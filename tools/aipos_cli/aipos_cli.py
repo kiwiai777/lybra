@@ -1740,6 +1740,16 @@ def build_parser() -> argparse.ArgumentParser:
     project_setrepos_parser.add_argument("--default", dest="default_repo", help="Default repo name (must be one of --repo names; required when more than one --repo)")
     project_setrepos_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_setrepos_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-F123 件②: project.json paths 落点声明写入口(键/值按 config.schema project_json.paths 校验; 与 set-repos 同一写路径与锁)
+    project_setpaths_parser = project_subparsers.add_parser("set-paths", help="AIPOS-F123: declare project.json paths.<key> (repeatable --key/--value pairs), validated against config.schema project_json.paths; --dry-run (default) shows the diff, --confirm writes")
+    project_setpaths_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: active project resolution)")
+    project_setpaths_parser.add_argument("--key", action="append", dest="path_keys", required=True, metavar="KEY", help="paths key (repeatable, paired in order with --value)")
+    project_setpaths_parser.add_argument("--value", action="append", dest="path_values", required=True, metavar="VALUE", help="value for the --key at the same position")
+    project_setpaths_mode = project_setpaths_parser.add_mutually_exclusive_group()
+    project_setpaths_mode.add_argument("--dry-run", action="store_true", help="Preview the project.json diff without writing (default)")
+    project_setpaths_mode.add_argument("--confirm", action="store_true", help="Write project.json")
+    project_setpaths_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    project_setpaths_parser.add_argument("--json", action="store_true", help="Output JSON")
     # AIPOS-F110 件②③: 跨机工位开工材料声明(project.json workstations.<实例>) + 双向可达检查(同一 ssh transport 代码路径)
     project_setws_parser = project_subparsers.add_parser("set-workstation", help="AIPOS-F110: declare a cross-machine workstation's material access (project.json workstations.<instance>: gate_ssh_alias + material_access), validated against config.schema project_json.workstations")
     project_setws_parser.add_argument("name", help="Established project name")
@@ -3121,6 +3131,36 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"Declared repos in {out['project_json']}: default={out['default']} code_repo={out['code_repo']}")
                     for k, v in out["items"].items():
                         print(f"  {k} = {v}")
+                return 0
+            if args.project_command == "set-paths":
+                # AIPOS-F123 件②: 唯一实现 workspace_config.set_project_paths(声明校验 + update_project_json 唯一写路径)
+                from tools.aipos_cli.workspace_config import (
+                    PathsDeclarationError,
+                    resolve_active_project,
+                    resolve_project_root,
+                    set_project_paths,
+                )
+
+                keys, values = list(args.path_keys or []), list(args.path_values or [])
+                if len(keys) != len(values):
+                    print(f"Error: --key 与 --value 须成对按序给出(得到 {len(keys)} 个 --key, {len(values)} 个 --value)", file=sys.stderr)
+                    return 2
+                project_name = args.name or resolve_active_project(home)
+                try:
+                    outcome = set_project_paths(resolve_project_root(home, project_name), list(zip(keys, values)),
+                                                dry_run=not args.confirm)
+                except PathsDeclarationError as exc:
+                    print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
+                    return 1
+                if getattr(args, "json", False):
+                    print(render_json({"ok": True, "project": project_name, **outcome}))
+                else:
+                    mode = "已写入" if outcome["written"] else ("无改动" if not outcome["changed"] else "预览(未写; 加 --confirm 写入)")
+                    print(f"project set-paths {project_name}: {mode} {outcome['project_json']}")
+                    for change in outcome["changes"]:
+                        print(f"  paths.{change['key']}: {change['before']!r} → {change['after']!r}")
+                    if outcome["diff"]:
+                        print(outcome["diff"].rstrip("\n"))
                 return 0
             if args.project_command == "set-workstation":
                 # AIPOS-F110 件②: 唯一写入口 workspace_config.set_project_workstation(校验 = config.schema project_json.workstations)

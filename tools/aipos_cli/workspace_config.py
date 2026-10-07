@@ -1485,6 +1485,147 @@ def write_project_created_snapshot(project_root: str | Path, name: str, *, regis
     return Path(result["target_path"])
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F123 件②: project.json 唯一写路径(set-repos / set-workstation / set-paths 共用; 禁第二份写实现)。
+# 排他锁 = fcntl.flock 加在 project.json 自身(inode 不变: 原位改写, 不用 rename, 并发写方排队而非各写各的);
+# 写后可选复核(读取口)不过 = 还原原文并原样上抛; dry_run = 只算 diff 零写入。
+# ---------------------------------------------------------------------------
+
+def update_project_json(
+    project_root: str | Path,
+    mutate: Any,
+    *,
+    verify: Any = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """读-改-写 project.json 的唯一实现。mutate(data) 原地修改 JSON 对象(可抛声明错误 = 不写);
+    verify(project_root) 在写后以产品读取口复核(抛 = 还原原文后上抛)。
+
+    返回 {project_json, changed, written, diff(unified diff 文本, 无改动为空串)}。
+    项目未建(无 project.json)= FileNotFoundError; 文件不是 JSON 对象 = ValueError。"""
+    import difflib
+    import fcntl
+
+    path = project_json_path(project_root)
+    if not path.is_file():
+        raise FileNotFoundError(f"{path} 不存在(项目未建; 先 lybra project new)")
+    with open(path, "r+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            original = handle.read()
+            data = json.loads(original)
+            if not isinstance(data, dict):
+                raise ValueError(f"{path} 不是 JSON 对象")
+            mutate(data)
+            rendered = json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+            diff = "".join(difflib.unified_diff(
+                original.splitlines(keepends=True), rendered.splitlines(keepends=True),
+                fromfile=f"{path} (当前)", tofile=f"{path} (写入后)"))
+            result = {"project_json": str(path), "changed": rendered != original, "written": False, "diff": diff}
+            if dry_run or rendered == original:
+                return result
+
+            def _rewrite(text: str) -> None:
+                handle.seek(0)
+                handle.truncate()
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+
+            _rewrite(rendered)
+            if verify is not None:
+                try:
+                    verify(Path(project_root))
+                except BaseException:
+                    _rewrite(original)  # 复核不过: 还原原文(不留半成品), 原异常上抛
+                    raise
+            result["written"] = True
+            return result
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+class PathsDeclarationError(ValueError):
+    """`lybra project set-paths` 的键/值不合 config.schema project_json.paths 声明(fail-closed, project.json 不动)。
+    code ∈ config.schema project_json.paths.reject_codes。problems = 全部问题(一次列全)。"""
+
+    def __init__(self, code: str, problems: list[str]):
+        super().__init__(f"{code}: " + "; ".join(problems))
+        self.code = code
+        self.problems = list(problems)
+
+
+def _paths_reject_codes() -> dict[str, str]:
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    codes = ((((load_schema("config").get("configuration_sources") or {}).get("project_json") or {}).get("schema") or {})
+             .get("paths") or {}).get("reject_codes")
+    if not isinstance(codes, dict) or not {"PATHS_KEY_UNKNOWN", "PATHS_VALUE_INVALID"} <= set(codes):
+        raise SchemaLoadError("config.schema.json project_json.paths.reject_codes(PATHS_KEY_UNKNOWN / PATHS_VALUE_INVALID)未声明")
+    return codes
+
+
+def _coerce_paths_value(key: str, raw: str, spec: dict[str, Any]) -> tuple[Any, str | None]:
+    """按声明把 CLI 串值转为 project.json 值: boolean 只认 true/false; enum 须在值域; 其余为非空单行串。返回 (值, 问题|None)。"""
+    text = str(raw if raw is not None else "")
+    kind = str(spec.get("type") or "string")
+    if kind == "boolean":
+        lowered = text.strip().lower()
+        if lowered not in ("true", "false"):
+            return None, f"{key}={text!r} 须为 true 或 false(声明 type=boolean)"
+        return lowered == "true", None
+    if not text.strip() or "\n" in text or "\r" in text:
+        return None, f"{key} 的值须为非空单行串, 得到 {text!r}"
+    enum = [str(v) for v in (spec.get("enum") or [])]
+    if enum and text.strip() not in enum:
+        return None, f"{key}={text.strip()!r} 不在声明值域 {enum}"
+    return text.strip(), None
+
+
+def set_project_paths(project_root: str | Path, pairs: list[tuple[str, str]], *, dry_run: bool = True) -> dict[str, Any]:
+    """AIPOS-F123 件②: `lybra project set-paths` 的唯一实现——写 project.json paths.<键>(可多对, 其余键原样保留)。
+
+    校验 = config.schema project_json.paths.schema 声明(未知键 PATHS_KEY_UNKNOWN; 值不合 PATHS_VALUE_INVALID; 问题一次列全,
+    任一不合 = 整批不写)。写入经 update_project_json(与 set-repos 同一写路径与锁), 写后经唯一读取口 project_paths 复核。
+    dry_run(缺省)= 只给 diff 零写入。返回 {project_json, dry_run, written, changes:[{key, before, after}], diff}。"""
+    codes = _paths_reject_codes()
+    decl = _project_paths_declaration()
+    if not pairs:
+        raise PathsDeclarationError("PATHS_VALUE_INVALID", ["至少给一对 --key/--value"])
+    unknown = [str(k) for k, _ in pairs if str(k) not in decl]
+    if unknown:
+        raise PathsDeclarationError("PATHS_KEY_UNKNOWN", [
+            f"{k}: {codes['PATHS_KEY_UNKNOWN']}(可写键: {', '.join(sorted(decl))})" for k in unknown])
+    problems: list[str] = []
+    values: dict[str, Any] = {}
+    for key, raw in pairs:
+        if key in values:
+            problems.append(f"{key} 重复给出")
+            continue
+        value, problem = _coerce_paths_value(key, raw, decl[key] if isinstance(decl[key], dict) else {})
+        if problem:
+            problems.append(problem)
+        else:
+            values[key] = value
+    if problems:
+        raise PathsDeclarationError("PATHS_VALUE_INVALID", problems)
+    path = project_json_path(project_root)
+    changes: list[dict[str, Any]] = []
+
+    def _mutate(data: dict[str, Any]) -> None:
+        current = data.get("paths") if data.get("paths") is not None else {}
+        if not isinstance(current, dict):
+            raise PathsDeclarationError("PATHS_VALUE_INVALID", [f"{path} 现有 paths 段不是 JSON 对象, 先人工核对"])
+        for key, value in values.items():
+            changes.append({"key": key, "before": current.get(key), "after": value})
+            current[key] = value
+        data["paths"] = current
+
+    outcome = update_project_json(project_root, _mutate, verify=project_paths, dry_run=dry_run)
+    return {"project_json": str(path), "dry_run": dry_run, "written": outcome["written"], "changed": outcome["changed"],
+            "changes": changes, "diff": outcome["diff"]}
+
+
 def set_project_repos(
     home_root: str | Path,
     name: str,
@@ -1499,21 +1640,15 @@ def set_project_repos(
     写后校验不过 = 原文件还原 + 抛 CardRepoUnresolved(REPOS_CONFLICT), 不留半成品。返回 project_repos() 结果 + project_json 路径。
     """
     root = resolve_project_root(home_root, name)
-    path = project_json_path(root)
-    original = path.read_text(encoding="utf-8")
-    data = json.loads(original)
-    if not isinstance(data, dict):
-        raise CardRepoUnresolved("REPOS_CONFLICT", f"{path} 不是 JSON 对象")
     clean_items = {str(k).strip(): str(Path(str(v).strip()).expanduser()) for k, v in items.items()}
-    data["repos"] = {"default": str(default).strip(), "items": clean_items}
-    data["code_repo"] = clean_items.get(str(default).strip())
-    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    try:
-        declared = project_repos(root)
-    except CardRepoUnresolved:
-        path.write_text(original, encoding="utf-8")
-        raise
-    return {**declared, "project_json": path}
+
+    def _mutate(data: dict[str, Any]) -> None:
+        data["repos"] = {"default": str(default).strip(), "items": clean_items}
+        data["code_repo"] = clean_items.get(str(default).strip())
+
+    # AIPOS-F123 件②: 写入经 project.json 唯一写路径(锁 + 写后经读取口 project_repos 复核, 不合 = 还原原文件)
+    update_project_json(root, _mutate, verify=project_repos)
+    return {**project_repos(root), "project_json": project_json_path(root)}
 
 
 def set_project_repo(
@@ -1604,17 +1739,16 @@ def set_project_workstation(project_root: str | Path, instance: str, *, gate_ssh
         raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID", f"实例名须为非空且不含空白: {instance!r}")
     entry = _validate_workstation_entry(instance, {"gate_ssh_alias": gate_ssh_alias, "material_access": material_access}, decl)
     path = project_json_path(project_root)
-    if not path.is_file():
-        raise FileNotFoundError(f"{path} 不存在(项目未建)")
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID", f"{path} 不是 JSON 对象")
-    workstations = data.get("workstations") if data.get("workstations") is not None else {}
-    if not isinstance(workstations, dict):
-        raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID", f"{path} workstations 须为 JSON 对象")
-    workstations[instance] = entry
-    data["workstations"] = workstations
-    path.write_text(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    def _mutate(data: dict[str, Any]) -> None:
+        workstations = data.get("workstations") if data.get("workstations") is not None else {}
+        if not isinstance(workstations, dict):
+            raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID", f"{path} workstations 须为 JSON 对象")
+        workstations[instance] = entry
+        data["workstations"] = workstations
+
+    # AIPOS-F123 件②: 写入经 project.json 唯一写路径(与 set-repos / set-paths 同一把锁)
+    update_project_json(project_root, _mutate)
     return {"project_json": str(path), "instance": instance, **entry}
 
 
