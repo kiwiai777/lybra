@@ -45,6 +45,11 @@ REPO_PLACEHOLDER = "<REPO_NAME>=<REPO_ABS_PATH>"
 DRAFT_JSON_PLACEHOLDER = "<CARD_DRAFT_JSON>"
 DRAFT_PATH_PLACEHOLDER = "<DRAFT_PATH>"
 TASK_ID_PLACEHOLDER = "<TASK_ID>"
+#: AIPOS-F123 件③ 接入既有人肉项目一节的占位(由顾问按项目实况填)
+LEGACY_BRANCH_PLACEHOLDER = "<LEGACY_BRANCH>"
+PATHS_KEY_PLACEHOLDER = "<PATHS_KEY>"
+PATHS_VALUE_PLACEHOLDER = "<PATHS_VALUE>"
+FREEZE_REASON_PLACEHOLDER = "<FREEZE_REASON>"
 #: Claude Code harness kind(distribution.schema harness_semantics.kinds 的键; 顾问会话)
 ADVISOR_HARNESS = "claude-code"
 
@@ -555,11 +560,68 @@ def generate_onboarding_guide(
         "total_steps": len(steps),
         "owner_actions": owner_steps,
         "steps": steps,
+        # AIPOS-F123 件③: 接入既有人肉项目(冻结 → 收编 → 落点声明), 新项目可略过
+        "legacy_onboarding": legacy_onboarding_steps(project_name, gov_s, home_root=str(home), actor=_actor,
+                                                     driver_policy=policies["driver"]),
         "summary": (
             f"从 0 接新项目 {project_name} 全流程({len(steps)} 步, 零手工编辑; Owner 一次性动作 = Step {' / '.join(map(str, owner_steps))}):\n"
             + "\n".join(f"  Step {s['step_number']}: {s['title']}" for s in steps)
         ),
     }
+
+
+def legacy_onboarding_steps(project_name: str, governance_root: str, *, home_root: str, actor: str, driver_policy: str) -> list[dict[str, Any]]:
+    """AIPOS-F123 件③: 「接入既有人肉项目」一节(接入向导唯一出处; 顺序 = 冻结 → 收编 → 落点声明)。
+
+    人肉期(无门记录)项目接入时: ① 存量冻结为历史(AIPOS-F122 迁移基线: lint/next 不再当待推进, 门拒对冻结卡写);
+    ② 仍在途的卡逐张经门收编(AIPOS-F123: 补铸 claim 记录、绑定既有分支、建卡工作树), 之后与新卡一样只用 lybra loop 推进;
+    ③ project.json 落点声明经产品写入口(set-paths, 免手改)。命令全部显式带治理根/项目, 禁写死项目 ID/路径/卡号前缀。"""
+    gq = _shell_quote(governance_root)
+    pq = _shell_quote(project_name)
+    hq = _shell_path(home_root)
+    return [
+        {
+            "order": 1,
+            "title": "存量冻结: 人肉期已结束/不再推进的卡一次声明为历史(迁移基线)",
+            "actor": "advisor",
+            "command": "\n".join([
+                "# 先 --dry-run 核对将冻结的卡与各卡 lint 问题计数, 无误后改 --confirm(清单只追加; 解冻 = --unfreeze)",
+                _cmd("lybra", "project", "freeze-legacy", "--queue", "claimed,completed,blocked", "--exclude", TASK_ID_PLACEHOLDER,
+                     "--reason", FREEZE_REASON_PLACEHOLDER, "--actor", actor, "--workspace-root", gq, "--dry-run"),
+            ]),
+            "purpose": "仍在途、要继续推进的卡用 --exclude 留出(交给下一步收编); 冻结卡不被 state lint 报 ERROR、不被 next 当待推进, 门拒对其写动作",
+        },
+        {
+            "order": 2,
+            "title": "在途卡收编: 门补铸 claim 记录、绑定既有分支、建卡工作树",
+            "actor": "advisor",
+            "command": "\n".join([
+                "# 每张在途卡: 先预览(零写入, 含信封判定与全部拒因), 无拒因后改 --confirm; 收编后与新卡同样只用 lybra loop 推进",
+                _cmd("lybra", "--workspace-root", gq, "queue", "adopt", "--task-id", TASK_ID_PLACEHOLDER, "--branch",
+                     LEGACY_BRANCH_PLACEHOLDER, "--actor", actor, "--owner-policy-ref", driver_policy, "--dry-run"),
+                _cmd("lybra", "--workspace-root", gq, "queue", "adopt", "--task-id", TASK_ID_PLACEHOLDER, "--branch",
+                     LEGACY_BRANCH_PLACEHOLDER, "--actor", actor, "--owner-policy-ref", driver_policy, "--confirm"),
+                _cmd("lybra", "loop", "--task-id", TASK_ID_PLACEHOLDER, "--workspace-root", gq, "--envelope", driver_policy),
+            ]),
+            "purpose": ("--branch = 该卡产物所在的既有分支(卡 lane.repo 仓内); 卡分支名与之不同时卡分支建在其 tip 上。"
+                        "拒因(声明 transitions nodes.N1.adoption.guards)一次列全: 卡面意图必填缺项 / 分支不存在 / 已有门生 claim / 已冻结 / 卡分支分叉 / 建树失败 / 信封不覆盖。"
+                        "已有手写 Return 不被覆盖: loop 按交回判据要求补 commit_sha / tree_hash / branch, 拒因原文给出补法"),
+        },
+        {
+            "order": 3,
+            "title": "落点声明: project.json paths 经产品写入口声明(免手改)",
+            "actor": "advisor",
+            "command": "\n".join([
+                "# 键名与取值按 config.schema project_json.paths 校验(未知键拒 / finalize_mode 枚举); 先 --dry-run 看 diff, 再 --confirm",
+                _cmd("lybra", "project", "set-paths", pq, "--home-root", hq, "--key", PATHS_KEY_PLACEHOLDER, "--value",
+                     PATHS_VALUE_PLACEHOLDER, "--dry-run"),
+                _cmd("lybra", "project", "set-paths", pq, "--home-root", hq, "--key", PATHS_KEY_PLACEHOLDER, "--value",
+                     PATHS_VALUE_PLACEHOLDER, "--confirm"),
+            ]),
+            "purpose": ("人肉期项目的 Return/裁决/队列/信封落点与缺省不同时声明之(可多对 --key/--value); "
+                        "注意: 改 return_root / verdict_root / queue_root / policies_root 的项目须在收编(上一步)之前完成本步——收编按声明落报告骨架、loop 按声明找产物"),
+        },
+    ]
 
 
 def format_guide_text(guide: dict[str, Any]) -> str:
@@ -605,6 +667,17 @@ def format_guide_text(guide: dict[str, Any]) -> str:
         lines.append("")
 
     lines.append("═══ 完成: 从项目注册到首卡结案, 零手工编辑 ═══")
+    legacy = guide.get("legacy_onboarding") or []
+    if legacy:
+        lines.append("")
+        lines.append("═══ 附: 接入既有人肉项目(人肉期已有卡与记录; 顺序 = 冻结 → 收编 → 落点声明) ═══")
+        for item in legacy:
+            lines.append(f"── {item['order']}. {item['title']} ──")
+            lines.append(f"目的: {item['purpose']}")
+            lines.append("命令:")
+            for cmd_line in str(item["command"]).split("\n"):
+                lines.append(f"  {cmd_line}")
+            lines.append("")
     return "\n".join(lines)
 
 

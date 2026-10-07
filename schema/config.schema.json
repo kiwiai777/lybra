@@ -226,6 +226,11 @@
           "type": "object",
           "required": false,
           "description": "落点声明(相对治理根或绝对路径)。缺段/缺键取 default。",
+          "writer": "AIPOS-F123 件②: 唯一写入口 `lybra project set-paths [项目] --key <键> --value <值>(可多对) [--dry-run|--confirm]` = workspace_config.set_project_paths: 键名与取值按本段 schema 校验(未知键拒; enum 键值须在 enum; boolean 键值只认 true/false; 字符串键须非空单行), 写入经 project.json 唯一写路径 workspace_config.update_project_json(与 set-repos / set-workstation 同一把锁、写后经读取口 project_paths 复核, 不合 = 还原原文件); --dry-run(缺省)给 diff 零写入。",
+          "reject_codes": {
+            "PATHS_KEY_UNKNOWN": "--key 不在本段 schema 声明的键内",
+            "PATHS_VALUE_INVALID": "--value 不合该键声明(enum 外 / 非 true|false / 空或多行 / 同键重复给出)"
+          },
           "schema": {
             "return_root": {
               "type": "string",

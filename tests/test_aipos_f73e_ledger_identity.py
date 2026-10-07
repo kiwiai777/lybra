@@ -159,7 +159,8 @@ def test_f73e_item1_no_claim_record_not_derivable_names_claim_record(gov: Path, 
     assert d["derivable"] is False, d
     assert d["command"] == "" and EXEC not in d["command"] and DRIVER not in d["command"]
     assert any("claim 记录" in m and f"claims/{card}/" in m for m in d["missing_records"]), d["missing_records"]
-    assert "queue claim" in d["suggested_action"]
+    # AIPOS-F123: claimed 卡无 claim 记录的出口 = 经门收编(queue adopt; claim 只从 pending 出发, 原「queue claim」出口走不通)
+    assert f"queue adopt --task-id {card}" in d["suggested_action"]
     assert (d.get("action") or {}).get("type") == "record_missing"
     # loop(从执行卡驱动; 审计卡经 N3 await_artifact 派生): 同一推导核 → 硬停 exit 4(verbs.schema lybra_loop.exit_codes.not_derivable)
     # 带出口——不把「缺 claim 记录」误当「agent 还在干活」空等到 exit 3

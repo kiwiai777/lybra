@@ -352,6 +352,69 @@
         "additionalProperties": false
       }
     },
+    "lybra_queue_adopt_dry_run": {
+      "description": "AIPOS-F123 件①: 收编人肉期在途卡(claimed 目录、无门生 claim 记录、未冻结)——门补铸 claim 记录(adopted_from=legacy_manual, 绑定既有分支与 tip)、写卡面运行时字段、按 card_worktree_location 建卡工作树。claim 动词族(transitions nodes.N1.adoption): 驱动方 token + autonomy_mode=PreAuthorized + 覆盖驱动方与本卡的信封 = 一段式落记录(与 claim 同一 matcher); preview_only=true = 只预览零写入(含信封判定)。无 Supervised 逐单路径。",
+      "phase": "dry_run",
+      "required_scope": "queue_claim",
+      "visibility": "scope",
+      "base_verb": "lybra_queue_adopt",
+      "verb_family": "claim",
+      "surface": [
+        "cli",
+        "mcp"
+      ],
+      "cli_command": "lybra queue adopt",
+      "stage_contract": {
+        "two_stage": false,
+        "dry_run_emits_token": false,
+        "self_confirm_allowed": [],
+        "owner_confirmation_required_in_response": false,
+        "one_stage": "autonomy_mode=PreAuthorized 且信封匹配 → 门在本动词一跳内落记录(preauthorized_release=true); 不匹配 = BLOCK + envelope_guards 出口(CLI exit 5); preview_only=true 恒不写",
+        "client_timeout_ms": 180000,
+        "client_timeout_note": "收编在门内同步建卡工作树(git worktree add)+ 落记录, 与 claim 同等待上限"
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "要收编的卡(frontmatter task_id)"
+          },
+          "branch": {
+            "type": "string",
+            "description": "卡 lane.repo 解析仓内的既有分支(本地或远端跟踪分支名)"
+          },
+          "actor": {
+            "type": "string",
+            "description": "提交收编的驱动方实例(记 adopted_by); claim 记录 actor = 卡面 agent_instance/assigned_to"
+          },
+          "autonomy_mode": {
+            "type": "string",
+            "$enum": "autonomy_mode",
+            "description": "写入只认 PreAuthorized(一段式信封); preview_only 时可缺省"
+          },
+          "owner_policy_ref": {
+            "type": "string",
+            "description": "覆盖驱动方与本卡的信封 policy_id(project.json paths.policies_root)"
+          },
+          "preview_only": {
+            "type": "boolean",
+            "description": "true = 只预览(CLI --dry-run), 零写入"
+          },
+          "workspace_root": {
+            "type": "string",
+            "description": "治理根(AIPOS-F42 解析序同 claim)"
+          }
+        },
+        "required": [
+          "task_id",
+          "branch",
+          "actor",
+          "owner_policy_ref"
+        ],
+        "additionalProperties": false
+      }
+    },
     "lybra_queue_return_dry_run": {
       "description": "Return completed work (preview).",
       "phase": "dry_run",
@@ -1706,7 +1769,7 @@
           "governance_commit"
         ],
         "subject_rule": "AIPOS-F90 件①: 信封 task_selector(task_mode/project/task_ids)的判定对象——审计卡(task_mode=audit 且声明 reviewed_task_id)= 被审卡, 其余 = 本卡; 驱动方(loop_driver.find_envelope)与门(_match_claim_envelope)同读唯一实现 autonomy_policy.envelope_subject。审计卡认领同样计入信封额度(count_bound)。",
-        "allowed_verbs_note": "loop 只执行 action_type 在此集合内的派生命令; 集合外(含 manual)=exit 5/4。集合唯一声明在此。AIPOS-F78B 件③: 门侧驱动方一阶段放行(queue return/audit-verdict/queue close 的 autonomy_mode=PreAuthorized)也读此集合判 verb 是否在信封授权内(claim 经 _match_claim_envelope, 其余经 _match_driver_envelope, 同一 matcher autonomy_policy.match_claim_envelope)。 AIPOS-F94: governance_commit = N6 落账步(transitions nodes.N6.landing), 独立列入本集合(非门动词, 门侧 _match_driver_envelope 不会收到它); 覆盖驱动方与本卡的有效信封即授权落账。",
+        "allowed_verbs_note": "loop 只执行 action_type 在此集合内的派生命令; 集合外(含 manual)=exit 5/4。集合唯一声明在此。AIPOS-F78B 件③: 门侧驱动方一阶段放行(queue return/audit-verdict/queue close 的 autonomy_mode=PreAuthorized)也读此集合判 verb 是否在信封授权内(claim 经 _match_claim_envelope, 其余经 _match_driver_envelope, 同一 matcher autonomy_policy.match_claim_envelope)。 AIPOS-F94: governance_commit = N6 落账步(transitions nodes.N6.landing), 独立列入本集合(非门动词, 门侧 _match_driver_envelope 不会收到它); 覆盖驱动方与本卡的有效信封即授权落账。 AIPOS-F123: 收编(lybra_queue_adopt_dry_run, verb_family=claim)按 claim 判授权——门侧经 _match_driver_envelope(verb=声明的 verb_family), 不另列动词。",
         "one_stage_release": "驱动方 token(roles.schema driver.role_class 或其 role_class 自定义角色) + autonomy_mode=PreAuthorized + owner_policy_ref 命名的信封(agent_or_role 覆盖驱动方实例/角色类, task_selector 覆盖本卡, 有效/时间窗/额度) → 门在 dry_run 一跳内落记录(preauthorized_release=true), 不索 owner_confirm; 不匹配 = BLOCK + envelope_guards 出口, CLI 薄壳 exit 5(无信封)。",
         "launch_harnesses": "AIPOS-F95 件②(b): 信封字段 launch_harnesses(harness 值列表, 取值 ⊆ enums.schema harness 中 launch 非 null 者; 缺省 [] = 不授权拉起, 只手工 /go)。`lybra envelope mint --launch-harness <harness>`(可重复)经 --confirm 由 Owner 签, 门 owner_decision_record 同一路径落盘。loop 判授权 = autonomy_policy.envelope_authorizes_launch(同一信封族唯一实现, 禁第二实现)。",
         "boundary_template": "This artifact records a bounded, revocable Owner pre-authorization (PreAuthorized envelope). Within its time bound, count bound and task_selector it authorizes the covered driver (`lybra loop`, one-stage gate release) to run only these verbs: {allowed_verbs} (declared in verbs.schema lybra_loop.envelope.allowed_verbs). Harness launch authorized: {launch_harnesses} (the loop may start a declared enums.schema harness.launch template once per card at the enrolled local workstation; otherwise the workstation starts work by hand with /go). It does not authorize publish, credential access, or any verb outside this list. Reaching the time or count bound, or status revoked/expired, drops matching actions back to Supervised (per-task owner_confirm).",

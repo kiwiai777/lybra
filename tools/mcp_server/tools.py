@@ -16,6 +16,7 @@ from tools.aipos_cli.board_adapter import (
     audit_dispatch_task,
     audit_verdict_task,
     bench_audit_submit,
+    adopt_task,
     claim_task,
     close_task,
     converge_r_cards,
@@ -2729,6 +2730,87 @@ def lybra_queue_claim_confirm(arguments: dict[str, Any] | None = None) -> dict[s
     return _tool_result(response, is_error=False)
 
 
+def _queue_adopt_error(error_code: str, message: str, suggested_next_action: str) -> dict[str, Any]:
+    return _teaching_error(error_code, message, suggested_next_action, doc_ref="AIPOS-F123 transitions nodes.N1.adoption")
+
+
+def lybra_queue_adopt_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F123 件①: 收编人肉期在途卡(claim 动词族, 声明 transitions nodes.N1.adoption / verbs.schema 本条目)。
+
+    preview_only=true: 判据 + 信封判定 + 记录预览, 零写入。否则只走一段式: 驱动方 token + autonomy_mode=PreAuthorized +
+    owner_policy_ref 命名的信封经 _match_driver_envelope(verb = 声明的 verb_family, 与 claim/return 同一 matcher)覆盖驱动方与本卡
+    → 门落记录(preauthorized_release=true, confirmer = 信封)。无 Supervised 逐单路径(ADOPT_ENVELOPE_REQUIRED)。"""
+    args = arguments or {}
+    if not _verb_scope_allowed("lybra_queue_adopt_dry_run"):
+        return _verb_scope_denied("lybra_queue_adopt_dry_run", "queue adopt (claim family)")
+    task_id = str(args.get("task_id") or "").strip()
+    branch = str(args.get("branch") or "").strip()
+    actor = str(args.get("actor") or "").strip()
+    owner_policy_ref = str(args.get("owner_policy_ref") or "").strip()
+    missing = [name for name, value in (("task_id", task_id), ("branch", branch), ("actor", actor), ("owner_policy_ref", owner_policy_ref)) if not value]
+    if missing:
+        return _queue_adopt_error("ADOPT_ARGUMENTS_REQUIRED", f"lybra_queue_adopt_dry_run requires: {', '.join(missing)}.",
+                                  "Pass task_id, branch (existing branch in the card's lane.repo), actor (driver instance) and owner_policy_ref (envelope).")
+    preview_only = args.get("preview_only") is True
+    requested_mode = str(args.get("autonomy_mode") or "").strip()
+    from tools.aipos_cli.queue_mutation import adoption_declaration, adoption_refusal
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        decl = adoption_declaration()
+    except SchemaLoadError as exc:
+        return _queue_adopt_error("ADOPT_DECLARATION_MISSING", str(exc), "Restore transitions.schema nodes.N1.adoption.")
+    if not preview_only and requested_mode != AUTONOMY_MODE_PREAUTHORIZED:
+        return _queue_adopt_error("ADOPT_ENVELOPE_REQUIRED",
+                                  adoption_refusal("ADOPT_ENVELOPE_REQUIRED", f"requested autonomy_mode={requested_mode or '(未给出)'}", decl),
+                                  "Retry with autonomy_mode=PreAuthorized and the driver token, or preview with preview_only=true.")
+    cap = _capability_token()
+    bound = str(cap.get("agent_instance") or "").strip()
+    if bound and actor != bound:
+        return _queue_adopt_error("INSTANCE_MISMATCH", f"actor {actor} ≠ token-bound driver instance {bound}.",
+                                  "Pass actor = the driver instance bound to the submitting token (recorded as adopted_by).")
+    try:
+        repo_root = _resolve_queue_workspace(args)
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        return _queue_adopt_error("WORKSPACE_UNRESOLVED", str(exc), "Pass workspace_root of the governance root that holds the card.")
+    policy_id, envelope_error = _match_driver_envelope(repo_root, owner_policy_ref=owner_policy_ref, task_id=task_id,
+                                                       verb=str(decl["verb_family"]))
+    if envelope_error is not None and not preview_only:
+        return envelope_error
+    confirmer = _driver_one_stage_confirmer(policy_id) if policy_id else None
+    result = adopt_task(task_id=task_id, branch=branch, adopted_by=actor, owner_policy_ref=owner_policy_ref,
+                        dry_run=preview_only, repo_root=repo_root, autonomy_mode=AUTONOMY_MODE_PREAUTHORIZED, confirmer=confirmer)
+    result["surface"] = "mcp"
+    result["autonomy_mode"] = AUTONOMY_MODE_PREAUTHORIZED
+    result["owner_policy_ref"] = owner_policy_ref
+    result["verb_family"] = str(decl["verb_family"])
+    if preview_only:
+        envelope = {"matched": bool(policy_id), "policy_id": policy_id}
+        if envelope_error is not None:
+            payload = envelope_error.get("structuredContent") if isinstance(envelope_error.get("structuredContent"), dict) else envelope_error
+            envelope["rejection"] = {k: payload.get(k) for k in ("error_code", "message", "details") if k in payload}
+            result.setdefault("blocking_reasons", []).append(
+                f"{envelope['rejection'].get('error_code') or 'ENVELOPE_REJECTED'}: {envelope['rejection'].get('message') or ''}")
+            result["verdict"] = Verdict.BLOCK
+            result["ok"] = False
+        result["envelope"] = envelope
+        result["preauthorized_release"] = False
+        result["preview_only"] = True
+        return _tool_result(result, is_error=result.get("verdict") == Verdict.BLOCK)
+    wrote = bool((result.get("data") or {}).get("wrote")) and result.get("verdict") != Verdict.BLOCK
+    result["preauthorized_release"] = wrote
+    result["provenance"] = {
+        "event_type": "mcp_queue_adopt",
+        "actor": actor,
+        "surface": "mcp",
+        "transport": "mcp",
+        "owner_policy_ref": policy_id,
+        "autonomy_mode": AUTONOMY_MODE_PREAUTHORIZED,
+        "result": result.get("verdict"),
+    }
+    return _tool_result(result, is_error=not wrote)
+
+
 def lybra_queue_return_dry_run(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     args = arguments or {}
     # AIPOS-F78B 件③: 驱动方一阶段——autonomy_mode=PreAuthorized 时 Owner 签的信封即授权(不索 queue_return scope / owner_confirm);
@@ -5352,6 +5434,7 @@ TOOL_HANDLERS: dict[str, Callable[[dict[str, Any] | None], dict[str, Any]]] = {
     "lybra_draft_submit_confirm": lybra_draft_submit_confirm,
     "lybra_queue_claim_dry_run": lybra_queue_claim_dry_run,
     "lybra_queue_claim_confirm": lybra_queue_claim_confirm,
+    "lybra_queue_adopt_dry_run": lybra_queue_adopt_dry_run,
     "lybra_queue_return_dry_run": lybra_queue_return_dry_run,
     "lybra_queue_return_confirm": lybra_queue_return_confirm,
     "lybra_audit_dispatch_dry_run": lybra_audit_dispatch_dry_run,
@@ -5762,6 +5845,32 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["dry_run_token", "actor", "agent_instance", "owner_policy_ref", "owner_confirmation_token"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "lybra_queue_adopt_dry_run",
+        "description": (
+            "When to use: adopt one in-flight legacy card (in claimed/, no gate-born claim record, not frozen) into the gate — "
+            "mint its claim record (adopted_from=legacy_manual, bound to an existing branch and its tip), write the card's runtime fields, "
+            "and build the card worktree on that branch (AIPOS-F123, claim verb family). "
+            "Prerequisites: queue_claim scope; driver token; autonomy_mode PreAuthorized with owner_policy_ref naming an Owner-signed envelope covering the driver and this card "
+            "(same matcher as claim); preview_only=true previews with zero writes. "
+            "Return structure: controlled response with verdict, data.adoption, data.claim_record_path, data.worktree_path, preauthorized_release. "
+            "Next-step hint: after adoption run `lybra loop --task-id <ID>`; refusals carry the declared exit (transitions nodes.N1.adoption.guards)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string"},
+                "branch": {"type": "string"},
+                "actor": {"type": "string"},
+                "autonomy_mode": {"type": "string", "enum": ["PreAuthorized"]},
+                "owner_policy_ref": {"type": "string"},
+                "preview_only": {"type": "boolean"},
+                "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
+            },
+            "required": ["task_id", "branch", "actor", "owner_policy_ref"],
             "additionalProperties": False,
         },
     },
