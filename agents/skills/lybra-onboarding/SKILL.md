@@ -66,7 +66,7 @@ Codex 会话(guide 加 `--advisor-harness codex`; 会话在他机时加 `--advis
 lybra roles enroll --code <注册码> --workspace <项目根> --harness codex --harness-dir <会话目录> --verify
 lybra roles enroll --code <注册码> --workspace <项目根> --harness codex --harness-host <会话所在机> --verify
 ```
-凭据落治理根 `.lybra/`(`lybra loop` 按治理根取驱动方凭据); 顾问件按 distribution 声明交付到会话目录: Claude Code = 技能 `.claude/skills/` + 顾问章程 `.claude/rules/lybra-advisor.md`, Codex = 顾问章程 `AGENTS.md`(会话目录在本机时; 他机会话本机无落点, sync 列 undelivered)。在会话目录重启会话即加载。sync 的 plan 为空 = 稳态; 会话目录里已有同名非 Lybra 文件 = 拒不覆盖(移走或换目录)。
+凭据落治理根 `.lybra/`(`lybra loop` 按治理根取驱动方凭据); 顾问件按 distribution 声明交付到会话目录: Claude Code = 技能 `.claude/skills/` + 顾问章程 `.claude/rules/lybra-advisor.md`, Codex = 顾问章程 `AGENTS.md`(会话目录在本机时; 他机会话本机无落点不落盘, 改为开局拉取: guide 第 5 步末行与 `lybra sync` 的 pull 行给出 `ssh <治理根主机> 'cd <治理根> && lybra charter --role advisor --instance <实例>'`, AIPOS-F138)。在会话目录重启会话即加载。sync 的 plan 为空 = 稳态; 会话目录里已有同名非 Lybra 文件 = 拒不覆盖(移走或换目录)。
 
 ### Step 6–7(你): 工位注册码 → 工位 enroll + sync
 

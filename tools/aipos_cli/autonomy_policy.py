@@ -13,6 +13,7 @@ and the owner_decision writer can share it without an import cycle.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -20,7 +21,7 @@ import sys
 from datetime import datetime, timezone
 from tools.aipos_cli.clock import utc_now
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.record_writer import record_root, render_markdown
@@ -69,6 +70,18 @@ def trace_envelope(payload: dict[str, Any]) -> None:
         line = json.dumps({"trace_serialize_error": str(exc), "payload_repr": repr(payload)[:500]}, sort_keys=True)
     # logging 自身的输出错误由 Handler.handleError 处理(不抛), 无需再包
     _ENVELOPE_LOGGER.info("[ENVELOPE_TRACE] " + line)
+
+
+@contextlib.contextmanager
+def envelope_trace_output(enabled: bool) -> Iterator[None]:
+    """AIPOS-F138 件③: 只读视图(`lybra loop status`)按开关输出信封判定诊断行 —— enabled=False 时本区段内不打印 [ENVELOPE_TRACE]
+    (状态结论不被淹没), 退出区段恢复原状。只开关输出, 不改 trace_envelope 的调用与信封判定逻辑; 门侧(serve)不经本开关, 照旧留痕。"""
+    previous = _ENVELOPE_LOGGER.disabled
+    _ENVELOPE_LOGGER.disabled = not enabled
+    try:
+        yield
+    finally:
+        _ENVELOPE_LOGGER.disabled = previous
 
 # FLAT bounded-map frontmatter (AIPOS-219 P5 idiom: depth-1, readable on bare python).
 # task_selector is flattened into three explicit fields; task_ids is a YAML list.

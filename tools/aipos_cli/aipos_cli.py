@@ -2150,6 +2150,17 @@ def build_parser() -> argparse.ArgumentParser:
     loop_status_parser.add_argument("--wait", type=float, default=None, metavar="SECONDS",
                                     help="AIPOS-F136 件①: 有界等待秒数(须 --task-id; 上限读 verbs.schema lybra_loop_status.wait.max_seconds), "
                                     "经 agent watch 等到顾问下一动作 ≠ continue_wait 或到时, 返回当时状态; 禁 until/sleep 轮询")
+    loop_status_parser.add_argument("--verbose", action="store_true", default=False,
+                                    help="AIPOS-F138 件③: 另输出门侧信封判定诊断行([ENVELOPE_TRACE], stderr); 缺省不打印")
+
+    # AIPOS-F138 件①: lybra charter — 拉取式输出实例的渲染后章程(他机会话开局经 ssh 读取; 参数由 verbs.schema lybra_charter 生成)
+    from tools.aipos_cli.charter_render import add_charter_arguments as _add_charter_arguments
+
+    charter_parser = subparsers.add_parser(
+        "charter",
+        help="AIPOS-F138: 输出实例的渲染后章程全文到 stdout(与 sync 同一渲染器; 他机会话开局经 ssh 在治理根所在机读取, 产品不推送)",
+    )
+    _add_charter_arguments(charter_parser)
 
     # AIPOS-F78 件②: lybra card render — 卡意图面单一渲染器(pi 三行 / codex Prompt.md+Plan.md / claude-code CLAUDE.md 片段)
     card_parser = subparsers.add_parser("card", help="AIPOS-F78: 卡意图面操作(render)")
@@ -5739,6 +5750,11 @@ def main(argv: list[str] | None = None) -> int:
         # AIPOS-F73D: 顾问侧驱动器薄壳 — 全部逻辑在 loop_driver(复用 next_resolver + agent_watch_fs + autonomy_policy)
         from tools.aipos_cli.loop_driver import run_loop_cli
         return run_loop_cli(args)
+
+    if args.command == "charter":
+        # AIPOS-F138 件①: 只读薄壳 — 全部逻辑在 charter_render(渲染唯一 render_charter)
+        from tools.aipos_cli.charter_render import run_charter_cli
+        return run_charter_cli(args)
 
     if args.command == "card":
         # AIPOS-F78 件②: 单一渲染器薄壳

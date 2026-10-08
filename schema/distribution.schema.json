@@ -256,7 +256,7 @@
       "operation": "render_charter",
       "version_strategy": "git_commit_hash",
       "gitignore": true,
-      "notes": "AIPOS-F136 件②: 同 advisor-charter-claude-code, 给 AIPOS-F129 的 codex 顾问会话。落点 = harness.dir 下 AGENTS.md(Codex 从会话目录及其上至仓根读 AGENTS.md)。会话在他机(role harness.host)或无 dir = 本机无落点, sync 零写入并把本件列为 undelivered(不猜落点; 他机交付属扩展位)。已有非 Lybra 渲染物(如会话仓自带 AGENTS.md)= 拒不覆盖。"
+      "notes": "AIPOS-F136 件②: 同 advisor-charter-claude-code, 给 AIPOS-F129 的 codex 顾问会话。落点 = harness.dir 下 AGENTS.md(Codex 从会话目录及其上至仓根读 AGENTS.md)。会话在他机(role harness.host)或无 dir = 本机无落点, sync 零写入, 本件给拉取出口(AIPOS-F138: harness_semantics.remote_session_delivery, 会话开局经 ssh 跑 `lybra charter` 取渲染物; 产品不推送, 不猜落点)。已有非 Lybra 渲染物(如会话仓自带 AGENTS.md)= 拒不覆盖。"
     },
     {
       "distribution_id": "transitions-schema",
@@ -466,7 +466,7 @@
         "advisor_session": true
       },
       "codex": {
-        "description": "AIPOS-F129 件①: Codex 会话(顾问; 可与治理根不同机, 如 Mac 上的 Codex 经 ssh 在治理根所在机跑产品命令): 凭据与身份落治理根 .lybra/(同 claude-code, loop 按治理根取驱动方凭据); 不落 .pi 接线, 不做 pi 落点 prune; AIPOS-F136 件②: 顾问章程经 advisor-charter-codex 渲染到 harness.dir/AGENTS.md(会话目录在本机时); 会话在他机或无 dir = 本机无落点, sync 零写入并列 undelivered(不猜本机落点, 不拒; 他机交付属扩展位); .lybra/role 记 harness {kind: codex, dir: <可空>, host: <可空>} —— 会话目录在他机时如实记 host 与路径, 不校验本机存在",
+        "description": "AIPOS-F129 件①: Codex 会话(顾问; 可与治理根不同机, 如 Mac 上的 Codex 经 ssh 在治理根所在机跑产品命令): 凭据与身份落治理根 .lybra/(同 claude-code, loop 按治理根取驱动方凭据); 不落 .pi 接线, 不做 pi 落点 prune; AIPOS-F136 件②: 顾问章程经 advisor-charter-codex 渲染到 harness.dir/AGENTS.md(会话目录在本机时); 会话在他机或无 dir = 本机无落点, sync 零写入, 章程件给拉取出口(AIPOS-F138: remote_session_delivery; 不猜本机落点, 不拒, 不推送); .lybra/role 记 harness {kind: codex, dir: <可空>, host: <可空>} —— 会话目录在他机时如实记 host 与路径, 不校验本机存在",
         "label": "Codex",
         "target_base": "harness_dir",
         "harness_dir": "optional",
@@ -475,6 +475,15 @@
       }
     },
     "charter_in_harness_dir": "AIPOS-F136 件②: target_base=harness_dir 的工位(claude-code / codex)同样接收 kind=charter 条目: 与 pi 同一渲染器(charter_render.render_charter, 经 distribution_sync._sync_harness_dir → apply_charter_render), 三指纹记 <工位>/.lybra/.version-<role>; 会话目录归用户 —— 章程落点已有文件而本地清单无该条渲染记录(非 Lybra 渲染物)= 拒并点名, 不覆盖; 有记录的副本被本地改动 = 声明缺口(报 diff 后覆盖, 同 pi)。",
+    "remote_session_delivery": {
+      "description": "AIPOS-F138 件①: 会话不在本机可落处(harness.local=false: codex 他机会话 / 无 dir)时声明给本角色该 harness 的 kind=charter 件的交付方式。Lybra 被动(不推送、不 ssh 到会话机): 会话开局由会话自己经 ssh 到治理根所在机跑 verb 的命令, 取同一渲染器(charter_render.render_charter)的输出; sync 对这类件不再列 undelivered, 改给本出口(pull 段: 分发条目 + 命令原文)。非 charter 件仍列 undelivered(本机无落点, 禁猜)。",
+      "mode": "pull",
+      "verb": "lybra_charter",
+      "host_source": "project.json workstations.<实例>.gate_ssh_alias(config.schema project_json.workstations: 他机视角门机 = 治理根所在机的 ssh 别名; 唯一读取口 workspace_config.project_workstation); 未声明 = 命令里写 host_placeholder 并附声明出口(lybra project set-workstation), 不猜主机",
+      "host_placeholder": "<治理根主机>",
+      "command_shape": "ssh <host> 'cd <治理根> && <verb.cli_command> --role <角色类> --instance <实例>'(唯一拼装 charter_render.charter_pull_command; 治理根 = 本次 sync / 向导所用治理根)",
+      "single_implementation": "tools/aipos_cli/charter_render.charter_pull_command(拼装) / instance_charter(渲染: 接入登记 → 工位身份 → 角色类 → 本 harness 章程条目 → render_charter); 消费方 distribution_sync._sync_harness_dir(pull 段) + onboarding.generate_onboarding_guide(他机顾问第 5 步开局命令)"
+    },
     "rule": "sync 只取 target.harness == 工位 harness kind 的条目(缺 target.harness = pi); enroll 的 .pi 接线、共享落点并集、.pi 挂载推导只认 pi 条目。harness kind 合法值 = 本 schema harness_semantics.kinds 的键(enroll --harness 与 onboarding guide --advisor-harness 取值由此推导, 禁代码写死第二份); distributions[].target.harness 须 ∈ kinds(不在 = 声明错误, fail-closed)。AIPOS-F129 说理: 原「合法值 = distributions[].target.harness 并集」推不出无分发件的 kind(codex 顾问本卡不新增技能分发); kinds 本就是每个 kind 语义的唯一声明, 改由其键推导仍是单源, 并集 ⊆ kinds 作一致性校验。",
     "single_implementation": "tools/aipos_cli/distribution_sync.declared_harness_kinds / harness_kind_declaration / advisor_harness_kinds / harness_role_record / workstation_harness / harness_distributions(判定、登记与过滤) + enroll_client.enroll(落 harness 字段并交付) + onboarding.generate_onboarding_guide(顾问 harness) + workstation_wiring.declared_role_skills/declared_role_extensions(只认 pi)",
     "kind_fields": {

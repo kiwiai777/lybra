@@ -1279,26 +1279,54 @@ def _sync_harness_dir(
     三指纹记本地清单); harness 目录是用户的会话目录 —— 章程落点已有文件而本地清单无本条渲染记录(非 Lybra 渲染物, 如会话仓自带的
     AGENTS.md)= 拒并点名, 不覆盖(harness_semantics.charter_in_harness_dir)。
 
-    AIPOS-F129 件① / F136 件②: 会话不在本机可落处(harness.local=False: codex 无 dir / 他机 host)—— 零写入, 声明给本角色该 harness
-    的件逐项列为 undelivered 并点名原因(本机无落点, 禁猜落点; 他机交付属扩展位), 不拒(凭据与身份已落本工位, sync 全量巡检不因此失败)。"""
+    AIPOS-F129 件① / F136 件②: 会话不在本机可落处(harness.local=False: codex 无 dir / 他机 host)—— 零写入, 不拒(凭据与身份已落本工位,
+    sync 全量巡检不因此失败)。AIPOS-F138 件①: 章程件(kind=charter)给拉取出口(pull 段: 会话开局经 ssh 在治理根所在机跑 `lybra charter`,
+    声明 harness_semantics.remote_session_delivery, 命令唯一拼装 charter_render.charter_pull_command; 产品不推送); 其余件仍列 undelivered
+    并点名原因(本机无落点, 禁猜落点)。"""
     if not harness.get("local", True):
+        from tools.aipos_cli.charter_render import charter_pull_command
+        from tools.aipos_cli.custom_roles import resolve_role_to_class
+
         dists_here = list(remote.get("distributions") or [])
         where = f"host={harness.get('host')} dir={harness.get('dir')}"
+        charter_dists = [d for d in dists_here if _is_charter(d)]
         undelivered = [{"distribution_id": d.get("distribution_id"), "kind": d.get("kind"), "target_path": d.get("target_path")}
-                       for d in dists_here]
-        if dists_here:
-            note = (f"harness={harness['kind']}({where}): 会话不在本机可落处, 声明给本角色该 harness 的件 "
-                    f"{[d['distribution_id'] for d in undelivered]} 未交付(本机无落点, 禁猜; 他机交付未实现 = 扩展位)。"
-                    f"会话目录在本机时: enroll 给 --harness-dir <本机会话目录>(不给 --harness-host)即由本命令交付")
-        else:
-            note = f"harness={harness['kind']}({where}): 声明给本角色该 harness 的件 = 0, 无可交付(凭据与身份在本工位 .lybra/)"
+                       for d in dists_here if not _is_charter(d)]
+        pull: list[dict[str, Any]] = []
+        notes: list[str] = []
+        if charter_dists:
+            # 治理根与 sync 渲染同一解析(resolve_workstation_governance_root); 解析不到 = 照原文出声(不猜, 不拒)
+            from tools.aipos_cli.charter_render import resolve_workstation_governance_root
+
+            try:
+                gov = resolve_workstation_governance_root(identity, explicit=governance_root)
+            except FileNotFoundError as exc:  # 出口给不出 = 仍列 undelivered 并点名原因(不丢件)
+                undelivered += [{"distribution_id": d.get("distribution_id"), "kind": d.get("kind"), "target_path": d.get("target_path")}
+                                for d in charter_dists]
+                notes.append(f"章程件 {[d['distribution_id'] for d in charter_dists]} 未交付, 拉取出口给不出: {exc}")
+            else:
+                role_class = str(resolve_role_to_class(str(identity["role"]), gov, required=True))
+                exit_ = charter_pull_command(gov, instance=str(identity["instance"]), role_class=role_class)
+                pull = [{"distribution_id": d.get("distribution_id"), "kind": d.get("kind"), "mode": "pull",
+                         "command": exit_["command"], "host_declared": exit_["host_declared"], "host_hint": exit_["host_hint"]}
+                        for d in charter_dists]
+                notes.append(f"harness={harness['kind']}({where}): 会话不在本机可落处, 章程件 {[p['distribution_id'] for p in pull]} "
+                             f"= pull: 在会话开局运行 `{exit_['command']}`(产品不推送; 输出即渲染后章程全文)"
+                             + (f"。{exit_['host_hint']}" if exit_["host_hint"] else ""))
+        others = [d for d in undelivered if d["kind"] != "charter"]
+        if others:
+            notes.append(f"harness={harness['kind']}({where}): 声明给本角色该 harness 的件 {[d['distribution_id'] for d in others]} "
+                         "未交付(本机无落点, 禁猜)。会话目录在本机时: enroll 给 --harness-dir <本机会话目录>(不给 --harness-host)即由本命令交付")
+        if not dists_here:
+            notes.append(f"harness={harness['kind']}({where}): 声明给本角色该 harness 的件 = 0, 无可交付(凭据与身份在本工位 .lybra/)")
+        note = "\n      ".join(notes)
         return {
             "ok": True, "status": "dry-run" if dry_run else "synced", "role": ctx["role"], "gate_url": ctx["gate_url"],
             "product_commit": remote.get("product_commit"), "harness_root": str(ctx["harness_root"]),
             "harness": {"kind": harness["kind"], "dir": None if harness.get("dir") is None else str(harness["dir"]),
                         "host": harness.get("host")},
             "workstation": _public_identity(identity), "scope_project": scope, "governance_root": None,
-            "distributions_checked": len(dists_here), "dry_run": dry_run, "plan": [], "undelivered": undelivered,
+            "distributions_checked": len(dists_here), "dry_run": dry_run, "plan": [], "undelivered": undelivered, "pull": pull,
             "would_prune": [], "declared_files": [],
             "shared_prune_guard": None, "pi_mount_prune": [], "pi_mount_warnings": [], "files_fetched": 0, "files_pruned": 0,
             "changes": [], "pruned_files": [], "prune_errors": [], "declaration_gaps": [], "manifest_path": None, "note": note,

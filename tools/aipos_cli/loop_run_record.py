@@ -821,10 +821,14 @@ def loop_status_cli(args: Any) -> int:
             print(f"lybra loop status: {exc}", file=sys.stderr)
             return int(lane_view_declaration()["invalid_lane_exit_code"])
         contract = load_loop_contract()
-        if wait is None:
-            report = loop_status(governance_root, task_id, contract=contract, lane=lane)
-        else:
-            report = wait_for_next_action(governance_root, task_id or "", float(wait), contract=contract, lane=lane)
+        # AIPOS-F138 件③: 信封判定诊断行([ENVELOPE_TRACE])只在 --verbose 时输出(「下一张」扫描会逐卡判信封); 判定逻辑不变
+        from tools.aipos_cli.autonomy_policy import envelope_trace_output
+
+        with envelope_trace_output(bool(getattr(args, "verbose", False))):
+            if wait is None:
+                report = loop_status(governance_root, task_id, contract=contract, lane=lane)
+            else:
+                report = wait_for_next_action(governance_root, task_id or "", float(wait), contract=contract, lane=lane)
     except StatusUsageError as exc:
         print(f"lybra loop status: {exc}", file=sys.stderr)
         return declared_exit_code(STATUS_VERB, "usage")

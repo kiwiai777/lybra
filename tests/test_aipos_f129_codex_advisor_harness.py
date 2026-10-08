@@ -187,7 +187,7 @@ def test_item3_guide_codex_vs_claude_code_default():
     assert (a_cc[0].harness, a_cc[0].harness_dir, a_cc[0].harness_host) == ("claude-code", "/tmp/f129-session", None)
     assert a_cc[1].command == "sync" and a_cc[1].dry_run is True and ".claude/skills" in cc5["creates"]
     a_cx = _lybra_args(cx5)
-    assert len(a_cx) == 1  # 无 sync 分发步骤(会话在他机: 本机无落点, AIPOS-F136 起声明给 codex 的章程列 undelivered)
+    assert len(a_cx) == 1  # 无 sync 分发步骤(会话在他机: 本机无落点; AIPOS-F138 起章程由会话开局拉取, 命令以注释行给出, 不是本步可执行行)
     assert (a_cx[0].roles_command, a_cx[0].workspace, a_cx[0].harness, a_cx[0].harness_host, a_cx[0].harness_dir) == (
         "enroll", cx["governance_root"], "codex", "mac-probe.local", None)
     blob = json.dumps(cx5, ensure_ascii=False)
