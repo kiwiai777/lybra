@@ -391,3 +391,127 @@ def derive_intent_declarations(
         derived.append("lane")
 
     return {"harness": harness, "lane": lane, "derived": derived, "blocking_reasons": blocking}
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F133 件①②: lane 键唯一派生 + 按 lane 视图的唯一过滤/分组(next 扫描 / brief / loop status / needs-owner 四命令共用)。
+# lane 键 = 卡解析后的产品仓名(workspace_config.resolve_card_repo 解析 → project.json repos.items 中的仓名);
+# 无仓清单的单仓项目 = 解析到的仓路径(唯一 lane)。参数声明只在 verbs.schema lane_view 一处; 本段只读声明不写死。
+# ---------------------------------------------------------------------------
+
+
+def lane_view_declaration(repo_root: Path | None = None) -> dict[str, Any]:
+    """读 verbs.schema lane_view(--lane 参数与未解析 lane 标签的唯一声明; 缺 = SchemaLoadError, fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = load_schema("verbs", repo_root).get("lane_view")
+    required = ("cli_flag", "help", "commands", "group_by_default", "unresolved_lane", "invalid_lane_exit_code")
+    if not isinstance(decl, dict) or any(key not in decl for key in required):
+        raise SchemaLoadError(f"verbs.schema.json lane_view 未声明或缺键 {list(required)}")
+    return decl
+
+
+def add_lane_argument(parser: Any) -> None:
+    """四命令的 --lane 参数(声明 verbs.schema lane_view.cli_flag / help; argparse 缺省 None = 不过滤)。"""
+    decl = lane_view_declaration()
+    parser.add_argument(str(decl["cli_flag"]), dest="lane", default=None, metavar=str(decl.get("metavar") or "LANE"),
+                        help=str(decl["help"]))
+
+
+def _lane_name_for_path(governance_root: Path, path: Path, repos: dict[str, Any]) -> str:
+    """已解析的仓路径 → lane 键(仓清单内仓名; 无清单 = 路径本身)。"""
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved, _same_path
+
+    if not repos["declared"]:
+        return str(path)
+    for name, item in repos["items"].items():
+        if _same_path(item, path):
+            return str(name)
+    raise CardRepoUnresolved("LANE_REPO_UNDECLARED", f"仓路径 {path} 不在 {governance_root} project.json repos.items 内")
+
+
+def card_lane_key(metadata: dict[str, Any], governance_root: Path) -> str:
+    """AIPOS-F133 件①: 卡的 lane 键唯一派生(四个查看命令与「下一张」共用, 禁各命令自取 lane.repo 字面)。
+
+    解析只走 workspace_config.resolve_card_repo(卡 lane.repo → repos 清单 → code_repo → 治理根, 与发布派生同源);
+    返回 project.json repos.items 中的仓名(无清单 = 解析到的仓路径)。解析失败 = CardRepoUnresolved 原样抛(调用方经
+    lane_of_card 标为未解析 lane 照列, 不隐藏)。"""
+    from tools.aipos_cli.workspace_config import project_repos, resolve_card_repo
+
+    root = Path(governance_root)
+    path = resolve_card_repo(root, metadata if isinstance(metadata, dict) else {})
+    return _lane_name_for_path(root, path, project_repos(root))
+
+
+def lane_of_card(metadata: dict[str, Any] | None, governance_root: Path) -> dict[str, Any]:
+    """视图行用: {"lane": 键, "lane_error": None} | 解析不了 = {"lane": 声明的未解析标签, "lane_error": "<CODE>: <原因>"}。
+    metadata=None(卡面读不出 / 找不到卡)= 未解析(带原因由调用方补)。"""
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved
+
+    unresolved = str(lane_view_declaration()["unresolved_lane"])
+    if metadata is None:
+        return {"lane": unresolved, "lane_error": "卡面不可读或找不到卡, lane 无从解析"}
+    try:
+        return {"lane": card_lane_key(metadata, governance_root), "lane_error": None}
+    except CardRepoUnresolved as exc:
+        return {"lane": unresolved, "lane_error": f"{exc.code}: {exc.reason}"}
+    except (OSError, ValueError) as exc:  # project.json 读不出 = 未解析 lane(点名原因, 不猜)
+        return {"lane": unresolved, "lane_error": f"project.json 读不出: {exc}"}
+
+
+def declared_lanes(governance_root: Path) -> list[str]:
+    """项目声明的全部 lane 键(仓清单仓名; 无清单 = 唯一仓路径)。"""
+    from tools.aipos_cli.workspace_config import project_repos, resolve_card_repo
+
+    root = Path(governance_root)
+    repos = project_repos(root)
+    if repos["declared"]:
+        return list(repos["items"])
+    return [str(resolve_card_repo(root, {}))]
+
+
+class LaneFilterInvalid(ValueError):
+    """--lane 值不是本项目声明的 lane(fail-closed: 拒, 点名可选值, 不当作「过滤后为空」)。"""
+
+
+def resolve_lane_filter(governance_root: Path, value: str | None) -> str | None:
+    """--lane 值 → 规范 lane 键(仓名或该仓绝对路径均可; 匹配走 workspace_config._match_repo_ref, 与 lane.repo 校验同一判据)。
+    None/空 = 不过滤。不在清单 = LaneFilterInvalid(点名可选值)。"""
+    from tools.aipos_cli.workspace_config import _match_repo_ref, project_repos
+
+    text = str(value or "").strip()
+    if not text:
+        return None
+    root = Path(governance_root)
+    repos = project_repos(root)
+    matched = _match_repo_ref(text, repos, root)
+    if matched is None:
+        raise LaneFilterInvalid(f"--lane {text!r} 不是本项目声明的 lane; 可选: {declared_lanes(root)}"
+                                "(project.json repos.items 仓名; 无仓清单 = code_repo 路径)")
+    return _lane_name_for_path(root, matched, repos)
+
+
+def filter_rows_by_lane(rows: list[dict[str, Any]], lane: str | None) -> list[dict[str, Any]]:
+    """AIPOS-F133 件②: 四命令同一过滤函数。rows 每项须带 "lane"(经 lane_of_card)。lane=None = 原样;
+    lane 给出 = 只留该 lane 与未解析 lane 的行(未解析 = 无法证明不属本 lane, 照列不隐藏)。"""
+    if lane is None:
+        return list(rows)
+    unresolved = str(lane_view_declaration()["unresolved_lane"])
+    return [row for row in rows if row.get("lane") in (lane, unresolved)]
+
+
+def group_rows_by_lane(rows: list[dict[str, Any]], governance_root: Path | None = None) -> dict[str, list[dict[str, Any]]]:
+    """按 lane 分组(保序): 先项目声明的 lane 次序(给出治理根时), 再其余 lane 字典序, 未解析 lane 末尾。"""
+    unresolved = str(lane_view_declaration()["unresolved_lane"])
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        groups.setdefault(str(row.get("lane") or unresolved), []).append(row)
+    order: list[str] = []
+    if governance_root is not None:
+        try:
+            order = [lane for lane in declared_lanes(Path(governance_root)) if lane in groups]
+        except (OSError, ValueError):  # 声明读不出: 分组仍按字典序给出, 不吞行
+            order = []
+    rest = sorted(lane for lane in groups if lane not in order and lane != unresolved)
+    tail = [unresolved] if unresolved in groups else []
+    return {lane: groups[lane] for lane in [*order, *rest, *tail]}

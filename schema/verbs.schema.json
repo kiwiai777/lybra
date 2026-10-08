@@ -104,6 +104,18 @@
       "visibility": "tools/list 可见性: always = 恒可见; scope = 持 required_scope 才可见; hidden = 不列出(只经产品 CLI 薄壳按名调用)"
     }
   },
+  "lane_view": {
+    "description": "AIPOS-F133 件②(CONVERGENCE §3c-3/5、§3d-7): 按 lane(子项目 = 卡解析后的产品仓)看进度的参数唯一声明。四个查看命令(lybra next 项目扫描 / lybra brief / lybra loop status / lybra needs-owner)同一 --lane 参数、同一过滤函数; 不带 --lane 时 brief 与 needs-owner 按 lane 分组输出。lane 键唯一派生 = machine_zone.card_lane_key(解析走 workspace_config.resolve_card_repo, 返回 project.json repos.items 仓名; 无仓清单的单仓项目 = code_repo 路径)。卡遍历只走 task_loader.iter_queue_task_paths, loop status 经 task_loader.find_task_card 反查卡面。lane 解析不了的卡 = unresolved_lane 标签照列(带原因), 带 --lane 时也照列(无法证明不属该 lane, 不隐藏)。",
+    "cli_flag": "--lane",
+    "metavar": "<仓名>",
+    "help": "AIPOS-F133: 只看该 lane(project.json repos.items 仓名或其绝对路径; 无仓清单的单仓项目 = code_repo 路径); lane 解析不了的卡照列不隐藏",
+    "commands": ["lybra next", "lybra brief", "lybra loop status", "lybra needs-owner"],
+    "group_by_default": ["lybra brief", "lybra needs-owner"],
+    "unresolved_lane": "(lane 不可解析)",
+    "invalid_lane_exit_code": 2,
+    "single_implementation": "tools/aipos_cli/machine_zone.card_lane_key / lane_of_card / resolve_lane_filter / filter_rows_by_lane / group_rows_by_lane",
+    "next_card": "lybra next 项目扫描首位给「下一张可推进卡」= pending 且可推导(依赖满足, 判据唯一实现 task_complexity.dependencies_satisfied)的卡中优先级最高者(enums.schema priority 值序, 后者高; 同级按 task_id); 无则写明原因。结案后取下一张的唯一出口"
+  },
   "verbs": {
     "lybra_queue_list": {
       "description": "Read the task queue (executor's only read surface).",
@@ -1950,6 +1962,7 @@
         "properties": {
           "task_id": {"type": "string", "description": "卡 ID; 缺省 = 列本项目全部未结束的 loop 运行"},
           "workspace_root": {"type": "string", "description": "治理根; 缺省自发现"},
+          "lane": {"type": "string", "description": "AIPOS-F133 件②: 只看该 lane 的运行(声明 lane_view; 运行记录反查卡面取 lane)"},
           "json": {"type": "boolean", "description": "JSON 输出"}
         },
         "additionalProperties": false

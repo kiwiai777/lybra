@@ -155,8 +155,6 @@ exit "$overall"
 # lybra-runall: known-failure tools/aipos_cli/tests/test_service_mode.py::ConnectionLocationTests::test_scopes_unchanged_after_location_move
 # lybra-runall: known-failure tools/aipos_cli/tests/test_service_mode.py::SelectiveRotationTests::test_selective_rotate_on_fresh_workspace
 # lybra-runall: known-failure tools/aipos_cli/tests/test_service_mode.py::ServiceModeTests::test_serve_stop_kills_without_home_root_or_project
-# lybra-runall: known-failure tools/aipos_cli/tests/test_task_complexity.py::TaskComplexityTests::test_complex_dependent_audit_task_can_publish_when_audit_ready
-# lybra-runall: known-failure tools/aipos_cli/tests/test_task_complexity.py::TaskComplexityTests::test_complex_dependent_draft_can_exist_but_cannot_publish_before_audit_pass
 # lybra-runall: known-failure tools/aipos_cli/tests/test_token_rotation.py::TestRotateExecute::test_full_rotation_backup_record_no_plaintext
 # lybra-runall: known-failure tools/aipos_cli/tests/test_writer_flat_contract.py::WriterFlatContractTests::test_publish_record_is_flat
 # lybra-runall: known-failure tools/lybra_tui/tests/test_ai_authoring.py::AiAuthoringTests::test_card_conformant_and_publishable

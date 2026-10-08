@@ -441,10 +441,30 @@ def _run_files(directory: Path) -> list[Path]:
     return sorted(p for p in directory.glob("looprun_*.md") if p.is_file()) if directory.is_dir() else []
 
 
+def _run_lane(governance_root: Path, task_id: str) -> dict[str, Any]:
+    """AIPOS-F133 件①: 运行记录的 lane = 经 task_loader.find_task_card 反查卡面, 再走唯一派生 machine_zone.lane_of_card
+    (运行记录不落 lane, 免第二份真相)。找不到卡/多义/卡面读不出 = 未解析 lane(带原因, 照列)。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.machine_zone import lane_of_card
+    from tools.aipos_cli.task_loader import AmbiguousTaskCard, find_task_card
+
+    try:
+        path, _state = find_task_card(Path(governance_root), task_id)
+        if path is None:
+            return {**lane_of_card(None, governance_root), "lane_error": f"队列中找不到卡 {task_id}, lane 无从解析"}
+        fm, _body = require_frontmatter(path)
+    except (AmbiguousTaskCard, FrontmatterReadError) as exc:
+        return {**lane_of_card(None, governance_root), "lane_error": str(exc)}
+    return lane_of_card(fm, governance_root)
+
+
 def loop_status(governance_root: Path, task_id: str | None = None, *, now: datetime | None = None,
-                contract: dict[str, Any] | None = None) -> dict[str, Any]:
+                contract: dict[str, Any] | None = None, lane: str | None = None) -> dict[str, Any]:
     """--task-id 给出 = 该卡最近一次运行(含已结束); 缺省 = 本项目全部未结束的运行(loop_dead 也列出: 记录未结束而进程已不在)。
-    读不出的记录 = LoopRunRecordError(fail-closed, 点名文件)。"""
+    读不出的记录 = LoopRunRecordError(fail-closed, 点名文件)。
+    AIPOS-F133 件②: 每个运行带 lane(_run_lane 反查卡面); lane 给出 = 经 machine_zone.filter_rows_by_lane 过滤(四命令同一函数)。"""
+    from tools.aipos_cli.machine_zone import filter_rows_by_lane
+
     from tools.aipos_cli.loop_driver import load_loop_contract
 
     decl = run_record_declaration(contract or load_loop_contract())
@@ -464,8 +484,10 @@ def loop_status(governance_root: Path, task_id: str | None = None, *, now: datet
     for meta in picked:
         view = judge_run(meta, decl, now=now)
         view["record_path"] = meta["_path"]
+        view.update(_run_lane(Path(governance_root), str(view.get("task_id") or meta.get("task_id") or "")))
         views.append(view)
-    return {"loop_runs_root": str(root), "task_id": task_id, "runs": views, "runs_on_record": total,
+    views = filter_rows_by_lane(views, lane)
+    return {"loop_runs_root": str(root), "task_id": task_id, "lane_filter": lane, "runs": views, "runs_on_record": total,
             "stall_after_seconds": int(decl["stall_after_seconds"]), "stall_after_tool_seconds": int(decl["stall_after_tool_seconds"])}
 
 
@@ -481,12 +503,14 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
     runs = report["runs"]
     if not runs:
         what = f"卡 {report['task_id']} 无 loop 运行记录" if report.get("task_id") else "本项目无未结束的 loop 运行"
+        if report.get("lane_filter"):
+            what += f"(lane {report['lane_filter']})"
         return f"{what}(落点 {report['loop_runs_root']})"
     out: list[str] = []
     for v in runs:
         state = v["state"]
         out.append(f"loop 运行 {v['run_id']}  [{state}] {decl_states.get(state, '')}")
-        out.append(f"  卡 {v['task_id']}  驱动 {v['driver']}  信封 {v.get('envelope') or '(未定)'}  主机 {v['host']}  "
+        out.append(f"  卡 {v['task_id']}  lane {v.get('lane') or '-'}  驱动 {v['driver']}  信封 {v.get('envelope') or '(未定)'}  主机 {v['host']}  "
                    f"loop pid {v['pid']}({'存活' if v['loop_alive'] else '已不在' if v['loop_alive'] is False else '未探活'})")
         span = "历时" if state == "ended" else "已运行"
         out.append(f"  开始 {v['started_at']}({span} {_dur(v['elapsed_seconds'])})  已落定 {v['steps_done']} 步")
@@ -513,6 +537,8 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
                        f"reason={v.get('end_reason')}" + (f" — {v['end_message']}" if v.get("end_message") else ""))
         if v.get("note"):
             out.append(f"  注: {v['note']}")
+        if v.get("lane_error"):
+            out.append(f"  lane: {v['lane_error']}")
         tool = (v.get("launch") or {}).get("tool_in_flight")
         out.append(f"  停滞判据: 拉起进程存活且 > {v['stall_after_seconds']}s 无输出 = stalled"
                    f"(verbs.schema lybra_loop.run_record.{'stall_after_tool_seconds, 工具在跑' if tool else 'stall_after_seconds'})")
@@ -533,11 +559,19 @@ def loop_status_cli(args: Any) -> int:
     from tools.aipos_cli.verb_contract import declared_exit_code
     from tools.schema_loader import SchemaLoadError
 
+    from tools.aipos_cli.machine_zone import LaneFilterInvalid, lane_view_declaration, resolve_lane_filter
+
     task_id = getattr(args, "task_id", None)
     try:
         governance_root = Path(getattr(args, "workspace_root", None) or _find_repo_root_for_args(args))
+        # AIPOS-F133 件②: --lane 校验(不在声明 = 拒, 退出码读 verbs.schema lane_view.invalid_lane_exit_code)
+        try:
+            lane = resolve_lane_filter(governance_root, getattr(args, "lane", None))
+        except LaneFilterInvalid as exc:
+            print(f"lybra loop status: {exc}", file=sys.stderr)
+            return int(lane_view_declaration()["invalid_lane_exit_code"])
         contract = load_loop_contract()
-        report = loop_status(governance_root, task_id, contract=contract)
+        report = loop_status(governance_root, task_id, contract=contract, lane=lane)
     except (FileNotFoundError, LoopRunRecordError, SchemaLoadError, ValueError, OSError) as exc:
         print(f"lybra loop status: {type(exc).__name__}: {exc}", file=sys.stderr)
         return declared_exit_code(STATUS_VERB, "unreadable")

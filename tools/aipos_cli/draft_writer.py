@@ -704,7 +704,8 @@ def publish_draft(
     publish_metadata = _external_intake_execution_metadata(metadata) if is_external_intake else metadata
     rendered_markdown = render_markdown_task_card(publish_metadata, body) if is_external_intake else source_markdown
     validation = validate_draft_metadata(repo_root, metadata, actual_path=source_path, parse_errors=parse_errors)
-    publish_complexity = validate_task_complexity(publish_metadata, enforce_dependency_gate=True)
+    # AIPOS-F133 件③: 发布时依赖判据读治理根门生记录(同一 unmet_dependencies; 不再退回卡面自报)
+    publish_complexity = validate_task_complexity(publish_metadata, enforce_dependency_gate=True, governance_root=repo_root)
     for reason in publish_complexity["blocking_reasons"]:
         if reason not in validation["blocking_reasons"]:
             validation["blocking_reasons"].append(reason)
