@@ -30,6 +30,7 @@ role: advisor
 |------|------|----------|
 | **N0 出卡** | 起草与发卡 | `lybra draft create/publish`, `lybra queue amend/withdraw` |
 | **推进** | **Owner 信封授权下, 一条命令把卡从当前节点推到 completed**(产物落盘自动 return→派审→裁决→finalize→close; agent 步只等产物; 信封 `launch_harnesses` 授权时 loop 在工位拉起 harness, 否则手工 `/go`, 见「两种开工模式」) | **`lybra loop --task-id <卡ID>`**(AIPOS-F73D; 替代逐步 `next --run`) |
+| **跟进(持续推进)** | Owner 说一次「推进 <lane>」后不等 Owner 推: 跑 loop → 有界等 → 按产品给的顾问下一动作处理, 只在 owner_needed 停(守则全文在顾问章程「持续推进守则」, 本 skill 不复述) | **`lybra loop status --task-id <卡ID> --wait <秒>`**(AIPOS-F136) |
 | **N1 认领** | 监督认领流程 | `lybra loop`(推进行; 一段式: 驱动方信封 PreAuthorized, 门在同一步建卡工作树, **建树失败 = 门拒认领**, 队列不变); 单步查看 `lybra next --task-id <卡ID>`; `lybra my-tasks` 查询 |
 | **开工(工位)** | 执行/审计工位开工 | **两种模式**(AIPOS-F95): ①授权拉起 = 信封带 `launch_harnesses`, `lybra loop` 等待前在工位拉起 harness(开工提示 = 产品 `my-tasks` 的 `next_card.kickoff`); ②手工 = Owner 在工位敲 **`/go`**(产品选卡并核验: 非 claimed/非本实例/已结案/产物已交即拒并给原因)。顾问**不贴卡号/卡路径/开工稿**(AIPOS-F90 件③) |
 | **开工渲染** | 把卡意图面按 harness 渲染给执行引擎(pi/codex/claude-code), 派子 agent 只看渲染物 | **`lybra card render --task-id <卡ID> --harness <harness>`**(AIPOS-F78 件②; 零门动词/零 token) |
@@ -149,6 +150,18 @@ lybra loop --task-id <卡ID> --envelope <信封ID> --actor <你的顾问实例> 
 - 一次 loop 对一张卡至多拉起一次, 不自动重试; 早退(exit 3 附 stderr 末尾)/超时后重跑 `lybra loop` = 显式再拉起。
 - 跨机工位(land 事件 host ≠ 本机)经 ssh 拉起, 接入步骤见下「跨机工位」; 材料未声明或 ssh 不可达 = 自动退回手工并给原因。
 
+#### `lybra loop status`(AIPOS-F131 / F136)
+**何时用**:看 loop 推进到哪、拉起的工位进程是否活着 / 停滞, 以及**顾问下一动作**; 跟进一张在推进的卡时用 `--wait` 有界等待
+(怎么循环见顾问章程「持续推进守则」, 本 skill 只列命令)。
+```bash
+lybra loop status --task-id <卡ID> --workspace-root <治理根>                 # 只读: 运行记录 + 探活 + 判停滞 + 下一动作
+lybra loop status --task-id <卡ID> --workspace-root <治理根> --wait 540      # 有界等到可行动或到时(秒数取会话单次命令超时以内)
+lybra loop status --workspace-root <治理根> --json                          # 缺 --task-id = 本项目全部未结束的运行
+```
+**下一动作**(唯一判定在产品, 判据表 verbs.schema `lybra_loop_status.next_action`): `continue_wait` / `owner_needed`(附事由) /
+`card_done_take_next`(附下一条命令) / `investigate`(附下一条命令)。`--wait` 的退出码按下一动作(verbs.schema `lybra_loop_status.exit_codes`)。
+**禁止**:tail/grep 原始运行日志自判; until/sleep 轮询(等待只用 `--wait`)。
+
 #### 跨机工位(AIPOS-F110: 执行体在别的机器, 门与治理根在本机)
 前提: loop 只在治理根所在机(门机)跑; 门机与工位机 ssh 双向可达——门机→工位(loop 拉起/清理), 工位→门机(执行体读写门机上的治理根/工作树/报告落点)。ssh 凭据只走两端各自的 ssh 配置与密钥(`BatchMode=yes` 不交互索要口令), 永不经 Lybra、不进开工提示。
 1. **接入**(Owner 亲自敲, 在门机产品仓根下; land 事件 host = `--ssh` 的 ssh 目标, loop 以它为拉起目标; 注册码经 ssh stdin 送达、Owner 凭据只在本机读 connection.json 调门, 均不进远端命令行):
@@ -157,10 +170,10 @@ python3 -m tools.aipos_cli.enroll_deliver --role executor --instance <执行体�
   --target-workspace <工位目录> --target-harness <工位目录> --ssh <ssh目标> \
   --gate-url <门地址> --owner-policy-ref <信封ID> --connection-json <Owner凭据>
 ```
-2. **声明开工材料**(远端视角: 工位上指向门机的 ssh 别名 + 一句话材料访问方式, 如「经 ssh <别名> 读写; 代码提交到卡分支并推回门机产品仓」; 禁含凭据; 未声明 = loop 拒拉起并提示本命令):
+2. **声明开工材料**(远端视角: 工位上指向门机的 ssh 别名 + 一句话材料访问方式, 如「经 ssh <别名> 读写; 代码提交到卡分支并推回门机产品仓」; 禁含凭据; 未声明 = loop 拒拉起并提示本命令)。写 project.json 的命令一律两阶段(AIPOS-F125): 先把下面的 `--confirm` 换成 `--dry-run` 预演(打印 diff 与校验, 零写入), 确认后原样带 `--confirm` 才写:
 ```bash
 lybra project set-workstation <项目名> --home-root <home根> --instance <执行体实例> \
-  --gate-ssh-alias <门机别名> --material-access "<材料访问说明>"
+  --gate-ssh-alias <门机别名> --material-access "<材料访问说明>" --confirm
 ```
 3. **双向可达检查**(只读, 与 loop 同一 ssh 代码路径; 门机→工位: 工位目录在、harness 可执行在远端非交互 PATH; 工位→门机: 经别名 `test -d <治理根>`; 任一 ✗ 先修 ssh 配置再推进):
 ```bash
@@ -265,6 +278,12 @@ lybra owner-decision --decision-id arb-2026-08-16-01 \
 lybra roles enroll --code <注册码> --workspace <工位目录> --verify
 ```
 **生成**:`.lybra/` 配置(connection.json/role/policy)、工具包、skills。
+**顾问自己接入**(凭据落治理根, 顾问件按会话 harness 交付; 取值读 distribution.schema harness_semantics, 步骤以 `lybra onboarding guide` 输出为准):
+```bash
+lybra roles enroll --code <注册码> --workspace <治理根> --harness claude-code --harness-dir <会话目录> --verify   # Claude Code: .claude/skills + .claude/rules 章程
+lybra roles enroll --code <注册码> --workspace <治理根> --harness codex --harness-dir <会话目录> --verify         # Codex(本机会话目录): 章程 AGENTS.md
+lybra roles enroll --code <注册码> --workspace <治理根> --harness codex --harness-host <会话所在机> --verify       # Codex 在他机: 如实登记, 本机无落点不交付
+```
 
 #### `lybra roles enroll-code`
 **何时用**:为跨机角色生成一次性注册码(未来:enroll-deliver 跨机形态)。

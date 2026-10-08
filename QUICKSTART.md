@@ -18,7 +18,7 @@
 ## 前置条件
 
 - **Node.js 18+**、**Python 3**、**git** 在 PATH 上
-- 一个 Claude Code 会话做顾问;执行 / 审计工位所用的 harness(如 pi)
+- 一个 Claude Code 或 Codex 会话做顾问;执行 / 审计工位所用的 harness(如 pi)
 
 ---
 
@@ -26,7 +26,7 @@
 
 ```bash
 npm install -g lybra
-lybra --version
+lybra --help
 ```
 
 ---
@@ -55,14 +55,18 @@ lybra onboarding guide my_project --repo app=/abs/path/to/app
 | 步 | 执行方 | 做什么 |
 |---|---|---|
 | 1 | 顾问 | `lybra project new my_project`:在 home 根下建治理根(队列 / 记录 / 治理文档 / project.json + 首份阶段快照),并落账 |
-| 2 | 顾问 | `lybra project set-repos`:声明产品仓,并落账 |
+| 2 | 顾问 | `lybra project set-repos … --dry-run` 预演 diff → `--confirm` 写入:声明产品仓,并落账 |
 | 3 | **Owner** | 签发一次性顾问注册码(`lybra roles … enroll-code`) |
 | 4 | **Owner** | 一条命令签三张信封:驱动方 / 执行 / 审计(`lybra envelope mint --confirm`) |
-| 5 | 顾问 | 凭码 enroll 到治理根,顾问技能交付到 Claude Code 会话目录(`lybra roles enroll --harness claude-code`) |
+| 5 | 顾问 | 凭码 enroll 到治理根,顾问技能与章程交付到会话目录(Claude Code:`lybra roles enroll --harness claude-code`;Codex:`--harness codex`) |
 | 6 | 顾问 | 为执行 / 审计工位各发一个注册码 |
 | 7 | 顾问 | 工位 enroll + `lybra sync` 落齐技能 / 扩展 / 章程 |
 | 8 | 工位 | 自检(`lybra onboarding check my_project --step 8`),起工位 harness |
 | 9 | 顾问 | 首卡(见第四步) |
+
+写 project.json 的命令(`set-repos` / `set-repo` / `set-paths` / `set-workstation`)一律两阶段:缺省 / `--dry-run` 只预演
+(打印 diff 与校验,零写入),`--confirm` 才写。顾问会话用 Codex 时,向导加 `--advisor-harness codex`(会话在他机再加
+`--advisor-host <会话所在机>`),第 5 步即给出 `--harness codex` 的接入命令。
 
 每步之后的落账(`lybra governance-commit --paths <本步产物>`)向导已原样给出;治理根须在治理仓(git)内,
 不在时向导先给出 `lybra home git-init --home-root <home 根>`。任一步卡住:
@@ -115,12 +119,16 @@ finalize → 结案 → 治理落账(N6)。走到需要工位干活的一步时:
 ## 第六步:等待与查看
 
 ```bash
+lybra loop status --task-id <卡ID> --workspace-root <治理根> --wait 540   # 有界等 loop 到可行动: 给出顾问下一动作
 lybra agent watch --workspace-root <治理根> --timeout 600   # 纯客户端文件哨兵: 变化即 exit 0, 超时 exit 2
 lybra next --task-id <卡ID> --workspace-root <治理根>      # 这张卡的当前状态与下一步
 lybra state lint --workspace-root <治理根>                 # 队列 × frontmatter × records 一致性, 含未落账真相
 lybra board open --workspace-root <治理根>                 # 本地看板(默认 7117)
 ```
 
+`loop status --wait` 返回顾问下一动作:`continue_wait`(仍在推进,再等)/ `owner_needed`(附事由,停下请 Owner 定)/
+`card_done_take_next`(已结案,取下一张)/ `investigate`(停滞 / 进程已不在 / 推导或产物类原因,按输出的下一条查);退出码按
+下一动作,声明在 `schema/verbs.schema.json` 的 `lybra_loop_status.exit_codes`。不加 `--wait` = 只读快照。
 `agent watch` 的完整退出码见 `docs/agent_watch_exit_codes.md`。
 
 ---

@@ -36,10 +36,12 @@ lybra onboarding guide <项目名> --home-root <home根> --advisor-dir <会话�
 ```bash
 lybra project new <项目名> --home-root <home根> --actor <你的顾问实例>
 lybra governance-commit --governance-root <项目根> --actor <你的顾问实例> --paths project.json --paths governance/decision_log.md --paths stage_archive
-lybra project set-repos <项目名> --home-root <home根> --repo <仓名>=<产品仓>
+lybra project set-repos <项目名> --home-root <home根> --repo <仓名>=<产品仓> --dry-run
+lybra project set-repos <项目名> --home-root <home根> --repo <仓名>=<产品仓> --confirm
 lybra governance-commit --governance-root <项目根> --actor <你的顾问实例> --paths project.json
 ```
 `project new` 同时写首份阶段快照「项目创建」(首次 finalize 不被阶段门拦); `set-repos` 经 project.json repos 声明校验, 多仓须 `--default`。
+写 project.json 的命令(`set-repos` / `set-repo` / `set-paths` / `set-workstation`)一律两阶段(AIPOS-F125): 先 `--dry-run` 预演(打印 diff 与校验, 零写入), 确认后 `--confirm` 才写。
 **每步之后落账**(AIPOS-F94): 照 guide 原样跑该步的 `lybra governance-commit --paths <本步产物>`, 只提交本步产物并推送治理仓——卡与声明只在盘上 = 未成为可追溯真相。治理根须在治理仓(git, 带 origin)内; 不在 = 先 `lybra home git-init --home-root <home根>`, 由 Owner 按其输出配远端并首推。
 
 ### Step 3–4(Owner): 顾问注册码 + 三张信封
@@ -52,13 +54,19 @@ lybra envelope mint --confirm --workspace-root <项目根> --connection-json <Ow
 第 4 步实际是一条命令签三张(驱动方 / 执行实例 / 审计实例, `--policy-id`/`--agent-or-role` 成对重复)。输出以门生记录为准(`signed ... wrote 5_tasks/policies/...`)。
 **可选 `--launch-harness pi`**(AIPOS-F95): 授权 `lybra loop` 在工位自动拉起 pi(执行体/审计体等待前按声明模板拉起一次, 过程汇总到顾问界面); **缺省 = 手工模式**(Owner 在工位敲 `/go`)。要不要加由 Owner 决定——先问 Owner, 同意才在交给 Owner 的命令里带上这个参数(两种模式见 advisor-commands「两种开工模式」)。
 
-### Step 5(你): 凭码 enroll 到治理根 + 技能交付
+### Step 5(你): 凭码 enroll 到治理根 + 顾问件交付
 
+Claude Code 会话(缺省):
 ```bash
 lybra roles enroll --code <注册码> --workspace <项目根> --harness claude-code --harness-dir <会话目录> --verify
 lybra sync --harness-root <项目根> --workspace-root <项目根> --dry-run
 ```
-凭据落治理根 `.lybra/`(`lybra loop` 按治理根取驱动方凭据); 顾问技能按 distribution 声明交付到 `<会话目录>/.claude/skills/`, 在会话目录重启 Claude Code 即加载。第二条 plan 为空 = 稳态。
+Codex 会话(guide 加 `--advisor-harness codex`; 会话在他机时加 `--advisor-host`, guide 生成 `--harness-host`):
+```bash
+lybra roles enroll --code <注册码> --workspace <项目根> --harness codex --harness-dir <会话目录> --verify
+lybra roles enroll --code <注册码> --workspace <项目根> --harness codex --harness-host <会话所在机> --verify
+```
+凭据落治理根 `.lybra/`(`lybra loop` 按治理根取驱动方凭据); 顾问件按 distribution 声明交付到会话目录: Claude Code = 技能 `.claude/skills/` + 顾问章程 `.claude/rules/lybra-advisor.md`, Codex = 顾问章程 `AGENTS.md`(会话目录在本机时; 他机会话本机无落点, sync 列 undelivered)。在会话目录重启会话即加载。sync 的 plan 为空 = 稳态; 会话目录里已有同名非 Lybra 文件 = 拒不覆盖(移走或换目录)。
 
 ### Step 6–7(你): 工位注册码 → 工位 enroll + sync
 
@@ -89,7 +97,12 @@ lybra --workspace-root <项目根> draft create --from-json <卡稿JSON>
 lybra --workspace-root <项目根> draft publish --path <草稿路径>
 lybra loop --task-id <卡ID> --workspace-root <项目根> --envelope <信封ID>
 ```
-`lybra loop` 一段式认领(建工作树)→ 等交回 → 派审 → 等审计报告 → 裁决 → finalize → 结案 → N6 落账(自动 `lybra governance-commit --task-id <卡ID>`, 本卡与审计卡的队列文件 / 记录等精确提交并推送); exit 3 = 工位尚未交产物, `/go` 后重跑同一条; exit 2 落账拒 = 按原文处理(如他人暂存)后重跑。查漏: `lybra state lint --workspace-root <项目根>` 的 GOVERNANCE_UNCOMMITTED。
+`lybra loop` 一段式认领(建工作树)→ 等交回 → 派审 → 等审计报告 → 裁决 → finalize → 结案 → N6 落账(自动 `lybra governance-commit --task-id <卡ID>`, 本卡与审计卡的队列文件 / 记录等精确提交并推送); exit 3 = 工位尚未交产物, `/go` 后重跑同一条; exit 2 落账拒 = 按原文处理(如他人暂存)后重跑。
+跟进(loop 在后台跑时):
+```bash
+lybra loop status --task-id <卡ID> --workspace-root <项目根> --wait 540
+```
+按输出的顾问下一动作处理(怎么循环见顾问章程「持续推进守则」)。查漏: `lybra state lint --workspace-root <项目根>` 的 GOVERNANCE_UNCOMMITTED。
 
 ## 诊断工具
 

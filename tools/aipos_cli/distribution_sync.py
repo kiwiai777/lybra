@@ -367,9 +367,9 @@ def _local_manifest_path(harness_root: Path, role: str, *, manifest_dir: Path | 
     return (manifest_dir if manifest_dir is not None else harness_root.parent / "_distributed") / f".version-{role}"
 
 
-def _load_local_manifest(harness_root: Path, role: str) -> dict[str, Any]:
-    """读本地 .version-{role}(不存在 = {}; 坏 JSON = 出声 warning + {}, 不吞)。"""
-    path = _local_manifest_path(harness_root, role)
+def _load_local_manifest(harness_root: Path, role: str, *, manifest_dir: Path | None = None) -> dict[str, Any]:
+    """读本地 .version-{role}(不存在 = {}; 坏 JSON = 出声 warning + {}, 不吞)。manifest_dir 同 _local_manifest_path(非 pi harness)。"""
+    path = _local_manifest_path(harness_root, role, manifest_dir=manifest_dir)
     if not path.is_file():
         return {}
     try:
@@ -427,6 +427,7 @@ def compute_diffs(
     shared_guard: dict[str, Any] | None = None,
     pi_mount_report: dict[str, Any] | None = None,
     prune: bool = True,
+    manifest_dir: Path | None = None,
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     """对比本地与远端清单, 返回 [(dist, [path...])] 差异、应存在文件清单、应删除文件清单。
 
@@ -449,7 +450,8 @@ def compute_diffs(
 
     to_fetch: list[dict[str, Any]] = []
     declared_files: set[str] = set()  # 所有声明中应存在的文件
-    local_manifest = _load_local_manifest(harness_root, role) if (render_context is not None and role) else {}
+    local_manifest = (_load_local_manifest(harness_root, role, manifest_dir=manifest_dir)
+                      if (render_context is not None and role) else {})
     ctx_sha = render_context_fingerprint(render_context) if render_context is not None else ""
 
     for dist in remote.get("distributions", []):
@@ -1096,7 +1098,8 @@ def sync(
     harness = workstation_harness(ctx["harness_root"])
     remote = {**remote, "distributions": harness_distributions(list(remote.get("distributions") or []), harness["kind"])}
     if harness["kind"] != default_harness_kind():
-        return _sync_harness_dir(client, ctx, remote, identity=identity, harness=harness, scope=scope, dry_run=dry_run)
+        return _sync_harness_dir(client, ctx, remote, identity=identity, harness=harness, scope=scope, dry_run=dry_run,
+                                 governance_root=governance_root)
 
     # AIPOS-F66B 件①: 章程渲染上下文(只在清单含 charter 时解析治理根; 解析不到 = fail-closed 出声)
     render_ctx: dict[str, Any] | None = None
@@ -1153,21 +1156,9 @@ def sync(
     fetched_total = 0
     results = []
     declaration_gaps: list[dict[str, Any]] = []
-    charter_records: dict[str, dict[str, dict[str, str]]] = {}
     # 未变的 charter 文件: 沿用本地 manifest 三指纹(否则下次会被当作无指纹重渲染)
-    if render_ctx is not None:
-        local_manifest = _load_local_manifest(ctx["harness_root"], ctx["role"])
-        for dist in remote.get("distributions", []):
-            if not _is_charter(dist):
-                continue
-            for f in dist.get("files", []):
-                rec = _recorded_file(local_manifest, dist.get("distribution_id", ""), f["path"])
-                if rec and rec.get("rendered_sha256"):
-                    charter_records.setdefault(str(dist.get("distribution_id")), {})[f["path"]] = {
-                        "source_sha256": rec.get("sha256", ""),
-                        "render_context_sha256": rec.get("render_context_sha256", ""),
-                        "rendered_sha256": rec.get("rendered_sha256", ""),
-                    }
+    charter_records = (_carried_charter_records(_load_local_manifest(ctx["harness_root"], ctx["role"]), remote)
+                       if render_ctx is not None else {})
     for item in diffs:
         dist = item["dist"]
         resp = client.call_tool("lybra_distribution_fetch", {
@@ -1238,6 +1229,23 @@ def sync(
 
 
 
+def _carried_charter_records(local_manifest: dict[str, Any], remote: dict[str, Any]) -> dict[str, dict[str, dict[str, str]]]:
+    """本地 manifest 已记录的章程三指纹(未变的章程沿用, 否则下次会被当作无指纹重渲染); pi 与 harness 目录两条 sync 路径同用。"""
+    records: dict[str, dict[str, dict[str, str]]] = {}
+    for dist in remote.get("distributions", []):
+        if not _is_charter(dist):
+            continue
+        for f in dist.get("files", []):
+            rec = _recorded_file(local_manifest, dist.get("distribution_id", ""), f["path"])
+            if rec and rec.get("rendered_sha256"):
+                records.setdefault(str(dist.get("distribution_id")), {})[f["path"]] = {
+                    "source_sha256": rec.get("sha256", ""),
+                    "render_context_sha256": rec.get("render_context_sha256", ""),
+                    "rendered_sha256": rec.get("rendered_sha256", ""),
+                }
+    return records
+
+
 def _created_wiring_items(report: dict[str, Any] | None) -> list[str]:
     """materialize_pi_wiring 报告中本次新建的挂载项(已在 = 跳过不列)。"""
     if not report:
@@ -1260,47 +1268,72 @@ def _sync_harness_dir(
     harness: dict[str, Any],
     scope: str | None,
     dry_run: bool,
+    governance_root: Path | None = None,
 ) -> dict[str, Any]:
     """AIPOS-F92 件②: 非 pi harness 工位的分发(同一清单/差异/拉取/落盘引擎: compute_diffs + lybra_distribution_fetch + apply_fetch)。
 
     落点基准 = harness.dir(harness_semantics.kinds.<kind>.target_base=harness_dir); 不做 pi 落点 prune(prune=False);
     本地清单写 <工位>/.lybra/.version-<role>。
 
-    AIPOS-F129 件①: 会话不在本机可落处(harness.local=False: codex 无 dir / 他机 host)—— 声明给本角色该 harness 的件为 0 = 无事可做
-    (零写入, 结果点名原因); 非 0 = 拒并点名(禁猜本机落点; 他机交付属扩展位)。"""
+    AIPOS-F136 件②: 章程(kind=charter, 如顾问章程按 claude-code / codex 落点)与 pi 同一渲染器 apply_charter_render(母本 + 项目声明,
+    三指纹记本地清单); harness 目录是用户的会话目录 —— 章程落点已有文件而本地清单无本条渲染记录(非 Lybra 渲染物, 如会话仓自带的
+    AGENTS.md)= 拒并点名, 不覆盖(harness_semantics.charter_in_harness_dir)。
+
+    AIPOS-F129 件① / F136 件②: 会话不在本机可落处(harness.local=False: codex 无 dir / 他机 host)—— 零写入, 声明给本角色该 harness
+    的件逐项列为 undelivered 并点名原因(本机无落点, 禁猜落点; 他机交付属扩展位), 不拒(凭据与身份已落本工位, sync 全量巡检不因此失败)。"""
     if not harness.get("local", True):
         dists_here = list(remote.get("distributions") or [])
         where = f"host={harness.get('host')} dir={harness.get('dir')}"
+        undelivered = [{"distribution_id": d.get("distribution_id"), "kind": d.get("kind"), "target_path": d.get("target_path")}
+                       for d in dists_here]
         if dists_here:
-            return {"ok": False, "role": ctx["role"],
-                    "error": (f"harness={harness['kind']} 会话不在本机可落处({where}), 但声明给本角色该 harness 的件有 "
-                              f"{[d.get('distribution_id') for d in dists_here]}: 本机无落点, 拒(他机交付未实现, 禁猜落点)")}
-        note = f"harness={harness['kind']}({where}): 声明给本角色该 harness 的件 = 0, 无可交付(凭据与身份在本工位 .lybra/)"
+            note = (f"harness={harness['kind']}({where}): 会话不在本机可落处, 声明给本角色该 harness 的件 "
+                    f"{[d['distribution_id'] for d in undelivered]} 未交付(本机无落点, 禁猜; 他机交付未实现 = 扩展位)。"
+                    f"会话目录在本机时: enroll 给 --harness-dir <本机会话目录>(不给 --harness-host)即由本命令交付")
+        else:
+            note = f"harness={harness['kind']}({where}): 声明给本角色该 harness 的件 = 0, 无可交付(凭据与身份在本工位 .lybra/)"
         return {
             "ok": True, "status": "dry-run" if dry_run else "synced", "role": ctx["role"], "gate_url": ctx["gate_url"],
             "product_commit": remote.get("product_commit"), "harness_root": str(ctx["harness_root"]),
             "harness": {"kind": harness["kind"], "dir": None if harness.get("dir") is None else str(harness["dir"]),
                         "host": harness.get("host")},
             "workstation": _public_identity(identity), "scope_project": scope, "governance_root": None,
-            "distributions_checked": 0, "dry_run": dry_run, "plan": [], "would_prune": [], "declared_files": [],
+            "distributions_checked": len(dists_here), "dry_run": dry_run, "plan": [], "undelivered": undelivered,
+            "would_prune": [], "declared_files": [],
             "shared_prune_guard": None, "pi_mount_prune": [], "pi_mount_warnings": [], "files_fetched": 0, "files_pruned": 0,
             "changes": [], "pruned_files": [], "prune_errors": [], "declaration_gaps": [], "manifest_path": None, "note": note,
             "owner_policy_correction": ({"checked": False, "note": "dry-run 零写入"} if dry_run
                                         else _correct_owner_policy_ref(Path(ctx["harness_root"]), ctx["role"])),
         }
+    from tools.aipos_cli.charter_render import charter_render_context, resolve_workstation_governance_root
+
     target_root = Path(harness["dir"])
     dists = [{**d, "target_base": "harness_root"} for d in remote.get("distributions", [])]
     remote_h = {**remote, "distributions": dists}
-    diffs, declared_files, _ = compute_diffs(target_root, remote_h, role=ctx["role"], prune=False)
+    manifest_dir = ctx["lybra_dir"]  # AIPOS-F106 件④: 工位 .lybra 已由 resolve_sync_context 经 discover_lybra_dir 定位
+    # AIPOS-F136 件②: 章程渲染上下文(只在清单含 charter 时解析治理根; 解析不到 = fail-closed 出声, 与 pi 路径同一解析)
+    render_ctx: dict[str, Any] | None = None
+    if any(_is_charter(d) for d in dists):
+        gov = resolve_workstation_governance_root(identity, explicit=governance_root)
+        render_ctx = charter_render_context(gov, identity=identity, product_commit=str(remote.get("product_commit") or "unknown"))
+    local_manifest = _load_local_manifest(target_root, ctx["role"], manifest_dir=manifest_dir)
+    foreign = [str(_file_target_path(target_root, d, f["path"])) for d in dists if _is_charter(d) for f in d.get("files", [])
+               if _file_target_path(target_root, d, f["path"]).exists()
+               and not (_recorded_file(local_manifest, str(d.get("distribution_id") or ""), f["path"]) or {}).get("rendered_sha256")]
+    if foreign:
+        return {"ok": False, "role": ctx["role"],
+                "error": (f"harness={harness['kind']} 章程落点已有非 Lybra 渲染物 {foreign}(本地清单无渲染记录): 拒, 不覆盖会话目录里的文件"
+                          f"(distribution.schema harness_semantics.charter_in_harness_dir)。出口: 移走该文件, 或 enroll 换一个 --harness-dir 后重跑")}
+    diffs, declared_files, _ = compute_diffs(target_root, remote_h, render_context=render_ctx, role=ctx["role"], prune=False,
+                                             manifest_dir=manifest_dir)
     plan = [{
         "distribution_id": item["dist"]["distribution_id"],
         "kind": item["dist"].get("kind"),
-        "action": "would-fetch",
+        "action": "would-render" if _is_charter(item["dist"]) and render_ctx is not None else "would-fetch",
         "paths": list(item["paths"]),
         "reasons": dict(item.get("reasons") or {}),
         "target_path": str(target_root / str(item["dist"].get("target_path") or "")),
     } for item in diffs]
-    manifest_dir = ctx["lybra_dir"]  # AIPOS-F106 件④: 工位 .lybra 已由 resolve_sync_context 经 discover_lybra_dir 定位
     base_result: dict[str, Any] = {
         "ok": True,
         "status": "dry-run" if dry_run else "synced",
@@ -1311,7 +1344,7 @@ def _sync_harness_dir(
         "harness": {"kind": harness["kind"], "dir": str(target_root)},
         "workstation": _public_identity(identity),
         "scope_project": scope,
-        "governance_root": None,
+        "governance_root": render_ctx["governance_root"] if render_ctx else None,
         "distributions_checked": len(dists),
         "dry_run": dry_run,
         "plan": plan,
@@ -1327,17 +1360,28 @@ def _sync_harness_dir(
                 "owner_policy_correction": {"checked": False, "note": "dry-run 零写入"}}
     fetched_total = 0
     results = []
+    declaration_gaps: list[dict[str, Any]] = []
+    charter_records = _carried_charter_records(local_manifest, remote_h) if render_ctx is not None else {}
     for item in diffs:
         dist = item["dist"]
         resp = client.call_tool("lybra_distribution_fetch", {"distribution_id": dist["distribution_id"], "paths": item["paths"]})
         if not resp.get("ok"):
             return {"ok": False, "error": f"fetch failed for {dist['distribution_id']}: {resp}", "role": ctx["role"]}
-        written = apply_fetch(target_root, dist, resp.get("files") or [])
+        files = resp.get("files") or []
+        if _is_charter(dist) and render_ctx is not None:
+            prev = {rel: fp.get("rendered_sha256", "") for rel, fp in (charter_records.get(str(dist["distribution_id"])) or {}).items()}
+            rendered = apply_charter_render(target_root, dist, files, render_ctx, reasons=item.get("reasons"), previous_rendered=prev)
+            written, action = rendered["written"], "rendered"
+            charter_records.setdefault(str(dist["distribution_id"]), {}).update(rendered["files"])
+            declaration_gaps.extend(rendered["declaration_gaps"])
+        else:
+            written, action = apply_fetch(target_root, dist, files), "fetched"
         fetched_total += written
-        results.append({"distribution_id": dist["distribution_id"], "action": "fetched", "files_written": written,
+        results.append({"distribution_id": dist["distribution_id"], "action": action, "files_written": written,
                         "reasons": dict(item.get("reasons") or {}), "target_path": str(target_root / str(dist.get("target_path") or ""))})
-    manifest_path = write_local_manifest(target_root, remote_h, workstation=identity, pruned=[], manifest_dir=manifest_dir)
-    return {**base_result, "files_fetched": fetched_total, "files_pruned": 0, "changes": results, "declaration_gaps": [],
+    manifest_path = write_local_manifest(target_root, remote_h, charter_records=charter_records or None, workstation=identity,
+                                         pruned=[], manifest_dir=manifest_dir)
+    return {**base_result, "files_fetched": fetched_total, "files_pruned": 0, "changes": results, "declaration_gaps": declaration_gaps,
             "manifest_path": str(manifest_path), "pruned_files": [], "prune_errors": [],
             "owner_policy_correction": _correct_owner_policy_ref(Path(ctx["harness_root"]), ctx["role"])}
 

@@ -48,7 +48,7 @@ lybra --help
 | Who | Does |
 |---|---|
 | **Owner** | Starts the gate (`lybra serve`), issues enrollment codes, signs autonomy envelopes (`lybra envelope mint`), and per card either presses **`/go`** in the workstation (manual mode, the default) or authorizes `lybra loop` to start the workstation harness (`lybra envelope mint … --launch-harness pi`). |
-| **Advisor** (a Claude Code session with the advisor skills) | Onboards the project, drafts and publishes cards, and advances each card with **`lybra loop`**. |
+| **Advisor** (a Claude Code or Codex session with the advisor charter and skills) | Onboards the project, drafts and publishes cards, and advances each card with **`lybra loop`**, following it with `lybra loop status --wait` and stopping only when the product says the Owner is needed. |
 | **Executor / auditor workstations** | Opened with `/go`, or launched by an authorized `lybra loop`; commit on the card branch and write the report to the project's declared location. No gate verbs, no credentials pasted. |
 
 **1. Onboard a project** — the product prints every step for your project, in order, with failure exits:
@@ -56,12 +56,20 @@ lybra --help
 ```bash
 lybra onboarding guide my_project            # steps 1–9: who runs each command, how to verify it
 lybra project new my_project                 # step 1: governance root + project.json under the home root
-lybra project set-repos my_project --repo app=/abs/path/to/app   # step 2: declare product repos
+lybra project set-repos my_project --repo app=/abs/path/to/app --dry-run   # step 2: preview the project.json diff (no write)
+lybra project set-repos my_project --repo app=/abs/path/to/app --confirm   #         then write it
 ```
+
+Every command that writes `project.json` (`set-repos`, `set-repo`, `set-paths`, `set-workstation`) is two-phase:
+`--dry-run` (default) previews the diff and validation with zero writes; `--confirm` writes.
 
 The guide's remaining steps cover the Owner's two one-time actions (an advisor enrollment code and
 one command that signs the envelopes), advisor and workstation enrollment (`lybra roles enroll`), and
-distribution (`lybra sync`). `lybra onboarding check my_project --step <n>` diagnoses any step.
+distribution (`lybra sync`). The advisor session may be Claude Code (default) or Codex
+(`lybra onboarding guide my_project --advisor-harness codex --advisor-host <session-host>`, which enrolls with
+`lybra roles enroll ... --harness codex`); the advisor charter is rendered into the session directory
+(Claude Code: `.claude/rules/lybra-advisor.md` next to the `.claude/skills/`; Codex: `AGENTS.md`) when that
+directory is on the governance machine. `lybra onboarding check my_project --step <n>` diagnoses any step.
 
 **2. Run a card** — the advisor publishes a card and drives it to completion with one command:
 
@@ -92,7 +100,10 @@ Two kickoff modes (AIPOS-F95):
 
 Exit codes are declared in `schema/verbs.schema.json` (`lybra_loop.exit_codes`).
 
-**3. Wait and inspect** — `lybra agent watch --workspace-root <governance-root>` is a pure-client,
+**3. Follow, wait and inspect** — `lybra loop status --task-id <CARD-ID> --wait <seconds>` waits (bounded) on the
+card's loop-run record and returns the advisor's next action — `continue_wait`, `owner_needed` (with the reason),
+`card_done_take_next` or `investigate` — with exit codes declared in `schema/verbs.schema.json`
+(`lybra_loop_status.exit_codes`); without `--wait` it is a read-only snapshot. `lybra agent watch --workspace-root <governance-root>` is a pure-client,
 bounded filesystem sentinel any bash-capable agent can use (exit codes:
 [`docs/agent_watch_exit_codes.md`](docs/agent_watch_exit_codes.md)). `lybra next --task-id <ID>`
 shows the next step of a card, `lybra state lint` checks queue / frontmatter / records consistency

@@ -1953,25 +1953,89 @@
       ]
     },
     "lybra_loop_status": {
-      "description": "AIPOS-F131 件②: `lybra loop status [--task-id <ID>] [--workspace-root <治理根>] [--json]` —— 读 loop 运行记录(lybra_loop.run_record)+ 本机探活(pid 存在且命令行指纹一致)+ 判停滞, 输出: 运行中/已结束、当前步与等待对象、拉起进程存活与否/已运行时长/距最近输出多久/最近活动类别与时间、停滞判定(states)、结束原因, 以及记录与日志路径。--task-id 给出 = 该卡最近一次运行(含已结束); 缺省 = 本项目全部未结束的运行。只读, 不写任何文件、不起任何进程、不发信号; 输出不含凭据与会话正文(记录本身不落)。跨机: 在治理根所在机执行(经 ssh 亦可); 记录主机 ≠ 本机 = unprobeable。判据唯一实现 tools/aipos_cli/loop_run_record.judge_run, 禁调用方 tail/grep 原始日志自判。",
+      "description": "AIPOS-F131 件②: `lybra loop status [--task-id <ID>] [--workspace-root <治理根>] [--json]` —— 读 loop 运行记录(lybra_loop.run_record)+ 本机探活(pid 存在且命令行指纹一致)+ 判停滞, 输出: 运行中/已结束、当前步与等待对象、拉起进程存活与否/已运行时长/距最近输出多久/最近活动类别与时间、停滞判定(states)、结束原因, 以及记录与日志路径。--task-id 给出 = 该卡最近一次运行(含已结束); 缺省 = 本项目全部未结束的运行。只读, 不写任何文件、不起任何进程、不发信号; 输出不含凭据与会话正文(记录本身不落)。跨机: 在治理根所在机执行(经 ssh 亦可); 记录主机 ≠ 本机 = unprobeable。判据唯一实现 tools/aipos_cli/loop_run_record.judge_run, 禁调用方 tail/grep 原始日志自判。AIPOS-F136 件①: 输出增「顾问下一动作」(next_action 段, 唯一判定 loop_run_record.next_action); `--wait <秒>` 有界等待到可行动或到时(wait 段), 退出码按下一动作。",
       "phase": "driver",
       "surface": ["cli"],
       "cli_command": "lybra loop status",
-      "single_implementation": "tools/aipos_cli/loop_run_record.loop_status / judge_run / render_status",
+      "single_implementation": "tools/aipos_cli/loop_run_record.loop_status / judge_run / next_action / wait_for_next_action / render_status",
       "parameters": {
         "type": "object",
         "properties": {
           "task_id": {"type": "string", "description": "卡 ID; 缺省 = 列本项目全部未结束的 loop 运行"},
           "workspace_root": {"type": "string", "description": "治理根; 缺省自发现"},
           "lane": {"type": "string", "description": "AIPOS-F133 件②: 只看该 lane 的运行(声明 lane_view; 运行记录反查卡面取 lane)"},
-          "json": {"type": "boolean", "description": "JSON 输出"}
+          "json": {"type": "boolean", "description": "JSON 输出"},
+          "wait": {"type": "number", "description": "AIPOS-F136 件①: 有界等待秒数(须 --task-id; 0 < 秒数 ≤ wait.max_seconds)。经 agent watch 唯一等待原语 run_fs_watch(expect = 本卡运行记录, expect_ready = 顾问下一动作 ≠ continue_wait)等到可行动或到时, 返回当时状态; 退出码按下一动作(exit_codes)"}
         },
         "additionalProperties": false
       },
+      "wait": {
+        "max_seconds": 3600,
+        "interval_seconds": 5,
+        "note": "AIPOS-F136 件①: --wait 上限与轮询间隔(唯一声明)。等待经 tools/aipos_cli/agent_watch_fs.run_fs_watch(loop 的唯一等待原语, 禁 sleep 自旋): 观察根 = 项目声明的运行记录落点 project.json paths.loop_runs_root(唯一读取口 workspace_config.project_paths), expect = <卡ID>/looprun_*.md, 每轮由 judge_run + next_action 重判(进程死 / 停滞 / 结束无需文件变化也在下一轮被判出)。到时 = 返回当时状态(continue_wait)。顾问取本会话单次命令超时以内的秒数; 超上限 = 用法错(usage), 不截断。"
+      },
+      "next_action": {
+        "description": "AIPOS-F136 件①: 顾问下一动作(唯一判定 tools/aipos_cli/loop_run_record.next_action; 输出与 --json 每个运行附 next_action {action, reason, detail, hint}, --task-id 时顶层另附本卡的 next_action)。判据只读运行记录: 状态(judge_run)→ by_state; 已结束 → 结束原因 by_end_reason(结束原因原文 end_message 即门/推导核的拒因, 一并给出); 本卡最近连续 consecutive_failures_owner_needed 次运行都以 investigate 类原因结束 = 连败 → owner_needed。",
+        "actions": {
+          "continue_wait": "loop 仍在推进(或在等工位产物): 再跑一次 `lybra loop status --task-id <卡ID> --wait <秒>`; reason=manual_kickoff 时 loop 在手工模式等工位, 向 Owner 说一次 detail 里的开工提示(在哪个工位敲 /go), 然后继续等",
+          "owner_needed": "须 Owner 决定/授权: 停下, 一次说清 detail 里要 Owner 定什么(设计分叉 / 授权 / 连败 / 门拒原因), Owner 定了再续跑 loop",
+          "card_done_take_next": "本卡已结案并落账: 取本 lane 下一张(next_card 与 hint 由 F133「下一张」出口给出; 无可推进卡时 hint 为 lane 扫描)",
+          "investigate": "loop 或其拉起的进程异常(停滞 / 进程已不在 / 别机记录)或以推导/产物类原因结束: 按 hint 查(`lybra next --task-id <卡ID>` 给缺项与出口), 能修的出卡修、修好续跑 loop; 修不了 = 升 owner_needed"
+        },
+        "by_state": {
+          "running": "continue_wait",
+          "stalled": "investigate",
+          "launch_dead": "investigate",
+          "loop_dead": "investigate",
+          "unprobeable": "investigate"
+        },
+        "by_end_reason": {
+          "completed": "card_done_take_next",
+          "gate_rejected": "owner_needed",
+          "landing_rejected": "owner_needed",
+          "no_envelope": "owner_needed",
+          "verb_not_authorized": "owner_needed",
+          "manual_required": "owner_needed",
+          "wait_timeout": "owner_needed",
+          "max_steps_exhausted": "investigate",
+          "launch_timeout": "investigate",
+          "launch_early_exit": "investigate",
+          "launch_failed": "investigate",
+          "launch_record_failed": "investigate",
+          "not_derivable": "investigate",
+          "artifact_invalid": "investigate",
+          "record_missing": "investigate",
+          "frontmatter_unreadable": "investigate",
+          "command_unparseable": "investigate",
+          "landing_unverified": "investigate",
+          "interrupted": "investigate",
+          "crashed": "investigate"
+        },
+        "owner_reasons": {
+          "gate_rejected": "门拒: 按拒因原文裁定(设计分叉 / 越界 / 冲突), 改卡或仲裁后续跑",
+          "landing_rejected": "N6 落账被拒(他人暂存 / 提交门护栏 / 推送未完成): 由 Owner 定怎么处理他人改动后续跑",
+          "no_envelope": "授权: 无有效信封(缺 / 过期 / 额度用尽), 请 Owner 签发或续额",
+          "verb_not_authorized": "授权: 信封未授权该动词, 请 Owner 决定是否扩授权",
+          "manual_required": "需人工裁定: 推导核给不出可执行命令(见 detail 的建议动作)",
+          "wait_timeout": "工位开工: 手工模式下工位未交产物, 请 Owner 在工位敲 /go(或签带 --launch-harness 的信封授权拉起), 之后续跑 loop",
+          "consecutive_failures": "连败: 本卡最近连续多次运行都异常结束, 不再自动续跑, 请 Owner 定是否改卡 / 换执行体 / 仲裁"
+        },
+        "consecutive_failures_owner_needed": 2,
+        "take_next_hint": "lybra loop --task-id {next_task_id} --workspace-root {governance_root}",
+        "take_next_none_hint": "lybra next --workspace-root {governance_root}{lane_arg}",
+        "take_next_note": "AIPOS-F136 × F133: card_done_take_next 接 F133「下一张」唯一出口(next_resolver.scan_project + pick_next_card, 判据 lane_view.next_card), 范围 = 本卡 lane(lane 不可解析 = 全项目); 有下一张 = take_next_hint(直接推进它), 无 = take_next_none_hint(按 lane 扫描看为何无可推进卡)",
+        "wait_hint": "lybra loop status --task-id {task_id} --workspace-root {governance_root} --wait <秒>",
+        "investigate_hint": "lybra next --task-id {task_id} --workspace-root {governance_root}"
+      },
       "exit_codes": {
-        "ok": {"code": 0, "meaning": "已输出(缺 --task-id 时无未结束运行也为 0, 输出写明)"},
-        "no_run": {"code": 4, "meaning": "--task-id 指定的卡无 loop 运行记录"},
-        "unreadable": {"code": 4, "meaning": "运行记录读不出 / record_type 不符 / 治理根或声明解析失败(点名文件, 不跳过)"}
+        "ok": {"code": 0, "meaning": "已输出(无 --wait; 缺 --task-id 时无未结束运行也为 0, 输出写明)"},
+        "card_done_take_next": {"code": 0, "meaning": "--wait: 下一动作 = card_done_take_next(本卡已结案并落账)"},
+        "usage": {"code": 2, "meaning": "--wait 用法错(缺 --task-id / 秒数 ≤ 0 / 超 wait.max_seconds), 零等待"},
+        "continue_wait": {"code": 3, "meaning": "--wait: 到时仍是 continue_wait(loop 仍在推进 / 等工位产物)"},
+        "no_run": {"code": 4, "meaning": "--task-id 指定的卡无 loop 运行记录(--wait 时 = 到时仍无)"},
+        "unreadable": {"code": 4, "meaning": "运行记录读不出 / record_type 不符 / 治理根或声明解析失败(点名文件, 不跳过)"},
+        "owner_needed": {"code": 5, "meaning": "--wait: 下一动作 = owner_needed(须 Owner 决定 / 授权, 事由见输出)"},
+        "investigate": {"code": 6, "meaning": "--wait: 下一动作 = investigate(停滞 / 进程已不在 / 别机记录 / 推导或产物类结束原因)"}
       }
     },
     "lybra_card_render": {
@@ -2352,7 +2416,7 @@
       "surface": ["mcp"]
     },
     "lybra_agent_watch": {
-      "description": "`lybra agent watch --workspace-root`: 纯客户端只读 mtime+path 哨兵(AIPOS-268/284/284C/295), 有界等待 5_tasks/queue/** + records/** 变化或 --expect 产物; loop 的唯一等待原语(禁 sleep 自旋)。本条目是哨兵退出码的唯一声明; 代码 tools/aipos_cli/agent_watch_fs.py 与 CLI help 只读不写死(AIPOS-F101 件③)。",
+      "description": "`lybra agent watch --workspace-root`: 纯客户端只读 mtime+path 哨兵(AIPOS-268/284/284C/295), 有界等待项目声明的队列根 / 记录根 / loop 运行记录根(AIPOS-F136 件①: 读 project.json paths.queue_root / loop_runs_root 与 transitions.schema record_locations, 不写死)下的变化或 --expect 产物; loop 的唯一等待原语(禁 sleep 自旋)。本条目是哨兵退出码的唯一声明; 代码 tools/aipos_cli/agent_watch_fs.py 与 CLI help 只读不写死(AIPOS-F101 件③)。",
       "phase": "single",
       "surface": ["cli"],
       "cli_command": "lybra agent watch",
