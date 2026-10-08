@@ -178,7 +178,7 @@ def build_autonomy_policy_markdown(
     status: str = POLICY_STATUS_ACTIVE,
     approved_by_owner: bool = True,
     launch_harnesses: list[str] | None = None,
-    task_selector_lane_repo: str | None = None,
+    task_selector_lane_repo: str | list[str] | None = None,
 ) -> str:
     """Render an owner_autonomy_policy artifact. Written only through the owner_confirm-gated
     owner_decision_record grant path — the presence of this on-disk artifact IS the Owner's
@@ -199,9 +199,13 @@ def build_autonomy_policy_markdown(
         "max_tasks": int(max_tasks),
         "launch_harnesses": [str(h) for h in (launch_harnesses or [])],
     }
-    lane_repo = str(task_selector_lane_repo or "").strip()
-    if lane_repo:  # AIPOS-F134 件③: 只在给定时落键(缺省 = 不限 lane, 渲染与存量信封逐字节同)
-        metadata["task_selector_lane_repo"] = lane_repo
+    from tools.aipos_cli.workspace_config import repo_name_set
+
+    # AIPOS-F139: 仓集合唯一序列化 repo_name_set(新铸一律落列表); 空 = 不落键(缺省 = 不限 lane, 渲染与存量信封逐字节同)
+    lane_repos = repo_name_set(task_selector_lane_repo)
+    if lane_repos:  # AIPOS-F134 件③: 只在给定时落键
+        metadata["task_selector_lane_repo"] = lane_repos
+    lane_text = ", ".join(f"`{name}`" for name in lane_repos)
     body = "\n".join(
         [
             f"# Owner Autonomy Policy: {policy_id}",
@@ -214,7 +218,8 @@ def build_autonomy_policy_markdown(
             f"- Max auto-released claims: {max_tasks} (count bound).",
             f"- Owner approval: `{owner_approval_ref}`.",
             f"- Harness launch: {', '.join(launch_harnesses or []) or 'none (manual /go only)'}.",
-            *([f"- Lane: cards whose lane.repo resolves to `{lane_repo}` only (task_selector_lane_repo)."] if lane_repo else []),
+            *([f"- Lane: cards whose lane.repo resolves to {'one of ' if len(lane_repos) > 1 else ''}{lane_text} only (task_selector_lane_repo)."]
+              if lane_repos else []),
             "",
             "## Boundary",
             "",
@@ -246,6 +251,12 @@ def normalize_policy(metadata: dict[str, Any]) -> dict[str, Any] | None:
     launch = metadata.get("launch_harnesses")
     if not isinstance(launch, list):
         launch = []
+    from tools.aipos_cli.workspace_config import repo_name_set
+
+    try:  # AIPOS-F139: 仓集合唯一解析(单值存量信封 = 单元素集合; 形不合 = 非合规信封, fail-closed 不授权)
+        lane_repos = repo_name_set(metadata.get("task_selector_lane_repo"))
+    except ValueError:
+        return None
     return {
         "policy_id": policy_id,
         "mode": str(metadata.get("mode") or "").strip(),
@@ -261,8 +272,8 @@ def normalize_policy(metadata: dict[str, Any]) -> dict[str, Any] | None:
         "max_tasks": max_tasks,
         # AIPOS-F95 件②(b): 缺省 [] = 不授权拉起(存量信封无此键)
         "launch_harnesses": [str(item).strip() for item in launch if str(item).strip()],
-        # AIPOS-F134 件③: 缺省 "" = 不限 lane(存量信封无此键)
-        "task_selector_lane_repo": str(metadata.get("task_selector_lane_repo") or "").strip(),
+        # AIPOS-F134 件③ / F139: 仓集合(缺省 [] = 不限 lane, 存量信封无此键; 单值存量 = 单元素集合)
+        "task_selector_lane_repo": lane_repos,
     }
 
 
@@ -432,6 +443,8 @@ def match_claim_envelope(
     as gate-side evidence, so a match or fallback is observable without agent self-report.
     AIPOS-F134 件③: task_selector_lane_repo(缺省 "" = 不限 lane) —— lane = 判定对象卡的仓指称(envelope_subject(with_lane=True) /
     card_lane_refs); 选择器值须在其 refs 内。带 lane 选择器而调用方未给 lane / 卡仓解析不到 = 不匹配(fail-closed, 原因链带原文)。
+    AIPOS-F139: 选择器 = 仓集合(workspace_config.repo_name_set 唯一解析; 单值存量信封 = 单元素集合), 集合任一仓在 refs 内即命中;
+    不命中原因链列出整个集合。lane 判定只在此处。
     """
     # ── evaluate every predicate (full picture for the trace) ─────────────
     is_dict = isinstance(policy, dict)
@@ -444,9 +457,16 @@ def match_claim_envelope(
     sel_mode = str(policy.get("task_selector_task_mode") or "").strip() if is_dict else ""
     sel_project = str(policy.get("task_selector_project") or "").strip() if is_dict else ""
     sel_ids = list(policy.get("task_selector_task_ids") or []) if is_dict else []
-    sel_lane = str(policy.get("task_selector_lane_repo") or "").strip() if is_dict else ""
+    # AIPOS-F139: 仓集合唯一解析 workspace_config.repo_name_set(单值存量信封 = 单元素集合); 卡 lane 指称 ∈ 集合任一即命中
+    from tools.aipos_cli.workspace_config import repo_name_set
+
+    lane_set_error = ""
+    try:
+        sel_lane = repo_name_set(policy.get("task_selector_lane_repo")) if is_dict else []
+    except ValueError as exc:  # 形不合 = 视为带 lane 限定且不命中(fail-closed, 原因链带原文)
+        sel_lane, lane_set_error = [], str(exc)
     lane_refs = [str(r) for r in ((lane or {}).get("refs") or [])] if isinstance(lane, dict) else []
-    lane_ok = (not sel_lane) or (sel_lane in lane_refs)
+    lane_ok = not lane_set_error and ((not sel_lane) or any(name in lane_refs for name in sel_lane))
 
     active_from = _parse_iso(policy.get("active_from")) if is_dict else None
     expires_at = _parse_iso(policy.get("expires_at")) if is_dict else None
@@ -465,7 +485,7 @@ def match_claim_envelope(
         "time_window_parseable": tw_parseable,
         "time_window_active": tw_parseable and (active_from <= now < expires_at),
         "agent_or_role": bool(covered) and covered in identity,
-        "task_selector_present": bool(sel_mode or sel_project or sel_ids or sel_lane),
+        "task_selector_present": bool(sel_mode or sel_project or sel_ids or sel_lane or lane_set_error),
         "task_id_in_ids": (not sel_ids) or (str(task_id or "").strip() in sel_ids),
         "task_mode": (not sel_mode) or (str(task_mode or "").strip() == sel_mode),
         "project": (not sel_project) or (str(project or "").strip() == sel_project),
@@ -501,7 +521,7 @@ def match_claim_envelope(
     elif not covered or covered not in identity:
         reason = "claiming agent/role is not covered by policy.agent_or_role"
         error_code = ENVELOPE_ERROR_AGENT_NOT_COVERED
-    elif not (sel_mode or sel_project or sel_ids or sel_lane):
+    elif not (sel_mode or sel_project or sel_ids or sel_lane or lane_set_error):
         reason = "policy task_selector is empty (no wildcard auto-release)"
         error_code = None  # empty selector (config error)
     elif sel_ids and str(task_id or "").strip() not in sel_ids:
@@ -514,13 +534,15 @@ def match_claim_envelope(
         reason = "project does not match policy task_selector.project"
         error_code = ENVELOPE_ERROR_SELECTOR_PROJECT_MISMATCH
     elif not lane_ok:
-        if not isinstance(lane, dict):
+        if lane_set_error:
+            where = f"policy task_selector.lane_repo unparseable ({lane_set_error})"
+        elif not isinstance(lane, dict):
             where = "card lane not provided to the matcher"
         elif lane.get("error"):
             where = f"card repo unresolvable ({lane.get('error')})"
         else:
             where = f"card lane.repo resolves to {lane_refs}"
-        reason = f"{where}; does not match policy task_selector.lane_repo={sel_lane!r}"
+        reason = f"{where}; does not match policy task_selector.lane_repo={sel_lane!r} (any of the set)"
         error_code = ENVELOPE_ERROR_SELECTOR_LANE_REPO_MISMATCH
     elif max_tasks <= 0:
         reason = "policy max_tasks is not a positive bound"
@@ -626,8 +648,10 @@ def select_envelope(
                 subject_mode = str(policy.get("task_selector_task_mode") or "")
                 subject_project = str(policy.get("task_selector_project") or "")
                 # 任务无关: 判定对象取信封自身选择器(= 「该信封覆盖某张卡」), lane 同理
-                sel_lane = str(policy.get("task_selector_lane_repo") or "")
-                subject_lane = {"refs": [sel_lane] if sel_lane else [], "error": ""}
+                from tools.aipos_cli.workspace_config import repo_name_set
+
+                # AIPOS-F139: 集合经唯一解析; 已过 normalize_policy 的信封形必合规(形不合者 load_policy 已拒)
+                subject_lane = {"refs": repo_name_set(policy.get("task_selector_lane_repo")), "error": ""}
             matched, reason, _code = match_claim_envelope(
                 policy=policy,
                 task_id=subject_id,

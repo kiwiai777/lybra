@@ -8,7 +8,7 @@ return work, launch a worker, dispatch audit, or finalize anything.
 | Party | Gate access |
 |---|---|
 | **Owner** | Starts the gate (`lybra serve start`), signs envelopes (`lybra envelope mint --confirm`), issues enrollment codes. |
-| **Advisor** | Drives every card through product commands — `lybra loop --task-id <card>` derives and runs claim / return ingest / audit dispatch / verdict ingest / finalize / close with the advisor's own credential. The advisor never hand-writes gate calls. Progress of a running (or backgrounded) loop is read with `lybra loop status [--task-id <card>]` on the governance-root machine (over ssh is fine) — never by tailing or grepping raw logs. After a card closes, the next card to drive is the first line of `lybra next` (project scan: the highest-priority pending card whose `depends_on` are all satisfied by gate-born records, declared in `schema/card.schema.json` `dependency_gate`). In a multi-repo project, `lybra next` / `lybra brief` / `lybra loop status` / `lybra needs-owner` take the same `--lane <repo name>` filter (declared once in `schema/verbs.schema.json` `lane_view`); without it, `brief` and `needs-owner` group their output by lane. |
+| **Advisor** | Drives every card through product commands — `lybra loop --task-id <card>` derives and runs claim / return ingest / audit dispatch / verdict ingest / finalize / close with the advisor's own credential. The advisor never hand-writes gate calls. Progress of a running (or backgrounded) loop is read with `lybra loop status [--task-id <card>]` on the governance-root machine (over ssh is fine) — never by tailing or grepping raw logs. After a card closes, the next card to drive is the first line of `lybra next` (project scan: the highest-priority pending card whose `depends_on` are all satisfied by gate-born records, declared in `schema/card.schema.json` `dependency_gate`). In a multi-repo project, `lybra next` / `lybra brief` / `lybra loop status` / `lybra needs-owner` take the same `--lane <repo name>` filter (declared once in `schema/verbs.schema.json` `lane_view`); repeat it for a sub-project that spans several repos (`--lane <repo a> --lane <repo b>`); without it, `brief` and `needs-owner` group their output by lane. |
 | **Executor / auditor workstations** | **None.** A workstation is opened with `/go` (or launched by the advisor's `lybra loop` when the Owner's envelope authorizes it with `--launch-harness`), commits on the card branch and writes its report to the project's declared location; the advisor's `lybra loop` picks the artifact up. Workstations hold no claim / return / confirm scope. |
 
 `lybra loop` keeps one run record per invocation under the project's declared `paths.loop_runs_root` (default
@@ -56,6 +56,14 @@ overwritten:
    is refused. Such an envelope only covers cards whose `lane.repo` resolves to that repo; a card of another lane is refused with
    `ENVELOPE_SELECTOR_LANE_REPO_MISMATCH` (`schema/transitions.schema.json` `envelope_guards.selector_lane_repo_mismatch`). An
    envelope without `--lane-repo` covers every lane, as before.
+
+   **Sub-projects that span several repos.** Write the advisor's whole repo set: repeat the flag
+   (`--lane-repo <repo a> --lane-repo <repo b> …`; values are not split on commas). A repo shared by two sub-projects may appear
+   in both advisors' sets — each advisor can then drive that repo's cards, and merges into the same repo are queued automatically
+   (AIPOS-F135). Every name in the set must resolve, otherwise the mint is refused naming that repo. The envelope stores the set as
+   a list; an envelope minted earlier with a single repo keeps working unchanged (read as a one-repo set). A card is covered when
+   its `lane.repo` resolves to any repo in the set; a refusal lists the whole set. Read progress for the same set with
+   `--lane <repo a> --lane <repo b>` on `lybra next` / `lybra brief` / `lybra loop status` / `lybra needs-owner`.
 3. **Drive with an explicit actor.** `lybra loop --task-id <card> --actor <advisor instance>`. The loop uses only that
    instance's own credential for every gate call (it never falls back to another advisor's credential or to the first one in the
    file), and refuses to start when the instance has no credential in the governance root. With two or more advisor instances

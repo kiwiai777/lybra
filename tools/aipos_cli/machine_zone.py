@@ -412,9 +412,10 @@ def lane_view_declaration(repo_root: Path | None = None) -> dict[str, Any]:
 
 
 def add_lane_argument(parser: Any) -> None:
-    """四命令的 --lane 参数(声明 verbs.schema lane_view.cli_flag / help; argparse 缺省 None = 不过滤)。"""
+    """四命令的 --lane 参数(声明 verbs.schema lane_view.cli_flag / help; argparse 缺省 None = 不过滤)。
+    AIPOS-F139: 可重复(`--lane a --lane b` = 仓集合, 与 `lybra envelope mint --lane-repo` 同一写法)。"""
     decl = lane_view_declaration()
-    parser.add_argument(str(decl["cli_flag"]), dest="lane", default=None, metavar=str(decl.get("metavar") or "LANE"),
+    parser.add_argument(str(decl["cli_flag"]), dest="lane", action="append", default=None, metavar=str(decl.get("metavar") or "LANE"),
                         help=str(decl["help"]))
 
 
@@ -474,30 +475,45 @@ class LaneFilterInvalid(ValueError):
     """--lane 值不是本项目声明的 lane(fail-closed: 拒, 点名可选值, 不当作「过滤后为空」)。"""
 
 
-def resolve_lane_filter(governance_root: Path, value: str | None) -> str | None:
-    """--lane 值 → 规范 lane 键(仓名或该仓绝对路径均可; 匹配走 workspace_config._match_repo_ref, 与 lane.repo 校验同一判据)。
-    None/空 = 不过滤。不在清单 = LaneFilterInvalid(点名可选值)。"""
-    from tools.aipos_cli.workspace_config import _match_repo_ref, project_repos
+def resolve_lane_filter(governance_root: Path, value: str | list[str] | None) -> list[str] | None:
+    """--lane 值(单个或可重复给出的仓集合)→ 规范 lane 键列表(仓名或该仓绝对路径均可; 匹配走 workspace_config._match_repo_ref,
+    与 lane.repo 校验同一判据; 集合解析唯一 workspace_config.repo_name_set)。None/空 = 不过滤。
+    集合内任一不在清单 = LaneFilterInvalid(点名该值与可选值; 不按「过滤后为空」处理)。"""
+    from tools.aipos_cli.workspace_config import _match_repo_ref, project_repos, repo_name_set
 
-    text = str(value or "").strip()
-    if not text:
+    names = repo_name_set(value)
+    if not names:
         return None
     root = Path(governance_root)
     repos = project_repos(root)
-    matched = _match_repo_ref(text, repos, root)
-    if matched is None:
-        raise LaneFilterInvalid(f"--lane {text!r} 不是本项目声明的 lane; 可选: {declared_lanes(root)}"
-                                "(project.json repos.items 仓名; 无仓清单 = code_repo 路径)")
-    return _lane_name_for_path(root, matched, repos)
+    keys: list[str] = []
+    for text in names:
+        matched = _match_repo_ref(text, repos, root)
+        if matched is None:
+            raise LaneFilterInvalid(f"--lane {text!r} 不是本项目声明的 lane; 可选: {declared_lanes(root)}"
+                                    "(project.json repos.items 仓名; 无仓清单 = code_repo 路径)")
+        keys.append(_lane_name_for_path(root, matched, repos))
+    return repo_name_set(keys)
 
 
-def filter_rows_by_lane(rows: list[dict[str, Any]], lane: str | None) -> list[dict[str, Any]]:
-    """AIPOS-F133 件②: 四命令同一过滤函数。rows 每项须带 "lane"(经 lane_of_card)。lane=None = 原样;
-    lane 给出 = 只留该 lane 与未解析 lane 的行(未解析 = 无法证明不属本 lane, 照列不隐藏)。"""
-    if lane is None:
+def lane_filter_label(lane: str | list[str] | None) -> str:
+    """lane 过滤集合的显示文字(标题/提示用; 集合解析唯一 repo_name_set): 单仓 = 仓名本身, 多仓 = 逗号连接。空 = ""。"""
+    from tools.aipos_cli.workspace_config import repo_name_set
+
+    return ", ".join(repo_name_set(lane))
+
+
+def filter_rows_by_lane(rows: list[dict[str, Any]], lane: str | list[str] | None) -> list[dict[str, Any]]:
+    """AIPOS-F133 件②: 四命令同一过滤函数。rows 每项须带 "lane"(经 lane_of_card)。lane=None/空 = 原样;
+    lane 给出 = 只留该 lane(F139: 或仓集合内任一 lane)与未解析 lane 的行(未解析 = 无法证明不属本 lane, 照列不隐藏)。"""
+    from tools.aipos_cli.workspace_config import repo_name_set
+
+    lanes = repo_name_set(lane)
+    if not lanes:
         return list(rows)
     unresolved = str(lane_view_declaration()["unresolved_lane"])
-    return [row for row in rows if row.get("lane") in (lane, unresolved)]
+    keep = {*lanes, unresolved}
+    return [row for row in rows if row.get("lane") in keep]
 
 
 def group_rows_by_lane(rows: list[dict[str, Any]], governance_root: Path | None = None) -> dict[str, list[dict[str, Any]]]:

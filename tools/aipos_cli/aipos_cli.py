@@ -271,7 +271,7 @@ def _attach_workstation_view(output: dict[str, Any], actor_report: dict[str, Any
     return output
 
 
-def _filter_needs_owner(report: dict[str, Any], *, governance_root: Path | None = None, lane: str | None = None) -> dict[str, Any]:
+def _filter_needs_owner(report: dict[str, Any], *, governance_root: Path | None = None, lane: str | list[str] | None = None) -> dict[str, Any]:
     filtered = [
         task
         for task in report["tasks"]
@@ -1088,15 +1088,18 @@ def _envelope_mint_payload(
     decision_summary: str,
     actor: str,
     launch_harnesses: list[str] | None = None,
-    lane_repo: str | None = None,
+    lane_repo: str | list[str] | None = None,
 ) -> dict[str, Any]:
     """信封 payload 唯一构造(--dry-run 本地预演与 --confirm 门路径同读): 门 envelope 路径只要 decision_id + autonomy_policy。"""
+    from tools.aipos_cli.workspace_config import repo_name_set
+
     task_selector: dict[str, Any] = {}
     if task_mode:
         task_selector["task_mode"] = task_mode
-    if str(lane_repo or "").strip():
-        # AIPOS-F134 件③: lane 选择器(门 owner_decision_writer._normalize_autonomy_policy 按 resolve_card_repo 校验); 缺省 = 不限 lane
-        task_selector["lane_repo"] = str(lane_repo).strip()
+    lane_repos = repo_name_set(lane_repo)  # AIPOS-F139: 仓集合唯一解析(--lane-repo 可重复)
+    if lane_repos:
+        # AIPOS-F134 件③: lane 选择器(门 owner_decision_writer._normalize_autonomy_policy 按 resolve_card_repo 逐个校验); 缺省 = 不限 lane
+        task_selector["lane_repo"] = lane_repos
     return {
         "decision_id": f"envelope-{policy_id}",
         "actor": actor,
@@ -2018,9 +2021,11 @@ def build_parser() -> argparse.ArgumentParser:
     envelope_mint_parser.add_argument("--agent-or-role", action="append", required=True, help="Agent instance or role covered (repeatable; paired in order with --policy-id)")
     envelope_mint_parser.add_argument("--max-tasks", type=int, required=True, help="Maximum tasks allowed")
     envelope_mint_parser.add_argument("--task-mode", help="Task mode selector (e.g., code)")
-    envelope_mint_parser.add_argument("--lane-repo", dest="lane_repo", default=None,
-                                      help="AIPOS-F134: lane selector — only cards whose lane.repo resolves to this repo (name in project.json repos.items; "
-                                           "path when the project has no repos list). Default: any lane")
+    envelope_mint_parser.add_argument("--lane-repo", dest="lane_repo", action="append", default=None,
+                                      help="AIPOS-F134/F139: lane selector — only cards whose lane.repo resolves to one of these repos (name in project.json "
+                                           "repos.items; path when the project has no repos list). Repeatable for a repo set (a sub-project spanning "
+                                           "several repos; a shared repo may appear in several advisors' sets); every name must resolve or the mint is "
+                                           "refused. Default: any lane")
     envelope_mint_parser.add_argument("--expires-at", required=True, help="Expiration datetime (ISO8601)")
     envelope_mint_parser.add_argument("--decision-summary", required=True, help="Decision summary")
     envelope_mint_parser.add_argument("--actor", default="owner", help="Actor (default: owner)")

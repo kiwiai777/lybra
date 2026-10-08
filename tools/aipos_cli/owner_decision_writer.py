@@ -355,22 +355,30 @@ def _normalize_autonomy_policy(
     sel_ids = [str(item).strip() for item in sel_ids_raw if str(item).strip()] if isinstance(sel_ids_raw, list) else []
     if sel_ids_raw not in (None, []) and not isinstance(sel_ids_raw, list):
         _add(blocking_reasons, "autonomy_policy.task_selector.task_ids must be a list of strings")
-    # AIPOS-F134 件③: lane 选择器(缺省 = 不限 lane)。须在本治理根可解析(workspace_config.resolve_card_repo 唯一解析: 仓名 ∈ project.json
-    # repos.items, 或无清单时 = code_repo 路径); 解析不到 = BLOCK(不落一张永远匹配不上的信封)。路径形落 resolve 后的绝对路径。
-    sel_lane = str(selector.get("lane_repo") or "").strip()
-    if sel_lane:
-        if repo_root is None:
-            _add(blocking_reasons, "autonomy_policy.task_selector.lane_repo needs the target governance root to resolve the repo")
-        else:
-            from tools.aipos_cli.workspace_config import CardRepoUnresolved, resolve_card_repo
+    # AIPOS-F134 件③ / F139: lane 选择器 = 仓集合(缺省 [] = 不限 lane; 集合唯一解析 workspace_config.repo_name_set)。集合内每个名
+    # 都须在本治理根可解析(workspace_config.resolve_card_repo 唯一解析: 仓名 ∈ project.json repos.items, 或无清单时 = code_repo 路径);
+    # 任一解析不到 = BLOCK(逐个点名, 不落一张含永远匹配不上之名的信封)。路径形落 resolve 后的绝对路径。
+    from tools.aipos_cli.workspace_config import repo_name_set
 
+    sel_lane: list[str] = []
+    try:
+        lane_names = repo_name_set(selector.get("lane_repo"))
+    except ValueError as exc:
+        lane_names = []
+        _add(blocking_reasons, f"autonomy_policy.task_selector.lane_repo 须为仓名字符串或其列表: {exc}")
+    if lane_names and repo_root is None:
+        _add(blocking_reasons, "autonomy_policy.task_selector.lane_repo needs the target governance root to resolve the repo")
+    elif lane_names:
+        from tools.aipos_cli.workspace_config import CardRepoUnresolved, resolve_card_repo
+
+        for name in lane_names:
             try:
-                resolved = resolve_card_repo(repo_root, {"task_id": f"envelope:{value.get('policy_id') or '?'}", "lane": {"repo": sel_lane}})
+                resolved = resolve_card_repo(repo_root, {"task_id": f"envelope:{value.get('policy_id') or '?'}", "lane": {"repo": name}})
             except (CardRepoUnresolved, OSError, ValueError) as exc:
-                _add(blocking_reasons, f"autonomy_policy.task_selector.lane_repo={sel_lane!r} 不可解析: {exc}")
-            else:
-                if Path(sel_lane).expanduser().is_absolute():
-                    sel_lane = str(resolved.resolve())
+                _add(blocking_reasons, f"autonomy_policy.task_selector.lane_repo={name!r} 不可解析(集合 {lane_names}): {exc}")
+                continue
+            sel_lane.append(str(resolved.resolve()) if Path(name).expanduser().is_absolute() else name)
+        sel_lane = repo_name_set(sel_lane)
     if not (sel_mode or sel_project or sel_ids or sel_lane):
         _add(blocking_reasons, "autonomy_policy.task_selector must set at least one of task_mode/project/task_ids/lane_repo (no wildcard envelope)")
 

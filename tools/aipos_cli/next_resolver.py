@@ -3003,7 +3003,7 @@ _SCAN_STATES = ("pending", "claimed", "blocked")
 _SCAN_STATE_ORDER = {"legacy_baseline_invalid": -1, "pending": 0, "claimed": 1, "blocked": 2, "completed": 3}
 
 
-def scan_project(workspace_root: Path, *, lane: str | None = None) -> list[dict[str, Any]]:
+def scan_project(workspace_root: Path, *, lane: str | list[str] | None = None) -> list[dict[str, Any]]:
     """项目级扫描:返回所有活跃任务的最小待办清单。
 
     AIPOS-F133: 卡遍历只走 task_loader.iter_queue_task_paths(原自 glob 队列目录); 每行带 lane(machine_zone.lane_of_card,
@@ -3115,7 +3115,7 @@ def format_output(result: dict[str, Any], *, json_mode: bool = False) -> str:
     return "\n".join(lines)
 
 
-def format_scan_output(results: list[dict[str, Any]], *, json_mode: bool = False, lane: str | None = None) -> str:
+def format_scan_output(results: list[dict[str, Any]], *, json_mode: bool = False, lane: str | list[str] | None = None) -> str:
     """格式化项目级扫描输出。"""
     if json_mode:
         import json
@@ -3125,7 +3125,9 @@ def format_scan_output(results: list[dict[str, Any]], *, json_mode: bool = False
         return "No active tasks found in queue."
 
     lines: list[str] = []
-    scope = f"lane {lane}, " if lane else ""
+    from tools.aipos_cli.machine_zone import lane_filter_label  # AIPOS-F139: lane 过滤可为仓集合
+
+    scope = f"lane {lane_filter_label(lane)}, " if lane else ""
     lines.append(f"=== lybra next — project scan ({scope}{len(results)} active tasks) ===")
     # AIPOS-F133 件③: 首位给出「下一张可推进卡」(结案后取下一张的唯一出口; 判据见 verbs.schema lane_view.next_card)
     nxt = pick_next_card(results)

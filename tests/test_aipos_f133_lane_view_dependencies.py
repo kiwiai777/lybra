@@ -116,7 +116,7 @@ def test_item1_card_lane_key_single_derivation(dual, tmp_path, monkeypatch):
     unresolved = mz.lane_view_declaration()["unresolved_lane"]
     assert keys["HBJ-X1"]["lane"] == unresolved and keys["HBJ-X1"]["lane_error"].startswith("LANE_REPO_UNDECLARED")
     # 仓名与绝对路径两种 --lane 写法归一到同一 lane 键; 未声明 lane = 拒(点名可选值)
-    assert mz.resolve_lane_filter(gov, "api") == "api" == mz.resolve_lane_filter(gov, str(repos["api"]))
+    assert mz.resolve_lane_filter(gov, "api") == ["api"] == mz.resolve_lane_filter(gov, str(repos["api"]))  # F139: 规范键列表
     with pytest.raises(mz.LaneFilterInvalid) as exc:
         mz.resolve_lane_filter(gov, "ghost")
     _show(f"件① --lane ghost: {exc.value}")
@@ -126,7 +126,7 @@ def test_item1_card_lane_key_single_derivation(dual, tmp_path, monkeypatch):
     single = _gov_skeleton(tmp_path / "gov-single", monkeypatch)
     repo = _product_repo(tmp_path / "repo-single")
     _write(single / "project.json", json.dumps({"project": PROJECT, "code_repo": str(repo), "config_version": 1}))
-    assert mz.card_lane_key({"task_id": "S-1"}, single) == str(repo) == mz.resolve_lane_filter(single, str(repo))
+    assert mz.card_lane_key({"task_id": "S-1"}, single) == str(repo) == mz.resolve_lane_filter(single, str(repo))[0]
 
 
 # ===========================================================================
@@ -165,7 +165,7 @@ def test_item2_brief_groups_by_lane_and_filters(dual):
     _show("件② lybra brief --lane api --json queue: " + json.dumps({k: queue[k] for k in ("pending", "blocked", "lane_filter")}
                                                                    | {"lanes": list(queue["lanes"])}, ensure_ascii=False))
     assert rc == 0, err
-    assert queue["lane_filter"] == "api" and queue["pending"] == 2 and queue["blocked"] == 1  # api 1 + 不可解析 1
+    assert queue["lane_filter"] == ["api"] and queue["pending"] == 2 and queue["blocked"] == 1  # api 1 + 不可解析 1
     assert list(queue["lanes"]) == ["api", mz.lane_view_declaration()["unresolved_lane"]]
 
 
@@ -212,7 +212,7 @@ def test_item2_lane_flag_declared_once_in_verbs_schema():
 
     decl = load_schema("verbs")["lane_view"]
     assert decl["commands"] == ["lybra next", "lybra brief", "lybra loop status", "lybra needs-owner"]
-    assert load_schema("verbs")["verbs"]["lybra_loop_status"]["parameters"]["properties"]["lane"]["type"] == "string"
+    assert load_schema("verbs")["verbs"]["lybra_loop_status"]["parameters"]["properties"]["lane"]["type"] == "array"  # F139: --lane 可重复(仓集合)
     src = (REPO_ROOT / "tools/aipos_cli/aipos_cli.py").read_text(encoding="utf-8")
     assert src.count("add_lane_argument(") == 4 and '"--lane"' not in src  # 四处同一声明投影, 不手写旗标
 

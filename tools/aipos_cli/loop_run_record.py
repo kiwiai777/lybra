@@ -519,7 +519,7 @@ def _run_lane(governance_root: Path, task_id: str) -> dict[str, Any]:
 
 
 def loop_status(governance_root: Path, task_id: str | None = None, *, now: datetime | None = None,
-                contract: dict[str, Any] | None = None, lane: str | None = None) -> dict[str, Any]:
+                contract: dict[str, Any] | None = None, lane: str | list[str] | None = None) -> dict[str, Any]:
     """--task-id 给出 = 该卡最近一次运行(含已结束); 缺省 = 本项目全部未结束的运行(loop_dead 也列出: 记录未结束而进程已不在)。
     读不出的记录 = LoopRunRecordError(fail-closed, 点名文件)。
     AIPOS-F133 件②: 每个运行带 lane(_run_lane 反查卡面); lane 给出 = 经 machine_zone.filter_rows_by_lane 过滤(四命令同一函数)。"""
@@ -677,7 +677,7 @@ class StatusUsageError(ValueError):
 
 def wait_for_next_action(governance_root: Path, task_id: str, seconds: float, *, contract: dict[str, Any] | None = None,
                          sleeper: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic,
-                         interval: float | None = None, lane: str | None = None) -> dict[str, Any]:
+                         interval: float | None = None, lane: str | list[str] | None = None) -> dict[str, Any]:
     """`loop status --task-id <ID> --wait <秒>`: 经 agent_watch_fs.run_fs_watch(唯一等待原语)有界等待, 直到本卡最近一次运行的
     下一动作 ≠ continue_wait(expect_ready 每轮重读记录 + judge_run + next_action; 进程死 / 停滞无需文件变化)或到时; 返回当时的
     loop_status 报告 + wait 段 {requested_seconds, waited_seconds, outcome: ready|timeout}。上限与间隔读 verbs.schema。"""
@@ -743,7 +743,9 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
     if not runs:
         what = f"卡 {report['task_id']} 无 loop 运行记录" if report.get("task_id") else "本项目无未结束的 loop 运行"
         if report.get("lane_filter"):
-            what += f"(lane {report['lane_filter']})"
+            from tools.aipos_cli.machine_zone import lane_filter_label  # AIPOS-F139: lane 过滤可为仓集合
+
+            what += f"(lane {lane_filter_label(report['lane_filter'])})"
         return f"{what}(落点 {report['loop_runs_root']})"
     out: list[str] = []
     for v in runs:

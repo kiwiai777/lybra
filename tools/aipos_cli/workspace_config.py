@@ -1220,6 +1220,31 @@ def default_lane_repo(governance_root: str | Path) -> str:
     return str(governance_root)
 
 
+def repo_name_set(value: Any) -> list[str]:
+    """AIPOS-F139: 仓集合的唯一序列化/解析(信封 task_selector_lane_repo 铸造/渲染/判定与 --lane 视图过滤共用, 禁第二路径)。
+
+    值 → 去空、去重、保序的仓指称列表(仓名或绝对路径, 解析另走 resolve_card_repo / _match_repo_ref):
+    None / "" / [] = [](不限); 单个字符串 = 单元素集合(存量单值信封 `task_selector_lane_repo: ota` 按此读, 文件不改写);
+    字符串列表 = 集合本身(新铸信封 frontmatter 即落此列表)。CLI 写法 = 参数可重复(`--lane-repo a --lane-repo b`), 不按逗号拆分。
+    其余类型(dict / 数字 / 列表含非字符串项)= ValueError(fail-closed, 不猜)。"""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items: list[Any] = [value]
+    elif isinstance(value, (list, tuple)):
+        items = list(value)
+    else:
+        raise ValueError(f"仓集合须为仓名字符串或其列表, 得到 {type(value).__name__}: {value!r}")
+    names: list[str] = []
+    for item in items:
+        if not isinstance(item, str):
+            raise ValueError(f"仓集合成员须为字符串, 得到 {type(item).__name__}: {item!r}")
+        text = item.strip()
+        if text and text not in names:
+            names.append(text)
+    return names
+
+
 def _match_repo_ref(ref: str, repos: dict[str, Any], governance_root: Path) -> Path | None:
     """仓引用(仓名或绝对路径)→ 清单内路径; 无清单时只允许 code_repo(缺则治理根自身)。匹配不到 = None。"""
     if repos["declared"]:
