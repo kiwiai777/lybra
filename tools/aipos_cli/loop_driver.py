@@ -1017,7 +1017,6 @@ def _drive(
             step = LoopStep(index, "wait", derivation.get("current_node"), derivation.get("current_state"), target_card,
                             artifacts=wait_patterns)
             say(f"[{index}] wait: {target_card} 产物 {wait_patterns} (≤{max_wait}s, 经 agent watch)")
-            recorder.step_started(index, "wait", step.node, step.state, target_card, waiting_for=wait_patterns)
 
             def _ready(_matched: list[str], _card: str = ready_card) -> bool:
                 # 就绪 = 推导核可推导; 或硬停(产物不合规 F78 件③ / 记录缺 F73E 件①)——都该让 loop 醒来判定, 而非空等到超时
@@ -1033,6 +1032,11 @@ def _drive(
                 step.launch = plan.to_dict()
                 if plan.refusal:
                     say(f"[{index}] manual: {plan.manual_hint}(未拉起: {plan.refusal})")
+            # AIPOS-F131 件① / F136 件①: 等待步进运行记录(拉起判定之后: 记开工方式, 手工模式附开工提示, 供 loop status 给顾问下一动作)
+            launching = plan is not None and not plan.refusal
+            recorder.step_started(index, "wait", step.node, step.state, target_card, waiting_for=wait_patterns,
+                                  mode="launch" if launching else "manual",
+                                  hint=None if launching or plan is None else plan.manual_hint)
             watch_args = _watch_args(watch_root, wait_patterns, max_wait=max_wait, interval=interval)
             if plan is not None and not plan.refusal:
                 launched.add(launch_card)

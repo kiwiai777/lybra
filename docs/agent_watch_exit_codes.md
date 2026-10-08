@@ -2,8 +2,10 @@
 
 ## Overview
 
-`lybra agent watch --workspace-root` is a pure-client filesystem sentinel that polls
-`5_tasks/queue/**` and `5_tasks/records/**` for changes. AIPOS-284 v2 enhances it with
+`lybra agent watch --workspace-root` is a pure-client filesystem sentinel that polls the
+project's declared subtrees for changes — the queue root (`project.json` `paths.queue_root`), the records
+root and the loop-run records root (`paths.loop_runs_root`; defaults `5_tasks/queue/**`, `5_tasks/records/**`,
+`5_tasks/records/loop_runs/**`). AIPOS-284 v2 enhances it with
 three "death silence" detection semantics, giving advisors and harnesses precise signals
 about task execution outcomes.
 
@@ -12,6 +14,11 @@ about task execution outcomes.
 `agent watch --expect` on the declared report location and maps the outcome to its own exit codes
 (`lybra loop` exit 3 = waiting for an artifact timed out / stalled). Use `agent watch` directly when a
 harness or an operator wants a bounded wait or an event stream of its own.
+
+To follow a running loop, the advisor does not call `agent watch` either: `lybra loop status --task-id <card>
+--wait <seconds>` (AIPOS-F136) waits through the same primitive on the card's loop-run record and returns the
+advisor's next action (`continue_wait` / `owner_needed` / `card_done_take_next` / `investigate`; exit codes in
+`schema/verbs.schema.json` `lybra_loop_status.exit_codes`).
 
 **AIPOS-284C --stream mode**: A persistent observer that emits JSON event lines (line-buffered,
 immediate flush) and continues running. Only `--timeout` or SIGTERM/SIGINT terminate the process.
@@ -47,7 +54,8 @@ lybra agent watch --workspace-root <governance-root> --stream --timeout 1800
 ## Observation Surface
 
 **Diff detection (exit 0 with `{"changed": [...]}`)**:
-- Scope: `5_tasks/queue/**` and `5_tasks/records/**` only
+- Scope: the declared queue root, records root and loop-run records root only (AIPOS-F136: read from
+  the project declarations, never hard-coded; a `loop_runs_root` declared outside the records root is still watched)
 - Any new/modified/moved/deleted file in these subtrees triggers exit 0
 
 **Expect matching (exit 0 with `{"expect_satisfied": [...]}`)**:
@@ -59,7 +67,7 @@ lybra agent watch --workspace-root <governance-root> --stream --timeout 1800
 
 **Stall detection (exit 4)**:
 - With `--run-log`: observes run-log mtime only
-- Without `--run-log`: observes `5_tasks/queue/**` and `5_tasks/records/**` (same as diff scope)
+- Without `--run-log`: observes the declared subtrees (same as diff scope)
 
 ## v2 Parameters (AIPOS-284)
 

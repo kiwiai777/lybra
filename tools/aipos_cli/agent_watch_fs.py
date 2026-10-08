@@ -4,8 +4,9 @@ This is the ONLY ``agent watch`` mode (``--workspace-root``): the loop's sole wa
 AIPOS-F103: the former gate-pull mode (candidate ⑤, AIPOS-248) was retired together with the
 old cross-machine connector (Owner ruling 10-04: executors never claim/return themselves).
 
-A PURE CLIENT, read-only mtime+path sentinel. It snapshots two subtrees of a Lybra
-workspace — ``5_tasks/queue/**`` and ``5_tasks/records/**`` — and block-polls until a
+A PURE CLIENT, read-only mtime+path sentinel. It snapshots the declared subtrees of a Lybra
+workspace — queue root (project.json paths.queue_root), records root (transitions.schema record_locations)
+and loop runs root (project.json paths.loop_runs_root; AIPOS-F136) — and block-polls until a
 change appears, then prints a ONE-LINE JSON change summary and exits 0. On timeout
 with no change it exits 2 SILENTLY; on SIGTERM/SIGINT it exits cleanly (130).
 
@@ -105,23 +106,33 @@ EXIT_STALL = declared_exit_code("lybra_agent_watch", "stall")
 EXIT_USAGE = declared_exit_code("lybra_agent_watch", "usage")
 EXIT_SIGNAL = declared_exit_code("lybra_agent_watch", "signal")
 
-# The two subtrees the advisor sentinel watches (relative to --workspace-root):
+# The subtrees the advisor sentinel watches (relative to --workspace-root; 声明在治理根外 = 绝对路径):
 # queue/** = task cards moving through states (pending→claimed→completed = moves);
-# records/** = session/claim/return records being written.
+# records/** = session/claim/return records being written;
+# loop runs/** = `lybra loop` 运行记录(AIPOS-F131), 项目可把落点声明到 records 之外。
 # AIPOS-F89 件① M8: 队列子树读项目声明(task_loader.queue_root_for = project.json paths.queue_root), 不写死;
-# records 子树仍为治理结构声明位(5_tasks/records)。
-_RECORDS_SUBTREE = "5_tasks/records"
+# AIPOS-F136 件①: records 子树读记录落点唯一声明(record_writer.records_root ← transitions.schema record_locations),
+# 运行记录子树读 project.json paths.loop_runs_root(唯一读取口 workspace_config.project_paths); 原写死的 5_tasks/records 退役。
+# 被另一子树包含的子树不重复列出(缺省 loop_runs_root 在 records 内), 每个文件只 stat 一次。
 
 
 def _watch_subtrees(workspace_root: Path) -> tuple[str, ...]:
+    from tools.aipos_cli.record_writer import records_root
     from tools.aipos_cli.task_loader import queue_root_for
+    from tools.aipos_cli.workspace_config import project_paths
 
-    queue = queue_root_for(Path(workspace_root))
-    try:
-        queue_rel = queue.relative_to(Path(workspace_root)).as_posix()
-    except ValueError:
-        queue_rel = str(queue)  # 声明在治理根外: 绝对路径(os.path.join 取其本身)
-    return (queue_rel, _RECORDS_SUBTREE)
+    root = Path(workspace_root)
+    declared = [queue_root_for(root), root / records_root(), Path(project_paths(root)["loop_runs_root"])]
+    absolute = [Path(os.path.abspath(p)) for p in declared]
+    out: list[str] = []
+    for i, path in enumerate(absolute):
+        if any(j != i and (path == other and j < i or other in path.parents) for j, other in enumerate(absolute)):
+            continue  # 同一子树已列 / 被另一子树包含
+        try:
+            out.append(path.relative_to(Path(os.path.abspath(root))).as_posix())
+        except ValueError:
+            out.append(str(path))  # 声明在治理根外: 绝对路径(os.path.join 取其本身)
+    return tuple(out)
 
 # AIPOS-284: default stall threshold (10 minutes = 600 seconds).
 DEFAULT_STALL_SECONDS = 600

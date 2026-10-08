@@ -2117,16 +2117,22 @@ def build_parser() -> argparse.ArgumentParser:
                              help="AIPOS-F95: 不拉起 harness 进程(即使信封授权), 手工模式: 等待提示「请在 <工位目录> 的 <harness> 会话敲 /go」")
     loop_parser.add_argument("--json", action="store_true", help="Output JSON")
     loop_actions = loop_parser.add_subparsers(dest="loop_action")
-    loop_status_parser = loop_actions.add_parser(
-        "status",
-        help="AIPOS-F131: 看 loop 进度——读运行记录(project.json paths.loop_runs_root)+ 本机探活 + 判停滞; 状态 running/stalled/"
+    from tools.aipos_cli.verb_contract import declared_exit_codes as _declared_exit_codes  # AIPOS-F136: help 出口读声明, 不写死
+    _loop_status_help = (
+        "AIPOS-F131: 看 loop 进度——读运行记录(project.json paths.loop_runs_root)+ 本机探活 + 判停滞; 状态 running/stalled/"
         "launch_dead/loop_dead/ended/unprobeable(verbs.schema lybra_loop.run_record.states)。缺 --task-id = 列本项目全部未结束的运行。"
-        "退出码(verbs.schema lybra_loop_status.exit_codes): 0=已输出, 4=该卡无运行记录/记录读不出。禁 tail/grep 原始日志自判",
+        "禁 tail/grep 原始日志自判。"
+        "AIPOS-F136: 输出附「顾问下一动作」continue_wait/owner_needed/card_done_take_next/investigate; --wait <秒> 有界等到可行动或到时"
+        "(退出码读声明: " + ", ".join(f"{k}={c}" for k, c in _declared_exit_codes("lybra_loop_status").items()) + ")"
     )
+    loop_status_parser = loop_actions.add_parser("status", help=_loop_status_help, description=_loop_status_help)
     # 与父解析器同名参数用 SUPPRESS 缺省: 不覆盖写在 status 之前的同名参数
     loop_status_parser.add_argument("--task-id", default=argparse.SUPPRESS, help="卡 ID; 缺省 = 本项目全部未结束的 loop 运行")
     loop_status_parser.add_argument("--workspace-root", type=Path, default=argparse.SUPPRESS, help="治理根; 缺省自发现")
     loop_status_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output JSON")
+    loop_status_parser.add_argument("--wait", type=float, default=None, metavar="SECONDS",
+                                    help="AIPOS-F136 件①: 有界等待秒数(须 --task-id; 上限读 verbs.schema lybra_loop_status.wait.max_seconds), "
+                                    "经 agent watch 等到顾问下一动作 ≠ continue_wait 或到时, 返回当时状态; 禁 until/sleep 轮询")
 
     # AIPOS-F78 件②: lybra card render — 卡意图面单一渲染器(pi 三行 / codex Prompt.md+Plan.md / claude-code CLAUDE.md 片段)
     card_parser = subparsers.add_parser("card", help="AIPOS-F78: 卡意图面操作(render)")
