@@ -6,7 +6,7 @@
   ② 声明产品仓(顾问): `lybra project set-repos`(project.json repos/code_repo, 经声明校验); 之后同法落账 project.json
   ③ Owner 一次性动作 ①: 用中央凭据库的 Owner 凭据为新项目签发顾问注册码(项目范围 = 新项目)
   ④ Owner 一次性动作 ②: 一条 `lybra envelope mint --confirm` 签三张信封(驱动方 / 执行实例 / 审计实例)
-  ⑤ 顾问凭码 enroll 到治理根(得 advisor 凭据), 产品经 distribution 声明把顾问技能交付到 Claude Code 会话目录 .claude/skills
+  ⑤ 顾问凭码 enroll 到治理根(得 advisor 凭据), 产品经 distribution 声明把顾问件(技能 .claude/skills + 章程; AIPOS-F136)交付到顾问会话目录
      (AIPOS-F129: --advisor-harness codex = 顾问是 Codex 会话(可在他机, --advisor-host): enroll 写 --harness codex, 声明无 codex 件
      = 不生成技能分发步骤; 取值读 distribution.schema harness_semantics.kinds.<kind>.advisor_session)
   ⑥ 顾问为执行 / 审计工位发注册码(顾问凭据)
@@ -463,19 +463,23 @@ def generate_onboarding_guide(
         enroll_extra += ["--harness-host", _shell_quote(adv_h["host"])]
     session_at = f"{adv_h['host']}:{advisor_ws or '<会话目录>'}" if adv_h["host"] else (advisor_ws or "<会话目录>")
     label = str(adv_h["declaration"].get("label") or adv_kind)
-    if adv_h["deliveries"]:
-        landing = str(adv_h["deliveries"][0].get("target_path") or "")
+    # AIPOS-F136 件②: 顾问件 = 技能 + 章程(advisor-charter-<harness>, 母本 agents/roles/advisor/AGENTS.md 含持续推进守则);
+    # 只在会话目录在本机(无 --advisor-host 且有会话目录)时可交付, 他机会话本机无落点(sync 列 undelivered, 不猜落点)
+    deliverable = bool(adv_h["deliveries"]) and not adv_h["host"] and bool(advisor_ws)
+    if deliverable:
+        landings = [f"{advisor_ws}/{d.get('target_path') or ''}" for d in adv_h["deliveries"]]
         step5 = [
-            f"# 顾问凭 Step 3 的码 enroll: 凭据落治理根 .lybra/(loop 按治理根取驱动方凭据), 顾问技能交付到会话目录 {landing}/",
+            f"# 顾问凭 Step 3 的码 enroll: 凭据落治理根 .lybra/(loop 按治理根取驱动方凭据), 顾问件(技能 / 章程)交付到会话目录: "
+            + ", ".join(landings),
             render_enroll_command(ADVISOR_CODE, gq, *enroll_extra),
-            "# 稳态复核: plan 为空 = 技能已齐",
+            "# 稳态复核: plan 为空 = 顾问件已齐",
             f"{sync_adv} --dry-run",
         ]
-        title5 = f"顾问 enroll 到治理根 + 顾问技能交付到 {label} 会话目录"
+        title5 = f"顾问 enroll 到治理根 + 顾问件(技能 / 章程)交付到 {label} 会话目录"
         purpose5 = (
             f"新顾问(在会话目录 {advisor_ws} 起的 {label})凭码兑换 advisor 凭据, 落 {gov_s}/.lybra/(connection.json + role); "
             f"产品按 distribution 声明({', '.join(d['distribution_id'] for d in adv_h['deliveries'])}, harness={adv_kind})"
-            f"把顾问技能经同一分发引擎交付到 {advisor_ws}/{landing}/<技能名>/"
+            f"把顾问件经同一分发引擎交付到 {', '.join(landings)}(章程 = 顾问章程母本的渲染物, 含持续推进守则)"
         )
         check5 = (f"enroll 输出 '✓ Enrollment successful' 与 '✓ {adv_kind} 件已交付: N 个文件'; "
                   "sync --dry-run 输出 'up-to-date: 0 file(s) to fetch/render'")
@@ -483,23 +487,27 @@ def generate_onboarding_guide(
             "code 过期/已用": "请 Owner 重跑 Step 3",
             "--harness-dir 须为已存在的绝对目录": f"先建会话目录(或改 --harness-dir 为实际 {label} 会话目录)",
             "件交付失败": "凭据已落, 重跑 lybra sync --harness-root <治理根>(勿重跑 enroll)",
+            "章程落点已有非 Lybra 渲染物": "会话目录里已有同名文件(非 Lybra 渲染): 移走它或换会话目录后重跑 lybra sync(不覆盖用户文件)",
         }
-        creates5 = f"{gov_s}/.lybra/connection.json, {gov_s}/.lybra/role, {advisor_ws}/{landing}/"
-        note5 = f"顾问会话目录与治理根可不同: 本 guide 每条命令都显式带治理根, 不依赖 cwd; 技能交付后在会话目录重启 {label} 会话即加载"
+        creates5 = f"{gov_s}/.lybra/connection.json, {gov_s}/.lybra/role, " + ", ".join(landings)
+        note5 = f"顾问会话目录与治理根可不同: 本 guide 每条命令都显式带治理根, 不依赖 cwd; 顾问件交付后在会话目录重启 {label} 会话即加载"
     else:
+        undelivered = ", ".join(d["distribution_id"] for d in adv_h["deliveries"])
+        why = (f"声明给 {adv_kind} 的顾问件({undelivered})需本机会话目录, 会话在 {session_at} = 本机无落点不交付(sync 列 undelivered)"
+               if adv_h["deliveries"] else f"声明里无给 {adv_kind} 的顾问件 = 无分发步骤")
         step5 = [
             f"# 顾问凭 Step 3 的码 enroll(在治理根所在机执行; {label} 会话在他机时经 ssh 到本机跑): 凭据与身份落治理根 .lybra/,"
-            f" role 如实记 harness={adv_kind} 与会话所在(--harness-host / --harness-dir); 声明里无给 {adv_kind} 的顾问件 = 无分发步骤",
+            f" role 如实记 harness={adv_kind} 与会话所在(--harness-host / --harness-dir); {why}",
             render_enroll_command(ADVISOR_CODE, gq, *enroll_extra),
         ]
         title5 = f"顾问 enroll 到治理根({label} 会话, 如实登记会话所在)"
         purpose5 = (
             f"新顾问({label} 会话, 位于 {session_at})凭码兑换 advisor 凭据, 落 {gov_s}/.lybra/(connection.json + role); "
             f"role 的 harness 记 {{kind: {adv_kind}, dir: {advisor_ws or '空'}, host: {adv_h['host'] or '空'}}}(他机目录如实记、不校验本机存在); "
-            f"不落 .pi 接线, distribution 声明无给 {adv_kind} 的顾问件, 不分发技能"
+            f"不落 .pi 接线; {why}"
         )
         check5 = ("enroll 输出 '✓ Enrollment successful' 与 'harness: {...}(已记入 .lybra/role)'; "
-                  "治理根下无 .pi/, 会话目录不新增技能目录")
+                  "治理根下无 .pi/, 本机不新增顾问件")
         on_fail5 = {
             "code 过期/已用": "请 Owner 重跑 Step 3",
             "不在 distribution.schema harness_semantics.kinds 声明内": "--harness 取值按输出列出的合法值改正后重跑(码未兑换, 可重用)",

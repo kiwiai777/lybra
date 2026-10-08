@@ -213,10 +213,11 @@ def test_item2_advisor_skills_declared_for_claude_code_only():
 
     dists = declared_role_distributions("advisor", "advisor")
     cc = harness_distributions(dists, "claude-code")
-    assert [d["distribution_id"] for d in cc] == ["advisor-skills"] and cc[0]["target_path"] == ".claude/skills"
+    # AIPOS-F136 件②: claude-code 顾问另收顾问章程(.claude/rules/), codex 顾问收章程 AGENTS.md(同一母本同一渲染器)
+    assert [d["distribution_id"] for d in cc] == ["advisor-skills", "advisor-charter-claude-code"] and cc[0]["target_path"] == ".claude/skills"
     assert declared_role_skills(dists) == {}  # 顾问技能不再走 pi 挂载
-    assert set(declared_harness_kinds()) == {"pi", "claude-code", "codex"}  # AIPOS-F129: 合法值 = harness_semantics.kinds 的键(codex 无分发件)
-    assert not harness_distributions(dists, "codex")
+    assert set(declared_harness_kinds()) == {"pi", "claude-code", "codex"}  # AIPOS-F129: 合法值 = harness_semantics.kinds 的键
+    assert [(d["distribution_id"], d["kind"]) for d in harness_distributions(dists, "codex")] == [("advisor-charter-codex", "charter")]
     assert "go.ts" not in json.dumps(cc)
 
 

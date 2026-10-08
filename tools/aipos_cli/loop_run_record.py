@@ -14,6 +14,10 @@
 - 退出码: loop 的 outcome/exit_code 读 verbs.schema lybra_loop.exit_codes(loop_driver.exit_code_for); status 的读
   verbs.schema lybra_loop_status.exit_codes(verb_contract.declared_exit_code)。
 判据单源: 运行状态(running / stalled / launch_dead / loop_dead / ended / unprobeable)只由 judge_run 判定, 调用方禁各自 grep 日志。
+
+AIPOS-F136 件①: 顾问下一动作(continue_wait / owner_needed / card_done_take_next / investigate)只由 next_action 判定(判据表
+verbs.schema lybra_loop_status.next_action); `loop status --wait <秒>` 只经 agent_watch_fs.run_fs_watch(loop 的唯一等待原语)
+有界等待(wait_for_next_action), 上限与间隔读 verbs.schema lybra_loop_status.wait, 退出码按下一动作读同条 exit_codes。
 """
 from __future__ import annotations
 
@@ -267,10 +271,18 @@ class LoopRunRecorder:
         self.flush(force=True)
 
     def step_started(self, index: int, kind: str, node: Any, state: Any, card: str, *, action: str = "",
-                     waiting_for: list[str] | None = None) -> None:
+                     waiting_for: list[str] | None = None, mode: str | None = None, hint: str | None = None) -> None:
+        """mode/hint(AIPOS-F136 件①, 只用于等待步): launch = loop 已拉起执行引擎; manual = 手工模式等工位开工, hint = 开工提示
+        (loop 输出的 manual 行同文, 经 redact_progress, 不含凭据)。"""
+        from tools.aipos_cli.harness_launch import redact_progress
+
         self.meta["current_step"] = {"index": index, "kind": kind, "node": node, "state": state, "card": card,
                                      "action": action or None, "waiting_for": list(waiting_for or []) or None,
                                      "since": iso_z()}
+        if mode:
+            self.meta["current_step"]["mode"] = mode
+        if hint:
+            self.meta["current_step"]["hint"] = redact_progress(str(hint))[:240]
         self._dirty = True
         self.flush(force=True)
 
@@ -468,13 +480,16 @@ def loop_status(governance_root: Path, task_id: str | None = None, *, now: datet
     from tools.aipos_cli.loop_driver import load_loop_contract
 
     decl = run_record_declaration(contract or load_loop_contract())
+    rules = next_action_declaration(decl)
     root = loop_runs_root(Path(governance_root))
+    history: list[Any] = []
     if task_id:
         files = _run_files(loop_runs_dir(governance_root, task_id))
         metas = [read_run(p, decl) for p in files]
         metas.sort(key=lambda m: (str(m.get("started_at") or ""), str(m.get("run_id") or "")))
         picked = metas[-1:]
         total = len(metas)
+        history = [m.get("end_reason") if m.get("status") == "ended" else None for m in metas[:-1]]
     else:
         picked = []
         for d in sorted(p for p in root.iterdir() if p.is_dir()) if root.is_dir() else []:
@@ -485,10 +500,186 @@ def loop_status(governance_root: Path, task_id: str | None = None, *, now: datet
         view = judge_run(meta, decl, now=now)
         view["record_path"] = meta["_path"]
         view.update(_run_lane(Path(governance_root), str(view.get("task_id") or meta.get("task_id") or "")))
+        view["next_action"] = next_action(view, rules, governance_root=Path(governance_root),
+                                          earlier_end_reasons=history if task_id else None)
         views.append(view)
     views = filter_rows_by_lane(views, lane)
-    return {"loop_runs_root": str(root), "task_id": task_id, "lane_filter": lane, "runs": views, "runs_on_record": total,
-            "stall_after_seconds": int(decl["stall_after_seconds"]), "stall_after_tool_seconds": int(decl["stall_after_tool_seconds"])}
+    report = {"loop_runs_root": str(root), "task_id": task_id, "lane_filter": lane, "runs": views, "runs_on_record": total,
+              "stall_after_seconds": int(decl["stall_after_seconds"]), "stall_after_tool_seconds": int(decl["stall_after_tool_seconds"])}
+    if task_id:
+        report["next_action"] = views[-1]["next_action"] if views else None
+    return report
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F136 件①: 顾问下一动作(唯一判定)+ 有界等待(经 run_fs_watch)
+# ---------------------------------------------------------------------------
+
+NEXT_ACTIONS = ("continue_wait", "owner_needed", "card_done_take_next", "investigate")
+_NEXT_ACTION_KEYS = ("actions", "by_state", "by_end_reason", "owner_reasons", "consecutive_failures_owner_needed",
+                     "take_next_hint", "take_next_none_hint", "wait_hint", "investigate_hint")
+
+
+def status_contract() -> dict[str, Any]:
+    """verbs.schema lybra_loop_status 条目(唯一读取口 verb_contract 同源 schema_loader)。缺 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    contract = (load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get(STATUS_VERB)
+    if not isinstance(contract, dict):
+        raise SchemaLoadError(f"verbs.schema.json verbs.{STATUS_VERB} 未声明")
+    return contract
+
+
+def next_action_declaration(run_decl: dict[str, Any], contract: dict[str, Any] | None = None) -> dict[str, Any]:
+    """verbs.schema lybra_loop_status.next_action, 并校验判据表覆盖 run_record 全部状态与结束原因(缺 = SchemaLoadError, fail-closed:
+    新增状态 / 结束原因而判据表未跟 = 顾问拿不到下一动作, 宁拒不猜)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = (contract or status_contract()).get("next_action")
+    if not isinstance(decl, dict) or any(k not in decl for k in _NEXT_ACTION_KEYS):
+        raise SchemaLoadError(f"verbs.schema.json verbs.{STATUS_VERB}.next_action 未声明齐 {list(_NEXT_ACTION_KEYS)}")
+    if set(decl["actions"]) != set(NEXT_ACTIONS):
+        raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.actions 须恰为 {list(NEXT_ACTIONS)}, 得到 {sorted(decl['actions'])}")
+    states = set(run_decl["states"]) - {"ended"}
+    reasons = set(run_decl["end_reasons"])
+    gaps = sorted(states - set(decl["by_state"])) + sorted(reasons - set(decl["by_end_reason"]))
+    bad = sorted({v for v in list(decl["by_state"].values()) + list(decl["by_end_reason"].values())} - set(NEXT_ACTIONS))
+    owner_gaps = sorted(r for r, a in decl["by_end_reason"].items() if a == "owner_needed" and r not in decl["owner_reasons"])
+    if gaps or bad or owner_gaps or "consecutive_failures" not in decl["owner_reasons"]:
+        raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action 判据表不全: 未覆盖 {gaps}; 非法动作 {bad}; "
+                              f"owner_needed 缺事由 {owner_gaps + ([] if 'consecutive_failures' in decl['owner_reasons'] else ['consecutive_failures'])}"
+                              f"(须覆盖 lybra_loop.run_record.states / end_reasons)")
+    return decl
+
+
+def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root: Path,
+                earlier_end_reasons: list[Any] | None = None) -> dict[str, Any]:
+    """一个运行视图(judge_run)→ 顾问下一动作 {action, reason, detail, hint}(唯一判定, 判据表 verbs.schema next_action)。
+
+    earlier_end_reasons = 本卡更早各次运行的结束原因(旧→新; 未结束 = None), 用于连败判定: 本次与其前连续
+    consecutive_failures_owner_needed 次都以 investigate 类原因结束 = owner_needed(consecutive_failures)。"""
+    task_id = str(view.get("task_id") or "")
+    fill = {"task_id": task_id, "governance_root": str(governance_root)}
+    state = str(view.get("state") or "")
+    if state == "ended":
+        reason = str(view.get("end_reason") or "")
+        if reason not in rules["by_end_reason"]:
+            raise LoopRunRecordError(f"{view.get('record_path') or view.get('run_id')}: 结束原因 {reason!r} 不在 verbs.schema "
+                                     f"{STATUS_VERB}.next_action.by_end_reason(记录与声明不符, 拒判下一动作)")
+        action = str(rules["by_end_reason"][reason])
+        message = str(view.get("end_message") or "")
+        if action == "investigate" and earlier_end_reasons is not None:
+            streak = 1
+            for earlier in reversed(earlier_end_reasons):
+                if earlier is None or rules["by_end_reason"].get(str(earlier)) != "investigate":
+                    break
+                streak += 1
+            if streak >= int(rules["consecutive_failures_owner_needed"]):
+                return {"action": "owner_needed", "reason": "consecutive_failures",
+                        "detail": f"{rules['owner_reasons']['consecutive_failures']}(连续 {streak} 次, 本次 {reason}: {message})",
+                        "hint": str(rules["investigate_hint"]).format(**fill)}
+        if action == "card_done_take_next":
+            return {"action": action, "reason": reason, **_take_next(view, rules, governance_root, message)}
+        if action == "owner_needed":
+            return {"action": action, "reason": reason, "detail": f"{rules['owner_reasons'][reason]}" + (f" — {message}" if message else ""),
+                    "hint": str(rules["investigate_hint"]).format(**fill)}
+        return {"action": action, "reason": reason, "detail": message or reason, "hint": str(rules["investigate_hint"]).format(**fill)}
+    if state not in rules["by_state"]:
+        raise LoopRunRecordError(f"状态 {state!r} 不在 verbs.schema {STATUS_VERB}.next_action.by_state")
+    action = str(rules["by_state"][state])
+    if action == "continue_wait":
+        cur = view.get("current_step") or {}
+        if cur.get("kind") == "wait" and cur.get("mode") == "manual":
+            what = cur.get("hint") or f"等工位产物 {cur.get('waiting_for')}"
+            return {"action": action, "reason": "manual_kickoff", "detail": f"手工模式: {what}",
+                    "hint": str(rules["wait_hint"]).format(**fill)}
+        return {"action": action, "reason": state, "detail": "loop 推进中", "hint": str(rules["wait_hint"]).format(**fill)}
+    detail = str(view.get("note") or "")
+    if state == "stalled":
+        detail = f"拉起进程 {(view.get('launch') or {}).get('idle_seconds')}s 无输出(阈值 {view.get('stall_after_seconds')}s)"
+    elif state == "launch_dead":
+        detail = "拉起的进程已不在而 loop 仍在等"
+    elif state == "loop_dead":
+        detail = "loop 进程已不在而运行记录未写结束"
+    return {"action": action, "reason": state, "detail": detail or state, "hint": str(rules["investigate_hint"]).format(**fill)}
+
+
+def _take_next(view: dict[str, Any], rules: dict[str, Any], governance_root: Path, message: str) -> dict[str, Any]:
+    """AIPOS-F136 × F133: 结案后取下一张 —— 接 F133「下一张」唯一出口(next_resolver.scan_project + pick_next_card, 判据
+    verbs.schema lane_view.next_card), 范围 = 本卡 lane(machine_zone.lane_of_card 已解析时; 解析不了 = 全项目, 照 F133
+    「不可证明不属本 lane 不隐藏」)。有下一张 = hint 为其 loop 命令(take_next_hint); 无 = hint 为 lane 扫描(take_next_none_hint)。"""
+    from tools.aipos_cli.next_resolver import pick_next_card, scan_project
+
+    lane = view.get("lane") if view.get("lane") and not view.get("lane_error") else None
+    fill = {"task_id": str(view.get("task_id") or ""), "governance_root": str(governance_root),
+            "lane_arg": f" --lane {lane}" if lane else ""}
+    nxt = pick_next_card(scan_project(Path(governance_root), lane=lane))
+    done = message or "已结案并落账"
+    if nxt is None:
+        return {"detail": f"{done}; 下一张可推进卡: 无{'(lane ' + lane + ')' if lane else ''}", "next_card": None,
+                "hint": str(rules["take_next_none_hint"]).format(**fill)}
+    card = {"task_id": nxt.get("task_id"), "lane": nxt.get("lane"), "priority": nxt.get("priority")}
+    return {"detail": f"{done}; 下一张可推进卡: {card['task_id']} lane={card['lane'] or '-'} priority={card['priority'] or '-'}",
+            "next_card": card, "hint": str(rules["take_next_hint"]).format(**{**fill, "next_task_id": card["task_id"]})}
+
+
+class StatusUsageError(ValueError):
+    """--wait 用法错(缺 --task-id / 秒数越界): 零等待, 出口 usage。"""
+
+
+def wait_for_next_action(governance_root: Path, task_id: str, seconds: float, *, contract: dict[str, Any] | None = None,
+                         sleeper: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic,
+                         interval: float | None = None, lane: str | None = None) -> dict[str, Any]:
+    """`loop status --task-id <ID> --wait <秒>`: 经 agent_watch_fs.run_fs_watch(唯一等待原语)有界等待, 直到本卡最近一次运行的
+    下一动作 ≠ continue_wait(expect_ready 每轮重读记录 + judge_run + next_action; 进程死 / 停滞无需文件变化)或到时; 返回当时的
+    loop_status 报告 + wait 段 {requested_seconds, waited_seconds, outcome: ready|timeout}。上限与间隔读 verbs.schema。"""
+    import contextlib
+    import io
+    from types import SimpleNamespace
+
+    from tools.aipos_cli.agent_watch_fs import run_fs_watch
+    from tools.aipos_cli.loop_driver import load_loop_contract
+    from tools.aipos_cli.verb_contract import declared_exit_code
+
+    wait_decl = status_contract().get("wait") or {}
+    try:
+        max_seconds, step = float(wait_decl["max_seconds"]), float(wait_decl["interval_seconds"])
+    except (KeyError, TypeError, ValueError) as exc:
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError(f"verbs.schema.json verbs.{STATUS_VERB}.wait 未声明 max_seconds/interval_seconds: {exc}") from exc
+    if not task_id:
+        raise StatusUsageError("--wait 须同时给 --task-id(等的是这张卡最近一次 loop 运行)")
+    if not (0 < float(seconds) <= max_seconds):
+        raise StatusUsageError(f"--wait {seconds} 越界: 须 0 < 秒数 ≤ {max_seconds:g}(verbs.schema {STATUS_VERB}.wait.max_seconds)")
+    contract = contract or load_loop_contract()
+    governance_root = Path(governance_root)
+    root = loop_runs_root(governance_root)
+    loop_runs_dir(governance_root, task_id)  # 卡 ID 合法性(validate_safe_task_id), 与读记录同一口
+    seen: dict[str, Any] = {}
+
+    def _ready(_matched: list[str]) -> bool:
+        report = loop_status(governance_root, task_id, contract=contract, lane=lane)
+        seen["report"] = report
+        action = (report.get("next_action") or {}).get("action")
+        return action is not None and action != "continue_wait"
+
+    started = clock()
+    rc = None
+    if root.is_dir():  # 落点根尚不存在 = 本项目从未跑过 loop: 无可等(no_run), 只读不建目录
+        args = SimpleNamespace(workspace_root=str(root), expect=[f"{task_id}/looprun_*.md"], timeout=float(seconds),
+                               interval=float(interval if interval is not None else step), events="expect", stream=False,
+                               run_log=None, end_pattern=None, stall_secs=None, health=None)
+        sink = io.StringIO()
+        with contextlib.redirect_stdout(sink):
+            rc = run_fs_watch(args, sleeper=sleeper, clock=clock, expect_ready=_ready)
+        if rc not in (declared_exit_code("lybra_agent_watch", "change"), declared_exit_code("lybra_agent_watch", "timeout")):
+            raise LoopRunRecordError(f"等待原语 agent watch 异常退出 {rc}: {sink.getvalue().strip()}")
+    report = loop_status(governance_root, task_id, contract=contract, lane=lane)  # 返回当时状态(到时 / 就绪均重读一次, 不用缓存)
+    outcome = "ready" if (report.get("next_action") or {}).get("action") not in (None, "continue_wait") else "timeout"
+    report["wait"] = {"requested_seconds": float(seconds), "waited_seconds": round(clock() - started, 1), "outcome": outcome,
+                      "watch_root": str(root), "max_seconds": max_seconds}
+    return report
 
 
 def _dur(seconds: Any) -> str:
@@ -544,13 +735,21 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
                    f"(verbs.schema lybra_loop.run_record.{'stall_after_tool_seconds, 工具在跑' if tool else 'stall_after_seconds'})")
         out.append(f"  记录 {v['record_path']}")
         out.append(f"  日志 {v['log_path']}")
+        na = v.get("next_action")
+        if na:
+            out.append(f"  顾问下一动作: {na['action']}({na['reason']}) — {na['detail']}")
+            out.append(f"    下一条: {na['hint']}")
     if report.get("task_id") and report.get("runs_on_record", 0) > 1:
         out.append(f"(该卡共 {report['runs_on_record']} 次运行记录, 上为最近一次)")
+    w = report.get("wait")
+    if w:
+        out.append(f"(--wait {w['requested_seconds']:g}s: {'可行动' if w['outcome'] == 'ready' else '到时仍在推进'}, 实等 {w['waited_seconds']}s)")
     return "\n".join(out)
 
 
 def loop_status_cli(args: Any) -> int:
-    """`lybra loop status [--task-id <ID>] [--workspace-root <治理根>] [--json]`。退出码读 verbs.schema lybra_loop_status.exit_codes。"""
+    """`lybra loop status [--task-id <ID>] [--workspace-root <治理根>] [--json] [--wait <秒>]`。退出码读 verbs.schema
+    lybra_loop_status.exit_codes(--wait 时按顾问下一动作)。"""
     import json
     import sys
 
@@ -562,6 +761,7 @@ def loop_status_cli(args: Any) -> int:
     from tools.aipos_cli.machine_zone import LaneFilterInvalid, lane_view_declaration, resolve_lane_filter
 
     task_id = getattr(args, "task_id", None)
+    wait = getattr(args, "wait", None)
     try:
         governance_root = Path(getattr(args, "workspace_root", None) or _find_repo_root_for_args(args))
         # AIPOS-F133 件②: --lane 校验(不在声明 = 拒, 退出码读 verbs.schema lane_view.invalid_lane_exit_code)
@@ -571,7 +771,13 @@ def loop_status_cli(args: Any) -> int:
             print(f"lybra loop status: {exc}", file=sys.stderr)
             return int(lane_view_declaration()["invalid_lane_exit_code"])
         contract = load_loop_contract()
-        report = loop_status(governance_root, task_id, contract=contract, lane=lane)
+        if wait is None:
+            report = loop_status(governance_root, task_id, contract=contract, lane=lane)
+        else:
+            report = wait_for_next_action(governance_root, task_id or "", float(wait), contract=contract, lane=lane)
+    except StatusUsageError as exc:
+        print(f"lybra loop status: {exc}", file=sys.stderr)
+        return declared_exit_code(STATUS_VERB, "usage")
     except (FileNotFoundError, LoopRunRecordError, SchemaLoadError, ValueError, OSError) as exc:
         print(f"lybra loop status: {type(exc).__name__}: {exc}", file=sys.stderr)
         return declared_exit_code(STATUS_VERB, "unreadable")
@@ -581,6 +787,8 @@ def loop_status_cli(args: Any) -> int:
         print(render_status(report, run_record_declaration(contract)["states"]))
     if task_id and not report["runs"]:
         return declared_exit_code(STATUS_VERB, "no_run")
+    if wait is not None:  # AIPOS-F136 件①: --wait 退出码按顾问下一动作(verbs.schema lybra_loop_status.exit_codes 同名出口)
+        return declared_exit_code(STATUS_VERB, str(report["next_action"]["action"]))
     return declared_exit_code(STATUS_VERB, "ok")
 
 

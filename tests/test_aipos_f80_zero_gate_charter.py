@@ -309,9 +309,10 @@ def test_item2_render_three_masters_two_contexts(tmp_path, monkeypatch, shape):
             assert ctx["verdict_root"].startswith(str(gov))
             assert f"{ctx['code_repo']}/task_cards" not in rendered  # 根因: 报告落点不再指产品仓
         if role == "advisor":
-            assert f"--auditor-instance {ctx['auditor_instance']}" in rendered
+            # AIPOS-F136 件③: 章程里原 `audit dispatch --auditor-instance` / `roles enroll --project --machine` 是不可解析的旧写法(已改),
+            # 实例 / 机器占位改在「本项目角色实例」行与信封预演命令里渲染
+            assert f"审计体 `{ctx['auditor_instance']}`" in rendered and f"本机 `{machine}`" in rendered
             assert f"--agent-or-role {ctx['executor_instance']}" in rendered
-            assert f"--project {project} --machine {machine}" in rendered
         print(f"\n----- F80 {shape} 形渲染 {role}(母本段, 前 40 行) -----\n" + "\n".join(rendered.splitlines()[:40]))
 
 
