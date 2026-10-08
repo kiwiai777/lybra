@@ -610,7 +610,8 @@ def mutate_queue_task(
         if action == "withdraw":
             filtered_blocks = [
                 reason for reason in validation["blocking_reasons"]
-                if not any(keyword in str(reason).lower() for keyword in ["actor", "claimed by", "assigned"])
+                # AIPOS-F133: 撤回不受依赖判据约束(依赖只门认领)
+                if not any(keyword in str(reason).lower() for keyword in ["actor", "claimed by", "assigned", "dependency_unmet", "dependency_unverifiable"])
             ]
             result["blocking_reasons"].extend(filtered_blocks)
         # AIPOS-R4A: reopen malformed 卡修复路径——降级 active_session_id 残留检查
@@ -640,6 +641,14 @@ def mutate_queue_task(
         if rejection is not None:
             result["blocking_reasons"].append(rejection["message"])
             result["error_code"] = rejection["code"]
+        # AIPOS-F133 件③: 依赖未满足拒认领(全部 task_class; 判据唯一实现 task_complexity.unmet_dependencies, 只读门生记录,
+        # 全部依赖满足才放行)。dependency_gate 级别的 validator 已给出同一拒因时不重复。
+        from tools.aipos_cli.task_complexity import unmet_dependencies
+
+        for reason_text in unmet_dependencies(source_metadata, repo_root):
+            if reason_text not in result["blocking_reasons"]:
+                result["blocking_reasons"].append(reason_text)
+            result.setdefault("error_code", "DEPENDENCY_UNMET")
 
     # AIPOS-315/348: withdraw and reopen have flexible from_state, skip this check
     if action not in ("withdraw", "reopen"):

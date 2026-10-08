@@ -320,7 +320,7 @@
     "dependency_condition": {
       "type": "string",
       "required": false,
-      "description": "Dependency completion condition"
+      "description": "Dependency completion condition(AIPOS-F133: 值域与判据见顶层 dependency_gate.conditions; 缺省 dependency_gate.default_condition)"
     },
     "dependency_executor_status": {
       "type": "string",
@@ -1046,6 +1046,16 @@
         "Milestones",
         "做什么"
       ]
+    }
+  },
+  "dependency_gate": {
+    "description": "AIPOS-F133 件③: 依赖满足判据唯一声明——卡 depends_on 的每一项都满足 dependency_condition 才算依赖满足(全部, 非任一); 判据只读被依赖卡的门生记录(record_writer.gate_record_files / 裁决另经 audit_helpers.is_gate_born_verdict_metadata), 不读卡面自报字段(dependency_executor_status / dependency_audit_readiness / dependency_audit_status 降为展示用运行时字段)。唯一实现 task_complexity.dependencies_satisfied(unmet_dependencies 给拒因); 认领(queue_mutation claim 全部 task_class; validator 对 dependency_gate=true 的 task_class 另要求声明条件)、推导核 pending→claim 与 lybra next「下一张」共用。卡缺 dependency_condition = default_condition。",
+    "default_condition": "closure",
+    "conditions": {
+      "closure": {"record_kind": "closures", "description": "被依赖卡已结案(门生 N6 结案记录在)"},
+      "executor_completion": {"record_kind": "returns", "description": "被依赖卡执行体已交回(门生 return 记录在)"},
+      "audit_readiness": {"record_kind": "returns", "description": "被依赖卡已交回可审(门生 return 记录在)"},
+      "audit_pass": {"record_kind": "audit_verdicts", "requires_pass_verdict": true, "description": "被依赖卡有门生 PASS 裁决记录(PASS 值域 = task_complexity.AUDIT_PASS_VALUES)"}
     }
   },
   "restricted_amend": {

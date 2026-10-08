@@ -47,7 +47,7 @@ class TaskComplexityTests(unittest.TestCase):
             "artifact_policy": "formal_write",
             "model_tier": "L2",
             "session_policy": "single_task_session",
-            "context_isolation": "strict",
+            "context_isolation": "isolated",  # 值域 = card.schema(shared|isolated); 原 strict 使 create_draft 拒(两条 known-failure 根因)
             "artifact_scope": "docs/",
             "memory_scope": "task complexity tests",
         }
@@ -116,103 +116,88 @@ class TaskComplexityTests(unittest.TestCase):
         self.assertIn("Complex-class active orchestration missing continuity_planner_agent", result["blocking_reasons"])
         self.assertIn("Complex-class active orchestration missing continuity_planner_agent_instance", result["blocking_reasons"])
 
+    # AIPOS-F133 件③: 依赖判据单源 task_complexity.unmet_dependencies——只读被依赖卡的门生记录(全部依赖满足才放行);
+    # 卡面自报字段(dependency_audit_status / dependency_executor_status / dependency_audit_readiness)不再采信。
+    COMPLEX = {
+        "task_class": "complex",
+        "planner_agent": "planner.local",
+        "reviewer": "review.local",
+        "audit_by": "audit.local",
+        "depends_on": ["AIPOS-139"],
+    }
+
+    # 发布须卡面零门判据可解析(AIPOS-F102): 实例名用注册表前缀(原 dev.codex.local 不可解析 = 两条 known-failure 另一根因)
+    PUBLISHABLE_INSTANCE = {"assigned_to": "exec.fx.local", "agent_instance": "exec.fx.local"}
+
+    def gate_record(self, kind: str, task_id: str, **meta: object) -> None:
+        from tools.aipos_cli.record_writer import record_dir, record_file_prefix
+
+        path = record_dir(self.repo_root, kind, task_id) / f"{record_file_prefix(kind)}_{task_id}_20261008_000000_{len(list(meta))}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = ["---", f"task_id: {task_id}", *(f"{k}: {v}" for k, v in meta.items()), "---", ""]
+        path.write_text("\n".join(lines), encoding="utf-8")
+
     def test_complex_dependency_audit_pass_blocks_until_pass(self) -> None:
-        common = {
-            "task_class": "complex",
-            "planner_agent": "planner.local",
-            "reviewer": "review.local",
-            "audit_by": "audit.local",
-            "depends_on": ["AIPOS-139"],
-            "dependency_condition": "audit_pass",
-        }
-        pending = validate_single_task(self.write_task(**common, dependency_audit_status="pending"))
-        self.assertIn("Complex-class dependent task is blocked until dependency_audit_status is PASS (or audit_verdict record exists)", pending["blocking_reasons"])
-        passed = validate_single_task(self.write_task(**common, dependency_audit_status="PASS"))
-        self.assertEqual(passed["verdict"], "PASS")
+        common = {**self.COMPLEX, "dependency_condition": "audit_pass"}
+        # 卡面自报 PASS 不算(原: 无记录时退回卡面自报)
+        pending = validate_single_task(self.write_task(**common, dependency_audit_status="PASS"))
+        self.assertTrue(any(r.startswith("DEPENDENCY_UNMET: 依赖 AIPOS-139 未满足 audit_pass") for r in pending["blocking_reasons"]),
+                        pending["blocking_reasons"])
+        self.gate_record("audit_verdicts", "AIPOS-139", record_type="audit_verdict", verdict_id="verdict_AIPOS-139_x",
+                         verdict_at="2026-10-08T00:00:00Z", verdict="PASS")
+        passed = validate_single_task(self.write_task(**common))
+        self.assertEqual(passed["verdict"], "PASS", passed["blocking_reasons"])
 
     def test_complex_dependency_executor_completion_uses_executor_status(self) -> None:
-        common = {
-            "task_class": "complex",
-            "planner_agent": "planner.local",
-            "reviewer": "review.local",
-            "audit_by": "audit.local",
-            "depends_on": ["AIPOS-139"],
-            "dependency_condition": "executor_completion",
-        }
-        pending = validate_single_task(self.write_task(**common, dependency_executor_status="pending"))
-        self.assertIn(
-            "Complex-class dependent task is blocked until dependency_executor_status is completed",
-            pending["blocking_reasons"],
-        )
-        completed = validate_single_task(self.write_task(**common, dependency_executor_status="completed"))
-        self.assertEqual(completed["verdict"], "PASS")
+        common = {**self.COMPLEX, "dependency_condition": "executor_completion"}
+        pending = validate_single_task(self.write_task(**common, dependency_executor_status="completed"))
+        self.assertTrue(any(r.startswith("DEPENDENCY_UNMET: 依赖 AIPOS-139 未满足 executor_completion") for r in pending["blocking_reasons"]),
+                        pending["blocking_reasons"])
+        self.gate_record("returns", "AIPOS-139", record_type="return_record")
+        completed = validate_single_task(self.write_task(**common))
+        self.assertEqual(completed["verdict"], "PASS", completed["blocking_reasons"])
 
     def test_complex_dependency_audit_readiness_uses_readiness_status(self) -> None:
-        common = {
-            "task_class": "complex",
-            "planner_agent": "planner.local",
-            "reviewer": "review.local",
-            "audit_by": "audit.local",
-            "depends_on": ["AIPOS-139"],
-            "dependency_condition": "audit_readiness",
-        }
-        not_ready = validate_single_task(self.write_task(**common, dependency_audit_readiness="not_ready"))
-        self.assertIn(
-            "Complex-class dependent task is blocked until dependency_audit_readiness is ready",
-            not_ready["blocking_reasons"],
-        )
-        ready = validate_single_task(self.write_task(**common, dependency_audit_readiness="ready"))
-        self.assertEqual(ready["verdict"], "PASS")
+        common = {**self.COMPLEX, "dependency_condition": "audit_readiness"}
+        not_ready = validate_single_task(self.write_task(**common, dependency_audit_readiness="ready"))
+        self.assertTrue(any(r.startswith("DEPENDENCY_UNMET: 依赖 AIPOS-139 未满足 audit_readiness") for r in not_ready["blocking_reasons"]),
+                        not_ready["blocking_reasons"])
+        self.gate_record("returns", "AIPOS-139", record_type="return_record")
+        ready = validate_single_task(self.write_task(**common))
+        self.assertEqual(ready["verdict"], "PASS", ready["blocking_reasons"])
 
     def test_complex_dependency_ambiguous_condition_blocks(self) -> None:
-        result = validate_single_task(
-            self.write_task(
-                task_class="complex",
-                planner_agent="planner.local",
-                reviewer="review.local",
-                audit_by="audit.local",
-                depends_on=["AIPOS-139"],
-                dependency_condition="owner_approved",
-            )
-        )
+        result = validate_single_task(self.write_task(**self.COMPLEX, dependency_condition="owner_approved"))
 
         self.assertIn(
-            "Complex-class dependent task requires dependency_condition: executor_completion, audit_readiness, or audit_pass",
+            "Complex-class dependent task requires dependency_condition: closure, executor_completion, audit_readiness, audit_pass "
+            "(card.schema dependency_gate.conditions)",
             result["blocking_reasons"],
         )
 
     def test_complex_dependent_audit_task_can_publish_when_audit_ready(self) -> None:
-        metadata = self.metadata(
-            task_class="complex",
-            planner_agent="planner.local",
-            reviewer="review.local",
-            audit_by="audit.local",
-            depends_on=["AIPOS-139"],
-            dependency_condition="audit_readiness",
-            dependency_audit_readiness="ready",
-        )
+        self.gate_record("returns", "AIPOS-139", record_type="return_record")
+        metadata = self.metadata(**self.COMPLEX, **self.PUBLISHABLE_INSTANCE, dependency_condition="audit_readiness")
         created = create_draft(self.repo_root, metadata, "Body")
         self.assertTrue(created["wrote"])
         published = publish_draft(self.repo_root, str(created["target_path"]), dry_run=True)
-        self.assertNotEqual(published["verdict"], "BLOCK")
+        self.assertNotEqual(published["verdict"], "BLOCK", published["blocking_reasons"])
         self.assertTrue(published["would_write"])
 
     def test_complex_dependent_draft_can_exist_but_cannot_publish_before_audit_pass(self) -> None:
-        metadata = self.metadata(
-            task_class="complex",
-            planner_agent="planner.local",
-            reviewer="review.local",
-            audit_by="audit.local",
-            depends_on=["AIPOS-139"],
-            dependency_condition="audit_pass",
-            dependency_audit_status="pending",
-        )
+        metadata = self.metadata(**self.COMPLEX, **self.PUBLISHABLE_INSTANCE, dependency_condition="audit_pass", dependency_audit_status="PASS")
         created = create_draft(self.repo_root, metadata, "Body")
         self.assertTrue(created["wrote"])
         published = publish_draft(self.repo_root, str(created["target_path"]), dry_run=True)
         self.assertEqual(published["verdict"], "BLOCK")
-        self.assertIn("Complex-class dependent task is blocked until dependency_audit_status is PASS (or audit_verdict record exists)", published["blocking_reasons"])
+        self.assertTrue(any(r.startswith("DEPENDENCY_UNMET: 依赖 AIPOS-139 未满足 audit_pass") for r in published["blocking_reasons"]),
+                        published["blocking_reasons"])
 
+    def test_dependency_gate_only_on_pending(self) -> None:
+        """依赖门 = 认领门: 已认领卡不再按依赖判(原各状态都判)。"""
+        task = self.write_task(**self.COMPLEX, dependency_condition="audit_pass")
+        claimed = {**task, "queue_state": "claimed"}
+        self.assertFalse([r for r in validate_single_task(claimed)["blocking_reasons"] if "DEPENDENCY" in r])
 
 if __name__ == "__main__":
     unittest.main()

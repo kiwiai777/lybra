@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 import re
+from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.agent_profiles import (
@@ -334,7 +335,10 @@ def validate_task(
         _add(warnings, "Missing memory_scope")
 
     _validate_external_intake_metadata(metadata, warnings)
-    complexity = validate_task_complexity(metadata, enforce_dependency_gate=True)
+    # AIPOS-F133 件③: 传治理根, 依赖判据读门生记录(task_complexity.unmet_dependencies 唯一实现; 原不传 → 退回卡面自报)
+    governance_root = Path(task["repo_root"]) if task.get("repo_root") else None
+    # 依赖门 = 认领门: 只对 pending(可认领)卡执行; 已认领/已结案卡不再按依赖判(原各状态都判, 结案卡也会因存量依赖报 BLOCK)
+    complexity = validate_task_complexity(metadata, enforce_dependency_gate=(queue_state == "pending"), governance_root=governance_root)
     for message in complexity["blocking_reasons"]:
         _add(blocking_reasons, message)
     classification_warnings = list(complexity["warnings"])
