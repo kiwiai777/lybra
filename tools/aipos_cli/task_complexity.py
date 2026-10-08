@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 
 
 
@@ -51,7 +50,7 @@ def default_task_class() -> str:
 ALLOWED_TASK_CLASSES = tuple(task_class_declarations())
 CODE_TASK_MODES = {"code", "coding"}
 AUDIT_PASS_VALUES = {"pass", "passed", "pass_with_notes"}
-DEPENDENCY_CONDITIONS = {"executor_completion", "audit_readiness", "audit_pass"}
+# AIPOS-F133 件③: 依赖条件值域 = card.schema dependency_gate.conditions(dependency_gate_declaration 唯一读取口; 原手写集合退役)
 
 
 def _text(value: Any) -> str:
@@ -73,6 +72,81 @@ def _as_list(value: Any) -> list[str]:
 def effective_task_class(metadata: dict[str, Any]) -> str:
     raw = _lower(metadata.get("task_class"))
     return raw or default_task_class()
+
+
+def dependency_gate_declaration() -> dict[str, Any]:
+    """AIPOS-F133 件③: card.schema dependency_gate(条件值域 → 门生记录类; 缺省条件)。缺/形坏 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = load_schema("card").get("dependency_gate")
+    conditions = decl.get("conditions") if isinstance(decl, dict) else None
+    if not isinstance(conditions, dict) or not conditions:
+        raise SchemaLoadError("card.schema.json dependency_gate.conditions 未声明")
+    for name, spec in conditions.items():
+        if not isinstance(spec, dict) or not str(spec.get("record_kind") or "").strip():
+            raise SchemaLoadError(f"card.schema.json dependency_gate.conditions.{name} 缺 record_kind")
+    if decl.get("default_condition") not in conditions:
+        raise SchemaLoadError("card.schema.json dependency_gate.default_condition 未声明或不在 conditions 内")
+    return decl
+
+
+def unmet_dependencies(metadata: dict[str, Any], governance_root: "Path | None") -> list[str]:
+    """AIPOS-F133 件③: 依赖满足判据唯一实现——返回未满足依赖的拒因(空 = 全部满足)。
+
+    - 条件 = 卡面 dependency_condition, 缺省 card.schema dependency_gate.default_condition; 值不在声明 = 拒因(不猜)。
+    - 每个 depends_on 都须满足(全部, 非任一); 判据只读被依赖卡的门生记录(record_writer.gate_record_files; audit_pass 另须
+      audit_helpers.is_gate_born_verdict_metadata 且 verdict ∈ AUDIT_PASS_VALUES), 不读卡面自报字段。
+    - 无治理根 = 读不到记录 = 拒因(fail-closed); 记录 frontmatter 读不出 = 拒因点名文件(不当作满足, 也不静默跳过)。"""
+    depends_on = _as_list(metadata.get("depends_on"))
+    if not depends_on:
+        return []
+    decl = dependency_gate_declaration()
+    conditions = decl["conditions"]
+    condition = _lower(metadata.get("dependency_condition")) or str(decl["default_condition"])
+    if condition not in conditions:
+        return [f"DEPENDENCY_CONDITION_INVALID: dependency_condition={condition!r} 不在 card.schema dependency_gate.conditions "
+                f"{list(conditions)} 内。出口: 改为其一(缺省 {decl['default_condition']})"]
+    if governance_root is None:
+        return [f"DEPENDENCY_UNVERIFIABLE: 卡声明 depends_on {depends_on} 但调用方未给治理根, 读不到门生记录(fail-closed)"]
+    from pathlib import Path as _Path
+
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.record_writer import gate_record_files, record_dir  # 延迟: record_writer→records→task_loader→本模块 循环
+
+    spec = conditions[condition]
+    kind = str(spec["record_kind"])
+    root = _Path(governance_root)
+    unmet: list[str] = []
+    for dep in depends_on:
+        files = gate_record_files(record_dir(root, kind, dep), kind)
+        satisfied = bool(files)
+        problems: list[str] = []
+        if satisfied and spec.get("requires_pass_verdict") is True:
+            from tools.aipos_cli.audit_helpers import is_gate_born_verdict_metadata
+
+            satisfied = False
+            for path in files:
+                try:
+                    vfm, _body = require_frontmatter(path)
+                except FrontmatterReadError as exc:
+                    problems.append(str(exc))
+                    continue
+                if is_gate_born_verdict_metadata(vfm) and _lower(vfm.get("verdict")) in AUDIT_PASS_VALUES:
+                    satisfied = True
+                    break
+        if not satisfied:
+            detail = f"; 读不出: {problems}" if problems else ""
+            unmet.append(
+                f"DEPENDENCY_UNMET: 依赖 {dep} 未满足 {condition}({spec.get('description') or kind}): "
+                f"{record_dir(root, kind, dep)} 下无{'门生 PASS 裁决' if spec.get('requires_pass_verdict') else '门生'}记录{detail}。"
+                f"出口: 先把 {dep} 推进到满足 {condition}, 本卡再认领(判据 card.schema dependency_gate)"
+            )
+    return unmet
+
+
+def dependencies_satisfied(metadata: dict[str, Any], governance_root: "Path | None") -> bool:
+    """AIPOS-F133 件③: 全部依赖满足才真(唯一判据 unmet_dependencies; 无 depends_on = 真)。"""
+    return not unmet_dependencies(metadata, governance_root)
 
 
 def _class_label(task_class: str) -> str:
@@ -212,58 +286,19 @@ def validate_task_complexity(
             if not _text(orchestration.get("continuity_planner_agent_instance")):
                 blocking_reasons.append(f"{label} active orchestration missing continuity_planner_agent_instance")
 
+    # AIPOS-F133 件③: 依赖判据单源 = unmet_dependencies / dependencies_satisfied(全部依赖满足才放行, 只读门生记录)。
+    # dependency_gate=true 的 task_class(发布 draft_writer / validator 用)另要求显式声明 dependency_condition(值域读 card.schema
+    # dependency_gate.conditions); 原「frontmatter 自报字段判 + audit_pass 任一依赖 PASS 即放行 + 无记录退回自报」退役。
     depends_on = _as_list(metadata.get("depends_on"))
     if declaration["dependency_gate"] is True and enforce_dependency_gate and depends_on:
+        conditions = dependency_gate_declaration()["conditions"]
         dependency_condition = _lower(metadata.get("dependency_condition"))
-        if dependency_condition not in DEPENDENCY_CONDITIONS:
+        if dependency_condition not in conditions:
             blocking_reasons.append(
-                f"{label} dependent task requires dependency_condition: executor_completion, audit_readiness, or audit_pass"
+                f"{label} dependent task requires dependency_condition: {', '.join(conditions)} (card.schema dependency_gate.conditions)"
             )
-        elif dependency_condition == "executor_completion":
-            dependency_executor_status = _lower(metadata.get("dependency_executor_status"))
-            if dependency_executor_status != "completed":
-                blocking_reasons.append(
-                    f"{label} dependent task is blocked until dependency_executor_status is completed"
-                )
-        elif dependency_condition == "audit_readiness":
-            dependency_audit_readiness = _lower(metadata.get("dependency_audit_readiness"))
-            if dependency_audit_readiness != "ready":
-                blocking_reasons.append(
-                    f"{label} dependent task is blocked until dependency_audit_readiness is ready"
-                )
         else:
-            # AIPOS-C3B 大项C④: audit_pass 依赖校验改读 records(禁 frontmatter 自证)
-            # 检查被依赖任务的 audit_verdict 记录是否存在 PASS
-            depends_on_list = _as_list(metadata.get("depends_on"))
-            audit_pass_verified = False
-            if governance_root is not None and depends_on_list:
-                from pathlib import Path as _Path
-                gov = _Path(governance_root)
-                for dep_tid in depends_on_list:
-                    from tools.aipos_cli.record_writer import record_dir  # 延迟: record_writer→records→task_loader→本模块 循环
-                    verdict_dir = record_dir(gov, "audit_verdicts", dep_tid)
-                    if verdict_dir.is_dir():
-                        # AIPOS-F2: 依赖校验也走门生单源判定
-                        from tools.aipos_cli.audit_helpers import is_gate_born_verdict_metadata
-                        for vf in verdict_dir.glob("*.md"):
-                            try:
-                                vtext = vf.read_text(encoding="utf-8")
-                                vfm, _, _ = parse_markdown_frontmatter(vtext)
-                                # AIPOS-F2: 只认门生记录,手写文件跳过
-                                if not is_gate_born_verdict_metadata(vfm):
-                                    continue
-                                if _lower(vfm.get("verdict")) in AUDIT_PASS_VALUES:
-                                    audit_pass_verified = True
-                                    break
-                            except Exception:
-                                continue
-                    if audit_pass_verified:
-                        break
-            if not audit_pass_verified:
-                # fallback: 旧 frontmatter 字段(向后兼容,但仅当无 records 时)
-                dependency_audit_status = _lower(metadata.get("dependency_audit_status"))
-                if dependency_audit_status not in AUDIT_PASS_VALUES:
-                    blocking_reasons.append(f"{label} dependent task is blocked until dependency_audit_status is PASS (or audit_verdict record exists)")
+            blocking_reasons.extend(unmet_dependencies(metadata, governance_root))
 
     return {
         "blocking_reasons": blocking_reasons,

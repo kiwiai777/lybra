@@ -125,15 +125,27 @@ def test_item1_completed_card_done_take_next(lrig):
     res = run_loop(TASK, lrig.gov, actor=DRIVER, policy_id=POLICY_LAUNCH, out=io.StringIO(), interval=0.05, max_wait=60,
                    max_steps=30)
     assert res.exit_code == 0 and res.outcome == "completed", res.message
+    # 本 lane 无 pending 卡: 「下一张」= 无, hint = F133 按 lane 扫描(lybra next --lane)
     rc, text = _status(lrig.gov, "--wait", "30")
-    _show(f"---- ① status --wait 30(已结案)原文 exit {rc} ----\n{text}")
+    _show(f"---- ① status --wait 30(已结案, 本 lane 无下一张)原文 exit {rc} ----\n{text}")
     assert rc == _code("card_done_take_next") == 0
-    assert "顾问下一动作: card_done_take_next(completed)" in text
-    assert f"下一条: lybra next --workspace-root {lrig.gov}" in text  # F133「下一张」未上线: 声明 take_next_hint 降级为 lybra next
+    assert "顾问下一动作: card_done_take_next(completed)" in text and "下一张可推进卡: 无" in text
+    lane = lrr.loop_status(lrig.gov, TASK)["runs"][0]["lane"]
+    assert lane and f"下一条: lybra next --workspace-root {lrig.gov} --lane {lane}" in text
+    # 同 lane 再发一张 pending 卡: 接 F133「下一张」唯一出口(next_resolver.scan_project + pick_next_card), hint = 直接推进它
+    nxt = TASK.replace("-1", "-2")
+    f90._card(lrig.gov, nxt, "pending", harness="pi")
+    from tools.aipos_cli.next_resolver import pick_next_card, scan_project
+
+    expected = pick_next_card(scan_project(lrig.gov, lane=lane))
     rc, js, _ = _cli(["loop", "status", "--task-id", TASK, "--workspace-root", str(lrig.gov), "--wait", "30", "--json"])
     report = json.loads(js)
+    _show(f"[① 已结案 + 同 lane pending 卡] next_action={report['next_action']} / lybra next 首位={expected and expected.get('task_id')}")
     assert rc == 0 and report["next_action"]["action"] == "card_done_take_next" and report["wait"]["outcome"] == "ready"
     assert report["runs"][0]["next_action"] == report["next_action"]
+    assert expected is not None and expected["task_id"] == nxt  # 与 F133 出口同一判据, 不另判
+    assert report["next_action"]["next_card"]["task_id"] == nxt
+    assert report["next_action"]["hint"] == f"lybra loop --task-id {nxt} --workspace-root {lrig.gov}"
 
 
 # ===========================================================================
@@ -258,7 +270,7 @@ def test_item1_next_action_table_covers_declarations_and_reasons():
     decl = lrr.run_record_declaration(contract)
     rules = lrr.next_action_declaration(decl)
     assert set(rules["by_end_reason"]) == set(decl["end_reasons"]) and set(rules["by_state"]) == set(decl["states"]) - {"ended"}
-    gov = Path("/tmp/f136-gov")
+    gov = Path("/tmp/f136-gov-nonexistent")  # 只读判定; completed 的「下一张」扫描对不存在的根 = 无
     base = {"task_id": TASK, "run_id": "r", "state": "ended", "end_message": "门拒原文: lane 越界"}
     got = {r: lrr.next_action({**base, "end_reason": r}, rules, governance_root=gov)["action"] for r in decl["end_reasons"]}
     _show(f"[① 结束原因 → 下一动作] {got}")

@@ -98,15 +98,29 @@ def render_my_tasks_text(report: dict[str, Any], actor: str) -> str:
     return "\n".join(lines)
 
 
-def render_needs_owner_text(report: dict[str, Any]) -> str:
-    lines = ["Needs Owner"]
+def render_needs_owner_text(report: dict[str, Any], *, groups: dict[str, list[dict[str, Any]]] | None = None,
+                            lane: str | None = None) -> str:
+    """AIPOS-F133 件②: groups(machine_zone.group_rows_by_lane 结果)给出 = 按 lane 分组输出; lane 给出 = 标题注明过滤。"""
+    lines = ["Needs Owner" + (f" — lane {lane}" if lane else "")]
     if not report["tasks"]:
         lines.append("(no tasks currently require owner review)")
         return "\n".join(lines)
-    for task in report["tasks"]:
+
+    def _emit(task: dict[str, Any]) -> None:
         lines.append(_task_line(task))
         reasons = task["needs_owner_reasons"] or task["blocking_reasons"] or ["owner review requested"]
         lines.append(f"  reasons: {', '.join(reasons[:3])}")
+        if task.get("lane_error"):
+            lines.append(f"  lane: {task.get('lane_error')}")
+
+    if groups:
+        for name, tasks in groups.items():
+            lines.append(f"== lane {name} ({len(tasks)}) ==")
+            for task in tasks:
+                _emit(task)
+        return "\n".join(lines)
+    for task in report["tasks"]:
+        _emit(task)
     return "\n".join(lines)
 
 

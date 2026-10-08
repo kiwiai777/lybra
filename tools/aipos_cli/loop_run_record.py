@@ -453,10 +453,30 @@ def _run_files(directory: Path) -> list[Path]:
     return sorted(p for p in directory.glob("looprun_*.md") if p.is_file()) if directory.is_dir() else []
 
 
+def _run_lane(governance_root: Path, task_id: str) -> dict[str, Any]:
+    """AIPOS-F133 件①: 运行记录的 lane = 经 task_loader.find_task_card 反查卡面, 再走唯一派生 machine_zone.lane_of_card
+    (运行记录不落 lane, 免第二份真相)。找不到卡/多义/卡面读不出 = 未解析 lane(带原因, 照列)。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.machine_zone import lane_of_card
+    from tools.aipos_cli.task_loader import AmbiguousTaskCard, find_task_card
+
+    try:
+        path, _state = find_task_card(Path(governance_root), task_id)
+        if path is None:
+            return {**lane_of_card(None, governance_root), "lane_error": f"队列中找不到卡 {task_id}, lane 无从解析"}
+        fm, _body = require_frontmatter(path)
+    except (AmbiguousTaskCard, FrontmatterReadError) as exc:
+        return {**lane_of_card(None, governance_root), "lane_error": str(exc)}
+    return lane_of_card(fm, governance_root)
+
+
 def loop_status(governance_root: Path, task_id: str | None = None, *, now: datetime | None = None,
-                contract: dict[str, Any] | None = None) -> dict[str, Any]:
+                contract: dict[str, Any] | None = None, lane: str | None = None) -> dict[str, Any]:
     """--task-id 给出 = 该卡最近一次运行(含已结束); 缺省 = 本项目全部未结束的运行(loop_dead 也列出: 记录未结束而进程已不在)。
-    读不出的记录 = LoopRunRecordError(fail-closed, 点名文件)。"""
+    读不出的记录 = LoopRunRecordError(fail-closed, 点名文件)。
+    AIPOS-F133 件②: 每个运行带 lane(_run_lane 反查卡面); lane 给出 = 经 machine_zone.filter_rows_by_lane 过滤(四命令同一函数)。"""
+    from tools.aipos_cli.machine_zone import filter_rows_by_lane
+
     from tools.aipos_cli.loop_driver import load_loop_contract
 
     decl = run_record_declaration(contract or load_loop_contract())
@@ -479,10 +499,12 @@ def loop_status(governance_root: Path, task_id: str | None = None, *, now: datet
     for meta in picked:
         view = judge_run(meta, decl, now=now)
         view["record_path"] = meta["_path"]
+        view.update(_run_lane(Path(governance_root), str(view.get("task_id") or meta.get("task_id") or "")))
         view["next_action"] = next_action(view, rules, governance_root=Path(governance_root),
                                           earlier_end_reasons=history if task_id else None)
         views.append(view)
-    report = {"loop_runs_root": str(root), "task_id": task_id, "runs": views, "runs_on_record": total,
+    views = filter_rows_by_lane(views, lane)
+    report = {"loop_runs_root": str(root), "task_id": task_id, "lane_filter": lane, "runs": views, "runs_on_record": total,
               "stall_after_seconds": int(decl["stall_after_seconds"]), "stall_after_tool_seconds": int(decl["stall_after_tool_seconds"])}
     if task_id:
         report["next_action"] = views[-1]["next_action"] if views else None
@@ -495,7 +517,7 @@ def loop_status(governance_root: Path, task_id: str | None = None, *, now: datet
 
 NEXT_ACTIONS = ("continue_wait", "owner_needed", "card_done_take_next", "investigate")
 _NEXT_ACTION_KEYS = ("actions", "by_state", "by_end_reason", "owner_reasons", "consecutive_failures_owner_needed",
-                     "take_next_hint", "wait_hint", "investigate_hint")
+                     "take_next_hint", "take_next_none_hint", "wait_hint", "investigate_hint")
 
 
 def status_contract() -> dict[str, Any]:
@@ -557,8 +579,7 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
                         "detail": f"{rules['owner_reasons']['consecutive_failures']}(连续 {streak} 次, 本次 {reason}: {message})",
                         "hint": str(rules["investigate_hint"]).format(**fill)}
         if action == "card_done_take_next":
-            return {"action": action, "reason": reason, "detail": message or "已结案并落账",
-                    "hint": str(rules["take_next_hint"]).format(**fill)}
+            return {"action": action, "reason": reason, **_take_next(view, rules, governance_root, message)}
         if action == "owner_needed":
             return {"action": action, "reason": reason, "detail": f"{rules['owner_reasons'][reason]}" + (f" — {message}" if message else ""),
                     "hint": str(rules["investigate_hint"]).format(**fill)}
@@ -583,13 +604,32 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
     return {"action": action, "reason": state, "detail": detail or state, "hint": str(rules["investigate_hint"]).format(**fill)}
 
 
+def _take_next(view: dict[str, Any], rules: dict[str, Any], governance_root: Path, message: str) -> dict[str, Any]:
+    """AIPOS-F136 × F133: 结案后取下一张 —— 接 F133「下一张」唯一出口(next_resolver.scan_project + pick_next_card, 判据
+    verbs.schema lane_view.next_card), 范围 = 本卡 lane(machine_zone.lane_of_card 已解析时; 解析不了 = 全项目, 照 F133
+    「不可证明不属本 lane 不隐藏」)。有下一张 = hint 为其 loop 命令(take_next_hint); 无 = hint 为 lane 扫描(take_next_none_hint)。"""
+    from tools.aipos_cli.next_resolver import pick_next_card, scan_project
+
+    lane = view.get("lane") if view.get("lane") and not view.get("lane_error") else None
+    fill = {"task_id": str(view.get("task_id") or ""), "governance_root": str(governance_root),
+            "lane_arg": f" --lane {lane}" if lane else ""}
+    nxt = pick_next_card(scan_project(Path(governance_root), lane=lane))
+    done = message or "已结案并落账"
+    if nxt is None:
+        return {"detail": f"{done}; 下一张可推进卡: 无{'(lane ' + lane + ')' if lane else ''}", "next_card": None,
+                "hint": str(rules["take_next_none_hint"]).format(**fill)}
+    card = {"task_id": nxt.get("task_id"), "lane": nxt.get("lane"), "priority": nxt.get("priority")}
+    return {"detail": f"{done}; 下一张可推进卡: {card['task_id']} lane={card['lane'] or '-'} priority={card['priority'] or '-'}",
+            "next_card": card, "hint": str(rules["take_next_hint"]).format(**{**fill, "next_task_id": card["task_id"]})}
+
+
 class StatusUsageError(ValueError):
     """--wait 用法错(缺 --task-id / 秒数越界): 零等待, 出口 usage。"""
 
 
 def wait_for_next_action(governance_root: Path, task_id: str, seconds: float, *, contract: dict[str, Any] | None = None,
                          sleeper: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic,
-                         interval: float | None = None) -> dict[str, Any]:
+                         interval: float | None = None, lane: str | None = None) -> dict[str, Any]:
     """`loop status --task-id <ID> --wait <秒>`: 经 agent_watch_fs.run_fs_watch(唯一等待原语)有界等待, 直到本卡最近一次运行的
     下一动作 ≠ continue_wait(expect_ready 每轮重读记录 + judge_run + next_action; 进程死 / 停滞无需文件变化)或到时; 返回当时的
     loop_status 报告 + wait 段 {requested_seconds, waited_seconds, outcome: ready|timeout}。上限与间隔读 verbs.schema。"""
@@ -619,7 +659,7 @@ def wait_for_next_action(governance_root: Path, task_id: str, seconds: float, *,
     seen: dict[str, Any] = {}
 
     def _ready(_matched: list[str]) -> bool:
-        report = loop_status(governance_root, task_id, contract=contract)
+        report = loop_status(governance_root, task_id, contract=contract, lane=lane)
         seen["report"] = report
         action = (report.get("next_action") or {}).get("action")
         return action is not None and action != "continue_wait"
@@ -635,7 +675,7 @@ def wait_for_next_action(governance_root: Path, task_id: str, seconds: float, *,
             rc = run_fs_watch(args, sleeper=sleeper, clock=clock, expect_ready=_ready)
         if rc not in (declared_exit_code("lybra_agent_watch", "change"), declared_exit_code("lybra_agent_watch", "timeout")):
             raise LoopRunRecordError(f"等待原语 agent watch 异常退出 {rc}: {sink.getvalue().strip()}")
-    report = loop_status(governance_root, task_id, contract=contract)  # 返回当时状态(到时 / 就绪均重读一次, 不用缓存)
+    report = loop_status(governance_root, task_id, contract=contract, lane=lane)  # 返回当时状态(到时 / 就绪均重读一次, 不用缓存)
     outcome = "ready" if (report.get("next_action") or {}).get("action") not in (None, "continue_wait") else "timeout"
     report["wait"] = {"requested_seconds": float(seconds), "waited_seconds": round(clock() - started, 1), "outcome": outcome,
                       "watch_root": str(root), "max_seconds": max_seconds}
@@ -654,12 +694,14 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
     runs = report["runs"]
     if not runs:
         what = f"卡 {report['task_id']} 无 loop 运行记录" if report.get("task_id") else "本项目无未结束的 loop 运行"
+        if report.get("lane_filter"):
+            what += f"(lane {report['lane_filter']})"
         return f"{what}(落点 {report['loop_runs_root']})"
     out: list[str] = []
     for v in runs:
         state = v["state"]
         out.append(f"loop 运行 {v['run_id']}  [{state}] {decl_states.get(state, '')}")
-        out.append(f"  卡 {v['task_id']}  驱动 {v['driver']}  信封 {v.get('envelope') or '(未定)'}  主机 {v['host']}  "
+        out.append(f"  卡 {v['task_id']}  lane {v.get('lane') or '-'}  驱动 {v['driver']}  信封 {v.get('envelope') or '(未定)'}  主机 {v['host']}  "
                    f"loop pid {v['pid']}({'存活' if v['loop_alive'] else '已不在' if v['loop_alive'] is False else '未探活'})")
         span = "历时" if state == "ended" else "已运行"
         out.append(f"  开始 {v['started_at']}({span} {_dur(v['elapsed_seconds'])})  已落定 {v['steps_done']} 步")
@@ -686,6 +728,8 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
                        f"reason={v.get('end_reason')}" + (f" — {v['end_message']}" if v.get("end_message") else ""))
         if v.get("note"):
             out.append(f"  注: {v['note']}")
+        if v.get("lane_error"):
+            out.append(f"  lane: {v['lane_error']}")
         tool = (v.get("launch") or {}).get("tool_in_flight")
         out.append(f"  停滞判据: 拉起进程存活且 > {v['stall_after_seconds']}s 无输出 = stalled"
                    f"(verbs.schema lybra_loop.run_record.{'stall_after_tool_seconds, 工具在跑' if tool else 'stall_after_seconds'})")
@@ -714,15 +758,23 @@ def loop_status_cli(args: Any) -> int:
     from tools.aipos_cli.verb_contract import declared_exit_code
     from tools.schema_loader import SchemaLoadError
 
+    from tools.aipos_cli.machine_zone import LaneFilterInvalid, lane_view_declaration, resolve_lane_filter
+
     task_id = getattr(args, "task_id", None)
     wait = getattr(args, "wait", None)
     try:
         governance_root = Path(getattr(args, "workspace_root", None) or _find_repo_root_for_args(args))
+        # AIPOS-F133 件②: --lane 校验(不在声明 = 拒, 退出码读 verbs.schema lane_view.invalid_lane_exit_code)
+        try:
+            lane = resolve_lane_filter(governance_root, getattr(args, "lane", None))
+        except LaneFilterInvalid as exc:
+            print(f"lybra loop status: {exc}", file=sys.stderr)
+            return int(lane_view_declaration()["invalid_lane_exit_code"])
         contract = load_loop_contract()
         if wait is None:
-            report = loop_status(governance_root, task_id, contract=contract)
+            report = loop_status(governance_root, task_id, contract=contract, lane=lane)
         else:
-            report = wait_for_next_action(governance_root, task_id or "", float(wait), contract=contract)
+            report = wait_for_next_action(governance_root, task_id or "", float(wait), contract=contract, lane=lane)
     except StatusUsageError as exc:
         print(f"lybra loop status: {exc}", file=sys.stderr)
         return declared_exit_code(STATUS_VERB, "usage")
