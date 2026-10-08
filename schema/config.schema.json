@@ -223,10 +223,16 @@
            "type": "object",
            "required": true,
            "description": "仓名 → 绝对路径(非空; 相对路径 = 拒 REPOS_CONFLICT)"
+          },
+          "no_deploy": {
+           "type": "array",
+           "required": false,
+           "default": [],
+           "description": "AIPOS-F135 件③: 按仓「本仓不部署」声明 = items 内仓名列表(缺省 [] = 行为不变: 部署适用性仍按部署机制判定)。列入的仓 finalize 不调部署脚本, finalization 记录 deploy_status=not_applicable 并写明依据(deploy_status_reason)。只在 deploy_gate.deploy_mechanism_present 读取(经唯一读取口 project_repos); 仓名不在 items / 非字符串列表 = 拒 REPOS_CONFLICT。写入口 = `lybra project set-repos --no-deploy <仓名>`(可重复; set-repos 为整段声明, 未给即清空, 预演 diff 可见)。单仓项目先用 set-repos 声明 repos 段再列入。"
           }
          },
          "reject_codes": {
-          "REPOS_CONFLICT": "repos 段自身不一致(default 不在 items / items 非绝对路径 / code_repo ≠ default 路径)",
+          "REPOS_CONFLICT": "repos 段自身不一致(default 不在 items / items 非绝对路径 / code_repo ≠ default 路径 / no_deploy 仓名不在 items)",
           "LANE_REPO_UNDECLARED": "卡 lane.repo 解析不到清单内一项(或无清单时 ≠ code_repo), 或卡/项目均未声明仓且治理根不是 git 仓",
           "INGEST_REPO_MISMATCH": "Return frontmatter 自述 repo 与卡 lane.repo 解析仓不符(transitions artifact_ingest.return.optional_frontmatter)"
          }

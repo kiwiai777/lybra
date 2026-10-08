@@ -181,7 +181,7 @@ def test_f78c_item1_declaration_single_source_config_card_transitions():
     config = json.loads((REPO_ROOT / "schema" / "config.schema.json").read_text(encoding="utf-8"))
     pj = config["configuration_sources"]["project_json"]["schema"]
     repos = pj["repos"]
-    assert repos["required"] is False and set(repos["schema"]) == {"default", "items"}
+    assert repos["required"] is False and set(repos["schema"]) == {"default", "items", "no_deploy"}  # AIPOS-F135 件③: 只追加 no_deploy
     assert set(repos["reject_codes"]) == {"REPOS_CONFLICT", "LANE_REPO_UNDECLARED", "INGEST_REPO_MISMATCH"}
     assert "兼容别名" in pj["code_repo"]["description"] and "repos.default" in pj["code_repo"]["description"]
     text = (REPO_ROOT / "schema" / "card.schema.json").read_text(encoding="utf-8")

@@ -241,6 +241,17 @@ def auditor_artifact_watch(workspace_root: Path, audit_task_id: str) -> tuple[Pa
         return directory.parent, [f"{directory.name}/{c}" for c in cands]
 
 
+def repo_turn_watch(workspace_root: Path, blocker_task_id: str) -> tuple[Path, list[str]]:
+    """AIPOS-F135 件①: loop 等同仓先合入卡合入完成的 (watch 根, 相对 glob 列表) = 该卡 finalization 记录落点
+    (record_dir(finalizations), 与 existing_finalization_records 读侧同一 glob)。"""
+    directory = record_dir(Path(workspace_root), "finalizations", blocker_task_id)
+    try:
+        rel = directory.resolve().relative_to(Path(workspace_root).resolve())
+        return Path(workspace_root), [str(rel / "finalization_*.md")]
+    except ValueError:
+        return directory.parent, [f"{directory.name}/finalization_*.md"]
+
+
 def verdict_artifact_dir(workspace_root: Path, audit_task_id: str) -> Path:
     """审计报告落点目录 = <paths.verdict_root>/<audit_task_id>(声明驱动, lybra 默认 task_cards/<ID>R)。"""
     return Path(_project_paths(workspace_root)["verdict_root"]) / audit_task_id
@@ -774,6 +785,82 @@ def invalid_finalization_frontmatter(frontmatter: dict[str, Any]) -> list[str]:
     return problems
 
 
+_PASS_VERDICTS = ("PASS", "PASS_WITH_NOTES")
+
+
+def _external_repo_turn_blocker(workspace_root: Path, task_id: str, fm: dict[str, Any]) -> dict[str, Any] | None:
+    """AIPOS-F135 件①: external 模式同仓合入串行的唯一判定(声明 transitions N5.finalize_mode.repo_serial)。
+
+    本卡 FINALIZE Return 未落时调用: 同一 lane 仓(仓键唯一派生 machine_zone.card_lane_key)另有「最新裁决 PASS/PASS_WITH_NOTES 且无
+    finalization 记录」的 claimed 卡, 且按先后序(FINALIZE Return 已落者优先 → 裁决时间 verdict_at → 卡号)排在本卡之前 = 返回
+    {blocker, lane, reason}(推导返回 await_repo_turn, 不派 FINALIZE); 无 = None。卡遍历只走 task_loader.iter_queue_task_paths;
+    finalization 判据只走 finalization_record.existing_finalization_records; 审计卡与存量冻结卡不计。
+    本卡 lane 不可解析 = CardRepoUnresolved 原样抛(调用方不可推导, 无法判同仓即不派)。他卡卡面读不出 / lane 不可解析 = 不计入并在
+    reason 点名(其自身推导已硬停, finalize 同一仓判据亦拒)。"""
+    from tools.aipos_cli.audit_derivation import is_audit_card
+    from tools.aipos_cli.finalization_record import existing_finalization_records
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+    from tools.aipos_cli.legacy_baseline import frozen_tasks
+    from tools.aipos_cli.machine_zone import card_lane_key
+    from tools.aipos_cli.record_writer import record_file_prefix
+    from tools.aipos_cli.task_loader import iter_queue_task_paths
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved
+
+    root = Path(workspace_root)
+    lane = card_lane_key(fm, root)
+
+    def _latest_verdict(card_id: str) -> dict[str, Any] | None:
+        return _find_latest_record(record_dir(root, "audit_verdicts", card_id), record_file_prefix("audit_verdicts"))
+
+    def _verdict_time(verdict: dict[str, Any]) -> str:
+        # 裁决时间同一口径(YAML 可能解析为 datetime 或字符串): 规范为 UTC ISO 秒级; 读不出 = 原文(排序退到卡号)
+        raw = verdict.get("verdict_at")
+        try:
+            moment = raw if isinstance(raw, datetime) else datetime.fromisoformat(str(raw or "").strip().replace("Z", "+00:00"))
+        except ValueError:
+            return str(raw or "")
+        moment = moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+        return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    own = _latest_verdict(task_id) or {}
+    own_key = (1, _verdict_time(own), task_id)
+    frozen = frozen_tasks(root)
+    skipped: list[str] = []
+    ahead: list[tuple[tuple[int, str, str], str]] = []
+    for path in iter_queue_task_paths(root, states=("claimed",)):
+        try:
+            other = _read_frontmatter(path)
+        except FrontmatterReadError as exc:
+            skipped.append(f"{path.name}(卡面读不出: {exc})")
+            continue
+        other_id = str(other.get("task_id") or "").strip()
+        if not other_id or other_id == task_id or other_id.upper() in frozen or is_audit_card(other_id, other):
+            continue
+        verdict = _latest_verdict(other_id)
+        if not verdict or str(verdict.get("verdict") or "") not in _PASS_VERDICTS or existing_finalization_records(root, other_id):
+            continue
+        try:
+            other_lane = card_lane_key(other, root)
+        except (CardRepoUnresolved, OSError, ValueError) as exc:
+            skipped.append(f"{other_id}(lane 不可解析: {exc})")
+            continue
+        if other_lane != lane:
+            continue
+        returned = find_return_artifact(root, finalize_task_id_for(other_id, other)) is not None
+        key = (0 if returned else 1, _verdict_time(verdict), other_id)
+        if key < own_key:
+            ahead.append((key, other_id))
+    if not ahead:
+        return None
+    key, blocker = min(ahead)
+    why = "其 FINALIZE Return 已落(合入在外部进行/已完成)" if key[0] == 0 else f"其裁决({key[1] or '无时间'})早于本卡({own_key[1] or '无时间'})"
+    reason = (f"同仓 lane {lane} 的卡 {blocker} 裁决已 PASS、finalization 记录未落, {why}, 先合入; "
+              f"本卡 {task_id} 待其 finalization 记录落盘后再派 FINALIZE(同仓同时只合一张, AIPOS-F135 件①)")
+    if skipped:
+        reason += f"; 未计入: {', '.join(skipped)}"
+    return {"blocker": blocker, "lane": lane, "reason": reason, "ahead": [card for _k, card in sorted(ahead)]}
+
+
 def _derive_external_finalize(
     workspace_root: Path,
     task_id: str,
@@ -788,6 +875,31 @@ def _derive_external_finalize(
     fin_id = finalize_task_id_for(task_id, fm)
     ret = find_return_artifact(workspace_root, fin_id)
     if ret is None:
+        # AIPOS-F135 件①: 同仓合入串行——同 lane 仓另有先合入的 PASS 待合入卡 = await_repo_turn, 不派 FINALIZE
+        from tools.aipos_cli.workspace_config import CardRepoUnresolved
+
+        try:
+            turn = _external_repo_turn_blocker(workspace_root, task_id, fm)
+        except CardRepoUnresolved as exc:
+            return {
+                **base,
+                "derivable": False,
+                "triggered_by": "advisor",
+                "missing_records": [f"卡 {task_id} lane 仓不可解析, 无法判同仓合入串行: {exc}"],
+                "suggested_action": exc.reason,
+                "notes": f"N4→N5(external): 裁决 {verdict_result}, 但 lane 仓不可解析({exc.code}), 不派 FINALIZE(fail-closed)",
+            }
+        if turn is not None:
+            return {
+                **base,
+                "derivable": False,
+                "triggered_by": "none",
+                "missing_records": [f"同仓先合入卡 {turn['blocker']} 的 finalization 记录"],
+                "suggested_action": f"等同仓卡 {turn['blocker']} 合入完成(其 finalization 记录落盘)后本卡再派 FINALIZE {fin_id}",
+                "notes": f"N4→N5(external): 裁决 {verdict_result}; {turn['reason']}",
+                "repo_turn": turn,
+                "action": {"type": "await_repo_turn", "card": turn["blocker"], "lane": turn["lane"]},
+            }
         cands = ", ".join(str(c) for c in (_artifact_ingest_declaration()["return"].get("return_file_candidates") or []))
         return {
             **base,
