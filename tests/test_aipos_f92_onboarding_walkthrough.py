@@ -117,9 +117,10 @@ def test_item3_worktree_root_excluded_and_deploy_applicability(tmp_path: Path):
     assert status == ""
     assert _exclude_worktree_root(repo, tmp_path / "elsewhere" / "PROBE-1") is None  # 仓外 = 无需登记
     assert "/.worktrees/" in (repo / ".git" / "info" / "exclude").read_text(encoding="utf-8")
-    assert deploy_mechanism_present(repo) is False
+    # AIPOS-F135 件③: 判定结果带 deploy_status 与依据(无机制 = skipped)
+    assert deploy_mechanism_present(repo)["applicable"] is False and deploy_mechanism_present(repo)["deploy_status"] == "skipped"
     (repo / ".deploy").mkdir()
-    assert deploy_mechanism_present(repo) is True
+    assert deploy_mechanism_present(repo)["applicable"] is True
 
 
 def test_state_lint_audit_card_terminal_is_gate_verdict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

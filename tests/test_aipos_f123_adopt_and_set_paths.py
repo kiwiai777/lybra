@@ -399,7 +399,10 @@ def test_item2_single_project_json_writer_with_lock_and_restore(rig, monkeypatch
         assert "update_project_json" in calls, name
         assert "write_text" not in ast.unparse(fn), name
     writer = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "update_project_json")
-    assert "flock" in ast.unparse(writer) and "LOCK_EX" in ast.unparse(writer)
+    # AIPOS-F135 件①: 锁收为唯一实现 workspace_config.exclusive_flock(fcntl.flock LOCK_EX), project.json 写路径经它加锁
+    assert "exclusive_flock(handle)" in ast.unparse(writer)
+    locker = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "exclusive_flock")
+    assert "fcntl.flock" in ast.unparse(locker) and "LOCK_EX" in ast.unparse(locker)
 
     pj = rig.gov / "project.json"
     original = pj.read_text(encoding="utf-8")

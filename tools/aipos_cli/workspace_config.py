@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from tools.aipos_cli.clock import iso_z, utc_now
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from tools.schema_loader import get_config_port
 
@@ -829,7 +830,8 @@ def _same_path(a: Path, b: Path) -> bool:
 def project_repos(governance_root: str | Path, *, project: dict[str, Any] | None = None) -> dict[str, Any]:
     """AIPOS-F78C 件①: 解析项目仓清单(唯一读取口)。
 
-    返回 {declared: bool, default: str|None, items: {仓名: Path}, code_repo: Path|None, project_json_exists: bool}。
+    返回 {declared: bool, default: str|None, items: {仓名: Path}, no_deploy: [仓名], code_repo: Path|None, project_json_exists: bool}。
+    - AIPOS-F135 件③: repos.no_deploy = 「本仓不部署」仓名列表(缺省 []); 须为 items 内仓名的字符串列表, 否则 REPOS_CONFLICT。
     - repos 段缺 = declared False, items 为空; code_repo 单独给出(单仓项目零感知)。
     - repos 段在: default 必在 items 内, items 值必须是非空绝对路径, code_repo(若写)必须 = items[default],
       否则 CardRepoUnresolved(REPOS_CONFLICT)。project.json 读失败 = OSError/ValueError 原样抛(不吞)。
@@ -844,7 +846,7 @@ def project_repos(governance_root: str | Path, *, project: dict[str, Any] | None
     code_repo = Path(code_repo_raw).expanduser() if code_repo_raw else None
     raw = project.get("repos")
     if raw in (None, {}):
-        return {"declared": False, "default": None, "items": {}, "code_repo": code_repo, "project_json_exists": exists}
+        return {"declared": False, "default": None, "items": {}, "no_deploy": [], "code_repo": code_repo, "project_json_exists": exists}
     where = f"{project_json_path(root)} repos"
     if not isinstance(raw, dict) or not isinstance(raw.get("items"), dict) or not raw.get("items"):
         raise CardRepoUnresolved("REPOS_CONFLICT", f"{where} 须为 {{default: <仓名>, items: {{<仓名>: <绝对路径>}}}}(config.schema project_json.repos)")
@@ -862,7 +864,15 @@ def project_repos(governance_root: str | Path, *, project: dict[str, Any] | None
             "REPOS_CONFLICT",
             f"{where}: code_repo={code_repo} ≠ items[{default!r}]={items[default]}(code_repo 是 repos.default 的兼容别名, 须一致或缺省)",
         )
-    return {"declared": True, "default": default, "items": items, "code_repo": code_repo, "project_json_exists": exists}
+    raw_no_deploy = raw.get("no_deploy", [])
+    if not isinstance(raw_no_deploy, list) or any(not isinstance(n, str) or n.strip() not in items for n in raw_no_deploy):
+        raise CardRepoUnresolved(
+            "REPOS_CONFLICT",
+            f"{where}.no_deploy={raw_no_deploy!r} 须为 items {sorted(items)} 内仓名的列表(config.schema project_json.repos.no_deploy)",
+        )
+    no_deploy = sorted({n.strip() for n in raw_no_deploy})
+    return {"declared": True, "default": default, "items": items, "no_deploy": no_deploy, "code_repo": code_repo,
+            "project_json_exists": exists}
 
 
 TEST_CONTRACT_KEYS = ("runall_path", "require_tests", "test_file_globs", "post_merge_regression", "isolation")
@@ -1543,6 +1553,32 @@ def write_project_created_snapshot(project_root: str | Path, name: str, *, regis
 
 
 # ---------------------------------------------------------------------------
+# AIPOS-F135 件①: 排他文件锁唯一实现(fcntl.flock)。project.json 写路径(update_project_json, F123 件②)与 finalize 同仓合入串行
+# (finalize._repo_merge_lock)共用本函数; 产品源码其余处禁再写 fcntl.flock(不变量夹具 tests/test_aipos_f135_finalize_repo_serial.py)。
+# 不起锁服务、不写 pid 文件判活: 锁随持有进程退出由内核释放(崩溃不留死锁)。
+# ---------------------------------------------------------------------------
+
+class FileLockBusy(RuntimeError):
+    """非阻塞取锁时锁已被他方持有(fail-closed: 调用方据此出「进行中, 可重试」出口, 不排队也不抢)。"""
+
+
+@contextlib.contextmanager
+def exclusive_flock(handle: Any, *, wait: bool = True) -> Iterator[None]:
+    """对已打开文件句柄加排他锁(fcntl.flock LOCK_EX), 退出时解锁。wait=False = 非阻塞: 已被持有即抛 FileLockBusy。"""
+    import fcntl
+
+    flags = fcntl.LOCK_EX if wait else fcntl.LOCK_EX | fcntl.LOCK_NB
+    try:
+        fcntl.flock(handle.fileno(), flags)
+    except BlockingIOError as exc:
+        raise FileLockBusy(f"排他锁已被持有: {getattr(handle, 'name', handle)}") from exc
+    try:
+        yield
+    finally:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+# ---------------------------------------------------------------------------
 # AIPOS-F123 件②: project.json 唯一写路径(set-repo / set-repos / set-workstation / set-paths 共用; 禁第二份写实现)。
 # 排他锁 = fcntl.flock 加在 project.json 自身(inode 不变: 原位改写, 不用 rename, 并发写方排队而非各写各的);
 # 写后可选复核(读取口)不过 = 还原原文并原样上抛; dry_run = 只算 diff 零写入。
@@ -1564,48 +1600,43 @@ def update_project_json(
     返回 {project_json, dry_run, changed, written, diff(unified diff 文本, 无改动为空串)}。
     项目未建(无 project.json)= FileNotFoundError; 文件不是 JSON 对象 = ValueError。"""
     import difflib
-    import fcntl
 
     path = project_json_path(project_root)
     if not path.is_file():
         raise FileNotFoundError(f"{path} 不存在(项目未建; 先 lybra project new)")
-    with open(path, "r+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            original = handle.read()
-            data = json.loads(original)
-            if not isinstance(data, dict):
-                raise ValueError(f"{path} 不是 JSON 对象")
-            mutate(data)
-            rendered = json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
-            diff = "".join(difflib.unified_diff(
-                original.splitlines(keepends=True), rendered.splitlines(keepends=True),
-                fromfile=f"{path} (当前)", tofile=f"{path} (写入后)"))
-            result = {"project_json": str(path), "dry_run": dry_run, "changed": rendered != original, "written": False,
-                      "diff": diff}
-            if verify is not None:
-                verify(Path(project_root), project=json.loads(rendered))  # AIPOS-F125: 写前预检(预演即报错, 零写入)
-            if dry_run or rendered == original:
-                return result
-
-            def _rewrite(text: str) -> None:
-                handle.seek(0)
-                handle.truncate()
-                handle.write(text)
-                handle.flush()
-                os.fsync(handle.fileno())
-
-            _rewrite(rendered)
-            if verify is not None:
-                try:
-                    verify(Path(project_root))
-                except BaseException:
-                    _rewrite(original)  # 复核不过: 还原原文(不留半成品), 原异常上抛
-                    raise
-            result["written"] = True
+    with open(path, "r+", encoding="utf-8") as handle, exclusive_flock(handle):  # AIPOS-F135: 锁唯一实现
+        original = handle.read()
+        data = json.loads(original)
+        if not isinstance(data, dict):
+            raise ValueError(f"{path} 不是 JSON 对象")
+        mutate(data)
+        rendered = json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+        diff = "".join(difflib.unified_diff(
+            original.splitlines(keepends=True), rendered.splitlines(keepends=True),
+            fromfile=f"{path} (当前)", tofile=f"{path} (写入后)"))
+        result = {"project_json": str(path), "dry_run": dry_run, "changed": rendered != original, "written": False,
+                  "diff": diff}
+        if verify is not None:
+            verify(Path(project_root), project=json.loads(rendered))  # AIPOS-F125: 写前预检(预演即报错, 零写入)
+        if dry_run or rendered == original:
             return result
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+        def _rewrite(text: str) -> None:
+            handle.seek(0)
+            handle.truncate()
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        _rewrite(rendered)
+        if verify is not None:
+            try:
+                verify(Path(project_root))
+            except BaseException:
+                _rewrite(original)  # 复核不过: 还原原文(不留半成品), 原异常上抛
+                raise
+        result["written"] = True
+        return result
 
 
 class PathsDeclarationError(ValueError):
@@ -1712,9 +1743,11 @@ def set_project_repos(
     items: dict[str, str | Path],
     *,
     default: str,
+    no_deploy: list[str] | tuple[str, ...] = (),
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """AIPOS-F92 件②: 声明项目产品仓 —— project.json `repos {default, items}` + `code_repo`(= items[default] 兼容别名)。
+    AIPOS-F135 件③: no_deploy = 「本仓不部署」仓名(须在 items 内; 整段声明: 未给 = 不写该键, 即缺省 [])。
 
     项目须已建(resolve_project_root, 无 lazy-create)。其余 project.json 键原样保留(只改 repos / code_repo)。
     校验 = 唯一读取口 project_repos()(config.schema project_json.repos 声明: 绝对路径 / default ∈ items / code_repo 一致);
@@ -1728,6 +1761,8 @@ def set_project_repos(
 
     def _mutate(data: dict[str, Any]) -> None:
         data["repos"] = {"default": str(default).strip(), "items": clean_items}
+        if no_deploy:
+            data["repos"]["no_deploy"] = sorted({str(n).strip() for n in no_deploy})
         data["code_repo"] = clean_items.get(str(default).strip())
         staged["project"] = data
 

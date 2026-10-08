@@ -1922,6 +1922,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_setrepos_parser.add_argument("name", help="Established project name")
     project_setrepos_parser.add_argument("--repo", action="append", required=True, metavar="NAME=ABS_PATH", help="Product repo entry (repeatable): <仓名>=<绝对路径>")
     project_setrepos_parser.add_argument("--default", dest="default_repo", help="Default repo name (must be one of --repo names; required when more than one --repo)")
+    project_setrepos_parser.add_argument("--no-deploy", dest="no_deploy", action="append", default=[], metavar="NAME", help="AIPOS-F135: declare repo NAME (one of --repo names; repeatable) as not deployed — finalize skips deployment and records deploy_status=not_applicable (project.json repos.no_deploy; set-repos is a whole-section declaration, omitted = cleared)")
     project_setrepos_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_setrepos_parser.add_argument("--json", action="store_true", help="Output JSON")
     _project_json_two_phase_flags(project_setrepos_parser, "set-repos")  # AIPOS-F125: 缺省预演 / --confirm 才写
@@ -3369,18 +3370,20 @@ def main(argv: list[str] | None = None) -> int:
                     print("Error: 多于一个 --repo 时须给 --default <仓名>(卡缺 lane.repo 时派生此仓)", file=sys.stderr)
                     return 2
                 try:
-                    declared = set_project_repos(home, args.name, items, default=default_repo, dry_run=not args.confirm)
+                    declared = set_project_repos(home, args.name, items, default=default_repo, no_deploy=list(args.no_deploy or []),
+                                                 dry_run=not args.confirm)
                 except CardRepoUnresolved as exc:
                     print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
                     return 1
                 # AIPOS-F125: 缺省预演(diff + 校验, 零写入), --confirm 才写; 输出同一包装
                 repos_view = {"default": declared["default"], "items": {k: str(v) for k, v in declared["items"].items()},
-                              "code_repo": str(declared["code_repo"])}
+                              "no_deploy": list(declared["no_deploy"]), "code_repo": str(declared["code_repo"])}
                 _project_json_two_phase_emit(
                     "set-repos", target, {k: declared[k] for k in ("dry_run", "changed", "written", "diff")}
                     | {"project_json": str(declared["project_json"])}, json_out=getattr(args, "json", False), extra=repos_view,
                     details=[f"repos.default = {repos_view['default']}  code_repo = {repos_view['code_repo']}"]
-                    + [f"repos.items.{k} = {v}" for k, v in repos_view["items"].items()])
+                    + [f"repos.items.{k} = {v}" for k, v in repos_view["items"].items()]
+                    + [f"repos.no_deploy = {repos_view['no_deploy']}(本仓不部署: finalize deploy_status=not_applicable)"] * bool(repos_view["no_deploy"]))
                 return 0
             if args.project_command == "set-paths":
                 # AIPOS-F123 件②: 唯一实现 workspace_config.set_project_paths(声明校验 + update_project_json 唯一写路径)
@@ -4149,6 +4152,9 @@ def main(argv: list[str] | None = None) -> int:
             
             if result.get('commit_hash'):
                 print(f"\n✓ Commit: {result['commit_hash']}")
+            # AIPOS-F135 件②: 推送结果如实标注(pushed / already_synced / not_applicable / not_requested; 声明 transitions N5.record.push_status)
+            if result.get('push_status'):
+                print(f"Push: push_status={result['push_status']}")
             
             # AIPOS-FND-9: Show deployment status
             if result.get('deployed'):
@@ -4169,6 +4175,8 @@ def main(argv: list[str] | None = None) -> int:
                         print("\nAction: Task complete. Run 'lybra queue close --task-id <ID>' to mark as concluded.")
                     else:
                         print("\nAction: Changes committed but deployment pending. Run 'lybra-deploy' if needed.")
+                elif result.get('committed') and result.get('push_status') == "not_applicable":
+                    print("✓ Changes committed locally; push not applicable (no origin remote / tracking branch).")
                 elif result.get('committed'):
                     print("✓ Changes committed locally.")
                     print("\nAction: Push changes with 'git push' or re-run with --push flag.")

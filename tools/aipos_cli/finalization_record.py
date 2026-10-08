@@ -37,8 +37,14 @@ def build_finalization_record(
     remote_ref: str | None = None,
     finalize_return_ref: str | None = None,
     post_merge_regression: dict[str, Any] | None = None,
+    push_status: str | None = None,
+    push_status_reason: str | None = None,
+    deploy_status_reason: str | None = None,
 ) -> dict[str, Any]:
     """构造 finalization 记录 frontmatter。
+
+    AIPOS-F135 件②③: push_status(值域声明 transitions N5.record.push_status.values; 值域外 = ValueError, fail-closed)与
+    push_status_reason / deploy_status_reason(依据, 声明 N5.record.*.reason_field)给了就入记录; 外部 ingest 不给 = 不写(行为不变)。
 
     AIPOS-F118 件①: post_merge_regression = 合并后回归检查结果(声明 transitions N5.record.post_merge_regression;
     post_merge_regression.check_after_merge 产出), 给了就原样入记录——下一次合并取 merged_failures 作合并前基线。
@@ -75,6 +81,15 @@ def build_finalization_record(
         "deploy_status": deploy_status,
     }
     
+    if deploy_status_reason:
+        record["deploy_status_reason"] = str(deploy_status_reason).strip()
+    if push_status is not None:
+        allowed = _declared_push_status_values()
+        if push_status not in allowed:
+            raise ValueError(f"push_status={push_status!r} 不在声明值域 {allowed}(transitions N5.record.push_status.values)")
+        record["push_status"] = push_status
+        if push_status_reason:
+            record["push_status_reason"] = str(push_status_reason).strip()
     if deployment_record_ref:
         record["deployment_record_ref"] = deployment_record_ref
     if remote_ref:
@@ -85,6 +100,17 @@ def build_finalization_record(
         record["post_merge_regression"] = post_merge_regression
 
     return record
+
+
+def _declared_push_status_values() -> list[str]:
+    """AIPOS-F135 件②: push_status 值域唯一声明 transitions N5.record.push_status.values(缺 = SchemaLoadError, fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = ((load_schema("transitions").get("nodes") or {}).get("N5") or {}).get("record", {}).get("push_status")
+    values = decl.get("values") if isinstance(decl, dict) else None
+    if not isinstance(values, list) or not values:
+        raise SchemaLoadError("transitions.schema.json nodes.N5.record.push_status.values 未声明")
+    return [str(v) for v in values]
 
 
 def record_path(governance_root: Path, task_id: str, finalize_ref: str) -> Path:
@@ -126,6 +152,9 @@ def render_record_markdown(frontmatter: dict[str, Any]) -> str:
 - **deployed**: {frontmatter['deployed']}
 - **deploy_status**: {frontmatter['deploy_status']}
 """
+    for extra in ("deploy_status_reason", "push_status", "push_status_reason"):
+        if frontmatter.get(extra):
+            body += f"- **{extra}**: {frontmatter[extra]}\n"
 
     if frontmatter.get("deployment_record_ref"):
         body += f"- **deployment_record_ref**: {frontmatter['deployment_record_ref']}\n"
@@ -155,10 +184,16 @@ def write_finalization_record(
     remote_ref: str | None = None,
     finalize_return_ref: str | None = None,
     post_merge_regression: dict[str, Any] | None = None,
+    push_status: str | None = None,
+    push_status_reason: str | None = None,
+    deploy_status_reason: str | None = None,
 ) -> dict[str, Any]:
     """写 finalization_record 到治理工作区 records。返回 {ok, path, wrote}。"""
     frontmatter = build_finalization_record(
         post_merge_regression=post_merge_regression,
+        push_status=push_status,
+        push_status_reason=push_status_reason,
+        deploy_status_reason=deploy_status_reason,
         task_id=task_id,
         actor=actor,
         commit=commit,
@@ -200,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--authorization-type", required=True, help="Authorization type (verdict_ref/dev_override)")
     parser.add_argument("--authorization-ref", required=True, help="Authorization reference")
     parser.add_argument("--deployed", action="store_true", help="Whether deployed")
-    parser.add_argument("--deploy-status", help="AIPOS-F73D: deploy_status (deployed|deploy_failed|skipped|not_attempted; declared in transitions.schema N5)")
+    parser.add_argument("--deploy-status", help="AIPOS-F73D: deploy_status (values declared in transitions.schema N5.record.deploy_status)")
     parser.add_argument("--deployment-record-ref", help="Deployment record reference")
     parser.add_argument("--dry-run", action="store_true", help="Preview only")
     args = parser.parse_args(argv)
