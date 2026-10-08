@@ -32,6 +32,32 @@ values are the keys of `schema/distribution.schema.json` `harness_semantics.kind
 list before the code is redeemed. Registering a Codex advisor does not extend the Owner-confirm surface (see
 `docs/v1_disclosure.md` row 14).
 
+## Several advisors on one project
+
+One governance root may be driven by more than one advisor instance — for example a main advisor and an OTA advisor that
+only pushes cards of the OTA product repo. Each advisor gets its own credential and its own envelope; nothing is shared or
+overwritten:
+
+1. **Enroll each advisor with its own instance.** The Owner issues one code per advisor, always with `--instance`
+   (`lybra roles … enroll-code --role <advisor role> --instance <prefix>.<project>.<host>`); a code for an advisor- or
+   planner-class role without `--instance` is refused before anything is written. Each advisor redeems its code on the
+   governance-root machine (`lybra roles enroll --code … --workspace <governance root> --verify`). The governance root's
+   `.lybra/connection.json` then holds one credential per instance (re-enrolling one instance retires only that instance's old
+   credential), and `.lybra/role` keeps one record per instance under `instances.<instance>` (declared in
+   `schema/config.schema.json` `configuration_sources.role.schema.instances`).
+2. **Sign one envelope per advisor, limited to its lane.** `lybra envelope mint --confirm --policy-id <id> --agent-or-role
+   <advisor instance> --task-mode code --lane-repo <repo name> …` — `--lane-repo` takes a repo name from the project's
+   `project.json` `repos.items` (the path of `code_repo` when the project declares no repos list); a value that does not resolve
+   is refused. Such an envelope only covers cards whose `lane.repo` resolves to that repo; a card of another lane is refused with
+   `ENVELOPE_SELECTOR_LANE_REPO_MISMATCH` (`schema/transitions.schema.json` `envelope_guards.selector_lane_repo_mismatch`). An
+   envelope without `--lane-repo` covers every lane, as before.
+3. **Drive with an explicit actor.** `lybra loop --task-id <card> --actor <advisor instance>`. The loop uses only that
+   instance's own credential for every gate call (it never falls back to another advisor's credential or to the first one in the
+   file), and refuses to start when the instance has no credential in the governance root. With two or more advisor instances
+   enrolled, running `lybra loop` without `--actor` is refused (the driver cannot be guessed).
+
+A project with a single advisor needs none of this: `--actor` stays optional and existing envelopes keep working unchanged.
+
 ## Start the gate
 
 ```bash

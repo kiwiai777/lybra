@@ -584,7 +584,7 @@ def _landed_host(explicit: str | None) -> str:
 
 
 def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = None, owner_policy_ref: str | None = None,
-                    *, harness: dict[str, str] | None = None) -> list[str]:
+                    *, harness: dict[str, str] | None = None, slot_by_instance: bool = False) -> list[str]:
     """写入 .lybra/role 文件(统一JSON格式,AIPOS-R6H靶②)。
     
     AIPOS-F23 验收⑨: 合并保留既有键 —— 禁整文件覆盖。既有 owner_policy_ref 等键
@@ -595,6 +595,7 @@ def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = Non
         role: 角色名
         agent_instance: agent_instance(可选)
         owner_policy_ref: owner策略引用(可选)
+        slot_by_instance: AIPOS-F134 件②: 治理席位类(顾问/规划方)写治理根时 = True, 按实例分槽(见下); 工位类 = False(行为不变)
     """
     role_file = lybra_dir / "role"
     role_data: dict[str, Any] = {}
@@ -606,15 +607,34 @@ def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = Non
                 role_data = dict(existing)
         except (json.JSONDecodeError, OSError):
             role_data = {}
-    role_data["role"] = role
+    # AIPOS-F134 件②: 按实例分槽(slot_by_instance) —— 治理根 .lybra/role 只有一个顶层记录, 同一治理根先后接入两个顾问实例时后者覆盖前者
+    # (含继承前者的 owner_policy_ref/harness)。另一实例写入(或文件已分槽)时各实例记录并存于 instances.<实例>(先接入者的顶层记录迁入其槽),
+    # 互不覆盖、互不继承; 顶层仍 = 最近一次写入的实例记录(单实例治理根与全部工位: 文件形与合并语义不变, 无 instances 键)。
+    # 读口不新增: 既有两个读口(ConnectionResolver.resolve_identity / charter_render.workstation_identity)照读顶层(= 最近接入实例,
+    # 语义不变); 各实例槽是留存记录(互不覆盖)。多顾问实例时驱动方身份不靠 role 文件, 以 lybra loop --actor + 该实例凭据条目为准
+    # (next_resolver: 连接文件绑定 ≥2 个驱动方实例而未给 --actor = 不定, 拒)。
+    slots = role_data.get("instances") if isinstance(role_data.get("instances"), dict) else None
+    top = {k: v for k, v in role_data.items() if k != "instances"}
+    prior_instance = str(top.get("instance") or "").strip()
+    if agent_instance and (slots is not None or (slot_by_instance and prior_instance and prior_instance != agent_instance)):
+        slots = dict(slots or {})
+        if prior_instance and prior_instance not in slots:
+            slots[prior_instance] = top
+        record = dict(slots.get(agent_instance) or {}) if isinstance(slots.get(agent_instance), dict) else {}
+    else:
+        record = top  # 验收⑨ 既有合并语义(同一实例重写 / 无实例写入)
+    record["role"] = role
     if agent_instance:
-        role_data["instance"] = agent_instance
+        record["instance"] = agent_instance
     if owner_policy_ref:
-        role_data["owner_policy_ref"] = owner_policy_ref
+        record["owner_policy_ref"] = owner_policy_ref
     if harness:
         # AIPOS-F92 件②: 工位 harness {kind, dir}(distribution.schema harness_semantics; 缺 = pi 工位)
-        role_data["harness"] = dict(harness)
-    role_data["enrolled_at"] = iso_z()
+        record["harness"] = dict(harness)
+    record["enrolled_at"] = iso_z()
+    if slots is not None and agent_instance:
+        slots[agent_instance] = dict(record)
+    role_data = {**record, **({"instances": slots} if slots is not None else {})}
     role_file.write_text(json.dumps(role_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     role_file.chmod(0o644)
     return sorted(role_data.keys())
@@ -840,8 +860,10 @@ def enroll(
         )
         policy_derivation = {"policy_id": derived_policy, "reason": policy_reason}
         role_class = resolve_role_class(role, token_entry, project_root=workspace_root)
+        # AIPOS-F134 件②: 治理席位类(顾问/规划方)按实例分槽(同一治理根多顾问实例并存); 分组读 roles.schema class_groups
+        seat_slots = role_class in role_classes_in_group("governance_seat")
         if derived_policy:
-            write_role_file(lybra_dir, role, agent_instance, derived_policy, harness=harness_record)
+            write_role_file(lybra_dir, role, agent_instance, derived_policy, harness=harness_record, slot_by_instance=seat_slots)
             files_written.append("role(含 owner_policy_ref)")
         elif role_class in role_classes_in_group("workstation"):  # AIPOS-F102 件②: 工位类读 roles.schema class_groups
             # 卡面②: 推导不出 → 报错带路, 禁静默留空导致循环起不来(验收⑩)
@@ -853,7 +875,7 @@ def enroll(
             )
         else:
             # 非循环角色类(advisor/planner 等): 仅告警不阻断
-            write_role_file(lybra_dir, role, agent_instance, None, harness=harness_record)
+            write_role_file(lybra_dir, role, agent_instance, None, harness=harness_record, slot_by_instance=seat_slots)
             files_written.append("role(无 owner_policy_ref, 非循环角色类仅告警)")
             policy_derivation["warning"] = True
     elif code is None:

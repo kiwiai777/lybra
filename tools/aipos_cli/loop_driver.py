@@ -211,21 +211,22 @@ def find_envelope(
     agent_or_role 覆盖驱动方实例或 advisor 角色/task_selector 覆盖本卡/额度未尽), 本函数只组驱动方身份与判定对象。
     返回 (policy | None, 每个候选的未匹配原因)。
     AIPOS-F78B 件③: 驱动方身份集合 = {实例, 工位角色名(如 chris 的 hbj-advisor), 角色类 advisor}——信封 agent_or_role 写其一即覆盖
-    (门侧 _match_driver_envelope 同口径)。AIPOS-F90 件①: 判定对象(审计卡 = 被审卡)经 envelope_subject, 与门同一规则。
+    (门侧 _match_driver_envelope 同口径; AIPOS-F134 件①: 集合只由 autonomy_policy.driver_envelope_identities 构造, 门与 loop 同一函数)。AIPOS-F90 件①: 判定对象(审计卡 = 被审卡)经 envelope_subject, 与门同一规则。
     """
-    from tools.aipos_cli.autonomy_policy import select_envelope
+    from tools.aipos_cli.autonomy_policy import driver_envelope_identities, select_envelope
 
-    roles = [r for r in (str(driver_role or "").strip(), DRIVER_ROLE) if r]
-    roles = list(dict.fromkeys(roles))
     task = {
         "task_id": task_id,
         "task_mode": str(task_fm.get("task_mode") or ""),
         "project": str(task_fm.get("project") or ""),
         "reviewed_task_id": str(task_fm.get("reviewed_task_id") or ""),
+        # AIPOS-F134 件③: 信封 task_selector_lane_repo 判定对象(卡 lane; 解析唯一 workspace_config.resolve_card_repo, 经 envelope_subject)
+        "lane": task_fm.get("lane") if isinstance(task_fm.get("lane"), dict) else {},
     }
     return select_envelope(
         governance_root,
-        identities=[(driver_actor, driver_actor, role) for role in roles],
+        # AIPOS-F134 件①: 驱动方身份集合唯一构造(门侧 _match_driver_envelope / _match_claim_envelope 同用)
+        identities=driver_envelope_identities(driver_actor, driver_role, DRIVER_ROLE),
         task=task,
         policy_id=policy_id,
         now=now,
@@ -828,6 +829,16 @@ def run_loop(
         return LoopResult(task_id, "not_derivable", exit_code_for(contract, "not_derivable"), msg,
                           missing_records=[DRIVER_ACTOR_MISSING])
 
+    # AIPOS-F134 件①: 驱动方实例须有自己的凭据(按实例挑, 禁回落连接文件里首个驱动方 token——同一治理根多顾问实例时会冒名)
+    from tools.aipos_cli.next_resolver import driver_token_refusal
+
+    token_refusal = driver_token_refusal(governance_root, driver_actor, connection_json)
+    if token_refusal:
+        msg = f"驱动方 {driver_actor} 凭据不可用, 拒跑: {token_refusal}"
+        say(f"lybra loop {task_id}: exit 4 — {msg}")
+        return LoopResult(task_id, "not_derivable", exit_code_for(contract, "not_derivable"), msg,
+                          missing_records=[f"驱动方实例 {driver_actor} 的凭据条目(connection.json tokens[].agent_instance)"])
+
     # AIPOS-F131 件①③: 运行记录 + 日志(落点 project.json paths.loop_runs_root)。建不起来 = 拒跑 exit 4(运行须可查, 不裸跑)
     from tools.schema_loader import SchemaLoadError
 
@@ -864,9 +875,12 @@ def _run_enveloped(task_id: str, governance_root: Path, result: LoopResult, *, t
                    derive: Callable[[str, Path], dict[str, Any]], execute: Callable[..., dict[str, Any]],
                    watch: Callable[..., int], no_launch: bool, recorder: LoopRunRecorder) -> LoopResult:
     # 件③ 信封(启动前校验; 无信封 exit 5 带申领出口, 禁裸跑); 身份集合含工位角色名(chris: hbj-advisor)
+    # AIPOS-F134 件①: 驱动方角色名按本次驱动方实例取(其凭据条目的 role), 故在 driver_scope 内解析(否则取的是工位声明/首个驱动方)
+    with driver_scope(actor=driver_actor, policy_id=policy_id):
+        driver_role = _driver_role_name(governance_root, connection_json)
     policy, reasons = find_envelope(
         governance_root, task_id=task_id, task_fm=task_fm, driver_actor=driver_actor, policy_id=policy_id, now=now,
-        driver_role=_driver_role_name(governance_root, connection_json),
+        driver_role=driver_role,
     )
     if policy is None:
         hint = mint_hint(task_id=task_id, task_fm=task_fm, driver_actor=driver_actor, now=now, governance_root=governance_root)

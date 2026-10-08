@@ -27,6 +27,42 @@ from tools.aipos_cli.confirm_client import (
 from tools.aipos_cli.renderer import render_json
 
 
+def _role_class_map(repo_root: Path | None) -> dict[str, str]:
+    """roles 注册表 {角色名: 角色类}(回退方案, 仅有 repo_root 时读; AIPOS-F44D-A-fix1 原内联, AIPOS-F134 抽出供驱动方实例判定同用)。"""
+    role_class_map: dict[str, str] = {}
+    if not repo_root:
+        return role_class_map
+    # AIPOS-F44D-A-fix1: 修正路径为 roles.schema.json (不是 .yaml)
+    roles_schema_path = repo_root / "0_ontology" / "schemas" / "roles.schema.json"
+    if roles_schema_path.exists():
+        try:
+            schema_data = json.loads(roles_schema_path.read_text(encoding="utf-8"))
+            for role_def in schema_data.get("roles", []):
+                role_name = role_def.get("role")
+                role_class = role_def.get("class")
+                if role_name and role_class:
+                    role_class_map[role_name] = role_class
+        except (OSError, ValueError) as exc:  # 注册表读取失败: 出声后降级为名字匹配(AIPOS-F78B: 禁静默吞)
+            print(f"two_phase_shell_factory: roles registry unreadable at {roles_schema_path}: {exc}", file=sys.stderr)
+    return role_class_map
+
+
+def _token_has_role_class(token: Any, required_role_class: str, role_class_map: dict[str, str]) -> bool:
+    """token 条目是否属所需角色类——唯一判定(resolve_role_from_connection 与 driver_token_entry 同用):
+    ① 条目 role_class 字段 = 所需类(门兑换自定义角色时写入) → ② 注册表角色类 → ③ 角色名即内建类名(向后兼容)。
+    判序与 AIPOS-F44D-A-fix1 原内联逻辑逐字等价(抽出不改行为)。"""
+    if not isinstance(token, dict):
+        return False
+    role = str(token.get("role") or "").strip()
+    if not role:
+        return False
+    if str(token.get("role_class") or "").strip() == required_role_class:
+        return True
+    if role in role_class_map:
+        return role_class_map[role] == required_role_class
+    return role == required_role_class
+
+
 def resolve_role_from_connection(
     *,
     connection_json_path: str,
@@ -59,41 +95,15 @@ def resolve_role_from_connection(
     if not tokens:
         raise ValueError(f"no tokens found in {connection_json_path}")
     
-    # 2. 读取 roles 注册表 (回退方案, 如果有 repo_root)
-    role_class_map = {}  # {role_name: role_class}
-    if repo_root:
-        # AIPOS-F44D-A-fix1: 修正路径为 roles.schema.json (不是 .yaml)
-        roles_schema_path = repo_root / "0_ontology" / "schemas" / "roles.schema.json"
-        if roles_schema_path.exists():
-            try:
-                schema_data = json.loads(roles_schema_path.read_text(encoding="utf-8"))
-                for role_def in schema_data.get("roles", []):
-                    role_name = role_def.get("role")
-                    role_class = role_def.get("class")
-                    if role_name and role_class:
-                        role_class_map[role_name] = role_class
-            except (OSError, ValueError) as exc:  # 注册表读取失败: 出声后降级为名字匹配(AIPOS-F78B: 禁静默吞)
-                print(f"two_phase_shell_factory: roles registry unreadable at {roles_schema_path}: {exc}", file=sys.stderr)
-    
-    # 3. 匹配角色
+    # 2+3. 匹配角色(AIPOS-F134 件①: 角色类判定抽为 _token_has_role_class, 驱动方按实例挑条目时同用, 禁第二判定)
+    role_class_map = _role_class_map(repo_root)
     available_roles = []
     for token in tokens:
         role = token.get("role")
         if not role:
             continue
         available_roles.append(role)
-        
-        # AIPOS-F44D-A-fix1: 优先从 token 的 role_class 字段读取 (现成的, 零解析成本)
-        token_role_class = token.get("role_class")
-        if token_role_class and token_role_class == required_role_class:
-            return role
-        
-        # 回退: 按注册表角色类匹配
-        if role in role_class_map:
-            if role_class_map[role] == required_role_class:
-                return role
-        # 降级: 直接名字匹配 (向后兼容)
-        elif role == required_role_class:
+        if _token_has_role_class(token, required_role_class, role_class_map):
             return role
     
     # 4. 无匹配角色, 报错带路
@@ -117,10 +127,100 @@ def driver_role_class(repo_root: Path | None = None) -> str:
     return role_class
 
 
-def resolve_driver_role_from_connection(*, connection_json_path: str, repo_root: Path | None = None) -> str:
+class DriverTokenError(ValueError):
+    """AIPOS-F134 件①: 驱动方实例的凭据解析失败(实例无 token / 非驱动方角色类 / 多实例未指明)。fail-closed, 禁回落首个驱动方 token;
+    拒因只带指纹与出口, 永不带 token 值。ValueError 子类: 既有 `except ValueError` 调用方照常接住。"""
+
+
+# AIPOS-F134 件①: loop 派生命令子进程的驱动方实例(声明 config.schema environment_variables.LYBRA_DRIVER_INSTANCE;
+# 只由 next_resolver._run_product_command 在 driver_scope 内写入子进程环境, 本模块 driver_instance_hint 唯一读取)
+DRIVER_INSTANCE_ENV = "LYBRA_DRIVER_INSTANCE"
+
+
+def driver_instance_hint() -> str:
+    """AIPOS-F134 件①: 当前驱动方实例——进程内 = lybra loop 已校验的 --actor(next_resolver.driver_scope); 派生命令子进程 =
+    环境变量 LYBRA_DRIVER_INSTANCE(loop 写入)。都无 = ""(人手直敲薄壳: 按连接文件判, 见 resolve_driver_role_from_connection)。"""
+    import os
+
+    from tools.aipos_cli.next_resolver import _scoped_driver  # 延迟导入(next_resolver 依赖本模块)
+
+    return str(_scoped_driver().get("actor") or os.environ.get(DRIVER_INSTANCE_ENV) or "").strip()
+
+
+def driver_token_entry(*, connection_json_path: str | Path, agent_instance: str, repo_root: Path | None = None) -> dict[str, Any]:
+    """AIPOS-F134 件①: 驱动方实例的 token 条目——挑选唯一实现 token_resolver.select_token_entry(只按 agent_instance, 不给 role:
+    该实例无可用条目即拒, 禁回落连接文件里首个驱动方 token)。候选集先按角色类过滤(_token_has_role_class = roles.schema
+    driver.role_class): 同一实例可并存多条凭据(如 chris 同实例 planner 在前、advisor 在后), 只在其驱动方角色类条目中挑——
+    挑选本身仍只在 select_token_entry 一处。同实例无驱动方类条目 = 拒(出口: 接入驱动方角色类凭据)。拒 = DriverTokenError(带出口)。"""
+    from tools.aipos_cli.token_resolver import TokenResolutionError, load_connection_tokens, select_token_entry, token_fingerprint
+
+    instance = str(agent_instance or "").strip()
+    if not instance:
+        raise DriverTokenError("驱动方实例为空, 无从按实例挑凭据")
+    path = str(Path(connection_json_path).expanduser())
+    tokens = load_connection_tokens(path)  # 读失败/无 tokens = ValueError(fail-closed)
+    wanted = driver_role_class()
+    role_map = _role_class_map(repo_root)
+    driver_tokens = [t for t in tokens if _token_has_role_class(t, wanted, role_map)]
+    try:
+        return select_token_entry(driver_tokens, agent_instance=instance, source=f"{path}(驱动方角色类 {wanted} 条目)")
+    except TokenResolutionError as exc:
+        others = [t for t in tokens if isinstance(t, dict) and t.get("agent_instance") == instance and t not in driver_tokens]
+        if others:
+            shown = ", ".join(f"role={t.get('role')!r} {token_fingerprint(str(t.get('token') or ''))}" for t in others)
+            raise DriverTokenError(
+                f"驱动方实例 {instance!r} 在 {path} 只有非驱动方角色类凭据({shown}), 角色类不是驱动方 {wanted}"
+                f"(roles.schema driver.role_class), 不能提交账务动词({exc})。"
+                f"出口: 为该实例接入驱动方角色类({wanted} 或其自定义角色)的凭据(Owner 发 --role <驱动方角色> --instance {instance} 的注册码 → "
+                f"`lybra roles enroll --code <码> --workspace <治理根>`)"
+            ) from exc
+        bound = driver_token_instances(connection_json_path=path, repo_root=repo_root, tokens=tokens)
+        raise DriverTokenError(
+            f"驱动方实例 {instance!r} 在 {path} 无可用凭据(按实例挑, 禁回落首个驱动方 token): {exc}。"
+            f"该连接文件已绑定的驱动方实例: {bound or '(无)'}。出口: 以已接入的实例跑 `lybra loop --actor <实例>`, "
+            f"或为 {instance} 接入顾问凭据(Owner 发带 --instance {instance} 的注册码 → `lybra roles enroll --code <码> --workspace <治理根>`)"
+        ) from exc
+
+
+def driver_token_instances(*, connection_json_path: str | Path, repo_root: Path | None = None,
+                           tokens: list[Any] | None = None) -> list[str]:
+    """AIPOS-F134 件①: 连接文件中可用(非 retired 且 token 非空, token_resolver.is_token_entry_active)驱动方角色类条目绑定的实例
+    (去重, 文件序)。角色级条目(无 agent_instance, 如自定义角色 svc-<名>)不计。"""
+    from tools.aipos_cli.token_resolver import is_token_entry_active, load_connection_tokens
+
+    items = tokens if tokens is not None else load_connection_tokens(str(Path(connection_json_path).expanduser()))
+    wanted = driver_role_class()
+    role_map = _role_class_map(repo_root)
+    out: list[str] = []
+    for entry in items:
+        if not is_token_entry_active(entry) or not _token_has_role_class(entry, wanted, role_map):
+            continue
+        instance = str(entry.get("agent_instance") or "").strip()
+        if instance and instance not in out:
+            out.append(instance)
+    return out
+
+
+def resolve_driver_role_from_connection(*, connection_json_path: str, repo_root: Path | None = None,
+                                        agent_instance: str | None = None) -> str:
     """AIPOS-F78 前置零①: 账务动词(claim/return/verdict…)一律用驱动方 token 提交——按 roles.schema driver.role_class
-    从 connection.json 选 token 的 role 名(actor/agent_instance 仍=卡实例, 由调用方传)。无驱动方 token = ValueError 带路。"""
+    从 connection.json 选 token 的 role 名(actor/agent_instance 仍=卡实例, 由调用方传)。无驱动方 token = ValueError 带路。
+
+    AIPOS-F134 件①: 驱动方实例已知(显式 agent_instance, 或 driver_instance_hint: loop --actor)= 取该实例条目的角色(driver_token_entry,
+    无即拒, 禁回落首个); 未知且连接文件绑定了 ≥2 个驱动方实例 = 拒(多顾问实例不得取首个冒名); 否则既有行为(首个驱动方角色类)。"""
     wanted = driver_role_class()  # schema 单一源在产品仓(自动定位), 禁随治理根解析
+    instance = str(agent_instance or driver_instance_hint() or "").strip()
+    if instance:
+        return str(driver_token_entry(connection_json_path=connection_json_path, agent_instance=instance, repo_root=repo_root).get("role") or "")
+    try:
+        bound = driver_token_instances(connection_json_path=connection_json_path, repo_root=repo_root)
+    except ValueError as exc:
+        raise ValueError(f"账务动词须由驱动方 token 提交(roles.schema driver.role_class={wanted}), 但 connection.json 读不出: {exc}") from exc
+    if len(bound) > 1:
+        raise DriverTokenError(
+            f"{connection_json_path} 绑定了 {len(bound)} 个驱动方实例 {bound}, 未指明本次驱动方(禁取首个冒名)。"
+            f"出口: 经 `lybra loop --task-id <卡> --actor <实例>` 推进(派生命令自动带实例), 人手直敲薄壳时设环境变量 {DRIVER_INSTANCE_ENV}=<实例>"
+        )
     try:
         return resolve_role_from_connection(
             connection_json_path=connection_json_path, required_role_class=wanted, repo_root=repo_root
@@ -129,6 +229,17 @@ def resolve_driver_role_from_connection(*, connection_json_path: str, repo_root:
         raise ValueError(
             f"账务动词须由驱动方 token 提交(roles.schema driver.role_class={wanted}), 但 connection.json 无该角色类 token: {exc}"
         ) from exc
+
+
+def load_role_token(*, connection_json_path: str, role: str) -> str:
+    """AIPOS-F134 件①: 薄壳取门凭据的唯一入口(execute_two_phase_verb / execute_single_phase_via_gate 同用)。
+    驱动方实例已知(driver_instance_hint)且所求角色 = 该实例条目角色 → 取该实例条目(同角色多实例不取首个); 否则按角色(既有 load_owner_token)。"""
+    instance = driver_instance_hint()
+    if instance:
+        entry = driver_token_entry(connection_json_path=connection_json_path, agent_instance=instance)
+        if str(entry.get("role") or "").strip() == str(role or "").strip():
+            return str(entry.get("token") or "").strip()
+    return load_owner_token(connection_json=connection_json_path, role=role)
 
 
 def _no_envelope_exit() -> int:
@@ -248,7 +359,7 @@ def execute_two_phase_verb(
     """
     # 1. 加载 gate 连接
     try:
-        token = load_owner_token(connection_json=connection_json_path, role=role)
+        token = load_role_token(connection_json_path=connection_json_path, role=role)  # AIPOS-F134 件①: 驱动方按实例
     except ValueError as exc:
         return _fail(f"cannot load {role} token: {exc}")
 
@@ -377,7 +488,7 @@ def execute_single_phase_via_gate(
     """
     # 1. 加载 gate 连接
     try:
-        token = load_owner_token(connection_json=connection_json_path, role=role)
+        token = load_role_token(connection_json_path=connection_json_path, role=role)  # AIPOS-F134 件①: 驱动方按实例
     except ValueError as exc:
         return _fail(f"cannot load {role} token: {exc}")
 
