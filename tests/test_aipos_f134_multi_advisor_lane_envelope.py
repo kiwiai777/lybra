@@ -179,6 +179,43 @@ def test_item1_each_actor_resolves_its_own_token_and_role(two, monkeypatch):
     assert load_role_token(connection_json_path=two.conn, role="advisor") == TOK_OTA
 
 
+def _conn(tmp_path: Path, tokens: list[dict]) -> str:
+    path = tmp_path / "conn" / "connection.json"
+    _write(path, json.dumps({"mcp": {"rpc_url": "http://127.0.0.1:1/mcp"}, "tokens": tokens}))
+    return str(path)
+
+
+def test_item1_same_instance_planner_before_advisor_picks_advisor(tmp_path):
+    """续做(chris 实况形): 同一实例两条凭据, 文件序 planner 在前、advisor 在后 → 只在驱动方角色类条目中挑, 选中 advisor。"""
+    from tools.aipos_cli.two_phase_shell_factory import driver_token_entry, resolve_driver_role_from_connection
+
+    inst = "advisor.f134chris.h1"
+    conn = _conn(tmp_path, [{"role": "planner", "agent_instance": inst, "token": "fixture-planner"},
+                            {"role": "advisor", "agent_instance": inst, "token": "fixture-advisor"}])
+    entry = driver_token_entry(connection_json_path=conn, agent_instance=inst)
+    _show(f"[续做·同实例 planner 在前] 选中 role={entry['role']} {token_fingerprint(entry['token'])}")
+    assert entry["role"] == "advisor" and entry["token"] == "fixture-advisor"
+    assert resolve_driver_role_from_connection(connection_json_path=conn, agent_instance=inst) == "advisor"
+    with nr.driver_scope(actor=inst, policy_id=None):
+        assert nr._driver_role_name(tmp_path, conn) == "advisor" and nr._driver_token_instance(tmp_path, conn) == inst
+        assert nr.driver_token_refusal(tmp_path, inst, conn) == ""
+
+
+def test_item1_same_instance_only_planner_refused_with_exit(tmp_path):
+    from tools.aipos_cli.two_phase_shell_factory import DriverTokenError, driver_token_entry
+
+    inst = "advisor.f134chris.h1"
+    conn = _conn(tmp_path, [{"role": "planner", "agent_instance": inst, "token": "fixture-planner"}])
+    with pytest.raises(DriverTokenError) as exc:
+        driver_token_entry(connection_json_path=conn, agent_instance=inst)
+    _show(f"[续做·同实例仅 planner] {exc.value}")
+    msg = str(exc.value)
+    assert f"驱动方实例 '{inst}'" in msg and "只有非驱动方角色类凭据(role='planner'" in msg and "角色类不是驱动方 advisor" in msg
+    assert f"出口: 为该实例接入驱动方角色类(advisor 或其自定义角色)的凭据" in msg and f"--instance {inst}" in msg
+    assert "fixture-planner" not in msg  # 拒因只带指纹, 永不带 token 值
+    assert nr.driver_token_refusal(tmp_path, inst, conn) == msg
+
+
 def test_item1_unknown_actor_refused_and_no_actor_with_two_slots_refused(two):
     _lane_card(two.gov, OTA_CARD, "ota")
     out = io.StringIO()
@@ -432,7 +469,7 @@ def test_ratchet_first_driver_token_scan_only_shrinks():
     _show(f"[棘轮] 现存命中 {len(hits)} / 基线 {len(base)}: {hits}")
     assert sorted(hits) == sorted(base), {"新增": sorted(set(hits) - set(base)), "基线残留": sorted(set(base) - set(hits))}
     src = (REPO_ROOT / "tools/aipos_cli/two_phase_shell_factory.py").read_text(encoding="utf-8")
-    assert "entry = select_token_entry(tokens, agent_instance=instance, source=path)" in src
+    assert "return select_token_entry(driver_tokens, agent_instance=instance," in src  # 挑选只此一处(候选先按角色类过滤)
     for fn in ("_driver_token_instance", "_driver_role_name"):
         body = re.search(rf"def {fn}\(.*?(?=\ndef )", (REPO_ROOT / "tools/aipos_cli/next_resolver.py").read_text(encoding="utf-8"), re.S).group(0)
         assert "driver_token_entry(" in body, fn
