@@ -124,6 +124,11 @@ def _resolve_repo_root(repo_root: str | Path | None) -> Path:
     return find_repo_root(candidate)
 
 
+# AIPOS-F132 件①: 审计裁决记录属主 = 角色类 auditor(roles.schema roles[].role_class 内建类名, authorize_instance_class 读注册表
+# 校验其存在; 是单一角色类身份, 不是实例前缀集合)。自定义审计角色经门注册表 role_class 解析到此类即放行。
+_AUDIT_VERDICT_SUBMITTER_CLASS = "auditor"
+
+
 def _resolve_repo_and_home(repo_root: str | Path | None) -> tuple[Path, Path | None]:
     """``(resolved_root, home_root)`` for the AIPOS-227 196a ingestion home-guard.
 
@@ -4868,28 +4873,30 @@ def audit_verdict_task(
         if not verdict_text:
             raise ValueError("verdict is required")
         
-        # AIPOS-R6A 靶子⑧: 记录属主校验 — audit_verdicts 只接受 auditor 角色
+        # AIPOS-R6A 靶子⑧: 记录属主校验 — audit_verdicts 只接受 auditor 角色类
         # (执行体补字段篡改 verdict 实证·.bak 铁证)
-        # 角色推导：agent_instance 包含角色前缀（如 audit.*, auditor.*, exec.*, advisor.*）
-        role_prefix = instance_text.split(".")[0].lower() if "." in instance_text else ""
-        if role_prefix not in {"audit", "auditor"}:
+        # AIPOS-F132 件①: 角色类经唯一解析 custom_roles.authorize_instance_class(实例 → 角色 → 角色类, 自定义角色读门注册表),
+        # 不再按实例名前缀字面量集合判(chris hbj-auditor.* = 注册角色 class auditor 曾被拒); 解析不到 = 拒(fail-closed)。
+        resolved_root = _resolve_repo_root(repo_root)
+        from tools.aipos_cli.custom_roles import authorize_instance_class
+
+        role_gate = authorize_instance_class(instance_text, _AUDIT_VERDICT_SUBMITTER_CLASS, resolved_root)
+        if not role_gate["ok"]:
             return {
                 "verdict": Verdict.BLOCK,
                 "task_id": reviewed_id,
                 "actor": actor_text,
                 "dry_run": dry_run,
                 "blocking_reasons": [
-                    f"ROLE_VIOLATION: audit_verdict can only be submitted by auditor role. "
-                    f"Current agent_instance '{instance_text}' (role: {role_prefix or 'unknown'}) is not authorized. "
-                    f"Only instances with 'audit.*' or 'auditor.*' prefix can write to records/audit_verdicts/. "
-                    f"防止执行体/其他角色篡改裁决记录。"
+                    f"ROLE_VIOLATION: audit_verdict 只能由角色类 {role_gate['required_class']} 的实例提交"
+                    f"(内建角色或门注册表 role_class={role_gate['required_class']} 的自定义角色)。"
+                    f"实例 '{instance_text}' 未授权: {role_gate['reason']}。防止执行体/其他角色篡改裁决记录。"
                 ],
                 "warnings": [],
-                "data": {},
+                "data": {"role_resolution": role_gate},
                 "message": "Audit verdict submission blocked: role violation",
             }
         
-        resolved_root = _resolve_repo_root(repo_root)
         frozen_block = _legacy_frozen_block("audit_verdict", resolved_root, [(reviewed_id, None), (audit_task_id, audit_task_path)],
                                             dry_run=dry_run, actor=actor_text)
         if frozen_block is not None:
@@ -7412,6 +7419,18 @@ def withdraw_task(
         return _normalize_exception("queue_withdraw", exc, dry_run=dry_run, actor=_actor_payload(actor))
 
 
+def restricted_amend_actor_class() -> str:
+    """AIPOS-F132 件②: 受限 amend(含 queue_rework 返工节)的执行者角色类——唯一声明 card.schema restricted_amend.actor_role_class。
+    缺声明 = SchemaLoadError(fail-closed, 由调用方 _normalize_exception 出声)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = load_schema("card", _code_repo_schema_root()).get("restricted_amend")
+    cls = str((decl or {}).get("actor_role_class") or "").strip() if isinstance(decl, dict) else ""
+    if not cls:
+        raise SchemaLoadError("card.schema.json restricted_amend.actor_role_class 未声明")
+    return cls
+
+
 def restricted_amend_fields() -> set[str]:
     """AIPOS-F78 前置零⑤: advisor 对 claimed 卡可受限修改的字段集合——唯一声明 card.schema restricted_amend.claimed_card_fields
     (F75 只写死 {rework_rounds}; 现读声明, 含 output_target/lane)。缺声明 = SchemaLoadError(fail-closed)。"""
@@ -7826,24 +7845,29 @@ def queue_rework_task(
         if not focus_items:
             raise ValueError("focus_items is required (at least one item)")
         
-        # 检查角色: 只有 advisor 可以追加返工节
-        role_prefix = instance_text.split(".")[0].lower() if "." in instance_text else ""
-        if role_prefix not in {"advisor", "advise"}:
+        # 检查角色: 只有顾问类可以追加返工节
+        # AIPOS-F132 件②: 角色类经唯一解析(与裁决提交同一函数), 要求类读 card.schema restricted_amend.actor_role_class
+        # (queue_rework = 受限 amend 子集的唯一声明); 不再按实例名前缀 {advisor, advise} 判。
+        resolved_root = _resolve_repo_root(repo_root)
+        from tools.aipos_cli.custom_roles import authorize_instance_class
+
+        role_gate = authorize_instance_class(instance_text, restricted_amend_actor_class(), resolved_root)
+        if not role_gate["ok"]:
             return {
                 "verdict": Verdict.BLOCK,
                 "task_id": task_id,
                 "actor": actor_text,
                 "dry_run": dry_run,
                 "blocking_reasons": [
-                    f"ROLE_VIOLATION: queue_rework 只能由 advisor 角色执行。"
-                    f"当前 agent_instance '{instance_text}' (角色: {role_prefix or 'unknown'}) 未授权。"
+                    f"ROLE_VIOLATION: queue_rework 只能由角色类 {role_gate['required_class']} 的实例执行"
+                    f"(内建或门注册表 role_class={role_gate['required_class']} 的自定义角色)。"
+                    f"实例 '{instance_text}' 未授权: {role_gate['reason']}。"
                 ],
                 "warnings": [],
-                "data": {},
+                "data": {"role_resolution": role_gate},
                 "message": "Queue rework blocked: role violation",
             }
         
-        resolved_root = _resolve_repo_root(repo_root)
         
         # 构建新返工轮次 (校验 + 构造)
         from tools.aipos_cli.queue_mutation import build_rework_round
