@@ -629,6 +629,9 @@ def generate_onboarding_guide(
         "on_fail": {
             "exit 5(无信封)": "Step 4 未落或信封不覆盖驱动方 / 本卡; 按输出的申领出口请 Owner 签",
             "exit 3(等待超时)": "工位尚未交回产物; 工位 /go 开工后重跑同一条 lybra loop",
+            "看进度(loop 跑在后台 / 久无动静)": f"lybra loop status --task-id {TASK_ID_PLACEHOLDER} --workspace-root {gq}"
+                                                "(读运行记录 + 探活 + 判停滞: running/stalled/launch_dead/loop_dead/ended, 含日志路径); "
+                                                "禁 tail/grep 原始日志自判",
             "exit 2(门拒)": "照输出原文处理; loop 已回读门生记录, 不会重复执行已落步骤",
             "exit 2(落账拒)": "N6 落账被拒(他人暂存 / 护栏 / 推送未完成): 照输出原文处理后重跑同一条 lybra loop(落账幂等)",
         },
