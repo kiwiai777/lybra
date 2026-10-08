@@ -2104,7 +2104,8 @@ def build_parser() -> argparse.ArgumentParser:
         "(过程汇总为一行式进度, 产物就绪/超时/早退/中断即清进程组); 否则手工模式(工位敲 /go)。"
         "退出码(verbs.schema lybra_loop.exit_codes): 0=completed, 2=门拒, 3=等待超时/停滞/步数用尽, 4=不可推导/命令不可解析, 5=无信封",
     )
-    loop_parser.add_argument("--task-id", required=True, help="要推进的卡 ID")
+    # AIPOS-F131 件②: `lybra loop status` 子命令(读运行记录 + 探活 + 判停滞); 推进本身仍须 --task-id(run_loop_cli 校验, 退出码同 argparse 必填 2)
+    loop_parser.add_argument("--task-id", help="要推进的卡 ID(推进时必填)")
     loop_parser.add_argument("--envelope", help="policy_id(<policies_root>/<id>.md, project.json paths.policies_root 缺省 5_tasks/policies); 缺省扫描信封目录取首个匹配本卡与驱动方身份的有效信封")
     loop_parser.add_argument("--actor", help="驱动方身份(顾问实例); 缺省=治理根 .lybra/role 的 instance, 再缺省 advisor")
     loop_parser.add_argument("--connection-json", help="透传给 next --run 的 connection.json 路径(token 永不上屏)")
@@ -2115,6 +2116,17 @@ def build_parser() -> argparse.ArgumentParser:
     loop_parser.add_argument("--no-launch", action="store_true", default=False,
                              help="AIPOS-F95: 不拉起 harness 进程(即使信封授权), 手工模式: 等待提示「请在 <工位目录> 的 <harness> 会话敲 /go」")
     loop_parser.add_argument("--json", action="store_true", help="Output JSON")
+    loop_actions = loop_parser.add_subparsers(dest="loop_action")
+    loop_status_parser = loop_actions.add_parser(
+        "status",
+        help="AIPOS-F131: 看 loop 进度——读运行记录(project.json paths.loop_runs_root)+ 本机探活 + 判停滞; 状态 running/stalled/"
+        "launch_dead/loop_dead/ended/unprobeable(verbs.schema lybra_loop.run_record.states)。缺 --task-id = 列本项目全部未结束的运行。"
+        "退出码(verbs.schema lybra_loop_status.exit_codes): 0=已输出, 4=该卡无运行记录/记录读不出。禁 tail/grep 原始日志自判",
+    )
+    # 与父解析器同名参数用 SUPPRESS 缺省: 不覆盖写在 status 之前的同名参数
+    loop_status_parser.add_argument("--task-id", default=argparse.SUPPRESS, help="卡 ID; 缺省 = 本项目全部未结束的 loop 运行")
+    loop_status_parser.add_argument("--workspace-root", type=Path, default=argparse.SUPPRESS, help="治理根; 缺省自发现")
+    loop_status_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output JSON")
 
     # AIPOS-F78 件②: lybra card render — 卡意图面单一渲染器(pi 三行 / codex Prompt.md+Plan.md / claude-code CLAUDE.md 片段)
     card_parser = subparsers.add_parser("card", help="AIPOS-F78: 卡意图面操作(render)")
@@ -5672,6 +5684,10 @@ def main(argv: list[str] | None = None) -> int:
     # AIPOS-F71: lybra next — 唯一推导实现
     # AIPOS-F73件②③: --run 机器扣扳机 (推导 + 执行)
     if args.command == "loop":
+        if getattr(args, "loop_action", None) == "status":
+            # AIPOS-F131 件②: 只读薄壳 — 全部逻辑在 loop_run_record(判据唯一 judge_run)
+            from tools.aipos_cli.loop_run_record import loop_status_cli
+            return loop_status_cli(args)
         # AIPOS-F73D: 顾问侧驱动器薄壳 — 全部逻辑在 loop_driver(复用 next_resolver + agent_watch_fs + autonomy_policy)
         from tools.aipos_cli.loop_driver import run_loop_cli
         return run_loop_cli(args)
