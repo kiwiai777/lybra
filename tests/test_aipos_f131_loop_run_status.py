@@ -317,3 +317,26 @@ def test_rerun_same_second_gets_own_record_status_shows_latest(rig):
     report = lrr.loop_status(rig.gov, TASK)
     assert report["runs_on_record"] == 2 and report["runs"][0]["record_path"] == res.run_record
     assert "共 2 次运行记录" in lrr.render_status(report, _decl()["states"])
+
+
+@pytest.mark.parametrize("raised, reason, code", [("signal", "interrupted", 128 + signal.SIGTERM), ("crash", "crashed", 1)])
+def test_interrupt_and_crash_still_end_the_record(rig, raised, reason, code):
+    """loop 被信号打断 / 内部异常: 先把结束原因写进运行记录再原样抛出(不吞), status 不会把它误报成仍在跑。"""
+    from tools.aipos_cli.loop_driver import LoopInterrupted
+
+    f90._card(rig.gov, TASK, "pending")
+    init_governance_repo(rig.gov)
+
+    def watch(args, expect_ready, **_kw):
+        if raised == "signal":
+            raise LoopInterrupted(signal.SIGTERM)
+        raise RuntimeError("fixture crash in watch")
+
+    expected = LoopInterrupted if raised == "signal" else RuntimeError
+    with pytest.raises(expected):
+        run_loop(TASK, rig.gov, actor=DRIVER, policy_id=f90.POLICY, out=io.StringIO(), interval=0.05, max_wait=1, max_steps=5,
+                 watch=watch)
+    meta = _meta(rig.gov)
+    assert meta["status"] == "ended" and meta["end_reason"] == reason and meta["exit_code"] == code, meta
+    assert [s["action"] for s in meta["steps"]][:1] == ["claim"]  # 打断前已落定的步在记录里
+    assert lrr.loop_status(rig.gov, TASK)["runs"][0]["state"] == "ended"
