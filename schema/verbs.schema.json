@@ -1883,14 +1883,14 @@
         }
       },
       "run_record": {
-        "description": "AIPOS-F131 件①③: 每次 `lybra loop` 在项目声明的落点(project.json paths.loop_runs_root, 唯一读取口 workspace_config.project_paths; 缺省 5_tasks/records/loop_runs)维护本次运行的一份运行记录 <loop_runs_root>/<卡ID>/looprun_<卡ID>_<compact 时间>_<loop pid>.md(frontmatter 带 record_type, 过入库护栏 B④; 原子替换写)与同名 .log 日志(首块 frontmatter 带 log_record_type, 其后只追加)。记录内容: run_id、驱动方、信封、主机、loop pid 与命令行指纹、开始/更新时间; 每步(轮号/节点/状态/卡/动作/结果/退出码/时间, 不记命令与输出原文)与当前步(含等待对象与起始时间); 每次拉起(harness/transport/host/工位/pid/pgid/remote_pgid/命令行指纹/开始与收尾时间/outcome/returncode/termination)及其活动(事件条数、最近一行输出时间、最近有意义活动的时间与类别、按类计数); 结束时间/outcome/exit_code(读本条目 exit_codes)/end_reason/end_message(首行, 经 redact_progress)。**不落会话正文、工具参数、kickoff 与命令行原文**(命令行只落 sha1 指纹, 供探活防 pid 复用)。日志 = loop 人读输出逐行(经 harness_launch.redact_progress), 拉起进程的进度行在日志里只写类别(stdout 照旧一行式进度, 行为不变)。唯一实现 tools/aipos_cli/loop_run_record.py(LoopRunRecorder 写 / judge_run 判 / loop_status 读)。运行记录是运行期观测, 不属卡落账范围(governance_commit.card_own_paths 跳过 loop_runs_root: loop 在落账后仍写结束原因, 若入范围则落账判据永不过); 需入库时照常经 governance-commit。记录建不起来 = loop 拒跑 exit 4(not_derivable, fail-closed: 运行须可查); 中途写失败不打断推进, 每种原因出声一次并计 write_errors。",
+        "description": "AIPOS-F131 件①③: 每次 `lybra loop` 在项目声明的落点(project.json paths.loop_runs_root, 唯一读取口 workspace_config.project_paths; 缺省 5_tasks/records/loop_runs)维护本次运行的一份运行记录 <loop_runs_root>/<卡ID>/looprun_<卡ID>_<compact 时间>_<loop pid>.md(frontmatter 带 record_type, 过入库护栏 B④; 原子替换写)与同名 .log 日志(首块 frontmatter 带 log_record_type, 其后只追加)。记录内容: run_id、驱动方、信封、主机、loop pid 与进程启动时刻指纹(AIPOS-F137)、开始/更新时间; 每步(轮号/节点/状态/卡/动作/结果/退出码/时间, 不记命令与输出原文)与当前步(含等待对象与起始时间); 每次拉起(harness/transport/host/工位/pid/pgid/remote_pgid/进程启动时刻指纹/开始与收尾时间/outcome/returncode/termination)及其活动(事件条数、最近一行输出时间、最近有意义活动的时间与类别、按类计数); 结束时间/outcome/exit_code(读本条目 exit_codes)/end_reason/end_message(首行, 经 redact_progress)。**不落会话正文、工具参数、kickoff 与命令行原文**(探活只落进程启动时刻指纹 loop_run_record.process_fingerprint: Linux starttime / 无 /proc 用 ps lstart, 同一进程改标题 / 改名 / exec 不变, pid 复用的新进程必不同; F137 前写的命令行 sha1 旧指纹降级为仅按 pid 判并标注)。日志 = loop 人读输出逐行(经 harness_launch.redact_progress), 拉起进程的进度行在日志里只写类别(stdout 照旧一行式进度, 行为不变)。唯一实现 tools/aipos_cli/loop_run_record.py(LoopRunRecorder 写 / judge_run 判 / loop_status 读)。运行记录是运行期观测, 不属卡落账范围(governance_commit.card_own_paths 跳过 loop_runs_root: loop 在落账后仍写结束原因, 若入范围则落账判据永不过); 需入库时照常经 governance-commit。记录建不起来 = loop 拒跑 exit 4(not_derivable, fail-closed: 运行须可查); 中途写失败不打断推进, 每种原因出声一次并计 write_errors。",
         "record_type": "loop_run",
         "log_record_type": "loop_run_log",
         "activity_flush_seconds": 5,
         "activity_flush_note": "拉起进程活动写入节流: 每拉起首条活动立即写, 之后每本秒数至多写一次(等待期 sleeper 每轮调 flush, 静默期也把最后一条落盘); 步骤开始/落定、拉起开始/收尾、结束一律立即写",
         "stall_after_seconds": 900,
         "stall_after_tool_seconds": 5400,
-        "stall_note": "停滞判据(lybra loop status 唯一判据 loop_run_record.judge_run): loop 进程在、拉起进程在(pid 存在且命令行指纹一致), 而距该进程最近一行输出(无输出则距拉起时刻)超过阈值 = stalled。阈值: 最近有意义活动是工具开始(tool:<名>, 工具在跑、跑全量测试等长命令期间本就无输出)= stall_after_tool_seconds, 否则 stall_after_seconds。只作显示判定, 不杀进程(进程去留仍按 launch 生命周期); 调用方禁各自 grep 日志判停滞",
+        "stall_note": "停滞判据(lybra loop status 唯一判据 loop_run_record.judge_run): loop 进程在、拉起进程在(pid 存在且进程启动时刻指纹一致, AIPOS-F137), 而距该进程最近一行输出(无输出则距拉起时刻)超过阈值 = stalled。阈值: 最近有意义活动是工具开始(tool:<名>, 工具在跑、跑全量测试等长命令期间本就无输出)= stall_after_tool_seconds, 否则 stall_after_seconds。只作显示判定, 不杀进程(进程去留仍按 launch 生命周期); 调用方禁各自 grep 日志判停滞",
         "activity_categories": {
           "tool:<工具名>": "pi-json tool_execution_start(只记工具名, 不记参数)",
           "tool_error:<工具名>": "pi-json tool_execution_end 且 isError(不记结果正文)",
@@ -1953,7 +1953,7 @@
       ]
     },
     "lybra_loop_status": {
-      "description": "AIPOS-F131 件②: `lybra loop status [--task-id <ID>] [--workspace-root <治理根>] [--json]` —— 读 loop 运行记录(lybra_loop.run_record)+ 本机探活(pid 存在且命令行指纹一致)+ 判停滞, 输出: 运行中/已结束、当前步与等待对象、拉起进程存活与否/已运行时长/距最近输出多久/最近活动类别与时间、停滞判定(states)、结束原因, 以及记录与日志路径。--task-id 给出 = 该卡最近一次运行(含已结束); 缺省 = 本项目全部未结束的运行。只读, 不写任何文件、不起任何进程、不发信号; 输出不含凭据与会话正文(记录本身不落)。跨机: 在治理根所在机执行(经 ssh 亦可); 记录主机 ≠ 本机 = unprobeable。判据唯一实现 tools/aipos_cli/loop_run_record.judge_run, 禁调用方 tail/grep 原始日志自判。AIPOS-F136 件①: 输出增「顾问下一动作」(next_action 段, 唯一判定 loop_run_record.next_action); `--wait <秒>` 有界等待到可行动或到时(wait 段), 退出码按下一动作。",
+      "description": "AIPOS-F131 件②: `lybra loop status [--task-id <ID>] [--workspace-root <治理根>] [--json]` —— 读 loop 运行记录(lybra_loop.run_record)+ 本机探活(pid 存在且进程启动时刻指纹一致, AIPOS-F137)+ 判停滞, 输出: 运行中/已结束、当前步与等待对象、拉起进程存活与否/已运行时长/距最近输出多久/最近活动类别与时间、停滞判定(states)、结束原因, 以及记录与日志路径。--task-id 给出 = 该卡最近一次运行(含已结束); 缺省 = 本项目全部未结束的运行。只读, 不写任何文件、不起任何进程、不发信号; 输出不含凭据与会话正文(记录本身不落)。跨机: 在治理根所在机执行(经 ssh 亦可); 记录主机 ≠ 本机 = unprobeable。判据唯一实现 tools/aipos_cli/loop_run_record.judge_run, 禁调用方 tail/grep 原始日志自判。AIPOS-F136 件①: 输出增「顾问下一动作」(next_action 段, 唯一判定 loop_run_record.next_action); `--wait <秒>` 有界等待到可行动或到时(wait 段), 退出码按下一动作。",
       "phase": "driver",
       "surface": ["cli"],
       "cli_command": "lybra loop status",
@@ -1965,7 +1965,8 @@
           "workspace_root": {"type": "string", "description": "治理根; 缺省自发现"},
           "lane": {"type": "string", "description": "AIPOS-F133 件②: 只看该 lane 的运行(声明 lane_view; 运行记录反查卡面取 lane)"},
           "json": {"type": "boolean", "description": "JSON 输出"},
-          "wait": {"type": "number", "description": "AIPOS-F136 件①: 有界等待秒数(须 --task-id; 0 < 秒数 ≤ wait.max_seconds)。经 agent watch 唯一等待原语 run_fs_watch(expect = 本卡运行记录, expect_ready = 顾问下一动作 ≠ continue_wait)等到可行动或到时, 返回当时状态; 退出码按下一动作(exit_codes)"}
+          "wait": {"type": "number", "description": "AIPOS-F136 件①: 有界等待秒数(须 --task-id; 0 < 秒数 ≤ wait.max_seconds)。经 agent watch 唯一等待原语 run_fs_watch(expect = 本卡运行记录, expect_ready = 顾问下一动作 ≠ continue_wait)等到可行动或到时, 返回当时状态; 退出码按下一动作(exit_codes)"},
+          "verbose": {"type": "boolean", "description": "AIPOS-F138 件③: 输出门侧信封判定诊断行([ENVELOPE_TRACE], autonomy_policy.trace_envelope 逐谓词留痕, 走 stderr); 缺省不打印(状态结论不被淹没)。只开关输出, 信封判定逻辑不变"}
         },
         "additionalProperties": false
       },
@@ -2036,6 +2037,30 @@
         "unreadable": {"code": 4, "meaning": "运行记录读不出 / record_type 不符 / 治理根或声明解析失败(点名文件, 不跳过)"},
         "owner_needed": {"code": 5, "meaning": "--wait: 下一动作 = owner_needed(须 Owner 决定 / 授权, 事由见输出)"},
         "investigate": {"code": 6, "meaning": "--wait: 下一动作 = investigate(停滞 / 进程已不在 / 别机记录 / 推导或产物类结束原因)"}
+      }
+    },
+    "lybra_charter": {
+      "description": "AIPOS-F138 件①: `lybra charter --role <角色类> [--instance <实例>] [--harness <kind>] [--workspace-root <治理根>]` —— 拉取式输出该实例的渲染后章程全文到 stdout(母本 + 项目声明 + 写权限边界, 与 sync 落盘同一渲染器 charter_render.render_charter, 同一上下文构造 charter_render_context)。供本机无落点的会话(他机 Codex 顾问)开局经 ssh 在治理根所在机读取(distribution.schema harness_semantics.remote_session_delivery); Lybra 不推送。实例 = 本治理根 enrollment_log 中有 land 事件(enrollment.workstation_location)且其工位 .lybra/role 实例相符者; 缺 --instance = 治理根 .lybra/role 的实例。harness 缺省 = 该工位 role 记录的 harness。输出只含声明文本: 不含凭据 / 令牌 / 注册码(身份只经 workstation_identity 读非秘密字段)。只读: 不写任何文件、不连门、不起进程。",
+      "phase": "render",
+      "surface": ["cli"],
+      "cli_command": "lybra charter",
+      "single_implementation": "tools/aipos_cli/charter_render.instance_charter(渲染) / charter_pull_command(拉取出口拼装) / run_charter_cli(CLI 薄壳; argparse 参数由本条 parameters 生成)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "role": {"type": "string", "description": "角色类(roles.schema 内建类, 如 advisor); 须等于该实例 .lybra/role 角色解析出的类(custom_roles.resolve_role_to_class), 不符 = 拒"},
+          "instance": {"type": "string", "description": "实例名(注册表模板); 缺省 = 治理根 .lybra/role 的实例(顾问工位即治理根)"},
+          "harness": {"type": "string", "description": "取哪个 harness 的章程条目(distribution.schema harness_semantics.kinds 的键); 缺省 = 该工位 role 记录的 harness"},
+          "workspace_root": {"type": "string", "description": "治理根; 缺省 = 当前目录向上首个已建治理根(workspace_config.enclosing_governance_root, 不读活动项目)"}
+        },
+        "required": ["role"],
+        "additionalProperties": false
+      },
+      "exit_codes": {
+        "ok": {"code": 0, "meaning": "章程全文已输出到 stdout"},
+        "usage": {"code": 2, "meaning": "参数错(缺 --role / harness 不在声明内), 零输出"},
+        "refused": {"code": 3, "meaning": "拒(原因与出口在 stderr): 实例未在本治理根接入登记 / 工位在他机 / 工位 .lybra/role 实例或角色类不符 / 该角色该 harness 无章程条目"},
+        "unreadable": {"code": 4, "meaning": "治理根或声明解析失败(无治理根 / project.json 坏 / 母本缺 / 母本含未声明占位), fail-closed"}
       }
     },
     "lybra_card_render": {

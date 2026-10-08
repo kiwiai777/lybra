@@ -173,7 +173,7 @@ lybra next --task-id <卡ID>
 ## 技能包(skills,由分发器下发)
 
 技能与本章程按你的会话 harness 由 `lybra sync` / `lybra roles enroll` 交付到会话目录(Claude Code: `.claude/skills/` 与
-`.claude/rules/lybra-advisor.md`; Codex: 会话目录 `AGENTS.md`; 落点读 distribution.schema 声明)。技能包含:
+`.claude/rules/lybra-advisor.md`; Codex: 会话目录 `AGENTS.md`; 落点读 distribution.schema 声明)。**他机会话开局先取本章程**(会话不在治理根所在机、本机无落点时, 产品不推送): 每次开局先运行 `ssh <治理根主机> 'cd {{governance_root}} && lybra charter --role {{role_class}} --instance {{instance}}'`(带真实主机的原文见 `lybra sync` 输出的 pull 行), 以其输出为准。技能包含:
 - **card-author**:出卡检查表(单卡单靶/交付≤3/验证修复不混/上下文预算/产品三问)
 - **truth-navigator**:时间线真相导航算法(冷启动/冲突时按 stage_archives + decision_log 裁定)
 - **advisor-commands**:动词手册(所有产品命令的参数/示例/何时用)

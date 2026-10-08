@@ -246,8 +246,10 @@ def resolve_advisor_harness(advisor_harness: str | None, advisor_host: str | Non
     from tools.aipos_cli.custom_roles import resolve_role_to_class
 
     role = "advisor"  # 向导第 5 步兑换的角色(第 3 步 enroll-code --role advisor); 类经唯一 role→class 实现解析
-    deliveries = harness_distributions(declared_role_distributions(role, resolve_role_to_class(role, required=True)), kind)
-    return {"kind": kind, "host": host, "instance_host": instance_host, "deliveries": deliveries, "declaration": decl}
+    role_class = str(resolve_role_to_class(role, required=True))
+    deliveries = harness_distributions(declared_role_distributions(role, role_class), kind)
+    return {"kind": kind, "host": host, "instance_host": instance_host, "deliveries": deliveries, "declaration": decl,
+            "role_class": role_class}
 
 
 # ---------------------------------------------------------------------------
@@ -464,8 +466,9 @@ def generate_onboarding_guide(
     session_at = f"{adv_h['host']}:{advisor_ws or '<会话目录>'}" if adv_h["host"] else (advisor_ws or "<会话目录>")
     label = str(adv_h["declaration"].get("label") or adv_kind)
     # AIPOS-F136 件②: 顾问件 = 技能 + 章程(advisor-charter-<harness>, 母本 agents/roles/advisor/AGENTS.md 含持续推进守则);
-    # 只在会话目录在本机(无 --advisor-host 且有会话目录)时可交付, 他机会话本机无落点(sync 列 undelivered, 不猜落点)
+    # 只在会话目录在本机(无 --advisor-host 且有会话目录)时可交付; 他机会话本机无落点(不猜落点): 章程件 = 拉取出口(AIPOS-F138), 其余列 undelivered
     deliverable = bool(adv_h["deliveries"]) and not adv_h["host"] and bool(advisor_ws)
+    session_start: dict[str, Any] | None = None  # AIPOS-F138 件②: 他机会话开局取章程命令(仅本机无落点时)
     if deliverable:
         landings = [f"{advisor_ws}/{d.get('target_path') or ''}" for d in adv_h["deliveries"]]
         step5 = [
@@ -493,13 +496,24 @@ def generate_onboarding_guide(
         note5 = f"顾问会话目录与治理根可不同: 本 guide 每条命令都显式带治理根, 不依赖 cwd; 顾问件交付后在会话目录重启 {label} 会话即加载"
     else:
         undelivered = ", ".join(d["distribution_id"] for d in adv_h["deliveries"])
-        why = (f"声明给 {adv_kind} 的顾问件({undelivered})需本机会话目录, 会话在 {session_at} = 本机无落点不交付(sync 列 undelivered)"
+        why = (f"声明给 {adv_kind} 的顾问件({undelivered})需本机会话目录, 会话在 {session_at} = 本机无落点不落盘(章程件由会话开局拉取, 见本步末行; 其余件 sync 列 undelivered)"
                if adv_h["deliveries"] else f"声明里无给 {adv_kind} 的顾问件 = 无分发步骤")
         step5 = [
             f"# 顾问凭 Step 3 的码 enroll(在治理根所在机执行; {label} 会话在他机时经 ssh 到本机跑): 凭据与身份落治理根 .lybra/,"
             f" role 如实记 harness={adv_kind} 与会话所在(--harness-host / --harness-dir); {why}",
             render_enroll_command(ADVISOR_CODE, gq, *enroll_extra),
         ]
+        # AIPOS-F138 件②: 本机无落点的顾问章程 = 拉取出口(会话开局经 ssh 取渲染后章程, 含持续推进守则; 产品不推送)。
+        # 命令唯一拼装 charter_render.charter_pull_command; 在会话所在机每次开局跑, 不是本步现在跑的命令, 故以注释行给出
+        from tools.aipos_cli.charter_render import charter_pull_command
+        from tools.aipos_cli.distribution_sync import _is_charter
+
+        if any(_is_charter(d) for d in adv_h["deliveries"]):
+            session_start = charter_pull_command(gov, instance=inst["advisor"], role_class=adv_h["role_class"])
+            step5 += [
+                f"# 开局取章程(在 {session_at} 每次开 {label} 会话先运行, 输出 = 渲染后顾问章程全文, 含持续推进守则):",
+                f"#   {session_start['command']}",
+            ] + ([f"#   ({session_start['host_hint']})"] if session_start["host_hint"] else [])
         title5 = f"顾问 enroll 到治理根({label} 会话, 如实登记会话所在)"
         purpose5 = (
             f"新顾问({label} 会话, 位于 {session_at})凭码兑换 advisor 凭据, 落 {gov_s}/.lybra/(connection.json + role); "
@@ -527,6 +541,7 @@ def generate_onboarding_guide(
         "on_fail": on_fail5,
         "creates": creates5,
         "note": note5,
+        "session_start": session_start,
     })
 
     # ── Step 6: 顾问发工位注册码 ─────────────────────────────────────

@@ -336,6 +336,193 @@ def local_edit_diff(previous_rendered: str | None, current_local: str, target: P
     return "".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F138 件①: 拉取式取章程(`lybra charter`)—— 本机无落点的会话(他机 Codex 顾问)开局经 ssh 在治理根所在机读取。
+# 渲染只走本模块 render_charter + charter_render_context(与 sync 落盘同一渲染器、同一上下文构造), 禁另写模板拼装。
+# ---------------------------------------------------------------------------
+
+CHARTER_VERB = "lybra_charter"
+
+
+class CharterRefused(ValueError):
+    """`lybra charter` 拒(实例未接入 / 工位在他机 / 身份或角色类不符 / 该角色该 harness 无章程), 消息带原因与出口。"""
+
+
+def charter_verb_contract() -> dict[str, Any]:
+    """verbs.schema verbs.lybra_charter(cli_command / parameters / exit_codes 唯一声明)。缺 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    contract = (load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get(CHARTER_VERB)
+    props = ((contract or {}).get("parameters") or {}).get("properties") if isinstance(contract, dict) else None
+    if not isinstance(contract, dict) or not str(contract.get("cli_command") or "").strip() or not isinstance(props, dict) or not props:
+        raise SchemaLoadError(f"verbs.schema.json verbs.{CHARTER_VERB}(cli_command / parameters.properties)未声明")
+    return contract
+
+
+def remote_session_delivery() -> dict[str, Any]:
+    """distribution.schema harness_semantics.remote_session_delivery(他机会话章程的拉取出口声明)。缺键 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (load_schema("distribution").get("harness_semantics") or {}).get("remote_session_delivery")
+    if not isinstance(decl, dict) or decl.get("mode") != "pull" or decl.get("verb") != CHARTER_VERB \
+            or not str(decl.get("host_placeholder") or "").strip():
+        raise SchemaLoadError("distribution.schema.json harness_semantics.remote_session_delivery(mode=pull / "
+                              f"verb={CHARTER_VERB} / host_placeholder)未声明")
+    return decl
+
+
+def add_charter_arguments(parser: Any) -> None:
+    """argparse 参数由 verbs.schema lybra_charter.parameters 生成(命令参数只此一处声明)。"""
+    contract = charter_verb_contract()
+    params = contract["parameters"]
+    required = set(params.get("required") or [])
+    for name, spec in params["properties"].items():
+        flag = "--" + name.replace("_", "-")
+        kwargs: dict[str, Any] = {"help": str(spec.get("description") or ""), "required": name in required}
+        if spec.get("type") == "boolean":
+            kwargs["action"] = "store_true"
+        elif name == "workspace_root":
+            kwargs["type"] = Path
+        elif name == "harness":  # 值域 = distribution.schema harness_semantics.kinds 的键(唯一推导口), 越界 = argparse 用法错
+            from tools.aipos_cli.distribution_sync import declared_harness_kinds
+
+            kwargs["choices"] = list(declared_harness_kinds())
+        parser.add_argument(flag, **kwargs)
+
+
+def instance_charter(
+    governance_root: str | Path,
+    *,
+    role_class: str,
+    instance: str | None = None,
+    harness: str | None = None,
+) -> dict[str, Any]:
+    """实例的渲染后章程(只读)。返回 {text, instance, role, role_class, harness, distribution_id, workstation, governance_root}。
+
+    判序(任一不成立 = CharterRefused, 带出口): 实例(缺省 = 治理根 .lybra/role 的实例)→ 本治理根 enrollment_log 有其 land 事件
+    (enrollment.workstation_location 唯一定位)且工位在本机 → 工位 .lybra/role(workstation_identity 唯一读取, 只读非秘密字段)实例相符
+    → 角色解析出的类(custom_roles.resolve_role_to_class)== role_class → 本角色该 harness(缺省 = 工位 role 记录的 harness)恰有一条
+    kind=charter 分发条目(与门清单同一构建器 workstation_wiring.declared_role_distributions)→ 母本 + charter_render_context → render_charter。
+    声明/治理根坏 = 原异常上抛(ValueError / FileNotFoundError / SchemaLoadError, fail-closed)。"""
+    from tools.aipos_cli.custom_roles import UnknownRoleClass, resolve_role_to_class
+    from tools.aipos_cli.distribution_sync import _is_charter, harness_distributions, harness_kind_declaration, workstation_harness
+    from tools.aipos_cli.enrollment import workstation_location
+    from tools.aipos_cli.workstation_wiring import declared_role_distributions
+    from tools.distribution_manifest import REPO_ROOT, get_product_commit
+
+    gov = Path(governance_root).expanduser().resolve()
+    if not (gov / "project.json").is_file():
+        raise FileNotFoundError(f"{gov} 无 project.json(不是已建治理根); 出口: 在治理根下运行或给 --workspace-root <治理根>")
+    inst = str(instance or "").strip()
+    if not inst:
+        if not is_enrolled_workstation(gov):
+            raise CharterRefused(f"未给 --instance, 且治理根 {gov} 无 .lybra/role(无本治理根工位实例可取); 出口: 加 --instance <实例>")
+        inst = str(workstation_identity(gov)["instance"])
+    loc = workstation_location(gov, inst)
+    if not loc["found"]:
+        raise CharterRefused(f"实例 {inst} 未在本治理根接入: {loc['reason']}; 出口: 先按接入向导 enroll 该实例"
+                             "(lybra onboarding guide), 或核对实例名(lybra roles enroll-where --instance <实例>)")
+    if loc["transport"] != "local":
+        raise CharterRefused(f"实例 {inst} 的工位在他机(land 事件 host={loc['host']} dir={loc['dir']}), 本机读不到其 .lybra/role; "
+                             "出口: 在该工位所在机运行本命令")
+    workstation = Path(str(loc["dir"])).expanduser()
+    try:
+        identity = workstation_identity(workstation)
+    except WorkstationIdentityError as exc:
+        raise CharterRefused(f"实例 {inst} 的登记工位 {workstation} 身份不可用: {exc}; 出口: 重新 enroll 该实例") from exc
+    if identity["instance"] != inst:
+        raise CharterRefused(f"登记工位 {workstation} 的 .lybra/role 实例 = {identity['instance']!r} ≠ {inst!r}"
+                             "(工位已被别的实例接入); 出口: 核对实例名或重新 enroll")
+    try:
+        actual_class = str(resolve_role_to_class(str(identity["role"]), gov, required=True))
+    except UnknownRoleClass as exc:
+        raise CharterRefused(f"实例 {inst} 的角色 {identity['role']!r} 解析不到角色类: {exc}") from exc
+    if actual_class != role_class:
+        raise CharterRefused(f"实例 {inst} 的角色类 = {actual_class!r}(角色 {identity['role']!r}) ≠ --role {role_class!r}; "
+                             f"出口: --role {actual_class}")
+    kind = str(harness or "").strip() or str(workstation_harness(workstation)["kind"])
+    harness_kind_declaration(kind)  # 不在声明 = ValueError(列出合法值)
+    charters = [d for d in harness_distributions(declared_role_distributions(str(identity["role"]), actual_class), kind)
+                if _is_charter(d)]
+    if not charters:
+        raise CharterRefused(f"角色 {identity['role']!r}(类 {actual_class})在 harness={kind} 下无章程分发条目"
+                             "(distribution.schema distributions[kind=charter, applies_to_roles, target.harness]); 无可输出")
+    if len(charters) > 1:
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError(f"角色类 {actual_class} 在 harness={kind} 下有多条章程分发条目 "
+                              f"{[d['distribution_id'] for d in charters]}(须恰一条, 声明错误)")
+    dist = charters[0]
+    master_text = (REPO_ROOT / str(dist["source_path"])).read_text(encoding="utf-8")
+    ctx = charter_render_context(gov, identity=identity, product_commit=get_product_commit(REPO_ROOT))
+    return {
+        "text": render_charter(master_text, ctx),
+        "instance": inst,
+        "role": identity["role"],
+        "role_class": actual_class,
+        "harness": kind,
+        "distribution_id": dist["distribution_id"],
+        "workstation": str(workstation),
+        "governance_root": str(gov),
+    }
+
+
+def charter_pull_command(governance_root: str | Path, *, instance: str, role_class: str) -> dict[str, Any]:
+    """他机会话开局取章程的命令(唯一拼装; 声明 distribution.schema harness_semantics.remote_session_delivery)。
+
+    返回 {command, host, host_declared, host_hint}: host = project.json workstations.<实例>.gate_ssh_alias(唯一读取口
+    workspace_config.project_workstation; 治理根尚无 project.json(向导先于建项目生成)或未声明 = host_placeholder + 声明出口, 不猜主机)。"""
+    import shlex
+
+    from tools.aipos_cli.workspace_config import WorkstationDeclarationError, project_workstation, read_project_json
+
+    decl = remote_session_delivery()
+    cli = str(charter_verb_contract()["cli_command"]).strip()
+    gov = Path(governance_root).expanduser()
+    host: str | None = None
+    hint = ""
+    if (gov / "project.json").is_file():
+        try:
+            host = project_workstation(gov, instance)["gate_ssh_alias"]
+        except WorkstationDeclarationError as exc:
+            hint = f"主机未声明({exc.code}: {exc.reason})"
+        project = str(read_project_json(gov).get("project") or "").strip() or gov.name
+    else:
+        hint = f"主机未声明(治理根 {gov} 尚未建项目)"
+        project = gov.name
+    if host is None:
+        hint += (f"; 声明后本出口带真实主机: lybra project set-workstation {shlex.quote(project)} --instance {shlex.quote(instance)} "
+                 f"--gate-ssh-alias {decl['host_placeholder']} --material-access <一句话> --confirm")
+    remote = f"cd {shlex.quote(str(gov))} && {cli} --role {shlex.quote(role_class)} --instance {shlex.quote(instance)}"
+    host_text = shlex.quote(host) if host else str(decl["host_placeholder"])
+    return {"command": f"ssh {host_text} {shlex.quote(remote)}", "host": host, "host_declared": host is not None, "host_hint": hint}
+
+
+def run_charter_cli(args: Any) -> int:
+    """`lybra charter` 薄壳: stdout 只出章程全文; 拒因 / 错误走 stderr, 退出码读 verbs.schema lybra_charter.exit_codes。"""
+    import sys
+
+    from tools.aipos_cli.verb_contract import declared_exit_code
+    from tools.aipos_cli.workspace_config import enclosing_governance_root
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        explicit = getattr(args, "workspace_root", None) or getattr(args, "global_workspace_root", None)
+        gov = Path(explicit).expanduser() if explicit else enclosing_governance_root()
+        if gov is None:
+            raise FileNotFoundError("当前目录不在任何已建治理根内; 出口: cd <治理根> 后运行, 或给 --workspace-root <治理根>")
+        result = instance_charter(gov, role_class=str(args.role).strip(), instance=getattr(args, "instance", None),
+                                  harness=getattr(args, "harness", None))
+    except CharterRefused as exc:
+        print(f"lybra charter: 拒: {exc}", file=sys.stderr)
+        return declared_exit_code(CHARTER_VERB, "refused")
+    except (FileNotFoundError, SchemaLoadError, ValueError, OSError) as exc:
+        print(f"lybra charter: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return declared_exit_code(CHARTER_VERB, "unreadable")
+    sys.stdout.write(result["text"])
+    return declared_exit_code(CHARTER_VERB, "ok")
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation  # noqa: E402
 check_direct_invocation(__name__)

@@ -369,7 +369,8 @@ def test_item2_codex_advisor_session_receives_charter_and_refuses_foreign_file(p
 
 
 def test_item2_remote_codex_session_lists_undelivered_not_refused(tmp_path):
-    """他机会话(无本机落点): 零写入, 声明给 codex 的章程列 undelivered 并点名原因, 不拒(sync 全量巡检不因此失败)。"""
+    """他机会话(无本机落点): 零写入, 不拒(sync 全量巡检不因此失败)。AIPOS-F138: 章程件改给拉取出口(pull 段, 见
+    test_aipos_f138_remote_charter_pull); 治理根解析不到 = 出口给不出, 章程件仍列 undelivered 并点名原因(本用例)。"""
     from tools.aipos_cli.distribution_sync import _sync_harness_dir
 
     class _NoGate:
@@ -384,6 +385,7 @@ def test_item2_remote_codex_session_lists_undelivered_not_refused(tmp_path):
     _show(f"[② 他机 codex] {res['note']}")
     assert res["ok"] is True and res["plan"] == [] and res["files_fetched"] == 0
     assert [u["distribution_id"] for u in res["undelivered"]] == ["advisor-charter-codex"] and "未交付" in res["note"]
+    assert res["pull"] == [] and "拉取出口给不出" in res["note"]
 
 
 def test_item2_charter_single_source_and_declared_per_advisor_harness():

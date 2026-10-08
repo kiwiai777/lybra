@@ -282,8 +282,11 @@ lybra roles enroll --code <注册码> --workspace <工位目录> --verify
 ```bash
 lybra roles enroll --code <注册码> --workspace <治理根> --harness claude-code --harness-dir <会话目录> --verify   # Claude Code: .claude/skills + .claude/rules 章程
 lybra roles enroll --code <注册码> --workspace <治理根> --harness codex --harness-dir <会话目录> --verify         # Codex(本机会话目录): 章程 AGENTS.md
-lybra roles enroll --code <注册码> --workspace <治理根> --harness codex --harness-host <会话所在机> --verify       # Codex 在他机: 如实登记, 本机无落点不交付
+lybra roles enroll --code <注册码> --workspace <治理根> --harness codex --harness-host <会话所在机> --verify       # Codex 在他机: 如实登记, 本机无落点不落盘
+lybra charter --role advisor --instance <你的顾问实例> --workspace-root <治理根>                                 # 他机会话开局取章程(AIPOS-F138, 经 ssh 在治理根所在机跑)
 ```
+他机会话的章程是拉取的(产品不推送): `lybra sync` 对它给 pull 行(`ssh <治理根主机> 'cd <治理根> && lybra charter ...'`, 主机读
+project.json `workstations.<实例>.gate_ssh_alias`, 未声明时给 `lybra project set-workstation` 出口); 会话开局先跑它, 输出即渲染后章程全文。
 
 #### `lybra roles enroll-code`
 **何时用**:为跨机角色生成一次性注册码(未来:enroll-deliver 跨机形态)。

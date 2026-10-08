@@ -27,7 +27,12 @@ The advisor session may be Claude Code (default) or Codex. `lybra onboarding gui
 --advisor-host <session host>` prints the advisor's enrollment as `lybra roles enroll … --harness codex [--harness-dir <dir>]
 [--harness-host <host>]`: the advisor credential lands in the governance root's `.lybra/` (run on the governance-root machine;
 a Codex session on another machine runs it over ssh), `.lybra/role` records `harness: {kind: codex, dir, host}` as given (a
-directory on another host is not checked locally), and no `.pi` wiring or `.claude/skills` delivery happens. Legal `--harness`
+directory on another host is not checked locally), and no `.pi` wiring or `.claude/skills` delivery happens. A Codex session on
+another machine gets the advisor charter by pull (Lybra never pushes): at session start it runs
+`ssh <governance-root host> 'cd <governance root> && lybra charter --role advisor --instance <instance>'`, which prints the
+rendered charter (same renderer as `lybra sync`; no credentials in the output). `lybra sync` and step 5 of the guide print
+that command; the host is read from project.json `workstations.<instance>.gate_ssh_alias` (`lybra project set-workstation`).
+Legal `--harness`
 values are the keys of `schema/distribution.schema.json` `harness_semantics.kinds`; an unknown value is refused with that
 list before the code is redeemed. Registering a Codex advisor does not extend the Owner-confirm surface (see
 `docs/v1_disclosure.md` row 14).
