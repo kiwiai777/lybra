@@ -273,97 +273,88 @@ def _queue_dir_states() -> tuple[str, ...]:
 
 
 def _get_queue_summary(governance_root: Path, repo_root: Path | None = None,
-                       unreadable: list[str] | None = None) -> dict[str, Any]:
-    """获取队列摘要 (转调 records.py 读取 queue 状态)。
-    
+                       unreadable: list[str] | None = None, *, lane: str | None = None) -> dict[str, Any]:
+    """获取队列摘要 (转调 records.py 读取记录; 卡遍历只走 task_loader.iter_queue_task_paths, AIPOS-F133 件①)。
+
+    AIPOS-F133 件②: 每张卡的 lane 经唯一派生 machine_zone.lane_of_card; lane 给出 = 经 filter_rows_by_lane 过滤
+    (四命令同一函数); lanes = 按 lane 分组的同形摘要(group_rows_by_lane)。
+
     Returns:
         {
             <task_loader.QUEUE_STATES 各目录名>: int,  # pending/claimed/completed/blocked/withdrawn
             "in_flight": list[dict],  # 在途卡详情
+            "lane_filter": str | None,
+            "lanes": {<lane>: {<各目录名>: int, "in_flight": list[dict]}},
         }
     """
+    from tools.aipos_cli.machine_zone import filter_rows_by_lane, group_rows_by_lane, lane_of_card
     from tools.aipos_cli.records import load_records
-    
+    from tools.aipos_cli.task_loader import iter_queue_task_paths
+
     # load_records 的第一个参数是 repo_root (治理工作区根)
     records_data = load_records(governance_root, groups=["claims", "returns", "closures"])
-    
+
     claims = records_data.get("claims", [])
     returns = records_data.get("returns", [])
     closures = records_data.get("closures", [])
-    
-    # 统计队列状态 (通过扫描 queue 目录) - 使用嵌套路径解析
+
+    # 队列根解析(唯一读取口 task_loader.queue_root_for); 解析失败/目录不在 = fail-closed 报错而非返回全零
     try:
         from tools.aipos_cli.task_loader import queue_root_for  # AIPOS-F89 件① M8: 队列根唯一读取口
 
         queue_dir = queue_root_for(governance_root)
     except Exception as e:
-        # Fail-closed: 路径不存在 → 报错而非返回全零
         return {
             "error": f"Queue directory resolution failed: {e}",
             **{state: None for state in _queue_dir_states()},
             "in_flight": [],
         }
-    
+
     if not queue_dir.exists():
-        # Fail-closed: 目录不存在 → 报错而非返回全零
         return {
             "error": f"Queue directory does not exist: {queue_dir}",
             **{state: None for state in _queue_dir_states()},
             "in_flight": [],
         }
-    
-    counts = {}
-    for subdir in _queue_dir_states():
-        subdir_path = queue_dir / subdir
-        if subdir_path.is_dir():
-            cards = list(subdir_path.glob("*.md"))
-            counts[subdir] = len(cards)
-        else:
-            counts[subdir] = 0
-    
-    # 在途卡三查 (claimed 但缺某环节的)
-    in_flight = []
-    claimed_dir = queue_dir / "claimed"
-    
-    if claimed_dir.is_dir():
-        for card_file in sorted(claimed_dir.glob("*.md")):
-            try:
-                fm, _ = require_frontmatter(card_file)
-                task_id = fm.get("task_id")
-                
-                if not task_id:
-                    continue
-                
-                # 检查三环: claim / return / closure
-                has_claim = any(c.get("task_id") == task_id for c in claims)
-                has_return = any(r.get("task_id") == task_id for r in returns)
-                has_closure = any(c.get("task_id") == task_id for c in closures)
-                
-                missing = []
-                if not has_claim:
-                    missing.append("claim")
-                if not has_return:
-                    missing.append("return")
-                if not has_closure:
-                    missing.append("closure")
-                
-                if missing:
-                    in_flight.append({
-                        "task_id": task_id,
-                        "missing": missing,
-                        "status": fm.get("status"),
-                    })
-            except FrontmatterReadError as exc:
-                if unreadable is not None:
-                    unreadable.append(str(exc))
+
+    rows: list[dict[str, Any]] = []
+    for card_file in iter_queue_task_paths(Path(governance_root)):
+        try:
+            fm, _ = require_frontmatter(card_file)
+        except FrontmatterReadError as exc:
+            if unreadable is not None:
+                unreadable.append(str(exc))
+            fm = None  # 读不出的卡仍计数(按所在目录), lane = 未解析(照列不隐藏)
+        rows.append({
+            "task_id": (fm or {}).get("task_id"),
+            "queue_state": card_file.parent.name,
+            "status": (fm or {}).get("status"),
+            **lane_of_card(fm, Path(governance_root)),
+        })
+    rows = filter_rows_by_lane(rows, lane)
+
+    def _summary(subset: list[dict[str, Any]]) -> dict[str, Any]:
+        counts = {state: sum(1 for r in subset if r["queue_state"] == state) for state in _queue_dir_states()}
+        # 在途卡三查 (claimed 但缺某环节的)
+        in_flight = []
+        for r in subset:
+            task_id = r.get("task_id")
+            if r["queue_state"] != "claimed" or not task_id:
                 continue
-            except Exception:
-                continue
-    
-    return {
-        **counts,
-        "in_flight": in_flight,
-    }
+            missing = []
+            if not any(c.get("task_id") == task_id for c in claims):
+                missing.append("claim")
+            if not any(x.get("task_id") == task_id for x in returns):
+                missing.append("return")
+            if not any(c.get("task_id") == task_id for c in closures):
+                missing.append("closure")
+            if missing:
+                in_flight.append({"task_id": task_id, "missing": missing, "status": r.get("status"), "lane": r.get("lane")})
+        return {**counts, "in_flight": in_flight}
+
+    lanes = {name: _summary(subset) for name, subset in group_rows_by_lane(rows, Path(governance_root)).items()}
+    lane_errors = sorted({f"{r.get('task_id') or '?'}: {r['lane_error']}" for r in rows if r.get("lane_error")})
+    return {**_summary(rows), "lane_filter": lane, "lanes": lanes, "lane_errors": lane_errors}
 
 
 def _count_cards_since_snapshot(
@@ -396,6 +387,7 @@ def run_brief(
     repo_root: Path | None = None,
     output_format: str = "text",
     since: str | None = None,
+    lane: str | None = None,
 ) -> int:
     """运行 lybra brief 命令。
     
@@ -404,6 +396,7 @@ def run_brief(
         repo_root: 产品仓根 (用于读取 schema, 默认: 自动检测)
         output_format: 输出格式 ("text" | "json")
         since: 只显示此日期之后的 decision (YYYY-MM-DD)
+        lane: AIPOS-F133 件②: 只看该 lane(machine_zone.resolve_lane_filter 校验); 缺省 = 全部并按 lane 分组
     
     Returns:
         退出码 (0=成功)
@@ -426,6 +419,15 @@ def run_brief(
             print(f"Error: Invalid date format: {since}. Use YYYY-MM-DD.", file=sys.stderr)
             return 1
     
+    # AIPOS-F133 件②: --lane 校验(不在声明 = 拒, 点名可选值; 退出码读 verbs.schema lane_view.invalid_lane_exit_code)
+    from tools.aipos_cli.machine_zone import LaneFilterInvalid, lane_view_declaration, resolve_lane_filter
+
+    try:
+        lane = resolve_lane_filter(workspace_root, lane)
+    except LaneFilterInvalid as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return int(lane_view_declaration()["invalid_lane_exit_code"])
+
     try:
         # 1. 阶段坐标
         unreadable: list[str] = []  # AIPOS-F100 件②: 读不出的文件不省略, 末节逐条列出
@@ -444,7 +446,7 @@ def run_brief(
         decisions = _get_decision_log_entries(workspace_root, filter_date, repo_root, unreadable)
         
         # 3. 队列摘要
-        queue_summary = _get_queue_summary(workspace_root, repo_root, unreadable)
+        queue_summary = _get_queue_summary(workspace_root, repo_root, unreadable, lane=lane)
         
         # Fail-closed: 检查 queue_summary 是否有错误
         if "error" in queue_summary:
@@ -537,7 +539,7 @@ def run_brief(
             print()
             
             # 3. 队列状态
-            print("【3. 当前在跑什么】")
+            print("【3. 当前在跑什么】" + (f"(lane {lane})" if lane else ""))
             for state in _queue_dir_states():  # AIPOS-F104 件②: 队列目录唯一投影(原写死含恒为 0 的 returned 行、漏 withdrawn)
                 print(f"  {state + ':':<10} {queue_summary.get(state, 0)}")
             
@@ -549,6 +551,16 @@ def run_brief(
                     print(f"    - {card['task_id']}: 缺 {missing_str}")
                 if len(queue_summary["in_flight"]) > 10:
                     print(f"    ... 还有 {len(queue_summary['in_flight']) - 10} 张")
+            if not lane:
+                # AIPOS-F133 件②: 不带 --lane 时按 lane 分组(总顾问/Owner 一眼看各子项目)
+                print()
+                print("  按 lane:")
+                for name, part in queue_summary.get("lanes", {}).items():
+                    counts = " ".join(f"{state}={part.get(state, 0)}" for state in _queue_dir_states())
+                    gap = f"  在途缺环 {len(part['in_flight'])}" if part["in_flight"] else ""
+                    print(f"    - {name}: {counts}{gap}")
+            for line in queue_summary.get("lane_errors", [])[:10]:
+                print(f"  lane 不可解析: {line}")
             print()
             
             # 4. 契约文档

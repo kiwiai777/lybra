@@ -2246,6 +2246,26 @@ def _derive_next_step(
                 "suggested_action": f"lybra queue amend --task-id {task_id} 补 assigned_to 后重推导",
                 "notes": "N0→N1: 卡无认领实例声明, 认领命令 actor 无据(fail-closed)",
             }
+        # AIPOS-F133 件③: 依赖未满足 = 不派生认领(判据唯一实现 task_complexity.unmet_dependencies, 与门 claim 校验同一判据;
+        # 全部依赖满足才放行, 只读门生记录)。不可推导, 点名未满足依赖与出口; loop 照 not_derivable 停(exit 4), 不空等。
+        from tools.aipos_cli.task_complexity import unmet_dependencies
+
+        unmet = unmet_dependencies(fm, workspace_root)
+        if unmet:
+            return {
+                "task_id": task_id,
+                "derivable": False,
+                "current_node": "publish",
+                "current_state": "pending",
+                "triggered_by": "none",
+                "command": "",
+                "verb": "lybra_queue_claim_dry_run",
+                "missing_records": unmet,
+                "suggested_action": "先推进被依赖卡至满足条件(card.schema dependency_gate), 本卡随后自动成为可认领",
+                "notes": "N0→N1: 依赖未满足, 不派生认领(AIPOS-F133)",
+                "action": {"type": "dependencies_unmet", "card": task_id,
+                           "depends_on": [str(d) for d in (fm.get("depends_on") or [])] if isinstance(fm.get("depends_on"), list) else [str(fm.get("depends_on"))]},
+            }
         # AIPOS-F90 件①: 认领一段式 = 驱动方 token + 覆盖驱动方与本卡的信封(与 return/verdict/close 同一判据 _driver_envelope_ref,
         # loop --envelope 经 driver_scope 贯穿); 信封在 → PreAuthorized + owner_policy_ref; 不在 → Supervised 形(执行时 exit 5 带申领出口)
         driver_policy = _driver_envelope_ref(workspace_root, task_id, fm, conn_arg)
@@ -2793,18 +2813,35 @@ def legacy_frozen_stop(workspace_root: Path, task_id: str, queue_dir: str | None
     }
 
 
-def scan_project(workspace_root: Path) -> list[dict[str, Any]]:
+def _priority_rank(value: Any) -> int:
+    """卡 priority 的序(enums.schema priority 值序, 后者高; 缺/不在值域 = -1 最低)。"""
+    from tools.schema_loader import load_schema
+
+    values = [str(v.get("value")) for v in (((load_schema("enums").get("enums") or {}).get("priority") or {}).get("values") or [])
+              if isinstance(v, dict)]
+    text = str(value or "").strip().lower()
+    return values.index(text) if text in values else -1
+
+
+_SCAN_STATES = ("pending", "claimed", "blocked")
+_SCAN_STATE_ORDER = {"legacy_baseline_invalid": -1, "pending": 0, "claimed": 1, "blocked": 2, "completed": 3}
+
+
+def scan_project(workspace_root: Path, *, lane: str | None = None) -> list[dict[str, Any]]:
     """项目级扫描:返回所有活跃任务的最小待办清单。
 
-    按优先级排序:pending(先出) > claimed(有 return 产物) > claimed(无产物) > blocked。
+    AIPOS-F133: 卡遍历只走 task_loader.iter_queue_task_paths(原自 glob 队列目录); 每行带 lane(machine_zone.lane_of_card,
+    唯一派生)、priority 与 next_card; lane 给出 = 经 machine_zone.filter_rows_by_lane 过滤(四命令同一函数)。
+    排序: 硬停项(存量冻结清单读不出)首行; 然后「下一张可推进卡」(pending 且可推导 = 依赖满足, 判据 task_complexity.
+    dependencies_satisfied; 优先级最高者, 同级按 task_id); 其余按 pending > claimed > blocked、可推导优先、优先级高者先、task_id。
     AIPOS-F122 件③: 存量冻结卡(legacy_baseline.frozen_tasks 唯一判定)不列; 清单读不出 = 首行列硬停项且不隐藏任何卡。
     """
     workspace_root = Path(workspace_root)
     from tools.aipos_cli.frontmatter import FrontmatterReadError
     from tools.aipos_cli.legacy_baseline import LegacyBaselineError, frozen_tasks
-    from tools.aipos_cli.task_loader import queue_root_for
+    from tools.aipos_cli.machine_zone import filter_rows_by_lane, lane_of_card
+    from tools.aipos_cli.task_loader import iter_queue_task_paths
 
-    queue_root = queue_root_for(workspace_root)  # AIPOS-F89 件① M8: 队列根唯一读取口
     results: list[dict[str, Any]] = []
     try:
         frozen = frozen_tasks(workspace_root)
@@ -2814,55 +2851,60 @@ def scan_project(workspace_root: Path) -> list[dict[str, Any]]:
             "task_id": "(legacy_baseline)", "derivable": False, "current_node": None, "current_state": "legacy_baseline_invalid",
             "triggered_by": "advisor", "command": "", "verb": "", "missing_records": [str(exc)],
             "suggested_action": "修正存量冻结清单条目 / project.json legacy_baseline(冻结不生效, 不隐藏任何卡)", "notes": "",
+            "lane": None, "lane_error": None,
         })
 
-    # 扫描 pending + claimed(活跃任务)
-    for status_dir in ["pending", "claimed", "blocked"]:
-        status_path = queue_root / status_dir
-        if not status_path.is_dir():
+    rows: list[dict[str, Any]] = []
+    for task_file in iter_queue_task_paths(workspace_root, states=_SCAN_STATES):
+        status_dir = task_file.parent.name
+        raw_id = task_file.stem
+        try:
+            fm = _read_frontmatter(task_file)
+        except FrontmatterReadError as exc:
+            if raw_id.upper() in frozen:
+                continue  # AIPOS-F122: 卡面读不出的冻结卡(清单按文件名回落记卡号, state_lint.queue_task_index 同一列举)
+            # AIPOS-F100 件②: 读不出的卡不按文件名猜 task_id 去推导; 原样列为硬停项(点名文件与出口)
+            rows.append({**frontmatter_unreadable_stop(raw_id.upper(), exc), "current_state": status_dir,
+                         **lane_of_card(None, workspace_root)})
             continue
-        for task_file in sorted(status_path.glob("*.md")):
-            # 从文件名提取 task_id
-            raw_id = task_file.stem
-            # 尝试从 frontmatter 取真实 task_id
-            try:
-                fm = _read_frontmatter(task_file)
-            except FrontmatterReadError as exc:
-                if raw_id.upper() in frozen:
-                    continue  # AIPOS-F122: 卡面读不出的冻结卡(清单按文件名回落记卡号, state_lint.queue_task_index 同一列举)
-                # AIPOS-F100 件②: 读不出的卡不按文件名猜 task_id 去推导; 原样列为硬停项(点名文件与出口)
-                results.append({**frontmatter_unreadable_stop(raw_id.upper(), exc), "current_state": status_dir})
-                continue
-            task_id = fm.get("task_id", raw_id.upper()) if fm else raw_id.upper()
-            if str(task_id).strip().upper() in frozen:
-                continue  # AIPOS-F122 件③: 存量冻结卡 = 历史, 不列为待推进
-            # 跳过审计卡(以 R 结尾的)—— 审计卡单独处理
-            # 但在扫描中仍显示
-            try:
-                result = derive_next_step(str(task_id), workspace_root)
-                results.append(result)
-            except Exception as e:
-                results.append({
-                    "task_id": task_id,
-                    "derivable": False,
-                    "current_node": None,
-                    "current_state": status_dir,
-                    "triggered_by": "unknown",
-                    "command": "",
-                    "verb": "",
-                    "missing_records": [f"推导异常: {e}"],
-                    "suggested_action": "检查任务状态",
-                    "notes": str(e),
-                })
+        task_id = fm.get("task_id", raw_id.upper()) if fm else raw_id.upper()
+        if str(task_id).strip().upper() in frozen:
+            continue  # AIPOS-F122 件③: 存量冻结卡 = 历史, 不列为待推进
+        try:
+            result = derive_next_step(str(task_id), workspace_root)
+        except Exception as e:  # 推导异常不吞: 列为不可推导行(带异常原文), 不隐藏该卡
+            result = {
+                "task_id": task_id,
+                "derivable": False,
+                "current_node": None,
+                "current_state": status_dir,
+                "triggered_by": "unknown",
+                "command": "",
+                "verb": "",
+                "missing_records": [f"推导异常: {e}"],
+                "suggested_action": "检查任务状态",
+                "notes": str(e),
+            }
+        rows.append({**result, **lane_of_card(fm, workspace_root), "priority": fm.get("priority")})
 
-    # 排序:pending 优先,然后 claimed 中可推导的优先
-    priority = {"legacy_baseline_invalid": -1, "pending": 0, "claimed": 1, "blocked": 2, "completed": 3}
-    results.sort(key=lambda r: (
-        priority.get(r.get("current_state", ""), 9),
-        0 if r.get("derivable") else 1,
-    ))
+    rows = filter_rows_by_lane(rows, lane)
 
-    return results
+    def order_key(r: dict[str, Any]) -> tuple[Any, ...]:
+        return (_SCAN_STATE_ORDER.get(r.get("current_state", ""), 9), 0 if r.get("derivable") else 1,
+                -_priority_rank(r.get("priority")), str(r.get("task_id") or ""))
+
+    rows.sort(key=order_key)
+    candidates = [r for r in rows if r.get("current_state") == "pending" and r.get("derivable")]
+    if candidates:
+        nxt = candidates[0]  # 已按 可推导 > 优先级 > task_id 排序
+        rows.remove(nxt)
+        rows.insert(0, {**nxt, "next_card": True})
+    return results + rows
+
+
+def pick_next_card(results: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """scan_project 结果中的「下一张可推进卡」(next_card 标记行; 无 = None)。"""
+    return next((r for r in results if r.get("next_card")), None)
 
 
 def format_output(result: dict[str, Any], *, json_mode: bool = False) -> str:
@@ -2897,7 +2939,7 @@ def format_output(result: dict[str, Any], *, json_mode: bool = False) -> str:
     return "\n".join(lines)
 
 
-def format_scan_output(results: list[dict[str, Any]], *, json_mode: bool = False) -> str:
+def format_scan_output(results: list[dict[str, Any]], *, json_mode: bool = False, lane: str | None = None) -> str:
     """格式化项目级扫描输出。"""
     if json_mode:
         import json
@@ -2907,7 +2949,19 @@ def format_scan_output(results: list[dict[str, Any]], *, json_mode: bool = False
         return "No active tasks found in queue."
 
     lines: list[str] = []
-    lines.append(f"=== lybra next — project scan ({len(results)} active tasks) ===")
+    scope = f"lane {lane}, " if lane else ""
+    lines.append(f"=== lybra next — project scan ({scope}{len(results)} active tasks) ===")
+    # AIPOS-F133 件③: 首位给出「下一张可推进卡」(结案后取下一张的唯一出口; 判据见 verbs.schema lane_view.next_card)
+    nxt = pick_next_card(results)
+    if nxt is not None:
+        lane_txt = f" lane={nxt.get('lane')}" if nxt.get("lane") else ""
+        lines.append(f"下一张可推进卡: {nxt.get('task_id')}{lane_txt} priority={nxt.get('priority') or '-'}")
+        if nxt.get("command"):
+            lines.append(f"  Command: {nxt.get('command')}")
+    else:
+        waiting = [r for r in results if r.get("current_state") == "pending" and not r.get("derivable")]
+        why = f"; pending 卡 {len(waiting)} 张均不可推导(依赖未满足/缺认领实例等, 见下)" if waiting else "; 无 pending 卡"
+        lines.append(f"下一张可推进卡: 无{why}")
     lines.append("")
 
     for r in results:
@@ -2915,6 +2969,8 @@ def format_scan_output(results: list[dict[str, Any]], *, json_mode: bool = False
         state = r.get("current_state", "?")
         node = r.get("current_node", "?")
         triggered = r.get("triggered_by", "?")
+        if r.get("lane"):
+            task_id = f"{task_id} [lane {r.get('lane')}]"
 
         if r.get("derivable"):
             cmd = r.get("command", "")
@@ -2928,6 +2984,8 @@ def format_scan_output(results: list[dict[str, Any]], *, json_mode: bool = False
             if missing:
                 lines.append(f"  Missing: {', '.join(missing)}")
             lines.append(f"  Suggested: {suggested}")
+        if r.get("lane_error"):
+            lines.append(f"  Lane: {r.get('lane_error')}")
         lines.append("")
 
     return "\n".join(lines)

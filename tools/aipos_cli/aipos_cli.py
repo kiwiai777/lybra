@@ -271,7 +271,7 @@ def _attach_workstation_view(output: dict[str, Any], actor_report: dict[str, Any
     return output
 
 
-def _filter_needs_owner(report: dict[str, Any]) -> dict[str, Any]:
+def _filter_needs_owner(report: dict[str, Any], *, governance_root: Path | None = None, lane: str | None = None) -> dict[str, Any]:
     filtered = [
         task
         for task in report["tasks"]
@@ -281,6 +281,11 @@ def _filter_needs_owner(report: dict[str, Any]) -> dict[str, Any]:
         or task["metadata"].get("approval_required") is True
         or bool(task["needs_owner_reasons"])
     ]
+    if governance_root is not None:
+        # AIPOS-F133 件①②: 每张卡的 lane 经唯一派生 machine_zone.lane_of_card; --lane 经同一过滤函数
+        from tools.aipos_cli.machine_zone import filter_rows_by_lane, lane_of_card
+
+        filtered = filter_rows_by_lane([{**task, **lane_of_card(task.get("metadata"), governance_root)} for task in filtered], lane)
     return {**report, "scope": "needs_owner", "tasks": filtered}
 
 
@@ -1268,6 +1273,7 @@ def _project_json_two_phase_emit(command: str, target: dict[str, Any], outcome: 
 
 
 def build_parser() -> argparse.ArgumentParser:
+    from tools.aipos_cli.machine_zone import add_lane_argument  # AIPOS-F133 件②: --lane 声明 verbs.schema lane_view
     # AIPOS-F106 件②: 帮助文案里的门地址示例读 config.schema urls.gate_local(唯一读取口 schema_loader), 禁写端口字面
     from tools.schema_loader import get_config_default_gate_url
     from tools.aipos_cli.verb_contract import declared_exit_codes  # AIPOS-F101 件③: help 中的退出码读声明
@@ -1549,6 +1555,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     needs_owner_parser = subparsers.add_parser("needs-owner", help="Render owner review tasks")
     needs_owner_parser.add_argument("--json", action="store_true", help="Output JSON")
+    add_lane_argument(needs_owner_parser)  # AIPOS-F133 件②: 缺省按 lane 分组
 
     validate_parser = subparsers.add_parser("validate", help="Run validator")
     validate_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -2094,6 +2101,7 @@ def build_parser() -> argparse.ArgumentParser:
     next_parser.add_argument("--run", action="store_true", help="AIPOS-F73件②③: 机器扣扳机 — 推导后立即执行命令（单步即退，禁循环）")
     next_parser.add_argument("--connection-json", help="Path to connection.json (for --run gate access)")
     next_parser.add_argument("--json", action="store_true", help="Output JSON")
+    add_lane_argument(next_parser)  # AIPOS-F133 件②: --lane(声明 verbs.schema lane_view; 只用于项目扫描)
 
     # AIPOS-F73D: lybra loop — 顾问侧驱动器(信封授权下 watch 产物落盘 → next --run 单步 → 重推导, 直到 completed)。
     # 参数缺省与退出码只声明在 schema/verbs.schema.json verbs.lybra_loop 一处(argparse 缺省 None, 运行时读声明)。
@@ -2127,6 +2135,7 @@ def build_parser() -> argparse.ArgumentParser:
     loop_status_parser.add_argument("--task-id", default=argparse.SUPPRESS, help="卡 ID; 缺省 = 本项目全部未结束的 loop 运行")
     loop_status_parser.add_argument("--workspace-root", type=Path, default=argparse.SUPPRESS, help="治理根; 缺省自发现")
     loop_status_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output JSON")
+    add_lane_argument(loop_status_parser)  # AIPOS-F133 件②
 
     # AIPOS-F78 件②: lybra card render — 卡意图面单一渲染器(pi 三行 / codex Prompt.md+Plan.md / claude-code CLAUDE.md 片段)
     card_parser = subparsers.add_parser("card", help="AIPOS-F78: 卡意图面操作(render)")
@@ -2254,6 +2263,7 @@ def build_parser() -> argparse.ArgumentParser:
     brief_parser.add_argument("--repo-root", help="Product repo root (for schema resolution); defaults to auto-detection")
     brief_parser.add_argument("--since", help="Only show decisions since this date (YYYY-MM-DD)")
     brief_parser.add_argument("--json", action="store_true", help="Output JSON")
+    add_lane_argument(brief_parser)  # AIPOS-F133 件②: 缺省按 lane 分组
 
     # AIPOS-A1 大项A: governance add 子命令族(产生侧治理写入 CLI)
     governance_parser = subparsers.add_parser("governance", help="AIPOS-A1: 治理文件操作(产生侧写入 CLI, 声明驱动)")
@@ -3935,6 +3945,7 @@ def main(argv: list[str] | None = None) -> int:
             repo_root=repo_root,
             output_format=output_format,
             since=since,
+            lane=getattr(args, "lane", None),
         )
 
     if args.command == "governance":
@@ -5329,11 +5340,26 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "needs-owner":
-        owner_report = _filter_needs_owner(report)
+        # AIPOS-F133 件②: lane 视图(过滤/分组同一函数 machine_zone.filter_rows_by_lane / group_rows_by_lane)
+        from tools.aipos_cli.machine_zone import LaneFilterInvalid, group_rows_by_lane, lane_view_declaration, resolve_lane_filter
+
+        try:
+            lane = resolve_lane_filter(repo_root, getattr(args, "lane", None))
+        except LaneFilterInvalid as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return int(lane_view_declaration()["invalid_lane_exit_code"])
+        owner_report = _filter_needs_owner(report, governance_root=repo_root, lane=lane)
         if args.json:
-            print(render_json(_json_report(owner_report, records=records)))
+            payload = _json_report(owner_report, records=records)
+            lanes = {name: [t.get("task_id") for t in rows]
+                     for name, rows in group_rows_by_lane(owner_report["tasks"], repo_root).items()}
+            payload.update({"lane_filter": lane, "lanes": lanes,
+                            "task_lanes": {str(t.get("path")): {"lane": t.get("lane"), "lane_error": t.get("lane_error")}
+                                           for t in owner_report["tasks"]}})
+            print(render_json(payload))
         else:
-            print(render_needs_owner_text(owner_report))
+            print(render_needs_owner_text(owner_report, groups=None if lane else group_rows_by_lane(owner_report["tasks"], repo_root),
+                                          lane=lane))
         return 0
 
     if args.command == "validate":
@@ -5716,6 +5742,11 @@ def main(argv: list[str] | None = None) -> int:
             json_mode = getattr(args, "json", False)
             run_mode = getattr(args, "run", False)
 
+            if args.task_id and getattr(args, "lane", None):
+                from tools.aipos_cli.machine_zone import lane_view_declaration
+
+                print("Error: --lane 只用于项目扫描(无 --task-id); 单卡推导不按 lane 过滤", file=sys.stderr)
+                return int(lane_view_declaration()["invalid_lane_exit_code"])
             if args.task_id:
                 # 单卡模式
                 result = derive_next_step(args.task_id, ws_root)
@@ -5738,9 +5769,16 @@ def main(argv: list[str] | None = None) -> int:
                     print(format_output(result, json_mode=json_mode))
                     return 0 if result.get("derivable") else 1
             else:
-                # 项目级扫描
-                results = scan_project(ws_root)
-                print(format_scan_output(results, json_mode=json_mode))
+                # 项目级扫描(AIPOS-F133 件②: --lane 经 machine_zone.resolve_lane_filter 校验后交同一过滤函数)
+                from tools.aipos_cli.machine_zone import LaneFilterInvalid, lane_view_declaration, resolve_lane_filter
+
+                try:
+                    lane = resolve_lane_filter(Path(ws_root), getattr(args, "lane", None))
+                except LaneFilterInvalid as exc:
+                    print(f"Error: {exc}", file=sys.stderr)
+                    return int(lane_view_declaration()["invalid_lane_exit_code"])
+                results = scan_project(ws_root, lane=lane)
+                print(format_scan_output(results, json_mode=json_mode, lane=lane))
                 if not json_mode:  # AIPOS-F122 件③: 存量冻结卡不列, 汇总一行(判定唯一实现 legacy_baseline.frozen_tasks)
                     from tools.aipos_cli.legacy_baseline import LegacyBaselineError, frozen_tasks
 
