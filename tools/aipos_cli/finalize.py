@@ -142,11 +142,15 @@ def _read_deploy_current(repo_root: Path) -> dict[str, str | None]:
 
 
 
-def _check_deployment_integrity(repo_root: Path, governance_root: Path | None = None) -> dict[str, Any]:
+def _check_deployment_integrity(repo_root: Path, governance_root: Path | None) -> dict[str, Any]:
     """AIPOS-C3 大项A: 部署完整性区间校验(current..HEAD 每个 commit 都属已 PASS 的卡)。
 
     使用 deployment_authorization.check_commit_interval_coverage 的统一实现。
     实证修复(2026-08-18 三层空洞): 取代原 current==HEAD 简单相等。
+
+    AIPOS-F130 件①(gap #105, F129 finalize 死锁): governance_root 必传(禁默认 None 静默)——原唯一调用方
+    _finalize_task_impl 未传, dev_override 基线的两条出口(Owner 授权记录 / 世系)永远不可达、区间校验恒被跳过(fail-open)。
+    现 None = 拒(fail-closed, 出声), 不再「跳过区间校验」。
 
     语义:
       - 无部署 → OK(首次 commit, 无漂移可校验)
@@ -164,6 +168,17 @@ def _check_deployment_integrity(repo_root: Path, governance_root: Path | None = 
     head_commit = _git_rev_parse_head(repo_root)
     deploy_dir = repo_root / ".deploy"
     current_link = deploy_dir / "current"
+
+    if governance_root is None:
+        return {
+            "integrity_ok": False,
+            "current_commit": None,
+            "head_commit": head_commit,
+            "provenance": None,
+            "missing_commits": [],
+            "message": ("部署完整性校验缺 governance_root(AIPOS-F130 件①: 禁默认 None 静默跳过), 无法核对裁决/Owner 授权记录; "
+                        "出口: 调用方传入治理根(finalize --governance-root 或工作区解析)"),
+        }
     
     if not current_link.exists():
         # No deployment setup yet - this is OK for finalize (we're just committing)
@@ -210,6 +225,9 @@ def _check_deployment_integrity(repo_root: Path, governance_root: Path | None = 
                 ),
             }
         print(f"Note: dev_override 部署基线 {current_commit[:8]} 已认可({why}), 继续区间校验", file=sys.stderr)
+    # AIPOS-F130 件①: 认可依据进结果与 operations 行(出声, 不只 stderr)
+    base_note = (f"dev_override 部署基线 {current_commit[:8]} 已认可({why}); "
+                 if provenance == "dev_override" else "")
 
     if current_commit == head_commit:
         return {
@@ -218,23 +236,10 @@ def _check_deployment_integrity(repo_root: Path, governance_root: Path | None = 
             "head_commit": head_commit,
             "provenance": provenance,
             "missing_commits": [],
-            "message": f"Deployment integrity OK: current == HEAD ({head_commit[:8]})",
+            "message": f"{base_note}Deployment integrity OK: current == HEAD ({head_commit[:8]})",
         }
 
-    # AIPOS-C3 大项A②: 区间校验统一实现(check_commit_interval_coverage)
-    if governance_root is None:
-        # 无 governance_root, 退化为简单检查(不做深度校验)
-        return {
-            "integrity_ok": True,
-            "current_commit": current_commit,
-            "head_commit": head_commit,
-            "provenance": provenance,
-            "missing_commits": [],
-            "message": (
-                f"区间校验跳过(无 governance_root): current({current_commit[:8]})..HEAD({head_commit[:8]})"
-            ),
-        }
-    
+    # AIPOS-C3 大项A②: 区间校验统一实现(check_commit_interval_coverage); AIPOS-F130: governance_root 已在入口保证非 None
     coverage = check_commit_interval_coverage(
         repo_root=repo_root,
         governance_root=governance_root,
@@ -248,7 +253,8 @@ def _check_deployment_integrity(repo_root: Path, governance_root: Path | None = 
         "head_commit": head_commit,
         "provenance": provenance,
         "missing_commits": coverage["missing_commits"],
-        "message": coverage["message"],
+        "verdicts": coverage.get("verdicts", []),
+        "message": f"{base_note}{coverage['message']}",
     }
 
 
@@ -276,30 +282,19 @@ def _dev_override_base_authorized(repo_root: Path, governance_root: Path | None,
             record_type = str((metadata or {}).get("record_type") or "")
             if record_type.startswith("owner_decision") and short in text:
                 return True, f"Owner 授权记录 {record.name} 引用 {short}"
-    # 世系: commit 归属卡 + 门生 PASS 覆盖
-    try:
-        from tools.aipos_cli.deployment_authorization import (
-            _task_id_from_commit_subject,
-            find_gate_pass_verdict_for_task,
-        )
+    # 世系: commit 归属卡(或其世系)有门生 PASS 裁决且绑定覆盖该 commit —— AIPOS-F130 件②: 唯一实现 deployment_authorization.commit_pass_coverage
+    # (精确绑定 / finalize merge --no-ff 合并提交第二父 = 裁决绑定的卡分支 tip / 绑定 tip 的祖先 / legacy)。原「以该 commit 本身找
+    # required_commit_sha 精确裁决」对 merge 提交恒不成立(裁决绑卡分支 tip, 合并提交从不被裁决绑定)。
+    from tools.aipos_cli.deployment_authorization import commit_pass_coverage
+    from tools.schema_loader import SchemaLoadError
 
-        subject = subprocess.run(
-            ["git", "log", "-1", "--format=%s", current_commit],
-            cwd=str(repo_root), capture_output=True, text=True, timeout=10,
-        )
-        if subject.returncode == 0:
-            task_id = _task_id_from_commit_subject(subject.stdout.strip(), repo_root=repo_root, governance_root=Path(governance_root))
-            if task_id:
-                verdict = find_gate_pass_verdict_for_task(task_id, Path(governance_root), required_commit_sha=current_commit)
-                if verdict.get("found"):
-                    return True, f"世系: {task_id} 门生 PASS 裁决 {verdict.get('verdict_id')} 覆盖 {short}"
-                return False, f"世系: {task_id} 无覆盖 {short} 的门生 PASS 裁决({verdict.get('reason')})"
-            return False, f"commit {short} 的提交信息无卡号, 无法追世系; 亦无 Owner 授权记录引用它"
-        return False, f"git log {short} 失败: {subject.stderr.strip()}"
-    except (OSError, subprocess.SubprocessError) as exc:
-        return False, f"世系核对异常: {exc}"
-    except Exception as exc:  # SchemaLoadError(task_id_pattern 声明缺)等: 出声不吞
+    try:
+        coverage = commit_pass_coverage(repo_root, Path(governance_root), current_commit)
+    except SchemaLoadError as exc:  # task_id_pattern 声明缺: 出声不吞(fail-closed)
         return False, f"世系核对声明缺失: {exc}"
+    if coverage["covered"]:
+        return True, f"世系: {coverage['reason']}"
+    return False, f"世系不成立且无 Owner 授权记录引用 {short}: {coverage['reason']}"
 
 
 class FinalizationRecordError(RuntimeError):
@@ -333,8 +328,11 @@ def _ensure_finalization_record(
     AIPOS-F120 件②: 续跑补记录同走本函数(唯一写口); dry_run=True 只算出将写的记录(路径 + frontmatter), 不落盘。
     """
     try:
+        from tools.aipos_cli.clock import iso_z
         from tools.aipos_cli.finalization_record import write_finalization_record
-        fin_result = write_finalization_record(
+
+        record_kwargs = dict(
+            finalized_at=iso_z(),  # 一次取时: 同名核对与真写同一落盘名
             governance_root=governance_root,
             task_id=task_id,
             actor=actor,
@@ -345,9 +343,14 @@ def _ensure_finalization_record(
             deployment_record_ref=deployment_record_ref,
             deploy_status=deploy_status,
             merge_commit=commit_hash,  # AIPOS-F78 前置零③: merge 后 main HEAD(直提场景=finalize 时 HEAD; 续跑=识别出的本卡合并提交)
-            dry_run=dry_run,
             post_merge_regression=regression,  # AIPOS-F118 件①: 合并后回归结果(声明 transitions N5.record.post_merge_regression)
         )
+        if not dry_run:
+            # AIPOS-F130 件④: finalization 记录只追加——落盘名(finalize_ref)与已有记录同名(同秒同 actor)= 拒覆盖(fail-closed, 出声)
+            planned = write_finalization_record(**record_kwargs, dry_run=True)
+            if Path(planned["path"]).exists():
+                raise FileExistsError(f"finalization 记录 {planned['path']} 已存在, 只追加不覆盖; 出口: 稍后重跑同一条 finalize")
+        fin_result = write_finalization_record(**record_kwargs, dry_run=dry_run)
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, ImportError) as e:
         print(f"Error: finalization record write failed for {task_id}: {type(e).__name__}: {e}", file=sys.stderr)
         operations.append(f"✗ Finalization record write failed: {type(e).__name__}: {e}")
@@ -559,6 +562,40 @@ def _resume_deploy_status(
             "reason": f"无部署记录且当前部署({current[:8] if current else '无'})不含合并提交 {merge_commit[:8]}; 续跑不部署"}
 
 
+def _git_push(workspace_root: Path) -> None:
+    """AIPOS-F130 件④: 推送基线分支——finalize 主路径与续做路径同一实现; 失败抛 CalledProcessError(调用方收成 FAIL, 不写记录:
+    声明 transitions N5.record.deploy_status.written_when「push 失败不写」)。"""
+    subprocess.run(["git", "push"], cwd=str(workspace_root), check=True, capture_output=True, text=True)
+
+
+def _push_pending(workspace_root: Path, base_branch: str, merge_commit: str) -> dict[str, Any]:
+    """AIPOS-F130 件④: 本卡合并提交是否已推送 = 它在远端跟踪分支 origin/<基线> 上。无远端跟踪分支 = 推送不适用
+    (与 _git_local_origin_synced「无 origin 即视为已同步」同语义)。返回 {pending, reason}。"""
+    remote = _git_out(workspace_root, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{base_branch}^{{commit}}")
+    if remote.returncode != 0:
+        return {"pending": False, "reason": f"无远端跟踪分支 origin/{base_branch}, 推送不适用"}
+    remote_head = remote.stdout.strip()
+    if _git_out(workspace_root, "merge-base", "--is-ancestor", merge_commit, remote_head).returncode == 0:
+        return {"pending": False, "reason": f"本卡合并提交 {merge_commit[:8]} 已在 origin/{base_branch}({remote_head[:8]})"}
+    ahead = _git_out(workspace_root, "rev-list", "--count", f"{remote_head}..HEAD").stdout.strip() or "?"
+    return {"pending": True,
+            "reason": f"本卡合并提交 {merge_commit[:8]} 不在 origin/{base_branch}({remote_head[:8]}), 本地 {base_branch} 领先远端 {ahead} 个提交(推送未完成)"}
+
+
+def _latest_record_merge_commit(records: list[Path]) -> tuple[str | None, str]:
+    """已有 finalization 记录(新到旧)里最新一条的 merge_commit(缺省 commit)。读不出 = (None, 原因)(调用方拒, fail-closed)。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+
+    try:
+        metadata, _body = require_frontmatter(records[0])
+    except FrontmatterReadError as exc:
+        return None, f"finalization 记录读不出: {exc}"
+    merge_commit = str(metadata.get("merge_commit") or metadata.get("commit") or "").strip()
+    if not merge_commit:
+        return None, f"finalization 记录 {records[0].name} 无 merge_commit/commit"
+    return merge_commit, f"已有 finalization 记录 {records[0].name} merge_commit={merge_commit[:8]}"
+
+
 def _resume_finalization(
     *,
     task_id: str,
@@ -566,42 +603,124 @@ def _resume_finalization(
     workspace_root: Path,
     governance_root: Path,
     dry_run: bool,
+    push: bool,
+    deploy: bool,
     finalize_check: dict[str, Any],
     branch_name: str,
     base_branch: str,
     integrity: dict[str, Any],
     branch_check: dict[str, Any],
     operations: list[str],
-) -> dict[str, Any]:
-    """AIPOS-F120 件②: 分支已合并 + finalization 记录缺失 → 识别本卡合并提交并补写记录(merge_commit = 该提交)。
-    不合并、不推送、不部署; 找不到唯一合并提交 = BLOCK 带出口(F61 禁写错误 commit 证据)。"""
-    from tools.aipos_cli.deploy_gate import deploy_mechanism_present
+    existing_records: list[Path],
+) -> dict[str, Any] | None:
+    """分支已合并(本次无合并动作)时的续做。
+
+    AIPOS-F120 件②: finalization 记录缺失 → 识别本卡合并提交并补写记录(merge_commit = 该提交); 找不到唯一合并提交 = BLOCK 带出口
+    (F61 禁写错误 commit 证据)。
+    AIPOS-F130 件④(F127 实撞: 首跑合并后推送 500 → 记录未落、部署未做; 续做只补记录、不推不部署却报 PASS): 续做先补完未完成的
+    推送(本卡合并提交不在 origin/<基线>)与部署(当前部署不含本卡合并提交), 与主路径同一实现(_git_push / deploy_gate.invoke_lybra_deploy
+    + verify_deployment_version), 结果如实写回: 记录缺失 → 补写; 记录已有但推送/部署未完成 → 追加一条新记录(只追加, 不改旧记录)。
+    推送未完成而未带 --push = BLOCK(不报成功); 推送失败 = FAIL 不写记录(N5 written_when); 部署失败 = 记录 deploy_status=deploy_failed + FAIL。
+    部署只在带 --deploy 时执行(未带 = 如实 not_attempted, AIPOS-F120 语义不变)。
+    记录已有且推送/部署均已完成(或未请求部署)→ 返回 None, 调用方维持原行为。
+    """
+    from tools.aipos_cli.deploy_gate import deploy_mechanism_present, invoke_lybra_deploy, verify_deployment_version
 
     verdict_id = finalize_check.get("verdict_id")
-    subject = finalize_check.get("artifact_subject") or {}
-    bound_commit = str(subject.get("commit_sha") or "").strip() or None
-    found = find_card_merge_commit(workspace_root, branch_name, base_branch, verdict_id, bound_commit)
-    operations.append(f"AIPOS-F120 续跑判定: {found['reason']}")
     base = {
         "task_id": task_id, "actor": actor, "dry_run": dry_run, "can_finalize": True,
         "integrity_check": integrity, "branch_check": branch_check,
         "committed": False, "pushed": False, "resumed": True,
     }
-    if not found["found"]:
-        message = (
-            f"BLOCKED: 分支 {branch_name} 已合并但 finalization 记录缺失, 且{found['reason']}——不补写记录(AIPOS-F61: 禁写错误 commit 证据)。"
-            f"出口: 核对 `git log --first-parent --merges {base_branch}` 中本卡的合并提交(须第二父 = 裁决绑定 commit 或合并信息含裁决号);"
-            " 无法唯一识别时交顾问/Owner 裁定, 禁手写 finalization 记录。"
-        )
-        operations.append(f"  → {message}")
-        return {**base, "verdict": Verdict.BLOCK, "deployed": False, "deployment_skipped": False,
-                "deployment_error": None, "commit_hash": None, "merge_candidates": found["candidates"],
-                "message": message, "operations": operations}
-    merge_commit = str(found["merge_commit"])
-    deploy = _resume_deploy_status(workspace_root, governance_root, merge_commit,
-                                   deploy_mechanism_present(workspace_root), operations)
-    operations.append(f"AIPOS-F120 续跑部署判定: deploy_status={deploy['deploy_status']}({deploy['reason']}), 不重复合并、不重复部署")
-    # AIPOS-F118: 续跑无合并动作 → 合并后回归不重跑, 记 skipped 并注明(不静默缺字段)
+    if existing_records:
+        merge_commit, why = _latest_record_merge_commit(existing_records)
+        if merge_commit is None:
+            message = f"BLOCKED: 续做判定读不出本卡已有 finalization 记录({why}); 出口: 修复该记录文件后重跑同一条 finalize"
+            operations.append(f"  → {message}")
+            return {**base, "verdict": Verdict.BLOCK, "deployed": False, "deployment_skipped": False,
+                    "deployment_error": None, "commit_hash": None, "message": message, "operations": operations}
+    else:
+        subject = finalize_check.get("artifact_subject") or {}
+        bound_commit = str(subject.get("commit_sha") or "").strip() or None
+        found = find_card_merge_commit(workspace_root, branch_name, base_branch, verdict_id, bound_commit)
+        operations.append(f"AIPOS-F120 续跑判定: {found['reason']}")
+        if not found["found"]:
+            message = (
+                f"BLOCKED: 分支 {branch_name} 已合并但 finalization 记录缺失, 且{found['reason']}——不补写记录(AIPOS-F61: 禁写错误 commit 证据)。"
+                f"出口: 核对 `git log --first-parent --merges {base_branch}` 中本卡的合并提交(须第二父 = 裁决绑定 commit 或合并信息含裁决号);"
+                " 无法唯一识别时交顾问/Owner 裁定, 禁手写 finalization 记录。"
+            )
+            operations.append(f"  → {message}")
+            return {**base, "verdict": Verdict.BLOCK, "deployed": False, "deployment_skipped": False,
+                    "deployment_error": None, "commit_hash": None, "merge_candidates": found["candidates"],
+                    "message": message, "operations": operations}
+        merge_commit = str(found["merge_commit"])
+        why = found["reason"]
+
+    deploy_applicable = deploy_mechanism_present(workspace_root)
+    push_state = _push_pending(workspace_root, base_branch, merge_commit)
+    deploy_state = _resume_deploy_status(workspace_root, governance_root, merge_commit, deploy_applicable, operations)
+    deploy_pending = deploy_state["deploy_status"] == "not_attempted"
+    if existing_records:
+        if not push_state["pending"] and not (deploy_pending and deploy):
+            return None  # 记录已有、推送已完成、部署已完成或未请求 → 维持原行为
+        operations.append(f"AIPOS-F130 续做判定: {why}; 推送: {push_state['reason']}; 部署: {deploy_state['reason']}")
+    else:
+        operations.append(f"AIPOS-F130 续做判定: 推送: {push_state['reason']}; 部署: {deploy_state['reason']}")
+
+    pushed = False
+    if push_state["pending"]:
+        if not push:
+            message = (f"BLOCKED: 续做: {push_state['reason']}; 未带 --push, 不推送也不报成功(AIPOS-F130 件④)。"
+                       f"出口: 带 --push 重跑同一条 finalize(续做推送{'与部署' if deploy_pending else ''}后{'追加' if existing_records else '补写'} finalization 记录)")
+            operations.append(f"  → {message}")
+            return {**base, "verdict": Verdict.BLOCK, "deployed": False, "deployment_skipped": False,
+                    "deployment_error": None, "commit_hash": merge_commit, "merge_commit": merge_commit,
+                    "message": message, "operations": operations}
+        if dry_run:
+            operations.append(f"DRY-RUN: 续做将推送 {base_branch}(同主路径 git push)")
+        else:
+            try:
+                _git_push(workspace_root)
+            except subprocess.CalledProcessError as exc:
+                message = (f"续做推送失败: {(exc.stderr or '').strip()[:300]}; finalization 记录不写(N5: push 失败不写)。"
+                           "出口: 远端恢复/修复原因后重跑同一条 finalize(续做重试推送, 再部署并写记录)")
+                operations.append(f"✗ {message}")
+                return {**base, "verdict": Verdict.FAIL, "deployed": False, "deployment_skipped": False,
+                        "deployment_error": None, "commit_hash": merge_commit, "merge_commit": merge_commit,
+                        "category": "FINALIZE_RESUME_PUSH_FAILED", "message": message, "operations": operations}
+            pushed = True
+            operations.append(f"✓ 续做推送成功({base_branch} → origin)")
+
+    deploy_status = deploy_state["deploy_status"]
+    deployed = deploy_state["deployed"]
+    deployment_record_ref = deploy_state["deployment_record_ref"]
+    deployment_error: str | None = None
+    if deploy_pending and deploy:
+        head = _git_rev_parse_head(workspace_root)
+        if dry_run:
+            operations.append(f"DRY-RUN: 续做将部署 HEAD {head[:8]}(verdict_ref={verdict_id}; 同主路径 invoke_lybra_deploy + 部署核验)")
+        else:
+            operations.append(f"续做部署 HEAD {head[:8]}(当前部署不含本卡合并提交 {merge_commit[:8]})...")
+            deploy_result = invoke_lybra_deploy(workspace_root, verdict_ref=verdict_id, actor=actor, governance_root=governance_root)
+            if deploy_result["success"]:
+                verification = verify_deployment_version(workspace_root, head)
+                if verification["verified"]:
+                    deploy_status, deployed = "deployed", True
+                    operations.append(f"✓ 续做部署完成并核验: {verification['message']}")
+                else:
+                    deploy_status, deployed, deployment_error = "deploy_failed", False, verification["message"]
+                    operations.append(f"✗ 续做部署核验失败: {verification['message']}")
+            else:
+                deploy_status, deployed = "deploy_failed", False
+                deployment_error = str(deploy_result.get("stderr") or "")[:500]
+                operations.append(f"✗ 续做部署失败: {deployment_error[:200]}")
+            if deployed:
+                # 部署记录(若部署脚本落了绑定本提交的门生记录)回填引用
+                after = _resume_deploy_status(workspace_root, governance_root, merge_commit, deploy_applicable, operations)
+                deployment_record_ref = after["deployment_record_ref"]
+
+    # AIPOS-F118: 续做无合并动作 → 合并后回归不重跑, 记 skipped 并注明(不静默缺字段)
     from tools.aipos_cli.post_merge_regression import summary_line
 
     regression = {"status": "skipped", "action": "none",
@@ -609,14 +728,20 @@ def _resume_finalization(
     regression["summary"] = summary_line(regression)
     operations.append(regression["summary"])
     fin = _ensure_finalization_record(
-        governance_root, task_id, actor, merge_commit, verdict_id, deploy["deployed"], operations,
-        deploy_status=deploy["deploy_status"], deployment_record_ref=deploy["deployment_record_ref"], dry_run=dry_run,
+        governance_root, task_id, actor, merge_commit, verdict_id, deployed, operations,
+        deploy_status=deploy_status, deployment_record_ref=deployment_record_ref, dry_run=dry_run,
         regression=regression,
     )
-    message = (f"{'DRY-RUN 续跑判定: 将补写' if dry_run else '续跑补记录: 已补写'} finalization 记录 "
-               f"(merge_commit={merge_commit[:8]}, deploy_status={deploy['deploy_status']}); 未重复合并/部署")
-    return {**base, "verdict": Verdict.PASS, "deployed": deploy["deployed"],
-            "deployment_skipped": deploy["deploy_status"] == "skipped", "deployment_error": None,
+    verb = ("DRY-RUN 续做判定: 将" if dry_run else "续做: 已") + ("追加" if existing_records else "补写")
+    done = [x for x, on in (("推送", pushed or (dry_run and push_state["pending"])),
+                            ("部署", deployed and deploy_pending)) if on]
+    message = (f"{verb} finalization 记录 (merge_commit={merge_commit[:8]}, deploy_status={deploy_status})"
+               f"{'; 续做补完: ' + '/'.join(done) if done else ''}; 未重复合并")
+    if deployment_error:
+        message += f"; 部署失败: {deployment_error[:200]}; 出口: 修复部署原因后重跑同一条 finalize(续做重试部署并追加记录)"
+    return {**base, "verdict": Verdict.FAIL if deploy_status == "deploy_failed" else Verdict.PASS,
+            "pushed": pushed, "deployed": deployed,
+            "deployment_skipped": deploy_status == "skipped", "deployment_error": deployment_error,
             "commit_hash": merge_commit, "merge_commit": merge_commit,
             "finalization_record": {"path": fin["path"], "wrote": fin["wrote"], "frontmatter": fin["frontmatter"]},
             "message": message, "operations": operations}
@@ -1627,7 +1752,7 @@ def _finalize_task_impl(
         }
 
     # Check deployment integrity (current==HEAD)
-    integrity = _check_deployment_integrity(workspace_root)
+    integrity = _check_deployment_integrity(workspace_root, governance_root)  # AIPOS-F130 件①: 传治理根(dev_override 出口可达、区间校验生效)
     operations.append(f"Deployment integrity: {integrity['message']}")
     
     if not integrity["integrity_ok"]:
@@ -1826,12 +1951,15 @@ def _finalize_task_impl(
     if integrate.get("action") == "skipped_already_merged":
         from tools.aipos_cli.finalization_record import existing_finalization_records
 
-        if not existing_finalization_records(governance_root, task_id):
-            return _resume_finalization(
-                task_id=task_id, actor=actor, workspace_root=workspace_root, governance_root=governance_root,
-                dry_run=dry_run, finalize_check=finalize_check, branch_name=branch_name, base_branch=base_branch,
-                integrity=integrity, branch_check=branch_check, operations=operations,
-            )
+        # AIPOS-F130 件④: 记录已有时也判推送/部署是否完成, 未完成 → 续做补完并追加记录; 均已完成 → None, 维持原行为
+        resumed = _resume_finalization(
+            task_id=task_id, actor=actor, workspace_root=workspace_root, governance_root=governance_root,
+            dry_run=dry_run, push=push, deploy=deploy, finalize_check=finalize_check, branch_name=branch_name,
+            base_branch=base_branch, integrity=integrity, branch_check=branch_check, operations=operations,
+            existing_records=existing_finalization_records(governance_root, task_id),
+        )
+        if resumed is not None:
+            return resumed
 
     # AIPOS-F61: 跟踪是否有实际合并动作作——clean-tree 路径只有在实际合并时才写 finalization 记录
     # 防止把上一张卡的 commit 误记为本卡的 finalization 证据(F58 假成功根因)
@@ -1929,7 +2057,7 @@ def _finalize_task_impl(
                 
                 from tools.aipos_cli.deploy_gate import invoke_lybra_deploy, verify_deployment_version
                 
-                deploy_result = invoke_lybra_deploy(workspace_root, verdict_ref=finalize_check.get("verdict_id"), actor=actor)
+                deploy_result = invoke_lybra_deploy(workspace_root, verdict_ref=finalize_check.get("verdict_id"), actor=actor, governance_root=governance_root)
                 if deploy_result["success"]:
                     operations.append("✓ Deploy completed successfully")
                     verification = verify_deployment_version(workspace_root, current_commit)
@@ -2071,13 +2199,7 @@ def _finalize_task_impl(
         # Actually push
         try:
             operations.append("Pushing unpushed commits to remote...")
-            subprocess.run(
-                ["git", "push"],
-                cwd=str(workspace_root),
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+            _git_push(workspace_root)  # AIPOS-F130 件④: 与续做同一实现
             operations.append("Push successful")
             
             # AIPOS-R7A2 靶①: push 成功后检查 deploy 需求
@@ -2087,7 +2209,7 @@ def _finalize_task_impl(
                 
                 from tools.aipos_cli.deploy_gate import invoke_lybra_deploy, verify_deployment_version
                 
-                deploy_result = invoke_lybra_deploy(workspace_root, verdict_ref=finalize_check.get("verdict_id"), actor=actor)
+                deploy_result = invoke_lybra_deploy(workspace_root, verdict_ref=finalize_check.get("verdict_id"), actor=actor, governance_root=governance_root)
                 if deploy_result["success"]:
                     operations.append("✓ Deploy completed successfully")
                     verification = verify_deployment_version(workspace_root, current_commit)
@@ -2341,7 +2463,7 @@ def _finalize_task_impl(
             from tools.aipos_cli.deploy_gate import invoke_lybra_deploy, verify_deployment_version
             
             operations.append("ℹ️  Invoking lybra-deploy (explicit deploy mode)...")
-            deploy_result = invoke_lybra_deploy(workspace_root, verdict_ref=finalize_check.get("verdict_id"), actor=actor)
+            deploy_result = invoke_lybra_deploy(workspace_root, verdict_ref=finalize_check.get("verdict_id"), actor=actor, governance_root=governance_root)
             
             if deploy_result["success"]:
                 operations.append("✓ lybra-deploy completed successfully")
@@ -2417,7 +2539,7 @@ def _finalize_task_impl(
                 # Gate-side changes detected - auto-deploy
                 operations.append("⚠️  Gate-side changes detected - triggering auto-deploy...")
                 
-                deploy_result = invoke_lybra_deploy(workspace_root, verdict_ref=finalize_check.get("verdict_id"), actor=actor)
+                deploy_result = invoke_lybra_deploy(workspace_root, verdict_ref=finalize_check.get("verdict_id"), actor=actor, governance_root=governance_root)
                 if deploy_result["success"]:
                     operations.append("✓ Deployment completed successfully")
                     # Append deployment output (first 10 lines)

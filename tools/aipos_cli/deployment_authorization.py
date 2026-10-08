@@ -396,6 +396,183 @@ def find_gate_pass_verdict_for_task(
     }
 
 
+def _commit_parents(repo_root: Path, commit_hash: str) -> list[str] | None:
+    """commit 的父提交列表(第一父在前); git 失败 = None(调用方出声, 不当无父)。"""
+    result = subprocess.run(
+        ["git", "rev-list", "--parents", "-n", "1", commit_hash],
+        cwd=str(repo_root), capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    parts = result.stdout.split()
+    return parts[1:] if parts else None
+
+
+def _is_ancestor_or_equal(repo_root: Path, ancestor: str, descendant: str) -> bool:
+    """git merge-base --is-ancestor(含相等); 0=是, 1=否, 其它(对象不存在等)按「否」——只用于判「已审覆盖」, 判不出即不覆盖(fail-closed)。"""
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=str(repo_root), capture_output=True, text=True,
+    )
+    return result.returncode == 0
+
+
+def _commit_subject(repo_root: Path, commit_hash: str) -> str | None:
+    result = subprocess.run(
+        ["git", "log", "-1", "--format=%s", commit_hash],
+        cwd=str(repo_root), capture_output=True, text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _verdict_binding_covers(
+    repo_root: Path, commit_hash: str, verdict_check: dict[str, Any]
+) -> tuple[str | None, str]:
+    """门生 PASS 裁决(find_gate_pass_verdict_for_task found=True 的结果)是否覆盖该 commit → (how, 说明)。how=None 即不覆盖。
+
+    ① exact: 裁决 artifact_subject.commit_sha == commit(AIPOS-F70 精确绑定)
+    ② merge: commit 是合并提交且第二父 == 裁决绑定 commit(finalize 的 merge --no-ff; 裁决绑卡分支 tip, 合并提交本身从不被裁决绑定)
+    ③ ancestor: commit 是裁决绑定 commit 的祖先(卡分支上的中间提交 / 合入基线的合并提交——审过的树已含它)
+    ④ legacy: 裁决无 artifact_subject(存量, 沿 AIPOS-F70 警告放行)
+    """
+    if verdict_check.get("is_legacy_verdict"):
+        return "legacy", "legacy 裁决(无 artifact_subject), 沿 AIPOS-F70 警告放行"
+    bound = str((verdict_check.get("artifact_subject") or {}).get("commit_sha") or "").strip().lower()
+    commit = commit_hash.strip().lower()
+    if not bound:
+        return None, "裁决 artifact_subject 无 commit_sha, 无法核对绑定"
+    if bound == commit:
+        return "exact", f"裁决精确绑定 {commit[:8]}"
+    parents = _commit_parents(repo_root, commit) or []
+    if len(parents) >= 2 and parents[1].lower() == bound:
+        return "merge", f"合并提交 {commit[:8]} 第二父 = 裁决绑定的卡分支 tip {bound[:8]}"
+    if _is_ancestor_or_equal(repo_root, commit, bound):
+        return "ancestor", f"{commit[:8]} 是裁决绑定的卡分支 tip {bound[:8]} 的祖先(审过的树已含它)"
+    return None, f"裁决绑定 {bound[:8]}, {commit[:8]} 既非该提交、非其合并提交、亦非其祖先(产物已变化, 须复审)"
+
+
+def commit_pass_coverage(
+    repo_root: Path,
+    governance_root: Path,
+    commit_hash: str,
+    subject: str | None = None,
+) -> dict[str, Any]:
+    """AIPOS-F130 件②③: 单个 commit 是否被门生 PASS 裁决覆盖 —— 唯一实现。
+
+    调用方: 区间覆盖(check_commits_coverage → finalize 完整性 check_commit_interval_coverage 与 lybra-deploy --verdict-ref
+    的 check_verdict_ref_authorization)、finalize dev_override 部署基线世系(finalize._dev_override_base_authorized)。
+
+    判定: commit 归属卡 = _task_id_from_commit_subject(项目声明 task_id_pattern + N5 branch_pattern; merge --no-ff 信息可解析出卡号);
+    先看归属卡自身, 不覆盖再看其世系(_resolve_task_lineage: fix 链末端 + 结案承接, AIPOS-F53)。每张候选卡取最新门生裁决
+    (find_gate_pass_verdict_for_task), PASS 且绑定覆盖该 commit(_verdict_binding_covers 四式)即覆盖。
+
+    Raises:
+        SchemaLoadError: 项目未声明 task_id_pattern(C2: 出声停, 调用方点名)。
+    Returns:
+        {covered, commit, task_id, covering_task_id, verdict_id, how, reason}
+    """
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+
+    base: dict[str, Any] = {"covered": False, "commit": commit_hash, "task_id": None,
+                            "covering_task_id": None, "verdict_id": None, "how": None}
+    if subject is None:
+        subject = _commit_subject(repo_root, commit_hash)
+        if subject is None:
+            return {**base, "reason": f"{commit_hash[:8]}: 无法读取 commit message"}
+    task_id = _task_id_from_commit_subject(subject, repo_root=repo_root, governance_root=governance_root)
+    if not task_id:
+        return {**base, "reason": f"{commit_hash[:8]}: 无 task_id (commit message: {subject[:60]})"}
+    base["task_id"] = task_id
+
+    tried: list[str] = []
+
+    def _try(candidate: str) -> dict[str, Any] | None:
+        check = find_gate_pass_verdict_for_task(candidate, governance_root)
+        if not check.get("found"):
+            tried.append(f"{candidate}: {str(check.get('reason'))[:80]}")
+            return None
+        how, why = _verdict_binding_covers(repo_root, commit_hash, check)
+        if how is None:
+            tried.append(f"{candidate}: {why}")
+            return None
+        return {**base, "covered": True, "covering_task_id": candidate, "verdict_id": check.get("verdict_id"),
+                "how": how, "reason": f"{commit_hash[:8]} ({task_id}) 由 {candidate} 门生 PASS 裁决 {check.get('verdict_id')} 覆盖: {why}"}
+
+    own = _try(task_id)
+    if own:
+        return own
+    try:
+        lineage = _resolve_task_lineage(task_id, governance_root)
+    except FrontmatterReadError as exc:
+        return {**base, "reason": f"{commit_hash[:8]} ({task_id}): 世系记录读不出, 无法判承接: {exc}"}
+    for candidate in lineage:
+        if candidate == task_id:
+            continue
+        hit = _try(candidate)
+        if hit:
+            return hit
+    return {**base, "reason": f"{commit_hash[:8]} ({task_id}): 无覆盖它的门生 PASS 裁决({'; '.join(tried)})"}
+
+
+def check_commits_coverage(
+    repo_root: Path,
+    governance_root: Path,
+    commits: list[dict[str, str]],
+) -> dict[str, Any]:
+    """AIPOS-F130 件③: 一组 commit 的覆盖校验(多卡并集) —— 每个 commit 属某张有门生 PASS 覆盖的卡即可(commit_pass_coverage)。
+
+    commits: [{hash, subject?}](subject 缺则读 git)。
+    Returns: {coverage_ok, total_commits, missing_commits, covered_commits, verdicts(覆盖区间的全部裁决, 首见序), message}
+    """
+    missing: list[str] = []
+    covered: list[dict[str, Any]] = []
+    verdicts: list[str] = []
+    for commit in commits:
+        try:
+            result = commit_pass_coverage(repo_root, governance_root, commit["hash"], commit.get("subject"))
+        except SchemaLoadError as e:
+            # AIPOS-F5: 声明缺失 = 出声停 (C2 原则), 不静默跳过
+            return {
+                "coverage_ok": False,
+                "total_commits": len(commits),
+                "missing_commits": [],
+                "covered_commits": covered,
+                "verdicts": verdicts,
+                "message": f"归属解析声明缺失 (task_id_pattern): {e}",
+            }
+        if not result["covered"]:
+            missing.append(result["reason"])
+            continue
+        covered.append({k: result[k] for k in ("commit", "task_id", "covering_task_id", "verdict_id", "how")})
+        if result["verdict_id"] and result["verdict_id"] not in verdicts:
+            verdicts.append(result["verdict_id"])
+    return {
+        "coverage_ok": not missing,
+        "total_commits": len(commits),
+        "missing_commits": missing,
+        "covered_commits": covered,
+        "verdicts": verdicts,
+        "message": (
+            f"共 {len(commits)} 个 commit, 其中 {len(missing)} 个未审" if missing else
+            f"共 {len(commits)} 个 commit 均属已 PASS 的卡(覆盖裁决 {len(verdicts)} 张: {', '.join(verdicts) or '无'})"
+        ),
+    }
+
+
+def commits_to_deploy(repo_root: Path, current_commit: str | None, head_commit: str) -> list[str]:
+    """待部署 commit(完整 hash, 新到旧): 无部署 = [HEAD]; current == HEAD = [](空区间); 否则 current..HEAD。
+    AIPOS-F130 件③: deploy_gate(finalize 内部署)与 lybra-deploy 自身预检/部署记录共用此推导。git 失败 = CalledProcessError 向上。"""
+    if not current_commit:
+        return [head_commit]
+    if current_commit == head_commit:
+        return []
+    result = subprocess.run(
+        ["git", "log", "--format=%H", f"{current_commit}..{head_commit}"],
+        cwd=str(repo_root), check=True, capture_output=True, text=True,
+    )
+    return [c.strip() for c in result.stdout.splitlines() if c.strip()]
+
+
 def check_commit_interval_coverage(
     repo_root: Path,
     governance_root: Path,
@@ -410,11 +587,9 @@ def check_commit_interval_coverage(
     
     校验流程:
       1. 获取 current..HEAD 的所有 commit
-      2. 对每个 commit:
-         a. 从 commit message 提取 task_id
-         b. 查找该 task_id 的门生 PASS 裁决(find_gate_pass_verdict_for_task)
-         c. 缺 task_id 或缺 PASS 裁决 → 标记为未审
-      3. 所有 commit 都已审 → 返回 OK
+      2. 逐 commit 判覆盖(AIPOS-F130: 唯一实现 commit_pass_coverage, 经 check_commits_coverage 多卡并集):
+         归属卡(或其世系)有门生 PASS 裁决, 且裁决绑定覆盖该 commit(精确 / 合并提交第二父 / 绑定 tip 的祖先 / legacy)
+      3. 所有 commit 都已审 → 返回 OK(带覆盖区间的全部裁决 verdicts)
       4. 任一 commit 未审 → 返回 FAIL,列出未审 commit
     
     Args:
@@ -428,6 +603,8 @@ def check_commit_interval_coverage(
             "coverage_ok": bool,
             "total_commits": int,
             "missing_commits": list[str],  # ["hash: reason", ...]
+            "covered_commits": list[dict],  # AIPOS-F130: 每个已覆盖 commit 的归属卡/覆盖裁决/覆盖方式
+            "verdicts": list[str],  # AIPOS-F130: 覆盖区间的全部裁决(并集)
             "message": str,
         }
     """
@@ -436,6 +613,8 @@ def check_commit_interval_coverage(
             "coverage_ok": True,
             "total_commits": 0,
             "missing_commits": [],
+            "covered_commits": [],
+            "verdicts": [],
             "message": f"current == HEAD ({head_commit[:8]}), 无待部署 commit",
         }
     
@@ -447,69 +626,22 @@ def check_commit_interval_coverage(
             "coverage_ok": False,
             "total_commits": 0,
             "missing_commits": [],
+            "covered_commits": [],
+            "verdicts": [],
             "message": (
                 f"DRIFT: current ({current_commit[:8]}) 不是 HEAD ({head_commit[:8]}) 的祖先 "
                 "(分支分叉或部署漂移)"
             ),
         }
     
-    missing: list[str] = []
-    
-    for commit in commits:
-        try:
-            task_id = _task_id_from_commit_subject(
-                commit["subject"], repo_root=repo_root, governance_root=governance_root
-            )
-        except SchemaLoadError as e:
-            # AIPOS-F5: 声明缺失 = 出声停 (C2 原则), 不静默跳过
-            return {
-                "coverage_ok": False,
-                "total_commits": len(commits),
-                "missing_commits": [],
-                "message": f"归属解析声明缺失 (task_id_pattern): {e}",
-            }
-        
-        if not task_id:
-            missing.append(
-                f"{commit['hash'][:8]}: 无 task_id (commit message: {commit['subject'][:60]})"
-            )
-            continue
-        
-        # AIPOS-F70: 精确 SHA 匹配 — 裁决必须覆盖该 commit
-        verdict_check = find_gate_pass_verdict_for_task(
-            task_id, governance_root, required_commit_sha=commit["hash"]
-        )
-        
-        if not verdict_check["found"]:
-            # AIPOS-F70: 区分 legacy 裁决的警告
-            if verdict_check.get("is_legacy_verdict"):
-                # legacy 裁决警告但放行 (已在 find_gate_pass_verdict_for_task 中处理)
-                # 这里不应该进入,因为 legacy found=True
-                pass
-            missing.append(
-                f"{commit['hash'][:8]} ({task_id}): {verdict_check['reason'][:80]}"
-            )
-    
-    if missing:
-        return {
-            "coverage_ok": False,
-            "total_commits": len(commits),
-            "missing_commits": missing,
-            "message": (
-                f"区间覆盖校验失败: current({current_commit[:8]})..HEAD({head_commit[:8]}) "
-                f"共 {len(commits)} 个 commit, 其中 {len(missing)} 个未审"
-            ),
-        }
-    
-    return {
-        "coverage_ok": True,
-        "total_commits": len(commits),
-        "missing_commits": [],
-        "message": (
-            f"区间覆盖校验 OK: current({current_commit[:8]})..HEAD({head_commit[:8]}) "
-            f"共 {len(commits)} 个 commit 均属已 PASS 的卡"
-        ),
-    }
+    coverage = check_commits_coverage(repo_root, governance_root, commits)
+    interval = f"current({current_commit[:8]})..HEAD({head_commit[:8]})"
+    if not coverage["coverage_ok"]:
+        message = (coverage["message"] if not coverage["missing_commits"] else
+                   f"区间覆盖校验失败: {interval} {coverage['message']}")
+    else:
+        message = f"区间覆盖校验 OK: {interval} {coverage['message']}"
+    return {**coverage, "message": message}
 
 
 def _find_fix_chain_terminal(task_id: str, governance_root: Path) -> str | None:
@@ -664,9 +796,10 @@ def check_verdict_ref_authorization(
     防止跨卡挪用(实证:拿 A 卡裁决部署 B 卡 commit = 拒绝)。
     
     校验流程:
-      1. verdict_ref 必须是真实的门生裁决文件(find 并校验真实性)
-      2. 裁决的 reviewed_task_id 对应的所有 commit 必须覆盖 commits_to_deploy
-      3. 任一待部署 commit 不属于该 task → 拒绝,列出未覆盖 commit
+      1. verdict_ref 必须是真实的门生裁决文件(find 并校验真实性), verdict ∈ PASS/PASS_WITH_NOTES
+      2. AIPOS-F130 件③: 待部署每个 commit 属某张有门生 PASS 覆盖的卡(多卡并集; 与 finalize 完整性同一实现
+         check_commits_coverage → commit_pass_coverage), 任一未覆盖 → 拒绝, 列出未覆盖 commit
+      3. verdict_ref 指向的裁决须在覆盖区间的裁决并集内(区间无该卡产物 = 跨卡挪用 → 拒绝)
     
     Args:
         verdict_ref: 裁决 ID (如 verdict_AIPOS-C3_20260819_...)
@@ -681,6 +814,8 @@ def check_verdict_ref_authorization(
             "reviewed_task_id": str | None,
             "verdict": str | None,
             "uncovered_commits": list[str],
+            "covering_verdicts": list[str],  # AIPOS-F130: 覆盖区间的全部裁决(并集)
+            "covered_commits": list[dict],
             "message": str,
         }
     """
@@ -750,82 +885,78 @@ def check_verdict_ref_authorization(
             "message": f"verdict_ref '{verdict_ref}' 的 verdict 不是 PASS: {verdict_value}",
         }
     
-    # 5. 检查 commit 覆盖:待部署的每个 commit 都必须属于 reviewed_task_id
-    uncovered: list[str] = []
-    for commit_hash in commits_to_deploy:
-        # 获取 commit 的 task_id
-        try:
-            result = subprocess.run(
-                ["git", "log", "-1", "--format=%s", commit_hash],
-                cwd=str(repo_root),
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            subject = result.stdout.strip()
-        except subprocess.CalledProcessError:
-            uncovered.append(f"{commit_hash[:8]}: 无法读取 commit message")
-            continue
-        
-        try:
-            task_id = _task_id_from_commit_subject(
-                subject, repo_root=repo_root, governance_root=governance_root
-            )
-        except SchemaLoadError as e:
-            # AIPOS-F5: 声明缺失 = 出声停 (C2 原则)
-            return {
-                "authorized": False,
-                "verdict_id": verdict_ref,
-                "reviewed_task_id": reviewed_task_id,
-                "verdict": verdict_value,
-                "uncovered_commits": commits_to_deploy,
-                "message": f"归属解析声明缺失 (task_id_pattern): {e}",
-            }
-        
-        if not task_id:
-            uncovered.append(f"{commit_hash[:8]}: commit message 无 task_id ({subject[:40]})")
-        elif task_id != reviewed_task_id:
-            # AIPOS-F53: 修复轮承接判定 — 检查 commit 所属任务的世系是否包含 reviewed_task_id
-            # 世系包括: fix 链 + 结案-承接关系
-            from tools.aipos_cli.frontmatter import FrontmatterReadError
-
-            try:
-                commit_lineage = _resolve_task_lineage(task_id, governance_root)
-            except FrontmatterReadError as exc:
-                uncovered.append(f"{commit_hash[:8]}: 属于 {task_id}, 世系记录读不出, 无法判承接: {exc}")
-                continue
-            if reviewed_task_id not in commit_lineage:
-                uncovered.append(
-                    f"{commit_hash[:8]}: 属于 {task_id}, 但裁决审的是 {reviewed_task_id} (跨卡挪用)"
-                )
-    
-    if uncovered:
-        # AIPOS-F53: 拒绝时给出 dev_override 出口引导
+    # 5. AIPOS-F130 件③: 覆盖判据单源 —— 与 finalize 完整性同一实现(check_commits_coverage → commit_pass_coverage)。
+    #    待部署区间每个 commit 属某张有门生 PASS 覆盖的卡即可(多卡并集); verdict_ref 指向的裁决须在并集内(防跨卡挪用)。
+    #    原「每个 commit 都须属 reviewed_task_id(或其世系)」的单裁决判据退役(F128 实撞: 区间跨两张各自 PASS 的卡即拒)。
+    verdict_id = str(metadata.get("verdict_id") or verdict_file.stem).strip()
+    coverage = check_commits_coverage(repo_root, governance_root, [{"hash": c} for c in commits_to_deploy])
+    base = {
+        "verdict_id": verdict_id,
+        "reviewed_task_id": reviewed_task_id,
+        "verdict": verdict_value,
+        "covering_verdicts": coverage["verdicts"],
+        "covered_commits": coverage["covered_commits"],
+    }
+    if not coverage["coverage_ok"]:
+        uncovered = coverage["missing_commits"] or list(commits_to_deploy)
         return {
+            **base,
             "authorized": False,
-            "verdict_id": verdict_ref,
-            "reviewed_task_id": reviewed_task_id,
-            "verdict": verdict_value,
             "uncovered_commits": uncovered,
             "message": (
                 f"verdict_ref '{verdict_ref}' 未覆盖所有待部署 commit: "
-                f"{len(uncovered)}/{len(commits_to_deploy)} 个 commit 不属于 {reviewed_task_id}。\n"
+                f"{coverage['message']}(区间内每个 commit 须属某张有门生 PASS 覆盖的卡)。\n"
                 f"如确需部署，请 Owner 授权 dev_override: "
                 f"lybra-deploy deploy --dev-override --reason '<Owner 授权原因>'"
             ),
         }
-    
+    if commits_to_deploy and verdict_id not in coverage["verdicts"]:
+        return {
+            **base,
+            "authorized": False,
+            "uncovered_commits": [],
+            "message": (
+                f"verdict_ref '{verdict_ref}' ({verdict_id}) 不在待部署区间的覆盖裁决并集内 "
+                f"(并集: {', '.join(coverage['verdicts'])}) —— 区间无该卡产物, 跨卡挪用拒绝。"
+                f"出口: 用并集内任一裁决部署; 如确需部署, 请 Owner 授权 dev_override: "
+                f"lybra-deploy deploy --dev-override --reason '<Owner 授权原因>'"
+            ),
+        }
     return {
+        **base,
         "authorized": True,
-        "verdict_id": verdict_ref,
-        "reviewed_task_id": reviewed_task_id,
-        "verdict": verdict_value,
         "uncovered_commits": [],
         "message": (
             f"verdict_ref '{verdict_ref}' 授权 OK: {reviewed_task_id} {verdict_value}, "
             f"覆盖 {len(commits_to_deploy)} 个待部署 commit"
+            + (f"(区间覆盖裁决并集 {len(coverage['verdicts'])} 张: {', '.join(coverage['verdicts'])})" if commits_to_deploy else "(空区间)")
         ),
     }
+
+
+def verdict_ref_deploy_coverage(
+    repo_root: Path,
+    governance_root: Path,
+    verdict_ref: str,
+    current_commit: str | None,
+    head_commit: str,
+) -> dict[str, Any]:
+    """AIPOS-F130 件③: 部署区间(commits_to_deploy) + verdict_ref 授权(check_verdict_ref_authorization)一步——
+    deploy_gate(finalize 内部署)、lybra-deploy 预检与部署记录(deployment_record --coverage-base)共用。
+    返回 check_verdict_ref_authorization 结果 + interval/commits_to_deploy。git 失败 = 拒(原文)。"""
+    try:
+        commits = commits_to_deploy(repo_root, current_commit, head_commit)
+    except subprocess.CalledProcessError as exc:
+        return {"authorized": False, "verdict_id": verdict_ref, "reviewed_task_id": None, "verdict": None,
+                "uncovered_commits": [], "covering_verdicts": [], "covered_commits": [], "commits_to_deploy": [],
+                "interval": f"{(current_commit or '')[:8]}..{head_commit[:8]}",
+                "message": f"无法取待部署区间 {(current_commit or '')[:8]}..{head_commit[:8]}: {(exc.stderr or '').strip() or exc}"}
+    result = check_verdict_ref_authorization(verdict_ref=verdict_ref, governance_root=governance_root,
+                                             commits_to_deploy=commits, repo_root=repo_root)
+    result.setdefault("covering_verdicts", [])
+    result.setdefault("covered_commits", [])
+    return {**result, "commits_to_deploy": commits,
+            "interval": f"{current_commit or '(无部署)'}..{head_commit}"}
 
 
 # AIPOS-316: Guard against direct invocation

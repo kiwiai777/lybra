@@ -208,27 +208,12 @@ def invoke_lybra_deploy(
                         current_commit = line.split(":", 1)[1].strip()
                         break
             
-            commits_to_deploy: list[str] = []
-            is_empty_interval = False
-            
-            if current_commit and current_commit == head_commit:
-                # AIPOS-F74 件③: 空区间(current==HEAD, 无待部署 commit)
-                # 拒绝无声 no-op 授权,必须显式 --reason 或真正有新 commit
-                is_empty_interval = True
-                commits_to_deploy = []  # 空区间
-            elif current_commit and current_commit != head_commit:
-                # 有部署漂移,获取 current..HEAD 的 commit 列表
-                commits_result = subprocess.run(
-                    ["git", "log", "--format=%H", f"{current_commit}..{head_commit}"],
-                    cwd=str(repo_root),
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-                commits_to_deploy = [c.strip() for c in commits_result.stdout.strip().splitlines() if c.strip()]
-            else:
-                # 首次部署(无 current commit),待部署的只有 HEAD
-                commits_to_deploy = [head_commit]
+            # AIPOS-F130 件③: 待部署区间推导与 lybra-deploy 预检/部署记录共用 deployment_authorization.commits_to_deploy
+            # (无部署 = [HEAD]; current == HEAD = 空区间(AIPOS-F74 件③); 否则 current..HEAD)
+            from tools.aipos_cli.deployment_authorization import commits_to_deploy as _commits_to_deploy
+
+            commits_to_deploy = _commits_to_deploy(repo_root, current_commit, head_commit)
+            is_empty_interval = bool(current_commit) and current_commit == head_commit
         except subprocess.CalledProcessError as e:
             return {
                 "success": False,
