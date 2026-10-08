@@ -273,7 +273,7 @@ def _queue_dir_states() -> tuple[str, ...]:
 
 
 def _get_queue_summary(governance_root: Path, repo_root: Path | None = None,
-                       unreadable: list[str] | None = None, *, lane: str | None = None) -> dict[str, Any]:
+                       unreadable: list[str] | None = None, *, lane: str | list[str] | None = None) -> dict[str, Any]:
     """获取队列摘要 (转调 records.py 读取记录; 卡遍历只走 task_loader.iter_queue_task_paths, AIPOS-F133 件①)。
 
     AIPOS-F133 件②: 每张卡的 lane 经唯一派生 machine_zone.lane_of_card; lane 给出 = 经 filter_rows_by_lane 过滤
@@ -283,7 +283,7 @@ def _get_queue_summary(governance_root: Path, repo_root: Path | None = None,
         {
             <task_loader.QUEUE_STATES 各目录名>: int,  # pending/claimed/completed/blocked/withdrawn
             "in_flight": list[dict],  # 在途卡详情
-            "lane_filter": str | None,
+            "lane_filter": list[str] | None,  # AIPOS-F139: --lane 仓集合(规范 lane 键)
             "lanes": {<lane>: {<各目录名>: int, "in_flight": list[dict]}},
         }
     """
@@ -387,7 +387,7 @@ def run_brief(
     repo_root: Path | None = None,
     output_format: str = "text",
     since: str | None = None,
-    lane: str | None = None,
+    lane: str | list[str] | None = None,
 ) -> int:
     """运行 lybra brief 命令。
     
@@ -420,7 +420,7 @@ def run_brief(
             return 1
     
     # AIPOS-F133 件②: --lane 校验(不在声明 = 拒, 点名可选值; 退出码读 verbs.schema lane_view.invalid_lane_exit_code)
-    from tools.aipos_cli.machine_zone import LaneFilterInvalid, lane_view_declaration, resolve_lane_filter
+    from tools.aipos_cli.machine_zone import LaneFilterInvalid, lane_filter_label, lane_view_declaration, resolve_lane_filter
 
     try:
         lane = resolve_lane_filter(workspace_root, lane)
@@ -539,7 +539,7 @@ def run_brief(
             print()
             
             # 3. 队列状态
-            print("【3. 当前在跑什么】" + (f"(lane {lane})" if lane else ""))
+            print("【3. 当前在跑什么】" + (f"(lane {lane_filter_label(lane)})" if lane else ""))  # AIPOS-F139: 集合显示
             for state in _queue_dir_states():  # AIPOS-F104 件②: 队列目录唯一投影(原写死含恒为 0 的 returned 行、漏 withdrawn)
                 print(f"  {state + ':':<10} {queue_summary.get(state, 0)}")
             

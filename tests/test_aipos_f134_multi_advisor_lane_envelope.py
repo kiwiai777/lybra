@@ -364,10 +364,10 @@ def test_item3_loop_lane_envelope_passes_own_lane_refuses_other(two):
     ota_fm = nr._read_frontmatter(nr._find_task_in_queue(two.gov, OTA_CARD)[0])
     lt_fm = nr._read_frontmatter(nr._find_task_in_queue(two.gov, LT_CARD)[0])
     pol, _ = find_envelope(two.gov, task_id=OTA_CARD, task_fm=ota_fm, driver_actor=ADV_OTA, driver_role="advisor")
-    assert pol and pol["policy_id"] == POL_OTA and pol["task_selector_lane_repo"] == "ota"
+    assert pol and pol["policy_id"] == POL_OTA and pol["task_selector_lane_repo"] == ["ota"]  # AIPOS-F139: 仓集合
     none, reasons = find_envelope(two.gov, task_id=LT_CARD, task_fm=lt_fm, driver_actor=ADV_OTA, driver_role="advisor")
     _show(f"[件③·loop OTA 信封推 lantu 卡] 原因链: {reasons}")
-    assert none is None and any(r.startswith(f"{POL_OTA}: card lane.repo resolves to") and "task_selector.lane_repo='ota'" in r for r in reasons)
+    assert none is None and any(r.startswith(f"{POL_OTA}: card lane.repo resolves to") and "task_selector.lane_repo=['ota']" in r for r in reasons)  # F139: 原因链列集合
     # 无 lane 信封(主顾问)行为不变: 两个 lane 的卡都覆盖
     for fm, tid in ((ota_fm, OTA_CARD), (lt_fm, LT_CARD)):
         pol, _ = find_envelope(two.gov, task_id=tid, task_fm=fm, driver_actor=ADV_MAIN, driver_role="advisor")
@@ -376,7 +376,7 @@ def test_item3_loop_lane_envelope_passes_own_lane_refuses_other(two):
     out = io.StringIO()
     res = run_loop(LT_CARD, two.gov, actor=ADV_OTA, out=out, watch=_stop_watch, max_wait=1, interval=0.05)
     _show(f"[件③·loop --actor {ADV_OTA} {LT_CARD}] exit {res.exit_code}\n{out.getvalue()}")
-    assert res.exit_code == exit_code_for(load_loop_contract(), "no_envelope") and "lane_repo='ota'" in res.message
+    assert res.exit_code == exit_code_for(load_loop_contract(), "no_envelope") and "lane_repo=['ota']" in res.message
     assert not TokenGate.calls
     out = io.StringIO()
     res = run_loop(LT_CARD, two.gov, actor=ADV_MAIN, out=out, watch=_stop_watch, max_wait=1, interval=0.05)
@@ -420,15 +420,16 @@ def test_item3_mint_lane_repo_declared_validated_and_default_unchanged(two):
     args = build_parser().parse_args(["envelope", "mint", "--policy-id", "pol_f134_m", "--agent-or-role", ADV_OTA, "--max-tasks", "5",
                                       "--task-mode", "code", "--expires-at", "2999-01-01T00:00:00Z", "--decision-summary", "s",
                                       "--lane-repo", "ota", "--dry-run"])
-    assert args.lane_repo == "ota"
+    assert args.lane_repo == ["ota"]  # AIPOS-F139: --lane-repo 可重复(仓集合)
     payload = _envelope_mint_payload(policy_id="pol_f134_m", agent_or_role=ADV_OTA, max_tasks=5, task_mode="code",
                                      expires_at="2999-01-01T00:00:00Z", decision_summary="s", actor="owner", lane_repo="ota")
-    assert payload["autonomy_policy"]["task_selector"] == {"task_mode": "code", "lane_repo": "ota"}
+    assert payload["autonomy_policy"]["task_selector"] == {"task_mode": "code", "lane_repo": ["ota"]}
     res = build_owner_decision_record(two.gov, payload, actor="owner", dry_run=False)
     assert not res.get("blocking_reasons"), res
     text = (two.gov / "5_tasks" / "policies" / "pol_f134_m.md").read_text(encoding="utf-8")
     _show("[件③·mint --lane-repo ota 落盘信封]\n" + text)
-    assert "task_selector_lane_repo: ota" in text and load_policy(two.gov, "pol_f134_m")["task_selector_lane_repo"] == "ota"
+    # AIPOS-F139: 新铸信封 frontmatter 落列表; 读回 = 仓集合
+    assert "task_selector_lane_repo:\n- ota\n" in text and load_policy(two.gov, "pol_f134_m")["task_selector_lane_repo"] == ["ota"]
     bad = _envelope_mint_payload(policy_id="pol_f134_bad", agent_or_role=ADV_OTA, max_tasks=5, task_mode="code",
                                  expires_at="2999-01-01T00:00:00Z", decision_summary="s", actor="owner", lane_repo="nope")
     res = build_owner_decision_record(two.gov, bad, actor="owner", dry_run=True)

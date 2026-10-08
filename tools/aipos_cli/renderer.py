@@ -99,9 +99,11 @@ def render_my_tasks_text(report: dict[str, Any], actor: str) -> str:
 
 
 def render_needs_owner_text(report: dict[str, Any], *, groups: dict[str, list[dict[str, Any]]] | None = None,
-                            lane: str | None = None) -> str:
+                            lane: str | list[str] | None = None) -> str:
     """AIPOS-F133 件②: groups(machine_zone.group_rows_by_lane 结果)给出 = 按 lane 分组输出; lane 给出 = 标题注明过滤。"""
-    lines = ["Needs Owner" + (f" — lane {lane}" if lane else "")]
+    from tools.aipos_cli.machine_zone import lane_filter_label  # AIPOS-F139: lane 过滤可为仓集合
+
+    lines = ["Needs Owner" + (f" — lane {lane_filter_label(lane)}" if lane else "")]
     if not report["tasks"]:
         lines.append("(no tasks currently require owner review)")
         return "\n".join(lines)
