@@ -332,7 +332,7 @@ def test_item3_no_deploy_declaration_before_after(tmp_path: Path, monkeypatch):
     t2 = _record_text(gov, after)
     _show(f"[件③·声明后] verdict={r2['verdict']} deployed={r2['deployed']}\n  message: {r2['message']}\n{t2}")
     assert r2["verdict"] == "PASS" and r2["deployed"] is False
-    assert "deploy_status: not_applicable" in t2 and "repos.no_deploy 声明仓 web" in t2
+    assert "deploy_status: not_applicable" in t2 and "repos.no_deploy 声明仓 web" in t2 and "deployed: false" in t2
     assert (repo / ".deploy" / "current").resolve() == deployed_before, "声明不部署后不调部署脚本"
     assert any("部署不适用" in op and "not_applicable" in op for op in r2["operations"])
 

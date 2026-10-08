@@ -2320,7 +2320,7 @@ def _finalize_task_impl(
                 # 已部署 → 真正无事可做
                 # AIPOS-F61: 只有实际合并才写 finalization 记录
                 if _actual_merge_happened:
-                    _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations, regression=regression, deploy_status=skip_deploy_status or "skipped", deploy_status_reason=skip_deploy_reason, push_status=clean_push_status, push_status_reason=push_na_reason)
+                    _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), deploy_applicable, operations, regression=regression, deploy_status=skip_deploy_status or "skipped", deploy_status_reason=skip_deploy_reason, push_status=clean_push_status, push_status_reason=push_na_reason)
                 else:
                     operations.append("AIPOS-F61: 无实际合并动作, 跳过 finalization 记录(禁写错误 commit 证据)")
                 return {
@@ -2478,7 +2478,7 @@ def _finalize_task_impl(
                 # 已部署,只需 push
                 # AIPOS-F61: 只有实际合并才写 finalization 记录
                 if _actual_merge_happened:
-                    _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations, regression=regression, deploy_status=skip_deploy_status or "skipped", deploy_status_reason=skip_deploy_reason, push_status="pushed")
+                    _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), deploy_applicable, operations, regression=regression, deploy_status=skip_deploy_status or "skipped", deploy_status_reason=skip_deploy_reason, push_status="pushed")
                 else:
                     operations.append("AIPOS-F61: 无实际合并动作, 跳过 finalization 记录(禁写错误 commit 证据)")
                 return {
