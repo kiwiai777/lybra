@@ -219,6 +219,46 @@
       "notes": "AIPOS-F66B 件①: seed_only 退役——章程 = 声明渲染物(母本 + 项目声明 → 工位副本), 母本变/声明变即重渲染, 工位本地改动 = 声明缺口(sync/distribute 报 diff 后覆盖, 须回流母本或声明)。目标工位按 .lybra/role 实例项目段过滤, 非本项目工位跳过。 AIPOS-R7A: advisor charter defines advisor role boundaries and workflow. Source of truth lives in lybra product repo (agents/roles/<class>/AGENTS.md)."
     },
     {
+      "distribution_id": "advisor-charter-claude-code",
+      "kind": "charter",
+      "description": "AIPOS-F136 件②: advisor charter for a Claude Code advisor session",
+      "source": {
+        "repo": "lybra",
+        "path": "agents/roles/advisor/AGENTS.md"
+      },
+      "target": {
+        "harness": "claude-code",
+        "relative_path": ".claude/rules/lybra-advisor.md"
+      },
+      "applies_to_roles": [
+        "advisor"
+      ],
+      "operation": "render_charter",
+      "version_strategy": "git_commit_hash",
+      "gitignore": true,
+      "notes": "AIPOS-F136 件②: 顾问章程按顾问实际会话 harness 分发(原只有 target.harness=pi 的 advisor-charter, 而 pi 不是顾问会话 harness: harness_semantics.kinds.pi.advisor_session=false)。母本同一份 agents/roles/advisor/AGENTS.md(唯一文本源, 含持续推进守则), 渲染器同一个 charter_render.render_charter(经 distribution_sync._sync_harness_dir → apply_charter_render)。落点 = 顾问工位 harness.dir(Claude Code 会话目录)下 .claude/rules/lybra-advisor.md —— Claude Code 把 .claude/rules/ 下的 .md 作项目记忆自动载入, 不占用会话目录自有的 CLAUDE.md。已有非 Lybra 渲染物 = 拒不覆盖(harness_semantics.charter_in_harness_dir)。"
+    },
+    {
+      "distribution_id": "advisor-charter-codex",
+      "kind": "charter",
+      "description": "AIPOS-F136 件②: advisor charter for a Codex advisor session",
+      "source": {
+        "repo": "lybra",
+        "path": "agents/roles/advisor/AGENTS.md"
+      },
+      "target": {
+        "harness": "codex",
+        "relative_path": "AGENTS.md"
+      },
+      "applies_to_roles": [
+        "advisor"
+      ],
+      "operation": "render_charter",
+      "version_strategy": "git_commit_hash",
+      "gitignore": true,
+      "notes": "AIPOS-F136 件②: 同 advisor-charter-claude-code, 给 AIPOS-F129 的 codex 顾问会话。落点 = harness.dir 下 AGENTS.md(Codex 从会话目录及其上至仓根读 AGENTS.md)。会话在他机(role harness.host)或无 dir = 本机无落点, sync 零写入并把本件列为 undelivered(不猜落点; 他机交付属扩展位)。已有非 Lybra 渲染物(如会话仓自带 AGENTS.md)= 拒不覆盖。"
+    },
+    {
       "distribution_id": "transitions-schema",
       "kind": "schema",
       "description": "Transitions schema for state machine navigation (AIPOS-CONN-LOOP-2 ③)",
@@ -426,7 +466,7 @@
         "advisor_session": true
       },
       "codex": {
-        "description": "AIPOS-F129 件①: Codex 会话(顾问; 可与治理根不同机, 如 Mac 上的 Codex 经 ssh 在治理根所在机跑产品命令): 凭据与身份落治理根 .lybra/(同 claude-code, loop 按治理根取驱动方凭据); 不落 .pi 接线, 不做 pi 落点 prune, 不落章程; 本 schema 暂无 target.harness=codex 的分发件(扩展位: 将来新增条目即经同一分发引擎落 harness.dir, 会话在他机时 sync 拒并点名, 不猜本机落点); .lybra/role 记 harness {kind: codex, dir: <可空>, host: <可空>} —— 会话目录在他机时如实记 host 与路径, 不校验本机存在",
+        "description": "AIPOS-F129 件①: Codex 会话(顾问; 可与治理根不同机, 如 Mac 上的 Codex 经 ssh 在治理根所在机跑产品命令): 凭据与身份落治理根 .lybra/(同 claude-code, loop 按治理根取驱动方凭据); 不落 .pi 接线, 不做 pi 落点 prune; AIPOS-F136 件②: 顾问章程经 advisor-charter-codex 渲染到 harness.dir/AGENTS.md(会话目录在本机时); 会话在他机或无 dir = 本机无落点, sync 零写入并列 undelivered(不猜本机落点, 不拒; 他机交付属扩展位); .lybra/role 记 harness {kind: codex, dir: <可空>, host: <可空>} —— 会话目录在他机时如实记 host 与路径, 不校验本机存在",
         "label": "Codex",
         "target_base": "harness_dir",
         "harness_dir": "optional",
@@ -434,6 +474,7 @@
         "advisor_session": true
       }
     },
+    "charter_in_harness_dir": "AIPOS-F136 件②: target_base=harness_dir 的工位(claude-code / codex)同样接收 kind=charter 条目: 与 pi 同一渲染器(charter_render.render_charter, 经 distribution_sync._sync_harness_dir → apply_charter_render), 三指纹记 <工位>/.lybra/.version-<role>; 会话目录归用户 —— 章程落点已有文件而本地清单无该条渲染记录(非 Lybra 渲染物)= 拒并点名, 不覆盖; 有记录的副本被本地改动 = 声明缺口(报 diff 后覆盖, 同 pi)。",
     "rule": "sync 只取 target.harness == 工位 harness kind 的条目(缺 target.harness = pi); enroll 的 .pi 接线、共享落点并集、.pi 挂载推导只认 pi 条目。harness kind 合法值 = 本 schema harness_semantics.kinds 的键(enroll --harness 与 onboarding guide --advisor-harness 取值由此推导, 禁代码写死第二份); distributions[].target.harness 须 ∈ kinds(不在 = 声明错误, fail-closed)。AIPOS-F129 说理: 原「合法值 = distributions[].target.harness 并集」推不出无分发件的 kind(codex 顾问本卡不新增技能分发); kinds 本就是每个 kind 语义的唯一声明, 改由其键推导仍是单源, 并集 ⊆ kinds 作一致性校验。",
     "single_implementation": "tools/aipos_cli/distribution_sync.declared_harness_kinds / harness_kind_declaration / advisor_harness_kinds / harness_role_record / workstation_harness / harness_distributions(判定、登记与过滤) + enroll_client.enroll(落 harness 字段并交付) + onboarding.generate_onboarding_guide(顾问 harness) + workstation_wiring.declared_role_skills/declared_role_extensions(只认 pi)",
     "kind_fields": {

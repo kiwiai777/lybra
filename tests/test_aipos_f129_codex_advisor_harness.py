@@ -49,7 +49,7 @@ def test_item1_kinds_are_single_derivation_source():
     print("[①·合法 harness kind(读 harness_semantics.kinds)]", kinds)
     assert kinds == tuple(sorted(sem["kinds"])) and "codex" in kinds and sem["default"] in kinds
     targets = {str((d.get("target") or {}).get("harness") or sem["default"]) for d in load_schema("distribution")["distributions"]}
-    assert targets <= set(kinds) and "codex" not in targets  # 本卡不新增 Codex 分发件(留扩展位), codex 仍是合法值
+    assert targets <= set(kinds) and "codex" in targets  # AIPOS-F136 件②: 扩展位落地——advisor-charter-codex(顾问章程)给 codex
     print("[①·顾问会话 harness(advisor_session)]", advisor_harness_kinds())
     assert advisor_harness_kinds() == ("claude-code", "codex")
     codex = harness_kind_declaration("codex")
@@ -187,7 +187,7 @@ def test_item3_guide_codex_vs_claude_code_default():
     assert (a_cc[0].harness, a_cc[0].harness_dir, a_cc[0].harness_host) == ("claude-code", "/tmp/f129-session", None)
     assert a_cc[1].command == "sync" and a_cc[1].dry_run is True and ".claude/skills" in cc5["creates"]
     a_cx = _lybra_args(cx5)
-    assert len(a_cx) == 1  # 无 sync 分发步骤(声明里给 codex 的件 = 0)
+    assert len(a_cx) == 1  # 无 sync 分发步骤(会话在他机: 本机无落点, AIPOS-F136 起声明给 codex 的章程列 undelivered)
     assert (a_cx[0].roles_command, a_cx[0].workspace, a_cx[0].harness, a_cx[0].harness_host, a_cx[0].harness_dir) == (
         "enroll", cx["governance_root"], "codex", "mac-probe.local", None)
     blob = json.dumps(cx5, ensure_ascii=False)

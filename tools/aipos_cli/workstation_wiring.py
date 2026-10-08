@@ -238,7 +238,7 @@ def _seed_charter(workspace_root: Path, dists: list[dict[str, Any]], warnings: l
     path = workspace_root / "AGENTS.md"
     if path.exists():
         return {"status": "skipped(existing)", "source": None}
-    charters = [d for d in dists if d.get("kind") == "charter"]
+    charters = [d for d in _pi_distributions(dists) if d.get("kind") == "charter"]  # AIPOS-F136: 种子是 pi 工位的 AGENTS.md, 只认 pi 条目
     if not charters:
         warnings.append("AGENTS.md 未写: 本角色无 kind=charter 分发声明(distribution.schema), 无母本可渲染")
         return {"status": "not_written(no-charter-declaration)", "source": None}
