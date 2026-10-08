@@ -282,7 +282,7 @@ class TestRoleFileMergeAndGuards(unittest.TestCase):
         from tools.aipos_cli.enroll_client import enroll
         with tempfile.TemporaryDirectory(prefix="f22d_planner_") as tmp:
             root = _make_gate_root(tmp)
-            result = issue_self_contained_code(root, role="planner", by="t")
+            result = issue_self_contained_code(root, role="planner", instance="plan.chris", by="t")  # AIPOS-F134 件②: 治理席位类码必须带实例
             sc = result["self_contained_code"]
             mock_exchange_result = {
                 "ok": True,
@@ -305,7 +305,7 @@ class TestRoleFileMergeAndGuards(unittest.TestCase):
         from tools.aipos_cli.enroll_client import enroll
         with tempfile.TemporaryDirectory(prefix="f22d_advisor_") as tmp:
             root = _make_gate_root(tmp)
-            result = issue_self_contained_code(root, role="advisor", by="t")
+            result = issue_self_contained_code(root, role="advisor", instance="adv.chris", by="t")  # AIPOS-F134 件②
             sc = result["self_contained_code"]
             mock_exchange_result = {
                 "ok": True,
@@ -371,7 +371,7 @@ class TestRoleFileMergeAndGuards(unittest.TestCase):
                 "mcp": {"rpc_url": "http://127.0.0.1:7118/mcp"},
                 "tokens": [],
             }), encoding="utf-8")
-            result = issue_self_contained_code(gov_root, role="planner", by="t")
+            result = issue_self_contained_code(gov_root, role="planner", instance="plan.ws", by="t")  # AIPOS-F134 件②
             sc = result["self_contained_code"]
             mock_exchange_result = {
                 "ok": True,

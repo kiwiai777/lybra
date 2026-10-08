@@ -6073,6 +6073,7 @@ def load_task_snapshot(
         "project": metadata.get("project"),
         "queue_state": task.get("queue_state"),
         "reviewed_task_id": metadata.get("reviewed_task_id"),  # AIPOS-F90 件①: 审计卡信封判定对象 = 被审卡(autonomy_policy.envelope_subject)
+        "lane": metadata.get("lane") if isinstance(metadata.get("lane"), dict) else None,  # AIPOS-F134 件③: 信封 lane 选择器判定对象
     }
 
 

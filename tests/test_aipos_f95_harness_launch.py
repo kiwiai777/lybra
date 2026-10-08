@@ -413,7 +413,7 @@ def test_item6b_land_event_carries_host_and_remote_falls_back_to_manual(lrig, mo
                                                             "tokens": []}))
     details: list[str] = []
     for host in (None, "kiwi@far-mac"):
-        sc = issue_self_contained_code(root, role="advisor", by="t")["self_contained_code"]
+        sc = issue_self_contained_code(root, role="advisor", instance="adv.f95", by="t")["self_contained_code"]  # AIPOS-F134 件②: 治理席位类码必须带实例
         exchange = {"ok": True, "token_entry": {"role": "advisor", "agent_instance": "adv.f95", "fingerprint": "fp",
                                                 "scopes": ["advisor"], "token": "tok-fixture"}}
         with patch.object(enroll_client, "exchange_enrollment_code", return_value=exchange), \
