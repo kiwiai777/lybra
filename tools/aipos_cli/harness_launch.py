@@ -57,41 +57,49 @@ def _first_line(value: Any) -> str:
 
 def summarize_event(line: str, fmt: str) -> tuple[str | None, str]:
     """一行事件 → (一行式摘要 | None, 计数类别)。fmt = enums.schema harness.launch.events; 未知格式只计数。"""
+    summary, kind, _category = summarize_event_activity(line, fmt)
+    return summary, kind
+
+
+def summarize_event_activity(line: str, fmt: str) -> tuple[str | None, str, str]:
+    """一行事件 → (一行式摘要 | None, 计数类别, 活动类别)。同一次解析(summarize_event 是其投影)。
+    AIPOS-F131: 活动类别(verbs.schema lybra_loop.run_record.activity_categories)只含工具名 / 发言 / 结束 / 出错等类别,
+    不含正文与参数——运行记录与日志只记它。"""
     if fmt != "pi-json":
-        return None, "raw"
+        return None, "raw", "output"
     try:
         event = json.loads(line)
     except ValueError:
-        return None, "non_json"
+        return None, "non_json", "output"
     if not isinstance(event, dict):
-        return None, "non_json"
+        return None, "non_json", "output"
     kind = str(event.get("type") or "")
     if kind == "tool_execution_start":
         args = event.get("args")
         first = next(iter(args.values()), "") if isinstance(args, dict) and args else args
-        return f"工具 {event.get('toolName')}: {_first_line(first)}", "summarized"
+        return f"工具 {event.get('toolName')}: {_first_line(first)}", "summarized", f"tool:{event.get('toolName')}"
     if kind == "tool_execution_end":
         if event.get("isError"):
             result = event.get("result")
             if isinstance(result, dict) and isinstance(result.get("content"), list):
                 result = " ".join(str(c.get("text") or "") for c in result["content"] if isinstance(c, dict))
-            return f"工具 {event.get('toolName')} 出错: {_first_line(result)}", "summarized"
-        return None, "quiet"
+            return f"工具 {event.get('toolName')} 出错: {_first_line(result)}", "summarized", f"tool_error:{event.get('toolName')}"
+        return None, "quiet", f"tool_end:{event.get('toolName')}"
     if kind == "message_end":
         message = event.get("message") if isinstance(event.get("message"), dict) else {}
         if message.get("role") != "assistant":
-            return None, "quiet"
+            return None, "quiet", "stream"
         if message.get("stopReason") == "error" or message.get("errorMessage"):
-            return f"错误: {_first_line(message.get('errorMessage') or 'stopReason=error')}", "summarized"
+            return f"错误: {_first_line(message.get('errorMessage') or 'stopReason=error')}", "summarized", "error"
         content = message.get("content")
         texts = [str(c.get("text") or "") for c in content if isinstance(c, dict) and c.get("type") == "text"] if isinstance(content, list) else []
         first = _first_line("\n".join(texts))
-        return (f"助手: {first}", "summarized") if first else (None, "quiet")
+        return (f"助手: {first}", "summarized", "assistant") if first else (None, "quiet", "assistant")
     if kind == "agent_end":
-        return "agent 结束", "summarized"
+        return "agent 结束", "summarized", "agent_end"
     if kind in _PI_QUIET_EVENTS:
-        return None, "quiet"
-    return None, f"unknown:{kind or '?'}"
+        return None, "quiet", "stream"
+    return None, f"unknown:{kind or '?'}", "stream"
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +264,10 @@ class LaunchedHarness:
         import selectors
         import subprocess
 
-        self.plan, self.say = plan, say
+        # AIPOS-F131: say 可带两个可选口(loop_driver._RunOutput 提供): progress = 一行式进度(含发言首行/工具首参, 只上 stdout,
+        # 不进日志); activity = 每行输出的活动类别(只类别不含内容 → loop 运行记录)。缺省 = 进度走 say 本身、不记活动(行为同前)。
+        self.plan, self.say = plan, getattr(say, "progress", say)
+        self.on_activity: Callable[[str], None] | None = getattr(say, "activity", None)
         self.max_chars = int(decl["progress_max_chars"])
         self.stderr_tail: collections.deque[str] = collections.deque(maxlen=int(decl["stderr_tail_lines"]))
         self.counts: collections.Counter[str] = collections.Counter()
@@ -311,16 +322,20 @@ class LaunchedHarness:
         if name == "stderr":
             if text.strip():
                 self.stderr_tail.append(redact_progress(text)[: self.max_chars])
+                if self.on_activity is not None:
+                    self.on_activity("stderr")
             return
         if self.remote and self.remote_pgid is None:
             marker = str(self._remote_decl["pgid_marker"])
             if text.startswith(marker) and text[len(marker):].isdigit():
                 self.remote_pgid = int(text[len(marker):])  # 远端组号行(首行)不计入事件
                 return
-        summary, kind = summarize_event(text, self.plan.events)
+        summary, kind, category = summarize_event_activity(text, self.plan.events)
         self.counts[kind] += 1
         if summary:
             self.say(f"  [{self.prefix}] {redact_progress(summary)[: self.max_chars]}")
+        if self.on_activity is not None:
+            self.on_activity(category)
 
     def _feed(self, name: str, chunk: bytes) -> None:
         *lines, rest = (self._bufs[name] + chunk).split(b"\n")

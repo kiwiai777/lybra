@@ -699,7 +699,8 @@ def declared_project_id(governance_root: str | Path) -> str:
 # ---------------------------------------------------------------------------
 
 PROJECT_PATH_KEYS = ("return_root", "verdict_root", "queue_root", "task_cards_root", "manual_gate_mode", "finalize_mode",
-                     "foundation_backlog", "hard_rules_source", "policies_root")  # AIPOS-F103 件④: 信封目录
+                     "foundation_backlog", "hard_rules_source", "policies_root",  # AIPOS-F103 件④: 信封目录
+                     "loop_runs_root")  # AIPOS-F131 件①: loop 运行记录落点
 # AIPOS-F78B 件②: 非路径键(值域读声明 enum), 与布尔 manual_gate_mode 一样不做路径解析
 PROJECT_ENUM_KEYS = ("finalize_mode",)
 

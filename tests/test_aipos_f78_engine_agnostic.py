@@ -182,8 +182,9 @@ def test_f78_item4_declarations_exist_in_schema_single_source():
     # AIPOS-F78B 件②: 声明表增 finalize_mode(internal|external, 默认 internal)
     # AIPOS-F89 件② M17: 另含两个项目治理文档可选声明位(未声明 = None, 缺省行为见声明)
     # AIPOS-F103 件④: 另含信封目录 policies_root(缺省 5_tasks/policies)
+    # AIPOS-F131 件①: 另含 loop 运行记录落点 loop_runs_root(缺省 5_tasks/records/loop_runs)
     assert set(paths) == {"return_root", "verdict_root", "queue_root", "task_cards_root", "manual_gate_mode", "finalize_mode",
-                          "foundation_backlog", "hard_rules_source", "policies_root"}
+                          "foundation_backlog", "hard_rules_source", "policies_root", "loop_runs_root"}
     assert paths["finalize_mode"]["default"] == "internal" and paths["finalize_mode"]["enum"] == ["internal", "external"]
     assert paths["return_root"]["default"] == "task_cards"  # lybra 默认 = 现行路径, 0 迁移
     card = json.loads((REPO_ROOT / "schema" / "card.schema.json").read_text(encoding="utf-8"))

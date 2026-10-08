@@ -367,7 +367,8 @@ def card_own_paths(governance_root: Path, task_id: str, *, card_path: Path | Non
 
     - 队列文件: <queue_root>/<每个队列状态>/<卡文件名>(卡在队列间搬动, 旧位的删除也属本卡);
     - 草稿: <drafts>/<卡文件名>;
-    - 记录: <records>/<每个记录类型>/<卡ID | 卡文件名 stem>/(门按 task_id 或 draft_id 分目录; 新类型自动纳入);
+    - 记录: <records>/<每个记录类型>/<卡ID | 卡文件名 stem>/(门按 task_id 或 draft_id 分目录; 新类型自动纳入;
+      AIPOS-F131: loop 运行记录目录 paths.loop_runs_root 除外——运行期观测, 不属卡落账);
     - 台账 / 交回 / 裁决落点: project.json paths.{task_cards_root, return_root, verdict_root}/<卡ID>/。
     卡文件名 = 队列中按 frontmatter task_id 查到的那份(task_loader.find_task_card 唯一查找), 另含 <卡ID 小写>.md 缺省名。
     """
@@ -398,11 +399,16 @@ def card_own_paths(governance_root: Path, task_id: str, *, card_path: Path | Non
     for name in names:
         add(drafts / name)
     records = _resolve_governance_path_with_relative("records", root)
+    declared = project_paths(root)
+    # AIPOS-F131: loop 运行记录(paths.loop_runs_root)是运行期观测、不属卡落账——loop 在 N6 落账后仍写结束原因,
+    # 入范围则落账判据永不过; 只跳过该声明目录, 其余记录类型照旧自动纳入
+    loop_runs = Path(declared["loop_runs_root"]).resolve()
     if records.is_dir():
         for kind_dir in sorted(p for p in records.iterdir() if p.is_dir()):
+            if kind_dir.resolve() == loop_runs:
+                continue
             for key in record_keys:
                 add(kind_dir / key)
-    declared = project_paths(root)
     for key in ("task_cards_root", "return_root", "verdict_root"):
         add(Path(declared[key]) / task_id)
     return out

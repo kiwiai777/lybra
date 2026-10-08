@@ -47,6 +47,7 @@ from tools.aipos_cli.harness_launch import (  # AIPOS-F95: 拉起进程封装(�
     signals_raise_interrupt as _signals_raise_interrupt,
 )
 from tools.aipos_cli.verb_contract import declared_exit_code  # AIPOS-F101 件③: 退出码唯一读取口
+from tools.aipos_cli.loop_run_record import LoopRunRecorder, LoopRunRecordError  # AIPOS-F131: 运行记录 + 日志(唯一实现)
 from tools.aipos_cli.next_resolver import (
     DRIVER_ACTOR_MISSING,
     REPO_ROOT,
@@ -150,6 +151,9 @@ class LoopResult:
     steps: list[LoopStep] = field(default_factory=list)
     missing_records: list[str] = field(default_factory=list)
     suggested_action: str = ""
+    reason: str = ""  # AIPOS-F131: 结束原因(细于 outcome; 取值声明 verbs.schema lybra_loop.run_record.end_reasons, 空 = 同 outcome)
+    run_record: str = ""  # AIPOS-F131: 本次运行记录 / 日志路径(产品给出)
+    run_log: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -161,7 +165,29 @@ class LoopResult:
             "steps": [s.to_dict() for s in self.steps],
             "missing_records": list(self.missing_records),
             "suggested_action": self.suggested_action,
+            "reason": self.reason or self.outcome,
+            "run_record": self.run_record,
+            "run_log": self.run_log,
         }
+
+
+class _RunOutput:
+    """AIPOS-F131 件③: loop 的输出口。人读行照旧上 stdout(TolerantOutput, 行为不变), 运行记录建好后同时写进记录旁的日志
+    (LoopRunRecorder.log 逐行过 redact_progress)。拉起进程的一行式进度(含发言首行/工具首参)走 progress = 只上 stdout;
+    其活动只以类别经 activity 进运行记录与日志(LaunchedHarness 按这两个可选口取用)。"""
+
+    def __init__(self, stdout: Callable[[str], None]) -> None:
+        self.progress = stdout
+        self.recorder: LoopRunRecorder | None = None
+
+    def __call__(self, line: str) -> None:
+        self.progress(line)
+        if self.recorder is not None:
+            self.recorder.log(line)
+
+    def activity(self, category: str) -> None:
+        if self.recorder is not None:
+            self.recorder.activity(category)
 
 
 # ---------------------------------------------------------------------------
@@ -626,14 +652,15 @@ def _session_event(governance_root: Path, card: str, actor: str, label: str, det
 def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root: Path, result: LoopResult, *,
                    contract: dict[str, Any], decl: dict[str, Any], watch: Callable[..., int], watch_args: SimpleNamespace,
                    ready: Callable[[list[str]], bool], say: Callable[[str], None], actor: str, envelope_id: str,
-                   wait_patterns: list[str]) -> bool:
+                   wait_patterns: list[str], recorder: LoopRunRecorder) -> bool:
     """拉起一次 harness 并经唯一哨兵等待产物(进程退出也唤醒), 结束即清进程组。返回 True = loop 应以 result 出口返回。
 
     产物就绪 → 宽限 grace_seconds 后终止进程组, 继续推导; 进程早退而产物未就绪 → exit 3 附 stderr 末尾;
     等待超时 → 终止进程组, exit 3; 收到 SIGINT/SIGTERM/SIGHUP(harness_launch.loop_signals)→ 终止进程组, 抛 LoopInterrupted;
     拉起事件写不进 session record → 终止, exit 4。
     AIPOS-F107 件①: 信号处置覆盖拉起全程——Popen 期间到的信号先记下(拉起后按中断处理), 拉起起至清组+收尾留痕止
-    中断处置不撤(清理与留痕期间到的信号记下, 清完再抛), 不留「默认处置直接终止 loop、进程组成孤儿」的窗口。"""
+    中断处置不撤(清理与留痕期间到的信号记下, 清完再抛), 不留「默认处置直接终止 loop、进程组成孤儿」的窗口。
+    AIPOS-F131: 拉起/收尾与进程活动(只类别与时间)进运行记录; 等待期 sleeper 每轮读输出后按节流落盘(静默期也落最后一条)。"""
     wait_timeout = exit_code_for(contract, "wait_timeout")
     terminate_wait = float(decl["terminate_wait_seconds"])
     where = f"{plan.location.get('host') or '本机'}:{plan.cwd}"
@@ -653,11 +680,13 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
                 step.ok, step.message = False, f"拉起 {plan.harness} 失败({type(launch_error).__name__}: {launch_error}); 手工模式: {plan.manual_hint}"
                 say(f"[{index}] exit 3 — {step.message}")
                 result.outcome, result.exit_code, result.message = "wait_timeout", wait_timeout, step.message
+                result.reason = "launch_failed"
                 return True
             step.launch = {**(step.launch or {}), "pid": harness.pid, "pgid": harness.pgid, "remote_pgid": harness.remote_pgid}
             remote_part = f" remote_pgid={harness.remote_pgid}(经 ssh, kickoff 经 stdin)" if plan.remote else ""
             say(f"[{index}] launch: {plan.harness} @ {where} pid={harness.pid} pgid={harness.pgid}{remote_part}(信封 {envelope_id} launch_harnesses 授权; "
                 f"kickoff = 工位 my-tasks --task-id {plan.card} next_card.kickoff)")
+            recorder.launch_started(plan, harness)
             if early:
                 raise LoopInterrupted(early[0])
             failure = _session_event(governance_root, plan.card, actor, "harness_launch",
@@ -668,10 +697,17 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
                 step.ok, step.message = False, f"拉起事件写不进 {plan.card} session record({failure}), 已终止进程组; 拉起须留痕(fail-closed)"
                 say(f"[{index}] exit 4 — {step.message}")
                 result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), step.message
+                result.reason = "launch_record_failed"
                 return True
+            running = harness
+
+            def _pump(seconds: float) -> None:  # 唯一哨兵的 sleeper: 读拉起进程输出(select 事件驱动), 再按节流落运行记录
+                running.pump(seconds)
+                recorder.flush()
+
             watch_out = io.StringIO()
             with contextlib.redirect_stdout(watch_out):
-                rc = watch(watch_args, expect_ready=ready, stop_when=harness.exited, sleeper=harness.pump)
+                rc = watch(watch_args, expect_ready=ready, stop_when=harness.exited, sleeper=_pump)
             step.exit_code, step.output = int(rc), watch_out.getvalue().strip()
             if rc == declared_exit_code("lybra_agent_watch", "change"):  # AIPOS-F101 件③: 哨兵退出码读声明
                 outcome = "artifact_ready"
@@ -692,6 +728,7 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
                 step.message = f"等待产物超时(watch exit {rc}), 已终止拉起的 {plan.harness} 进程组: 等的是 {wait_patterns}"
             say(f"[{index}] exit 3 — {step.message}")
             result.outcome, result.exit_code, result.message = "wait_timeout", wait_timeout, step.message
+            result.reason = "launch_early_exit" if outcome == "early_exit" else "launch_timeout"
             return True
         except LoopInterrupted as exc:
             if harness is not None:
@@ -706,6 +743,7 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
                     harness.close()
                     say(harness.counts_line())
                     step.launch = {**(step.launch or {}), "outcome": outcome, "returncode": harness.proc.returncode, "termination": how}
+                    recorder.launch_ended(outcome, harness.proc.returncode, how)
                     failure = _session_event(governance_root, plan.card, actor, "harness_exit",
                                              f"harness={plan.harness}; pid={harness.pid}; outcome={outcome}; returncode={harness.proc.returncode}; termination={how}")
                     if failure:
@@ -754,7 +792,8 @@ def run_loop(
     if watch is None:
         from tools.aipos_cli.agent_watch_fs import run_fs_watch as watch  # noqa: F811 — 唯一哨兵
 
-    say = TolerantOutput(out)  # AIPOS-F107 件①: 输出端断开(ssh 断线/管道关闭)→ 静默丢弃, 不打断拉起期清理
+    # AIPOS-F107 件①: 输出端断开(ssh 断线/管道关闭)→ 静默丢弃, 不打断拉起期清理; AIPOS-F131 件③: 记录建好后同写日志
+    say = _RunOutput(TolerantOutput(out))
 
     # AIPOS-F122 件③: 存量冻结卡拒推进(判定唯一实现 legacy_baseline.frozen_tasks, 经推导核同一硬停项 legacy_frozen_stop;
     # 先于找卡与信封校验——冻结卡不该得到「无信封 exit 5」之类误导出口)
@@ -788,6 +827,41 @@ def run_loop(
         return LoopResult(task_id, "not_derivable", exit_code_for(contract, "not_derivable"), msg,
                           missing_records=[DRIVER_ACTOR_MISSING])
 
+    # AIPOS-F131 件①③: 运行记录 + 日志(落点 project.json paths.loop_runs_root)。建不起来 = 拒跑 exit 4(运行须可查, 不裸跑)
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        recorder = LoopRunRecorder(governance_root, task_id, driver=driver_actor, contract=contract, warn=say)
+    except (LoopRunRecordError, SchemaLoadError) as exc:
+        msg = f"loop 运行记录建不起来, 拒跑(运行须可查, fail-closed; 落点声明 project.json paths.loop_runs_root): {exc}"
+        say(f"lybra loop {task_id}: exit 4 — {msg}")
+        return LoopResult(task_id, "not_derivable", exit_code_for(contract, "not_derivable"), msg, missing_records=[msg])
+    say.recorder = recorder
+    say(f"lybra loop {task_id}: run_record={recorder.path} log={recorder.log_path}(进度: lybra loop status --task-id {task_id})")
+    holder = LoopResult(task_id, "completed", exit_code_for(contract, "completed"), "")
+    try:
+        result = _run_enveloped(task_id, governance_root, holder, task_fm=task_fm, driver_actor=driver_actor, policy_id=policy_id,
+                                now=now, connection_json=connection_json, contract=contract, max_steps=max_steps, max_wait=max_wait,
+                                interval=interval, allowed_verbs=allowed_verbs, say=say, derive=derive, execute=execute,
+                                watch=watch, no_launch=no_launch, recorder=recorder)
+    except LoopInterrupted as exc:
+        recorder.end(outcome="interrupted", exit_code=128 + exc.signum, reason="interrupted", message=f"收到信号 {exc.signum}",
+                     steps=holder.steps)
+        raise
+    except BaseException as exc:  # 记下崩溃原因后原样抛出(不吞)
+        recorder.end(outcome="crashed", exit_code=1, reason="crashed", message=f"{type(exc).__name__}: {exc}", steps=holder.steps)
+        raise
+    recorder.end(outcome=result.outcome, exit_code=result.exit_code, reason=result.reason or result.outcome, message=result.message,
+                 steps=result.steps)
+    result.run_record, result.run_log = str(recorder.path), str(recorder.log_path)
+    return result
+
+
+def _run_enveloped(task_id: str, governance_root: Path, result: LoopResult, *, task_fm: dict[str, Any], driver_actor: str,
+                   policy_id: str | None, now: datetime | None, connection_json: str | None, contract: dict[str, Any],
+                   max_steps: int, max_wait: float, interval: float, allowed_verbs: set[str], say: _RunOutput,
+                   derive: Callable[[str, Path], dict[str, Any]], execute: Callable[..., dict[str, Any]],
+                   watch: Callable[..., int], no_launch: bool, recorder: LoopRunRecorder) -> LoopResult:
     # 件③ 信封(启动前校验; 无信封 exit 5 带申领出口, 禁裸跑); 身份集合含工位角色名(chris: hbj-advisor)
     policy, reasons = find_envelope(
         governance_root, task_id=task_id, task_fm=task_fm, driver_actor=driver_actor, policy_id=policy_id, now=now,
@@ -799,21 +873,24 @@ def run_loop(
         say(f"lybra loop {task_id}: exit 5 — {msg}")
         return LoopResult(task_id, "no_envelope", exit_code_for(contract, "no_envelope"), msg, suggested_action=hint)
     envelope_id = str(policy.get("policy_id"))
+    recorder.set_envelope(envelope_id)
     say(f"lybra loop {task_id}: envelope={envelope_id} driver={driver_actor} max_steps={max_steps} max_wait={max_wait}s")
 
-    result = LoopResult(task_id, "completed", exit_code_for(contract, "completed"), "", envelope=envelope_id)
+    result.envelope = envelope_id
     # AIPOS-F90 件①: 已校验的驱动方身份与信封贯穿推导核与执行体(派生 claim/return/verdict/close 带同一 owner_policy_ref)
     with driver_scope(actor=driver_actor, policy_id=envelope_id):
         try:
             return _drive(task_id, governance_root, result, contract=contract, max_steps=max_steps, max_wait=max_wait,
                           interval=interval, allowed_verbs=allowed_verbs, say=say, derive=derive, execute=execute, watch=watch,
-                          connection_json=connection_json, policy=policy, driver_actor=driver_actor, no_launch=no_launch)
+                          connection_json=connection_json, policy=policy, driver_actor=driver_actor, no_launch=no_launch,
+                          recorder=recorder)
         except FrontmatterReadError as exc:
             # AIPOS-F100 件②: 推导核之外的回读(落账回读 / 结案判据 / 等待实例)遇记录读不出 = 同一硬停 exit 4 点名文件
             stop = frontmatter_unreadable_stop(task_id, exc)
             say(f"lybra loop {task_id}: exit 4 — {exc}")
             result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), str(exc)
             result.missing_records, result.suggested_action = stop["missing_records"], stop["suggested_action"]
+            result.reason = "frontmatter_unreadable"
             return result
 
 
@@ -861,6 +938,7 @@ def _drive(
     policy: dict[str, Any] | None = None,
     driver_actor: str = "",
     no_launch: bool = False,
+    recorder: LoopRunRecorder,
 ) -> LoopResult:
     steps = result.steps
     launch_decl = launch_declaration(contract)
@@ -870,6 +948,7 @@ def _drive(
     landing_action = str(n6_landing_declaration()["action_type"])  # AIPOS-F94: N6 落账步(声明 transitions nodes.N6.landing)
 
     for index in range(1, max_steps + 1):
+        recorder.sync_steps(steps)  # AIPOS-F131 件①: 上一轮落定的步立即进运行记录
         # 出口 0: closure 记录存在且治理已落账(AIPOS-F94 件①: 本卡落账范围已提交且已推送); 未落账 → 推导核派生 N6 落账步
         if _has_closure(governance_root, task_id):
             landing = _landing(governance_root, task_id)
@@ -917,6 +996,7 @@ def _drive(
                 say(f"[{index}] exit 4 — {msg}")
                 result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), msg
                 result.missing_records, result.suggested_action = missing, str(derivation.get("suggested_action") or "")
+                result.reason = str(action.get("type"))
                 return result
             if derivation.get("derivable") or wait_patterns:
                 pass  # 审计卡可推导 → 下方账务步; 已定等待 → 下方 watch
@@ -937,6 +1017,7 @@ def _drive(
             step = LoopStep(index, "wait", derivation.get("current_node"), derivation.get("current_state"), target_card,
                             artifacts=wait_patterns)
             say(f"[{index}] wait: {target_card} 产物 {wait_patterns} (≤{max_wait}s, 经 agent watch)")
+            recorder.step_started(index, "wait", step.node, step.state, target_card, waiting_for=wait_patterns)
 
             def _ready(_matched: list[str], _card: str = ready_card) -> bool:
                 # 就绪 = 推导核可推导; 或硬停(产物不合规 F78 件③ / 记录缺 F73E 件①)——都该让 loop 醒来判定, 而非空等到超时
@@ -957,7 +1038,8 @@ def _drive(
                 launched.add(launch_card)
                 return_now = _launched_wait(index, step, plan, governance_root, result, contract=contract, decl=launch_decl,
                                             watch=watch, watch_args=watch_args, ready=_ready, say=say, actor=driver_actor,
-                                            envelope_id=str((policy or {}).get("policy_id") or ""), wait_patterns=wait_patterns)
+                                            envelope_id=str((policy or {}).get("policy_id") or ""), wait_patterns=wait_patterns,
+                                            recorder=recorder)
                 steps.append(step)
                 if return_now:
                     return result
@@ -972,6 +1054,7 @@ def _drive(
                 steps.append(step)
                 say(f"[{index}] exit 3 — {step.message}")
                 result.outcome, result.exit_code, result.message = "wait_timeout", exit_code_for(contract, "wait_timeout"), step.message
+                result.reason = "wait_timeout"
                 return result
             step.message = "产物就绪"
             steps.append(step)
@@ -989,12 +1072,14 @@ def _drive(
             say(f"[{index}] exit 4 — {step.message}")
             result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), step.message
             result.suggested_action = str(derivation.get("suggested_action") or "")
+            result.reason = "manual_required"
             return result
         if action_type not in allowed_verbs:
             step.ok, step.message = False, f"信封未授权动词 {action_type}(允许: {sorted(allowed_verbs)})"
             steps.append(step)
             say(f"[{index}] exit 5 — {step.message}")
             result.outcome, result.exit_code, result.message = "no_envelope", exit_code_for(contract, "no_envelope"), step.message
+            result.reason = "verb_not_authorized"
             return result
         parses, parse_error = check_command_parses(command)
         if not parses:
@@ -1002,8 +1087,10 @@ def _drive(
             steps.append(step)
             say(f"[{index}] exit 4 — {step.message}\n  command: {command}")
             result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), step.message
+            result.reason = "command_unparseable"
             return result
 
+        recorder.step_started(index, "execute", node, state, target_card, action=action_type)
         say(f"[{index}] run {action_type} @ {node}/{state} ({target_card}): {command}")
         before = _landed_record(governance_root, action_type, target_card)
         exec_result = execute(derivation, governance_root, connection_json)
@@ -1027,6 +1114,7 @@ def _drive(
             msg = f"{what} @ {action_type} ({target_card}) exit {step.exit_code}: {step.message}\n{step.output}".rstrip()
             say(f"[{index}] exit 2 — {msg}")
             result.outcome, result.exit_code, result.message = "gate_rejected", exit_code_for(contract, "gate_rejected"), msg
+            result.reason = "landing_rejected" if action_type == landing_action else "gate_rejected"
             return result
         say(f"[{index}] ok: {step.message}")
         if action_type == "finalize":
@@ -1045,11 +1133,13 @@ def _drive(
                 say(f"[{index}] exit 4 — {msg}")
                 result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), msg
                 result.missing_records = [reason]
+                result.reason = "landing_unverified"
                 return result
 
     msg = f"--max-steps {max_steps} 用尽, 未走到 completed"
     say(f"exit 3 — {msg}")
     result.outcome, result.exit_code, result.message = "wait_timeout", exit_code_for(contract, "wait_timeout"), msg
+    result.reason = "max_steps_exhausted"
     return result
 
 
@@ -1057,6 +1147,10 @@ def run_loop_cli(args: Any) -> int:
     """CLI 入口(`lybra loop`)。参数缺省读 verbs.schema; 输出人读或 --json; 返回声明的退出码。"""
     from tools.aipos_cli.aipos_cli import _find_repo_root_for_args
 
+    if not getattr(args, "task_id", None):
+        # AIPOS-F131: --task-id 由 argparse 必填改为此处校验(父解析器挂了 status 子命令); 文案与退出码同 argparse 必填缺失
+        print("lybra loop: error: the following arguments are required: --task-id(看进度: lybra loop status)", file=sys.stderr)
+        return 2
     try:
         governance_root = Path(getattr(args, "workspace_root", None) or _find_repo_root_for_args(args))
     except FileNotFoundError as exc:
