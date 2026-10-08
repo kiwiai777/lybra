@@ -69,6 +69,8 @@ PLACEHOLDER_VALUES = {
     # AIPOS-F110: 跨机工位接入步骤占位
     "<门机别名>": "gate-host",
     "<材料访问说明>": "经 ssh gate-host 读写",
+    # AIPOS-F136 件③: codex 顾问接入(他机会话)占位
+    "<会话所在机>": "mac-probe",
 }
 PLACEHOLDER_RE = re.compile(r"<[^<>\s'\"]+>")
 #: 已退役的子命令(示例不得再教)
