@@ -303,3 +303,17 @@ def test_declared_loop_runs_root_used_and_unwritable_root_fails_closed(rig, tmp_
     _show(f"[落点不可写] {out.getvalue()}")
     assert res.exit_code == 4 and res.outcome == "not_derivable" and "运行记录" in res.message
     assert rig.cli == []  # 未执行任何门动作
+
+
+def test_rerun_same_second_gets_own_record_status_shows_latest(rig):
+    """同进程同秒再跑(立即重跑 / 夹具): 各得一份记录, 绝不覆盖; status --task-id 取最近一次并注明共几次。"""
+    f90._card(rig.gov, TASK, "pending")
+    for _ in range(2):
+        res = run_loop(TASK, rig.gov, actor=DRIVER, policy_id="pol_absent_1", out=io.StringIO(), interval=0.05, max_wait=1,
+                       max_steps=2)
+        assert res.exit_code == 5 and res.run_record and Path(res.run_record).is_file()
+    paths = _runs(rig.gov)
+    assert len(paths) == 2 and len({p.name for p in paths}) == 2, paths
+    report = lrr.loop_status(rig.gov, TASK)
+    assert report["runs_on_record"] == 2 and report["runs"][0]["record_path"] == res.run_record
+    assert "共 2 次运行记录" in lrr.render_status(report, _decl()["states"])

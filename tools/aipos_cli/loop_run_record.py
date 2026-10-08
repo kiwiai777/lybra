@@ -122,7 +122,7 @@ class LoopRunRecorder:
     中途写失败: 不中断 loop(推进是主业), 但每种失败原因出声一次(warn 回调 = loop 输出)并计入 write_errors。"""
 
     def __init__(self, governance_root: Path, task_id: str, *, driver: str, contract: dict[str, Any],
-                 warn: Callable[[str], None], argv_summary: str = "") -> None:
+                 warn: Callable[[str], None]) -> None:
         from tools.aipos_cli.record_writer import render_frontmatter_block
 
         self.decl = run_record_declaration(contract)
@@ -130,14 +130,27 @@ class LoopRunRecorder:
         self.flush_every = float(self.decl["activity_flush_seconds"])
         self.started = utc_now()
         pid = os.getpid()
-        self.run_id = f"looprun_{task_id}_{file_slug('compact', self.started)}_{pid}"
         try:
             self.dir = loop_runs_dir(governance_root, task_id)
             self.dir.mkdir(parents=True, exist_ok=True)
         except (OSError, ValueError) as exc:
             raise LoopRunRecordError(f"运行记录目录建不起来: {exc}") from exc
-        self.path = self.dir / f"{self.run_id}.md"
-        self.log_path = self.dir / f"{self.run_id}.log"
+        self._log = None
+        base = f"looprun_{task_id}_{file_slug('compact', self.started)}_{pid}"
+        for n in range(1, 100):  # 同进程同秒再跑(夹具 / 立即重跑): 追加序号, 日志独占创建判撞, 绝不覆盖既有运行
+            self.run_id = base if n == 1 else f"{base}_{n}"
+            self.path, self.log_path = self.dir / f"{self.run_id}.md", self.dir / f"{self.run_id}.log"
+            if self.path.exists():
+                continue
+            try:
+                self._log = self.log_path.open("x", encoding="utf-8")
+                break
+            except FileExistsError:
+                continue
+            except OSError as exc:
+                raise LoopRunRecordError(f"运行日志建不起来 {self.log_path}: {type(exc).__name__}: {exc}") from exc
+        if self._log is None:
+            raise LoopRunRecordError(f"运行记录名 {base}_* 已用尽(同秒 99 次), 拒跑")
         self.meta: dict[str, Any] = {
             "record_type": str(self.decl["record_type"]),
             "run_id": self.run_id,
@@ -167,12 +180,10 @@ class LoopRunRecorder:
         self._warned: set[str] = set()
         self._active: dict[str, Any] | None = None
         self._harness: Any = None
-        self._log = None
         try:
             header = render_frontmatter_block({"record_type": str(self.decl["log_record_type"]), "run_id": self.run_id,
                                                "task_id": task_id, "run_record": self.path.name},
                                               ["record_type", "run_id", "task_id", "run_record"])
-            self._log = self.log_path.open("x", encoding="utf-8")
             self._log.write(header + "\n")
             self._log.flush()
             self._write()
