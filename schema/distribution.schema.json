@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0.0",
   "description": "Lybra distribution specification - declarative rules for distributing tools/credentials/config/charters to harness workstations. Per DESIGN v2 §4: distribution WHAT = data (this schema), distribution HOW = fixed primitives (distribute_tools.py engine). New distribution entry = add data row, zero code change. Replaces hardcoded ROLE_TOOL_MAPPING.",
-  "last_updated": "2026-10-03",
+  "last_updated": "2026-10-08",
   "primitives": {
     "description": "Fixed distribution primitives (implemented in distribute_tools.py engine). These are the ONLY operations; plugins/custom code forbidden per §4 design decision (supply-chain + auditability).",
     "operations": [
@@ -406,19 +406,42 @@
     ]
   },
   "harness_semantics": {
-    "description": "AIPOS-F92 件②: 工位 harness 维度 —— 分发条目 target.harness 声明该件给哪种 harness(pi / claude-code); 工位的 harness 由 enroll 写入 .lybra/role 的 harness 字段({kind, dir}), 缺省 = pi(既有工位零迁移)。",
+    "description": "AIPOS-F92 件②: 工位 harness 维度 —— 分发条目 target.harness 声明该件给哪种 harness(pi / claude-code); 工位的 harness 由 enroll 写入 .lybra/role 的 harness 字段({kind, dir[, host]}), 缺省 = pi(既有工位零迁移)。 AIPOS-F129 件①: 增 codex(顾问 Codex 会话, 可与治理根不同机); 合法 kind 改由 kinds 的键推导(codex 无分发件, distributions 并集推不出它)。",
     "default": "pi",
     "kinds": {
       "pi": {
         "description": "Pi 编码代理工位(既有语义不变): .lybra 所在目录即 harness 根; charter 落 harness 根, 其余落 harness 父根(_distributed/ 等), .pi 接线由 enroll 落、悬空挂载由 sync 回收",
-        "target_base": "by_kind"
+        "label": "Pi",
+        "target_base": "by_kind",
+        "harness_dir": "forbidden",
+        "harness_host": "forbidden",
+        "advisor_session": false
       },
       "claude-code": {
         "description": "Claude Code 会话(顾问): 凭据与身份落治理根 .lybra/(loop 等产品命令按治理根取驱动方凭据), 分发件落 .lybra/role harness.dir(会话工作目录; Claude Code 只从会话目录及其上至仓根的 .claude/skills 加载项目级技能); 不落 .pi 接线, 不做 pi 落点 prune; 本地清单写 <工位>/.lybra/.version-<role>",
-        "target_base": "harness_dir"
+        "label": "Claude Code",
+        "target_base": "harness_dir",
+        "harness_dir": "required",
+        "harness_host": "forbidden",
+        "advisor_session": true
+      },
+      "codex": {
+        "description": "AIPOS-F129 件①: Codex 会话(顾问; 可与治理根不同机, 如 Mac 上的 Codex 经 ssh 在治理根所在机跑产品命令): 凭据与身份落治理根 .lybra/(同 claude-code, loop 按治理根取驱动方凭据); 不落 .pi 接线, 不做 pi 落点 prune, 不落章程; 本 schema 暂无 target.harness=codex 的分发件(扩展位: 将来新增条目即经同一分发引擎落 harness.dir, 会话在他机时 sync 拒并点名, 不猜本机落点); .lybra/role 记 harness {kind: codex, dir: <可空>, host: <可空>} —— 会话目录在他机时如实记 host 与路径, 不校验本机存在",
+        "label": "Codex",
+        "target_base": "harness_dir",
+        "harness_dir": "optional",
+        "harness_host": "optional",
+        "advisor_session": true
       }
     },
-    "rule": "sync 只取 target.harness == 工位 harness kind 的条目(缺 target.harness = pi); enroll 的 .pi 接线、共享落点并集、.pi 挂载推导只认 pi 条目。harness kind 合法值 = 本 schema distributions[].target.harness 的并集(enroll --harness 取值由此推导, 禁代码写死第二份)。",
-    "single_implementation": "tools/aipos_cli/distribution_sync.workstation_harness / harness_distributions(判定与过滤) + enroll_client.enroll(落 harness 字段并交付) + workstation_wiring.declared_role_skills/declared_role_extensions(只认 pi)"
+    "rule": "sync 只取 target.harness == 工位 harness kind 的条目(缺 target.harness = pi); enroll 的 .pi 接线、共享落点并集、.pi 挂载推导只认 pi 条目。harness kind 合法值 = 本 schema harness_semantics.kinds 的键(enroll --harness 与 onboarding guide --advisor-harness 取值由此推导, 禁代码写死第二份); distributions[].target.harness 须 ∈ kinds(不在 = 声明错误, fail-closed)。AIPOS-F129 说理: 原「合法值 = distributions[].target.harness 并集」推不出无分发件的 kind(codex 顾问本卡不新增技能分发); kinds 本就是每个 kind 语义的唯一声明, 改由其键推导仍是单源, 并集 ⊆ kinds 作一致性校验。",
+    "single_implementation": "tools/aipos_cli/distribution_sync.declared_harness_kinds / harness_kind_declaration / advisor_harness_kinds / harness_role_record / workstation_harness / harness_distributions(判定、登记与过滤) + enroll_client.enroll(落 harness 字段并交付) + onboarding.generate_onboarding_guide(顾问 harness) + workstation_wiring.declared_role_skills/declared_role_extensions(只认 pi)",
+    "kind_fields": {
+      "description": "AIPOS-F129 件①: 每个 kind 的登记取舍(唯一读取 distribution_sync.harness_kind_declaration; 缺键或取值不在下列 = 声明错误, fail-closed)",
+      "harness_dir": "enroll --harness-dir / role harness.dir: forbidden = 不许给(落点即工位根); required = 必给已存在的本机绝对目录; optional = 可空, 给则须绝对路径, 无 host(本机会话)时须已存在, 有 host(他机会话)时如实记、不校验本机存在",
+      "harness_host": "enroll --harness-host / role harness.host: forbidden = 不许给; optional = 可空(会话所在机; 他机会话如实记, 不含空白)",
+      "advisor_session": "true = 可作顾问会话 harness(lybra onboarding guide --advisor-harness 的取值由此推导)",
+      "label": "人读名(向导等文案用; 缺 = kind 本身)"
+    }
   }
 }

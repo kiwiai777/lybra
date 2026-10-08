@@ -215,7 +215,8 @@ def test_item2_advisor_skills_declared_for_claude_code_only():
     cc = harness_distributions(dists, "claude-code")
     assert [d["distribution_id"] for d in cc] == ["advisor-skills"] and cc[0]["target_path"] == ".claude/skills"
     assert declared_role_skills(dists) == {}  # 顾问技能不再走 pi 挂载
-    assert set(declared_harness_kinds()) == {"pi", "claude-code"}
+    assert set(declared_harness_kinds()) == {"pi", "claude-code", "codex"}  # AIPOS-F129: 合法值 = harness_semantics.kinds 的键(codex 无分发件)
+    assert not harness_distributions(dists, "codex")
     assert "go.ts" not in json.dumps(cc)
 
 

@@ -7,6 +7,8 @@
   ③ Owner 一次性动作 ①: 用中央凭据库的 Owner 凭据为新项目签发顾问注册码(项目范围 = 新项目)
   ④ Owner 一次性动作 ②: 一条 `lybra envelope mint --confirm` 签三张信封(驱动方 / 执行实例 / 审计实例)
   ⑤ 顾问凭码 enroll 到治理根(得 advisor 凭据), 产品经 distribution 声明把顾问技能交付到 Claude Code 会话目录 .claude/skills
+     (AIPOS-F129: --advisor-harness codex = 顾问是 Codex 会话(可在他机, --advisor-host): enroll 写 --harness codex, 声明无 codex 件
+     = 不生成技能分发步骤; 取值读 distribution.schema harness_semantics.kinds.<kind>.advisor_session)
   ⑥ 顾问为执行 / 审计工位发注册码(顾问凭据)
   ⑦ 工位 enroll + sync 分发 + 稳态复核
   ⑧ 工位自检 → 起 pi → /go(工位零门: 认领由驱动方经产品完成)
@@ -51,7 +53,8 @@ PATHS_KEY_PLACEHOLDER = "<PATHS_KEY>"
 PATHS_VALUE_PLACEHOLDER = "<PATHS_VALUE>"
 META_TEXT_PLACEHOLDER = "<META_TEXT>"  # AIPOS-F127 件④: set-meta 的说明文本(phase / note)
 FREEZE_REASON_PLACEHOLDER = "<FREEZE_REASON>"
-#: Claude Code harness kind(distribution.schema harness_semantics.kinds 的键; 顾问会话)
+#: 顾问会话 harness 缺省(distribution.schema harness_semantics.kinds 的键; 缺省 = 既有行为 Claude Code)。
+#: AIPOS-F129 件③: 可选值 = distribution_sync.advisor_harness_kinds()(kinds.<kind>.advisor_session = true), 本常量只定缺省
 ADVISOR_HARNESS = "claude-code"
 
 
@@ -200,11 +203,51 @@ def _gate_url(explicit: str | None, owner_connection: str) -> tuple[str, str]:
     return resolve_gate_base_url(), ("环境变量 LYBRA_GATE_URL" if provenance["via_env"] else "config.schema 缺省")
 
 
-def _instances(project: str, host: str) -> dict[str, str]:
+def _instances(project: str, host: str, advisor_host: str | None = None) -> dict[str, str]:
+    """实例名 = roles.schema naming.template({prefix}.{project}.{host}); AIPOS-F129: 顾问 host 段可与工位不同(他机顾问会话)。"""
     from tools.aipos_cli.naming_profile import _registry_prefix_mapping, default_instance_name
 
     prefixes = _registry_prefix_mapping()
-    return {role: default_instance_name(prefixes[role], project=project, host=host) for role in ("advisor", "executor", "auditor")}
+    hosts = {"advisor": advisor_host or host, "executor": host, "auditor": host}
+    return {role: default_instance_name(prefixes[role], project=project, host=hosts[role]) for role in ("advisor", "executor", "auditor")}
+
+
+def resolve_advisor_harness(advisor_harness: str | None, advisor_host: str | None, host_segment: str | None) -> dict[str, Any]:
+    """AIPOS-F129 件③: 顾问会话 harness(取值读声明 distribution_sync.advisor_harness_kinds; 缺省 ADVISOR_HARNESS = 既有行为)。
+
+    返回 {kind, host, instance_host, deliveries}: host = --advisor-host(会话所在机, 原样; 声明 harness_host=forbidden 的 kind 给了 = 拒);
+    instance_host = 顾问实例名 host 段 = --advisor-host 短名 > --host-segment > (harness_host=forbidden: 本机短名)
+    > (harness_host=optional, 会话可在他机: 拒, 不默认成治理根所在机); deliveries = 声明给 advisor 角色、该 harness 的分发条目
+    (workstation_wiring.declared_role_distributions + distribution_sync.harness_distributions, 与 enroll / sync 同一构建器)。"""
+    from tools.aipos_cli.distribution_sync import advisor_harness_kinds, harness_distributions, harness_kind_declaration
+    from tools.aipos_cli.workstation_wiring import declared_role_distributions
+
+    kind = str(advisor_harness or ADVISOR_HARNESS).strip()
+    allowed = advisor_harness_kinds()
+    if kind not in allowed:
+        raise ValueError(f"--advisor-harness {kind!r} 不是声明的顾问会话 harness; 合法值 {list(allowed)}"
+                         "(distribution.schema harness_semantics.kinds.<kind>.advisor_session)")
+    decl = harness_kind_declaration(kind)
+    host = str(advisor_host or "").strip() or None
+    if host and decl["harness_host"] == "forbidden":
+        raise ValueError(f"--advisor-host 不适用于 --advisor-harness {kind}(声明 harness_host=forbidden: 该会话与治理根同机, "
+                         "技能交付到本机会话目录); 他机顾问会话用 --advisor-harness 中 harness_host=optional 的值")
+    if host and any(ch.isspace() for ch in host):
+        raise ValueError(f"--advisor-host {host!r} 含空白(主机名不得含空白)")
+    if host:
+        instance_host = host.split(".")[0]
+    elif str(host_segment or "").strip():
+        instance_host = str(host_segment).strip()
+    elif decl["harness_host"] == "optional":
+        raise ValueError(f"--advisor-harness {kind} 的会话可在他机: 须给 --advisor-host <会话所在机>(或 --host-segment), "
+                         "顾问实例名 host 段不默认成治理根所在机")
+    else:
+        instance_host = socket.gethostname().split(".")[0].strip()
+    from tools.aipos_cli.custom_roles import resolve_role_to_class
+
+    role = "advisor"  # 向导第 5 步兑换的角色(第 3 步 enroll-code --role advisor); 类经唯一 role→class 实现解析
+    deliveries = harness_distributions(declared_role_distributions(role, resolve_role_to_class(role, required=True)), kind)
+    return {"kind": kind, "host": host, "instance_host": instance_host, "deliveries": deliveries, "declaration": decl}
 
 
 # ---------------------------------------------------------------------------
@@ -228,13 +271,16 @@ def generate_onboarding_guide(
     owner_connection_json: str | None = None,
     envelope_days: int = 30,
     max_tasks: int = 50,
+    advisor_harness: str | None = None,
+    advisor_host: str | None = None,
 ) -> dict[str, Any]:
     """生成从 0 接新项目全流程的分步指南(结构化: steps[] + metadata)。
 
     每步: step_number, title, actor(owner|advisor|workstation), owner_action(Owner 一次性动作序号或 None), command/commands,
     purpose, check, on_fail, creates。参数:
       - workspace_dir: 执行工位目录(兼容旧参数名; 缺省 ~/<项目>-executor); auditor_dir: 审计工位(缺省 ~/<项目>-auditor)
-      - advisor_dir: 顾问 Claude Code 会话目录(顾问技能交付落点基准; 缺省 ~/<项目>)
+      - advisor_dir: 顾问 Claude Code 会话目录(顾问技能交付落点基准; 缺省 ~/<项目>); codex 顾问 = 会话目录(可空, 如实记)
+      - advisor_harness / advisor_host: AIPOS-F129 件③ 顾问会话 harness(取值读声明, 缺省 claude-code)与会话所在机(见 resolve_advisor_harness)
       - repos: ["<仓名>=<绝对路径>", ...](缺省: code_repo 给了 = 单仓 <项目>=<code_repo>; 都缺 = 占位)
       - owner_workspace / owner_connection_json: Owner 凭据所在(门的中央凭据库; 缺省 home 根/活动项目)
     """
@@ -252,14 +298,16 @@ def generate_onboarding_guide(
     except ValueError:
         pol_rel = str(pol_dir)
     host = (host_segment or socket.gethostname().split(".")[0]).strip()
-    inst = _instances(project_name, host)
+    adv_h = resolve_advisor_harness(advisor_harness, advisor_host, host_segment)
+    inst = _instances(project_name, host, adv_h["instance_host"])
     owner_ws = _owner_workspace(home, owner_workspace)
     from tools.aipos_cli.service_mode import connection_path as _connection_path
 
     owner_conn = str(Path(owner_connection_json).expanduser()) if owner_connection_json else (
         str(_connection_path(Path(owner_ws))) if not owner_ws.startswith("<") else str(_connection_path(Path("<OWNER_WORKSPACE>"))))
     gate, gate_source = _gate_url(gate_url, owner_conn)
-    advisor_ws = advisor_dir or f"~/{project_name}"
+    # AIPOS-F129: 会话目录必给(harness_dir=required, Claude Code)才落缺省 ~/<项目>; 可空(codex)= 只用显式值, 不猜他机路径
+    advisor_ws = advisor_dir or (f"~/{project_name}" if adv_h["declaration"]["harness_dir"] == "required" else None)
     exec_ws = workspace_dir or f"~/{project_name}-executor"
     audit_ws = auditor_dir or f"~/{project_name}-auditor"
     _actor = actor or inst["advisor"]
@@ -405,31 +453,72 @@ def generate_onboarding_guide(
     })
 
     # ── Step 5: 顾问 enroll(治理根)+ 技能交付 ────────────────────────
+    # AIPOS-F129 件③: 顾问 harness 读声明(resolve_advisor_harness); 技能分发步骤只在声明给该 harness 的顾问件非空时生成
+    adv_kind = adv_h["kind"]
     sync_adv = _cmd("lybra", "sync", "--harness-root", gq, "--workspace-root", gq)
-    step5 = [
-        "# 顾问凭 Step 3 的码 enroll: 凭据落治理根 .lybra/(loop 按治理根取驱动方凭据), 顾问技能交付到会话目录 .claude/skills/",
-        render_enroll_command(ADVISOR_CODE, gq, "--harness", ADVISOR_HARNESS, "--harness-dir", _shell_path(advisor_ws)),
-        "# 稳态复核: plan 为空 = 技能已齐",
-        f"{sync_adv} --dry-run",
-    ]
+    enroll_extra = ["--harness", adv_kind]
+    if advisor_ws:
+        enroll_extra += ["--harness-dir", _shell_path(advisor_ws)]
+    if adv_h["host"]:
+        enroll_extra += ["--harness-host", _shell_quote(adv_h["host"])]
+    session_at = f"{adv_h['host']}:{advisor_ws or '<会话目录>'}" if adv_h["host"] else (advisor_ws or "<会话目录>")
+    label = str(adv_h["declaration"].get("label") or adv_kind)
+    if adv_h["deliveries"]:
+        landing = str(adv_h["deliveries"][0].get("target_path") or "")
+        step5 = [
+            f"# 顾问凭 Step 3 的码 enroll: 凭据落治理根 .lybra/(loop 按治理根取驱动方凭据), 顾问技能交付到会话目录 {landing}/",
+            render_enroll_command(ADVISOR_CODE, gq, *enroll_extra),
+            "# 稳态复核: plan 为空 = 技能已齐",
+            f"{sync_adv} --dry-run",
+        ]
+        title5 = f"顾问 enroll 到治理根 + 顾问技能交付到 {label} 会话目录"
+        purpose5 = (
+            f"新顾问(在会话目录 {advisor_ws} 起的 {label})凭码兑换 advisor 凭据, 落 {gov_s}/.lybra/(connection.json + role); "
+            f"产品按 distribution 声明({', '.join(d['distribution_id'] for d in adv_h['deliveries'])}, harness={adv_kind})"
+            f"把顾问技能经同一分发引擎交付到 {advisor_ws}/{landing}/<技能名>/"
+        )
+        check5 = (f"enroll 输出 '✓ Enrollment successful' 与 '✓ {adv_kind} 件已交付: N 个文件'; "
+                  "sync --dry-run 输出 'up-to-date: 0 file(s) to fetch/render'")
+        on_fail5 = {
+            "code 过期/已用": "请 Owner 重跑 Step 3",
+            "--harness-dir 须为已存在的绝对目录": f"先建会话目录(或改 --harness-dir 为实际 {label} 会话目录)",
+            "件交付失败": "凭据已落, 重跑 lybra sync --harness-root <治理根>(勿重跑 enroll)",
+        }
+        creates5 = f"{gov_s}/.lybra/connection.json, {gov_s}/.lybra/role, {advisor_ws}/{landing}/"
+        note5 = f"顾问会话目录与治理根可不同: 本 guide 每条命令都显式带治理根, 不依赖 cwd; 技能交付后在会话目录重启 {label} 会话即加载"
+    else:
+        step5 = [
+            f"# 顾问凭 Step 3 的码 enroll(在治理根所在机执行; {label} 会话在他机时经 ssh 到本机跑): 凭据与身份落治理根 .lybra/,"
+            f" role 如实记 harness={adv_kind} 与会话所在(--harness-host / --harness-dir); 声明里无给 {adv_kind} 的顾问件 = 无分发步骤",
+            render_enroll_command(ADVISOR_CODE, gq, *enroll_extra),
+        ]
+        title5 = f"顾问 enroll 到治理根({label} 会话, 如实登记会话所在)"
+        purpose5 = (
+            f"新顾问({label} 会话, 位于 {session_at})凭码兑换 advisor 凭据, 落 {gov_s}/.lybra/(connection.json + role); "
+            f"role 的 harness 记 {{kind: {adv_kind}, dir: {advisor_ws or '空'}, host: {adv_h['host'] or '空'}}}(他机目录如实记、不校验本机存在); "
+            f"不落 .pi 接线, distribution 声明无给 {adv_kind} 的顾问件, 不分发技能"
+        )
+        check5 = ("enroll 输出 '✓ Enrollment successful' 与 'harness: {...}(已记入 .lybra/role)'; "
+                  "治理根下无 .pi/, 会话目录不新增技能目录")
+        on_fail5 = {
+            "code 过期/已用": "请 Owner 重跑 Step 3",
+            "不在 distribution.schema harness_semantics.kinds 声明内": "--harness 取值按输出列出的合法值改正后重跑(码未兑换, 可重用)",
+            "须为已存在的绝对目录": "会话在他机时加 --harness-host <会话所在机>(他机目录如实记, 不校验本机存在); 同机则先建目录",
+        }
+        creates5 = f"{gov_s}/.lybra/connection.json, {gov_s}/.lybra/role(harness={adv_kind})"
+        note5 = (f"顾问会话({label})与治理根可不同机: 产品命令在治理根所在机运行(他机会话经 ssh), 本 guide 每条命令都显式带治理根, "
+                 "不依赖 cwd")
     steps.append({
         "step_number": 5,
         "actor": "advisor",
         "owner_action": None,
-        "title": "顾问 enroll 到治理根 + 顾问技能交付到 Claude Code 会话目录",
+        "title": title5,
         "command": "\n".join(step5),
-        "purpose": (
-            f"新顾问(在会话目录 {advisor_ws} 起的 Claude Code)凭码兑换 advisor 凭据, 落 {gov_s}/.lybra/(connection.json + role); "
-            f"产品按 distribution 声明(advisor-skills, harness={ADVISOR_HARNESS})把顾问技能经同一分发引擎交付到 {advisor_ws}/.claude/skills/<技能名>/"
-        ),
-        "check": "enroll 输出 '✓ Enrollment successful' 与 '✓ claude-code 件已交付: N 个文件'; sync --dry-run 输出 'up-to-date: 0 file(s) to fetch/render'",
-        "on_fail": {
-            "code 过期/已用": "请 Owner 重跑 Step 3",
-            "--harness-dir 须为已存在的绝对目录": "先建会话目录(或改 --harness-dir 为实际 Claude Code 会话目录)",
-            "件交付失败": "凭据已落, 重跑 lybra sync --harness-root <治理根>(勿重跑 enroll)",
-        },
-        "creates": f"{gov_s}/.lybra/connection.json, {gov_s}/.lybra/role, {advisor_ws}/.claude/skills/",
-        "note": "顾问会话目录与治理根可不同: 本 guide 每条命令都显式带治理根, 不依赖 cwd; 技能交付后在会话目录重启 Claude Code 会话即加载",
+        "purpose": purpose5,
+        "check": check5,
+        "on_fail": on_fail5,
+        "creates": creates5,
+        "note": note5,
     })
 
     # ── Step 6: 顾问发工位注册码 ─────────────────────────────────────
@@ -560,6 +649,7 @@ def generate_onboarding_guide(
         "instances": inst,
         "policies": policies,
         "advisor_dir": advisor_ws,
+        "advisor_harness": {"kind": adv_h["kind"], "host": adv_h["host"], "dir": advisor_ws},
         "workstations": {"executor": exec_ws, "auditor": audit_ws},
         "generated_at": now.isoformat(),
         "total_steps": len(steps),

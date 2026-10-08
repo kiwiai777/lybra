@@ -1781,8 +1781,9 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_parser.add_argument("--policy", help="Optional policy reference")
     roles_enroll_parser.add_argument("--bootstrap-token", help="Legacy plain codes only: bootstrap token for HTTP transport auth (self-contained codes need none)")
     roles_enroll_parser.add_argument("--verify", action="store_true", help="AIPOS-R6S 大项C②: enroll 后立刻用新 token 调一次 gate, 不通即报错并回滚")
-    roles_enroll_parser.add_argument("--harness", help="AIPOS-F92: workstation harness kind (declared in distribution.schema harness_semantics; default pi). claude-code = advisor Claude Code session: credentials land in --workspace, declared skills land in --harness-dir/.claude/skills")
-    roles_enroll_parser.add_argument("--harness-dir", help="AIPOS-F92: absolute working directory of a non-pi harness (e.g. the Claude Code session directory); delivery base for its declared distributions")
+    roles_enroll_parser.add_argument("--harness", help="AIPOS-F92/F129: workstation harness kind (legal values = distribution.schema harness_semantics.kinds; default pi; unknown = refused with the declared list). claude-code = advisor Claude Code session: credentials land in --workspace, declared skills land in --harness-dir/.claude/skills; codex = advisor Codex session (may run on another machine): credentials land in --workspace, no .pi wiring, no skills delivered")
+    roles_enroll_parser.add_argument("--harness-dir", help="AIPOS-F92/F129: absolute working directory of a non-pi harness (claude-code: required, must exist here; codex: optional, recorded as given — not checked locally when --harness-host is set)")
+    roles_enroll_parser.add_argument("--harness-host", help="AIPOS-F129: host the harness session runs on when it is not this machine (only kinds declaring harness_host=optional, e.g. codex); recorded in .lybra/role harness.host")
     roles_enroll_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     profile_parser = subparsers.add_parser("agent-profile", help="Workspace-local custom agent profile authoring")
@@ -2052,6 +2053,10 @@ def build_parser() -> argparse.ArgumentParser:
     onboarding_guide_parser.add_argument("--repo", action="append", dest="repos", metavar="NAME=ABS_PATH", help="Product repo (repeatable) for Step 2 project set-repos")
     onboarding_guide_parser.add_argument("--default-repo", help="Default repo name when more than one --repo")
     onboarding_guide_parser.add_argument("--host-segment", help="Host segment of instance names (defaults to short hostname)")
+    from tools.aipos_cli.distribution_sync import advisor_harness_kinds as _advisor_harness_kinds
+    onboarding_guide_parser.add_argument("--advisor-harness", choices=list(_advisor_harness_kinds()), default=None,
+                                         help="AIPOS-F129: advisor session harness (choices = distribution.schema harness_semantics.kinds with advisor_session=true; default claude-code = existing guide). codex = Codex session: Step 5 enrolls with --harness codex, no .claude/skills delivery")
+    onboarding_guide_parser.add_argument("--advisor-host", help="AIPOS-F129: host the advisor session runs on when it is not the governance-root machine (codex; recorded as --harness-host; its short name is the advisor instance host segment)")
     onboarding_guide_parser.add_argument("--owner-workspace", help="Gate workspace holding the Owner credential (central registry); defaults to <home>/<active project>")
     onboarding_guide_parser.add_argument("--owner-connection-json", help="Owner credential connection.json (defaults to <owner-workspace>/.lybra/connection.json)")
     onboarding_guide_parser.add_argument("--envelope-days", type=int, default=30, help="Envelope validity in days (default 30)")
@@ -3106,7 +3111,8 @@ def main(argv: list[str] | None = None) -> int:
                         bootstrap_token=getattr(args, "bootstrap_token", None),
                         verify=bool(getattr(args, "verify", False)),
                         harness_kind=getattr(args, "harness", None),
-                        harness_dir=Path(args.harness_dir).expanduser() if getattr(args, "harness_dir", None) else None,
+                        harness_dir=getattr(args, "harness_dir", None) or None,
+                        harness_host=getattr(args, "harness_host", None),
                     )
                     if getattr(args, "json", False):
                         print(render_json(result))
@@ -3154,10 +3160,14 @@ def main(argv: list[str] | None = None) -> int:
                             else:
                                 print(f"\n  ⚠ 可启动最小集缺项: {', '.join(mbs.get('missing') or [])}")
                         hd_ = result.get('harness_delivery')
-                        if hd_:
+                        if hd_ and hd_.get('note'):  # AIPOS-F129: 非本机可落 harness(codex 无 dir / 他机会话)零交付, 原因由 sync 点名
+                            print(f"\n  · {hd_['note']}")
+                        elif hd_:
                             print(f"\n  ✓ {(result.get('harness') or {}).get('kind')} 件已交付: {hd_.get('files_fetched')} 个文件 → {(result.get('harness') or {}).get('dir')}(清单 {hd_.get('manifest_path')})")
                             for ch in hd_.get('changes') or []:
                                 print(f"    - {ch.get('distribution_id')}: {ch.get('files_written')} 个文件 → {ch.get('target_path')}")
+                        if result.get('harness'):
+                            print(f"  harness: {json.dumps(result['harness'], ensure_ascii=False)}(已记入 .lybra/role)")
                         pd_ = result.get('policy_derivation')
                         if pd_ and pd_.get('policy_id'):
                             print(f"\n  ✓ owner_policy_ref 已推导: {pd_['policy_id']}")
@@ -4158,23 +4168,29 @@ def main(argv: list[str] | None = None) -> int:
             validate_step_prerequisites,
         )
         if args.onboarding_command == "guide":
-            guide = generate_onboarding_guide(
-                args.project_name,
-                home_root=args.home_root,
-                gate_url=args.gate_url,
-                code_repo=args.code_repo,
-                actor=args.actor,
-                workspace_dir=args.workspace_dir,
-                repos=args.repos,
-                default_repo=args.default_repo,
-                advisor_dir=args.advisor_dir,
-                auditor_dir=args.auditor_dir,
-                host_segment=args.host_segment,
-                owner_workspace=args.owner_workspace,
-                owner_connection_json=args.owner_connection_json,
-                envelope_days=args.envelope_days,
-                max_tasks=args.max_tasks,
-            )
+            try:
+                guide = generate_onboarding_guide(
+                    args.project_name,
+                    home_root=args.home_root,
+                    gate_url=args.gate_url,
+                    code_repo=args.code_repo,
+                    actor=args.actor,
+                    workspace_dir=args.workspace_dir,
+                    repos=args.repos,
+                    default_repo=args.default_repo,
+                    advisor_dir=args.advisor_dir,
+                    auditor_dir=args.auditor_dir,
+                    host_segment=args.host_segment,
+                    advisor_harness=args.advisor_harness,
+                    advisor_host=args.advisor_host,
+                    owner_workspace=args.owner_workspace,
+                    owner_connection_json=args.owner_connection_json,
+                    envelope_days=args.envelope_days,
+                    max_tasks=args.max_tasks,
+                )
+            except ValueError as exc:  # AIPOS-F129: 顾问 harness 取值/会话所在机违反声明 = 拒(原文给出口)
+                print(f"Error: {exc}", file=sys.stderr)
+                return 2
             if args.json:
                 print(render_json(guide))
             else:
