@@ -715,6 +715,11 @@
       "required": false,
       "description": "Task selector mode filter"
     },
+    "task_selector_lane_repo": {
+      "type": "string",
+      "required": false,
+      "description": "AIPOS-F134 件③: envelope lane selector — the card's lane.repo (resolved via workspace_config.resolve_card_repo) must denote this repo (name in project.json repos.items, or path); absent = any lane"
+    },
     "template_id": {
       "type": "string",
       "required": false,

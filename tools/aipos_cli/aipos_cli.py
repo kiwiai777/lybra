@@ -1083,11 +1083,15 @@ def _envelope_mint_payload(
     decision_summary: str,
     actor: str,
     launch_harnesses: list[str] | None = None,
+    lane_repo: str | None = None,
 ) -> dict[str, Any]:
     """信封 payload 唯一构造(--dry-run 本地预演与 --confirm 门路径同读): 门 envelope 路径只要 decision_id + autonomy_policy。"""
     task_selector: dict[str, Any] = {}
     if task_mode:
         task_selector["task_mode"] = task_mode
+    if str(lane_repo or "").strip():
+        # AIPOS-F134 件③: lane 选择器(门 owner_decision_writer._normalize_autonomy_policy 按 resolve_card_repo 校验); 缺省 = 不限 lane
+        task_selector["lane_repo"] = str(lane_repo).strip()
     return {
         "decision_id": f"envelope-{policy_id}",
         "actor": actor,
@@ -2006,6 +2010,9 @@ def build_parser() -> argparse.ArgumentParser:
     envelope_mint_parser.add_argument("--agent-or-role", action="append", required=True, help="Agent instance or role covered (repeatable; paired in order with --policy-id)")
     envelope_mint_parser.add_argument("--max-tasks", type=int, required=True, help="Maximum tasks allowed")
     envelope_mint_parser.add_argument("--task-mode", help="Task mode selector (e.g., code)")
+    envelope_mint_parser.add_argument("--lane-repo", dest="lane_repo", default=None,
+                                      help="AIPOS-F134: lane selector — only cards whose lane.repo resolves to this repo (name in project.json repos.items; "
+                                           "path when the project has no repos list). Default: any lane")
     envelope_mint_parser.add_argument("--expires-at", required=True, help="Expiration datetime (ISO8601)")
     envelope_mint_parser.add_argument("--decision-summary", required=True, help="Decision summary")
     envelope_mint_parser.add_argument("--actor", default="owner", help="Actor (default: owner)")
@@ -4251,6 +4258,7 @@ def main(argv: list[str] | None = None) -> int:
                     policy_id=pid, agent_or_role=agent, max_tasks=args.max_tasks, task_mode=args.task_mode,
                     expires_at=args.expires_at, decision_summary=args.decision_summary, actor=args.actor,
                     launch_harnesses=list(getattr(args, "launch_harness", None) or []),
+                    lane_repo=getattr(args, "lane_repo", None),
                 )
                 for pid, agent in zip(policy_ids, agents)
             ]

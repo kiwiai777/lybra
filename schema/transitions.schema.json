@@ -1230,6 +1230,16 @@
           "action": "执行者身份验证失败。请检查 token 绑定的 agent_instance 是否与请求中的一致,或使用 Supervised 模式",
           "command": null
         }
+      },
+      "selector_lane_repo_mismatch": {
+        "error_code": "ENVELOPE_SELECTOR_LANE_REPO_MISMATCH",
+        "error_message": "任务卡 lane.repo(经 workspace_config.resolve_card_repo 解析)与信封的 task_selector_lane_repo 不匹配(AIPOS-F134 件③)",
+        "severity": "needs_human",
+        "next_step": {
+          "audience": "advisor",
+          "action": "当前卡所在仓不在该信封覆盖的 lane 内。请用覆盖该 lane 的顾问实例与信封推进(lybra loop --actor <该 lane 的顾问实例>), 或请 Owner 为该 lane 签信封(lybra envelope mint --lane-repo <仓名>)",
+          "command": null
+        }
       }
     }
   }

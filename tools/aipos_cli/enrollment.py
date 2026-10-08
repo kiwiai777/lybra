@@ -655,6 +655,22 @@ def void_instance_events(
             "entries": planned}
 
 
+def governance_seat_instance_refusal(role: str, instance: str | None, project_root: str | Path) -> str | None:
+    """AIPOS-F134 件②: 治理席位类(顾问/规划方, roles.schema class_groups.governance_seat)注册码必须带实例——其凭据落治理根 .lybra/,
+    同一治理根可接入多个顾问实例; 码不带实例 = 兑换出角色级条目, 落盘(enroll_client.upsert_token_entry)按角色匹配会把同角色既有条目置
+    retired(互覆)。角色类唯一解析 custom_roles.resolve_role_to_class(自定义角色经门注册表; 注册表读不出照抛 = fail-closed)。
+    返回拒因(带出口)或 None(放行: 已带实例 / 工位类 / 角色类不可解析由既有 UNKNOWN_ROLE 判)。工位类与 svc 角色级条目语义不变。"""
+    if str(instance or "").strip():
+        return None
+    from tools.aipos_cli.custom_roles import resolve_role_to_class, role_classes_in_group
+
+    role_class = resolve_role_to_class(role, project_root)
+    if role_class not in role_classes_in_group("governance_seat"):
+        return None
+    return (f"角色 {role!r}(类 {role_class})是治理席位类, 注册码必须带实例(--instance <角色前缀>.<项目>.<机器>): 同一治理根可接入多个顾问实例, "
+            "不带实例的凭据按角色匹配会把同角色既有凭据置 retired。出口: 重发码并给 --instance")
+
+
 def create_enrollment_code(
     workspace_root: str | Path,
     *,
@@ -690,6 +706,10 @@ def create_enrollment_code(
         }
     """
     root = _workspace_root_path(workspace_root)
+    # AIPOS-F134 件②: 治理席位类码必须带实例(判定唯一实现 governance_seat_instance_refusal, 门 dry-run 预检同用)
+    refusal = governance_seat_instance_refusal(role, instance, str(governance_root or "").strip() or root)
+    if refusal:
+        raise ValueError(refusal)
     code = _generate_enrollment_code()
     code_id = f"enroll_{secrets.token_hex(8)}"
     now = utc_now().replace(microsecond=0)
