@@ -234,6 +234,80 @@ def role_in_class_group(role_name: str, group: str, project_root: str | Path | N
     return resolve_role_to_class(role_name, project_root, required=True) in role_classes_in_group(group)
 
 
+def resolve_instance_role_class(
+    instance: str,
+    project_root: str | Path | None = None,
+    *,
+    required: bool = False,
+) -> tuple[str, str] | None:
+    """AIPOS-F132: 实例名 → (角色名, 角色类) 的**唯一实现**(门侧授权判定与卡角色类判定共用, 禁第二份前缀表)。
+
+    实例名 → 角色名(AIPOS-F73C/F102 口径, 原 draft_writer._card_role_class 内联, 收口于此):
+      1. 无点的候选本身即角色名(executor/auditor/advisor… 或自定义角色名; 角色名禁含点, validate_custom_role_name);
+      2. 实例名首段(roles.schema naming.template 唯一解析 parse_instance_name; 非三段式存量 audit.test 等取首段)
+         按注册表 naming.prefix 反查角色名(exec→executor / audit→auditor), 首段不是任何前缀则首段即角色名
+         (自定义角色实例 = <角色名>.<项目>.<机器>, 如 hbj-auditor.<项目>.<机器>)。
+    角色名 → 角色类只经 resolve_role_to_class(内建 = 自身; 自定义 = 门注册表 role_class)。
+    解析不到 → None; required=True → UnknownRoleClass(拒因列实例与试过的角色名)。注册表读不出 = RoleRegistryReadError 照抛。
+    """
+    from tools.aipos_cli.naming_profile import _registry_prefix_mapping, parse_instance_name
+
+    clean = str(instance or "").strip()
+    tried: list[str] = []
+    if clean:
+        parsed = parse_instance_name(clean)
+        head = parsed["prefix"] if parsed else clean.split(".")[0]
+        role_by_prefix = {prefix: role for role, prefix in _registry_prefix_mapping().items()}
+        for role_name in (clean if "." not in clean else "", role_by_prefix.get(head, head)):
+            if not role_name or role_name in tried:
+                continue
+            tried.append(role_name)
+            cls = resolve_role_to_class(role_name, project_root)
+            if cls:
+                return role_name, str(cls)
+    if required:
+        raise UnknownRoleClass(
+            f"实例 {clean!r} 的角色类不可解析(试过角色名 {tried}): 既非 roles.schema 内建角色/实例前缀, 也不在门注册表"
+            f"(connection.json tokens[].role_class)自定义角色内"
+            f"{'' if project_root is not None else '(未给项目根, 只认内建角色)'}; "
+            f"出口: 用注册表角色的实例名(<角色>.<项目>.<机器>), 或 lybra roles register <角色> --class <builtin>"
+        )
+    return None
+
+
+def authorize_instance_class(
+    instance: str,
+    required_class: str,
+    project_root: str | Path | None,
+) -> dict[str, Any]:
+    """AIPOS-F132: 门侧授权判定「此实例的角色类 == required_class」的唯一口(裁决提交 / 返工节等记录属主校验共用)。
+
+    - required_class 须是 roles.schema 内建角色类(读注册表, 不认 = 拒, 禁写死前缀集合);
+    - 实例 → 角色 → 类经 resolve_instance_role_class(required=True); 解析不到 / 注册表读不出 / 角色声明读不出 = 拒(fail-closed);
+    返回 {"ok", "instance", "role", "role_class", "required_class", "reason"}; ok=False 时 reason 列实例、角色、解析结果。
+    """
+    from tools.schema_loader import SchemaLoadError
+
+    clean = str(instance or "").strip()
+    out: dict[str, Any] = {"ok": False, "instance": clean, "role": None, "role_class": None,
+                           "required_class": required_class, "reason": None}
+    try:
+        if required_class not in _builtin_role_names():
+            out["reason"] = (f"要求的角色类 {required_class!r} 不是 roles.schema 内建角色类 {sorted(_builtin_role_names())}"
+                             "(声明缺失, fail-closed)")
+            return out
+        role, cls = resolve_instance_role_class(clean, project_root, required=True)  # type: ignore[misc]
+    except (UnknownRoleClass, RoleRegistryReadError, SchemaLoadError, FileNotFoundError, OSError, KeyError) as exc:
+        out["reason"] = f"角色类不可解析(拒): {exc}"
+        return out
+    out["role"], out["role_class"] = role, cls
+    if cls != required_class:
+        out["reason"] = f"实例 {clean!r} → 角色 {role!r} → 角色类 {cls!r}, 要求角色类 {required_class!r}"
+        return out
+    out["ok"] = True
+    return out
+
+
 def is_custom_role(role_name: str, project_root: str | Path | None = None) -> bool:
     """True if role_name is a registered custom role (not a built-in)."""
     clean = str(role_name or "").strip()

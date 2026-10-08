@@ -525,15 +525,15 @@ def _manual_gate_mode(repo_root: Path | None) -> bool:
 def _card_role_class(metadata: dict[str, Any], repo_root: Path | None) -> str:
     """AIPOS-F73C 件①(顾问代修, Owner 2026-09-08 仲裁 C): 卡 assigned_to/agent_instance → 角色类别。
 
-    AIPOS-F102 件②: 角色 → 类只经唯一实现 custom_roles.resolve_role_to_class; 本函数只做「实例名 → 角色名」:
+    AIPOS-F102 件②: 角色 → 类只经唯一实现 custom_roles.resolve_role_to_class; AIPOS-F132: 「实例名 → 角色名」也收口到
+    custom_roles.resolve_instance_role_class(门侧裁决/返工授权判定同一函数), 本函数只按候选顺序(assigned_to → agent_instance)取首个可解析者:
       1. 候选本身即角色名(executor/auditor/advisor… 或自定义角色名);
       2. 实例名首段(roles.schema naming.template 唯一解析 parse_instance_name)按注册表 naming.prefix 反查角色名
          (exec./audit./advisor.), 首段不是前缀则按角色名(自定义角色 hbj-coder.<项目>.<机器>);
     禁子串猜(exec/audit in name)。全部候选解析不到 / 注册表读不到 = 拒(UnknownRoleClass, 统一失败语义),
     不再返回 None 被调用方当「非执行体」放行。repo_root = 治理根(自定义角色在门注册表, 内建角色无需)。
     """
-    from tools.aipos_cli.custom_roles import UnknownRoleClass, resolve_role_to_class
-    from tools.aipos_cli.naming_profile import _registry_prefix_mapping, parse_instance_name
+    from tools.aipos_cli.custom_roles import UnknownRoleClass, resolve_instance_role_class
     from tools.schema_loader import SchemaLoadError
 
     candidates = [
@@ -541,16 +541,13 @@ def _card_role_class(metadata: dict[str, Any], repo_root: Path | None) -> str:
         str(metadata.get("agent_instance") or "").strip(),
     ]
     try:
-        role_by_prefix = {prefix: role for role, prefix in _registry_prefix_mapping().items()}
         for cand in candidates:
             if not cand:
                 continue
-            parsed = parse_instance_name(cand)
-            head = parsed["prefix"] if parsed else cand.split(".")[0]  # 非三段式(存量 exec.test 等)取首段, 与 F73C 口径同
-            for role_name in (cand, role_by_prefix.get(head, head)):
-                cls = resolve_role_to_class(role_name, repo_root)
-                if cls:
-                    return str(cls)
+            # AIPOS-F132: 实例名 → 角色 → 类收口到唯一实现 custom_roles.resolve_instance_role_class(门侧授权判定同一函数)
+            resolved = resolve_instance_role_class(cand, repo_root)
+            if resolved:
+                return resolved[1]
     except (SchemaLoadError, FileNotFoundError, OSError, json.JSONDecodeError, KeyError) as exc:
         raise UnknownRoleClass(f"角色注册表读不到, 卡角色类不可解析(assigned_to/agent_instance={candidates}): {exc}") from exc
     raise UnknownRoleClass(
