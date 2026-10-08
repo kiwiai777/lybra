@@ -17,7 +17,6 @@
 """
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 import socket
@@ -64,36 +63,79 @@ def loop_runs_dir(governance_root: Path, task_id: str) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# 探活(本机): pid 存在且命令行指纹与记录时一致(防 pid 复用)。命令行本身不落盘(拉起进程的命令行含 kickoff 全文), 只落指纹。
+# 探活(本机): pid 存在且进程启动时刻指纹与记录时一致(防 pid 复用)。
+# AIPOS-F137(gap #118): 原以命令行(/proc/<pid>/cmdline)sha1 作指纹——pi(node)启动后改写进程标题(argv 覆写)致命令行变,
+# 活进程被判 launch_dead, 顾问据此停 loop 连带终止在跑的审计 pi。现指纹 = 进程启动时刻(同一进程终身不变, 改标题 / 改名 /
+# exec 都不变; pid 被复用的新进程启动时刻必不同)。启动时刻不含任何会话/命令内容, 原样落盘。
+# 旧记录(F131 起至本卡前写的命令行 sha1 指纹, 16 位小写十六进制)兼容: 降级为「pid 存在即活」, status 标注「旧指纹, 仅按 pid」。
 # ---------------------------------------------------------------------------
 
+FINGERPRINT_PREFIX_PROC = "starttime:"  # Linux: /proc/<pid>/stat 第 22 字段(开机以来的时钟滴答数)
+FINGERPRINT_PREFIX_PS = "lstart:"  # 无 /proc(macOS 等): `ps -o lstart=`(LC_ALL=C 固定格式, 空白归一为 _)
+LEGACY_FINGERPRINT_NOTE = "旧指纹, 仅按 pid"
+_LEGACY_FINGERPRINT_RE = re.compile(r"^[0-9a-f]{16}$")
+_DEAD_STATES = (b"Z", b"X", b"x")  # 僵尸 / 已死: 进程已结束只差回收, 按不在计
+
+
+def _proc_available() -> bool:
+    """本机有无 /proc(探活读法二选一的唯一判定; 记录与探活同机同读法)。"""
+    return Path("/proc/self").is_dir()
+
+
+def _start_from_proc(pid: int) -> str | None:
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_bytes()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except PermissionError as exc:
+        raise LoopRunRecordError(f"读 /proc/{pid}/stat 无权限: {exc}") from exc
+    if not raw.strip():
+        return None  # 进程正在退出: 读到空 = 已不在
+    close = raw.rfind(b")")  # 第 2 字段是括号包住的进程名, 可含空格与括号: 按最后一个右括号定位其后字段
+    fields = raw[close + 1:].split() if close >= 0 else []
+    if len(fields) < 20 or not fields[19].isdigit():
+        raise LoopRunRecordError(f"/proc/{pid}/stat 形不合(右括号后应有 ≥20 个字段且第 22 字段 starttime 为整数): {raw[:120]!r}")
+    if fields[0] in _DEAD_STATES:
+        return None
+    return FINGERPRINT_PREFIX_PROC + fields[19].decode("ascii")
+
+
+def _start_from_ps(pid: int) -> str | None:
+    env = {**os.environ, "LC_ALL": "C", "LANG": "C"}  # lstart 随 locale 本地化(实测 zh_CN 出「四 10月 8 …」): 固定 C
+    try:
+        proc = subprocess.run(["ps", "-o", "stat=", "-o", "lstart=", "-p", str(pid)], capture_output=True, timeout=10, env=env)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise LoopRunRecordError(f"ps 探活失败: {type(exc).__name__}: {exc}") from exc
+    tokens = proc.stdout.split() if proc.returncode == 0 else []
+    if len(tokens) < 2:
+        return None  # ps 查无此 pid(退出码非 0 / 无输出)= 不在
+    if tokens[0][:1] in _DEAD_STATES:
+        return None
+    return FINGERPRINT_PREFIX_PS + "_".join(t.decode("ascii", "replace") for t in tokens[1:])
+
+
 def process_fingerprint(pid: int | None) -> str | None:
-    """进程命令行指纹(sha1 前 16 位); 进程不存在 / 已成僵尸(命令行为空)= None。
-    Linux 读 /proc/<pid>/cmdline; 无 /proc(macOS)用 `ps -ww -o command= -p <pid>`。同一台机上记录与探活走同一读法。"""
+    """进程启动时刻指纹(唯一实现): Linux `starttime:<stat 第 22 字段>`; 无 /proc 用 `lstart:<ps -o lstart=>`。
+    进程不存在 / 已成僵尸 = None。同一进程改标题 / 改名 / exec 指纹不变; pid 复用的新进程启动时刻不同 → 指纹不同。"""
     if not isinstance(pid, int) or pid <= 0:
         return None
-    if Path("/proc/self").is_dir():
-        try:
-            raw = Path(f"/proc/{pid}/cmdline").read_bytes()
-        except (FileNotFoundError, ProcessLookupError):
-            return None
-        except PermissionError as exc:
-            raise LoopRunRecordError(f"读 /proc/{pid}/cmdline 无权限: {exc}") from exc
-    else:
-        try:
-            proc = subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(pid)], capture_output=True, timeout=10)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise LoopRunRecordError(f"ps 探活失败: {type(exc).__name__}: {exc}") from exc
-        raw = proc.stdout.strip() if proc.returncode == 0 else b""
-        if raw.endswith(b"<defunct>"):
-            raw = b""
-    if not raw.strip(b"\0").strip():
-        return None
-    return hashlib.sha1(raw).hexdigest()[:16]
+    return _start_from_proc(pid) if _proc_available() else _start_from_ps(pid)
+
+
+def fingerprint_is_legacy(fingerprint: Any) -> bool:
+    """旧记录的命令行 sha1 指纹(16 位小写十六进制, 无前缀)。新指纹一律带前缀, 二者不相交。"""
+    return isinstance(fingerprint, str) and bool(_LEGACY_FINGERPRINT_RE.match(fingerprint))
 
 
 def process_alive(pid: Any, fingerprint: Any) -> bool:
-    return bool(fingerprint) and isinstance(pid, int) and process_fingerprint(pid) == fingerprint
+    """记录的进程是否仍在(唯一判活)。新指纹: 现读启动时刻 == 记录值; 旧指纹: 降级为 pid 存在即活(无从核身, 调用方须标注
+    LEGACY_FINGERPRINT_NOTE)。只读 /proc 或 ps, 不发任何信号。"""
+    if not fingerprint or not isinstance(pid, int):
+        return False
+    current = process_fingerprint(pid)
+    if current is None:
+        return False
+    return True if fingerprint_is_legacy(fingerprint) else current == fingerprint
 
 
 def _parse_iso(text: Any) -> datetime | None:
@@ -367,7 +409,9 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
     """一份运行记录 → 状态视图(唯一判据)。
     ended: 记录已写结束; unprobeable: 记录写于别的主机(本机无从探活, 请在治理根所在机执行); loop_dead: loop 进程已不在而记录未结束;
     launch_dead: loop 在等、其拉起的进程已不在; stalled: 拉起的进程在但距最近一行输出(或拉起时刻)超过阈值(最近有意义活动是
-    工具开始 tool:<名> = 工具在跑 → stall_after_tool_seconds, 否则 stall_after_seconds); running: 其余。"""
+    工具开始 tool:<名> = 工具在跑 → stall_after_tool_seconds, 否则 stall_after_seconds); running: 其余。
+    「在 / 不在」一律经 process_alive(进程启动时刻指纹, AIPOS-F137); 记录是旧命令行指纹 = 仅按 pid 判, 视图带
+    loop_probe_note / launch.probe_note = LEGACY_FINGERPRINT_NOTE。"""
     now = now or utc_now()
     host = str(meta.get("host") or "")
     local_host = local_host or socket.gethostname()
@@ -400,11 +444,15 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
         view["note"] = f"记录写于主机 {host}, 本机 {local_host} 无从探活: 请在治理根所在机(经 ssh 亦可)执行 lybra loop status"
         return view
     view["loop_alive"] = process_alive(meta.get("pid"), meta.get("process_fingerprint"))
+    if fingerprint_is_legacy(meta.get("process_fingerprint")):
+        view["loop_probe_note"] = LEGACY_FINGERPRINT_NOTE
     if not view["loop_alive"]:
         view["state"] = "loop_dead"
         return view
     if active is not None and view["launch"] is not None:
         alive = process_alive(active.get("pid"), active.get("process_fingerprint"))
+        if fingerprint_is_legacy(active.get("process_fingerprint")):
+            view["launch"]["probe_note"] = LEGACY_FINGERPRINT_NOTE
         launched_at = _parse_iso(active.get("started_at"))
         last_seen = _parse_iso((active.get("activity") or {}).get("last_event_at")) or launched_at
         in_tool = str(view["launch"].get("last_activity_kind") or "").startswith("tool:")
@@ -511,7 +559,8 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
         state = v["state"]
         out.append(f"loop 运行 {v['run_id']}  [{state}] {decl_states.get(state, '')}")
         out.append(f"  卡 {v['task_id']}  lane {v.get('lane') or '-'}  驱动 {v['driver']}  信封 {v.get('envelope') or '(未定)'}  主机 {v['host']}  "
-                   f"loop pid {v['pid']}({'存活' if v['loop_alive'] else '已不在' if v['loop_alive'] is False else '未探活'})")
+                   f"loop pid {v['pid']}({'存活' if v['loop_alive'] else '已不在' if v['loop_alive'] is False else '未探活'}"
+                   + (f"; {v['loop_probe_note']}" if v.get("loop_probe_note") else "") + ")")
         span = "历时" if state == "ended" else "已运行"
         out.append(f"  开始 {v['started_at']}({span} {_dur(v['elapsed_seconds'])})  已落定 {v['steps_done']} 步")
         cur = v.get("current_step")
@@ -528,7 +577,8 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
             else:
                 alive = {True: "存活", False: "已不在"}.get(la.get("alive"), "未探活")
                 out.append(f"  拉起 {la['harness']} {la['card']} @ {la.get('host') or '本机'}:{la.get('workstation')} "
-                           f"pid={la['pid']} pgid={la['pgid']} {alive}, 已运行 {_dur(la.get('running_seconds'))}, "
+                           f"pid={la['pid']} pgid={la['pgid']} {alive}"
+                           + (f"({la['probe_note']})" if la.get("probe_note") else "") + f", 已运行 {_dur(la.get('running_seconds'))}, "
                            f"距最近输出 {_dur(la.get('idle_seconds'))}")
             out.append(f"  活动: 事件 {la.get('events')} 条; 最近 {la.get('last_activity_kind') or '(无)'} @ "
                        f"{la.get('last_activity_at') or '-'}; 计数 {la.get('counts') or {}}")
