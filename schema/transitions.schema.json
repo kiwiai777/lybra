@@ -521,9 +521,24 @@
         "deploy_status": {
           "description": "AIPOS-F73D 前置一①: finalization 记录在卡分支 merge + push 成功即落, 不以嵌入部署成功为前提(F73C2 活体: 部署被 F70 覆盖校验拒 → 记录不落 → 推导核停 N4 链断)。部署结果记在 deploy_status 字段; N5→N6 判据 = finalization 记录存在(推导核只读此记录, deployments/ 记录不参与 N5 判据——二选一取此项)。",
           "field": "deploy_status",
-          "values": ["deployed", "deploy_failed", "skipped", "not_attempted"],
+          "values": ["deployed", "deploy_failed", "skipped", "not_attempted", "not_applicable"],
+          "values_note": "AIPOS-F135 件③: not_applicable = 项目声明本仓不部署(config.schema project_json.repos.no_deploy), 与 skipped(产品仓无部署机制)区分; 两者都在 deploy_status_reason 写明依据。判定唯一实现 deploy_gate.deploy_mechanism_present。值域只追加。",
+          "reason_field": "deploy_status_reason",
           "written_when": "merge/push 成功后的每一条出口(部署成功/部署失败/部署验证失败/无需部署)都写; merge 冲突或 push 失败不写",
           "writer": "finalize._ensure_finalization_record → finalization_record.write_finalization_record(deploy_status=...)"
+        },
+        "push_status": {
+          "description": "AIPOS-F135 件②: 本次 finalize 对产品仓基线分支的推送结果如实标注(原无 remote / 无 origin/<分支> 时按「已同步」静默收尾, 结果不可辨)。推送唯一实现 finalize._git_push; 「推送是否适用」唯一判据 finalize._push_not_applicable_reason(无 origin 远端或无远端跟踪分支 origin/<基线> = 不适用), 主路径与续做路径(F130)同口径。finalize 输出(结果 push_status / operations 行)与 finalization 记录同值。",
+          "field": "push_status",
+          "values": ["pushed", "already_synced", "not_applicable", "not_requested"],
+          "values_meaning": {
+            "pushed": "本次已推送(git push 成功)",
+            "already_synced": "本卡合并提交已在远端跟踪分支上, 无需推送",
+            "not_applicable": "无 origin 远端或无远端跟踪分支 origin/<基线>, 推送不适用(依据写 push_status_reason)",
+            "not_requested": "有远端但未带 --push(本次未推送)"
+          },
+          "reason_field": "push_status_reason",
+          "writer": "finalize._ensure_finalization_record(push_status=…) → finalization_record.build_finalization_record(push_status=…)(值不在 values = ValueError, fail-closed)"
         },
         "merge_commit": {
           "description": "AIPOS-F78 前置零③: finalization 记录必含 merge_commit(卡分支 merge --no-ff 后 main 的 HEAD; 直提/已合并场景=finalize 时 HEAD)与 finalize_ref(记录 id)。推导核 N5→N6 派生 close 时读 merge_commit 填 closure_evidence.finalize_commit_hash, 读 return 记录填 finalize_return_ref, 读裁决填 verdict_ref——三字段齐才派生 close, 缺一即不可推导并点名缺项。",
@@ -551,7 +566,13 @@
         "description": "AIPOS-F78B 件②: finalize 场地由项目声明 project.json paths.finalize_mode(config.schema 声明表, 默认 internal)。internal=现行(推导核派生 `lybra finalize` 在 dev 上 merge/push/部署); external=产品仓不在本机(chris: merge/push 由其 FINALIZE 卡执行, AGENTS §8/§9.4), 裁决 PASS 后推导核不派生 finalize, 改为等待 FINALIZE 卡的 Return 落盘, 经 `lybra artifact ingest --task-id <被审卡>` 读其 frontmatter 铸 finalization 记录(finalization_record.write_finalization_record 同一 writer), 随后 N5→N6 close 证据自填不变。FINALIZE 卡 ID 规则与 Return 必填字段唯一声明: #/artifact_ingest/finalization。",
         "values": ["internal", "external"],
         "declaration": "config.schema configuration_sources.project_json.schema.paths.finalize_mode",
-        "external_flow": "N4 PASS → await_artifact(FINALIZE 卡 Return) → artifact ingest 铸 finalization 记录(merge_commit/remote_ref/deploy_status 来自 Return frontmatter) → N6 close"
+        "external_flow": "N4 PASS → await_artifact(FINALIZE 卡 Return) → artifact ingest 铸 finalization 记录(merge_commit/remote_ref/deploy_status 来自 Return frontmatter) → N6 close",
+        "repo_serial": {
+          "description": "AIPOS-F135 件①: 同仓合入串行(外部路线)。external 模式 N4→N5 推导处: 本卡 FINALIZE Return 未落时, 若同一 lane 仓(仓键 = machine_zone.card_lane_key, 卡 lane.repo 经 resolve_card_repo 解析)另有「最新裁决 PASS/PASS_WITH_NOTES 且无 finalization 记录」的卡排在本卡之前, 推导返回 await_repo_turn(不派 FINALIZE, 点名先合入的卡), 待其 finalization 记录落盘后再派。先后序 = (FINALIZE Return 已落者优先, 裁决时间 verdict_at, 卡号)。本卡 Return 已落 = 合入已在外部发生, 照常 ingest。本卡 lane 不可解析 = 不可推导(无法判同仓, fail-closed)。internal 模式由 finalize 的仓级锁串行(#/nodes/N5/branch_integration/repo_merge_lock)。",
+          "action_type": "await_repo_turn",
+          "order": ["finalize_return_present", "verdict_at", "task_id"],
+          "implementation": "next_resolver._external_repo_turn_blocker(唯一实现); loop 等待先合入卡的 finalization 记录(loop_driver)"
+        }
       },
       "deployment_record": {
         "type": "deployment",
@@ -623,6 +644,17 @@
             "audience": "self",
             "action": "手动切回 main 分支后重试 finalize(auto_checkout 已关闭或切回失败)",
             "command": "git checkout main"
+          }
+        },
+        "repo_merge_lock": {
+          "description": "AIPOS-F135 件①: 同仓合入串行(内部路线)。finalize(非 dry-run)在部署完整性检查与卡分支整合之前, 对产品仓 git common-dir 下的锁文件加排他锁(workspace_config.exclusive_flock 唯一锁实现, 非阻塞), 持有到 finalize 返回(合并 / 合并后回归 / 推送 / 部署 / finalization 记录全程); 同仓(含其各工作树: common-dir 相同)另一 finalize 在途 = 拿不到锁, 立即返回 BLOCK(category 见 busy_category, 点名持锁卡与进程)可重试出口, 不排队、不抢锁。锁随持有进程退出由内核释放(崩溃不留死锁)。不另起锁服务。",
+          "lock_file": "lybra-finalize.lock",
+          "location": "git rev-parse --git-common-dir(产品仓公共 .git 目录; 工作树共享)",
+          "busy_category": "REPO_MERGE_IN_PROGRESS",
+          "next_step": {
+            "audience": "advisor",
+            "action": "同仓另一张卡正在合入: 等其 finalize 结束(或其 loop 推进到 finalization 记录落盘)后重跑同一条 finalize / lybra loop",
+            "command": null
           }
         },
         "base_sync": {

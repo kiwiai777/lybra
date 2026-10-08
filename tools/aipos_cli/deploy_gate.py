@@ -119,13 +119,31 @@ def deploy_script_path(repo_root: Path) -> Path:
     return Path(repo_root) / "tools" / "lybra-deploy"
 
 
-def deploy_mechanism_present(repo_root: Path) -> bool:
-    """AIPOS-F92 件③: 该产品仓是否有部署机制 = 部署脚本在标准位置, 或已有部署快照(.deploy/)。
+def deploy_mechanism_present(repo_root: Path, governance_root: Path | None = None) -> dict[str, Any]:
+    """部署适用性唯一判定(finalize 主路径与续做路径共用)。返回 {applicable, deploy_status, reason}:
+    applicable=True 时 deploy_status=None(由部署结果决定); False 时 deploy_status ∈ {not_applicable, skipped}
+    (值域声明 transitions N5.record.deploy_status.values), reason 写进 finalization 记录 deploy_status_reason 与输出。
 
-    两者皆无 = 部署不适用(新项目普通产品仓: finalize 合并即完成, finalization 记录 deploy_status=skipped, 不判部署失败);
-    有 .deploy/ 而无脚本 = 部署机制残缺, 仍走部署并如实失败(fail-closed, 不静默跳过)。"""
+    AIPOS-F135 件③: 先读项目「本仓不部署」声明——project.json repos.no_deploy(config.schema project_json.repos.no_deploy;
+    经唯一读取口 workspace_config.project_repos, 本函数是该声明的唯一读取方): 产品仓在列 = not_applicable 并写明依据;
+    未声明 = 行为不变。governance_root=None = 不读声明(只判机制)。project.json 读不出 / 声明不合 = 原样抛
+    (CardRepoUnresolved / OSError / ValueError, 调用方 fail-closed)。
+    AIPOS-F92 件③: 再判部署机制 = 部署脚本在标准位置, 或已有部署快照(.deploy/)。两者皆无 = 部署不适用(新项目普通产品仓:
+    finalize 合并即完成, deploy_status=skipped, 不判部署失败); 有 .deploy/ 而无脚本 = 部署机制残缺, 仍走部署并如实失败
+    (fail-closed, 不静默跳过)。"""
     root = Path(repo_root)
-    return deploy_script_path(root).exists() or (root / ".deploy").exists()
+    if governance_root is not None:
+        from tools.aipos_cli.workspace_config import _same_path, project_repos
+
+        repos = project_repos(Path(governance_root))
+        for name in repos.get("no_deploy") or []:
+            if _same_path(repos["items"][name], root):
+                return {"applicable": False, "deploy_status": "not_applicable",
+                        "reason": f"project.json repos.no_deploy 声明仓 {name}({root})不部署"}
+    if deploy_script_path(root).exists() or (root / ".deploy").exists():
+        return {"applicable": True, "deploy_status": None, "reason": f"产品仓 {root} 有部署机制(tools/lybra-deploy 或 .deploy/)"}
+    return {"applicable": False, "deploy_status": "skipped",
+            "reason": f"产品仓 {root} 无部署机制(无 tools/lybra-deploy 与 .deploy/), 合并即完成"}
 
 
 def invoke_lybra_deploy(

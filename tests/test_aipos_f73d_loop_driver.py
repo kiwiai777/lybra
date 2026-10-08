@@ -502,6 +502,7 @@ def test_f73d_pre1_item1_finalization_record_written_when_deploy_fails_after_pus
     monkeypatch.setattr(fz, "check_stage_archive_gate", lambda *a, **k: {"passed": True, "message": "ok"})
     monkeypatch.setattr(fz, "_check_deployment_integrity", lambda *a, **k: {"integrity_ok": True, "message": "ok"})
     monkeypatch.setattr(fz, "_ensure_on_main_branch", lambda *a, **k: None)
+    monkeypatch.setattr(fz, "_acquire_repo_merge_lock", lambda *a, **k: None)  # AIPOS-F135 件①: 仓级合入锁(本用例 git 全替身, 锁另有夹具)
     monkeypatch.setattr("tools.aipos_cli.deploy_gate.check_deployment_branch", lambda *a, **k: {"on_required_branch": True, "message": "main"})
     monkeypatch.setattr(fz, "_integrate_card_branch", lambda **k: {"blocked": False, "action": "merged", "message": "merged"})
     monkeypatch.setattr(fz, "_git_status_clean", lambda root: True)
@@ -531,7 +532,8 @@ def test_f73d_pre1_item1_finalization_record_written_when_deploy_fails_after_pus
 def test_f73d_pre1_item1_deploy_status_declared_once_in_transitions():
     t = json.loads((REPO_ROOT / "schema" / "transitions.schema.json").read_text(encoding="utf-8"))
     decl = t["nodes"]["N5"]["record"]["deploy_status"]
-    assert decl["values"] == ["deployed", "deploy_failed", "skipped", "not_attempted"]
+    # AIPOS-F135 件③: 值域只追加(not_applicable = 项目声明本仓不部署)
+    assert decl["values"] == ["deployed", "deploy_failed", "skipped", "not_attempted", "not_applicable"]
     src = (REPO_ROOT / "tools" / "aipos_cli" / "finalize.py").read_text(encoding="utf-8")
     assert src.count('deploy_status="deploy_failed"') == 7, "每条 push/merge 成功后的部署失败出口都落记录"
 

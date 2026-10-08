@@ -64,6 +64,7 @@ from tools.aipos_cli.next_resolver import (
     auditor_artifact_watch,
     executor_artifact_watch,
     frontmatter_unreadable_stop,
+    repo_turn_watch,
 )
 from tools.aipos_cli.frontmatter import FrontmatterReadError
 
@@ -979,6 +980,7 @@ def _drive(
         wait_patterns: list[str] = []
         watch_root = governance_root
         launch_card: str | None = None  # AIPOS-F95: 执行体(N1)/审计体(N3)等待才可拉起; external finalize 等待不拉起
+        repo_turn_wait = False  # AIPOS-F135 件①: external 同仓串行等待(就绪 = 本卡不再 await_repo_turn)
 
         if not derivation.get("derivable"):
             action = derivation.get("action") or {}
@@ -987,6 +989,12 @@ def _drive(
                 # 就绪 = 本卡重推导可推导(派生 artifact ingest 铸 finalization 记录)或硬停(Return 不合规)
                 target_card = str(action["card"])
                 watch_root, wait_patterns = executor_artifact_watch(governance_root, target_card)
+            elif action.get("type") == "await_repo_turn" and action.get("card"):
+                # AIPOS-F135 件①: external 同仓合入串行——同 lane 仓先合入卡未落 finalization 记录, 不派本卡 FINALIZE;
+                # 等该卡 finalization 记录落盘(不拉起任何 harness), 醒来重推导本卡
+                target_card = str(action["card"])
+                watch_root, wait_patterns = repo_turn_watch(governance_root, target_card)
+                repo_turn_wait = True
             elif action.get("type") == "await_artifact" and action.get("card"):
                 # N3: 已派审, 审计体在干活 → 审计卡自身可能已可推导(claim 审计卡 / 提交裁决); 或已硬停(报告不合规/无 claim 记录)
                 audit_card = str(action["card"])
@@ -1032,9 +1040,11 @@ def _drive(
                             artifacts=wait_patterns)
             say(f"[{index}] wait: {target_card} 产物 {wait_patterns} (≤{max_wait}s, 经 agent watch)")
 
-            def _ready(_matched: list[str], _card: str = ready_card) -> bool:
+            def _ready(_matched: list[str], _card: str = ready_card, _turn: bool = repo_turn_wait) -> bool:
                 # 就绪 = 推导核可推导; 或硬停(产物不合规 F78 件③ / 记录缺 F73E 件①)——都该让 loop 醒来判定, 而非空等到超时
                 d = derive(_card, governance_root)
+                if _turn and (d.get("action") or {}).get("type") != "await_repo_turn":
+                    return True  # AIPOS-F135 件①: 同仓轮到本卡(先合入卡 finalization 已落)
                 # AIPOS-F114: 等待中本轮作废(所审交回过期 / 被下一轮取代)也醒来——重推导被审卡派生重交回, 不空等到超时
                 return (bool(d.get("derivable")) or (d.get("action") or {}).get("type") in HARD_STOP_ACTIONS
                         or isinstance(d.get("return_stale"), dict) or isinstance(d.get("superseded_by"), dict))
