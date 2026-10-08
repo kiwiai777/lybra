@@ -38,6 +38,8 @@ from tools.aipos_cli.autonomy_policy import (
     AUTONOMY_MODE_PREAUTHORIZED,
     AUTONOMY_MODE_SUPERVISED,
     count_preauthorized_claims,
+    driver_envelope_identities,
+    envelope_subject,
     load_policy,
     match_claim_envelope,
     trace_envelope,
@@ -2137,6 +2139,41 @@ def _envelope_rejection(error_code: str, reason: str, *, verb: str) -> dict[str,
     )
 
 
+def _match_envelope_for_identities(
+    repo_root: Path,
+    *,
+    policy: dict[str, Any],
+    snapshot: dict[str, Any],
+    task_id: str,
+    identities: list[tuple[str, str, str | None]],
+    released_count: int,
+    audit_subject_rule: bool = True,
+) -> tuple[bool, str, str | None]:
+    """AIPOS-F134: 门侧逐请求核验给定信封——判定对象经 autonomy_policy.envelope_subject(与 loop 同一主体规则; 信封带
+    task_selector_lane_repo 时解析卡 lane 指称), 身份三元组(驱动方 = driver_envelope_identities, 与 loop find_envelope 同一构造)
+    逐个交 match_claim_envelope(唯一判据), 任一匹配即放行。未匹配原因取首个已过身份覆盖的三元组(否则末个), 与原单次调用同口径。
+    audit_subject_rule=False(驱动方非认领动词, 既有口径): 判定对象 = 本卡自身字段(不做审计卡→被审卡映射), lane 亦取本卡。"""
+    subject_id, subject_mode, subject_project, subject_lane = envelope_subject(
+        repo_root, task_id=str(snapshot.get("task_id") or task_id or ""), task_mode=str(snapshot.get("task_mode") or ""),
+        project=str(snapshot.get("project") or ""),
+        reviewed_task_id=str(snapshot.get("reviewed_task_id") or "") if audit_subject_rule else "",
+        lane=snapshot.get("lane") if isinstance(snapshot.get("lane"), dict) else None,
+        with_lane=bool(policy.get("task_selector_lane_repo")))
+    now = utc_now()
+    outcome: tuple[bool, str, str | None] | None = None
+    for agent_instance, actor, claiming_role in identities:
+        matched, reason, error_code = match_claim_envelope(
+            policy=policy, task_id=subject_id, task_mode=subject_mode, project=subject_project,
+            agent_instance=agent_instance, actor=actor, now=now, released_count=released_count,
+            claiming_role=claiming_role, lane=subject_lane,
+        )
+        if matched:
+            return matched, reason, error_code
+        if outcome is None or outcome[2] == "ENVELOPE_AGENT_NOT_COVERED":
+            outcome = (matched, reason, error_code)
+    return outcome if outcome is not None else (False, "no envelope identity to match", "ENVELOPE_AGENT_NOT_COVERED")
+
+
 def _match_driver_envelope(
     repo_root: Path,
     *,
@@ -2184,16 +2221,10 @@ def _match_driver_envelope(
     role_name = str(cap.get("role") or "").strip()
     released = count_preauthorized_claims(repo_root, policy_ref)
     # 身份集合 = {token 绑定实例(缺则角色类), 角色类, 角色名}——信封 agent_or_role 写其一即覆盖驱动方
-    matched, reason, error_code = match_claim_envelope(
-        policy=policy,
-        task_id=str(snapshot.get("task_id") or task_id),
-        task_mode=str(snapshot.get("task_mode") or ""),
-        project=str(snapshot.get("project") or ""),
-        agent_instance=bound or driver_identity,
-        actor=driver_identity,
-        now=utc_now(),
-        released_count=released,
-        claiming_role=role_name or driver_identity,
+    # AIPOS-F134 件①: 集合唯一构造 autonomy_policy.driver_envelope_identities(loop find_envelope 同用); 件③: 判定对象 + lane 经 envelope_subject
+    matched, reason, error_code = _match_envelope_for_identities(
+        repo_root, policy=policy, snapshot=snapshot, task_id=task_id,
+        identities=driver_envelope_identities(bound, role_name, driver_identity), released_count=released, audit_subject_rule=False,
     )
     trace_envelope({"phase": "_match_driver_envelope", "verb": verb, "task_id": task_id, "owner_policy_ref": policy_ref,
                     "driver_identity": driver_identity, "bound": bound, "role": role_name, "matched": matched, "reason": reason,
@@ -2303,21 +2334,12 @@ def _match_claim_envelope(
     # (e.g. agent_or_role: kaia-asst) and still match an agent claiming under that role.
     # The role is read from the Owner-minted capability token (authoritative, not self-reported).
     # AIPOS-F90 件①: 信封 task_selector 判定对象(审计卡 = 被审卡), 与驱动方 loop 同一规则 autonomy_policy.envelope_subject
-    from tools.aipos_cli.autonomy_policy import envelope_subject
-
-    subject_id, subject_mode, subject_project = envelope_subject(
-        repo_root, task_id=str(snapshot.get("task_id") or task_id or ""), task_mode=str(snapshot.get("task_mode") or ""),
-        project=str(snapshot.get("project") or ""), reviewed_task_id=str(snapshot.get("reviewed_task_id") or ""))
-    matched, inner_reason, error_code = match_claim_envelope(
-        policy=policy,
-        task_id=subject_id,
-        task_mode=subject_mode,
-        project=subject_project,
-        agent_instance=envelope_instance,
-        actor=envelope_actor,
-        now=utc_now(),
-        released_count=released,
-        claiming_role=(claiming_role or driver_identity) or None,
+    # AIPOS-F134 件①: 驱动方身份集合唯一构造 driver_envelope_identities(与 loop find_envelope / _match_driver_envelope 同一函数);
+    # 非驱动方(卡实例自认领)仍为单一三元组。件③: 判定对象与 lane 指称经 envelope_subject(_match_envelope_for_identities 内)
+    identities = (driver_envelope_identities(bound, claiming_role, driver_identity) if driver_identity
+                  else [(envelope_instance, envelope_actor, claiming_role or None)])
+    matched, inner_reason, error_code = _match_envelope_for_identities(
+        repo_root, policy=policy, snapshot=snapshot, task_id=str(task_id or ""), identities=identities, released_count=released,
     )
     _emit("final", owner_policy_ref if matched else None, None,
           policy_loaded=True, snapshot_loaded=True, queue_state=queue_state,
@@ -4732,6 +4754,15 @@ def _validate_enroll_code_args(args: dict[str, Any]) -> tuple[dict[str, Any], di
             f"Unknown role: {role}. Role must be a built-in or registered custom role.",
             "Use a built-in role (executor/auditor/advisor/owner/planner) or register the custom role first "
             "(lybra_roles_register), then retry.",
+        )
+    # AIPOS-F134 件②: 治理席位类(顾问/规划方)码必须带实例——判定唯一实现 enrollment.governance_seat_instance_refusal(发码同用)
+    from tools.aipos_cli.enrollment import governance_seat_instance_refusal
+
+    refusal = governance_seat_instance_refusal(role, instance, governance_root or root)
+    if refusal:
+        return {}, _teaching_error(
+            "INSTANCE_REQUIRED", refusal, "Retry with instance set (e.g. {\"instance\": \"<role-prefix>.<project>.<host>\"}).",
+            example_args={"role": role, "instance": "<实例>", "ttl": 86400, "owner_authorization_ref": owner_authorization_ref},
         )
     validated = {
         "role": role,

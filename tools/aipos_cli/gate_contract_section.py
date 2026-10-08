@@ -266,6 +266,8 @@ def render_gate_contract_section(
             "task_id": str(task_fields.get("task_id") or task_id or ""),
             "task_mode": str(task_fields.get("task_mode") or ""),
             "project": str(task_fields.get("project") or ""),
+            # AIPOS-F134 件③: 信封 task_selector_lane_repo 判定对象(卡 lane; 只在有 lane 信封时经 resolve_card_repo 解析)
+            "lane": task_fields.get("lane") if isinstance(task_fields.get("lane"), dict) else None,
         }
         executor_instance = str(task_fields.get("agent_instance") or task_fields.get("assigned_to") or "").strip()
         if needs_exec and (claim_envelope is None or return_envelope is None):

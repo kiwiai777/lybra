@@ -840,19 +840,33 @@ def _driver_envelope_ref(workspace_root: Path, task_id: str, task_fm: dict[str, 
 
 
 def _driver_token_instance(workspace_root: Path, connection_json: str | None = None) -> str:
-    """驱动方 token 绑定的实例: connection.json 中 role_class==roles.schema driver.role_class 的 token 的 agent_instance。"""
-    import json
+    """驱动方 token 绑定的实例(connection.json 中 role_class==roles.schema driver.role_class 的条目)。
 
-    from tools.aipos_cli.two_phase_shell_factory import driver_role_class
+    AIPOS-F134 件①: loop --actor 在 scope 内 = 只认该实例自己的条目(two_phase_shell_factory.driver_token_entry → token_resolver
+    .select_token_entry(agent_instance=…), 无即 "" 并出声, 禁回落首个); 无 scope 时连接文件绑定 ≥2 个驱动方实例 = ""(多顾问实例不取首个,
+    调用方 fail-closed 要求显式 --actor); 否则既有行为(首个驱动方角色类条目的实例)。"""
+    import json
+    import sys
+
+    from tools.aipos_cli.two_phase_shell_factory import driver_role_class, driver_token_entry, driver_token_instances
 
     conn = connection_json or _find_connection_json(workspace_root)
     if not conn or not Path(conn).is_file():
         return ""
+    scoped_actor = _scoped_driver().get("actor")
+    try:
+        if scoped_actor:
+            return str(driver_token_entry(connection_json_path=conn, agent_instance=scoped_actor).get("agent_instance") or "").strip()
+        bound = driver_token_instances(connection_json_path=conn)
+    except ValueError as exc:  # DriverTokenError / 连接文件读不出: 出声, 按「解析不到」交调用方 fail-closed
+        print(f"Warning: {conn}: driver instance unresolved: {exc}", file=sys.stderr)
+        return ""
+    if len(bound) > 1:
+        print(f"Warning: {conn} 绑定了多个驱动方实例 {bound}, 不取首个; 须显式 lybra loop --actor <实例>", file=sys.stderr)
+        return ""
     try:
         tokens = json.loads(Path(conn).read_text(encoding="utf-8")).get("tokens") or []
     except (OSError, ValueError) as exc:
-        import sys
-
         print(f"Warning: {conn} unreadable, driver instance unresolved: {exc}", file=sys.stderr)
         return ""
     wanted = driver_role_class()
@@ -863,6 +877,19 @@ def _driver_token_instance(workspace_root: Path, connection_json: str | None = N
         if role_class == wanted:
             return str(tok.get("agent_instance") or "").strip()
     return ""
+
+
+def _bound_driver_instances(workspace_root: Path, connection_json: str | None = None) -> list[str]:
+    """AIPOS-F134: 连接文件里可用驱动方条目绑定的实例(two_phase_shell_factory.driver_token_instances 唯一判定); 无连接文件/读不出 = []。"""
+    from tools.aipos_cli.two_phase_shell_factory import driver_token_instances
+
+    conn = connection_json or _find_connection_json(workspace_root)
+    if not conn or not Path(conn).is_file():
+        return []
+    try:
+        return driver_token_instances(connection_json_path=conn)
+    except ValueError:
+        return []
 
 
 def _driver_actor(workspace_root: Path, fallback: str | None = None, *, connection_json: str | None = None) -> str:
@@ -877,6 +904,10 @@ def _driver_actor(workspace_root: Path, fallback: str | None = None, *, connecti
     scoped_actor = _scoped_driver().get("actor")
     if scoped_actor:
         return scoped_actor
+    # AIPOS-F134 件①②: 连接文件绑定 ≥2 个驱动方实例(同一治理根多顾问)= 驱动方不定——.lybra/role 顶层只是最近接入的实例,
+    # 不能代表本次驱动方, 禁取顶层/首个冒名 → 调用方显式 fallback(靶场/申领提示) 或 ""(调用方 fail-closed: 须显式 --actor)
+    if len(_bound_driver_instances(workspace_root, connection_json)) > 1:
+        return str(fallback or "")
     # AIPOS-F106 件④: 治理根 .lybra/role 只经 ConnectionResolver.resolve_identity 读(唯一实现; env 不参与 = 只认工位声明层)
     from tools.loop_context import ConnectionResolver
 
@@ -889,22 +920,40 @@ def _driver_actor(workspace_root: Path, fallback: str | None = None, *, connecti
     return str(fallback or "")
 
 
-DRIVER_ACTOR_MISSING = "驱动方身份(治理根 .lybra/role 的 instance, 或 connection.json 驱动方 token 的 agent_instance)"
+DRIVER_ACTOR_MISSING = "驱动方身份(治理根 .lybra/role 的 instance, 或 connection.json 驱动方 token 的 agent_instance; 同一治理根多顾问实例时须显式 --actor)"
 
 
 def _driver_role_name(workspace_root: Path, connection_json: str | None = None) -> str:
     """AIPOS-F78B 件③: 驱动方的角色名(自定义角色如 chris 的 hbj-advisor)——工位声明 .lybra/role 的 role, 其次 connection.json
-    驱动方 token(role_class==driver.role_class)的 role; 解析不到返回 ""(调用方回退角色类 advisor)。信封 agent_or_role 可写角色名。"""
+    驱动方 token(role_class==driver.role_class)的 role; 解析不到返回 ""(调用方回退角色类 advisor)。信封 agent_or_role 可写角色名。
+
+    AIPOS-F134 件①: loop --actor 在 scope 内 = 该实例自己凭据条目的 role(driver_token_entry, 与门侧按请求 token 取角色名同口径);
+    该实例无凭据 = ""(禁回落首个驱动方或另一实例的角色; loop 启动已按 driver_token_refusal 拒)。.lybra/role 读法仍只经
+    ConnectionResolver.resolve_identity / resolve_role(顶层 = 最近接入实例; 多顾问实例时驱动方身份以 --actor + 其凭据条目为准)。"""
     import json
 
-    from tools.aipos_cli.two_phase_shell_factory import driver_role_class
+    from tools.aipos_cli.two_phase_shell_factory import driver_role_class, driver_token_entry
     from tools.loop_context import ConnectionResolver
 
+    conn = connection_json or _find_connection_json(workspace_root)
+    scoped_actor = _scoped_driver().get("actor")
+    if scoped_actor:
+        if conn and Path(conn).is_file():
+            try:
+                return str(driver_token_entry(connection_json_path=conn, agent_instance=scoped_actor).get("role") or "").strip()
+            except ValueError:
+                return ""
+        # 无连接文件(靶场): 工位声明 .lybra/role 顶层记录恰为该实例时取其 role(ConnectionResolver 唯一读法), 否则不借别的实例
+        ident = ConnectionResolver.resolve_identity(workspace_root=workspace_root, env={})
+        if ident["agent_instance"]["source"] == ".lybra/role" and str(ident["agent_instance"]["value"] or "").strip() == scoped_actor:
+            return str(ident["role"]["value"] or "").strip()
+        return ""
+    if len(_bound_driver_instances(workspace_root, conn)) > 1:
+        return ""  # AIPOS-F134: 多驱动方实例未指明 = 不取 role 顶层(最近接入者)或首个驱动方的角色
     # AIPOS-F106 件④: 治理根 .lybra/role 只经 ConnectionResolver.resolve_role 读(唯一实现; env={} = 只认工位声明层)
     role = str(ConnectionResolver.resolve_role(workspace_root=workspace_root, env={}) or "").strip()
     if role:
         return role
-    conn = connection_json or _find_connection_json(workspace_root)
     if not conn or not Path(conn).is_file():
         return ""
     try:
@@ -915,6 +964,21 @@ def _driver_role_name(workspace_root: Path, connection_json: str | None = None) 
     for tok in tokens:
         if isinstance(tok, dict) and str(tok.get("role_class") or tok.get("role") or "").strip() == wanted:
             return str(tok.get("role") or "").strip()
+    return ""
+
+
+def driver_token_refusal(workspace_root: Path, actor: str, connection_json: str | None = None) -> str:
+    """AIPOS-F134 件①: loop 启动前核驱动方实例有自己的凭据——连接文件在而该实例无可用驱动方条目 = 拒因原文(禁回落首个);
+    连接文件不在 = ""(派生命令不带凭据文件, 既有行为)。判定唯一实现 two_phase_shell_factory.driver_token_entry。"""
+    from tools.aipos_cli.two_phase_shell_factory import driver_token_entry
+
+    conn = connection_json or _find_connection_json(workspace_root)
+    if not conn or not Path(conn).is_file():
+        return ""
+    try:
+        driver_token_entry(connection_json_path=conn, agent_instance=actor)
+    except ValueError as exc:
+        return str(exc)
     return ""
 
 
@@ -3338,8 +3402,15 @@ def _run_product_command(command: str, action_type: str) -> dict[str, Any]:
     import subprocess
 
     timeout = loop_step_timeout_seconds()
+    # AIPOS-F134 件①: loop 已校验的驱动方实例随子进程环境下传(薄壳按实例取凭据, two_phase_shell_factory.driver_instance_hint 唯一读取)
+    from tools.aipos_cli.two_phase_shell_factory import DRIVER_INSTANCE_ENV
+
+    env = dict(os.environ)
+    scoped_actor = _scoped_driver().get("actor")
+    if scoped_actor:
+        env[DRIVER_INSTANCE_ENV] = scoped_actor
     try:
-        result = subprocess.run(shlex.split(command), capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(shlex.split(command), capture_output=True, text=True, timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
         return {
             "ok": False,

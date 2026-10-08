@@ -41,6 +41,7 @@ ENVELOPE_ERROR_QUOTA_EXHAUSTED = "ENVELOPE_QUOTA_EXHAUSTED"
 ENVELOPE_ERROR_SELECTOR_TASK_ID_MISMATCH = "ENVELOPE_SELECTOR_TASK_ID_MISMATCH"
 ENVELOPE_ERROR_SELECTOR_TASK_MODE_MISMATCH = "ENVELOPE_SELECTOR_TASK_MODE_MISMATCH"
 ENVELOPE_ERROR_SELECTOR_PROJECT_MISMATCH = "ENVELOPE_SELECTOR_PROJECT_MISMATCH"
+ENVELOPE_ERROR_SELECTOR_LANE_REPO_MISMATCH = "ENVELOPE_SELECTOR_LANE_REPO_MISMATCH"  # AIPOS-F134 件③
 ENVELOPE_ERROR_AGENT_NOT_COVERED = "ENVELOPE_AGENT_NOT_COVERED"
 ENVELOPE_ERROR_NOT_APPROVED = "ENVELOPE_NOT_APPROVED"
 ENVELOPE_ERROR_STATUS_NOT_ACTIVE = "ENVELOPE_STATUS_NOT_ACTIVE"
@@ -86,6 +87,7 @@ POLICY_FRONTMATTER_ORDER = [
     "task_selector_task_ids",
     "max_tasks",
     "launch_harnesses",
+    "task_selector_lane_repo",  # AIPOS-F134 件③: 只追加; 缺省(键缺)= 不限 lane, 存量信封不变
 ]
 
 
@@ -163,6 +165,7 @@ def build_autonomy_policy_markdown(
     status: str = POLICY_STATUS_ACTIVE,
     approved_by_owner: bool = True,
     launch_harnesses: list[str] | None = None,
+    task_selector_lane_repo: str | None = None,
 ) -> str:
     """Render an owner_autonomy_policy artifact. Written only through the owner_confirm-gated
     owner_decision_record grant path — the presence of this on-disk artifact IS the Owner's
@@ -183,6 +186,9 @@ def build_autonomy_policy_markdown(
         "max_tasks": int(max_tasks),
         "launch_harnesses": [str(h) for h in (launch_harnesses or [])],
     }
+    lane_repo = str(task_selector_lane_repo or "").strip()
+    if lane_repo:  # AIPOS-F134 件③: 只在给定时落键(缺省 = 不限 lane, 渲染与存量信封逐字节同)
+        metadata["task_selector_lane_repo"] = lane_repo
     body = "\n".join(
         [
             f"# Owner Autonomy Policy: {policy_id}",
@@ -195,6 +201,7 @@ def build_autonomy_policy_markdown(
             f"- Max auto-released claims: {max_tasks} (count bound).",
             f"- Owner approval: `{owner_approval_ref}`.",
             f"- Harness launch: {', '.join(launch_harnesses or []) or 'none (manual /go only)'}.",
+            *([f"- Lane: cards whose lane.repo resolves to `{lane_repo}` only (task_selector_lane_repo)."] if lane_repo else []),
             "",
             "## Boundary",
             "",
@@ -241,6 +248,8 @@ def normalize_policy(metadata: dict[str, Any]) -> dict[str, Any] | None:
         "max_tasks": max_tasks,
         # AIPOS-F95 件②(b): 缺省 [] = 不授权拉起(存量信封无此键)
         "launch_harnesses": [str(item).strip() for item in launch if str(item).strip()],
+        # AIPOS-F134 件③: 缺省 "" = 不限 lane(存量信封无此键)
+        "task_selector_lane_repo": str(metadata.get("task_selector_lane_repo") or "").strip(),
     }
 
 
@@ -322,13 +331,43 @@ def count_preauthorized_claims(repo_root: Path, policy_id: str) -> int:
     return count
 
 
-def envelope_subject(repo_root: Path, *, task_id: str, task_mode: str, project: str, reviewed_task_id: str = "") -> tuple[str, str, str]:
+def card_lane_refs(governance_root: Path | str, card_frontmatter: dict[str, Any] | None) -> dict[str, Any]:
+    """AIPOS-F134 件③: 卡所在仓的全部指称(信封 task_selector_lane_repo 的判定对象)——解析唯一 workspace_config.resolve_card_repo
+    (卡 lane.repo → project.json repos 清单 → 缺省仓), 指称 = {解析路径, 其 resolve 形, 卡面原值, 清单里指向同一路径的仓名}。
+    解析不到 = {"refs": [], "error": 拒因原文}(带 lane 选择器的信封据此判不匹配, fail-closed; 无 lane 选择器的信封不调用本函数)。"""
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved, _same_path, project_repos, resolve_card_repo
+
+    root = Path(governance_root)
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    try:
+        path = resolve_card_repo(root, fm)
+        repos = project_repos(root)
+    except (CardRepoUnresolved, OSError, ValueError) as exc:  # 精确捕获并带出原文(禁静默); 判定落 match_claim_envelope 原因链
+        return {"refs": [], "error": f"{type(exc).__name__}: {exc}"}
+    refs = [str(path)]
+    try:
+        refs.append(str(path.resolve()))
+    except OSError as exc:
+        return {"refs": [], "error": f"OSError: {exc}"}
+    lane = fm.get("lane") if isinstance(fm.get("lane"), dict) else {}
+    raw = str(lane.get("repo") or "").strip()
+    if raw:
+        refs.append(raw)
+    refs.extend(name for name, item in (repos.get("items") or {}).items() if _same_path(item, path))
+    return {"refs": list(dict.fromkeys(refs)), "error": ""}
+
+
+def envelope_subject(repo_root: Path, *, task_id: str, task_mode: str, project: str, reviewed_task_id: str = "",
+                     lane: dict[str, Any] | None = None, with_lane: bool = False
+                     ) -> tuple[str, str, str, dict[str, Any] | None]:
     """AIPOS-F90 件①: 信封 task_selector 的判定对象(驱动方 loop_driver.find_envelope 与门 _match_claim_envelope 同读此处)。
 
     审计卡(task_mode=audit 且声明 reviewed_task_id)= 被审卡: 审计卡由派审从被审卡派生, 其认领是被审卡推进链的一步
     (与裁决/close 按被审卡判信封同口径), 否则 task_selector_task_mode=code 的驱动信封永远认领不了审计卡, loop 停在审计认领。
     被审卡找不到 = 仍按审计卡自身字段判(只窄不宽, fail-safe)。声明: verbs.schema lybra_loop.envelope.subject_rule。
-    返回 (task_id, task_mode, project)。"""
+    AIPOS-F134 件③: with_lane=True 时第四项 = 判定对象卡的 lane 指称(card_lane_refs; 审计卡 = 被审卡的 lane, 同一主体规则),
+    否则 None(只在有信封带 task_selector_lane_repo 时才解析, 无 lane 信封零额外读取 = 行为不变)。
+    返回 (task_id, task_mode, project, lane_refs | None)。"""
     if str(task_mode or "").strip() == "audit" and str(reviewed_task_id or "").strip():
         from tools.aipos_cli.task_loader import find_task_card
 
@@ -336,8 +375,25 @@ def envelope_subject(repo_root: Path, *, task_id: str, task_mode: str, project: 
         if reviewed_path is not None:
             fm, _body, _warnings = parse_markdown_frontmatter(reviewed_path.read_text(encoding="utf-8"))
             if isinstance(fm, dict):
-                return (str(reviewed_task_id).strip(), str(fm.get("task_mode") or ""), str(fm.get("project") or ""))
-    return str(task_id or ""), str(task_mode or ""), str(project or "")
+                rid = str(reviewed_task_id).strip()
+                lane_refs = card_lane_refs(repo_root, {**fm, "task_id": rid}) if with_lane else None
+                return (rid, str(fm.get("task_mode") or ""), str(fm.get("project") or ""), lane_refs)
+    lane_refs = None
+    if with_lane:
+        lane_refs = card_lane_refs(repo_root, {"task_id": str(task_id or ""), "lane": lane if isinstance(lane, dict) else {}})
+    return str(task_id or ""), str(task_mode or ""), str(project or ""), lane_refs
+
+
+def driver_envelope_identities(instance: str | None, role_name: str | None, role_class: str | None
+                               ) -> list[tuple[str, str, str | None]]:
+    """AIPOS-F134 件①: 驱动方信封身份集合的唯一构造(loop_driver.find_envelope 与门 _match_driver_envelope / _match_claim_envelope 同用)。
+
+    身份 = {驱动方实例(缺则角色类), 角色名(凭据条目 role, 如 hbj-advisor), 角色类(roles.schema driver.role_class)}——信封 agent_or_role
+    写其一即覆盖。返回 match_claim_envelope 三元组列表, 按具体程度降序(角色名 → 角色类; select_envelope 据此优先更具体的信封)。"""
+    klass = str(role_class or "").strip()
+    inst = str(instance or "").strip() or klass
+    roles = list(dict.fromkeys(r for r in (str(role_name or "").strip(), klass) if r))
+    return [(inst, inst, r) for r in roles] or [(inst, inst, None)]
 
 
 def match_claim_envelope(
@@ -351,6 +407,7 @@ def match_claim_envelope(
     now: datetime,
     released_count: int,
     claiming_role: str | None = None,
+    lane: dict[str, Any] | None = None,
 ) -> tuple[bool, str, str | None]:
     """Strict-AND envelope match for a claim. Returns (matched, reason, error_code). Every predicate must
     hold; any miss returns matched=False with a human reason and error_code (maps to transitions.schema.json
@@ -360,6 +417,8 @@ def match_claim_envelope(
     AIPOS-F9: error_code maps to transitions.schema.json envelope_guards for structured next_step.
     AIPOS-PRERELEASE-1: every predicate's input and judgment is traced to stderr (→ journald)
     as gate-side evidence, so a match or fallback is observable without agent self-report.
+    AIPOS-F134 件③: task_selector_lane_repo(缺省 "" = 不限 lane) —— lane = 判定对象卡的仓指称(envelope_subject(with_lane=True) /
+    card_lane_refs); 选择器值须在其 refs 内。带 lane 选择器而调用方未给 lane / 卡仓解析不到 = 不匹配(fail-closed, 原因链带原文)。
     """
     # ── evaluate every predicate (full picture for the trace) ─────────────
     is_dict = isinstance(policy, dict)
@@ -372,6 +431,9 @@ def match_claim_envelope(
     sel_mode = str(policy.get("task_selector_task_mode") or "").strip() if is_dict else ""
     sel_project = str(policy.get("task_selector_project") or "").strip() if is_dict else ""
     sel_ids = list(policy.get("task_selector_task_ids") or []) if is_dict else []
+    sel_lane = str(policy.get("task_selector_lane_repo") or "").strip() if is_dict else ""
+    lane_refs = [str(r) for r in ((lane or {}).get("refs") or [])] if isinstance(lane, dict) else []
+    lane_ok = (not sel_lane) or (sel_lane in lane_refs)
 
     active_from = _parse_iso(policy.get("active_from")) if is_dict else None
     expires_at = _parse_iso(policy.get("expires_at")) if is_dict else None
@@ -390,10 +452,11 @@ def match_claim_envelope(
         "time_window_parseable": tw_parseable,
         "time_window_active": tw_parseable and (active_from <= now < expires_at),
         "agent_or_role": bool(covered) and covered in identity,
-        "task_selector_present": bool(sel_mode or sel_project or sel_ids),
+        "task_selector_present": bool(sel_mode or sel_project or sel_ids or sel_lane),
         "task_id_in_ids": (not sel_ids) or (str(task_id or "").strip() in sel_ids),
         "task_mode": (not sel_mode) or (str(task_mode or "").strip() == sel_mode),
         "project": (not sel_project) or (str(project or "").strip() == sel_project),
+        "lane_repo": lane_ok,
         "max_tasks_positive": max_tasks > 0,
         "count_bound": released_count < max_tasks,
     }
@@ -425,7 +488,7 @@ def match_claim_envelope(
     elif not covered or covered not in identity:
         reason = "claiming agent/role is not covered by policy.agent_or_role"
         error_code = ENVELOPE_ERROR_AGENT_NOT_COVERED
-    elif not (sel_mode or sel_project or sel_ids):
+    elif not (sel_mode or sel_project or sel_ids or sel_lane):
         reason = "policy task_selector is empty (no wildcard auto-release)"
         error_code = None  # empty selector (config error)
     elif sel_ids and str(task_id or "").strip() not in sel_ids:
@@ -437,6 +500,15 @@ def match_claim_envelope(
     elif sel_project and str(project or "").strip() != sel_project:
         reason = "project does not match policy task_selector.project"
         error_code = ENVELOPE_ERROR_SELECTOR_PROJECT_MISMATCH
+    elif not lane_ok:
+        if not isinstance(lane, dict):
+            where = "card lane not provided to the matcher"
+        elif lane.get("error"):
+            where = f"card repo unresolvable ({lane.get('error')})"
+        else:
+            where = f"card lane.repo resolves to {lane_refs}"
+        reason = f"{where}; does not match policy task_selector.lane_repo={sel_lane!r}"
+        error_code = ENVELOPE_ERROR_SELECTOR_LANE_REPO_MISMATCH
     elif max_tasks <= 0:
         reason = "policy max_tasks is not a positive bound"
         error_code = None  # invalid max_tasks (config error)
@@ -461,7 +533,8 @@ def match_claim_envelope(
             "now": now.isoformat(),
             "released_count": released_count,
             "policy_agent_or_role": covered,
-            "policy_task_selector": {"task_mode": sel_mode, "project": sel_project, "task_ids": sel_ids},
+            "policy_task_selector": {"task_mode": sel_mode, "project": sel_project, "task_ids": sel_ids, "lane_repo": sel_lane},
+            "lane": lane,
             "policy_active_from": policy.get("active_from") if is_dict else None,
             "policy_expires_at": policy.get("expires_at") if is_dict else None,
             "policy_max_tasks": max_tasks,
@@ -486,7 +559,8 @@ def select_envelope(
 
     - identities: 身份三元组 (agent_instance, actor, claiming_role) 列表, 按具体程度降序(实例/角色名 → 角色类);
       每个三元组原样交 match_claim_envelope(其身份集合 = 三者去空)。
-    - task: 判定对象 {task_id, task_mode, project, reviewed_task_id?}; 经 envelope_subject(审计卡 = 被审卡, 门与 loop 同一规则)。
+    - task: 判定对象 {task_id, task_mode, project, reviewed_task_id?, lane?}; 经 envelope_subject(审计卡 = 被审卡, 门与 loop 同一规则);
+      AIPOS-F134 件③: 候选信封有 task_selector_lane_repo 时才解析卡 lane 指称(card_lane_refs)。
       None = 任务无关(工位 .lybra/role 推导、凭据上下文自发现等无卡场景): 判定对象取该信封自身 task_selector
       (= 「该信封覆盖某张卡」), 其余谓词(有效/时间窗/身份覆盖/选择器非空/额度)照常由 match_claim_envelope 判。
     - policy_id: 给定 = 只核该信封(同一判据重核, 不另挑); 缺省 = 扫描声明目录 policies_dir 全部信封。
@@ -509,15 +583,6 @@ def select_envelope(
         except ValueError:
             shown = f"{pdir}/"
         return None, [f"{shown} 下没有任何信封"]
-    subject: tuple[str, str, str] | None = None
-    if task is not None:
-        subject = envelope_subject(
-            root,
-            task_id=str(task.get("task_id") or ""),
-            task_mode=str(task.get("task_mode") or ""),
-            project=str(task.get("project") or ""),
-            reviewed_task_id=str(task.get("reviewed_task_id") or ""),
-        )
     loaded: list[tuple[str, dict[str, Any], int]] = []
     reasons: list[str] = []
     for pid in candidates:
@@ -526,16 +591,30 @@ def select_envelope(
             reasons.append(f"{pid}: 信封文件缺失或格式不合规(owner_autonomy_policy)")
             continue
         loaded.append((pid, policy, count_preauthorized_claims(root, pid)))
+    subject: tuple[str, str, str, dict[str, Any] | None] | None = None
+    if task is not None:
+        subject = envelope_subject(
+            root,
+            task_id=str(task.get("task_id") or ""),
+            task_mode=str(task.get("task_mode") or ""),
+            project=str(task.get("project") or ""),
+            reviewed_task_id=str(task.get("reviewed_task_id") or ""),
+            lane=task.get("lane") if isinstance(task.get("lane"), dict) else None,
+            with_lane=any(p.get("task_selector_lane_repo") for _pid, p, _r in loaded),
+        )
     last_reason: dict[str, str] = {}
     for agent_instance, actor, claiming_role in triples:
         for pid, policy, released in loaded:
             if subject is not None:
-                subject_id, subject_mode, subject_project = subject
+                subject_id, subject_mode, subject_project, subject_lane = subject
             else:
                 sel_ids = list(policy.get("task_selector_task_ids") or [])
                 subject_id = sel_ids[0] if sel_ids else ""
                 subject_mode = str(policy.get("task_selector_task_mode") or "")
                 subject_project = str(policy.get("task_selector_project") or "")
+                # 任务无关: 判定对象取信封自身选择器(= 「该信封覆盖某张卡」), lane 同理
+                sel_lane = str(policy.get("task_selector_lane_repo") or "")
+                subject_lane = {"refs": [sel_lane] if sel_lane else [], "error": ""}
             matched, reason, _code = match_claim_envelope(
                 policy=policy,
                 task_id=subject_id,
@@ -546,6 +625,7 @@ def select_envelope(
                 now=now,
                 released_count=released,
                 claiming_role=claiming_role,
+                lane=subject_lane,
             )
             if matched:
                 return policy, []

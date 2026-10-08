@@ -305,7 +305,7 @@ def _metadata(record: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_autonomy_policy(
-    value: Any, *, decision_id: str, blocking_reasons: list[str]
+    value: Any, *, decision_id: str, blocking_reasons: list[str], repo_root: Path | None = None
 ) -> dict[str, Any] | None:
     """AIPOS-250: OPTIONAL — when an owner decision GRANTS a PreAuthorized autonomy envelope,
     the payload carries an autonomy_policy block. Validating and materializing the policy
@@ -355,8 +355,24 @@ def _normalize_autonomy_policy(
     sel_ids = [str(item).strip() for item in sel_ids_raw if str(item).strip()] if isinstance(sel_ids_raw, list) else []
     if sel_ids_raw not in (None, []) and not isinstance(sel_ids_raw, list):
         _add(blocking_reasons, "autonomy_policy.task_selector.task_ids must be a list of strings")
-    if not (sel_mode or sel_project or sel_ids):
-        _add(blocking_reasons, "autonomy_policy.task_selector must set at least one of task_mode/project/task_ids (no wildcard envelope)")
+    # AIPOS-F134 件③: lane 选择器(缺省 = 不限 lane)。须在本治理根可解析(workspace_config.resolve_card_repo 唯一解析: 仓名 ∈ project.json
+    # repos.items, 或无清单时 = code_repo 路径); 解析不到 = BLOCK(不落一张永远匹配不上的信封)。路径形落 resolve 后的绝对路径。
+    sel_lane = str(selector.get("lane_repo") or "").strip()
+    if sel_lane:
+        if repo_root is None:
+            _add(blocking_reasons, "autonomy_policy.task_selector.lane_repo needs the target governance root to resolve the repo")
+        else:
+            from tools.aipos_cli.workspace_config import CardRepoUnresolved, resolve_card_repo
+
+            try:
+                resolved = resolve_card_repo(repo_root, {"task_id": f"envelope:{value.get('policy_id') or '?'}", "lane": {"repo": sel_lane}})
+            except (CardRepoUnresolved, OSError, ValueError) as exc:
+                _add(blocking_reasons, f"autonomy_policy.task_selector.lane_repo={sel_lane!r} 不可解析: {exc}")
+            else:
+                if Path(sel_lane).expanduser().is_absolute():
+                    sel_lane = str(resolved.resolve())
+    if not (sel_mode or sel_project or sel_ids or sel_lane):
+        _add(blocking_reasons, "autonomy_policy.task_selector must set at least one of task_mode/project/task_ids/lane_repo (no wildcard envelope)")
 
     # AIPOS-F95 件②(b): 拉起授权(缺省 [] = 只手工 /go); 取值须为 enums.schema harness 中有 launch 模板者(声明唯一读取口)
     launch_raw = value.get("launch_harnesses")
@@ -383,6 +399,7 @@ def _normalize_autonomy_policy(
         "task_selector_task_mode": sel_mode,
         "task_selector_project": sel_project,
         "task_selector_task_ids": sel_ids,
+        "task_selector_lane_repo": sel_lane,
         "launch_harnesses": launch_harnesses,
         "owner_approval_ref": decision_id,
     }
@@ -483,7 +500,7 @@ def build_owner_decision_record(
 
     decision_id = _normalize_decision_id(payload.get("decision_id"), blocking_reasons)
     autonomy_policy = _normalize_autonomy_policy(
-        payload.get("autonomy_policy"), decision_id=decision_id, blocking_reasons=blocking_reasons
+        payload.get("autonomy_policy"), decision_id=decision_id, blocking_reasons=blocking_reasons, repo_root=Path(repo_root)
     )
     is_policy_grant = payload.get("autonomy_policy") not in (None, "")
 
@@ -594,6 +611,7 @@ def build_owner_decision_record(
             task_selector_project=autonomy_policy["task_selector_project"],
             task_selector_task_ids=autonomy_policy["task_selector_task_ids"],
             launch_harnesses=autonomy_policy["launch_harnesses"],
+            task_selector_lane_repo=autonomy_policy["task_selector_lane_repo"],
         )
         planned_writes.append(
             {
