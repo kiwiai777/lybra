@@ -240,6 +240,19 @@ def charter_render_context(
         if runall
         else "本项目未声明测试清单(project.json 无 test_contract.runall_path)——独立全量基线跳过, 报告注明「项目未声明 test_contract.runall_path」"
     )
+    # AIPOS-F137 件③(gap #117/#101): 长测试写法——全量一次的命令式样与 bash 工具超时。超时 = 同一清单全量跑一次的既有时限声明
+    # test_contract.post_merge_regression.timeout_seconds(finalize 合并后回归跑的正是同一清单全量; 同一读取口, 未声明取 config.schema
+    # 缺省), 不另设键、不写死数值; 命令式样只拼声明的清单位置。
+    pmr = test_contract["post_merge_regression"]
+    ctx["runall_command"] = (
+        f"`bash {runall} 2>&1 | tee <本工位临时目录>/runall-<tip|main>.log`"
+        if runall
+        else "(本项目未声明测试清单, 无全量可跑——见第 6 条)"
+    )
+    ctx["runall_timeout_seconds"] = (
+        f"`{int(pmr['timeout_seconds'])}` 秒(来源 {pmr['source']} 的 timeout_seconds"
+        "——同一清单全量跑一次的时限声明)"
+    )
     return ctx
 
 
