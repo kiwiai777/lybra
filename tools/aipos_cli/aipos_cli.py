@@ -150,12 +150,19 @@ def _resolve_my_tasks_workstation(args: argparse.Namespace) -> int | None:
         return None
     from tools.aipos_cli.charter_render import (
         WorkstationIdentityError,
+        WorkstationInstanceNotRegistered,
         resolve_workstation_governance_root,
         workstation_identity,
     )
 
     try:
-        identity = workstation_identity(workstation)
+        # AIPOS-F140 件②: 给了 --actor = 按实例取记录(治理根多顾问实例取其槽; 工位无槽 = 顶层, 实例不符拒因同修前)
+        identity = workstation_identity(workstation, instance=actor or None)
+    except WorkstationInstanceNotRegistered as exc:
+        listed = f"; 已登记实例: {', '.join(exc.registered)}" if exc.slotted else ""
+        print(f"Error: --actor {actor} ≠ 工位 {Path(workstation).expanduser().resolve()} 的实例 {exc.top_instance}"
+              f"(二者择一, 以工位身份为准{listed})", file=sys.stderr)
+        return 2
     except WorkstationIdentityError as exc:
         print(f"Error: WORKSTATION_IDENTITY_UNRESOLVED: {exc}", file=sys.stderr)
         return 1
