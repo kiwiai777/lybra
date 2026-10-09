@@ -68,6 +68,13 @@ overwritten:
    instance's own credential for every gate call (it never falls back to another advisor's credential or to the first one in the
    file), and refuses to start when the instance has no credential in the governance root. With two or more advisor instances
    enrolled, running `lybra loop` without `--actor` is refused (the driver cannot be guessed).
+4. **Each advisor reads its own charter.** `lybra charter --role advisor --instance <advisor instance>` (run in the
+   governance root, or over ssh from the session's machine) renders the charter from that instance's own record in
+   `.lybra/role` (`instances.<instance>`: its role, harness kind and host), so the advisor enrolled first is not refused after a
+   second one enrolls. An instance that has no record there is refused with the list of instances recorded in that governance
+   root. Without `--instance` the command keeps using the most recently enrolled instance, and workstations (one record, no
+   `instances`) behave as before. Every reader of `.lybra/role` that needs a given instance's record goes through one function
+   (`tools/aipos_cli/enroll_client.py` `read_role_record`, next to the writer).
 
 A project with a single advisor needs none of this: `--actor` stays optional and existing envelopes keep working unchanged.
 

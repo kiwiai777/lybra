@@ -22,7 +22,7 @@
 | 工位分发 | 工位 | `lybra roles enroll`(凭注册码) + `lybra sync`(工位发起拉取);`--harness` 合法值 = `harness_semantics.kinds` 的键(未知值拒并列出合法值, 先于兑换、零写盘) |
 | 治理落账 / 体检 | 顾问 | `lybra governance-commit`(卡由 loop 结案后自动落账;非卡改动用 `--paths`);`lybra state lint`;冷启动简报 `lybra brief` |
 | Owner 动作 | Owner | `lybra envelope mint`(签信封);`lybra roles … enroll-code`(发注册码);`lybra serve`(起门);`lybra board`(看板) |
-| 同一项目多顾问实例 | Owner + 各顾问 | 每个顾问实例各一张带 `--instance` 的注册码(顾问/规划方类码缺实例即拒)、各自 `lybra roles enroll` 到同一治理根(凭据按实例并存, 重接入只轮换本实例;`.lybra/role` 按实例分槽 `instances.<实例>`);各签一张按实例覆盖的信封, 限定 lane 时加 `lybra envelope mint --lane-repo <仓名>`(仓名取 project.json `repos.items`, 不可解析即拒;不给 = 不限 lane, 行为不变);**子项目跨仓**:信封与视图写仓集合(`--lane-repo <仓a> --lane-repo <仓b>` 重复给出, 不按逗号拆), 共用仓可同时出现在多个顾问的集合里, 同仓合入由 F135 自动排队;集合内任一仓不可解析即拒;存量单值信封按单元素集合读, 行为不变;推进一律 `lybra loop --task-id <卡ID> --actor <顾问实例>`(只用该实例自己的凭据, 无凭据即拒;两个及以上顾问实例时缺 `--actor` 即拒)。步骤详见 [`docs/mcp-agent-setup.md`](../../docs/mcp-agent-setup.md)「Several advisors on one project」 |
+| 同一项目多顾问实例 | Owner + 各顾问 | 每个顾问实例各一张带 `--instance` 的注册码(顾问/规划方类码缺实例即拒)、各自 `lybra roles enroll` 到同一治理根(凭据按实例并存, 重接入只轮换本实例;`.lybra/role` 按实例分槽 `instances.<实例>`, 各顾问开局 `lybra charter --role advisor --instance <本实例>` 取本实例槽渲染的章程, 未登记实例即拒并列出已登记实例);各签一张按实例覆盖的信封, 限定 lane 时加 `lybra envelope mint --lane-repo <仓名>`(仓名取 project.json `repos.items`, 不可解析即拒;不给 = 不限 lane, 行为不变);**子项目跨仓**:信封与视图写仓集合(`--lane-repo <仓a> --lane-repo <仓b>` 重复给出, 不按逗号拆), 共用仓可同时出现在多个顾问的集合里, 同仓合入由 F135 自动排队;集合内任一仓不可解析即拒;存量单值信封按单元素集合读, 行为不变;推进一律 `lybra loop --task-id <卡ID> --actor <顾问实例>`(只用该实例自己的凭据, 无凭据即拒;两个及以上顾问实例时缺 `--actor` 即拒)。步骤详见 [`docs/mcp-agent-setup.md`](../../docs/mcp-agent-setup.md)「Several advisors on one project」 |
 
 ## 声明单源
 
