@@ -231,7 +231,8 @@ def test_item3_next_scan_skips_frozen_and_single_derive_stops(tmp_path, monkeypa
     after = {r["task_id"] for r in scan_project(gov)}
     assert after == {"DEMO-4", "DEMO-9"}, after
     rc, out, _err = _cli(["next", "--workspace-root", str(gov)], capsys)
-    assert rc == 0 and "frozen 5" in out and "DEMO-1" not in out
+    # AIPOS-F141: 汇总行经四视图唯一可见卡入口 = 本视图(活跃队列 pending/claimed/blocked)内未列的冻结卡数(DEMO-1/3/5)
+    assert rc == 0 and "冻结 3 张未列" in out and "DEMO-1" not in out
     stop = derive_next_step("DEMO-1", gov)
     assert stop["derivable"] is False and stop["current_state"] == "legacy_frozen"
     assert "--unfreeze DEMO-1" in stop["suggested_action"]

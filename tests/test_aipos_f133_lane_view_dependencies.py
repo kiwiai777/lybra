@@ -138,7 +138,8 @@ def test_item2_next_scan_lane_filter(dual):
     rc, out, err = _cli(["next", "--workspace-root", str(gov), "--lane", "api"])
     _show("件② lybra next --lane api:\n" + out)
     assert rc == 0, err
-    assert "HBJ-A1" in out and "HBJ-A2" in out and "HBJ-X1" in out  # 不可解析 lane 照列
+    listed, aside = out.split("未归 lane", 1)  # AIPOS-F141 件②: 不可解析 lane 不混入, 末尾单独一组(计数 + 卡号)
+    assert "HBJ-A1" in listed and "HBJ-A2" in listed and "HBJ-X1" not in listed and aside.startswith(" 1 张") and "HBJ-X1" in aside
     assert "HBJ-W1" not in out and "HBJ-W2" not in out and "HBJ-D1" not in out
     rc, out_all, _ = _cli(["next", "--workspace-root", str(gov), "--json"])
     rows = json.loads(out_all)
@@ -165,8 +166,9 @@ def test_item2_brief_groups_by_lane_and_filters(dual):
     _show("件② lybra brief --lane api --json queue: " + json.dumps({k: queue[k] for k in ("pending", "blocked", "lane_filter")}
                                                                    | {"lanes": list(queue["lanes"])}, ensure_ascii=False))
     assert rc == 0, err
-    assert queue["lane_filter"] == ["api"] and queue["pending"] == 2 and queue["blocked"] == 1  # api 1 + 不可解析 1
-    assert list(queue["lanes"]) == ["api", mz.lane_view_declaration()["unresolved_lane"]]
+    # AIPOS-F141 件②: 只计 api; 不可解析 lane 的卡不混入, 单独成「未归 lane」组
+    assert queue["lane_filter"] == ["api"] and queue["pending"] == 1 and queue["blocked"] == 1
+    assert list(queue["lanes"]) == ["api"] and [u["task_id"] for u in queue["unresolved_lane"]] == ["HBJ-X1"]
 
 
 def test_item2_needs_owner_groups_by_lane_and_filters(dual):
@@ -179,7 +181,9 @@ def test_item2_needs_owner_groups_by_lane_and_filters(dual):
         < out.index(f"== lane {unresolved}") < out.index("HBJ-X1")
     rc, out, err = _cli(["--workspace-root", str(gov), "needs-owner", "--lane", "web"])
     _show("件② lybra needs-owner --lane web:\n" + out)
-    assert rc == 0 and "HBJ-W2" in out and "HBJ-X1" in out and "HBJ-A2" not in out and "== lane" not in out
+    listed = out.split("未归 lane", 1)[0]  # AIPOS-F141 件②: 不可解析 lane 不混入, 末尾单独计数
+    assert rc == 0 and "HBJ-W2" in listed and "HBJ-X1" not in listed and "HBJ-A2" not in out and "== lane" not in out
+    assert "未归 lane 1 张" in out and "HBJ-X1" in out.split("未归 lane", 1)[1]
     rc, out, err = _cli(["--workspace-root", str(gov), "needs-owner", "--json"])
     payload = json.loads(out)
     assert {k: sorted(v) for k, v in payload["lanes"].items()} == {"web": ["HBJ-W2"], "api": ["HBJ-A2"], unresolved: ["HBJ-X1"]}
