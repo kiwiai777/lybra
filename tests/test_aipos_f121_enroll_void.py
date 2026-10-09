@@ -203,7 +203,8 @@ def test_single_implementation_and_fail_closed():
     """⑧ 行渲染 / 写口 / 事件分拣各一处; 读取口经 _instance_events; 新段无 except Exception。"""
     src = (REPO_ROOT / "tools" / "aipos_cli" / "enrollment.py").read_text(encoding="utf-8")
     assert src.count("def _trail_line(") == 1 and src.count("def _write_trail_line(") == 1
-    assert src.count('.open("a"') == 1  # 接入日志唯一追加写口
+    # 接入日志唯一追加写口 _write_trail_line; AIPOS-F140 件③: 其追加委托产品治理文档唯一写口 governance_add.append_governance_doc_line
+    assert src.count('.open("a"') == 0 and src.count("append_governance_doc_line(") == 1
     assert src.count("def _instance_events(") == 1 and src.count("_VOID_LINE_RE.match(") == 1
     assert src.count("owner = enrollment_owner_root(") == 2  # F107 不变量: 写侧 + 诊断同一解析口(void 复用诊断扫描, 不另解析)
     for fn in (enrollment._instance_events, enrollment._latest_land, enrollment.enrollment_whereabouts,
