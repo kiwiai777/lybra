@@ -519,11 +519,13 @@ def _run_lane(governance_root: Path, task_id: str) -> dict[str, Any]:
 
 
 def loop_status(governance_root: Path, task_id: str | None = None, *, now: datetime | None = None,
-                contract: dict[str, Any] | None = None, lane: str | list[str] | None = None) -> dict[str, Any]:
+                contract: dict[str, Any] | None = None, lane: str | list[str] | None = None,
+                include_frozen: bool = False) -> dict[str, Any]:
     """--task-id 给出 = 该卡最近一次运行(含已结束); 缺省 = 本项目全部未结束的运行(loop_dead 也列出: 记录未结束而进程已不在)。
     读不出的记录 = LoopRunRecordError(fail-closed, 点名文件)。
-    AIPOS-F133 件②: 每个运行带 lane(_run_lane 反查卡面); lane 给出 = 经 machine_zone.filter_rows_by_lane 过滤(四命令同一函数)。"""
-    from tools.aipos_cli.machine_zone import filter_rows_by_lane
+    AIPOS-F133 件②: 每个运行带 lane(_run_lane 反查卡面)。AIPOS-F141: 运行行经四视图唯一可见卡入口 machine_zone.visible_cards
+    (冻结卡的运行缺省不列 = F122 唯一判定; lane 给出 = 只列所选, 未解析 lane 的运行单独成组); --task-id = 显式点名, 照列(冻结标 frozen)。"""
+    from tools.aipos_cli.machine_zone import visible_cards
 
     from tools.aipos_cli.loop_driver import load_loop_contract
 
@@ -551,9 +553,11 @@ def loop_status(governance_root: Path, task_id: str | None = None, *, now: datet
         view["next_action"] = next_action(view, rules, governance_root=Path(governance_root),
                                           earlier_end_reasons=history if task_id else None)
         views.append(view)
-    views = filter_rows_by_lane(views, lane)
+    view = visible_cards(Path(governance_root), ((v, None) for v in views), lane=lane, include_frozen=include_frozen or bool(task_id))
+    views = view["rows"]
     report = {"loop_runs_root": str(root), "task_id": task_id, "lane_filter": lane, "runs": views, "runs_on_record": total,
-              "stall_after_seconds": int(decl["stall_after_seconds"]), "stall_after_tool_seconds": int(decl["stall_after_tool_seconds"])}
+              "stall_after_seconds": int(decl["stall_after_seconds"]), "stall_after_tool_seconds": int(decl["stall_after_tool_seconds"]),
+              "frozen_hidden": view["frozen_hidden"], "unresolved_lane": view["unresolved_lane"], "frozen_error": view["frozen_error"]}
     if task_id:
         report["next_action"] = views[-1]["next_action"] if views else None
     return report
@@ -739,18 +743,20 @@ def _dur(seconds: Any) -> str:
 
 
 def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
+    from tools.aipos_cli.machine_zone import lane_filter_label, lane_view_declaration, render_visible_summary  # F139: 仓集合
+
     runs = report["runs"]
+    summary = render_visible_summary(report)  # AIPOS-F141: 可见卡汇总行(四视图同一渲染)
     if not runs:
         what = f"卡 {report['task_id']} 无 loop 运行记录" if report.get("task_id") else "本项目无未结束的 loop 运行"
         if report.get("lane_filter"):
-            from tools.aipos_cli.machine_zone import lane_filter_label  # AIPOS-F139: lane 过滤可为仓集合
-
             what += f"(lane {lane_filter_label(report['lane_filter'])})"
-        return f"{what}(落点 {report['loop_runs_root']})"
+        return "\n".join([f"{what}(落点 {report['loop_runs_root']})", *summary])
+    marker = str(lane_view_declaration()["visible_cards"]["frozen_marker"])
     out: list[str] = []
     for v in runs:
         state = v["state"]
-        out.append(f"loop 运行 {v['run_id']}  [{state}] {decl_states.get(state, '')}")
+        out.append(f"loop 运行 {v['run_id']}  [{state}] {decl_states.get(state, '')}" + (f" {marker}" if v.get("frozen") else ""))
         out.append(f"  卡 {v['task_id']}  lane {v.get('lane') or '-'}  驱动 {v['driver']}  信封 {v.get('envelope') or '(未定)'}  主机 {v['host']}  "
                    f"loop pid {v['pid']}({'存活' if v['loop_alive'] else '已不在' if v['loop_alive'] is False else '未探活'}"
                    + (f"; {v['loop_probe_note']}" if v.get("loop_probe_note") else "") + ")")
@@ -796,7 +802,7 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
     w = report.get("wait")
     if w:
         out.append(f"(--wait {w['requested_seconds']:g}s: {'可行动' if w['outcome'] == 'ready' else '到时仍在推进'}, 实等 {w['waited_seconds']}s)")
-    return "\n".join(out)
+    return "\n".join(out + summary)
 
 
 def loop_status_cli(args: Any) -> int:
@@ -828,7 +834,8 @@ def loop_status_cli(args: Any) -> int:
 
         with envelope_trace_output(bool(getattr(args, "verbose", False))):
             if wait is None:
-                report = loop_status(governance_root, task_id, contract=contract, lane=lane)
+                report = loop_status(governance_root, task_id, contract=contract, lane=lane,
+                                     include_frozen=bool(getattr(args, "include_frozen", False)))
             else:
                 report = wait_for_next_action(governance_root, task_id or "", float(wait), contract=contract, lane=lane)
     except StatusUsageError as exc:

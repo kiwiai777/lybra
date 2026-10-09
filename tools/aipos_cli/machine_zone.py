@@ -405,18 +405,25 @@ def lane_view_declaration(repo_root: Path | None = None) -> dict[str, Any]:
     from tools.schema_loader import SchemaLoadError, load_schema
 
     decl = load_schema("verbs", repo_root).get("lane_view")
-    required = ("cli_flag", "help", "commands", "group_by_default", "unresolved_lane", "invalid_lane_exit_code")
-    if not isinstance(decl, dict) or any(key not in decl for key in required):
-        raise SchemaLoadError(f"verbs.schema.json lane_view 未声明或缺键 {list(required)}")
+    required = ("cli_flag", "help", "commands", "group_by_default", "unresolved_lane", "invalid_lane_exit_code", "visible_cards")
+    visible_keys = ("include_frozen_flag", "include_frozen_help", "frozen_marker", "frozen_summary", "frozen_error_summary",
+                    "unresolved_summary", "unresolved_list_limit")
+    if not isinstance(decl, dict) or any(key not in decl for key in required) \
+            or not isinstance(decl.get("visible_cards"), dict) or any(key not in decl["visible_cards"] for key in visible_keys):
+        raise SchemaLoadError(f"verbs.schema.json lane_view 未声明或缺键 {list(required)}(visible_cards: {list(visible_keys)})")
     return decl
 
 
 def add_lane_argument(parser: Any) -> None:
-    """四命令的 --lane 参数(声明 verbs.schema lane_view.cli_flag / help; argparse 缺省 None = 不过滤)。
-    AIPOS-F139: 可重复(`--lane a --lane b` = 仓集合, 与 `lybra envelope mint --lane-repo` 同一写法)。"""
+    """四命令的视图参数: --lane(声明 verbs.schema lane_view.cli_flag / help; argparse 缺省 None = 不过滤)。
+    AIPOS-F139: 可重复(`--lane a --lane b` = 仓集合, 与 `lybra envelope mint --lane-repo` 同一写法)。
+    AIPOS-F141 件①: 同处挂 --include-frozen(声明 lane_view.visible_cards.include_frozen_flag; 缺省 False = 冻结卡不列)。"""
     decl = lane_view_declaration()
     parser.add_argument(str(decl["cli_flag"]), dest="lane", action="append", default=None, metavar=str(decl.get("metavar") or "LANE"),
                         help=str(decl["help"]))
+    visible = decl["visible_cards"]
+    parser.add_argument(str(visible["include_frozen_flag"]), dest="include_frozen", action="store_true", default=False,
+                        help=str(visible["include_frozen_help"]))
 
 
 def _lane_name_for_path(governance_root: Path, path: Path, repos: dict[str, Any]) -> str:
@@ -503,17 +510,82 @@ def lane_filter_label(lane: str | list[str] | None) -> str:
     return ", ".join(repo_name_set(lane))
 
 
-def filter_rows_by_lane(rows: list[dict[str, Any]], lane: str | list[str] | None) -> list[dict[str, Any]]:
-    """AIPOS-F133 件②: 四命令同一过滤函数。rows 每项须带 "lane"(经 lane_of_card)。lane=None/空 = 原样;
-    lane 给出 = 只留该 lane(F139: 或仓集合内任一 lane)与未解析 lane 的行(未解析 = 无法证明不属本 lane, 照列不隐藏)。"""
+def filter_rows_by_lane(rows: list[dict[str, Any]], lane: str | list[str] | None,
+                        *, set_aside: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """AIPOS-F133 件② / F141 件②: lane 过滤唯一实现(四命令经 visible_cards 调用)。rows 每项须带 "lane"(经 lane_of_card)。
+    lane=None/空 = 原样(未解析 lane 的行照列, 分组输出不变); lane 给出 = 只留 lane ∈ 所给集合(F139: 仓集合)的行——lane 解析不了的行
+    不混入所选 lane; 给了 set_aside 时这些行追加进 set_aside(调用方作「未归 lane」组单独计数, 不静默丢)。"""
     from tools.aipos_cli.workspace_config import repo_name_set
 
-    lanes = repo_name_set(lane)
+    lanes = set(repo_name_set(lane))
     if not lanes:
         return list(rows)
     unresolved = str(lane_view_declaration()["unresolved_lane"])
-    keep = {*lanes, unresolved}
-    return [row for row in rows if row.get("lane") in keep]
+    if set_aside is not None:
+        set_aside.extend(row for row in rows if row.get("lane") == unresolved)
+    return [row for row in rows if row.get("lane") in lanes]
+
+
+def _view_card_id(row: dict[str, Any], metadata: dict[str, Any] | None) -> str:
+    """可见卡入口的卡号(冻结判定键): 卡面 task_id → 行 task_id → 卡文件名(卡面读不出时, 与 state_lint.queue_task_index 同一回落)。"""
+    raw = (metadata or {}).get("task_id") or row.get("task_id") or (Path(str(row["path"])).stem if row.get("path") else "")
+    return str(raw or "").strip().upper()
+
+
+def visible_cards(governance_root: Path, entries: Any, *, lane: str | list[str] | None = None,
+                  include_frozen: bool = False) -> dict[str, Any]:
+    """AIPOS-F141: 四个查看命令(lybra next 项目扫描 / brief / loop status / needs-owner)共用的唯一「可见卡」入口。
+
+    entries = 可迭代的 (row, metadata) 对: row 至少带 task_id 或 path; metadata = 卡面 frontmatter(读不出 = None)。
+    row 已带 "lane" 键(调用方已反查, 如 loop status 的运行)= 不重算; 否则经 lane_of_card 唯一派生。
+    顺序(冻结在先, 冻结卡不进「未归 lane」组):
+      ① 冻结: 是否冻结只调 F122 唯一判定 legacy_baseline.frozen_tasks; 缺省不列, 卡号进 frozen_hidden; include_frozen = 照列并标
+         row["frozen"]=True。清单读不出 = frozen_error(原文), 不隐藏任何卡(fail-closed)。
+      ② lane: 唯一过滤 filter_rows_by_lane; 给定 lane 时 lane 解析不了的行不混入, 进 unresolved_lane(卡号 + 原因)。
+    返回 {rows, frozen_hidden: [卡号], unresolved_lane: [{task_id, lane_error}], frozen_error: str|None, lane_filter, include_frozen}。"""
+    from tools.aipos_cli.legacy_baseline import LegacyBaselineError, frozen_tasks
+
+    root = Path(governance_root)
+    frozen_error: str | None = None
+    try:
+        frozen = frozen_tasks(root)
+    except LegacyBaselineError as exc:
+        frozen, frozen_error = {}, str(exc)
+    rows: list[dict[str, Any]] = []
+    hidden: list[str] = []
+    for row, metadata in entries:
+        card_id = _view_card_id(row, metadata)
+        is_frozen = bool(card_id) and card_id in frozen
+        if is_frozen and not include_frozen:
+            hidden.append(card_id)
+            continue
+        out = dict(row) if "lane" in row else {**row, **lane_of_card(metadata, root)}
+        if is_frozen:
+            out["frozen"] = True
+        rows.append(out)
+    aside: list[dict[str, Any]] = []
+    rows = filter_rows_by_lane(rows, lane, set_aside=aside)
+    unresolved = [{"task_id": _view_card_id(row, None) or "?", "lane_error": row.get("lane_error")} for row in aside]
+    return {"rows": rows, "frozen_hidden": hidden, "unresolved_lane": unresolved, "frozen_error": frozen_error,
+            "lane_filter": lane, "include_frozen": bool(include_frozen)}
+
+
+def render_visible_summary(view: dict[str, Any]) -> list[str]:
+    """visible_cards 结果的汇总行(四命令文字输出同一渲染; 模板读 verbs.schema lane_view.visible_cards)。无可报 = []。"""
+    decl = lane_view_declaration()["visible_cards"]
+    lines: list[str] = []
+    if view.get("frozen_error"):
+        lines.append(str(decl["frozen_error_summary"]).format(error=view["frozen_error"]))
+    if view.get("frozen_hidden"):
+        lines.append(str(decl["frozen_summary"]).format(count=len(view["frozen_hidden"]), flag=decl["include_frozen_flag"]))
+    aside = view.get("unresolved_lane") or []
+    if aside:
+        limit = int(decl["unresolved_list_limit"])
+        ids = ", ".join(str(item.get("task_id")) for item in aside[:limit]) + (f" …(另 {len(aside) - limit} 张, --json 看全部)"
+                                                                                if len(aside) > limit else "")
+        lines.append(str(decl["unresolved_summary"]).format(count=len(aside), task_ids=ids,
+                                                            lane=lane_filter_label(view.get("lane_filter"))))
+    return lines
 
 
 def group_rows_by_lane(rows: list[dict[str, Any]], governance_root: Path | None = None) -> dict[str, list[dict[str, Any]]]:

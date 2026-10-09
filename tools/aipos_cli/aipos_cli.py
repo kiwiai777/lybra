@@ -278,7 +278,8 @@ def _attach_workstation_view(output: dict[str, Any], actor_report: dict[str, Any
     return output
 
 
-def _filter_needs_owner(report: dict[str, Any], *, governance_root: Path | None = None, lane: str | list[str] | None = None) -> dict[str, Any]:
+def _filter_needs_owner(report: dict[str, Any], *, governance_root: Path | None = None, lane: str | list[str] | None = None,
+                        include_frozen: bool = False) -> dict[str, Any]:
     filtered = [
         task
         for task in report["tasks"]
@@ -288,12 +289,14 @@ def _filter_needs_owner(report: dict[str, Any], *, governance_root: Path | None 
         or task["metadata"].get("approval_required") is True
         or bool(task["needs_owner_reasons"])
     ]
-    if governance_root is not None:
-        # AIPOS-F133 件①②: 每张卡的 lane 经唯一派生 machine_zone.lane_of_card; --lane 经同一过滤函数
-        from tools.aipos_cli.machine_zone import filter_rows_by_lane, lane_of_card
+    if governance_root is None:
+        return {**report, "scope": "needs_owner", "tasks": filtered}
+    # AIPOS-F141: 四视图唯一可见卡入口 machine_zone.visible_cards(冻结卡缺省不列 = F122 唯一判定; lane 经唯一派生 lane_of_card +
+    # 唯一过滤 filter_rows_by_lane, 给定 --lane 时未解析 lane 的卡单独成组)
+    from tools.aipos_cli.machine_zone import visible_cards
 
-        filtered = filter_rows_by_lane([{**task, **lane_of_card(task.get("metadata"), governance_root)} for task in filtered], lane)
-    return {**report, "scope": "needs_owner", "tasks": filtered}
+    view = visible_cards(governance_root, ((task, task.get("metadata")) for task in filtered), lane=lane, include_frozen=include_frozen)
+    return {**report, "scope": "needs_owner", "tasks": view["rows"], "view": view}
 
 
 def _task_summary(task: dict[str, Any]) -> dict[str, Any]:
@@ -3985,6 +3988,7 @@ def main(argv: list[str] | None = None) -> int:
             output_format=output_format,
             since=since,
             lane=getattr(args, "lane", None),
+            include_frozen=bool(getattr(args, "include_frozen", False)),  # AIPOS-F141 件①
         )
 
     if args.command == "governance":
@@ -5393,14 +5397,18 @@ def main(argv: list[str] | None = None) -> int:
         except LaneFilterInvalid as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return int(lane_view_declaration()["invalid_lane_exit_code"])
-        owner_report = _filter_needs_owner(report, governance_root=repo_root, lane=lane)
+        owner_report = _filter_needs_owner(report, governance_root=repo_root, lane=lane,
+                                           include_frozen=bool(getattr(args, "include_frozen", False)))
+        view = owner_report["view"]
         if args.json:
             payload = _json_report(owner_report, records=records)
             lanes = {name: [t.get("task_id") for t in rows]
                      for name, rows in group_rows_by_lane(owner_report["tasks"], repo_root).items()}
             payload.update({"lane_filter": lane, "lanes": lanes,
                             "task_lanes": {str(t.get("path")): {"lane": t.get("lane"), "lane_error": t.get("lane_error")}
-                                           for t in owner_report["tasks"]}})
+                                           for t in owner_report["tasks"]},
+                            "frozen_hidden": view["frozen_hidden"], "unresolved_lane": view["unresolved_lane"],
+                            "frozen_error": view["frozen_error"]})  # AIPOS-F141: 可见卡口径(machine_zone.visible_cards)
             print(render_json(payload))
         else:
             print(render_needs_owner_text(owner_report, groups=None if lane else group_rows_by_lane(owner_report["tasks"], repo_root),
@@ -5785,7 +5793,7 @@ def main(argv: list[str] | None = None) -> int:
         return run_ingest_cli(args)
 
     if args.command == "next":
-        from tools.aipos_cli.next_resolver import derive_next_step, scan_project, format_output, format_scan_output
+        from tools.aipos_cli.next_resolver import derive_next_step, scan_project_view, format_output, format_scan_output
 
         try:
             ws_root = getattr(args, "workspace_root", None) or _find_repo_root_for_args(args)
@@ -5827,17 +5835,9 @@ def main(argv: list[str] | None = None) -> int:
                 except LaneFilterInvalid as exc:
                     print(f"Error: {exc}", file=sys.stderr)
                     return int(lane_view_declaration()["invalid_lane_exit_code"])
-                results = scan_project(ws_root, lane=lane)
-                print(format_scan_output(results, json_mode=json_mode, lane=lane))
-                if not json_mode:  # AIPOS-F122 件③: 存量冻结卡不列, 汇总一行(判定唯一实现 legacy_baseline.frozen_tasks)
-                    from tools.aipos_cli.legacy_baseline import LegacyBaselineError, frozen_tasks
-
-                    try:
-                        frozen_count = len(frozen_tasks(Path(ws_root)))
-                    except LegacyBaselineError:
-                        frozen_count = 0  # 清单读不出已在扫描首行列硬停项
-                    if frozen_count:
-                        print(f"frozen {frozen_count}(存量冻结卡, 历史, 不列为待推进)")
+                # AIPOS-F141: 扫描经唯一可见卡入口(machine_zone.visible_cards; 冻结卡缺省不列、--lane 只列所选), 汇总行同一渲染
+                view = scan_project_view(ws_root, lane=lane, include_frozen=bool(getattr(args, "include_frozen", False)))
+                print(format_scan_output(view["rows"], json_mode=json_mode, lane=lane, view=view))
                 return 0
         except Exception as exc:
             print(f"Error in lybra next: {exc}", file=sys.stderr)
