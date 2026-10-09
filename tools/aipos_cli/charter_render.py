@@ -29,6 +29,18 @@ class WorkstationIdentityError(ValueError):
     """工位身份不可解析(缺 .lybra/role / 实例名不合模板), fail-closed。"""
 
 
+class WorkstationInstanceNotRegistered(WorkstationIdentityError):
+    """AIPOS-F140 件①: 给定实例在该工位 / 治理根 .lybra/role 既非顶层也无其槽(读口 enroll_client.read_role_record 判)。
+    携 top_instance / registered / slotted(无槽工位的拒因原文保持修前形, 有槽治理根附已登记实例清单)。"""
+
+    def __init__(self, message: str, *, instance: str, top_instance: str, registered: list[str], slotted: bool):
+        super().__init__(message)
+        self.instance = instance
+        self.top_instance = top_instance
+        self.registered = registered
+        self.slotted = slotted
+
+
 def _sha256_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -38,8 +50,9 @@ def _sha256_text(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 # AIPOS-F106 件④(M2): 工位身份文件名(config.schema configuration_sources.role.source_file = .lybra/role)。
-# .lybra 目录一律经 loop_context.ConnectionResolver.discover_lybra_dir 定位; 本模块是 .lybra/role 的唯一读取实现
-# (另一读取口 ConnectionResolver.resolve_role / resolve_identity 只出身份键), 其余代码禁直接读该文件。
+# .lybra 目录一律经 loop_context.ConnectionResolver.discover_lybra_dir 定位; 文件内容(含 instances.<实例> 分槽)只经
+# enroll_client.read_role_record 读(AIPOS-F140 件①, 与写入器同处的唯一分槽读口; 另一读取口 ConnectionResolver.resolve_role /
+# resolve_identity 在车道外, 只出顶层身份键), 其余代码禁直接读该文件。
 WORKSTATION_ROLE_FILE = "role"
 
 
@@ -57,9 +70,13 @@ def is_enrolled_workstation(harness_root: str | Path) -> bool:
     return role_file is not None and role_file.is_file()
 
 
-def workstation_identity(harness_root: str | Path) -> dict[str, Any]:
+def workstation_identity(harness_root: str | Path, instance: str | None = None) -> dict[str, Any]:
     """读工位 .lybra/role(+ connection.json 非秘密字段)→ {harness_root, role, instance, project, owner_policy_ref, harness,
     governance_root_declared, token_projects, gate_url}。token 值永不读入。
+
+    AIPOS-F140 件①: 记录经唯一分槽读口 enroll_client.read_role_record 取——给 instance = 该实例的记录(治理根多顾问实例各取
+    instances.<实例> 槽: role / harness / owner_policy_ref 都取槽内), 未登记 = WorkstationInstanceNotRegistered(列出已登记实例);
+    未给 = 顶层(现行; 工位无 instances 键, 行为不变)。
 
     AIPOS-F106: .lybra 经 ConnectionResolver.discover_lybra_dir 定位; gate_url = 门基址, 经 confirm_client.resolve_gate_base_url
     (唯一推导口, 委托 ConnectionResolver.resolve_gate_url) 读本工位 connection.json 的 mcp.rpc_url, 未声明 = None;
@@ -68,12 +85,15 @@ def workstation_identity(harness_root: str | Path) -> dict[str, Any]:
     role_file = workstation_role_file(root)
     if role_file is None or not role_file.is_file():
         raise WorkstationIdentityError(f"{root}: 无 .lybra/role — 不是已 enroll 工位, 拒绝分发/渲染")
+    from tools.aipos_cli.enroll_client import RoleInstanceNotRegistered, RoleRecordError, read_role_record
+
     try:
-        data = json.loads(role_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise WorkstationIdentityError(f"{role_file} 不可读/非 JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise WorkstationIdentityError(f"{role_file} 须为 JSON 对象(role/instance)")
+        data = read_role_record(role_file.parent, instance) or {}
+    except RoleInstanceNotRegistered as exc:
+        raise WorkstationInstanceNotRegistered(str(exc), instance=exc.instance, top_instance=exc.top_instance,
+                                               registered=exc.registered, slotted=exc.slotted) from exc
+    except RoleRecordError as exc:
+        raise WorkstationIdentityError(str(exc)) from exc
     role = str(data.get("role") or "").strip()
     instance = str(data.get("instance") or "").strip()
     if not role or not instance:
@@ -399,8 +419,9 @@ def instance_charter(
 ) -> dict[str, Any]:
     """实例的渲染后章程(只读)。返回 {text, instance, role, role_class, harness, distribution_id, workstation, governance_root}。
 
-    判序(任一不成立 = CharterRefused, 带出口): 实例(缺省 = 治理根 .lybra/role 的实例)→ 本治理根 enrollment_log 有其 land 事件
-    (enrollment.workstation_location 唯一定位)且工位在本机 → 工位 .lybra/role(workstation_identity 唯一读取, 只读非秘密字段)实例相符
+    判序(任一不成立 = CharterRefused, 带出口): 实例(缺省 = 治理根 .lybra/role 的顶层实例)→ 本治理根 enrollment_log 有其 land 事件
+    (enrollment.workstation_location 唯一定位)且工位在本机 → 工位 .lybra/role 有该实例的记录(workstation_identity(…, instance=)
+    经分槽读口 read_role_record: 治理根多顾问实例取 instances.<实例> 槽, AIPOS-F140; 只读非秘密字段)
     → 角色解析出的类(custom_roles.resolve_role_to_class)== role_class → 本角色该 harness(缺省 = 工位 role 记录的 harness)恰有一条
     kind=charter 分发条目(与门清单同一构建器 workstation_wiring.declared_role_distributions)→ 母本 + charter_render_context → render_charter。
     声明/治理根坏 = 原异常上抛(ValueError / FileNotFoundError / SchemaLoadError, fail-closed)。"""
@@ -427,7 +448,12 @@ def instance_charter(
                              "出口: 在该工位所在机运行本命令")
     workstation = Path(str(loc["dir"])).expanduser()
     try:
-        identity = workstation_identity(workstation)
+        # AIPOS-F140 件①: 按实例取记录(治理根多顾问实例各取其槽; 工位无槽 = 顶层, 实例不符拒因原文同修前)
+        identity = workstation_identity(workstation, instance=inst)
+    except WorkstationInstanceNotRegistered as exc:
+        listed = f"; 本治理根已登记实例: {', '.join(exc.registered)}" if exc.slotted else ""
+        raise CharterRefused(f"登记工位 {workstation} 的 .lybra/role 实例 = {exc.top_instance!r} ≠ {inst!r}"
+                             f"(工位已被别的实例接入{listed}); 出口: 核对实例名或重新 enroll") from exc
     except WorkstationIdentityError as exc:
         raise CharterRefused(f"实例 {inst} 的登记工位 {workstation} 身份不可用: {exc}; 出口: 重新 enroll 该实例") from exc
     if identity["instance"] != inst:
@@ -440,7 +466,7 @@ def instance_charter(
     if actual_class != role_class:
         raise CharterRefused(f"实例 {inst} 的角色类 = {actual_class!r}(角色 {identity['role']!r}) ≠ --role {role_class!r}; "
                              f"出口: --role {actual_class}")
-    kind = str(harness or "").strip() or str(workstation_harness(workstation)["kind"])
+    kind = str(harness or "").strip() or str(workstation_harness(workstation, instance=inst)["kind"])
     harness_kind_declaration(kind)  # 不在声明 = ValueError(列出合法值)
     charters = [d for d in harness_distributions(declared_role_distributions(str(identity["role"]), actual_class), kind)
                 if _is_charter(d)]

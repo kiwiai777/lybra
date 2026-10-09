@@ -303,8 +303,10 @@ def harness_distributions(dists: list[dict[str, Any]], kind: str) -> list[dict[s
     return [d for d in dists if dist_harness_kind(d) == kind]
 
 
-def workstation_harness(harness_root: Path) -> dict[str, Any]:
+def workstation_harness(harness_root: Path, instance: str | None = None) -> dict[str, Any]:
     """工位 harness = .lybra/role 的 harness {kind, dir[, host]}; 缺 = {缺省 kind, dir=工位根}(既有 pi 工位零迁移)。
+    AIPOS-F140 件①: 给 instance = 取该实例记录的 harness(治理根多顾问实例各取其槽, 经 workstation_identity → read_role_record);
+    未给 = 顶层(现行)。
 
     kind 不在声明内 / dir 取舍违反声明(harness_kind_declaration)= ValueError(fail-closed, 禁猜落点)。
     返回 {kind, dir: Path | None, host: str | None, local: bool, default: bool}; local = 分发件可落本机 dir
@@ -314,7 +316,7 @@ def workstation_harness(harness_root: Path) -> dict[str, Any]:
 
     root = Path(harness_root).expanduser().resolve()
     role_file = workstation_role_file(root) or root
-    raw = workstation_identity(root).get("harness") if is_enrolled_workstation(root) else None
+    raw = workstation_identity(root, instance=instance).get("harness") if is_enrolled_workstation(root) else None
     default_kind = default_harness_kind()
     if raw in (None, "", {}):
         return {"kind": default_kind, "dir": root, "host": None, "local": True, "default": True}
