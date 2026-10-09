@@ -1040,8 +1040,9 @@ def _driver_role_name(workspace_root: Path, connection_json: str | None = None) 
     驱动方 token(role_class==driver.role_class)的 role; 解析不到返回 ""(调用方回退角色类 advisor)。信封 agent_or_role 可写角色名。
 
     AIPOS-F134 件①: loop --actor 在 scope 内 = 该实例自己凭据条目的 role(driver_token_entry, 与门侧按请求 token 取角色名同口径);
-    该实例无凭据 = ""(禁回落首个驱动方或另一实例的角色; loop 启动已按 driver_token_refusal 拒)。.lybra/role 读法仍只经
-    ConnectionResolver.resolve_identity / resolve_role(顶层 = 最近接入实例; 多顾问实例时驱动方身份以 --actor + 其凭据条目为准)。"""
+    该实例无凭据 = ""(禁回落首个驱动方或另一实例的角色; loop 启动已按 driver_token_refusal 拒)。未给 --actor 时 .lybra/role 读顶层
+    (ConnectionResolver.resolve_role, 顶层 = 最近接入实例; 多顾问实例时驱动方身份以 --actor + 其凭据条目为准); 给了 --actor 而无连接
+    文件时按实例经分槽读口 enroll_client.read_role_record 取(AIPOS-F140)。"""
     import json
 
     from tools.aipos_cli.two_phase_shell_factory import driver_role_class, driver_token_entry
@@ -1055,11 +1056,16 @@ def _driver_role_name(workspace_root: Path, connection_json: str | None = None) 
                 return str(driver_token_entry(connection_json_path=conn, agent_instance=scoped_actor).get("role") or "").strip()
             except ValueError:
                 return ""
-        # 无连接文件(靶场): 工位声明 .lybra/role 顶层记录恰为该实例时取其 role(ConnectionResolver 唯一读法), 否则不借别的实例
-        ident = ConnectionResolver.resolve_identity(workspace_root=workspace_root, env={})
-        if ident["agent_instance"]["source"] == ".lybra/role" and str(ident["agent_instance"]["value"] or "").strip() == scoped_actor:
-            return str(ident["role"]["value"] or "").strip()
-        return ""
+        # 无连接文件(靶场): 治理根 .lybra/role 中该实例的记录(AIPOS-F140 件②: 唯一分槽读口 read_role_record——顶层或
+        # instances.<实例> 槽)的 role; 未登记该实例 = ""(不借别的实例); 文件坏 = RoleRecordError 原样抛(fail-closed)
+        from tools.aipos_cli.enroll_client import RoleInstanceNotRegistered, read_role_record
+
+        lybra_dir = ConnectionResolver.discover_lybra_dir(Path(workspace_root))
+        try:
+            record = read_role_record(lybra_dir, scoped_actor) if lybra_dir is not None else None
+        except RoleInstanceNotRegistered:
+            return ""
+        return str((record or {}).get("role") or "").strip()
     if len(_bound_driver_instances(workspace_root, conn)) > 1:
         return ""  # AIPOS-F134: 多驱动方实例未指明 = 不取 role 顶层(最近接入者)或首个驱动方的角色
     # AIPOS-F106 件④: 治理根 .lybra/role 只经 ConnectionResolver.resolve_role 读(唯一实现; env={} = 只认工位声明层)

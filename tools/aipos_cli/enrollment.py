@@ -589,15 +589,11 @@ def _trail_line(*, action: str, code_id: str, role: str, instance: str | None, p
 
 
 def _write_trail_line(trail: Path, line: str) -> None:
-    """接入日志唯一写口: 只追加(open "a"); 首建带声明 frontmatter。"""
-    trail.parent.mkdir(parents=True, exist_ok=True)
-    with trail.open("a", encoding="utf-8") as fh:
-        if trail.stat().st_size == 0:
-            # AIPOS-F94 N6: 治理文档首建带声明 frontmatter(governance_add.governance_doc_frontmatter 唯一渲染), 过治理仓提交门 B②
-            from tools.aipos_cli.governance_add import governance_doc_frontmatter
+    """接入日志唯一写口: 只追加; 首建带声明 frontmatter(AIPOS-F94 N6, 过治理仓提交门 B②)。
+    AIPOS-F140 件③: 委托产品治理文档追加唯一写口 governance_add.append_governance_doc_line, 头 = governance_doc_frontmatter。"""
+    from tools.aipos_cli.governance_add import append_governance_doc_line
 
-            fh.write(governance_doc_frontmatter() + "\n# Enrollment Codes Log (append-only)\n\n")
-        fh.write(line)
+    append_governance_doc_line(trail, line, title="Enrollment Codes Log (append-only)")
 
 
 def void_instance_events(

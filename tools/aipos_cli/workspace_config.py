@@ -644,15 +644,13 @@ def set_dispatch_mode(
     data["dispatch_mode"] = clean
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    # append-only trail
+    # append-only trail(AIPOS-F140 件③: 首建带声明头, 经唯一写口 governance_add.append_governance_doc_line; 既有文件不动)
+    from tools.aipos_cli.governance_add import append_governance_doc_line
+
     trail = dispatch_mode_trail_path(root)
-    trail.parent.mkdir(parents=True, exist_ok=True)
     ts = iso_z()
     line = f"- {ts}  `{previous}` -> `{clean}`  by={by}  reason={reason or '(none)'}\n"
-    with trail.open("a", encoding="utf-8") as fh:
-        if trail.stat().st_size == 0:
-            fh.write("# Dispatch Mode Switch Log (append-only)\n\n")
-        fh.write(line)
+    append_governance_doc_line(trail, line, title="Dispatch Mode Switch Log (append-only)")
     return clean, trail
 
 

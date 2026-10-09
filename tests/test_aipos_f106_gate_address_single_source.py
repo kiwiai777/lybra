@@ -435,7 +435,8 @@ def test_item3_serve_child_env_carries_only_new_name():
 # ---------------------------------------------------------------------------
 
 ROLE_READ_RE = re.compile(r"""/\s*["']role["']|["']\.lybra/role["']\s*\)|Path\(\s*["']\.lybra/role["']""")
-# 唯一实现: charter_render(WORKSTATION_ROLE_FILE)、loop_context.ConnectionResolver(车道外)、enroll_client.write_role_file(唯一写入器)
+# 唯一实现: charter_render(WORKSTATION_ROLE_FILE 定位)、loop_context.ConnectionResolver(车道外)、enroll_client(_role_file 定位:
+# 唯一写入器 write_role_file 与唯一分槽读口 read_role_record 共用, AIPOS-F140)
 ROLE_ALLOWED = {"tools/loop_context.py", "tools/aipos_cli/enroll_client.py"}
 
 
@@ -446,7 +447,7 @@ def test_item4_no_direct_role_file_access_outside_unique_impl():
     assert hits == [], "\n".join(hits)
     writer = (REPO_ROOT / "tools" / "aipos_cli" / "enroll_client.py").read_text(encoding="utf-8")
     role_lines = [ln for ln in writer.splitlines() if ROLE_READ_RE.search(ln)]
-    assert len(role_lines) == 1 and "role_file = lybra_dir" in role_lines[0], role_lines  # 只在 write_role_file 内
+    assert len(role_lines) == 1 and "role_file = lybra_dir" in role_lines[0], role_lines  # 只在 _role_file 定位内(读写共用)
     used = _grep(_lane_python_files(), re.compile(r"WORKSTATION_ROLE_FILE"))
     assert {h.split(":", 1)[0] for h in used} == {"tools/aipos_cli/charter_render.py"}
 

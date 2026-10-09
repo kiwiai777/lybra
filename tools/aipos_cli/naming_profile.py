@@ -248,9 +248,12 @@ def _append_naming_trail(
     reason: str,
     profile: dict[str, Any],
 ) -> Path:
-    """Append-only trail for naming profile changes."""
+    """Append-only trail for naming profile changes.
+
+    AIPOS-F140 件③: 首建带声明头, 经唯一写口 governance_add.append_governance_doc_line; 既有文件不动。"""
+    from tools.aipos_cli.governance_add import append_governance_doc_line
+
     trail = governance_paths(project_root)["decision_log"].parent / "naming_profile_log.md"
-    trail.parent.mkdir(parents=True, exist_ok=True)
     ts = iso_z()
     # Summarize the change compactly
     prefix_summary = ",".join(f"{r}={p}" for r, p in sorted(profile.get("prefix_mapping", {}).items()))
@@ -261,11 +264,7 @@ def _append_naming_trail(
         f"prefixes=[{prefix_summary}]"
     )
     line = f"- {ts}  {summary}  by={by}  reason={reason or '(none)'}\n"
-    with trail.open("a", encoding="utf-8") as fh:
-        if trail.stat().st_size == 0:
-            fh.write("# Naming Profile Switch Log (append-only)\n\n")
-        fh.write(line)
-    return trail
+    return append_governance_doc_line(trail, line, title="Naming Profile Switch Log (append-only)")
 
 
 # ---------------------------------------------------------------------------

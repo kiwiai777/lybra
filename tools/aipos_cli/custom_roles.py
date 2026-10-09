@@ -457,16 +457,16 @@ def _append_custom_role_trail(
     by: str,
     reason: str,
 ) -> Path:
-    """Append-only trail for custom role changes."""
+    """Append-only trail for custom role changes.
+
+    AIPOS-F140 件③(gap #122): 首建带声明头(原首行只写标题, 被治理仓提交门 B② 拒)——经唯一写口
+    governance_add.append_governance_doc_line; 既有文件不动。"""
+    from tools.aipos_cli.governance_add import append_governance_doc_line
+
     trail = governance_paths(project_root)["decision_log"].parent / "custom_roles_log.md"
-    trail.parent.mkdir(parents=True, exist_ok=True)
     ts = iso_z()
     line = f"- {ts}  {change_type}  name={name}  class={builtin_class}  by={by}  reason={reason or '(none)'}\n"
-    with trail.open("a", encoding="utf-8") as fh:
-        if trail.stat().st_size == 0:
-            fh.write("# Custom Roles Registry Log (append-only)\n\n")
-        fh.write(line)
-    return trail
+    return append_governance_doc_line(trail, line, title="Custom Roles Registry Log (append-only)")
 
 
 def custom_roles_for_naming(project_root: str | Path) -> dict[str, str]:

@@ -597,21 +597,19 @@ def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = Non
         owner_policy_ref: owner策略引用(可选)
         slot_by_instance: AIPOS-F134 件②: 治理席位类(顾问/规划方)写治理根时 = True, 按实例分槽(见下); 工位类 = False(行为不变)
     """
-    role_file = lybra_dir / "role"
+    role_file = _role_file(lybra_dir)
     role_data: dict[str, Any] = {}
-    # 验收⑨: 先读既有文件(存在且合法 JSON 则并入, 既有键默认保留)
-    if role_file.exists():
-        try:
-            existing = json.loads(role_file.read_text(encoding="utf-8"))
-            if isinstance(existing, dict):
-                role_data = dict(existing)
-        except (json.JSONDecodeError, OSError):
-            role_data = {}
+    # 验收⑨: 先读既有文件(存在且合法 JSON 对象则并入, 既有键默认保留)。AIPOS-F140 件①: 文件读取与 read_role_record 同一加载
+    # _load_role_document; 坏文件(不可读 / 非 JSON 对象)= 本次写入重建(既有语义: 写入器修复坏文件, 读口对坏文件 fail-closed)。
+    try:
+        role_data = dict(_load_role_document(lybra_dir) or {})
+    except RoleRecordError:
+        role_data = {}
     # AIPOS-F134 件②: 按实例分槽(slot_by_instance) —— 治理根 .lybra/role 只有一个顶层记录, 同一治理根先后接入两个顾问实例时后者覆盖前者
     # (含继承前者的 owner_policy_ref/harness)。另一实例写入(或文件已分槽)时各实例记录并存于 instances.<实例>(先接入者的顶层记录迁入其槽),
     # 互不覆盖、互不继承; 顶层仍 = 最近一次写入的实例记录(单实例治理根与全部工位: 文件形与合并语义不变, 无 instances 键)。
-    # 读口不新增: 既有两个读口(ConnectionResolver.resolve_identity / charter_render.workstation_identity)照读顶层(= 最近接入实例,
-    # 语义不变); 各实例槽是留存记录(互不覆盖)。多顾问实例时驱动方身份不靠 role 文件, 以 lybra loop --actor + 该实例凭据条目为准
+    # 读法(AIPOS-F140 件①): 分槽读取只有一个函数 read_role_record(本函数下方, 同一格式); 给实例 = 取该实例槽, 未给 = 顶层(= 最近
+    # 接入实例)。多顾问实例时驱动方身份不靠 role 文件顶层, 以 lybra loop --actor + 该实例凭据条目为准
     # (next_resolver: 连接文件绑定 ≥2 个驱动方实例而未给 --actor = 不定, 拒)。
     slots = role_data.get("instances") if isinstance(role_data.get("instances"), dict) else None
     top = {k: v for k, v in role_data.items() if k != "instances"}
@@ -638,6 +636,80 @@ def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = Non
     role_file.write_text(json.dumps(role_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     role_file.chmod(0o644)
     return sorted(role_data.keys())
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F140 件①: .lybra/role 分槽读口(唯一实现; 与上方写入器 write_role_file 的分槽格式同处)
+# ---------------------------------------------------------------------------
+
+ROLE_SLOTS_KEY = "instances"  # 分槽键(config.schema configuration_sources.role.schema.instances)
+
+
+class RoleRecordError(ValueError):
+    """AIPOS-F140 件①: .lybra/role 不可读 / 非 JSON 对象 / 槽形坏(fail-closed, 不当「未声明」)。"""
+
+
+class RoleInstanceNotRegistered(RoleRecordError):
+    """AIPOS-F140 件①: 给定实例在该 .lybra/role 既非顶层实例也无 instances.<实例> 槽 = 拒; 携已登记实例清单(顶层在前)。"""
+
+    def __init__(self, role_file: Path, instance: str, *, top_instance: str, registered: list[str], slotted: bool):
+        self.role_file = role_file
+        self.instance = instance
+        self.top_instance = top_instance
+        self.registered = registered
+        self.slotted = slotted
+        super().__init__(f"{role_file} 未登记实例 {instance!r}(已登记实例: {', '.join(registered) or '(无)'})")
+
+
+def _role_file(lybra_dir: Path) -> Path:
+    """.lybra/role 文件位置(读口与写入器共用; .lybra 目录本身经 ConnectionResolver.discover_lybra_dir 定位)。"""
+    role_file = lybra_dir / "role"
+    return role_file
+
+
+def _load_role_document(lybra_dir: Path) -> dict[str, Any] | None:
+    """整文件加载(读口与写入器合并读共用): 无文件 = None; 不可读 / 非 JSON / 非对象 = RoleRecordError。"""
+    role_file = _role_file(Path(lybra_dir))
+    if not role_file.is_file():
+        return None
+    try:
+        data = json.loads(role_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RoleRecordError(f"{role_file} 不可读/非 JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise RoleRecordError(f"{role_file} 须为 JSON 对象(role/instance)")
+    return data
+
+
+def read_role_record(lybra_dir: str | Path, instance: str | None = None) -> dict[str, Any] | None:
+    """AIPOS-F140 件①: `.lybra/role` 的分槽读取(唯一实现; 工位身份 / 章程 / 治理席位实例读点全走这里)。
+
+    - 未给 instance = 顶层记录(现行语义: 最近一次写入的实例; 工位 = 唯一记录), 不含 instances 键;
+    - 给 instance = 顶层恰为该实例时取顶层, 否则取 instances.<实例> 槽; 都无 = RoleInstanceNotRegistered(列出已登记实例);
+    - 工位(无 instances 键)行为不变: 顶层即唯一记录;
+    - 无文件 = None(是否已 enroll 由调用方判); 文件 / 槽形坏 = RoleRecordError(fail-closed)。"""
+    lybra = Path(lybra_dir)
+    doc = _load_role_document(lybra)
+    if doc is None:
+        return None
+    role_file = _role_file(lybra)
+    raw_slots = doc.get(ROLE_SLOTS_KEY)
+    if raw_slots is not None and not isinstance(raw_slots, dict):
+        raise RoleRecordError(f"{role_file} {ROLE_SLOTS_KEY} 须为 {{实例: 记录}} 对象, 得到 {type(raw_slots).__name__}")
+    slots: dict[str, Any] = raw_slots or {}
+    bad = sorted(k for k, v in slots.items() if not isinstance(v, dict))
+    if bad:
+        raise RoleRecordError(f"{role_file} {ROLE_SLOTS_KEY} 槽 {bad} 须为 JSON 对象(role/instance)")
+    top = {k: v for k, v in doc.items() if k != ROLE_SLOTS_KEY}
+    want = str(instance or "").strip()
+    top_instance = str(top.get("instance") or "").strip()
+    if not want or top_instance == want:
+        return top
+    if want in slots:
+        return dict(slots[want])
+    registered = [i for i in [top_instance, *slots] if i]
+    raise RoleInstanceNotRegistered(role_file, want, top_instance=top_instance,
+                                    registered=list(dict.fromkeys(registered)), slotted=bool(slots))
 
 
 def write_actor_file(lybra_dir: Path, actor: str) -> None:

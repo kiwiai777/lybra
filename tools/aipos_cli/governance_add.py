@@ -77,6 +77,24 @@ def governance_doc_frontmatter(*, status: str = "active", repo_root: Path | None
     return _render_frontmatter(fields)
 
 
+def append_governance_doc_line(trail: Path, line: str, *, title: str, repo_root: Path | None = None) -> Path:
+    """AIPOS-F140 件③(gap #122): 产品写 governance/ 下追加型治理文档(接入 / 自定义角色 / 命名档 / 派发模式等日志)的唯一写口。
+
+    只追加(open "a"); 文件首建(不存在或空)时先写声明头 governance_doc_frontmatter(config.schema file_declarations.governance_doc
+    template_frontmatter 单源, 与提交门 B② 同一声明)+ ``# <title>``; 既有文件(含存量无头文件)不动、不补头。头先渲染后开文件:
+    声明读不出 = 原异常上抛且不留空文件(fail-closed)。"""
+    trail = Path(trail)
+    header = None
+    if not trail.is_file() or trail.stat().st_size == 0:
+        header = governance_doc_frontmatter(repo_root=repo_root) + f"\n# {title}\n\n"
+    trail.parent.mkdir(parents=True, exist_ok=True)
+    with trail.open("a", encoding="utf-8") as fh:
+        if header is not None and trail.stat().st_size == 0:
+            fh.write(header)
+        fh.write(line)
+    return trail
+
+
 def add_decision(
     governance_root: Path,
     *,
