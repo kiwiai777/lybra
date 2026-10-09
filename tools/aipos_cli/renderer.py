@@ -100,16 +100,20 @@ def render_my_tasks_text(report: dict[str, Any], actor: str) -> str:
 
 def render_needs_owner_text(report: dict[str, Any], *, groups: dict[str, list[dict[str, Any]]] | None = None,
                             lane: str | list[str] | None = None) -> str:
-    """AIPOS-F133 件②: groups(machine_zone.group_rows_by_lane 结果)给出 = 按 lane 分组输出; lane 给出 = 标题注明过滤。"""
-    from tools.aipos_cli.machine_zone import lane_filter_label  # AIPOS-F139: lane 过滤可为仓集合
+    """AIPOS-F133 件②: groups(machine_zone.group_rows_by_lane 结果)给出 = 按 lane 分组输出; lane 给出 = 标题注明过滤。
+    AIPOS-F141: report["view"](machine_zone.visible_cards 结果)给出 = 冻结行标 frozen_marker, 末尾附同一汇总行(render_visible_summary)。"""
+    from tools.aipos_cli.machine_zone import lane_filter_label, lane_view_declaration, render_visible_summary  # AIPOS-F139: 集合
 
+    view = report.get("view")
     lines = ["Needs Owner" + (f" — lane {lane_filter_label(lane)}" if lane else "")]
+    summary = render_visible_summary(view) if view else []
     if not report["tasks"]:
         lines.append("(no tasks currently require owner review)")
-        return "\n".join(lines)
+        return "\n".join(lines + summary)
+    marker = str(lane_view_declaration()["visible_cards"]["frozen_marker"]) if view else ""
 
     def _emit(task: dict[str, Any]) -> None:
-        lines.append(_task_line(task))
+        lines.append(_task_line(task) + (f" {marker}" if task.get("frozen") else ""))
         reasons = task["needs_owner_reasons"] or task["blocking_reasons"] or ["owner review requested"]
         lines.append(f"  reasons: {', '.join(reasons[:3])}")
         if task.get("lane_error"):
@@ -120,10 +124,10 @@ def render_needs_owner_text(report: dict[str, Any], *, groups: dict[str, list[di
             lines.append(f"== lane {name} ({len(tasks)}) ==")
             for task in tasks:
                 _emit(task)
-        return "\n".join(lines)
+        return "\n".join(lines + summary)
     for task in report["tasks"]:
         _emit(task)
-    return "\n".join(lines)
+    return "\n".join(lines + summary)
 
 
 def render_validate_text(report: dict[str, Any]) -> str:

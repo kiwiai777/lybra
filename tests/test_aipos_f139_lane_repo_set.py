@@ -75,7 +75,7 @@ def quad(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                                              "repos": {"default": "ota-app", "items": {k: str(v) for k, v in repos.items()}}}))
     for tid, repo in CARDS.items():
         _hcard(gov, tid, "pending", lane_repo=repo, priority="medium", needs_owner=True)
-    _hcard(gov, "HBJ-X1", "pending", lane_repo="ghost", priority="low", needs_owner=True)  # 未声明仓 → lane 不可解析(照列)
+    _hcard(gov, "HBJ-X1", "pending", lane_repo="ghost", priority="low", needs_owner=True)  # 未声明仓 → lane 不可解析(不带 --lane 照列; 带 --lane 不混入, 单独计数 AIPOS-F141)
     return gov, repos
 
 
@@ -241,7 +241,8 @@ def test_item2_four_commands_multi_repo_lane_filter(quad):
     _show("[件②·lybra next --lane ota-contracts --lane shared-web]\n" + out)
     assert rc == 0, err
     assert "lane ota-contracts, shared-web" in out.splitlines()[0]
-    assert "HBJ-OC1" in out and "HBJ-SW1" in out and "HBJ-X1" in out
+    listed = out.split("未归 lane", 1)[0]  # AIPOS-F141 件②: 不可解析 lane 不混入, 末尾单独计数
+    assert "HBJ-OC1" in listed and "HBJ-SW1" in listed and "HBJ-X1" not in listed and "HBJ-X1" in out.split("未归 lane", 1)[1]
     assert "HBJ-OA1" not in out and "HBJ-LT1" not in out
 
     rc, out, err = _cli(["brief", "--workspace-root", str(gov), *lane_args, "--json"])
@@ -249,14 +250,17 @@ def test_item2_four_commands_multi_repo_lane_filter(quad):
     _show("[件②·lybra brief --lane ×2 --json queue] " + json.dumps(
         {"lane_filter": queue["lane_filter"], "pending": queue["pending"], "lanes": list(queue["lanes"])}, ensure_ascii=False))
     assert rc == 0, err
-    assert queue["lane_filter"] == ["ota-contracts", "shared-web"] and queue["pending"] == 3
-    assert list(queue["lanes"]) == ["ota-contracts", "shared-web", unresolved]  # 分组输出形不变(声明序 + 未解析末尾)
+    assert queue["lane_filter"] == ["ota-contracts", "shared-web"] and queue["pending"] == 2  # AIPOS-F141: 不可解析不混入
+    assert list(queue["lanes"]) == ["ota-contracts", "shared-web"]  # 声明序; 未解析 lane 单独成「未归 lane」组
+    assert [u["task_id"] for u in queue["unresolved_lane"]] == ["HBJ-X1"]
 
     rc, out, err = _cli(["--workspace-root", str(gov), "needs-owner", *lane_args])
     _show("[件②·lybra needs-owner --lane ×2]\n" + out)
     assert rc == 0, err
     assert out.splitlines()[0] == "Needs Owner — lane ota-contracts, shared-web"
-    assert "HBJ-OC1" in out and "HBJ-SW1" in out and "HBJ-X1" in out and "HBJ-OA1" not in out and "HBJ-LT1" not in out
+    listed = out.split("未归 lane", 1)[0]
+    assert "HBJ-OC1" in listed and "HBJ-SW1" in listed and "HBJ-X1" not in listed and "HBJ-OA1" not in out and "HBJ-LT1" not in out
+    assert "HBJ-X1" in out.split("未归 lane", 1)[1]
     rc, out, err = _cli(["--workspace-root", str(gov), "needs-owner", "--json"])
     lanes = json.loads(out)["lanes"]
     assert list(lanes) == ["ota-app", "ota-contracts", "shared-web", "lantu-app", unresolved]  # 不带 --lane 分组不变
@@ -290,8 +294,10 @@ def test_item2_single_filter_function_and_declaration():
     src = (REPO_ROOT / "tools/aipos_cli/machine_zone.py").read_text(encoding="utf-8")
     assert src.count("def filter_rows_by_lane(") == 1 and 'action="append"' in src.split("def add_lane_argument(", 1)[1].split("\ndef ", 1)[0]
     rows = [{"lane": "a"}, {"lane": "b"}, {"lane": "c"}, {"lane": decl["unresolved_lane"]}]
-    assert mz.filter_rows_by_lane(rows, ["a", "c"]) == [rows[0], rows[2], rows[3]]
-    assert mz.filter_rows_by_lane(rows, "b") == [rows[1], rows[3]]  # 单值调用方(结案取下一张按本卡 lane)不变
+    # AIPOS-F141 件②: 未解析 lane 不混入所选 lane(set_aside 收集供「未归 lane」组计数)
+    aside: list = []
+    assert mz.filter_rows_by_lane(rows, ["a", "c"], set_aside=aside) == [rows[0], rows[2]] and aside == [rows[3]]
+    assert mz.filter_rows_by_lane(rows, "b") == [rows[1]]  # 单值调用方(结案取下一张按本卡 lane)
     assert mz.filter_rows_by_lane(rows, None) == rows
 
 

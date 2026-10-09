@@ -273,11 +273,13 @@ def _queue_dir_states() -> tuple[str, ...]:
 
 
 def _get_queue_summary(governance_root: Path, repo_root: Path | None = None,
-                       unreadable: list[str] | None = None, *, lane: str | list[str] | None = None) -> dict[str, Any]:
+                       unreadable: list[str] | None = None, *, lane: str | list[str] | None = None,
+                       include_frozen: bool = False) -> dict[str, Any]:
     """获取队列摘要 (转调 records.py 读取记录; 卡遍历只走 task_loader.iter_queue_task_paths, AIPOS-F133 件①)。
 
-    AIPOS-F133 件②: 每张卡的 lane 经唯一派生 machine_zone.lane_of_card; lane 给出 = 经 filter_rows_by_lane 过滤
-    (四命令同一函数); lanes = 按 lane 分组的同形摘要(group_rows_by_lane)。
+    AIPOS-F141: 卡行经四视图唯一可见卡入口 machine_zone.visible_cards(冻结卡缺省不计 = F122 唯一判定; lane 经唯一派生
+    lane_of_card + 唯一过滤 filter_rows_by_lane, 给定 lane 时未解析 lane 的卡单独成「未归 lane」组);
+    lanes = 按 lane 分组的同形摘要(group_rows_by_lane)。
 
     Returns:
         {
@@ -285,9 +287,10 @@ def _get_queue_summary(governance_root: Path, repo_root: Path | None = None,
             "in_flight": list[dict],  # 在途卡详情
             "lane_filter": list[str] | None,  # AIPOS-F139: --lane 仓集合(规范 lane 键)
             "lanes": {<lane>: {<各目录名>: int, "in_flight": list[dict]}},
+            "frozen_hidden": list[str], "unresolved_lane": list[dict], "frozen_error": str | None,  # AIPOS-F141
         }
     """
-    from tools.aipos_cli.machine_zone import filter_rows_by_lane, group_rows_by_lane, lane_of_card
+    from tools.aipos_cli.machine_zone import group_rows_by_lane, visible_cards
     from tools.aipos_cli.records import load_records
     from tools.aipos_cli.task_loader import iter_queue_task_paths
 
@@ -317,21 +320,22 @@ def _get_queue_summary(governance_root: Path, repo_root: Path | None = None,
             "in_flight": [],
         }
 
-    rows: list[dict[str, Any]] = []
+    entries: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
     for card_file in iter_queue_task_paths(Path(governance_root)):
         try:
             fm, _ = require_frontmatter(card_file)
         except FrontmatterReadError as exc:
             if unreadable is not None:
                 unreadable.append(str(exc))
-            fm = None  # 读不出的卡仍计数(按所在目录), lane = 未解析(照列不隐藏)
-        rows.append({
+            fm = None  # 读不出的卡仍计数(按所在目录), lane = 未解析; 冻结判定按文件名回落
+        entries.append(({
             "task_id": (fm or {}).get("task_id"),
+            "path": str(card_file),
             "queue_state": card_file.parent.name,
             "status": (fm or {}).get("status"),
-            **lane_of_card(fm, Path(governance_root)),
-        })
-    rows = filter_rows_by_lane(rows, lane)
+        }, fm))
+    view = visible_cards(Path(governance_root), entries, lane=lane, include_frozen=include_frozen)
+    rows = view["rows"]
 
     def _summary(subset: list[dict[str, Any]]) -> dict[str, Any]:
         counts = {state: sum(1 for r in subset if r["queue_state"] == state) for state in _queue_dir_states()}
@@ -354,7 +358,8 @@ def _get_queue_summary(governance_root: Path, repo_root: Path | None = None,
 
     lanes = {name: _summary(subset) for name, subset in group_rows_by_lane(rows, Path(governance_root)).items()}
     lane_errors = sorted({f"{r.get('task_id') or '?'}: {r['lane_error']}" for r in rows if r.get("lane_error")})
-    return {**_summary(rows), "lane_filter": lane, "lanes": lanes, "lane_errors": lane_errors}
+    return {**_summary(rows), "lane_filter": lane, "lanes": lanes, "lane_errors": lane_errors,
+            "frozen_hidden": view["frozen_hidden"], "unresolved_lane": view["unresolved_lane"], "frozen_error": view["frozen_error"]}
 
 
 def _count_cards_since_snapshot(
@@ -388,6 +393,7 @@ def run_brief(
     output_format: str = "text",
     since: str | None = None,
     lane: str | list[str] | None = None,
+    include_frozen: bool = False,
 ) -> int:
     """运行 lybra brief 命令。
     
@@ -397,6 +403,7 @@ def run_brief(
         output_format: 输出格式 ("text" | "json")
         since: 只显示此日期之后的 decision (YYYY-MM-DD)
         lane: AIPOS-F133 件②: 只看该 lane(machine_zone.resolve_lane_filter 校验); 缺省 = 全部并按 lane 分组
+        include_frozen: AIPOS-F141 件①: 存量冻结卡也计入(缺省不计, 汇总行给冻结张数)
     
     Returns:
         退出码 (0=成功)
@@ -420,7 +427,8 @@ def run_brief(
             return 1
     
     # AIPOS-F133 件②: --lane 校验(不在声明 = 拒, 点名可选值; 退出码读 verbs.schema lane_view.invalid_lane_exit_code)
-    from tools.aipos_cli.machine_zone import LaneFilterInvalid, lane_filter_label, lane_view_declaration, resolve_lane_filter
+    from tools.aipos_cli.machine_zone import (LaneFilterInvalid, lane_filter_label, lane_view_declaration, render_visible_summary,
+                                              resolve_lane_filter)
 
     try:
         lane = resolve_lane_filter(workspace_root, lane)
@@ -446,7 +454,7 @@ def run_brief(
         decisions = _get_decision_log_entries(workspace_root, filter_date, repo_root, unreadable)
         
         # 3. 队列摘要
-        queue_summary = _get_queue_summary(workspace_root, repo_root, unreadable, lane=lane)
+        queue_summary = _get_queue_summary(workspace_root, repo_root, unreadable, lane=lane, include_frozen=include_frozen)
         
         # Fail-closed: 检查 queue_summary 是否有错误
         if "error" in queue_summary:
@@ -561,6 +569,8 @@ def run_brief(
                     print(f"    - {name}: {counts}{gap}")
             for line in queue_summary.get("lane_errors", [])[:10]:
                 print(f"  lane 不可解析: {line}")
+            for line in render_visible_summary(queue_summary):  # AIPOS-F141: 可见卡汇总行(四视图同一渲染)
+                print(f"  {line}")
             print()
             
             # 4. 契约文档

@@ -75,6 +75,18 @@ overwritten:
    root. Without `--instance` the command keeps using the most recently enrolled instance, and workstations (one record, no
    `instances`) behave as before. Every reader of `.lybra/role` that needs a given instance's record goes through one function
    (`tools/aipos_cli/enroll_client.py` `read_role_record`, next to the writer).
+5. **Read the views the same way `lybra next` does.** `lybra next` (project scan), `lybra brief`, `lybra loop status` and
+   `lybra needs-owner` show the same set of cards (one entry point, `tools/aipos_cli/machine_zone.py` `visible_cards`, declared in
+   `schema/verbs.schema.json` `lane_view.visible_cards`):
+   - Cards frozen as history (`lybra project freeze-legacy`) are left out by default; a summary line gives how many were left
+     out. `--include-frozen` lists them too, read-only and marked `[frozen]`. If the freeze list cannot be read, nothing is
+     hidden and the summary line names the error.
+   - With `--lane <repo>` (repeatable), only cards whose lane resolves to one of the given repos are listed. Cards whose lane
+     cannot be resolved are not mixed in: they are counted in a separate group at the end ("未归 lane N 张", with their card IDs).
+     Give such a card a `lane.repo` from `project.json` `repos.items`, or freeze it. Without `--lane`, output is grouped by
+     lane as before, and the unresolved group is still listed.
+   - `lybra loop status --task-id <card>` names one card explicitly, so its run is shown even when the card is frozen (marked
+     `[frozen]`).
 
 A project with a single advisor needs none of this: `--actor` stays optional and existing envelopes keep working unchanged.
 

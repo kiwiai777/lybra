@@ -3009,49 +3009,56 @@ _SCAN_STATES = ("pending", "claimed", "blocked")
 _SCAN_STATE_ORDER = {"legacy_baseline_invalid": -1, "pending": 0, "claimed": 1, "blocked": 2, "completed": 3}
 
 
-def scan_project(workspace_root: Path, *, lane: str | list[str] | None = None) -> list[dict[str, Any]]:
-    """项目级扫描:返回所有活跃任务的最小待办清单。
+def scan_project(workspace_root: Path, *, lane: str | list[str] | None = None, include_frozen: bool = False) -> list[dict[str, Any]]:
+    """项目级扫描的行(= scan_project_view(...)["rows"]; 结案取下一张 / 测试等只要行的调用方用)。"""
+    return scan_project_view(workspace_root, lane=lane, include_frozen=include_frozen)["rows"]
 
-    AIPOS-F133: 卡遍历只走 task_loader.iter_queue_task_paths(原自 glob 队列目录); 每行带 lane(machine_zone.lane_of_card,
-    唯一派生)、priority 与 next_card; lane 给出 = 经 machine_zone.filter_rows_by_lane 过滤(四命令同一函数)。
+
+def scan_project_view(workspace_root: Path, *, lane: str | list[str] | None = None, include_frozen: bool = False) -> dict[str, Any]:
+    """项目级扫描:返回所有活跃任务的最小待办清单 + 可见卡汇总。
+
+    AIPOS-F133: 卡遍历只走 task_loader.iter_queue_task_paths(原自 glob 队列目录); 每行带 lane、priority 与 next_card。
+    AIPOS-F141: 冻结与 lane 过滤只经四视图唯一可见卡入口 machine_zone.visible_cards(冻结卡 = F122 唯一判定 frozen_tasks, 缺省不列;
+    --lane 只列所选, 未解析 lane 的卡单独成组), 在推导之前过滤(不为不列的卡做推导); include_frozen = 冻结卡照列(推导核给
+    legacy_frozen 硬停, 行标 frozen)。返回 visible_cards 结果, rows 换成推导后的行(含首行硬停项)。
     排序: 硬停项(存量冻结清单读不出)首行; 然后「下一张可推进卡」(pending 且可推导 = 依赖满足, 判据 task_complexity.
     dependencies_satisfied; 优先级最高者, 同级按 task_id); 其余按 pending > claimed > blocked、可推导优先、优先级高者先、task_id。
-    AIPOS-F122 件③: 存量冻结卡(legacy_baseline.frozen_tasks 唯一判定)不列; 清单读不出 = 首行列硬停项且不隐藏任何卡。
     """
     workspace_root = Path(workspace_root)
     from tools.aipos_cli.frontmatter import FrontmatterReadError
-    from tools.aipos_cli.legacy_baseline import LegacyBaselineError, frozen_tasks
-    from tools.aipos_cli.machine_zone import filter_rows_by_lane, lane_of_card
+    from tools.aipos_cli.machine_zone import visible_cards
     from tools.aipos_cli.task_loader import iter_queue_task_paths
 
+    entries: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
+    for task_file in iter_queue_task_paths(workspace_root, states=_SCAN_STATES):
+        stub: dict[str, Any] = {"task_id": task_file.stem.upper(), "path": str(task_file), "current_state": task_file.parent.name}
+        try:
+            fm = _read_frontmatter(task_file)
+        except FrontmatterReadError as exc:
+            # AIPOS-F100 件②: 读不出的卡不按文件名猜 task_id 去推导; 原样列为硬停项(点名文件与出口); 冻结判定按文件名回落
+            entries.append(({**stub, "_unreadable": exc}, None))
+            continue
+        fm = fm or {}
+        entries.append(({**stub, "task_id": fm.get("task_id", stub["task_id"]), "priority": fm.get("priority")}, fm))
+    view = visible_cards(workspace_root, entries, lane=lane, include_frozen=include_frozen)
+
     results: list[dict[str, Any]] = []
-    try:
-        frozen = frozen_tasks(workspace_root)
-    except LegacyBaselineError as exc:
-        frozen = {}
+    if view["frozen_error"]:
         results.append({
             "task_id": "(legacy_baseline)", "derivable": False, "current_node": None, "current_state": "legacy_baseline_invalid",
-            "triggered_by": "advisor", "command": "", "verb": "", "missing_records": [str(exc)],
+            "triggered_by": "advisor", "command": "", "verb": "", "missing_records": [view["frozen_error"]],
             "suggested_action": "修正存量冻结清单条目 / project.json legacy_baseline(冻结不生效, 不隐藏任何卡)", "notes": "",
             "lane": None, "lane_error": None,
         })
 
     rows: list[dict[str, Any]] = []
-    for task_file in iter_queue_task_paths(workspace_root, states=_SCAN_STATES):
-        status_dir = task_file.parent.name
-        raw_id = task_file.stem
-        try:
-            fm = _read_frontmatter(task_file)
-        except FrontmatterReadError as exc:
-            if raw_id.upper() in frozen:
-                continue  # AIPOS-F122: 卡面读不出的冻结卡(清单按文件名回落记卡号, state_lint.queue_task_index 同一列举)
-            # AIPOS-F100 件②: 读不出的卡不按文件名猜 task_id 去推导; 原样列为硬停项(点名文件与出口)
-            rows.append({**frontmatter_unreadable_stop(raw_id.upper(), exc), "current_state": status_dir,
-                         **lane_of_card(None, workspace_root)})
+    for card in view["rows"]:
+        lane_part = {"lane": card.get("lane"), "lane_error": card.get("lane_error"), **({"frozen": True} if card.get("frozen") else {})}
+        if card.get("_unreadable") is not None:
+            rows.append({**frontmatter_unreadable_stop(card["task_id"], card["_unreadable"]), "current_state": card["current_state"],
+                         **lane_part})
             continue
-        task_id = fm.get("task_id", raw_id.upper()) if fm else raw_id.upper()
-        if str(task_id).strip().upper() in frozen:
-            continue  # AIPOS-F122 件③: 存量冻结卡 = 历史, 不列为待推进
+        task_id = card["task_id"]
         try:
             result = derive_next_step(str(task_id), workspace_root)
         except Exception as e:  # 推导异常不吞: 列为不可推导行(带异常原文), 不隐藏该卡
@@ -3059,7 +3066,7 @@ def scan_project(workspace_root: Path, *, lane: str | list[str] | None = None) -
                 "task_id": task_id,
                 "derivable": False,
                 "current_node": None,
-                "current_state": status_dir,
+                "current_state": card["current_state"],
                 "triggered_by": "unknown",
                 "command": "",
                 "verb": "",
@@ -3067,9 +3074,7 @@ def scan_project(workspace_root: Path, *, lane: str | list[str] | None = None) -
                 "suggested_action": "检查任务状态",
                 "notes": str(e),
             }
-        rows.append({**result, **lane_of_card(fm, workspace_root), "priority": fm.get("priority")})
-
-    rows = filter_rows_by_lane(rows, lane)
+        rows.append({**result, **lane_part, "priority": card.get("priority")})
 
     def order_key(r: dict[str, Any]) -> tuple[Any, ...]:
         return (_SCAN_STATE_ORDER.get(r.get("current_state", ""), 9), 0 if r.get("derivable") else 1,
@@ -3081,7 +3086,7 @@ def scan_project(workspace_root: Path, *, lane: str | list[str] | None = None) -
         nxt = candidates[0]  # 已按 可推导 > 优先级 > task_id 排序
         rows.remove(nxt)
         rows.insert(0, {**nxt, "next_card": True})
-    return results + rows
+    return {**view, "rows": results + rows}
 
 
 def pick_next_card(results: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -3121,17 +3126,22 @@ def format_output(result: dict[str, Any], *, json_mode: bool = False) -> str:
     return "\n".join(lines)
 
 
-def format_scan_output(results: list[dict[str, Any]], *, json_mode: bool = False, lane: str | list[str] | None = None) -> str:
-    """格式化项目级扫描输出。"""
+def format_scan_output(results: list[dict[str, Any]], *, json_mode: bool = False, lane: str | list[str] | None = None,
+                       view: dict[str, Any] | None = None) -> str:
+    """格式化项目级扫描输出。AIPOS-F141: view(scan_project_view 结果)给出 = 冻结行标 frozen_marker, 末尾附可见卡汇总行
+    (machine_zone.render_visible_summary, 四视图同一渲染); JSON 仍为行列表(冻结行带 frozen: true)。"""
     if json_mode:
         import json
         return json.dumps(results, indent=2, ensure_ascii=False)
 
+    from tools.aipos_cli.machine_zone import lane_filter_label, lane_view_declaration, render_visible_summary  # F139: 仓集合
+
+    summary = render_visible_summary(view) if view else []
     if not results:
-        return "No active tasks found in queue."
+        return "\n".join(["No active tasks found in queue.", *summary])
 
     lines: list[str] = []
-    from tools.aipos_cli.machine_zone import lane_filter_label  # AIPOS-F139: lane 过滤可为仓集合
+    marker = str(lane_view_declaration()["visible_cards"]["frozen_marker"])
 
     scope = f"lane {lane_filter_label(lane)}, " if lane else ""
     lines.append(f"=== lybra next — project scan ({scope}{len(results)} active tasks) ===")
@@ -3155,6 +3165,8 @@ def format_scan_output(results: list[dict[str, Any]], *, json_mode: bool = False
         triggered = r.get("triggered_by", "?")
         if r.get("lane"):
             task_id = f"{task_id} [lane {r.get('lane')}]"
+        if r.get("frozen"):
+            task_id = f"{task_id} {marker}"
 
         if r.get("derivable"):
             cmd = r.get("command", "")
@@ -3172,7 +3184,7 @@ def format_scan_output(results: list[dict[str, Any]], *, json_mode: bool = False
             lines.append(f"  Lane: {r.get('lane_error')}")
         lines.append("")
 
-    return "\n".join(lines)
+    return "\n".join(lines + summary)
 
 
 # ---------------------------------------------------------------------------

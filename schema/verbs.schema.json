@@ -105,16 +105,26 @@
     }
   },
   "lane_view": {
-    "description": "AIPOS-F133 件②(CONVERGENCE §3c-3/5、§3d-7): 按 lane(子项目 = 卡解析后的产品仓)看进度的参数唯一声明。四个查看命令(lybra next 项目扫描 / lybra brief / lybra loop status / lybra needs-owner)同一 --lane 参数、同一过滤函数; 不带 --lane 时 brief 与 needs-owner 按 lane 分组输出。lane 键唯一派生 = machine_zone.card_lane_key(解析走 workspace_config.resolve_card_repo, 返回 project.json repos.items 仓名; 无仓清单的单仓项目 = code_repo 路径)。卡遍历只走 task_loader.iter_queue_task_paths, loop status 经 task_loader.find_task_card 反查卡面。lane 解析不了的卡 = unresolved_lane 标签照列(带原因), 带 --lane 时也照列(无法证明不属该 lane, 不隐藏)。",
+    "description": "AIPOS-F133 件②(CONVERGENCE §3c-3/5、§3d-7): 按 lane(子项目 = 卡解析后的产品仓)看进度的参数唯一声明。四个查看命令(lybra next 项目扫描 / lybra brief / lybra loop status / lybra needs-owner)同一 --lane 参数、同一过滤函数; 不带 --lane 时 brief 与 needs-owner 按 lane 分组输出。lane 键唯一派生 = machine_zone.card_lane_key(解析走 workspace_config.resolve_card_repo, 返回 project.json repos.items 仓名; 无仓清单的单仓项目 = code_repo 路径)。卡遍历只走 task_loader.iter_queue_task_paths, loop status 经 task_loader.find_task_card 反查卡面。lane 解析不了的卡 = unresolved_lane 标签: 不带 --lane 时照列(分组末尾, 带原因); AIPOS-F141 件②: 带 --lane 时只列 lane ∈ 所给集合的卡, lane 解析不了的卡不混入所选 lane, 在输出末尾单独一组「未归 lane N 张」(计数 + 卡号, 提示补 lane.repo 或冻结)。AIPOS-F141 件①: 四命令共用唯一「可见卡」入口 machine_zone.visible_cards(冻结在先: 是否冻结只调 F122 唯一判定 legacy_baseline.frozen_tasks, 缺省不列, 汇总行注明冻结 N 张未列, --include-frozen 照列并标 frozen; 冻结清单读不出 = 汇总行点名错误, 不隐藏任何卡; 然后 lane 过滤只经 filter_rows_by_lane)。loop status 给 --task-id = 显式点名该卡, 照列(冻结则标 frozen)。",
     "cli_flag": "--lane",
     "metavar": "<仓名>",
-    "help": "AIPOS-F133/F139: 只看该 lane(project.json repos.items 仓名或其绝对路径; 无仓清单的单仓项目 = code_repo 路径); 可重复给出仓集合(--lane a --lane b = 子项目跨仓一并看, 共用仓可同时出现在多个顾问的集合里); 集合内任一仓未声明即拒; lane 解析不了的卡照列不隐藏",
+    "help": "AIPOS-F133/F139: 只看该 lane(project.json repos.items 仓名或其绝对路径; 无仓清单的单仓项目 = code_repo 路径); 可重复给出仓集合(--lane a --lane b = 子项目跨仓一并看, 共用仓可同时出现在多个顾问的集合里); 集合内任一仓未声明即拒; 给出时 lane 解析不了的卡不混入, 末尾单独计数「未归 lane N 张」(AIPOS-F141)",
     "commands": ["lybra next", "lybra brief", "lybra loop status", "lybra needs-owner"],
     "group_by_default": ["lybra brief", "lybra needs-owner"],
     "unresolved_lane": "(lane 不可解析)",
     "invalid_lane_exit_code": 2,
-    "single_implementation": "tools/aipos_cli/machine_zone.card_lane_key / lane_of_card / resolve_lane_filter / filter_rows_by_lane / group_rows_by_lane / lane_filter_label",
-    "repo_set": "AIPOS-F139(Owner 10-09 方案 A): --lane 与信封 task_selector_lane_repo 都是仓集合, 写法 = 参数可重复(`--lane a --lane b` / `lybra envelope mint --lane-repo a --lane-repo b`), 不按逗号拆分(仓指称可为绝对路径, 逗号无转义歧义; 与既有 --policy-id / --launch-harness 可重复同一惯例)。集合的序列化与解析唯一实现 = workspace_config.repo_name_set(去空去重保序; 单个字符串 = 单元素集合, 存量单值信封据此读、文件不改写); 过滤仍只在 filter_rows_by_lane(行 lane ∈ 集合或未解析 lane), 信封判定仍只在 autonomy_policy.match_claim_envelope。JSON 输出 lane_filter = 规范 lane 键列表; 分组输出不变。同仓合入由 F135 自动排队。",
+    "single_implementation": "tools/aipos_cli/machine_zone.visible_cards(四命令唯一可见卡入口, AIPOS-F141) / render_visible_summary / card_lane_key / lane_of_card / resolve_lane_filter / filter_rows_by_lane / group_rows_by_lane / lane_filter_label",
+    "visible_cards": {
+      "description": "AIPOS-F141: 四个查看命令共用的「可见卡」口径(唯一实现 machine_zone.visible_cards; 汇总行唯一渲染 render_visible_summary)。冻结卡缺省不列(判定 = legacy_baseline.frozen_tasks), include_frozen_flag 显式列出(只读, 行标 frozen_marker); 给定 --lane 时 lane 解析不了的卡单独成「未归 lane」组。文字模板占位: frozen_summary {count} {flag}; frozen_error_summary {error}; unresolved_summary {count} {task_ids} {lane}。--json 输出附 frozen_hidden(卡号) / unresolved_lane([{task_id, lane_error}]) / frozen_error(next --json 仍为行列表, 冻结行带 frozen: true)。",
+      "include_frozen_flag": "--include-frozen",
+      "include_frozen_help": "AIPOS-F141: 也列出存量冻结卡(只读, 标 [frozen]); 缺省不列, 汇总行给冻结张数",
+      "frozen_marker": "[frozen]",
+      "frozen_summary": "冻结 {count} 张未列(存量冻结卡 = 历史, 判定 legacy_baseline; {flag} 可列出)",
+      "frozen_error_summary": "存量冻结清单读不出(冻结不生效, 未隐藏任何卡): {error}",
+      "unresolved_summary": "未归 lane {count} 张(lane 不可解析, 不混入 lane {lane}): {task_ids} —— 补卡面 lane.repo(project.json repos.items 仓名)或冻结",
+      "unresolved_list_limit": 20
+    },
+    "repo_set": "AIPOS-F139(Owner 10-09 方案 A): --lane 与信封 task_selector_lane_repo 都是仓集合, 写法 = 参数可重复(`--lane a --lane b` / `lybra envelope mint --lane-repo a --lane-repo b`), 不按逗号拆分(仓指称可为绝对路径, 逗号无转义歧义; 与既有 --policy-id / --launch-harness 可重复同一惯例)。集合的序列化与解析唯一实现 = workspace_config.repo_name_set(去空去重保序; 单个字符串 = 单元素集合, 存量单值信封据此读、文件不改写); 过滤仍只在 filter_rows_by_lane(行 lane ∈ 集合; AIPOS-F141: 未解析 lane 不混入, 单独计数), 信封判定仍只在 autonomy_policy.match_claim_envelope。JSON 输出 lane_filter = 规范 lane 键列表; 分组输出不变。同仓合入由 F135 自动排队。",
     "next_card": "lybra next 项目扫描首位给「下一张可推进卡」= pending 且可推导(依赖满足, 判据唯一实现 task_complexity.dependencies_satisfied)的卡中优先级最高者(enums.schema priority 值序, 后者高; 同级按 task_id); 无则写明原因。结案后取下一张的唯一出口"
   },
   "verbs": {
@@ -1965,6 +1975,7 @@
           "task_id": {"type": "string", "description": "卡 ID; 缺省 = 列本项目全部未结束的 loop 运行"},
           "workspace_root": {"type": "string", "description": "治理根; 缺省自发现"},
           "lane": {"type": "array", "items": {"type": "string"}, "description": "AIPOS-F133 件② / F139: 只看该 lane(或仓集合: --lane 可重复)的运行(声明 lane_view; 运行记录反查卡面取 lane)"},
+          "include_frozen": {"type": "boolean", "description": "AIPOS-F141 件①: 也列出存量冻结卡的运行(标 frozen); 缺省不列(lane_view.visible_cards)。给 --task-id = 显式点名, 照列"},
           "json": {"type": "boolean", "description": "JSON 输出"},
           "wait": {"type": "number", "description": "AIPOS-F136 件①: 有界等待秒数(须 --task-id; 0 < 秒数 ≤ wait.max_seconds)。经 agent watch 唯一等待原语 run_fs_watch(expect = 本卡运行记录, expect_ready = 顾问下一动作 ≠ continue_wait)等到可行动或到时, 返回当时状态; 退出码按下一动作(exit_codes)"},
           "verbose": {"type": "boolean", "description": "AIPOS-F138 件③: 输出门侧信封判定诊断行([ENVELOPE_TRACE], autonomy_policy.trace_envelope 逐谓词留痕, 走 stderr); 缺省不打印(状态结论不被淹没)。只开关输出, 信封判定逻辑不变"}

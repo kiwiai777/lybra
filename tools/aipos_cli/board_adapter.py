@@ -565,15 +565,13 @@ def get_needs_owner(repo_root: str | Path | None = None) -> dict[str, Any]:
         records = load_records(resolved_root)
         profiles = load_agent_profiles(resolved_root)
         report = validate_tasks(tasks, records=records, profiles=profiles)
-        filtered = [
-            task
-            for task in report["tasks"]
-            if task.get("verdict") == Verdict.NEEDS_OWNER
-            or task.get("metadata", {}).get("needs_owner") is True
-            or task.get("metadata", {}).get("owner_review_required") is True
-            or task.get("metadata", {}).get("approval_required") is True
-            or bool(task.get("needs_owner_reasons"))
-        ]
+        # AIPOS-F141: 看板「需 Owner 决定」与 CLI needs-owner 同一筛选(aipos_cli._filter_needs_owner, 原本处第二份判据已删)
+        # 并经四视图唯一可见卡入口 machine_zone.visible_cards: 存量冻结卡不列, 张数进 frozen_hidden
+        from tools.aipos_cli.aipos_cli import _filter_needs_owner
+
+        owner_report = _filter_needs_owner(report, governance_root=Path(resolved_root))
+        filtered = owner_report["tasks"]
+        view = owner_report["view"]
         payload = {
             "scope": "needs_owner",
             "summary": {
@@ -581,6 +579,8 @@ def get_needs_owner(repo_root: str | Path | None = None) -> dict[str, Any]:
                 "needs_owner": len(filtered),
             },
             "tasks": filtered,
+            "frozen_hidden": view["frozen_hidden"],
+            "frozen_error": view["frozen_error"],
         }
         return _response_from_validated_report(operation=operation, report=payload)
     except Exception as exc:

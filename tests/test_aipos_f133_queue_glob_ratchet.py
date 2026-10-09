@@ -203,8 +203,10 @@ def test_lane_views_use_single_traversal_and_lane_key():
     cli = (REPO_ROOT / "tools/aipos_cli/aipos_cli.py").read_text(encoding="utf-8")
     assert "iter_queue_task_paths(workspace_root, states=_SCAN_STATES)" in nr and "iter_queue_task_paths(Path(governance_root))" in br
     assert "find_task_card(Path(governance_root), task_id)" in lr
+    # AIPOS-F141: 四命令经唯一可见卡入口 machine_zone.visible_cards(内含唯一 lane 派生 lane_of_card + 唯一过滤 filter_rows_by_lane)
+    assert mz.count("def visible_cards(") == 1 and "filter_rows_by_lane(rows, lane" in mz and "lane_of_card(metadata, root)" in mz
     for src in (nr, br, lr, cli):
-        assert "filter_rows_by_lane(" in src and "lane_of_card(" in src
+        assert "visible_cards(" in src
     tc = (REPO_ROOT / "tools/aipos_cli/task_complexity.py").read_text(encoding="utf-8")
     assert tc.count("def unmet_dependencies(") == 1 and tc.count("def dependencies_satisfied(") == 1
     assert "dependency_audit_status" not in tc and "dependency_executor_status" not in tc  # 卡面自报字段不再被判据读
