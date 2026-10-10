@@ -217,7 +217,7 @@ def run_render_cli(args: Any) -> int:
     from tools.schema_loader import SchemaLoadError
 
     try:
-        governance_root = Path(getattr(args, "workspace_root", None) or _find_repo_root_for_args(args))
+        governance_root = Path(_find_repo_root_for_args(args))  # AIPOS-F144: 唯一薄壳(全局/子命令级 --workspace-root 同义)
     except FileNotFoundError as exc:
         print(f"lybra card render: cannot resolve governance root: {exc}", file=sys.stderr)
         return 1

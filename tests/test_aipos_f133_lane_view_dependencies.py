@@ -255,8 +255,8 @@ def test_item3_dependency_blocks_claim_and_next_until_closure(dual):
     _show(f"件③ B 未结案 下一张(lane api): {nxt and nxt['task_id']}")
     assert nxt is not None and nxt["task_id"] == "HBJ-A1"  # A 依赖未满足不入选, 取 lane 内可推导最高优先级
     rc, out, _ = _cli(["next", "--workspace-root", str(gov), "--lane", "api"])
-    _show("件③ B 未结案 lybra next --lane api(首行):\n" + "\n".join(out.splitlines()[:4]))
-    assert out.splitlines()[1].startswith("下一张可推进卡: HBJ-A1 lane=api priority=high")
+    _show("件③ B 未结案 lybra next --lane api(首行):\n" + "\n".join(out.splitlines()[:5]))
+    assert out.splitlines()[2].startswith("下一张可推进卡: HBJ-A1 lane=api priority=high")  # AIPOS-F144: 首行 = 治理根标注
 
     # B 结案(门生结案记录落盘)→ A 依赖满足: 可认领 + 成为下一张(critical 高于 A1 high)
     _closure(gov, "HBJ-B9")
@@ -264,8 +264,8 @@ def test_item3_dependency_blocks_claim_and_next_until_closure(dual):
     rows = scan_project(gov, lane="api")
     assert rows[0]["task_id"] == "HBJ-A9" and rows[0]["next_card"] is True
     rc, out, _ = _cli(["next", "--workspace-root", str(gov), "--lane", "api"])
-    _show("件③ B 结案后 lybra next --lane api(首行):\n" + "\n".join(out.splitlines()[:4]))
-    assert out.splitlines()[1].startswith("下一张可推进卡: HBJ-A9 lane=api priority=critical")
+    _show("件③ B 结案后 lybra next --lane api(首行):\n" + "\n".join(out.splitlines()[:5]))
+    assert out.splitlines()[2].startswith("下一张可推进卡: HBJ-A9 lane=api priority=critical")  # AIPOS-F144: 首行 = 治理根标注
     claim = mutate_queue_task(gov, "claim", task_id="HBJ-A9", actor=EXEC, dry_run=False,
                               profiles=load_agent_profiles(gov), with_records=True)
     _show("件③ B 结案后 门 claim A: " + json.dumps({k: claim.get(k) for k in ("verdict", "wrote", "blocking_reasons")}, ensure_ascii=False))

@@ -871,7 +871,7 @@ def run_ingest_cli(args: Any) -> int:
     from tools.aipos_cli.aipos_cli import _find_repo_root_for_args
 
     try:
-        governance_root = Path(getattr(args, "workspace_root", None) or _find_repo_root_for_args(args))
+        governance_root = Path(_find_repo_root_for_args(args))  # AIPOS-F144: 唯一薄壳(全局/子命令级 --workspace-root 同义)
     except FileNotFoundError as exc:
         print(f"lybra artifact ingest: cannot resolve governance root: {exc}", file=sys.stderr)
         return INGEST_EXIT_REJECTED

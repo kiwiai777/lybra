@@ -156,17 +156,13 @@ def attach_verbose_flags(root_parser: Any) -> None:
     父子命令都挂时不互相覆盖; 读取方一律 getattr(args, "verbose", False))。路径找不到 = SchemaLoadError(声明与命令树不符, fail-closed)。"""
     import argparse
 
+    from tools.aipos_cli.cli_self_describe import subcommand_parser  # AIPOS-F144: 子命令定位唯一遍历实现(与 --workspace-root 注册共用)
     from tools.schema_loader import SchemaLoadError
 
     decl = envelope_trace_declaration()
     flag = str(decl["verbose_flag"])
     for path in decl["verbose_commands"]:
-        parser = root_parser
-        for name in str(path).split():
-            subs = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
-            parser = next((a.choices[name] for a in subs if name in a.choices), None)
-            if parser is None:
-                raise SchemaLoadError(f"verbs.schema envelope_trace.verbose_commands: 命令 {path!r} 不在 lybra 命令树内")
+        parser = subcommand_parser(root_parser, path, label="verbs.schema envelope_trace.verbose_commands")
         if any(flag in a.option_strings for a in parser._actions):
             raise SchemaLoadError(f"verbs.schema envelope_trace.verbose_commands: 命令 {path!r} 已自带 {flag}(开关须只挂一处)")
         parser.add_argument(flag, dest="verbose", action="store_true", default=argparse.SUPPRESS, help=str(decl["verbose_help"]))

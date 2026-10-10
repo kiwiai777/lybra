@@ -240,7 +240,7 @@ def test_item2_four_commands_multi_repo_lane_filter(quad):
     rc, out, err = _cli(["next", "--workspace-root", str(gov), *lane_args])
     _show("[件②·lybra next --lane ota-contracts --lane shared-web]\n" + out)
     assert rc == 0, err
-    assert "lane ota-contracts, shared-web" in out.splitlines()[0]
+    assert "lane ota-contracts, shared-web" in out.splitlines()[1]  # AIPOS-F144: 首行 = 治理根标注
     listed = out.split("未归 lane", 1)[0]  # AIPOS-F141 件②: 不可解析 lane 不混入, 末尾单独计数
     assert "HBJ-OC1" in listed and "HBJ-SW1" in listed and "HBJ-X1" not in listed and "HBJ-X1" in out.split("未归 lane", 1)[1]
     assert "HBJ-OA1" not in out and "HBJ-LT1" not in out
@@ -257,7 +257,9 @@ def test_item2_four_commands_multi_repo_lane_filter(quad):
     rc, out, err = _cli(["--workspace-root", str(gov), "needs-owner", *lane_args])
     _show("[件②·lybra needs-owner --lane ×2]\n" + out)
     assert rc == 0, err
-    assert out.splitlines()[0] == "Needs Owner — lane ota-contracts, shared-web"
+    # AIPOS-F144 件②: 首行 = 解析到的治理根项目与来源; 视图标题顺延到第二行
+    assert out.splitlines()[0].startswith("治理根: 项目 ") and str(gov.resolve()) in out.splitlines()[0]
+    assert out.splitlines()[1] == "Needs Owner — lane ota-contracts, shared-web"
     listed = out.split("未归 lane", 1)[0]
     assert "HBJ-OC1" in listed and "HBJ-SW1" in listed and "HBJ-X1" not in listed and "HBJ-OA1" not in out and "HBJ-LT1" not in out
     assert "HBJ-X1" in out.split("未归 lane", 1)[1]

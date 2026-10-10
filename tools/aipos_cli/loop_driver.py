@@ -1180,7 +1180,7 @@ def run_loop_cli(args: Any) -> int:
         print("lybra loop: error: the following arguments are required: --task-id(看进度: lybra loop status)", file=sys.stderr)
         return 2
     try:
-        governance_root = Path(getattr(args, "workspace_root", None) or _find_repo_root_for_args(args))
+        governance_root = Path(_find_repo_root_for_args(args))  # AIPOS-F144: 唯一薄壳(全局/子命令级 --workspace-root 同义)
     except FileNotFoundError as exc:
         print(f"lybra loop: cannot resolve governance root: {exc}", file=sys.stderr)
         return exit_code_for(load_loop_contract(), "not_derivable")

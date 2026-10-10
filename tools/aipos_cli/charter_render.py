@@ -528,15 +528,14 @@ def run_charter_cli(args: Any) -> int:
     """`lybra charter` 薄壳: stdout 只出章程全文; 拒因 / 错误走 stderr, 退出码读 verbs.schema lybra_charter.exit_codes。"""
     import sys
 
+    from tools.aipos_cli.aipos_cli import _find_repo_root_for_args
     from tools.aipos_cli.verb_contract import declared_exit_code
-    from tools.aipos_cli.workspace_config import enclosing_governance_root
     from tools.schema_loader import SchemaLoadError
 
     try:
-        explicit = getattr(args, "workspace_root", None) or getattr(args, "global_workspace_root", None)
-        gov = Path(explicit).expanduser() if explicit else enclosing_governance_root()
-        if gov is None:
-            raise FileNotFoundError("当前目录不在任何已建治理根内; 出口: cd <治理根> 后运行, 或给 --workspace-root <治理根>")
+        # AIPOS-F144 件①: 治理根经 CLI 唯一薄壳(读写共用 resolve_governance_root: 全局/子命令级 --workspace-root > 环境变量 >
+        # 所在治理根 > 工位声明 > 拒), 原本处自写的「显式 > 所在治理根 > 拒」退役(禁第二实现)
+        gov = _find_repo_root_for_args(args)
         result = instance_charter(gov, role_class=str(args.role).strip(), instance=getattr(args, "instance", None),
                                   harness=getattr(args, "harness", None))
     except CharterRefused as exc:

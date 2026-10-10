@@ -122,3 +122,20 @@ def wrap_error_with_verb_help(error_msg: str, verb_name: str, repo_root: Path | 
         help_text = f"\n动词 {verb_name} 的详细帮助信息不可用。\n请检查参数是否完整，或参考文档。"
     
     return f"{error_msg}\n{help_text}"
+
+
+def subcommand_parser(root_parser: Any, path: str, *, label: str) -> Any:
+    """AIPOS-F144: 按空格分隔的子命令路径(如 "loop status")取命令树里的子解析器——按声明给命令挂参数的唯一遍历实现
+    (autonomy_policy.attach_verbose_flags 的 --verbose、workspace_config.attach_workspace_root_flags 的 --workspace-root 共用)。
+    路径不在命令树内 = SchemaLoadError(声明与命令树不符, fail-closed; label = 声明位置, 写进拒因)。"""
+    import argparse
+
+    from tools.schema_loader import SchemaLoadError
+
+    parser = root_parser
+    for name in str(path).split():
+        subs = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
+        parser = next((a.choices[name] for a in subs if name in a.choices), None)
+        if parser is None:
+            raise SchemaLoadError(f"{label}: 命令 {path!r} 不在 lybra 命令树内")
+    return parser
