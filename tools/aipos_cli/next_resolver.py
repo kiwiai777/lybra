@@ -3006,15 +3006,20 @@ def _priority_rank(value: Any) -> int:
 
 
 _SCAN_STATES = ("pending", "claimed", "blocked")
+# AIPOS-F142 件①: 「下一张可推进卡」只可能出自这些队列状态(verbs.schema lane_view.next_card: pending 且可推导)——scan_project_view
+# 选 next_card 与结案取下一张(next_states_only)共用这一处, 两处不得各写一份
+NEXT_CARD_STATES = ("pending",)
 _SCAN_STATE_ORDER = {"legacy_baseline_invalid": -1, "pending": 0, "claimed": 1, "blocked": 2, "completed": 3}
 
 
-def scan_project(workspace_root: Path, *, lane: str | list[str] | None = None, include_frozen: bool = False) -> list[dict[str, Any]]:
+def scan_project(workspace_root: Path, *, lane: str | list[str] | None = None, include_frozen: bool = False,
+                 next_states_only: bool = False) -> list[dict[str, Any]]:
     """项目级扫描的行(= scan_project_view(...)["rows"]; 结案取下一张 / 测试等只要行的调用方用)。"""
-    return scan_project_view(workspace_root, lane=lane, include_frozen=include_frozen)["rows"]
+    return scan_project_view(workspace_root, lane=lane, include_frozen=include_frozen, next_states_only=next_states_only)["rows"]
 
 
-def scan_project_view(workspace_root: Path, *, lane: str | list[str] | None = None, include_frozen: bool = False) -> dict[str, Any]:
+def scan_project_view(workspace_root: Path, *, lane: str | list[str] | None = None, include_frozen: bool = False,
+                      next_states_only: bool = False) -> dict[str, Any]:
     """项目级扫描:返回所有活跃任务的最小待办清单 + 可见卡汇总。
 
     AIPOS-F133: 卡遍历只走 task_loader.iter_queue_task_paths(原自 glob 队列目录); 每行带 lane、priority 与 next_card。
@@ -3023,14 +3028,28 @@ def scan_project_view(workspace_root: Path, *, lane: str | list[str] | None = No
     legacy_frozen 硬停, 行标 frozen)。返回 visible_cards 结果, rows 换成推导后的行(含首行硬停项)。
     排序: 硬停项(存量冻结清单读不出)首行; 然后「下一张可推进卡」(pending 且可推导 = 依赖满足, 判据 task_complexity.
     dependencies_satisfied; 优先级最高者, 同级按 task_id); 其余按 pending > claimed > blocked、可推导优先、优先级高者先、task_id。
+    AIPOS-F142 件①: next_states_only=True(结案取下一张, 只要 pick_next_card)只遍历 NEXT_CARD_STATES —— 下一张只可能出自这些状态,
+    所得 next_card 与全扫相同, 不为不可能当选的 claimed/blocked 卡做推导。
     """
     workspace_root = Path(workspace_root)
+    from tools.aipos_cli.task_loader import task_card_lookup_scope
+
+    # AIPOS-F142 件①: 整趟扫描共用一个只读作用域——逐卡 derive_next_step 共用一趟队列索引(原每卡各建一趟 = O(卡数²)),
+    # 冻结清单重放与信封已放行计数各只算一次(lookup_scope_memo); 判据与逐卡推导完全相同
+    with task_card_lookup_scope(workspace_root):
+        return _scan_project_view(workspace_root, lane=lane, include_frozen=include_frozen, next_states_only=next_states_only)
+
+
+def _scan_project_view(workspace_root: Path, *, lane: str | list[str] | None, include_frozen: bool,
+                       next_states_only: bool) -> dict[str, Any]:
     from tools.aipos_cli.frontmatter import FrontmatterReadError
     from tools.aipos_cli.machine_zone import visible_cards
     from tools.aipos_cli.task_loader import iter_queue_task_paths
 
     entries: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
-    for task_file in iter_queue_task_paths(workspace_root, states=_SCAN_STATES):
+    task_files = (iter_queue_task_paths(workspace_root, states=NEXT_CARD_STATES) if next_states_only
+                  else iter_queue_task_paths(workspace_root, states=_SCAN_STATES))
+    for task_file in task_files:
         stub: dict[str, Any] = {"task_id": task_file.stem.upper(), "path": str(task_file), "current_state": task_file.parent.name}
         try:
             fm = _read_frontmatter(task_file)
@@ -3081,7 +3100,7 @@ def scan_project_view(workspace_root: Path, *, lane: str | list[str] | None = No
                 -_priority_rank(r.get("priority")), str(r.get("task_id") or ""))
 
     rows.sort(key=order_key)
-    candidates = [r for r in rows if r.get("current_state") == "pending" and r.get("derivable")]
+    candidates = [r for r in rows if r.get("current_state") in NEXT_CARD_STATES and r.get("derivable")]
     if candidates:
         nxt = candidates[0]  # 已按 可推导 > 优先级 > task_id 排序
         rows.remove(nxt)

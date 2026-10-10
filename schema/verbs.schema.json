@@ -125,7 +125,46 @@
       "unresolved_list_limit": 20
     },
     "repo_set": "AIPOS-F139(Owner 10-09 方案 A): --lane 与信封 task_selector_lane_repo 都是仓集合, 写法 = 参数可重复(`--lane a --lane b` / `lybra envelope mint --lane-repo a --lane-repo b`), 不按逗号拆分(仓指称可为绝对路径, 逗号无转义歧义; 与既有 --policy-id / --launch-harness 可重复同一惯例)。集合的序列化与解析唯一实现 = workspace_config.repo_name_set(去空去重保序; 单个字符串 = 单元素集合, 存量单值信封据此读、文件不改写); 过滤仍只在 filter_rows_by_lane(行 lane ∈ 集合; AIPOS-F141: 未解析 lane 不混入, 单独计数), 信封判定仍只在 autonomy_policy.match_claim_envelope。JSON 输出 lane_filter = 规范 lane 键列表; 分组输出不变。同仓合入由 F135 自动排队。",
-    "next_card": "lybra next 项目扫描首位给「下一张可推进卡」= pending 且可推导(依赖满足, 判据唯一实现 task_complexity.dependencies_satisfied)的卡中优先级最高者(enums.schema priority 值序, 后者高; 同级按 task_id); 无则写明原因。结案后取下一张的唯一出口"
+    "next_card": "lybra next 项目扫描首位给「下一张可推进卡」= pending 且可推导(依赖满足, 判据唯一实现 task_complexity.dependencies_satisfied)的卡中优先级最高者(enums.schema priority 值序, 后者高; 同级按 task_id); 无则写明原因。结案后取下一张的唯一出口",
+    "performance": {
+      "description": "AIPOS-F142 件③: 四视图(loop status / next 项目扫描 / needs-owner / brief)性能阈值与回归夹具规模的唯一声明(夹具 tests/test_aipos_f142_view_speed_quiet_trace.py 读本段造临时治理根并测时)。阈值是产品目标(秒); 夹具断言用 阈值 × ci_slack_factor(沙箱/并发 CI 宽裕), 原始耗时与阈值一并打印。实现约束: 一次视图调用全程一个只读作用域(task_loader.task_card_lookup_scope, 可重入): 队列索引一趟、冻结清单重放一次、信封已放行计数一趟(lookup_scope_memo); --task-id 只读该卡运行记录, 已结束运行不探活; 结案取下一张只扫可当选状态(next_resolver.NEXT_CARD_STATES)。",
+      "fixture": {
+        "cards": 300,
+        "frozen": 270,
+        "lanes": [
+          "web",
+          "api",
+          "ops"
+        ],
+        "loop_runs": 6,
+        "policies": 10,
+        "claim_records": 300
+      },
+      "single_card_status_seconds": 3,
+      "full_view_seconds": 10,
+      "ci_slack_factor": 3
+    }
+  },
+  "envelope_trace": {
+    "description": "AIPOS-F142 件②: 门侧信封判定诊断行([ENVELOPE_TRACE], autonomy_policy.trace_envelope 逐谓词留痕, 走 stderr)的输出开关唯一声明。开关只在发射处一处判定(autonomy_policy.envelope_trace_enabled), 所有调用方受同一开关约束: CLI(lybra 入口 aipos_cli.main → decide_cli_envelope_trace, 调用结束由 cli_envelope_trace_entry 恢复)缺省关, --verbose(挂在 verbose_commands 所列命令, 唯一挂载口 autonomy_policy.attach_verbose_flags)或调试环境变量 debug_env 开; in-process 嵌套调用(loop 驱动器执行派生命令)沿用外层决定; 不经 CLI 入口的进程(门 MCP 服务, journald 留痕 AIPOS-PRERELEASE-1)取 non_cli_default_enabled。只开关调试轨迹输出, 信封判定逻辑与结果不变; 门拒时的拒因与原因链由各命令照常输出。",
+    "cli_default_enabled": false,
+    "non_cli_default_enabled": true,
+    "verbose_flag": "--verbose",
+    "verbose_help": "AIPOS-F142 件②: 另输出门侧信封判定诊断行([ENVELOPE_TRACE], stderr); 缺省不打印(只收调试轨迹, 门拒的拒因与原因链照常输出)",
+    "verbose_commands": [
+      "sync",
+      "next",
+      "loop",
+      "loop status",
+      "queue claim"
+    ],
+    "debug_env": "LYBRA_ENVELOPE_TRACE",
+    "debug_env_on_values": [
+      "1",
+      "true",
+      "yes",
+      "on"
+    ]
   },
   "verbs": {
     "lybra_queue_list": {
@@ -1798,6 +1837,11 @@
             "default": false,
             "description": "AIPOS-F95 件③: 不拉起 harness 进程(即使信封 launch_harnesses 授权), 退回手工模式: 等待提示「请在 <工位目录> 的 <harness> 会话敲 /go」"
           },
+          "verbose": {
+            "type": "boolean",
+            "default": false,
+            "description": "AIPOS-F142 件②: 另输出门侧信封判定诊断行([ENVELOPE_TRACE], stderr); 缺省不打印(开关声明 envelope_trace)"
+          },
           "json": {
             "type": "boolean",
             "description": "JSON 输出"
@@ -1978,7 +2022,7 @@
           "include_frozen": {"type": "boolean", "description": "AIPOS-F141 件①: 也列出存量冻结卡的运行(标 frozen); 缺省不列(lane_view.visible_cards)。给 --task-id = 显式点名, 照列"},
           "json": {"type": "boolean", "description": "JSON 输出"},
           "wait": {"type": "number", "description": "AIPOS-F136 件①: 有界等待秒数(须 --task-id; 0 < 秒数 ≤ wait.max_seconds)。经 agent watch 唯一等待原语 run_fs_watch(expect = 本卡运行记录, expect_ready = 顾问下一动作 ≠ continue_wait)等到可行动或到时, 返回当时状态; 退出码按下一动作(exit_codes)"},
-          "verbose": {"type": "boolean", "description": "AIPOS-F138 件③: 输出门侧信封判定诊断行([ENVELOPE_TRACE], autonomy_policy.trace_envelope 逐谓词留痕, 走 stderr); 缺省不打印(状态结论不被淹没)。只开关输出, 信封判定逻辑不变"}
+          "verbose": {"type": "boolean", "description": "AIPOS-F138 件③: 输出门侧信封判定诊断行([ENVELOPE_TRACE], autonomy_policy.trace_envelope 逐谓词留痕, 走 stderr); 缺省不打印(状态结论不被淹没)。只开关输出, 信封判定逻辑不变。AIPOS-F142 件②: 开关统一由 envelope_trace 声明承载"}
         },
         "additionalProperties": false
       },
