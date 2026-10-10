@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.task_complexity import complexity_payload
@@ -243,12 +243,33 @@ _LOOKUP_INDEX: "ContextVar[dict[str, Any] | None]" = ContextVar("lybra_task_card
 
 @contextmanager
 def task_card_lookup_scope(repo_root: Path) -> Iterator[None]:
-    """只读批量调用方用: 作用域内对同一治理根的 find_task_card / find_task_card_matches 共用一趟队列索引。"""
-    token = _LOOKUP_INDEX.set({"root": Path(repo_root).resolve(), "by_states": {}})
+    """只读批量调用方用: 作用域内对同一治理根的 find_task_card / find_task_card_matches 共用一趟队列索引。
+
+    AIPOS-F142 件①: 可重入——已在同一治理根的作用域内再进入 = 共用外层那一趟索引与 lookup_scope_memo 缓存(原每次进入都新建,
+    视图扫描逐卡 derive_next_step 各建一趟全队列索引 = O(卡数²), lybra 治理根 1000+ 卡单次 loop status 70 秒); 根不同 = 新建。
+    作用域只活在一次只读调用内(视图命令 / 一次推导), 退出即弃, 不跨调用缓存。"""
+    root = Path(repo_root).resolve()
+    current = _LOOKUP_INDEX.get()
+    if current is not None and current["root"] == root:
+        yield
+        return
+    token = _LOOKUP_INDEX.set({"root": root, "by_states": {}, "memo": {}})
     try:
         yield
     finally:
         _LOOKUP_INDEX.reset(token)
+
+
+def lookup_scope_memo(repo_root: Path, key: str, compute: Callable[[], Any]) -> Any:
+    """AIPOS-F142 件①: 只读作用域(task_card_lookup_scope)内同一治理根的整根派生量只算一次(冻结清单重放 / 信封已放行计数等);
+    作用域外 = 每次 compute()(门写动作与逐次调用行为不变)。compute 抛错不缓存(下次照常重算并再抛, fail-closed 不变)。"""
+    scope = _LOOKUP_INDEX.get()
+    if scope is None or Path(repo_root).resolve() != scope["root"]:
+        return compute()
+    memo = scope["memo"]
+    if key not in memo:
+        memo[key] = compute()
+    return memo[key]
 
 
 def find_task_card_matches(repo_root: Path, task_id: str, *, states: tuple[str, ...] | None = None) -> list[Path]:

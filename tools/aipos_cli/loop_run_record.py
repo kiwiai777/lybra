@@ -524,7 +524,17 @@ def loop_status(governance_root: Path, task_id: str | None = None, *, now: datet
     """--task-id 给出 = 该卡最近一次运行(含已结束); 缺省 = 本项目全部未结束的运行(loop_dead 也列出: 记录未结束而进程已不在)。
     读不出的记录 = LoopRunRecordError(fail-closed, 点名文件)。
     AIPOS-F133 件②: 每个运行带 lane(_run_lane 反查卡面)。AIPOS-F141: 运行行经四视图唯一可见卡入口 machine_zone.visible_cards
-    (冻结卡的运行缺省不列 = F122 唯一判定; lane 给出 = 只列所选, 未解析 lane 的运行单独成组); --task-id = 显式点名, 照列(冻结标 frozen)。"""
+    (冻结卡的运行缺省不列 = F122 唯一判定; lane 给出 = 只列所选, 未解析 lane 的运行单独成组); --task-id = 显式点名, 照列(冻结标 frozen)。
+    AIPOS-F142 件①: 一次 status 全程一个只读作用域(task_loader.task_card_lookup_scope): 运行行反查卡面、结案取下一张的扫描共用一趟
+    队列索引, 冻结清单与信封计数各只算一次; --task-id 只读该卡运行记录; 已结束运行 judge_run 不探活。每次调用(含 --wait 每轮)新建作用域。"""
+    from tools.aipos_cli.task_loader import task_card_lookup_scope
+
+    with task_card_lookup_scope(Path(governance_root)):
+        return _loop_status(Path(governance_root), task_id, now=now, contract=contract, lane=lane, include_frozen=include_frozen)
+
+
+def _loop_status(governance_root: Path, task_id: str | None, *, now: datetime | None, contract: dict[str, Any] | None,
+                 lane: str | list[str] | None, include_frozen: bool) -> dict[str, Any]:
     from tools.aipos_cli.machine_zone import visible_cards
 
     from tools.aipos_cli.loop_driver import load_loop_contract
@@ -665,7 +675,8 @@ def _take_next(view: dict[str, Any], rules: dict[str, Any], governance_root: Pat
     lane = view.get("lane") if view.get("lane") and not view.get("lane_error") else None
     fill = {"task_id": str(view.get("task_id") or ""), "governance_root": str(governance_root),
             "lane_arg": f" --lane {lane}" if lane else ""}
-    nxt = pick_next_card(scan_project(Path(governance_root), lane=lane))
+    # AIPOS-F142 件①: 只要「下一张」= 只扫可当选状态(next_states_only, 同一 scan_project 出口), 不为 claimed/blocked 卡做推导
+    nxt = pick_next_card(scan_project(Path(governance_root), lane=lane, next_states_only=True))
     done = message or "已结案并落账"
     if nxt is None:
         return {"detail": f"{done}; 下一张可推进卡: 无{'(lane ' + lane + ')' if lane else ''}", "next_card": None,
@@ -829,15 +840,13 @@ def loop_status_cli(args: Any) -> int:
             print(f"lybra loop status: {exc}", file=sys.stderr)
             return int(lane_view_declaration()["invalid_lane_exit_code"])
         contract = load_loop_contract()
-        # AIPOS-F138 件③: 信封判定诊断行([ENVELOPE_TRACE])只在 --verbose 时输出(「下一张」扫描会逐卡判信封); 判定逻辑不变
-        from tools.aipos_cli.autonomy_policy import envelope_trace_output
-
-        with envelope_trace_output(bool(getattr(args, "verbose", False))):
-            if wait is None:
-                report = loop_status(governance_root, task_id, contract=contract, lane=lane,
-                                     include_frozen=bool(getattr(args, "include_frozen", False)))
-            else:
-                report = wait_for_next_action(governance_root, task_id or "", float(wait), contract=contract, lane=lane)
+        # AIPOS-F138 件③ → AIPOS-F142 件②: 信封判定诊断行([ENVELOPE_TRACE])的开关只在发射处一处(autonomy_policy.trace_envelope ←
+        # CLI 入口 cli_envelope_trace, --verbose 开), 本处不再另设
+        if wait is None:
+            report = loop_status(governance_root, task_id, contract=contract, lane=lane,
+                                 include_frozen=bool(getattr(args, "include_frozen", False)))
+        else:
+            report = wait_for_next_action(governance_root, task_id or "", float(wait), contract=contract, lane=lane)
     except StatusUsageError as exc:
         print(f"lybra loop status: {exc}", file=sys.stderr)
         return declared_exit_code(STATUS_VERB, "usage")

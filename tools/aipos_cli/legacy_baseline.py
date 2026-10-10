@@ -137,7 +137,16 @@ def read_manifest(governance_root: Path) -> list[dict[str, Any]]:
 
 def frozen_tasks(governance_root: Path) -> dict[str, dict[str, Any]]:
     """AIPOS-F122 件③: 「是否冻结」唯一判定——重放清单条目, 返回 {卡号(大写): 冻结它的那批条目摘要}。
-    项目未声明 legacy_baseline = {}(行为不变)。清单不合 = LegacyBaselineError(调用方 fail-closed)。"""
+    项目未声明 legacy_baseline = {}(行为不变)。清单不合 = LegacyBaselineError(调用方 fail-closed)。
+    AIPOS-F142 件①: 只读视图作用域(task_loader.task_card_lookup_scope)内同一治理根只重放一次(lookup_scope_memo; 原视图逐卡推导各读一遍
+    清单, chris 269 张冻结); 作用域外(门写动作 / loop)每次现读, 行为不变。返回副本, 调用方改动不污染缓存。"""
+    from tools.aipos_cli.task_loader import lookup_scope_memo  # 懒导入: 本模块须保持轻依赖(见文末命令侧注)
+
+    root = Path(governance_root)
+    return dict(lookup_scope_memo(root, "legacy_baseline.frozen_tasks", lambda: _replay_manifest(root)))
+
+
+def _replay_manifest(governance_root: Path) -> dict[str, dict[str, Any]]:
     frozen: dict[str, dict[str, Any]] = {}
     for entry in read_manifest(Path(governance_root)):
         for task_id in entry["task_ids"]:

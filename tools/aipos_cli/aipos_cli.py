@@ -2165,8 +2165,7 @@ def build_parser() -> argparse.ArgumentParser:
     loop_status_parser.add_argument("--wait", type=float, default=None, metavar="SECONDS",
                                     help="AIPOS-F136 件①: 有界等待秒数(须 --task-id; 上限读 verbs.schema lybra_loop_status.wait.max_seconds), "
                                     "经 agent watch 等到顾问下一动作 ≠ continue_wait 或到时, 返回当时状态; 禁 until/sleep 轮询")
-    loop_status_parser.add_argument("--verbose", action="store_true", default=False,
-                                    help="AIPOS-F138 件③: 另输出门侧信封判定诊断行([ENVELOPE_TRACE], stderr); 缺省不打印")
+    # AIPOS-F138 件③ 的 --verbose 由 AIPOS-F142 件② 统一挂载(verbs.schema envelope_trace.verbose_commands 含 "loop status", 见 build_parser 末)
 
     # AIPOS-F138 件①: lybra charter — 拉取式输出实例的渲染后章程(他机会话开局经 ssh 读取; 参数由 verbs.schema lybra_charter 生成)
     from tools.aipos_cli.charter_render import add_charter_arguments as _add_charter_arguments
@@ -2365,6 +2364,10 @@ def build_parser() -> argparse.ArgumentParser:
     gov_list_decl.add_argument("--workspace-root", help="Product repo root (for schema resolution)")
     gov_list_decl.add_argument("--json", action="store_true", help="Output JSON")
 
+    # AIPOS-F142 件②: [ENVELOPE_TRACE] 的 --verbose 只按声明挂载(verbs.schema envelope_trace.verbose_commands, 唯一挂载口)
+    from tools.aipos_cli.autonomy_policy import attach_verbose_flags
+
+    attach_verbose_flags(parser)
     return parser
 
 
@@ -2456,6 +2459,14 @@ def _workspace_roots_command(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    # AIPOS-F142 件②: [ENVELOPE_TRACE] 唯一开关的 CLI 决定点(缺省关; --verbose / 调试环境变量开; in-process 嵌套沿用外层)
+    from tools.aipos_cli.autonomy_policy import cli_envelope_trace
+
+    with cli_envelope_trace(bool(getattr(args, "verbose", False))):
+        return _dispatch(parser, args)
+
+
+def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     if not args.command:
         parser.print_help()
         return 2
@@ -5258,6 +5269,72 @@ def main(argv: list[str] | None = None) -> int:
             print(render_json(result))
         return 1 if result.get("verdict") == Verdict.BLOCK else 0
 
+    # AIPOS-F142 件①: loop(含 loop status)与 next 是自含薄壳, 不用下方全量校验报告(load_all_tasks + load_records + validate_tasks,
+    # lybra 治理根 1000+ 卡约 5 秒)——先于它分派, 免每次查询白读全部卡与记录。分派体原样搬移, 逻辑不变
+    # AIPOS-F71: lybra next — 唯一推导实现
+    # AIPOS-F73件②③: --run 机器扣扳机 (推导 + 执行)
+    if args.command == "loop":
+        if getattr(args, "loop_action", None) == "status":
+            # AIPOS-F131 件②: 只读薄壳 — 全部逻辑在 loop_run_record(判据唯一 judge_run)
+            from tools.aipos_cli.loop_run_record import loop_status_cli
+            return loop_status_cli(args)
+        # AIPOS-F73D: 顾问侧驱动器薄壳 — 全部逻辑在 loop_driver(复用 next_resolver + agent_watch_fs + autonomy_policy)
+        from tools.aipos_cli.loop_driver import run_loop_cli
+        return run_loop_cli(args)
+
+    if args.command == "next":
+        from tools.aipos_cli.next_resolver import derive_next_step, scan_project_view, format_output, format_scan_output
+
+        try:
+            ws_root = getattr(args, "workspace_root", None) or _find_repo_root_for_args(args)
+            json_mode = getattr(args, "json", False)
+            run_mode = getattr(args, "run", False)
+
+            if args.task_id and getattr(args, "lane", None):
+                from tools.aipos_cli.machine_zone import lane_view_declaration
+
+                print("Error: --lane 只用于项目扫描(无 --task-id); 单卡推导不按 lane 过滤", file=sys.stderr)
+                return int(lane_view_declaration()["invalid_lane_exit_code"])
+            if args.task_id:
+                # 单卡模式
+                result = derive_next_step(args.task_id, ws_root)
+                
+                if run_mode and result.get("derivable"):
+                    # AIPOS-F73件③: 推导后立即执行
+                    from tools.aipos_cli.next_resolver import execute_derived_action
+                    conn_json = getattr(args, "connection_json", None)
+                    exec_result = execute_derived_action(result, ws_root, conn_json)
+                    if json_mode:
+                        print(render_json(exec_result))
+                    else:
+                        print(f"Action: {exec_result.get('action_type', '?')}")
+                        if exec_result.get("ok"):
+                            print(f"✓ {exec_result.get('message', 'Success')}")
+                        else:
+                            print(f"✗ {exec_result.get('message', 'Failed')}", file=sys.stderr)
+                    return 0 if exec_result.get("ok") else 1
+                else:
+                    print(format_output(result, json_mode=json_mode))
+                    return 0 if result.get("derivable") else 1
+            else:
+                # 项目级扫描(AIPOS-F133 件②: --lane 经 machine_zone.resolve_lane_filter 校验后交同一过滤函数)
+                from tools.aipos_cli.machine_zone import LaneFilterInvalid, lane_view_declaration, resolve_lane_filter
+
+                try:
+                    lane = resolve_lane_filter(Path(ws_root), getattr(args, "lane", None))
+                except LaneFilterInvalid as exc:
+                    print(f"Error: {exc}", file=sys.stderr)
+                    return int(lane_view_declaration()["invalid_lane_exit_code"])
+                # AIPOS-F141: 扫描经唯一可见卡入口(machine_zone.visible_cards; 冻结卡缺省不列、--lane 只列所选), 汇总行同一渲染
+                view = scan_project_view(ws_root, lane=lane, include_frozen=bool(getattr(args, "include_frozen", False)))
+                print(format_scan_output(view["rows"], json_mode=json_mode, lane=lane, view=view))
+                return 0
+        except Exception as exc:
+            print(f"Error in lybra next: {exc}", file=sys.stderr)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            return 1
+
     try:
         tasks = load_all_tasks(repo_root)
     except FileNotFoundError as exc:
@@ -5760,17 +5837,6 @@ def main(argv: list[str] | None = None) -> int:
             print(render_preview_text(preview))
         return 0
 
-    # AIPOS-F71: lybra next — 唯一推导实现
-    # AIPOS-F73件②③: --run 机器扣扳机 (推导 + 执行)
-    if args.command == "loop":
-        if getattr(args, "loop_action", None) == "status":
-            # AIPOS-F131 件②: 只读薄壳 — 全部逻辑在 loop_run_record(判据唯一 judge_run)
-            from tools.aipos_cli.loop_run_record import loop_status_cli
-            return loop_status_cli(args)
-        # AIPOS-F73D: 顾问侧驱动器薄壳 — 全部逻辑在 loop_driver(复用 next_resolver + agent_watch_fs + autonomy_policy)
-        from tools.aipos_cli.loop_driver import run_loop_cli
-        return run_loop_cli(args)
-
     if args.command == "charter":
         # AIPOS-F138 件①: 只读薄壳 — 全部逻辑在 charter_render(渲染唯一 render_charter)
         from tools.aipos_cli.charter_render import run_charter_cli
@@ -5791,59 +5857,6 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         from tools.aipos_cli.artifact_ingest import run_ingest_cli
         return run_ingest_cli(args)
-
-    if args.command == "next":
-        from tools.aipos_cli.next_resolver import derive_next_step, scan_project_view, format_output, format_scan_output
-
-        try:
-            ws_root = getattr(args, "workspace_root", None) or _find_repo_root_for_args(args)
-            json_mode = getattr(args, "json", False)
-            run_mode = getattr(args, "run", False)
-
-            if args.task_id and getattr(args, "lane", None):
-                from tools.aipos_cli.machine_zone import lane_view_declaration
-
-                print("Error: --lane 只用于项目扫描(无 --task-id); 单卡推导不按 lane 过滤", file=sys.stderr)
-                return int(lane_view_declaration()["invalid_lane_exit_code"])
-            if args.task_id:
-                # 单卡模式
-                result = derive_next_step(args.task_id, ws_root)
-                
-                if run_mode and result.get("derivable"):
-                    # AIPOS-F73件③: 推导后立即执行
-                    from tools.aipos_cli.next_resolver import execute_derived_action
-                    conn_json = getattr(args, "connection_json", None)
-                    exec_result = execute_derived_action(result, ws_root, conn_json)
-                    if json_mode:
-                        print(render_json(exec_result))
-                    else:
-                        print(f"Action: {exec_result.get('action_type', '?')}")
-                        if exec_result.get("ok"):
-                            print(f"✓ {exec_result.get('message', 'Success')}")
-                        else:
-                            print(f"✗ {exec_result.get('message', 'Failed')}", file=sys.stderr)
-                    return 0 if exec_result.get("ok") else 1
-                else:
-                    print(format_output(result, json_mode=json_mode))
-                    return 0 if result.get("derivable") else 1
-            else:
-                # 项目级扫描(AIPOS-F133 件②: --lane 经 machine_zone.resolve_lane_filter 校验后交同一过滤函数)
-                from tools.aipos_cli.machine_zone import LaneFilterInvalid, lane_view_declaration, resolve_lane_filter
-
-                try:
-                    lane = resolve_lane_filter(Path(ws_root), getattr(args, "lane", None))
-                except LaneFilterInvalid as exc:
-                    print(f"Error: {exc}", file=sys.stderr)
-                    return int(lane_view_declaration()["invalid_lane_exit_code"])
-                # AIPOS-F141: 扫描经唯一可见卡入口(machine_zone.visible_cards; 冻结卡缺省不列、--lane 只列所选), 汇总行同一渲染
-                view = scan_project_view(ws_root, lane=lane, include_frozen=bool(getattr(args, "include_frozen", False)))
-                print(format_scan_output(view["rows"], json_mode=json_mode, lane=lane, view=view))
-                return 0
-        except Exception as exc:
-            print(f"Error in lybra next: {exc}", file=sys.stderr)
-            import traceback
-            traceback.print_exc(file=sys.stderr)
-            return 1
 
     if args.command == "next-step":
         print("[RETIRED] 'lybra next-step' is retired by AIPOS-F71. Use 'lybra next --task-id <ID>' instead.", file=sys.stderr)

@@ -63,7 +63,11 @@ _ENVELOPE_LOGGER.propagate = False
 
 
 def trace_envelope(payload: dict[str, Any]) -> None:
-    """Emit one structured envelope-decision trace line (JSON). Best-effort: never raises."""
+    """Emit one structured envelope-decision trace line (JSON). Best-effort: never raises.
+    AIPOS-F142 件②: 发射前只问唯一开关 envelope_trace_enabled()(关 = 不序列化不输出; 信封判定逻辑与结果不变, 门拒的拒因与原因链
+    由各调用方照常输出, 收的只是逐谓词调试轨迹)。"""
+    if not envelope_trace_enabled():
+        return
     try:
         line = json.dumps(payload, default=str, sort_keys=True)
     except (TypeError, ValueError) as exc:  # AIPOS-F115 件③: 精确捕获序列化失败并出声(原 except Exception: pass 静默丢迹)
@@ -72,16 +76,86 @@ def trace_envelope(payload: dict[str, Any]) -> None:
     _ENVELOPE_LOGGER.info("[ENVELOPE_TRACE] " + line)
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F142 件②: [ENVELOPE_TRACE] 输出开关——只在发射处(trace_envelope)一处判定, 声明只在 verbs.schema envelope_trace 一处。
+#   CLI(lybra 入口 main)缺省关: --verbose(挂在 envelope_trace.verbose_commands 所列命令上)或调试开关环境变量(debug_env)开;
+#   in-process 嵌套调用(loop 驱动器执行派生命令)沿用外层决定。不经 CLI 入口的进程(门 MCP 服务, journald 留痕, AIPOS-PRERELEASE-1)
+#   无 CLI 决定 = 取 non_cli_default_enabled(缺省开, 门侧证据照旧)。进程内全局(门服务为多线程, 不用 ContextVar)。
+# ---------------------------------------------------------------------------
+_TRACE_SWITCH: dict[str, bool | None] = {"enabled": None}  # None = 无 CLI 决定(非 CLI 进程)
+
+
+def envelope_trace_declaration() -> dict[str, Any]:
+    """verbs.schema envelope_trace(缺 / 缺键 = SchemaLoadError, fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = load_schema("verbs").get("envelope_trace")
+    keys = ("cli_default_enabled", "non_cli_default_enabled", "verbose_flag", "verbose_help", "verbose_commands", "debug_env",
+            "debug_env_on_values")
+    if not isinstance(decl, dict) or any(k not in decl for k in keys) or not isinstance(decl.get("verbose_commands"), list):
+        raise SchemaLoadError(f"verbs.schema.json envelope_trace 未声明齐 {list(keys)}")
+    return decl
+
+
+def _debug_env_on(decl: dict[str, Any]) -> bool:
+    import os
+
+    value = str(os.environ.get(str(decl["debug_env"])) or "").strip().lower()
+    return bool(value) and value in {str(v).strip().lower() for v in decl["debug_env_on_values"]}
+
+
+def envelope_trace_enabled() -> bool:
+    """唯一开关读口: CLI 已决定 = 用之; 否则(非 CLI 进程)= 调试环境变量开 或 声明 non_cli_default_enabled。"""
+    decided = _TRACE_SWITCH["enabled"]
+    if decided is not None:
+        return decided
+    decl = envelope_trace_declaration()
+    return _debug_env_on(decl) or bool(decl["non_cli_default_enabled"])
+
+
 @contextlib.contextmanager
-def envelope_trace_output(enabled: bool) -> Iterator[None]:
-    """AIPOS-F138 件③: 只读视图(`lybra loop status`)按开关输出信封判定诊断行 —— enabled=False 时本区段内不打印 [ENVELOPE_TRACE]
-    (状态结论不被淹没), 退出区段恢复原状。只开关输出, 不改 trace_envelope 的调用与信封判定逻辑; 门侧(serve)不经本开关, 照旧留痕。"""
-    previous = _ENVELOPE_LOGGER.disabled
-    _ENVELOPE_LOGGER.disabled = not enabled
+def envelope_trace_output(enabled: bool | None) -> Iterator[None]:
+    """区段内设定开关(None = 不改, 沿用当前), 退出恢复原状。只开关输出, 不改 trace_envelope 的调用与信封判定逻辑。
+    AIPOS-F138 件③ 原为 loop status 专用(改 logger.disabled); AIPOS-F142 件② 起改由唯一开关承载, logger 本身不动。"""
+    previous = _TRACE_SWITCH["enabled"]
+    if enabled is not None:
+        _TRACE_SWITCH["enabled"] = bool(enabled)
     try:
         yield
     finally:
-        _ENVELOPE_LOGGER.disabled = previous
+        _TRACE_SWITCH["enabled"] = previous
+
+
+def cli_envelope_trace(verbose: bool) -> contextlib.AbstractContextManager[None]:
+    """CLI 入口(aipos_cli.main)唯一调用: --verbose 或调试环境变量 = 开; 已在外层 CLI 决定之内(in-process 嵌套)= 沿用;
+    否则 = 声明 cli_default_enabled(缺省关)。"""
+    decl = envelope_trace_declaration()
+    if verbose or _debug_env_on(decl):
+        return envelope_trace_output(True)
+    if _TRACE_SWITCH["enabled"] is not None:
+        return envelope_trace_output(None)
+    return envelope_trace_output(bool(decl["cli_default_enabled"]))
+
+
+def attach_verbose_flags(root_parser: Any) -> None:
+    """给 verbs.schema envelope_trace.verbose_commands 所列命令(空格分隔的子命令路径)挂 --verbose(dest=verbose, 缺省 SUPPRESS:
+    父子命令都挂时不互相覆盖; 读取方一律 getattr(args, "verbose", False))。路径找不到 = SchemaLoadError(声明与命令树不符, fail-closed)。"""
+    import argparse
+
+    from tools.schema_loader import SchemaLoadError
+
+    decl = envelope_trace_declaration()
+    flag = str(decl["verbose_flag"])
+    for path in decl["verbose_commands"]:
+        parser = root_parser
+        for name in str(path).split():
+            subs = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
+            parser = next((a.choices[name] for a in subs if name in a.choices), None)
+            if parser is None:
+                raise SchemaLoadError(f"verbs.schema envelope_trace.verbose_commands: 命令 {path!r} 不在 lybra 命令树内")
+        if any(flag in a.option_strings for a in parser._actions):
+            raise SchemaLoadError(f"verbs.schema envelope_trace.verbose_commands: 命令 {path!r} 已自带 {flag}(开关须只挂一处)")
+        parser.add_argument(flag, dest="verbose", action="store_true", default=argparse.SUPPRESS, help=str(decl["verbose_help"]))
 
 # FLAT bounded-map frontmatter (AIPOS-219 P5 idiom: depth-1, readable on bare python).
 # task_selector is flattened into three explicit fields; task_ids is a YAML list.
@@ -331,14 +405,26 @@ def load_policy(repo_root: Path, policy_id: str) -> dict[str, Any] | None:
 
 def count_preauthorized_claims(repo_root: Path, policy_id: str) -> int:
     """Count already-landed PreAuthorized claim records attributed to this policy. Stateless and
-    auditable (R-1 count bound): the gate re-derives the count from truth every match."""
+    auditable (R-1 count bound): the gate re-derives the count from truth every match.
+
+    AIPOS-F142 件①: 计数判据不变; 只读视图作用域(task_loader.task_card_lookup_scope)内, 认领记录只遍历一趟、一次得出全部信封的计数
+    (lookup_scope_memo; 原每卡 × 每信封各全量 rglob 一遍, lybra 30 信封 × 900 认领记录 = 单卡 25 秒)。作用域外(门 claim 的
+    放行判定)每次现读现数, 行为不变。"""
+    from tools.aipos_cli.task_loader import lookup_scope_memo
+
     pid = str(policy_id or "").strip()
     if not pid:
         return 0
+    return int(lookup_scope_memo(Path(repo_root), "autonomy_policy.preauthorized_claim_counts",
+                                 lambda: _preauthorized_claim_counts(Path(repo_root))).get(pid, 0))
+
+
+def _preauthorized_claim_counts(repo_root: Path) -> dict[str, int]:
+    """已落盘 PreAuthorized 认领记录按 owner_policy_ref 计数(count_preauthorized_claims 的唯一判据)。"""
     claims_root = (repo_root / record_root("claims")).resolve()
+    counts: dict[str, int] = {}
     if not claims_root.is_dir():
-        return 0
-    count = 0
+        return counts
     for path in claims_root.rglob("*.md"):
         if not path.is_file():
             continue
@@ -350,9 +436,10 @@ def count_preauthorized_claims(repo_root: Path, policy_id: str) -> int:
             continue
         if str(metadata.get("autonomy_mode") or "").strip() != AUTONOMY_MODE_PREAUTHORIZED:
             continue
-        if str(metadata.get("owner_policy_ref") or "").strip() == pid:
-            count += 1
-    return count
+        ref = str(metadata.get("owner_policy_ref") or "").strip()
+        if ref:
+            counts[ref] = counts.get(ref, 0) + 1
+    return counts
 
 
 def card_lane_refs(governance_root: Path | str, card_frontmatter: dict[str, Any] | None) -> dict[str, Any]:
