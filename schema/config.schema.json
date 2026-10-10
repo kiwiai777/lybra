@@ -240,7 +240,8 @@
          "reject_codes": {
           "REPOS_CONFLICT": "repos 段自身不一致(default 不在 items / items 非绝对路径 / code_repo ≠ default 路径 / no_deploy 仓名不在 items)",
           "LANE_REPO_UNDECLARED": "卡 lane.repo 解析不到清单内一项(或无清单时 ≠ code_repo), 或卡/项目均未声明仓且治理根不是 git 仓",
-          "INGEST_REPO_MISMATCH": "Return frontmatter 自述 repo 与卡 lane.repo 解析仓不符(transitions artifact_ingest.return.optional_frontmatter)"
+          "INGEST_REPO_MISMATCH": "Return frontmatter 自述 repo 与卡 lane.repo 解析仓不符(transitions artifact_ingest.return.optional_frontmatter)",
+          "LANE_REPO_REQUIRED": "AIPOS-F148 件①(gap #123): 项目声明了多个仓(repos.items ≥ 2)而卡稿未写 lane.repo——不按 repos.default 缺省派生(同一默认仓可能同属多个 lane, 卡归属含糊), 发卡拒并列出仓名; 单仓项目(无 repos 段或 items 仅 1 项)不适用, 缺 lane.repo 仍按 default 派生(行为不变)。判据唯一实现 draft_writer.multi_repo_lane_refusal, 只在发卡核身份同一校验入口 draft_writer.publish_identity_refusals 判拒; 起草(create)与存量重生成(regen)遇此情形不替卡写 lane.repo(只出声)"
          }
         },
         "paths": {
@@ -488,6 +489,19 @@
             "EXECUTION_DECLARATION_INVALID": "execution 段形不合(非对象 / 未知键 / 必填键缺 / 值非非空单行串 / default_mode 或 task_mode 不在值域 / pi_allowed_task_modes 非空而缺 pi_executor / 审计者与执行者同一实例)",
             "EXECUTION_INSTANCE_NOT_ENROLLED": "声明的实例不是本项目已接入实例(或审计者 / pi 执行者无工位位置); 出口: 先按 lybra onboarding guide 接入该实例(子 agent 执行者: --executor-mode subagent), 再声明",
             "EXECUTION_PI_NOT_ALLOWED": "卡要派 pi 执行工位, 但其 task_mode 不在 execution.pi_allowed_task_modes(Owner 未明示)或未声明 pi_executor; 出口: 去掉 harness=pi 按缺省派子 agent, 或请 Owner 明示后 lybra project set-execution 追加 --pi-allowed-task-mode"
+          }
+        },
+        "return_summary_source": {
+          "type": "object",
+          "required": false,
+          "default_from": "transitions.artifact_ingest.return.summary_source",
+          "description": "AIPOS-F148 件②(gap #112: 交回就绪判据写死 lybra 模板「一句话结论」节, 人肉期接入项目的 Return 无此节即被当「无交回」空等): 本项目 Return 的「摘要来源」声明。形: {\"frontmatter_keys\": [\"<Return frontmatter 键>\", …], \"section_markers\": [\"<正文节标记>\", …]}; 逐键覆盖 transitions.schema artifact_ingest.return.summary_source 的同名键, 缺段 / 缺键 = 取该声明缺省(frontmatter_keys=[]、section_markers=现行「一句话结论」两标记, 存量行为不变)。判据: 先按 frontmatter_keys 列序取首个非占位值, 再按 section_markers 取正文节首个内容行(规则见该声明 rule); 都取不到 = 未就绪。唯一读取口 workspace_config.return_summary_source(交回就绪判据 next_resolver._check_return_artifact / 推导核交回步 / artifact ingest 同读, 解析唯一 next_resolver.extract_return_summary_text); 唯一写入口 `lybra project set-return-summary [项目] [--frontmatter-key <键>…] [--section-marker <标记>…] [--dry-run|--confirm]`(workspace_config.set_return_summary_source, 经 update_project_json 唯一写路径; 整段声明, 未给的键 = 取缺省)。",
+          "schema": {
+            "frontmatter_keys": {"type": "array", "required": false, "items": {"type": "string"}, "description": "Return frontmatter 中承载一句话摘要的键名列表(如 result_summary), 按列序取首个非占位值(占位判据 = next_resolver._is_placeholder_value: 空 / `(待填写` 前缀 / `<` 起首)"},
+            "section_markers": {"type": "array", "required": false, "items": {"type": "string"}, "description": "正文摘要节标记列表: 某行含任一标记即进入该节, 取其后首个非空非标题行(遇 `##` 起首行止; `(待填写` 前缀 = 骨架占位, 未就绪)"}
+          },
+          "reject_codes": {
+            "RETURN_SUMMARY_SOURCE_INVALID": "return_summary_source 段形不合(非对象 / 未知键 / 值非「非空单行字符串」列表 / 两键都为空列表 = 无任何摘要来源)"
           }
         }
       }

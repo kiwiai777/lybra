@@ -254,8 +254,9 @@ def test_item3_gate_writes_and_loop_refuse_frozen_with_unfreeze_command(tmp_path
         "dispatch": audit_dispatch_task(source_task_id="DEMO-1", actor="advisor.sample", agent_instance="advisor.sample",
                                         owner_policy_ref="pol", audit_task_id="DEMO-1R", audit_agent_instance="audit.sample",
                                         dry_run=True, repo_root=gov),
-        "verdict": audit_verdict_task(audit_task_id="DEMO-1R", reviewed_task_id="DEMO-1", actor="audit.sample",
-                                      agent_instance="audit.sample", owner_policy_ref="pol", verdict="PASS", dry_run=True, repo_root=gov),
+        # AIPOS-F148 件③: 裁决门侧授权要求完整实例名(三段式), 审计实例写 audit.sample.host
+        "verdict": audit_verdict_task(audit_task_id="DEMO-1R", reviewed_task_id="DEMO-1", actor="audit.sample.host",
+                                      agent_instance="audit.sample.host", owner_policy_ref="pol", verdict="PASS", dry_run=True, repo_root=gov),
     }
     for verb, resp in responses.items():
         assert resp["verdict"] == "BLOCK" and resp["error_code"] == "LEGACY_FROZEN", (verb, resp)

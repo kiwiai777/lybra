@@ -125,6 +125,21 @@ independent pi auditor workstation (AIPOS-F143).
    approved list). `lybra draft publish` refuses a card whose `assigned_to` or auditor is not enrolled in the project (or, for
    `harness: pi` and auditors, has no workstation) and lists the enrolled instances.
 
+### Card and Return rules every project follows (AIPOS-F148)
+
+- **Multi-repo projects must name the repo.** When `project.json` declares two or more repos (`repos.items`), `lybra draft
+  publish` refuses a card whose draft has no `lane.repo` (`LANE_REPO_REQUIRED`, the refusal lists the repo names); it no
+  longer falls back to `repos.default`. Single-repo projects are unchanged.
+- **Where the Return summary lives is declared.** A Return counts as handed in once its one-line summary can be read from
+  the declared sources (`schema/transitions.schema.json` `artifact_ingest.return.summary_source`; default: the
+  `一句话结论` section, exactly as before). A project whose Returns carry the summary elsewhere declares it with
+  `lybra project set-return-summary [--frontmatter-key result_summary] [--section-marker <marker>]` (preview by default,
+  `--confirm` writes `project.json` `return_summary_source`). If a Return has its required frontmatter filled but none of
+  the sources yields a summary, `lybra loop` stops with the sources it checked and how to fix it instead of waiting.
+- **Gate authorization needs a full instance name.** Audit verdicts and rework rounds are accepted only for an
+  `agent_instance` that matches the instance-name template (`<prefix>.<project>.<host>`); a bare role name such as
+  `auditor` is refused (`INSTANCE_NOT_CANONICAL`).
+
 `lybra loop` starts its sub-commands with the same Python interpreter and code tree it runs from, so it does not need
 `lybra` on `PATH` (for example when started over ssh); a sub-command that fails is reported with its error text.
 

@@ -2058,6 +2058,105 @@ def project_execution(project_root: str | Path, *, project: dict[str, Any] | Non
 
 
 # ---------------------------------------------------------------------------
+# AIPOS-F148 件②(gap #112): 交回「摘要来源」声明——缺省 transitions.schema artifact_ingest.return.summary_source,
+# 项目覆盖 project.json return_summary_source(config.schema project_json.schema.return_summary_source)。
+# 唯一读取口 return_summary_source / 唯一写入口 set_return_summary_source; 解析唯一 next_resolver.extract_return_summary_text。
+# ---------------------------------------------------------------------------
+
+RETURN_SUMMARY_SOURCE_KEYS = ("frontmatter_keys", "section_markers")
+
+
+class ReturnSummarySourceError(ValueError):
+    """return_summary_source 段不合声明(fail-closed)。code ∈ config.schema project_json.return_summary_source.reject_codes。"""
+
+    def __init__(self, code: str, problems: list[str]):
+        super().__init__(f"{code}: " + "; ".join(problems))
+        self.code = code
+        self.problems = list(problems)
+
+
+def return_summary_source_default() -> dict[str, list[str]]:
+    """transitions.schema artifact_ingest.return.summary_source 的缺省(两键均须为字符串列表; 缺 / 形不合 = SchemaLoadError)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = ((load_schema("transitions").get("artifact_ingest") or {}).get("return") or {}).get("summary_source")
+    if not isinstance(decl, dict) or not all(
+            isinstance(decl.get(k), list) and all(isinstance(v, str) and v.strip() for v in decl[k]) for k in RETURN_SUMMARY_SOURCE_KEYS) \
+            or not (decl["frontmatter_keys"] or decl["section_markers"]):
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.return.summary_source(frontmatter_keys / section_markers "
+                              "字符串列表, 至少一项)未声明齐")
+    return {k: [str(v).strip() for v in decl[k]] for k in RETURN_SUMMARY_SOURCE_KEYS}
+
+
+def _return_summary_source_decl() -> dict[str, Any]:
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (((load_schema("config").get("configuration_sources") or {}).get("project_json") or {}).get("schema") or {}).get(
+        "return_summary_source")
+    if (not isinstance(decl, dict) or set((decl.get("schema") or {})) != set(RETURN_SUMMARY_SOURCE_KEYS)
+            or not str((decl.get("reject_codes") or {}).get("RETURN_SUMMARY_SOURCE_INVALID") or "").strip()):
+        raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.return_summary_source"
+                              "(schema {frontmatter_keys, section_markers} / reject_codes.RETURN_SUMMARY_SOURCE_INVALID)未声明齐")
+    return decl
+
+
+def return_summary_source(governance_root: str | Path, *, project: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F148 件②: 本项目 Return 的摘要来源(唯一读取口)→ {frontmatter_keys, section_markers, declared}。
+    project.json return_summary_source 逐键覆盖 transitions 缺省; 缺段 = 缺省(declared=False, 行为不变)。
+    形不合 = ReturnSummarySourceError(RETURN_SUMMARY_SOURCE_INVALID, 问题一次列全); project.json 读不出 = 原异常上抛(不吞成缺省)。
+    project = 将写入的内容(update_project_json 写前预检)。"""
+    decl = _return_summary_source_decl()
+    source: dict[str, Any] = {**return_summary_source_default(), "declared": False}
+    data = project if project is not None else read_project_json(governance_root)
+    raw = data.get("return_summary_source") if isinstance(data, dict) else None
+    if raw is None:
+        return source
+    problems: list[str] = []
+    if not isinstance(raw, dict):
+        raise ReturnSummarySourceError("RETURN_SUMMARY_SOURCE_INVALID", [f"return_summary_source 须为 JSON 对象: {decl['reject_codes']['RETURN_SUMMARY_SOURCE_INVALID']}"])
+    problems += [f"未知键 {k}(可写键: {', '.join(RETURN_SUMMARY_SOURCE_KEYS)})" for k in raw if k not in RETURN_SUMMARY_SOURCE_KEYS]
+    for key in RETURN_SUMMARY_SOURCE_KEYS:
+        if key not in raw:
+            continue
+        value = raw[key]
+        if not isinstance(value, list) or any(not isinstance(v, str) or not v.strip() or "\n" in v for v in value):
+            problems.append(f"{key}={value!r} 须为非空单行字符串列表")
+            continue
+        source[key] = list(dict.fromkeys(v.strip() for v in value))
+    if not problems and not (source["frontmatter_keys"] or source["section_markers"]):
+        problems.append("frontmatter_keys 与 section_markers 都为空 = 无任何摘要来源")
+    if problems:
+        raise ReturnSummarySourceError("RETURN_SUMMARY_SOURCE_INVALID", problems)
+    source["declared"] = True
+    return source
+
+
+def set_return_summary_source(project_root: str | Path, *, frontmatter_keys: list[str] | None = None,
+                              section_markers: list[str] | None = None, dry_run: bool = True) -> dict[str, Any]:
+    """AIPOS-F148 件②: `lybra project set-return-summary` 的唯一实现——整段写 project.json return_summary_source
+    (只写给出的键; 未给的键 = 取 transitions 缺省)。两键都未给 = 拒(RETURN_SUMMARY_SOURCE_INVALID)。
+    写入经 update_project_json(锁 + diff + 写前/写后经读取口 return_summary_source 复核; dry_run 缺省 = 预演零写入)。
+    返回 {project_json, dry_run, changed, written, diff, return_summary_source(生效视图)}。"""
+    section: dict[str, list[str]] = {}
+    if frontmatter_keys:
+        section["frontmatter_keys"] = list(frontmatter_keys)
+    if section_markers:
+        section["section_markers"] = list(section_markers)
+    if not section:
+        raise ReturnSummarySourceError("RETURN_SUMMARY_SOURCE_INVALID", ["至少给一个 --frontmatter-key 或 --section-marker"])
+
+    def _mutate(data: dict[str, Any]) -> None:
+        data["return_summary_source"] = section
+
+    def _verify(root: Path, *, project: dict[str, Any] | None = None) -> None:
+        return_summary_source(root, project=project)
+
+    outcome = update_project_json(project_root, _mutate, verify=_verify, dry_run=dry_run)
+    view = return_summary_source(project_root, project={"return_summary_source": section})
+    return {**outcome, "return_summary_source": view}
+
+
+# ---------------------------------------------------------------------------
 # AIPOS-F127 件①: project 族写命令目标项目解析的唯一实现(声明 verbs.schema two_phase_protocol.project_json_writers
 # .target_resolution)。序: 显式项目名 > --workspace-root / 当前目录所在治理根声明的 project.json#project > 拒;
 # 禁回落 home 级活动项目(resolve_active_project 梯只给读路径用)。

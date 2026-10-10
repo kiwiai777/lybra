@@ -11,6 +11,11 @@
       "prefix": "role-specific short label, from this registry (role.naming.prefix)",
       "project": "workspace project_segment (from project.json)",
       "host": "workspace host_segment (from project.json); per-instance override allowed at mint time"
+    },
+    "gate_authorization": {
+      "description": "AIPOS-F148 件③(gap #114: F132 后门侧授权对无点裸角色名 agent_instance=auditor 按角色名解析放行, 裁决归因从实例降到角色): 门侧授权判定(custom_roles.authorize_instance_class: 审计裁决提交 / 返工节等记录属主校验)要求 agent_instance 是合 template 的完整实例名(段数严格相等、无空段, 唯一解析 naming_profile.parse_instance_name); 裸角色名 / 段数不合 = 拒, 不再按角色名解析放行。与提交身份的绑定沿用既有门链: MCP 层 actor 须等于 agent_instance 解析出的规范实例(INSTANCE_MISMATCH), 裁决预览以审计卡 claimed_by(门认领时落定)核 actor(validator: Task is claimed by another actor); 驱动方 token 提交账务动词时 token 实例只记 submitted_by(transitions record_authenticity.submission_identity), 不替代 agent_instance。",
+      "reject_code": "INSTANCE_NOT_CANONICAL",
+      "reject_message": "agent_instance 须为合实例名模板 {template} 的完整实例名(裸角色名 / 段数不合不授权, 裁决归因须到实例)"
     }
   },
   "roles": [

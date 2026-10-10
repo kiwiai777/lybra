@@ -1994,6 +1994,16 @@ def build_parser() -> argparse.ArgumentParser:
     project_setexec_parser.add_argument("--workspace-root", help="Target governance root when the project name is omitted (default: the one containing the current directory)")
     project_setexec_parser.add_argument("--json", action="store_true", help="Output JSON")
     _project_json_two_phase_flags(project_setexec_parser, "set-execution")  # 缺省预演 / --confirm 才写(同一包装)
+    # AIPOS-F148 件②: Return 摘要来源声明写入口(project.json return_summary_source; 声明 config.schema project_json.return_summary_source;
+    # 缺省 transitions artifact_ingest.return.summary_source; 唯一实现 workspace_config.set_return_summary_source)
+    project_setsummary_parser = project_subparsers.add_parser("set-return-summary", help="AIPOS-F148: declare where this project's Return carries its one-line summary (project.json return_summary_source: Return frontmatter keys and/or body section markers; unset keys fall back to transitions.schema artifact_ingest.return.summary_source, default = the 一句话结论 section); --dry-run (default) shows the diff, --confirm writes")
+    project_setsummary_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory)")
+    project_setsummary_parser.add_argument("--frontmatter-key", action="append", dest="summary_frontmatter_keys", default=[], metavar="KEY", help="Return frontmatter key holding the one-line summary, e.g. result_summary (repeatable; first non-placeholder value wins)")
+    project_setsummary_parser.add_argument("--section-marker", action="append", dest="summary_section_markers", default=[], metavar="MARKER", help="Body section marker: the first non-empty line after a line containing it is the summary (repeatable; omitted = the declared default markers)")
+    project_setsummary_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    project_setsummary_parser.add_argument("--workspace-root", help="Target governance root when the project name is omitted (default: the one containing the current directory)")
+    project_setsummary_parser.add_argument("--json", action="store_true", help="Output JSON")
+    _project_json_two_phase_flags(project_setsummary_parser, "set-return-summary")  # 缺省预演 / --confirm 才写(同一包装)
     # AIPOS-F110 件②③: 跨机工位开工材料声明(project.json workstations.<实例>) + 双向可达检查(同一 ssh transport 代码路径)
     project_setws_parser = project_subparsers.add_parser("set-workstation", help="AIPOS-F110: declare a cross-machine workstation's material access (project.json workstations.<instance>: gate_ssh_alias + material_access), validated against config.schema project_json.workstations; --dry-run (default) shows the diff, --confirm writes")
     project_setws_parser.add_argument("name", help="Established project name")
@@ -3535,6 +3545,29 @@ def main(argv: list[str] | None = None) -> int:
                     details=[f"execution.{k} = {view[k]!r}" for k in ("default_mode", "subagent_executor", "pi_allowed_task_modes",
                                                                        "pi_executor", "auditor")]
                     + ["各实例已核: 本项目已接入(审计者 / pi 执行者有工位位置); 起草缺省与发卡核身份同读本段"])
+                return 0
+            if args.project_command == "set-return-summary":
+                # AIPOS-F148 件②: 唯一实现 workspace_config.set_return_summary_source(声明校验 + update_project_json 唯一写路径)
+                from tools.aipos_cli.workspace_config import ReturnSummarySourceError, set_return_summary_source
+
+                target = _project_write_target(args, home, args.name)
+                if target is None:
+                    return 1
+                try:
+                    outcome = set_return_summary_source(
+                        target["project_root"], frontmatter_keys=list(args.summary_frontmatter_keys or []),
+                        section_markers=list(args.summary_section_markers or []), dry_run=not args.confirm)
+                except ReturnSummarySourceError as exc:
+                    print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
+                    return 1
+                view = outcome["return_summary_source"]
+                _project_json_two_phase_emit(
+                    "set-return-summary", target, {k: outcome[k] for k in ("dry_run", "changed", "written", "diff", "project_json")},
+                    json_out=getattr(args, "json", False),
+                    extra={"return_summary_source": {k: view[k] for k in ("frontmatter_keys", "section_markers")}},
+                    details=[f"return_summary_source.frontmatter_keys = {view['frontmatter_keys']!r}",
+                             f"return_summary_source.section_markers = {view['section_markers']!r}",
+                             "交回就绪判据 / 推导核交回步 / artifact ingest 同读本段(未给的键取 transitions 缺省)"])
                 return 0
             if args.project_command == "set-workstation":
                 # AIPOS-F110 件②: 唯一写入口 workspace_config.set_project_workstation(校验 = config.schema project_json.workstations)

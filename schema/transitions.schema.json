@@ -1090,8 +1090,17 @@
         "卡 lane.repo 解析仓(resolve_card_repo)必须是 git 仓根, 否则拒(LANE_REPO_UNDECLARED, 出口: project.json 声明 repos 清单 + 卡 lane.repo 写仓名); frontmatter.repo(可选)解析结果 ≠ 卡 lane.repo 解析仓 = 拒(INGEST_REPO_MISMATCH)(AIPOS-F78C 件③)",
         "git rev-parse <branch> == commit_sha (分支 tip 精确等于自述 sha), 否则拒(INGEST_TIP_MISMATCH)",
         "git rev-parse <commit_sha>^{tree} == tree_hash, 否则拒(INGEST_TREE_MISMATCH)",
-        "「一句话结论」非占位, 否则拒(INGEST_SUMMARY_MISSING)"
+        "「一句话结论」非占位, 否则拒(INGEST_SUMMARY_MISSING)",
+        "AIPOS-F148 件②: 上一条的「一句话结论」= summary_source 声明的摘要来源(缺省即「一句话结论」节); 项目声明 frontmatter_keys 时其非占位值同样算摘要; 拒因原文列出所查的全部来源(INGEST_SUMMARY_MISSING)"
       ],
+      "summary_source": {
+        "description": "AIPOS-F148 件②(gap #112): 交回「就绪」判据的摘要来源声明——不再写死 lybra 模板节名。推导核就绪判据 next_resolver._check_return_artifact、推导核交回步 result_summary、artifact ingest 摘要检查同用唯一解析 next_resolver.extract_return_summary_text(content, source); source = 项目声明(project.json return_summary_source, config.schema project_json.schema.return_summary_source, 唯一读取口 workspace_config.return_summary_source)逐键覆盖本节缺省。",
+        "frontmatter_keys": [],
+        "section_markers": ["一句话结论", "## 一句话"],
+        "rule": "先 frontmatter_keys(按列序取首个非占位值; 占位 = 空 / `(待填写` 前缀 / `<` 起首), 再 section_markers(正文中首个含任一标记的行之后首个非空行; 遇 `##` 起首行止; 该行去首尾 `*` 与句末「。」; `(待填写` 前缀 = 骨架占位 → 未就绪)。缺省 frontmatter_keys=[] + section_markers 两标记 = AIPOS-F148 前的写死判据原样(lybra 现行 RETURN 模板与已接入项目格式行为不变)。",
+        "not_ready": "Return 已落盘而所有摘要来源都取不到: 若必填 frontmatter(required_frontmatter)也仍为占位 = 执行体还在写(认领骨架), loop 继续等待; 必填 frontmatter 已填实值(执行体已自认交回)而摘要缺 = 推导核判 artifact_invalid(loop exit 4), missing_records 原文列出所查的 frontmatter 键与正文节标记及补法, 不再空等到超时。声明不合(RETURN_SUMMARY_SOURCE_INVALID)= 同判 artifact_invalid 并给出口(fail-closed)。",
+        "verdict_reports": "审计报告的 findings_summary 提取同一解析、取本节缺省(审计报告是产品模板, 不读项目覆盖)"
+      },
       "submits_via": "lybra queue return --confirm(驱动方 token, actor=claim 记录实例, completion_report_ref=Return 相对路径, artifact_refs=[Return 相对路径], actual_model=产品按会话记录定位器填写的运行时模型 AIPOS-F90 件②; frontmatter.model 只作对照)"
     },
     "verdict": {

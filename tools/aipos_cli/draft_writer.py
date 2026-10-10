@@ -422,19 +422,48 @@ def apply_execution_defaults(metadata: dict[str, Any], repo_root: Path) -> list[
     return []
 
 
-def publish_identity_refusals(repo_root: Path, metadata: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+def multi_repo_lane_refusal(repo_root: Path, metadata: dict[str, Any]) -> str:
+    """AIPOS-F148 件①(gap #123): 多仓项目发卡必写 lane.repo 的唯一判据——project.json repos.items ≥ 2 而卡稿 lane.repo 缺 =
+    拒因原文(LANE_REPO_REQUIRED, 列出仓名); 单仓项目(无 repos 段 / items 仅 1 项)或已写 lane.repo = ""(行为不变)。
+    仓清单只读唯一读取口 workspace_config.project_repos; 清单自身不一致(REPOS_CONFLICT)/ project.json 读不出 = 拒因原文(fail-closed)。
+    metadata = 卡稿原样 frontmatter(须在意图面派生之前取: 派生会按 repos.default 补 lane.repo)。"""
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved, project_repos
+
+    lane = metadata.get("lane") if isinstance(metadata.get("lane"), dict) else {}
+    if str(lane.get("repo") or "").strip():
+        return ""
+    try:
+        repos = project_repos(repo_root)
+    except CardRepoUnresolved as exc:
+        return f"{exc.code}: {exc.reason}(多仓判定不可得, fail-closed)"
+    except (OSError, ValueError) as exc:
+        return f"LANE_REPO_REQUIRED: project.json 读不出, 多仓判定不可得(fail-closed): {exc}"
+    names = sorted(repos["items"])
+    if len(names) < 2:
+        return ""
+    return (f"LANE_REPO_REQUIRED: 本项目声明了 {len(names)} 个产品仓 {names}(project.json repos.items), 卡稿未写 lane.repo——"
+            f"多仓项目不按 repos.default({repos['default']})缺省派生, 卡须写明属于哪个仓。"
+            f"出口: 草稿 frontmatter 写 lane.repo: <{' | '.join(names)}>(一卡一仓, 跨仓改动拆卡)后重发")
+
+
+def publish_identity_refusals(repo_root: Path, metadata: dict[str, Any], *,
+                              draft_metadata: dict[str, Any] | None = None) -> tuple[list[str], dict[str, Any]]:
     """AIPOS-F143 件③: 发卡核身份——assigned_to 与审计者须为本项目已接入实例(enrollment.instance_enrollment 唯一判定);
     harness=pi 的执行者须有工位位置; 审计者恒为独立 pi 工位(须有工位位置); 声明了 execution 时派 pi 须在 pi_allowed_task_modes。
     适用 = 声明了 execution 或本项目有接入登记(enrollment_log, enrollment.has_enrollment_registry); 都没有(裸治理根 / 夹具)= 不适用, 行为不变。
     审计者 = 卡面 audit_by; 缺而 task_mode=code 且 audit ≠ none = 派审时将用的实例(audit_derivation.resolve_audit_instance 唯一解析)。
-    返回 (拒因, 核验视图)。拒因末条列已接入实例与 set-execution 出口。"""
+    返回 (拒因, 核验视图)。拒因末条列已接入实例与 set-execution 出口。
+    AIPOS-F148 件①: 同一校验入口先判多仓项目卡稿是否写了 lane.repo(multi_repo_lane_refusal; 不受上面的适用条件限制——
+    裸治理根声明了多仓同样适用); draft_metadata = 意图面派生前的卡稿 frontmatter(缺省 = metadata)。"""
     from tools.aipos_cli.enrollment import enrolled_instances_line, has_enrollment_registry, instance_enrollment
 
+    lane_refusal = multi_repo_lane_refusal(repo_root, draft_metadata if draft_metadata is not None else metadata)
+    lane_refusals = [lane_refusal] if lane_refusal else []
     execution, reasons = _execution_or_reasons(repo_root)
     if reasons:
-        return reasons, {"applied": True}
+        return [*lane_refusals, *reasons], {"applied": True}
     if execution is None and not has_enrollment_registry(repo_root):
-        return [], {"applied": False, "reason": "本项目无接入登记且未声明 execution(裸治理根), 发卡核身份不适用"}
+        return lane_refusals, {"applied": False, "reason": "本项目无接入登记且未声明 execution(裸治理根), 发卡核身份不适用"}
     harness = str(metadata.get("harness") or "").strip()
     task_mode = str(metadata.get("task_mode") or "").strip()
     refusals: list[str] = []
@@ -454,6 +483,7 @@ def publish_identity_refusals(repo_root: Path, metadata: dict[str, Any]) -> tupl
     if auditor:
         checks.append(("audit_by" if metadata.get("audit_by") else "audit_by(缺省推导)", auditor, True))
     view: dict[str, Any] = {"applied": True, "instances": {}}
+    refusals = [*lane_refusals, *refusals]
     for key, name, needs_workstation in checks:
         if not name:
             refusals.append(f"AIPOS-F143: {key} 缺, 发卡须指明本项目已接入的执行者")
@@ -470,7 +500,7 @@ def publish_identity_refusals(repo_root: Path, metadata: dict[str, Any]) -> tupl
         elif needs_workstation and not status["workstation"].get("found"):
             role = "审计者恒为独立 pi 工位" if key.startswith("audit_by") else "harness=pi 的执行者须有 pi 工位"
             refusals.append(f"AIPOS-F143 无工位位置: {key}={name} 已接入但无工位位置({status['workstation'].get('reason')}); {role}")
-    if refusals:
+    if refusals[len(lane_refusals):]:
         refusals.append(
             f"{enrolled_instances_line(repo_root)}。出口: 卡稿 assigned_to / audit_by 改写为已接入实例; 或声明执行方式后由起草缺省填写: "
             f"lybra project set-execution --workspace-root {repo_root} --subagent-executor <已接入子 agent 执行者> --auditor <已接入 pi 审计工位> "
@@ -509,7 +539,13 @@ def create_draft(
         _intent = derive_intent_declarations(normalized, repo_root)
         if not _intent["blocking_reasons"]:
             normalized.setdefault("harness", _intent["harness"])
-            normalized.setdefault("lane", _intent["lane"])
+            # AIPOS-F148 件①: 多仓项目卡稿缺 lane.repo 时起草不替卡写 repos.default(否则发卡判据被起草缺省绕过); 只出声
+            _lane_refusal = multi_repo_lane_refusal(repo_root, normalized)
+            if _lane_refusal:
+                _intent_warnings.append(_lane_refusal)
+                normalized.setdefault("lane", {k: v for k, v in _intent["lane"].items() if k != "repo"})
+            else:
+                normalized.setdefault("lane", _intent["lane"])
         else:
             _intent_warnings.extend(_intent["blocking_reasons"])
     except _IntentSchemaLoadError as e:
@@ -970,6 +1006,7 @@ def publish_draft(
         except ContractSectionError as exc:
             validation["blocking_reasons"].append(str(exc))
         
+        _draft_intent_metadata = publish_metadata  # AIPOS-F148 件①: 意图面派生前的卡稿(多仓 lane.repo 判据读此, 派生会补 default)
         # AIPOS-F78 件①: 意图面 harness/lane 校验——缺则派生(与 create/regen 同一函数), 派生不出(LANE_REQUIRED)= 拒
         try:
             from tools.aipos_cli.machine_zone import derive_intent_declarations
@@ -996,7 +1033,9 @@ def publish_draft(
 
         # AIPOS-F143 件③: 发卡核身份(执行者 / 审计者须为本项目已接入实例; 判定唯一实现 enrollment.instance_enrollment)——
         # 读派生后的意图面(harness 缺省已补), 与起草缺省同读执行方式声明
-        identity_reasons, result["identity_check"] = publish_identity_refusals(repo_root, publish_metadata)
+        # AIPOS-F148 件①: 同一入口先判多仓项目卡稿必写 lane.repo(draft_metadata = 派生前卡稿)
+        identity_reasons, result["identity_check"] = publish_identity_refusals(repo_root, publish_metadata,
+                                                                               draft_metadata=_draft_intent_metadata)
         for reason in identity_reasons:
             if reason not in validation["blocking_reasons"]:
                 validation["blocking_reasons"].append(reason)
@@ -1197,7 +1236,14 @@ def regen_machine_zone_for_pending(
                     if not str(metadata.get("harness") or "").strip():
                         amendments["harness"] = intent["harness"]
                     if not isinstance(metadata.get("lane"), dict) or not metadata.get("lane"):
-                        amendments["lane"] = intent["lane"]
+                        # AIPOS-F148 件①: 多仓项目不替存量卡写 repos.default 为 lane.repo(归属含糊), 只出声
+                        lane_refusal = multi_repo_lane_refusal(governance_root, metadata)
+                        if lane_refusal:
+                            import sys
+                            print(f"Warning: {card_task_id}: {lane_refusal}", file=sys.stderr)
+                            amendments["lane"] = {k: v for k, v in intent["lane"].items() if k != "repo"}
+                        else:
+                            amendments["lane"] = intent["lane"]
             except Exception as e:  # SchemaLoadError 等: 出声不吞, 不阻塞纪律段重生成
                 import sys
                 print(f"Warning: {card_task_id}: harness/lane 声明读取失败: {e}", file=sys.stderr)
