@@ -1,22 +1,45 @@
 #!/usr/bin/env python3
-"""Verification test for AIPOS-R0 N0 validation acceptance criteria."""
+"""Verification test for AIPOS-R0 N0 validation acceptance criteria.
 
+AIPOS-F149 件①(gap #100): 草稿一律落临时根, 不写产品仓检出目录。原状: 草稿写 <产品仓>/5_tasks/drafts/_test/*.md, pytest 收集时
+只跑 test_* 函数、不经 main() 的清理 → 每次全量都在检出目录(含 main 检出)留残留。现: 临时根建在隔离 HOME 之下——HOME 隔离唯一实现
+runall_discovery.isolate_test_session(pytest 经仓根 conftest.py 会话层调用, 脚本直跑经 main() 调用; run-all 执行器已隔离时不动),
+隔离 HOME 由其建立方随进程退出删除; HOME 未隔离 = 拒写(fail-closed, 绝不落真实 HOME 或产品仓)。
+"""
+
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from tools.aipos_cli.draft_validator import validate_draft_file, validate_draft_metadata
+from tools.aipos_cli.runall_discovery import ISOLATED_HOME_ENV, isolate_test_session
 
-# Use real repo root for schema access
-REPO_ROOT = Path(__file__).parent.parent
+_SCRATCH_ROOT: Path | None = None
+
+
+def scratch_root() -> Path:
+    """本文件的临时草稿根(一次进程一个; 其下 5_tasks/drafts 与 5_tasks/queue)。建在隔离 HOME 内, HOME 未隔离 = AssertionError。"""
+    global _SCRATCH_ROOT
+    if _SCRATCH_ROOT is None:
+        home = os.environ.get("HOME") or ""
+        marked = os.environ.get(ISOLATED_HOME_ENV) or ""
+        if not home or marked != home:
+            raise AssertionError(f"HOME 未隔离(HOME={home!r}, {ISOLATED_HOME_ENV}={marked!r}): 先经 isolate_test_session 隔离, 拒写")
+        root = Path(tempfile.mkdtemp(prefix="n0-validation-", dir=home))
+        (root / "5_tasks" / "drafts").mkdir(parents=True)
+        (root / "5_tasks" / "queue").mkdir(parents=True)
+        _SCRATCH_ROOT = root
+    return _SCRATCH_ROOT
 
 
 def create_test_draft(content: str, name: str = "test-draft.md") -> Path:
-    """Create a test draft file in real repo."""
-    drafts_dir = REPO_ROOT / "5_tasks" / "drafts" / "_test"
+    """Create a test draft file under the scratch root (never the product checkout)."""
+    drafts_dir = scratch_root() / "5_tasks" / "drafts" / "_test"
     drafts_dir.mkdir(parents=True, exist_ok=True)
-    
+
     draft_path = drafts_dir / name
     draft_path.write_text(content, encoding="utf-8")
     return draft_path
@@ -24,7 +47,7 @@ def create_test_draft(content: str, name: str = "test-draft.md") -> Path:
 
 def cleanup_test_drafts():
     """Clean up test drafts."""
-    test_dir = REPO_ROOT / "5_tasks" / "drafts" / "_test"
+    test_dir = scratch_root() / "5_tasks" / "drafts" / "_test"
     if test_dir.exists():
         import shutil
         shutil.rmtree(test_dir)
@@ -58,7 +81,7 @@ This draft has a misspelled field 'materialize_refs' instead of 'referenced_file
 """
     
     draft_path = create_test_draft(draft_content, "test-misspell.md")
-    result = validate_draft_file(REPO_ROOT, draft_path)
+    result = validate_draft_file(scratch_root(), draft_path)
     
     print(f"Verdict: {result['verdict']}")
     print(f"Blocking reasons: {result['blocking_reasons']}")
@@ -103,7 +126,7 @@ This draft is missing needs_owner, output_target, and artifact_policy.
 """
     
     draft_path = create_test_draft(draft_content, "test-missing.md")
-    result = validate_draft_file(REPO_ROOT, draft_path)
+    result = validate_draft_file(scratch_root(), draft_path)
     
     print(f"Verdict: {result['verdict']}")
     print(f"Blocking reasons:")
@@ -154,7 +177,7 @@ This draft incorrectly contains runtime fields.
 """
     
     draft_path = create_test_draft(draft_content, "test-runtime.md")
-    result = validate_draft_file(REPO_ROOT, draft_path)
+    result = validate_draft_file(scratch_root(), draft_path)
     
     print(f"Verdict: {result['verdict']}")
     print(f"Blocking reasons:")
@@ -209,13 +232,13 @@ governance_refs:
 This is a valid draft with all required fields and no errors.
 """
     
-    # Use proper draft location outside _test to avoid path mismatch
-    drafts_dir = REPO_ROOT / "5_tasks" / "drafts"
+    # Use proper draft location outside _test to avoid path mismatch(临时根, AIPOS-F149 件①)
+    drafts_dir = scratch_root() / "5_tasks" / "drafts"
     drafts_dir.mkdir(parents=True, exist_ok=True)
     draft_path = drafts_dir / "test-valid.md"
     draft_path.write_text(draft_content, encoding="utf-8")
     
-    result = validate_draft_file(REPO_ROOT, draft_path)
+    result = validate_draft_file(scratch_root(), draft_path)
     
     # Clean up this specific draft
     if draft_path.exists():
@@ -263,7 +286,7 @@ This draft has invalid enum values.
 """
     
     draft_path = create_test_draft(draft_content, "test-enum.md")
-    result = validate_draft_file(REPO_ROOT, draft_path)
+    result = validate_draft_file(scratch_root(), draft_path)
     
     print(f"Verdict: {result['verdict']}")
     print(f"Blocking reasons:")
@@ -336,6 +359,7 @@ def test_schema_lookup_independent_of_repo_root():
 
 def main():
     """Run all verification tests."""
+    isolate_test_session()  # 脚本直跑: HOME 隔离(唯一实现; 已由 run-all 执行器隔离时不动), 临时草稿根建在其下
     print("=" * 70)
     print("AIPOS-R0 N0 Validation Verification Tests")
     print("=" * 70)
