@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import subprocess
 import tempfile
 from pathlib import Path
@@ -23,12 +24,14 @@ import pytest
 
 from tools.aipos_cli import post_merge_regression as pmr
 from tools.aipos_cli.finalize import finalize_task
-from tools.aipos_cli.runall_discovery import failure_set
+from tools.aipos_cli.runall_discovery import LEAK_MARK_PREFIX, failure_set, reap_marked
 
 PRODUCT_ROOT = Path(__file__).resolve().parents[1]
 CARD_A, CARD_B = "AIPOS-T118A", "AIPOS-T118B"
 ACTOR = "exec.test.f118"
 RUNALL = "tests/run-all.sh"
+#: AIPOS-F149 件②: 本文件用例自起进程的标记变量名前缀(后接每用例随机串); 沿用孤儿守卫前缀(嵌套执行器不剥, 一路下传)。
+RIG_MARK_PREFIX = f"{LEAK_MARK_PREFIX}F118RIG_"
 
 
 @pytest.fixture(autouse=True)
@@ -233,7 +236,12 @@ def test_block_with_async_rejected_before_merge(tmp_path):
 
 
 @pytest.mark.parametrize("mode,expected", [("warn", "warned"), ("block", "blocked")])
-def test_timeout_is_not_a_pass(tmp_path, mode, expected):
+def test_timeout_is_not_a_pass(tmp_path, monkeypatch, mode, expected):
+    # AIPOS-F149 件②(gap #119): 残留判据只看本用例自起的进程——本用例专属标记变量(随机串)经环境下传到回归子进程及其测试孙进程
+    # (run-all 执行器只剥 LYBRA_/AIPOS_ 前缀), 按标记精确识别(runall_discovery.marked_processes 唯一实现)。原 `pgrep -f test_slow.py`
+    # 按命令行全机匹配, 并行 run-all 里他方同名用例的进程会被误判为本用例残留(偶发红)。
+    mark = f"{RIG_MARK_PREFIX}{secrets.token_hex(8)}"
+    monkeypatch.setenv(mark, "1")
     r = _rig(tmp_path, {"mode": mode, "timeout_seconds": 3})
     _git(r["repo"], "checkout", "-q", f"card/{CARD_A}")
     _write(r["repo"] / "tests" / "test_slow.py", "import time\n\n\ndef test_slow():\n    time.sleep(60)\n")
@@ -250,8 +258,8 @@ def test_timeout_is_not_a_pass(tmp_path, mode, expected):
         assert res["verdict"] == "PASS" and _fin_record(r["gov"], CARD_A)["post_merge_regression"]["action"] == "warned"
     else:
         assert res["verdict"] == "BLOCK" and res["post_merge_regression"]["action"] == "blocked"
-    leftover = subprocess.run(["pgrep", "-f", "test_slow.py"], capture_output=True, text=True)
-    assert leftover.stdout.strip() == "", f"超时须整组清理: {leftover.stdout}"
+    leftover = reap_marked(mark)  # 只清本用例标记的进程(精确到本用例; 他方进程不带此标记, 不碰)
+    assert leftover == [], f"超时须整组清理(残留已按本用例标记清掉): {leftover}"
 
 
 def test_failure_set_parsing_single_口径():

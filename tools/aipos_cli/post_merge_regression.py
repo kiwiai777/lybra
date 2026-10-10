@@ -172,18 +172,130 @@ def _recorded_regressions(governance_root: Path) -> tuple[list[tuple[Path, dict[
     return found, unreadable
 
 
+def _record_ref(governance_root: Path, path: Path) -> str:
+    try:
+        return str(path.relative_to(governance_root))
+    except ValueError:
+        return str(path)
+
+
 def lookup_recorded_baseline(governance_root: Path, commit: str) -> dict[str, Any]:
     """「上次合并时记录的基线」: merge_commit == commit 且合并后集合完整(merged_complete)的最新一份记录。
-    无 = {"failures": None, "unreadable": [...]}; 有 = {"failures", "ref", "previous", "unreadable"}。"""
+    无 = {"failures": None, "unreadable": [...], "incomplete": [...]}; 有 = {"failures", "ref", "previous", "unreadable", "incomplete"}。
+    AIPOS-F149 件③: incomplete = merge_commit == commit 却不可作基线的记录 [{ref, status, error}](超时 / 出错 / 异步未落结果 /
+    合并后集合缺), 供审计基线查询说明「为何须自跑」; finalize 侧不读此键(行为不变)。"""
     records, unreadable = _recorded_regressions(governance_root)
+    incomplete: list[dict[str, Any]] = []
     for path, pmr in records:
-        if str(pmr.get("merge_commit") or "") == commit and pmr.get("merged_complete") is True and isinstance(pmr.get("merged_failures"), list):
-            try:
-                ref = str(path.relative_to(governance_root))
-            except ValueError:
-                ref = str(path)
-            return {"failures": [str(x) for x in pmr["merged_failures"]], "ref": ref, "previous": pmr, "unreadable": unreadable}
-    return {"failures": None, "unreadable": unreadable}
+        if str(pmr.get("merge_commit") or "") != commit:
+            continue
+        if pmr.get("merged_complete") is True and isinstance(pmr.get("merged_failures"), list):
+            return {"failures": [str(x) for x in pmr["merged_failures"]], "ref": _record_ref(governance_root, path), "previous": pmr,
+                    "unreadable": unreadable, "incomplete": incomplete}
+        incomplete.append({"ref": _record_ref(governance_root, path), "status": str(pmr.get("status") or "(无 status)"),
+                           "error": str(pmr.get("error") or "")})
+    return {"failures": None, "unreadable": unreadable, "incomplete": incomplete}
+
+
+#: AIPOS-F149 件③: 审计基线查询的两种结论(输出与 --json 的 status 值)。
+AUDIT_BASELINE_RECORDED = "recorded"
+AUDIT_BASELINE_SELF_RUN = "self_run_required"
+
+
+def audit_baseline(governance_root: Path, commit: str) -> dict[str, Any]:
+    """AIPOS-F149 件③(gap #89): 审计 main 侧基线按 sha 取已记录的合并后回归失败集合(只读; 判据 = lookup_recorded_baseline,
+    与 finalize 取「记录基线」同一实现, 不另扫记录)。
+
+    有完整记录 = {status: recorded, failures, failure_lines, failure_nodes, ref, execution, merged_seconds}——main 侧不必自跑;
+    无记录 / 记录为超时·出错·异步未落结果·集合不完整 / 记录读不出 = {status: self_run_required, reasons: [...]}——main 侧自跑一次。
+    被审分支一侧无论哪种结论都必须由审计体自跑(本函数不涉被审分支, 独立性不降)。"""
+    found = lookup_recorded_baseline(governance_root, commit)
+    out: dict[str, Any] = {"commit": commit, "governance_root": str(governance_root), "unreadable": list(found["unreadable"])}
+    if found["failures"] is not None:
+        prev = found["previous"]
+        failures = list(found["failures"])
+        out.update(status=AUDIT_BASELINE_RECORDED, ref=found["ref"], failures=failures,
+                   failure_lines=[f for f in failures if "::" not in f], failure_nodes=[f for f in failures if "::" in f],
+                   execution=prev.get("execution"), merged_seconds=prev.get("merged_seconds"), runall_path=prev.get("runall_path"))
+        return out
+    reasons = [f"记录 {item['ref']} 不可作基线: status={item['status']}" + (f"({item['error']})" if item["error"] else "")
+               + "——超时 / 出错 / 异步未落结果 / 合并后集合不完整的记录一律不作基线" for item in found["incomplete"]]
+    if not reasons:
+        reasons.append(f"无 merge_commit = {commit} 的合并后回归记录(该提交不是经 finalize 合并产生, 或合并后回归关闭/跳过)")
+    reasons += list(found["unreadable"])
+    out.update(status=AUDIT_BASELINE_SELF_RUN, reasons=reasons)
+    return out
+
+
+def resolve_audit_sha(governance_root: Path, sha: str | None, repo_root: str | Path | None = None) -> tuple[str, str]:
+    """AIPOS-F149 件③: 审计基线查询的 sha。返回 (完整 sha, 来源说明)。
+    sha 给了完整 40 位 = 原样; 给了短 sha / 引用 = 在产品仓解析; 不给 = 产品仓基线分支(transitions N5.branch_integration.base_branch,
+    唯一读取口 next_resolver.card_base_branch)当前 HEAD。产品仓 = --repo-root, 缺省 = project.json repos.default / code_repo
+    (唯一读取口 workspace_config.project_repos)。解析不出 = ValueError(含出口)。"""
+    import re
+
+    text = str(sha or "").strip()
+    if re.fullmatch(r"[0-9a-f]{40}", text):
+        return text, "--sha"
+    if repo_root is not None and str(repo_root).strip():
+        repo = Path(repo_root).expanduser().resolve()
+        repo_note = f"--repo-root {repo}"
+    else:
+        from tools.aipos_cli.workspace_config import project_repos
+
+        repos = project_repos(governance_root)
+        declared = repos["items"].get(repos["default"]) if repos["declared"] else repos["code_repo"]
+        if declared is None:
+            raise ValueError(f"治理根 {governance_root} 的 project.json 未声明产品仓(repos / code_repo); 出口: 给 --repo-root <产品仓> 或完整 40 位 --sha")
+        repo = Path(declared)
+        repo_note = f"project.json 声明的产品仓 {repo}"
+    if not text:
+        from tools.aipos_cli.next_resolver import card_base_branch
+
+        text = card_base_branch()
+        what = f"{repo_note} 的 {text} 当前 HEAD"
+    else:
+        what = f"{repo_note} 中解析 {text}"
+    res = _git(repo, "rev-parse", "--verify", "--quiet", f"{text}^{{commit}}")
+    full = res.stdout.strip()
+    if res.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40}", full):
+        raise ValueError(f"{what}: 解析不出提交({res.stderr.strip() or '无此引用'}); 出口: 给完整 40 位 --sha 或正确的 --repo-root")
+    return full, what
+
+
+def audit_baseline_command(governance_root: str | Path, repo_root: str | Path | None = None) -> str:
+    """AIPOS-F149 件③: 审计基线查询命令的唯一渲染(章程占位 regression_baseline_command 与审计卡取证锚点共用, 禁第二份字面量)。
+    治理根 / 产品仓按声明给出(调用方经 project.json 解析), 不写死主机与路径。"""
+    import shlex
+
+    parts = ["lybra", "--workspace-root", str(governance_root), "regression", "baseline"]
+    if repo_root:
+        parts += ["--repo-root", str(repo_root)]
+    return " ".join(shlex.quote(part) for part in parts)
+
+
+def render_audit_baseline(result: dict[str, Any]) -> str:
+    """audit_baseline 结果的人读输出(CLI 唯一出口)。"""
+    commit = str(result.get("commit") or "")
+    lines = [f"合并后回归记录基线: sha {commit}(来源 {result.get('sha_source') or '--sha'}; 治理根 {result.get('governance_root')})"]
+    if result.get("status") == AUDIT_BASELINE_RECORDED:
+        failures = list(result.get("failures") or [])
+        lines.append(f"结论: 已记录, 可复用(记录 {result.get('ref')}; execution={result.get('execution')}, "
+                     f"合并后一跑 {result.get('merged_seconds')}s, 清单 {result.get('runall_path')})")
+        lines.append(f"失败集合 {len(failures)} 条(口径 runall_discovery.failure_set: `✗` 行的文件/原文 + 失败文件段内 FAILED/ERROR 节点):")
+        lines.append(f"  ✗ 行条目 {len(result.get('failure_lines') or [])} 条:")
+        lines += [f"    {item}" for item in result.get("failure_lines") or []] or ["    (无)"]
+        lines.append(f"  失败节点 {len(result.get('failure_nodes') or [])} 条:")
+        lines += [f"    {item}" for item in result.get("failure_nodes") or []] or ["    (无)"]
+        lines.append("下一步: main 侧以本失败集合为基线, 不再自跑; 被审分支一侧仍须自跑一次全量, 按同一口径取失败集合逐条比对。")
+    else:
+        lines.append("结论: 须自跑 main 侧(无可复用的记录基线)")
+        lines += [f"  原因: {reason}" for reason in result.get("reasons") or []]
+        lines.append("下一步: main 侧按审计章程建 main 基线副本自跑一次; 被审分支一侧同样自跑一次。")
+    for note in result.get("unreadable") or []:
+        if result.get("status") == AUDIT_BASELINE_RECORDED:
+            lines.append(f"  注: {note}")
+    return "\n".join(lines)
 
 
 def _preview(items: list[str]) -> str:

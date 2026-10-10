@@ -20,6 +20,7 @@ import json
 import os
 import pwd
 import re
+import secrets
 import signal
 import socket
 import subprocess
@@ -288,7 +289,8 @@ def test_item3_orphan_guard_kills_escaped_board_and_fails_the_file(tmp_path):
 
 
 def test_item3_marked_processes_sees_only_this_mark(tmp_path):
-    mark = runall_discovery.LEAK_MARK_PREFIX + "f116probe"
+    # AIPOS-F149 件②: 标记带随机串——固定标记在并行 run-all 下会认到(并 SIGKILL)他方同名用例的进程; 只认本用例自起进程
+    mark = runall_discovery.LEAK_MARK_PREFIX + "f116probe" + secrets.token_hex(8)
     env = {**os.environ, mark: "1"}
     sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], env=env, start_new_session=True)
     other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)

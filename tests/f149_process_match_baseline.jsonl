@@ -1,0 +1,2 @@
+{"file": "tests/test_aipos_f116_test_hygiene.py", "reason": "只读探测(不杀): 模式含本用例 tmp_path 下独有的 board_root 路径, 他方进程不可能命中; 存量登记, 改用标记判据时删行", "text": "survivors = subprocess.run([\"pgrep\", \"-f\", f\"web.board.app.*{board_root}\"], capture_output=True, text=True)"}
+{"file": "tests/test_aipos_f95_harness_launch.py", "reason": "只读探测(不杀): 模式 = 本检出目录内假 harness 脚本绝对路径(各检出目录/工作树各异); 存量登记, 改用标记判据时删行", "text": "out = subprocess.run([\"pgrep\", \"-af\", str(FAKE)], capture_output=True, text=True)"}
