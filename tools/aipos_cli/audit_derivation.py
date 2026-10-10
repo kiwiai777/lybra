@@ -95,11 +95,21 @@ def build_forensic_anchor_section(
         repo_root, audit_task_id or derive_audit_task_id(source_task_id, repo_root=None)
     )
 
+    # AIPOS-F149 件③: main 侧基线查询命令(唯一渲染 post_merge_regression.audit_baseline_command, 章程占位同源); 何时复用 / 何时自跑
+    # 以章程「独立全量基线」为准, 此处只给本卡实值(治理根 + 被审卡产品仓)。治理根不可得(手动派审未给)= 不出此行, 不猜。
+    baseline_line = ""
+    if repo_root is not None:
+        from tools.aipos_cli.post_merge_regression import audit_baseline_command
+
+        repo_arg = code_repo if not code_repo.startswith("<unresolved") else None
+        baseline_line = (f"- **main 侧基线先查记录**: `{audit_baseline_command(repo_root, repo_arg)}`"
+                         " (只读; 已记录 = main 侧不再自跑, 须自跑 = 自跑 main 侧; 被审分支一侧必须自跑; 细则以审计章程「独立全量基线」为准)\n")
     return (
         "\n## 取证锚点(AIPOS-A1 大项C: 默认注入, 路径来自注册表)\n\n"
         f"- **产品仓绝对路径**: `{code_repo}` (被审卡 lane.repo → project.json repos/code_repo, 禁写死)\n"
         f"- **禁 checkout 卡分支**: 用 `git diff {card_base_branch()}...{card_branch_name(source_task_id)}` 取证(不切换工作区)\n"
         f"- **报告落点绝对路径**: `{report_location}` (治理根 verdict_root/<审计卡ID>/, 声明渲染; 禁落被审卡目录、禁落产品仓)\n"
+        f"{baseline_line}"
         "- **不存在结论必须附**: `pwd` + 命令 + 输出(三条缺一即无效证据)\n"
     )
 

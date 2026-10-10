@@ -2313,6 +2313,20 @@ def build_parser() -> argparse.ArgumentParser:
     gate_drift_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
     gate_drift_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    # AIPOS-F149 件③(gap #89): lybra regression baseline — 审计 main 侧基线按 sha 取已记录的合并后回归失败集合(只读)
+    regression_parser = subparsers.add_parser(
+        "regression", help="AIPOS-F149: 合并后回归记录查询(只读; finalize 合入后已落的回归记录, 实现 post_merge_regression)")
+    regression_subparsers = regression_parser.add_subparsers(dest="regression_command")
+    regression_baseline_parser = regression_subparsers.add_parser(
+        "baseline",
+        help="AIPOS-F149: 按 sha 取已记录的合并后回归失败集合(审计 main 侧基线复用)。结论 recorded = main 侧不必自跑; "
+        "self_run_required = 无该 sha 的记录或记录为超时/未完成/读不出, main 侧须自跑。被审分支一侧无论如何须自跑。"
+        "治理根用全局 `lybra --workspace-root <治理根> regression baseline`(缺省同其他命令的解析梯)",
+    )
+    regression_baseline_parser.add_argument("--sha", help="要查的提交(完整 40 位原样用; 短 sha/引用在产品仓解析); 缺省 = 产品仓基线分支当前 HEAD")
+    regression_baseline_parser.add_argument("--repo-root", help="解析 sha 用的产品仓; 缺省 = project.json repos.default / code_repo")
+    regression_baseline_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     # AIPOS-R7A2 靶②: governance-commit (顾问收口一条命令)
     governance_commit_parser = subparsers.add_parser("governance-commit", help="AIPOS-R7A2: N6 收账提交(校验四件→commit→push)")
     governance_commit_parser.add_argument("--task-id", required=False, help="Task ID for governance closure (optional; omit for governance batch updates). AIPOS-F94: without --paths/--paths-file = task-scoped precise commit (paths derived from the card + declarations: this card and its audit card's queue files/drafts/records/ledger dirs + card chronicle; never whole-root); idempotent (already committed and pushed = no-op)")
@@ -3838,6 +3852,25 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         parser.print_help()
         return 2
+
+    if args.command == "regression":
+        # AIPOS-F149 件③: 只读薄壳——治理根经唯一薄壳 _find_repo_root_for_args, sha 解析与判据在 post_merge_regression(唯一实现)
+        if getattr(args, "regression_command", None) != "baseline":
+            parser.parse_args([args.command, "--help"])
+            return 2
+        from tools.aipos_cli import post_merge_regression as pmr_mod
+        from tools.schema_loader import SchemaLoadError
+
+        try:
+            governance_root = _find_repo_root_for_args(args)
+            commit, sha_source = pmr_mod.resolve_audit_sha(governance_root, args.sha, args.repo_root)
+        except (FileNotFoundError, ValueError, OSError, SchemaLoadError) as exc:  # 拒因原文 + 出口, 非 0 退出(fail-closed)
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        result = pmr_mod.audit_baseline(governance_root, commit)
+        result["sha_source"] = sha_source
+        print(render_json(result) if args.json else pmr_mod.render_audit_baseline(result))
+        return 0
 
     if args.command == "gate":
         # AIPOS-FND-9: Gate deployment operations

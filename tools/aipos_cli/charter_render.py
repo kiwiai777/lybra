@@ -273,6 +273,11 @@ def charter_render_context(
         f"`{int(pmr['timeout_seconds'])}` 秒(来源 {pmr['source']} 的 timeout_seconds"
         "——同一清单全量跑一次的时限声明)"
     )
+    # AIPOS-F149 件③(gap #89): main 侧基线复用——审计体按 sha 查已记录的合并后回归失败集合的只读命令(唯一渲染
+    # post_merge_regression.audit_baseline_command; 治理根与产品仓读声明, 与审计卡取证锚点同一函数)。
+    from tools.aipos_cli.post_merge_regression import audit_baseline_command
+
+    ctx["regression_baseline_command"] = f"`{audit_baseline_command(gov)}`"
     return ctx
 
 
