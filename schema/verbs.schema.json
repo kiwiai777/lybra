@@ -1974,7 +1974,8 @@
           "local": "请在 {dir} 的 {harness} 会话敲 /go",
           "remote": "请在 {host}:{dir} 的 {harness} 会话敲 /go(跨机工位)",
           "unlocated": "请在实例 {instance} 的工位({harness} 会话)敲 /go(工位位置定位不到: {reason})",
-          "note": "手工模式(未拉起)的等待提示唯一声明; 占位 {dir}/{host}/{harness}/{instance}/{reason} 由 loop 按工位位置(enrollment_log land 事件)填入"
+          "subagent": "请顾问在 {harness} 会话派子 agent(实例 {instance}, 无工位)按卡执行并写交回: 开工材料 `lybra my-tasks --actor {instance} --task-id {card}`(工作树 / 报告落点 / 卡路径), 章程 `lybra charter --role executor --instance {instance}`; 子 agent 写完 RETURN.md 即止, loop 等其落盘后继续",
+          "note": "手工模式(未拉起)的等待提示唯一声明; 占位 {dir}/{host}/{harness}/{instance}/{reason}/{card} 由 loop 按工位位置(enrollment_log land 事件)填入。AIPOS-F146 件②: subagent = 等待目标实例为无工位的子 agent 执行者(enrollment.instance_enrollment governance_root_mode, land 事件 mode 属 roles.schema executor_modes credential_landing=governance_root)时的等待提示——loop 不拉起(无工位可拉), 由顾问派子 agent; {harness} = 卡 harness(子 agent 卡缺省 = land 事件记下的顾问会话 kind)"
         },
         "progress_max_chars": 160,
         "progress_note": "stdout 事件流(enums.schema harness.launch.events)逐行汇总为一行式进度(工具调用名+首段参数 / 助手文本首行 / 错误), 每行截断到本字符数; 未知事件类型只计数不刷屏, 结束时一行计数; 凭据字样(token/secret/password/api key/credential/bearer)所在行整行隐去, 长凭据串打码",
@@ -2164,7 +2165,7 @@
       }
     },
     "lybra_charter": {
-      "description": "AIPOS-F138 件①: `lybra charter --role <角色类> [--instance <实例>] [--harness <kind>] [--workspace-root <治理根>]` —— 拉取式输出该实例的渲染后章程全文到 stdout(母本 + 项目声明 + 写权限边界, 与 sync 落盘同一渲染器 charter_render.render_charter, 同一上下文构造 charter_render_context)。供本机无落点的会话(他机 Codex 顾问)开局经 ssh 在治理根所在机读取(distribution.schema harness_semantics.remote_session_delivery); Lybra 不推送。实例 = 本治理根 enrollment_log 中有 land 事件(enrollment.workstation_location)且其工位 .lybra/role 实例相符者; 缺 --instance = 治理根 .lybra/role 的实例。harness 缺省 = 该工位 role 记录的 harness。输出只含声明文本: 不含凭据 / 令牌 / 注册码(身份只经 workstation_identity 读非秘密字段)。只读: 不写任何文件、不连门、不起进程。",
+      "description": "AIPOS-F138 件①: `lybra charter --role <角色类> [--instance <实例>] [--harness <kind>] [--workspace-root <治理根>]` —— 拉取式输出该实例的渲染后章程全文到 stdout(母本 + 项目声明 + 写权限边界, 与 sync 落盘同一渲染器 charter_render.render_charter, 同一上下文构造 charter_render_context)。供本机无落点的会话(他机 Codex 顾问)开局经 ssh 在治理根所在机读取(distribution.schema harness_semantics.remote_session_delivery); Lybra 不推送。实例 = 本治理根 enrollment_log 中有 land 事件(enrollment.workstation_location)且其工位 .lybra/role 实例相符者; 缺 --instance = 治理根 .lybra/role 的实例。harness 缺省 = 该工位 role 记录的 harness。 AIPOS-F146: 实例身份与模式经 enrollment.instance_enrollment 一处判定——land 事件 mode 为无工位接入模式(子 agent 执行者, roles.schema executor_modes credential_landing=governance_root)= 身份取 land 事件 role/mode/harness(charter_render.subagent_identity, 不要求工位、不读 .lybra/role), harness 缺省 = land 事件 harness; 母本按渲染上下文 executor_mode 选段(charter_render.select_mode_segments)。输出只含声明文本: 不含凭据 / 令牌 / 注册码(身份只经 workstation_identity 读非秘密字段)。只读: 不写任何文件、不连门、不起进程。",
       "phase": "render",
       "surface": ["cli"],
       "cli_command": "lybra charter",

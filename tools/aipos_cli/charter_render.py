@@ -23,6 +23,13 @@ from typing import Any
 
 CHARTER_RENDER_MARKER = "<!-- lybra:charter-render"
 _PLACEHOLDER_RE = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}")
+# AIPOS-F146 件①: 母本按执行者接入模式分段(声明式最小分段; 母本仍只一份)。段标记独占一行:
+#   <!-- lybra:executor-mode <模式> -->  … 该模式的正文行 …  <!-- lybra:executor-mode <另一模式> -->  …  <!-- lybra:executor-mode end -->
+# 模式名 = roles.schema executor_modes.values 的键(唯一读取口 enrollment.executor_mode_declaration); 一组须恰覆盖全部声明模式
+# (新增模式而母本未补段 = 渲染拒, fail-closed)。渲染只留 ctx["executor_mode"] 那段, 标记行不进渲染物; 母本无段标记 = 原样(行为不变)。
+EXECUTOR_MODE_SEGMENT_MARKER = "<!-- lybra:executor-mode"
+_MODE_SEGMENT_RE = re.compile(r"^<!-- lybra:executor-mode (?P<mode>[A-Za-z0-9_-]+) -->[ \t]*$")
+_MODE_SEGMENT_END = "end"
 
 
 class WorkstationIdentityError(ValueError):
@@ -116,7 +123,15 @@ def workstation_identity(harness_root: str | Path, instance: str | None = None) 
         "token_projects": [],
         "gate_url": None,
     }
-    conn_file = role_file.parent / "connection.json"
+    identity.update(_connection_identity_fields(role_file.parent / "connection.json", instance))
+    return identity
+
+
+def _connection_identity_fields(conn_file: Path, instance: str) -> dict[str, Any]:
+    """身份的连接文件非秘密字段 {governance_root_declared, gate_url, token_projects}(token 值永不读入)。
+    AIPOS-F146: 自 workstation_identity 抽出, 工位身份(工位 .lybra/connection.json)与子 agent 执行者身份(治理根 .lybra/connection.json,
+    subagent_identity)同读此处, 禁第二份连接文件读法。文件不在 = 缺省值; 不可读 / 非 JSON = WorkstationIdentityError。"""
+    out: dict[str, Any] = {"governance_root_declared": None, "gate_url": None, "token_projects": []}
     if conn_file.is_file():
         try:
             conn = json.loads(conn_file.read_text(encoding="utf-8"))
@@ -126,9 +141,9 @@ def workstation_identity(harness_root: str | Path, instance: str | None = None) 
             from tools.aipos_cli.confirm_client import declared_rpc_url, resolve_gate_base_url
 
             gov = str(conn.get("governance_root") or "").strip()
-            identity["governance_root_declared"] = gov or None
+            out["governance_root_declared"] = gov or None
             if declared_rpc_url(conn_file):
-                identity["gate_url"] = resolve_gate_base_url(connection_json=conn_file, require_declared=True)
+                out["gate_url"] = resolve_gate_base_url(connection_json=conn_file, require_declared=True)
             # AIPOS-F81: 条目挑选委托 token_resolver 单源(按实例, 排除 retired), 只取非秘密字段 projects。
             # 无可用条目(无命中/全 retired)→ [](元数据缺省); 凭据的 fail-closed 在 token 解析处(带重签出口)。
             from tools.aipos_cli.token_resolver import TOKEN_ENTRY_FIELDS, TokenResolutionError, select_token_entry
@@ -141,9 +156,42 @@ def workstation_identity(harness_root: str | Path, instance: str | None = None) 
                     projects = [str(p) for p in (entry.get(TOKEN_ENTRY_FIELDS["projects"]) or [])]
                 except TokenResolutionError:
                     projects = []
-            identity["token_projects"] = projects
-    return identity
+            out["token_projects"] = projects
+    return out
 
+
+def subagent_identity(governance_root: str | Path, enrollment_view: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F146 件①: 无工位的已接入执行者(子 agent 模式, enrollment_view.governance_root_mode)的身份 —— 与 workstation_identity 同形。
+
+    身份源只有一处 = enrollment.instance_enrollment 的结果(本函数不再读接入日志): role = 最新 land 事件行的 role=(门签码时记下;
+    子 agent 不写 .lybra/role, roles.schema executor_modes 声明), harness = land 事件 harness=(顾问会话 kind)、host = land 事件 host=;
+    harness_root = 治理根(凭据所在 .lybra/connection.json 所在根; 写权限边界对执行者恒为只读面); 连接文件非秘密字段同
+    _connection_identity_fields。实例名不合注册表模板 / land 事件缺 role = WorkstationIdentityError(fail-closed)。"""
+    from tools.aipos_cli.naming_profile import parse_instance_name
+
+    gov = Path(governance_root).expanduser().resolve()
+    instance = str(enrollment_view.get("instance") or "").strip()
+    role = str(enrollment_view.get("role") or "").strip()
+    if not enrollment_view.get("governance_root_mode"):
+        raise WorkstationIdentityError(f"实例 {instance!r} 的接入模式 {enrollment_view.get('mode')!r} 不是无工位模式(子 agent), 身份须读工位 .lybra/role")
+    if not role:
+        raise WorkstationIdentityError(f"实例 {instance!r} 的最新 land 事件缺 role=(接入日志行形坏), 身份不可判")
+    parsed = parse_instance_name(instance)
+    if parsed is None or not parsed.get("project"):
+        raise WorkstationIdentityError(f"实例 {instance!r} 不合注册表模板(roles.schema naming.template), 无法判项目归属")
+    from tools.aipos_cli.service_mode import connection_path
+
+    identity: dict[str, Any] = {
+        "harness_root": str(gov),
+        "role": role,
+        "instance": instance,
+        "project": parsed["project"],
+        "owner_policy_ref": None,  # 子 agent 不推导信封(认领由驱动方信封放行, 执行体零门)
+        "harness": {"kind": enrollment_view.get("harness"), "dir": None, "host": enrollment_view.get("host")},
+        "executor_mode": enrollment_view.get("mode"),
+    }
+    identity.update(_connection_identity_fields(connection_path(gov), instance))
+    return identity
 
 def resolve_workstation_governance_root(identity: dict[str, Any], *, explicit: str | Path | None = None) -> Path:
     """工位的治理根(渲染上下文来源): 显式 → connection.json#governance_root → home_root/<project>(F66 单一解析)。
@@ -243,6 +291,9 @@ def charter_render_context(
         "executor_instance": sibling["executor_instance"],
         "auditor_instance": sibling["auditor_instance"],
         "product_commit": str(product_commit or "unknown"),
+        # AIPOS-F146 件①: 执行者接入模式(母本分段选择键)。子 agent 身份(subagent_identity)带 land 事件 mode; 工位身份无此键 =
+        # roles.schema executor_modes.default(工位, 行为不变)。
+        "executor_mode": str(identity.get("executor_mode") or _default_executor_mode()),
     }
     # AIPOS-F93 件①: 章程报告节的报告必填字段 = 声明 transitions artifact_ingest 单源渲染(与落点句 / my-tasks / 认领模板同一函数)
     from tools.aipos_cli.next_resolver import render_report_frontmatter_clause, report_frontmatter_contract
@@ -286,6 +337,55 @@ def render_context_fingerprint(ctx: dict[str, Any]) -> str:
 # 渲染
 # ---------------------------------------------------------------------------
 
+def _default_executor_mode() -> str:
+    from tools.aipos_cli.enrollment import executor_mode_declaration
+
+    return str(executor_mode_declaration()["default"])
+
+
+def select_mode_segments(master_text: str, mode: str) -> str:
+    """AIPOS-F146 件①: 母本执行者接入模式分段的唯一选择实现(render_charter 内调用; 段语法见 EXECUTOR_MODE_SEGMENT_MARKER 注释)。
+    无段标记 = 原文返回(不读声明)。段名不在声明 / 同组重复 / 组未覆盖全部声明模式 / 未闭合 / 组外 end / mode 不在声明 = ValueError。"""
+    if EXECUTOR_MODE_SEGMENT_MARKER not in master_text:
+        return master_text
+    from tools.aipos_cli.enrollment import executor_mode_declaration
+
+    declared = list(executor_mode_declaration()["values"])
+    if mode not in declared:
+        raise ValueError(f"章程母本按执行者接入模式分段, 渲染上下文 executor_mode={mode!r} 不在 roles.schema executor_modes {declared}")
+    out: list[str] = []
+    seen: list[str] | None = None  # None = 组外
+    current = ""
+    for lineno, line in enumerate(master_text.splitlines(keepends=True), start=1):
+        stripped = line.rstrip("\r\n")
+        if stripped.lstrip().startswith(EXECUTOR_MODE_SEGMENT_MARKER):
+            match = _MODE_SEGMENT_RE.match(stripped)
+            if not match:
+                raise ValueError(f"章程母本第 {lineno} 行段标记形坏(须独占一行: <!-- lybra:executor-mode <模式|end> -->): {stripped!r}")
+            name = match.group("mode")
+            if name == _MODE_SEGMENT_END:
+                if seen is None:
+                    raise ValueError(f"章程母本第 {lineno} 行 end 段标记不在任何分段组内")
+                if sorted(seen) != sorted(declared):
+                    raise ValueError(f"章程母本第 {lineno} 行结束的分段组覆盖模式 {seen} ≠ roles.schema executor_modes {declared}"
+                                     "(每组须恰覆盖全部声明模式; 新增模式须先补母本段)")
+                seen, current = None, ""
+                continue
+            if name not in declared:
+                raise ValueError(f"章程母本第 {lineno} 行段模式 {name!r} 不在 roles.schema executor_modes {declared}")
+            seen = [] if seen is None else seen
+            if name in seen:
+                raise ValueError(f"章程母本第 {lineno} 行分段组内模式 {name!r} 重复")
+            seen.append(name)
+            current = name
+            continue
+        if seen is None or current == mode:
+            out.append(line)
+    if seen is not None:
+        raise ValueError(f"章程母本分段组未闭合(缺 <!-- lybra:executor-mode end -->), 已开模式 {seen}")
+    return "".join(out)
+
+
 def _substitute(master_text: str, ctx: dict[str, Any]) -> str:
     missing: list[str] = []
 
@@ -306,11 +406,23 @@ def _substitute(master_text: str, ctx: dict[str, Any]) -> str:
     return out
 
 
+def _harness_root_line(ctx: dict[str, Any]) -> str:
+    """尾节「工位根」行。AIPOS-F146: 无工位接入模式(子 agent, roles.schema executor_modes credential_landing=governance_root)无工位根 /
+    共享层, 如实写凭据所在(治理根 .lybra/, 门领地); 工位模式原文不变。"""
+    from tools.aipos_cli.enrollment import governance_root_executor_modes
+
+    mode = str(ctx.get("executor_mode") or "")
+    if mode and mode in governance_root_executor_modes():
+        return (f"- 无工位(接入模式 `{mode}`): 凭据与身份在治理根 `{ctx['governance_root']}/.lybra/`(门领地, 只读; 由驱动方使用, "
+                "执行体不读不用)")
+    return f"- 工位根: `{ctx['harness_root']}`(共享层 `{ctx['harness_parent']}/_shared` 与 `_distributed` 由分发器写, 角色只读)"
+
+
 def render_charter(master_text: str, ctx: dict[str, Any]) -> str:
     """渲染物 = 母本(占位替换)+ 项目声明尾节 + 写权限边界节 + 渲染标记行(母本/声明指纹, 无时间戳: 同输入同输出)。"""
     from tools.aipos_cli.write_boundary import build_write_boundary, render_write_boundary_markdown
 
-    body = _substitute(master_text, ctx).rstrip("\n")
+    body = _substitute(select_mode_segments(master_text, str(ctx.get("executor_mode") or "")), ctx).rstrip("\n")
     master_sha = _sha256_text(master_text)
     ctx_sha = render_context_fingerprint(ctx)
     repos_line = ", ".join(f"{k}=`{v}`" for k, v in sorted(ctx["repos"].items())) if ctx["repos"] else f"`{ctx['code_repo']}`"
@@ -327,7 +439,7 @@ def render_charter(master_text: str, ctx: dict[str, Any]) -> str:
         f"- 产品仓(project.json repos/code_repo): {repos_line}",
         f"- Return 落点: `{ctx['return_root']}/<卡ID>/`; 审计报告落点: `{ctx['verdict_root']}/<审计卡ID>/`; 队列(门领地): `{ctx['queue_root']}`",
         f"- 门: `{ctx['gate_url']}`(凭据只在工位 `.lybra/connection.json`, 只按名引用, 永不上屏)",
-        f"- 工位根: `{ctx['harness_root']}`(共享层 `{ctx['harness_parent']}/_shared` 与 `_distributed` 由分发器写, 角色只读)",
+        _harness_root_line(ctx),
         "",
     ]
     boundary = build_write_boundary(ctx["governance_root"], role=ctx["role"], harness_root=ctx["harness_root"])
@@ -417,17 +529,20 @@ def instance_charter(
     instance: str | None = None,
     harness: str | None = None,
 ) -> dict[str, Any]:
-    """实例的渲染后章程(只读)。返回 {text, instance, role, role_class, harness, distribution_id, workstation, governance_root}。
+    """实例的渲染后章程(只读)。返回 {text, instance, role, role_class, harness, distribution_id, workstation, executor_mode, governance_root}
+    (子 agent: workstation=None, executor_mode=land 事件 mode; 工位: executor_mode=None)。
 
-    判序(任一不成立 = CharterRefused, 带出口): 实例(缺省 = 治理根 .lybra/role 的顶层实例)→ 本治理根 enrollment_log 有其 land 事件
-    (enrollment.workstation_location 唯一定位)且工位在本机 → 工位 .lybra/role 有该实例的记录(workstation_identity(…, instance=)
+    判序(任一不成立 = CharterRefused, 带出口): 实例(缺省 = 治理根 .lybra/role 的顶层实例)→ 本项目已接入(enrollment.instance_enrollment
+    唯一判定; AIPOS-F146 件①: 其 land 事件 mode 为无工位模式(子 agent 执行者)= 身份取 subagent_identity(land 事件 role/mode/harness),
+    harness 缺省 = land 事件 harness, 不要求工位, 下接角色类判定)→ 否则本治理根 enrollment_log 有其 land 事件
+    (instance_enrollment 结果中的 workstation_location 定位)且工位在本机 → 工位 .lybra/role 有该实例的记录(workstation_identity(…, instance=)
     经分槽读口 read_role_record: 治理根多顾问实例取 instances.<实例> 槽, AIPOS-F140; 只读非秘密字段)
     → 角色解析出的类(custom_roles.resolve_role_to_class)== role_class → 本角色该 harness(缺省 = 工位 role 记录的 harness)恰有一条
     kind=charter 分发条目(与门清单同一构建器 workstation_wiring.declared_role_distributions)→ 母本 + charter_render_context → render_charter。
     声明/治理根坏 = 原异常上抛(ValueError / FileNotFoundError / SchemaLoadError, fail-closed)。"""
     from tools.aipos_cli.custom_roles import UnknownRoleClass, resolve_role_to_class
     from tools.aipos_cli.distribution_sync import _is_charter, harness_distributions, harness_kind_declaration, workstation_harness
-    from tools.aipos_cli.enrollment import workstation_location
+    from tools.aipos_cli.enrollment import instance_enrollment
     from tools.aipos_cli.workstation_wiring import declared_role_distributions
     from tools.distribution_manifest import REPO_ROOT, get_product_commit
 
@@ -439,26 +554,42 @@ def instance_charter(
         if not is_enrolled_workstation(gov):
             raise CharterRefused(f"未给 --instance, 且治理根 {gov} 无 .lybra/role(无本治理根工位实例可取); 出口: 加 --instance <实例>")
         inst = str(workstation_identity(gov)["instance"])
-    loc = workstation_location(gov, inst)
-    if not loc["found"]:
-        raise CharterRefused(f"实例 {inst} 未在本治理根接入: {loc['reason']}; 出口: 先按接入向导 enroll 该实例"
-                             "(lybra onboarding guide), 或核对实例名(lybra roles enroll-where --instance <实例>)")
-    if loc["transport"] != "local":
-        raise CharterRefused(f"实例 {inst} 的工位在他机(land 事件 host={loc['host']} dir={loc['dir']}), 本机读不到其 .lybra/role; "
-                             "出口: 在该工位所在机运行本命令")
-    workstation = Path(str(loc["dir"])).expanduser()
-    try:
-        # AIPOS-F140 件①: 按实例取记录(治理根多顾问实例各取其槽; 工位无槽 = 顶层, 实例不符拒因原文同修前)
-        identity = workstation_identity(workstation, instance=inst)
-    except WorkstationInstanceNotRegistered as exc:
-        listed = f"; 本治理根已登记实例: {', '.join(exc.registered)}" if exc.slotted else ""
-        raise CharterRefused(f"登记工位 {workstation} 的 .lybra/role 实例 = {exc.top_instance!r} ≠ {inst!r}"
-                             f"(工位已被别的实例接入{listed}); 出口: 核对实例名或重新 enroll") from exc
-    except WorkstationIdentityError as exc:
-        raise CharterRefused(f"实例 {inst} 的登记工位 {workstation} 身份不可用: {exc}; 出口: 重新 enroll 该实例") from exc
-    if identity["instance"] != inst:
-        raise CharterRefused(f"登记工位 {workstation} 的 .lybra/role 实例 = {identity['instance']!r} ≠ {inst!r}"
-                             "(工位已被别的实例接入); 出口: 核对实例名或重新 enroll")
+    exit_enroll = ("出口: 先按接入向导 enroll 该实例(lybra onboarding guide), 或核对实例名(lybra roles enroll-where --instance <实例>)")
+    view = instance_enrollment(gov, inst)  # AIPOS-F146: 实例身份与模式唯一判定(连接文件读不出 = ValueError 上抛, fail-closed)
+    if not view["enrolled"]:
+        raise CharterRefused(f"实例 {inst} 未在本治理根接入: {view['reason']}; {exit_enroll}")
+    if view["governance_root_mode"]:
+        # AIPOS-F146 件①: 无工位的已接入执行者(子 agent): 身份 = land 事件 role/mode/harness, 不要求工位、不读 .lybra/role
+        try:
+            identity = subagent_identity(gov, view)
+        except WorkstationIdentityError as exc:
+            raise CharterRefused(f"实例 {inst}(接入模式 {view['mode']})身份不可用: {exc}; 出口: 以同一模式重新 enroll 该实例") from exc
+        workstation = gov
+        default_kind = str(view["harness"] or "").strip()
+        if not default_kind:
+            raise CharterRefused(f"实例 {inst}(接入模式 {view['mode']})的 land 事件缺 harness=, 无从取章程条目; "
+                                 "出口: 加 --harness <顾问会话 kind>, 或以同一模式重新 enroll 该实例")
+    else:
+        loc = view["workstation"]
+        if not loc["found"]:
+            raise CharterRefused(f"实例 {inst} 未在本治理根接入: {loc['reason']}; {exit_enroll}")
+        if loc["transport"] != "local":
+            raise CharterRefused(f"实例 {inst} 的工位在他机(land 事件 host={loc['host']} dir={loc['dir']}), 本机读不到其 .lybra/role; "
+                                 "出口: 在该工位所在机运行本命令")
+        workstation = Path(str(loc["dir"])).expanduser()
+        try:
+            # AIPOS-F140 件①: 按实例取记录(治理根多顾问实例各取其槽; 工位无槽 = 顶层, 实例不符拒因原文同修前)
+            identity = workstation_identity(workstation, instance=inst)
+        except WorkstationInstanceNotRegistered as exc:
+            listed = f"; 本治理根已登记实例: {', '.join(exc.registered)}" if exc.slotted else ""
+            raise CharterRefused(f"登记工位 {workstation} 的 .lybra/role 实例 = {exc.top_instance!r} ≠ {inst!r}"
+                                 f"(工位已被别的实例接入{listed}); 出口: 核对实例名或重新 enroll") from exc
+        except WorkstationIdentityError as exc:
+            raise CharterRefused(f"实例 {inst} 的登记工位 {workstation} 身份不可用: {exc}; 出口: 重新 enroll 该实例") from exc
+        if identity["instance"] != inst:
+            raise CharterRefused(f"登记工位 {workstation} 的 .lybra/role 实例 = {identity['instance']!r} ≠ {inst!r}"
+                                 "(工位已被别的实例接入); 出口: 核对实例名或重新 enroll")
+        default_kind = ""
     try:
         actual_class = str(resolve_role_to_class(str(identity["role"]), gov, required=True))
     except UnknownRoleClass as exc:
@@ -466,7 +597,7 @@ def instance_charter(
     if actual_class != role_class:
         raise CharterRefused(f"实例 {inst} 的角色类 = {actual_class!r}(角色 {identity['role']!r}) ≠ --role {role_class!r}; "
                              f"出口: --role {actual_class}")
-    kind = str(harness or "").strip() or str(workstation_harness(workstation, instance=inst)["kind"])
+    kind = str(harness or "").strip() or default_kind or str(workstation_harness(workstation, instance=inst)["kind"])
     harness_kind_declaration(kind)  # 不在声明 = ValueError(列出合法值)
     charters = [d for d in harness_distributions(declared_role_distributions(str(identity["role"]), actual_class), kind)
                 if _is_charter(d)]
@@ -488,7 +619,8 @@ def instance_charter(
         "role_class": actual_class,
         "harness": kind,
         "distribution_id": dist["distribution_id"],
-        "workstation": str(workstation),
+        "workstation": None if view["governance_root_mode"] else str(workstation),  # 子 agent 无工位
+        "executor_mode": identity.get("executor_mode"),
         "governance_root": str(gov),
     }
 

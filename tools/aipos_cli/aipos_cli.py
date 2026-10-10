@@ -138,6 +138,25 @@ def _filter_my_tasks(report: dict[str, Any], actor: str, profiles: dict[str, Any
     return {**report, "scope": "my_tasks", "actor": actor, "tasks": filtered, **availability}
 
 
+def _subagent_actor_exit(workstation: str, actor: str) -> str:
+    """AIPOS-F146 件②: `my-tasks --workstation <治理根> --actor <子 agent 执行者>` 的明确出口(子 agent 无工位, 不写 .lybra/role 槽)。
+    判定唯一 enrollment.instance_enrollment(governance_root_mode); 目录非治理根 / 非子 agent = 空串(拒因原文同修前)。
+    接入登记读不出 = 如实附在拒因里(仍拒, 不吞)。"""
+    root = Path(workstation).expanduser()
+    if not actor or not (root / "project.json").is_file():
+        return ""
+    from tools.aipos_cli.enrollment import instance_enrollment
+
+    try:
+        view = instance_enrollment(root, actor)
+    except ValueError as exc:
+        return f"; 接入登记读不出: {exc}"
+    if not view["governance_root_mode"]:
+        return ""
+    return (f"; 实例 {actor} 为子 agent 执行者(接入模式 {view['mode']}, 无工位), 出口: lybra my-tasks --actor {actor} "
+            f"--workspace-root {root.resolve()} --task-id <卡号>(不带 --workstation)")
+
+
 def _resolve_my_tasks_workstation(args: argparse.Namespace) -> int | None:
     """AIPOS-F89 件③b(Owner 2026-10-03 裁定 A2): `my-tasks --workstation <工位目录>` = 产品解析工位身份——实例与治理根经
     charter_render.workstation_identity / resolve_workstation_governance_root(唯一实现), 回填 args.actor / args.workspace_root。
@@ -162,7 +181,7 @@ def _resolve_my_tasks_workstation(args: argparse.Namespace) -> int | None:
     except WorkstationInstanceNotRegistered as exc:
         listed = f"; 已登记实例: {', '.join(exc.registered)}" if exc.slotted else ""
         print(f"Error: --actor {actor} ≠ 工位 {Path(workstation).expanduser().resolve()} 的实例 {exc.top_instance}"
-              f"(二者择一, 以工位身份为准{listed})", file=sys.stderr)
+              f"(二者择一, 以工位身份为准{listed}){_subagent_actor_exit(workstation, actor)}", file=sys.stderr)
         return 2
     except WorkstationIdentityError as exc:
         print(f"Error: WORKSTATION_IDENTITY_UNRESOLVED: {exc}", file=sys.stderr)
