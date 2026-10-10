@@ -594,7 +594,15 @@
         "deployment_provenance_values": [
           "audited",
           "dev_override"
-        ]
+        ],
+        "optional_fields": {
+          "dev_override_reason": "authorization_type=dev_override 时 = --reason 原文",
+          "runtime_directory": "部署运行目录(lybra-deploy 传入时写)",
+          "coverage_interval": "AIPOS-F130 件③ / F147 件②(gap #110 登记): verdict_ref 部署且传 --coverage-base 时写 = 覆盖区间 <部署前 commit>..<本次 commit>(首次部署为单 commit); 计算唯一实现 deployment_authorization.verdict_ref_deploy_coverage",
+          "covering_verdicts": "AIPOS-F130 件③ / F147 件②(gap #110 登记): 同上条件写 = 覆盖该区间的全部 PASS 裁决 id 列表(多卡并集; 空区间 = 空列表)",
+          "writer": "deployment_record.build_deployment_record(唯一构建)"
+        },
+        "card_attribution": "AIPOS-F147 件①: 部署平铺无卡目录; 归属 = authorization_ref 所指裁决所属的卡(裁决记录在 <records>/audit_verdicts/<卡ID>/<裁决 id>.md)。N6 落账范围(governance_commit.card_own_paths)经 governance_commit.card_deployment_records 按此纳入本卡部署记录; dev_override 部署无裁决、不属任何卡(非卡改动, 用 governance-commit --paths 精确提交)。"
       },
       "automation": {
         "git_operations": "commit (产品仓) + push",
@@ -716,7 +724,7 @@
         "command_template": "lybra governance-commit --task-id {task_id} --actor {actor} --governance-root {governance_root}",
         "actor": "驱动方(loop --actor → 治理根 .lybra/role instance → connection.json 驱动方 token 实例); 落账不是门账务动词, 提交身份 = 驱动方; 解析不到 = 不可推导",
         "envelope": "独立授权: action_type governance_commit 列在 verbs.schema lybra_loop.envelope.allowed_verbs(覆盖驱动方与本卡的有效信封即可落账, 不另签、不借 close)",
-        "scope": "本卡与其审计卡(<task_id>R)各自的: 队列文件(<queue_root>/<各队列状态>/<卡文件名>, 搬动旧位的删除也属本卡) / 草稿(<drafts>/<卡文件名>) / 各类记录(<records>/<类型>/<卡ID 或 draft_id>/, 新记录类型自动纳入) / 台账·交回·裁决落点(project.json paths.{task_cards_root,return_root,verdict_root}/<卡ID>/) + 卡编年史(project.json paths.foundation_backlog, 声明了才有); .gitignore 排除者列出不提交; 禁整根。实现 governance_commit.task_scope_candidates / resolve_task_scope",
+        "scope": "本卡与其审计卡(<task_id>R)各自的: 队列文件(<queue_root>/<各队列状态>/<卡文件名>, 搬动旧位的删除也属本卡) / 草稿(<drafts>/<卡文件名>) / 各类记录(<records>/<类型>/<卡ID 或 draft_id>/, 新记录类型自动纳入) / 台账·交回·裁决落点(project.json paths.{task_cards_root,return_root,verdict_root}/<卡ID>/) + 卡编年史(project.json paths.foundation_backlog, 声明了才有); AIPOS-F147 件①: + 本卡部署记录(平铺 deployments/, authorization_ref = 本卡裁决, governance_commit.card_deployment_records; 读不出者不猜归属, 未入库的出声) + 本卡已结束的 loop 运行记录 .md(<loop_runs_root>/<卡ID>/, 入判据) + 运行中的 loop 运行记录 .md(只随提交带走, 不入落账判据; .log 经 .git/info/exclude 不入库); 结案后才落盘的门记录(合并后回归 async 事件记录 / loop 运行记录终态)写完由 governance_commit.reland_after_write 经本提交口补一次落账(卡未结案 = 由其 N6 带上); .gitignore 排除者列出不提交; 禁整根。实现 governance_commit.task_scope_candidates / resolve_task_scope",
         "criterion": "范围路径在治理仓无未跟踪 / 未提交 / 已暂存未提交(git status --porcelain -uall), 且 <上游>..HEAD 未触及范围路径(已推送, 上游 = 当前分支 @{u}, 读上次 fetch 结果); 治理根不在 git 工作树内或当前分支无上游 = 未落账。实现 governance_commit.governance_landing(只读)",
         "idempotent": "已落账 = governance-commit PASS no-op(无新提交); loop 再跑一轮即 exit 0",
         "on_reject": "他人暂存在范围外 / 提交门护栏拒 / 推送未完成 = loop exit 2 透传拒因原文(不重试, 不动他人暂存); 落账报成功但判据仍未落账 = exit 4",

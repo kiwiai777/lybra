@@ -132,8 +132,8 @@ def _closed_card(gov: Path, task_id: str = TASK) -> None:
     _write(gov / "task_cards" / audit / "RETURN.md", "# audit\n\n## 一句话结论\nPASS\n")
 
 
-def _head_files(repo: Path) -> set[str]:
-    return set(_git(repo, "show", "--name-only", "--no-renames", "--format=", "HEAD").splitlines())
+def _head_files(repo: Path, rev: str = "HEAD") -> set[str]:
+    return set(_git(repo, "show", "--name-only", "--no-renames", "--format=", rev).splitlines())
 
 
 # ===========================================================================
@@ -178,8 +178,14 @@ def test_item1_loop_claimed_to_completed_then_lands_task_scope_and_pushes(rig: d
     assert "治理已落账" in res.message
     log = _git(repo, "log", "--oneline", "-3")
     _show(f"[①·治理仓 git log -3]\n{log}")
+    # AIPOS-F147 件①: N6 落账提交之后, loop 出口 0 再补一次落账带走本次运行记录终态(同一提交口)——HEAD = 补落账提交(只含运行记录),
+    # HEAD~1 = N6 落账提交
     assert f"N6 收账 {TASK}" in _git(repo, "log", "-1", "--format=%s")
-    committed = _head_files(repo)
+    relanded = _head_files(repo)
+    assert relanded and all(f.startswith(f"{GOV_REL}/5_tasks/records/loop_runs/{TASK}/looprun_") and f.endswith(".md") for f in relanded), relanded
+    assert "补落账:" in text and "loop 运行记录终态" in text
+    assert f"N6 收账 {TASK}" in _git(repo, "log", "-1", "--format=%s", "HEAD~1")
+    committed = _head_files(repo, "HEAD~1")
     _show("[①·落账提交文件]\n  " + "\n  ".join(sorted(committed)))
     prefix = f"{GOV_REL}/"
     assert committed and all(f.startswith(prefix) for f in committed)
@@ -193,10 +199,13 @@ def test_item1_loop_claimed_to_completed_then_lands_task_scope_and_pushes(rig: d
     assert _git(gov, "status", "--porcelain", "-uall", "--", *scope) == ""  # 工作区该卡路径干净
     assert _git(repo, "rev-parse", "HEAD") == _git(rig["remote"], "rev-parse", "main")  # 已推送
     assert _scene_outside(rig) == before_outside  # 他项目 / 无关治理文件 / 他卡记录原样
-    # 再跑 loop: 已结案且已落账 → 一轮 exit 0, 不再提交
+    assert _git(gov, "status", "--porcelain", "-uall", "--", f"5_tasks/records/loop_runs/{TASK}") == ""  # 运行记录已落账, .log 已排除
+    # 再跑 loop: 已结案且已落账 → 一轮 exit 0, 不重复卡的落账; AIPOS-F147 件①: 本次运行自身的运行记录照样补落账(只此一份)
     head = _git(repo, "rev-parse", "HEAD")
     again = run_loop(TASK, gov, actor=DRIVER, out=io.StringIO(), execute=gate, interval=0.01, max_wait=1, max_steps=3)
-    assert again.exit_code == 0 and len(again.steps) == 1 and _git(repo, "rev-parse", "HEAD") == head
+    assert again.exit_code == 0 and len(again.steps) == 1
+    assert _git(repo, "rev-parse", "HEAD~1") == head
+    assert _head_files(repo) == {f"{GOV_REL}/5_tasks/records/loop_runs/{TASK}/{Path(again.run_record).name}"}
 
 
 # ===========================================================================

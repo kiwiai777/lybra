@@ -15,6 +15,8 @@
        产物槽 —— project.json paths.{return_root,verdict_root}/<ID>/** (落点唯一读取口 workspace_config.project_paths);
        冻结卡 —— <records>/<类型>/<ID>/** 且 ID 被存量冻结(唯一判定 legacy_baseline.frozen_tasks, 解冻后恢复要求)。
        只免 B④ 必填字段, B①②③ 照旧; 豁免逐文件记入报告并按依据计数出声(不静默)。
+     AIPOS-F147 件②(gap #99): 另查取值(声明: file_declarations.record_file.value_enums = {字段: enums.schema 枚举名}; 缺 = 只查存在)
+       —— 新增记录的 record_type 须 ∈ enums.schema record_type(读取 schema_loader.get_enum_values, 与 RecordType 同源); 豁免同上。
   B⑤ 治理仓 HEAD 必须是 main    (AIPOS-F29 大项C, 沿用)
 
 工作区根按文件归属(件②): 每个 staged 文件自其所在目录向上找最近的同时含 <governance 首段>/ 与
@@ -78,6 +80,8 @@ class GuardrailDeclarations:
     slot_label: str = ""
     legacy_frozen_exempt: bool = False
     frozen_label: str = ""
+    # AIPOS-F147 件②: B④ 取值检查 {字段: (枚举名, 允许值)}(config.schema file_declarations.record_file.value_enums; 缺 = 不查取值)
+    record_value_enums: tuple[tuple[str, str, frozenset[str]], ...] = ()
 
     @property
     def gov_segment(self) -> str:
@@ -201,6 +205,7 @@ def load_guardrail_declarations(schema_dir: Path | None = None) -> GuardrailDecl
         )
 
     slot_keys, slot_label, frozen_exempt, frozen_label = _load_b4_exemptions(file_decls, schema_path)
+    value_enums = _load_b4_value_enums(file_decls, record_fm, schema_dir, schema_path)
 
     return GuardrailDeclarations(
         schema_path=schema_path,
@@ -217,7 +222,39 @@ def load_guardrail_declarations(schema_dir: Path | None = None) -> GuardrailDecl
         slot_label=slot_label,
         legacy_frozen_exempt=frozen_exempt,
         frozen_label=frozen_label,
+        record_value_enums=value_enums,
     )
+
+
+def _load_b4_value_enums(file_decls: dict[str, Any], record_fm: tuple[str, ...], schema_dir: Path,
+                         schema_path: Path) -> tuple[tuple[str, str, frozenset[str]], ...]:
+    """AIPOS-F147 件②: 读 record_file.value_enums {字段: 枚举名} 并取各枚举允许值——与 config.schema 同一 schema 目录(hook 给的
+    --schema-dir)下的 enums.schema.json, 结构 enums.<名>.values[].value(与 schema_loader.get_enum_values / schema_constants.RecordType
+    同一份文件同一结构; 本模块按 --schema-dir 读, 同 config.schema 读法)。段缺 = 不查取值(行为不变); 段在而形不合 / 字段不在
+    required_frontmatter / 枚举文件读不出 / 枚举缺或空 = fail-closed。"""
+    where = f"config.schema file_declarations.record_file.value_enums at {schema_path}"
+    decl = (file_decls.get("record_file") or {}).get("value_enums")
+    if decl is None:
+        return ()
+    if not isinstance(decl, dict) or not decl:
+        raise GuardrailDeclarationError(f"{where} must be a non-empty object {{field: enums.schema enum name}}")
+    enums_path = Path(schema_dir) / "enums.schema.json"
+    try:
+        enums = (json.loads(enums_path.read_text(encoding="utf-8")).get("enums") or {})
+    except (OSError, ValueError) as exc:
+        raise GuardrailDeclarationError(f"{where}: enums.schema unreadable at {enums_path}: {exc.__class__.__name__}: {exc}") from exc
+
+    out: list[tuple[str, str, frozenset[str]]] = []
+    for field_name, enum_name in decl.items():
+        if field_name not in record_fm or not isinstance(enum_name, str) or not enum_name.strip():
+            raise GuardrailDeclarationError(f"{where}: {field_name!r} must be in required_frontmatter {list(record_fm)} "
+                                            f"and map to an enums.schema enum name")
+        entries = (enums.get(enum_name.strip()) or {}).get("values") if isinstance(enums.get(enum_name.strip()), dict) else None
+        values = frozenset(str(e.get("value")) for e in (entries or []) if isinstance(e, dict) and e.get("value"))
+        if not values:
+            raise GuardrailDeclarationError(f"{where}: enums.schema enum {enum_name!r} declares no values")
+        out.append((str(field_name), enum_name.strip(), values))
+    return tuple(out)
 
 
 def _load_b4_exemptions(file_decls: dict[str, Any], schema_path: Path) -> tuple[tuple[str, ...], str, bool, str]:
@@ -384,6 +421,18 @@ def _has_field(text: str, field_name: str) -> bool:
     return any(line.startswith(prefix) for line in text.split("\n"))
 
 
+def _field_value(text: str, field_name: str) -> str:
+    """AIPOS-F147 件②: 与 _has_field 同一定位(首个以 `<字段>:` 起头的行)取标量值, 去首尾空白与成对引号(YAML 单/双引号标量)。"""
+    prefix = f"{field_name}:"
+    for line in text.split("\n"):
+        if line.startswith(prefix):
+            value = line[len(prefix):].split(" #", 1)[0].strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            return value
+    return ""
+
+
 def normalize_entries(entries: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
     """(status, repo_rel_path) 归一: 状态码取首字母映射到 A/M/D; 未知码整体拒(fail-closed)。"""
     out: list[tuple[str, str]] = []
@@ -458,9 +507,12 @@ def check_entries(
         if status == STATUS_ADDED and on_disk and file.startswith(records_prefix):
             text = abs_path.read_text(encoding="utf-8", errors="replace")
             missing = [f for f in decls.record_required_fm if not _has_field(text, f)]
+            # AIPOS-F147 件②: 字段在而取值不在声明枚举内(value_enums)= 同属 B④
+            bad_values = [(f, enum_name, _field_value(text, f)) for f, enum_name, allowed in decls.record_value_enums
+                          if f not in missing and _field_value(text, f) not in allowed]
             exemption = None
-            # AIPOS-F128: 缺字段时才看豁免(产物槽 / 冻结卡); 找不到工作区根 = 无项目声明可读 = 不豁免
-            if missing and found and (decls.slot_path_keys or decls.legacy_frozen_exempt):
+            # AIPOS-F128: 缺字段(F147: 或取值非法)时才看豁免(产物槽 / 冻结卡); 找不到工作区根 = 无项目声明可读 = 不豁免
+            if (missing or bad_values) and found and (decls.slot_path_keys or decls.legacy_frozen_exempt):
                 if prefix not in exemption_cache:
                     exemption_cache[prefix] = _exemption_context(repo_root, prefix, decls)
                 exemption = _b4_exemption(file, records_prefix, exemption_cache[prefix], decls)
@@ -472,6 +524,13 @@ def check_entries(
                         file,
                         CHECK_B4,
                         f"New record lacks required field '{field_name}' (B④, declared in config.schema file_declarations.record_file)",
+                    )
+                for field_name, enum_name, value in bad_values:
+                    add(
+                        file,
+                        CHECK_B4,
+                        f"New record field '{field_name}' value {value!r} not in enums.schema {enum_name} "
+                        f"(B④, declared in config.schema file_declarations.record_file.value_enums)",
                     )
 
     # B⑤ (AIPOS-F29): 治理仓 HEAD 必须是 main
@@ -592,6 +651,8 @@ def format_report(report: GuardrailReport, decls: GuardrailDeclarations) -> str:
             "     ---",
             "  ③ decision_log/ is append-only (modifications forbidden)",
             f"  ④ New records require declared fields (from config.schema file_declarations.record_file): {'|'.join(decls.record_required_fm)}",
+            *([f"     Field values must be in enums.schema (file_declarations.record_file.value_enums): "
+               + ", ".join(f"{f} ∈ {e}" for f, e, _v in decls.record_value_enums)] if decls.record_value_enums else []),
             "  ⑤ Governance repo must be on 'main' branch (F29)",
         ])
     if report.ok:

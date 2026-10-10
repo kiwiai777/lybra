@@ -144,11 +144,13 @@ def test_item1_run_record_lands_step_by_step_and_completed(lrig, monkeypatch):
     assert f"[end] outcome=completed exit=0 reason=completed" in log_text and "envelope=" in log_text
     # ③ 运行记录与日志不含会话正文 / 工具参数 / kickoff / 凭据
     _assert_no_session_or_credentials({"运行记录": record_text, "日志": log_text})
-    # 运行记录目录不入卡落账范围(loop 已 exit 0 即证落账判据未被运行记录拖住; 此处再核范围候选)
+    # 运行记录目录不整入卡落账范围(loop 已 exit 0 即证落账判据未被运行中的记录拖住)。AIPOS-F147 件①: 已结束的运行 .md 逐文件入范围
+    # (落账带上), 运行日志 .log 与目录本身不入
     from tools.aipos_cli.governance_commit import task_scope_candidates
 
     scope = task_scope_candidates(lrig.gov, TASK)["paths"]
-    assert not any("loop_runs" in p for p in scope), scope
+    loop_scope = [p for p in scope if "loop_runs" in p]
+    assert loop_scope == [Path(record_path).resolve().relative_to(lrig.gov.resolve()).as_posix()], scope
     rc, status_out, _err = _cli(["loop", "status", "--task-id", TASK, "--workspace-root", str(lrig.gov)])
     _show(f"---- ① lybra loop status(已结束)原文 exit {rc} ----\n{status_out}")
     assert rc == 0 and "[ended]" in status_out and "outcome=completed exit=0 reason=completed" in status_out

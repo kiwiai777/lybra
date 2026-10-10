@@ -382,7 +382,20 @@ def _run_async_main(args: argparse.Namespace) -> int:
         print(f"[post_merge_regression] 回归事件记录写入失败: {exc}", file=sys.stderr, flush=True)
         return 1
     print(f"[post_merge_regression] 回归事件记录: {path}", flush=True)
-    return 0
+    # AIPOS-F147 件①(gap #104): 异步记录写完后补一次落账——复用 N6 同一提交口(governance_commit.reland_after_write);
+    # 卡未结案 = 由其 N6 带上。补落账失败 = 出声 + 非 0 退出(记录在本卡落账判据范围内, lint/loop 会再点名, 不丢)
+    from tools.aipos_cli.governance_commit import reland_after_write
+
+    try:
+        reland = reland_after_write(Path(args.governance_root), args.task_id, args.actor, what="合并后回归事件记录")
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        print(f"[post_merge_regression] 补落账失败({type(exc).__name__}: {exc}); 记录在本卡落账范围内, 由 N6 / state lint 再点名",
+              file=sys.stderr, flush=True)
+        return 1
+    print(f"[post_merge_regression] {reland['line']}", flush=True)
+    from tools.schema_constants import Verdict
+
+    return 0 if reland["verdict"] in (None, Verdict.PASS) else 1
 
 
 def main(argv: list[str] | None = None) -> int:
