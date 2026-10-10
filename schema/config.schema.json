@@ -73,7 +73,7 @@
       }
     },
     "role": {
-      "description": "AIPOS-F106 件③④(M15/M2): 工位身份文件 .lybra/role(JSON 对象, enroll_client.write_role_file 合并写)。role/instance/owner_policy_ref 的解析优先级只在 identity_resolution 声明(本节 resolution 只是指针)。读取唯一实现: charter_render.workstation_identity(工位身份/项目归属, fail-closed) 与 loop_context.ConnectionResolver.resolve_role / resolve_identity(身份键带来源自曝); 其余代码禁直接读该文件。旧版纯文本 .lybra/actor / .lybra/policy 只作 identity_resolution 声明的兼容层读取, 无 .lybra/role.json / .lybra/policy.json。",
+      "description": "AIPOS-F106 件③④(M15/M2): 工位身份文件 .lybra/role(JSON 对象, enroll_client.write_role_file 合并写)。role/instance/owner_policy_ref 的解析优先级只在 identity_resolution 声明(本节 resolution 只是指针)。读取口(AIPOS-F147 件②(gap #120)按现行实现对齐, 原写 charter_render.workstation_identity 为读取实现): ① enroll_client.read_role_record(AIPOS-F140: 按实例取 instances.<实例> 槽, 缺省读顶层)——工位身份/项目归属 charter_render.workstation_identity(fail-closed)与章程渲染经它读; ② loop_context.ConnectionResolver.resolve_identity / resolve_role(只读顶层, 身份键带来源自曝; 驱动方/连接上下文用)。其余代码禁直接读该文件。旧版纯文本 .lybra/actor / .lybra/policy 只作 identity_resolution 声明的兼容层读取, 无 .lybra/role.json / .lybra/policy.json。",
       "source_file": ".lybra/role",
       "resolution": "identity_resolution",
       "legacy_plain_text_files": [
@@ -280,8 +280,8 @@
             },
             "task_cards_root": {
               "type": "string",
-              "default": "task_cards",
-              "description": "任务台账根(归档 RETURN/AUDIT-REPORT/CLOSURE)"
+              "default_from": "project_json.paths.return_root",
+              "description": "任务台账根(归档 RETURN/AUDIT-REPORT/CLOSURE; N6 收账完整性检查 <task_cards_root>/<ID>/)。AIPOS-F147 件③(gap #115): 未声明 = 取 return_root 的取值(项目声明了 return_root 用其声明, 否则用其缺省)——台账根随交回根; lybra 两者同为 task_cards, 行为不变; 人肉期接入项目(如 returns 在 5_tasks/records/returns)未声明台账根时不再撞「台账条目不存在」。台账另设时经 `lybra project set-paths --key task_cards_root --value <路径>` 显式声明。唯一读取口 workspace_config.project_paths(default_from 解析 _declared_default: 只认 governance_structure.paths.<键> 与 project_json.paths.<本段键>)。"
             },
             "policies_root": {
               "type": "string",
@@ -291,7 +291,7 @@
             "loop_runs_root": {
               "type": "string",
               "default": "5_tasks/records/loop_runs",
-              "description": "AIPOS-F131 件①: lybra loop 运行记录与日志落点根(<loop_runs_root>/<卡ID>/looprun_*.md 与同名 .log; 相对治理根或绝对)。缺省 = 行为对既有项目只是多出该目录。记录形/节流/停滞阈值声明在 verbs.schema lybra_loop.run_record; 唯一读写实现 tools/aipos_cli/loop_run_record.py(落点经 workspace_config.project_paths)。运行记录是运行期观测, 不属卡落账范围(governance_commit.card_own_paths 跳过本目录)。"
+              "description": "AIPOS-F131 件①: lybra loop 运行记录与日志落点根(<loop_runs_root>/<卡ID>/looprun_*.md 与同名 .log; 相对治理根或绝对)。缺省 = 行为对既有项目只是多出该目录。记录形/节流/停滞阈值声明在 verbs.schema lybra_loop.run_record; 唯一读写实现 tools/aipos_cli/loop_run_record.py(落点经 workspace_config.project_paths)。运行记录不按目录整入卡落账范围(governance_commit.card_own_paths 跳过本目录); AIPOS-F147 件①: 改为逐文件——已结束的运行 .md 入落账判据, 运行中的只随落账提交带走, 日志 .log 经 git_exclude.register_git_exclude 登记 .git/info/exclude(/<本根仓相对>/*/*.log)不入库; loop 出口 0 后以 governance_commit.reland_after_write 补落账本次运行终态。"
             },
             "manual_gate_mode": {
               "type": "boolean",
@@ -317,7 +317,7 @@
             "stage_archive_root": {
               "type": "string",
               "default_from": "governance_structure.paths.stage_archive",
-              "description": "AIPOS-F145 件①: 项目阶段档案(阶段快照)目录(相对治理根或绝对)。未声明 = default_from 所指 governance_structure.paths.stage_archive(lybra 缺省布局 <治理根>/stage_archive/, 存量行为不变); 人肉期接入的项目阶段档案在别处(如 governance/stage_archives/)时经 `lybra project set-paths --key stage_archive_root --value <相对治理根路径>` 声明。唯一读取口 workspace_config.stage_archive_root(= project_paths); 读写方: finalize 阶段闸门 check_stage_archive_gate(判据 timeline_enforcement.stage_level 不变: 目录内 .md 排除 README/index)、brief 阶段坐标、governance-commit 完整性、close 鲜度 WARN、governance add stage 落点、project new 脚手架。default_from 只认 governance_structure.paths.<键>(解析 = schema_loader.get_governance_path 的 path, 相对治理根)。"
+              "description": "AIPOS-F145 件①: 项目阶段档案(阶段快照)目录(相对治理根或绝对)。未声明 = default_from 所指 governance_structure.paths.stage_archive(lybra 缺省布局 <治理根>/stage_archive/, 存量行为不变); 人肉期接入的项目阶段档案在别处(如 governance/stage_archives/)时经 `lybra project set-paths --key stage_archive_root --value <相对治理根路径>` 声明。唯一读取口 workspace_config.stage_archive_root(= project_paths); 读写方: finalize 阶段闸门 check_stage_archive_gate(判据 timeline_enforcement.stage_level 不变: 目录内 .md 排除 README/index)、brief 阶段坐标、governance-commit 完整性、close 鲜度 WARN、governance add stage 落点、project new 脚手架。default_from 认 governance_structure.paths.<键>(解析 = schema_loader.get_governance_path 的 path, 相对治理根)与 project_json.paths.<本段键>(AIPOS-F147 件③, 同段另一键的取值)。"
             }
           }
         },
@@ -833,11 +833,15 @@
         ],
         "append_only": true,
         "description": "记录文件(5_tasks/records/**) — 必须携机器出生标记 record_type",
+        "value_enums": {
+          "record_type": "record_type"
+        },
+        "value_enums_description": "AIPOS-F147 件②(gap #99): 入库护栏 B④ 对新增记录文件另查取值——键 = required_frontmatter 中的字段, 值 = enums.schema enums.<名>(取值须 ∈ 其 values[].value; 读取 schema_loader.get_enum_values, 与 schema_constants.RecordType 同源)。只查新增(存量不追溯); 本段缺 = 只查字段存在(行为同 F147 前); 所指枚举缺 = 护栏拒绝放行(fail-closed)。产物槽 / 冻结卡豁免(required_frontmatter_exemptions)同样免取值检查。唯一实现 governance_guardrails.check_entries。",
         "template_frontmatter": {
           "record_type": "<record_type>"
         },
         "required_frontmatter_exemptions": {
-          "description": "AIPOS-F128: 入库护栏 B④(records 新增须携 required_frontmatter)按项目声明豁免的两类文件; 本段缺省 = 无豁免(行为不变)。只豁免 B④ 的必填字段要求, B①(代码文件禁止)/B②/B③ 照旧生效。豁免不静默: governance-commit 预演/正式提交与 pre-commit hook 同一判据(唯一实现 governance_guardrails.check_entries), 输出列明「B④ 豁免: 产物槽 N、冻结卡 M」及各自依据, --json 同步(guardrail_report.b4_exemptions)。",
+          "description": "AIPOS-F128: 入库护栏 B④(records 新增须携 required_frontmatter)按项目声明豁免的两类文件; 本段缺省 = 无豁免(行为不变)。只豁免 B④ 的必填字段要求(AIPOS-F147: 含 value_enums 取值检查), B①(代码文件禁止)/B②/B③ 照旧生效。豁免不静默: governance-commit 预演/正式提交与 pre-commit hook 同一判据(唯一实现 governance_guardrails.check_entries), 输出列明「B④ 豁免: 产物槽 N、冻结卡 M」及各自依据, --json 同步(guardrail_report.b4_exemptions)。",
           "artifact_slot": {
             "label": "产物槽",
             "project_paths_keys": ["return_root", "verdict_root"],

@@ -11,6 +11,7 @@ deployment 记录可选、按 <commit> 分目录(部署跨卡,键不同是对的
 import json
 import sys
 from tools.aipos_cli.clock import iso_z
+from tools.schema_constants import RecordType
 from pathlib import Path
 from typing import Any
 
@@ -66,7 +67,7 @@ def build_finalization_record(
         raise ValueError("finalization 记录缺 merge_commit/commit(AIPOS-F78 前置零③: 三字段齐才派生 close)")
     
     record = {
-        "record_type": "finalization_record",
+        "record_type": RecordType.FINALIZATION_RECORD,  # AIPOS-F147 件②: 值域单源 enums.schema record_type
         "operation": "finalize",
         "task_id": task_id,
         "actor": actor,

@@ -866,6 +866,17 @@ def run_loop(
     recorder.end(outcome=result.outcome, exit_code=result.exit_code, reason=result.reason or result.outcome, message=result.message,
                  steps=result.steps)
     result.run_record, result.run_log = str(recorder.path), str(recorder.log_path)
+    if result.exit_code == exit_code_for(contract, "completed"):
+        # AIPOS-F147 件①: 出口 0 = 已结案且已落账, 但本次运行记录的终态写在落账之后——补一次落账(N6 同一提交口, 范围已落账 = no-op);
+        # 失败不改 loop 结果(推进已完成), 结果行如实输出; 该记录(已结束)在本卡落账判据内, lint / 下次 loop 会再点名
+        import subprocess
+
+        from tools.aipos_cli.governance_commit import reland_after_write
+
+        try:
+            say(reland_after_write(governance_root, task_id, driver_actor, what="loop 运行记录终态")["line"])
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            say(f"补落账: {task_id} loop 运行记录终态 失败({type(exc).__name__}: {exc}); 出口: lybra loop --task-id {task_id}(推导核派生 N6 落账步)")
     return result
 
 

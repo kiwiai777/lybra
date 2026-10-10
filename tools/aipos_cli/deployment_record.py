@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import sys
 from tools.aipos_cli.clock import file_slug, iso_z
+from tools.schema_constants import RecordType
 from pathlib import Path
 from typing import Any
 
@@ -71,7 +72,7 @@ def build_deployment_record(
     provenance = PROVENANCE_AUDITED if authorization_type == "verdict_ref" else PROVENANCE_DEV_OVERRIDE
     deployed_at = deployed_at or iso_z()
     frontmatter: dict[str, Any] = {
-        "record_type": "deployment_record",
+        "record_type": RecordType.DEPLOYMENT_RECORD,  # AIPOS-F147 件②: 值域单源 enums.schema record_type
         "operation": "deploy",
         "commit": commit,
         "commit_short": commit[:8],

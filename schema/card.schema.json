@@ -716,9 +716,10 @@
       "description": "Task selector mode filter"
     },
     "task_selector_lane_repo": {
-      "type": "string",
+      "type": "array",
+      "items": {"type": "string"},
       "required": false,
-      "description": "AIPOS-F134 件③: envelope lane selector — the card's lane.repo (resolved via workspace_config.resolve_card_repo) must denote this repo (name in project.json repos.items, or path); absent = any lane"
+      "description": "AIPOS-F134 件③: envelope lane selector — the card's lane.repo (resolved via workspace_config.resolve_card_repo) must denote one of these repos (names in project.json repos.items, or paths); absent = any lane. AIPOS-F139: a repo SET (newly minted envelopes write a list); a legacy single string is read as a one-element set (files not rewritten). Set serialization/parsing single implementation = workspace_config.repo_name_set. AIPOS-F147 件②(gap #120): declared type aligned to the implementation (was string)."
     },
     "template_id": {
       "type": "string",

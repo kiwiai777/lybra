@@ -368,7 +368,10 @@ def card_own_paths(governance_root: Path, task_id: str, *, card_path: Path | Non
     - 队列文件: <queue_root>/<每个队列状态>/<卡文件名>(卡在队列间搬动, 旧位的删除也属本卡);
     - 草稿: <drafts>/<卡文件名>;
     - 记录: <records>/<每个记录类型>/<卡ID | 卡文件名 stem>/(门按 task_id 或 draft_id 分目录; 新类型自动纳入;
-      AIPOS-F131: loop 运行记录目录 paths.loop_runs_root 除外——运行期观测, 不属卡落账);
+      loop 运行记录目录 paths.loop_runs_root 不按目录整入, 见下);
+    - AIPOS-F147 件①: 本卡的部署记录(平铺无卡目录; 归属 = authorization_ref 是本卡裁决, card_deployment_records);
+    - AIPOS-F147 件①: 本卡已结束的 loop 运行记录 .md(<loop_runs_root>/<卡ID>/looprun_*.md 中 status≠running 者, loop_run_files);
+      运行中的那份是运行期观测(loop 每轮都写), 不入判据, 只随提交带走(card_trailing_paths); .log 一律不入库;
     - 台账 / 交回 / 裁决落点: project.json paths.{task_cards_root, return_root, verdict_root}/<卡ID>/。
     卡文件名 = 队列中按 frontmatter task_id 查到的那份(task_loader.find_task_card 唯一查找), 另含 <卡ID 小写>.md 缺省名。
     """
@@ -400,8 +403,8 @@ def card_own_paths(governance_root: Path, task_id: str, *, card_path: Path | Non
         add(drafts / name)
     records = _resolve_governance_path_with_relative("records", root)
     declared = project_paths(root)
-    # AIPOS-F131: loop 运行记录(paths.loop_runs_root)是运行期观测、不属卡落账——loop 在 N6 落账后仍写结束原因,
-    # 入范围则落账判据永不过; 只跳过该声明目录, 其余记录类型照旧自动纳入
+    # AIPOS-F131: loop 运行记录目录不按目录整入(loop 每轮都写本次运行的 .md, 整目录入判据则落账判据永不过);
+    # AIPOS-F147 件①: 改为逐文件——已结束的运行 .md 入判据(loop_run_files), 运行中的只随提交带走(card_trailing_paths)
     loop_runs = Path(declared["loop_runs_root"]).resolve()
     if records.is_dir():
         for kind_dir in sorted(p for p in records.iterdir() if p.is_dir()):
@@ -409,9 +412,96 @@ def card_own_paths(governance_root: Path, task_id: str, *, card_path: Path | Non
                 continue
             for key in record_keys:
                 add(kind_dir / key)
+    for path in card_deployment_records(root, task_id):
+        add(path)
+    for path in loop_run_files(root, task_id)["ended"]:
+        add(path)
     for key in ("task_cards_root", "return_root", "verdict_root"):
         add(Path(declared[key]) / task_id)
     return out
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F147 件①(gap #104): 卡外 / 异步门记录归属——部署记录(平铺)、loop 运行记录(运行中 / 已结束)
+# ---------------------------------------------------------------------------
+
+#: 部署记录归属索引缓存: {部署记录目录: (目录项签名, {authorization_ref: [记录路径]}, [读不出的记录])}
+_DEPLOYMENT_INDEX: dict[str, tuple[tuple[tuple[str, int], ...], dict[str, list[Path]], list[tuple[Path, str]]]] = {}
+
+
+def deployment_attribution(governance_root: Path) -> dict[str, Any]:
+    """部署记录(record_locations.kinds.deployments, 平铺; 存量旧名含 <commit8>/ 子目录)按 authorization_ref 建索引。
+
+    返回 {by_ref: {裁决 id: [记录路径]}, unreadable: [(记录路径, 拒因)](读不出 frontmatter 的记录, 存量旧格式, 无从归属)}。读经唯一入口
+    frontmatter.require_frontmatter; 读不出的记录不猜归属, 原样列出由调用方出声(N6 输出 / --json task_scope.unattributed_deployments)。
+    缓存键 = 部署目录直接项的 (名, mtime_ns)(记录只追加; 新增必改目录项)。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.record_writer import record_dir
+
+    directory = record_dir(Path(governance_root), "deployments")
+    if not directory.is_dir():
+        return {"by_ref": {}, "unreadable": []}
+    signature = tuple(sorted((p.name, p.stat().st_mtime_ns) for p in directory.iterdir()))
+    cache_key = str(directory.resolve())
+    hit = _DEPLOYMENT_INDEX.get(cache_key)
+    if hit is None or hit[0] != signature:
+        by_ref: dict[str, list[Path]] = {}
+        unreadable: list[tuple[Path, str]] = []
+        for record in sorted(p for p in directory.rglob("deployment_*.md") if p.is_file()):
+            try:
+                meta, _body = require_frontmatter(record)
+            except FrontmatterReadError as exc:
+                unreadable.append((record, str(exc)))
+                continue
+            ref = str(meta.get("authorization_ref") or "").strip()
+            if ref and str(meta.get("authorization_type") or "") == "verdict_ref":
+                by_ref.setdefault(ref, []).append(record)
+        hit = (signature, by_ref, unreadable)
+        _DEPLOYMENT_INDEX[cache_key] = hit
+    return {"by_ref": hit[1], "unreadable": list(hit[2])}
+
+
+def card_deployment_records(governance_root: Path, task_id: str) -> list[Path]:
+    """本卡的部署记录 = authorization_ref ∈ 本卡裁决 id(<records>/audit_verdicts/<卡ID>/ 下门生裁决记录文件名; 门生判据
+    record_writer.gate_record_files)。dev_override 部署无裁决, 不属任何卡。声明 transitions nodes.N5.deployment_record.card_attribution。"""
+    from tools.aipos_cli.record_writer import gate_record_files, record_dir
+
+    verdict_ids = {p.stem for p in gate_record_files(record_dir(Path(governance_root), "audit_verdicts", task_id), "audit_verdicts")}
+    if not verdict_ids:
+        return []
+    by_ref = deployment_attribution(governance_root)["by_ref"]
+    return sorted({path for vid in verdict_ids for path in by_ref.get(vid, [])})
+
+
+def loop_run_files(governance_root: Path, task_id: str) -> dict[str, list[Path]]:
+    """本卡 loop 运行记录 .md(<loop_runs_root>/<卡ID>/looprun_*.md)按记录 status 分 {ended, running}(.log 不在内, 日志不入库)。
+    status 读经唯一读法 loop_run_record.read_run(record_type 须为声明值; 读不出 = LoopRunRecordError, fail-closed 原样抛)。
+    running = loop 进程仍在写(或已被杀未写结束)——运行期观测, 只随提交带走、不入落账判据; 其余(ended)入判据。"""
+    from tools.aipos_cli.loop_driver import load_loop_contract
+    from tools.aipos_cli.loop_run_record import _run_files, loop_runs_dir, read_run, run_record_declaration
+
+    directory = loop_runs_dir(Path(governance_root), task_id)
+    files = _run_files(directory)
+    out: dict[str, list[Path]] = {"ended": [], "running": []}
+    if not files:
+        return out
+    from tools.aipos_cli.loop_run_record import LoopRunRecordError
+
+    decl = run_record_declaration(load_loop_contract())
+    for path in files:
+        try:
+            status = str(read_run(path, decl).get("status") or "")
+        except LoopRunRecordError as exc:
+            # 判据调用方(N6 推导 / loop 出口 / 落账提交)按 ValueError 走「落账判据不可读」fail-closed 出口
+            raise ValueError(f"loop 运行记录读不出, 落账范围不可推导: {exc}") from exc
+        out["running" if status == "running" else "ended"].append(path)
+    return out
+
+
+def card_trailing_paths(governance_root: Path, task_id: str) -> list[str]:
+    """随本卡落账提交带走、但不入落账判据的路径(治理根相对): 本卡运行中的 loop 运行记录 .md(AIPOS-F147 件①)。"""
+    root = Path(governance_root)
+    return [rel for rel in (_gov_rel(root, p) for p in loop_run_files(root, task_id)["running"]) if rel]
 
 
 def task_scope_candidates(governance_root: Path, task_id: str) -> dict[str, Any]:
@@ -427,7 +517,11 @@ def task_scope_candidates(governance_root: Path, task_id: str) -> dict[str, Any]
     chronicle_path = project_paths(root).get("foundation_backlog")
     chronicle = _gov_rel(root, Path(chronicle_path)) if chronicle_path else None
     paths = list(dict.fromkeys(own + audit + ([chronicle] if chronicle else [])))
-    return {"paths": paths, "own": own, "audit": audit, "chronicle": chronicle, "card_found": card_path is not None}
+    # AIPOS-F147 件①: 随提交带走、不入判据的路径(本卡运行中的 loop 运行记录); 读不出、无从归属的部署记录(出声, 不猜)
+    trailing = [p for p in card_trailing_paths(root, task_id) if p not in paths]
+    unattributed = [rel for rel in (_gov_rel(root, p) for p, _why in deployment_attribution(root)["unreadable"]) if rel]
+    return {"paths": paths, "own": own, "audit": audit, "chronicle": chronicle, "card_found": card_path is not None,
+            "trailing": trailing, "unattributed_deployments": unattributed}
 
 
 def _under(path: str, scope_path: str) -> bool:
@@ -442,7 +536,8 @@ def resolve_task_scope(governance_root: Path, task_id: str) -> dict[str, Any]:
     """
     root = Path(governance_root)
     scope = task_scope_candidates(root, task_id)
-    candidates = scope["paths"]
+    # AIPOS-F147 件①: 提交白名单 = 判据范围 + 随提交带走者(trailing); 判据(task_landing)仍只看 scope["paths"]
+    candidates = list(dict.fromkeys(scope["paths"] + scope["trailing"]))
     tracked_files = _split_nul(_git_readonly(["ls-files", "-z", "--"] + candidates, root)) if candidates else []
     prefix = _git_ws_prefix(root)
     tracked_rel = [f[len(prefix):] if prefix and f.startswith(prefix) else f for f in tracked_files]
@@ -463,8 +558,14 @@ def resolve_task_scope(governance_root: Path, task_id: str) -> dict[str, Any]:
         ignored_set = set(_split_nul(proc.stdout))
         ignored = [p for p in untracked_present if p in ignored_set or p.rstrip("/") in ignored_set]
     paths = [p for p in present if p not in ignored]
+    # AIPOS-F147 件①: 读不出、无从归属的部署记录只报未入库者(已跟踪的存量旧格式已在仓里, 不丢, 不再逐次出声)
+    unattributed = scope["unattributed_deployments"]
+    if unattributed:
+        tracked_unattr = set(_split_nul(_git_readonly(["ls-files", "-z", "--"] + unattributed, root)))
+        unattributed = [u for u in unattributed if f"{prefix}{u}" not in tracked_unattr and u not in tracked_unattr]
     return {"paths": paths, "ignored": ignored, "absent": absent, "candidates": candidates,
-            "card_found": scope["card_found"], "chronicle": scope["chronicle"]}
+            "card_found": scope["card_found"], "chronicle": scope["chronicle"], "trailing": scope["trailing"],
+            "unattributed_deployments": unattributed}
 
 
 def governance_landing(governance_root: Path, scopes: dict[str, list[str]]) -> dict[str, dict[str, Any]]:
@@ -540,6 +641,34 @@ def task_landing(governance_root: Path, task_id: str) -> dict[str, Any]:
     return status
 
 
+#: AIPOS-F147 件①: 补落账结果行的行首(唯一出处; async 回归后台日志与 loop 输出同用)
+RELAND_MARKER = "补落账:"
+
+
+def reland_after_write(governance_root: Path, task_id: str, actor: str, *, what: str, push: bool = True) -> dict[str, Any]:
+    """AIPOS-F147 件①: 卡结案(N6)之后才落盘的门记录(合并后回归 async 事件记录 / loop 结束时的运行记录终态)写完后补一次落账——
+    复用 N6 同一提交口 governance_commit(task 范围精确提交 + 推送; 范围已落账 = no-op), 不另写提交路径。
+
+    卡尚未结案(无 closure 记录)= 不提交: 该记录在本卡落账范围内(events/<卡ID>/ 与已结束的 loop 运行记录入判据), 由本卡 N6 带上。
+    补落账失败(并发提交撞锁 / 推送被拒等)不吞: 结果行如实带拒因; 记录仍在本卡判据范围内 → state lint GOVERNANCE_UNCOMMITTED
+    点名并给 `governance-commit --task-id` 出口, loop 再推该卡时推导核派生 N6 落账步——不丢。
+    返回 {relanded, verdict, committed, pushed, line}(line 以 RELAND_MARKER 起头, 调用方原样输出)。"""
+    from tools.aipos_cli.next_resolver import _read_task_records
+
+    root = Path(governance_root)
+    if not _read_task_records(root, task_id).get("latest_closure"):
+        return {"relanded": False, "verdict": None, "committed": False, "pushed": False,
+                "line": f"{RELAND_MARKER} {task_id} 未结案, {what}由本卡 N6 落账带上(在本卡落账范围内)"}
+    result = governance_commit(root, task_id, actor, push=push)
+    first = next((ln.strip() for ln in str(result.get("message") or "").splitlines() if ln.strip()), "")
+    return {"relanded": bool(result.get("committed")), "verdict": result.get("verdict"), "committed": bool(result.get("committed")),
+            "pushed": bool(result.get("pushed")),
+            "line": (f"{RELAND_MARKER} {task_id} {what}: verdict={result.get('verdict')} committed={bool(result.get('committed'))} "
+                     f"pushed={bool(result.get('pushed'))} — {first[:300]}"
+                     + ("" if result.get("verdict") == Verdict.PASS else
+                        f"; 出口: {governance_commit_command(task_id, actor, root)}"))}
+
+
 def check_governance_completeness(
     governance_root: Path,
     task_id: str | None,
@@ -605,7 +734,16 @@ def check_governance_completeness(
                     f.name for f in task_cards_dir.iterdir()
                     if f.name in ["RETURN.md", "AUDIT-REPORT.md", "CLOSURE.md"]
                 ]
-                
+                if not archive_files:
+                    # AIPOS-F147 件③(gap #115): 台账根缺省随交回根(task_cards_root default_from return_root)时, 台账目录 = 交回目录;
+                    # 交回文件名按项目候选(transitions artifact_ingest.return.return_file_candidates)认, 经唯一 Return 查找
+                    # next_resolver.find_return_artifact——不另写候选匹配。
+                    from tools.aipos_cli.next_resolver import find_return_artifact
+
+                    found_return = find_return_artifact(governance_root, task_id)
+                    if found_return is not None and found_return.parent.resolve() == task_cards_dir.resolve():
+                        archive_files = [found_return.name]
+
                 if not archive_files:
                     missing.append(f"{ledger_ref}/ 缺少归档文件 (RETURN.md/AUDIT-REPORT.md/CLOSURE.md)")
                 
@@ -951,7 +1089,13 @@ def _task_scope_operation(governance_root: Path, task_id: str, task_scope: dict[
     ignored = task_scope.get("ignored") or []
     return (f"Task scope ({TASK_SCOPE_SOURCE}, AIPOS-F94): {len(task_scope['paths'])} path(s) derived for {task_id} "
             f"(+{'+'.join(audit_card_ids(governance_root, task_id))}" + (f", chronicle {task_scope['chronicle']}" if task_scope.get("chronicle") else "")
-            + ")" + (f"; ignored by .gitignore (not committed): {', '.join(ignored)}" if ignored else ""))
+            + ")" + (f"; ignored by .gitignore (not committed): {', '.join(ignored)}" if ignored else "")
+            + (f"; trailing (committed, not in landing criterion): {', '.join(task_scope['trailing'])}" if task_scope.get("trailing") else "")
+            + (f"; ⚠️ {len(task_scope['unattributed_deployments'])} deployment record(s) unreadable, not attributable to any card "
+               f"(not in scope; commit with --paths after review): "
+               + "; ".join(task_scope["unattributed_deployments"][:3])
+               + (" …" if len(task_scope["unattributed_deployments"]) > 3 else "")
+               if task_scope.get("unattributed_deployments") else ""))
 
 
 def _task_scope_selection(governance_root: Path, task_id: str, actor: str, *, dry_run: bool, push: bool) -> dict[str, Any]:
@@ -972,6 +1116,9 @@ def _task_scope_selection(governance_root: Path, task_id: str, actor: str, *, dr
         scope = resolve_task_scope(root, task_id)
     except AmbiguousTaskCard as exc:
         return stop(Verdict.BLOCK, f"卡范围不可推导: {exc}(同一 task_id 只能有一份卡文件)", ["Blocked: task scope underivable"])
+    except ValueError as exc:
+        # AIPOS-F147 件①: 范围内门记录读不出(loop 运行记录等)= 范围不可推导, BLOCK 点名文件(不跳过)
+        return stop(Verdict.BLOCK, f"卡 {task_id} 落账范围不可推导: {exc}", ["Blocked: task scope underivable (record unreadable)"])
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
         detail = (getattr(exc, "stderr", "") or str(exc)).strip()
         return stop(Verdict.BLOCK,

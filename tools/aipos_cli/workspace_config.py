@@ -738,6 +738,8 @@ def project_paths(governance_root: str | Path, *, project: dict[str, Any] | None
     - AIPOS-F125: project 给出 = 校验/解析这份(将写入的)内容而非盘上文件(update_project_json 写前预检, 同一读取口)。
     - AIPOS-F145 件①: stage_archive_root(阶段档案目录)无 default 字面量, 缺省经声明 default_from 取
       governance_structure.paths.stage_archive(_declared_default_from); 便捷读取口 stage_archive_root()。
+    - AIPOS-F147 件③(gap #115): default_from 另认 ``project_json.paths.<键>``(同段另一键的取值: 项目声明了用声明, 否则用其缺省)——
+      task_cards_root 未声明 = 取 return_root(台账根随交回根; lybra 两者同为 task_cards, 行为不变)。
     """
     root = Path(governance_root)
     decl = _project_paths_declaration()
@@ -753,9 +755,7 @@ def project_paths(governance_root: str | Path, *, project: dict[str, Any] | None
     result: dict[str, Any] = {"declared": {}}
     for key in PROJECT_PATH_KEYS:
         spec = decl.get(key) or {}
-        default = spec.get("default")
-        if default in (None, "") and spec.get("default_from"):
-            default = _declared_default_from(key, spec["default_from"])  # AIPOS-F145 件①: 缺省取既有声明, 不写第二份
+        default = _declared_default(key, decl, raw_paths)  # AIPOS-F145 件① / F147 件③: 缺省取既有声明, 不写第二份
         declared = key in raw_paths and raw_paths.get(key) not in (None, "")
         value = raw_paths.get(key) if declared else default
         if key == "manual_gate_mode":
@@ -786,15 +786,45 @@ def project_paths(governance_root: str | Path, *, project: dict[str, Any] | None
     return result
 
 
+#: AIPOS-F147 件③: default_from 指同段另一键(project_json.paths.<键>)的前缀
+PROJECT_PATHS_DEFAULT_FROM_PREFIX = "project_json.paths."
+
+
+def _declared_default(key: str, decl: dict[str, dict[str, Any]], raw_paths: dict[str, Any],
+                      _chain: tuple[str, ...] = ()) -> Any:
+    """一个 paths 键的缺省值(未声明时取值): 声明 default 字面量; 否则 default_from——
+    ``governance_structure.paths.<键>``(AIPOS-F145 件①, _declared_default_from)或 ``project_json.paths.<键>``(AIPOS-F147 件③:
+    同段另一键的取值 = 项目声明了用声明值, 否则递归取其缺省)。所指键未声明于本段 / 成环 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    spec = decl.get(key) or {}
+    default = spec.get("default")
+    ref = spec.get("default_from")
+    if default not in (None, "") or not ref:
+        return default
+    text = str(ref).strip()
+    if not text.startswith(PROJECT_PATHS_DEFAULT_FROM_PREFIX):
+        return _declared_default_from(key, text)
+    target = text[len(PROJECT_PATHS_DEFAULT_FROM_PREFIX):]
+    if target not in decl or target == key or target in _chain:
+        raise SchemaLoadError(f"config.schema.json project_json.paths.{key}.default_from={text!r}: "
+                              f"所指键须为本段另一已声明键且不成环(链 {' → '.join(_chain + (key, target))})")
+    if target in raw_paths and raw_paths.get(target) not in (None, ""):
+        return raw_paths.get(target)
+    return _declared_default(target, decl, raw_paths, _chain + (key,))
+
+
 def _declared_default_from(key: str, ref: Any) -> str:
-    """AIPOS-F145 件①: project_json.paths.<key>.default_from 解析——只认 ``governance_structure.paths.<键>``,
-    取该键声明的 path(相对治理根, 去首尾 /)。形不合 / 所指键缺 = SchemaLoadError(fail-closed)。"""
+    """AIPOS-F145 件①: project_json.paths.<key>.default_from 解析(``governance_structure.paths.<键>`` 形)——
+    取该键声明的 path(相对治理根, 去首尾 /)。形不合 / 所指键缺 = SchemaLoadError(fail-closed)。
+    AIPOS-F147 件③: ``project_json.paths.<键>`` 形由 _declared_default 先行分流, 不进本函数。"""
     from tools.schema_loader import SchemaLoadError, get_governance_path
 
     prefix = "governance_structure.paths."
     text = str(ref or "").strip()
     if not text.startswith(prefix) or not text[len(prefix):]:
-        raise SchemaLoadError(f"config.schema.json project_json.paths.{key}.default_from={text!r} 须为 {prefix}<键>")
+        raise SchemaLoadError(f"config.schema.json project_json.paths.{key}.default_from={text!r} 须为 {prefix}<键>"
+                              f" 或 {PROJECT_PATHS_DEFAULT_FROM_PREFIX}<键>")
     rel = str(get_governance_path(text[len(prefix):]).get("path") or "").strip().strip("/")
     if not rel:
         raise SchemaLoadError(f"config.schema.json {text}.path 为空(project_json.paths.{key}.default_from)")
