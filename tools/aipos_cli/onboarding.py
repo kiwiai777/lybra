@@ -126,11 +126,11 @@ def enroll_delivery(code: str) -> dict[str, str]:
 def project_new_products(governance_root: Path) -> list[str]:
     """`lybra project new` 的治理产物(治理根相对): project.json + 治理文档(decision_log 桩) + 阶段快照目录。
     单源: workspace_config.project_json_path / governance_paths(scaffold_project 同读); 空目录骨架(队列 / 记录)无文件, 不入。"""
-    from tools.aipos_cli.workspace_config import governance_paths, project_json_path
+    from tools.aipos_cli.workspace_config import governance_paths, project_json_path, stage_archive_root
 
     root = Path(governance_root)
     paths = governance_paths(root)
-    return [Path(p).relative_to(root).as_posix() for p in (project_json_path(root), paths["decision_log"], paths["stage_archive"])]
+    return [Path(p).relative_to(root).as_posix() for p in (project_json_path(root), paths["decision_log"], stage_archive_root(root))]
 
 
 def set_repos_products(governance_root: Path) -> list[str]:
@@ -737,7 +737,7 @@ def legacy_onboarding_steps(project_name: str, governance_root: str, *, home_roo
     命令全部显式带治理根/项目, 禁写死项目 ID/路径/卡号前缀。
     AIPOS-F127 件④: 第 1 步同时给出 project.json 说明键(phase / note)写入口 set-meta(人肉期旧文不再手改); 可写键 = 唯一判定
     workspace_config.declared_meta_keys(config.schema project_json 未声明 = 只给一行说明, 不给会被拒的命令)。"""
-    from tools.aipos_cli.workspace_config import declared_meta_keys, project_meta_declaration
+    from tools.aipos_cli.workspace_config import STAGE_ARCHIVE_PATH_KEY, declared_meta_keys, project_meta_declaration
 
     gq = _shell_quote(governance_root)
     pq = _shell_quote(project_name)
@@ -760,12 +760,17 @@ def legacy_onboarding_steps(project_name: str, governance_root: str, *, home_roo
                      PATHS_VALUE_PLACEHOLDER, "--dry-run"),
                 _cmd("lybra", "project", "set-paths", pq, "--home-root", hq, "--key", PATHS_KEY_PLACEHOLDER, "--value",
                      PATHS_VALUE_PLACEHOLDER, "--confirm"),
+                # AIPOS-F145 件③: 既有项目声明阶段档案位置(finalize 阶段闸门按此落点核阶段快照)
+                f"# 阶段档案(阶段快照)不在缺省位置时同样声明: --key {STAGE_ARCHIVE_PATH_KEY} --value <相对治理根路径>"
+                "(未声明 = 缺省落点; 落点下无快照 = finalize 阶段闸门拒)",
                 *meta_lines,
             ]),
             "purpose": ("为什么先做: 后两步都按声明落点工作——冻结按 queue_root 找卡, 收编按 return_root 写报告骨架、loop 按声明找产物; "
                         "落点未声明时取缺省值, 人肉期项目的真实落点未必是缺省, 骨架会落错位置。"
                         "人肉期项目的 Return/裁决/队列/信封落点逐项声明(可多对 --key/--value; 与缺省相同也显式声明: "
                         "收编要求 config.schema project_json.paths.adoption.required_declared_keys 已显式声明, 否则拒 ADOPT_PATHS_UNDECLARED)。"
+                        f"阶段档案(阶段快照)若不在缺省位置, 一并声明 {STAGE_ARCHIVE_PATH_KEY}(相对治理根): Lybra 内部 finalize 的阶段闸门按此落点核"
+                        "阶段快照, 未声明而缺省位置无快照 = 拒(AIPOS-F145)。"
                         "预演首行标明目标项目与 project.json 绝对路径, 核对无误再 --confirm; 在目标项目治理根下运行可省项目名"
                         "(目标 = 该根 project.json#project, 解析不出即拒, 绝不回落 home 级活动项目; 显式项目名与所在治理根不一致 = 拒)"),
         },

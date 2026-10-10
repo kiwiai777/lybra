@@ -947,25 +947,32 @@ def check_task_can_finalize(task_id: str, governance_root: Path, commit_sha: str
 def check_stage_archive_gate(governance_root: Path, repo_root: Path | None = None) -> dict[str, Any]:
     """AIPOS-R6M 大项A③: 阶段粒度门票 — stage transition (finalize/发布门) 前校验阶段快照存在。
 
-    判据与路径从 config.schema 治理目录树读
-    (``timeline_enforcement.stage_level.path_key`` + ``governance_structure.paths.<key>``),
-    代码零写死。缺阶段快照 → BLOCK (门票机制: 阶段快照=转换前提, 缺快照=未关账=不许转换)。
+    判据从 config.schema ``timeline_enforcement.stage_level`` 读(目录内 .md 排除 README/index, 代码零写死);
+    AIPOS-F145 件①: 落点经唯一读取口 ``workspace_config.stage_archive_root``(project.json paths.stage_archive_root 声明,
+    未声明 = governance_structure.paths.<stage_level.path_key>, 存量行为不变)。缺阶段快照 → BLOCK
+    (门票机制: 阶段快照=转换前提, 缺快照=未关账=不许转换); 件②: 拒因附出口(stage_level.next_step, 声明他处落点)。
 
     Args:
-        governance_root: 治理工作区根 (拥有 stage_archive/ 的根, 非产品仓)。
+        governance_root: 治理工作区根 (拥有 project.json 与阶段档案的根, 非产品仓)。
         repo_root: 产品仓根 (用于定位 schema/config.schema.json 单一源)。
 
     Returns:
         {"passed": bool, "message": str, "stage_archive_dir": str|None,
-         "snapshot_count": int, "path_key": str|None}
+         "snapshot_count": int, "path_key": str|None, "declared": bool|None}
     """
     try:
-        from tools.schema_loader import get_governance_structure, resolve_governance_path
+        from tools.aipos_cli.workspace_config import STAGE_ARCHIVE_PATH_KEY, project_paths
+        from tools.schema_loader import SchemaLoadError, get_governance_structure
 
         gs = get_governance_structure(repo_root)
         stage_level = (gs.get("timeline_enforcement") or {}).get("stage_level") or {}
-        path_key = str(stage_level.get("path_key") or "stage_archive")
-        stage_dir = resolve_governance_path(path_key, governance_root, repo_root)
+        next_step = str(stage_level.get("next_step") or "").strip()
+        if "{key}" not in next_step:
+            raise SchemaLoadError("config.schema governance_structure.timeline_enforcement.stage_level.next_step 未声明(须含 {key})")
+        next_step = next_step.format(key=STAGE_ARCHIVE_PATH_KEY)
+        resolved = project_paths(governance_root)
+        stage_dir = Path(resolved[STAGE_ARCHIVE_PATH_KEY])  # = workspace_config.stage_archive_root(同一读取口, 已解析一次复用)
+        declared = bool(resolved["declared"][STAGE_ARCHIVE_PATH_KEY])
     except Exception as exc:
         return {
             "passed": False,
@@ -973,18 +980,22 @@ def check_stage_archive_gate(governance_root: Path, repo_root: Path | None = Non
             "stage_archive_dir": None,
             "snapshot_count": 0,
             "path_key": None,
+            "declared": None,
         }
 
+    source = (f"落点来源: project.json paths.{STAGE_ARCHIVE_PATH_KEY} 声明" if declared
+              else f"落点来源: 缺省(project.json 未声明 paths.{STAGE_ARCHIVE_PATH_KEY})")
     if not stage_dir.is_dir():
         return {
             "passed": False,
             "message": (
-                f"Stage gate BLOCK: stage archive dir missing ({stage_dir}). "
-                "阶段快照=转换前提, 缺快照=未关账=不许转换 (AIPOS-R6M 大项A③)."
+                f"Stage gate BLOCK: stage archive dir missing ({stage_dir}; {source}). "
+                f"阶段快照=转换前提, 缺快照=未关账=不许转换 (AIPOS-R6M 大项A③). 出口: {next_step}"
             ),
             "stage_archive_dir": str(stage_dir),
             "snapshot_count": 0,
-            "path_key": path_key,
+            "path_key": STAGE_ARCHIVE_PATH_KEY,
+            "declared": declared,
         }
 
     # 阶段快照 = 目录内 .md 文件, 排除 README/index (索引非阶段快照)。
@@ -996,12 +1007,13 @@ def check_stage_archive_gate(governance_root: Path, repo_root: Path | None = Non
         return {
             "passed": False,
             "message": (
-                f"Stage gate BLOCK: no stage snapshot in {stage_dir} (empty or index-only). "
-                "阶段快照=转换前提, 缺快照=未关账=不许转换 (AIPOS-R6M 大项A③)."
+                f"Stage gate BLOCK: no stage snapshot in {stage_dir} (empty or index-only; {source}). "
+                f"阶段快照=转换前提, 缺快照=未关账=不许转换 (AIPOS-R6M 大项A③). 出口: {next_step}"
             ),
             "stage_archive_dir": str(stage_dir),
             "snapshot_count": 0,
-            "path_key": path_key,
+            "path_key": STAGE_ARCHIVE_PATH_KEY,
+            "declared": declared,
         }
 
     return {
@@ -1009,7 +1021,8 @@ def check_stage_archive_gate(governance_root: Path, repo_root: Path | None = Non
         "message": f"Stage gate OK: {len(snapshots)} stage snapshot(s) in {stage_dir}",
         "stage_archive_dir": str(stage_dir),
         "snapshot_count": len(snapshots),
-        "path_key": path_key,
+        "path_key": STAGE_ARCHIVE_PATH_KEY,
+        "declared": declared,
     }
 
 

@@ -93,7 +93,9 @@ def repo(tmp_path: Path) -> Path:
     # Create project.json so _resolve_active_project_for works
     # AIPOS-F89 件② M17: 「治理账齐全」= 项目声明了卡编年史(paths.foundation_backlog); 未声明的新项目形另有用例(跳过+warning)
     (root / "project.json").write_text(
-        '{"project": "lybra", "paths": {"foundation_backlog": "governance/FOUNDATION-BACKLOG.md"}}\n', encoding="utf-8")
+        # AIPOS-F145 件①: 阶段档案在 governance/stage_archives/(非缺省)= 经 paths.stage_archive_root 声明(close 鲜度检查按声明读)
+        '{"project": "lybra", "paths": {"foundation_backlog": "governance/FOUNDATION-BACKLOG.md", '
+        '"stage_archive_root": "governance/stage_archives"}}\n', encoding="utf-8")
 
     return root
 
@@ -445,7 +447,9 @@ class TestGovernanceAccountInspection:
         (root / "governance" / "decision_log").mkdir(parents=True, exist_ok=True)
         # (AIPOS-F18-fix2 F-D-1: 夹具目录同步 R6M 新位置 governance/stage_archives/)
         (root / "governance" / "stage_archives").mkdir(parents=True, exist_ok=True)
-        (root / "project.json").write_text('{"project": "lybra"}\n', encoding="utf-8")
+        # AIPOS-F145 件①: 非缺省阶段档案位置经 project.json paths.stage_archive_root 声明(close 鲜度检查按声明读)
+        (root / "project.json").write_text('{"project": "lybra", "paths": {"stage_archive_root": "governance/stage_archives"}}\n',
+                                           encoding="utf-8")
 
         decision_log = root / "governance" / "decision_log" / "2026-08.md"
         decision_log.write_text("# August 2026 Decisions\n\n## AIPOS-TEST-003\n\nDecision entry.\n", encoding="utf-8")

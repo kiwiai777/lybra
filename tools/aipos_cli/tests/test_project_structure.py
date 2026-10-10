@@ -29,7 +29,7 @@ from tools.aipos_cli.project_structure import (
     parse_yaml,
     validate_structure,
 )
-from tools.aipos_cli.workspace_config import governance_paths, project_paths
+from tools.aipos_cli.workspace_config import governance_paths, project_paths, stage_archive_root
 
 
 def _imp(structure_file, output: Path, **kwargs):
@@ -279,7 +279,7 @@ class ImportTests(unittest.TestCase):
             self.assertTrue((queue_root / state).is_dir(), state)
         paths = governance_paths(output)
         self.assertTrue(paths["decision_log"].is_file())
-        self.assertTrue(any(p.name.lower() != "readme.md" for p in paths["stage_archive"].glob("*.md")))
+        self.assertTrue(any(p.name.lower() != "readme.md" for p in stage_archive_root(output).glob("*.md")))  # AIPOS-F145
         # 原第二实现产物不再出现
         self.assertFalse((output / ".lybra" / "config.json").exists())
         self.assertFalse((output / "README.md").exists())

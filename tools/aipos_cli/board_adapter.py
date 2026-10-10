@@ -6877,8 +6877,11 @@ def close_task(
         # 保留旧的stage_archive检查作为WARN (不BLOCK)(governance_warnings 已在编年史校验前初始化)
         
         # AIPOS-R6M: stage_archives鲜度检查 (WARN, 不BLOCK - 阶段粒度由转换门票机制执法)
+        # AIPOS-F145 件①: 落点经唯一读取口 stage_archive_root(原写死 governance/stage_archives, 与阶段闸门读的目录不一致)
+        from tools.aipos_cli.workspace_config import stage_archive_root
+
         stage_archive_threshold_days = 30
-        stage_archive_dir = resolved_root / "governance" / "stage_archives"
+        stage_archive_dir = stage_archive_root(resolved_root)
         if stage_archive_dir.is_dir():
             latest_mtime = 0.0
             for entry in stage_archive_dir.rglob("*"):

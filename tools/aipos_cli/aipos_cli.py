@@ -95,12 +95,12 @@ from tools.aipos_cli.workspace_config import (
     get_collaboration_profile,
     project_json_path,
     read_project_json,
-    governance_paths,
     governance_workspace_root,
     resolve_home_root,
     resolve_home_root_with_source,
     resolve_workspace_root,
     scaffold_project,
+    stage_archive_root,
 )
 
 from tools.aipos_cli.home_git import execute_home_git_init, plan_home_git_init
@@ -3347,7 +3347,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     print(f"Created project root: {root} (local scaffold)")
                     print(f"project.json: {project_json_path(root)}")
-                    for snap in sorted((governance_paths(root)["stage_archive"]).glob("*.md")):
+                    for snap in sorted(stage_archive_root(root).glob("*.md")):  # AIPOS-F145: 阶段档案落点唯一读取口
                         if snap.name.lower() != "readme.md":
                             print(f"stage snapshot: {snap}")
                     if collaboration_profile:
