@@ -387,6 +387,8 @@ def select_mode_segments(master_text: str, mode: str) -> str:
 
 
 def _substitute(master_text: str, ctx: dict[str, Any]) -> str:
+    """母本 → 正文: 先按 ctx["executor_mode"] 选段(select_mode_segments, AIPOS-F146), 再替换 `{{key}}` 占位(未声明占位 = 拒)。"""
+    master_text = select_mode_segments(master_text, str(ctx.get("executor_mode") or ""))
     missing: list[str] = []
 
     def repl(match: re.Match[str]) -> str:
@@ -422,7 +424,7 @@ def render_charter(master_text: str, ctx: dict[str, Any]) -> str:
     """渲染物 = 母本(占位替换)+ 项目声明尾节 + 写权限边界节 + 渲染标记行(母本/声明指纹, 无时间戳: 同输入同输出)。"""
     from tools.aipos_cli.write_boundary import build_write_boundary, render_write_boundary_markdown
 
-    body = _substitute(select_mode_segments(master_text, str(ctx.get("executor_mode") or "")), ctx).rstrip("\n")
+    body = _substitute(master_text, ctx).rstrip("\n")
     master_sha = _sha256_text(master_text)
     ctx_sha = render_context_fingerprint(ctx)
     repos_line = ", ".join(f"{k}=`{v}`" for k, v in sorted(ctx["repos"].items())) if ctx["repos"] else f"`{ctx['code_repo']}`"
