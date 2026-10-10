@@ -114,7 +114,12 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     cli_calls: list[list[str]] = []
     real_run = subprocess.run
 
+    from tools.aipos_cli.workstation_wiring import LYBRA_CLI_MODULE
+
     def in_process_run(argv, *args, **kwargs):
+        # AIPOS-F143 件①: 派生 lybra 子命令 = [sys.executable, -m, tools.aipos_cli, …](workstation_wiring.lybra_cli_invocation), 靶场按此识别
+        if isinstance(argv, (list, tuple)) and len(argv) >= 3 and argv[0] == sys.executable and list(argv[1:3]) == ["-m", LYBRA_CLI_MODULE]:
+            argv = ["lybra", *argv[3:]]
         if isinstance(argv, (list, tuple)) and argv and argv[0] == "lybra":
             cli_calls.append(list(argv))
             if argv[1] == "finalize":  # 产品仓所在机的 merge/push/deploy: 同一 writer 替身, 禁在靶场 deploy

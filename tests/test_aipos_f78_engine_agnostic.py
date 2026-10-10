@@ -500,7 +500,11 @@ def test_f78_pre0_1_claim_derives_preauthorized_with_driver_envelope(tmp_path, m
     monkeypatch.setattr(nr, "card_workstation_view", lambda ws, tid, fm: {"worktree_exists": True, "worktree_path": "/wt"})
     res = nr.execute_derived_action(d, gov, None)
     assert res["ok"], res
-    cmd = " ".join(seen[0])
+    from tools.aipos_cli.workstation_wiring import lybra_cli_invocation
+
+    prefix = lybra_cli_invocation([])[0]  # AIPOS-F143 件①: 派生 lybra 子命令 = 同一解释器 -m tools.aipos_cli(不按 PATH 找 lybra)
+    assert seen[0][:len(prefix)] == prefix, seen[0]
+    cmd = " ".join(["lybra", *seen[0][len(prefix):]])
     assert cmd == d["command"], (cmd, d["command"])  # 执行的就是推导核派生的那一条(禁第二条认领命令)
     assert "--autonomy-mode PreAuthorized" in cmd and f"--owner-policy-ref {POLICY}" in cmd, cmd
     assert f"--actor {EXEC}" in cmd and f"--agent-instance {EXEC}" in cmd and "--confirm" in cmd
