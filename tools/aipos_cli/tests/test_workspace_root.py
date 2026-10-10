@@ -14,6 +14,7 @@ from tools.aipos_cli.workspace_config import (
     LEGACY_WORKSPACE_ROOT_ENV,
     active_project_from_config,
     governance_paths,
+    stage_archive_root,
     home_root_from_config,
     resolve_active_project,
     resolve_home_root,
@@ -225,8 +226,9 @@ class ResolutionCoreTests(unittest.TestCase):
         paths = governance_paths(project_root)
         self.assertEqual(paths["decision_log"], project_root / "governance" / "decision_log.md")
         # AIPOS-F89 件② M17: 产品不再声明 project_status / roadmap 等治理文档名(AIPOS-F117 随登记 run-all 校正)
-        self.assertEqual(set(paths), {"decision_log", "stage_archive", "workspace_artifacts"})
-        self.assertEqual(paths["stage_archive"], project_root / "stage_archive")
+        # AIPOS-F145 件①: 阶段档案目录移出本表, 唯一读取口 stage_archive_root(未声明 = 缺省 <根>/stage_archive)
+        self.assertEqual(set(paths), {"decision_log", "workspace_artifacts"})
+        self.assertEqual(stage_archive_root(project_root), project_root / "stage_archive")
         self.assertEqual(paths["workspace_artifacts"], project_root / "workspace_artifacts")
         # ruling 1=B: decision_log is a single .md file, not a directory
         self.assertTrue(str(paths["decision_log"]).endswith("decision_log.md"))

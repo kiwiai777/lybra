@@ -197,8 +197,11 @@ def add_stage(
 
     声明来源: config.schema governance_structure.file_declarations.stage_archive_snapshot
     """
+    from tools.aipos_cli.workspace_config import stage_archive_root
+
     decl = _get_file_declaration("stage_archive_snapshot", repo_root)
-    target_dir = _resolve_target_dir(decl["path_key"], governance_root, repo_root)
+    # AIPOS-F145 件①: 落点经唯一读取口 stage_archive_root(project.json paths.stage_archive_root 声明; 未声明 = 声明 path_key 所指缺省)
+    target_dir = stage_archive_root(governance_root)
 
     # 命名: <date>_<stage-name>.md
     today = _today_str()

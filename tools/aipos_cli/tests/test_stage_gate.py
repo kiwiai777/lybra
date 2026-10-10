@@ -20,7 +20,7 @@ def test_stage_gate_block_missing_dir(tmp_path):
     assert result["passed"] is False
     assert "missing" in result["message"]
     assert result["snapshot_count"] == 0
-    assert result["path_key"] == "stage_archive"
+    assert result["path_key"] == "stage_archive_root"  # AIPOS-F145: 落点经 project.json paths 键(未声明 = 缺省)
 
 
 def test_stage_gate_block_empty_dir(tmp_path):

@@ -76,7 +76,7 @@ def _structure_file(path: Path, name: str = "from-file") -> Path:
 
 def _assert_project_new_shape(root: Path, name: str, code_repo: str) -> None:
     from tools.aipos_cli.task_loader import QUEUE_SKELETON_STATES, queue_root_for
-    from tools.aipos_cli.workspace_config import governance_paths
+    from tools.aipos_cli.workspace_config import governance_paths, stage_archive_root
 
     decl = json.loads((root / "project.json").read_text(encoding="utf-8"))
     assert decl["project"] == name and decl["code_repo"] == code_repo and decl["config_version"] == 1, decl
@@ -84,7 +84,7 @@ def _assert_project_new_shape(root: Path, name: str, code_repo: str) -> None:
         assert (Path(queue_root_for(root)) / state).is_dir(), state
     paths = governance_paths(root)
     assert paths["decision_log"].is_file()
-    snaps = [p for p in paths["stage_archive"].glob("*.md") if p.name.lower() != "readme.md"]
+    snaps = [p for p in stage_archive_root(root).glob("*.md") if p.name.lower() != "readme.md"]  # AIPOS-F145: 唯一读取口
     assert snaps, "project new 首份阶段快照「项目创建」"
     assert (root / "migration-checklist.md").is_file()
     # 原第二实现的产物不再出现

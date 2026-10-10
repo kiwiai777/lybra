@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
-from tools.schema_loader import get_governance_structure, resolve_governance_path
+from tools.schema_loader import resolve_governance_path
 
 
 def _parse_date(date_str: str | None) -> datetime | None:
@@ -56,10 +56,12 @@ def _get_stage_snapshot_info(governance_root: Path, repo_root: Path | None = Non
     """
     from tools.aipos_cli.finalize import check_stage_archive_gate
     
+    from tools.aipos_cli.workspace_config import stage_archive_root
+
     gate_result = check_stage_archive_gate(governance_root, repo_root)
-    
-    gs = get_governance_structure(repo_root)
-    stage_dir = resolve_governance_path("stage_archive", governance_root, repo_root)
+
+    # AIPOS-F145 件①: 阶段档案落点经唯一读取口(project.json paths.stage_archive_root 声明, 缺省 = governance_structure)
+    stage_dir = stage_archive_root(governance_root)
     
     if not stage_dir.is_dir():
         return {

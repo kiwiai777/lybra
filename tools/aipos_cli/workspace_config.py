@@ -508,17 +508,17 @@ def resolve_project_root(home_root: str | Path, project: str) -> Path:
 
 
 def governance_paths(project_root: str | Path) -> dict[str, Path]:
-    """Per-project governance + archive + artifact paths under a resolved project root.
+    """Per-project governance + artifact paths under a resolved project root.
 
     Ruling 1=B: decision_log is a single file `governance/decision_log.md` (directory-ization
     is a separate later slice). Ruling 7: workspace_artifacts is truth and lives under the
     project root. Returns absolute Paths; not yet consumed (board_adapter adoption is Slice 1).
+    AIPOS-F145 件①: 阶段档案目录不在此(原 root/"stage_archive" 字面量删除), 唯一读取口 stage_archive_root(project.json 声明)。
     """
     root = Path(project_root)
     governance = root / "governance"
     return {
         "decision_log": governance / "decision_log.md",
-        "stage_archive": root / "stage_archive",
         "workspace_artifacts": root / "workspace_artifacts",
     }
 
@@ -699,7 +699,10 @@ def declared_project_id(governance_root: str | Path) -> str:
 
 PROJECT_PATH_KEYS = ("return_root", "verdict_root", "queue_root", "task_cards_root", "manual_gate_mode", "finalize_mode",
                      "foundation_backlog", "hard_rules_source", "policies_root",  # AIPOS-F103 件④: 信封目录
-                     "loop_runs_root")  # AIPOS-F131 件①: loop 运行记录落点
+                     "loop_runs_root",  # AIPOS-F131 件①: loop 运行记录落点
+                     "stage_archive_root")  # AIPOS-F145 件①: 阶段档案目录(缺省 = 声明 default_from)
+#: AIPOS-F145 件①: 阶段档案落点键(唯一读取口 stage_archive_root; 阶段闸门拒因出口按此键渲染)
+STAGE_ARCHIVE_PATH_KEY = "stage_archive_root"
 # AIPOS-F78B 件②: 非路径键(值域读声明 enum), 与布尔 manual_gate_mode 一样不做路径解析
 PROJECT_ENUM_KEYS = ("finalize_mode",)
 
@@ -733,6 +736,8 @@ def project_paths(governance_root: str | Path, *, project: dict[str, Any] | None
     - manual_gate_mode: paths 段优先, 兼容顶层 project.json manual_gate_mode(F73C 件①)。
     - project.json 读失败 = 精确捕获 + warning + 视为未声明(不静默吞)。
     - AIPOS-F125: project 给出 = 校验/解析这份(将写入的)内容而非盘上文件(update_project_json 写前预检, 同一读取口)。
+    - AIPOS-F145 件①: stage_archive_root(阶段档案目录)无 default 字面量, 缺省经声明 default_from 取
+      governance_structure.paths.stage_archive(_declared_default_from); 便捷读取口 stage_archive_root()。
     """
     root = Path(governance_root)
     decl = _project_paths_declaration()
@@ -749,6 +754,8 @@ def project_paths(governance_root: str | Path, *, project: dict[str, Any] | None
     for key in PROJECT_PATH_KEYS:
         spec = decl.get(key) or {}
         default = spec.get("default")
+        if default in (None, "") and spec.get("default_from"):
+            default = _declared_default_from(key, spec["default_from"])  # AIPOS-F145 件①: 缺省取既有声明, 不写第二份
         declared = key in raw_paths and raw_paths.get(key) not in (None, "")
         value = raw_paths.get(key) if declared else default
         if key == "manual_gate_mode":
@@ -777,6 +784,28 @@ def project_paths(governance_root: str | Path, *, project: dict[str, Any] | None
             result[key] = path if path.is_absolute() else root / path
         result["declared"][key] = declared
     return result
+
+
+def _declared_default_from(key: str, ref: Any) -> str:
+    """AIPOS-F145 件①: project_json.paths.<key>.default_from 解析——只认 ``governance_structure.paths.<键>``,
+    取该键声明的 path(相对治理根, 去首尾 /)。形不合 / 所指键缺 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, get_governance_path
+
+    prefix = "governance_structure.paths."
+    text = str(ref or "").strip()
+    if not text.startswith(prefix) or not text[len(prefix):]:
+        raise SchemaLoadError(f"config.schema.json project_json.paths.{key}.default_from={text!r} 须为 {prefix}<键>")
+    rel = str(get_governance_path(text[len(prefix):]).get("path") or "").strip().strip("/")
+    if not rel:
+        raise SchemaLoadError(f"config.schema.json {text}.path 为空(project_json.paths.{key}.default_from)")
+    return rel
+
+
+def stage_archive_root(governance_root: str | Path) -> Path:
+    """AIPOS-F145 件①: 项目阶段档案目录的唯一读取口 = project_paths()[STAGE_ARCHIVE_PATH_KEY]
+    (project.json paths.stage_archive_root 声明; 未声明 = 声明 default_from 所指 governance_structure.paths.stage_archive)。
+    读写阶段档案的点(阶段闸门 / brief / governance-commit / close 鲜度 / governance add stage / 脚手架)一律经此, 禁直接解析。"""
+    return Path(project_paths(governance_root)[STAGE_ARCHIVE_PATH_KEY])
 
 
 # ---------------------------------------------------------------------------
@@ -1509,7 +1538,7 @@ def scaffold_project(
     (root / "governance").mkdir(parents=True, exist_ok=True)
 
     paths = governance_paths(root)
-    paths["stage_archive"].mkdir(parents=True, exist_ok=True)
+    stage_archive_root(root).mkdir(parents=True, exist_ok=True)  # AIPOS-F145 件①: 阶段档案落点唯一读取口(新项目 = 声明缺省)
     paths["workspace_artifacts"].mkdir(parents=True, exist_ok=True)
 
     decision_log = paths["decision_log"]  # ruling 1=B: single file

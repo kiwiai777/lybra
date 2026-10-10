@@ -313,6 +313,11 @@
               "type": "string",
               "optional": true,
               "description": "AIPOS-F89 件② M17: 硬规矩来源手册(相对治理根或绝对; 内含「## 0.5. 硬规矩」节与可选「## 6.9 阻塞分诊与排查路径」节)。声明了 = hard_rules_extractor 从该文件提取, 章程「单一真相源」行指向它; 未声明 = 跳过提取并 warning, 章程以母本自带的硬规矩条文为准(模板自带)。原写死的命令手册文件名删除。"
+            },
+            "stage_archive_root": {
+              "type": "string",
+              "default_from": "governance_structure.paths.stage_archive",
+              "description": "AIPOS-F145 件①: 项目阶段档案(阶段快照)目录(相对治理根或绝对)。未声明 = default_from 所指 governance_structure.paths.stage_archive(lybra 缺省布局 <治理根>/stage_archive/, 存量行为不变); 人肉期接入的项目阶段档案在别处(如 governance/stage_archives/)时经 `lybra project set-paths --key stage_archive_root --value <相对治理根路径>` 声明。唯一读取口 workspace_config.stage_archive_root(= project_paths); 读写方: finalize 阶段闸门 check_stage_archive_gate(判据 timeline_enforcement.stage_level 不变: 目录内 .md 排除 README/index)、brief 阶段坐标、governance-commit 完整性、close 鲜度 WARN、governance add stage 落点、project new 脚手架。default_from 只认 governance_structure.paths.<键>(解析 = schema_loader.get_governance_path 的 path, 相对治理根)。"
             }
           }
         },
@@ -762,7 +767,7 @@
       "stage_archive": {
         "relative_to": "governance_root",
         "path": "stage_archive/",
-        "description": "Stage completion archive directory (AIPOS-R6M 大项A③: stage粒度门票机制 — 单一源, 与 governance_worktree whitelist 同用此键)",
+        "description": "Stage completion archive directory (AIPOS-R6M 大项A③: stage粒度门票机制 — 单一源, 与 governance_worktree whitelist 同用此键)。AIPOS-F145: 本键 = 缺省落点; 项目可经 project.json paths.stage_archive_root 声明他处(读写一律经唯一读取口 workspace_config.stage_archive_root, 不直接解析本键)",
         "structure": "<date>_<stage-name>.md (历史快照, 最新一篇=当前坐标)",
         "semantics": "阶段粒度·低频·阶段关账才写 - 三个月后的人只读最新一篇+其后decision_log即可上手"
       },
@@ -877,7 +882,8 @@
       "stage_level": {
         "trigger": "stage transition actions (阶段关账/迁移门/发布门, e.g. finalize)",
         "path_key": "stage_archive",
-        "check": "governance_structure.paths.stage_archive 指向的目录存在且含至少一篇阶段快照(.md, 排除 README.md/index)",
+        "check": "项目阶段档案目录(唯一读取口 workspace_config.stage_archive_root = project.json paths.stage_archive_root, 未声明 = governance_structure.paths.<path_key>)存在且含至少一篇阶段快照(.md, 排除 README.md/index)",
+        "next_step": "若项目阶段档案在别处, 用 `lybra project set-paths --key {key} --value <相对治理根路径>` 声明(在该项目治理根下运行或加 --workspace-root <治理根>; 缺省预演给 diff, 加 --confirm 写入)",
         "enforcement": "BLOCK if missing (门票机制)",
         "rationale": "阶段快照=转换前提, 缺快照=未关账=不许转换"
       }

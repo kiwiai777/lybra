@@ -648,10 +648,13 @@ def check_governance_completeness(
                 "error": str(exc),
             }
     
-    # ③ 阶段快照 (stage_archive/)
-    # AIPOS-R7A2 FIX-2: stage_archive 路径从 schema 解析,失败显式报错 (同 finalize.py 模式)
+    # ③ 阶段快照
+    # AIPOS-R7A2 FIX-2: 路径解析失败显式报错 (同 finalize.py 模式)
+    # AIPOS-F145 件①: 落点经唯一读取口 stage_archive_root(project.json paths.stage_archive_root 声明, 缺省 = governance_structure)
     try:
-        stage_archive_dir = resolve_governance_path("stage_archive", governance_root, repo_root)
+        from tools.aipos_cli.workspace_config import stage_archive_root
+
+        stage_archive_dir = stage_archive_root(governance_root)
         
         stage_snapshots = []
         if stage_archive_dir.is_dir():
