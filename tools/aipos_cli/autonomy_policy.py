@@ -21,7 +21,7 @@ import sys
 from datetime import datetime, timezone
 from tools.aipos_cli.clock import utc_now
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 from tools.aipos_cli.record_writer import record_root, render_markdown
@@ -78,7 +78,7 @@ def trace_envelope(payload: dict[str, Any]) -> None:
 
 # ---------------------------------------------------------------------------
 # AIPOS-F142 件②: [ENVELOPE_TRACE] 输出开关——只在发射处(trace_envelope)一处判定, 声明只在 verbs.schema envelope_trace 一处。
-#   CLI(lybra 入口 main)缺省关: --verbose(挂在 envelope_trace.verbose_commands 所列命令上)或调试开关环境变量(debug_env)开;
+#   CLI(lybra 入口 main: decide_cli_envelope_trace, cli_envelope_trace_entry 收尾恢复)缺省关: --verbose(挂在 envelope_trace.verbose_commands 所列命令上)或调试开关环境变量(debug_env)开;
 #   in-process 嵌套调用(loop 驱动器执行派生命令)沿用外层决定。不经 CLI 入口的进程(门 MCP 服务, journald 留痕, AIPOS-PRERELEASE-1)
 #   无 CLI 决定 = 取 non_cli_default_enabled(缺省开, 门侧证据照旧)。进程内全局(门服务为多线程, 不用 ContextVar)。
 # ---------------------------------------------------------------------------
@@ -126,15 +126,29 @@ def envelope_trace_output(enabled: bool | None) -> Iterator[None]:
         _TRACE_SWITCH["enabled"] = previous
 
 
-def cli_envelope_trace(verbose: bool) -> contextlib.AbstractContextManager[None]:
-    """CLI 入口(aipos_cli.main)唯一调用: --verbose 或调试环境变量 = 开; 已在外层 CLI 决定之内(in-process 嵌套)= 沿用;
-    否则 = 声明 cli_default_enabled(缺省关)。"""
+def decide_cli_envelope_trace(verbose: bool) -> None:
+    """CLI 入口(aipos_cli.main, 解析参数后)唯一调用: --verbose 或调试环境变量 = 开; 已在外层 CLI 决定之内(in-process 嵌套,
+    如 loop 驱动器执行派生命令)= 沿用外层; 否则 = 声明 cli_default_enabled(缺省关)。恢复原状由 cli_envelope_trace_entry 负责。"""
     decl = envelope_trace_declaration()
     if verbose or _debug_env_on(decl):
-        return envelope_trace_output(True)
-    if _TRACE_SWITCH["enabled"] is not None:
-        return envelope_trace_output(None)
-    return envelope_trace_output(bool(decl["cli_default_enabled"]))
+        _TRACE_SWITCH["enabled"] = True
+    elif _TRACE_SWITCH["enabled"] is None:
+        _TRACE_SWITCH["enabled"] = bool(decl["cli_default_enabled"])
+
+
+def cli_envelope_trace_entry(func: Callable[..., Any]) -> Callable[..., Any]:
+    """CLI 入口装饰器: 调用结束(含异常 / SystemExit)恢复开关原状——嵌套调用的决定不泄漏给外层, 进程内多次调用互不影响。"""
+    import functools
+
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        previous = _TRACE_SWITCH["enabled"]
+        try:
+            return func(*args, **kwargs)
+        finally:
+            _TRACE_SWITCH["enabled"] = previous
+
+    return wrapper
 
 
 def attach_verbose_flags(root_parser: Any) -> None:

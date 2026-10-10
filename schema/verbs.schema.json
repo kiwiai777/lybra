@@ -146,7 +146,7 @@
     }
   },
   "envelope_trace": {
-    "description": "AIPOS-F142 件②: 门侧信封判定诊断行([ENVELOPE_TRACE], autonomy_policy.trace_envelope 逐谓词留痕, 走 stderr)的输出开关唯一声明。开关只在发射处一处判定(autonomy_policy.envelope_trace_enabled), 所有调用方受同一开关约束: CLI(lybra 入口 aipos_cli.main → cli_envelope_trace)缺省关, --verbose(挂在 verbose_commands 所列命令, 唯一挂载口 autonomy_policy.attach_verbose_flags)或调试环境变量 debug_env 开; in-process 嵌套调用(loop 驱动器执行派生命令)沿用外层决定; 不经 CLI 入口的进程(门 MCP 服务, journald 留痕 AIPOS-PRERELEASE-1)取 non_cli_default_enabled。只开关调试轨迹输出, 信封判定逻辑与结果不变; 门拒时的拒因与原因链由各命令照常输出。",
+    "description": "AIPOS-F142 件②: 门侧信封判定诊断行([ENVELOPE_TRACE], autonomy_policy.trace_envelope 逐谓词留痕, 走 stderr)的输出开关唯一声明。开关只在发射处一处判定(autonomy_policy.envelope_trace_enabled), 所有调用方受同一开关约束: CLI(lybra 入口 aipos_cli.main → decide_cli_envelope_trace, 调用结束由 cli_envelope_trace_entry 恢复)缺省关, --verbose(挂在 verbose_commands 所列命令, 唯一挂载口 autonomy_policy.attach_verbose_flags)或调试环境变量 debug_env 开; in-process 嵌套调用(loop 驱动器执行派生命令)沿用外层决定; 不经 CLI 入口的进程(门 MCP 服务, journald 留痕 AIPOS-PRERELEASE-1)取 non_cli_default_enabled。只开关调试轨迹输出, 信封判定逻辑与结果不变; 门拒时的拒因与原因链由各命令照常输出。",
     "cli_default_enabled": false,
     "non_cli_default_enabled": true,
     "verbose_flag": "--verbose",

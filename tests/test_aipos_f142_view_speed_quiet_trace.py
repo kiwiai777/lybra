@@ -297,14 +297,18 @@ def test_item2_single_switch_semantics_and_gate_keeps_trace():
     decl = _trace_decl()
     assert decl["cli_default_enabled"] is False and decl["non_cli_default_enabled"] is True
     assert ap.envelope_trace_enabled() is True  # 测试进程未经 CLI 入口 = 门侧口径
-    with ap.cli_envelope_trace(False):
-        assert ap.envelope_trace_enabled() is False
-        with ap.cli_envelope_trace(False):  # loop 驱动器 in-process 执行派生命令: 沿用外层
-            assert ap.envelope_trace_enabled() is False
-    with ap.cli_envelope_trace(True):
-        with ap.cli_envelope_trace(False):
-            assert ap.envelope_trace_enabled() is True
-    assert ap.envelope_trace_enabled() is True  # 区段外恢复
+
+    @ap.cli_envelope_trace_entry
+    def fake_cli(verbose: bool, inner=None):  # 与 aipos_cli.main 同一决定点 + 同一收尾恢复
+        ap.decide_cli_envelope_trace(verbose)
+        seen = ap.envelope_trace_enabled()
+        return (seen, inner()) if inner else (seen, None)
+
+    assert fake_cli(False) == (False, None) and fake_cli(True) == (True, None)
+    assert fake_cli(False, lambda: fake_cli(False)) == (False, (False, None))  # loop 驱动器 in-process 执行派生命令: 沿用外层
+    assert fake_cli(True, lambda: fake_cli(False)) == (True, (True, None))
+    assert fake_cli(False, lambda: fake_cli(True)) == (False, (True, None))
+    assert ap.envelope_trace_enabled() is True  # 调用结束恢复(不泄漏)
 
     policy = {"policy_id": "pol_x", "mode": "PreAuthorized", "status": "active", "approved_by_owner": True,
               "active_from": "2026-01-01T00:00:00Z", "expires_at": "2999-01-01T00:00:00Z", "agent_or_role": "someone-else",
@@ -315,7 +319,7 @@ def test_item2_single_switch_semantics_and_gate_keeps_trace():
               now=datetime(2026, 10, 10, tzinfo=timezone.utc), released_count=0)
     with _trace_sink() as loud:
         on = ap.match_claim_envelope(**kw)
-    with ap.cli_envelope_trace(False), _trace_sink() as quiet:
+    with ap.envelope_trace_output(False), _trace_sink() as quiet:
         off = ap.match_claim_envelope(**kw)
     assert on == off and on[0] is False and "not covered" in on[1] and on[2] == ap.ENVELOPE_ERROR_AGENT_NOT_COVERED  # 拒因不丢
     assert TRACE in loud.getvalue() and quiet.getvalue() == ""
@@ -331,6 +335,7 @@ def test_item2_switch_declared_once_and_flags_mounted_from_declaration():
     sources = {p.name: p.read_text(encoding="utf-8") for p in (REPO_ROOT / "tools" / "aipos_cli").glob("*.py")}
     assert not [n for n, s in sources.items() if "_ENVELOPE_LOGGER.disabled" in s or 'logging.getLogger("lybra.envelope").disabled' in s]
     assert not [n for n, s in sources.items() if n != "autonomy_policy.py" and "envelope_trace_output(" in s]
+    assert "decide_cli_envelope_trace(" in sources["aipos_cli.py"] and "@cli_envelope_trace_entry" in sources["aipos_cli.py"]
     assert '"--verbose"' not in sources["aipos_cli.py"] and '"--verbose"' not in sources["loop_run_record.py"]
     assert sources["autonomy_policy.py"].count("def trace_envelope(") == 1
     parser = build_parser()

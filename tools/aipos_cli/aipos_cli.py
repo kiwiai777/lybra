@@ -65,6 +65,7 @@ from tools.aipos_cli.owner_decision_writer import build_owner_decision_record, l
 from tools.aipos_cli.planner_loop_mvp import build_planner_loop_mvp_preview
 from tools.aipos_cli.planner_iteration_writer import append_planner_iteration, load_iteration_payload_from_json
 from tools.aipos_cli.preview import build_preview
+from tools.aipos_cli.autonomy_policy import cli_envelope_trace_entry, decide_cli_envelope_trace  # AIPOS-F142 件②
 from tools.aipos_cli.queue_mutation import mutate_queue_task
 from tools.aipos_cli.records import load_records, expected_session_record_path
 from tools.aipos_cli.service_mode import (
@@ -2456,17 +2457,12 @@ def _workspace_roots_command(args: argparse.Namespace) -> int:
     return 1 if errors else 0
 
 
+@cli_envelope_trace_entry  # AIPOS-F142 件②: 本次 CLI 调用结束即恢复 [ENVELOPE_TRACE] 开关原状(in-process 嵌套调用不泄漏)
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     # AIPOS-F142 件②: [ENVELOPE_TRACE] 唯一开关的 CLI 决定点(缺省关; --verbose / 调试环境变量开; in-process 嵌套沿用外层)
-    from tools.aipos_cli.autonomy_policy import cli_envelope_trace
-
-    with cli_envelope_trace(bool(getattr(args, "verbose", False))):
-        return _dispatch(parser, args)
-
-
-def _dispatch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    decide_cli_envelope_trace(bool(getattr(args, "verbose", False)))
     if not args.command:
         parser.print_help()
         return 2

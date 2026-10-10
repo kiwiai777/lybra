@@ -841,7 +841,7 @@ def loop_status_cli(args: Any) -> int:
             return int(lane_view_declaration()["invalid_lane_exit_code"])
         contract = load_loop_contract()
         # AIPOS-F138 件③ → AIPOS-F142 件②: 信封判定诊断行([ENVELOPE_TRACE])的开关只在发射处一处(autonomy_policy.trace_envelope ←
-        # CLI 入口 cli_envelope_trace, --verbose 开), 本处不再另设
+        # CLI 入口 decide_cli_envelope_trace, --verbose 开), 本处不再另设
         if wait is None:
             report = loop_status(governance_root, task_id, contract=contract, lane=lane,
                                  include_frozen=bool(getattr(args, "include_frozen", False)))
