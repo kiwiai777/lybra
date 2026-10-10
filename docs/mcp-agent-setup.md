@@ -88,6 +88,18 @@ overwritten:
    - `lybra loop status --task-id <card>` names one card explicitly, so its run is shown even when the card is frozen (marked
      `[frozen]`).
 
+6. **Run commands in the project's governance root, or name it.** When you run `lybra` commands — over ssh included — `cd` to
+   the project's governance root (the directory holding `project.json` and the queue) first, or pass
+   `--workspace-root <governance root>`. The flag works both before the subcommand (`lybra --workspace-root <root> needs-owner`)
+   and after it (`lybra needs-owner --workspace-root <root>`) with the same meaning; giving both with different roots is refused
+   (`GOVERNANCE_ROOT_CONFLICT`). Without the flag the governance root containing the current directory is used. Outside any
+   governance root and without the flag, the command is refused (`GOVERNANCE_ROOT_UNRESOLVED`, naming both ways out) — it never
+   falls back to the home's active project, so one advisor cannot silently read another project's queue. `lybra next`,
+   `lybra needs-owner`, `lybra brief`, `lybra loop status`, `lybra state lint` and `lybra queue` print the resolved project and
+   where it came from as their first line (on stderr with `--json`, so stdout stays pure JSON). Read and write commands share one
+   resolver (`tools/aipos_cli/workspace_config.py` `resolve_governance_root`; order, labels and the list of commands that take
+   the subcommand-level flag are declared once in `schema/verbs.schema.json` `governance_root_resolution`).
+
 A project with a single advisor needs none of this: `--actor` stays optional and existing envelopes keep working unchanged.
 
 ## Execution mode (who does the work)

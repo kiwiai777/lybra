@@ -832,7 +832,7 @@ def loop_status_cli(args: Any) -> int:
     task_id = getattr(args, "task_id", None)
     wait = getattr(args, "wait", None)
     try:
-        governance_root = Path(getattr(args, "workspace_root", None) or _find_repo_root_for_args(args))
+        governance_root = Path(_find_repo_root_for_args(args))  # AIPOS-F144: 唯一薄壳(全局/子命令级 --workspace-root 同义)
         # AIPOS-F133 件②: --lane 校验(不在声明 = 拒, 退出码读 verbs.schema lane_view.invalid_lane_exit_code)
         try:
             lane = resolve_lane_filter(governance_root, getattr(args, "lane", None))

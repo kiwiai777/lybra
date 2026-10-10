@@ -1347,29 +1347,19 @@ def governance_workspace_root(
 ) -> Path:
     """AIPOS-F88 件③: 「治理工作区根」唯一命名入口(队列 / 卡 / 记录 / 信封 / project.json 所在根)。
 
-    序(每级都以唯一结构判据 has_workspace_queue 验证, 不看路径名; 禁按任何项目布局回退):
-      1. explicit: CLI --workspace-root / --governance-root / --repo-root, 或调用方转交的 env 值(向后兼容: 显式永远最高)
-      2. 声明: 自 start(缺省 cwd)向上首个 .lybra/connection.json 的 governance_root(缺则 workspace_root)
-      3. 结构识别: resolve_workspace_root(AIPOS-226 唯一优先级梯: LYBRA_WORKSPACE_ROOT / LYBRA_HOME_ROOT /
-         in-workspace config / 向上队列结构 / 全局 ~/.lybra/config.json home_root + active_project)
-    显式或声明指向非治理工作区 = FileNotFoundError(声明错了不猜); 全不可解析 = FileNotFoundError(带出口)。
+    AIPOS-F144 件①: 实现委托 resolve_governance_root(读写共用唯一实现; 本入口 = 全局视图: established=False,
+    allow_active_project=True)。序: explicit(CLI --workspace-root / --governance-root / --repo-root, 或调用方转交的环境变量值)
+    > 环境变量 LYBRA_WORKSPACE_ROOT > 自 start(缺省 cwd)向上首个已建治理根 > 工位 .lybra/connection.json 声明的 governance_root
+    (缺则 workspace_root)> 不在任何治理根内时才走 AIPOS-226 home 模型(活动项目)。原「结构识别」一级先查向上配置, 撞到
+    ~/.lybra/config.json(全局配置)即进 home 模型、先于所在治理根 —— 他项目治理根下解析成活动项目(F144 病理), 已随委托修正。
+    每级都以唯一结构判据 has_workspace_queue 验证, 不看路径名; 显式或声明指向非治理工作区 / 全不可解析 = FileNotFoundError(带出口)。
     """
-    if explicit:
-        root = Path(explicit).expanduser().resolve()
-        if not has_workspace_queue(root):
-            raise FileNotFoundError(f"显式治理根 {root} 不是治理工作区(无声明的队列根); 出口: 传入项目治理根(含 project.json 与队列)")
-        return root
-    declared = _declared_root_from_connection(start)
-    if declared is not None:
-        root = declared.resolve()
-        if not has_workspace_queue(root):
-            raise FileNotFoundError(f".lybra/connection.json 声明的治理根 {root} 不是治理工作区(无声明的队列根); 出口: 修正 connection.json#governance_root")
-        return root
     try:
-        return resolve_workspace_root(start, env=env)
-    except (FileNotFoundError, ValueError) as exc:
+        return resolve_governance_root(explicit, start=start, env=env, established=False,
+                                       allow_active_project=True)["project_root"]
+    except ProjectTargetError as exc:
         raise FileNotFoundError(
-            f"治理工作区根不可解析(无显式参数 / 无 connection.json 声明 / 结构识别失败: {exc}); "
+            f"治理工作区根不可解析: {exc.detail}; "
             "出口: 传 --workspace-root <治理根>, 或在工位 .lybra/connection.json 声明 governance_root"
         ) from exc
 
@@ -2031,23 +2021,25 @@ def _target_resolution_declaration() -> dict[str, Any]:
     sources = decl.get("sources") if isinstance(decl, dict) else None
     codes = decl.get("reject_codes") if isinstance(decl, dict) else None
     if (not isinstance(sources, dict) or not all(isinstance(sources.get(k), str) and sources[k]
-                                                 for k in ("explicit", "explicit_matches_root", "workspace_root", "cwd_root"))
+                                                 for k in ("explicit", "explicit_matches_root"))
             or not isinstance(codes, dict)
             or not all(isinstance(codes.get(k), str) and codes[k] for k in ("PROJECT_TARGET_UNRESOLVED", "PROJECT_TARGET_CONFLICT"))):
         raise SchemaLoadError("verbs.schema.json two_phase_protocol.project_json_writers.target_resolution(sources {explicit, "
-                              "explicit_matches_root, workspace_root, cwd_root} / reject_codes {PROJECT_TARGET_UNRESOLVED, "
+                              "explicit_matches_root} / reject_codes {PROJECT_TARGET_UNRESOLVED, "
                               "PROJECT_TARGET_CONFLICT})未声明齐")
     return decl
 
 
-def enclosing_governance_root(start: str | Path | None = None) -> Path | None:
+def enclosing_governance_root(start: str | Path | None = None, *, established: bool = True) -> Path | None:
     """自 start(缺省 cwd)向上首个已建治理根(结构判据 has_workspace_queue(established=True): project.json + 声明的队列根)。
-    无 = None。只看结构, 不读 env / 全局配置 / 活动项目。某级 project.json 坏 = 原异常上抛(声明坏了不猜)。"""
+    established=False(AIPOS-F144 读命令): 向上首个有声明队列根的目录(含无 project.json 的存量队列根, 同原 AIPOS-226 梯
+    「向上队列结构」一级)。无 = None。只看结构, 不读 env / 全局配置 / 活动项目。某级 project.json 坏 = 原异常上抛(声明坏了不猜)。
+    调用方只有 resolve_governance_root(AIPOS-F144 唯一实现)。"""
     current = Path(start if start is not None else Path.cwd()).expanduser().resolve()
     if current.is_file():
         current = current.parent
     for candidate in [current, *current.parents]:
-        if has_workspace_queue(candidate, established=True):
+        if has_workspace_queue(candidate, established=established):
             return candidate
     return None
 
@@ -2065,20 +2057,27 @@ def resolve_project_write_target(
       - 给 name: 目标 = <home>/<name>(resolve_project_root, 未建 = PROJECT_NOT_ESTABLISHED 原样上抛);
         有所在治理根而其声明 ≠ name, 或 <home>/<name> 不是该根 = PROJECT_TARGET_CONFLICT(列出两者)。
       - 不给 name: 目标 = 所在治理根, 项目 = 其声明; 无所在治理根 / 未声明 project = PROJECT_TARGET_UNRESOLVED。
-    从不读 home 级活动项目(LYBRA_ACTIVE_PROJECT / 全局 active_project / 单项目回落)。"""
+    从不读 home 级活动项目(LYBRA_ACTIVE_PROJECT / 全局 active_project / 单项目回落)。
+    AIPOS-F144 件①: 「所在治理根」的定位委托 resolve_governance_root(读写共用唯一实现; established=True, declared_sources=False
+    = 只认当场显式 --workspace-root 与所在目录, 不认进程环境变量 / 工位声明, 不开全局视图 —— 本函数原语义不变)。"""
     decl = _target_resolution_declaration()
     sources, codes = decl["sources"], decl["reject_codes"]
     clean = str(name).strip() if name is not None else ""
-    if workspace_root is not None and str(workspace_root).strip():
-        located = Path(workspace_root).expanduser().resolve()
-        located_source = sources["workspace_root"]
-        if not has_workspace_queue(located, established=True):
+    explicit_root = workspace_root is not None and bool(str(workspace_root).strip())
+    try:
+        hit: dict[str, Any] | None = resolve_governance_root(workspace_root if explicit_root else None, start=start,
+                                                             established=True, declared_sources=False)
+    except ProjectTargetError as exc:
+        if explicit_root:  # 显式给的根不是已建治理根 = 拒(带出该根与出口)
+            located_label = governance_root_declaration()["sources"]["workspace_root"]
             raise ProjectTargetError("PROJECT_TARGET_UNRESOLVED",
-                                     f"{located_source} {located} 不是已建治理根(无 project.json 或声明的队列根)。"
-                                     f"{codes['PROJECT_TARGET_UNRESOLVED']}")
-    else:
-        located = enclosing_governance_root(start)
-        located_source = sources["cwd_root"]
+                                     f"{located_label} {Path(str(workspace_root)).expanduser().resolve()} 不是已建治理根"
+                                     f"(无 project.json 或声明的队列根)。{codes['PROJECT_TARGET_UNRESOLVED']}") from exc
+        if not clean:  # 无项目名且定位不出(或环境变量 / 工位声明指向非治理根) = 拒, 原因原样带出
+            raise ProjectTargetError("PROJECT_TARGET_UNRESOLVED", f"{exc.detail} {codes['PROJECT_TARGET_UNRESOLVED']}") from exc
+        hit = None  # 显式项目名 → <home>/<name>
+    located: Path | None = hit["project_root"] if hit else None
+    located_source = hit["label"] if hit else ""
     declared: str | None = None
     if located is not None:
         try:
@@ -2106,6 +2105,141 @@ def resolve_project_write_target(
         raise ProjectTargetError("PROJECT_TARGET_UNRESOLVED", f"当前目录 {here} 向上无已建治理根。{codes['PROJECT_TARGET_UNRESOLVED']}")
     return {"project": declared, "project_root": located, "project_json": project_json_path(located),
             "source": f"{located_source} {located}"}
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F144 件①: 治理根解析的唯一实现(读写共用)。F127 的 resolve_project_write_target 原自带「显式 --workspace-root / 所在治理根」
+# 定位, 读类命令却走 AIPOS-226 优先级梯(向上找到 ~/.lybra/config.json 即进 home 模型 = 活动项目, 先于所在治理根)——chris 治理根下
+# `lybra needs-owner --lane <chris 仓>` 读成 lybra。现把「定位治理根」抽到 resolve_governance_root: 写命令(F127)、CLI 全部命令薄壳
+# (aipos_cli._find_repo_root_for_args)与 F88 命名入口 governance_workspace_root 都经它; 序与文案只声明在 verbs.schema
+# governance_root_resolution 一处。
+# ---------------------------------------------------------------------------
+
+def governance_root_declaration() -> dict[str, Any]:
+    """verbs.schema governance_root_resolution(参数注册 / 来源标注 / 首行模板 / 拒因的唯一声明)。缺 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = load_schema("verbs").get("governance_root_resolution")
+    sources = decl.get("sources") if isinstance(decl, dict) else None
+    codes = decl.get("reject_codes") if isinstance(decl, dict) else None
+    lists_ok = isinstance(decl, dict) and all(
+        isinstance(decl.get(key), list) and all(isinstance(item, str) and item.strip() for item in decl[key])
+        for key in ("commands", "announce_commands", "global_view_commands"))
+    if (not lists_ok or not all(isinstance(decl.get(k), str) and decl[k] for k in ("cli_flag", "help", "resolved_line", "unknown_project"))
+            or not isinstance(sources, dict)
+            or not all(isinstance(sources.get(k), str) and sources[k]
+                       for k in ("workspace_root", "env", "cwd_root", "workstation", "active_project"))
+            or not isinstance(codes, dict)
+            or not all(isinstance(codes.get(k), str) and codes[k] for k in ("GOVERNANCE_ROOT_UNRESOLVED", "GOVERNANCE_ROOT_CONFLICT"))):
+        raise SchemaLoadError("verbs.schema.json governance_root_resolution(cli_flag / help / resolved_line / unknown_project / commands / "
+                              "announce_commands / global_view_commands / sources {workspace_root, env, cwd_root, workstation, "
+                              "active_project} / reject_codes {GOVERNANCE_ROOT_UNRESOLVED, GOVERNANCE_ROOT_CONFLICT})未声明齐")
+    return decl
+
+
+def resolve_governance_root(
+    workspace_root: str | Path | None = None,
+    *,
+    start: str | Path | None = None,
+    env: dict[str, str] | None = None,
+    established: bool = True,
+    declared_sources: bool = True,
+    allow_active_project: bool = False,
+) -> dict[str, Any]:
+    """AIPOS-F144 件①: 治理根解析唯一实现(读写共用)。返回 {project, project_root, source, label, kind}(label = 声明的来源文案;
+    source = label + 根路径; project = project.json#project, 未声明 = None, 写命令自行拒)。
+
+    序(高 → 低, 命中即停; 每级都以结构判据 has_workspace_queue 验证, 不看路径名):
+      1. workspace_root: 显式 --workspace-root(全局或子命令级, CLI 薄壳已合并)                    kind=workspace_root
+      2. [declared_sources] 环境变量 LYBRA_WORKSPACE_ROOT(唯一读取口 workspace_root_from_env)   kind=env
+      3. 自 start(缺省 cwd)向上首个治理根(enclosing_governance_root)                            kind=cwd_root
+      4. [declared_sources] 自 start 向上首个工位 .lybra/connection.json 声明的治理根             kind=workstation
+      5. 仅 allow_active_project(命令声明为全局视图)且以上都无: AIPOS-226 home 模型               kind=active_project
+      6. 拒: ProjectTargetError(GOVERNANCE_ROOT_UNRESOLVED, 出口 = cd 到治理根或加 --workspace-root)
+    当前目录在某治理根内时第 3 级先于 home 模型 —— 绝不回落活动项目(原 AIPOS-226 梯自 cwd 向上先撞 ~/.lybra/config.json
+    即进 home 模型, 是 F144 病理)。established: 治理根是否须带 project.json(写命令 True = 已建治理根; 读命令 False 兼容
+    无 project.json 的存量队列根, 同原梯「向上队列结构」一级)。declared_sources: 是否认进程环境变量 / 工位声明这两种非当场
+    显式来源(读命令 True, 与原梯一致; 写命令 False = F127 原语义: 目标只由调用者当场指明或所在目录给出)。"""
+    decl = governance_root_declaration()
+    sources, codes = decl["sources"], decl["reject_codes"]
+    source_env = env if env is not None else os.environ
+
+    def _hit(root: Path, kind: str, label: str) -> dict[str, Any]:
+        try:
+            project: str | None = declared_project_id(root)
+        except ValueError:
+            project = None
+        return {"project": project, "project_root": root, "source": f"{label} {root}", "label": label, "kind": kind}
+
+    def _checked(raw: str | Path, kind: str, label: str) -> dict[str, Any]:
+        root = Path(raw).expanduser().resolve()
+        if not has_workspace_queue(root, established=established):
+            need = "project.json + 声明的队列根" if established else "声明的队列根"
+            raise ProjectTargetError("GOVERNANCE_ROOT_UNRESOLVED",
+                                     f"{label} {root} 不是治理根(无 {need})。{codes['GOVERNANCE_ROOT_UNRESOLVED']}")
+        return _hit(root, kind, label)
+
+    if workspace_root is not None and str(workspace_root).strip():
+        return _checked(workspace_root, "workspace_root", sources["workspace_root"])
+    if declared_sources:
+        raw_env, env_name = workspace_root_from_env(source_env)
+        if raw_env:
+            return _checked(raw_env, "env", sources["env"].format(env=env_name))
+    located = enclosing_governance_root(start, established=established)
+    if located is not None:
+        return _hit(located, "cwd_root", sources["cwd_root"])
+    start_path = Path(start).expanduser() if start is not None else None
+    if declared_sources:
+        declared = _declared_root_from_connection(start_path)
+        if declared is not None:
+            return _checked(declared, "workstation", sources["workstation"])
+    here = Path(start if start is not None else Path.cwd()).expanduser().resolve()
+    if allow_active_project:
+        try:
+            root, _home = resolve_workspace_context(start_path, env=source_env)
+        except (FileNotFoundError, ValueError) as exc:
+            raise ProjectTargetError("GOVERNANCE_ROOT_UNRESOLVED",
+                                     f"当前目录 {here} 不在任何已建治理根内, 全局视图也解析不出({exc})。"
+                                     f"{codes['GOVERNANCE_ROOT_UNRESOLVED']}") from exc
+        return _hit(root, "active_project", sources["active_project"])
+    tried = "显式 --workspace-root / 环境变量 / 工位声明" if declared_sources else "显式 --workspace-root"
+    raise ProjectTargetError("GOVERNANCE_ROOT_UNRESOLVED",
+                             f"当前目录 {here} 不在任何已建治理根内(向上无 project.json + 队列根), 也无{tried}。"
+                             f"{codes['GOVERNANCE_ROOT_UNRESOLVED']}")
+
+
+def merge_workspace_root_flags(global_value: str | Path | None, sub_value: str | Path | None) -> str | Path | None:
+    """AIPOS-F144 件②: 全局 `lybra --workspace-root X <命令>` 与子命令级 `<命令> --workspace-root X` 同义: 只给一处 = 用它;
+    两处都给且解析为同一路径 = 用它; 指向不同治理根 = ProjectTargetError(GOVERNANCE_ROOT_CONFLICT, 两者列出)。"""
+    given = [v for v in (sub_value, global_value) if v is not None and str(v).strip()]
+    if len(given) == 2 and Path(given[0]).expanduser().resolve() != Path(given[1]).expanduser().resolve():
+        codes = governance_root_declaration()["reject_codes"]
+        raise ProjectTargetError("GOVERNANCE_ROOT_CONFLICT",
+                                 f"全局 --workspace-root {global_value} ≠ 子命令级 --workspace-root {sub_value}。"
+                                 f"{codes['GOVERNANCE_ROOT_CONFLICT']}")
+    return given[0] if given else None
+
+
+def attach_workspace_root_flags(root_parser: Any) -> None:
+    """AIPOS-F144 件②: 子命令级 --workspace-root 的唯一注册口——给 verbs.schema governance_root_resolution.commands 所列命令
+    (空格分隔的子命令路径)挂 --workspace-root(dest=workspace_root, 缺省 SUPPRESS: 父子命令都挂时不互相覆盖, 读取方一律 getattr),
+    并记下命令路径(dest=governance_root_command, 供首行标注判定)。路径找不到 / 该命令已自带同名参数 = SchemaLoadError(fail-closed)。
+    子命令定位与 --verbose 挂载共用 cli_self_describe.subcommand_parser(唯一遍历实现)。"""
+    import argparse
+
+    from tools.aipos_cli.cli_self_describe import subcommand_parser
+    from tools.schema_loader import SchemaLoadError
+
+    decl = governance_root_declaration()
+    flag = str(decl["cli_flag"])
+    label = "verbs.schema governance_root_resolution.commands"
+    for path in decl["commands"]:
+        parser = subcommand_parser(root_parser, path, label=label)
+        if any(flag in a.option_strings for a in parser._actions):
+            raise SchemaLoadError(f"{label}: 命令 {path!r} 已自带 {flag}(子命令级参数须只经本注册口)")
+        parser.add_argument(flag, dest="workspace_root", default=argparse.SUPPRESS, metavar=str(decl.get("metavar") or "ROOT"),
+                            help=str(decl["help"]))
+        parser.set_defaults(governance_root_command=str(path))
 
 
 # ---------------------------------------------------------------------------

@@ -79,7 +79,7 @@ from tools.aipos_cli.service_mode import (
     stop_report,
 )
 from tools.aipos_cli.state_recovery import build_state_recovery_preview
-from tools.aipos_cli.task_loader import find_repo_root, load_all_tasks, load_task_by_path
+from tools.aipos_cli.task_loader import load_all_tasks, load_task_by_path
 from tools.aipos_cli.validator import (
     build_records_diagnostics,
     build_records_summary,
@@ -487,10 +487,28 @@ def _resolve_workspace_for_command(args: argparse.Namespace) -> Path:
 
 
 def _find_repo_root_for_args(args: argparse.Namespace) -> Path:
-    explicit_root = getattr(args, "workspace_root", None) or getattr(args, "global_workspace_root", None)
-    if explicit_root:
-        return resolve_workspace_root(explicit_root=explicit_root)
-    return find_repo_root()
+    """AIPOS-F144: CLI 命令治理根的薄壳 —— 实现 = workspace_config.resolve_governance_root(读写共用唯一实现)。
+    显式根 = 全局 --workspace-root 与子命令级 --workspace-root 合并(merge_workspace_root_flags: 同义, 两处不同 = 拒);
+    其后 环境变量 > 当前目录所在治理根 > 工位声明; 活动项目只给 governance_root_resolution.global_view_commands 所列命令; 否则拒
+    (不回落 home 级活动项目)。announce_commands 所列命令打印首行「解析到的项目 + 来源」(--json 时写 stderr)。
+    解析不出 / 冲突 = FileNotFoundError(拒因原文; 各调用方既有出口)。同一次调用内只解析、只标注一次。"""
+    from tools.aipos_cli.workspace_config import governance_root_declaration, merge_workspace_root_flags, resolve_governance_root
+
+    cached = getattr(args, "_governance_root_hit", None)
+    if cached is not None:
+        return cached["project_root"]
+    decl = governance_root_declaration()
+    command = getattr(args, "governance_root_command", None)
+    try:
+        explicit = merge_workspace_root_flags(getattr(args, "global_workspace_root", None), getattr(args, "workspace_root", None))
+        hit = resolve_governance_root(explicit, established=False, allow_active_project=command in decl["global_view_commands"])
+    except ValueError as exc:  # ProjectTargetError(拒因码) / 工位 connection.json 不可读(声明坏了不猜)
+        raise FileNotFoundError(str(exc)) from exc
+    args._governance_root_hit = hit
+    if command in decl["announce_commands"]:
+        line = decl["resolved_line"].format(project=hit["project"] or decl["unknown_project"], source=hit["source"])
+        print(line, file=sys.stderr if getattr(args, "json", False) else sys.stdout, flush=True)
+    return hit["project_root"]
 
 
 def _run_board_command(args: argparse.Namespace) -> int:
@@ -1473,7 +1491,6 @@ def build_parser() -> argparse.ArgumentParser:
     queue_adopt_mode.add_argument("--dry-run", action="store_true", help="Preview through the gate with zero writes (default)")
     queue_adopt_mode.add_argument("--confirm", action="store_true", help="Adopt (one-stage PreAuthorized release under the envelope)")
     queue_adopt_parser.add_argument("--connection-json", help="Path to connection.json (driver token)")
-    queue_adopt_parser.add_argument("--workspace-root", help="Governance root holding the card (passed to the gate; default = token project scope)")
     queue_adopt_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     queue_block_parser = queue_subparsers.add_parser("block", help="Move a task from claimed to blocked")
@@ -1598,7 +1615,6 @@ def build_parser() -> argparse.ArgumentParser:
     # AIPOS-F88 件③: 根路径只读查询(两命名函数 + home 根的唯一出口; bash 调用方 lybra-deploy / governance-pre-commit 读此输出, 禁再写死)
     workspace_roots_parser = workspace_subparsers.add_parser(
         "roots", help="Show resolved governance workspace / product repo / home roots (read-only, AIPOS-F88)")
-    workspace_roots_parser.add_argument("--workspace-root", help="Explicit governance workspace root (default: connection.json 声明 → 结构识别)")
     workspace_roots_parser.add_argument(
         "--field", choices=["governance_root", "product_repo", "code_repo", "schema_dir", "home_root"],
         help="Print only this field's value (plain text, for shell command substitution); unresolvable = exit 1")
@@ -1611,13 +1627,11 @@ def build_parser() -> argparse.ArgumentParser:
     state_subparsers = state_parser.add_subparsers(dest="state_command")
     # AIPOS-C3B 大项C①: state lint — 卡状态三方一致 lint(队列目录×frontmatter status×records)
     lint_parser = state_subparsers.add_parser("lint", help="AIPOS-C3B: 卡状态三方一致 lint(队列目录×frontmatter×records)")
-    lint_parser.add_argument("--workspace-root", type=Path, default=None, help="Governance workspace root (default: auto-detect)")
     lint_parser.add_argument("--task-id", default=None, help="Limit to specific task ID")
     lint_parser.add_argument("--json", action="store_true", help="Output JSON")
     # AIPOS-C3B 大项C③: state repair — 按 records 重建卡一致状态
     repair_parser = state_subparsers.add_parser("repair", help="AIPOS-C3B: 按 records 重建卡一致状态(坏卡修复)")
     repair_parser.add_argument("--task-id", required=True, help="Task ID to repair")
-    repair_parser.add_argument("--workspace-root", type=Path, default=None, help="Governance workspace root (default: auto-detect)")
     repair_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     repair_parser.add_argument("--json", action="store_true", help="Output JSON")
     recovery_parser = state_subparsers.add_parser("recovery", help="State recovery preview operations")
@@ -2142,7 +2156,6 @@ def build_parser() -> argparse.ArgumentParser:
     # AIPOS-F71: lybra next — 唯一推导实现(合并 turn-advancer + next-step)
     next_parser = subparsers.add_parser("next", help="AIPOS-F71: 推导下一步(唯一实现)。无参=项目级扫描;--task-id=单卡")
     next_parser.add_argument("--task-id", help="Task ID to resolve (omit for project scan)")
-    next_parser.add_argument("--workspace-root", type=Path, help="Workspace root; defaults to auto-discovery")
     next_parser.add_argument("--run", action="store_true", help="AIPOS-F73件②③: 机器扣扳机 — 推导后立即执行命令（单步即退，禁循环）")
     next_parser.add_argument("--connection-json", help="Path to connection.json (for --run gate access)")
     next_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -2162,7 +2175,6 @@ def build_parser() -> argparse.ArgumentParser:
     loop_parser.add_argument("--envelope", help="policy_id(<policies_root>/<id>.md, project.json paths.policies_root 缺省 5_tasks/policies); 缺省扫描信封目录取首个匹配本卡与驱动方身份的有效信封")
     loop_parser.add_argument("--actor", help="驱动方身份(顾问实例); 缺省=治理根 .lybra/role 的 instance, 再缺省 advisor")
     loop_parser.add_argument("--connection-json", help="透传给 next --run 的 connection.json 路径(token 永不上屏)")
-    loop_parser.add_argument("--workspace-root", type=Path, help="治理根(队列/记录所在); 缺省自发现")
     loop_parser.add_argument("--max-steps", type=int, default=None, help="硬上限: 推导轮数(含等待轮); 缺省读 verbs.schema(20)")
     loop_parser.add_argument("--max-wait", type=float, default=None, help="硬上限: 每次等待产物秒数; 缺省读 verbs.schema(沿用 agent watch 1800)")
     loop_parser.add_argument("--interval", type=float, default=None, help="等待轮询间隔秒(经 agent watch, 禁 sleep 自旋); 缺省读 verbs.schema(15)")
@@ -2181,7 +2193,6 @@ def build_parser() -> argparse.ArgumentParser:
     loop_status_parser = loop_actions.add_parser("status", help=_loop_status_help, description=_loop_status_help)
     # 与父解析器同名参数用 SUPPRESS 缺省: 不覆盖写在 status 之前的同名参数
     loop_status_parser.add_argument("--task-id", default=argparse.SUPPRESS, help="卡 ID; 缺省 = 本项目全部未结束的 loop 运行")
-    loop_status_parser.add_argument("--workspace-root", type=Path, default=argparse.SUPPRESS, help="治理根; 缺省自发现")
     loop_status_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output JSON")
     add_lane_argument(loop_status_parser)  # AIPOS-F133 件②
     loop_status_parser.add_argument("--wait", type=float, default=None, metavar="SECONDS",
@@ -2207,7 +2218,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     card_render_parser.add_argument("--task-id", required=True, help="卡 ID")
     card_render_parser.add_argument("--harness", choices=harness_choices, default=None, help="目标引擎(enums.schema harness); 缺省=卡面 harness, 再缺省=card.schema intent_face.harness.default_by_task_mode")
-    card_render_parser.add_argument("--workspace-root", type=Path, help="治理根; 缺省自发现")
     card_render_parser.add_argument("--out-dir", help="codex/claude-code 输出目录; 缺省=卡工作树根")
     card_render_parser.add_argument("--stdout", action="store_true", help="只打印不落盘")
     card_render_parser.add_argument("--json", action="store_true", help="JSON 输出(文件名→内容)")
@@ -2220,7 +2230,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="AIPOS-F78 件③: 读项目声明落点找 Return/裁决报告, 校验必填 frontmatter 与分支 tip==commit_sha, 经既有薄壳铸记录(驱动方 token)",
     )
     artifact_ingest_parser.add_argument("--task-id", required=True, help="卡 ID(执行卡=Return 入口; R 卡=裁决入口)")
-    artifact_ingest_parser.add_argument("--workspace-root", type=Path, help="治理根; 缺省自发现")
     artifact_ingest_parser.add_argument("--connection-json", help="connection.json(驱动方 token, 永不上屏)")
     artifact_ingest_parser.add_argument("--dry-run", action="store_true", help="只校验与打印将执行的薄壳命令, 不提交")
     artifact_ingest_parser.add_argument("--kind", choices=["return", "verdict", "finalization"], default=None,
@@ -2320,7 +2329,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     # AIPOS-F67: lybra brief — 顾问真相派生(冷启动简报算出来,不写出来)
     brief_parser = subparsers.add_parser("brief", help="AIPOS-F67: 冷启动简报(阶段坐标+增量真相+在途三查+契约清单+新鲜度)")
-    brief_parser.add_argument("--workspace-root", help="Governance workspace root; defaults to current directory")
     brief_parser.add_argument("--repo-root", help="Product repo root (for schema resolution); defaults to auto-detection")
     brief_parser.add_argument("--since", help="Only show decisions since this date (YYYY-MM-DD)")
     brief_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -2390,6 +2398,11 @@ def build_parser() -> argparse.ArgumentParser:
     from tools.aipos_cli.autonomy_policy import attach_verbose_flags
 
     attach_verbose_flags(parser)
+    # AIPOS-F144 件②: 子命令级 --workspace-root 只按声明挂载(verbs.schema governance_root_resolution.commands, 唯一注册口;
+    # 与全局 --workspace-root 同义, 合并与解析见 _find_repo_root_for_args)
+    from tools.aipos_cli.workspace_config import attach_workspace_root_flags
+
+    attach_workspace_root_flags(parser)
     return parser
 
 
@@ -2436,6 +2449,7 @@ def _workspace_roots_command(args: argparse.Namespace) -> int:
     from tools.aipos_cli.workspace_config import (
         CardRepoUnresolved,
         governance_workspace_root,
+        merge_workspace_root_flags,
         product_repo_root,
         resolve_home_root,
     )
@@ -2444,7 +2458,9 @@ def _workspace_roots_command(args: argparse.Namespace) -> int:
     resolve_errors = (FileNotFoundError, ValueError, OSError, CardRepoUnresolved, SchemaLoadError)
 
     def _gov() -> Path:
-        return governance_workspace_root(getattr(args, "workspace_root", None))
+        # AIPOS-F144: 全局与子命令级 --workspace-root 同义(merge_workspace_root_flags; 两处不同 = 拒)
+        return governance_workspace_root(merge_workspace_root_flags(getattr(args, "global_workspace_root", None),
+                                                                    getattr(args, "workspace_root", None)))
 
     resolvers = {
         "governance_root": _gov,
@@ -3707,7 +3723,7 @@ def main(argv: list[str] | None = None) -> int:
                     proj_root = str(target["project_root"])
                 elif not proj_root:
                     try:
-                        proj_root = str(resolve_workspace_root())
+                        proj_root = str(_find_repo_root_for_args(args))  # AIPOS-F144: 唯一薄壳(全局 --workspace-root > 所在治理根 > 拒)
                     except (FileNotFoundError, OSError) as exc:
                         print(f"Error: {exc}", file=sys.stderr)
                         print("Hint: provide --project-root or run from within a project.", file=sys.stderr)
@@ -3889,17 +3905,19 @@ def main(argv: list[str] | None = None) -> int:
         # AIPOS-R7A2 靶②: N6 收账提交(校验四件→commit→push)
         # AIPOS-R7A2 FIX-1: 传入 repo_root 用于 schema 解析
         from tools.aipos_cli.governance_commit import governance_commit
-        from tools.aipos_cli.workspace_config import resolve_workspace_root
-        
+
         # Resolve governance root
         if args.governance_root:
             governance_root = Path(args.governance_root).expanduser().resolve()
         elif args.global_workspace_root:
             governance_root = Path(args.global_workspace_root).expanduser().resolve()
         else:
+            # AIPOS-F144: 缺省治理根经读写共用唯一实现(所在治理根 > 拒, 不回落 home 级活动项目); 本命令的子命令级
+            # --workspace-root 是产品仓根(schema 解析), 不作治理根, 故此处直调 resolve_governance_root 而非 CLI 薄壳
+            from tools.aipos_cli.workspace_config import resolve_governance_root
             try:
-                governance_root = resolve_workspace_root()
-            except Exception as e:
+                governance_root = resolve_governance_root(None, established=False)["project_root"]
+            except ValueError as e:
                 print(f"Error: Cannot auto-discover governance root: {e}", file=sys.stderr)
                 return 1
         
@@ -4026,12 +4044,14 @@ def main(argv: list[str] | None = None) -> int:
         # AIPOS-F67: lybra brief — 顾问真相派生(冷启动简报算出来,不写出来)
         from tools.aipos_cli.brief import run_brief
 
-        # 遵循全局 --workspace-root 取参路径 (R6L: 同名参数全动词统一语义)
-        # 全局位 > 子命令位 > None
-        workspace_root = getattr(args, "global_workspace_root", None) or getattr(args, "workspace_root", None)
-        if workspace_root:
-            workspace_root = Path(workspace_root).expanduser().resolve()
-        
+        # AIPOS-F144: 治理根经唯一薄壳(全局/子命令级 --workspace-root 同义 > 环境变量 > 所在治理根 > 工位声明 > 拒);
+        # 原缺省 = 当前目录(不在治理根内也照读)退役
+        try:
+            workspace_root = _find_repo_root_for_args(args)
+        except FileNotFoundError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+
         repo_root = getattr(args, "repo_root", None)
         if repo_root:
             repo_root = Path(repo_root).expanduser().resolve()
@@ -4468,6 +4488,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
 
+    if args.command == "charter":
+        # AIPOS-F138 件①: 只读薄壳 — 全部逻辑在 charter_render(渲染唯一 render_charter)。AIPOS-F144: 先于下方通用治理根解析分派,
+        # 治理根由 run_charter_cli 经同一薄壳解析, 解析不出走本命令声明的退出码(lybra_charter.exit_codes.unreadable)
+        from tools.aipos_cli.charter_render import run_charter_cli
+        return run_charter_cli(args)
+
     try:
         repo_root = _find_repo_root_for_args(args)
     except FileNotFoundError as exc:
@@ -4623,8 +4649,8 @@ def main(argv: list[str] | None = None) -> int:
             "owner_policy_ref": args.owner_policy_ref,
             "autonomy_mode": "PreAuthorized",
         }
-        if getattr(args, "workspace_root", None):
-            verb_args["workspace_root"] = str(Path(args.workspace_root).expanduser().resolve())
+        if getattr(args, "workspace_root", None) or getattr(args, "global_workspace_root", None):
+            verb_args["workspace_root"] = str(repo_root)  # AIPOS-F144: 显式给出(全局或子命令级)= 唯一薄壳解析结果交门
         try:
             role = resolve_driver_role_from_connection(connection_json_path=conn_json_path, repo_root=repo_root)
         except ValueError as exc:
@@ -5333,7 +5359,7 @@ def main(argv: list[str] | None = None) -> int:
         from tools.aipos_cli.next_resolver import derive_next_step, scan_project_view, format_output, format_scan_output
 
         try:
-            ws_root = getattr(args, "workspace_root", None) or _find_repo_root_for_args(args)
+            ws_root = _find_repo_root_for_args(args)  # AIPOS-F144: 子命令级/全局 --workspace-root 合并 + 首行标注, 唯一薄壳
             json_mode = getattr(args, "json", False)
             run_mode = getattr(args, "run", False)
 
@@ -5399,10 +5425,7 @@ def main(argv: list[str] | None = None) -> int:
         # AIPOS-C3B 大项C①: state lint
         if state_cmd == "lint":
             from tools.aipos_cli.state_lint import run_state_lint
-            ws_root = getattr(args, "workspace_root", None)
-            if ws_root is None:
-                from tools.aipos_cli.workspace_config import resolve_workspace_root
-                ws_root = resolve_workspace_root()
+            ws_root = repo_root  # AIPOS-F144: 已经唯一薄壳 _find_repo_root_for_args 解析(子命令级/全局 --workspace-root 同义)
             result = run_state_lint(
                 governance_root=Path(ws_root),
                 task_id_filter=getattr(args, "task_id", None),
@@ -5431,10 +5454,7 @@ def main(argv: list[str] | None = None) -> int:
         # AIPOS-C3B 大项C③: state repair
         if state_cmd == "repair":
             from tools.aipos_cli.state_lint import repair_task_state
-            ws_root = getattr(args, "workspace_root", None)
-            if ws_root is None:
-                from tools.aipos_cli.workspace_config import resolve_workspace_root
-                ws_root = resolve_workspace_root()
+            ws_root = repo_root  # AIPOS-F144: 已经唯一薄壳 _find_repo_root_for_args 解析(子命令级/全局 --workspace-root 同义)
             result = repair_task_state(
                 governance_root=Path(ws_root),
                 task_id=args.task_id,
@@ -5883,11 +5903,6 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(render_preview_text(preview))
         return 0
-
-    if args.command == "charter":
-        # AIPOS-F138 件①: 只读薄壳 — 全部逻辑在 charter_render(渲染唯一 render_charter)
-        from tools.aipos_cli.charter_render import run_charter_cli
-        return run_charter_cli(args)
 
     if args.command == "card":
         # AIPOS-F78 件②: 单一渲染器薄壳

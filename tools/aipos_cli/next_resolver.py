@@ -3547,19 +3547,25 @@ def loop_step_timeout_seconds() -> float:
     return float(value)
 
 
-def _run_product_command(command: str, action_type: str) -> dict[str, Any]:
-    """执行一条派生产品命令(`lybra ...`, 每步过门零旁路), 超时读声明。返回 execute_derived_action 响应形。"""
+def _run_product_command(command: str, action_type: str, governance_root: Path | str | None = None) -> dict[str, Any]:
+    """执行一条派生产品命令(`lybra ...`, 每步过门零旁路), 超时读声明。返回 execute_derived_action 响应形。
+    AIPOS-F144: governance_root(推导所在治理根)给出 = 经环境变量 LYBRA_WORKSPACE_ROOT 下传子进程(唯一治理根解析
+    resolve_governance_root 的显式级来源), 派生命令不依赖 loop 的 cwd、不回落 home 级活动项目; 命令文本不变(可照抄)。"""
     import shlex
     import subprocess
 
     timeout = loop_step_timeout_seconds()
     # AIPOS-F134 件①: loop 已校验的驱动方实例随子进程环境下传(薄壳按实例取凭据, two_phase_shell_factory.driver_instance_hint 唯一读取)
     from tools.aipos_cli.two_phase_shell_factory import DRIVER_INSTANCE_ENV
+    from tools.aipos_cli.workspace_config import LEGACY_WORKSPACE_ROOT_ENV, WORKSPACE_ROOT_ENV
 
     env = dict(os.environ)
     scoped_actor = _scoped_driver().get("actor")
     if scoped_actor:
         env[DRIVER_INSTANCE_ENV] = scoped_actor
+    if governance_root is not None:
+        env.pop(LEGACY_WORKSPACE_ROOT_ENV, None)
+        env[WORKSPACE_ROOT_ENV] = str(Path(governance_root).expanduser().resolve())
     try:
         argv = shlex.split(command)
         if argv and argv[0] == "lybra":
@@ -3677,7 +3683,7 @@ def _execute_claim_with_role_token(
     """
     task_id = str(derivation.get("task_id") or "")
     command = str(derivation.get("command") or "")
-    run = _run_product_command(command, "claim")
+    run = _run_product_command(command, "claim", governance_root=workspace_root)
     if not run.get("ok"):
         # AIPOS-F143 件①: 原写「claim 失败: <退出码>」吞掉真因(接入项目首卡实撞: FileNotFoundError 只剩「claim 失败: 1」);
         # 现首行 = 退出码 + 真因原文(子进程异常 / stderr 关键行), 超时(124)沿用超时文案
@@ -3890,4 +3896,4 @@ def _execute_derived_action(
         return _execute_claim_with_role_token(derivation=derivation, workspace_root=Path(workspace_root))
 
     # AIPOS-F73件②③: 每步过门零旁路 — 执行产品 CLI(超时读声明 verbs.schema lybra_loop.step_timeout_seconds)
-    return _run_product_command(command, action_type)
+    return _run_product_command(command, action_type, governance_root=workspace_root)

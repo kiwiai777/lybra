@@ -51,12 +51,10 @@
       "output_scope": "只涉 project.json(路径 + diff + 校验结果); 禁打印凭据或 connection.json 内容。set-repo 门路径(connection.json 声明 mcp.rpc_url)的预演亦在本机经同一实现算 diff, 不取凭据、不调门动词; --confirm 才经门动词 lybra_project_set_repo_dry_run → _confirm 写入。",
       "target_line": "目标项目 {project}(来源: {source}) · project.json {project_json}",
       "target_resolution": {
-        "description": "AIPOS-F127 件①(chris 第 2 步预演发现: set-paths 不写项目名时落到 home 级活动项目 lybra): project 族写命令(commands 全部 + freeze-legacy + dispatch-mode set)目标项目解析的唯一实现 = workspace_config.resolve_project_write_target。序: 显式项目名 > --workspace-root(dispatch-mode 为 --project-root)/当前目录向上首个已建治理根(project.json + 声明的队列根)声明的 project.json#project > 拒。禁回落 home 级活动项目(LYBRA_ACTIVE_PROJECT / ~/.lybra/config.json active_project / 单项目回落)。显式项目名与所在治理根声明不一致(或 home 根下同名项目不是所在治理根)= 拒并列出两者。预演/写入输出首行 = target_line(四个两阶段命令与 set-meta 同一包装 aipos_cli._project_json_two_phase_emit)。",
+        "description": "AIPOS-F127 件①(chris 第 2 步预演发现: set-paths 不写项目名时落到 home 级活动项目 lybra): project 族写命令(commands 全部 + freeze-legacy + dispatch-mode set)目标项目解析的唯一实现 = workspace_config.resolve_project_write_target。序: 显式项目名 > --workspace-root(dispatch-mode 为 --project-root)/当前目录向上首个已建治理根(project.json + 声明的队列根)声明的 project.json#project > 拒。禁回落 home 级活动项目(LYBRA_ACTIVE_PROJECT / ~/.lybra/config.json active_project / 单项目回落)。显式项目名与所在治理根声明不一致(或 home 根下同名项目不是所在治理根)= 拒并列出两者。预演/写入输出首行 = target_line(四个两阶段命令与 set-meta 同一包装 aipos_cli._project_json_two_phase_emit)。AIPOS-F144 件①: 「所在治理根」的定位(--workspace-root / 环境变量 / 当前目录 / 工位声明)委托读写共用唯一实现 workspace_config.resolve_governance_root, 其来源文案读 governance_root_resolution.sources; 本段 sources 只剩显式项目名两种。",
         "sources": {
           "explicit": "显式项目名",
-          "explicit_matches_root": "显式项目名(与所在治理根声明一致)",
-          "workspace_root": "--workspace-root 指定治理根",
-          "cwd_root": "当前目录所在治理根"
+          "explicit_matches_root": "显式项目名(与所在治理根声明一致)"
         },
         "reject_codes": {
           "PROJECT_TARGET_UNRESOLVED": "未给项目名, 且 --workspace-root 未给 / 当前目录不在任何已建治理根内(向上无 project.json + 队列根), 或该治理根未声明 project.json#project; 不回落 home 级活动项目。出口: 写项目名, 或在目标项目治理根下运行, 或传 --workspace-root <治理根>",
@@ -103,6 +101,75 @@
       "conditional_scope": "{scope, when}: 仅当 when 所述条件成立时另需的 scope",
       "scope_waiver": "{param, equals, reason}: 入参 param 去空白后等于 equals 时不索 required_scope(驱动方一阶段, 信封即授权)",
       "visibility": "tools/list 可见性: always = 恒可见; scope = 持 required_scope 才可见; hidden = 不列出(只经产品 CLI 薄壳按名调用)"
+    }
+  },
+  "governance_root_resolution": {
+    "description": "AIPOS-F144(10-10 chris 岚图分顾问实撞: chris 治理根下 `lybra needs-owner --lane huibojin-web6` 报 lane 不属本项目、可选值却是 lybra 的仓——读类命令走 AIPOS-226 优先级梯, 自 cwd 向上先撞到 ~/.lybra/config.json(全局配置, 带 home_root)即进 home 模型 = 活动项目, 先于所在治理根; needs-owner 子命令也不认 --workspace-root): 治理根解析读写同一规则的唯一声明。唯一实现 = workspace_config.resolve_governance_root(F127 写命令 resolve_project_write_target、F88 命名入口 governance_workspace_root、CLI 全部命令薄壳 aipos_cli._find_repo_root_for_args 都经它)。序(命中即停, 每级都以结构判据 has_workspace_queue 验证): 显式 --workspace-root(全局 `lybra --workspace-root X <命令>` 与子命令级 `<命令> --workspace-root X` 同义, 两处指向不同治理根 = GOVERNANCE_ROOT_CONFLICT)> 环境变量 LYBRA_WORKSPACE_ROOT > 当前目录向上首个已建治理根(project.json + 声明的队列根)> 工位 .lybra/connection.json 声明的 governance_root > 仅 global_view_commands 所列命令且不在任何治理根内: 活动项目(AIPOS-226 home 模型, 来源标注 active_project)> 拒 GOVERNANCE_ROOT_UNRESOLVED。当前目录在某治理根内时绝不回落活动项目。子命令级参数只经 attach_workspace_root_flags 按 commands 注册(子命令定位 cli_self_describe.subcommand_parser, 与 --verbose 挂载共用); announce_commands 所列命令输出首行 = resolved_line(--json 时写 stderr, stdout 仍为纯 JSON)。清单只追加; 新命令要子命令级参数 = 往 commands 追加一行。",
+    "single_implementation": "tools/aipos_cli/workspace_config.resolve_governance_root",
+    "cli_flag": "--workspace-root",
+    "metavar": "<治理根>",
+    "help": "AIPOS-F144: 治理根(含 project.json 与队列根); 与全局 `lybra --workspace-root` 同义(两处都给且不同 = 拒)。缺省 = 当前目录向上首个已建治理根; 不在任何治理根内且未给 = 拒(不回落 home 级活动项目)",
+    "commands": [
+      "next",
+      "needs-owner",
+      "brief",
+      "loop",
+      "loop status",
+      "state lint",
+      "state repair",
+      "state recovery preview",
+      "queue",
+      "queue claim",
+      "queue adopt",
+      "queue block",
+      "queue complete",
+      "queue reopen",
+      "queue amend",
+      "queue withdraw",
+      "queue return-repair",
+      "queue repair",
+      "queue return",
+      "queue close",
+      "queue rework",
+      "draft create",
+      "draft validate",
+      "draft list",
+      "draft publish",
+      "draft regen-machine-zone",
+      "my-tasks",
+      "validate",
+      "records",
+      "agents",
+      "task",
+      "preview",
+      "context-pack preview",
+      "card render",
+      "artifact ingest",
+      "workspace roots"
+    ],
+    "announce_commands": [
+      "next",
+      "needs-owner",
+      "brief",
+      "loop status",
+      "state lint",
+      "queue"
+    ],
+    "global_view_commands": [
+      "workspace roots"
+    ],
+    "resolved_line": "治理根: 项目 {project}(来源: {source})",
+    "unknown_project": "(project.json 未声明 project)",
+    "sources": {
+      "workspace_root": "--workspace-root 指定治理根",
+      "env": "环境变量 {env} 指定治理根",
+      "cwd_root": "当前目录所在治理根",
+      "workstation": "工位 .lybra/connection.json 声明的治理根",
+      "active_project": "活动项目(不在任何治理根内, 全局视图)"
+    },
+    "reject_codes": {
+      "GOVERNANCE_ROOT_UNRESOLVED": "不回落 home 级活动项目。出口: cd 到目标项目治理根(含 project.json 与队列根)再运行, 或加 --workspace-root <治理根>(全局 `lybra --workspace-root <治理根> <命令>` 或子命令后均可); 经 ssh 跑命令同理",
+      "GOVERNANCE_ROOT_CONFLICT": "全局与子命令级 --workspace-root 指向不同治理根(两者已列出)。出口: 只给一处"
     }
   },
   "lane_view": {
