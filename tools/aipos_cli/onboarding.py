@@ -203,12 +203,13 @@ def _gate_url(explicit: str | None, owner_connection: str) -> tuple[str, str]:
     return resolve_gate_base_url(), ("环境变量 LYBRA_GATE_URL" if provenance["via_env"] else "config.schema 缺省")
 
 
-def _instances(project: str, host: str, advisor_host: str | None = None) -> dict[str, str]:
-    """实例名 = roles.schema naming.template({prefix}.{project}.{host}); AIPOS-F129: 顾问 host 段可与工位不同(他机顾问会话)。"""
+def _instances(project: str, host: str, advisor_host: str | None = None, *, executor_host: str | None = None) -> dict[str, str]:
+    """实例名 = roles.schema naming.template({prefix}.{project}.{host}); AIPOS-F129: 顾问 host 段可与工位不同(他机顾问会话)。
+    AIPOS-F143 件④: 子 agent 执行者的 host 段 = 顾问会话所在机(executor_host)。"""
     from tools.aipos_cli.naming_profile import _registry_prefix_mapping, default_instance_name
 
     prefixes = _registry_prefix_mapping()
-    hosts = {"advisor": advisor_host or host, "executor": host, "auditor": host}
+    hosts = {"advisor": advisor_host or host, "executor": executor_host or host, "auditor": host}
     return {role: default_instance_name(prefixes[role], project=project, host=hosts[role]) for role in ("advisor", "executor", "auditor")}
 
 
@@ -275,8 +276,14 @@ def generate_onboarding_guide(
     max_tasks: int = 50,
     advisor_harness: str | None = None,
     advisor_host: str | None = None,
+    executor_mode: str | None = None,
 ) -> dict[str, Any]:
     """生成从 0 接新项目全流程的分步指南(结构化: steps[] + metadata)。
+
+    AIPOS-F143 件④: executor_mode(取值读 roles.schema executor_modes; 缺省 = 声明 default = 既有 pi 执行工位步骤)。凭据落治理根的模式
+    (subagent = 顾问派子 agent 执行, CONVERGENCE §3e 缺省): 执行者实例名主机段 = 顾问会话所在机; 第 7 步执行者改为
+    `lybra roles enroll --code <码> --workspace <治理根> --executor-mode subagent --harness <顾问会话 kind>`(不起工位、不 sync);
+    第 8 步只剩审计工位(审计恒为独立 pi); 第 9 步先 `lybra project set-execution` 声明执行方式, 卡稿可不写执行者 / harness / 审计者。
 
     每步: step_number, title, actor(owner|advisor|workstation), owner_action(Owner 一次性动作序号或 None), command/commands,
     purpose, check, on_fail, creates。参数:
@@ -301,7 +308,14 @@ def generate_onboarding_guide(
         pol_rel = str(pol_dir)
     host = (host_segment or socket.gethostname().split(".")[0]).strip()
     adv_h = resolve_advisor_harness(advisor_harness, advisor_host, host_segment)
-    inst = _instances(project_name, host, adv_h["instance_host"])
+    from tools.aipos_cli.enrollment import executor_mode_declaration, governance_root_executor_modes
+
+    mode_decl = executor_mode_declaration()
+    exec_mode = str(executor_mode or "").strip() or str(mode_decl["default"])
+    if exec_mode not in mode_decl["values"]:
+        raise ValueError(f"--executor-mode {exec_mode!r} 不在 {list(mode_decl['values'])}(roles.schema executor_modes)")
+    subagent_exec = exec_mode in governance_root_executor_modes()  # AIPOS-F143 件④: 子 agent 执行者(凭据落治理根)
+    inst = _instances(project_name, host, adv_h["instance_host"], executor_host=adv_h["instance_host"] if subagent_exec else None)
     owner_ws = _owner_workspace(home, owner_workspace)
     from tools.aipos_cli.service_mode import connection_path as _connection_path
 
@@ -573,7 +587,14 @@ def generate_onboarding_guide(
 
     # ── Step 7: 工位 enroll + sync ──────────────────────────────────
     step7: list[str] = []
-    for label, ws, code in (("执行", exec_ws, EXECUTOR_CODE), ("审计", audit_ws, AUDITOR_CODE)):
+    if subagent_exec:
+        # AIPOS-F143 件④: 子 agent 执行者——凭据落治理根(--workspace = 治理根), harness = 顾问会话 kind; 无工位、不 sync、不起 pi
+        host_args = ("--harness-host", _shell_quote(adv_h["host"])) if adv_h["host"] else ()
+        step7 += [
+            f"# 执行者(子 agent 模式, 顾问派生): 凭据落治理根 .lybra/connection.json(实例 {inst['executor']}), harness = 顾问会话 {adv_h['kind']}; 不起工位",
+            render_enroll_command(EXECUTOR_CODE, gq, "--executor-mode", exec_mode, "--harness", adv_h["kind"], *host_args),
+        ]
+    for label, ws, code in ((() if subagent_exec else (("执行", exec_ws, EXECUTOR_CODE),)) + (("审计", audit_ws, AUDITOR_CODE),)):
         wq = _shell_path(ws)
         sync_ws = f"lybra sync --harness-root {wq} --workspace-root {gq}"
         step7 += [
@@ -588,7 +609,10 @@ def generate_onboarding_guide(
         "owner_action": None,
         "title": "执行 / 审计工位 enroll + sync 分发 + 稳态复核",
         "command": "\n".join(step7),
-        "purpose": f"在工位 {exec_ws} / {audit_ws} 兑换凭据(owner_policy_ref 由 Step 4 信封推导), 按分发声明落齐技能 / 扩展 / 章程, 复核稳态; 工位只同步分发, 不敲门动词",
+        "purpose": (f"子 agent 执行者 {inst['executor']} 兑换凭据落治理根(顾问会话 {adv_h['kind']} 派生子 agent 以此身份交付; 无工位); "
+                    f"审计工位 {audit_ws} 兑换凭据(owner_policy_ref 由 Step 4 信封推导), 按分发声明落齐技能 / 扩展 / 章程, 复核稳态"
+                    if subagent_exec else
+                    f"在工位 {exec_ws} / {audit_ws} 兑换凭据(owner_policy_ref 由 Step 4 信封推导), 按分发声明落齐技能 / 扩展 / 章程, 复核稳态; 工位只同步分发, 不敲门动词"),
         "check": (
             "enroll 输出 '✓ Enrollment successful' 与 '✓ owner_policy_ref 已推导'; 工位 .lybra/connection.json 含 lybra_bin 且 "
             "workspace_root == governance_root; sync 工位行 synced(首个工位会补挂 .pi/extensions/go.ts); "
@@ -604,16 +628,19 @@ def generate_onboarding_guide(
             "sync 把工位记为 skipped": f"--workspace-root 须为本项目治理根 {gov_s}",
             "--dry-run 的 plan 或 prune 非空": "再跑一次不带 --dry-run 的 sync 后复核; 仍非空 = 报 bug, 附 --dry-run --json 输出",
         },
-        "creates": f"{exec_ws}/.lybra + .pi + AGENTS.md, {audit_ws}/.lybra + .pi + AGENTS.md, 工位父根 _distributed/",
+        "creates": (f"治理根 .lybra/connection.json 子 agent 执行者条目 + land 事件(mode={exec_mode}), {audit_ws}/.lybra + .pi + AGENTS.md, 工位父根 _distributed/"
+                    if subagent_exec else
+                    f"{exec_ws}/.lybra + .pi + AGENTS.md, {audit_ws}/.lybra + .pi + AGENTS.md, 工位父根 _distributed/"),
     })
 
     # ── Step 8: 工位自检 → 起 pi → /go ───────────────────────────────
+    pi_ws = audit_ws if subagent_exec else exec_ws  # AIPOS-F143 件④: 子 agent 模式只剩审计工位是 pi(审计恒为独立 pi)
     step8 = [
         "# 工位自检(只读, 缺项逐项点名; 可在 pi 外任一终端跑)",
         _cmd("lybra", "onboarding", "check", _shell_quote(project_name), "--step", "8", "--home-root", hq,
-             "--workspace-dir", _shell_path(exec_ws)),
+             "--workspace-dir", _shell_path(pi_ws)),
         "# 在工位目录起 pi(Pi 编码代理), pi 内无参 /go 开工(只查本实例已认领的卡; 认领由驱动方经产品完成)",
-        f"cd {_shell_path(exec_ws)}",
+        f"cd {_shell_path(pi_ws)}",
         "pi",
         "/go",
     ]
@@ -634,8 +661,16 @@ def generate_onboarding_guide(
     })
 
     # ── Step 9: 首卡(顾问, 产品命令) ─────────────────────────────────
+    step9_exec = [
+        "# 声明执行方式(AIPOS-F143): 缺省子 agent 执行者 + 独立 pi 审计工位; 起草缺省与发卡核身份同读此声明(先预演再写入)",
+        *[_cmd("lybra", "project", "set-execution", "--workspace-root", gq, "--subagent-executor", _shell_quote(inst["executor"]),
+               "--auditor", _shell_quote(inst["auditor"]), phase) for phase in ("--dry-run", "--confirm")],
+    ] if subagent_exec else []
     step9 = [
-        "# 发卡: 卡稿 JSON 写 project / assigned_to(执行实例) / lane.repo(Step 2 仓名) / audit 等; 校验后发布到 pending",
+        *step9_exec,
+        ("# 发卡: 卡稿 JSON 写 project / lane.repo(Step 2 仓名) / audit 等(执行者 / harness / 审计者按执行方式声明缺省); 校验后发布到 pending"
+         if subagent_exec else
+         "# 发卡: 卡稿 JSON 写 project / assigned_to(执行实例) / lane.repo(Step 2 仓名) / audit 等; 校验后发布到 pending"),
         _cmd("lybra", "--workspace-root", gq, "draft", "create", "--from-json", DRAFT_JSON_PLACEHOLDER),
         _cmd("lybra", "--workspace-root", gq, "draft", "publish", "--path", DRAFT_PATH_PLACEHOLDER),
         "# 推进: 驱动方信封一段式认领(建工作树)→ 等工位交回 → 派审 → 等审计报告 → 裁决 → finalize → 结案",
@@ -676,7 +711,8 @@ def generate_onboarding_guide(
         "policies": policies,
         "advisor_dir": advisor_ws,
         "advisor_harness": {"kind": adv_h["kind"], "host": adv_h["host"], "dir": advisor_ws},
-        "workstations": {"executor": exec_ws, "auditor": audit_ws},
+        "workstations": {"executor": None if subagent_exec else exec_ws, "auditor": audit_ws},
+        "executor_mode": exec_mode,  # AIPOS-F143 件④
         "generated_at": now.isoformat(),
         "total_steps": len(steps),
         "owner_actions": owner_steps,

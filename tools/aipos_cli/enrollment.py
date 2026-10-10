@@ -551,6 +551,214 @@ def enrollment_whereabouts(workspace_root: str | Path, instance: str) -> dict[st
             "expected_log": expected, "found": found, "verdict": verdict, "workstation_location": location}
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F143 件③④: 执行者接入模式声明(roles.schema executor_modes) + 本项目已接入实例判定(唯一实现;
+# 发卡核身份 draft_writer.publish_identity_refusals、执行方式声明写前核验 workspace_config.set_project_execution、
+# 起草缺省 harness 推导同读此处, 禁另建身份表)。
+# ---------------------------------------------------------------------------
+
+_LAND_MODE_RE = re.compile(r"(?:^|\s)mode=(?P<mode>\S+)")
+_LAND_HARNESS_RE = re.compile(r"(?:^|\s)harness=(?P<harness>\S+)")
+
+
+def executor_mode_declaration() -> dict[str, Any]:
+    """roles.schema executor_modes(执行者接入模式: 缺省 / 各模式落点 / 允许角色类 / 拒因)唯一读取口。缺 / 形不合 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    decl = load_schema("roles", code_repo_schema_root()).get("executor_modes")
+    values = decl.get("values") if isinstance(decl, dict) else None
+    codes = decl.get("reject_codes") if isinstance(decl, dict) else None
+    landings = {"workstation", "governance_root"}
+    if (not isinstance(values, dict) or decl.get("default") not in values
+            or not all(isinstance(v, dict) and v.get("credential_landing") in landings
+                       and isinstance(v.get("allowed_role_classes"), list) and v["allowed_role_classes"] for v in values.values())
+            or not isinstance(codes, dict)
+            or not all(isinstance(codes.get(k), str) and codes[k] for k in (
+                "EXECUTOR_MODE_UNKNOWN", "EXECUTOR_MODE_ROLE_CLASS", "EXECUTOR_MODE_TARGET",
+                "EXECUTOR_MODE_INSTANCE_REQUIRED", "EXECUTOR_MODE_HARNESS"))):
+        raise SchemaLoadError("roles.schema.json executor_modes(default ∈ values / values.<模式>{credential_landing, allowed_role_classes} / "
+                              "reject_codes)未声明齐")
+    return decl
+
+
+def governance_root_executor_modes() -> tuple[str, ...]:
+    """凭据落治理根的执行者接入模式(声明 credential_landing=governance_root; 向导 / enroll / 起草同读)。"""
+    return tuple(name for name, spec in executor_mode_declaration()["values"].items()
+                 if spec["credential_landing"] == "governance_root")
+
+
+def subagent_land_detail(*, host: str, harness: str, mode: str, files: list[str]) -> str:
+    """子 agent 模式 land 事件 reason 载荷(enroll_client 写; instance_enrollment 读): 无 workstation= 段 = 无工位位置。"""
+    return f"host={host} mode={mode} harness={harness} files={files}"
+
+
+def _governance_connection(governance_root: Path) -> Path:
+    """治理根连接文件路径(既有原语 service_mode.connection_path, 不另拼 .lybra 路径)。"""
+    from tools.aipos_cli.service_mode import connection_path
+
+    return connection_path(Path(governance_root))
+
+
+def _connection_bound(governance_root: Path, instance: str) -> bool:
+    """治理根连接文件 .lybra/connection.json 是否有该实例的可用条目(挑选判据唯一实现 token_resolver.select_token_entry, 只按实例)。
+    文件不在 = False; 读不出 / 形坏 = ValueError 上抛(fail-closed, 不当作「未绑定」)。只看字段, 永不取出 token 值。"""
+    from tools.aipos_cli.token_resolver import TokenResolutionError, load_connection_tokens, select_token_entry
+
+    conn = _governance_connection(Path(governance_root))
+    if not conn.is_file():
+        return False
+    tokens = load_connection_tokens(conn)
+    try:
+        select_token_entry(tokens, agent_instance=instance, source=str(conn))
+    except TokenResolutionError:
+        return False
+    return True
+
+
+def instance_enrollment(governance_root: str | Path, instance: str) -> dict[str, Any]:
+    """AIPOS-F143 件③: 实例是否为本项目已接入实例——唯一判定。
+
+    已接入 = 本项目 enrollment_log 有该实例未作废的 land 事件(_latest_land, 与 workstation_location 同一读取口)
+    或 治理根连接文件有该实例可用凭据条目(_connection_bound → select_token_entry; 子 agent 执行者既有形)。
+    返回 {instance, enrolled, via: [land|connection], mode, harness, host, workstation: workstation_location 结果, reason}:
+    mode / harness / host 取自最新 land 事件 reason(子 agent 模式 = mode=subagent harness=<顾问会话 kind>; pi 工位 = 无 mode, 有 workstation=)。
+    连接文件读不出 = ValueError 上抛(fail-closed)。只读。"""
+    root = _workspace_root_path(governance_root)
+    name = str(instance or "").strip()
+    out: dict[str, Any] = {"instance": name, "enrolled": False, "via": [], "mode": None, "harness": None, "host": None,
+                           "workstation": {"found": False, "reason": "未接入"}, "reason": ""}
+    if not name:
+        out["reason"] = "实例名为空"
+        return out
+    trail = enrollment_trail_path(root)
+    land = _latest_land(trail, name) if trail.is_file() else None
+    if land is not None:
+        out["via"].append("land")
+        reason = land.group("reason")
+        for key, rx in (("mode", _LAND_MODE_RE), ("harness", _LAND_HARNESS_RE), ("host", _LAND_HOST_RE)):
+            match = rx.search(reason)
+            out[key] = match.group(key) if match else None
+    if _connection_bound(root, name):
+        out["via"].append("connection")
+    out["enrolled"] = bool(out["via"])
+    if out["enrolled"]:
+        out["workstation"] = workstation_location(root, name)
+    else:
+        out["reason"] = (f"{trail.name} 无 {name} 的未作废 land 事件, 治理根 .lybra/connection.json 亦无其可用凭据条目"
+                         "(该实例未在本项目接入)")
+    return out
+
+
+def enrolled_instances(governance_root: str | Path) -> list[dict[str, Any]]:
+    """本项目全部已接入实例(按实例名排序; 每项 = instance_enrollment 结果)。候选 = enrollment_log 中有 land 事件的实例
+    ∪ 治理根连接文件中带 agent_instance 的条目; 逐个经 instance_enrollment 判定(作废 / retired 的不列)。只读。"""
+    from tools.aipos_cli.token_resolver import TOKEN_ENTRY_FIELDS, load_connection_tokens
+
+    root = _workspace_root_path(governance_root)
+    names: set[str] = set()
+    trail = enrollment_trail_path(root)
+    if trail.is_file():
+        for line in trail.read_text(encoding="utf-8").splitlines():
+            event = _EVENT_LINE_RE.match(line.strip())  # 候选只取事件行实例名; land 是否在册由 instance_enrollment(_latest_land)判
+            if event and event.group("action") == "land":
+                names.add(event.group("instance"))
+    conn = _governance_connection(root)
+    if conn.is_file():
+        field = TOKEN_ENTRY_FIELDS["agent_instance"]
+        names |= {str(e.get(field)).strip() for e in load_connection_tokens(conn) if isinstance(e, dict) and str(e.get(field) or "").strip()}
+    views = [instance_enrollment(root, n) for n in sorted(names)]
+    return [v for v in views if v["enrolled"]]
+
+
+def enrolled_instances_line(governance_root: str | Path) -> str:
+    """拒因末尾「本项目已接入实例: …」一行的唯一渲染(发卡核身份与 set-execution 共用): 实例[来源+工位+模式]。
+    连接文件读不出 = 如实写入该行(不吞, 不抛断拒因)。"""
+    try:
+        views = enrolled_instances(governance_root)
+    except ValueError as exc:
+        return f"本项目已接入实例: (列不出: {exc})"
+    listed = ", ".join(f"{v['instance']}[{'+'.join(v['via'])}{' 工位' if v['workstation'].get('found') else ''}"
+                       f"{' ' + str(v['mode']) if v['mode'] else ''}]" for v in views)
+    return f"本项目已接入实例: {listed or '(无)'}"
+
+
+def has_enrollment_registry(governance_root: str | Path) -> bool:
+    """本项目有无接入登记 = 本项目 enrollment_log 存在(接入事件的唯一登记处; 经产品接入的项目, 向导第 5 步顾问 enroll 即由门写入
+    land 事件)。无 = 无从判「已接入」(裸治理根 / 夹具 / 未经产品接入), 发卡核身份不适用(行为不变)。只看登记处是否存在,
+    「某实例是否已接入」仍由 instance_enrollment 判(land 事件 / 治理根连接文件绑定)。"""
+    return enrollment_trail_path(_workspace_root_path(governance_root)).is_file()
+
+
+# AIPOS-F143 件②: 执行方式声明(project.json execution)唯一写入口——读取口 workspace_config.project_execution; 写前核各实例为本项目
+# 已接入实例(instance_enrollment, 与发卡核身份同一判定)。写入经 workspace_config.update_project_json 唯一写路径。
+
+def execution_instance_refusals(project_root: str | Path, execution: dict[str, Any]) -> list[str]:
+    """AIPOS-F143 件②: 执行方式声明里各实例的接入核验(判定唯一实现 enrollment.instance_enrollment, 与发卡核身份同一判定): 未接入 / 审计者与 pi 执行者
+    无工位位置 = 拒因(带已接入实例清单)。空列表 = 全部通过。"""
+    refusals: list[str] = []
+    for key, needs_workstation in (("subagent_executor", False), ("auditor", True), ("pi_executor", True)):
+        name = execution.get(key)
+        if not name:
+            continue
+        try:
+            view = instance_enrollment(project_root, name)
+        except ValueError as exc:  # 治理根连接文件读不出 = 接入状态不可得(fail-closed, 记为拒因)
+            refusals.append(f"{key}={name}: 接入状态不可得: {exc}")
+            continue
+        if not view["enrolled"]:
+            refusals.append(f"{key}={name}: {view['reason']}")
+        elif needs_workstation and not view["workstation"].get("found"):
+            refusals.append(f"{key}={name}: 已接入但无工位位置({view['workstation'].get('reason')}); 审计者 / pi 执行者须为 pi 工位")
+    if refusals:
+        refusals.append(enrolled_instances_line(project_root))
+    return refusals
+
+
+def set_project_execution(
+    project_root: str | Path,
+    *,
+    subagent_executor: str,
+    auditor: str,
+    pi_executor: str | None = None,
+    pi_allowed_task_modes: list[str] | tuple[str, ...] = (),
+    default_mode: str | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """AIPOS-F143 件②: `lybra project set-execution` 的唯一实现——整段写 project.json execution(未给的可选键 = 声明缺省; 其余键原样保留)。
+    校验 = 唯一读取口 project_execution(写前以将写内容预检 + 写后复核, 经 update_project_json verify); 写前另核各实例为本项目已接入实例
+    (execution_instance_refusals; 不过 = EXECUTION_INSTANCE_NOT_ENROLLED 零写入)。dry_run(缺省)= 只预演 diff 零写入。
+    返回 {project_json, dry_run, changed, written, diff, execution}。"""
+    from tools.aipos_cli.workspace_config import (
+        ExecutionDeclarationError,
+        execution_declaration,
+        project_execution,
+        project_json_path,
+        update_project_json,
+    )
+
+    decl = execution_declaration()
+    section: dict[str, Any] = {
+        "default_mode": default_mode or decl["schema"]["default_mode"].get("default"),
+        "subagent_executor": str(subagent_executor or "").strip(),
+        "pi_allowed_task_modes": [str(m).strip() for m in pi_allowed_task_modes],
+        "pi_executor": (str(pi_executor).strip() or None) if pi_executor is not None else None,
+        "auditor": str(auditor or "").strip(),
+    }
+    staged: dict[str, Any] = {}
+
+    def _mutate(data: dict[str, Any]) -> None:
+        data["execution"] = section
+        staged["view"] = project_execution(project_root, project=data)  # 形不合 = 抛, 零写入
+
+    probe: dict[str, Any] = {"execution": dict(section)}
+    view = project_execution(project_root, project=probe)
+    refusals = execution_instance_refusals(project_root, view or {})
+    if refusals:
+        raise ExecutionDeclarationError("EXECUTION_INSTANCE_NOT_ENROLLED", refusals)
+    outcome = update_project_json(project_root, _mutate, verify=project_execution, dry_run=dry_run)
+    return {**outcome, "project_json": str(project_json_path(project_root)), "execution": staged.get("view") or view}
+
+
 def _append_enrollment_trail(
     workspace_root: Path,
     *,

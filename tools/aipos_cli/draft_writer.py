@@ -353,6 +353,132 @@ def _external_intake_execution_metadata(metadata: dict[str, Any]) -> dict[str, A
     return updated
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F143 件②③: 执行方式声明(project.json execution, 唯一读取口 workspace_config.project_execution)驱动的起草缺省 + 发卡核身份
+# (已接入判定唯一实现 enrollment.instance_enrollment)。起草与发卡同读一处, 禁另建身份表 / 第二份缺省。
+# ---------------------------------------------------------------------------
+
+def _execution_or_reasons(repo_root: Path) -> tuple[dict[str, Any] | None, list[str]]:
+    from tools.aipos_cli.workspace_config import ExecutionDeclarationError, project_execution
+
+    try:
+        return project_execution(repo_root), []
+    except ExecutionDeclarationError as exc:
+        return None, [f"AIPOS-F143: project.json execution 声明不合, 拒(出口: lybra project set-execution 重声明): {exc}"]
+    except (OSError, ValueError) as exc:
+        return None, [f"AIPOS-F143: project.json 读不出, 执行方式声明不可得(fail-closed): {exc}"]
+
+
+def _pi_mode_refusal(execution: dict[str, Any], task_mode: str) -> str:
+    """卡要派 pi 执行工位: task_mode 须在 pi_allowed_task_modes(Owner 明示)且声明了 pi_executor; 否则拒因(EXECUTION_PI_NOT_ALLOWED)。"""
+    from tools.aipos_cli.workspace_config import execution_declaration
+
+    if task_mode in execution["pi_allowed_task_modes"] and execution["pi_executor"]:
+        return ""
+    codes = execution_declaration()["reject_codes"]
+    return (f"AIPOS-F143 EXECUTION_PI_NOT_ALLOWED: task_mode={task_mode or '(缺)'} 不在 execution.pi_allowed_task_modes "
+            f"{execution['pi_allowed_task_modes']}(pi_executor={execution['pi_executor'] or '未声明'})。{codes['EXECUTION_PI_NOT_ALLOWED']}")
+
+
+def apply_execution_defaults(metadata: dict[str, Any], repo_root: Path) -> list[str]:
+    """AIPOS-F143 件②: 起草缺省按执行方式声明补 assigned_to / agent_instance / harness / audit_by(只补缺, 已给原样保留)。
+    返回拒因(空 = 通过)。未声明 execution = 不动(行为不变)。
+      - 派 pi 仅当卡稿显式要 pi(harness=pi 或 assigned_to=pi_executor)且 task_mode ∈ pi_allowed_task_modes(Owner 明示)→ 执行者 = pi_executor;
+        否则拒 EXECUTION_PI_NOT_ALLOWED(未列明 = 按缺省, 不静默改派)。
+      - 其余 = 缺省子 agent: assigned_to 缺 → subagent_executor; harness 缺且执行者是 subagent_executor → 其子 agent 模式接入登记记下的
+        顾问会话 kind(enrollment.instance_enrollment; 登记里没有 = 拒, 出口 = 卡稿显式给 harness 或按向导 --executor-mode subagent 接入)。
+      - audit_by 缺且卡要审计(audit ≠ none)→ auditor(审计恒为声明的独立 pi 审计工位)。"""
+    execution, reasons = _execution_or_reasons(repo_root)
+    if reasons or execution is None:
+        return reasons
+    from tools.aipos_cli.enrollment import instance_enrollment
+
+    task_mode = str(metadata.get("task_mode") or "").strip()
+    harness = str(metadata.get("harness") or "").strip()
+    assigned = str(metadata.get("assigned_to") or "").strip()
+    wants_pi = harness == "pi" or (not harness and bool(assigned) and assigned == execution["pi_executor"])
+    if wants_pi:
+        refusal = _pi_mode_refusal(execution, task_mode)
+        if refusal:
+            return [refusal]
+        metadata["assigned_to"] = assigned or execution["pi_executor"]
+        metadata["harness"] = "pi"
+    else:
+        metadata["assigned_to"] = assigned or execution["subagent_executor"]
+        if not harness and metadata["assigned_to"] == execution["subagent_executor"]:
+            try:
+                view = instance_enrollment(repo_root, execution["subagent_executor"])
+            except ValueError as exc:
+                return [f"AIPOS-F143: 治理根连接文件读不出, 子 agent 执行者接入登记不可得: {exc}"]
+            if not view.get("harness"):
+                return [f"AIPOS-F143: 子 agent 执行者 {execution['subagent_executor']} 无子 agent 模式接入登记(land 事件无 harness=), "
+                        "顾问会话 harness 不可得。出口: 卡稿显式给 harness(claude-code|codex), 或按 lybra onboarding guide "
+                        "--executor-mode subagent 重接入该实例"]
+            metadata["harness"] = view["harness"]
+    if not str(metadata.get("agent_instance") or "").strip():
+        metadata["agent_instance"] = metadata["assigned_to"]
+    if str(metadata.get("audit") or "").strip().lower() != "none" and not str(metadata.get("audit_by") or "").strip():
+        metadata["audit_by"] = execution["auditor"]
+    return []
+
+
+def publish_identity_refusals(repo_root: Path, metadata: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    """AIPOS-F143 件③: 发卡核身份——assigned_to 与审计者须为本项目已接入实例(enrollment.instance_enrollment 唯一判定);
+    harness=pi 的执行者须有工位位置; 审计者恒为独立 pi 工位(须有工位位置); 声明了 execution 时派 pi 须在 pi_allowed_task_modes。
+    适用 = 声明了 execution 或本项目有接入登记(enrollment_log, enrollment.has_enrollment_registry); 都没有(裸治理根 / 夹具)= 不适用, 行为不变。
+    审计者 = 卡面 audit_by; 缺而 task_mode=code 且 audit ≠ none = 派审时将用的实例(audit_derivation.resolve_audit_instance 唯一解析)。
+    返回 (拒因, 核验视图)。拒因末条列已接入实例与 set-execution 出口。"""
+    from tools.aipos_cli.enrollment import enrolled_instances_line, has_enrollment_registry, instance_enrollment
+
+    execution, reasons = _execution_or_reasons(repo_root)
+    if reasons:
+        return reasons, {"applied": True}
+    if execution is None and not has_enrollment_registry(repo_root):
+        return [], {"applied": False, "reason": "本项目无接入登记且未声明 execution(裸治理根), 发卡核身份不适用"}
+    harness = str(metadata.get("harness") or "").strip()
+    task_mode = str(metadata.get("task_mode") or "").strip()
+    refusals: list[str] = []
+    if execution is not None and harness == "pi":
+        refusal = _pi_mode_refusal(execution, task_mode)
+        if refusal:
+            refusals.append(refusal)
+    checks: list[tuple[str, str, bool]] = [("assigned_to", str(metadata.get("assigned_to") or "").strip(), harness == "pi")]
+    auditor = str(metadata.get("audit_by") or "").strip()
+    if not auditor and task_mode == "code" and str(metadata.get("audit") or "").strip().lower() != "none":
+        from tools.aipos_cli.audit_derivation import resolve_audit_instance
+
+        try:
+            auditor = resolve_audit_instance(metadata, repo_root)
+        except ValueError as exc:
+            refusals.append(f"AIPOS-F143: 卡无 audit_by 且审计实例推导不出: {exc}")
+    if auditor:
+        checks.append(("audit_by" if metadata.get("audit_by") else "audit_by(缺省推导)", auditor, True))
+    view: dict[str, Any] = {"applied": True, "instances": {}}
+    for key, name, needs_workstation in checks:
+        if not name:
+            refusals.append(f"AIPOS-F143: {key} 缺, 发卡须指明本项目已接入的执行者")
+            continue
+        try:
+            status = instance_enrollment(repo_root, name)
+        except ValueError as exc:
+            refusals.append(f"AIPOS-F143: 治理根连接文件读不出, {key}={name} 接入状态不可得(fail-closed): {exc}")
+            continue
+        view["instances"][key] = {"instance": name, "enrolled": status["enrolled"], "via": status["via"],
+                                  "workstation": bool(status["workstation"].get("found")), "mode": status["mode"]}
+        if not status["enrolled"]:
+            refusals.append(f"AIPOS-F143 身份未接入: {key}={name} 不是本项目已接入实例({status['reason']})")
+        elif needs_workstation and not status["workstation"].get("found"):
+            role = "审计者恒为独立 pi 工位" if key.startswith("audit_by") else "harness=pi 的执行者须有 pi 工位"
+            refusals.append(f"AIPOS-F143 无工位位置: {key}={name} 已接入但无工位位置({status['workstation'].get('reason')}); {role}")
+    if refusals:
+        refusals.append(
+            f"{enrolled_instances_line(repo_root)}。出口: 卡稿 assigned_to / audit_by 改写为已接入实例; 或声明执行方式后由起草缺省填写: "
+            f"lybra project set-execution --workspace-root {repo_root} --subagent-executor <已接入子 agent 执行者> --auditor <已接入 pi 审计工位> "
+            "[--pi-executor <pi 执行工位> --pi-allowed-task-mode <task_mode>](--dry-run 预演 / --confirm 写入); "
+            "新实例先按 lybra onboarding guide 接入(子 agent 执行者: --executor-mode subagent)")
+    return refusals, view
+
+
 def create_draft(
     repo_root: Path,
     metadata: dict[str, Any],
@@ -370,6 +496,8 @@ def create_draft(
                 metadata[field_name] = placeholder_value
 
     project_reasons = _fill_declared_project(metadata, repo_root)
+    # AIPOS-F143 件②: 执行方式声明 → 缺省执行者 / harness / 审计者(未声明 = 不动; 先于 harness 派生, 派生只补仍缺的)
+    project_reasons = [*project_reasons, *apply_execution_defaults(metadata, repo_root)]
     normalized = _normalized_metadata(metadata, repo_root)
     
     # AIPOS-F78 件①: 意图面 harness/lane 缺则派生(create/publish/regen 三口一函数 derive_intent_declarations)
@@ -865,6 +993,13 @@ def publish_draft(
                 )
         except _IntentSchemaLoadError as exc:
             validation["blocking_reasons"].append(f"AIPOS-F78 件①: harness/lane 声明缺失, 拒发布: {exc}")
+
+        # AIPOS-F143 件③: 发卡核身份(执行者 / 审计者须为本项目已接入实例; 判定唯一实现 enrollment.instance_enrollment)——
+        # 读派生后的意图面(harness 缺省已补), 与起草缺省同读执行方式声明
+        identity_reasons, result["identity_check"] = publish_identity_refusals(repo_root, publish_metadata)
+        for reason in identity_reasons:
+            if reason not in validation["blocking_reasons"]:
+                validation["blocking_reasons"].append(reason)
 
         # AIPOS-F73C件①: 校验 executor/auditor 卡面不含门动词 (fail-closed)
         # 角色判据:与渲染侧共用 _card_role_class(顾问代修, 仲裁 C;此前引用不存在的

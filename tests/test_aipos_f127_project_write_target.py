@@ -221,8 +221,8 @@ def test_item1_resolver_is_single_implementation_and_cli_has_no_active_project_w
     calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
              and n.func.id == "_project_write_target"]
     _show(f"[件①·静态] _project_write_target 调用点 {len(calls)} 处(set-paths/set-meta/set-repos/set-repo/set-workstation/"
-          "freeze-legacy/dispatch-mode set/export 隐式目标)")
-    assert len(calls) == 8
+          "set-execution/freeze-legacy/dispatch-mode set/export 隐式目标)")
+    assert len(calls) == 9  # AIPOS-F143 件②: + set-execution(同一目标解析)
     wc_src = (REPO_ROOT / "tools/aipos_cli/workspace_config.py").read_text(encoding="utf-8")
     fn = next(n for n in ast.parse(wc_src).body if isinstance(n, ast.FunctionDef) and n.name == "resolve_project_write_target")
     names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
@@ -231,7 +231,7 @@ def test_item1_resolver_is_single_implementation_and_cli_has_no_active_project_w
 
 
 # ===========================================================================
-# 件② 输出首行: 五个两阶段写命令同一包装, 首行 = 目标项目 + 来源 + project.json 绝对路径
+# 件② 输出首行: 六个两阶段写命令同一包装(AIPOS-F143 + set-execution), 首行 = 目标项目 + 来源 + project.json 绝对路径
 # ===========================================================================
 
 def test_item2_first_line_names_target_and_absolute_project_json_for_every_writer(rig, monkeypatch):
@@ -245,7 +245,15 @@ def test_item2_first_line_names_target_and_absolute_project_json_for_every_write
         "set-repos": ["--repo", f"app={tmp}/app"],
         "set-workstation": ["--instance", "exec.beta.mac", "--gate-ssh-alias", "gate-dev", "--material-access", "经 ssh gate-dev 读写"],
         "set-meta": ["--phase", "试运行"],
+        # AIPOS-F143 件②: set-execution 写前核实例已接入——先在 beta 接入登记两条 land 事件(子 agent 执行者 + pi 审计工位)
+        "set-execution": ["--subagent-executor", "exec.beta.adv", "--auditor", "audit.beta.ws"],
     }
+    from tools.aipos_cli.enrollment import _trail_line, _write_trail_line, enrollment_trail_path, subagent_land_detail
+
+    for inst, role, reason in (("exec.beta.adv", "executor", subagent_land_detail(host="adv", harness="codex", mode="subagent", files=[])),
+                               ("audit.beta.ws", "auditor", f"host=fixture workstation={tmp / 'ws-audit'} files=[]")):
+        _write_trail_line(enrollment_trail_path(rig["beta"]), _trail_line(action="land", code_id="enroll_fixture", role=role,
+                                                                          instance=inst, project="beta", by="t", reason=reason))
     from tools.schema_loader import load_schema
 
     assert sorted(load_schema("verbs")["two_phase_protocol"]["project_json_writers"]["commands"]) == sorted(argvs)

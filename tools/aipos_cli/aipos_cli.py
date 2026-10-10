@@ -1809,6 +1809,13 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_parser.add_argument("--harness", help="AIPOS-F92/F129: workstation harness kind (legal values = distribution.schema harness_semantics.kinds; default pi; unknown = refused with the declared list). claude-code = advisor Claude Code session: credentials land in --workspace, declared skills land in --harness-dir/.claude/skills; codex = advisor Codex session (may run on another machine): credentials land in --workspace, no .pi wiring, no skills delivered")
     roles_enroll_parser.add_argument("--harness-dir", help="AIPOS-F92/F129: absolute working directory of a non-pi harness (claude-code: required, must exist here; codex: optional, recorded as given — not checked locally when --harness-host is set)")
     roles_enroll_parser.add_argument("--harness-host", help="AIPOS-F129: host the harness session runs on when it is not this machine (only kinds declaring harness_host=optional, e.g. codex); recorded in .lybra/role harness.host")
+    from tools.aipos_cli.enrollment import executor_mode_declaration as _executor_mode_declaration  # AIPOS-F143 件④: 取值读声明
+    roles_enroll_parser.add_argument("--executor-mode", choices=list(_executor_mode_declaration()["values"]), default=None,
+                                     help="AIPOS-F143: executor enrollment mode (roles.schema executor_modes; default workstation = existing behavior). "
+                                          "subagent = advisor-spawned sub-agent executor (ROLES 1a): credentials land in the governance root's "
+                                          ".lybra/connection.json (--workspace = governance root), --harness = the advisor session kind "
+                                          "(claude-code|codex), --harness-host = the advisor session host if not this machine; executor class only "
+                                          "(auditors are always independent pi workstations)")
     roles_enroll_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     profile_parser = subparsers.add_parser("agent-profile", help="Workspace-local custom agent profile authoring")
@@ -1961,6 +1968,18 @@ def build_parser() -> argparse.ArgumentParser:
     project_setmeta_parser.add_argument("--workspace-root", help="Target governance root when the project name is omitted (default: the one containing the current directory)")
     project_setmeta_parser.add_argument("--json", action="store_true", help="Output JSON")
     _project_json_two_phase_flags(project_setmeta_parser, "set-meta")  # 缺省预演 / --confirm 才写(与四个写命令同一包装)
+    # AIPOS-F143 件②: 项目执行方式声明写入口(project.json execution; 声明 config.schema project_json.execution; update_project_json 唯一写路径)
+    project_setexec_parser = project_subparsers.add_parser("set-execution", help="AIPOS-F143: declare the project's execution mode (project.json execution: sub-agent executor by default, Owner-approved task modes may go to a pi executor workstation, audits always by an independent pi auditor); every instance must already be enrolled in this project; --dry-run (default) shows the diff, --confirm writes")
+    project_setexec_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory)")
+    project_setexec_parser.add_argument("--subagent-executor", required=True, metavar="INSTANCE", help="Sub-agent executor instance (enrolled with lybra roles enroll --executor-mode subagent); default assigned_to of drafted cards")
+    project_setexec_parser.add_argument("--auditor", required=True, metavar="INSTANCE", help="Independent pi auditor workstation instance (must have a workstation location); default audit_by of drafted cards")
+    project_setexec_parser.add_argument("--pi-executor", default=None, metavar="INSTANCE", help="pi executor workstation instance (required when --pi-allowed-task-mode is given)")
+    project_setexec_parser.add_argument("--pi-allowed-task-mode", action="append", dest="pi_allowed_task_modes", default=[], metavar="TASK_MODE", help="task_mode the Owner explicitly allows to go to the pi executor (repeatable; enums.schema task_mode); unlisted = sub-agent default")
+    project_setexec_parser.add_argument("--default-mode", default=None, help="Default execution mode (config.schema project_json.execution.default_mode enum; default subagent)")
+    project_setexec_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    project_setexec_parser.add_argument("--workspace-root", help="Target governance root when the project name is omitted (default: the one containing the current directory)")
+    project_setexec_parser.add_argument("--json", action="store_true", help="Output JSON")
+    _project_json_two_phase_flags(project_setexec_parser, "set-execution")  # 缺省预演 / --confirm 才写(同一包装)
     # AIPOS-F110 件②③: 跨机工位开工材料声明(project.json workstations.<实例>) + 双向可达检查(同一 ssh transport 代码路径)
     project_setws_parser = project_subparsers.add_parser("set-workstation", help="AIPOS-F110: declare a cross-machine workstation's material access (project.json workstations.<instance>: gate_ssh_alias + material_access), validated against config.schema project_json.workstations; --dry-run (default) shows the diff, --confirm writes")
     project_setws_parser.add_argument("name", help="Established project name")
@@ -2088,6 +2107,8 @@ def build_parser() -> argparse.ArgumentParser:
     onboarding_guide_parser.add_argument("--advisor-harness", choices=list(_advisor_harness_kinds()), default=None,
                                          help="AIPOS-F129: advisor session harness (choices = distribution.schema harness_semantics.kinds with advisor_session=true; default claude-code = existing guide). codex = Codex session: Step 5 enrolls with --harness codex, no .claude/skills delivery")
     onboarding_guide_parser.add_argument("--advisor-host", help="AIPOS-F129: host the advisor session runs on when it is not the governance-root machine (codex; recorded as --harness-host; its short name is the advisor instance host segment)")
+    onboarding_guide_parser.add_argument("--executor-mode", choices=list(_executor_mode_declaration()["values"]), default=None,
+                                         help="AIPOS-F143: executor enrollment mode (roles.schema executor_modes; default workstation = existing pi executor steps). subagent = advisor-spawned sub-agent executor: Step 7 enrolls it into the governance root with --executor-mode subagent --harness <advisor kind>, Step 9 declares lybra project set-execution")
     onboarding_guide_parser.add_argument("--owner-workspace", help="Gate workspace holding the Owner credential (central registry); defaults to <home>/<active project>")
     onboarding_guide_parser.add_argument("--owner-connection-json", help="Owner credential connection.json (defaults to <owner-workspace>/.lybra/connection.json)")
     onboarding_guide_parser.add_argument("--envelope-days", type=int, default=30, help="Envelope validity in days (default 30)")
@@ -3182,6 +3203,7 @@ def main(argv: list[str] | None = None) -> int:
                         harness_kind=getattr(args, "harness", None),
                         harness_dir=getattr(args, "harness_dir", None) or None,
                         harness_host=getattr(args, "harness_host", None),
+                        executor_mode=getattr(args, "executor_mode", None),
                     )
                     if getattr(args, "json", False):
                         print(render_json(result))
@@ -3237,6 +3259,8 @@ def main(argv: list[str] | None = None) -> int:
                                 print(f"    - {ch.get('distribution_id')}: {ch.get('files_written')} 个文件 → {ch.get('target_path')}")
                         if result.get('harness'):
                             print(f"  harness: {json.dumps(result['harness'], ensure_ascii=False)}(已记入 .lybra/role)")
+                        if result.get('subagent_harness'):  # AIPOS-F143 件④
+                            print(f"  executor_mode: {result['executor_mode']}(子 agent 执行者; harness={result['subagent_harness']} 已记入 land 事件, 未写 .lybra/role)")
                         pd_ = result.get('policy_derivation')
                         if pd_ and pd_.get('policy_id'):
                             print(f"\n  ✓ owner_policy_ref 已推导: {pd_['policy_id']}")
@@ -3455,6 +3479,32 @@ def main(argv: list[str] | None = None) -> int:
                 _project_json_two_phase_emit(
                     "set-meta", target, outcome, json_out=getattr(args, "json", False),
                     details=[f"{change['key']}: {change['before']!r} → {change['after']!r}" for change in outcome["changes"]])
+                return 0
+            if args.project_command == "set-execution":
+                # AIPOS-F143 件②: 唯一实现 enrollment.set_project_execution(声明校验 + 实例接入核验 + update_project_json 唯一写路径)
+                from tools.aipos_cli.enrollment import set_project_execution
+                from tools.aipos_cli.workspace_config import ExecutionDeclarationError
+
+                target = _project_write_target(args, home, args.name)
+                if target is None:
+                    return 1
+                try:
+                    outcome = set_project_execution(
+                        target["project_root"], subagent_executor=args.subagent_executor, auditor=args.auditor,
+                        pi_executor=args.pi_executor, pi_allowed_task_modes=list(args.pi_allowed_task_modes or []),
+                        default_mode=args.default_mode, dry_run=not args.confirm)
+                except ExecutionDeclarationError as exc:
+                    print(f"Error: {exc.code}(project.json 未改动)", file=sys.stderr)
+                    for problem in exc.problems:
+                        print(f"  - {problem}", file=sys.stderr)
+                    return 1
+                view = outcome["execution"]
+                _project_json_two_phase_emit(
+                    "set-execution", target, {k: outcome[k] for k in ("dry_run", "changed", "written", "diff", "project_json")},
+                    json_out=getattr(args, "json", False), extra={"execution": view},
+                    details=[f"execution.{k} = {view[k]!r}" for k in ("default_mode", "subagent_executor", "pi_allowed_task_modes",
+                                                                       "pi_executor", "auditor")]
+                    + ["各实例已核: 本项目已接入(审计者 / pi 执行者有工位位置); 起草缺省与发卡核身份同读本段"])
                 return 0
             if args.project_command == "set-workstation":
                 # AIPOS-F110 件②: 唯一写入口 workspace_config.set_project_workstation(校验 = config.schema project_json.workstations)
@@ -4261,6 +4311,7 @@ def main(argv: list[str] | None = None) -> int:
                     host_segment=args.host_segment,
                     advisor_harness=args.advisor_harness,
                     advisor_host=args.advisor_host,
+                    executor_mode=args.executor_mode,
                     owner_workspace=args.owner_workspace,
                     owner_connection_json=args.owner_connection_json,
                     envelope_days=args.envelope_days,

@@ -29,7 +29,7 @@ if str(REPO_ROOT) not in sys.path:
 COMMANDS = ("set-paths", "set-repo", "set-repos", "set-workstation")
 # AIPOS-F127 件③: set-meta 登记于同一声明(两阶段旗标 / 输出包装同一份); 其写入正反例见 test_aipos_f127_project_write_target.py
 # (键须 config.schema project_json 已声明, 本文件的逐命令写入参数化只覆盖上面四个)
-DECLARED_COMMANDS = COMMANDS + ("set-meta",)
+DECLARED_COMMANDS = COMMANDS + ("set-meta", "set-execution")  # AIPOS-F143 件②: set-execution 登记于同一声明(正反例见 test_aipos_f143_execution_mode.py)
 SECRET = "lybra_tok_F125SECRETabcdefghijklmnopqrstuvwxyz0123456789"
 PREVIEW = "预览(未写; 加 --confirm 写入)"
 

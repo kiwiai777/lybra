@@ -1923,6 +1923,92 @@ def set_project_workstation(project_root: str | Path, instance: str, *, gate_ssh
 
 
 # ---------------------------------------------------------------------------
+# AIPOS-F143 件②: 项目执行方式声明 project.json execution(声明 config.schema project_json.schema.execution)。
+# 唯一读取口 project_execution(起草缺省 / 发卡核身份同读); 唯一写入口 enrollment.set_project_execution(`lybra project set-execution`;
+# 写前须核实例接入, 放在 enrollment 侧——本模块在 finalize 合并前预载闭包内, 不引入接入模块依赖)。
+# ---------------------------------------------------------------------------
+
+class ExecutionDeclarationError(ValueError):
+    """execution 段不合声明 / 实例未接入(fail-closed, project.json 不动)。code ∈ config.schema project_json.execution.reject_codes。"""
+
+    def __init__(self, code: str, problems: list[str]):
+        super().__init__(f"{code}: " + "; ".join(problems))
+        self.code = code
+        self.problems = list(problems)
+
+
+def execution_declaration() -> dict[str, Any]:
+    """config.schema project_json.schema.execution(键表 + 拒因码)。缺 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (((load_schema("config").get("configuration_sources") or {}).get("project_json") or {}).get("schema") or {}).get("execution")
+    keys = decl.get("schema") if isinstance(decl, dict) else None
+    codes = decl.get("reject_codes") if isinstance(decl, dict) else None
+    if (not isinstance(keys, dict) or not {"default_mode", "subagent_executor", "pi_allowed_task_modes", "pi_executor", "auditor"} <= set(keys)
+            or not isinstance((keys.get("default_mode") or {}).get("enum"), list)
+            or not isinstance(codes, dict)
+            or not all(isinstance(codes.get(k), str) and codes[k] for k in (
+                "EXECUTION_DECLARATION_INVALID", "EXECUTION_INSTANCE_NOT_ENROLLED", "EXECUTION_PI_NOT_ALLOWED"))):
+        raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.execution(schema {default_mode, "
+                              "subagent_executor, pi_allowed_task_modes, pi_executor, auditor} / reject_codes)未声明齐")
+    return decl
+
+
+def _execution_instance(value: Any, key: str, problems: list[str], *, required: bool) -> str | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        if required:
+            problems.append(f"{key} 必填(实例名)")
+        return None
+    if not isinstance(value, str) or any(ch.isspace() for ch in value.strip()):
+        problems.append(f"{key}={value!r} 须为不含空白的实例名")
+        return None
+    return value.strip()
+
+
+def project_execution(project_root: str | Path, *, project: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """project.json execution 段 → 规范化视图 {default_mode, subagent_executor, pi_allowed_task_modes, pi_executor, auditor};
+    缺段 = None(未声明, 行为不变)。形不合 = ExecutionDeclarationError(EXECUTION_DECLARATION_INVALID, 问题一次列全)。
+    project = 将写入的内容(update_project_json 写前预检); 缺省读盘(project.json 读不出 = 原异常上抛, 不吞成未声明)。只读, 不核身份。"""
+    from tools.schema_loader import get_enum_values
+
+    decl = execution_declaration()
+    data = project if project is not None else read_project_json(project_root)
+    raw = data.get("execution") if isinstance(data, dict) else None
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ExecutionDeclarationError("EXECUTION_DECLARATION_INVALID", ["execution 须为 JSON 对象"])
+    keys = decl["schema"]
+    problems = [f"未知键 {k}(可写键: {', '.join(keys)})" for k in raw if k not in keys]
+    modes = [str(m) for m in keys["default_mode"]["enum"]]
+    mode = raw.get("default_mode", keys["default_mode"].get("default"))
+    if mode not in modes:
+        problems.append(f"default_mode={mode!r} 不在值域 {modes}")
+    subagent = _execution_instance(raw.get("subagent_executor"), "subagent_executor", problems, required=True)
+    auditor = _execution_instance(raw.get("auditor"), "auditor", problems, required=True)
+    pi_exec = _execution_instance(raw.get("pi_executor"), "pi_executor", problems, required=False)
+    allowed_raw = raw.get("pi_allowed_task_modes", [])
+    task_modes = set(get_enum_values("task_mode"))
+    allowed: list[str] = []
+    if not isinstance(allowed_raw, list):
+        problems.append("pi_allowed_task_modes 须为列表")
+    else:
+        for item in allowed_raw:
+            if not isinstance(item, str) or item not in task_modes:
+                problems.append(f"pi_allowed_task_modes 含 {item!r}, 不在 enums.schema task_mode 值域 {sorted(task_modes)}")
+            elif item not in allowed:
+                allowed.append(item)
+    if allowed and not pi_exec:
+        problems.append("pi_allowed_task_modes 非空时须声明 pi_executor")
+    if auditor and auditor in {subagent, pi_exec}:
+        problems.append(f"auditor={auditor} 与执行者同一实例(审计恒为独立 pi 工位)")
+    if problems:
+        raise ExecutionDeclarationError("EXECUTION_DECLARATION_INVALID", problems)
+    return {"default_mode": mode, "subagent_executor": subagent, "pi_allowed_task_modes": allowed, "pi_executor": pi_exec,
+            "auditor": auditor}
+
+
+# ---------------------------------------------------------------------------
 # AIPOS-F127 件①: project 族写命令目标项目解析的唯一实现(声明 verbs.schema two_phase_protocol.project_json_writers
 # .target_resolution)。序: 显式项目名 > --workspace-root / 当前目录所在治理根声明的 project.json#project > 拒;
 # 禁回落 home 级活动项目(resolve_active_project 梯只给读路径用)。

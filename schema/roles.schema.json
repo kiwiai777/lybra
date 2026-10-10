@@ -137,6 +137,36 @@
       "governance_seat": "治理席位类(顾问/规划方): 允许落治理工作区(.lybra/ 在治理根)。"
     }
   },
+  "executor_modes": {
+    "description": "AIPOS-F143 件④(子 agent 执行者正式接入; Owner 10-10 定执行方式): 执行者接入模式——唯一声明处。enroll 落盘位置与对工位类落治理根的放行判据只读本段(唯一读取口 enrollment.executor_mode_declaration / enroll_client.enroll), 代码禁写死模式名 → 落点映射。说理: 子 agent 执行者没有自己的 harness 工位目录——它在顾问会话里由顾问派生(claude-code / codex 子 agent), 驱动方 loop 以其身份认领后等子 agent 交回; 其凭据与治理席位同落治理根连接文件(与 lybra 治理根既有子 agent 执行者凭据同形), 不落工位、不落 .lybra/role、不接 .pi、不推导 owner_policy_ref(认领由驱动方信封放行)。审计类恒为独立 pi 工位, 无子 agent 模式。",
+    "default": "workstation",
+    "values": {
+      "workstation": {
+        "description": "缺省(既有行为): 工位类凭据只落工位目录; 落治理根 = 拒(第九坑防护)。",
+        "credential_landing": "workstation",
+        "allowed_role_classes": [
+          "executor",
+          "auditor"
+        ]
+      },
+      "subagent": {
+        "description": "子 agent 执行者: 凭据落治理根 .lybra/connection.json(按实例条目); land 事件 reason 记 host=<顾问会话所在机> mode=subagent harness=<顾问会话 kind>(无 workstation= 段 = 无工位位置, 不可派 pi)。须带实例(码签发 --instance, 实例名主机段 = 顾问会话所在机)。harness 取值 = distribution.schema harness_semantics.kinds 中 advisor_session=true 的 kind(distribution_sync.advisor_harness_kinds 唯一读取)。",
+        "credential_landing": "governance_root",
+        "allowed_role_classes": [
+          "executor"
+        ],
+        "requires_instance": true,
+        "land_detail_mode": "subagent"
+      }
+    },
+    "reject_codes": {
+      "EXECUTOR_MODE_UNKNOWN": "--executor-mode 取值不在本段 values",
+      "EXECUTOR_MODE_ROLE_CLASS": "该角色类不允许此接入模式(子 agent 模式只给执行类; 审计恒为独立 pi 工位)",
+      "EXECUTOR_MODE_TARGET": "子 agent 模式凭据须落治理根: --workspace 须为码内治理根",
+      "EXECUTOR_MODE_INSTANCE_REQUIRED": "子 agent 模式码须带实例(--instance <执行前缀>.<项目>.<顾问会话所在机>)",
+      "EXECUTOR_MODE_HARNESS": "子 agent 模式须给 --harness <顾问会话 kind>(advisor_session=true 的 harness), 且不给 --harness-dir"
+    }
+  },
   "custom_roles": {
     "description": "Extension point: gate-registered custom roles. Lives in the GATE role registry (connection.json tokens — same source as credentials/projects attribution; AIPOS-F32B; formerly project.json:custom_roles, that source is RETIRED). A custom role = a registry token entry with a non-builtin role and a role_class naming a builtin class; scopes are derived from the builtin class at call time. Registry carries ZERO scope fields of its own (anti-privilege-escalation: a custom role can never grant scopes its builtin class does not hold). Adding a custom role = one registry entry (roles register / enrollment), zero code change. Resolved by tools/aipos_cli/custom_roles.py.",
     "source": "gate registry: <workspace>/.lybra/connection.json tokens[].role_class",
