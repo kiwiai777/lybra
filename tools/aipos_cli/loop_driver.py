@@ -11,7 +11,7 @@ AIPOS-F95: 唯一例外——Owner 信封 launch_harnesses 授权该卡 harness 
 - 执行: next_resolver.execute_derived_action(AIPOS-F73 `next --run` 同一执行体)
 - 等待: agent_watch_fs.run_fs_watch(AIPOS-268/284 唯一哨兵, `--expect` + 就绪谓词=推导核可推导)
 - 拉起: 本模块 plan_launch / LaunchedHarness(AIPOS-F95; 模板 enums.schema harness.launch, 授权 autonomy_policy.envelope_authorizes_launch,
-  工位位置 enrollment.workstation_location, 身份 charter_render.workstation_identity,
+  工位位置 enrollment.workstation_location(经 instance_enrollment, AIPOS-F146), 身份 charter_render.workstation_identity,
   kickoff = 工位 my-tasks --task-id <等待目标卡> 的 next_card.kickoff(AIPOS-F111: 按卡号取, 同工位多卡可各自拉起))
 - 信封: autonomy_policy(owner_autonomy_policy 族, `lybra envelope mint` 申领)
 - 退出码/参数/允许动词集合/等待产物: schema/verbs.schema.json verbs.lybra_loop 一处声明, 本模块只读。
@@ -380,16 +380,25 @@ def _wait_instance(governance_root: Path, card: str, task_fm: dict[str, Any]) ->
     return str(task_fm.get("assigned_to") or "").strip()
 
 
-def _render_manual_hint(decl: dict[str, Any], *, harness: str, instance: str, location: dict[str, Any]) -> str:
+def _render_manual_hint(decl: dict[str, Any], *, harness: str, instance: str, location: dict[str, Any],
+                        subagent: bool = False, card: str = "") -> str:
+    """手工模式等待提示(声明 verbs.schema lybra_loop.launch.manual_hint 唯一来源)。AIPOS-F146 件②: subagent = 等待目标实例为无工位的
+    子 agent 执行者(instance_enrollment governance_root_mode)→ manual_hint.subagent(顾问派子 agent 按卡执行并写交回, 非工位 /go)。"""
+    from tools.schema_loader import SchemaLoadError
+
     hints = decl["manual_hint"]
-    if location.get("found") and location.get("transport") == "local":
+    if subagent:
+        if not isinstance(hints.get("subagent"), str) or not hints["subagent"]:
+            raise SchemaLoadError(f"verbs.schema.json verbs.{LOOP_VERB}.launch.manual_hint.subagent 未声明")
+        template = str(hints["subagent"])
+    elif location.get("found") and location.get("transport") == "local":
         template = str(hints["local"])
     elif location.get("found"):
         template = str(hints["remote"])
     else:
         template = str(hints["unlocated"])
     values = {"dir": str(location.get("dir") or ""), "host": str(location.get("host") or ""), "harness": harness or "(未知 harness)",
-              "instance": instance or "(未知实例)", "reason": str(location.get("reason") or "")}
+              "instance": instance or "(未知实例)", "reason": str(location.get("reason") or ""), "card": card or "(未知卡)"}
     for key, value in values.items():
         template = template.replace("{" + key + "}", value)
     return template
@@ -452,7 +461,7 @@ def plan_launch(governance_root: Path, card: str, *, policy: dict[str, Any] | No
 
     from tools.aipos_cli.autonomy_policy import envelope_authorizes_launch, launchable_harnesses
     from tools.aipos_cli.charter_render import WorkstationIdentityError, workstation_identity
-    from tools.aipos_cli.enrollment import workstation_location
+    from tools.aipos_cli.enrollment import instance_enrollment
     from tools.schema_loader import SchemaLoadError
 
     plan = LaunchPlan(card=card)
@@ -471,12 +480,21 @@ def plan_launch(governance_root: Path, card: str, *, policy: dict[str, Any] | No
     except SchemaLoadError as exc:
         plan.refusal = f"卡 harness 不可推导: {exc}"
     plan.instance = _wait_instance(governance_root, card, fm)
+    subagent = False
     try:
-        plan.location = workstation_location(governance_root, plan.instance) if plan.instance else {
-            "found": False, "reason": f"{card} 无 assigned_to/认领实例"}
+        # AIPOS-F146 件②: 实例身份与模式只经 instance_enrollment 一处判定; 工位位置 = 其结果中的 workstation_location(同一读取口)
+        if plan.instance:
+            view = instance_enrollment(governance_root, plan.instance)
+            subagent = bool(view["governance_root_mode"])
+            plan.location = view["workstation"]
+        else:
+            plan.location = {"found": False, "reason": f"{card} 无 assigned_to/认领实例"}
     except (ValueError, OSError, SchemaLoadError) as exc:
         plan.location = {"found": False, "reason": f"工位位置读取失败: {exc}"}
-    plan.manual_hint = _render_manual_hint(decl, harness=plan.harness, instance=plan.instance, location=plan.location)
+    plan.manual_hint = _render_manual_hint(decl, harness=plan.harness, instance=plan.instance, location=plan.location,
+                                           subagent=subagent, card=card)
+    if subagent:  # 无工位可拉起: 不拉起, 等待提示 = 顾问派子 agent(信封是否授权拉起均同)
+        plan.refusal = plan.refusal or f"实例 {plan.instance} 为子 agent 执行者(接入模式 {view['mode']}, 无工位), loop 不拉起"
 
     def refuse(reason: str) -> LaunchPlan:
         plan.refusal = plan.refusal or reason
@@ -575,7 +593,7 @@ def check_workstation(project_root: Path, instance: str, harness: str) -> dict[s
 
     from tools.aipos_cli.autonomy_policy import launchable_harnesses
     from tools.aipos_cli.charter_render import WorkstationIdentityError, workstation_identity
-    from tools.aipos_cli.enrollment import workstation_location
+    from tools.aipos_cli.enrollment import instance_enrollment
     from tools.aipos_cli.harness_launch import probe_remote, remote_check_reverse, remote_declaration
     from tools.aipos_cli.workspace_config import WorkstationDeclarationError, project_workstation
     from tools.schema_loader import SchemaLoadError
@@ -590,7 +608,15 @@ def check_workstation(project_root: Path, instance: str, harness: str) -> dict[s
         return {"ok": all(c["ok"] for c in checks), "instance": instance, "harness": harness, "checks": checks}
 
     try:
-        loc = workstation_location(project_root, instance)
+        # AIPOS-F146 件②: 身份与模式经 instance_enrollment 一处判定; 工位位置 = 其 workstation(workstation_location 同一读取口)
+        view = instance_enrollment(project_root, instance)
+        loc = view["workstation"]
+        if view["governance_root_mode"]:  # 子 agent 执行者: 无工位, 拉起检查不适用(明确出口 = 子 agent 等待提示, 声明 manual_hint.subagent)
+            hint = _render_manual_hint(launch_declaration(load_loop_contract()), harness=harness, instance=instance, location=loc,
+                                       subagent=True, card="<卡号>")
+            check("接入模式", False, f"实例 {instance} 为子 agent 执行者(接入模式 {view['mode']}, 无工位), loop 不拉起、无工位可检查; "
+                                   f"等待时: {hint}")
+            return report()
     except (ValueError, OSError, SchemaLoadError) as exc:
         check("land 事件位置", False, f"读取失败: {exc}")
         return report()

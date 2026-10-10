@@ -559,6 +559,7 @@ def enrollment_whereabouts(workspace_root: str | Path, instance: str) -> dict[st
 
 _LAND_MODE_RE = re.compile(r"(?:^|\s)mode=(?P<mode>\S+)")
 _LAND_HARNESS_RE = re.compile(r"(?:^|\s)harness=(?P<harness>\S+)")
+_LAND_ROLE_RE = re.compile(r"\srole=(?P<role>\S+)")  # AIPOS-F146: land 行结构字段 role=(_trail_line 渲染, reason 之前)
 
 
 def executor_mode_declaration() -> dict[str, Any]:
@@ -620,13 +621,17 @@ def instance_enrollment(governance_root: str | Path, instance: str) -> dict[str,
 
     已接入 = 本项目 enrollment_log 有该实例未作废的 land 事件(_latest_land, 与 workstation_location 同一读取口)
     或 治理根连接文件有该实例可用凭据条目(_connection_bound → select_token_entry; 子 agent 执行者既有形)。
-    返回 {instance, enrolled, via: [land|connection], mode, harness, host, workstation: workstation_location 结果, reason}:
+    返回 {instance, enrolled, via: [land|connection], role, mode, harness, host, governance_root_mode,
+    workstation: workstation_location 结果, reason}:
     mode / harness / host 取自最新 land 事件 reason(子 agent 模式 = mode=subagent harness=<顾问会话 kind>; pi 工位 = 无 mode, 有 workstation=)。
+    AIPOS-F146: role = 最新 land 事件行的 role= 结构字段(门签码时记下的角色; 子 agent 执行者不写 .lybra/role, 其身份源即此处);
+    governance_root_mode = land 事件 mode 是凭据落治理根的执行者接入模式(roles.schema executor_modes credential_landing=governance_root,
+    唯一读取口 governance_root_executor_modes; 无 mode = False, 不读声明)——无工位的已接入实例(子 agent 执行者)判定只此一处。
     连接文件读不出 = ValueError 上抛(fail-closed)。只读。"""
     root = _workspace_root_path(governance_root)
     name = str(instance or "").strip()
-    out: dict[str, Any] = {"instance": name, "enrolled": False, "via": [], "mode": None, "harness": None, "host": None,
-                           "workstation": {"found": False, "reason": "未接入"}, "reason": ""}
+    out: dict[str, Any] = {"instance": name, "enrolled": False, "via": [], "role": None, "mode": None, "harness": None, "host": None,
+                           "governance_root_mode": False, "workstation": {"found": False, "reason": "未接入"}, "reason": ""}
     if not name:
         out["reason"] = "实例名为空"
         return out
@@ -638,12 +643,15 @@ def instance_enrollment(governance_root: str | Path, instance: str) -> dict[str,
         for key, rx in (("mode", _LAND_MODE_RE), ("harness", _LAND_HARNESS_RE), ("host", _LAND_HOST_RE)):
             match = rx.search(reason)
             out[key] = match.group(key) if match else None
+        role_match = _LAND_ROLE_RE.search(land.string[:land.start("reason")])
+        out["role"] = role_match.group("role") if role_match else None
+        out["governance_root_mode"] = bool(out["mode"]) and out["mode"] in governance_root_executor_modes()
     if _connection_bound(root, name):
         out["via"].append("connection")
     out["enrolled"] = bool(out["via"])
-    if out["enrolled"]:
-        out["workstation"] = workstation_location(root, name)
-    else:
+    # AIPOS-F146: 工位位置恒为 workstation_location 结果(未接入时其拒因即「无 land 事件」原文, 等待提示 / 诊断同读此键)
+    out["workstation"] = workstation_location(root, name)
+    if not out["enrolled"]:
         out["reason"] = (f"{trail.name} 无 {name} 的未作废 land 事件, 治理根 .lybra/connection.json 亦无其可用凭据条目"
                          "(该实例未在本项目接入)")
     return out

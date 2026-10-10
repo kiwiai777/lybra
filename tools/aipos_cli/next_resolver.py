@@ -603,18 +603,23 @@ def render_kickoff(next_card: dict[str, Any], *, remote: dict[str, Any] | None =
 
 def remote_kickoff_context(workspace_root: Path, instance: str) -> dict[str, str]:
     """AIPOS-F110 件②: 跨机工位开工提示的门机材料上下文(render_kickoff remote=)。门机读不到远端工位目录, 身份 = land 事件实例:
-    位置 = enrollment.workstation_location(该实例最新 land 事件, 须 transport=remote), 材料 = workspace_config.project_workstation
+    位置 = enrollment.workstation_location(该实例最新 land 事件, 须 transport=remote; AIPOS-F146 经 instance_enrollment, 子 agent 执行者 = 拒带出口),
+    材料 = workspace_config.project_workstation
     (project.json workstations.<实例>)。不可得 = ValueError(含 WORKSTATION_MATERIAL_* 拒因码 / 位置拒因; fail-closed)。"""
     import socket
 
-    from tools.aipos_cli.enrollment import workstation_location
+    from tools.aipos_cli.enrollment import instance_enrollment
     from tools.aipos_cli.workspace_config import project_workstation
     from tools.schema_loader import SchemaLoadError
 
     try:
-        loc = workstation_location(workspace_root, instance)
+        view = instance_enrollment(workspace_root, instance)  # AIPOS-F146: 身份与模式一处判定; 位置 = 其 workstation(workstation_location)
     except SchemaLoadError as exc:
         raise ValueError(f"工位位置声明读取失败: {exc}") from exc
+    if view["governance_root_mode"]:
+        raise ValueError(f"实例 {instance} 为子 agent 执行者(接入模式 {view['mode']}, 无工位), 不适用 --remote-workstation; "
+                         f"出口: lybra my-tasks --actor {instance} --task-id <卡号>(不带 --workstation / --remote-workstation)")
+    loc = view["workstation"]
     if not loc.get("found"):
         raise ValueError(f"实例 {instance} 工位位置定位不到: {loc.get('reason')}")
     if loc.get("transport") != "remote":

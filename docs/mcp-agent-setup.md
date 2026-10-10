@@ -124,6 +124,17 @@ independent pi auditor workstation (AIPOS-F143).
    `audit_by` from it (a card goes to the pi executor only when the draft asks for `harness: pi` and its task mode is in the
    approved list). `lybra draft publish` refuses a card whose `assigned_to` or auditor is not enrolled in the project (or, for
    `harness: pi` and auditors, has no workstation) and lists the enrolled instances.
+4. **The sub-agent reads its charter and works from the card path.** On the governance-root host,
+   `lybra charter --role executor --instance <sub-agent instance>` prints the executor charter for the session kind recorded at
+   enrollment (`executor-charter-claude-code` / `executor-charter-codex` in `schema/distribution.schema.json`). It is rendered
+   from the same single master `agents/roles/executor/AGENTS.md` as the pi charter; the master marks the few lines that
+   differ by enrollment mode, and the renderer keeps only the lines for this instance's mode (pi workstations still start
+   with `/go`; a sub-agent is handed the card path by the advisor, reads the card, writes its report and stops). Identity
+   comes from the land event (role / mode / harness, `enrollment.instance_enrollment`); nothing is written for the sub-agent.
+   While `lybra loop` waits for the sub-agent's report it does not try to start anything, and prints the declared hint
+   (`schema/verbs.schema.json` `lybra_loop.launch.manual_hint.subagent`): hand the card to a sub-agent, with the card
+   material from `lybra my-tasks --actor <instance> --task-id <card>`. `lybra project check-workstation` and
+   `my-tasks --workstation` / `--remote-workstation` point a sub-agent instance to the same command instead.
 
 ### Card and Return rules every project follows (AIPOS-F148)
 
