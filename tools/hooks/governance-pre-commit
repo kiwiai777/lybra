@@ -52,6 +52,10 @@ git_staged_name_status() {
 
 # ---- 自检 (AIPOS-F6 靶②, C2: 护栏禁静默降级) ----
 # 用同一读取函数在临时仓枚举非 ASCII 文件, 必须原样输出(未被 quotepath 转义)。失败即拒绝放行。
+# AIPOS-F147 件④(gap #113): 探针绝不写调用方索引。git 跑钩子时导出 GIT_INDEX_FILE(部分提交 `git commit -- <路径>` 时
+#   是临时索引); 探针若沿用它, `git -C <临时仓> add` 会把样例写进调用方索引(对象却在临时仓)→ 提交报 invalid object /
+#   Error building trees。探针整体在子 shell 里跑: 清掉指向调用方仓的 GIT_* 环境, GIT_INDEX_FILE 钉到临时仓自己的索引文件
+#   (只影响子 shell, 四检读 staged 清单仍用 git 给的索引)。
 self_test_nonascii() {
     local sample="决策日志_非ASCII自检.md"
     local tmpd out
@@ -60,19 +64,25 @@ self_test_nonascii() {
         echo "❌ BLOCKED: hook self-test 无法创建临时目录(mktemp 失败)。拒绝放行。"
         return 1
     fi
-    if ! git -C "$tmpd" init -q 2>/dev/null; then
-        rm -rf "$tmpd"
-        echo "❌ BLOCKED: hook self-test 无法初始化临时仓(git init 失败)。拒绝放行。"
-        return 1
+    if ! out="$(
+        unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX
+        export GIT_INDEX_FILE="$tmpd/.git/index"
+        git -C "$tmpd" init -q 2>/dev/null || { echo "__F147_PROBE__ init"; exit 0; }
+        printf 'x\n' > "$tmpd/$sample"
+        git -C "$tmpd" add -- "$sample" 2>/dev/null || { echo "__F147_PROBE__ add"; exit 0; }
+        git_staged_name_status "$tmpd" 2>/dev/null | tr '\0' '\n' || true
+    )"; then
+        out=""
     fi
-    printf 'x\n' > "$tmpd/$sample"
-    if ! git -C "$tmpd" add -- "$sample" 2>/dev/null; then
-        rm -rf "$tmpd"
-        echo "❌ BLOCKED: hook self-test 无法暂存非 ASCII 样例(git add 失败)。拒绝放行。"
-        return 1
-    fi
-    out="$(git_staged_name_status "$tmpd" 2>/dev/null | tr '\0' '\n' || true)"
     rm -rf "$tmpd"
+    case "$out" in
+        "__F147_PROBE__ init"*)
+            echo "❌ BLOCKED: hook self-test 无法初始化临时仓(git init 失败)。拒绝放行。"
+            return 1 ;;
+        "__F147_PROBE__ add"*)
+            echo "❌ BLOCKED: hook self-test 无法暂存非 ASCII 样例(git add 失败)。拒绝放行。"
+            return 1 ;;
+    esac
     if ! printf '%s\n' "$out" | grep -qF "$sample"; then
         echo "❌ BLOCKED: hook self-test FAILED — git 读取层对非 ASCII 路径输出了转义形式(core.quotepath 未禁用), 护栏被击穿。拒绝放行。"
         return 1
