@@ -6584,7 +6584,7 @@ def _write_fix_closure_derivation_record(
     record_rel = location_tpl.format(fix_task_id=fix_task_id, timestamp=ts_compact)
 
     fields = {
-        "record_type": "fix_closure_derivation",
+        "record_type": RecordType.FIX_CLOSURE_DERIVATION,  # AIPOS-F147 件②: 值域单源 enums.schema record_type
         "event_type": "fix_closure_derivation",
         "fix_task_id": fix_task_id,
         "source_task_id": source_task_id,
@@ -7623,7 +7623,7 @@ def amend_task(
         amendment_id = build_runtime_id("amendment", task.get("task_id"), amendment_timestamp, actor_text)
         
         amendment_record = {
-            "record_type": "amendment_record",
+            "record_type": RecordType.AMENDMENT_RECORD,  # AIPOS-F147 件②: 值域单源 enums.schema record_type
             "amendment_id": amendment_id,
             "task_id": task.get("task_id"),
             "amended_by": actor_text,

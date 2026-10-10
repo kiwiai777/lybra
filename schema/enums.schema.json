@@ -80,7 +80,7 @@
       ]
     },
     "record_type": {
-      "description": "Record types in the system",
+      "description": "Record types in the system. AIPOS-F147 件②(gap #99): 本枚举 = 记录类型唯一值域源——产品写出的每个 record_type 值(代码字面量 / RecordType 常量 / schema 声明的 record_type·log_record_type)都须在此; 入库护栏 B④ 对 records/** 新增文件查 record_type 取值 ∈ 本枚举(声明 config.schema file_declarations.record_file.value_enums; 唯一实现 governance_guardrails.check_entries); 不变量夹具 tests/test_aipos_f147_landing_records.py 防回潮。",
       "values": [
         {
           "value": "ai_authoring_provenance",
@@ -189,6 +189,30 @@
         {
           "value": "token_removal",
           "description": "AIPOS-F21: token-entry removal record (fingerprints only, never plaintext)"
+        },
+        {
+          "value": "finalization_record",
+          "description": "AIPOS-F147 件②(gap #99): finalize 记录(records/finalizations/<ID>/; 写入 finalization_record.build_finalization_record)"
+        },
+        {
+          "value": "amendment_record",
+          "description": "AIPOS-F147 件②: 卡面修订记录(records/amendments/<ID>/; 写入 board_adapter 受控改卡)"
+        },
+        {
+          "value": "fix_closure_derivation",
+          "description": "AIPOS-F147 件②: 修复卡结案推导记录(records/fix_closures/<ID>/; 声明 transitions nodes fix_card_closure; 写入 board_adapter)"
+        },
+        {
+          "value": "audit_report_snapshot",
+          "description": "AIPOS-F147 件②: 审计报告全文快照(records/audit_verdicts/<ID>/report_snapshots/; 声明 transitions artifact_ingest.verdict.report_snapshot.record_type; 写入 board_adapter._audit_report_snapshot_plan)"
+        },
+        {
+          "value": "loop_run",
+          "description": "AIPOS-F147 件②: lybra loop 运行记录(<loop_runs_root>/<ID>/looprun_*.md; 声明 verbs.schema lybra_loop.run_record.record_type; 写入 loop_run_record.LoopRunRecorder)"
+        },
+        {
+          "value": "loop_run_log",
+          "description": "AIPOS-F147 件②: lybra loop 运行日志头(<loop_runs_root>/<ID>/looprun_*.log; 声明 verbs.schema lybra_loop.run_record.log_record_type; 日志不入库)"
         }
       ]
     },

@@ -236,6 +236,25 @@ class LoopRunRecorder:
         except (OSError, ValueError) as exc:
             self.close_log()
             raise LoopRunRecordError(f"运行记录 / 日志写不进 {self.dir}: {type(exc).__name__}: {exc}") from exc
+        self._exclude_logs()
+
+    def _exclude_logs(self) -> None:
+        """AIPOS-F147 件①: 日志不入库——运行日志(<loop_runs_root>/<卡ID>/*.log)经既有唯一实现 git_exclude.register_git_exclude
+        登记进治理仓 .git/info/exclude(本地, 不提交; 一条文件模式 /<loop_runs_root 仓相对>/*/*.log, 幂等; 只排 .log, 运行记录 .md 照常落账)。
+        治理根不在 git 仓 = 跳过; 登记失败不中断 loop, 出声一次(_failed)。"""
+        from tools.aipos_cli.git_exclude import register_git_exclude
+
+        try:
+            proc = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=str(self.dir), capture_output=True, text=True, timeout=10)
+            if proc.returncode != 0 or not proc.stdout.strip():
+                return  # 不在 git 仓: 无可排
+            top = Path(proc.stdout.strip())
+            rel = self.dir.parent.resolve().relative_to(top.resolve()).as_posix()
+            report = register_git_exclude(top, [f"/{rel}/*/*.log" if rel != "." else "/*/*.log"])
+            if not report.get("ok"):
+                raise OSError(str(report.get("error") or "register_git_exclude 未成功"))
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            self._failed("日志排除登记", exc)
 
     # -- 日志(件③): loop 自身输出行逐行过 redact_progress; 拉起进程进度行只写类别(activity 内) --
     def log(self, text: str) -> None:

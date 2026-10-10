@@ -233,6 +233,8 @@ def test_item4_declaration_absent_behaviour_unchanged(rig, tmp_path):
     config = json.loads((REPO_ROOT / "schema" / "config.schema.json").read_text(encoding="utf-8"))
     del config["governance_structure"]["file_declarations"]["record_file"]["required_frontmatter_exemptions"]
     (schema_dir / "config.schema.json").write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+    # AIPOS-F147 件②: B④ 取值检查读同一 schema 目录的 enums.schema.json(真实 schema 目录两者并存)
+    shutil.copy(REPO_ROOT / "schema" / "enums.schema.json", schema_dir / "enums.schema.json")
     decls = load_guardrail_declarations(schema_dir)
     report = check_entries(rig.repo, _entries(files), decls, current_branch="main")
     assert decls.slot_path_keys == () and decls.legacy_frozen_exempt is False

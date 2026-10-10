@@ -35,7 +35,7 @@ from tools.aipos_cli.record_writer import record_dir
 from pathlib import Path
 from typing import Any
 
-from tools.schema_constants import Verdict
+from tools.schema_constants import RecordType, Verdict
 
 REQUIRED_CONNECTION_MODE = 0o600
 RELOAD_VERB = "lybra_roles_reload"
@@ -361,7 +361,7 @@ def rotate_tokens_report(
     gate_reload = "hot_reload_ok" if reload_result.get("ok") else "restart_required"
 
     record_frontmatter = {
-        "record_type": "token_rotation",
+        "record_type": RecordType.TOKEN_ROTATION,  # AIPOS-F147 件②: 值域单源 enums.schema record_type
         "operation": operation,
         "actor": actor or owner_authorization_ref or "owner",
         "owner_authorization_ref": str(owner_authorization_ref),
@@ -379,7 +379,7 @@ def rotate_tokens_report(
     body += ["", f"- backup: `{backup_path.name}` (0600)", f"- gate reload: {gate_reload}",
              "- security notice: token plaintext lives only in connection.json / its backup."]
     record_path = _write_record(
-        workspace_root, record_type="token_rotation",
+        workspace_root, record_type=RecordType.TOKEN_ROTATION,
         filename=f"rotation_{file_slug("millis")}.md",
         frontmatter=record_frontmatter, body_lines=body,
     )
@@ -466,10 +466,10 @@ def remove_instance_report(
     removed_view = [_safe_entry(t) for t in removed]
     record_path = _write_record(
         workspace_root,
-        record_type="token_removal",
+        record_type=RecordType.TOKEN_REMOVAL,
         filename=f"removal_{file_slug("millis")}.md",
         frontmatter={
-            "record_type": "token_removal",
+            "record_type": RecordType.TOKEN_REMOVAL,  # AIPOS-F147 件②: 值域单源 enums.schema record_type
             "operation": operation,
             "actor": actor or owner_authorization_ref or "owner",
             "owner_authorization_ref": str(owner_authorization_ref),
