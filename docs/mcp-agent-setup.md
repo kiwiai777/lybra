@@ -90,6 +90,32 @@ overwritten:
 
 A project with a single advisor needs none of this: `--actor` stays optional and existing envelopes keep working unchanged.
 
+## Execution mode (who does the work)
+
+By default the advisor hands execution work (code, configuration, …) to a sub-agent of its own session (Claude Code or
+Codex); an Owner-approved list of task modes may instead go to a pi executor workstation, and audits are always done by an
+independent pi auditor workstation (AIPOS-F143).
+
+1. **Enroll the sub-agent executor.** The advisor issues an executor code with `--instance <exec prefix>.<project>.<advisor
+   session host>`; it is redeemed into the governance root:
+   `lybra roles enroll --code … --workspace <governance root> --executor-mode subagent --harness <claude-code|codex>
+   [--harness-host <advisor session host>] --verify`. The credential lands in the governance root's `.lybra/connection.json`
+   (no `.lybra/role` change, no `.pi`, no workstation); the land event records `mode=subagent harness=<kind>`. Without
+   `--executor-mode subagent`, executor and auditor credentials are still refused in a governance root. The mode names and
+   rules are declared in `schema/roles.schema.json` `executor_modes`; `lybra onboarding guide <project> --executor-mode subagent`
+   prints these steps.
+2. **Declare the execution mode.** `lybra project set-execution --subagent-executor <instance> --auditor <pi auditor>
+   [--pi-executor <pi executor> --pi-allowed-task-mode <task_mode> …]` (preview by default, `--confirm` writes
+   `project.json` `execution`; declared in `schema/config.schema.json`). Every instance must already be enrolled in the
+   project, and the auditor and pi executor must have a workstation. Without this section nothing changes.
+3. **Draft and publish.** With the section declared, `lybra draft create` fills a missing `assigned_to` / `harness` /
+   `audit_by` from it (a card goes to the pi executor only when the draft asks for `harness: pi` and its task mode is in the
+   approved list). `lybra draft publish` refuses a card whose `assigned_to` or auditor is not enrolled in the project (or, for
+   `harness: pi` and auditors, has no workstation) and lists the enrolled instances.
+
+`lybra loop` starts its sub-commands with the same Python interpreter and code tree it runs from, so it does not need
+`lybra` on `PATH` (for example when started over ssh); a sub-command that fails is reported with its error text.
+
 ## Start the gate
 
 ```bash

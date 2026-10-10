@@ -31,7 +31,8 @@
         "set-repo",
         "set-repos",
         "set-workstation",
-        "set-meta"
+        "set-meta",
+        "set-execution"
       ],
       "default_phase": "dry_run",
       "flags": {

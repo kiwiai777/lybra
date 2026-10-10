@@ -437,6 +437,53 @@
             "WORKSTATION_MATERIAL_UNDECLARED": "remote 工位的实例在 project.json workstations 下未声明(或缺 gate_ssh_alias / material_access)",
             "WORKSTATION_MATERIAL_INVALID": "声明形不合(非对象 / 值非非空单行串 / 含凭据字样)"
           }
+        },
+        "execution": {
+          "type": "object",
+          "required": false,
+          "description": "AIPOS-F143 件②(Owner 10-10 定执行方式): 项目执行方式声明。缺省执行类工作(代码/配置等)由顾问派子 agent 做(执行身份 = 本项目「子 agent 执行者」实例 subagent_executor, 其 harness = 该实例子 agent 模式接入登记记下的顾问会话 kind); Owner 明示后, pi_allowed_task_modes 列明的 task_mode 可派 pi 执行工位 pi_executor(loop 自动拉起); 审计恒为独立 pi 审计工位 auditor。缺段 = 未声明, 行为不变(起草不补执行者/审计者, harness 照 card.schema intent_face.harness.default_by_task_mode)。读取方: 起草缺省(draft_writer.create_draft 经 apply_execution_defaults)与发卡核身份(draft_writer.publish_identity_refusals)同读唯一读取口 workspace_config.project_execution; 唯一写入口 `lybra project set-execution [项目] --subagent-executor <实例> --auditor <实例> [--pi-executor <实例> --pi-allowed-task-mode <task_mode>…] [--dry-run|--confirm]`(enrollment.set_project_execution, 经 workspace_config.update_project_json 唯一写路径; 整段声明, 未给的可选键 = 缺省值)。写前核身份: 各实例须为本项目已接入实例(enrollment.instance_enrollment, 与发卡核身份同一判定), 审计者与 pi 执行者须有工位位置(enrollment.workstation_location)。",
+          "schema": {
+            "default_mode": {
+              "type": "string",
+              "required": false,
+              "enum": [
+                "subagent"
+              ],
+              "default": "subagent",
+              "description": "执行类卡缺省执行方式。subagent = 顾问派子 agent(Owner 10-10 定); 值域只追加。"
+            },
+            "subagent_executor": {
+              "type": "string",
+              "required": true,
+              "description": "子 agent 执行者实例名(实例名模板 roles.schema naming.template, 主机段 = 顾问会话所在机); 须为本项目已接入实例(子 agent 模式接入: `lybra roles enroll --executor-mode subagent`)。起草缺省 assigned_to/agent_instance。"
+            },
+            "pi_allowed_task_modes": {
+              "type": "array",
+              "required": false,
+              "default": [],
+              "items": {
+                "$enum": "task_mode"
+              },
+              "description": "Owner 明示允许派 pi 执行工位的 task_mode 列表(值域 enums.schema task_mode); 未列明 = 按缺省(子 agent)。起草卡显式给 harness=pi(或 assigned_to=pi_executor)且 task_mode 在列才派 pi; 不在列 = 起草/发卡拒 EXECUTION_PI_NOT_ALLOWED。"
+            },
+            "pi_executor": {
+              "type": "string",
+              "required": false,
+              "default": null,
+              "nullable": true,
+              "description": "pi 执行工位实例名(pi_allowed_task_modes 非空时必给); 须为本项目已接入且有工位位置(land 事件 workstation=)的实例。"
+            },
+            "auditor": {
+              "type": "string",
+              "required": true,
+              "description": "独立 pi 审计工位实例名(审计恒为独立 pi, 不随执行方式变化); 须为本项目已接入且有工位位置的实例, 且不等于 subagent_executor / pi_executor。起草缺省 audit_by。"
+            }
+          },
+          "reject_codes": {
+            "EXECUTION_DECLARATION_INVALID": "execution 段形不合(非对象 / 未知键 / 必填键缺 / 值非非空单行串 / default_mode 或 task_mode 不在值域 / pi_allowed_task_modes 非空而缺 pi_executor / 审计者与执行者同一实例)",
+            "EXECUTION_INSTANCE_NOT_ENROLLED": "声明的实例不是本项目已接入实例(或审计者 / pi 执行者无工位位置); 出口: 先按 lybra onboarding guide 接入该实例(子 agent 执行者: --executor-mode subagent), 再声明",
+            "EXECUTION_PI_NOT_ALLOWED": "卡要派 pi 执行工位, 但其 task_mode 不在 execution.pi_allowed_task_modes(Owner 未明示)或未声明 pi_executor; 出口: 去掉 harness=pi 按缺省派子 agent, 或请 Owner 明示后 lybra project set-execution 追加 --pi-allowed-task-mode"
+          }
         }
       }
     }

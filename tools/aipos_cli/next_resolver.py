@@ -3561,7 +3561,13 @@ def _run_product_command(command: str, action_type: str) -> dict[str, Any]:
     if scoped_actor:
         env[DRIVER_INSTANCE_ENV] = scoped_actor
     try:
-        result = subprocess.run(shlex.split(command), capture_output=True, text=True, timeout=timeout, env=env)
+        argv = shlex.split(command)
+        if argv and argv[0] == "lybra":
+            # AIPOS-F143 件①: 派生 lybra 子命令不按调用方 PATH 找(唯一构造 workstation_wiring.lybra_cli_invocation)
+            from tools.aipos_cli.workstation_wiring import lybra_cli_invocation
+
+            argv, env = lybra_cli_invocation(argv[1:], env)
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
         return {
             "ok": False,
@@ -3571,14 +3577,17 @@ def _run_product_command(command: str, action_type: str) -> dict[str, Any]:
             "exit_code": 124,
             "output": f"Command timed out after {timeout:g} seconds",
         }
-    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        # AIPOS-F143 件①: 异常原文(类名 + 原文, 如 FileNotFoundError: [Errno 2] …)进 message 首行与 cause, 调用方禁再吞成「失败: 1」
+        cause = f"{type(exc).__name__}: {exc}"
         return {
             "ok": False,
             "action_type": action_type,
-            "message": f"{action_type} 执行异常: {exc}",
+            "message": f"{action_type} 执行异常: {cause}",
             "command": command,
             "exit_code": 1,
-            "output": str(exc),
+            "output": cause,
+            "cause": cause,
         }
     success = result.returncode == 0
     # AIPOS-F120 件③: stderr 与 stdout 分段进 output(原两段首尾直接粘连, 末行与 traceback 首行混成一行); 失败时 stderr 关键行
@@ -3589,8 +3598,12 @@ def _run_product_command(command: str, action_type: str) -> dict[str, Any]:
     if stderr.strip():
         output = (output + "\n" if output else "") + "[stderr]\n" + stderr.rstrip("\n")
     message = f"{action_type} {'成功' if success else '失败'}"
-    if not success and key_lines:
-        message += f": {key_lines[-1]}"
+    # AIPOS-F143 件①: 失败真因 = stderr 关键行(无 stderr 取 stdout 末行非空行), 进 message 首行与 cause(运行记录 end_message 取首行)
+    cause = ""
+    if not success:
+        cause = key_lines[-1] if key_lines else next((ln.strip() for ln in reversed(stdout.splitlines()) if ln.strip()), "")
+    if cause:
+        message += f": {cause}"
     return {
         "ok": success,
         "action_type": action_type,
@@ -3599,6 +3612,7 @@ def _run_product_command(command: str, action_type: str) -> dict[str, Any]:
         "exit_code": result.returncode,
         "output": output,
         "stderr_key_lines": key_lines,
+        "cause": cause,
     }
 
 
@@ -3665,7 +3679,11 @@ def _execute_claim_with_role_token(
     command = str(derivation.get("command") or "")
     run = _run_product_command(command, "claim")
     if not run.get("ok"):
-        run["message"] = f"claim 失败: {run.get('exit_code')}" if run.get("exit_code") not in (None, 124) else run["message"]
+        # AIPOS-F143 件①: 原写「claim 失败: <退出码>」吞掉真因(接入项目首卡实撞: FileNotFoundError 只剩「claim 失败: 1」);
+        # 现首行 = 退出码 + 真因原文(子进程异常 / stderr 关键行), 超时(124)沿用超时文案
+        if run.get("exit_code") != 124:
+            cause = str(run.get("cause") or "").strip() or "子进程无 stderr/stdout 输出"
+            run["message"] = f"claim 失败(exit {run.get('exit_code')}): {cause}"
         return run
 
     task_path, _queue = _find_task_in_queue(workspace_root, task_id)
