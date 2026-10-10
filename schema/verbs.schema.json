@@ -32,7 +32,8 @@
         "set-repos",
         "set-workstation",
         "set-meta",
-        "set-execution"
+        "set-execution",
+        "set-return-summary"
       ],
       "default_phase": "dry_run",
       "flags": {

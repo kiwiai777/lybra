@@ -275,6 +275,33 @@ def resolve_instance_role_class(
     return None
 
 
+def gate_authorization_declaration() -> dict[str, Any]:
+    """AIPOS-F148 件③: roles.schema naming.gate_authorization(门侧授权的实例名要求; 缺 / 形不合 = SchemaLoadError, fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (load_schema("roles").get("naming") or {}).get("gate_authorization")
+    if (not isinstance(decl, dict) or not str(decl.get("reject_code") or "").strip()
+            or "{template}" not in str(decl.get("reject_message") or "")):
+        raise SchemaLoadError("roles.schema.json naming.gate_authorization(reject_code / reject_message 含 {template})未声明齐")
+    return decl
+
+
+def instance_name_canonical_refusal(instance: str) -> str:
+    """AIPOS-F148 件③: 门侧授权的实例名判据(唯一)——合 roles.schema naming.template 的完整实例名 = ""; 否则拒因原文
+    (裸角色名 / 段数不合 / 空段; 段切分唯一实现 naming_profile.parse_instance_name)。声明缺 = SchemaLoadError 上抛(调用方拒)。"""
+    from tools.aipos_cli.naming_profile import parse_instance_name
+    from tools.schema_loader import get_role_naming_template
+
+    decl = gate_authorization_declaration()
+    clean = str(instance or "").strip()
+    if parse_instance_name(clean) is not None:
+        return ""
+    template = get_role_naming_template()
+    kind = "裸角色名(无点)" if clean and "." not in clean else "段数不合模板或有空段"
+    return (f"{decl['reject_code']}: 实例 {clean!r} 是{kind}——" + str(decl["reject_message"]).format(template=template)
+            + "。出口: 以本项目已接入实例的完整实例名提交(`lybra roles list` 可查)")
+
+
 def authorize_instance_class(
     instance: str,
     required_class: str,
@@ -283,18 +310,25 @@ def authorize_instance_class(
     """AIPOS-F132: 门侧授权判定「此实例的角色类 == required_class」的唯一口(裁决提交 / 返工节等记录属主校验共用)。
 
     - required_class 须是 roles.schema 内建角色类(读注册表, 不认 = 拒, 禁写死前缀集合);
+    - AIPOS-F148 件③(gap #114): instance 须为合实例名模板的完整实例名(roles.schema naming.gate_authorization; 段切分唯一
+      naming_profile.parse_instance_name)——裸角色名(`auditor`)/ 段数不合 = 拒(INSTANCE_NOT_CANONICAL), 不再按角色名解析放行,
+      裁决归因到实例而非角色;
     - 实例 → 角色 → 类经 resolve_instance_role_class(required=True); 解析不到 / 注册表读不出 / 角色声明读不出 = 拒(fail-closed);
-    返回 {"ok", "instance", "role", "role_class", "required_class", "reason"}; ok=False 时 reason 列实例、角色、解析结果。
+    返回 {"ok", "instance", "role", "role_class", "required_class", "reason", "reject_code"}; ok=False 时 reason 列实例、角色、解析结果。
     """
     from tools.schema_loader import SchemaLoadError
 
     clean = str(instance or "").strip()
     out: dict[str, Any] = {"ok": False, "instance": clean, "role": None, "role_class": None,
-                           "required_class": required_class, "reason": None}
+                           "required_class": required_class, "reason": None, "reject_code": None}
     try:
         if required_class not in _builtin_role_names():
             out["reason"] = (f"要求的角色类 {required_class!r} 不是 roles.schema 内建角色类 {sorted(_builtin_role_names())}"
                              "(声明缺失, fail-closed)")
+            return out
+        canonical_refusal = instance_name_canonical_refusal(clean)
+        if canonical_refusal:
+            out["reason"], out["reject_code"] = canonical_refusal, gate_authorization_declaration()["reject_code"]
             return out
         role, cls = resolve_instance_role_class(clean, project_root, required=True)  # type: ignore[misc]
     except (UnknownRoleClass, RoleRegistryReadError, SchemaLoadError, FileNotFoundError, OSError, KeyError) as exc:

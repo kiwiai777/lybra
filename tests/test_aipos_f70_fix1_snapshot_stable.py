@@ -445,6 +445,7 @@ class TestDryRunConfirmTwoHop:
         
         测试覆盖:复验阶段(snapshot 匹配)。真执行阶段需要完整 workspace,由活体终验覆盖。
         """
+        # AIPOS-F148 件③: 门侧授权要求完整实例名(roles.schema naming.template 三段), 靶场审计实例由两段式 audit.test 改为 audit.test.dev
         from tools.aipos_cli.board_adapter import audit_verdict_task
         from tools.aipos_cli.controlled_execute import snapshot_hash
         
@@ -460,7 +461,7 @@ class TestDryRunConfirmTwoHop:
         (workspace / "task_cards" / "TASK-X").mkdir(parents=True)
         
         (workspace / "0_control_plane" / "agent_profiles" / "profiles.yaml").write_text(
-            "agents:\n  - id: audit.test\n    role: auditor\n  - id: exec.test\n    role: executor\n"
+            "agents:\n  - id: audit.test.dev\n    role: auditor\n  - id: exec.test\n    role: executor\n"
         )
         (workspace / "5_tasks" / "queue" / "claimed" / "task-x.md").write_text(
             "---\ntask_id: TASK-X\ntitle: T\nassigned_to: exec.test\ncontext_bundle: t\ntask_mode: code\n"
@@ -470,10 +471,10 @@ class TestDryRunConfirmTwoHop:
             "active_session_id: session_exec_TASK-X\n---\n# T\n"
         )
         (workspace / "5_tasks" / "queue" / "claimed" / "audit-task-x.md").write_text(
-            "---\ntask_id: AUDIT-TASK-X\ntitle: A\nassigned_to: audit.test\ncontext_bundle: t\n"
+            "---\ntask_id: AUDIT-TASK-X\ntitle: A\nassigned_to: audit.test.dev\ncontext_bundle: t\n"
             "task_mode: audit\npriority: normal\nneeds_owner: false\noutput_target: verdict\n"
             "artifact_policy: record_only\nstatus: claimed\ncreated_by: gate_derivation\n"
-            "reviewed_task_id: TASK-X\nclaimed_by: audit.test\nagent_instance: audit.test\n"
+            "reviewed_task_id: TASK-X\nclaimed_by: audit.test.dev\nagent_instance: audit.test.dev\n"
             "claim_id: claim_AUDIT-TASK-X_20260901_110000_audit-test\nclaimed_at: '2026-09-01T11:00:00Z'\n"
             "active_session_id: sa\nreviewed_executor_instance: exec.test\n---\n# A\n"
         )
@@ -492,8 +493,8 @@ class TestDryRunConfirmTwoHop:
         dry_run_response = audit_verdict_task(
             audit_task_id="AUDIT-TASK-X",
             reviewed_task_id="TASK-X",
-            actor="audit.test",
-            agent_instance="audit.test",
+            actor="audit.test.dev",
+            agent_instance="audit.test.dev",
             owner_policy_ref="pol",
             verdict="PASS",
             findings_summary="OK",
@@ -506,7 +507,7 @@ class TestDryRunConfirmTwoHop:
             repo_root=workspace,
         )
         
-        dry_run_hash = snapshot_hash("audit_verdict", "audit.test", dry_run_response)
+        dry_run_hash = snapshot_hash("audit_verdict", "audit.test.dev", dry_run_response)
         
         # 模拟 confirm 时的 revalidation:从 original_payload 重新调用
         payload = dry_run_response["data"]["original_payload"]
@@ -529,7 +530,7 @@ class TestDryRunConfirmTwoHop:
             repo_root=workspace,
         )
         
-        confirm_hash = snapshot_hash("audit_verdict", "audit.test", confirm_response)
+        confirm_hash = snapshot_hash("audit_verdict", "audit.test.dev", confirm_response)
         
         # 验证:两个 hash 必须相等
         assert dry_run_hash == confirm_hash, (
@@ -561,6 +562,7 @@ class TestDryRunConfirmTwoHop:
         1. code 卡 + artifact_subject (主测试已覆盖)
         2. doc 卡不需要 artifact_subject (本测试)
         """
+        # AIPOS-F148 件③: 门侧授权要求完整实例名(roles.schema naming.template 三段), 靶场审计实例由两段式 audit.test 改为 audit.test.dev
         from tools.aipos_cli.board_adapter import audit_verdict_task
         from tools.aipos_cli.controlled_execute import snapshot_hash
         
@@ -575,7 +577,7 @@ class TestDryRunConfirmTwoHop:
         (workspace / "task_cards" / "TASK-DOC").mkdir(parents=True)
         
         (workspace / "0_control_plane" / "agent_profiles" / "profiles.yaml").write_text(
-            "agents:\n  - id: audit.test\n    role: auditor\n  - id: exec.test\n    role: executor\n"
+            "agents:\n  - id: audit.test.dev\n    role: auditor\n  - id: exec.test\n    role: executor\n"
         )
         # 被审卡:task_mode=doc (非 code)
         (workspace / "5_tasks" / "queue" / "claimed" / "task-doc.md").write_text(
@@ -586,10 +588,10 @@ class TestDryRunConfirmTwoHop:
             "active_session_id: session_exec_TASK-DOC\n---\n# Doc Task\n"
         )
         (workspace / "5_tasks" / "queue" / "claimed" / "audit-task-doc.md").write_text(
-            "---\ntask_id: AUDIT-TASK-DOC\ntitle: Audit Doc\nassigned_to: audit.test\ncontext_bundle: t\n"
+            "---\ntask_id: AUDIT-TASK-DOC\ntitle: Audit Doc\nassigned_to: audit.test.dev\ncontext_bundle: t\n"
             "task_mode: audit\npriority: normal\nneeds_owner: false\noutput_target: verdict\n"
             "artifact_policy: record_only\nstatus: claimed\ncreated_by: gate_derivation\n"
-            "reviewed_task_id: TASK-DOC\nclaimed_by: audit.test\nagent_instance: audit.test\n"
+            "reviewed_task_id: TASK-DOC\nclaimed_by: audit.test.dev\nagent_instance: audit.test.dev\n"
             "claim_id: claim_AUDIT-TASK-DOC_20260901_110000_audit-test\nclaimed_at: '2026-09-01T11:00:00Z'\n"
             "active_session_id: sa_doc\nreviewed_executor_instance: exec.test\n---\n# Audit Doc\n"
         )
@@ -608,8 +610,8 @@ class TestDryRunConfirmTwoHop:
         dry_run_response = audit_verdict_task(
             audit_task_id="AUDIT-TASK-DOC",
             reviewed_task_id="TASK-DOC",
-            actor="audit.test",
-            agent_instance="audit.test",
+            actor="audit.test.dev",
+            agent_instance="audit.test.dev",
             owner_policy_ref="pol",
             verdict="PASS",
             findings_summary="OK",
@@ -622,7 +624,7 @@ class TestDryRunConfirmTwoHop:
             repo_root=workspace,
         )
         
-        dry_run_hash = snapshot_hash("audit_verdict", "audit.test", dry_run_response)
+        dry_run_hash = snapshot_hash("audit_verdict", "audit.test.dev", dry_run_response)
         
         # 模拟 confirm 时的 revalidation
         payload = dry_run_response["data"]["original_payload"]
@@ -645,7 +647,7 @@ class TestDryRunConfirmTwoHop:
             repo_root=workspace,
         )
         
-        confirm_hash = snapshot_hash("audit_verdict", "audit.test", confirm_response)
+        confirm_hash = snapshot_hash("audit_verdict", "audit.test.dev", confirm_response)
         
         # 验证:两个 hash 必须相等(doc 卡场景)
         assert dry_run_hash == confirm_hash, (

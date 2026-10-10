@@ -509,8 +509,19 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         except (OSError, UnicodeDecodeError) as exc:
             out["category"], out["reasons"] = "INGEST_RETURN_UNREADABLE", [f"{path}: {exc}"]
             return out
-        if not extract_return_summary_text(content):
-            out["category"], out["reasons"] = "INGEST_SUMMARY_MISSING", [f"{path}: 「一句话结论」缺失或仍是骨架占位"]
+        # AIPOS-F148 件②: 摘要来源读声明(transitions artifact_ingest.return.summary_source + 项目 return_summary_source,
+        # 唯一读取口 workspace_config.return_summary_source), 与推导核就绪判据同一解析 extract_return_summary_text; 拒因同一文案
+        from tools.aipos_cli.next_resolver import return_summary_missing_text
+        from tools.aipos_cli.workspace_config import ReturnSummarySourceError, return_summary_source
+
+        try:
+            summary_source = return_summary_source(workspace_root)
+        except (ReturnSummarySourceError, OSError, ValueError) as exc:
+            out["category"], out["reasons"] = "INGEST_SUMMARY_MISSING", [
+                f"{path}: 本项目 Return 摘要来源声明不可用(fail-closed): {exc}。出口: lybra project set-return-summary 重新声明"]
+            return out
+        if not extract_return_summary_text(content, summary_source):
+            out["category"], out["reasons"] = "INGEST_SUMMARY_MISSING", [return_summary_missing_text(path, summary_source)]
             return out
         # AIPOS-F78C 件③: Return 自述 repo(可选, 声明 artifact_ingest.return.optional_frontmatter)须与卡 lane.repo 解析仓一致
         optional = [str(k) for k in (decl.get("optional_frontmatter") or [])]

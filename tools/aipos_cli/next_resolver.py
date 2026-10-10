@@ -1287,12 +1287,68 @@ def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
 
 
 def _check_return_artifact(workspace_root: Path, task_id: str) -> bool:
-    """执行体产物就绪判据(唯一): 路径读 transitions N2.artifact.location; 存在且非骨架
-    (「一句话结论」非 `(待填写` 占位)才算。骨架由 claim 创建(N1.return_skeleton), 不是交回。"""
+    """执行体产物就绪判据(唯一): 路径读 transitions N2.artifact.location; 存在且摘要可取
+    (AIPOS-F148 件②: 摘要来源读声明 transitions artifact_ingest.return.summary_source + 项目覆盖, 缺省 =「一句话结论」节非
+    `(待填写` 占位)才算。骨架由 claim 创建(N1.return_skeleton), 不是交回。"""
     path = _return_artifact_path(workspace_root, task_id)
     if not path.is_file():
         return False
     return _extract_return_summary(workspace_root, task_id) is not None
+
+
+def return_summary_status(workspace_root: Path, task_id: str) -> dict[str, Any]:
+    """AIPOS-F148 件②: 执行体 Return 的摘要就绪视图(推导核「不就绪说清缺什么」与 artifact ingest 拒因同源)。
+
+    返回 {path, exists, summary, source, submitted, missing, error}:
+      summary   = extract_return_summary_text(内容, 本项目摘要来源)(None = 取不到);
+      submitted = 必填 frontmatter(required_frontmatter)均已填实值(= 执行体已自认交回, 骨架不算);
+      missing   = 摘要取不到时的原文(所查 frontmatter 键 + 正文节标记 + 补法); error = 摘要来源声明不合 / 文件读不出的原文。"""
+    from tools.aipos_cli.workspace_config import ReturnSummarySourceError, return_summary_source
+
+    path = _return_artifact_path(workspace_root, task_id)
+    out: dict[str, Any] = {"path": path, "exists": path.is_file(), "summary": None, "source": None, "submitted": False,
+                           "missing": "", "error": ""}
+    if not out["exists"]:
+        return out
+    try:
+        source = return_summary_source(workspace_root)
+    except (ReturnSummarySourceError, OSError, ValueError) as exc:
+        out["error"] = (f"本项目 Return 摘要来源声明不可用(fail-closed): {exc}。出口: lybra project set-return-summary "
+                        "--frontmatter-key <键> / --section-marker <标记> 重新声明(config.schema project_json.return_summary_source)")
+        return out
+    out["source"] = source
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        out["error"] = f"{path} 读不出: {exc}"
+        return out
+    out["summary"] = extract_return_summary_text(content, source)
+    if out["summary"] is None:
+        out["missing"] = return_summary_missing_text(path, source)
+        from tools.aipos_cli.frontmatter import FrontmatterReadError
+
+        try:
+            out["submitted"] = not missing_return_frontmatter(_read_frontmatter(path, allow_missing_block=True))
+        except FrontmatterReadError:
+            out["submitted"] = False  # frontmatter 读不出 = 不能断定已交(推导核交回步另按 F100 件② 判 frontmatter_unreadable)
+    return out
+
+
+def return_summary_missing_text(path: Path, source: dict[str, Any]) -> str:
+    """AIPOS-F148 件②: 摘要取不到时的拒因原文(推导核 missing_records 与 artifact ingest INGEST_SUMMARY_MISSING 同一文案)。"""
+    keys, markers = list(source.get("frontmatter_keys") or []), list(source.get("section_markers") or [])
+    parts = []
+    if keys:
+        parts.append(f"frontmatter 键 {keys} 均缺或为占位")
+    if markers:
+        parts.append(f"正文无含 {markers} 任一标记的摘要节(或其内容仍为 `{_RETURN_PLACEHOLDER_PREFIX}` 骨架占位)")
+    how = []
+    if keys:
+        how.append(f"frontmatter 写 {keys[0]}: <一句话结论>")
+    if markers:
+        how.append(f"正文加「## {markers[0].lstrip('#').strip()}」节并在其下写一句话结论")
+    return (f"{path}: Return 摘要缺——" + "; ".join(parts) + "(摘要来源声明: transitions.schema artifact_ingest.return.summary_source"
+            + (" + 本项目 project.json return_summary_source" if source.get("declared") else "") + ")。补法(任一): " + " / ".join(how))
 
 
 def _check_verdict_artifact(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None = None) -> Path | None:
@@ -1331,31 +1387,46 @@ def _check_audit_card(workspace_root: Path, task_id: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _extract_return_summary(workspace_root: Path, task_id: str) -> str | None:
-    """从 RETURN.md 提取一句话结论。
-    
-    第4轮③: result_summary 必须从 RETURN.md「一句话结论」节提取,不存在→该步不该是return。
+    """从 Return 提取一句话结论(推导核交回步的 result_summary)。
+
+    第4轮③: result_summary 必须从 Return 摘要来源提取,不存在→该步不该是return。
     AIPOS-F73D: 占位符(骨架 `(待填写`)不算结论 → None(= 产物未就绪)。路径读 N2.artifact.location。
+    AIPOS-F148 件②: 摘要来源读声明(return_summary_status 唯一视图); 来源声明不合 / 文件读不出 = None 并出声(推导核另判 artifact_invalid)。
     """
-    try:
-        return_path = _return_artifact_path(workspace_root, task_id)
-
-        if not return_path.is_file():
-            return None
-
-        return extract_return_summary_text(return_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError) as exc:
+    status = return_summary_status(workspace_root, task_id)
+    if status["error"]:
         import sys
 
-        print(f"Warning: RETURN.md unreadable for {task_id}: {exc}", file=sys.stderr)
+        print(f"Warning: {task_id}: {status['error']}", file=sys.stderr)
+    return status["summary"]
+
+
+def extract_return_summary_text(content: str, source: dict[str, Any] | None = None) -> str | None:
+    """从 Return 提取一句话结论(唯一解析; 推导核就绪判据 / 交回步 / artifact ingest / 审计报告 findings_summary 共用)。骨架占位 → None。
+
+    AIPOS-F148 件②: source = 摘要来源 {frontmatter_keys, section_markers}(项目的经 workspace_config.return_summary_source 取);
+    缺省 None = transitions artifact_ingest.return.summary_source 缺省(=「一句话结论」节, 与 F148 前写死判据逐字等价)。
+    序: frontmatter_keys 按列序取首个非占位值 → section_markers 正文节首个内容行。"""
+    if source is None:
+        from tools.aipos_cli.workspace_config import return_summary_source_default
+
+        source = return_summary_source_default()
+    keys = [str(k) for k in (source.get("frontmatter_keys") or [])]
+    if keys:
+        from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+
+        meta, _body, _warnings = parse_markdown_frontmatter(content)
+        for key in keys:
+            value = (meta or {}).get(key)
+            if isinstance(value, str) and not _is_placeholder_value(value):
+                return value.strip().rstrip("。")
+    markers = [str(m) for m in (source.get("section_markers") or [])]
+    if not markers:
         return None
-
-
-def extract_return_summary_text(content: str) -> str | None:
-    """从 Return 正文提取「一句话结论」(唯一解析; 推导核与 artifact ingest 共用)。骨架占位 → None。"""
     lines = content.split("\n")
     in_summary_section = False
     for line in lines:
-        if "一句话结论" in line or "## 一句话" in line:
+        if any(marker in line for marker in markers):
             in_summary_section = True
             continue
         if in_summary_section:
@@ -2137,7 +2208,7 @@ def _derive_stale_re_return(workspace_root: Path, task_id: str, fm: dict[str, An
         return _not_derivable_no_claim(task_id, node=state, state="claimed", verb="lybra_queue_return_dry_run",
                                        triggered_by="executor", notes=f"{state}: {head}; 无 claim 记录, 重交回 actor 无据(AIPOS-F73E 件①)")
     return_path = Path(str(check["path"]))
-    summary = extract_return_summary_text(return_path.read_text(encoding="utf-8")) or ""
+    summary = _extract_return_summary(workspace_root, task_id) or ""  # AIPOS-F148 件②: 摘要来源读声明(同一解析)
     step = _return_submission_step(
         workspace_root, task_id, fm, claimer=claimer, conn_arg=conn_arg, result_summary=summary, return_path=return_path,
         node=state,
@@ -2804,8 +2875,8 @@ def _derive_next_step(
                     "triggered_by": "executor",
                     "command": "",
                     "verb": "",
-                    "missing_records": ["RETURN.md 存在但无法提取一句话结论"],
-                    "suggested_action": "检查 RETURN.md 是否包含『一句话结论』节",
+                    "missing_records": ["RETURN.md 存在但无法提取一句话结论(摘要来源: transitions artifact_ingest.return.summary_source)"],
+                    "suggested_action": "检查 Return 是否含声明的摘要来源(缺省『一句话结论』节)",
                     "notes": "RETURN.md 格式不完整,推导不出",
                 }
 
@@ -2842,6 +2913,26 @@ def _derive_next_step(
                 suggested_action="交回工作(RETURN.md 已存在,执行 return)",
                 notes="N1→N2: RETURN.md 已生成,需执行 return 动词",
             )
+
+        # AIPOS-F148 件②(gap #112): Return 已落盘但摘要来源都取不到——必填 frontmatter 已填实值(执行体已自认交回)或摘要来源声明
+        # 不可用 = artifact_invalid(loop exit 4, 原文列出所查来源与补法), 不当「无交回」空等; 必填 frontmatter 仍为占位 = 骨架, 照旧等待
+        summary_status = return_summary_status(workspace_root, task_id)
+        if summary_status["exists"] and summary_status["summary"] is None and (summary_status["error"] or summary_status["submitted"]):
+            reason = summary_status["error"] or summary_status["missing"]
+            return {
+                "task_id": task_id,
+                "derivable": False,
+                "current_node": "claim",
+                "current_state": "claimed",
+                "triggered_by": "executor",
+                "command": "",
+                "verb": "lybra_queue_return_dry_run",
+                "missing_records": [reason],
+                "suggested_action": (f"执行体按拒因补齐 {summary_status['path']} 的摘要后产品自动重推导(声明: transitions.schema "
+                                     "artifact_ingest.return.summary_source; 项目可经 lybra project set-return-summary 声明本项目的摘要来源)"),
+                "notes": "Return 已落盘且必填 frontmatter 已填, 但摘要来源都取不到, 产品无法铸交回记录(AIPOS-F148 件② fail-closed, 不空等)",
+                "action": {"type": "artifact_invalid", "card": task_id, "path": str(summary_status["path"])},
+            }
 
         # 无 return 记录也无 RETURN.md → 检查是否有返工节 (AIPOS-F75 件③)
         rework_rounds = fm.get("rework_rounds", [])
