@@ -147,16 +147,29 @@ def test_item1_loop_deploy_switched_between_steps_ends_deploy_changed_then_resum
     rc, out, err = _cli(["loop", "status", "--task-id", TASK, "--workspace-root", str(rig.gov), "--wait", "5"])
     text = out + err
     _show(f"---- ① lybra loop status --wait 5 原文 exit {rc} ----\n{text}")
-    rules = lrr.status_contract()["next_action"]
-    declared = rules["by_end_reason"]["deploy_changed"]
-    assert rc == declared_exit_code("lybra_loop_status", declared)
+    assert lrr.status_contract()["next_action"]["by_end_reason"]["deploy_changed"] == "advisor_fix"  # F150 例行清单
+    assert rc == declared_exit_code("lybra_loop_status", "advisor_fix") == 7
     assert f"reason=deploy_changed — 部署已更新" in text
     assert f"部署: 本运行快照 r-a commit {COMMIT_A} → 现部署 commit {COMMIT_B}" in text
-    assert f"顾问下一动作: {declared}(deploy_changed)" in text
+    assert "顾问下一动作: advisor_fix(deploy_changed) — 例行结束 deploy_changed 第 1/3 次: 修法固定, 顾问按下一条自处理, 不问 Owner" in text
+    resume = f"lybra loop --task-id {TASK} --workspace-root {rig.gov} --actor {DRIVER} --envelope {f90.POLICY}"
+    rc_j, js, _ = _cli(["loop", "status", "--task-id", TASK, "--workspace-root", str(rig.gov), "--json"])
+    na = json.loads(js)["next_action"]
+    _show("---- ① --json next_action 原文 ----\n" + json.dumps(na, ensure_ascii=False, indent=2))
+    fix = lrr.status_contract()["next_action"]["routine_rejections"]["end_reasons"]["deploy_changed"]["fix"]
+    assert na["action"] == "advisor_fix" and na["fix"] == fix and na["resume"] == resume == na["hint"].splitlines()[-1]
 
-    # 重跑(新进程跑的是新快照 r-b): 推导核按已落记录续推——不重复认领, 从交回往下走到结案
-    res2, text2 = _loop(rig, _guard(deploy, "r-b"), _guarded(f90._agent_watch(rig, [])))
-    _show(f"---- ① 重跑 loop(新快照 r-b)原文 exit {res2.exit_code} ----\n"
+    # 重跑 = hint 末行原文(经产品 CLI 解析器解析), 新进程跑的是新快照 r-b: 推导核按已落记录续推——不重复认领, 从交回走到结案
+    from tools.aipos_cli.aipos_cli import build_parser
+
+    args = build_parser().parse_args(resume.split()[1:])
+    assert (args.task_id, args.actor, args.envelope, args.workspace_root) == (TASK, DRIVER, f90.POLICY, str(rig.gov))
+    out2 = io.StringIO()
+    res2 = run_loop(args.task_id, Path(args.workspace_root), actor=args.actor, policy_id=args.envelope, out=out2,
+                    watch=_guarded(f90._agent_watch(rig, [])), interval=0.05, max_wait=5, max_steps=30,
+                    deploy_guard=_guard(deploy, "r-b"))
+    text2 = out2.getvalue()
+    _show(f"---- ① 重跑 `{resume}`(新快照 r-b)原文 exit {res2.exit_code} ----\n"
           + "\n".join(l for l in text2.splitlines() if not l.startswith("[ENVELOPE")))
     assert res2.exit_code == exit_code_for(load_loop_contract(), "completed") == 0, text2
     assert len(f90._records(rig.gov, "claims", TASK)) == claims_before  # 断点续做: 认领不重复
@@ -233,6 +246,30 @@ def test_item1_loop_status_wait_detects_deploy_change(rig, tmp_path, monkeypatch
                 and f"本命令运行的是旧版本代码, 等待已停下, 用原命令重跑(lybra loop status --task-id {TASK} --wait <秒>)" in out)
     finally:
         recorder.end(outcome="interrupted", exit_code=130, reason="interrupted", message="fixture end")
+
+
+def test_item1_deploy_changed_streak_escalates_and_declaration_fail_closed():
+    """防死循环: 同卡连续 repeat_owner_needed 次以 deploy_changed 结束 = owner_needed(routine_fix_exhausted);
+    by_end_reason 判 advisor_fix 而例行清单缺该原因修法 = 声明拒(fail-closed)。"""
+    import copy
+
+    from tools.schema_loader import SchemaLoadError
+
+    run_decl = lrr.run_record_declaration(load_loop_contract())
+    rules = lrr.next_action_declaration(run_decl)
+    limit = rules["routine_rejections"]["repeat_owner_needed"]
+    view = {"task_id": TASK, "run_id": "r", "state": "ended", "end_reason": "deploy_changed", "end_message": "部署已更新(…)",
+            "driver": DRIVER, "envelope": f90.POLICY}
+    gov = Path("/tmp/f152-gov-nonexistent")  # 只读判定: 例行结束原因的修法不读卡面
+    first = lrr.next_action(view, rules, governance_root=gov, earlier_end_reasons=["completed"])
+    exhausted = lrr.next_action(view, rules, governance_root=gov, earlier_end_reasons=["deploy_changed"] * (limit - 1))
+    _show(f"[① 连续 {limit} 次 deploy_changed] {exhausted['action']}({exhausted['reason']}) — {exhausted['detail']}")
+    assert first["action"] == "advisor_fix" and exhausted["action"] == "owner_needed"
+    assert exhausted["reason"] == "routine_fix_exhausted" and f"连续 {limit} 次以 deploy_changed 结束" in exhausted["detail"]
+    broken = copy.deepcopy(lrr.status_contract())
+    del broken["next_action"]["routine_rejections"]["end_reasons"]["deploy_changed"]
+    with pytest.raises(SchemaLoadError, match="by_end_reason.deploy_changed = advisor_fix"):
+        lrr.next_action_declaration(run_decl, broken)
 
 
 # ===========================================================================

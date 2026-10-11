@@ -706,6 +706,16 @@ def next_action_declaration(run_decl: dict[str, Any], contract: dict[str, Any] |
                               f"owner_needed 缺事由 {owner_gaps + escalations}"
                               f"(须覆盖 lybra_loop.run_record.states / end_reasons)")
     _check_routine_rejections(decl["routine_rejections"])
+    # AIPOS-F152 件①: by_end_reason 判为 advisor_fix 的结束原因须在 routine_rejections.end_reasons 有修法(缺 = 拒, 不猜)
+    routine_reasons = decl["routine_rejections"].get("end_reasons") or {}
+    if not isinstance(routine_reasons, dict) or set(routine_reasons) - reasons:
+        raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.routine_rejections.end_reasons 须为对象且键 ⊆ lybra_loop.run_record.end_reasons, "
+                              f"多出 {sorted(set(routine_reasons) - reasons) if isinstance(routine_reasons, dict) else routine_reasons!r}")
+    for reason in sorted(r for r, a in decl["by_end_reason"].items() if a == "advisor_fix"):
+        fix = (routine_reasons.get(reason) or {}).get("fix")
+        if not isinstance(fix, list) or not fix or any(not isinstance(x, str) or not x.strip() for x in fix):
+            raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.by_end_reason.{reason} = advisor_fix, 但 routine_rejections.end_reasons."
+                                  f"{reason}.fix 未声明为非空字符串的非空列表")
     return decl
 
 
@@ -762,6 +772,8 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
                         "hint": str(rules["investigate_hint"]).format(**fill)}
         if action == "card_done_take_next":
             return {"action": action, "reason": reason, **_take_next(view, rules, governance_root, message)}
+        if action == "advisor_fix":  # AIPOS-F152 件①: 结束原因本身属例行(routine_rejections.end_reasons, 如 deploy_changed)
+            return _routine_end_reason_action(view, rules, governance_root, reason, message, earlier_end_reasons)
         if action == "owner_needed":
             routine = _routine_action(view, rules, governance_root, reason, message, earlier_end_codes)
             if routine is not None:
@@ -826,10 +838,49 @@ def _routine_action(view: dict[str, Any], rules: dict[str, Any], governance_root
     for code in codes:
         fix += [_render_routine(step, values, f"codes.{code}.fix") for step in routine["codes"][code]["fix"]]
     resume = _render_routine(routine["resume_hint"], values, "resume_hint")
-    hint = "\n".join([*(f"{i}) {step}" for i, step in enumerate(fix, 1)), resume])  # 末行 = 续跑命令
+    hint = _routine_hint(fix, resume)
     return {"action": "advisor_fix", "reason": reason, "codes": codes, "fix": fix, "resume": resume,
             "detail": f"例行门拒 {tally}: 修法固定, 顾问按下一条自处理, 不问 Owner" + (f" — {message}" if message else ""),
             "hint": hint}
+
+
+def _routine_end_reason_action(view: dict[str, Any], rules: dict[str, Any], governance_root: Path, reason: str, message: str,
+                               earlier_end_reasons: list[Any] | None) -> dict[str, Any]:
+    """AIPOS-F152 件①: 例行结束原因(routine_rejections.end_reasons)→ advisor_fix, hint = 该原因 fix 逐条渲染 + resume_hint(续跑命令
+    占位值与例行门拒同一实现 _resume_fill); 本卡最近连续各次运行以同一原因结束 ≥ repeat_owner_needed = owner_needed(routine_fix_exhausted)。"""
+    routine = rules["routine_rejections"]
+    task_id = str(view.get("task_id") or "")
+    fill = {"task_id": task_id, "governance_root": str(governance_root)}
+    limit = int(routine["repeat_owner_needed"])
+    streak = 1
+    for earlier in reversed(earlier_end_reasons or []):
+        if earlier != reason:
+            break
+        streak += 1
+    if streak >= limit:
+        return {"action": "owner_needed", "reason": "routine_fix_exhausted", "codes": [],
+                "detail": f"{rules['owner_reasons']['routine_fix_exhausted']}(本卡连续 {streak} 次以 {reason} 结束; 本次: {message})",
+                "hint": str(rules["investigate_hint"]).format(**fill)}
+    values = _resume_fill(view, governance_root)
+    where = f"end_reasons.{reason}.fix"
+    fix = [_render_routine(step, values, where) for step in routine["end_reasons"][reason]["fix"]]
+    resume = _render_routine(routine["resume_hint"], values, "resume_hint")
+    hint = _routine_hint(fix, resume)
+    return {"action": "advisor_fix", "reason": reason, "codes": [], "fix": fix, "resume": resume,
+            "detail": f"例行结束 {reason} 第 {streak}/{limit} 次: 修法固定, 顾问按下一条自处理, 不问 Owner" + (f" — {message}" if message else ""),
+            "hint": hint}
+
+
+def _routine_hint(fix: list[str], resume: str) -> str:
+    """修法逐条编号 + 末行续跑命令(例行门拒与例行结束原因同一渲染)。"""
+    return "\n".join([*(f"{i}) {step}" for i, step in enumerate(fix, 1)), resume])
+
+
+def _resume_fill(view: dict[str, Any], governance_root: Path) -> dict[str, str]:
+    """续跑命令占位实值(task_id / governance_root / actor_arg / envelope_arg; 运行记录 driver / envelope)——例行门拒与例行结束原因同一实现。"""
+    driver, envelope = str(view.get("driver") or "").strip(), str(view.get("envelope") or "").strip()
+    return {"task_id": str(view.get("task_id") or ""), "governance_root": str(governance_root),
+            "actor_arg": f" --actor {driver}" if driver else "", "envelope_arg": f" --envelope {envelope}" if envelope else ""}
 
 
 class _RoutineFixUnrenderable(ValueError):
@@ -865,10 +916,8 @@ def _routine_fill(view: dict[str, Any], routine: dict[str, Any], governance_root
     except (AmbiguousTaskCard, FrontmatterReadError, CardRepoUnresolved) as exc:
         raise _RoutineFixUnrenderable(f"{type(exc).__name__}: {exc}") from exc
     branch, base = card_branch_name(task_id), card_expected_base(fm)
-    driver, envelope = str(view.get("driver") or "").strip(), str(view.get("envelope") or "").strip()
-    values = {"task_id": task_id, "governance_root": str(governance_root), "branch": branch, "base": base,
-              "worktree": str(worktree), "base_sync_command": base_sync_command(branch, base),
-              "actor_arg": f" --actor {driver}" if driver else "", "envelope_arg": f" --envelope {envelope}" if envelope else ""}
+    values = {**_resume_fill(view, governance_root), "branch": branch, "base": base,  # AIPOS-F152: 续跑占位与例行结束原因同一实现
+              "worktree": str(worktree), "base_sync_command": base_sync_command(branch, base)}
     undeclared = sorted(set(values) - set(routine["placeholders"]))
     if undeclared:
         from tools.schema_loader import SchemaLoadError
