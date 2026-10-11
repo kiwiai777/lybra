@@ -46,10 +46,11 @@ lybra agent watch --workspace-root <governance-root> --stream --timeout 1800
 | **2** | Timeout (silent) | None | **Both modes.** No change within `--timeout` seconds. Clean bounded wait exhausted. |
 | **3** | End pattern seen, no product | JSON: `{"end_no_product": {"run_log_tail": "..."}}` | **Default mode only.** `--end-pattern` appeared in `--run-log`, but `--expect` was NOT satisfied (after one grace poll). The execution claims to be done but produced no artifact. |
 | **4** | Stall detected | JSON: `{"stall": {"silence_seconds": N, "run_log_tail": "..."}}` | **Default mode only.** Observation surface (run-log or queue+records) silent for ≥ `--stall-secs`. The execution is stuck. |
+| **6** | Deploy changed (AIPOS-F152) | JSON: `{"deploy_changed": {"from": "<commit>", "to": "<commit>", "message": "..."}}` | **Both modes.** This watch runs from a deploy snapshot and a newer deploy has landed (`.deploy/current` moved). It stops instead of running old code; re-run the same command. Not checked when running a work tree / `LYBRA_DEV_TREE`. |
 | **5** | Usage error (布防拒绝) | stderr: single-line error message | **Both modes.** `--expect` pattern is invalid: absolute path (starts with `/`) or escape attempt (contains `..`). Fix the pattern and retry. (F-284B-1) |
 | **130** | SIGTERM/SIGINT | None | **Both modes.** Clean signal exit (no Python traceback) |
 
-**Note**: In `--stream` mode, exit codes 0/3/4 become JSON event lines instead of process exits. Only timeout (exit 2) or signals (exit 130) terminate the stream.
+**Note**: In `--stream` mode, exit codes 0/3/4 become JSON event lines instead of process exits. Only timeout (exit 2), a deploy change (exit 6, after its event line) or signals (exit 130) terminate the stream.
 
 ## Observation Surface
 
@@ -135,6 +136,7 @@ lybra agent watch --workspace-root <governance-root> \
 - `{"kind": "change", "changed": [{"path": "...", "kind": "new|modified|moved|deleted"}, ...]}` — filesystem change detected
 - `{"kind": "stall", "silence_seconds": N, "run_log_tail": "..."}` — observation surface silent beyond threshold
 - `{"kind": "run_end", "run_log_tail": "..."}` — end-pattern seen but expect not satisfied
+- `{"kind": "deploy_changed", "from": "...", "to": "...", "message": "..."}` — a newer deploy landed (AIPOS-F152); followed by `{"kind": "end", "reason": "deploy_changed"}` and exit 6
 
 **Event deduplication (S3):** Each expect file is reported at most once. Filesystem changes advance the snapshot, so the same change is not re-reported.
 
@@ -179,6 +181,7 @@ After `lybra agent watch` exits (when you call it directly; inside `lybra loop` 
 | 2 | Timeout is a **normal bounded exit**. Log "no activity in N seconds" and either re-run the same wait or escalate per governance policy. |
 | 3 | **Execution claimed completion but produced nothing.** Read `run_log_tail` from JSON. The workstation said "done" without the declared artifact: report it to the Owner (the workstation is reopened with `/go`, or by re-running an authorized `lybra loop`); never write the artifact on the executor's behalf. |
 | 4 | **Execution is stalled/frozen.** Read `silence_seconds` and `run_log_tail`. Report the stall to the Owner with this evidence; the Owner decides whether to restart the workstation (`/go`, or re-run an authorized `lybra loop`). |
+| 6 | **Deploy changed.** A newer deploy landed while this watch ran old code. Re-run the same command (it starts on the new snapshot). |
 | 5 | **Usage error (布防拒绝).** The `--expect` pattern is invalid (absolute path or `..` escape). Read stderr for the exact error. Fix the pattern and re-invoke. This is a **caller bug**, not an execution failure. |
 | 130 | Signal exit (external interrupt). Clean shutdown, no action needed unless this was unexpected. |
 
@@ -192,7 +195,9 @@ Parse each JSON event line from stdout:
 | `stall` | **Execution stalled.** Read `silence_seconds` and `run_log_tail`. Report the stall to the Owner with this evidence. |
 | `run_end` | **Execution finished but produced nothing.** Read `run_log_tail`. Report it to the Owner; never write the artifact on the executor's behalf. |
 
-Process exits (exit 2 timeout or exit 130 signal): terminate the monitoring loop.
+| `deploy_changed` | **A newer deploy landed.** The stream ends right after this event (exit 6): re-run the same watch command. |
+
+Process exits (exit 2 timeout, exit 6 deploy changed, or exit 130 signal): terminate the monitoring loop.
 
 ## Red Lines (Preserved from AIPOS-268)
 
