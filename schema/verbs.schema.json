@@ -2057,6 +2057,14 @@
           "verb_not_authorized": "信封未授权该动词(exit_codes.no_envelope)",
           "interrupted": "loop 收到 SIGINT/SIGTERM/SIGHUP(已清拉起进程组; exit_code 记 128+信号)",
           "crashed": "loop 内部异常退出(exit_code 记 1; 异常类型进 end_message)"
+        },
+        "end_codes": {
+          "description": "AIPOS-F150 件①(gap #128): loop 以 end_reasons 所列结束原因结束时, 运行记录另落 end_codes = 门拒原文(loop 结果全文 message, 非仅首行 end_message)里出现的既有门拒错误码列表(按出现顺序去重)。只抽取不造码: 码 = 门侧 blocking_reasons / error_code 既有写法(`<码>: 原因` 或 error_code=<码>), 抽取式样即 patterns(每条含命名组 code); 抽不出 = 空列表(下一动作照旧 owner_needed)。其余结束原因不落(null)。唯一实现 tools/aipos_cli/loop_run_record.extract_end_codes(LoopRunRecorder.end 调用); 旧记录无此键 = 视同空列表(行为不变)。",
+          "end_reasons": ["gate_rejected", "landing_rejected"],
+          "patterns": [
+            "(?<![A-Za-z0-9_])(?P<code>[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+):",
+            "error_code[\"']?\\s*[=:]\\s*[\"']?(?P<code>[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)"
+          ]
         }
       },
       "await_artifacts": {
@@ -2078,7 +2086,7 @@
       ]
     },
     "lybra_loop_status": {
-      "description": "AIPOS-F131 件②: `lybra loop status [--task-id <ID>] [--workspace-root <治理根>] [--json]` —— 读 loop 运行记录(lybra_loop.run_record)+ 本机探活(pid 存在且进程启动时刻指纹一致, AIPOS-F137)+ 判停滞, 输出: 运行中/已结束、当前步与等待对象、拉起进程存活与否/已运行时长/距最近输出多久/最近活动类别与时间、停滞判定(states)、结束原因, 以及记录与日志路径。--task-id 给出 = 该卡最近一次运行(含已结束); 缺省 = 本项目全部未结束的运行。只读, 不写任何文件、不起任何进程、不发信号; 输出不含凭据与会话正文(记录本身不落)。跨机: 在治理根所在机执行(经 ssh 亦可); 记录主机 ≠ 本机 = unprobeable。判据唯一实现 tools/aipos_cli/loop_run_record.judge_run, 禁调用方 tail/grep 原始日志自判。AIPOS-F136 件①: 输出增「顾问下一动作」(next_action 段, 唯一判定 loop_run_record.next_action); `--wait <秒>` 有界等待到可行动或到时(wait 段), 退出码按下一动作。",
+      "description": "AIPOS-F131 件②: `lybra loop status [--task-id <ID>] [--workspace-root <治理根>] [--json]` —— 读 loop 运行记录(lybra_loop.run_record)+ 本机探活(pid 存在且进程启动时刻指纹一致, AIPOS-F137)+ 判停滞, 输出: 运行中/已结束、当前步与等待对象、拉起进程存活与否/已运行时长/距最近输出多久/最近活动类别与时间、停滞判定(states)、结束原因, 以及记录与日志路径。--task-id 给出 = 该卡最近一次运行(含已结束); 缺省 = 本项目全部未结束的运行。只读, 不写任何文件、不起任何进程、不发信号; 输出不含凭据与会话正文(记录本身不落)。跨机: 在治理根所在机执行(经 ssh 亦可); 记录主机 ≠ 本机 = unprobeable。判据唯一实现 tools/aipos_cli/loop_run_record.judge_run, 禁调用方 tail/grep 原始日志自判。AIPOS-F136 件①: 输出增「顾问下一动作」(next_action 段, 唯一判定 loop_run_record.next_action); `--wait <秒>` 有界等待到可行动或到时(wait 段), 退出码按下一动作。AIPOS-F150: 门拒运行的结构化拒因码(lybra_loop.run_record.end_codes)全部属例行清单(next_action.routine_rejections)= 下一动作 advisor_fix, 人读输出与 --json 均含其修法原文(hint)与拒因码(codes)。",
       "phase": "driver",
       "surface": ["cli"],
       "cli_command": "lybra loop status",
@@ -2102,12 +2110,13 @@
         "note": "AIPOS-F136 件①: --wait 上限与轮询间隔(唯一声明)。等待经 tools/aipos_cli/agent_watch_fs.run_fs_watch(loop 的唯一等待原语, 禁 sleep 自旋): 观察根 = 项目声明的运行记录落点 project.json paths.loop_runs_root(唯一读取口 workspace_config.project_paths), expect = <卡ID>/looprun_*.md, 每轮由 judge_run + next_action 重判(进程死 / 停滞 / 结束无需文件变化也在下一轮被判出)。到时 = 返回当时状态(continue_wait)。顾问取本会话单次命令超时以内的秒数; 超上限 = 用法错(usage), 不截断。"
       },
       "next_action": {
-        "description": "AIPOS-F136 件①: 顾问下一动作(唯一判定 tools/aipos_cli/loop_run_record.next_action; 输出与 --json 每个运行附 next_action {action, reason, detail, hint}, --task-id 时顶层另附本卡的 next_action)。判据只读运行记录: 状态(judge_run)→ by_state; 已结束 → 结束原因 by_end_reason(结束原因原文 end_message 即门/推导核的拒因, 一并给出); 本卡最近连续 consecutive_failures_owner_needed 次运行都以 investigate 类原因结束 = 连败 → owner_needed。",
+        "description": "AIPOS-F136 件①: 顾问下一动作(唯一判定 tools/aipos_cli/loop_run_record.next_action; 输出与 --json 每个运行附 next_action {action, reason, detail, hint}, --task-id 时顶层另附本卡的 next_action)。判据只读运行记录: 状态(judge_run)→ by_state; 已结束 → 结束原因 by_end_reason(结束原因原文 end_message 即门/推导核的拒因, 一并给出); 本卡最近连续 consecutive_failures_owner_needed 次运行都以 investigate 类原因结束 = 连败 → owner_needed。AIPOS-F150 件②: by_end_reason 判为 owner_needed 的运行, 若运行记录 end_codes(lybra_loop.run_record.end_codes)非空且全部在 routine_rejections.codes 内 = advisor_fix(修法读声明, 顾问自处理不问 Owner); 同卡同一例行码连续 routine_rejections.repeat_owner_needed 次 = owner_needed(routine_fix_exhausted)。",
         "actions": {
           "continue_wait": "loop 仍在推进(或在等工位产物): 再跑一次 `lybra loop status --task-id <卡ID> --wait <秒>`; reason=manual_kickoff 时 loop 在手工模式等工位, 向 Owner 说一次 detail 里的开工提示(在哪个工位敲 /go), 然后继续等",
           "owner_needed": "须 Owner 决定/授权: 停下, 一次说清 detail 里要 Owner 定什么(设计分叉 / 授权 / 连败 / 门拒原因), Owner 定了再续跑 loop",
           "card_done_take_next": "本卡已结案并落账: 取本 lane 下一张(next_card 与 hint 由 F133「下一张」出口给出; 无可推进卡时 hint 为 lane 扫描)",
-          "investigate": "loop 或其拉起的进程异常(停滞 / 进程已不在 / 别机记录)或以推导/产物类原因结束: 按 hint 查(`lybra next --task-id <卡ID>` 给缺项与出口), 能修的出卡修、修好续跑 loop; 修不了 = 升 owner_needed"
+          "investigate": "loop 或其拉起的进程异常(停滞 / 进程已不在 / 别机记录)或以推导/产物类原因结束: 按 hint 查(`lybra next --task-id <卡ID>` 给缺项与出口), 能修的出卡修、修好续跑 loop; 修不了 = 升 owner_needed",
+          "advisor_fix": "例行门拒(AIPOS-F150): 门拒原因码全部在 routine_rejections.codes 内 = 修法固定, 顾问按 hint 自处理(改卡分支 / 交回的步骤派本卡执行体做, 顾问永不碰产品仓), 修好按 hint 末条命令续跑 loop, 不问 Owner; 同卡同一例行码连续 routine_rejections.repeat_owner_needed 次仍被拒 = 升 owner_needed(routine_fix_exhausted)"
         },
         "by_state": {
           "running": "continue_wait",
@@ -2145,7 +2154,34 @@
           "verb_not_authorized": "授权: 信封未授权该动词, 请 Owner 决定是否扩授权",
           "manual_required": "需人工裁定: 推导核给不出可执行命令(见 detail 的建议动作)",
           "wait_timeout": "工位开工: 手工模式下工位未交产物, 请 Owner 在工位敲 /go(或签带 --launch-harness 的信封授权拉起), 之后续跑 loop",
-          "consecutive_failures": "连败: 本卡最近连续多次运行都异常结束, 不再自动续跑, 请 Owner 定是否改卡 / 换执行体 / 仲裁"
+          "consecutive_failures": "连败: 本卡最近连续多次运行都异常结束, 不再自动续跑, 请 Owner 定是否改卡 / 换执行体 / 仲裁",
+          "routine_fix_exhausted": "例行门拒修了仍连败: 本卡连续多次被同一例行拒因码拒(固定修法对本卡不灵, 或多条 lane 交替抢合入), 不再自处理, 请 Owner 定是否改卡 / 排合入顺序 / 仲裁"
+        },
+        "routine_rejections": {
+          "description": "AIPOS-F150 件②(gap #128): 例行门拒清单与各码固定修法(唯一声明, 只追加; 判定唯一实现 loop_run_record.next_action)。by_end_reason 判为 owner_needed 的运行, 其 end_codes(lybra_loop.run_record.end_codes, 门拒原文里的既有错误码)非空且全部在 codes 内 = advisor_fix: hint = 各码 fix 逐条按序渲染(占位见 placeholders) + resume_hint; 任一码不在 codes / end_codes 为空 / 旧记录无 end_codes = owner_needed 照旧。防死循环: 本卡最近连续各次运行(含本次, 旧→新取尾段)的 end_codes 都含同一例行码且次数 ≥ repeat_owner_needed = owner_needed(routine_fix_exhausted)。码只取门侧既有错误码, 不另造; 未入清单的门拒码(RETURN_STALE / INGEST_TIP_MISMATCH / TEST_NOT_IN_RUNALL 等)的评估与理由见 AIPOS-F150 交回报告。",
+          "repeat_owner_needed": 3,
+          "placeholders": {
+            "task_id": "卡 ID",
+            "governance_root": "治理根",
+            "branch": "卡分支名(next_resolver.card_branch_name, 读 transitions N5.branch_integration.branch_pattern)",
+            "base": "期望基座(next_resolver.card_expected_base: 卡面 fix_base_branch, 缺省 N5.branch_integration.base_branch; 与交回检查同一判据)",
+            "worktree": "卡工作树(next_resolver.card_worktree_location, 认领建树同一落点)",
+            "base_sync_command": "基线合入卡分支命令(唯一渲染 board_adapter.base_sync_command, 声明 transitions N5.branch_integration.base_sync; 禁 rebase/stash)",
+            "actor_arg": "续跑命令的驱动方参数(运行记录 driver; 无 = 空)",
+            "envelope_arg": "续跑命令的信封参数(运行记录 envelope; 无 = 空)"
+          },
+          "resume_hint": "lybra loop --task-id {task_id} --workspace-root {governance_root}{actor_arg}{envelope_arg}",
+          "codes": {
+            "BRANCH_WRONG_BASE": {
+              "why_routine": "共用仓多条 lane 交替合入: 本卡交回时基线已被他卡前进, 门交回检查⑤分支合规「基座合法」正确拒; 修法固定 = 把基线合入卡分支, 不涉设计判断",
+              "fix": [
+                "派本卡执行体(顾问永不碰产品仓)在卡工作树 {worktree} 把最新 {base} 合入卡分支 {branch}(合并, 不 rebase / 不 stash): {base_sync_command}; 冲突由执行体按卡意图解, 解不了 = 升 owner_needed",
+                "执行体在卡工作树重跑本卡定向测试(卡面验收所列), 绿后提交合并结果",
+                "执行体把交回报告 frontmatter commit_sha / tree_hash 改为卡分支新 tip(git rev-parse {branch} / git rev-parse {branch}^{{tree}}), 正文补合入基线与定向测试证据",
+                "顾问用原命令续跑 loop(本修法末行命令); 若本卡已审计过, loop 走既有 verdict_stale 重审出口(裁决覆盖的 tip 已变), 不手工干预"
+              ]
+            }
+          }
         },
         "consecutive_failures_owner_needed": 2,
         "take_next_hint": "lybra loop --task-id {next_task_id} --workspace-root {governance_root}",
@@ -2162,6 +2198,7 @@
         "no_run": {"code": 4, "meaning": "--task-id 指定的卡无 loop 运行记录(--wait 时 = 到时仍无)"},
         "unreadable": {"code": 4, "meaning": "运行记录读不出 / record_type 不符 / 治理根或声明解析失败(点名文件, 不跳过)"},
         "owner_needed": {"code": 5, "meaning": "--wait: 下一动作 = owner_needed(须 Owner 决定 / 授权, 事由见输出)"},
+        "advisor_fix": {"code": 7, "meaning": "AIPOS-F150 --wait: 下一动作 = advisor_fix(例行门拒, 顾问按输出的修法自处理后续跑 loop)"},
         "investigate": {"code": 6, "meaning": "--wait: 下一动作 = investigate(停滞 / 进程已不在 / 别机记录 / 推导或产物类结束原因)"}
       }
     },
