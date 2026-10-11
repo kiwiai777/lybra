@@ -3380,6 +3380,14 @@ def card_base_branch(branch_integration: dict[str, Any] | None = None) -> str:
     return base.strip()
 
 
+def card_expected_base(task_metadata: dict[str, Any] | None, branch_integration: dict[str, Any] | None = None) -> str:
+    """AIPOS-F150: 卡分支的「期望基座」唯一判定——卡面 fix_base_branch(fix 卡声明的合法基座)优先, 缺省 = card_base_branch。
+    交回检查⑤分支合规「基座合法」(board_adapter._check_branch_compliance)与例行门拒修法渲染(loop_run_record.next_action,
+    BRANCH_WRONG_BASE 的 {base})共用, 禁第二实现。"""
+    fix_base = str((task_metadata or {}).get("fix_base_branch") or "").strip()
+    return fix_base or card_base_branch(branch_integration)
+
+
 def existing_branch_tip(code_repo: Path, branch: str) -> str | None:
     """AIPOS-F123 件①: 产品仓 code_repo 内既有分支 branch 的 tip 完整 sha(本地 refs/heads/<branch> 优先, 其次远端跟踪
     refs/remotes/<branch>); 不存在 = None。只读 git rev-parse; git 不可执行 = OSError 上抛(调用方 fail-closed)。"""

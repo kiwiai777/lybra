@@ -85,6 +85,10 @@
    - `card_done_take_next` → 本卡已结案落账: 按输出的「下一条」取本 lane 的下一张卡, 回到第 1 步。
    - `investigate` → 按输出的「下一条」查(`lybra next --task-id <卡ID>` 给缺项与出口): 卡不全 = 你 amend / 撤回重出(H 条);
      护栏问题 = 出产品修复卡; 修好后回到第 1 步续跑。查不出或修不了 = 升为 owner_needed。
+   - `advisor_fix` → **例行门拒, 按 hint 自处理, 不问 Owner**(AIPOS-F150): 门拒原因码全部属产品声明的例行清单
+     (verbs.schema `lybra_loop_status.next_action.routine_rejections`, 如 `BRANCH_WRONG_BASE` = 共用仓他卡先合入、本卡分支落后),
+     修法固定, 输出「下一条」逐步给出。改卡分支 / 更新交回的步骤**派本卡执行体做**(你仍永不碰产品仓), 执行体交回后用「下一条」
+     末行命令续跑 loop, 回到第 2 步。同卡同一例行码连续被拒到声明次数, 产品自动升为 `owner_needed`, 不必你计数。
    - `owner_needed` → **停**, 一次说清要 Owner 定什么(输出 detail 已写事由: 设计分叉 / 授权 / 连败 / 门拒原因)与可选项;
      Owner 定了再回到第 1 步。
 

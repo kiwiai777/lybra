@@ -3072,7 +3072,7 @@ def _check_branch_compliance(
     
     # AIPOS-F108 件②(M18): 分支名 / 基线读 N5.branch_integration 声明(唯一读取口, 读 Lybra 自身 schema 而非项目产品仓);
     # 原实现读产品仓 schema(非 lybra 形项目无 schema/ → except Exception 静默回落写死 card/{task_id}), 已退役; 声明缺 = SchemaLoadError
-    from tools.aipos_cli.next_resolver import card_base_branch, card_branch_name
+    from tools.aipos_cli.next_resolver import card_base_branch, card_branch_name, card_expected_base
 
     branch_name = card_branch_name(task_id)
     base_branch = card_base_branch()
@@ -3140,10 +3140,7 @@ def _check_branch_compliance(
     
     # 子判据 3: merge-base 为当前基线分支(或 fix 卡声明的合法基座)
     # 读取 fix 卡的合法基座(如果有)
-    expected_base = base_branch  # 默认基座 = N5.branch_integration.base_branch 声明
-    fix_base_branch = str(task_metadata.get("fix_base_branch") or "").strip()
-    if fix_base_branch:
-        expected_base = fix_base_branch
+    expected_base = card_expected_base(task_metadata)  # AIPOS-F150: 期望基座唯一判定(fix 卡 fix_base_branch, 缺省 base_branch 声明)
     
     try:
         # 获取 merge-base

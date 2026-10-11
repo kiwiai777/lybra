@@ -17,8 +17,10 @@ harness or an operator wants a bounded wait or an event stream of its own.
 
 To follow a running loop, the advisor does not call `agent watch` either: `lybra loop status --task-id <card>
 --wait <seconds>` (AIPOS-F136) waits through the same primitive on the card's loop-run record and returns the
-advisor's next action (`continue_wait` / `owner_needed` / `card_done_take_next` / `investigate`; exit codes in
-`schema/verbs.schema.json` `lybra_loop_status.exit_codes`).
+advisor's next action (`continue_wait` / `owner_needed` / `card_done_take_next` / `investigate` / `advisor_fix`; exit codes in
+`schema/verbs.schema.json` `lybra_loop_status.exit_codes`). `advisor_fix` (AIPOS-F150) = the gate rejected with error codes
+that are all declared routine (`lybra_loop_status.next_action.routine_rejections`, e.g. `BRANCH_WRONG_BASE`): the output
+carries the fixed remedy and the resume command; the advisor handles it without asking the Owner.
 
 **AIPOS-284C --stream mode**: A persistent observer that emits JSON event lines (line-buffered,
 immediate flush) and continues running. Only `--timeout` or SIGTERM/SIGINT terminate the process.
