@@ -302,11 +302,14 @@ def signer_role_for_actor(*, connection_json_path: str, actor: str, repo_root: P
 
 
 def progress_reporter_identity(*, connection_json_path: str, actor: str, repo_root: Path | None = None) -> tuple[str, str | None]:
-    """AIPOS-F154 件②: task-progress --confirm 的凭据身份——(角色名, 签发实例或 None)。角色 = 执行体类优先、审计体类次之
-    (resolve_role_from_connection, AIPOS-F44D-A 既有序); --actor 持有该角色凭据 = 按实例取(signer=actor), 否则按角色取
-    (load_role_token 的多实例拒仍生效)。门侧进度事件以 actor 参数记账, 凭据只定 scope。读失败/无匹配角色类 = ValueError。"""
+    """AIPOS-F154 件②: task-progress --confirm 的凭据身份——(角色名, 签发实例或 None)。角色 = 工位类分组按注册表序(执行体类优先、
+    审计体类次之; 分组唯一读取口 custom_roles.role_classes_in_group, 与 AIPOS-F44D-A 既有序一致)经 resolve_role_from_connection 解析;
+    --actor 持有该角色凭据 = 按实例取(signer=actor), 否则按角色取(load_role_token 的多实例拒仍生效)。门侧进度事件以 actor 参数记账,
+    凭据只定 scope。读失败/无匹配角色类 = ValueError。"""
+    from tools.aipos_cli.custom_roles import role_classes_in_group
+
     last: ValueError | None = None
-    for role_class in ("executor", "auditor"):
+    for role_class in role_classes_in_group("workstation"):
         try:
             role = resolve_role_from_connection(
                 connection_json_path=connection_json_path, required_role_class=role_class, repo_root=repo_root
