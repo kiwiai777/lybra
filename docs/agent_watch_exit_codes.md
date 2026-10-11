@@ -46,7 +46,7 @@ lybra agent watch --workspace-root <governance-root> --stream --timeout 1800
 | **2** | Timeout (silent) | None | **Both modes.** No change within `--timeout` seconds. Clean bounded wait exhausted. |
 | **3** | End pattern seen, no product | JSON: `{"end_no_product": {"run_log_tail": "..."}}` | **Default mode only.** `--end-pattern` appeared in `--run-log`, but `--expect` was NOT satisfied (after one grace poll). The execution claims to be done but produced no artifact. |
 | **4** | Stall detected | JSON: `{"stall": {"silence_seconds": N, "run_log_tail": "..."}}` | **Default mode only.** Observation surface (run-log or queue+records) silent for ≥ `--stall-secs`. The execution is stuck. |
-| **6** | Deploy changed (AIPOS-F152) | JSON: `{"deploy_changed": {"from": "<commit>", "to": "<commit>", "message": "..."}}` | **Both modes.** This watch runs from a deploy snapshot and a newer deploy has landed (`.deploy/current` moved). It stops instead of running old code; re-run the same command. Not checked when running a work tree / `LYBRA_DEV_TREE`. |
+| **6** | Deploy changed (AIPOS-F152) | JSON: `{"deploy_changed": {"from": "<commit>", "to": "<commit>", "message": "..."}}` | **Both modes.** This watch runs from a deploy snapshot and a newer deploy has landed (`.deploy/current` moved). It stops instead of running old code; re-run the same command. Not checked when running a work tree / `--dev-tree`. |
 | **5** | Usage error (布防拒绝) | stderr: single-line error message | **Both modes.** `--expect` pattern is invalid: absolute path (starts with `/`) or escape attempt (contains `..`). Fix the pattern and retry. (F-284B-1) |
 | **130** | SIGTERM/SIGINT | None | **Both modes.** Clean signal exit (no Python traceback) |
 

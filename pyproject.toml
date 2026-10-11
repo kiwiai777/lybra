@@ -21,7 +21,7 @@ tui = ["textual>=4.0"]
 # AIPOS-290: console_scripts entry for `pip install -e .` dev convenience.
 # AIPOS-F152 件②: the entry no longer runs the (possibly mid-merge / dirty) working tree. deploy_runtime:main is only a
 # trampoline: it execs the same launcher text that `tools/lybra-deploy install-entry` writes, which loads the CLI from the
-# deploy snapshot (.deploy/current resolved once per process). Local debugging: LYBRA_DEV_TREE=<work tree> lybra ...
+# deploy snapshot (.deploy/current resolved once per process). Local debugging: lybra --dev-tree <work tree> <subcommand> ...
 # Preferred install: `tools/lybra-deploy install-entry` (deploy runs it too); see docs/release_discipline.md.
 lybra = "tools.aipos_cli.deploy_runtime:main"
 

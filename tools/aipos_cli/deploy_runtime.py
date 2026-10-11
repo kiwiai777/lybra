@@ -7,7 +7,9 @@
 - launcher_source(deploy_current, interpreter): 入口脚本文本——`tools/lybra-deploy install-entry`(部署时自动执行)写进 bin 目录;
   pip 控制台入口(pyproject [project.scripts] lybra = 本模块 main)在新解释器里 exec 同一文本。
 - launch(): 入口脚本把快照根放进 sys.path 首位后调用——核对代码确实加载自该根(否则拒跑)、开发开关首行标明、转 aipos_cli.main。
-- 显式开发开关 LYBRA_DEV_TREE=<产品仓工作树>: 代码取自该树, stderr 首行标明「开发模式」(stdout 不掺杂, --json 照常可解析)。
+- 显式开发开关 `lybra --dev-tree <产品仓工作树> <子命令> …`(入口级选项, 须为第一个参数; 入口在加载任何产品代码前消费它):
+  代码取自该树, stderr 首行标明「开发模式」(stdout 不掺杂, --json 照常可解析)。不另设环境变量(环境变量名单单源
+  config.schema environment_variables, 开关只在显式命令行出现, 不会被继承的环境悄悄带进别的命令)。
 - 卡工作树里跑测试 / `python3 -m tools.aipos_cli` 不经入口 = 工作树代码(mode=worktree), 行为不变。
 
 件① 部署一致性(唯一判定 DeployGuard): 运行代码来自部署快照(<部署目录>/releases/<名>, 且同目录有 current 链接)= mode deploy,
@@ -27,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-DEV_TREE_ENV = "LYBRA_DEV_TREE"
+DEV_TREE_FLAG = "--dev-tree"
 RELEASES_DIRNAME = "releases"
 CURRENT_LINKNAME = "current"
 VERSION_FILENAME = "VERSION"
@@ -35,7 +37,7 @@ DEPLOY_DIRNAME = ".deploy"
 LAUNCHER_MARK = "lybra-entry-launcher/v1(AIPOS-F152)"
 ENTRY_NAME = "lybra"
 DEFAULT_BIN_DIR = "~/.local/bin"
-BIN_DIR_ENV = "LYBRA_BIN_DIR"
+_ENTRY: dict[str, str] = {}  # 入口(launch)本进程登记: dev_tree = 开发开关指向的代码根(running_code 据此判 dev)
 
 
 class EntryError(RuntimeError):
@@ -79,14 +81,13 @@ def snapshot_deploy_dir(code_root: Path) -> Path | None:
     return None
 
 
-def running_code(code_root: Path | None = None, env: dict[str, str] | None = None) -> RunningCode:
-    """本进程运行的代码: deploy(部署快照)/ dev(LYBRA_DEV_TREE 指向本代码根)/ worktree(其余: 卡工作树测试、python -m)。"""
-    env = os.environ if env is None else env
+def running_code(code_root: Path | None = None) -> RunningCode:
+    """本进程运行的代码: deploy(部署快照)/ dev(入口 --dev-tree 指向本代码根)/ worktree(其余: 卡工作树测试、python -m)。"""
     root = Path(code_root) if code_root is not None else _code_root()
     deploy_dir = snapshot_deploy_dir(root)
     if deploy_dir is not None:
         return RunningCode(root, "deploy", deploy_dir, _read_commit(root / VERSION_FILENAME), root.name)
-    dev = str(env.get(DEV_TREE_ENV) or "").strip()
+    dev = _ENTRY.get("dev_tree")
     if dev and Path(os.path.realpath(dev)) == Path(os.path.realpath(root)):
         return RunningCode(root, "dev")
     return RunningCode(root, "worktree")
@@ -161,28 +162,36 @@ def change_summary(change: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 def launcher_source(deploy_current: str | Path, interpreter: str | None = None) -> str:
-    """入口脚本文本(唯一渲染)。启动时解析一次 current 真实路径, 整个进程只用这一份快照; LYBRA_DEV_TREE 显式改取工作树。"""
+    """入口脚本文本(唯一渲染)。启动时解析一次 current 真实路径, 整个进程只用这一份快照; 第一个参数 --dev-tree <树> 显式改取工作树。"""
     interp = str(interpreter or sys.executable or "").strip()
     if not interp:
         raise EntryError("当前解释器路径 sys.executable 取不到, 无法生成 lybra 入口")
     return f'''#!{interp}
 # {LAUNCHER_MARK}: lybra CLI 入口, 由 tools/lybra-deploy install-entry 生成(部署时自动重写); 勿手改。
 # 代码从部署快照加载: 启动时把 current 解析成真实路径, 整个进程只用这一份不可变快照(产品仓工作树的中间态不影响 lybra 命令)。
-# 本地调试: {DEV_TREE_ENV}=<产品仓工作树> lybra ...(stderr 首行标明开发模式)。安装/升级见 docs/release_discipline.md。
+# 本地调试: lybra {DEV_TREE_FLAG} <产品仓工作树> <子命令> ...(须为第一个参数; stderr 首行标明开发模式)。安装/升级见 docs/release_discipline.md。
 import os
 import sys
 
 DEPLOY_CURRENT = {str(deploy_current)!r}
-_dev = os.environ.get({DEV_TREE_ENV!r}, "").strip()
+_argv = sys.argv[1:]
+_dev = ""
+if _argv and _argv[0] == {DEV_TREE_FLAG!r}:
+    if len(_argv) < 2 or not _argv[1].strip():
+        sys.stderr.write("lybra: {DEV_TREE_FLAG} 须跟产品仓工作树路径(lybra {DEV_TREE_FLAG} <工作树> <子命令> ...)\\n")
+        sys.exit(2)
+    _dev, _argv = _argv[1].strip(), _argv[2:]
+elif _argv and _argv[0].startswith({DEV_TREE_FLAG + "="!r}):
+    _dev, _argv = _argv[0].split("=", 1)[1].strip(), _argv[1:]
 _root = os.path.realpath(_dev or DEPLOY_CURRENT)
 if not os.path.isfile(os.path.join(_root, "tools", "aipos_cli", "deploy_runtime.py")):
-    _what = "{DEV_TREE_ENV}=" + _dev if _dev else "部署快照 " + DEPLOY_CURRENT
+    _what = "{DEV_TREE_FLAG} " + _dev if _dev else "部署快照 " + DEPLOY_CURRENT
     sys.stderr.write("lybra: " + _what + " -> " + _root + " 不是 lybra 产品代码树(缺 tools/aipos_cli/deploy_runtime.py); "
-                     "出口: 用 tools/lybra-deploy 部署, 或本地调试设 {DEV_TREE_ENV}=<产品仓工作树>\\n")
+                     "出口: 用 tools/lybra-deploy 部署, 或本地调试 lybra {DEV_TREE_FLAG} <产品仓工作树> ...\\n")
     sys.exit(1)
 sys.path.insert(0, _root)
 from tools.aipos_cli.deploy_runtime import launch
-sys.exit(launch(code_root=_root, deploy_current=DEPLOY_CURRENT, dev_tree=_dev, argv=sys.argv[1:]))
+sys.exit(launch(code_root=_root, deploy_current=DEPLOY_CURRENT, dev_tree=_dev, argv=_argv))
 '''
 
 
@@ -196,8 +205,9 @@ def launch(*, code_root: str, deploy_current: str, dev_tree: str, argv: list[str
         sys.stderr.write(f"lybra: 入口应从 {root} 加载产品代码, 实际加载自 {loaded}(sys.path 被前置覆盖?), 拒跑\n")
         return 1
     if dev_tree:
-        sys.stderr.write(f"[lybra] 开发模式({DEV_TREE_ENV}): 代码取自 {root}, 不是部署快照 {deploy_current}; "
-                         f"取消: unset {DEV_TREE_ENV}\n")
+        _ENTRY["dev_tree"] = str(root)
+        sys.stderr.write(f"[lybra] 开发模式({DEV_TREE_FLAG}): 代码取自 {root}, 不是部署快照 {deploy_current}; "
+                         f"取消: 去掉 {DEV_TREE_FLAG}\n")
         sys.stderr.flush()
     elif snapshot_deploy_dir(root) is None:
         sys.stderr.write(f"lybra: {deploy_current} → {root} 不是部署快照(应为 <部署目录>/{RELEASES_DIRNAME}/<名>), 拒跑; "
@@ -290,7 +300,7 @@ def version_line(running: RunningCode | None = None) -> str:
     if rc.mode == "deploy":
         return f"lybra 部署快照 {rc.release}(commit {rc.commit or '不明'}); 代码根 {rc.code_root}"
     if rc.mode == "dev":
-        return f"lybra 开发模式 {DEV_TREE_ENV}={rc.code_root}(非部署快照; {_git_head(rc.code_root)})"
+        return f"lybra 开发模式 {DEV_TREE_FLAG} {rc.code_root}(非部署快照; {_git_head(rc.code_root)})"
     return (f"lybra 工作树代码 {rc.code_root}(未经部署快照入口; {_git_head(rc.code_root)}; "
             f"装入口: tools/lybra-deploy install-entry)")
 
@@ -317,9 +327,9 @@ def _cli(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     inst = sub.add_parser("install-entry", help="把 lybra 入口脚本写进 bin 目录(指向部署链接 current)")
     inst.add_argument("--deploy-current", required=True, help="部署链接(<产品仓>/.deploy/current)")
-    inst.add_argument("--bin-dir", default=None, help=f"入口所在目录(缺省 ${BIN_DIR_ENV} 或 {DEFAULT_BIN_DIR})")
+    inst.add_argument("--bin-dir", default=DEFAULT_BIN_DIR, help=f"入口所在目录(缺省 {DEFAULT_BIN_DIR})")
     args = parser.parse_args(argv)
-    bin_dir = args.bin_dir or os.environ.get(BIN_DIR_ENV) or DEFAULT_BIN_DIR
+    bin_dir = args.bin_dir
     try:
         result = install_entry(args.deploy_current, bin_dir)
     except (EntryError, OSError) as exc:

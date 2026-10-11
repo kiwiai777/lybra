@@ -52,7 +52,7 @@ DEPLOY_AUTH_TYPE=""
 DEPLOY_AUTH_REF=""
 DEPLOY_PROVENANCE=""
 DEPLOY_COVERAGE_BASE=""
-# AIPOS-F152 件②: `lybra` CLI 入口所在目录(install-entry / deploy 时写入口脚本); 缺省 $LYBRA_BIN_DIR 或 ~/.local/bin
+# AIPOS-F152 件②: `lybra` CLI 入口所在目录(install-entry / deploy 时写入口脚本); 缺省 ~/.local/bin(--bin-dir 改)
 ENTRY_BIN_DIR=""
 
 parse_authorization_args() {
@@ -351,7 +351,7 @@ except Exception:
 # ── install-entry (AIPOS-F152 件②) ─────────────────────────────────────
 # `lybra` CLI 入口改从部署快照运行: 入口脚本(渲染唯一实现 tools.aipos_cli.deploy_runtime.launcher_source)每次启动把
 # $CURRENT_LINK 解析成真实路径、整个进程只用这一份快照; 产品仓工作树的中间态(合并中 / 未提交改动)不再被 lybra 命令吃到。
-# 用当前快照里的实现安装(入口文本与部署代码同版本); 本地调试走 LYBRA_DEV_TREE=<工作树>(stderr 首行标明)。
+# 用当前快照里的实现安装(入口文本与部署代码同版本); 本地调试走 lybra --dev-tree <工作树> <子命令>(stderr 首行标明)。
 cmd_install_entry() {
     local current_dir bin_dir
     current_dir=$(get_current_release_dir)
@@ -359,7 +359,7 @@ cmd_install_entry() {
         err "lybra 入口未安装: 无部署快照($CURRENT_LINK 不存在); 出口: 先 lybra-deploy 部署"
         return 1
     fi
-    bin_dir="${ENTRY_BIN_DIR:-${LYBRA_BIN_DIR:-$HOME/.local/bin}}"
+    bin_dir="${ENTRY_BIN_DIR:-$HOME/.local/bin}"
     (cd "$current_dir" && python3 -m tools.aipos_cli.deploy_runtime install-entry --deploy-current "$CURRENT_LINK" --bin-dir "$bin_dir")
 }
 
@@ -915,8 +915,8 @@ main() {
             echo "  verify     Verify deployment integrity: current==HEAD + live gate HTTP check (AIPOS-369)"
             echo "  roots      Show resolved product repo / governance root / gate connection.json (read-only, AIPOS-F88)"
             echo "  install-entry  (Re)install the \`lybra\` CLI entry so it runs from .deploy/current (AIPOS-F152; deploy does this too)"
-            echo "             --bin-dir <dir>  entry directory (default: \$LYBRA_BIN_DIR or ~/.local/bin)"
-            echo "             Local debugging: LYBRA_DEV_TREE=<work tree> lybra ... (stderr first line marks dev mode)"
+            echo "             --bin-dir <dir>  entry directory (default: ~/.local/bin)"
+            echo "             Local debugging: lybra --dev-tree <work tree> <subcommand> ... (first argument; stderr first line marks dev mode)"
             echo ""
             echo "Authorization (deploy only, REQUIRED — AIPOS-R6S 大项B② 缺授权即拒):"
             echo "  --verdict-ref <id>   Audited deploy: PASS audit verdict id (deployment_provenance=audited)"

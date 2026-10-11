@@ -73,7 +73,7 @@ def _fake_deploy(base: Path) -> Path:
 
 
 def _guard(deploy: Path, release: str) -> dr.DeployGuard:
-    running = dr.running_code(code_root=deploy / "releases" / release, env={})
+    running = dr.running_code(code_root=deploy / "releases" / release)
     assert running.mode == "deploy" and running.release == release, running
     return dr.DeployGuard(running)
 
@@ -320,25 +320,42 @@ def test_item2_entry_runs_deploy_snapshot_even_with_dirty_main_checkout(product)
 def test_item2_dev_switch_marks_first_line_and_loads_named_tree(product):
     assert _install(product).returncode == 0
     entry = product.bin / "lybra"
-    dev = subprocess.run([str(entry), "--version"], cwd=str(product.gov), env=_env(LYBRA_DEV_TREE=str(REPO_ROOT)),
+    dev = subprocess.run([str(entry), "--dev-tree", str(REPO_ROOT), "--version"], cwd=str(product.gov), env=_env(),
                          capture_output=True, text=True, timeout=120)
-    _show(f"---- ② 开发开关 LYBRA_DEV_TREE=<卡工作树> lybra --version 原文 rc={dev.returncode} ----\n"
+    _show(f"---- ② 开发开关 lybra --dev-tree <卡工作树> --version 原文 rc={dev.returncode} ----\n"
           f"[stderr]\n{dev.stderr}[stdout]\n{dev.stdout}")
     assert dev.returncode == 0
-    assert dev.stderr.splitlines()[0] == (f"[lybra] 开发模式(LYBRA_DEV_TREE): 代码取自 {REPO_ROOT}, 不是部署快照 "
-                                          f"{product.deploy / 'current'}; 取消: unset LYBRA_DEV_TREE")
-    assert dev.stdout.startswith(f"lybra 开发模式 LYBRA_DEV_TREE={REPO_ROOT}(非部署快照; HEAD ")
+    assert dev.stderr.splitlines()[0] == (f"[lybra] 开发模式(--dev-tree): 代码取自 {REPO_ROOT}, 不是部署快照 "
+                                          f"{product.deploy / 'current'}; 取消: 去掉 --dev-tree")
+    assert dev.stdout.startswith(f"lybra 开发模式 --dev-tree {REPO_ROOT}(非部署快照; HEAD ")
+
+    watch = subprocess.run([str(entry), f"--dev-tree={REPO_ROOT}", "agent", "watch", "--workspace-root", str(product.gov),
+                            "--expect", "marker.txt", "--timeout", "5", "--interval", "0.2"], cwd=str(product.gov), env=_env(),
+                           capture_output=True, text=True, timeout=120)
+    _show(f"[② --dev-tree=<树> 跑子命令] rc={watch.returncode} stdout={watch.stdout.strip()} stderr 首行={watch.stderr.splitlines()[0]}")
+    assert watch.returncode == 0 and watch.stderr.startswith("[lybra] 开发模式(--dev-tree)") and "expect_satisfied" in watch.stdout
 
     (product.repo / "tools" / "aipos_cli" / "aipos_cli.py").write_text('raise SystemExit("dev 树代码被加载")\n', encoding="utf-8")
-    named = subprocess.run([str(entry), "--version"], cwd=str(product.gov), env=_env(LYBRA_DEV_TREE=str(product.repo)),
+    named = subprocess.run([str(entry), "--dev-tree", str(product.repo), "--version"], cwd=str(product.gov), env=_env(),
                            capture_output=True, text=True, timeout=120)
     _show(f"[② 开发开关指向改坏的主检出] rc={named.returncode} stderr={named.stderr.strip()!r}")
     assert named.returncode != 0 and named.stderr.startswith("[lybra] 开发模式") and "dev 树代码被加载" in named.stderr
 
-    bogus = subprocess.run([str(entry), "--version"], cwd=str(product.gov), env=_env(LYBRA_DEV_TREE=str(product.gov)),
+    bogus = subprocess.run([str(entry), "--dev-tree", str(product.gov), "--version"], cwd=str(product.gov), env=_env(),
                            capture_output=True, text=True, timeout=120)
     _show(f"[② 开发开关指向非代码树] rc={bogus.returncode} {bogus.stderr.strip()}")
     assert bogus.returncode == 1 and "不是 lybra 产品代码树" in bogus.stderr  # fail-closed, 不回落部署快照
+
+    late = subprocess.run([str(entry), "--workspace-root", str(product.gov), "--dev-tree", str(REPO_ROOT), "--version"],
+                          cwd=str(product.gov), env=_env(), capture_output=True, text=True, timeout=120)
+    _show(f"[② --dev-tree 不在第一个参数] rc={late.returncode} {late.stdout.strip()} {late.stderr.strip()}")
+    # 不在第一个参数 = 入口不消费: --version 照实报告在跑部署快照(不是开发模式), stderr 无开发模式标记
+    assert late.returncode == 0 and late.stdout.startswith("lybra 部署快照 r-a") and "开发模式" not in late.stderr
+    misplaced = subprocess.run([str(entry), "--workspace-root", str(product.gov), "--dev-tree", str(REPO_ROOT), "loop", "status"],
+                               cwd=str(product.gov), env=_env(), capture_output=True, text=True, timeout=120)
+    _show(f"[② --dev-tree 位置不对 + 子命令] rc={misplaced.returncode} {misplaced.stderr.strip()}")
+    assert misplaced.returncode == 2 and "须作为 lybra 入口的第一个参数" in misplaced.stderr
+    assert "本进程运行的是: lybra 部署快照 r-a" in misplaced.stderr
 
 
 def test_item2_pip_console_entry_is_trampoline_to_same_launcher(product):
@@ -421,7 +438,7 @@ def test_item4_layout_names_match_lybra_deploy_and_deploy_updates_entry_after_sw
     # 入口文本只有一处渲染(deploy_runtime.launcher_source): 脚本只调它, 不内嵌第二份 python 入口
     install_fn = script[script.index("cmd_install_entry() {"):script.index("# ── deploy ─")]
     assert "python3 -m tools.aipos_cli.deploy_runtime install-entry" in install_fn
-    assert "sys.path" not in script and "LYBRA_DEV_TREE" not in install_fn
+    assert "sys.path" not in script and "--dev-tree" not in install_fn
 
 
 def test_item4_single_implementations_and_fail_closed():

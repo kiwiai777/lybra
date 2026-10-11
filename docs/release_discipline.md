@@ -37,11 +37,13 @@ unrelated change swept into a finalize commit via a broad `git add`.
   immutable snapshot, so a working tree that is mid-merge, dirty, or wrongly edited is never picked up by gate commands or
   advisor commands. `lybra --version` prints which code is running (snapshot release + commit, or dev mode / work tree).
 - **Install / upgrade the entry:** `tools/lybra-deploy install-entry [--bin-dir <dir>]` writes the entry to
-  `$LYBRA_BIN_DIR` or `~/.local/bin` (a previous non-snapshot entry such as a `pip install -e` console script is kept as
+  `~/.local/bin` (or `--bin-dir`; a previous non-snapshot entry such as a `pip install -e` console script is kept as
   `lybra.pre-snapshot-entry`). Every deploy rewrites it (Step 3b), so after the first install nothing else is needed: the
   next deploy is what `lybra` runs. A `pip install -e .` entry is only a trampoline into the same snapshot entry.
-- **Local debugging:** `LYBRA_DEV_TREE=<work tree> lybra ...` runs that tree; the first stderr line says
-  `[lybra] 开发模式(LYBRA_DEV_TREE)`. Card worktree tests and `python3 -m tools.aipos_cli` keep using the work tree code.
+- **Local debugging:** `lybra --dev-tree <work tree> <subcommand> ...` (it must be the first argument) runs that tree; the
+  first stderr line says `[lybra] 开发模式(--dev-tree)`. The switch is command-line only, so an inherited environment never
+  silently moves another command off the snapshot. Card worktree tests and `python3 -m tools.aipos_cli` keep using the work
+  tree code.
 - **Long-running commands follow the deploy.** `lybra loop`, `lybra agent watch` and `lybra loop status --wait` remember the
   snapshot commit they started on and compare it with `.deploy/current`; once a newer deploy lands they stop cleanly
   (`lybra loop`: end reason `deploy_changed`, old and new commits in the run record; exit codes in

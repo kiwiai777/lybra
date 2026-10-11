@@ -1336,11 +1336,14 @@ def build_parser() -> argparse.ArgumentParser:
     _GATE_URL_DEFAULT = get_config_default_gate_url()
     parser = argparse.ArgumentParser(description="AI Project OS CLI")
     parser.add_argument("--workspace-root", dest="global_workspace_root", help="Workspace root; may also be provided on supported subcommands")
-    # AIPOS-F152 件②: 本进程运行的代码(部署快照 / LYBRA_DEV_TREE 开发模式 / 工作树), 唯一实现 deploy_runtime.version_line
-    from tools.aipos_cli.deploy_runtime import VersionAction
+    # AIPOS-F152 件②: 本进程运行的代码(部署快照 / --dev-tree 开发模式 / 工作树), 唯一实现 deploy_runtime.version_line
+    from tools.aipos_cli.deploy_runtime import DEV_TREE_FLAG, VersionAction
 
     parser.add_argument("--version", action=VersionAction,
-                        help="show which code this lybra runs (deploy snapshot + commit / LYBRA_DEV_TREE dev mode / work tree) and exit")
+                        help="show which code this lybra runs (deploy snapshot + commit / --dev-tree dev mode / work tree) and exit")
+    parser.add_argument(DEV_TREE_FLAG, dest="dev_tree", metavar="WORK_TREE",
+                        help="entry-level dev switch, must be the FIRST argument of the lybra entry (consumed before any code "
+                             "loads): run that product work tree instead of the deploy snapshot; stderr first line marks dev mode")
     subparsers = parser.add_subparsers(dest="command")
 
     # `agent watch --workspace-root`(AIPOS-268 文件系统哨兵): loop 唯一等待原语, 纯客户端只读(无门/凭据)。
@@ -2548,6 +2551,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     # AIPOS-F142 件②: [ENVELOPE_TRACE] 唯一开关的 CLI 决定点(缺省关; --verbose / 调试环境变量开; in-process 嵌套沿用外层)
     decide_cli_envelope_trace(bool(getattr(args, "verbose", False)))
+    if getattr(args, "dev_tree", None):
+        # AIPOS-F152 件②: --dev-tree 只在入口第一个参数生效(入口在加载代码前消费); 到这里 = 位置不对或未经入口, 拒(不静默忽略)
+        from tools.aipos_cli.deploy_runtime import version_line
+
+        print(f"lybra: --dev-tree 须作为 lybra 入口的第一个参数(入口在加载任何代码前消费它); 本进程运行的是: {version_line()}",
+              file=sys.stderr)
+        return 2
     if not args.command:
         parser.print_help()
         return 2

@@ -1854,7 +1854,7 @@
       "step_timeout_seconds": 600,
       "step_timeout_note": "AIPOS-F90 件①(缺陷③): loop/next --run 执行派生命令子进程的硬上限(next_resolver.loop_step_timeout_seconds 唯一读取口, 原写死 120s); 不变量: ≥ 门 initialize(config.schema timeouts.gate_mcp_request_ms) + 两阶段最大 client_timeout_ms×2 + 超时回读一次, 夹具核。",
       "deploy_consistency": {
-        "description": "AIPOS-F152 件①(gap #127: F148 长驻 loop 启动于 F147 部署前, 部署后读到新格式声明而内存是旧代码 → 崩): loop 启动时记下本进程运行的部署快照提交(运行代码根 = <部署目录>/releases/<名> 时取其 VERSION git_commit; 判定唯一实现 tools/aipos_cli/deploy_runtime.DeployGuard, VERSION 解析唯一口 gate_drift.read_version_commit), 每步推导前比对 <部署目录>/current 的提交; 变了(含 current 不在 / 不可读)= 以 end_reason deploy_changed、exit_codes.deploy_changed 干净结束, 运行记录 deploy 段写明 from / to 提交, 结束原文第一行即「部署已更新 … 用原命令重跑 loop 从断点续做」。手工模式等待(未拉起 harness)期间也每轮比对(经唯一等待原语 agent_watch_fs.run_fs_watch 的 deploy_guard), 部署一变即醒来结束; 拉起 harness 的等待期间不打断(打断 = 终止进程组, 执行体白干), 等待结束后的下一步前照常比对。非部署快照运行(卡工作树测试 / python -m / LYBRA_DEV_TREE 开发开关)= 不适用, 运行记录 deploy.deploy_check=not_applicable 如实标明。同一判定也用于 `lybra agent watch`(lybra_agent_watch.exit_codes.deploy_changed)与 `lybra loop status --wait`(lybra_loop_status.exit_codes.deploy_changed)。",
+        "description": "AIPOS-F152 件①(gap #127: F148 长驻 loop 启动于 F147 部署前, 部署后读到新格式声明而内存是旧代码 → 崩): loop 启动时记下本进程运行的部署快照提交(运行代码根 = <部署目录>/releases/<名> 时取其 VERSION git_commit; 判定唯一实现 tools/aipos_cli/deploy_runtime.DeployGuard, VERSION 解析唯一口 gate_drift.read_version_commit), 每步推导前比对 <部署目录>/current 的提交; 变了(含 current 不在 / 不可读)= 以 end_reason deploy_changed、exit_codes.deploy_changed 干净结束, 运行记录 deploy 段写明 from / to 提交, 结束原文第一行即「部署已更新 … 用原命令重跑 loop 从断点续做」。手工模式等待(未拉起 harness)期间也每轮比对(经唯一等待原语 agent_watch_fs.run_fs_watch 的 deploy_guard), 部署一变即醒来结束; 拉起 harness 的等待期间不打断(打断 = 终止进程组, 执行体白干), 等待结束后的下一步前照常比对。非部署快照运行(卡工作树测试 / python -m / lybra --dev-tree 开发开关)= 不适用, 运行记录 deploy.deploy_check=not_applicable 如实标明。同一判定也用于 `lybra agent watch`(lybra_agent_watch.exit_codes.deploy_changed)与 `lybra loop status --wait`(lybra_loop_status.exit_codes.deploy_changed)。",
         "end_reason": "deploy_changed",
         "run_record_field": "deploy"
       },
@@ -2589,7 +2589,7 @@
         "timeout": {"code": 2, "meaning": "--timeout 内无变化(默认静默)"},
         "end_no_product": {"code": 3, "meaning": "见到 --end-pattern 但 --expect 未满足"},
         "stall": {"code": 4, "meaning": "观测面静默超过 --stall-secs(静默停滞)"},
-        "deploy_changed": {"code": 6, "meaning": "AIPOS-F152: 部署已更新(本命令运行的部署快照提交 ≠ 现部署 current, 判定唯一实现 deploy_runtime.DeployGuard): 打印 {\"deploy_changed\": …}(--stream 先发 kind:deploy_changed 事件再发 kind:end reason=deploy_changed)后退出, 用原命令重跑; 非部署快照运行(工作树 / LYBRA_DEV_TREE)不检测"},
+        "deploy_changed": {"code": 6, "meaning": "AIPOS-F152: 部署已更新(本命令运行的部署快照提交 ≠ 现部署 current, 判定唯一实现 deploy_runtime.DeployGuard): 打印 {\"deploy_changed\": …}(--stream 先发 kind:deploy_changed 事件再发 kind:end reason=deploy_changed)后退出, 用原命令重跑; 非部署快照运行(工作树 / --dev-tree)不检测"},
         "usage": {"code": 5, "meaning": "用法错/布防拒绝(如 --expect 模式非法)"},
         "signal": {"code": 130, "meaning": "SIGTERM/SIGINT 干净退出(无输出无 traceback)"}
       }

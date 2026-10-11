@@ -20,7 +20,7 @@ GATE_SIDE_PATHS = [
 ]
 
 # CLI-side paths: AIPOS-F152 起 `lybra` 入口也从部署快照(.deploy/current)运行, 这些改动同样经部署才对 `lybra` 命令生效
-# (直跑 python -m 于工作树 / LYBRA_DEV_TREE 开发开关除外)
+# (直跑 python -m 于工作树 / lybra --dev-tree 开发开关除外)
 CLI_SIDE_PATHS = [
     "tools/aipos_cli/",
     "tools/lybra_tui/",

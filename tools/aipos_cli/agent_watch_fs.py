@@ -468,7 +468,7 @@ def run_fs_watch(
     AIPOS-F152 件①: ``deploy_guard`` (deploy_runtime.DeployGuard; the CLI passes the guard of its own process, in-process
     callers pass theirs or None) — checked at the top of every poll; once the deploy snapshot this process runs from is no
     longer the deployed one, print ``{"deploy_changed": …}`` (stream mode: a ``kind:deploy_changed`` event, then ``kind:end``
-    with reason deploy_changed) and return EXIT_DEPLOY_CHANGED. Not applicable (work tree / LYBRA_DEV_TREE) = never fires.
+    with reason deploy_changed) and return EXIT_DEPLOY_CHANGED. Not applicable (work tree / --dev-tree) = never fires.
     """
     interval = DEFAULT_INTERVAL_SECONDS if getattr(args, "interval", None) is None else float(args.interval)
     timeout_arg = getattr(args, "timeout", None)
