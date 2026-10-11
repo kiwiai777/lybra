@@ -90,7 +90,13 @@ def normalize_gate_url_for_same_host(gate_url: str) -> str:
         return gate_url
     if not is_same_host(gate_url):
         return gate_url
-    
+    return loopback_gate_url(gate_url)
+
+
+def loopback_gate_url(gate_url: str) -> str:
+    """same_host_rule(config.schema lybra_dir_authority.same_host_rule)的 loopback 形唯一渲染: http://127.0.0.1:<端口>。
+    端口取 gate_url 自带端口, 缺 = config.schema ports.gate_default。AIPOS-F153 件②: 工位侧同机规范化(normalize_gate_url_for_same_host)
+    与签码侧同机门地址(enrollment.resolve_gate_url_default)共用本函数。"""
     parsed = urlparse(gate_url)
     from tools.schema_loader import get_config_port
 

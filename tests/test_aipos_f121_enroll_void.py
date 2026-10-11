@@ -1,4 +1,5 @@
 """AIPOS-F121 件② — 接入日志测试行作废: `lybra roles enroll-void --instance <实例> --reason <理由> --actor <操作者> [--dry-run]`。
+(AIPOS-F153 件①起: 须显式作用域 --log/--project, 缺省预演, --confirm 才追加; 作用域与限定的专项夹具见 tests/test_aipos_f153_enrollment_hygiene.py)
 
 依据(gap #34/#70, F116 发现): tools/test_aipos_r2_enroll.py 原经生产门往真实 lybra governance/enrollment_log.md 写
 instance=test.enroll.aipos-r2 的 create/use/land 行(10-06 已 238 行)。日志是 append-only 审计真相, 不许删行;
@@ -105,15 +106,15 @@ def test_void_dry_run_then_append_only_and_readers_ignore(two):
 
     # ① dry-run 零写入
     before = _digest(two.a, two.b)
-    dry = _void(two, inst, "--dry-run")
+    dry = _void(two, inst, "--project", "proj-b", "--dry-run")
     _show(f"---- ① lybra roles enroll-void --dry-run 原文 ----\n{dry.stdout}{dry.stderr}")
     assert dry.returncode == 0, dry.stderr
     assert _digest(two.a, two.b) == before
-    assert "dry-run(零写入)" in dry.stdout and "  void  " in dry.stdout
+    assert "预览(未写" in dry.stdout and "  void  " in dry.stdout
 
     # ② 执行 = 只追加一行
     text_before = log_b.read_text(encoding="utf-8")
-    run = _void(two, inst, "--json")
+    run = _void(two, inst, "--project", "proj-b", "--confirm", "--json")
     assert run.returncode == 0, run.stderr
     rep = json.loads(run.stdout)
     _show(f"---- ② enroll-void 执行(--json)原文 ----\n{run.stdout}")
@@ -141,7 +142,7 @@ def test_void_dry_run_then_append_only_and_readers_ignore(two):
     assert where["verdict"] == "not_landed"
 
     # ⑤ 已全部作废 → 拒, 零写入
-    again = _void(two, inst)
+    again = _void(two, inst, "--project", "proj-b", "--confirm")
     _show(f"[⑤ 重复作废] exit={again.returncode} {again.stderr.strip()}")
     assert again.returncode != 0 and "已全部作废" in again.stderr
     assert log_b.read_text(encoding="utf-8") == text_after
@@ -181,7 +182,7 @@ def test_void_legacy_events_in_issuer_log_in_place(two):
                       f"- 2026-08-28T14:50:26Z  land  code_id=enroll_legacy  role=hbj-coder  instance={inst}  by=(agent-enroll)  "
                       f"reason=workstation={two.ws} files=['connection.json', 'role']\n", encoding="utf-8")
     assert enrollment.workstation_location(two.a, inst)["found"] is True
-    rep = enrollment.void_instance_events(two.a, inst, by="advisor.fixture", reason="存量测试行", dry_run=False)
+    rep = enrollment.void_instance_events(two.a, inst, by="advisor.fixture", reason="存量测试行", dry_run=False, log=str(legacy))
     assert [e["log"] for e in rep["entries"]] == [str(legacy)] and rep["entries"][0]["voids_lines"] == "3-4"
     assert "project=proj-a" in rep["entries"][0]["line"] and "role=hbj-coder" in rep["entries"][0]["line"]
     assert enrollment.workstation_location(two.a, inst)["found"] is False
@@ -206,7 +207,8 @@ def test_single_implementation_and_fail_closed():
     # 接入日志唯一追加写口 _write_trail_line; AIPOS-F140 件③: 其追加委托产品治理文档唯一写口 governance_add.append_governance_doc_line
     assert src.count('.open("a"') == 0 and src.count("append_governance_doc_line(") == 1
     assert src.count("def _instance_events(") == 1 and src.count("_VOID_LINE_RE.match(") == 1
-    assert src.count("owner = enrollment_owner_root(") == 2  # F107 不变量: 写侧 + 诊断同一解析口(void 复用诊断扫描, 不另解析)
+    # F107 不变量: 写侧 + 诊断 + 签码门地址跨机判定(AIPOS-F153 件②)同一解析口(void 复用诊断扫描, 不另解析)
+    assert src.count("owner = enrollment_owner_root(") == 3
     for fn in (enrollment._instance_events, enrollment._latest_land, enrollment.enrollment_whereabouts,
                enrollment.void_instance_events, enrollment._trail_line, enrollment._write_trail_line,
                enrollment._parse_line_ranges, enrollment._line_ranges):

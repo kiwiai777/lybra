@@ -38,6 +38,13 @@ def find_free_port() -> int:
 class TestAIPOS296HttpVersionUpgrade(unittest.TestCase):
     """AIPOS-296: HTTP/1.1 升级与传输正确性验证"""
 
+    def setUp(self) -> None:
+        # AIPOS-F153 件③(gap #126): 看板 handler 的工作区根用本用例临时根——make_handler 会在 <根>/.lybra/ 落 remember_secret
+        # (与 auth-log 落点), 原传产品仓根 REPO_ROOT 即每次全量往检出目录写凭据类文件。本用例只验 HTTP 头, 不需要真实工作区。
+        self._board_root = tempfile.TemporaryDirectory(prefix="aipos296_board_")
+        self.addCleanup(self._board_root.cleanup)
+        self.board_root = Path(self._board_root.name)
+
     def test_gate_protocol_version_is_http11(self) -> None:
         """S1: LybraMcpHttpSseHandler.protocol_version = "HTTP/1.1" """
         from tools.mcp_server.http_sse import LybraMcpHttpSseHandler
@@ -51,7 +58,7 @@ class TestAIPOS296HttpVersionUpgrade(unittest.TestCase):
     def test_board_protocol_version_is_http11(self) -> None:
         """S1: BoardHandler.protocol_version = "HTTP/1.1" """
         # BoardHandler 是动态创建的内部类，通过 make_handler 获取
-        handler_class = make_handler(repo_root=REPO_ROOT)
+        handler_class = make_handler(repo_root=self.board_root)
         
         self.assertEqual(
             handler_class.protocol_version,
@@ -203,7 +210,7 @@ class TestAIPOS296HttpVersionUpgrade(unittest.TestCase):
     def test_board_json_response_has_content_length(self) -> None:
         """S2a: board JSON 响应有 Content-Length"""
         port = find_free_port()
-        handler_class = make_handler(repo_root=REPO_ROOT)
+        handler_class = make_handler(repo_root=self.board_root)
         server = ThreadingHTTPServer(("127.0.0.1", port), handler_class)
         
         def run_server():
@@ -238,7 +245,7 @@ class TestAIPOS296HttpVersionUpgrade(unittest.TestCase):
     def test_board_static_file_has_content_length(self) -> None:
         """S2a: board 静态文件响应有 Content-Length"""
         port = find_free_port()
-        handler_class = make_handler(repo_root=REPO_ROOT)
+        handler_class = make_handler(repo_root=self.board_root)
         server = ThreadingHTTPServer(("127.0.0.1", port), handler_class)
         
         def run_server():

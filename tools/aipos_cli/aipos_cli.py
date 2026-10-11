@@ -1258,38 +1258,50 @@ def _envelope_mint_via_gate(
 # workspace_config.update_project_json dry_run)。缺省预演(diff + 校验, 零写入), --confirm 才写。
 # ---------------------------------------------------------------------------
 
-#: AIPOS-F151: 两阶段命令族(verbs.schema two_phase_protocol.<族>) → 该族 outcome_labels 必备键 / 额外校验
-_TWO_PHASE_FAMILY_LABELS = {"project_json_writers": ("written", "unchanged", "preview"), "roles_writers": ("preview", "done")}
-
-
-def _two_phase_family_declaration(family: str = "project_json_writers") -> dict[str, Any]:
-    """verbs.schema two_phase_protocol.<family>(AIPOS-F125 project_json_writers; AIPOS-F151 roles_writers)。缺键 / 形不合 = SchemaLoadError。"""
+def _project_json_writers_declaration() -> dict[str, Any]:
+    """verbs.schema two_phase_protocol.project_json_writers。缺键 / 形不合 = SchemaLoadError(fail-closed)。"""
     from tools.schema_loader import SchemaLoadError, load_schema
 
-    decl = (load_schema("verbs").get("two_phase_protocol") or {}).get(family)
+    decl = (load_schema("verbs").get("two_phase_protocol") or {}).get("project_json_writers")
     phases = ("dry_run", "confirm")
-    labels = _TWO_PHASE_FAMILY_LABELS.get(family)
-    if (labels is None or not isinstance(decl, dict) or not isinstance(decl.get("commands"), list) or not decl["commands"]
+    if (not isinstance(decl, dict) or not isinstance(decl.get("commands"), list) or not decl["commands"]
             or decl.get("default_phase") != "dry_run"
             or not all(isinstance((decl.get(k) or {}).get(p), str) and (decl.get(k) or {}).get(p) for k in ("flags", "flag_help") for p in phases)
-            or not all(isinstance((decl.get("outcome_labels") or {}).get(k), str) for k in labels)
-            or (family == "project_json_writers"
-                and not all(f"{{{k}}}" in str(decl.get("target_line") or "") for k in ("project", "source", "project_json")))):
-        raise SchemaLoadError(f"verbs.schema.json two_phase_protocol.{family}(commands / default_phase=dry_run / "
-                              f"flags / flag_help {{dry_run, confirm}} / outcome_labels {set(labels or ())}"
-                              + (" / target_line 含 {project} {source} {project_json}" if family == "project_json_writers" else "")
-                              + ")未声明齐")
+            or not all(isinstance((decl.get("outcome_labels") or {}).get(k), str) for k in ("written", "unchanged", "preview"))
+            or not all(f"{{{k}}}" in str(decl.get("target_line") or "") for k in ("project", "source", "project_json"))):
+        raise SchemaLoadError("verbs.schema.json two_phase_protocol.project_json_writers(commands / default_phase=dry_run / "
+                              "flags / flag_help {dry_run, confirm} / outcome_labels {written, unchanged, preview} / "
+                              "target_line 含 {project} {source} {project_json})未声明齐")
     return decl
 
 
-def _project_json_writers_declaration() -> dict[str, Any]:
-    """verbs.schema two_phase_protocol.project_json_writers。缺键 / 形不合 = SchemaLoadError(fail-closed)。"""
-    return _two_phase_family_declaration("project_json_writers")
+def _two_phase_family_declaration(family: str = "project_json_writers") -> dict[str, Any]:
+    """AIPOS-F153 件① / AIPOS-F151: 本地写命令族的两阶段声明(唯一读取口)。旗标名 / 缺省阶段 = project_json_writers 一处(同一两阶段语义,
+    各族不重复声明); 其他族(enrollment_log_writers / roles_writers)只声明 commands 与 flag_help(及族专属键)。状态标签缺省继承
+    project_json_writers; 族的动作不是「写文件」时可在本族声明自己的 outcome_labels(须为非空串, 如 roles_writers {preview, done})。
+    缺键 / 形不合 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    base = _project_json_writers_declaration()
+    if family == "project_json_writers":
+        return base
+    decl = (load_schema("verbs").get("two_phase_protocol") or {}).get(family)
+    own_labels = decl.get("outcome_labels") if isinstance(decl, dict) else None
+    if (not isinstance(decl, dict) or not isinstance(decl.get("commands"), list) or not decl["commands"]
+            or not all(isinstance((decl.get("flag_help") or {}).get(p), str) and decl["flag_help"][p] for p in ("dry_run", "confirm"))
+            or any(k in decl for k in ("flags", "default_phase"))
+            or (own_labels is not None and (not isinstance(own_labels, dict) or not own_labels
+                                            or not all(isinstance(v, str) and v for v in own_labels.values())))):
+        raise SchemaLoadError(f"verbs.schema.json two_phase_protocol.{family}(commands / flag_help {{dry_run, confirm}}; 可选 outcome_labels "
+                              "非空串; flags / default_phase 只在 project_json_writers 声明)未声明齐或重复声明")
+    return {**decl, "default_phase": base["default_phase"], "flags": base["flags"],
+            "outcome_labels": own_labels if own_labels is not None else base["outcome_labels"]}
 
 
 def _project_json_two_phase_flags(parser: argparse.ArgumentParser, command: str, *, family: str = "project_json_writers") -> None:
-    """两阶段命令族的唯一旗标注册包装: 互斥的 --dry-run(缺省)/ --confirm(旗标名与帮助读声明 two_phase_protocol.<family>;
-    未登记的命令 = SchemaLoadError)。AIPOS-F125 写 project.json 的命令; AIPOS-F151 family=roles_writers(roles 族写命令)同用本包装。"""
+    """本地写命令两阶段的唯一旗标注册包装: 互斥的 --dry-run(缺省)/ --confirm(旗标名与帮助读声明; 未登记的命令 = SchemaLoadError)。
+    family 选写命令族: 缺省 project.json 写命令(AIPOS-F125); enrollment_log_writers = 写接入日志(AIPOS-F153);
+    roles_writers = roles 族写命令 enroll-code / enroll-deliver / register / remove(AIPOS-F151)。"""
     from tools.schema_loader import SchemaLoadError
 
     decl = _two_phase_family_declaration(family)
@@ -1889,7 +1901,7 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_code_parser.add_argument("--role", required=True, help="Role to bind (e.g., executor, auditor, or custom role)")
     roles_enroll_code_parser.add_argument("--instance", help="Optional instance name to bind (e.g., exec.lybra.mac1); omit for any instance")
     roles_enroll_code_parser.add_argument("--ttl", type=int, help="Time-to-live in seconds (default 86400 = 24h; also bounds the embedded transport credential)")
-    roles_enroll_code_parser.add_argument("--gate-url", help=f"Externally reachable gate URL to embed (default: connection.json mcp.rpc_url if non-loopback, else {_GATE_URL_DEFAULT})")
+    roles_enroll_code_parser.add_argument("--gate-url", help="Gate URL to embed. Default (AIPOS-F153, config.schema same_host_rule): loopback http://127.0.0.1:<gate port> when the code is redeemed on the gate host; the gate's connection.json mcp.rpc_url only when --instance is declared cross-host in its project's project.json workstations. Pass an externally reachable URL here for other cross-host redemption")
     roles_enroll_code_parser.add_argument("--governance-root", help="Governance workspace root to embed (F24A): bare registered project name or absolute path; validated against the project registry on the gate. Default: workspace_root of the local connection.json")
     roles_enroll_code_parser.add_argument("--token-role", default="advisor", help="Role of the local token used to call the gate verb (default: advisor; falls back to owner if advisor is absent)")
     roles_enroll_code_parser.add_argument("--owner-authorization-ref", help="Reference to owner authorization for this enrollment")
@@ -1931,11 +1943,21 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_where_parser.add_argument("--instance", required=True, help="实例名(<prefix>.<project>.<host>)")
     roles_enroll_where_parser.add_argument("--json", action="store_true", help="Output JSON")
     # AIPOS-F121 件②: 接入日志作废(只追加 void 事件行, 不删行; 读取口忽略被作废事件)
-    roles_enroll_void_parser = roles_subparsers.add_parser("enroll-void", help="AIPOS-F121: 作废某实例的接入事件——向事件所在 enrollment_log 追加 void 行(指向被作废行号区间/code_id, 带操作者与理由), 不删行; workstation_location/enroll-where 忽略被作废事件。先 --dry-run 看将追加的行")
+    roles_enroll_void_parser = roles_subparsers.add_parser("enroll-void", help="AIPOS-F121/F153: 作废某实例的接入事件——向显式指定的 enrollment_log(--log 或 --project, 缺省拒绝跨日志)追加 void 行(指向被作废行号区间/code_id, 带操作者与理由), 不删行; workstation_location/enroll-where 忽略被作废事件。缺省预演, --confirm 才追加")
     roles_enroll_void_parser.add_argument("--instance", required=True, help="要作废其接入事件的实例名(未知实例拒)")
     roles_enroll_void_parser.add_argument("--reason", required=True, help="作废理由(单行, 写入 void 行)")
     roles_enroll_void_parser.add_argument("--actor", required=True, help="操作者(写入 void 行 by=; 不含空白)")
-    roles_enroll_void_parser.add_argument("--dry-run", action="store_true", help="只打印将追加的 void 行, 零写入")
+    # AIPOS-F153 件①: 作用域旗标名读声明 verbs.schema two_phase_protocol.enrollment_log_writers.scope.flags(缺 = SchemaLoadError)
+    _void_scope = (_two_phase_family_declaration("enrollment_log_writers").get("scope") or {}).get("flags") or {}
+    if not all(isinstance(_void_scope.get(k), str) and _void_scope[k].startswith("--") for k in ("log", "project", "code_id", "before")):
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError("verbs.schema.json two_phase_protocol.enrollment_log_writers.scope.flags {log, project, code_id, before} 未声明齐")
+    roles_enroll_void_parser.add_argument(_void_scope["log"], dest="void_log", help="作用域: 只在这份 enrollment_log 作废(路径; 与 --project 二选一, 都不给 = 拒)")
+    roles_enroll_void_parser.add_argument(_void_scope["project"], dest="void_project", help="作用域: 只在该项目的 enrollment_log 作废(项目名; 与 --log 二选一)")
+    roles_enroll_void_parser.add_argument(_void_scope["code_id"], dest="void_code_ids", action="append", default=[], help="再限定: 只作废这些 code_id 的事件(可重复)")
+    roles_enroll_void_parser.add_argument(_void_scope["before"], dest="void_before", help="再限定: 只作废时间戳早于该 ISO 时刻的事件(如 2026-10-08T16:00:00Z)")
+    _project_json_two_phase_flags(roles_enroll_void_parser, "enroll-void", family="enrollment_log_writers")  # AIPOS-F153 件①: 缺省预演 / --confirm 才写
     roles_enroll_void_parser.add_argument("--json", action="store_true", help="Output JSON")
     
     # AIPOS-F66B 件②: 写权限边界可读面 + 读取口(护栏读声明; 单源 roles.schema write_boundary)
@@ -2253,7 +2275,7 @@ def build_parser() -> argparse.ArgumentParser:
     onboarding_guide_parser = onboarding_subparsers.add_parser("guide", help="Generate step-by-step onboarding guide for a new project")
     onboarding_guide_parser.add_argument("project_name", help="Project name (the project you're onboarding)")
     onboarding_guide_parser.add_argument("--home-root", help="Governance home root (defaults to LYBRA_HOME_ROOT env or ~/.lybra/projects)")
-    onboarding_guide_parser.add_argument("--gate-url", help=f"Gate URL (default order per config.schema identity_resolution.keys.gate_url: Owner connection.json mcp.rpc_url > LYBRA_GATE_URL env > {_GATE_URL_DEFAULT})")
+    onboarding_guide_parser.add_argument("--gate-url", help=f"Gate URL embedded in the guide's codes (default: loopback per config.schema same_host_rule, port from Owner connection.json mcp.rpc_url > LYBRA_GATE_URL env > {_GATE_URL_DEFAULT}; AIPOS-F153)")
     onboarding_guide_parser.add_argument("--code-repo", help="Optional code repo path")
     onboarding_guide_parser.add_argument("--actor", help="Actor name (defaults to $USER or owner)")
     onboarding_guide_parser.add_argument("--workspace-dir", help="Executor workstation directory (defaults to ~/<project>-executor)")
@@ -3390,16 +3412,22 @@ def main(argv: list[str] | None = None) -> int:
                 # AIPOS-F121 件②: 薄壳, 逻辑在 enrollment.void_instance_events(定位与 enroll-where 同一扫描; 写口 _write_trail_line 只追加)
                 from tools.aipos_cli.enrollment import void_instance_events
 
+                # AIPOS-F153 件①: 作用域显式(--log / --project, 缺省拒)+ 两阶段同 F125 包装(缺省预演, --confirm 才追加)
+                labels = _two_phase_family_declaration("enrollment_log_writers")["outcome_labels"]
                 result = void_instance_events(workspace_root, args.instance, by=args.actor, reason=args.reason,
-                                              dry_run=bool(args.dry_run))
+                                              dry_run=not args.confirm, log=args.void_log, project=args.void_project,
+                                              code_ids=list(args.void_code_ids or []), before=args.void_before)
                 if getattr(args, "json", False):
                     print(render_json(result))
                 else:
-                    head = "dry-run(零写入), 将追加" if result["dry_run"] else "已追加"
-                    print(f"实例 {result['instance']}: {head} {len(result['entries'])} 行 void 事件")
+                    head = labels["preview"] if result["dry_run"] else labels["written"]
+                    print(f"roles enroll-void {result['instance']}: {head}")
                     for item in result["entries"]:
-                        print(f"  log: {item['log']}")
-                        print(f"    作废 {item['event_count']} 个事件(code_id {item['code_id_count']} 个), 行号区间 {item['voids_lines']}")
+                        print(f"  log: {item['log']}(project {item['project']})")
+                        print(f"    作废 {item['event_count']} 个事件(code_id {item['code_id_count']} 个), 行号区间 {item['voids_lines']};"
+                              f" 该日志该实例余未作废事件 {item['left_live']} 个")
+                        for ev in item["events"]:
+                            print(f"      行 {ev['line']}: {ev['ts']}  {ev['action']}  code_id={ev['code_id']}")
                         print(f"    {'将追加' if result['dry_run'] else '已追加'}: {item['line']}")
                 return 0
             elif args.roles_command == "enroll":

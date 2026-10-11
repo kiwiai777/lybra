@@ -76,18 +76,13 @@
       }
     },
     "roles_writers": {
-      "description": "AIPOS-F151(gap #106 / #121 / #107 / #92): `lybra roles` 族写命令(签码 enroll-code / 签码接入一体 enroll-deliver / 自定义角色 register·remove)同一两阶段语义的唯一声明; 旗标注册与 project_json_writers 同一包装 aipos_cli._project_json_two_phase_flags(family=roles_writers, 禁各写一份)。缺省 = 预演: 打印将签的角色 / 实例 / 治理根 / 有效期, 或将建 / 删的 token 引用(token_ref / 指纹, 永不打印 token 明文)与角色类, 零写入、不出码; --confirm 才执行。预演本体 = 各命令既有唯一实现: enroll-code 预演 = 门动词 lybra_enroll_code_dry_run, 执行 = lybra_enroll_code_dry_run → lybra_enroll_code_confirm(发码唯一实现 enrollment.issue_self_contained_code 在门进程内); enroll-deliver = enroll_deliver.enroll_deliver(本机预检 + 门动词 lybra_enroll_code_dry_run; --confirm 才经 lybra_enroll_code_confirm 签码, 码只在本进程内: 同机直调 enroll_client.enroll, 跨机经 ssh stdin 交远端 enroll_client --code-stdin, 不打印、不落盘、不进 argv); register = custom_roles.register_custom_role(dry_run, 本机算计划, 不取凭据不调门) / --confirm 经门动词 lybra_roles_register; remove <角色> = custom_roles.remove_custom_role(dry_run); remove --instance = token_rotation.remove_instance_report(dry_run)。日后新增 roles 族写命令登记于 commands 即得同一两阶段。",
+      "description": "AIPOS-F151(gap #106 / #121 / #107 / #92): `lybra roles` 族写命令(签码 enroll-code / 签码接入一体 enroll-deliver / 自定义角色 register·remove)同一两阶段语义的唯一声明; 旗标注册与 project_json_writers / enrollment_log_writers 同一包装 aipos_cli._project_json_two_phase_flags(family=roles_writers, 禁各写一份); 旗标名与缺省阶段读 project_json_writers 一处(本段不重复声明), 本段登记 commands / flag_help, 另声明本族状态标签 outcome_labels(动作是签码 / 接入 / 写注册表, 非写 project.json)。缺省 = 预演: 打印将签的角色 / 实例 / 治理根 / 有效期, 或将建 / 删的 token 引用(token_ref / 指纹, 永不打印 token 明文)与角色类, 零写入、不出码; --confirm 才执行。预演本体 = 各命令既有唯一实现: enroll-code 预演 = 门动词 lybra_enroll_code_dry_run, 执行 = lybra_enroll_code_dry_run → lybra_enroll_code_confirm(发码唯一实现 enrollment.issue_self_contained_code 在门进程内); enroll-deliver = enroll_deliver.enroll_deliver(本机预检 + 门动词 lybra_enroll_code_dry_run; --confirm 才经 lybra_enroll_code_confirm 签码, 码只在本进程内: 同机直调 enroll_client.enroll, 跨机经 ssh stdin 交远端 enroll_client --code-stdin, 不打印、不落盘、不进 argv); register = custom_roles.register_custom_role(dry_run, 本机算计划, 不取凭据不调门) / --confirm 经门动词 lybra_roles_register; remove <角色> = custom_roles.remove_custom_role(dry_run); remove --instance = token_rotation.remove_instance_report(dry_run)。日后新增 roles 族写命令登记于 commands 即得同一两阶段。",
       "commands": [
         "enroll-code",
         "enroll-deliver",
         "register",
         "remove"
       ],
-      "default_phase": "dry_run",
-      "flags": {
-        "dry_run": "--dry-run",
-        "confirm": "--confirm"
-      },
       "flag_help": {
         "dry_run": "Preview what would be issued / written (role, instance, governance root, expiry, token refs) without issuing a code or writing (default)",
         "confirm": "Execute: issue the code / enroll / write the registry"
@@ -100,6 +95,25 @@
       "reject_codes": {
         "ENROLL_ENVELOPE_MISSING": "工位类角色(roles.schema class_groups.workstation)接入须有覆盖该实例 / 角色的生效 PreAuthorized 信封(workstation_wiring.derive_effective_owner_policy_ref 推导 owner_policy_ref)。判定唯一实现 workstation_wiring.enroll_envelope_requirement: enroll 换码前按码内签发声明预检(拒 = 未换码、码仍可用、凭据未改), 换码后再按门下发的 token 复核且先于写 connection.json(拒 = 凭据未改, 码在 grace 窗口内可重试); enroll-deliver 签码前预检(拒 = 不签码)。治理席位类(class_groups.governance_seat)与凭据落治理根的执行者模式(roles.schema executor_modes credential_landing=governance_root, 如 subagent)不要求。出口: Owner 先铸信封 `lybra envelope mint --workspace-root <治理根> --policy-id <信封ID> --agent-or-role <实例> … --dry-run` 预演后 --confirm, 再重跑接入命令",
         "ENROLL_CODE_DECLARATION_MISMATCH": "码内签发声明(role / instance)与门兑换下发的 token 不一致(码被改写或签发方异常); 拒且先于写 connection.json。出口: 请签发方重签新码"
+      }
+    },
+    "enrollment_log_writers": {
+      "description": "AIPOS-F153 件①: 写接入日志(enrollment_log, 只追加)的本地 CLI 命令同一两阶段语义——与 project_json_writers 同一包装(aipos_cli._project_json_two_phase_flags 注册旗标, family=enrollment_log_writers), 旗标名 / 缺省阶段 / 状态标签读 project_json_writers 一处(本段不重复声明), 本段只登记命令与旗标帮助。缺省 = 预演: 打印将作废的各行(行号 + 动作 + code_id + 时刻)、所在日志与将追加的 void 行, 零写入; --confirm 才追加。预演/写入同一实现 = enrollment.void_instance_events(dry_run)。日后新增写接入日志的命令登记于 commands 即得同一两阶段。",
+      "commands": [
+        "enroll-void"
+      ],
+      "flag_help": {
+        "dry_run": "Preview the enrollment_log lines to void and the void line to append, without writing (default)",
+        "confirm": "Append the void line to the scoped enrollment_log"
+      },
+      "scope": {
+        "description": "AIPOS-F153 件①(gap #108): enroll-void 作废作用域必须显式——恰给 --log <日志路径> 或 --project <项目名> 之一(只在该日志作废), 可再以 --code-id(可重复)/ --before <ISO 时刻> 限定; 缺省(两者都不给)= 拒, 拒因列出含该实例未作废事件的各日志作出口。原「按实例跨所有日志一刀切」退役(会连同所属项目新 land 一并作废)。",
+        "flags": {
+          "log": "--log",
+          "project": "--project",
+          "code_id": "--code-id",
+          "before": "--before"
+        }
       }
     }
   },

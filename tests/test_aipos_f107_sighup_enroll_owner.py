@@ -271,7 +271,7 @@ def test_item2_owner_root_single_resolver_precedence_and_refusals(two, tmp_path)
 def test_item2_single_writer_and_resolver_no_second_implementation():
     src = (REPO_ROOT / "tools" / "aipos_cli" / "enrollment.py").read_text(encoding="utf-8")
     assert src.count("def enrollment_owner_root(") == 1 and src.count("def _append_enrollment_trail(") == 1
-    assert src.count("owner = enrollment_owner_root(") == 2  # 写侧 + 诊断 同一解析口
+    assert src.count("owner = enrollment_owner_root(") == 3  # 写侧 + 诊断 + 签码门地址跨机判定(AIPOS-F153 件②)同一解析口
     assert src.count("_LAND_LINE_RE.match(") == 1  # land 解析一处(workstation_location 与诊断共用 _latest_land)
     import inspect
 
