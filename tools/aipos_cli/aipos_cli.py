@@ -4930,7 +4930,7 @@ def main(argv: list[str] | None = None) -> int:
         from tools.aipos_cli.two_phase_shell_factory import (
             execute_single_phase_via_gate,
             execute_two_phase_verb,
-            resolve_driver_role_from_connection,
+            signer_role_for_actor,
         )
 
         conn_json_path = _queue_gate_connection_json(args, repo_root)
@@ -4946,19 +4946,23 @@ def main(argv: list[str] | None = None) -> int:
         }
         if getattr(args, "workspace_root", None) or getattr(args, "global_workspace_root", None):
             verb_args["workspace_root"] = str(repo_root)  # AIPOS-F144: 显式给出(全局或子命令级)= 唯一薄壳解析结果交门
+        # AIPOS-F154 件②: 收编的签发者 = --actor(门判 actor = token 绑定驱动方实例, 记 adopted_by)——按 --actor 实例选凭据,
+        # 唯一口 signer_role_for_actor(F134 driver_token_entry; 未接入即拒, 禁取首个驱动方 token)
         try:
-            role = resolve_driver_role_from_connection(connection_json_path=conn_json_path, repo_root=repo_root)
+            role = signer_role_for_actor(connection_json_path=conn_json_path, actor=args.actor, repo_root=repo_root)
         except ValueError as exc:
             print(f"Error resolving role: {exc}", file=sys.stderr)
             return 1
         json_out = bool(getattr(args, "json", False))
         if getattr(args, "confirm", False):
             exit_code, resp = execute_two_phase_verb(verb_base="lybra_queue_adopt", args_dict=verb_args,
-                                                     connection_json_path=conn_json_path, role=role, json_output=json_out)
+                                                     connection_json_path=conn_json_path, role=role, json_output=json_out,
+                                                     signer_instance=args.actor)
         else:
             exit_code, resp = execute_single_phase_via_gate(verb_name="lybra_queue_adopt_dry_run",
                                                             args_dict={**verb_args, "preview_only": True},
-                                                            connection_json_path=conn_json_path, role=role, json_output=json_out)
+                                                            connection_json_path=conn_json_path, role=role, json_output=json_out,
+                                                            signer_instance=args.actor)
         if not json_out and isinstance(resp, dict):
             print(render_adopt_summary(resp))
         if exit_code == 0 and isinstance(resp, dict) and resp.get("verdict") == Verdict.BLOCK:
@@ -5458,7 +5462,7 @@ def main(argv: list[str] | None = None) -> int:
         if not args.confirm:
             # 没有 --confirm，返回用法提示
             print("Error: queue rework requires --confirm flag (two-phase via MCP gate)", file=sys.stderr)
-            print("Usage: lybra queue rework --task-id <ID> --actor <advisor> --verdict-ref <ref> \\", file=sys.stderr)
+            print("Usage: lybra queue rework --task-id <ID> --actor <顾问实例(签发者, 按其凭据签)> --verdict-ref <ref> \\", file=sys.stderr)
             print("         --focus-items '[...]' --acceptance-criteria '[...]' --connection-json <path> --confirm", file=sys.stderr)
             return 1
         
@@ -5473,59 +5477,50 @@ def main(argv: list[str] | None = None) -> int:
         
         try:
             acceptance_criteria = json.loads(args.acceptance_criteria)
-            if not isinstance(acceptance_criteria, list):
-                raise ValueError("acceptance_criteria must be a JSON array")
+            if not isinstance(acceptance_criteria, list) or not all(isinstance(c, str) for c in acceptance_criteria):
+                raise ValueError("acceptance_criteria must be a JSON array of strings")
         except (json.JSONDecodeError, ValueError) as exc:
             print(f"Error: Invalid --acceptance-criteria JSON: {exc}", file=sys.stderr)
             return 1
         
-        from tools.aipos_cli.two_phase_shell_factory import execute_two_phase_verb, resolve_role_from_connection
+        from tools.aipos_cli.two_phase_shell_factory import execute_two_phase_verb, signer_role_for_actor
         
-        # 解析 connection.json 路径
-        conn_json_path = getattr(args, "connection_json", None)
+        # 凭据文件解析走唯一口(queue claim / adopt 同用): --connection-json → 治理根 .lybra/connection.json → LYBRA_CONNECTION_JSON
+        conn_json_path = _queue_gate_connection_json(args, repo_root)
         if not conn_json_path:
-            default_conn = workspace_connection_path(Path(repo_root))
-            if default_conn.exists():
-                conn_json_path = str(default_conn)
-            else:
-                print(f"Error: --connection-json required (default {default_conn} not found)", file=sys.stderr)
-                return 1
-        
-        # 派生 required_role_class: queue_rework 是 advisor scope
-        required_role_class = "advisor"
-        
-        try:
-            role = resolve_role_from_connection(
-                connection_json_path=conn_json_path,
-                required_role_class=required_role_class,
-                repo_root=repo_root,
-            )
-        except ValueError as exc:
-            print(f"Error resolving advisor role: {exc}", file=sys.stderr)
+            print(f"Error: --connection-json required (default {workspace_connection_path(Path(repo_root))} not found, LYBRA_CONNECTION_JSON unset)", file=sys.stderr)
             return 1
         
-        # 构建动词参数
+        # AIPOS-F154 件①: 返工的签发者 = --actor(顾问类实例)。身份确定只走唯一口 signer_role_for_actor(F134 按实例选凭据,
+        # 未接入实例即拒、禁取首个顾问 token; 角色类授权在门侧 F132 authorize_instance_class), agent_instance=该实例交门
+        try:
+            role = signer_role_for_actor(connection_json_path=conn_json_path, actor=args.actor, repo_root=repo_root)
+        except ValueError as exc:
+            print(f"Error resolving advisor credential for --actor {args.actor}: {exc}", file=sys.stderr)
+            return 1
+        
+        # 构建动词参数(门 lybra_queue_rework_dry_run inputSchema: acceptance_criteria = string, card.schema rework_rounds 同型;
+        # CLI 收 JSON 数组, 逐条一行交门)
         args_dict = {
             "task_id": args.task_id,
             "actor": args.actor,
+            "agent_instance": args.actor,
             "verdict_ref": args.verdict_ref,
             "focus_items": focus_items,
-            "acceptance_criteria": acceptance_criteria,
+            "acceptance_criteria": "\n".join(acceptance_criteria),
         }
         
-        # 调用两阶段薯壳
+        # 调用两阶段薄壳(按 --actor 实例取凭据)
         exit_code, response = execute_two_phase_verb(
             verb_base="lybra_queue_rework",
             args_dict=args_dict,
             connection_json_path=conn_json_path,
             role=role,
             json_output=args.json,
+            signer_instance=args.actor,
         )
         
-        if args.json:
-            print(render_json(response))
-        else:
-            # 简单文本输出
+        if not args.json:  # --json 时工厂已输出门应答, 不重复打印
             if response.get("error"):
                 print(f"Error: {response['error']}", file=sys.stderr)
             elif response.get("result"):
@@ -6053,7 +6048,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
         else:
             # 显式参数模式（向后兼容）
-            from tools.aipos_cli.confirm_client import load_owner_token
+            # AIPOS-F154 件②: 取凭据走薄壳唯一口 load_role_token(loop 驱动方实例按实例取; 同角色 ≥2 实例未指明 = 拒, 禁取首个)
+            from tools.aipos_cli.two_phase_shell_factory import load_role_token
             
             connection_json_path = args.connection_json
             if not connection_json_path:
@@ -6063,9 +6059,9 @@ def main(argv: list[str] | None = None) -> int:
                     connection_json_path = workspace_connection_path(Path(repo_root or Path.cwd()))
             
             try:
-                token = load_owner_token(
-                    connection_json=connection_json_path,
-                    role=args.token_role
+                token = load_role_token(
+                    connection_json_path=str(connection_json_path),
+                    role=args.token_role,
                 )
             except (ValueError, OSError, json.JSONDecodeError) as exc:
                 print(f"Error reading token: {exc}", file=sys.stderr)
@@ -6255,26 +6251,15 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "reason", None):
             verb_args["reason"] = args.reason
         
-        # AIPOS-F44D-A: 角色解析不写死
-        # task_progress 需要 task_progress scope（executor/auditor 都有）
-        from tools.aipos_cli.two_phase_shell_factory import resolve_role_from_connection
+        # AIPOS-F44D-A: 角色解析不写死(task_progress scope: executor/auditor 都有)
+        # AIPOS-F154 件②: 身份确定走唯一口 progress_reporter_identity——--actor 持本角色凭据即按实例取, 否则按角色取
+        # (同角色 ≥2 实例未指明 = 拒, 禁取首个冒名)
+        from tools.aipos_cli.two_phase_shell_factory import progress_reporter_identity
         try:
-            role = resolve_role_from_connection(
-                connection_json_path=conn_json_path,
-                required_role_class="executor",  # 默认 executor，如果不存在则尝试 auditor
-                repo_root=repo_root,
-            )
-        except ValueError:
-            # 降级尝试 auditor (因为 auditor 也有 task_progress scope)
-            try:
-                role = resolve_role_from_connection(
-                    connection_json_path=conn_json_path,
-                    required_role_class="auditor",
-                    repo_root=repo_root,
-                )
-            except ValueError as exc:
-                print(f"Error resolving role: {exc}", file=sys.stderr)
-                return 1
+            role, signer = progress_reporter_identity(connection_json_path=conn_json_path, actor=args.actor, repo_root=repo_root)
+        except ValueError as exc:
+            print(f"Error resolving role: {exc}", file=sys.stderr)
+            return 1
         
         exit_code, _ = execute_single_phase_via_gate(
             verb_name="lybra_task_progress",
@@ -6282,6 +6267,7 @@ def main(argv: list[str] | None = None) -> int:
             connection_json_path=conn_json_path,
             role=role,
             json_output=getattr(args, "json", False),
+            signer_instance=signer,
         )
         return exit_code
     

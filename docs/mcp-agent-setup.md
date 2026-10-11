@@ -75,6 +75,13 @@ overwritten:
    instance's own credential for every gate call (it never falls back to another advisor's credential or to the first one in the
    file), and refuses to start when the instance has no credential in the governance root. With two or more advisor instances
    enrolled, running `lybra loop` without `--actor` is refused (the driver cannot be guessed).
+   Commands an advisor signs by hand name the signer the same way: a rework round after a FAIL verdict is
+   `lybra queue rework --task-id <card> --actor <advisor instance> --verdict-ref <verdict record id> --focus-items '["…"]'
+   --acceptance-criteria '["…"]' --confirm`, and `lybra queue adopt` takes `--actor` likewise. The command signs with that
+   instance's own credential and sends it to the gate as `agent_instance`; an instance with no credential in the governance
+   root is refused (the refusal lists the enrolled instances), and it never falls back to the first advisor credential in the
+   file. Other commands that pick a credential by role refuse when two or more instances hold that role, unless the instance
+   is known (`lybra loop --actor <instance>`, or `LYBRA_DRIVER_INSTANCE=<instance>` when typing a command by hand).
 4. **Each advisor reads its own charter.** `lybra charter --role advisor --instance <advisor instance>` (run in the
    governance root, or over ssh from the session's machine) renders the charter from that instance's own record in
    `.lybra/role` (`instances.<instance>`: its role, harness kind and host), so the advisor enrolled first is not refused after a
