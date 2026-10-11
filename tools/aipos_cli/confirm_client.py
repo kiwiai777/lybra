@@ -316,6 +316,10 @@ class GateClient:
     def token_fingerprint(self) -> str:
         return token_fingerprint(self._token)
 
+    def redaction_needles(self) -> list[str]:
+        """AIPOS-F151: 本客户端凭据明文, 仅供调用方在对外输出 / 异常文本前脱敏(enroll_deliver._redact); 调用方永不打印它。"""
+        return [self._token] if self._token else []
+
     def _rpc(self, method: str, params: dict[str, Any] | None = None, *, timeout: float | None = None) -> dict[str, Any] | None:
         self._next_id += 1
         body = json.dumps({"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params or {}}).encode("utf-8")

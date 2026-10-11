@@ -171,14 +171,16 @@ def driver_token_entry(*, connection_json_path: str | Path, agent_instance: str,
             raise DriverTokenError(
                 f"驱动方实例 {instance!r} 在 {path} 只有非驱动方角色类凭据({shown}), 角色类不是驱动方 {wanted}"
                 f"(roles.schema driver.role_class), 不能提交账务动词({exc})。"
-                f"出口: 为该实例接入驱动方角色类({wanted} 或其自定义角色)的凭据(Owner 发 --role <驱动方角色> --instance {instance} 的注册码 → "
-                f"`lybra roles enroll --code <码> --workspace <治理根>`)"
+                f"出口: 为该实例接入驱动方角色类({wanted} 或其自定义角色)的凭据(Owner 在治理根所在机 "
+                f"`lybra roles enroll-deliver --role <驱动方角色> --instance {instance} --governance-root <治理根> --workspace <治理根> "
+                f"--owner-authorization-ref <授权引用>`, 先预演再 --confirm, 注册码不出进程)"
             ) from exc
         bound = driver_token_instances(connection_json_path=path, repo_root=repo_root, tokens=tokens)
         raise DriverTokenError(
             f"驱动方实例 {instance!r} 在 {path} 无可用凭据(按实例挑, 禁回落首个驱动方 token): {exc}。"
             f"该连接文件已绑定的驱动方实例: {bound or '(无)'}。出口: 以已接入的实例跑 `lybra loop --actor <实例>`, "
-            f"或为 {instance} 接入顾问凭据(Owner 发带 --instance {instance} 的注册码 → `lybra roles enroll --code <码> --workspace <治理根>`)"
+            f"或为 {instance} 接入顾问凭据(Owner 在治理根所在机 `lybra roles enroll-deliver --role <顾问角色> --instance {instance} "
+            f"--governance-root <治理根> --workspace <治理根> --owner-authorization-ref <授权引用>`, 先预演再 --confirm, 注册码不出进程)"
         ) from exc
 
 

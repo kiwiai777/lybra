@@ -378,6 +378,37 @@ def _write_registry_file(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def custom_role_registration_plan(project_root: str | Path, name: str, builtin_class: str) -> dict[str, Any]:
+    """AIPOS-F151 件④: 自定义角色注册的计划(预演与写入同一计算; register_custom_role 据此写)。零写入。
+
+    返回 {name, builtin_class, registry, token_ref, action(create|update), fingerprint(既有条目指纹; create = None), scopes(类派生),
+    previous_class}。名 / 类不合法 = ValueError(预演即拒)。不含 token 明文。"""
+    name_ok, name_err = validate_custom_role_name(name)
+    if not name_ok:
+        raise ValueError(name_err)
+    class_ok, class_err = validate_builtin_class(builtin_class)
+    if not class_ok:
+        raise ValueError(class_err)
+    root = Path(project_root).expanduser().resolve()
+    path = _workspace_registry_path(root)
+    tokens = _read_registry_file(path).get("tokens")
+    from tools.aipos_cli.service_mode import ROLE_SPECS
+    class_spec = next((s for s in ROLE_SPECS if s["role"] == builtin_class), None)
+    token_ref = f"svc-{name}"
+    existing = next((item for item in (tokens if isinstance(tokens, list) else [])
+                     if isinstance(item, dict) and str(item.get("token_ref") or "") == token_ref and str(item.get("role") or "") == name), None)
+    return {
+        "name": name,
+        "builtin_class": builtin_class,
+        "registry": str(path),
+        "token_ref": token_ref,
+        "action": "update" if existing is not None else "create",
+        "fingerprint": (existing or {}).get("fingerprint"),
+        "previous_class": (existing or {}).get("role_class"),
+        "scopes": list(class_spec.get("scopes", [])) if class_spec else [],
+    }
+
+
 def register_custom_role(
     project_root: str | Path,
     name: str,
@@ -399,28 +430,19 @@ def register_custom_role(
         scopes DERIVED from ROLE_SPECS of the builtin class (zero scope fields
         of its own — anti-privilege-escalation).
 
+    AIPOS-F151 件④: what will be written is computed by custom_role_registration_plan (the CLI preview runs the same plan).
     Returns the updated custom_roles mapping ({name: {"class": builtin_class}}).
     """
-    name_ok, name_err = validate_custom_role_name(name)
-    if not name_ok:
-        raise ValueError(name_err)
-    class_ok, class_err = validate_builtin_class(builtin_class)
-    if not class_ok:
-        raise ValueError(class_err)
-
+    plan = custom_role_registration_plan(project_root, name, builtin_class)
     root = Path(project_root).expanduser().resolve()
-    path = _workspace_registry_path(root)
+    path = Path(plan["registry"])
     data = _read_registry_file(path)
     tokens = data.get("tokens")
     if not isinstance(tokens, list):
         tokens = []
         data["tokens"] = tokens
 
-    from tools.aipos_cli.service_mode import ROLE_SPECS
-    class_spec = next((s for s in ROLE_SPECS if s["role"] == builtin_class), None)
-    derived_scopes = list(class_spec.get("scopes", [])) if class_spec else []
-
-    token_ref = f"svc-{name}"
+    token_ref = plan["token_ref"]
     entry: dict[str, Any] | None = None
     for item in tokens:
         if isinstance(item, dict) and str(item.get("token_ref") or "") == token_ref and str(item.get("role") or "") == name:
@@ -438,7 +460,7 @@ def register_custom_role(
         tokens.append(entry)
     # class truth + DERIVED scopes (never caller-supplied scope fields)
     entry["role_class"] = builtin_class
-    entry["scopes"] = derived_scopes
+    entry["scopes"] = list(plan["scopes"])
 
     _write_registry_file(path, data)
 
@@ -446,6 +468,23 @@ def register_custom_role(
     _append_custom_role_trail(root, change_type="register", name=name,
                               builtin_class=builtin_class, by=by, reason=reason)
     return {name: {"class": builtin_class}}
+
+
+def custom_role_removal_plan(project_root: str | Path, name: str) -> dict[str, Any]:
+    """AIPOS-F151 件④: 自定义角色移除的计划(预演与写入同一计算; remove_custom_role 据此写)。零写入。
+    返回 {name, registry, role_class, entries: [{token_ref, fingerprint, role_class, agent_instance}]}(entries 空 = 幂等无改动)。不含 token 明文。"""
+    root = Path(project_root).expanduser().resolve()
+    path = _workspace_registry_path(root)
+    tokens = _read_registry_file(path).get("tokens")
+    entries = [
+        {"token_ref": t.get("token_ref"), "fingerprint": t.get("fingerprint"), "role_class": t.get("role_class"),
+         "agent_instance": t.get("agent_instance")}
+        for t in (tokens if isinstance(tokens, list) else [])
+        if isinstance(t, dict) and str(t.get("role") or "") == name
+    ]
+    classes = sorted({str(e["role_class"]) for e in entries if e.get("role_class")})
+    return {"name": name, "registry": str(path), "role_class": classes[0] if len(classes) == 1 else (classes or None),
+            "entries": entries}
 
 
 def remove_custom_role(
@@ -461,20 +500,20 @@ def remove_custom_role(
     ``.lybra/connection.json`` (the role's credentials die with it — a removed
     role must not keep live tokens). Entries for the same role in OTHER
     projects' registry files (if any) are not touched by this per-workspace
-    verb.
+    verb. AIPOS-F151 件④: the entries removed are exactly custom_role_removal_plan's (the CLI preview runs the same plan).
 
     Returns the updated custom_roles mapping (from the gate registry).
     """
     root = Path(project_root).expanduser().resolve()
-    path = _workspace_registry_path(root)
+    plan = custom_role_removal_plan(root, name)
+    path = Path(plan["registry"])
     data = _read_registry_file(path)
     tokens = data.get("tokens")
     if not isinstance(tokens, list):
         tokens = []
 
     kept = [t for t in tokens if not (isinstance(t, dict) and str(t.get("role") or "") == name)]
-    removed = len(kept) != len(tokens)
-    if removed:
+    if plan["entries"]:
         data["tokens"] = kept
         _write_registry_file(path, data)
         _append_custom_role_trail(root, change_type="unregister", name=name,
