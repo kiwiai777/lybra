@@ -74,6 +74,25 @@
           "META_NOTHING_TO_SET": "至少给一个 --phase / --note"
         }
       }
+    },
+    "enrollment_log_writers": {
+      "description": "AIPOS-F153 件①: 写接入日志(enrollment_log, 只追加)的本地 CLI 命令同一两阶段语义——与 project_json_writers 同一包装(aipos_cli._project_json_two_phase_flags 注册旗标, family=enrollment_log_writers), 旗标名 / 缺省阶段 / 状态标签读 project_json_writers 一处(本段不重复声明), 本段只登记命令与旗标帮助。缺省 = 预演: 打印将作废的各行(行号 + 动作 + code_id + 时刻)、所在日志与将追加的 void 行, 零写入; --confirm 才追加。预演/写入同一实现 = enrollment.void_instance_events(dry_run)。日后新增写接入日志的命令登记于 commands 即得同一两阶段。",
+      "commands": [
+        "enroll-void"
+      ],
+      "flag_help": {
+        "dry_run": "Preview the enrollment_log lines to void and the void line to append, without writing (default)",
+        "confirm": "Append the void line to the scoped enrollment_log"
+      },
+      "scope": {
+        "description": "AIPOS-F153 件①(gap #108): enroll-void 作废作用域必须显式——恰给 --log <日志路径> 或 --project <项目名> 之一(只在该日志作废), 可再以 --code-id(可重复)/ --before <ISO 时刻> 限定; 缺省(两者都不给)= 拒, 拒因列出含该实例未作废事件的各日志作出口。原「按实例跨所有日志一刀切」退役(会连同所属项目新 land 一并作废)。",
+        "flags": {
+          "log": "--log",
+          "project": "--project",
+          "code_id": "--code-id",
+          "before": "--before"
+        }
+      }
     }
   },
   "warn_behavior": {

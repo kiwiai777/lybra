@@ -1275,13 +1275,29 @@ def _project_json_writers_declaration() -> dict[str, Any]:
     return decl
 
 
-def _project_json_two_phase_flags(parser: argparse.ArgumentParser, command: str) -> None:
-    """给写 project.json 的子命令注册互斥的 --dry-run(缺省)/ --confirm(旗标名与帮助读声明; 未登记的命令 = SchemaLoadError)。"""
+def _two_phase_family_declaration(family: str = "project_json_writers") -> dict[str, Any]:
+    """AIPOS-F153 件①: 本地写命令族的两阶段声明。旗标名 / 缺省阶段 / 状态标签 = project_json_writers 一处(同一两阶段语义, 各族
+    不重复声明); 其他族(如 enrollment_log_writers)只声明 commands 与 flag_help(及族专属键)。缺键 / 形不合 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    base = _project_json_writers_declaration()
+    if family == "project_json_writers":
+        return base
+    decl = (load_schema("verbs").get("two_phase_protocol") or {}).get(family)
+    if (not isinstance(decl, dict) or not isinstance(decl.get("commands"), list) or not decl["commands"]
+            or not all(isinstance((decl.get("flag_help") or {}).get(p), str) and decl["flag_help"][p] for p in ("dry_run", "confirm"))):
+        raise SchemaLoadError(f"verbs.schema.json two_phase_protocol.{family}(commands / flag_help {{dry_run, confirm}})未声明齐")
+    return {**decl, "default_phase": base["default_phase"], "flags": base["flags"], "outcome_labels": base["outcome_labels"]}
+
+
+def _project_json_two_phase_flags(parser: argparse.ArgumentParser, command: str, *, family: str = "project_json_writers") -> None:
+    """给本地写命令注册互斥的 --dry-run(缺省)/ --confirm(旗标名与帮助读声明; 未登记的命令 = SchemaLoadError)。
+    AIPOS-F153 件①: family 选写命令族(缺省 project.json 写命令; enrollment_log_writers = 写接入日志), 同一包装。"""
     from tools.schema_loader import SchemaLoadError
 
-    decl = _project_json_writers_declaration()
+    decl = _two_phase_family_declaration(family)
     if command not in decl["commands"]:
-        raise SchemaLoadError(f"verbs.schema.json two_phase_protocol.project_json_writers.commands 未登记 {command}")
+        raise SchemaLoadError(f"verbs.schema.json two_phase_protocol.{family}.commands 未登记 {command}")
     group = parser.add_mutually_exclusive_group()
     group.add_argument(decl["flags"]["dry_run"], dest="dry_run", action="store_true", help=decl["flag_help"]["dry_run"])
     group.add_argument(decl["flags"]["confirm"], dest="confirm", action="store_true", help=decl["flag_help"]["confirm"])
@@ -1795,7 +1811,7 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_code_parser.add_argument("--role", required=True, help="Role to bind (e.g., executor, auditor, or custom role)")
     roles_enroll_code_parser.add_argument("--instance", help="Optional instance name to bind (e.g., exec.lybra.mac1); omit for any instance")
     roles_enroll_code_parser.add_argument("--ttl", type=int, help="Time-to-live in seconds (default 86400 = 24h; also bounds the embedded transport credential)")
-    roles_enroll_code_parser.add_argument("--gate-url", help=f"Externally reachable gate URL to embed (default: connection.json mcp.rpc_url if non-loopback, else {_GATE_URL_DEFAULT})")
+    roles_enroll_code_parser.add_argument("--gate-url", help="Gate URL to embed. Default (AIPOS-F153, config.schema same_host_rule): loopback http://127.0.0.1:<gate port> when the code is redeemed on the gate host; the gate's connection.json mcp.rpc_url only when --instance is declared cross-host in its project's project.json workstations. Pass an externally reachable URL here for other cross-host redemption")
     roles_enroll_code_parser.add_argument("--governance-root", help="Governance workspace root to embed (F24A): bare registered project name or absolute path; validated against the project registry on the gate. Default: workspace_root of the local connection.json")
     roles_enroll_code_parser.add_argument("--token-role", default="advisor", help="Role of the local token used to call the gate verb (default: advisor; falls back to owner if advisor is absent)")
     roles_enroll_code_parser.add_argument("--owner-authorization-ref", help="Reference to owner authorization for this enrollment")
@@ -1813,11 +1829,21 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_where_parser.add_argument("--instance", required=True, help="实例名(<prefix>.<project>.<host>)")
     roles_enroll_where_parser.add_argument("--json", action="store_true", help="Output JSON")
     # AIPOS-F121 件②: 接入日志作废(只追加 void 事件行, 不删行; 读取口忽略被作废事件)
-    roles_enroll_void_parser = roles_subparsers.add_parser("enroll-void", help="AIPOS-F121: 作废某实例的接入事件——向事件所在 enrollment_log 追加 void 行(指向被作废行号区间/code_id, 带操作者与理由), 不删行; workstation_location/enroll-where 忽略被作废事件。先 --dry-run 看将追加的行")
+    roles_enroll_void_parser = roles_subparsers.add_parser("enroll-void", help="AIPOS-F121/F153: 作废某实例的接入事件——向显式指定的 enrollment_log(--log 或 --project, 缺省拒绝跨日志)追加 void 行(指向被作废行号区间/code_id, 带操作者与理由), 不删行; workstation_location/enroll-where 忽略被作废事件。缺省预演, --confirm 才追加")
     roles_enroll_void_parser.add_argument("--instance", required=True, help="要作废其接入事件的实例名(未知实例拒)")
     roles_enroll_void_parser.add_argument("--reason", required=True, help="作废理由(单行, 写入 void 行)")
     roles_enroll_void_parser.add_argument("--actor", required=True, help="操作者(写入 void 行 by=; 不含空白)")
-    roles_enroll_void_parser.add_argument("--dry-run", action="store_true", help="只打印将追加的 void 行, 零写入")
+    # AIPOS-F153 件①: 作用域旗标名读声明 verbs.schema two_phase_protocol.enrollment_log_writers.scope.flags(缺 = SchemaLoadError)
+    _void_scope = (_two_phase_family_declaration("enrollment_log_writers").get("scope") or {}).get("flags") or {}
+    if not all(isinstance(_void_scope.get(k), str) and _void_scope[k].startswith("--") for k in ("log", "project", "code_id", "before")):
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError("verbs.schema.json two_phase_protocol.enrollment_log_writers.scope.flags {log, project, code_id, before} 未声明齐")
+    roles_enroll_void_parser.add_argument(_void_scope["log"], dest="void_log", help="作用域: 只在这份 enrollment_log 作废(路径; 与 --project 二选一, 都不给 = 拒)")
+    roles_enroll_void_parser.add_argument(_void_scope["project"], dest="void_project", help="作用域: 只在该项目的 enrollment_log 作废(项目名; 与 --log 二选一)")
+    roles_enroll_void_parser.add_argument(_void_scope["code_id"], dest="void_code_ids", action="append", default=[], help="再限定: 只作废这些 code_id 的事件(可重复)")
+    roles_enroll_void_parser.add_argument(_void_scope["before"], dest="void_before", help="再限定: 只作废时间戳早于该 ISO 时刻的事件(如 2026-10-08T16:00:00Z)")
+    _project_json_two_phase_flags(roles_enroll_void_parser, "enroll-void", family="enrollment_log_writers")  # AIPOS-F153 件①: 缺省预演 / --confirm 才写
     roles_enroll_void_parser.add_argument("--json", action="store_true", help="Output JSON")
     
     # AIPOS-F66B 件②: 写权限边界可读面 + 读取口(护栏读声明; 单源 roles.schema write_boundary)
@@ -2136,7 +2162,7 @@ def build_parser() -> argparse.ArgumentParser:
     onboarding_guide_parser = onboarding_subparsers.add_parser("guide", help="Generate step-by-step onboarding guide for a new project")
     onboarding_guide_parser.add_argument("project_name", help="Project name (the project you're onboarding)")
     onboarding_guide_parser.add_argument("--home-root", help="Governance home root (defaults to LYBRA_HOME_ROOT env or ~/.lybra/projects)")
-    onboarding_guide_parser.add_argument("--gate-url", help=f"Gate URL (default order per config.schema identity_resolution.keys.gate_url: Owner connection.json mcp.rpc_url > LYBRA_GATE_URL env > {_GATE_URL_DEFAULT})")
+    onboarding_guide_parser.add_argument("--gate-url", help=f"Gate URL embedded in the guide's codes (default: loopback per config.schema same_host_rule, port from Owner connection.json mcp.rpc_url > LYBRA_GATE_URL env > {_GATE_URL_DEFAULT}; AIPOS-F153)")
     onboarding_guide_parser.add_argument("--code-repo", help="Optional code repo path")
     onboarding_guide_parser.add_argument("--actor", help="Actor name (defaults to $USER or owner)")
     onboarding_guide_parser.add_argument("--workspace-dir", help="Executor workstation directory (defaults to ~/<project>-executor)")
@@ -3223,16 +3249,22 @@ def main(argv: list[str] | None = None) -> int:
                 # AIPOS-F121 件②: 薄壳, 逻辑在 enrollment.void_instance_events(定位与 enroll-where 同一扫描; 写口 _write_trail_line 只追加)
                 from tools.aipos_cli.enrollment import void_instance_events
 
+                # AIPOS-F153 件①: 作用域显式(--log / --project, 缺省拒)+ 两阶段同 F125 包装(缺省预演, --confirm 才追加)
+                labels = _two_phase_family_declaration("enrollment_log_writers")["outcome_labels"]
                 result = void_instance_events(workspace_root, args.instance, by=args.actor, reason=args.reason,
-                                              dry_run=bool(args.dry_run))
+                                              dry_run=not args.confirm, log=args.void_log, project=args.void_project,
+                                              code_ids=list(args.void_code_ids or []), before=args.void_before)
                 if getattr(args, "json", False):
                     print(render_json(result))
                 else:
-                    head = "dry-run(零写入), 将追加" if result["dry_run"] else "已追加"
-                    print(f"实例 {result['instance']}: {head} {len(result['entries'])} 行 void 事件")
+                    head = labels["preview"] if result["dry_run"] else labels["written"]
+                    print(f"roles enroll-void {result['instance']}: {head}")
                     for item in result["entries"]:
-                        print(f"  log: {item['log']}")
-                        print(f"    作废 {item['event_count']} 个事件(code_id {item['code_id_count']} 个), 行号区间 {item['voids_lines']}")
+                        print(f"  log: {item['log']}(project {item['project']})")
+                        print(f"    作废 {item['event_count']} 个事件(code_id {item['code_id_count']} 个), 行号区间 {item['voids_lines']};"
+                              f" 该日志该实例余未作废事件 {item['left_live']} 个")
+                        for ev in item["events"]:
+                            print(f"      行 {ev['line']}: {ev['ts']}  {ev['action']}  code_id={ev['code_id']}")
                         print(f"    {'将追加' if result['dry_run'] else '已追加'}: {item['line']}")
                 return 0
             elif args.roles_command == "enroll":

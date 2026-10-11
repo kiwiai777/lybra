@@ -170,9 +170,15 @@ def test_item1_single_declaration_and_shared_implementation():
                   and n.func.id == "_project_json_two_phase_emit"]
     emitted = {n.args[0].value for n in emit_calls if n.args and isinstance(n.args[0], ast.Constant)}
     assert emitted == set(DECLARED_COMMANDS), emitted
-    flag_calls = {n.args[1].value for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                  and n.func.id == "_project_json_two_phase_flags"}
-    assert flag_calls == set(DECLARED_COMMANDS), flag_calls
+    # AIPOS-F153 件①: 同一包装按族(family 关键字)注册; 缺省族 = project.json 写命令, 其他族的命令各登记于其族声明
+    flag_calls: dict[str, set[str]] = {}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_project_json_two_phase_flags":
+            family = next((k.value.value for k in n.keywords if k.arg == "family"), "project_json_writers")
+            flag_calls.setdefault(family, set()).add(n.args[1].value)
+    assert flag_calls.pop("project_json_writers") == set(DECLARED_COMMANDS), flag_calls
+    for family, commands in flag_calls.items():
+        assert commands == set(load_schema("verbs")["two_phase_protocol"][family]["commands"]), (family, commands)
     assert "预览(未写" not in src and "已写入\"" not in src, "状态文案只出自 verbs.schema outcome_labels"
 
     # 写实现: 四个命令的库函数都经 update_project_json(唯一写路径); 无第二处 write_text
