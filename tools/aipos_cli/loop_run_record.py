@@ -23,6 +23,10 @@ AIPOS-F150(gap #128): 门拒结束的运行另落结构化拒因码 end_codes(ex
 lybra_loop.run_record.end_codes; 只抽门拒原文里的既有错误码, 不造码); next_action 新增 advisor_fix —— end_codes 全部属例行清单
 (verbs.schema lybra_loop_status.next_action.routine_rejections, 唯一声明)= 给出该码的固定修法(声明渲染), 否则 owner_needed 照旧;
 同卡同一例行码连续 repeat_owner_needed 次 = owner_needed(routine_fix_exhausted)。
+
+AIPOS-F152 件①: 运行记录 deploy 段 = 本次 loop 运行的代码(部署快照 + 提交 / 非快照不适用)与部署变化(changed_to / changed_at);
+`loop status --wait` 等待中部署一变(本命令跑的是旧快照)= wait.outcome deploy_changed + 退出码 deploy_changed(判定唯一实现
+deploy_runtime.DeployGuard, 经唯一等待原语 run_fs_watch 的 deploy_guard)。
 """
 from __future__ import annotations
 
@@ -376,6 +380,22 @@ class LoopRunRecorder:
         self._dirty = True
         self.flush(force=True)
 
+    # -- AIPOS-F152 件①: 部署一致性(verbs.schema lybra_loop.deploy_consistency.run_record_field) --
+    def set_deploy(self, info: dict[str, Any]) -> None:
+        """本次运行的代码: mode(deploy/dev/worktree)/ 快照 release / commit / deploy_current / deploy_check(active|not_applicable)。"""
+        self.meta["deploy"] = dict(info)
+        self._dirty = True
+        self.flush(force=True)
+
+    def deploy_changed(self, change: dict[str, Any]) -> None:
+        """部署已更新: 写明新旧提交(from = 本运行快照, to = 现部署 current; 读不出时 to_detail 给缘由)。"""
+        deploy = dict(self.meta.get("deploy") or {})
+        deploy.update({"changed_to": change.get("to"), "changed_to_detail": change.get("to_detail") or None,
+                       "changed_at": iso_z()})
+        self.meta["deploy"] = deploy
+        self._dirty = True
+        self.flush(force=True)
+
     def step_started(self, index: int, kind: str, node: Any, state: Any, card: str, *, action: str = "",
                      waiting_for: list[str] | None = None, mode: str | None = None, hint: str | None = None) -> None:
         """mode/hint(AIPOS-F136 件①, 只用于等待步): launch = loop 已拉起执行引擎; manual = 手工模式等工位开工, hint = 开工提示
@@ -516,6 +536,7 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
         view["launch"].update({"events": act.get("events"), "last_event_at": act.get("last_event_at"),
                                "last_activity_at": act.get("last_activity_at"), "last_activity_kind": act.get("last_activity_kind"),
                                "counts": act.get("counts"), "alive": None, "running_seconds": None, "idle_seconds": None})
+    view["deploy"] = meta.get("deploy")  # AIPOS-F152 件①: 本次运行的代码与部署变化(旧记录无此键 = None)
     if meta.get("status") == "ended":
         view["state"] = "ended"
         return view
@@ -685,6 +706,16 @@ def next_action_declaration(run_decl: dict[str, Any], contract: dict[str, Any] |
                               f"owner_needed 缺事由 {owner_gaps + escalations}"
                               f"(须覆盖 lybra_loop.run_record.states / end_reasons)")
     _check_routine_rejections(decl["routine_rejections"])
+    # AIPOS-F152 件①: by_end_reason 判为 advisor_fix 的结束原因须在 routine_rejections.end_reasons 有修法(缺 = 拒, 不猜)
+    routine_reasons = decl["routine_rejections"].get("end_reasons") or {}
+    if not isinstance(routine_reasons, dict) or set(routine_reasons) - reasons:
+        raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.routine_rejections.end_reasons 须为对象且键 ⊆ lybra_loop.run_record.end_reasons, "
+                              f"多出 {sorted(set(routine_reasons) - reasons) if isinstance(routine_reasons, dict) else routine_reasons!r}")
+    for reason in sorted(r for r, a in decl["by_end_reason"].items() if a == "advisor_fix"):
+        fix = (routine_reasons.get(reason) or {}).get("fix")
+        if not isinstance(fix, list) or not fix or any(not isinstance(x, str) or not x.strip() for x in fix):
+            raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.by_end_reason.{reason} = advisor_fix, 但 routine_rejections.end_reasons."
+                                  f"{reason}.fix 未声明为非空字符串的非空列表")
     return decl
 
 
@@ -741,6 +772,8 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
                         "hint": str(rules["investigate_hint"]).format(**fill)}
         if action == "card_done_take_next":
             return {"action": action, "reason": reason, **_take_next(view, rules, governance_root, message)}
+        if action == "advisor_fix":  # AIPOS-F152 件①: 结束原因本身属例行(routine_rejections.end_reasons, 如 deploy_changed)
+            return _routine_end_reason_action(view, rules, governance_root, reason, message, earlier_end_reasons)
         if action == "owner_needed":
             routine = _routine_action(view, rules, governance_root, reason, message, earlier_end_codes)
             if routine is not None:
@@ -805,10 +838,49 @@ def _routine_action(view: dict[str, Any], rules: dict[str, Any], governance_root
     for code in codes:
         fix += [_render_routine(step, values, f"codes.{code}.fix") for step in routine["codes"][code]["fix"]]
     resume = _render_routine(routine["resume_hint"], values, "resume_hint")
-    hint = "\n".join([*(f"{i}) {step}" for i, step in enumerate(fix, 1)), resume])  # 末行 = 续跑命令
+    hint = _routine_hint(fix, resume)
     return {"action": "advisor_fix", "reason": reason, "codes": codes, "fix": fix, "resume": resume,
             "detail": f"例行门拒 {tally}: 修法固定, 顾问按下一条自处理, 不问 Owner" + (f" — {message}" if message else ""),
             "hint": hint}
+
+
+def _routine_end_reason_action(view: dict[str, Any], rules: dict[str, Any], governance_root: Path, reason: str, message: str,
+                               earlier_end_reasons: list[Any] | None) -> dict[str, Any]:
+    """AIPOS-F152 件①: 例行结束原因(routine_rejections.end_reasons)→ advisor_fix, hint = 该原因 fix 逐条渲染 + resume_hint(续跑命令
+    占位值与例行门拒同一实现 _resume_fill); 本卡最近连续各次运行以同一原因结束 ≥ repeat_owner_needed = owner_needed(routine_fix_exhausted)。"""
+    routine = rules["routine_rejections"]
+    task_id = str(view.get("task_id") or "")
+    fill = {"task_id": task_id, "governance_root": str(governance_root)}
+    limit = int(routine["repeat_owner_needed"])
+    streak = 1
+    for earlier in reversed(earlier_end_reasons or []):
+        if earlier != reason:
+            break
+        streak += 1
+    if streak >= limit:
+        return {"action": "owner_needed", "reason": "routine_fix_exhausted", "codes": [],
+                "detail": f"{rules['owner_reasons']['routine_fix_exhausted']}(本卡连续 {streak} 次以 {reason} 结束; 本次: {message})",
+                "hint": str(rules["investigate_hint"]).format(**fill)}
+    values = _resume_fill(view, governance_root)
+    where = f"end_reasons.{reason}.fix"
+    fix = [_render_routine(step, values, where) for step in routine["end_reasons"][reason]["fix"]]
+    resume = _render_routine(routine["resume_hint"], values, "resume_hint")
+    hint = _routine_hint(fix, resume)
+    return {"action": "advisor_fix", "reason": reason, "codes": [], "fix": fix, "resume": resume,
+            "detail": f"例行结束 {reason} 第 {streak}/{limit} 次: 修法固定, 顾问按下一条自处理, 不问 Owner" + (f" — {message}" if message else ""),
+            "hint": hint}
+
+
+def _routine_hint(fix: list[str], resume: str) -> str:
+    """修法逐条编号 + 末行续跑命令(例行门拒与例行结束原因同一渲染)。"""
+    return "\n".join([*(f"{i}) {step}" for i, step in enumerate(fix, 1)), resume])
+
+
+def _resume_fill(view: dict[str, Any], governance_root: Path) -> dict[str, str]:
+    """续跑命令占位实值(task_id / governance_root / actor_arg / envelope_arg; 运行记录 driver / envelope)——例行门拒与例行结束原因同一实现。"""
+    driver, envelope = str(view.get("driver") or "").strip(), str(view.get("envelope") or "").strip()
+    return {"task_id": str(view.get("task_id") or ""), "governance_root": str(governance_root),
+            "actor_arg": f" --actor {driver}" if driver else "", "envelope_arg": f" --envelope {envelope}" if envelope else ""}
 
 
 class _RoutineFixUnrenderable(ValueError):
@@ -844,10 +916,8 @@ def _routine_fill(view: dict[str, Any], routine: dict[str, Any], governance_root
     except (AmbiguousTaskCard, FrontmatterReadError, CardRepoUnresolved) as exc:
         raise _RoutineFixUnrenderable(f"{type(exc).__name__}: {exc}") from exc
     branch, base = card_branch_name(task_id), card_expected_base(fm)
-    driver, envelope = str(view.get("driver") or "").strip(), str(view.get("envelope") or "").strip()
-    values = {"task_id": task_id, "governance_root": str(governance_root), "branch": branch, "base": base,
-              "worktree": str(worktree), "base_sync_command": base_sync_command(branch, base),
-              "actor_arg": f" --actor {driver}" if driver else "", "envelope_arg": f" --envelope {envelope}" if envelope else ""}
+    values = {**_resume_fill(view, governance_root), "branch": branch, "base": base,  # AIPOS-F152: 续跑占位与例行结束原因同一实现
+              "worktree": str(worktree), "base_sync_command": base_sync_command(branch, base)}
     undeclared = sorted(set(values) - set(routine["placeholders"]))
     if undeclared:
         from tools.schema_loader import SchemaLoadError
@@ -882,10 +952,13 @@ class StatusUsageError(ValueError):
 
 def wait_for_next_action(governance_root: Path, task_id: str, seconds: float, *, contract: dict[str, Any] | None = None,
                          sleeper: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic,
-                         interval: float | None = None, lane: str | list[str] | None = None) -> dict[str, Any]:
+                         interval: float | None = None, lane: str | list[str] | None = None,
+                         deploy_guard: Any | None = None) -> dict[str, Any]:
     """`loop status --task-id <ID> --wait <秒>`: 经 agent_watch_fs.run_fs_watch(唯一等待原语)有界等待, 直到本卡最近一次运行的
     下一动作 ≠ continue_wait(expect_ready 每轮重读记录 + judge_run + next_action; 进程死 / 停滞无需文件变化)或到时; 返回当时的
-    loop_status 报告 + wait 段 {requested_seconds, waited_seconds, outcome: ready|timeout}。上限与间隔读 verbs.schema。"""
+    loop_status 报告 + wait 段 {requested_seconds, waited_seconds, outcome: ready|timeout}。上限与间隔读 verbs.schema。
+    AIPOS-F152 件①: deploy_guard(缺省 = 本进程的 deploy_runtime.DeployGuard)经 run_fs_watch 每轮比对部署; 等待中部署一变 =
+    outcome deploy_changed, 报告另附 deploy_changed 段(新旧提交 + 重跑提示), 调用方按 exit_codes.deploy_changed 退出。"""
     import contextlib
     import io
     from types import SimpleNamespace
@@ -917,6 +990,9 @@ def wait_for_next_action(governance_root: Path, task_id: str, seconds: float, *,
         action = (report.get("next_action") or {}).get("action")
         return action is not None and action != "continue_wait"
 
+    from tools.aipos_cli.deploy_runtime import DeployGuard
+
+    guard = deploy_guard if deploy_guard is not None else DeployGuard.for_running_process()
     started = clock()
     rc = None
     if root.is_dir():  # 落点根尚不存在 = 本项目从未跑过 loop: 无可等(no_run), 只读不建目录
@@ -925,11 +1001,19 @@ def wait_for_next_action(governance_root: Path, task_id: str, seconds: float, *,
                                run_log=None, end_pattern=None, stall_secs=None, health=None)
         sink = io.StringIO()
         with contextlib.redirect_stdout(sink):
-            rc = run_fs_watch(args, sleeper=sleeper, clock=clock, expect_ready=_ready)
-        if rc not in (declared_exit_code("lybra_agent_watch", "change"), declared_exit_code("lybra_agent_watch", "timeout")):
+            rc = run_fs_watch(args, sleeper=sleeper, clock=clock, expect_ready=_ready, deploy_guard=guard)
+        if rc not in (declared_exit_code("lybra_agent_watch", "change"), declared_exit_code("lybra_agent_watch", "timeout"),
+                      declared_exit_code("lybra_agent_watch", "deploy_changed")):
             raise LoopRunRecordError(f"等待原语 agent watch 异常退出 {rc}: {sink.getvalue().strip()}")
     report = loop_status(governance_root, task_id, contract=contract, lane=lane)  # 返回当时状态(到时 / 就绪均重读一次, 不用缓存)
     outcome = "ready" if (report.get("next_action") or {}).get("action") not in (None, "continue_wait") else "timeout"
+    change = guard.check() if rc == declared_exit_code("lybra_agent_watch", "deploy_changed") else None
+    if change:
+        from tools.aipos_cli.deploy_runtime import change_summary
+
+        outcome = "deploy_changed"
+        report["deploy_changed"] = {**change, "message": f"{change_summary(change)}; 本命令运行的是旧版本代码, 等待已停下, "
+                                                         f"用原命令重跑(lybra loop status --task-id {task_id} --wait <秒>)"}
     report["wait"] = {"requested_seconds": float(seconds), "waited_seconds": round(clock() - started, 1), "outcome": outcome,
                       "watch_root": str(root), "max_seconds": max_seconds}
     return report
@@ -985,6 +1069,10 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
         if state == "ended":
             out.append(f"  已结束 {v.get('ended_at')}: outcome={v.get('outcome')} exit={v.get('exit_code')} "
                        f"reason={v.get('end_reason')}" + (f" — {v['end_message']}" if v.get("end_message") else ""))
+        dep = v.get("deploy") or {}
+        if dep.get("changed_to") or dep.get("changed_to_detail"):  # AIPOS-F152 件①: 运行记录 deploy 段(新旧提交)
+            out.append(f"  部署: 本运行快照 {dep.get('release')} commit {dep.get('commit')} → 现部署 commit "
+                       f"{dep.get('changed_to') or dep.get('changed_to_detail')}({dep.get('changed_at')})")
         if v.get("note"):
             out.append(f"  注: {v['note']}")
         if v.get("lane_error"):
@@ -1006,7 +1094,10 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
         out.append(f"(该卡共 {report['runs_on_record']} 次运行记录, 上为最近一次)")
     w = report.get("wait")
     if w:
-        out.append(f"(--wait {w['requested_seconds']:g}s: {'可行动' if w['outcome'] == 'ready' else '到时仍在推进'}, 实等 {w['waited_seconds']}s)")
+        what = {"ready": "可行动", "deploy_changed": "部署已更新, 等待停下"}.get(w["outcome"], "到时仍在推进")
+        out.append(f"(--wait {w['requested_seconds']:g}s: {what}, 实等 {w['waited_seconds']}s)")
+    if report.get("deploy_changed"):
+        out.append(f"(AIPOS-F152) {report['deploy_changed']['message']}")
     return "\n".join(out + summary)
 
 
@@ -1053,6 +1144,8 @@ def loop_status_cli(args: Any) -> int:
         print(render_status(report, run_record_declaration(contract)["states"]))
     if task_id and not report["runs"]:
         return declared_exit_code(STATUS_VERB, "no_run")
+    if wait is not None and report.get("deploy_changed"):  # AIPOS-F152 件①: 等待中部署已更新 = 声明出口 deploy_changed
+        return declared_exit_code(STATUS_VERB, "deploy_changed")
     if wait is not None:  # AIPOS-F136 件①: --wait 退出码按顾问下一动作(verbs.schema lybra_loop_status.exit_codes 同名出口)
         return declared_exit_code(STATUS_VERB, str(report["next_action"]["action"]))
     return declared_exit_code(STATUS_VERB, "ok")

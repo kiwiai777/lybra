@@ -2810,7 +2810,7 @@ def _finalize_task_impl(
                         "operations": operations,
                     }
             elif drift_check["has_drift"] and not drift_check["classification"]["has_gate_side_changes"]:
-                operations.append("ℹ️  CLI-side changes only - no deployment needed")
+                operations.append("ℹ️  CLI-side changes only - gate unaffected, not auto-deployed (AIPOS-F152: lybra CLI 从部署快照运行, 下次部署起生效)")
                 deployment_skipped = True
             else:
                 operations.append("ℹ️  No drift detected - deployment up-to-date")

@@ -240,9 +240,11 @@ def test_item4_exit_codes_declared_once_and_code_reads_them():
     assert (artifact_ingest.INGEST_EXIT_RECORDED, artifact_ingest.INGEST_EXIT_SHELL_REJECTED,
             artifact_ingest.INGEST_EXIT_REJECTED) == (ingest["recorded"], ingest["shell_rejected"], ingest["rejected"])
     watch = declared_exit_codes("lybra_agent_watch")
-    assert watch == {"change": 0, "timeout": 2, "end_no_product": 3, "stall": 4, "usage": 5, "signal": 130}
+    assert watch == {"change": 0, "timeout": 2, "end_no_product": 3, "stall": 4, "deploy_changed": 6, "usage": 5,
+                     "signal": 130}  # AIPOS-F152 件①: deploy_changed(只追加)
     for outcome, const in (("change", "EXIT_CHANGE"), ("timeout", "EXIT_TIMEOUT"), ("end_no_product", "EXIT_END_NO_PRODUCT"),
-                           ("stall", "EXIT_STALL"), ("usage", "EXIT_USAGE"), ("signal", "EXIT_SIGNAL")):
+                           ("stall", "EXIT_STALL"), ("usage", "EXIT_USAGE"), ("signal", "EXIT_SIGNAL"),
+                           ("deploy_changed", "EXIT_DEPLOY_CHANGED")):
         assert getattr(agent_watch_fs, const) == watch[outcome], const
     # transitions 不再重复声明 ingest 退出码
     assert "exit_codes" not in json.loads(TRANSITIONS_SCHEMA.read_text(encoding="utf-8"))["artifact_ingest"]

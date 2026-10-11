@@ -19,8 +19,11 @@ tui = ["textual>=4.0"]
 
 [project.scripts]
 # AIPOS-290: console_scripts entry for `pip install -e .` dev convenience.
-# Points to tools.aipos_cli.aipos_cli:main (existing main() in aipos_cli.py).
-lybra = "tools.aipos_cli.aipos_cli:main"
+# AIPOS-F152 件②: the entry no longer runs the (possibly mid-merge / dirty) working tree. deploy_runtime:main is only a
+# trampoline: it execs the same launcher text that `tools/lybra-deploy install-entry` writes, which loads the CLI from the
+# deploy snapshot (.deploy/current resolved once per process). Local debugging: lybra --dev-tree <work tree> <subcommand> ...
+# Preferred install: `tools/lybra-deploy install-entry` (deploy runs it too); see docs/release_discipline.md.
+lybra = "tools.aipos_cli.deploy_runtime:main"
 
 [tool.setuptools]
 # AIPOS-290: explicit package discovery to avoid flat-layout multi-package error.
