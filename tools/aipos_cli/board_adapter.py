@@ -401,6 +401,7 @@ def _attach_controlled_execute_metadata(
         "queue_return",
         "queue_withdraw",  # AIPOS-315: G2 两阶段动词
         "queue_amend",     # AIPOS-315: G2 两阶段动词
+        "queue_rework",    # AIPOS-F154: 返工节两阶段(门 lybra_queue_rework_confirm 认此 operation)
         "audit_dispatch",
         "audit_verdict",
         "orchestration_event_append",
@@ -5133,6 +5134,7 @@ def execute_dry_run(
             "queue_return",
             "queue_withdraw",  # AIPOS-315: G2 两阶段动词
             "queue_amend",     # AIPOS-315: G2 两阶段动词
+            "queue_rework",    # AIPOS-F154: 返工节两阶段
             "audit_dispatch",
             "audit_verdict",
             "orchestration_event_append",
@@ -5265,6 +5267,11 @@ def execute_dry_run(
             # amend 的 data 结构不同,需要从 planned_writes 或其他地方提取
             # 暂时跳过 amend revalidation (只要 withdraw 能工作即可证明 G2 修复)
             current = {"ok": True, "verdict": Verdict.PASS, "data": source_data}
+        elif op == "queue_rework":
+            # AIPOS-F154: 返工节 revalidation = 以 dry-run 原始参数重跑同一 queue_rework_task 预览(卡仍 claimed / 轮次未超限 /
+            # 门侧角色类授权仍通过), 快照比对 task_id + original_payload + planned_writes(修订记录路径含时间戳, 不入哈希)
+            current = queue_rework_task(**(source_data.get("original_payload") or {}), actor=actor_text, dry_run=True,
+                                        repo_root=resolved_root)
         elif op == RecordType.AUDIT_DISPATCH:
             payload = source_data.get("original_payload") or {}
             current = audit_dispatch_task(
@@ -5721,6 +5728,29 @@ def execute_dry_run(
                 repo_root=resolved_root,
             )
             verdict = str(result.get("verdict") or Verdict.BLOCK)
+            return make_response(
+                ok=bool(result.get("ok", False)),
+                verdict=verdict,
+                operation=op,
+                dry_run=False,
+                actor=_actor_payload(actor_text),
+                data=result.get("data"),
+                summary=result.get("summary"),
+                planned_writes=list(result.get("planned_writes", [])),
+                performed_writes=list(result.get("performed_writes", [])),
+                planned_moves=[],
+                performed_moves=[],
+                warnings=list(result.get("warnings", [])),
+                blocking_reasons=list(result.get("blocking_reasons", [])),
+                safety_notice=CONTROLLED_EXECUTE_NOTICE,
+                errors=list(result.get("errors", [])),
+            )
+
+        if op == "queue_rework":
+            # AIPOS-F154: 返工节 confirm 执行 = 同一 queue_rework_task(dry_run=False), 写卡面 rework_rounds + 修订记录(F75 语义)
+            result = queue_rework_task(**(source_data.get("original_payload") or {}), actor=actor_text, dry_run=False,
+                                       repo_root=resolved_root)
+            verdict = str(result.get("verdict") or (Verdict.PASS if result.get("ok") else Verdict.BLOCK))
             return make_response(
                 ok=bool(result.get("ok", False)),
                 verdict=verdict,
@@ -7904,6 +7934,23 @@ def queue_rework_task(
             result.setdefault("data", {})["max_rounds"] = round_result["data"]["max_rounds"]
             result.setdefault("data", {})["rework_round"] = round_result["data"]["new_round"]
         
+        if dry_run and result.get("ok") and result.get("verdict") != Verdict.BLOCK:
+            # AIPOS-F154: 预览签发的确认令牌须是 queue_rework 自己的(门 lybra_queue_rework_confirm 只认 operation=queue_rework;
+            # 原样透出内部 amend 的 queue_amend 令牌 = 确认必拒 INCOMPATIBLE_DRY_RUN, 返工节永远落不了)。令牌 plan 带原始参数,
+            # confirm 经 execute_dry_run 以同一 queue_rework_task 重放; 内部 amend 令牌不外露。
+            for key in ("dry_run_id", "dry_run_token", "dry_run_snapshot_hash", "dry_run_created_at", "dry_run_expires_at"):
+                result.pop(key, None)
+            result.setdefault("data", {})["original_payload"] = {
+                "task_id": task_id,
+                "verdict_ref": verdict_ref,
+                "focus_items": list(focus_items),
+                "acceptance_criteria": acceptance_criteria,
+                "agent_instance": instance_text,
+                "owner_policy_ref": owner_policy_ref,
+            }
+            result = _attach_controlled_execute_metadata(
+                operation="queue_rework", actor=actor_text, response=result, execute_allowed=True
+            )
         return result
     except Exception as exc:
         return _normalize_exception("queue_rework", exc, dry_run=dry_run, actor=_actor_payload(actor))

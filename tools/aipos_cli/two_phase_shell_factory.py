@@ -231,15 +231,93 @@ def resolve_driver_role_from_connection(*, connection_json_path: str, repo_root:
         ) from exc
 
 
-def load_role_token(*, connection_json_path: str, role: str) -> str:
+def role_bound_instances(*, connection_json_path: str | Path, role: str) -> list[str]:
+    """AIPOS-F154: 连接文件中角色名 = role 的可用条目(token_resolver.is_token_entry_active)绑定的实例(去重, 文件序)。
+    角色级条目(无 agent_instance)不计。load_role_token 判「按角色取会取到谁」与 progress_reporter_identity 判「--actor 有无本角色凭据」同用。"""
+    from tools.aipos_cli.token_resolver import is_token_entry_active, load_connection_tokens
+
+    wanted = str(role or "").strip()
+    out: list[str] = []
+    for entry in load_connection_tokens(str(Path(connection_json_path).expanduser())):
+        if not is_token_entry_active(entry) or str(entry.get("role") or "").strip() != wanted:
+            continue
+        instance = str(entry.get("agent_instance") or "").strip()
+        if instance and instance not in out:
+            out.append(instance)
+    return out
+
+
+def load_role_token(*, connection_json_path: str, role: str, agent_instance: str | None = None) -> str:
     """AIPOS-F134 件①: 薄壳取门凭据的唯一入口(execute_two_phase_verb / execute_single_phase_via_gate 同用)。
-    驱动方实例已知(driver_instance_hint)且所求角色 = 该实例条目角色 → 取该实例条目(同角色多实例不取首个); 否则按角色(既有 load_owner_token)。"""
+    驱动方实例已知(driver_instance_hint)且所求角色 = 该实例条目角色 → 取该实例条目(同角色多实例不取首个); 否则按角色(既有 load_owner_token)。
+
+    AIPOS-F154: ① 显式签发实例(agent_instance, 调用方经 signer_role_for_actor / progress_reporter_identity 定出)= 只取该实例的
+    本角色条目(挑选仍委托 token_resolver.select_token_entry), 无即拒(DriverTokenError), 禁回落按角色取首个;
+    ② 落到按角色取时, 该角色可用条目绑定了 ≥2 个实例 = 拒(不知取谁, 禁取首个冒名), 只有 ≤1 个实例时既有行为不变。"""
+    explicit = str(agent_instance or "").strip()
+    if explicit:
+        from tools.aipos_cli.token_resolver import TokenResolutionError, load_connection_tokens, select_token_entry
+
+        path = str(Path(connection_json_path).expanduser())
+        wanted = str(role or "").strip()
+        same_role = [t for t in load_connection_tokens(path) if isinstance(t, dict) and str(t.get("role") or "").strip() == wanted]
+        try:
+            entry = select_token_entry(same_role, agent_instance=explicit, source=f"{path}(角色 {wanted} 条目)")
+        except TokenResolutionError as exc:
+            raise DriverTokenError(
+                f"签发实例 {explicit!r} 在 {path} 无可用的角色 {wanted!r} 凭据(按实例挑, 禁回落按角色取首个): {exc}"
+            ) from exc
+        return str(entry.get("token") or "").strip()
     instance = driver_instance_hint()
     if instance:
         entry = driver_token_entry(connection_json_path=connection_json_path, agent_instance=instance)
         if str(entry.get("role") or "").strip() == str(role or "").strip():
             return str(entry.get("token") or "").strip()
+    bound = role_bound_instances(connection_json_path=connection_json_path, role=role)
+    if len(bound) > 1:
+        raise DriverTokenError(
+            f"{connection_json_path} 中角色 {role!r} 的凭据绑定了 {len(bound)} 个实例 {bound}, 未指明本次签发实例(禁取首个冒名)。"
+            f"出口: 签发者即 --actor 的命令(queue rework / queue adopt)按 --actor 选凭据; 账务动词经 "
+            f"`lybra loop --task-id <卡> --actor <实例>` 推进(派生命令自动带实例), 人手直敲薄壳时设环境变量 {DRIVER_INSTANCE_ENV}=<实例>"
+        )
     return load_owner_token(connection_json=connection_json_path, role=role)
+
+
+def signer_role_for_actor(*, connection_json_path: str, actor: str, repo_root: Path | None = None) -> str:
+    """AIPOS-F154 件①: 签发者即 --actor 的门动词(queue rework: 门要 agent_instance=顾问实例; queue adopt: 门判 actor = token 绑定实例)
+    的凭据角色——唯一口, 各薄壳禁自拼身份。--actor 须为该连接文件已接入的驱动方角色类实例: 按实例挑条目走 F134 唯一实现
+    driver_token_entry(→ token_resolver.select_token_entry, 无即拒, 禁回落首个驱动方 token); 角色类授权在门侧走 F132
+    custom_roles.authorize_instance_class。loop 已定驱动方实例(driver_instance_hint)而与 --actor 不同 = 拒(禁以 A 的 loop 冒签 B)。
+    返回该实例条目的角色名; 调用方把 actor 作 signer_instance 交薄壳工厂(load_role_token 取同一实例条目的 token)。"""
+    instance = str(actor or "").strip()
+    if not instance:
+        raise DriverTokenError("签发实例(--actor)为空, 无从按实例挑凭据")
+    scoped = driver_instance_hint()
+    if scoped and scoped != instance:
+        raise DriverTokenError(
+            f"本次驱动方实例 {scoped!r}(lybra loop --actor / 环境变量 {DRIVER_INSTANCE_ENV})与 --actor {instance!r} 不一致, "
+            f"拒绝以 {scoped} 的驱动冒签 {instance}。出口: --actor 写 {scoped}, 或以 {instance} 自己的 loop / 会话发起"
+        )
+    return resolve_driver_role_from_connection(connection_json_path=connection_json_path, repo_root=repo_root, agent_instance=instance)
+
+
+def progress_reporter_identity(*, connection_json_path: str, actor: str, repo_root: Path | None = None) -> tuple[str, str | None]:
+    """AIPOS-F154 件②: task-progress --confirm 的凭据身份——(角色名, 签发实例或 None)。角色 = 执行体类优先、审计体类次之
+    (resolve_role_from_connection, AIPOS-F44D-A 既有序); --actor 持有该角色凭据 = 按实例取(signer=actor), 否则按角色取
+    (load_role_token 的多实例拒仍生效)。门侧进度事件以 actor 参数记账, 凭据只定 scope。读失败/无匹配角色类 = ValueError。"""
+    last: ValueError | None = None
+    for role_class in ("executor", "auditor"):
+        try:
+            role = resolve_role_from_connection(
+                connection_json_path=connection_json_path, required_role_class=role_class, repo_root=repo_root
+            )
+        except ValueError as exc:
+            last = exc
+            continue
+        instance = str(actor or "").strip()
+        bound = role_bound_instances(connection_json_path=connection_json_path, role=role)
+        return role, (instance if instance and instance in bound else None)
+    raise last if last is not None else ValueError(f"no executor/auditor-class token in {connection_json_path}")
 
 
 def _no_envelope_exit() -> int:
@@ -340,6 +418,7 @@ def execute_two_phase_verb(
     role: str,
     owner_confirmation_literal: str = "OWNER_CONFIRMED",
     json_output: bool = False,
+    signer_instance: str | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """两阶段动词薄壳工厂核心：dry_run → confirm
     
@@ -353,13 +432,15 @@ def execute_two_phase_verb(
         role: 角色名（用于加载 token）
         owner_confirmation_literal: 自确认字面常量（AIPOS-328）
         json_output: 是否 JSON 输出
+        signer_instance: AIPOS-F154 显式签发实例(signer_role_for_actor 定出): 只取该实例凭据, 无即拒
 
     Returns:
         (exit_code, response_dict)
     """
     # 1. 加载 gate 连接
     try:
-        token = load_role_token(connection_json_path=connection_json_path, role=role)  # AIPOS-F134 件①: 驱动方按实例
+        # AIPOS-F134 件①: 驱动方按实例; AIPOS-F154: 显式签发实例优先
+        token = load_role_token(connection_json_path=connection_json_path, role=role, agent_instance=signer_instance)
     except ValueError as exc:
         return _fail(f"cannot load {role} token: {exc}")
 
@@ -454,6 +535,15 @@ def execute_two_phase_verb(
     if early is not None:
         return early
 
+    # AIPOS-F154(fail-closed): 门拒确认(isError / verdict=BLOCK / ok=false)= 未落记录, 非零出口原样出声, 不得报 "confirmed"
+    if confirm_resp.get("isError") or confirm_resp.get("verdict") == "BLOCK" or confirm_resp.get("ok") is False:
+        if json_output:
+            print(render_json(confirm_resp))
+        else:
+            reasons = confirm_resp.get("blocking_reasons") or confirm_resp.get("errors") or confirm_resp.get("message") or confirm_resp
+            print(f"{confirm_verb} REJECTED (门拒确认, 未落记录): {reasons}", file=sys.stderr)
+        return 1, confirm_resp
+
     # 5. 输出结果
     if json_output:
         print(render_json(confirm_resp))
@@ -473,6 +563,7 @@ def execute_single_phase_via_gate(
     connection_json_path: str,
     role: str,
     json_output: bool = False,
+    signer_instance: str | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """单阶段动词经 gate MCP 执行（如 task_progress）
 
@@ -482,13 +573,15 @@ def execute_single_phase_via_gate(
         connection_json_path: connection.json 路径
         role: 角色名
         json_output: 是否 JSON 输出
+        signer_instance: AIPOS-F154 显式签发实例: 只取该实例凭据, 无即拒
 
     Returns:
         (exit_code, response_dict)
     """
     # 1. 加载 gate 连接
     try:
-        token = load_role_token(connection_json_path=connection_json_path, role=role)  # AIPOS-F134 件①: 驱动方按实例
+        # AIPOS-F134 件①: 驱动方按实例; AIPOS-F154: 显式签发实例优先
+        token = load_role_token(connection_json_path=connection_json_path, role=role, agent_instance=signer_instance)
     except ValueError as exc:
         return _fail(f"cannot load {role} token: {exc}")
 
