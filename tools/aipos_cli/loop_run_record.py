@@ -18,6 +18,11 @@
 AIPOS-F136 件①: 顾问下一动作(continue_wait / owner_needed / card_done_take_next / investigate)只由 next_action 判定(判据表
 verbs.schema lybra_loop_status.next_action); `loop status --wait <秒>` 只经 agent_watch_fs.run_fs_watch(loop 的唯一等待原语)
 有界等待(wait_for_next_action), 上限与间隔读 verbs.schema lybra_loop_status.wait, 退出码按下一动作读同条 exit_codes。
+
+AIPOS-F150(gap #128): 门拒结束的运行另落结构化拒因码 end_codes(extract_end_codes, 抽取式样与适用结束原因读 verbs.schema
+lybra_loop.run_record.end_codes; 只抽门拒原文里的既有错误码, 不造码); next_action 新增 advisor_fix —— end_codes 全部属例行清单
+(verbs.schema lybra_loop_status.next_action.routine_rejections, 唯一声明)= 给出该码的固定修法(声明渲染), 否则 owner_needed 照旧;
+同卡同一例行码连续 repeat_owner_needed 次 = owner_needed(routine_fix_exhausted)。
 """
 from __future__ import annotations
 
@@ -33,7 +38,7 @@ from typing import Any, Callable
 from tools.aipos_cli.clock import file_slug, iso_z, utc_now
 
 RUN_RECORD_KEYS = ("record_type", "log_record_type", "activity_flush_seconds", "stall_after_seconds", "stall_after_tool_seconds",
-                   "states", "end_reasons", "activity_categories", "background_category")
+                   "states", "end_reasons", "activity_categories", "background_category", "end_codes")
 STATUS_VERB = "lybra_loop_status"
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9_.:-]")
 
@@ -50,6 +55,45 @@ def run_record_declaration(contract: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(decl, dict) or any(k not in decl for k in RUN_RECORD_KEYS):
         raise SchemaLoadError(f"verbs.schema.json verbs.lybra_loop.run_record 未声明齐 {list(RUN_RECORD_KEYS)}")
     return decl
+
+
+def extract_end_codes(message: Any, decl: dict[str, Any]) -> list[str]:
+    """AIPOS-F150 件①: 门拒原文 → 既有门拒错误码列表(按首次出现顺序去重; 唯一实现)。式样读 verbs.schema
+    lybra_loop.run_record.end_codes.patterns(每条含命名组 code); 声明缺 / 式样不合 = SchemaLoadError(fail-closed)。只抽不造码:
+    原文里没有 `<码>:` / error_code=<码> 形 = 空列表(下一动作照旧 owner_needed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    spec = decl.get("end_codes") if isinstance(decl, dict) else None
+    patterns = spec.get("patterns") if isinstance(spec, dict) else None
+    if not isinstance(patterns, list) or not patterns:
+        raise SchemaLoadError("verbs.schema.json verbs.lybra_loop.run_record.end_codes.patterns 未声明(非空列表)")
+    found: dict[int, str] = {}
+    text = str(message or "")
+    for raw in patterns:
+        try:
+            rx = re.compile(str(raw))
+        except re.error as exc:
+            raise SchemaLoadError(f"verbs.schema.json lybra_loop.run_record.end_codes.patterns 式样不合 {raw!r}: {exc}") from exc
+        if "code" not in rx.groupindex:
+            raise SchemaLoadError(f"verbs.schema.json lybra_loop.run_record.end_codes.patterns 式样缺命名组 code: {raw!r}")
+        for m in rx.finditer(text):
+            found.setdefault(m.start("code"), m.group("code"))
+    codes: list[str] = []
+    for _pos, code in sorted(found.items()):
+        if code not in codes:
+            codes.append(code)
+    return codes
+
+
+def end_codes_reasons(decl: dict[str, Any]) -> list[str]:
+    """AIPOS-F150 件①: 落 end_codes 的结束原因(verbs.schema lybra_loop.run_record.end_codes.end_reasons)。须为已声明结束原因。"""
+    from tools.schema_loader import SchemaLoadError
+
+    spec = decl.get("end_codes") if isinstance(decl, dict) else None
+    reasons = spec.get("end_reasons") if isinstance(spec, dict) else None
+    if not isinstance(reasons, list) or not reasons or any(r not in decl.get("end_reasons", {}) for r in reasons):
+        raise SchemaLoadError("verbs.schema.json verbs.lybra_loop.run_record.end_codes.end_reasons 未声明或含未声明的结束原因")
+    return [str(r) for r in reasons]
 
 
 def loop_runs_root(governance_root: Path) -> Path:
@@ -218,6 +262,7 @@ class LoopRunRecorder:
             "exit_code": None,
             "end_reason": None,
             "end_message": None,
+            "end_codes": None,
             "write_errors": 0,
         }
         self._synced = 0
@@ -420,9 +465,12 @@ class LoopRunRecorder:
         if reason not in declared:
             raise LoopRunRecordError(f"结束原因 {reason!r} 未在 verbs.schema lybra_loop.run_record.end_reasons 声明")
         first = next((ln.strip() for ln in str(message or "").splitlines() if ln.strip()), "")
+        # AIPOS-F150 件①: 门拒类结束另落结构化拒因码(取自门拒原文全文, 不只首行); 其余结束原因 = null
+        codes = extract_end_codes(message, self.decl) if reason in end_codes_reasons(self.decl) else None
         self.meta.update({"status": "ended", "ended_at": iso_z(), "outcome": outcome, "exit_code": int(exit_code),
-                          "end_reason": reason, "end_message": redact_progress(first)[:240] or None, "current_step": None})
-        self.log(f"[end] outcome={outcome} exit={exit_code} reason={reason}")
+                          "end_reason": reason, "end_message": redact_progress(first)[:240] or None, "end_codes": codes,
+                          "current_step": None})
+        self.log(f"[end] outcome={outcome} exit={exit_code} reason={reason}" + (f" codes={','.join(codes)}" if codes else ""))
         self.flush(force=True)
         self.close_log()
 
@@ -458,6 +506,7 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
         "steps_done": len(meta.get("steps") or []), "log_path": meta.get("log_path"), "stall_after_seconds": stall_after,
         "loop_alive": None, "launch": None, "outcome": meta.get("outcome"), "exit_code": meta.get("exit_code"),
         "end_reason": meta.get("end_reason"), "end_message": meta.get("end_message"), "ended_at": meta.get("ended_at"),
+        "end_codes": [str(c) for c in (meta.get("end_codes") or [])],  # AIPOS-F150: 旧记录无此键 = 空列表
     }
     last = launches[-1] if launches else None
     if last is not None:
@@ -562,6 +611,7 @@ def _loop_status(governance_root: Path, task_id: str | None, *, now: datetime | 
     rules = next_action_declaration(decl)
     root = loop_runs_root(Path(governance_root))
     history: list[Any] = []
+    code_history: list[Any] = []
     if task_id:
         files = _run_files(loop_runs_dir(governance_root, task_id))
         metas = [read_run(p, decl) for p in files]
@@ -569,6 +619,7 @@ def _loop_status(governance_root: Path, task_id: str | None, *, now: datetime | 
         picked = metas[-1:]
         total = len(metas)
         history = [m.get("end_reason") if m.get("status") == "ended" else None for m in metas[:-1]]
+        code_history = [[str(c) for c in (m.get("end_codes") or [])] if m.get("status") == "ended" else None for m in metas[:-1]]
     else:
         picked = []
         for d in sorted(p for p in root.iterdir() if p.is_dir()) if root.is_dir() else []:
@@ -580,7 +631,8 @@ def _loop_status(governance_root: Path, task_id: str | None, *, now: datetime | 
         view["record_path"] = meta["_path"]
         view.update(_run_lane(Path(governance_root), str(view.get("task_id") or meta.get("task_id") or "")))
         view["next_action"] = next_action(view, rules, governance_root=Path(governance_root),
-                                          earlier_end_reasons=history if task_id else None)
+                                          earlier_end_reasons=history if task_id else None,
+                                          earlier_end_codes=code_history if task_id else None)
         views.append(view)
     view = visible_cards(Path(governance_root), ((v, None) for v in views), lane=lane, include_frozen=include_frozen or bool(task_id))
     views = view["rows"]
@@ -596,9 +648,10 @@ def _loop_status(governance_root: Path, task_id: str | None, *, now: datetime | 
 # AIPOS-F136 件①: 顾问下一动作(唯一判定)+ 有界等待(经 run_fs_watch)
 # ---------------------------------------------------------------------------
 
-NEXT_ACTIONS = ("continue_wait", "owner_needed", "card_done_take_next", "investigate")
+NEXT_ACTIONS = ("continue_wait", "owner_needed", "card_done_take_next", "investigate", "advisor_fix")
 _NEXT_ACTION_KEYS = ("actions", "by_state", "by_end_reason", "owner_reasons", "consecutive_failures_owner_needed",
-                     "take_next_hint", "take_next_none_hint", "wait_hint", "investigate_hint")
+                     "take_next_hint", "take_next_none_hint", "wait_hint", "investigate_hint", "routine_rejections")
+_ROUTINE_KEYS = ("repeat_owner_needed", "placeholders", "resume_hint", "codes")
 
 
 def status_contract() -> dict[str, Any]:
@@ -626,19 +679,46 @@ def next_action_declaration(run_decl: dict[str, Any], contract: dict[str, Any] |
     gaps = sorted(states - set(decl["by_state"])) + sorted(reasons - set(decl["by_end_reason"]))
     bad = sorted({v for v in list(decl["by_state"].values()) + list(decl["by_end_reason"].values())} - set(NEXT_ACTIONS))
     owner_gaps = sorted(r for r, a in decl["by_end_reason"].items() if a == "owner_needed" and r not in decl["owner_reasons"])
-    if gaps or bad or owner_gaps or "consecutive_failures" not in decl["owner_reasons"]:
+    escalations = [k for k in ("consecutive_failures", "routine_fix_exhausted") if k not in decl["owner_reasons"]]
+    if gaps or bad or owner_gaps or escalations:
         raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action 判据表不全: 未覆盖 {gaps}; 非法动作 {bad}; "
-                              f"owner_needed 缺事由 {owner_gaps + ([] if 'consecutive_failures' in decl['owner_reasons'] else ['consecutive_failures'])}"
+                              f"owner_needed 缺事由 {owner_gaps + escalations}"
                               f"(须覆盖 lybra_loop.run_record.states / end_reasons)")
+    _check_routine_rejections(decl["routine_rejections"])
     return decl
 
 
+def _check_routine_rejections(routine: Any) -> None:
+    """AIPOS-F150 件②: 例行门拒声明形校验(fail-closed): 键齐; repeat_owner_needed 为 ≥1 整数; 每码 fix 为非空字符串的非空列表;
+    码形 = 门侧错误码形(大写 + 下划线)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    where = f"verbs.{STATUS_VERB}.next_action.routine_rejections"
+    if not isinstance(routine, dict) or any(k not in routine for k in _ROUTINE_KEYS):
+        raise SchemaLoadError(f"{where} 未声明齐 {list(_ROUTINE_KEYS)}")
+    n = routine["repeat_owner_needed"]
+    if not isinstance(n, int) or isinstance(n, bool) or n < 1:
+        raise SchemaLoadError(f"{where}.repeat_owner_needed 须为 ≥1 整数, 得到 {n!r}")
+    codes = routine["codes"]
+    if not isinstance(codes, dict):
+        raise SchemaLoadError(f"{where}.codes 须为对象(码 → {{why_routine, fix}})")
+    for code, spec in codes.items():
+        fix = spec.get("fix") if isinstance(spec, dict) else None
+        if not re.fullmatch(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+", str(code)) or not isinstance(fix, list) or not fix \
+                or any(not isinstance(s, str) or not s.strip() for s in fix):
+            raise SchemaLoadError(f"{where}.codes.{code}: 码须为门侧错误码形且 fix 为非空字符串的非空列表")
+
+
 def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root: Path,
-                earlier_end_reasons: list[Any] | None = None) -> dict[str, Any]:
+                earlier_end_reasons: list[Any] | None = None,
+                earlier_end_codes: list[Any] | None = None) -> dict[str, Any]:
     """一个运行视图(judge_run)→ 顾问下一动作 {action, reason, detail, hint}(唯一判定, 判据表 verbs.schema next_action)。
 
     earlier_end_reasons = 本卡更早各次运行的结束原因(旧→新; 未结束 = None), 用于连败判定: 本次与其前连续
-    consecutive_failures_owner_needed 次都以 investigate 类原因结束 = owner_needed(consecutive_failures)。"""
+    consecutive_failures_owner_needed 次都以 investigate 类原因结束 = owner_needed(consecutive_failures)。
+    AIPOS-F150 件②: owner_needed 类结束且 end_codes 非空并全部在 routine_rejections.codes 内 = advisor_fix(另带 codes / fix);
+    earlier_end_codes = 本卡更早各次运行的 end_codes(旧→新; 未结束 = None), 同一例行码连续 repeat_owner_needed 次 =
+    owner_needed(routine_fix_exhausted)。"""
     task_id = str(view.get("task_id") or "")
     fill = {"task_id": task_id, "governance_root": str(governance_root)}
     state = str(view.get("state") or "")
@@ -662,6 +742,9 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
         if action == "card_done_take_next":
             return {"action": action, "reason": reason, **_take_next(view, rules, governance_root, message)}
         if action == "owner_needed":
+            routine = _routine_action(view, rules, governance_root, reason, message, earlier_end_codes)
+            if routine is not None:
+                return routine
             return {"action": action, "reason": reason, "detail": f"{rules['owner_reasons'][reason]}" + (f" — {message}" if message else ""),
                     "hint": str(rules["investigate_hint"]).format(**fill)}
         return {"action": action, "reason": reason, "detail": message or reason, "hint": str(rules["investigate_hint"]).format(**fill)}
@@ -683,6 +766,94 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
     elif state == "loop_dead":
         detail = "loop 进程已不在而运行记录未写结束"
     return {"action": action, "reason": state, "detail": detail or state, "hint": str(rules["investigate_hint"]).format(**fill)}
+
+
+def _routine_action(view: dict[str, Any], rules: dict[str, Any], governance_root: Path, reason: str, message: str,
+                    earlier_end_codes: list[Any] | None) -> dict[str, Any] | None:
+    """AIPOS-F150 件②: owner_needed 类结束 → 例行门拒判定。end_codes 为空或含非例行码 = None(调用方照旧 owner_needed)。
+    全部例行: 同一例行码在本卡最近连续各次运行(含本次)中出现 ≥ repeat_owner_needed 次 = owner_needed(routine_fix_exhausted);
+    否则 advisor_fix, hint = 各码 fix 按序渲染 + resume_hint(声明 routine_rejections)。修法渲染所需事实(卡面 / 工作树)取不到 =
+    owner_needed 并写明缘由(给不出确定修法宁停不猜)。"""
+    routine = rules["routine_rejections"]
+    codes = [str(c) for c in (view.get("end_codes") or [])]
+    if not codes or any(c not in routine["codes"] for c in codes):
+        return None
+    task_id = str(view.get("task_id") or "")
+    fill = {"task_id": task_id, "governance_root": str(governance_root)}
+    limit = int(routine["repeat_owner_needed"])
+    streaks: dict[str, int] = {}
+    for code in codes:
+        streak = 1
+        for earlier in reversed(earlier_end_codes or []):
+            if earlier is None or code not in earlier:
+                break
+            streak += 1
+        streaks[code] = streak
+    worst = max(codes, key=lambda c: streaks[c])
+    tally = ", ".join(f"{c} 第 {streaks[c]}/{limit} 次" for c in codes)
+    if streaks[worst] >= limit:
+        return {"action": "owner_needed", "reason": "routine_fix_exhausted", "codes": codes,
+                "detail": f"{rules['owner_reasons']['routine_fix_exhausted']}(本卡 {worst} 连续 {streaks[worst]} 次; 本次 {reason}: {message})",
+                "hint": str(rules["investigate_hint"]).format(**fill)}
+    try:
+        values = _routine_fill(view, routine, governance_root)
+    except _RoutineFixUnrenderable as exc:
+        return {"action": "owner_needed", "reason": reason, "codes": codes,
+                "detail": f"{rules['owner_reasons'][reason]}(例行拒因 {', '.join(codes)} 的修法渲染不了: {exc})" + (f" — {message}" if message else ""),
+                "hint": str(rules["investigate_hint"]).format(**fill)}
+    fix: list[str] = []
+    for code in codes:
+        fix += [_render_routine(step, values, f"codes.{code}.fix") for step in routine["codes"][code]["fix"]]
+    resume = _render_routine(routine["resume_hint"], values, "resume_hint")
+    hint = "\n".join([*(f"{i}) {step}" for i, step in enumerate(fix, 1)), resume])  # 末行 = 续跑命令
+    return {"action": "advisor_fix", "reason": reason, "codes": codes, "fix": fix, "resume": resume,
+            "detail": f"例行门拒 {tally}: 修法固定, 顾问按下一条自处理, 不问 Owner" + (f" — {message}" if message else ""),
+            "hint": hint}
+
+
+class _RoutineFixUnrenderable(ValueError):
+    """例行修法所需事实(卡面 / 卡工作树落点)取不到。"""
+
+
+def _render_routine(template: str, values: dict[str, str], where: str) -> str:
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        return str(template).format_map(values)
+    except (KeyError, IndexError, ValueError) as exc:
+        raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.routine_rejections.{where} 占位不在 placeholders 声明内: {exc}") from exc
+
+
+def _routine_fill(view: dict[str, Any], routine: dict[str, Any], governance_root: Path) -> dict[str, str]:
+    """修法占位实值(键 = routine_rejections.placeholders): 全经既有唯一实现——卡面 task_loader.find_task_card;
+    分支 next_resolver.card_branch_name; 期望基座 next_resolver.card_expected_base; 工作树 next_resolver.card_worktree_location;
+    合入命令 board_adapter.base_sync_command。"""
+    from tools.aipos_cli.board_adapter import base_sync_command
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.next_resolver import card_branch_name, card_expected_base, card_worktree_location
+    from tools.aipos_cli.task_loader import AmbiguousTaskCard, find_task_card
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved
+
+    task_id = str(view.get("task_id") or "")
+    try:
+        path, _state = find_task_card(Path(governance_root), task_id)
+        if path is None:
+            raise _RoutineFixUnrenderable(f"队列中找不到卡 {task_id}")
+        fm, _body = require_frontmatter(path)
+        _repo, worktree = card_worktree_location(Path(governance_root), task_id, fm)
+    except (AmbiguousTaskCard, FrontmatterReadError, CardRepoUnresolved) as exc:
+        raise _RoutineFixUnrenderable(f"{type(exc).__name__}: {exc}") from exc
+    branch, base = card_branch_name(task_id), card_expected_base(fm)
+    driver, envelope = str(view.get("driver") or "").strip(), str(view.get("envelope") or "").strip()
+    values = {"task_id": task_id, "governance_root": str(governance_root), "branch": branch, "base": base,
+              "worktree": str(worktree), "base_sync_command": base_sync_command(branch, base),
+              "actor_arg": f" --actor {driver}" if driver else "", "envelope_arg": f" --envelope {envelope}" if envelope else ""}
+    undeclared = sorted(set(values) - set(routine["placeholders"]))
+    if undeclared:
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.routine_rejections.placeholders 未声明 {undeclared}")
+    return values
 
 
 def _take_next(view: dict[str, Any], rules: dict[str, Any], governance_root: Path, message: str) -> dict[str, Any]:
@@ -823,10 +994,14 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
                    f"(verbs.schema lybra_loop.run_record.{'stall_after_tool_seconds, 工具在跑' if tool else 'stall_after_seconds'})")
         out.append(f"  记录 {v['record_path']}")
         out.append(f"  日志 {v['log_path']}")
+        if v.get("end_codes"):
+            out.append(f"  拒因码: {', '.join(v['end_codes'])}")  # AIPOS-F150 件①: 运行记录结构化拒因码
         na = v.get("next_action")
         if na:
             out.append(f"  顾问下一动作: {na['action']}({na['reason']}) — {na['detail']}")
-            out.append(f"    下一条: {na['hint']}")
+            first, *rest = str(na["hint"]).splitlines() or [""]
+            out.append(f"    下一条: {first}")
+            out.extend(f"      {line}" for line in rest)  # AIPOS-F150: advisor_fix 修法多步逐行
     if report.get("task_id") and report.get("runs_on_record", 0) > 1:
         out.append(f"(该卡共 {report['runs_on_record']} 次运行记录, 上为最近一次)")
     w = report.get("wait")
