@@ -175,6 +175,62 @@ def derive_effective_owner_policy_ref(
     return str(policy["policy_id"]), "matched"
 
 
+#: AIPOS-F151 件③: 拒因码(声明 verbs.schema two_phase_protocol.roles_writers.reject_codes)
+ENROLL_ENVELOPE_MISSING = "ENROLL_ENVELOPE_MISSING"
+
+
+def envelope_mint_exit(governance_root: Path | str | None, covers: str) -> str:
+    """覆盖信封缺失时的出口命令(既有 `lybra envelope mint`, 先 --dry-run 预演后 --confirm; Owner 亲自敲)。占位由 Owner 填。"""
+    import shlex
+
+    where = shlex.quote(str(governance_root)) if governance_root else "<治理根>"
+    return (f"lybra envelope mint --workspace-root {where} --connection-json <Owner 凭据 connection.json> "
+            f"--policy-id <信封ID> --agent-or-role {shlex.quote(str(covers))} --max-tasks <N> --task-mode <任务类型> "
+            "--expires-at <ISO 到期时间> --decision-summary <说明> --actor owner --dry-run")
+
+
+def enroll_envelope_requirement(
+    governance_root: Path | str | None,
+    *,
+    role: str,
+    role_class: str,
+    agent_instance: str | None = None,
+    executor_mode: str | None = None,
+    stage: str = "precheck",
+) -> dict[str, Any]:
+    """AIPOS-F151 件③(gap #107): 接入所需覆盖信封的唯一判定——enroll 换码前预检(码内签发声明)、换码后复核(门下发 token,
+    先于写 connection.json)、enroll-deliver 签码前预检同用此函数(禁第二套判定)。
+
+    判据: 推导 = derive_effective_owner_policy_ref(唯一挑选 select_envelope); 要求覆盖信封 = 角色类属 roles.schema
+    class_groups.workstation 且执行者模式不是凭据落治理根的模式(roles.schema executor_modes credential_landing=governance_root,
+    AIPOS-F143 规则: 子 agent 执行者不推导信封); 治理席位类推导不出只告警。
+    返回 {required, policy_id, reason, refusal}: refusal 非空 = 拒(调用方原样抛出, 带出口); stage 只决定拒因里对码 / 凭据状态的说明
+    (precheck = 未换码、码仍可用; post_exchange = 码已兑换未落地, grace 窗口内可重试; issue = 未签码)。"""
+    from tools.aipos_cli.custom_roles import role_classes_in_group
+    from tools.aipos_cli.enrollment import executor_mode_declaration, governance_root_executor_modes
+
+    mode = str(executor_mode or "").strip() or str(executor_mode_declaration()["default"])
+    if mode in governance_root_executor_modes():
+        return {"required": False, "policy_id": None, "refusal": None,
+                "reason": f"executor_mode={mode}: 凭据落治理根, 不推导信封(认领由驱动方信封放行)"}
+    policy_id, reason = derive_effective_owner_policy_ref(governance_root, role=role, agent_instance=agent_instance)
+    required = str(role_class) in role_classes_in_group("workstation")
+    refusal = None
+    if required and not policy_id:
+        state = {
+            "precheck": "未换码(注册码仍可用)、未改凭据",
+            "post_exchange": "码已兑换但未落地(grace 窗口内同码可重试)、未改凭据",
+            "issue": "未签码、未改凭据",
+        }.get(stage, "未改凭据")
+        refusal = (
+            f"{ENROLL_ENVELOPE_MISSING}: enroll 推导 owner_policy_ref 失败——接入 {role}(类={role_class}, 实例 "
+            f"{agent_instance or '-'})须有覆盖它的生效 PreAuthorized 信封(owner_autonomy_policy): {reason}。已拒: {state}。\n"
+            "下一步: 请 Owner 先铸信封(预演后 --confirm), 再重跑本接入命令:\n"
+            f"  {envelope_mint_exit(governance_root, agent_instance or role)}"
+        )
+    return {"required": required, "policy_id": policy_id, "reason": reason, "refusal": refusal}
+
+
 # ---------------------------------------------------------------------------
 # ③ lybra_bin 推导(指向实际部署位)
 # ---------------------------------------------------------------------------

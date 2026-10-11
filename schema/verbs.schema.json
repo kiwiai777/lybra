@@ -74,6 +74,33 @@
           "META_NOTHING_TO_SET": "至少给一个 --phase / --note"
         }
       }
+    },
+    "roles_writers": {
+      "description": "AIPOS-F151(gap #106 / #121 / #107 / #92): `lybra roles` 族写命令(签码 enroll-code / 签码接入一体 enroll-deliver / 自定义角色 register·remove)同一两阶段语义的唯一声明; 旗标注册与 project_json_writers 同一包装 aipos_cli._project_json_two_phase_flags(family=roles_writers, 禁各写一份)。缺省 = 预演: 打印将签的角色 / 实例 / 治理根 / 有效期, 或将建 / 删的 token 引用(token_ref / 指纹, 永不打印 token 明文)与角色类, 零写入、不出码; --confirm 才执行。预演本体 = 各命令既有唯一实现: enroll-code 预演 = 门动词 lybra_enroll_code_dry_run, 执行 = lybra_enroll_code_dry_run → lybra_enroll_code_confirm(发码唯一实现 enrollment.issue_self_contained_code 在门进程内); enroll-deliver = enroll_deliver.enroll_deliver(本机预检 + 门动词 lybra_enroll_code_dry_run; --confirm 才经 lybra_enroll_code_confirm 签码, 码只在本进程内: 同机直调 enroll_client.enroll, 跨机经 ssh stdin 交远端 enroll_client --code-stdin, 不打印、不落盘、不进 argv); register = custom_roles.register_custom_role(dry_run, 本机算计划, 不取凭据不调门) / --confirm 经门动词 lybra_roles_register; remove <角色> = custom_roles.remove_custom_role(dry_run); remove --instance = token_rotation.remove_instance_report(dry_run)。日后新增 roles 族写命令登记于 commands 即得同一两阶段。",
+      "commands": [
+        "enroll-code",
+        "enroll-deliver",
+        "register",
+        "remove"
+      ],
+      "default_phase": "dry_run",
+      "flags": {
+        "dry_run": "--dry-run",
+        "confirm": "--confirm"
+      },
+      "flag_help": {
+        "dry_run": "Preview what would be issued / written (role, instance, governance root, expiry, token refs) without issuing a code or writing (default)",
+        "confirm": "Execute: issue the code / enroll / write the registry"
+      },
+      "outcome_labels": {
+        "preview": "预览(未执行; 加 --confirm 执行)",
+        "done": "已执行"
+      },
+      "output_scope": "预演与执行输出只含角色 / 实例 / 治理根 / 有效期 / token_ref / 指纹 / 角色类 / 落点路径; 禁打印 token 明文与 connection.json 内容。enroll-code --confirm 按既有契约展示一次自包含码(交给接收方); enroll-deliver 全程不打印注册码(只出 code_id 与指纹)。",
+      "reject_codes": {
+        "ENROLL_ENVELOPE_MISSING": "工位类角色(roles.schema class_groups.workstation)接入须有覆盖该实例 / 角色的生效 PreAuthorized 信封(workstation_wiring.derive_effective_owner_policy_ref 推导 owner_policy_ref)。判定唯一实现 workstation_wiring.enroll_envelope_requirement: enroll 换码前按码内签发声明预检(拒 = 未换码、码仍可用、凭据未改), 换码后再按门下发的 token 复核且先于写 connection.json(拒 = 凭据未改, 码在 grace 窗口内可重试); enroll-deliver 签码前预检(拒 = 不签码)。治理席位类(class_groups.governance_seat)与凭据落治理根的执行者模式(roles.schema executor_modes credential_landing=governance_root, 如 subagent)不要求。出口: Owner 先铸信封 `lybra envelope mint --workspace-root <治理根> --policy-id <信封ID> --agent-or-role <实例> … --dry-run` 预演后 --confirm, 再重跑接入命令",
+        "ENROLL_CODE_DECLARATION_MISMATCH": "码内签发声明(role / instance)与门兑换下发的 token 不一致(码被改写或签发方异常); 拒且先于写 connection.json。出口: 请签发方重签新码"
+      }
     }
   },
   "warn_behavior": {
@@ -1083,7 +1110,7 @@
       }
     },
     "lybra_enroll_code_dry_run": {
-      "description": "AIPOS-F23: advisor-driven enrollment code issuance (preview). Issues a SELF-CONTAINED code embedding gate_url/governance_root/transport credential (base64). Owner-gated via owner_authorization_ref. F24A: CLI `lybra roles enroll-code` is a THIN SHELL over this verb (in-server issuance is the single path; unknown parameters are rejected fail-closed).",
+      "description": "AIPOS-F23: advisor-driven enrollment code issuance (preview). Issues a SELF-CONTAINED code embedding gate_url/governance_root/transport credential (base64). Owner-gated via owner_authorization_ref. F24A: CLI `lybra roles enroll-code` is a THIN SHELL over this verb (in-server issuance is the single path; unknown parameters are rejected fail-closed). AIPOS-F151: the CLI is two-phase (two_phase_protocol.roles_writers) — by default `lybra roles enroll-code` calls only this verb (preview: role / instance / governance root / ttl, no code), `--confirm` continues with lybra_enroll_code_confirm; `lybra roles enroll-deliver` issues through the same pair (enroll_deliver.gate_enroll_code) and redeems the code inside the same process.",
       "phase": "dry_run",
       "required_scope": null,
       "visibility": "hidden",
@@ -1779,7 +1806,7 @@
       }
     },
     "lybra_roles_register": {
-      "description": "AIPOS-352F1/F78B 件④a: register a custom role (name → builtin class) in the gate registry. Owner-gated via owner_authorization_ref. 单一实现(CLI `lybra roles register` 为其薄壳; 未挂入 TOOL_HANDLERS 的 dry_run/confirm 对已删)。落盘根按 workspace_root(token projects scope 校验)。",
+      "description": "AIPOS-352F1/F78B 件④a: register a custom role (name → builtin class) in the gate registry. Owner-gated via owner_authorization_ref. 单一实现(CLI `lybra roles register` 为其薄壳; 未挂入 TOOL_HANDLERS 的 dry_run/confirm 对已删)。AIPOS-F151: CLI 两阶段(two_phase_protocol.roles_writers)——缺省预演在本机经 custom_roles.custom_role_registration_plan(本动词写入同一计划)显示将建 / 改的 token 引用与角色类, 不取凭据不调门; --confirm 才调本动词。落盘根按 workspace_root(token projects scope 校验)。",
       "phase": "single",
       "required_scope": null,
       "visibility": "always",

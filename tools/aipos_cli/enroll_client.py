@@ -645,6 +645,11 @@ def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = Non
 ROLE_SLOTS_KEY = "instances"  # 分槽键(config.schema configuration_sources.role.schema.instances)
 
 
+class EnrollLandedError(RuntimeError):
+    """AIPOS-F151: 码已兑换并 land 之后的失败(--verify 不通且凭据已回滚 / 非 pi harness 件交付失败)。码已消费: 调用方(enroll-deliver)
+    不再吊销该码(吊销已消费的码无意义), 按消息出口处理。"""
+
+
 class RoleRecordError(ValueError):
     """AIPOS-F140 件①: .lybra/role 不可读 / 非 JSON 对象 / 槽形坏(fail-closed, 不当「未声明」)。"""
 
@@ -737,6 +742,127 @@ def write_policy_file(lybra_dir: Path, policy: str | None) -> None:
     policy_file.chmod(0o644)
 
 
+def _code_declaration(sc: dict[str, Any] | None, governance_root: str | None) -> dict[str, Any] | None:
+    """AIPOS-F151 件③: 自包含码内的签发声明(角色 / 实例 / 角色类)。无声明(旧码 / 裸码)= None。
+    角色类: 码内值须为内建类(roles.schema), 否则经唯一实现 resolve_role_to_class 按码内治理根注册表解析; 仍解析不到 = 空串
+    (预检跳过, 换码后以门下发 token 复核)。"""
+    if sc is None or not str(sc.get("role") or "").strip():
+        return None
+    from tools.aipos_cli.custom_roles import resolve_role_to_class, validate_builtin_class
+
+    role = str(sc["role"]).strip()
+    role_class = str(sc.get("role_class") or "").strip()
+    if not (role_class and validate_builtin_class(role_class)[0]):
+        role_class = str(resolve_role_to_class(role, governance_root or None) or "")
+    return {"role": role, "instance": str(sc.get("instance") or "").strip() or None, "role_class": role_class}
+
+
+def _governance_target_refusal(workspace_root: Path, role: str, role_class: str) -> str | None:
+    """AIPOS-F22D / F23⑧ 第九坑: 目标是治理工作区时, 非治理席位类(工位类等)的拒因; 允许 = None。分组读 roles.schema class_groups。"""
+    from tools.aipos_cli.custom_roles import role_classes_in_group
+
+    if role_class in role_classes_in_group("governance_seat"):
+        return None
+    return (
+        f"enroll 目标是治理工作区({workspace_root}), 角色 {role}(类={role_class}) 拒绝落盘 —— "
+        f"工位角色类(executor/auditor)只落工位目录 .lybra/。\n"
+        "下一步: 在工位目录(pi harness 目录)运行, 或用 --workspace 指向工位目录。\n"
+        "可抄示例: lybra roles enroll-deliver --role <角色> --instance <实例> --governance-root <治理根> "
+        "--workspace ~/workstations/my-agent --owner-authorization-ref <信封ID>(在治理根所在机运行, 码不出进程)\n"
+        "(顾问角色类 planner/advisor 允许落治理工作区)"
+    )
+
+
+def _seat_mode_refusal(mode_decl: dict[str, Any], mode: str, *, role: str, role_class: str, instance: str | None,
+                       governance_target: bool | None, workspace_root: Path | str, governance_root: str | None) -> str | None:
+    """AIPOS-F143 件④ 子 agent(凭据落治理根)模式放行判据(声明 roles.schema executor_modes.values.<模式>): 角色类 ∈ allowed_role_classes、
+    带合模板的实例、目标 = 治理根。返回拒因或 None。governance_target=None = 目标不在本机(enroll-deliver --ssh), 不判目标。
+    AIPOS-F151: 换码前(码内声明 / enroll-deliver 参数)与换码后(门下发 token)同用此判定。"""
+    from tools.aipos_cli.naming_profile import parse_instance_name
+
+    spec, codes = mode_decl["values"][mode], mode_decl["reject_codes"]
+    if role_class not in spec["allowed_role_classes"]:
+        return (f"EXECUTOR_MODE_ROLE_CLASS: 角色 {role}(类={role_class})不允许 --executor-mode {mode}"
+                f"(允许 {spec['allowed_role_classes']})。{codes['EXECUTOR_MODE_ROLE_CLASS']}")
+    if spec.get("requires_instance") and parse_instance_name(str(instance or "")) is None:
+        return (f"EXECUTOR_MODE_INSTANCE_REQUIRED: 码内实例 {instance!r} 缺或不合实例名模板。"
+                f"{codes['EXECUTOR_MODE_INSTANCE_REQUIRED']}")
+    if governance_target is False:
+        return (f"EXECUTOR_MODE_TARGET: --workspace {workspace_root} 不是治理根(码内治理根 {governance_root or '(码未携带)'})。"
+                f"{codes['EXECUTOR_MODE_TARGET']}")
+    return None
+
+
+def enroll_preflight(
+    *,
+    workspace_root: Path,
+    governance_root: str | None,
+    declared: dict[str, Any] | None,
+    harness_kind: str | None = None,
+    harness_dir: Path | str | None = None,
+    harness_host: str | None = None,
+    executor_mode: str | None = None,
+    check_target: bool = True,
+    stage: str = "precheck",
+) -> dict[str, Any]:
+    """AIPOS-F151 件③: 接入换码前预检的唯一实现(enroll 换码前、enroll-deliver 签码前同用; 均先于任何写盘 / 兑换 / 签码)。
+
+    ① 执行者模式取值(roles.schema executor_modes, EXECUTOR_MODE_UNKNOWN)与 harness 参数(凭据落治理根的模式: 顾问会话 kind 且无
+       harness_dir, EXECUTOR_MODE_HARNESS; 其他: distribution_sync.harness_role_record 唯一判定——check_target=False(目标在他机)时不判,
+       由远端 enroll 自判);
+    ② declared = {role, instance, role_class}(码内签发声明或 enroll-deliver 参数; role_class 空 = 声明类预检跳过):
+       子 agent 模式判据(_seat_mode_refusal)/ 工位类不落治理根(_governance_target_refusal)/ 覆盖信封
+       (workstation_wiring.enroll_envelope_requirement, 拒因码 ENROLL_ENVELOPE_MISSING)。
+    任一不满足 = RuntimeError(带出口)。返回 {mode_decl, mode, seat_mode, harness_record, governance_target, envelope}。"""
+    from tools.aipos_cli.distribution_sync import harness_role_record
+    from tools.aipos_cli.enrollment import executor_mode_declaration, governance_root_executor_modes
+
+    mode_decl = executor_mode_declaration()
+    mode = str(executor_mode or "").strip() or str(mode_decl["default"])
+    if mode not in mode_decl["values"]:
+        raise RuntimeError(f"EXECUTOR_MODE_UNKNOWN: --executor-mode {mode!r} 不在 {list(mode_decl['values'])}"
+                           f"(roles.schema executor_modes)。{mode_decl['reject_codes']['EXECUTOR_MODE_UNKNOWN']}")
+    seat_mode = mode in governance_root_executor_modes()  # AIPOS-F143 件④: 凭据落治理根的执行者模式(子 agent)
+    harness_record: dict[str, Any] | None = None
+    if seat_mode:
+        # AIPOS-F92 件② / AIPOS-F129 件②: harness 参数校验先于任何写盘/兑换(fail-closed); 取舍读 distribution.schema harness_semantics.kinds
+        from tools.aipos_cli.distribution_sync import advisor_harness_kinds
+
+        kinds = advisor_harness_kinds()
+        if str(harness_kind or "").strip() not in kinds or str(harness_dir or "").strip():
+            raise RuntimeError(f"EXECUTOR_MODE_HARNESS: --executor-mode {mode} 须给 --harness <{'|'.join(kinds)}>(顾问会话 kind)且不给 "
+                               f"--harness-dir(得到 harness={harness_kind!r}, harness_dir={harness_dir!r})。"
+                               f"{mode_decl['reject_codes']['EXECUTOR_MODE_HARNESS']}")
+        if harness_host and any(ch.isspace() for ch in str(harness_host)):
+            raise RuntimeError(f"--harness-host {harness_host!r} 含空白(主机名不得含空白)")
+        # 子 agent 无工位 harness 目录: 不写 .lybra/role harness、不交付分发件
+    elif check_target:
+        try:
+            harness_record = harness_role_record(harness_kind, harness_dir, harness_host)
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+    governance_target = is_governance_workspace(workspace_root, governance_root) if check_target else None
+    envelope: dict[str, Any] | None = None
+    if declared is not None and declared.get("role_class"):
+        role, role_class, instance = declared["role"], declared["role_class"], declared.get("instance")
+        if seat_mode:
+            refusal = _seat_mode_refusal(mode_decl, mode, role=role, role_class=role_class, instance=instance,
+                                         governance_target=governance_target, workspace_root=workspace_root,
+                                         governance_root=governance_root)
+        else:
+            refusal = _governance_target_refusal(workspace_root, role, role_class) if governance_target else None
+        if refusal:
+            raise RuntimeError(refusal)
+        from tools.aipos_cli.workstation_wiring import enroll_envelope_requirement
+
+        envelope = enroll_envelope_requirement(governance_root or None, role=role, role_class=role_class, agent_instance=instance,
+                                               executor_mode=mode, stage=stage)
+        if envelope["refusal"]:
+            raise RuntimeError(envelope["refusal"])
+    return {"mode_decl": mode_decl, "mode": mode, "seat_mode": seat_mode, "harness_record": harness_record,
+            "governance_target": bool(governance_target), "envelope": envelope}
+
+
 def enroll(
     *,
     code: str | None = None,
@@ -805,36 +931,8 @@ def enroll(
         码留在 grace 窗口内可免费重试(返回同一 token)。
     """
     from tools.aipos_cli.enrollment import decode_self_contained_code
-    from tools.aipos_cli.distribution_sync import harness_role_record
 
     workspace_root = workspace_root.resolve()
-
-    # AIPOS-F92 件② / AIPOS-F129 件②: harness 参数校验(先于任何写盘/兑换, fail-closed); 取舍读 distribution.schema
-    # harness_semantics.kinds(唯一判定 harness_role_record: 未知 kind 拒并列出合法值; codex 记 {kind, dir, host})
-    from tools.aipos_cli.enrollment import executor_mode_declaration, governance_root_executor_modes
-
-    mode_decl = executor_mode_declaration()
-    mode = str(executor_mode or "").strip() or str(mode_decl["default"])
-    if mode not in mode_decl["values"]:
-        raise RuntimeError(f"EXECUTOR_MODE_UNKNOWN: --executor-mode {mode!r} 不在 {list(mode_decl['values'])}"
-                           f"(roles.schema executor_modes)。{mode_decl['reject_codes']['EXECUTOR_MODE_UNKNOWN']}")
-    seat_mode = mode in governance_root_executor_modes()  # AIPOS-F143 件④: 凭据落治理根的执行者模式(子 agent)
-    if seat_mode:
-        from tools.aipos_cli.distribution_sync import advisor_harness_kinds
-
-        kinds = advisor_harness_kinds()
-        if str(harness_kind or "").strip() not in kinds or str(harness_dir or "").strip():
-            raise RuntimeError(f"EXECUTOR_MODE_HARNESS: --executor-mode {mode} 须给 --harness <{'|'.join(kinds)}>(顾问会话 kind)且不给 "
-                               f"--harness-dir(得到 harness={harness_kind!r}, harness_dir={harness_dir!r})。"
-                               f"{mode_decl['reject_codes']['EXECUTOR_MODE_HARNESS']}")
-        if harness_host and any(ch.isspace() for ch in str(harness_host)):
-            raise RuntimeError(f"--harness-host {harness_host!r} 含空白(主机名不得含空白)")
-        harness_record = None  # 子 agent 无工位 harness 目录: 不写 .lybra/role harness、不交付分发件
-    else:
-        try:
-            harness_record = harness_role_record(harness_kind, harness_dir, harness_host)
-        except ValueError as exc:
-            raise RuntimeError(str(exc)) from exc
 
     # F23: 自包含码解析(内嵌 gate 地址优先; 显式 gate_url 参数可覆盖)
     sc = decode_self_contained_code(code) if code is not None else None
@@ -845,14 +943,21 @@ def enroll(
         if not (gate_url and gate_url.strip()):
             effective_gate_url = sc["gate_url"]
 
+    # AIPOS-F151 件③(gap #107): 换码前预检唯一实现 enroll_preflight(enroll-deliver 签码前同用)——执行者模式 / harness 参数校验,
+    # 加上码内签发声明(角色 / 实例 / 角色类; 非秘密, enrollment.SELF_CONTAINED_DECLARED_KEYS)足以判定的「工位类须有覆盖信封」
+    # 「工位类不落治理根」「子 agent 模式判据」: 不满足即拒, 不调兑换(码不消耗)、不建目录、不改凭据。
+    # 旧码无声明 = 声明类预检跳过, 换码后按门下发 token 复核(先于写 connection.json)兜住。
+    declared = _code_declaration(sc, governance_root)
+    pre = enroll_preflight(workspace_root=workspace_root, governance_root=governance_root, declared=declared,
+                           harness_kind=harness_kind, harness_dir=harness_dir, harness_host=harness_host,
+                           executor_mode=executor_mode, check_target=code is not None)
+    mode_decl, mode, seat_mode, harness_record = pre["mode_decl"], pre["mode"], pre["seat_mode"], pre["harness_record"]
+    _gov_workspace = pre["governance_target"]
+
     # FIX-1: 确保目标目录存在(对空目录新机零手工上线)
     # AIPOS-F54 同族并入③: 目录不存在时自动创建并出声(chris 实撞 cd: No such file or directory)
     created_workspace_dir = not workspace_root.exists()
     workspace_root.mkdir(parents=True, exist_ok=True)
-
-    # AIPOS-F22D: 治理工作区守卫延迟到 exchange 之后(需先知道 role 才能按角色类判定)
-    # 工位角色类(executor/auditor 及其自定义角色)维持拒绝; 顾问角色类(planner/advisor)允许
-    _gov_workspace = is_governance_workspace(workspace_root, governance_root) if code is not None else False
 
     # Step 2: 确保 .lybra/ 目录存在
     lybra_dir = ensure_lybra_dir(workspace_root)
@@ -888,46 +993,39 @@ def enroll(
         
         if not role:
             raise RuntimeError("token_entry missing 'role' field")
+        # AIPOS-F151 件③: 码内签发声明只供预检, 授权以门下发 token 为准——两者不一致 = 拒(先于任何落盘)
+        if declared is not None and (role != declared["role"] or (declared["instance"] and agent_instance != declared["instance"])):
+            raise RuntimeError(
+                f"ENROLL_CODE_DECLARATION_MISMATCH: 码内声明 role={declared['role']} instance={declared['instance'] or '-'} 与门兑换下发的 "
+                f"role={role} instance={agent_instance or '-'} 不一致; 已拒, 未改凭据。出口: 请签发方重签新码"
+            )
         
         # AIPOS-F22D: 治理工作区守卫——按角色类判定(F23⑧ 第九坑防护升级)
         # 工位角色类(executor/auditor)→拒绝; 顾问角色类(planner/advisor)→允许
         # AIPOS-F102 件②: 角色类唯一解析 custom_roles.resolve_role_to_class(解析不到 = 拒, 原「回落角色名自身」退役); 分组读 roles.schema class_groups
         if seat_mode:
             # AIPOS-F143 件④: 子 agent 模式放行判据(声明 roles.schema executor_modes.values.<模式>): 角色类 ∈ allowed_role_classes、
-            # 码带实例、目标 = 码内治理根; 任一不满足 = 拒(先于任何落盘)
+            # 码带实例、目标 = 码内治理根; 任一不满足 = 拒(先于任何落盘)。判定唯一实现 _seat_mode_refusal(换码前预检同用)
             from tools.aipos_cli.custom_roles import UnknownRoleClass, resolve_role_to_class
 
-            spec, codes = mode_decl["values"][mode], mode_decl["reject_codes"]
             try:
                 _role_class = resolve_role_to_class(role, str(workspace_root), required=True)
             except UnknownRoleClass as exc:
                 raise RuntimeError(f"enroll --executor-mode {mode}: {exc}") from exc
-            if _role_class not in spec["allowed_role_classes"]:
-                raise RuntimeError(f"EXECUTOR_MODE_ROLE_CLASS: 角色 {role}(类={_role_class})不允许 --executor-mode {mode}"
-                                   f"(允许 {spec['allowed_role_classes']})。{codes['EXECUTOR_MODE_ROLE_CLASS']}")
-            from tools.aipos_cli.naming_profile import parse_instance_name
-
-            if spec.get("requires_instance") and parse_instance_name(str(agent_instance or "")) is None:
-                raise RuntimeError(f"EXECUTOR_MODE_INSTANCE_REQUIRED: 码内实例 {agent_instance!r} 缺或不合实例名模板。"
-                                   f"{codes['EXECUTOR_MODE_INSTANCE_REQUIRED']}")
-            if not _gov_workspace:
-                raise RuntimeError(f"EXECUTOR_MODE_TARGET: --workspace {workspace_root} 不是治理根(码内治理根 {governance_root or '(码未携带)'})。"
-                                   f"{codes['EXECUTOR_MODE_TARGET']}")
+            refusal = _seat_mode_refusal(mode_decl, mode, role=role, role_class=_role_class, instance=agent_instance,
+                                         governance_target=_gov_workspace, workspace_root=workspace_root, governance_root=governance_root)
+            if refusal:
+                raise RuntimeError(refusal)
         elif _gov_workspace:
-            from tools.aipos_cli.custom_roles import UnknownRoleClass, resolve_role_to_class, role_classes_in_group
+            from tools.aipos_cli.custom_roles import UnknownRoleClass, resolve_role_to_class
 
             try:
                 _role_class = resolve_role_to_class(role, str(workspace_root), required=True)
             except UnknownRoleClass as exc:
                 raise RuntimeError(f"enroll 目标是治理工作区({workspace_root}), {exc}") from exc
-            if _role_class not in role_classes_in_group("governance_seat"):
-                raise RuntimeError(
-                    f"enroll 目标是治理工作区({workspace_root}), 角色 {role}(类={_role_class}) 拒绝落盘 —— "
-                    f"工位角色类(executor/auditor)只落工位目录 .lybra/。\n"
-                    "下一步: 在工位目录(pi harness 目录)运行, 或用 --workspace 指向工位目录。\n"
-                    "可抄示例: lybra roles enroll --code <码> --workspace ~/workstations/my-agent\n"
-                    "(顾问角色类 planner/advisor 允许落治理工作区)"
-                )
+            refusal = _governance_target_refusal(workspace_root, role, _role_class)
+            if refusal:
+                raise RuntimeError(refusal)
     
     # Step 3: 加载或创建 connection.json (AIPOS-C2 大项B: 铸全 workspace_root)
     # AIPOS-F54-fix1: workspace_root 单源 = governance_root(码内治理根);
@@ -964,6 +1062,20 @@ def enroll(
             f"enroll 铸全失败: connection.json 缺必填键 {', '.join(missing)} "
             f"(声明见 config.schema#identity_resolution)。不落半成品。"
         )
+
+    # AIPOS-F151 件③(gap #107): 覆盖信封复核先于写 connection.json(原「先写凭据后推导」= 推导失败留半成品: 凭据已改、role 未更新、
+    # 无 land)。同一判定 enroll_envelope_requirement(换码前预检 / enroll-deliver 同用); 拒 = 凭据未改, 码未 land(grace 窗口内可重试)
+    envelope: dict[str, Any] | None = None
+    if code is not None and role and not seat_mode:
+        from tools.aipos_cli.workstation_wiring import enroll_envelope_requirement
+
+        envelope = enroll_envelope_requirement(
+            str(connection_data.get("governance_root") or "").strip() or None, role=role,
+            role_class=resolve_role_class(role, token_entry, project_root=workspace_root), agent_instance=agent_instance,
+            executor_mode=mode, stage="post_exchange",
+        )
+        if envelope["refusal"]:
+            raise RuntimeError(envelope["refusal"])
     
     # Step 5: 写入 connection.json
     write_connection_json(lybra_dir, connection_data)
@@ -976,28 +1088,17 @@ def enroll(
         # AIPOS-F143 件④: 子 agent 执行者只落凭据条目(治理根连接文件); 不写 .lybra/role(治理根的 role 槽属治理席位), 不推导信封
         # (认领由驱动方信封放行, 执行体零门)
         policy_derivation = {"policy_id": None, "reason": f"executor_mode={mode}: 凭据落治理根, 无工位 role / owner_policy_ref"}
-    elif code is not None and role:
-        # AIPOS-F54 ②: owner_policy_ref 按角色类从门侧生效信封推导(禁硬编码 policy id)
-        from tools.aipos_cli.workstation_wiring import derive_effective_owner_policy_ref
-        effective_gov_root = str(connection_data.get("governance_root") or "").strip() or None
-        derived_policy, policy_reason = derive_effective_owner_policy_ref(
-            effective_gov_root, role=role, agent_instance=agent_instance,
-        )
-        policy_derivation = {"policy_id": derived_policy, "reason": policy_reason}
+    elif code is not None and role and envelope is not None:
+        # AIPOS-F54 ②: owner_policy_ref 按角色类从门侧生效信封推导(禁硬编码 policy id); AIPOS-F151 件③: 推导已在写 connection.json
+        # 之前完成(enroll_envelope_requirement, 工位类推导不出已拒), 此处只落 role
+        derived_policy = envelope["policy_id"]
+        policy_derivation = {"policy_id": derived_policy, "reason": envelope["reason"]}
         role_class = resolve_role_class(role, token_entry, project_root=workspace_root)
         # AIPOS-F134 件②: 治理席位类(顾问/规划方)按实例分槽(同一治理根多顾问实例并存); 分组读 roles.schema class_groups
         seat_slots = role_class in role_classes_in_group("governance_seat")
         if derived_policy:
             write_role_file(lybra_dir, role, agent_instance, derived_policy, harness=harness_record, slot_by_instance=seat_slots)
             files_written.append("role(含 owner_policy_ref)")
-        elif role_class in role_classes_in_group("workstation"):  # AIPOS-F102 件②: 工位类读 roles.schema class_groups
-            # 卡面②: 推导不出 → 报错带路, 禁静默留空导致循环起不来(验收⑩)
-            raise RuntimeError(
-                f"enroll 推导 owner_policy_ref 失败: {policy_reason}。\n"
-                "下一步: 请先为该角色铸信封(owner_autonomy_policy, PreAuthorized), 命令示例: \n"
-                "  lybra owner-decision ... 铸 owner_autonomy_policy 后重跑 enroll;\n"
-                "或顾问代设置: lybra sync 会按生效信封校正该键。"
-            )
         else:
             # 非循环角色类(advisor/planner 等): 仅告警不阻断
             write_role_file(lybra_dir, role, agent_instance, None, harness=harness_record, slot_by_instance=seat_slots)
@@ -1054,7 +1155,7 @@ def enroll(
                 raise RuntimeError(
                     f"enroll --verify FAILED ({detail}) and rollback also failed: {rb_exc}"
                 ) from rb_exc
-            raise RuntimeError(f"enroll --verify FAILED: {detail} — token 已回滚, 未留下坏配置")
+            raise EnrollLandedError(f"enroll --verify FAILED: {detail} — token 已回滚, 未留下坏配置")
     
     # AIPOS-F58: 工位私有状态自我保护 —— 把 .lybra/ 凭据路径登记进 .git/info/exclude
     # 防止邻居项目 `git stash -u` 连坐抹掉凭据(不碰 .gitignore, 幂等, 无 git 静默跳过)
@@ -1070,12 +1171,12 @@ def enroll(
         try:
             harness_delivery = _distribution_sync(harness_root=workspace_root)
         except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
-            raise RuntimeError(
+            raise EnrollLandedError(
                 f"凭据已落盘({lybra_dir}), 但 {harness_record['kind']} 件交付失败: {exc.__class__.__name__}: {exc}\n"
                 f"出口: lybra sync --harness-root {workspace_root}(凭据保留, 重跑即可; 勿重跑 enroll)"
             ) from exc
         if not harness_delivery.get("ok"):
-            raise RuntimeError(
+            raise EnrollLandedError(
                 f"凭据已落盘({lybra_dir}), 但 {harness_record['kind']} 件交付失败: {harness_delivery.get('error')}\n"
                 f"出口: lybra sync --harness-root {workspace_root}"
             )
@@ -1153,6 +1254,11 @@ def main() -> int:
     parser.add_argument("--quiet", action="store_true", help="Suppress non-error output")
     parser.add_argument("--json", action="store_true", help="Output JSON")
     parser.add_argument("--landed-host", help="AIPOS-F95: host recorded in the land event (enroll_deliver --ssh passes the ssh target; default = this machine's hostname)")
+    # AIPOS-F151 件②: `lybra roles enroll-deliver --ssh` 把接入参数原样交远端 enroll(与 `lybra roles enroll` 同名同义, 取值读同一声明)
+    parser.add_argument("--harness", help="Workstation harness kind (distribution.schema harness_semantics.kinds; same as `lybra roles enroll --harness`)")
+    parser.add_argument("--harness-dir", help="Absolute working directory of a non-pi harness (same as `lybra roles enroll --harness-dir`)")
+    parser.add_argument("--harness-host", help="Host the harness session runs on (same as `lybra roles enroll --harness-host`)")
+    parser.add_argument("--executor-mode", help="Executor enrollment mode (roles.schema executor_modes; same as `lybra roles enroll --executor-mode`)")
     
     args = parser.parse_args()
 
@@ -1198,6 +1304,10 @@ def main() -> int:
             bootstrap_token=getattr(args, 'bootstrap_token', None),
             verify=bool(getattr(args, 'verify', False)),
             landed_host=getattr(args, 'landed_host', None),
+            harness_kind=args.harness,
+            harness_dir=args.harness_dir or None,
+            harness_host=args.harness_host,
+            executor_mode=args.executor_mode,
         )
     except RuntimeError as e:
         if args.json:
