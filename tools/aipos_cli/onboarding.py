@@ -4,16 +4,19 @@
   ① 建项目(顾问): `lybra project new` 落在 resolve_home_root 解析出的 home 根下(打印结果与来源; 门只扫描 home 根),
      同时写首份阶段快照「项目创建」(首次 finalize 不被阶段门拦); 之后 `lybra governance-commit --paths <本步产物>` 落账(AIPOS-F94)
   ② 声明产品仓(顾问): `lybra project set-repos`(project.json repos/code_repo, 经声明校验); 之后同法落账 project.json
-  ③ Owner 一次性动作 ①: 用中央凭据库的 Owner 凭据为新项目签发顾问注册码(项目范围 = 新项目)
-  ④ Owner 一次性动作 ②: 一条 `lybra envelope mint --confirm` 签三张信封(驱动方 / 执行实例 / 审计实例)
-  ⑤ 顾问凭码 enroll 到治理根(得 advisor 凭据), 产品经 distribution 声明把顾问件(技能 .claude/skills + 章程; AIPOS-F136)交付到顾问会话目录
-     (AIPOS-F129: --advisor-harness codex = 顾问是 Codex 会话(可在他机, --advisor-host): enroll 写 --harness codex, 声明无 codex 件
+  ③ Owner 一次性动作 ①: 一条 `lybra envelope mint --confirm` 签三张信封(驱动方 / 执行实例 / 审计实例)
+  ④ Owner 一次性动作 ②: `lybra roles enroll-deliver`(AIPOS-F151: 先 --dry-run 预演再 --confirm)用中央凭据库的 Owner 凭据为新项目
+     签码并把顾问接入治理根(得 advisor 凭据, 项目范围 = 新项目; 注册码只在进程内, 不打印不落盘不进 argv), 产品经 distribution 声明把
+     顾问件(技能 .claude/skills + 章程; AIPOS-F136)交付到顾问会话目录
+     (AIPOS-F129: --advisor-harness codex = 顾问是 Codex 会话(可在他机, --advisor-host): 接入写 --harness codex, 声明无 codex 件
      = 不生成技能分发步骤; 取值读 distribution.schema harness_semantics.kinds.<kind>.advisor_session)
-  ⑥ 顾问为执行 / 审计工位发注册码(顾问凭据)
-  ⑦ 工位 enroll + sync 分发 + 稳态复核
+  ⑤ 顾问就位复核(前置自检 + 顾问件稳态 / 他机会话开局取章程)
+  ⑥ 顾问为执行 / 审计工位签码接入(`lybra roles enroll-deliver`, 顾问凭据; 码不出进程)
+  ⑦ 工位 sync 分发 + 稳态复核
   ⑧ 工位自检 → 起 pi → /go(工位零门: 认领由驱动方经产品完成)
   ⑨ 首卡: 发卡 → `lybra loop` 推进到结案(结案后 loop 自动 N6 落账: task 范围精确提交并推送)
-Owner 动作只有 ③④ 两条(每条在 guide 中以 owner_action 标出); 其余由新顾问执行。顾问会话目录可与治理根不同:
+Owner 动作只有 ③④ 两条(每条在 guide 中以 owner_action 标出); 其余由新顾问执行。注册码不经手任何人(AIPOS-F151 gap #92: 向导不再示例
+把注册码写进命令行的兑换写法): 签码与兑换在 enroll-deliver 同一进程内完成。顾问会话目录可与治理根不同:
 所有命令显式带治理根(--workspace-root / --home-root / --governance-root), 不依赖 cwd。
 
 每步失败都报错带路且给出可执行出口。禁任何项目名/路径硬编码(项目无关性)。
@@ -38,10 +41,8 @@ from tools.aipos_cli.clock import utc_now
 from pathlib import Path
 from typing import Any
 
-#: guide 中由上一步输出填入的占位(F85 夹具登记同一组; 新占位须同步登记)
-ADVISOR_CODE = "<ADVISOR_CODE>"
-EXECUTOR_CODE = "<EXECUTOR_CODE>"
-AUDITOR_CODE = "<AUDITOR_CODE>"
+#: guide 中由上一步输出填入的占位(F85 夹具登记同一组; 新占位须同步登记)。AIPOS-F151: 注册码占位(<ADVISOR_CODE> 等)退役——
+#: 向导以 enroll-deliver 签码 + 接入一体, 码不出进程, 不再有「上一步输出的码」要填
 OWNER_WORKSPACE_PLACEHOLDER = "<OWNER_WORKSPACE>"
 REPO_PLACEHOLDER = "<REPO_NAME>=<REPO_ABS_PATH>"
 DRAFT_JSON_PLACEHOLDER = "<CARD_DRAFT_JSON>"
@@ -88,7 +89,7 @@ def _cmd(*parts: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# AIPOS-F93 件②: 注册码交付文案唯一渲染(向导 Step 5/7、发码 paste_text 与门 enroll_code 动词说明 / next_step、CLI enroll-code
+# AIPOS-F93 件②: 注册码交付文案唯一渲染(发码 paste_text 与门 enroll_code 动词说明 / next_step、CLI enroll-code
 # 打印同此; 原「会话斜杠 enroll 命令」随 lybra-loop 扩展退役, 禁再出现)。项目无关: 只拼产品命令形。
 # ---------------------------------------------------------------------------
 
@@ -106,6 +107,17 @@ def render_enroll_command(code: str, workspace: str = ENROLL_WORKSPACE_PLACEHOLD
     """注册码兑换命令的唯一渲染: `lybra roles enroll --code <码> --workspace <工位或治理根> [extra…] --verify`。
     workspace 由调用方按需 shell 引用(向导传已引用路径; 发码侧传占位, 由接收方替换)。"""
     return _cmd("lybra", "roles", "enroll", "--code", code, "--workspace", workspace, *extra, "--verify")
+
+
+def render_enroll_deliver_command(roles_prefix: list[str] | tuple[str, ...], *, role: str, instance: str, governance_root: str,
+                                  workspace: str, extra: list[str] | tuple[str, ...] = (), phase: str = "--confirm") -> str:
+    """AIPOS-F151 件②: 签码 + 接入一体命令的唯一渲染(向导 Step 4 / 6 同用): `<roles_prefix> enroll-deliver --role … --instance …
+    --governance-root <治理根> --workspace <工位或治理根> [extra…] <--dry-run | --confirm>`。参数由调用方按需 shell 引用。
+    roles_prefix = `lybra roles [--workspace-root <门客户端凭据所在> --connection-json <…>]`。"""
+    if phase not in ("--dry-run", "--confirm"):
+        raise ValueError(f"phase 须为 --dry-run / --confirm(verbs.schema two_phase_protocol.roles_writers.flags), 得到 {phase!r}")
+    return _cmd(*roles_prefix, "enroll-deliver", "--role", role, "--instance", instance, "--governance-root", governance_root,
+                "--workspace", workspace, *extra, phase)
 
 
 def enroll_delivery(code: str) -> dict[str, str]:
@@ -246,7 +258,7 @@ def resolve_advisor_harness(advisor_harness: str | None, advisor_host: str | Non
         instance_host = socket.gethostname().split(".")[0].strip()
     from tools.aipos_cli.custom_roles import resolve_role_to_class
 
-    role = "advisor"  # 向导第 5 步兑换的角色(第 3 步 enroll-code --role advisor); 类经唯一 role→class 实现解析
+    role = "advisor"  # 向导第 4 步 enroll-deliver 接入的角色; 类经唯一 role→class 实现解析
     role_class = str(resolve_role_to_class(role, required=True))
     deliveries = harness_distributions(declared_role_distributions(role, role_class), kind)
     return {"kind": kind, "host": host, "instance_host": instance_host, "deliveries": deliveries, "declaration": decl,
@@ -281,9 +293,9 @@ def generate_onboarding_guide(
     """生成从 0 接新项目全流程的分步指南(结构化: steps[] + metadata)。
 
     AIPOS-F143 件④: executor_mode(取值读 roles.schema executor_modes; 缺省 = 声明 default = 既有 pi 执行工位步骤)。凭据落治理根的模式
-    (subagent = 顾问派子 agent 执行, CONVERGENCE §3e 缺省): 执行者实例名主机段 = 顾问会话所在机; 第 7 步执行者改为
-    `lybra roles enroll --code <码> --workspace <治理根> --executor-mode subagent --harness <顾问会话 kind>`(不起工位、不 sync);
-    第 8 步只剩审计工位(审计恒为独立 pi); 第 9 步先 `lybra project set-execution` 声明执行方式, 卡稿可不写执行者 / harness / 审计者。
+    (subagent = 顾问派子 agent 执行, CONVERGENCE §3e 缺省): 执行者实例名主机段 = 顾问会话所在机; 第 6 步执行者改为
+    `lybra roles enroll-deliver … --workspace <治理根> --executor-mode subagent --harness <顾问会话 kind>`(AIPOS-F151; 不起工位);
+    第 7 步只 sync 审计工位、第 8 步只剩审计工位(审计恒为独立 pi); 第 9 步先 `lybra project set-execution` 声明执行方式, 卡稿可不写执行者 / harness / 审计者。
 
     每步: step_number, title, actor(owner|advisor|workstation), owner_action(Owner 一次性动作序号或 None), command/commands,
     purpose, check, on_fail, creates。参数:
@@ -411,33 +423,10 @@ def generate_onboarding_guide(
         "creates": f"{gov_s}/project.json#repos",
     })
 
-    # ── Step 3: Owner ① 签发顾问注册码 ───────────────────────────────
-    owner_roles = ["lybra", "roles", "--workspace-root", _shell_path(owner_ws), "--connection-json", _shell_path(owner_conn)]
-    step3 = _cmd(*owner_roles, "enroll-code", "--role", "advisor", "--instance", _shell_quote(inst["advisor"]),
-                 "--governance-root", _shell_quote(project_name), "--token-role", "owner", "--gate-url", _shell_quote(gate),
-                 "--ttl", "86400", "--owner-authorization-ref", _shell_quote(f"onboarding-{project_name}"),
-                 "--reason", _shell_quote(f"Onboarding {project_name} advisor"))
-    steps.append({
-        "step_number": 3,
-        "actor": "owner",
-        "owner_action": 1,
-        "title": "【Owner 动作 ①】签发顾问注册码(凭据项目范围 = 新项目)",
-        "command": step3,
-        "purpose": (
-            f"Owner 用门的中央凭据库({owner_conn})里的 Owner 凭据, 为 {project_name} 签发一次性顾问注册码: 码内嵌门地址 {gate}"
-            f"(来源: {gate_source})与治理根, 兑换出的顾问凭据 projects=[{project_name}]。把输出的 LYBRAENROLL1.* 码交给新顾问(Step 5)"
-        ),
-        "check": "输出 'Generated SELF-CONTAINED enrollment code' 与 Code ID / Governance root 行; 码只显示一次",
-        "on_fail": {
-            "UNKNOWN_GOVERNANCE_ROOT": "门在 home 根下找不到该项目(Step 1 未完成或门的 home 根不同); 确认门与 Step 1 用同一 home 根",
-            "no usable role token": "--connection-json 须指向持 Owner 凭据的中央凭据库(门 serve 所读的 connection.json)",
-            "gate call failed": "门未运行或地址不通: lybra serve status; 此为门侧故障, 报 Owner",
-        },
-        "creates": "一个一次性顾问注册码(24h 有效)",
-    })
-
-    # ── Step 4: Owner ② 一条命令签三张信封 ───────────────────────────
-    step4 = _cmd(
+    # ── Step 3: Owner ① 一条命令签三张信封 ───────────────────────────
+    # AIPOS-F151: 信封先于接入——接入时(enroll-deliver 签码前预检与 enroll 换码前预检同一判定)工位类须有覆盖信封, 顾问 role 的
+    # owner_policy_ref 亦由此推导; 原「先发顾问码、后签信封」顺序随签码 + 接入一体化调换
+    step3 = _cmd(
         "lybra", "envelope", "mint", "--confirm",
         "--workspace-root", gq, "--connection-json", _shell_path(owner_conn),
         "--policy-id", policies["driver"], "--agent-or-role", _shell_quote(inst["advisor"]),
@@ -448,15 +437,16 @@ def generate_onboarding_guide(
         "--actor", "owner",
     )
     steps.append({
-        "step_number": 4,
+        "step_number": 3,
         "actor": "owner",
-        "owner_action": 2,
-        "title": "【Owner 动作 ②】签三张信封(驱动方 / 执行 / 审计)",
-        "command": step4,
+        "owner_action": 1,
+        "title": "【Owner 动作 ①】签三张信封(驱动方 / 执行 / 审计)",
+        "command": step3,
         "purpose": (
             f"一条命令经门 owner_decision_record envelope 路径签三张 PreAuthorized 信封并真实落盘到 {pol_dir}/: "
             f"{policies['driver']} 覆盖驱动方 {inst['advisor']}(lybra loop 一阶段认领 / 交回 / 派审 / 裁决 / 结案), "
             f"{policies['executor']} 覆盖 {inst['executor']}, {policies['auditor']} 覆盖 {inst['auditor']}(审计卡按被审卡判定)。"
+            "信封先于接入: 工位类接入须有覆盖它的生效信封(无则接入预检即拒, 不签码 / 不换码 / 不改凭据)。"
             "可选 --launch-harness pi(AIPOS-F95): 授权 lybra loop 在工位自动拉起 pi(缺省不加 = 手工模式, 工位敲 /go); 由 Owner 决定是否加"
         ),
         "check": f"输出三行 'signed <policy_id> covers <实例>' 与各自 'wrote {pol_rel}/<id>.md' / 'wrote 5_tasks/records/owner_decisions/...'(以门生记录为准)",
@@ -468,15 +458,21 @@ def generate_onboarding_guide(
         "creates": f"{pol_dir}/{{{policies['driver']},{policies['executor']},{policies['auditor']}}}.md + 三份 owner_decisions 记录",
     })
 
-    # ── Step 5: 顾问 enroll(治理根)+ 技能交付 ────────────────────────
-    # AIPOS-F129 件③: 顾问 harness 读声明(resolve_advisor_harness); 技能分发步骤只在声明给该 harness 的顾问件非空时生成
+    # ── Step 4: Owner ② 签码接入顾问(enroll-deliver: 码不出进程)+ 顾问件交付 ─────
+    # AIPOS-F129 件③: 顾问 harness 读声明(resolve_advisor_harness); 技能分发只在声明给该 harness 的顾问件非空且会话目录在本机时发生
     adv_kind = adv_h["kind"]
-    sync_adv = _cmd("lybra", "sync", "--harness-root", gq, "--workspace-root", gq)
+    owner_roles = ["lybra", "roles", "--workspace-root", _shell_path(owner_ws), "--connection-json", _shell_path(owner_conn)]
     enroll_extra = ["--harness", adv_kind]
     if advisor_ws:
         enroll_extra += ["--harness-dir", _shell_path(advisor_ws)]
     if adv_h["host"]:
         enroll_extra += ["--harness-host", _shell_quote(adv_h["host"])]
+    enroll_extra += ["--token-role", "owner", "--gate-url", _shell_quote(gate), "--ttl", "86400",
+                     "--owner-authorization-ref", _shell_quote(f"onboarding-{project_name}"),
+                     "--reason", _shell_quote(f"Onboarding {project_name} advisor")]
+    step4_deliver = [render_enroll_deliver_command(owner_roles, role="advisor", instance=_shell_quote(inst["advisor"]),
+                                                   governance_root=gq, workspace=gq, extra=enroll_extra, phase=phase)
+                     for phase in ("--dry-run", "--confirm")]
     session_at = f"{adv_h['host']}:{advisor_ws or '<会话目录>'}" if adv_h["host"] else (advisor_ws or "<会话目录>")
     label = str(adv_h["declaration"].get("label") or adv_kind)
     # AIPOS-F136 件②: 顾问件 = 技能 + 章程(advisor-charter-<harness>, 母本 agents/roles/advisor/AGENTS.md 含持续推进守则);
@@ -485,38 +481,81 @@ def generate_onboarding_guide(
     session_start: dict[str, Any] | None = None  # AIPOS-F138 件②: 他机会话开局取章程命令(仅本机无落点时)
     if deliverable:
         landings = [f"{advisor_ws}/{d.get('target_path') or ''}" for d in adv_h["deliveries"]]
-        step5 = [
-            f"# 顾问凭 Step 3 的码 enroll: 凭据落治理根 .lybra/(loop 按治理根取驱动方凭据), 顾问件(技能 / 章程)交付到会话目录: "
-            + ", ".join(landings),
-            render_enroll_command(ADVISOR_CODE, gq, *enroll_extra),
-            "# 稳态复核: plan 为空 = 顾问件已齐",
-            f"{sync_adv} --dry-run",
+        step4 = [
+            "# 先预演(显示将签的角色 / 实例 / 治理根 / 有效期与接入落点, 不签码、零写入)给 Owner 看, 再 --confirm: 签码 + 接入一体,"
+            " 注册码只在本进程内(不打印、不落盘、不进 argv)。凭据落治理根 .lybra/(loop 按治理根取驱动方凭据), 顾问件(技能 / 章程)"
+            "交付到会话目录: " + ", ".join(landings),
+            *step4_deliver,
         ]
-        title5 = f"顾问 enroll 到治理根 + 顾问件(技能 / 章程)交付到 {label} 会话目录"
-        purpose5 = (
-            f"新顾问(在会话目录 {advisor_ws} 起的 {label})凭码兑换 advisor 凭据, 落 {gov_s}/.lybra/(connection.json + role); "
+        title4 = f"【Owner 动作 ②】签码接入顾问到治理根(enroll-deliver, 码不出进程)+ 顾问件交付到 {label} 会话目录"
+        purpose4 = (
+            f"Owner 用门的中央凭据库({owner_conn})里的 Owner 凭据, 在治理根所在机一条命令为 {project_name} 签顾问码并就地兑换: "
+            f"码内嵌门地址 {gate}(来源: {gate_source})与治理根, 只在本进程内传给 enroll(不打印、不落盘、不进 argv), 兑换出的 advisor 凭据"
+            f"(projects=[{project_name}])落 {gov_s}/.lybra/(connection.json + role, owner_policy_ref 由 Step 3 驱动方信封推导); "
             f"产品按 distribution 声明({', '.join(d['distribution_id'] for d in adv_h['deliveries'])}, harness={adv_kind})"
             f"把顾问件经同一分发引擎交付到 {', '.join(landings)}(章程 = 顾问章程母本的渲染物, 含持续推进守则)"
         )
-        check5 = (f"enroll 输出 '✓ Enrollment successful' 与 '✓ {adv_kind} 件已交付: N 个文件'; "
-                  "sync --dry-run 输出 'up-to-date: 0 file(s) to fetch/render'")
-        on_fail5 = {
-            "code 过期/已用": "请 Owner 重跑 Step 3",
-            "--harness-dir 须为已存在的绝对目录": f"先建会话目录(或改 --harness-dir 为实际 {label} 会话目录)",
-            "件交付失败": "凭据已落, 重跑 lybra sync --harness-root <治理根>(勿重跑 enroll)",
-            "章程落点已有非 Lybra 渲染物": "会话目录里已有同名文件(非 Lybra 渲染): 移走它或换会话目录后重跑 lybra sync(不覆盖用户文件)",
-        }
-        creates5 = f"{gov_s}/.lybra/connection.json, {gov_s}/.lybra/role, " + ", ".join(landings)
-        note5 = f"顾问会话目录与治理根可不同: 本 guide 每条命令都显式带治理根, 不依赖 cwd; 顾问件交付后在会话目录重启 {label} 会话即加载"
+        check4 = (f"--dry-run 输出 'roles enroll-deliver advisor: 预览(未执行; 加 --confirm 执行)'(未签码、零写入); --confirm 输出 '已执行'、"
+                  f"注册码 code_id 与指纹(无码原文)与 '{adv_kind} 件 → …' 行")
+        creates4 = f"{gov_s}/.lybra/connection.json, {gov_s}/.lybra/role, " + ", ".join(landings)
+        note4 = f"顾问会话目录与治理根可不同: 本 guide 每条命令都显式带治理根, 不依赖 cwd; 顾问件交付后在会话目录重启 {label} 会话即加载"
     else:
         undelivered = ", ".join(d["distribution_id"] for d in adv_h["deliveries"])
-        why = (f"声明给 {adv_kind} 的顾问件({undelivered})需本机会话目录, 会话在 {session_at} = 本机无落点不落盘(章程件由会话开局拉取, 见本步末行; 其余件 sync 列 undelivered)"
+        why = (f"声明给 {adv_kind} 的顾问件({undelivered})需本机会话目录, 会话在 {session_at} = 本机无落点不落盘(章程件由会话开局拉取, 见 Step 5; 其余件 sync 列 undelivered)"
                if adv_h["deliveries"] else f"声明里无给 {adv_kind} 的顾问件 = 无分发步骤")
-        step5 = [
-            f"# 顾问凭 Step 3 的码 enroll(在治理根所在机执行; {label} 会话在他机时经 ssh 到本机跑): 凭据与身份落治理根 .lybra/,"
+        step4 = [
+            f"# 先预演再 --confirm(在治理根所在机执行; 签码 + 接入一体, 注册码只在本进程内): 凭据与身份落治理根 .lybra/,"
             f" role 如实记 harness={adv_kind} 与会话所在(--harness-host / --harness-dir); {why}",
-            render_enroll_command(ADVISOR_CODE, gq, *enroll_extra),
+            *step4_deliver,
         ]
+        title4 = f"【Owner 动作 ②】签码接入顾问到治理根(enroll-deliver, 码不出进程; {label} 会话, 如实登记会话所在)"
+        purpose4 = (
+            f"Owner 用门的中央凭据库({owner_conn})里的 Owner 凭据, 在治理根所在机一条命令为 {project_name} 签顾问码并就地兑换"
+            f"(码内嵌门地址 {gate}, 来源: {gate_source}; 码只在本进程内): 顾问({label} 会话, 位于 {session_at})的 advisor 凭据落 "
+            f"{gov_s}/.lybra/(connection.json + role); role 的 harness 记 {{kind: {adv_kind}, dir: {advisor_ws or '空'}, host: {adv_h['host'] or '空'}}}"
+            f"(他机目录如实记、不校验本机存在); 不落 .pi 接线; {why}"
+        )
+        check4 = ("--dry-run 输出 '预览(未执行; 加 --confirm 执行)'(未签码、零写入); --confirm 输出 '已执行' 与 'harness …' 已记入 .lybra/role; "
+                  "治理根下无 .pi/, 本机不新增顾问件")
+        creates4 = f"{gov_s}/.lybra/connection.json, {gov_s}/.lybra/role(harness={adv_kind})"
+        note4 = (f"顾问会话({label})与治理根可不同机: 产品命令在治理根所在机运行(他机会话经 ssh), 本 guide 每条命令都显式带治理根, "
+                 "不依赖 cwd")
+    steps.append({
+        "step_number": 4,
+        "actor": "owner",
+        "owner_action": 2,
+        "title": title4,
+        "command": "\n".join(step4),
+        "commands": step4_deliver,
+        "purpose": purpose4,
+        "check": check4,
+        "on_fail": {
+            "ENROLL_ENVELOPE_MISSING / 推导 owner_policy_ref 失败": "Step 3 信封未落或不覆盖本实例; 核对 Step 3 输出(预检拒 = 未签码、未改凭据)",
+            "UNKNOWN_GOVERNANCE_ROOT / PROJECT_NOT_ESTABLISHED": "门或本机在 home 根下找不到该项目(Step 1 未完成或门的 home 根不同); 确认门与 Step 1 用同一 home 根",
+            "no usable role token": "--connection-json 须指向持 Owner 凭据的中央凭据库(门 serve 所读的 connection.json)",
+            "gate call failed": "门未运行或地址不通: lybra serve status; 此为门侧故障, 报 Owner",
+            "不在 distribution.schema harness_semantics.kinds 声明内": "--harness 取值按输出列出的合法值改正后重跑(预检拒, 未签码)",
+            "须为已存在的绝对目录": "会话在他机时加 --harness-host <会话所在机>(他机目录如实记, 不校验本机存在); 同机则先建目录",
+            "件交付失败": "凭据已落, 重跑 lybra sync --harness-root <治理根>(勿重跑接入)",
+            "已回滚 / 回滚失败": "接入失败时注册码已经门吊销(输出 '已回滚'); 回滚失败按输出出口手工吊销后重跑本步",
+        },
+        "creates": creates4,
+        "note": note4,
+    })
+
+    # ── Step 5: 顾问就位复核(前置自检 + 顾问件稳态 / 开局取章程) ────────────
+    step5 = [
+        "# 前置自检(只读): 项目 / 产品仓 / 信封 / 顾问凭据齐",
+        _cmd("lybra", "onboarding", "check", _shell_quote(project_name), "--step", "5", "--home-root", hq),
+    ]
+    if deliverable:
+        step5 += [
+            "# 顾问件稳态复核: plan 为空 = 顾问件已齐(Step 4 已交付; 母本变更后由 lybra sync 重渲染)",
+            f"{_cmd('lybra', 'sync', '--harness-root', gq, '--workspace-root', gq)} --dry-run",
+        ]
+        title5 = f"顾问就位复核({label} 会话目录顾问件稳态)"
+        check5 = "onboarding check 输出 '✓ Step 5 prerequisites satisfied'; sync --dry-run 输出 'up-to-date: 0 file(s) to fetch/render'"
+    else:
         # AIPOS-F138 件②: 本机无落点的顾问章程 = 拉取出口(会话开局经 ssh 取渲染后章程, 含持续推进守则; 产品不推送)。
         # 命令唯一拼装 charter_render.charter_pull_command; 在会话所在机每次开局跑, 不是本步现在跑的命令, 故以注释行给出
         from tools.aipos_cli.charter_render import charter_pull_command
@@ -528,109 +567,103 @@ def generate_onboarding_guide(
                 f"# 开局取章程(在 {session_at} 每次开 {label} 会话先运行, 输出 = 渲染后顾问章程全文, 含持续推进守则):",
                 f"#   {session_start['command']}",
             ] + ([f"#   ({session_start['host_hint']})"] if session_start["host_hint"] else [])
-        title5 = f"顾问 enroll 到治理根({label} 会话, 如实登记会话所在)"
-        purpose5 = (
-            f"新顾问({label} 会话, 位于 {session_at})凭码兑换 advisor 凭据, 落 {gov_s}/.lybra/(connection.json + role); "
-            f"role 的 harness 记 {{kind: {adv_kind}, dir: {advisor_ws or '空'}, host: {adv_h['host'] or '空'}}}(他机目录如实记、不校验本机存在); "
-            f"不落 .pi 接线; {why}"
-        )
-        check5 = ("enroll 输出 '✓ Enrollment successful' 与 'harness: {...}(已记入 .lybra/role)'; "
-                  "治理根下无 .pi/, 本机不新增顾问件")
-        on_fail5 = {
-            "code 过期/已用": "请 Owner 重跑 Step 3",
-            "不在 distribution.schema harness_semantics.kinds 声明内": "--harness 取值按输出列出的合法值改正后重跑(码未兑换, 可重用)",
-            "须为已存在的绝对目录": "会话在他机时加 --harness-host <会话所在机>(他机目录如实记, 不校验本机存在); 同机则先建目录",
-        }
-        creates5 = f"{gov_s}/.lybra/connection.json, {gov_s}/.lybra/role(harness={adv_kind})"
-        note5 = (f"顾问会话({label})与治理根可不同机: 产品命令在治理根所在机运行(他机会话经 ssh), 本 guide 每条命令都显式带治理根, "
-                 "不依赖 cwd")
+        title5 = f"顾问就位复核({label} 会话: 前置自检 + 开局取章程)"
+        check5 = "onboarding check 输出 '✓ Step 5 prerequisites satisfied'; 治理根下无 .pi/, 本机不新增顾问件"
     steps.append({
         "step_number": 5,
         "actor": "advisor",
         "owner_action": None,
         "title": title5,
         "command": "\n".join(step5),
-        "purpose": purpose5,
+        "purpose": (f"新顾问({label} 会话, 位于 {session_at})确认 Step 1–4 的产物齐: 治理根 {gov_s}/.lybra/ 已有自己的 advisor 凭据与 role"
+                    "(owner_policy_ref = 驱动方信封), 顾问件到位(本机会话)或会话开局取章程(他机会话)"),
         "check": check5,
-        "on_fail": on_fail5,
-        "creates": creates5,
-        "note": note5,
+        "on_fail": {
+            "Step 4 未完成 / 治理根无顾问凭据": "请 Owner 重跑 Step 4(先 --dry-run 再 --confirm)",
+            "Step 3 未完成 / 无信封文件": "请 Owner 跑 Step 3 签信封后再跑 Step 4",
+            "--dry-run 的 plan 非空": "再跑一次不带 --dry-run 的 lybra sync --harness-root <治理根> 后复核; 仍非空 = 报 bug, 附 --dry-run --json 输出",
+            "章程落点已有非 Lybra 渲染物": "会话目录里已有同名文件(非 Lybra 渲染): 移走它或换会话目录后重跑 lybra sync(不覆盖用户文件)",
+        },
+        "creates": "无(只读复核)",
+        "note": note4,
         "session_start": session_start,
     })
 
-    # ── Step 6: 顾问发工位注册码 ─────────────────────────────────────
-    adv_roles = ["lybra", "roles", "--workspace-root", gq, "enroll-code"]
+    # ── Step 6: 顾问为工位签码接入(enroll-deliver: 码不出进程) ──────────────
     from tools.aipos_cli.custom_roles import role_classes_in_group
 
+    adv_roles = ["lybra", "roles", "--workspace-root", gq]
+    common = ["--gate-url", _shell_quote(gate), "--ttl", "86400"]
+    step6_cmds: list[str] = []
+    step6: list[str] = ["# 每个工位先 --dry-run 预演(角色 / 实例 / 治理根 / 落点 / 覆盖信封, 不签码零写入)再 --confirm; 注册码只在本进程内"]
     # AIPOS-F102 件②: 发工位注册码的角色 = 工位类(roles.schema class_groups.workstation, 注册表顺序), 原写死的工位类分组元组退役
-    step6 = [
-        _cmd(*adv_roles, "--role", role, "--instance", _shell_quote(inst[role]), "--governance-root", _shell_quote(project_name),
-             "--gate-url", _shell_quote(gate), "--ttl", "86400", "--owner-authorization-ref", policies[role],
-             "--reason", _shell_quote(f"Onboarding {project_name} {role}"))
-        for role in role_classes_in_group("workstation")
-    ]
+    for role in role_classes_in_group("workstation"):
+        auth = ["--owner-authorization-ref", policies[role], "--reason", _shell_quote(f"Onboarding {project_name} {role}")]
+        if subagent_exec and role == "executor":
+            # AIPOS-F143 件④: 子 agent 执行者——凭据落治理根(--workspace = 治理根), harness = 顾问会话 kind; 无工位、不 sync、不起 pi
+            host_args = ["--harness-host", _shell_quote(adv_h["host"])] if adv_h["host"] else []
+            extra, target = ["--executor-mode", exec_mode, "--harness", adv_h["kind"], *host_args, *common, *auth], gq
+            step6.append(f"# 执行者(子 agent 模式, 顾问派生): 凭据落治理根 .lybra/connection.json(实例 {inst['executor']}), "
+                         f"harness = 顾问会话 {adv_h['kind']}; 不起工位")
+        else:
+            extra, target = [*common, *auth], _shell_path(exec_ws if role == "executor" else audit_ws)
+            step6.append(f"# {'执行' if role == 'executor' else '审计'}工位: 签码 + 接入(落 .lybra + .pi 接线; owner_policy_ref 由 Step 3 信封推导)")
+        pair = [render_enroll_deliver_command(adv_roles, role=role, instance=_shell_quote(inst[role]), governance_root=gq,
+                                              workspace=target, extra=extra, phase=phase) for phase in ("--dry-run", "--confirm")]
+        step6 += pair
+        step6_cmds += pair
     steps.append({
         "step_number": 6,
         "actor": "advisor",
         "owner_action": None,
-        "title": "顾问为执行 / 审计工位发注册码",
-        "commands": step6,
-        "command": step6[0],
-        "purpose": f"顾问用自己的凭据(治理根 .lybra/connection.json, projects=[{project_name}])为两个工位各发一个一次性注册码; 授权依据 = Step 4 的信封",
-        "check": "每条输出 'Generated SELF-CONTAINED enrollment code'; 两个码分别用于 Step 7",
+        "title": "顾问为执行 / 审计工位签码接入(工位 enroll-deliver, 码不出进程)",
+        "commands": step6_cmds,
+        "command": "\n".join(step6),
+        "purpose": (f"顾问用自己的凭据(治理根 .lybra/connection.json, projects=[{project_name}])在治理根所在机为每个工位一条命令签码并就地兑换"
+                    f"(授权依据 = Step 3 的信封): " + (
+                        f"子 agent 执行者 {inst['executor']} 凭据落治理根(顾问会话 {adv_h['kind']} 派生子 agent 以此身份交付; 无工位); "
+                        f"审计工位 {audit_ws} 兑换凭据并落 .pi 接线" if subagent_exec else
+                        f"工位 {exec_ws} / {audit_ws} 兑换凭据并落 .pi 接线") +
+                    "; 覆盖信封预检先于签码(无信封 = 拒, 不签码不改凭据); 注册码不经手任何人"),
+        "check": (
+            "--dry-run 输出 '预览(未执行; 加 --confirm 执行)' 与覆盖信封 policy_id; --confirm 输出 '已执行'、code_id 与指纹(无码原文)与 "
+            "'role(含 owner_policy_ref)'; 工位 .lybra/connection.json 含 lybra_bin 且 workspace_root == governance_root"
+        ),
         "on_fail": {
-            "no usable role token": "Step 5 未完成(治理根无顾问凭据); 先跑 Step 5",
+            "no usable role token": "Step 4 未完成(治理根无顾问凭据); 请 Owner 先跑 Step 4",
             "UNKNOWN_GOVERNANCE_ROOT": "门找不到项目; 核对门与 Step 1 同一 home 根",
+            "ENROLL_ENVELOPE_MISSING / 推导 owner_policy_ref 失败": "Step 3 信封未落或 agent_or_role 与工位实例不符; 核对 Step 3 输出(预检拒 = 未签码)",
+            "401 Unauthorized": "门拒绝顾问凭据或码(发码门 ≠ 本门); 核对 connection.json mcp.rpc_url 后重跑本步(失败时码已吊销)",
+            ".pi 接线缺失": "接入落 .pi 接线, Step 7 sync 补挂声明内缺失挂载; 仍缺 = 报 bug(附 sync --json 输出)",
+            "connection.json 缺 lybra_bin": "接入按运行中的 lybra 部署位写入; 用部署的 lybra 命令重跑本步",
+            "workspace_root 写成 harness root": "workspace_root 须等于码内治理根; 重跑本步校正",
+            "已回滚 / 回滚失败": "接入失败时注册码已经门吊销(输出 '已回滚'); 回滚失败按输出出口手工吊销后重跑",
         },
-        "creates": "两个一次性工位注册码",
+        "creates": (f"治理根 .lybra/connection.json 子 agent 执行者条目 + land 事件(mode={exec_mode}), {audit_ws}/.lybra + .pi + AGENTS.md"
+                    if subagent_exec else f"{exec_ws}/.lybra + .pi + AGENTS.md, {audit_ws}/.lybra + .pi + AGENTS.md"),
     })
 
-    # ── Step 7: 工位 enroll + sync ──────────────────────────────────
+    # ── Step 7: 工位 sync 分发 + 稳态复核 ───────────────────────────
     step7: list[str] = []
-    if subagent_exec:
-        # AIPOS-F143 件④: 子 agent 执行者——凭据落治理根(--workspace = 治理根), harness = 顾问会话 kind; 无工位、不 sync、不起 pi
-        host_args = ("--harness-host", _shell_quote(adv_h["host"])) if adv_h["host"] else ()
-        step7 += [
-            f"# 执行者(子 agent 模式, 顾问派生): 凭据落治理根 .lybra/connection.json(实例 {inst['executor']}), harness = 顾问会话 {adv_h['kind']}; 不起工位",
-            render_enroll_command(EXECUTOR_CODE, gq, "--executor-mode", exec_mode, "--harness", adv_h["kind"], *host_args),
-        ]
-    for label, ws, code in ((() if subagent_exec else (("执行", exec_ws, EXECUTOR_CODE),)) + (("审计", audit_ws, AUDITOR_CODE),)):
+    for label7, ws in ((() if subagent_exec else (("执行", exec_ws),)) + (("审计", audit_ws),)):
         wq = _shell_path(ws)
         sync_ws = f"lybra sync --harness-root {wq} --workspace-root {gq}"
-        step7 += [
-            f"# {label}工位: enroll(落 .lybra + .pi 接线) → 按分发声明落齐工位件 → 稳态复核",
-            render_enroll_command(code, wq),
-            sync_ws,
-            f"{sync_ws} --dry-run",
-        ]
+        step7 += [f"# {label7}工位: 按分发声明落齐工位件 → 稳态复核", sync_ws, f"{sync_ws} --dry-run"]
     steps.append({
         "step_number": 7,
         "actor": "advisor",
         "owner_action": None,
-        "title": "执行 / 审计工位 enroll + sync 分发 + 稳态复核",
+        "title": "工位 sync 分发 + 稳态复核",
         "command": "\n".join(step7),
-        "purpose": (f"子 agent 执行者 {inst['executor']} 兑换凭据落治理根(顾问会话 {adv_h['kind']} 派生子 agent 以此身份交付; 无工位); "
-                    f"审计工位 {audit_ws} 兑换凭据(owner_policy_ref 由 Step 4 信封推导), 按分发声明落齐技能 / 扩展 / 章程, 复核稳态"
-                    if subagent_exec else
-                    f"在工位 {exec_ws} / {audit_ws} 兑换凭据(owner_policy_ref 由 Step 4 信封推导), 按分发声明落齐技能 / 扩展 / 章程, 复核稳态; 工位只同步分发, 不敲门动词"),
-        "check": (
-            "enroll 输出 '✓ Enrollment successful' 与 '✓ owner_policy_ref 已推导'; 工位 .lybra/connection.json 含 lybra_bin 且 "
-            "workspace_root == governance_root; sync 工位行 synced(首个工位会补挂 .pi/extensions/go.ts); "
-            "--dry-run 输出 'up-to-date: 0 file(s) to fetch/render'、无 would-prune 行"
-        ),
+        "purpose": (f"审计工位 {audit_ws} 按分发声明落齐技能 / 扩展 / 章程, 复核稳态(子 agent 执行者无工位, 不 sync)" if subagent_exec else
+                    f"工位 {exec_ws} / {audit_ws} 按分发声明落齐技能 / 扩展 / 章程, 复核稳态; 工位只同步分发, 不敲门动词"),
+        "check": ("sync 工位行 synced(首个工位会补挂 .pi/extensions/go.ts); --dry-run 输出 'up-to-date: 0 file(s) to fetch/render'、无 would-prune 行"),
         "on_fail": {
-            "code 过期/已用": "请顾问重跑 Step 6 为该工位发新码",
-            "401 Unauthorized": "注册码无效或过期(或发码门 ≠ 本门); 重跑 Step 6 发新码后重试 enroll --verify",
-            "推导 owner_policy_ref 失败 / role 缺 owner_policy_ref": "Step 4 信封未落或 agent_or_role 与工位实例不符; 核对 Step 4 输出",
-            ".pi/ 接线缺失": "enroll 落 .pi 接线, sync 补挂声明内缺失挂载; 仍缺 = 报 bug(附 sync --json 输出)",
-            "connection.json 缺 lybra_bin": "enroll 按运行中的 lybra 部署位写入; 用部署的 lybra 命令重跑 enroll",
-            "workspace_root 写成 harness root": "workspace_root 须等于码内治理根; 重跑 enroll 校正",
             "sync 把工位记为 skipped": f"--workspace-root 须为本项目治理根 {gov_s}",
             "--dry-run 的 plan 或 prune 非空": "再跑一次不带 --dry-run 的 sync 后复核; 仍非空 = 报 bug, 附 --dry-run --json 输出",
+            "未完成 enroll, 拒绝写入": "该工位未接入: 回 Step 6 为它 enroll-deliver",
         },
-        "creates": (f"治理根 .lybra/connection.json 子 agent 执行者条目 + land 事件(mode={exec_mode}), {audit_ws}/.lybra + .pi + AGENTS.md, 工位父根 _distributed/"
-                    if subagent_exec else
-                    f"{exec_ws}/.lybra + .pi + AGENTS.md, {audit_ws}/.lybra + .pi + AGENTS.md, 工位父根 _distributed/"),
+        "creates": f"{audit_ws if subagent_exec else exec_ws + ', ' + audit_ws} 的工位件, 工位父根 _distributed/",
     })
 
     # ── Step 8: 工位自检 → 起 pi → /go ───────────────────────────────
@@ -653,7 +686,7 @@ def generate_onboarding_guide(
         "purpose": "验证工位可启动最小集完整, 在工位目录起 pi; 首卡由顾问发卡、驱动方经 lybra loop 认领并建工作树后 /go 开工(审计工位同法)",
         "check": "onboarding check 输出 '✓ Step 8 prerequisites satisfied'; /go 发出开工提示或提示'无已认领卡'(驱动方尚未认领 = 正常)",
         "on_fail": {
-            "缺项报错": "按输出的缺项逐项修复(lybra_bin 悬空 → 重跑 Step 7 enroll; owner_policy_ref 缺失 → 核对 Step 4 信封)",
+            "缺项报错": "按输出的缺项逐项修复(lybra_bin 悬空 → 重跑 Step 6 enroll-deliver; owner_policy_ref 缺失 → 核对 Step 3 信封)",
             "/go 不是已知命令": "go 扩展未落到工位; 回 Step 7 重跑 sync 并用 --dry-run 复核稳态",
             "/go 报 工作树尚未建立": "认领与建树由驱动方完成, 工位不自领; 等驱动方 lybra loop 认领后再 /go",
         },
@@ -685,7 +718,7 @@ def generate_onboarding_guide(
         "purpose": f"顾问只用产品命令推进: lybra loop 以信封 {policies['driver']} 驱动整张卡, 工位只在 /go 后写产物(RETURN / 审计报告)",
         "check": "lybra loop 退出码 0 且输出 'done: <卡ID> 已结案(closure 记录存在), 治理已落账'(结案后 loop 自动执行 N6 落账: lybra governance-commit --task-id)",
         "on_fail": {
-            "exit 5(无信封)": "Step 4 未落或信封不覆盖驱动方 / 本卡; 按输出的申领出口请 Owner 签",
+            "exit 5(无信封)": "Step 3 未落或信封不覆盖驱动方 / 本卡; 按输出的申领出口请 Owner 签",
             "exit 3(等待超时)": "工位尚未交回产物; 工位 /go 开工后重跑同一条 lybra loop",
             "看进度(loop 跑在后台 / 久无动静)": f"lybra loop status --task-id {TASK_ID_PLACEHOLDER} --workspace-root {gq}"
                                                 "(读运行记录 + 探活 + 判停滞: running/stalled/launch_dead/loop_dead/ended, 含日志路径); "
@@ -877,8 +910,9 @@ def validate_step_prerequisites(
 ) -> dict[str, Any]:
     """验证进入某一步之前的产物是否齐(负夹具 / 运行时前置检查)。步号 = generate_onboarding_guide 的步号。
 
-    ≥1 项目根 + project.json; ≥3 产品仓声明; ≥5 信封; ≥6 顾问凭据(治理根 .lybra/connection.json);
-    ≥8 工位 connection.json(lybra_bin / workspace_root==governance_root)+ .pi 接线 + role#owner_policy_ref。
+    ≥1 项目根 + project.json; ≥3 产品仓声明; ≥4 信封(Step 3); ≥5 顾问凭据(治理根 .lybra/connection.json, Step 4);
+    ≥8 工位 connection.json(lybra_bin / workspace_root==governance_root)+ .pi 接线 + role#owner_policy_ref(Step 6 / 7)。
+    AIPOS-F151: 信封先于接入(Step 3), 顾问 / 工位接入 = enroll-deliver(Step 4 / 6)。
     返回 {ok: bool, missing: [str], guidance: [str]}。
     """
     from tools.aipos_cli.workspace_config import resolve_home_root
@@ -909,44 +943,44 @@ def validate_step_prerequisites(
             missing.append("repos")
             guidance.append(f"产品仓声明不合规: {exc}; 重跑 Step 2")
 
-    if step_number >= 5:
+    if step_number >= 4:
         # AIPOS-F103 件④: 信封目录读项目声明 policies_root(唯一读取口 autonomy_policy.policies_dir / policy_ids)
         from tools.aipos_cli.autonomy_policy import policy_ids
 
         if not policy_ids(project_root):
             missing.append("envelopes")
-            guidance.append("Step 4 未完成: 无信封文件; Owner 跑 Step 4 的 lybra envelope mint --confirm")
+            guidance.append("Step 3 未完成: 无信封文件; Owner 跑 Step 3 的 lybra envelope mint --confirm")
 
     # AIPOS-F106 件④: connection.json 定位经 service_mode.connection_path(既有唯一定位); role 只经 charter_render.workstation_identity 读
     from tools.aipos_cli.service_mode import connection_path as _connection_path
 
-    if step_number >= 6 and project_root.is_dir():
+    if step_number >= 5 and project_root.is_dir():
         if not _connection_path(project_root).is_file():
             missing.append("advisor_credential")
-            guidance.append("Step 5 未完成: 治理根无 .lybra/connection.json(顾问凭据); 跑 Step 5 的 lybra roles enroll")
+            guidance.append("Step 4 未完成: 治理根无 .lybra/connection.json(顾问凭据); Owner 跑 Step 4 的 lybra roles enroll-deliver(先 --dry-run 再 --confirm)")
 
     if step_number >= 8:
         conn_json = _connection_path(ws)
         if not conn_json.is_file():
             missing.append("connection.json")
-            guidance.append(f"Step 7 未完成: {conn_json} 不存在; 跑 lybra roles enroll")
+            guidance.append(f"Step 6 未完成: {conn_json} 不存在; 跑 Step 6 的 lybra roles enroll-deliver(先 --dry-run 再 --confirm)")
         else:
             try:
                 data = json.loads(conn_json.read_text(encoding="utf-8"))
                 if not data.get("lybra_bin"):
                     missing.append("lybra_bin")
-                    guidance.append("connection.json 缺 lybra_bin; 重跑 Step 7 enroll")
+                    guidance.append("connection.json 缺 lybra_bin; 重跑 Step 6 enroll-deliver")
                 ws_root = data.get("workspace_root", "")
                 gov_root = data.get("governance_root", "")
                 if ws_root and gov_root and Path(ws_root).resolve() != Path(gov_root).resolve():
                     missing.append("workspace_root_mismatch")
-                    guidance.append("workspace_root != governance_root; 重跑 Step 7 enroll")
+                    guidance.append("workspace_root != governance_root; 重跑 Step 6 enroll-deliver")
             except (OSError, json.JSONDecodeError):
                 missing.append("connection.json_invalid")
-                guidance.append("connection.json 格式错误; 重跑 Step 7")
+                guidance.append("connection.json 格式错误; 重跑 Step 6")
         if not (ws / ".pi" / "settings.json").is_file():
             missing.append(".pi/settings.json")
-            guidance.append(".pi 接线缺失; Step 7 enroll 应自动落, 重跑 Step 7")
+            guidance.append(".pi 接线缺失; Step 6 接入应自动落, 重跑 Step 7 sync(仍缺再重跑 Step 6)")
         from tools.aipos_cli.charter_render import is_enrolled_workstation
         from tools.loop_context import ConnectionResolver
 
@@ -959,14 +993,14 @@ def validate_step_prerequisites(
                 ident = ConnectionResolver.resolve_identity(workspace_root=ws, env={})
             except WorkstationFileError as exc:
                 missing.append("role_invalid")
-                guidance.append(f"{exc}; 重跑 Step 7")
+                guidance.append(f"{exc}; 重跑 Step 6")
             else:
                 if ident["role"]["source"] != ".lybra/role":
                     missing.append("role_invalid")
-                    guidance.append("role 文件格式错误; 重跑 Step 7")
+                    guidance.append("role 文件格式错误; 重跑 Step 6")
                 elif ident["owner_policy_ref"]["source"] != ".lybra/role":
                     missing.append("owner_policy_ref")
-                    guidance.append("role 文件缺 owner_policy_ref; 核对 Step 4 信封是否覆盖本工位实例后重跑 lybra sync")
+                    guidance.append("role 文件缺 owner_policy_ref; 核对 Step 3 信封是否覆盖本工位实例后重跑 lybra sync")
 
     return {
         "ok": not missing,
