@@ -23,6 +23,7 @@ SUPPORTED_OPERATIONS = {
     "queue_return",
     "queue_withdraw",  # AIPOS-315: G2 两阶段动词
     "queue_amend",     # AIPOS-315: G2 两阶段动词
+    "queue_rework",    # AIPOS-F154: 返工节两阶段(门 lybra_queue_rework_confirm)
     "orchestration_event_append",
     "planner_iteration_append",
     "intake_submit",
@@ -208,6 +209,9 @@ def _stable_planned_writes(items: Any, *, operation: str | None = None) -> list[
             # AIPOS-F70-fix1: verdict record paths embed timestamp-derived verdict_id.
             # Session records are also updated during verdict dry_run.
             # Exclude both from snapshot hash to align with queue_return behavior.
+            path = None
+        if operation == "queue_rework" and item.get("type") == "amendment_record":
+            # AIPOS-F154: 修订记录路径含时间戳派生的 amendment_id, 不入快照哈希(与 return/verdict 同法)
             path = None
         stable.append(
             {
