@@ -31,6 +31,22 @@ unrelated change swept into a finalize commit via a broad `git add`.
   Non-card governance changes (project declarations, governance documents, envelopes) use
   `lybra governance-commit --actor <advisor> --paths <path> [--paths <path> ...]`. Never hand-run `git add`/`git commit` in the governance repo.
 
+## Deploy snapshot and the `lybra` CLI entry (AIPOS-F152)
+- **The `lybra` command runs the deployed snapshot, not the product repo working tree.** The entry resolves
+  `<product repo>/.deploy/current` to its real release directory once at start-up and loads every module from that one
+  immutable snapshot, so a working tree that is mid-merge, dirty, or wrongly edited is never picked up by gate commands or
+  advisor commands. `lybra --version` prints which code is running (snapshot release + commit, or dev mode / work tree).
+- **Install / upgrade the entry:** `tools/lybra-deploy install-entry [--bin-dir <dir>]` writes the entry to
+  `$LYBRA_BIN_DIR` or `~/.local/bin` (a previous non-snapshot entry such as a `pip install -e` console script is kept as
+  `lybra.pre-snapshot-entry`). Every deploy rewrites it (Step 3b), so after the first install nothing else is needed: the
+  next deploy is what `lybra` runs. A `pip install -e .` entry is only a trampoline into the same snapshot entry.
+- **Local debugging:** `LYBRA_DEV_TREE=<work tree> lybra ...` runs that tree; the first stderr line says
+  `[lybra] 开发模式(LYBRA_DEV_TREE)`. Card worktree tests and `python3 -m tools.aipos_cli` keep using the work tree code.
+- **Long-running commands follow the deploy.** `lybra loop`, `lybra agent watch` and `lybra loop status --wait` remember the
+  snapshot commit they started on and compare it with `.deploy/current`; once a newer deploy lands they stop cleanly
+  (`lybra loop`: end reason `deploy_changed`, old and new commits in the run record; exit codes in
+  `schema/verbs.schema.json`). Re-run the same command: the loop resumes from where the records stand.
+
 ## Secrets
 - Tokens / API keys are **fingerprint-only** in any output, log, record, report, or commit.
 - `connection.json` is local (`0600`), never committed. LLM keys come from an env var

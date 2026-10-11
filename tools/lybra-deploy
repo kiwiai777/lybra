@@ -11,6 +11,7 @@
 #   lybra-deploy status       # show what version the gate is running
 #   lybra-deploy rollback     # revert to previous release
 #   lybra-deploy validate     # validate working tree without deploying
+#   lybra-deploy install-entry [--bin-dir <dir>]  # (re)install the `lybra` CLI entry → deploy snapshot (AIPOS-F152)
 #
 # Exit codes:
 #   0  success
@@ -51,6 +52,8 @@ DEPLOY_AUTH_TYPE=""
 DEPLOY_AUTH_REF=""
 DEPLOY_PROVENANCE=""
 DEPLOY_COVERAGE_BASE=""
+# AIPOS-F152 件②: `lybra` CLI 入口所在目录(install-entry / deploy 时写入口脚本); 缺省 $LYBRA_BIN_DIR 或 ~/.local/bin
+ENTRY_BIN_DIR=""
 
 parse_authorization_args() {
     while [[ $# -gt 0 ]]; do
@@ -60,6 +63,7 @@ parse_authorization_args() {
             --reason) DEPLOY_REASON="${2:-}"; shift 2 ;;
             --actor) DEPLOY_ACTOR="${2:-}"; shift 2 ;;
             --governance-root) GOVERNANCE_ROOT="${2:-}"; shift 2 ;;
+            --bin-dir) ENTRY_BIN_DIR="${2:-}"; shift 2 ;;
             *) shift ;;
         esac
     done
@@ -344,6 +348,21 @@ except Exception:
     return 0
 }
 
+# ── install-entry (AIPOS-F152 件②) ─────────────────────────────────────
+# `lybra` CLI 入口改从部署快照运行: 入口脚本(渲染唯一实现 tools.aipos_cli.deploy_runtime.launcher_source)每次启动把
+# $CURRENT_LINK 解析成真实路径、整个进程只用这一份快照; 产品仓工作树的中间态(合并中 / 未提交改动)不再被 lybra 命令吃到。
+# 用当前快照里的实现安装(入口文本与部署代码同版本); 本地调试走 LYBRA_DEV_TREE=<工作树>(stderr 首行标明)。
+cmd_install_entry() {
+    local current_dir bin_dir
+    current_dir=$(get_current_release_dir)
+    if [[ -z "$current_dir" || ! -d "$current_dir" ]]; then
+        err "lybra 入口未安装: 无部署快照($CURRENT_LINK 不存在); 出口: 先 lybra-deploy 部署"
+        return 1
+    fi
+    bin_dir="${ENTRY_BIN_DIR:-${LYBRA_BIN_DIR:-$HOME/.local/bin}}"
+    (cd "$current_dir" && python3 -m tools.aipos_cli.deploy_runtime install-entry --deploy-current "$CURRENT_LINK" --bin-dir "$bin_dir")
+}
+
 # ── deploy ──────────────────────────────────────────────────────────────
 cmd_deploy() {
     log "Starting deploy from working tree..."
@@ -518,6 +537,14 @@ EOF
         exit 1
     fi
     log "  ✓ Assertion passed: current → HEAD ($expected_commit)"
+
+    # ── AIPOS-F152 件②: lybra CLI 入口指向部署快照(随部署重写; 失败不回滚门, 但部署整体报失败并给出口)──
+    log "Step 3b/5: Updating lybra CLI entry (deploy snapshot)..."
+    local entry_failed=0
+    if ! cmd_install_entry; then
+        entry_failed=1
+        err "✗ lybra CLI 入口未更新(门照常部署); 出口: tools/lybra-deploy install-entry [--bin-dir <dir>]"
+    fi
 
     # ── Step 4: graceful handoff (AIPOS-356) ────────────────────────────
     # Zero-downtime deploy using SO_REUSEPORT:
@@ -794,6 +821,10 @@ except Exception:
 
     log ""
     log "Done. Gate is serving from isolated snapshot."
+    if [[ "$entry_failed" == "1" ]]; then
+        err "Deploy finished but the lybra CLI entry was NOT updated (see Step 3b); 出口: tools/lybra-deploy install-entry"
+        exit 1
+    fi
 }
 
 # ── rollback ────────────────────────────────────────────────────────────
@@ -872,6 +903,7 @@ main() {
         validate)  cmd_validate "$@" ;;
         verify)    cmd_verify ;;
         roots)     cmd_roots ;;
+        install-entry) cmd_install_entry ;;
         -h|--help|help)
             echo "Usage: lybra-deploy [command] [authorization]"
             echo ""
@@ -882,6 +914,9 @@ main() {
             echo "  validate   Check if working tree can be imported (no deploy)"
             echo "  verify     Verify deployment integrity: current==HEAD + live gate HTTP check (AIPOS-369)"
             echo "  roots      Show resolved product repo / governance root / gate connection.json (read-only, AIPOS-F88)"
+            echo "  install-entry  (Re)install the \`lybra\` CLI entry so it runs from .deploy/current (AIPOS-F152; deploy does this too)"
+            echo "             --bin-dir <dir>  entry directory (default: \$LYBRA_BIN_DIR or ~/.local/bin)"
+            echo "             Local debugging: LYBRA_DEV_TREE=<work tree> lybra ... (stderr first line marks dev mode)"
             echo ""
             echo "Authorization (deploy only, REQUIRED — AIPOS-R6S 大项B② 缺授权即拒):"
             echo "  --verdict-ref <id>   Audited deploy: PASS audit verdict id (deployment_provenance=audited)"
@@ -893,10 +928,11 @@ main() {
             echo "AIPOS-333: gate runtime isolation from working tree."
             echo "AIPOS-369: deployment integrity verification."
             echo "AIPOS-R6S: deployment authorization + deployment_record."
+            echo "AIPOS-F152: the lybra CLI entry runs from the deploy snapshot, not the product repo working tree."
             ;;
         *)
             err "Unknown command: $cmd"
-            echo "Usage: lybra-deploy [deploy|status|rollback|validate|verify|roots] [--verdict-ref|--dev-override ...]" >&2
+            echo "Usage: lybra-deploy [deploy|status|rollback|validate|verify|roots|install-entry] [--verdict-ref|--dev-override ...|--bin-dir <dir>]" >&2
             exit 2
             ;;
     esac

@@ -1336,6 +1336,11 @@ def build_parser() -> argparse.ArgumentParser:
     _GATE_URL_DEFAULT = get_config_default_gate_url()
     parser = argparse.ArgumentParser(description="AI Project OS CLI")
     parser.add_argument("--workspace-root", dest="global_workspace_root", help="Workspace root; may also be provided on supported subcommands")
+    # AIPOS-F152 件②: 本进程运行的代码(部署快照 / LYBRA_DEV_TREE 开发模式 / 工作树), 唯一实现 deploy_runtime.version_line
+    from tools.aipos_cli.deploy_runtime import VersionAction
+
+    parser.add_argument("--version", action=VersionAction,
+                        help="show which code this lybra runs (deploy snapshot + commit / LYBRA_DEV_TREE dev mode / work tree) and exit")
     subparsers = parser.add_subparsers(dest="command")
 
     # `agent watch --workspace-root`(AIPOS-268 文件系统哨兵): loop 唯一等待原语, 纯客户端只读(无门/凭据)。
