@@ -131,6 +131,21 @@ class DeployGuard:
             return None, str(exc)
         return commit, "" if commit else f"{current / VERSION_FILENAME} 无 git_commit"
 
+    def adopt_own_deploy(self, commit: Any) -> dict[str, Any] | None:
+        """AIPOS-F155 件③(gap #136): 本进程刚执行的 finalize(--deploy)把 current 切到它合入的提交 commit = 本 loop 自己引起的部署, 不算
+        外部更新——比对基线改为 commit, 之后只有非本 loop 引起的变化才 deploy_changed。current ≠ commit / 读不出 / 不适用 = None(基线不动,
+        下一步照常比对)。调用方须在该步执行前 check() 为 None(步前已核过部署未变), 故步内的变化只可能来自这次 finalize。
+        本进程代码仍是启动时的快照(running.commit 不变, 运行记录 deploy.commit 照旧): 推导核 / N6 落账在本进程内、close 子进程与本进程
+        同一代码树(AIPOS-F143), 收尾都跑旧快照——风险说明见 verbs.schema lybra_loop.deploy_consistency.self_deploy。"""
+        if not self.applicable or not commit:
+            return None
+        current, _why = self.current_commit()
+        if current is None or current != str(commit).strip():
+            return None
+        previous, self.baseline = self.baseline, current
+        return {"from": previous, "to": current, "running_release": self.running.release,
+                "deploy_current": str(self.running.deploy_dir / CURRENT_LINKNAME), "code_root": str(self.running.code_root)}
+
     def check(self) -> dict[str, Any] | None:
         if not self.applicable:
             return None

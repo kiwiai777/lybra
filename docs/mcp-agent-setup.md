@@ -77,7 +77,8 @@ overwritten:
    enrolled, running `lybra loop` without `--actor` is refused (the driver cannot be guessed).
    Commands an advisor signs by hand name the signer the same way: a rework round after a FAIL verdict is
    `lybra queue rework --task-id <card> --actor <advisor instance> --verdict-ref <verdict record id> --focus-items '["…"]'
-   --acceptance-criteria '["…"]' --confirm`, and `lybra queue adopt` takes `--actor` likewise. The command signs with that
+   --acceptance-criteria '["…"]' --confirm` (without `--confirm` it only previews the round it would append and
+   pre-checks the signer — nothing is written; AIPOS-F155), and `lybra queue adopt` takes `--actor` likewise. The command signs with that
    instance's own credential and sends it to the gate as `agent_instance`; an instance with no credential in the governance
    root is refused (the refusal lists the enrolled instances), and it never falls back to the first advisor credential in the
    file. Other commands that pick a credential by role refuse when two or more instances hold that role, unless the instance

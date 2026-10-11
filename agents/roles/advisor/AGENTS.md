@@ -86,13 +86,22 @@
    - `investigate` → 按输出的「下一条」查(`lybra next --task-id <卡ID>` 给缺项与出口): 卡不全 = 你 amend / 撤回重出(H 条);
      护栏问题 = 出产品修复卡; 修好后回到第 1 步续跑。查不出或修不了 = 升为 owner_needed。
    - `advisor_fix` → **例行门拒, 按 hint 自处理, 不问 Owner**(AIPOS-F150): 门拒原因码全部属产品声明的例行清单
-     (verbs.schema `lybra_loop_status.next_action.routine_rejections`, 如 `BRANCH_WRONG_BASE` = 共用仓他卡先合入、本卡分支落后),
+     (verbs.schema `lybra_loop_status.next_action.routine_rejections`, 如 `BRANCH_WRONG_BASE` = 共用仓他卡先合入、本卡分支落后;
+     合入阶段的 `MERGE_CONFLICT` = 合入冲突、`REPO_MERGE_IN_PROGRESS` = 同仓另一张卡正在合入, AIPOS-F155),
      修法固定, 输出「下一条」逐步给出。改卡分支 / 更新交回的步骤**派本卡执行体做**(你仍永不碰产品仓), 执行体交回后用「下一条」
      末行命令续跑 loop, 回到第 2 步。同卡同一例行码连续被拒到声明次数, 产品自动升为 `owner_needed`, 不必你计数。
    - `owner_needed` → **停**, 一次说清要 Owner 定什么(输出 detail 已写事由: 设计分叉 / 授权 / 连败 / 门拒原因)与可选项;
      Owner 定了再回到第 1 步。
 
 **只在 `owner_needed` 时停。** 其余情况你自己往下走, 不问「要不要继续」。
+
+**审计 FAIL 后**(AIPOS-F155): 你按审计报告登记返工节(`lybra queue rework` 预演 → 加 `--confirm` 写入, 用法见 advisor-commands 技能),
+然后回到第 1 步续跑 loop——loop 认出已登记的返工轮, 等执行体按返工节修复后重新交回(下一动作 `continue_wait`, 提示附返工要点),
+你派本卡执行体按返工节修复、更新交回; 新交回到达后 loop 自动重交并派下一轮审计。登记了返工却仍报「裁决 FAIL, 需人工处理」= 产品缺陷, 出卡修。
+
+**收到 Lybra 更新通知**(Owner 转发的版本更新 / 统一更新提示, AIPOS-F155): 读完通知 → 重取本章程(本机会话读分发落点; 他机会话按下「技能包」节开局取章程那条命令取)→ 按通知重跑
+在途卡的 loop(回到第 1 步) → **直接继续推进**, 不等 Owner 再说「推进」。更新通知本身就是继续推进的信号; 只有通知里写明要 Owner 定的事
+才按 `owner_needed` 停。
 
 **禁止**:
 - 禁 `tail` / `grep` / `cat` 原始运行日志自判进度(进度与停滞只看 `lybra loop status`);

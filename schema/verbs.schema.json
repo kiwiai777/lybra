@@ -97,6 +97,20 @@
         "ENROLL_CODE_DECLARATION_MISMATCH": "码内签发声明(role / instance)与门兑换下发的 token 不一致(码被改写或签发方异常); 拒且先于写 connection.json。出口: 请签发方重签新码"
       }
     },
+    "queue_writers": {
+      "description": "AIPOS-F155 件④(gap #134): `lybra queue` 族经门动词写卡面的顾问命令(首项 rework: 追加返工节)同一两阶段语义——旗标注册与 project_json_writers / roles_writers / enrollment_log_writers 同一包装 aipos_cli._project_json_two_phase_flags(family=queue_writers), 旗标名与缺省阶段读 project_json_writers 一处(本段不重复声明)。缺省 = 预演: 本机经返工节唯一构建 queue_mutation.build_rework_round(校验 claimed / 轮次上限 + 构造, 不写盘)显示将追加的返工节(轮次 / 依据裁决 / 点杀清单 / 验收), 并以门侧同一判定预检签发者(two_phase_shell_factory.signer_role_for_actor 按 --actor 实例选凭据 + custom_roles.authorize_instance_class 角色类), 零写入、不调门动词、不打印凭据; --confirm 才经门动词 lybra_queue_rework_dry_run → lybra_queue_rework_confirm 写入(two_phase_shell_factory.execute_two_phase_verb, 签发实例 = --actor)。日后新增同类命令登记于 commands 即得同一两阶段。",
+      "commands": [
+        "rework"
+      ],
+      "flag_help": {
+        "dry_run": "Preview the rework round that would be appended (round / verdict ref / focus items / acceptance) and pre-check the signer, without writing or calling the gate (default)",
+        "confirm": "Append the rework round via the gate (lybra_queue_rework_dry_run -> lybra_queue_rework_confirm), signed by --actor"
+      },
+      "outcome_labels": {
+        "preview": "预览(未写; 加 --confirm 经门写入)",
+        "done": "已写入"
+      }
+    },
     "enrollment_log_writers": {
       "description": "AIPOS-F153 件①: 写接入日志(enrollment_log, 只追加)的本地 CLI 命令同一两阶段语义——与 project_json_writers 同一包装(aipos_cli._project_json_two_phase_flags 注册旗标, family=enrollment_log_writers), 旗标名 / 缺省阶段 / 状态标签读 project_json_writers 一处(本段不重复声明), 本段只登记命令与旗标帮助。缺省 = 预演: 打印将作废的各行(行号 + 动作 + code_id + 时刻)、所在日志与将追加的 void 行, 零写入; --confirm 才追加。预演/写入同一实现 = enrollment.void_instance_events(dry_run)。日后新增写接入日志的命令登记于 commands 即得同一两阶段。",
       "commands": [
@@ -1897,7 +1911,8 @@
       "deploy_consistency": {
         "description": "AIPOS-F152 件①(gap #127: F148 长驻 loop 启动于 F147 部署前, 部署后读到新格式声明而内存是旧代码 → 崩): loop 启动时记下本进程运行的部署快照提交(运行代码根 = <部署目录>/releases/<名> 时取其 VERSION git_commit; 判定唯一实现 tools/aipos_cli/deploy_runtime.DeployGuard, VERSION 解析唯一口 gate_drift.read_version_commit), 每步推导前比对 <部署目录>/current 的提交; 变了(含 current 不在 / 不可读)= 以 end_reason deploy_changed、exit_codes.deploy_changed 干净结束, 运行记录 deploy 段写明 from / to 提交, 结束原文第一行即「部署已更新 … 用原命令重跑 loop 从断点续做」。手工模式等待(未拉起 harness)期间也每轮比对(经唯一等待原语 agent_watch_fs.run_fs_watch 的 deploy_guard), 部署一变即醒来结束; 拉起 harness 的等待期间不打断(打断 = 终止进程组, 执行体白干), 等待结束后的下一步前照常比对。非部署快照运行(卡工作树测试 / python -m / lybra --dev-tree 开发开关)= 不适用, 运行记录 deploy.deploy_check=not_applicable 如实标明。同一判定也用于 `lybra agent watch`(lybra_agent_watch.exit_codes.deploy_changed)与 `lybra loop status --wait`(lybra_loop_status.exit_codes.deploy_changed)。",
         "end_reason": "deploy_changed",
-        "run_record_field": "deploy"
+        "run_record_field": "deploy",
+        "self_deploy": "AIPOS-F155 件③(gap #136): 本 loop 自己执行的 finalize(--deploy)成功后, 以本卡 finalization 记录的合入提交(merge_commit)让 DeployGuard 采纳该部署为比对基线(唯一实现 deploy_runtime.DeployGuard.adopt_own_deploy, 调用 loop_driver._adopt_own_deploy): 部署链接 current 恰指向该提交 = 本 loop 引起的部署, 不 deploy_changed, 继续 close / N6; current 不是该提交(未部署 / 部署失败 / 期间他人部署)= 基线不动, 下一步照常比对, 非本 loop 引起的变化仍 deploy_changed。运行记录 deploy 段另写 self_deployed_to / self_deployed_at(deploy.commit 仍 = 本进程运行快照)。代码版本说明(风险如实): 采纳后收尾仍跑启动时的旧快照——推导核与 N6 落账在本进程内执行(AIPOS-F94), close 的派生子进程按 AIPOS-F143 workstation_wiring.lybra_cli_invocation 与本 loop 同一代码树(旧快照, 部署保留最近多份快照且不删 previous), 不是现部署; 门服务(MCP)由部署重启为新代码, close 薄壳(旧) ↔ 门(新)的兼容性与任何旧客户端相同。即本卡新合入的改动对本次收尾不生效, 到下一次 loop 运行才生效; 收尾三步(close / N6 落账 / 运行记录终态)只读写本卡已落记录, 与推进本卡至合入的代码同版本。"
       },
       "single_implementation": {
         "derivation_core": "tools/aipos_cli/next_resolver.derive_next_step (AIPOS-F71 唯一推导核, 禁第二推导核)",
@@ -2110,7 +2125,7 @@
           "crashed": "loop 内部异常退出(exit_code 记 1; 异常类型进 end_message)"
         },
         "end_codes": {
-          "description": "AIPOS-F150 件①(gap #128): loop 以 end_reasons 所列结束原因结束时, 运行记录另落 end_codes = 门拒原文(loop 结果全文 message, 非仅首行 end_message)里出现的既有门拒错误码列表(按出现顺序去重)。只抽取不造码: 码 = 门侧 blocking_reasons / error_code 既有写法(`<码>: 原因` 或 error_code=<码>), 抽取式样即 patterns(每条含命名组 code); 抽不出 = 空列表(下一动作照旧 owner_needed)。其余结束原因不落(null)。唯一实现 tools/aipos_cli/loop_run_record.extract_end_codes(LoopRunRecorder.end 调用); 旧记录无此键 = 视同空列表(行为不变)。",
+          "description": "AIPOS-F150 件①(gap #128): loop 以 end_reasons 所列结束原因结束时, 运行记录另落 end_codes = 门拒原文(loop 结果全文 message, 非仅首行 end_message)里出现的既有门拒错误码列表(按出现顺序去重)。只抽取不造码: 码 = 门侧 blocking_reasons / error_code 既有写法(`<码>: 原因` 或 error_code=<码>), 抽取式样即 patterns(每条含命名组 code); 抽不出 = 空列表(下一动作照旧 owner_needed)。其余结束原因不落(null)。唯一实现 tools/aipos_cli/loop_run_record.extract_end_codes(LoopRunRecorder.end 调用); 旧记录无此键 = 视同空列表(行为不变)。AIPOS-F155 件①(gap #133): 门拒原文三种已知格式同一抽取——列表(`lybra_queue_return BLOCKED: [\"BRANCH_WRONG_BASE: …\"]` / ['…'])、单条(`<码>: 原因` / error_code=<码>)、finalize 结果段(`Verdict: BLOCK` 下一行 `error_code: <码>`, 码 = finalize 结果 category: 仓级合入锁 REPO_MERGE_IN_PROGRESS / 合并冲突 MERGE_CONFLICT 等); finalize 此前不出码 = 抽不出(F151/F152 实撞 end_codes 为空)。",
           "end_reasons": ["gate_rejected", "landing_rejected"],
           "patterns": [
             "(?<![A-Za-z0-9_])(?P<code>[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+):",
@@ -2232,11 +2247,28 @@
                 "执行体把交回报告 frontmatter commit_sha / tree_hash 改为卡分支新 tip(git rev-parse {branch} / git rev-parse {branch}^{{tree}}), 正文补合入基线与定向测试证据",
                 "顾问用原命令续跑 loop(本修法末行命令); 若本卡已审计过, loop 走既有 verdict_stale 重审出口(裁决覆盖的 tip 已变), 不手工干预"
               ]
+            },
+            "REPO_MERGE_IN_PROGRESS": {
+              "why_routine": "AIPOS-F155 件①(gap #133): finalize 仓级合入锁被同仓另一张卡持有(AIPOS-F135, 码 = transitions nodes.N5.branch_integration.repo_merge_lock.busy_category, finalize 输出 `error_code:` 行), 本卡未合并、未改仓; 修法固定 = 等对方合完, 用原命令重跑, 不涉设计判断",
+              "fix": [
+                "不改卡、不碰产品仓、不问 Owner: 同仓另一张卡正在合入(持锁卡与进程见拒因原文), 本卡未合并、未改仓",
+                "等持锁卡 finalize 结束(其 loop 推进过合入步 / 其 finalization 记录落盘; 看进度: lybra loop status --task-id <持锁卡> --workspace-root {governance_root})",
+                "顾问用原命令重跑 loop(本修法末行命令): 推导核按已落记录重派同一条 finalize; 同卡连续被锁拒到声明次数 = 产品升 owner_needed(排合入顺序)"
+              ]
+            },
+            "MERGE_CONFLICT": {
+              "why_routine": "AIPOS-F155 件①(gap #133): finalize 把卡分支合入基线时冲突(transitions nodes.N5.branch_integration.conflict_policy: 中止、列冲突文件、main 无半合并残留; finalize 输出 `error_code: MERGE_CONFLICT`), 典型 = 共用仓他卡先合入改了同一文件; 修法固定 = 执行体在卡分支合入最新基线解冲突后重交, 走既有重审出口, 不涉设计判断(解冲突要设计裁定 = 执行体升 owner_needed)",
+              "fix": [
+                "派本卡执行体(顾问永不碰产品仓)在卡工作树 {worktree} 把最新 {base} 合入卡分支 {branch}(合并, 不 rebase / 不 stash): {base_sync_command}; 冲突文件见拒因原文, 由执行体按卡意图解, 解不了 = 升 owner_needed",
+                "执行体在卡工作树重跑本卡定向测试(卡面验收所列), 绿后提交合并结果",
+                "执行体把交回报告 frontmatter commit_sha / tree_hash 改为卡分支新 tip(git rev-parse {branch} / git rev-parse {branch}^{{tree}}), 正文补解冲突与定向测试证据",
+                "顾问用原命令续跑 loop(本修法末行命令): 裁决覆盖的 tip 已变, loop 走既有 verdict_stale 重交回 → 下一轮审计, 不手工干预"
+              ]
             }
           },
           "end_reasons": {
             "deploy_changed": {
-              "why_routine": "AIPOS-F152 件①: 部署已更新(他卡 finalize 或本卡自身 finalize 的部署), 本次 loop 在步间干净停下、未执行下一步; 修法固定 = 用原命令重跑(新进程从新部署快照加载), 推导核按已落记录从断点续做, 不涉设计判断",
+              "why_routine": "AIPOS-F152 件①: 部署已更新(他卡 finalize 的部署; AIPOS-F155 件③起本 loop 自身 finalize 的部署不再触发, 见 lybra_loop.deploy_consistency.self_deploy), 本次 loop 在步间干净停下、未执行下一步; 修法固定 = 用原命令重跑(新进程从新部署快照加载), 推导核按已落记录从断点续做, 不涉设计判断",
               "fix": [
                 "不改卡、不碰产品仓、不问 Owner: 部署已更新, 上次 loop 跑的是旧版本代码, 已在步间停下(新旧提交见本运行记录 deploy 段 / detail)",
                 "顾问用原命令重跑 loop(本修法末行命令): 新进程从新部署快照加载, 推导核按已落记录从断点续做, 已落的步不重复"

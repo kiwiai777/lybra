@@ -257,7 +257,9 @@ def test_item1_routine_codes_are_existing_gate_codes_declared_once():
     import subprocess
 
     for code in _routine()["codes"]:
-        hits = subprocess.run(["git", "grep", "-l", f"{code}:", "--", "tools/aipos_cli/board_adapter.py", "tools/mcp_server/"],
+        # AIPOS-F155 件①: 门侧既有码出处另含 finalize 结果 category(finalize.py 字面 / transitions repo_merge_lock.busy_category 声明)
+        hits = subprocess.run(["git", "grep", "-l", "-e", f"{code}:", "-e", f'"{code}"', "--", "tools/aipos_cli/board_adapter.py",
+                               "tools/mcp_server/", "tools/aipos_cli/finalize.py", "schema/transitions.schema.json"],
                               cwd=REPO_ROOT, capture_output=True, text=True).stdout.split()
         _show(f"[例行码出处] {code}: {hits}")
         assert hits, f"{code} 不是门侧既有错误码"

@@ -1572,6 +1572,36 @@ def _live_card_branch(workspace_root: Path, task_id: str,
     return tip
 
 
+def uncleared_rework_rounds(card_frontmatter: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """AIPOS-F75 件③ 返工识别唯一实现: 卡面 rework_rounds(只经 queue rework 门动词追加)中未销账(无 cleared_at)的轮次, 按登记序。
+    推导核「claimed 且无交回」分支(F75 原逻辑)与 AIPOS-F155 件② N4 非 PASS 裁决分支(rework_round_for_verdict)同读, 禁第二份。"""
+    rounds = (card_frontmatter or {}).get("rework_rounds") if isinstance(card_frontmatter, dict) else None
+    if not isinstance(rounds, list):
+        return []
+    return [r for r in rounds if isinstance(r, dict) and not r.get("cleared_at")]
+
+
+def rework_round_for_verdict(card_frontmatter: dict[str, Any] | None, verdict: dict[str, Any] | None) -> dict[str, Any] | None:
+    """AIPOS-F155 件②(gap #135): 针对该门生裁决登记的未销账返工轮(最新一轮; 识别 = uncleared_rework_rounds 同一实现)。
+    「针对」= 返工节 verdict_ref 指向该裁决(含其 verdict_id 或审计卡号, 门 queue rework 不校验写法, 两种写法都认)或登记时刻不早于裁决时刻
+    (verdict_at; 轮次销账字段 cleared_at 尚无写入方, 故用时刻区分上一轮 FAIL 的旧返工节)。无 = None。"""
+    if not isinstance(verdict, dict):
+        return None
+    verdict_id = str(verdict.get("verdict_id") or "").strip()
+    audit_id = str(verdict.get("audit_task_id") or "").strip()
+    verdict_at = str(verdict.get("verdict_at") or "").strip()
+    for rnd in reversed(uncleared_rework_rounds(card_frontmatter)):
+        ref = str(rnd.get("verdict_ref") or "").strip()
+        if verdict_id and verdict_id in ref:
+            return rnd
+        if audit_id and ref and re.search(rf"(?<![A-Za-z0-9_-]){re.escape(audit_id)}(?![A-Za-z0-9])", ref):
+            return rnd
+        created = str(rnd.get("created_at") or "").strip()
+        if verdict_at and created and created >= verdict_at:
+            return rnd
+    return None
+
+
 def verdict_staleness(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None) -> dict[str, Any] | None:
     """AIPOS-F112 件①: 「裁决已过期」判据唯一实现(推导核 audit_verdict 判定前 / 门侧交回自动派审 同读, 禁第二份)。
 
@@ -1590,11 +1620,20 @@ def verdict_staleness(workspace_root: Path, task_id: str, card_frontmatter: dict
     check = find_gate_pass_verdict_for_task(task_id, Path(workspace_root), required_commit_sha=subject["commit_sha"])
     allowed = [str(v) for v in (_transition_node("N5").get("guards", {}).get("has_pass_verdict", {}).get("allowed_verdict_values") or [])]
     covered = check.get("artifact_subject") if isinstance(check.get("artifact_subject"), dict) else None
-    if check.get("found") or str(check.get("verdict") or "") not in allowed or covered is None:
+    if check.get("found") or covered is None:
         return None
     verdict_file = str(check.get("verdict_file") or "")
     verdict_fm = _read_frontmatter(Path(verdict_file)) if verdict_file else {}
+    rework = None
+    if str(check.get("verdict") or "") not in allowed:
+        # AIPOS-F155 件②(gap #135): 非 PASS 裁决本身不「过期」; 但已针对它登记返工轮(F75 返工识别同一实现)且卡分支已前进(返工修复提交)
+        # = 该裁决审的产物已被返工取代, 与 PASS 过期同一出口(重交回 → 门侧按卡号演进派下一轮审计)
+        rework = rework_round_for_verdict(card_frontmatter, {**verdict_fm, "verdict_id": check.get("verdict_id"),
+                                                             "verdict_at": check.get("verdict_at")})
+        if rework is None or str(covered.get("commit_sha") or "").strip().lower() == str(subject["commit_sha"]).lower():
+            return None
     return {
+        "rework_round": rework,
         "verdict_id": str(check.get("verdict_id") or ""),
         "verdict": str(check.get("verdict") or ""),
         "verdict_at": str(check.get("verdict_at") or ""),
@@ -2177,6 +2216,46 @@ def _derive_return_stale(workspace_root: Path, task_id: str, fm: dict[str, Any],
     )
 
 
+def _derive_rework_wait(workspace_root: Path, task_id: str, fm: dict[str, Any], records: dict[str, Any], verdict: dict[str, Any],
+                        rework: dict[str, Any], *, claimer: str, conn_arg: str | None) -> dict[str, Any]:
+    """AIPOS-F155 件②(gap #135): N4 非 PASS 裁决且已针对它登记返工轮(F75 返工识别 rework_round_for_verdict)。
+    执行体已按返工节修复(卡分支前进, verdict_staleness 判该裁决已被返工取代)且 Return frontmatter commit_sha 已是新 tip = 重交回,
+    走 F112 verdict_stale 同一出口(_derive_verdict_stale → 重交回 → 门侧按卡号演进派下一轮审计 R(n+1)); Return 已写新 tip 但不合规 =
+    该出口的 artifact_invalid(原文点名)。否则 = 等返工交回: 不可推导但 action await_rework(loop 按执行体产物等待, 与 N1 执行体在干活
+    同一等待; 不以 not_derivable 结束, 故不入连败), 等待提示附返工节要点。"""
+    round_num = rework.get("round") or "?"
+    focus = [str(x) for x in (rework.get("focus_items") or [])]
+    criteria = "; ".join(ln.strip() for ln in str(rework.get("acceptance_criteria") or "").splitlines() if ln.strip())  # 一行(等待提示单行)
+    stale = verdict_staleness(workspace_root, task_id, fm)
+    return_path = find_return_artifact(workspace_root, task_id)
+    if stale is not None and stale.get("rework_round") is not None and return_path is not None:
+        ret_fm = _read_frontmatter(return_path, allow_missing_block=True)
+        if str(ret_fm.get("commit_sha") or "").strip().lower() == str(stale.get("tip") or "").lower():
+            return _derive_verdict_stale(workspace_root, task_id, fm, records, stale, claimer=claimer, conn_arg=conn_arg)
+    branch = card_branch_name(task_id)
+    progress = (f"卡分支 {branch} 已有返工提交(tip {str(stale.get('tip'))[:12]}), 等 Return frontmatter commit_sha / tree_hash 更新为该 tip"
+                if stale is not None else f"等卡分支 {branch} 出现返工提交并更新 Return")
+    points = "; ".join(focus) if focus else "(返工节无具体项)"
+    return {
+        "task_id": task_id,
+        "derivable": False,
+        "current_node": "audit_verdict",
+        "current_state": "claimed",
+        "triggered_by": "executor",
+        "command": "",
+        "verb": "lybra_queue_return_dry_run",
+        "missing_records": [f"第 {round_num} 轮返工交回(卡分支 {branch} 新提交 + Return commit_sha/tree_hash 更新为新 tip)"],
+        "suggested_action": (f"执行体按第 {round_num} 轮返工节修复后重新交回(返工要点: {points}"
+                             + (f"; 验收: {criteria}" if criteria else "")
+                             + f"): 在卡工作树提交修复 → 重跑定向测试 → 把 Return frontmatter commit_sha / tree_hash 改为卡分支新 tip、"
+                               "正文补返工证据; loop 见新交回即重交并派下一轮审计"),
+        "notes": (f"N4: 裁决 {verdict.get('verdict')}({verdict.get('verdict_id') or '?'}), 已登记第 {round_num} 轮返工"
+                  f"(依据 {rework.get('verdict_ref') or '?'}); {progress}(AIPOS-F155 件②, F75 返工节)"),
+        "rework_round": rework,
+        "action": {"type": "await_rework", "card": task_id, "round": round_num},
+    }
+
+
 def _derive_stale_re_return(workspace_root: Path, task_id: str, fm: dict[str, Any], records: dict[str, Any],
                             stale: dict[str, Any], *, claimer: str, conn_arg: str | None, state: str, stale_key: str, head: str,
                             reviewed_ref: str, since: str | None, reviewed_what: str, without_round_suggested: str,
@@ -2744,7 +2823,12 @@ def _derive_next_step(
                         "notes": f"N4→N5: 裁决 {verdict_result},需 finalize",
                     }
                 else:
-                    # FAIL/BLOCK 等非 PASS 裁决
+                    # AIPOS-F155 件②(gap #135): 已针对本裁决登记返工轮 = 等执行体按返工节修复后重交(不再「需人工处理」)
+                    rework = rework_round_for_verdict(fm, latest_verdict)
+                    if rework is not None:
+                        return _derive_rework_wait(workspace_root, task_id, fm, records, latest_verdict, rework,
+                                                   claimer=claimer, conn_arg=conn_arg)
+                    # FAIL/BLOCK 等非 PASS 裁决(未登记返工轮)
                     return {
                         "task_id": task_id,
                         "derivable": False,
@@ -2942,8 +3026,8 @@ def _derive_next_step(
         # 无 return 记录也无 RETURN.md → 检查是否有返工节 (AIPOS-F75 件③)
         rework_rounds = fm.get("rework_rounds", [])
         if isinstance(rework_rounds, list) and rework_rounds:
-            # 取最新且未销账的轮次
-            uncleared_rounds = [r for r in rework_rounds if not r.get("cleared_at")]
+            # 取最新且未销账的轮次(识别唯一实现 uncleared_rework_rounds, AIPOS-F155 件② N4 分支同读)
+            uncleared_rounds = uncleared_rework_rounds(fm)
             if uncleared_rounds:
                 # 有未销账返工节,输出点杀清单
                 latest_round = uncleared_rounds[-1]
