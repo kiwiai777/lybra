@@ -37,7 +37,7 @@ role: advisor
 | **N2 执行** | 监督进度 | 无直接干预 (执行体在卡分支提交 + 把 Return 落到项目声明落点; `lybra loop` 经 agent watch 等它落盘) |
 | **N3 交回** | 监督交回流程 | `lybra loop`(推进行; 推导核派生 `lybra artifact ingest --kind return`: 校验 Return frontmatter 与分支 tip, **模型字段由产品从会话记录填写**, 自报只作对照) |
 | **N4 审计** | 代码卡审计入门 / 审非代码卡 | 代码卡: `lybra loop`(审计报告落盘后派生 `lybra artifact ingest --kind verdict`: 绑被审分支 tip、产品填模型字段、**门把报告全文快照进 records**, 顾问不手提裁决); 非代码卡顾问自审: `lybra audit-verdict`; 手动派审 `lybra audit dispatch` |
-| **返工** | 追加返工节 | `lybra queue rework --confirm` (AIPOS-F75, F73C件⑤) |
+| **返工** | 审计 FAIL 后追加返工节(缺省预演, `--confirm` 才写); 登记后 loop 自动等执行体按返工节修复重交 → 下一轮审计 | `lybra queue rework` → `lybra queue rework --confirm` → `lybra loop`(AIPOS-F75, F73C件⑤, F155) |
 | **N5 finalize** | 监督交付上线 | `lybra loop`(推进行) |
 | **N6 收账/落账** | 治理真相进治理仓(提交+推送) | **每张卡由 `lybra loop` 结案后自动落账**(N6 落账步 = `lybra governance-commit --task-id <卡ID>`, task 范围精确提交, 幂等; AIPOS-F94);**非卡改动**(项目声明、治理文档、信封与决策记录)用 `lybra governance-commit --paths` 精确提交;查漏 `lybra state lint`(GOVERNANCE_UNCOMMITTED);编年史 `generate_backlog_entry.py`, 决策 `lybra owner-decision` |
 
@@ -110,17 +110,23 @@ lybra queue withdraw --task-id <卡ID> --reason "duplicate" \
 #### `lybra queue rework`
 **何时用**:追加返工节到卡面(FAIL 裁决后,点杀清单+验收标准)(顾问职责).
 ```bash
+# ① 预演(缺省): 显示将追加的返工节(第几轮 / 依据裁决 / 点杀 / 验收)并预检签发实例, 零写入、不调门
 lybra queue rework --task-id <卡ID> --actor <你的顾问实例> \
   --verdict-ref "<裁决记录ID>" \
   --focus-items '["fix item 1", "fix item 2"]' \
-  --acceptance-criteria '["criterion 1", "criterion 2"]' \
-  --confirm
+  --acceptance-criteria '["criterion 1", "criterion 2"]'
+# ② 确认写入: 同一命令加 --confirm(经门两阶段, 按 --actor 实例的凭据签发)
+lybra queue rework --task-id <卡ID> --actor <你的顾问实例> --verdict-ref "<裁决记录ID>" \
+  --focus-items '["fix item 1", "fix item 2"]' --acceptance-criteria '["criterion 1", "criterion 2"]' --confirm
+# ③ 续跑: loop 认出「已登记返工轮」, 等执行体按返工节修复后重新交回, 再自动重交并派下一轮审计(R2/R3…)
+lybra loop --task-id <卡ID> --workspace-root <治理根>
 # 凭据自动发现(工位 .lybra/connection.json, 或 --connection-json <凭据文件>); token 永不上屏
 ```
 **约束**:
-- 只能由 advisor 调用(需 queue_rework scope);
-- 必须带 `--confirm` (两阶段门动词);
-- rework_rounds 字段禁手写,只能通过本命令追加。
+- 只能由顾问类实例签发(`--actor` 即签发实例, 按其凭据签; 未接入本治理根即拒);
+- 两阶段(AIPOS-F155, verbs.schema `two_phase_protocol.queue_writers`): 缺省预演, `--confirm` 才写;
+- rework_rounds 字段禁手写,只能通过本命令追加;
+- 登记后 `lybra loop status` 的下一动作是 `continue_wait`(loop 在等返工交回, 手工提示里附返工要点): 派本卡执行体(子 agent)按返工节修复 → 重跑定向测试 → 把 RETURN.md frontmatter `commit_sha` / `tree_hash` 改为卡分支新 tip, 写完即止; 不再报「裁决 FAIL, 需人工处理」。
 
 ---
 
@@ -159,7 +165,14 @@ lybra loop status --task-id <卡ID> --workspace-root <治理根> --wait 540     
 lybra loop status --workspace-root <治理根> --json                          # 缺 --task-id = 本项目全部未结束的运行
 ```
 **下一动作**(唯一判定在产品, 判据表 verbs.schema `lybra_loop_status.next_action`): `continue_wait` / `owner_needed`(附事由) /
-`card_done_take_next`(附下一条命令) / `investigate`(附下一条命令)。`--wait` 的退出码按下一动作(verbs.schema `lybra_loop_status.exit_codes`)。
+`card_done_take_next`(附下一条命令) / `investigate`(附下一条命令) / `advisor_fix`(例行情况, 附修法与续跑命令)。`--wait` 的退出码按下一动作(verbs.schema `lybra_loop_status.exit_codes`)。
+
+**`advisor_fix` 用法**(AIPOS-F150 / F152 / F155; 怎么循环见顾问章程「持续推进守则」): 输出的 hint 是编号修法 + 末行续跑命令, 照做即可, 不问 Owner。
+例行清单只在 verbs.schema `lybra_loop_status.next_action.routine_rejections` 一处声明, 目前:
+- 门拒码 `BRANCH_WRONG_BASE`(交回时基线已前进)/ `MERGE_CONFLICT`(finalize 合入冲突): 派本卡执行体在卡工作树合入最新基线、解冲突、重测、更新交回 frontmatter, 然后末行命令续跑(走既有重审出口);
+- 门拒码 `REPO_MERGE_IN_PROGRESS`(同仓另一张卡正在合入): 不改卡, 等持锁卡合完后末行命令重跑;
+- 结束原因 `deploy_changed`(他卡部署了新版本): 末行命令重跑, 从断点续做(本 loop 自己 finalize 的部署不再触发它)。
+同卡同一例行原因连续到声明次数仍被拒 = 产品自动升 `owner_needed`, 不必自己计数。
 **禁止**:tail/grep 原始运行日志自判; until/sleep 轮询(等待只用 `--wait`)。
 
 #### 跨机工位(AIPOS-F110: 执行体在别的机器, 门与治理根在本机)

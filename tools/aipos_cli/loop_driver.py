@@ -17,6 +17,7 @@ AIPOS-F95: 唯一例外——Owner 信封 launch_harnesses 授权该卡 harness 
 - 退出码/参数/允许动词集合/等待产物: schema/verbs.schema.json verbs.lybra_loop 一处声明, 本模块只读。
 - 部署一致性(AIPOS-F152 件①): deploy_runtime.DeployGuard(声明 verbs.lybra_loop.deploy_consistency)——启动记下运行快照提交,
   每步推导前比对 current, 变了 = end_reason deploy_changed 干净结束(手工等待期经 run_fs_watch deploy_guard 每轮比对; 拉起等待期不打断)。
+  AIPOS-F155 件③: 本 loop 自身 finalize 的部署经 DeployGuard.adopt_own_deploy 采纳为比对基线(_adopt_own_deploy), 不 deploy_changed。
 
 每轮: 推导 → 若账务命令: 先过 aipos_cli argparse 解析(失败=exit 4 禁执行) → 执行 → 重推导;
 若 agent 步(执行体在干活 / 已派审等审计体): 经 watch 有界等待产物(产物就绪判据=推导核), 落盘即回到推导;
@@ -1035,6 +1036,7 @@ def _drive(
         watch_root = governance_root
         launch_card: str | None = None  # AIPOS-F95: 执行体(N1)/审计体(N3)等待才可拉起; external finalize 等待不拉起
         repo_turn_wait = False  # AIPOS-F135 件①: external 同仓串行等待(就绪 = 本卡不再 await_repo_turn)
+        rework_note = ""  # AIPOS-F155 件②: 等返工交回时附在手工等待提示后的返工节要点(推导核 suggested_action)
 
         if not derivation.get("derivable"):
             action = derivation.get("action") or {}
@@ -1076,10 +1078,12 @@ def _drive(
                 return result
             if derivation.get("derivable") or wait_patterns:
                 pass  # 审计卡可推导 → 下方账务步; 已定等待 → 下方 watch
-            elif node == "claim" and state == "claimed":
+            elif (node == "claim" and state == "claimed") or action.get("type") == "await_rework":
                 # N1→N2: 执行体在干活 → 等 Return 落盘(落点读项目声明; 骨架不算, 判据=推导核)
+                # AIPOS-F155 件②: N4 非 PASS 裁决已登记返工轮(推导核 await_rework)= 同一执行体等待(等返工修复后的新交回), 不以 not_derivable 结束
                 watch_root, wait_patterns = executor_artifact_watch(governance_root, task_id)
                 launch_card = task_id
+                rework_note = str(derivation.get("suggested_action") or "") if action.get("type") == "await_rework" else ""
             else:
                 missing = list(derivation.get("missing_records") or [])
                 msg = f"不可推导 @ {node}/{state}: missing={missing}; suggested={derivation.get('suggested_action', '')}"
@@ -1108,6 +1112,8 @@ def _drive(
                 plan = plan_launch(governance_root, launch_card, policy=policy, no_launch=no_launch, decl=launch_decl,
                                    already_launched=launched)
                 step.launch = plan.to_dict()
+                if plan.refusal and rework_note:
+                    plan.manual_hint = f"{plan.manual_hint}。返工: {rework_note}"  # AIPOS-F155 件②: 手工提示附返工节要点
                 if plan.refusal:
                     say(f"[{index}] manual: {plan.manual_hint}(未拉起: {plan.refusal})")
             # AIPOS-F131 件① / F136 件①: 等待步进运行记录(拉起判定之后: 记开工方式, 手工模式附开工提示, 供 loop status 给顾问下一动作)
@@ -1214,6 +1220,8 @@ def _drive(
             regression_line = result_line(step.output)
             if regression_line:
                 say(f"[{index}] {regression_line}")
+            if guard is not None:  # AIPOS-F155 件③: 本 loop 自身 finalize 的部署不算外部更新(并入 F152 DeployGuard)
+                _adopt_own_deploy(index, guard, governance_root, target_card, say=say, recorder=recorder)
         if action_type == landing_action:
             # AIPOS-F94 件①: 落账步报成功后以判据复核(已提交且已推送); 仍未落账 = 不重试, exit 4 点名缺什么
             landing = _landing(governance_root, target_card)
@@ -1231,6 +1239,28 @@ def _drive(
     result.outcome, result.exit_code, result.message = "wait_timeout", exit_code_for(contract, "wait_timeout"), msg
     result.reason = "max_steps_exhausted"
     return result
+
+
+def _adopt_own_deploy(index: int, guard: Any, governance_root: Path, task_id: str, *, say: Callable[[str], None],
+                      recorder: LoopRunRecorder) -> None:
+    """AIPOS-F155 件③(gap #136): 本 loop 的 finalize 步成功后, 以本卡 finalization 记录的合入提交(merge_commit, 推导核派 close 同一字段;
+    记录唯一判据 finalization_record.existing_finalization_records)让 DeployGuard 采纳本进程自己引起的部署(DeployGuard.adopt_own_deploy
+    唯一实现); 部署链接未指向该提交(未部署 / 部署失败 / 期间他人部署)= 基线不动, 下一步照常比对(非本 loop 引起的变化仍 deploy_changed)。"""
+    if not getattr(guard, "applicable", False):
+        return
+    from tools.aipos_cli.deploy_runtime import short
+    from tools.aipos_cli.finalization_record import existing_finalization_records
+
+    records = existing_finalization_records(governance_root, task_id)
+    fm = _read_frontmatter(records[0]) if records else {}
+    merge_commit = str(fm.get("merge_commit") or fm.get("commit") or "").strip()
+    adopted = guard.adopt_own_deploy(merge_commit) if merge_commit else None
+    if adopted is None:
+        return
+    recorder.deploy_adopted(adopted)
+    say(f"[{index}] 本 loop finalize 已部署 commit {short(adopted['to'])}(本卡合入提交): 部署比对基线 {short(adopted['from'])} → "
+        f"{short(adopted['to'])}, 自身部署不触发 deploy_changed, 继续收尾(收尾仍跑本进程快照 {adopted.get('running_release')} 的代码, "
+        "本卡新代码下次 loop 运行生效)")
 
 
 def _deploy_changed_end(index: int, change: dict[str, Any], result: LoopResult, *, contract: dict[str, Any],

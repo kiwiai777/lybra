@@ -1426,10 +1426,13 @@ def _integrate_card_branch(
         if not clean_after_abort:
             message += " [警告: abort 后工作树仍不干净]"
         operations.append(f"  → BLOCKED: {message}")
+        # AIPOS-F155 件①(gap #133): 冲突 BLOCK 带结构化拒因码(与 finalize 其余 BLOCK 的 category 同形), 经 finalize 输出
+        # `error_code: <码>` 行进 loop 运行记录 end_codes(抽取唯一实现 loop_run_record.extract_end_codes)
         return {
             **base,
             "blocked": True,
             "action": "blocked_conflict",
+            "category": "MERGE_CONFLICT",
             "message": message,
             "conflict_files": conflict_files,
         }
@@ -2127,6 +2130,7 @@ def _finalize_task_impl(
             "deployment_error": None,
             "commit_hash": None,
             "branch_integration": integrate,
+            **({"category": integrate["category"]} if integrate.get("category") else {}),  # AIPOS-F155 件①: 冲突 = MERGE_CONFLICT
             "message": integrate["message"],
             "operations": operations,
         }

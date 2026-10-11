@@ -938,6 +938,46 @@ def _queue_gate_connection_json(args: argparse.Namespace, repo_root: Any) -> str
     return os.environ.get("LYBRA_CONNECTION_JSON") or None
 
 
+def _queue_rework_preview(args: argparse.Namespace, repo_root: Any, role: str, focus_items: list[Any],
+                          acceptance_criteria: list[str]) -> int:
+    """AIPOS-F155 件④(gap #134): `lybra queue rework` 缺省预演——将追加的返工节由返工节唯一构建 queue_mutation.build_rework_round
+    (门 queue_rework_task 同一函数; 校验 claimed / 轮次上限 + 构造, 不写盘)算出, 签发者角色类以门侧同一判定 custom_roles.authorize_instance_class
+    预检(签发凭据已由调用方经 signer_role_for_actor 按 --actor 实例选定)。零写入、不调门动词、不打印凭据; 拒 = 非零退出(与确认阶段同一拒因)。"""
+    from tools.aipos_cli.board_adapter import restricted_amend_actor_class
+    from tools.aipos_cli.custom_roles import authorize_instance_class
+    from tools.aipos_cli.queue_mutation import build_rework_round
+
+    labels = _two_phase_family_declaration("queue_writers")["outcome_labels"]
+    gate = authorize_instance_class(args.actor, restricted_amend_actor_class(), Path(repo_root))
+    planned = build_rework_round(repo_root=Path(repo_root), task_id=args.task_id, verdict_ref=args.verdict_ref,
+                                 focus_items=[str(x) for x in focus_items], acceptance_criteria="\n".join(acceptance_criteria),
+                                 actor=args.actor)
+    reasons = list(planned.get("blocking_reasons") or [])
+    if not gate["ok"]:
+        reasons.insert(0, f"ROLE_VIOLATION: queue_rework 只能由角色类 {gate['required_class']} 的实例执行; 实例 '{args.actor}' 未授权: {gate['reason']}")
+    data = planned.get("data") or {}
+    payload = {"ok": not reasons, "command": "queue rework", "phase": "dry_run", "wrote": False, "task_id": args.task_id,
+               "signer_instance": args.actor, "signer_role": role, "blocking_reasons": reasons,
+               "rework_round": data.get("new_round"), "round_added": data.get("round_added"), "max_rounds": data.get("max_rounds"),
+               "task_path": data.get("task_path")}
+    if args.json:
+        print(render_json(payload))
+    elif reasons:
+        print(f"queue rework {args.task_id}: BLOCKED(预演, 未写): {reasons}", file=sys.stderr)
+    else:
+        rnd = data.get("new_round") or {}
+        print(f"queue rework {args.task_id}: {labels['preview']}")
+        print(f"  签发实例: {args.actor}(凭据角色 {role}; 门侧角色类 {gate.get('role_class')})")
+        print(f"  卡: {data.get('task_path')}  将追加第 {data.get('round_added')} 轮(上限 {data.get('max_rounds')})")
+        print(f"  依据裁决: {rnd.get('verdict_ref')}")
+        for item in rnd.get("focus_items") or []:
+            print(f"  点杀: {item}")
+        for line in str(rnd.get("acceptance_criteria") or "").splitlines():
+            print(f"  验收: {line}")
+        print("  确认写入: 同一命令加 --confirm")
+    return 1 if reasons else 0
+
+
 def render_adopt_summary(resp: dict[str, Any]) -> str:
     """AIPOS-F123 件①: `lybra queue adopt` 的人读摘要(门应答原样字段, 不另判)。"""
     data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
@@ -1703,7 +1743,7 @@ def build_parser() -> argparse.ArgumentParser:
     queue_rework_parser.add_argument("--focus-items", required=True, help="JSON array of focus items (what to fix)")
     queue_rework_parser.add_argument("--acceptance-criteria", required=True, help="JSON array of acceptance criteria")
     queue_rework_parser.add_argument("--connection-json", help="Path to connection.json (for MCP gate access)")
-    queue_rework_parser.add_argument("--confirm", action="store_true", help="Execute two-phase rework (dry_run + confirm via MCP)")
+    _project_json_two_phase_flags(queue_rework_parser, "rework", family="queue_writers")  # AIPOS-F155 件④: 缺省预演 / --confirm 才经门写
     queue_rework_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     my_tasks_parser = subparsers.add_parser("my-tasks", help="Render tasks for an actor")
@@ -4542,6 +4582,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Task: {result['task_id']}")
             print(f"Actor: {result['actor']}")
             print(f"Verdict: {verdict}")
+            if verdict != Verdict.PASS and result.get('category'):
+                # AIPOS-F155 件①(gap #133): 非 PASS 结果的结构化拒因码(finalize 结果 category: 仓级合入锁 REPO_MERGE_IN_PROGRESS /
+                # 合并冲突 MERGE_CONFLICT 等)以 `error_code: <码>` 行出声——loop 运行记录 end_codes 由 extract_end_codes 唯一抽取
+                print(f"error_code: {result['category']}")
             print(f"\nMessage: {result['message']}")
             
             if result.get('operations'):
@@ -5459,13 +5503,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # AIPOS-F73C件⑤: queue rework — two-phase shell (复用 two_phase_shell_factory)
     if args.command == "queue" and getattr(args, "queue_command", None) == "rework":
-        if not args.confirm:
-            # 没有 --confirm，返回用法提示
-            print("Error: queue rework requires --confirm flag (two-phase via MCP gate)", file=sys.stderr)
-            print("Usage: lybra queue rework --task-id <ID> --actor <顾问实例(签发者, 按其凭据签)> --verdict-ref <ref> \\", file=sys.stderr)
-            print("         --focus-items '[...]' --acceptance-criteria '[...]' --connection-json <path> --confirm", file=sys.stderr)
-            return 1
-        
+        # AIPOS-F155 件④(gap #134): 两阶段(verbs.schema two_phase_protocol.queue_writers)——缺省预演(本机算将追加的返工节 + 签发者预检,
+        # 零写入不调门); --confirm 才经门动词写入。原「不带 --confirm 直接报错」退役。
         # 解析 JSON 参数
         try:
             focus_items = json.loads(args.focus_items)
@@ -5499,6 +5538,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Error resolving advisor credential for --actor {args.actor}: {exc}", file=sys.stderr)
             return 1
         
+        if not args.confirm:
+            return _queue_rework_preview(args, repo_root, role, focus_items, acceptance_criteria)
+
         # 构建动词参数(门 lybra_queue_rework_dry_run inputSchema: acceptance_criteria = string, card.schema rework_rounds 同型;
         # CLI 收 JSON 数组, 逐条一行交门)
         args_dict = {

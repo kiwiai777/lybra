@@ -396,6 +396,14 @@ class LoopRunRecorder:
         self._dirty = True
         self.flush(force=True)
 
+    def deploy_adopted(self, adopted: dict[str, Any]) -> None:
+        """AIPOS-F155 件③: 本 loop 自身 finalize 的部署被采纳为比对基线(deploy.commit 仍 = 本进程运行快照; self_deployed_to = 采纳的提交)。"""
+        deploy = dict(self.meta.get("deploy") or {})
+        deploy.update({"self_deployed_to": adopted.get("to"), "self_deployed_at": iso_z()})
+        self.meta["deploy"] = deploy
+        self._dirty = True
+        self.flush(force=True)
+
     def step_started(self, index: int, kind: str, node: Any, state: Any, card: str, *, action: str = "",
                      waiting_for: list[str] | None = None, mode: str | None = None, hint: str | None = None) -> None:
         """mode/hint(AIPOS-F136 件①, 只用于等待步): launch = loop 已拉起执行引擎; manual = 手工模式等工位开工, hint = 开工提示
@@ -408,7 +416,8 @@ class LoopRunRecorder:
         if mode:
             self.meta["current_step"]["mode"] = mode
         if hint:
-            self.meta["current_step"]["hint"] = redact_progress(str(hint))[:240]
+            # AIPOS-F155 件②: 等返工交回时提示另附返工节要点, 上限 240 → 600(子 agent 口径开工提示本身已近 240, 原上限截掉返工要点)
+            self.meta["current_step"]["hint"] = redact_progress(str(hint))[:600]
         self._dirty = True
         self.flush(force=True)
 
@@ -1073,6 +1082,9 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
         if dep.get("changed_to") or dep.get("changed_to_detail"):  # AIPOS-F152 件①: 运行记录 deploy 段(新旧提交)
             out.append(f"  部署: 本运行快照 {dep.get('release')} commit {dep.get('commit')} → 现部署 commit "
                        f"{dep.get('changed_to') or dep.get('changed_to_detail')}({dep.get('changed_at')})")
+        if dep.get("self_deployed_to"):  # AIPOS-F155 件③: 本 loop 自身 finalize 的部署(已采纳为比对基线, 不触发 deploy_changed)
+            out.append(f"  部署: 本 loop finalize 自身部署 commit {dep.get('self_deployed_to')}({dep.get('self_deployed_at')}), "
+                       f"已采纳为比对基线; 本进程代码仍为快照 {dep.get('release')} commit {dep.get('commit')}")
         if v.get("note"):
             out.append(f"  注: {v['note']}")
         if v.get("lane_error"):
