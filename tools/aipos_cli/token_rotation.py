@@ -246,9 +246,10 @@ def _reenroll_guidance(entries: list[dict[str, Any]], gate_base: str | None) -> 
     base_url = gate_base or "(gate url unknown)"
     lines = [
         "All rotated tokens below are now INVALID. Every workstation holding an old token",
-        "must re-enroll with a fresh enrollment code:",
-        "  1) code issuer (owner-side): lybra roles enroll-code --role <role> [--instance <instance>] --owner-authorization-ref <ref>",
-        "  2) workstation:             lybra roles enroll --code <code> --workspace-root <seat-root> --gate-url " + base_url,
+        "must re-enroll (AIPOS-F151: issue + redeem in one process on the governance-root machine; the code never leaves it):",
+        "  lybra roles enroll-deliver --role <role> --instance <instance> --governance-root <governance root> "
+        "--workspace <seat-root> --gate-url " + base_url + " --owner-authorization-ref <ref>   (preview; add --confirm to execute)",
+        "  remote seat: add --ssh <target> (the code reaches the remote enrollment over ssh stdin only)",
         "Invalidated fingerprints:",
     ]
     for entry in entries:
@@ -412,11 +413,13 @@ def remove_instance_report(
     reason: str = "",
     connection_target: Path | None = None,
     reload_gate: bool = True,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """AIPOS-F21: `lybra roles remove --instance <name>` — remove token entry(ies)
     bound to an agent_instance from connection.json (with record + reload).
 
     Owner-gated (owner_authorization_ref required) like the roles family.
+    AIPOS-F151 件④: dry_run=True = 预演(同一校验与选取, 列将删的 token 引用 / 指纹 / 角色类), 零写入(不备份、不写记录、不重载门)。
     """
     workspace_root = Path(workspace_root).expanduser().resolve()
     conn_path = _connection_path(workspace_root, connection_target=connection_target)
@@ -446,6 +449,13 @@ def remove_instance_report(
     if not removed:
         return {**base, "ok": False, "verdict": Verdict.BLOCK, "blocking_reasons": [{
             "message": f"No token entry bound to instance {instance!r} in {conn_path}."}]}
+    if dry_run:
+        from tools.aipos_cli.custom_roles import resolve_role_to_class
+
+        return {**base, "ok": True, "verdict": Verdict.PASS, "dry_run": True,
+                "would_remove": [{**_safe_entry(t), "role_class": t.get("role_class") or resolve_role_to_class(str(t.get("role") or ""),
+                                                                                                           workspace_root)}
+                                 for t in removed]}
 
     now = iso_z()
     config["tokens"] = kept

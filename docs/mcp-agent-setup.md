@@ -7,7 +7,7 @@ return work, launch a worker, dispatch audit, or finalize anything.
 
 | Party | Gate access |
 |---|---|
-| **Owner** | Starts the gate (`lybra serve start`), signs envelopes (`lybra envelope mint --confirm`), issues enrollment codes. |
+| **Owner** | Starts the gate (`lybra serve start`), signs envelopes (`lybra envelope mint --confirm`), enrolls the advisor (`lybra roles enroll-deliver`). |
 | **Advisor** | Drives every card through product commands — `lybra loop --task-id <card>` derives and runs claim / return ingest / audit dispatch / verdict ingest / finalize / close with the advisor's own credential. The advisor never hand-writes gate calls. Progress of a running (or backgrounded) loop is read with `lybra loop status [--task-id <card>]` on the governance-root machine (over ssh is fine) — never by tailing or grepping raw logs. After a card closes, the next card to drive is the first line of `lybra next` (project scan: the highest-priority pending card whose `depends_on` are all satisfied by gate-born records, declared in `schema/card.schema.json` `dependency_gate`). In a multi-repo project, `lybra next` / `lybra brief` / `lybra loop status` / `lybra needs-owner` take the same `--lane <repo name>` filter (declared once in `schema/verbs.schema.json` `lane_view`); repeat it for a sub-project that spans several repos (`--lane <repo a> --lane <repo b>`); without it, `brief` and `needs-owner` group their output by lane. |
 | **Executor / auditor workstations** | **None.** A workstation is opened with `/go` (or launched by the advisor's `lybra loop` when the Owner's envelope authorizes it with `--launch-harness`), commits on the card branch and writes its report to the project's declared location; the advisor's `lybra loop` picks the artifact up. Workstations hold no claim / return / confirm scope. |
 
@@ -19,14 +19,21 @@ the record; its path is printed on the loop's first line and by `lybra loop stat
 launch_dead / loop_dead / ended from that record plus a local liveness probe; the stall threshold is declared, not chosen by the
 caller. Run records are runtime observation, not part of a card's governance landing scope.
 
-Credentials are never typed or pasted: the advisor and each workstation redeem a one-time enrollment
-code (`lybra roles enroll --code …`), which writes a local `.lybra/connection.json` (`0600`). The
-per-project steps are printed by `lybra onboarding guide <project>`.
+Credentials are never typed or pasted, and enrollment codes are not handed around either: on the governance-root machine,
+`lybra roles enroll-deliver --role <role> --instance <instance> --governance-root <governance root> --workspace <workstation or
+governance root> …` issues a one-time code and redeems it in the same process (the code is never printed, written to a file or put
+on any command line; with `--ssh <target>` it reaches the remote enrollment over ssh stdin only). The redemption writes a local
+`.lybra/connection.json` (`0600`). Like every `lybra roles` write command (`enroll-code`, `enroll-deliver`, `register`,
+`remove`), it previews by default — role, instance, governance root, expiry, target and the covering envelope, no code issued,
+nothing written — and only `--confirm` executes (declared in `schema/verbs.schema.json` `two_phase_protocol.roles_writers`).
+Before any code is issued or redeemed, a workstation-class enrollment is checked for an active PreAuthorized envelope covering
+the instance or role; without one it is refused with the `lybra envelope mint` exit, the code is not consumed and no credential
+changes (`ENROLL_ENVELOPE_MISSING`). The per-project steps are printed by `lybra onboarding guide <project>`.
 
 The advisor session may be Claude Code (default) or Codex. `lybra onboarding guide <project> --advisor-harness codex
---advisor-host <session host>` prints the advisor's enrollment as `lybra roles enroll … --harness codex [--harness-dir <dir>]
-[--harness-host <host>]`: the advisor credential lands in the governance root's `.lybra/` (run on the governance-root machine;
-a Codex session on another machine runs it over ssh), `.lybra/role` records `harness: {kind: codex, dir, host}` as given (a
+--advisor-host <session host>` prints the advisor's enrollment as `lybra roles enroll-deliver … --harness codex [--harness-dir <dir>]
+[--harness-host <host>]`: the advisor credential lands in the governance root's `.lybra/` (run on the governance-root machine,
+also when the Codex session is on another machine), `.lybra/role` records `harness: {kind: codex, dir, host}` as given (a
 directory on another host is not checked locally), and no `.pi` wiring or `.claude/skills` delivery happens. A Codex session on
 another machine gets the advisor charter by pull (Lybra never pushes): at session start it runs
 `ssh <governance-root host> 'cd <governance root> && lybra charter --role advisor --instance <instance>'`, which prints the
@@ -34,7 +41,7 @@ rendered charter (same renderer as `lybra sync`; no credentials in the output). 
 that command; the host is read from project.json `workstations.<instance>.gate_ssh_alias` (`lybra project set-workstation`).
 Legal `--harness`
 values are the keys of `schema/distribution.schema.json` `harness_semantics.kinds`; an unknown value is refused with that
-list before the code is redeemed. Registering a Codex advisor does not extend the Owner-confirm surface (see
+list before any code is issued. Registering a Codex advisor does not extend the Owner-confirm surface (see
 `docs/v1_disclosure.md` row 14).
 
 ## Several advisors on one project
@@ -43,10 +50,10 @@ One governance root may be driven by more than one advisor instance — for exam
 only pushes cards of the OTA product repo. Each advisor gets its own credential and its own envelope; nothing is shared or
 overwritten:
 
-1. **Enroll each advisor with its own instance.** The Owner issues one code per advisor, always with `--instance`
-   (`lybra roles … enroll-code --role <advisor role> --instance <prefix>.<project>.<host>`); a code for an advisor- or
-   planner-class role without `--instance` is refused before anything is written. Each advisor redeems its code on the
-   governance-root machine (`lybra roles enroll --code … --workspace <governance root> --verify`). The governance root's
+1. **Enroll each advisor with its own instance.** The Owner enrolls each advisor on the governance-root machine, always with
+   `--instance` (`lybra roles … enroll-deliver --role <advisor role> --instance <prefix>.<project>.<host> --governance-root
+   <governance root> --workspace <governance root> …`, preview first, then `--confirm`); an advisor- or planner-class role
+   without `--instance` is refused before anything is written. The governance root's
    `.lybra/connection.json` then holds one credential per instance (re-enrolling one instance retires only that instance's old
    credential), and `.lybra/role` keeps one record per instance under `instances.<instance>` (declared in
    `schema/config.schema.json` `configuration_sources.role.schema.instances`).
@@ -115,10 +122,10 @@ By default the advisor hands execution work (code, configuration, …) to a sub-
 Codex); an Owner-approved list of task modes may instead go to a pi executor workstation, and audits are always done by an
 independent pi auditor workstation (AIPOS-F143).
 
-1. **Enroll the sub-agent executor.** The advisor issues an executor code with `--instance <exec prefix>.<project>.<advisor
-   session host>`; it is redeemed into the governance root:
-   `lybra roles enroll --code … --workspace <governance root> --executor-mode subagent --harness <claude-code|codex>
-   [--harness-host <advisor session host>] --verify`. The credential lands in the governance root's `.lybra/connection.json`
+1. **Enroll the sub-agent executor.** The advisor enrolls it into the governance root with `--instance <exec
+   prefix>.<project>.<advisor session host>`:
+   `lybra roles enroll-deliver --role executor --instance … --governance-root <governance root> --workspace <governance root>
+   --executor-mode subagent --harness <claude-code|codex> [--harness-host <advisor session host>] …` (preview, then `--confirm`). The credential lands in the governance root's `.lybra/connection.json`
    (no `.lybra/role` change, no `.pi`, no workstation); the land event records `mode=subagent harness=<kind>`. Without
    `--executor-mode subagent`, executor and auditor credentials are still refused in a governance root. The mode names and
    rules are declared in `schema/roles.schema.json` `executor_modes`; `lybra onboarding guide <project> --executor-mode subagent`

@@ -170,7 +170,7 @@ def test_item1_single_declaration_and_shared_implementation():
                   and n.func.id == "_project_json_two_phase_emit"]
     emitted = {n.args[0].value for n in emit_calls if n.args and isinstance(n.args[0], ast.Constant)}
     assert emitted == set(DECLARED_COMMANDS), emitted
-    # AIPOS-F153 件①: 同一包装按族(family 关键字)注册; 缺省族 = project.json 写命令, 其他族的命令各登记于其族声明
+    # AIPOS-F153 件① / AIPOS-F151: 同一包装按族(family 关键字)注册(enrollment_log_writers / roles_writers); 缺省族 = project.json 写命令, 其他族的命令各登记于其族声明
     flag_calls: dict[str, set[str]] = {}
     for n in ast.walk(tree):
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_project_json_two_phase_flags":

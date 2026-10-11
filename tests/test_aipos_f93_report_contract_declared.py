@@ -219,10 +219,10 @@ def test_item1_contract_fail_closed_and_no_second_list():
 def test_item2_enroll_delivery_single_render_gate_cli_guide(tmp_path):
     from tools.aipos_cli.onboarding import (
         ENROLL_WORKSPACE_PLACEHOLDER,
-        EXECUTOR_CODE,
         enroll_delivery,
         generate_onboarding_guide,
         render_enroll_command,
+        render_enroll_deliver_command,
     )
     from tools.mcp_server import tools as gate
 
@@ -230,11 +230,17 @@ def test_item2_enroll_delivery_single_render_gate_cli_guide(tmp_path):
     _show("[②·交付文案] " + json.dumps(delivery, ensure_ascii=False))
     assert delivery["paste_text"] == f"lybra roles enroll --code LYBRAENROLL1.Zm9v --workspace {ENROLL_WORKSPACE_PLACEHOLDER} --verify"
     assert delivery["paste_text"] in delivery["paste_instruction"]
-    # 向导 Step 7 同一渲染
+    # 向导: AIPOS-F151 起工位 / 顾问接入 = enroll-deliver(唯一渲染 render_enroll_deliver_command, 码不出进程), 不再示例 --code 兑换
     guide = generate_onboarding_guide("probe", home_root=str(tmp_path / "home"), workspace_dir=str(tmp_path / "ws-exec"),
                                       auditor_dir=str(tmp_path / "ws-audit"), advisor_dir=str(tmp_path / "adv"))
-    step7 = next(s for s in guide["steps"] if s["step_number"] == 7)["command"]
-    assert render_enroll_command(EXECUTOR_CODE, str(tmp_path / "ws-exec")) in step7
+    step6 = next(s for s in guide["steps"] if s["step_number"] == 6)
+    gov = guide["governance_root"]
+    assert render_enroll_deliver_command(["lybra", "roles", "--workspace-root", gov], role="executor",
+                                         instance=guide["instances"]["executor"], governance_root=gov, workspace=str(tmp_path / "ws-exec"),
+                                         extra=["--gate-url", guide["gate_url"], "--ttl", "86400", "--owner-authorization-ref",
+                                                guide["policies"]["executor"], "--reason", "'Onboarding probe executor'"],
+                                         phase="--dry-run") in step6["commands"]
+    assert "--code" not in json.dumps(guide["steps"], ensure_ascii=False)
     # 门: 动词说明 / 预演 confirm_output 同一渲染
     descs = {d["name"]: d["description"] for d in gate.WRITE_TOOL_DESCRIPTORS if "enroll_code" in d["name"]}
     assert descs and all(render_enroll_command("<code>") in text for text in descs.values()), descs

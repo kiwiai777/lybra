@@ -179,18 +179,23 @@ def test_item3_guide_codex_vs_claude_code_default():
     cc = generate_onboarding_guide(**BASE, advisor_dir="/tmp/f129-session")
     cc_explicit = generate_onboarding_guide(**BASE, advisor_dir="/tmp/f129-session", advisor_harness="claude-code")
     cx = generate_onboarding_guide(**BASE, advisor_harness="codex", advisor_host="mac-probe.local")
-    cc5, cx5 = cc["steps"][4], cx["steps"][4]
-    print("[③·claude-code(缺省)第 5 步]\n" + cc5["command"])
-    print("[③·codex 第 5 步]\n" + cx5["command"])
-    assert cc5 == cc_explicit["steps"][4]  # 缺省 = 显式 claude-code(既有行为)
-    a_cc = _lybra_args(cc5)
-    assert (a_cc[0].harness, a_cc[0].harness_dir, a_cc[0].harness_host) == ("claude-code", "/tmp/f129-session", None)
-    assert a_cc[1].command == "sync" and a_cc[1].dry_run is True and ".claude/skills" in cc5["creates"]
-    a_cx = _lybra_args(cx5)
-    assert len(a_cx) == 1  # 无 sync 分发步骤(会话在他机: 本机无落点; AIPOS-F138 起章程由会话开局拉取, 命令以注释行给出, 不是本步可执行行)
-    assert (a_cx[0].roles_command, a_cx[0].workspace, a_cx[0].harness, a_cx[0].harness_host, a_cx[0].harness_dir) == (
-        "enroll", cx["governance_root"], "codex", "mac-probe.local", None)
-    blob = json.dumps(cx5, ensure_ascii=False)
+    # AIPOS-F151: 顾问接入 = 第 4 步 Owner enroll-deliver(先 --dry-run 再 --confirm, 码不出进程); 第 5 步 = 前置自检 + 顾问件稳态
+    cc4, cx4 = cc["steps"][3], cx["steps"][3]
+    print("[③·claude-code(缺省)第 4 步]\n" + cc4["command"])
+    print("[③·codex 第 4 步]\n" + cx4["command"])
+    assert cc4 == cc_explicit["steps"][3] and cc["steps"][4] == cc_explicit["steps"][4]  # 缺省 = 显式 claude-code(既有行为)
+    a_cc = _lybra_args(cc4)
+    assert [(a.roles_command, a.harness, a.harness_dir, a.harness_host, a.dry_run, a.confirm) for a in a_cc] == [
+        ("enroll-deliver", "claude-code", "/tmp/f129-session", None, True, False),
+        ("enroll-deliver", "claude-code", "/tmp/f129-session", None, False, True)]
+    s_cc = _lybra_args(cc["steps"][4])
+    assert s_cc[-1].command == "sync" and s_cc[-1].dry_run is True and ".claude/skills" in cc4["creates"]
+    a_cx = _lybra_args(cx4)
+    assert [(a.roles_command, a.workspace, a.harness, a.harness_host, a.harness_dir) for a in a_cx] == [
+        ("enroll-deliver", cx["governance_root"], "codex", "mac-probe.local", None)] * 2
+    # 第 5 步无 sync 分发(会话在他机: 本机无落点; AIPOS-F138 起章程由会话开局拉取, 命令以注释行给出, 不是本步可执行行)
+    assert [a.command for a in _lybra_args(cx["steps"][4])] == ["onboarding"]
+    blob = json.dumps([cx4, cx["steps"][4]], ensure_ascii=False)
     assert ".claude" not in blob and "claude-code" not in blob
     # 实例名: 顾问 host 段 = --advisor-host 短名; 工位仍按 --host-segment
     assert cx["instances"] == {"advisor": "advisor.f129-probe.mac-probe", "executor": "exec.f129-probe.devbox",
@@ -198,11 +203,11 @@ def test_item3_guide_codex_vs_claude_code_default():
     assert cc["instances"]["advisor"] == "advisor.f129-probe.devbox"
     assert cx["advisor_harness"] == {"kind": "codex", "host": "mac-probe.local", "dir": None}
     # 其余各步与 claude-code 一致(除顾问实例名替换)
-    for n in (1, 2, 6, 7, 8, 9):
+    for n in (1, 2, 3, 6, 7, 8, 9):
         assert cx["steps"][n - 1]["command"].replace("mac-probe", "devbox") == cc["steps"][n - 1]["command"], n
     # 带 --advisor-dir 时如实写 --harness-dir(他机路径不校验)
     cxd = generate_onboarding_guide(**BASE, advisor_harness="codex", advisor_host="mac-probe", advisor_dir="/Users/probe/hbj advisor")
-    assert _lybra_args(cxd["steps"][4])[0].harness_dir == "/Users/probe/hbj advisor"
+    assert _lybra_args(cxd["steps"][3])[0].harness_dir == "/Users/probe/hbj advisor"
 
 
 def test_item3_guide_codex_every_command_parses():
@@ -251,7 +256,7 @@ def test_item3_cli_advisor_harness_choices_from_declaration(iso_home: Path):
                    "--advisor-harness", "codex", "--advisor-host", "mac-probe", "--json")
     assert rc == 0, out
     guide = json.loads(out)
-    assert guide["advisor_harness"]["kind"] == "codex" and "--harness codex" in guide["steps"][4]["command"]
+    assert guide["advisor_harness"]["kind"] == "codex" and "--harness codex" in guide["steps"][3]["command"]
     rc, out = _cli("onboarding", "guide", "f129-probe", "--home-root", str(iso_home / "h"), "--gate-url", "http://127.0.0.1:7118",
                    "--advisor-harness", "codex")
     print("[③·CLI codex 缺 host]\n" + out)
@@ -269,21 +274,16 @@ def test_range_codex_advisor_enroll_lands_governance_root(probe_range: Range):
                   f"--host-segment devbox --envelope-days 7 --max-tasks 20")
     guide = json.loads(r.sh(f"lybra onboarding guide {guide_args} --json"))
     assert guide["instances"]["advisor"] == "advisor.lybra-probe.mac-probe"
-    fills: dict[str, str] = {}
-    step3 = ""
     for step in guide["steps"][:5]:
         for line in (l.strip() for l in step["command"].splitlines()):
             if not line or line.startswith("#"):
                 continue
-            for k, v in fills.items():
-                line = line.replace(k, v)
             out = r.sh(line)
-            if "enroll-code" in line:
-                step3 = line
-                fills["<ADVISOR_CODE>"] = CODE_RE.findall(out)[0]
-            if "roles enroll " in line:
-                print("[靶场·第 5 步 enroll 输出]\n" + CODE_RE.sub("LYBRAENROLL1.<redacted>", out))
-                assert "✓ Enrollment successful" in out and "Instance: advisor.lybra-probe.mac-probe" in out
+            # AIPOS-F151: 第 4 步 enroll-deliver 签码 + 接入一体, 注册码不出进程(输出零码原文)
+            assert not CODE_RE.search(out), "注册码出现在命令输出里"
+            if "enroll-deliver" in line and line.endswith("--confirm"):
+                print("[靶场·第 4 步 enroll-deliver 输出]\n" + out)
+                assert "已执行" in out and "实例 advisor.lybra-probe.mac-probe" in out
     role_text = (gov / ".lybra" / "role").read_text(encoding="utf-8")
     print("[靶场·治理根 .lybra/role 原文]\n" + role_text)
     role = json.loads(role_text)
@@ -299,12 +299,10 @@ def test_range_codex_advisor_enroll_lands_governance_root(probe_range: Range):
     print("[靶场·sync --dry-run]", json.dumps({k: ws0[k] for k in ("status",)}, ensure_ascii=False), ws0["result"].get("note"))
     assert ws0["status"] == "dry-run" and ws0["result"]["plan"] == [] and ws0["result"]["harness"]["kind"] == "codex"
 
-    # 他机会话目录: 如实记 host 与路径, 不校验本机存在(第二个码, 同一 Owner 签发命令)
-    code2 = CODE_RE.findall(r.sh(step3))[0]
+    # 他机会话目录: 如实记 host 与路径, 不校验本机存在(第二次接入, 同一条 Owner enroll-deliver 加 --harness-dir; 码仍不出进程)
     remote_dir = "/Users/probe/hbj advisor"
-    out = r.sh(f"lybra roles enroll --code {code2} --workspace {shlex.quote(str(gov))} --harness codex "
-               f"--harness-dir {shlex.quote(remote_dir)} --harness-host mac-probe --verify")
-    assert "✓ Enrollment successful" in out
+    out = r.sh(f"{guide['steps'][3]['commands'][1]} --harness-dir {shlex.quote(remote_dir)}")
+    assert "已执行" in out and not CODE_RE.search(out)
     role_text = (gov / ".lybra" / "role").read_text(encoding="utf-8")
     print("[靶场·他机目录 .lybra/role 原文]\n" + role_text)
     assert json.loads(role_text)["harness"] == {"kind": "codex", "dir": remote_dir, "host": "mac-probe"}

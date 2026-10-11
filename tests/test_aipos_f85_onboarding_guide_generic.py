@@ -31,11 +31,9 @@ from tools.aipos_cli.onboarding import format_guide_text, generate_onboarding_gu
 from tools.schema_loader import load_schema  # noqa: E402
 
 #: guide 里出现的占位 → 合法值(仅供解析; 新占位须在此登记, 否则红)
-#: AIPOS-F92: 九步 guide 的占位 = 上一步输出(三个注册码)/ 顾问自填(仓、卡稿、草稿路径、卡号)/ Owner 工作区解析不到时的占位
+#: AIPOS-F92: 九步 guide 的占位 = 顾问自填(仓、卡稿、草稿路径、卡号)/ Owner 工作区解析不到时的占位
+#: (AIPOS-F151: 三个注册码占位退役——向导以 enroll-deliver 签码 + 接入一体, 码不出进程, 无「上一步输出的码」)
 PLACEHOLDER_VALUES = {
-    "<ADVISOR_CODE>": "LYBRAENROLL1.fixture-not-a-code",
-    "<EXECUTOR_CODE>": "LYBRAENROLL1.fixture-not-a-code",
-    "<AUDITOR_CODE>": "LYBRAENROLL1.fixture-not-a-code",
     "<OWNER_WORKSPACE>": "/tmp/f85-owner",
     "<REPO_NAME>": "app",
     "<REPO_ABS_PATH>": "/tmp/f85-code/app",
@@ -204,10 +202,11 @@ def test_item1_every_guide_command_parses_and_slash_in_declaration():
 
 
 def test_item1_steps5_6_are_zero_gate_real_path():
-    """AIPOS-F92 九步(原 F85 第 4–6 步的零门不变量平移到第 5/7/8 步):
-    第 5 步 = 顾问 enroll 到治理根(--harness claude-code --harness-dir 会话目录)+ sync --dry-run 稳态;
-    第 7 步 = 每个工位 enroll(--workspace 工位)→ sync → sync --dry-run, 参数指向工位 / 治理根;
-    第 8 步 = onboarding check 自检 → cd 工位 → pi → /go; 第 3/4 步 = Owner 动作(enroll-code --token-role owner / envelope mint --confirm)。"""
+    """AIPOS-F92 九步(原 F85 第 4–6 步的零门不变量平移); AIPOS-F151 起签码 + 接入一体(enroll-deliver, 码不出进程):
+    第 3 步 = Owner 签三张信封(envelope mint --confirm, 信封先于接入); 第 4 步 = Owner enroll-deliver 顾问(--dry-run → --confirm,
+    --token-role owner, 落治理根, --harness claude-code --harness-dir 会话目录); 第 5 步 = 前置自检 + sync --dry-run 稳态;
+    第 6 步 = 顾问为每个工位 enroll-deliver(--workspace 工位, 先预演再确认); 第 7 步 = 每个工位 sync → sync --dry-run;
+    第 8 步 = onboarding check 自检 → cd 工位 → pi → /go。"""
     for shape, kw in GUIDE_SHAPES.items():
         guide = _guide(shape)
         home = kw.get("home_root") or guide["home_root"]
@@ -221,25 +220,30 @@ def test_item1_steps5_6_are_zero_gate_real_path():
             return [seg for _, l in _iter_command_lines({"steps": [step]}) for seg in _segments(l) if seg[0] == "lybra"]
 
         owner3 = [_parse_lybra(seg[1:], "step3") for seg in lybra_segs(steps[3])]
-        assert len(owner3) == 1 and owner3[0].roles_command == "enroll-code" and owner3[0].token_role == "owner"
-        assert owner3[0].role == "advisor" and owner3[0].governance_root == kw["project_name"]
+        assert len(owner3) == 1 and owner3[0].envelope_command == "mint" and owner3[0].confirm is True
+        assert len(owner3[0].policy_id) == 3 == len(owner3[0].agent_or_role) and owner3[0].workspace_root == gov
         owner4 = [_parse_lybra(seg[1:], "step4") for seg in lybra_segs(steps[4])]
-        assert len(owner4) == 1 and owner4[0].envelope_command == "mint" and owner4[0].confirm is True
-        assert len(owner4[0].policy_id) == 3 == len(owner4[0].agent_or_role) and owner4[0].workspace_root == gov
+        assert [(a.roles_command, a.dry_run, a.confirm) for a in owner4] == [("enroll-deliver", True, False), ("enroll-deliver", False, True)]
+        for a in owner4:
+            assert (a.role, a.token_role, a.governance_root, a.workspace, a.harness) == ("advisor", "owner", gov, gov, "claude-code")
+            assert a.harness_dir == adv and a.instance == guide["instances"]["advisor"]
         assert steps[3]["owner_action"] == 1 and steps[4]["owner_action"] == 2
         assert all(st["owner_action"] is None for n, st in steps.items() if n not in (3, 4))
 
-        adv_enroll, adv_sync = (_parse_lybra(seg[1:], "step5") for seg in lybra_segs(steps[5]))
-        assert (adv_enroll.roles_command, adv_enroll.workspace, adv_enroll.harness) == ("enroll", gov, "claude-code")
-        assert adv_enroll.harness_dir == adv and adv_sync.dry_run is True and adv_sync.harness_root == gov
+        check5, adv_sync = (_parse_lybra(seg[1:], "step5") for seg in lybra_segs(steps[5]))
+        assert (check5.command, check5.onboarding_command, check5.step) == ("onboarding", "check", 5)
+        assert adv_sync.dry_run is True and adv_sync.harness_root == gov
 
-        segs7 = lybra_segs(steps[7])
-        enrolls = [_parse_lybra(seg[1:], "step7") for seg in segs7 if seg[1:3] == ["roles", "enroll"]]
-        assert [e.workspace for e in enrolls] == [ws, aws]
-        syncs = [_parse_lybra(seg[1:], "step7") for seg in segs7 if seg[1] == "sync"]
+        delivers = [_parse_lybra(seg[1:], "step6") for seg in lybra_segs(steps[6])]
+        assert [(d.role, d.workspace, d.dry_run, d.confirm) for d in delivers] == [
+            ("executor", ws, True, False), ("executor", ws, False, True), ("auditor", aws, True, False), ("auditor", aws, False, True)]
+        assert all(d.roles_command == "enroll-deliver" and d.governance_root == gov for d in delivers)
+        assert [d.owner_authorization_ref for d in delivers] == [guide["policies"]["executor"]] * 2 + [guide["policies"]["auditor"]] * 2
+
+        syncs = [_parse_lybra(seg[1:], "step7") for seg in lybra_segs(steps[7])]
         assert [(a.harness_root, a.dry_run) for a in syncs] == [(ws, False), (ws, True), (aws, False), (aws, True)]
         for a in syncs:
-            assert a.workspace_root == gov, (shape, a)
+            assert a.command == "sync" and a.workspace_root == gov, (shape, a)
             assert a.token is None  # token 永不上屏: guide 不带 --token, 由工位 connection.json 取
 
         lines8 = [l for _, l in _iter_command_lines({"steps": [steps[8]]})]

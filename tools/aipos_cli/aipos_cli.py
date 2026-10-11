@@ -1276,23 +1276,32 @@ def _project_json_writers_declaration() -> dict[str, Any]:
 
 
 def _two_phase_family_declaration(family: str = "project_json_writers") -> dict[str, Any]:
-    """AIPOS-F153 件①: 本地写命令族的两阶段声明。旗标名 / 缺省阶段 / 状态标签 = project_json_writers 一处(同一两阶段语义, 各族
-    不重复声明); 其他族(如 enrollment_log_writers)只声明 commands 与 flag_help(及族专属键)。缺键 / 形不合 = SchemaLoadError。"""
+    """AIPOS-F153 件① / AIPOS-F151: 本地写命令族的两阶段声明(唯一读取口)。旗标名 / 缺省阶段 = project_json_writers 一处(同一两阶段语义,
+    各族不重复声明); 其他族(enrollment_log_writers / roles_writers)只声明 commands 与 flag_help(及族专属键)。状态标签缺省继承
+    project_json_writers; 族的动作不是「写文件」时可在本族声明自己的 outcome_labels(须为非空串, 如 roles_writers {preview, done})。
+    缺键 / 形不合 = SchemaLoadError。"""
     from tools.schema_loader import SchemaLoadError, load_schema
 
     base = _project_json_writers_declaration()
     if family == "project_json_writers":
         return base
     decl = (load_schema("verbs").get("two_phase_protocol") or {}).get(family)
+    own_labels = decl.get("outcome_labels") if isinstance(decl, dict) else None
     if (not isinstance(decl, dict) or not isinstance(decl.get("commands"), list) or not decl["commands"]
-            or not all(isinstance((decl.get("flag_help") or {}).get(p), str) and decl["flag_help"][p] for p in ("dry_run", "confirm"))):
-        raise SchemaLoadError(f"verbs.schema.json two_phase_protocol.{family}(commands / flag_help {{dry_run, confirm}})未声明齐")
-    return {**decl, "default_phase": base["default_phase"], "flags": base["flags"], "outcome_labels": base["outcome_labels"]}
+            or not all(isinstance((decl.get("flag_help") or {}).get(p), str) and decl["flag_help"][p] for p in ("dry_run", "confirm"))
+            or any(k in decl for k in ("flags", "default_phase"))
+            or (own_labels is not None and (not isinstance(own_labels, dict) or not own_labels
+                                            or not all(isinstance(v, str) and v for v in own_labels.values())))):
+        raise SchemaLoadError(f"verbs.schema.json two_phase_protocol.{family}(commands / flag_help {{dry_run, confirm}}; 可选 outcome_labels "
+                              "非空串; flags / default_phase 只在 project_json_writers 声明)未声明齐或重复声明")
+    return {**decl, "default_phase": base["default_phase"], "flags": base["flags"],
+            "outcome_labels": own_labels if own_labels is not None else base["outcome_labels"]}
 
 
 def _project_json_two_phase_flags(parser: argparse.ArgumentParser, command: str, *, family: str = "project_json_writers") -> None:
-    """给本地写命令注册互斥的 --dry-run(缺省)/ --confirm(旗标名与帮助读声明; 未登记的命令 = SchemaLoadError)。
-    AIPOS-F153 件①: family 选写命令族(缺省 project.json 写命令; enrollment_log_writers = 写接入日志), 同一包装。"""
+    """本地写命令两阶段的唯一旗标注册包装: 互斥的 --dry-run(缺省)/ --confirm(旗标名与帮助读声明; 未登记的命令 = SchemaLoadError)。
+    family 选写命令族: 缺省 project.json 写命令(AIPOS-F125); enrollment_log_writers = 写接入日志(AIPOS-F153);
+    roles_writers = roles 族写命令 enroll-code / enroll-deliver / register / remove(AIPOS-F151)。"""
     from tools.schema_loader import SchemaLoadError
 
     decl = _two_phase_family_declaration(family)
@@ -1341,6 +1350,84 @@ def _project_json_two_phase_emit(command: str, target: dict[str, Any], outcome: 
         print(f"  {line}")
     if outcome["diff"]:
         print(outcome["diff"].rstrip("\n"))
+
+
+class _RolesIssuerError(RuntimeError):
+    """`lybra roles enroll-code / enroll-deliver` 取门客户端失败(拒因 + 出口)。"""
+
+    def __init__(self, message: str, next_step: str) -> None:
+        super().__init__(message)
+        self.next_step = next_step
+
+
+def _roles_issuer_client(workspace_root: Path, connection_target: Path | None, token_role: str) -> tuple[Any, dict[str, Any], str]:
+    """签码命令(roles enroll-code / enroll-deliver, AIPOS-F151 同一取法)的门客户端: <workspace>/.lybra/connection.json(或 --connection-json)
+    声明的门基址(唯一推导口 resolve_gate_base_url, 须声明 mcp.rpc_url)+ 按角色取凭据(缺省 advisor, 缺席回落 owner)。
+    凭据原文只在进程内作 HTTP Authorization, 永不上 argv / 不回显。返回 (client, connection 数据, 实际凭据角色)。"""
+    from tools.aipos_cli.confirm_client import GateAddressError, GateClient, load_owner_token, resolve_gate_base_url
+
+    conn_path = workspace_connection_path(workspace_root, connection_target=connection_target)
+    if not conn_path.exists():
+        raise _RolesIssuerError(f"local connection.json not found: {conn_path}",
+                                "在治理工作区运行本命令(或 --connection-json 指定本机 connection.json); "
+                                "薄壳只调门动词, 没有(也不许有)本地发码路径。")
+    conn_data = json.loads(conn_path.read_text(encoding="utf-8"))
+    try:
+        base_url = resolve_gate_base_url(connection_json=conn_path, require_declared=True)
+    except GateAddressError as exc:
+        raise _RolesIssuerError(str(exc), "先 lybra serve start 或修正 connection.json。") from exc
+    for candidate_role in (token_role, "owner"):
+        try:
+            token = load_owner_token(connection_json=conn_path, role=candidate_role)
+        except ValueError:
+            continue
+        return GateClient(base_url, token, timeout=30.0), conn_data, candidate_role
+    raise _RolesIssuerError(f"no usable role token ({token_role}/owner) in {conn_path}",
+                            "用 --token-role 指定角色, 或先在本机 enroll 出顾问/Owner 凭据。")
+
+
+def _render_roles_preview(command: str, args: argparse.Namespace, payload: dict[str, Any], lines: list[str]) -> None:
+    """AIPOS-F151 件④: roles register / remove 预演输出(状态文案读声明 roles_writers.outcome_labels; 只含 token 引用 / 指纹 / 角色类)。"""
+    label = _two_phase_family_declaration("roles_writers")["outcome_labels"]["preview"]
+    if getattr(args, "json", False):
+        print(render_json({"ok": True, "operation": f"roles_{command}", "phase": "dry_run", "dry_run": True, "written": False, **payload}))
+        return
+    target = getattr(args, "name", None) or getattr(args, "instance", None)
+    print(f"roles {command} {target}: {label}")
+    for line in lines:
+        print(f"  · 将: {line}")
+    print("  零写入; 确认后同一条命令加 --confirm 写入")
+
+
+def _render_enroll_deliver(result: dict[str, Any]) -> None:
+    """`lybra roles enroll-deliver` 文本输出(只含角色 / 实例 / 治理根 / 落点 / code_id / 指纹; 注册码与凭据明文永不出现)。"""
+    labels = _two_phase_family_declaration("roles_writers")["outcome_labels"]
+    head = labels["preview"] if result.get("dry_run") else labels["done"]
+    print(f"roles enroll-deliver {result['role']}: {head}")
+    print(f"  角色 {result['role']}(类 {result['role_class']})  实例 {result.get('instance') or '-'}  执行者模式 {result.get('executor_mode')}")
+    print(f"  治理根 {result['governance_root']}")
+    where = f"{result['ssh_target']}:{result['workspace_root']}" if result.get("ssh_target") else result["workspace_root"]
+    print(f"  接入落点 {where}(mode={result['mode']})")
+    env = result.get("envelope") or {}
+    if env.get("required") or env.get("policy_id"):
+        print(f"  覆盖信封 {env.get('policy_id') or '-'}({env.get('reason')})")
+    if result.get("dry_run"):
+        preview = result.get("gate_preview") or {}
+        print(f"  有效期 {preview.get('ttl_seconds')} 秒  Gate URL {preview.get('gate_url')}")
+        for line in result.get("will") or []:
+            print(f"  · 将: {line}")
+        print("  未签码、零写入; 确认后同一条命令加 --confirm 执行")
+        return
+    enrollment = result.get("enrollment") or {}
+    print(f"  注册码 {enrollment.get('code_id')}(指纹 {enrollment.get('fingerprint')}, 已在本进程内兑换, 未输出)")
+    print(f"  凭据指纹 {(result.get('token') or {}).get('fingerprint')}  scopes {', '.join((result.get('token') or {}).get('scopes') or [])}")
+    enrolled = result.get("enroll") or {}
+    for item in enrolled.get("files_written") or []:
+        print(f"    - {item}")
+    for warn in enrolled.get("warnings") or []:
+        print(f"    ⚠ {warn}")
+    if enrolled.get("next_step"):
+        print(f"  下一步: {enrolled['next_step']}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1784,6 +1871,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve_rotate_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     # AIPOS-346 S5: roles subcommand (first-class role management)
+    from tools.aipos_cli.enrollment import executor_mode_declaration as _executor_mode_declaration  # AIPOS-F143 件④: 取值读声明
     roles_parser = subparsers.add_parser("roles", help="AIPOS-346 S5: first-class role management commands")
     roles_parser.add_argument("--workspace-root", help="Workspace root; defaults to auto-discovery")
     roles_parser.add_argument("--connection-json", help="Override the connection.json path")
@@ -1799,12 +1887,14 @@ def build_parser() -> argparse.ArgumentParser:
     roles_register_parser.add_argument("--owner-authorization-ref", help="AIPOS-346F2: reference to owner authorization for this registration")
     roles_register_parser.add_argument("--reason", default="", help="Reason for registering this custom role")
     roles_register_parser.add_argument("--json", action="store_true", help="Output JSON")
+    _project_json_two_phase_flags(roles_register_parser, "register", family="roles_writers")  # AIPOS-F151 件④: 缺省预演 / --confirm 才写
     roles_remove_parser = roles_subparsers.add_parser("remove", help="AIPOS-352F1: remove a custom role (idempotent); AIPOS-F21: --instance removes a token entry from connection.json")
     roles_remove_parser.add_argument("name", nargs="?", help="Custom role name to remove (or omit when using --instance)")
     roles_remove_parser.add_argument("--instance", help="AIPOS-F21: remove the token entry bound to this agent_instance (e.g., test.mac.aipos362) from connection.json")
     roles_remove_parser.add_argument("--owner-authorization-ref", help="AIPOS-346F2: reference to owner authorization for this removal")
     roles_remove_parser.add_argument("--reason", default="", help="Reason for removing this custom role")
     roles_remove_parser.add_argument("--json", action="store_true", help="Output JSON")
+    _project_json_two_phase_flags(roles_remove_parser, "remove", family="roles_writers")  # AIPOS-F151 件④: 缺省预演 / --confirm 才写
     # AIPOS-F21: two-phase service-token rotation (credential rotation as a product action)
     roles_rotate_parser = roles_subparsers.add_parser("rotate", help="AIPOS-F21: rotate service tokens in connection.json (two-phase: --dry-run preview; execution needs --owner-authorization-ref)")
     roles_rotate_parser.add_argument("--dry-run", action="store_true", help="Phase 1: preview the fingerprints that would be rotated; lands NO change")
@@ -1825,6 +1915,30 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_code_parser.add_argument("--owner-authorization-ref", help="Reference to owner authorization for this enrollment")
     roles_enroll_code_parser.add_argument("--reason", default="", help="Reason for generating this enrollment code")
     roles_enroll_code_parser.add_argument("--json", action="store_true", help="Output JSON")
+    _project_json_two_phase_flags(roles_enroll_code_parser, "enroll-code", family="roles_writers")  # AIPOS-F151 件①: 缺省预演不出码 / --confirm 才出码
+    # AIPOS-F151 件②(gap #106/#92): 签码 + 接入一体, 注册码只在本进程内(唯一实现 enroll_deliver.enroll_deliver)
+    roles_deliver_parser = roles_subparsers.add_parser(
+        "enroll-deliver",
+        help="AIPOS-F151: issue an enrollment code AND enroll the target in one command — the code never leaves this process "
+             "(same machine: in-process enroll; --ssh: code via ssh stdin). Run on the governance-root machine; "
+             "default = preview (no code issued), --confirm executes")
+    roles_deliver_parser.add_argument("--role", required=True, help="Role to enroll (built-in or registered custom role)")
+    roles_deliver_parser.add_argument("--instance", help="Instance name (<prefix>.<project>.<host>; required for advisor-class roles and --executor-mode subagent)")
+    roles_deliver_parser.add_argument("--governance-root", required=True, help="Governance root on this machine: registered project name or absolute path (embedded in the code; the envelope pre-check reads it)")
+    roles_deliver_parser.add_argument("--workspace", required=True, help="Enrollment target: workstation directory, or the governance root for advisor-class roles / --executor-mode subagent (with --ssh: path on the remote host)")
+    roles_deliver_parser.add_argument("--executor-mode", choices=list(_executor_mode_declaration()["values"]), default=None,
+                                      help="Executor enrollment mode (roles.schema executor_modes; same as `lybra roles enroll --executor-mode`)")
+    roles_deliver_parser.add_argument("--harness", help="Harness kind (distribution.schema harness_semantics.kinds; same as `lybra roles enroll --harness`)")
+    roles_deliver_parser.add_argument("--harness-dir", help="Absolute working directory of a non-pi harness (same as `lybra roles enroll --harness-dir`)")
+    roles_deliver_parser.add_argument("--harness-host", help="Host the harness session runs on (same as `lybra roles enroll --harness-host`)")
+    roles_deliver_parser.add_argument("--ssh", help="SSH target of a remote workstation (user@host); the code reaches the remote enroll via ssh stdin only")
+    roles_deliver_parser.add_argument("--gate-url", help=f"Externally reachable gate URL to embed (default: connection.json mcp.rpc_url if non-loopback, else {_GATE_URL_DEFAULT})")
+    roles_deliver_parser.add_argument("--ttl", type=int, help="Code time-to-live in seconds (default 86400)")
+    roles_deliver_parser.add_argument("--token-role", default="advisor", help="Role of the local credential used to call the gate (default: advisor; falls back to owner)")
+    roles_deliver_parser.add_argument("--owner-authorization-ref", required=True, help="Owner authorization ref for issuing the code (workstation codes: the envelope covering that workstation)")
+    roles_deliver_parser.add_argument("--reason", default="", help="Reason recorded with the code")
+    roles_deliver_parser.add_argument("--json", action="store_true", help="Output JSON")
+    _project_json_two_phase_flags(roles_deliver_parser, "enroll-deliver", family="roles_writers")
     roles_enroll_revoke_parser = roles_subparsers.add_parser("enroll-revoke", help="AIPOS-362: revoke an enrollment code")
     roles_enroll_revoke_parser.add_argument("code_id", help="Enrollment code ID to revoke")
     roles_enroll_revoke_parser.add_argument("--owner-authorization-ref", help="Reference to owner authorization for this revocation")
@@ -1876,7 +1990,6 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_parser.add_argument("--harness", help="AIPOS-F92/F129: workstation harness kind (legal values = distribution.schema harness_semantics.kinds; default pi; unknown = refused with the declared list). claude-code = advisor Claude Code session: credentials land in --workspace, declared skills land in --harness-dir/.claude/skills; codex = advisor Codex session (may run on another machine): credentials land in --workspace, no .pi wiring, no skills delivered")
     roles_enroll_parser.add_argument("--harness-dir", help="AIPOS-F92/F129: absolute working directory of a non-pi harness (claude-code: required, must exist here; codex: optional, recorded as given — not checked locally when --harness-host is set)")
     roles_enroll_parser.add_argument("--harness-host", help="AIPOS-F129: host the harness session runs on when it is not this machine (only kinds declaring harness_host=optional, e.g. codex); recorded in .lybra/role harness.host")
-    from tools.aipos_cli.enrollment import executor_mode_declaration as _executor_mode_declaration  # AIPOS-F143 件④: 取值读声明
     roles_enroll_parser.add_argument("--executor-mode", choices=list(_executor_mode_declaration()["values"]), default=None,
                                      help="AIPOS-F143: executor enrollment mode (roles.schema executor_modes; default workstation = existing behavior). "
                                           "subagent = advisor-spawned sub-agent executor (ROLES 1a): credentials land in the governance root's "
@@ -2930,6 +3043,20 @@ def main(argv: list[str] | None = None) -> int:
                 if not owner_auth_ref:
                     print("Error: --owner-authorization-ref is required (owner-gated)", file=sys.stderr)
                     return 1
+                if not getattr(args, "confirm", False):
+                    # AIPOS-F151 件④(gap #121): 缺省预演——本机经唯一实现的计划(custom_role_registration_plan)算将建 / 改的 token 引用与
+                    # 角色类, 零写入、不取凭据、不调门; --confirm 才经门动词 lybra_roles_register 写
+                    from tools.aipos_cli.custom_roles import custom_role_registration_plan
+
+                    plan = custom_role_registration_plan(workspace_root, args.name, args.builtin_class)
+                    _render_roles_preview("register", args, {"owner_authorization_ref": owner_auth_ref, "plan": plan}, [
+                        f"{'新建' if plan['action'] == 'create' else '更新'} token 引用 {plan['token_ref']}"
+                        f"(指纹 {plan['fingerprint'] or '确认时新铸'}) 角色 {plan['name']} → 类 {plan['builtin_class']}"
+                        + (f"(原类 {plan['previous_class']})" if plan.get("previous_class") else ""),
+                        f"scopes(按类派生) {', '.join(plan['scopes']) or '-'}",
+                        f"注册表 {plan['registry']}",
+                    ])
+                    return 0
                 
                 # 连接信息
                 conn_override = getattr(args, "connection_json", None)
@@ -2981,6 +3108,7 @@ def main(argv: list[str] | None = None) -> int:
                 if not instance and not name:
                     print("Error: roles remove requires a custom role name or --instance <agent_instance>", file=sys.stderr)
                     return 1
+                confirm_phase = bool(getattr(args, "confirm", False))  # AIPOS-F151 件④: 缺省预演 / --confirm 才写
                 if instance:
                     # AIPOS-F21: instance-token removal from connection.json (with record + gate reload)
                     from tools.aipos_cli.token_rotation import remove_instance_report
@@ -2995,17 +3123,30 @@ def main(argv: list[str] | None = None) -> int:
                         actor=owner_auth_ref,
                         reason=str(getattr(args, "reason", "") or "").strip(),
                         connection_target=connection_target,
+                        dry_run=not confirm_phase,
                     )
+                    if result.get("dry_run") and not getattr(args, "json", False):
+                        _render_roles_preview("remove", args, result, [
+                            f"删 token 引用 {e['token_ref'] or '-'}(指纹 {e['fingerprint']}) 角色 {e['role']} 类 {e.get('role_class') or '-'} 实例 {e['instance']}"
+                            for e in result["would_remove"]] + [f"凭据文件 {result['connection_path']}(确认时先备份 + 写删除记录 + 重载门)"])
+                        return 0
                     if getattr(args, "json", False):
                         print(render_json(result))
                     else:
                         _render_token_lifecycle_result(result)
                     return 1 if result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons") else 0
                 # AIPOS-352F1: remove a custom role
-                from tools.aipos_cli.custom_roles import remove_custom_role
+                from tools.aipos_cli.custom_roles import custom_role_removal_plan, remove_custom_role
                 owner_auth_ref = str(getattr(args, "owner_authorization_ref", "") or "").strip() or None
                 reason = str(getattr(args, "reason", "") or "").strip()
                 by = owner_auth_ref or "owner"
+                if not confirm_phase:
+                    plan = custom_role_removal_plan(workspace_root, args.name)
+                    _render_roles_preview("remove", args, {"owner_authorization_ref": owner_auth_ref, "plan": plan}, [
+                        f"删 token 引用 {e['token_ref'] or '-'}(指纹 {e['fingerprint']}) 角色 {plan['name']} 类 {e.get('role_class') or '-'}"
+                        + (f" 实例 {e['agent_instance']}" if e.get("agent_instance") else "")
+                        for e in plan["entries"]] or [f"注册表无角色 {plan['name']} 的条目: 确认也无改动(幂等)"])
+                    return 0
                 updated = remove_custom_role(
                     workspace_root,
                     args.name,
@@ -3047,11 +3188,13 @@ def main(argv: list[str] | None = None) -> int:
                     _render_token_lifecycle_result(result)
                 return 1 if result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons") else 0
             elif args.roles_command == "enroll-code":
-                # AIPOS-F24A 大項A: CLI 薄壳化 —— 发码唯一实现=门动词 in-server(运输凭证注册与
-                # 门内存注册表同进程, 死凭证类缺陷根除)。本 CLI 只调 lybra_enroll_code_dry_run/
-                # confirm 两阶段动词, 本地发码路径已删除(grep 证明单实现); gate 不可达=如实报错,
-                # 绝不回退到本地发码(本地发码=死运输凭证)。
-                from tools.aipos_cli.confirm_client import GateAddressError, GateClient, GateError, load_owner_token, resolve_gate_base_url
+                # AIPOS-F24A 大項A: CLI 薄壳化 —— 发码唯一实现=门动词 in-server(运输凭证注册与门内存注册表同进程, 死凭证类缺陷根除)。
+                # 本 CLI 只经 enroll_deliver.gate_enroll_code 调 lybra_enroll_code_dry_run / lybra_enroll_code_confirm 两阶段动词, 本地发码
+                # 路径已删除(grep 证明单实现); gate 不可达=如实报错, 绝不回退到本地发码(本地发码=死运输凭证)。
+                # AIPOS-F151 件①(gap #106): 两阶段(verbs.schema two_phase_protocol.roles_writers)——缺省预演 = 只调 dry_run 动词
+                # (显示将签的角色 / 实例 / 治理根 / 有效期, 不出码); --confirm 才 dry_run → confirm 出码。
+                from tools.aipos_cli.confirm_client import GateError
+                from tools.aipos_cli.enroll_deliver import ENROLL_CODE_DRY_RUN_VERB, GateVerbRefused, gate_enroll_code
 
                 def _enroll_code_fail(message: str, *, next_step: str = "") -> int:
                     print(f"Error: {message}", file=sys.stderr)
@@ -3066,6 +3209,7 @@ def main(argv: list[str] | None = None) -> int:
                 gate_url_arg = str(getattr(args, "gate_url", "") or "").strip() or None
                 governance_root_arg = str(getattr(args, "governance_root", "") or "").strip() or None
                 token_role = str(getattr(args, "token_role", "advisor") or "advisor").strip() or "advisor"
+                confirm_phase = bool(getattr(args, "confirm", False))
                 if not args.role:
                     raise ValueError(
                         "roles enroll-code requires --role.\n"
@@ -3077,39 +3221,13 @@ def main(argv: list[str] | None = None) -> int:
                         "roles enroll-code requires --owner-authorization-ref (发码是 owner-gated).\n"
                         "可抄示例: lybra roles enroll-code --role executor --owner-authorization-ref <owner-authorization-ref>"
                     )
-                # ① 连接源: <workspace>/.lybra/connection.json(或 --connection-json 覆盖)
-                conn_path = workspace_connection_path(workspace_root, connection_target=connection_target)
-                if not conn_path.exists():
-                    return _enroll_code_fail(
-                        f"local connection.json not found: {conn_path}",
-                        next_step=("在治理工作区运行本命令(或 --connection-json 指定本机 connection.json); "
-                                   "薄壳只调门动词, 没有(也不许有)本地发码路径。"),
-                    )
-                conn_data = json.loads(conn_path.read_text(encoding="utf-8"))
-                # AIPOS-F106 件①: 门基址唯一推导口(委托 ConnectionResolver.resolve_gate_url), 凭据文件须声明 mcp.rpc_url
                 try:
-                    base_url = resolve_gate_base_url(connection_json=conn_path, require_declared=True)
-                except GateAddressError as exc:
-                    return _enroll_code_fail(str(exc), next_step="先 lybra serve start 或修正 connection.json。")
-                # ② 治理根(F24A): 显式参数优先, 缺省=本机 connection.json 的 workspace_root ——
-                #    显式化传入, 码内治理根不再依赖门进程环境解析(被吞缺陷根除)
+                    client, conn_data, token_role_used = _roles_issuer_client(workspace_root, connection_target, token_role)
+                except _RolesIssuerError as exc:
+                    return _enroll_code_fail(str(exc), next_step=exc.next_step)
+                # ② 治理根(F24A): 显式参数优先, 缺省=本机 connection.json 的 workspace_root —— 显式化传入, 码内治理根不再依赖门进程环境解析
                 governance_root = governance_root_arg or str(conn_data.get("workspace_root") or "").strip() or None
-                # ③ token 按角色读(默认 advisor, 缺席回落 owner); 原始 token 只进程内使用, 永不上 argv/不回显
-                token = None
-                token_role_used = None
-                for candidate_role in (token_role, "owner"):
-                    try:
-                        token = load_owner_token(connection_json=conn_path, role=candidate_role)
-                        token_role_used = candidate_role
-                        break
-                    except ValueError:
-                        continue
-                if not token:
-                    return _enroll_code_fail(
-                        f"no usable role token ({token_role}/owner) in {conn_path}",
-                        next_step="用 --token-role 指定角色, 或先在本机 enroll 出顾问/Owner 凭据。",
-                    )
-                dry_run_args = {
+                params = {
                     "role": args.role,
                     "instance": instance,
                     "ttl": ttl,
@@ -3119,25 +3237,14 @@ def main(argv: list[str] | None = None) -> int:
                     "reason": reason,
                     "actor": f"cli:roles-enroll-code:{token_role_used}",
                 }
-                dry_run_args = {k: v for k, v in dry_run_args.items() if v not in (None, "")}
                 try:
-                    client = GateClient(base_url, token, timeout=30.0)
-                    dry = client.call_tool("lybra_enroll_code_dry_run", dry_run_args)
-                    if not dry.get("ok"):
-                        return _enroll_code_fail(
-                            "gate rejected lybra_enroll_code_dry_run: " + json.dumps(dry, ensure_ascii=False)[:800],
-                            next_step="按上面 teaching error 修正参数后重试。",
-                        )
-                    confirm = client.call_tool("lybra_enroll_code_confirm", {
-                        "dry_run_token": dry.get("dry_run_token"),
-                        "owner_confirmation_token": "OWNER_CONFIRMED",
-                        "actor": dry_run_args["actor"],
-                    })
-                    if not confirm.get("ok"):
-                        return _enroll_code_fail(
-                            "gate rejected lybra_enroll_code_confirm: " + json.dumps(confirm, ensure_ascii=False)[:800],
-                            next_step="按上面 teaching error 处理(dry_run_token TTL=600s, 过期重跑本命令)。",
-                        )
+                    issued = gate_enroll_code(client, params, confirm=confirm_phase)
+                except GateVerbRefused as exc:
+                    return _enroll_code_fail(
+                        str(exc),
+                        next_step=("按上面 teaching error 修正参数后重试。" if exc.verb == ENROLL_CODE_DRY_RUN_VERB
+                                   else "按上面 teaching error 处理(dry_run_token TTL=600s, 过期重跑本命令)。"),
+                    )
                 except GateError as exc:
                     return _enroll_code_fail(
                         f"gate call failed: {exc}",
@@ -3145,6 +3252,26 @@ def main(argv: list[str] | None = None) -> int:
                                    "此为产品侧/连接故障, 与你无关, 禁自行诊断修复门/服务/部署 —— 报告顾问即可。"
                                    "薄壳没有本地发码回退路径(本地发码=死运输凭证, 已废除)。"),
                     )
+                if not confirm_phase:
+                    preview = issued["dry_run"].get("preview") or {}
+                    label = _two_phase_family_declaration("roles_writers")["outcome_labels"]["preview"]
+                    result_out = {
+                        "ok": True, "operation": "roles_enroll_code", "phase": "dry_run", "dry_run": True, "issued": False,
+                        "issued_via": "gate_verb_thin_shell(F24A)", "preview": preview,
+                        "next_step": "确认后同一条命令加 --confirm 才出码(码只显示一次)",
+                    }
+                    if getattr(args, "json", False):
+                        print(render_json(result_out))
+                    else:
+                        print(f"roles enroll-code {args.role}: {label}")
+                        print(f"  Role: {preview.get('role', args.role)}  Instance: {preview.get('instance') or instance or '(any)'}")
+                        print(f"  Governance root: {preview.get('governance_root') or governance_root}")
+                        print(f"  有效期: {preview.get('ttl_seconds') or ttl} 秒(自 --confirm 签码起算)")
+                        print(f"  Gate URL: {preview.get('gate_url') or gate_url_arg}")
+                        print(f"  Owner authorization ref: {owner_auth_ref}")
+                        print("  未出码、零写入; 确认后同一条命令加 --confirm 才出码(码只显示一次)")
+                    return 0
+                confirm = issued["confirm"]
                 # AIPOS-F93 件②: 交付文案 = onboarding.enroll_delivery(门 paste_text / paste_instruction 同一渲染源, CLI 与门一份)
                 from tools.aipos_cli.onboarding import enroll_delivery
 
@@ -3153,6 +3280,7 @@ def main(argv: list[str] | None = None) -> int:
                 result_out = {
                     "ok": True,
                     "operation": "roles_enroll_code",
+                    "phase": "confirm",
                     "issued_via": "gate_verb_thin_shell(F24A)",
                     "code_id": confirm.get("code_id"),
                     "self_contained_code": confirm.get("self_contained_code"),
@@ -3181,6 +3309,40 @@ def main(argv: list[str] | None = None) -> int:
                     print("\n  " + delivery["paste_instruction"].replace("\n", "\n  "))
                     print(f"\n  ⚠ 码单次 + TTL + 可撤销; 内嵌零 scope 运输凭证(码即运输认证, 无需 bootstrap token)。")
                     print(f"  ⚠ This code is shown only once. Share it immediately.")
+                    print("  · 同机(治理根所在机)接入不必经手此码: lybra roles enroll-deliver 签码 + 接入一体, 码不出进程")
+                return 0
+            elif args.roles_command == "enroll-deliver":
+                # AIPOS-F151 件②(gap #106/#92): 薄壳, 全部逻辑在 enroll_deliver.enroll_deliver(唯一实现; 码只在本进程内)。
+                # 门客户端凭据与 enroll-code 同一取法(_roles_issuer_client); 两阶段旗标 = roles_writers 同一包装
+                from tools.aipos_cli.confirm_client import GateError
+                from tools.aipos_cli.enroll_deliver import EnrollDeliverRollbackError, GateVerbRefused, enroll_deliver
+
+                try:
+                    client, _conn, token_role_used = _roles_issuer_client(
+                        workspace_root, connection_target, str(getattr(args, "token_role", "advisor") or "advisor"))
+                except _RolesIssuerError as exc:
+                    print(f"Error: {exc}", file=sys.stderr)
+                    print(f"下一步: {exc.next_step}", file=sys.stderr)
+                    return 1
+                try:
+                    result = enroll_deliver(
+                        client=client, role=args.role, instance=args.instance, governance_root=args.governance_root,
+                        workspace=args.workspace, owner_authorization_ref=args.owner_authorization_ref,
+                        confirm=bool(getattr(args, "confirm", False)), ssh_target=args.ssh, harness_kind=args.harness,
+                        harness_dir=args.harness_dir, harness_host=args.harness_host, executor_mode=args.executor_mode,
+                        gate_url=args.gate_url, ttl_seconds=args.ttl, reason=str(args.reason or "").strip(),
+                        actor=f"cli:roles-enroll-deliver:{token_role_used}",
+                    )
+                except (GateVerbRefused, GateError, EnrollDeliverRollbackError, RuntimeError, ValueError) as exc:
+                    if getattr(args, "json", False):
+                        print(render_json({"ok": False, "operation": "enroll-deliver", "error": str(exc)}), file=sys.stderr)
+                    else:
+                        print(f"Error: {exc}", file=sys.stderr)
+                    return 1
+                if getattr(args, "json", False):
+                    print(render_json(result))
+                else:
+                    _render_enroll_deliver(result)
                 return 0
             elif args.roles_command == "enroll-revoke":
                 # AIPOS-362: revoke enrollment code
@@ -3296,8 +3458,8 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError(
                         "roles enroll requires --gate-url for legacy plain codes "
                         "(自包含码 LYBRAENROLL1.* 内嵌 gate 地址, 无需此参数)。\n"
-                        "可抄示例: lybra roles enroll --code LYBRAENROLL1.<base64> --workspace ~/workstations/my-agent\n"
-                        "旧码示例:   lybra roles enroll --code <裸码> --gate-url http://<host>:<port> --workspace ~/workstations/my-agent"
+                        "在治理根所在机接入请改用 lybra roles enroll-deliver(签码 + 兑换同一进程, 码不出进程; AIPOS-F151)。\n"
+                        "可抄示例(旧码兑换): lybra roles enroll --code <裸码> --gate-url http://<host>:<port> --workspace ~/workstations/my-agent"
                     )
                 try:
                     result = enroll(

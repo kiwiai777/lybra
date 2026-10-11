@@ -299,21 +299,18 @@ GUARD_TEXT = ("持续推进守则", "lybra loop status --task-id <卡ID>", "只�
 
 
 def _run_guide_to_step5(r: Range, guide_args: str, *, ok_step5: tuple[int, ...] = (0,)) -> tuple[dict, str]:
+    """向导原样走到顾问接入(AIPOS-F151: 第 4 步 Owner `roles enroll-deliver` 先 --dry-run 再 --confirm, 码不出进程)。"""
     guide = json.loads(r.sh(f"lybra onboarding guide {guide_args} --json"))
-    fills: dict[str, str] = {}
     enroll_out = ""
-    for step in guide["steps"][:5]:
+    for step in guide["steps"][:4]:
         for line in (l.strip() for l in step["command"].splitlines()):
             if not line or line.startswith("#"):
                 continue
-            for k, v in fills.items():
-                line = line.replace(k, v)
-            out = r.sh(line, ok=ok_step5 if "roles enroll " in line else (0,))
-            if "enroll-code" in line:
-                fills["<ADVISOR_CODE>"] = CODE_RE.findall(out)[0]
-            if "roles enroll " in line:
-                enroll_out = CODE_RE.sub("LYBRAENROLL1.<redacted>", out)
-                break  # 第 5 步其余行(sync 复核)由调用方按场景跑
+            confirm_line = "enroll-deliver" in line and line.endswith("--confirm")
+            out = r.sh(line, ok=ok_step5 if confirm_line else (0,))
+            assert not CODE_RE.search(out), "注册码出现在命令输出里"
+            if confirm_line:
+                enroll_out = out
     return guide, enroll_out
 
 
@@ -330,8 +327,8 @@ def test_item2_claude_code_advisor_session_receives_charter(probe_range: Range):
     gov = r.hroot / "lybra-probe"
     guide, enroll_out = _run_guide_to_step5(r, f"lybra-probe --repo app={r.session}/app --default-repo app --advisor-dir {r.session} "
                                                f"--envelope-days 7 --max-tasks 20")
-    _show("[② claude-code 第 5 步 enroll 输出]\n" + enroll_out)
-    assert ".claude/rules/lybra-advisor.md" in guide["steps"][4]["command"]
+    _show("[② claude-code 第 4 步 enroll-deliver 输出]\n" + enroll_out)
+    assert ".claude/rules/lybra-advisor.md" in guide["steps"][3]["command"]
     charter = r.session / ".claude" / "rules" / "lybra-advisor.md"
     text = _assert_rendered_charter(charter, "lybra-probe")
     _show(f"[② claude-code 章程落点 {charter}] 前 6 行:\n" + "\n".join(text.splitlines()[:6]))
@@ -353,8 +350,8 @@ def test_item2_codex_advisor_session_receives_charter_and_refuses_foreign_file(p
     (session / "AGENTS.md").write_text("# 会话仓自带的 AGENTS.md(非 Lybra 渲染物)\n", encoding="utf-8")
     guide, enroll_out = _run_guide_to_step5(
         r, f"lybra-probe --repo app={r.session}/app --default-repo app --advisor-harness codex --advisor-dir {session} "
-           f"--host-segment devbox --envelope-days 7 --max-tasks 20", ok_step5=(2,))
-    _show("[② codex 第 5 步 enroll 输出(会话目录已有非 Lybra AGENTS.md)]\n" + enroll_out)
+           f"--host-segment devbox --envelope-days 7 --max-tasks 20", ok_step5=(1,))
+    _show("[② codex 第 4 步 enroll-deliver 输出(会话目录已有非 Lybra AGENTS.md)]\n" + enroll_out)
     assert "章程落点已有非 Lybra 渲染物" in enroll_out and "不覆盖" in enroll_out
     assert (session / "AGENTS.md").read_text(encoding="utf-8").startswith("# 会话仓自带的")  # 未被覆盖
     assert json.loads((gov / ".lybra" / "role").read_text(encoding="utf-8"))["harness"] == {"kind": "codex", "dir": str(session), "host": None}

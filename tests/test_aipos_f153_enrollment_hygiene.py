@@ -211,7 +211,7 @@ def test_item2_guide_gate_address_same_rule(two):
     _show(f"[② guide] 门地址: {guide['gate_url']}(来源: {guide['gate_url_source']})")
     assert guide["gate_url"] == "http://127.0.0.1:7121" and "same_host_rule" in guide["gate_url_source"]
     commands = [c for step in guide["steps"] for c in (step.get("commands") or [step.get("command") or ""])]
-    code_cmds = [c for c in commands if "enroll-code" in c]
+    code_cmds = [c for c in commands if "enroll-deliver" in c]  # AIPOS-F151: 向导签码命令 = roles enroll-deliver(签码 + 接入一体)
     assert code_cmds and all("--gate-url http://127.0.0.1:7121" in c for c in code_cmds), code_cmds
     assert "ts.net" not in json.dumps(guide["steps"], ensure_ascii=False)
     explicit = generate_onboarding_guide("probe153", home_root=str(two.home), owner_connection_json=str(conn),

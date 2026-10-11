@@ -57,17 +57,26 @@ ENROLL_DEFAULT_TTL_SECONDS = 86400
 TRANSPORT_TOKEN_ROLE = "enroll-transport"
 
 
+#: AIPOS-F151 件③: 码内非秘密的签发声明字段(可缺; 旧码无此三键)。只供兑换方换码前预检(工位类须有覆盖信封),
+#: 不是授权依据——换码后以门下发的 token_entry 为准, 两者不一致即拒(enroll_client.enroll)
+SELF_CONTAINED_DECLARED_KEYS = ("role", "instance", "role_class")
+
+
 def encode_self_contained_code(
     *,
     gate_url: str,
     governance_root: str,
     transport_token: str,
     code: str,
+    role: str | None = None,
+    instance: str | None = None,
+    role_class: str | None = None,
 ) -> str:
     """F23: 编码自包含码 —— 格式唯一定义处。
 
-    payload = {v:1, gate_url, governance_root, transport_token, code}
+    payload = {v:1, gate_url, governance_root, transport_token, code[, role, instance, role_class]}
     输出 = "LYBRAENROLL1." + base64url(JSON, 无 padding)
+    AIPOS-F151 件③: role / instance / role_class = 签发时的声明(非秘密, 给了才写; 同版本 v1 —— 旧解码器忽略多余键)。
     """
     payload = {
         "v": SELF_CONTAINED_CODE_VERSION,
@@ -76,6 +85,9 @@ def encode_self_contained_code(
         "transport_token": str(transport_token),
         "code": str(code),
     }
+    for key, value in zip(SELF_CONTAINED_DECLARED_KEYS, (role, instance, role_class)):
+        if str(value or "").strip():
+            payload[key] = str(value).strip()
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     b64 = base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
     return SELF_CONTAINED_CODE_PREFIX + b64
@@ -85,7 +97,8 @@ def decode_self_contained_code(text: str) -> dict[str, Any] | None:
     """F23: 解码自包含码。非自包含码(旧裸码)返回 None, 调用方走旧路径。
 
     Returns:
-        {v, gate_url, governance_root, transport_token, code} 或 None
+        {v, gate_url, governance_root, transport_token, code, role, instance, role_class} 或 None
+        (AIPOS-F151: role / instance / role_class 旧码无 = 空串)
     """
     s = str(text or "").strip()
     if not s.startswith(SELF_CONTAINED_CODE_PREFIX):
@@ -111,6 +124,7 @@ def decode_self_contained_code(text: str) -> dict[str, Any] | None:
         "governance_root": str(payload.get("governance_root") or ""),
         "transport_token": str(payload["transport_token"]),
         "code": str(payload["code"]),
+        **{key: str(payload.get(key) or "").strip() for key in SELF_CONTAINED_DECLARED_KEYS},
     }
 
 
@@ -258,11 +272,19 @@ def issue_self_contained_code(
     # (可能是 lybra), 不一定是治理根。governance_root 为空时应保持空, 让 enroll_exchange
     # 的推导失败逻辑处理 (projects=[], projects_enforced=False)。
     resolved_governance_root = (governance_root or "").strip()
+    # AIPOS-F151 件③: 码内带签发声明(角色 / 实例 / 角色类), 兑换方换码前据此预检覆盖信封(不消耗码、不改凭据)。
+    # 角色类经唯一实现解析(注册表根 = 码内治理根, 缺省发码门工作区); 解析不到 = 不写该键(兑换方退回换码后复核)
+    from tools.aipos_cli.custom_roles import resolve_role_to_class
+
+    declared_class = resolve_role_to_class(role, resolved_governance_root or root)
     self_contained = encode_self_contained_code(
         gate_url=resolved_gate_url,
         governance_root=resolved_governance_root,
         transport_token=transport_entry["token"],
         code=enrollment["code"],
+        role=role,
+        instance=instance,
+        role_class=declared_class,
     )
 
     # ④ 交付文案(AIPOS-F93 件②: 产品命令形, 向导同一渲染源 onboarding.enroll_delivery; 门与 CLI 共用)
