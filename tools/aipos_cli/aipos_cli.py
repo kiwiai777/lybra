@@ -2242,7 +2242,8 @@ def build_parser() -> argparse.ArgumentParser:
         "AIPOS-F131: 看 loop 进度——读运行记录(project.json paths.loop_runs_root)+ 本机探活 + 判停滞; 状态 running/stalled/"
         "launch_dead/loop_dead/ended/unprobeable(verbs.schema lybra_loop.run_record.states)。缺 --task-id = 列本项目全部未结束的运行。"
         "禁 tail/grep 原始日志自判。"
-        "AIPOS-F136: 输出附「顾问下一动作」continue_wait/owner_needed/card_done_take_next/investigate; --wait <秒> 有界等到可行动或到时"
+        "AIPOS-F136: 输出附「顾问下一动作」continue_wait/owner_needed/card_done_take_next/investigate"
+        "/advisor_fix(AIPOS-F150: 例行门拒, 修法读声明 next_action.routine_rejections); --wait <秒> 有界等到可行动或到时"
         "(退出码读声明: " + ", ".join(f"{k}={c}" for k, c in _declared_exit_codes("lybra_loop_status").items()) + ")"
     )
     loop_status_parser = loop_actions.add_parser("status", help=_loop_status_help, description=_loop_status_help)
