@@ -170,7 +170,8 @@ def test_enroll_flow(tmp_path, monkeypatch):
         print("\n[1] Generating enrollment code for test role...")
         result = _run_cli_json(project, env, "roles", "enroll-code", "--role", "executor", "--instance", INSTANCE,
                                "--ttl", "3600", "--gate-url", gate_url,
-                               "--owner-authorization-ref", "AIPOS-R2-integration-test", "--reason", "AIPOS-R2 integration test")
+                               "--owner-authorization-ref", "AIPOS-R2-integration-test", "--reason", "AIPOS-R2 integration test",
+                               "--confirm")  # AIPOS-F151 件①: enroll-code 缺省预演不出码, --confirm 才出码
         assert result.get("ok"), result
         code = result["self_contained_code"]
         print(f"✓ Generated: {result['code_id']}")
@@ -225,7 +226,8 @@ def test_enroll_flow(tmp_path, monkeypatch):
         print("\n[5] Testing idempotency (re-enrolling same instance)...")
         result2 = _run_cli_json(project, env, "roles", "enroll-code", "--role", "executor", "--instance", INSTANCE,
                                 "--ttl", "3600", "--gate-url", gate_url,
-                                "--owner-authorization-ref", "AIPOS-R2-idempotency-test", "--reason", "Test token rotation")
+                                "--owner-authorization-ref", "AIPOS-R2-idempotency-test", "--reason", "Test token rotation",
+                                "--confirm")
         assert result2.get("ok"), result2
         old_token = token_entry["token"]
         enroll_result2 = enroll(code=result2["self_contained_code"], gate_url=gate_url, workspace_root=test_workspace, policy=None)

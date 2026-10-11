@@ -252,7 +252,7 @@ class TestCliThinShell(unittest.TestCase):
                 proc = self._run_cli(
                     "--workspace-root", str(proj_a),
                     "enroll-code", "--role", "executor", "--instance", "exec.stub",
-                    "--owner-authorization-ref", "test-ref", "--json",
+                    "--owner-authorization-ref", "test-ref", "--json", "--confirm",  # AIPOS-F151 件①: --confirm 才出码(缺省预演)
                 )
                 self.assertEqual(proc.returncode, 0, proc.stderr)
                 out = json.loads(proc.stdout)

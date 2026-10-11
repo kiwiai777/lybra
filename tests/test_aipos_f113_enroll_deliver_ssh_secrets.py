@@ -4,14 +4,17 @@
   - 假 ssh(PATH 最前的 `ssh` 替身, 与 AIPOS-F110 tests/fake_ssh.py 等价): 记录本机交给 ssh 的 argv 与 stdin, 再按 OpenSSH 语义
     (远端命令 = 余下参数以空格拼接, 交远端登录 shell 解释)用 /bin/sh -c 在靶场 cwd 内"远端执行"。
   - 假远端 python3(只在假远端 PATH 上): 记录远端实际收到的 argv 与 stdin, 按命令回 enroll/distribute 的 JSON(或按开关失败)。
-  - 门替身: 替换 enroll_deliver.GateClient, 记录 lybra_roles_enroll_code / lybra_roles_enroll_revoke 调用(不碰任何真实门)。
+  - 门替身: 注入 enroll_deliver.enroll_deliver 的门客户端(AIPOS-F151: 签码 = lybra_enroll_code_dry_run → _confirm, 回滚 =
+    lybra_roles_enroll_revoke), 记录调用(不碰任何真实门); CLI 层(`lybra roles enroll-deliver`)替换 confirm_client.GateClient。
+  - 本机治理根(AIPOS-F151 件③ 签码前覆盖信封预检读它): tmp 下已建项目 + 覆盖 executor 的生效 PreAuthorized 信封。
 所有凭据/注册码均为假值; 断言只比对假值是否出现, 测试输出不打印明文。
 
 四类靶场:
   ① 凭据不上远端命令行: 远端 argv 不含注册码与 Owner 凭据明文; 码经 stdin 逐字节送达; Owner 凭据只在本机 HTTP 层(门替身)出现
   ② 远端命令正确转义: 含空格/单双引号/$()/反引号的路径与实例名逐字节到达远端 argv, 远端 shell 不执行注入
   ③ 回滚 fail-closed: 远端失败 → 经门吊销码; 吊销也失败 → EnrollDeliverRollbackError / CLI 非零退出, 消息含手工清理出口, 无吞错
-  ④ 本机 CLI 输出与日志只出现指纹: main() 的 stdout/stderr(成功与失败)不含明文; Owner 凭据只经 stdin / connection.json 入
+  ④ 本机 CLI(AIPOS-F151 起 = `lybra roles enroll-deliver`)输出与日志只出现指纹: stdout/stderr(成功与失败)不含明文; 门凭据只经
+    connection.json 入; 旧模块入口已收为该子命令(只打印等价命令, 不签码不 ssh)
 """
 from __future__ import annotations
 
@@ -80,7 +83,7 @@ else:
 
 
 class FakeGateClient:
-    """门替身: 记录调用; 发码返回假自包含码; 吊销按开关成功/失败。"""
+    """门替身: 记录调用; 签码两阶段返回假自包含码; 吊销按开关成功/失败。"""
 
     calls: list[tuple[str, dict]] = []
     tokens_seen: list[str] = []
@@ -94,11 +97,18 @@ class FakeGateClient:
     def token_fingerprint(self) -> str:
         return secret_fingerprint(self._token)
 
+    def redaction_needles(self) -> list[str]:  # 与 confirm_client.GateClient 同接口(AIPOS-F151)
+        return [self._token]
+
     def call_tool(self, name: str, arguments: dict, *, timeout: float | None = None) -> dict:
         FakeGateClient.calls.append((name, dict(arguments)))
-        if name == "lybra_roles_enroll_code":
-            return {"ok": True, "code_id": "enroll_f113fake", "self_contained_code": FAKE_CODE,
-                    "enrollment": {"code_id": "enroll_f113fake", "fingerprint": "sha256:fakecodefp00"}}
+        if name == "lybra_enroll_code_dry_run":
+            return {"ok": True, "dry_run_token": "enrolldr_f113fixture",
+                    "preview": {"role": arguments.get("role"), "instance": arguments.get("instance"), "ttl_seconds": 86400,
+                                "governance_root": arguments.get("governance_root"), "gate_url": "http://gate.invalid:7118"}}
+        if name == "lybra_enroll_code_confirm":
+            return {"ok": True, "code_id": "enroll_f113fake", "self_contained_code": FAKE_CODE, "fingerprint": "sha256:fakecodefp00",
+                    "gate_url": "http://gate.invalid:7118", "expires_at": "2999-01-01T00:00:00Z"}
         if name == "lybra_roles_enroll_revoke":
             if FakeGateClient.revoke_mode == "raise":
                 raise RuntimeError("gate unreachable during rollback (fixture); bearer was " + self._token)
@@ -106,6 +116,27 @@ class FakeGateClient:
                 return {"ok": False, "errors": [{"message": "fixture reject"}]}
             return {"ok": True, "revoked": {"code_id": arguments.get("code_id")}}
         raise AssertionError(f"unexpected gate tool {name}")
+
+
+ISSUE_VERBS = ["lybra_enroll_code_dry_run", "lybra_enroll_code_confirm"]
+
+
+def _governance_root(tmp: Path) -> Path:
+    """本机已建治理根(project.json + 队列根)+ 覆盖 executor 的生效 PreAuthorized 信封(AIPOS-F151 件③ 签码前预检读)。"""
+    from tools.aipos_cli.autonomy_policy import policies_dir
+
+    gov = tmp / "home" / "f113"
+    (gov / "5_tasks" / "queue" / "pending").mkdir(parents=True)
+    (gov / "project.json").write_text(json.dumps({"project": "f113", "config_version": 1}), encoding="utf-8")
+    pdir = policies_dir(gov)
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "pol_fixture.md").write_text(
+        "---\nrecord_type: owner_autonomy_policy\npolicy_id: pol_fixture\nmode: PreAuthorized\nstatus: active\n"
+        "approved_by_owner: true\nowner_approval_ref: dec_f113\nactive_from: '2020-01-01T00:00:00Z'\n"
+        "expires_at: '2099-01-01T00:00:00Z'\nagent_or_role: executor\ntask_selector_task_mode: ''\n"
+        "task_selector_project: f113\ntask_selector_task_ids: []\nmax_tasks: 50\n---\n# Owner Autonomy Policy: pol_fixture\n",
+        encoding="utf-8")
+    return gov
 
 
 def _read_jsonl(path: Path) -> list[dict]:
@@ -138,11 +169,12 @@ def rig(tmp_path, monkeypatch):
     FakeGateClient.calls = []
     FakeGateClient.tokens_seen = []
     FakeGateClient.revoke_mode = "ok"
-    monkeypatch.setattr(enroll_deliver, "GateClient", FakeGateClient)
+    gov = _governance_root(tmp_path)
 
     class Rig:
         tmp = tmp_path
         cwd = remote_cwd
+        governance_root = gov
 
         @staticmethod
         def ssh_log() -> list[dict]:
@@ -155,12 +187,14 @@ def rig(tmp_path, monkeypatch):
     return Rig
 
 
-def _deliver(**overrides):
-    kwargs = dict(role="executor", instance="exec.f113.fake", workspace_root="/remote/ws", harness_root="/remote/harness",
-                  ssh_target="tester@fake-host", gate_url="http://gate.invalid:7118", owner_policy_ref="pol_fixture",
-                  owner_token=FAKE_OWNER_TOKEN)
+def _deliver(rig, **overrides):
+    """AIPOS-F151: 唯一实现 enroll_deliver.enroll_deliver(--confirm 阶段); 门客户端 = 替身(持假门凭据)。"""
+    kwargs = dict(client=FakeGateClient("http://gate.invalid:7118", FAKE_OWNER_TOKEN), role="executor", instance="exec.f113.fake",
+                  governance_root=str(rig.governance_root), workspace="/remote/ws", harness_root="/remote/harness",
+                  ssh_target="tester@fake-host", gate_url="http://gate.invalid:7118", owner_authorization_ref="pol_fixture",
+                  policy="pol_fixture", confirm=True)
     kwargs.update(overrides)
-    return enroll_deliver.enroll_deliver_ssh(**kwargs)
+    return enroll_deliver.enroll_deliver(**kwargs)
 
 
 def _show(label: str, obj) -> None:
@@ -174,7 +208,7 @@ def _show(label: str, obj) -> None:
 # ── ① 凭据不上远端命令行 ──────────────────────────────────────────────────────────────
 
 def test_item1_no_code_or_owner_token_in_any_argv_code_via_stdin(rig):
-    result = _deliver()
+    result = _deliver(rig)
     ssh_calls = rig.ssh_log()
     remote_calls = rig.remote_log()
     _show("①ssh-argv", [c["argv"] for c in ssh_calls])
@@ -190,15 +224,16 @@ def test_item1_no_code_or_owner_token_in_any_argv_code_via_stdin(rig):
     assert enroll_call["stdin"] == FAKE_CODE + "\n"
     assert remote_calls[1]["stdin"] == ""
     assert all(FAKE_OWNER_TOKEN not in c["stdin"] for c in ssh_calls + remote_calls)
-    # Owner 凭据只在本机门调用层(HTTP Authorization)出现: 发码走门动词(发码唯一实现)
+    # 门凭据只在本机门调用层(HTTP Authorization)出现: 签码走门两阶段动词(发码唯一实现在门内; AIPOS-F151)
     assert FakeGateClient.tokens_seen == [FAKE_OWNER_TOKEN]
-    assert [name for name, _ in FakeGateClient.calls] == ["lybra_roles_enroll_code"]
+    assert [name for name, _ in FakeGateClient.calls] == ISSUE_VERBS
     assert FakeGateClient.calls[0][1]["owner_authorization_ref"] == "pol_fixture"
+    assert FakeGateClient.calls[0][1]["governance_root"] == str(rig.governance_root.resolve())
     # 结果只含指纹
     dumped = json.dumps(result, ensure_ascii=False)
     assert FAKE_CODE not in dumped and FAKE_OWNER_TOKEN not in dumped
     assert result["enrollment"]["fingerprint"] == "sha256:fakecodefp00"
-    assert result["owner_token_fingerprint"] == secret_fingerprint(FAKE_OWNER_TOKEN)
+    assert result["credential_fingerprint"] == secret_fingerprint(FAKE_OWNER_TOKEN)
 
 
 def test_item1_enroll_client_code_stdin_reaches_enroll(monkeypatch, tmp_path, capsys):
@@ -239,7 +274,7 @@ def test_item2_special_chars_arrive_byte_exact_and_no_injection(rig):
     ws = f"/remote/{SPECIAL}/ws"
     hr = f"/remote/{SPECIAL}/harness"
     inst = f"exec.{SPECIAL}"
-    result = _deliver(workspace_root=ws, harness_root=hr, instance=inst, owner_policy_ref=f"pol {SPECIAL}", force=True)
+    result = _deliver(rig, workspace=ws, harness_root=hr, instance=inst, policy=f"pol {SPECIAL}", force=True)
     remote_calls = rig.remote_log()
     _show("②remote-argv", [c["argv"] for c in remote_calls])
     _show("②remote-cwd", sorted(p.name for p in rig.cwd.iterdir()))
@@ -260,7 +295,7 @@ def test_item2_special_chars_arrive_byte_exact_and_no_injection(rig):
 def test_item2_ssh_target_option_injection_rejected_before_minting(rig):
     for bad in ("-oProxyCommand=touch PWNED", "user@host evil", ""):
         with pytest.raises(ValueError):
-            _deliver(ssh_target=bad)
+            _deliver(rig, ssh_target=bad)
     assert FakeGateClient.calls == [] and rig.ssh_log() == []
 
 
@@ -270,12 +305,12 @@ def test_item2_ssh_target_option_injection_rejected_before_minting(rig):
 def test_item3_remote_failure_revokes_and_raises_redacted(rig, monkeypatch, stage):
     monkeypatch.setenv("F113_REMOTE_FAIL", stage)
     with pytest.raises(RuntimeError) as excinfo:
-        _deliver()
+        _deliver(rig)
     msg = str(excinfo.value)
     _show(f"③{stage}-失败-回滚成功", msg)
     assert not isinstance(excinfo.value, enroll_deliver.EnrollDeliverRollbackError)
-    assert [name for name, _ in FakeGateClient.calls] == ["lybra_roles_enroll_code", "lybra_roles_enroll_revoke"]
-    assert FakeGateClient.calls[1][1]["code_id"] == "enroll_f113fake"
+    assert [name for name, _ in FakeGateClient.calls] == ISSUE_VERBS + ["lybra_roles_enroll_revoke"]
+    assert FakeGateClient.calls[2][1]["code_id"] == "enroll_f113fake"
     assert "已回滚" in msg and "enroll_f113fake" in msg
     # 远端把码回显到 stderr 时本机侧脱敏为指纹
     assert FAKE_CODE not in msg and FAKE_OWNER_TOKEN not in msg
@@ -290,7 +325,7 @@ def test_item3_rollback_failure_is_loud_with_exit(rig, monkeypatch, revoke_mode)
     monkeypatch.setenv("F113_REMOTE_FAIL", "enroll")
     FakeGateClient.revoke_mode = revoke_mode
     with pytest.raises(enroll_deliver.EnrollDeliverRollbackError) as excinfo:
-        _deliver()
+        _deliver(rig)
     msg = str(excinfo.value)
     _show(f"③回滚失败-{revoke_mode}", msg)
     assert "回滚失败" in msg and "enroll_f113fake" in msg
@@ -299,77 +334,76 @@ def test_item3_rollback_failure_is_loud_with_exit(rig, monkeypatch, revoke_mode)
     assert FAKE_CODE not in msg and FAKE_OWNER_TOKEN not in msg
 
 
-def test_item3_local_mode_rollback_failure_is_loud(monkeypatch, tmp_path):
-    """同机模式同一回滚纪律: 兑换失败 + 吊销失败 → EnrollDeliverRollbackError(原 except: pass 吞错退役)。"""
-    from tools.aipos_cli import enrollment
+def test_item3_local_mode_rollback_failure_is_loud(rig, monkeypatch):
+    """同机模式同一回滚纪律: 本进程 enroll 失败 + 门吊销失败 → EnrollDeliverRollbackError(出口含手工吊销命令; 无明文)。"""
+    def boom_enroll(**kwargs):
+        raise RuntimeError("exchange failed, code=" + kwargs["code"])
 
-    monkeypatch.setenv("LYBRA_WORKSPACE_ROOT", str(tmp_path / "gate-ws"))
-    monkeypatch.setattr(enroll_deliver, "create_enrollment_code",
-                        lambda **k: {"code": FAKE_CODE, "code_id": "enroll_localfake", "fingerprint": "sha256:fp"})
-
-    def boom_exchange(*a, **k):
-        raise RuntimeError("exchange failed, code=" + FAKE_CODE)
-
-    def boom_revoke(*a, **k):
-        raise ValueError("revoke store unwritable (fixture)")
-
-    monkeypatch.setattr(enroll_deliver, "exchange_enrollment_code", boom_exchange)
-    monkeypatch.setattr(enrollment, "revoke_enrollment_code", boom_revoke)
+    monkeypatch.setattr(enroll_client, "enroll", boom_enroll)
+    FakeGateClient.revoke_mode = "raise"
     with pytest.raises(enroll_deliver.EnrollDeliverRollbackError) as excinfo:
-        enroll_deliver.enroll_deliver_local(role="executor", instance="exec.f113.local", workspace_root=tmp_path / "ws",
-                                            harness_root=tmp_path / "harness", gate_url="http://127.0.0.1:1",
-                                            owner_policy_ref="p", owner_token=FAKE_OWNER_TOKEN)
+        _deliver(rig, ssh_target=None, workspace=str(rig.tmp / "ws"))
     msg = str(excinfo.value)
     _show("③同机回滚失败", msg)
-    assert "回滚失败" in msg and "lybra roles enroll-revoke enroll_localfake" in msg
+    assert [name for name, _ in FakeGateClient.calls] == ISSUE_VERBS + ["lybra_roles_enroll_revoke"]
+    assert "回滚失败" in msg and "lybra roles enroll-revoke enroll_f113fake" in msg and ".lybra/connection.json" in msg
     assert FAKE_CODE not in msg and FAKE_OWNER_TOKEN not in msg
 
 
 # ── ④ 本机 CLI 输出/日志只出现指纹 ────────────────────────────────────────────────────
 
-def _cli(monkeypatch, capsys, extra: list[str], stdin_text: str) -> tuple[int, str, str]:
-    argv = ["enroll_deliver", "--role", "executor", "--instance", "exec.f113.fake", "--target-workspace", "/remote/ws",
-            "--target-harness", "/remote/harness", "--gate-url", "http://gate.invalid:7118",
-            "--owner-policy-ref", "pol_fixture", "--ssh", "tester@fake-host", *extra]
-    monkeypatch.setattr(sys, "argv", argv)
-    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin_text))
-    rc = enroll_deliver.main()
+def _cli(monkeypatch, capsys, rig, extra: list[str]) -> tuple[int, str, str]:
+    """`lybra roles enroll-deliver --ssh`(AIPOS-F151 唯一入口); 门凭据从 --connection-json 读(不上 argv), 门 = 替身。"""
+    from tools.aipos_cli import aipos_cli, confirm_client
+
+    conn = rig.tmp / "owner-connection.json"
+    conn.write_text(json.dumps({"mcp": {"rpc_url": "http://gate.invalid:7118/mcp"},
+                                "tokens": [{"role": "owner", "token": FAKE_OWNER_TOKEN}]}), encoding="utf-8")
+    monkeypatch.setattr(confirm_client, "GateClient", FakeGateClient)
+    argv = ["roles", "--workspace-root", str(rig.governance_root), "--connection-json", str(conn), "enroll-deliver",
+            "--role", "executor", "--instance", "exec.f113.fake", "--governance-root", str(rig.governance_root),
+            "--workspace", "/remote/ws", "--ssh", "tester@fake-host", "--owner-authorization-ref", "pol_fixture", *extra]
+    try:
+        rc = aipos_cli.main(argv)
+    except SystemExit as exc:
+        rc = exc.code if isinstance(exc.code, int) else 1
     cap = capsys.readouterr()
-    return rc, cap.out, cap.err
+    return int(rc or 0), cap.out, cap.err
 
 
 def test_item4_cli_success_and_failure_output_only_fingerprints(rig, monkeypatch, capsys):
-    rc, out, err = _cli(monkeypatch, capsys, ["--owner-token-stdin", "--json"], FAKE_OWNER_TOKEN + "\n")
+    rc, out, err = _cli(monkeypatch, capsys, rig, ["--confirm", "--json"])
     _show("④CLI成功-stdout", out)
-    assert rc == 0 and FAKE_CODE not in out + err and FAKE_OWNER_TOKEN not in out + err
-    assert json.loads(out)["owner_token_fingerprint"] == secret_fingerprint(FAKE_OWNER_TOKEN)
-    rc, out, err = _cli(monkeypatch, capsys, ["--owner-token-stdin"], FAKE_OWNER_TOKEN + "\n")
+    assert rc == 0, err
+    assert FAKE_CODE not in out + err and FAKE_OWNER_TOKEN not in out + err
+    assert json.loads(out)["credential_fingerprint"] == secret_fingerprint(FAKE_OWNER_TOKEN)
+    rc, out, err = _cli(monkeypatch, capsys, rig, ["--confirm"])
     assert rc == 0 and "sha256:fakecodefp00" in out and FAKE_CODE not in out + err and FAKE_OWNER_TOKEN not in out + err
 
     # 回滚失败: 非零退出, stderr 含出口, 无明文
     monkeypatch.setenv("F113_REMOTE_FAIL", "enroll")
     FakeGateClient.revoke_mode = "raise"
-    rc, out, err = _cli(monkeypatch, capsys, ["--owner-token-stdin"], FAKE_OWNER_TOKEN + "\n")
+    rc, out, err = _cli(monkeypatch, capsys, rig, ["--confirm"])
     _show("④CLI回滚失败-stderr", err)
     assert rc == 1 and "回滚失败" in err and "远端手工清理" in err
     assert FAKE_CODE not in out + err and FAKE_OWNER_TOKEN not in out + err
 
 
 def test_item4_cli_owner_token_never_on_argv(monkeypatch, capsys, rig):
-    # --owner-token <明文> 已退役: argparse 拒(非零), 且不发码不 ssh
-    with pytest.raises(SystemExit) as excinfo:
-        _cli(monkeypatch, capsys, ["--owner-token", FAKE_OWNER_TOKEN], "")
-    assert excinfo.value.code != 0
+    # 新入口无任何凭据参数: --owner-token <明文> = argparse 拒(非零), 且不签码不 ssh
+    rc, _out, _err = _cli(monkeypatch, capsys, rig, ["--owner-token", FAKE_OWNER_TOKEN])
+    assert rc != 0
     assert FakeGateClient.calls == [] and rig.ssh_log() == []
-    # 空 stdin → 拒
-    rc, out, err = _cli(monkeypatch, capsys, ["--owner-token-stdin"], "")
-    assert rc == 1 and "stdin carried no token" in err
-    # connection.json 读入路径(凭据走文件, 不走 argv)
-    conn = rig.tmp / "owner-connection.json"
-    conn.write_text(json.dumps({"tokens": [{"role": "owner", "token": FAKE_OWNER_TOKEN}]}), encoding="utf-8")
-    rc, out, err = _cli(monkeypatch, capsys, ["--connection-json", str(conn), "--json"], "")
-    assert rc == 0, err
-    assert FakeGateClient.tokens_seen[-1] == FAKE_OWNER_TOKEN and FAKE_OWNER_TOKEN not in out + err
+    # 旧模块入口已收为 `lybra roles enroll-deliver`: 只打印等价命令(不含凭据)并退出 2, 不签码、不 ssh
+    monkeypatch.setattr(sys, "stdin", io.StringIO(FAKE_OWNER_TOKEN + "\n"))
+    rc = enroll_deliver.main(["--role", "executor", "--instance", "exec.f113.fake", "--target-workspace", "/remote/ws",
+                              "--target-harness", "/remote/harness", "--gate-url", "http://gate.invalid:7118",
+                              "--owner-policy-ref", "pol_fixture", "--ssh", "tester@fake-host", "--owner-token-stdin"])
+    cap = capsys.readouterr()
+    _show("④旧入口", cap.err)
+    assert rc == 2 and "lybra roles enroll-deliver --role executor" in cap.err and "--confirm" in cap.err
+    assert FAKE_OWNER_TOKEN not in cap.out + cap.err
+    assert FakeGateClient.calls == [] and rig.ssh_log() == []
 
 
 def test_item4_help_has_no_plaintext_owner_token_option():

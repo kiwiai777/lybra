@@ -431,14 +431,17 @@ def test_item4_onboarding_guide_subagent_mode():
 
     default = generate_onboarding_guide(**BASE, advisor_dir="/tmp/f143-session")
     sub = generate_onboarding_guide(**BASE, advisor_harness="codex", advisor_host="mac-probe.local", executor_mode="subagent")
-    s7, s9 = sub["steps"][6]["command"], sub["steps"][8]["command"]
-    _show(f"[件④·向导 --executor-mode subagent 第 7 步]\n{s7}\n[第 9 步]\n{s9}")
+    # AIPOS-F151: 工位接入 = 第 6 步 enroll-deliver(先 --dry-run 再 --confirm, 码不出进程); 第 7 步只 sync 工位
+    s6, s9 = sub["steps"][5]["command"], sub["steps"][8]["command"]
+    _show(f"[件④·向导 --executor-mode subagent 第 6 步]\n{s6}\n[第 9 步]\n{s9}")
     assert sub["instances"]["executor"] == "exec.f143-probe.mac-probe" and sub["executor_mode"] == "subagent"
     gov = sub["governance_root"]
-    enroll_line = next(ln for ln in s7.splitlines() if "--executor-mode subagent" in ln)
-    args = _parse_lybra(_segments(enroll_line)[0][1:], enroll_line)
-    assert (args.workspace, args.executor_mode, args.harness, args.harness_host) == (gov, "subagent", "codex", "mac-probe.local")
-    assert "/tmp/f143-ws/exec" not in json.dumps(sub["steps"][6:8], ensure_ascii=False)  # 无执行工位 enroll / sync / pi
+    enroll_lines = [ln for ln in s6.splitlines() if "--executor-mode subagent" in ln and not ln.startswith("#")]
+    parsed = [_parse_lybra(_segments(ln)[0][1:], ln) for ln in enroll_lines]
+    assert [(a.roles_command, a.workspace, a.executor_mode, a.harness, a.harness_host, a.dry_run, a.confirm) for a in parsed] == [
+        ("enroll-deliver", gov, "subagent", "codex", "mac-probe.local", True, False),
+        ("enroll-deliver", gov, "subagent", "codex", "mac-probe.local", False, True)]
+    assert "/tmp/f143-ws/exec" not in json.dumps(sub["steps"][5:8], ensure_ascii=False)  # 无执行工位接入 / sync / pi
     assert "project set-execution" in s9 and f"--subagent-executor {sub['instances']['executor']}" in s9
     n = 0
     for _, line in _iter_command_lines(sub):

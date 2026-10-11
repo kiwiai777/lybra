@@ -170,8 +170,9 @@ def test_item1_single_declaration_and_shared_implementation():
                   and n.func.id == "_project_json_two_phase_emit"]
     emitted = {n.args[0].value for n in emit_calls if n.args and isinstance(n.args[0], ast.Constant)}
     assert emitted == set(DECLARED_COMMANDS), emitted
+    # AIPOS-F151: 同一包装另服务 roles 族(family="roles_writers"); 本族 = 不带 family 关键字的调用
     flag_calls = {n.args[1].value for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-                  and n.func.id == "_project_json_two_phase_flags"}
+                  and n.func.id == "_project_json_two_phase_flags" and not any(k.arg == "family" for k in n.keywords)}
     assert flag_calls == set(DECLARED_COMMANDS), flag_calls
     assert "预览(未写" not in src and "已写入\"" not in src, "状态文案只出自 verbs.schema outcome_labels"
 

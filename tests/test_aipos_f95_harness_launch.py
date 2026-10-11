@@ -422,29 +422,29 @@ def test_item6b_land_event_carries_host_and_remote_falls_back_to_manual(lrig, mo
     _show(f"[⑥b] enroll landed_detail: {details}")
     assert details[0].startswith(f"host={socket.gethostname()} workstation={root.resolve()} ")
     assert details[1].startswith(f"host=kiwi@far-mac workstation={root.resolve()} ")
-    # enroll_deliver --ssh 把 ssh 目标作 --landed-host 传给远端 enroll
+    # enroll-deliver --ssh 把 ssh 目标作 --landed-host 传给远端 enroll(AIPOS-F151: 唯一实现 enroll_deliver.enroll_deliver, 签码前预检
+    # 读本机治理根覆盖信封 → 夹具补一张覆盖执行实例的信封)
     from tools.aipos_cli import enroll_deliver
+    from tools.aipos_cli.autonomy_policy import build_autonomy_policy_markdown
 
-    monkeypatch.setenv("LYBRA_WORKSPACE_ROOT", str(lrig.gov))
+    _write(lrig.gov / "5_tasks" / "policies" / "pol_f95_exec_ssh.md", build_autonomy_policy_markdown(
+        policy_id="pol_f95_exec_ssh", agent_or_role=EXEC, active_from="2026-01-01T00:00:00Z", expires_at="2999-01-01T00:00:00Z",
+        max_tasks=5, owner_approval_ref="fixture-envelope-exec-ssh", task_selector_task_mode="code"))
     sent: list[list[str]] = []
 
-    class _GateStub:  # AIPOS-F113: --ssh 发码/回滚走门动词(本机 Owner 凭据只作 HTTP Authorization); 夹具不连真实门
-        def __init__(self, *a, **k):
-            pass
-
+    class _GateStub:  # AIPOS-F113/F151: --ssh 签码(dry_run → confirm)/回滚走门动词(本机门凭据只作 HTTP Authorization); 夹具不连真实门
         def call_tool(self, name, arguments, **k):
-            if name == "lybra_roles_enroll_code":
+            if name == "lybra_enroll_code_confirm":
                 return {"ok": True, "code_id": "enroll_f95fixture", "self_contained_code": "LYBRAENROLL1.fixture-not-a-secret",
-                        "enrollment": {"fingerprint": "sha256:fixture"}}
-            return {"ok": True}
+                        "fingerprint": "sha256:fixture", "gate_url": "http://127.0.0.1:1"}
+            return {"ok": True, "dry_run_token": "enrolldr_f95"}
 
-    with patch.object(enroll_deliver, "GateClient", _GateStub), \
-            patch.object(enroll_deliver.subprocess, "run", side_effect=lambda argv, **k: sent.append(argv) or
-                         subprocess.CompletedProcess(argv, 1, "", "stop here (fixture)")):
+    with patch.object(enroll_deliver.subprocess, "run", side_effect=lambda argv, **k: sent.append(argv) or
+                      subprocess.CompletedProcess(argv, 1, "", "stop here (fixture)")):
         with pytest.raises(RuntimeError):
-            enroll_deliver.enroll_deliver_ssh(role="executor", instance=EXEC, workspace_root="/remote/ws", harness_root="/remote/ws",
-                                              ssh_target="kiwi@far-mac", gate_url="http://127.0.0.1:1", owner_policy_ref="p",
-                                              owner_token="fixture-owner-not-a-secret")
+            enroll_deliver.enroll_deliver(client=_GateStub(), role="executor", instance=EXEC, governance_root=str(lrig.gov),
+                                          workspace="/remote/ws", ssh_target="kiwi@far-mac", owner_authorization_ref="p",
+                                          confirm=True)
     # AIPOS-F113: ssh argv = ssh -- <目标> <逐参数 shlex.quote 的远端命令>(远端命令在末位)
     assert "--landed-host kiwi@far-mac" in sent[0][-1], sent
     help_text = subprocess.run([sys.executable, "-m", "tools.aipos_cli.enroll_client", "--help"], capture_output=True, text=True,
