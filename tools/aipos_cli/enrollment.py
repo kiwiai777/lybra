@@ -159,23 +159,48 @@ def mint_transport_token_entry(
     return entry
 
 
-def resolve_gate_url_default(workspace_root: str | Path) -> str:
-    """F23: 自包含码内嵌 gate_url 的缺省推导。
+def resolve_gate_url_default(
+    workspace_root: str | Path,
+    *,
+    instance: str | None = None,
+    governance_root: str | None = None,
+) -> dict[str, Any]:
+    """F23: 自包含码内嵌 gate_url 的缺省推导(未给显式 gate_url 时; 唯一实现)。
 
     AIPOS-F106 件①②: 门基址经 confirm_client.resolve_gate_base_url(唯一推导口, 委托 ConnectionResolver.resolve_gate_url;
-    env 不参与——码内嵌地址只认工作区声明 connection.json#mcp.rpc_url), 非 loopback 才用(对外可达);
-    否则 config.schema urls.gate_local(缺省口, 端口 = ports.gate_default; 原写死的地址字面删除)。
-    """
+    env 不参与——码内嵌地址只认工作区声明 connection.json#mcp.rpc_url)。
+    AIPOS-F153 件②(gap #93): 按 config.schema lybra_dir_authority.same_host_rule 取址——码在门机兑换(同机)= loopback
+    (enroll_client.loopback_gate_url 唯一渲染, 端口取声明地址的端口; 免疫代理劫道); 跨机才用对外地址。跨机判据 = 已有声明:
+    实例在所属项目 project.json workstations 下声明(F110 跨机工位开工材料, 唯一读取口 workspace_config.project_workstation;
+    所属项目经 enrollment_owner_root 唯一解析)。跨机而声明的门地址只有 loopback = 拒(ValueError: 远端连不上本机回环; 出口 = 显式
+    --gate-url 给对外地址)。跨机经 ssh 交付(enroll_deliver --ssh)本就显式传对外地址, 不走本推导。
+    返回 {url, cross_host, source}。"""
     from urllib.parse import urlparse
 
     from tools.aipos_cli.confirm_client import resolve_gate_base_url
-    from tools.schema_loader import get_config_default_gate_url
+    from tools.aipos_cli.enroll_client import loopback_gate_url
+    from tools.aipos_cli.workspace_config import WorkstationDeclarationError, project_workstation
 
     root = _workspace_root_path(workspace_root)
     url = resolve_gate_base_url(workspace_root=root, env={})
-    if (urlparse(url).hostname or "") not in ("127.0.0.1", "localhost", "::1", "0.0.0.0"):
-        return url
-    return get_config_default_gate_url()
+    declared_loopback = (urlparse(url).hostname or "") in ("127.0.0.1", "localhost", "::1", "0.0.0.0")
+    name = str(instance or "").strip()
+    owner = enrollment_owner_root(root, governance_root=governance_root, instance=name) if name else {"root": None}
+    cross_declared = None
+    if owner["root"] is not None:
+        try:
+            project_workstation(owner["root"], name)
+            cross_declared = f"{owner['root']}/project.json workstations.{name}"
+        except WorkstationDeclarationError as exc:
+            if exc.code != "WORKSTATION_MATERIAL_UNDECLARED":  # 声明形坏 = 照抛(fail-closed), 不当作同机
+                raise
+    if cross_declared:
+        if declared_loopback:
+            raise ValueError(f"实例 {name} 声明为跨机工位({cross_declared}), 但门工作区 connection.json 声明的门地址 {url} 是本机回环, "
+                             "远端兑换连不上; 出口: 显式 --gate-url <远端可达的门地址>")
+        return {"url": url, "cross_host": True, "source": f"跨机工位声明 {cross_declared}: 对外地址(connection.json mcp.rpc_url)"}
+    return {"url": loopback_gate_url(url), "cross_host": False,
+            "source": "同机: config.schema lybra_dir_authority.same_host_rule 取 loopback(实例未在所属项目 project.json workstations 声明为跨机)"}
 
 
 def issue_self_contained_code(
@@ -204,6 +229,12 @@ def issue_self_contained_code(
     """
     root = _workspace_root_path(workspace_root)
     effective_ttl = int(ttl_seconds) if ttl_seconds and int(ttl_seconds) > 0 else ENROLL_DEFAULT_TTL_SECONDS
+    # AIPOS-F153 件②: 码内门地址先于发码确定(推导拒 = 不建码记录、不铸运输凭证); 显式参数优先, 缺省按 same_host_rule
+    # (同机 loopback, 声明跨机才用对外地址; resolve_gate_url_default 唯一实现)
+    if (gate_url or "").strip():
+        gate_choice = {"url": str(gate_url).strip(), "cross_host": None, "source": "显式 gate_url"}
+    else:
+        gate_choice = resolve_gate_url_default(root, instance=instance, governance_root=(governance_root or "").strip() or None)
 
     # ① 既有发码实现(单次/TTL/撤销面不动)
     enrollment = create_enrollment_code(
@@ -222,7 +253,7 @@ def issue_self_contained_code(
     )
 
     # ③ 自包含码(gate_url 缺省推导, 显式参数优先; governance_root 同理 —— F24A)
-    resolved_gate_url = (gate_url or "").strip() or resolve_gate_url_default(root)
+    resolved_gate_url = gate_choice["url"]
     # AIPOS-F50-fix1: governance_root 禁回落 workspace_root —— workspace_root 是发码门的工作区
     # (可能是 lybra), 不一定是治理根。governance_root 为空时应保持空, 让 enroll_exchange
     # 的推导失败逻辑处理 (projects=[], projects_enforced=False)。
@@ -251,6 +282,7 @@ def issue_self_contained_code(
         "ttl_seconds": effective_ttl,
         "expires_at": enrollment.get("expires_at"),
         "gate_url": resolved_gate_url,
+        "gate_url_source": gate_choice["source"],
         "governance_root": resolved_governance_root,
         "transport_token_fingerprint": transport_entry.get("fingerprint"),
         "transport_token_expires_at": transport_entry.get("expires_at"),
@@ -819,51 +851,105 @@ def void_instance_events(
     by: str,
     reason: str,
     dry_run: bool,
+    log: str | Path | None = None,
+    project: str | None = None,
+    code_ids: list[str] | tuple[str, ...] = (),
+    before: str | None = None,
 ) -> dict[str, Any]:
     """AIPOS-F121 件②(`lybra roles enroll-void`): 作废某实例的接入事件——向事件所在 enrollment_log 追加 void 行, 不删不改任何行。
 
     定位 = enrollment_whereabouts 同一扫描(home 下各已建项目 + 签发门工作区; 事件写在哪个项目的 log 就在哪个 log 作废,
-    存量写在签发方 log 的事件亦然)。每个含未作废事件的 log 追加一行:
+    存量写在签发方 log 的事件亦然)。
+    AIPOS-F153 件①(gap #108): 作用域必须显式——恰给 log(日志路径)或 project(项目名)之一, 只在该日志作废; 缺省(两者都不给)
+    = 拒(原「按实例跨所有日志一刀切」会连同所属项目新 land 一并作废), 拒因列出含该实例未作废事件的各日志作出口。
+    可再限定 code_ids(只作废这些 code_id 的事件; 给了而范围内无其事件 = 拒)与 before(只作废时间戳早于该 ISO 时刻的事件)。
+    范围内命中的事件追加一行:
       `- <ts>  void  code_id=-  role=<被作废事件角色>  instance=<实例>  project=<该 log 项目>  voids_lines=<行号区间>
        voids_code_ids=<code_id,...>  by=<操作者>  reason=<理由>`
     读取口(_instance_events: workstation_location / enroll-where)忽略 voids_lines 区间内该实例的事件; 作废之后的重接入不受影响。
-    拒(ValueError, 不写): 实例/操作者/理由缺或形坏; 未知实例(各 log 均无该实例事件); 该实例事件已全部作废。
-    dry_run=True: 只返回将追加的行, 零写入。"""
+    拒(ValueError, 不写): 实例/操作者/理由缺或形坏; 作用域缺 / 两者都给 / 不在扫描范围; 未知实例(各 log 均无该实例事件);
+    --before 形坏; 范围内无未作废事件。dry_run=True: 只返回将追加的行与将作废的各行(行号 + 动作 + code_id + 时刻), 零写入。"""
+    from tools.aipos_cli.autonomy_policy import _parse_iso
     from tools.aipos_cli.workspace_config import read_project_json
 
     instance = str(instance or "").strip()
     by = str(by or "").strip()
     reason = str(reason or "").strip()
+    log_arg = str(log or "").strip()
+    project_arg = str(project or "").strip()
+    wanted_codes = [str(c).strip() for c in code_ids if str(c).strip()]
+    before_arg = str(before or "").strip()
     if not instance or any(ch.isspace() for ch in instance):
         raise ValueError(f"--instance 缺或含空白: {instance!r}")
     if not by or any(ch.isspace() for ch in by):
         raise ValueError(f"--actor 缺或含空白(作废行须带操作者): {by!r}")
     if not reason or "\n" in reason or "\r" in reason:
         raise ValueError("--reason 缺或含换行(作废行须带单行理由)")
+    if log_arg and project_arg:
+        raise ValueError("--log 与 --project 只能给一个(作废作用域 = 恰一个日志)")
+    cutoff = None
+    if before_arg:
+        cutoff = _parse_iso(before_arg)
+        if cutoff is None:
+            raise ValueError(f"--before 不是 ISO 时刻: {before_arg!r}(如 2026-10-08T16:00:00Z)")
     report = enrollment_whereabouts(workspace_root, instance)
     if not report["found"]:
         raise ValueError(f"未知实例 {instance}: home {report['home']} 下各项目与签发门工作区的 enrollment_log 均无该实例事件, 拒绝作废")
-    planned: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     for item in report["found"]:
-        trail = Path(item["log"])
-        live = _instance_events(trail, instance)["live"]
-        if not live:
+        root = Path(item["project_root"])
+        candidates.append({"log": Path(item["log"]), "project": str(read_project_json(root).get("project") or root.name).strip(),
+                           "live": len(_instance_events(Path(item["log"]), instance)["live"])})
+    listing = "; ".join(f"--log {c['log']}(--project {c['project']}, 未作废事件 {c['live']} 个)" for c in candidates)
+    if not log_arg and not project_arg:
+        raise ValueError(f"作废须显式作用域(--log <日志路径> 或 --project <项目>), 缺省不跨日志一刀切; 实例 {instance} 事件所在: {listing}")
+    if log_arg:
+        target = Path(log_arg).expanduser().resolve()
+        scoped = [c for c in candidates if c["log"].resolve() == target]
+        if not scoped:
+            raise ValueError(f"--log {log_arg} 不是含实例 {instance} 事件的 enrollment_log(扫描范围: home 下各项目与签发门工作区); 可选: {listing}")
+    else:
+        scoped = [c for c in candidates if c["project"] == project_arg]
+        if not scoped:
+            raise ValueError(f"--project {project_arg} 的 enrollment_log 无实例 {instance} 事件; 可选: {listing}")
+    if len(scoped) > 1:
+        raise ValueError(f"--project {project_arg} 对应多个 enrollment_log({[str(c['log']) for c in scoped]}), 改用 --log 指明其一")
+    chosen = scoped[0]
+    trail = chosen["log"]
+    live = _instance_events(trail, instance)["live"]
+    selected: list[dict[str, Any]] = []
+    for lineno, line in live:
+        match = _EVENT_LINE_RE.match(line)
+        if wanted_codes and match.group("code_id") not in wanted_codes:
             continue
-        matches = [_EVENT_LINE_RE.match(line) for _n, line in live]
-        code_ids = list(dict.fromkeys(m.group("code_id") for m in matches))
-        roles = sorted({line.split("role=", 1)[1].split()[0] for _n, line in live if "role=" in line})
-        ranges = _line_ranges([n for n, _ in live])
-        project = str(read_project_json(Path(item["project_root"])).get("project") or Path(item["project_root"]).name).strip()
-        line = _trail_line(action=VOID_ACTION, code_id="-", role=",".join(roles) or "-", instance=instance, project=project,
-                           by=by, reason=reason, extra=f"voids_lines={ranges}  voids_code_ids={','.join(code_ids)}")
-        planned.append({"log": str(trail), "line": line.rstrip("\n"), "voids_lines": ranges, "event_count": len(live),
-                        "code_id_count": len(code_ids), "code_ids": code_ids})
-    if not planned:
-        raise ValueError(f"实例 {instance} 的接入事件已全部作废(无未作废事件), 拒绝重复作废")
+        if cutoff is not None:
+            stamp = _parse_iso(match.group("ts"))
+            if stamp is None:
+                raise ValueError(f"{trail}:{lineno}: 事件时间戳形坏 {match.group('ts')!r}, 无法按 --before 判定(fail-closed)")
+            if stamp >= cutoff:
+                continue
+        selected.append({"line": lineno, "action": match.group("action"), "code_id": match.group("code_id"),
+                         "ts": match.group("ts"), "role": line.split("role=", 1)[1].split()[0] if "role=" in line else "-"})
+    missing_codes = [c for c in wanted_codes if c not in {s["code_id"] for s in selected}]
+    if wanted_codes and missing_codes:
+        raise ValueError(f"--code-id {','.join(missing_codes)} 在 {trail} 的作用域内无实例 {instance} 的未作废事件, 拒绝作废(核对 code_id 或用 enroll-where 查看)")
+    if not selected:
+        scope_text = "".join([f" code_id∈{wanted_codes}" if wanted_codes else "", f" 早于 {before_arg}" if before_arg else ""])
+        raise ValueError(f"{trail} 中实例 {instance} 无范围内未作废事件{scope_text}(已全部作废或不在范围), 拒绝作废")
+    codes = list(dict.fromkeys(s["code_id"] for s in selected))
+    roles = sorted({s["role"] for s in selected if s["role"] != "-"})
+    ranges = _line_ranges([s["line"] for s in selected])
+    rendered = _trail_line(action=VOID_ACTION, code_id="-", role=",".join(roles) or "-", instance=instance,
+                           project=chosen["project"], by=by, reason=reason,
+                           extra=f"voids_lines={ranges}  voids_code_ids={','.join(codes)}")
+    planned = [{"log": str(trail), "project": chosen["project"], "line": rendered.rstrip("\n"), "voids_lines": ranges,
+                "event_count": len(selected), "code_id_count": len(codes), "code_ids": codes, "events": selected,
+                "left_live": len(live) - len(selected)}]
     if not dry_run:
         for item in planned:
             _write_trail_line(Path(item["log"]), item["line"] + "\n")
     return {"ok": True, "operation": "roles_enroll_void", "dry_run": dry_run, "written": not dry_run, "instance": instance,
+            "scope": {"log": str(trail), "project": chosen["project"], "code_ids": wanted_codes, "before": before_arg or None},
             "entries": planned}
 
 

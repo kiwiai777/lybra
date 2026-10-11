@@ -130,15 +130,18 @@ class TestIssueSelfContainedCode(unittest.TestCase):
             result = issue_self_contained_code(root, role="executor", by="x")
             self.assertEqual(result["ttl_seconds"], ENROLL_DEFAULT_TTL_SECONDS)
 
-    def test_gate_url_default_prefers_non_loopback_rpc_url(self):
+    def test_gate_url_default_same_host_loopback(self):
+        # AIPOS-F153 件②(gap #93): 缺省按 same_host_rule —— 码在门机兑换(实例未声明跨机)= loopback, 端口取声明地址的端口;
+        # 对外地址只给声明跨机的实例(专项夹具 tests/test_aipos_f153_enrollment_hygiene.py); 原「非 loopback 即对外地址」退役
         with tempfile.TemporaryDirectory(prefix="f23_url_") as tmp:
             root = _make_gate_root(tmp)
             conn_path = root / ".lybra" / "connection.json"
             data = json.loads(conn_path.read_text())
-            data["mcp"]["rpc_url"] = "http://kiwiai-dev.tail6b5218.ts.net:7118/mcp"
+            data["mcp"]["rpc_url"] = "http://kiwiai-dev.tail6b5218.ts.net:7120/mcp"
             conn_path.write_text(json.dumps(data))
             result = issue_self_contained_code(root, role="executor", by="x")
-            self.assertEqual(result["gate_url"], "http://kiwiai-dev.tail6b5218.ts.net:7118")
+            self.assertEqual(result["gate_url"], "http://127.0.0.1:7120")
+            self.assertIn("same_host_rule", result["gate_url_source"])
             # loopback rpc_url → 缺省 127.0.0.1:7118
             data["mcp"]["rpc_url"] = "http://127.0.0.1:7118/mcp"
             conn_path.write_text(json.dumps(data))

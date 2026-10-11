@@ -29,7 +29,7 @@
 
 命令行为由声明驱动, 改行为先改声明:
 
-- `schema/verbs.schema.json` —— 门动词、`lybra loop` 出口码与信封授权动词、写 project.json 命令的两阶段语义(`two_phase_protocol.project_json_writers`)
+- `schema/verbs.schema.json` —— 门动词、`lybra loop` 出口码与信封授权动词、写 project.json 命令的两阶段语义(`two_phase_protocol.project_json_writers`)与同一包装下写接入日志的命令(`two_phase_protocol.enrollment_log_writers`: `roles enroll-void` 须显式 `--log`/`--project` 作用域)
 - `schema/transitions.schema.json` —— 节点、下一步推导、分支约定
 - `schema/config.schema.json` —— 工作树根、项目声明(project.json)结构
 - `schema/distribution.schema.json` —— 各角色工位分发物

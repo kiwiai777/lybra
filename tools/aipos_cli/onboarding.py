@@ -183,24 +183,31 @@ def _owner_workspace(home: Path, explicit: str | None) -> str:
 
 
 def _gate_url(explicit: str | None, owner_connection: str) -> tuple[str, str]:
-    """门地址(门基址) + 来源标注。AIPOS-F106 件①: 一律经 confirm_client.resolve_gate_base_url(唯一推导口, 委托
+    """码内门地址(门基址) + 来源标注。AIPOS-F106 件①: 一律经 confirm_client.resolve_gate_base_url(唯一推导口, 委托
     loop_context.ConnectionResolver.resolve_gate_url), 优先级按 config.schema identity_resolution.keys.gate_url 声明序:
     显式 --gate-url > Owner 中央凭据库 connection.json 的 mcp.rpc_url(显式凭据文件层, 非秘密字段) > env LYBRA_GATE_URL(仅兜底)
-    > urls.gate_local。原「env 高于凭据文件」与声明序相反, 已改正。凭据文件坏 = 出声 warning 后按未声明处理(guide 照常生成)。"""
+    > urls.gate_local。原「env 高于凭据文件」与声明序相反, 已改正。凭据文件坏 = 出声 warning 后按未声明处理(guide 照常生成)。
+    AIPOS-F153 件②(gap #93): 本 guide 各码都在治理根所在机(= 门机)兑换(顾问自接入落治理根、工位在本机; 跨机工位另走
+    enroll_deliver --ssh 显式对外地址), 故非显式时按 config.schema lybra_dir_authority.same_host_rule 取 loopback
+    (enroll_client.loopback_gate_url 唯一渲染, 端口取上述来源的端口)——与签码侧缺省推导 enrollment.resolve_gate_url_default 同一规则。"""
     from tools.aipos_cli.confirm_client import GateAddressError, declared_rpc_url, resolve_gate_base_url
+    from tools.aipos_cli.enroll_client import loopback_gate_url
 
     if explicit:
         return resolve_gate_base_url(explicit_url=explicit), "显式 --gate-url"
+    same_host = "; 同机按 same_host_rule 取 loopback, 端口取自该来源"
     if not owner_connection.startswith("<") and Path(owner_connection).is_file():
         try:
             if declared_rpc_url(owner_connection):
-                return resolve_gate_base_url(connection_json=owner_connection, require_declared=True), f"{owner_connection} mcp.rpc_url"
+                base = resolve_gate_base_url(connection_json=owner_connection, require_declared=True)
+                return loopback_gate_url(base), f"{owner_connection} mcp.rpc_url{same_host}"
         except GateAddressError as exc:
             print(f"Warning: {exc}; 门地址按未声明处理", file=sys.stderr)
     from tools.loop_context import ConnectionResolver
 
     provenance = ConnectionResolver.resolve_identity()["gate_url"]  # 来源自曝(同一解析器): env 兜底 / schema 缺省
-    return resolve_gate_base_url(), ("环境变量 LYBRA_GATE_URL" if provenance["via_env"] else "config.schema 缺省")
+    return (loopback_gate_url(resolve_gate_base_url()),
+            ("环境变量 LYBRA_GATE_URL" if provenance["via_env"] else "config.schema 缺省") + same_host)
 
 
 def _instances(project: str, host: str, advisor_host: str | None = None, *, executor_host: str | None = None) -> dict[str, str]:
