@@ -225,7 +225,8 @@ def test_f73d_item2_exit_codes_declared_in_verbs_schema_single_place():
     loop = verbs["lybra_loop"]
     assert loop["cli_command"] == "lybra loop"
     codes = {k: v["code"] for k, v in loop["exit_codes"].items()}
-    assert codes == {"completed": 0, "gate_rejected": 2, "wait_timeout": 3, "not_derivable": 4, "no_envelope": 5}
+    assert codes == {"completed": 0, "gate_rejected": 2, "wait_timeout": 3, "not_derivable": 4, "no_envelope": 5,
+                     "deploy_changed": 6}  # AIPOS-F152 件①: 部署已更新(只追加)
     props = loop["parameters"]["properties"]
     assert props["max_steps"]["default"] == 20
     assert props["max_wait"]["default"] == 1800

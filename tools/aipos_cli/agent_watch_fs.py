@@ -105,6 +105,7 @@ EXIT_END_NO_PRODUCT = declared_exit_code("lybra_agent_watch", "end_no_product")
 EXIT_STALL = declared_exit_code("lybra_agent_watch", "stall")
 EXIT_USAGE = declared_exit_code("lybra_agent_watch", "usage")
 EXIT_SIGNAL = declared_exit_code("lybra_agent_watch", "signal")
+EXIT_DEPLOY_CHANGED = declared_exit_code("lybra_agent_watch", "deploy_changed")  # AIPOS-F152 件①
 
 # The subtrees the advisor sentinel watches (relative to --workspace-root; 声明在治理根外 = 绝对路径):
 # queue/** = task cards moving through states (pending→claimed→completed = moves);
@@ -441,6 +442,7 @@ def run_fs_watch(
     clock: Callable[[], float] = time.monotonic,
     expect_ready: Callable[[list[str]], bool] | None = None,
     stop_when: Callable[[], bool] | None = None,
+    deploy_guard: Any | None = None,
 ) -> int:
     """Core bounded poll loop (testable: sleeper/clock injectable, no global signal
     state). Returns EXIT_CHANGE (0) on the first change OR expect satisfaction — a
@@ -463,6 +465,10 @@ def run_fs_watch(
     process) — checked after the expect check of every poll; when it turns true (the launched
     process exited) the watch does ONE final expect check (an artifact written right before exit
     still counts) and otherwise returns EXIT_END_NO_PRODUCT (3) with ``{"end_no_product": ...}``.
+    AIPOS-F152 件①: ``deploy_guard`` (deploy_runtime.DeployGuard; the CLI passes the guard of its own process, in-process
+    callers pass theirs or None) — checked at the top of every poll; once the deploy snapshot this process runs from is no
+    longer the deployed one, print ``{"deploy_changed": …}`` (stream mode: a ``kind:deploy_changed`` event, then ``kind:end``
+    with reason deploy_changed) and return EXIT_DEPLOY_CHANGED. Not applicable (work tree / --dev-tree) = never fires.
     """
     interval = DEFAULT_INTERVAL_SECONDS if getattr(args, "interval", None) is None else float(args.interval)
     timeout_arg = getattr(args, "timeout", None)
@@ -593,6 +599,19 @@ def run_fs_watch(
     grace_after_end = False  # S2: one-poll grace period after end-pattern
 
     while True:
+        # AIPOS-F152 件①: 部署一变(本进程跑的是旧快照)= 明示并结束, 用原命令重跑(判定唯一实现 deploy_runtime.DeployGuard)
+        change = deploy_guard.check() if deploy_guard is not None else None
+        if change:
+            from tools.aipos_cli.deploy_runtime import change_summary
+
+            payload = {**change, "message": f"{change_summary(change)}; 本命令运行的是旧版本代码, 已停下, 用原命令重跑"}
+            if stream_mode:
+                print(json.dumps({"kind": "deploy_changed", **payload}, ensure_ascii=False), flush=True)
+                print(json.dumps({"kind": "end", "reason": "deploy_changed"}, ensure_ascii=False), flush=True)
+            else:
+                print(json.dumps({"deploy_changed": payload}, ensure_ascii=False), flush=True)
+            return EXIT_DEPLOY_CHANGED
+
         # AIPOS-295: Health monitoring (periodic heartbeat)
         if health_enabled:
             elapsed_since_health = clock() - last_health_check
@@ -782,8 +801,10 @@ def run_fs_watch_cli(args: Any) -> int:
 
     prev_term = signal.signal(signal.SIGTERM, _handler)
     prev_int = signal.signal(signal.SIGINT, _handler)
+    from tools.aipos_cli.deploy_runtime import DeployGuard  # AIPOS-F152 件①: 本进程运行的部署快照(非快照运行 = 不检测)
+
     try:
-        return run_fs_watch(args)
+        return run_fs_watch(args, deploy_guard=DeployGuard.for_running_process())
     except _SignalExit as exc:
         return int(exc.code) if exc.code is not None else EXIT_SIGNAL
     finally:

@@ -1872,6 +1872,11 @@
       "cli_command": "lybra loop",
       "step_timeout_seconds": 600,
       "step_timeout_note": "AIPOS-F90 件①(缺陷③): loop/next --run 执行派生命令子进程的硬上限(next_resolver.loop_step_timeout_seconds 唯一读取口, 原写死 120s); 不变量: ≥ 门 initialize(config.schema timeouts.gate_mcp_request_ms) + 两阶段最大 client_timeout_ms×2 + 超时回读一次, 夹具核。",
+      "deploy_consistency": {
+        "description": "AIPOS-F152 件①(gap #127: F148 长驻 loop 启动于 F147 部署前, 部署后读到新格式声明而内存是旧代码 → 崩): loop 启动时记下本进程运行的部署快照提交(运行代码根 = <部署目录>/releases/<名> 时取其 VERSION git_commit; 判定唯一实现 tools/aipos_cli/deploy_runtime.DeployGuard, VERSION 解析唯一口 gate_drift.read_version_commit), 每步推导前比对 <部署目录>/current 的提交; 变了(含 current 不在 / 不可读)= 以 end_reason deploy_changed、exit_codes.deploy_changed 干净结束, 运行记录 deploy 段写明 from / to 提交, 结束原文第一行即「部署已更新 … 用原命令重跑 loop 从断点续做」。手工模式等待(未拉起 harness)期间也每轮比对(经唯一等待原语 agent_watch_fs.run_fs_watch 的 deploy_guard), 部署一变即醒来结束; 拉起 harness 的等待期间不打断(打断 = 终止进程组, 执行体白干), 等待结束后的下一步前照常比对。非部署快照运行(卡工作树测试 / python -m / lybra --dev-tree 开发开关)= 不适用, 运行记录 deploy.deploy_check=not_applicable 如实标明。同一判定也用于 `lybra agent watch`(lybra_agent_watch.exit_codes.deploy_changed)与 `lybra loop status --wait`(lybra_loop_status.exit_codes.deploy_changed)。",
+        "end_reason": "deploy_changed",
+        "run_record_field": "deploy"
+      },
       "single_implementation": {
         "derivation_core": "tools/aipos_cli/next_resolver.derive_next_step (AIPOS-F71 唯一推导核, 禁第二推导核)",
         "step_executor": "tools/aipos_cli/next_resolver.execute_derived_action (AIPOS-F73 next --run 同一执行体)",
@@ -1956,6 +1961,10 @@
         "not_derivable": {
           "code": 4,
           "meaning": "推导不可推导(输出 missing_records; 含治理根不在 git 仓 = N6 落账 fail-closed, 附 nodes.N6.landing.non_git_exit 出口), 或派生命令解析失败/需人工介入, 或落账步报成功但判据仍未落账"
+        },
+        "deploy_changed": {
+          "code": 6,
+          "meaning": "AIPOS-F152: 部署已更新——本 loop 运行的部署快照提交 ≠ 现部署 current(见 deploy_consistency), 在步间干净停下(运行记录写明新旧提交), 用原命令重跑 loop 从断点续做"
         },
         "no_envelope": {
           "code": 5,
@@ -2074,6 +2083,7 @@
           "landing_unverified": "落账步报成功但判据仍未落账(exit_codes.not_derivable)",
           "no_envelope": "无有效信封(exit_codes.no_envelope)",
           "verb_not_authorized": "信封未授权该动词(exit_codes.no_envelope)",
+          "deploy_changed": "部署已更新, 步间停下(exit_codes.deploy_changed; 新旧提交见运行记录 deploy 段)",
           "interrupted": "loop 收到 SIGINT/SIGTERM/SIGHUP(已清拉起进程组; exit_code 记 128+信号)",
           "crashed": "loop 内部异常退出(exit_code 记 1; 异常类型进 end_message)"
         },
@@ -2163,6 +2173,7 @@
           "frontmatter_unreadable": "investigate",
           "command_unparseable": "investigate",
           "landing_unverified": "investigate",
+          "deploy_changed": "advisor_fix",
           "interrupted": "investigate",
           "crashed": "investigate"
         },
@@ -2177,7 +2188,7 @@
           "routine_fix_exhausted": "例行门拒修了仍连败: 本卡连续多次被同一例行拒因码拒(固定修法对本卡不灵, 或多条 lane 交替抢合入), 不再自处理, 请 Owner 定是否改卡 / 排合入顺序 / 仲裁"
         },
         "routine_rejections": {
-          "description": "AIPOS-F150 件②(gap #128): 例行门拒清单与各码固定修法(唯一声明, 只追加; 判定唯一实现 loop_run_record.next_action)。by_end_reason 判为 owner_needed 的运行, 其 end_codes(lybra_loop.run_record.end_codes, 门拒原文里的既有错误码)非空且全部在 codes 内 = advisor_fix: hint = 各码 fix 逐条按序渲染(占位见 placeholders) + resume_hint; 任一码不在 codes / end_codes 为空 / 旧记录无 end_codes = owner_needed 照旧。防死循环: 本卡最近连续各次运行(含本次, 旧→新取尾段)的 end_codes 都含同一例行码且次数 ≥ repeat_owner_needed = owner_needed(routine_fix_exhausted)。码只取门侧既有错误码, 不另造; 未入清单的门拒码(RETURN_STALE / INGEST_TIP_MISMATCH / TEST_NOT_IN_RUNALL 等)的评估与理由见 AIPOS-F150 交回报告。",
+          "description": "AIPOS-F150 件②(gap #128): 例行门拒清单与各码固定修法(唯一声明, 只追加; 判定唯一实现 loop_run_record.next_action)。by_end_reason 判为 owner_needed 的运行, 其 end_codes(lybra_loop.run_record.end_codes, 门拒原文里的既有错误码)非空且全部在 codes 内 = advisor_fix: hint = 各码 fix 逐条按序渲染(占位见 placeholders) + resume_hint; 任一码不在 codes / end_codes 为空 / 旧记录无 end_codes = owner_needed 照旧。防死循环: 本卡最近连续各次运行(含本次, 旧→新取尾段)的 end_codes 都含同一例行码且次数 ≥ repeat_owner_needed = owner_needed(routine_fix_exhausted)。码只取门侧既有错误码, 不另造; 未入清单的门拒码(RETURN_STALE / INGEST_TIP_MISMATCH / TEST_NOT_IN_RUNALL 等)的评估与理由见 AIPOS-F150 交回报告。AIPOS-F152 件①: end_reasons = 结束原因本身即例行的清单(只追加; 键须为 lybra_loop.run_record.end_reasons 已声明者, 且 by_end_reason 判为 advisor_fix 的结束原因必须在此有 fix)——by_end_reason 判为 advisor_fix 的运行 = 该结束原因 fix 逐条渲染 + resume_hint(占位只许 task_id / governance_root / actor_arg / envelope_arg, 值与 codes 修法同一实现); 本卡最近连续各次运行(含本次)以同一结束原因结束且次数 ≥ repeat_owner_needed = owner_needed(routine_fix_exhausted)。首项 deploy_changed(部署已更新, 用原命令重跑从断点续做)。",
           "repeat_owner_needed": 3,
           "placeholders": {
             "task_id": "卡 ID",
@@ -2200,6 +2211,15 @@
                 "顾问用原命令续跑 loop(本修法末行命令); 若本卡已审计过, loop 走既有 verdict_stale 重审出口(裁决覆盖的 tip 已变), 不手工干预"
               ]
             }
+          },
+          "end_reasons": {
+            "deploy_changed": {
+              "why_routine": "AIPOS-F152 件①: 部署已更新(他卡 finalize 或本卡自身 finalize 的部署), 本次 loop 在步间干净停下、未执行下一步; 修法固定 = 用原命令重跑(新进程从新部署快照加载), 推导核按已落记录从断点续做, 不涉设计判断",
+              "fix": [
+                "不改卡、不碰产品仓、不问 Owner: 部署已更新, 上次 loop 跑的是旧版本代码, 已在步间停下(新旧提交见本运行记录 deploy 段 / detail)",
+                "顾问用原命令重跑 loop(本修法末行命令): 新进程从新部署快照加载, 推导核按已落记录从断点续做, 已落的步不重复"
+              ]
+            }
           }
         },
         "consecutive_failures_owner_needed": 2,
@@ -2214,6 +2234,7 @@
         "card_done_take_next": {"code": 0, "meaning": "--wait: 下一动作 = card_done_take_next(本卡已结案并落账)"},
         "usage": {"code": 2, "meaning": "--wait 用法错(缺 --task-id / 秒数 ≤ 0 / 超 wait.max_seconds), 零等待"},
         "continue_wait": {"code": 3, "meaning": "--wait: 到时仍是 continue_wait(loop 仍在推进 / 等工位产物)"},
+        "deploy_changed": {"code": 8, "meaning": "AIPOS-F152 --wait: 等待中部署已更新(本命令运行的是旧快照), 输出当时状态后停下, 用原命令重跑"},
         "no_run": {"code": 4, "meaning": "--task-id 指定的卡无 loop 运行记录(--wait 时 = 到时仍无)"},
         "unreadable": {"code": 4, "meaning": "运行记录读不出 / record_type 不符 / 治理根或声明解析失败(点名文件, 不跳过)"},
         "owner_needed": {"code": 5, "meaning": "--wait: 下一动作 = owner_needed(须 Owner 决定 / 授权, 事由见输出)"},
@@ -2633,6 +2654,7 @@
         "timeout": {"code": 2, "meaning": "--timeout 内无变化(默认静默)"},
         "end_no_product": {"code": 3, "meaning": "见到 --end-pattern 但 --expect 未满足"},
         "stall": {"code": 4, "meaning": "观测面静默超过 --stall-secs(静默停滞)"},
+        "deploy_changed": {"code": 6, "meaning": "AIPOS-F152: 部署已更新(本命令运行的部署快照提交 ≠ 现部署 current, 判定唯一实现 deploy_runtime.DeployGuard): 打印 {\"deploy_changed\": …}(--stream 先发 kind:deploy_changed 事件再发 kind:end reason=deploy_changed)后退出, 用原命令重跑; 非部署快照运行(工作树 / --dev-tree)不检测"},
         "usage": {"code": 5, "meaning": "用法错/布防拒绝(如 --expect 模式非法)"},
         "signal": {"code": 130, "meaning": "SIGTERM/SIGINT 干净退出(无输出无 traceback)"}
       }

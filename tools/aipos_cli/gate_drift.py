@@ -19,7 +19,8 @@ GATE_SIDE_PATHS = [
     "0_control_plane/",
 ]
 
-# CLI-side paths: changes here are live immediately (editable install)
+# CLI-side paths: AIPOS-F152 起 `lybra` 入口也从部署快照(.deploy/current)运行, 这些改动同样经部署才对 `lybra` 命令生效
+# (直跑 python -m 于工作树 / lybra --dev-tree 开发开关除外)
 CLI_SIDE_PATHS = [
     "tools/aipos_cli/",
     "tools/lybra_tui/",
@@ -128,11 +129,16 @@ def _read_deployed_commit(workspace_root: Path) -> str | None:
     if not current_link.exists():
         return None
     
-    version_file = current_link / "VERSION"
+    return read_version_commit(current_link / "VERSION")
+
+
+def read_version_commit(version_file: Path) -> str | None:
+    """部署快照 VERSION 文件的 git_commit(唯一解析; AIPOS-F152 长驻进程部署一致性 deploy_runtime 同读此口)。
+
+    文件不存在 = None; 存在但不可读 = RuntimeError(AIPOS-F115 件③: ≠「无部署」, 原 except Exception: pass 吞错后误报
+    No deployment found); 无 git_commit 行 = None。"""
     if not version_file.exists():
         return None
-    
-    # AIPOS-F115 件③: VERSION 存在但不可读 ≠「无部署」(原 except Exception: pass 吞错后误报 No deployment found)。
     try:
         text = version_file.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
@@ -246,7 +252,8 @@ def check_gate_drift(workspace_root: Path) -> dict[str, Any]:
     if classification["has_gate_side_changes"]:
         recommendation = "Run 'lybra-deploy' to deploy gate-side changes"
     else:
-        recommendation = "Changes are CLI-side only (no deployment needed)"
+        # AIPOS-F152: 门不受影响, 但 `lybra` 入口从部署快照运行——CLI 侧改动经下一次部署才对 lybra 命令生效(不再是「无需部署」)
+        recommendation = "Changes are CLI-side only (gate unaffected; the lybra CLI runs from the deploy snapshot, so they take effect on the next lybra-deploy)"
     
     return {
         "has_drift": True,
