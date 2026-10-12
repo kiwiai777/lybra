@@ -111,6 +111,26 @@
         "done": "已写入"
       }
     },
+    "records_migration_writers": {
+      "description": "AIPOS-F158 件②(gap #130): `lybra migrate` 族(存量治理真相迁移, 首项 record-type: 补齐滞留未入库、缺 record_type 而被入库护栏 B④ 拒入的记录)同一两阶段语义——旗标注册与 project_json_writers / roles_writers / queue_writers 同一包装 aipos_cli._project_json_two_phase_flags(family=records_migration_writers), 旗标名与缺省阶段读 project_json_writers 一处(本段不重复声明)。缺省 = 预演: 列出候选(治理根 records 下 git 将新增且被 B④ 判据 governance_guardrails.check_entries 拒入、缺必填字段者)、按声明落点推导出的类型与处置, 零写入; --confirm 才改写可推导者并经 lybra_governance_commit.post_write_landing 同一提交口落账。推导 = 唯一命中的声明落点(transitions artifact_ingest.verdict.report_snapshot / record_locations.kinds), 只对声明了可复原记录头的类改写(审计报告快照: 记录头取自引用它的裁决记录且 sha256 一致, 构造 = board_adapter.render_report_snapshot); 其余记录类缺 record_type = 门出生标记缺失, 补字段即伪造门记录, 列出类型不改; 推导不出列出原因不改。唯一实现 tools/aipos_cli/record_type_migration.py。日后新增迁移命令登记于 commands 即得同一两阶段。",
+      "commands": [
+        "record-type"
+      ],
+      "flag_help": {
+        "dry_run": "Preview records rejected by guard B④ for a missing record_type, the type derived from declared record locations and what would change, without writing (default)",
+        "confirm": "Rewrite the derivable records and land them via the governance-commit path (lybra governance-commit --paths), pushing like N6 landing"
+      },
+      "outcome_labels": {
+        "preview": "预览(未写; 加 --confirm 写入并落账)",
+        "done": "已写入",
+        "nothing": "无可补齐(未写)"
+      },
+      "item_status_labels": {
+        "derived": "补齐",
+        "typed_not_rebuildable": "类型已推导·不改",
+        "underivable": "推导不出·不改"
+      }
+    },
     "enrollment_log_writers": {
       "description": "AIPOS-F153 件①: 写接入日志(enrollment_log, 只追加)的本地 CLI 命令同一两阶段语义——与 project_json_writers 同一包装(aipos_cli._project_json_two_phase_flags 注册旗标, family=enrollment_log_writers), 旗标名 / 缺省阶段 / 状态标签读 project_json_writers 一处(本段不重复声明), 本段只登记命令与旗标帮助。缺省 = 预演: 打印将作废的各行(行号 + 动作 + code_id + 时刻)、所在日志与将追加的 void 行, 零写入; --confirm 才追加。预演/写入同一实现 = enrollment.void_instance_events(dry_run)。日后新增写接入日志的命令登记于 commands 即得同一两阶段。",
       "commands": [
@@ -201,7 +221,8 @@
       "context-pack preview",
       "card render",
       "artifact ingest",
-      "workspace roots"
+      "workspace roots",
+      "migrate record-type"
     ],
     "announce_commands": [
       "next",
@@ -2491,6 +2512,23 @@
           "actor"
         ],
         "additionalProperties": false
+      },
+      "post_write_landing": {
+        "description": "AIPOS-F158(gap #130): 非卡写命令写完即经本提交口落账——复用 governance_commit.governance_commit 的 --paths 精确提交(白名单 = 该命令本次写出的文件, 治理根相对, 禁整根; 护栏四检 / 清单核对 / 推送判据与 N6 落账同一实现, 推送策略同 N6: 提交即推送), 不另写 git 提交逻辑。唯一实现 governance_commit.land_written_paths(范围已落账 = PASS no-op, 幂等)。落账失败不回滚已写内容(写入已生效, 勿重复执行写命令): 输出拒因原文 + 补账命令(governance_commit_paths_command 渲染的 `lybra governance-commit --paths …`)并以 landing_failed_exit_code 退出。按项目治理根解析(治理根在仓内子目录 = 提交前缀照 git rev-parse --show-prefix), 任何项目同一组命令。",
+        "landing_failed_exit_code": 3,
+        "commands": {
+          "envelope_mint": {
+            "cli": "lybra envelope mint --confirm",
+            "scope": "门 owner_decision_record envelope 路径确认应答的 performed_writes(决策记录 + 信封 + decision_log 自动指针; 指针由门 board_adapter._auto_generate_decision_log_pointer 写出即列入), 各张签发的并集; 中途门拒 = 已签各张照落账",
+            "message_template": "chore(governance): 信封签发落账 {policy_ids}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra envelope mint --confirm"
+          },
+          "migrate_record_type": {
+            "cli": "lybra migrate record-type --confirm",
+            "scope": "本次补齐改写的记录文件(record_type_migration.run_record_type_migration 的 written); 推导不出 / 不改的不入",
+            "message_template": "chore(governance): 记录类型补齐迁移 {count} 份\n\nActor: {actor}\nType: governance_commit\nCommand: lybra migrate record-type --confirm"
+          }
+        },
+        "not_applicable": "envelope revoke / renew: 非 --dry-run 即门外拒(board_adapter.record_owner_decision dry_run=False = _blocked_execute), 无写路径、无记录可落; 日后加写路径须登记于 commands"
       },
       "exit_codes": {
         "0": "PASS — committed (and pushed unless no_push), or no-op (nothing to commit within the selection), or dry_run manifest emitted",

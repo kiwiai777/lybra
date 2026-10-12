@@ -1263,11 +1263,28 @@ def _envelope_mint_via_gate(
     signed: list[dict[str, Any]] = []
     report: dict[str, Any] = {"ok": False, "operation": "envelope_mint", "via": "gate owner_decision_record envelope path",
                               "gate_url": base_url, "credential_role": token_role, "credential_fingerprint": token_fingerprint(token),
-                              "governance_root": str(governance_root), "signed": signed}
+                              "governance_root": str(governance_root), "signed": signed, "landing": None}
 
     def _emit(rc: int, error: str | None = None) -> int:
         if error:
             report["error"] = error
+        # AIPOS-F158 件①: 已签各张的门生记录(performed_writes: 决策记录 / 信封 / decision_log 指针)经 N6 同一提交口落账;
+        # 中途门拒 = 已签的照落。落账失败不影响信封生效: 出拒因 + 补账命令, 签发成功时以声明退出码退出(post_write_landing)
+        landing = None
+        if signed:
+            from tools.aipos_cli.governance_commit import land_written_paths
+            from tools.schema_loader import SchemaLoadError
+
+            written_all = [p for item in signed for p in item["written"]]
+            try:
+                landing = land_written_paths(governance_root, written_all, actor,
+                                             command="envelope_mint", policy_ids=" ".join(item["policy_id"] for item in signed))
+            except SchemaLoadError as exc:  # 落账声明不可读 = 不落账(fail-closed), 信封已生效: 拒因出声, exit 1
+                landing = {"landed": False, "exit_code": 1, "reason": str(exc), "paths": written_all,
+                           "line": f"⚠ 落账未完成(写入已生效, 勿重复执行写命令): {exc}"}
+            report["landing"] = {k: v for k, v in landing.items() if k != "line"}
+            if rc == 0 and not landing["landed"]:
+                rc = landing["exit_code"]
         if json_output:
             print(render_json(report))
         else:
@@ -1276,6 +1293,8 @@ def _envelope_mint_via_gate(
                 print(f"  signed {item['policy_id']} covers {item['agent_or_role']}: decision={item['decision_id']}")
                 for path in item["written"]:
                     print(f"    wrote {path}")
+            if landing is not None:
+                print(landing["line"], file=sys.stdout if landing["landed"] else sys.stderr)
             if error:
                 print(f"Error: {error}", file=sys.stderr)
         return rc
@@ -1309,6 +1328,53 @@ def _envelope_mint_via_gate(
         return _emit(1, f"门调用失败: {exc}(已签 {len(signed)} 张, 以门生记录为准; 未签的重跑本命令, 已落的 policy_id 会被门拒「already exists」)")
     report["ok"] = True
     return _emit(0)
+
+
+def _migrate_record_type_cli(args: argparse.Namespace) -> int:
+    """AIPOS-F158 件②: `lybra migrate record-type` 薄壳——全部逻辑在 record_type_migration(计划 / 改写 / 经同一提交口落账);
+    本函数只解析治理根(_find_repo_root_for_args 唯一薄壳)、按两阶段声明出声。--confirm 缺 --actor = exit 2(零写入)。"""
+    import subprocess
+
+    from tools.aipos_cli.record_type_migration import MigrationError, run_record_type_migration
+    from tools.schema_loader import SchemaLoadError
+
+    decl = _two_phase_family_declaration("records_migration_writers")
+    labels, item_labels = decl["outcome_labels"], decl.get("item_status_labels") or {}
+    if args.confirm and not str(args.actor or "").strip():
+        print("Error: --confirm 须给 --actor(落账提交身份); 未写入", file=sys.stderr)
+        return 2
+    try:
+        root = _find_repo_root_for_args(args)
+        result = run_record_type_migration(root, actor=args.actor, confirm=bool(args.confirm))
+    except MigrationError as exc:
+        print(f"Error: {exc}" + (f"\n出口: {exc.next_step}" if exc.next_step else ""), file=sys.stderr)
+        return 1
+    except (FileNotFoundError, SchemaLoadError, OSError, ValueError, subprocess.CalledProcessError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    landing = result.get("landing")
+    rc = int(landing["exit_code"]) if landing else 0
+    items = [{k: v for k, v in item.items() if k != "content"} for item in result["items"]]
+    if args.json:
+        print(render_json({**{k: v for k, v in result.items() if k not in ("items", "landing")}, "items": items,
+                           "landing": {k: v for k, v in landing.items() if k != "line"} if landing else None}))
+        return rc
+    counts = result["counts"]
+    outcome = (labels["done"] if result["written"] else labels["nothing"]) if result["confirm"] else labels["preview"]
+    print(f"migrate record-type: {outcome} 治理根 {result['governance_root']}"
+          f"(records = {result['records']})")
+    print(f"  缺记录类型被 B④ 拒入: {counts['total']} 份; " + ", ".join(
+        f"{item_labels.get(k, k)} {counts[k]}" for k in ("derived", "typed_not_rebuildable", "underivable")))
+    for item in items:
+        print(f"  [{item_labels.get(item['status'], item['status'])}] {item['path']}  缺 {item['missing_fields']}  "
+              f"类型 {item.get('record_type') or '-'}  — {item.get('basis') or item.get('reason') or ''}")
+    for path in result["written"]:
+        print(f"  wrote {path}")
+    if landing is not None:
+        for op in landing.get("operations") or []:
+            print(f"    · {op}")
+        print(landing["line"], file=sys.stdout if landing["landed"] else sys.stderr)
+    return rc
 
 
 # ---------------------------------------------------------------------------
@@ -2339,6 +2405,17 @@ def build_parser() -> argparse.ArgumentParser:
     envelope_renew_parser.add_argument("--actor", default="owner", help="Actor (default: owner)")
     envelope_renew_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     envelope_renew_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    # AIPOS-F158 件②: migrate 族(存量治理真相迁移; 两阶段 verbs.schema two_phase_protocol.records_migration_writers, 治理根
+    # --workspace-root 经 governance_root_resolution.commands 唯一注册口挂载)
+    migrate_parser = subparsers.add_parser("migrate", help="AIPOS-F158: governance-truth migrations (default preview; --confirm writes and lands via governance-commit)")
+    migrate_subparsers = migrate_parser.add_subparsers(dest="migrate_command")
+    migrate_record_type_parser = migrate_subparsers.add_parser(
+        "record-type", help="AIPOS-F158: backfill record_type on unlanded records rejected by guard B④ (type derived from declared record "
+                            "locations; underivable ones are listed, not changed)")
+    migrate_record_type_parser.add_argument("--actor", help="Commit identity for landing (required with --confirm)")
+    migrate_record_type_parser.add_argument("--json", action="store_true", help="Output JSON")
+    _project_json_two_phase_flags(migrate_record_type_parser, "record-type", family="records_migration_writers")
 
     # AIPOS-F57: Onboarding guide (from 0 to first card running)
     onboarding_parser = subparsers.add_parser("onboarding", help="AIPOS-F57: From 0 to first card running — full onboarding guide (zero manual editing)")
@@ -4747,6 +4824,12 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if result["ok"] else 1
         parser.print_help()
         return 2
+
+    if args.command == "migrate":
+        if getattr(args, "migrate_command", None) != "record-type":
+            parser.print_help()
+            return 2
+        return _migrate_record_type_cli(args)
 
     # AIPOS-F92 件①: 信封命令先校验参数、自行解析目标治理根(mint 用 --workspace-root / governance_workspace_root), 不先过通用工作区解析
     if args.command == "envelope":

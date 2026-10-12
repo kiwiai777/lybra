@@ -4232,33 +4232,26 @@ def audit_dispatch_task(
 REPORT_SNAPSHOT_HEADER_END = "\n---\n"
 
 
-def _audit_report_snapshot_plan(repo_root: Path, audit_task_id: str, reviewed_task_id: str, verdict_id: str) -> dict[str, Any] | None:
-    """AIPOS-F90 件②: 审计报告快照计划(唯一实现)。报告 = 推导核唯一就绪判据 _check_verdict_artifact 命中的文件; 落点/record_type
-    读 transitions artifact_ingest.verdict.report_snapshot(缺 = SchemaLoadError)。无报告 = None(裁决照落, 不带快照字段)。
-
-    AIPOS-F89 件③d(2026-10-03 F91 实撞: 原文直拷进 records 缺 record_type 被护栏 B④ 拒): 快照 = 记录头 + 报告原文逐字节。
-    记录头字段读声明 report_snapshot.header_fields, 经单源 record_writer.render_frontmatter_block 构造; sha256 = 报告原文字节的
-    sha256(= 裁决记录 report_snapshot_sha256); 复原 = unwrap_report_snapshot(去记录头 + 核 sha256)。"""
-    import hashlib
-
-    from tools.aipos_cli.next_resolver import _artifact_ingest_declaration, _check_verdict_artifact, _resolve_governance_path_with_relative
-    from tools.aipos_cli.record_writer import render_frontmatter_block
+def report_snapshot_declaration() -> dict[str, Any]:
+    """transitions artifact_ingest.verdict.report_snapshot(审计报告快照落点 / 记录类型 / 记录头字段)唯一读取口。缺 = SchemaLoadError。"""
+    from tools.aipos_cli.next_resolver import _artifact_ingest_declaration
 
     decl = (_artifact_ingest_declaration().get("verdict") or {}).get("report_snapshot")
     if not isinstance(decl, dict) or not decl.get("location") or not decl.get("record_type") or not decl.get("header_fields"):
         raise SchemaLoadError("transitions.schema.json artifact_ingest.verdict.report_snapshot(location/record_type/header_fields)未声明")
-    report = _check_verdict_artifact(repo_root, audit_task_id) if audit_task_id else None
-    if report is None:
-        return None
-    raw = report.read_bytes()
+    return decl
+
+
+def render_report_snapshot(raw: bytes, *, verdict_id: str, reviewed_task_id: str, audit_task_id: str, source_ref: str) -> tuple[str, str]:
+    """AIPOS-F89 件③d: 快照内容唯一构造 = 记录头(声明 header_fields, 经单源 record_writer.render_frontmatter_block)+ 换行 + 报告原文
+    逐字节。返回 (内容, 报告原文字节 sha256)。门写快照(_audit_report_snapshot_plan)与 AIPOS-F158 记录类型补齐迁移
+    (record_type_migration, 存量无头快照补记录头)同用。"""
+    import hashlib
+
+    from tools.aipos_cli.record_writer import render_frontmatter_block
+
+    decl = report_snapshot_declaration()
     original = raw.decode("utf-8")
-    root = repo_root.resolve()
-    target = _resolve_governance_path_with_relative(str(decl.get("relative_to") or "records"), repo_root) / str(decl["location"]).format(
-        reviewed_task_id=reviewed_task_id, verdict_id=verdict_id)
-    try:
-        source_ref = str(report.resolve().relative_to(root))
-    except ValueError:
-        source_ref = str(report.resolve())
     sha256 = hashlib.sha256(raw).hexdigest()
     values = {
         "record_type": str(decl["record_type"]),
@@ -4274,10 +4267,36 @@ def _audit_report_snapshot_plan(repo_root: Path, audit_task_id: str, reviewed_ta
     if unknown:
         raise SchemaLoadError(f"transitions.schema.json artifact_ingest.verdict.report_snapshot.header_fields 含未知字段 {unknown}")
     header = render_frontmatter_block({f: values[f] for f in fields}, fields)
+    return header + "\n" + original, sha256
+
+
+def _audit_report_snapshot_plan(repo_root: Path, audit_task_id: str, reviewed_task_id: str, verdict_id: str) -> dict[str, Any] | None:
+    """AIPOS-F90 件②: 审计报告快照计划(唯一实现)。报告 = 推导核唯一就绪判据 _check_verdict_artifact 命中的文件; 落点/record_type
+    读 transitions artifact_ingest.verdict.report_snapshot(缺 = SchemaLoadError)。无报告 = None(裁决照落, 不带快照字段)。
+
+    AIPOS-F89 件③d(2026-10-03 F91 实撞: 原文直拷进 records 缺 record_type 被护栏 B④ 拒): 快照 = 记录头 + 报告原文逐字节,
+    构造 = render_report_snapshot(AIPOS-F158 抽出, 存量无头快照迁移同用); sha256 = 报告原文字节的 sha256(= 裁决记录
+    report_snapshot_sha256); 复原 = unwrap_report_snapshot(去记录头 + 核 sha256)。"""
+    from tools.aipos_cli.next_resolver import _check_verdict_artifact, _resolve_governance_path_with_relative
+
+    decl = report_snapshot_declaration()
+    report = _check_verdict_artifact(repo_root, audit_task_id) if audit_task_id else None
+    if report is None:
+        return None
+    raw = report.read_bytes()
+    root = repo_root.resolve()
+    target = _resolve_governance_path_with_relative(str(decl.get("relative_to") or "records"), repo_root) / str(decl["location"]).format(
+        reviewed_task_id=reviewed_task_id, verdict_id=verdict_id)
+    try:
+        source_ref = str(report.resolve().relative_to(root))
+    except ValueError:
+        source_ref = str(report.resolve())
+    content, sha256 = render_report_snapshot(raw, verdict_id=verdict_id, reviewed_task_id=reviewed_task_id,
+                                             audit_task_id=audit_task_id, source_ref=source_ref)
     return {
         "path": str(target.resolve().relative_to(root)),
         "record_type": str(decl["record_type"]),
-        "content": header + "\n" + original,
+        "content": content,
         "sha256": sha256,
         "source_ref": source_ref,
     }
@@ -5530,23 +5549,31 @@ def execute_dry_run(
             )
             
             # AIPOS-R6M 大项A②: 决策粒度机器触发 - owner_decision_record落库时自动生成decision_log指针条目
+            # AIPOS-F158: 指针写出即列入 performed_writes(落账范围以门应答为准, `lybra envelope mint --confirm` 据此一并提交);
+            # 写失败不再静默: 拒因进 warnings(决策记录已落, 不回滚)
+            performed_writes = list(result.get("planned_writes", [])) if result.get("wrote") else []
+            warnings_out = list(result.get("warnings", []))
             if result.get("wrote") and result.get("decision_id"):
                 original_payload = result.get("original_payload") or {}
                 decision_summary = str(original_payload.get("decision_summary") or "Owner decision")
                 decided_by = str(original_payload.get("decided_by_ref") or actor_text or "unknown")
                 record_path = str(result.get("target_path") or "")
                 
-                _auto_generate_decision_log_pointer(
+                pointer = _auto_generate_decision_log_pointer(
                     resolved_root,
                     result["decision_id"],
                     decision_summary,
                     decided_by,
                     record_path,
                 )
+                if pointer.get("path"):
+                    performed_writes.append({"path": pointer["path"], "kind": "create", "type": "decision_log_pointer"})
+                if pointer.get("warning"):
+                    warnings_out.append(pointer["warning"])
             
             verdict = derive_verdict(
                 blocking_reasons=list(result.get("blocking_reasons", [])),
-                warnings=list(result.get("warnings", [])),
+                warnings=warnings_out,
             )
             return make_response(
                 ok=bool(result.get("wrote", False)),
@@ -5561,8 +5588,8 @@ def execute_dry_run(
                     "wrote": result.get("wrote", False),
                 },
                 planned_writes=list(result.get("planned_writes", [])),
-                performed_writes=list(result.get("planned_writes", [])) if result.get("wrote") else [],
-                warnings=list(result.get("warnings", [])),
+                performed_writes=performed_writes,
+                warnings=warnings_out,
                 blocking_reasons=list(result.get("blocking_reasons", [])),
                 safety_notice=CONTROLLED_EXECUTE_NOTICE,
                 errors=[],
@@ -6514,22 +6541,22 @@ def _auto_generate_decision_log_pointer(
     decision_summary: str,
     decided_by: str,
     record_path: str,
-) -> bool:
+) -> dict[str, str | None]:
     """AIPOS-R6M 大项A②: 决策粒度机器触发 - owner_decision_record落库时自动生成decision_log指针条目
-    
-    Returns:
-        True if pointer was written, False if skipped (already exists or error)
+
+    AIPOS-F158: 目录读 config.schema governance_structure.paths.decision_log_dir(schema_loader.resolve_governance_path, 原写死
+    governance/decision_log 退役, 缺省值不变); 返回 {"path": 写出的治理根相对路径 | None(当日同名指针已在 = 跳过), "warning": 写失败拒因 | None}
+    (原「静默失败」改为拒因出声, 决策记录照落不回滚)。
     """
+    from tools.schema_loader import resolve_governance_path
+
     try:
-        
-        governance_dir = repo_root / "governance"
-        decision_log_dir = governance_dir / "decision_log"
+        decision_log_dir = resolve_governance_path("decision_log_dir", repo_root)
         
         # 生成 YYYY-MM 目录
         now = utc_now()
         year_month = file_slug("month", now)
         month_dir = decision_log_dir / year_month
-        month_dir.mkdir(parents=True, exist_ok=True)
         
         # 生成文件名: YYYY-MM-DD-<slug>.md
         date_str = file_slug("date", now)
@@ -6540,7 +6567,7 @@ def _auto_generate_decision_log_pointer(
         
         # 如果文件已存在，跳过
         if pointer_file.exists():
-            return False
+            return {"path": None, "warning": None}
         
         # 生成指针内容（固化命名·一句话+decided_by+指向记录路径）
         # AIPOS-F87 件①: frontmatter 经单源 record_writer.render_frontmatter_block(原 f-string 手拼退役)
@@ -6566,11 +6593,11 @@ def _auto_generate_decision_log_pointer(
 **Auto-generated pointer** (AIPOS-R6M 大项A②): This entry was automatically created when the owner_decision_record was written.
 """
         
+        month_dir.mkdir(parents=True, exist_ok=True)
         pointer_file.write_text(content, encoding="utf-8")
-        return True
-    except Exception:
-        # 静默失败，不影响主流程
-        return False
+        return {"path": pointer_file.resolve().relative_to(Path(repo_root).resolve()).as_posix(), "warning": None}
+    except (OSError, ValueError, SchemaLoadError) as exc:
+        return {"path": None, "warning": f"decision_log 自动指针未写出({decision_id}): {exc.__class__.__name__}: {exc}"}
 
 
 def _code_repo_schema_root() -> Path:

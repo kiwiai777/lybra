@@ -62,7 +62,9 @@ overwritten:
    `project.json` `repos.items` (the path of `code_repo` when the project declares no repos list); a value that does not resolve
    is refused. Such an envelope only covers cards whose `lane.repo` resolves to that repo; a card of another lane is refused with
    `ENVELOPE_SELECTOR_LANE_REPO_MISMATCH` (`schema/transitions.schema.json` `envelope_guards.selector_lane_repo_mismatch`). An
-   envelope without `--lane-repo` covers every lane, as before.
+   envelope without `--lane-repo` covers every lane, as before. A successful `--confirm` also commits and pushes the records the
+   gate wrote for it (AIPOS-F158); if that landing fails the envelope is still in force, and the command prints the
+   `lybra governance-commit --paths …` line to re-run instead of signing again.
 
    **Sub-projects that span several repos.** Write the advisor's whole repo set: repeat the flag
    (`--lane-repo <repo a> --lane-repo <repo b> …`; values are not split on commas). A repo shared by two sub-projects may appear

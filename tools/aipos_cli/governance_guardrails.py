@@ -433,6 +433,15 @@ def _field_value(text: str, field_name: str) -> str:
     return ""
 
 
+def record_b4_problems(text: str, decls: GuardrailDeclarations) -> tuple[list[str], list[tuple[str, str, str]]]:
+    """B④ 内容判据唯一实现(check_entries 与 AIPOS-F158 记录类型补齐迁移同读): 返回 (缺的必填字段, [(字段, 枚举名, 非法取值)])。
+    必填 = config.schema file_declarations.record_file.required_frontmatter; AIPOS-F147 件②: 字段在而取值不在声明枚举内(value_enums)= 同属 B④。"""
+    missing = [f for f in decls.record_required_fm if not _has_field(text, f)]
+    bad_values = [(f, enum_name, _field_value(text, f)) for f, enum_name, allowed in decls.record_value_enums
+                  if f not in missing and _field_value(text, f) not in allowed]
+    return missing, bad_values
+
+
 def normalize_entries(entries: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
     """(status, repo_rel_path) 归一: 状态码取首字母映射到 A/M/D; 未知码整体拒(fail-closed)。"""
     out: list[tuple[str, str]] = []
@@ -506,10 +515,7 @@ def check_entries(
         # B④: records/** 新增文件必须携机器出生标记
         if status == STATUS_ADDED and on_disk and file.startswith(records_prefix):
             text = abs_path.read_text(encoding="utf-8", errors="replace")
-            missing = [f for f in decls.record_required_fm if not _has_field(text, f)]
-            # AIPOS-F147 件②: 字段在而取值不在声明枚举内(value_enums)= 同属 B④
-            bad_values = [(f, enum_name, _field_value(text, f)) for f, enum_name, allowed in decls.record_value_enums
-                          if f not in missing and _field_value(text, f) not in allowed]
+            missing, bad_values = record_b4_problems(text, decls)
             exemption = None
             # AIPOS-F128: 缺字段(F147: 或取值非法)时才看豁免(产物槽 / 冻结卡); 找不到工作区根 = 无项目声明可读 = 不豁免
             if (missing or bad_values) and found and (decls.slot_path_keys or decls.legacy_frozen_exempt):
