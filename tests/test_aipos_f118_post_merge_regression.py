@@ -24,7 +24,7 @@ import pytest
 
 from tools.aipos_cli import post_merge_regression as pmr
 from tools.aipos_cli.finalize import finalize_task
-from tools.aipos_cli.runall_discovery import LEAK_MARK_PREFIX, failure_set, reap_marked
+from tools.aipos_cli.runall_discovery import LEAK_MARK_PREFIX, failure_set, marked_processes
 
 PRODUCT_ROOT = Path(__file__).resolve().parents[1]
 CARD_A, CARD_B = "AIPOS-T118A", "AIPOS-T118B"
@@ -258,8 +258,35 @@ def test_timeout_is_not_a_pass(tmp_path, monkeypatch, mode, expected):
         assert res["verdict"] == "PASS" and _fin_record(r["gov"], CARD_A)["post_merge_regression"]["action"] == "warned"
     else:
         assert res["verdict"] == "BLOCK" and res["post_merge_regression"]["action"] == "blocked"
-    leftover = reap_marked(mark)  # 只清本用例标记的进程(精确到本用例; 他方进程不带此标记, 不碰)
+    leftover = _settled_leftover(mark)  # 只清本用例标记的进程(精确到本用例; 他方进程不带此标记, 不碰)
     assert leftover == [], f"超时须整组清理(残留已按本用例标记清掉): {leftover}"
+
+
+#: AIPOS-F157 件④(gap #119): 产品超时清理发的是 SIGKILL(异步: 发出后到进程真正退出之间, /proc 里仍可读到带标记的环境),
+#: 并行 run-all 重负载下这一窗口被拉长 = 偶发「残留」。判残留前给已发 SIGKILL 的进程一个有界退场窗口, 再只按精确 pid 清理。
+_SETTLE_SECONDS = 10.0
+
+
+def _settled_leftover(mark: str) -> list[tuple[int, str]]:
+    """本用例标记进程的残留判定 + 精确清理: 每轮按本用例随机标记重扫(runall_discovery.marked_processes: 读 /proc/<pid>/environ,
+    pid 复用后标记不在 = 不算), 有界窗口内全部退场 = 无残留; 窗口结束仍在 = 真残留 → 只对这些精确 pid 发 SIGKILL 并返回(调用方判红)。
+    不按命令行全机匹配, 不碰他方进程(他方不带本用例标记)。"""
+    import os
+    import signal
+    import time
+
+    deadline = time.monotonic() + _SETTLE_SECONDS
+    alive = dict(marked_processes(mark))
+    while alive and time.monotonic() < deadline:
+        time.sleep(0.2)
+        alive = dict(marked_processes(mark))
+    leftover = sorted(alive.items())
+    for pid, _cmd in leftover:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            continue  # 快照与清理之间自行退出
+    return leftover
 
 
 def test_failure_set_parsing_single_口径():
