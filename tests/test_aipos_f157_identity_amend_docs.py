@@ -402,3 +402,15 @@ def test_item3_docs_enroll_deliver_and_advisor_commands():
     verbs = json.loads((REPO_ROOT / "schema/verbs.schema.json").read_text(encoding="utf-8"))
     roles_cmds = verbs["two_phase_protocol"]["roles_writers"]["commands"]
     assert {"enroll-code", "enroll-deliver"} <= set(roles_cmds)
+
+
+def test_item1_finalize_preload_closure_not_dragged_by_credential_shell():
+    """凭据唯一口(two_phase_shell_factory)被 confirm_client / audit_helpers 懒导入后, finalize 合并后预载闭包(AIPOS-F120)不得因此
+    展开到 loop / CLI 全链(展开 = 合并前预载整个 CLI 及其可选依赖, 缺可选依赖即合并前拒): 本模块在 _POST_MERGE_NO_DESCEND。"""
+    from tools.aipos_cli.finalize import _POST_MERGE_NO_DESCEND, _post_merge_import_closure
+
+    closure = set(_post_merge_import_closure())
+    _show(f"[件①·finalize 预载闭包] {len(closure)} 个模块; two_phase_shell_factory 在闭包={'tools.aipos_cli.two_phase_shell_factory' in closure}")
+    assert "tools.aipos_cli.two_phase_shell_factory" in _POST_MERGE_NO_DESCEND
+    for dragged in ("tools.aipos_cli.aipos_cli", "tools.aipos_cli.loop_driver", "tools.aipos_cli.board_adapter", "tools.lybra_tui.app"):
+        assert dragged not in closure, dragged
