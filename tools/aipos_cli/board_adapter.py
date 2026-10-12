@@ -5264,9 +5264,11 @@ def execute_dry_run(
             )
         elif op == "queue_amend":
             # AIPOS-315: G2 两阶段动词 - amend revalidation
-            # amend 的 data 结构不同,需要从 planned_writes 或其他地方提取
-            # 暂时跳过 amend revalidation (只要 withdraw 能工作即可证明 G2 修复)
-            current = {"ok": True, "verdict": Verdict.PASS, "data": source_data}
+            # AIPOS-F157 件②: 以 dry-run 原始参数重跑同一 amend_task 预览(卡仍 pending / 受限模式卡仍 claimed / 改动值仍合 schema),
+            # 快照比对 task_id + original_payload + planned_writes(修订记录路径含时间戳, 不入哈希)——原「跳过 revalidation」的
+            # 占位 current 与 dry-run 快照必不等(确认恒 REVALIDATION_FAILED)
+            current = amend_task(**amend_replay_kwargs(source_data.get("original_payload") or {}), actor=actor_text, dry_run=True,
+                                 repo_root=resolved_root)
         elif op == "queue_rework":
             # AIPOS-F154: 返工节 revalidation = 以 dry-run 原始参数重跑同一 queue_rework_task 预览(卡仍 claimed / 轮次未超限 /
             # 门侧角色类授权仍通过), 快照比对 task_id + original_payload + planned_writes(修订记录路径含时间戳, 不入哈希)
@@ -5719,14 +5721,9 @@ def execute_dry_run(
 
         if op == "queue_amend":
             # AIPOS-315: G2 两阶段动词 - amend confirm 执行
-            result = amend_task(
-                task_id=source_data.get("task_id"),
-                actor=actor_text,
-                amendments=source_data.get("amendments_to_apply"),
-                amendment_reason=source_data.get("amendment_reason"),
-                dry_run=False,
-                repo_root=resolved_root,
-            )
+            # AIPOS-F157 件②: 以令牌计划的原始参数执行同一 amend_task(原取 amendments_to_apply = 字段名列表、reason 未入计划, 必拒)
+            result = amend_task(**amend_replay_kwargs(source_data.get("original_payload") or {}), actor=actor_text, dry_run=False,
+                                repo_root=resolved_root)
             verdict = str(result.get("verdict") or Verdict.BLOCK)
             return make_response(
                 ok=bool(result.get("ok", False)),
@@ -7474,6 +7471,22 @@ def restricted_amend_fields() -> set[str]:
     return {str(f) for f in fields}
 
 
+def amend_replay_payload(*, task_id: str, amendments: dict[str, Any], amendment_reason: str, amendment_type: str | None,
+                         restricted_fields: set[str] | None) -> dict[str, Any]:
+    """AIPOS-F157 件②: queue_amend 确认令牌计划里的原始参数(amend_task 的关键字参数; restricted_fields 存为有序列表以入快照哈希)。
+    execute_dry_run 重放(预演核快照 / 确认写入)经 amend_replay_kwargs 还原, 两处同一形。"""
+    return {"task_id": task_id, "amendments": dict(amendments), "amendment_reason": amendment_reason,
+            "amendment_type": amendment_type, "restricted_fields": sorted(restricted_fields) if restricted_fields is not None else None}
+
+
+def amend_replay_kwargs(payload: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F157 件②: 由确认令牌计划的 original_payload 还原 amend_task 关键字参数(缺键 = amend_task 自身拒, fail-closed)。"""
+    restricted = payload.get("restricted_fields")
+    return {"task_id": payload.get("task_id"), "amendments": payload.get("amendments"),
+            "amendment_reason": payload.get("amendment_reason"), "amendment_type": payload.get("amendment_type"),
+            "restricted_fields": set(restricted) if isinstance(restricted, list) else None}
+
+
 def amend_task(
     task_id: str | None = None,
     path: str | Path | None = None,
@@ -7732,6 +7745,12 @@ def amend_task(
                 blocking_reasons=[],
                 safety_notice="AIPOS-315 S1: amendment record will be written (append-only), original content preserved in record.",
             )
+            # AIPOS-F157 件②: 确认令牌的计划带原始参数(F154 queue_rework 同一口径)——门 lybra_queue_amend_confirm 凭 dry_run_token 经
+            # execute_dry_run 以同一 amend_task 重放预演(快照比对)后写入; 原 confirm 不认令牌、按入参裸重做, execute 路径拿
+            # amendments_to_apply(字段名列表)当改动 dict, 两条都落不了预演过的那次修改。queue_rework 复用本函数后以自己的 original_payload 覆盖。
+            response.setdefault("data", {})["original_payload"] = amend_replay_payload(
+                task_id=str(task.get("task_id") or ""), amendments=amendments, amendment_reason=str(amendment_reason).strip(),
+                amendment_type=amendment_type, restricted_fields=restricted_fields)
             # G2 红线修复: amend 也是两阶段动词, WARN 永不吐 token
             return _attach_controlled_execute_metadata(
                 operation=operation,

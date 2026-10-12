@@ -3930,55 +3930,57 @@ def lybra_queue_amend_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
 
 def lybra_queue_amend_confirm(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     """AIPOS-315: confirm amend — execute the amendment (update task + write amendment record).
-    
-    Does NOT require owner_confirm (advisor callable for governance amendments).
-    Re-validates all inputs and pending state before executing.
+
+    AIPOS-F157 件②(gap #132): 确认令牌口径与 lybra_queue_rework_confirm(AIPOS-F154)同一——只认 lybra_queue_amend_dry_run 签发的
+    dry_run_token(operation=queue_amend), 经 execute_dry_run 以令牌计划里的原始参数重放同一 amend_task 预演核快照(卡仍 pending、改动值
+    仍合 schema), 一致才写入。原实现不认令牌、按入参裸重做(预演与确认之间零绑定), 而薄壳工厂按令牌确认必拒 TASK_ID_REQUIRED。
+    Does NOT require owner_confirm scope (advisor callable for governance amendments); owner_confirmation_token = 公开字面常量 OWNER_CONFIRMED。
     """
     if not _verb_scope_allowed("lybra_queue_amend_confirm"):
         return _verb_scope_denied("lybra_queue_amend_confirm", "queue amend tools")
     args = arguments or {}
-    task_id = str(args.get("task_id") or "").strip()
-    if not task_id:
+    dry_run_token = str(args.get("dry_run_token") or "").strip()
+    if not dry_run_token:
         return _teaching_error(
-            "TASK_ID_REQUIRED",
-            "lybra_queue_amend_confirm requires task_id.",
-            "Pass the task_id of the pending task to amend.",
+            "DRY_RUN_REQUIRED",
+            "lybra_queue_amend_confirm requires dry_run_token from a prior lybra_queue_amend_dry_run response "
+            "(confirm no longer re-executes from raw arguments: the confirmed amendment must be the previewed one).",
+            "Call lybra_queue_amend_dry_run first, review the preview, then confirm with its dry_run_token.",
         )
-    amendments = args.get("amendments")
-    if not amendments or not isinstance(amendments, dict):
+    if str(args.get("owner_confirmation_token") or "").strip() != OWNER_CONFIRMATION_TOKEN:
         return _teaching_error(
-            "AMENDMENTS_REQUIRED",
-            "amendments dict is required with fields to update.",
-            "Provide amendments dict with frontmatter fields or 'body' to change.",
-        )
-    amendment_reason = str(args.get("amendment_reason") or "").strip()
-    if not amendment_reason:
-        return _teaching_error(
-            "REASON_REQUIRED",
-            "amendment_reason is required.",
-            "Provide the reason for this amendment.",
+            "OWNER_CONFIRMATION_REQUIRED",
+            "queue_amend confirm requires owner_confirmation_token: OWNER_CONFIRMED (公开字面常量, 顾问自确认, AIPOS-328).",
+            "Retry confirm with owner_confirmation_token set to the literal OWNER_CONFIRMED.",
         )
     actor = str(args.get("actor") or "").strip()
     if not actor:
         return _teaching_error(
             "ACTOR_REQUIRED",
-            "actor is required.",
-            "Pass the actor performing the amendment.",
+            "actor is required on confirm.",
+            "Pass the same actor reviewed in the dry-run preview.",
         )
-    response = amend_task(
-        task_id=task_id,
-        actor=actor,
-        amendments=amendments,
-        amendment_reason=amendment_reason,
-        dry_run=False,
-        repo_root=_resolve_queue_workspace(args),
-    )
-    if response.get("verdict") == Verdict.BLOCK:
+    token = get_dry_run(dry_run_token)
+    if token is None:
+        return _teaching_error(
+            "STALE_DRY_RUN",
+            "dry_run_token was not found in this MCP server process, or it expired.",
+            "Run lybra_queue_amend_dry_run again, review the new preview, then confirm.",
+        )
+    if token.operation != "queue_amend":
+        return _teaching_error(
+            "INCOMPATIBLE_DRY_RUN",
+            "dry_run_token was recognized but is not compatible with lybra_queue_amend_confirm.",
+            "Confirm only with a token produced by lybra_queue_amend_dry_run.",
+        )
+    response = execute_dry_run(dry_run_token, actor, owner_confirmation_token=OWNER_CONFIRMATION_TOKEN,
+                               repo_root=_resolve_queue_workspace(args))
+    if response.get("verdict") == Verdict.BLOCK or not response.get("ok", False):
         return _tool_result(response, is_error=True)
     response["surface"] = "mcp"
     response["operation"] = "queue_amend"
     response["dry_run"] = False
-    return _tool_result(response, is_error=not bool(response.get("ok", False)))
+    return _tool_result(response, is_error=False)
 
 
 def lybra_task_progress(arguments: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -6368,22 +6370,19 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
         "name": "lybra_queue_amend_confirm",
         "description": (
             "AIPOS-315: confirm amend — execute the amendment (update task + write amendment record). "
-            "Re-validates pending state before executing. "
-            "Does NOT require owner_confirm (advisor callable for governance amendments)."
+            "AIPOS-F157: requires dry_run_token from lybra_queue_amend_dry_run (same confirm-token contract as lybra_queue_rework_confirm): "
+            "the gate replays the previewed amendment (re-validates pending state and schema, snapshot must match) and only then writes. "
+            "Does NOT require owner_confirm scope (advisor callable for governance amendments); owner_confirmation_token = OWNER_CONFIRMED."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task_id": {"type": "string"},
-                "actor": {"type": "string"},
-                "amendments": {
-                    "type": "object",
-                    "additionalProperties": True,
-                },
-                "amendment_reason": {"type": "string"},
+                "dry_run_token": {"type": "string", "description": "Token from lybra_queue_amend_dry_run."},
+                "actor": {"type": "string", "description": "Confirming actor (same as the dry-run actor)."},
+                "owner_confirmation_token": {"type": "string", "description": "Must be OWNER_CONFIRMED."},
                 "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
-            "required": ["task_id", "actor", "amendments", "amendment_reason"],
+            "required": ["dry_run_token", "actor", "owner_confirmation_token"],
             "additionalProperties": False,
         },
     },

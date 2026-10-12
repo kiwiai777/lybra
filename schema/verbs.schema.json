@@ -2251,7 +2251,7 @@
           "card_owner_mismatch": "owner_needed"
         },
         "by_execution_mode": {
-          "description": "AIPOS-F156 件①(gap #139): 按本卡执行方式分流的覆盖表(唯一声明, 与 by_end_reason 同节; 判定唯一实现 loop_run_record.next_action)。执行方式 = 运行最后一次等待的卡即本卡(执行体等待; 等审计 / 外部 FINALIZE / 同仓先合入卡的等待不适用)时, 经 workspace_config.card_execution_mode(只读 F143 执行方式声明唯一读取口 workspace_config.project_execution)判出; 未声明 execution / 判不出 = 不覆盖(行为不变)。modes 键 ⊆ config.schema project_json.execution.default_mode 值域。by_end_reason = 该执行方式下覆盖 by_end_reason 的结束原因映射(判为 advisor_fix 的须在 routine_rejections.end_reasons 有修法, 连续计数与其他例行结束原因同一实现); kickoff_detail = 手工等待(reason=manual_kickoff)时顾问下一动作 detail 的前缀(占位 {hint} = 运行记录里的开工提示)。pi 执行工位 / 手工工位(card_execution_mode = pi 或未声明)= 原口径(owner_needed / 向 Owner 说开工提示)。",
+          "description": "AIPOS-F156 件①(gap #139): 按本卡执行方式分流的覆盖表(唯一声明, 与 by_end_reason 同节; 判定唯一实现 loop_run_record.next_action)。执行方式 = 运行最后一次等待的卡即本卡(执行体等待; 等审计 / 外部 FINALIZE / 同仓先合入卡的等待不适用)时, 经 workspace_config.card_execution_mode(只读 F143 执行方式声明唯一读取口 workspace_config.project_execution)判出; AIPOS-F157 件③(gap #125): 等待目标实例为无工位的子 agent 执行者(enrollment.instance_enrollment governance_root_mode, 与 lybra_loop.launch.manual_hint.subagent 同一判定 loop_driver.wait_instance_is_subagent)= subagent(未声明 execution 亦然, 等交回超时不再出工位 /go 口径); 未声明 execution 且非子 agent 执行者 / 判不出 = 不覆盖(行为不变)。modes 键 ⊆ config.schema project_json.execution.default_mode 值域。by_end_reason = 该执行方式下覆盖 by_end_reason 的结束原因映射(判为 advisor_fix 的须在 routine_rejections.end_reasons 有修法, 连续计数与其他例行结束原因同一实现); kickoff_detail = 手工等待(reason=manual_kickoff)时顾问下一动作 detail 的前缀(占位 {hint} = 运行记录里的开工提示)。pi 执行工位 / 手工工位(card_execution_mode = pi 或未声明)= 原口径(owner_needed / 向 Owner 说开工提示)。",
           "modes": {
             "subagent": {
               "by_end_reason": {
@@ -2325,7 +2325,7 @@
             "wait_timeout": {
               "why_routine": "AIPOS-F156 件①(gap #139): 只在 by_execution_mode.modes.subagent 覆盖时适用(本卡执行方式 = 顾问派子 agent): loop 等交回超 --max-wait 结束, 子 agent 多半仍在做(跑全量测试等长任务), 不是工位没人开工; 修法固定 = 等子 agent 交回后用原命令重跑, 或补派子 agent, 不涉 Owner 授权。pi 执行工位 / 手工工位仍按 by_end_reason(owner_needed: 请 Owner 在工位敲 /go)",
               "fix": [
-                "不找 Owner: 本卡执行方式 = 顾问派子 agent(project.json execution), loop 等交回超时是例行等待, 不是工位没人开工",
+                "不找 Owner: 本卡执行方式 = 顾问派子 agent(project.json execution, 或等待目标实例为子 agent 执行者接入), loop 等交回超时是例行等待, 不是工位没人开工",
                 "子 agent 仍在做 → 等它提交并写完交回(RETURN.md)后用原命令重跑 loop(本修法末行命令; 已落的步不重复, 推导核按已落记录续做)",
                 "子 agent 已终止或未派 → 按开工材料派本卡子 agent(`lybra my-tasks --actor <本卡 assigned_to> --task-id {task_id}` 给工作树 / 报告落点 / 卡路径), 子 agent 写完交回即止",
                 "建议重跑时加大 --max-wait(秒; 缺省读 verbs.schema lybra_loop.parameters.max_wait), 免子 agent 长任务期间再超时"
@@ -2705,7 +2705,7 @@
       "surface": ["mcp"]
     },
     "lybra_queue_amend_confirm": {
-      "description": "改卡确认。",
+      "description": "改卡确认。AIPOS-F157 件②: 只认 lybra_queue_amend_dry_run 签发的 dry_run_token(与 lybra_queue_rework_confirm 同一确认令牌口径), 门以令牌计划里的原始参数重放同一 amend_task 预演核快照后写入; 不再按入参裸重做。",
       "phase": "confirm",
       "required_scope": "queue_amend",
       "visibility": "scope",
