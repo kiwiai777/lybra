@@ -66,6 +66,10 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     home = tmp_path / "home"
     alpha = scaffold_project(home, "alpha", registered_by="owner.alpha")
     beta = scaffold_project(home, "beta", registered_by="owner.beta")
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_aipos_f73d_loop_driver import init_governance_repo  # 靶场治理仓构件唯一来源
+
+    init_governance_repo(home)  # AIPOS-F159 件①: project 族 --confirm 写后经同一提交口落账, home 根作治理仓(带 origin)
     (userhome / ".lybra" / "config.json").write_text(
         json.dumps({"home_root": str(home), "active_project": "alpha"}), encoding="utf-8")
     monkeypatch.setenv("LYBRA_ACTIVE_PROJECT", "alpha")

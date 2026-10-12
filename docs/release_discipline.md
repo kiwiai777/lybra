@@ -33,8 +33,16 @@ unrelated change swept into a finalize commit via a broad `git add`.
 - Commands that write governance records land them themselves through that same commit path (AIPOS-F158, declared in
   `schema/verbs.schema.json` `lybra_governance_commit.post_write_landing`): `lybra envelope mint --confirm` commits and pushes
   the records the gate wrote for the signing (decision record, envelope, decision_log pointer; message names the policy ids),
-  and `lybra migrate record-type --confirm` commits the records it backfilled. If landing fails the write still stands
-  (do not sign again): the command prints the reason and the exact `lybra governance-commit --paths …` to re-run, and exits 3.
+  and `lybra migrate record-type --confirm` commits the records it backfilled. Since AIPOS-F159 the project commands that write
+  project.json (`lybra project set-paths` / `set-repo` / `set-repos` / `set-workstation` / `set-meta` / `set-execution` /
+  `set-return-summary`, plus `freeze-legacy` and `dispatch-mode set`) land what they wrote the same way after `--confirm`
+  (commit identity `--actor`, default `$USER` or owner; message names the subcommand and project); `--dry-run` still writes
+  and lands nothing. If landing fails the write still stands (do not sign again): the command prints the reason and the exact
+  `lybra governance-commit --paths …` to re-run, and exits 3.
+- The gate's decision_log auto-pointer is named after the full decision id (`YYYY-MM-DD-<decision_id>-auto-pointer.md`;
+  an envelope's is `envelope-<policy_id>`), so several envelopes signed on one day each get one (AIPOS-F159). Older pointers keep
+  their names and are read by directory and content, not by file name. `lybra migrate decision-log-pointers` lists decision
+  records that have no pointer; it is a read-only preview and never backfills.
 - Records that the commit guard (B④) refuses for a missing `record_type` are listed by `lybra migrate record-type` (preview,
   writes nothing): a type is derived only from the declared record locations; only kinds with a reconstructable record header
   (audit report snapshots, checked against the verdict record's sha256) are rewritten on `--confirm`, everything else is listed

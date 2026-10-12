@@ -22,7 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from test_aipos_f73d_loop_driver import _write  # noqa: E402  — 靶场/替身唯一来源
+from test_aipos_f73d_loop_driver import _write, init_governance_repo  # noqa: E402  — 靶场/替身唯一来源
 from test_aipos_f78_engine_agnostic import DRIVER  # noqa: E402
 from test_aipos_f78c_card_repo import _gov_skeleton, _product_repo  # noqa: E402
 from test_aipos_f133_lane_view_dependencies import PROJECT, _cli, _hcard, _show  # noqa: E402
@@ -52,6 +52,7 @@ def gov(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     _hcard(root, "HBJ-F1", "claimed", lane_repo="web", needs_owner=True, status="completed")
     _hcard(root, "HBJ-F2", "blocked", lane_repo="api", needs_owner=True, status="claimed")
     _hcard(root, "HBJ-F3", "claimed", lane_repo="ghost", needs_owner=True, status="completed")
+    init_governance_repo(root)  # AIPOS-F159 件①: freeze-legacy --confirm 写后经同一提交口落账, 治理根须在治理仓(带 origin)内
     rc, out, err = _cli(["project", "freeze-legacy", "--workspace-root", str(root), "--task-ids", *FROZEN,
                          "--reason", "人肉期存量", "--actor", DRIVER, "--confirm"])
     assert rc == 0, (out, err)

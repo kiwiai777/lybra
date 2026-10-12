@@ -36,6 +36,7 @@ import test_aipos_f90_loop_one_stage as f90  # noqa: E402  — 进程内真门 +
 from test_aipos_f78_engine_agnostic import AUDITOR, DRIVER, EXEC, _write  # noqa: E402
 from test_aipos_f85_onboarding_guide_generic import SHELL_VERBS, _iter_command_lines, _parse_lybra, _segments  # noqa: E402
 from test_aipos_f90_loop_one_stage import POLICY, TASK, rig  # noqa: E402,F401  — pytest 夹具复用
+from test_aipos_f73d_loop_driver import init_governance_repo  # noqa: E402  — 靶场治理仓构件唯一来源
 from tools.aipos_cli import next_resolver as nr  # noqa: E402
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter  # noqa: E402
 from tools.aipos_cli.loop_driver import exit_code_for, load_loop_contract, run_loop  # noqa: E402
@@ -192,6 +193,7 @@ def test_item1_spawn_nonzero_exit_stderr_cause_passed_through(rig, monkeypatch, 
 def test_item2_set_execution_two_phase_and_refusals(tmp_path, monkeypatch):
     gov = f78._make_gov(tmp_path, monkeypatch, shape="lybra")
     _registry(gov)
+    init_governance_repo(gov)  # AIPOS-F159 件①: set-execution --confirm 写后经同一提交口落账, 治理根须在治理仓(带 origin)内
     before = (gov / "project.json").read_text(encoding="utf-8")
     base = ("project", "set-execution", "--workspace-root", str(gov), "--subagent-executor", SUB, "--auditor", AUDITOR)
     rc, out, err = _cli(*base, "--pi-executor", PIX, "--pi-allowed-task-mode", "config")
@@ -376,6 +378,7 @@ def test_item4_subagent_executor_enrolls_into_governance_root_and_loop_claims_as
     assert view["enrolled"] and view["via"] == ["land", "connection"] and view["mode"] == "subagent" and not view["workstation"]["found"]
     # 审计工位(pi)已接入 → 声明执行方式 → 起草缺省 → 发卡核身份通过 → loop 以子 agent 执行者身份认领
     _land(gov, AUDITOR, "auditor", f"host={socket.gethostname()} workstation={gov.parent / 'ws-audit'} files=['connection.json']")
+    init_governance_repo(gov)  # AIPOS-F159 件①: set-execution --confirm 写后即落账
     rc, out, err = _cli("project", "set-execution", "--workspace-root", str(gov), "--subagent-executor", EXEC, "--auditor", AUDITOR, "--confirm")
     assert rc == 0, err
     created = create_draft(gov, _meta(TASK), "## Goal\n\nx\n")

@@ -18,7 +18,7 @@ from tools.aipos_cli.confirm_client import (
     GateClient,
     Preview,
     claim_args_from_task,
-    load_owner_token,
+    load_client_token,
     return_args_from_task,
     token_fingerprint,
 )
@@ -51,7 +51,8 @@ class TuiSession:
         token_env: str | None = None,
         role: str = "owner",
     ) -> "TuiSession":
-        token = load_owner_token(connection_json=connection_json, role=role, token_env=token_env)
+        # AIPOS-F159 件③: 连接文件取凭据经 F134/F154 唯一口(confirm_client.load_client_token → load_role_token; 同角色多实例即拒)
+        token = load_client_token(connection_json=connection_json, role=role, token_env=token_env)
         client = GateClient(gate_url, token)
         client.initialize()
         session = cls(gate_url=gate_url, _client=client)

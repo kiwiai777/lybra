@@ -219,6 +219,7 @@ def test_item2_declared_result_summary_frontmatter_is_ready(tmp_path, monkeypatc
     rc, out, err = _cli("project", "set-return-summary", "--workspace-root", str(gov_root), "--frontmatter-key", "result_summary")
     _show(f"件②·set-return-summary 预演 rc={rc}", out + err)
     assert rc == 0 and "预览" in out and '"return_summary_source"' in out and pj.read_text(encoding="utf-8") == original
+    init_governance_repo(gov_root)  # AIPOS-F159 件①: --confirm 写后经同一提交口落账, 治理根须在治理仓(带 origin)内
     rc, out, err = _cli("project", "set-return-summary", "--workspace-root", str(gov_root), "--frontmatter-key", "result_summary", "--confirm")
     _show(f"件②·set-return-summary 确认 rc={rc}", out + err)
     assert rc == 0 and "已写入" in out

@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 from urllib import request as _request
 
-from tools.aipos_cli.confirm_client import GateClient, load_owner_token, token_fingerprint
+from tools.aipos_cli.confirm_client import GateClient, load_client_token, token_fingerprint
 # AIPOS-208: draft_validator is a READ-ONLY validator (it writes nothing and is NOT one of the
 # write helpers the AIPOS-206 guard test forbids here). Importing it lets the copilot guarantee
 # card conformance in-memory (single source for the field contract), so a copilot-authored card is
@@ -325,7 +325,8 @@ class CopilotSession:
         token_env: str | None = None,
         role: str = "copilot",
     ) -> "CopilotSession":
-        token = load_owner_token(connection_json=connection_json, role=role, token_env=token_env)
+        # AIPOS-F159 件③: 连接文件取凭据经 F134/F154 唯一口(confirm_client.load_client_token → load_role_token; 同角色多实例即拒)
+        token = load_client_token(connection_json=connection_json, role=role, token_env=token_env)
         client = GateClient(gate_url, token)
         client.initialize()
         return cls(client=client, llm=llm, project=project)

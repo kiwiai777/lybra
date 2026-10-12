@@ -408,6 +408,9 @@ def test_item5_check_workstation_bidirectional_and_set_workstation_cli(tmp_path,
     rem = setup_remote(r, monkeypatch)
     _append_enrollment_trail(proj, action="land", code_id="enroll_fixture", role="executor", instance="exec.probe.mac",
                              by="(agent-enroll)", reason=f"host={REMOTE_HOST} workstation={rem.remote_ws} files=['role']")
+    from test_aipos_f73d_loop_driver import init_governance_repo  # 靶场治理仓构件唯一来源
+
+    init_governance_repo(home)  # AIPOS-F159 件①: set-workstation --confirm 写后经同一提交口落账, home 根作治理仓(带 origin)
 
     def cli(*argv: str) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()

@@ -36,6 +36,7 @@ from test_aipos_f123_adopt_and_set_paths import (  # noqa: E402  — 收编靶�
     TASK,
     _adopt,
     _cli,
+    _ensure_governance_repo,
     _legacy_branch,
     _legacy_card,
     _set_paths,
@@ -52,6 +53,7 @@ def _show(text: str) -> None:
 
 
 def _freeze(rig, *args: str) -> tuple[int, str, str]:
+    _ensure_governance_repo(rig)  # AIPOS-F159 件①: freeze-legacy --confirm 写后即落账
     return _cli(["project", "freeze-legacy", "--workspace-root", str(rig.gov), *args, "--reason", "人肉期存量",
                  "--actor", FREEZER, "--confirm"])
 

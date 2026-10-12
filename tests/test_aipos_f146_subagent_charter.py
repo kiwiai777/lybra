@@ -27,6 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from test_aipos_f73d_loop_driver import init_governance_repo  # noqa: E402  — 靶场治理仓构件唯一来源
 from test_aipos_f78_engine_agnostic import AUDITOR, DRIVER, EXEC  # noqa: E402
 from test_aipos_f90_loop_one_stage import POLICY, TASK, rig  # noqa: E402,F401  — pytest 夹具复用
 from test_aipos_f95_harness_launch import _land as _land_ws, _workstation  # noqa: E402  — pi 工位 / land 事件同一 writer
@@ -219,6 +220,8 @@ def _declare_and_publish(rig, harness: str) -> None:
 
     _enroll_subagent(rig, harness)
     _land(rig.gov, AUDITOR, "auditor", f"host={socket.gethostname()} workstation={rig.gov.parent / 'ws-audit'} files=['connection.json']")
+    if not (rig.gov / ".git").exists():
+        init_governance_repo(rig.gov)  # AIPOS-F159 件①: set-execution --confirm 写后经同一提交口落账, 治理根须在治理仓(带 origin)内
     rc, _out, err = _cli("project", "set-execution", "--workspace-root", str(rig.gov), "--subagent-executor", EXEC, "--auditor", AUDITOR,
                          "--confirm")
     assert rc == 0, err

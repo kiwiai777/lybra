@@ -467,6 +467,7 @@ def test_item3_no_inline_selection_left_in_off_lane_callers():
     assert deploy.count("resolve_executor_token \"$conn_json\"") == 2
     cw_src = (REPO_ROOT / "tools" / "sandbox_runtime" / "confined_worker.py").read_text(encoding="utf-8")
     body = cw_src[cw_src.index("def executor_token"):cw_src.index("def all_raw_secrets")]
-    assert "get_token_for_role_and_project" in body and "for item in" not in body
+    # AIPOS-F159 件③: 经 F134/F154 唯一口 load_role_token(其按角色取仍委托 token_resolver 单源), 不自遍历挑选
+    assert "load_role_token(" in body and "for item in" not in body
     board = (REPO_ROOT / "web" / "board" / "app.py").read_text(encoding="utf-8")
     assert "is_token_entry_retired(item)" in board

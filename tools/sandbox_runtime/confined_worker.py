@@ -150,12 +150,16 @@ def load_role_tokens(connection_json: Path) -> list[dict[str, Any]]:
 
 def executor_token(connection_json: Path) -> str:
     """AIPOS-F82 件③: 取值走 token_resolver 单源(instance→role·排除 retired; 全 retired fail-closed 带重签出口),
-    禁本地再遍历挑选(旧实现取第一条 executor 条目, 重 enroll 后会拿到 retired 旧 token)。拒因只带指纹。"""
-    from tools.aipos_cli.token_resolver import get_token_for_role_and_project
+    禁本地再遍历挑选(旧实现取第一条 executor 条目, 重 enroll 后会拿到 retired 旧 token)。拒因只带指纹。
+
+    AIPOS-F159 件③(gap #143): 经 F134/F154 按实例选凭据唯一口 two_phase_shell_factory.load_role_token(其按角色取仍委托
+    token_resolver.get_token_for_role_and_project, 上述单源判据不变)——连接文件里 executor 可用条目绑定 ≥2 个实例 = 拒
+    (不知取谁, 禁取首个冒名); ≤1 个实例 = 既有行为。"""
+    from tools.aipos_cli.two_phase_shell_factory import load_role_token
 
     try:
-        return get_token_for_role_and_project(connection_json, "executor")
-    except ValueError as exc:  # TokenResolutionError 族 / 读失败 —— 拒因不含 token 值
+        return load_role_token(connection_json_path=str(connection_json), role="executor")
+    except ValueError as exc:  # TokenResolutionError 族 / DriverTokenError(多实例) / 读失败 —— 拒因不含 token 值
         raise ConfinedWorkerError(f"executor token unresolved from connection.json: {exc}") from exc
 
 
