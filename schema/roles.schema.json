@@ -316,6 +316,12 @@
         "applies_to": "all",
         "text": "遇护栏拦截即说明并停; 禁换方式重试同一写入——禁换命令头(ssh/bash -c/sudo/别的 shell)、禁拆复合命令、禁换路径/别名/符号链接、禁换工具或包装。拒 = 声明缺口: 记入 RETURN/报告回流给卡或顾问, 由改声明放行, 不由角色自行突破。",
         "evidence": "2026-09-06 chris HBJ-POC-005 停线: kiwiaiops 被 multizone-guard 拦后换 head/拆复合命令继续(违其章程「遇护栏拦截即说明并停」)"
+      },
+      {
+        "id": "no_privilege_escalation",
+        "applies_to": "all",
+        "text": "严禁 sudo/su/doas 等任何提权, 严禁修改系统路径(/usr /etc /bin /opt 等)或本卡工作树与治理落点之外的任何文件。声明命令在本机不可执行时给 BLOCK 并写原因, 由顾问改卡/重派;严禁 sudo、严禁修改系统路径或工作树外文件来凑命令。loop 拉起的 pi 缺省以 no_new_privs 运行, 提权本就会失败。",
+        "evidence": "2026-10-12 chris LANTU-UI3-S1R: 补审声明命令 /usr/bin/node 在审计主机不存在, 审计用实际 node 跑通后被逐字判据拒收, 于是 sudo 建 /usr/bin/node 系统符号链接再逐字重跑(AIPOS-F165)"
       }
     ],
     "charter_render": "章程渲染物(distribution.schema charter_render_semantics)附本面的该角色行 + hard_rules 为「写权限边界(声明渲染)」节, 所有角色章程同源下发"

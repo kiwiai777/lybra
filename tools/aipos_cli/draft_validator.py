@@ -269,16 +269,31 @@ def validate_draft_metadata(
             if not is_valid and error_msg:
                 _add(blocking_reasons, error_msg)
         # AIPOS-F162 件①: 运行证据要求声明形(与裁决入口同一解析 artifact_ingest.parse_runtime_evidence_declaration)
+        # AIPOS-F165 件①: + 派发前可执行核查, 经声明校验唯一处 check_runtime_evidence_declaration(补审派发同调); 审计实例 = 卡 audit_by
+        # (缺省按项目推导, audit_derivation.resolve_audit_instance 同一口径), 推导不出 = 按治理根所在机核
         from tools.aipos_cli.artifact_ingest import (
-            RuntimeEvidenceDeclarationError, parse_runtime_evidence_declaration, runtime_evidence_declaration,
+            RuntimeEvidenceDeclarationError, check_runtime_evidence_declaration, runtime_evidence_declaration,
         )
 
         evidence_key = str(runtime_evidence_declaration()["card_field"])
         if not _is_missing(metadata.get(evidence_key)):
+            from tools.aipos_cli.audit_derivation import resolve_audit_instance
+
             try:
-                parse_runtime_evidence_declaration(metadata.get(evidence_key))
+                audit_instance: str | None = resolve_audit_instance(metadata, repo_root)
+            except (ValueError, OSError) as exc:
+                audit_instance = None
+                _add(warnings, f"运行证据可执行核查: 审计实例推导不出({exc}), 按治理根所在机核")
+            try:
+                checked = check_runtime_evidence_declaration(metadata.get(evidence_key), governance_root=repo_root,
+                                                             audit_instance=audit_instance)
             except RuntimeEvidenceDeclarationError as exc:
                 _add(blocking_reasons, f"RUNTIME_EVIDENCE_DECLARATION_INVALID: {exc}")
+            else:
+                for problem in checked["problems"]:
+                    _add(blocking_reasons, problem)
+                for note in checked["notes"]:
+                    _add(warnings, note)
     else:
         # Fallback to hardcoded validation if schema not available
         for field in DRAFT_REQUIRED_FIELDS:

@@ -40,6 +40,9 @@
    **禁 `git stash`**(全仓隐式波及他工位)、**禁 `git pull --rebase`**(隐式 stash 同险)。
    需暂存用 `git worktree` 机制;需拉取用 `git pull --no-rebase` 或 `git fetch + git merge`。
    违反 = 连坐事故(08-28 凭据全仓 stash -u、09-05 wrapper 借尸还魂的结构根因)。
+8. **禁提权、禁改工作树与治理落点之外(AIPOS-F165 硬条款)**:条文 = 本章程「写权限边界」节硬规矩 `no_privilege_escalation`
+   (单源 roles.schema write_boundary.hard_rules, 执行/审计章程同源下发)。**卡面要求的命令在本机不可执行 = 停线写原因**, 由顾问改卡/重派;
+   **严禁 sudo、严禁修改系统路径或工作树外文件来凑命令**。
 
 ## 🟡 硬规矩(门交互与职责边界 — AIPOS-F41 下发)
 

@@ -3860,11 +3860,14 @@ def _build_audit_dispatch_preview(
             blocking_reasons.append(
                 f"SUPPLEMENTARY_ACTOR_NOT_ADVISOR: 补充审计只能由角色类 {sup_decl['actor_role_class']} 的实例发起: {role_gate['reason']}")
         if runtime_evidence_commands:
-            from tools.aipos_cli.artifact_ingest import RuntimeEvidenceDeclarationError, parse_runtime_evidence_declaration
+            # AIPOS-F165 件①: 声明校验唯一处(形 + 派发前可执行核查, 出卡 draft_validator 同调); 不过 = 预演即报, --confirm 拒
+            from tools.aipos_cli.artifact_ingest import RuntimeEvidenceDeclarationError, check_runtime_evidence_declaration
 
             raw_evidence = {"required": True, "commands": list(runtime_evidence_commands)}
             try:
-                parse_runtime_evidence_declaration(raw_evidence)
+                checked = check_runtime_evidence_declaration(raw_evidence, governance_root=repo_root, audit_instance=audit_agent_instance)
+                blocking_reasons.extend(checked["problems"])
+                warnings.extend(checked["notes"])
                 supplementary_runtime_evidence = raw_evidence
             except RuntimeEvidenceDeclarationError as exc:
                 blocking_reasons.append(f"RUNTIME_EVIDENCE_DECLARATION_INVALID: {exc}")

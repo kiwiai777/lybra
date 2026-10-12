@@ -258,6 +258,8 @@ lybra loop --task-id <已结案卡ID>
 ```
 派生审计卡会列出这些命令与证据节格式; 审计报告 PASS 类缺 `## 独立运行证据` 节 / 工作树不是审计分配工作树 / 命令缺一条 = 裁决入口拒收(`RUNTIME_EVIDENCE_MISSING`), loop 让审计体补做, 超声明上限 = `loop status` 判 owner_needed(runtime_evidence_exhausted)。FAIL 裁决不受限。声明: transitions.schema `artifact_ingest.verdict.runtime_evidence`。
 
+**派发前可执行核查(AIPOS-F165)**:出卡(draft create/publish)与补审派发(`--runtime-evidence-command`)同一处校验——命令里的绝对路径可执行(含 `cd … &&` 之后、`env …` 之后的那个)须在审计工位主机上存在且可执行, 否则预演即报 `RUNTIME_EVIDENCE_COMMAND_NOT_EXECUTABLE` 并给修法, `--confirm` 拒; 声明含 `sudo` 等提权 = `RUNTIME_EVIDENCE_COMMAND_PRIVILEGED`。修法: 在审计工位主机 `command -v <名>` 实测后写实际路径, 或直接写 PATH 中的名字(如 `node`); 跨机审计工位门机核不到, 标「未核」提示你去该机实测。逐字匹配判据不放松: 审计跑不了声明命令 = 给 BLOCK 写原因, 由你改卡/重派(审计章程硬条款 `no_privilege_escalation`)。
+
 #### `lybra next`(`next-step` 已退役转发, AIPOS-F71)
 **何时用**:查询任务当前状态 → 下一步动词+完整参数(AIPOS-R7A 大项C;AIPOS-F71 起唯一实现为 `lybra next`)。
 ```bash

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import stat as stat_module
 from tools.schema_constants import RecordType
 from tools.aipos_cli.verb_contract import declared_exit_code
@@ -661,6 +662,146 @@ def parse_runtime_evidence_declaration(raw: Any, *, source: str = "card") -> dic
     return {"commands": [c.strip() for c in commands], "source": source}
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F165 件①: 派发前可执行核查——声明 transitions.schema artifact_ingest.verdict.runtime_evidence.executable_check;
+# 声明校验唯一处 check_runtime_evidence_declaration(出卡 draft_validator 与补审派发 board_adapter 同调; 裁决入口判据不经此, 逐字匹配不变)
+# ---------------------------------------------------------------------------
+
+_SHELL_SEPARATORS = frozenset({"&&", "||", ";", "|", "&", ";;", "|&", "(", ")"})
+_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def runtime_evidence_command_words(command: str) -> list[str]:
+    """声明命令中每段的可执行词(按 shell 控制符切段; 跳过前导 VAR=值; cd 段不计; env 跳过选项/赋值后取可执行)。
+    shell 引号不配对 = RuntimeEvidenceDeclarationError(声明形不合, fail-closed)。"""
+    import shlex
+
+    check = runtime_evidence_declaration().get("executable_check") or {}
+    with_arg = {str(o) for o in check.get("env_options_with_arg") or []}
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError as exc:
+        raise RuntimeEvidenceDeclarationError(f"命令 {command!r} 不可按 shell 词法解析: {exc}") from exc
+    segments: list[list[str]] = [[]]
+    for token in tokens:
+        if token in _SHELL_SEPARATORS:
+            segments.append([])
+        else:
+            segments[-1].append(token)
+    words: list[str] = []
+    for segment in segments:
+        rest = list(segment)
+        while rest and _ASSIGNMENT_RE.match(rest[0]):
+            rest.pop(0)
+        if not rest or rest[0] == "cd":
+            continue
+        if rest[0] == "env" or rest[0].endswith("/env"):
+            words.append(rest[0])
+            rest.pop(0)
+            while rest and (rest[0].startswith("-") or _ASSIGNMENT_RE.match(rest[0])):
+                option = rest.pop(0)
+                if option == "--":
+                    break
+                if option in with_arg and rest:
+                    rest.pop(0)
+            while rest and _ASSIGNMENT_RE.match(rest[0]):
+                rest.pop(0)
+            if not rest:
+                continue
+        words.append(rest[0])
+    return words
+
+
+def check_runtime_evidence_declaration(raw: Any, *, governance_root: Path | str, audit_instance: str | None) -> dict[str, Any]:
+    """运行证据声明校验唯一处(出卡 draft create/publish 与补审派发 audit dispatch --supplementary 同调): 形校验(同裁决入口
+    parse_runtime_evidence_declaration)+ 派发前可执行核查。返回 {requirement, problems: [拒因原文], notes: [未核提示]}。
+    形不合 = RuntimeEvidenceDeclarationError。problems 非空 = 调用方拒(预演报错, --confirm 拒)。"""
+    import socket
+
+    requirement = parse_runtime_evidence_declaration(raw)
+    out: dict[str, Any] = {"requirement": requirement, "problems": [], "notes": []}
+    if requirement is None:
+        return out
+    decl = runtime_evidence_declaration()
+    check = decl.get("executable_check")
+    needed = ("category", "privilege_category", "privilege_commands", "fix_hint", "unverified_note")
+    if not isinstance(check, dict) or any(not check.get(k) for k in needed):
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError(f"transitions.schema.json artifact_ingest.verdict.runtime_evidence.executable_check({'/'.join(needed)})未声明")
+    placeholders = ["{" + str(k) + "}" for k in decl["placeholders"]]
+    privileged = {str(c) for c in check["privilege_commands"]}
+    location: dict[str, Any] = {}
+    basis = ""
+    if audit_instance:
+        from tools.aipos_cli.enrollment import workstation_location
+        from tools.schema_loader import SchemaLoadError
+
+        try:
+            location = workstation_location(governance_root, str(audit_instance))
+        except (OSError, ValueError, SchemaLoadError) as exc:
+            basis = f"审计工位 {audit_instance} 位置读取失败({exc}), 按治理根所在机核"
+    remote = bool(location.get("found")) and location.get("transport") == "remote"
+    if not basis:
+        basis = (f"审计工位 {audit_instance} 在本机" if location.get("found") else
+                 f"审计工位{(' ' + str(audit_instance) + ' ') if audit_instance else ''}位置定位不到"
+                 f"({location.get('reason') or '无审计实例'}), 按治理根所在机核")
+    host = socket.gethostname()
+    unverified: list[str] = []
+    for index, command in enumerate(requirement["commands"], 1):
+        for word in runtime_evidence_command_words(command):
+            name = word.rsplit("/", 1)[-1]
+            if word in privileged or name in privileged:
+                out["problems"].append(f"{check['privilege_category']}: 命令 #{index} `{command}` 含提权命令 `{word}`; 运行证据命令须以审计体自身权限"
+                                       f"可执行, 不得要求提权")
+                continue
+            if not word.startswith("/") or any(p in word for p in placeholders):
+                continue  # PATH 名 / 相对路径 / 含占位 = 审计体按其 PATH 与工作树解析, 派发时不核
+            if remote:
+                unverified.append(word)
+                continue
+            if not (os.path.isfile(word) and os.access(word, os.X_OK)):
+                out["problems"].append(
+                    f"{check['category']}: 命令 #{index} `{command}` 中的可执行 `{word}` 在审计工位主机(本机 {host}; {basis})不存在或不可执行; "
+                    + str(check["fix_hint"]).replace("{name}", name))
+    if unverified:
+        out["notes"].append(str(check["unverified_note"]).replace("{instance}", str(audit_instance))
+                            .replace("{host}", str(location.get("host"))).replace("{paths}", ", ".join(dict.fromkeys(unverified))))
+    return out
+
+
+def runtime_evidence_guidance() -> str:
+    """AIPOS-F165 件②: 运行证据拒因 / 要求段的固定指引。文案唯一来源 = roles.schema write_boundary.hard_rules 中
+    id = transitions runtime_evidence.rejection_guidance.guidance_rule_id 的条文(章程「写权限边界」节同源下发)。缺 = SchemaLoadError。"""
+    from tools.aipos_cli.write_boundary import load_write_boundary_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    rule_id = str((runtime_evidence_declaration().get("rejection_guidance") or {}).get("guidance_rule_id") or "")
+    rule = next((r for r in load_write_boundary_declaration()["hard_rules"] if isinstance(r, dict) and r.get("id") == rule_id), None)
+    if not rule_id or rule is None or not str(rule.get("text") or "").strip():
+        raise SchemaLoadError(f"roles.schema.json write_boundary.hard_rules 无 id={rule_id!r} 的条文"
+                              "(transitions runtime_evidence.rejection_guidance.guidance_rule_id)")
+    return f"固定指引(硬条款 {rule_id}): {str(rule['text']).strip()}"
+
+
+def runtime_evidence_command_diff(declared: str, ran: list[str]) -> str:
+    """AIPOS-F165 件②: 一条缺运行记录的声明命令(已渲染)与最接近的实跑命令逐词对比 → 「声明 vs 实跑」差异原文。
+    最接近 = difflib 相似度最高的一条; 无实跑记录 = 只说明无可对比。只作拒因说明, 判据(逐字匹配)不变。"""
+    import difflib
+
+    if not ran:
+        return "逐条差异: 报告无任何实跑命令可对比"
+    closest = max(ran, key=lambda c: difflib.SequenceMatcher(None, declared, c).ratio())
+    want, got = declared.split(), closest.split()
+    parts: list[str] = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, want, got).get_opcodes():
+        if tag != "equal":
+            parts.append(f"声明 `{' '.join(want[i1:i2]) or '(无)'}` ≠ 实跑 `{' '.join(got[j1:j2]) or '(无)'}`")
+    return f"逐条差异: 声明 `{declared}` vs 最接近的实跑 `{closest}`: " + ("; ".join(parts) or "仅空白不同")
+
+
 def render_runtime_evidence_requirement(requirement: dict[str, Any]) -> str:
     """审计卡正文「独立运行证据要求」段(唯一渲染; 派生审计卡与手动/补充派审同读): 命令清单 + 证据节格式 + 示例。"""
     decl = runtime_evidence_declaration()
@@ -670,7 +811,8 @@ def render_runtime_evidence_requirement(requirement: dict[str, Any]) -> str:
              f"- 本卡声明 {decl['card_field']}.required=true: PASS / PASS_WITH_NOTES 报告必须含 `## {heading}` 节, 否则裁决入口拒收"
              f"({decl['rejection_category']}), loop 让你补做",
              "- 独立核验 = 在**你自己的审计分配工作树**重跑下列命令; 只核执行体原件 hash/退出码不算; 跑不了(环境/时长)给 FAIL 或 BLOCK 并写原因",
-             f"- 命令占位: {', '.join('{' + str(k) + '}' for k in decl['placeholders'])}(审计分配工作树 / 被审 tip / tree), 记录里写渲染后的实际命令, 逐字一致"]
+             f"- 命令占位: {', '.join('{' + str(k) + '}' for k in decl['placeholders'])}(审计分配工作树 / 被审 tip / tree), 记录里写渲染后的实际命令, 逐字一致",
+             f"- {runtime_evidence_guidance()}"]  # AIPOS-F165 件②: 与拒因同一固定指引
     if requirement.get("commands"):
         lines.append("- 必须逐条运行并记录:")
         lines.extend(f"  - `{c}`" for c in requirement["commands"])
@@ -766,7 +908,8 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
     category = str(decl["rejection_category"])
     heading = str(decl["section_heading"])
     outlet = (f"出口: 审计体在自己的审计分配工作树重跑卡面声明的验证命令, 按 transitions.schema artifact_ingest.verdict.runtime_evidence.format "
-              f"把每条命令/工作树/退出码/日志写进报告「{heading}」节; 跑不了(环境/时长)= 给 FAIL 或 BLOCK 并写原因, 不得以核执行体原件 hash/退出码代替")
+              f"把每条命令/工作树/退出码/日志写进报告「{heading}」节; 跑不了(环境/时长)= 给 FAIL 或 BLOCK 并写原因, 不得以核执行体原件 hash/退出码代替。"
+              + runtime_evidence_guidance())  # AIPOS-F165 件②: 固定指引(声明命令不可执行 → BLOCK; 严禁提权/改系统凑命令)
     try:
         code_repo, audit_wt = card_worktree_location(workspace_root, audit_task_id, audit_fm)
         exec_wt = card_worktree_location(workspace_root, reviewed, reviewed_fm)[1] if reviewed else None
@@ -843,10 +986,12 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
         valid_commands.append(_collapse_ws(command))
     if not entries:
         reasons.append("「独立运行证据」节运行记录为空")
+    ran = [_collapse_ws(str(e.get("command"))) for e in entries if isinstance(e, dict) and e.get("command") not in (None, "")]
     for declared in requirement["commands"]:
         rendered = render(declared)
         if rendered not in valid_commands:
-            reasons.append(f"卡面声明的命令缺有效运行记录: {rendered!r}(声明原文 {declared!r}; 须在审计分配工作树运行, 命令逐字一致)")
+            reasons.append(f"卡面声明的命令缺有效运行记录: {rendered!r}(声明原文 {declared!r}; 须在审计分配工作树运行, 命令逐字一致); "
+                           + runtime_evidence_command_diff(rendered, ran))  # AIPOS-F165 件②: 逐条差异(声明 vs 实跑)
     if not reasons:
         return None
     return {"category": category, "reasons": [where + r for r in reasons] + [outlet]}
