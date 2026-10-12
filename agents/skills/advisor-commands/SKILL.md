@@ -188,9 +188,9 @@ lybra loop status --workspace-root <治理根> --json                          #
 lybra roles --workspace-root <治理根> enroll-deliver --role executor --instance <执行体实例> \
   --governance-root <治理根> --workspace <工位目录> --ssh <ssh目标> \
   --gate-url <门地址> --actor <你的顾问实例> --owner-authorization-ref <信封ID> --dry-run
-# --workspace = 工位机上的目录; --gate-url = 工位可达的门地址。确认: 同一命令把 --dry-run 换成 --confirm
-# (Owner 凭据签码时改 --connection-json <Owner凭据> --token-role owner, 去掉 --actor)
 ```
+`--workspace` = 工位机上的目录, `--gate-url` = 工位可达的门地址; 预演无误后同一命令把 `--dry-run` 换成 `--confirm`(Owner 凭据签码时改
+`--connection-json <Owner凭据> --token-role owner`, 去掉 `--actor`)。
 2. **声明开工材料**(远端视角: 工位上指向门机的 ssh 别名 + 一句话材料访问方式, 如「经 ssh <别名> 读写; 代码提交到卡分支并推回门机产品仓」; 禁含凭据; 未声明 = loop 拒拉起并提示本命令)。写 project.json 的命令一律两阶段(AIPOS-F125): 先把下面的 `--confirm` 换成 `--dry-run` 预演(打印 diff 与校验, 零写入), 确认后原样带 `--confirm` 才写:
 ```bash
 lybra project set-workstation <项目名> --home-root <home根> --instance <执行体实例> \

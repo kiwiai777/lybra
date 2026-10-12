@@ -382,6 +382,11 @@ def test_item5_skill_remote_steps_parse():
             # AIPOS-F113 新形: Owner 凭据从 connection.json 读(不上命令行), 无 --owner-token / --code 参数
             assert args.ssh == "kiwi@remote-host" and args.connection_json and not hasattr(args, "owner_token")
             assert "--owner-token " not in line and "--code" not in line
+        elif argv[1:2] == ["roles"]:
+            # AIPOS-F157 件③: 接入示例以 CLI 为准 = `lybra roles … enroll-deliver --ssh`(码经 ssh stdin, 不进命令行); 签码凭据按 --actor 实例
+            args = build_parser().parse_args(argv[1:])
+            assert args.command == "roles" and args.roles_command == "enroll-deliver" and args.ssh == "kiwi@remote-host", argv
+            assert args.actor and "--owner-token " not in line and "--code" not in line
         else:
             args = build_parser().parse_args(argv[1:])
             assert args.command == "project" and args.project_command in ("set-workstation", "check-workstation"), argv
