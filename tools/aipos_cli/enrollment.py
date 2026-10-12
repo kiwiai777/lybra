@@ -424,7 +424,12 @@ def enrollment_owner_root(
 
 
 # AIPOS-F95 件③b: land 事件 reason 字段的位置载荷(enroll_client 写 `host=<主机> workstation=<目录> files=[...]`)
-_LAND_LINE_RE = re.compile(r"^- (?P<ts>\S+)\s+land\s+.*?\binstance=(?P<instance>\S+)\s+.*?\breason=(?P<reason>.*)$")
+# AIPOS-F161: 位置事件 = land(接入落地)或 relocate(`lybra project relocate-workstation` 迁移工位, append_relocation_event 唯一写入),
+# 二者同一解析(本正则)、同一「最新未作废者为准」(_latest_land); 动作名 relocate 与声明 enums.schema
+# workstation_transport.relocation.event_action 一致(workstation_relocate.relocation_declaration 核, 不一致 = fail-closed)。
+LAND_ACTION = "land"
+RELOCATE_ACTION = "relocate"
+_LAND_LINE_RE = re.compile(rf"^- (?P<ts>\S+)\s+(?P<action>{LAND_ACTION}|{RELOCATE_ACTION})\s+.*?\binstance=(?P<instance>\S+)\s+.*?\breason=(?P<reason>.*)$")
 _LAND_HOST_RE = re.compile(r"(?:^|\s)host=(?P<host>\S+)")
 _LAND_DIR_RE = re.compile(r"(?:^|\s)workstation=(?P<dir>.+?)(?:\s+files=|$)")
 
@@ -440,7 +445,7 @@ def workstation_transport_declaration() -> dict[str, Any]:
 
 
 def _latest_land(trail: Path, instance: str) -> re.Match[str] | None:
-    """该日志中实例最新 land 事件(_LAND_LINE_RE 唯一解析; workstation_location 与诊断 enrollment_whereabouts 共用)。
+    """该日志中实例最新位置事件(land / AIPOS-F161 relocate; _LAND_LINE_RE 唯一解析; workstation_location 与诊断 enrollment_whereabouts 共用)。
     AIPOS-F121 件②: 只看未作废事件(_instance_events 唯一判定), 已作废的 land 不再定位工位。"""
     latest: re.Match[str] | None = None
     for _lineno, line in _instance_events(trail, instance)["live"]:
@@ -546,6 +551,71 @@ def workstation_location(workspace_root: str | Path, instance: str) -> dict[str,
 
 
 _EVENT_LINE_RE = re.compile(r"^- (?P<ts>\S+)\s+(?P<action>\S+)\s+code_id=(?P<code_id>\S+)\s+.*?\binstance=(?P<instance>\S+)")
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F161: 工位迁移位置事件(relocate)。工位位置的唯一声明来源仍是本日志(不新增路径表); 迁移 = 追加一行 relocate:
+# 结构字段沿用被迁移的位置事件(code_id / role; reason 沿用 host / harness), reason 记 relocation=<forward|rollback>
+# relocated_from=<旧目录> workstation=<新目录>(workstation= 在末尾, _LAND_DIR_RE 原样读)。作废(enroll-void)按 code_id 一并覆盖。
+# ---------------------------------------------------------------------------
+
+_LAND_FROM_RE = re.compile(r"(?:^|\s)relocated_from=(?P<dir>.+?)\s+workstation=")
+_LAND_RELOCATION_RE = re.compile(r"(?:^|\s)relocation=(?P<relocation>\S+)")
+
+
+def location_event(workspace_root: str | Path, instance: str) -> dict[str, Any]:
+    """实例最新未作废位置事件(_latest_land 同一读取口)的结构字段: {found, action, ts, code_id, role, host, harness, relocation,
+    relocated_from, dir, line_fields}。line_fields = 能沿用其 code_id / role 渲染 relocate 行。只读。"""
+    out: dict[str, Any] = {"found": False, "action": None, "ts": None, "code_id": None, "role": None, "host": None, "harness": None,
+                           "relocation": None, "relocated_from": None, "dir": None, "line_fields": False}
+    trail = enrollment_trail_path(_workspace_root_path(workspace_root))
+    latest = _latest_land(trail, str(instance or "").strip()) if trail.is_file() else None
+    if latest is None:
+        return out
+    reason = latest.group("reason")
+    event = _EVENT_LINE_RE.match(latest.string)
+    role = _LAND_ROLE_RE.search(latest.string[:latest.start("reason")])
+    found = {key: (m.group(key) if (m := rx.search(reason)) else None)
+             for key, rx in (("host", _LAND_HOST_RE), ("harness", _LAND_HARNESS_RE), ("relocation", _LAND_RELOCATION_RE))}
+    from_match, dir_match = _LAND_FROM_RE.search(reason), _LAND_DIR_RE.search(reason)
+    out.update(found=True, action=latest.group("action"), ts=latest.group("ts"), code_id=event.group("code_id") if event else None,
+               role=role.group("role") if role else None, **found,
+               relocated_from=from_match.group("dir").strip() if from_match else None,
+               dir=dir_match.group("dir").strip() if dir_match else None)
+    out["line_fields"] = bool(out["code_id"] and out["role"])
+    return out
+
+
+def relocation_event_line(event: dict[str, Any], *, instance: str, project: str, old: str | Path, new: str | Path, by: str,
+                          rollback: bool, ts: str | None = None) -> str:
+    """relocate 位置事件一行的唯一渲染(经 _trail_line): host 沿用被迁移事件(缺 = 本机主机名, 迁移在治理根所在机执行)。"""
+    import socket
+
+    parts = [f"host={event.get('host') or socket.gethostname()}"]
+    if event.get("harness"):
+        parts.append(f"harness={event['harness']}")
+    parts += [f"relocation={'rollback' if rollback else 'forward'}", f"relocated_from={old}", f"workstation={new}"]
+    return _trail_line(action=RELOCATE_ACTION, code_id=str(event["code_id"]), role=str(event["role"]), instance=instance,
+                       project=project, by=by, reason=" ".join(parts), ts=ts)
+
+
+def append_relocation_event(workspace_root: str | Path, instance: str, *, project: str, old: str | Path, new: str | Path, by: str,
+                            rollback: bool) -> Path:
+    """追加 relocate 位置事件(只追加; 唯一写口 _write_trail_line)。前置: 实例有可沿用字段的最新位置事件、操作者非空无空白、
+    新旧目录无空白。不满足 = ValueError(零写入)。返回日志路径。"""
+    root = _workspace_root_path(workspace_root)
+    event = location_event(root, instance)
+    actor = str(by or "").strip()
+    if not event["found"] or not event["line_fields"]:
+        raise ValueError(f"实例 {instance} 在 {enrollment_trail_path(root)} 无可沿用 code_id / role 的位置事件, 不追加 relocate")
+    if not actor or any(ch.isspace() for ch in actor):
+        raise ValueError(f"relocate 行须带操作者(非空、无空白): {by!r}")
+    if any(ch.isspace() for ch in f"{old}{new}"):
+        raise ValueError(f"工位目录含空白(位置事件按空白分段): {old!r} → {new!r}")
+    trail = enrollment_trail_path(root)
+    _write_trail_line(trail, relocation_event_line(event, instance=instance, project=project, old=old, new=new, by=actor,
+                                                   rollback=rollback))
+    return trail
 
 
 def enrollment_whereabouts(workspace_root: str | Path, instance: str) -> dict[str, Any]:

@@ -137,13 +137,14 @@
       }
     },
     "enrollment_log_writers": {
-      "description": "AIPOS-F153 件①: 写接入日志(enrollment_log, 只追加)的本地 CLI 命令同一两阶段语义——与 project_json_writers 同一包装(aipos_cli._project_json_two_phase_flags 注册旗标, family=enrollment_log_writers), 旗标名 / 缺省阶段 / 状态标签读 project_json_writers 一处(本段不重复声明), 本段只登记命令与旗标帮助。缺省 = 预演: 打印将作废的各行(行号 + 动作 + code_id + 时刻)、所在日志与将追加的 void 行, 零写入; --confirm 才追加。预演/写入同一实现 = enrollment.void_instance_events(dry_run)。日后新增写接入日志的命令登记于 commands 即得同一两阶段。",
+      "description": "AIPOS-F153 件①: 写接入日志(enrollment_log, 只追加)的本地 CLI 命令同一两阶段语义——与 project_json_writers 同一包装(aipos_cli._project_json_two_phase_flags 注册旗标, family=enrollment_log_writers), 旗标名 / 缺省阶段 / 状态标签读 project_json_writers 一处(本段不重复声明), 本段只登记命令与旗标帮助。缺省 = 预演: 打印将作废的各行(行号 + 动作 + code_id + 时刻)、所在日志与将追加的 void 行, 零写入; --confirm 才追加。预演/写入同一实现 = enrollment.void_instance_events(dry_run)。日后新增写接入日志的命令登记于 commands 即得同一两阶段。AIPOS-F161: `lybra project relocate-workstation` 登记于此(写接入日志的 relocate 位置事件; 预演/确认同一实现 workstation_relocate.relocate_workstation, 声明 enums.schema workstation_transport.relocation)。",
       "commands": [
-        "enroll-void"
+        "enroll-void",
+        "relocate-workstation"
       ],
       "flag_help": {
-        "dry_run": "Preview the enrollment_log lines to void and the void line to append, without writing (default)",
-        "confirm": "Append the void line to the scoped enrollment_log"
+        "dry_run": "Preview without writing (default): enroll-void = the enrollment_log lines to void and the void line to append; relocate-workstation = the move plan, in-flight checks and the relocate location event to append",
+        "confirm": "Execute: enroll-void = append the void line to the scoped enrollment_log; relocate-workstation = move the workstation, sync it, append the relocate location event and land the log"
       },
       "scope": {
         "description": "AIPOS-F153 件①(gap #108): enroll-void 作废作用域必须显式——恰给 --log <日志路径> 或 --project <项目名> 之一(只在该日志作废), 可再以 --code-id(可重复)/ --before <ISO 时刻> 限定; 缺省(两者都不给)= 拒, 拒因列出含该实例未作废事件的各日志作出口。原「按实例跨所有日志一刀切」退役(会连同所属项目新 land 一并作废)。",
@@ -2535,8 +2536,8 @@
           },
           "project_writers": {
             "cli": "lybra project <subcommand> --confirm",
-            "subcommands": ["set-paths", "set-repo", "set-repos", "set-workstation", "set-meta", "set-execution", "set-return-summary", "freeze-legacy", "dispatch-mode set"],
-            "scope": "AIPOS-F159 件①(gap #144): 写 project.json 的 project 族命令 --confirm 成功后的写出文件(治理根相对): two_phase_protocol.project_json_writers 各命令 = project.json(--confirm 即落, 无改动亦经同一提交口核一次: 范围已落账 = PASS no-op, 前次写后未落账者随之补落); freeze-legacy = 本次追加的清单条目 + 本次补声明 legacy_baseline 时的 project.json(本批无卡可冻 = 无写出, 不落); dispatch-mode set = project.json + 切换留痕文件。提交身份 = 该命令 --actor(dispatch-mode set 为 --by; 未给 = $USER 或 owner, 与 set-repo / project new 同一缺省)。--dry-run 零写入、不落账。唯一落账点: 写 project.json 的两阶段命令经输出包装 aipos_cli._project_json_two_phase_emit, freeze-legacy / dispatch-mode set 经同一薄壳 aipos_cli._land_project_writes(→ land_written_paths)。不含 project new / import(建治理根本身, 治理根此时可能尚未入治理仓; 向导第 1 步照旧给 governance-commit 与 home git-init)。",
+            "subcommands": ["set-paths", "set-repo", "set-repos", "set-workstation", "set-meta", "set-execution", "set-return-summary", "freeze-legacy", "dispatch-mode set", "relocate-workstation"],
+            "scope": "AIPOS-F159 件①(gap #144): 写 project.json 的 project 族命令 --confirm 成功后的写出文件(治理根相对): two_phase_protocol.project_json_writers 各命令 = project.json(--confirm 即落, 无改动亦经同一提交口核一次: 范围已落账 = PASS no-op, 前次写后未落账者随之补落); freeze-legacy = 本次追加的清单条目 + 本次补声明 legacy_baseline 时的 project.json(本批无卡可冻 = 无写出, 不落); dispatch-mode set = project.json + 切换留痕文件。AIPOS-F161: relocate-workstation = 本项目 enrollment_log(追加的 relocate 位置事件; 唯一写出, 工位目录在治理仓外不入)。提交身份 = 该命令 --actor(dispatch-mode set 为 --by; 未给 = $USER 或 owner, 与 set-repo / project new 同一缺省)。--dry-run 零写入、不落账。唯一落账点: 写 project.json 的两阶段命令经输出包装 aipos_cli._project_json_two_phase_emit, freeze-legacy / dispatch-mode set 经同一薄壳 aipos_cli._land_project_writes(→ land_written_paths)。不含 project new / import(建治理根本身, 治理根此时可能尚未入治理仓; 向导第 1 步照旧给 governance-commit 与 home git-init)。",
             "message_template": "chore(governance): 项目配置落账 {subcommand} {project}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra project {subcommand} --confirm"
           }
         },
