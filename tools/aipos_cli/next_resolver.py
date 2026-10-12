@@ -1273,7 +1273,21 @@ def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
 
     # audit_verdicts (keyed by reviewed_task_id)
     verdicts_dir = record_dir(workspace_root, "audit_verdicts", task_id)
-    result["latest_verdict"] = _find_latest_record(verdicts_dir, record_file_prefix("audit_verdicts"))
+    # AIPOS-F162 件②: 补审裁决(记录带 supplementary_of)不是本卡审计链的裁决——latest_verdict 只认常规审计裁决(原裁决语义不变),
+    # 补审裁决另列 latest_supplementary_verdict
+    from tools.aipos_cli.record_writer import record_files_with_prefix
+
+    result["latest_supplementary_verdict"] = None
+    filled: set[str] = set()
+    for vfile in sorted(record_files_with_prefix(verdicts_dir, record_file_prefix("audit_verdicts")),
+                        key=lambda p: p.stat().st_mtime, reverse=True):
+        vfm = _read_frontmatter(vfile) or None
+        slot = "latest_supplementary_verdict" if vfm and str(vfm.get("supplementary_of") or "").strip() else "latest_verdict"
+        if slot not in filled:
+            filled.add(slot)
+            result[slot] = vfm
+        if len(filled) == 2:
+            break
 
     # closures(AIPOS-F73E: 门落 close_*, 读 closure_* 即永远找不到 → loop 不得 exit 0; AIPOS-F122 件④: 前缀读声明 N6.record.location,
     # 与写侧 record_writer.CLOSURE_ID_PREFIX 相等由夹具钉住)
@@ -2476,6 +2490,26 @@ def _derive_next_step(
                 "notes": "N4: 审计报告已交但未完成(完成判据 = 必填 frontmatter 全部已填且非占位, AIPOS-F89 件③c)",
                 "action": {"type": "artifact_invalid", "card": task_id, "path": str(verdict_artifact)},
             }
+        # AIPOS-F162 件①: 运行证据硬门(裁决入口同一判据 artifact_ingest.runtime_evidence_check)先行——不合格 = 审计产物不合格,
+        # 让审计体补做(action.type 读声明 runtime_evidence.loop.derivation_action; 非硬停、不升 Owner, loop 拉起审计体并附拒因)
+        from tools.aipos_cli.artifact_ingest import runtime_evidence_check, runtime_evidence_declaration
+
+        evidence = runtime_evidence_check(workspace_root, task_id, fm, verdict_artifact, verdict_fm)
+        if evidence is not None:
+            rework_action = str(runtime_evidence_declaration()["loop"]["derivation_action"])
+            return {
+                "task_id": task_id,
+                "derivable": False,
+                "current_node": "audit_verdict",
+                "current_state": "claimed",
+                "triggered_by": "auditor",
+                "command": "",
+                "verb": "lybra_audit_verdict_dry_run",
+                "missing_records": list(evidence["reasons"]),
+                "suggested_action": f"审计报告被拒收({evidence['category']}), 审计体补做: " + "; ".join(evidence["reasons"]),
+                "notes": "N4: 审计报告 PASS 类裁决缺卡面要求的独立运行证据(AIPOS-F162 件①), 裁决入口拒收; loop 让审计体补做",
+                "action": {"type": rework_action, "card": task_id, "path": str(verdict_artifact), "category": evidence["category"]},
+            }
         agent_inst = actor
         
         # AIPOS-F73前置①: 从被审卡分支提取 artifact_subject (code 卡必填)
@@ -3088,9 +3122,47 @@ def _derive_next_step(
 
     # --- completed → N6 落账(AIPOS-F94 件①) 或 done ---
     if queue_dir == "completed":
+        # AIPOS-F162 件②: 已结案卡的补充审计——在途 = 等补审卡(loop 走既有审计等待/拉起/裁决入口, 同 N3 await_artifact);
+        # 已有补审 = 链路随推导结果给出(next 视图); 原 closure/原裁决不动
+        from tools.aipos_cli.audit_derivation import render_supplementary_chain, supplementary_audit_chain, supplementary_in_flight
+
+        sup_chain = [] if is_audit_card else supplementary_audit_chain(workspace_root, task_id)
+        sup_line = render_supplementary_chain(task_id, sup_chain) if sup_chain else ""
+        sup_card = supplementary_in_flight(workspace_root, task_id) if sup_chain else None
+        if sup_card:
+            return {
+                "task_id": task_id,
+                "derivable": False,
+                "current_node": "supplementary_audit",
+                "current_state": "completed",
+                "triggered_by": "auditor",
+                "command": "",
+                "verb": "",
+                "missing_records": [f"补充审计 {sup_card} 裁决"],
+                "suggested_action": f"已结案卡补充审计在途: {sup_line}; lybra loop --task-id {task_id} 推进(认领补审卡/拉起审计体/裁决入门)",
+                "notes": "AIPOS-F162 件②: 已结案卡有在途补充审计, 原 closure/原裁决不动",
+                "action": {"type": "await_artifact", "card": sup_card},
+                "supplementary_audit": sup_chain,
+            }
         landing_step = _derive_n6_landing(workspace_root, task_id, "completed", conn_arg)
         if landing_step is not None:
+            if sup_chain:
+                landing_step["supplementary_audit"] = sup_chain
             return landing_step
+        if sup_chain:
+            return {
+                "task_id": task_id,
+                "derivable": True,
+                "current_node": "close",
+                "current_state": "completed",
+                "triggered_by": "none",
+                "command": "# 任务已完成,无下一步",
+                "verb": "",
+                "missing_records": [],
+                "suggested_action": f"无(任务已结束); {sup_line}",
+                "notes": "N6: 任务已结案(AIPOS-F162 件②: 附补充审计链路)",
+                "supplementary_audit": sup_chain,
+            }
         return {
             "task_id": task_id,
             "derivable": True,
@@ -3326,6 +3398,10 @@ def format_output(result: dict[str, Any], *, json_mode: bool = False) -> str:
     notes = result.get("notes", "")
     if notes:
         lines.append(f"Notes: {notes}")
+    if result.get("supplementary_audit"):  # AIPOS-F162 件②: 补充审计链路(唯一渲染 audit_derivation.render_supplementary_chain)
+        from tools.aipos_cli.audit_derivation import render_supplementary_chain
+
+        lines.append(f"Supplementary: {render_supplementary_chain(str(task_id), result['supplementary_audit'])}")
 
     return "\n".join(lines)
 

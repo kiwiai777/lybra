@@ -80,8 +80,12 @@ def build_forensic_anchor_section(
     source_metadata: dict[str, Any] | None = None,
     *,
     audit_task_id: str | None = None,
+    audit_metadata: dict[str, Any] | None = None,
 ) -> str:
     """AIPOS-A1 大项C: 构建取证锚点段(注入审计卡 governance_refs)。
+
+    AIPOS-F162 件①: 卡面声明 audit_runtime_evidence(审计卡 audit_metadata 优先, 缺省被审卡)时追加「独立运行证据要求」段
+    (唯一渲染 artifact_ingest.render_runtime_evidence_requirement, 与裁决入口判据同一声明)。
 
     路径值全部来自声明/注册表, 禁写死。内容基准=AIPOS-C1R2 实证有效的那段。
     AIPOS-F78C: 产品仓按被审卡 source_metadata(lane.repo)解析。
@@ -111,7 +115,20 @@ def build_forensic_anchor_section(
         f"- **报告落点绝对路径**: `{report_location}` (治理根 verdict_root/<审计卡ID>/, 声明渲染; 禁落被审卡目录、禁落产品仓)\n"
         f"{baseline_line}"
         "- **不存在结论必须附**: `pwd` + 命令 + 输出(三条缺一即无效证据)\n"
+    ) + _runtime_evidence_section(audit_metadata, source_metadata)
+
+
+def _runtime_evidence_section(audit_metadata: dict[str, Any] | None, source_metadata: dict[str, Any] | None) -> str:
+    """AIPOS-F162 件①: 审计卡正文的独立运行证据要求段(未声明 = 空串; 声明形不对 = 点名, 裁决入口届时 fail-closed 拒)。"""
+    from tools.aipos_cli.artifact_ingest import (
+        RuntimeEvidenceDeclarationError, render_runtime_evidence_requirement, runtime_evidence_requirement,
     )
+
+    try:
+        requirement = runtime_evidence_requirement(audit_metadata, source_metadata)
+    except RuntimeEvidenceDeclarationError as exc:
+        return f"\n## 独立运行证据要求(AIPOS-F162)\n\n- 卡面声明不合: {exc}; 裁决入口将拒收, 先请顾问修正卡面声明\n"
+    return render_runtime_evidence_requirement(requirement) if requirement else ""
 
 
 def build_gate_territory_discipline_section(
@@ -986,8 +1003,13 @@ def derive_repair_card_on_fail(
     verdict_id: str,
     fail_reason: str,
     actor: str,
+    supplementary_of: str | None = None,
 ) -> dict[str, Any]:
     """AIPOS-C3B 大项C⑤: 审计 FAIL 自动派审——审计员判 FAIL 时自动派一张'修复卡'回队列。
+
+    AIPOS-F162 件②: supplementary_of = 已结案原卡(补充审计 FAIL): 同一 writer 派修复卡, 不受「原卡已收账」级联终局判拦截;
+    修复卡承继原卡 lane/harness/output_target/audit/audit_by/audit_runtime_evidence, 卡面 supplementary_of=原卡, 不带
+    derived_from_audit_task_id(不触发 fix_card_closure 原卡复审派生), 走常规执行/审计/合入(声明 transitions supplementary_audit.repair_card)。
 
     避免死等: executor 不用等 owner 手动建卡, 系统自动建修复卡。
 
@@ -1011,7 +1033,7 @@ def derive_repair_card_on_fail(
     from tools.aipos_cli.records import load_records
     records = load_records(governance_root)
     task_closures = records.get("task_closures", {}).get(reviewed_task_id, [])
-    if task_closures:
+    if task_closures and not supplementary_of:
         # 原卡已有 closure 记录 = 已收账，不再派修复卡
         closure_ids = [c.get("closure_id") for c in task_closures]
         return {
@@ -1066,6 +1088,11 @@ def derive_repair_card_on_fail(
         if candidate.exists():
             source_card = candidate
             break
+    if source_card is None and supplementary_of:
+        # AIPOS-F162 件②: 卡文件名不限(chris 形带 slug)——按 frontmatter task_id 唯一查找(task_loader.find_task_card)
+        from tools.aipos_cli.task_loader import find_task_card
+
+        source_card, _state = find_task_card(governance_root, reviewed_task_id)
 
     source_metadata = {}
     source_body = ""
@@ -1111,6 +1138,13 @@ def derive_repair_card_on_fail(
         "artifact_scope": source_metadata.get("artifact_scope", ""),
     }
 
+    if supplementary_of:
+        repair_metadata.pop("derived_from_audit_task_id", None)
+        repair_metadata["supplementary_of"] = str(supplementary_of)
+        for key in supplementary_audit_declaration().get("repair_inherit_fields") or []:  # 承继字段读声明
+            if source_metadata.get(key) not in (None, "", [], {}):
+                repair_metadata[key] = source_metadata[key]
+
     # AIPOS-F17 大项A: 从 schema 必填集补全——值承继原卡, 原卡无则用安全默认值。
     # 禁手写第二份字段清单; schema 改即自动跟随。
     _required_fields = get_required_card_fields()
@@ -1130,9 +1164,12 @@ def derive_repair_card_on_fail(
             f" schema 单源 = {_required_fields}"
         )
 
+    origin_line = (f"已结案卡 {supplementary_of} 的补充审计 {audit_task_id} 裁决 FAIL(裁决 {verdict_id}), 自动派生此修复卡; "
+                   f"原卡 closure 与原裁决不动, 本卡走常规执行/审计/合入。" if supplementary_of
+                   else f"审计任务 {audit_task_id} 裁决 FAIL, 自动派生此修复卡。")
     repair_body = f"""## 修复任务 (第 {fix_round} 轮)
 
-审计任务 {audit_task_id} 裁决 FAIL, 自动派生此修复卡。
+{origin_line}
 
 ### FAIL 原因
 
@@ -1161,6 +1198,187 @@ def derive_repair_card_on_fail(
         "repair_task_path": str(target_path.relative_to(governance_root)),
         "message": f"已自动派生修复卡: {repair_task_id} (第 {fix_round} 轮)",
     }
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F162 件②: 已结案卡的补充审计——声明 transitions.schema supplementary_audit(唯一); 本节是补审卡号 / 在途判定 /
+# 链路视图的唯一实现(audit dispatch --supplementary、推导核、loop 结案出口、落账范围、next/brief/loop status/needs-owner 同读)
+# ---------------------------------------------------------------------------
+
+def supplementary_audit_declaration() -> dict[str, Any]:
+    """transitions.schema supplementary_audit 唯一读取口。缺 / 关键键缺 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    decl = load_schema("transitions", code_repo_schema_root()).get("supplementary_audit")
+    needed = ("card_numbering", "actor_role_class", "owner_policy_ref", "fail_verdicts", "pass_verdicts", "status_text")
+    if not isinstance(decl, dict) or any(not decl.get(k) for k in needed):
+        raise SchemaLoadError(f"transitions.schema.json supplementary_audit({'/'.join(needed)})未声明")
+    pattern = str((decl["card_numbering"] or {}).get("pattern") or "")
+    if "<原卡ID>" not in pattern or "[序号]" not in pattern:
+        raise SchemaLoadError("transitions.schema.json supplementary_audit.card_numbering.pattern 须含 <原卡ID> 与 [序号]")
+    return decl
+
+
+def supplementary_audit_id(source_task_id: str, number: int) -> str:
+    pattern = str(supplementary_audit_declaration()["card_numbering"]["pattern"])
+    return pattern.replace("<原卡ID>", str(source_task_id)).replace("[序号]", str(int(number)))
+
+
+def supplementary_audit_status_text(kind: str, **values: str) -> str:
+    """补审结论文案(声明 supplementary_audit.status_text 唯一来源)。"""
+    template = str((supplementary_audit_declaration()["status_text"] or {}).get(kind) or "")
+    if not template:
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError(f"transitions.schema.json supplementary_audit.status_text.{kind} 未声明")
+    for key, value in values.items():
+        template = template.replace("{" + key + "}", str(value))
+    return template
+
+
+def supplementary_audit_cards(repo_root: Path, source_task_id: str) -> list[dict[str, Any]]:
+    """原卡已有的补审卡(按声明卡号形从 1 起连续查队列, 首个缺号即止; 卡面 supplementary_of 须 = 原卡, 否则不认)。
+    返回 [{audit_task_id, queue_state, path, frontmatter}]。卡面读不出 = FrontmatterReadError 向上(fail-closed)。"""
+    from tools.aipos_cli.next_resolver import _read_frontmatter
+    from tools.aipos_cli.task_loader import find_task_card
+
+    out: list[dict[str, Any]] = []
+    number = 1
+    while True:
+        candidate = supplementary_audit_id(source_task_id, number)
+        path, state = find_task_card(Path(repo_root), candidate)
+        if path is None:
+            break
+        fm = _read_frontmatter(path)
+        if str(fm.get("supplementary_of") or "").strip() == str(source_task_id):
+            out.append({"audit_task_id": candidate, "queue_state": state, "path": path, "frontmatter": fm})
+        number += 1
+    return out
+
+
+def next_supplementary_audit_id(repo_root: Path, source_task_id: str) -> str:
+    """下一张补审卡号 = 已占用卡号(不论卡面)之后的首个序号。"""
+    from tools.aipos_cli.task_loader import find_task_card_matches
+
+    number = 1
+    while find_task_card_matches(Path(repo_root), supplementary_audit_id(source_task_id, number)):
+        number += 1
+    return supplementary_audit_id(source_task_id, number)
+
+
+def supplementary_in_flight(repo_root: Path, source_task_id: str) -> str | None:
+    """同一原卡在途补审卡号(pending/claimed); 无 = None。"""
+    for card in supplementary_audit_cards(repo_root, source_task_id):
+        if card["queue_state"] in ("pending", "claimed"):
+            return str(card["audit_task_id"])
+    return None
+
+
+def supplementary_repair_cards(repo_root: Path, source_task_id: str) -> list[dict[str, Any]]:
+    """补审 FAIL 派生的修复卡(derive_repair_card_on_fail 卡号 <原卡ID>-fix<n>, 卡面 supplementary_of = 原卡)。"""
+    from tools.aipos_cli.next_resolver import _read_frontmatter
+    from tools.aipos_cli.task_loader import find_task_card
+
+    out: list[dict[str, Any]] = []
+    number = 1
+    while True:
+        candidate = f"{source_task_id}-fix{number}"
+        path, state = find_task_card(Path(repo_root), candidate)
+        if path is None:
+            break
+        fm = _read_frontmatter(path)
+        if str(fm.get("supplementary_of") or "").strip() == str(source_task_id):
+            out.append({"task_id": candidate, "queue_state": state, "verdict_id": str(fm.get("derived_from_verdict_id") or "")})
+        number += 1
+    return out
+
+
+def supplementary_audit_chain(repo_root: Path, source_task_id: str) -> list[dict[str, Any]]:
+    """链路视图(唯一实现): 每张补审卡 {audit_task_id, queue_state, reason, verdict, verdict_id, repair_task_id, repair_state, status}。
+    裁决读原卡裁决记录中 audit_task_id = 补审卡者(补审裁决记录带 supplementary_of)。无补审 = []。"""
+    from tools.aipos_cli.next_resolver import _read_frontmatter
+    from tools.aipos_cli.record_writer import record_file_prefix
+
+    cards = supplementary_audit_cards(repo_root, source_task_id)
+    if not cards:
+        return []
+    verdicts: dict[str, dict[str, Any]] = {}
+    vdir = record_dir(Path(repo_root), "audit_verdicts", source_task_id)
+    if vdir.is_dir():
+        prefix = record_file_prefix("audit_verdicts")
+        for path in sorted(vdir.glob(f"{prefix}*.md"), key=lambda p: p.stat().st_mtime):
+            fm = _read_frontmatter(path)
+            if str(fm.get("supplementary_of") or "").strip() == str(source_task_id):
+                verdicts[str(fm.get("audit_task_id") or "")] = fm
+    repairs = {r["verdict_id"]: r for r in supplementary_repair_cards(repo_root, source_task_id)}
+    decl = supplementary_audit_declaration()
+    chain: list[dict[str, Any]] = []
+    for card in cards:
+        audit_id = str(card["audit_task_id"])
+        verdict_fm = verdicts.get(audit_id) or {}
+        verdict = str(verdict_fm.get("verdict") or "").upper()
+        verdict_id = str(verdict_fm.get("verdict_id") or "")
+        repair = repairs.get(verdict_id) if verdict_id else None
+        if not verdict:
+            status = supplementary_audit_status_text("in_flight", audit_task_id=audit_id)
+        elif verdict in decl["pass_verdicts"]:
+            status = supplementary_audit_status_text("pass", audit_task_id=audit_id)
+        elif verdict in decl["fail_verdicts"] and repair:
+            status = supplementary_audit_status_text("fail", repair_task_id=repair["task_id"])
+        else:
+            status = supplementary_audit_status_text("other", verdict=verdict, audit_task_id=audit_id)
+        chain.append({"audit_task_id": audit_id, "queue_state": card["queue_state"],
+                      "reason": str(card["frontmatter"].get("supplementary_reason") or ""), "verdict": verdict,
+                      "verdict_id": verdict_id, "repair_task_id": repair["task_id"] if repair else "",
+                      "repair_state": repair["queue_state"] if repair else "", "status": status})
+    return chain
+
+
+def supplementary_audit_overview(repo_root: Path, unreadable: list[str] | None = None) -> list[dict[str, Any]]:
+    """全项目补充审计链路(brief / needs-owner 同读): 队列中补审卡(task_mode=audit 且卡面 supplementary_of)指向的原卡逐张出链路。
+    返回 [{task_id, chain, line}](按原卡号排序)。视图口径(AIPOS-F100): 卡面/记录读不出的不省略也不猜——原文追加进 unreadable
+    (调用方逐条列出), 该卡/该链路不计; unreadable=None = 读不出即 FrontmatterReadError 向上。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+    from tools.aipos_cli.next_resolver import _read_frontmatter
+    from tools.aipos_cli.task_loader import iter_queue_task_paths, task_card_lookup_scope
+
+    root = Path(repo_root)
+    out: list[dict[str, Any]] = []
+    with task_card_lookup_scope(root):
+        sources = set()
+        for path in iter_queue_task_paths(root):
+            try:
+                fm = _read_frontmatter(path)
+            except FrontmatterReadError as exc:
+                if unreadable is None:
+                    raise
+                if str(exc) not in unreadable:
+                    unreadable.append(str(exc))
+                continue
+            if str(fm.get("task_mode") or "").strip().lower() == "audit" and str(fm.get("supplementary_of") or "").strip():
+                sources.add(str(fm["supplementary_of"]).strip())
+        for source in sorted(sources):
+            try:
+                chain = supplementary_audit_chain(root, source)
+            except FrontmatterReadError as exc:
+                if unreadable is None:
+                    raise
+                unreadable.append(f"{source} 补充审计链路不可读: {exc}")
+                continue
+            if chain:
+                out.append({"task_id": source, "chain": chain, "line": render_supplementary_chain(source, chain)})
+    return out
+
+
+def render_supplementary_chain(source_task_id: str, chain: list[dict[str, Any]]) -> str:
+    """链路一行(四视图同一渲染): <原卡> 补审: <补审卡>[<队列>] <结论>(修复卡 <ID>[<队列>]) → …"""
+    parts = []
+    for row in chain:
+        part = f"{row['audit_task_id']}[{row['queue_state']}] {row['status']}"
+        if row.get("repair_task_id"):
+            part += f"(修复卡 {row['repair_task_id']}[{row['repair_state']}])"
+        parts.append(part)
+    return f"{source_task_id} 补审: " + " → ".join(parts)
 
 
 # AIPOS-316: Guard against direct invocation

@@ -312,6 +312,35 @@ def _has_closure(governance_root: Path, task_id: str) -> bool:
     return bool(_read_task_records(governance_root, task_id).get("latest_closure"))
 
 
+def _supplementary_in_flight(governance_root: Path, task_id: str) -> bool:
+    """AIPOS-F162 件②: 已结案卡是否有在途补充审计(唯一判定 audit_derivation.supplementary_in_flight)。"""
+    from tools.aipos_cli.audit_derivation import supplementary_in_flight
+
+    return supplementary_in_flight(governance_root, task_id) is not None
+
+
+def _runtime_evidence_loop_declaration() -> dict[str, Any]:
+    """AIPOS-F162 件①: transitions artifact_ingest.verdict.runtime_evidence.loop(派生动作名 / 拉起上限 / 结束原因)。缺 = SchemaLoadError。"""
+    from tools.aipos_cli.artifact_ingest import runtime_evidence_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    loop = runtime_evidence_declaration()["loop"]
+    if not loop.get("derivation_action") or not loop.get("exhausted_end_reason") or not isinstance(loop.get("relaunch_cap"), int):
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.verdict.runtime_evidence.loop(derivation_action/relaunch_cap/exhausted_end_reason)未声明")
+    return loop
+
+
+def _report_fingerprint(path: Any) -> str:
+    """推导核点名的审计报告(evidence_rework action.path = 裁决入口所读同一份)当前内容 sha256; 无 / 不在 = 空串。"""
+    import hashlib
+
+    report = Path(str(path)) if path else None
+    try:
+        return hashlib.sha256(report.read_bytes()).hexdigest() if report is not None and report.is_file() else ""
+    except OSError as exc:
+        return f"unreadable:{type(exc).__name__}"
+
+
 def _landing(governance_root: Path, task_id: str) -> dict[str, Any] | None:
     """落账判据(governance_commit.task_landing 唯一实现); 读失败 = None(交推导核按拒因出口, 不在此吞成已落账)。"""
     import subprocess
@@ -359,6 +388,12 @@ class LaunchPlan:
     events: str = ""
     kickoff: str = ""
     remote: dict[str, Any] = field(default_factory=dict)  # AIPOS-F110: transport=remote 时 {host, dir, identity_source}
+
+    def append_kickoff_note(self, note: str) -> None:
+        """AIPOS-F162 件①: 开工提示后附一段(拒因补做); argv 中整参数 kickoff 同步替换(跨机 kickoff 经 stdin 读 self.kickoff)。"""
+        old = self.kickoff
+        self.kickoff = f"{old}\n\n{note}" if old else note
+        self.argv = [self.kickoff if a == old else a for a in self.argv]
 
     def to_dict(self) -> dict[str, Any]:
         return {"card": self.card, "harness": self.harness, "instance": self.instance, "launched": not self.refusal,
@@ -1045,6 +1080,9 @@ def _drive(
     steps = result.steps
     launch_decl = launch_declaration(contract)
     launched: set[str] = set()  # AIPOS-F95 件③④: 一次 loop 运行对一张卡至多拉起一次
+    # AIPOS-F162 件①: 运行证据拒收补做——同一运行内每张审计卡被拒收过的报告指纹(拉起次数上限读声明 runtime_evidence.loop.relaunch_cap)
+    evidence_rejected: dict[str, set[str]] = {}
+    evidence_loop = _runtime_evidence_loop_declaration()
     from tools.aipos_cli.governance_commit import n6_landing_declaration
 
     landing_action = str(n6_landing_declaration()["action_type"])  # AIPOS-F94: N6 落账步(声明 transitions nodes.N6.landing)
@@ -1056,7 +1094,8 @@ def _drive(
         if change:
             return _deploy_changed_end(index, change, result, contract=contract, say=say, recorder=recorder)
         # 出口 0: closure 记录存在且治理已落账(AIPOS-F94 件①: 本卡落账范围已提交且已推送); 未落账 → 推导核派生 N6 落账步
-        if _has_closure(governance_root, task_id):
+        # AIPOS-F162 件②: 已结案卡有在途补充审计 = 未完(推导核派 await_artifact 等补审卡), 结案出口不成立
+        if _has_closure(governance_root, task_id) and not _supplementary_in_flight(governance_root, task_id):
             landing = _landing(governance_root, task_id)
             if landing is not None and landing.get("landed"):
                 steps.append(LoopStep(index, "done", "close", "completed", task_id, message="closure 记录存在, 治理已落账"))
@@ -1073,6 +1112,8 @@ def _drive(
         launch_card: str | None = None  # AIPOS-F95: 执行体(N1)/审计体(N3)等待才可拉起; external finalize 等待不拉起
         repo_turn_wait = False  # AIPOS-F135 件①: external 同仓串行等待(就绪 = 本卡不再 await_repo_turn)
         rework_note = ""  # AIPOS-F155 件②: 等返工交回时附在手工等待提示后的返工节要点(推导核 suggested_action)
+        evidence_relaunch = False  # AIPOS-F162 件①: 本次等待 = 审计报告缺独立运行证据被拒收, 让审计体补做(可再拉起)
+        evidence_report = ""  # 被拒收的那份报告(推导核 action.path), 等待起点指纹的依据
 
         if not derivation.get("derivable"):
             action = derivation.get("action") or {}
@@ -1098,6 +1139,24 @@ def _drive(
                     target_card = ready_card = audit_card
                     watch_root, wait_patterns = auditor_artifact_watch(governance_root, audit_card)
                     launch_card = audit_card
+                    if audit_action.get("type") == evidence_loop["derivation_action"]:
+                        # AIPOS-F162 件①: 报告被运行证据硬门拒收 = 审计产物不合格 → 让审计体补做(拒因附开工/手工提示); 同一运行内
+                        # 对同一审计卡因此拉起超过声明上限 = 结束(runtime_evidence_exhausted, loop status 判 owner_needed = 连败上限)
+                        seen = evidence_rejected.setdefault(audit_card, set())
+                        seen.add(_report_fingerprint(audit_action.get("path")))
+                        rework_note = str(audit_derivation.get("suggested_action") or "")
+                        if len(seen) > int(evidence_loop["relaunch_cap"]):
+                            missing = list(audit_derivation.get("missing_records") or [])
+                            msg = (f"审计卡 {audit_card} 报告缺独立运行证据被拒收, 本次运行已让审计体补做 {evidence_loop['relaunch_cap']} 次仍不合格"
+                                   f"(声明 relaunch_cap): missing={missing}")
+                            steps.append(LoopStep(index, "execute", audit_derivation.get("current_node"), audit_derivation.get("current_state"),
+                                                  audit_card, ok=False, message=msg))
+                            say(f"[{index}] exit 4 — {msg}")
+                            result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), msg
+                            result.missing_records, result.suggested_action = missing, rework_note
+                            result.reason = str(evidence_loop["exhausted_end_reason"])
+                            return result
+                        evidence_relaunch, evidence_report = True, str(audit_action.get("path") or "")
             node = derivation.get("current_node")
             state = derivation.get("current_state")
             if action.get("type") in HARD_STOP_ACTIONS:
@@ -1134,11 +1193,16 @@ def _drive(
                             artifacts=wait_patterns)
             say(f"[{index}] wait: {target_card} 产物 {wait_patterns} (≤{max_wait}s, 经 agent watch)")
 
-            def _ready(_matched: list[str], _card: str = ready_card, _turn: bool = repo_turn_wait) -> bool:
+            start_report = _report_fingerprint(evidence_report) if evidence_relaunch else ""
+
+            def _ready(_matched: list[str], _card: str = ready_card, _turn: bool = repo_turn_wait, _start: str = start_report) -> bool:
                 # 就绪 = 推导核可推导; 或硬停(产物不合规 F78 件③ / 记录缺 F73E 件①)——都该让 loop 醒来判定, 而非空等到超时
                 d = derive(_card, governance_root)
                 if _turn and (d.get("action") or {}).get("type") != "await_repo_turn":
                     return True  # AIPOS-F135 件①: 同仓轮到本卡(先合入卡 finalization 已落)
+                if (d.get("action") or {}).get("type") == evidence_loop["derivation_action"]:
+                    # AIPOS-F162 件①: 审计报告(改写后)仍缺独立运行证据 = 醒来重判(补做计数), 未改写不算(防同一份被拒报告空转)
+                    return _report_fingerprint((d.get("action") or {}).get("path")) != _start
                 # AIPOS-F114: 等待中本轮作废(所审交回过期 / 被下一轮取代)也醒来——重推导被审卡派生重交回, 不空等到超时
                 return (bool(d.get("derivable")) or (d.get("action") or {}).get("type") in HARD_STOP_ACTIONS
                         or isinstance(d.get("return_stale"), dict) or isinstance(d.get("superseded_by"), dict))
@@ -1146,10 +1210,12 @@ def _drive(
             plan: LaunchPlan | None = None
             if launch_card is not None:
                 plan = plan_launch(governance_root, launch_card, policy=policy, no_launch=no_launch, decl=launch_decl,
-                                   already_launched=launched)
+                                   already_launched=launched - {launch_card} if evidence_relaunch else launched)
                 step.launch = plan.to_dict()
                 if plan.refusal and rework_note:
                     plan.manual_hint = f"{plan.manual_hint}。返工: {rework_note}"  # AIPOS-F155 件②: 手工提示附返工节要点
+                if evidence_relaunch and not plan.refusal and rework_note:
+                    plan.append_kickoff_note(f"返工(审计报告被拒收, 须补做): {rework_note}")  # AIPOS-F162 件①: 拉起的审计体看得到拒因
                 if plan.refusal:
                     say(f"[{index}] manual: {plan.manual_hint}(未拉起: {plan.refusal})")
             # AIPOS-F131 件① / F136 件①: 等待步进运行记录(拉起判定之后: 记开工方式, 手工模式附开工提示, 供 loop status 给顾问下一动作)

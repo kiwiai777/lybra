@@ -1089,6 +1089,8 @@ def build_mcp_audit_dispatch_record_markdown(
     dry_run_snapshot_hash: str | None = None,
     confirmation_ref: str | None = None,
     supersedes: str | None = None,
+    supplementary_of: str | None = None,  # AIPOS-F162 件②: 补充审计派审(已结案原卡)
+    supplementary_reason: str | None = None,
 ) -> str:
     metadata = {
         "record_type": RecordType.AUDIT_DISPATCH_RECORD,
@@ -1123,6 +1125,9 @@ def build_mcp_audit_dispatch_record_markdown(
     # AIPOS-F72: supersedes 引用(放行 re-dispatch 时记录旧链)
     if supersedes:
         metadata["supersedes"] = supersedes
+    if supplementary_of:
+        metadata["supplementary_of"] = supplementary_of
+        metadata["supplementary_reason"] = supplementary_reason or ""
     
     body_lines = [
         f"# MCP Audit Dispatch Record: {dispatch_id}",
@@ -1182,6 +1187,7 @@ def build_mcp_audit_verdict_record_markdown(
     artifact_subject: dict[str, Any] | None = None,  # AIPOS-F70: 产物指纹
     submitted_by: str | None = None,  # AIPOS-F73E 件②: 提交身份(驱动方 token 实例), 只记不判
     report_snapshot: dict[str, Any] | None = None,  # AIPOS-F90 件②: 审计报告快照指针(transitions artifact_ingest.verdict.report_snapshot)
+    supplementary_of: str | None = None,  # AIPOS-F162 件②: 补审裁决(关联已结案原卡; 推导核读原卡最新裁决不计)
 ) -> str:
     metadata = {
         "record_type": RecordType.AUDIT_VERDICT_RECORD,
@@ -1234,6 +1240,8 @@ def build_mcp_audit_verdict_record_markdown(
     if isinstance(artifact_subject, dict) and artifact_subject:
         metadata["artifact_subject"] = dict(artifact_subject)
     # AIPOS-F90 件②: 裁决入门时门快照的审计报告(只在有报告时写, 存量/无报告裁决无此三字段)
+    if supplementary_of:
+        metadata["supplementary_of"] = supplementary_of
     if isinstance(report_snapshot, dict) and report_snapshot:
         metadata["report_snapshot_ref"] = str(report_snapshot.get("path") or "")
         metadata["report_snapshot_sha256"] = str(report_snapshot.get("sha256") or "")

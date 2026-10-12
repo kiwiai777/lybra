@@ -2039,13 +2039,20 @@ def build_parser() -> argparse.ArgumentParser:
     dispatch_parser.add_argument("--source-task-id", "--task-id", dest="source_task_id", help="Source task ID")
     dispatch_parser.add_argument("--source-task-path", "--task-path", dest="source_task_path", help="Source task path")
     dispatch_parser.add_argument("--actor", required=True, help="Actor dispatching audit")
-    dispatch_parser.add_argument("--agent-instance", required=True, help="Agent instance (dispatcher)")
-    dispatch_parser.add_argument("--owner-policy-ref", required=True, help="Owner policy reference")
-    dispatch_parser.add_argument("--audit-task-id", required=True, help="Audit task ID")
+    # AIPOS-F162 件②: --supplementary 时以下四项有缺省(派审实例 = --actor; 授权引用 / 卡号读声明 transitions supplementary_audit;
+    # 审计实例 = 原卡 audit_by → 按项目推导), 常规派审仍必填(handler 校验, 缺 = 原文拒)
+    dispatch_parser.add_argument("--agent-instance", help="Agent instance (dispatcher); 常规派审必填")
+    dispatch_parser.add_argument("--owner-policy-ref", help="Owner policy reference; 常规派审必填")
+    dispatch_parser.add_argument("--audit-task-id", help="Audit task ID; 常规派审必填")
     dispatch_parser.add_argument("--audit-task-title", help="Audit task title")
     dispatch_parser.add_argument("--audit-by", help="Auditor role/instance")
-    dispatch_parser.add_argument("--audit-agent-instance", required=True, help="Auditor agent instance")
-    dispatch_parser.add_argument("--dispatch-reason", help="Dispatch reason")
+    dispatch_parser.add_argument("--audit-agent-instance", help="Auditor agent instance; 常规派审必填")
+    dispatch_parser.add_argument("--dispatch-reason", "--reason", dest="dispatch_reason", help="Dispatch reason(--supplementary 时 = 争议摘要, 必填)")
+    dispatch_parser.add_argument("--supplementary", action="store_true",
+                                 help="AIPOS-F162: 已结案卡补充审计(派生 <原卡ID>-S<n>R 补审卡; 原 closure/原裁决不动; 缺省预演, --confirm 写)")
+    dispatch_parser.add_argument("--runtime-evidence-command", action="append", default=None, dest="runtime_evidence_commands",
+                                 help="AIPOS-F162: 补审卡声明 audit_runtime_evidence(required=true)的验证命令, 可多次; 占位 {worktree}/{commit_sha}/{tree_hash}")
+    dispatch_parser.add_argument("--confirm", action="store_true", help="AIPOS-F162: --supplementary 的写入阶段(缺省预演)")
     dispatch_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     dispatch_parser.add_argument("--json", action="store_true", help="Output JSON")
 
@@ -6194,8 +6201,15 @@ def main(argv: list[str] | None = None) -> int:
                                            include_frozen=bool(getattr(args, "include_frozen", False)),
                                            viewer=_owner_viewer_for_args(Path(repo_root), args, lane))  # AIPOS-F156 件②
         view = owner_report["view"]
+        # AIPOS-F162 件②: 已结案卡补充审计链路(只读告知, 不升 Owner; 唯一实现 audit_derivation.supplementary_audit_overview, brief 同读)
+        from tools.aipos_cli.audit_derivation import supplementary_audit_overview
+
+        supplementary_unreadable: list[str] = []
+        supplementary = supplementary_audit_overview(Path(repo_root), supplementary_unreadable)
         if args.json:
             payload = _json_report(owner_report, records=records)
+            payload["supplementary_audits"] = supplementary
+            payload["supplementary_unreadable"] = supplementary_unreadable
             lanes = {name: [t.get("task_id") for t in rows]
                      for name, rows in group_rows_by_lane(owner_report["tasks"], repo_root).items()}
             payload.update({"lane_filter": lane, "lanes": lanes,
@@ -6208,6 +6222,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(render_needs_owner_text(owner_report, groups=None if lane else group_rows_by_lane(owner_report["tasks"], repo_root),
                                           lane=lane))
+            if supplementary:
+                print("补充审计链路(已结案卡, 只读; 补审由顾问发起、loop 推进, 不需 Owner):")
+                for row in supplementary:
+                    print(f"  - {row['line']}")
+            for line in supplementary_unreadable:  # AIPOS-F100 口径: 读不出不省略
+                print(f"补充审计链路读不出: {line}")
         return 0
 
     if args.command == "validate":
@@ -6234,6 +6254,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "audit":
         if getattr(args, "audit_command", None) == "dispatch":
             from tools.aipos_cli.board_adapter import audit_dispatch_task
+            supplementary = bool(getattr(args, "supplementary", False))
+            if not supplementary:
+                missing_flags = [flag for flag, value in (("--agent-instance", args.agent_instance), ("--owner-policy-ref", args.owner_policy_ref),
+                                                          ("--audit-task-id", args.audit_task_id),
+                                                          ("--audit-agent-instance", args.audit_agent_instance)) if not value]
+                if missing_flags or args.confirm or args.runtime_evidence_commands:
+                    extra = ("--confirm / --runtime-evidence-command 只用于 --supplementary; " if (args.confirm or args.runtime_evidence_commands) else "")
+                    print(f"Error: {extra}常规 audit dispatch 缺必填参数: {', '.join(missing_flags) or '无'}", file=sys.stderr)
+                    return 2
+            elif args.confirm and args.dry_run:
+                print("Error: --dry-run 与 --confirm 互斥", file=sys.stderr)
+                return 2
             try:
                 result = audit_dispatch_task(
                     source_task_id=args.source_task_id,
@@ -6246,8 +6278,11 @@ def main(argv: list[str] | None = None) -> int:
                     audit_by=args.audit_by,
                     audit_agent_instance=args.audit_agent_instance,
                     dispatch_reason=args.dispatch_reason,
-                    dry_run=args.dry_run,
+                    # AIPOS-F162 件②: 补充审计缺省预演, --confirm 才写(两阶段); 常规派审行为不变
+                    dry_run=(not args.confirm) if supplementary else args.dry_run,
                     repo_root=repo_root,
+                    supplementary=supplementary,
+                    runtime_evidence_commands=args.runtime_evidence_commands,
                 )
             except (FileNotFoundError, OSError, ValueError) as exc:
                 print(f"Error: {exc}", file=sys.stderr)

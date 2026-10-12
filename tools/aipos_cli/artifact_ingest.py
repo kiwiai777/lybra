@@ -596,8 +596,260 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         out["reasons"] = [f"被审分支 {branch} tip={tip[:12]} ≠ 报告自述 commit_sha={commit_sha[:12]}: 审的不是当前产物"
                           + _stale_round_outlet(workspace_root, task_id, card_fm, reviewed)]
         return out
+    # AIPOS-F162 件①: 运行证据硬门(卡声明 audit_runtime_evidence.required 时, PASS 类裁决须带审计自身工作树的独立运行证据)
+    evidence = runtime_evidence_check(workspace_root, task_id, card_fm, path, fm)
+    if evidence is not None:
+        out["category"], out["reasons"] = evidence["category"], evidence["reasons"]
+        return out
     out["ok"], out["category"], out["exit_code"] = True, "OK", INGEST_EXIT_RECORDED
     return out
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F162 件①: 运行证据硬门——声明 transitions.schema artifact_ingest.verdict.runtime_evidence(唯一);
+# 本节是唯一实现: 裁决入口(上方 _validate_task_artifact)与推导核审计卡裁决步(next_resolver)同读 runtime_evidence_check
+# ---------------------------------------------------------------------------
+
+class RuntimeEvidenceDeclarationError(ValueError):
+    """卡面 audit_runtime_evidence 形不对(fail-closed: 不当未声明放行)。"""
+
+
+def runtime_evidence_declaration() -> dict[str, Any]:
+    """transitions artifact_ingest.verdict.runtime_evidence 唯一读取口。缺 / 关键键缺 = SchemaLoadError。"""
+    from tools.aipos_cli.next_resolver import _artifact_ingest_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    decl = (_artifact_ingest_declaration().get("verdict") or {}).get("runtime_evidence")
+    needed = ("card_field", "applies_to_verdicts", "section_heading", "block_language", "entry_required_fields", "log_fields",
+              "placeholders", "rejection_category", "declaration_invalid_category", "loop")
+    if not isinstance(decl, dict) or any(not decl.get(k) for k in needed):
+        raise SchemaLoadError(f"transitions.schema.json artifact_ingest.verdict.runtime_evidence({'/'.join(needed)})未声明")
+    return decl
+
+
+def runtime_evidence_requirement(audit_fm: dict[str, Any] | None, reviewed_fm: dict[str, Any] | None) -> dict[str, Any] | None:
+    """卡面运行证据要求: 审计卡自身声明优先(补充审计写入), 缺省读被审卡。返回 {commands, source} 或 None(未声明 / required 非 true)。
+    形不对 = RuntimeEvidenceDeclarationError。draft 校验与裁决入口同用本函数解析。"""
+    key = str(runtime_evidence_declaration()["card_field"])
+    raw, source = None, ""
+    for fm, where in ((audit_fm, "audit_card"), (reviewed_fm, "reviewed_card")):
+        if isinstance(fm, dict) and fm.get(key) not in (None, ""):
+            raw, source = fm.get(key), where
+            break
+    if raw is None:
+        return None
+    return parse_runtime_evidence_declaration(raw, source=source)
+
+
+def parse_runtime_evidence_declaration(raw: Any, *, source: str = "card") -> dict[str, Any] | None:
+    key = str(runtime_evidence_declaration()["card_field"])
+    if not isinstance(raw, dict):
+        raise RuntimeEvidenceDeclarationError(f"{key} 须为对象 {{required: true|false, commands: [...]}}, 实为 {type(raw).__name__}")
+    unknown = sorted(set(raw) - {"required", "commands"})
+    if unknown:
+        raise RuntimeEvidenceDeclarationError(f"{key} 含未声明的键 {unknown}(只认 required / commands)")
+    required = raw.get("required")
+    if not isinstance(required, bool):
+        raise RuntimeEvidenceDeclarationError(f"{key}.required 须为布尔 true/false, 实为 {required!r}")
+    commands = raw.get("commands", [])
+    if commands is None:
+        commands = []
+    if not isinstance(commands, list) or any(not isinstance(c, str) or not c.strip() for c in commands):
+        raise RuntimeEvidenceDeclarationError(f"{key}.commands 须为非空命令串列表, 实为 {commands!r}")
+    if not required:
+        return None
+    return {"commands": [c.strip() for c in commands], "source": source}
+
+
+def render_runtime_evidence_requirement(requirement: dict[str, Any]) -> str:
+    """审计卡正文「独立运行证据要求」段(唯一渲染; 派生审计卡与手动/补充派审同读): 命令清单 + 证据节格式 + 示例。"""
+    decl = runtime_evidence_declaration()
+    keys = decl["log_fields"]
+    heading = str(decl["section_heading"])
+    lines = ["", "## 独立运行证据要求(AIPOS-F162: 裁决入口硬门)", "",
+             f"- 本卡声明 {decl['card_field']}.required=true: PASS / PASS_WITH_NOTES 报告必须含 `## {heading}` 节, 否则裁决入口拒收"
+             f"({decl['rejection_category']}), loop 让你补做",
+             "- 独立核验 = 在**你自己的审计分配工作树**重跑下列命令; 只核执行体原件 hash/退出码不算; 跑不了(环境/时长)给 FAIL 或 BLOCK 并写原因",
+             f"- 命令占位: {', '.join('{' + str(k) + '}' for k in decl['placeholders'])}(审计分配工作树 / 被审 tip / tree), 记录里写渲染后的实际命令, 逐字一致"]
+    if requirement.get("commands"):
+        lines.append("- 必须逐条运行并记录:")
+        lines.extend(f"  - `{c}`" for c in requirement["commands"])
+    else:
+        lines.append("- 卡面未列具体命令: 记录你实际运行的验证命令(至少一条)")
+    lines += ["", f"证据节格式(节内第一个 ```{decl['block_language']} 块; 日志二选一: {keys['excerpt']} 或 {keys['path']}+{keys['sha256']}):", "",
+              f"```{decl['block_language']}",
+              '[{"command": "<实际命令>", "worktree": "<审计分配工作树绝对路径>", "exit_code": 0, '
+              f'"{keys["path"]}": "<日志绝对路径>", "{keys["sha256"]}": "<sha256>"' + "}]",
+              "```", ""]
+    return "\n".join(lines)
+
+
+def _collapse_ws(text: str) -> str:
+    return " ".join(str(text).split())
+
+
+def parse_runtime_evidence_section(report_text: str) -> tuple[list[Any] | None, str]:
+    """报告「独立运行证据」节内首个声明语言代码块 → (运行记录列表, 问题)。节缺 / 块缺 / JSON 坏 / 非列表 = (None, 问题原文)。"""
+    import json as _json
+
+    decl = runtime_evidence_declaration()
+    heading = str(decl["section_heading"])
+    fence = "```" + str(decl["block_language"])
+    lines = report_text.splitlines()
+    start = None
+    level = 0
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("#") and stripped.lstrip("#").strip() == heading:
+            start, level = i + 1, len(stripped) - len(stripped.lstrip("#"))
+            break
+    if start is None:
+        return None, f"报告缺「{heading}」节(标题行 `{'#' * 2} {heading}`)"
+    body: list[str] = []
+    for line in lines[start:]:
+        stripped = line.strip()
+        if stripped.startswith("#") and len(stripped) - len(stripped.lstrip("#")) <= level and stripped.lstrip("#").startswith(" "):
+            break
+        body.append(line)
+    block: list[str] | None = None
+    for line in body:
+        stripped = line.strip()
+        if block is None:
+            if stripped == fence:
+                block = []
+            continue
+        if stripped == "```":
+            break
+        block.append(line)
+    else:
+        if block is not None:
+            return None, f"「{heading}」节的 {fence} 代码块未闭合"
+    if block is None:
+        return None, f"「{heading}」节内无 {fence} 代码块(运行记录须机器可解析)"
+    try:
+        entries = _json.loads("\n".join(block))
+    except ValueError as exc:
+        return None, f"「{heading}」节 {fence} 代码块不是合法 JSON: {exc}"
+    if not isinstance(entries, list):
+        return None, f"「{heading}」节 {fence} 代码块须为运行记录数组, 实为 {type(entries).__name__}"
+    return entries, ""
+
+
+def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: dict[str, Any], report_path: Path | str,
+                           report_fm: dict[str, Any]) -> dict[str, Any] | None:
+    """运行证据判据(唯一实现)。None = 不适用或通过; 否则 {category, reasons}(拒因原文逐条列缺什么 + 出口)。
+
+    不适用: 报告裁决不在 applies_to_verdicts(FAIL 等不受限) / 审计卡与被审卡都未声明 required=true。
+    审计分配工作树 = next_resolver.card_worktree_location(<审计卡>)(认领建树同一推导); 被审执行卡工作树同一函数(被审卡号)。"""
+    import hashlib
+
+    from tools.aipos_cli.audit_derivation import audit_card_reviewed_id
+    from tools.aipos_cli.next_resolver import _find_task_in_queue, _read_frontmatter, card_worktree_location
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved
+    from tools.schema_loader import SchemaLoadError
+
+    decl = runtime_evidence_declaration()
+    verdict = str((report_fm or {}).get("verdict") or "").strip().upper()
+    if verdict not in {str(v).upper() for v in decl["applies_to_verdicts"]}:
+        return None
+    workspace_root = Path(workspace_root)
+    reviewed = str((report_fm or {}).get("reviewed_task_id") or "").strip() or audit_card_reviewed_id(audit_task_id, audit_fm)
+    reviewed_path, _q = _find_task_in_queue(workspace_root, reviewed) if reviewed else (None, None)
+    reviewed_fm = _read_frontmatter(reviewed_path) if reviewed_path else {}
+    try:
+        requirement = runtime_evidence_requirement(audit_fm, reviewed_fm)
+    except RuntimeEvidenceDeclarationError as exc:
+        return {"category": str(decl["declaration_invalid_category"]),
+                "reasons": [f"卡面 {decl['card_field']} 声明不合({exc}); 出口: 顾问 lybra queue amend 修正卡面声明后重推导(fail-closed, 不当未声明放行)"]}
+    if requirement is None:
+        return None
+    category = str(decl["rejection_category"])
+    heading = str(decl["section_heading"])
+    outlet = (f"出口: 审计体在自己的审计分配工作树重跑卡面声明的验证命令, 按 transitions.schema artifact_ingest.verdict.runtime_evidence.format "
+              f"把每条命令/工作树/退出码/日志写进报告「{heading}」节; 跑不了(环境/时长)= 给 FAIL 或 BLOCK 并写原因, 不得以核执行体原件 hash/退出码代替")
+    try:
+        code_repo, audit_wt = card_worktree_location(workspace_root, audit_task_id, audit_fm)
+        exec_wt = card_worktree_location(workspace_root, reviewed, reviewed_fm)[1] if reviewed else None
+    except (CardRepoUnresolved, SchemaLoadError, OSError, ValueError) as exc:
+        return {"category": category, "reasons": [f"审计分配工作树不可推导, 无从核对运行证据(fail-closed): {exc}"]}
+    commit_sha = str((report_fm or {}).get("commit_sha") or "").strip()
+    tree_hash = _git_out(code_repo, "rev-parse", f"{commit_sha}^{{tree}}") if commit_sha else None
+    values = {"worktree": str(audit_wt), "commit_sha": commit_sha, "tree_hash": tree_hash or ""}
+
+    def render(command: str) -> str:
+        for name in decl["placeholders"]:
+            command = command.replace("{" + str(name) + "}", values.get(str(name), ""))
+        return _collapse_ws(command)
+
+    try:
+        text = Path(report_path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return {"category": category, "reasons": [f"{report_path}: 报告不可读({exc})"]}
+    entries, problem = parse_runtime_evidence_section(text)
+    where = f"{report_path}: "
+    if entries is None:
+        return {"category": category, "reasons": [where + problem + f"; 卡面要求独立运行证据(来源 {requirement['source']})。{outlet}"]}
+    reasons: list[str] = []
+    valid_commands: list[str] = []
+    log_keys = decl["log_fields"]
+    audit_resolved = Path(audit_wt).resolve()
+    exec_resolved = Path(exec_wt).resolve() if exec_wt else None
+    for index, entry in enumerate(entries, 1):
+        label = f"运行记录 #{index}"
+        if not isinstance(entry, dict):
+            reasons.append(f"{label} 不是对象: {entry!r}")
+            continue
+        missing = [k for k in decl["entry_required_fields"] if k not in entry or entry.get(k) in (None, "")]
+        if missing:
+            reasons.append(f"{label} 缺字段 {', '.join(missing)}")
+            continue
+        command = str(entry.get("command"))
+        label = f"{label}(command={_collapse_ws(command)!r})"
+        exit_code = entry.get("exit_code")
+        if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+            reasons.append(f"{label} exit_code 须为整数, 实为 {exit_code!r}")
+            continue
+        worktree = Path(str(entry.get("worktree"))).expanduser()
+        resolved = worktree.resolve() if worktree.is_absolute() else None
+        if resolved is None:
+            reasons.append(f"{label} worktree 须为绝对路径, 实为 {worktree}")
+            continue
+        if resolved != audit_resolved:
+            if exec_resolved is not None and resolved == exec_resolved:
+                reasons.append(f"{label} 执行工作树 {worktree} 是被审执行卡 {reviewed} 的工作树, 不是审计分配工作树 {audit_wt}"
+                               "(执行体树上的运行/原件不构成独立核验)")
+            else:
+                reasons.append(f"{label} 执行工作树 {worktree} ≠ 审计分配工作树 {audit_wt}")
+            continue
+        excerpt = str(entry.get(log_keys["excerpt"]) or "").strip()
+        log_path = str(entry.get(log_keys["path"]) or "").strip()
+        log_sha = str(entry.get(log_keys["sha256"]) or "").strip().lower()
+        if not excerpt:
+            if not log_path or not log_sha:
+                reasons.append(f"{label} 缺日志: {log_keys['excerpt']}(摘要)或 {log_keys['path']} + {log_keys['sha256']} 二选一")
+                continue
+            log_file = Path(log_path).expanduser()
+            try:
+                actual = hashlib.sha256(log_file.read_bytes()).hexdigest() if log_file.is_absolute() else ""
+            except OSError as exc:
+                reasons.append(f"{label} 日志 {log_path} 不可读: {exc}")
+                continue
+            if not actual:
+                reasons.append(f"{label} {log_keys['path']} 须为绝对路径, 实为 {log_path}")
+                continue
+            if actual != log_sha:
+                reasons.append(f"{label} 日志 {log_path} sha256={actual[:12]} ≠ 报告自述 {log_sha[:12]}")
+                continue
+        valid_commands.append(_collapse_ws(command))
+    if not entries:
+        reasons.append("「独立运行证据」节运行记录为空")
+    for declared in requirement["commands"]:
+        rendered = render(declared)
+        if rendered not in valid_commands:
+            reasons.append(f"卡面声明的命令缺有效运行记录: {rendered!r}(声明原文 {declared!r}; 须在审计分配工作树运行, 命令逐字一致)")
+    if not reasons:
+        return None
+    return {"category": category, "reasons": [where + r for r in reasons] + [outlet]}
 
 
 def _stale_round_outlet(workspace_root: Path, audit_task_id: str, card_fm: dict[str, Any], reviewed: str) -> str:

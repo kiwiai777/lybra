@@ -136,9 +136,10 @@ def test_no_new_role_prefix_judgement_and_baseline_only_shrinks():
 
 
 def test_gate_authorization_sites_use_single_resolver():
-    """件①②: 裁决提交 / 返工节两处门侧判定经 authorize_instance_class; 唯一实现各只定义一次。"""
+    """件①②: 裁决提交 / 返工节 / 补充审计发起(AIPOS-F162)三处门侧判定经 authorize_instance_class; 唯一实现各只定义一次。"""
     ba = (REPO_ROOT / "tools/aipos_cli/board_adapter.py").read_text(encoding="utf-8")
-    assert ba.count("role_gate = authorize_instance_class(") == 2
+    # AIPOS-F162 件②: 第三处 = 补充审计发起者须为顾问角色类(同一 authorize_instance_class)
+    assert ba.count("role_gate = authorize_instance_class(") == 3
     cr = (REPO_ROOT / "tools/aipos_cli/custom_roles.py").read_text(encoding="utf-8")
     assert cr.count("def resolve_instance_role_class(") == 1 and cr.count("def authorize_instance_class(") == 1
     dw = (REPO_ROOT / "tools/aipos_cli/draft_writer.py").read_text(encoding="utf-8")
