@@ -85,6 +85,10 @@ overwritten:
    root is refused (the refusal lists the enrolled instances), and it never falls back to the first advisor credential in the
    file. Other commands that pick a credential by role refuse when two or more instances hold that role, unless the instance
    is known (`lybra loop --actor <instance>`, or `LYBRA_DRIVER_INSTANCE=<instance>` when typing a command by hand).
+   An advisor that issues enrollment codes names itself as the signer too: `lybra roles … enroll-deliver … --actor <advisor
+   instance>` and `lybra roles … enroll-code … --actor <advisor instance>` take that instance's own credential (AIPOS-F157);
+   without `--actor` they pick by `--token-role` (default advisor, then owner) and refuse when two or more instances hold that
+   role. `lybra audit-verdict` (non-code cards) takes the credential of `--agent-instance` (or `--actor`) the same way.
 4. **Each advisor reads its own charter.** `lybra charter --role advisor --instance <advisor instance>` (run in the
    governance root, or over ssh from the session's machine) renders the charter from that instance's own record in
    `.lybra/role` (`instances.<instance>`: its role, harness kind and host), so the advisor enrolled first is not refused after a

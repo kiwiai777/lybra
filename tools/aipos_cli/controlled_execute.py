@@ -210,8 +210,8 @@ def _stable_planned_writes(items: Any, *, operation: str | None = None) -> list[
             # Session records are also updated during verdict dry_run.
             # Exclude both from snapshot hash to align with queue_return behavior.
             path = None
-        if operation == "queue_rework" and item.get("type") == "amendment_record":
-            # AIPOS-F154: 修订记录路径含时间戳派生的 amendment_id, 不入快照哈希(与 return/verdict 同法)
+        if operation in ("queue_rework", "queue_amend") and item.get("type") == "amendment_record":
+            # AIPOS-F154: 修订记录路径含时间戳派生的 amendment_id, 不入快照哈希(与 return/verdict 同法); AIPOS-F157 件②: queue_amend 同
             path = None
         stable.append(
             {

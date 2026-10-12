@@ -406,7 +406,11 @@ _POST_MERGE_ROOTS: tuple[str, ...] = (
 # next_resolver 合并后只用 card_branch_name / card_base_branch(纯函数), 不展开其懒导入(展开 = 整个 CLI, 且合并前已加载)
 # AIPOS-F147 件①: governance_commit 只被 post_merge_regression 的 async 后台入口(新进程, 不在 finalize 本进程)懒导入
 # (reland_after_write 补落账), finalize 合并后本进程不调用——预载本模块但不展开其懒导入(展开 = 推导核/loop 全链)
-_POST_MERGE_NO_DESCEND = frozenset({"tools.aipos_cli.next_resolver", "tools.aipos_cli.governance_commit"})
+# AIPOS-F157 件①: two_phase_shell_factory = CLI 薄壳取门凭据唯一口(load_role_token 等), confirm_client(门客户端偏好序取凭据)与
+# audit_helpers(审计裁决取凭据)懒导入它; finalize 合并后本进程只用 confirm_client 的门客户端 / audit_helpers 的裁决存在性判定,
+# 不经薄壳选凭据——预载本模块但不展开其懒导入(展开 = loop / 推导核 / 整个 CLI)
+_POST_MERGE_NO_DESCEND = frozenset({"tools.aipos_cli.next_resolver", "tools.aipos_cli.governance_commit",
+                                   "tools.aipos_cli.two_phase_shell_factory"})
 
 
 def _is_product_module(name: str) -> bool:

@@ -383,6 +383,22 @@ def _wait_instance(governance_root: Path, card: str, task_fm: dict[str, Any]) ->
     return str(task_fm.get("assigned_to") or "").strip()
 
 
+def wait_instance_is_subagent(governance_root: Path, card: str, task_fm: dict[str, Any]) -> bool:
+    """AIPOS-F157 件③(gap #125): 等待目标实例(_wait_instance)是无工位的子 agent 执行者——判定只经 enrollment.instance_enrollment
+    (governance_root_mode, AIPOS-F146 唯一判定)。plan_launch 的开工提示与 loop_run_record.run_execution_mode 的顾问下一动作同读此判定,
+    子 agent 执行者的等待 / 等交回超时一律子 agent 口径(不出工位 /go)。实例为空 / 接入登记读不出 = False(按既有口径, 不猜)。"""
+    from tools.aipos_cli.enrollment import instance_enrollment
+    from tools.schema_loader import SchemaLoadError
+
+    instance = _wait_instance(governance_root, card, task_fm)
+    if not instance:
+        return False
+    try:
+        return bool(instance_enrollment(governance_root, instance)["governance_root_mode"])
+    except (ValueError, OSError, SchemaLoadError):
+        return False
+
+
 def _render_manual_hint(decl: dict[str, Any], *, harness: str, instance: str, location: dict[str, Any],
                         subagent: bool = False, card: str = "") -> str:
     """手工模式等待提示(声明 verbs.schema lybra_loop.launch.manual_hint 唯一来源)。AIPOS-F146 件②: subagent = 等待目标实例为无工位的

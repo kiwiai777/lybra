@@ -84,6 +84,7 @@ lybra queue amend --restricted --task-id <卡ID> --actor <你的顾问实例> \
   --amendment-reason "补车道: 漏列 tests/"
 # 允许字段唯一声明 card.schema restricted_amend.claimed_card_fields = rework_rounds / output_target / lane
 ```
+经门 MCP 改卡(`lybra_queue_amend_dry_run` → `lybra_queue_amend_confirm`)时, 确认只认预演返回的 `dry_run_token`(与返工同一确认令牌口径, AIPOS-F157), 门按预演过的那次修改重放核验后写入。
 
 #### `lybra card render`(AIPOS-F78 件②)
 **何时用**:派子 agent(Claude Code / Codex / pi)开工前, 把卡的意图面渲染成该引擎的开工物。同一源三输出, 渲染物 `grep lybra_` = 0。
@@ -173,18 +174,23 @@ lybra loop status --workspace-root <治理根> --json                          #
 例行清单只在 verbs.schema `lybra_loop_status.next_action.routine_rejections` 一处声明, 目前:
 - 门拒码 `BRANCH_WRONG_BASE`(交回时基线已前进)/ `MERGE_CONFLICT`(finalize 合入冲突): 派本卡执行体在卡工作树合入最新基线、解冲突、重测、更新交回 frontmatter, 然后末行命令续跑(走既有重审出口);
 - 门拒码 `REPO_MERGE_IN_PROGRESS`(同仓另一张卡正在合入): 不改卡, 等持锁卡合完后末行命令重跑;
-- 结束原因 `deploy_changed`(他卡部署了新版本): 末行命令重跑, 从断点续做(本 loop 自己 finalize 的部署不再触发它)。
+- 结束原因 `deploy_changed`(他卡部署了新版本): 末行命令重跑, 从断点续做(本 loop 自己 finalize 的部署不再触发它);
+- 结束原因 `wait_timeout` 且本卡执行方式 = 顾问派子 agent(project.json `execution`, 或等待目标是子 agent 执行者接入; AIPOS-F156 / F157): 不找 Owner、不敲 `/go`——子 agent 仍在做就等它写完交回后末行命令重跑(可加大 `--max-wait`), 已终止或未派就按开工材料补派; pi 工位 / 手工工位的 `wait_timeout` 仍是 `owner_needed`。
 同卡同一例行原因连续到声明次数仍被拒 = 产品自动升 `owner_needed`, 不必自己计数。
+**等待中的开工提示**(`continue_wait(manual_kickoff)`): 子 agent 模式 = 「顾问按开工材料派本卡子 agent 执行并写交回」(`lybra my-tasks --actor <执行体实例> --task-id <卡ID>` 给工作树 / 报告落点 / 卡路径), 照做, 不转述给 Owner; 只有 pi / 手工工位才是「请在 <工位> 敲 /go」。
+**取下一张归属**(`card_done_take_next`, AIPOS-F156): 末行命令只给归属本驱动方实例的下一张(门侧发布记录签发实例 = `draft publish --actor`); 共用仓里其他顾问实例的卡不取。
 **禁止**:tail/grep 原始运行日志自判; until/sleep 轮询(等待只用 `--wait`)。
 
 #### 跨机工位(AIPOS-F110: 执行体在别的机器, 门与治理根在本机)
 前提: loop 只在治理根所在机(门机)跑; 门机与工位机 ssh 双向可达——门机→工位(loop 拉起/清理), 工位→门机(执行体读写门机上的治理根/工作树/报告落点)。ssh 凭据只走两端各自的 ssh 配置与密钥(`BatchMode=yes` 不交互索要口令), 永不经 Lybra、不进开工提示。
-1. **接入**(Owner 亲自敲, 在门机产品仓根下; land 事件 host = `--ssh` 的 ssh 目标, loop 以它为拉起目标; 注册码经 ssh stdin 送达、Owner 凭据只在本机读 connection.json 调门, 均不进远端命令行):
+1. **接入**(在门机治理根所在机运行; land 事件 host = `--ssh` 的 ssh 目标, loop 以它为拉起目标; 注册码经 ssh stdin 送达、签码凭据只在本机读 connection.json 调门, 均不进远端命令行; 先预演再 `--confirm`):
 ```bash
-python3 -m tools.aipos_cli.enroll_deliver --role executor --instance <执行体实例> \
-  --target-workspace <工位目录> --target-harness <工位目录> --ssh <ssh目标> \
-  --gate-url <门地址> --owner-policy-ref <信封ID> --connection-json <Owner凭据>
+lybra roles --workspace-root <治理根> enroll-deliver --role executor --instance <执行体实例> \
+  --governance-root <治理根> --workspace <工位目录> --ssh <ssh目标> \
+  --gate-url <门地址> --actor <你的顾问实例> --owner-authorization-ref <信封ID> --dry-run
 ```
+`--workspace` = 工位机上的目录, `--gate-url` = 工位可达的门地址; 预演无误后同一命令把 `--dry-run` 换成 `--confirm`(Owner 凭据签码时改
+`--connection-json <Owner凭据> --token-role owner`, 去掉 `--actor`)。
 2. **声明开工材料**(远端视角: 工位上指向门机的 ssh 别名 + 一句话材料访问方式, 如「经 ssh <别名> 读写; 代码提交到卡分支并推回门机产品仓」; 禁含凭据; 未声明 = loop 拒拉起并提示本命令)。写 project.json 的命令一律两阶段(AIPOS-F125): 先把下面的 `--confirm` 换成 `--dry-run` 预演(打印 diff 与校验, 零写入), 确认后原样带 `--confirm` 才写:
 ```bash
 lybra project set-workstation <项目名> --home-root <home根> --instance <执行体实例> \
@@ -289,29 +295,32 @@ lybra owner-decision --decision-id arb-2026-08-16-01 \
 
 ### 📦 角色供给(enroll-deliver)
 
-#### `lybra roles enroll`
-**何时用**:在工位目录用注册码(`roles enroll-code` 产出)兑换凭据, 初始化工位(凭据+配置+工具包)。
+#### `lybra roles enroll-deliver`(AIPOS-F151; 取凭据按实例 AIPOS-F157)
+**何时用**:为执行体 / 审计体工位(或顾问会话)签码并就地接入——在治理根所在机一条命令完成, **注册码只在本进程内**(不打印、不落盘、不进 argv)。
+缺省 = 预演(显示将签的角色 / 实例 / 治理根 / 有效期 / 覆盖信封, 不签码、零写入), `--confirm` 才执行。
 ```bash
-lybra roles enroll --code <注册码> --workspace <工位目录> --verify
+lybra roles --workspace-root <治理根> enroll-deliver --role executor --instance <执行体实例> \
+  --governance-root <治理根> --workspace <工位目录> --actor <你的顾问实例> --owner-authorization-ref <信封ID> --dry-run
+lybra roles --workspace-root <治理根> enroll-deliver --role executor --instance <执行体实例> \
+  --governance-root <治理根> --workspace <工位目录> --actor <你的顾问实例> --owner-authorization-ref <信封ID> --confirm
 ```
-**生成**:`.lybra/` 配置(connection.json/role/policy)、工具包、skills。
-**顾问自己接入**(凭据落治理根, 顾问件按会话 harness 交付; 取值读 distribution.schema harness_semantics, 步骤以 `lybra onboarding guide` 输出为准):
-```bash
-lybra roles enroll --code <注册码> --workspace <治理根> --harness claude-code --harness-dir <会话目录> --verify   # Claude Code: .claude/skills + .claude/rules 章程
-lybra roles enroll --code <注册码> --workspace <治理根> --harness codex --harness-dir <会话目录> --verify         # Codex(本机会话目录): 章程 AGENTS.md
-lybra roles enroll --code <注册码> --workspace <治理根> --harness codex --harness-host <会话所在机> --verify       # Codex 在他机: 如实登记, 本机无落点不落盘
-lybra charter --role advisor --instance <你的顾问实例> --workspace-root <治理根>                                 # 他机会话开局取章程(AIPOS-F138, 经 ssh 在治理根所在机跑)
-```
-他机会话的章程是拉取的(产品不推送): `lybra sync` 对它给 pull 行(`ssh <治理根主机> 'cd <治理根> && lybra charter ...'`, 主机读
-project.json `workstations.<实例>.gate_ssh_alias`, 未声明时给 `lybra project set-workstation` 出口); 会话开局先跑它, 输出即渲染后章程全文。
+- **`--actor` = 签发实例**:按该实例在治理根 `.lybra/connection.json` 的凭据签码(F134/F154 按实例选凭据唯一口); 未接入本治理根的实例即拒;
+  不给 `--actor` = 按 `--token-role`(缺省 advisor, 缺席回落 owner)取, **同一角色接入两个及以上实例时拒**(禁取首个, 出口 = 加 `--actor`)。
+- 子 agent 执行者(无工位, 凭据落治理根): `--executor-mode subagent --workspace <治理根>`; 顾问会话: `--role <顾问角色> --instance <顾问实例> --workspace <治理根> --harness claude-code --harness-dir <会话目录>`(Codex: `--harness codex`, 会话在他机加 `--harness-host <会话所在机>`)。
+- 跨机工位加 `--ssh <ssh目标>`(见「跨机工位」)。工位类接入须有覆盖该实例的生效信封(无 = 拒 `ENROLL_ENVELOPE_MISSING`, 未签码)。
+- 他机会话开局取章程(AIPOS-F138, 产品不推送): `ssh <治理根主机> 'cd <治理根> && lybra charter --role advisor --instance <你的顾问实例>'`(`lybra sync` 的 pull 行给出带真实主机的原文)。
 
-#### `lybra roles enroll-code`
-**何时用**:为跨机角色生成一次性注册码(未来:enroll-deliver 跨机形态)。
+**生成**:工位 `.lybra/` 配置(connection.json / role / policy)、工具包、skills; 之后 `lybra sync --harness-root <工位目录> --workspace-root <治理根>` 落齐分发件。
+
+#### `lybra roles enroll-code`(跨主机、无法同机接入时)
+**何时用**:接入方不在治理根所在机、又不能 `--ssh` 送达时, 签一次性自包含注册码交给接收方(同机一律用 `enroll-deliver`, 码不经手)。
 ```bash
-lybra roles enroll-code --role auditor --ttl 86400 --governance-root <治理根> \
-  --reason "Onboarding auditor" --json
+lybra roles --workspace-root <治理根> enroll-code --role auditor --instance <审计体实例> --governance-root <治理根> \
+  --actor <你的顾问实例> --owner-authorization-ref <信封ID> --ttl 86400 --dry-run     # 预演: 不出码
+lybra roles --workspace-root <治理根> enroll-code --role auditor --instance <审计体实例> --governance-root <治理根> \
+  --actor <你的顾问实例> --owner-authorization-ref <信封ID> --ttl 86400 --confirm     # 出码(只显示一次)
 ```
-注册码一次性、有时效;不贴进聊天/文档(凭据不过手)。
+`--actor` 取凭据规则同 `enroll-deliver`。注册码一次性、有时效; 只经输出的 paste_text 原样交接收方在其工位兑换, 不贴进聊天 / 文档(凭据不过手)。
 
 ---
 

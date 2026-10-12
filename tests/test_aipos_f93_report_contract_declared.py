@@ -237,8 +237,9 @@ def test_item2_enroll_delivery_single_render_gate_cli_guide(tmp_path):
     gov = guide["governance_root"]
     assert render_enroll_deliver_command(["lybra", "roles", "--workspace-root", gov], role="executor",
                                          instance=guide["instances"]["executor"], governance_root=gov, workspace=str(tmp_path / "ws-exec"),
-                                         extra=["--gate-url", guide["gate_url"], "--ttl", "86400", "--owner-authorization-ref",
-                                                guide["policies"]["executor"], "--reason", "'Onboarding probe executor'"],
+                                         extra=["--gate-url", guide["gate_url"], "--ttl", "86400", "--actor", guide["instances"]["advisor"],
+                                                "--owner-authorization-ref", guide["policies"]["executor"], "--reason",
+                                                "'Onboarding probe executor'"],  # AIPOS-F157: --actor = 签发实例(顾问)
                                          phase="--dry-run") in step6["commands"]
     assert "--code" not in json.dumps(guide["steps"], ensure_ascii=False)
     # 门: 动词说明 / 预演 confirm_output 同一渲染

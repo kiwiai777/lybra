@@ -50,12 +50,53 @@ def derive_audit_task_id(reviewed_task_id: str, repo_root: Path | None = None) -
     return uniq[0] if len(uniq) == 1 else None
 
 
+def resolve_audit_credential(
+    *,
+    connection_json_path: str | Path,
+    role: str | None,
+    agent_instance: str | None = None,
+) -> tuple[str, str, dict[str, Any] | None]:
+    """AIPOS-F157 件①(gap #132): 审计裁决(`lybra audit-verdict` 自发现 / 显式参数两路)取门凭据——只走 F134/F154 按实例选凭据唯一口
+    two_phase_shell_factory.load_role_token, 不再按角色取首个:
+      - 给了实例(--agent-instance / --actor)= 只取该实例的本角色条目, 无即拒(DriverTokenError, 禁回落按角色取首个);
+        未给角色 = 该实例唯一可用条目的角色(instance_bound_roles; 0 个 / ≥2 个 = 拒, 出口 --token-role);
+      - 未给实例 = 按角色取: 同角色可用条目绑定 ≥2 个实例 = 拒(禁取首个冒名, 出口 --agent-instance), ≤1 个 = 既有行为。
+    返回 (角色, token, 同一可用条目或 None); 身份元数据(实例 / actor)取自同一条目(AIPOS-F81 同源)。token 只在进程内用。"""
+    from tools.aipos_cli.token_resolver import is_token_entry_active, load_connection_tokens
+    from tools.aipos_cli.two_phase_shell_factory import DriverTokenError, instance_bound_roles, load_role_token
+
+    path = str(Path(connection_json_path).expanduser())
+    instance = str(agent_instance or "").strip() or None
+    wanted = str(role or "").strip()
+    if not wanted:
+        if not instance:
+            raise DriverTokenError(f"审计凭据: 未给角色(--token-role)也未给实例(--agent-instance / --actor), 无从在 {path} 取凭据")
+        roles = instance_bound_roles(connection_json_path=path, agent_instance=instance)
+        if len(roles) != 1:
+            raise DriverTokenError(
+                f"审计凭据: 实例 {instance!r} 在 {path} 的可用条目角色为 {roles or '(无)'}, 无从唯一定角色(按实例挑, 禁回落按角色取首个)。"
+                f"出口: 加 --token-role <该实例的角色>, 或为该实例接入凭据"
+            )
+        wanted = roles[0]
+    try:
+        token = load_role_token(connection_json_path=path, role=wanted, agent_instance=instance)
+    except DriverTokenError as exc:
+        if instance:
+            raise
+        raise DriverTokenError(f"{exc} —— 审计裁决出口: 加 --agent-instance <审计实例>(或 --actor)按实例取凭据") from exc
+    entry = next((e for e in load_connection_tokens(path)
+                  if is_token_entry_active(e) and str(e.get("role") or "").strip() == wanted
+                  and str(e.get("token") or "").strip() == token), None)
+    return wanted, token, entry
+
+
 def resolve_audit_context(
     *,
     workspace_root: Path | None = None,
-    role: str = "auditor",
+    role: str | None = "auditor",
     gate_url: str | None = None,
     token: str | None = None,
+    agent_instance: str | None = None,
 ) -> dict[str, Any]:
     """从 LoopContext 自发现审计身份参数。
     
@@ -67,6 +108,7 @@ def resolve_audit_context(
         role: 角色名（默认 auditor）
         gate_url: 显式指定 gate URL（可选，优先级最高）
         token: 显式指定 token（可选，优先级最高）
+        agent_instance: AIPOS-F157 件①: 签发实例(CLI --agent-instance / --actor); 给出 = 按实例取凭据(resolve_audit_credential)
     
     Returns:
         {
@@ -97,12 +139,30 @@ def resolve_audit_context(
 
     resolved_gate_url = resolve_gate_base_url(workspace_root=workspace_root, explicit_url=gate_url)
     
-    # Resolve token
-    resolved_token = ConnectionResolver.resolve_token(
-        workspace_root=workspace_root,
-        role=role,
-        explicit_token=token,
-    )
+    # Resolve token —— AIPOS-F157 件①(gap #132): 工位连接文件在 = 按实例取凭据唯一口(resolve_audit_credential → F154 load_role_token;
+    # 给了实例只取该实例条目, 未给实例时同角色多实例即拒, 禁取首个); 无连接文件 / 角色与实例都未给 = 既有自发现(env 兜底)不变。
+    from tools.aipos_cli.token_resolver import TOKEN_ENTRY_FIELDS, TokenNotFoundError
+
+    explicit_instance = str(agent_instance or "").strip() or None
+    lybra_dir = ConnectionResolver.discover_lybra_dir(workspace_root)
+    conn_file = lybra_dir / "connection.json" if lybra_dir else None
+    token_entry: dict[str, Any] | None = None
+    resolved_token: str | None = None
+    if not token and conn_file is not None and conn_file.is_file() and (role or explicit_instance):
+        try:
+            role, resolved_token, token_entry = resolve_audit_credential(
+                connection_json_path=conn_file, role=role, agent_instance=explicit_instance)
+        except TokenNotFoundError:
+            if explicit_instance:
+                raise
+            resolved_token = None  # 本层按角色无命中: 照既有声明优先级落到下方 env 兜底(按实例 / 多实例拒原样抛出)
+    if resolved_token is None:
+        resolved_token = ConnectionResolver.resolve_token(
+            workspace_root=workspace_root,
+            role=role,
+            agent_instance=explicit_instance,
+            explicit_token=token,
+        )
     
     # Try to load connection.json for additional metadata
     agent_instance = None
@@ -111,23 +171,13 @@ def resolve_audit_context(
     source = "auto_discovery"
     
     try:
-        lybra_dir = ConnectionResolver.discover_lybra_dir(workspace_root)
         if lybra_dir:
-            connection_config = ConnectionResolver.load_connection_config(lybra_dir)
-            
-            # AIPOS-F81: 身份元数据取自 token_resolver 单源挑中的同一条目(排除 retired), 与上面取的 token 同源
-            from tools.aipos_cli.token_resolver import TOKEN_ENTRY_FIELDS, TokenResolutionError, select_token_entry
-
-            tokens = connection_config.get("tokens")
-            token_entry = None
-            if isinstance(tokens, list):
-                try:
-                    token_entry = select_token_entry(tokens, role=role, source=str(lybra_dir / "connection.json"))
-                except TokenResolutionError:
-                    token_entry = None  # 无可用条目: 身份元数据留空, 由下游显式参数/自发现补(token 已在上面 fail-closed)
+            # AIPOS-F81: 身份元数据取自与 token 同一条目(AIPOS-F157: 即 resolve_audit_credential 按实例挑中的条目)
             if token_entry is not None:
                 agent_instance = token_entry.get(TOKEN_ENTRY_FIELDS["agent_instance"])
                 actor = token_entry.get("actor") or agent_instance
+            elif explicit_instance:
+                agent_instance = actor = explicit_instance
             
             # AIPOS-R6C ⑩: policy_ref 自发现全序 (信封唯一挑选 → env → 显式)
             # AIPOS-F103 件④: 挑选唯一实现 autonomy_policy.select_envelope(判据 match_claim_envelope); 身份 = 上面

@@ -775,7 +775,13 @@ def run_execution_mode(governance_root: Path, view: dict[str, Any]) -> tuple[str
     from tools.aipos_cli.audit_derivation import is_audit_card
     from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
     from tools.aipos_cli.task_loader import AmbiguousTaskCard, find_task_card
-    from tools.aipos_cli.workspace_config import ExecutionDeclarationError, card_execution_mode, project_execution
+    from tools.aipos_cli.loop_driver import wait_instance_is_subagent
+    from tools.aipos_cli.workspace_config import (
+        EXECUTION_MODE_SUBAGENT,
+        ExecutionDeclarationError,
+        card_execution_mode,
+        project_execution,
+    )
 
     task_id = str(view.get("task_id") or "")
     if not task_id or view.get("wait_card") != task_id:
@@ -785,9 +791,14 @@ def run_execution_mode(governance_root: Path, view: dict[str, Any]) -> tuple[str
         if path is None:
             return None, f"队列中找不到卡 {task_id}, 执行方式判不出"
         fm, _body = require_frontmatter(path)
-        return card_execution_mode(project_execution(Path(governance_root)), fm, audit_card=is_audit_card(task_id, fm)), ""
+        mode = card_execution_mode(project_execution(Path(governance_root)), fm, audit_card=is_audit_card(task_id, fm))
     except (AmbiguousTaskCard, FrontmatterReadError, ExecutionDeclarationError, OSError, ValueError) as exc:
         return None, f"执行方式判不出({type(exc).__name__}: {exc})"
+    # AIPOS-F157 件③(gap #125): 等待目标实例是无工位的子 agent 执行者(接入登记 governance_root_mode)= 子 agent 口径——与 loop_driver.plan_launch
+    # 开工提示同一判定(wait_instance_is_subagent → enrollment.instance_enrollment), 未声明 execution 时等交回超时也不再出「请 Owner 在工位敲 /go」
+    if mode != EXECUTION_MODE_SUBAGENT and wait_instance_is_subagent(Path(governance_root), task_id, fm):
+        return EXECUTION_MODE_SUBAGENT, ""
+    return mode, ""
 
 
 def _execution_rule(rules: dict[str, Any], mode: str | None) -> dict[str, Any]:
