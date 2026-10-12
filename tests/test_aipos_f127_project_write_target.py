@@ -226,7 +226,7 @@ def test_item1_resolver_is_single_implementation_and_cli_has_no_active_project_w
              and n.func.id == "_project_write_target"]
     _show(f"[件①·静态] _project_write_target 调用点 {len(calls)} 处(set-paths/set-meta/set-repos/set-repo/set-workstation/"
           "set-execution/freeze-legacy/dispatch-mode set/export 隐式目标)")
-    assert len(calls) == 10  # AIPOS-F143 件②: + set-execution; AIPOS-F148 件②: + set-return-summary(同一目标解析)
+    assert len(calls) == 11  # AIPOS-F143 件②: + set-execution; AIPOS-F148 件②: + set-return-summary; AIPOS-F161: + relocate-workstation(同一目标解析)
     wc_src = (REPO_ROOT / "tools/aipos_cli/workspace_config.py").read_text(encoding="utf-8")
     fn = next(n for n in ast.parse(wc_src).body if isinstance(n, ast.FunctionDef) and n.name == "resolve_project_write_target")
     names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}

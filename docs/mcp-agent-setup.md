@@ -181,6 +181,35 @@ independent pi auditor workstation (AIPOS-F143).
 `lybra loop` starts its sub-commands with the same Python interpreter and code tree it runs from, so it does not need
 `lybra` on `PATH` (for example when started over ssh); a sub-command that fails is reported with its error text.
 
+## Moving a workstation out of a shared checkout
+
+A pi workstation (auditor or executor) that sits inside a git checkout shared with other projects is exposed to every
+checkout / stash / pull anyone runs there. `lybra project relocate-workstation` moves it to a location of its own; any project
+uses the same command, run on the governance-root machine (an advisor on another machine runs it over ssh). Only an instance
+enrolled in this project can be moved; any other instance is refused with nothing written (`RELOCATE_NOT_THIS_PROJECT`).
+
+The workstation location has one declaration: the instance's latest live location event in the project's enrollment log. A
+move appends one `relocate` location event (same log, same parser as `land`), so `lybra loop` launches, `lybra project
+check-workstation`, `lybra roles enroll-where` and `lybra charter` all read the new location; there is no second path table.
+
+1. Preview (default, nothing written): `lybra project relocate-workstation <project> --instance <instance> --to <new dir>`
+   lists the workstation state (credential files by path, mode and size only — never their content), the old and new
+   location, the declarations and links affected, and the in-flight checks: an unfinished launch in the project's loop run
+   records whose process is still alive in that workstation, a live loop waiting on that instance's artifact, or any local
+   process whose working directory is inside the workstation. Without `--to` it prints the suggested location (declared in
+   `schema/enums.schema.json` `workstation_transport.relocation.suggested_target`).
+2. `--confirm --actor <committer>` is refused when anything is in flight, when the new location is inside any git checkout,
+   or when it already exists and is not empty. Otherwise it moves the whole workstation (credentials move with the directory,
+   permissions kept), runs `lybra sync` on the new location and requires a steady dry-run (empty plan and prune; the charter is
+   re-rendered for the new path), appends the location event, re-reads it, leaves a read-only pointer file in the old directory
+   (the directory is kept for rollback) and lands the enrollment log through the governance commit point. A failed sync moves the
+   workstation back and leaves the declaration unchanged.
+3. `--rollback` (preview, then `--confirm`) moves it back to the location before the latest move and appends a rollback event.
+
+The shared parent's `_distributed/` and `_shared/` stay where they are for the other workstations; the new parent gets its own
+from the sync. Files of the moved workstation that the shared checkout tracked show up there as deleted; the command never runs
+git in that checkout.
+
 ## Start the gate
 
 ```bash

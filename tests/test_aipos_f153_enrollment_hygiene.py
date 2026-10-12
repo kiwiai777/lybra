@@ -148,7 +148,8 @@ def test_item1_two_phase_reuses_f125_wrapper():
 
     decl = load_schema("verbs")["two_phase_protocol"]
     fam = _two_phase_family_declaration("enrollment_log_writers")
-    assert fam["commands"] == ["enroll-void"] and fam["flags"] == decl["project_json_writers"]["flags"]
+    assert fam["commands"] == ["enroll-void", "relocate-workstation"]  # AIPOS-F161: 迁移位置事件同族
+    assert fam["flags"] == decl["project_json_writers"]["flags"]
     assert fam["outcome_labels"] == decl["project_json_writers"]["outcome_labels"] and "flags" not in decl["enrollment_log_writers"]
     args = build_parser().parse_args(["roles", "enroll-void", "--instance", "i", "--reason", "r", "--actor", "a", "--log", "/x"])
     assert args.confirm is False and args.dry_run is False and args.void_log == "/x"  # 缺省 = 预演
