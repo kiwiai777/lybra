@@ -2103,6 +2103,18 @@
         "terminate_note": "终止进程组: 先 SIGTERM, 等本秒数仍未退出再 SIGKILL",
         "stderr_tail_lines": 20,
         "stderr_tail_note": "进程退出而产物未就绪(早退) → exit 3(wait_timeout), 附 stderr 末尾本行数",
+        "privilege_guard": {
+          "description": "AIPOS-F165 件③(10-12 chris LANTU-UI3-S1R 实撞: loop 拉起的审计 pi 继承用户全部权限, sudo 免密可用, 审计为凑逐字命令 sudo 建系统符号链接): loop 拉起 pi(执行与审计)缺省以 no_new_privs 运行, sudo/setuid 提权失败。挂在唯一拉起口 harness_launch.LaunchedHarness(本机 = Popen 子进程 exec 前 prctl(PR_SET_NO_NEW_PRIVS); 内核标志随 fork/exec 继承且不可撤销, 覆盖 harness 起的全部孙进程)。开关读 project.json launch_guard(config.schema; 缺省开, 关闭须 owner_approval_ref); 判定唯一实现 harness_launch.privilege_guard_state(plan_launch 与 check-workstation 同读)。不可用 = 如实降级照常拉起, 状态记入拉起 session 事件与运行记录 launches[].privilege_guard。",
+          "states": {
+            "applied": "no_new_privs 已施加(机制 prctl PR_SET_NO_NEW_PRIVS)",
+            "disabled": "project.json launch_guard.no_new_privs=false 关闭(Owner 授权 {owner_approval_ref})",
+            "degraded": "降级未施加: {reason}"
+          },
+          "degraded_reasons": {
+            "platform": "本机平台 {platform} 无 prctl(PR_SET_NO_NEW_PRIVS)(仅 Linux 支持)",
+            "remote": "跨机工位: 门机经 ssh 拉起, 远端进程不施加 no_new_privs(远端机制未实现)"
+          }
+        },
         "manual_hint": {
           "local": "请在 {dir} 的 {harness} 会话敲 /go",
           "remote": "请在 {host}:{dir} 的 {harness} 会话敲 /go(跨机工位)",

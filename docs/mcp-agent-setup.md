@@ -162,6 +162,14 @@ independent pi auditor workstation (AIPOS-F143).
    (`schema/verbs.schema.json` `lybra_loop.launch.manual_hint.subagent`): hand the card to a sub-agent, with the card
    material from `lybra my-tasks --actor <instance> --task-id <card>`. `lybra project check-workstation` and
    `my-tasks --workstation` / `--remote-workstation` point a sub-agent instance to the same command instead.
+5. **Launched pi cannot escalate privileges (AIPOS-F165).** Every pi that `lybra loop` starts (executor or auditor) runs with
+   the kernel `no_new_privs` flag set just before exec, so `sudo` and other setuid programs cannot gain root. It is on by
+   default; `project.json` `launch_guard` can turn it off only together with an Owner approval reference
+   (`{"no_new_privs": false, "owner_approval_ref": "<decision or envelope id>"}`; without the reference the loop refuses to
+   launch). Where the flag cannot be set (non-Linux gate, or a remote workstation started over ssh) the launch goes ahead and
+   the session event and loop run record say so (`privilege_guard: degraded`). `lybra project check-workstation` prints the
+   state (`applied` / `disabled` / `degraded`). Declared in `schema/config.schema.json` (`launch_guard`) and
+   `schema/verbs.schema.json` (`lybra_loop.launch.privilege_guard`).
 
 ### Card and Return rules every project follows (AIPOS-F148)
 

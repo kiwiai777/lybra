@@ -4176,6 +4176,9 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     for item in report["checks"]:
                         print(f"{'✓' if item['ok'] else '✗'} {item['check']}: {item['detail']}")
+                    if report.get("privilege_guard"):  # AIPOS-F165 件③: 拉起禁提权状态(applied / disabled / degraded)
+                        guard = report["privilege_guard"]
+                        print(f"拉起禁提权(no_new_privs): {guard['state']} — {guard['detail']}")
                     print(f"check-workstation {args.instance}: {'OK' if report['ok'] else 'FAILED'}")
                 return 0 if report["ok"] else 1
             if args.project_command == "set-repo":

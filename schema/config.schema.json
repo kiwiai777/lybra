@@ -444,6 +444,27 @@
             "WORKSTATION_MATERIAL_INVALID": "声明形不合(非对象 / 值非非空单行串 / 含凭据字样)"
           }
         },
+        "launch_guard": {
+          "type": "object",
+          "required": false,
+          "description": "AIPOS-F165 件③(10-12 chris LANTU-UI3-S1R 实撞: loop 拉起的审计 pi 继承用户全部权限, 为凑逐字命令 sudo 建了 /usr/bin/node 系统符号链接): loop 拉起 pi(执行与审计)的禁提权声明。缺段 = 缺省开(no_new_privs=true: 拉起进程置 no_new_privs, sudo/setuid 提权失败); 关闭须同时给 owner_approval_ref(Owner 授权引用), 缺 = 声明不合拒拉起(LAUNCH_GUARD_INVALID, fail-closed, 不当缺省放行也不静默关)。机制与降级口径声明 verbs.schema lybra_loop.launch.privilege_guard。唯一读取口 workspace_config.project_launch_guard(loop 拉起判定 plan_launch 与 `lybra project check-workstation` 同读); 无写命令(Owner 手改 project.json, 关闭本身即须 Owner 授权)。",
+          "schema": {
+            "no_new_privs": {
+              "type": "boolean",
+              "required": false,
+              "default": true,
+              "description": "true(缺省)= loop 拉起的 pi 进程以 no_new_privs 运行; false = 关闭(须同时给 owner_approval_ref)"
+            },
+            "owner_approval_ref": {
+              "type": "string",
+              "required": false,
+              "description": "no_new_privs=false 时必填: Owner 授权引用(如决策日志条目 / 信封 id, 非空单行串, 禁含凭据); 记入拉起事件与运行记录"
+            }
+          },
+          "reject_codes": {
+            "LAUNCH_GUARD_INVALID": "launch_guard 段形不合(非对象 / 未知键 / no_new_privs 非布尔 / owner_approval_ref 非非空单行串或含凭据字样 / 关闭而缺 owner_approval_ref)"
+          }
+        },
         "execution": {
           "type": "object",
           "required": false,

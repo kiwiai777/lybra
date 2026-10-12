@@ -1947,6 +1947,51 @@ def project_workstation(project_root: str | Path, instance: str) -> dict[str, st
     return _validate_workstation_entry(instance, workstations[instance], decl)
 
 
+class LaunchGuardDeclarationError(ValueError):
+    """project.json launch_guard 段不合声明(fail-closed: 拒拉起, 不当缺省放行也不静默关)。code ∈ config.schema launch_guard.reject_codes。"""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(f"{code}: {message}")
+        self.code = code
+
+
+def project_launch_guard(project_root: str | Path) -> dict[str, Any]:
+    """AIPOS-F165 件③: loop 拉起禁提权开关的唯一读取口(声明 config.schema project_json.schema.launch_guard)。
+    返回 {no_new_privs: bool, owner_approval_ref: str | None, declared: bool}; 缺段 = 缺省开(声明 default)。
+    段形不合 / 关闭而缺 owner_approval_ref = LaunchGuardDeclarationError; project.json 不可读 = 原异常上抛(不吞成缺省)。只读。"""
+    from tools.aipos_cli.harness_launch import redact_progress
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (((load_schema("config").get("configuration_sources") or {}).get("project_json") or {}).get("schema") or {}).get("launch_guard")
+    fields = decl.get("schema") if isinstance(decl, dict) else None
+    if not isinstance(fields, dict) or "no_new_privs" not in fields or "owner_approval_ref" not in fields \
+            or not isinstance(decl.get("reject_codes"), dict) or len(decl["reject_codes"]) != 1:
+        raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.launch_guard(schema / reject_codes)未声明")
+    code = next(iter(decl["reject_codes"]))
+    default = fields["no_new_privs"].get("default")
+    if not isinstance(default, bool):
+        raise SchemaLoadError("config.schema.json project_json.schema.launch_guard.no_new_privs.default 须为布尔")
+    raw = read_project_json(project_root).get("launch_guard")
+    if raw is None:
+        return {"no_new_privs": default, "owner_approval_ref": None, "declared": False}
+    where = f"{project_json_path(project_root)} launch_guard"
+    if not isinstance(raw, dict):
+        raise LaunchGuardDeclarationError(code, f"{where} 须为 JSON 对象, 得到 {type(raw).__name__}")
+    unknown = sorted(set(raw) - set(fields))
+    if unknown:
+        raise LaunchGuardDeclarationError(code, f"{where} 含未声明的键 {unknown}(只认 {sorted(fields)})")
+    enabled = raw.get("no_new_privs", default)
+    if not isinstance(enabled, bool):
+        raise LaunchGuardDeclarationError(code, f"{where}.no_new_privs 须为布尔 true/false, 实为 {enabled!r}")
+    auth = raw.get("owner_approval_ref")
+    if auth is not None and (not isinstance(auth, str) or not auth.strip() or "\n" in auth or "\r" in auth
+                             or redact_progress(auth) != auth):
+        raise LaunchGuardDeclarationError(code, f"{where}.owner_approval_ref 须为非空单行串且不含凭据字样, 实为 {auth!r}")
+    if not enabled and auth is None:
+        raise LaunchGuardDeclarationError(code, f"{where}.no_new_privs=false 而缺 owner_approval_ref(关闭禁提权须 Owner 授权引用)")
+    return {"no_new_privs": enabled, "owner_approval_ref": auth.strip() if isinstance(auth, str) else None, "declared": True}
+
+
 def set_project_workstation(project_root: str | Path, instance: str, *, gate_ssh_alias: str, material_access: str,
                             dry_run: bool = False) -> dict[str, Any]:
     """写 project.json workstations.<instance>(其余键原样保留); 写前按声明校验(不合 = 不写, 抛 WorkstationDeclarationError)。
