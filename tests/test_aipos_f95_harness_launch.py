@@ -77,15 +77,42 @@ def _land(gov: Path, instance: str, role: str, workstation: Path, *, host: str |
                              by="(agent-enroll)", reason=f"{host_part}workstation={workstation} files=['connection.json', 'role']")
 
 
+def ws_token(role: str) -> str:
+    """夹具工位凭据(按角色区分, 供假门 RepoGate 按 token 认角色; 含 fixture-ws-not-a-secret 字样, 各测试「凭据不上屏」断言照旧适用)。"""
+    return f"fixture-ws-not-a-secret-{role}"
+
+
 def _workstation(home: Path, gov: Path, name: str, role: str, instance: str) -> Path:
     ws = home / "workstations" / name
     _write(ws / ".lybra" / "role", json.dumps({"role": role, "instance": instance}))
     _write(ws / ".lybra" / "connection.json", json.dumps({
         "governance_root": str(gov), "mcp": {"rpc_url": "http://127.0.0.1:1/mcp"},
-        "tokens": [{"role": role, "role_class": role, "agent_instance": instance, "token": "fixture-ws-not-a-secret", "scopes": []}],
+        "tokens": [{"role": role, "role_class": role, "agent_instance": instance, "token": ws_token(role), "scopes": []}],
     }))
     _write(ws / "AGENTS.md", f"# {role} 工位(夹具)\n")
     return ws
+
+
+def sync_fixture_workstations(mp: pytest.MonkeyPatch, gov: Path, *workstations: Path) -> None:
+    """AIPOS-F164: loop 拉起前核章程新鲜度(= lybra sync --dry-run 同一实现, 连门取分发清单)。靶场门 = 假门 RepoGate(test_aipos_f82:
+    清单 = 真 build_role_manifest, 内容 = 产品树真文件, 按工位凭据认角色); 各工位先按产品 sync 一次 = 章程为产品渲染最新版
+    (与真实接入后 Step 7 sync 同形), 拉起前核即「最新, 不 sync 直接拉起」, 原有拉起用例行为不变。"""
+    from test_aipos_f82_workstation_intake import RepoGate
+
+    from tools.aipos_cli import confirm_client
+    from tools.aipos_cli import distribution_sync as ds
+
+    from tools.aipos_cli.autonomy_policy import envelope_trace_output
+
+    RepoGate.roles = {ws_token(role): (role, None) for role in ("executor", "auditor")}
+    mp.setattr(confirm_client, "GateClient", RepoGate)
+    for ws in workstations:
+        # 预备步的 stderr(注册表告警 / 信封轨迹)不进用例输出: 子进程用例(F95 ③ / F107)只读 stdout 到首行进度, stderr 管道写满会互等
+        noise = io.StringIO()
+        with contextlib.redirect_stderr(noise), envelope_trace_output(False):
+            res = ds.sync(harness_root=ws, governance_root=gov)
+            fresh = ds.charter_freshness(ws, gov)
+        assert res["status"] == "synced" and fresh["fresh"], (res, fresh, noise.getvalue()[-2000:])
 
 
 def setup_launch(r: SimpleNamespace, mp: pytest.MonkeyPatch, *, grace: float = 1, terminate_wait: float = 1) -> SimpleNamespace:
@@ -98,6 +125,7 @@ def setup_launch(r: SimpleNamespace, mp: pytest.MonkeyPatch, *, grace: float = 1
         max_tasks=20, owner_approval_ref="fixture-envelope-launch", task_selector_task_mode="code", launch_harnesses=["pi"]))
     ws_exec = _workstation(r.home, r.gov, "probe-executor", "executor", EXEC)
     ws_audit = _workstation(r.home, r.gov, "probe-auditor", "auditor", AUDIT_CLAIMER)
+    sync_fixture_workstations(mp, r.gov, ws_exec, ws_audit)  # AIPOS-F164: 拉起前章程核 = 最新
     mp.setattr(autonomy_policy, "launchable_harnesses",
                lambda: {"pi": {"argv": [sys.executable, str(FAKE), "{kickoff}"], "events": "pi-json"}})
     real_contract = loop_driver.load_loop_contract

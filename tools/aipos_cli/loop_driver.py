@@ -13,6 +13,8 @@ AIPOS-F95: 唯一例外——Owner 信封 launch_harnesses 授权该卡 harness 
 - 拉起: 本模块 plan_launch / LaunchedHarness(AIPOS-F95; 模板 enums.schema harness.launch, 授权 autonomy_policy.envelope_authorizes_launch,
   工位位置 enrollment.workstation_location(经 instance_enrollment, AIPOS-F146), 身份 charter_render.workstation_identity,
   kickoff = 工位 my-tasks --task-id <等待目标卡> 的 next_card.kickoff(AIPOS-F111: 按卡号取, 同工位多卡可各自拉起))
+- 拉起前章程(AIPOS-F164): _launched_wait 起点 _charter_before_launch —— 判定 distribution_sync.charter_freshness(= `lybra sync --dry-run`
+  同一实现), 修复 distribution_sync.sync_workstation_charter(= `lybra sync` 同一实现); check-workstation 章程项同一判定(check_charter)
 - 信封: autonomy_policy(owner_autonomy_policy 族, `lybra envelope mint` 申领)
 - 退出码/参数/允许动词集合/等待产物: schema/verbs.schema.json verbs.lybra_loop 一处声明, 本模块只读。
 - 部署一致性(AIPOS-F152 件①): deploy_runtime.DeployGuard(声明 verbs.lybra_loop.deploy_consistency)——启动记下运行快照提交,
@@ -651,10 +653,85 @@ def _plan_remote_launch(governance_root: Path, plan: LaunchPlan, decl: dict[str,
     return plan
 
 
+def charter_refusal_text(fresh: dict[str, Any]) -> str:
+    """AIPOS-F164: 章程不新鲜的原因 + 修法(check-workstation FAIL 详情 / loop 章程拒因同一措辞; 命令唯一渲染 distribution_sync.render_sync_command)。"""
+    return f"{fresh['state']}: {fresh['detail']}; 修法: {fresh['repair_command']}(复核: {fresh['verify_command']})"
+
+
+def check_charter(project_root: Path, workstation: str, check: Callable[[str, bool, str], bool]) -> dict[str, Any]:
+    """AIPOS-F164 件①: check-workstation 章程项——判定只经 distribution_sync.charter_freshness(= `lybra sync --dry-run` 同一实现,
+    F66B 三指纹, 零写入)。最新 / 无章程件 / 会话拉取 = ✓; 未渲染 / 指纹过期 / 缺失 / 核不了 = ✗ 并给修法(sync 命令)。"""
+    from tools.aipos_cli.distribution_sync import charter_freshness
+
+    fresh = charter_freshness(workstation, project_root)
+    if fresh["fresh"]:
+        check("章程新鲜度", True, f"{fresh['state']}: {fresh['detail']}")
+    else:
+        check("章程新鲜度", False, charter_refusal_text(fresh))
+    return fresh
+
+
+def _charter_before_launch(index: int, step: LoopStep, plan: LaunchPlan, governance_root: Path, result: LoopResult, *,
+                           contract: dict[str, Any], say: Callable[[str], None], recorder: LoopRunRecorder) -> bool:
+    """AIPOS-F164 件②: 拉起 pi 前核该工位章程新鲜度(挂在唯一拉起口 _launched_wait 起点)。返回 True = 不拉起, loop 以 result 出口返回。
+
+    判定 = distribution_sync.charter_freshness(`lybra sync --dry-run` 同一实现); 最新 = 不 sync 直接拉起; 不新鲜(未渲染 / 过期 / 缺失 /
+    核不了)且 project.json charter_auto_sync(缺省 true)= 先 sync 本工位(distribution_sync.sync_workstation_charter = `lybra sync` 同一实现,
+    只本工位, 之后复核)再拉起; sync 失败 = 不拉起, 结束原因 charter_sync_failed; 自动 sync 关闭(或声明不合)= 不拉起, 结束原因
+    charter_not_fresh。两者例行(lybra_loop_status next_action routine_rejections.end_reasons: advisor_fix, 连败计数同一实现)。
+    每次判定进运行记录 charter_checks(detail)并在日志留一行(say)。remote 工位: 门机不跨机读写工位文件, 不核(日志一行说明)。"""
+    from tools.aipos_cli.distribution_sync import charter_freshness, sync_workstation_charter
+    from tools.aipos_cli.workspace_config import charter_auto_sync
+    from tools.schema_loader import SchemaLoadError
+
+    ws = plan.cwd
+    entry = {"card": plan.card, "instance": plan.instance, "workstation": ws}
+    if plan.location.get("transport") == "remote":
+        detail = f"跨机工位 {plan.location.get('host')}:{ws}: 门机不跨机读写工位文件, 章程不在此核(在工位所在机 lybra sync --dry-run 核)"
+        recorder.charter_check({**entry, "outcome": "not_applicable", "detail": detail})
+        say(f"[{index}] charter: {detail}")
+        return False
+    fresh = charter_freshness(ws, governance_root)
+    entry["repair_command"] = fresh["repair_command"]
+    if fresh["fresh"]:
+        detail = f"{fresh['state']}: {fresh['detail']}"
+        recorder.charter_check({**entry, "outcome": "fresh", "detail": detail})
+        say(f"[{index}] charter: {plan.instance} @ {ws} 章程新鲜({detail}), 不 sync, 直接拉起")
+        return False
+    try:
+        auto, off_reason = charter_auto_sync(governance_root), "project.json charter_auto_sync=false"
+    except (OSError, ValueError, SchemaLoadError) as exc:
+        auto, off_reason = False, f"声明读不出 / 不合, 按不自动 sync: {exc}"
+    stale = f"{fresh['state']}: {fresh['detail']}"
+    if auto:
+        say(f"[{index}] charter: {plan.instance} @ {ws} 章程不新鲜({stale}) → 自动 sync 本工位: {fresh['repair_command']}")
+        synced = sync_workstation_charter(ws, governance_root)
+        if synced["ok"]:
+            recorder.charter_check({**entry, "outcome": "synced", "detail": f"{stale} → {synced['detail']}"})
+            say(f"[{index}] charter: 已 sync {ws}({synced['detail']}), 拉起")
+            return False
+        reason, outcome = "charter_sync_failed", "sync_failed"
+        msg = (f"工位 {ws} 章程不新鲜({stale}), 自动 sync 失败({synced['detail']}), 不拉起 {plan.harness}({plan.card}); "
+               f"修法: {fresh['repair_command']}(复核: {fresh['verify_command']}), 修好用原命令重跑 loop")
+    else:
+        reason, outcome = "charter_not_fresh", "refused"
+        msg = (f"工位 {ws} 章程不新鲜({stale}), 自动 sync 未开({off_reason}), 不拉起 {plan.harness}({plan.card}); "
+               f"修法: {fresh['repair_command']}(复核: {fresh['verify_command']}), 修好用原命令重跑 loop")
+    recorder.charter_check({**entry, "outcome": outcome, "detail": msg})
+    step.ok, step.message = False, msg
+    step.launch = {**(step.launch or {}), "launched": False, "refusal": msg}  # 未起进程(拉起判定已过, 章程拦下)
+    say(f"[{index}] exit {exit_code_for(contract, 'not_derivable')} — {msg}")
+    result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), msg
+    result.suggested_action, result.reason = fresh["repair_command"], reason
+    return True
+
+
 def check_workstation(project_root: Path, instance: str, harness: str) -> dict[str, Any]:
     """AIPOS-F110 件③: `lybra project check-workstation` —— loop 拉起前置的逐项只读检查(与 plan_launch 同一读取口/同一 ssh 代码路径):
     land 事件位置 → (local) 工位身份 + harness 可执行在本机 PATH; (remote) 材料声明 + 门机→工位 ssh 探测(目录 + harness 可执行)
-    + 工位→门机反向可达(远端经声明的 gate_ssh_alias 以同一 ssh 前缀 `test -d <门机治理根>`)。不起 harness、不写任何文件。"""
+    + 工位→门机反向可达(远端经声明的 gate_ssh_alias 以同一 ssh 前缀 `test -d <门机治理根>`)。不起 harness、不写任何文件。
+    AIPOS-F164 件①: (local) 另核章程新鲜度(check_charter: 与 `lybra sync --dry-run` 同一实现, 零写入); remote 工位目录在他机,
+    门机不跨机读写工位文件, 本项不核(章程在工位所在机 `lybra sync --dry-run` 核)。"""
     import shutil
 
     from tools.aipos_cli.autonomy_policy import launchable_harnesses
@@ -709,6 +786,7 @@ def check_workstation(project_root: Path, instance: str, harness: str) -> dict[s
         except WorkstationIdentityError as exc:
             check("工位身份", False, str(exc))
         check("harness 可执行(本机 PATH)", bool(shutil.which(exe)), exe)
+        check_charter(project_root, workstation, check)
         return report()
     host = str(loc.get("host") or "")
     try:
@@ -755,6 +833,8 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
     AIPOS-F107 件①: 信号处置覆盖拉起全程——Popen 期间到的信号先记下(拉起后按中断处理), 拉起起至清组+收尾留痕止
     中断处置不撤(清理与留痕期间到的信号记下, 清完再抛), 不留「默认处置直接终止 loop、进程组成孤儿」的窗口。
     AIPOS-F131: 拉起/收尾与进程活动(只类别与时间)进运行记录; 等待期 sleeper 每轮读输出后按节流落盘(静默期也落最后一条)。"""
+    if _charter_before_launch(index, step, plan, governance_root, result, contract=contract, say=say, recorder=recorder):
+        return True  # AIPOS-F164 件②: 章程不新鲜且未能 sync = 不拉起
     wait_timeout = exit_code_for(contract, "wait_timeout")
     terminate_wait = float(decl["terminate_wait_seconds"])
     where = f"{plan.location.get('host') or '本机'}:{plan.cwd}"

@@ -2091,6 +2091,32 @@ def card_execution_mode(execution: dict[str, Any] | None, card: dict[str, Any] |
 # 唯一读取口 return_summary_source / 唯一写入口 set_return_summary_source; 解析唯一 next_resolver.extract_return_summary_text。
 # ---------------------------------------------------------------------------
 
+class CharterAutoSyncError(ValueError):
+    """AIPOS-F164: project.json charter_auto_sync 值非布尔(CHARTER_AUTO_SYNC_INVALID)。"""
+
+
+def charter_auto_sync(governance_root: str | Path, *, project: dict[str, Any] | None = None) -> bool:
+    """AIPOS-F164 件②: loop 拉起前章程不新鲜时是否先自动 sync 该工位(唯一读取口)。缺键 = 声明 default(config.schema
+    project_json.schema.charter_auto_sync.default); 值非布尔 = CharterAutoSyncError(不猜); 声明缺 = SchemaLoadError(fail-closed);
+    project.json 读不出 = 原异常上抛(不吞成缺省)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (((load_schema("config").get("configuration_sources") or {}).get("project_json") or {}).get("schema") or {}).get(
+        "charter_auto_sync")
+    if not isinstance(decl, dict) or not isinstance(decl.get("default"), bool) \
+            or not str((decl.get("reject_codes") or {}).get("CHARTER_AUTO_SYNC_INVALID") or "").strip():
+        raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.charter_auto_sync"
+                              "(布尔 default / reject_codes.CHARTER_AUTO_SYNC_INVALID)未声明齐")
+    data = project if project is not None else read_project_json(governance_root)
+    value = data.get("charter_auto_sync") if isinstance(data, dict) else None
+    if value is None:
+        return bool(decl["default"])
+    if not isinstance(value, bool):
+        raise CharterAutoSyncError(f"CHARTER_AUTO_SYNC_INVALID: project.json charter_auto_sync={value!r}: "
+                                   f"{decl['reject_codes']['CHARTER_AUTO_SYNC_INVALID']}")
+    return value
+
+
 RETURN_SUMMARY_SOURCE_KEYS = ("frontmatter_keys", "section_markers")
 
 

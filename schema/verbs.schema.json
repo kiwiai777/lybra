@@ -2096,7 +2096,7 @@
         "task_selector_lane_repo": "AIPOS-F134 件③: 信封字段 task_selector_lane_repo(缺省 \"\"/键缺 = 不限 lane, 存量信封行为不变)——值 = 本项目 project.json repos.items 的仓名(无清单时 = code_repo 路径), `lybra envelope mint --lane-repo <仓名>` 经 --confirm 由 Owner 签, 门 owner_decision_writer._normalize_autonomy_policy 按 workspace_config.resolve_card_repo 校验可解析(不可解析 = BLOCK)。判定对象 = subject_rule 所指卡的 lane.repo 经 resolve_card_repo 解析出的仓(autonomy_policy.card_lane_refs: 路径 / 卡面原值 / 指向同一路径的仓名), 判定只在 match_claim_envelope 谓词 lane_repo 与原因链(不匹配 = transitions envelope_guards.selector_lane_repo_mismatch)。用途: 同一项目多顾问实例各管一个 lane(如 OTA 顾问只推 OTA 仓的卡)。AIPOS-F139: 值为仓集合——`--lane-repo` 可重复(一个子项目跨多个仓; 共用仓可同时列入多个顾问的信封), 新铸信封 frontmatter 落列表, 存量单值信封按单元素集合读(文件逐字节不变); 集合内每个名都须可解析, 任一不可解析 = BLOCK(逐个点名); 卡 lane 指称命中集合任一即匹配, 不匹配原因链列出整个集合。集合序列化/解析唯一 workspace_config.repo_name_set(见 lane_view.repo_set)。"
       },
       "launch": {
-        "description": "AIPOS-F95 件③: loop 内拉起薄函数(tools/aipos_cli/loop_driver.py, 无守护/调度/心跳/常驻): 在 N1 执行体等待与 N3 审计体等待进入 watch 之前, 条件全满足才拉起一次——①信封 launch_harnesses 覆盖该卡 harness(卡面值, 缺省 card.schema default_by_task_mode); ②该 harness 有 launch 模板(enums.schema harness.launch 非 null)且其可执行在驱动方 PATH; ③按本项目 enrollment_log 中该实例最新 land 事件定位工位位置 {host, dir}, transport(enums.schema workstation_transport)已支持(local; AIPOS-F110 起 remote 经 ssh, 见本段 remote); ④charter_render.workstation_identity(dir) 的实例 = 卡 assigned_to(审计卡 = 其认领实例)(remote 工位: 门机读不到远端目录, 身份 = land 事件实例, 另须 project.json workstations.<实例> 材料声明 + ssh 探测可达); ⑤未给 --no-launch; ⑥kickoff = 该工位 `my-tasks --workstation <dir> --task-id <等待目标卡> --json` 的 next_card.kickoff(AIPOS-F111 件①: 按卡号取, 只核验等待目标卡这一张——判据 next_resolver.kickoff_refusal, 与工位 `/go <卡号>` 同一判据; 不要求该卡是工位 NEXT_CARD_RULE 选卡结果, 同一工位同时在办多张卡可各自拉起; 唯一实现 loop_driver.workstation_kickoff)(remote: `my-tasks --actor <实例> --task-id <卡> --remote-workstation`, 同一 render_kickoff 附门机材料段)。任一不满足 → 退回手工模式(等待提示含工位目录与 /go; remote 工位提示 <host>:<dir>)。",
+        "description": "AIPOS-F95 件③: loop 内拉起薄函数(tools/aipos_cli/loop_driver.py, 无守护/调度/心跳/常驻): 在 N1 执行体等待与 N3 审计体等待进入 watch 之前, 条件全满足才拉起一次——①信封 launch_harnesses 覆盖该卡 harness(卡面值, 缺省 card.schema default_by_task_mode); ②该 harness 有 launch 模板(enums.schema harness.launch 非 null)且其可执行在驱动方 PATH; ③按本项目 enrollment_log 中该实例最新 land 事件定位工位位置 {host, dir}, transport(enums.schema workstation_transport)已支持(local; AIPOS-F110 起 remote 经 ssh, 见本段 remote); ④charter_render.workstation_identity(dir) 的实例 = 卡 assigned_to(审计卡 = 其认领实例)(remote 工位: 门机读不到远端目录, 身份 = land 事件实例, 另须 project.json workstations.<实例> 材料声明 + ssh 探测可达); ⑤未给 --no-launch; ⑥kickoff = 该工位 `my-tasks --workstation <dir> --task-id <等待目标卡> --json` 的 next_card.kickoff(AIPOS-F111 件①: 按卡号取, 只核验等待目标卡这一张——判据 next_resolver.kickoff_refusal, 与工位 `/go <卡号>` 同一判据; 不要求该卡是工位 NEXT_CARD_RULE 选卡结果, 同一工位同时在办多张卡可各自拉起; 唯一实现 loop_driver.workstation_kickoff)(remote: `my-tasks --actor <实例> --task-id <卡> --remote-workstation`, 同一 render_kickoff 附门机材料段)。任一不满足 → 退回手工模式(等待提示含工位目录与 /go; remote 工位提示 <host>:<dir>)。AIPOS-F164 件②(gap #149): 条件全满足后、起进程前(唯一拉起口 loop_driver._launched_wait 起点)核该工位章程新鲜度(distribution_sync.charter_freshness = `lybra sync --dry-run` 同一实现, F66B 三指纹): 最新 = 直接拉起; 不新鲜且 project.json charter_auto_sync(缺省 true)= 先 sync 本工位(`lybra sync` 同一实现)复核后拉起; sync 失败 = 不拉起(结束原因 charter_sync_failed); 自动 sync 关闭 = 不拉起(charter_not_fresh); 两者 lybra loop status 下一动作 advisor_fix(给 sync 修法)。local 工位才核, remote 工位门机不跨机读写工位文件(运行记录 charter_checks 记 not_applicable)。",
         "grace_seconds": 30,
         "grace_note": "产物就绪后给进程的宽限期(秒): 期内自行退出即收尾, 超期终止整个进程组",
         "terminate_wait_seconds": 5,
@@ -2143,6 +2143,7 @@
         "description": "AIPOS-F131 件①③: 每次 `lybra loop` 在项目声明的落点(project.json paths.loop_runs_root, 唯一读取口 workspace_config.project_paths; 缺省 5_tasks/records/loop_runs)维护本次运行的一份运行记录 <loop_runs_root>/<卡ID>/looprun_<卡ID>_<compact 时间>_<loop pid>.md(frontmatter 带 record_type, 过入库护栏 B④; 原子替换写)与同名 .log 日志(首块 frontmatter 带 log_record_type, 其后只追加)。记录内容: run_id、驱动方、信封、主机、loop pid 与进程启动时刻指纹(AIPOS-F137)、开始/更新时间; 每步(轮号/节点/状态/卡/动作/结果/退出码/时间, 不记命令与输出原文)与当前步(含等待对象与起始时间); 每次拉起(harness/transport/host/工位/pid/pgid/remote_pgid/进程启动时刻指纹/开始与收尾时间/outcome/returncode/termination)及其活动(事件条数、最近一行输出时间、最近有意义活动的时间与类别、按类计数); 结束时间/outcome/exit_code(读本条目 exit_codes)/end_reason/end_message(首行, 经 redact_progress)。**不落会话正文、工具参数、kickoff 与命令行原文**(探活只落进程启动时刻指纹 loop_run_record.process_fingerprint: Linux starttime / 无 /proc 用 ps lstart, 同一进程改标题 / 改名 / exec 不变, pid 复用的新进程必不同; F137 前写的命令行 sha1 旧指纹降级为仅按 pid 判并标注)。日志 = loop 人读输出逐行(经 harness_launch.redact_progress), 拉起进程的进度行在日志里只写类别(stdout 照旧一行式进度, 行为不变)。唯一实现 tools/aipos_cli/loop_run_record.py(LoopRunRecorder 写 / judge_run 判 / loop_status 读)。AIPOS-F147 件①(gap #104): 运行记录逐文件入卡落账——已结束的运行 .md(status≠running)入落账判据, 运行中的那份只随 N6 提交带走、不入判据(loop 每轮都写, 入判据则永不过; governance_commit.loop_run_files / card_trailing_paths); 出口 0 后本次运行终态写在落账之后, loop 以 governance_commit.reland_after_write 经 N6 同一提交口补落账(失败不改 loop 结果, 结果行如实输出; 已结束记录在判据内, lint/下次 loop 再点名); 日志 .log 不入库(LoopRunRecorder 经 git_exclude.register_git_exclude 登记 .git/info/exclude 一条 /<loop_runs_root 仓相对>/*/*.log)。记录建不起来 = loop 拒跑 exit 4(not_derivable, fail-closed: 运行须可查); 中途写失败不打断推进, 每种原因出声一次并计 write_errors。",
         "record_type": "loop_run",
         "log_record_type": "loop_run_log",
+        "charter_checks": "AIPOS-F164 件②(gap #149): 每次拉起前章程判定(loop_driver._charter_before_launch)追加一条 charter_checks {card, instance, workstation, outcome, repair_command, detail(经 redact_progress), at}: outcome = fresh(章程最新, 不 sync 直接拉起)/ synced(不新鲜 → 自动 sync 本工位后复核最新, 再拉起)/ sync_failed(自动 sync 失败, 不拉起, 结束原因 charter_sync_failed)/ refused(project.json charter_auto_sync=false, 不拉起, 结束原因 charter_not_fresh)/ not_applicable(跨机工位, 门机不核); 同时 loop 输出(即日志)一行 `[轮] charter: …`。判定 = distribution_sync.charter_freshness(`lybra sync --dry-run` 同一实现), 修复 = distribution_sync.sync_workstation_charter(`lybra sync` 同一实现)。无拉起的运行不出现本键(存量记录形不变)。",
         "activity_flush_seconds": 5,
         "activity_flush_note": "拉起进程活动写入节流: 每拉起首条活动立即写, 之后每本秒数至多写一次(等待期 sleeper 每轮调 flush, 静默期也把最后一条落盘); 步骤开始/落定、拉起开始/收尾、结束一律立即写",
         "stall_after_seconds": 900,
@@ -2191,7 +2192,9 @@
           "deploy_changed": "部署已更新, 步间停下(exit_codes.deploy_changed; 新旧提交见运行记录 deploy 段)",
           "interrupted": "loop 收到 SIGINT/SIGTERM/SIGHUP(已清拉起进程组; exit_code 记 128+信号)",
           "crashed": "loop 内部异常退出(exit_code 记 1; 异常类型进 end_message)",
-          "card_owner_mismatch": "AIPOS-F156 件②: 卡归属(门侧发布记录签发实例)≠ 驱动方, 且驱动方本次信封限 lane(非总顾问), 启动即拒、未推进任何步(exit_codes.not_derivable)"
+          "card_owner_mismatch": "AIPOS-F156 件②: 卡归属(门侧发布记录签发实例)≠ 驱动方, 且驱动方本次信封限 lane(非总顾问), 启动即拒、未推进任何步(exit_codes.not_derivable)",
+          "charter_sync_failed": "AIPOS-F164 件②: 拉起 pi 前工位章程不新鲜(未渲染 / 指纹过期 / 缺失 / 核不了), 自动 sync 该工位失败(或 sync 后复核仍不新鲜), 未拉起(exit_codes.not_derivable; 修法 = 结束原文的 lybra sync 命令)",
+          "charter_not_fresh": "AIPOS-F164 件②: 拉起 pi 前工位章程不新鲜, 项目声明关闭自动 sync(project.json charter_auto_sync=false, 或该键不合), 未拉起(exit_codes.not_derivable; 修法 = 结束原文的 lybra sync 命令)"
         },
         "end_codes": {
           "description": "AIPOS-F150 件①(gap #128): loop 以 end_reasons 所列结束原因结束时, 运行记录另落 end_codes = 门拒原文(loop 结果全文 message, 非仅首行 end_message)里出现的既有门拒错误码列表(按出现顺序去重)。只抽取不造码: 码 = 门侧 blocking_reasons / error_code 既有写法(`<码>: 原因` 或 error_code=<码>), 抽取式样即 patterns(每条含命名组 code); 抽不出 = 空列表(下一动作照旧 owner_needed)。其余结束原因不落(null)。唯一实现 tools/aipos_cli/loop_run_record.extract_end_codes(LoopRunRecorder.end 调用); 旧记录无此键 = 视同空列表(行为不变)。AIPOS-F155 件①(gap #133): 门拒原文三种已知格式同一抽取——列表(`lybra_queue_return BLOCKED: [\"BRANCH_WRONG_BASE: …\"]` / ['…'])、单条(`<码>: 原因` / error_code=<码>)、finalize 结果段(`Verdict: BLOCK` 下一行 `error_code: <码>`, 码 = finalize 结果 category: 仓级合入锁 REPO_MERGE_IN_PROGRESS / 合并冲突 MERGE_CONFLICT 等); finalize 此前不出码 = 抽不出(F151/F152 实撞 end_codes 为空)。",
@@ -2283,7 +2286,9 @@
           "deploy_changed": "advisor_fix",
           "interrupted": "investigate",
           "crashed": "investigate",
-          "card_owner_mismatch": "owner_needed"
+          "card_owner_mismatch": "owner_needed",
+          "charter_sync_failed": "advisor_fix",
+          "charter_not_fresh": "advisor_fix"
         },
         "by_execution_mode": {
           "description": "AIPOS-F156 件①(gap #139): 按本卡执行方式分流的覆盖表(唯一声明, 与 by_end_reason 同节; 判定唯一实现 loop_run_record.next_action)。执行方式 = 运行最后一次等待的卡即本卡(执行体等待; 等审计 / 外部 FINALIZE / 同仓先合入卡的等待不适用)时, 经 workspace_config.card_execution_mode(只读 F143 执行方式声明唯一读取口 workspace_config.project_execution)判出; AIPOS-F157 件③(gap #125): 等待目标实例为无工位的子 agent 执行者(enrollment.instance_enrollment governance_root_mode, 与 lybra_loop.launch.manual_hint.subagent 同一判定 loop_driver.wait_instance_is_subagent)= subagent(未声明 execution 亦然, 等交回超时不再出工位 /go 口径); 未声明 execution 且非子 agent 执行者 / 判不出 = 不覆盖(行为不变)。modes 键 ⊆ config.schema project_json.execution.default_mode 值域。by_end_reason = 该执行方式下覆盖 by_end_reason 的结束原因映射(判为 advisor_fix 的须在 routine_rejections.end_reasons 有修法, 连续计数与其他例行结束原因同一实现); kickoff_detail = 手工等待(reason=manual_kickoff)时顾问下一动作 detail 的前缀(占位 {hint} = 运行记录里的开工提示)。pi 执行工位 / 手工工位(card_execution_mode = pi 或未声明)= 原口径(owner_needed / 向 Owner 说开工提示)。",
@@ -2365,6 +2370,23 @@
                 "子 agent 仍在做 → 等它提交并写完交回(RETURN.md)后用原命令重跑 loop(本修法末行命令; 已落的步不重复, 推导核按已落记录续做)",
                 "子 agent 已终止或未派 → 按开工材料派本卡子 agent(`lybra my-tasks --actor <本卡 assigned_to> --task-id {task_id}` 给工作树 / 报告落点 / 卡路径), 子 agent 写完交回即止",
                 "建议重跑时加大 --max-wait(秒; 缺省读 verbs.schema lybra_loop.parameters.max_wait), 免子 agent 长任务期间再超时"
+              ]
+            },
+            "charter_sync_failed": {
+              "why_routine": "AIPOS-F164 件②(gap #149): loop 拉起 pi 前核出工位章程不是产品渲染的最新版, 自动 sync 该工位没成(连不上门 / 工位未接入或非本项目 / 渲染声明读不出等, 原因原文在结束原文与运行记录 charter_checks), 未拉起、未推进; 修法固定 = 按原文的 lybra sync 命令把该工位章程同步到最新后用原命令重跑, 不涉设计判断",
+              "fix": [
+                "不改卡、不问 Owner: 读结束原文(或运行记录 charter_checks 末条 detail / repair_command)里 sync 失败的原因与修法命令(lybra sync --harness-root <工位> --workspace-root {governance_root})",
+                "在治理根所在机先跑该命令加 --dry-run 看 plan, 再不带 --dry-run 跑; 失败原因不是例行(门挂 / 工位凭据失效 / 工位非本项目)= 按其出口修(门 / 重签凭据 / 改卡 audit_by), 修不了 = 升 owner_needed",
+                "复核: lybra project check-workstation <项目名> --instance <工位实例> --harness pi 的「章程新鲜度」项 ✓",
+                "顾问用原命令重跑 loop(本修法末行命令): 拉起前复核章程最新即直接拉起"
+              ]
+            },
+            "charter_not_fresh": {
+              "why_routine": "AIPOS-F164 件②(gap #149): loop 拉起 pi 前核出工位章程不是产品渲染的最新版, 本项目声明不自动 sync(project.json charter_auto_sync=false), 按声明拒拉起; 修法固定 = 顾问手动 sync 该工位后用原命令重跑, 不涉设计判断",
+              "fix": [
+                "不改卡、不问 Owner: 按结束原文(或运行记录 charter_checks 末条 repair_command)的命令 sync 该工位(lybra sync --harness-root <工位> --workspace-root {governance_root}; 先加 --dry-run 看 plan)",
+                "复核: lybra project check-workstation <项目名> --instance <工位实例> --harness pi 的「章程新鲜度」项 ✓",
+                "顾问用原命令重跑 loop(本修法末行命令)"
               ]
             }
           }

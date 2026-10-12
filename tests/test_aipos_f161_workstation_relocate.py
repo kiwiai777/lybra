@@ -236,7 +236,7 @@ def test_item1_launch_cwd_follows_relocation(lrig, tmp_path, monkeypatch):
     f90.f78._claim_record(lrig.gov, CARD, EXEC)
     assert _ensure_worktree(lrig.gov, CARD)["ok"]
     f95._land(lrig.gov, EXEC, "executor", lrig.ws_exec)
-    RepoGate.roles = {"fixture-ws-not-a-secret": ("executor", None)}
+    RepoGate.roles = {f95.ws_token("executor"): ("executor", None)}  # AIPOS-F164: 夹具工位凭据按角色区分(f95.ws_token)
     monkeypatch.setattr(confirm_client, "GateClient", RepoGate)
     decl = launch_declaration(load_loop_contract())
     policy = load_policy(lrig.gov, f95.POLICY_LAUNCH)
