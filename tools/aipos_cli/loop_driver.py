@@ -803,7 +803,7 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
             failure = _session_event(governance_root, plan.card, actor, "harness_launch",
                                      f"harness={plan.harness}; transport={plan.location.get('transport')}; host={plan.location.get('host') or '(本机, 存量缺 host)'}; "
                                      f"workstation={plan.cwd}; pid={harness.pid}; pgid={harness.pgid}; remote_pgid={harness.remote_pgid}; envelope={envelope_id}; "
-                f"privilege_guard={harness.privilege_guard['state']}({harness.privilege_guard['detail']})")
+                                     f"privilege_guard={harness.privilege_guard['state']}({harness.privilege_guard['detail']})")
             if failure:
                 outcome = "record_failed"
                 step.ok, step.message = False, f"拉起事件写不进 {plan.card} session record({failure}), 已终止进程组; 拉起须留痕(fail-closed)"
