@@ -600,7 +600,8 @@ def generate_onboarding_guide(
     from tools.aipos_cli.custom_roles import role_classes_in_group
 
     adv_roles = ["lybra", "roles", "--workspace-root", gq]
-    common = ["--gate-url", _shell_quote(gate), "--ttl", "86400"]
+    # AIPOS-F157 件①: --actor = 签发实例(顾问本人), 按实例取凭据(F134/F154 唯一口; 同角色多顾问实例时缺之即拒)
+    common = ["--gate-url", _shell_quote(gate), "--ttl", "86400", "--actor", _shell_quote(inst["advisor"])]
     step6_cmds: list[str] = []
     step6: list[str] = ["# 每个工位先 --dry-run 预演(角色 / 实例 / 治理根 / 落点 / 覆盖信封, 不签码零写入)再 --confirm; 注册码只在本进程内"]
     # AIPOS-F102 件②: 发工位注册码的角色 = 工位类(roles.schema class_groups.workstation, 注册表顺序), 原写死的工位类分组元组退役

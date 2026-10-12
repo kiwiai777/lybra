@@ -249,6 +249,22 @@ def role_bound_instances(*, connection_json_path: str | Path, role: str) -> list
     return out
 
 
+def instance_bound_roles(*, connection_json_path: str | Path, agent_instance: str) -> list[str]:
+    """AIPOS-F157: 连接文件中 agent_instance = 该实例的可用条目(token_resolver.is_token_entry_active)的角色名(去重, 文件序)——
+    role_bound_instances 的反向; 只读条目的实例 / 角色字段, 不取凭据值。调用方只给了实例、未给角色时据此定角色(恰一个才定, 否则拒)。"""
+    from tools.aipos_cli.token_resolver import is_token_entry_active, load_connection_tokens
+
+    wanted = str(agent_instance or "").strip()
+    out: list[str] = []
+    for entry in load_connection_tokens(str(Path(connection_json_path).expanduser())):
+        if not is_token_entry_active(entry) or str(entry.get("agent_instance") or "").strip() != wanted:
+            continue
+        role = str(entry.get("role") or "").strip()
+        if role and role not in out:
+            out.append(role)
+    return out
+
+
 def load_role_token(*, connection_json_path: str, role: str, agent_instance: str | None = None) -> str:
     """AIPOS-F134 件①: 薄壳取门凭据的唯一入口(execute_two_phase_verb / execute_single_phase_via_gate 同用)。
     驱动方实例已知(driver_instance_hint)且所求角色 = 该实例条目角色 → 取该实例条目(同角色多实例不取首个); 否则按角色(既有 load_owner_token)。

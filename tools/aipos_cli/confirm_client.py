@@ -169,15 +169,18 @@ def resolve_gate_base_url(
 
 def load_gate_client_token(connection_json: str | Path) -> tuple[str, str]:
     """AIPOS-F106 件①(M1): 本机门客户端薄壳的凭据——按 config.schema identity_resolution.keys.token.gate_client_role_preference
-    (唯一声明, token_resolver.gate_client_role_preference 读)逐角色经 load_owner_token(→ token_resolver 单源挑选)取第一个可用条目。
+    (唯一声明, token_resolver.gate_client_role_preference 读)逐角色经 load_role_token(AIPOS-F157: 薄壳取凭据唯一口 → token_resolver 单源挑选)取第一个可用条目。
     返回 (role, token); token 只在进程内用, 永不回显。全部角色无可用条目 = ValueError(带各角色拒因)。
     文件不可读/非对象等非「无命中」错误原样抛出(fail-closed, 不换下一个角色掩盖)。"""
     from tools.aipos_cli.token_resolver import TokenResolutionError, gate_client_role_preference
+    from tools.aipos_cli.two_phase_shell_factory import load_role_token
 
     reasons: list[str] = []
     for role in gate_client_role_preference():
         try:
-            return role, load_owner_token(connection_json=connection_json, role=role)
+            # AIPOS-F157 件①: 逐角色取值经薄壳唯一口 load_role_token(loop 驱动方实例按实例取; 同角色可用条目绑定 ≥2 个实例 = 拒,
+            # DriverTokenError 非 TokenResolutionError → 原样抛出, 禁取首个冒名、不换下一个角色掩盖)
+            return role, load_role_token(connection_json_path=str(connection_json), role=role)
         except TokenResolutionError as exc:
             reasons.append(f"{role}: {exc}")
     raise ValueError(f"no usable token in {connection_json} ({'; '.join(reasons)})")
@@ -518,7 +521,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        token = load_owner_token(connection_json=args.connection_json, role=args.role, token_env=args.token_env)
+        if args.token_env:
+            token = load_owner_token(role=args.role, token_env=args.token_env)
+        else:  # AIPOS-F157 件①: 连接文件取凭据经薄壳唯一口(同角色多实例即拒, 禁取首个)
+            from tools.aipos_cli.two_phase_shell_factory import load_role_token
+
+            token = load_role_token(connection_json_path=str(args.connection_json), role=args.role)
     except (ValueError, OSError, json.JSONDecodeError) as exc:
         print(f"error reading token: {exc}")
         return 2

@@ -1241,16 +1241,16 @@ def _envelope_mint_via_gate(
         GateAddressError,
         GateClient,
         GateError,
-        load_owner_token,
         resolve_gate_base_url,
         token_fingerprint,
     )
+    from tools.aipos_cli.two_phase_shell_factory import load_role_token  # AIPOS-F157 件①: 取凭据唯一口(同角色多实例即拒)
     conn_path = workspace_connection_path(governance_root, connection_target=Path(connection_json) if connection_json else None)
     if not conn_path.is_file():
         print(f"Error: 凭据文件不存在: {conn_path}(--connection-json 指向持 {token_role} 凭据的 connection.json, 如门的中央凭据库)", file=sys.stderr)
         return 1
     try:
-        token = load_owner_token(connection_json=conn_path, role=token_role)
+        token = load_role_token(connection_json_path=str(conn_path), role=token_role)
     except (OSError, ValueError) as exc:
         print(f"Error: 读不到 {token_role} 凭据({conn_path}): {exc}", file=sys.stderr)
         return 1
@@ -1419,11 +1419,18 @@ class _RolesIssuerError(RuntimeError):
         self.next_step = next_step
 
 
-def _roles_issuer_client(workspace_root: Path, connection_target: Path | None, token_role: str) -> tuple[Any, dict[str, Any], str]:
+def _roles_issuer_client(workspace_root: Path, connection_target: Path | None, token_role: str,
+                         actor: str | None = None) -> tuple[Any, dict[str, Any], str, str | None]:
     """签码命令(roles enroll-code / enroll-deliver, AIPOS-F151 同一取法)的门客户端: <workspace>/.lybra/connection.json(或 --connection-json)
-    声明的门基址(唯一推导口 resolve_gate_base_url, 须声明 mcp.rpc_url)+ 按角色取凭据(缺省 advisor, 缺席回落 owner)。
-    凭据原文只在进程内作 HTTP Authorization, 永不上 argv / 不回显。返回 (client, connection 数据, 实际凭据角色)。"""
-    from tools.aipos_cli.confirm_client import GateAddressError, GateClient, load_owner_token, resolve_gate_base_url
+    声明的门基址(唯一推导口 resolve_gate_base_url, 须声明 mcp.rpc_url)+ 门凭据。
+    凭据原文只在进程内作 HTTP Authorization, 永不上 argv / 不回显。返回 (client, connection 数据, 实际凭据角色, 签发实例或 None)。
+
+    AIPOS-F157 件①(gap #132): 取凭据只走 F134/F154 按实例选凭据唯一口(two_phase_shell_factory), 删除按角色取首个 token 的旁路——
+    --actor <签发实例> = signer_role_for_actor(F134 driver_token_entry, 未接入即拒)定角色 + load_role_token(agent_instance=该实例)取同一条目;
+    缺 --actor = 按角色(缺省 advisor, 缺席回落 owner)经 load_role_token: 同角色可用条目绑定 ≥2 个实例 = 拒(禁取首个冒名, 不回落 owner),
+    ≤1 个实例 = 既有行为。"""
+    from tools.aipos_cli.confirm_client import GateAddressError, GateClient, resolve_gate_base_url
+    from tools.aipos_cli.two_phase_shell_factory import DriverTokenError, load_role_token, signer_role_for_actor
 
     conn_path = workspace_connection_path(workspace_root, connection_target=connection_target)
     if not conn_path.exists():
@@ -1435,14 +1442,26 @@ def _roles_issuer_client(workspace_root: Path, connection_target: Path | None, t
         base_url = resolve_gate_base_url(connection_json=conn_path, require_declared=True)
     except GateAddressError as exc:
         raise _RolesIssuerError(str(exc), "先 lybra serve start 或修正 connection.json。") from exc
+    signer = str(actor or "").strip()
+    if signer:
+        try:
+            role = signer_role_for_actor(connection_json_path=str(conn_path), actor=signer, repo_root=workspace_root)
+            token = load_role_token(connection_json_path=str(conn_path), role=role, agent_instance=signer)
+        except ValueError as exc:  # DriverTokenError(未接入 / 非驱动方角色类 / 与 loop 驱动方冲突)及读失败: 拒, 不回落按角色取
+            raise _RolesIssuerError(f"签发实例 --actor {signer} 取凭据被拒: {exc}",
+                                    f"--actor 写本治理根已接入的顾问实例(其凭据在 {conn_path}), 或去掉 --actor 用 --token-role 按角色取"
+                                    "(同角色多实例时必须 --actor)。") from exc
+        return GateClient(base_url, token, timeout=30.0), conn_data, role, signer
     for candidate_role in (token_role, "owner"):
         try:
-            token = load_owner_token(connection_json=conn_path, role=candidate_role)
-        except ValueError:
+            token = load_role_token(connection_json_path=str(conn_path), role=candidate_role)
+        except DriverTokenError as exc:  # 同角色多实例未指明 = 拒(禁取首个冒名), 不回落下一个角色掩盖
+            raise _RolesIssuerError(str(exc), f"加 --actor <签发实例>(本治理根已接入的 {candidate_role} 实例之一)按实例取凭据。") from exc
+        except ValueError:  # 该角色无可用条目(TokenResolutionError 族)/ 读失败: 按既有序试下一个角色, 全无 = 下方拒
             continue
-        return GateClient(base_url, token, timeout=30.0), conn_data, candidate_role
+        return GateClient(base_url, token, timeout=30.0), conn_data, candidate_role, None
     raise _RolesIssuerError(f"no usable role token ({token_role}/owner) in {conn_path}",
-                            "用 --token-role 指定角色, 或先在本机 enroll 出顾问/Owner 凭据。")
+                            "用 --actor <签发实例> 或 --token-role 指定, 或先在本机 enroll 出顾问/Owner 凭据。")
 
 
 def _render_roles_preview(command: str, args: argparse.Namespace, payload: dict[str, Any], lines: list[str]) -> None:
@@ -1975,6 +1994,7 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_code_parser.add_argument("--gate-url", help="Gate URL to embed. Default (AIPOS-F153, config.schema same_host_rule): loopback http://127.0.0.1:<gate port> when the code is redeemed on the gate host; the gate's connection.json mcp.rpc_url only when --instance is declared cross-host in its project's project.json workstations. Pass an externally reachable URL here for other cross-host redemption")
     roles_enroll_code_parser.add_argument("--governance-root", help="Governance workspace root to embed (F24A): bare registered project name or absolute path; validated against the project registry on the gate. Default: workspace_root of the local connection.json")
     roles_enroll_code_parser.add_argument("--token-role", default="advisor", help="Role of the local token used to call the gate verb (default: advisor; falls back to owner if advisor is absent)")
+    roles_enroll_code_parser.add_argument("--actor", default=None, help="AIPOS-F157: signing instance — the gate credential is taken from this instance's entry in connection.json (per-instance selection, AIPOS-F134/F154); required when the token role has two or more instances")
     roles_enroll_code_parser.add_argument("--owner-authorization-ref", help="Reference to owner authorization for this enrollment")
     roles_enroll_code_parser.add_argument("--reason", default="", help="Reason for generating this enrollment code")
     roles_enroll_code_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -1998,6 +2018,7 @@ def build_parser() -> argparse.ArgumentParser:
     roles_deliver_parser.add_argument("--gate-url", help=f"Externally reachable gate URL to embed (default: connection.json mcp.rpc_url if non-loopback, else {_GATE_URL_DEFAULT})")
     roles_deliver_parser.add_argument("--ttl", type=int, help="Code time-to-live in seconds (default 86400)")
     roles_deliver_parser.add_argument("--token-role", default="advisor", help="Role of the local credential used to call the gate (default: advisor; falls back to owner)")
+    roles_deliver_parser.add_argument("--actor", default=None, help="AIPOS-F157: signing instance — the gate credential is taken from this instance's entry in connection.json (per-instance selection, AIPOS-F134/F154); required when the token role has two or more instances")
     roles_deliver_parser.add_argument("--owner-authorization-ref", required=True, help="Owner authorization ref for issuing the code (workstation codes: the envelope covering that workstation)")
     roles_deliver_parser.add_argument("--reason", default="", help="Reason recorded with the code")
     roles_deliver_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -3302,7 +3323,9 @@ def main(argv: list[str] | None = None) -> int:
                         "可抄示例: lybra roles enroll-code --role executor --owner-authorization-ref <owner-authorization-ref>"
                     )
                 try:
-                    client, conn_data, token_role_used = _roles_issuer_client(workspace_root, connection_target, token_role)
+                    # AIPOS-F157 件①: --actor = 签发实例(按实例取凭据唯一口); 缺 = 按角色取, 同角色多实例即拒
+                    client, conn_data, token_role_used, signer = _roles_issuer_client(
+                        workspace_root, connection_target, token_role, str(getattr(args, "actor", "") or "").strip() or None)
                 except _RolesIssuerError as exc:
                     return _enroll_code_fail(str(exc), next_step=exc.next_step)
                 # ② 治理根(F24A): 显式参数优先, 缺省=本机 connection.json 的 workspace_root —— 显式化传入, 码内治理根不再依赖门进程环境解析
@@ -3315,7 +3338,7 @@ def main(argv: list[str] | None = None) -> int:
                     "governance_root": governance_root,
                     "owner_authorization_ref": owner_auth_ref,
                     "reason": reason,
-                    "actor": f"cli:roles-enroll-code:{token_role_used}",
+                    "actor": signer or f"cli:roles-enroll-code:{token_role_used}",
                 }
                 try:
                     issued = gate_enroll_code(client, params, confirm=confirm_phase)
@@ -3398,8 +3421,9 @@ def main(argv: list[str] | None = None) -> int:
                 from tools.aipos_cli.enroll_deliver import EnrollDeliverRollbackError, GateVerbRefused, enroll_deliver
 
                 try:
-                    client, _conn, token_role_used = _roles_issuer_client(
-                        workspace_root, connection_target, str(getattr(args, "token_role", "advisor") or "advisor"))
+                    client, _conn, token_role_used, signer = _roles_issuer_client(
+                        workspace_root, connection_target, str(getattr(args, "token_role", "advisor") or "advisor"),
+                        str(getattr(args, "actor", "") or "").strip() or None)  # AIPOS-F157 件①: 与 enroll-code 同一取法
                 except _RolesIssuerError as exc:
                     print(f"Error: {exc}", file=sys.stderr)
                     print(f"下一步: {exc.next_step}", file=sys.stderr)
@@ -3411,7 +3435,7 @@ def main(argv: list[str] | None = None) -> int:
                         confirm=bool(getattr(args, "confirm", False)), ssh_target=args.ssh, harness_kind=args.harness,
                         harness_dir=args.harness_dir, harness_host=args.harness_host, executor_mode=args.executor_mode,
                         gate_url=args.gate_url, ttl_seconds=args.ttl, reason=str(args.reason or "").strip(),
-                        actor=f"cli:roles-enroll-deliver:{token_role_used}",
+                        actor=signer or f"cli:roles-enroll-deliver:{token_role_used}",
                     )
                 except (GateVerbRefused, GateError, EnrollDeliverRollbackError, RuntimeError, ValueError) as exc:
                     if getattr(args, "json", False):
@@ -6122,11 +6146,18 @@ def main(argv: list[str] | None = None) -> int:
                 elif hasattr(args, 'global_workspace_root') and args.global_workspace_root:
                     workspace_root = Path(args.global_workspace_root).expanduser().resolve()
                 
+                # AIPOS-F157 件①(gap #132): 给了 --agent-instance / --actor = 按该实例取凭据(唯一口 F154 load_role_token, 无即拒);
+                # 都未给 = 按角色取, 同角色多实例即拒(禁取首个)。显式给出的身份参数优先于自发现结果(只补缺的)。
+                signer_instance = (str(getattr(args, 'agent_instance', None) or getattr(args, 'actor', None) or "").strip() or None)
                 context = resolve_audit_context(
                     workspace_root=workspace_root,
                     role=getattr(args, 'token_role', 'auditor'),
                     gate_url=getattr(args, 'gate_url', None),
+                    agent_instance=signer_instance,
                 )
+                for key in ("actor", "agent_instance", "owner_policy_ref"):
+                    if getattr(args, key, None):
+                        context[key] = getattr(args, key)
                 
                 print(f"[自发现] gate_url: {context['gate_url']}", file=sys.stderr)
                 print(f"[自发现] role: {context['role']}", file=sys.stderr)
@@ -6140,7 +6171,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             # 显式参数模式（向后兼容）
             # AIPOS-F154 件②: 取凭据走薄壳唯一口 load_role_token(loop 驱动方实例按实例取; 同角色 ≥2 实例未指明 = 拒, 禁取首个)
-            from tools.aipos_cli.two_phase_shell_factory import load_role_token
+            # AIPOS-F157 件①: 与自发现同一取法 resolve_audit_credential——按 --agent-instance 实例取(无即拒), 未给 --token-role 时按该实例定角色
+            from tools.aipos_cli.audit_helpers import resolve_audit_credential
             
             connection_json_path = args.connection_json
             if not connection_json_path:
@@ -6150,9 +6182,10 @@ def main(argv: list[str] | None = None) -> int:
                     connection_json_path = workspace_connection_path(Path(repo_root or Path.cwd()))
             
             try:
-                token = load_role_token(
+                token_role_used, token, _entry = resolve_audit_credential(
                     connection_json_path=str(connection_json_path),
                     role=args.token_role,
+                    agent_instance=args.agent_instance,
                 )
             except (ValueError, OSError, json.JSONDecodeError) as exc:
                 print(f"Error reading token: {exc}", file=sys.stderr)
@@ -6167,7 +6200,7 @@ def main(argv: list[str] | None = None) -> int:
             context = {
                 "gate_url": resolved_gate_url,
                 "token": token,
-                "role": args.token_role,
+                "role": token_role_used,
                 "actor": args.actor,
                 "agent_instance": args.agent_instance,
                 "owner_policy_ref": args.owner_policy_ref,
