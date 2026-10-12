@@ -55,7 +55,7 @@ lybra onboarding guide my_project --repo app=/abs/path/to/app
 | 步 | 执行方 | 做什么 |
 |---|---|---|
 | 1 | 顾问 | `lybra project new my_project`:在 home 根下建治理根(队列 / 记录 / 治理文档 / project.json + 首份阶段快照),并落账 |
-| 2 | 顾问 | `lybra project set-repos … --dry-run` 预演 diff → `--confirm` 写入:声明产品仓,并落账 |
+| 2 | 顾问 | `lybra project set-repos … --dry-run` 预演 diff → `--confirm` 写入:声明产品仓(写后即自动落账) |
 | 3 | **Owner** | 签发一次性顾问注册码(`lybra roles … enroll-code`) |
 | 4 | **Owner** | 一条命令签三张信封:驱动方 / 执行 / 审计(`lybra envelope mint --confirm`) |
 | 5 | 顾问 | 凭码 enroll 到治理根,顾问技能与章程交付到会话目录(Claude Code:`lybra roles enroll --harness claude-code`;Codex:`--harness codex`) |
@@ -68,7 +68,9 @@ lybra onboarding guide my_project --repo app=/abs/path/to/app
 (打印 diff 与校验,零写入),`--confirm` 才写。顾问会话用 Codex 时,向导加 `--advisor-harness codex`(会话在他机再加
 `--advisor-host <会话所在机>`),第 5 步即给出 `--harness codex` 的接入命令。
 
-每步之后的落账(`lybra governance-commit --paths <本步产物>`)向导已原样给出;治理根须在治理仓(git)内,
+落账:写治理真相的命令(写 project.json 的 `lybra project set-*`、`lybra envelope mint`、`lybra migrate …`)`--confirm`
+写后即自动提交并推送治理仓,不必再跑 `lybra governance-commit`;落账失败时命令以 exit 3 退出并打印补账命令,照跑那一条即可。
+只有第 1 步建项目之后,向导原样给出一条 `lybra governance-commit --paths <本步产物>`。治理根须在治理仓(git)内,
 不在时向导先给出 `lybra home git-init --home-root <home 根>`。任一步卡住:
 `lybra onboarding check my_project --step <n>` 输出缺什么、怎么修。
 
@@ -135,7 +137,7 @@ lybra board open --workspace-root <治理根>                 # 本地看板(默
 
 ## 核心概念
 
-- **文件即真相**:卡、记录、裁决、决策都在治理根的文件里,并经 `lybra governance-commit` 进治理仓
+- **文件即真相**:卡、记录、裁决、决策都在治理根的文件里,并经唯一提交口 `lybra governance-commit` 进治理仓(卡由 `lybra loop` 结案后、写命令由 `--confirm` 写后自动调用)
 - **门不是引擎**:门不运行、不唤醒 agent;推进由顾问的 `lybra loop` 在 Owner 信封授权下完成,工位只有在信封明确授权拉起时才由 loop 拉起
 - **执行体零门**:执行 / 审计工位只交产物,所有门动作由产品完成
 - **执行者 ≠ 审计者**:没有独立审计 PASS,不 finalize

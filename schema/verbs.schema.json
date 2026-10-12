@@ -117,13 +117,18 @@
       }
     },
     "records_migration_writers": {
-      "description": "AIPOS-F158 件②(gap #130): `lybra migrate` 族(存量治理真相迁移, 首项 record-type: 补齐滞留未入库、缺 record_type 而被入库护栏 B④ 拒入的记录)同一两阶段语义——旗标注册与 project_json_writers / roles_writers / queue_writers 同一包装 aipos_cli._project_json_two_phase_flags(family=records_migration_writers), 旗标名与缺省阶段读 project_json_writers 一处(本段不重复声明)。缺省 = 预演: 列出候选(治理根 records 下 git 将新增且被 B④ 判据 governance_guardrails.check_entries 拒入、缺必填字段者)、按声明落点推导出的类型与处置, 零写入; --confirm 才改写可推导者并经 lybra_governance_commit.post_write_landing 同一提交口落账。推导 = 唯一命中的声明落点(transitions artifact_ingest.verdict.report_snapshot / record_locations.kinds), 只对声明了可复原记录头的类改写(审计报告快照: 记录头取自引用它的裁决记录且 sha256 一致, 构造 = board_adapter.render_report_snapshot); 其余记录类缺 record_type = 门出生标记缺失, 补字段即伪造门记录, 列出类型不改; 推导不出列出原因不改。唯一实现 tools/aipos_cli/record_type_migration.py。日后新增迁移命令登记于 commands 即得同一两阶段。",
+      "description": "AIPOS-F158 件②(gap #130): `lybra migrate` 族(存量治理真相迁移, 首项 record-type: 补齐滞留未入库、缺 record_type 而被入库护栏 B④ 拒入的记录)同一两阶段语义——旗标注册与 project_json_writers / roles_writers / queue_writers 同一包装 aipos_cli._project_json_two_phase_flags(family=records_migration_writers), 旗标名与缺省阶段读 project_json_writers 一处(本段不重复声明)。缺省 = 预演: 列出候选(治理根 records 下 git 将新增且被 B④ 判据 governance_guardrails.check_entries 拒入、缺必填字段者)、按声明落点推导出的类型与处置, 零写入; --confirm 才改写可推导者并经 lybra_governance_commit.post_write_landing 同一提交口落账。推导 = 唯一命中的声明落点(transitions artifact_ingest.verdict.report_snapshot / record_locations.kinds), 只对声明了可复原记录头的类改写(审计报告快照: 记录头取自引用它的裁决记录且 sha256 一致, 构造 = board_adapter.render_report_snapshot); 其余记录类缺 record_type = 门出生标记缺失, 补字段即伪造门记录, 列出类型不改; 推导不出列出原因不改。唯一实现 tools/aipos_cli/record_type_migration.py。AIPOS-F160 件③: 第二项 decision-log-pointers(历史缺 decision_log 自动指针补生成, 同一两阶段 + 同一提交口; 各命令一句话见 commands_description)。日后新增迁移命令登记于 commands 即得同一两阶段。",
       "commands": [
-        "record-type"
+        "record-type",
+        "decision-log-pointers"
       ],
+      "commands_description": {
+        "record-type": "补齐滞留未入库、缺 record_type 而被入库护栏 B④ 拒入的记录(AIPOS-F158 件②)",
+        "decision-log-pointers": "AIPOS-F160 件③(gap #145): 历史缺 decision_log 自动指针的决策记录补生成指针(声明 config.schema governance_structure.timeline_enforcement.decision_level.missing_pointer_backfill; 唯一实现 tools/aipos_cli/decision_log_pointers.py, 生成复用门落库同一实现 board_adapter._auto_generate_decision_log_pointer)。预演列出缺指针的决策记录与将生成的指针名, --confirm 生成并经同一提交口落账(post_write_landing.commands.migrate_decision_log_pointers); 推导不出的列出不补; 幂等。"
+      },
       "flag_help": {
-        "dry_run": "Preview records rejected by guard B④ for a missing record_type, the type derived from declared record locations and what would change, without writing (default)",
-        "confirm": "Rewrite the derivable records and land them via the governance-commit path (lybra governance-commit --paths), pushing like N6 landing"
+        "dry_run": "Preview the migration candidates, what was derived for each and what would be written, without writing (default)",
+        "confirm": "Write the derivable items and land them via the governance-commit path (lybra governance-commit --paths), pushing like N6 landing"
       },
       "outcome_labels": {
         "preview": "预览(未写; 加 --confirm 写入并落账)",
@@ -2527,6 +2532,11 @@
             "cli": "lybra envelope mint --confirm",
             "scope": "门 owner_decision_record envelope 路径确认应答的 performed_writes(决策记录 + 信封 + decision_log 自动指针; 指针由门 board_adapter._auto_generate_decision_log_pointer 写出即列入), 各张签发的并集; 中途门拒 = 已签各张照落账",
             "message_template": "chore(governance): 信封签发落账 {policy_ids}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra envelope mint --confirm"
+          },
+          "migrate_decision_log_pointers": {
+            "cli": "lybra migrate decision-log-pointers --confirm",
+            "scope": "AIPOS-F160 件③: 本次补生成的 decision_log 指针文件(decision_log_pointers.run_pointer_backfill 的 written); 推导不出 / 不补的不入, 决策记录本身不改不入",
+            "message_template": "chore(governance): decision_log 指针补生成 {count} 份\n\nActor: {actor}\nType: governance_commit\nCommand: lybra migrate decision-log-pointers --confirm"
           },
           "migrate_record_type": {
             "cli": "lybra migrate record-type --confirm",

@@ -318,17 +318,21 @@ def test_item2_guide_steps_1_2_land_their_products(tmp_path: Path, monkeypatch: 
         lines = [l for l in guide["steps"][idx]["command"].splitlines() if l.strip() and not l.startswith("#")]
         landing = [l for l in lines if l.startswith("lybra governance-commit")]
         _show(f"[②·Step {idx + 1} 命令原文]\n" + "\n".join(lines))
-        assert len(landing) == 1 and landing[0] == lines[-1]
-        assert check_command_parses(landing[0]) == (True, "")
-        argv = shlex.split(landing[0])
-        assert {argv[i + 1] for i, a in enumerate(argv) if a == "--paths"} == expected
-        assert "--task-id" not in argv and "." not in {argv[i + 1] for i, a in enumerate(argv) if a == "--paths"}
+        if idx == 1:
+            # AIPOS-F160 件①: 第 2 步 set-repos --confirm 写后自动落账(AIPOS-F159), 向导不再给多余的手跑落账行; 落账照样发生(下方核提交)
+            assert landing == [] and lines[-1].endswith("--confirm")
+        else:
+            assert len(landing) == 1 and landing[0] == lines[-1]
+            assert check_command_parses(landing[0]) == (True, "")
+            argv = shlex.split(landing[0])
+            assert {argv[i + 1] for i, a in enumerate(argv) if a == "--paths"} == expected
+            assert "--task-id" not in argv and "." not in {argv[i + 1] for i, a in enumerate(argv) if a == "--paths"}
         for line in lines:
             capsys.readouterr()
             rc = cli_main(shlex.split(line)[1:])
             out = capsys.readouterr().out
             assert rc == 0, out[-2000:]
-        _show(f"[②·Step {idx + 1} 落账输出(截)]\n" + "\n".join(l for l in out.splitlines() if l.startswith(("Verdict", "✓", "Message"))))
+        _show(f"[②·Step {idx + 1} 落账输出(截)]\n" + "\n".join(l for l in out.splitlines() if l.startswith(("Verdict", "✓", "Message", "落账"))))
         files = _head_files(home)
         _show(f"[②·Step {idx + 1} 提交文件] {sorted(files)}")
         assert files and all(f.startswith("probe-f94/") for f in files)

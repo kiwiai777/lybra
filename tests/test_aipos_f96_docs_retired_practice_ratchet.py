@@ -52,6 +52,10 @@ RETIRED_PRACTICES: dict[str, tuple[str, str]] = {
     "old_connector": (r"\bagent (?:fetch|materialize|pushback)\b", "旧跨机连接器(N2, AIPOS-F103 已退役: 子命令不存在)"),
     "lybra_dispatch": (r"\blybra dispatch\b", "lybra dispatch 执行体自认领(N2, AIPOS-F103 已退役: 子命令不存在)"),
     "lybra_init": (r"\blybra init\b|\bworkspace init\b", "旧建项目入口 init / workspace init(N1, AIPOS-F105 已退役, 命令已删); 现行 = onboarding guide + project new"),
+    "enroll_code_on_cmdline": (
+        r"\benroll --code\b|--code (?:<|LYBRAENROLL1|\"|')",
+        "注册码写进命令行(`roles enroll --code <码>`); 现行 = `lybra roles enroll-deliver` 签码 + 兑换同一进程, 码不进命令行(AIPOS-F151/F160)",
+    ),
 }
 COMPILED = {pid: re.compile(rx) for pid, (rx, _) in RETIRED_PRACTICES.items()}
 
@@ -228,6 +232,7 @@ def test_patterns_hit_retired_forms_and_spare_current_forms():
         "old_connector": "lybra agent materialize --task-id X; lybra agent pushback",
         "lybra_dispatch": "lybra dispatch --task-id X",
         "lybra_init": "lybra init ./ws --project-id p; lybra workspace init",
+        "enroll_code_on_cmdline": "lybra roles enroll --code <码> --workspace ~/ws",  # AIPOS-F160 件②
     }
     assert set(retired) == set(RETIRED_PRACTICES)
     for pid, sample in retired.items():
@@ -242,6 +247,8 @@ def test_patterns_hit_retired_forms_and_spare_current_forms():
         "lybra tui --gate-url http://127.0.0.1:7118",
         "lybra governance-commit --task-id X --actor a",
         "lybra queue amend --task-id X",
+        "lybra roles enroll-deliver --role executor --governance-root /g --workspace ~/w --owner-authorization-ref p --dry-run",
+        "lybra roles enroll-void --code-id c1 --project p",
     ]
     for line in current_forms:
         hit = [pid for pid, rx in COMPILED.items() if rx.search(line)]

@@ -210,7 +210,7 @@ def select_token_entry(
         raise TokenAllRetiredError(
             f"All {len(matched)} token entr{'y' if len(matched) == 1 else 'ies'} for {selector} in {source} "
             f"are retired (fingerprints: {fps}) — no active credential. "
-            f"出口: 重签凭据 `{TOKEN_REENROLL_EXIT}` (Owner 签发新 enrollment 码)"
+            f"出口: 重签凭据 `{TOKEN_REENROLL_EXIT}`(签码 + 兑换同一进程, 码不进命令行; 预演后换 --confirm)"
         )
     if project is not None:
         raise TokenNotFoundError(
