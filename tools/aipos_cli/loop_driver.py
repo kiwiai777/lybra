@@ -494,10 +494,22 @@ def plan_launch(governance_root: Path, card: str, *, policy: dict[str, Any] | No
             plan.location = {"found": False, "reason": f"{card} 无 assigned_to/认领实例"}
     except (ValueError, OSError, SchemaLoadError) as exc:
         plan.location = {"found": False, "reason": f"工位位置读取失败: {exc}"}
+    # AIPOS-F156 件①: 本卡执行方式(只读 F143 声明, workspace_config.card_execution_mode 唯一判定)= 子 agent 时, 开工提示同为子 agent 口径
+    # (执行者实例无子 agent 接入登记也不出「在工位敲 /go」的 pi 口径); 声明读不出 / 不合 = 不据声明改口径, 照接入模式判定
+    from tools.aipos_cli.audit_derivation import is_audit_card
+    from tools.aipos_cli.workspace_config import ExecutionDeclarationError, card_execution_mode, project_execution
+
+    try:
+        by_declaration = card_execution_mode(project_execution(governance_root), fm,
+                                             audit_card=is_audit_card(card, fm)) == "subagent"
+    except (ExecutionDeclarationError, OSError, ValueError):
+        by_declaration = False
     plan.manual_hint = _render_manual_hint(decl, harness=plan.harness, instance=plan.instance, location=plan.location,
-                                           subagent=subagent, card=card)
+                                           subagent=subagent or by_declaration, card=card)
     if subagent:  # 无工位可拉起: 不拉起, 等待提示 = 顾问派子 agent(信封是否授权拉起均同)
         plan.refusal = plan.refusal or f"实例 {plan.instance} 为子 agent 执行者(接入模式 {view['mode']}, 无工位), loop 不拉起"
+    elif by_declaration:
+        plan.refusal = plan.refusal or "本卡执行方式 = 顾问派子 agent(project.json execution, AIPOS-F143), loop 不拉起"
 
     def refuse(reason: str) -> LaunchPlan:
         plan.refusal = plan.refusal or reason
@@ -942,6 +954,14 @@ def _run_enveloped(task_id: str, governance_root: Path, result: LoopResult, *, t
     say(f"lybra loop {task_id}: envelope={envelope_id} driver={driver_actor} max_steps={max_steps} max_wait={max_wait}s")
 
     result.envelope = envelope_id
+    from tools.aipos_cli.machine_zone import card_owner_refusal
+
+    refusal = card_owner_refusal(governance_root, task_id, task_fm, driver_actor=driver_actor, policy=policy)
+    if refusal:  # AIPOS-F156 件②(gap #140): 卡归属 ≠ 驱动方且非总顾问 = 拒(防跑走别人的卡; 例行清单之外, 该停)
+        say(f"lybra loop {task_id}: exit {exit_code_for(contract, 'not_derivable')} — {refusal}")
+        result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), refusal
+        result.reason = "card_owner_mismatch"
+        return result
     # AIPOS-F90 件①: 已校验的驱动方身份与信封贯穿推导核与执行体(派生 claim/return/verdict/close 带同一 owner_policy_ref)
     with driver_scope(actor=driver_actor, policy_id=envelope_id):
         try:

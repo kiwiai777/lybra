@@ -56,17 +56,19 @@ role: advisor
 #### `lybra draft create`
 **何时用**:新建任务草稿。
 ```bash
-lybra draft create --from-template basic --task-id <卡ID> --title "..." --project <项目名>
-# 生成 5_tasks/drafts/<卡ID小写>.md(--from-json <草稿JSON> 为另一入口, 二选一)
+lybra draft create --from-template basic --task-id <卡ID> --title "..." --project <项目名> --actor <你的顾问实例>
+# 生成 5_tasks/drafts/<卡ID小写>.md(--from-json <草稿JSON> 为另一入口, 二选一); --actor 填卡稿 created_by
 ```
 
 #### `lybra draft publish`
 **何时用**:发布草稿到 pending 队列(N0)。
 ```bash
-lybra draft publish --path 5_tasks/drafts/<卡ID小写>.md --dry-run   # 先预演
-lybra draft publish --path 5_tasks/drafts/<卡ID小写>.md
+lybra draft publish --path 5_tasks/drafts/<卡ID小写>.md --actor <你的顾问实例> --dry-run   # 先预演
+lybra draft publish --path 5_tasks/drafts/<卡ID小写>.md --actor <你的顾问实例>
 ```
-发布者身份取驱动方凭据绑定的实例(本命令无 `--actor`)。
+`--actor` = 签发实例(AIPOS-F156): 记入发布记录 actor = 卡归属(共用仓「取下一张只取本子项目的卡」、loop 拒跑别人的卡都按它判);
+按 `--actor` 实例核凭据(治理根连接文件须有该实例的顾问凭据)。同一治理根接入多个顾问实例时必填(缺 = 拒 `PUBLISH_ACTOR_REQUIRED`);
+只接入一个时可省(推断为该实例)。
 **自动校验**:schema 校验(必填/拼错字段)、N0 容量 lint(交付大项>3 会 WARN)。
 
 #### `lybra queue amend`
@@ -214,8 +216,10 @@ lybra audit dispatch --task-id <卡ID> --actor <你的顾问实例> \
 **何时用**:查询任务当前状态 → 下一步动词+完整参数(AIPOS-R7A 大项C;AIPOS-F71 起唯一实现为 `lybra next`)。
 ```bash
 lybra next --task-id <卡ID>
+lybra next --actor <你的顾问实例>   # 项目扫描按归属看(AIPOS-F156): 只推荐归属本实例的卡, 共用仓里其他顾问的卡单列「其他子项目(不取)」
 ```
 **输出**:当前状态、下一步动词、完整命令、触发者、授权语义(由 transitions.schema 生成,禁口述)。
+项目扫描(无 `--task-id`)给 `--actor` 时, 你的有效信封不限 lane(总顾问)= 看全量、只标归属; 存量卡(发布记录无归因)按卡面 created_by 标「自报」。
 
 **对外陈述序列必须由它生成**(LOOP-REDESIGN §4.5 A13)——口述 = 记忆叙述 = 漏步漂移。
 

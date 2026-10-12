@@ -250,6 +250,40 @@
     },
     "repo_set": "AIPOS-F139(Owner 10-09 方案 A): --lane 与信封 task_selector_lane_repo 都是仓集合, 写法 = 参数可重复(`--lane a --lane b` / `lybra envelope mint --lane-repo a --lane-repo b`), 不按逗号拆分(仓指称可为绝对路径, 逗号无转义歧义; 与既有 --policy-id / --launch-harness 可重复同一惯例)。集合的序列化与解析唯一实现 = workspace_config.repo_name_set(去空去重保序; 单个字符串 = 单元素集合, 存量单值信封据此读、文件不改写); 过滤仍只在 filter_rows_by_lane(行 lane ∈ 集合; AIPOS-F141: 未解析 lane 不混入, 单独计数), 信封判定仍只在 autonomy_policy.match_claim_envelope。JSON 输出 lane_filter = 规范 lane 键列表; 分组输出不变。同仓合入由 F135 自动排队。",
     "next_card": "lybra next 项目扫描首位给「下一张可推进卡」= pending 且可推导(依赖满足, 判据唯一实现 task_complexity.dependencies_satisfied)的卡中优先级最高者(enums.schema priority 值序, 后者高; 同级按 task_id); 无则写明原因。结案后取下一张的唯一出口",
+    "owner_view": {
+      "description": "AIPOS-F156 件②③(gap #140/#141): 卡归属与归属视角唯一声明。卡归属 = 门侧发布记录(records publishes)的签发实例 actor(唯一判定 machine_zone.card_owner, 不另立卡面字段口径): 取该卡最近一份 actor 不在 unattributed_actors 内的发布记录 = owner_source publish_record; 审计卡归属 = 被审卡归属; 存量卡(发布记录无归因)回退读卡面 self_report_keys 按序首个合实例名模板者(custom_roles.instance_name_canonical_refusal 判)= owner_source self_reported, 输出标 self_report_marker; 都无 = 归属不明(不分组、不隐藏)。归属视角(唯一判定 machine_zone.owner_viewer): 给 --actor = 该实例; 否则给 --lane 且有效信封(有效性唯一判据 autonomy_policy.select_envelope)中 lane 集合覆盖所给 lane、agent_or_role 为实例名者恰一个实例 = 该实例(多个 / 无 = 不按归属分, 行为不变); loop 结案取下一张 = 运行记录驱动方 + 本次运行信封。总顾问 = 视角实例的有效信封中有不限 lane 者(loop = 本次运行信封不限 lane): 看全量(只标归属不分组)。非总顾问: 四视图(next 项目扫描 / brief / needs-owner / loop status 结案取下一张)只推荐 / 计入归属本实例或归属不明的卡, 归属其他实例的卡单列 other_summary(不取、不推导)——四视图经唯一可见卡入口 machine_zone.visible_cards 同一判定。loop 启动: 驱动方非总顾问且卡归属来自发布记录且 ≠ 驱动方 = 拒(结束原因 card_owner_mismatch → owner_needed, 例行清单之外); 自报归属不作拒据(卡面字段是起草输入自报), 只作视图分组。",
+      "cli_flag": "--actor",
+      "dest": "view_actor",
+      "metavar": "<实例>",
+      "commands": [
+        "lybra next",
+        "lybra brief",
+        "lybra needs-owner"
+      ],
+      "help": "AIPOS-F156: 归属视角(顾问实例): 只推荐 / 计入归属本实例(门侧发布记录签发实例; 存量卡回退卡面 created_by 标「自报」)的卡, 共用仓里归属其他实例的卡单列「其他子项目(不取)」; 该实例有不限 lane 的有效信封 = 总顾问, 看全量。缺省 = 不按归属分(--lane 且其信封恰属一个实例时按该实例)",
+      "unattributed_actors": [
+        "unknown",
+        "gate_derivation"
+      ],
+      "self_report_keys": [
+        "created_by",
+        "draft_created_by"
+      ],
+      "self_report_marker": "自报",
+      "chief_summary": "归属视角 {instance}: 总顾问(有效信封不限 lane), 看全量",
+      "viewer_summary": "归属视角 {instance}(来源 {source}): 只取归属本实例或归属不明的卡",
+      "other_summary": "其他子项目(不取) {count} 张(归属其他实例, 不推荐、不取): {items}",
+      "other_item": "{task_id}(归属 {owner}{marker})",
+      "row_tag": "[归属 {owner}{marker}]",
+      "loop_refusal": "卡归属不符, 拒跑(防跑走别人的卡): {task_id} 归属 {owner}(门侧发布记录签发实例), 驱动方 {driver} 本次信封 {envelope} 限 lane {lanes}(非总顾问)。出口: 由 {owner} 推进本卡; 或请 Owner 定由不限 lane 的总顾问推进",
+      "publish_signer": {
+        "description": "AIPOS-F156 件③: `lybra draft create|publish --actor <实例>` 的签发实例(publish 记入发布记录 actor / published_by; create 填卡稿 created_by, 已给且不同 = 拒)。身份核验走 F154 按 --actor 实例选凭据唯一口 two_phase_shell_factory.signer_role_for_actor(治理根连接文件须有该实例可用的驱动方条目, 无即拒)。缺 --actor = 按当前治理根唯一顾问实例推断: 连接文件(门注册表)里绑定实例的驱动方条目恰一个 = 该实例(two_phase_shell_factory.driver_token_instances 唯一判定, 只读条目的实例 / 角色字段, 不取凭据值); ≥2 个 = 拒(多实例必填); 无连接文件 / 0 个 = 存量行为(发布记录 actor 记 unknown, 输出写明未归因)。唯一实现 draft_writer.resolve_publish_signer(CLI 两子命令同用; 门侧 MCP 发布以门认定的 actor 记账, 不经此处)。",
+        "multi_refusal": "PUBLISH_ACTOR_REQUIRED: 本治理根接入了 {count} 个顾问实例 {instances}, 未给 --actor 无从定签发实例(多实例必填, 禁取首个)。出口: 加 --actor <本会话顾问实例>",
+        "signer_refusal": "PUBLISH_ACTOR_UNVERIFIED: 签发实例 {actor} 核不过(按 --actor 实例选凭据, AIPOS-F154): {reason}",
+        "created_by_refusal": "PUBLISH_ACTOR_MISMATCH: 卡稿 created_by={created_by} 与签发实例 --actor {actor} 不一致(卡归属以签发实例为准)。出口: 去掉卡稿 created_by 由 --actor 填写, 或改 --actor",
+        "unattributed_note": "发布记录 actor 未归因(unknown): {reason}; 卡归属回退卡面 created_by(自报)"
+      }
+    },
     "performance": {
       "description": "AIPOS-F142 件③: 四视图(loop status / next 项目扫描 / needs-owner / brief)性能阈值与回归夹具规模的唯一声明(夹具 tests/test_aipos_f142_view_speed_quiet_trace.py 读本段造临时治理根并测时)。阈值是产品目标(秒); 夹具断言用 阈值 × ci_slack_factor(沙箱/并发 CI 宽裕), 原始耗时与阈值一并打印。实现约束: 一次视图调用全程一个只读作用域(task_loader.task_card_lookup_scope, 可重入): 队列索引一趟、冻结清单重放一次、信封已放行计数一趟(lookup_scope_memo); --task-id 只读该卡运行记录, 已结束运行不探活; 结案取下一张只扫可当选状态(next_resolver.NEXT_CARD_STATES)。",
       "fixture": {
@@ -2122,7 +2156,8 @@
           "verb_not_authorized": "信封未授权该动词(exit_codes.no_envelope)",
           "deploy_changed": "部署已更新, 步间停下(exit_codes.deploy_changed; 新旧提交见运行记录 deploy 段)",
           "interrupted": "loop 收到 SIGINT/SIGTERM/SIGHUP(已清拉起进程组; exit_code 记 128+信号)",
-          "crashed": "loop 内部异常退出(exit_code 记 1; 异常类型进 end_message)"
+          "crashed": "loop 内部异常退出(exit_code 记 1; 异常类型进 end_message)",
+          "card_owner_mismatch": "AIPOS-F156 件②: 卡归属(门侧发布记录签发实例)≠ 驱动方, 且驱动方本次信封限 lane(非总顾问), 启动即拒、未推进任何步(exit_codes.not_derivable)"
         },
         "end_codes": {
           "description": "AIPOS-F150 件①(gap #128): loop 以 end_reasons 所列结束原因结束时, 运行记录另落 end_codes = 门拒原文(loop 结果全文 message, 非仅首行 end_message)里出现的既有门拒错误码列表(按出现顺序去重)。只抽取不造码: 码 = 门侧 blocking_reasons / error_code 既有写法(`<码>: 原因` 或 error_code=<码>), 抽取式样即 patterns(每条含命名组 code); 抽不出 = 空列表(下一动作照旧 owner_needed)。其余结束原因不落(null)。唯一实现 tools/aipos_cli/loop_run_record.extract_end_codes(LoopRunRecorder.end 调用); 旧记录无此键 = 视同空列表(行为不变)。AIPOS-F155 件①(gap #133): 门拒原文三种已知格式同一抽取——列表(`lybra_queue_return BLOCKED: [\"BRANCH_WRONG_BASE: …\"]` / ['…'])、单条(`<码>: 原因` / error_code=<码>)、finalize 结果段(`Verdict: BLOCK` 下一行 `error_code: <码>`, 码 = finalize 结果 category: 仓级合入锁 REPO_MERGE_IN_PROGRESS / 合并冲突 MERGE_CONFLICT 等); finalize 此前不出码 = 抽不出(F151/F152 实撞 end_codes 为空)。",
@@ -2178,7 +2213,7 @@
       "next_action": {
         "description": "AIPOS-F136 件①: 顾问下一动作(唯一判定 tools/aipos_cli/loop_run_record.next_action; 输出与 --json 每个运行附 next_action {action, reason, detail, hint}, --task-id 时顶层另附本卡的 next_action)。判据只读运行记录: 状态(judge_run)→ by_state; 已结束 → 结束原因 by_end_reason(结束原因原文 end_message 即门/推导核的拒因, 一并给出); 本卡最近连续 consecutive_failures_owner_needed 次运行都以 investigate 类原因结束 = 连败 → owner_needed。AIPOS-F150 件②: by_end_reason 判为 owner_needed 的运行, 若运行记录 end_codes(lybra_loop.run_record.end_codes)非空且全部在 routine_rejections.codes 内 = advisor_fix(修法读声明, 顾问自处理不问 Owner); 同卡同一例行码连续 routine_rejections.repeat_owner_needed 次 = owner_needed(routine_fix_exhausted)。",
         "actions": {
-          "continue_wait": "loop 仍在推进(或在等工位产物): 再跑一次 `lybra loop status --task-id <卡ID> --wait <秒>`; reason=manual_kickoff 时 loop 在手工模式等工位, 向 Owner 说一次 detail 里的开工提示(在哪个工位敲 /go), 然后继续等",
+          "continue_wait": "loop 仍在推进(或在等工位产物): 再跑一次 `lybra loop status --task-id <卡ID> --wait <秒>`; reason=manual_kickoff 时 loop 在手工模式等执行体开工: execution_mode=subagent(AIPOS-F156: 本卡执行方式 = 顾问派子 agent, 判定读 project.json execution)= 顾问按 detail 派本卡子 agent 开工(不找 Owner、不敲 /go), 否则向 Owner 说一次 detail 里的开工提示(在哪个工位敲 /go); 然后继续等",
           "owner_needed": "须 Owner 决定/授权: 停下, 一次说清 detail 里要 Owner 定什么(设计分叉 / 授权 / 连败 / 门拒原因), Owner 定了再续跑 loop",
           "card_done_take_next": "本卡已结案并落账: 取本 lane 下一张(next_card 与 hint 由 F133「下一张」出口给出; 无可推进卡时 hint 为 lane 扫描)",
           "investigate": "loop 或其拉起的进程异常(停滞 / 进程已不在 / 别机记录)或以推导/产物类原因结束: 按 hint 查(`lybra next --task-id <卡ID>` 给缺项与出口), 能修的出卡修、修好续跑 loop; 修不了 = 升 owner_needed",
@@ -2212,7 +2247,19 @@
           "landing_unverified": "investigate",
           "deploy_changed": "advisor_fix",
           "interrupted": "investigate",
-          "crashed": "investigate"
+          "crashed": "investigate",
+          "card_owner_mismatch": "owner_needed"
+        },
+        "by_execution_mode": {
+          "description": "AIPOS-F156 件①(gap #139): 按本卡执行方式分流的覆盖表(唯一声明, 与 by_end_reason 同节; 判定唯一实现 loop_run_record.next_action)。执行方式 = 运行最后一次等待的卡即本卡(执行体等待; 等审计 / 外部 FINALIZE / 同仓先合入卡的等待不适用)时, 经 workspace_config.card_execution_mode(只读 F143 执行方式声明唯一读取口 workspace_config.project_execution)判出; 未声明 execution / 判不出 = 不覆盖(行为不变)。modes 键 ⊆ config.schema project_json.execution.default_mode 值域。by_end_reason = 该执行方式下覆盖 by_end_reason 的结束原因映射(判为 advisor_fix 的须在 routine_rejections.end_reasons 有修法, 连续计数与其他例行结束原因同一实现); kickoff_detail = 手工等待(reason=manual_kickoff)时顾问下一动作 detail 的前缀(占位 {hint} = 运行记录里的开工提示)。pi 执行工位 / 手工工位(card_execution_mode = pi 或未声明)= 原口径(owner_needed / 向 Owner 说开工提示)。",
+          "modes": {
+            "subagent": {
+              "by_end_reason": {
+                "wait_timeout": "advisor_fix"
+              },
+              "kickoff_detail": "子 agent 模式(本卡执行方式 = 顾问派子 agent; 不找 Owner、不敲 /go): 顾问按开工材料派本卡子 agent 执行并写交回 —— {hint}"
+            }
+          }
         },
         "owner_reasons": {
           "gate_rejected": "门拒: 按拒因原文裁定(设计分叉 / 越界 / 冲突), 改卡或仲裁后续跑",
@@ -2222,7 +2269,8 @@
           "manual_required": "需人工裁定: 推导核给不出可执行命令(见 detail 的建议动作)",
           "wait_timeout": "工位开工: 手工模式下工位未交产物, 请 Owner 在工位敲 /go(或签带 --launch-harness 的信封授权拉起), 之后续跑 loop",
           "consecutive_failures": "连败: 本卡最近连续多次运行都异常结束, 不再自动续跑, 请 Owner 定是否改卡 / 换执行体 / 仲裁",
-          "routine_fix_exhausted": "例行门拒修了仍连败: 本卡连续多次被同一例行拒因码拒(固定修法对本卡不灵, 或多条 lane 交替抢合入), 不再自处理, 请 Owner 定是否改卡 / 排合入顺序 / 仲裁"
+          "routine_fix_exhausted": "例行门拒修了仍连败: 本卡连续多次被同一例行拒因码拒(固定修法对本卡不灵, 或多条 lane 交替抢合入), 不再自处理, 请 Owner 定是否改卡 / 排合入顺序 / 仲裁",
+          "card_owner_mismatch": "卡归属不符(AIPOS-F156): 本卡由另一实例发布(门侧发布记录签发实例), 驱动方的信封限 lane(非总顾问)不得跑走别人的卡; 请 Owner 定由归属实例推进, 或改由不限 lane 的总顾问推进"
         },
         "routine_rejections": {
           "description": "AIPOS-F150 件②(gap #128): 例行门拒清单与各码固定修法(唯一声明, 只追加; 判定唯一实现 loop_run_record.next_action)。by_end_reason 判为 owner_needed 的运行, 其 end_codes(lybra_loop.run_record.end_codes, 门拒原文里的既有错误码)非空且全部在 codes 内 = advisor_fix: hint = 各码 fix 逐条按序渲染(占位见 placeholders) + resume_hint; 任一码不在 codes / end_codes 为空 / 旧记录无 end_codes = owner_needed 照旧。防死循环: 本卡最近连续各次运行(含本次, 旧→新取尾段)的 end_codes 都含同一例行码且次数 ≥ repeat_owner_needed = owner_needed(routine_fix_exhausted)。码只取门侧既有错误码, 不另造; 未入清单的门拒码(RETURN_STALE / INGEST_TIP_MISMATCH / TEST_NOT_IN_RUNALL 等)的评估与理由见 AIPOS-F150 交回报告。AIPOS-F152 件①: end_reasons = 结束原因本身即例行的清单(只追加; 键须为 lybra_loop.run_record.end_reasons 已声明者, 且 by_end_reason 判为 advisor_fix 的结束原因必须在此有 fix)——by_end_reason 判为 advisor_fix 的运行 = 该结束原因 fix 逐条渲染 + resume_hint(占位只许 task_id / governance_root / actor_arg / envelope_arg, 值与 codes 修法同一实现); 本卡最近连续各次运行(含本次)以同一结束原因结束且次数 ≥ repeat_owner_needed = owner_needed(routine_fix_exhausted)。首项 deploy_changed(部署已更新, 用原命令重跑从断点续做)。",
@@ -2272,6 +2320,15 @@
               "fix": [
                 "不改卡、不碰产品仓、不问 Owner: 部署已更新, 上次 loop 跑的是旧版本代码, 已在步间停下(新旧提交见本运行记录 deploy 段 / detail)",
                 "顾问用原命令重跑 loop(本修法末行命令): 新进程从新部署快照加载, 推导核按已落记录从断点续做, 已落的步不重复"
+              ]
+            },
+            "wait_timeout": {
+              "why_routine": "AIPOS-F156 件①(gap #139): 只在 by_execution_mode.modes.subagent 覆盖时适用(本卡执行方式 = 顾问派子 agent): loop 等交回超 --max-wait 结束, 子 agent 多半仍在做(跑全量测试等长任务), 不是工位没人开工; 修法固定 = 等子 agent 交回后用原命令重跑, 或补派子 agent, 不涉 Owner 授权。pi 执行工位 / 手工工位仍按 by_end_reason(owner_needed: 请 Owner 在工位敲 /go)",
+              "fix": [
+                "不找 Owner: 本卡执行方式 = 顾问派子 agent(project.json execution), loop 等交回超时是例行等待, 不是工位没人开工",
+                "子 agent 仍在做 → 等它提交并写完交回(RETURN.md)后用原命令重跑 loop(本修法末行命令; 已落的步不重复, 推导核按已落记录续做)",
+                "子 agent 已终止或未派 → 按开工材料派本卡子 agent(`lybra my-tasks --actor <本卡 assigned_to> --task-id {task_id}` 给工作树 / 报告落点 / 卡路径), 子 agent 写完交回即止",
+                "建议重跑时加大 --max-wait(秒; 缺省读 verbs.schema lybra_loop.parameters.max_wait), 免子 agent 长任务期间再超时"
               ]
             }
           }

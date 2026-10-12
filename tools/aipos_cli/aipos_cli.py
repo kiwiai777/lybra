@@ -52,11 +52,13 @@ from tools.aipos_cli.board_adapter import submit_external_intake
 from tools.aipos_cli.controlled_execute import OWNER_CONFIRMATION_TOKEN, snapshot_hash, validate_owner_confirmation
 from tools.aipos_cli.draft_validator import list_drafts, validate_draft_file
 from tools.aipos_cli.draft_writer import (
+    apply_signer_created_by,
     build_template_payload,
     create_draft,
     load_body_file,
     load_create_payload_from_json,
     publish_draft,
+    resolve_publish_signer,
 )
 from tools.aipos_cli.external_intake_writer import build_external_intake_draft, load_intake_payload_from_json
 from tools.aipos_cli.orchestration_event_writer import append_orchestration_event, load_event_payload_from_json
@@ -298,8 +300,17 @@ def _attach_workstation_view(output: dict[str, Any], actor_report: dict[str, Any
     return output
 
 
+def _owner_viewer_for_args(governance_root: Path, args: Any, lane: str | list[str] | None) -> dict[str, Any] | None:
+    """AIPOS-F156 件②: 三视图(next 项目扫描 / brief / needs-owner)的归属视角——唯一判定 machine_zone.owner_viewer
+    (--actor 给出 = 该实例; 否则 --lane 且其有效信封恰属一个实例 = 该实例; 都无 = None 不按归属分)。"""
+    from tools.aipos_cli.machine_zone import owner_view_declaration, owner_viewer
+
+    actor = getattr(args, str(owner_view_declaration()["dest"]), None)
+    return owner_viewer(Path(governance_root), actor=actor, lane=lane)
+
+
 def _filter_needs_owner(report: dict[str, Any], *, governance_root: Path | None = None, lane: str | list[str] | None = None,
-                        include_frozen: bool = False) -> dict[str, Any]:
+                        include_frozen: bool = False, viewer: dict[str, Any] | None = None) -> dict[str, Any]:
     filtered = [
         task
         for task in report["tasks"]
@@ -315,7 +326,8 @@ def _filter_needs_owner(report: dict[str, Any], *, governance_root: Path | None 
     # 唯一过滤 filter_rows_by_lane, 给定 --lane 时未解析 lane 的卡单独成组)
     from tools.aipos_cli.machine_zone import visible_cards
 
-    view = visible_cards(governance_root, ((task, task.get("metadata")) for task in filtered), lane=lane, include_frozen=include_frozen)
+    view = visible_cards(governance_root, ((task, task.get("metadata")) for task in filtered), lane=lane, include_frozen=include_frozen,
+                         viewer=viewer)  # AIPOS-F156 件②: 归属视角同一判定
     return {**report, "scope": "needs_owner", "tasks": view["rows"], "view": view}
 
 
@@ -927,6 +939,13 @@ def _queue_mutation_arguments(subparser: argparse.ArgumentParser) -> None:
     subparser.add_argument("--json", action="store_true", help="Output JSON")
 
 
+def _signer_line(signer: dict[str, Any]) -> str:
+    """AIPOS-F156 件③: draft create / publish 文字输出末行 = 签发实例与来源(未归因 = 说明原文)。"""
+    if signer.get("actor"):
+        return f"签发实例: {signer['actor']}(来源 {signer.get('source')})"
+    return f"签发实例: 未归因 — {signer.get('note')}"
+
+
 def _queue_gate_connection_json(args: argparse.Namespace, repo_root: Any) -> str | None:
     """queue claim --confirm / queue adopt 的凭据文件解析(唯一): --connection-json → 治理根 .lybra/connection.json → LYBRA_CONNECTION_JSON。"""
     explicit = getattr(args, "connection_json", None)
@@ -1472,6 +1491,7 @@ def _render_enroll_deliver(result: dict[str, Any]) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     from tools.aipos_cli.machine_zone import add_lane_argument  # AIPOS-F133 件②: --lane 声明 verbs.schema lane_view
+    from tools.aipos_cli.machine_zone import add_owner_view_argument  # AIPOS-F156 件②: --actor 归属视角(lane_view.owner_view)
     # AIPOS-F106 件②: 帮助文案里的门地址示例读 config.schema urls.gate_local(唯一读取口 schema_loader), 禁写端口字面
     from tools.schema_loader import get_config_default_gate_url
     from tools.aipos_cli.verb_contract import declared_exit_codes  # AIPOS-F101 件③: help 中的退出码读声明
@@ -1607,6 +1627,7 @@ def build_parser() -> argparse.ArgumentParser:
     draft_create_parser.add_argument("--output-target", help="output_target value")
     draft_create_parser.add_argument("--artifact-policy", help="artifact_policy value")
     draft_create_parser.add_argument("--body-file", help="Optional body markdown file")
+    draft_create_parser.add_argument("--actor", default=None, help="AIPOS-F156: signing advisor instance (fills created_by; verified via the F154 per-instance credential pick). Default = the governance root's only advisor instance; required when several are enrolled")
     draft_create_parser.add_argument("--dry-run", action="store_true", help="Render and validate without writing")
     draft_create_parser.add_argument("--json", action="store_true", help="Output JSON")
 
@@ -1619,6 +1640,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     draft_publish_parser = draft_subparsers.add_parser("publish", help="Publish a validated draft to pending")
     draft_publish_parser.add_argument("--path", required=True, help="Draft path under 5_tasks/drafts/")
+    draft_publish_parser.add_argument("--actor", default=None, help="AIPOS-F156: signing advisor instance recorded as the publish record actor (= card owner; verified via the F154 per-instance credential pick). Default = the governance root's only advisor instance; required when several are enrolled")
     draft_publish_parser.add_argument("--dry-run", action="store_true", help="Validate and render without writing")
     draft_publish_parser.add_argument("--json", action="store_true", help="Output JSON")
 
@@ -1761,6 +1783,7 @@ def build_parser() -> argparse.ArgumentParser:
     needs_owner_parser = subparsers.add_parser("needs-owner", help="Render owner review tasks")
     needs_owner_parser.add_argument("--json", action="store_true", help="Output JSON")
     add_lane_argument(needs_owner_parser)  # AIPOS-F133 件②: 缺省按 lane 分组
+    add_owner_view_argument(needs_owner_parser)  # AIPOS-F156 件②
 
     validate_parser = subparsers.add_parser("validate", help="Run validator")
     validate_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -2376,6 +2399,7 @@ def build_parser() -> argparse.ArgumentParser:
     next_parser.add_argument("--connection-json", help="Path to connection.json (for --run gate access)")
     next_parser.add_argument("--json", action="store_true", help="Output JSON")
     add_lane_argument(next_parser)  # AIPOS-F133 件②: --lane(声明 verbs.schema lane_view; 只用于项目扫描)
+    add_owner_view_argument(next_parser)  # AIPOS-F156 件②: --actor 归属视角(只用于项目扫描)
 
     # AIPOS-F73D: lybra loop — 顾问侧驱动器(信封授权下 watch 产物落盘 → next --run 单步 → 重推导, 直到 completed)。
     # 参数缺省与退出码只声明在 schema/verbs.schema.json verbs.lybra_loop 一处(argparse 缺省 None, 运行时读声明)。
@@ -2564,6 +2588,7 @@ def build_parser() -> argparse.ArgumentParser:
     brief_parser.add_argument("--since", help="Only show decisions since this date (YYYY-MM-DD)")
     brief_parser.add_argument("--json", action="store_true", help="Output JSON")
     add_lane_argument(brief_parser)  # AIPOS-F133 件②: 缺省按 lane 分组
+    add_owner_view_argument(brief_parser)  # AIPOS-F156 件②
 
     # AIPOS-A1 大项A: governance add 子命令族(产生侧治理写入 CLI)
     governance_parser = subparsers.add_parser("governance", help="AIPOS-A1: 治理文件操作(产生侧写入 CLI, 声明驱动)")
@@ -2837,7 +2862,14 @@ def main(argv: list[str] | None = None) -> int:
                         },
                         body=body,
                     )
+                # AIPOS-F156 件③: 签发实例(唯一判定 draft_writer.resolve_publish_signer; 凭据文件经唯一解析口)→ 卡稿 created_by
+                signer = resolve_publish_signer(repo_root, args.actor, _queue_gate_connection_json(args, repo_root))
+                refusal = signer["refusal"] or apply_signer_created_by(metadata, signer)
+                if refusal:
+                    print(f"Error: {refusal}", file=sys.stderr)
+                    return 1
                 result = create_draft(repo_root, metadata, body, dry_run=args.dry_run)
+                result["signer"] = signer
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 print(f"Error: {exc}", file=sys.stderr)
                 return 1
@@ -2846,6 +2878,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(render_json(result))
             else:
                 print(render_draft_result_text(result))
+                print(_signer_line(result["signer"]))
             return 1 if result.get("verdict") == Verdict.BLOCK else 0
 
         if args.draft_command == "validate":
@@ -2870,7 +2903,13 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.draft_command == "publish":
             try:
-                result = publish_draft(repo_root, args.path, dry_run=args.dry_run)
+                # AIPOS-F156 件③: 签发实例 = 发布记录 actor(卡归属唯一来源); 多实例缺 --actor / 核不过 = 拒, 不落任何文件
+                signer = resolve_publish_signer(repo_root, args.actor, _queue_gate_connection_json(args, repo_root))
+                if signer["refusal"]:
+                    print(f"Error: {signer['refusal']}", file=sys.stderr)
+                    return 1
+                result = publish_draft(repo_root, args.path, dry_run=args.dry_run, actor=signer["actor"])
+                result["signer"] = signer
             except (OSError, ValueError) as exc:
                 print(f"Error: {exc}", file=sys.stderr)
                 return 1
@@ -2878,6 +2917,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(render_json(result))
             else:
                 print(render_draft_result_text(result))
+                print(_signer_line(signer))
             return 1 if result.get("verdict") == Verdict.BLOCK else 0
 
         if args.draft_command == "regen-machine-zone":
@@ -4401,6 +4441,7 @@ def main(argv: list[str] | None = None) -> int:
             since=since,
             lane=getattr(args, "lane", None),
             include_frozen=bool(getattr(args, "include_frozen", False)),  # AIPOS-F141 件①
+            actor=getattr(args, "view_actor", None),  # AIPOS-F156 件②: 归属视角
         )
 
     if args.command == "governance":
@@ -5700,6 +5741,11 @@ def main(argv: list[str] | None = None) -> int:
 
                 print("Error: --lane 只用于项目扫描(无 --task-id); 单卡推导不按 lane 过滤", file=sys.stderr)
                 return int(lane_view_declaration()["invalid_lane_exit_code"])
+            if args.task_id and getattr(args, "view_actor", None):
+                from tools.aipos_cli.machine_zone import lane_view_declaration
+
+                print("Error: --actor 只用于项目扫描(无 --task-id); 单卡推导不按归属过滤", file=sys.stderr)
+                return int(lane_view_declaration()["invalid_lane_exit_code"])
             if args.task_id:
                 # 单卡模式
                 result = derive_next_step(args.task_id, ws_root)
@@ -5731,7 +5777,8 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"Error: {exc}", file=sys.stderr)
                     return int(lane_view_declaration()["invalid_lane_exit_code"])
                 # AIPOS-F141: 扫描经唯一可见卡入口(machine_zone.visible_cards; 冻结卡缺省不列、--lane 只列所选), 汇总行同一渲染
-                view = scan_project_view(ws_root, lane=lane, include_frozen=bool(getattr(args, "include_frozen", False)))
+                view = scan_project_view(ws_root, lane=lane, include_frozen=bool(getattr(args, "include_frozen", False)),
+                                         viewer=_owner_viewer_for_args(Path(ws_root), args, lane))  # AIPOS-F156 件②
                 print(format_scan_output(view["rows"], json_mode=json_mode, lane=lane, view=view))
                 return 0
         except Exception as exc:
@@ -5874,7 +5921,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Error: {exc}", file=sys.stderr)
             return int(lane_view_declaration()["invalid_lane_exit_code"])
         owner_report = _filter_needs_owner(report, governance_root=repo_root, lane=lane,
-                                           include_frozen=bool(getattr(args, "include_frozen", False)))
+                                           include_frozen=bool(getattr(args, "include_frozen", False)),
+                                           viewer=_owner_viewer_for_args(Path(repo_root), args, lane))  # AIPOS-F156 件②
         view = owner_report["view"]
         if args.json:
             payload = _json_report(owner_report, records=records)
@@ -5884,7 +5932,8 @@ def main(argv: list[str] | None = None) -> int:
                             "task_lanes": {str(t.get("path")): {"lane": t.get("lane"), "lane_error": t.get("lane_error")}
                                            for t in owner_report["tasks"]},
                             "frozen_hidden": view["frozen_hidden"], "unresolved_lane": view["unresolved_lane"],
-                            "frozen_error": view["frozen_error"]})  # AIPOS-F141: 可见卡口径(machine_zone.visible_cards)
+                            "frozen_error": view["frozen_error"],  # AIPOS-F141: 可见卡口径(machine_zone.visible_cards)
+                            "owner_view": view["owner_view"], "owner_other": view["owner_other"]})  # AIPOS-F156 件②
             print(render_json(payload))
         else:
             print(render_needs_owner_text(owner_report, groups=None if lane else group_rows_by_lane(owner_report["tasks"], repo_root),

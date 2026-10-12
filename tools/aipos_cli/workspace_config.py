@@ -2057,6 +2057,31 @@ def project_execution(project_root: str | Path, *, project: dict[str, Any] | Non
             "auditor": auditor}
 
 
+# AIPOS-F156 件①: 卡的执行方式(唯一判定)——只读 F143 执行方式声明(project_execution 规范化视图), 起草缺省「派不派 pi」与
+# loop 等待 / 顾问下一动作按执行方式分流同读此处, 禁另判。
+EXECUTION_MODE_PI = "pi"
+
+
+def execution_wants_pi(execution: dict[str, Any], card: dict[str, Any] | None) -> bool:
+    """卡要派 pi 执行工位: harness=pi, 或未给 harness 而 assigned_to = 声明的 pi_executor(起草缺省与卡执行方式同一谓词)。"""
+    fm = card if isinstance(card, dict) else {}
+    harness = str(fm.get("harness") or "").strip()
+    assigned = str(fm.get("assigned_to") or "").strip()
+    return harness == EXECUTION_MODE_PI or (not harness and bool(assigned) and assigned == execution.get("pi_executor"))
+
+
+def card_execution_mode(execution: dict[str, Any] | None, card: dict[str, Any] | None, *, audit_card: bool = False) -> str | None:
+    """AIPOS-F156 件①: 卡的执行方式。execution = project_execution 结果; 未声明(None)= None(行为不变, 调用方按原口径);
+    审计卡(audit_card, 调用方经唯一判据 audit_derivation.is_audit_card 给出——本模块在 finalize 合并前预载闭包内, 不引入该依赖)= "pi"
+    (审计恒为独立 pi 审计工位); 卡要 pi(execution_wants_pi)= "pi"; 其余 = 声明的 default_mode(值域 config.schema
+    project_json.execution.default_mode, 如 subagent = 顾问派子 agent)。"""
+    if execution is None:
+        return None
+    if audit_card or execution_wants_pi(execution, card):
+        return EXECUTION_MODE_PI
+    return str(execution["default_mode"])
+
+
 # ---------------------------------------------------------------------------
 # AIPOS-F148 件②(gap #112): 交回「摘要来源」声明——缺省 transitions.schema artifact_ingest.return.summary_source,
 # 项目覆盖 project.json return_summary_source(config.schema project_json.schema.return_summary_source)。

@@ -533,7 +533,7 @@ def _view_card_id(row: dict[str, Any], metadata: dict[str, Any] | None) -> str:
 
 
 def visible_cards(governance_root: Path, entries: Any, *, lane: str | list[str] | None = None,
-                  include_frozen: bool = False) -> dict[str, Any]:
+                  include_frozen: bool = False, viewer: dict[str, Any] | None = None) -> dict[str, Any]:
     """AIPOS-F141: 四个查看命令(lybra next 项目扫描 / brief / loop status / needs-owner)共用的唯一「可见卡」入口。
 
     entries = 可迭代的 (row, metadata) 对: row 至少带 task_id 或 path; metadata = 卡面 frontmatter(读不出 = None)。
@@ -542,7 +542,11 @@ def visible_cards(governance_root: Path, entries: Any, *, lane: str | list[str] 
       ① 冻结: 是否冻结只调 F122 唯一判定 legacy_baseline.frozen_tasks; 缺省不列, 卡号进 frozen_hidden; include_frozen = 照列并标
          row["frozen"]=True。清单读不出 = frozen_error(原文), 不隐藏任何卡(fail-closed)。
       ② lane: 唯一过滤 filter_rows_by_lane; 给定 lane 时 lane 解析不了的行不混入, 进 unresolved_lane(卡号 + 原因)。
-    返回 {rows, frozen_hidden: [卡号], unresolved_lane: [{task_id, lane_error}], frozen_error: str|None, lane_filter, include_frozen}。"""
+      ③ 归属(AIPOS-F156 件②): viewer = owner_viewer 结果(None = 不按归属分, 行为不变)——每行经唯一判定 card_owner 标 owner /
+         owner_source; 非总顾问视角下归属其他实例的行移出 rows 进 owner_other(不取、不推导, 汇总行单列「其他子项目(不取)」);
+         归属本实例 / 归属不明的行留在 rows。总顾问 = 只标归属不分组。
+    返回 {rows, frozen_hidden: [卡号], unresolved_lane: [{task_id, lane_error}], frozen_error: str|None, lane_filter, include_frozen,
+          owner_view: viewer, owner_other: [{task_id, owner, owner_source, lane, ...}]}。"""
     from tools.aipos_cli.legacy_baseline import LegacyBaselineError, frozen_tasks
 
     root = Path(governance_root)
@@ -553,6 +557,7 @@ def visible_cards(governance_root: Path, entries: Any, *, lane: str | list[str] 
         frozen, frozen_error = {}, str(exc)
     rows: list[dict[str, Any]] = []
     hidden: list[str] = []
+    publishes = publish_index(root) if viewer is not None else {}
     for row, metadata in entries:
         card_id = _view_card_id(row, metadata)
         is_frozen = bool(card_id) and card_id in frozen
@@ -562,12 +567,20 @@ def visible_cards(governance_root: Path, entries: Any, *, lane: str | list[str] 
         out = dict(row) if "lane" in row else {**row, **lane_of_card(metadata, root)}
         if is_frozen:
             out["frozen"] = True
+        if viewer is not None:  # AIPOS-F156 件②: 归属唯一判定(发布记录索引一趟读, 逐行查)
+            out.update(card_owner(root, card_id, metadata, publishes=publishes))
         rows.append(out)
     aside: list[dict[str, Any]] = []
     rows = filter_rows_by_lane(rows, lane, set_aside=aside)
     unresolved = [{"task_id": _view_card_id(row, None) or "?", "lane_error": row.get("lane_error")} for row in aside]
+    other: list[dict[str, Any]] = []
+    if viewer is not None and not viewer.get("chief"):
+        other = [row for row in rows if row.get("owner") and row.get("owner") != viewer.get("instance")]
+        rows = [row for row in rows if not (row.get("owner") and row.get("owner") != viewer.get("instance"))]
     return {"rows": rows, "frozen_hidden": hidden, "unresolved_lane": unresolved, "frozen_error": frozen_error,
-            "lane_filter": lane, "include_frozen": bool(include_frozen)}
+            "lane_filter": lane, "include_frozen": bool(include_frozen), "owner_view": viewer,
+            "owner_other": [{k: row.get(k) for k in ("task_id", "owner", "owner_source", "lane", "current_state", "queue_state")
+                             if row.get(k) is not None} | {"task_id": _view_card_id(row, None) or "?"} for row in other]}
 
 
 def render_visible_summary(view: dict[str, Any]) -> list[str]:
@@ -585,7 +598,185 @@ def render_visible_summary(view: dict[str, Any]) -> list[str]:
                                                                                 if len(aside) > limit else "")
         lines.append(str(decl["unresolved_summary"]).format(count=len(aside), task_ids=ids,
                                                             lane=lane_filter_label(view.get("lane_filter"))))
+    viewer = view.get("owner_view")
+    if viewer:  # AIPOS-F156 件②: 归属视角一行 + 其他子项目(不取)单列(模板读 lane_view.owner_view)
+        owner_decl = owner_view_declaration()
+        if viewer.get("chief"):
+            lines.append(str(owner_decl["chief_summary"]).format(instance=viewer["instance"]))
+        else:
+            lines.append(str(owner_decl["viewer_summary"]).format(instance=viewer["instance"], source=viewer.get("source")))
+        if view.get("owner_other"):
+            lines.append(render_owner_other(view["owner_other"]))
     return lines
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F156 件②③: 卡归属(唯一判定 card_owner)+ 归属视角(唯一判定 owner_viewer)。声明 verbs.schema lane_view.owner_view。
+# 四视图经 visible_cards(viewer=)同一判定; loop 启动核归属(loop_driver)与结案取下一张(loop_run_record._take_next)同读此处。
+# ---------------------------------------------------------------------------
+
+_OWNER_VIEW_KEYS = ("cli_flag", "dest", "commands", "help", "unattributed_actors", "self_report_keys", "self_report_marker",
+                    "chief_summary", "viewer_summary", "other_summary", "other_item", "row_tag", "loop_refusal", "publish_signer")
+
+
+def owner_view_declaration() -> dict[str, Any]:
+    """verbs.schema lane_view.owner_view(缺键 = SchemaLoadError, fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (load_schema("verbs").get("lane_view") or {}).get("owner_view")
+    if not isinstance(decl, dict) or any(key not in decl for key in _OWNER_VIEW_KEYS):
+        raise SchemaLoadError(f"verbs.schema.json lane_view.owner_view 未声明或缺键 {list(_OWNER_VIEW_KEYS)}")
+    return decl
+
+
+def add_owner_view_argument(parser: Any) -> None:
+    """归属视角参数(声明 lane_view.owner_view.cli_flag / dest / help; 缺省 None = 不按归属分)。"""
+    decl = owner_view_declaration()
+    parser.add_argument(str(decl["cli_flag"]), dest=str(decl["dest"]), default=None, metavar=str(decl.get("metavar") or "ACTOR"),
+                        help=str(decl["help"]))
+
+
+def owner_marker(row: dict[str, Any]) -> str:
+    """归属来源标注: 自报(卡面 created_by 回退)= 「(自报)」后缀; 发布记录 = 空。"""
+    if row.get("owner_source") == "self_reported":
+        return f"({owner_view_declaration()['self_report_marker']})"
+    return ""
+
+
+def render_owner_other(other: list[dict[str, Any]]) -> str:
+    """「其他子项目(不取)」一行(四视图汇总行与 loop status 结案取下一张同一渲染; 模板 lane_view.owner_view.other_summary / other_item)。"""
+    decl = owner_view_declaration()
+    limit = int(lane_view_declaration()["visible_cards"]["unresolved_list_limit"])
+    items = ", ".join(str(decl["other_item"]).format(task_id=o.get("task_id"), owner=o.get("owner"), marker=owner_marker(o))
+                      for o in other[:limit])
+    if len(other) > limit:
+        items += f" …(另 {len(other) - limit} 张, --json 看全部)"
+    return str(decl["other_summary"]).format(count=len(other), items=items)
+
+
+def owner_tag(row: dict[str, Any]) -> str:
+    """行内归属标签(next 文字输出; 无归属信息 = 空串)。"""
+    if not row.get("owner_source"):
+        return ""
+    owner = row.get("owner") or "(未知)"
+    return str(owner_view_declaration()["row_tag"]).format(owner=owner, marker=owner_marker(row))
+
+
+def publish_index(governance_root: Path) -> dict[str, list[dict[str, Any]]]:
+    """发布记录按卡索引(records.load_records 唯一入口, 只读 publishes 分组, 一次视图一趟)。"""
+    from tools.aipos_cli.records import load_records
+
+    return dict(load_records(Path(governance_root), groups=["publishes"]).get("task_publishes") or {})
+
+
+def card_owner(governance_root: Path, task_id: str, metadata: dict[str, Any] | None, *,
+               publishes: dict[str, list[dict[str, Any]]] | None = None) -> dict[str, Any]:
+    """AIPOS-F156 件②: 卡归属唯一判定 → {owner, owner_source: publish_record|self_reported|unknown}。
+    ① 门侧发布记录: 该卡(审计卡 = 被审卡, audit_derivation.audit_card_reviewed_id)最近一份 actor 不在 unattributed_actors 的发布记录
+       签发实例; ② 存量卡回退卡面 self_report_keys 按序首个合实例名模板者(custom_roles.instance_name_canonical_refusal)= 自报;
+    ③ 都无 = 归属不明(owner None)。publishes = publish_index 结果(缺省按卡读)。只读。"""
+    from tools.aipos_cli.audit_derivation import audit_card_reviewed_id, is_audit_card
+    from tools.aipos_cli.custom_roles import instance_name_canonical_refusal
+
+    decl = owner_view_declaration()
+    unattributed = {str(a) for a in decl["unattributed_actors"]}
+    fm = metadata if isinstance(metadata, dict) else {}
+    tid = str(task_id or fm.get("task_id") or "").strip()
+    subject = tid
+    if tid and is_audit_card(tid, fm):
+        subject = audit_card_reviewed_id(tid, fm) or tid
+    if publishes is None:
+        from tools.aipos_cli.records import load_records
+
+        publishes = dict(load_records(Path(governance_root), groups=["publishes"], task_id=subject).get("task_publishes") or {})
+    records = sorted(publishes.get(subject) or [], key=lambda r: str(r.get("published_at") or ""), reverse=True)
+    for record in records:
+        actor = str(record.get("actor") or "").strip()
+        if actor and actor not in unattributed:
+            return {"owner": actor, "owner_source": "publish_record", "owner_ref": record.get("path")}
+    if subject == tid:
+        for key in decl["self_report_keys"]:
+            value = str(fm.get(key) or "").strip()
+            if value and value not in unattributed and not instance_name_canonical_refusal(value):
+                return {"owner": value, "owner_source": "self_reported", "owner_ref": f"卡面 {key}"}
+    return {"owner": None, "owner_source": "unknown", "owner_ref": None}
+
+
+def _valid_envelopes(governance_root: Path) -> list[dict[str, Any]]:
+    """当前有效的信封(有效性唯一判据 autonomy_policy.select_envelope → match_claim_envelope: 状态 / 批准 / 时间窗 / 选择器 / 额度),
+    身份 = 信封自身 agent_or_role。读不出 / 不合规的信封不计(select_envelope 已给原因, 归属视角不据其放宽或收紧)。"""
+    from tools.aipos_cli.autonomy_policy import load_policy, policy_ids, select_envelope
+
+    root = Path(governance_root)
+    valid: list[dict[str, Any]] = []
+    for pid in policy_ids(root):
+        policy = load_policy(root, pid)
+        covered = str((policy or {}).get("agent_or_role") or "").strip()
+        if not covered:
+            continue
+        matched, _reasons = select_envelope(root, identities=[(covered, covered, None)], policy_id=pid)
+        if matched is not None:
+            valid.append(matched)
+    return valid
+
+
+def owner_viewer(governance_root: Path, *, actor: str | None = None, lane: str | list[str] | None = None,
+                 policy: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """AIPOS-F156 件②: 归属视角唯一判定 → None(不按归属分, 行为不变)或 {instance, source, chief, chief_reason}。
+    actor 给出 = 该实例(source actor); 否则 lane 给出且有效信封中 lane 集合 ⊇ 所给 lane、agent_or_role 为实例名者恰一个 = 该实例
+    (source lane_envelope); 其余 = None。总顾问(chief): policy 给出(loop 本次运行信封)= 其不限 lane; 否则该实例的有效信封里有不限 lane 者。"""
+    from tools.aipos_cli.custom_roles import instance_name_canonical_refusal
+    from tools.aipos_cli.workspace_config import repo_name_set
+
+    root = Path(governance_root)
+    instance, source = str(actor or "").strip(), "actor"
+    envelopes: list[dict[str, Any]] | None = None
+    if not instance:
+        wanted = set(repo_name_set(lane))
+        if not wanted:
+            return None
+        envelopes = _valid_envelopes(root)
+        owners = set()
+        for env in envelopes:
+            covered = str(env.get("agent_or_role") or "").strip()
+            try:
+                env_lanes = set(resolve_lane_filter(root, env.get("task_selector_lane_repo")) or [])
+            except LaneFilterInvalid:
+                continue
+            if env_lanes and wanted <= env_lanes and not instance_name_canonical_refusal(covered):
+                owners.add(covered)
+        if len(owners) != 1:
+            return None
+        instance, source = owners.pop(), "lane_envelope"
+    if policy is not None:
+        lanes = repo_name_set(policy.get("task_selector_lane_repo"))
+        chief = not lanes
+        reason = f"本次信封 {policy.get('policy_id')} " + ("不限 lane" if chief else f"限 lane {lanes}")
+    else:
+        envelopes = envelopes if envelopes is not None else _valid_envelopes(root)
+        own = [env for env in envelopes if str(env.get("agent_or_role") or "").strip() == instance]
+        free = [env for env in own if not repo_name_set(env.get("task_selector_lane_repo"))]
+        chief = bool(free)
+        reason = (f"有效信封 {free[0].get('policy_id')} 不限 lane" if free
+                  else f"有效信封 {[e.get('policy_id') for e in own]} 均限 lane" if own else "无本实例的有效信封")
+    return {"instance": instance, "source": source, "chief": chief, "chief_reason": reason}
+
+
+def card_owner_refusal(governance_root: Path, task_id: str, card: dict[str, Any] | None, *, driver_actor: str,
+                       policy: dict[str, Any] | None) -> str:
+    """AIPOS-F156 件②: loop 启动核卡归属(唯一判定 card_owner + owner_viewer)。驱动方非总顾问(本次信封限 lane)且卡归属来自门侧发布记录
+    且 ≠ 驱动方 = 拒因原文(模板 lane_view.owner_view.loop_refusal); 否则 ""。自报归属 / 归属不明不作拒据(卡面字段是起草输入自报)。"""
+    from tools.aipos_cli.workspace_config import repo_name_set
+
+    viewer = owner_viewer(Path(governance_root), actor=driver_actor, policy=policy)
+    if viewer is None or viewer["chief"]:
+        return ""
+    own = card_owner(Path(governance_root), task_id, card)
+    if own["owner_source"] != "publish_record" or own["owner"] == viewer["instance"]:
+        return ""
+    return str(owner_view_declaration()["loop_refusal"]).format(
+        task_id=task_id, owner=own["owner"], driver=driver_actor, envelope=(policy or {}).get("policy_id") or "(未定)",
+        lanes=repo_name_set((policy or {}).get("task_selector_lane_repo")))
 
 
 def group_rows_by_lane(rows: list[dict[str, Any]], governance_root: Path | None = None) -> dict[str, list[dict[str, Any]]]:
