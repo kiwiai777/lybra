@@ -76,6 +76,10 @@ PLACEHOLDER_VALUES = {
     "<驱动方信封ID>": "pol_proj_loop_1",
     "<执行信封ID>": "pol_proj_exec_1",
     "<审计信封ID>": "pol_proj_audit_1",
+    # AIPOS-F162 件②: 已结案卡补充审计占位
+    "<已结案卡ID>": "PROJ-12",
+    "<争议摘要>": "dispute",
+    "<审计须在自己分配工作树重跑的命令>": "pytest",
 }
 PLACEHOLDER_RE = re.compile(r"<[^<>\s'\"]+>")
 #: 已退役的子命令(示例不得再教)

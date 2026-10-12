@@ -640,7 +640,12 @@ def loop_status(governance_root: Path, task_id: str | None = None, *, now: datet
     from tools.aipos_cli.task_loader import task_card_lookup_scope
 
     with task_card_lookup_scope(Path(governance_root)):
-        return _loop_status(Path(governance_root), task_id, now=now, contract=contract, lane=lane, include_frozen=include_frozen)
+        report = _loop_status(Path(governance_root), task_id, now=now, contract=contract, lane=lane, include_frozen=include_frozen)
+        if task_id:  # AIPOS-F162 件②: 本卡补充审计链路(唯一实现 audit_derivation.supplementary_audit_chain; 同一作用域, 不另扫队列)
+            from tools.aipos_cli.audit_derivation import supplementary_audit_chain
+
+            report["supplementary_audit"] = supplementary_audit_chain(Path(governance_root), task_id)
+        return report
 
 
 def _loop_status(governance_root: Path, task_id: str | None, *, now: datetime | None, contract: dict[str, Any] | None,
@@ -1263,12 +1268,6 @@ def loop_status_cli(args: Any) -> int:
                                  include_frozen=bool(getattr(args, "include_frozen", False)))
         else:
             report = wait_for_next_action(governance_root, task_id or "", float(wait), contract=contract, lane=lane)
-        if task_id:  # AIPOS-F162 件②: 本卡补充审计链路(唯一实现 audit_derivation.supplementary_audit_chain)
-            from tools.aipos_cli.audit_derivation import supplementary_audit_chain
-            from tools.aipos_cli.task_loader import task_card_lookup_scope
-
-            with task_card_lookup_scope(governance_root):
-                report["supplementary_audit"] = supplementary_audit_chain(governance_root, task_id)
     except StatusUsageError as exc:
         print(f"lybra loop status: {exc}", file=sys.stderr)
         return declared_exit_code(STATUS_VERB, "usage")

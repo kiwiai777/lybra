@@ -242,12 +242,14 @@ lybra audit dispatch --task-id <卡ID> --actor <你的顾问实例> \
 ```bash
 # ① 预演(缺省, 零写入): 列出补审卡号 <卡ID>-S<n>R / 审计实例 / 将写的文件
 lybra audit dispatch --supplementary --task-id <已结案卡ID> --actor <你的顾问实例> --reason "<争议摘要>" \
-  [--runtime-evidence-command "<审计须在自己分配工作树重跑的命令>"]…   # 可多次; 占位 {worktree}/{commit_sha}/{tree_hash}
-# ② 确认写入
-lybra audit dispatch --supplementary --task-id <已结案卡ID> --actor <你的顾问实例> --reason "<争议摘要>" [--runtime-evidence-command …] --confirm
+  --runtime-evidence-command "<审计须在自己分配工作树重跑的命令>"
+# ② 确认写入(同一组参数 + --confirm)
+lybra audit dispatch --supplementary --task-id <已结案卡ID> --actor <你的顾问实例> --reason "<争议摘要>" \
+  --runtime-evidence-command "<审计须在自己分配工作树重跑的命令>" --confirm
 # ③ 推进: 对原卡跑 loop(认领补审卡 → 拉起/等审计体 → 裁决入门 → 落账)
 lybra loop --task-id <已结案卡ID>
 ```
+`--runtime-evidence-command` 可省(省 = 沿用原卡卡面的 `audit_runtime_evidence` 声明)、可多次; 命令里可用占位 `{worktree}`/`{commit_sha}`/`{tree_hash}`(审计分配工作树 / 被审 tip / tree)。`--audit-agent-instance` 可省(缺省 = 原卡 audit_by)。
 原卡 closure 与原裁决不动、不回滚 main; 补审 PASS 类 → 原卡附「补审通过」; FAIL/BLOCK → 门自动派生关联修复卡 `<卡ID>-fix<n>`(走常规执行/审计/合入), 原卡标「补审未通过·修复卡 X」。同卡同时只允许一张在途补审(`SUPPLEMENTARY_AUDIT_IN_FLIGHT`); 未结案卡拒(`SUPPLEMENTARY_SOURCE_NOT_CONCLUDED`)。链路在 `lybra next --task-id` / `brief` / `loop status --task-id` / `needs-owner` 都可见。声明: transitions.schema `supplementary_audit`。
 
 **出卡声明审计须独立运行(AIPOS-F162)**:卡面要求审计「实际运行逐条核验」时, 不只写在正文里, 卡稿 frontmatter 加一个字段(唯一声明处; 缺省 = 不要求, 行为不变):
