@@ -72,7 +72,7 @@ lybra roles --workspace-root <项目根> enroll-deliver --role executor --instan
 lybra sync --harness-root <工位目录> --workspace-root <项目根>
 lybra sync --harness-root <工位目录> --workspace-root <项目根> --dry-run
 ```
-审计工位同法(`--role auditor`, 审计信封)。`--actor` = 签发实例(你自己, 按你在治理根连接文件的凭据签码; 同一角色接入多个顾问实例时必填, AIPOS-F157)。注册码只在本进程内(不打印、不落盘、不进 argv); enroll 按 Step 3 信封推导 owner_policy_ref; sync 落齐技能 / 扩展 / 章程并补挂缺失的 `.pi` 挂载。
+审计工位同法(`--role auditor`, 审计信封)。`--actor` = 签发实例(你自己, 按你在治理根连接文件的凭据签码; 同一角色接入多个顾问实例时必填, AIPOS-F157)。注册码只在本进程内(不打印、不落盘、不进 argv); enroll 按 Step 3 信封推导 owner_policy_ref; sync 落齐技能 / 扩展 / 章程并补挂缺失的 `.pi` 挂载。 工位章程由产品渲染(母本 + 项目声明, 不手写): 之后 `lybra project check-workstation` 的「章程新鲜度」项核它是否最新, `lybra loop` 拉起 pi 前也自动核, 过期先 sync 该工位再拉起(AIPOS-F164; 项目可在 project.json 声明 `"charter_auto_sync": false` 关闭自动 sync)。
 
 **失败出口**(首个外部项目接入实录的缺口已修, 再遇报 bug):
 - `ENROLL_ENVELOPE_MISSING` / `推导 owner_policy_ref 失败` → Step 3 信封未落或实例不符(预检拒 = 未签码、未改凭据)

@@ -181,6 +181,26 @@ independent pi auditor workstation (AIPOS-F143).
 `lybra loop` starts its sub-commands with the same Python interpreter and code tree it runs from, so it does not need
 `lybra` on `PATH` (for example when started over ssh); a sub-command that fails is reported with its error text.
 
+## Workstation charters are rendered by the product (AIPOS-F164)
+
+A workstation's charter (`AGENTS.md` in the workstation root) is produced by the product: `lybra sync` renders it from the
+role's charter master plus the project's declarations and records three fingerprints (master / declarations / rendered file)
+in the workstation's local manifest. A hand-written charter, or one that was never synced, is *unrendered*; one whose master or
+project declarations changed since the last sync is *stale*. There is one check and one fix, and every project uses the same
+commands on the governance-root machine:
+
+- `lybra project check-workstation <project> --instance <instance> --harness pi` adds a **charter freshness** line for a local
+  workstation. It runs the same check as `lybra sync --dry-run` and writes nothing: up to date = ✓; unrendered / stale /
+  missing / not checkable (for example the gate is unreachable) = ✗ with the fix,
+  `lybra sync --harness-root <workstation> --workspace-root <governance root>` (preview it with `--dry-run` first).
+- `lybra loop` checks the charter of the workstation it is about to start pi in (executor or auditor), every time. Up to date =
+  it starts pi. Not up to date = it runs `lybra sync` for that workstation only, checks again and then starts pi; the run
+  record (`charter_checks`) and the run log get one line each. If the sync fails, pi is not started and the run ends with
+  `charter_sync_failed`; a project that sets `"charter_auto_sync": false` in `project.json` gets no automatic sync and the
+  run ends with `charter_not_fresh` instead. For both, `lybra loop status` says `advisor_fix`: run the sync command from the
+  message, then rerun the same loop command (the same reason repeating on the same card escalates to `owner_needed`).
+- Remote workstations (on another machine) are not checked from the gate machine; run `lybra sync --dry-run` there.
+
 ## Moving a workstation out of a shared checkout
 
 A pi workstation (auditor or executor) that sits inside a git checkout shared with other projects is exposed to every
