@@ -10,8 +10,8 @@
 4. 幂等:重复 enroll 同 (project, role, machine) 轮换凭据不重复注册
 5. 跨机安全:enrollment code 可明文传输,token 只落目标机配置文件
 
-Usage:
-    lybra enroll --code <enrollment_code> --gate-url <url> [--workspace <path>]
+Usage(AIPOS-F160: 在治理根所在机优先 `lybra roles enroll-deliver`, 签码 + 兑换同一进程, 码不进命令行):
+    lybra roles enroll-deliver --role <角色> --governance-root <治理根> --workspace <工位根> --owner-authorization-ref <引用> --dry-run
 
 Security:
   - Enrollment code 可明文传输(它不是凭据,只是兑换凭据的临时通行证)
@@ -202,7 +202,8 @@ def exchange_enrollment_code(gate_url: str, code: str, bootstrap_token: str | No
             "Bootstrap token required for HTTP transport authentication (legacy plain code).\n"
             "Provide via --bootstrap-token or set LYBRA_BOOTSTRAP_TOKEN env var, or better: use a "
             "self-contained code (LYBRAENROLL1.*) from `lybra roles enroll-code` — 码即运输认证, 无需 bootstrap。\n"
-            "Example: lybra roles enroll --code LYBRAENROLL1.<base64> --workspace ~/my-workstation"
+            "Better still, enroll from the governance-root machine with `lybra roles enroll-deliver` (issue + exchange in one process; "
+            "the code never reaches a command line, AIPOS-F151)."
         )
     
     url = gate_rpc_url(gate_url)  # AIPOS-F106 件①: 门基址→MCP 端点唯一换算

@@ -84,14 +84,18 @@ def _validate_enrolled(root: Path) -> None:
             f"  正确用法: lybra sync --harness-root <你的工位根>"
         )
     if not is_enrolled_workstation(root):
-        # AIPOS-F93 件②: 兑换命令形 = onboarding.render_enroll_command(注册码交付文案唯一渲染; 原教不存在的 `lybra enroll --role`)
+        # AIPOS-F160 件②: 出口 = 签码 + 接入一体(enroll-deliver, 码不进命令行), 命令形 = 向导同一渲染 onboarding.render_enroll_deliver_command
+        # (原给 roles enroll 带码参数的命令: 码进命令行, 退役)
         import shlex
 
-        from tools.aipos_cli.onboarding import render_enroll_command
+        from tools.aipos_cli.onboarding import render_enroll_deliver_command
 
+        deliver = render_enroll_deliver_command(["lybra", "roles"], role="<角色>", instance="<实例>", governance_root="<治理根>",
+                                                workspace=shlex.quote(str(root)), extra=["--owner-authorization-ref", "<授权引用>"],
+                                                phase="--dry-run")
         raise ValueError(
             f"harness root '{root}' 有 .lybra/ 但缺少 role 文件 — 未完成 enroll, 拒绝写入。\n"
-            f"  先执行: {render_enroll_command('<注册码>', shlex.quote(str(root)))}"
+            f"  先在治理根所在机接入本工位(签码 + 兑换同一进程, 码不进命令行; 预演后换 --confirm): {deliver}"
         )
 
 

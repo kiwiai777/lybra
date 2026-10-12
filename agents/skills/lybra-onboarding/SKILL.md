@@ -37,12 +37,11 @@ lybra onboarding guide <项目名> --home-root <home根> --advisor-dir <会话�
 lybra project new <项目名> --home-root <home根> --actor <你的顾问实例>
 lybra governance-commit --governance-root <项目根> --actor <你的顾问实例> --paths project.json --paths governance/decision_log.md --paths stage_archive
 lybra project set-repos <项目名> --home-root <home根> --repo <仓名>=<产品仓> --dry-run
-lybra project set-repos <项目名> --home-root <home根> --repo <仓名>=<产品仓> --confirm
-lybra governance-commit --governance-root <项目根> --actor <你的顾问实例> --paths project.json
+lybra project set-repos <项目名> --home-root <home根> --repo <仓名>=<产品仓> --actor <你的顾问实例> --confirm
 ```
 `project new` 同时写首份阶段快照「项目创建」(首次 finalize 不被阶段门拦); `set-repos` 经 project.json repos 声明校验, 多仓须 `--default`。
 写 project.json 的命令(`set-repos` / `set-repo` / `set-paths` / `set-workstation`)一律两阶段(AIPOS-F125): 先 `--dry-run` 预演(打印 diff 与校验, 零写入), 确认后 `--confirm` 才写。
-**每步之后落账**(AIPOS-F94): 照 guide 原样跑该步的 `lybra governance-commit --paths <本步产物>`, 只提交本步产物并推送治理仓——卡与声明只在盘上 = 未成为可追溯真相。治理根须在治理仓(git, 带 origin)内; 不在 = 先 `lybra home git-init --home-root <home根>`, 由 Owner 按其输出配远端并首推。
+**落账**(AIPOS-F94 / F158 / F159): 卡与声明只在盘上 = 未成为可追溯真相, 须精确提交并推送治理仓。**写治理真相的命令 `--confirm` 写后即自动落账**——`project set-repos` / `set-repo` / `set-paths` / `set-workstation` 等 project 族写命令(提交身份 `--actor`)、`envelope mint --confirm`、`migrate … --confirm`; 输出 `落账: verdict=PASS committed=True pushed=True` 即完成, **不要再手跑 `governance-commit`**。落账失败(exit 3)= 写入已生效, 照输出原文给出的补账命令跑一次即可, 勿重复执行写命令。只有 `project new`(建治理根本身, 不自动落账)之后照 guide 第 1 步原样跑那条 `lybra governance-commit --paths …`。治理根须在治理仓(git, 带 origin)内; 不在 = 先 `lybra home git-init --home-root <home根>`, 由 Owner 按其输出配远端并首推。
 
 ### Step 3–4(Owner): 三张信封 + 签码接入顾问(enroll-deliver)
 

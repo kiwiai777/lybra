@@ -153,8 +153,9 @@
 1. **卡编年史**(项目在 project.json `paths.foundation_backlog` 声明了才有):close 时产品校验/自动生成本卡条目;未声明则跳过并提示, 不替项目建文件
 2. **decision_log 指针**(如有决策):Owner 裁定/仲裁/信封授权与吊销 → `governance/decision_log/YYYY-MM/YYYY-MM-DD-<slug>.md`
 3. **阶段归档**(阶段关账时):`stage_archive/<NN>-<stage>.md`(三个月后的人读这一篇+其后 decision_log 即可上手)
-4. **治理仓提交与推送**:每张卡由 `lybra loop` 结案后自动落账(N6);非卡改动用 `lybra governance-commit --paths <路径>` 精确提交并推送,
-   永不手敲 `git add`/`git commit`(不 push = 没收口)
+4. **治理仓提交与推送**:每张卡由 `lybra loop` 结案后自动落账(N6);`project` 族写 project.json 的命令、`envelope mint`、`migrate …`
+   的 `--confirm` 写后自动落账(不再手跑);其余非卡改动(手改治理文档、`owner-decision` 决策记录、建根产物、补账)用
+   `lybra governance-commit --paths <路径>` 精确提交并推送, 永不手敲 `git add`/`git commit`(不 push = 没收口)
 
 **时间线真相导航**(truth-navigator skill):冷启动/冲突时,按 stage_archives 最新篇 + 其后 decision_log + 文档状态头裁定真相。
 
@@ -212,7 +213,7 @@ lybra next --task-id <卡ID>
 - ⏳ 信封吊销/续额:`lybra envelope revoke/renew`(尚未产品化)
 - ✅ 仲裁:`lybra owner-decision --decision-type arbitration`
 - ✅ 推进与查看:`lybra loop` / `lybra loop status --wait` / `lybra next`
-- ✅ 收账:`lybra governance-commit`(卡由 loop 自动落账)
+- ✅ 收账:`lybra governance-commit`(卡由 loop 自动落账; 写命令 `--confirm` 写后自动落账)
 - ✅ 角色供给:`lybra roles enroll-deliver`(签码 + 接入一体, 码不出进程)
 
 ## 常见反模式(禁止)
