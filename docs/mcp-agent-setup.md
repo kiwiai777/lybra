@@ -138,7 +138,12 @@ independent pi auditor workstation (AIPOS-F143).
 3. **Draft and publish.** With the section declared, `lybra draft create` fills a missing `assigned_to` / `harness` /
    `audit_by` from it (a card goes to the pi executor only when the draft asks for `harness: pi` and its task mode is in the
    approved list). `lybra draft publish` refuses a card whose `assigned_to` or auditor is not enrolled in the project (or, for
-   `harness: pi` and auditors, has no workstation) and lists the enrolled instances.
+   `harness: pi` and auditors, has no workstation) and lists the enrolled instances. Pass `--actor <your advisor instance>`
+   to both commands: the publish record keeps that instance as the card's owner (on a repo shared by several sub-projects,
+   `lybra next --actor` and the loop's "take the next card" only offer the owner's cards, and a lane-limited advisor's loop
+   refuses another advisor's card). It is required when the governance root has more than one advisor instance.
+   While a sub-agent works, a loop that times out waiting for its return is routine (`lybra loop status` says `advisor_fix`):
+   let the sub-agent finish, then rerun the same loop command.
 4. **The sub-agent reads its charter and works from the card path.** On the governance-root host,
    `lybra charter --role executor --instance <sub-agent instance>` prints the executor charter for the session kind recorded at
    enrollment (`executor-charter-claude-code` / `executor-charter-codex` in `schema/distribution.schema.json`). It is rendered

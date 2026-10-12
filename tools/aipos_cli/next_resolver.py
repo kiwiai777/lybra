@@ -3193,13 +3193,14 @@ _SCAN_STATE_ORDER = {"legacy_baseline_invalid": -1, "pending": 0, "claimed": 1, 
 
 
 def scan_project(workspace_root: Path, *, lane: str | list[str] | None = None, include_frozen: bool = False,
-                 next_states_only: bool = False) -> list[dict[str, Any]]:
+                 next_states_only: bool = False, viewer: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """项目级扫描的行(= scan_project_view(...)["rows"]; 结案取下一张 / 测试等只要行的调用方用)。"""
-    return scan_project_view(workspace_root, lane=lane, include_frozen=include_frozen, next_states_only=next_states_only)["rows"]
+    return scan_project_view(workspace_root, lane=lane, include_frozen=include_frozen, next_states_only=next_states_only,
+                             viewer=viewer)["rows"]
 
 
 def scan_project_view(workspace_root: Path, *, lane: str | list[str] | None = None, include_frozen: bool = False,
-                      next_states_only: bool = False) -> dict[str, Any]:
+                      next_states_only: bool = False, viewer: dict[str, Any] | None = None) -> dict[str, Any]:
     """项目级扫描:返回所有活跃任务的最小待办清单 + 可见卡汇总。
 
     AIPOS-F133: 卡遍历只走 task_loader.iter_queue_task_paths(原自 glob 队列目录); 每行带 lane、priority 与 next_card。
@@ -3210,6 +3211,8 @@ def scan_project_view(workspace_root: Path, *, lane: str | list[str] | None = No
     dependencies_satisfied; 优先级最高者, 同级按 task_id); 其余按 pending > claimed > blocked、可推导优先、优先级高者先、task_id。
     AIPOS-F142 件①: next_states_only=True(结案取下一张, 只要 pick_next_card)只遍历 NEXT_CARD_STATES —— 下一张只可能出自这些状态,
     所得 next_card 与全扫相同, 不为不可能当选的 claimed/blocked 卡做推导。
+    AIPOS-F156 件②: viewer(machine_zone.owner_viewer 结果)给出 = 经 visible_cards 同一归属判定: 非总顾问视角下归属其他实例的卡
+    不进 rows(不推导、不当选「下一张」), 列在返回的 owner_other(「其他子项目(不取)」); 行带 owner / owner_source。
     """
     workspace_root = Path(workspace_root)
     from tools.aipos_cli.task_loader import task_card_lookup_scope
@@ -3217,11 +3220,12 @@ def scan_project_view(workspace_root: Path, *, lane: str | list[str] | None = No
     # AIPOS-F142 件①: 整趟扫描共用一个只读作用域——逐卡 derive_next_step 共用一趟队列索引(原每卡各建一趟 = O(卡数²)),
     # 冻结清单重放与信封已放行计数各只算一次(lookup_scope_memo); 判据与逐卡推导完全相同
     with task_card_lookup_scope(workspace_root):
-        return _scan_project_view(workspace_root, lane=lane, include_frozen=include_frozen, next_states_only=next_states_only)
+        return _scan_project_view(workspace_root, lane=lane, include_frozen=include_frozen, next_states_only=next_states_only,
+                                  viewer=viewer)
 
 
 def _scan_project_view(workspace_root: Path, *, lane: str | list[str] | None, include_frozen: bool,
-                       next_states_only: bool) -> dict[str, Any]:
+                       next_states_only: bool, viewer: dict[str, Any] | None = None) -> dict[str, Any]:
     from tools.aipos_cli.frontmatter import FrontmatterReadError
     from tools.aipos_cli.machine_zone import visible_cards
     from tools.aipos_cli.task_loader import iter_queue_task_paths
@@ -3239,7 +3243,7 @@ def _scan_project_view(workspace_root: Path, *, lane: str | list[str] | None, in
             continue
         fm = fm or {}
         entries.append(({**stub, "task_id": fm.get("task_id", stub["task_id"]), "priority": fm.get("priority")}, fm))
-    view = visible_cards(workspace_root, entries, lane=lane, include_frozen=include_frozen)
+    view = visible_cards(workspace_root, entries, lane=lane, include_frozen=include_frozen, viewer=viewer)
 
     results: list[dict[str, Any]] = []
     if view["frozen_error"]:
@@ -3252,7 +3256,8 @@ def _scan_project_view(workspace_root: Path, *, lane: str | list[str] | None, in
 
     rows: list[dict[str, Any]] = []
     for card in view["rows"]:
-        lane_part = {"lane": card.get("lane"), "lane_error": card.get("lane_error"), **({"frozen": True} if card.get("frozen") else {})}
+        lane_part = {"lane": card.get("lane"), "lane_error": card.get("lane_error"), **({"frozen": True} if card.get("frozen") else {}),
+                     **{k: card[k] for k in ("owner", "owner_source") if k in card}}  # AIPOS-F156 件②: 归属标注
         if card.get("_unreadable") is not None:
             rows.append({**frontmatter_unreadable_stop(card["task_id"], card["_unreadable"]), "current_state": card["current_state"],
                          **lane_part})
@@ -3331,9 +3336,12 @@ def format_scan_output(results: list[dict[str, Any]], *, json_mode: bool = False
     (machine_zone.render_visible_summary, 四视图同一渲染); JSON 仍为行列表(冻结行带 frozen: true)。"""
     if json_mode:
         import json
-        return json.dumps(results, indent=2, ensure_ascii=False)
+        # AIPOS-F156 件②: 归属其他实例的卡(不取)追加在行列表末尾, 标 owner_other(永不带 next_card)
+        others = [{**o, "owner_other": True, "derivable": False} for o in ((view or {}).get("owner_other") or [])]
+        return json.dumps(results + others, indent=2, ensure_ascii=False)
 
-    from tools.aipos_cli.machine_zone import lane_filter_label, lane_view_declaration, render_visible_summary  # F139: 仓集合
+    from tools.aipos_cli.machine_zone import (lane_filter_label, lane_view_declaration, owner_tag,  # F139: 仓集合
+                                              render_visible_summary)
 
     summary = render_visible_summary(view) if view else []
     if not results:
@@ -3348,7 +3356,8 @@ def format_scan_output(results: list[dict[str, Any]], *, json_mode: bool = False
     nxt = pick_next_card(results)
     if nxt is not None:
         lane_txt = f" lane={nxt.get('lane')}" if nxt.get("lane") else ""
-        lines.append(f"下一张可推进卡: {nxt.get('task_id')}{lane_txt} priority={nxt.get('priority') or '-'}")
+        tag = f" {owner_tag(nxt)}" if owner_tag(nxt) else ""
+        lines.append(f"下一张可推进卡: {nxt.get('task_id')}{lane_txt} priority={nxt.get('priority') or '-'}{tag}")
         if nxt.get("command"):
             lines.append(f"  Command: {nxt.get('command')}")
     else:
@@ -3366,6 +3375,8 @@ def format_scan_output(results: list[dict[str, Any]], *, json_mode: bool = False
             task_id = f"{task_id} [lane {r.get('lane')}]"
         if r.get("frozen"):
             task_id = f"{task_id} {marker}"
+        if owner_tag(r):  # AIPOS-F156 件②: 归属标注(自报另标)
+            task_id = f"{task_id} {owner_tag(r)}"
 
         if r.get("derivable"):
             cmd = r.get("command", "")

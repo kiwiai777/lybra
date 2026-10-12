@@ -392,12 +392,12 @@ def apply_execution_defaults(metadata: dict[str, Any], repo_root: Path) -> list[
     if reasons or execution is None:
         return reasons
     from tools.aipos_cli.enrollment import instance_enrollment
+    from tools.aipos_cli.workspace_config import execution_wants_pi
 
     task_mode = str(metadata.get("task_mode") or "").strip()
     harness = str(metadata.get("harness") or "").strip()
     assigned = str(metadata.get("assigned_to") or "").strip()
-    wants_pi = harness == "pi" or (not harness and bool(assigned) and assigned == execution["pi_executor"])
-    if wants_pi:
+    if execution_wants_pi(execution, metadata):  # AIPOS-F156 件①: 与卡执行方式判定(card_execution_mode)同一谓词
         refusal = _pi_mode_refusal(execution, task_mode)
         if refusal:
             return [refusal]
@@ -420,6 +420,60 @@ def apply_execution_defaults(metadata: dict[str, Any], repo_root: Path) -> list[
     if str(metadata.get("audit") or "").strip().lower() != "none" and not str(metadata.get("audit_by") or "").strip():
         metadata["audit_by"] = execution["auditor"]
     return []
+
+
+def resolve_publish_signer(repo_root: Path, actor: str | None, connection_json: str | None) -> dict[str, Any]:
+    """AIPOS-F156 件③: `lybra draft create|publish` 的签发实例唯一判定(声明 verbs.schema lane_view.owner_view.publish_signer)。
+    返回 {actor: 实例 | None, source: explicit|inferred|unattributed, refusal: 拒因原文("" = 放行), note: 未归因说明}。
+      - --actor 给出: 身份核验走 F154 唯一口 two_phase_shell_factory.signer_role_for_actor(连接文件须有该实例可用的驱动方条目, 无即拒)。
+      - 缺省: 连接文件里绑定实例的驱动方条目(two_phase_shell_factory.driver_token_instances, 只读条目字段)恰一个 = 该实例(再经同一核验);
+        ≥2 个 = 拒(多实例必填, 禁取首个); 无连接文件 / 0 个 = 存量行为(actor None → 发布记录记 unknown, note 写明)。
+    connection_json = 调用方经凭据文件唯一解析口给出的路径(不存在 = 视同无)。只读, 不取凭据值。"""
+    from tools.aipos_cli.machine_zone import owner_view_declaration
+    from tools.aipos_cli.two_phase_shell_factory import driver_token_instances, signer_role_for_actor
+
+    decl = owner_view_declaration()["publish_signer"]
+    conn = str(connection_json) if connection_json and Path(connection_json).expanduser().is_file() else None
+    instance = str(actor or "").strip()
+    source = "explicit"
+    if not instance:
+        if conn is None:
+            return {"actor": None, "source": "unattributed", "refusal": "",
+                    "note": str(decl["unattributed_note"]).format(reason="治理根无连接文件, 签发实例无从推断")}
+        try:
+            bound = driver_token_instances(connection_json_path=conn, repo_root=repo_root)
+        except ValueError as exc:
+            return {"actor": None, "source": "inferred", "note": "",
+                    "refusal": str(decl["signer_refusal"]).format(actor="(缺省推断)", reason=f"连接文件读不出: {exc}")}
+        if len(bound) > 1:
+            return {"actor": None, "source": "inferred", "note": "",
+                    "refusal": str(decl["multi_refusal"]).format(count=len(bound), instances=bound)}
+        if not bound:
+            return {"actor": None, "source": "unattributed", "refusal": "",
+                    "note": str(decl["unattributed_note"]).format(reason="连接文件无绑定实例的顾问(驱动方)条目")}
+        instance, source = bound[0], "inferred"
+    if conn is None:
+        return {"actor": instance, "source": source, "note": "",
+                "refusal": str(decl["signer_refusal"]).format(actor=instance, reason="治理根无连接文件, 无从按实例核凭据")}
+    try:
+        signer_role_for_actor(connection_json_path=conn, actor=instance, repo_root=repo_root)
+    except ValueError as exc:
+        return {"actor": instance, "source": source, "note": "", "refusal": str(decl["signer_refusal"]).format(actor=instance, reason=exc)}
+    return {"actor": instance, "source": source, "refusal": "", "note": ""}
+
+
+def apply_signer_created_by(metadata: dict[str, Any], signer: dict[str, Any]) -> str:
+    """AIPOS-F156 件③: draft create 的卡稿 created_by = 签发实例(缺 = 填; 已给且不同 = 拒因原文, PUBLISH_ACTOR_MISMATCH)。未归因 = 不动。"""
+    from tools.aipos_cli.machine_zone import owner_view_declaration
+
+    instance = str(signer.get("actor") or "").strip()
+    if not instance:
+        return ""
+    given = str(metadata.get("created_by") or "").strip()
+    if given and given != instance:
+        return str(owner_view_declaration()["publish_signer"]["created_by_refusal"]).format(created_by=given, actor=instance)
+    metadata["created_by"] = instance
+    return ""
 
 
 def multi_repo_lane_refusal(repo_root: Path, metadata: dict[str, Any]) -> str:

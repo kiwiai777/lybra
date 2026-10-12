@@ -512,6 +512,17 @@ def _seconds(a: datetime | None, b: datetime) -> int | None:
     return None if a is None else max(0, int((b - a).total_seconds()))
 
 
+def _last_wait_card(meta: dict[str, Any]) -> str | None:
+    """AIPOS-F156 件①: 运行最后一次等待步的卡(当前步是等待 = 其卡; 否则已落定步中最后一个 kind=wait 的卡; 无 = None)。只读记录。"""
+    cur = meta.get("current_step")
+    if isinstance(cur, dict) and cur.get("kind") == "wait":
+        return str(cur.get("card") or "") or None
+    for step in reversed([s for s in (meta.get("steps") or []) if isinstance(s, dict)]):
+        if step.get("kind") == "wait":
+            return str(step.get("card") or "") or None
+    return None
+
+
 def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | None = None,
               local_host: str | None = None) -> dict[str, Any]:
     """一份运行记录 → 状态视图(唯一判据)。
@@ -536,6 +547,7 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
         "loop_alive": None, "launch": None, "outcome": meta.get("outcome"), "exit_code": meta.get("exit_code"),
         "end_reason": meta.get("end_reason"), "end_message": meta.get("end_message"), "ended_at": meta.get("ended_at"),
         "end_codes": [str(c) for c in (meta.get("end_codes") or [])],  # AIPOS-F150: 旧记录无此键 = 空列表
+        "wait_card": _last_wait_card(meta),  # AIPOS-F156 件①: 最后一次等待的卡(执行方式分流只对本卡执行体等待生效)
     }
     last = launches[-1] if launches else None
     if last is not None:
@@ -720,12 +732,68 @@ def next_action_declaration(run_decl: dict[str, Any], contract: dict[str, Any] |
     if not isinstance(routine_reasons, dict) or set(routine_reasons) - reasons:
         raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.routine_rejections.end_reasons 须为对象且键 ⊆ lybra_loop.run_record.end_reasons, "
                               f"多出 {sorted(set(routine_reasons) - reasons) if isinstance(routine_reasons, dict) else routine_reasons!r}")
-    for reason in sorted(r for r, a in decl["by_end_reason"].items() if a == "advisor_fix"):
+    # AIPOS-F156 件①: 按执行方式覆盖(by_execution_mode)同受上述约束——覆盖到 advisor_fix 的结束原因也须有修法
+    overrides = _check_execution_modes(decl, reasons)
+    for reason in sorted({r for r, a in decl["by_end_reason"].items() if a == "advisor_fix"} | overrides):
         fix = (routine_reasons.get(reason) or {}).get("fix")
         if not isinstance(fix, list) or not fix or any(not isinstance(x, str) or not x.strip() for x in fix):
             raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.by_end_reason.{reason} = advisor_fix, 但 routine_rejections.end_reasons."
                                   f"{reason}.fix 未声明为非空字符串的非空列表")
     return decl
+
+
+def _check_execution_modes(decl: dict[str, Any], reasons: set[str]) -> set[str]:
+    """AIPOS-F156 件①: next_action.by_execution_mode 形校验(fail-closed): modes 键 ⊆ config.schema project_json.execution.default_mode
+    值域; 每个 mode 的 by_end_reason 键 ⊆ 已声明结束原因、值 ∈ 下一动作; kickoff_detail 为含 {hint} 的非空串。返回覆盖到 advisor_fix 的结束原因。
+    缺段 = 不覆盖(空集合, 行为不变)。"""
+    from tools.aipos_cli.workspace_config import execution_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    where = f"verbs.{STATUS_VERB}.next_action.by_execution_mode"
+    spec = decl.get("by_execution_mode")
+    if spec is None:
+        return set()
+    modes = spec.get("modes") if isinstance(spec, dict) else None
+    allowed = {str(m) for m in execution_declaration()["schema"]["default_mode"]["enum"]}
+    if not isinstance(modes, dict) or set(modes) - allowed:
+        raise SchemaLoadError(f"{where}.modes 须为对象且键 ⊆ config.schema project_json.execution.default_mode 值域 {sorted(allowed)}")
+    fixes: set[str] = set()
+    for mode, rule in modes.items():
+        table = rule.get("by_end_reason") if isinstance(rule, dict) else None
+        kickoff = rule.get("kickoff_detail") if isinstance(rule, dict) else None
+        if (not isinstance(table, dict) or set(table) - reasons or set(table.values()) - set(NEXT_ACTIONS)
+                or not isinstance(kickoff, str) or "{hint}" not in kickoff):
+            raise SchemaLoadError(f"{where}.modes.{mode}: by_end_reason 须为 已声明结束原因 → 下一动作, kickoff_detail 须为含 {{hint}} 的串")
+        fixes |= {r for r, a in table.items() if a == "advisor_fix"}
+    return fixes
+
+
+def run_execution_mode(governance_root: Path, view: dict[str, Any]) -> tuple[str | None, str]:
+    """AIPOS-F156 件①: 运行视图的执行方式 —— 最后一次等待的卡即本卡(执行体等待)时, 经 workspace_config.card_execution_mode
+    (只读 F143 声明唯一读取口 project_execution)判出; 等待别的卡(审计 / 外部 FINALIZE / 同仓先合入)、未声明 execution = (None, "")。
+    判不出(卡找不到 / 读不出 / 声明不合)= (None, 原因)——调用方按原口径(owner_needed), 原因进 detail, 不猜。"""
+    from tools.aipos_cli.audit_derivation import is_audit_card
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.task_loader import AmbiguousTaskCard, find_task_card
+    from tools.aipos_cli.workspace_config import ExecutionDeclarationError, card_execution_mode, project_execution
+
+    task_id = str(view.get("task_id") or "")
+    if not task_id or view.get("wait_card") != task_id:
+        return None, ""
+    try:
+        path, _state = find_task_card(Path(governance_root), task_id)
+        if path is None:
+            return None, f"队列中找不到卡 {task_id}, 执行方式判不出"
+        fm, _body = require_frontmatter(path)
+        return card_execution_mode(project_execution(Path(governance_root)), fm, audit_card=is_audit_card(task_id, fm)), ""
+    except (AmbiguousTaskCard, FrontmatterReadError, ExecutionDeclarationError, OSError, ValueError) as exc:
+        return None, f"执行方式判不出({type(exc).__name__}: {exc})"
+
+
+def _execution_rule(rules: dict[str, Any], mode: str | None) -> dict[str, Any]:
+    """by_execution_mode.modes.<执行方式>(无 / 未声明 = {})。"""
+    modes = (rules.get("by_execution_mode") or {}).get("modes") or {}
+    return (modes.get(mode) or {}) if mode else {}
 
 
 def _check_routine_rejections(routine: Any) -> None:
@@ -769,6 +837,13 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
                                      f"{STATUS_VERB}.next_action.by_end_reason(记录与声明不符, 拒判下一动作)")
         action = str(rules["by_end_reason"][reason])
         message = str(view.get("end_message") or "")
+        mode_note = ""
+        if any(reason in (m.get("by_end_reason") or {}) for m in ((rules.get("by_execution_mode") or {}).get("modes") or {}).values()):
+            # AIPOS-F156 件①: 本卡执行方式覆盖(如子 agent 模式等交回超时 = 例行); 判不出 = 原口径, 原因进 detail
+            mode, mode_note = run_execution_mode(governance_root, view)
+            action = str((_execution_rule(rules, mode).get("by_end_reason") or {}).get(reason) or action)
+            if mode:
+                view = {**view, "execution_mode": mode}
         if action == "investigate" and earlier_end_reasons is not None:
             streak = 1
             for earlier in reversed(earlier_end_reasons):
@@ -782,12 +857,14 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
         if action == "card_done_take_next":
             return {"action": action, "reason": reason, **_take_next(view, rules, governance_root, message)}
         if action == "advisor_fix":  # AIPOS-F152 件①: 结束原因本身属例行(routine_rejections.end_reasons, 如 deploy_changed)
-            return _routine_end_reason_action(view, rules, governance_root, reason, message, earlier_end_reasons)
+            routine = _routine_end_reason_action(view, rules, governance_root, reason, message, earlier_end_reasons)
+            return {**routine, "execution_mode": view["execution_mode"]} if view.get("execution_mode") else routine
         if action == "owner_needed":
             routine = _routine_action(view, rules, governance_root, reason, message, earlier_end_codes)
             if routine is not None:
                 return routine
-            return {"action": action, "reason": reason, "detail": f"{rules['owner_reasons'][reason]}" + (f" — {message}" if message else ""),
+            return {"action": action, "reason": reason, "detail": f"{rules['owner_reasons'][reason]}" + (f" — {message}" if message else "")
+                    + (f"({mode_note})" if mode_note else ""),
                     "hint": str(rules["investigate_hint"]).format(**fill)}
         return {"action": action, "reason": reason, "detail": message or reason, "hint": str(rules["investigate_hint"]).format(**fill)}
     if state not in rules["by_state"]:
@@ -797,6 +874,11 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
         cur = view.get("current_step") or {}
         if cur.get("kind") == "wait" and cur.get("mode") == "manual":
             what = cur.get("hint") or f"等工位产物 {cur.get('waiting_for')}"
+            mode, _note = run_execution_mode(governance_root, view)
+            kickoff = _execution_rule(rules, mode).get("kickoff_detail")
+            if kickoff:  # AIPOS-F156 件①: 子 agent 模式 = 顾问派子 agent 开工(不找 Owner), 前缀读声明
+                return {"action": action, "reason": "manual_kickoff", "execution_mode": mode,
+                        "detail": str(kickoff).replace("{hint}", str(what)), "hint": str(rules["wait_hint"]).format(**fill)}
             return {"action": action, "reason": "manual_kickoff", "detail": f"手工模式: {what}",
                     "hint": str(rules["wait_hint"]).format(**fill)}
         return {"action": action, "reason": state, "detail": "loop 推进中", "hint": str(rules["wait_hint"]).format(**fill)}
@@ -938,21 +1020,43 @@ def _routine_fill(view: dict[str, Any], routine: dict[str, Any], governance_root
 def _take_next(view: dict[str, Any], rules: dict[str, Any], governance_root: Path, message: str) -> dict[str, Any]:
     """AIPOS-F136 × F133: 结案后取下一张 —— 接 F133「下一张」唯一出口(next_resolver.scan_project + pick_next_card, 判据
     verbs.schema lane_view.next_card), 范围 = 本卡 lane(machine_zone.lane_of_card 已解析时; 解析不了 = 全项目, 照 F133
-    「不可证明不属本 lane 不隐藏」)。有下一张 = hint 为其 loop 命令(take_next_hint); 无 = hint 为 lane 扫描(take_next_none_hint)。"""
-    from tools.aipos_cli.next_resolver import pick_next_card, scan_project
+    「不可证明不属本 lane 不隐藏」)。有下一张 = hint 为其 loop 命令(take_next_hint); 无 = hint 为 lane 扫描(take_next_none_hint)。
+    AIPOS-F156 件②(gap #140): 归属视角 = 本次运行驱动方 + 本次运行信封(machine_zone.owner_viewer 唯一判定; 信封不限 lane = 总顾问
+    看全量): 只取归属本实例 / 归属不明的卡, 共用仓里归属其他实例的卡不取(detail 单列「其他子项目(不取)」)。"""
+    from tools.aipos_cli.machine_zone import render_owner_other
+    from tools.aipos_cli.next_resolver import pick_next_card, scan_project_view
 
     lane = view.get("lane") if view.get("lane") and not view.get("lane_error") else None
     fill = {"task_id": str(view.get("task_id") or ""), "governance_root": str(governance_root),
             "lane_arg": f" --lane {lane}" if lane else ""}
+    viewer = _run_owner_viewer(Path(governance_root), view)
     # AIPOS-F142 件①: 只要「下一张」= 只扫可当选状态(next_states_only, 同一 scan_project 出口), 不为 claimed/blocked 卡做推导
-    nxt = pick_next_card(scan_project(Path(governance_root), lane=lane, next_states_only=True))
+    scan = scan_project_view(Path(governance_root), lane=lane, next_states_only=True, viewer=viewer)
+    nxt = pick_next_card(scan["rows"])
     done = message or "已结案并落账"
+    others = scan.get("owner_other") or []
+    tail = f"; {render_owner_other(others)}" if others else ""
+    extra = {"owner_view": viewer, "owner_other": others} if viewer else {}
     if nxt is None:
-        return {"detail": f"{done}; 下一张可推进卡: 无{'(lane ' + lane + ')' if lane else ''}", "next_card": None,
-                "hint": str(rules["take_next_none_hint"]).format(**fill)}
+        return {"detail": f"{done}; 下一张可推进卡: 无{'(lane ' + lane + ')' if lane else ''}{tail}", "next_card": None,
+                "hint": str(rules["take_next_none_hint"]).format(**fill), **extra}
     card = {"task_id": nxt.get("task_id"), "lane": nxt.get("lane"), "priority": nxt.get("priority")}
-    return {"detail": f"{done}; 下一张可推进卡: {card['task_id']} lane={card['lane'] or '-'} priority={card['priority'] or '-'}",
-            "next_card": card, "hint": str(rules["take_next_hint"]).format(**{**fill, "next_task_id": card["task_id"]})}
+    return {"detail": f"{done}; 下一张可推进卡: {card['task_id']} lane={card['lane'] or '-'} priority={card['priority'] or '-'}{tail}",
+            "next_card": card, "hint": str(rules["take_next_hint"]).format(**{**fill, "next_task_id": card["task_id"]}), **extra}
+
+
+def _run_owner_viewer(governance_root: Path, view: dict[str, Any]) -> dict[str, Any] | None:
+    """运行的归属视角: 驱动方(运行记录 driver)+ 本次运行信封(运行记录 envelope, autonomy_policy.load_policy 读; 读不出 = 按该实例的
+    有效信封判总顾问)。无驱动方(旧记录)= None(不按归属分, 行为不变)。"""
+    from tools.aipos_cli.autonomy_policy import load_policy
+    from tools.aipos_cli.machine_zone import owner_viewer
+
+    driver = str(view.get("driver") or "").strip()
+    if not driver:
+        return None
+    envelope = str(view.get("envelope") or "").strip()
+    policy = load_policy(Path(governance_root), envelope) if envelope else None
+    return owner_viewer(Path(governance_root), actor=driver, policy=policy)
 
 
 class StatusUsageError(ValueError):

@@ -80,14 +80,18 @@
    (秒数取本会话单次命令超时以内; 上限读 verbs.schema `lybra_loop_status.wait.max_seconds`)。
    它经产品唯一等待原语有界等待, 返回「顾问下一动作」与当时状态, 退出码按下一动作。
 3. **按下一动作处理**(判据唯一在产品 `loop_run_record.next_action`, 你不自判):
-   - `continue_wait` → 回到第 2 步再等; 若事由为 `manual_kickoff`(手工模式等工位), 向 Owner **说一次**输出里的开工提示
+   - `continue_wait` → 回到第 2 步再等; 若事由为 `manual_kickoff`(手工模式等执行体开工): 输出写「子 agent 模式」(本卡执行方式 =
+     顾问派子 agent, AIPOS-F156)= **你按开工提示派本卡子 agent**, 不找 Owner、不敲 `/go`; 否则向 Owner **说一次**输出里的开工提示
      (在哪个工位敲 `/go`), 然后继续等, 不重复催。
-   - `card_done_take_next` → 本卡已结案落账: 按输出的「下一条」取本 lane 的下一张卡, 回到第 1 步。
+   - `card_done_take_next` → 本卡已结案落账: 按输出的「下一条」取本 lane 的下一张卡, 回到第 1 步。产品只推荐归属你的卡
+     (AIPOS-F156: 你的信封限 lane 时, 共用仓里别的顾问出的卡列在「其他子项目(不取)」, 不要去跑; 看本子项目全貌用
+     `lybra next --workspace-root {{governance_root}} --actor {{instance}}`)。
    - `investigate` → 按输出的「下一条」查(`lybra next --task-id <卡ID>` 给缺项与出口): 卡不全 = 你 amend / 撤回重出(H 条);
      护栏问题 = 出产品修复卡; 修好后回到第 1 步续跑。查不出或修不了 = 升为 owner_needed。
    - `advisor_fix` → **例行门拒, 按 hint 自处理, 不问 Owner**(AIPOS-F150): 门拒原因码全部属产品声明的例行清单
      (verbs.schema `lybra_loop_status.next_action.routine_rejections`, 如 `BRANCH_WRONG_BASE` = 共用仓他卡先合入、本卡分支落后;
-     合入阶段的 `MERGE_CONFLICT` = 合入冲突、`REPO_MERGE_IN_PROGRESS` = 同仓另一张卡正在合入, AIPOS-F155),
+     合入阶段的 `MERGE_CONFLICT` = 合入冲突、`REPO_MERGE_IN_PROGRESS` = 同仓另一张卡正在合入, AIPOS-F155;
+     子 agent 模式下 loop 等交回超时 `wait_timeout` = 子 agent 多半仍在做, 等它交回后重跑 / 补派子 agent, AIPOS-F156),
      修法固定, 输出「下一条」逐步给出。改卡分支 / 更新交回的步骤**派本卡执行体做**(你仍永不碰产品仓), 执行体交回后用「下一条」
      末行命令续跑 loop, 回到第 2 步。同卡同一例行码连续被拒到声明次数, 产品自动升为 `owner_needed`, 不必你计数。
    - `owner_needed` → **停**, 一次说清要 Owner 定什么(输出 detail 已写事由: 设计分叉 / 授权 / 连败 / 门拒原因)与可选项;
@@ -117,9 +121,11 @@
 1. **用 card-author skill 自查**:单卡单靶、交付大项≤3、验证修复不混装、上下文预算、产品三问。
 2. **draft → publish**(卡稿 JSON 的写法见 card-author / advisor-commands 技能):
    ```bash
-   lybra --workspace-root {{governance_root}} draft create --from-json <卡稿JSON>
-   lybra --workspace-root {{governance_root}} draft publish --path <草稿路径>
+   lybra --workspace-root {{governance_root}} draft create --from-json <卡稿JSON> --actor {{instance}}
+   lybra --workspace-root {{governance_root}} draft publish --path <草稿路径> --actor {{instance}}
    ```
+   `--actor` = 你自己的实例(AIPOS-F156): 发布记录记下签发实例 = 这张卡归你(共用仓里卡的归属只认它); 同一治理根接入了多个顾问实例时必填,
+   缺了产品拒发(只接入你一个时可省, 产品按唯一顾问实例推断)。
 3. **N0 容量 lint**:draft_publish 自动 WARN 交付大项>3,但出卡前自查更高效。
 
 ### 派工与监督
