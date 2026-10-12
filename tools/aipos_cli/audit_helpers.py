@@ -78,7 +78,12 @@ def resolve_audit_credential(
                 f"出口: 加 --token-role <该实例的角色>, 或为该实例接入凭据"
             )
         wanted = roles[0]
-    token = load_role_token(connection_json_path=path, role=wanted, agent_instance=instance)
+    try:
+        token = load_role_token(connection_json_path=path, role=wanted, agent_instance=instance)
+    except DriverTokenError as exc:
+        if instance:
+            raise
+        raise DriverTokenError(f"{exc} —— 审计裁决出口: 加 --agent-instance <审计实例>(或 --actor)按实例取凭据") from exc
     entry = next((e for e in load_connection_tokens(path)
                   if is_token_entry_active(e) and str(e.get("role") or "").strip() == wanted
                   and str(e.get("token") or "").strip() == token), None)

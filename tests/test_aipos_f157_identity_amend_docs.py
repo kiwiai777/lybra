@@ -197,7 +197,7 @@ def test_item1_audit_verdict_cli_signs_with_instance(two):
             "--findings-summary", "probe"]
     rc, out, err = _cli([*base, "--token-role", "auditor"])
     _show(f"[件①·audit-verdict 自发现 缺实例] exit {rc}\nstderr 原文: {err.strip()}")
-    assert rc == 1 and not TokenGate.calls and "禁取首个冒名" in err
+    assert rc == 1 and not TokenGate.calls and "禁取首个冒名" in err and "加 --agent-instance <审计实例>" in err
     rc, out, err = _cli([*base, "--actor", AU2])
     _show(f"[件①·audit-verdict --actor {AU2}] exit {rc} 门动词 × (token 绑定实例, 请求 actor): {TokenGate.calls}")
     assert TokenGate.calls and TokenGate.calls[0][0] == "lybra_audit_verdict_dry_run"
