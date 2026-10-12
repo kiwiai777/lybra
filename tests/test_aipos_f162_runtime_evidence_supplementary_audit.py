@@ -4,8 +4,8 @@
 OTA 顾问欲追加重审, `audit dispatch` 以「已有通过裁决」拒, 争议无产品出口。
 
 各件并入点(唯一实现, 禁第二份):
-  件① 卡面声明 = card.schema audit_runtime_evidence(唯一字段); 判据 = artifact_ingest.runtime_evidence_check(裁决入口
-      _validate_task_artifact 一段 + 推导核审计卡裁决步同读); 声明 = transitions artifact_ingest.verdict.runtime_evidence;
+  件① 卡面声明 = card.schema audit_runtime_evidence(唯一字段); 判据 = board_adapter.runtime_evidence_check(AIPOS-F163 下沉门侧
+      裁决写入唯一口; 裁决入口 _validate_task_artifact 预检 + 推导核审计卡裁决步同读); 声明 = transitions artifact_ingest.verdict.runtime_evidence;
       loop = 既有审计等待/拉起(evidence_rework 让审计体补做, 上限读声明, 超限结束原因 runtime_evidence_exhausted)。
   件② 派审 = 同一 audit dispatch(board_adapter._build_audit_dispatch_preview supplementary 分支); 拉起 = 原卡 loop 推导核
       await_artifact(补审卡); 裁决 = 同一 artifact ingest → audit-verdict; FAIL = 同一 derive_repair_card_on_fail;

@@ -245,7 +245,7 @@
     "audit_runtime_evidence": {
       "type": "object",
       "required": false,
-      "description": "AIPOS-F162 件①: 本卡审计须在审计自身分配工作树实际运行的声明(运行证据要求的唯一卡面声明字段; 缺省 = 不要求, 行为不变)。形 {required: true|false, commands: [命令串, …]}; commands 可用占位 {worktree}(审计分配工作树)/{commit_sha}/{tree_hash}(被审分支 tip)。声明 required=true 时, 审计报告 PASS/PASS_WITH_NOTES 须带结构化「独立运行证据」节, 裁决入口(artifact ingest --kind verdict)逐条核对, 缺 = 拒收 RUNTIME_EVIDENCE_MISSING(判据与证据节格式唯一声明: transitions.schema artifact_ingest.verdict.runtime_evidence; 唯一实现 artifact_ingest.runtime_evidence_problems)。补充审计卡可自带本字段(audit dispatch --supplementary --runtime-evidence-command), 优先于被审卡声明。出卡 draft create 原样透传。",
+      "description": "AIPOS-F162 件①: 本卡审计须在审计自身分配工作树实际运行的声明(运行证据要求的唯一卡面声明字段; 缺省 = 不要求, 行为不变)。形 {required: true|false, commands: [命令串, …]}; commands 可用占位 {worktree}(审计分配工作树)/{commit_sha}/{tree_hash}(被审分支 tip)。声明 required=true 时, 审计报告 PASS/PASS_WITH_NOTES 须带结构化「独立运行证据」节, 门侧裁决写入唯一口逐条核对(AIPOS-F163: ingest 与手敲 audit-verdict --confirm 等一切提交路径同核), 缺 = 拒收 RUNTIME_EVIDENCE_MISSING(判据与证据节格式唯一声明: transitions.schema artifact_ingest.verdict.runtime_evidence; 唯一实现 board_adapter.runtime_evidence_check)。补充审计卡可自带本字段(audit dispatch --supplementary --runtime-evidence-command), 优先于被审卡声明。出卡 draft create 原样透传。",
       "shape": {
         "required": "boolean (true = 审计 PASS 类裁决须附独立运行证据)",
         "commands": "array of string (须逐条有运行记录的验证命令; 可空 = 只要求证据节存在且至少一条运行记录)"
