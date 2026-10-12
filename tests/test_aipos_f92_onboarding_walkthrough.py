@@ -387,6 +387,10 @@ def test_walkthrough_guide_onboards_new_project_to_first_card_completed(probe_ra
     hlog = _git(r.hroot, "log", "--format=%s")
     print("[F94·home 根治理仓 git log]\n" + hlog)
     assert "chore(governance): N6 收账 PROBE-1" in hlog and hlog.count("治理批次更新") >= 2
+    # AIPOS-F158 件①: 向导第 3 步 Owner 签信封(真门 envelope 路径)后, 门生记录与 decision_log 指针随签发即经同一提交口落账
+    assert "chore(governance): 信封签发落账 " in hlog
+    assert _git(r.hroot, "status", "--porcelain", "-uall", "--", "lybra-probe/5_tasks/policies", "lybra-probe/5_tasks/records/owner_decisions",
+                "lybra-probe/governance/decision_log") == ""
     assert _git(r.hroot, "rev-parse", "HEAD") == _git(r.hroot.parent / f"{r.hroot.name}-remote.git", "rev-parse", "main")
     assert _git(r.hroot, "status", "--porcelain", "-uall", "--", "lybra-probe/5_tasks/queue", "lybra-probe/5_tasks/records/claims/PROBE-1",
                 "lybra-probe/project.json") == ""
