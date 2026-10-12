@@ -28,8 +28,17 @@ unrelated change swept into a finalize commit via a broad `git add`.
   hand-merges or hand-pushes a finalize, and no party finalizes or audits its own work.
 - Governance truth is landed by the same loop: after close, its N6 step runs
   `lybra governance-commit --task-id <card> --actor <driver>` (task-scoped precise commit + push).
-  Non-card governance changes (project declarations, governance documents, envelopes) use
+  Non-card governance changes (project declarations, governance documents) use
   `lybra governance-commit --actor <advisor> --paths <path> [--paths <path> ...]`. Never hand-run `git add`/`git commit` in the governance repo.
+- Commands that write governance records land them themselves through that same commit path (AIPOS-F158, declared in
+  `schema/verbs.schema.json` `lybra_governance_commit.post_write_landing`): `lybra envelope mint --confirm` commits and pushes
+  the records the gate wrote for the signing (decision record, envelope, decision_log pointer; message names the policy ids),
+  and `lybra migrate record-type --confirm` commits the records it backfilled. If landing fails the write still stands
+  (do not sign again): the command prints the reason and the exact `lybra governance-commit --paths …` to re-run, and exits 3.
+- Records that the commit guard (B④) refuses for a missing `record_type` are listed by `lybra migrate record-type` (preview,
+  writes nothing): a type is derived only from the declared record locations; only kinds with a reconstructable record header
+  (audit report snapshots, checked against the verdict record's sha256) are rewritten on `--confirm`, everything else is listed
+  and left untouched.
 
 ## Deploy snapshot and the `lybra` CLI entry (AIPOS-F152)
 - **The `lybra` command runs the deployed snapshot, not the product repo working tree.** The entry resolves

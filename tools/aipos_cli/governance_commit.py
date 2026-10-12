@@ -669,6 +669,61 @@ def reland_after_write(governance_root: Path, task_id: str, actor: str, *, what:
                         f"; 出口: {governance_commit_command(task_id, actor, root)}"))}
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F158(gap #130): 写后落账——非卡写命令(信封签发 / 记录类型补齐迁移)写完即经本模块同一提交口精确提交并推送。
+# 声明 = verbs.schema verbs.lybra_governance_commit.post_write_landing(提交信息模板 / 落账失败退出码); 提交本体 = governance_commit
+# (--paths 白名单 = 本次写出的文件, 护栏 / 清单核对 / 推送判据与 N6 落账同一实现), 不另写 git 提交逻辑。
+# ---------------------------------------------------------------------------
+
+def post_write_landing_declaration() -> dict[str, Any]:
+    """verbs.schema verbs.lybra_governance_commit.post_write_landing(唯一声明)。缺键 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.aipos_cli.next_resolver import REPO_ROOT
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (((load_schema("verbs", REPO_ROOT).get("verbs") or {}).get("lybra_governance_commit") or {}).get("post_write_landing"))
+    commands = decl.get("commands") if isinstance(decl, dict) else None
+    if (not isinstance(decl, dict) or not isinstance(decl.get("landing_failed_exit_code"), int)
+            or isinstance(decl.get("landing_failed_exit_code"), bool) or decl["landing_failed_exit_code"] in (0, 1, 2)
+            or not isinstance(commands, dict) or not commands
+            or not all(isinstance(c, dict) and "{actor}" in str(c.get("message_template") or "") for c in commands.values())):
+        raise SchemaLoadError("verbs.schema.json verbs.lybra_governance_commit.post_write_landing(landing_failed_exit_code 非 0/1/2 的整数 / "
+                              "commands.<命令>.message_template 含 {actor})未声明齐")
+    return decl
+
+
+def land_written_paths(governance_root: Path | str, paths: list[str], actor: str, *, command: str, push: bool = True,
+                       **fields: Any) -> dict[str, Any]:
+    """AIPOS-F158: 写后落账唯一实现——paths(治理根相对, 本次写出的文件)经 governance_commit 精确提交并推送(推送策略同 N6 落账)。
+    范围已落账 = governance_commit PASS no-op(幂等)。落账失败不回滚已写内容(写入已生效), 结果带拒因原文与补账命令。
+    返回 {landed, verdict, committed, pushed, commit_hash, reason, remedy, exit_code, operations, line}; line 供调用方原样输出。"""
+    root = Path(governance_root)
+    decl = post_write_landing_declaration()
+    spec = decl["commands"].get(command)
+    if not isinstance(spec, dict):
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError(f"verbs.schema.json verbs.lybra_governance_commit.post_write_landing.commands 未登记 {command}")
+    selected = sorted({str(p) for p in paths if str(p).strip()})
+    remedy = governance_commit_paths_command(selected, actor, root)  # 空 paths = ValueError(禁整根)
+    message = str(spec["message_template"]).format(actor=actor, **fields)
+    result = governance_commit(root, None, actor, push=push, message=message, paths=selected)
+    landed = result.get("verdict") == Verdict.PASS
+    first = next((ln.strip() for ln in str(result.get("message") or "").splitlines() if ln.strip()), "")
+    push_reason = (result.get("push_result") or {}).get("reason")
+    reason = None if landed else (push_reason or first or str(result.get("verdict")))
+    commit_hash = result.get("commit_hash")
+    if landed:
+        line = (f"落账: verdict={result.get('verdict')} committed={bool(result.get('committed'))} pushed={bool(result.get('pushed'))}"
+                + (f" commit={str(commit_hash)[:12]}" if commit_hash else f" — {first[:200]}") + f"({len(selected)} 个文件)")
+    else:
+        line = (f"⚠ 落账未完成(写入已生效, 勿重复执行写命令): verdict={result.get('verdict')} committed={bool(result.get('committed'))} "
+                f"pushed={bool(result.get('pushed'))} — {str(reason)[:500]}\n  补账: {remedy}")
+    return {"landed": landed, "verdict": result.get("verdict"), "committed": bool(result.get("committed")),
+            "pushed": bool(result.get("pushed")), "commit_hash": commit_hash, "paths": selected, "reason": reason,
+            "remedy": None if landed else remedy, "exit_code": 0 if landed else int(decl["landing_failed_exit_code"]),
+            "operations": list(result.get("operations") or []), "line": line}
+
+
 def check_governance_completeness(
     governance_root: Path,
     task_id: str | None,
