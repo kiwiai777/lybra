@@ -419,9 +419,10 @@ def test_item3_ratchet_role_first_selection_gone_from_four_call_sites():
 
 def test_item3_r2_enroll_guide_has_no_code_on_command_line():
     pattern = r"--code"
-    hits = subprocess.run(["git", "grep", "-nE", pattern, "--", "tools/AIPOS-R2-ENROLL-GUIDE.md"], cwd=REPO_ROOT,
+    hits = subprocess.run(["git", "grep", "-n", "-e", pattern, "--", "tools/AIPOS-R2-ENROLL-GUIDE.md"], cwd=REPO_ROOT,
                           capture_output=True, text=True)
     text = (REPO_ROOT / "tools/AIPOS-R2-ENROLL-GUIDE.md").read_text(encoding="utf-8")
-    _show(f"[件③·R2 指南] git grep -nE {pattern!r} → rc={hits.returncode} 命中={hits.stdout.strip() or 0}; "
+    _show(f"[件③·R2 指南] git grep -n -e {pattern!r} → rc={hits.returncode} 命中={hits.stdout.strip() or 0}; "
           f"enroll-deliver 出现 {text.count('enroll-deliver')} 次")
+    assert hits.returncode == 1 and hits.stdout == ""  # rc=1 = 无命中(非用法错误)
     assert "--code" not in text and text.count("enroll-deliver") >= 2
