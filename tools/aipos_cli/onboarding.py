@@ -3,7 +3,7 @@
 把"从项目注册到首卡结案"做成产品命令序列, 全程零手工编辑。AIPOS-F92 起按单门 home 根约定(AIPOS-226 §1.3)重排:
   ① 建项目(顾问): `lybra project new` 落在 resolve_home_root 解析出的 home 根下(打印结果与来源; 门只扫描 home 根),
      同时写首份阶段快照「项目创建」(首次 finalize 不被阶段门拦); 之后 `lybra governance-commit --paths <本步产物>` 落账(AIPOS-F94)
-  ② 声明产品仓(顾问): `lybra project set-repos`(project.json repos/code_repo, 经声明校验); 之后同法落账 project.json
+  ② 声明产品仓(顾问): `lybra project set-repos`(project.json repos/code_repo, 经声明校验); --confirm 写后即自动落账 project.json(AIPOS-F159)
   ③ Owner 一次性动作 ①: 一条 `lybra envelope mint --confirm` 签三张信封(驱动方 / 执行实例 / 审计实例)
   ④ Owner 一次性动作 ②: `lybra roles enroll-deliver`(AIPOS-F151: 先 --dry-run 预演再 --confirm)用中央凭据库的 Owner 凭据为新项目
      签码并把顾问接入治理根(得 advisor 凭据, 项目范围 = 新项目; 注册码只在进程内, 不打印不落盘不进 argv), 产品经 distribution 声明把
@@ -132,7 +132,8 @@ def enroll_delivery(code: str) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# AIPOS-F94 件②: 向导第 1 / 2 步之后的治理落账(产物路径由向导按单源推导, 命令唯一渲染 governance_commit_paths_command)
+# AIPOS-F94 件②: 向导第 1 步之后的治理落账(产物路径由向导按单源推导, 命令唯一渲染 governance_commit_paths_command);
+# 第 2 步 set-repos --confirm 写后自动落账(AIPOS-F159), 其手跑落账行随 AIPOS-F160 件① 退役
 # ---------------------------------------------------------------------------
 
 def project_new_products(governance_root: Path) -> list[str]:
@@ -143,14 +144,6 @@ def project_new_products(governance_root: Path) -> list[str]:
     root = Path(governance_root)
     paths = governance_paths(root)
     return [Path(p).relative_to(root).as_posix() for p in (project_json_path(root), paths["decision_log"], stage_archive_root(root))]
-
-
-def set_repos_products(governance_root: Path) -> list[str]:
-    """`lybra project set-repos` 的治理产物: project.json(repos / code_repo 段, 唯一写入口 set_project_repos)。"""
-    from tools.aipos_cli.workspace_config import project_json_path
-
-    root = Path(governance_root)
-    return [project_json_path(root).relative_to(root).as_posix()]
 
 
 def governance_repo_status(home_root: Path) -> dict[str, Any]:
@@ -408,10 +401,10 @@ def generate_onboarding_guide(
         # AIPOS-F125: 写 project.json 的命令同一两阶段(verbs.schema two_phase_protocol.project_json_writers): 缺省预演, --confirm 才写
         "# 先预演(打印将写的 project.json diff 与校验结果, 零写入)给 Owner 看, 再 --confirm 写入",
         _cmd(*repo_parts, "--dry-run"),
+        # AIPOS-F159 件①: --confirm 写后即经同一提交口落账 project.json(提交身份 --actor)。AIPOS-F160 件①(gap #145): 原随后的
+        # 「核账/补账」governance-commit 行退役(已落账 = 多余空操作, 新项目照做困惑); 落账失败时 --confirm 自己打印补账命令并 exit 3
+        "# --confirm 写入后即自动提交并推送 project.json(输出 '落账: verdict=PASS …'), 不必再跑 governance-commit; 落账失败(exit 3)时照其输出的补账命令跑一次",
         _cmd(*repo_parts, "--actor", _shell_quote(_actor), "--confirm"),
-        # AIPOS-F159 件①: --confirm 写后即经同一提交口落账 project.json(提交身份 --actor); 下行为同一范围的补账命令(已落账 = PASS no-op)
-        "# 落账: --confirm 已随写入提交并推送 project.json(AIPOS-F159); 下行核账/补账: 已落账即 no-op, 落账失败(exit 3)时按其拒因处理后照跑(AIPOS-F94)",
-        render_landing_command(gov, _actor, set_repos_products(gov)),
     ]
     steps.append({
         "step_number": 2,
@@ -420,10 +413,10 @@ def generate_onboarding_guide(
         "title": "声明产品仓(project.json repos / code_repo)并落账",
         "command": "\n".join(step2),
         "purpose": ("把产品仓清单写进 project.json(repos {default, items} + code_repo 别名), 经 config.schema project_json.repos 声明校验; "
-                    "卡 lane.repo 写仓名, 建工作树 / finalize 按此解析。之后各卡由 lybra loop 结案后自动落账; 非卡改动一律 governance-commit --paths"),
+                    "卡 lane.repo 写仓名, 建工作树 / finalize 按此解析。之后各卡由 lybra loop 结案后自动落账; 写治理真相的命令(project 族 / "
+                    "envelope mint / migrate)--confirm 写后自动落账; 其余非卡改动(手改治理文档等)用 governance-commit --paths"),
         "check": ("--dry-run 输出 'project set-repos <项目>: 预览(未写; 加 --confirm 写入)' + 每个仓一行 + project.json diff(零写入); "
-                  "--confirm 输出 '已写入' 与 '落账: verdict=PASS committed=True pushed=True'(AIPOS-F159: 写后即落账); 多于一个仓须 --default; "
-                  "核账命令输出 Verdict: PASS(已落账 = no-op)"),
+                  "--confirm 输出 '已写入' 与 '落账: verdict=PASS committed=True pushed=True'(AIPOS-F159: 写后即落账); 多于一个仓须 --default"),
         "on_fail": {
             "REPOS_CONFLICT": "路径须为绝对路径、default 须在仓名内; 改参数重跑(预演即报错, project.json 未改动)",
             "PROJECT_NOT_ESTABLISHED": "Step 1 未完成; 先跑 Step 1",

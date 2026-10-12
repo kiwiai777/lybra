@@ -319,7 +319,8 @@ def test_single_implementations_and_declarations():
 
     decl = post_write_landing_declaration()
     assert set(decl["commands"]) >= {"envelope_mint", "migrate_record_type"}
-    assert _two_phase_family_declaration("records_migration_writers")["commands"] == ["record-type"]
+    # AIPOS-F160 件③: migrate 族第二项 decision-log-pointers 同族同口径(清单只追加)
+    assert _two_phase_family_declaration("records_migration_writers")["commands"][:2] == ["record-type", "decision-log-pointers"]
     src = {p: (REPO_ROOT / p).read_text(encoding="utf-8") for p in (
         "tools/aipos_cli/aipos_cli.py", "tools/aipos_cli/record_type_migration.py", "tools/aipos_cli/governance_commit.py",
         "tools/aipos_cli/board_adapter.py")}

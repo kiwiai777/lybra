@@ -28,12 +28,15 @@ unrelated change swept into a finalize commit via a broad `git add`.
   hand-merges or hand-pushes a finalize, and no party finalizes or audits its own work.
 - Governance truth is landed by the same loop: after close, its N6 step runs
   `lybra governance-commit --task-id <card> --actor <driver>` (task-scoped precise commit + push).
-  Non-card governance changes (project declarations, governance documents) use
+  Commands that write governance truth land it themselves (next item), so do not follow their `--confirm` with a
+  `lybra governance-commit`; it would be a no-op. Other non-card governance changes (hand-edited governance documents,
+  `lybra owner-decision` records, the files `lybra project new` creates, and re-landing after a failed landing) use
   `lybra governance-commit --actor <advisor> --paths <path> [--paths <path> ...]`. Never hand-run `git add`/`git commit` in the governance repo.
 - Commands that write governance records land them themselves through that same commit path (AIPOS-F158, declared in
   `schema/verbs.schema.json` `lybra_governance_commit.post_write_landing`): `lybra envelope mint --confirm` commits and pushes
   the records the gate wrote for the signing (decision record, envelope, decision_log pointer; message names the policy ids),
-  and `lybra migrate record-type --confirm` commits the records it backfilled. Since AIPOS-F159 the project commands that write
+  `lybra migrate record-type --confirm` commits the records it backfilled, and `lybra migrate decision-log-pointers --confirm`
+  commits the pointers it generated (AIPOS-F160). Since AIPOS-F159 the project commands that write
   project.json (`lybra project set-paths` / `set-repo` / `set-repos` / `set-workstation` / `set-meta` / `set-execution` /
   `set-return-summary`, plus `freeze-legacy` and `dispatch-mode set`) land what they wrote the same way after `--confirm`
   (commit identity `--actor`, default `$USER` or owner; message names the subcommand and project); `--dry-run` still writes
@@ -41,8 +44,12 @@ unrelated change swept into a finalize commit via a broad `git add`.
   `lybra governance-commit --paths …` to re-run, and exits 3.
 - The gate's decision_log auto-pointer is named after the full decision id (`YYYY-MM-DD-<decision_id>-auto-pointer.md`;
   an envelope's is `envelope-<policy_id>`), so several envelopes signed on one day each get one (AIPOS-F159). Older pointers keep
-  their names and are read by directory and content, not by file name. `lybra migrate decision-log-pointers` lists decision
-  records that have no pointer; it is a read-only preview and never backfills.
+  their names and are read by directory and content, not by file name. `lybra migrate decision-log-pointers` (the `migrate`
+  family, same two phases as `record-type`) previews by default: it lists decision records that have no pointer and the pointer
+  file it would create for each, and writes nothing. `--confirm --actor <instance>` creates those pointers with the gate's own
+  pointer generator (dated by the decision's `decided_at`, marked as backfilled) and lands them. Only records the gate wrote as
+  `owner_decision_record` with a decision id, a dated `decided_at`, `decided_by_ref` and a summary line are filled; anything
+  else is listed with the reason and left alone. A second run finds nothing to fill (AIPOS-F160).
 - Records that the commit guard (B④) refuses for a missing `record_type` are listed by `lybra migrate record-type` (preview,
   writes nothing): a type is derived only from the declared record locations; only kinds with a reconstructable record header
   (audit report snapshots, checked against the verdict record's sha256) are rewritten on `--confirm`, everything else is listed

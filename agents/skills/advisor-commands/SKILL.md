@@ -39,13 +39,13 @@ role: advisor
 | **N4 审计** | 代码卡审计入门 / 审非代码卡 | 代码卡: `lybra loop`(审计报告落盘后派生 `lybra artifact ingest --kind verdict`: 绑被审分支 tip、产品填模型字段、**门把报告全文快照进 records**, 顾问不手提裁决); 非代码卡顾问自审: `lybra audit-verdict`; 手动派审 `lybra audit dispatch` |
 | **返工** | 审计 FAIL 后追加返工节(缺省预演, `--confirm` 才写); 登记后 loop 自动等执行体按返工节修复重交 → 下一轮审计 | `lybra queue rework` → `lybra queue rework --confirm` → `lybra loop`(AIPOS-F75, F73C件⑤, F155) |
 | **N5 finalize** | 监督交付上线 | `lybra loop`(推进行) |
-| **N6 收账/落账** | 治理真相进治理仓(提交+推送) | **每张卡由 `lybra loop` 结案后自动落账**(N6 落账步 = `lybra governance-commit --task-id <卡ID>`, task 范围精确提交, 幂等; AIPOS-F94);**非卡改动**(项目声明、治理文档、信封与决策记录)用 `lybra governance-commit --paths` 精确提交;查漏 `lybra state lint`(GOVERNANCE_UNCOMMITTED);编年史 `generate_backlog_entry.py`, 决策 `lybra owner-decision` |
+| **N6 收账/落账** | 治理真相进治理仓(提交+推送) | **每张卡由 `lybra loop` 结案后自动落账**(N6 落账步 = `lybra governance-commit --task-id <卡ID>`, task 范围精确提交, 幂等; AIPOS-F94);**写命令自动落账**(AIPOS-F158/F159/F160):`project` 族写 project.json 的命令、`envelope mint`、`migrate …` 的 `--confirm` 写后即经同一提交口提交推送, 不再手跑;**其余非卡改动**(手改的治理文档、`owner-decision` 决策记录、`project new` 建根产物、落账失败的补账)用 `lybra governance-commit --paths` 精确提交;查漏 `lybra state lint`(GOVERNANCE_UNCOMMITTED);编年史 `generate_backlog_entry.py`, 决策 `lybra owner-decision` |
 
 **关键原则**:
 - **推进由产品执行** (`lybra loop --task-id <卡ID>`)，顾问不手搓门动词、不逐步代按。`lybra next --run` 单步入口保留为 loop 的内部执行体与排障单步, **顾问逐步手按 `next --run` 这条人工路径退役**(AIPOS-F73D, Δ=-1)。
 - **返工节只能通过 `lybra queue rework` 追加**，禁手写卡面 rework_rounds 字段。
 - **next-step 导航**：用 `lybra next --task-id <卡ID>` 查询当前状态与下一步动词(`next-step` 已退役转发)。
-- **落账规则(AIPOS-F94)**:卡与记录只在盘上 = 未成为可追溯真相。每张卡结案后由 `lybra loop` 自动执行 N6 落账(该卡与其审计卡的队列文件、草稿、各类记录、台账落点 + 卡编年史, 路径由产品按卡与声明推导, 禁整根);非卡改动(`project.json` 声明、治理文档、信封与决策记录、接入向导各步产物)一律 `lybra governance-commit --paths <这些路径>`;永不手敲 `git add`/`git commit`。
+- **落账规则(AIPOS-F94)**:卡与记录只在盘上 = 未成为可追溯真相。每张卡结案后由 `lybra loop` 自动执行 N6 落账(该卡与其审计卡的队列文件、草稿、各类记录、台账落点 + 卡编年史, 路径由产品按卡与声明推导, 禁整根);写治理真相的命令写后自动落账(AIPOS-F158/F159/F160, 声明 `schema/verbs.schema.json` `lybra_governance_commit.post_write_landing.commands`):写 project.json 的 `project` 族命令(`set-*` / `freeze-legacy` / `dispatch-mode set`)、`envelope mint`、`migrate record-type` / `migrate decision-log-pointers` 的 `--confirm` 写后即精确提交并推送本次写出的文件, **之后不要再手跑 `governance-commit`**(已落账 = no-op, 多余);落账失败(exit 3)= 写入已生效, 只跑其输出给出的补账命令。其余非卡改动(手改的治理文档、`owner-decision` 决策记录、`project new` 建根产物)一律 `lybra governance-commit --paths <这些路径>`;永不手敲 `git add`/`git commit`。
 
 ---
 
@@ -367,7 +367,7 @@ lybra governance-commit --task-id <卡ID> --actor <你的顾问实例> --governa
 lybra governance-commit --task-id <卡ID> --actor <你的顾问实例> --governance-root <治理根>
 lybra state lint --workspace-root <治理根>   # GOVERNANCE_UNCOMMITTED 点名已结案未落账的卡并给上面这条出口
 ```
-**非卡改动**(声明 / 治理文档 / 信封与决策记录)用下面的 `--paths` 形:
+**非卡改动**用下面的 `--paths` 形——只限没有自动落账的改动(手改的治理文档、`owner-decision` 决策记录、`project new` 建根产物、写命令落账失败后的补账);`project` 族 / `envelope mint` / `migrate …` 的 `--confirm` 已写后自动落账(AIPOS-F158/F159/F160), 不再跟一条 `--paths`:
 **AIPOS-F79 铁律:先 `--dry-run` 看清单,再去掉 `--dry-run` 正式提交;他项目一律 `--paths`。**
 ```bash
 # ① 预演:只读列出将提交的具体文件(modified/added/deleted/untracked_selected),不 add/不 reset/不 stash

@@ -1388,27 +1388,52 @@ def _migrate_record_type_cli(args: argparse.Namespace) -> int:
 
 
 def _migrate_decision_log_pointers_cli(args: argparse.Namespace) -> int:
-    """AIPOS-F159 件②: `lybra migrate decision-log-pointers` 薄壳——只读预演(全部逻辑在 decision_log_pointers), 零写入、不补。"""
-    from tools.aipos_cli.decision_log_pointers import DecisionPointerError, missing_pointer_plan
+    """AIPOS-F159 件② → AIPOS-F160 件③(gap #145): `lybra migrate decision-log-pointers` 薄壳——全部逻辑在 decision_log_pointers
+    (预演 / 补生成 / 经同一提交口落账); 与 record-type 同族同口径(两阶段声明 records_migration_writers, 输出标签同读)。
+    --confirm 缺 --actor = exit 2(零写入)。"""
+    import subprocess
+
+    from tools.aipos_cli.clock import iso_z
+    from tools.aipos_cli.decision_log_pointers import DecisionPointerError, run_pointer_backfill
     from tools.schema_loader import SchemaLoadError
 
+    decl = _two_phase_family_declaration("records_migration_writers")
+    labels, item_labels = decl["outcome_labels"], decl.get("item_status_labels") or {}
+    if args.confirm and not str(args.actor or "").strip():
+        print("Error: --confirm 须给 --actor(落账提交身份); 未写入", file=sys.stderr)
+        return 2
     try:
         root = _find_repo_root_for_args(args)
-        plan = missing_pointer_plan(root)
-    except (DecisionPointerError, FileNotFoundError, SchemaLoadError, OSError, ValueError) as exc:
+        result = run_pointer_backfill(root, actor=args.actor, confirm=bool(args.confirm))
+    except (DecisionPointerError, FileNotFoundError, SchemaLoadError, OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+    landing = result.get("landing")
+    rc = int(landing["exit_code"]) if landing else 0
+    items = [{k: (iso_z(v) if k == "decided_at" else v) for k, v in item.items()} for item in result["items"]]
     if args.json:
-        print(render_json(plan))
-        return 0
-    print(f"migrate decision-log-pointers: 预演(只列不补, policy={plan['policy']}) 治理根 {plan['governance_root']}"
-          f"(决策记录 {plan['records_dir']}, 指针目录 {plan['decision_log_dir']})")
-    print(f"  决策记录 {plan['decisions']} 份; 有指针 {plan['pointed']}; 缺指针 {len(plan['missing'])}; 指针文件 {plan['pointers']} 份(新旧文件名同判)")
-    for item in plan["missing"]:
-        print(f"  [缺指针] {item['record']}  decision_id={item['decision_id']}")
-    for reason in plan["unreadable"]:
+        print(render_json({**{k: v for k, v in result.items() if k not in ("items", "landing")}, "items": items,
+                           "landing": {k: v for k, v in landing.items() if k != "line"} if landing else None}))
+        return rc
+    counts = result["counts"]
+    outcome = (labels["done"] if result["written"] else labels["nothing"]) if result["confirm"] else labels["preview"]
+    print(f"migrate decision-log-pointers: {outcome} 治理根 {result['governance_root']}"
+          f"(决策记录 {result['records_dir']}, 指针目录 {result['decision_log_dir']})")
+    print(f"  决策记录 {result['decisions']} 份; 有指针 {result['pointed']}; 缺指针 {len(result['missing'])}"
+          f"(指针文件 {result['pointers']} 份, 新旧文件名同判); " + ", ".join(
+              f"{item_labels.get(k, k)} {counts[k]}" for k in ("derived", "underivable")))
+    for item in items:
+        tail = f"→ {item['pointer']}" if item.get("pointer") else f"— {item.get('reason') or ''}"
+        print(f"  [{item_labels.get(item['status'], item['status'])}] {item['record']}  decision_id={item['decision_id']}  {tail}")
+    for reason in result["unreadable"]:
         print(f"  [读不出] {reason}", file=sys.stderr)
-    return 0
+    for path in result["written"]:
+        print(f"  wrote {path}")
+    if landing is not None:
+        for op in landing.get("operations") or []:
+            print(f"    · {op}")
+        print(landing["line"], file=sys.stdout if landing["landed"] else sys.stderr)
+    return rc
 
 
 # ---------------------------------------------------------------------------
@@ -2533,11 +2558,15 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_record_type_parser.add_argument("--actor", help="Commit identity for landing (required with --confirm)")
     migrate_record_type_parser.add_argument("--json", action="store_true", help="Output JSON")
     _project_json_two_phase_flags(migrate_record_type_parser, "record-type", family="records_migration_writers")
-    # AIPOS-F159 件②: 历史缺 decision_log 自动指针只预演列出(只读, 无 --confirm; 声明 config.schema decision_level.missing_pointer_preview)
+    # AIPOS-F159 件② → AIPOS-F160 件③: 历史缺 decision_log 自动指针补生成(与 record-type 同族同口径: 缺省预演零写入, --confirm 写入并落账;
+    # 声明 config.schema decision_level.missing_pointer_backfill)
     migrate_pointer_parser = migrate_subparsers.add_parser(
-        "decision-log-pointers", help="AIPOS-F159: list owner decision records that have no decision_log auto-pointer "
-                                      "(old and new pointer filenames both count); read-only preview, never backfills")
+        "decision-log-pointers", help="AIPOS-F160: backfill decision_log auto-pointers for owner decision records that have none "
+                                      "(old and new pointer filenames both count; pointer written by the gate's own generator; "
+                                      "underivable records are listed, not changed)")
+    migrate_pointer_parser.add_argument("--actor", help="Commit identity for landing (required with --confirm)")
     migrate_pointer_parser.add_argument("--json", action="store_true", help="Output JSON")
+    _project_json_two_phase_flags(migrate_pointer_parser, "decision-log-pointers", family="records_migration_writers")
 
     # AIPOS-F57: Onboarding guide (from 0 to first card running)
     onboarding_parser = subparsers.add_parser("onboarding", help="AIPOS-F57: From 0 to first card running — full onboarding guide (zero manual editing)")
@@ -3741,7 +3770,7 @@ def main(argv: list[str] | None = None) -> int:
                         "roles enroll requires --gate-url for legacy plain codes "
                         "(自包含码 LYBRAENROLL1.* 内嵌 gate 地址, 无需此参数)。\n"
                         "在治理根所在机接入请改用 lybra roles enroll-deliver(签码 + 兑换同一进程, 码不出进程; AIPOS-F151)。\n"
-                        "可抄示例(旧码兑换): lybra roles enroll --code <裸码> --gate-url http://<host>:<port> --workspace ~/workstations/my-agent"
+                        "旧裸码兑换: 在本条命令上加 --gate-url http://<host>:<port>(AIPOS-F160: 不再给带码命令行示例)"
                     )
                 try:
                     result = enroll(

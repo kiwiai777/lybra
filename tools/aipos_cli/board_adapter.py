@@ -6538,6 +6538,10 @@ def _auto_generate_decision_log_pointer(
     decision_summary: str,
     decided_by: str,
     record_path: str,
+    *,
+    decided_at: datetime | None = None,
+    backfilled_by: str | None = None,
+    dry_run: bool = False,
 ) -> dict[str, str | None]:
     """AIPOS-R6M 大项A②: 决策粒度机器触发 - owner_decision_record落库时自动生成decision_log指针条目
 
@@ -6548,6 +6552,11 @@ def _auto_generate_decision_log_pointer(
     AIPOS-F159 件②(gap #142): 文件名唯一键 = 完整 decision_id(信封决策 = envelope-<policy_id>; 声明 config.schema
     timeline_enforcement.decision_level.path_pattern)。原取 decision_id 首个 `_` 前段, 同日多张信封都成 `envelope-pol` 重名,
     第二张起被「同名已在 = 跳过」吞掉。既有旧名指针不重命名: 读取侧(brief / 缺指针预演 decision_log_pointers)按目录与内容读, 不依赖文件名。
+
+    AIPOS-F160 件③(gap #145): 历史缺指针补生成(`lybra migrate decision-log-pointers --confirm`, decision_log_pointers.run_pointer_backfill)
+    复用本函数(禁第二份指针渲染/命名): decided_at = 决策记录的决策时刻(月目录 / 日期 / frontmatter decided_at 随之, 缺省 = 当前 UTC,
+    门落库路径不变); backfilled_by = 补生成命令(给出即尾注写明补生成来源, 不冒充落库时生成); dry_run = 只算将写的路径不写盘
+    (预演列出指针名同此一处命名)。
     """
     import re
 
@@ -6556,8 +6565,8 @@ def _auto_generate_decision_log_pointer(
     try:
         decision_log_dir = resolve_governance_path("decision_log_dir", repo_root)
         
-        # 生成 YYYY-MM 目录
-        now = utc_now()
+        # 生成 YYYY-MM 目录(AIPOS-F160: 补生成按决策记录的决策时刻)
+        now = utc_now() if decided_at is None else decided_at
         year_month = file_slug("month", now)
         month_dir = decision_log_dir / year_month
         
@@ -6571,6 +6580,8 @@ def _auto_generate_decision_log_pointer(
         # 如果文件已存在，跳过
         if pointer_file.exists():
             return {"path": None, "warning": None}
+        if dry_run:  # AIPOS-F160: 只算将写的路径(预演), 不写盘
+            return {"path": pointer_file.resolve().relative_to(Path(repo_root).resolve()).as_posix(), "warning": None}
         
         # 生成指针内容（固化命名·一句话+decided_by+指向记录路径）
         # AIPOS-F87 件①: frontmatter 经单源 record_writer.render_frontmatter_block(原 f-string 手拼退役)
@@ -6593,8 +6604,9 @@ def _auto_generate_decision_log_pointer(
 
 **Record**: `{record_path}`
 
-**Auto-generated pointer** (AIPOS-R6M 大项A②): This entry was automatically created when the owner_decision_record was written.
-"""
+""" + (f"**Backfilled pointer** (AIPOS-F160): This entry was created later by `{backfilled_by}` for a decision record "
+       "that had no decision_log pointer.\n" if backfilled_by else
+       "**Auto-generated pointer** (AIPOS-R6M 大项A②): This entry was automatically created when the owner_decision_record was written.\n")
         
         month_dir.mkdir(parents=True, exist_ok=True)
         pointer_file.write_text(content, encoding="utf-8")

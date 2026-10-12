@@ -4,7 +4,7 @@
     freeze-legacy / dispatch-mode set)--confirm 成功后, 经 F158 写后落账同一包装 governance_commit.land_written_paths(N6 同一提交口)
     精确提交并推送本次写出的文件, 提交信息含子命令与项目名; 落账失败不回滚写入、给补账命令并以声明退出码退出; --dry-run 零写入不变。
 件② decision_log 自动指针文件名唯一键 = 完整 decision_id(信封 = envelope-<policy_id>): 同日多签全部生成; 旧名指针不重命名, 读取侧
-    (brief / decision_log_pointers)按目录与正文 Record 行读; 历史缺指针 `lybra migrate decision-log-pointers` 只列不补。
+    (brief / decision_log_pointers)按目录与正文 Record 行读; 历史缺指针 `lybra migrate decision-log-pointers` 只列不补(AIPOS-F160 起补生成, 见 test_aipos_f160)。
 件③ 剩余按角色取凭据收口到 F134/F154 按实例选凭据唯一口 two_phase_shell_factory.load_role_token(ConnectionResolver / TUI 两会话 /
     confined_worker); R2 接入指南的命令行带码示例改 enroll-deliver。
 
@@ -305,13 +305,15 @@ def test_item2_legacy_named_pointer_still_read_and_missing_listed_not_backfilled
     before, status_before = _tree_digest(home), _git(home, "status", "--porcelain", "-uall")
     rc, out, err = _cli("migrate", "decision-log-pointers", "--workspace-root", str(gov))
     _show(f"[件②·缺指针预演] rc={rc}\n{out}{err}")
-    assert rc == 0 and "只列不补" in out and "[缺指针] 5_tasks/records/owner_decisions/dec-f159-e.md" in out
+    # AIPOS-F160 件③: 预演(缺省)零写入; e 的 record_type 非 owner_decision_record = 推导不出, 列出不补
+    assert rc == 0 and "预览" in out and "5_tasks/records/owner_decisions/dec-f159-e.md" in out and "推导不出" in out
     assert "envelope-pol_f159_c" not in out and "envelope-pol_f159_d" not in out
     assert (_tree_digest(home), _git(home, "status", "--porcelain", "-uall")) == (before, status_before), "预演零写入、不补"
     plan = missing_pointer_plan(gov)
-    assert plan["policy"] == "list_only" and [m["decision_id"] for m in plan["missing"]] == ["dec-f159-e"]
+    assert plan["policy"] == "two_phase" and [m["decision_id"] for m in plan["missing"]] == ["dec-f159-e"]
     rc, _out, err = _cli("migrate", "decision-log-pointers", "--workspace-root", str(gov), "--confirm")
-    assert rc == 2, "无 --confirm(只列不补)"
+    assert rc == 2 and "--actor" in err, "AIPOS-F160: --confirm 须给 --actor(与 record-type 同口径), 零写入"
+    assert (_tree_digest(home), _git(home, "status", "--porcelain", "-uall")) == (before, status_before)
 
 
 def test_item2_pointer_naming_lives_in_one_function():
