@@ -71,6 +71,11 @@ PLACEHOLDER_VALUES = {
     "<材料访问说明>": "经 ssh gate-host 读写",
     # AIPOS-F136 件③: codex 顾问接入(他机会话)占位
     "<会话所在机>": "mac-probe",
+    # AIPOS-F157 件③: enroll-deliver 跨机(--ssh)与向导三张信封分列占位
+    "<ssh目标>": "kiwi@ws-host",
+    "<驱动方信封ID>": "pol_proj_loop_1",
+    "<执行信封ID>": "pol_proj_exec_1",
+    "<审计信封ID>": "pol_proj_audit_1",
 }
 PLACEHOLDER_RE = re.compile(r"<[^<>\s'\"]+>")
 #: 已退役的子命令(示例不得再教)

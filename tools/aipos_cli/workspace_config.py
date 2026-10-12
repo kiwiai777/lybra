@@ -2060,6 +2060,9 @@ def project_execution(project_root: str | Path, *, project: dict[str, Any] | Non
 # AIPOS-F156 件①: 卡的执行方式(唯一判定)——只读 F143 执行方式声明(project_execution 规范化视图), 起草缺省「派不派 pi」与
 # loop 等待 / 顾问下一动作按执行方式分流同读此处, 禁另判。
 EXECUTION_MODE_PI = "pi"
+# AIPOS-F157 件③: 顾问派子 agent 的执行方式值(config.schema project_json.execution.default_mode 值域; verbs.schema
+# lybra_loop_status.next_action.by_execution_mode.modes 键)——等待目标为无工位子 agent 执行者时 loop_run_record.run_execution_mode 记此值
+EXECUTION_MODE_SUBAGENT = "subagent"
 
 
 def execution_wants_pi(execution: dict[str, Any], card: dict[str, Any] | None) -> bool:

@@ -158,14 +158,16 @@
 
 **时间线真相导航**(truth-navigator skill):冷启动/冲突时,按 stage_archives 最新篇 + 其后 decision_log + 文档状态头裁定真相。
 
-### 角色供给(enroll)
+### 角色供给(enroll-deliver)
 
-**在工位目录(或你的会话所在治理根)凭 Owner / 你签发的一次性注册码兑换凭据**(步骤与参数以 `lybra onboarding guide <项目名>` 输出为准):
+**在治理根所在机一条命令签码并就地接入, 注册码不出进程**(AIPOS-F151; 步骤与参数以 `lybra onboarding guide <项目名>` 输出为准; 先预演再 `--confirm`):
 ```bash
-lybra roles enroll --code <注册码> --workspace <工位目录> --verify
+lybra roles --workspace-root {{governance_root}} enroll-deliver --role executor --instance {{executor_instance}} --governance-root {{governance_root}} --workspace <工位目录> --actor {{instance}} --owner-authorization-ref <信封ID> --dry-run
+lybra roles --workspace-root {{governance_root}} enroll-deliver --role executor --instance {{executor_instance}} --governance-root {{governance_root}} --workspace <工位目录> --actor {{instance}} --owner-authorization-ref <信封ID> --confirm
 ```
-- **同机**:直接写 `.lybra/` 配置到工位, 再 `lybra sync` 落齐技能 / 扩展 / 章程
-- **跨机**:按 advisor-commands「跨机工位」节(Owner 在门机敲 enroll_deliver --ssh), 不 ssh 推送凭据
+- **`--actor` = 签发实例(你自己)**(AIPOS-F157): 按该实例在治理根 `.lybra/connection.json` 的凭据签码; 同一治理根同一角色接入多个顾问实例时必填(缺 = 拒, 禁取首个)
+- **同机**:接入即写 `.lybra/` 配置到工位, 再 `lybra sync` 落齐技能 / 扩展 / 章程
+- **跨机**:同一命令加 `--ssh <ssh目标>`(码经 ssh stdin 送达, 不进远端命令行), 见 advisor-commands「跨机工位」节; 不 ssh 推送凭据
 
 ### 仲裁与信封(Owner 决策, 命令由 Owner 亲自敲, 你只给出命令)
 
@@ -211,7 +213,7 @@ lybra next --task-id <卡ID>
 - ✅ 仲裁:`lybra owner-decision --decision-type arbitration`
 - ✅ 推进与查看:`lybra loop` / `lybra loop status --wait` / `lybra next`
 - ✅ 收账:`lybra governance-commit`(卡由 loop 自动落账)
-- ✅ 角色供给:`lybra roles enroll`
+- ✅ 角色供给:`lybra roles enroll-deliver`(签码 + 接入一体, 码不出进程)
 
 ## 常见反模式(禁止)
 
