@@ -588,9 +588,42 @@
       ]
     },
     "workstation_transport": {
-      "description": "AIPOS-F95 件③b(Owner 2026-10-04 裁定: 变量现在加, 跨机连接以后做): 工位位置 = {host, dir}, 来源 = 本项目 enrollment_log 中该实例最新的 land 事件(enroll 落地写 host=<主机> workstation=<目录>; 本机 enroll 写本机主机名, enroll_deliver --ssh 写 ssh 目标)。拉起分两层: 先按位置解析启动方式(transport), 再套 harness launch 模板。supported=false 的 transport = 已声明未支持 → loop 不拉起, 退回手工模式并提示 <host>:<dir> 与 /go。以后加远程 = 新增一种 transport 实现(改 supported), 不改分层。AIPOS-F110: remote 已按此补齐(supported=true), 分层不变。",
+      "description": "AIPOS-F95 件③b(Owner 2026-10-04 裁定: 变量现在加, 跨机连接以后做): 工位位置 = {host, dir}, 来源 = 本项目 enrollment_log 中该实例最新的 land 事件(AIPOS-F161: 或 relocate 迁移事件, 见 relocation)(enroll 落地写 host=<主机> workstation=<目录>; 本机 enroll 写本机主机名, enroll_deliver --ssh 写 ssh 目标)。拉起分两层: 先按位置解析启动方式(transport), 再套 harness launch 模板。supported=false 的 transport = 已声明未支持 → loop 不拉起, 退回手工模式并提示 <host>:<dir> 与 /go。以后加远程 = 新增一种 transport 实现(改 supported), 不改分层。AIPOS-F110: remote 已按此补齐(supported=true), 分层不变。",
       "missing_host": "local",
       "missing_host_note": "缺 host 的存量 land 事件(F95 前写入)按本机处理; 唯一缺省声明在此, 代码不写死",
+      "relocation": {
+        "description": "AIPOS-F161(F77 收窄重写): 工位迁移 `lybra project relocate-workstation [项目] --instance <实例> (--to <新落点> | --rollback) [--dry-run|--confirm] [--actor]`。工位位置的唯一声明来源仍是本项目 enrollment_log 中该实例最新的未作废位置事件(本声明的 description); 迁移 = 向同一日志追加一行 event_action 位置事件(与 land 同一解析 enrollment._LAND_LINE_RE, 同一「最新为准」), 行内 code_id / role / host / harness 沿用被迁移事件, reason = relocation=<forward|rollback> relocated_from=<旧目录> workstation=<新目录>; 拉起(loop_driver.plan_launch)、check-workstation、enroll-where、lybra charter、执行方式声明核验全部经 enrollment.workstation_location 读到新落点, 不另设路径表(project.json workstations 只记跨机开工材料, 与目录无关)。只迁本项目实例(实例名项目段 = 本治理根 project.json project, 工位 .lybra/role 实例与项目一致), 只迁本机工位(transport=local; 跨机工位在其所在机迁)。凭据(.lybra/)只随目录移动(rename; 跨文件系统 shutil.move 保权限), 命令只取路径 / 权限 / 大小。两阶段 = verbs.schema two_phase_protocol.enrollment_log_writers; 确认后落账 = verbs.lybra_governance_commit.post_write_landing.commands.project_writers。缺省 = 行为不变(无迁移事件时位置即 land 事件)。唯一实现 tools/aipos_cli/workstation_relocate.py(relocate_workstation / plan_relocation / in_flight)+ enrollment.append_relocation_event。",
+        "event_action": "relocate",
+        "pointer_file": "LYBRA-RELOCATED.json",
+        "pointer_note": "旧落点只读退役指针(0444, JSON: instance / project / governance_root / moved_to / moved_at / by / rollback 命令); 旧目录不删(回滚用)。目标目录只含本实例指针 = 视为空(回滚后再迁 / 迁后回滚)。",
+        "suggested_target": "{base}/{project}-workstations/{name}",
+        "suggested_target_note": "预演不给 --to 时的建议落点(确认须显式 --to): base = 旧落点所在 git 检出顶的父目录(不在检出内 = 旧工位父根的父目录), project = 本项目名, name = 旧工位目录名。新落点的父目录即新工位父根, 其 _distributed / _shared 由 sync 落地。",
+        "in_flight": "精确判定(只读): ①本项目 loop 运行记录(paths.loop_runs_root)中未收尾的拉起, workstation 在本工位目录内且进程仍活(loop_run_record.process_alive; 记录写于他机 = 无从探活, 按在途计); ②运行记录中 loop 仍活(judge_run running / stalled / launch_dead / unprobeable)且当前步为等待步、等待卡的干活实例(loop_driver._wait_instance)= 本实例; ③本机进程 cwd 在工位目录内(/proc; 无 /proc = RELOCATE_PROBE_UNAVAILABLE)。运行记录 / 等待卡读不出 = 按在途拒(fail-closed)。",
+        "steps": [
+          "迁移工位态到新落点(独立目录, 不在任何 git 检出内)",
+          "对新落点 sync 分发并以 dry-run 核稳态(plan / would_prune 皆空 = 清单与章程一致; 失败 = 移回, 声明不改)",
+          "追加 relocate 位置事件(enrollment_log)",
+          "读回核查(workstation_location 指向新落点 + 工位身份 + check-workstation)",
+          "旧落点留只读退役指针(不删旧目录)",
+          "落账(lybra governance-commit 同一提交口)"
+        ],
+        "reject_codes": {
+          "RELOCATE_NOT_THIS_PROJECT": "实例不属本项目(实例名项目段 ≠ 本治理根 project.json project); 他项目工位由该项目在其治理根运行同一命令。零写入",
+          "RELOCATE_NO_LOCATION": "本项目 enrollment_log 无该实例的位置事件(未接入 / 子 agent 执行者无工位)",
+          "RELOCATE_REMOTE_UNSUPPORTED": "工位在他机(transport=remote); 迁移只在工位所在机进行",
+          "RELOCATE_IDENTITY_MISMATCH": "声明落点的 .lybra/role 实例 / 项目与该实例不一致(或读不出)",
+          "RELOCATE_TARGET_REQUIRED": "确认须显式 --to <新落点>(预演可不给, 打印建议落点)",
+          "RELOCATE_TARGET_INVALID": "新落点非绝对路径 / 含空白 / 与旧落点相同或互相包含",
+          "RELOCATE_TARGET_IN_CHECKOUT": "新落点位于某个 git 检出内(祖先目录含 .git); 工位须落独立目录, 不再与他方共用检出",
+          "RELOCATE_TARGET_NOT_EMPTY": "新落点已存在且非空(只含本实例退役指针者除外)",
+          "RELOCATE_IN_FLIGHT": "该实例有在途工作(拉起进程 / loop 等待其产物 / 进程 cwd 在工位内)或运行记录读不出; 等其收尾(lybra loop status)后再迁",
+          "RELOCATE_PROBE_UNAVAILABLE": "本机无 /proc, 无从探活工位目录内进程; 在治理根所在机(Linux)运行",
+          "RELOCATE_NOTHING_TO_ROLLBACK": "该实例最新位置事件不是迁移事件, 无可回滚",
+          "RELOCATE_SYNC_FAILED": "新落点 sync 失败或 sync 后非稳态(或凭据文件权限 / 大小 / mtime 迁移前后不一致); 工位态已移回旧落点, 位置声明未改",
+          "RELOCATE_MOVE_FAILED": "移动工位态失败; 已移动部分已移回旧落点, 位置声明未改",
+          "RELOCATE_HARNESS_UNSUPPORTED": "工位 harness 不是 pi(distribution.schema harness_semantics 缺省 kind); 其他 harness 的目录随角色记录声明, 不随工位目录迁移"
+        }
+      },
       "local_rule": "host 等于驱动方本机主机名(socket.gethostname()) = local, 否则 = remote",
       "values": [
         {

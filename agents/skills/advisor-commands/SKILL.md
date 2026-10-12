@@ -202,6 +202,26 @@ lybra project check-workstation <项目名> --home-root <home根> --instance <�
 ```
 4. **推进**照常 `lybra loop --task-id <卡ID>`: 执行体等待前 loop 经 `ssh -T <ssh目标>` 在工位目录以新进程组起 harness, 开工提示经 ssh stdin 逐字节传入(不进命令行、不经远端 shell 展开), 提示末段写明工作树/报告落点/任务卡在门机及材料访问方式(产品 `render_kickoff` 单源); 产物就绪/超时/早退/中断(含 ssh 断线 SIGHUP)即经 ssh 清远端进程组, 本地 ssh 子进程同清。执行体交付不变: 报告写门机报告落点(经材料通道), 代码提交卡分支并推回门机产品仓(卡面 lane.repo), loop 仍在门机看产物。
 
+#### 工位迁出共用检出(AIPOS-F161: `lybra project relocate-workstation`)
+**何时用**: pi 工位(审计 / 执行)放在和别的项目共用的 git 检出里(任何一方 checkout / stash / pull 都连坐全部工位), 要迁到独立落点。任何项目同一命令, 在治理根所在机运行(跨机顾问经 ssh 跑同一命令); 只能迁本项目接入的实例(他项目工位 = 拒, 零写入)。
+位置声明只有一处 = 本项目接入日志里该实例最新的位置事件; 迁移追加一行 `relocate` 位置事件, loop 拉起 / `check-workstation` / `enroll-where` / `lybra charter` 都从这里读到新落点(不另写路径表)。
+1. **预演**(缺省, 零写入; 不给 `--to` 时打印按声明约定推导的建议落点): 列工位态(凭据只列路径 / 权限 / 大小)、旧 / 新落点、受影响的声明与链接、在途检查(运行记录里的拉起进程 / 等待本实例的 loop / cwd 在工位内的进程)
+```bash
+lybra project relocate-workstation <项目名> --home-root <home根> --instance <审计体实例> --to <工位目录> --dry-run
+```
+2. **确认**(须无在途审计 / 执行; 新落点不得在任何 git 检出内、须不存在或为空): 整体迁移工位态(凭据随目录移动, 不读内容)→ 对新落点 sync 并核稳态 → 追加位置事件 → 核查 → 旧落点留只读退役指针(旧目录不删)→ 经治理提交口自动落账(`--actor` 为提交身份)。sync 失败 = 工位态移回、声明不改
+```bash
+lybra project relocate-workstation <项目名> --home-root <home根> --instance <审计体实例> --to <工位目录> --confirm --actor <你的顾问实例>
+```
+3. **核查**(只读): `check-workstation` 的「land 事件位置」一行应为新落点
+```bash
+lybra project check-workstation <项目名> --home-root <home根> --instance <审计体实例> --harness pi
+```
+4. **回滚**(同样先预演再确认; 迁回最近一次迁移前的落点, 声明追加一行回滚位置事件):
+```bash
+lybra project relocate-workstation <项目名> --home-root <home根> --instance <审计体实例> --rollback --dry-run
+```
+
 #### `lybra mark-concluded` / `lybra queue close --conclusion-note`(AIPOS-F78 前置零⑨)
 **何时用**:已 PASS 但不走 finalize 的卡(如产物由续卡承接):
 ```bash

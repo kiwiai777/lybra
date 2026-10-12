@@ -209,7 +209,7 @@ def test_item1_freeze_legacy_and_dispatch_mode_set_land_their_writes(rig):
 
 def test_item1_every_project_json_writer_has_one_landing_point():
     """防碎片化: 写 project.json 的两阶段命令全部经输出包装 _project_json_two_phase_emit(唯一落账点, 必带 actor);
-    落账薄壳只调 F158 land_written_paths; 声明 subcommands 覆盖 project_json_writers 全部命令 + freeze-legacy + dispatch-mode set。"""
+    落账薄壳只调 F158 land_written_paths; 声明 subcommands 覆盖 project_json_writers 全部命令 + freeze-legacy + dispatch-mode set(+ AIPOS-F161 relocate-workstation)。"""
     import ast
 
     from tools.schema_loader import load_schema
@@ -225,7 +225,7 @@ def test_item1_every_project_json_writer_has_one_landing_point():
     writers = verbs["two_phase_protocol"]["project_json_writers"]["commands"]
     landing = verbs["verbs"]["lybra_governance_commit"]["post_write_landing"]["commands"]["project_writers"]
     _show(f"[件①·声明] project_json_writers={writers}; project_writers.subcommands={landing['subcommands']}")
-    assert set(writers) | {"freeze-legacy", "dispatch-mode set"} == set(landing["subcommands"])
+    assert set(writers) | {"freeze-legacy", "dispatch-mode set", "relocate-workstation"} == set(landing["subcommands"])  # AIPOS-F161: 迁移写接入日志
     assert "{subcommand}" in landing["message_template"] and "{project}" in landing["message_template"]
 
 

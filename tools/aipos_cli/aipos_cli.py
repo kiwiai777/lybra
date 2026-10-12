@@ -2443,6 +2443,19 @@ def build_parser() -> argparse.ArgumentParser:
     project_checkws_parser.add_argument("--harness", required=True, help="Harness whose launch template executable must be on the workstation PATH (enums.schema harness.launch)")
     project_checkws_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_checkws_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-F161: pi 工位迁出共用检出(位置声明唯一来源 = enrollment_log 位置事件; 唯一实现 workstation_relocate.relocate_workstation)
+    project_relocate_parser = project_subparsers.add_parser("relocate-workstation", help="AIPOS-F161: move an enrolled pi workstation (auditor / executor) of this project out of its current location (e.g. a git checkout shared with other projects) to a location of its own: preview (default) lists the workstation state (credentials by path/mode/size only), old/new location, affected declarations and in-flight checks; --confirm moves it, syncs the new location, appends a relocate location event to the enrollment log, verifies, leaves a read-only pointer in the old directory and lands the log; --rollback moves it back")
+    project_relocate_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory)")
+    project_relocate_parser.add_argument("--instance", required=True, help="Workstation instance of this project (as in its enrollment log location event)")
+    relocate_target = project_relocate_parser.add_mutually_exclusive_group()
+    relocate_target.add_argument("--to", default=None, help="New workstation directory (absolute; must not be inside any git checkout; must not exist or be empty). Omitted on preview = print the suggested location")
+    relocate_target.add_argument("--rollback", action="store_true", help="Move the workstation back to where it was before its latest relocation")
+    project_relocate_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    project_relocate_parser.add_argument("--workspace-root", help="Target governance root when the project name is omitted (default: the one containing the current directory)")
+    project_relocate_parser.add_argument("--json", action="store_true", help="Output JSON")
+    _project_json_two_phase_flags(project_relocate_parser, "relocate-workstation", family="enrollment_log_writers")  # 缺省预演 / --confirm 才写
+    _relocate_actor = _project_json_writers_declaration()["landing_actor_flag"]  # AIPOS-F159 落账提交身份旗标(同一声明)
+    project_relocate_parser.add_argument(_relocate_actor["flag"], dest="actor", default=_default_actor(), help=_relocate_actor["help"])
     # AIPOS-F122 件②: 存量冻结(迁移基线)——人肉期卡一次声明为历史(只追加清单; 声明 config.schema project_json.legacy_baseline)
     project_freeze_parser = project_subparsers.add_parser("freeze-legacy", help="AIPOS-F122: freeze legacy (pre-gate) cards as history via an append-only manifest (project.json legacy_baseline): state lint stops reporting them, next scan skips them, gate writes and loop refuse them (LEGACY_FROZEN). --unfreeze appends an unfreeze entry. Never moves or rewrites cards/records.")
     freeze_select = project_freeze_parser.add_mutually_exclusive_group(required=True)
@@ -4112,6 +4125,40 @@ def main(argv: list[str] | None = None) -> int:
                     extra={k: declared[k] for k in ("instance", "gate_ssh_alias", "material_access")},
                     details=[f"workstations.{declared['instance']}: gate_ssh_alias={declared['gate_ssh_alias']} "
                              f"material_access={declared['material_access']}"])
+            if args.project_command == "relocate-workstation":
+                # AIPOS-F161: 唯一实现 workstation_relocate.relocate_workstation; 确认后落账经 _land_project_writes(F158/F159 同一提交口)
+                from tools.aipos_cli.workstation_relocate import RelocationRefused, relocate_workstation, render_relocation
+
+                target = _project_write_target(args, home, args.name)
+                if target is None:
+                    return 1
+                try:
+                    result = relocate_workstation(target["project_root"], args.instance, to=args.to, rollback=args.rollback,
+                                                  dry_run=not args.confirm, actor=args.actor)
+                except RelocationRefused as exc:
+                    print(f"Error: {exc.code}(位置声明未改; 工位态未动)", file=sys.stderr)
+                    for problem in exc.problems:
+                        print(f"  - {problem}", file=sys.stderr)
+                    return 1
+                landing = None
+                if not result["dry_run"]:
+                    landing = _land_project_writes(target["project_root"], result["written"], actor=args.actor,
+                                                   subcommand="relocate-workstation", project=target["project"])
+                rc = 1 if result["refusals"] or (not result["dry_run"] and not result.get("ok")) else 0
+                if landing is not None and not landing["landed"]:
+                    rc = int(landing["exit_code"])
+                if getattr(args, "json", False):
+                    print(render_json({**result, "landing": _landing_view(landing)}))
+                    return rc
+                labels = _two_phase_family_declaration("enrollment_log_writers")["outcome_labels"]
+                print(_project_json_writers_declaration()["target_line"].format(
+                    project=target["project"], source=target["source"], project_json=result["project_json"]))
+                print(f"project relocate-workstation {result['instance']}: {labels['preview'] if result['dry_run'] else labels['written']}")
+                for line in render_relocation(result):
+                    print(line)
+                if landing is not None:
+                    print(landing["line"], file=sys.stdout if landing["landed"] else sys.stderr)
+                return rc
             if args.project_command == "check-workstation":
                 from tools.aipos_cli.loop_driver import check_workstation
                 from tools.aipos_cli.workspace_config import resolve_project_root
