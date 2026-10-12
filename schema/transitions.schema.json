@@ -1146,6 +1146,19 @@
         "worktree_rule": "每条运行记录的 worktree 解析后须 = 审计卡分配工作树; = 被审执行卡工作树单列拒因(执行体原件不算独立核验)",
         "rejection_category": "RUNTIME_EVIDENCE_MISSING",
         "declaration_invalid_category": "RUNTIME_EVIDENCE_DECLARATION_INVALID",
+        "executable_check": {
+          "description": "AIPOS-F165 件①(10-12 chris LANTU-UI3-S1R 实撞: 补审声明 `cd {worktree} && /usr/bin/node …`, 而审计工位主机上 /usr/bin/node 不存在; 不可能的命令被派出, 审计为凑逐字命令 sudo 改了系统): 派发前可执行核查。声明校验唯一处(出卡 draft create/publish 的 draft_validator 与补审派发 audit dispatch --supplementary 同调 artifact_ingest.check_runtime_evidence_declaration)对每条命令按 shell 控制符(&& || ; | &)切段, 每段跳过前导 VAR=值 赋值, 取命令词: cd 段不计(内建); env 段跳过 env_options_with_arg 与无参选项及赋值后取可执行; 命令词在 privilege_commands = 声明含提权拒; 命令词为绝对路径(不含占位)= 须在审计工位主机上存在且可执行。相对路径与 PATH 名不核(审计体按其 PATH 解析)。审计工位 = 卡 audit_by(缺省按项目推导, audit_derivation.resolve_audit_instance)的 land 事件位置: transport=remote = 门机核不到, 标 unverified_note 并提示, 不拒; 本机 / 位置定位不到 = 在本机(治理根所在机)核。不过 = 预演即报 category 并给修法, --confirm 拒。逐字匹配判据(command_match)不变。",
+          "category": "RUNTIME_EVIDENCE_COMMAND_NOT_EXECUTABLE",
+          "privilege_category": "RUNTIME_EVIDENCE_COMMAND_PRIVILEGED",
+          "privilege_commands": ["sudo", "su", "doas", "pkexec"],
+          "env_options_with_arg": ["-u", "--unset", "-C", "--chdir", "-S", "--split-string"],
+          "fix_hint": "修法: 在审计工位主机上用 `command -v {name}` 实测路径后改写声明, 或改为 PATH 中的名字 `{name}`(审计体按其 PATH 解析); 严禁指望审计体 sudo 或改系统路径凑命令",
+          "unverified_note": "未核: 审计工位 {instance} 在跨机主机 {host}, 门机核不到其可执行 {paths}; 请在该主机 `command -v` 实测后确认声明可执行"
+        },
+        "rejection_guidance": {
+          "description": "AIPOS-F165 件②: RUNTIME_EVIDENCE_MISSING 拒因附逐条差异与固定指引。逐条差异 = 每条缺有效运行记录的声明命令(渲染后)与最接近的一条实跑 command(difflib 相似度最高)按空白切词对比, 列出声明段 ≠ 实跑段; 无实跑记录 = 只列声明。固定指引文案唯一来源 = roles.schema write_boundary.hard_rules 中 id=guidance_rule_id 的条文(章程「写权限边界」节同源下发, 审计/执行章程同一硬条款)。",
+          "guidance_rule_id": "no_privilege_escalation"
+        },
         "loop": {
           "derivation_action": "evidence_rework",
           "rule": "推导核对 claimed 审计卡已就绪报告先核本节判据, 不过 = 不可推导 action.type=evidence_rework(triggered_by=auditor, 非硬停, 不升 Owner): loop 等审计体并拉起它补做, 拒因原文附在开工提示与手工提示后; 等待中报告被改写仍不过 = 唤醒重判。同一运行内对同一审计卡因本拒因拉起超过 relaunch_cap 次 = 结束原因 exhausted_end_reason(verbs.schema lybra_loop_status.next_action.by_end_reason 判 owner_needed, 即连败上限)",

@@ -3860,11 +3860,14 @@ def _build_audit_dispatch_preview(
             blocking_reasons.append(
                 f"SUPPLEMENTARY_ACTOR_NOT_ADVISOR: 补充审计只能由角色类 {sup_decl['actor_role_class']} 的实例发起: {role_gate['reason']}")
         if runtime_evidence_commands:
-            from tools.aipos_cli.artifact_ingest import RuntimeEvidenceDeclarationError, parse_runtime_evidence_declaration
+            # AIPOS-F165 件①: 声明校验唯一处(形 + 派发前可执行核查, 出卡 draft_validator 同调); 不过 = 预演即报, --confirm 拒
+            from tools.aipos_cli.artifact_ingest import RuntimeEvidenceDeclarationError, check_runtime_evidence_declaration
 
             raw_evidence = {"required": True, "commands": list(runtime_evidence_commands)}
             try:
-                parse_runtime_evidence_declaration(raw_evidence)
+                checked = check_runtime_evidence_declaration(raw_evidence, governance_root=repo_root, audit_instance=audit_agent_instance)
+                blocking_reasons.extend(checked["problems"])
+                warnings.extend(checked["notes"])
                 supplementary_runtime_evidence = raw_evidence
             except RuntimeEvidenceDeclarationError as exc:
                 blocking_reasons.append(f"RUNTIME_EVIDENCE_DECLARATION_INVALID: {exc}")
@@ -4431,8 +4434,8 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
     import hashlib
 
     from tools.aipos_cli.artifact_ingest import (
-        RuntimeEvidenceDeclarationError, _git_out, parse_runtime_evidence_section, runtime_evidence_declaration,
-        runtime_evidence_requirement,
+        RuntimeEvidenceDeclarationError, _git_out, parse_runtime_evidence_section, runtime_evidence_command_diff,
+        runtime_evidence_declaration, runtime_evidence_guidance, runtime_evidence_requirement,
     )
     from tools.aipos_cli.audit_derivation import audit_card_reviewed_id
     from tools.aipos_cli.next_resolver import _check_verdict_artifact, _find_task_in_queue, _read_frontmatter, card_worktree_location
@@ -4458,7 +4461,8 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
     category = str(decl["rejection_category"])
     heading = str(decl["section_heading"])
     outlet = (f"出口: 审计体在自己的审计分配工作树重跑卡面声明的验证命令, 按 transitions.schema artifact_ingest.verdict.runtime_evidence.format "
-              f"把每条命令/工作树/退出码/日志写进报告「{heading}」节; 跑不了(环境/时长)= 给 FAIL 或 BLOCK 并写原因, 不得以核执行体原件 hash/退出码代替")
+              f"把每条命令/工作树/退出码/日志写进报告「{heading}」节; 跑不了(环境/时长)= 给 FAIL 或 BLOCK 并写原因, 不得以核执行体原件 hash/退出码代替。"
+              + runtime_evidence_guidance())  # AIPOS-F165 件②: 固定指引(声明命令不可执行 → BLOCK; 严禁提权/改系统凑命令)
     try:
         code_repo, audit_wt = card_worktree_location(workspace_root, audit_task_id, audit_fm)
         exec_wt = card_worktree_location(workspace_root, reviewed, reviewed_fm)[1] if reviewed else None
@@ -4543,10 +4547,12 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
         valid_commands.append(_collapse_ws(command))
     if not entries:
         reasons.append("「独立运行证据」节运行记录为空")
+    ran = [_collapse_ws(str(e.get("command"))) for e in entries if isinstance(e, dict) and e.get("command") not in (None, "")]
     for declared in requirement["commands"]:
         rendered = render(declared)
         if rendered not in valid_commands:
-            reasons.append(f"卡面声明的命令缺有效运行记录: {rendered!r}(声明原文 {declared!r}; 须在审计分配工作树运行, 命令逐字一致)")
+            reasons.append(f"卡面声明的命令缺有效运行记录: {rendered!r}(声明原文 {declared!r}; 须在审计分配工作树运行, 命令逐字一致); "
+                           + runtime_evidence_command_diff(rendered, ran))  # AIPOS-F165 件②: 逐条差异(声明 vs 实跑)
     if not reasons:
         return None
     return {"category": category, "reasons": [where + r for r in reasons] + [outlet]}

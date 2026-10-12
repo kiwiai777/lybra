@@ -390,6 +390,7 @@ class LaunchPlan:
     events: str = ""
     kickoff: str = ""
     remote: dict[str, Any] = field(default_factory=dict)  # AIPOS-F110: transport=remote 时 {host, dir, identity_source}
+    privilege_guard: dict[str, Any] = field(default_factory=dict)  # AIPOS-F165 件③: harness_launch.privilege_guard_state 判定
 
     def append_kickoff_note(self, note: str) -> None:
         """AIPOS-F162 件①: 开工提示后附一段(拒因补做); argv 中整参数 kickoff 同步替换(跨机 kickoff 经 stdin 读 self.kickoff)。"""
@@ -401,7 +402,7 @@ class LaunchPlan:
         return {"card": self.card, "harness": self.harness, "instance": self.instance, "launched": not self.refusal,
                 "refusal": self.refusal, "manual_hint": self.manual_hint if self.refusal else "",
                 "workstation": self.location.get("dir"), "host": self.location.get("host"),
-                "transport": self.location.get("transport")}
+                "transport": self.location.get("transport"), "privilege_guard": dict(self.privilege_guard)}
 
 
 def card_harness(task_fm: dict[str, Any]) -> str:
@@ -593,6 +594,13 @@ def plan_launch(governance_root: Path, card: str, *, policy: dict[str, Any] | No
     if unknown or "{kickoff}" not in argv_template:
         return refuse(f"harness {plan.harness} launch.argv 占位非法(仅允许整参数 {{kickoff}}): {argv_template}")
     plan.events = str(template.get("events") or "")
+    # AIPOS-F165 件③: 拉起禁提权判定(唯一实现 harness_launch.privilege_guard_state; check-workstation 同读); 声明不合 = 不拉起
+    from tools.aipos_cli.harness_launch import privilege_guard_state
+
+    try:
+        plan.privilege_guard = privilege_guard_state(decl, governance_root, plan.location.get("transport"))
+    except (ValueError, OSError, SchemaLoadError) as exc:
+        return refuse(f"拉起禁提权声明不可用(fail-closed, 不拉起): {exc}")
     if plan.location.get("transport") == "remote":
         return _plan_remote_launch(governance_root, plan, decl, argv_template, refuse)
     try:
@@ -742,13 +750,15 @@ def check_workstation(project_root: Path, instance: str, harness: str) -> dict[s
     from tools.schema_loader import SchemaLoadError
 
     checks: list[dict[str, Any]] = []
+    guard: dict[str, Any] = {}  # AIPOS-F165 件③: 拉起禁提权状态(与 plan_launch 同一判定 harness_launch.privilege_guard_state)
 
     def check(name: str, ok: bool, detail: str) -> bool:
         checks.append({"check": name, "ok": bool(ok), "detail": detail})
         return bool(ok)
 
     def report() -> dict[str, Any]:
-        return {"ok": all(c["ok"] for c in checks), "instance": instance, "harness": harness, "checks": checks}
+        return {"ok": all(c["ok"] for c in checks), "instance": instance, "harness": harness, "checks": checks,
+                "privilege_guard": guard or None}
 
     try:
         # AIPOS-F146 件②: 身份与模式经 instance_enrollment 一处判定; 工位位置 = 其 workstation(workstation_location 同一读取口)
@@ -763,6 +773,13 @@ def check_workstation(project_root: Path, instance: str, harness: str) -> dict[s
     except (ValueError, OSError, SchemaLoadError) as exc:
         check("land 事件位置", False, f"读取失败: {exc}")
         return report()
+    from tools.aipos_cli.harness_launch import privilege_guard_state
+
+    try:
+        guard.update(privilege_guard_state(launch_declaration(load_loop_contract()), project_root,
+                                           loc.get("transport") if loc.get("found") else None))
+    except (ValueError, OSError, SchemaLoadError) as exc:  # 声明不合 = 拉起会被拒(plan_launch 同一判定)
+        check("拉起禁提权声明", False, f"{exc}(loop 将拒拉起)")
     if not check("land 事件位置", bool(loc.get("found")),
                  f"{loc.get('host') or '(本机, 存量缺 host)'}:{loc.get('dir')} transport={loc.get('transport')}" if loc.get("found")
                  else str(loc.get("reason"))):
@@ -859,13 +876,14 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
             step.launch = {**(step.launch or {}), "pid": harness.pid, "pgid": harness.pgid, "remote_pgid": harness.remote_pgid}
             remote_part = f" remote_pgid={harness.remote_pgid}(经 ssh, kickoff 经 stdin)" if plan.remote else ""
             say(f"[{index}] launch: {plan.harness} @ {where} pid={harness.pid} pgid={harness.pgid}{remote_part}(信封 {envelope_id} launch_harnesses 授权; "
-                f"kickoff = 工位 my-tasks --task-id {plan.card} next_card.kickoff)")
+                f"kickoff = 工位 my-tasks --task-id {plan.card} next_card.kickoff; 禁提权 {harness.privilege_guard['state']}: {harness.privilege_guard['detail']})")
             recorder.launch_started(plan, harness)
             if early:
                 raise LoopInterrupted(early[0])
             failure = _session_event(governance_root, plan.card, actor, "harness_launch",
                                      f"harness={plan.harness}; transport={plan.location.get('transport')}; host={plan.location.get('host') or '(本机, 存量缺 host)'}; "
-                                     f"workstation={plan.cwd}; pid={harness.pid}; pgid={harness.pgid}; remote_pgid={harness.remote_pgid}; envelope={envelope_id}")
+                                     f"workstation={plan.cwd}; pid={harness.pid}; pgid={harness.pgid}; remote_pgid={harness.remote_pgid}; envelope={envelope_id}; "
+                                     f"privilege_guard={harness.privilege_guard['state']}({harness.privilege_guard['detail']})")
             if failure:
                 outcome = "record_failed"
                 step.ok, step.message = False, f"拉起事件写不进 {plan.card} session record({failure}), 已终止进程组; 拉起须留痕(fail-closed)"

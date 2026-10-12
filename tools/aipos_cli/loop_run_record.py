@@ -455,6 +455,7 @@ class LoopRunRecorder:
             "card": plan.card, "harness": plan.harness, "transport": plan.location.get("transport"),
             "host": plan.location.get("host"), "workstation": plan.cwd, "pid": harness.pid, "pgid": harness.pgid,
             "remote_pgid": harness.remote_pgid, "process_fingerprint": process_fingerprint(harness.pid),
+            "privilege_guard": dict(getattr(harness, "privilege_guard", None) or {}),  # AIPOS-F165 件③: 禁提权实际状态(含降级原因)
             "started_at": iso_z(), "ended_at": None, "outcome": None, "returncode": None, "termination": None,
             "activity": {"events": 0, "last_event_at": None, "last_activity_at": None, "last_activity_kind": None,
                          "counts": {}},

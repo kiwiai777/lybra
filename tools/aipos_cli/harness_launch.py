@@ -251,6 +251,95 @@ def remote_signal(remote: dict[str, Any], host: str, pgid: int, signame: str) ->
     return f"failed: ssh exit {proc.returncode}: {_ssh_failure_text(proc)}"
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F165 件③: 拉起禁提权(no_new_privs)。声明 verbs.schema lybra_loop.launch.privilege_guard; 开关 project.json launch_guard
+# (workspace_config.project_launch_guard 唯一读取口)。判定唯一实现 privilege_guard_state(plan_launch 与 check-workstation 同读);
+# 施加唯一处 = 下方 LaunchedHarness 的 Popen(本机: 子进程 exec 前 prctl, 内核标志随 fork/exec 继承且不可撤销)。
+# ---------------------------------------------------------------------------
+
+_PR_SET_NO_NEW_PRIVS = 38  # linux/prctl.h
+_PR_GET_NO_NEW_PRIVS = 39
+PRIVILEGE_GUARD_STATES = ("applied", "disabled", "degraded")
+
+
+class PrivilegeGuardError(OSError):
+    """应施加 no_new_privs 而施加不了(fail-closed: 不拉起)。调用方按「拉起失败」处置(exit 3 + 手工提示)。"""
+
+
+def _prctl() -> Any:
+    """libc prctl(仅 Linux); 不可用 = None。只在父进程解析(子进程 exec 前只调用, 不在 fork 后加载库)。"""
+    import ctypes
+    import sys
+
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        func = ctypes.CDLL(None, use_errno=True).prctl
+    except (OSError, AttributeError):
+        return None
+    func.restype = ctypes.c_int
+    return func
+
+
+def _prctl_args(option: int, arg2: int) -> tuple[Any, ...]:
+    """prctl 变参按内核签名传 unsigned long(与 runall_isolation Landlock 启动器同一传法; 未用参数须为 0, 否则 EINVAL)。"""
+    import ctypes
+
+    return (ctypes.c_int(option), ctypes.c_ulong(arg2), ctypes.c_ulong(0), ctypes.c_ulong(0), ctypes.c_ulong(0))
+
+
+def no_new_privs_supported() -> bool:
+    """本机能否置 no_new_privs: prctl 可解析且 PR_GET_NO_NEW_PRIVS 返回 0/1(只读探测)。"""
+    func = _prctl()
+    return func is not None and func(*_prctl_args(_PR_GET_NO_NEW_PRIVS, 0)) in (0, 1)
+
+
+def privilege_guard_declaration(decl: dict[str, Any]) -> dict[str, Any]:
+    """verbs.schema lybra_loop.launch.privilege_guard(states / degraded_reasons)。缺 = ValueError(fail-closed)。"""
+    guard = decl.get("privilege_guard") if isinstance(decl, dict) else None
+    if not isinstance(guard, dict) or not isinstance(guard.get("states"), dict) \
+            or any(not guard["states"].get(s) for s in PRIVILEGE_GUARD_STATES) \
+            or not isinstance(guard.get("degraded_reasons"), dict) \
+            or any(not guard["degraded_reasons"].get(k) for k in ("platform", "remote")):
+        raise ValueError(f"verbs.schema.json lybra_loop.launch.privilege_guard 未声明齐 states{list(PRIVILEGE_GUARD_STATES)} / "
+                         "degraded_reasons(platform/remote)")
+    return guard
+
+
+def privilege_guard_state(decl: dict[str, Any], governance_root: Any, transport: Any) -> dict[str, Any]:
+    """一次拉起的禁提权判定(唯一实现): {state ∈ PRIVILEGE_GUARD_STATES, detail, owner_approval_ref}。
+    开关读 project.json launch_guard(缺段 = 缺省开); 关闭 = disabled; 跨机 = degraded(remote); 本机平台不支持 = degraded(platform);
+    其余 = applied。launch_guard 不合 = LaunchGuardDeclarationError 上抛(调用方拒拉起); project.json 不可读 = 原异常上抛。"""
+    import sys
+
+    from tools.aipos_cli.workspace_config import project_launch_guard
+
+    texts = privilege_guard_declaration(decl)
+    guard = project_launch_guard(governance_root)
+    auth = guard["owner_approval_ref"]
+    if not guard["no_new_privs"]:
+        state, detail = "disabled", str(texts["states"]["disabled"]).replace("{owner_approval_ref}", str(auth))
+    elif transport == "remote":
+        state = "degraded"
+        detail = str(texts["states"]["degraded"]).replace("{reason}", str(texts["degraded_reasons"]["remote"]))
+    elif not no_new_privs_supported():
+        reason = str(texts["degraded_reasons"]["platform"]).replace("{platform}", sys.platform)
+        state, detail = "degraded", str(texts["states"]["degraded"]).replace("{reason}", reason)
+    else:
+        state, detail = "applied", str(texts["states"]["applied"])
+    return {"state": state, "detail": detail, "owner_approval_ref": auth}
+
+
+def _no_new_privs_preexec(func: Any) -> Callable[[], None]:
+    """子进程 exec 前置 no_new_privs(失败 = 抛, Popen 在父进程报 SubprocessError → PrivilegeGuardError, 不拉起)。"""
+    args = _prctl_args(_PR_SET_NO_NEW_PRIVS, 1)  # 父进程备好参数, 子进程 exec 前只调用
+
+    def _apply() -> None:
+        if func(*args) != 0:
+            raise OSError("prctl(PR_SET_NO_NEW_PRIVS) 失败")
+    return _apply
+
+
 class LaunchedHarness:
     """一次拉起的 harness 进程(新进程组、无 shell)。pump = 注入 watch 的 sleeper(select 阻塞读输出, 非自旋)。
 
@@ -274,9 +363,24 @@ class LaunchedHarness:
         self.remote: dict[str, Any] = dict(getattr(plan, "remote", None) or {})
         self.remote_pgid: int | None = None
         self._remote_decl = remote_declaration(decl) if self.remote else {}
-        self.proc = subprocess.Popen(plan.argv, cwd=None if self.remote else plan.cwd,
-                                     stdin=subprocess.PIPE if self.remote else subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE, start_new_session=True, close_fds=True)
+        # AIPOS-F165 件③: 禁提权唯一施加处。判定读 plan.privilege_guard(plan_launch 经 privilege_guard_state 填); 未判定 = 按缺省开施加
+        # (fail-closed); 本机 applied = exec 前 prctl, 施加不了 = PrivilegeGuardError 不拉起; disabled / degraded = 不施加(判定已记原因)
+        guard = dict(getattr(plan, "privilege_guard", None) or {})
+        self.privilege_guard = guard or (
+            {"state": "degraded", "detail": "未经 plan_launch 判定的跨机拉起: 远端不施加", "owner_approval_ref": None} if self.remote
+            else {"state": "applied", "detail": "未经 plan_launch 判定, 按缺省开施加", "owner_approval_ref": None})
+        preexec = None
+        if self.privilege_guard.get("state") == "applied" and not self.remote:
+            func = _prctl()
+            if func is None:
+                raise PrivilegeGuardError("应施加 no_new_privs 而本机无 prctl, 不拉起(fail-closed)")
+            preexec = _no_new_privs_preexec(func)
+        try:
+            self.proc = subprocess.Popen(plan.argv, cwd=None if self.remote else plan.cwd,
+                                         stdin=subprocess.PIPE if self.remote else subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE, start_new_session=True, close_fds=True, preexec_fn=preexec)
+        except subprocess.SubprocessError as exc:  # preexec 失败(子进程未 exec 即退出)
+            raise PrivilegeGuardError(f"no_new_privs 施加失败, 不拉起: {exc}") from exc
         self.pid = self.pgid = self.proc.pid  # start_new_session → setsid: 进程组号 = pid(remote = 本地 ssh 进程组)
         where = f" {self.remote.get('host')}" if self.remote else ""
         self.prefix = f"{plan.harness} {plan.card}{where} pid={self.pid}"
