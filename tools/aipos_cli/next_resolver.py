@@ -2490,11 +2490,12 @@ def _derive_next_step(
                 "notes": "N4: 审计报告已交但未完成(完成判据 = 必填 frontmatter 全部已填且非占位, AIPOS-F89 件③c)",
                 "action": {"type": "artifact_invalid", "card": task_id, "path": str(verdict_artifact)},
             }
-        # AIPOS-F162 件①: 运行证据硬门(裁决入口同一判据 artifact_ingest.runtime_evidence_check)先行——不合格 = 审计产物不合格,
+        # AIPOS-F162 件①: 运行证据硬门(门侧裁决写入唯一口同一判据 board_adapter.runtime_evidence_check, AIPOS-F163)先行——不合格 = 审计产物不合格,
         # 让审计体补做(action.type 读声明 runtime_evidence.loop.derivation_action; 非硬停、不升 Owner, loop 拉起审计体并附拒因)
-        from tools.aipos_cli.artifact_ingest import runtime_evidence_check, runtime_evidence_declaration
+        from tools.aipos_cli.artifact_ingest import runtime_evidence_declaration
+        from tools.aipos_cli.board_adapter import runtime_evidence_check
 
-        evidence = runtime_evidence_check(workspace_root, task_id, fm, verdict_artifact, verdict_fm)
+        evidence = runtime_evidence_check(workspace_root, task_id, fm, report_path=verdict_artifact, report_fm=verdict_fm)
         if evidence is not None:
             rework_action = str(runtime_evidence_declaration()["loop"]["derivation_action"])
             return {
