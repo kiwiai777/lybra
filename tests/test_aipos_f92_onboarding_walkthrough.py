@@ -182,6 +182,7 @@ def test_item1_owner_cross_project_in_home_registry(tmp_path: Path):
 def test_item2_set_repos_validates_and_restores(iso_home: Path, tmp_path: Path):
     home_root = iso_home / "h"
     assert _cli("project", "new", "probe-x", "--home-root", str(home_root), "--actor", "a.b.c")[0] == 0
+    init_governance_repo(home_root)  # AIPOS-F159 件①: set-repos --confirm 写后经同一提交口落账, home 根作治理仓(带 origin)
     before = (home_root / "probe-x" / "project.json").read_text(encoding="utf-8")
     rc, out = _cli("project", "set-repos", "probe-x", "--home-root", str(home_root), "--repo", "app=relative/path")
     assert rc == 1 and "REPOS_CONFLICT" in out
@@ -386,7 +387,9 @@ def test_walkthrough_guide_onboards_new_project_to_first_card_completed(probe_ra
     assert "run governance_commit" in final and "治理已落账" in final
     hlog = _git(r.hroot, "log", "--format=%s")
     print("[F94·home 根治理仓 git log]\n" + hlog)
-    assert "chore(governance): N6 收账 PROBE-1" in hlog and hlog.count("治理批次更新") >= 2
+    # AIPOS-F159 件①: 第 2 步 set-repos --confirm 写后即经同一提交口落账(提交信息含子命令与项目名), 向导随后的核账命令 = PASS no-op
+    assert "chore(governance): N6 收账 PROBE-1" in hlog and hlog.count("治理批次更新") >= 1
+    assert "chore(governance): 项目配置落账 set-repos lybra-probe" in hlog
     # AIPOS-F158 件①: 向导第 3 步 Owner 签信封(真门 envelope 路径)后, 门生记录与 decision_log 指针随签发即经同一提交口落账
     assert "chore(governance): 信封签发落账 " in hlog
     assert _git(r.hroot, "status", "--porcelain", "-uall", "--", "lybra-probe/5_tasks/policies", "lybra-probe/5_tasks/records/owner_decisions",

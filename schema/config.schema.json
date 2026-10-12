@@ -893,7 +893,15 @@
       "decision_level": {
         "trigger": "owner_decision_record confirm (落库成功)",
         "action": "auto-generate decision_log pointer entry",
-        "path_pattern": "governance/decision_log/YYYY-MM/YYYY-MM-DD-<slug>-auto-pointer.md",
+        "path_pattern": "governance/decision_log/YYYY-MM/YYYY-MM-DD-<decision_id>-auto-pointer.md",
+        "path_pattern_description": "AIPOS-F159 件②(gap #142): 文件名唯一键 = 完整 decision_id(信封决策 = envelope-<policy_id>), 同日多签各得一份指针; 唯一生成实现 board_adapter._auto_generate_decision_log_pointer, 目录读 governance_structure.paths.decision_log_dir。",
+        "legacy_path_pattern": "governance/decision_log/YYYY-MM/YYYY-MM-DD-<decision_id 首个 _ 前段>-auto-pointer.md",
+        "legacy_compat": "旧名指针(F159 前生成; 同日多张信封只留首张)不重命名、不改写: 读取侧(brief 增量真相 / 缺指针预演)按 decision_log 月目录与指针正文的 Record 行读, 不依赖文件名。",
+        "missing_pointer_preview": {
+          "command": "lybra migrate decision-log-pointers",
+          "policy": "list_only",
+          "description": "历史缺指针只预演列出, 不自动补、无 --confirm: 候选 = 决策记录落点(transitions.schema record_locations.kinds.owner_decisions)下的每份决策记录, 判有无 = decision_log 月目录下任一 *-auto-pointer.md 的 Record 行指向它(新旧文件名同判)。只读, 零写入; 唯一实现 tools/aipos_cli/decision_log_pointers.py。"
+        },
         "content": "一句话结论 + decided_by + 指向记录路径 (固化命名)",
         "enforcement": "automatic (silent failure does not block main flow)"
       },

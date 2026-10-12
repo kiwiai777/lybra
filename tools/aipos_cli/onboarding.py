@@ -408,8 +408,9 @@ def generate_onboarding_guide(
         # AIPOS-F125: 写 project.json 的命令同一两阶段(verbs.schema two_phase_protocol.project_json_writers): 缺省预演, --confirm 才写
         "# 先预演(打印将写的 project.json diff 与校验结果, 零写入)给 Owner 看, 再 --confirm 写入",
         _cmd(*repo_parts, "--dry-run"),
-        _cmd(*repo_parts, "--confirm"),
-        "# 落账: 本步产物(project.json)精确提交并推送治理仓(AIPOS-F94)",
+        _cmd(*repo_parts, "--actor", _shell_quote(_actor), "--confirm"),
+        # AIPOS-F159 件①: --confirm 写后即经同一提交口落账 project.json(提交身份 --actor); 下行为同一范围的补账命令(已落账 = PASS no-op)
+        "# 落账: --confirm 已随写入提交并推送 project.json(AIPOS-F159); 下行核账/补账: 已落账即 no-op, 落账失败(exit 3)时按其拒因处理后照跑(AIPOS-F94)",
         render_landing_command(gov, _actor, set_repos_products(gov)),
     ]
     steps.append({
@@ -421,7 +422,8 @@ def generate_onboarding_guide(
         "purpose": ("把产品仓清单写进 project.json(repos {default, items} + code_repo 别名), 经 config.schema project_json.repos 声明校验; "
                     "卡 lane.repo 写仓名, 建工作树 / finalize 按此解析。之后各卡由 lybra loop 结案后自动落账; 非卡改动一律 governance-commit --paths"),
         "check": ("--dry-run 输出 'project set-repos <项目>: 预览(未写; 加 --confirm 写入)' + 每个仓一行 + project.json diff(零写入); "
-                  "--confirm 输出 '已写入'; 多于一个仓须 --default; 落账输出 Verdict: PASS 且 '✓ Pushed to remote'"),
+                  "--confirm 输出 '已写入' 与 '落账: verdict=PASS committed=True pushed=True'(AIPOS-F159: 写后即落账); 多于一个仓须 --default; "
+                  "核账命令输出 Verdict: PASS(已落账 = no-op)"),
         "on_fail": {
             "REPOS_CONFLICT": "路径须为绝对路径、default 须在仓名内; 改参数重跑(预演即报错, project.json 未改动)",
             "PROJECT_NOT_ESTABLISHED": "Step 1 未完成; 先跑 Step 1",
@@ -705,7 +707,7 @@ def generate_onboarding_guide(
     step9_exec = [
         "# 声明执行方式(AIPOS-F143): 缺省子 agent 执行者 + 独立 pi 审计工位; 起草缺省与发卡核身份同读此声明(先预演再写入)",
         *[_cmd("lybra", "project", "set-execution", "--workspace-root", gq, "--subagent-executor", _shell_quote(inst["executor"]),
-               "--auditor", _shell_quote(inst["auditor"]), phase) for phase in ("--dry-run", "--confirm")],
+               "--auditor", _shell_quote(inst["auditor"]), *phase) for phase in (("--dry-run",), ("--actor", _shell_quote(_actor), "--confirm"))],
     ] if subagent_exec else []
     step9 = [
         *step9_exec,

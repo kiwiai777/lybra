@@ -92,6 +92,20 @@ def load_owner_token(*, connection_json: str | Path | None = None, role: str = "
     return get_token_for_role_and_project(connection_json, role, project)
 
 
+def load_client_token(*, connection_json: str | Path | None = None, role: str = "owner", token_env: str | None = None) -> str:
+    """AIPOS-F159 件③(gap #143): 交互式门客户端(`lybra confirm` / Owner TUI 会话 / TUI copilot 会话)取凭据的同一取法——
+    显式 env(token_env)= 只读该环境变量(load_owner_token 的 env 分支); 连接文件 = 经 F134/F154 按实例选凭据唯一口
+    two_phase_shell_factory.load_role_token(同角色可用条目绑定 ≥2 个实例 = 拒, 禁取首个冒名; ≤1 个实例 = 既有行为)。
+    两者都未给 = ValueError(与 load_owner_token 同一拒因)。token 只在进程内用, 永不打印。"""
+    if token_env:
+        return load_owner_token(role=role, token_env=token_env)
+    if connection_json is None:
+        raise ValueError("provide connection_json (+ role) or token_env to source the token")
+    from tools.aipos_cli.two_phase_shell_factory import load_role_token
+
+    return load_role_token(connection_json_path=str(connection_json), role=role)
+
+
 # ---------------------------------------------------------------------------
 # AIPOS-F106 件①(M1): 门地址与门客户端凭据的唯一推导口
 # ---------------------------------------------------------------------------
@@ -520,13 +534,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list", action="store_true", help="list confirm gates and exit")
     args = parser.parse_args(argv)
 
-    try:
-        if args.token_env:
-            token = load_owner_token(role=args.role, token_env=args.token_env)
-        else:  # AIPOS-F157 件①: 连接文件取凭据经薄壳唯一口(同角色多实例即拒, 禁取首个)
-            from tools.aipos_cli.two_phase_shell_factory import load_role_token
-
-            token = load_role_token(connection_json_path=str(args.connection_json), role=args.role)
+    try:  # AIPOS-F157 件① / F159 件③: env 或连接文件(经薄壳唯一口, 同角色多实例即拒)同一取法 load_client_token
+        token = load_client_token(connection_json=args.connection_json, role=args.role, token_env=args.token_env)
     except (ValueError, OSError, json.JSONDecodeError) as exc:
         print(f"error reading token: {exc}")
         return 2

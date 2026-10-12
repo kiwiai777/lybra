@@ -335,7 +335,18 @@ def test_item1_single_implementations_reused():
 # 件② project set-paths: 正反例原文与 project.json diff; 与 set-repos 同一写路径与锁
 # ===========================================================================
 
+def _ensure_governance_repo(rig) -> None:
+    """AIPOS-F159 件①: project 族写命令 --confirm 写后经同一提交口落账 → 靶场治理根须在治理仓(带 origin)内。
+    f90 rig 本身不建仓(loop 夹具按需自建), 本处首次确认前补建(构件唯一来源 f73d.init_governance_repo; 已建 = 不重复)。"""
+    from test_aipos_f73d_loop_driver import init_governance_repo
+
+    if not (rig.gov / ".git").exists():
+        init_governance_repo(rig.gov)
+
+
 def _set_paths(rig, pairs: list[tuple[str, str]], *, confirm: bool) -> tuple[int, str, str]:
+    if confirm:
+        _ensure_governance_repo(rig)
     argv = ["project", "set-paths", rig.gov.name, "--home-root", str(rig.gov.parent)]
     for key, value in pairs:
         argv += ["--key", key, "--value", value]

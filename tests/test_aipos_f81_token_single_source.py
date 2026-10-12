@@ -179,9 +179,14 @@ def test_charter_render_token_projects_from_active_entry(tmp_path):
 
 def test_all_retired_resolve_token_fail_closed(all_retired):
     root, fps, raw = all_retired
-    with pytest.raises(TokenAllRetiredError) as ei:
+    # AIPOS-F159 件③: 给了角色 + 实例 = 经 F134/F154 唯一口 load_role_token 按实例取, 全 retired 的拒因由 DriverTokenError 原样带出
+    # (cause = TokenAllRetiredError); 仍 fail-closed、不落 env 兜底
+    from tools.aipos_cli.two_phase_shell_factory import DriverTokenError
+
+    with pytest.raises((TokenAllRetiredError, DriverTokenError)) as ei:
         ConnectionResolver.resolve_token(workspace_root=root, role="executor", agent_instance=INSTANCE,
                                          env={"LYBRA_TOKEN": _tok("env")})
+    assert isinstance(ei.value, TokenAllRetiredError) or isinstance(ei.value.__cause__, TokenAllRetiredError)
     msg = str(ei.value)
     print(f"resolve_token 全 retired 拒因: {msg}")
     assert TOKEN_REENROLL_EXIT in msg and "lybra roles enroll" in msg

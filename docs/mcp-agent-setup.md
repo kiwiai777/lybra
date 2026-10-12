@@ -139,7 +139,8 @@ independent pi auditor workstation (AIPOS-F143).
    prints these steps.
 2. **Declare the execution mode.** `lybra project set-execution --subagent-executor <instance> --auditor <pi auditor>
    [--pi-executor <pi executor> --pi-allowed-task-mode <task_mode> …]` (preview by default, `--confirm` writes
-   `project.json` `execution`; declared in `schema/config.schema.json`). Every instance must already be enrolled in the
+   `project.json` `execution` and commits and pushes it through the governance commit path, commit identity `--actor`;
+   declared in `schema/config.schema.json`). Every instance must already be enrolled in the
    project, and the auditor and pi executor must have a workstation. Without this section nothing changes.
 3. **Draft and publish.** With the section declared, `lybra draft create` fills a missing `assigned_to` / `harness` /
    `audit_by` from it (a card goes to the pi executor only when the draft asks for `harness: pi` and its task mode is in the

@@ -785,9 +785,17 @@ def _project_freeze_legacy(args: argparse.Namespace) -> int:
     except LegacyBaselineError as exc:
         print(f"Error: {exc}(freeze-legacy 零写入)", file=sys.stderr)
         return 1
+    # AIPOS-F159 件①: 追加的清单条目(+ 本次补声明落点的 project.json)经同一落账薄壳落账; 本批无写出 = 不落
+    landing = None
+    if written and written.get("written"):
+        landing = _land_project_writes(
+            root, [written["entry"]] + ([project_json_path(root)] if written["project_json_declared"] else []),
+            actor=args.actor, subcommand="freeze-legacy", project=str(target["project"]))
+    rc = 0 if landing is None or landing["landed"] else int(landing["exit_code"])
     if getattr(args, "json", False):
-        print(render_json({"ok": True, "confirm": bool(args.confirm), "plan": plan, "written": written}))
-        return 0
+        print(render_json({"ok": True, "confirm": bool(args.confirm), "plan": plan, "written": written,
+                           **({"landing": _landing_view(landing)} if landing is not None else {})}))
+        return rc
     verb = "冻结" if plan["action"] == "freeze" else "解冻"
     mode = "confirm" if args.confirm else "dry-run"
     print(f"freeze-legacy ({mode}) {verb} {len(plan['selected'])} 张卡; 治理根 {plan['governance_root']}; "
@@ -804,10 +812,12 @@ def _project_freeze_legacy(args: argparse.Namespace) -> int:
         print("  (dry-run 零写入; 确认后加 --confirm 追加清单条目)")
     elif written["written"]:
         print(f"✓ 已追加清单条目 {written['entry']}" + ("; 并在 project.json 声明 legacy_baseline 落点" if written["project_json_declared"] else ""))
-        print("  卡文件与记录未被移动或改写; 清单条目属治理真相, 按项目惯例经 governance-commit 落账")
+        print("  卡文件与记录未被移动或改写")
     else:
         print(f"  本批无需{verb}的卡(幂等), 未写清单")
-    return 0
+    if landing is not None:
+        print(landing["line"], file=sys.stdout if landing["landed"] else sys.stderr)
+    return rc
 
 
 def _ask_project_type_interactive() -> dict[str, Any] | None:
@@ -1377,6 +1387,30 @@ def _migrate_record_type_cli(args: argparse.Namespace) -> int:
     return rc
 
 
+def _migrate_decision_log_pointers_cli(args: argparse.Namespace) -> int:
+    """AIPOS-F159 件②: `lybra migrate decision-log-pointers` 薄壳——只读预演(全部逻辑在 decision_log_pointers), 零写入、不补。"""
+    from tools.aipos_cli.decision_log_pointers import DecisionPointerError, missing_pointer_plan
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        root = _find_repo_root_for_args(args)
+        plan = missing_pointer_plan(root)
+    except (DecisionPointerError, FileNotFoundError, SchemaLoadError, OSError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(render_json(plan))
+        return 0
+    print(f"migrate decision-log-pointers: 预演(只列不补, policy={plan['policy']}) 治理根 {plan['governance_root']}"
+          f"(决策记录 {plan['records_dir']}, 指针目录 {plan['decision_log_dir']})")
+    print(f"  决策记录 {plan['decisions']} 份; 有指针 {plan['pointed']}; 缺指针 {len(plan['missing'])}; 指针文件 {plan['pointers']} 份(新旧文件名同判)")
+    for item in plan["missing"]:
+        print(f"  [缺指针] {item['record']}  decision_id={item['decision_id']}")
+    for reason in plan["unreadable"]:
+        print(f"  [读不出] {reason}", file=sys.stderr)
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # AIPOS-F125: 写 project.json 的 CLI 命令(set-paths / set-repo / set-repos / set-workstation)同一两阶段——
 # 声明 verbs.schema two_phase_protocol.project_json_writers 一处; 旗标注册与输出渲染只此一份包装(预演/diff 本体 =
@@ -1393,10 +1427,12 @@ def _project_json_writers_declaration() -> dict[str, Any]:
             or decl.get("default_phase") != "dry_run"
             or not all(isinstance((decl.get(k) or {}).get(p), str) and (decl.get(k) or {}).get(p) for k in ("flags", "flag_help") for p in phases)
             or not all(isinstance((decl.get("outcome_labels") or {}).get(k), str) for k in ("written", "unchanged", "preview"))
-            or not all(f"{{{k}}}" in str(decl.get("target_line") or "") for k in ("project", "source", "project_json"))):
+            or not all(f"{{{k}}}" in str(decl.get("target_line") or "") for k in ("project", "source", "project_json"))
+            or not all(isinstance((decl.get("landing_actor_flag") or {}).get(k), str) and decl["landing_actor_flag"][k]
+                       for k in ("flag", "help"))):
         raise SchemaLoadError("verbs.schema.json two_phase_protocol.project_json_writers(commands / default_phase=dry_run / "
                               "flags / flag_help {dry_run, confirm} / outcome_labels {written, unchanged, preview} / "
-                              "target_line 含 {project} {source} {project_json})未声明齐")
+                              "target_line 含 {project} {source} {project_json} / landing_actor_flag {flag, help})未声明齐")
     return decl
 
 
@@ -1435,6 +1471,11 @@ def _project_json_two_phase_flags(parser: argparse.ArgumentParser, command: str,
     group = parser.add_mutually_exclusive_group()
     group.add_argument(decl["flags"]["dry_run"], dest="dry_run", action="store_true", help=decl["flag_help"]["dry_run"])
     group.add_argument(decl["flags"]["confirm"], dest="confirm", action="store_true", help=decl["flag_help"]["confirm"])
+    if family == "project_json_writers":
+        # AIPOS-F159 件①: --confirm 写后落账的提交身份(声明 landing_actor_flag); 命令自带同名旗标(set-repo)= 沿用, 不重复注册
+        actor_flag = decl["landing_actor_flag"]
+        if actor_flag["flag"] not in parser._option_string_actions:
+            parser.add_argument(actor_flag["flag"], dest="actor", default=_default_actor(), help=actor_flag["help"])
 
 
 def _project_write_target(args: argparse.Namespace, home: Path | None, name: str | None, *,
@@ -1453,20 +1494,59 @@ def _project_write_target(args: argparse.Namespace, home: Path | None, name: str
         return None
 
 
-def _project_json_two_phase_emit(command: str, target: dict[str, Any], outcome: dict[str, Any], *, json_out: bool,
+def _default_actor() -> str:
+    """来源 / 提交身份缺省: $USER 或 owner(project new / set-repo / home git-init 与 project 族落账同一缺省)。"""
+    return os.environ.get("USER") or "owner"
+
+
+def _land_project_writes(project_root: str | Path, written: list[str | Path], *, actor: str, subcommand: str,
+                         project: str) -> dict[str, Any]:
+    """AIPOS-F159 件①(gap #144): project 族写命令 --confirm 后的落账薄壳——复用 F158 写后落账唯一实现
+    governance_commit.land_written_paths(N6 同一提交口, 声明 verbs.lybra_governance_commit.post_write_landing.commands.project_writers),
+    不另写 git 逻辑。written = 本次写出的文件(绝对或治理根相对), 换算为治理根相对路径作 --paths 白名单。
+    落账声明不可读 = 不落账(fail-closed), 写入已生效: 拒因出声, exit 1(与 envelope mint 同一处置)。返回 land_written_paths 的结果(含 line)。"""
+    from tools.aipos_cli.governance_commit import land_written_paths
+    from tools.schema_loader import SchemaLoadError
+
+    root = Path(project_root).resolve()
+    rels = sorted({(Path(p).resolve().relative_to(root) if Path(p).is_absolute() else Path(p)).as_posix() for p in written})
+    try:
+        return land_written_paths(root, rels, actor, command="project_writers", subcommand=subcommand, project=project)
+    except SchemaLoadError as exc:
+        return {"landed": False, "exit_code": 1, "reason": str(exc), "paths": rels,
+                "line": f"⚠ 落账未完成(写入已生效, 勿重复执行写命令): {exc}"}
+
+
+def _landing_view(landing: dict[str, Any] | None) -> dict[str, Any] | None:
+    """落账结果的 JSON 视图(去掉供文本输出的 line)。"""
+    return None if landing is None else {k: v for k, v in landing.items() if k != "line"}
+
+
+def _project_json_two_phase_emit(command: str, target: dict[str, Any], outcome: dict[str, Any], *, actor: str, json_out: bool,
                                  details: list[str] | tuple[str, ...] = (), extra: dict[str, Any] | None = None,
-                                 via: str = "") -> None:
+                                 via: str = "") -> int:
     """写 project.json 的命令同一输出: 首行 = 目标项目名 + 来源 + project.json 绝对路径(AIPOS-F127 件②, 文案读声明 target_line),
     次行状态(已写入 / 无改动 / 预览)+ 命令自述的改动行 + project.json unified diff。target = workspace_config.resolve_project_write_target
-    的结果(各命令目标解析同一实现)。只涉 project.json(update_project_json 的结果), 不读不印 connection.json / 凭据。--json = 同一内容的 JSON。"""
+    的结果(各命令目标解析同一实现)。只涉 project.json(update_project_json 的结果), 不读不印 connection.json / 凭据。--json = 同一内容的 JSON。
+
+    AIPOS-F159 件①(gap #144): 本族唯一落账点——确认阶段(outcome dry_run=False)写后即经 _land_project_writes 落 project.json
+    (提交身份 = actor; 无改动亦核一次: 范围已落账 = PASS no-op, 前次写后未落账者随之补落); 预演零写入、不落账。
+    返回退出码: 落账成功 / 预演 = 0, 落账未完成 = 声明的 landing_failed_exit_code(写入已生效, 出拒因 + 补账命令)。"""
     decl = _project_json_writers_declaration()
     labels = decl["outcome_labels"]
     project_name = target["project"]
+    landing = None
+    if not outcome.get("dry_run", True):
+        landing = _land_project_writes(target["project_root"], [outcome["project_json"]], actor=actor, subcommand=command,
+                                       project=project_name)
+    rc = 0 if landing is None or landing["landed"] else int(landing["exit_code"])
     if json_out:
         payload = {"ok": True, "command": command, "project": project_name, "target_source": target["source"],
                    **(extra or {}), **outcome}
+        if landing is not None:
+            payload["landing"] = _landing_view(landing)
         print(render_json({k: (str(v) if isinstance(v, Path) else v) for k, v in payload.items()}))
-        return
+        return rc
     print(decl["target_line"].format(project=project_name, source=target["source"],
                                      project_json=Path(outcome["project_json"]).resolve()))
     mode = labels["written"] if outcome["written"] else (labels["unchanged"] if not outcome["changed"] else labels["preview"])
@@ -1475,6 +1555,9 @@ def _project_json_two_phase_emit(command: str, target: dict[str, Any], outcome: 
         print(f"  {line}")
     if outcome["diff"]:
         print(outcome["diff"].rstrip("\n"))
+    if landing is not None:
+        print(landing["line"], file=sys.stdout if landing["landed"] else sys.stderr)
+    return rc
 
 
 class _RolesIssuerError(RuntimeError):
@@ -2251,7 +2334,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # AIPOS-226 (Slice 2, Phase 2a): governance-home Owner scaffold + one-shot git setup.
     # These are LOCAL Owner actions (ruling 2=a) — they perform no gate confirm and mint no token.
-    default_actor = os.environ.get("USER") or "owner"
+    default_actor = _default_actor()
 
     project_parser = subparsers.add_parser("project", help="Owner project scaffold under the governance home")
     project_subparsers = project_parser.add_subparsers(dest="project_command")
@@ -2437,6 +2520,11 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_record_type_parser.add_argument("--actor", help="Commit identity for landing (required with --confirm)")
     migrate_record_type_parser.add_argument("--json", action="store_true", help="Output JSON")
     _project_json_two_phase_flags(migrate_record_type_parser, "record-type", family="records_migration_writers")
+    # AIPOS-F159 件②: 历史缺 decision_log 自动指针只预演列出(只读, 无 --confirm; 声明 config.schema decision_level.missing_pointer_preview)
+    migrate_pointer_parser = migrate_subparsers.add_parser(
+        "decision-log-pointers", help="AIPOS-F159: list owner decision records that have no decision_log auto-pointer "
+                                      "(old and new pointer filenames both count); read-only preview, never backfills")
+    migrate_pointer_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     # AIPOS-F57: Onboarding guide (from 0 to first card running)
     onboarding_parser = subparsers.add_parser("onboarding", help="AIPOS-F57: From 0 to first card running — full onboarding guide (zero manual editing)")
@@ -3885,13 +3973,12 @@ def main(argv: list[str] | None = None) -> int:
                 # AIPOS-F125: 缺省预演(diff + 校验, 零写入), --confirm 才写; 输出同一包装
                 repos_view = {"default": declared["default"], "items": {k: str(v) for k, v in declared["items"].items()},
                               "no_deploy": list(declared["no_deploy"]), "code_repo": str(declared["code_repo"])}
-                _project_json_two_phase_emit(
+                return _project_json_two_phase_emit(
                     "set-repos", target, {k: declared[k] for k in ("dry_run", "changed", "written", "diff")}
-                    | {"project_json": str(declared["project_json"])}, json_out=getattr(args, "json", False), extra=repos_view,
+                    | {"project_json": str(declared["project_json"])}, actor=args.actor, json_out=getattr(args, "json", False), extra=repos_view,
                     details=[f"repos.default = {repos_view['default']}  code_repo = {repos_view['code_repo']}"]
                     + [f"repos.items.{k} = {v}" for k, v in repos_view["items"].items()]
                     + [f"repos.no_deploy = {repos_view['no_deploy']}(本仓不部署: finalize deploy_status=not_applicable)"] * bool(repos_view["no_deploy"]))
-                return 0
             if args.project_command == "set-paths":
                 # AIPOS-F123 件②: 唯一实现 workspace_config.set_project_paths(声明校验 + update_project_json 唯一写路径)
                 from tools.aipos_cli.workspace_config import PathsDeclarationError, set_project_paths
@@ -3909,10 +3996,9 @@ def main(argv: list[str] | None = None) -> int:
                 except PathsDeclarationError as exc:
                     print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
                     return 1
-                _project_json_two_phase_emit(
-                    "set-paths", target, outcome, json_out=getattr(args, "json", False),
+                return _project_json_two_phase_emit(
+                    "set-paths", target, outcome, actor=args.actor, json_out=getattr(args, "json", False),
                     details=[f"paths.{change['key']}: {change['before']!r} → {change['after']!r}" for change in outcome["changes"]])
-                return 0
             if args.project_command == "set-meta":
                 # AIPOS-F127 件③: 唯一实现 workspace_config.set_project_meta(键须 config.schema project_json 已声明; update_project_json 唯一写路径)
                 from tools.aipos_cli.workspace_config import ProjectMetaError, project_meta_declaration, set_project_meta
@@ -3926,10 +4012,9 @@ def main(argv: list[str] | None = None) -> int:
                 except ProjectMetaError as exc:
                     print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
                     return 1
-                _project_json_two_phase_emit(
-                    "set-meta", target, outcome, json_out=getattr(args, "json", False),
+                return _project_json_two_phase_emit(
+                    "set-meta", target, outcome, actor=args.actor, json_out=getattr(args, "json", False),
                     details=[f"{change['key']}: {change['before']!r} → {change['after']!r}" for change in outcome["changes"]])
-                return 0
             if args.project_command == "set-execution":
                 # AIPOS-F143 件②: 唯一实现 enrollment.set_project_execution(声明校验 + 实例接入核验 + update_project_json 唯一写路径)
                 from tools.aipos_cli.enrollment import set_project_execution
@@ -3949,13 +4034,12 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"  - {problem}", file=sys.stderr)
                     return 1
                 view = outcome["execution"]
-                _project_json_two_phase_emit(
+                return _project_json_two_phase_emit(
                     "set-execution", target, {k: outcome[k] for k in ("dry_run", "changed", "written", "diff", "project_json")},
-                    json_out=getattr(args, "json", False), extra={"execution": view},
+                    actor=args.actor, json_out=getattr(args, "json", False), extra={"execution": view},
                     details=[f"execution.{k} = {view[k]!r}" for k in ("default_mode", "subagent_executor", "pi_allowed_task_modes",
                                                                        "pi_executor", "auditor")]
                     + ["各实例已核: 本项目已接入(审计者 / pi 执行者有工位位置); 起草缺省与发卡核身份同读本段"])
-                return 0
             if args.project_command == "set-return-summary":
                 # AIPOS-F148 件②: 唯一实现 workspace_config.set_return_summary_source(声明校验 + update_project_json 唯一写路径)
                 from tools.aipos_cli.workspace_config import ReturnSummarySourceError, set_return_summary_source
@@ -3971,14 +4055,13 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
                     return 1
                 view = outcome["return_summary_source"]
-                _project_json_two_phase_emit(
+                return _project_json_two_phase_emit(
                     "set-return-summary", target, {k: outcome[k] for k in ("dry_run", "changed", "written", "diff", "project_json")},
-                    json_out=getattr(args, "json", False),
+                    actor=args.actor, json_out=getattr(args, "json", False),
                     extra={"return_summary_source": {k: view[k] for k in ("frontmatter_keys", "section_markers")}},
                     details=[f"return_summary_source.frontmatter_keys = {view['frontmatter_keys']!r}",
                              f"return_summary_source.section_markers = {view['section_markers']!r}",
                              "交回就绪判据 / 推导核交回步 / artifact ingest 同读本段(未给的键取 transitions 缺省)"])
-                return 0
             if args.project_command == "set-workstation":
                 # AIPOS-F110 件②: 唯一写入口 workspace_config.set_project_workstation(校验 = config.schema project_json.workstations)
                 from tools.aipos_cli.workspace_config import WorkstationDeclarationError, set_project_workstation
@@ -3994,13 +4077,12 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
                     return 1
                 # AIPOS-F125: 缺省预演(diff + 校验, 零写入), --confirm 才写; 输出同一包装
-                _project_json_two_phase_emit(
+                return _project_json_two_phase_emit(
                     "set-workstation", target, {k: declared[k] for k in ("project_json", "dry_run", "changed", "written", "diff")},
-                    json_out=getattr(args, "json", False),
+                    actor=args.actor, json_out=getattr(args, "json", False),
                     extra={k: declared[k] for k in ("instance", "gate_ssh_alias", "material_access")},
                     details=[f"workstations.{declared['instance']}: gate_ssh_alias={declared['gate_ssh_alias']} "
                              f"material_access={declared['material_access']}"])
-                return 0
             if args.project_command == "check-workstation":
                 from tools.aipos_cli.loop_driver import check_workstation
                 from tools.aipos_cli.workspace_config import resolve_project_root
@@ -4043,10 +4125,9 @@ def main(argv: list[str] | None = None) -> int:
                 details = [f"code_repo = {preview['code_repo']}"]
 
                 def _emit_set_repo(outcome: dict[str, Any], via: str = "") -> int:
-                    _project_json_two_phase_emit(
+                    return _project_json_two_phase_emit(
                         "set-repo", target, {k: outcome[k] for k in ("project_json", "dry_run", "changed", "written", "diff")},
-                        json_out=False, details=details, via=via)
-                    return 0
+                        actor=args.actor, json_out=False, details=details, via=via)
 
                 def _local_write() -> int:
                     try:
@@ -4196,14 +4277,18 @@ def main(argv: list[str] | None = None) -> int:
                     new_mode, trail = set_dispatch_mode(
                         proj_root, args.mode, by=args.by, reason=args.reason,
                     )
+                    # AIPOS-F159 件①: project.json + 切换留痕经同一落账薄壳落账(提交身份 = --by)
+                    landing = _land_project_writes(proj_root, [project_json_path(Path(proj_root)), trail], actor=args.by,
+                                                   subcommand="dispatch-mode set", project=str(target["project"]))
                     if args.json:
                         print(render_json({
                             "ok": True, "project_root": proj_root,
-                            "dispatch_mode": new_mode, "trail_path": str(trail),
+                            "dispatch_mode": new_mode, "trail_path": str(trail), "landing": _landing_view(landing),
                         }))
                     else:
                         print(f"✓ dispatch_mode set to {new_mode}  (trail: {trail})")
-                    return 0
+                        print(landing["line"], file=sys.stdout if landing["landed"] else sys.stderr)
+                    return 0 if landing["landed"] else int(landing["exit_code"])
                 print("Usage: lybra project dispatch-mode {show|set} ...", file=sys.stderr)
                 return 2
             if args.project_command == "export":
@@ -4850,6 +4935,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.command == "migrate":
+        if getattr(args, "migrate_command", None) == "decision-log-pointers":
+            return _migrate_decision_log_pointers_cli(args)
         if getattr(args, "migrate_command", None) != "record-type":
             parser.print_help()
             return 2

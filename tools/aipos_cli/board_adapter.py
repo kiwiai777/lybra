@@ -6542,9 +6542,15 @@ def _auto_generate_decision_log_pointer(
     """AIPOS-R6M 大项A②: 决策粒度机器触发 - owner_decision_record落库时自动生成decision_log指针条目
 
     AIPOS-F158: 目录读 config.schema governance_structure.paths.decision_log_dir(schema_loader.resolve_governance_path, 原写死
-    governance/decision_log 退役, 缺省值不变); 返回 {"path": 写出的治理根相对路径 | None(当日同名指针已在 = 跳过), "warning": 写失败拒因 | None}
+    governance/decision_log 退役, 缺省值不变); 返回 {"path": 写出的治理根相对路径 | None(同名指针已在 = 跳过), "warning": 写失败拒因 | None}
     (原「静默失败」改为拒因出声, 决策记录照落不回滚)。
+
+    AIPOS-F159 件②(gap #142): 文件名唯一键 = 完整 decision_id(信封决策 = envelope-<policy_id>; 声明 config.schema
+    timeline_enforcement.decision_level.path_pattern)。原取 decision_id 首个 `_` 前段, 同日多张信封都成 `envelope-pol` 重名,
+    第二张起被「同名已在 = 跳过」吞掉。既有旧名指针不重命名: 读取侧(brief / 缺指针预演 decision_log_pointers)按目录与内容读, 不依赖文件名。
     """
+    import re
+
     from tools.schema_loader import resolve_governance_path
 
     try:
@@ -6555,10 +6561,10 @@ def _auto_generate_decision_log_pointer(
         year_month = file_slug("month", now)
         month_dir = decision_log_dir / year_month
         
-        # 生成文件名: YYYY-MM-DD-<slug>.md
+        # 生成文件名: YYYY-MM-DD-<decision_id>-auto-pointer.md(AIPOS-F159 件②: 唯一键 = 完整 decision_id, 同日多签不重名;
+        # decision_id 已按 owner_decision_writer.DECISION_ID_PATTERN 限于文件名安全字符, 此处再收一道防御)
         date_str = file_slug("date", now)
-        # 从 decision_id 提取 slug (移除时间戳部分)
-        slug = decision_id.split("_")[0] if "_" in decision_id else decision_id
+        slug = re.sub(r"[^A-Za-z0-9._-]", "-", str(decision_id))
         filename = f"{date_str}-{slug}-auto-pointer.md"
         pointer_file = month_dir / filename
         

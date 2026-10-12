@@ -99,6 +99,9 @@ def test_item1_item2_undeclared_refused_with_exit_then_set_paths_then_finalize_p
 
     pj = gov / "project.json"
     before = pj.read_bytes()
+    from test_aipos_f73d_loop_driver import init_governance_repo  # 靶场治理仓构件唯一来源
+
+    init_governance_repo(gov)  # AIPOS-F159 件①: set-paths --confirm 写后经同一提交口落账, 治理根须在治理仓(带 origin)内
     argv = ["project", "set-paths", "--workspace-root", str(gov), "--key", STAGE_ARCHIVE_PATH_KEY, "--value", LEGACY_DIR]
     rc, out, err = _cli(argv)
     _show(f"[件①·set-paths 预演] rc={rc}\n{out}{err}")

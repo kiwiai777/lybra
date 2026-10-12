@@ -50,6 +50,14 @@ def _cli(*argv: str) -> tuple[int, str, str]:
     return int(rc or 0), out.getvalue(), err.getvalue()
 
 
+def _governance_repo(home: Path) -> None:
+    """AIPOS-F159 件①: home 根作靶场治理仓(带临时 origin 裸仓; 构件唯一来源 test_aipos_f73d_loop_driver.init_governance_repo)。"""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_aipos_f73d_loop_driver import init_governance_repo
+
+    init_governance_repo(home)
+
+
 def _md5(path: Path) -> str:
     return hashlib.md5(path.read_bytes()).hexdigest()
 
@@ -64,6 +72,7 @@ def proj(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("HOME", str(userhome))
     home = tmp_path / "home"
     root = scaffold_project(home, "probe", registered_by="owner.probe")
+    _governance_repo(home)  # AIPOS-F159 件①: --confirm 写后经同一提交口落账, 治理根须在治理仓(带 origin)内
     return {"home": home, "root": root, "pj": root / "project.json", "tmp": tmp_path, "userhome": userhome}
 
 
@@ -254,6 +263,7 @@ def test_item2_onboarding_step2_previews_then_confirms(tmp_path, monkeypatch):
     parsed = [build_parser().parse_args(shlex.split(l)[1:]) for l in lines]
     assert (parsed[0].dry_run, parsed[0].confirm, parsed[1].dry_run, parsed[1].confirm) == (True, False, False, True)
     root = scaffold_project(home, "probe-g")
+    _governance_repo(home)  # AIPOS-F159 件①: Step 2 --confirm 写后即落账
     before = _md5(root / "project.json")
     rc, out, err = _cli(*shlex.split(lines[0])[1:])
     assert rc == 0 and PREVIEW in out and _md5(root / "project.json") == before

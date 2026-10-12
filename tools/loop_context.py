@@ -63,6 +63,25 @@ def _load_declared_connection(lybra_dir: Path) -> dict[str, Any] | None:
         raise WorkstationFileError(connection_file, exc) from exc
 
 
+def _select_connection_token(connection_file: Path, role: str | None, agent_instance: str | None) -> str:
+    """AIPOS-F159 件③(gap #143): ConnectionResolver(resolve_token / resolve_identity)从工位连接文件挑凭据的同一取法——
+    给了角色 = 经 F134/F154 按实例选凭据唯一口 two_phase_shell_factory.load_role_token: 给了实例只取该实例的本角色条目
+    (无即拒 DriverTokenError, 禁回落按角色取首个——原 select_token_entry「实例 → 角色」两段会落到他实例的本角色条目);
+    未给实例时同角色可用条目绑定 ≥2 个实例即拒, ≤1 个 = 既有行为。未给角色 = 只按实例挑(token_resolver 单源, 无角色段可回落)。
+    连接文件里根本没有该角色的条目 = TokenNotFoundError(本层无候选, 调用方按声明优先级落 env 兜底, 与改造前同)。token 只在进程内用。"""
+    from tools.aipos_cli.token_resolver import TokenNotFoundError, get_token_for_role_and_project, load_connection_tokens
+
+    wanted = str(role or "").strip()
+    instance = str(agent_instance or "").strip() or None
+    if not wanted:
+        return get_token_for_role_and_project(connection_file, None, agent_instance=instance)
+    if not any(isinstance(t, dict) and str(t.get("role") or "").strip() == wanted for t in load_connection_tokens(connection_file)):
+        raise TokenNotFoundError(f"No token found for role={wanted!r} in {connection_file}")
+    from tools.aipos_cli.two_phase_shell_factory import load_role_token
+
+    return load_role_token(connection_json_path=str(connection_file), role=wanted, agent_instance=instance)
+
+
 @dataclass(frozen=True)
 class LoopContext:
     """Loop execution context — immutable per session.
@@ -200,19 +219,18 @@ class ConnectionResolver:
             return explicit_token
         
         # Auto-discovery from .lybra/connection.json (优先级高于env)
-        # AIPOS-F81: 挑选委托 token_resolver 单源(instance → role, 排除 retired); 本处不再自带挑选循环。
-        # 无命中(TokenNotFoundError)才落 env 兜底; 命中全 retired / 文件坏 = 抛出(fail-closed, 拒因带重签出口)。
+        # AIPOS-F81: 挑选委托 token_resolver 单源(排除 retired); 本处不再自带挑选循环。AIPOS-F159 件③: 给了角色 = 经 F134/F154
+        # 唯一口 load_role_token(_select_connection_token: 给实例只取该实例本角色条目, 未给实例时同角色多实例即拒)。
+        # 无命中(TokenNotFoundError)才落 env 兜底; 命中全 retired / 文件坏 / 按实例无条目 / 多实例未指明 = 抛出(fail-closed, 拒因带出口)。
         workstation_miss = ".lybra/connection.json not found"
         if workspace_root:
             lybra_dir = ConnectionResolver.discover_lybra_dir(workspace_root)
             connection_file = lybra_dir / "connection.json" if lybra_dir else None
             if connection_file is not None and connection_file.is_file():
-                from tools.aipos_cli.token_resolver import TokenNotFoundError, get_token_for_role_and_project
+                from tools.aipos_cli.token_resolver import TokenNotFoundError
 
                 try:
-                    return get_token_for_role_and_project(
-                        connection_file, role, None, agent_instance=agent_instance,
-                    )
+                    return _select_connection_token(connection_file, role, agent_instance)
                 except TokenNotFoundError as exc:
                     workstation_miss = str(exc)  # 本层无命中: 按声明优先级落到 env 兜底; 其余错误原样抛出
         
@@ -394,29 +412,20 @@ class ConnectionResolver:
         if ex.get("token"):
             token.update(value=ex["token"], source="explicit", env_downgraded=bool(env_token))
         else:
-            # AIPOS-F81: 挑选委托 token_resolver.select_token_entry 单源(instance → role, 排除 retired)。
-            # 无命中才落 env 兜底; 命中全 retired = value None + error(带重签出口), 禁 env 静默顶替(fail-closed)。
-            from tools.aipos_cli.token_resolver import (
-                TOKEN_ENTRY_FIELDS,
-                TokenNotFoundError,
-                TokenResolutionError,
-                select_token_entry,
-            )
+            # AIPOS-F81: 挑选委托 token_resolver 单源(排除 retired)。AIPOS-F159 件③: 与 resolve_token 同一取法
+            # _select_connection_token(给了角色 = F134/F154 唯一口 load_role_token: 按实例只取该实例本角色条目, 禁回落他实例; 同角色多实例未指明即拒)。
+            # 无命中才落 env 兜底; 命中全 retired / 按实例无条目 / 多实例未指明 = value None + error(带出口), 禁 env 静默顶替(fail-closed)。
+            from tools.aipos_cli.token_resolver import TokenNotFoundError
 
             matched = None
             token_error = None
             tokens = conn.get("tokens") if isinstance(conn, dict) else None
-            if isinstance(tokens, list):
+            if isinstance(tokens, list) and lybra_dir is not None:
                 try:
-                    matched = select_token_entry(
-                        tokens,
-                        role=role["value"],
-                        agent_instance=agent_instance["value"],
-                        source=str(lybra_dir / "connection.json") if lybra_dir else ".lybra/connection.json",
-                    )[TOKEN_ENTRY_FIELDS["token"]]
+                    matched = _select_connection_token(lybra_dir / "connection.json", role["value"], agent_instance["value"])
                 except TokenNotFoundError:
                     matched = None
-                except TokenResolutionError as exc:
+                except ValueError as exc:  # TokenResolutionError 族(全 retired 等)/ DriverTokenError(按实例无条目 / 多实例未指明)
                     token_error = str(exc)
             if matched:
                 token.update(value=str(matched), source=".lybra/connection.json", env_downgraded=bool(env_token))

@@ -42,7 +42,12 @@
       },
       "flag_help": {
         "dry_run": "Preview the project.json diff and validation without writing (default)",
-        "confirm": "Write project.json"
+        "confirm": "Write project.json, then land it via the governance commit point (lybra governance-commit --paths)"
+      },
+      "landing_actor_flag": {
+        "description": "AIPOS-F159 件①: --confirm 写后经 verbs.lybra_governance_commit.post_write_landing.commands.project_writers 落账的提交身份旗标; 由同一旗标包装 aipos_cli._project_json_two_phase_flags 给本族各命令注册(命令自带同名旗标者如 set-repo 沿用自带, 不重复注册)。缺省 = $USER 或 owner(与 set-repo / project new 同一缺省)。",
+        "flag": "--actor",
+        "help": "Commit identity for landing project.json after --confirm (default: $USER or owner)"
       },
       "outcome_labels": {
         "written": "已写入",
@@ -222,7 +227,8 @@
       "card render",
       "artifact ingest",
       "workspace roots",
-      "migrate record-type"
+      "migrate record-type",
+      "migrate decision-log-pointers"
     ],
     "announce_commands": [
       "next",
@@ -2526,6 +2532,12 @@
             "cli": "lybra migrate record-type --confirm",
             "scope": "本次补齐改写的记录文件(record_type_migration.run_record_type_migration 的 written); 推导不出 / 不改的不入",
             "message_template": "chore(governance): 记录类型补齐迁移 {count} 份\n\nActor: {actor}\nType: governance_commit\nCommand: lybra migrate record-type --confirm"
+          },
+          "project_writers": {
+            "cli": "lybra project <subcommand> --confirm",
+            "subcommands": ["set-paths", "set-repo", "set-repos", "set-workstation", "set-meta", "set-execution", "set-return-summary", "freeze-legacy", "dispatch-mode set"],
+            "scope": "AIPOS-F159 件①(gap #144): 写 project.json 的 project 族命令 --confirm 成功后的写出文件(治理根相对): two_phase_protocol.project_json_writers 各命令 = project.json(--confirm 即落, 无改动亦经同一提交口核一次: 范围已落账 = PASS no-op, 前次写后未落账者随之补落); freeze-legacy = 本次追加的清单条目 + 本次补声明 legacy_baseline 时的 project.json(本批无卡可冻 = 无写出, 不落); dispatch-mode set = project.json + 切换留痕文件。提交身份 = 该命令 --actor(dispatch-mode set 为 --by; 未给 = $USER 或 owner, 与 set-repo / project new 同一缺省)。--dry-run 零写入、不落账。唯一落账点: 写 project.json 的两阶段命令经输出包装 aipos_cli._project_json_two_phase_emit, freeze-legacy / dispatch-mode set 经同一薄壳 aipos_cli._land_project_writes(→ land_written_paths)。不含 project new / import(建治理根本身, 治理根此时可能尚未入治理仓; 向导第 1 步照旧给 governance-commit 与 home git-init)。",
+            "message_template": "chore(governance): 项目配置落账 {subcommand} {project}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra project {subcommand} --confirm"
           }
         },
         "not_applicable": "envelope revoke / renew: 非 --dry-run 即门外拒(board_adapter.record_owner_decision dry_run=False = _blocked_execute), 无写路径、无记录可落; 日后加写路径须登记于 commands"

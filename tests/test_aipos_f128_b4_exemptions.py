@@ -99,14 +99,16 @@ def _make_rig(tmp_path: Path, monkeypatch, capsys, *, prefix: str, absolute: boo
     _card(ws, "completed", f"{prefix}-1")
     _card(ws, "claimed", f"{prefix}-2")
     _card(ws, "pending", f"{prefix}-9")
-    rc, out, err = _cli(["project", "freeze-legacy", "--workspace-root", str(ws), "--task-ids", f"{prefix}-1", f"{prefix}-2",
-                         "--reason", "人肉期存量", "--actor", ACTOR, "--confirm"], capsys)
-    assert rc == 0, out + err
-    _git(tmp_path, "init", "-q", "-b", "main", str(repo))
+    # AIPOS-F159 件①: freeze-legacy --confirm 写后经同一提交口落账 → 治理仓(带 origin)须先就位; 构件唯一来源 f73d.init_governance_repo
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_aipos_f73d_loop_driver import init_governance_repo
+
+    init_governance_repo(repo)  # 人肉期治理工作区作基线提交并推送
     _git(repo, "config", "user.name", "Rig User")
     _git(repo, "config", "user.email", "rig@example.com")
-    _git(repo, "add", "--", WS_REL)
-    _git(repo, "commit", "-q", "-m", "rig: human-era governance workspace + legacy freeze")
+    rc, out, err = _cli(["project", "freeze-legacy", "--workspace-root", str(ws), "--task-ids", f"{prefix}-1", f"{prefix}-2",
+                         "--reason", "人肉期存量", "--actor", ACTOR, "--confirm"], capsys)
+    assert rc == 0 and "落账: verdict=PASS" in out, out + err  # 冻结清单条目 + project.json 声明随写入落账
     hooks = repo / ".git" / "hooks"
     hooks.mkdir(exist_ok=True)
     shutil.copy(HOOK_SRC, hooks / "pre-commit")

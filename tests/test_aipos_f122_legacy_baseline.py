@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -76,7 +77,19 @@ def _cli(argv: list[str], capsys) -> tuple[int, str, str]:
     return rc, captured.out, captured.err
 
 
+def _ensure_governance_repo(gov: Path) -> None:
+    """AIPOS-F159 件①: freeze-legacy --confirm 写后经同一提交口落账 → 靶场治理根须在治理仓(带 origin)内。仓根 = 治理根的上级
+    (治理根是仓内子目录, 同 chris 形; .git 不进治理根, _tree_digest 不受影响); 构件唯一来源 f73d.init_governance_repo, 已建 = 不重复。"""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_aipos_f73d_loop_driver import init_governance_repo
+
+    if not (gov.parent / ".git").exists():
+        init_governance_repo(gov.parent)
+
+
 def _freeze(gov: Path, capsys, *extra: str, prefix: str = "DEMO") -> tuple[int, str, str]:
+    if "--confirm" in extra:
+        _ensure_governance_repo(gov)
     return _cli(["project", "freeze-legacy", "--workspace-root", str(gov), "--queue", "claimed,completed,blocked",
                  "--exclude", f"{prefix}-4", "--reason", "人肉期存量", "--actor", "advisor.sample", *extra], capsys)
 
