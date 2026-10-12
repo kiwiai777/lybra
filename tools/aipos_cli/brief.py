@@ -471,6 +471,11 @@ def run_brief(
             print(f"  - Expected queue structure: <workspace>/5_tasks/queue/", file=sys.stderr)
             return 1
         
+        # AIPOS-F162 件②: 已结案卡补充审计链路(唯一实现 audit_derivation.supplementary_audit_overview, needs-owner 同读)
+        from tools.aipos_cli.audit_derivation import supplementary_audit_overview
+
+        supplementary = supplementary_audit_overview(workspace_root, unreadable)
+
         # 4. 治理文档清单
         governance_docs = _get_governance_docs(workspace_root, repo_root, unreadable)
         
@@ -499,6 +504,7 @@ def run_brief(
                     for d in decisions
                 ],
                 "queue": queue_summary,
+                "supplementary_audits": supplementary,
                 "governance_docs": [
                     {
                         "name": d["name"],
@@ -578,6 +584,11 @@ def run_brief(
                 print(f"  lane 不可解析: {line}")
             for line in render_visible_summary(queue_summary):  # AIPOS-F141: 可见卡汇总行(四视图同一渲染)
                 print(f"  {line}")
+            if supplementary:  # AIPOS-F162 件②
+                print()
+                print("  补充审计链路(已结案卡):")
+                for row in supplementary:
+                    print(f"    - {row['line']}")
             print()
             
             # 4. 契约文档

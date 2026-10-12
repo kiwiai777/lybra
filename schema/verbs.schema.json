@@ -2180,6 +2180,7 @@
           "launch_record_failed": "拉起事件写不进 session record(exit_codes.not_derivable)",
           "not_derivable": "推导不可推导(exit_codes.not_derivable)",
           "artifact_invalid": "产物已落盘但不合规(exit_codes.not_derivable)",
+          "runtime_evidence_exhausted": "AIPOS-F162 件①: 审计报告 PASS 类裁决缺独立运行证据(RUNTIME_EVIDENCE_MISSING), 本次运行已为补做拉起审计体达上限(transitions artifact_ingest.verdict.runtime_evidence.loop.relaunch_cap)仍不合格(exit_codes.not_derivable)",
           "record_missing": "账务记录缺(exit_codes.not_derivable)",
           "frontmatter_unreadable": "卡或记录 frontmatter 读不出(exit_codes.not_derivable)",
           "manual_required": "需人工介入/无法识别动词(exit_codes.not_derivable)",
@@ -2274,6 +2275,7 @@
           "launch_record_failed": "investigate",
           "not_derivable": "investigate",
           "artifact_invalid": "investigate",
+          "runtime_evidence_exhausted": "owner_needed",
           "record_missing": "investigate",
           "frontmatter_unreadable": "investigate",
           "command_unparseable": "investigate",
@@ -2303,7 +2305,8 @@
           "wait_timeout": "工位开工: 手工模式下工位未交产物, 请 Owner 在工位敲 /go(或签带 --launch-harness 的信封授权拉起), 之后续跑 loop",
           "consecutive_failures": "连败: 本卡最近连续多次运行都异常结束, 不再自动续跑, 请 Owner 定是否改卡 / 换执行体 / 仲裁",
           "routine_fix_exhausted": "例行门拒修了仍连败: 本卡连续多次被同一例行拒因码拒(固定修法对本卡不灵, 或多条 lane 交替抢合入), 不再自处理, 请 Owner 定是否改卡 / 排合入顺序 / 仲裁",
-          "card_owner_mismatch": "卡归属不符(AIPOS-F156): 本卡由另一实例发布(门侧发布记录签发实例), 驱动方的信封限 lane(非总顾问)不得跑走别人的卡; 请 Owner 定由归属实例推进, 或改由不限 lane 的总顾问推进"
+          "card_owner_mismatch": "卡归属不符(AIPOS-F156): 本卡由另一实例发布(门侧发布记录签发实例), 驱动方的信封限 lane(非总顾问)不得跑走别人的卡; 请 Owner 定由归属实例推进, 或改由不限 lane 的总顾问推进",
+          "runtime_evidence_exhausted": "审计补做连败(AIPOS-F162): 审计报告 PASS 类裁决缺卡面要求的独立运行证据, loop 已让审计体按拒因补做到声明上限仍不合格(审计体跑不了声明命令 / 不按格式填 / 只核执行体原件); 请 Owner 定换审计体 / 改卡面运行证据声明 / 仲裁"
         },
         "routine_rejections": {
           "description": "AIPOS-F150 件②(gap #128): 例行门拒清单与各码固定修法(唯一声明, 只追加; 判定唯一实现 loop_run_record.next_action)。by_end_reason 判为 owner_needed 的运行, 其 end_codes(lybra_loop.run_record.end_codes, 门拒原文里的既有错误码)非空且全部在 codes 内 = advisor_fix: hint = 各码 fix 逐条按序渲染(占位见 placeholders) + resume_hint; 任一码不在 codes / end_codes 为空 / 旧记录无 end_codes = owner_needed 照旧。防死循环: 本卡最近连续各次运行(含本次, 旧→新取尾段)的 end_codes 都含同一例行码且次数 ≥ repeat_owner_needed = owner_needed(routine_fix_exhausted)。码只取门侧既有错误码, 不另造; 未入清单的门拒码(RETURN_STALE / INGEST_TIP_MISMATCH / TEST_NOT_IN_RUNALL 等)的评估与理由见 AIPOS-F150 交回报告。AIPOS-F152 件①: end_reasons = 结束原因本身即例行的清单(只追加; 键须为 lybra_loop.run_record.end_reasons 已声明者, 且 by_end_reason 判为 advisor_fix 的结束原因必须在此有 fix)——by_end_reason 判为 advisor_fix 的运行 = 该结束原因 fix 逐条渲染 + resume_hint(占位只许 task_id / governance_root / actor_arg / envelope_arg, 值与 codes 修法同一实现); 本卡最近连续各次运行(含本次)以同一结束原因结束且次数 ≥ repeat_owner_needed = owner_needed(routine_fix_exhausted)。首项 deploy_changed(部署已更新, 用原命令重跑从断点续做)。",

@@ -3805,6 +3805,8 @@ def _build_audit_dispatch_preview(
     dry_run: bool,
     planned_dispatch_id: str | None = None,
     planned_dispatched_at: str | None = None,
+    supplementary: bool = False,
+    runtime_evidence_commands: list[str] | None = None,
 ) -> dict[str, Any]:
     # AIPOS-F14 大项B: 报错参数名取 verb_contract 实名(source_task_id/source_task_path)
     source_task = _select_task(
@@ -3830,64 +3832,100 @@ def _build_audit_dispatch_preview(
     if actor != canonical_agent_instance:
         blocking_reasons.append("INSTANCE_MISMATCH: actor must equal canonical agent_instance for Supervised MCP audit_dispatch")
 
-    if source_task.get("queue_state") != "claimed" or source_metadata.get("status") != "claimed":
-        blocking_reasons.append("SOURCE_TASK_NOT_AUDIT_READY: source task must be claimed")
-    if source_metadata.get("executor_status") != "completed":
-        blocking_reasons.append("SOURCE_TASK_NOT_AUDIT_READY: executor_status must be completed")
-    if source_metadata.get("audit_readiness") != "ready":
-        blocking_reasons.append("SOURCE_TASK_NOT_AUDIT_READY: audit_readiness must be ready")
-    # AIPOS-FND-7F1: FAIL/REQUEST_CHANGES 是非终态,可以复审;PASS 是终态,不可翻案
     source_task_id_for_verdict = str(source_task.get("task_id") or "")
     existing_verdicts = records.get("task_audit_verdicts", {}).get(source_task_id_for_verdict, [])
-    if existing_verdicts:
-        # 有已有裁决,检查最新裁决状态
-        latest_verdict = max(existing_verdicts, key=_verdict_time)
-        latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
-        if latest_verdict_value in {Verdict.PASS, Verdict.PASS_WITH_NOTES}:
-            # AIPOS-F78 前置零⑦(F79 实撞): PASS 绑的是裁决自述 artifact_subject.commit_sha; 卡分支 tip 已变(解冲突/追加提交)
-            # → 审过的产物已不是当前产物, 放行为「复审」派审(warn), 而非 AUDIT_ALREADY_PASSED 死锁只能承接卡重审
-            rereview = _pass_verdict_tip_changed(repo_root, source_task_id_for_verdict, latest_verdict, card_frontmatter=source_metadata)
-            if rereview:
-                warnings.append(f"REREVIEW_TIP_CHANGED: {rereview}")
-            else:
-                blocking_reasons.append("AUDIT_ALREADY_PASSED: source task already has audit PASS (terminal state, cannot overturn)")
-        # FAIL/REQUEST_CHANGES/BLOCKED 等非终态:允许 re-dispatch,不 BLOCK
-    elif source_metadata.get("dependency_audit_status") == Verdict.PASS:
-        # 兜底:metadata 显示 PASS 但没找到 verdict 记录(数据不一致)
-        blocking_reasons.append("AUDIT_ALREADY_PASSED: source task already has audit PASS")
-    
-    # AIPOS-F2 ③立墙带路: 检测手写文件在场时附加提示
-    from tools.aipos_cli.audit_helpers import detect_hand_written_verdicts, HAND_WRITTEN_VERDICT_NOTICE, is_dispatch_chain_valid
-    _hw_dispatch = detect_hand_written_verdicts(
-        record_dir(repo_root, "audit_verdicts", source_task_id_for_verdict)
-    )
-    if _hw_dispatch:
-        warnings.append(HAND_WRITTEN_VERDICT_NOTICE)
-        for _hw in _hw_dispatch:
-            warnings.append(f"  ignored: {_hw['file']} ({_hw['reason']})")
-    
-    # AIPOS-F72: 派审链有效性判据(manual dispatch 与 auto derivation 同源)
-    # 链有效 ⇔ (审计卡 pending/claimed 在途) 或 (源卡已有裁决)
-    # 审计卡 concluded/withdrawn 且零裁决 → 链失效,放行 re-dispatch
     superseded_ref = None  # AIPOS-F72: 初始化 superseded_ref
-    if source_metadata.get("related_audit_task_ref") or source_metadata.get("audit_dispatch_record_ref"):
-        chain_valid, superseded_ref = is_dispatch_chain_valid(source_metadata, existing_verdicts, repo_root)
-        if chain_valid:
-            # 链有效:审计在途或已有裁决 → BLOCK
-            if existing_verdicts:
-                latest_verdict = max(existing_verdicts, key=_verdict_time)
-                latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
-                # AIPOS-R6J: 非终态裁决允许re-dispatch(FAIL/BLOCK/WARN/NEEDS_OWNER)
-                if latest_verdict_value not in {Verdict.FAIL, Verdict.BLOCK, Verdict.WARN, Verdict.NEEDS_OWNER}:
+    supplementary_runtime_evidence: dict[str, Any] | None = None
+    if supplementary:
+        # AIPOS-F162 件②: 已结案卡补充审计(声明 transitions supplementary_audit)——前提 = 原卡已结案, 同卡无在途补审, 有争议摘要,
+        # 发起者 = 项目顾问(角色类 advisor); 不判 claimed/executor_status/已 PASS(那是常规派审的前提), 原卡卡面不改
+        from tools.aipos_cli.audit_derivation import supplementary_audit_declaration, supplementary_in_flight
+        from tools.aipos_cli.custom_roles import authorize_instance_class
+
+        sup_decl = supplementary_audit_declaration()
+        concluded = source_task.get("queue_state") == "completed" or bool(records.get("task_closures", {}).get(source_task_id_for_verdict))
+        if not concluded:
+            blocking_reasons.append(
+                f"SUPPLEMENTARY_SOURCE_NOT_CONCLUDED: {source_task_id_for_verdict} 未结案(queue={source_task.get('queue_state')}, 无 closure 记录); "
+                "补充审计只对已结案卡。出口: 在途卡走常规 audit dispatch / 复审轮")
+        in_flight = supplementary_in_flight(repo_root, source_task_id_for_verdict)
+        if in_flight:
+            blocking_reasons.append(
+                f"SUPPLEMENTARY_AUDIT_IN_FLIGHT: {source_task_id_for_verdict} 已有在途补充审计 {in_flight}(同卡同时只允许一张); "
+                f"出口: 等 {in_flight} 出裁决后再发起")
+        if not str(dispatch_reason or "").strip():
+            blocking_reasons.append("SUPPLEMENTARY_REASON_REQUIRED: 补充审计须给争议摘要(--reason)")
+        role_gate = authorize_instance_class(actor, str(sup_decl["actor_role_class"]), repo_root)
+        if not role_gate["ok"]:
+            blocking_reasons.append(
+                f"SUPPLEMENTARY_ACTOR_NOT_ADVISOR: 补充审计只能由角色类 {sup_decl['actor_role_class']} 的实例发起: {role_gate['reason']}")
+        if runtime_evidence_commands:
+            from tools.aipos_cli.artifact_ingest import RuntimeEvidenceDeclarationError, parse_runtime_evidence_declaration
+
+            raw_evidence = {"required": True, "commands": list(runtime_evidence_commands)}
+            try:
+                parse_runtime_evidence_declaration(raw_evidence)
+                supplementary_runtime_evidence = raw_evidence
+            except RuntimeEvidenceDeclarationError as exc:
+                blocking_reasons.append(f"RUNTIME_EVIDENCE_DECLARATION_INVALID: {exc}")
+    else:
+        if source_task.get("queue_state") != "claimed" or source_metadata.get("status") != "claimed":
+            blocking_reasons.append("SOURCE_TASK_NOT_AUDIT_READY: source task must be claimed")
+        if source_metadata.get("executor_status") != "completed":
+            blocking_reasons.append("SOURCE_TASK_NOT_AUDIT_READY: executor_status must be completed")
+        if source_metadata.get("audit_readiness") != "ready":
+            blocking_reasons.append("SOURCE_TASK_NOT_AUDIT_READY: audit_readiness must be ready")
+        # AIPOS-FND-7F1: FAIL/REQUEST_CHANGES 是非终态,可以复审;PASS 是终态,不可翻案
+        source_task_id_for_verdict = str(source_task.get("task_id") or "")
+        existing_verdicts = records.get("task_audit_verdicts", {}).get(source_task_id_for_verdict, [])
+        if existing_verdicts:
+            # 有已有裁决,检查最新裁决状态
+            latest_verdict = max(existing_verdicts, key=_verdict_time)
+            latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
+            if latest_verdict_value in {Verdict.PASS, Verdict.PASS_WITH_NOTES}:
+                # AIPOS-F78 前置零⑦(F79 实撞): PASS 绑的是裁决自述 artifact_subject.commit_sha; 卡分支 tip 已变(解冲突/追加提交)
+                # → 审过的产物已不是当前产物, 放行为「复审」派审(warn), 而非 AUDIT_ALREADY_PASSED 死锁只能承接卡重审
+                rereview = _pass_verdict_tip_changed(repo_root, source_task_id_for_verdict, latest_verdict, card_frontmatter=source_metadata)
+                if rereview:
+                    warnings.append(f"REREVIEW_TIP_CHANGED: {rereview}")
+                else:
+                    blocking_reasons.append("AUDIT_ALREADY_PASSED: source task already has audit PASS (terminal state, cannot overturn)")
+            # FAIL/REQUEST_CHANGES/BLOCKED 等非终态:允许 re-dispatch,不 BLOCK
+        elif source_metadata.get("dependency_audit_status") == Verdict.PASS:
+            # 兜底:metadata 显示 PASS 但没找到 verdict 记录(数据不一致)
+            blocking_reasons.append("AUDIT_ALREADY_PASSED: source task already has audit PASS")
+    
+        # AIPOS-F2 ③立墙带路: 检测手写文件在场时附加提示
+        from tools.aipos_cli.audit_helpers import detect_hand_written_verdicts, HAND_WRITTEN_VERDICT_NOTICE, is_dispatch_chain_valid
+        _hw_dispatch = detect_hand_written_verdicts(
+            record_dir(repo_root, "audit_verdicts", source_task_id_for_verdict)
+        )
+        if _hw_dispatch:
+            warnings.append(HAND_WRITTEN_VERDICT_NOTICE)
+            for _hw in _hw_dispatch:
+                warnings.append(f"  ignored: {_hw['file']} ({_hw['reason']})")
+    
+        # AIPOS-F72: 派审链有效性判据(manual dispatch 与 auto derivation 同源)
+        # 链有效 ⇔ (审计卡 pending/claimed 在途) 或 (源卡已有裁决)
+        # 审计卡 concluded/withdrawn 且零裁决 → 链失效,放行 re-dispatch
+        superseded_ref = None  # AIPOS-F72: 初始化 superseded_ref
+        if source_metadata.get("related_audit_task_ref") or source_metadata.get("audit_dispatch_record_ref"):
+            chain_valid, superseded_ref = is_dispatch_chain_valid(source_metadata, existing_verdicts, repo_root)
+            if chain_valid:
+                # 链有效:审计在途或已有裁决 → BLOCK
+                if existing_verdicts:
+                    latest_verdict = max(existing_verdicts, key=_verdict_time)
+                    latest_verdict_value = str(latest_verdict.get("verdict", "")).upper().strip()
+                    # AIPOS-R6J: 非终态裁决允许re-dispatch(FAIL/BLOCK/WARN/NEEDS_OWNER)
+                    if latest_verdict_value not in {Verdict.FAIL, Verdict.BLOCK, Verdict.WARN, Verdict.NEEDS_OWNER}:
+                        blocking_reasons.append("AUDIT_ALREADY_DISPATCHED: source task already links an audit dispatch")
+                else:
+                    # 审计卡在途(pending/claimed),BLOCK
                     blocking_reasons.append("AUDIT_ALREADY_DISPATCHED: source task already links an audit dispatch")
             else:
-                # 审计卡在途(pending/claimed),BLOCK
-                blocking_reasons.append("AUDIT_ALREADY_DISPATCHED: source task already links an audit dispatch")
-        else:
-            # 链失效:旧审计卡已废且零裁决 → 放行,但须出声披露旧链
-            if superseded_ref:
-                warnings.append(f"SUPERSEDING_DEAD_DISPATCH_CHAIN: old audit card {superseded_ref} is concluded with zero verdicts; allowing re-dispatch (new dispatch will record supersedes={superseded_ref})")
-
+                # 链失效:旧审计卡已废且零裁决 → 放行,但须出声披露旧链
+                if superseded_ref:
+                    warnings.append(f"SUPERSEDING_DEAD_DISPATCH_CHAIN: old audit card {superseded_ref} is concluded with zero verdicts; allowing re-dispatch (new dispatch will record supersedes={superseded_ref})")
     # AIPOS-F72: 若放行 re-dispatch,记录 supersedes 引用
     supersedes_dispatch_ref = None
     if superseded_ref:
@@ -4009,6 +4047,16 @@ def _build_audit_dispatch_preview(
     }
     if dispatch_reason:
         audit_metadata["dispatch_reason"] = dispatch_reason
+    if supplementary:
+        # AIPOS-F162 件②: 补审卡卡面 = 补审标记 + 争议摘要; 无依赖(原卡已结案, 依赖门按常规审计条件判必不满足)
+        audit_metadata["supplementary_of"] = str(source_task.get("task_id") or "")
+        audit_metadata["supplementary_reason"] = str(dispatch_reason or "").strip()
+        audit_metadata["title"] = audit_task_title or f"补充审计 {source_task.get('task_id')}: {str(dispatch_reason or '').strip()[:80]}"
+        audit_metadata["depends_on"] = []
+        for key in ("dependency_condition", "dependency_executor_status", "dependency_audit_readiness", "dependency_audit_status"):
+            audit_metadata.pop(key, None)
+        if supplementary_runtime_evidence:
+            audit_metadata["audit_runtime_evidence"] = supplementary_runtime_evidence
     # AIPOS-A1 大项C: 手动派审也注入取证锚点到 governance_refs
     from tools.aipos_cli.audit_derivation import _resolve_code_repo, render_audit_report_location
     _code_repo = _resolve_code_repo(repo_root, source_metadata)  # AIPOS-F78C: 被审卡声明的仓
@@ -4030,7 +4078,15 @@ def _build_audit_dispatch_preview(
     )
     # AIPOS-A1 大项C: 手动派审也注入取证锚点段(路径来自注册表, 禁写死)
     from tools.aipos_cli.audit_derivation import build_forensic_anchor_section
-    audit_body += build_forensic_anchor_section(str(source_task.get("task_id") or ""), repo_root, source_metadata, audit_task_id=task_id_text)
+    if supplementary:
+        audit_body += (
+            f"\n## 补充审计(AIPOS-F162 件②)\n\n- 原卡 `{source_task.get('task_id')}` 已结案; 本卡是顾问 `{actor}` 发起的补充审计, "
+            f"原 closure 与原裁决不动、不回滚 main\n- 争议摘要: {str(dispatch_reason or '').strip()}\n"
+            "- 审的是原卡分支当前 tip(取证工作树由认领建); 准绳 = 原卡全文 + 本争议摘要\n"
+            "- 裁决: PASS 类 = 原卡附「补审通过」; FAIL/BLOCK = 门自动派生关联修复卡(走常规执行/审计/合入)\n"
+        )
+    audit_body += build_forensic_anchor_section(str(source_task.get("task_id") or ""), repo_root, source_metadata, audit_task_id=task_id_text,
+                                                audit_metadata=audit_metadata)
     # AIPOS-F38 大项A(F17 原则覆盖全部 writer): 产前自检——派生审计卡必过同一 schema 必填校验,
     # 不合规即拒并出声(BLOCK + 人话拒因);审计身份由上方 resolve_instance_id/INDEPENDENCE 把关。
     from tools.schema_loader import get_required_card_fields
@@ -4065,6 +4121,8 @@ def _build_audit_dispatch_preview(
         owner_policy_ref=owner_policy_ref,
         dispatched_at=timestamp,
         supersedes=supersedes_dispatch_ref,  # AIPOS-F72: 记录被取代的旧链
+        supplementary_of=str(source_task.get("task_id") or "") if supplementary else None,
+        supplementary_reason=str(dispatch_reason or "").strip() if supplementary else None,
     )
     record_writes = [_mcp_record_write_plan(dispatch_rel, RecordType.AUDIT_DISPATCH_RECORD, would_write=not blocking_reasons)]
     data = {
@@ -4105,11 +4163,15 @@ def _build_audit_dispatch_preview(
             "planned_dispatch_id": dispatch_id,
             "planned_dispatched_at": timestamp,
         },
+        "supplementary": bool(supplementary),  # AIPOS-F162 件②: 补充审计 = 原卡卡面不改(不写 target_path)
         # AIPOS-C1 大项C②: idempotent dispatch flags
         "idempotent_supplement": audit_task_already_exists or dispatch_record_already_exists,
         "audit_task_already_existed": audit_task_already_exists,
         "dispatch_record_already_existed": dispatch_record_already_exists,
     }
+    if supplementary and audit_task_already_exists:
+        # AIPOS-F162 件②: 补审卡号只派新卡(缺省 = 声明形下一个空号), 不幂等覆盖既有卡
+        blocking_reasons.append(f"SUPPLEMENTARY_AUDIT_ID_EXISTS: {task_id_text} 已存在, 补充审计不覆盖既有卡(省略 --audit-task-id 取下一个空号)")
     # AIPOS-C1: add idempotent warnings (not blocks)
     if audit_task_already_exists:
         warnings.append(f"AUDIT_TASK_ALREADY_EXISTS_IDEMPOTENT: {task_id_text} — supplementing dispatch record (not blocking)")
@@ -4124,8 +4186,7 @@ def _build_audit_dispatch_preview(
         actor=_actor_payload(actor),
         data=data,
         summary={"source_task_id": source_task.get("task_id"), "audit_task_id": task_id_text},
-        planned_writes=[
-            {"path": source_rel, "kind": "update", "type": "task_markdown"},
+        planned_writes=([] if supplementary else [{"path": source_rel, "kind": "update", "type": "task_markdown"}]) + [
             {"path": audit_rel, "kind": "create", "type": "task_markdown"},
             {"path": dispatch_rel, "kind": "create", "type": "record_markdown", "record_type": RecordType.AUDIT_DISPATCH_RECORD},
         ],
@@ -4157,6 +4218,8 @@ def audit_dispatch_task(
     planned_dispatched_at: str | None = None,
     dry_run: bool = True,
     repo_root: str | Path | None = None,
+    supplementary: bool = False,
+    runtime_evidence_commands: list[str] | None = None,
 ) -> dict[str, Any]:
     try:
         actor_text = str(actor or "").strip()
@@ -4164,6 +4227,22 @@ def audit_dispatch_task(
         policy_ref = str(owner_policy_ref or "").strip()
         audit_id = str(audit_task_id or "").strip()
         audit_instance = str(audit_agent_instance or "").strip()
+        if supplementary:
+            # AIPOS-F162 件②: 补充审计缺省值读声明/原卡(卡号 = 声明形下一个; 审计实例 = 原卡 audit_by → 按项目推导;
+            # 派审实例 = 发起顾问; 授权引用 = 声明 owner_policy_ref, 不需 Owner 信封)
+            from tools.aipos_cli.audit_derivation import (
+                next_supplementary_audit_id, resolve_audit_instance, supplementary_audit_declaration,
+            )
+
+            sup_root = _resolve_repo_root(repo_root)
+            sup_task = _select_task(sup_root, task_id=source_task_id, path=source_path,
+                                    id_param_name="source_task_id", path_param_name="source_task_path")
+            sup_fm, _b, _w = parse_markdown_frontmatter((sup_root / str(sup_task.get("path") or "")).read_text(encoding="utf-8"))
+            sup_fm = _normalize_return_value(sup_fm)
+            instance_text = instance_text or actor_text
+            policy_ref = policy_ref or str(supplementary_audit_declaration()["owner_policy_ref"])
+            audit_id = audit_id or next_supplementary_audit_id(sup_root, str(sup_task.get("task_id") or ""))
+            audit_instance = audit_instance or resolve_audit_instance(sup_fm, sup_root)
         if not actor_text:
             raise ValueError("actor is required")
         if not instance_text:
@@ -4194,6 +4273,8 @@ def audit_dispatch_task(
             planned_dispatched_at=str(planned_dispatched_at or "").strip() or None,
             repo_root=resolved_root,
             dry_run=dry_run,
+            supplementary=supplementary,
+            runtime_evidence_commands=runtime_evidence_commands,
         )
         if dry_run:
             return _attach_controlled_execute_metadata(
@@ -4205,14 +4286,17 @@ def audit_dispatch_task(
         if response.get("verdict") == Verdict.BLOCK:
             return response
         data = response.get("data") if isinstance(response.get("data"), dict) else {}
-        (resolved_root / str(data.get("target_path") or "")).write_text(str(data.get("rendered_markdown") or ""), encoding="utf-8")
+        performed: list[dict[str, Any]] = []
+        if not data.get("supplementary"):  # AIPOS-F162 件②: 补充审计不改原卡卡面(原卡已结案)
+            (resolved_root / str(data.get("target_path") or "")).write_text(str(data.get("rendered_markdown") or ""), encoding="utf-8")
+            performed.append({"path": data.get("target_path"), "kind": "update", "type": "task_markdown"})
         audit_path = resolved_root / str(data.get("audit_task_path") or "")
         audit_path.parent.mkdir(parents=True, exist_ok=True)
         # AIPOS-C1 大项C②: idempotent — if audit card already exists, skip creating it
         # (it was created by a prior dispatch). Still update source + dispatch record.
         audit_task_kind = "update" if audit_path.exists() else "create"
         audit_path.write_text(str(data.get("audit_task_markdown") or ""), encoding="utf-8")
-        performed = [{"path": data.get("target_path"), "kind": "update", "type": "task_markdown"}, {"path": data.get("audit_task_path"), "kind": audit_task_kind, "type": "task_markdown"}]
+        performed.append({"path": data.get("audit_task_path"), "kind": audit_task_kind, "type": "task_markdown"})
         for preview in data.get("record_previews", []):
             path = resolved_root / str(preview.get("path") or "")
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -4602,16 +4686,30 @@ def _build_audit_verdict_preview(
         )
 
     updated_reviewed = dict(reviewed_metadata)
-    updated_reviewed["related_audit_verdict_ref"] = verdict_id
-    updated_reviewed["audit_verdict"] = normalized_verdict
-    updated_reviewed["audit_verdict_at"] = timestamp
-    updated_reviewed["audit_verdict_by"] = canonical_agent_instance or actor
-    if normalized_verdict == Verdict.PASS:
-        updated_reviewed["dependency_audit_status"] = Verdict.PASS
-        updated_reviewed["audit_status"] = Verdict.PASS
+    # AIPOS-F162 件②: 补审卡(卡面 supplementary_of = 被审卡)的裁决 = 补审裁决: 原卡原裁决字段不动, 只写补审两字段
+    # (文案读声明 supplementary_audit.status_text; FAIL 类的修复卡号在派生后由 audit_verdict_task 回填)
+    supplementary_of = str(audit_metadata.get("supplementary_of") or "").strip()
+    is_supplementary = bool(supplementary_of) and supplementary_of == str(reviewed_task.get("task_id") or "")
+    if is_supplementary:
+        from tools.aipos_cli.audit_derivation import supplementary_audit_declaration, supplementary_audit_status_text
+
+        sup_decl = supplementary_audit_declaration()
+        updated_reviewed["supplementary_audit_ref"] = str(audit_task.get("task_id") or "")
+        updated_reviewed["supplementary_audit_status"] = (
+            supplementary_audit_status_text("pass", audit_task_id=str(audit_task.get("task_id") or ""))
+            if normalized_verdict in sup_decl["pass_verdicts"]
+            else supplementary_audit_status_text("other", verdict=normalized_verdict, audit_task_id=str(audit_task.get("task_id") or "")))
     else:
-        updated_reviewed["dependency_audit_status"] = normalized_verdict
-        updated_reviewed["audit_status"] = normalized_verdict
+        updated_reviewed["related_audit_verdict_ref"] = verdict_id
+        updated_reviewed["audit_verdict"] = normalized_verdict
+        updated_reviewed["audit_verdict_at"] = timestamp
+        updated_reviewed["audit_verdict_by"] = canonical_agent_instance or actor
+        if normalized_verdict == Verdict.PASS:
+            updated_reviewed["dependency_audit_status"] = Verdict.PASS
+            updated_reviewed["audit_status"] = Verdict.PASS
+        else:
+            updated_reviewed["dependency_audit_status"] = normalized_verdict
+            updated_reviewed["audit_status"] = normalized_verdict
     reviewed_markdown = render_task_markdown(updated_reviewed, reviewed_body)
 
     updated_audit = dict(audit_metadata)
@@ -4647,6 +4745,7 @@ def _build_audit_verdict_preview(
         artifact_subject=artifact_subject,  # AIPOS-F70: 产物指纹
         submitted_by=submitted_by,  # AIPOS-F73E 件②
         report_snapshot=report_snapshot,  # AIPOS-F90 件②
+        supplementary_of=supplementary_of if is_supplementary else None,  # AIPOS-F162 件②
     )
     session_markdown = ""
     session_rel = str(session_path.resolve().relative_to(root)) if session_path else ""  # AIPOS-240: symlink-safe
@@ -4689,6 +4788,7 @@ def _build_audit_verdict_preview(
         "audit_task_metadata": updated_audit,
         "verdict_id": verdict_id,
         "verdict": normalized_verdict,
+        "supplementary_of": supplementary_of if is_supplementary else "",  # AIPOS-F162 件②
         "audit_verdict_record_path": verdict_rel,
         "audit_session_record_path": session_rel,
         "record_writes": [_mcp_record_write_plan(verdict_rel, RecordType.AUDIT_VERDICT_RECORD, would_write=not blocking_reasons)],
@@ -4848,6 +4948,41 @@ def _auto_close_audit_card_on_verdict(
         }
 
 
+def _supplementary_repair(resolved_root: Path, response: dict[str, Any], data: dict[str, Any], *, reviewed_id: str,
+                          audit_task_id: str | None, findings_summary: str | None, actor: str) -> None:
+    """AIPOS-F162 件②: 补审裁决入门后的处置(声明 transitions supplementary_audit): FAIL 类 → derive_repair_card_on_fail(supplementary 模式)
+    派修复卡, 原卡卡面 supplementary_audit_status 回填「补审未通过·修复卡 X」(经单源 render_task_markdown)。派生失败 = 出声(warnings +
+    data.supplementary_repair_error), 裁决记录已落不回滚。"""
+    from tools.aipos_cli.audit_derivation import (
+        derive_repair_card_on_fail, supplementary_audit_declaration, supplementary_audit_status_text,
+    )
+
+    verdict_value = str(data.get("verdict") or "").upper()
+    if verdict_value not in supplementary_audit_declaration()["fail_verdicts"]:
+        return
+    try:
+        repair = derive_repair_card_on_fail(
+            governance_root=resolved_root, reviewed_task_id=reviewed_id,
+            audit_task_id=str(data.get("audit_task_id") or audit_task_id or ""), verdict_id=str(data.get("verdict_id") or ""),
+            fail_reason=str(findings_summary or "(no reason provided)")[:500], actor=actor, supplementary_of=reviewed_id,
+        )
+    except (ValueError, OSError, SchemaLoadError) as exc:
+        response.setdefault("warnings", []).append(f"SUPPLEMENTARY_REPAIR_FAILED: 补审 FAIL 后修复卡派生失败: {exc}")
+        data["supplementary_repair_error"] = str(exc)
+        return
+    data["supplementary_repair"] = repair
+    if not repair.get("derived"):
+        response.setdefault("warnings", []).append(f"SUPPLEMENTARY_REPAIR_NOT_DERIVED: {repair.get('message')}")
+        return
+    response.setdefault("performed_writes", []).append(
+        {"path": repair.get("repair_task_path"), "kind": "create", "type": "derived_repair_task"})
+    target = resolved_root / str(data.get("target_path") or "")
+    meta, body, _w = parse_markdown_frontmatter(target.read_text(encoding="utf-8"))
+    meta = _normalize_return_value(meta)
+    meta["supplementary_audit_status"] = supplementary_audit_status_text("fail", repair_task_id=str(repair.get("repair_task_id") or ""))
+    target.write_text(render_task_markdown(meta, body), encoding="utf-8")
+
+
 def audit_verdict_task(
     *,
     audit_task_id: str | None = None,
@@ -4984,7 +5119,11 @@ def audit_verdict_task(
         # AIPOS-F75 件①: 检查 fix_derivation 开关 — 默认 manual (不派生)
         # 从 data 中读取 verdict 字段
         normalized_verdict_value = str(data.get("verdict") or verdict_text or "").upper()
-        if normalized_verdict_value in {"FAIL", "BLOCK"}:
+        if data.get("supplementary_of"):
+            # AIPOS-F162 件②: 补审裁决 FAIL 类 = 同一 writer 派修复卡(原卡已结案, 不走返工节; 不受 fix_derivation 开关)并回填原卡补审结论
+            _supplementary_repair(resolved_root, response, data, reviewed_id=reviewed_id, audit_task_id=audit_task_id,
+                                  findings_summary=findings_summary, actor=actor_text)
+        elif normalized_verdict_value in {"FAIL", "BLOCK"}:
             # 读取 transitions.schema.json 中的 fix_derivation 声明
             fix_derivation_mode = _read_fix_derivation_mode(resolved_root)
             if fix_derivation_mode == "auto":

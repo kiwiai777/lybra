@@ -1225,6 +1225,10 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
         out.append(f"(--wait {w['requested_seconds']:g}s: {what}, 实等 {w['waited_seconds']}s)")
     if report.get("deploy_changed"):
         out.append(f"(AIPOS-F152) {report['deploy_changed']['message']}")
+    if report.get("supplementary_audit"):  # AIPOS-F162 件②: 已结案卡补充审计链路(唯一渲染 audit_derivation.render_supplementary_chain)
+        from tools.aipos_cli.audit_derivation import render_supplementary_chain
+
+        out.append(render_supplementary_chain(str(report.get("task_id") or ""), report["supplementary_audit"]))
     return "\n".join(out + summary)
 
 
@@ -1259,6 +1263,12 @@ def loop_status_cli(args: Any) -> int:
                                  include_frozen=bool(getattr(args, "include_frozen", False)))
         else:
             report = wait_for_next_action(governance_root, task_id or "", float(wait), contract=contract, lane=lane)
+        if task_id:  # AIPOS-F162 件②: 本卡补充审计链路(唯一实现 audit_derivation.supplementary_audit_chain)
+            from tools.aipos_cli.audit_derivation import supplementary_audit_chain
+            from tools.aipos_cli.task_loader import task_card_lookup_scope
+
+            with task_card_lookup_scope(governance_root):
+                report["supplementary_audit"] = supplementary_audit_chain(governance_root, task_id)
     except StatusUsageError as exc:
         print(f"lybra loop status: {exc}", file=sys.stderr)
         return declared_exit_code(STATUS_VERB, "usage")

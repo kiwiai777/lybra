@@ -268,6 +268,17 @@ def validate_draft_metadata(
             is_valid, error_msg = validate_field_value(field_name, value)
             if not is_valid and error_msg:
                 _add(blocking_reasons, error_msg)
+        # AIPOS-F162 件①: 运行证据要求声明形(与裁决入口同一解析 artifact_ingest.parse_runtime_evidence_declaration)
+        from tools.aipos_cli.artifact_ingest import (
+            RuntimeEvidenceDeclarationError, parse_runtime_evidence_declaration, runtime_evidence_declaration,
+        )
+
+        evidence_key = str(runtime_evidence_declaration()["card_field"])
+        if not _is_missing(metadata.get(evidence_key)):
+            try:
+                parse_runtime_evidence_declaration(metadata.get(evidence_key))
+            except RuntimeEvidenceDeclarationError as exc:
+                _add(blocking_reasons, f"RUNTIME_EVIDENCE_DECLARATION_INVALID: {exc}")
     else:
         # Fallback to hardcoded validation if schema not available
         for field in DRAFT_REQUIRED_FIELDS:

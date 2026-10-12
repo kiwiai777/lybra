@@ -1124,6 +1124,34 @@
       ],
       "submits_via": "lybra audit-verdict --confirm(驱动方 token, artifact_subject 从被审分支 tip 取 commit_sha/tree_hash, agent_runtime=产品按会话记录定位器填写的运行时模型 AIPOS-F90 件②)",
       "derived_command": "AIPOS-F90 件②: 推导核对 return/verdict 步给驱动方的命令 = `lybra artifact ingest --task-id <ID> --kind <return|verdict> --workspace-root <治理根>`; 入口内部执行推导核同时给出的 shell_command(唯一构建), 驱动方不再手提 audit-verdict / queue return",
+      "runtime_evidence": {
+        "description": "AIPOS-F162 件①(chris OTA HBJOTA-57R/58R 实撞: 卡面要求「实际运行逐条独立核验」只在文字里, 审计只在审计树跑 preflight、核执行体原件 hash/退出码即判 PASS_WITH_NOTES 并合入): 运行证据硬门。卡声明 card_field.required=true 时, 审计报告 PASS 类裁决须含结构化「独立运行证据」节; 裁决入口(本节所在的 artifact ingest --kind verdict, 唯一入口)逐条核对, 缺 = 拒收 rejection_category 并列出缺哪条。FAIL 等非 PASS 类裁决不受限; 卡未声明 = 行为不变。推导核对同一报告同一判据先行(loop 视为审计产物不合格, 让审计体补做, 见 loop)。",
+        "single_implementation": "tools/aipos_cli/artifact_ingest.runtime_evidence_problems(裁决入口 _validate_task_artifact 与推导核 next_resolver 审计卡裁决步同读; 要求解析 artifact_ingest.runtime_evidence_requirement)",
+        "card_field": "audit_runtime_evidence",
+        "card_field_precedence": "审计卡自身卡面(补充审计 --runtime-evidence-command 写入)优先, 缺省读被审卡卡面; 都无 / required 非 true = 不要求",
+        "declaration_shape": "{required: boolean, commands: [非空串, …]}; 形不对 = 拒收 declaration_invalid_category(fail-closed, 不当未声明放行)",
+        "applies_to_verdicts": ["PASS", "PASS_WITH_NOTES"],
+        "section_heading": "独立运行证据",
+        "block_language": "json",
+        "format": "报告正文中以 `## 独立运行证据` 为标题的节, 节内第一个 ```json 代码块 = 运行记录数组, 每条一个对象: command(实际执行的命令行) / worktree(执行所在工作树绝对路径 = 审计卡分配工作树) / exit_code(整数) / 日志二选一: log_excerpt(非空日志摘要)或 log_path(日志绝对路径)+ log_sha256(该文件 sha256, 门核对)",
+        "entry_required_fields": ["command", "worktree", "exit_code"],
+        "log_fields": {"excerpt": "log_excerpt", "path": "log_path", "sha256": "log_sha256"},
+        "placeholders": {
+          "worktree": "审计卡分配工作树(next_resolver.card_worktree_location(<审计卡>) 唯一推导)",
+          "commit_sha": "被审分支 tip(审计报告 commit_sha 同值)",
+          "tree_hash": "被审分支 tip 的 tree"
+        },
+        "command_match": "卡声明的每条命令按占位渲染后, 与某条运行记录的 command 在空白折叠后逐字相等; 加参数(如 --preflight-only)即不算该条已运行",
+        "worktree_rule": "每条运行记录的 worktree 解析后须 = 审计卡分配工作树; = 被审执行卡工作树单列拒因(执行体原件不算独立核验)",
+        "rejection_category": "RUNTIME_EVIDENCE_MISSING",
+        "declaration_invalid_category": "RUNTIME_EVIDENCE_DECLARATION_INVALID",
+        "loop": {
+          "derivation_action": "evidence_rework",
+          "rule": "推导核对 claimed 审计卡已就绪报告先核本节判据, 不过 = 不可推导 action.type=evidence_rework(triggered_by=auditor, 非硬停, 不升 Owner): loop 等审计体并拉起它补做, 拒因原文附在开工提示与手工提示后; 等待中报告被改写仍不过 = 唤醒重判。同一运行内对同一审计卡因本拒因拉起超过 relaunch_cap 次 = 结束原因 exhausted_end_reason(verbs.schema lybra_loop_status.next_action.by_end_reason 判 owner_needed, 即连败上限)",
+          "relaunch_cap": 2,
+          "exhausted_end_reason": "runtime_evidence_exhausted"
+        }
+      },
       "report_snapshot": {
         "description": "AIPOS-F90 件②(2026-10-02 事故: 已结案卡被重审并覆盖原审计报告, 报告落点被 gitignore 不可恢复): 裁决入门时门把审计报告全文逐字节(包记录头, AIPOS-F89 件③d)快照进 records, 与裁决记录同一批受控落盘; 报告事后被覆盖仍可从快照复原。",
         "relative_to": "records",
@@ -1166,6 +1194,33 @@
       "derived_command": "lybra artifact ingest --task-id <被审卡ID> --workspace-root <治理根>(action_type=finalize, 信封 allowed_verbs 同 internal finalize)"
     },
     "exit_codes_ref": "verbs.schema.json verbs.lybra_artifact_ingest.exit_codes(退出码唯一声明处, AIPOS-F101 件③ 删本处重复声明)"
+  },
+  "supplementary_audit": {
+    "description": "AIPOS-F162 件②(chris HBJOTA-58 实撞: 已结案卡审计结论有争议, `audit dispatch` 以「已有通过裁决」拒, 争议无产品出口只能找 Owner): 已结案卡的补充审计出口。复用既有链路, 不另写审计执行路径: 派审 = 同一 audit dispatch(board_adapter.audit_dispatch_task / _build_audit_dispatch_preview, supplementary 分支)派生补审审计卡; 拉起 = 原卡 loop 推导核对已结案原卡给 await_artifact(card=补审卡), loop 走既有审计等待/拉起/裁决入口; 裁决 = 同一 artifact ingest --kind verdict → audit-verdict 门写; FAIL = 同一 audit_derivation.derive_repair_card_on_fail(supplementary 模式)派生修复卡。原卡 closure 记录与原裁决记录不动、不回滚 main; 补审裁决记录带 supplementary_of, 推导核读原卡最新裁决时不计补审裁决。",
+    "cli": "lybra audit dispatch --supplementary --task-id <已结案卡> --actor <顾问实例> --reason <争议摘要> [--runtime-evidence-command <命令>]… [--audit-agent-instance <审计实例>] [--confirm]",
+    "two_phase": "缺省 = 预演(只读: 列出将派生的补审卡号/审计实例/将写的文件, 零写入); --confirm 才写(与 verbs.schema two_phase_protocol queue_writers 同一语义: 缺省预演、--confirm 写)",
+    "actor_role_class": "advisor",
+    "actor_rule": "发起者 = 项目顾问实例(custom_roles.authorize_instance_class 判角色类 advisor, 自定义角色读门注册表); 不需 Owner、不需信封",
+    "card_numbering": {
+      "pattern": "<原卡ID>-S[序号]R",
+      "rule": "序号 = 该原卡已有补审卡数 + 1(从 1 起, 连续); 补审卡卡面 task_mode=audit + reviewed_task_id=原卡 + supplementary_of=原卡(审计卡判据 audit_derivation.is_audit_card 读卡面, 不靠号尾)"
+    },
+    "source_precondition": "原卡已结案(在 completed/ 或有 closure 记录); 未结案 = 拒 SUPPLEMENTARY_SOURCE_NOT_CONCLUDED(出口: 走常规 audit dispatch / 复审轮)",
+    "in_flight_rule": "同一原卡同时只允许一张在途补审卡(在 pending/ 或 claimed/ 的 supplementary_of=原卡 审计卡); 有 = 拒 SUPPLEMENTARY_AUDIT_IN_FLIGHT 点名在途卡",
+    "owner_policy_ref": "advisor_supplementary_audit",
+    "untouched": "原卡卡面(派审时)、原卡 closure 记录、原卡既有裁决记录、产品仓 main 一律不改; 补审裁决入门时门只在原卡卡面写 supplementary_audit_ref / supplementary_audit_status 两字段",
+    "fail_verdicts": ["FAIL", "BLOCK"],
+    "pass_verdicts": ["PASS", "PASS_WITH_NOTES"],
+    "status_text": {
+      "in_flight": "补审在途·{audit_task_id}",
+      "pass": "补审通过·{audit_task_id}",
+      "fail": "补审未通过·修复卡 {repair_task_id}",
+      "other": "补审裁决 {verdict}·{audit_task_id}"
+    },
+    "repair_inherit_fields": ["lane", "harness", "output_target", "audit", "audit_by", "audit_runtime_evidence"],
+    "repair_card": "补审 FAIL/BLOCK = 门同一 writer derive_repair_card_on_fail(supplementary 模式: 不受原卡已结案的级联终局判拦截; 修复卡承继原卡 repair_inherit_fields 所列字段, 卡面 supplementary_of=原卡 + derived_from_verdict_id=补审裁决, 不带 derived_from_audit_task_id 故不触发 fix_card_closure 原卡复审派生), 走常规执行/审计/合入",
+    "views": "next(推导核 suggested_action / supplementary_audit 字段)、brief(supplementary_audits 节)、loop status(--task-id 时 supplementary_audit 行)、needs-owner(补审链路节, 只读不升 Owner)同读 audit_derivation.supplementary_audit_chain(唯一实现)",
+    "landing": "补审卡自身路径并入原卡落账范围(governance_commit.audit_card_ids 含补审卡), 原卡 loop 结案出口在补审在途时不成立"
   },
   "envelope_guards": {
     "description": "AIPOS-F9 大项B: PreAuthorized 信封守卫声明——信封不匹配的每种原因都声明 next_step(找谁+做什么)。门响应原样带出,绝不手写散落文案。",
