@@ -2444,7 +2444,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_setws_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_setws_parser.add_argument("--json", action="store_true", help="Output JSON")
     _project_json_two_phase_flags(project_setws_parser, "set-workstation")  # AIPOS-F125: 缺省预演 / --confirm 才写
-    project_checkws_parser = project_subparsers.add_parser("check-workstation", help="AIPOS-F110: check a workstation for loop launch: land-event location, material declaration (remote), gate→workstation ssh probe (dir + harness executable) and workstation→gate ssh reachability via the declared gate_ssh_alias")
+    project_checkws_parser = project_subparsers.add_parser("check-workstation", help="AIPOS-F110: check a workstation for loop launch: land-event location, material declaration (remote), gate→workstation ssh probe (dir + harness executable) and workstation→gate ssh reachability via the declared gate_ssh_alias; AIPOS-F164: (local) charter freshness = same check as `lybra sync --dry-run` (F66B render fingerprints), FAIL gives the sync command")
     project_checkws_parser.add_argument("name", help="Established project name")
     project_checkws_parser.add_argument("--instance", required=True, help="Workstation instance (as in its land event)")
     project_checkws_parser.add_argument("--harness", required=True, help="Harness whose launch template executable must be on the workstation PATH (enums.schema harness.launch)")

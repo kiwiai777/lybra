@@ -503,6 +503,15 @@
           "reject_codes": {
             "RETURN_SUMMARY_SOURCE_INVALID": "return_summary_source 段形不合(非对象 / 未知键 / 值非「非空单行字符串」列表 / 两键都为空列表 = 无任何摘要来源)"
           }
+        },
+        "charter_auto_sync": {
+          "type": "boolean",
+          "required": false,
+          "default": true,
+          "description": "AIPOS-F164 件②(gap #149): loop 拉起 pi(执行 / 审计)前核该工位章程新鲜度(判定 = `lybra sync --dry-run` 同一实现 distribution_sync.charter_freshness, F66B 三指纹), 章程过期 / 未渲染 / 核不了时是否先自动 sync 该工位(只本工位, 修复 = `lybra sync` 同一实现 distribution_sync.sync_workstation_charter)再拉起。缺省 true(缺键 = 自动 sync); false = 不自动 sync, 章程不新鲜即拒拉起(结束原因 charter_not_fresh, 给 sync 修法)。值非布尔 = CHARTER_AUTO_SYNC_INVALID(loop 按不自动 sync 处理并在拒因里点名)。唯一读取口 workspace_config.charter_auto_sync; 写入 = 编辑 project.json 本键(无专用写命令)。",
+          "reject_codes": {
+            "CHARTER_AUTO_SYNC_INVALID": "charter_auto_sync 须为 JSON 布尔(true / false)"
+          }
         }
       }
     }

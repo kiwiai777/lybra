@@ -1142,6 +1142,8 @@ def sync(
         "scope_project": scope,
         "governance_root": render_ctx["governance_root"] if render_ctx else None,
         "distributions_checked": len(remote.get("distributions", [])),
+        # AIPOS-F164 件①②: 本工位清单内的章程件(章程新鲜度判定 charter_freshness 据此区分「无章程件」与「章程最新」)
+        "charter_distributions": [str(d.get("distribution_id")) for d in remote.get("distributions", []) if _is_charter(d)],
         "dry_run": dry_run,
         "plan": plan,
         "would_prune": list(to_prune),
@@ -1380,6 +1382,7 @@ def _sync_harness_dir(
         "scope_project": scope,
         "governance_root": render_ctx["governance_root"] if render_ctx else None,
         "distributions_checked": len(dists),
+        "charter_distributions": [str(d.get("distribution_id")) for d in dists if _is_charter(d)],  # AIPOS-F164(同 pi 路径)
         "dry_run": dry_run,
         "plan": plan,
         "would_prune": [],
@@ -1535,6 +1538,97 @@ def _correct_owner_policy_ref(harness_root: Path, role: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # CLI 薄壳(lybra sync 与 python -m tools.aipos_cli.distribution_sync 同一入口)
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# AIPOS-F164: 工位章程新鲜度(check-workstation 章程项 + loop 拉起前核)—— 判定与 `lybra sync --dry-run` 同一实现,
+# 修复与 `lybra sync` 同一实现; 不另写比对、不另写渲染。
+# ---------------------------------------------------------------------------
+
+def _one_line(text: Any) -> str:
+    """多行原因(如门连接诊断块)压成一行(各非空行以 ` | ` 连接): 章程判定的 detail 进 check-workstation 详情 / loop 结束原文首行。"""
+    return " | ".join(line.strip() for line in str(text).splitlines() if line.strip())
+
+
+def _sync_errors() -> tuple[type[BaseException], ...]:
+    """sync 单工位调用的捕获面 = sync_many 同一捕获面 + 声明读不出(SchemaLoadError); 出错 = 如实给原因(不吞, 调用方按不新鲜处理)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    return (ValueError, FileNotFoundError, OSError, RuntimeError, SchemaLoadError)
+
+
+def render_sync_command(harness_root: str | Path, governance_root: str | Path, *, dry_run: bool = False) -> str:
+    """AIPOS-F164: 单工位 sync 修法命令的唯一渲染(check-workstation FAIL 修法 / loop 章程拒因同用):
+    `lybra sync --harness-root <工位> --workspace-root <治理根> [--dry-run]`(路径 shell 引用)。"""
+    import shlex
+
+    cmd = f"lybra sync --harness-root {shlex.quote(str(harness_root))} --workspace-root {shlex.quote(str(governance_root))}"
+    return f"{cmd} --dry-run" if dry_run else cmd
+
+
+def charter_freshness(harness_root: str | Path, governance_root: str | Path) -> dict[str, Any]:
+    """AIPOS-F164 件①②: 工位章程是否为产品渲染的最新版。
+
+    判定 = `lybra sync --harness-root <工位> --workspace-root <治理根> --dry-run` 同一实现(sync(dry_run=True) → compute_diffs →
+    F66B 三指纹判据 _charter_render_reason: missing / unrendered / master_changed / declaration_changed / local_edit), 只取 kind=charter
+    的计划项; 零写入(dry-run)。返回:
+      {fresh: True | False | None, state, stale: [{distribution_id, path, reason}], detail, repair_command, verify_command}
+    state: fresh(章程件全部最新)/ no_charter(本工位清单无章程件, 无可核)/ pull(会话不在本机可落处, 章程经 `lybra charter`
+    会话开局拉取、每次现渲染)/ stale(有章程件需重渲染)/ unverifiable(核不了: 非本项目工位 / 未接入 / 连不上门 / 清单不 ok 等;
+    fresh=None, 调用方按不新鲜处理, fail-closed)。"""
+    ws, gov = Path(harness_root), Path(governance_root)
+    out: dict[str, Any] = {"fresh": None, "state": "unverifiable", "stale": [], "detail": "",
+                           "repair_command": render_sync_command(ws, gov), "verify_command": render_sync_command(ws, gov, dry_run=True)}
+    try:
+        result = sync(harness_root=ws, governance_root=gov, dry_run=True)
+    except _sync_errors() as exc:
+        out["detail"] = _one_line(f"sync --dry-run 出错: {type(exc).__name__}: {exc}")
+        return out
+    if not result.get("ok"):
+        out["detail"] = _one_line(f"sync --dry-run 未成: {result.get('error') or result}")
+        return out
+    if result.get("status") == "skipped":
+        out["detail"] = _one_line(f"sync --dry-run 跳过本工位: {result.get('reason')}")
+        return out
+    if result.get("pull"):
+        out.update(fresh=True, state="pull",
+                   detail=f"会话不在本机可落处, 章程经会话开局拉取(每次现渲染): {result['pull'][0].get('command')}")
+        return out
+    stale = [{"distribution_id": p["distribution_id"], "path": rel, "reason": why}
+             for p in result.get("plan") or [] if p.get("kind") == "charter" for rel, why in (p.get("reasons") or {}).items()]
+    if stale:
+        out.update(fresh=False, state="stale", stale=stale,
+                   detail="; ".join(f"{s['distribution_id']}:{s['path']} {s['reason']}" for s in stale))
+        return out
+    charters = list(result.get("charter_distributions") or [])
+    if not charters:
+        out.update(fresh=True, state="no_charter", detail="本工位分发清单无章程件(无可核)")
+        return out
+    out.update(fresh=True, state="fresh", detail=f"章程件 {', '.join(charters)} 渲染指纹与母本 / 声明一致(product_commit={result.get('product_commit')})")
+    return out
+
+
+def sync_workstation_charter(harness_root: str | Path, governance_root: str | Path) -> dict[str, Any]:
+    """AIPOS-F164 件②: 修复 = `lybra sync --harness-root <工位> --workspace-root <治理根>` 同一实现(sync, 只本工位), 之后以 charter_freshness
+    复核(fail-closed: sync 报成功但章程仍不新鲜 = 失败)。返回 {ok, detail, files_fetched, changes, declaration_gaps, after}。"""
+    ws, gov = Path(harness_root), Path(governance_root)
+    try:
+        result = sync(harness_root=ws, governance_root=gov)
+    except _sync_errors() as exc:
+        return {"ok": False, "detail": _one_line(f"sync 出错: {type(exc).__name__}: {exc}"), "after": None}
+    if not result.get("ok") or result.get("status") != "synced":
+        return {"ok": False, "detail": _one_line(f"sync 未成: status={result.get('status')} {result.get('error') or result.get('reason') or ''}"),
+                "after": None}
+    after = charter_freshness(ws, gov)
+    changes = [f"{c.get('distribution_id')}:{c.get('action')}" for c in result.get("changes") or []]
+    gaps = [f"{g.get('path')} [{g.get('reason')}]" for g in result.get("declaration_gaps") or []]
+    if not after["fresh"]:
+        return {"ok": False, "detail": f"sync 已跑(changes={changes}), 复核章程仍不新鲜: {after['state']} {after['detail']}",
+                "after": after, "files_fetched": result.get("files_fetched"), "changes": changes, "declaration_gaps": gaps}
+    return {"ok": True, "detail": f"sync 已跑: files_fetched={result.get('files_fetched')} changes={changes}"
+                                  + (f" 声明缺口(工位本地改动已被渲染物覆盖, 须回流母本/声明)={gaps}" if gaps else "")
+                                  + f"; 复核: {after['state']}",
+            "after": after, "files_fetched": result.get("files_fetched"), "changes": changes, "declaration_gaps": gaps}
+
 
 def render_sync_text(run: dict[str, Any]) -> str:
     lines = [f"sync {'dry-run' if run.get('dry_run') else 'run'} · mode={run.get('mode')} · scope_project={run.get('scope_project')} · harness_root={run.get('harness_root')}"]

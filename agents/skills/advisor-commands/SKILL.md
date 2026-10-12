@@ -202,6 +202,18 @@ lybra project check-workstation <项目名> --home-root <home根> --instance <�
 ```
 4. **推进**照常 `lybra loop --task-id <卡ID>`: 执行体等待前 loop 经 `ssh -T <ssh目标>` 在工位目录以新进程组起 harness, 开工提示经 ssh stdin 逐字节传入(不进命令行、不经远端 shell 展开), 提示末段写明工作树/报告落点/任务卡在门机及材料访问方式(产品 `render_kickoff` 单源); 产物就绪/超时/早退/中断(含 ssh 断线 SIGHUP)即经 ssh 清远端进程组, 本地 ssh 子进程同清。执行体交付不变: 报告写门机报告落点(经材料通道), 代码提交卡分支并推回门机产品仓(卡面 lane.repo), loop 仍在门机看产物。
 
+#### 工位章程新鲜度(AIPOS-F164: 章程由产品渲染, 拉起前自动核)
+工位章程(工位根 `AGENTS.md`)= 产品按母本 + 项目声明渲染的产物(`lybra sync` 写入, 本地清单记母本 / 声明 / 渲染物三指纹), 不是手写文件; 人肉期手写或从未 sync 的章程 = 未渲染, 母本或项目声明变了而工位未 sync = 过期。判定只有一处: 与 `lybra sync --dry-run` 同一实现; 修复只有一处: `lybra sync`。任何项目同一组命令, 在治理根所在机运行。
+1. **体检**(只读, 零写入): `check-workstation` 本机工位多一项「章程新鲜度」——最新 = ✓; 未渲染 / 指纹过期 / 缺失 / 核不了(连不上门等)= ✗ 并给修法命令
+```bash
+lybra project check-workstation <项目名> --home-root <home根> --instance <审计体实例> --harness pi
+```
+2. **修法**(✗ 时; 先预演看 plan, 再去掉 `--dry-run` 落盘, 只动该工位):
+```bash
+lybra sync --harness-root <工位目录> --workspace-root <治理根> --dry-run
+```
+3. **loop 拉起前自动核**: `lybra loop` 每次拉起 pi(执行 / 审计)前核该工位章程; 最新 = 直接拉起; 不新鲜 = 先自动 sync 该工位(只本工位)再复核后拉起, 运行记录 `charter_checks` 与日志各留一行; sync 失败 = 不拉起, 结束原因 `charter_sync_failed`; 项目在 project.json 声明 `"charter_auto_sync": false` 时不自动 sync, 不新鲜即拒拉起(`charter_not_fresh`)。两者 `lybra loop status` 下一动作 = `advisor_fix`(修法 = 上面的 sync 命令, 修好用原命令续跑 loop; 同卡连续同因 = 升 owner_needed)。跨机工位门机不读写工位文件, 不核(在工位所在机跑 `lybra sync --dry-run`)。
+
 #### 工位迁出共用检出(AIPOS-F161: `lybra project relocate-workstation`)
 **何时用**: pi 工位(审计 / 执行)放在和别的项目共用的 git 检出里(任何一方 checkout / stash / pull 都连坐全部工位), 要迁到独立落点。任何项目同一命令, 在治理根所在机运行(跨机顾问经 ssh 跑同一命令); 只能迁本项目接入的实例(他项目工位 = 拒, 零写入)。
 位置声明只有一处 = 本项目接入日志里该实例最新的位置事件; 迁移追加一行 `relocate` 位置事件, loop 拉起 / `check-workstation` / `enroll-where` / `lybra charter` 都从这里读到新落点(不另写路径表)。
