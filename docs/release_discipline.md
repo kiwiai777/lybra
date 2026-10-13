@@ -72,6 +72,12 @@ unrelated change swept into a finalize commit via a broad `git add`.
   snapshot commit they started on and compare it with `.deploy/current`; once a newer deploy lands they stop cleanly
   (`lybra loop`: end reason `deploy_changed`, old and new commits in the run record; exit codes in
   `schema/verbs.schema.json`). Re-run the same command: the loop resumes from where the records stand.
+  Exception (AIPOS-F166): while `lybra loop` is in a manual wait step (waiting for an executor's return), a new deploy does
+  not stop it — the loop re-execs itself on the new snapshot (same pid, `deploy_reexec` / `continues_run` in the run records)
+  and keeps waiting at the same step. Between execute steps the loop still stops with `deploy_changed`.
+- **Post-merge regression logs live next to the run records** (AIPOS-F166): async regression logs go under the governance
+  root's `loop_runs_root/<card>/` (git-excluded), not `/tmp`; a regression whose process vanished is reported as unfinished
+  by `lybra loop status` / `brief` / `next` with the re-run command `lybra regression run --sha <commit>`.
 
 ## Secrets
 - Tokens / API keys are **fingerprint-only** in any output, log, record, report, or commit.

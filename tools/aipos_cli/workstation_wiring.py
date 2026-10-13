@@ -260,7 +260,8 @@ def resolve_deployed_lybra_bin() -> str | None:
 LYBRA_CLI_MODULE = "tools.aipos_cli"
 
 
-def lybra_cli_invocation(args: list[str], env: dict[str, str] | None = None) -> tuple[list[str], dict[str, str]]:
+def lybra_cli_invocation(args: list[str], env: dict[str, str] | None = None,
+                         code_root: Path | None = None) -> tuple[list[str], dict[str, str]]:
     """AIPOS-F143 件①: 派生 `lybra <args>` 子进程的 (argv, env)——不依赖调用方 PATH(接入项目首卡实撞: 分顾问经 ssh 起 loop,
     PATH 无 ~/.local/bin → `[Errno 2] No such file or directory: 'lybra'`)。
 
@@ -269,11 +270,12 @@ def lybra_cli_invocation(args: list[str], env: dict[str, str] | None = None) -> 
     (node 薄壳, `#!/usr/bin/env node` 仍按 PATH 找 node), 且 .deploy/current 可能不是正在运行的这份代码(卡工作树 / 靶场);
     同一解释器 + 同一代码树 = 零 PATH 依赖且派生命令与驱动它的 loop 同版本(AIPOS-F94 N6 落账走进程内同理)。
     resolve_deployed_lybra_bin 仍是 connection.json lybra_bin(给其他进程用)的唯一推导, 两者不互为回落。
-    sys.executable 取不到(嵌入式解释器)= RuntimeError(fail-closed, 不回落 PATH 上的 lybra)。"""
+    sys.executable 取不到(嵌入式解释器)= RuntimeError(fail-closed, 不回落 PATH 上的 lybra)。
+    AIPOS-F166 件①: code_root 给出 = 代码树根取它(loop 等待步遇部署更新 re-exec 到新部署快照: 同一构造, 代码树换成新快照); 缺省 = 本运行代码树。"""
     interpreter = str(sys.executable or "").strip()
     if not interpreter:
         raise RuntimeError("当前解释器路径 sys.executable 取不到, 无法派生 lybra 子命令(不回落 PATH 上的 lybra)")
-    code_root = str(Path(__file__).resolve().parents[2])
+    code_root = str(Path(code_root).resolve()) if code_root is not None else str(Path(__file__).resolve().parents[2])
     out_env = dict(os.environ if env is None else env)
     existing = str(out_env.get("PYTHONPATH") or "")
     out_env["PYTHONPATH"] = code_root + (os.pathsep + existing if existing else "")

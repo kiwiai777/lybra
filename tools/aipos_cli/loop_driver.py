@@ -242,16 +242,41 @@ def mint_hint(*, task_id: str, task_fm: dict[str, Any], driver_actor: str, now: 
               governance_root: Path | None = None) -> str:
     """申领出口: 既有 `lybra envelope mint --confirm` 命令(AIPOS-F92 件①: 经门 owner_decision_record envelope 路径真实落盘;
     Owner 亲自敲, --connection-json 指向持 Owner 凭据的 connection.json), 参数按本卡填好可照抄。"""
+    from tools.aipos_cli.autonomy_policy import envelope_renew_declaration, next_policy_id, render_mint_command
+
     now = now or utc_now()
     project = str(task_fm.get("project") or "project").strip() or "project"
     task_mode = str(task_fm.get("task_mode") or "code").strip() or "code"
-    expires = (now + timedelta(days=7)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    where = f" --workspace-root {shlex.quote(str(governance_root))}" if governance_root else ""
-    return (
-        f"lybra envelope mint --confirm --policy-id pol_{project}_loop_1 --agent-or-role {driver_actor} "
-        f"--max-tasks 20 --task-mode {task_mode} --expires-at {expires} "
-        f"--decision-summary \"loop envelope for {task_id}\" --actor owner{where} --connection-json <Owner 凭据 connection.json>"
-    )
+    expires = (now + timedelta(days=int(envelope_renew_declaration()["renew_days"]))).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    # AIPOS-F166 件②: policy_id 不再写死 _1(10-12 实撞: 建议已用过的 <项目>_loop_1)——按该驱动方同前缀信封已有最大序号 +1
+    policy_id = (next_policy_id(governance_root, identities={driver_actor, DRIVER_ROLE}, project=project)
+                 if governance_root else f"pol_{project}_loop_1")
+    return render_mint_command(policy_id=policy_id, agent_or_role=driver_actor, max_tasks=20, task_mode=task_mode, expires_at=expires,
+                               decision_summary=f"loop envelope for {task_id}", governance_root=governance_root)
+
+
+def _envelope_ending(governance_root: Path, envelope_id: str | None, *, task_id: str, task_fm: dict[str, Any], driver_actor: str,
+                     driver_role: str | None, what: str, now: datetime | None = None) -> dict[str, Any] | None:
+    """AIPOS-F166 件②(gap #152): 信封被拒时读门侧用量真相(autonomy_policy.envelope_usage, 与门 count_bound / 时间窗同一计数)判是否
+    「额度用尽 / 已过期」。是 = {reason(envelope_exhausted|envelope_expired), message(用量/上限/到期 + 续签命令), suggested_action(续签命令),
+    state(运行记录 envelope_state)}; 否(信封仍有效 / 缺 / 撤销等)= None, 调用方照旧出口。文案与结束原因名读声明 lybra_loop.envelope.renew。"""
+    from tools.aipos_cli.autonomy_policy import envelope_renew_declaration, envelope_usage, renew_plan
+
+    if not envelope_id:
+        return None
+    usage = envelope_usage(governance_root, envelope_id, now=now)
+    if usage.get("state") not in ("exhausted", "expired"):
+        return None
+    decl = envelope_renew_declaration()
+    identities = {driver_actor, DRIVER_ROLE} | ({driver_role} if driver_role else set())
+    plan = renew_plan(governance_root, usage, identities=identities, task_id=task_id, card_task_mode=str(task_fm.get("task_mode") or ""), now=now)
+    head = decl["messages"][usage["state"]].format(policy_id=usage["policy_id"], used=usage["used"], max_tasks=usage["max_tasks"],
+                                                    expires_at=usage["expires_at"], what=what)
+    renew = decl["messages"]["renew"].format(next_policy_id=plan["next_policy_id"], policy_id=usage["policy_id"], command=plan["renew_command"])
+    message = "\n".join([head, renew] + ([f"  注: {plan['note']}"] if plan["note"] else []))
+    state = {k: usage.get(k) for k in ("policy_id", "state", "used", "max_tasks", "remaining", "expires_at")}
+    state.update(plan)
+    return {"reason": str(decl["end_reasons"][usage["state"]]), "message": message, "suggested_action": plan["renew_command"], "state": state}
 
 
 # ---------------------------------------------------------------------------
@@ -966,12 +991,16 @@ def run_loop(
     now: datetime | None = None,
     no_launch: bool = False,
     deploy_guard: Any | None = None,
+    wait_reexec: "WaitReexec | None" = None,
+    continues_run: str | None = None,
 ) -> LoopResult:
     """有界推进一张卡。返回 LoopResult(exit_code 按 verbs.schema lybra_loop.exit_codes)。
 
     derive/execute/watch 可注入(靶场用), 缺省 = 产品唯一实现。
     AIPOS-F95: no_launch=True = 不拉起 harness(手工模式); 拉起等待期间收到 SIGINT/SIGTERM/SIGHUP → 清进程组后抛 LoopInterrupted。
     AIPOS-F152 件①: deploy_guard 缺省 = 本进程的 deploy_runtime.DeployGuard(运行代码非部署快照 = 不适用, 行为不变); 靶场可注入。
+    AIPOS-F166 件①: wait_reexec = 等待步遇部署更新的续等口(CLI 注入 exec_into_snapshot; None = 原 deploy_changed 行为);
+    continues_run = 续等关联的上一运行 run_id(re-exec 来的新进程由 --continues-run 带入, 落运行记录 continues_run)。
     """
     out = out or sys.stdout
     governance_root = Path(governance_root)
@@ -1042,6 +1071,10 @@ def run_loop(
         return LoopResult(task_id, "not_derivable", exit_code_for(contract, "not_derivable"), msg, missing_records=[msg])
     say.recorder = recorder
     say(f"lybra loop {task_id}: run_record={recorder.path} log={recorder.log_path}(进度: lybra loop status --task-id {task_id})")
+    if continues_run:  # AIPOS-F166 件①: 等待步遇部署更新 re-exec 而来, 与上一运行记录明确关联
+        recorder.set_continues(str(continues_run))
+        say(f"lybra loop {task_id}: 续等(AIPOS-F166): 接上一运行 {continues_run}(等待中部署已更新, 已 re-exec 到本部署快照, "
+            "从同一等待步续等; 已落的步不重复)")
     # AIPOS-F152 件①: 记下本次运行的代码(部署快照 + 提交), 之后每步比对 current
     from tools.aipos_cli.deploy_runtime import DeployGuard
 
@@ -1049,13 +1082,14 @@ def run_loop(
     recorder.set_deploy(guard.describe())
     if guard.applicable:
         say(f"lybra loop {task_id}: 运行部署快照 {guard.running.release}(commit {guard.baseline}); 每步比对 "
-            f"{guard.running.describe()['deploy_current']}, 部署一变即停下(deploy_changed)")
+            f"{guard.running.describe()['deploy_current']}, 部署一变即停下(deploy_changed)"
+            + ("; 手工等待步中部署一变 = 换新快照从同一等待步续等(re-exec, AIPOS-F166)" if wait_reexec is not None else ""))
     holder = LoopResult(task_id, "completed", exit_code_for(contract, "completed"), "")
     try:
         result = _run_enveloped(task_id, governance_root, holder, task_fm=task_fm, driver_actor=driver_actor, policy_id=policy_id,
                                 now=now, connection_json=connection_json, contract=contract, max_steps=max_steps, max_wait=max_wait,
                                 interval=interval, allowed_verbs=allowed_verbs, say=say, derive=derive, execute=execute,
-                                watch=watch, no_launch=no_launch, recorder=recorder, guard=guard)
+                                watch=watch, no_launch=no_launch, recorder=recorder, guard=guard, wait_reexec=wait_reexec)
     except LoopInterrupted as exc:
         recorder.end(outcome="interrupted", exit_code=128 + exc.signum, reason="interrupted", message=f"收到信号 {exc.signum}",
                      steps=holder.steps)
@@ -1084,7 +1118,8 @@ def _run_enveloped(task_id: str, governance_root: Path, result: LoopResult, *, t
                    policy_id: str | None, now: datetime | None, connection_json: str | None, contract: dict[str, Any],
                    max_steps: int, max_wait: float, interval: float, allowed_verbs: set[str], say: _RunOutput,
                    derive: Callable[[str, Path], dict[str, Any]], execute: Callable[..., dict[str, Any]],
-                   watch: Callable[..., int], no_launch: bool, recorder: LoopRunRecorder, guard: Any) -> LoopResult:
+                   watch: Callable[..., int], no_launch: bool, recorder: LoopRunRecorder, guard: Any,
+                   wait_reexec: "WaitReexec | None" = None) -> LoopResult:
     # 件③ 信封(启动前校验; 无信封 exit 5 带申领出口, 禁裸跑); 身份集合含工位角色名(chris: hbj-advisor)
     # AIPOS-F134 件①: 驱动方角色名按本次驱动方实例取(其凭据条目的 role), 故在 driver_scope 内解析(否则取的是工位声明/首个驱动方)
     with driver_scope(actor=driver_actor, policy_id=policy_id):
@@ -1093,6 +1128,16 @@ def _run_enveloped(task_id: str, governance_root: Path, result: LoopResult, *, t
         governance_root, task_id=task_id, task_fm=task_fm, driver_actor=driver_actor, policy_id=policy_id, now=now,
         driver_role=driver_role,
     )
+    if policy is None and policy_id:
+        # AIPOS-F166 件②: 显式 --envelope(续跑命令一律带)的信封额度用尽 / 已过期 = 专门出口(用量/上限/到期 + 续签命令), 不给泛化申领出口
+        ending = _envelope_ending(governance_root, policy_id, task_id=task_id, task_fm=task_fm, driver_actor=driver_actor,
+                                  driver_role=driver_role, what="loop 启动校验不过, 未推进任何步", now=now)
+        if ending is not None:
+            recorder.set_envelope(str(policy_id))
+            recorder.set_envelope_state(ending["state"])
+            say(f"lybra loop {task_id}: exit {exit_code_for(contract, 'no_envelope')} — {ending['message']}")
+            return LoopResult(task_id, "no_envelope", exit_code_for(contract, "no_envelope"), ending["message"], envelope=str(policy_id),
+                              suggested_action=ending["suggested_action"], reason=ending["reason"])
     if policy is None:
         hint = mint_hint(task_id=task_id, task_fm=task_fm, driver_actor=driver_actor, now=now, governance_root=governance_root)
         msg = "无有效 autonomy 信封, 拒绝裸跑。\n" + "\n".join(f"  - {r}" for r in reasons) + f"\n申领出口(Owner 亲自敲):\n  {hint}"
@@ -1117,7 +1162,7 @@ def _run_enveloped(task_id: str, governance_root: Path, result: LoopResult, *, t
             return _drive(task_id, governance_root, result, contract=contract, max_steps=max_steps, max_wait=max_wait,
                           interval=interval, allowed_verbs=allowed_verbs, say=say, derive=derive, execute=execute, watch=watch,
                           connection_json=connection_json, policy=policy, driver_actor=driver_actor, no_launch=no_launch,
-                          recorder=recorder, guard=guard)
+                          recorder=recorder, guard=guard, driver_role=driver_role, task_fm=task_fm, now=now, wait_reexec=wait_reexec)
         except FrontmatterReadError as exc:
             # AIPOS-F100 件②: 推导核之外的回读(落账回读 / 结案判据 / 等待实例)遇记录读不出 = 同一硬停 exit 4 点名文件
             stop = frontmatter_unreadable_stop(task_id, exc)
@@ -1174,6 +1219,10 @@ def _drive(
     no_launch: bool = False,
     recorder: LoopRunRecorder,
     guard: Any = None,
+    driver_role: str | None = None,
+    task_fm: dict[str, Any] | None = None,
+    now: datetime | None = None,
+    wait_reexec: "WaitReexec | None" = None,
 ) -> LoopResult:
     steps = result.steps
     launch_decl = launch_declaration(contract)
@@ -1343,7 +1392,15 @@ def _drive(
                 if change:
                     step.ok, step.message = False, "等待中部署已更新"
                     steps.append(step)
-                    return _deploy_changed_end(index, change, result, contract=contract, say=say, recorder=recorder)
+                    note = ""
+                    if wait_reexec is not None:
+                        # AIPOS-F166 件①: 等待步无副作用 → re-exec 到新快照从同一等待步续等(成功不返回: 本进程已被替换)
+                        recorder.sync_steps(steps)
+                        note = _wait_reexec(index, change, guard, wait_reexec, recorder=recorder, say=say, args=_reexec_args(
+                            task_id, governance_root, driver_actor=driver_actor, envelope_id=str((policy or {}).get("policy_id") or ""),
+                            remaining=max_steps - index, max_wait=max_wait, interval=interval, no_launch=no_launch,
+                            connection_json=connection_json, run_id=recorder.run_id))
+                    return _deploy_changed_end(index, change, result, contract=contract, say=say, recorder=recorder, note=note)
             if rc != declared_exit_code("lybra_agent_watch", "change"):  # AIPOS-F101 件③: 哨兵退出码读声明
                 step.ok = False
                 step.message = f"等待产物超时/停滞(watch exit {rc}): 等的是 {wait_patterns}"
@@ -1408,6 +1465,18 @@ def _drive(
                 continue
             what = "落账拒" if action_type == landing_action else "门拒"
             msg = f"{what} @ {action_type} ({target_card}) exit {step.exit_code}: {step.message}\n{step.output}".rstrip()
+            if _is_envelope_rejection(step, contract):
+                # AIPOS-F166 件②(gap #152): 拒因属信封且门侧用量真相 = 用尽 / 过期 → 专门出口(不再泛化 gate_rejected)
+                ending = _envelope_ending(governance_root, str((policy or {}).get("policy_id") or ""), task_id=task_id,
+                                          task_fm=task_fm or {}, driver_actor=driver_actor, driver_role=driver_role,
+                                          what=f"{action_type} 步({target_card})被拒, 未执行", now=now)
+                if ending is not None:
+                    recorder.set_envelope_state(ending["state"])
+                    say(f"[{index}] exit {exit_code_for(contract, 'no_envelope')} — {ending['message']}")
+                    result.outcome, result.exit_code = "no_envelope", exit_code_for(contract, "no_envelope")
+                    result.message = f"{ending['message']}\n  门拒原文: {msg}"
+                    result.suggested_action, result.reason = ending["suggested_action"], ending["reason"]
+                    return result
             say(f"[{index}] exit 2 — {msg}")
             result.outcome, result.exit_code, result.message = "gate_rejected", exit_code_for(contract, "gate_rejected"), msg
             result.reason = "landing_rejected" if action_type == landing_action else "gate_rejected"
@@ -1464,17 +1533,108 @@ def _adopt_own_deploy(index: int, guard: Any, governance_root: Path, task_id: st
 
 
 def _deploy_changed_end(index: int, change: dict[str, Any], result: LoopResult, *, contract: dict[str, Any],
-                        say: Callable[[str], None], recorder: LoopRunRecorder) -> LoopResult:
-    """AIPOS-F152 件①: 部署已更新 → end_reason deploy_changed(exit_codes.deploy_changed), 运行记录 deploy 段写新旧提交。"""
+                        say: Callable[[str], None], recorder: LoopRunRecorder, note: str = "") -> LoopResult:
+    """AIPOS-F152 件①: 部署已更新 → end_reason deploy_changed(exit_codes.deploy_changed), 运行记录 deploy 段写新旧提交。
+    AIPOS-F166 件①: note = 等待步续等不可行的原因(新快照不可用 / 余步为 0 / exec 失败), 附在结束原文末。"""
     from tools.aipos_cli.deploy_runtime import change_commits
 
     code = exit_code_for(contract, "deploy_changed")
     msg = (f"部署已更新({change_commits(change)}), 本 loop 跑的是旧版本代码, 已在步间停下(未执行下一步): "
-           f"用原命令重跑 loop 从断点续做(已落的步不重复)。快照 {change.get('running_release')}, 部署链接 {change.get('deploy_current')}")
+           f"用原命令重跑 loop 从断点续做(已落的步不重复)。快照 {change.get('running_release')}, 部署链接 {change.get('deploy_current')}"
+           + (f"。等待步续等未成(AIPOS-F166): {note}" if note else ""))
     recorder.deploy_changed(change)
     say(f"[{index}] exit {code} — {msg}")
     result.outcome, result.exit_code, result.message, result.reason = "deploy_changed", code, msg, "deploy_changed"
     return result
+
+
+def _is_envelope_rejection(step: LoopStep, contract: dict[str, Any]) -> bool:
+    """AIPOS-F166 件②: 账务步拒因属信封——退出码 = exit_codes.no_envelope(派生命令无覆盖驱动方的有效信封 / 薄壳一阶段被信封门拒,
+    AIPOS-F78B 件③), 或拒因原文含 transitions envelope_guards 声明的 ENVELOPE_* 码(autonomy_policy.envelope_guard_codes)。"""
+    from tools.aipos_cli.autonomy_policy import envelope_guard_codes
+
+    if int(step.exit_code) == exit_code_for(contract, "no_envelope"):
+        return True
+    text = f"{step.message}\n{step.output}"
+    return any(code in text for code in envelope_guard_codes())
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F166 件①(gap #151): 等待步遇部署更新 → re-exec 到新部署快照, 从同一等待步续等(声明 verbs.schema
+# lybra_loop.deploy_consistency.wait_reexec)。判定 = F152 DeployGuard(check / current_snapshot); 换代码 = F143 子进程新代码机制
+# workstation_wiring.lybra_cli_invocation(同一解释器 + 代码树根, 代码树根 = 新快照), os.execve 替换本进程(同一 pid)。
+# ---------------------------------------------------------------------------
+
+@dataclass
+class WaitReexec:
+    """续等口: launcher(参数, 新快照根) 以新快照代码替换本进程(成功不返回; 失败抛 OSError / RuntimeError);
+    extra_args = CLI 层旗标(--json / --verbose), 原样带给新进程。"""
+
+    launcher: Callable[[list[str], Path], None]
+    extra_args: list[str] = field(default_factory=list)
+
+
+def _reexec_args(task_id: str, governance_root: Path, *, driver_actor: str, envelope_id: str, remaining: int, max_wait: float,
+                 interval: float, no_launch: bool, connection_json: str | None, run_id: str) -> list[str]:
+    """新进程的 `lybra loop` 参数: 原参数原样(路径一律绝对: 新进程 cwd = 新快照根), --max-steps = 余步, --continues-run = 本 run_id。"""
+    args = ["loop", "--task-id", task_id, "--workspace-root", str(Path(governance_root).resolve()), "--actor", driver_actor]
+    if envelope_id:
+        args += ["--envelope", envelope_id]
+    args += ["--max-steps", str(int(remaining)), "--max-wait", f"{float(max_wait):g}", "--interval", f"{float(interval):g}",
+             "--continues-run", run_id]
+    if no_launch:
+        args.append("--no-launch")
+    if connection_json:
+        args += ["--connection-json", str(Path(connection_json).expanduser().resolve())]
+    return args
+
+
+def _wait_reexec(index: int, change: dict[str, Any], guard: Any, wait_reexec: WaitReexec, *, recorder: LoopRunRecorder,
+                 say: Callable[[str], None], args: list[str]) -> str:
+    """等待步续等: 新快照可用且有余步 → 日志 / 运行记录各一行(本运行以 deploy_reexec 结束, 记录封存)→ launcher 替换本进程(不返回)。
+    返回 = 续等不可行的原因(调用方照 deploy_changed 停, 原因附结束原文); launcher 失败 = 解封记录, 由调用方写 deploy_changed 终态。"""
+    from tools.aipos_cli.deploy_runtime import EntryError, change_commits, short
+
+    remaining = int(args[args.index("--max-steps") + 1])
+    if remaining < 1:
+        return f"--max-steps 已用尽(本等待步为第 {index} 轮), 不再续等"
+    try:
+        target = guard.current_snapshot()
+    except EntryError as exc:
+        return f"新部署快照不可用: {exc}"
+    args = [*args, *wait_reexec.extra_args]
+    say(f"[{index}] 等待中部署已更新({change_commits(change)}); 本步是等待步(无副作用) → re-exec 到新部署快照 {target.name}"
+        f"(commit {short(change.get('to'))}), 从同一等待步续等(进程号不变; 本运行记录 {recorder.run_id} 以 deploy_reexec 结束, "
+        f"新运行记录 continues_run={recorder.run_id}; 余 {remaining} 轮)")
+    recorder.reexec(change, target=target)
+    try:
+        wait_reexec.launcher(args, target)
+    except (OSError, RuntimeError, EntryError) as exc:
+        recorder.reexec_failed(f"{type(exc).__name__}: {exc}")
+        return f"re-exec 失败({type(exc).__name__}: {exc})"
+    recorder.reexec_failed("launcher 返回而未替换进程")
+    return "re-exec 未替换进程(launcher 返回)"
+
+
+def exec_into_snapshot(args: list[str], target: Path) -> None:
+    """以新部署快照的代码替换本进程(同一 pid), 跑 `lybra <args>`。派生构造 = F143 workstation_wiring.lybra_cli_invocation(同一解释器 +
+    代码树根前置 PYTHONPATH, 零 PATH 依赖; 代码树根 = target)。cwd 切到快照根: `python -m` 的 sys.path[0] = cwd, 防调用方 cwd 里同名
+    tools 包遮蔽快照代码(新进程参数已全为绝对路径)。exec 失败 = cwd 复原后原样抛 OSError(调用方退回 deploy_changed)。"""
+    from tools.aipos_cli.workstation_wiring import lybra_cli_invocation
+
+    argv, env = lybra_cli_invocation(list(args), code_root=Path(target))
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except (OSError, ValueError):  # 输出端已断开(ssh 断线): 无可冲刷, 照常替换进程
+            continue
+    cwd = os.getcwd()
+    os.chdir(str(target))
+    try:
+        os.execve(argv[0], argv, env)
+    except OSError:
+        os.chdir(cwd)
+        raise
 
 
 def run_loop_cli(args: Any) -> int:
@@ -1507,6 +1667,19 @@ def run_loop_cli(args: Any) -> int:
         return 128 + exc.signum  # 仅当信号被外部屏蔽时到达
 
 
+def _cli_wait_reexec(args: Any, json_mode: bool, sink: TextIO) -> WaitReexec:
+    """AIPOS-F166 件①: CLI 的续等口——新进程带上本进程的 CLI 层旗标(--json / --verbose); --json 模式本进程攒下的人读行先写 stderr
+    (stdout 留给新进程的那一份 JSON 结果; 这些行也已在运行日志里)。"""
+    extra = (["--json"] if json_mode else []) + (["--verbose"] if getattr(args, "verbose", False) else [])
+
+    def launcher(reexec_args: list[str], target: Path) -> None:
+        if json_mode:
+            TolerantOutput(sys.stderr)(sink.getvalue())
+        exec_into_snapshot(reexec_args, target)
+
+    return WaitReexec(launcher=launcher, extra_args=extra)
+
+
 def _run_loop_cli_body(args: Any, governance_root: Path, json_mode: bool, sink: TextIO) -> int:
     result = run_loop(
         args.task_id,
@@ -1519,6 +1692,8 @@ def _run_loop_cli_body(args: Any, governance_root: Path, json_mode: bool, sink: 
         interval=getattr(args, "interval", None),
         out=sink,
         no_launch=bool(getattr(args, "no_launch", False)),
+        wait_reexec=_cli_wait_reexec(args, json_mode, sink),
+        continues_run=getattr(args, "continues_run", None),
     )
     if json_mode:
         TolerantOutput(sys.stdout)(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
