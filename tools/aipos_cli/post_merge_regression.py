@@ -71,10 +71,10 @@ def merge_parent(repo_root: Path, merge_commit: str) -> str:
     return res.stdout.strip()
 
 
-def _popen_group(cmd: list[str], *, cwd: Path, env: dict[str, str] | None, stdout: Any) -> subprocess.Popen:
-    """本检查唯一的子进程拉起口(测试清单一跑 / async 后台检查): 独立会话(进程组号 = pid), 超时或收尾按组清理, stdin 关闭。
-    不是 harness 拉起层(agent 拉起唯一在 harness_launch)。"""
-    return subprocess.Popen(cmd, cwd=str(cwd), env=env, stdout=stdout, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+def _popen_group(cmd: list[str], *, cwd: Path, env: dict[str, str] | None, stdout: Any, stdin: Any = subprocess.DEVNULL) -> subprocess.Popen:
+    """本检查唯一的子进程拉起口(测试清单一跑 / async 后台检查): 独立会话(进程组号 = pid), 超时或收尾按组清理, stdin 缺省关闭
+    (AIPOS-F166 件③: async 后台检查 stdin = 管道, 作「进行中记录已落」的握手)。不是 harness 拉起层(agent 拉起唯一在 harness_launch)。"""
+    return subprocess.Popen(cmd, cwd=str(cwd), env=env, stdout=stdout, stderr=subprocess.STDOUT, stdin=stdin,
                             text=True, start_new_session=True)
 
 
@@ -97,8 +97,9 @@ def _terminate(proc: subprocess.Popen) -> str:
     return output or ""
 
 
-def run_suite(repo_root: Path, commit: str, runall_rel: str, timeout: float) -> dict[str, Any]:
-    """在 commit 的临时 detached worktree 里跑测试清单一次。返回 {commit, status: ran|timeout|error, exit_code, failures, log, seconds, error}。"""
+def run_suite(repo_root: Path, commit: str, runall_rel: str, timeout: float, log_dir: Path | None = None) -> dict[str, Any]:
+    """在 commit 的临时 detached worktree 里跑测试清单一次。返回 {commit, status: ran|timeout|error, exit_code, failures, log, seconds, error}。
+    AIPOS-F166 件③: log_dir = 日志落点(产品调用一律给治理根运行记录旁 regression_log_dir; 机器重启不丢); 未给(直接调用)= 系统临时目录。"""
     from tools.aipos_cli.runall_discovery import _reap_group, failure_set
 
     started = time.monotonic()
@@ -108,7 +109,8 @@ def run_suite(repo_root: Path, commit: str, runall_rel: str, timeout: float) -> 
         return result
     tmp = Path(tempfile.mkdtemp(prefix="lybra-pmr-"))
     worktree = tmp / "wt"
-    log_path = Path(tempfile.gettempdir()) / f"lybra-post-merge-regression-{commit[:12]}-{os.getpid()}-{int(time.time())}.log"
+    log_path = (Path(log_dir) / f"{EVENT_TYPE}_suite_{commit[:12]}_{os.getpid()}_{int(time.time())}.log" if log_dir is not None
+                else Path(tempfile.gettempdir()) / f"lybra-post-merge-regression-{commit[:12]}-{os.getpid()}-{int(time.time())}.log")
     added = _git(repo_root, "worktree", "add", "--detach", str(worktree), commit)
     try:
         if added.returncode != 0:
@@ -237,18 +239,9 @@ def resolve_audit_sha(governance_root: Path, sha: str | None, repo_root: str | P
     text = str(sha or "").strip()
     if re.fullmatch(r"[0-9a-f]{40}", text):
         return text, "--sha"
-    if repo_root is not None and str(repo_root).strip():
-        repo = Path(repo_root).expanduser().resolve()
-        repo_note = f"--repo-root {repo}"
-    else:
-        from tools.aipos_cli.workspace_config import project_repos
-
-        repos = project_repos(governance_root)
-        declared = repos["items"].get(repos["default"]) if repos["declared"] else repos["code_repo"]
-        if declared is None:
-            raise ValueError(f"治理根 {governance_root} 的 project.json 未声明产品仓(repos / code_repo); 出口: 给 --repo-root <产品仓> 或完整 40 位 --sha")
-        repo = Path(declared)
-        repo_note = f"project.json 声明的产品仓 {repo}"
+    given = repo_root is not None and str(repo_root).strip()
+    repo = _product_repo(governance_root, repo_root)  # AIPOS-F166: 产品仓解析唯一实现(补跑同读)
+    repo_note = f"--repo-root {repo}" if given else f"project.json 声明的产品仓 {repo}"
     if not text:
         from tools.aipos_cli.next_resolver import card_base_branch
 
@@ -304,8 +297,9 @@ def _preview(items: list[str]) -> str:
 
 
 def execute_check(*, governance_root: Path, repo_root: Path, merge_commit: str, runall_path: str,
-                  timeout_seconds: int) -> dict[str, Any]:
-    """同步执行检查(finalize sync 与 async 子进程同一函数)。返回记录形字段(不含策略处置)。"""
+                  timeout_seconds: int, log_dir: Path | None = None) -> dict[str, Any]:
+    """同步执行检查(finalize sync 与 async 子进程同一函数; AIPOS-F166 件③ `lybra regression run --confirm` 补跑同一函数)。
+    返回记录形字段(不含策略处置)。log_dir = 测试清单日志落点(regression_log_dir)。"""
     deadline = time.monotonic() + timeout_seconds
     out: dict[str, Any] = {"merge_commit": merge_commit, "runall_path": runall_path, "timeout_seconds": timeout_seconds,
                            "merged_complete": False, "notes": []}
@@ -315,7 +309,7 @@ def execute_check(*, governance_root: Path, repo_root: Path, merge_commit: str, 
         out.update(status="error", error=str(exc))
         return out
     out["pre_merge_commit"] = pre
-    merged = run_suite(repo_root, merge_commit, runall_path, deadline - time.monotonic())
+    merged = run_suite(repo_root, merge_commit, runall_path, deadline - time.monotonic(), log_dir)
     out["merged_log"], out["merged_seconds"] = merged.get("log"), merged.get("seconds")
     if merged.get("cleanup_warning"):
         out["notes"].append(merged["cleanup_warning"])
@@ -332,7 +326,7 @@ def execute_check(*, governance_root: Path, repo_root: Path, merge_commit: str, 
         if prev.get("execution") == "async" and prev.get("new_failures"):
             out["notes"].append(f"上次合并 {pre[:8]} 的异步回归结果: 新增失败 {len(prev['new_failures'])} 条 [{_preview(list(prev['new_failures']))}]")
     else:
-        before = run_suite(repo_root, pre, runall_path, deadline - time.monotonic())
+        before = run_suite(repo_root, pre, runall_path, deadline - time.monotonic(), log_dir)
         out["baseline_log"], out["baseline_seconds"] = before.get("log"), before.get("seconds")
         if before.get("cleanup_warning"):
             out["notes"].append(before["cleanup_warning"])
@@ -356,8 +350,12 @@ def summary_line(result: dict[str, Any]) -> str:
     if status == "off":
         return f"{MARKER} 已关闭(项目声明 mode=off, 来源 {result.get('policy_source')}); 本次合并未做组合回归"
     if status == "async_started":
+        record = result.get("event_record") or f"events/{result.get('task_id')}/{EVENT_TYPE}_*.md"
         return (f"{MARKER} 异步执行中(pid {result.get('async_pid')}, 日志 {result.get('async_log')}); "
-                f"结果落回归事件记录 events/{result.get('task_id')}/{EVENT_TYPE}_*.md")
+                f"进行中记录已落, 结论落同一回归事件记录 {record}")
+    if status == "running":  # AIPOS-F166 件③: 回归事件记录的进行中态(启动即落)
+        return (f"{MARKER} 进行中(pid {result.get('async_pid')} @ {result.get('host')}, 日志 {result.get('async_log') or result.get('log_dir')}; "
+                f"起于 {result.get('started_at')})")
     if status == "pass":
         fixed = result.get("fixed_failures") or []
         return (f"{MARKER} 无新增失败(合并后 {len(result.get('merged_failures') or [])} 条失败 / 基线 "
@@ -383,14 +381,29 @@ def result_line(output: str) -> str | None:
     return None
 
 
-def write_event_record(governance_root: Path, task_id: str, actor: str, result: dict[str, Any]) -> str:
-    """回归事件记录(block 撤销合并 / async 后台完成): 统一写入器 write_records_atomic, 记录类 events。返回相对路径。"""
+def new_event_record_id(governance_root: Path, task_id: str) -> str:
+    """回归事件记录 id(落 records/events/<卡>/<id>.md)。同秒已有同名记录(进行中记录与补跑同秒)= 追加序号, 绝不覆盖既有记录。"""
     from tools.aipos_cli.clock import file_slug, iso_z
+    from tools.aipos_cli.record_writer import record_dir
+
+    base = f"{EVENT_TYPE}_{task_id}_{file_slug('compact', iso_z())}"
+    directory = record_dir(Path(governance_root), "events") / task_id
+    for n in range(1, 1000):
+        record_id = base if n == 1 else f"{base}_{n}"
+        if not (directory / f"{record_id}.md").exists():
+            return record_id
+    raise ValueError(f"回归事件记录名 {base}_* 已用尽(同秒 999 份)")
+
+
+def write_event_record(governance_root: Path, task_id: str, actor: str, result: dict[str, Any], record_id: str | None = None) -> str:
+    """回归事件记录(block 撤销合并 / async 后台完成 / AIPOS-F166 件③ 进行中与补跑): 统一写入器 write_records_atomic, 记录类 events。
+    record_id 给出 = 写同一份(进行中 → 结论同一记录更新); 缺省 = 新 id。返回相对路径。"""
+    from tools.aipos_cli.clock import iso_z
     from tools.aipos_cli.record_writer import render_markdown, write_records_atomic
     from tools.schema_constants import RecordType
 
     timestamp = iso_z()
-    record_id = f"{EVENT_TYPE}_{task_id}_{file_slug('compact', timestamp)}"
+    record_id = record_id or new_event_record_id(governance_root, task_id)
     metadata = {
         "record_type": RecordType.TASK_PROGRESS_EVENT,
         "event_type": EVENT_TYPE,
@@ -405,22 +418,73 @@ def write_event_record(governance_root: Path, task_id: str, actor: str, result: 
     return str(written["paths"][0])
 
 
-def _spawn_async(*, governance_root: Path, repo_root: Path, task_id: str, actor: str, merge_commit: str, policy: dict[str, Any]) -> dict[str, Any]:
+def regression_log_dir(governance_root: Path, task_id: str) -> tuple[Path, str]:
+    """AIPOS-F166 件③(gap #153: /tmp 日志随机器重启丢失): 合并后回归日志落点 = 治理根运行记录旁(<loop_runs_root>/<卡ID>/, 唯一读取口
+    loop_run_record.loop_runs_dir), 与 loop 运行日志同一条 git 排除规则(loop_run_record.exclude_run_logs, .log 不入库)。
+    返回 (目录, 排除登记失败的说明 | "")——登记失败不阻断检查(日志照落, 说明进结果 notes 出声)。目录建不起来 = OSError / ValueError 原样抛。"""
+    from tools.aipos_cli.loop_run_record import exclude_run_logs, loop_runs_dir
+
+    directory = loop_runs_dir(Path(governance_root), task_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        exclude_run_logs(directory)
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        return directory, f"回归日志 git 排除登记失败({type(exc).__name__}: {exc}); 日志在 {directory}, 勿提交"
+    return directory, ""
+
+
+def _process_identity(pid: int) -> dict[str, Any]:
+    """进行中记录的进程身份: pid + 主机 + 进程启动时刻指纹(唯一实现 loop_run_record.process_fingerprint; 探活同读 process_alive)。"""
+    import socket
+
+    from tools.aipos_cli.clock import iso_z
+    from tools.aipos_cli.loop_run_record import LoopRunRecordError, process_fingerprint
+
+    out: dict[str, Any] = {"async_pid": int(pid), "host": socket.gethostname(), "started_at": iso_z()}
+    try:
+        out["process_fingerprint"] = process_fingerprint(int(pid))
+    except LoopRunRecordError as exc:  # 指纹读不出(无权限 / /proc 形不合): 记下原因, 判活时按「不在」处理(宁报未完成, 不报在跑)
+        out.update(process_fingerprint=None, fingerprint_error=str(exc)[:240])
+    return out
+
+
+def _spawn_async(*, governance_root: Path, repo_root: Path, task_id: str, actor: str, merge_commit: str, policy: dict[str, Any],
+                 trigger: str = "finalize") -> dict[str, Any]:
     """拉起独立会话后台子进程跑同一 execute_check(本模块 run-async 入口), 立即返回。包根 = 本模块所在目录的实路径(不经
     .deploy/current 符号链接)。子进程是新进程, 从包根一次性加载一份代码(editable 安装时即合并后的代码), 不与 finalize 进程
-    混用新旧(AIPOS-F120 导入闸管的是 finalize 本进程)。"""
+    混用新旧(AIPOS-F120 导入闸管的是 finalize 本进程)。
+    AIPOS-F166 件③: 日志落治理根运行记录旁(regression_log_dir, 不落 /tmp); 子进程起后即落「进行中」回归事件记录(合并提交 / pid / 主机 /
+    进程启动时刻指纹 / 日志), 子进程先等本进程写完进行中记录(stdin 握手: 读到 EOF 才开跑)再执行, 结论落定时覆写同一记录——不会出现
+    结论先落、进行中记录后写把结论盖掉。返回 {async_pid, async_log, event_record, notes}。"""
+    from tools.aipos_cli.clock import file_slug, iso_z
+
     package_root = Path(__file__).resolve().parents[2]
-    log_path = Path(tempfile.gettempdir()) / f"lybra-post-merge-regression-async-{merge_commit[:12]}-{os.getpid()}-{int(time.time())}.log"
+    log_dir, note = regression_log_dir(governance_root, task_id)
+    log_path = log_dir / f"{EVENT_TYPE}_{merge_commit[:12]}_{file_slug('compact', iso_z())}_{os.getpid()}.log"
+    record_id = new_event_record_id(governance_root, task_id)
     cmd = [sys.executable, "-m", "tools.aipos_cli.post_merge_regression", "run-async",
            "--governance-root", str(governance_root), "--repo-root", str(repo_root), "--task-id", task_id, "--actor", actor,
            "--merge-commit", merge_commit, "--runall-path", str(policy["runall_path"]),
            "--timeout-seconds", str(policy["timeout_seconds"]), "--mode", str(policy["mode"]),
-           "--policy-source", str(policy["policy_source"])]
+           "--policy-source", str(policy["policy_source"]), "--event-record-id", record_id, "--async-log", str(log_path),
+           "--trigger", trigger]
     env = {**os.environ, "PYTHONPATH": str(package_root)}
     with open(log_path, "w", encoding="utf-8") as log:
-        proc = _popen_group(cmd, cwd=package_root, env=env, stdout=log)
+        proc = _popen_group(cmd, cwd=package_root, env=env, stdout=log, stdin=subprocess.PIPE)
     ASYNC_CHILDREN.append(proc)
-    return {"async_pid": proc.pid, "async_log": str(log_path)}
+    running = {"task_id": task_id, "mode": policy["mode"], "execution": "async", "timeout_seconds": policy["timeout_seconds"],
+               "policy_source": policy["policy_source"], "runall_path": policy["runall_path"], "merge_commit": merge_commit,
+               "status": "running", "action": "none", "trigger": trigger, "async_log": str(log_path), **_process_identity(proc.pid)}
+    running["summary"] = summary_line(running)
+    try:
+        event_path = write_event_record(governance_root, task_id, actor, running, record_id=record_id)
+    finally:
+        try:
+            proc.stdin.close()  # 握手: 子进程读到 EOF 才开跑(进行中记录已落 / 写失败也放行, 结论照落同一 id)
+        except OSError as exc:  # 子进程已退出(管道断): 无可放行, 出声进 notes
+            note = f"{note}; " if note else ""
+            note += f"后台子进程握手管道已断({exc})"
+    return {"async_pid": proc.pid, "async_log": str(log_path), "event_record": event_path, "notes": [note] if note else []}
 
 
 def check_after_merge(*, governance_root: Path, repo_root: Path, task_id: str, actor: str, merge_commit: str,
@@ -428,6 +492,8 @@ def check_after_merge(*, governance_root: Path, repo_root: Path, task_id: str, a
     """finalize 合并后入口(merge --no-ff 之后、push/deploy 之前)。返回记录形 dict, 含 status / action / summary。
 
     action: none(通过/关闭/跳过/异步已拉起) | warned(mode=warn 且 新增失败/超时/出错) | blocked(mode=block 且同上; 调用方撤销合并)。"""
+    from tools.schema_loader import SchemaLoadError
+
     result: dict[str, Any] = {
         "task_id": task_id,
         "mode": policy["mode"],
@@ -443,11 +509,25 @@ def check_after_merge(*, governance_root: Path, repo_root: Path, task_id: str, a
     elif policy["mode"] == "off":
         result.update(status="off")
     elif policy["execution"] == "async":
-        result.update(status="async_started", **_spawn_async(governance_root=governance_root, repo_root=repo_root, task_id=task_id,
-                                                            actor=actor, merge_commit=merge_commit, policy=policy))
+        try:
+            spawned = _spawn_async(governance_root=governance_root, repo_root=repo_root, task_id=task_id, actor=actor,
+                                   merge_commit=merge_commit, policy=policy)
+        except (OSError, ValueError, RuntimeError, SchemaLoadError) as exc:  # AIPOS-F166 件③: 日志落点 / 拉起 / 进行中记录不可得 = 检查未完成(不当作通过, 按 warn 出声)
+            result.update(status="error", error=f"异步回归未能拉起({type(exc).__name__}: {exc})", action="warned")
+        else:
+            notes = spawned.pop("notes")
+            result.update(status="async_started", **spawned)
+            if notes:
+                result["notes"] = notes
     else:
+        try:
+            log_dir, note = regression_log_dir(governance_root, task_id)
+        except (OSError, ValueError, SchemaLoadError) as exc:
+            log_dir, note = None, f"回归日志落点不可得({type(exc).__name__}: {exc}), 日志落系统临时目录"
         result.update(execute_check(governance_root=governance_root, repo_root=repo_root, merge_commit=merge_commit,
-                                    runall_path=policy["runall_path"], timeout_seconds=policy["timeout_seconds"]))
+                                    runall_path=policy["runall_path"], timeout_seconds=policy["timeout_seconds"], log_dir=log_dir))
+        if note:
+            result.setdefault("notes", []).append(note)
         if result["status"] in ACTIONABLE_STATUSES:
             result["action"] = "blocked" if policy["mode"] == "block" else "warned"
         _loop_timeout_note(result, policy["loop_step_timeout_seconds"])
@@ -477,37 +557,276 @@ def undo_merge(repo_root: Path, merge_commit: str, pre_merge_commit: str) -> tup
     return True, f"main 已复位到合并前 {pre_merge_commit[:12]}(撤销合并提交 {merge_commit[:12]}; 卡分支保留)"
 
 
-def _run_async_main(args: argparse.Namespace) -> int:
-    """async 后台子进程: 跑 execute_check → 写回归事件记录。写不了 = 出声(日志)且非 0 退出, 不吞。"""
-    result: dict[str, Any] = {
-        "task_id": args.task_id, "mode": args.mode, "execution": "async", "timeout_seconds": args.timeout_seconds,
-        "policy_source": args.policy_source, "runall_path": args.runall_path, "merge_commit": args.merge_commit,
-    }
-    result.update(execute_check(governance_root=Path(args.governance_root), repo_root=Path(args.repo_root),
-                                merge_commit=args.merge_commit, runall_path=args.runall_path, timeout_seconds=args.timeout_seconds))
-    result["action"] = "recorded"
-    result["summary"] = summary_line(result)
-    print(result["summary"], flush=True)
+def record_conclusion(governance_root: Path, task_id: str, actor: str, result: dict[str, Any], record_id: str | None
+                      ) -> tuple[int, list[str]]:
+    """结论落回归事件记录(record_id 给出 = 覆写同一份进行中记录)+ 补落账(governance_commit.reland_after_write, N6 同一提交口)。
+    async 后台与 `lybra regression run --confirm` 前台同一实现。返回 (退出码 0/1, 输出行)。写不了 / 补落账失败 = 出声 + 1, 不吞。"""
+    lines: list[str] = []
     try:
-        path = write_event_record(Path(args.governance_root), args.task_id, args.actor, result)
-    except (OSError, ValueError) as exc:
-        print(f"[post_merge_regression] 回归事件记录写入失败: {exc}", file=sys.stderr, flush=True)
-        return 1
-    print(f"[post_merge_regression] 回归事件记录: {path}", flush=True)
-    # AIPOS-F147 件①(gap #104): 异步记录写完后补一次落账——复用 N6 同一提交口(governance_commit.reland_after_write);
+        path = write_event_record(Path(governance_root), task_id, actor, result, record_id=record_id)
+    except (OSError, ValueError, RuntimeError) as exc:
+        return 1, [f"[post_merge_regression] 回归事件记录写入失败: {exc}"]
+    lines.append(f"[post_merge_regression] 回归事件记录: {path}")
+    # AIPOS-F147 件①(gap #104): 记录写完后补一次落账——复用 N6 同一提交口(governance_commit.reland_after_write);
     # 卡未结案 = 由其 N6 带上。补落账失败 = 出声 + 非 0 退出(记录在本卡落账判据范围内, lint/loop 会再点名, 不丢)
     from tools.aipos_cli.governance_commit import reland_after_write
 
     try:
-        reland = reland_after_write(Path(args.governance_root), args.task_id, args.actor, what="合并后回归事件记录")
+        reland = reland_after_write(Path(governance_root), task_id, actor, what="合并后回归事件记录")
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
-        print(f"[post_merge_regression] 补落账失败({type(exc).__name__}: {exc}); 记录在本卡落账范围内, 由 N6 / state lint 再点名",
-              file=sys.stderr, flush=True)
-        return 1
-    print(f"[post_merge_regression] {reland['line']}", flush=True)
+        lines.append(f"[post_merge_regression] 补落账失败({type(exc).__name__}: {exc}); 记录在本卡落账范围内, 由 N6 / state lint 再点名")
+        return 1, lines
+    lines.append(f"[post_merge_regression] {reland['line']}")
     from tools.schema_constants import Verdict
 
-    return 0 if reland["verdict"] in (None, Verdict.PASS) else 1
+    return (0 if reland["verdict"] in (None, Verdict.PASS) else 1), lines
+
+
+def _run_async_main(args: argparse.Namespace) -> int:
+    """async 后台子进程: 跑 execute_check → 写回归事件记录。写不了 = 出声(日志)且非 0 退出, 不吞。
+    AIPOS-F166 件③: --event-record-id 给出 = 结论覆写拉起方已落的同一份进行中记录(进程身份 / 日志落点保留); 测试清单日志落同一目录。"""
+    log = str(getattr(args, "async_log", None) or "")
+    result: dict[str, Any] = {
+        "task_id": args.task_id, "mode": args.mode, "execution": "async", "timeout_seconds": args.timeout_seconds,
+        "policy_source": args.policy_source, "runall_path": args.runall_path, "merge_commit": args.merge_commit,
+    }
+    if getattr(args, "trigger", None):
+        result["trigger"] = args.trigger
+    if log:
+        result.update({**_process_identity(os.getpid()), "async_log": log})
+    result.update(execute_check(governance_root=Path(args.governance_root), repo_root=Path(args.repo_root),
+                                merge_commit=args.merge_commit, runall_path=args.runall_path, timeout_seconds=args.timeout_seconds,
+                                log_dir=Path(log).parent if log else None))
+    result["action"] = "recorded"
+    result["summary"] = summary_line(result)
+    print(result["summary"], flush=True)
+    rc, lines = record_conclusion(Path(args.governance_root), args.task_id, args.actor, result, getattr(args, "event_record_id", None))
+    for i, line in enumerate(lines):
+        print(line, file=sys.stderr if rc and i == len(lines) - 1 else sys.stdout, flush=True)
+    return rc
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F166 件③(gap #153): 合并后回归状态(唯一判定)+ 补跑 `lybra regression run --sha <提交>`(预演缺省, --confirm 执行)。
+# 声明 = verbs.schema lybra_regression_run(states / rerun_hint / exit_codes); 记录格式 = F149 同一(post_merge_regression 字段)。
+# ---------------------------------------------------------------------------
+
+REGRESSION_VERB = "lybra_regression_run"
+#: 有结论的状态(检查跑完了, 无论通过与否); 其中 COMPLETE 的结论完整可作基线, 不再补跑。
+CONCLUSION_STATUSES = ("pass", "new_failures", "timeout", "error")
+COMPLETE_STATUSES = ("pass", "new_failures")
+_STATE_KEYS = ("running", "incomplete", "concluded", "unprobeable", "none")
+
+
+def regression_declaration() -> dict[str, Any]:
+    """verbs.schema lybra_regression_run(states / rerun_hint / exit_codes)。缺 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    decl = (load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get(REGRESSION_VERB)
+    if (not isinstance(decl, dict) or not isinstance(decl.get("states"), dict) or set(decl["states"]) != set(_STATE_KEYS)
+            or not isinstance(decl.get("rerun_hint"), str) or not isinstance(decl.get("exit_codes"), dict)):
+        raise SchemaLoadError(f"verbs.schema.json verbs.{REGRESSION_VERB}(states {list(_STATE_KEYS)} / rerun_hint / exit_codes)未声明齐")
+    return decl
+
+
+def rerun_command(governance_root: Path, sha: str) -> str:
+    """补跑命令(预演形; 执行加 --confirm --actor <实例>)的唯一渲染(声明 rerun_hint)。"""
+    return str(regression_declaration()["rerun_hint"]).format(sha=sha, governance_root=governance_root)
+
+
+def _record_task(path: Path, pmr: dict[str, Any]) -> str:
+    return str(pmr.get("task_id") or path.parent.name)
+
+
+def regression_states(governance_root: Path, *, task_id: str | None = None, sha: str | None = None,
+                      local_host: str | None = None) -> list[dict[str, Any]]:
+    """合并后回归状态(唯一判定; loop status / brief / next / regression run 同读): 按合并提交归并 finalization 记录与回归事件记录
+    (_recorded_regressions, 与基线查找同一扫描), 每个提交一条 {merge_commit, task_id, state, status, detail, record, pid, host, log, rerun}。
+    state(声明 lybra_regression_run.states): concluded(任一记录有结论)/ running(进行中记录的进程在)/ unprobeable(进行中记录写于他机)/
+    incomplete(进行中 / 已拉起而无结论, 进程已不在)。进程判活 = loop_run_record.process_alive(pid + 启动时刻指纹); F166 前的
+    finalization 记录 async_started 无指纹无主机 = 仅按 pid 判(注明)。只读。"""
+    import socket
+
+    from tools.aipos_cli.loop_run_record import LEGACY_FINGERPRINT_NOTE, LoopRunRecordError, process_alive, process_fingerprint
+
+    root = Path(governance_root)
+    local_host = local_host or socket.gethostname()
+    records, _unreadable = _recorded_regressions(root)
+    by_commit: dict[str, list[tuple[Path, dict[str, Any]]]] = {}
+    for path, pmr in records:
+        commit = str(pmr.get("merge_commit") or "")
+        if not commit or (sha and commit != sha) or (task_id and _record_task(path, pmr) != task_id):
+            continue
+        by_commit.setdefault(commit, []).append((path, pmr))
+    out: list[dict[str, Any]] = []
+    for commit, items in by_commit.items():
+        task = _record_task(*items[0])
+        entry: dict[str, Any] = {"merge_commit": commit, "task_id": task, "rerun": rerun_command(root, commit)}
+        concluded = next(((p, r) for p, r in items if r.get("status") in CONCLUSION_STATUSES), None)
+        if concluded is not None:
+            path, pmr = concluded
+            entry.update(state="concluded", status=pmr.get("status"), record=_record_ref(root, path),
+                         complete=bool(pmr.get("merged_complete")) and pmr.get("status") in COMPLETE_STATUSES,
+                         detail=str(pmr.get("summary") or summary_line(pmr)))
+            out.append(entry)
+            continue
+        running = next(((p, r) for p, r in items if r.get("status") == "running"), None)
+        started = next(((p, r) for p, r in items if r.get("status") == "async_started"), None)
+        if running is None and started is None:
+            continue  # 只有 off / skipped 等无检查的记录: 不归本判定管
+        path, pmr = running or started
+        pid = pmr.get("async_pid")
+        log = pmr.get("async_log") or pmr.get("log_dir")
+        entry.update(record=_record_ref(root, path), pid=pid, log=log, host=pmr.get("host"))
+        probe_error = ""
+        try:
+            if running is not None:
+                alive, how = process_alive(pid, pmr.get("process_fingerprint")), "pid + 进程启动时刻指纹"
+            else:  # F166 前的 finalization 记录: 无指纹无主机, 仅按 pid(pid 被复用会误判为在跑, 如实注明)
+                alive, how = isinstance(pid, int) and process_fingerprint(pid) is not None, f"{LEGACY_FINGERPRINT_NOTE}(F166 前记录无进程指纹)"
+        except LoopRunRecordError as exc:
+            alive, how, probe_error = False, "", str(exc)
+        if running is not None and str(pmr.get("host") or "") != local_host:
+            entry.update(state="unprobeable", detail=f"进行中记录写于主机 {pmr.get('host')}, 本机 {local_host} 无从探活: 在治理根所在机执行")
+        elif probe_error:
+            entry.update(state="unprobeable", detail=f"pid {pid} 探活失败({probe_error}), 判不出是否仍在跑")
+        else:
+            what = "进行中记录" if running is not None else "finalization 记录 async_started"
+            if alive:
+                entry.update(state="running", detail=f"{what}: pid {pid} 仍在(判活: {how}); 日志 {log}")
+            else:
+                entry.update(state="incomplete",
+                             detail=(f"合并后回归未完成: {what}(pid {pid}, 日志 {log})无结论且进程已不在(判活: {how}; "
+                                     "机器重启 / 进程被杀)"))
+        out.append(entry)
+    return out
+
+
+def unfinished_regressions(governance_root: Path, *, task_id: str | None = None) -> list[dict[str, Any]]:
+    """合并后回归未完成(state=incomplete)的提交; 每条另带 line(loop status / brief / next 同一行文案)。"""
+    rows = [e for e in regression_states(governance_root, task_id=task_id) if e["state"] == "incomplete"]
+    for row in rows:
+        row["line"] = (f"合并后回归未完成: {row['task_id']} 合并提交 {row['merge_commit'][:12]} — {row['detail']}; "
+                       f"补跑: {row['rerun']}(预演; 执行加 --confirm --actor <驱动方实例>)")
+    return rows
+
+
+def _product_repo(governance_root: Path, repo_root: str | Path | None) -> Path:
+    """补跑所在产品仓: --repo-root, 缺省 = project.json repos.default / code_repo(唯一读取口 workspace_config.project_repos,
+    与 resolve_audit_sha 同一口径)。声明缺 = ValueError(含出口)。"""
+    if repo_root is not None and str(repo_root).strip():
+        return Path(repo_root).expanduser().resolve()
+    from tools.aipos_cli.workspace_config import project_repos
+
+    repos = project_repos(governance_root)
+    declared = repos["items"].get(repos["default"]) if repos["declared"] else repos["code_repo"]
+    if declared is None:
+        raise ValueError(f"治理根 {governance_root} 的 project.json 未声明产品仓(repos / code_repo); 出口: 给 --repo-root <产品仓> 或完整 40 位 --sha")
+    return Path(declared)
+
+
+def rerun(governance_root: Path, sha: str, *, repo_root: str | Path | None = None, task_id: str | None = None,
+          actor: str | None = None, confirm: bool = False, background: bool = False) -> dict[str, Any]:
+    """`lybra regression run`(AIPOS-F166 件③): 预演(缺省, 只读)/ --confirm 前台补跑 / --confirm --background 后台(同 finalize async 入口)。
+    执行 = execute_check(F118 唯一实现), 结论 = 同格式回归事件记录(F149), 落账 = record_conclusion。返回 {exit_code, lines, ...}。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = regression_declaration()
+    codes = {k: int(v["code"]) for k, v in decl["exit_codes"].items()}
+    root = Path(governance_root)
+    out: dict[str, Any] = {"governance_root": str(root), "sha": sha, "dry_run": not confirm, "lines": []}
+
+    def refuse(why: str) -> dict[str, Any]:
+        out.update(exit_code=codes["refused"], refused=why)
+        out["lines"].append(f"拒: {why}")
+        return out
+
+    if background and not confirm:
+        return refuse("--background 须与 --confirm 同用(预演不起进程)")
+    try:
+        repo = _product_repo(root, repo_root)
+        commit, what = resolve_audit_sha(root, sha, repo_root)
+    except (ValueError, OSError, SchemaLoadError) as exc:
+        return refuse(str(exc))
+    out["commit"] = commit
+    states = regression_states(root, sha=commit)
+    entry = states[0] if states else {"merge_commit": commit, "state": "none", "detail": decl["states"]["none"]}
+    out["state"] = entry
+    task = task_id or entry.get("task_id")
+    out["lines"].append(f"合并后回归状态: 提交 {commit}(来源 {what}) — {entry['state']}: {entry.get('detail')}"
+                        + (f"(记录 {entry['record']})" if entry.get("record") else ""))
+    if not task:
+        return refuse(f"找不到提交 {commit[:12]} 所属卡(无该提交的 finalization / 回归记录); 出口: 加 --task-id <卡ID>")
+    out["task_id"] = task
+    if entry["state"] == "running":
+        return refuse(f"该提交的回归仍在跑(pid {entry.get('pid')}), 不重复补跑; 看结论: lybra regression baseline --sha {commit}")
+    if entry["state"] == "unprobeable":
+        return refuse(f"{entry['detail']}(本机判不出是否仍在跑, 不补跑)")
+    if entry["state"] == "concluded" and entry.get("complete"):
+        return refuse(f"已有完整结论 {entry.get('status')}(记录 {entry.get('record')}), 不重跑; 基线: lybra regression baseline --sha {commit}")
+    try:
+        policy = resolve_policy(root, repo)
+    except (ValueError, SchemaLoadError) as exc:
+        return refuse(f"测试约定声明不可用: {exc}")
+    if not policy["runall_path"]:
+        return refuse(f"项目未声明 test_contract.runall_path(来源 {policy['runall_source']}), 无清单可跑")
+    from tools.aipos_cli.loop_run_record import loop_runs_dir
+
+    try:
+        log_dir = loop_runs_dir(root, task)  # 预演只算落点, 不建目录(零写入)
+    except (OSError, ValueError, SchemaLoadError) as exc:
+        return refuse(f"日志落点不可得: {exc}")
+    plan = (f"补跑: 在产品仓 {repo} 的 {commit[:12]} 上跑 {policy['runall_path']}(总时限 {policy['timeout_seconds']}s, 合并前基线优先取记录), "
+            f"结论落 records/events/{task}/{EVENT_TYPE}_*.md(同格式回归事件记录), 日志落 {log_dir}/")
+    out["lines"].append(plan)
+    if not confirm:
+        out["lines"].append(f"预演(未执行、未写任何文件)。执行: 原命令加 --confirm --actor <驱动方实例>(前台; 加 --background = 后台)")
+        out["exit_code"] = codes["ok"]
+        return out
+    if not str(actor or "").strip():
+        return refuse("--confirm 须给 --actor <驱动方实例>(事件记录与补落账的执行身份)")
+    if background:
+        try:
+            spawned = _spawn_async(governance_root=root, repo_root=repo, task_id=task, actor=str(actor), merge_commit=commit,
+                                   policy=policy, trigger="rerun")
+        except (OSError, ValueError, RuntimeError, SchemaLoadError) as exc:
+            out.update(exit_code=codes["failed"])
+            out["lines"].append(f"后台补跑未能拉起({type(exc).__name__}: {exc})")
+            return out
+        out.update(exit_code=codes["ok"], spawned=spawned)
+        out["lines"].append(f"{MARKER} 后台补跑已拉起(pid {spawned['async_pid']}, 日志 {spawned['async_log']}); "
+                            f"进行中记录 {spawned['event_record']}, 结论落定时同一记录更新")
+        out["lines"] += [f"  ↳ 提示: {n}" for n in spawned["notes"]]
+        return out
+    try:
+        record_id = new_event_record_id(root, task)
+        log_dir, note = regression_log_dir(root, task)
+    except (OSError, ValueError, SchemaLoadError) as exc:
+        out.update(exit_code=codes["failed"])
+        out["lines"].append(f"日志落点 / 记录名不可得({type(exc).__name__}: {exc}), 未开跑")
+        return out
+    base = {"task_id": task, "mode": policy["mode"], "execution": "sync", "timeout_seconds": policy["timeout_seconds"],
+            "policy_source": policy["policy_source"], "runall_path": policy["runall_path"], "merge_commit": commit, "trigger": "rerun"}
+    running = {**base, "status": "running", "action": "none", **_process_identity(os.getpid()), "log_dir": str(log_dir)}
+    running["summary"] = summary_line(running)
+    try:
+        started = write_event_record(root, task, str(actor), running, record_id=record_id)
+    except (OSError, ValueError, RuntimeError) as exc:
+        out.update(exit_code=codes["failed"])
+        out["lines"].append(f"进行中记录写不进({exc}), 未开跑")
+        return out
+    out["lines"].append(f"进行中记录: {started}")
+    result = {**running, **execute_check(governance_root=root, repo_root=repo, merge_commit=commit, runall_path=policy["runall_path"],
+                                         timeout_seconds=policy["timeout_seconds"], log_dir=log_dir)}
+    if note:
+        result.setdefault("notes", []).append(note)
+    result["action"] = "recorded"
+    result["summary"] = summary_line(result)
+    out["lines"].append(result["summary"])
+    rc, lines = record_conclusion(root, task, str(actor), result, record_id)
+    out["lines"] += lines
+    out.update(exit_code=codes["ok"] if rc == 0 else codes["failed"], result=result)
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -517,7 +836,13 @@ def main(argv: list[str] | None = None) -> int:
     for flag in ("--governance-root", "--repo-root", "--task-id", "--actor", "--merge-commit", "--runall-path", "--mode", "--policy-source"):
         run_async.add_argument(flag, required=True)
     run_async.add_argument("--timeout-seconds", type=int, required=True)
+    # AIPOS-F166 件③: 进行中记录 id(拉起方已落)/ 日志落点 / 触发方(finalize | rerun); 给了 id = 先等 stdin EOF(握手)再开跑
+    run_async.add_argument("--event-record-id", default=None)
+    run_async.add_argument("--async-log", default=None)
+    run_async.add_argument("--trigger", default=None)
     args = parser.parse_args(argv)
+    if args.event_record_id:
+        sys.stdin.read()  # 拉起方写完进行中记录即关管道(EOF); 拉起方退出同样 EOF
     return _run_async_main(args)
 
 

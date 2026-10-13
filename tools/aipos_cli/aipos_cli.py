@@ -2656,6 +2656,8 @@ def build_parser() -> argparse.ArgumentParser:
     loop_parser.add_argument("--no-launch", action="store_true", default=False,
                              help="AIPOS-F95: 不拉起 harness 进程(即使信封授权), 手工模式: 等待提示「请在 <工位目录> 的 <harness> 会话敲 /go」")
     loop_parser.add_argument("--json", action="store_true", help="Output JSON")
+    loop_parser.add_argument("--continues-run", dest="continues_run", default=None,
+                             help="AIPOS-F166 件①: 续等关联(loop 在等待步遇部署更新 re-exec 到新快照时自填上一运行 run_id); 人工启动不给")
     loop_actions = loop_parser.add_subparsers(dest="loop_action")
     from tools.aipos_cli.verb_contract import declared_exit_codes as _declared_exit_codes  # AIPOS-F136: help 出口读声明, 不写死
     _loop_status_help = (
@@ -2802,6 +2804,19 @@ def build_parser() -> argparse.ArgumentParser:
     regression_baseline_parser.add_argument("--sha", help="要查的提交(完整 40 位原样用; 短 sha/引用在产品仓解析); 缺省 = 产品仓基线分支当前 HEAD")
     regression_baseline_parser.add_argument("--repo-root", help="解析 sha 用的产品仓; 缺省 = project.json repos.default / code_repo")
     regression_baseline_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-F166 件③(gap #153): lybra regression run — 合并后回归状态与补跑(预演缺省, --confirm 执行; 声明 verbs.schema lybra_regression_run)
+    regression_run_parser = regression_subparsers.add_parser(
+        "run",
+        help="AIPOS-F166: 合并后回归补跑。缺省预演(只读: 该提交的回归状态 + 将跑什么、结论落哪); --confirm 前台执行(先落进行中记录, "
+        "跑完同一记录更新为结论, F149 同格式); --confirm --background = 与 finalize async 同一后台入口。仍在跑 / 已有完整结论 = 拒",
+    )
+    regression_run_parser.add_argument("--sha", required=True, help="合并提交(完整 40 位原样; 短 sha/引用在产品仓解析)")
+    regression_run_parser.add_argument("--repo-root", help="产品仓; 缺省 = project.json repos.default / code_repo")
+    regression_run_parser.add_argument("--task-id", help="结论记到哪张卡; 缺省 = 该提交的回归 / finalization 记录所属卡")
+    regression_run_parser.add_argument("--actor", help="--confirm 时必给: 记录与补落账的执行身份(驱动方实例)")
+    regression_run_parser.add_argument("--confirm", action="store_true", help="执行(缺省只预演, 不写任何文件)")
+    regression_run_parser.add_argument("--background", action="store_true", help="与 --confirm 同用: 后台执行, 立即返回 pid / 日志 / 进行中记录")
+    regression_run_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     # AIPOS-R7A2 靶②: governance-commit (顾问收口一条命令)
     governance_commit_parser = subparsers.add_parser("governance-commit", help="AIPOS-R7A2: N6 收账提交(校验四件→commit→push)")
@@ -4469,11 +4484,27 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "regression":
         # AIPOS-F149 件③: 只读薄壳——治理根经唯一薄壳 _find_repo_root_for_args, sha 解析与判据在 post_merge_regression(唯一实现)
-        if getattr(args, "regression_command", None) != "baseline":
+        if getattr(args, "regression_command", None) not in ("baseline", "run"):
             parser.parse_args([args.command, "--help"])
             return 2
         from tools.aipos_cli import post_merge_regression as pmr_mod
         from tools.schema_loader import SchemaLoadError
+
+        if args.regression_command == "run":
+            # AIPOS-F166 件③: 薄壳——状态判定 / 补跑 / 记录 / 落账全在 post_merge_regression.rerun(唯一实现), 退出码读声明
+            try:
+                governance_root = Path(_find_repo_root_for_args(args))
+                outcome = pmr_mod.rerun(governance_root, args.sha, repo_root=args.repo_root, task_id=args.task_id, actor=args.actor,
+                                        confirm=bool(args.confirm), background=bool(args.background))
+            except (FileNotFoundError, SchemaLoadError) as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+            if args.json:
+                print(render_json(outcome))
+            else:
+                stream = sys.stderr if outcome.get("refused") else sys.stdout
+                print("\n".join(outcome["lines"]), file=stream)
+            return int(outcome["exit_code"])
 
         try:
             governance_root = _find_repo_root_for_args(args)
@@ -6045,6 +6076,12 @@ def main(argv: list[str] | None = None) -> int:
                             print(f"✗ {exec_result.get('message', 'Failed')}", file=sys.stderr)
                     return 0 if exec_result.get("ok") else 1
                 else:
+                    # AIPOS-F166 件③: 本卡合并后回归未完成 = 一并报出(唯一判定 post_merge_regression.unfinished_regressions)
+                    from tools.aipos_cli.post_merge_regression import unfinished_regressions
+
+                    unfinished = unfinished_regressions(Path(ws_root), task_id=args.task_id)
+                    if unfinished:
+                        result["post_merge_regression_unfinished"] = unfinished
                     print(format_output(result, json_mode=json_mode))
                     return 0 if result.get("derivable") else 1
             else:
@@ -6060,6 +6097,11 @@ def main(argv: list[str] | None = None) -> int:
                 view = scan_project_view(ws_root, lane=lane, include_frozen=bool(getattr(args, "include_frozen", False)),
                                          viewer=_owner_viewer_for_args(Path(ws_root), args, lane))  # AIPOS-F156 件②
                 print(format_scan_output(view["rows"], json_mode=json_mode, lane=lane, view=view))
+                if not json_mode:  # AIPOS-F166 件③: 全项目合并后回归未完成(JSON 形 = 行列表, 不改形)
+                    from tools.aipos_cli.post_merge_regression import unfinished_regressions
+
+                    for row in unfinished_regressions(Path(ws_root)):
+                        print(row["line"])
                 return 0
         except Exception as exc:
             print(f"Error in lybra next: {exc}", file=sys.stderr)

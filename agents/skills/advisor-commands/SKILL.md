@@ -174,9 +174,11 @@ lybra loop status --workspace-root <治理根> --json                          #
 例行清单只在 verbs.schema `lybra_loop_status.next_action.routine_rejections` 一处声明, 目前:
 - 门拒码 `BRANCH_WRONG_BASE`(交回时基线已前进)/ `MERGE_CONFLICT`(finalize 合入冲突): 派本卡执行体在卡工作树合入最新基线、解冲突、重测、更新交回 frontmatter, 然后末行命令续跑(走既有重审出口);
 - 门拒码 `REPO_MERGE_IN_PROGRESS`(同仓另一张卡正在合入): 不改卡, 等持锁卡合完后末行命令重跑;
-- 结束原因 `deploy_changed`(他卡部署了新版本): 末行命令重跑, 从断点续做(本 loop 自己 finalize 的部署不再触发它);
+- 结束原因 `deploy_changed`(他卡部署了新版本, 且发生在执行步之间): 末行命令重跑, 从断点续做(本 loop 自己 finalize 的部署不再触发它)。**手工等待步**(等执行体交回)中他卡部署 = loop 自己换新快照从同一等待步续等(AIPOS-F166, 运行记录旧运行 `deploy_reexec` / 新运行 `continues_run`), 不停、不用重跑; 结束原因 `deploy_reexec` 只在新进程没接上时才是最近一次运行, 同样末行命令重跑;
 - 结束原因 `wait_timeout` 且本卡执行方式 = 顾问派子 agent(project.json `execution`, 或等待目标是子 agent 执行者接入; AIPOS-F156 / F157): 不找 Owner、不敲 `/go`——子 agent 仍在做就等它写完交回后末行命令重跑(可加大 `--max-wait`), 已终止或未派就按开工材料补派; pi 工位 / 手工工位的 `wait_timeout` 仍是 `owner_needed`。
 同卡同一例行原因连续到声明次数仍被拒 = 产品自动升 `owner_needed`, 不必自己计数。
+**信封用尽 / 过期**(AIPOS-F166): 结束原因 `envelope_exhausted` / `envelope_expired` = `owner_needed(envelope_renew)`, detail 给当前用量 / 上限 / 到期, hint = 续签命令(`lybra envelope mint --confirm`, policy_id = 该驱动方同前缀已有最大序号 +1, 范围照抄用尽的信封)——原样转给 Owner 亲自敲, 签好用原命令续跑。剩余 ≤10% 或 ≤3 次、或 ≤24h 到期时 `loop status` / `brief` 先出一行「信封预警」(阈值声明 verbs.schema `lybra_loop.envelope.renew.warn`), 趁早请 Owner 续签。
+**合并后回归未完成**(AIPOS-F166): 异步回归进程没跑完就没了(机器重启 / 被杀), `loop status` / `brief` / `next` 出一行「合并后回归未完成 … 补跑: `lybra regression run --sha <提交> --workspace-root <治理根>`」: 先原样跑一次(预演, 只读), 再加 `--confirm --actor <驱动方实例>` 补跑(前台; `--background` 后台), 结论落同格式回归事件记录, `lybra regression baseline --sha` 即可复用。仍在跑 / 已有完整结论 = 产品拒。
 **等待中的开工提示**(`continue_wait(manual_kickoff)`): 子 agent 模式 = 「顾问按开工材料派本卡子 agent 执行并写交回」(`lybra my-tasks --actor <执行体实例> --task-id <卡ID>` 给工作树 / 报告落点 / 卡路径), 照做, 不转述给 Owner; 只有 pi / 手工工位才是「请在 <工位> 敲 /go」。
 **取下一张归属**(`card_done_take_next`, AIPOS-F156): 末行命令只给归属本驱动方实例的下一张(门侧发布记录签发实例 = `draft publish --actor`); 共用仓里其他顾问实例的卡不取。
 **禁止**:tail/grep 原始运行日志自判; until/sleep 轮询(等待只用 `--wait`)。
@@ -328,7 +330,7 @@ lybra envelope revoke --policy-id <信封ID> \
 ```
 
 #### `lybra envelope renew`
-**何时用**:续额/延期已有信封。⚠ 尚未产品化(同 revoke, AIPOS-F92 未做项); 续额暂以新 `--policy-id` 再签一张(`lybra envelope mint --confirm`)。
+**何时用**:续额/延期已有信封。⚠ 尚未产品化(同 revoke, AIPOS-F92 未做项); 续额暂以新 `--policy-id` 再签一张(`lybra envelope mint --confirm`)——loop 因信封用尽 / 过期停下时, `lybra loop status` 的 hint 即按用尽信封渲染好的这条命令(AIPOS-F166)。
 ```bash
 lybra envelope renew --policy-id <信封ID> \
   --add-tasks 30 --new-expiry 2026-10-01T00:00:00Z \

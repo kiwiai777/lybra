@@ -234,7 +234,8 @@
       "artifact ingest",
       "workspace roots",
       "migrate record-type",
-      "migrate decision-log-pointers"
+      "migrate decision-log-pointers",
+      "regression run"
     ],
     "announce_commands": [
       "next",
@@ -1979,6 +1980,15 @@
         "description": "AIPOS-F152 件①(gap #127: F148 长驻 loop 启动于 F147 部署前, 部署后读到新格式声明而内存是旧代码 → 崩): loop 启动时记下本进程运行的部署快照提交(运行代码根 = <部署目录>/releases/<名> 时取其 VERSION git_commit; 判定唯一实现 tools/aipos_cli/deploy_runtime.DeployGuard, VERSION 解析唯一口 gate_drift.read_version_commit), 每步推导前比对 <部署目录>/current 的提交; 变了(含 current 不在 / 不可读)= 以 end_reason deploy_changed、exit_codes.deploy_changed 干净结束, 运行记录 deploy 段写明 from / to 提交, 结束原文第一行即「部署已更新 … 用原命令重跑 loop 从断点续做」。手工模式等待(未拉起 harness)期间也每轮比对(经唯一等待原语 agent_watch_fs.run_fs_watch 的 deploy_guard), 部署一变即醒来结束; 拉起 harness 的等待期间不打断(打断 = 终止进程组, 执行体白干), 等待结束后的下一步前照常比对。非部署快照运行(卡工作树测试 / python -m / lybra --dev-tree 开发开关)= 不适用, 运行记录 deploy.deploy_check=not_applicable 如实标明。同一判定也用于 `lybra agent watch`(lybra_agent_watch.exit_codes.deploy_changed)与 `lybra loop status --wait`(lybra_loop_status.exit_codes.deploy_changed)。",
         "end_reason": "deploy_changed",
         "run_record_field": "deploy",
+        "wait_reexec": {
+          "description": "AIPOS-F166 件①(gap #151: 10-12 loop 在等待步等执行体交回时, 他卡合入部署让它以 deploy_changed 停下, 顾问一天逐个重跑 5 次——等待步无副作用, 停下纯属摩擦): 手工模式等待步(经唯一等待原语 run_fs_watch 的 deploy_guard)检测到部署更新 = 不结束 loop, 运行记录记一行后 re-exec 到新部署快照、从同一等待步续等。机制 = F152 DeployGuard 判定(check / current_snapshot 唯一实现) + F143 子进程新代码机制(workstation_wiring.lybra_cli_invocation: 同一解释器 sys.executable + 代码树根前置 PYTHONPATH, 零 PATH 依赖; 代码树根 = 新快照, 不再是本进程旧快照), 以 os.execve 替换本进程(同一 pid; cwd 切到新快照根, 防 python -m 的 sys.path[0]=cwd 遮蔽快照代码)。续等参数 = 原 loop 参数(治理根/驱动方/信封/--max-wait/--interval/--no-launch/--connection-json 原样, --json/--verbose 由 CLI 层带上), --max-steps = 原上限减已用轮数(被打断的等待步计一轮: 部署连环更新也有界; 余 0 = 不续等, 照 deploy_changed 停), 另带 --continues-run <本运行 run_id>。运行记录: 本运行以 end_reason deploy_reexec 结束(outcome continued, exit_code null; reexec 段写新快照名/提交/时间, deploy 段照写 changed_to), 新运行记录 continues_run = 上一 run_id(明确关联); 已落的步不重复(新进程推导核按已落记录续推, 回到同一等待步)。只在等待步生效: 执行步之间(每步推导前比对)检测到部署更新仍按 deploy_changed 停下; 拉起 harness 的等待期仍不打断(F152 原规则)。re-exec 不可行(新快照不可用 / 余步为 0 / exec 失败)= 退回 deploy_changed 停下, 结束原文附原因。调用方: 只 `lybra loop` CLI(loop_driver.run_loop_cli 注入 exec_into_snapshot); run_loop 被进程内调用(靶场)而未注入续等口 = 原 deploy_changed 行为。",
+          "end_reason": "deploy_reexec",
+          "parameter": "continues_run",
+          "run_record_fields": [
+            "reexec",
+            "continues_run"
+          ]
+        },
         "self_deploy": "AIPOS-F155 件③(gap #136): 本 loop 自己执行的 finalize(--deploy)成功后, 以本卡 finalization 记录的合入提交(merge_commit)让 DeployGuard 采纳该部署为比对基线(唯一实现 deploy_runtime.DeployGuard.adopt_own_deploy, 调用 loop_driver._adopt_own_deploy): 部署链接 current 恰指向该提交 = 本 loop 引起的部署, 不 deploy_changed, 继续 close / N6; current 不是该提交(未部署 / 部署失败 / 期间他人部署)= 基线不动, 下一步照常比对, 非本 loop 引起的变化仍 deploy_changed。运行记录 deploy 段另写 self_deployed_to / self_deployed_at(deploy.commit 仍 = 本进程运行快照)。代码版本说明(风险如实): 采纳后收尾仍跑启动时的旧快照——推导核与 N6 落账在本进程内执行(AIPOS-F94), close 的派生子进程按 AIPOS-F143 workstation_wiring.lybra_cli_invocation 与本 loop 同一代码树(旧快照, 部署保留最近多份快照且不删 previous), 不是现部署; 门服务(MCP)由部署重启为新代码, close 薄壳(旧) ↔ 门(新)的兼容性与任何旧客户端相同。即本卡新合入的改动对本次收尾不生效, 到下一次 loop 运行才生效; 收尾三步(close / N6 落账 / 运行记录终态)只读写本卡已落记录, 与推进本卡至合入的代码同版本。"
       },
       "single_implementation": {
@@ -2039,6 +2049,10 @@
             "default": false,
             "description": "AIPOS-F142 件②: 另输出门侧信封判定诊断行([ENVELOPE_TRACE], stderr); 缺省不打印(开关声明 envelope_trace)"
           },
+          "continues_run": {
+            "type": "string",
+            "description": "AIPOS-F166 件①: 续等关联——等待步遇部署更新 re-exec 到新快照时由 loop 自填上一运行的 run_id(见 deploy_consistency.wait_reexec), 新运行记录落 continues_run; 人工启动 loop 不给"
+          },
           "json": {
             "type": "boolean",
             "description": "JSON 输出"
@@ -2093,6 +2107,25 @@
         "launch_harnesses": "AIPOS-F95 件②(b): 信封字段 launch_harnesses(harness 值列表, 取值 ⊆ enums.schema harness 中 launch 非 null 者; 缺省 [] = 不授权拉起, 只手工 /go)。`lybra envelope mint --launch-harness <harness>`(可重复)经 --confirm 由 Owner 签, 门 owner_decision_record 同一路径落盘。loop 判授权 = autonomy_policy.envelope_authorizes_launch(同一信封族唯一实现, 禁第二实现)。",
         "boundary_template": "This artifact records a bounded, revocable Owner pre-authorization (PreAuthorized envelope). Within its time bound, count bound and task_selector it authorizes the covered driver (`lybra loop`, one-stage gate release) to run only these verbs: {allowed_verbs} (declared in verbs.schema lybra_loop.envelope.allowed_verbs). Harness launch authorized: {launch_harnesses} (the loop may start a declared enums.schema harness.launch template once per card at the enrolled local workstation; otherwise the workstation starts work by hand with /go). It does not authorize publish, credential access, or any verb outside this list. Reaching the time or count bound, or status revoked/expired, drops matching actions back to Supervised (per-task owner_confirm).",
         "boundary_template_note": "AIPOS-F95 件②(c): 信封正文 Boundary 由本模板渲染(autonomy_policy.build_autonomy_policy_markdown 唯一渲染), {allowed_verbs} = 本条目 allowed_verbs 实值, {launch_harnesses} = 信封 launch_harnesses 实值(空 = none (manual /go only))。存量信封正文不改写(追加式), 新铸即正确。",
+        "renew": {
+          "description": "AIPOS-F166 件②(gap #152: pol_lybra_loop_8 用尽时 F165 在 return、F164 在 verdict 被拒「无覆盖驱动方的有效 autonomy 信封」, next_action 报泛化 owner_needed(gate_rejected), 申领出口建议已用过的 pol_lybra_loop_1, 用尽前无预警): 信封用尽 / 过期的专门出口与预警。用量真相只读门侧既有判据(autonomy_policy.envelope_usage = load_policy + count_preauthorized_claims, 与门 match_claim_envelope 的 count_bound / 时间窗同一计数, 不另计数)。识别: loop 账务步被拒且拒因属信封(步退出码 = exit_codes.no_envelope, 或拒因原文含 transitions envelope_guards 的 ENVELOPE_* 码), 或 loop 启动时显式 --envelope 的信封不匹配——再读该信封用量真相: 过期 = end_reason envelope_expired, 额度用尽 = envelope_exhausted(过期优先, 与门判定次序同), outcome no_envelope(exit_codes.no_envelope); 其余照旧(gate_rejected / no_envelope)。运行记录落 envelope_state(用量/上限/到期/续签命令)。续签命令 = `lybra envelope mint --confirm` 申领出口(唯一渲染 autonomy_policy.render_mint_command, loop_driver.mint_hint 同用), 范围照抄用尽的信封(agent_or_role / max_tasks / task_mode / lane_repo / launch_harnesses), policy_id = 该驱动方同前缀信封已有最大序号 +1(autonomy_policy.next_policy_id; 与已有文件撞名则顺延), 到期 = 现在 + renew_days。lybra loop status 下一动作 owner_needed(envelope_renew)(映射 lybra_loop_status.next_action.by_end_reason / envelope_renew)。预警: lybra loop status(运行所用信封)与 lybra brief(全部有效信封)在剩余 ≤ warn.remaining_ratio × 上限、或剩余 ≤ warn.remaining_count 次、或距到期 ≤ warn.expiry_hours 小时时各出一行(autonomy_policy.envelope_warning 唯一判定)。",
+          "end_reasons": {
+            "exhausted": "envelope_exhausted",
+            "expired": "envelope_expired"
+          },
+          "renew_days": 7,
+          "warn": {
+            "remaining_ratio": 0.1,
+            "remaining_count": 3,
+            "expiry_hours": 24
+          },
+          "messages": {
+            "exhausted": "信封 {policy_id} 额度已用尽(已用 {used}/{max_tasks} 次, 到期 {expires_at}): {what}",
+            "expired": "信封 {policy_id} 已过期(到期 {expires_at}; 已用 {used}/{max_tasks} 次): {what}",
+            "renew": "请 Owner 续签(新信封 {next_policy_id} = 该驱动方同前缀已有最大序号 +1, 范围照抄 {policy_id}; Owner 亲自敲):\n  {command}",
+            "warn": "信封预警: {policy_id} {why}; 续签: {command}"
+          }
+        },
         "task_selector_lane_repo": "AIPOS-F134 件③: 信封字段 task_selector_lane_repo(缺省 \"\"/键缺 = 不限 lane, 存量信封行为不变)——值 = 本项目 project.json repos.items 的仓名(无清单时 = code_repo 路径), `lybra envelope mint --lane-repo <仓名>` 经 --confirm 由 Owner 签, 门 owner_decision_writer._normalize_autonomy_policy 按 workspace_config.resolve_card_repo 校验可解析(不可解析 = BLOCK)。判定对象 = subject_rule 所指卡的 lane.repo 经 resolve_card_repo 解析出的仓(autonomy_policy.card_lane_refs: 路径 / 卡面原值 / 指向同一路径的仓名), 判定只在 match_claim_envelope 谓词 lane_repo 与原因链(不匹配 = transitions envelope_guards.selector_lane_repo_mismatch)。用途: 同一项目多顾问实例各管一个 lane(如 OTA 顾问只推 OTA 仓的卡)。AIPOS-F139: 值为仓集合——`--lane-repo` 可重复(一个子项目跨多个仓; 共用仓可同时列入多个顾问的信封), 新铸信封 frontmatter 落列表, 存量单值信封按单元素集合读(文件逐字节不变); 集合内每个名都须可解析, 任一不可解析 = BLOCK(逐个点名); 卡 lane 指称命中集合任一即匹配, 不匹配原因链列出整个集合。集合序列化/解析唯一 workspace_config.repo_name_set(见 lane_view.repo_set)。"
       },
       "launch": {
@@ -2207,8 +2240,13 @@
           "crashed": "loop 内部异常退出(exit_code 记 1; 异常类型进 end_message)",
           "card_owner_mismatch": "AIPOS-F156 件②: 卡归属(门侧发布记录签发实例)≠ 驱动方, 且驱动方本次信封限 lane(非总顾问), 启动即拒、未推进任何步(exit_codes.not_derivable)",
           "charter_sync_failed": "AIPOS-F164 件②: 拉起 pi 前工位章程不新鲜(未渲染 / 指纹过期 / 缺失 / 核不了), 自动 sync 该工位失败(或 sync 后复核仍不新鲜), 未拉起(exit_codes.not_derivable; 修法 = 结束原文的 lybra sync 命令)",
-          "charter_not_fresh": "AIPOS-F164 件②: 拉起 pi 前工位章程不新鲜, 项目声明关闭自动 sync(project.json charter_auto_sync=false, 或该键不合), 未拉起(exit_codes.not_derivable; 修法 = 结束原文的 lybra sync 命令)"
+          "charter_not_fresh": "AIPOS-F164 件②: 拉起 pi 前工位章程不新鲜, 项目声明关闭自动 sync(project.json charter_auto_sync=false, 或该键不合), 未拉起(exit_codes.not_derivable; 修法 = 结束原文的 lybra sync 命令)",
+          "deploy_reexec": "AIPOS-F166 件①: 手工等待步中部署已更新, 本运行已 re-exec 到新部署快照续等(同一进程号; outcome continued, exit_code null; 新运行记录 continues_run = 本 run_id, 见 deploy_consistency.wait_reexec)",
+          "envelope_exhausted": "AIPOS-F166 件②: 信封额度用尽(门侧用量真相 已用 ≥ max_tasks), 账务步被拒或启动校验不过(exit_codes.no_envelope; 续签命令见运行记录 envelope_state, envelope.renew)",
+          "envelope_expired": "AIPOS-F166 件②: 信封已过期(现在 ≥ expires_at), 账务步被拒或启动校验不过(exit_codes.no_envelope; 续签命令见运行记录 envelope_state, envelope.renew)"
         },
+        "reexec": "AIPOS-F166 件①: 以 deploy_reexec 结束的运行另落 reexec 段 {to_release, to_commit, at, pid}(新快照与本进程号), 新运行记录落 continues_run = 上一 run_id(lybra loop status 两行分别标明)。无续等的运行不出现这两个键(存量记录形不变)。",
+        "envelope_state": "AIPOS-F166 件②: 以 envelope_exhausted / envelope_expired 结束的运行另落 envelope_state {policy_id, state, used, max_tasks, remaining, expires_at, next_policy_id, renew_command, note}(结束时刻的门侧用量真相, autonomy_policy.envelope_usage); lybra loop status 下一动作 owner_needed(envelope_renew) 的 detail/hint 读此段。其余结束原因不落。",
         "end_codes": {
           "description": "AIPOS-F150 件①(gap #128): loop 以 end_reasons 所列结束原因结束时, 运行记录另落 end_codes = 门拒原文(loop 结果全文 message, 非仅首行 end_message)里出现的既有门拒错误码列表(按出现顺序去重)。只抽取不造码: 码 = 门侧 blocking_reasons / error_code 既有写法(`<码>: 原因` 或 error_code=<码>), 抽取式样即 patterns(每条含命名组 code); 抽不出 = 空列表(下一动作照旧 owner_needed)。其余结束原因不落(null)。唯一实现 tools/aipos_cli/loop_run_record.extract_end_codes(LoopRunRecorder.end 调用); 旧记录无此键 = 视同空列表(行为不变)。AIPOS-F155 件①(gap #133): 门拒原文三种已知格式同一抽取——列表(`lybra_queue_return BLOCKED: [\"BRANCH_WRONG_BASE: …\"]` / ['…'])、单条(`<码>: 原因` / error_code=<码>)、finalize 结果段(`Verdict: BLOCK` 下一行 `error_code: <码>`, 码 = finalize 结果 category: 仓级合入锁 REPO_MERGE_IN_PROGRESS / 合并冲突 MERGE_CONFLICT 等); finalize 此前不出码 = 抽不出(F151/F152 实撞 end_codes 为空)。",
           "end_reasons": ["gate_rejected", "landing_rejected"],
@@ -2235,6 +2273,78 @@
         "token 永不上屏",
         "禁直调 board_adapter/queue_mutation 做门动作"
       ]
+    },
+    "lybra_regression_run": {
+      "description": "AIPOS-F166 件③(gap #153: dev 10-13 夜间重启, F165 合并后的异步回归进程与 /tmp 日志一起丢了, 无事件记录, 产品不知道回归没跑完, 也无补跑命令): `lybra regression run --sha <提交> [--workspace-root <治理根>] [--repo-root <产品仓>] [--task-id <卡>] [--actor <实例>] [--confirm [--background]] [--json]` —— 合并后回归的状态与补跑。缺省 = 预演(只读, 不写任何文件、不起进程): 该提交的回归状态(states)+ 将在哪个产品仓跑哪份测试清单、时限多少、结论落哪份事件记录; --confirm = 前台同步执行(先落「进行中」回归事件记录, 跑完更新同一记录为结论); --confirm --background = 与 finalize async 同一后台入口(post_merge_regression run-async, 启动即落进行中记录)。执行 = F118 合并后回归唯一实现 execute_check(合并结果上跑测试清单、与第一父失败集合比对, 基线优先取记录); 结论 = F149 同一记录格式(records/events/<卡>/post_merge_regression_*.md 的 post_merge_regression 字段, merged_complete=true 即可作下次合并基线与审计 main 侧基线 `lybra regression baseline`)。卡 = 该提交的 finalization / 回归记录所属卡(找不到 = 须 --task-id)。日志落治理根运行记录旁(<loop_runs_root>/<卡ID>/post_merge_regression_<提交前 12 位>_<时刻>.log, 经 git_exclude 不入库), 不落 /tmp。拒: 提交解析不出 / 卡找不到 / 项目未声明 test_contract.runall_path / 该提交回归仍在跑(进程在) / 已有完整结论(pass / new_failures, 不重跑)。记录写完后补落账(governance_commit.reland_after_write, 与 async 后台同一口)。",
+      "phase": "driver",
+      "surface": [
+        "cli"
+      ],
+      "cli_command": "lybra regression run",
+      "single_implementation": "tools/aipos_cli/post_merge_regression.regression_state(状态判定唯一实现; loop status / brief / next 同读)/ rerun(补跑; 执行 execute_check, 记录 write_event_record, 后台 _spawn_async)",
+      "states": {
+        "running": "进行中: 事件记录 status=running 且其进程在(本机 pid + 进程启动时刻指纹, loop_run_record.process_alive)",
+        "incomplete": "合并后回归未完成: 有回归进行中/已拉起的记录(事件记录 status=running 或 finalization 记录 status=async_started)而无结论, 且进程已不在(机器重启 / 被杀)——loop status / brief / next 报此状态并给补跑命令",
+        "concluded": "已有结论: 事件记录或 finalization 记录 status ∈ pass / new_failures / timeout / error(timeout / error 的结论不完整, 可补跑)",
+        "unprobeable": "进行中记录写于别的主机, 本机无从探活: 在治理根所在机执行",
+        "none": "该提交无任何合并后回归记录(非 finalize 合并产生, 或回归关闭/跳过)"
+      },
+      "rerun_hint": "lybra regression run --sha {sha} --workspace-root {governance_root}",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sha": {
+            "type": "string",
+            "description": "合并提交(完整 40 位原样; 短 sha / 引用在产品仓解析, 唯一实现 post_merge_regression.resolve_audit_sha)"
+          },
+          "workspace_root": {
+            "type": "string",
+            "description": "治理根; 缺省自发现(governance_root_resolution)"
+          },
+          "repo_root": {
+            "type": "string",
+            "description": "产品仓; 缺省 = project.json repos.default / code_repo"
+          },
+          "task_id": {
+            "type": "string",
+            "description": "结论记到哪张卡; 缺省 = 该提交的回归 / finalization 记录所属卡"
+          },
+          "actor": {
+            "type": "string",
+            "description": "记录与补落账的执行身份(驱动方 / 顾问实例); --confirm 时必给(预演不需要, 预演不读任何凭据)"
+          },
+          "confirm": {
+            "type": "boolean",
+            "description": "执行(缺省只预演)"
+          },
+          "background": {
+            "type": "boolean",
+            "description": "与 --confirm 同用: 后台执行(与 finalize async 同一入口), 立即返回 pid / 日志 / 进行中记录"
+          },
+          "json": {
+            "type": "boolean",
+            "description": "JSON 输出"
+          }
+        },
+        "required": [
+          "sha"
+        ],
+        "additionalProperties": false
+      },
+      "exit_codes": {
+        "ok": {
+          "code": 0,
+          "meaning": "预演已输出 / 补跑已落结论记录(结论本身可为 new_failures 等, 见输出) / 后台已拉起"
+        },
+        "failed": {
+          "code": 1,
+          "meaning": "补跑执行或记录写入失败(原文出声)"
+        },
+        "refused": {
+          "code": 2,
+          "meaning": "拒: 提交解析不出 / 卡找不到 / 未声明 runall_path / 回归仍在跑 / 已有完整结论 / --confirm 未给 --actor / --background 未配 --confirm"
+        }
+      }
     },
     "lybra_loop_status": {
       "description": "AIPOS-F131 件②: `lybra loop status [--task-id <ID>] [--workspace-root <治理根>] [--json]` —— 读 loop 运行记录(lybra_loop.run_record)+ 本机探活(pid 存在且进程启动时刻指纹一致, AIPOS-F137)+ 判停滞, 输出: 运行中/已结束、当前步与等待对象、拉起进程存活与否/已运行时长/距最近输出多久/最近活动类别与时间、停滞判定(states)、结束原因, 以及记录与日志路径。--task-id 给出 = 该卡最近一次运行(含已结束); 缺省 = 本项目全部未结束的运行。只读, 不写任何文件、不起任何进程、不发信号; 输出不含凭据与会话正文(记录本身不落)。跨机: 在治理根所在机执行(经 ssh 亦可); 记录主机 ≠ 本机 = unprobeable。判据唯一实现 tools/aipos_cli/loop_run_record.judge_run, 禁调用方 tail/grep 原始日志自判。AIPOS-F136 件①: 输出增「顾问下一动作」(next_action 段, 唯一判定 loop_run_record.next_action); `--wait <秒>` 有界等待到可行动或到时(wait 段), 退出码按下一动作。AIPOS-F150: 门拒运行的结构化拒因码(lybra_loop.run_record.end_codes)全部属例行清单(next_action.routine_rejections)= 下一动作 advisor_fix, 人读输出与 --json 均含其修法原文(hint)与拒因码(codes)。",
@@ -2301,7 +2411,10 @@
           "crashed": "investigate",
           "card_owner_mismatch": "owner_needed",
           "charter_sync_failed": "advisor_fix",
-          "charter_not_fresh": "advisor_fix"
+          "charter_not_fresh": "advisor_fix",
+          "deploy_reexec": "advisor_fix",
+          "envelope_exhausted": "owner_needed",
+          "envelope_expired": "owner_needed"
         },
         "by_execution_mode": {
           "description": "AIPOS-F156 件①(gap #139): 按本卡执行方式分流的覆盖表(唯一声明, 与 by_end_reason 同节; 判定唯一实现 loop_run_record.next_action)。执行方式 = 运行最后一次等待的卡即本卡(执行体等待; 等审计 / 外部 FINALIZE / 同仓先合入卡的等待不适用)时, 经 workspace_config.card_execution_mode(只读 F143 执行方式声明唯一读取口 workspace_config.project_execution)判出; AIPOS-F157 件③(gap #125): 等待目标实例为无工位的子 agent 执行者(enrollment.instance_enrollment governance_root_mode, 与 lybra_loop.launch.manual_hint.subagent 同一判定 loop_driver.wait_instance_is_subagent)= subagent(未声明 execution 亦然, 等交回超时不再出工位 /go 口径); 未声明 execution 且非子 agent 执行者 / 判不出 = 不覆盖(行为不变)。modes 键 ⊆ config.schema project_json.execution.default_mode 值域。by_end_reason = 该执行方式下覆盖 by_end_reason 的结束原因映射(判为 advisor_fix 的须在 routine_rejections.end_reasons 有修法, 连续计数与其他例行结束原因同一实现); kickoff_detail = 手工等待(reason=manual_kickoff)时顾问下一动作 detail 的前缀(占位 {hint} = 运行记录里的开工提示)。pi 执行工位 / 手工工位(card_execution_mode = pi 或未声明)= 原口径(owner_needed / 向 Owner 说开工提示)。",
@@ -2324,7 +2437,10 @@
           "consecutive_failures": "连败: 本卡最近连续多次运行都异常结束, 不再自动续跑, 请 Owner 定是否改卡 / 换执行体 / 仲裁",
           "routine_fix_exhausted": "例行门拒修了仍连败: 本卡连续多次被同一例行拒因码拒(固定修法对本卡不灵, 或多条 lane 交替抢合入), 不再自处理, 请 Owner 定是否改卡 / 排合入顺序 / 仲裁",
           "card_owner_mismatch": "卡归属不符(AIPOS-F156): 本卡由另一实例发布(门侧发布记录签发实例), 驱动方的信封限 lane(非总顾问)不得跑走别人的卡; 请 Owner 定由归属实例推进, 或改由不限 lane 的总顾问推进",
-          "runtime_evidence_exhausted": "审计补做连败(AIPOS-F162): 审计报告 PASS 类裁决缺卡面要求的独立运行证据, loop 已让审计体按拒因补做到声明上限仍不合格(审计体跑不了声明命令 / 不按格式填 / 只核执行体原件); 请 Owner 定换审计体 / 改卡面运行证据声明 / 仲裁"
+          "runtime_evidence_exhausted": "审计补做连败(AIPOS-F162): 审计报告 PASS 类裁决缺卡面要求的独立运行证据, loop 已让审计体按拒因补做到声明上限仍不合格(审计体跑不了声明命令 / 不按格式填 / 只核执行体原件); 请 Owner 定换审计体 / 改卡面运行证据声明 / 仲裁",
+          "envelope_exhausted": "授权: 信封额度已用尽(AIPOS-F166), 请 Owner 按 hint 的续签命令签新信封, 签好用原命令续跑 loop",
+          "envelope_expired": "授权: 信封已过期(AIPOS-F166), 请 Owner 按 hint 的续签命令签新信封, 签好用原命令续跑 loop",
+          "envelope_renew": "信封续签(AIPOS-F166 件②): 结束原因 envelope_exhausted / envelope_expired 的下一动作事由——detail = 当前用量 / 上限 / 到期, hint = 续签命令(policy_id 按该驱动方已有最大序号 +1)"
         },
         "routine_rejections": {
           "description": "AIPOS-F150 件②(gap #128): 例行门拒清单与各码固定修法(唯一声明, 只追加; 判定唯一实现 loop_run_record.next_action)。by_end_reason 判为 owner_needed 的运行, 其 end_codes(lybra_loop.run_record.end_codes, 门拒原文里的既有错误码)非空且全部在 codes 内 = advisor_fix: hint = 各码 fix 逐条按序渲染(占位见 placeholders) + resume_hint; 任一码不在 codes / end_codes 为空 / 旧记录无 end_codes = owner_needed 照旧。防死循环: 本卡最近连续各次运行(含本次, 旧→新取尾段)的 end_codes 都含同一例行码且次数 ≥ repeat_owner_needed = owner_needed(routine_fix_exhausted)。码只取门侧既有错误码, 不另造; 未入清单的门拒码(RETURN_STALE / INGEST_TIP_MISMATCH / TEST_NOT_IN_RUNALL 等)的评估与理由见 AIPOS-F150 交回报告。AIPOS-F152 件①: end_reasons = 结束原因本身即例行的清单(只追加; 键须为 lybra_loop.run_record.end_reasons 已声明者, 且 by_end_reason 判为 advisor_fix 的结束原因必须在此有 fix)——by_end_reason 判为 advisor_fix 的运行 = 该结束原因 fix 逐条渲染 + resume_hint(占位只许 task_id / governance_root / actor_arg / envelope_arg, 值与 codes 修法同一实现); 本卡最近连续各次运行(含本次)以同一结束原因结束且次数 ≥ repeat_owner_needed = owner_needed(routine_fix_exhausted)。首项 deploy_changed(部署已更新, 用原命令重跑从断点续做)。",
@@ -2401,8 +2517,23 @@
                 "复核: lybra project check-workstation <项目名> --instance <工位实例> --harness pi 的「章程新鲜度」项 ✓",
                 "顾问用原命令重跑 loop(本修法末行命令)"
               ]
+            },
+            "deploy_reexec": {
+              "why_routine": "AIPOS-F166 件①: 等待步遇部署更新, loop 已 re-exec 到新快照续等——正常情况下新运行记录(continues_run)接续, 本记录不是最近一次; 本记录仍是最近一次 = 新进程没接上(启动即崩 / 被杀), 修法固定 = 用原命令重跑, 不涉设计判断",
+              "fix": [
+                "不改卡、不碰产品仓、不问 Owner: 上次 loop 在等待步遇部署更新已 re-exec 到新快照续等, 但未见接续的新运行记录(新进程没起来)",
+                "顾问用原命令重跑 loop(本修法末行命令): 新进程从现部署快照加载, 推导核按已落记录从断点续做, 已落的步不重复"
+              ]
             }
           }
+        },
+        "envelope_renew": {
+          "description": "AIPOS-F166 件②: 信封用尽 / 过期的下一动作映射(唯一声明; 判定唯一实现 loop_run_record.next_action): end_reasons 所列结束原因 = by_end_reason 判 owner_needed, 下一动作 reason 改为 reason(envelope_renew), detail = owner_reasons[结束原因] + 运行记录 envelope_state 的用量/上限/到期, hint = envelope_state.renew_command(无 envelope_state 的记录 = investigate_hint)。",
+          "reason": "envelope_renew",
+          "end_reasons": [
+            "envelope_exhausted",
+            "envelope_expired"
+          ]
         },
         "consecutive_failures_owner_needed": 2,
         "take_next_hint": "lybra loop --task-id {next_task_id} --workspace-root {governance_root}",

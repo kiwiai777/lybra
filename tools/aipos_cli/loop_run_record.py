@@ -114,6 +114,23 @@ def loop_runs_dir(governance_root: Path, task_id: str) -> Path:
     return loop_runs_root(governance_root) / task_id
 
 
+def exclude_run_logs(directory: Path) -> None:
+    """AIPOS-F147 件①(唯一实现): 运行记录旁的日志不入库——<loop_runs_root>/<卡ID>/*.log 经既有唯一实现 git_exclude.register_git_exclude
+    登记进治理仓 .git/info/exclude(本地, 不提交; 一条文件模式 /<loop_runs_root 仓相对>/*/*.log, 幂等; 只排 .log, 运行记录 .md 照常落账)。
+    directory = 某卡的运行记录目录。治理根不在 git 仓 = 跳过。AIPOS-F166 件③: 合并后回归日志同落此目录(post_merge_regression.regression_log_dir),
+    同一条排除规则。登记失败 = OSError / ValueError / SubprocessError 原样抛(调用方出声)。"""
+    from tools.aipos_cli.git_exclude import register_git_exclude
+
+    proc = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=str(directory), capture_output=True, text=True, timeout=10)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return  # 不在 git 仓: 无可排
+    top = Path(proc.stdout.strip())
+    rel = Path(directory).parent.resolve().relative_to(top.resolve()).as_posix()
+    report = register_git_exclude(top, [f"/{rel}/*/*.log" if rel != "." else "/*/*.log"])
+    if not report.get("ok"):
+        raise OSError(str(report.get("error") or "register_git_exclude 未成功"))
+
+
 # ---------------------------------------------------------------------------
 # 探活(本机): pid 存在且进程启动时刻指纹与记录时一致(防 pid 复用)。
 # AIPOS-F137(gap #118): 原以命令行(/proc/<pid>/cmdline)sha1 作指纹——pi(node)启动后改写进程标题(argv 覆写)致命令行变,
@@ -275,6 +292,7 @@ class LoopRunRecorder:
         self._warned: set[str] = set()
         self._active: dict[str, Any] | None = None
         self._harness: Any = None
+        self._sealed = False  # AIPOS-F166 件①: 已以 deploy_reexec 封存(本进程即将被新快照替换), 之后的 end() 不再改写
         try:
             header = render_frontmatter_block({"record_type": str(self.decl["log_record_type"]), "run_id": self.run_id,
                                                "task_id": task_id, "run_record": self.path.name},
@@ -288,20 +306,9 @@ class LoopRunRecorder:
         self._exclude_logs()
 
     def _exclude_logs(self) -> None:
-        """AIPOS-F147 件①: 日志不入库——运行日志(<loop_runs_root>/<卡ID>/*.log)经既有唯一实现 git_exclude.register_git_exclude
-        登记进治理仓 .git/info/exclude(本地, 不提交; 一条文件模式 /<loop_runs_root 仓相对>/*/*.log, 幂等; 只排 .log, 运行记录 .md 照常落账)。
-        治理根不在 git 仓 = 跳过; 登记失败不中断 loop, 出声一次(_failed)。"""
-        from tools.aipos_cli.git_exclude import register_git_exclude
-
+        """AIPOS-F147 件①: 日志不入库(唯一实现 exclude_run_logs)。登记失败不中断 loop, 出声一次(_failed)。"""
         try:
-            proc = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=str(self.dir), capture_output=True, text=True, timeout=10)
-            if proc.returncode != 0 or not proc.stdout.strip():
-                return  # 不在 git 仓: 无可排
-            top = Path(proc.stdout.strip())
-            rel = self.dir.parent.resolve().relative_to(top.resolve()).as_posix()
-            report = register_git_exclude(top, [f"/{rel}/*/*.log" if rel != "." else "/*/*.log"])
-            if not report.get("ok"):
-                raise OSError(str(report.get("error") or "register_git_exclude 未成功"))
+            exclude_run_logs(self.dir)
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             self._failed("日志排除登记", exc)
 
@@ -373,6 +380,44 @@ class LoopRunRecorder:
             self._write()
         except (OSError, ValueError) as exc:
             self._failed("", exc)
+
+    # -- AIPOS-F166: 续等关联 / 信封用尽真相 --
+    def set_continues(self, run_id: str) -> None:
+        """件①: 本运行由上一运行在等待步遇部署更新 re-exec 而来(continues_run = 上一 run_id, 明确关联)。"""
+        self.meta["continues_run"] = str(run_id)
+        self._dirty = True
+        self.flush(force=True)
+
+    def set_envelope_state(self, state: dict[str, Any]) -> None:
+        """件②: 信封用尽 / 过期时的门侧用量真相与续签命令(verbs.schema lybra_loop.run_record.envelope_state)。"""
+        self.meta["envelope_state"] = {k: state.get(k) for k in ("policy_id", "state", "used", "max_tasks", "remaining", "expires_at",
+                                                                  "next_policy_id", "renew_command", "note")}
+        self._dirty = True
+        self.flush(force=True)
+
+    def reexec(self, change: dict[str, Any], *, target: Path) -> None:
+        """件①: 等待步遇部署更新 → 本运行以 deploy_reexec 结束(outcome continued, exit_code null; reexec 段写新快照/提交/进程号), 封存
+        (进程即被新快照替换, 同一 pid 的新运行记录以 continues_run 关联本 run_id)。结束原因名读声明 deploy_consistency.wait_reexec。"""
+        from tools.aipos_cli.loop_driver import load_loop_contract
+
+        reason = str(((load_loop_contract().get("deploy_consistency") or {}).get("wait_reexec") or {}).get("end_reason") or "")
+        if reason not in self.decl["end_reasons"]:
+            raise LoopRunRecordError(f"续等结束原因 {reason!r} 未在 verbs.schema lybra_loop.run_record.end_reasons 声明")
+        self.deploy_changed(change)
+        self.meta.update({"status": "ended", "ended_at": iso_z(), "outcome": "continued", "exit_code": None, "end_reason": reason,
+                          "end_message": f"等待中部署已更新, 已 re-exec 到新部署快照 {Path(target).name} 从同一等待步续等",
+                          "end_codes": None, "current_step": None,
+                          "reexec": {"to_release": Path(target).name, "to_commit": change.get("to"), "at": iso_z(), "pid": os.getpid()}})
+        self.log(f"[end] outcome=continued reason={reason} → {Path(target).name}(re-exec, pid {os.getpid()})")
+        self.flush(force=True)
+        self._sealed = True
+
+    def reexec_failed(self, why: str) -> None:
+        """件①: re-exec 没替换成进程 → 解封(调用方随后按 deploy_changed 写终态), reexec 段记失败原因。"""
+        self._sealed = False
+        self.meta["status"] = "running"
+        self.meta.setdefault("reexec", {})["failed"] = str(why)[:240]
+        self._dirty = True
 
     # -- 步骤 --
     def set_envelope(self, envelope: str) -> None:
@@ -502,6 +547,8 @@ class LoopRunRecorder:
     def end(self, *, outcome: str, exit_code: int, reason: str, message: str, steps: list[Any] | None = None) -> None:
         from tools.aipos_cli.harness_launch import redact_progress
 
+        if self._sealed:  # AIPOS-F166 件①: 已以 deploy_reexec 结束并交给新快照进程续等, 本记录终态不再改写
+            return
         if steps is not None:
             self.sync_steps(steps)
         declared = self.decl["end_reasons"]
@@ -572,6 +619,9 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
                                "last_activity_at": act.get("last_activity_at"), "last_activity_kind": act.get("last_activity_kind"),
                                "counts": act.get("counts"), "alive": None, "running_seconds": None, "idle_seconds": None})
     view["deploy"] = meta.get("deploy")  # AIPOS-F152 件①: 本次运行的代码与部署变化(旧记录无此键 = None)
+    for key in ("continues_run", "reexec", "envelope_state"):  # AIPOS-F166: 续等关联 / 信封用尽真相(无 = 不出现, 存量记录形不变)
+        if meta.get(key):
+            view[key] = meta[key]
     if meta.get("status") == "ended":
         view["state"] = "ended"
         return view
@@ -694,6 +744,9 @@ def _loop_status(governance_root: Path, task_id: str | None, *, now: datetime | 
         view["next_action"] = next_action(view, rules, governance_root=Path(governance_root),
                                           earlier_end_reasons=history if task_id else None,
                                           earlier_end_codes=code_history if task_id else None)
+        warning = envelope_warning_view(Path(governance_root), view, now=now)  # AIPOS-F166 件②: 运行所用信封的用量预警
+        if warning:
+            view["envelope_warning"] = warning
         views.append(view)
     view = visible_cards(Path(governance_root), ((v, None) for v in views), lane=lane, include_frozen=include_frozen or bool(task_id))
     views = view["rows"]
@@ -702,6 +755,10 @@ def _loop_status(governance_root: Path, task_id: str | None, *, now: datetime | 
               "frozen_hidden": view["frozen_hidden"], "unresolved_lane": view["unresolved_lane"], "frozen_error": view["frozen_error"]}
     if task_id:
         report["next_action"] = views[-1]["next_action"] if views else None
+    # AIPOS-F166 件③: 合并后回归未完成(唯一判定 post_merge_regression.regression_states; --task-id = 本卡, 缺省 = 全项目)
+    from tools.aipos_cli.post_merge_regression import unfinished_regressions
+
+    report["post_merge_regression_unfinished"] = unfinished_regressions(Path(governance_root), task_id=task_id)
     return report
 
 
@@ -711,7 +768,7 @@ def _loop_status(governance_root: Path, task_id: str | None, *, now: datetime | 
 
 NEXT_ACTIONS = ("continue_wait", "owner_needed", "card_done_take_next", "investigate", "advisor_fix")
 _NEXT_ACTION_KEYS = ("actions", "by_state", "by_end_reason", "owner_reasons", "consecutive_failures_owner_needed",
-                     "take_next_hint", "take_next_none_hint", "wait_hint", "investigate_hint", "routine_rejections")
+                     "take_next_hint", "take_next_none_hint", "wait_hint", "investigate_hint", "routine_rejections", "envelope_renew")
 _ROUTINE_KEYS = ("repeat_owner_needed", "placeholders", "resume_hint", "codes")
 
 
@@ -746,6 +803,14 @@ def next_action_declaration(run_decl: dict[str, Any], contract: dict[str, Any] |
                               f"owner_needed 缺事由 {owner_gaps + escalations}"
                               f"(须覆盖 lybra_loop.run_record.states / end_reasons)")
     _check_routine_rejections(decl["routine_rejections"])
+    # AIPOS-F166 件②: 信封续签映射——所列结束原因须已声明、by_end_reason 判 owner_needed, reason 须有事由
+    renew = decl["envelope_renew"]
+    renew_ends = renew.get("end_reasons") if isinstance(renew, dict) else None
+    if (not isinstance(renew_ends, list) or not renew_ends or set(renew_ends) - reasons
+            or any(decl["by_end_reason"].get(r) != "owner_needed" for r in renew_ends)
+            or not isinstance(renew.get("reason"), str) or renew["reason"] not in decl["owner_reasons"]):
+        raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.envelope_renew: end_reasons 须为已声明且 by_end_reason=owner_needed 的结束原因, "
+                              "reason 须在 owner_reasons")
     # AIPOS-F152 件①: by_end_reason 判为 advisor_fix 的结束原因须在 routine_rejections.end_reasons 有修法(缺 = 拒, 不猜)
     routine_reasons = decl["routine_rejections"].get("end_reasons") or {}
     if not isinstance(routine_reasons, dict) or set(routine_reasons) - reasons:
@@ -759,6 +824,24 @@ def next_action_declaration(run_decl: dict[str, Any], contract: dict[str, Any] |
             raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.by_end_reason.{reason} = advisor_fix, 但 routine_rejections.end_reasons."
                                   f"{reason}.fix 未声明为非空字符串的非空列表")
     return decl
+
+
+def envelope_warning_view(governance_root: Path, view: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any] | None:
+    """AIPOS-F166 件②: 运行所用信封的预警(判定唯一 autonomy_policy.envelope_warning; 用量真相 envelope_usage 现读门侧计数)。
+    达阈值 = {policy_id, state, why, line(声明 envelope.renew.messages.warn 渲染, 含续签命令)}; 否 / 无信封 / 信封缺 = None。"""
+    from tools.aipos_cli.autonomy_policy import envelope_renew_declaration, envelope_usage, envelope_warning, renew_plan
+
+    pid = str(view.get("envelope") or "").strip()
+    if not pid:
+        return None
+    usage = envelope_usage(governance_root, pid, now=now)
+    why = envelope_warning(usage)
+    if not why:
+        return None
+    driver = str(view.get("driver") or "").strip()
+    plan = renew_plan(governance_root, usage, identities={driver, "advisor"} - {""}, task_id=str(view.get("task_id") or ""), now=now)
+    line = envelope_renew_declaration()["messages"]["warn"].format(policy_id=pid, why=why, command=plan["renew_command"])
+    return {"policy_id": pid, "state": usage.get("state"), "why": why, "next_policy_id": plan["next_policy_id"], "line": line}
 
 
 def _check_execution_modes(decl: dict[str, Any], reasons: set[str]) -> set[str]:
@@ -889,6 +972,8 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
         if action == "advisor_fix":  # AIPOS-F152 件①: 结束原因本身属例行(routine_rejections.end_reasons, 如 deploy_changed)
             routine = _routine_end_reason_action(view, rules, governance_root, reason, message, earlier_end_reasons)
             return {**routine, "execution_mode": view["execution_mode"]} if view.get("execution_mode") else routine
+        if action == "owner_needed" and reason in (rules["envelope_renew"].get("end_reasons") or []):
+            return _envelope_renew_action(view, rules, reason, message, fill)  # AIPOS-F166 件②: 信封续签专门出口
         if action == "owner_needed":
             routine = _routine_action(view, rules, governance_root, reason, message, earlier_end_codes)
             if routine is not None:
@@ -920,6 +1005,27 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
     elif state == "loop_dead":
         detail = "loop 进程已不在而运行记录未写结束"
     return {"action": action, "reason": state, "detail": detail or state, "hint": str(rules["investigate_hint"]).format(**fill)}
+
+
+def _envelope_renew_action(view: dict[str, Any], rules: dict[str, Any], reason: str, message: str, fill: dict[str, str]) -> dict[str, Any]:
+    """AIPOS-F166 件②: envelope_exhausted / envelope_expired → owner_needed(envelope_renew): detail = 事由 + 结束时门侧用量真相(运行记录
+    envelope_state: 用量 / 上限 / 到期), hint = 续签命令(policy_id 按该驱动方已有最大序号 +1)。旧记录无 envelope_state = 事由 + 结束原文,
+    hint = investigate_hint(不猜命令)。"""
+    st = view.get("envelope_state") or {}
+    parts = [str(rules["owner_reasons"][reason])]
+    if st:
+        parts.append(f"信封 {st.get('policy_id')} 已用 {st.get('used')}/{st.get('max_tasks')} 次, 到期 {st.get('expires_at')}"
+                     f"({'额度已用尽' if st.get('state') == 'exhausted' else '已过期' if st.get('state') == 'expired' else st.get('state')})"
+                     f"; 续签新信封 {st.get('next_policy_id')}")
+        if st.get("note"):
+            parts.append(f"注: {st['note']}")
+    elif message:
+        parts.append(message)
+    out = {"action": "owner_needed", "reason": str(rules["envelope_renew"]["reason"]), "end_reason": reason, "detail": " — ".join(parts),
+           "hint": str(st.get("renew_command") or rules["investigate_hint"].format(**fill))}
+    if st:
+        out["envelope_state"] = dict(st)
+    return out
 
 
 def _routine_action(view: dict[str, Any], rules: dict[str, Any], governance_root: Path, reason: str, message: str,
@@ -1179,7 +1285,8 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
         what = f"卡 {report['task_id']} 无 loop 运行记录" if report.get("task_id") else "本项目无未结束的 loop 运行"
         if report.get("lane_filter"):
             what += f"(lane {lane_filter_label(report['lane_filter'])})"
-        return "\n".join([f"{what}(落点 {report['loop_runs_root']})", *summary])
+        unfinished = [row["line"] for row in report.get("post_merge_regression_unfinished") or []]  # AIPOS-F166 件③
+        return "\n".join([f"{what}(落点 {report['loop_runs_root']})", *unfinished, *summary])
     marker = str(lane_view_declaration()["visible_cards"]["frozen_marker"])
     out: list[str] = []
     for v in runs:
@@ -1219,6 +1326,14 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
         if dep.get("self_deployed_to"):  # AIPOS-F155 件③: 本 loop 自身 finalize 的部署(已采纳为比对基线, 不触发 deploy_changed)
             out.append(f"  部署: 本 loop finalize 自身部署 commit {dep.get('self_deployed_to')}({dep.get('self_deployed_at')}), "
                        f"已采纳为比对基线; 本进程代码仍为快照 {dep.get('release')} commit {dep.get('commit')}")
+        if v.get("continues_run"):  # AIPOS-F166 件①
+            out.append(f"  续等: 接上一运行 {v['continues_run']}(等待中部署已更新, re-exec 到本运行的部署快照, 从同一等待步续等)")
+        if v.get("reexec"):
+            rx = v["reexec"]
+            out.append(f"  续等: 已 re-exec 到新部署快照 {rx.get('to_release')}(commit {rx.get('to_commit')}, pid {rx.get('pid')} 不变), "
+                       f"后续见 continues_run={v['run_id']} 的运行记录" + (f"; re-exec 未成: {rx['failed']}" if rx.get("failed") else ""))
+        if v.get("envelope_warning"):  # AIPOS-F166 件②
+            out.append(f"  {v['envelope_warning']['line']}")
         if v.get("note"):
             out.append(f"  注: {v['note']}")
         if v.get("lane_error"):
@@ -1244,6 +1359,8 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
         out.append(f"(--wait {w['requested_seconds']:g}s: {what}, 实等 {w['waited_seconds']}s)")
     if report.get("deploy_changed"):
         out.append(f"(AIPOS-F152) {report['deploy_changed']['message']}")
+    for row in report.get("post_merge_regression_unfinished") or []:  # AIPOS-F166 件③
+        out.append(row["line"])
     if report.get("supplementary_audit"):  # AIPOS-F162 件②: 已结案卡补充审计链路(唯一渲染 audit_derivation.render_supplementary_chain)
         from tools.aipos_cli.audit_derivation import render_supplementary_chain
 

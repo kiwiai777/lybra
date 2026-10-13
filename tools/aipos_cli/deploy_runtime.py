@@ -146,6 +146,23 @@ class DeployGuard:
         return {"from": previous, "to": current, "running_release": self.running.release,
                 "deploy_current": str(self.running.deploy_dir / CURRENT_LINKNAME), "code_root": str(self.running.code_root)}
 
+    def current_snapshot(self) -> Path:
+        """AIPOS-F166 件①: 现部署 current 解析成的快照真实路径(等待步续等 re-exec 的目标代码根)。不适用 / current 不在 / 指向的不是
+        本部署目录下含产品代码的快照 = EntryError(调用方退回 deploy_changed 停下, 不猜)。"""
+        if not self.applicable:
+            raise EntryError("本进程不是从部署快照运行(工作树 / --dev-tree), 无新快照可换")
+        assert self.running.deploy_dir is not None
+        current = self.running.deploy_dir / CURRENT_LINKNAME
+        if not current.exists():
+            raise EntryError(f"{current} 不存在(部署链接被移除)")
+        root = Path(os.path.realpath(current))
+        owner = snapshot_deploy_dir(root)
+        if owner is None or Path(os.path.realpath(owner)) != Path(os.path.realpath(self.running.deploy_dir)):
+            raise EntryError(f"{current} → {root} 不是本部署目录 {self.running.deploy_dir} 下的快照")
+        if not (root / "tools" / "aipos_cli" / "deploy_runtime.py").is_file():
+            raise EntryError(f"{root} 不含 lybra 产品代码(缺 tools/aipos_cli/deploy_runtime.py)")
+        return root
+
     def check(self) -> dict[str, Any] | None:
         if not self.applicable:
             return None

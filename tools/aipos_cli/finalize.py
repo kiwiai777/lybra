@@ -402,6 +402,7 @@ _POST_MERGE_ROOTS: tuple[str, ...] = (
     "tools.aipos_cli.post_merge_regression",  # AIPOS-F118: 合并后回归(check_after_merge / undo_merge / 事件记录; 闭包含 runall_discovery)
     "tools.aipos_cli.task_loader",
     "tools.aipos_cli.workspace_config",
+    "tools.aipos_cli.git_exclude",  # AIPOS-F166 件③: 合并后回归日志落运行记录旁, 经 loop_run_record.exclude_run_logs 登记排除(懒导入本模块)
 )
 # next_resolver 合并后只用 card_branch_name / card_base_branch(纯函数), 不展开其懒导入(展开 = 整个 CLI, 且合并前已加载)
 # AIPOS-F147 件①: governance_commit 只被 post_merge_regression 的 async 后台入口(新进程, 不在 finalize 本进程)懒导入
@@ -409,8 +410,10 @@ _POST_MERGE_ROOTS: tuple[str, ...] = (
 # AIPOS-F157 件①: two_phase_shell_factory = CLI 薄壳取门凭据唯一口(load_role_token 等), confirm_client(门客户端偏好序取凭据)与
 # audit_helpers(审计裁决取凭据)懒导入它; finalize 合并后本进程只用 confirm_client 的门客户端 / audit_helpers 的裁决存在性判定,
 # 不经薄壳选凭据——预载本模块但不展开其懒导入(展开 = loop / 推导核 / 整个 CLI)
+# AIPOS-F166 件③: loop_run_record = 合并后回归的日志落点(loop_runs_dir)/ 排除登记(exclude_run_logs)/ 进程身份(process_fingerprint)唯一
+# 实现; finalize 合并后本进程只调这三个(标准库 + 已预载的 record_writer / workspace_config / git_exclude), 不展开其懒导入(展开 = loop 全链)
 _POST_MERGE_NO_DESCEND = frozenset({"tools.aipos_cli.next_resolver", "tools.aipos_cli.governance_commit",
-                                   "tools.aipos_cli.two_phase_shell_factory"})
+                                   "tools.aipos_cli.two_phase_shell_factory", "tools.aipos_cli.loop_run_record"})
 
 
 def _is_product_module(name: str) -> bool:

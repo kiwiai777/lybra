@@ -768,6 +768,188 @@ def select_envelope(
     return None, reasons
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F166 件②(gap #152): 信封用量真相(门侧既有判据, 不另计数)+ 续签出口 + 预警。
+# 声明 = verbs.schema lybra_loop.envelope.renew(结束原因名 / 续签天数 / 预警阈值 / 文案); 下一动作映射 = lybra_loop_status.next_action。
+# ---------------------------------------------------------------------------
+
+ENVELOPE_RENEW_KEYS = ("end_reasons", "renew_days", "warn", "messages")
+_POLICY_SEQ_RE = re.compile(r"^(?P<prefix>.*?)(?P<seq>\d+)$")
+
+
+def envelope_renew_declaration() -> dict[str, Any]:
+    """verbs.schema lybra_loop.envelope.renew。缺键 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = loop_envelope_declaration().get("renew")
+    if not isinstance(decl, dict) or any(k not in decl for k in ENVELOPE_RENEW_KEYS):
+        raise SchemaLoadError(f"verbs.schema.json verbs.lybra_loop.envelope.renew 未声明齐 {list(ENVELOPE_RENEW_KEYS)}")
+    ends, warn, msgs = decl["end_reasons"], decl["warn"], decl["messages"]
+    if (not isinstance(ends, dict) or set(ends) != {"exhausted", "expired"}
+            or not isinstance(warn, dict) or any(not isinstance(warn.get(k), (int, float)) or isinstance(warn.get(k), bool)
+                                                 for k in ("remaining_ratio", "remaining_count", "expiry_hours"))
+            or not isinstance(msgs, dict) or any(not isinstance(msgs.get(k), str) for k in ("exhausted", "expired", "renew", "warn"))
+            or not isinstance(decl["renew_days"], int) or decl["renew_days"] < 1):
+        raise SchemaLoadError("verbs.schema.json verbs.lybra_loop.envelope.renew 形不合(end_reasons{exhausted,expired} / warn 三阈值 / "
+                              "messages{exhausted,expired,renew,warn} / renew_days≥1)")
+    return decl
+
+
+def envelope_guard_codes() -> list[str]:
+    """transitions.schema envelope_guards.guards 声明的全部 error_code(ENVELOPE_*; 门信封拒因码唯一声明处)。缺 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    guards = (load_schema("transitions", code_repo_schema_root()).get("envelope_guards") or {}).get("guards")
+    codes = [str(g.get("error_code")) for g in (guards or {}).values() if isinstance(g, dict) and g.get("error_code")]
+    if not codes:
+        raise SchemaLoadError("transitions.schema.json envelope_guards.guards 未声明 error_code")
+    return codes
+
+
+def envelope_usage(governance_root: Path | str, policy_id: str, *, now: datetime | None = None) -> dict[str, Any]:
+    """一个信封的用量真相(唯一实现): 读门侧同一判据——信封文件 load_policy + 已放行认领计数 count_preauthorized_claims(门 match_claim_envelope
+    的 count_bound 即此计数)+ 时间窗。state: missing(信封文件缺 / 形不合)/ inactive(status≠active 或未获 Owner 批准)/ invalid(时间窗读不出)/
+    not_yet_active / expired / exhausted / active —— 次序与门判定一致(过期先于额度)。"""
+    root = Path(governance_root)
+    now = now or utc_now()
+    pid = str(policy_id or "").strip()
+    policy = load_policy(root, pid) if pid else None
+    if policy is None:
+        return {"policy_id": pid, "state": "missing", "policy": None}
+    used = count_preauthorized_claims(root, pid)
+    max_tasks = int(policy.get("max_tasks") or 0)
+    frm, exp = _parse_iso(policy.get("active_from")), _parse_iso(policy.get("expires_at"))
+    if policy.get("status") != POLICY_STATUS_ACTIVE or not policy.get("approved_by_owner"):
+        state = "inactive"
+    elif frm is None or exp is None:
+        state = "invalid"
+    elif now < frm:
+        state = "not_yet_active"
+    elif now >= exp:
+        state = "expired"
+    elif max_tasks <= 0 or used >= max_tasks:
+        state = "exhausted"
+    else:
+        state = "active"
+    return {"policy_id": pid, "state": state, "used": used, "max_tasks": max_tasks, "remaining": max(0, max_tasks - used),
+            "expires_at": policy.get("expires_at"), "seconds_to_expiry": int((exp - now).total_seconds()) if exp else None,
+            "policy": policy}
+
+
+def next_policy_id(governance_root: Path | str, *, identities: set[str] | list[str], previous: str | None = None,
+                   project: str = "") -> str:
+    """续签信封的 policy_id: 该驱动方(agent_or_role ∈ identities)同前缀信封已有最大序号 +1; 与已有文件撞名则顺延(不覆盖任何信封)。
+    前缀 = 用尽信封 id 去掉末尾序号(previous 无序号 = previous + "_"); 无 previous = pol_<项目>_loop_(既有申领出口惯例)。"""
+    root = Path(governance_root)
+    match = _POLICY_SEQ_RE.match(str(previous or "").strip()) if previous else None
+    if match and match.group("prefix"):
+        prefix = match.group("prefix")
+    elif previous:
+        prefix = f"{str(previous).strip()}_"
+    else:
+        prefix = f"pol_{str(project or '').strip() or 'project'}_loop_"
+    who = {str(i).strip() for i in identities if str(i).strip()}
+    existing = set(policy_ids(root))
+    seqs = []
+    for pid in existing:
+        hit = _POLICY_SEQ_RE.match(pid)
+        if not hit or hit.group("prefix") != prefix:
+            continue
+        policy = load_policy(root, pid)
+        if policy is not None and policy.get("agent_or_role") in who:
+            seqs.append(int(hit.group("seq")))
+    seq = max(seqs, default=0) + 1
+    while f"{prefix}{seq}" in existing:
+        seq += 1
+    return f"{prefix}{seq}"
+
+
+def render_mint_command(*, policy_id: str, agent_or_role: str, max_tasks: int, task_mode: str, expires_at: str,
+                        decision_summary: str, governance_root: Path | str | None = None,
+                        lane_repos: list[str] | None = None, launch_harnesses: list[str] | None = None) -> str:
+    """`lybra envelope mint --confirm` 申领 / 续签出口命令的唯一渲染(loop 无信封出口 loop_driver.mint_hint 与信封用尽续签同用)。
+    Owner 亲自敲(--connection-json 指向持 Owner 凭据的 connection.json, 本命令不读不显示凭据)。"""
+    import shlex
+
+    parts = [f"lybra envelope mint --confirm --policy-id {policy_id} --agent-or-role {agent_or_role}",
+             f"--max-tasks {int(max_tasks)}"]
+    if task_mode:
+        parts.append(f"--task-mode {task_mode}")
+    parts += [f"--lane-repo {shlex.quote(str(r))}" for r in (lane_repos or [])]
+    parts += [f"--launch-harness {h}" for h in (launch_harnesses or [])]
+    parts.append(f"--expires-at {expires_at} --decision-summary \"{decision_summary}\" --actor owner")
+    if governance_root:
+        parts.append(f"--workspace-root {shlex.quote(str(governance_root))}")
+    parts.append("--connection-json <Owner 凭据 connection.json>")
+    return " ".join(parts)
+
+
+def renew_plan(governance_root: Path | str, usage: dict[str, Any], *, identities: set[str] | list[str], task_id: str,
+               card_task_mode: str = "", now: datetime | None = None) -> dict[str, Any]:
+    """用尽 / 过期信封的续签计划: {next_policy_id, renew_command, note}。范围照抄该信封(agent_or_role / max_tasks / task_mode(信封无则取本卡)/
+    lane_repo / launch_harnesses); 信封另有 mint 不支持的选择器(task_selector_project / task_selector_task_ids)= note 写明, 命令不丢范围之外的东西。"""
+    from datetime import timedelta
+
+    decl = envelope_renew_declaration()
+    now = now or utc_now()
+    policy = usage.get("policy") or {}
+    pid = str(usage.get("policy_id") or "")
+    nxt = next_policy_id(governance_root, identities=identities, previous=pid or None, project=str(policy.get("task_selector_project") or ""))
+    expires = (now + timedelta(days=int(decl["renew_days"]))).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    command = render_mint_command(
+        policy_id=nxt, agent_or_role=str(policy.get("agent_or_role") or next(iter(sorted(identities)), "advisor")),
+        max_tasks=int(policy.get("max_tasks") or usage.get("max_tasks") or 1),
+        task_mode=str(policy.get("task_selector_task_mode") or card_task_mode or ""), expires_at=expires,
+        decision_summary=f"renew {pid} ({usage.get('state')}) for {task_id}", governance_root=governance_root,
+        lane_repos=list(policy.get("task_selector_lane_repo") or []), launch_harnesses=list(policy.get("launch_harnesses") or []))
+    unexpressible = [f"{k}={policy.get(k)!r}" for k in ("task_selector_project", "task_selector_task_ids") if policy.get(k)]
+    note = (f"原信封另有 {', '.join(unexpressible)}(envelope mint 无对应参数, 续签命令只照抄可表达的范围; 如需同样收窄请 Owner 另定)"
+            if unexpressible else "")
+    return {"next_policy_id": nxt, "renew_command": command, "note": note}
+
+
+def envelope_warning(usage: dict[str, Any]) -> str | None:
+    """预警判定(唯一实现, loop status / brief 同用): 有效信封(state=active)剩余 ≤ remaining_ratio × 上限、或剩余 ≤ remaining_count 次、或
+    距到期 ≤ expiry_hours 小时 = 一行原因; 用尽 / 过期 = 一行原因; 其余(缺 / 未生效 / 撤销)= None(不归预警管)。"""
+    decl = envelope_renew_declaration()
+    warn = decl["warn"]
+    state = usage.get("state")
+    if state == "exhausted":
+        return f"额度已用尽(已用 {usage.get('used')}/{usage.get('max_tasks')} 次)"
+    if state == "expired":
+        return f"已过期(到期 {usage.get('expires_at')})"
+    if state != "active":
+        return None
+    reasons: list[str] = []
+    remaining, max_tasks = int(usage.get("remaining") or 0), int(usage.get("max_tasks") or 0)
+    if remaining <= int(warn["remaining_count"]) or remaining <= float(warn["remaining_ratio"]) * max_tasks:
+        reasons.append(f"剩余 {remaining}/{max_tasks} 次(阈值: ≤{warn['remaining_count']} 次或 ≤{float(warn['remaining_ratio']):.0%})")
+    seconds = usage.get("seconds_to_expiry")
+    if isinstance(seconds, int) and seconds <= float(warn["expiry_hours"]) * 3600:
+        reasons.append(f"{usage.get('expires_at')} 到期(剩 {seconds // 3600}h{(seconds % 3600) // 60:02d}m, 阈值 ≤{warn['expiry_hours']}h)")
+    return "; ".join(reasons) or None
+
+
+def envelope_warnings(governance_root: Path | str, *, now: datetime | None = None) -> list[dict[str, Any]]:
+    """brief 用: 本项目全部有效信封(state=active)中达预警阈值者 [{policy_id, why, usage}](用尽 / 过期的历史信封不列, 预警只管仍在用的)。"""
+    out: list[dict[str, Any]] = []
+    template = ""
+    for pid in policy_ids(governance_root):
+        usage = envelope_usage(governance_root, pid, now=now)
+        if usage.get("state") != "active":
+            continue
+        why = envelope_warning(usage)
+        if not why:
+            continue
+        template = template or envelope_renew_declaration()["messages"]["warn"]
+        who = str((usage.get("policy") or {}).get("agent_or_role") or "")
+        plan = renew_plan(governance_root, usage, identities={who}, task_id="<在推卡>", now=now)
+        out.append({"policy_id": pid, "why": why, "used": usage["used"], "max_tasks": usage["max_tasks"], "expires_at": usage["expires_at"],
+                    "agent_or_role": who, "next_policy_id": plan["next_policy_id"],
+                    "line": f"{template.format(policy_id=pid, why=why, command=plan['renew_command'])}(覆盖 {who})"})
+    return out
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)

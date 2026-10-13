@@ -3403,6 +3403,8 @@ def format_output(result: dict[str, Any], *, json_mode: bool = False) -> str:
         from tools.aipos_cli.audit_derivation import render_supplementary_chain
 
         lines.append(f"Supplementary: {render_supplementary_chain(str(task_id), result['supplementary_audit'])}")
+    for row in result.get("post_merge_regression_unfinished") or []:  # AIPOS-F166 件③(行文案唯一 post_merge_regression.unfinished_regressions)
+        lines.append(f"Regression: {row['line']}")
 
     return "\n".join(lines)
 
