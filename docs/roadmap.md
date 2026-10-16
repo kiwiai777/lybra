@@ -75,7 +75,7 @@ lybra roadmap status [项目] [--lane <lane>] [--json]        # 只读: 里程�
 | 信号 | 含义 | 严重度 |
 |---|---|---|
 | 游离卡占比高 `unlinked_ratio` | 近 `unlinked_window_days` 天新出的卡里没挂路线图的占比超过 `unlinked_ratio`(审计卡、已撤卡不计) | 提示 |
-| 里程碑停滞 `stalled` | active 里程碑的挂接卡最近一次推进(卡面时刻 / 门记录 / loop 运行记录)早于 `stall_days` 天前 | **严重** |
+| 里程碑停滞 `stalled` | active 且标准未全满足的里程碑, 挂接卡最近一次推进(卡面时刻 / 门记录 / loop 运行记录)早于 `stall_days` 天前(有挂接卡的记录读不出 = 不判, 点名) | **严重** |
 | 标准无卡覆盖 `uncovered` | active 里程碑下的某条标准没有任何挂接卡 | **严重** |
 | 反复返工 `rework` | 同一标准的挂接卡返工轮次(卡面 `rework_rounds`)合计 ≥ `rework_rounds` | 提示 |
 | 里程碑逾期 `overdue` | `target_date` 已过而里程碑未 done / dropped | **严重** |

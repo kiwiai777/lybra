@@ -342,8 +342,9 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
                 out["signals"].append(_signal(decl, "overdue", anchor=f"{ms_id}|{ms.get('target_date')}",
                                               subject=_inbox_subject("overdue", ms_id, None), target_date=ms.get("target_date"),
                                               days_over=days_over, status=status, met=n_met, total=n_total, **base))
-            # 停滞: active 且挂接卡最近推进早于阈值(有卡读不出 = 不判)
-            if status == "active" and ms_cards and last is not None and not any(t.get("unreadable") for t in truths):
+            # 停滞: active、标准未全满足且挂接卡最近推进早于阈值(有卡读不出 = 不判; 已全满足只差标 done = 见状态不一致, 不算停滞)
+            if (status == "active" and ms_cards and last is not None and not (n_total and n_met == n_total)
+                    and not any(t.get("unreadable") for t in truths)):
                 idle = (moment - last).days
                 if moment - last > timedelta(days=int(thresholds["stall_days"])):
                     out["signals"].append(_signal(decl, "stalled", anchor=f"{ms_id}|{_iso(last)}",
