@@ -92,6 +92,10 @@ def gov(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (root / "task_cards").mkdir()
     code_repo = tmp_path / "product"
     code_repo.mkdir()
+    # AIPOS-F178 item 3: the loop now verifies (and auto-repairs) a claimed card's worktree before waiting,
+    # so the declared product repo must be a real git repo with a main branch (previously a bare placeholder dir)
+    for argv in (["init", "-q", "-b", "main"], ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]):
+        subprocess.run(["git", *argv], cwd=code_repo, check=True, capture_output=True)
     _write(root / "project.json", json.dumps({"project": "lybra", "code_repo": str(code_repo), "config_version": 1}))
     # AIPOS-F78 前置零②: 驱动方身份读工位声明(.lybra/role instance), 禁回退占位 advisor
     _write(root / ".lybra" / "role", json.dumps({"role": "advisor", "instance": DRIVER}))

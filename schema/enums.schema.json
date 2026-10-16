@@ -260,6 +260,12 @@
     },
     "task_mode": {
       "description": "Task mode - determines workflow routing",
+      "product_repo_write": {
+        "description": "AIPOS-F178(10-16 chris 岚图 LANTU-HW1 实撞: task_mode=docs + lane.repo=lantu-contracts 的卡认领成功却未建卡工作树, 开工说明却指向 <仓>/.worktrees/<ID>): 「卡是否写产品仓 = 是否建卡工作树」的唯一判据声明。每个值带 writes_product_repo(该模式缺省是否写产品仓); 卡面 lane.repo 显式出现且解析到的仓不是治理根自身 = 写仓(不论模式); 审计卡(audit)本身不写仓, 其只读取证工作树跟随被审卡(被审卡写仓 = 建取证树)。认领建树(queue_mutation)/ loop 认领后核验与自动补建 / `lybra queue repair` 缺树修复 / my-tasks 开工面 / card render 开工说明 / write_boundary / finalize 缺分支判定 / 审计裁决绑卡分支 tip 全部先问这一个判据, 禁第二判据。缺值或未知 task_mode = 缺省不写仓(行为同 F178 前)。",
+        "single_implementation": "tools/aipos_cli/next_resolver.card_needs_worktree",
+        "lane_repo_rule": "卡面 lane.repo 非空且经 workspace_config.resolve_card_repo 解析到的仓 ≠ 治理根自身 = 写仓; 解析失败 = 按写仓(建树时给出拒因, fail-closed)",
+        "audit_rule": "审计卡 = 被审卡是否写仓(被审卡查不到 / 审计卡缺被审卡字段 = 按需建, 建树时给出拒因)"
+      },
       "routing_rules": {
         "code": "Full workflow N0→N6 (all nodes including independent audit N4 and finalize N5)",
         "docs": "Skip N4/N5, advisor review replaces independent audit",
@@ -269,23 +275,28 @@
       "values": [
         {
           "value": "code",
-          "description": "Code implementation task - full workflow with independent audit"
+          "description": "Code implementation task - full workflow with independent audit",
+          "writes_product_repo": true
         },
         {
           "value": "docs",
-          "description": "Documentation task - advisor review, skip independent audit"
+          "description": "Documentation task - advisor review, skip independent audit",
+          "writes_product_repo": false
         },
         {
           "value": "governance",
-          "description": "Governance task - advisor review, skip independent audit"
+          "description": "Governance task - advisor review, skip independent audit",
+          "writes_product_repo": false
         },
         {
           "value": "config",
-          "description": "Configuration task - advisor review, skip independent audit"
+          "description": "Configuration task - advisor review, skip independent audit",
+          "writes_product_repo": false
         },
         {
           "value": "audit",
-          "description": "Audit task (R cards) - gate-generated to review completed work"
+          "description": "Audit task (R cards) - gate-generated to review completed work",
+          "writes_product_repo": false
         }
       ]
     },

@@ -205,10 +205,9 @@ def _is_within(path: Path, root: Path) -> bool:
         return False
 
 
-def _card_lane_paths(governance_root: Path, task_id: str) -> tuple[Path, list[str]]:
-    """卡的产品仓 + lane.paths(读卡面; 卡不存在 = 拒)。"""
+def _card_frontmatter(governance_root: Path, task_id: str) -> dict[str, Any]:
+    """卡面 frontmatter(卡不存在 / 读不出 = WriteBoundaryError, fail-closed)。"""
     from tools.aipos_cli.next_resolver import _find_task_in_queue, _read_frontmatter
-    from tools.aipos_cli.workspace_config import resolve_card_repo
 
     task_path, _queue = _find_task_in_queue(governance_root, task_id)
     if not task_path:
@@ -216,10 +215,17 @@ def _card_lane_paths(governance_root: Path, task_id: str) -> tuple[Path, list[st
     from tools.aipos_cli.frontmatter import FrontmatterReadError
 
     try:
-        fm = _read_frontmatter(task_path)
+        return _read_frontmatter(task_path)
     except FrontmatterReadError as exc:
         # AIPOS-F100 件②: 卡读不出 = 拒(不按空 lane 判, 原文点名文件)
         raise WriteBoundaryError(f"卡 {task_id} frontmatter {exc}") from exc
+
+
+def _card_lane_paths(governance_root: Path, task_id: str) -> tuple[Path, list[str]]:
+    """卡的产品仓 + lane.paths(读卡面; 卡不存在 = 拒)。"""
+    from tools.aipos_cli.workspace_config import resolve_card_repo
+
+    fm = _card_frontmatter(governance_root, task_id)
     lane = fm.get("lane") if isinstance(fm.get("lane"), dict) else {}
     paths = [str(p).strip() for p in (lane.get("paths") or []) if str(p).strip()]
     repo = resolve_card_repo(governance_root, {**fm, "task_id": task_id})
@@ -310,8 +316,15 @@ def check_access(
         if not task_id:
             return {**base, "allowed": False, "code": "TASK_ID_REQUIRED",
                     "reason": f"面 {surface} 的 {want} 受本卡工作树 + lane.paths 双限, 需给 task_id"}
-        from tools.aipos_cli.next_resolver import card_worktree_location
+        from tools.aipos_cli.next_resolver import card_needs_worktree, card_report_path, card_worktree_location
 
+        card_fm = _card_frontmatter(governance_root, task_id)
+        if not card_needs_worktree(governance_root, {**card_fm, "task_id": task_id}):
+            # AIPOS-F178 件②: 只写治理根的卡不建卡工作树(唯一判据 card_needs_worktree), 产品仓无本卡可写处; 点名治理根报告落点
+            report = card_report_path(governance_root, task_id, card_fm)
+            return {**base, "allowed": False, "code": "CARD_NO_WORKTREE",
+                    "reason": (f"卡 {task_id} 只写治理根(不写产品仓, 不建卡工作树; 判据 enums.schema task_mode.product_repo_write), "
+                               f"product_repo 的 {want} 一律拒; 产物写治理根报告落点 {report}")}
         _repo, lane_paths = _card_lane_paths(governance_root, task_id)
         _repo, worktree = card_worktree_location(governance_root, task_id)  # AIPOS-F86: 与 claim 建树 / my-tasks 同一推导
         worktree_r = worktree.resolve() if worktree.exists() else Path(str(worktree))
