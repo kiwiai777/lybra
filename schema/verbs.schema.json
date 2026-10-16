@@ -163,6 +163,21 @@
         }
       }
     },
+    "project_upgrade_writers": {
+      "description": "AIPOS-F176 件①: `lybra project upgrade` 同一两阶段语义——旗标注册与其他族同一包装 aipos_cli._project_json_two_phase_flags(family=project_upgrade_writers), 旗标名与缺省阶段读 project_json_writers 一处(本段不重复声明)。缺省 = 预演: 逐步列会改什么 / 为什么 / 是否已是最新, 零写入; --confirm(须 --actor)才依次执行待升级的机械步骤, 各步写出经该步声明的落账命令落账(verbs.lybra_project_upgrade.upgrade_steps[].landing)。唯一实现 project_upgrade.run_upgrade。",
+      "commands": [
+        "upgrade"
+      ],
+      "flag_help": {
+        "dry_run": "Preview every upgrade step (what would change, why, already current or not) and unread update counts, without writing (default)",
+        "confirm": "Run the pending mechanical upgrade steps in order (stop at the first failure, keeping finished steps); each step lands via its declared governance-commit path"
+      },
+      "outcome_labels": {
+        "preview": "预览(未写; 加 --confirm --actor <实例或 owner> 执行)",
+        "done": "已执行",
+        "nothing": "无事可做(未写)"
+      }
+    },
     "advisor_update_writers": {
       "description": "AIPOS-F167 件③: `lybra updates --ack` 写已读标记(治理根 records advisor_update_acks/<实例>/, 只追加)同一两阶段语义——旗标注册与其他族同一包装 aipos_cli._project_json_two_phase_flags(family=advisor_update_writers), 旗标名与缺省阶段读 project_json_writers 一处(本段不重复声明)。缺省 = 预演: 打印该实例将标记已读的更新说明(编号 / 生效版本 / 条数)与将写的记录路径, 零写入; --confirm 才写记录并经 lybra_governance_commit.post_write_landing.commands.advisor_update_ack 同一提交口落账。不带 --ack 的 `lybra updates` 只读, 两阶段旗标不适用(给了 = 用法错)。唯一实现 advisor_updates_cli.ack_updates。",
       "commands": [
@@ -3263,6 +3278,256 @@
         "landing_failed": {"code": 3, "meaning": "写入已生效但落账未完成(同 post_write_landing.landing_failed_exit_code; 出补账命令)"}
       }
     },
+    "lybra_project_upgrade": {
+      "description": "AIPOS-F176(Owner 10-16: 看板写例外② = 项目升级按钮——「一下子能用上最新的能力, 以后就是产品升级功能」): `lybra project upgrade [项目] [--home-root] [--workspace-root] [--dry-run|--confirm --actor <实例或 owner>] [--guidance] [--json]` 与看板升级页一次把项目跟上最新版本。缺省预演(零写入): 按 upgrade_steps 逐步列会改什么 / 为什么 / 是否已是最新, 另列本项目各顾问实例未读更新数(F167 advisor_updates_cli.advisor_view 同读); --confirm 依次执行状态为「待升级」的机械步骤, 任一步失败即停并报告(已成功步保留, 写入已生效), 各步写出经该步声明的同一提交口落账(F158 governance_commit.land_written_paths / F159 project_writers); 幂等: 重跑无事可做。--guidance = 按钮做不到、需顾问主动用起来的新能力(逐顾问实例: 一句话为什么 / 可直接转述的话术含命令 / 完成判据; 下次推导做到即消失), 数据 = F167 未读更新的 advisor_notice actions + F174 接入清单缺项(board_pages.onboarding_rows)+ 近期卡卡面字段使用(task_loader.iter_queue_task_paths), 一个推导函数 project_upgrade.derive_guidance。看板 = page_path 升级页(每项目「可升级(N 项)」与引导; Owner 会话见预演 / 确认按钮)+ 唯一写路由 write_path(复用 F172 写例外同一安全框架 envelope_board.handle_owner_write: Owner 会话 / workspace 须为 home 根注册项目 / 会话绑定一次性预演令牌 / Origin 校验 / 看板审计日志, 确认前写不进 = 拒), 记录 actor = Owner 会话(captured_by 同 F172 模板), 来源 = 看板。换项目: 任何项目同一组命令与声明, 不写死项目 ID / 路径 / 卡号前缀; 换机器: 路径全读 project.json 与接入日志声明, 工位只核 transport=local(跨机工位门机不读写, 列不适用); 配置演进: 新步骤 / 新引导只追加。唯一实现 tools/aipos_cli/project_upgrade.py(声明读取 / 步骤预演与执行 / 引导推导 / CLI 与看板渲染)。",
+      "phase": "render",
+      "surface": [
+        "cli",
+        "board"
+      ],
+      "cli_command": "lybra project upgrade",
+      "single_implementation": "tools/aipos_cli/project_upgrade.py(upgrade_declaration / plan_upgrade / run_upgrade / derive_guidance / render_* / handle_upgrade_request)+ web/board/app.py(路由)",
+      "upgrade_steps": [
+        {
+          "name": "config_defaults",
+          "label": "配置缺省补齐",
+          "why": "新配置键已在 config.schema 声明并带缺省(缺键 = 行为不变), 补齐后 project.json 显式列出可调项",
+          "applies_when": "project_json",
+          "preview": "tools.aipos_cli.workspace_config.fill_project_json_defaults",
+          "execute": "tools.aipos_cli.workspace_config.fill_project_json_defaults",
+          "mechanical": true,
+          "landing": "project_writers"
+        },
+        {
+          "name": "workstation_charter",
+          "label": "工位章程同步",
+          "why": "工位章程须为产品渲染的最新版(F164 三指纹), 否则执行体 / 审计体按旧规矩干活",
+          "applies_when": "local_workstations",
+          "preview": "tools.aipos_cli.distribution_sync.charter_freshness",
+          "execute": "tools.aipos_cli.distribution_sync.sync_workstation_charter",
+          "mechanical": true,
+          "landing": null
+        },
+        {
+          "name": "record_type",
+          "label": "记录类型补齐",
+          "why": "人肉期审计报告快照缺 record_type, 被入库护栏 B④ 拒入而长期滞留未跟踪(F158)",
+          "applies_when": "git_governance_root",
+          "preview": "tools.aipos_cli.record_type_migration.run_record_type_migration",
+          "execute": "tools.aipos_cli.record_type_migration.run_record_type_migration",
+          "preview_command": "lybra migrate record-type --workspace-root {governance_root}",
+          "mechanical": true,
+          "landing": "migrate_record_type"
+        },
+        {
+          "name": "decision_log_pointers",
+          "label": "决策指针补生成",
+          "why": "历史 Owner 决策记录缺 decision_log 自动指针, 决策史查不到(F160)",
+          "applies_when": "git_governance_root",
+          "preview": "tools.aipos_cli.decision_log_pointers.run_pointer_backfill",
+          "execute": "tools.aipos_cli.decision_log_pointers.run_pointer_backfill",
+          "preview_command": "lybra migrate decision-log-pointers --workspace-root {governance_root}",
+          "mechanical": true,
+          "landing": "migrate_decision_log_pointers"
+        }
+      ],
+      "applies_when": {
+        "project_json": "治理根有 project.json(已建项目恒适用)",
+        "local_workstations": "执行方式声明(project.json execution)里有工位的实例(审计者 / pi 执行者)已接入且工位 transport=local; 跨机工位门机不跨机读写, 列不适用",
+        "git_governance_root": "治理根在 git 工作树内(迁移经同一提交口落账)"
+      },
+      "step_states": {
+        "pending": "待升级",
+        "current": "已是最新",
+        "not_applicable": "不适用",
+        "error": "核不了",
+        "unchecked": "待现核(看板按记录真相未见判定, 不计入可升级数; 预演 / CLI 现核)"
+      },
+      "run_outcomes": {
+        "done": "已执行",
+        "skipped": "跳过",
+        "failed": "失败",
+        "not_run": "未执行(前一步失败已停)"
+      },
+      "guidance": {
+        "description": "「告诉顾问」引导: 按钮做不到、需顾问主动用起来的新能力。来源三类(只追加): notice = F167 本实例未读更新说明里 audience 含 advisor 的条目 actions(做到 = 该实例记已读); onboarding = F174 接入清单(board_pages.onboarding_rows)中 onboarding_items 所列项处于 todo / error(命令取清单行自身 commands; 做到 = 下次推导该项 ok); card_fields = 本项目近期 recent_cards 张(task_mode ∈ card_task_modes, 按卡面 created_at 取最新)卡面都未声明的字段(做到 = 近期任一张声明)。项目无顾问实例 = 一组, 告诉对象用 unknown_advisor。",
+        "recent_cards": 5,
+        "card_task_modes": [
+          "code"
+        ],
+        "tell_line": "告诉 {advisor}: {say}",
+        "unknown_advisor": "<你的顾问实例>",
+        "notice": {
+          "why": "Lybra 更新({task_id}): {summary}",
+          "say": "{action}",
+          "done_when": "该顾问实例读完后记已读(lybra updates --ack --actor {advisor} --confirm), 下次检查即消失"
+        },
+        "onboarding_items": {
+          "advisor": {
+            "why": "本项目还没有接入的顾问实例, 产品命令无人驱动",
+            "say": "按接入向导把顾问接入 {project}: {commands}",
+            "done_when": "接入清单「顾问」项变为已完成"
+          },
+          "executor": {
+            "why": "执行方式未声明或执行实例未接入, 卡无人可派",
+            "say": "声明 {project} 的执行方式并接入执行实例: {commands}",
+            "done_when": "接入清单「执行者」项变为已完成"
+          },
+          "auditor": {
+            "why": "审计实例未接入或无工位, 审计无法独立运行",
+            "say": "接入 {project} 的审计实例工位: {commands}",
+            "done_when": "接入清单「审计者」项变为已完成"
+          },
+          "pi_model": {
+            "why": "未声明 pi 执行 / 审计用哪个模型, 拉起沿用 pi 全局缺省, 换模型无记录",
+            "say": "按 Owner 指示给 {project} 声明 pi 模型(先 --dry-run 看影响工位): {commands}",
+            "done_when": "project.json execution.pi_models 声明了各角色模型(接入清单「pi 模型」项已完成)"
+          },
+          "roadmap": {
+            "why": "项目还没有路线图, 看板看不到进度、偏差与逐条验收证据",
+            "say": "为 {project} 建 roadmap.yaml(里程碑 + 验收标准), 之后出卡挂到标准上: {commands}",
+            "done_when": "治理根有路线图文件(接入清单「路线图」项已完成)"
+          },
+          "envelope": {
+            "why": "信封将尽 / 未签, loop 无法自治推进",
+            "say": "预演续签或新签 {project} 的信封后请 Owner 在看板信封页确认: {commands}",
+            "done_when": "当前在用信封均为生效状态(接入清单「信封」项已完成)"
+          }
+        },
+        "card_fields": {
+          "audit_runtime_evidence": {
+            "why": "近期卡都没声明审计运行证据, 审计 PASS 不必附独立运行记录(F162)",
+            "say": "下次出代码卡在卡稿写 audit_runtime_evidence: {{required: true, commands: [<审计须在自己工作树实跑的命令>]}}(lybra draft create 原样透传)",
+            "done_when": "近期 {recent} 张代码卡中至少一张声明 audit_runtime_evidence"
+          },
+          "artifacts": {
+            "why": "近期卡都没声明验收产物, 路线图标准看不到截图 / 输出证据(F175)",
+            "say": "下次出卡在卡稿写 artifacts: [{{criterion: <路线图标准 id>, path_glob: <产物文件 glob>, kind: screenshot|output|report}}], 执行体把产物放进卡产物落点",
+            "done_when": "近期 {recent} 张代码卡中至少一张声明 artifacts"
+          }
+        }
+      },
+      "texts": {
+        "head_preview": "lybra project upgrade: 预览(未写; 加 --confirm --actor <实例或 owner> 依次执行待升级的机械步骤并落账) · 项目 {project}(来源 {source}) · 治理根 {governance_root}",
+        "head_confirm": "lybra project upgrade --confirm: 项目 {project}(来源 {source}) · 治理根 {governance_root} · actor={actor}",
+        "step_line": "[{index}/{total}] {label}: {state} — {why}",
+        "change_line": "    会改: {text}",
+        "detail_line": "    {text}",
+        "run_line": "[{index}/{total}] {label}: {outcome} — {detail}",
+        "unread_head": "未读更新(各顾问实例):",
+        "unread_line": "    {instance}: {count} 条",
+        "unread_unavailable": "    更新说明库不可用: {reason}",
+        "unread_error": "    读不出: {error}",
+        "unread_none": "    (本项目无已接入顾问实例)",
+        "summary_preview": "合计: 待升级 {pending} 项(机械, --confirm 一次执行) · 需顾问主动用的新能力 {guidance} 项(lybra project upgrade --guidance 看话术)",
+        "summary_confirm": "结果: 已执行 {done} 步 · 跳过 {skipped} 步 · 失败 {failed} 步 · 未执行 {not_run} 步",
+        "stopped": "已停止: 第 {index} 步「{label}」失败, 已成功步保留(写入已生效); 修好后重跑同一条命令(幂等, 只做剩下的)",
+        "nothing": "无事可做: 各步均已是最新 / 不适用",
+        "guidance_head": "需顾问主动用的新能力 — 项目 {project}(按钮做不到, 逐顾问实例转述; 做到后下次检查即消失): {count} 项",
+        "guidance_group": "顾问实例 {advisor}:",
+        "guidance_item": "  · [{source}] {why}",
+        "guidance_say": "      话术: {tell}",
+        "guidance_done": "      完成判据: {done_when}",
+        "guidance_none": "  (无: 本项目已用上全部新能力)",
+        "guidance_error": "  ⚠ 引导数据读不出({source}): {error}"
+      },
+      "exit_codes": {
+        "ok": {
+          "code": 0,
+          "meaning": "预演已输出 / 全部待升级步骤执行成功(或无事可做) / --guidance 已输出"
+        },
+        "refused": {
+          "code": 1,
+          "meaning": "目标项目解析不出 / 声明读不出(零写入)"
+        },
+        "usage": {
+          "code": 2,
+          "meaning": "--confirm 缺 --actor / --guidance 与 --confirm 同用(零写入)"
+        },
+        "step_failed": {
+          "code": 3,
+          "meaning": "某一步执行失败或其写后落账未完成(= post_write_landing.landing_failed_exit_code): 已停止, 已成功步保留, 出拒因与出口"
+        }
+      },
+      "board": {
+        "description": "看板写例外②(Owner 角色名、预演令牌表及其时效 = F172 同一框架: board_owner_envelopes.owner_role / preview_ttl_seconds, 本段不重复声明): page_path = 升级页(服务端渲染; 全部登录会话可看各项目待升级步数与「告诉顾问」引导, 只有 Owner 会话渲染预演按钮); write_path = 唯一写路由(stage=preview|confirm, 判定全部经 F172 同一框架 envelope_board.handle_owner_write; 预演 = plan_upgrade 全文, 确认 = run_upgrade, actor = 登录会话 Owner 角色, captured_by / 来源 = 看板)。总览页 / 接入页每项目显示「可升级(N 项)」链接到本页(N = 待升级步数, 章程步取记录真相 loop_run_record.latest_charter_checks 免看板每次连门; 预演全文才现核)。其余写路由仍按 board_readonly 应答。",
+        "page_path": "/owner/upgrade",
+        "write_path": "/api/owner/projects/upgrade",
+        "script_path": "/upgrade.js",
+        "action": "project_upgrade",
+        "texts": {
+          "title": "项目升级 — {projects} 个项目(home 根 {home_root})",
+          "project_heading": "{project} · 待升级 {pending} 项 · 需告诉顾问 {guidance} 项",
+          "steps_heading": "升级步骤(机械, 按钮一次执行)",
+          "guidance_heading": "按钮做不到的: 告诉顾问",
+          "preview_button": "预演升级",
+          "confirm_button": "确认执行",
+          "cancel_button": "取消",
+          "preview_heading": "预演全文(未写入; 确认后依次执行并落账)",
+          "result_heading": "执行结果",
+          "readonly_hint": "只读视图: 执行升级只对 Owner 登录会话开放; 其他角色请告诉顾问运行 lybra project upgrade",
+          "page_error": "升级页读不出(不猜): {error}"
+        },
+        "errors": {
+          "OWNER_ONLY": {
+            "status": 403,
+            "message": "只有 Owner 登录会话可以执行项目升级; 其他角色请告诉顾问运行 lybra project upgrade"
+          },
+          "ORIGIN_MISMATCH": {
+            "status": 403,
+            "message": "请求来源与看板地址不符(跨站请求拒绝)"
+          },
+          "WORKSPACE_REQUIRED": {
+            "status": 400,
+            "message": "请求须带 workspace(home 根已注册项目名)"
+          },
+          "WORKSPACE_NOT_IN_HOME": {
+            "status": 400,
+            "message": "workspace {workspace!r} 不是 home 根 {home_root} 的已注册项目: {projects}"
+          },
+          "PARAMS_INVALID": {
+            "status": 400,
+            "message": "参数不合: {detail}"
+          },
+          "STAGE_INVALID": {
+            "status": 400,
+            "message": "stage 须为 preview 或 confirm"
+          },
+          "PREVIEW_BLOCKED": {
+            "status": 422,
+            "message": "预演读不出(未发预演令牌): {detail}"
+          },
+          "PREVIEW_TOKEN_REQUIRED": {
+            "status": 403,
+            "message": "确认须携带本会话的预演令牌(先预演)"
+          },
+          "PREVIEW_TOKEN_INVALID": {
+            "status": 403,
+            "message": "预演令牌无效或已用过(单次即焚); 请重新预演"
+          },
+          "PREVIEW_TOKEN_EXPIRED": {
+            "status": 403,
+            "message": "预演令牌已过期({ttl} 秒); 请重新预演"
+          },
+          "PREVIEW_SESSION_MISMATCH": {
+            "status": 403,
+            "message": "预演令牌不属于本会话; 请在本会话重新预演"
+          },
+          "PREVIEW_PARAMS_MISMATCH": {
+            "status": 403,
+            "message": "确认参数与预演不一致(预演后改过项目或待升级步骤已变); 请重新预演"
+          },
+          "AUDIT_LOG_UNAVAILABLE": {
+            "status": 503,
+            "message": "看板审计日志写不进({detail}), 拒绝执行(每次升级须留痕)"
+          },
+          "UPGRADE_FAILED": {
+            "status": 409,
+            "message": "升级未完成: {detail}"
+          }
+        }
+      }
+    },
     "lybra_updates": {
       "description": "AIPOS-F167 件②③(Owner 10-16: 产品更新的「顾问须知」由产品自己送达, Owner 零转述): `lybra updates [--actor <实例>] [--all] [--workspace-root <治理根>] [--json]` 列该顾问实例的未读更新说明全文(--all = 全部, 标已读/未读); `lybra updates --ack --actor <实例> [--dry-run|--confirm]` 记已读(两阶段 two_phase_protocol.advisor_update_writers, 落账 post_write_landing.commands.advisor_update_ack)。更新说明 = 卡面 advisor_notice(card.schema fields.advisor_notice)在部署唯一口汇成的产品侧记录(store), 跨项目共享: 任何接入项目的顾问在其治理根运行本命令读同一份库, 已读按本治理根本实例各记(ack)。四出口(charter 开头 / loop status 末尾 / next 末尾 / brief 末尾)经同一渲染 advisor_updates_cli.advisor_banner_lines 显示「Lybra 有 N 条未读更新」(banner), 无未读 / 库不可用 = 不显示(行为不变); 读不出 = 一行告警(不静默, 不掀翻原命令)。审计/执行体的变化仍走章程渲染(AIPOS-F164), 不重复送达。",
       "phase": "render",
@@ -3474,8 +3739,8 @@
           },
           "project_writers": {
             "cli": "lybra project <subcommand> --confirm",
-            "subcommands": ["set-paths", "set-repo", "set-repos", "set-workstation", "set-meta", "set-execution", "set-model", "set-return-summary", "freeze-legacy", "dispatch-mode set", "relocate-workstation"],
-            "scope": "AIPOS-F159 件①(gap #144): 写 project.json 的 project 族命令 --confirm 成功后的写出文件(治理根相对): two_phase_protocol.project_json_writers 各命令 = project.json(--confirm 即落, 无改动亦经同一提交口核一次: 范围已落账 = PASS no-op, 前次写后未落账者随之补落); freeze-legacy = 本次追加的清单条目 + 本次补声明 legacy_baseline 时的 project.json(本批无卡可冻 = 无写出, 不落); dispatch-mode set = project.json + 切换留痕文件。AIPOS-F161: relocate-workstation = 本项目 enrollment_log(追加的 relocate 位置事件; 唯一写出, 工位目录在治理仓外不入)。提交身份 = 该命令 --actor(dispatch-mode set 为 --by; 未给 = $USER 或 owner, 与 set-repo / project new 同一缺省)。--dry-run 零写入、不落账。唯一落账点: 写 project.json 的两阶段命令经输出包装 aipos_cli._project_json_two_phase_emit, freeze-legacy / dispatch-mode set 经同一薄壳 aipos_cli._land_project_writes(→ land_written_paths)。不含 project new / import(建治理根本身, 治理根此时可能尚未入治理仓; 向导第 1 步照旧给 governance-commit 与 home git-init)。",
+            "subcommands": ["set-paths", "set-repo", "set-repos", "set-workstation", "set-meta", "set-execution", "set-model", "set-return-summary", "freeze-legacy", "dispatch-mode set", "relocate-workstation", "upgrade"],
+            "scope": "AIPOS-F159 件①(gap #144): 写 project.json 的 project 族命令 --confirm 成功后的写出文件(治理根相对): two_phase_protocol.project_json_writers 各命令 = project.json(--confirm 即落, 无改动亦经同一提交口核一次: 范围已落账 = PASS no-op, 前次写后未落账者随之补落); freeze-legacy = 本次追加的清单条目 + 本次补声明 legacy_baseline 时的 project.json(本批无卡可冻 = 无写出, 不落); dispatch-mode set = project.json + 切换留痕文件。AIPOS-F161: relocate-workstation = 本项目 enrollment_log(追加的 relocate 位置事件; 唯一写出, 工位目录在治理仓外不入)。AIPOS-F176: upgrade = `lybra project upgrade --confirm` 配置缺省补齐步写出的 project.json(其余步骤各经自身声明的落账命令: migrate_record_type / migrate_decision_log_pointers; 工位章程在治理仓外不入)。提交身份 = 该命令 --actor(dispatch-mode set 为 --by; 未给 = $USER 或 owner, 与 set-repo / project new 同一缺省)。--dry-run 零写入、不落账。唯一落账点: 写 project.json 的两阶段命令经输出包装 aipos_cli._project_json_two_phase_emit, freeze-legacy / dispatch-mode set 经同一薄壳 aipos_cli._land_project_writes(→ land_written_paths)。不含 project new / import(建治理根本身, 治理根此时可能尚未入治理仓; 向导第 1 步照旧给 governance-commit 与 home git-init)。",
             "message_template": "chore(governance): 项目配置落账 {subcommand} {project}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra project {subcommand} --confirm"
           },
           "roadmap_writers": {

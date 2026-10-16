@@ -2745,6 +2745,52 @@ def set_project_meta(project_root: str | Path, values: dict[str, str | None], *,
             "changes": changes, "diff": outcome["diff"]}
 
 
+def upgrade_fill_defaults() -> dict[str, Any]:
+    """AIPOS-F176 件①: config.schema project_json.schema 里声明 upgrade_fill=true 的键 → 其字面量 default(唯一判定)。
+    upgrade_fill 键缺 default / 用 default_from / 已退役 = SchemaLoadError(fail-closed)。"""
+    import copy
+
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    declared = ((load_schema("config").get("configuration_sources") or {}).get("project_json") or {}).get("schema") or {}
+    out: dict[str, Any] = {}
+    for key, spec in declared.items():
+        if not isinstance(spec, dict) or not spec.get("upgrade_fill"):
+            continue
+        if "default" not in spec or "default_from" in spec or spec.get("retired"):
+            raise SchemaLoadError(f"config.schema.json project_json.schema.{key}: upgrade_fill=true 须有字面量 default(且非 default_from / 未退役)")
+        out[key] = copy.deepcopy(spec["default"])
+    return out
+
+
+def fill_project_json_defaults(project_root: str | Path, *, dry_run: bool = True) -> dict[str, Any]:
+    """AIPOS-F176 件①: 配置缺省补齐——project.json 缺 upgrade_fill 键时写入其声明 default(已有的键一律不动, 取值不合也不改,
+    由各键读取口照旧报错)。写入经 update_project_json 唯一写路径(锁 + diff; dry_run 缺省 = 预演零写入; 写后复核盘上值 = 声明 default,
+    不合 = 还原原文上抛)。返回 {project_json, dry_run, changed, written, diff, filled: [{key, value}], present: [键…]}。"""
+    defaults = upgrade_fill_defaults()
+    filled: list[dict[str, Any]] = []
+    present: list[str] = []
+
+    def _mutate(data: dict[str, Any]) -> None:
+        filled.clear()
+        present.clear()
+        for key, value in defaults.items():
+            if key in data:
+                present.append(key)
+            else:
+                data[key] = value
+                filled.append({"key": key, "value": value})
+
+    def _verify(root: Path, *, project: dict[str, Any] | None = None) -> None:
+        data = project if project is not None else read_project_json(root)
+        wrong = [item["key"] for item in filled if data.get(item["key"]) != item["value"]]
+        if wrong:
+            raise ValueError(f"{project_json_path(root)} 补齐后复核不合: {wrong} 不等于声明 default")
+
+    outcome = update_project_json(project_root, _mutate, verify=_verify, dry_run=dry_run)
+    return {**outcome, "filled": list(filled), "present": list(present)}
+
+
 def project_status(governance_root: str | Path) -> str:
     """AIPOS-F170 件②: project.json status 的唯一读取口(声明 config.schema project_json.status: enum + default)。
     缺键 = 声明 default(active, 行为不变); 值不在 enum / project.json 读不出 = ValueError(调用方点名, 不猜成暂停)。"""
