@@ -1216,16 +1216,8 @@ def build_rework_round(
             "data": {},
         }
     
-    # 读取上限声明 (默认 2)
-    max_rounds = 2
-    try:
-        schema_path = repo_root / "schema" / "transitions.schema.json"
-        if schema_path.exists():
-            schema_data = json.loads(schema_path.read_text(encoding="utf-8"))
-            max_rounds = schema_data.get("nodes", {}).get("queue_rework", {}).get("guards", {}).get("rework_limit", {}).get("max_rounds", 2)
-    except (json.JSONDecodeError, OSError) as e:
-        # fail-closed: 解析失败使用默认值，但记录 warning
-        warnings.append(f"Failed to read max_rounds from schema: {e}, using default 2")
+    # 读取上限声明 (默认 2); AIPOS-F168: 抽为 rework_max_rounds(收件箱「返工轮次达上限」同读, 禁第二份)
+    max_rounds = rework_max_rounds(repo_root, warnings)
     
     next_round = len(rework_rounds) + 1
     if next_round > max_rounds:
@@ -1272,6 +1264,25 @@ def build_rework_round(
             "updated_rework_rounds": updated_rework_rounds,
         },
     }
+
+
+def rework_max_rounds(repo_root: Path, warnings: list[str] | None = None) -> int:
+    """返工轮次上限(唯一读取; AIPOS-F168 由 build_rework_round 原地逻辑抽出, 行为不变): <repo_root>/schema/transitions.schema.json
+    nodes.queue_rework.guards.rework_limit.max_rounds, 文件不在 = 缺省 2; 读坏 = 缺省 2 并把原因追加进 warnings(调用方出声)。
+    门 queue_rework(build_rework_round)与 Owner 收件箱「返工轮次达上限」(owner_inbox)同读此函数。"""
+    import json
+
+    max_rounds = 2
+    try:
+        schema_path = Path(repo_root) / "schema" / "transitions.schema.json"
+        if schema_path.exists():
+            schema_data = json.loads(schema_path.read_text(encoding="utf-8"))
+            max_rounds = schema_data.get("nodes", {}).get("queue_rework", {}).get("guards", {}).get("rework_limit", {}).get("max_rounds", 2)
+    except (json.JSONDecodeError, OSError) as e:
+        # fail-closed: 解析失败使用默认值，但记录 warning
+        if warnings is not None:
+            warnings.append(f"Failed to read max_rounds from schema: {e}, using default 2")
+    return int(max_rounds)
 
 
 # AIPOS-316: Guard against direct invocation

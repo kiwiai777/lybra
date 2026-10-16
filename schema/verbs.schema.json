@@ -217,6 +217,7 @@
       "brief",
       "loop",
       "loop status",
+      "loop note",
       "state lint",
       "state repair",
       "state recovery preview",
@@ -2572,6 +2573,190 @@
         "investigate": {"code": 6, "meaning": "--wait: 下一动作 = investigate(停滞 / 进程已不在 / 别机记录 / 推导或产物类结束原因)"}
       }
     },
+    "lybra_owner_inbox": {
+      "description": "AIPOS-F168 件①: `lybra owner inbox [--home-root <home 根>] [--project <项目>] [--json]` —— 跨 home 根下全部已注册项目(唯一枚举 workspace_config._project_candidates: 5_tasks/queue 与 project.json 同在)汇总需 Owner 定的事项: 每项 = 项目 / 卡(或信封)/ 来自哪个顾问实例 / 类别 / 要 Owner 定什么 / 顾问建议(记录中有才显示)/ 影响 / 可选裁决 / 裁决命令。待决判定只读既有真相, 不另记待办: ① loop 运行记录顾问下一动作 owner_needed(每卡最近一次运行, 唯一判定 loop_run_record.loop_status / next_action; 运行记录 owner_ask 结构字段 = lybra_loop_note 补写, 有则优先) ② 卡面 needs_owner(唯一筛选 aipos_cli._filter_needs_owner 经 board_adapter.get_needs_owner, 再只取 categories.needs_owner_card.queue_states 所列可裁决状态) ③ 有效信封预警(唯一判定 autonomy_policy.envelope_warnings) ④ 返工轮次达上限(queue_mutation.rework_max_rounds)且最新常规裁决未过、无针对它的返工节(next_resolver.rework_round_for_verdict) ⑤ 补审 FAIL 未派修复卡(audit_derivation.supplementary_audit_overview, 裁决值域 transitions.schema supplementary_audit.fail_verdicts)。已裁决(该事项的决策记录已在: decision_id = decision.decision_id_prefix + 事项哈希)或已自行解除(真相不再判出)= 不再出现。排序: 阻塞级 rank 升序(1 阻塞 / 2 待定 / 3 预警), 同级按发生时刻早者先。看板(board)页与 API 与 CLI 同读 owner_inbox.collect_inbox。只读: 不写任何文件、不连门、不起进程; 某项目某类真相读不出 = 列入 errors(点名, 不猜不吞)并以 partial 退出。",
+      "phase": "owner",
+      "surface": ["cli", "board"],
+      "cli_command": "lybra owner inbox",
+      "single_implementation": "tools/aipos_cli/owner_inbox.collect_inbox / render_inbox_text / render_inbox_html",
+      "board": {"page": "/owner/inbox", "api": "/api/owner/inbox"},
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "home_root": {"type": "string", "description": "home 根(项目治理根的容器); 缺省 = workspace_config.resolve_home_root 同一优先级梯(--home-root > LYBRA_HOME_ROOT > ~/.lybra/config.json home_root > ~/.lybra/projects)"},
+          "project": {"type": "string", "description": "只看该项目(home 根下目录名); 缺省 = 全部已注册项目"},
+          "json": {"type": "boolean", "description": "JSON 输出(与看板 API 同一数据)"}
+        },
+        "additionalProperties": false
+      },
+      "item_id": {"prefix": "OI-", "hash_chars": 10, "rule": "事项 ID = prefix + sha1(项目|类别|主体|锚点)前 hash_chars 位; 锚点 = loop 类: 运行 run_id; needs_owner 卡: 队列状态 + needs_owner 理由 + 阻塞/认领时刻; 信封: policy_id + 状态; 返工上限: 轮次数 + 最新裁决 id; 补审: 补审裁决 id。同一真相重算得同一 ID(预演 / 确认 / 顾问侧回查同一函数 owner_inbox.item_id), 真相变了(新运行 / 新裁决)= 新事项"},
+      "decision": {
+        "decision_id_prefix": "owner-inbox-",
+        "decision_type": "owner_inbox_ruling",
+        "decision_status": "approved",
+        "capture_surface": "cli",
+        "source_tag": "owner_inbox",
+        "capture_method": "lybra_owner_decide_confirm",
+        "approval_intent": "owner_inbox_ruling",
+        "redaction_status": "not_applicable",
+        "token_ref": "owner_inbox_cli",
+        "capability_ttl_hours": 24,
+        "external_ref_prefix": "owner_inbox:",
+        "summary_template": "{category_label}·{subject}: 选 {choice}({label}){note_part}",
+        "authority_boundary": "Owner inbox ruling on {category} for {subject} (records the choice; release / withdraw only via the existing queue exits)",
+        "note": "裁决写成既有 owner_decision_record(owner_decision_writer 全量 AIPOS-110 形, 经门侧同一预演 / 执行 board_adapter.record_owner_decision + execute_dry_run, 含 decision_log 自动指针), 不另立存储。evidence_hash = 所裁事项(收件箱同一数据)规范 JSON 的 sha256; allowed_next_action = 所选选项键; applies_to.external_ref = external_ref_prefix + 事项 ID(顾问侧按此回查)。client_tag = 项目名小写、非 [a-z0-9_] 换 _(owner_decision_writer.TAG_PATTERN); 项目名与之不同时 applies_to 不填 project(writer 校验 client_tag = applies_to.project), 记录落在该项目治理根即项目归属。"
+      },
+      "texts": {
+        "header": "Owner 待决收件箱 — {count} 项待定({projects} 个项目; home 根 {home_root})",
+        "empty": "Owner 待决收件箱: 无待定事项({projects} 个项目; home 根 {home_root})",
+        "item": "[{rank_label}] {item_id}  {project} / {subject}  ({category_label}; 来自 {source})",
+        "ask": "  要定: {ask}",
+        "recommend": "  顾问建议: {recommend}",
+        "no_recommend": "  顾问建议: (记录中无; 顾问可用 lybra loop note --task-id {task_id} --ask … --recommend … 补写)",
+        "impact": "  影响: {impact}",
+        "options": "  选项: {options}",
+        "decide": "  裁决: {command}",
+        "since": "  发生: {since}",
+        "errors_header": "读不出的真相({count} 处, 未计入上表, 不猜):",
+        "error": "  ⚠ {project}: {source}: {error}",
+        "decide_command": "lybra owner decide --item {item_id} --choice <选项> [--note <备注>] --home-root {home_root}",
+        "ruling_line": "Owner 已裁决: 选 {choice}({label}){note_part} @ {decided_at}, 按此继续",
+        "note_part": " — 备注: {note}",
+        "next_hint": "  顾问下一条: {advisor_next}",
+        "unknown_source": "(未记录)",
+        "page_error": "Owner 待决收件箱读不出(不猜): {error}"
+      },
+      "rank_labels": {"1": "阻塞", "2": "待定", "3": "预警"},
+      "categories": {
+        "loop_owner_needed": {
+          "rank": 1,
+          "label": "loop 停下等 Owner",
+          "subject": "卡 {task_id}",
+          "impact": "卡 {task_id} 的 loop 已停({reason}), 不再自动推进",
+          "default_options": ["continue", "rework", "pause"],
+          "options_by_reason": {"envelope_renew": ["renew", "pause"]},
+          "recommend_by_reason": {"envelope_renew": "续签新信封(Owner 执行): {hint}"}
+        },
+        "needs_owner_card": {
+          "label": "卡待 Owner(needs_owner)",
+          "subject": "卡 {task_id} [{queue_state}]",
+          "queue_states": ["pending", "claimed", "blocked"],
+          "rank_by_queue_state": {"blocked": 1, "claimed": 1, "pending": 2},
+          "impact_by_queue_state": {"pending": "卡带 needs_owner, 不会被认领推进", "claimed": "在途卡待 Owner 复核", "blocked": "卡已阻塞, 不会被推进"},
+          "options_by_queue_state": {"pending": ["release", "withdraw", "acknowledge"], "claimed": ["withdraw", "acknowledge"], "blocked": ["new_card", "acknowledge"]},
+          "ask": "{reasons}",
+          "note": "blocked 卡无写路径的解除口(queue reopen 仅预演、withdraw 只收 pending/claimed: transitions.schema queue_mutations.transitions), 故只给 new_card / acknowledge"
+        },
+        "rework_limit": {
+          "rank": 1,
+          "label": "返工轮次达上限",
+          "subject": "卡 {task_id}",
+          "ask": "已返工 {rounds}/{max_rounds} 轮, 最新裁决 {verdict}({verdict_id})仍未过、无针对它的返工节: 定另出修复卡 / 改卡 / 撤卡",
+          "impact": "返工上限已到(transitions.schema queue_rework.guards.rework_limit), 顾问不能再追加返工节, 卡停在审计未过",
+          "options": ["new_card", "rescope", "withdraw", "acknowledge"]
+        },
+        "supplementary_fail": {
+          "rank": 2,
+          "label": "补审未过待定",
+          "subject": "卡 {task_id}",
+          "ask": "已结案卡补审 {audit_task_id} 裁决 {verdict}({verdict_id}), 未派修复卡: 定派修复卡还是接受原结案",
+          "impact": "已结案卡的审计争议未收口",
+          "options": ["repair", "accept"]
+        },
+        "envelope_warning": {
+          "rank": 3,
+          "label": "信封将尽",
+          "subject": "信封 {policy_id}",
+          "ask": "{why}: 定是否续签",
+          "recommend": "续签(Owner 执行): {renew_command}",
+          "impact": "信封覆盖的 {agent_or_role} 自动推进将在额度用尽 / 到期后停",
+          "options": ["renew", "let_expire"]
+        }
+      },
+      "options": {
+        "continue": {"label": "按顾问建议继续推进", "advisor_next": "按 Owner 裁决继续: {resume}"},
+        "rework": {"label": "打回返工 / 改卡后继续", "advisor_next": "按裁决改卡或追加返工节(lybra queue rework …), 完成后续跑: {resume}"},
+        "pause": {"label": "暂停此卡", "advisor_next": "按裁决暂停本卡: 不续跑, 转下一张(lybra next --workspace-root {governance_root})"},
+        "renew": {"label": "续签信封", "advisor_next": "Owner 已定续签: 新信封签好(Owner 执行裁决输出里的续签命令)后续跑: {resume}"},
+        "let_expire": {"label": "不续签, 到期 / 用尽即停", "advisor_next": "Owner 不续签: 信封用尽或到期后 loop 停, 不再催签"},
+        "release": {"label": "解除 needs_owner, 卡回到可推进", "effect": "release_needs_owner", "advisor_next": "卡已由裁决解除 needs_owner(既有解除口 queue amend), 按常规推进: lybra next --task-id {task_id} --workspace-root {governance_root}"},
+        "withdraw": {"label": "撤卡(不再做)", "effect": "withdraw_card", "advisor_next": "卡已由裁决撤回(既有解除口 queue withdraw), 不再推进"},
+        "new_card": {"label": "另出新卡承接(本卡不再推进)", "advisor_next": "按裁决出新卡承接剩余问题(lybra draft create …), 本卡按裁决备注收口"},
+        "rescope": {"label": "改卡面验收 / 拆卡", "advisor_next": "按裁决备注改卡(lybra queue amend …)后续跑: {resume}"},
+        "acknowledge": {"label": "知悉, 维持现状", "advisor_next": "Owner 已知悉, 维持现状; 不需顾问动作"},
+        "repair": {"label": "派修复卡", "advisor_next": "按裁决派修复卡处理补审问题(FAIL 派生出口): lybra next --task-id {task_id} --workspace-root {governance_root}"},
+        "accept": {"label": "接受原结案, 不修", "advisor_next": "Owner 接受原结案, 补审争议收口, 不需顾问动作"}
+      },
+      "custom_option": {"key_pattern": "^[a-z][a-z0-9_]{0,31}$", "advisor_next": "按 Owner 裁决「{label}」处理后续跑: {resume}"},
+      "exit_codes": {
+        "ok": {"code": 0, "meaning": "已输出(含无待定事项)"},
+        "partial": {"code": 4, "meaning": "已输出, 但有项目 / 类别的真相读不出(errors 段逐条点名; 未计入事项, 不猜)"},
+        "usage": {"code": 2, "meaning": "home 根 / --project 解析不了"}
+      }
+    },
+    "lybra_owner_decide": {
+      "description": "AIPOS-F168 件②: `lybra owner decide --item <事项ID> --choice <选项> [--note <备注>] [--home-root <home 根>] [--actor <Owner 身份>] [--confirm] [--json]` —— 缺省 = 预演(零写入): 重算收件箱(lybra_owner_inbox 同一 collect_inbox)找到该事项, 校验选项属该事项, 经门侧同一预演 board_adapter.record_owner_decision 出将写的决策记录, 列出解除动作的预演(既有解除口同一函数的 dry_run)。--confirm = 写入: 决策记录经 board_adapter.execute_dry_run(令牌 = 本进程预演; 门侧同一执行, 含 decision_log 自动指针); 选项 effect = release_needs_owner → board_adapter.amend_task(needs_owner / owner_review_required / approval_required 中为真的改 false, 只收 pending 卡) / withdraw_card → board_adapter.withdraw_task, 均为既有队列出口, 不手改卡; 写出文件经 lybra_governance_commit.post_write_landing.commands.owner_decide 同一提交口落账(落账失败: 写入已生效, 出补账命令, 退出码读该声明 landing_failed_exit_code)。解除动作被既有出口拒 = 决策记录照落(Owner 的裁决已发生), 拒因原文输出, exit blocked。之后对应顾问 `lybra loop status --task-id <卡>` 下一动作 = advisor_fix(owner_ruled): detail = 裁决原文 + 时刻, hint = 该选项的 advisor_next(续跑命令); `lybra next --task-id <卡>` 附裁决行。身份: --actor 缺省 owner(本机治理根所在机执行; 与 controlled-execute confirm 同为本机门侧实现, 不经 HTTP 门)。",
+      "phase": "owner",
+      "surface": ["cli"],
+      "cli_command": "lybra owner decide",
+      "single_implementation": "tools/aipos_cli/owner_inbox.decide",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "item": {"type": "string", "description": "事项 ID(收件箱列出的 OI-…)"},
+          "choice": {"type": "string", "description": "选项键(该事项列出的选项之一)"},
+          "note": {"type": "string", "description": "裁决备注(进决策记录一句话结论与 rationale, 顾问侧原样显示)"},
+          "home_root": {"type": "string", "description": "同 lybra_owner_inbox.home_root"},
+          "actor": {"type": "string", "description": "裁决人身份, 缺省 owner"},
+          "confirm": {"type": "boolean", "description": "写入; 缺省预演"},
+          "json": {"type": "boolean", "description": "JSON 输出"}
+        },
+        "required": ["item", "choice"],
+        "additionalProperties": false
+      },
+      "exit_codes": {
+        "ok": {"code": 0, "meaning": "预演通过 / 已写入并落账"},
+        "blocked": {"code": 1, "meaning": "决策记录预演被拒(拒因原文), 或解除动作被既有出口拒(决策记录已落)"},
+        "usage": {"code": 2, "meaning": "选项不属该事项 / 参数缺"},
+        "not_found": {"code": 4, "meaning": "收件箱中无该事项(已裁决 / 已自行解除 / ID 错)"}
+      }
+    },
+    "lybra_loop_note": {
+      "description": "AIPOS-F168 件③: `lybra loop note --task-id <卡> --ask <要 Owner 定什么> [--options <键=标签> …] [--recommend <顾问建议>] [--workspace-root <治理根>] [--actor <顾问实例>] [--confirm] [--json]` —— 给本卡最近一次 loop 运行记录补写结构字段 owner_ask {ask, options[{key,label}], recommend, noted_by, noted_at}, 收件箱(lybra_owner_inbox)据此展示要定什么 / 选项 / 建议, 不再只见泛化拒因。只许已结束或 loop 进程已不在的运行(state ∈ allowed_states; 运行中的记录由 loop 进程原子重写, 补写会被覆盖 = 拒 run_active)。选项键须合 lybra_owner_inbox.custom_option.key_pattern。缺省 = 预演(零写入, 显示将写的 owner_ask); --confirm = 经 record_writer.render_markdown 原子替换写回(其余字段原样)并经 lybra_governance_commit.post_write_landing.commands.loop_note 同一提交口落账。",
+      "phase": "driver",
+      "surface": ["cli"],
+      "cli_command": "lybra loop note",
+      "single_implementation": "tools/aipos_cli/loop_run_record.annotate_owner_ask / loop_note_cli",
+      "allowed_states": ["ended", "loop_dead"],
+      "texts": {
+        "ask": "  Owner 待决(顾问补写 {noted_by} @ {noted_at}): {ask}",
+        "options": "    选项: {options}",
+        "recommend": "    顾问建议: {recommend}",
+        "preview": "loop note 预演(未写入): 运行 {run_id} [{state}] {record_path}; 加 --confirm 写入并落账",
+        "written": "loop note 已写入: 运行 {run_id} [{state}] {record_path}"
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": {"type": "string"},
+          "ask": {"type": "string", "description": "要 Owner 定什么(一句话)"},
+          "options": {"type": "array", "items": {"type": "string"}, "description": "裁决选项, 每项 键=标签"},
+          "recommend": {"type": "string", "description": "顾问建议(可写建议选哪个及理由)"},
+          "workspace_root": {"type": "string"},
+          "actor": {"type": "string", "description": "补写人(顾问实例); 缺省 = 运行记录 driver"},
+          "confirm": {"type": "boolean"},
+          "json": {"type": "boolean"}
+        },
+        "required": ["task_id", "ask"],
+        "additionalProperties": false
+      },
+      "exit_codes": {
+        "ok": {"code": 0, "meaning": "预演 / 已写入并落账"},
+        "run_active": {"code": 1, "meaning": "最近一次运行仍在跑(state 不在 allowed_states), 拒写"},
+        "usage": {"code": 2, "meaning": "缺 --ask / 选项格式不合"},
+        "no_run": {"code": 4, "meaning": "本卡无 loop 运行记录 / 记录读不出"}
+      }
+    },
     "lybra_charter": {
       "description": "AIPOS-F138 件①: `lybra charter --role <角色类> [--instance <实例>] [--harness <kind>] [--workspace-root <治理根>]` —— 拉取式输出该实例的渲染后章程全文到 stdout(母本 + 项目声明 + 写权限边界, 与 sync 落盘同一渲染器 charter_render.render_charter, 同一上下文构造 charter_render_context)。供本机无落点的会话(他机 Codex 顾问)开局经 ssh 在治理根所在机读取(distribution.schema harness_semantics.remote_session_delivery); Lybra 不推送。实例 = 本治理根 enrollment_log 中有 land 事件(enrollment.workstation_location)且其工位 .lybra/role 实例相符者; 缺 --instance = 治理根 .lybra/role 的实例。harness 缺省 = 该工位 role 记录的 harness。 AIPOS-F146: 实例身份与模式经 enrollment.instance_enrollment 一处判定——land 事件 mode 为无工位接入模式(子 agent 执行者, roles.schema executor_modes credential_landing=governance_root)= 身份取 land 事件 role/mode/harness(charter_render.subagent_identity, 不要求工位、不读 .lybra/role), harness 缺省 = land 事件 harness; 母本按渲染上下文 executor_mode 选段(charter_render.select_mode_segments)。输出只含声明文本: 不含凭据 / 令牌 / 注册码(身份只经 workstation_identity 读非秘密字段)。只读: 不写任何文件、不连门、不起进程。",
       "phase": "render",
@@ -2780,6 +2965,11 @@
             "scope": "门 owner_decision_record envelope 路径确认应答的 performed_writes(决策记录 + 信封 + decision_log 自动指针; 指针由门 board_adapter._auto_generate_decision_log_pointer 写出即列入), 各张签发的并集; 中途门拒 = 已签各张照落账",
             "message_template": "chore(governance): 信封签发落账 {policy_ids}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra envelope mint --confirm"
           },
+          "loop_note": {
+            "cli": "lybra loop note --confirm",
+            "scope": "AIPOS-F168 件③: 本次补写 owner_ask 的那份 loop 运行记录 .md(治理根相对; 唯一写出)",
+            "message_template": "chore(governance): loop 运行记录补写 Owner 待决结构字段 {task_id}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra loop note --confirm"
+          },
           "migrate_decision_log_pointers": {
             "cli": "lybra migrate decision-log-pointers --confirm",
             "scope": "AIPOS-F160 件③: 本次补生成的 decision_log 指针文件(decision_log_pointers.run_pointer_backfill 的 written); 推导不出 / 不补的不入, 决策记录本身不改不入",
@@ -2794,6 +2984,11 @@
             "cli": "lybra migrate record-type --confirm",
             "scope": "本次补齐改写的记录文件(record_type_migration.run_record_type_migration 的 written); 推导不出 / 不改的不入",
             "message_template": "chore(governance): 记录类型补齐迁移 {count} 份\n\nActor: {actor}\nType: governance_commit\nCommand: lybra migrate record-type --confirm"
+          },
+          "owner_decide": {
+            "cli": "lybra owner decide --confirm",
+            "scope": "AIPOS-F168 件②: 门侧同一执行(board_adapter.execute_dry_run)应答的 performed_writes(决策记录 + decision_log 自动指针) + 解除动作写出的文件(release = 卡文件 + amendment 记录; withdraw = 卡源路径删除 + withdrawn 目标); 解除被拒 = 决策记录照落",
+            "message_template": "chore(governance): Owner 待决裁决落账 {item_id} {choice}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra owner decide --confirm"
           },
           "project_writers": {
             "cli": "lybra project <subcommand> --confirm",

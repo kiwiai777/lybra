@@ -619,7 +619,7 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
                                "last_activity_at": act.get("last_activity_at"), "last_activity_kind": act.get("last_activity_kind"),
                                "counts": act.get("counts"), "alive": None, "running_seconds": None, "idle_seconds": None})
     view["deploy"] = meta.get("deploy")  # AIPOS-F152 件①: 本次运行的代码与部署变化(旧记录无此键 = None)
-    for key in ("continues_run", "reexec", "envelope_state"):  # AIPOS-F166: 续等关联 / 信封用尽真相(无 = 不出现, 存量记录形不变)
+    for key in ("continues_run", "reexec", "envelope_state", "owner_ask"):  # AIPOS-F166: 续等关联 / 信封用尽真相; AIPOS-F168: Owner 待决结构字段(无 = 不出现, 存量记录形不变)
         if meta.get(key):
             view[key] = meta[key]
     if meta.get("status") == "ended":
@@ -744,6 +744,10 @@ def _loop_status(governance_root: Path, task_id: str | None, *, now: datetime | 
         view["next_action"] = next_action(view, rules, governance_root=Path(governance_root),
                                           earlier_end_reasons=history if task_id else None,
                                           earlier_end_codes=code_history if task_id else None)
+        # AIPOS-F168 件②: 该运行对应的 Owner 收件箱事项已裁决 = 下一动作改为 advisor_fix(owner_ruled), detail 带裁决原文, hint 带续跑命令
+        from tools.aipos_cli.owner_inbox import apply_owner_ruling
+
+        view["next_action"] = apply_owner_ruling(Path(governance_root), view, view["next_action"])
         warning = envelope_warning_view(Path(governance_root), view, now=now)  # AIPOS-F166 件②: 运行所用信封的用量预警
         if warning:
             view["envelope_warning"] = warning
@@ -1345,6 +1349,8 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
         out.append(f"  日志 {v['log_path']}")
         if v.get("end_codes"):
             out.append(f"  拒因码: {', '.join(v['end_codes'])}")  # AIPOS-F150 件①: 运行记录结构化拒因码
+        if v.get("owner_ask"):  # AIPOS-F168 件③: 顾问补写的 Owner 待决结构字段(收件箱同读)
+            out.extend(render_owner_ask(v["owner_ask"]))
         na = v.get("next_action")
         if na:
             out.append(f"  顾问下一动作: {na['action']}({na['reason']}) — {na['detail']}")
@@ -1421,6 +1427,155 @@ def loop_status_cli(args: Any) -> int:
     if wait is not None:  # AIPOS-F136 件①: --wait 退出码按顾问下一动作(verbs.schema lybra_loop_status.exit_codes 同名出口)
         return declared_exit_code(STATUS_VERB, str(report["next_action"]["action"]))
     return declared_exit_code(STATUS_VERB, "ok")
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F168 件③: `lybra loop note` —— 给本卡最近一次运行补写 Owner 待决结构字段 owner_ask(收件箱据此展示)
+# ---------------------------------------------------------------------------
+
+NOTE_VERB = "lybra_loop_note"
+
+
+def note_declaration() -> dict[str, Any]:
+    """verbs.schema lybra_loop_note(allowed_states / texts / exit_codes)。缺 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    decl = (load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get(NOTE_VERB)
+    if not isinstance(decl, dict) or any(k not in decl for k in ("allowed_states", "texts", "exit_codes")):
+        raise SchemaLoadError(f"verbs.schema.json verbs.{NOTE_VERB} 未声明齐 allowed_states / texts / exit_codes")
+    return decl
+
+
+class LoopNoteRejected(ValueError):
+    """loop note 拒写(出口名 = outcome: usage / no_run / run_active)。"""
+
+    def __init__(self, outcome: str, message: str) -> None:
+        super().__init__(message)
+        self.outcome = outcome
+
+
+def parse_note_options(raw: list[str] | None) -> list[dict[str, str]]:
+    """`键=标签` 列表 → [{key, label}]; 键式样读 lybra_owner_inbox.custom_option.key_pattern(收件箱 / 裁决同一校验)。"""
+    from tools.aipos_cli.owner_inbox import inbox_declaration
+
+    pattern = re.compile(str(inbox_declaration()["custom_option"]["key_pattern"]))
+    out: list[dict[str, str]] = []
+    for text in raw or []:
+        key, sep, label = str(text).partition("=")
+        key, label = key.strip(), label.strip()
+        if not sep or not label or not pattern.fullmatch(key):
+            raise LoopNoteRejected("usage", f"选项 {text!r} 须为 键=标签, 键合 {pattern.pattern}")
+        if any(o["key"] == key for o in out):
+            raise LoopNoteRejected("usage", f"选项键 {key!r} 重复")
+        out.append({"key": key, "label": label})
+    return out
+
+
+def render_owner_ask(ask: dict[str, Any]) -> list[str]:
+    """运行记录 owner_ask 的人读行(loop status / loop note 同一渲染, 文案读 lybra_loop_note.texts)。"""
+    texts = note_declaration()["texts"]
+    lines = [str(texts["ask"]).format(noted_by=ask.get("noted_by") or "?", noted_at=ask.get("noted_at") or "?", ask=ask.get("ask") or "")]
+    if ask.get("options"):
+        lines.append(str(texts["options"]).format(options=" / ".join(f"{o.get('key')}={o.get('label')}" for o in ask["options"])))
+    if ask.get("recommend"):
+        lines.append(str(texts["recommend"]).format(recommend=ask["recommend"]))
+    return lines
+
+
+def annotate_owner_ask(governance_root: Path, task_id: str, *, ask: str, options: list[str] | None = None,
+                       recommend: str | None = None, actor: str | None = None, confirm: bool = False,
+                       now: datetime | None = None) -> dict[str, Any]:
+    """件③ 唯一实现: 本卡最近一次运行(与 loop status --task-id 同一取法)state ∈ allowed_states 才写; 预演零写入, 确认 = 读回整份记录
+    → 只加 owner_ask → record_writer.render_markdown 原子替换(其余字段与正文原样)→ 经 land_written_paths(loop_note)落账。
+    拒 = LoopNoteRejected(outcome)。返回 {stage, record_path, owner_ask, state, landing}。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.loop_driver import load_loop_contract
+    from tools.aipos_cli.record_writer import render_markdown
+
+    if not str(ask or "").strip():
+        raise LoopNoteRejected("usage", "--ask 须为非空的一句话(要 Owner 定什么)")
+    parsed = parse_note_options(options)
+    decl = note_declaration()
+    rdecl = run_record_declaration(load_loop_contract())
+    root = Path(governance_root)
+    files = _run_files(loop_runs_dir(root, task_id))
+    if not files:
+        raise LoopNoteRejected("no_run", f"卡 {task_id} 无 loop 运行记录(落点 {loop_runs_root(root)})")
+    try:
+        metas = sorted((read_run(p, rdecl) for p in files), key=lambda m: (str(m.get("started_at") or ""), str(m.get("run_id") or "")))
+    except LoopRunRecordError as exc:
+        raise LoopNoteRejected("no_run", f"运行记录读不出: {exc}") from exc
+    meta = metas[-1]
+    state = judge_run(meta, rdecl, now=now)["state"]
+    if state not in decl["allowed_states"]:
+        raise LoopNoteRejected("run_active", f"卡 {task_id} 最近一次运行 {meta.get('run_id')} 状态 {state}(须 ∈ {decl['allowed_states']}): "
+                                             "运行中的记录由 loop 进程原子重写, 补写会被覆盖; 等运行结束再补写")
+    path = Path(meta["_path"])
+    owner_ask = {"ask": str(ask).strip(), "options": parsed, "recommend": str(recommend or "").strip() or None,
+                 "noted_by": str(actor or meta.get("driver") or "").strip() or None, "noted_at": iso_z(now or utc_now())}
+    report: dict[str, Any] = {"stage": "confirm" if confirm else "preview", "record_path": str(path), "run_id": meta.get("run_id"),
+                              "state": state, "owner_ask": owner_ask, "landing": None}
+    if not confirm:
+        return report
+    try:
+        fm, body = require_frontmatter(path)
+    except FrontmatterReadError as exc:
+        raise LoopNoteRejected("no_run", f"运行记录读不出: {exc}") from exc
+    fm["owner_ask"] = owner_ask
+    text = render_markdown(fm, body.lstrip("\n"), list(fm))
+    tmp = path.with_name(f".{path.name}.tmp{os.getpid()}")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+    from tools.aipos_cli.governance_commit import land_written_paths
+    from tools.schema_loader import SchemaLoadError
+
+    landed_by = owner_ask["noted_by"] or "advisor"
+    try:
+        report["landing"] = land_written_paths(root, [path.resolve().relative_to(root.resolve()).as_posix()], landed_by,
+                                               command="loop_note", task_id=task_id)
+    except SchemaLoadError as exc:
+        report["landing"] = {"landed": False, "exit_code": 1, "reason": str(exc), "line": f"⚠ 落账未完成(写入已生效, 勿重复执行写命令): {exc}"}
+    return report
+
+
+def loop_note_cli(args: Any) -> int:
+    """`lybra loop note` 薄壳: 全部逻辑在 annotate_owner_ask; 退出码读 verbs.schema lybra_loop_note.exit_codes(落账失败读 post_write_landing)。"""
+    import json
+    import sys
+
+    from tools.aipos_cli.aipos_cli import _find_repo_root_for_args
+    from tools.aipos_cli.verb_contract import declared_exit_code
+    from tools.schema_loader import SchemaLoadError
+
+    task_id = getattr(args, "task_id", None)
+    if not task_id:
+        print("lybra loop note: 须给 --task-id", file=sys.stderr)
+        return declared_exit_code(NOTE_VERB, "usage")
+    try:
+        root = Path(_find_repo_root_for_args(args))
+        report = annotate_owner_ask(root, task_id, ask=getattr(args, "ask", None) or "", options=getattr(args, "note_options", None),
+                                    recommend=getattr(args, "recommend", None), actor=getattr(args, "actor", None),
+                                    confirm=bool(getattr(args, "confirm", False)))
+    except LoopNoteRejected as exc:
+        print(f"lybra loop note: {exc}", file=sys.stderr)
+        return declared_exit_code(NOTE_VERB, exc.outcome)
+    except (FileNotFoundError, SchemaLoadError, ValueError, OSError) as exc:
+        print(f"lybra loop note: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return declared_exit_code(NOTE_VERB, "no_run")
+    landing = report.get("landing")
+    if getattr(args, "json", False):
+        print(json.dumps({k: v for k, v in report.items() if k != "landing"} | {"landing": {k: v for k, v in (landing or {}).items() if k != "line"} or None},
+                         indent=2, ensure_ascii=False))
+    else:
+        texts = note_declaration()["texts"]
+        print(str(texts["preview" if report["stage"] == "preview" else "written"]).format(record_path=report["record_path"],
+                                                                                          run_id=report["run_id"], state=report["state"]))
+        print("\n".join(render_owner_ask(report["owner_ask"])))
+        if landing:
+            print(landing["line"], file=sys.stdout if landing.get("landed") else sys.stderr)
+    if landing and not landing.get("landed"):
+        return int(landing.get("exit_code") or 1)
+    return declared_exit_code(NOTE_VERB, "ok")
 
 
 # AIPOS-316: Guard against direct invocation

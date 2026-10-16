@@ -54,6 +54,7 @@ from tools.aipos_cli.board_adapter import (
     get_governance,
     get_needs_owner,
     get_owner_decision_records,
+    get_owner_inbox,
     get_owner_truth_view,
     get_orchestration_summary_preview,
     get_orchestration_index,
@@ -323,6 +324,8 @@ def _api_routes(repo_root: Path | None, board_config_path: Path | None = None) -
         "/api/verify-bench": lambda params: get_verify_bench(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
         "/api/external-intake/review": lambda params: get_external_intake_review(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
         "/api/owner-decision-records": lambda params: get_owner_decision_records(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
+        # AIPOS-F168 件①: Owner 待决收件箱(跨 home 根全部已注册项目, CLI `lybra owner inbox` 同一数据; home 根 = 服务进程的 resolve_home_root)
+        "/api/owner/inbox": lambda _params: get_owner_inbox(),
         "/api/planner-drafts/review": partial(_get_planner_drafts_review_route, repo_root=repo_root),
         "/api/owner-decisions/review": partial(_get_owner_decisions_review_route, repo_root=repo_root),
         "/api/orchestration/index": lambda params: get_orchestration_index(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
@@ -3910,6 +3913,18 @@ def make_handler(
             if path in routes:
                 _status, result = dispatch_api_request(method="GET", path=self.path, routes=routes)
                 self._send_json(HTTPStatus.OK, result)
+                return
+
+            # AIPOS-F168 件①: Owner 待决页(服务端渲染, 与 /api/owner/inbox 同一数据; 文案读 verbs.schema lybra_owner_inbox)
+            if path == "/owner/inbox":
+                from tools.aipos_cli.board_adapter import render_owner_inbox_page
+
+                body = render_owner_inbox_page().encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
                 return
 
             # AIPOS-251: Overview page as new root
