@@ -1599,6 +1599,67 @@ def _project_json_two_phase_flags(parser: argparse.ArgumentParser, command: str,
             parser.add_argument(actor_flag["flag"], dest="actor", default=_default_actor(), help=actor_flag["help"])
 
 
+def _roadmap_command(args: argparse.Namespace) -> int:
+    """AIPOS-F171 件①: `lybra roadmap` 薄壳。目标项目解析 = project 族同一实现(_project_write_target); show 只读; 写命令两阶段
+    (roadmap.apply_roadmap_change)。拒 = exit 1(拒因码 + 出口, 零写入); 落账未完成 = 声明退出码(写入已生效)。"""
+    import subprocess
+
+    from tools.aipos_cli import roadmap as rm
+    from tools.aipos_cli.workspace_config import resolve_home_root_with_source
+    from tools.schema_loader import SchemaLoadError
+
+    command = getattr(args, "roadmap_command", None)
+    if not command:
+        print("Error: 缺子命令(show / add-milestone / add-criterion / set / remove)", file=sys.stderr)
+        return 2
+    try:
+        home, _source = resolve_home_root_with_source(explicit_root=args.home_root)
+    except (OSError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    target = _project_write_target(args, home, args.name)
+    if target is None:
+        return 1
+    root, project = Path(target["project_root"]), target["project"]
+    try:
+        if command == "show":
+            view = rm.roadmap_view(root, lane=args.lane, project=project)
+            if args.json:
+                print(render_json(view))
+            else:
+                print(rm.render_view_text(view))
+            return 0
+        params = {k: getattr(args, k, None) for k in ("id", "lane", "title", "target_date", "status", "milestone_id", "statement",
+                                                      "verify", "field", "value")}
+        outcome = rm.apply_roadmap_change(root, command, params, actor=args.actor, confirm=bool(args.confirm), project=project)
+    except rm.RoadmapError as exc:
+        print(f"Error: {exc}(路线图未改动)", file=sys.stderr)
+        return 1
+    except (SchemaLoadError, OSError, ValueError, subprocess.CalledProcessError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    landing = outcome.get("landing")
+    rc = 0 if landing is None or landing["landed"] else int(landing["exit_code"])
+    if args.json:
+        print(render_json({"ok": True, "command": command, "project": project, "target_source": target["source"],
+                           **{k: v for k, v in outcome.items() if k != "landing"}, "landing": _landing_view(landing)}))
+        return rc
+    labels = _two_phase_family_declaration("roadmap_writers")["outcome_labels"]
+    mode = labels["written"] if outcome["written"] else (labels["unchanged"] if not outcome["changed"] else labels["preview"])
+    print(f"目标项目 {project}(来源: {target['source']}) · 路线图 {outcome['path']}")
+    print(f"roadmap {command} {outcome['target']}: {mode}")
+    print(f"  {outcome['detail']}")
+    if outcome["diff"]:
+        print(outcome["diff"].rstrip("\n"))
+    if outcome.get("pointer"):
+        print(f"  decision_log 指针{'' if outcome['written'] else '(将生成)'}: {outcome['pointer']}")
+    if outcome.get("pointer_warning"):
+        print(f"  ⚠ {outcome['pointer_warning']}", file=sys.stderr)
+    if landing is not None:
+        print(landing["line"], file=sys.stdout if landing["landed"] else sys.stderr)
+    return rc
+
+
 def _project_write_target(args: argparse.Namespace, home: Path | None, name: str | None, *,
                           workspace_root: str | Path | None = None) -> dict[str, Any] | None:
     """AIPOS-F127 件①: project 族写命令目标项目解析的 CLI 薄壳——实现 = workspace_config.resolve_project_write_target(唯一);
@@ -2866,6 +2927,52 @@ def build_parser() -> argparse.ArgumentParser:
     updates_parser.add_argument("--ack", action="store_true", help="Mark the currently unread update notes as read for --actor")
     updates_parser.add_argument("--json", action="store_true", help="Output JSON")
     _project_json_two_phase_flags(updates_parser, "updates", family="advisor_update_writers")
+
+    # AIPOS-F171 件①: lybra roadmap — 结构化路线图(里程碑 + 验收标准)声明与编辑(声明 verbs.schema lybra_roadmap; 文件形
+    # config.schema governance_structure.roadmap; 写命令两阶段族 roadmap_writers; 唯一实现 tools/aipos_cli/roadmap.py)
+    roadmap_parser = subparsers.add_parser(
+        "roadmap",
+        help="AIPOS-F171: project roadmap (milestones + acceptance criteria) in the governance root's roadmap file "
+             "(project.json paths.roadmap_file, default governance/roadmap.yaml): show (read-only) / add-milestone / add-criterion / "
+             "set / remove (default preview, --confirm writes + decision_log pointer + landing)",
+    )
+    roadmap_sub = roadmap_parser.add_subparsers(dest="roadmap_command")
+    _roadmap_actor = _project_json_writers_declaration()["landing_actor_flag"]  # 落账提交身份旗标(与 project 族同一声明)
+
+    def _roadmap_common(sub: argparse.ArgumentParser) -> None:
+        sub.add_argument("name", nargs="?", default=None, help="Project name (default: the project.json#project of --workspace-root / "
+                         "the governance root containing the current directory)")
+        sub.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+        sub.add_argument("--workspace-root", help="Target governance root when the project name is omitted")
+        sub.add_argument("--json", action="store_true", help="Output JSON")
+
+    roadmap_show = roadmap_sub.add_parser("show", help="Read-only: milestones / criteria with linked-card counts and the unlinked "
+                                          "(free-floating) cards; no roadmap file = first-use hint")
+    _roadmap_common(roadmap_show)
+    roadmap_show.add_argument("--lane", default=None, help="Only milestones of this lane")
+    roadmap_writers = {}
+    roadmap_writers["add-milestone"] = roadmap_sub.add_parser("add-milestone", help="Add a milestone (two-phase)")
+    roadmap_writers["add-milestone"].add_argument("--id", required=True, help="Milestone id (unique in the project)")
+    roadmap_writers["add-milestone"].add_argument("--lane", required=True, help="Lane (sub-project) of the milestone")
+    roadmap_writers["add-milestone"].add_argument("--title", required=True, help="One-line goal")
+    roadmap_writers["add-milestone"].add_argument("--target-date", default=None, help="Target date YYYY-MM-DD (optional)")
+    roadmap_writers["add-milestone"].add_argument("--status", default=None, help="Milestone status (default planned)")
+    roadmap_writers["add-criterion"] = roadmap_sub.add_parser("add-criterion", help="Add an acceptance criterion under a milestone (two-phase)")
+    roadmap_writers["add-criterion"].add_argument("--milestone", dest="milestone_id", required=True, help="Milestone id")
+    roadmap_writers["add-criterion"].add_argument("--id", required=True, help="Criterion id (unique in the project)")
+    roadmap_writers["add-criterion"].add_argument("--statement", required=True, help="A checkable one-line statement")
+    roadmap_writers["add-criterion"].add_argument("--verify", required=True, help="How it is verified (auto | artifact | owner_check)")
+    roadmap_writers["set"] = roadmap_sub.add_parser("set", help="Change one field of a milestone / criterion (two-phase; ids cannot be renamed)")
+    roadmap_writers["set"].add_argument("--id", required=True, help="Milestone or criterion id")
+    roadmap_writers["set"].add_argument("--field", required=True, help="Field name (settable fields per config.schema governance_structure.roadmap)")
+    roadmap_writers["set"].add_argument("--value", required=True, help="New value (empty string clears an optional field)")
+    roadmap_writers["remove"] = roadmap_sub.add_parser("remove", help="Remove a milestone / criterion that no card links to "
+                                                       "(two-phase; linked = refused, set the milestone status to dropped instead)")
+    roadmap_writers["remove"].add_argument("--id", required=True, help="Milestone or criterion id")
+    for _roadmap_cmd, _roadmap_sub_parser in roadmap_writers.items():
+        _roadmap_common(_roadmap_sub_parser)
+        _project_json_two_phase_flags(_roadmap_sub_parser, _roadmap_cmd, family="roadmap_writers")
+        _roadmap_sub_parser.add_argument(_roadmap_actor["flag"], dest="actor", default=_default_actor(), help=_roadmap_actor["help"])
 
     # AIPOS-F78 件②: lybra card render — 卡意图面单一渲染器(pi 三行 / codex Prompt.md+Plan.md / claude-code CLAUDE.md 片段)
     card_parser = subparsers.add_parser("card", help="AIPOS-F78: 卡意图面操作(render)")
@@ -5393,6 +5500,10 @@ def main(argv: list[str] | None = None) -> int:
         from tools.aipos_cli.advisor_updates_cli import run_updates_cli
 
         return run_updates_cli(args)
+
+    if args.command == "roadmap":
+        # AIPOS-F171 件①: 薄壳 —— 全部逻辑在 roadmap(读 / 校验 / 两阶段写 + 指针 + 落账唯一实现)
+        return _roadmap_command(args)
 
     if args.command == "owner":
         # AIPOS-F168 件①②: 薄壳 —— 全部逻辑在 owner_inbox(收集 / 渲染 / 裁决唯一实现), 退出码读 verbs.schema。跨项目命令(home 根),

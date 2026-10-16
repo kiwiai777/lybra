@@ -351,6 +351,17 @@
       "required": false,
       "description": "References to governance documents"
     },
+    "milestone": {
+      "type": "string",
+      "required": false,
+      "description": "AIPOS-F171 件②: 本卡挂接的路线图里程碑 id(声明在治理根 roadmap.yaml, 形见 config.schema governance_structure.roadmap)。出卡 draft create / validate / publish 与 queue amend 经同一校验(roadmap.link_problems): 引用不存在 = 拒; 项目已声明路线图而卡未挂 = 警告游离卡(不拒); 项目无路线图 = 不校验不警告。挂接规则见 roadmap_link。"
+    },
+    "criteria": {
+      "type": "array",
+      "items": {"type": "string"},
+      "required": false,
+      "description": "AIPOS-F171 件②: 本卡对应的验收标准 id 列表(须属于 milestone 所指里程碑; 给 criteria 须同时给 milestone)。校验同 milestone。"
+    },
     "referenced_files": {
       "type": "array",
       "items": {"type": "string"},
@@ -1003,7 +1014,9 @@
       "lane",
       "governance_refs",
       "anchor_refs",
-      "advisor_notice"
+      "advisor_notice",
+      "milestone",
+      "criteria"
     ],
     "body_sections": [
       "Goal",
@@ -1119,5 +1132,13 @@
       "output_target",
       "lane"
     ]
+  },
+  "roadmap_link": {
+    "description": "AIPOS-F171 件②(Owner 10-16: 游离卡只警告不拒): 卡面挂接路线图的唯一声明。字段 = fields.milestone / fields.criteria; 判定唯一实现 roadmap.card_link_status(状态: no_roadmap 项目未声明路线图 / linked 已挂 / unlinked 游离 / invalid 引用不存在或不合; F172 偏差推导复用同一函数), 出卡与 amend 校验 roadmap.link_problems(draft_validator.validate_draft_metadata 与 board_adapter.amend_task 同调)。只改挂接字段的 amend(amendments 键 ⊆ fields)在 amend_states 内任一队列状态均允许(老卡回挂; 原 amend 只许 pending), 其余字段照旧。",
+    "fields": ["milestone", "criteria"],
+    "amend_states": ["pending", "claimed", "blocked", "completed"],
+    "unlinked_warning": "ROADMAP_UNLINKED: 本项目已声明路线图({roadmap}), 本卡未挂里程碑 = 游离卡(不拒, 计入偏差)。出口: 卡稿加 \"milestone\": \"<里程碑id>\", \"criteria\": [\"<标准id>\"](可挂: {milestones}); 老卡用 `lybra queue amend --task-id <卡> --amendments '{{\"milestone\": \"<id>\"}}'` 回挂; 确为探索/修复工作可忽略",
+    "invalid": "ROADMAP_LINK_INVALID: {reason}。出口: `lybra roadmap show` 查可挂 id, 或先 `lybra roadmap add-milestone / add-criterion`(预演后 --confirm)",
+    "unreadable": "ROADMAP_UNREADABLE: 路线图文件读不出或不合声明, 挂接无法核对: {reason}"
   }
 }

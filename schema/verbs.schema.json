@@ -177,6 +177,19 @@
         "done": "已记已读",
         "nothing": "无未读(未写)"
       }
+    },
+    "roadmap_writers": {
+      "description": "AIPOS-F171 件①: `lybra roadmap` 族写命令(add-milestone / add-criterion / set / remove)同一两阶段语义——旗标注册与其他族同一包装 aipos_cli._project_json_two_phase_flags(family=roadmap_writers), 旗标名 / 缺省阶段 / 状态标签读 project_json_writers 一处(本段不重复声明); 落账提交身份旗标同读 project_json_writers.landing_actor_flag。缺省 = 预演: 校验改动后的整份路线图(config.schema governance_structure.roadmap)并打印路线图文件 unified diff 与将生成的 decision_log 指针名, 零写入; --confirm 才写路线图文件、生成 decision_log 指针(board_adapter._auto_generate_decision_log_pointer, Record = 路线图文件)并经 lybra_governance_commit.post_write_landing.commands.roadmap_writers 同一提交口落账。唯一实现 tools/aipos_cli/roadmap.py(apply_roadmap_change)。只读 `lybra roadmap show` 不适用两阶段。",
+      "commands": [
+        "add-milestone",
+        "add-criterion",
+        "set",
+        "remove"
+      ],
+      "flag_help": {
+        "dry_run": "Preview the roadmap change (validated whole-file diff + decision_log pointer name) without writing (default)",
+        "confirm": "Write the roadmap file, generate the decision_log pointer and land both via the governance-commit path (lybra governance-commit --paths), pushing like N6 landing"
+      }
     }
   },
   "warn_behavior": {
@@ -355,6 +368,22 @@
       "full_view_seconds": 10,
       "ci_slack_factor": 3
     }
+  },
+  "board_readonly": {
+    "description": "AIPOS-F171 件③(Owner 10-16 裁定: web 看板现阶段只读展示、零写入, Owner 交互经顾问 agent; gap #155): 看板全部业务写接口下线——除 allowed_post_paths(鉴权 / 登录通道)外, 任何 POST / PUT / PATCH / DELETE 一律返回 status + 下方应答(不调用任何写实现), 前端不再提供写按钮(需 Owner 动作处给「告诉顾问: …」与对应顾问命令)。不修鉴权(鉴权路由照旧)。唯一实现 web/board/app.py dispatch_api_request(读本段; 原 POST 业务路由表 _api_post_routes 删除)。",
+    "status": 405,
+    "error": "BOARD_READ_ONLY",
+    "message": "看板只读, 请经顾问",
+    "message_en": "The Board is read-only; please go through your advisor",
+    "next_step": "告诉顾问你要做什么(核验 / 打回 / 出卡 / 发布 / 接入项目等), 由顾问用 lybra 命令完成",
+    "allowed_post_paths": [
+      "/api/auth/login",
+      "/api/auth/logout",
+      "/api/auth/otc/mint",
+      "/api/auth/device/code",
+      "/api/auth/device/poll",
+      "/api/auth/device/approve"
+    ]
   },
   "envelope_trace": {
     "description": "AIPOS-F142 件②: 门侧信封判定诊断行([ENVELOPE_TRACE], autonomy_policy.trace_envelope 逐谓词留痕, 走 stderr)的输出开关唯一声明。开关只在发射处一处判定(autonomy_policy.envelope_trace_enabled), 所有调用方受同一开关约束: CLI(lybra 入口 aipos_cli.main → decide_cli_envelope_trace, 调用结束由 cli_envelope_trace_entry 恢复)缺省关, --verbose(挂在 verbose_commands 所列命令, 唯一挂载口 autonomy_policy.attach_verbose_flags)或调试环境变量 debug_env 开; in-process 嵌套调用(loop 驱动器执行派生命令)沿用外层决定; 不经 CLI 入口的进程(门 MCP 服务, journald 留痕 AIPOS-PRERELEASE-1)取 non_cli_default_enabled。只开关调试轨迹输出, 信封判定逻辑与结果不变; 门拒时的拒因与原因链由各命令照常输出。",
@@ -2814,6 +2843,47 @@
         "unreadable": {"code": 4, "meaning": "治理根或声明解析失败(无治理根 / project.json 坏 / 母本缺 / 母本含未声明占位), fail-closed"}
       }
     },
+    "lybra_roadmap": {
+      "description": "AIPOS-F171 件①(设计稿 governance/research/2026-10-16-roadmap-verification-design.md, Owner 10-16 同意): 结构化路线图的声明与编辑。`lybra roadmap show [项目] [--lane <lane>] [--json]` 只读: 列里程碑(lane / 状态 / 目标日)与验收标准(核对方式)及各自挂接卡数, 末行游离卡数; 无路线图文件 = 提示首次用法(不报错, 退出 0)。`lybra roadmap add-milestone --id --lane --title [--target-date] [--status]` / `add-criterion --milestone --id --statement --verify` / `set --id --field --value` / `remove --id`: 两阶段(two_phase_protocol.roadmap_writers; 缺省预演, --confirm 写 + decision_log 指针 + 落账 post_write_landing.commands.roadmap_writers)。目标项目解析与 project 族写命令同一实现 workspace_config.resolve_project_write_target(显式项目名 > --workspace-root / 所在治理根; 禁回落 home 级活动项目)。文件形 config.schema governance_structure.roadmap; 卡挂接 card.schema roadmap_link。任何项目同一组命令, 产品不写死项目 / 路径 / 卡号前缀。",
+      "phase": "render",
+      "surface": ["cli"],
+      "cli_command": "lybra roadmap",
+      "single_implementation": "tools/aipos_cli/roadmap.py(声明读取 / 文件读写与校验 / 编辑计划 / 挂接卡扫描 / 游离判定 card_link_status / 出卡与 amend 挂接校验 link_problems / 两阶段写 + 指针 + 落账 apply_roadmap_change / 文本渲染)+ aipos_cli 薄壳",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string", "description": "项目名(缺省 = --workspace-root / 所在治理根声明的项目)"},
+          "id": {"type": "string", "description": "里程碑 / 标准 id(config.schema governance_structure.roadmap.id_pattern; 项目内唯一)"},
+          "lane": {"type": "string", "description": "里程碑所属 lane(子项目); show 的过滤条件"},
+          "title": {"type": "string", "description": "里程碑一句人话目标"},
+          "target_date": {"type": "string", "description": "目标日 YYYY-MM-DD(可选)"},
+          "status": {"type": "string", "description": "里程碑状态(值域 governance_structure.roadmap.status.enum)"},
+          "milestone": {"type": "string", "description": "add-criterion: 所属里程碑 id"},
+          "statement": {"type": "string", "description": "add-criterion: 可核对的一句话"},
+          "verify": {"type": "string", "description": "add-criterion: 核对方式(值域 governance_structure.roadmap.verify.enum)"},
+          "field": {"type": "string", "description": "set: 字段名(可改字段 governance_structure.roadmap.settable_fields)"},
+          "value": {"type": "string", "description": "set: 新值"},
+          "dry_run": {"type": "boolean", "description": "预演(缺省)"},
+          "confirm": {"type": "boolean", "description": "写入 + 指针 + 落账"},
+          "actor": {"type": "string", "description": "落账提交身份 / 指针 Decided by(缺省 $USER 或 owner)"},
+          "workspace_root": {"type": "string", "description": "目标治理根(未给项目名时)"},
+          "json": {"type": "boolean", "description": "JSON 输出"}
+        },
+        "additionalProperties": false
+      },
+      "texts": {
+        "no_roadmap": "项目 {project} 未声明路线图({path} 不存在)。首次: `lybra roadmap add-milestone --id <里程碑id> --lane <lane> --title <一句话目标>` 预演后加 --confirm; 再 `lybra roadmap add-criterion --milestone <里程碑id> --id <标准id> --statement <可核对的一句话> --verify auto|artifact|owner_check`",
+        "header": "路线图 {project} · {path} · 里程碑 {milestones} 个 · 标准 {criteria} 个",
+        "unlinked_line": "游离卡(本项目卡未挂里程碑): {count} 张{sample}",
+        "decision_summary": "路线图变更 {subcommand} {target}: {detail}"
+      },
+      "exit_codes": {
+        "ok": {"code": 0, "meaning": "show 已输出 / 预演通过 / 已写入并落账"},
+        "refused": {"code": 1, "meaning": "拒(拒因码见 config.schema governance_structure.roadmap.reject_codes; 零写入)"},
+        "usage": {"code": 2, "meaning": "参数错"},
+        "landing_failed": {"code": 3, "meaning": "写入已生效但落账未完成(同 post_write_landing.landing_failed_exit_code; 出补账命令)"}
+      }
+    },
     "lybra_updates": {
       "description": "AIPOS-F167 件②③(Owner 10-16: 产品更新的「顾问须知」由产品自己送达, Owner 零转述): `lybra updates [--actor <实例>] [--all] [--workspace-root <治理根>] [--json]` 列该顾问实例的未读更新说明全文(--all = 全部, 标已读/未读); `lybra updates --ack --actor <实例> [--dry-run|--confirm]` 记已读(两阶段 two_phase_protocol.advisor_update_writers, 落账 post_write_landing.commands.advisor_update_ack)。更新说明 = 卡面 advisor_notice(card.schema fields.advisor_notice)在部署唯一口汇成的产品侧记录(store), 跨项目共享: 任何接入项目的顾问在其治理根运行本命令读同一份库, 已读按本治理根本实例各记(ack)。四出口(charter 开头 / loop status 末尾 / next 末尾 / brief 末尾)经同一渲染 advisor_updates_cli.advisor_banner_lines 显示「Lybra 有 N 条未读更新」(banner), 无未读 / 库不可用 = 不显示(行为不变); 读不出 = 一行告警(不静默, 不掀翻原命令)。审计/执行体的变化仍走章程渲染(AIPOS-F164), 不重复送达。",
       "phase": "render",
@@ -3028,6 +3098,12 @@
             "subcommands": ["set-paths", "set-repo", "set-repos", "set-workstation", "set-meta", "set-execution", "set-model", "set-return-summary", "freeze-legacy", "dispatch-mode set", "relocate-workstation"],
             "scope": "AIPOS-F159 件①(gap #144): 写 project.json 的 project 族命令 --confirm 成功后的写出文件(治理根相对): two_phase_protocol.project_json_writers 各命令 = project.json(--confirm 即落, 无改动亦经同一提交口核一次: 范围已落账 = PASS no-op, 前次写后未落账者随之补落); freeze-legacy = 本次追加的清单条目 + 本次补声明 legacy_baseline 时的 project.json(本批无卡可冻 = 无写出, 不落); dispatch-mode set = project.json + 切换留痕文件。AIPOS-F161: relocate-workstation = 本项目 enrollment_log(追加的 relocate 位置事件; 唯一写出, 工位目录在治理仓外不入)。提交身份 = 该命令 --actor(dispatch-mode set 为 --by; 未给 = $USER 或 owner, 与 set-repo / project new 同一缺省)。--dry-run 零写入、不落账。唯一落账点: 写 project.json 的两阶段命令经输出包装 aipos_cli._project_json_two_phase_emit, freeze-legacy / dispatch-mode set 经同一薄壳 aipos_cli._land_project_writes(→ land_written_paths)。不含 project new / import(建治理根本身, 治理根此时可能尚未入治理仓; 向导第 1 步照旧给 governance-commit 与 home git-init)。",
             "message_template": "chore(governance): 项目配置落账 {subcommand} {project}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra project {subcommand} --confirm"
+          },
+          "roadmap_writers": {
+            "cli": "lybra roadmap <subcommand> --confirm",
+            "subcommands": ["add-milestone", "add-criterion", "set", "remove"],
+            "scope": "AIPOS-F171 件①: 本次写出的路线图文件(project.json paths.roadmap_file) + 本次生成的 decision_log 指针(治理根相对); 预演零写入、不落账。提交身份 = 该命令 --actor(未给 = $USER 或 owner)。唯一落账点 roadmap.apply_roadmap_change(→ land_written_paths)。",
+            "message_template": "chore(governance): 路线图变更落账 {subcommand} {target} {project}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra roadmap {subcommand} --confirm"
           }
         },
         "not_applicable": "envelope revoke / renew: 非 --dry-run 即门外拒(board_adapter.record_owner_decision dry_run=False = _blocked_execute), 无写路径、无记录可落; 日后加写路径须登记于 commands"

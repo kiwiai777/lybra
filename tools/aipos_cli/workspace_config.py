@@ -700,7 +700,8 @@ def declared_project_id(governance_root: str | Path) -> str:
 PROJECT_PATH_KEYS = ("return_root", "verdict_root", "queue_root", "task_cards_root", "manual_gate_mode", "finalize_mode",
                      "foundation_backlog", "hard_rules_source", "policies_root",  # AIPOS-F103 件④: 信封目录
                      "loop_runs_root",  # AIPOS-F131 件①: loop 运行记录落点
-                     "stage_archive_root")  # AIPOS-F145 件①: 阶段档案目录(缺省 = 声明 default_from)
+                     "stage_archive_root",  # AIPOS-F145 件①: 阶段档案目录(缺省 = 声明 default_from)
+                     "roadmap_file")  # AIPOS-F171 件①: 结构化路线图声明文件(缺省 governance/roadmap.yaml; 唯一读写 roadmap.py)
 #: AIPOS-F145 件①: 阶段档案落点键(唯一读取口 stage_archive_root; 阶段闸门拒因出口按此键渲染)
 STAGE_ARCHIVE_PATH_KEY = "stage_archive_root"
 # AIPOS-F78B 件②: 非路径键(值域读声明 enum), 与布尔 manual_gate_mode 一样不做路径解析

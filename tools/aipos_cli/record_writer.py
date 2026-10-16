@@ -465,6 +465,17 @@ def render_frontmatter_block(metadata: dict[str, Any], order: list[str] | None =
     return block
 
 
+def render_yaml_document(mapping: dict[str, Any], order: list[str] | None = None) -> str:
+    """AIPOS-F171 件①: 独立 YAML 映射文档(治理根 roadmap.yaml)的序列化——与卡 frontmatter 同一序列化(_dump_frontmatter_yaml)
+    与同一回读校验(读侧 = frontmatter.parse_yaml_mapping 背后的同一解析实现), 禁另写 YAML 输出。顶层键序同 render_frontmatter_block;
+    嵌套映射保持调用方给出的插入序。返回以换行结尾的文档文本; 回读不逐字一致 = FrontmatterRoundtripError(不落盘)。"""
+    ordered_meta = _ordered_frontmatter(mapping, order)
+    yaml_text = _dump_frontmatter_yaml(ordered_meta)
+    _self_check_yaml(yaml_text, ordered_meta)
+    _verify_frontmatter_roundtrip(f"---\n{yaml_text}\n---\n", ordered_meta)
+    return yaml_text + "\n"
+
+
 def render_markdown(metadata: dict[str, Any], body: str, order: list[str] | None = None) -> str:
     """Render markdown with YAML frontmatter.
 
