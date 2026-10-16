@@ -588,6 +588,12 @@
               "list_timeout_seconds": 60,
               "list_header_first_column": "provider",
               "id_template": "{provider}/{model}"
+            },
+            "session": {
+              "description": "AIPOS-F171B 件②: 固定会话 id 的参数声明(pi `--session-id <id>`: 按工位目录的项目会话精确 id, 不存在即以该 id 新建、已存在即接着该会话)。loop 唯一拉起口(loop_driver.plan_launch)在 argv 模板(及 model 参数)后追加本 argv({session_id} = loop 生成的会话 id, 整参数替换); 首次拉起与同会话续接(verbs.schema lybra_loop.launch.resume)用同一 id。id = id_prefix + '-' + 卡号(非 [A-Za-z0-9] 字符换 '-', 小写)+ '-' + 12 位随机十六进制, 须匹配 id_pattern(pi 自身校验同式样), 不匹配 = 不拉起(fail-closed)。本段缺 = 不固定会话、不续接(行为不变)。",
+              "argv": ["--session-id", "{session_id}"],
+              "id_prefix": "lybra",
+              "id_pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$"
             }
           }
         },

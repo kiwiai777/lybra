@@ -400,6 +400,16 @@ def launch_declaration(contract: dict[str, Any]) -> dict[str, Any]:
     return decl
 
 
+def resume_prompt_template(decl: dict[str, Any]) -> str:
+    """AIPOS-F171B 件②: verbs.schema lybra_loop.launch.resume.prompt(须含 {artifact})。缺 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    prompt = (decl.get("resume") or {}).get("prompt") if isinstance(decl.get("resume"), dict) else None
+    if not isinstance(prompt, str) or "{artifact}" not in prompt:
+        raise SchemaLoadError(f"verbs.schema.json verbs.{LOOP_VERB}.launch.resume.prompt 未声明(须为含 {{artifact}} 的串)")
+    return prompt
+
+
 @dataclass
 class LaunchPlan:
     """一次等待的拉起判定。refusal 非空 = 不拉起(退回手工, 等待提示 = manual_hint)。"""
@@ -417,6 +427,10 @@ class LaunchPlan:
     remote: dict[str, Any] = field(default_factory=dict)  # AIPOS-F110: transport=remote 时 {host, dir, identity_source}
     privilege_guard: dict[str, Any] = field(default_factory=dict)  # AIPOS-F165 件③: harness_launch.privilege_guard_state 判定
     model: dict[str, Any] = field(default_factory=dict)  # AIPOS-F169: {model(None = 不传 --model), source, role}(pi_model_for_role 判定)
+    # AIPOS-F171B 件②: 固定会话 id(harness 模板 session 声明; 空 = 不固定、不续接)/ 续接上限(project.json launch_resume_max)/ 续接指令模板
+    session_id: str = ""
+    resume_max: int = 0
+    resume_prompt: str = ""
 
     def append_kickoff_note(self, note: str) -> None:
         """AIPOS-F162 件①: 开工提示后附一段(拒因补做); argv 中整参数 kickoff 同步替换(跨机 kickoff 经 stdin 读 self.kickoff)。"""
@@ -424,12 +438,19 @@ class LaunchPlan:
         self.kickoff = f"{old}\n\n{note}" if old else note
         self.argv = [self.kickoff if a == old else a for a in self.argv]
 
+    def resumed(self, prompt: str) -> "LaunchPlan":
+        """AIPOS-F171B 件②: 同会话续接的拉起计划——同一 argv 模板与会话 id, 整参数 kickoff 换成续接指令(跨机经 stdin 读 kickoff)。"""
+        import dataclasses
+
+        old = self.kickoff
+        return dataclasses.replace(self, kickoff=prompt, argv=[prompt if a == old else a for a in self.argv])
+
     def to_dict(self) -> dict[str, Any]:
         return {"card": self.card, "harness": self.harness, "instance": self.instance, "launched": not self.refusal,
                 "refusal": self.refusal, "manual_hint": self.manual_hint if self.refusal else "",
                 "workstation": self.location.get("dir"), "host": self.location.get("host"),
                 "transport": self.location.get("transport"), "privilege_guard": dict(self.privilege_guard),
-                "model": dict(self.model) or None}
+                "model": dict(self.model) or None, "session_id": self.session_id or None, "resume_max": self.resume_max}
 
 
 def card_harness(task_fm: dict[str, Any]) -> str:
@@ -639,6 +660,20 @@ def plan_launch(governance_root: Path, card: str, *, policy: dict[str, Any] | No
             argv_template = argv_template + model_launch_args(template, plan.harness, plan.model["model"])
     except (ExecutionDeclarationError, ValueError, OSError, SchemaLoadError) as exc:
         return refuse(f"pi 模型声明不可用(fail-closed, 不拉起): {exc}")
+    # AIPOS-F171B 件②: 固定会话 id 唯一注入处(模型参数之后; local 与 remote 同一 argv 模板)。模板 session 声明(enums.schema)缺 = 不固定、不续接;
+    # 续接上限 = project.json launch_resume_max(唯一读取口), 续接指令 = verbs.schema lybra_loop.launch.resume.prompt; 任一不合 = 不拉起(fail-closed)
+    from tools.aipos_cli.harness_launch import session_launch_args
+    from tools.aipos_cli.workspace_config import launch_resume_max
+
+    try:
+        session = session_launch_args(template, plan.harness, card)
+        if session is not None:
+            plan.session_id, session_args = session
+            plan.resume_max = launch_resume_max(governance_root)
+            plan.resume_prompt = resume_prompt_template(decl)
+            argv_template = argv_template + session_args
+    except (ValueError, OSError, SchemaLoadError) as exc:
+        return refuse(f"pi 会话 / 续接声明不可用(fail-closed, 不拉起): {exc}")
     if plan.location.get("transport") == "remote":
         return _plan_remote_launch(governance_root, plan, decl, argv_template, refuse)
     try:
@@ -934,102 +969,148 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
     拉起事件写不进 session record → 终止, exit 4。
     AIPOS-F107 件①: 信号处置覆盖拉起全程——Popen 期间到的信号先记下(拉起后按中断处理), 拉起起至清组+收尾留痕止
     中断处置不撤(清理与留痕期间到的信号记下, 清完再抛), 不留「默认处置直接终止 loop、进程组成孤儿」的窗口。
-    AIPOS-F131: 拉起/收尾与进程活动(只类别与时间)进运行记录; 等待期 sleeper 每轮读输出后按节流落盘(静默期也落最后一条)。"""
+    AIPOS-F131: 拉起/收尾与进程活动(只类别与时间)进运行记录; 等待期 sleeper 每轮读输出后按节流落盘(静默期也落最后一条)。
+    AIPOS-F171B 件②: 进程 exit 0 而产物未就绪(半途停笔)且计划固定了会话(plan.session_id)= 以同一会话续接(plan.resumed, 指令
+    plan.resume_prompt), 至多 plan.resume_max 次, 等待总时长仍为同一 --max-wait(续接用剩余时长); 用尽 / 无剩余时长才判早退。
+    非 0 退出 / 被信号终止 / 超时不续接(_should_resume 唯一判定)。"""
     if _charter_before_launch(index, step, plan, governance_root, result, contract=contract, say=say, recorder=recorder):
         return True  # AIPOS-F164 件②: 章程不新鲜且未能 sync = 不拉起
+    wait_timeout = exit_code_for(contract, "wait_timeout")
+    deadline = utc_now() + timedelta(seconds=float(watch_args.timeout))  # 续接共用同一 --max-wait(F73D: 本模块不计时自旋)
+    artifact = str(Path(str(watch_args.workspace_root)) / wait_patterns[0]) if wait_patterns else "(产物落点)"
+    attempt, resume = plan, 0
+    with _signals_raise_interrupt():
+        while True:
+            args = watch_args if resume == 0 else SimpleNamespace(**{**vars(watch_args), "timeout": (deadline - utc_now()).total_seconds()})
+            run = _launch_once(index, step, attempt, governance_root, result, contract=contract, decl=decl, watch=watch,
+                               watch_args=args, ready=ready, say=say, actor=actor, envelope_id=envelope_id, recorder=recorder,
+                               resume=resume)
+            if run["outcome"] == "artifact_ready":
+                return False
+            if run["outcome"] not in ("early_exit", "timeout"):
+                return True  # 拉起失败 / 拉起事件写不进: _launch_once 已按出口填 result
+            if run["outcome"] == "early_exit" and _should_resume(plan, run["returncode"], resume, (deadline - utc_now()).total_seconds()):
+                resume += 1
+                step.launch = {**(step.launch or {}), "session_id": plan.session_id, "resumes": resume}
+                say(f"[{index}] resume: {plan.harness} {plan.card} exit 0 而产物未就绪(半途停笔) → 同会话 {plan.session_id} 续接 "
+                    f"{resume}/{plan.resume_max}(等的是 {artifact})")
+                attempt = plan.resumed(plan.resume_prompt.replace("{artifact}", artifact))
+                continue
+            step.ok = False
+            if run["outcome"] == "early_exit":
+                tail = "\n".join(f"    {line}" for line in run["stderr_tail"]) or "    (stderr 无输出)"
+                resumed = (f"(同会话 {plan.session_id} 已续接 {resume}/{plan.resume_max} 次仍未写出)"
+                           if plan.session_id and run["returncode"] == 0 else "")
+                step.message = (f"拉起的 {plan.harness} 进程已退出(exit {run['returncode']})而产物未就绪{resumed}: 等的是 {wait_patterns}\n"
+                                f"  stderr 末尾:\n{tail}")
+            else:
+                step.message = f"等待产物超时(watch exit {run['watch_rc']}), 已终止拉起的 {plan.harness} 进程组: 等的是 {wait_patterns}"
+            say(f"[{index}] exit 3 — {step.message}")
+            result.outcome, result.exit_code, result.message = "wait_timeout", wait_timeout, step.message
+            result.reason = "launch_early_exit" if run["outcome"] == "early_exit" else "launch_timeout"
+            return True
+
+
+def _should_resume(plan: LaunchPlan, returncode: Any, resumed: int, remaining_seconds: float) -> bool:
+    """AIPOS-F171B 件②: 是否同会话续接(唯一判定)——固定了会话、进程以 exit 0 自行结束(非 0 / 被信号终止 = 维持早退原判)、
+    续接未达上限、等待仍有剩余时长。"""
+    return bool(plan.session_id) and returncode == 0 and resumed < int(plan.resume_max) and remaining_seconds > 0
+
+
+def _launch_once(index: int, step: LoopStep, plan: LaunchPlan, governance_root: Path, result: LoopResult, *,
+                 contract: dict[str, Any], decl: dict[str, Any], watch: Callable[..., int], watch_args: SimpleNamespace,
+                 ready: Callable[[list[str]], bool], say: Callable[[str], None], actor: str, envelope_id: str,
+                 recorder: LoopRunRecorder, resume: int) -> dict[str, Any]:
+    """一次拉起(resume=0)或同会话第 resume 次续接: 起进程 → 留痕 → 经唯一哨兵等待 → 收尾清进程组(调用方须已在 _signals_raise_interrupt 内)。
+    返回 {outcome: artifact_ready | early_exit | timeout | launch_failed | record_failed, returncode, watch_rc, stderr_tail};
+    launch_failed / record_failed 已按出口填 result。"""
     wait_timeout = exit_code_for(contract, "wait_timeout")
     terminate_wait = float(decl["terminate_wait_seconds"])
     where = f"{plan.location.get('host') or '本机'}:{plan.cwd}"
     harness: LaunchedHarness | None = None
     launch_error: OSError | None = None
     outcome = "error"
-    with _signals_raise_interrupt():
-        try:
-            with _signals_deferred() as early:  # Popen 期间不被打断(打断 = 子进程已起而无人持有 → 孤儿)
-                try:
-                    harness = LaunchedHarness(plan, decl, say)
-                except OSError as exc:
-                    launch_error = exc
-            if harness is None:
-                if early:
-                    raise LoopInterrupted(early[0])
-                step.ok, step.message = False, f"拉起 {plan.harness} 失败({type(launch_error).__name__}: {launch_error}); 手工模式: {plan.manual_hint}"
-                say(f"[{index}] exit 3 — {step.message}")
-                result.outcome, result.exit_code, result.message = "wait_timeout", wait_timeout, step.message
-                result.reason = "launch_failed"
-                return True
-            step.launch = {**(step.launch or {}), "pid": harness.pid, "pgid": harness.pgid, "remote_pgid": harness.remote_pgid}
-            remote_part = f" remote_pgid={harness.remote_pgid}(经 ssh, kickoff 经 stdin)" if plan.remote else ""
-            say(f"[{index}] launch: {plan.harness} @ {where} pid={harness.pid} pgid={harness.pgid}{remote_part}(信封 {envelope_id} launch_harnesses 授权; "
-                f"kickoff = 工位 my-tasks --task-id {plan.card} next_card.kickoff; 禁提权 {harness.privilege_guard['state']}: {harness.privilege_guard['detail']}; "
-                f"模型 {model_label(plan.model)})")
-            recorder.launch_started(plan, harness)
+    session = f"; session={plan.session_id}; resume={resume}/{plan.resume_max}" if plan.session_id else ""
+    try:
+        with _signals_deferred() as early:  # Popen 期间不被打断(打断 = 子进程已起而无人持有 → 孤儿)
+            try:
+                harness = LaunchedHarness(plan, decl, say)
+            except OSError as exc:
+                launch_error = exc
+        if harness is None:
             if early:
                 raise LoopInterrupted(early[0])
-            failure = _session_event(governance_root, plan.card, actor, "harness_launch",
-                                     f"harness={plan.harness}; transport={plan.location.get('transport')}; host={plan.location.get('host') or '(本机, 存量缺 host)'}; "
-                                     f"workstation={plan.cwd}; pid={harness.pid}; pgid={harness.pgid}; remote_pgid={harness.remote_pgid}; envelope={envelope_id}; "
-                                     f"privilege_guard={harness.privilege_guard['state']}({harness.privilege_guard['detail']}); "
-                                     f"model={(plan.model or {}).get('model') or '(未传, pi 缺省)'}({(plan.model or {}).get('source')})")
-            if failure:
-                outcome = "record_failed"
-                step.ok, step.message = False, f"拉起事件写不进 {plan.card} session record({failure}), 已终止进程组; 拉起须留痕(fail-closed)"
-                say(f"[{index}] exit 4 — {step.message}")
-                result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), step.message
-                result.reason = "launch_record_failed"
-                return True
-            running = harness
-
-            def _pump(seconds: float) -> None:  # 唯一哨兵的 sleeper: 读拉起进程输出(select 事件驱动), 再按节流落运行记录
-                running.pump(seconds)
-                recorder.flush()
-
-            watch_out = io.StringIO()
-            with contextlib.redirect_stdout(watch_out):
-                rc = watch(watch_args, expect_ready=ready, stop_when=harness.exited, sleeper=_pump)
-            step.exit_code, step.output = int(rc), watch_out.getvalue().strip()
-            if rc == declared_exit_code("lybra_agent_watch", "change"):  # AIPOS-F101 件③: 哨兵退出码读声明
-                outcome = "artifact_ready"
-                harness.pump(float(decl["grace_seconds"]))  # 宽限期内自行退出即收尾(输出照常汇总)
-                detail = "宽限期内自行退出" if harness.exited() else f"宽限 {decl['grace_seconds']}s 后终止进程组"
-                step.message = f"产物就绪(拉起的 {plan.harness} 进程: {detail})"
-                say(f"[{index}] ready: {step.output}")
-                return False
-            step.ok = False
-            if harness.exited():
-                outcome = "early_exit"
-                harness.pump(terminate_wait)  # 进程已退出: 读尽管道余量(EOF 即返回)再取 stderr 末尾
-                tail = "\n".join(f"    {line}" for line in harness.stderr_tail) or "    (stderr 无输出)"
-                step.message = (f"拉起的 {plan.harness} 进程已退出(exit {harness.proc.returncode})而产物未就绪: 等的是 {wait_patterns}\n"
-                                f"  stderr 末尾:\n{tail}")
-            else:
-                outcome = "timeout"
-                step.message = f"等待产物超时(watch exit {rc}), 已终止拉起的 {plan.harness} 进程组: 等的是 {wait_patterns}"
+            step.ok, step.message = False, f"拉起 {plan.harness} 失败({type(launch_error).__name__}: {launch_error}); 手工模式: {plan.manual_hint}"
             say(f"[{index}] exit 3 — {step.message}")
             result.outcome, result.exit_code, result.message = "wait_timeout", wait_timeout, step.message
-            result.reason = "launch_early_exit" if outcome == "early_exit" else "launch_timeout"
-            return True
-        except LoopInterrupted as exc:
-            if harness is not None:
-                outcome = f"interrupted(signal {exc.signum})"
-                step.ok, step.message = False, f"loop 收到信号 {exc.signum}: 已终止拉起的 {plan.harness} 进程组"
-                say(f"[{index}] interrupted — {step.message}")
-            raise
-        finally:
-            if harness is not None:
-                with _signals_deferred() as pending:  # 清进程组与收尾留痕期间不被信号打断; 期间到的信号清完再按 LoopInterrupted 抛
-                    how = harness.terminate_group(terminate_wait)
-                    harness.close()
-                    say(harness.counts_line())
-                    step.launch = {**(step.launch or {}), "outcome": outcome, "returncode": harness.proc.returncode, "termination": how}
-                    recorder.launch_ended(outcome, harness.proc.returncode, how)
-                    failure = _session_event(governance_root, plan.card, actor, "harness_exit",
-                                             f"harness={plan.harness}; pid={harness.pid}; outcome={outcome}; returncode={harness.proc.returncode}; termination={how}")
-                    if failure:
-                        say(f"[{index}] warning — 收尾事件写不进 {plan.card} session record: {failure}")
-                        step.launch["exit_event_error"] = failure
-                if pending:
-                    raise LoopInterrupted(pending[0])
+            result.reason = "launch_failed"
+            return {"outcome": "launch_failed"}
+        step.launch = {**(step.launch or {}), "pid": harness.pid, "pgid": harness.pgid, "remote_pgid": harness.remote_pgid}
+        remote_part = f" remote_pgid={harness.remote_pgid}(经 ssh, kickoff 经 stdin)" if plan.remote else ""
+        what = f"同会话续接 {resume}/{plan.resume_max} 指令" if resume else f"工位 my-tasks --task-id {plan.card} next_card.kickoff"
+        say(f"[{index}] launch: {plan.harness} @ {where} pid={harness.pid} pgid={harness.pgid}{remote_part}(信封 {envelope_id} launch_harnesses 授权; "
+            f"kickoff = {what}; 禁提权 {harness.privilege_guard['state']}: {harness.privilege_guard['detail']}; "
+            f"模型 {model_label(plan.model)}" + (f"; 会话 {plan.session_id}" if plan.session_id else "") + ")")
+        recorder.launch_started(plan, harness, resume=resume)
+        if early:
+            raise LoopInterrupted(early[0])
+        failure = _session_event(governance_root, plan.card, actor, "harness_launch",
+                                 f"harness={plan.harness}; transport={plan.location.get('transport')}; host={plan.location.get('host') or '(本机, 存量缺 host)'}; "
+                                 f"workstation={plan.cwd}; pid={harness.pid}; pgid={harness.pgid}; remote_pgid={harness.remote_pgid}; envelope={envelope_id}; "
+                                 f"privilege_guard={harness.privilege_guard['state']}({harness.privilege_guard['detail']}); "
+                                 f"model={(plan.model or {}).get('model') or '(未传, pi 缺省)'}({(plan.model or {}).get('source')}){session}")
+        if failure:
+            outcome = "record_failed"
+            step.ok, step.message = False, f"拉起事件写不进 {plan.card} session record({failure}), 已终止进程组; 拉起须留痕(fail-closed)"
+            say(f"[{index}] exit 4 — {step.message}")
+            result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), step.message
+            result.reason = "launch_record_failed"
+            return {"outcome": "record_failed"}
+        running = harness
+
+        def _pump(seconds: float) -> None:  # 唯一哨兵的 sleeper: 读拉起进程输出(select 事件驱动), 再按节流落运行记录
+            running.pump(seconds)
+            recorder.flush()
+
+        watch_out = io.StringIO()
+        with contextlib.redirect_stdout(watch_out):
+            rc = watch(watch_args, expect_ready=ready, stop_when=harness.exited, sleeper=_pump)
+        step.exit_code, step.output = int(rc), watch_out.getvalue().strip()
+        if rc == declared_exit_code("lybra_agent_watch", "change"):  # AIPOS-F101 件③: 哨兵退出码读声明
+            outcome = "artifact_ready"
+            harness.pump(float(decl["grace_seconds"]))  # 宽限期内自行退出即收尾(输出照常汇总)
+            detail = "宽限期内自行退出" if harness.exited() else f"宽限 {decl['grace_seconds']}s 后终止进程组"
+            step.ok, step.message = True, f"产物就绪(拉起的 {plan.harness} 进程: {detail})"
+            say(f"[{index}] ready: {step.output}")
+            return {"outcome": outcome}
+        if harness.exited():
+            outcome = "early_exit"
+            harness.pump(terminate_wait)  # 进程已退出: 读尽管道余量(EOF 即返回)再取 stderr 末尾
+            return {"outcome": outcome, "returncode": harness.proc.returncode, "watch_rc": rc, "stderr_tail": list(harness.stderr_tail)}
+        outcome = "timeout"
+        return {"outcome": outcome, "returncode": None, "watch_rc": rc, "stderr_tail": []}
+    except LoopInterrupted as exc:
+        if harness is not None:
+            outcome = f"interrupted(signal {exc.signum})"
+            step.ok, step.message = False, f"loop 收到信号 {exc.signum}: 已终止拉起的 {plan.harness} 进程组"
+            say(f"[{index}] interrupted — {step.message}")
+        raise
+    finally:
+        if harness is not None:
+            with _signals_deferred() as pending:  # 清进程组与收尾留痕期间不被信号打断; 期间到的信号清完再按 LoopInterrupted 抛
+                how = harness.terminate_group(terminate_wait)
+                harness.close()
+                say(harness.counts_line())
+                step.launch = {**(step.launch or {}), "outcome": outcome, "returncode": harness.proc.returncode, "termination": how}
+                recorder.launch_ended(outcome, harness.proc.returncode, how)
+                failure = _session_event(governance_root, plan.card, actor, "harness_exit",
+                                         f"harness={plan.harness}; pid={harness.pid}; outcome={outcome}; returncode={harness.proc.returncode}; "
+                                         f"termination={how}{session}")
+                if failure:
+                    say(f"[{index}] warning — 收尾事件写不进 {plan.card} session record: {failure}")
+                    step.launch["exit_event_error"] = failure
+            if pending:
+                raise LoopInterrupted(pending[0])
 
 
 # ---------------------------------------------------------------------------
@@ -1133,6 +1214,9 @@ def run_loop(
         return LoopResult(task_id, "not_derivable", exit_code_for(contract, "not_derivable"), msg, missing_records=[msg])
     say.recorder = recorder
     say(f"lybra loop {task_id}: run_record={recorder.path} log={recorder.log_path}(进度: lybra loop status --task-id {task_id})")
+    refused = _single_instance_refusal(task_id, governance_root, recorder, contract=contract, say=say)
+    if refused is not None:  # AIPOS-F171B 件①: 同卡已有存活 loop = 拒(未推进任何步)
+        return refused
     if continues_run:  # AIPOS-F166 件①: 等待步遇部署更新 re-exec 而来, 与上一运行记录明确关联
         recorder.set_continues(str(continues_run))
         say(f"lybra loop {task_id}: 续等(AIPOS-F166): 接上一运行 {continues_run}(等待中部署已更新, 已 re-exec 到本部署快照, "
@@ -1174,6 +1258,33 @@ def run_loop(
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             say(f"补落账: {task_id} loop 运行记录终态 失败({type(exc).__name__}: {exc}); 出口: lybra loop --task-id {task_id}(推导核派生 N6 落账步)")
     return result
+
+
+def _single_instance_refusal(task_id: str, governance_root: Path, recorder: LoopRunRecorder, *, contract: dict[str, Any],
+                             say: Callable[[str], None]) -> LoopResult | None:
+    """AIPOS-F171B 件①: 同卡单实例(loop 启动唯一口; 判定唯一实现 loop_run_record.live_run_conflict, 与 lybra loop status 同一 judge_run)。
+    本运行记录已落盘后判: 先于本运行的同卡 loop 仍存活 = 本运行以 single_instance.end_reason 结束(exit_codes 同名), 不推进任何步;
+    运行记录读不出 = 无从判定, 拒跑(not_derivable, fail-closed)。None = 可继续。"""
+    from tools.aipos_cli.loop_run_record import live_run_conflict, single_instance_declaration
+
+    end_reason = str(single_instance_declaration(contract)["end_reason"])
+    status_cmd = f"lybra loop status --task-id {task_id} --workspace-root {governance_root}"
+    try:
+        conflict = live_run_conflict(governance_root, task_id, own=recorder.meta, contract=contract)
+    except LoopRunRecordError as exc:
+        msg = f"本卡运行记录读不出, 无从判定是否已有 loop 在跑, 拒跑(fail-closed): {exc}"
+        code = exit_code_for(contract, "not_derivable")
+        say(f"lybra loop {task_id}: exit {code} — {msg}")
+        recorder.end(outcome="not_derivable", exit_code=code, reason="not_derivable", message=msg)
+        return LoopResult(task_id, "not_derivable", code, msg, missing_records=[msg], reason="not_derivable",
+                          run_record=str(recorder.path), run_log=str(recorder.log_path))
+    if conflict is None:
+        return None
+    code = exit_code_for(contract, end_reason)
+    say(f"lybra loop {task_id}: exit {code} — {conflict['message']}")
+    recorder.end(outcome=end_reason, exit_code=code, reason=end_reason, message=conflict["message"])
+    return LoopResult(task_id, end_reason, code, conflict["message"], suggested_action=status_cmd, reason=end_reason,
+                      run_record=str(recorder.path), run_log=str(recorder.log_path))
 
 
 def _run_enveloped(task_id: str, governance_root: Path, result: LoopResult, *, task_fm: dict[str, Any], driver_actor: str,

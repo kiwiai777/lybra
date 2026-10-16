@@ -6,6 +6,10 @@
   pi -p <kickoff> --mode json [--model <id>]
                               = loop 按 enums.schema harness pi launch 模板拉起: 收到的 argv(不含 kickoff 正文)落
                               FAKE_HARNESS_LOG/<卡号>.argv.json, 然后 exec tests/fake_harness.py <kickoff>(F95 假 harness 干活)。
+  pi -p <prompt> --mode json [--model <id>] --session-id <id>
+                              AIPOS-F171B: 会话按 id 落 FAKE_HARNESS_LOG/pi_sessions/<id>.json(首次 = 记下 kickoff; 已存在 = 同会话续接,
+                              追加本次指令)。续接时 argv 落 <卡号>.argv.resume<k>.json(指令显示为 <resume>), 指令原文落
+                              <卡号>.resume<k>.prompt; exec 假 harness 时传原 kickoff, 环境 FAKE_PI_RESUMES=<k>(首次 0)。
 """
 from __future__ import annotations
 
@@ -35,13 +39,26 @@ def list_models(argv: list[str]) -> int:
 
 
 def launch(argv: list[str]) -> int:
-    kickoff = argv[argv.index("-p") + 1]
-    card = next((ln.split("已认领任务卡 ", 1)[1].split("。", 1)[0] for ln in kickoff.splitlines() if "已认领任务卡 " in ln), "unknown")
+    prompt = argv[argv.index("-p") + 1]
     log = os.environ["FAKE_HARNESS_LOG"]
     os.makedirs(log, exist_ok=True)
-    shown = ["<kickoff>" if a == kickoff else a for a in argv]
-    with open(os.path.join(log, f"{card}.argv.json"), "w", encoding="utf-8") as fh:
+    kickoff, resumes = prompt, 0
+    if "--session-id" in argv:  # AIPOS-F171B: 同会话续接 = 会话已存在 → 原 kickoff + 第 k 次续接
+        store = Path(log) / "pi_sessions" / f"{argv[argv.index('--session-id') + 1]}.json"
+        store.parent.mkdir(parents=True, exist_ok=True)
+        data = json.loads(store.read_text(encoding="utf-8")) if store.exists() else {"kickoff": prompt, "prompts": []}
+        if store.exists():
+            data["prompts"].append(prompt)
+        kickoff, resumes = data["kickoff"], len(data["prompts"])
+        store.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    card = next((ln.split("已认领任务卡 ", 1)[1].split("。", 1)[0] for ln in kickoff.splitlines() if "已认领任务卡 " in ln), "unknown")
+    shown = [("<resume>" if resumes else "<kickoff>") if a == prompt else a for a in argv]
+    name = f"{card}.argv.resume{resumes}.json" if resumes else f"{card}.argv.json"
+    with open(os.path.join(log, name), "w", encoding="utf-8") as fh:
         json.dump(["pi", *shown], fh, ensure_ascii=False)
+    if resumes:
+        Path(log, f"{card}.resume{resumes}.prompt").write_text(prompt, encoding="utf-8")
+    os.environ["FAKE_PI_RESUMES"] = str(resumes)
     os.execv(sys.executable, [sys.executable, str(FAKE_HARNESS), kickoff])
     return 0  # 不可达(execv 替换进程)
 
