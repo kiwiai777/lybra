@@ -1332,6 +1332,7 @@ def _integrate_card_branch(
     branch_integration: dict[str, Any] | None = None,
     task_mode: str | None = None,
     output_target: str | None = None,
+    needs_worktree: bool | None = None,
 ) -> dict[str, Any]:
     """AIPOS-C3C: 按 N5 branch_integration 声明执行卡分支整合 (merge --no-ff)。
 
@@ -1340,6 +1341,8 @@ def _integrate_card_branch(
       (信息格式由 merge_message_format 声明保证归属: 含卡号 + 裁决号)
     ③冲突 → 中止出声, 列冲突文件, 绝不自动解, main 无半合并残留
     ④分支不存在 → 代码任务(task_mode=code)硬 BLOCK(AIPOS-F61); 非代码任务跳过出声
+      AIPOS-F178 件④: needs_worktree = 唯一判据 next_resolver.card_needs_worktree(调用方按卡面算好传入)——True(写产品仓的
+      docs 等卡同代码卡)缺分支 = 硬 BLOCK; 分支存在则不论 task_mode 同一路径 merge --no-ff。None = 未传(旧调用面), 只按 F61 判
     ⑤已合并 → 跳过出声
     分支保留 (不删除), 与既有惯例一致。
 
@@ -1372,7 +1375,8 @@ def _integrate_card_branch(
         # AIPOS-F61: 代码任务分支不存在 = 硬 BLOCK(禁假报成功 + 写错误 finalization 记录)
         # 非代码任务(无 output_target 或 task_mode != code)仍允许跳过
         is_code_task = (
-            task_mode == "code"
+            bool(needs_worktree)
+            or task_mode == "code"
             or (output_target and str(output_target).strip())
         )
         if is_code_task:
@@ -2037,6 +2041,10 @@ def _finalize_task_impl(
     # AIPOS-F61: 读卡面 task_mode/output_target 传给分支整合, 代码任务缺分支=硬 BLOCK
     _task_mode_for_branch: str | None = None
     _output_target_for_branch: str | None = None
+    _needs_worktree_for_branch: bool | None = None
+    from tools.aipos_cli.next_resolver import card_needs_worktree as _card_needs_worktree
+    from tools.schema_loader import SchemaLoadError as _SchemaLoadError
+
     try:
         from tools.aipos_cli.task_loader import find_task_by_id as _find_task
         _matches = _find_task(task_id, governance_root)
@@ -2046,7 +2054,9 @@ def _finalize_task_impl(
             _ot = _task_meta.get("output_target")
             if _ot:
                 _output_target_for_branch = str(_ot).strip() if not isinstance(_ot, list) else ", ".join(str(x) for x in _ot)
-    except (OSError, ValueError) as exc:
+            # AIPOS-F178 件④: 缺分支是否硬拒先问唯一判据(写产品仓的 docs 等卡同代码卡)
+            _needs_worktree_for_branch = _card_needs_worktree(governance_root, {**dict(_task_meta), "task_id": task_id})
+    except (OSError, ValueError, _SchemaLoadError) as exc:
         # AIPOS-F115 件③(F108R): 原 except Exception: pass 降级为「不知 task_mode」→ 代码任务缺分支的硬 BLOCK 被静默跳过(fail-open)。
         # 读卡失败 = 无法判定是否代码任务, 拒 finalize(拒因带出口)。
         reason = f"读卡失败, 无法判定 task_mode/output_target(代码任务缺分支须硬拒): {exc}; 出口: 修复卡文件后重跑 finalize"
@@ -2156,6 +2166,7 @@ def _finalize_task_impl(
         branch_integration=branch_integration,
         task_mode=_task_mode_for_branch,
         output_target=_output_target_for_branch,
+        needs_worktree=_needs_worktree_for_branch,
     )
     if integrate["blocked"]:
         return {

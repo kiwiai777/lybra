@@ -1508,6 +1508,13 @@ def _drive(
                 result.missing_records, result.suggested_action = missing, str(derivation.get("suggested_action") or "")
                 return result
 
+        if launch_card is not None:
+            # AIPOS-F178 件③: 执行体/审计体等待前核验已认领卡的工作树——缺 = 自动走缺树修复唯一实现(queue repair 同一函数), 记运行记录
+            if _claimed_worktree_repair(index, launch_card, governance_root, result, steps=steps, contract=contract,
+                                        node=derivation.get("current_node"), state=derivation.get("current_state"),
+                                        actor=driver_actor, say=say, recorder=recorder):
+                return result
+
         if wait_patterns:
             step = LoopStep(index, "wait", derivation.get("current_node"), derivation.get("current_state"), target_card,
                             artifacts=wait_patterns)
@@ -1681,6 +1688,39 @@ def _drive(
     result.outcome, result.exit_code, result.message = "wait_timeout", exit_code_for(contract, "wait_timeout"), msg
     result.reason = "max_steps_exhausted"
     return result
+
+
+def _claimed_worktree_repair(index: int, card: str, governance_root: Path, result: LoopResult, *, steps: list[LoopStep],
+                             contract: dict[str, Any], node: Any, state: Any, actor: str, say: Callable[[str], None],
+                             recorder: LoopRunRecorder) -> bool:
+    """AIPOS-F178 件③: 等待目标卡已认领、须建树(next_resolver.card_needs_worktree)而工作树不在落点 = 等待前自动补建(唯一实现
+    next_resolver.repair_missing_worktree, 与 `lybra queue repair --confirm` 同一函数, 写修复记录), 运行记录 worktree_repairs 记一条、
+    loop 输出一行 `[轮] worktree_repair: …`; 补建成功 / 无需补建(未认领 / 不须建树 / 已在落点 / 判不出——交既有等待与开工核验出声)
+    = 返回 False 照常进入等待。补建失败 = 本运行以 worktree_repair_failed 结束(not_derivable 退出码), 结束原文给修复命令, 返回 True。"""
+    from tools.aipos_cli.next_resolver import repair_missing_worktree, worktree_repair_command
+
+    who = actor or "loop"
+    preview = repair_missing_worktree(governance_root, card, who, confirm=False)
+    if not preview.get("applicable"):
+        return False
+    repaired = repair_missing_worktree(governance_root, card, who, confirm=True)
+    created = repaired.get("action") == "created"
+    preview_cmd = worktree_repair_command(card, who, governance_root)
+    recorder.worktree_repair({"card": card, "outcome": "created" if created else "failed",
+                              "worktree_path": repaired.get("worktree_path"), "repair_command": preview_cmd,
+                              "detail": str(repaired.get("message") or "")})
+    if created:
+        say(f"[{index}] worktree_repair: {repaired.get('message')}")
+        return False
+    msg = (f"已认领卡 {card} 缺卡工作树, 自动补建失败: {repaired.get('message')}; 出口: {preview_cmd} 预演看拒因, "
+           f"修好后加 --confirm, 再用原命令重跑 loop")
+    steps.append(LoopStep(index, "execute", node, state, card, action_type="worktree_repair",
+                          command=worktree_repair_command(card, who, governance_root, confirm=True), ok=False, exit_code=1, message=msg))
+    say(f"[{index}] exit 4 — {msg}")
+    result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), msg
+    result.missing_records, result.suggested_action = [f"卡工作树 {repaired.get('worktree_path') or ''}"], preview_cmd
+    result.reason = "worktree_repair_failed"
+    return True
 
 
 def _adopt_own_deploy(index: int, guard: Any, governance_root: Path, task_id: str, *, say: Callable[[str], None],

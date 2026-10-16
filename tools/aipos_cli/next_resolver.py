@@ -303,21 +303,63 @@ def forensic_subject(card_frontmatter: dict[str, Any] | None) -> str | None:
     return str(fm.get("reviewed_task_id") or fm.get("derived_from") or "").strip()
 
 
-def card_needs_worktree(workspace_root: Path, card_frontmatter: dict[str, Any] | None) -> bool:
-    """认领是否须建卡工作树(唯一判据, 门认领 queue_mutation 与 loop 认领核验同读): 代码卡 = 卡分支工作树;
-    AIPOS-F89 件③a: 审计卡且被审卡为代码卡(或被审卡查不到 = fail-closed 按需建) = 被审分支 tip 的只读 detached 取证工作树。
-    其余(非代码卡及其审计卡)不建树(与 F90 前语义一致)。"""
+def task_mode_writes_product_repo(task_mode: str) -> bool:
+    """AIPOS-F178 件①: 该 task_mode 缺省是否写产品仓(唯一读取口: enums.schema task_mode.values[].writes_product_repo)。
+    缺值 / 未知 task_mode = False(行为同 F178 前: 只有代码卡缺省建树)。声明缺 / 形变 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = ((load_schema("enums", REPO_ROOT).get("enums") or {}).get("task_mode") or {})
+    values = decl.get("values")
+    if not isinstance(values, list) or not isinstance(decl.get("product_repo_write"), dict):
+        raise SchemaLoadError("enums.schema.json enums.task_mode(values / product_repo_write)未声明(AIPOS-F178)")
+    mode = str(task_mode or "").strip().lower()
+    for item in values:
+        if isinstance(item, dict) and str(item.get("value") or "").strip().lower() == mode:
+            flag = item.get("writes_product_repo")
+            if not isinstance(flag, bool):
+                raise SchemaLoadError(f"enums.schema.json task_mode={mode!r} 缺 writes_product_repo(布尔, AIPOS-F178)")
+            return flag
+    return False
+
+
+def card_writes_product_repo(workspace_root: Path, card_frontmatter: dict[str, Any] | None) -> bool:
+    """AIPOS-F178 件①: 非审计卡是否写产品仓 = task_mode 缺省(enums.schema writes_product_repo)或卡面 lane.repo 显式出现且
+    解析到的仓不是治理根自身(workspace_config.resolve_card_repo 唯一解析); lane.repo 解析失败 = 按写仓(建树时给出拒因, fail-closed)。"""
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved
+
     fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
-    mode = str(fm.get("task_mode") or "").strip().lower()
-    if mode == "code":
+    if task_mode_writes_product_repo(str(fm.get("task_mode") or "")):
         return True
+    lane = fm.get("lane") if isinstance(fm.get("lane"), dict) else {}
+    if not str(lane.get("repo") or "").strip():
+        return False
+    try:
+        repo = _card_repo_root(workspace_root, str(fm.get("task_id") or ""), fm)
+    except CardRepoUnresolved:
+        return True
+    return Path(repo).resolve() != Path(workspace_root).resolve()
+
+
+def card_needs_worktree(workspace_root: Path, card_frontmatter: dict[str, Any] | None) -> bool:
+    """是否建卡工作树的唯一判据(AIPOS-F178: 声明 enums.schema task_mode.product_repo_write)——门认领 queue_mutation、loop 认领后核验与
+    自动补建、`lybra queue repair` 缺树修复、my-tasks 开工面、card render、write_boundary、finalize 缺分支判定、审计裁决绑 tip 同读。
+    执行卡 = card_writes_product_repo(写产品仓 = 卡分支工作树; 只写治理根 = 不建树);
+    AIPOS-F89 件③a: 审计卡跟随被审卡(被审卡写仓 = 被审分支 tip 的只读 detached 取证工作树; 被审卡查不到 / 审计卡缺被审卡字段
+    = fail-closed 按需建, 建树时给出拒因)。"""
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
     reviewed = forensic_subject(fm)
+    if reviewed is None:
+        return card_writes_product_repo(workspace_root, fm)
     if not reviewed:
-        return reviewed == ""  # 审计卡缺被审卡字段 → 需要(建树时给出拒因); 非审计卡 → 不需要
+        # 审计卡缺被审卡字段 → 需要(建树时给出拒因)
+        return True
     task_path, _ = _find_task_in_queue(workspace_root, reviewed)
     if task_path is None:
         return True
-    return str(_read_frontmatter(task_path).get("task_mode") or "code").strip().lower() == "code"
+    reviewed_fm = _read_frontmatter(task_path)
+    # reviewed card without task_mode keeps the pre-F178 reading (treated as code)
+    return card_writes_product_repo(workspace_root, {**reviewed_fm, "task_id": str(reviewed_fm.get("task_id") or reviewed),
+                                                     "task_mode": str(reviewed_fm.get("task_mode") or "code")})
 
 
 def card_worktree_location(workspace_root: Path, task_id: str,
@@ -358,7 +400,9 @@ def card_report_path(workspace_root: Path, task_id: str, card_frontmatter: dict[
 def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None) -> dict[str, Any]:
     """`lybra my-tasks --json` 每张 claimed 卡的开工面字段(工位 /go 只读这些字段, 不自行推导)。
 
-    - worktree_path: 推导出的工作树路径(不可推导 = None)
+    - worktree_required: 是否建卡工作树(AIPOS-F178 唯一判据 card_needs_worktree); False = 只写治理根, worktree_path 恒 None,
+      worktree_refusal = WORKTREE_NOT_REQUIRED(点名治理根报告落点)
+    - worktree_path: 推导出的工作树路径(不可推导 / 不建树 = None)
     - worktree_exists: 该路径是否已在盘上(认领时由驱动方建)
     - worktree_refusal: None | {code, reason} —— 不可推导(CardRepoUnresolved.code / WORKTREE_ROOT_UNDECLARED)
       或尚未建立(WORKTREE_NOT_CREATED); 从不输出空串
@@ -381,20 +425,38 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
     if not task_id:
         missing = {"code": "TASK_ID_MISSING", "reason": "卡 frontmatter 无 task_id, 工作树/报告落点按卡 ID 推导, 不可推导"}
         return {**view, "worktree_refusal": missing, "report_refusal": missing}
+    # AIPOS-F178 件②: 是否建树只问唯一判据 card_needs_worktree; 不建树(只写治理根)= 不给工作树路径, 拒因点名治理根报告落点
     try:
-        _code_repo, worktree = card_worktree_location(workspace_root, task_id, fm)
-    except CardRepoUnresolved as exc:
-        view["worktree_refusal"] = {"code": exc.code, "reason": exc.reason}
+        needs_worktree = card_needs_worktree(workspace_root, {**fm, "task_id": task_id})
     except (SchemaLoadError, OSError, ValueError) as exc:
-        view["worktree_refusal"] = {"code": "WORKTREE_ROOT_UNDECLARED", "reason": f"工作树落点声明读取失败: {exc}"}
-    else:
-        view["worktree_path"] = str(worktree)
-        view["worktree_exists"] = worktree.is_dir()
-        if not view["worktree_exists"]:
-            view["worktree_refusal"] = {
-                "code": "WORKTREE_NOT_CREATED",
-                "reason": f"工作树 {worktree} 尚未建立: 认领由驱动方完成并建树, 工位等待驱动方完成认领; 持续存在按 block-and-report 上报",
-            }
+        needs_worktree = True
+        view["worktree_refusal"] = {"code": "WORKTREE_ROOT_UNDECLARED", "reason": f"是否建卡工作树不可判定(AIPOS-F178 判据): {exc}"}
+    view["worktree_required"] = needs_worktree
+    if view["worktree_refusal"] is None and not needs_worktree:
+        try:
+            where = str(card_report_path(workspace_root, task_id, fm))
+        except (SchemaLoadError, OSError, ValueError) as exc:
+            where = f"(报告落点不可推导: {exc})"
+        view["worktree_refusal"] = {
+            "code": "WORKTREE_NOT_REQUIRED",
+            "reason": (f"本卡只写治理根(不写产品仓, 不建卡工作树/卡分支; 判据 enums.schema task_mode.product_repo_write): "
+                       f"产物写治理根报告落点 {where}; 工位开工提示只给建树卡, 本卡开工说明见卡渲染物(card render)"),
+        }
+    elif view["worktree_refusal"] is None:
+        try:
+            _code_repo, worktree = card_worktree_location(workspace_root, task_id, fm)
+        except CardRepoUnresolved as exc:
+            view["worktree_refusal"] = {"code": exc.code, "reason": exc.reason}
+        except (SchemaLoadError, OSError, ValueError) as exc:
+            view["worktree_refusal"] = {"code": "WORKTREE_ROOT_UNDECLARED", "reason": f"工作树落点声明读取失败: {exc}"}
+        else:
+            view["worktree_path"] = str(worktree)
+            view["worktree_exists"] = worktree.is_dir()
+            if not view["worktree_exists"]:
+                view["worktree_refusal"] = {
+                    "code": "WORKTREE_NOT_CREATED",
+                    "reason": f"工作树 {worktree} 尚未建立: 认领由驱动方完成并建树, 工位等待驱动方完成认领; 持续存在按 block-and-report 上报",
+                }
     try:
         view["report_path"] = str(card_report_path(workspace_root, task_id, fm))
     except (SchemaLoadError, OSError, ValueError) as exc:
@@ -451,7 +513,8 @@ NEXT_CARD_RULE: dict[str, Any] = {
     "eligible": [
         "queue_state == claimed",
         "卡面 frontmatter 可解析(产品唯一读取口 parse_markdown_frontmatter 无告警)",
-        "worktree_exists == true(工作树由驱动方认领时建立; AIPOS-F89 件③a: 审计卡 = 被审分支 tip 的只读 detached 取证工作树)",
+        "worktree_exists == true(工作树由驱动方认领时建立; AIPOS-F89 件③a: 审计卡 = 被审分支 tip 的只读 detached 取证工作树; "
+        "AIPOS-F178: worktree_required == false 的只写治理根卡不入选, 拒因 WORKTREE_NOT_REQUIRED 点名治理根报告落点)",
         "report_path 可推导(开工提示必需的报告落点)",
         "report_required_frontmatter 可推导(AIPOS-F93 件①: 报告必填字段, 声明 transitions artifact_ingest 单源; 审计卡附被审 tip/tree)",
         "kickoff_refusal 为空(AIPOS-F90 件③: 本实例在办、未结案、产物未交——判据 next_resolver.kickoff_refusal)",
@@ -672,6 +735,11 @@ def select_next_card(cards: list[dict[str, Any]], *, remote: dict[str, Any] | No
             excluded.append({"task_id": task_id, "code": str(kickoff.get("code") or "NOT_YOUR_TURN"), "reason": str(kickoff.get("reason") or "")})
             continue
         refusal = card.get("worktree_refusal") if isinstance(card.get("worktree_refusal"), dict) else {}
+        if card.get("worktree_required") is False:
+            # AIPOS-F178 件②: 只写治理根的卡不建树, 拒因原样点名治理根报告落点(不再指向不存在的工作树路径)
+            excluded.append({"task_id": task_id, "code": str(refusal.get("code") or "WORKTREE_NOT_REQUIRED"),
+                             "reason": str(refusal.get("reason") or "本卡只写治理根, 不建卡工作树")})
+            continue
         if not card.get("worktree_path"):
             excluded.append({
                 "task_id": task_id,
@@ -1558,7 +1626,9 @@ def _card_branch_tip(workspace_root: Path, task_id: str,
     tip 读取口 = _extract_artifact_subject_from_branch(裁决提交绑 tip / 门交回记录绑 tip 同一函数), 分支名 = card_branch_name(声明)。
     None = 非代码卡 / 产品仓不可解析(交给既有派生点出声)/ 无卡分支。"""
     fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
-    if str(fm.get("task_mode") or "code").strip() != "code":
+    # AIPOS-F178: card branch exists iff the card writes a product repo (single criterion card_writes_product_repo;
+    # card without task_mode keeps the pre-F178 reading = code)
+    if not card_writes_product_repo(workspace_root, {**fm, "task_id": task_id, "task_mode": str(fm.get("task_mode") or "code")}):
         return None
     from tools.aipos_cli.workspace_config import CardRepoUnresolved
 
@@ -2517,11 +2587,14 @@ def _derive_next_step(
         reviewed_task_path, _ = _find_task_in_queue(workspace_root, reviewed_task_id)
         reviewed_fm = _read_frontmatter(reviewed_task_path) if reviewed_task_path else {}
         reviewed_task_mode = reviewed_fm.get("task_mode", "code")
+        # AIPOS-F178: 被审卡有卡分支 = 写产品仓(唯一判据 card_writes_product_repo; 写仓的 docs 等卡与代码卡同路径绑 tip)
+        reviewed_has_branch = card_writes_product_repo(
+            workspace_root, {**reviewed_fm, "task_id": reviewed_task_id, "task_mode": str(reviewed_task_mode or "code")})
         # AIPOS-F73D + F78C: 卡分支活在被审卡声明的产品仓(resolve_card_repo: lane.repo → repos 清单 → code_repo → 治理根)
         from tools.aipos_cli.workspace_config import CardRepoUnresolved
 
         try:
-            reviewed_repo = _card_repo_root(workspace_root, reviewed_task_id, reviewed_fm) if reviewed_task_mode == "code" else workspace_root
+            reviewed_repo = _card_repo_root(workspace_root, reviewed_task_id, reviewed_fm) if reviewed_has_branch else workspace_root
         except CardRepoUnresolved as exc:
             return {
                 "task_id": task_id,
@@ -2536,7 +2609,8 @@ def _derive_next_step(
                 "notes": f"N4: 被审卡产品仓解析失败({exc.code}), 裁决 artifact_subject 无据(AIPOS-F78C)",
                 "action": {"type": "artifact_invalid", "card": reviewed_task_id, "path": ""},
             }
-        artifact_subject = _extract_artifact_subject_from_branch(reviewed_repo, reviewed_task_id, reviewed_task_mode)
+        artifact_subject = _extract_artifact_subject_from_branch(reviewed_repo, reviewed_task_id,
+                                                                 "code" if reviewed_has_branch else reviewed_task_mode)
         # AIPOS-F78B 件③: 驱动方信封(覆盖被审卡, 与 loop 同一判据)在 → 一阶段 PreAuthorized; 否则 Supervised 形(执行时 exit 5)
         driver_policy = _driver_envelope_ref(workspace_root, reviewed_task_id, reviewed_fm, conn_arg)
         
@@ -3729,6 +3803,114 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
         }
 
 
+def worktree_repair_command(task_id: str, actor: str, governance_root: str | Path | None = None, *, confirm: bool = False) -> str:
+    """AIPOS-F178 件③: 缺树修复命令的唯一渲染(loop 停线提示 / my-tasks 出口同用)。"""
+    root = f" --workspace-root {governance_root}" if governance_root else ""
+    return f"lybra queue repair --task-id {task_id} --actor {actor or '<实例>'}{root}{' --confirm' if confirm else ''}"
+
+
+def repair_missing_worktree(repo_root: Path, task_id: str, actor: str, *, confirm: bool = False) -> dict[str, Any]:
+    """AIPOS-F178 件③: 「已认领但缺卡工作树」检测与修复——`lybra queue repair` 族(queue_mutation.repair_bad_frontmatter 委托)
+    与 loop 认领后核验 / 等待前核验共用的唯一实现(与唯一建树入口 _ensure_worktree 同模块)。
+
+    判据只读既有唯一实现: 是否须建树 = next_resolver.card_needs_worktree; 落点 = card_worktree_location; 建树 =
+    next_resolver._ensure_worktree(门认领同一建树入口, 审计卡 = 被审分支 tip 的只读 detached 取证工作树; 卡分支已存在即复用)。
+    适用 = 卡在 claimed 队列目录、须建树、落点目录不存在。confirm=False = 预演(零写); confirm=True = 建树并写
+    records/events/<ID>/event_worktree_repair_*.md; 已在落点 = 幂等(不重建、不写记录)。
+    返回 {operation, task_id, actor, confirm, applicable, needs_worktree, queue_state, code_repo, worktree_path, branch,
+    action: none|would_create|created, message, repair_record, verdict: OK|BLOCK, blocking_reasons}; 失败 = BLOCK + 原文拒因。"""
+    from tools.aipos_cli.clock import file_slug, iso_z
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.record_writer import render_markdown, write_records_atomic
+    from tools.aipos_cli.task_loader import AmbiguousTaskCard, find_task_card
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved
+    from tools.schema_constants import RecordType
+    from tools.schema_loader import SchemaLoadError
+
+    out: dict[str, Any] = {
+        "operation": "repair_worktree", "task_id": task_id, "actor": actor, "confirm": bool(confirm), "applicable": False,
+        "needs_worktree": None, "queue_state": None, "code_repo": None, "worktree_path": None, "branch": None,
+        "action": "none", "message": "", "repair_record": None, "verdict": "OK", "blocking_reasons": [],
+    }
+
+    def block(reason: str) -> dict[str, Any]:
+        out.update({"verdict": "BLOCK", "message": reason})
+        out["blocking_reasons"].append(reason)
+        return out
+
+    try:
+        card_path, queue_state = find_task_card(Path(repo_root), task_id)
+    except AmbiguousTaskCard as exc:
+        return block(str(exc))
+    if card_path is None:
+        return block(f"队列中找不到卡 {task_id}")
+    out["queue_state"] = queue_state
+    if queue_state != "claimed":
+        out["message"] = f"卡 {task_id} 在 {queue_state} 队列, 不是「已认领」, 缺树修复不适用"
+        return out
+    try:
+        fm, _body = require_frontmatter(card_path)
+        fm = {**fm, "task_id": str(fm.get("task_id") or task_id)}
+        needs = card_needs_worktree(Path(repo_root), fm)
+    except (FrontmatterReadError, SchemaLoadError, OSError, ValueError) as exc:
+        return block(f"卡 {task_id} 是否须建树不可判定(fail-closed): {exc}")
+    out["needs_worktree"] = needs
+    if not needs:
+        try:
+            where = str(card_report_path(Path(repo_root), task_id, fm))
+        except (SchemaLoadError, OSError, ValueError) as exc:
+            where = f"(报告落点不可推导: {exc})"
+        out["message"] = f"卡 {task_id} 只写治理根(不建卡工作树; 判据 enums.schema task_mode.product_repo_write), 产物落 {where}; 缺树修复不适用"
+        return out
+    try:
+        code_repo, worktree = card_worktree_location(Path(repo_root), task_id, fm)
+        branch = card_branch_name(forensic_subject(fm) or task_id)
+    except CardRepoUnresolved as exc:
+        return block(f"{exc.code}: {exc.reason}")
+    except (SchemaLoadError, OSError, ValueError) as exc:
+        return block(f"卡 {task_id} 工作树落点不可推导: {exc}")
+    out.update({"code_repo": str(code_repo), "worktree_path": str(worktree), "branch": branch})
+    if worktree.is_dir():
+        out["message"] = f"卡工作树已在落点 {worktree}(幂等: 不重建, 不写记录)"
+        return out
+    out["applicable"] = True
+    if not confirm:
+        out["action"] = "would_create"
+        out["message"] = (f"预演: 卡 {task_id} 已认领但缺卡工作树, 将在 {code_repo} 建 {worktree}(分支 {branch}; "
+                          f"经门认领同一建树入口 _ensure_worktree, 卡分支已存在即复用)。确认: {worktree_repair_command(task_id, actor, confirm=True)}")
+        return out
+    built = _ensure_worktree(Path(repo_root), task_id, card_frontmatter=fm)
+    if not built.get("ok"):
+        return block(f"建卡工作树失败: {built.get('message')}")
+    if not Path(str(built.get("worktree_path") or worktree)).is_dir():
+        return block(f"落点 {worktree} 已被非目录占用, 未建卡工作树({built.get('message')}); 出口: 核对该路径是否在途产物, 移走后重试")
+    out["action"] = "created"
+    out["worktree_path"] = str(built.get("worktree_path") or worktree)
+    timestamp = iso_z()
+    record_id = f"event_worktree_repair_{task_id}_{file_slug('compact', timestamp)}"
+    metadata = {
+        "record_type": RecordType.TASK_PROGRESS_EVENT,
+        "event_type": "worktree_repair",
+        "task_id": task_id,
+        "actor": actor,
+        "timestamp": timestamp,
+        "repair": "AIPOS-F178 件③: 已认领但缺卡工作树, 经门认领同一建树入口补建(卡面与队列状态不变)",
+        "code_repo": str(code_repo),
+        "worktree_path": out["worktree_path"],
+        "branch": branch,
+        "ensure_message": str(built.get("message") or ""),
+    }
+    body = (f"# Worktree Repair: {task_id}\n\n卡 `{card_path}` 已认领但缺卡工作树; 补建于 `{out['worktree_path']}`(分支 `{branch}`)。\n\n"
+            "由 `lybra queue repair --confirm`(或 loop 认领后核验)经 next_resolver._ensure_worktree 写入。\n")
+    try:
+        written = write_records_atomic(Path(repo_root), [("event", record_id, render_markdown(metadata, body, list(metadata)), task_id)])
+    except (OSError, ValueError, RuntimeError) as exc:
+        return block(f"卡工作树已建于 {out['worktree_path']}, 但修复记录写入失败: {exc}")
+    out["repair_record"] = written["paths"][0]
+    out["message"] = f"已补建卡工作树 {out['worktree_path']}(分支 {branch}); 修复记录 {out['repair_record']}"
+    return out
+
+
 def _exclude_worktree_root(code_repo: Path, worktree_path: Path) -> str | None:
     """AIPOS-F92 件③: 工作树根(声明 worktree_root, 缺省 <产品仓>/.worktrees)在产品仓内时登记进该仓 .git/info/exclude
     (既有唯一实现 git_exclude.register_git_exclude, 幂等)。否则新项目产品仓的工作树目录是未跟踪文件, finalize 合并前
@@ -3975,14 +4157,23 @@ def _execute_claim_with_role_token(
     assigned_to = str(fm.get("assigned_to") or fm.get("agent_instance") or "")
     worktree_path = ""
     # AIPOS-F89 件③a: 认领须建树的判据与门侧同一函数 card_needs_worktree(代码卡 + 代码卡的审计卡)
+    repair_note = ""
+    repair: dict[str, Any] = {}
     if card_needs_worktree(workspace_root, fm if fm else {"task_mode": "code"}):
         view = card_workstation_view(workspace_root, task_id, fm)
+        if not view.get("worktree_exists"):
+            # AIPOS-F178 件③: 认领后核验缺树 = 自动走缺树修复唯一实现(queue repair 同一函数, 写修复记录); 修不了才停并给命令
+            repair = repair_missing_worktree(workspace_root, task_id, assigned_to, confirm=True)
+            if repair["action"] == "created":
+                view = card_workstation_view(workspace_root, task_id, fm)
+                repair_note = f"\nWorktree repair: {repair['message']}"
         if not view.get("worktree_exists"):
             refusal = view.get("worktree_refusal") or {}
             return {
                 "ok": False,
                 "action_type": "claim",
-                "message": f"门报认领成功但卡工作树不在落点({refusal.get('code') or 'WORKTREE_UNRESOLVED'}): 门侧建树失败须拒认领, 此为门/部署不一致",
+                "message": (f"门报认领成功但卡工作树不在落点({refusal.get('code') or 'WORKTREE_UNRESOLVED'}), 自动补建未成: "
+                            f"{repair.get('message') or ''}; 出口: {worktree_repair_command(task_id, assigned_to, workspace_root)} 预演看拒因, 修好后加 --confirm"),
                 "command": command,
                 "exit_code": 1,
                 "output": run.get("output", "") + "\n" + str(refusal.get("reason") or ""),
@@ -3995,7 +4186,7 @@ def _execute_claim_with_role_token(
         "message": "claim 成功 + 工作树已在落点" if worktree_path else "claim 成功",
         "command": command,
         "exit_code": 0,
-        "output": str(run.get("output") or "") + (f"\nWorktree: {worktree_path}" if worktree_path else ""),
+        "output": str(run.get("output") or "") + (f"\nWorktree: {worktree_path}" if worktree_path else "") + repair_note,
         "worktree_path": worktree_path,
         "spawn_action": {"type": "spawn_worker", "card": task_id, "worktree": worktree_path, "instance": assigned_to},
     }

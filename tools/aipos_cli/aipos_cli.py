@@ -2063,10 +2063,11 @@ def build_parser() -> argparse.ArgumentParser:
     queue_return_repair_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     # AIPOS-F65C 件①: queue repair subcommand (repair bad frontmatter YAML)
-    queue_repair_parser = queue_subparsers.add_parser("repair", help="AIPOS-F65C: Repair bad frontmatter in task card (minimal fix for unparseable YAML)")
+    queue_repair_parser = queue_subparsers.add_parser("repair", help="AIPOS-F65C: Repair bad frontmatter in task card (minimal fix for unparseable YAML); AIPOS-F178: also detects a claimed card missing its worktree (preview by default, --confirm builds it)")
     queue_repair_parser.add_argument("--task-id", required=True, help="Task ID to repair")
     queue_repair_parser.add_argument("--actor", required=True, help="Actor performing the repair")
     queue_repair_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    queue_repair_parser.add_argument("--confirm", action="store_true", help="AIPOS-F178: build the missing card worktree of a claimed card (same entry as gate claim; idempotent). Without it the worktree part is preview only")
     queue_repair_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     # AIPOS-FND-1: queue return subcommand (same-machine task return)
@@ -6015,6 +6016,7 @@ def main(argv: list[str] | None = None) -> int:
                 task_id=args.task_id,
                 actor=args.actor,
                 dry_run=args.dry_run,
+                confirm=bool(getattr(args, "confirm", False)),
             )
         except (FileNotFoundError, OSError, ValueError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
