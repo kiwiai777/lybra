@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
 import re
+import threading
+import time
+from collections import OrderedDict
 from typing import Any
 
 
@@ -899,9 +903,15 @@ def _fallback_parse(frontmatter: str, salvage: bool = False) -> tuple[dict[str, 
 
 
 def parse_markdown_frontmatter(text: str) -> tuple[dict[str, Any], str, list[str]]:
-    warnings: list[str] = []
+    data, body, warnings, shared = _markdown_parts(text)
+    return (_fresh_copy(data) if shared else data), body, list(warnings)
+
+
+def _markdown_parts(text: str) -> tuple[dict[str, Any], str, list[str], bool]:
+    """parse_markdown_frontmatter without the final copy: (mapping, body, warnings, shared); shared = the mapping is the
+    level-2 memo's private object (callers copy it before handing it out, never mutate it)."""
     if not text.startswith("---"):
-        return {}, text, warnings
+        return {}, text, [], False
 
     lines = text.splitlines()
     end_index: int | None = None
@@ -911,12 +921,54 @@ def parse_markdown_frontmatter(text: str) -> tuple[dict[str, Any], str, list[str
             break
 
     if end_index is None:
-        return {}, text, ["Frontmatter start found without closing delimiter"]
+        return {}, text, ["Frontmatter start found without closing delimiter"], False
 
     frontmatter = "\n".join(lines[1:end_index])
     body = "\n".join(lines[end_index + 1 :]).lstrip("\n")
-    data, warnings = _parse_frontmatter_text(frontmatter)
-    return data, body, warnings
+    data, warnings, shared = _parse_frontmatter_shared(frontmatter)
+    return data, body, warnings, shared
+
+
+def read_markdown_frontmatter(path: Any) -> tuple[dict[str, Any], str, list[str], bool]:
+    """AIPOS-F177 per-file cache (level 1, see the AIPOS-F177 comment below): read a markdown file (exactly
+    open(path, encoding="utf-8").read(), same exceptions) and parse it with parse_markdown_frontmatter ->
+    (mapping, body, warnings, starts_with_fence); starts_with_fence = the text starts with ``---``. An unchanged file
+    (same stat identity) is not read again; every call gets its own copy of the mapping."""
+    given = os.fspath(path)
+    key = os.path.abspath(given)
+    st = os.stat(given)
+    ident = (yaml is not None, st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+    with _FRONTMATTER_MEMO_LOCK:
+        cached = _FILE_CACHE.get(key)
+        if cached is not None and cached[0] == ident:
+            _FILE_CACHE.move_to_end(key)
+            _FILE_CACHE_STATS["hits"] += 1
+        else:
+            cached = None
+    if cached is not None:
+        return _fresh_copy(cached[1]), cached[2], list(cached[3]), cached[4]
+    with open(given, encoding="utf-8") as handle:
+        text = handle.read()
+    data, body, warnings, shared = _markdown_parts(text)
+    fence = text.startswith("---")
+    settled = time.time_ns() - max(st.st_mtime_ns, st.st_ctime_ns) >= _FILE_CACHE_RACY_WINDOW_NS
+    if not shared:  # no frontmatter / unclosed fence / not memoisable: the mapping is already the caller's own
+        with _FRONTMATTER_MEMO_LOCK:
+            _FILE_CACHE_STATS["misses"] += 1
+            _FILE_CACHE.pop(key, None)
+        return data, body, list(warnings), fence
+    with _FRONTMATTER_MEMO_LOCK:
+        _FILE_CACHE_STATS["misses"] += 1
+        if settled:
+            _FILE_CACHE[key] = (ident, data, body, list(warnings), fence)
+            _FILE_CACHE.move_to_end(key)
+            while len(_FILE_CACHE) > _FILE_CACHE_MAX_ENTRIES:
+                _FILE_CACHE.popitem(last=False)
+                _FILE_CACHE_STATS["evictions"] += 1
+        else:
+            _FILE_CACHE.pop(key, None)
+            _FILE_CACHE_STATS["unsettled"] += 1
+    return _fresh_copy(data), body, list(warnings), fence
 
 
 def parse_yaml_mapping(text: str) -> tuple[dict[str, Any], list[str]]:
@@ -931,13 +983,118 @@ def parse_yaml_mapping(text: str) -> tuple[dict[str, Any], list[str]]:
     return _parse_frontmatter_text("\n".join(lines))
 
 
+# AIPOS-F177 (read performance): the read caches and the parser choice live only in this module (one lock, one stats
+# reader frontmatter_memo_stats, one reset clear_frontmatter_memo), in two levels:
+#   Level 1, per file (read_markdown_frontmatter; records group load, queue card load, task_id lookup, require_frontmatter,
+#     claim counting): key = absolute path, valid while the parser in effect and the stat identity (st_dev, st_ino,
+#     st_size, st_mtime_ns, st_ctime_ns) are unchanged; value = (mapping, body, warnings, starts_with_fence). Any write
+#     changes st_ctime (tools cannot set it back), a replace changes st_ino; a file whose mtime / ctime is younger than
+#     _FILE_CACHE_RACY_WINDOW_NS is not cached at all (same-tick rewrites can never be served stale), so only modified or
+#     new files are re-read and re-parsed; a deleted file is never listed again by the callers' directory walks.
+#   Level 2, per frontmatter text (_parse_frontmatter_text; every caller, including the 80+ that pass text): key = (parser
+#     in effect, the exact frontmatter text). The key IS the parser input, so a hit can never be stale.
+#   - Values are kept private; every hit returns a fresh copy (callers may mutate what they get). Never persisted
+#     (process memory only): long-running board / gate processes benefit, a cold CLI run gets the libyaml speed-up.
+#   - Bounds = _FILE_CACHE_MAX_ENTRIES / _FRONTMATTER_MEMO_MAX_ENTRIES, least-recently-used eviction; guarded by one lock
+#     (board is multi-threaded); reading and parsing run outside the lock.
+#   - Parser: libyaml CSafeLoader when PyYAML was built with it (same SafeConstructor + Resolver as SafeLoader; result
+#     equality verified over all real governance-root frontmatter, see the card RETURN), else yaml.safe_load as before.
+#     Any CSafeLoader failure re-parses with the pure-Python SafeLoader, so error results and warning texts stay exactly
+#     the SafeLoader ones.
+_FRONTMATTER_MEMO_MAX_ENTRIES = 65536
+_FRONTMATTER_MEMO: "OrderedDict[tuple[bool, str], tuple[dict[str, Any], list[str]]]" = OrderedDict()
+_FRONTMATTER_MEMO_LOCK = threading.Lock()
+_FRONTMATTER_MEMO_STATS = {"hits": 0, "misses": 0, "evictions": 0}
+_FILE_CACHE_MAX_ENTRIES = 32768
+_FILE_CACHE_RACY_WINDOW_NS = 2_000_000_000
+_FILE_CACHE: "OrderedDict[str, tuple[tuple[int, ...], dict[str, Any], str, list[str], bool]]" = OrderedDict()
+_FILE_CACHE_STATS = {"hits": 0, "misses": 0, "evictions": 0, "unsettled": 0}
+_CONTAINERS = frozenset((dict, list, set))
+
+
+def _fresh_copy(value: Any) -> Any:
+    """Copy the mutable containers a YAML parse can produce; scalars (str / int / float / bool / None / date / datetime /
+    bytes) are immutable and shared."""
+    kind = type(value)
+    if kind is dict:
+        return {key: item if type(item) not in _CONTAINERS else _fresh_copy(item) for key, item in value.items()}
+    if kind is list:
+        return [item if type(item) not in _CONTAINERS else _fresh_copy(item) for item in value]
+    if kind is set:
+        return set(value)
+    return value
+
+
+def frontmatter_memo_stats() -> dict[str, dict[str, int]]:
+    """AIPOS-F177: counters of both levels for fixtures and the board perf log. file: hits / misses (= file reads) /
+    evictions / unsettled (read but too young to cache) / entries; text: hits / misses (= real YAML parses) / evictions / entries."""
+    with _FRONTMATTER_MEMO_LOCK:
+        return {"file": {**_FILE_CACHE_STATS, "entries": len(_FILE_CACHE)},
+                "text": {**_FRONTMATTER_MEMO_STATS, "entries": len(_FRONTMATTER_MEMO)}}
+
+
+def clear_frontmatter_memo() -> None:
+    """AIPOS-F177: drop both levels and reset counters (fixtures; production never needs it: keys are content / stat identity)."""
+    with _FRONTMATTER_MEMO_LOCK:
+        _FRONTMATTER_MEMO.clear()
+        _FILE_CACHE.clear()
+        for stats in (_FRONTMATTER_MEMO_STATS, _FILE_CACHE_STATS):
+            for key in stats:
+                stats[key] = 0
+
+
+def _yaml_safe_load(frontmatter: str) -> Any:
+    """yaml.safe_load result, through libyaml when available (see the AIPOS-F177 comment above)."""
+    c_loader = getattr(yaml, "CSafeLoader", None)
+    if c_loader is not None:
+        try:
+            return yaml.load(frontmatter, Loader=c_loader)  # noqa: S506 - CSafeLoader is the safe loader
+        except Exception:  # noqa: BLE001 - not swallowed: the pure-Python SafeLoader below re-parses and owns the outcome
+            return yaml.safe_load(frontmatter)
+    return yaml.safe_load(frontmatter)
+
+
 def _parse_frontmatter_text(frontmatter: str) -> tuple[dict[str, Any], list[str]]:
     """The frontmatter text (between the fences) → (mapping, warnings): the single implementation behind
-    parse_markdown_frontmatter and parse_yaml_mapping."""
+    parse_markdown_frontmatter and parse_yaml_mapping (AIPOS-F177: memoised by content, see above)."""
+    data, warnings, shared = _parse_frontmatter_shared(frontmatter)
+    return (_fresh_copy(data) if shared else data), list(warnings)
+
+
+def _parse_frontmatter_shared(frontmatter: str) -> tuple[dict[str, Any], list[str], bool]:
+    """Level-2 memo lookup / fill: (mapping, warnings, shared); shared = the mapping is the memo's private object
+    (never mutated; callers copy it out). A self-referencing YAML alias graph is returned as parsed and not memoised."""
+    key = (yaml is not None, frontmatter)
+    with _FRONTMATTER_MEMO_LOCK:
+        cached = _FRONTMATTER_MEMO.get(key)
+        if cached is not None:
+            _FRONTMATTER_MEMO.move_to_end(key)
+            _FRONTMATTER_MEMO_STATS["hits"] += 1
+    if cached is not None:
+        return cached[0], cached[1], True
+    data, warnings = _parse_frontmatter_uncached(frontmatter)
+    if "*" in frontmatter:  # only YAML aliases (*name) can build a cyclic graph: check copyability = memoisability
+        try:
+            _fresh_copy(data)
+        except RecursionError:
+            with _FRONTMATTER_MEMO_LOCK:
+                _FRONTMATTER_MEMO_STATS["misses"] += 1
+            return data, warnings, False
+    with _FRONTMATTER_MEMO_LOCK:
+        _FRONTMATTER_MEMO_STATS["misses"] += 1
+        _FRONTMATTER_MEMO[key] = (data, list(warnings))
+        _FRONTMATTER_MEMO.move_to_end(key)
+        while len(_FRONTMATTER_MEMO) > _FRONTMATTER_MEMO_MAX_ENTRIES:
+            _FRONTMATTER_MEMO.popitem(last=False)
+            _FRONTMATTER_MEMO_STATS["evictions"] += 1
+    return data, list(warnings), True
+
+
+def _parse_frontmatter_uncached(frontmatter: str) -> tuple[dict[str, Any], list[str]]:
     warnings: list[str] = []
     if yaml is not None:
         try:
-            data = yaml.safe_load(frontmatter) or {}
+            data = _yaml_safe_load(frontmatter) or {}
             if not isinstance(data, dict):
                 return {}, ["Frontmatter did not parse to a mapping"]
             return data, warnings
@@ -1002,13 +1159,15 @@ def require_frontmatter(path: Any, text: str | None = None, *, allow_missing_blo
     ``text`` 已在手时传入(仍以 ``path`` 署名), 免二次读盘。"""
     if text is None:
         try:
-            text = open(path, encoding="utf-8").read()  # noqa: SIM115 — path may be str or Path
+            data, body, warnings, fence = read_markdown_frontmatter(path)
         except (OSError, UnicodeDecodeError) as exc:
             raise FrontmatterReadError(path, f"文件不可读: {exc}") from exc
-    data, body, warnings = parse_markdown_frontmatter(text)
+    else:
+        data, body, warnings = parse_markdown_frontmatter(text)
+        fence = text.startswith("---")
     if warnings:
         raise FrontmatterReadError(path, "; ".join(warnings), _warning_file_line(warnings))
-    if not text.startswith("---") and not allow_missing_block:
+    if not fence and not allow_missing_block:
         raise FrontmatterReadError(path, "无 frontmatter 块(首行不是 ---)", 1)
     return data, body
 

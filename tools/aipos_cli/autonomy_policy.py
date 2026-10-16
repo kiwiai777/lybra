@@ -23,7 +23,7 @@ from tools.aipos_cli.clock import utc_now
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+from tools.aipos_cli.frontmatter import parse_markdown_frontmatter, read_markdown_frontmatter
 from tools.aipos_cli.record_writer import record_root, render_markdown
 from tools.schema_constants import RecordType
 
@@ -439,7 +439,7 @@ def _preauthorized_claim_counts(repo_root: Path) -> dict[str, int]:
         if not path.is_file():
             continue
         try:
-            metadata, _body, _warn = parse_markdown_frontmatter(path.read_text(encoding="utf-8"))
+            metadata, _body, _warn, _fence = read_markdown_frontmatter(path)  # AIPOS-F177: per-file cache (unchanged record = no re-read)
         except OSError:
             continue
         if not isinstance(metadata, dict):
@@ -1001,10 +1001,13 @@ def envelope_overview(governance_root: Path | str, *, now: datetime | None = Non
     status: 有效信封被接替 = superseded(不预警); 有效且达阈值 = warn; 其余 = usage.state(用尽 / 过期 / 未生效 / 停用 / 形不合 / 缺失)。
     current = 未被接替且 status ∈ _CURRENT_STATUSES。返回 {governance_root, envelopes(按 active_from 新→旧, 同刻按 id), drivers}:
     drivers = 每个驱动方(agent_or_role)一行 {agent_or_role, current: [当前在用 policy_id], latest}。"""
-    from tools.aipos_cli.task_loader import task_card_lookup_scope
+    from tools.aipos_cli.task_loader import lookup_scope_memo, task_card_lookup_scope
 
     root = Path(governance_root)
-    now = now or utc_now()
+    if now is None:
+        # AIPOS-F177 件③: 只读作用域(请求级 / 视图级)内同一治理根只推导一次, 各调用方拿深拷贝; 作用域外照旧每次现算
+        return lookup_scope_memo(root, "autonomy_policy.envelope_overview", lambda: envelope_overview(root, now=utc_now()),
+                                 copy_out=True)
     with task_card_lookup_scope(root):  # 只读推导: 已放行认领计数整根只数一趟(F142 同一作用域, 可重入)
         return _envelope_overview(root, now)
 

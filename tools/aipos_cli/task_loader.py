@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import os
 import re
 from contextlib import contextmanager
@@ -8,7 +9,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+from tools.aipos_cli.frontmatter import read_markdown_frontmatter
 from tools.aipos_cli.task_complexity import complexity_payload
 from tools.aipos_cli.workspace_config import (
 
@@ -45,6 +46,9 @@ QUEUE_SKELETON_STATES = _queue_state_projection("skeleton")
 QUEUE_TERMINAL_STATES = _queue_state_projection("terminal")
 
 
+_PLAIN_SCALARS = frozenset((str, int, float, bool, type(None)))
+
+
 def _serialize_dates(obj: Any) -> Any:
     """递归转换 date/datetime 对象为 ISO 格式字符串,确保 JSON 可序列化。
     
@@ -56,9 +60,10 @@ def _serialize_dates(obj: Any) -> Any:
     elif isinstance(obj, date):
         return obj.isoformat()
     elif isinstance(obj, dict):
-        return {k: _serialize_dates(v) for k, v in obj.items()}
+        # AIPOS-F177: plain scalars are returned as-is without a recursive call (same result, far fewer calls)
+        return {k: v if type(v) in _PLAIN_SCALARS else _serialize_dates(v) for k, v in obj.items()}
     elif isinstance(obj, (list, tuple)):
-        return [_serialize_dates(item) for item in obj]
+        return [item if type(item) in _PLAIN_SCALARS else _serialize_dates(item) for item in obj]
     else:
         return obj
 
@@ -115,6 +120,33 @@ def find_repo_context(start: Path | None = None) -> tuple[Path, Path | None]:
     return resolve_workspace_context(start, env=env)
 
 
+def _card_rel_path(path: Path, repo_root: Path) -> str:
+    """str(path.resolve().relative_to(repo_root.resolve())), AIPOS-240 symlink-safe. AIPOS-F177: inside a read scope the realpath of the
+    governance root and of each queue directory is walked once per scope; a card file that is itself a symlink is always resolved in
+    full; the containment check is the same component-wise prefix test relative_to makes (anything else falls back to relative_to,
+    which raises as before). Outside a scope = the plain two resolves (unchanged)."""
+    scope = _LOOKUP_INDEX.get()
+    if scope is None:
+        return str(path.resolve().relative_to(repo_root.resolve()))
+    real = scope.setdefault("realpaths", {})
+    root_key = os.fspath(repo_root)
+    root_real = real.get(root_key)
+    if root_real is None:
+        root_real = real[root_key] = str(repo_root.resolve())
+    path_s = os.fspath(path)
+    if os.path.islink(path_s):
+        file_real = str(path.resolve())
+    else:
+        parent_key, name = os.path.split(path_s)
+        parent_real = real.get(parent_key)
+        if parent_real is None:
+            parent_real = real[parent_key] = str(Path(parent_key).resolve())
+        file_real = f"{parent_real}/{name}" if parent_real != "/" else f"/{name}"
+    if root_real != "/" and file_real.startswith(root_real + "/") and len(file_real) > len(root_real) + 1:
+        return file_real[len(root_real) + 1:]
+    return str(Path(file_real).relative_to(root_real))
+
+
 def _normalize_task(
     path: Path,
     repo_root: Path,
@@ -130,7 +162,7 @@ def _normalize_task(
     return {
         "task_id": metadata.get("task_id"),
         "title": metadata.get("title"),
-        "path": str(path.resolve().relative_to(repo_root.resolve())),  # AIPOS-240 (F-o3-19): symlink-safe
+        "path": _card_rel_path(path, repo_root),  # AIPOS-240 (F-o3-19): symlink-safe
         "repo_root": str(repo_root),
         "queue_state": queue_state,
         "frontmatter_status": frontmatter_status,
@@ -152,11 +184,10 @@ def load_task_file(path: Path, repo_root: Path) -> dict[str, Any]:
     queue_state = path.parent.name
     parse_errors: list[str] = []
     try:
-        text = path.read_text(encoding="utf-8")
+        metadata, body, warnings, _fence = read_markdown_frontmatter(path)
     except Exception as exc:
         return _normalize_task(path, repo_root, queue_state, {}, "", [f"Read failed: {exc}"])
 
-    metadata, body, warnings = parse_markdown_frontmatter(text)
     parse_errors.extend(warnings)
     return _normalize_task(path, repo_root, queue_state, metadata, body, parse_errors)
 
@@ -194,6 +225,12 @@ def queue_state_ref(repo_root: Path | None, state: str) -> str:
 
 
 def iter_queue_task_paths(repo_root: Path, *, states: tuple[str, ...] | None = None) -> list[Path]:
+    """卡遍历唯一口(队列各状态目录下的 .md, 按状态声明序、目录内排序)。AIPOS-F177 件③: 只读作用域内同一治理根同一状态集只列一次目录。"""
+    key = f"task_loader.iter_queue_task_paths:{tuple(states or QUEUE_STATES)!r}"
+    return list(lookup_scope_memo(repo_root, key, lambda: _list_queue_task_paths(repo_root, states)))
+
+
+def _list_queue_task_paths(repo_root: Path, states: tuple[str, ...] | None) -> list[Path]:
     queue_root = queue_root_for(repo_root)
     paths: list[Path] = []
     for queue_state in (states or QUEUE_STATES):
@@ -213,16 +250,16 @@ def _frontmatter_task_id(path: Path) -> str | None:
     """读卡文件 frontmatter 的 task_id。YAML 解析失败(坏卡, `queue repair` 场景)时退到正则读首个 `task_id:` 行,
     仍是 frontmatter 声明而非文件名。读失败 = 精确捕获 + warning + None。"""
     try:
-        text = path.read_text(encoding="utf-8")
+        metadata, _body, _warnings, fence = read_markdown_frontmatter(path)
+        value = metadata.get("task_id") if isinstance(metadata, dict) else None
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        text = path.read_text(encoding="utf-8") if fence else ""  # regex fallback only (bad YAML): read the raw head
     except (OSError, UnicodeDecodeError) as exc:
         import sys
 
         print(f"Warning: task card unreadable, skipped in lookup: {path}: {exc}", file=sys.stderr)
         return None
-    metadata, _body, _warnings = parse_markdown_frontmatter(text)
-    value = metadata.get("task_id") if isinstance(metadata, dict) else None
-    if isinstance(value, str) and value.strip():
-        return value.strip()
     if text.startswith("---"):
         head = text.split("\n---", 1)[0]
         match = _TASK_ID_LINE.search(head)
@@ -241,35 +278,90 @@ class AmbiguousTaskCard(ValueError):
 _LOOKUP_INDEX: "ContextVar[dict[str, Any] | None]" = ContextVar("lybra_task_card_lookup_index", default=None)
 
 
+def _root_scope() -> dict[str, Any]:
+    return {"by_states": {}, "memo": {}}
+
+
+def _scope_for(repo_root: Path) -> dict[str, Any] | None:
+    """The active scope's per-root entry for this governance root (None = not inside a read scope for it).
+    Keys are resolved roots; a caller passing the resolved root already hits without another realpath walk."""
+    scope = _LOOKUP_INDEX.get()
+    if scope is None:
+        return None
+    roots = scope["roots"]
+    root = Path(repo_root)
+    entry = roots.get(root) or roots.get(root.resolve())
+    if entry is None and scope["request"]:
+        # a request-level scope covers every governance root the request reads (read-only for all of them)
+        entry = roots[root.resolve()] = _root_scope()
+    return entry
+
+
 @contextmanager
 def task_card_lookup_scope(repo_root: Path) -> Iterator[None]:
     """只读批量调用方用: 作用域内对同一治理根的 find_task_card / find_task_card_matches 共用一趟队列索引。
 
     AIPOS-F142 件①: 可重入——已在同一治理根的作用域内再进入 = 共用外层那一趟索引与 lookup_scope_memo 缓存(原每次进入都新建,
     视图扫描逐卡 derive_next_step 各建一趟全队列索引 = O(卡数²), lybra 治理根 1000+ 卡单次 loop status 70 秒); 根不同 = 新建。
-    作用域只活在一次只读调用内(视图命令 / 一次推导), 退出即弃, 不跨调用缓存。"""
+    作用域只活在一次只读调用内(视图命令 / 一次推导), 退出即弃, 不跨调用缓存。
+    AIPOS-F177 件③: 处在请求级作用域(read_request_scope)内时, 进入新根 = 把该根加进请求作用域(请求结束才弃), 同一请求里各视图共用。"""
     root = Path(repo_root).resolve()
     current = _LOOKUP_INDEX.get()
-    if current is not None and current["root"] == root:
+    if current is not None and root in current["roots"]:
         yield
         return
-    token = _LOOKUP_INDEX.set({"root": root, "by_states": {}, "memo": {}})
+    if current is not None and current["request"]:
+        current["roots"][root] = _root_scope()
+        yield
+        return
+    token = _LOOKUP_INDEX.set({"request": False, "roots": {root: _root_scope()}})
     try:
         yield
     finally:
         _LOOKUP_INDEX.reset(token)
 
 
-def lookup_scope_memo(repo_root: Path, key: str, compute: Callable[[], Any]) -> Any:
-    """AIPOS-F142 件①: 只读作用域(task_card_lookup_scope)内同一治理根的整根派生量只算一次(冻结清单重放 / 信封已放行计数等);
-    作用域外 = 每次 compute()(门写动作与逐次调用行为不变)。compute 抛错不缓存(下次照常重算并再抛, fail-closed 不变)。"""
+@contextmanager
+def read_request_scope() -> Iterator[None]:
+    """AIPOS-F177 件③: 一次只读请求(看板总览 / 收件箱 / 路线图 / 接入页, CLI owner inbox)的请求级作用域。
+    作用域内每个进入过 task_card_lookup_scope 的治理根各一份索引与 lookup_scope_memo 缓存, 跨项目、跨视图共用, 请求结束即弃
+    (不跨请求缓存; 看板多线程各请求各自一份: ContextVar 按线程隔离)。已在任一作用域内 = 共用外层(不新建)。只读专用: 作用域内不得改队列。"""
+    if _LOOKUP_INDEX.get() is not None:
+        yield
+        return
+    token = _LOOKUP_INDEX.set({"request": True, "roots": {}})
+    try:
+        yield
+    finally:
+        _LOOKUP_INDEX.reset(token)
+
+
+def request_memo(key: tuple[Any, ...], compute: Callable[[], Any]) -> Any:
+    """AIPOS-F177 件③: request-level memo. Inside a request-level read scope (read_request_scope) one value per key per request
+    (e.g. the enrollment log split and matched once although every instance check of the onboarding page reads it; the gate
+    role registry loaded once for the home root); outside a request scope = compute() every time. A compute that raises is not
+    memoised (it raises again next time). Keys start with the owning function's dotted name. The caller owns copying a mutable
+    value out."""
     scope = _LOOKUP_INDEX.get()
-    if scope is None or Path(repo_root).resolve() != scope["root"]:
+    if scope is None or not scope["request"]:
         return compute()
-    memo = scope["memo"]
+    memo = scope.setdefault("request_memo", {})
     if key not in memo:
         memo[key] = compute()
     return memo[key]
+
+
+def lookup_scope_memo(repo_root: Path, key: str, compute: Callable[[], Any], *, copy_out: bool = False) -> Any:
+    """AIPOS-F142 件①: 只读作用域(task_card_lookup_scope)内同一治理根的整根派生量只算一次(冻结清单重放 / 信封已放行计数等);
+    作用域外 = 每次 compute()(门写动作与逐次调用行为不变)。compute 抛错不缓存(下次照常重算并再抛, fail-closed 不变)。
+    AIPOS-F177 件③: copy_out=True = 作用域内每次交出缓存值的深拷贝(整份视图类结果: 调用方改动不串到同一请求的别的视图)。"""
+    entry = _scope_for(repo_root)
+    if entry is None:
+        return compute()
+    memo = entry["memo"]
+    if key not in memo:
+        memo[key] = compute()
+    return copy.deepcopy(memo[key]) if copy_out else memo[key]
 
 
 def find_task_card_matches(repo_root: Path, task_id: str, *, states: tuple[str, ...] | None = None) -> list[Path]:
@@ -277,8 +369,8 @@ def find_task_card_matches(repo_root: Path, task_id: str, *, states: tuple[str, 
     wanted = str(task_id or "").strip()
     if not wanted:
         return []
-    scope = _LOOKUP_INDEX.get()
-    if scope is not None and Path(repo_root).resolve() == scope["root"]:
+    scope = _scope_for(repo_root)
+    if scope is not None:
         key = tuple(states or QUEUE_STATES)
         index = scope["by_states"].get(key)
         if index is None:
