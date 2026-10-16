@@ -380,6 +380,13 @@
           "required": false,
           "description": "AIPOS-F127 件③: 项目备注(人读文本, 产品不按此分支)。唯一写入口 `lybra project set-meta [项目] --note <文本>`; 缺 = 不展示, 行为不变。"
         },
+        "status": {
+          "type": "string",
+          "required": false,
+          "enum": ["active", "paused"],
+          "default": "active",
+          "description": "AIPOS-F170 件②: 项目推进状态(唯一声明处)。paused = 项目已暂停: Owner 待决收件箱(lybra owner inbox / 看板 /owner/inbox)缺省不列该项目事项(--include-paused 可看), 其余行为不变。缺键 = default(active, 行为不变); 值不在 enum = 读取口报错(收件箱把该项目照列并在 errors 点名, 不猜成暂停)。唯一读取口 workspace_config.project_status; 唯一写入口 `lybra project set-meta [项目] --status paused|active`(set_project_meta 同一两阶段 + 写后自动落账; 旗标登记 verbs.schema two_phase_protocol.project_json_writers.meta.keys)。"
+        },
         "custom_roles": {
           "type": "object",
           "required": false,

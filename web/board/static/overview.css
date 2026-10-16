@@ -603,3 +603,11 @@ main {
 .advisor-pending-item.reject {
   color: var(--color-danger, #e74c3c);
 }
+
+/* AIPOS-F170 件④: Owner 待决收件箱只读入口 */
+.owner-inbox-link {
+  margin-left: auto;
+  font-size: 0.9rem;
+  text-decoration: underline;
+  color: inherit;
+}

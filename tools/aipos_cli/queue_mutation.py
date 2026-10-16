@@ -74,6 +74,55 @@ def queue_mutation_transitions() -> dict[str, tuple[tuple[str, ...], str]]:
 
 # 模块级投影(只读声明, 非第二份表): {动作: (允许源目录元组, 目标目录)}
 ALLOWED_TRANSITIONS = queue_mutation_transitions()
+
+
+def withdraw_owner_ruling_states() -> tuple[str, ...]:
+    """AIPOS-F170 件①: 撤回须带 Owner 裁决引用的源目录——唯一读取口 transitions.schema queue_mutations.transitions.withdraw
+    .owner_ruling_required_from(须为 withdraw.from_states 子集; 缺键 = 空元组 = 无此前置, 行为不变; 形不合 = SchemaLoadError)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    spec = ((load_schema("transitions").get("queue_mutations") or {}).get("transitions") or {}).get("withdraw") or {}
+    raw = spec.get("owner_ruling_required_from") if isinstance(spec, dict) else None
+    if raw is None:
+        return ()
+    states = tuple(str(s) for s in raw) if isinstance(raw, list) else None
+    if states is None or not set(states) <= set(ALLOWED_TRANSITIONS["withdraw"][0]):
+        raise SchemaLoadError(f"transitions.schema.json queue_mutations.transitions.withdraw.owner_ruling_required_from 须为 "
+                              f"from_states {list(ALLOWED_TRANSITIONS['withdraw'][0])} 的子集列表, 得到 {raw!r}")
+    return states
+
+
+def withdraw_owner_ruling_problem(repo_root: Path, task_id: str, owner_ruling_ref: str | None, *, dry_run: bool) -> tuple[str | None, str | None]:
+    """AIPOS-F170 件①: 须带 Owner 裁决引用的撤回 → (拒因|None, 提示|None)。引用 = 本治理根已落 owner_decision_record 的 decision_id:
+    记录 task_id 须为本卡、allowed_next_action 须为收件箱声明中 effect=withdraw_card 的选项。预演时记录未落 = 提示(owner decide 先落记录
+    再执行), 确认时未落 = 拒。记录读不出 = 拒(fail-closed)。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.owner_inbox import inbox_declaration
+    from tools.aipos_cli.record_writer import record_root
+
+    ref = str(owner_ruling_ref or "").strip()
+    if not ref:
+        return (f"withdraw from this queue state requires an Owner ruling reference (owner_ruling_ref = decision_id of an "
+                f"owner_decision_record ruling withdrawal of {task_id}); rule it via `lybra owner decide`"), None
+    if "/" in ref or "\\" in ref or ref.startswith("."):
+        return f"owner_ruling_ref {ref!r} is not a decision_id", None
+    path = Path(repo_root) / record_root("owner_decisions") / f"{ref}.md"
+    if not path.is_file():
+        if dry_run:
+            return None, f"Owner ruling {ref} not yet on record (owner decide writes it before executing the withdrawal)"
+        return f"Owner ruling {ref} not found at {path}", None
+    try:
+        fm, _body = require_frontmatter(path)
+    except FrontmatterReadError as exc:
+        return f"Owner ruling {ref} unreadable: {exc}", None
+    options = inbox_declaration()["options"]
+    allowed = {k for k, v in options.items() if isinstance(v, dict) and v.get("effect") == "withdraw_card"}
+    if str(fm.get("task_id") or "").upper() != str(task_id or "").upper() or str(fm.get("allowed_next_action") or "") not in allowed:
+        return (f"Owner ruling {ref} does not rule withdrawal of {task_id} (task_id={fm.get('task_id')!r}, "
+                f"allowed_next_action={fm.get('allowed_next_action')!r}, withdrawal choices {sorted(allowed)})"), None
+    return None, None
+
+
 # AIPOS-348: reopen 允许源目录(= 声明 reopen.from_states)
 REOPEN_SOURCE_STATES = ALLOWED_TRANSITIONS["reopen"][0]
 # AIPOS-F87 件①: 卡字段序唯一定义在 record_writer.CARD_FRONTMATTER_ORDER(本名保留为别名, 供既有调用方)。
@@ -557,6 +606,7 @@ def mutate_queue_task(
     with_records: bool = False,
     claim_id_override: str | None = None,
     session_id_override: str | None = None,
+    owner_ruling_ref: str | None = None,
 ) -> dict[str, Any]:
     # AIPOS-R6A 靶子②: CLI queue mutation 平行路径拆除 — 禁止非 dry-run 执行
     # (绕过 gate 控制执行流程，不产生真实的 claim/return 记录，"卡面假成功")
@@ -600,6 +650,15 @@ def mutate_queue_task(
         result["with_records"] = True
         result["records_enabled"] = True
         result["safety_notice"] = MUTATION_RECORDS_SAFETY_NOTICE
+
+    # AIPOS-F170 件①: 声明须带 Owner 裁决引用的源目录(blocked)撤回 = 核引用(既有 withdraw 口放宽前置, 不另写解除口)
+    if action == "withdraw" and source_task.get("queue_state") in withdraw_owner_ruling_states():
+        problem, note = withdraw_owner_ruling_problem(repo_root, str(source_task.get("task_id") or ""), owner_ruling_ref, dry_run=dry_run)
+        if problem:
+            result["blocking_reasons"].append(problem)
+        if note:
+            result["warnings"].append(note)
+        result["owner_ruling_ref"] = str(owner_ruling_ref or "").strip() or None
 
     validation_profiles = profiles if profiles else None
     # AIPOS-315: withdraw allows any actor (advisor can revoke any task), skip actor validation

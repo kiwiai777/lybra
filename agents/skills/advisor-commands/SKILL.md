@@ -200,6 +200,33 @@ lybra loop status --workspace-root <治理根> --json                          #
 **取下一张归属**(`card_done_take_next`, AIPOS-F156): 末行命令只给归属本驱动方实例的下一张(门侧发布记录签发实例 = `draft publish --actor`); 共用仓里其他顾问实例的卡不取。
 **禁止**:tail/grep 原始运行日志自判; until/sleep 轮询(等待只用 `--wait`)。
 
+#### Owner 待决: `lybra loop note` / `lybra owner inbox` / `lybra owner decide`(AIPOS-F168 / F170)
+**何时用**: loop status 给 `owner_needed` 时(怎么停见顾问章程「持续推进守则」)。所有项目需 Owner 定的事集中在一个收件箱, Owner 在那里看、定;
+Owner 对你口头说了裁决, 由你落记录(写明你转达、Owner 原话)。任何项目同一组命令, 在治理根所在机运行。
+1. **报 owner_needed 前先写清要定什么**(写进本卡最近一次运行记录, 收件箱据此展示要定什么 / 选项 / 建议; 缺省预演, `--confirm` 写入并自动落账):
+```bash
+lybra loop note --task-id <卡ID> --workspace-root <治理根> --actor <你的顾问实例> --ask "<要定什么>" --options <键=标签> --recommend "<建议>"
+```
+2. **Owner 看收件箱**(只读; 看板 /owner/inbox 同一数据; project.json `status: paused` 的项目缺省不列, `--include-paused` 可看;
+   `--stale-before <日期>` = 遗留视图: 按项目分组每项一行「卡 / 标题 / 卡住原因 / 建议: 撤回 | 冻结为历史 | 保留」, 并给同建议的批量裁决命令):
+```bash
+lybra owner inbox --home-root <home根>
+lybra owner inbox --home-root <home根> --stale-before 2026-10-01
+```
+3. **Owner 口头裁决 → 你落记录**(`--relayed-by` 写你自己的实例, Owner 本人敲写 `owner`; `--owner-words` 写 Owner 原话摘要, 单行; 两者缺 = 拒;
+   先预演, 无误再加 `--confirm`, 自动落账; `--items` 用逗号连多个事项 = 同一裁决批量, 整批预演任一被拒整批不写):
+```bash
+lybra owner decide --item <事项ID> --choice <选项键> --relayed-by <你的顾问实例> --owner-words "<Owner原话摘要>" --home-root <home根>
+lybra owner decide --items <事项ID>,<事项ID> --choice freeze_legacy --relayed-by <你的顾问实例> --owner-words "<Owner原话摘要>" --home-root <home根> --confirm
+```
+   blocked 卡的裁决可选 `withdraw`(经既有撤卡口, 记录带裁决引用)或 `freeze_legacy`(经既有存量冻结口, 清单条目带裁决引用)。之后对应卡
+   `lybra loop status` 给 `advisor_fix(owner_ruled)`, detail 显示裁决、转达人与 Owner 原话, 按 hint 续跑; `lybra next --task-id` 附同一裁决行(自定义选项显示标签)。
+4. **项目暂停 / 恢复**(Owner 说「某项目先停」; 暂停项目的事项不再刷屏收件箱, 其余行为不变; 先预演, 再确认, 自动落账; 恢复 = `--status active`):
+```bash
+lybra project set-meta <项目名> --home-root <home根> --status paused --dry-run
+lybra project set-meta <项目名> --home-root <home根> --status paused --confirm --actor <你的顾问实例>
+```
+
 #### 跨机工位(AIPOS-F110: 执行体在别的机器, 门与治理根在本机)
 前提: loop 只在治理根所在机(门机)跑; 门机与工位机 ssh 双向可达——门机→工位(loop 拉起/清理), 工位→门机(执行体读写门机上的治理根/工作树/报告落点)。ssh 凭据只走两端各自的 ssh 配置与密钥(`BatchMode=yes` 不交互索要口令), 永不经 Lybra、不进开工提示。
 1. **接入**(在门机治理根所在机运行; land 事件 host = `--ssh` 的 ssh 目标, loop 以它为拉起目标; 注册码经 ssh stdin 送达、签码凭据只在本机读 connection.json 调门, 均不进远端命令行; 先预演再 `--confirm`):

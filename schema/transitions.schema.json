@@ -956,13 +956,13 @@
     }
   },
   "queue_mutations": {
-    "description": "AIPOS-F104 件①: 队列搬卡转移表唯一声明——queue_mutation.mutate_queue_task(门 claim/block/complete/reopen/withdraw 搬卡的唯一执行器)只读本表(读取口 queue_mutation.queue_mutation_transitions), 原 queue_mutation.ALLOWED_TRANSITIONS 手写表(withdraw/reopen 源写 \"*\")与 transition_engine.validate_transition 本地简化表退役。from_states = 允许的源队列目录, to_state = 目标队列目录, 均须为 enums.schema queue_state 中 queue_dir=true 的值(读取口校验, 不符 = SchemaLoadError fail-closed)。node = 引用 nodes.<id> 的 from_states/to_state(同一转移不写两遍)。reopen 此处 = AIPOS-348 修正路径(blocked/completed → pending), 与 nodes.reopen(owner 门节点, full_reset/resume_claim)是不同动作。",
+    "description": "AIPOS-F104 件①: 队列搬卡转移表唯一声明——queue_mutation.mutate_queue_task(门 claim/block/complete/reopen/withdraw 搬卡的唯一执行器)只读本表(读取口 queue_mutation.queue_mutation_transitions), 原 queue_mutation.ALLOWED_TRANSITIONS 手写表(withdraw/reopen 源写 \"*\")与 transition_engine.validate_transition 本地简化表退役。from_states = 允许的源队列目录, to_state = 目标队列目录, 均须为 enums.schema queue_state 中 queue_dir=true 的值(读取口校验, 不符 = SchemaLoadError fail-closed)。node = 引用 nodes.<id> 的 from_states/to_state(同一转移不写两遍)。reopen 此处 = AIPOS-348 修正路径(blocked/completed → pending), 与 nodes.reopen(owner 门节点, full_reset/resume_claim)是不同动作。 AIPOS-F170: withdraw 源加 blocked(仅凭 Owner 裁决, 见 withdraw.owner_ruling_required_from)。",
     "transitions": {
       "claim": {"node": "N1"},
       "block": {"from_states": ["claimed"], "to_state": "blocked"},
       "complete": {"from_states": ["claimed"], "to_state": "completed"},
       "reopen": {"from_states": ["blocked", "completed"], "to_state": "pending"},
-      "withdraw": {"from_states": ["pending", "claimed"], "to_state": "withdrawn"},
+      "withdraw": {"from_states": ["pending", "claimed", "blocked"], "to_state": "withdrawn", "owner_ruling_required_from": ["blocked"], "owner_ruling_note": "AIPOS-F170 件①: blocked 卡可撤, 但须带 Owner 裁决引用(owner_ruling_ref = 治理根内已落的 owner_decision_record 的 decision_id, 记录 task_id 须为本卡、allowed_next_action 须为 lybra_owner_inbox 中 effect=withdraw_card 的选项); 缺 / 对不上 = 拒(预演只核引用形, 记录未落时由 owner decide 先落记录再执行)。唯一读取口 queue_mutation.withdraw_owner_ruling_states; 撤回原因写入卡面 withdrawal_reason(含裁决引用)。"},
       "adopt": {"from_states": ["claimed"], "to_state": "claimed", "declaration": "nodes.N1.adoption"}
     }
   },

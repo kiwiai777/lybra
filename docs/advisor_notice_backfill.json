@@ -1,5 +1,5 @@
 {
-  "description": "AIPOS-F167 件④: 卡面 advisor_notice 字段上线前已部署的卡的顾问须知回填清单(只写对顾问可见的变化; 清单只追加)。读取唯一口 tools/aipos_cli/advisor_updates.compile_on_deploy(声明 verbs.schema lybra_updates.compile.backfill_source): finalize --deploy 成功后, 库内尚未汇总过的条目随该次部署汇成更新说明(去重键 task_id)。条目形同卡面 advisor_notice(同一校验 parse_advisor_notice)。AIPOS-F167 自身部署时 finalize 仍跑旧快照(无汇总口), 故本卡须知亦列于此, 随下一次部署一并送达。",
+  "description": "AIPOS-F167 件④: 卡面 advisor_notice 字段上线前已部署的卡的顾问须知回填清单(只写对顾问可见的变化; 清单只追加)。读取唯一口 tools/aipos_cli/advisor_updates.compile_on_deploy(声明 verbs.schema lybra_updates.compile.backfill_source): finalize --deploy 成功后, 库内尚未汇总过的条目随该次部署汇成更新说明(去重键 task_id)。条目形同卡面 advisor_notice(同一校验 parse_advisor_notice)。AIPOS-F167 自身部署时 finalize 仍跑旧快照(无汇总口), 故本卡须知亦列于此, 随下一次部署一并送达。 AIPOS-F170 追加 F168 / F169 / F170(F170 卡面亦有 advisor_notice, 去重键 task_id 保证只汇一次; 本清单只追加)。",
   "entries": [
     {
       "task_id": "AIPOS-F160",
@@ -69,6 +69,33 @@
         "看到「Lybra 有 N 条未读更新」: lybra updates --workspace-root <治理根> --actor <你的顾问实例> 读全文",
         "读完: lybra updates --ack --workspace-root <治理根> --actor <你的顾问实例> --confirm 记已读(自动落账), 然后继续推进",
         "出改顾问 / 审计 / 执行可见行为的卡(改 CLI 参数 / next_action / 章程 / 卡面字段)时, 卡稿写 advisor_notice {audience: [advisor], summary: <一句话>, actions: [...]}; 缺了出卡会警告"
+      ]
+    },
+    {
+      "task_id": "AIPOS-F168",
+      "audience": ["advisor"],
+      "summary": "Owner 待决收件箱: 所有项目需 Owner 定的事集中在 lybra owner inbox(看板 /owner/inbox), Owner 一处 lybra owner decide 裁决; 你下一次 lybra loop status / next 直接读到裁决(advisor_fix(owner_ruled))接着推进; lybra loop note 把「要定什么 / 选项 / 建议」写进运行记录",
+      "actions": [
+        "loop status 给 owner_needed 时, 先 lybra loop note --task-id <卡> --ask <要定什么> --options <键=标签> … --recommend <建议> --workspace-root <治理根> --actor <你的顾问实例> 预演, 再加 --confirm 写入, 然后告诉 Owner 去收件箱定",
+        "loop status 给 advisor_fix(owner_ruled) 时按 hint 做(裁决原文在 detail), 不再等 Owner 转述"
+      ]
+    },
+    {
+      "task_id": "AIPOS-F169",
+      "audience": ["advisor"],
+      "summary": "pi 模型可按项目 / 角色声明: lybra project set-model 写 project.json execution.pi_models(只能选本机 pi 已配置的模型), loop 拉起 pi 时传 --model, 运行记录记实际模型; 未声明 = 沿用 pi 自身缺省",
+      "actions": [
+        "各项目顾问自行确认本项目是否要声明缺省 pi 模型: Owner 指定了模型时, lybra project set-model <项目名> --home-root <home根> --model <provider/id> --owner-ref <Owner指示摘要> 先预演, 再加 --confirm --actor <你的顾问实例>(须先有 set-execution 声明)",
+        "改完用 lybra project check-workstation <项目名> --home-root <home根> --instance <工位实例> --harness pi 核「拉起模型」行"
+      ]
+    },
+    {
+      "task_id": "AIPOS-F170",
+      "audience": ["advisor"],
+      "summary": "收件箱只列真待决(遗留项可批量定、暂停项目缺省隐藏); Owner 口头裁决由顾问用 owner decide --relayed-by <你的实例> --owner-words <原话摘要> 落记录; 报 owner_needed 前先 lybra loop note 写清要定什么 / 选项 / 建议。",
+      "actions": [
+        "报 owner_needed 前先 `lybra loop note --task-id <卡> --ask <要定什么> --options <选项> --recommend <建议>`",
+        "Owner 口头裁决后:`lybra owner decide --item <id> --choice <选项> --relayed-by <你的实例> --owner-words <原话摘要>`(先预演再 --confirm)"
       ]
     }
   ]

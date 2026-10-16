@@ -34,6 +34,8 @@
         </svg>
         <span id="add-project-text"></span>
       </button>
+      <!-- AIPOS-F170 件④: Owner 待决收件箱只读入口(服务端渲染页 /owner/inbox, 与 lybra owner inbox 同一数据) -->
+      <a id="owner-inbox-link" class="owner-inbox-link" href="/owner/inbox" data-owner-inbox-entry="readonly">Owner inbox</a>
     </div>
     
     <div id="workspace-grid" class="workspace-grid" data-owner-truth="overview">
@@ -166,6 +168,7 @@
       document.getElementById('kicker-text').textContent = i18n.t('overview.workspaces');
       document.getElementById('section-title').textContent = i18n.t('overview.all_projects');
       document.getElementById('add-project-text').textContent = i18n.t('overview.add_project');
+      document.getElementById('owner-inbox-link').textContent = i18n.t('overview.owner_inbox');
       
       // Modal i18n
       document.getElementById('modal-title').textContent = i18n.t('overview.new_project_modal.title');

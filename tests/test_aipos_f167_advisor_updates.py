@@ -462,7 +462,7 @@ def test_declarations_single_source_and_backfill_list():
     backfill = json.loads((REPO_ROOT / decl["compile"]["backfill_source"]).read_text(encoding="utf-8"))
     ids = [e["task_id"] for e in backfill["entries"]]
     _show(f"---- ④ 回填清单 {decl['compile']['backfill_source']}: {ids} ----")
-    assert ids == [f"AIPOS-F{n}" for n in range(160, 168)] and len(set(ids)) == len(ids)
+    assert ids == [f"AIPOS-F{n}" for n in range(160, 171)] and len(set(ids)) == len(ids)  # AIPOS-F170: 追加 F168–F170(只追加)
     for entry in backfill["entries"]:
         parsed = au.parse_advisor_notice({k: v for k, v in entry.items() if k != "task_id"})
         assert "advisor" in parsed["audience"] and parsed["actions"], entry["task_id"]

@@ -778,7 +778,8 @@ def legacy_onboarding_steps(project_name: str, governance_root: str, *, home_roo
     gq = _shell_quote(governance_root)
     pq = _shell_quote(project_name)
     hq = _shell_path(home_root)
-    meta_flags = [project_meta_declaration()["keys"][key] for key in declared_meta_keys()]
+    # AIPOS-F170 件②: 只给自由文本键(声明无 enum)的示例行——占位 <META_TEXT> 只对自由文本成立(status 等 enum 键不进向导)
+    meta_flags = [project_meta_declaration()["keys"][key] for key, spec in declared_meta_keys().items() if not spec.get("enum")]
     if meta_flags:
         meta_lines = ["# project.json 说明键(" + " / ".join(f.lstrip("-") for f in meta_flags) + ")同样经产品写入口更新(人肉期旧文免手改), 先预演再 --confirm"]
         meta_args = [part for flag in meta_flags for part in (flag, META_TEXT_PLACEHOLDER)]

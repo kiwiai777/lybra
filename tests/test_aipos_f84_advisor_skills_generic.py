@@ -83,6 +83,13 @@ PLACEHOLDER_VALUES = {
     # AIPOS-F169: pi 模型切换(set-model)占位
     "<provider/id>": "kiwiai/qwen3.7-plus",
     "<Owner指示摘要>": "Owner 指示(夹具)",
+    # AIPOS-F170: Owner 待决(loop note / owner inbox / owner decide)占位
+    "<要定什么>": "方案二选一",
+    "<键=标签>": "plan_a=方案A",
+    "<建议>": "建议 plan_a",
+    "<事项ID>": "OI-0123456789",
+    "<选项键>": "acknowledge",
+    "<Owner原话摘要>": "Owner 原话(夹具)",
 }
 PLACEHOLDER_RE = re.compile(r"<[^<>\s'\"]+>")
 #: 已退役的子命令(示例不得再教)
