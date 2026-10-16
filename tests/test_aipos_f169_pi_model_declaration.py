@@ -142,7 +142,10 @@ def test_item1_launch_argv_undeclared_default_role_override_and_item3_record_sta
             argv = _argv(lrig, target)
             _show(f"[件①] {target}({role}) 拉起命令行原文: {argv}")
             base = ["pi", "-p", "<kickoff>", "--mode", "json"]
-            assert argv == (base if want is None else [*base, "--model", want]), argv
+            # AIPOS-F171B 件②: 模型参数之后追加固定会话 --session-id <id>(enums.schema harness pi launch.session)
+            expected = base if want is None else [*base, "--model", want]
+            assert argv[:len(expected)] == expected and argv[len(expected):-1] == ["--session-id"], argv
+            assert re.fullmatch(rf"lybra-{target.lower()}-[0-9a-f]{{12}}", argv[-1]), argv
         # 件③ 运行记录 launches[].model(实际传入值 + 来源 + 角色)
         launches = _run_record_launches(lrig.gov, card)
         _show(f"[件③] {card} 运行记录 launches[].model: {[l.get('model') for l in launches]}")

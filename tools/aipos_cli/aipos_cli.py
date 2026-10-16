@@ -2825,7 +2825,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="AIPOS-F73D: 顾问侧驱动器 — Owner 信封授权下有界循环推进一张卡到 completed(复用 agent watch + next --run)。"
         "AIPOS-F95: 信封 launch_harnesses 授权且工位条件全满足时, 等待前按 enums.schema harness.launch 模板在本机工位拉起一次 harness 进程"
         "(过程汇总为一行式进度, 产物就绪/超时/早退/中断即清进程组); 否则手工模式(工位敲 /go)。"
-        "退出码(verbs.schema lybra_loop.exit_codes): 0=completed, 2=门拒, 3=等待超时/停滞/步数用尽, 4=不可推导/命令不可解析, 5=无信封",
+        "退出码(verbs.schema lybra_loop.exit_codes): 0=completed, 2=门拒, 3=等待超时/停滞/步数用尽, 4=不可推导/命令不可解析, 5=无信封, 6=部署已更新, 7=同卡已有 loop 在跑(AIPOS-F171B, 用 loop status 观察)",
     )
     # AIPOS-F131 件②: `lybra loop status` 子命令(读运行记录 + 探活 + 判停滞); 推进本身仍须 --task-id(run_loop_cli 校验, 退出码同 argparse 必填 2)
     loop_parser.add_argument("--task-id", help="要推进的卡 ID(推进时必填)")

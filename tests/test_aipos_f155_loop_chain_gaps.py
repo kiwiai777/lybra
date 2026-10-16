@@ -450,7 +450,8 @@ def test_item4_charter_renders_continue_after_update_and_rework(rig):
     rework = section[section.index("**审计 FAIL 后**"):section.index("**收到 Lybra 更新通知**")]
     _show("---- ④ 渲染后章程「持续推进守则」新增两条原文 ----\n" + rework + update)
     assert "{{" not in rendered
-    assert "**直接继续推进**, 不等 Owner 再说「推进」" in update and "重取本章程" in update and "重跑\n在途卡的 loop" in update
+    assert "**直接继续推进**, 不等 Owner 再说「推进」" in update and "重取本章程" in update
+    assert "**在跑的 loop 不动**" in update and "**只有已停的 loop** 才按其「下一条」重跑" in update  # AIPOS-F171B 件③: 只重跑已停的 loop
     assert "lybra queue rework" in rework and "--confirm" in rework and "continue_wait" in rework
     assert "MERGE_CONFLICT" in section and "REPO_MERGE_IN_PROGRESS" in section
     skill = (REPO_ROOT / "agents" / "skills" / "advisor-commands" / "SKILL.md").read_text(encoding="utf-8")

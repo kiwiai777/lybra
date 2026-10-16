@@ -2253,6 +2253,32 @@ def charter_auto_sync(governance_root: str | Path, *, project: dict[str, Any] | 
     return value
 
 
+class LaunchResumeDeclarationError(ValueError):
+    """AIPOS-F171B: project.json launch_resume_max 不合声明(LAUNCH_RESUME_MAX_INVALID; loop 不拉起, fail-closed)。"""
+
+
+def launch_resume_max(governance_root: str | Path, *, project: dict[str, Any] | None = None) -> int:
+    """AIPOS-F171B 件②: loop 拉起的 pi 半途停笔(exit 0 而产物未就绪)时同会话续接的最多次数(唯一读取口)。缺键 = 声明 default
+    (config.schema project_json.schema.launch_resume_max.default); 值非 ≥0 整数 = LaunchResumeDeclarationError(不猜); 声明缺 =
+    SchemaLoadError(fail-closed); project.json 读不出 = 原异常上抛(不吞成缺省)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (((load_schema("config").get("configuration_sources") or {}).get("project_json") or {}).get("schema") or {}).get(
+        "launch_resume_max")
+    default = decl.get("default") if isinstance(decl, dict) else None
+    why = str(((decl or {}).get("reject_codes") or {}).get("LAUNCH_RESUME_MAX_INVALID") or "").strip() if isinstance(decl, dict) else ""
+    if not isinstance(default, int) or isinstance(default, bool) or default < 0 or not why:
+        raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.launch_resume_max"
+                              "(≥0 整数 default / reject_codes.LAUNCH_RESUME_MAX_INVALID)未声明齐")
+    data = project if project is not None else read_project_json(governance_root)
+    value = data.get("launch_resume_max") if isinstance(data, dict) else None
+    if value is None:
+        return int(default)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise LaunchResumeDeclarationError(f"LAUNCH_RESUME_MAX_INVALID: project.json launch_resume_max={value!r}: {why}")
+    return value
+
+
 RETURN_SUMMARY_SOURCE_KEYS = ("frontmatter_keys", "section_markers")
 
 

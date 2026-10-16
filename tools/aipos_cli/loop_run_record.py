@@ -494,7 +494,8 @@ class LoopRunRecorder:
         self.flush(force=True)
 
     # -- 拉起 --
-    def launch_started(self, plan: Any, harness: Any) -> None:
+    def launch_started(self, plan: Any, harness: Any, *, resume: int = 0) -> None:
+        """一次拉起(resume=0)或同会话第 resume 次续接(AIPOS-F171B 件②)= launches[] 追加一条; 续接另写日志一行 [resume]。"""
         self._harness = harness
         self._active = {
             "card": plan.card, "harness": plan.harness, "transport": plan.location.get("transport"),
@@ -503,11 +504,17 @@ class LoopRunRecorder:
             "privilege_guard": dict(getattr(harness, "privilege_guard", None) or {}),  # AIPOS-F165 件③: 禁提权实际状态(含降级原因)
             # AIPOS-F169: 实际传入的模型 {model(None = 未传 --model, pi 缺省), source, role}(verbs.schema run_record.launch_model)
             "model": dict(getattr(plan, "model", None) or {}) or None,
+            # AIPOS-F171B 件②: 固定会话 id(无 session 声明 = null)/ 第几次续接 / 续接上限(verbs.schema run_record.launch_session)
+            "session_id": getattr(plan, "session_id", "") or None, "resume": int(resume),
+            "resume_max": int(getattr(plan, "resume_max", 0) or 0),
             "started_at": iso_z(), "ended_at": None, "outcome": None, "returncode": None, "termination": None,
             "activity": {"events": 0, "last_event_at": None, "last_activity_at": None, "last_activity_kind": None,
                          "counts": {}},
         }
         self.meta["launches"].append(self._active)
+        if resume:
+            self.log(f"[resume] {plan.harness} {plan.card} 会话 {self._active['session_id']} 续接 {resume}/{self._active['resume_max']}"
+                     f"(上一轮 exit 0 而产物未就绪)")
         self.log(f"[launch] {plan.harness} {plan.card} pid={harness.pid} pgid={harness.pgid}")
         self._dirty = True
         self.flush(force=True)
@@ -617,7 +624,7 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
         act = last.get("activity") or {}
         view["launch"] = {k: last.get(k) for k in ("card", "harness", "transport", "host", "workstation", "pid", "pgid",
                                                     "remote_pgid", "started_at", "ended_at", "outcome", "returncode", "termination",
-                                                    "model")}  # AIPOS-F169: model(存量记录无 = None)
+                                                    "model", "session_id", "resume", "resume_max")}  # AIPOS-F169: model; AIPOS-F171B: 会话 / 续接(存量记录无 = None)
         view["launch"].update({"events": act.get("events"), "last_event_at": act.get("last_event_at"),
                                "last_activity_at": act.get("last_activity_at"), "last_activity_kind": act.get("last_activity_kind"),
                                "counts": act.get("counts"), "alive": None, "running_seconds": None, "idle_seconds": None})
@@ -695,6 +702,70 @@ def _run_lane(governance_root: Path, task_id: str) -> dict[str, Any]:
     return lane_of_card(fm, governance_root)
 
 
+_SINGLE_INSTANCE_KEYS = ("end_reason", "live_states", "unprobeable_heartbeat_key", "message")
+
+
+def single_instance_declaration(contract: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F171B 件①: verbs.schema lybra_loop.single_instance(同卡单实例)。缺 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = contract.get("single_instance") if isinstance(contract, dict) else None
+    run_decl = run_record_declaration(contract)
+    if not isinstance(decl, dict) or any(k not in decl for k in _SINGLE_INSTANCE_KEYS):
+        raise SchemaLoadError(f"verbs.schema.json verbs.lybra_loop.single_instance 未声明齐 {list(_SINGLE_INSTANCE_KEYS)}")
+    live = decl["live_states"]
+    beat = run_decl.get(str(decl["unprobeable_heartbeat_key"]))
+    if (decl["end_reason"] not in run_decl["end_reasons"] or decl["end_reason"] not in (contract.get("exit_codes") or {})
+            or not isinstance(live, list) or not live or set(live) - (set(run_decl["states"]) - {"ended", "unprobeable"})
+            or not isinstance(beat, int) or isinstance(beat, bool) or beat <= 0 or not isinstance(decl["message"], str)):
+        raise SchemaLoadError("verbs.schema.json verbs.lybra_loop.single_instance: end_reason 须为已声明结束原因且有同名退出码; "
+                              "live_states ⊆ run_record.states(除 ended / unprobeable); unprobeable_heartbeat_key 须指向 run_record 的正整数秒数")
+    return decl
+
+
+def _step_label(step: Any) -> str:
+    if not isinstance(step, dict):
+        return "(无)"
+    action = f" {step.get('action')}" if step.get("action") else ""
+    return f"[{step.get('index')}] {step.get('kind')}{action} @ {step.get('node')}/{step.get('state')}({step.get('card')})"
+
+
+def live_run_conflict(governance_root: Path, task_id: str, *, own: dict[str, Any], contract: dict[str, Any],
+                      now: datetime | None = None, local_host: str | None = None) -> dict[str, Any] | None:
+    """AIPOS-F171B 件①: 同卡单实例判定(唯一实现, loop 启动唯一口 loop_driver.run_loop 调用)。own = 本次运行记录 meta(已落盘)。
+    本卡别的未结束运行中, (started_at, run_id) 先于本运行且判为存活的第一个 → {run_id, pid, host, started_at, current_step, state,
+    heartbeat_age, message}; 无 = None。存活判据 = lybra loop status 同一判定 judge_run(本机进程启动时刻指纹, AIPOS-F137)的
+    live_states; 别机记录(unprobeable)= 心跳 updated_at 距今 ≤ run_record.<unprobeable_heartbeat_key> 秒。先于本运行者才拒本运行
+    (两个同时启动: 双方看到同一顺序, 先者继续、后者被拒)。运行记录读不出 = LoopRunRecordError(调用方 fail-closed 拒跑)。只读。"""
+    decl = run_record_declaration(contract)
+    si = single_instance_declaration(contract)
+    now = now or utc_now()
+    own_id = str(own.get("run_id") or "")
+    own_key = (str(own.get("started_at") or ""), own_id)
+    for path in _run_files(loop_runs_dir(Path(governance_root), task_id)):
+        meta = read_run(path, decl)
+        rid = str(meta.get("run_id") or "")
+        if rid == own_id or meta.get("status") == "ended" or (str(meta.get("started_at") or ""), rid) >= own_key:
+            continue
+        view = judge_run(meta, decl, now=now, local_host=local_host)
+        age = _seconds(_parse_iso(meta.get("updated_at")), now)
+        if view["state"] == "unprobeable":
+            live = age is not None and age <= int(decl[str(si["unprobeable_heartbeat_key"])])
+        else:
+            live = view["state"] in si["live_states"]
+        if not live:
+            continue
+        fill = {"run_id": rid, "pid": meta.get("pid"), "host": meta.get("host"), "started_at": meta.get("started_at"),
+                "current_step": _step_label(meta.get("current_step")), "task_id": task_id, "governance_root": str(governance_root)}
+        message = str(si["message"])
+        for key, value in fill.items():
+            message = message.replace("{" + key + "}", str(value))
+        if view["state"] == "unprobeable":
+            message += f"(该运行记录写于主机 {meta.get('host')}, 本机无从探活; 按心跳判存活: 最近写入 {age}s 前)"
+        return {**fill, "state": view["state"], "heartbeat_age": age, "message": message}
+    return None
+
+
 def loop_status(governance_root: Path, task_id: str | None = None, *, now: datetime | None = None,
                 contract: dict[str, Any] | None = None, lane: str | list[str] | None = None,
                 include_frozen: bool = False) -> dict[str, Any]:
@@ -728,7 +799,10 @@ def _loop_status(governance_root: Path, task_id: str | None, *, now: datetime | 
     code_history: list[Any] = []
     if task_id:
         files = _run_files(loop_runs_dir(governance_root, task_id))
-        metas = [read_run(p, decl) for p in files]
+        # AIPOS-F171B 件①: 单实例锁拒掉的启动(从未推进)不算「最近一次运行」, 也不进连败计数
+        refused = single_instance_declaration(contract or load_loop_contract())["end_reason"]
+        metas = [m for m in (read_run(p, decl) for p in files)
+                 if not (m.get("status") == "ended" and m.get("end_reason") == refused)]
         metas.sort(key=lambda m: (str(m.get("started_at") or ""), str(m.get("run_id") or "")))
         picked = metas[-1:]
         total = len(metas)
@@ -988,6 +1062,8 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
             return {"action": action, "reason": reason, "detail": f"{rules['owner_reasons'][reason]}" + (f" — {message}" if message else "")
                     + (f"({mode_note})" if mode_note else ""),
                     "hint": str(rules["investigate_hint"]).format(**fill)}
+        if action == "continue_wait":  # AIPOS-F171B 件①: already_running = 另一个 loop 在跑, 继续等它(提示同运行中)
+            return {"action": action, "reason": reason, "detail": message or reason, "hint": str(rules["wait_hint"]).format(**fill)}
         return {"action": action, "reason": reason, "detail": message or reason, "hint": str(rules["investigate_hint"]).format(**fill)}
     if state not in rules["by_state"]:
         raise LoopRunRecordError(f"状态 {state!r} 不在 verbs.schema {STATUS_VERB}.next_action.by_state")
@@ -1323,6 +1399,8 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
         la = v.get("launch")
         if la:
             model = f" 模型 {model_label(la['model'])}" if la.get("model") else ""  # AIPOS-F169: 存量记录无 model = 不显示
+            if la.get("session_id"):  # AIPOS-F171B 件②: 固定会话与续接次数(存量记录无 = 不显示)
+                model += f" 会话 {la['session_id']} 续接 {la.get('resume') or 0}/{la.get('resume_max') or 0}"
             if la.get("ended_at"):
                 out.append(f"  拉起 {la['harness']} {la['card']}{model} pid={la['pid']} 已收尾: outcome={la.get('outcome')} "
                            f"returncode={la.get('returncode')} termination={la.get('termination')}")

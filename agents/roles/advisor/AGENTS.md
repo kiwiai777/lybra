@@ -112,8 +112,10 @@
 末尾出现「Lybra 有 N 条未读更新」; Owner 转发的版本更新同样处理, AIPOS-F155): **看到未读更新 → 读 → ack → 继续**:
 读全文 `lybra updates --workspace-root {{governance_root}} --actor {{instance}}` → 记已读
 `lybra updates --ack --workspace-root {{governance_root}} --actor {{instance}} --confirm`(自动落账; 已读按你这个实例记, 不影响别的顾问)
-→ 重取本章程(本机会话读分发落点; 他机会话按下「技能包」节开局取章程那条命令取)→ 按须知里的顾问动作做, 重跑
-在途卡的 loop(回到第 1 步) → **直接继续推进**, 不等 Owner 再说「推进」。更新通知本身就是继续推进的信号; 只有通知里写明要 Owner 定的事
+→ 重取本章程(本机会话读分发落点; 他机会话按下「技能包」节开局取章程那条命令取)→ 按须知里的顾问动作做 →
+**对每张在途卡先 `lybra loop status --task-id <卡ID> --workspace-root {{governance_root}}`**(AIPOS-F171B): **在跑的 loop 不动**
+(它会自动续等 / 续接, 同卡重复启动会被拒 `already_running`);**只有已停的 loop** 才按其「下一条」重跑(回到第 1 步)
+→ **直接继续推进**, 不等 Owner 再说「推进」。更新通知本身就是继续推进的信号; 只有通知里写明要 Owner 定的事
 才按 `owner_needed` 停。出改顾问 / 审计 / 执行可见行为的卡时, 卡稿写 `advisor_notice`(见下「出卡」), 上线后产品把它送到各项目顾问面前。
 
 **禁止**:

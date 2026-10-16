@@ -8,6 +8,8 @@
     linger  同 work 但写完产物不退出(验产物就绪后宽限期满终止进程组)
     hang    吐事件后挂起, 另起一个孙进程同挂(验超时/信号杀整组); 忽略 SIGTERM(验 SIGKILL 升级)
     early   往 stderr 写几行后 exit 7(验早退 exit 3 附 stderr 末尾)
+    stop    AIPOS-F171B: 只发一条纯文字(「let me poll」)即 exit 0、不写产物(半途停笔; 验同会话续接用尽 → 早退)
+    stop_once  AIPOS-F171B: 首次(FAKE_PI_RESUMES=0)同 stop, 同会话续接时(FAKE_PI_RESUMES≥1, 假 pi 设)同 work
   FAKE_HARNESS_LOG: 目录; 收到的 argv[1](kickoff)按字节原样落 <卡号>.kickoff, cwd 落 <卡号>.cwd(供逐字节比对)
 事件里故意含一行凭据字样、一个未知事件类型、一行非 JSON(验汇总隐去/计数不刷屏)。
 """
@@ -129,6 +131,11 @@ def main() -> int:
         sys.stderr.write("fatal: fake harness crashed early\n")
         sys.stderr.flush()
         return 7
+    if mode == "stop" or (mode == "stop_once" and os.environ.get("FAKE_PI_RESUMES", "0") == "0"):
+        emit({"type": "message_end", "message": {"role": "assistant", "content": [
+            {"type": "text", "text": "UI tests still running… let me poll"}]}})
+        emit({"type": "agent_end", "messages": []})
+        return 0
     if mode == "hang":
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         subprocess.Popen([sys.executable, os.path.abspath(__file__), "--grandchild"])

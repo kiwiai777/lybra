@@ -369,6 +369,30 @@ def model_launch_args(template: dict[str, Any] | None, harness: str, model: str)
     return [model if a == "{model}" else a for a in model_declaration(template, harness)["argv"]]
 
 
+_SESSION_KEYS = ("argv", "id_prefix", "id_pattern")
+
+
+def session_launch_args(template: dict[str, Any] | None, harness: str, card: str) -> tuple[str, list[str]] | None:
+    """AIPOS-F171B 件②: enums.schema harness.<harness>.launch.session → (新会话 id, 追加到拉起 argv 的参数)。
+    模板无 session 段 = None(不固定会话、不续接, 行为不变); 段形不合 / 生成的 id 不合 id_pattern = ValueError(fail-closed, 不拉起)。"""
+    import secrets
+
+    decl = template.get("session") if isinstance(template, dict) else None
+    if decl is None:
+        return None
+    if not isinstance(decl, dict) or any(k not in decl for k in _SESSION_KEYS):
+        raise ValueError(f"enums.schema.json harness {harness} launch.session 未声明齐 {list(_SESSION_KEYS)}")
+    argv = decl["argv"]
+    if (not isinstance(argv, list) or argv.count("{session_id}") != 1 or not all(isinstance(a, str) and a for a in argv)
+            or any("{" in a and a != "{session_id}" for a in argv)):
+        raise ValueError(f"harness {harness} launch.session.argv 须为串数组且含且仅含一个整参数 {{session_id}}: {argv!r}")
+    slug = re.sub(r"[^a-z0-9]+", "-", str(card).lower()).strip("-") or "card"
+    session_id = f"{decl['id_prefix']}-{slug}-{secrets.token_hex(6)}"
+    if not re.fullmatch(str(decl["id_pattern"]), session_id):
+        raise ValueError(f"harness {harness} 生成的会话 id {session_id!r} 不合 launch.session.id_pattern {decl['id_pattern']!r}")
+    return session_id, [session_id if a == "{session_id}" else a for a in argv]
+
+
 def harness_model_catalog(harness: str) -> dict[str, Any]:
     """本机该 harness 已配置的模型清单(唯一实现): 执行 [launch.argv[0], *launch.model.list_args](pi = `pi --list-models`, 只列不发请求),
     首个首列 = list_header_first_column 的行为表头, 其后每行前两列 → id_template。

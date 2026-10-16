@@ -2135,7 +2135,18 @@
         "no_envelope": {
           "code": 5,
           "meaning": "无有效 autonomy 信封(输出 `lybra envelope mint` 申领出口), 或信封未授权该动词"
+        },
+        "already_running": {
+          "code": 7,
+          "meaning": "AIPOS-F171B 件①: 同卡已有存活 loop(见 single_instance), 本次启动被拒、未推进任何步; 用 lybra loop status 观察在跑的那一个, 勿重复启动(顾问下一动作 continue_wait)"
         }
+      },
+      "single_instance": {
+        "description": "AIPOS-F171B 件①(10-16 chris HBLX-8 实撞: 更新通知后顾问又起一个同卡 loop, 原 loop 仍在等审计, 两 loop 各拉起一个审计 pi 共用同一工作树互扰): 同卡同时只允许一个 loop 在跑。判定挂在 loop 启动唯一口 loop_driver.run_loop(运行记录建好后、推进任何步之前), 判据 = 本卡运行记录(不另立锁文件)经 lybra loop status 同一判定 loop_run_record.judge_run(进程启动时刻指纹探活, AIPOS-F137): 别的未结束运行判为 live_states 之一 = 存活; 记录写于别的主机(unprobeable, 本机无从探活)= 按运行记录心跳判: updated_at 距今 ≤ run_record.<unprobeable_heartbeat_key> 秒视为存活, 更久视为已停(可能被拒的一方得到的拒因写明主机与心跳)。同卡已有存活运行且其 (started_at, run_id) 先于本运行 = 本运行以 end_reason 结束(exit_codes.already_running, 未推进任何步), 输出 message 模板(在跑那一个的 pid / 主机 / 开始时间 / 当前步); 两个 loop 同时启动时先者继续、后者被拒(双方看到同一顺序)。以 end_reason 结束的运行记录不计入 lybra loop status 的「最近一次运行」与连败计数(它从未推进)。",
+        "end_reason": "already_running",
+        "live_states": ["running", "stalled", "launch_dead"],
+        "unprobeable_heartbeat_key": "stall_after_tool_seconds",
+        "message": "本卡 loop 已在运行(run {run_id}, pid {pid} @ {host}, 开始 {started_at}, 当前步 {current_step}), 本次启动已拒、未推进任何步; 用 lybra loop status --task-id {task_id} --workspace-root {governance_root} 观察, 勿重复启动(顾问下一动作 continue_wait: 在跑的 loop 会自己续等 / 续接)"
       },
       "envelope": {
         "family": "owner_autonomy_policy (5_tasks/policies/<policy_id>.md, 由 `lybra envelope mint` 申领, owner_decision_record 落 grant)",
@@ -2213,11 +2224,17 @@
           "进程退出而产物未就绪 → exit 3 附 stderr 末尾 stderr_tail_lines 行",
           "等待超时 → 终止进程组后 exit 3",
           "loop 收到 SIGINT/SIGTERM → 先终止进程组, 再按该信号退出(不新增退出码)",
-          "一次 loop 运行对一张卡至多拉起一次, 不自动重试(重跑 loop = 显式再拉起)",
+          "一次 loop 运行对一张卡至多拉起一次, 不自动重试(重跑 loop = 显式再拉起); AIPOS-F171B 件②: 同会话续接(见 resume)是同一次拉起的延续, 不算重新拉起",
+          "AIPOS-F171B 件②: 拉起的进程 exit 0 而产物未就绪(半途停笔)= 同会话续接(见 resume); 非 0 退出 / 被信号终止 / 等待超时不续接(维持原判)",
           "拉起与收尾事件追加进该卡既有 session record 的 Events(谁拉起/何时/harness/工位/pid), 不新建记录类型",
           "AIPOS-F165 件③: 本机拉起进程 exec 前置 no_new_privs(缺省开, 见 privilege_guard; 关闭须 project.json launch_guard + Owner 授权引用), 状态进拉起事件与运行记录 launches[].privilege_guard",
           "AIPOS-F110 跨机(transport=remote): 本地只起 ssh 子进程(新进程组、无 shell、cwd 不设、stdin=管道写入 kickoff 后关闭); 远端按 remote 段声明起新进程组并回传组号; 终止 = 经 ssh 对远端组 TERM→等 terminate_wait_seconds→KILL, 再清本地 ssh 组"
         ],
+        "resume": {
+          "description": "AIPOS-F171B 件②(10-16 chris HBLX-8 实撞: loop 拉起的审计 pi 在 -p 单发模式下发了一条纯文字(「UI tests still running… let me poll」/「Now let me do code review」)即以 exit 0 结束, 未写报告, loop 判 launch_early_exit 连两次 → owner_needed): 拉起 pi 时固定会话 id(harness 模板 enums.schema harness.launch.session 声明的 argv, 会话 id 记入运行记录 launches[].session_id); 进程 exit 0 而产物未就绪 = 半途停笔 → 以同一会话 id 续接(同一 argv 模板, kickoff 换成 prompt; 跨机工位同样只经 ssh stdin 传入), 每次续接 = 运行记录 launches[] 追加一条(resume = 第几次)+ 日志一行 [resume] + session Events 一条; 续接上限 = project.json launch_resume_max(config.schema, 唯一读取口 workspace_config.launch_resume_max; 缺省 2, 0 = 不续接); 续接用尽仍无产物才判 launch_early_exit。非 0 退出 / 被信号终止 / 等待超时不续接(维持原判)。等待总时长仍受同一 --max-wait(续接用剩余时长, 用尽不再续接)。唯一实现 loop_driver._launched_wait(唯一拉起口; 判定 _should_resume)。harness 模板无 session 声明 = 不续接(行为不变)。",
+          "prompt": "你的上一轮在未写出 {artifact} 前结束了。请继续完成本卡任务直到写出该文件;无法完成请写 BLOCK 报告并写明原因。单发运行中不要只发说明不调用工具就结束;要等长任务就用工具等待。",
+          "prompt_note": "续接指令唯一声明; 占位 {artifact} = 本次等待的产物落点(等待产物候选首项, 治理根下绝对路径)"
+        },
         "remote": {
           "description": "AIPOS-F110 件①: transport=remote(enums.schema workstation_transport)的拉起声明。ssh 目标 = 该实例最新 land 事件 host(enroll_deliver --ssh 写入的 ssh 目标), 不另设声明位。拉起 argv = ssh_argv + [<host>, <远端命令>]; 远端命令 = 固定 sh 脚本 + 逐个 shell 引号化的参数(工位目录 + harness.launch.argv 模板原样, 含 {kickoff} 占位)——kickoff 不进命令行, 经 ssh stdin 逐字节传入, 远端脚本按字节读尽 stdin 后整参数替换 {kickoff}(kickoff 原文中的 ` $( ${ 换行等 shell 元字符不经任何 shell 展开); 远端 set -m 作业 = 新进程组, 组号以 pgid_marker 行首行回传(stdout 其余行照常按 events 汇总)。实现唯一: tools/aipos_cli/harness_launch.py(remote_launch_command / probe_remote / LaunchedHarness / terminate_group)。",
           "ssh_argv": ["ssh", "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"],
@@ -2293,9 +2310,11 @@
           "charter_not_fresh": "AIPOS-F164 件②: 拉起 pi 前工位章程不新鲜, 项目声明关闭自动 sync(project.json charter_auto_sync=false, 或该键不合), 未拉起(exit_codes.not_derivable; 修法 = 结束原文的 lybra sync 命令)",
           "deploy_reexec": "AIPOS-F166 件①: 手工等待步中部署已更新, 本运行已 re-exec 到新部署快照续等(同一进程号; outcome continued, exit_code null; 新运行记录 continues_run = 本 run_id, 见 deploy_consistency.wait_reexec)",
           "envelope_exhausted": "AIPOS-F166 件②: 信封额度用尽(门侧用量真相 已用 ≥ max_tasks), 账务步被拒或启动校验不过(exit_codes.no_envelope; 续签命令见运行记录 envelope_state, envelope.renew)",
-          "envelope_expired": "AIPOS-F166 件②: 信封已过期(现在 ≥ expires_at), 账务步被拒或启动校验不过(exit_codes.no_envelope; 续签命令见运行记录 envelope_state, envelope.renew)"
+          "envelope_expired": "AIPOS-F166 件②: 信封已过期(现在 ≥ expires_at), 账务步被拒或启动校验不过(exit_codes.no_envelope; 续签命令见运行记录 envelope_state, envelope.renew)",
+          "already_running": "AIPOS-F171B 件①: 同卡已有存活 loop, 本次启动被拒、未推进任何步(exit_codes.already_running; 见 single_instance; 本记录不计入 loop status 最近一次运行与连败)"
         },
-        "reexec": "AIPOS-F166 件①: 以 deploy_reexec 结束的运行另落 reexec 段 {to_release, to_commit, at, pid}(新快照与本进程号), 新运行记录落 continues_run = 上一 run_id(lybra loop status 两行分别标明)。无续等的运行不出现这两个键(存量记录形不变)。",
+        "launch_session": "AIPOS-F171B 件②: 每次拉起 launches[] 另记 session_id(harness 模板声明 session 时 loop 固定的会话 id; 无声明 = null)、resume(0 = 首次拉起, k = 同会话第 k 次续接)、resume_max(本次运行的续接上限, project.json launch_resume_max); 日志每次续接一行 [resume]。lybra loop status 拉起行显示「会话 <id> 续接 k/N」。无此键的存量记录 = F171B 前(未固定会话)。",
+        "reexec":"AIPOS-F166 件①: 以 deploy_reexec 结束的运行另落 reexec 段 {to_release, to_commit, at, pid}(新快照与本进程号), 新运行记录落 continues_run = 上一 run_id(lybra loop status 两行分别标明)。无续等的运行不出现这两个键(存量记录形不变)。",
         "envelope_state": "AIPOS-F166 件②: 以 envelope_exhausted / envelope_expired 结束的运行另落 envelope_state {policy_id, state, used, max_tasks, remaining, expires_at, next_policy_id, renew_command, note}(结束时刻的门侧用量真相, autonomy_policy.envelope_usage); lybra loop status 下一动作 owner_needed(envelope_renew) 的 detail/hint 读此段。其余结束原因不落。",
         "end_codes": {
           "description": "AIPOS-F150 件①(gap #128): loop 以 end_reasons 所列结束原因结束时, 运行记录另落 end_codes = 门拒原文(loop 结果全文 message, 非仅首行 end_message)里出现的既有门拒错误码列表(按出现顺序去重)。只抽取不造码: 码 = 门侧 blocking_reasons / error_code 既有写法(`<码>: 原因` 或 error_code=<码>), 抽取式样即 patterns(每条含命名组 code); 抽不出 = 空列表(下一动作照旧 owner_needed)。其余结束原因不落(null)。唯一实现 tools/aipos_cli/loop_run_record.extract_end_codes(LoopRunRecorder.end 调用); 旧记录无此键 = 视同空列表(行为不变)。AIPOS-F155 件①(gap #133): 门拒原文三种已知格式同一抽取——列表(`lybra_queue_return BLOCKED: [\"BRANCH_WRONG_BASE: …\"]` / ['…'])、单条(`<码>: 原因` / error_code=<码>)、finalize 结果段(`Verdict: BLOCK` 下一行 `error_code: <码>`, 码 = finalize 结果 category: 仓级合入锁 REPO_MERGE_IN_PROGRESS / 合并冲突 MERGE_CONFLICT 等); finalize 此前不出码 = 抽不出(F151/F152 实撞 end_codes 为空)。",
@@ -2465,7 +2484,8 @@
           "charter_not_fresh": "advisor_fix",
           "deploy_reexec": "advisor_fix",
           "envelope_exhausted": "owner_needed",
-          "envelope_expired": "owner_needed"
+          "envelope_expired": "owner_needed",
+          "already_running": "continue_wait"
         },
         "by_execution_mode": {
           "description": "AIPOS-F156 件①(gap #139): 按本卡执行方式分流的覆盖表(唯一声明, 与 by_end_reason 同节; 判定唯一实现 loop_run_record.next_action)。执行方式 = 运行最后一次等待的卡即本卡(执行体等待; 等审计 / 外部 FINALIZE / 同仓先合入卡的等待不适用)时, 经 workspace_config.card_execution_mode(只读 F143 执行方式声明唯一读取口 workspace_config.project_execution)判出; AIPOS-F157 件③(gap #125): 等待目标实例为无工位的子 agent 执行者(enrollment.instance_enrollment governance_root_mode, 与 lybra_loop.launch.manual_hint.subagent 同一判定 loop_driver.wait_instance_is_subagent)= subagent(未声明 execution 亦然, 等交回超时不再出工位 /go 口径); 未声明 execution 且非子 agent 执行者 / 判不出 = 不覆盖(行为不变)。modes 键 ⊆ config.schema project_json.execution.default_mode 值域。by_end_reason = 该执行方式下覆盖 by_end_reason 的结束原因映射(判为 advisor_fix 的须在 routine_rejections.end_reasons 有修法, 连续计数与其他例行结束原因同一实现); kickoff_detail = 手工等待(reason=manual_kickoff)时顾问下一动作 detail 的前缀(占位 {hint} = 运行记录里的开工提示)。pi 执行工位 / 手工工位(card_execution_mode = pi 或未声明)= 原口径(owner_needed / 向 Owner 说开工提示)。",

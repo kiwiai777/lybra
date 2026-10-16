@@ -565,6 +565,16 @@
           "reject_codes": {
             "CHARTER_AUTO_SYNC_INVALID": "charter_auto_sync 须为 JSON 布尔(true / false)"
           }
+        },
+        "launch_resume_max": {
+          "type": "integer",
+          "required": false,
+          "default": 2,
+          "minimum": 0,
+          "description": "AIPOS-F171B 件②(10-16 chris HBLX-8 实撞: 审计 pi 单发模式半途停笔 exit 0 未写报告): loop 拉起的 pi 以 exit 0 退出而产物未就绪时, 以同一会话 id 续接的最多次数(机制声明 verbs.schema lybra_loop.launch.resume)。缺省 2(缺键 = 2); 0 = 不续接(F171B 前行为)。值须为 ≥0 的 JSON 整数, 否则 LAUNCH_RESUME_MAX_INVALID(loop 不拉起, fail-closed, 拒因点名)。唯一读取口 workspace_config.launch_resume_max; 写入 = 编辑 project.json 本键(无专用写命令)。",
+          "reject_codes": {
+            "LAUNCH_RESUME_MAX_INVALID": "launch_resume_max 须为 ≥0 的 JSON 整数"
+          }
         }
       }
     }
