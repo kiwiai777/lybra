@@ -84,6 +84,48 @@ def roadmap_texts() -> dict[str, str]:
     return texts
 
 
+#: CLI 字段旗标帮助(旗标名 = 声明键投影; 本表只给帮助文案, 键须在声明里)
+_FIELD_HELP = {
+    ("milestone", "id"): "Milestone id (unique in the project)",
+    ("milestone", "lane"): "Lane (sub-project) of the milestone",
+    ("milestone", "title"): "One-line goal",
+    ("milestone", "target_date"): "Target date YYYY-MM-DD (optional)",
+    ("milestone", "status"): "Milestone status (default planned)",
+    ("criterion", "id"): "Criterion id (unique in the project)",
+    ("criterion", "statement"): "A checkable one-line statement",
+    ("criterion", "verify"): "How it is verified (auto | artifact | owner_check)",
+}
+#: add-criterion 的所属里程碑旗标(非条目字段)
+_PARENT_FLAG = {"flag": "--milestone", "dest": "milestone_id", "required": True, "help": "Milestone id the criterion belongs to"}
+
+
+def roadmap_cli_fields() -> dict[str, Any]:
+    """`lybra roadmap add-milestone / add-criterion / show` 的字段旗标 = 声明 milestone_keys / criterion_keys 的投影(键名 `_` → `-`;
+    required 键必填; 列表型键 criteria 不作旗标)。show 的过滤旗标 = 里程碑 lane 键。"""
+    decl = roadmap_declaration()
+
+    def _flags(kind: str) -> list[dict[str, Any]]:
+        keys = decl[f"{kind}_keys"]
+        out = []
+        for key in [*keys["required"], *keys["optional"]]:
+            if key == "criteria":
+                continue
+            out.append({"flag": "--" + key.replace("_", "-"), "dest": key, "required": key in keys["required"],
+                        "help": _FIELD_HELP.get((kind, key), key)})
+        return out
+
+    lane_key = next(k for k in decl["milestone_keys"]["required"] if k == "lane")
+    return {"milestone": _flags(_MILESTONE), "criterion": [_PARENT_FLAG, *_flags(_CRITERION)],
+            "lane_filter": {"flag": "--" + lane_key, "help": "Only milestones of this lane"}}
+
+
+def roadmap_param_keys() -> list[str]:
+    """CLI 薄壳交给 apply_roadmap_change 的参数键(字段旗标 dest + set 的 field/value)。"""
+    fields = roadmap_cli_fields()
+    keys = [f["dest"] for f in fields["milestone"]] + [f["dest"] for f in fields["criterion"]] + ["field", "value"]
+    return list(dict.fromkeys(keys))
+
+
 def _reject(code: str, detail: str, decl: dict[str, Any] | None = None) -> RoadmapError:
     decl = decl or roadmap_declaration()
     hint = str((decl.get("reject_codes") or {}).get(code) or "")

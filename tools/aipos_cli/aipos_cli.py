@@ -1629,8 +1629,7 @@ def _roadmap_command(args: argparse.Namespace) -> int:
             else:
                 print(rm.render_view_text(view))
             return 0
-        params = {k: getattr(args, k, None) for k in ("id", "lane", "title", "target_date", "status", "milestone_id", "statement",
-                                                      "verify", "field", "value")}
+        params = {k: getattr(args, k, None) for k in rm.roadmap_param_keys()}
         outcome = rm.apply_roadmap_change(root, command, params, actor=args.actor, confirm=bool(args.confirm), project=project)
     except rm.RoadmapError as exc:
         print(f"Error: {exc}(路线图未改动)", file=sys.stderr)
@@ -2930,9 +2929,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # AIPOS-F171 件①: lybra roadmap — 结构化路线图(里程碑 + 验收标准)声明与编辑(声明 verbs.schema lybra_roadmap; 文件形
     # config.schema governance_structure.roadmap; 写命令两阶段族 roadmap_writers; 唯一实现 tools/aipos_cli/roadmap.py)
-    roadmap_parser = subparsers.add_parser(
-        "roadmap",
-        help="AIPOS-F171: project roadmap (milestones + acceptance criteria) in the governance root's roadmap file "
+    roadmap_parser = subparsers.add_parser("roadmap", help="AIPOS-F171: project roadmap (milestones + acceptance criteria) in the governance root's roadmap file "
              "(project.json paths.roadmap_file, default governance/roadmap.yaml): show (read-only) / add-milestone / add-criterion / "
              "set / remove (default preview, --confirm writes + decision_log pointer + landing)",
     )
@@ -2949,29 +2946,30 @@ def build_parser() -> argparse.ArgumentParser:
     roadmap_show = roadmap_sub.add_parser("show", help="Read-only: milestones / criteria with linked-card counts and the unlinked "
                                           "(free-floating) cards; no roadmap file = first-use hint")
     _roadmap_common(roadmap_show)
-    roadmap_show.add_argument("--lane", default=None, help="Only milestones of this lane")
-    roadmap_writers = {}
-    roadmap_writers["add-milestone"] = roadmap_sub.add_parser("add-milestone", help="Add a milestone (two-phase)")
-    roadmap_writers["add-milestone"].add_argument("--id", required=True, help="Milestone id (unique in the project)")
-    roadmap_writers["add-milestone"].add_argument("--lane", required=True, help="Lane (sub-project) of the milestone")
-    roadmap_writers["add-milestone"].add_argument("--title", required=True, help="One-line goal")
-    roadmap_writers["add-milestone"].add_argument("--target-date", default=None, help="Target date YYYY-MM-DD (optional)")
-    roadmap_writers["add-milestone"].add_argument("--status", default=None, help="Milestone status (default planned)")
-    roadmap_writers["add-criterion"] = roadmap_sub.add_parser("add-criterion", help="Add an acceptance criterion under a milestone (two-phase)")
-    roadmap_writers["add-criterion"].add_argument("--milestone", dest="milestone_id", required=True, help="Milestone id")
-    roadmap_writers["add-criterion"].add_argument("--id", required=True, help="Criterion id (unique in the project)")
-    roadmap_writers["add-criterion"].add_argument("--statement", required=True, help="A checkable one-line statement")
-    roadmap_writers["add-criterion"].add_argument("--verify", required=True, help="How it is verified (auto | artifact | owner_check)")
-    roadmap_writers["set"] = roadmap_sub.add_parser("set", help="Change one field of a milestone / criterion (two-phase; ids cannot be renamed)")
-    roadmap_writers["set"].add_argument("--id", required=True, help="Milestone or criterion id")
-    roadmap_writers["set"].add_argument("--field", required=True, help="Field name (settable fields per config.schema governance_structure.roadmap)")
-    roadmap_writers["set"].add_argument("--value", required=True, help="New value (empty string clears an optional field)")
-    roadmap_writers["remove"] = roadmap_sub.add_parser("remove", help="Remove a milestone / criterion that no card links to "
-                                                       "(two-phase; linked = refused, set the milestone status to dropped instead)")
-    roadmap_writers["remove"].add_argument("--id", required=True, help="Milestone or criterion id")
-    for _roadmap_cmd, _roadmap_sub_parser in roadmap_writers.items():
+    # 里程碑 / 标准的字段旗标 = 路线图形声明(config.schema governance_structure.roadmap *_keys)的投影, 不手写字段旗标
+    from tools.aipos_cli.roadmap import roadmap_cli_fields
+
+    _rm_fields = roadmap_cli_fields()
+    roadmap_show.add_argument(_rm_fields["lane_filter"]["flag"], dest="lane", default=None, help=_rm_fields["lane_filter"]["help"])
+    roadmap_add_ms = roadmap_sub.add_parser("add-milestone", help="Add a milestone (two-phase)")
+    roadmap_add_crit = roadmap_sub.add_parser("add-criterion", help="Add an acceptance criterion under a milestone (two-phase)")
+    for _rm_parser, _rm_kind in ((roadmap_add_ms, "milestone"), (roadmap_add_crit, "criterion")):
+        for _rm_field in _rm_fields[_rm_kind]:
+            _rm_parser.add_argument(_rm_field["flag"], dest=_rm_field["dest"], required=_rm_field["required"], default=None,
+                                    help=_rm_field["help"])
+    roadmap_set = roadmap_sub.add_parser("set", help="Change one field of a milestone / criterion (two-phase; ids cannot be renamed)")
+    roadmap_set.add_argument("--id", required=True, help="Milestone or criterion id")
+    roadmap_set.add_argument("--field", required=True, help="Field name (settable fields per config.schema governance_structure.roadmap)")
+    roadmap_set.add_argument("--value", required=True, help="New value (empty string clears an optional field)")
+    roadmap_remove = roadmap_sub.add_parser("remove", help="Remove a milestone / criterion that no card links to "
+                                            "(two-phase; linked = refused, set the milestone status to dropped instead)")
+    roadmap_remove.add_argument("--id", required=True, help="Milestone or criterion id")
+    _project_json_two_phase_flags(roadmap_add_ms, "add-milestone", family="roadmap_writers")
+    _project_json_two_phase_flags(roadmap_add_crit, "add-criterion", family="roadmap_writers")
+    _project_json_two_phase_flags(roadmap_set, "set", family="roadmap_writers")
+    _project_json_two_phase_flags(roadmap_remove, "remove", family="roadmap_writers")
+    for _roadmap_sub_parser in (roadmap_add_ms, roadmap_add_crit, roadmap_set, roadmap_remove):
         _roadmap_common(_roadmap_sub_parser)
-        _project_json_two_phase_flags(_roadmap_sub_parser, _roadmap_cmd, family="roadmap_writers")
         _roadmap_sub_parser.add_argument(_roadmap_actor["flag"], dest="actor", default=_default_actor(), help=_roadmap_actor["help"])
 
     # AIPOS-F78 件②: lybra card render — 卡意图面单一渲染器(pi 三行 / codex Prompt.md+Plan.md / claude-code CLAUDE.md 片段)

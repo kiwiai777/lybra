@@ -88,12 +88,12 @@ lybra draft publish --path 5_tasks/drafts/<卡ID小写>.md --actor <你的顾问
 #### `lybra roadmap`(AIPOS-F171: 路线图声明与编辑)
 **何时用**:子项目首次接入结构化路线图(按阶段目标声明里程碑与验收标准)、阶段目标变化、看哪些卡挂在哪个里程碑 / 哪些是游离卡。
 ```bash
-lybra roadmap show --workspace-root <治理根> [--lane <lane>]                         # 只读: 里程碑 / 标准 / 挂接卡数 / 游离卡
-lybra roadmap add-milestone --workspace-root <治理根> --id <里程碑id> --lane <lane> --title "<一句话目标>" [--target-date YYYY-MM-DD]   # 先预演
+lybra roadmap show --workspace-root <治理根>                                          # 只读: 里程碑 / 标准 / 挂接卡数 / 游离卡(可加 --lane <lane> 过滤)
+lybra roadmap add-milestone --workspace-root <治理根> --id <里程碑id> --lane <lane> --title "<一句话目标>"     # 先预演(可加 --target-date YYYY-MM-DD)
 lybra roadmap add-milestone --workspace-root <治理根> --id <里程碑id> --lane <lane> --title "<一句话目标>" --confirm --actor <你的顾问实例>
-lybra roadmap add-criterion --workspace-root <治理根> --milestone <里程碑id> --id <标准id> --statement "<可核对的一句话>" --verify auto|artifact|owner_check [--confirm --actor <你的顾问实例>]
-lybra roadmap set --workspace-root <治理根> --id <id> --field status --value done [--confirm --actor <你的顾问实例>]
-lybra roadmap remove --workspace-root <治理根> --id <id> [--confirm --actor <你的顾问实例>]    # 有挂接卡 = 拒 ROADMAP_REMOVE_LINKED, 里程碑改 status=dropped
+lybra roadmap add-criterion --workspace-root <治理根> --milestone <里程碑id> --id <标准id> --statement "<可核对的一句话>" --verify auto
+lybra roadmap set --workspace-root <治理根> --id <id> --field status --value done --confirm --actor <你的顾问实例>
+lybra roadmap remove --workspace-root <治理根> --id <id>                              # 有挂接卡 = 拒 ROADMAP_REMOVE_LINKED, 里程碑改 status=dropped
 ```
 缺省预演(整份文件 diff + 将生成的 decision_log 指针名, 零写入); `--confirm` 写入、生成 decision_log 指针(路线图变更本身可见)并自动落账。
 文件落点 project.json `paths.roadmap_file`(缺省 `governance/roadmap.yaml`), 格式见 `docs/roadmap.md`; 改动只经本组命令。
