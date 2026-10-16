@@ -93,6 +93,10 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     (gov / "governance" / "NOTES.md").write_text("---\nstatus: active\n---\n# notes\n", encoding="utf-8")
     code_repo = tmp_path / "product"
     code_repo.mkdir()
+    # AIPOS-F178 item 3: the loop verifies (and auto-repairs) a claimed card's worktree before waiting,
+    # so the declared product repo must be a real git repo with a main branch (previously a bare placeholder dir)
+    for argv in (["init", "-q", "-b", "main"], ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"]):
+        subprocess.run(["git", *argv], cwd=code_repo, check=True, capture_output=True)
     _write(gov / "project.json", json.dumps({"project": "gov", "code_repo": str(code_repo), "config_version": 1}))
     _write(gov / ".lybra" / "role", json.dumps({"role": "advisor", "instance": DRIVER}))
     _write(other / "plan.md", "plan v1\n")

@@ -351,7 +351,8 @@ def card_needs_worktree(workspace_root: Path, card_frontmatter: dict[str, Any] |
     if reviewed is None:
         return card_writes_product_repo(workspace_root, fm)
     if not reviewed:
-        return True  # 审计卡缺被审卡字段 → 需要(建树时给出拒因)
+        # 审计卡缺被审卡字段 → 需要(建树时给出拒因)
+        return True
     task_path, _ = _find_task_in_queue(workspace_root, reviewed)
     if task_path is None:
         return True
