@@ -2510,13 +2510,15 @@ def build_parser() -> argparse.ArgumentParser:
     project_setpaths_parser.add_argument("--workspace-root", help="AIPOS-F127: target governance root when the project name is omitted (default: the one containing the current directory)")
     project_setpaths_parser.add_argument("--json", action="store_true", help="Output JSON")
     # AIPOS-F127 件③: project.json 顶层说明键(phase / note)写入口; 旗标 → 键登记读 verbs.schema project_json_writers.meta.keys
-    from tools.aipos_cli.workspace_config import project_meta_declaration
+    from tools.aipos_cli.workspace_config import declared_meta_keys, project_meta_declaration
 
     project_setmeta_parser = project_subparsers.add_parser("set-meta", help="AIPOS-F127: set project.json top-level description keys (phase / note; each must be declared in config.schema project_json); --dry-run (default) shows the diff, --confirm writes")
     project_setmeta_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory; never the home-level active project)")
+    _meta_enums = {k: list(v.get("enum") or []) for k, v in declared_meta_keys().items()}  # AIPOS-F170: enum 键(status)帮助列值域
     for _meta_key, _meta_flag in project_meta_declaration()["keys"].items():
-        project_setmeta_parser.add_argument(_meta_flag, dest=f"meta_{_meta_key}", default=None, metavar="TEXT",
-                                            help=f"project.json {_meta_key} (single line)")
+        _enum = _meta_enums.get(_meta_key) or []
+        project_setmeta_parser.add_argument(_meta_flag, dest=f"meta_{_meta_key}", default=None, metavar="|".join(_enum) or "TEXT",
+                                            help=f"project.json {_meta_key} " + (f"(one of {', '.join(_enum)})" if _enum else "(single line)"))
     project_setmeta_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_setmeta_parser.add_argument("--workspace-root", help="Target governance root when the project name is omitted (default: the one containing the current directory)")
     project_setmeta_parser.add_argument("--json", action="store_true", help="Output JSON")

@@ -121,6 +121,8 @@ def withdraw_owner_ruling_problem(repo_root: Path, task_id: str, owner_ruling_re
         return (f"Owner ruling {ref} does not rule withdrawal of {task_id} (task_id={fm.get('task_id')!r}, "
                 f"allowed_next_action={fm.get('allowed_next_action')!r}, withdrawal choices {sorted(allowed)})"), None
     return None, None
+
+
 # AIPOS-348: reopen 允许源目录(= 声明 reopen.from_states)
 REOPEN_SOURCE_STATES = ALLOWED_TRANSITIONS["reopen"][0]
 # AIPOS-F87 件①: 卡字段序唯一定义在 record_writer.CARD_FRONTMATTER_ORDER(本名保留为别名, 供既有调用方)。
