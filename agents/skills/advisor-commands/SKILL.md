@@ -31,6 +31,7 @@ role: advisor
 | **N0 出卡** | 起草与发卡 | `lybra draft create/publish`, `lybra queue amend/withdraw` |
 | **推进** | **Owner 信封授权下, 一条命令把卡从当前节点推到 completed**(产物落盘自动 return→派审→裁决→finalize→close; agent 步只等产物; 信封 `launch_harnesses` 授权时 loop 在工位拉起 harness, 否则手工 `/go`, 见「两种开工模式」) | **`lybra loop --task-id <卡ID>`**(AIPOS-F73D; 替代逐步 `next --run`) |
 | **跟进(持续推进)** | Owner 说一次「推进 <lane>」后不等 Owner 推: 跑 loop → 有界等 → 按产品给的顾问下一动作处理, 只在 owner_needed 停(守则全文在顾问章程「持续推进守则」, 本 skill 不复述) | **`lybra loop status --task-id <卡ID> --wait <秒>`**(AIPOS-F136) |
+| **更新通知** | 产品上线后的顾问须知由产品送达(AIPOS-F167, Owner 不再转述): `lybra charter` 开头 / `loop status`、`next`、`brief` 末尾出现「Lybra 有 N 条未读更新」→ 读 → 记已读 → 继续推进(守则在顾问章程「持续推进守则」, 本 skill 不复述) | **`lybra updates --actor <你的顾问实例>`** → **`lybra updates --ack --actor <你的顾问实例> --confirm`** |
 | **N1 认领** | 监督认领流程 | `lybra loop`(推进行; 一段式: 驱动方信封 PreAuthorized, 门在同一步建卡工作树, **建树失败 = 门拒认领**, 队列不变); 单步查看 `lybra next --task-id <卡ID>`; `lybra my-tasks` 查询 |
 | **开工(工位)** | 执行/审计工位开工 | **两种模式**(AIPOS-F95): ①授权拉起 = 信封带 `launch_harnesses`, `lybra loop` 等待前在工位拉起 harness(开工提示 = 产品 `my-tasks` 的 `next_card.kickoff`); ②手工 = Owner 在工位敲 **`/go`**(产品选卡并核验: 非 claimed/非本实例/已结案/产物已交即拒并给原因)。顾问**不贴卡号/卡路径/开工稿**(AIPOS-F90 件③) |
 | **开工渲染** | 把卡意图面按 harness 渲染给执行引擎(pi/codex/claude-code), 派子 agent 只看渲染物 | **`lybra card render --task-id <卡ID> --harness <harness>`**(AIPOS-F78 件②; 零门动词/零 token) |
@@ -69,7 +70,23 @@ lybra draft publish --path 5_tasks/drafts/<卡ID小写>.md --actor <你的顾问
 `--actor` = 签发实例(AIPOS-F156): 记入发布记录 actor = 卡归属(共用仓「取下一张只取本子项目的卡」、loop 拒跑别人的卡都按它判);
 按 `--actor` 实例核凭据(治理根连接文件须有该实例的顾问凭据)。同一治理根接入多个顾问实例时必填(缺 = 拒 `PUBLISH_ACTOR_REQUIRED`);
 只接入一个时可省(推断为该实例)。
-**自动校验**:schema 校验(必填/拼错字段)、N0 容量 lint(交付大项>3 会 WARN)。
+**自动校验**:schema 校验(必填/拼错字段)、N0 容量 lint(交付大项>3 会 WARN)、顾问须知(AIPOS-F167: `advisor_notice` 形不合 = 拒 `ADVISOR_NOTICE_INVALID`; 改 Lybra 产品顾问/审计/执行可见面的卡缺它 = 警告 `ADVISOR_NOTICE_MISSING`, 不拒)。
+
+**卡稿 JSON 写顾问须知**(AIPOS-F167; 卡改 CLI 参数 / next_action / 章程 / 卡面字段等顾问可见行为时写, 上线后产品自动送达各项目顾问):
+```json
+"advisor_notice": {"audience": ["advisor"], "summary": "<一句话要点>", "actions": ["<顾问要做的动作>"]}
+```
+`audience` 可含 `advisor` / `auditor` / `executor`(含 `advisor` 才进顾问未读提示; 审计 / 执行体的变化随章程渲染送达)。
+
+#### `lybra updates`(AIPOS-F167: Lybra 更新说明 · 记已读)
+**何时用**:`lybra charter` 开头或 `loop status` / `next` / `brief` 末尾出现「Lybra 有 N 条未读更新(自 <版本>): 要点…」时。
+```bash
+lybra updates --workspace-root <治理根> --actor <你的顾问实例>                       # 读未读全文(--all 看全部, 标已读/未读)
+lybra updates --ack --workspace-root <治理根> --actor <你的顾问实例>                 # 预演: 将记已读哪几份(零写入)
+lybra updates --ack --workspace-root <治理根> --actor <你的顾问实例> --confirm       # 记已读(写已读标记并自动落账)
+```
+已读按「本治理根 × 本实例」记: 你 ack 了, 同项目别的顾问实例仍会看到。读完 → ack → 按须知里的顾问动作做 → 直接继续推进, 不必等 Owner。
+更新说明在产品侧(部署目录)一份, 所有接入项目共用; 卡工作树里 `python -m` 跑不读真实库(如实说明「库不可用」)。
 
 #### `lybra queue amend`
 **何时用**:改卡(如 `needs_owner: true → false` 解放行阻塞)。

@@ -1,0 +1,75 @@
+{
+  "description": "AIPOS-F167 件④: 卡面 advisor_notice 字段上线前已部署的卡的顾问须知回填清单(只写对顾问可见的变化; 清单只追加)。读取唯一口 tools/aipos_cli/advisor_updates.compile_on_deploy(声明 verbs.schema lybra_updates.compile.backfill_source): finalize --deploy 成功后, 库内尚未汇总过的条目随该次部署汇成更新说明(去重键 task_id)。条目形同卡面 advisor_notice(同一校验 parse_advisor_notice)。AIPOS-F167 自身部署时 finalize 仍跑旧快照(无汇总口), 故本卡须知亦列于此, 随下一次部署一并送达。",
+  "entries": [
+    {
+      "task_id": "AIPOS-F160",
+      "audience": ["advisor"],
+      "summary": "写治理真相的命令 --confirm 后自动落账, 文档与向导不再教手跑 governance-commit; 重签 / 未接入提示不再把注册码写进命令行; lybra migrate decision-log-pointers 可补生成历史缺失的 decision_log 指针",
+      "actions": [
+        "project set-* / freeze-legacy / dispatch-mode set / envelope mint / migrate 的 --confirm 之后不要再手跑 lybra governance-commit(已自动落账); 落账失败(exit 3)只跑输出给出的补账命令",
+        "历史缺 decision_log 指针: lybra migrate decision-log-pointers --workspace-root <治理根> 先预演, 再加 --confirm --actor <你的顾问实例> 补生成(幂等)"
+      ]
+    },
+    {
+      "task_id": "AIPOS-F161",
+      "audience": ["advisor"],
+      "summary": "新增 lybra project relocate-workstation: 把与其他项目共用 git 检出的 pi 工位(审计 / 执行)迁到独立落点, 可预演 / 确认 / 回滚, 跨项目通用",
+      "actions": [
+        "本项目 pi 工位在共用检出里时, 按 advisor-commands 技能「工位迁出共用检出」一节先预演, 等在途审计 / 执行收尾后再 --confirm --actor <你的顾问实例>"
+      ]
+    },
+    {
+      "task_id": "AIPOS-F162",
+      "audience": ["advisor", "auditor"],
+      "summary": "卡面可声明 audit_runtime_evidence(审计须在自己的分配工作树实跑), PASS 类裁决缺独立运行证据即拒收; 已结案卡可用 lybra audit dispatch --supplementary 发起补充审计, 不必找 Owner",
+      "actions": [
+        "需要审计实跑验证的卡, 出卡时在卡稿写 audit_runtime_evidence {required: true, commands: [...]}",
+        "对已结案卡的审计结论有争议: 按 advisor-commands 技能「已结案卡补充审计」一节先预演再 --confirm, 然后对原卡跑 lybra loop"
+      ]
+    },
+    {
+      "task_id": "AIPOS-F163",
+      "audience": ["advisor", "auditor"],
+      "summary": "运行证据硬门下沉到门侧裁决写入唯一口: 手敲 lybra audit-verdict --confirm 直提裁决同样核运行证据, 缺 = RUNTIME_EVIDENCE_MISSING",
+      "actions": [
+        "不要用手敲 audit-verdict --confirm 绕过运行证据; 被拒时按拒因让审计补独立运行证据后重交"
+      ]
+    },
+    {
+      "task_id": "AIPOS-F164",
+      "audience": ["advisor"],
+      "summary": "工位章程新鲜度核查: check-workstation 报章程未渲染 / 过期; lybra loop 拉起 pi 前核章程指纹, 过期先 sync 本工位; 新结束原因 charter_sync_failed / charter_not_fresh 在 loop status 给 advisor_fix",
+      "actions": [
+        "loop status 报 charter_sync_failed / charter_not_fresh 时按输出的 advisor_fix 修法处理, 修好用末行命令续跑 loop"
+      ]
+    },
+    {
+      "task_id": "AIPOS-F165",
+      "audience": ["advisor", "auditor"],
+      "summary": "audit_runtime_evidence 声明的命令在出卡 / 补审派发时先核审计主机上可执行(不可执行 = 预演报错、--confirm 拒); 运行证据拒因附「声明 vs 实跑」逐条差异与 BLOCK 指引; loop 拉起的 pi 缺省禁提权(no_new_privs)",
+      "actions": [
+        "audit_runtime_evidence 的命令里只写审计主机上存在的可执行文件; 出卡预演报不可执行时按修法改卡稿",
+        "审计做不到逐字运行证据时按拒因判 BLOCK 交回, 不要让审计用 sudo 改系统凑命令"
+      ]
+    },
+    {
+      "task_id": "AIPOS-F166",
+      "audience": ["advisor"],
+      "summary": "loop 手工等待步遇部署更新自动续等; 信封用尽 / 过期走专门出口 owner_needed(envelope_renew) 并给续签命令, 余量达阈值时 loop status / brief 预警; 合并后回归丢失可见, 新增 lybra regression run --sha 补跑",
+      "actions": [
+        "loop status 给 owner_needed(envelope_renew) 时, 把输出里的续签命令交 Owner 签, 签好后续跑 loop",
+        "看到「合并后回归未完成」: 按提示先原样跑 lybra regression run --sha <提交> --workspace-root <治理根> 预演, 再加 --confirm --actor <你的顾问实例> 补跑"
+      ]
+    },
+    {
+      "task_id": "AIPOS-F167",
+      "audience": ["advisor"],
+      "summary": "产品内更新通知: 卡面 advisor_notice 随部署自动汇成更新说明; lybra charter 开头、loop status / next / brief 末尾显示「Lybra 有 N 条未读更新」, 顾问读完记已读即继续推进, 不必等 Owner 转述",
+      "actions": [
+        "看到「Lybra 有 N 条未读更新」: lybra updates --workspace-root <治理根> --actor <你的顾问实例> 读全文",
+        "读完: lybra updates --ack --workspace-root <治理根> --actor <你的顾问实例> --confirm 记已读(自动落账), 然后继续推进",
+        "出改顾问 / 审计 / 执行可见行为的卡(改 CLI 参数 / next_action / 章程 / 卡面字段)时, 卡稿写 advisor_notice {audience: [advisor], summary: <一句话>, actions: [...]}; 缺了出卡会警告"
+      ]
+    }
+  ]
+}

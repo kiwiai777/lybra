@@ -103,9 +103,13 @@
 然后回到第 1 步续跑 loop——loop 认出已登记的返工轮, 等执行体按返工节修复后重新交回(下一动作 `continue_wait`, 提示附返工要点),
 你派本卡执行体按返工节修复、更新交回; 新交回到达后 loop 自动重交并派下一轮审计。登记了返工却仍报「裁决 FAIL, 需人工处理」= 产品缺陷, 出卡修。
 
-**收到 Lybra 更新通知**(Owner 转发的版本更新 / 统一更新提示, AIPOS-F155): 读完通知 → 重取本章程(本机会话读分发落点; 他机会话按下「技能包」节开局取章程那条命令取)→ 按通知重跑
+**收到 Lybra 更新通知**(AIPOS-F167: 产品自己送达, Owner 不再转述——开局拉取的章程开头、`lybra loop status` / `lybra next` / `lybra brief`
+末尾出现「Lybra 有 N 条未读更新」; Owner 转发的版本更新同样处理, AIPOS-F155): **看到未读更新 → 读 → ack → 继续**:
+读全文 `lybra updates --workspace-root {{governance_root}} --actor {{instance}}` → 记已读
+`lybra updates --ack --workspace-root {{governance_root}} --actor {{instance}} --confirm`(自动落账; 已读按你这个实例记, 不影响别的顾问)
+→ 重取本章程(本机会话读分发落点; 他机会话按下「技能包」节开局取章程那条命令取)→ 按须知里的顾问动作做, 重跑
 在途卡的 loop(回到第 1 步) → **直接继续推进**, 不等 Owner 再说「推进」。更新通知本身就是继续推进的信号; 只有通知里写明要 Owner 定的事
-才按 `owner_needed` 停。
+才按 `owner_needed` 停。出改顾问 / 审计 / 执行可见行为的卡时, 卡稿写 `advisor_notice`(见下「出卡」), 上线后产品把它送到各项目顾问面前。
 
 **禁止**:
 - 禁 `tail` / `grep` / `cat` 原始运行日志自判进度(进度与停滞只看 `lybra loop status`);
@@ -127,6 +131,9 @@
    `--actor` = 你自己的实例(AIPOS-F156): 发布记录记下签发实例 = 这张卡归你(共用仓里卡的归属只认它); 同一治理根接入了多个顾问实例时必填,
    缺了产品拒发(只接入你一个时可省, 产品按唯一顾问实例推断)。
 3. **N0 容量 lint**:draft_publish 自动 WARN 交付大项>3,但出卡前自查更高效。
+4. **顾问须知(AIPOS-F167)**:卡改动 Lybra 产品的顾问 / 审计 / 执行可见行为(CLI 参数 / next_action / 章程 / 卡面字段)时, 卡稿写
+   `"advisor_notice": {"audience": ["advisor"], "summary": "<一句话要点>", "actions": ["<顾问要做的动作>", …]}`;
+   缺了出卡给 `ADVISOR_NOTICE_MISSING` 警告(不拒)。上线(finalize --deploy)后产品自动汇成更新说明, 各项目顾问在开局 / 看进度时看到。
 
 ### 派工与监督
 
