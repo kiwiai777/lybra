@@ -300,6 +300,7 @@ NON_TEST_UNDER_TESTS = {
     "manual_test_aipos366.py": "人工对活体门的验证脚本(依赖 requests + 真门), 不在任何自动化 runner 中",
     "fake_harness.py": "F95 假 harness 辅助脚本(被夹具按 launch 模板拉起; run-all 只 py_compile, 非测试)",
     "fake_ssh.py": "AIPOS-F110 ssh 执行器替身(被 F110 夹具以 `ssh` 之名放 PATH 首位调用, 非测试)",
+    "fake_pi.py": "AIPOS-F169 pi 可执行替身(被 F169 夹具以 `pi` 之名放 PATH 首位调用: 假模型清单 / 拉起转 F95 假 harness, 非测试)",
     "ratchet_baseline.py": "AIPOS-F109 件⑤ 棘轮基线 jsonl 读写口(被 f87/f96/F109 夹具导入, 非测试)",
     "conftest.py": "AIPOS-F116 件② pytest 会话层 HOME 隔离(各测试目录, 非测试)",
 }

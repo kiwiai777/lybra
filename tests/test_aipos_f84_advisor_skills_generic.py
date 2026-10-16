@@ -80,6 +80,9 @@ PLACEHOLDER_VALUES = {
     "<已结案卡ID>": "PROJ-12",
     "<争议摘要>": "dispute",
     "<审计须在自己分配工作树重跑的命令>": "pytest",
+    # AIPOS-F169: pi 模型切换(set-model)占位
+    "<provider/id>": "kiwiai/qwen3.7-plus",
+    "<Owner指示摘要>": "Owner 指示(夹具)",
 }
 PLACEHOLDER_RE = re.compile(r"<[^<>\s'\"]+>")
 #: 已退役的子命令(示例不得再教)

@@ -240,8 +240,8 @@ lybra project relocate-workstation <项目名> --home-root <home根> --instance 
 **何时用**: Owner 对你说「后面 pi 执行体(或审计体)换成某模型」。Owner 没说 = 不声明, loop 拉起 pi 不传 `--model`, 沿用 pi 自身缺省(现为 `kiwiai/qwen3.7-plus`)。模型声明只在 project.json `execution.pi_models` 一处(须先有 `set-execution` 声明); 只能切到本机 pi 已配置的模型(产品按 `pi --list-models` 核, 不在清单 = 拒并列出相近可用模型, 原样转给 Owner 选)。任何项目同一组命令, 在治理根所在机运行。
 1. **预演**(缺省, 零写入): 核模型在 pi 已配置清单中, 列影响的工位(角色 / 实例 / 位置)与下次拉起的模型变化 `旧 → 新`、生效时机(下次拉起生效, 在途已拉起的进程不受影响)
 ```bash
-lybra project set-model <项目名> --home-root <home根> --model <provider/id> --owner-ref "<Owner 指示摘要或决定记录>"                  # 项目缺省(执行与审计)
-lybra project set-model <项目名> --home-root <home根> --role auditor --model <provider/id> --owner-ref "<Owner 指示摘要>"          # 只换审计体(--role executor 只换执行体)
+lybra project set-model <项目名> --home-root <home根> --model <provider/id> --owner-ref "<Owner指示摘要>"                  # 项目缺省(执行与审计)
+lybra project set-model <项目名> --home-root <home根> --role auditor --model <provider/id> --owner-ref "<Owner指示摘要>"          # 只换审计体(--role executor 只换执行体)
 ```
 2. **确认**: 同一组参数加 `--confirm --actor <你的顾问实例>`, 写 project.json 并经治理提交口自动落账(之后不手跑 `governance-commit`)
 3. **核查**(只读): `check-workstation` 多一行「拉起模型 [角色]: <模型>(来源)」, 本机工位另核该模型仍在 pi 清单中(不在 = ✗); loop 拉起后 `lybra loop status` 拉起行显示「模型 …」, 运行记录 `launches[].model` 记实际传入值
