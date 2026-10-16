@@ -28,7 +28,7 @@ role: advisor
 
 | 阶段 | 职责 | 主要命令 |
 |------|------|----------|
-| **N0 出卡** | 起草与发卡(卡挂路线图里程碑, AIPOS-F171) | `lybra draft create/publish`, `lybra queue amend/withdraw`, `lybra roadmap show/status/add-milestone/add-criterion/set/remove` |
+| **N0 出卡** | 起草与发卡(卡挂路线图里程碑, AIPOS-F171) | `lybra draft create/publish`, `lybra queue amend/withdraw`, `lybra roadmap show/status/add-milestone/add-criterion/set/remove/verify` |
 | **推进** | **Owner 信封授权下, 一条命令把卡从当前节点推到 completed**(产物落盘自动 return→派审→裁决→finalize→close; agent 步只等产物; 信封 `launch_harnesses` 授权时 loop 在工位拉起 harness, 否则手工 `/go`, 见「两种开工模式」) | **`lybra loop --task-id <卡ID>`**(AIPOS-F73D; 替代逐步 `next --run`) |
 | **跟进(持续推进)** | Owner 说一次「推进 <lane>」后不等 Owner 推: 跑 loop → 有界等 → 按产品给的顾问下一动作处理, 只在 owner_needed 停(守则全文在顾问章程「持续推进守则」, 本 skill 不复述) | **`lybra loop status --task-id <卡ID> --wait <秒>`**(AIPOS-F136) |
 | **更新通知** | 产品上线后的顾问须知由产品送达(AIPOS-F167, Owner 不再转述): `lybra charter` 开头 / `loop status`、`next`、`brief` 末尾出现「Lybra 有 N 条未读更新」→ 读 → 记已读 → 继续推进(守则在顾问章程「持续推进守则」, 本 skill 不复述) | **`lybra updates --actor <你的顾问实例>`** → **`lybra updates --ack --actor <你的顾问实例> --confirm`** |
@@ -85,6 +85,14 @@ lybra draft publish --path 5_tasks/drafts/<卡ID小写>.md --actor <你的顾问
 引用不存在 / 标准不属该里程碑 = 拒 `ROADMAP_LINK_INVALID`; 已有路线图而卡没挂 = 警告 `ROADMAP_UNLINKED`(游离卡, 不拒, 计入偏差);
 项目没有路线图文件 = 不校验不警告。
 
+**卡稿 JSON 声明验收产物**(AIPOS-F175; 所挂标准 verify = artifact / owner_check 时必写, 只此一个卡面字段):
+```json
+"artifacts": [{"criterion": "<本卡 criteria 里的标准id>", "path_glob": "home.png", "kind": "screenshot"},
+              {"criterion": "<标准id>", "path_glob": "steps.txt", "kind": "output"}]
+```
+执行体把文件放进卡产物落点 `<return_root>/<卡ID>/artifacts/`(lybra = `task_cards/<卡ID>/artifacts/`), 交回 / 审计报告引用;
+形不合(criterion 不在本卡 criteria / kind 不在 screenshot|output|report / glob 绝对路径或含 ..)= 拒 `CARD_ARTIFACTS_INVALID`。
+
 #### `lybra roadmap`(AIPOS-F171: 路线图声明与编辑)
 **何时用**:子项目首次接入结构化路线图(按阶段目标声明里程碑与验收标准)、阶段目标变化、看哪些卡挂在哪个里程碑 / 哪些是游离卡。
 ```bash
@@ -113,6 +121,21 @@ lybra roadmap status --workspace-root <治理根> --json                        
 - 路线图近期被改 → 核对变更经 Owner 同意(看 decision_log 指针)。
 逾期 / 停滞 / 无卡覆盖会自动进 Owner 收件箱(类别 `roadmap_drift`); Owner 裁决后按 `lybra owner inbox` 里的裁决行做。
 阈值在 project.json `roadmap_drift` 段(缺省与含义见 `docs/roadmap.md`「进度与偏差」)。
+每条标准另显示**验证状态五态**(AIPOS-F175): 未验证(原因写缺什么: 未结案 / 审计未过 / 缺运行证据 / 缺产物)/ 自动验证通过 / 待 Owner 抽查 /
+Owner 已确认 / 不符·修复卡 X; auto / artifact 标准到「自动验证通过」算满足, owner_check 标准到「Owner 已确认」才算满足。
+
+#### `lybra roadmap verify`(AIPOS-F175: 记录 Owner 抽查结论)
+**何时用**:Owner 收件箱出现「验收待 Owner 抽查」(类别 `owner_check`, 附截图 / 输出路径与看板路线图页链接), Owner 看完告诉你「符合」或「不符: …」后。
+```bash
+lybra roadmap verify --workspace-root <治理根> --criterion <标准id> --result confirm --relayed-by <你的顾问实例> --owner-words "<Owner 原话>"            # 先预演
+lybra roadmap verify --workspace-root <治理根> --criterion <标准id> --result confirm --relayed-by <你的顾问实例> --owner-words "<Owner 原话>" --confirm --actor owner
+lybra roadmap verify --workspace-root <治理根> --criterion <标准id> --result mismatch --relayed-by <你的顾问实例> --owner-words "<Owner 原话>" --note "<哪里不对>" --confirm --actor owner
+```
+写既有 owner_verifications 记录(转达人 + Owner 原话)并自动落账; `--relayed-by` / `--owner-words` 缺 = 用法错(exit 2)。
+不符 = 同次自动起草修复卡(卡号 `<被抽查卡>-oc<N>`, 挂同一 milestone / criteria, `owner_check_ref` = 抽查记录), 输出给出
+`lybra draft publish --path <草稿> --dry-run` 预演命令, 你确认后发布; 修复卡结案审计通过后标准回到「待 Owner 抽查」等 Owner 复查。
+只有 verify=owner_check 且已到「待 Owner 抽查」(或已有结论要改)的标准能记录, 其余拒 `VERIFY_NOT_OWNER_CHECK` / `VERIFY_NOT_READY`。
+对 owner_check 事项敲 `lybra owner decide` = 用法错, 拒因指回本命令。
 
 #### `lybra updates`(AIPOS-F167: Lybra 更新说明 · 记已读)
 **何时用**:`lybra charter` 开头或 `loop status` / `next` / `brief` 末尾出现「Lybra 有 N 条未读更新(自 <版本>): 要点…」时。
