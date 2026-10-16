@@ -145,6 +145,20 @@ or the language already picked on the Board). All three pages are GET only; any 
   loop run records — the Board does not re-run `lybra sync --dry-run`), pi model declared, roadmap declared, first card closed.
   Not-applicable items do not count towards completion.
 
+### Read performance (AIPOS-F177)
+
+- Frontmatter is parsed with libyaml (`CSafeLoader`) when PyYAML has it, else `yaml.safe_load`; the choice lives only in
+  `tools/aipos_cli/frontmatter.py` (`_yaml_safe_load`), and any libyaml failure is re-parsed with the pure-Python loader so
+  results and warnings stay those of `yaml.safe_load`.
+- Two in-process read caches, both in `frontmatter.py` (never persisted): per file (`read_markdown_frontmatter`, keyed by the
+  file's stat identity; files younger than 2 s are not cached) and per frontmatter text (keyed by the text itself). An
+  unchanged file is not re-read; a modified or new file alone is re-read and re-parsed. The F55 records group cache sits on top.
+- One request-level read scope (`task_loader.read_request_scope`) per overview / inbox / roadmap / onboarding request (and per
+  `lybra owner inbox` run): per project the queue listing, card index, roadmap status, envelope overview, enrollment log and the
+  gate role registry are derived once and shared by every view of that request; nothing is kept across requests.
+- Optional per-request timing: `python3 -m web.board.app ... --perf-log <file>` appends one JSON line per GET (`path` without
+  the query string, `server_ms`, cache counters). Off when the flag is omitted; separate from the board audit log.
+
 ## Available Endpoints
 
 - `GET /api/roadmap?workspace=<n>` (AIPOS-F171; replaces the retired `/api/project-map`)

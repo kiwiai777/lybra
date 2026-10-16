@@ -189,10 +189,15 @@ def test_4_on_demand_and_default_compatibility():
 def test_5_perf_red_green():
     """验收①: 同一真实 records 规模, 连续 10 次总耗时降一个数量级以上(先红后绿)。"""
     # 红: main 版(无缓存)真跑 10 次
-    t0 = time.perf_counter()
+    # AIPOS-F177: frontmatter 读取口自带逐文件 / 逐文本缓存(frontmatter.py), 红侧每次先清空, 保持「完全无缓存」口径
+    from tools.aipos_cli.frontmatter import clear_frontmatter_memo
+
+    red_total = 0.0
     for _ in range(10):
+        clear_frontmatter_memo()
+        t0 = time.perf_counter()
         PREFIX.load_records(GOV)
-    red_total = time.perf_counter() - t0
+        red_total += time.perf_counter() - t0
     # 绿: HEAD 版(缓存+增量) 10 次(首次含一次冷扫)
     clear_records_cache()
     load_records(GOV)  # 冷(不计入, 模拟进程启动首载)
