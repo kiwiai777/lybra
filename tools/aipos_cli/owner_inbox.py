@@ -157,8 +157,10 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
     for directory in sorted(p for p in runs_root.iterdir() if p.is_dir()):
         task_id = directory.name
         try:
-            report = loop_status(root, task_id)
             _path, state = find_task_card(root, task_id)
+            if state in ("completed", "withdrawn"):  # 卡已结案 / 撤回 = 已自行解除: 先判, 免为它算下一动作(结案取下一张会扫全项目)
+                continue
+            report = loop_status(root, task_id)
         except (OSError, ValueError, LookupError, RuntimeError) as exc:  # 读不出 = 点名进 errors(不猜不吞)
             errors.append({"project": project, "source": f"loop 运行记录 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
             continue
@@ -167,7 +169,7 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
             continue
         view = runs[-1]
         na = view.get("next_action") or {}
-        if na.get("action") != "owner_needed" or view.get("frozen") or state in ("completed", "withdrawn"):
+        if na.get("action") != "owner_needed" or view.get("frozen"):
             continue
         reason = str(na.get("reason") or "")
         ask_rec = view.get("owner_ask") if isinstance(view.get("owner_ask"), dict) else {}
