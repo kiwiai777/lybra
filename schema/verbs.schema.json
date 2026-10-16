@@ -541,6 +541,54 @@
       }
     }
   },
+  "board_readonly_pages": {
+    "description": "AIPOS-F174(Owner 10-16 裁定: 看板现阶段只读展示——接入指导 / 进度展示 / 验证展示; 需 Owner 动作处不放按钮, 给「告诉顾问: …」与顾问命令): 看板三张只读页(服务端渲染, 仅 GET, 写方法一律 board_readonly 应答, 不新增任何写路由)。overview = 每项目卡片: 在途卡数(队列唯一遍历 task_loader.iter_queue_task_paths, 在途 = 非终态 queue_state)、待 Owner 项数(owner_inbox.collect_inbox, 链收件箱页)、信封状态(autonomy_policy.envelope_overview, 链信封页)、路线图进度摘要(roadmap_drift.roadmap_status, 链路线图页)、接入完成度(链接入页), 暂停项目(workspace_config.project_status=paused)折叠。roadmap = 选中项目: 顶部偏差红黄条(roadmap_status.signals, 每条一句原因 + 「告诉 <顾问实例>: …」+ 建议命令; 顾问实例 = 信号 advisor, 缺省 = 本治理根已接入顾问 advisor_updates_cli.advisor_instances)、左栏按 lane 列里程碑(进度条 = 推导 met/total、状态、目标日、逾期标红)、右栏选中里程碑的逐条标准(挂接卡 / 队列态 / 审计裁决与链接 / 运行证据摘录 = roadmap_drift.card_evidence 随行带出, 复用 parse_runtime_evidence_section; verify_pending 方式显示推导给的「待 F175」原因); 无路线图 = 「如何开始」引导(话术 + lybra_roadmap.texts.no_roadmap 命令)。onboarding = 每项目一张接入清单, 项目与顺序 = onboarding_items(只追加), 每项判定只读既有唯一实现: governance_root = home 根注册枚举 owner_inbox.home_projects(+ project_status 读不出点名); advisor = advisor_updates_cli.advisor_instances; executor / auditor = project.json execution(workspace_config.project_execution)各实例经 enrollment.instance_enrollment(接入唯一判定; 诊断命令 enroll-where), 审计者另须有工位位置; envelope = envelope_overview 当前在用且 status=active(warn / exhausted = 将尽 / 用尽, 给 F166 续签命令与信封页链接); charter = 各本机 pi 工位实例最近一次拉起前章程判定(F164 loop 写进运行记录 charter_checks, 读口 loop_run_record.latest_charter_checks; 看板不重跑 sync --dry-run: 那会读工位凭据并连门), 无记录 = 待办(给 check-workstation 命令); pi_model = workspace_config.pi_model_for_role(审计者恒为 pi 工位; 声明了 pi_executor 再核 executor); roadmap = roadmap_status.exists(未声明给 lybra_roadmap.texts.no_roadmap); first_closed = 结案队列态(lybra_roadmap.status.satisfied_queue_states)至少一张。未完成项给「告诉 <顾问实例>: …」(文案走看板 i18n 单通道 web/board/app.py _I18N_TEMPLATES, zh / en 同键)与 onboarding_commands 命令(占位 {project} / {home_root} / {governance_root} / {instance} / {harness}; 用 F166 / F164 已推导的续签 / 修法命令处原样给出)。语言 = 查询参数 locale.param(缺省 locale.default; 浏览器已在看板选过英文时页内脚本按 locale.storage_key 跳到英文)。唯一实现: tools/aipos_cli/board_pages.py(数据, 只调上列推导)+ web/board/readonly_pages.py(渲染)+ web/board/app.py do_GET(路由读 pages)。",
+    "pages": {
+      "overview": "/owner/overview",
+      "roadmap": "/owner/roadmap",
+      "onboarding": "/owner/onboarding"
+    },
+    "nav_links": {
+      "board_home": "/",
+      "inbox": "/owner/inbox"
+    },
+    "stylesheet": "/readonly-pages.css",
+    "query": {
+      "project": "project",
+      "milestone": "milestone"
+    },
+    "locale": {
+      "param": "lang",
+      "default": "zh",
+      "supported": [
+        "zh",
+        "en"
+      ],
+      "storage_key": "lybra_lang"
+    },
+    "evidence_excerpt_chars": 400,
+    "onboarding_items": [
+      "governance_root",
+      "advisor",
+      "executor",
+      "auditor",
+      "envelope",
+      "charter",
+      "pi_model",
+      "roadmap",
+      "first_closed"
+    ],
+    "onboarding_commands": {
+      "governance_root": "lybra project set-meta {project} --status active --home-root {home_root}",
+      "advisor": "lybra onboarding guide {project}",
+      "execution_undeclared": "lybra project set-execution {project} --subagent-executor <执行实例> --auditor <审计实例> --home-root {home_root}",
+      "instance_not_enrolled": "lybra roles enroll-where --instance {instance}",
+      "envelope_mint": "lybra envelope mint --workspace-root {governance_root} --policy-id <policy_id> --agent-or-role <顾问实例> --max-tasks <N> --expires-at <YYYY-MM-DDTHH:MM:SSZ> --decision-summary <一句话> --dry-run",
+      "charter_check": "lybra project check-workstation {project} --instance {instance} --harness {harness} --home-root {home_root}",
+      "pi_model": "lybra project set-model {project} --role {role} --model <provider/id> --owner-ref <Owner 指示原话> --home-root {home_root}",
+      "first_closed": "lybra loop status --workspace-root {governance_root}"
+    }
+  },
   "envelope_trace": {
     "description": "AIPOS-F142 件②: 门侧信封判定诊断行([ENVELOPE_TRACE], autonomy_policy.trace_envelope 逐谓词留痕, 走 stderr)的输出开关唯一声明。开关只在发射处一处判定(autonomy_policy.envelope_trace_enabled), 所有调用方受同一开关约束: CLI(lybra 入口 aipos_cli.main → decide_cli_envelope_trace, 调用结束由 cli_envelope_trace_entry 恢复)缺省关, --verbose(挂在 verbose_commands 所列命令, 唯一挂载口 autonomy_policy.attach_verbose_flags)或调试环境变量 debug_env 开; in-process 嵌套调用(loop 驱动器执行派生命令)沿用外层决定; 不经 CLI 入口的进程(门 MCP 服务, journald 留痕 AIPOS-PRERELEASE-1)取 non_cli_default_enabled。只开关调试轨迹输出, 信封判定逻辑与结果不变; 门拒时的拒因与原因链由各命令照常输出。",
     "cli_default_enabled": false,
