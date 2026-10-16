@@ -87,10 +87,10 @@ def test_overview_list_uses_helper():
 
 def test_detail_renders_uses_helper():
     """
-    AIPOS-288 FIX-5a: project-detail.html must use workspaceLabel() in 3 places:
+    AIPOS-288 FIX-5a: project-detail.html must use workspaceLabel() in its render places:
       - createProjectHeader (H1)
-      - renderPortalHeader (portal card title)
       - browser title (document.title)
+    (AIPOS-F171: the portal header render point retired with project-map.md)
     """
     if not DETAIL_HTML.exists():
         raise AssertionError("project-detail.html not found")
@@ -111,20 +111,9 @@ def test_detail_renders_uses_helper():
             "AIPOS-288 FIX-5a: createProjectHeader must call workspaceLabel(workspace)"
         )
     
-    # 2) Check renderPortalHeader uses workspaceLabel
-    portal_match = re.search(
-        r'function\s+renderPortalHeader\s*\([^)]*\)\s*\{(.*?)(?=\n\s{4}function)',
-        content,
-        re.DOTALL
-    )
-    if not portal_match:
-        raise AssertionError("AIPOS-288 FIX-5a: renderPortalHeader function not found")
-    
-    if "workspaceLabel(workspace)" not in portal_match.group(1):
-        raise AssertionError(
-            "AIPOS-288 FIX-5a: renderPortalHeader must call workspaceLabel(workspace)"
-        )
-    
+    # 2) AIPOS-F171 件③: 门户头(读手写 project-map.md 的 portal 段)已随旧项目地图下线, 不再是渲染点
+    assert "renderPortalHeader" not in content, "AIPOS-F171: portal header (project-map.md) must stay retired"
+
     # 3) Check document.title uses workspaceLabel
     # Look for document.title assignment after workspace data is loaded
     title_pattern = r'document\.title\s*=\s*[^;]*workspaceLabel\s*\(\s*workspace\s*\)'
@@ -136,39 +125,23 @@ def test_detail_renders_uses_helper():
 
 def test_server_import_accepts_label_en():
     """
-    AIPOS-288 FIX-5b (retargeted by AIPOS-F105): the board's server-side workspace init route was retired
-    (single project-creation entry = lybra onboarding guide + lybra project new); the remaining board writer
-    of board_config, _project_structure_import_route, must accept label_en and write it to the workspace entry.
+    AIPOS-288 FIX-5b → AIPOS-F171 件③(gap #155): the Board is read-only. The last board writer of board_config
+    (project import, POST /api/project-structure/import, which used to write label_en into board_config.json) is offline:
+    the route answers 405 BOARD_READ_ONLY and writes nothing; the import route implementation is gone from app.py.
     """
-    if not APP_PY.exists():
-        raise AssertionError("app.py not found")
+    import tempfile
+
+    from web.board.app import _api_routes, dispatch_api_request
 
     content = APP_PY.read_text(encoding='utf-8')
     assert "_workspace_init_route" not in content, "AIPOS-F105: board workspace init route must stay retired"
-
-    match = re.search(
-        r'def\s+_project_structure_import_route\s*\([^)]*\)\s*->.*?:\s*(.*?)(?=\ndef\s+)',
-        content,
-        re.DOTALL
-    )
-    if not match:
-        raise AssertionError("AIPOS-288 FIX-5b: _project_structure_import_route function not found")
-
-    func_body = match.group(1)
-
-    if not re.search(r'label_en\s*=.*payload\.get\(["\']label_en["\']', func_body):
-        raise AssertionError(
-            "AIPOS-288 FIX-5b: _project_structure_import_route must extract label_en from payload"
-        )
-
-    has_label_en_write = (
-        re.search(r'["\']label_en["\']\s*:\s*label_en', func_body) or
-        re.search(r'ws_entry\[["\']label_en["\']\]\s*=\s*label_en', func_body)
-    )
-    if not has_label_en_write:
-        raise AssertionError(
-            "AIPOS-288 FIX-5b: _project_structure_import_route must write label_en to workspace entry"
-        )
+    assert "_project_structure_import_route" not in content, "AIPOS-F171: board import writer must stay offline"
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "5_tasks" / "queue" / "pending").mkdir(parents=True)
+        status, data = dispatch_api_request(method="POST", path="/api/project-structure/import", routes=_api_routes(root))
+        assert status == 405 and data["error"] == "BOARD_READ_ONLY", data
+        assert not (root / ".lybra" / "board_config.json").exists(), "read-only board must not write board_config.json"
 
 
 def test_frontend_wizard_sends_label_en():
@@ -265,92 +238,19 @@ def test_backward_compatibility():
 
 def test_api_overview_transparently_returns_label_en():
     """
-    AIPOS-288 FIX-6: /api/overview must transparently pass label_en from board_config to response.
-    
-    Contract: For each workspace in board_config.workspaces:
-      - If workspace has label_en key => API response includes label_en
-      - If workspace lacks label_en => API response omits label_en (or null)
-    
-    This test inspects the three assembly points in get_overview():
-      1. Error branch (L147): validation failure case
-      2. OK branch (L205): successful workspace aggregation
-      3. Exception branch (L218): exception handling
+    AIPOS-288 FIX-6 → AIPOS-F171 件③(gap #156): /api/overview no longer reads the static board_config.json list (and so
+    no longer passes its label_en through): the project list is derived from the governance home root (one enumeration
+    shared with the Owner inbox, owner_inbox.home_projects) and each workspace carries its project name as label plus the
+    paused marker. The overview assembly must not read board_config / label_en any more.
     """
-    if not APP_PY.exists():
-        raise AssertionError("app.py not found")
-    
     content = APP_PY.read_text(encoding='utf-8')
-    
-    # Find get_overview function
-    match = re.search(
-        r'def\s+get_overview\s*\([^)]*\)\s*->.*?:\s*(.*?)(?=\ndef\s+)',
-        content,
-        re.DOTALL
-    )
-    if not match:
-        raise AssertionError("AIPOS-288 FIX-6: get_overview function not found")
-    
-    func_body = match.group(1)
-    
-    # Verify all three assembly points extract label_en from ws_config and conditionally add to result
-    
-    # Pattern 1: Extract label_en from ws_config
-    label_en_extraction = re.search(r'label_en\s*=\s*ws_config\.get\(["\']label_en["\']\)', func_body)
-    if not label_en_extraction:
-        raise AssertionError(
-            "AIPOS-288 FIX-6: get_overview must extract label_en from ws_config"
-        )
-    
-    # Count occurrences - should appear 3 times (once per assembly point)
-    extraction_count = len(re.findall(r'label_en\s*=\s*ws_config\.get\(["\']label_en["\']\)', func_body))
-    if extraction_count < 3:
-        raise AssertionError(
-            f"AIPOS-288 FIX-6: Expected label_en extraction at 3 assembly points, found {extraction_count}"
-        )
-    
-    # Pattern 2: Conditional assignment to result dict
-    conditional_writes = re.findall(
-        r'if\s+label_en:\s*[\w_]+\[["\']label_en["\']\]\s*=\s*label_en',
-        func_body
-    )
-    if len(conditional_writes) < 3:
-        raise AssertionError(
-            f"AIPOS-288 FIX-6: Expected conditional label_en write at 3 assembly points, found {len(conditional_writes)}"
-        )
-    
-    # Verify the three specific assembly points:
-    # 1. Error branch (has_workspace_queue validation failure)
-    error_branch_match = re.search(
-        r'if not has_workspace_queue\(root\):.*?error_entry.*?label_en = ws_config\.get\(["\']label_en["\']\).*?if label_en:.*?error_entry\[["\']label_en["\']\] = label_en.*?results\.append\(error_entry\)',
-        func_body,
-        re.DOTALL
-    )
-    if not error_branch_match:
-        raise AssertionError(
-            "AIPOS-288 FIX-6: Error assembly point (validation failure) must transparently pass label_en"
-        )
-    
-    # 2. OK branch (successful aggregation)
-    ok_branch_match = re.search(
-        r'ok_entry\s*=\s*\{.*?["\']status["\']:\s*["\']ok["\'].*?\}.*?label_en = ws_config\.get\(["\']label_en["\']\).*?if label_en:.*?ok_entry\[["\']label_en["\']\] = label_en.*?results\.append\(ok_entry\)',
-        func_body,
-        re.DOTALL
-    )
-    if not ok_branch_match:
-        raise AssertionError(
-            "AIPOS-288 FIX-6: OK assembly point (successful aggregation) must transparently pass label_en"
-        )
-    
-    # 3. Exception branch
-    exception_branch_match = re.search(
-        r'except\s+Exception.*?exception_entry\s*=\s*\{.*?["\']error["\'].*?\}.*?label_en = ws_config\.get\(["\']label_en["\']\).*?if label_en:.*?exception_entry\[["\']label_en["\']\] = label_en.*?results\.append\(exception_entry\)',
-        func_body,
-        re.DOTALL
-    )
-    if not exception_branch_match:
-        raise AssertionError(
-            "AIPOS-288 FIX-6: Exception assembly point must transparently pass label_en"
-        )
+    match = re.search(r'def\s+get_overview\s*\([^)]*\)\s*->.*?:\s*(.*?)(?=\ndef\s+)', content, re.DOTALL)
+    assert match, "get_overview function not found"
+    body = match.group(1)
+    assert "_board_workspaces(" in body, "get_overview must take the home-root derived project list"
+    assert "label_en" not in body and "board_config" not in body, "board_config label_en passthrough must stay retired"
+    ws = re.search(r'def\s+_board_workspaces\s*\([^)]*\)\s*->.*?:\s*(.*?)(?=\ndef\s+)', content, re.DOTALL)
+    assert ws and "home_projects(" in ws.group(1), "_board_workspaces must reuse owner_inbox.home_projects"
 
 
 if __name__ == "__main__":

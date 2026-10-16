@@ -408,16 +408,34 @@ def _sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
     return (int(item["rank"]), str(item.get("since") or "9999"), item["project"], item["item_id"])
 
 
+def home_projects(home_root: str | Path | None = None) -> dict[str, Any]:
+    """home 根已注册项目的唯一枚举(workspace_config._project_candidates: 5_tasks/queue + project.json 同在)+ 各项目推进状态
+    (workspace_config.project_status)。收件箱(collect_inbox)与看板项目列表(AIPOS-F171 件③, web/board/app.py)同调, 禁另写枚举。
+    返回 {home_root, home_source, projects: [{name, root, status, status_error}]}; status 读不出 / 值不合 = status None + status_error
+    (调用方点名, 不猜成暂停)。"""
+    from tools.aipos_cli.workspace_config import _project_candidates, project_status, resolve_home_root_with_source
+
+    home, source = resolve_home_root_with_source(explicit_root=home_root)
+    projects: list[dict[str, Any]] = []
+    for name in _project_candidates(home):
+        try:
+            status, error = project_status(home / name), None
+        except ValueError as exc:  # 值不合 / project.json 读不出
+            status, error = None, str(exc)
+        projects.append({"name": name, "root": home / name, "status": status, "status_error": error})
+    return {"home_root": home, "home_source": source, "projects": projects}
+
+
 def collect_inbox(home_root: str | Path | None = None, *, project: str | None = None, include_paused: bool = False) -> dict[str, Any]:
     """跨 home 根全部已注册项目(workspace_config._project_candidates 唯一枚举)。返回 {home_root, home_source, projects, items(已排序),
     decided_hidden, paused_hidden, errors}。--project 不在注册清单 = ValueError(用法错, 不猜)。
     AIPOS-F170 件②: project.json status = paused(唯一读取口 workspace_config.project_status)的项目缺省不列(include_paused / 显式 --project
     照列), 名单进 paused_hidden; status 读不出 / 值不合 = 该项目照列并在 errors 点名(不猜成暂停)。"""
-    from tools.aipos_cli.workspace_config import _project_candidates, project_status, resolve_home_root_with_source
-
     decl = inbox_declaration()
-    home, source = resolve_home_root_with_source(explicit_root=home_root)
-    names = _project_candidates(home)
+    enumerated = home_projects(home_root)  # AIPOS-F171: 枚举 + 状态读取收为一处(看板项目列表同调)
+    home, source = enumerated["home_root"], enumerated["home_source"]
+    by_name = {p["name"]: p for p in enumerated["projects"]}
+    names = list(by_name)
     if project:
         if project not in names:
             raise ValueError(f"项目 {project!r} 不在 home 根 {home} 的已注册项目中(5_tasks/queue + project.json 同在): {names}")
@@ -428,11 +446,10 @@ def collect_inbox(home_root: str | Path | None = None, *, project: str | None = 
     paused: list[str] = []
     for name in names:
         if not include_paused and not project:
-            try:
-                status = project_status(home / name)
-            except ValueError as exc:  # 值不合 / project.json 读不出: 照列并点名
-                errors.append({"project": name, "source": "project.json status", "error": str(exc)})
-                status = None
+            entry = by_name[name]
+            status = entry["status"]
+            if entry["status_error"]:  # 值不合 / project.json 读不出: 照列并点名
+                errors.append({"project": name, "source": "project.json status", "error": entry["status_error"]})
             if status == "paused":
                 paused.append(name)
                 continue

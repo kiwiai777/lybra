@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.error import URLError
 
-from web.board.app import _api_post_routes, _api_routes, dispatch_api_request
+from web.board.app import _api_routes, dispatch_api_request
 
 WEB_ROOT = Path(__file__).resolve().parents[1]
 
@@ -35,7 +35,6 @@ class AiAuthoringApiTests(unittest.TestCase):
         for state in ("pending", "claimed", "completed", "blocked"):
             (self.repo_root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
         self.routes = _api_routes(self.repo_root)
-        self.post_routes = _api_post_routes(self.repo_root)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -50,26 +49,20 @@ class AiAuthoringApiTests(unittest.TestCase):
         data.update(overrides)
         return data
 
-    def post(self, path: str, body: dict[str, object]) -> dict[str, object]:
-        status, data = dispatch_api_request(
-            method="POST",
-            path=path,
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body=body,
-        )
-        self.assertEqual(status, 200)
-        return data
-
-    def preview(self, *, fixture_id: str = "standard-simple", actor: str = "owner", intent: dict[str, object] | None = None) -> dict[str, object]:
-        return self.post(
-            "/api/ai-author/preview",
-            {
-                "actor": actor,
-                "fixture_id": fixture_id,
-                "intent": intent or self.intent(),
-            },
-        )
+    def assert_board_read_only(self, paths: list[str]) -> None:
+        """AIPOS-F171 件③(gap #155): 看板写接口全部下线 —— 同一路由 POST 一律 405 + BOARD_READ_ONLY(文案读 verbs.schema
+        board_readonly), 不调用任何写实现, 工作区零写入。"""
+        root = Path(self.repo_root)
+        def _snapshot() -> list[tuple[str, int]]:
+            return sorted((p.relative_to(root).as_posix(), p.stat().st_size) for p in root.rglob("*") if p.is_file())
+        before = _snapshot()
+        for path in paths:
+            status, data = dispatch_api_request(method="POST", path=path, routes=_api_routes(root))
+            print(f"[F171 read-only] POST {path} -> {status} {data.get('error')} {data.get('message')}")
+            self.assertEqual(status, 405, path)
+            self.assertEqual(data["error"], "BOARD_READ_ONLY", path)
+            self.assertFalse(data["ok"])
+        self.assertEqual(before, _snapshot(), "read-only board must write nothing")
 
     def live_response(self, *, task_id: str = "BOARD-LIVE-01") -> dict[str, object]:
         return {
@@ -119,22 +112,6 @@ class AiAuthoringApiTests(unittest.TestCase):
             },
         }
 
-    def live_preview(self, *, intent: dict[str, object] | None = None) -> dict[str, object]:
-        return self.post(
-            "/api/ai-author/live/preview",
-            {
-                "actor": "owner",
-                "intent": intent or self.intent(intent_id="board-live"),
-                "endpoint_ref": "http://127.0.0.1:8787/live-authoring",
-                "credential_ref": "env:LYBRA_LLM_API_KEY",
-                "provider_ref": "provider-neutral",
-                "model_ref": "demo-model",
-                "request_config_ref": "live-default",
-                "request_timeout_seconds": 30,
-                "max_output_tokens": 768,
-            },
-        )
-
     def data_paths(self) -> list[str]:
         values: list[str] = []
         for root in (self.repo_root / "5_tasks" / "drafts", self.repo_root / "5_tasks" / "records"):
@@ -143,135 +120,36 @@ class AiAuthoringApiTests(unittest.TestCase):
         return sorted(values)
 
     def test_preview_then_confirm_writes_standard_draft_and_sidecar_only(self) -> None:
-        before = self.data_paths()
-        preview = self.preview()
-
-        self.assertEqual(preview["verdict"], "NEEDS_OWNER")
-        self.assertEqual(before, self.data_paths())
-        self.assertEqual(len(preview["planned_writes"]), 2)
-
-        confirmed = self.post(
-            "/api/ai-author/confirm",
-            {"actor": "owner", "owner_confirmed": True, "preview": preview},
-        )
-
-        self.assertEqual(confirmed["verdict"], "PASS")
-        self.assertTrue((self.repo_root / "5_tasks" / "drafts" / "fixture-simple-01.md").exists())
-        self.assertTrue((self.repo_root / confirmed["data"]["provenance_path"]).exists())
-        self.assertFalse((self.repo_root / "5_tasks" / "queue" / "pending" / "fixture-simple-01.md").exists())
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/ai-author/confirm', '/api/ai-author/preview'])
 
     def test_injection_fixture_blocks_with_zero_writes(self) -> None:
-        before = self.data_paths()
-        preview = self.preview(fixture_id="injection-escalation", intent=self.intent(intent_id="board-injection"))
-
-        self.assertEqual(preview["verdict"], "BLOCK")
-        self.assertIn("AI proposal requests prohibited policy action: bypass_owner_review", preview["blocking_reasons"])
-        self.assertIn("AI proposal requests prohibited policy action: request_credentials", preview["blocking_reasons"])
-        self.assertIn("AI proposal requests prohibited policy action: authority_expansion", preview["blocking_reasons"])
-        self.assertIn("AI proposal requests prohibited policy action: publish_immediately", preview["blocking_reasons"])
-        self.assertIn("AI-assisted proposal must keep needs_owner: true until Owner review", preview["blocking_reasons"])
-        self.assertEqual(before, self.data_paths())
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/ai-author/preview'])
 
     def test_adapter_failure_is_visible_with_zero_writes(self) -> None:
-        before = self.data_paths()
-        preview = self.preview(fixture_id="adapter-failure", intent=self.intent(intent_id="board-failure"))
-
-        self.assertEqual(preview["verdict"], "BLOCK")
-        self.assertIn("Fixture adapter failure for visible degradation testing.", preview["blocking_reasons"])
-        self.assertEqual(before, self.data_paths())
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/ai-author/preview'])
 
     def test_confirm_requires_owner_confirmation_and_matching_actor(self) -> None:
-        preview = self.preview()
-
-        missing_confirmation = self.post(
-            "/api/ai-author/confirm",
-            {"actor": "owner", "owner_confirmed": False, "preview": preview},
-        )
-        wrong_actor = self.post(
-            "/api/ai-author/confirm",
-            {"actor": "other-owner", "owner_confirmed": True, "preview": preview},
-        )
-
-        self.assertEqual(missing_confirmation["verdict"], "BLOCK")
-        self.assertIn("owner confirmation token is required", missing_confirmation["blocking_reasons"][0])
-        self.assertEqual(wrong_actor["verdict"], "BLOCK")
-        self.assertIn("confirm actor does not match", wrong_actor["blocking_reasons"][0])
-        self.assertEqual(self.data_paths(), [])
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/ai-author/confirm', '/api/ai-author/preview'])
 
     def test_stale_and_expired_previews_block_with_zero_writes(self) -> None:
-        stale_preview = self.preview()
-        target = self.repo_root / "5_tasks" / "drafts" / "fixture-simple-01.md"
-        target.parent.mkdir(parents=True)
-        target.write_text("occupied\n", encoding="utf-8")
-
-        stale = self.post(
-            "/api/ai-author/confirm",
-            {"actor": "owner", "owner_confirmed": True, "preview": stale_preview},
-        )
-        target.unlink()
-        expired_preview = self.preview(intent=self.intent(intent_id="board-expired"))
-        expired_preview["dry_run_expires_at"] = "2000-01-01T00:00:00Z"
-        expired = self.post(
-            "/api/ai-author/confirm",
-            {"actor": "owner", "owner_confirmed": True, "preview": expired_preview},
-        )
-
-        self.assertEqual(stale["verdict"], "BLOCK")
-        self.assertIn("snapshot mismatch", stale["blocking_reasons"][0])
-        self.assertEqual(expired["verdict"], "BLOCK")
-        self.assertIn("preview expired", expired["blocking_reasons"][0])
-        self.assertEqual(self.data_paths(), [])
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/ai-author/confirm', '/api/ai-author/preview'])
 
     def test_manual_retry_is_explicit_and_persists_retry_relationship(self) -> None:
-        preview = self.preview(intent=self.intent(intent_id="board-retry", retry_of="authoring_previous"))
-        confirmed = self.post(
-            "/api/ai-author/confirm",
-            {"actor": "owner", "owner_confirmed": True, "preview": preview},
-        )
-
-        provenance = self.repo_root / confirmed["data"]["provenance_path"]
-        self.assertIn("retry_of: authoring_previous", provenance.read_text(encoding="utf-8"))
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/ai-author/confirm', '/api/ai-author/preview'])
 
     def test_live_preview_then_confirm_writes_standard_draft_and_non_secret_sidecar(self) -> None:
-        with patch.dict(os.environ, {"LYBRA_LLM_API_KEY": "live-secret"}), patch(
-            "tools.aipos_cli.ai_assisted_authoring.urlopen",
-            return_value=_FakeLiveAdapterResponse(self.live_response()),
-        ):
-            preview = self.live_preview()
-
-        self.assertEqual(preview["verdict"], "NEEDS_OWNER")
-        self.assertTrue(preview["data"]["network_call_performed"])
-        self.assertTrue(preview["data"]["credential_read_performed"])
-        self.assertEqual(self.data_paths(), [])
-
-        confirmed = self.post(
-            "/api/ai-author/live/confirm",
-            {"actor": "owner", "owner_confirmed": True, "preview": preview},
-        )
-
-        provenance = self.repo_root / confirmed["data"]["provenance_path"]
-        self.assertEqual(confirmed["verdict"], "PASS")
-        self.assertTrue((self.repo_root / "5_tasks" / "drafts" / "board-live-01.md").exists())
-        self.assertTrue(provenance.exists())
-        self.assertNotIn("live-secret", provenance.read_text(encoding="utf-8"))
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/ai-author/live/confirm', '/api/ai-author/live/preview'])
 
     def test_live_missing_credential_and_network_failure_block_with_zero_writes(self) -> None:
-        with patch.dict(os.environ, {}, clear=True), patch("tools.aipos_cli.ai_assisted_authoring.urlopen") as mocked_urlopen:
-            missing_credential = self.live_preview(intent=self.intent(intent_id="board-live-missing-key"))
-
-        self.assertEqual(missing_credential["verdict"], "BLOCK")
-        self.assertIn("credential_ref environment variable is missing", missing_credential["blocking_reasons"][0])
-        mocked_urlopen.assert_not_called()
-
-        with patch.dict(os.environ, {"LYBRA_LLM_API_KEY": "live-secret"}), patch(
-            "tools.aipos_cli.ai_assisted_authoring.urlopen",
-            side_effect=URLError("boom"),
-        ):
-            network_failure = self.live_preview(intent=self.intent(intent_id="board-live-network-failure"))
-
-        self.assertEqual(network_failure["verdict"], "BLOCK")
-        self.assertIn("live adapter network failure", network_failure["blocking_reasons"][0])
-        self.assertEqual(self.data_paths(), [])
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/ai-author/live/preview'])
 
     def test_static_workbench_keeps_modes_and_separate_publish_contract(self) -> None:
         html = (WEB_ROOT / "static" / "index.html").read_text(encoding="utf-8")

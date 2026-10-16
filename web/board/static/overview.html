@@ -51,6 +51,8 @@
         </div>
         <div class="modal-body">
           <p id="modal-intro"></p>
+          <!-- AIPOS-F171 件③: 看板只读提示(写操作经顾问) -->
+          <p id="board-readonly-note" class="board-readonly-note" data-board-readonly></p>
           
           <div class="input-group">
             <label for="project-name-input" id="project-name-label"></label>
@@ -85,8 +87,9 @@
               </div>
             </div>
 
-            <!-- AIPOS-293 S4 + FIX-1: Option C: Import existing project (dual mode) -->
-            <div class="setup-option">
+            <!-- AIPOS-293 S4 + FIX-1: Option C: Import existing project (dual mode)
+                 AIPOS-F171 件③: 看板只读 —— 导入是写操作(后端写接口已下线, 返回 405), 整块隐藏; 接入经顾问(上方 A 指路命令) -->
+            <div class="setup-option" data-board-write hidden>
               <div class="option-header">
                 <span class="option-badge">B</span>
                 <h4 id="option-c-title"></h4>
@@ -169,6 +172,7 @@
       document.getElementById('section-title').textContent = i18n.t('overview.all_projects');
       document.getElementById('add-project-text').textContent = i18n.t('overview.add_project');
       document.getElementById('owner-inbox-link').textContent = i18n.t('overview.owner_inbox');
+      document.getElementById('board-readonly-note').textContent = i18n.t('board.readonly_note');
       
       // Modal i18n
       document.getElementById('modal-title').textContent = i18n.t('overview.new_project_modal.title');
@@ -256,6 +260,14 @@
       
       header.appendChild(label);
       header.appendChild(status);
+      // AIPOS-F171 件③: 项目列表 = home 根推导; 暂停项目(project.json status=paused)标注
+      if (workspace.paused) {
+        const paused = document.createElement('span');
+        paused.className = 'workspace-paused';
+        paused.dataset.projectStatus = 'paused';
+        paused.textContent = i18n.t('overview.paused');
+        header.appendChild(paused);
+      }
       card.appendChild(header);
       
       // Error state

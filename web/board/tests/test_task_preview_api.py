@@ -102,9 +102,10 @@ class TaskPreviewApiTests(unittest.TestCase):
         self.assertEqual(data["errors"][0]["category"], "VALIDATION_ERROR")
 
     def test_non_get_remains_rejected(self) -> None:
+        # AIPOS-F171 件③: 看板只读 —— 非 GET 一律 405 + BOARD_READ_ONLY
         status, data = dispatch_api_request(method="POST", path="/api/task?task_id=EXAMPLE-001", routes=self.routes)
         self.assertEqual(status, 405)
-        self.assertEqual(data["error"], "METHOD_NOT_ALLOWED")
+        self.assertEqual(data["error"], "BOARD_READ_ONLY")
 
     def test_unknown_route_remains_404(self) -> None:
         status, data = dispatch_api_request(method="GET", path="/api/not-real", routes=self.routes)

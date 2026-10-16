@@ -85,9 +85,11 @@ class FourAreaI18nTests(unittest.TestCase):
         status, html = _get(f"{self.base}/workspace/0")
         self.assertEqual(status, 200)
         self.assertIn('src="/i18n.js"', html)
-        for sid in ("portal-header-section", "milestone-map-section",
+        for sid in ("milestone-map-section",
                     "verify-bench-section", "task-center-section"):
             self.assertIn(f'id="{sid}"', html)
+        # AIPOS-F171 件③: 门户头(读手写 project-map.md 的 portal 段)随旧项目地图下线
+        self.assertNotIn('id="portal-header-section"', html)
 
     def test_four_area_static_headings_have_i18n_ids_and_zh_default(self) -> None:
         """S3 anchor: the baked zh skeleton + i18n ids must stay (curl-visible),
@@ -107,15 +109,14 @@ class FourAreaI18nTests(unittest.TestCase):
         """S1: the dynamic render paths (popups, badges, buttons, rings, legend,
         member chips, drawer) reference i18n keys, not raw zh literals."""
         _, html = _get(f"{self.base}/workspace/0")
-        # Portal header collab labels + worker chip title.
-        self.assertIn("i18n.t('portal.label.workers')", html)
-        self.assertIn("i18n.t('portal.worker_chip_title')", html)
-        # Milestone legend + popup kinds.
-        self.assertIn("i18n.t('map.legend.done')", html)
-        self.assertIn("i18n.t('map.popup.kind.done')", html)
-        # Verify bench rings + pass/reject + station title.
+        # AIPOS-F171 件③: 里程碑区改读路线图声明(简版), 门户头 / 旧地图图例弹层下线; 状态 / 核对方式 / 挂接卡走 i18n 键。
+        self.assertIn("i18n.t('roadmap.status.'", html)
+        self.assertIn("i18n.t('roadmap.verify.'", html)
+        self.assertIn("i18n.t('roadmap.cards')", html)
+        # Verify bench rings + read-only hint (pass/reject buttons retired: the Board is read-only) + station title.
         self.assertIn("i18n.t('vb.ring.machine')", html)
-        self.assertIn("i18n.t('vb.action.pass')", html)
+        self.assertIn("i18n.t('vb.readonly_hint')", html)
+        self.assertNotIn("/api/verify/approve", html)
         self.assertIn("i18n.t('vb.station.head_title')", html)
         # Task center member chips + view-source + duration units.
         self.assertIn("i18n.t('tc.member.main')", html)
@@ -165,7 +166,8 @@ class FourAreaI18nTests(unittest.TestCase):
         """The topology/role DATA matching still inspects the original zh tokens
         in the source data (these are value inspections, not displayed chrome)."""
         _, html = _get(f"{self.base}/workspace/0")
-        self.assertIn("t.includes('星')", html)
+        # AIPOS-F171: 拓扑图标(门户头, 匹配 '星')随门户头下线; 角色类匹配仍看原 zh 值
+        self.assertNotIn("t.includes('星')", html)
         self.assertIn("roleText === '审计员'", html)
 
 

@@ -160,52 +160,40 @@ def board_range(tmp_path):
 
 
 def test_item1_board_import_directory_mode_goes_through_project_new(board_range):
+    """AIPOS-F171 件③(gap #155): 看板只读 —— 原「看板导入经 project new 建项目」的写接口已下线: 真看板进程上同一请求 = 405
+    BOARD_READ_ONLY, 不建项目、不写 board_config.json、源目录只读; 建项目单一入口仍是 lybra onboarding guide + lybra project new。"""
     r = board_range
     source = _source_workspace(r["tmp"] / "existing-project")
+    before = sorted(p.relative_to(r["tmp"]).as_posix() for p in r["tmp"].rglob("*"))
     status, body, _ = _request(f"{r['base']}/api/project-structure/import", cookie=r["cookie"], body={
         "mode": "directory", "workspace_path": str(source), "project_id": "imported-dir", "label_en": "Imported Dir"})
-    _show(f"[① 看板导入·目录模式] POST /api/project-structure/import → {status}\n"
-          + json.dumps({k: body.get(k) for k in ("ok", "operation", "project_name", "home_root", "home_root_source",
-                                                 "project_root", "created_by", "migration_item_count",
-                                                 "board_config_updated", "mode")}, ensure_ascii=False, indent=1))
-    assert status == 200 and body["ok"] is True, body
-    root = r["gov_home"] / "imported-dir"
-    assert body["project_root"] == str(root) and body["home_root_source"] == "环境变量 LYBRA_HOME_ROOT"
-    assert "scaffold_project" in body["created_by"]
-    _assert_project_new_shape(root, "imported-dir", "/code/legacy")
-    assert not (r["home"] / ".lybra" / "workspaces").exists(), "看板不再自建 ~/.lybra/workspaces/"
-    reg = json.loads((r["repo_root"] / ".lybra" / "board_config.json").read_text(encoding="utf-8"))
-    assert reg["workspaces"] == [{"label": "Imported Dir", "root": str(root), "label_en": "Imported Dir"}], reg
-    assert sorted(p.name for p in source.rglob("*")) == sorted(
-        ["5_tasks", "queue", "pending", "governance", "decision_log.md", "notes.md", "project.json", "README.md"])  # 源目录只读
-    _show(f"[① 看板导入·目录模式] 项目根 {root} 内容: {sorted(p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file())}")
-    _show(f"[① 看板导入·目录模式] 临时 HOME 下 .lybra/workspaces 存在? {(r['home'] / '.lybra' / 'workspaces').exists()}")
-
-    # 同名再导入 = 拒(project new 同一拒因), 不覆盖
-    status2, body2, _ = _request(f"{r['base']}/api/project-structure/import", cookie=r["cookie"], body={
-        "mode": "directory", "workspace_path": str(source), "project_id": "imported-dir"})
-    _show(f"[① 看板导入·同名再导入] → {status2} {body2.get('error_code')} {body2.get('error_detail') or body2.get('message')}")
-    assert body2["ok"] is False and body2["error_code"] == "workspace_not_empty", body2
+    _show(f"[① 看板导入·目录模式(只读)] POST /api/project-structure/import → {status} {body}")
+    assert status == 405 and body["error"] == "BOARD_READ_ONLY" and body["ok"] is False, body
+    assert not (r["gov_home"] / "imported-dir").exists(), "只读看板不建项目"
+    assert not (r["repo_root"] / ".lybra" / "board_config.json").exists(), "只读看板不写 board_config.json"
+    assert sorted(p.relative_to(r["tmp"]).as_posix() for p in r["tmp"].rglob("*")) == before, "零写入"
+    status2, body2, _ = _request(f"{r['base']}/api/project-structure/preview", cookie=r["cookie"], body={
+        "mode": "directory", "workspace_path": str(source)})
+    assert status2 == 405 and body2["error"] == "BOARD_READ_ONLY", body2
 
 
 def test_item1_board_import_file_mode_and_corrupt_registry_fail_closed(board_range):
+    """AIPOS-F171 件③(gap #156): 文件模式导入同样 405; board_config.json 静态清单退役 —— 读坏的旧登记文件不再被读取(也不被改写),
+    看板项目列表照常由 home 根推导(本靶场 home 根 = LYBRA_HOME_ROOT 指向的空治理 home, 回落单工作区)。"""
     r = board_range
     sf = _structure_file(r["tmp"] / "structure.yaml")
     status, body, _ = _request(f"{r['base']}/api/project-structure/import", cookie=r["cookie"], body={
         "mode": "file", "structure_file_path": str(sf), "project_id": "imported-file"})
-    _show(f"[① 看板导入·文件模式] → {status} ok={body.get('ok')} project_root={body.get('project_root')}")
-    assert status == 200 and body["ok"] is True, body
-    _assert_project_new_shape(r["gov_home"] / "imported-file", "imported-file", "/code/from-file")
-    assert not (r["home"] / ".lybra" / "workspaces").exists()
-
-    # 登记文件读坏 = 拒(不再吞错后整文件重写丢登记), 且未建项目
+    _show(f"[① 看板导入·文件模式(只读)] → {status} {body.get('error')} {body.get('message')}")
+    assert status == 405 and body["error"] == "BOARD_READ_ONLY", body
+    assert not (r["gov_home"] / "imported-file").exists()
     reg = r["repo_root"] / ".lybra" / "board_config.json"
     reg.write_text("{not json", encoding="utf-8")
-    status3, body3, _ = _request(f"{r['base']}/api/project-structure/import", cookie=r["cookie"], body={
-        "mode": "file", "structure_file_path": str(sf), "project_id": "imported-file-2"})
-    _show(f"[① 看板导入·登记文件坏] → {status3} ok={body3.get('ok')} {body3.get('error_code')}")
-    assert body3["ok"] is False and reg.read_text(encoding="utf-8") == "{not json"
-    assert not (r["gov_home"] / "imported-file-2").exists()
+    status3, body3, _ = _request(f"{r['base']}/api/overview", cookie=r["cookie"])
+    _show(f"[① 旧登记文件读坏 → 总览照常] {status3} {[w.get('label') for w in body3.get('workspaces', [])]}")
+    assert status3 == 200 and body3["ok"] is True
+    assert [w["root"] for w in body3["workspaces"]] == [str(r["repo_root"])]
+    assert reg.read_text(encoding="utf-8") == "{not json"
 
 
 def test_item1_import_reuses_scaffold_project_single_implementation(tmp_path, monkeypatch):

@@ -302,6 +302,15 @@ def validate_draft_metadata(
             _add(blocking_reasons, message)
         for message in notice_warnings:
             _add(warnings, message)
+        # AIPOS-F171 件②: 路线图挂接(milestone / criteria): 引用不存在 = 拒, 未挂 = 游离卡警告(不拒), 项目无路线图 = 不校验;
+        # 唯一判据 roadmap.link_problems(queue amend 同调)
+        from tools.aipos_cli.roadmap import link_problems
+
+        roadmap_blocking, roadmap_warnings = link_problems(metadata, repo_root)
+        for message in roadmap_blocking:
+            _add(blocking_reasons, message)
+        for message in roadmap_warnings:
+            _add(warnings, message)
     else:
         # Fallback to hardcoded validation if schema not available
         for field in DRAFT_REQUIRED_FIELDS:

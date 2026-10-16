@@ -987,3 +987,7 @@ pre {
     display: grid;
   }
 }
+
+/* AIPOS-F171 件③: 看板只读 —— 写操作面板 / 控件一律隐藏(后端写接口已下线) */
+[data-board-write] { display: none !important; }
+.board-readonly-note { margin: 0.5rem 0 1rem; padding: 0.5rem 0.75rem; border-left: 3px solid #d97706; background: rgba(217, 119, 6, 0.08); font-size: 13px; line-height: 1.6; }

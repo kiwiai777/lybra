@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web.board.app import _api_post_routes, _api_routes, dispatch_api_request
+from web.board.app import _api_routes, dispatch_api_request
 
 
 class DualModeContractTests(unittest.TestCase):
@@ -35,44 +35,36 @@ class DualModeContractTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.routes = _api_routes(self.repo_root)
-        self.post_routes = _api_post_routes(self.repo_root)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
 
-    def post(self, path: str, body: dict) -> dict:
-        status, data = dispatch_api_request(
-            method="POST",
-            path=path,
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body=body,
-        )
-        self.assertEqual(status, 200)
-        return data
+    def assert_board_read_only(self, paths: list[str]) -> None:
+        """AIPOS-F171 件③(gap #155): 看板写接口全部下线 —— 同一路由 POST 一律 405 + BOARD_READ_ONLY(文案读 verbs.schema
+        board_readonly), 不调用任何写实现, 工作区零写入。"""
+        root = Path(self.repo_root)
+        def _snapshot() -> list[tuple[str, int]]:
+            return sorted((p.relative_to(root).as_posix(), p.stat().st_size) for p in root.rglob("*") if p.is_file())
+        before = _snapshot()
+        for path in paths:
+            status, data = dispatch_api_request(method="POST", path=path, routes=_api_routes(root))
+            print(f"[F171 read-only] POST {path} -> {status} {data.get('error')} {data.get('message')}")
+            self.assertEqual(status, 405, path)
+            self.assertEqual(data["error"], "BOARD_READ_ONLY", path)
+            self.assertFalse(data["ok"])
+        self.assertEqual(before, _snapshot(), "read-only board must write nothing")
 
     # -----------------------------------------------------------------------
     # Mode: directory (existing behavior, zero regression)
     # -----------------------------------------------------------------------
 
     def test_directory_mode_preview_success(self) -> None:
-        """Directory mode preview should work as before (zero regression)."""
-        result = self.post("/api/project-structure/preview", {
-            "mode": "directory",
-            "workspace_path": str(self.repo_root),
-        })
-        self.assertTrue(result.get("ok"), f"Expected ok=True, got: {result}")
-        self.assertEqual(result.get("mode"), "directory")
-        self.assertIn("project_name", result)
-        self.assertIn("doc_count", result)
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/project-structure/preview'])
 
     def test_directory_mode_preview_default_mode(self) -> None:
-        """Omitting mode should default to directory (backward compat)."""
-        result = self.post("/api/project-structure/preview", {
-            "workspace_path": str(self.repo_root),
-        })
-        self.assertTrue(result.get("ok"), f"Expected ok=True, got: {result}")
-        self.assertEqual(result.get("mode"), "directory")
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/project-structure/preview'])
 
     # -----------------------------------------------------------------------
     # Mode: file (new in FIX-1)
@@ -97,172 +89,60 @@ queue_summary:
         path.write_text(yaml_content, encoding="utf-8")
 
     def test_file_mode_preview_success(self) -> None:
-        """File mode preview should read and validate a structure file."""
-        yaml_path = Path(self.temp_dir.name) / "test-structure.yaml"
-        self._create_structure_yaml(yaml_path)
-
-        result = self.post("/api/project-structure/preview", {
-            "mode": "file",
-            "structure_file_path": str(yaml_path),
-        })
-        self.assertTrue(result.get("ok"), f"Expected ok=True, got: {result}")
-        self.assertEqual(result.get("mode"), "file")
-        self.assertEqual(result.get("project_name"), "test-from-file")
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/project-structure/preview'])
 
     def test_file_mode_preview_path_not_exists(self) -> None:
-        """File mode preview with non-existent path should return humanized error."""
-        result = self.post("/api/project-structure/preview", {
-            "mode": "file",
-            "structure_file_path": "/nonexistent/path/structure.yaml",
-        })
-        self.assertFalse(result.get("ok"))
-        self.assertEqual(result.get("error_code"), "path_not_exists")
-        self.assertIn("error_i18n_key", result)
-        self.assertEqual(result["error_i18n_key"], "error.import.path_not_exists")
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/project-structure/preview'])
 
     def test_file_mode_preview_not_yaml(self) -> None:
-        """File mode preview with non-YAML file should return humanized error."""
-        txt_path = Path(self.temp_dir.name) / "not-yaml.txt"
-        txt_path.write_text("hello world", encoding="utf-8")
-
-        result = self.post("/api/project-structure/preview", {
-            "mode": "file",
-            "structure_file_path": str(txt_path),
-        })
-        self.assertFalse(result.get("ok"))
-        self.assertEqual(result.get("error_code"), "path_not_yaml")
-        self.assertIn("error_i18n_key", result)
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/project-structure/preview'])
 
     def test_file_mode_preview_not_file(self) -> None:
-        """File mode preview with directory path should return humanized error."""
-        result = self.post("/api/project-structure/preview", {
-            "mode": "file",
-            "structure_file_path": str(self.repo_root),
-        })
-        self.assertFalse(result.get("ok"))
-        self.assertEqual(result.get("error_code"), "path_not_file")
-        self.assertIn("error_i18n_key", result)
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/project-structure/preview'])
 
     def test_file_mode_preview_schema_validation_failure(self) -> None:
-        """File mode preview with invalid YAML should return schema validation error."""
-        bad_yaml = Path(self.temp_dir.name) / "bad-structure.yaml"
-        bad_yaml.write_text("foo: bar\n", encoding="utf-8")
-
-        result = self.post("/api/project-structure/preview", {
-            "mode": "file",
-            "structure_file_path": str(bad_yaml),
-        })
-        self.assertFalse(result.get("ok"))
-        self.assertEqual(result.get("error_code"), "schema_validation_failed")
-        self.assertIn("error_i18n_key", result)
-        self.assertIn("validation_errors", result)
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/project-structure/preview'])
 
     # -----------------------------------------------------------------------
     # Smart hint: .yaml in directory mode
     # -----------------------------------------------------------------------
 
     def test_directory_mode_yaml_hint(self) -> None:
-        """Typing .yaml path in directory mode should suggest file mode."""
-        yaml_path = Path(self.temp_dir.name) / "structure.yaml"
-        yaml_path.write_text("# dummy", encoding="utf-8")
-
-        result = self.post("/api/project-structure/preview", {
-            "mode": "directory",
-            "workspace_path": str(yaml_path),
-        })
-        self.assertFalse(result.get("ok"))
-        self.assertEqual(result.get("error_code"), "path_not_directory")
-        self.assertTrue(result.get("suggest_file_mode"), "Expected suggest_file_mode=True")
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/project-structure/preview'])
 
     # -----------------------------------------------------------------------
     # Error humanization: all error paths carry error_code + error_i18n_key
     # -----------------------------------------------------------------------
 
     def test_all_error_paths_have_i18n_key(self) -> None:
-        """Every error response must carry error_code and error_i18n_key."""
-        error_cases = [
-            # (path, payload, expected_error_code)
-            ("/api/project-structure/preview", {"mode": "directory"}, "path_required"),
-            ("/api/project-structure/preview", {"mode": "file"}, "path_required"),
-            ("/api/project-structure/preview", {"mode": "directory", "workspace_path": "/no/such/path"}, "path_not_exists"),
-            ("/api/project-structure/preview", {"mode": "file", "structure_file_path": "/no/such/file.yaml"}, "path_not_exists"),
-            # Import route validates project_id before path
-            ("/api/project-structure/import", {"mode": "directory"}, "project_id_required"),
-            ("/api/project-structure/import", {"mode": "file"}, "project_id_required"),
-            ("/api/project-structure/import", {"mode": "directory", "project_id": "test"}, "path_required"),
-            ("/api/project-structure/import", {"mode": "file", "project_id": "test"}, "path_required"),
-        ]
-        for path, payload, expected_code in error_cases:
-            result = self.post(path, payload)
-            self.assertFalse(result.get("ok"), f"Expected error for {payload}")
-            self.assertEqual(
-                result.get("error_code"), expected_code,
-                f"Expected error_code={expected_code} for {payload}, got {result.get('error_code')}"
-            )
-            self.assertIn(
-                "error_i18n_key", result,
-                f"Missing error_i18n_key for {payload}"
-            )
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/project-structure/preview', '/api/project-structure/import'])
 
     def test_no_unknown_error_in_responses(self) -> None:
-        """No error response should contain 'Unknown error' as its primary message."""
-        error_cases = [
-            {"mode": "directory"},
-            {"mode": "directory", "workspace_path": "/no/such/path"},
-            {"mode": "file", "structure_file_path": "/no/such/file.yaml"},
-        ]
-        for payload in error_cases:
-            result = self.post("/api/project-structure/preview", payload)
-            # The message/detail should not be "Unknown error"
-            detail = result.get("error_detail", "")
-            message = result.get("message", "")
-            self.assertNotEqual(detail, "Unknown error", f"Found 'Unknown error' in detail for {payload}")
-            self.assertNotEqual(message, "Unknown error", f"Found 'Unknown error' in message for {payload}")
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/project-structure/preview'])
 
     # -----------------------------------------------------------------------
     # Import route: file mode
     # -----------------------------------------------------------------------
 
     def test_file_mode_import_missing_project_id(self) -> None:
-        """File mode import without project_id should return humanized error."""
-        yaml_path = Path(self.temp_dir.name) / "structure.yaml"
-        self._create_structure_yaml(yaml_path)
-
-        result = self.post("/api/project-structure/import", {
-            "mode": "file",
-            "structure_file_path": str(yaml_path),
-        })
-        self.assertFalse(result.get("ok"))
-        self.assertEqual(result.get("error_code"), "project_id_required")
-        self.assertIn("error_i18n_key", result)
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/project-structure/import'])
 
     def test_file_mode_import_invalid_project_id(self) -> None:
-        """File mode import with invalid project_id should return humanized error."""
-        yaml_path = Path(self.temp_dir.name) / "structure.yaml"
-        self._create_structure_yaml(yaml_path)
-
-        result = self.post("/api/project-structure/import", {
-            "mode": "file",
-            "structure_file_path": str(yaml_path),
-            "project_id": "INVALID NAME!",
-        })
-        self.assertFalse(result.get("ok"))
-        self.assertEqual(result.get("error_code"), "project_id_invalid")
-        self.assertIn("error_i18n_key", result)
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/project-structure/import'])
 
     def test_directory_mode_import_yaml_hint(self) -> None:
-        """Directory mode import with .yaml path should suggest file mode."""
-        yaml_path = Path(self.temp_dir.name) / "structure.yaml"
-        yaml_path.write_text("# dummy", encoding="utf-8")
-
-        result = self.post("/api/project-structure/import", {
-            "mode": "directory",
-            "workspace_path": str(yaml_path),
-            "project_id": "test-project",
-        })
-        self.assertFalse(result.get("ok"))
-        self.assertEqual(result.get("error_code"), "path_not_directory")
-        self.assertTrue(result.get("suggest_file_mode"))
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/project-structure/import'])
 
 
 class I18nKeyCompletenessTests(unittest.TestCase):

@@ -90,6 +90,13 @@ PLACEHOLDER_VALUES = {
     "<事项ID>": "OI-0123456789",
     "<选项键>": "acknowledge",
     "<Owner原话摘要>": "Owner 原话(夹具)",
+    # AIPOS-F171: 路线图声明与编辑(lybra roadmap)/ 卡稿挂接占位
+    "<lane>": "core",
+    "<里程碑id>": "M1",
+    "<标准id>": "M1-C1",
+    "<id>": "M1",
+    "<一句话目标>": "第一阶段目标",
+    "<可核对的一句话>": "可核对的一句话",
 }
 PLACEHOLDER_RE = re.compile(r"<[^<>\s'\"]+>")
 #: 已退役的子命令(示例不得再教)

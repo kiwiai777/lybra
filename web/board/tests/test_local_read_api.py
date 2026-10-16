@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-from web.board.app import _api_post_routes, _api_routes, dispatch_api_request, parse_args
+from web.board.app import _api_routes, dispatch_api_request, parse_args
 
 WEB_ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,10 +19,24 @@ class LocalReadApiTests(unittest.TestCase):
             (self.repo_root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
         (self.repo_root / "0_control_plane" / "agents").mkdir(parents=True, exist_ok=True)
         self.routes = _api_routes(self.repo_root)
-        self.post_routes = _api_post_routes(self.repo_root)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
+
+    def assert_board_read_only(self, paths: list[str]) -> None:
+        """AIPOS-F171 件③(gap #155): 看板写接口全部下线 —— 同一路由 POST 一律 405 + BOARD_READ_ONLY(文案读 verbs.schema
+        board_readonly), 不调用任何写实现, 工作区零写入。"""
+        root = Path(self.repo_root)
+        def _snapshot() -> list[tuple[str, int]]:
+            return sorted((p.relative_to(root).as_posix(), p.stat().st_size) for p in root.rglob("*") if p.is_file())
+        before = _snapshot()
+        for path in paths:
+            status, data = dispatch_api_request(method="POST", path=path, routes=_api_routes(root))
+            print(f"[F171 read-only] POST {path} -> {status} {data.get('error')} {data.get('message')}")
+            self.assertEqual(status, 405, path)
+            self.assertEqual(data["error"], "BOARD_READ_ONLY", path)
+            self.assertFalse(data["ok"])
+        self.assertEqual(before, _snapshot(), "read-only board must write nothing")
 
     def test_health_route_returns_json(self) -> None:
         status, data = dispatch_api_request(method="GET", path="/api/health", routes=self.routes)
@@ -203,51 +217,21 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertIn("finalize_writer", data["data"]["deferred_gates"])
 
     def test_runtime_status_reads_connection_json_per_workspace(self) -> None:
-        """AIPOS-272 FIX-8: /api/runtime-status must read connection.json from the requested workspace."""
-        # Workspace 0 (default): connection.json with port 7120
-        ws0_connection_dir = self.repo_root / ".lybra"
-        ws0_connection_dir.mkdir(parents=True, exist_ok=True)
-        (ws0_connection_dir / "connection.json").write_text(
-            json.dumps({
-                "mcp": {
-                    "rpc_url": "http://127.0.0.1:7120/mcp",
-                    "sse_url": "http://127.0.0.1:7120/sse"
-                },
-                "board": {"url": "http://127.0.0.1:7119"}
-            }),
-            encoding="utf-8"
-        )
+        """AIPOS-272 FIX-8: /api/runtime-status must read connection.json from the requested workspace.
+        AIPOS-F171 件③: ?workspace=<序号> = home 根推导的项目序(原 board_config 静态清单退役)。"""
+        home = Path(self.temp_dir.name) / "home-root"
+        for name, port in (("p0-workspace", 7120), ("p1-workspace", 7130)):
+            root = home / name
+            (root / "5_tasks" / "queue" / "pending").mkdir(parents=True, exist_ok=True)
+            (root / "project.json").write_text(json.dumps({"project": name}), encoding="utf-8")
+            (root / ".lybra").mkdir(parents=True, exist_ok=True)
+            (root / ".lybra" / "connection.json").write_text(  # 靶场连接声明(假地址, 无凭据)
+                json.dumps({"mcp": {"rpc_url": f"http://127.0.0.1:{port}/mcp", "sse_url": f"http://127.0.0.1:{port}/sse"},
+                            "board": {"url": f"http://127.0.0.1:{port - 1}"}}),
+                encoding="utf-8",
+            )
 
-        # Workspace 1: different port 7130
-        ws1_root = Path(self.temp_dir.name) / "workspace1"
-        ws1_root.mkdir(parents=True, exist_ok=True)
-        (ws1_root / "5_tasks" / "queue" / "pending").mkdir(parents=True, exist_ok=True)
-        ws1_connection_dir = ws1_root / ".lybra"
-        ws1_connection_dir.mkdir(parents=True, exist_ok=True)
-        (ws1_connection_dir / "connection.json").write_text(
-            json.dumps({
-                "mcp": {
-                    "rpc_url": "http://127.0.0.1:7130/mcp",
-                    "sse_url": "http://127.0.0.1:7130/sse"
-                },
-                "board": {"url": "http://127.0.0.1:7129"}
-            }),
-            encoding="utf-8"
-        )
-
-        # Board config pointing to both workspaces
-        board_config_path = Path(self.temp_dir.name) / "board_config.json"
-        board_config_path.write_text(
-            json.dumps({
-                "workspaces": [
-                    {"label": "Workspace 0", "root": str(self.repo_root)},
-                    {"label": "Workspace 1", "root": str(ws1_root)}
-                ]
-            }),
-            encoding="utf-8"
-        )
-
-        routes = _api_routes(self.repo_root, board_config_path=board_config_path)
+        routes = _api_routes(self.repo_root, home_root=home)
 
         # Test workspace 0
         status0, data0 = dispatch_api_request(method="GET", path="/api/runtime-status?workspace=0", routes=routes)
@@ -530,9 +514,10 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertFalse(data["data"]["entries"][0]["has_iterations"])
 
     def test_unsupported_method_rejected(self) -> None:
+        # AIPOS-F171 件③: 看板只读 —— 非 GET 一律 405 + BOARD_READ_ONLY
         status, data = dispatch_api_request(method="POST", path="/api/queue", routes=self.routes)
         self.assertEqual(status, 405)
-        self.assertEqual(data.get("error"), "METHOD_NOT_ALLOWED")
+        self.assertEqual(data.get("error"), "BOARD_READ_ONLY")
 
     def test_execute_dry_run_route_requires_post(self) -> None:
         status, data = dispatch_api_request(method="GET", path="/api/execute/dry-run", routes=self.routes)
@@ -547,194 +532,32 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertEqual(args.port, 7117)
 
     def test_execute_dry_run_post_returns_envelope(self) -> None:
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/execute/dry-run",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={},
-        )
-        self.assertEqual(status, 200)
-        self.assertIn("ok", data)
-        self.assertIn("verdict", data)
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/execute/dry-run'])
 
     def test_parent_requirement_preview_returns_envelope_without_writing(self) -> None:
-        before = sorted(p.relative_to(self.repo_root).as_posix() for p in self.repo_root.rglob("*"))
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/parent-requirement/preview",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={
-                "title": "Planner Loop UI",
-                "project": "ai-project-os",
-                "owner_goal": "Create a parent requirement entry point.",
-                "forum_thread_ref": "forum://aipos/59",
-                "planner_agent": "dev_codex",
-                "planner_agent_instance": "dev.codex.local",
-                "planner_runtime_profile": "local_process",
-                "planner_model_tier": "L3",
-            },
-        )
-        after = sorted(p.relative_to(self.repo_root).as_posix() for p in self.repo_root.rglob("*"))
-
-        self.assertEqual(status, 200)
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["operation"], "parent_requirement_preview")
-        self.assertFalse(data["data"]["writes_enabled"])
-        self.assertFalse(data["execute_allowed"])
-        self.assertEqual(data["data"]["parent_requirement"]["min_planner_model_tier"], "L3")
-        self.assertEqual(before, after)
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/parent-requirement/preview'])
 
     def test_parent_requirement_preview_requires_l3_or_l4(self) -> None:
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/parent-requirement/preview",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={
-                "title": "Planner Loop UI",
-                "owner_goal": "Create a parent requirement entry point.",
-                "forum_thread_ref": "forum://aipos/59",
-                "planner_model_tier": "L2",
-            },
-        )
-
-        self.assertEqual(status, 200)
-        self.assertFalse(data["ok"])
-        self.assertEqual(data["verdict"], "BLOCK")
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/parent-requirement/preview'])
 
     def test_planner_tick_preview_returns_forum_visible_metadata_without_writing(self) -> None:
-        before = sorted(p.relative_to(self.repo_root).as_posix() for p in self.repo_root.rglob("*"))
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/planner-tick/preview",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={
-                "orchestration_id": "orch_ai_project_os_20260503_planner_loop",
-                "parent_task_id": "REQ-20260503-planner-loop-PARENT",
-                "forum_thread_ref": "forum://aipos/60",
-                "planner_agent": "dev_codex",
-                "planner_agent_instance": "dev.codex.local",
-                "planner_model_tier": "L3",
-                "iteration_number": "1",
-                "decision": "needs_owner",
-                "decision_reason": "Architecture route split requires Owner approval.",
-                "next_expected_action": "Owner decides whether to publish subtasks.",
-                "inputs_read": "parent requirement\nqueue summary",
-                "observations": "No running subtasks.",
-                "needs_owner_reasons": "architecture_route_split",
-            },
-        )
-        after = sorted(p.relative_to(self.repo_root).as_posix() for p in self.repo_root.rglob("*"))
-
-        self.assertEqual(status, 200)
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["operation"], "planner_tick_preview")
-        self.assertEqual(data["verdict"], "NEEDS_OWNER")
-        self.assertFalse(data["data"]["writes_enabled"])
-        self.assertFalse(data["data"]["forum_backend_enabled"])
-        self.assertFalse(data["data"]["planner_runtime_launch_enabled"])
-        self.assertFalse(data["data"]["orchestration_writer_enabled"])
-        self.assertFalse(data["execute_allowed"])
-        self.assertEqual(data["planned_writes"], [])
-        self.assertEqual(data["data"]["planner_iteration"]["verdict"], "needs_owner")
-        self.assertTrue(data["data"]["visible_report"]["owner_decision_required"])
-        self.assertIn("planner_tick_started", [event["event_type"] for event in data["data"]["event_log_preview"]])
-        self.assertIn("planner_verdict_recorded", [event["event_type"] for event in data["data"]["event_log_preview"]])
-        self.assertIn("needs_owner_raised", [event["event_type"] for event in data["data"]["event_log_preview"]])
-        self.assertEqual(before, after)
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/planner-tick/preview'])
 
     def test_planner_tick_preview_requires_l3_or_l4(self) -> None:
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/planner-tick/preview",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={
-                "orchestration_id": "orch_ai_project_os_20260503_planner_loop",
-                "parent_task_id": "REQ-20260503-planner-loop-PARENT",
-                "forum_thread_ref": "forum://aipos/60",
-                "planner_model_tier": "L2",
-                "decision": "continue",
-                "decision_reason": "Continue observing.",
-                "next_expected_action": "Run another tick later.",
-            },
-        )
-
-        self.assertEqual(status, 200)
-        self.assertFalse(data["ok"])
-        self.assertEqual(data["verdict"], "BLOCK")
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/planner-tick/preview'])
 
     def test_planner_tick_preview_requires_aipos54_verdict(self) -> None:
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/planner-tick/preview",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={
-                "orchestration_id": "orch_ai_project_os_20260503_planner_loop",
-                "parent_task_id": "REQ-20260503-planner-loop-PARENT",
-                "forum_thread_ref": "forum://aipos/60",
-                "planner_model_tier": "L3",
-                "decision": "launch_runtime",
-                "decision_reason": "Invalid runtime launch attempt.",
-                "next_expected_action": "Launch runtime.",
-            },
-        )
-
-        self.assertEqual(status, 200)
-        self.assertFalse(data["ok"])
-        self.assertEqual(data["verdict"], "BLOCK")
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/planner-tick/preview'])
 
     def test_manual_planner_tick_flow_preview_stops_on_critical_fork_without_writing(self) -> None:
-        before = self.data_paths()
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/planner-tick/manual-flow/preview",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={
-                "orchestration_id": "orch_ai_project_os_20260509_manual_tick",
-                "parent_task_id": "REQ-20260509-manual-tick-PARENT",
-                "forum_thread_ref": "forum://aipos/74",
-                "planner_agent": "dev_codex",
-                "planner_agent_instance": "dev.codex.local",
-                "planner_model_tier": "L3",
-                "iteration_number": "2",
-                "decision": "continue",
-                "decision_reason": "Architecture route split requires Owner approval before continuing.",
-                "next_expected_action": "Owner decides the route before any publish.",
-                "inputs_read": "parent requirement\norchestration summary\nplanner timeline",
-                "observations": "No autonomous runtime is active.",
-                "publish_candidates": "AIPOS-74R_audit_minimal_manual_planner_tick_flow.md",
-                "audit_handoff_needed": True,
-                "stop_condition_hits": "architecture route split",
-            },
-        )
-        after = self.data_paths()
-
-        self.assertEqual(status, 200)
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["operation"], "planner_tick_manual_flow_preview")
-        self.assertEqual(data["verdict"], "NEEDS_OWNER")
-        self.assertTrue(data["dry_run"])
-        self.assertTrue(data["data"]["manual_flow"])
-        self.assertFalse(data["data"]["writes_enabled"])
-        self.assertFalse(data["data"]["planner_iteration_append_enabled"])
-        self.assertFalse(data["data"]["forum_event_append_enabled"])
-        self.assertFalse(data["data"]["planner_runtime_launch_enabled"])
-        self.assertFalse(data["data"]["queue_mutation_enabled"])
-        self.assertFalse(data["execute_allowed"])
-        self.assertIsNone(data["dry_run_token"])
-        self.assertEqual(data["planned_writes"], [])
-        self.assertEqual(data["planned_moves"], [])
-        self.assertIn("architecture", data["summary"]["critical_fork_hits"])
-        self.assertTrue(data["summary"]["owner_decision_required"])
-        self.assertIn("critical fork requires Owner decision: architecture", data["needs_owner_reasons"])
-        self.assertEqual(data["data"]["visible_report"]["manual_flow_next_step"], "stop_for_owner")
-        self.assertEqual(before, after)
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/planner-tick/manual-flow/preview'])
 
     def write_planner_draft(self, *, publish_status: str = "approved_for_publish", extra_lines: list[str] | None = None) -> Path:
         path = self.repo_root / "5_tasks/drafts/aipos-61-planner-draft.md"
@@ -895,44 +718,12 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertEqual(before, after)
 
     def test_append_event_controlled_execute_dry_run_returns_token_without_writing(self) -> None:
-        before = self.data_paths()
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/execute/dry-run",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={"operation": "orchestration_event_append", "actor": "dev.codex.local", "payload": self.event_payload()},
-        )
-        after = self.data_paths()
-
-        self.assertEqual(status, 200)
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["operation"], "orchestration_event_append")
-        self.assertTrue(data["execute_allowed"])
-        self.assertTrue(data["owner_confirmation_required"])
-        self.assertIn("dry_run_id", data)
-        self.assertEqual(data["data"]["target_path"], "5_tasks/orchestration/orch_web_controlled/orchestration_events.md")
-        self.assertEqual(before, after)
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/execute/dry-run'])
 
     def test_append_iteration_controlled_execute_dry_run_returns_token_without_writing(self) -> None:
-        before = self.data_paths()
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/execute/dry-run",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={"operation": "planner_iteration_append", "actor": "dev.codex.local", "payload": self.iteration_payload()},
-        )
-        after = self.data_paths()
-
-        self.assertEqual(status, 200)
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["operation"], "planner_iteration_append")
-        self.assertTrue(data["execute_allowed"])
-        self.assertTrue(data["owner_confirmation_required"])
-        self.assertIn("dry_run_id", data)
-        self.assertEqual(data["data"]["target_path"], "5_tasks/orchestration/orch_web_controlled/planner_iterations.md")
-        self.assertEqual(before, after)
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/execute/dry-run'])
 
     def test_context_pack_preview_route_is_read_only(self) -> None:
         task_path = self.write_planner_draft()
@@ -980,184 +771,36 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertEqual(before, after)
 
     def test_planner_draft_review_returns_publish_readiness_without_writing(self) -> None:
-        draft_path = self.write_planner_draft()
-        before = self.data_paths()
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/planner-draft/review",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={"path": draft_path.relative_to(self.repo_root).as_posix(), "actor": "dev.codex.local"},
-        )
-        after = self.data_paths()
-
-        self.assertEqual(status, 200)
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["operation"], "planner_draft_review")
-        self.assertEqual(data["verdict"], "PASS")
-        self.assertFalse(data["execute_allowed"])
-        self.assertFalse(data["data"]["writes_enabled"])
-        self.assertTrue(data["data"]["review_only"])
-        self.assertFalse(data["data"]["controlled_execute_expanded"])
-        self.assertTrue(data["data"]["handoff_to_draft_publish"]["enabled"])
-        self.assertEqual(data["planned_writes"], [])
-        self.assertEqual(data["data"]["publish_preview"]["target_path"], "5_tasks/queue/pending/aipos-61-planner-draft.md")
-        self.assertEqual(before, after)
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/planner-draft/review'])
 
     def test_approved_planner_draft_publish_dry_run_returns_token_without_writing(self) -> None:
-        draft_path = self.write_planner_draft()
-        before = self.data_paths()
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/planner-draft/publish/dry-run",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={"path": draft_path.relative_to(self.repo_root).as_posix(), "actor": "dev.codex.local"},
-        )
-        after = self.data_paths()
-
-        self.assertEqual(status, 200)
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["operation"], "planner_draft_publish")
-        self.assertEqual(data["data"]["controlled_execute_operation"], "draft_publish")
-        self.assertTrue(data["data"]["owner_decision_gate"]["clear"])
-        self.assertTrue(data["data"]["second_confirmation_required"])
-        self.assertTrue(data["execute_allowed"])
-        self.assertIn("dry_run_id", data)
-        self.assertEqual(data["planned_writes"][0]["path"], "5_tasks/queue/pending/aipos-61-planner-draft.md")
-        self.assertEqual(before, after)
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/planner-draft/publish/dry-run'])
 
     def test_approved_planner_draft_publish_blocks_owner_gate_without_token(self) -> None:
-        draft_path = self.write_planner_draft(publish_status="needs_owner")
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/planner-draft/publish/dry-run",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={"path": draft_path.relative_to(self.repo_root).as_posix(), "actor": "dev.codex.local"},
-        )
-
-        self.assertEqual(status, 200)
-        self.assertFalse(data["ok"])
-        self.assertEqual(data["verdict"], "NEEDS_OWNER")
-        self.assertFalse(data["execute_allowed"])
-        self.assertIsNone(data["dry_run_token"])
-        self.assertIn("Draft has a pending Owner decision gate.", data["needs_owner_reasons"])
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/planner-draft/publish/dry-run'])
 
     def test_approved_planner_draft_publish_confirm_uses_existing_controlled_execute(self) -> None:
-        draft_path = self.write_planner_draft()
-        _status, dry = dispatch_api_request(
-            method="POST",
-            path="/api/planner-draft/publish/dry-run",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={"path": draft_path.relative_to(self.repo_root).as_posix(), "actor": "dev.codex.local"},
-        )
-        status, executed = dispatch_api_request(
-            method="POST",
-            path="/api/execute/confirm",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={"dry_run_id": dry["dry_run_id"], "actor": "dev.codex.local", "owner_confirmed": True},
-        )
-
-        self.assertEqual(status, 200)
-        self.assertTrue(executed["ok"])
-        self.assertEqual(executed["operation"], "draft_publish")
-        self.assertTrue((self.repo_root / "5_tasks/queue/pending/aipos-61-planner-draft.md").exists())
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/planner-draft/publish/dry-run', '/api/execute/confirm'])
 
     def test_planner_draft_review_routes_owner_gate_to_needs_owner(self) -> None:
-        draft_path = self.write_planner_draft(publish_status="needs_owner")
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/planner-draft/review",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={"path": draft_path.relative_to(self.repo_root).as_posix()},
-        )
-
-        self.assertEqual(status, 200)
-        self.assertEqual(data["verdict"], "NEEDS_OWNER")
-        self.assertFalse(data["data"]["handoff_to_draft_publish"]["enabled"])
-        self.assertIn("Draft has a pending Owner decision gate.", data["needs_owner_reasons"])
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/planner-draft/review'])
 
     def test_planner_draft_review_blocks_non_planner_draft(self) -> None:
-        draft_path = self.write_planner_draft(extra_lines=["draft_source: manual", "created_by_planner: false"])
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/planner-draft/review",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={"path": draft_path.relative_to(self.repo_root).as_posix()},
-        )
-
-        self.assertEqual(status, 200)
-        self.assertFalse(data["ok"])
-        self.assertEqual(data["verdict"], "BLOCK")
-        self.assertIn("Draft must be marked as planner-created for Planner Draft Review.", data["blocking_reasons"])
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/planner-draft/review'])
 
     def test_forum_event_review_returns_append_plan_without_writing(self) -> None:
-        before = self.data_paths()
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/forum-event/review",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={
-                "orchestration_id": "orch_ai_project_os_20260504_forum_event",
-                "event_type": "planner_verdict_recorded",
-                "severity": "info",
-                "actor": "dev.codex.local",
-                "source": "web_board_forum_event_review",
-                "forum_thread_ref": "forum://aipos/63",
-                "related_task_id": "REQ-20260504-forum-event-PARENT",
-                "related_iteration_id": "iter_20260504_forum_event_001",
-                "summary": "Planner verdict is ready for review.",
-                "details": "Review-only event persistence plan.",
-                "refs": "forum://aipos/63",
-            },
-        )
-        after = self.data_paths()
-
-        self.assertEqual(status, 200)
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["operation"], "forum_event_persistence_review")
-        self.assertEqual(data["verdict"], "PASS")
-        self.assertFalse(data["execute_allowed"])
-        self.assertFalse(data["data"]["writes_enabled"])
-        self.assertFalse(data["data"]["forum_backend_enabled"])
-        self.assertFalse(data["data"]["network_posting_enabled"])
-        self.assertFalse(data["data"]["controlled_execute_expanded"])
-        self.assertTrue(data["data"]["writer_review_only"])
-        self.assertTrue(data["data"]["append_plan"]["append_only"])
-        self.assertEqual(
-            data["data"]["append_plan"]["target_path"],
-            "5_tasks/orchestration/orch_ai_project_os_20260504_forum_event/orchestration_events.md",
-        )
-        self.assertEqual(data["planned_writes"], [])
-        self.assertEqual(before, after)
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/forum-event/review'])
 
     def test_forum_event_review_rejects_invalid_event_type(self) -> None:
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/forum-event/review",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={
-                "orchestration_id": "orch_ai_project_os_20260504_forum_event",
-                "event_type": "launch_runtime",
-                "severity": "info",
-                "actor": "dev.codex.local",
-                "forum_thread_ref": "forum://aipos/63",
-                "summary": "Invalid event.",
-            },
-        )
-
-        self.assertEqual(status, 200)
-        self.assertFalse(data["ok"])
-        self.assertEqual(data["verdict"], "BLOCK")
-        self.assertIn("event_type must be allowed by orchestration_event_log_schema.md", data["blocking_reasons"])
-
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/forum-event/review'])
 
     def write_orchestration_fixture(self, orchestration_id: str = "orch_aipos_69_summary_ui") -> None:
         task_path = self.repo_root / "5_tasks" / "queue" / "pending" / "aipos-69-summary-ui.md"
@@ -1321,71 +964,12 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertEqual(before, after)
 
     def test_owner_decision_resolution_review_returns_append_plan_without_writing(self) -> None:
-        orchestration_id = "orch_aipos_76_owner_resolution"
-        self.write_orchestration_fixture(orchestration_id)
-        before = self.data_paths()
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/owner-decision/resolve/review",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={
-                "request_id": "timeline:orch_aipos_76_owner_resolution:evt_aipos_69_needs_owner",
-                "orchestration_id": orchestration_id,
-                "actor": "owner",
-                "forum_thread_ref": "forum://aipos/76",
-                "evidence_ref": "owner_decision:forum://aipos/76#approved",
-                "decision_type": "architecture",
-                "related_task_id": "REQ-AIPOS-76-PARENT",
-                "related_iteration_id": "iter_aipos_69_002",
-                "decision": "approved",
-                "decision_reason": "Proceed with the preview-only resolution flow.",
-            },
-        )
-        after = self.data_paths()
-
-        self.assertEqual(status, 200)
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["operation"], "owner_decision_resolution_review")
-        self.assertEqual(data["verdict"], "PASS")
-        self.assertTrue(data["dry_run"])
-        self.assertFalse(data["execute_allowed"])
-        self.assertIsNone(data["dry_run_token"])
-        self.assertEqual(data["planned_writes"], [])
-        self.assertEqual(data["planned_moves"], [])
-        self.assertFalse(data["data"]["writes_enabled"])
-        self.assertFalse(data["data"]["decision_persistence_enabled"])
-        self.assertFalse(data["data"]["controlled_mutation_allowed"])
-        self.assertTrue(data["data"]["resolution_review_only"])
-        self.assertEqual(data["data"]["event_entry"]["event_type"], "owner_decision_recorded")
-        self.assertEqual(data["data"]["append_plan"]["target_path"], f"5_tasks/orchestration/{orchestration_id}/orchestration_events.md")
-        self.assertEqual(data["summary"]["decision"], "approved")
-        self.assertEqual(data["summary"]["decision_type"], "architecture")
-        self.assertTrue(data["summary"]["writer_review_passed"])
-        self.assertEqual(before, after)
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/owner-decision/resolve/review'])
 
     def test_owner_decision_resolution_review_requires_evidence(self) -> None:
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/owner-decision/resolve/review",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={
-                "request_id": "timeline:orch:evt",
-                "orchestration_id": "orch_aipos_76_owner_resolution",
-                "actor": "owner",
-                "forum_thread_ref": "forum://aipos/76",
-                "decision": "approved",
-                "decision_reason": "Approve route.",
-            },
-        )
-
-        self.assertEqual(status, 200)
-        self.assertFalse(data["ok"])
-        self.assertEqual(data["verdict"], "BLOCK")
-        self.assertFalse(data["execute_allowed"])
-        self.assertIsNone(data["dry_run_token"])
-        self.assertIn("evidence_ref is required", data["blocking_reasons"])
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/owner-decision/resolve/review'])
 
     def test_orchestration_timeline_preview_route_returns_read_only_chronological_items(self) -> None:
         orchestration_id = "orch_aipos_70_timeline_ui"
@@ -1486,25 +1070,8 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertIn("orchestration_id is required", data["blocking_reasons"])
 
     def test_forum_event_review_owner_decision_recorded_requires_evidence_ref(self) -> None:
-        status, data = dispatch_api_request(
-            method="POST",
-            path="/api/forum-event/review",
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body={
-                "orchestration_id": "orch_ai_project_os_20260504_forum_event",
-                "event_type": "owner_decision_recorded",
-                "severity": "needs_owner",
-                "actor": "Owner",
-                "forum_thread_ref": "forum://aipos/63",
-                "summary": "Owner decision recorded without evidence ref.",
-            },
-        )
-
-        self.assertEqual(status, 200)
-        self.assertFalse(data["ok"])
-        self.assertEqual(data["verdict"], "BLOCK")
-        self.assertIn("owner_decision_recorded requires an Owner decision evidence ref", data["blocking_reasons"])
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/forum-event/review'])
 
     def test_unknown_route_not_found(self) -> None:
         status, data = dispatch_api_request(method="GET", path="/api/nope", routes=self.routes)

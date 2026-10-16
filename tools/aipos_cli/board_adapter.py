@@ -1066,6 +1066,38 @@ def get_owner_inbox(home_root: str | Path | None = None, *, project: str | None 
     )
 
 
+def get_roadmap_view(repo_root: str | Path | None = None, *, lane: str | None = None) -> dict[str, Any]:
+    """AIPOS-F171 件③: 看板项目页里程碑简版(/api/roadmap)的数据——与 `lybra roadmap show` 同一函数 roadmap.roadmap_view(只读)。
+    无路线图文件 = ok + exists False(前端整区隐藏); 读不出 / 不合声明 = BLOCK 应答带拒因(点名, 不吞)。"""
+    from tools.aipos_cli.roadmap import RoadmapError, roadmap_view
+    from tools.schema_loader import SchemaLoadError
+
+    operation = "get_roadmap_view"
+    try:
+        resolved_root = _resolve_repo_root(repo_root)
+        view = roadmap_view(resolved_root, lane=lane)
+    except RoadmapError as exc:
+        return blocked_response(operation=operation, dry_run=False, category="VALIDATION_ERROR", message=str(exc),
+                                safety_notice=READ_SAFETY_NOTICE)
+    except (OSError, ValueError, SchemaLoadError) as exc:
+        return _normalize_exception(operation, exc, dry_run=False)
+    return make_response(
+        ok=True,
+        verdict=Verdict.PASS,
+        operation=operation,
+        dry_run=False,
+        data={k: (str(v) if isinstance(v, Path) else v) for k, v in view.items()},
+        summary={"exists": view["exists"], "milestones": len(view["milestones"]), "unlinked": len(view["unlinked"])},
+        warnings=[],
+        blocking_reasons=[],
+        needs_owner_reasons=[],
+        owner_confirmation_required=False,
+        owner_confirmation_reasons=[],
+        safety_notice=READ_SAFETY_NOTICE,
+        errors=[],
+    )
+
+
 def render_owner_inbox_page(home_root: str | Path | None = None) -> str:
     """AIPOS-F168 件①: 看板 /owner/inbox 页 HTML(get_owner_inbox 同一数据 → owner_inbox.render_inbox_html; 读不出 = 错误页, 拒因原文)。"""
     from tools.aipos_cli.owner_inbox import render_inbox_error_html, render_inbox_html
@@ -6883,6 +6915,7 @@ def _auto_generate_decision_log_pointer(
     *,
     decided_at: datetime | None = None,
     backfilled_by: str | None = None,
+    origin: str | None = None,
     dry_run: bool = False,
 ) -> dict[str, str | None]:
     """AIPOS-R6M 大项A②: 决策粒度机器触发 - owner_decision_record落库时自动生成decision_log指针条目
@@ -6899,6 +6932,9 @@ def _auto_generate_decision_log_pointer(
     复用本函数(禁第二份指针渲染/命名): decided_at = 决策记录的决策时刻(月目录 / 日期 / frontmatter decided_at 随之, 缺省 = 当前 UTC,
     门落库路径不变); backfilled_by = 补生成命令(给出即尾注写明补生成来源, 不冒充落库时生成); dry_run = 只算将写的路径不写盘
     (预演列出指针名同此一处命名)。
+
+    AIPOS-F171 件①: 路线图变更(`lybra roadmap … --confirm`, roadmap.apply_roadmap_change)每次修改留指针, 复用本函数(禁第二份指针
+    渲染/命名): record_path = 路线图文件(治理根相对); origin = 生成来源说明(给出即尾注写明来源, 不冒充 owner_decision_record 落库触发)。
     """
     import re
 
@@ -6948,6 +6984,7 @@ def _auto_generate_decision_log_pointer(
 
 """ + (f"**Backfilled pointer** (AIPOS-F160): This entry was created later by `{backfilled_by}` for a decision record "
        "that had no decision_log pointer.\n" if backfilled_by else
+       f"**Auto-generated pointer** (AIPOS-F171): This entry was automatically created by `{origin}`.\n" if origin else
        "**Auto-generated pointer** (AIPOS-R6M 大项A②): This entry was automatically created when the owner_decision_record was written.\n")
         
         month_dir.mkdir(parents=True, exist_ok=True)
@@ -7941,9 +7978,27 @@ def amend_task(
         # AIPOS-F75: 受限模式判据
         is_restricted_mode = restricted_fields is not None
         current_state = task.get("queue_state")
+        # AIPOS-F171 件②: 只改路线图挂接字段(card.schema roadmap_link.fields)的 amend = 老卡回挂, 在 roadmap_link.amend_states 内任一
+        # 队列状态均允许(不走 pending / 受限两条状态闸); 挂接引用经 roadmap.link_problems 校验(与出卡同一判据)
+        from tools.aipos_cli.roadmap import link_declaration, link_problems
+
+        _link_decl = link_declaration()
+        roadmap_link_only = set(amendments) <= set(_link_decl["fields"])
+        if roadmap_link_only and current_state not in _link_decl["amend_states"]:
+            return blocked_response(
+                operation=operation,
+                dry_run=dry_run,
+                category="ROADMAP_LINK_STATE",
+                message=f"Roadmap link amend is allowed in states {_link_decl['amend_states']}, but task is {current_state}.",
+                actor=_actor_payload(actor_text),
+                data={"task_id": task.get("task_id"), "current_state": current_state},
+                safety_notice="AIPOS-F171: roadmap link amend states are declared in card.schema roadmap_link.amend_states.",
+            )
         
         # S1: Only allow amending pending tasks (UNLESS restricted mode for claimed)
-        if not is_restricted_mode:
+        if roadmap_link_only:
+            pass
+        elif not is_restricted_mode:
             # 普通模式: 只允许 pending
             if current_state != "pending":
                 return blocked_response(
@@ -8036,6 +8091,10 @@ def amend_task(
             if not is_valid and error_msg:
                 validation_errors.append(error_msg)
         
+        if set(amendments) & set(_link_decl["fields"]):
+            link_blocking, _link_warnings = link_problems(updated_metadata, resolved_root)
+            validation_errors.extend(link_blocking)
+
         if validation_errors:
             return blocked_response(
                 operation=operation,
@@ -8123,7 +8182,7 @@ def amend_task(
                 data={
                     "task_id": task.get("task_id"),
                     "task_path": str(task_path_obj.relative_to(resolved_root)),
-                    "current_state": "pending",
+                    "current_state": current_state,
                     "amendments_to_apply": list(amendments.keys()),
                     "amendment_record_path": str(amendment_path.relative_to(resolved_root)),
                     "would_write_amendment_record": True,

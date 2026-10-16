@@ -26,6 +26,8 @@
   </header>
 
   <main>
+    <!-- AIPOS-F171 件③: 看板只读 —— 写操作面板一律隐藏(data-board-write; 后端写接口已下线, 返回 405), 写操作经顾问 -->
+    <p id="board-readonly-note" class="board-readonly-note" data-board-readonly data-i18n="board.readonly_note">The Board is read-only: to create/import a project, verify, draft or publish a card, tell your advisor, who does it with lybra commands.</p>
     <details id="workflow-inbox" class="workflow-group" open>
 
       <summary>Today / Inbox</summary>
@@ -91,7 +93,7 @@
 
       <div class="workflow-grid">
 
-      <section id="ai-task-authoring" class="operator-primary-action">
+      <section data-board-write id="ai-task-authoring" class="operator-primary-action">
       <h2>AI Task Authoring</h2>
       <textarea id="ai-author-requirement" rows="5" placeholder="Describe the task in plain language"></textarea>
       <fieldset id="ai-author-mode" class="segmented-control" aria-label="AI authoring mode">
@@ -154,8 +156,8 @@
       <button class="panel-refresh" data-route-id="external-intake-review">Refresh Intake</button>
       <div id="external-intake-review-list" class="detail-list">loading...</div>
       <div id="external-intake-review-card" class="intake-review-card">Select an external intake draft.</div>
-      <button id="external-intake-prefill-resolution" class="secondary-action" disabled>Prefill Resolution</button>
-      <button id="external-intake-load-publish" class="secondary-action" disabled>Use In Draft Publish</button>
+      <button data-board-write id="external-intake-prefill-resolution" class="secondary-action" disabled>Prefill Resolution</button>
+      <button data-board-write id="external-intake-load-publish" class="secondary-action" disabled>Use In Draft Publish</button>
       <details class="raw-json-drawer">
         <summary>Raw intake list JSON</summary>
         <pre id="external-intake-review">loading...</pre>
@@ -174,7 +176,7 @@
       <pre id="owner-decisions-detail">Select an Owner decision request.</pre>
     </section>
 
-      <section>
+      <section data-board-write>
       <h2>Owner Decision Resolution Review</h2>
       <div class="draft-grid">
         <input id="owner-resolution-request-id" type="text" placeholder="request_id">
@@ -202,7 +204,7 @@
       <pre id="owner-resolution-result">Review an Owner decision resolution plan.</pre>
     </section>
 
-      <section>
+      <section data-board-write>
       <h2>Owner Decision Record</h2>
       <div class="draft-grid">
         <input id="owner-record-decision-id" type="text" placeholder="decision_id">
@@ -233,7 +235,7 @@
       <pre id="owner-record-result">Fill the decision record fields and run dry-run.</pre>
     </section>
 
-      <section class="operator-primary-action">
+      <section data-board-write class="operator-primary-action">
       <h2>Draft Publish</h2>
       <div class="toolbar">
         <input id="draft-publish-path" type="text" placeholder="5_tasks/drafts/example.md">
@@ -250,7 +252,7 @@
       <button class="panel-refresh" data-route-id="owner-decision-records">Refresh Decision Records</button>
       <div id="owner-decision-records-list" class="detail-list">loading...</div>
       <div id="owner-decision-records-card" class="owner-decision-record-card">Select an owner decision record.</div>
-      <button id="owner-decision-record-prefill-resolution" class="secondary-action" disabled>Prefill Resolution</button>
+      <button data-board-write id="owner-decision-record-prefill-resolution" class="secondary-action" disabled>Prefill Resolution</button>
       <details class="raw-json-drawer">
         <summary>Raw decision records JSON</summary>
         <pre id="owner-decision-records">loading...</pre>
@@ -285,17 +287,17 @@
       <pre id="planner-drafts-review-detail">Select a planner draft to review readiness.</pre>
     </section>
 
-      <section>
+      <section data-board-write>
       <h2>Planner Draft Review</h2>
       <div class="toolbar">
         <input id="planner-draft-path" type="text" placeholder="5_tasks/drafts/planner/orchestration/subtask.md">
         <button id="planner-draft-review">Review Planner Draft</button>
       </div>
-      <button id="planner-draft-load-publish" disabled>Use In Draft Publish</button>
+      <button data-board-write id="planner-draft-load-publish" disabled>Use In Draft Publish</button>
       <pre id="planner-draft-result">Enter a planner draft path and review publish readiness.</pre>
     </section>
 
-      <section>
+      <section data-board-write>
       <h2>Approved Planner Draft Publish</h2>
       <div class="toolbar">
         <input id="approved-planner-draft-path" type="text" placeholder="5_tasks/drafts/planner/orchestration/subtask.md">
@@ -434,7 +436,7 @@
       <pre id="agents-detail">Select a profile or runtime instance.</pre>
     </section>
 
-      <section id="custom-agent-profiles" class="operator-primary-action">
+      <section data-board-write id="custom-agent-profiles" class="operator-primary-action">
       <h2>Custom Agent Profiles</h2>
       <div class="draft-grid">
         <select id="profile-action">
@@ -498,7 +500,7 @@
       <pre id="task-preview">Select a task and actor.</pre>
     </section>
 
-      <section>
+      <section data-board-write>
       <h2>Controlled Execute</h2>
       <div class="toolbar">
         <button id="execute-dry-run">Dry-Run Claim</button>
@@ -511,7 +513,7 @@
       <pre id="execute-result">Run a claim dry-run first.</pre>
     </section>
 
-      <section>
+      <section data-board-write>
       <h2>Draft Create</h2>
       <div class="draft-grid">
         <input id="draft-task-id" type="text" placeholder="task_id">
@@ -543,7 +545,7 @@
       <pre id="draft-create-result">Fill the draft fields and run dry-run.</pre>
     </section>
 
-      <section>
+      <section data-board-write>
       <h2>Parent Requirement</h2>
       <div class="draft-grid">
         <input id="parent-title" type="text" placeholder="title">
@@ -560,7 +562,7 @@
       <pre id="parent-preview-result">Fill the parent requirement fields and preview.</pre>
     </section>
 
-      <section>
+      <section data-board-write>
       <h2>Planner Tick</h2>
       <div class="draft-grid">
         <input id="tick-orchestration-id" type="text" placeholder="orchestration_id">
@@ -599,7 +601,7 @@ Draft summary</textarea>
       <pre id="manual-planner-tick-result">Preview a manual planner tick flow.</pre>
     </section>
 
-      <section>
+      <section data-board-write>
       <h2>Planner Loop Persistence</h2>
       <div class="draft-grid">
         <select id="planner-persist-operation">
@@ -626,7 +628,7 @@ Draft summary</textarea>
       <pre id="planner-persist-result">Load a manual tick payload or paste append JSON, then run dry-run.</pre>
     </section>
 
-      <section>
+      <section data-board-write>
       <h2>Forum Event Review</h2>
       <div class="draft-grid">
         <input id="event-orchestration-id" type="text" placeholder="orchestration_id">

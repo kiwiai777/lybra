@@ -11,4 +11,3 @@
 {"file": "tools/loop_context.py", "fp": "a2c6e402349a", "inv": "a", "item": "H5", "text": "agent_instance: Agent instance ID (e.g., \"exec.lybra.kiwiai-dev\")"}
 {"file": "tools/loop_context.py", "fp": "fa53ff6a0e3e", "inv": "a", "item": "H5", "text": "instance: str  # agent_instance (e.g., \"exec.lybra.kiwiai-dev\")"}
 {"file": "tools/lybra_tui/copilot.py", "fp": "2ab7be308542", "inv": "e", "item": "M11", "lane_blocked": "F87 车道外(lane.paths 不含该文件), 未能改; 见 F87 RETURN 产品缺口", "text": "lines = [\"---\"]"}
-{"file": "web/board/app.py", "fp": "02139c34a9f9", "function": "_generate_advisor_prompt_route", "inv": "f", "item": "AIPOS-F115 件③(gap #58/#61 同族)", "lane_blocked": "F115 车道外(lane.paths 不含 web/board/app.py), 未能改; 见 F115 RETURN 缺口", "text": "except Exception: | pass"}

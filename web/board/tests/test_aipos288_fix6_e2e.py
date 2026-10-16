@@ -1,15 +1,11 @@
 """
-AIPOS-288 FIX-6: End-to-end test for label_en transparency across full stack.
+AIPOS-288 FIX-6 → AIPOS-F171 件③(gap #156): end-to-end project list of the Board overview.
 
-Verifies the complete data flow:
-  board_config.json (label + label_en)
-  → /api/overview response (workspace.label_en)
-  → Frontend workspaceLabel() helper (EN mode preference)
-
-Test cases:
-  1. Workspace with label_en: API returns it, helper prefers it in EN mode
-  2. Workspace without label_en: API omits it, helper falls back to label
-  3. Mixed config (some workspaces have label_en, others don't): all render correctly
+Originally: board_config.json (label + label_en) → /api/overview (label_en passthrough) → workspaceLabel().
+AIPOS-F171: the static board_config.json list is retired (the file is kept but never read); /api/overview lists the
+governance home root's registered projects (owner_inbox.home_projects — the same enumeration as the Owner inbox), label =
+project name, paused projects (project.json status=paused) marked. The frontend workspaceLabel() helper stays (label_en is
+simply absent now, so it falls back to label).
 """
 from __future__ import annotations
 
@@ -48,49 +44,38 @@ def _get_json(url: str) -> tuple[int, dict]:
 
 class LabelEnE2ETests(unittest.TestCase):
     def setUp(self) -> None:
+        from tools.aipos_cli.workspace_config import scaffold_project
+
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.repo_root = Path(self.temp_dir.name)
-        
-        # Create workspace structure
+        self.repo_root = Path(self.temp_dir.name) / "serve-root"
         for state in ("pending", "claimed", "completed", "blocked"):
             (self.repo_root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
-        
-        # Setup board_config with mixed label_en presence
+        # 靶场 home 根: 三个已注册项目(一个暂停, 一个 status 值不合), 名字为靶场值
+        self.home = Path(self.temp_dir.name) / "home-root"
+        for name in ("alpha-probe", "beta-probe", "gamma-probe"):
+            scaffold_project(self.home, name, registered_by="fixture")
+        self._set_status("beta-probe", "paused")
+        self._set_status("gamma-probe", "bogus-status")
+        # 旧静态清单: 写一份与 home 根不一致的 board_config.json, 证明它不再被读取
         self.config_path = self.repo_root / "board_config.json"
-        self.config_path.write_text(
-            json.dumps({
-                "workspaces": [
-                    {
-                        "label": "工作区甲",
-                        "label_en": "Workspace Alpha",
-                        "root": str(self.repo_root)
-                    },
-                    {
-                        "label": "工作区乙",
-                        # No label_en - tests backward compatibility
-                        "root": str(self.repo_root)
-                    }
-                ]
-            }),
-            encoding="utf-8"
-        )
-        
-        # Setup auth
+        self.config_path.write_text(json.dumps({"workspaces": [
+            {"label": "工作区甲", "label_en": "Workspace Alpha", "root": str(self.repo_root)}]}), encoding="utf-8")
         self._auth_store = SessionStore()
         _sid = self._auth_store.create(role="owner", scopes=["owner_confirm"])
         global _AUTH_COOKIE
         _AUTH_COOKIE = f"{SESSION_COOKIE_NAME}={_sid}"
-        
-        # Start server
+        self._start(self.home)
+
+    def _set_status(self, name: str, status: str) -> None:
+        path = self.home / name / "project.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["status"] = status
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _start(self, home: Path) -> None:
         port = _free_port()
-        self.server = ThreadingHTTPServer(
-            ("127.0.0.1", port),
-            make_handler(
-                repo_root=self.repo_root,
-                board_config_path=self.config_path,
-                session_store=self._auth_store
-            )
-        )
+        self.server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(
+            repo_root=self.repo_root, board_config_path=self.config_path, home_root=home, session_store=self._auth_store))
         self._thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self._thread.start()
         self.base = f"http://127.0.0.1:{port}"
@@ -103,133 +88,61 @@ class LabelEnE2ETests(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_api_overview_returns_label_en_when_present(self) -> None:
-        """
-        AIPOS-288 FIX-6: /api/overview transparently passes label_en from board_config.
-        
-        Workspace 0 has label_en => response includes it.
-        Workspace 1 lacks label_en => response omits it.
-        """
+        """AIPOS-F171: /api/overview = home 根推导的项目列表(label = 项目名); board_config.json 的 label / label_en 不再读取。"""
         status, data = _get_json(f"{self.base}/api/overview")
-        
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
-        self.assertIn("workspaces", data)
-        
-        workspaces = data["workspaces"]
-        self.assertEqual(len(workspaces), 2)
-        
-        # Workspace 0: has label_en
-        ws0 = workspaces[0]
-        self.assertEqual(ws0["label"], "工作区甲")
-        self.assertEqual(ws0["label_en"], "Workspace Alpha")
-        
-        # Workspace 1: no label_en
-        ws1 = workspaces[1]
-        self.assertEqual(ws1["label"], "工作区乙")
-        self.assertNotIn("label_en", ws1)
+        labels = [ws["label"] for ws in data["workspaces"]]
+        print(f"[F171 overview labels] {labels}")
+        self.assertEqual(labels, ["alpha-probe", "beta-probe", "gamma-probe"])
+        self.assertNotIn("工作区甲", labels)
+        for ws in data["workspaces"]:
+            self.assertNotIn("label_en", ws)
+            self.assertEqual(ws["project"], ws["label"])
 
     def test_frontend_helper_prefers_label_en_in_en_mode(self) -> None:
-        """
-        AIPOS-288 FIX-6: Frontend workspaceLabel() helper correctly selects label_en in EN mode.
-        
-        This test verifies the helper logic by checking the static HTML contains:
-          1. workspaceLabel(workspace) function definition
-          2. EN mode preference logic: workspace.label_en check
-          3. Fallback to workspace.label
-        
-        Runtime behavior is implicitly tested by overview and detail pages using the helper.
-        """
-        # Check overview.html has the helper
+        """AIPOS-288 FIX-6: the frontend workspaceLabel() helper stays (falls back to label when label_en is absent)."""
         status, html = _get(f"{self.base}/overview.html")
         self.assertEqual(status, 200)
-        
-        # Verify helper exists and has EN preference
         self.assertIn("function workspaceLabel(workspace)", html)
         self.assertIn("workspace.label_en", html)
         self.assertIn("workspace.label", html)
-        
-        # Check detail page also has it
         status, detail_html = _get(f"{self.base}/workspace/0")
         self.assertEqual(status, 200)
         self.assertIn("function workspaceLabel(workspace)", detail_html)
-        self.assertIn("workspace.label_en", detail_html)
 
     def test_mixed_config_all_workspaces_render(self) -> None:
-        """
-        AIPOS-288 FIX-6: Mixed board_config (some with label_en, some without) works correctly.
-        
-        Both workspaces should be present in API response with correct label fields.
-        """
+        """AIPOS-F171: 暂停项目照列并标 paused(看板展示全部项目, 收件箱才按暂停过滤); 状态读不出的项目照列并点名, 不猜成暂停。"""
         status, data = _get_json(f"{self.base}/api/overview")
-        
         self.assertEqual(status, 200)
-        workspaces = data["workspaces"]
-        self.assertEqual(len(workspaces), 2)
-        
-        # All workspaces must have 'label'
-        for ws in workspaces:
-            self.assertIn("label", ws)
-        
-        # Only workspace 0 has label_en
-        has_label_en = [ws.get("label_en") is not None for ws in workspaces]
-        self.assertEqual(has_label_en, [True, False])
+        by = {ws["label"]: ws for ws in data["workspaces"]}
+        print(f"[F171 overview paused] {[(k, v['paused'], v['project_status'], v['status_error']) for k, v in by.items()]}")
+        self.assertEqual((by["alpha-probe"]["paused"], by["alpha-probe"]["project_status"]), (False, "active"))
+        self.assertEqual((by["beta-probe"]["paused"], by["beta-probe"]["project_status"]), (True, "paused"))
+        self.assertFalse(by["gamma-probe"]["paused"])
+        self.assertIsNone(by["gamma-probe"]["project_status"])
+        self.assertIn("bogus-status", by["gamma-probe"]["status_error"])
+        # ?workspace=<序号> 与列表同序: 1 = beta-probe(该项目队列里的靶场卡可见, 别的项目不可见)
+        (self.home / "beta-probe" / "5_tasks" / "queue" / "pending" / "beta-1.md").write_text(
+            "---\ntask_id: BETA-1\ntitle: beta card\nstatus: pending\n---\n# BETA-1\n", encoding="utf-8")
+        status, queue1 = _get_json(f"{self.base}/api/queue?workspace=1")
+        self.assertEqual(status, 200)
+        self.assertIn("BETA-1", json.dumps(queue1, ensure_ascii=False))
+        _status, queue0 = _get_json(f"{self.base}/api/queue?workspace=0")
+        self.assertNotIn("BETA-1", json.dumps(queue0, ensure_ascii=False))
 
     def test_error_branch_also_passes_label_en(self) -> None:
-        """
-        AIPOS-288 FIX-6: Error responses (validation failure, exception) also include label_en.
-        
-        This tests the other two assembly points (L147 error, L218 exception) in get_overview.
-        We can't easily trigger the exception branch, but can verify error branch by using
-        an invalid workspace root.
-        """
-        # Create a config with invalid workspace root
-        bad_config = self.repo_root / "bad_config.json"
-        bad_root = self.repo_root / "nonexistent"
-        bad_config.write_text(
-            json.dumps({
-                "workspaces": [
-                    {
-                        "label": "坏工作区",
-                        "label_en": "Bad Workspace",
-                        "root": str(bad_root)
-                    }
-                ]
-            }),
-            encoding="utf-8"
-        )
-        
-        # Restart server with bad config
+        """AIPOS-F171: home 根无已注册项目 = 单工作区(服务进程的工作区根), 与旧缺省一致; board_config.json 照样不读。"""
         self.server.shutdown()
         self.server.server_close()
-        
-        port = _free_port()
-        self.server = ThreadingHTTPServer(
-            ("127.0.0.1", port),
-            make_handler(
-                repo_root=self.repo_root,
-                board_config_path=bad_config,
-                session_store=self._auth_store
-            )
-        )
-        self._thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self._thread.start()
-        self.base = f"http://127.0.0.1:{port}"
-        
-        # Give server time to start
-        import time
-        time.sleep(0.1)
-        
+        empty_home = Path(self.temp_dir.name) / "empty-home"
+        empty_home.mkdir()
+        self._start(empty_home)
         status, data = _get_json(f"{self.base}/api/overview")
-        
         self.assertEqual(status, 200)
-        workspaces = data["workspaces"]
-        self.assertEqual(len(workspaces), 1)
-        
-        ws = workspaces[0]
-        self.assertEqual(ws["status"], "error")
-        self.assertEqual(ws["label"], "坏工作区")
-        self.assertEqual(ws["label_en"], "Bad Workspace")  # Error branch passes label_en
-        self.assertIn("Workspace root does not contain 5_tasks/queue", ws["error"])
+        self.assertEqual(len(data["workspaces"]), 1)
+        ws = data["workspaces"][0]
+        self.assertEqual((ws["label"], ws["root"], ws["status"]), ("Default Workspace", str(self.repo_root), "ok"))
 
 
 if __name__ == "__main__":

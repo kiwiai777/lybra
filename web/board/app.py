@@ -30,22 +30,9 @@ from tools.aipos_cli.task_loader import queue_root_for, queue_state_ref  # noqa:
 REPO_ROOT = code_repo_schema_root()
 
 from tools.aipos_cli.adapter_response import blocked_response
-from tools.aipos_cli.ai_assisted_authoring import (
-    build_authoring_draft,
-    build_live_authoring_draft,
-    confirm_authoring_draft,
-    confirm_live_authoring_draft,
-)
-from tools.aipos_cli.custom_agent_profiles import build_profile_draft, confirm_profile_draft
-from tools.aipos_cli.project_map import get_project_map
 from tools.aipos_cli.verify_bench import get_verify_bench
 from tools.aipos_cli.board_adapter import (
     get_advisor_pending_items,
-    append_orchestration_event,
-    append_planner_iteration,
-    claim_task,
-    create_draft,
-    execute_dry_run,
     get_agents,
     get_context_pack_preview,
     get_drafts,
@@ -63,13 +50,11 @@ from tools.aipos_cli.board_adapter import (
     get_preview,
     get_queue,
     get_records,
+    get_roadmap_view,
     get_task,
     get_validate,
     publish_draft,
-    record_owner_decision,
-    record_owner_verification,
 )
-from tools.aipos_cli.controlled_execute import OWNER_CONFIRMATION_TOKEN
 from tools.aipos_cli.draft_validator import validate_draft_file
 from tools.aipos_cli.draft_writer import publish_draft as backend_publish_draft
 from tools.aipos_cli.state_recovery import build_state_recovery_preview
@@ -91,53 +76,28 @@ from web.board.auth_otc import (
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
-def _load_board_config(config_path: Path | None, repo_root: Path | None) -> list[dict[str, str]]:
-    """Load multi-workspace config from specified path or workspace-local deployment config.
-    
-    AIPOS-272 FIX-3: Config resolution order:
-    1. Explicit --board-config parameter (config_path)
-    2. <repo_root>/.lybra/board_config.json (workspace-local deployment config)
-    3. No config => single-workspace mode (workspace is repo_root itself; empty => wizard)
-    
-    Returns list of {label, root} dicts, or empty list for single-workspace fallback.
-    """
-    # Priority 1: Explicit --board-config parameter
-    if config_path and config_path.exists():
-        try:
-            data = json.loads(config_path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                workspaces = data.get("workspaces", [])
-                if isinstance(workspaces, list):
-                    return workspaces
-        except (json.JSONDecodeError, OSError):
-            pass
-    
-    # Priority 2: Workspace-local deployment config
-    if repo_root:
-        workspace_config = repo_root / ".lybra" / "board_config.json"
-        if workspace_config.exists():
-            try:
-                data = json.loads(workspace_config.read_text(encoding="utf-8"))
-                if isinstance(data, dict):
-                    workspaces = data.get("workspaces", [])
-                    if isinstance(workspaces, list):
-                        return workspaces
-            except (json.JSONDecodeError, OSError):
-                pass
-    
-    # Priority 3: Single-workspace mode (empty list => caller handles fallback)
-    return []
+def _board_workspaces(repo_root: Path | None, home_root: str | Path | None = None) -> list[dict[str, Any]]:
+    """AIPOS-F171 件③(gap #156): 看板项目列表 = home 根已注册项目(owner_inbox.home_projects, 与 Owner 收件箱同一枚举; 序 = 项目名序,
+    ?workspace=<序号> 即此序), 暂停项目(project.json status=paused)标 paused。原 .lybra/board_config.json / --board-config 静态清单
+    退役(文件保留不删, 不再读取)。home 根无已注册项目 = 单工作区(服务进程的工作区根, 与旧缺省一致)。只读。"""
+    from tools.aipos_cli.owner_inbox import home_projects
+
+    workspaces = [
+        {"label": p["name"], "project": p["name"], "root": str(p["root"]), "project_status": p["status"],
+         "paused": p["status"] == "paused", "status_error": p["status_error"]}
+        for p in home_projects(home_root)["projects"]
+    ]
+    if workspaces:
+        return workspaces
+    fallback = repo_root or REPO_ROOT
+    return [{"label": "Default Workspace", "project": None, "root": str(fallback), "project_status": None, "paused": False,
+             "status_error": None}]
 
 
-def get_overview(board_config_path: Path | None = None, repo_root: Path | None = None) -> dict[str, Any]:
-    """Multi-workspace overview aggregation (AIPOS-251, AIPOS-272 FIX-3)."""
-    workspaces_config = _load_board_config(board_config_path, repo_root)
-    
-    # Fallback to single workspace if no config
-    if not workspaces_config:
-        fallback_root = repo_root or REPO_ROOT
-        workspaces_config = [{"label": "Default Workspace", "root": str(fallback_root)}]
-    
+def get_overview(repo_root: Path | None = None, *, home_root: str | Path | None = None) -> dict[str, Any]:
+    """Multi-workspace overview aggregation (AIPOS-251; AIPOS-F171 件③: 项目列表 = home 根推导 _board_workspaces, 暂停项目标注)."""
+    workspaces_config = _board_workspaces(repo_root, home_root)
+
     results = []
     for ws_config in workspaces_config:
         label = ws_config.get("label", "Unnamed")
@@ -149,14 +109,12 @@ def get_overview(board_config_path: Path | None = None, repo_root: Path | None =
             # Validate workspace
             if not has_workspace_queue(root):
                 error_entry = {
+                    **_workspace_identity(ws_config),
                     "label": label,
                     "root": str(root),
                     "status": "error",
                     "error": "Workspace root does not contain 5_tasks/queue"
                 }
-                label_en = ws_config.get("label_en")
-                if label_en:
-                    error_entry["label_en"] = label_en
                 results.append(error_entry)
                 continue
             
@@ -231,6 +189,7 @@ def get_overview(board_config_path: Path | None = None, repo_root: Path | None =
                 }
 
             ok_entry = {
+                **_workspace_identity(ws_config),
                 "label": label,
                 "root": str(root),
                 "status": "ok",
@@ -242,27 +201,28 @@ def get_overview(board_config_path: Path | None = None, repo_root: Path | None =
                 "truth_total": truth_total,
                 "advisor_pending": advisor_pending,
             }
-            label_en = ws_config.get("label_en")
-            if label_en:
-                ok_entry["label_en"] = label_en
             results.append(ok_entry)
             
         except Exception as e:
             exception_entry = {
+                **_workspace_identity(ws_config),
                 "label": label,
                 "root": root_str,
                 "status": "error",
                 "error": str(e)
             }
-            label_en = ws_config.get("label_en")
-            if label_en:
-                exception_entry["label_en"] = label_en
             results.append(exception_entry)
     
     return {
         "ok": True,
         "workspaces": results
     }
+
+
+def _workspace_identity(ws_config: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F171 件③: 总览每项带项目名与推进状态(暂停标注), 取自 _board_workspaces。"""
+    return {"project": ws_config.get("project"), "project_status": ws_config.get("project_status"),
+            "paused": bool(ws_config.get("paused")), "status_error": ws_config.get("status_error")}
 
 
 def _json_bytes(payload: dict[str, Any]) -> bytes:
@@ -280,55 +240,50 @@ def _content_type(path: Path) -> str:
     return "application/octet-stream"
 
 
-def _resolve_workspace_root(params: dict[str, list[str]], fallback_root: Path | None, board_config_path: Path | None) -> Path | None:
-    """Resolve workspace root from query params or fallback to default.
-    
-    AIPOS-252: Multi-workspace API support.
-    AIPOS-272 FIX-3: Use new config resolution.
-    If ?workspace=N is provided, load that workspace from config.
-    Otherwise use fallback_root (single-workspace mode).
-    """
+def _resolve_workspace_root(params: dict[str, list[str]], fallback_root: Path | None, home_root: str | Path | None = None) -> Path | None:
+    """?workspace=<序号> → 该项目治理根(AIPOS-252 多工作区; AIPOS-F171 件③: 序号 = _board_workspaces 的 home 根推导序, 原 board_config
+    静态清单退役)。无参 / 越界 / 非数字 = fallback_root(单工作区)。"""
     workspace_param = params.get('workspace', [])
     if not workspace_param:
         return fallback_root
-    
     try:
         workspace_index = int(workspace_param[0])
-        workspaces_config = _load_board_config(board_config_path, fallback_root)
-        if not workspaces_config or workspace_index >= len(workspaces_config):
-            return fallback_root
-        
-        ws_config = workspaces_config[workspace_index]
-        root_str = ws_config.get('root', '')
-        return Path(root_str).expanduser().resolve()
-    except (ValueError, IndexError, KeyError):
+    except ValueError:
         return fallback_root
+    workspaces = _board_workspaces(fallback_root, home_root)
+    if workspace_index < 0 or workspace_index >= len(workspaces):
+        return fallback_root
+    return Path(str(workspaces[workspace_index]["root"])).expanduser().resolve()
 
 
-def _api_routes(repo_root: Path | None, board_config_path: Path | None = None) -> dict[str, Callable[[dict[str, list[str]]], dict[str, Any]]]:
+def _api_routes(repo_root: Path | None, board_config_path: Path | None = None, *,
+                home_root: str | Path | None = None) -> dict[str, Callable[[dict[str, list[str]]], dict[str, Any]]]:
+    """看板只读 GET 路由表(AIPOS-F171 件③: 写接口全部下线, 无 POST 业务路由表)。board_config_path 已退役(AIPOS-F171: 不再读取, 参数
+    只为旧调用方兼容); 项目列表 = home 根推导(home_root 缺省 = resolve_home_root 同一优先级梯)。"""
     return {
-        "/api/health": lambda params: get_health(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
-        "/api/overview": lambda _params: get_overview(board_config_path=board_config_path, repo_root=repo_root),
-        "/api/runtime-status": partial(_get_runtime_status_route, repo_root=repo_root, board_config_path=board_config_path),
-        "/api/generate/advisor-prompt": partial(_generate_advisor_prompt_route, repo_root=repo_root, board_config_path=board_config_path),
+        "/api/health": lambda params: get_health(repo_root=_resolve_workspace_root(params, repo_root, home_root)),
+        "/api/overview": lambda _params: get_overview(repo_root=repo_root, home_root=home_root),
+        "/api/runtime-status": partial(_get_runtime_status_route, repo_root=repo_root, home_root=home_root),
+        "/api/generate/advisor-prompt": partial(_generate_advisor_prompt_route, repo_root=repo_root, home_root=home_root),
         "/api/lifecycle": partial(_get_lifecycle_route, repo_root=repo_root),
-        "/api/governance": lambda params: get_governance(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
-        "/api/queue": lambda params: get_queue(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
-        "/api/needs-owner": lambda params: get_needs_owner(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
-        "/api/validate": lambda params: get_validate(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
-        "/api/agents": lambda params: get_agents(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
-        "/api/drafts": lambda params: get_drafts(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
-        "/api/records": lambda params: get_records(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
-        "/api/owner-truth": lambda params: get_owner_truth_view(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
-        "/api/project-map": lambda params: get_project_map(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
-        "/api/verify-bench": lambda params: get_verify_bench(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
-        "/api/external-intake/review": lambda params: get_external_intake_review(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
-        "/api/owner-decision-records": lambda params: get_owner_decision_records(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
+        "/api/governance": lambda params: get_governance(repo_root=_resolve_workspace_root(params, repo_root, home_root)),
+        "/api/queue": lambda params: get_queue(repo_root=_resolve_workspace_root(params, repo_root, home_root)),
+        "/api/needs-owner": lambda params: get_needs_owner(repo_root=_resolve_workspace_root(params, repo_root, home_root)),
+        "/api/validate": lambda params: get_validate(repo_root=_resolve_workspace_root(params, repo_root, home_root)),
+        "/api/agents": lambda params: get_agents(repo_root=_resolve_workspace_root(params, repo_root, home_root)),
+        "/api/drafts": lambda params: get_drafts(repo_root=_resolve_workspace_root(params, repo_root, home_root)),
+        "/api/records": lambda params: get_records(repo_root=_resolve_workspace_root(params, repo_root, home_root)),
+        "/api/owner-truth": lambda params: get_owner_truth_view(repo_root=_resolve_workspace_root(params, repo_root, home_root)),
+        # AIPOS-F171 件③: 旧项目地图(读手写 governance/project-map.md, gap #156)下线(文件不删); 项目页里程碑改读路线图声明(只读简版)
+        "/api/roadmap": lambda params: get_roadmap_view(repo_root=_resolve_workspace_root(params, repo_root, home_root)),
+        "/api/verify-bench": lambda params: get_verify_bench(repo_root=_resolve_workspace_root(params, repo_root, home_root)),
+        "/api/external-intake/review": lambda params: get_external_intake_review(repo_root=_resolve_workspace_root(params, repo_root, home_root)),
+        "/api/owner-decision-records": lambda params: get_owner_decision_records(repo_root=_resolve_workspace_root(params, repo_root, home_root)),
         # AIPOS-F168 件①: Owner 待决收件箱(跨 home 根全部已注册项目, CLI `lybra owner inbox` 同一数据; home 根 = 服务进程的 resolve_home_root)
         "/api/owner/inbox": lambda _params: get_owner_inbox(),
         "/api/planner-drafts/review": partial(_get_planner_drafts_review_route, repo_root=repo_root),
         "/api/owner-decisions/review": partial(_get_owner_decisions_review_route, repo_root=repo_root),
-        "/api/orchestration/index": lambda params: get_orchestration_index(repo_root=_resolve_workspace_root(params, repo_root, board_config_path)),
+        "/api/orchestration/index": lambda params: get_orchestration_index(repo_root=_resolve_workspace_root(params, repo_root, home_root)),
         "/api/orchestration-summary": partial(_get_orchestration_summary_route, repo_root=repo_root),
         "/api/orchestration/summary": partial(_get_orchestration_summary_route, repo_root=repo_root),
         "/api/orchestration-timeline": partial(_get_orchestration_timeline_route, repo_root=repo_root),
@@ -337,31 +292,7 @@ def _api_routes(repo_root: Path | None, board_config_path: Path | None = None) -
         "/api/context-pack/preview": partial(_get_context_pack_preview_route, repo_root=repo_root),
         "/api/task": partial(_get_task_route, repo_root=repo_root),
         "/api/preview": partial(_get_preview_route, repo_root=repo_root),
-        "/api/markdown-source": partial(_get_markdown_source_route, repo_root=repo_root, board_config_path=board_config_path),
-    }
-
-
-def _api_post_routes(repo_root: Path | None) -> dict[str, Callable[[dict[str, Any]], dict[str, Any]]]:
-    return {
-        "/api/project-structure/preview": partial(_project_structure_preview_route, repo_root=repo_root),
-        "/api/project-structure/import": partial(_project_structure_import_route, repo_root=repo_root),
-        "/api/parent-requirement/preview": partial(_parent_requirement_preview_route, repo_root=repo_root),
-        "/api/planner-tick/preview": partial(_planner_tick_preview_route, repo_root=repo_root),
-        "/api/planner-tick/manual-flow/preview": partial(_planner_tick_manual_flow_preview_route, repo_root=repo_root),
-        "/api/planner-draft/review": partial(_planner_draft_review_route, repo_root=repo_root),
-        "/api/forum-event/review": partial(_forum_event_review_route, repo_root=repo_root),
-        "/api/owner-decision/resolve/review": partial(_owner_decision_resolution_review_route, repo_root=repo_root),
-        "/api/planner-draft/publish/dry-run": partial(_planner_draft_publish_dry_run_route, repo_root=repo_root),
-        "/api/ai-author/preview": partial(_ai_author_preview_route, repo_root=repo_root),
-        "/api/ai-author/confirm": partial(_ai_author_confirm_route, repo_root=repo_root),
-        "/api/ai-author/live/preview": partial(_ai_author_live_preview_route, repo_root=repo_root),
-        "/api/ai-author/live/confirm": partial(_ai_author_live_confirm_route, repo_root=repo_root),
-        "/api/agent-profile/draft": partial(_agent_profile_draft_route, repo_root=repo_root),
-        "/api/agent-profile/confirm": partial(_agent_profile_confirm_route, repo_root=repo_root),
-        "/api/execute/dry-run": partial(_execute_dry_run_route, repo_root=repo_root),
-        "/api/execute/confirm": partial(_execute_confirm_route, repo_root=repo_root),
-        "/api/verify/approve": partial(_owner_verification_approve_route, repo_root=repo_root),
-        "/api/verify/reject": partial(_owner_verification_reject_route, repo_root=repo_root),
+        "/api/markdown-source": partial(_get_markdown_source_route, repo_root=repo_root, home_root=home_root),
     }
 
 
@@ -381,21 +312,6 @@ def _selector_error(operation: str, message: str) -> dict[str, Any]:
         message=message,
         safety_notice="Local read-only web UI route. No files are written.",
     )
-
-
-def _execute_error(operation: str, message: str, *, category: str = "VALIDATION_ERROR") -> dict[str, Any]:
-    return blocked_response(
-        operation=operation,
-        dry_run=True,
-        category=category,
-        message=message,
-        safety_notice="Local controlled execute UI route. Writes require dry-run token revalidation.",
-    )
-
-
-def _slug(value: str) -> str:
-    text = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
-    return re.sub(r"-{2,}", "-", text) or "requirement"
 
 
 def _utc_now() -> str:
@@ -458,7 +374,6 @@ def _load_connection_endpoints(repo_root: Path) -> dict[str, Any]:
             "board_url": None,
             "connection_notice": f"Failed to parse connection.json: {exc}",
         }
-
 
 
 def _capability_status(raw: str) -> dict[str, Any]:
@@ -993,9 +908,10 @@ def _generate_text(template_key: str, locale: str, **variables: Any) -> str:
     return template.format(**variables)
 
 
-def _get_runtime_status_route(params: dict[str, list[str]], *, repo_root: Path | None, board_config_path: Path | None = None) -> dict[str, Any]:
+def _get_runtime_status_route(params: dict[str, list[str]], *, repo_root: Path | None, home_root: str | Path | None = None,
+                              board_config_path: Path | None = None) -> dict[str, Any]:
     operation = "get_runtime_status"
-    resolved_root = _resolve_workspace_root(params, repo_root or REPO_ROOT, board_config_path)
+    resolved_root = _resolve_workspace_root(params, repo_root or REPO_ROOT, home_root)  # AIPOS-F171: board_config_path 退役不读
     if resolved_root is None:
         resolved_root = (repo_root or REPO_ROOT).resolve()
     else:
@@ -1115,7 +1031,8 @@ def _get_runtime_status_route(params: dict[str, list[str]], *, repo_root: Path |
     }
 
 
-def _generate_advisor_prompt_route(params: dict[str, list[str]], *, repo_root: Path | None, board_config_path: Path | None = None) -> dict[str, Any]:
+def _generate_advisor_prompt_route(params: dict[str, list[str]], *, repo_root: Path | None, home_root: str | Path | None = None,
+                                  board_config_path: Path | None = None) -> dict[str, Any]:
     """
     AIPOS-286 FIX-2: Server-side advisor prompt generation with locale support.
     
@@ -1127,25 +1044,20 @@ def _generate_advisor_prompt_route(params: dict[str, list[str]], *, repo_root: P
     if locale not in ("zh", "en"):
         locale = "zh"
     
-    resolved_root = _resolve_workspace_root(params, repo_root or REPO_ROOT, board_config_path)
+    resolved_root = _resolve_workspace_root(params, repo_root or REPO_ROOT, home_root)  # AIPOS-F171: board_config_path 退役不读
     if resolved_root is None:
         resolved_root = (repo_root or REPO_ROOT).resolve()
     else:
         resolved_root = resolved_root.resolve()
     
-    # Load workspace label
+    # Load workspace label(AIPOS-F171 件③: 取 home 根推导的项目名, 原 board_config 静态清单退役)
     workspace_label = "unnamed workspace"
-    if board_config_path and board_config_path.exists():
-        try:
-            config_data = json.loads(board_config_path.read_text(encoding="utf-8"))
-            workspaces = config_data.get("workspaces", [])
-            workspace_param = _first_param(params, "workspace")
-            if workspace_param and workspace_param.isdigit():
-                idx = int(workspace_param)
-                if 0 <= idx < len(workspaces):
-                    workspace_label = workspaces[idx].get("label", "unnamed workspace")
-        except Exception:
-            pass
+    workspace_param = _first_param(params, "workspace")
+    if workspace_param and workspace_param.isdigit():
+        workspaces = _board_workspaces(repo_root, home_root)
+        idx = int(workspace_param)
+        if 0 <= idx < len(workspaces):
+            workspace_label = str(workspaces[idx].get("label") or workspace_label)
     
     # AIPOS-F106 件①: 门基址唯一推导口(confirm_client.resolve_gate_base_url → ConnectionResolver.resolve_gate_url, 声明序
     # config.schema identity_resolution.keys.gate_url: 工作区 connection.json mcp.rpc_url → env 兜底 → urls.gate_local); 原本地剥 MCP 路径删除
@@ -1193,49 +1105,6 @@ def _generate_advisor_prompt_route(params: dict[str, list[str]], *, repo_root: P
     }
 
 
-def _parent_requirement_error(message: str) -> dict[str, Any]:
-    return blocked_response(
-        operation="parent_requirement_preview",
-        dry_run=True,
-        category="VALIDATION_ERROR",
-        message=message,
-        safety_notice="Local parent requirement preview route. No files are written.",
-    )
-
-
-PLANNER_TICK_VERDICTS = {
-    "continue",
-    "draft_subtasks",
-    "publish_ready",
-    "wait_for_audit",
-    "repair",
-    "needs_owner",
-    "blocked",
-    "complete",
-    "cancel",
-    "failed",
-}
-
-
-def _planner_tick_error(message: str) -> dict[str, Any]:
-    return blocked_response(
-        operation="planner_tick_preview",
-        dry_run=True,
-        category="VALIDATION_ERROR",
-        message=message,
-        safety_notice="Local planner tick preview route. No files are written.",
-    )
-
-
-def _list_from_payload(payload: dict[str, Any], name: str) -> list[str]:
-    value = payload.get(name)
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    if value is None:
-        return []
-    return [line.strip() for line in str(value).splitlines() if line.strip()]
-
-
 def _as_bool(value: Any) -> bool:
     if isinstance(value, bool):
         return value
@@ -1279,70 +1148,8 @@ PLANNER_DRAFT_REQUIRED_FIELDS = [
 ]
 
 
-def _planner_draft_error(message: str) -> dict[str, Any]:
-    return blocked_response(
-        operation="planner_draft_review",
-        dry_run=True,
-        category="VALIDATION_ERROR",
-        message=message,
-        safety_notice="Local planner draft review route. No files are written.",
-    )
-
-
 def _is_missing_metadata(metadata: dict[str, Any], field: str) -> bool:
     return metadata.get(field) in (None, "", [])
-
-
-ORCHESTRATION_EVENT_TYPES = {
-    "orchestration_created",
-    "planner_assigned",
-    "planner_tick_started",
-    "planner_tick_completed",
-    "planner_paused",
-    "planner_resumed",
-    "planner_verdict_recorded",
-    "subtask_created",
-    "subtask_draft_proposed",
-    "subtask_publish_ready",
-    "subtask_claimed",
-    "subtask_completed",
-    "subtask_blocked",
-    "review_submitted",
-    "repair_requested",
-    "quota_warning",
-    "quota_exhausted",
-    "runtime_unavailable",
-    "needs_owner_raised",
-    "owner_decision_recorded",
-    "audit_handoff_requested",
-    "handoff_recommended",
-    "handoff_approved",
-    "orchestration_completed",
-    "orchestration_cancelled",
-    "orchestration_failed",
-}
-
-ORCHESTRATION_EVENT_SEVERITIES = {"info", "warning", "needs_owner", "blocking"}
-ORCHESTRATION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-
-
-def _forum_event_error(message: str) -> dict[str, Any]:
-    return blocked_response(
-        operation="forum_event_persistence_review",
-        dry_run=True,
-        category="VALIDATION_ERROR",
-        message=message,
-        safety_notice="Local forum event persistence review route. No files are written.",
-    )
-
-
-def _safe_orchestration_id(value: str) -> bool:
-    if not value or value in {".", ".."}:
-        return False
-    if "/" in value or "\\" in value or ".." in value:
-        return False
-    return bool(ORCHESTRATION_ID_PATTERN.fullmatch(value))
-
 
 
 OWNER_DECISION_TYPE_KEYWORDS = {
@@ -1650,932 +1457,6 @@ def _get_planner_drafts_review_route(_params: dict[str, list[str]], *, repo_root
     }
 
 
-def _forum_event_review_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    del repo_root
-    orchestration_id = str(payload.get("orchestration_id") or "").strip()
-    event_type = str(payload.get("event_type") or "").strip()
-    severity = str(payload.get("severity") or "info").strip()
-    actor = str(payload.get("actor") or "").strip()
-    source = str(payload.get("source") or "web_board_forum_event_review").strip()
-    summary = str(payload.get("summary") or "").strip()
-    forum_thread_ref = str(payload.get("forum_thread_ref") or "").strip()
-    timestamp = str(payload.get("timestamp") or "").strip() or _utc_now()
-    related_task_id = str(payload.get("related_task_id") or "").strip() or None
-    related_subtask_id = str(payload.get("related_subtask_id") or "").strip() or None
-    related_iteration_id = str(payload.get("related_iteration_id") or "").strip() or None
-    details_text = str(payload.get("details") or "").strip()
-    refs = _list_from_payload(payload, "refs")
-    blocking_reasons: list[str] = []
-    warnings: list[str] = []
-    needs_owner_reasons: list[str] = []
-    preconditions: list[dict[str, Any]] = []
-
-    def add_check(name: str, passed: bool, detail: str, severity_level: str = "block") -> None:
-        preconditions.append({"name": name, "passed": passed, "severity": severity_level, "detail": detail})
-        if passed:
-            return
-        if severity_level == "needs_owner":
-            if detail not in needs_owner_reasons:
-                needs_owner_reasons.append(detail)
-        elif severity_level == "warn":
-            if detail not in warnings:
-                warnings.append(detail)
-        elif detail not in blocking_reasons:
-            blocking_reasons.append(detail)
-
-    add_check("orchestration_id_present", bool(orchestration_id), "orchestration_id is required")
-    add_check("orchestration_id_path_safe", _safe_orchestration_id(orchestration_id), "orchestration_id must be path-safe")
-    add_check("event_type_allowed", event_type in ORCHESTRATION_EVENT_TYPES, "event_type must be allowed by orchestration_event_log_schema.md")
-    add_check("severity_allowed", severity in ORCHESTRATION_EVENT_SEVERITIES, "severity must be info, warning, needs_owner, or blocking")
-    add_check("actor_present", bool(actor), "actor is required")
-    add_check("source_present", bool(source), "source is required")
-    add_check("summary_present", bool(summary), "summary is required")
-    add_check("forum_ref_present", bool(forum_thread_ref), "forum_thread_ref is required")
-
-    if forum_thread_ref and forum_thread_ref not in refs:
-        refs.insert(0, forum_thread_ref)
-
-    owner_gate_event = event_type in {"needs_owner_raised", "owner_decision_recorded"} or severity == "needs_owner"
-    if event_type == "owner_decision_recorded":
-        has_owner_ref = any("owner" in ref.lower() or "decision" in ref.lower() for ref in refs)
-        add_check(
-            "owner_decision_evidence_ref",
-            has_owner_ref,
-            "owner_decision_recorded requires an Owner decision evidence ref",
-        )
-    if owner_gate_event:
-        add_check(
-            "owner_gate_preserved",
-            event_type != "owner_decision_recorded" or not blocking_reasons,
-            "Owner gate events must preserve or reference explicit Owner decision evidence",
-            severity_level="needs_owner",
-        )
-
-    event_id = str(payload.get("event_id") or "").strip()
-    if not event_id and orchestration_id and event_type:
-        event_id = f"evt_{_slug(orchestration_id)}_{_slug(event_type)}_{timestamp[:10].replace('-', '')}"
-    target_path = f"5_tasks/orchestration/{orchestration_id}/orchestration_events.md" if orchestration_id else None
-    event_entry = {
-        "event_id": event_id or None,
-        "orchestration_id": orchestration_id or None,
-        "event_type": event_type or None,
-        "timestamp": timestamp,
-        "actor": actor or None,
-        "source": source or None,
-        "related_task_id": related_task_id,
-        "related_subtask_id": related_subtask_id,
-        "related_iteration_id": related_iteration_id,
-        "severity": severity,
-        "summary": summary or None,
-        "details": {"text": details_text} if details_text else {},
-        "refs": refs,
-    }
-    append_plan = {
-        "target_path": target_path,
-        "append_only": True,
-        "operation": "future_append_orchestration_event",
-        "planned_writes": [
-            {
-                "path": target_path,
-                "kind": "append",
-                "type": "orchestration_event_entry",
-            }
-        ] if target_path and not blocking_reasons else [],
-    }
-    review_passed = not blocking_reasons
-    verdict = "BLOCK" if blocking_reasons else ("NEEDS_OWNER" if needs_owner_reasons else ("WARN" if warnings else "PASS"))
-    return {
-        "ok": review_passed,
-        "verdict": verdict,
-        "operation": "forum_event_persistence_review",
-        "dry_run": True,
-        "actor": {"actor": actor} if actor else None,
-        "data": {
-            "event_entry": event_entry,
-            "append_plan": append_plan,
-            "preconditions": preconditions,
-            "writer_review_only": True,
-            "writes_enabled": False,
-            "forum_backend_enabled": False,
-            "network_posting_enabled": False,
-            "controlled_execute_expanded": False,
-            "handoff_to_future_writer": {
-                "enabled": review_passed,
-                "next_operation": "append_only_orchestration_event_writer",
-                "requires_future_audit": True,
-            },
-        },
-        "summary": {
-            "orchestration_id": orchestration_id,
-            "event_type": event_type,
-            "severity": severity,
-            "target_path": target_path,
-            "writer_review_passed": review_passed,
-            "preconditions_total": len(preconditions),
-            "preconditions_passed": sum(1 for item in preconditions if item.get("passed")),
-        },
-        "planned_writes": [],
-        "planned_moves": [],
-        "warnings": warnings,
-        "blocking_reasons": blocking_reasons,
-        "needs_owner_reasons": needs_owner_reasons,
-        "execute_allowed": False,
-        "execute_blocking_reasons": ["AIPOS-63 forum event persistence review is review-only; AIPOS-64 must implement any writer."],
-        "safety_notice": "Local forum event persistence review route. No files are written.",
-        "errors": [],
-    }
-
-
-
-
-def _owner_decision_resolution_review_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    request_id = str(payload.get("request_id") or "").strip()
-    decision = str(payload.get("decision") or "").strip()
-    decision_reason = str(payload.get("decision_reason") or "").strip()
-    actor = str(payload.get("actor") or "").strip()
-    evidence_ref = str(payload.get("evidence_ref") or "").strip()
-    orchestration_id = str(payload.get("orchestration_id") or "").strip()
-    forum_thread_ref = str(payload.get("forum_thread_ref") or "").strip()
-    decision_type = str(payload.get("decision_type") or "owner_review").strip()
-    related_task_id = str(payload.get("related_task_id") or "").strip()
-    related_iteration_id = str(payload.get("related_iteration_id") or "").strip()
-    allowed_decisions = {"approved", "rejected", "scope_reduced", "needs_revision", "deferred"}
-    blocking_reasons: list[str] = []
-    if not request_id:
-        blocking_reasons.append("request_id is required")
-    if decision not in allowed_decisions:
-        blocking_reasons.append("decision must be approved, rejected, scope_reduced, needs_revision, or deferred")
-    if not decision_reason:
-        blocking_reasons.append("decision_reason is required")
-    if not actor:
-        blocking_reasons.append("actor is required")
-    if not evidence_ref:
-        blocking_reasons.append("evidence_ref is required")
-    if not orchestration_id:
-        blocking_reasons.append("orchestration_id is required")
-    if not forum_thread_ref:
-        blocking_reasons.append("forum_thread_ref is required")
-    if blocking_reasons:
-        return {
-            "ok": False,
-            "verdict": "BLOCK",
-            "operation": "owner_decision_resolution_review",
-            "dry_run": True,
-            "data": {
-                "resolution_review_only": True,
-                "writes_enabled": False,
-                "decision_persistence_enabled": False,
-            },
-            "summary": {"request_id": request_id, "decision": decision, "writes_enabled": False},
-            "planned_writes": [],
-            "planned_moves": [],
-            "warnings": [],
-            "blocking_reasons": blocking_reasons,
-            "needs_owner_reasons": [],
-            "execute_allowed": False,
-            "execute_blocking_reasons": ["AIPOS-76 Owner decision resolution review is preview-only."],
-            "dry_run_token": None,
-            "safety_notice": "Owner decision resolution review only. No files are written and no decisions are persisted.",
-            "errors": [],
-        }
-    details = {
-        "request_id": request_id,
-        "decision": decision,
-        "decision_type": decision_type,
-        "decision_reason": decision_reason,
-        "resolution_scope": "review_only",
-    }
-    review = _forum_event_review_route(
-        {
-            "orchestration_id": orchestration_id,
-            "event_type": "owner_decision_recorded",
-            "severity": "info",
-            "actor": actor,
-            "source": "web_board_owner_decision_resolution_review",
-            "forum_thread_ref": forum_thread_ref,
-            "related_task_id": related_task_id,
-            "related_iteration_id": related_iteration_id,
-            "summary": f"Owner decision {decision} for {request_id}: {decision_reason}",
-            "details": json.dumps(details, ensure_ascii=False, sort_keys=True),
-            "refs": [forum_thread_ref, evidence_ref, f"owner_decision:{request_id}"],
-        },
-        repo_root=repo_root,
-    )
-    data = dict(review.get("data") or {})
-    data.update(
-        {
-            "resolution_request": {
-                "request_id": request_id,
-                "decision": decision,
-                "decision_type": decision_type,
-                "decision_reason": decision_reason,
-                "evidence_ref": evidence_ref,
-            },
-            "resolution_review_only": True,
-            "decision_persistence_enabled": False,
-            "controlled_mutation_allowed": False,
-            "writes_enabled": False,
-        }
-    )
-    return {
-        **review,
-        "operation": "owner_decision_resolution_review",
-        "data": data,
-        "summary": {
-            **dict(review.get("summary") or {}),
-            "request_id": request_id,
-            "decision": decision,
-            "decision_type": decision_type,
-            "writer_review_passed": review.get("verdict") == "PASS",
-            "writes_enabled": False,
-        },
-        "planned_writes": [],
-        "planned_moves": [],
-        "execute_allowed": False,
-        "execute_blocking_reasons": ["AIPOS-76 previews Owner decision resolution only; persistence remains a future controlled gate."],
-        "dry_run_token": None,
-        "safety_notice": "Owner decision resolution review only. No files are written, no forum backend is posted, and no decision is persisted.",
-    }
-
-
-def _planner_draft_publish_dry_run_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    path = str(payload.get("path") or "").strip()
-    actor = str(payload.get("actor") or "").strip()
-    if not actor:
-        return _execute_error("planner_draft_publish", "actor is required")
-    if not path:
-        return _execute_error("planner_draft_publish", "path is required")
-
-    review = _planner_draft_review_route({"path": path, "actor": actor}, repo_root=repo_root)
-    review_data = dict(review.get("data") or {})
-    review_summary = dict(review.get("summary") or {})
-    if review.get("verdict") != "PASS" or not review_summary.get("publish_eligible"):
-        return {
-            "ok": False,
-            "verdict": "NEEDS_OWNER" if review.get("verdict") == "NEEDS_OWNER" else "BLOCK",
-            "operation": "planner_draft_publish",
-            "dry_run": True,
-            "actor": {"actor": actor},
-            "data": {
-                "path": path,
-                "planner_review": review_data,
-                "owner_decision_gate": {"clear": False, "decision_requests": []},
-                "writes_enabled": False,
-                "controlled_execute_operation": "draft_publish",
-            },
-            "summary": {"path": path, "publish_eligible": False, "owner_gate_clear": False},
-            "planned_writes": [],
-            "planned_moves": [],
-            "warnings": list(review.get("warnings", [])),
-            "blocking_reasons": list(review.get("blocking_reasons", [])),
-            "needs_owner_reasons": list(review.get("needs_owner_reasons", [])),
-            "owner_confirmation_required": bool(review.get("needs_owner_reasons")),
-            "owner_confirmation_reasons": list(review.get("needs_owner_reasons", [])),
-            "execute_allowed": False,
-            "execute_blocking_reasons": ["Planner draft is not approved for controlled publish."],
-            "dry_run_token": None,
-            "safety_notice": "Planner draft publish wrapper did not create a dry-run token because preconditions failed.",
-            "errors": [],
-        }
-
-    metadata = dict(review_data.get("frontmatter") or {})
-    task_id = str(review_summary.get("task_id") or metadata.get("task_id") or "").strip()
-    orchestration_id = str(metadata.get("orchestration_id") or "").strip()
-    owner_gate = _get_owner_decisions_review_route({}, repo_root=repo_root)
-    related_requests = []
-    for request in owner_gate.get("data", {}).get("decision_requests", []) or []:
-        request_task = str(request.get("related_task_id") or "").strip()
-        request_orch = str(request.get("related_orchestration_id") or "").strip()
-        if (task_id and request_task == task_id) or (orchestration_id and request_orch == orchestration_id):
-            related_requests.append(request)
-    if related_requests:
-        reasons = [str(item.get("summary") or item.get("title") or item.get("request_id")) for item in related_requests]
-        return {
-            "ok": False,
-            "verdict": "NEEDS_OWNER",
-            "operation": "planner_draft_publish",
-            "dry_run": True,
-            "actor": {"actor": actor},
-            "data": {
-                "path": path,
-                "planner_review": review_data,
-                "owner_decision_gate": {"clear": False, "decision_requests": related_requests},
-                "writes_enabled": False,
-                "controlled_execute_operation": "draft_publish",
-            },
-            "summary": {"path": path, "task_id": task_id, "publish_eligible": False, "owner_gate_clear": False},
-            "planned_writes": [],
-            "planned_moves": [],
-            "warnings": list(owner_gate.get("warnings", [])),
-            "blocking_reasons": [],
-            "needs_owner_reasons": reasons,
-            "owner_confirmation_required": True,
-            "owner_confirmation_reasons": reasons,
-            "execute_allowed": False,
-            "execute_blocking_reasons": ["Related Owner decision gate is still open."],
-            "dry_run_token": None,
-            "safety_notice": "Planner draft publish wrapper blocked publish because an Owner decision gate is open.",
-            "errors": [],
-        }
-
-    dry_run = publish_draft(path=path, dry_run=True, repo_root=repo_root, actor=actor)
-    dry_data = dict(dry_run.get("data") or {})
-    dry_data.update(
-        {
-            "planner_review_summary": review_summary,
-            "owner_decision_gate": {"clear": True, "decision_requests": []},
-            "controlled_execute_operation": "draft_publish",
-            "second_confirmation_required": True,
-        }
-    )
-    dry_run["operation"] = "planner_draft_publish"
-    dry_run["data"] = dry_data
-    dry_run["summary"] = {
-        **dict(dry_run.get("summary") or {}),
-        "task_id": task_id,
-        "path": path,
-        "publish_eligible": True,
-        "owner_gate_clear": True,
-        "second_confirmation_required": True,
-    }
-    dry_run["execute_blocking_reasons"] = list(dry_run.get("execute_blocking_reasons", []))
-    dry_run["safety_notice"] = "Planner draft publish uses existing controlled draft_publish dry-run token and still requires explicit confirmation."
-    return dry_run
-
-
-def _planner_draft_review_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    path = str(payload.get("path") or "").strip()
-    actor = str(payload.get("actor") or "").strip() or None
-    if not path:
-        return _planner_draft_error("path is required")
-    resolved_root = (repo_root or REPO_ROOT).resolve()
-    try:
-        validation = validate_draft_file(resolved_root, path)
-        publish_preview = backend_publish_draft(resolved_root, path, dry_run=True)
-    except Exception as exc:
-        return _planner_draft_error(str(exc) or exc.__class__.__name__)
-
-    metadata = dict(validation.get("frontmatter") or {})
-    blocking_reasons = list(validation.get("blocking_reasons", []))
-    warnings = list(validation.get("warnings", []))
-    needs_owner_reasons: list[str] = []
-    preconditions: list[dict[str, Any]] = []
-
-    def add_check(name: str, passed: bool, detail: str, severity: str = "block") -> None:
-        preconditions.append({"name": name, "passed": passed, "severity": severity, "detail": detail})
-        if passed:
-            return
-        if severity == "needs_owner":
-            if detail not in needs_owner_reasons:
-                needs_owner_reasons.append(detail)
-        elif severity == "warn":
-            if detail not in warnings:
-                warnings.append(detail)
-        elif detail not in blocking_reasons:
-            blocking_reasons.append(detail)
-
-    planner_created = (
-        str(metadata.get("draft_source") or "").strip() == "planner"
-        or _as_bool(metadata.get("created_by_planner"))
-        or "/planner/" in path
-    )
-    add_check(
-        "planner_created_draft",
-        planner_created,
-        "Draft must be marked as planner-created for Planner Draft Review.",
-    )
-
-    missing_fields = [field for field in PLANNER_DRAFT_REQUIRED_FIELDS if _is_missing_metadata(metadata, field)]
-    add_check(
-        "required_planner_metadata",
-        not missing_fields,
-        "Missing planner draft metadata: " + ", ".join(missing_fields),
-    )
-
-    planner_tier = str(metadata.get("planner_model_tier") or "").strip().upper()
-    add_check(
-        "planner_model_tier",
-        planner_tier in {"L3", "L4"},
-        "planner_model_tier must be L3 or L4.",
-    )
-
-    publish_status = str(metadata.get("publish_status") or "").strip()
-    draft_status = str(metadata.get("draft_status") or "").strip()
-    add_check(
-        "publish_status_approved",
-        publish_status == "approved_for_publish",
-        "publish_status must be approved_for_publish before planner draft publish.",
-        severity="needs_owner",
-    )
-    add_check(
-        "draft_not_rejected_or_superseded",
-        draft_status not in {"rejected", "superseded", "blocked"} and publish_status not in {"rejected", "superseded", "blocked"},
-        "Draft is rejected, superseded, or blocked.",
-    )
-    add_check(
-        "owner_gate_clear",
-        draft_status != "needs_owner" and publish_status != "needs_owner" and not _as_bool(metadata.get("needs_owner")),
-        "Draft has a pending Owner decision gate.",
-        severity="needs_owner",
-    )
-
-    planner_agent = str(metadata.get("planner_agent") or "").strip()
-    reviewer = str(metadata.get("reviewer") or "").strip()
-    audit_by = str(metadata.get("audit_by") or "").strip()
-    add_check("reviewer_explicit", bool(reviewer), "reviewer is required for planner-created drafts.")
-    add_check("audit_by_explicit", bool(audit_by), "audit_by is required for planner-created drafts.")
-    add_check(
-        "planner_not_reviewer",
-        bool(planner_agent and reviewer and planner_agent != reviewer),
-        "planner_agent must not review its own planned work.",
-    )
-    add_check(
-        "planner_not_auditor",
-        bool(planner_agent and audit_by and planner_agent != audit_by),
-        "planner_agent must not audit its own planned work.",
-    )
-    # AIPOS-F89 item1 M8: queue root read from the project declaration (task_loader.queue_state_ref)
-    pending_ref = queue_state_ref(resolved_root, "pending")
-    add_check(
-        "publish_target_pending_queue",
-        str(metadata.get("publish_target") or metadata.get("draft_publish_target") or "").strip() == pending_ref,
-        f"publish target must be {pending_ref}.",
-    )
-
-    publish_blocking = list(publish_preview.get("blocking_reasons", []))
-    publish_warnings = list(publish_preview.get("warnings", []))
-    classification_warnings = list(validation.get("classification_warnings", [])) + list(
-        publish_preview.get("classification_warnings", [])
-    )
-    add_check(
-        "controlled_publish_dry_run_compatible",
-        str(publish_preview.get("verdict")) != "BLOCK",
-        "Existing draft_publish dry-run blocks this draft: " + "; ".join(publish_blocking),
-    )
-    for warning in publish_warnings:
-        if warning not in warnings:
-            warnings.append(warning)
-
-    publish_eligible = not blocking_reasons and not needs_owner_reasons
-    verdict_warnings = [warning for warning in warnings if warning not in classification_warnings]
-    verdict = "BLOCK" if blocking_reasons else ("NEEDS_OWNER" if needs_owner_reasons else ("WARN" if verdict_warnings else "PASS"))
-    return {
-        "ok": verdict != "BLOCK",
-        "verdict": verdict,
-        "operation": "planner_draft_review",
-        "dry_run": True,
-        "actor": {"actor": actor} if actor else None,
-        "data": {
-            "path": validation.get("path"),
-            "task_id": validation.get("task_id"),
-            "frontmatter": metadata,
-            "planner_created": planner_created,
-            "preconditions": preconditions,
-            "publish_preview": {
-                "operation": "draft_publish",
-                "source_path": publish_preview.get("source_path"),
-                "target_path": publish_preview.get("target_path"),
-                "task_id": publish_preview.get("task_id"),
-                "verdict": publish_preview.get("verdict"),
-                "would_write": publish_preview.get("would_write", False),
-                "planned_writes": publish_preview.get("planned_writes", []),
-                "blocking_reasons": publish_blocking,
-                "warnings": publish_warnings,
-                "classification_warnings": classification_warnings,
-            },
-            "handoff_to_draft_publish": {
-                "enabled": publish_eligible,
-                "path": validation.get("path"),
-                "next_operation": "draft_publish",
-                "next_action": "Run the existing Draft Publish dry-run, then confirm through the controlled execute path.",
-            },
-            "writes_enabled": False,
-            "review_only": True,
-            "controlled_execute_expanded": False,
-        },
-        "summary": {
-            "task_id": validation.get("task_id"),
-            "path": validation.get("path"),
-            "publish_eligible": publish_eligible,
-            "preconditions_total": len(preconditions),
-            "preconditions_passed": sum(1 for item in preconditions if item.get("passed")),
-        },
-        "planned_writes": [],
-        "planned_moves": [],
-        "warnings": warnings,
-        "blocking_reasons": blocking_reasons,
-        "needs_owner_reasons": needs_owner_reasons,
-        "execute_allowed": False,
-        "execute_blocking_reasons": ["AIPOS-61 planner draft review is review-only; publish must use existing draft_publish dry-run and confirm."],
-        "safety_notice": "Local planner draft review route. No files are written.",
-        "errors": [],
-    }
-
-
-def _planner_tick_preview_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    del repo_root
-    orchestration_id = str(payload.get("orchestration_id") or "").strip()
-    parent_task_id = str(payload.get("parent_task_id") or "").strip()
-    forum_thread_ref = str(payload.get("forum_thread_ref") or "").strip()
-    planner_agent = str(payload.get("planner_agent") or "planner_agent").strip() or "planner_agent"
-    planner_agent_instance = str(payload.get("planner_agent_instance") or "planner.local.001").strip() or "planner.local.001"
-    planner_model_tier = str(payload.get("planner_model_tier") or "L3").strip().upper()
-    decision = str(payload.get("decision") or "").strip()
-    decision_reason = str(payload.get("decision_reason") or "").strip()
-    next_expected_action = str(payload.get("next_expected_action") or "").strip()
-    combined_planner_executor = bool(payload.get("combined_planner_executor", False))
-    try:
-        iteration_number = int(str(payload.get("iteration_number") or "1").strip())
-    except ValueError:
-        return _planner_tick_error("iteration_number must be an integer")
-    if not orchestration_id:
-        return _planner_tick_error("orchestration_id is required")
-    if not parent_task_id:
-        return _planner_tick_error("parent_task_id is required")
-    if not forum_thread_ref:
-        return _planner_tick_error("forum_thread_ref is required")
-    if planner_model_tier not in {"L3", "L4"}:
-        return _planner_tick_error("planner_model_tier must be L3 or L4")
-    if iteration_number < 1:
-        return _planner_tick_error("iteration_number must be greater than zero")
-    if decision not in PLANNER_TICK_VERDICTS:
-        return _planner_tick_error("decision must be an AIPOS-54 planner tick verdict")
-    if not decision_reason:
-        return _planner_tick_error("decision_reason is required")
-    if not next_expected_action:
-        return _planner_tick_error("next_expected_action is required")
-
-    timestamp = _utc_now()
-    iteration_id = f"iter_{timestamp[:10].replace('-', '')}_{_slug(orchestration_id)}_{iteration_number:03d}"
-    inputs_read = _list_from_payload(payload, "inputs_read")
-    observations = _list_from_payload(payload, "observations")
-    needs_owner_reasons = _list_from_payload(payload, "needs_owner_reasons")
-    publish_candidates = _list_from_payload(payload, "publish_candidates")
-    repair_recommendations = _list_from_payload(payload, "repair_recommendations")
-    stop_condition_hits = _list_from_payload(payload, "stop_condition_hits")
-    subtask_drafts_proposed = _list_from_payload(payload, "subtask_drafts_proposed")
-    audit_handoff_needed = decision == "wait_for_audit" or bool(payload.get("audit_handoff_needed", False))
-    owner_decision_required = decision == "needs_owner" or bool(needs_owner_reasons)
-    severity = "needs_owner" if owner_decision_required else "blocking" if decision in {"blocked", "failed"} else "info"
-    planner_iteration = {
-        "iteration_id": iteration_id,
-        "orchestration_id": orchestration_id,
-        "iteration_number": iteration_number,
-        "planner_agent": planner_agent,
-        "planner_agent_instance": planner_agent_instance,
-        "planner_model_tier": planner_model_tier,
-        "started_at": timestamp,
-        "ended_at": timestamp,
-        "input_refs": inputs_read,
-        "observed_queue_state": str(payload.get("observed_queue_state") or "not_observed_in_preview").strip(),
-        "observed_subtask_summary": observations,
-        "decisions": [
-            {
-                "decision": decision,
-                "reason": decision_reason,
-                "owner_decision_required": owner_decision_required,
-            }
-        ],
-        "created_subtasks": subtask_drafts_proposed,
-        "updated_recommendations": repair_recommendations,
-        "failure_observations": _list_from_payload(payload, "failure_observations"),
-        "quota_observations": _list_from_payload(payload, "quota_observations"),
-        "needs_owner_reasons": needs_owner_reasons,
-        "next_check_after": str(payload.get("next_check_after") or "").strip() or None,
-        "verdict": decision,
-    }
-    visible_report = {
-        "planner_iteration_id": iteration_id,
-        "orchestration_id": orchestration_id,
-        "parent_task_id": parent_task_id,
-        "planner_agent": planner_agent,
-        "planner_agent_instance": planner_agent_instance,
-        "planner_model_tier": planner_model_tier,
-        "combined_planner_executor": combined_planner_executor,
-        "forum_thread_ref": forum_thread_ref,
-        "inputs_read": inputs_read,
-        "observations": observations,
-        "decision": decision,
-        "decision_reason": decision_reason,
-        "owner_decision_required": owner_decision_required,
-        "needs_owner_reasons": needs_owner_reasons,
-        "subtask_drafts_proposed": subtask_drafts_proposed,
-        "publish_candidates": publish_candidates,
-        "repair_recommendations": repair_recommendations,
-        "audit_handoff_needed": audit_handoff_needed,
-        "next_expected_action": next_expected_action,
-        "stop_condition_hits": stop_condition_hits,
-    }
-    event_log_preview = [
-        {
-            "event_id": f"evt_{iteration_id}_started",
-            "orchestration_id": orchestration_id,
-            "event_type": "planner_tick_started",
-            "timestamp": timestamp,
-            "actor": planner_agent_instance,
-            "source": "web_board_planner_tick_preview",
-            "related_task_id": parent_task_id,
-            "related_subtask_id": None,
-            "related_iteration_id": iteration_id,
-            "severity": "info",
-            "summary": "Planner tick preview started.",
-            "details": {"planner_model_tier": planner_model_tier},
-            "refs": [forum_thread_ref],
-        },
-        {
-            "event_id": f"evt_{iteration_id}_verdict",
-            "orchestration_id": orchestration_id,
-            "event_type": "planner_verdict_recorded",
-            "timestamp": timestamp,
-            "actor": planner_agent_instance,
-            "source": "web_board_planner_tick_preview",
-            "related_task_id": parent_task_id,
-            "related_subtask_id": None,
-            "related_iteration_id": iteration_id,
-            "severity": severity,
-            "summary": f"Planner tick preview verdict: {decision}.",
-            "details": {"decision_reason": decision_reason, "next_expected_action": next_expected_action},
-            "refs": [forum_thread_ref],
-        },
-        {
-            "event_id": f"evt_{iteration_id}_completed",
-            "orchestration_id": orchestration_id,
-            "event_type": "planner_tick_completed",
-            "timestamp": timestamp,
-            "actor": planner_agent_instance,
-            "source": "web_board_planner_tick_preview",
-            "related_task_id": parent_task_id,
-            "related_subtask_id": None,
-            "related_iteration_id": iteration_id,
-            "severity": severity,
-            "summary": "Planner tick preview completed.",
-            "details": {"owner_decision_required": owner_decision_required},
-            "refs": [forum_thread_ref],
-        },
-    ]
-    if owner_decision_required:
-        event_log_preview.append(
-            {
-                "event_id": f"evt_{iteration_id}_needs_owner",
-                "orchestration_id": orchestration_id,
-                "event_type": "needs_owner_raised",
-                "timestamp": timestamp,
-                "actor": planner_agent_instance,
-                "source": "web_board_planner_tick_preview",
-                "related_task_id": parent_task_id,
-                "related_subtask_id": None,
-                "related_iteration_id": iteration_id,
-                "severity": "needs_owner",
-                "summary": "Planner tick preview requires Owner decision.",
-                "details": {"needs_owner_reasons": needs_owner_reasons},
-                "refs": [forum_thread_ref],
-            }
-        )
-    return {
-        "ok": True,
-        "verdict": "NEEDS_OWNER" if owner_decision_required else "PASS",
-        "operation": "planner_tick_preview",
-        "dry_run": True,
-        "data": {
-            "planner_iteration": planner_iteration,
-            "visible_report": visible_report,
-            "event_log_preview": event_log_preview,
-            "writes_enabled": False,
-            "forum_backend_enabled": False,
-            "planner_runtime_launch_enabled": False,
-            "orchestration_writer_enabled": False,
-        },
-        "summary": {
-            "orchestration_id": orchestration_id,
-            "planner_iteration_id": iteration_id,
-            "decision": decision,
-            "owner_decision_required": owner_decision_required,
-            "writes_enabled": False,
-        },
-        "planned_writes": [],
-        "planned_moves": [],
-        "warnings": [
-            "Preview only. AIPOS-60 does not write planner iterations, orchestration events, forum events, task cards, drafts, queue files, records, or memory."
-        ],
-        "blocking_reasons": [],
-        "needs_owner_reasons": needs_owner_reasons,
-        "execute_allowed": False,
-        "execute_blocking_reasons": ["AIPOS-60 planner tick/event log UI is preview-only"],
-        "safety_notice": "Local planner tick preview route. No files are written.",
-        "errors": [],
-    }
-
-
-
-CRITICAL_OWNER_FORK_KEYWORDS = {
-    "architecture": ["architecture", "route", "design", "service", "database", "deployment"],
-    "scope": ["scope", "expand", "expansion", "requirement"],
-    "risk": ["risk", "high-risk", "irreversible", "data loss", "refactor"],
-    "authority": ["authority", "permission", "agent authority", "model tier"],
-    "security": ["security", "credential", "secret", "auth", "rbac"],
-    "audit_boundary": ["audit", "reviewer", "auditor", "self-audit"],
-}
-
-
-def _critical_fork_hits(payload: dict[str, Any]) -> list[str]:
-    text = " ".join(
-        str(payload.get(field) or "")
-        for field in [
-            "decision",
-            "decision_reason",
-            "observations",
-            "needs_owner_reasons",
-            "publish_candidates",
-            "repair_recommendations",
-            "stop_condition_hits",
-            "next_expected_action",
-        ]
-    ).lower()
-    hits: list[str] = []
-    for fork_type, keywords in CRITICAL_OWNER_FORK_KEYWORDS.items():
-        if any(keyword in text for keyword in keywords):
-            hits.append(fork_type)
-    return hits
-
-
-def _planner_tick_manual_flow_preview_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    resolved_root = (repo_root or REPO_ROOT).resolve()
-    preview = _planner_tick_preview_route(payload, repo_root=repo_root)
-    if preview.get("verdict") == "BLOCK":
-        preview["operation"] = "planner_tick_manual_flow_preview"
-        return preview
-
-    orchestration_id = str(payload.get("orchestration_id") or "").strip()
-    summary = get_orchestration_summary_preview(orchestration_id=orchestration_id, repo_root=resolved_root) if orchestration_id else {}
-    timeline = get_orchestration_timeline_preview(orchestration_id=orchestration_id, repo_root=resolved_root) if orchestration_id else {}
-    owner_gate = _get_owner_decisions_review_route({}, repo_root=repo_root)
-    related_owner_requests = [
-        request
-        for request in owner_gate.get("data", {}).get("decision_requests", []) or []
-        if str(request.get("related_orchestration_id") or "") == orchestration_id
-        or str(request.get("related_task_id") or "") == str(payload.get("parent_task_id") or "").strip()
-    ]
-    fork_hits = _critical_fork_hits(payload)
-    decision = str(payload.get("decision") or "").strip()
-    needs_owner_reasons = list(preview.get("needs_owner_reasons", []))
-    if related_owner_requests:
-        needs_owner_reasons.extend(str(item.get("summary") or item.get("title") or item.get("request_id")) for item in related_owner_requests)
-    if fork_hits and decision != "needs_owner":
-        needs_owner_reasons.extend(f"critical fork requires Owner decision: {fork}" for fork in fork_hits)
-
-    data = dict(preview.get("data") or {})
-    visible_report = dict(data.get("visible_report") or {})
-    owner_decision_required = bool(needs_owner_reasons) or bool(visible_report.get("owner_decision_required"))
-    visible_report["critical_fork_hits"] = fork_hits
-    visible_report["related_owner_decision_requests"] = related_owner_requests
-    visible_report["owner_decision_required"] = owner_decision_required
-    visible_report["manual_flow_next_step"] = "stop_for_owner" if owner_decision_required else visible_report.get("next_expected_action")
-    data["visible_report"] = visible_report
-    data.update(
-        {
-            "manual_flow": True,
-            "orchestration_summary_snapshot": summary.get("summary") or {},
-            "timeline_snapshot": timeline.get("summary") or {},
-            "owner_decision_snapshot": {
-                "total": owner_gate.get("summary", {}).get("total", 0),
-                "related_requests": related_owner_requests,
-            },
-            "writes_enabled": False,
-            "orchestration_writer_enabled": False,
-            "planner_iteration_append_enabled": False,
-            "forum_event_append_enabled": False,
-            "planner_runtime_launch_enabled": False,
-            "queue_mutation_enabled": False,
-        }
-    )
-    verdict = "NEEDS_OWNER" if owner_decision_required else preview.get("verdict")
-    return {
-        **preview,
-        "ok": True,
-        "verdict": verdict,
-        "operation": "planner_tick_manual_flow_preview",
-        "data": data,
-        "summary": {
-            **dict(preview.get("summary") or {}),
-            "manual_flow": True,
-            "critical_fork_hits": fork_hits,
-            "related_owner_decision_requests": len(related_owner_requests),
-            "owner_decision_required": owner_decision_required,
-            "writes_enabled": False,
-        },
-        "planned_writes": [],
-        "planned_moves": [],
-        "needs_owner_reasons": list(dict.fromkeys(reason for reason in needs_owner_reasons if reason)),
-        "owner_confirmation_required": owner_decision_required,
-        "owner_confirmation_reasons": list(dict.fromkeys(reason for reason in needs_owner_reasons if reason)),
-        "execute_allowed": False,
-        "execute_blocking_reasons": ["AIPOS-74 manual planner tick flow is preview-only; no planner iteration or event is persisted."],
-        "dry_run_token": None,
-        "safety_notice": "Manual planner tick flow preview only. No planner iteration, event, task, queue, draft, record, runtime, forum, or git state is written.",
-    }
-
-
-def _parent_requirement_preview_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    del repo_root
-    title = str(payload.get("title") or "").strip()
-    owner_goal = str(payload.get("owner_goal") or "").strip()
-    project = str(payload.get("project") or "lybra").strip() or "lybra"
-    forum_thread_ref = str(payload.get("forum_thread_ref") or "").strip()
-    planner_agent = str(payload.get("planner_agent") or "planner_agent").strip() or "planner_agent"
-    planner_agent_instance = str(payload.get("planner_agent_instance") or "planner.local.001").strip() or "planner.local.001"
-    planner_runtime_profile = str(payload.get("planner_runtime_profile") or "local_process").strip() or "local_process"
-    planner_model_tier = str(payload.get("planner_model_tier") or "L3").strip().upper()
-    max_iterations = str(payload.get("max_iterations") or "5").strip()
-    timestamp = _utc_now()
-    if not title:
-        return _parent_requirement_error("title is required")
-    if not owner_goal:
-        return _parent_requirement_error("owner_goal is required")
-    if not forum_thread_ref:
-        return _parent_requirement_error("forum_thread_ref is required")
-    if planner_model_tier not in {"L3", "L4"}:
-        return _parent_requirement_error("planner_model_tier must be L3 or L4")
-    requirement_slug = _slug(title)
-    date_slug = timestamp[:10].replace("-", "")
-    requirement_id = f"REQ-{date_slug}-{requirement_slug}"
-    orchestration_id = f"orch_{_slug(project)}_{date_slug}_{requirement_slug}"
-    parent_task_id = f"{requirement_id}-PARENT"
-    requirement = {
-        "requirement_id": requirement_id,
-        "title": title,
-        "owner_goal": owner_goal,
-        "created_by": "Owner",
-        "created_at": timestamp,
-        "project": project,
-        "task_class": "complex",
-        "complexity_note": "Parent requirement uses the governed planner closed loop.",
-        "intake_status": "received",
-        "forum_thread_ref": forum_thread_ref,
-        "visibility": "forum_visible",
-        "planning_required": True,
-        "min_planner_model_tier": "L3",
-        "allowed_planner_agents": ["dev_codex", "dev_claude"],
-        "assigned_planner": planner_agent,
-        "assigned_planner_instance": planner_agent_instance,
-        "planner_runtime_profile": planner_runtime_profile,
-        "planner_assignment_status": "proposed",
-        "orchestration_id": orchestration_id,
-        "parent_task_id": parent_task_id,
-        "needs_owner": False,
-        "needs_owner_reasons": [],
-    }
-    planner_loop_preview = {
-        "loop": "observe -> decide -> emit -> wait",
-        "next_expected_action": "Owner reviews preview, then a future approved writer may create the parent requirement record.",
-        "max_iterations": max_iterations,
-        "stop_conditions": [
-            "owner_decision_required",
-            "audit_pending",
-            "dependency_blocked",
-            "max_iterations_reached",
-            "scope_or_risk_fork",
-        ],
-        "owner_decision_required_for": [
-            "architecture_route_split",
-            "scope_expansion",
-            "risk_escalation",
-            "new_runtime_or_service",
-            "audit_boundary_change",
-            "turning_protocol_into_implementation",
-        ],
-    }
-    return {
-        "ok": True,
-        "verdict": "PASS",
-        "operation": "parent_requirement_preview",
-        "dry_run": True,
-        "data": {
-            "parent_requirement": requirement,
-            "planner_loop_preview": planner_loop_preview,
-            "writes_enabled": False,
-            "forum_backend_enabled": False,
-            "planner_runtime_launch_enabled": False,
-        },
-        "summary": {
-            "requirement_id": requirement_id,
-            "orchestration_id": orchestration_id,
-            "planner_model_tier": planner_model_tier,
-            "writes_enabled": False,
-        },
-        "planned_writes": [],
-        "planned_moves": [],
-        "warnings": [
-            "Preview only. AIPOS-59 does not write parent requirement records, orchestration files, forum events, or task cards."
-        ],
-        "blocking_reasons": [],
-        "needs_owner_reasons": [],
-        "execute_allowed": False,
-        "execute_blocking_reasons": ["AIPOS-59 parent requirement entry is preview-only"],
-        "safety_notice": "Local parent requirement preview route. No files are written.",
-        "errors": [],
-    }
-
-
 def _get_orchestration_summary_route(params: dict[str, list[str]], *, repo_root: Path | None) -> dict[str, Any]:
     orchestration_id = _first_param(params, "orchestration_id")
     if not orchestration_id:
@@ -2626,9 +1507,9 @@ def _get_preview_route(params: dict[str, list[str]], *, repo_root: Path | None) 
     return get_preview(task_id=task_id, path=path, actor=actor, repo_root=repo_root)
 
 
-def _get_markdown_source_route(params: dict[str, list[str]], *, repo_root: Path | None, board_config_path: Path | None = None) -> dict[str, Any]:
+def _get_markdown_source_route(params: dict[str, list[str]], *, repo_root: Path | None, home_root: str | Path | None = None) -> dict[str, Any]:
     # AIPOS-263: md 原文侧栏 — 队列卡 / 记录 md 的只读安全渲染(零依赖、先转义后变换、路径白名单)。
-    resolved_root = _resolve_workspace_root(params, repo_root, board_config_path)
+    resolved_root = _resolve_workspace_root(params, repo_root, home_root)
     return get_markdown_source(
         path=_first_param(params, "path"),
         task_id=_first_param(params, "task_id"),
@@ -2637,557 +1518,23 @@ def _get_markdown_source_route(params: dict[str, list[str]], *, repo_root: Path 
     )
 
 
-def _ai_author_preview_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    actor = str(payload.get("actor") or "").strip()
-    fixture_id = str(payload.get("fixture_id") or "").strip()
-    intent = payload.get("intent")
-    if not actor:
-        return _execute_error("ai_assisted_fixture_authoring", "actor is required")
-    if not fixture_id:
-        return _execute_error("ai_assisted_fixture_authoring", "fixture_id is required")
-    if not isinstance(intent, dict):
-        return _execute_error("ai_assisted_fixture_authoring", "intent object is required")
-    try:
-        return build_authoring_draft(Path(repo_root or REPO_ROOT), intent, fixture_id=fixture_id, actor=actor)
-    except Exception as exc:
-        return _execute_error("ai_assisted_fixture_authoring", str(exc))
+def board_readonly_declaration() -> dict[str, Any]:
+    """AIPOS-F171 件③(gap #155): verbs.schema board_readonly(看板只读应答 / 允许的鉴权 POST 通道)。缺键 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = load_schema("verbs").get("board_readonly")
+    if (not isinstance(decl, dict) or not isinstance(decl.get("status"), int)
+            or not all(isinstance(decl.get(k), str) and decl[k] for k in ("error", "message", "message_en", "next_step"))
+            or not isinstance(decl.get("allowed_post_paths"), list)):
+        raise SchemaLoadError("verbs.schema.json board_readonly(status / error / message / message_en / next_step / allowed_post_paths)未声明齐")
+    return decl
 
 
-def _ai_author_confirm_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    actor = str(payload.get("actor") or "").strip()
-    preview = payload.get("preview")
-    if not actor:
-        return _execute_error("ai_assisted_fixture_authoring", "actor is required")
-    if not isinstance(preview, dict):
-        return _execute_error("ai_assisted_fixture_authoring", "preview object is required")
-    owner_token = OWNER_CONFIRMATION_TOKEN if bool(payload.get("owner_confirmed", False)) else None
-    try:
-        return confirm_authoring_draft(
-            Path(repo_root or REPO_ROOT),
-            preview,
-            actor=actor,
-            owner_confirmation_token=owner_token,
-        )
-    except Exception as exc:
-        return _execute_error("ai_assisted_fixture_authoring", str(exc))
-
-
-def _ai_author_live_preview_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    actor = str(payload.get("actor") or "").strip()
-    intent = payload.get("intent")
-    if not actor:
-        return _execute_error("ai_assisted_live_authoring", "actor is required")
-    if not isinstance(intent, dict):
-        return _execute_error("ai_assisted_live_authoring", "intent object is required")
-    try:
-        return build_live_authoring_draft(
-            Path(repo_root or REPO_ROOT),
-            intent,
-            endpoint_ref=str(payload.get("endpoint_ref") or "").strip(),
-            credential_ref=str(payload.get("credential_ref") or "").strip(),
-            model_ref=str(payload.get("model_ref") or "").strip(),
-            actor=actor,
-            provider_ref=str(payload.get("provider_ref") or "provider-neutral").strip(),
-            request_config_ref=str(payload.get("request_config_ref") or "live-default").strip(),
-            request_timeout_seconds=int(payload.get("request_timeout_seconds") or 30),
-            max_output_tokens=int(payload.get("max_output_tokens") or 768),
-        )
-    except Exception as exc:
-        return _execute_error("ai_assisted_live_authoring", str(exc))
-
-
-def _ai_author_live_confirm_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    actor = str(payload.get("actor") or "").strip()
-    preview = payload.get("preview")
-    if not actor:
-        return _execute_error("ai_assisted_live_authoring", "actor is required")
-    if not isinstance(preview, dict):
-        return _execute_error("ai_assisted_live_authoring", "preview object is required")
-    owner_token = OWNER_CONFIRMATION_TOKEN if bool(payload.get("owner_confirmed", False)) else None
-    try:
-        return confirm_live_authoring_draft(
-            Path(repo_root or REPO_ROOT),
-            preview,
-            actor=actor,
-            owner_confirmation_token=owner_token,
-        )
-    except Exception as exc:
-        return _execute_error("ai_assisted_live_authoring", str(exc))
-
-
-def _agent_profile_draft_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    actor = str(payload.get("actor") or "").strip()
-    profile_payload = payload.get("payload")
-    if not actor:
-        return _execute_error("custom_agent_profile_write", "actor is required")
-    if not isinstance(profile_payload, dict):
-        return _execute_error("custom_agent_profile_write", "payload object is required")
-    try:
-        return build_profile_draft(Path(repo_root or REPO_ROOT), profile_payload, actor=actor)
-    except Exception as exc:
-        return _execute_error("custom_agent_profile_write", str(exc))
-
-
-def _agent_profile_confirm_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    actor = str(payload.get("actor") or "").strip()
-    preview = payload.get("preview")
-    if not actor:
-        return _execute_error("custom_agent_profile_write", "actor is required")
-    if not isinstance(preview, dict):
-        return _execute_error("custom_agent_profile_write", "preview object is required")
-    owner_token = OWNER_CONFIRMATION_TOKEN if bool(payload.get("owner_confirmed", False)) else None
-    try:
-        return confirm_profile_draft(
-            Path(repo_root or REPO_ROOT),
-            preview,
-            actor=actor,
-            owner_confirmation_token=owner_token,
-        )
-    except Exception as exc:
-        return _execute_error("custom_agent_profile_write", str(exc))
-
-
-# ---------------------------------------------------------------------------
-# AIPOS-293 FIX-1: Error code → i18n key mapping for humanized errors
-# ---------------------------------------------------------------------------
-
-# Maps backend error codes to i18n keys. Frontend uses these keys to display
-# localized, actionable error messages. "Unknown error" is forbidden.
-_ERROR_CODE_TO_I18N: dict[str, str] = {
-    "path_required": "error.import.path_required",
-    "path_not_exists": "error.import.path_not_exists",
-    "path_not_directory": "error.import.path_not_directory",
-    "path_not_file": "error.import.path_not_file",
-    "path_not_yaml": "error.import.path_not_yaml",
-    "file_read_failed": "error.import.file_read_failed",
-    "schema_validation_failed": "error.import.schema_validation_failed",
-    "project_id_required": "error.import.project_id_required",
-    "project_id_invalid": "error.import.project_id_invalid",
-    "workspace_not_empty": "error.import.workspace_not_empty",
-    "export_failed": "error.import.export_failed",
-    "import_failed": "error.import.import_failed",
-    "unexpected_error": "error.import.unexpected_error",
-}
-
-
-def _humanized_error(code: str, detail: str = "", **extra: Any) -> dict[str, Any]:
-    """Return a structured error response with i18n error code.
-
-    AIPOS-293 FIX-1: All errors must carry an error_code that maps to an i18n key.
-    The 'Unknown error' string is forbidden — every error path must use this helper
-    or include an explicit error_code.
-    """
-    i18n_key = _ERROR_CODE_TO_I18N.get(code, "error.import.unexpected_error")
-    result: dict[str, Any] = {
-        "ok": False,
-        "error_code": code,
-        "error_i18n_key": i18n_key,
-        "error_detail": detail,
-    }
-    result.update(extra)
-    return result
-
-
-def _project_structure_preview_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    """AIPOS-293 S4 + FIX-1: Preview structure from directory OR structure file.
-
-    Supports two modes:
-    - mode="directory" (default): Export structure from an existing workspace directory
-    - mode="file": Read and validate a YAML structure file directly
-    """
-    from tools.aipos_cli.project_structure import (
-        export_project_structure,
-        validate_structure,
-        parse_yaml,
-        _check_no_credentials,
-    )
-
-    mode = str(payload.get("mode") or "directory").strip().lower()
-    workspace_path = str(payload.get("workspace_path") or "").strip()
-    structure_file_path = str(payload.get("structure_file_path") or "").strip()
-
-    # --- Mode: file (AIPOS-293 FIX-1: direct structure file import) ---
-    if mode == "file":
-        if not structure_file_path:
-            return {
-                **_humanized_error("path_required", "Structure file path is required"),
-                "operation": "project_structure_preview",
-            }
-
-        fp = Path(structure_file_path).expanduser().resolve()
-        if not fp.exists():
-            return {
-                **_humanized_error("path_not_exists", str(fp)),
-                "operation": "project_structure_preview",
-            }
-        if not fp.is_file():
-            return {
-                **_humanized_error("path_not_file", str(fp)),
-                "operation": "project_structure_preview",
-            }
-        if fp.suffix.lower() not in (".yaml", ".yml"):
-            return {
-                **_humanized_error("path_not_yaml", str(fp)),
-                "operation": "project_structure_preview",
-            }
-
-        try:
-            yaml_text = fp.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
-            return {
-                **_humanized_error("file_read_failed", str(exc)),
-                "operation": "project_structure_preview",
-            }
-
-        try:
-            structure = parse_yaml(yaml_text)
-        except Exception as exc:
-            return {
-                **_humanized_error("schema_validation_failed", str(exc)),
-                "operation": "project_structure_preview",
-            }
-
-        errors = validate_structure(structure)
-        if errors:
-            return {
-                **_humanized_error("schema_validation_failed", "; ".join(errors)),
-                "operation": "project_structure_preview",
-                "validation_errors": errors,
-            }
-
-        # Credential safety check (red line)
-        cred_findings = _check_no_credentials(structure)
-        if cred_findings:
-            return {
-                **_humanized_error("schema_validation_failed", "Credential values detected"),
-                "operation": "project_structure_preview",
-                "validation_errors": cred_findings,
-            }
-
-        return {
-            "ok": True,
-            "operation": "project_structure_preview",
-            "mode": "file",
-            "source_file": str(fp),
-            "project_name": structure.get("project_name"),
-            "description": structure.get("description", ""),
-            "code_repos": structure.get("code_repos", []),
-            "doc_count": len(structure.get("doc_manifest", [])),
-            "governance_files": list(structure.get("governance_files", {}).keys()),
-            "queue_summary": structure.get("queue_summary", {}),
-            "roles": structure.get("roles", []),
-        }
-
-    # --- Mode: directory (default, existing behavior) ---
-    if not workspace_path:
-        return {
-            **_humanized_error("path_required", "Workspace path is required"),
-            "operation": "project_structure_preview",
-        }
-
-    ws = Path(workspace_path).expanduser().resolve()
-    if not ws.exists():
-        return {
-            **_humanized_error("path_not_exists", str(ws)),
-            "operation": "project_structure_preview",
-        }
-    if not ws.is_dir():
-        # AIPOS-293 FIX-1: Smart suggestion — if user typed a .yaml path, suggest file mode
-        if ws.suffix.lower() in (".yaml", ".yml"):
-            return {
-                **_humanized_error("path_not_directory", str(ws)),
-                "operation": "project_structure_preview",
-                "suggest_file_mode": True,
-            }
-        return {
-            **_humanized_error("path_not_directory", str(ws)),
-            "operation": "project_structure_preview",
-        }
-
-    try:
-        structure = export_project_structure(ws)
-        errors = validate_structure(structure)
-        if errors:
-            return {
-                **_humanized_error("schema_validation_failed", "; ".join(errors)),
-                "operation": "project_structure_preview",
-                "validation_errors": errors,
-            }
-        return {
-            "ok": True,
-            "operation": "project_structure_preview",
-            "mode": "directory",
-            "project_name": structure.get("project_name"),
-            "description": structure.get("description", ""),
-            "code_repos": structure.get("code_repos", []),
-            "doc_count": len(structure.get("doc_manifest", [])),
-            "governance_files": list(structure.get("governance_files", {}).keys()),
-            "queue_summary": structure.get("queue_summary", {}),
-            "roles": structure.get("roles", []),
-        }
-    except Exception as exc:
-        return {
-            **_humanized_error("unexpected_error", str(exc)),
-            "operation": "project_structure_preview",
-        }
-
-
-def _project_structure_import_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    """AIPOS-293 S4 + FIX-1: Import workspace from directory OR structure file.
-
-    AIPOS-F117 件①(Owner 10-04 裁定 gap #53): 看板「导入既有项目」收敛到 `lybra project new` 同一实现——
-    建项目 = project_structure.import_project_structure → workspace_config.scaffold_project(project new 唯一实现),
-    落点 = <home 根>/<project_id>, home 根经 project new 同一 AIPOS-226 优先级梯(resolve_home_root_with_source)解析;
-    看板不再自建 ~/.lybra/workspaces/<id>(原第二条建工作区路径删除)。看板只做: 入参校验、目录模式先导出结构文件(临时目录,
-    用完即删)、把建成的项目根登记进 .lybra/board_config.json 展示列表(登记文件读坏 = 拒, 不覆盖)。
-
-    Supports two modes:
-    - mode="directory" (default): Export from directory then import
-    - mode="file": Import directly from a YAML structure file (FIX-1)
-    """
-    import tempfile as _tempfile
-
-    from tools.aipos_cli.project_structure import export_project_to_yaml, import_project_structure
-    from tools.aipos_cli.workspace_config import project_root_for, resolve_home_root_with_source
-
-    mode = str(payload.get("mode") or "directory").strip().lower()
-    workspace_path = str(payload.get("workspace_path") or "").strip()
-    structure_file_path = str(payload.get("structure_file_path") or "").strip()
-    project_id = str(payload.get("project_id") or "").strip()
-    label_en = str(payload.get("label_en") or "").strip()
-
-    def fail(key: str, detail: str, **extra: Any) -> dict[str, Any]:
-        return {**_humanized_error(key, detail), "operation": "project_structure_import", **extra}
-
-    # --- Common validation ---
-    if not project_id:
-        return fail("project_id_required", "project_id is required")
-    if not re.match(r"^[a-z0-9_-]+$", project_id):
-        return fail("project_id_invalid", "project_id must use lowercase letters, numbers, dash, or underscore")
-
-    # --- Mode-specific source validation(只读入参, 先于任何落点解析) ---
-    if mode == "file":
-        if not structure_file_path:
-            return fail("path_required", "Structure file path is required")
-        source = Path(structure_file_path).expanduser().resolve()
-        if not source.exists():
-            return fail("path_not_exists", str(source))
-        if not source.is_file():
-            return fail("path_not_file", str(source))
-        if source.suffix.lower() not in (".yaml", ".yml"):
-            return fail("path_not_yaml", str(source))
-    else:
-        if not workspace_path:
-            return fail("path_required", "Workspace path is required")
-        source = Path(workspace_path).expanduser().resolve()
-        if not source.exists():
-            return fail("path_not_exists", str(source))
-        if not source.is_dir():
-            if source.suffix.lower() in (".yaml", ".yml"):
-                return fail("path_not_directory", str(source), suggest_file_mode=True)
-            return fail("path_not_directory", str(source))
-
-    try:
-        # 目标 = project new 同一落点(<home 根>/<project_id>, home 根同一优先级梯)
-        home, home_source = resolve_home_root_with_source()
-        target_root = project_root_for(home, project_id)
-        if target_root.exists() and any(target_root.iterdir()):
-            return fail("workspace_not_empty", f"Target project root already exists and is not empty: {target_root}")
-
-        board_config_path = (repo_root or REPO_ROOT) / ".lybra" / "board_config.json"
-        workspaces: list[Any] = []
-        if board_config_path.exists():
-            try:
-                data = json.loads(board_config_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError) as exc:
-                # fail-closed: 登记文件读坏不得被覆盖成只剩新条目(原实现吞错后整文件重写 = 丢失既有登记)
-                return fail("unexpected_error", f"board_config.json unreadable, refusing to overwrite: {board_config_path}: {exc}")
-            workspaces = data.get("workspaces", []) if isinstance(data, dict) else None
-            if not isinstance(workspaces, list):
-                return fail("unexpected_error", f"board_config.json workspaces is not a list: {board_config_path}")
-
-        with _tempfile.TemporaryDirectory(prefix="aipos293_import_") as tmp_dir:
-            structure_file = source
-            if mode != "file":
-                # Step 1: 既有目录先导出结构文件(只读源目录; 结构文件落临时目录, 用完即删)
-                structure_file = Path(tmp_dir) / "lybra-project.yaml"
-                export_result = export_project_to_yaml(source, project_name=project_id, output_path=structure_file)
-                if not export_result.get("ok"):
-                    blocking = export_result.get("blocking_reasons", "unknown")
-                    return fail("export_failed", "; ".join(blocking) if isinstance(blocking, list) else str(blocking))
-
-            # Step 2: project new 同一实现建项目 + 迁移清单
-            import_result = import_project_structure(structure_file, home, name=project_id, actor="board.import-wizard")
-            if not import_result.get("ok"):
-                blocking = import_result.get("blocking_reasons", "unknown")
-                return fail("import_failed", "; ".join(blocking) if isinstance(blocking, list) else str(blocking))
-
-        # Step 3: 登记到看板展示列表(shared by both modes)
-        project_root = str(import_result["project_root"])
-        existing = any(isinstance(ws_entry, dict) and ws_entry.get("root") == project_root for ws_entry in workspaces)
-        if not existing:
-            ws_entry = {
-                "label": project_id.replace("-", " ").replace("_", " ").title(),
-                "root": project_root,
-            }
-            if label_en:
-                ws_entry["label_en"] = label_en
-            workspaces.append(ws_entry)
-            board_config_path.parent.mkdir(parents=True, exist_ok=True)
-            board_config_path.write_text(
-                json.dumps({"workspaces": workspaces}, indent=2, ensure_ascii=False) + "\n",
-                encoding="utf-8",
-            )
-
-        import_result["board_config_updated"] = not existing
-        import_result["workspace_path"] = project_root
-        import_result["home_root_source"] = home_source
-        import_result["mode"] = mode
-        return import_result
-
-    except Exception as exc:
-        return fail("unexpected_error", str(exc))
-
-
-def _execute_dry_run_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    operation = str(payload.get("operation") or "").strip()
-    actor = str(payload.get("actor") or "").strip()
-    if not actor:
-        return _execute_error(operation or "execute_dry_run", "actor is required")
-    if operation == "draft_create":
-        draft_payload = payload.get("payload")
-        if not isinstance(draft_payload, dict):
-            return _execute_error("draft_create", "payload object is required")
-        return create_draft(draft_payload, dry_run=True, repo_root=repo_root, actor=actor)
-    if operation == "draft_publish":
-        path = str(payload.get("path") or "").strip()
-        if not path:
-            return _execute_error("draft_publish", "path is required")
-        return publish_draft(path=path, dry_run=True, repo_root=repo_root, actor=actor)
-    if operation == "orchestration_event_append":
-        event_payload = payload.get("payload")
-        if not isinstance(event_payload, dict):
-            return _execute_error("orchestration_event_append", "payload object is required")
-        return append_orchestration_event(event_payload, dry_run=True, repo_root=repo_root, actor=actor)
-    if operation == "planner_iteration_append":
-        iteration_payload = payload.get("payload")
-        if not isinstance(iteration_payload, dict):
-            return _execute_error("planner_iteration_append", "payload object is required")
-        return append_planner_iteration(iteration_payload, dry_run=True, repo_root=repo_root, actor=actor)
-    if operation == "owner_decision_record":
-        decision_payload = payload.get("payload")
-        if not isinstance(decision_payload, dict):
-            return _execute_error("owner_decision_record", "payload object is required")
-        return record_owner_decision(decision_payload, dry_run=True, repo_root=repo_root, actor=actor)
-    if operation == "owner_verification_record":
-        verification_payload = payload.get("payload")
-        if not isinstance(verification_payload, dict):
-            return _execute_error("owner_verification_record", "payload object is required")
-        return record_owner_verification(verification_payload, dry_run=True, repo_root=repo_root, actor=actor)
-    if operation != "queue_claim":
-        return _execute_error(
-            "execute_dry_run",
-            "Only queue_claim, draft_create, draft_publish, orchestration_event_append, planner_iteration_append, owner_decision_record, and owner_verification_record are enabled in the controlled execute API",
-        )
-    task_id = str(payload.get("task_id") or "").strip() or None
-    path = str(payload.get("path") or "").strip() or None
-    if bool(task_id) == bool(path):
-        return _execute_error("queue_claim", "Exactly one of task_id or path is required")
-    if bool(payload.get("with_records", False)):
-        return _execute_error("queue_claim", "with_records execute is not enabled in the AIPOS-55 UI")
-    return claim_task(task_id=task_id, path=path, actor=actor, dry_run=True, with_records=False, repo_root=repo_root)
-
-
-def _execute_confirm_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    dry_run_id = str(payload.get("dry_run_id") or "").strip()
-    actor = str(payload.get("actor") or "").strip()
-    if not dry_run_id:
-        return _execute_error("execute_dry_run", "dry_run_id is required")
-    if not actor:
-        return _execute_error("execute_dry_run", "actor is required")
-    owner_token = OWNER_CONFIRMATION_TOKEN if bool(payload.get("owner_confirmed", False)) else None
-    return execute_dry_run(dry_run_id, actor, owner_confirmation_token=owner_token, repo_root=repo_root)
-
-
-def _owner_verification_approve_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    """AIPOS-273: Owner verification approve route (POST /api/verify/<task_id>/approve).
-    
-    Wrapper for the controlled execute flow: builds payload -> dry-run -> confirm.
-    """
-    task_id = str(payload.get("task_id") or "").strip()
-    actor = str(payload.get("actor") or "owner").strip()
-    if not task_id:
-        return _execute_error("owner_verification_record", "task_id is required")
-    
-    verification_payload = {
-        "task_id": task_id,
-        "decision": "approve",
-        "reason": "",  # approve doesn't require reason
-        "decided_via": "web_session",
-    }
-    
-    # Step 1: dry-run to get the plan
-    dry_run_response = record_owner_verification(
-        verification_payload,
-        dry_run=True,
-        repo_root=repo_root,
-        actor=actor,
-    )
-    
-    if not dry_run_response.get("ok") or dry_run_response.get("verdict") == "BLOCK":
-        return dry_run_response
-    
-    # Step 2: extract dry_run_id and confirm
-    dry_run_id = dry_run_response.get("dry_run_id")
-    if not dry_run_id:
-        return _execute_error("owner_verification_record", "Failed to register dry-run")
-    
-    # Step 3: execute with owner_confirm
-    owner_token = OWNER_CONFIRMATION_TOKEN if bool(payload.get("owner_confirmed", True)) else None
-    return execute_dry_run(dry_run_id, actor, owner_confirmation_token=owner_token, repo_root=repo_root)
-
-
-def _owner_verification_reject_route(payload: dict[str, Any], *, repo_root: Path | None) -> dict[str, Any]:
-    """AIPOS-273: Owner verification reject route (POST /api/verify/<task_id>/reject).
-    
-    Wrapper for the controlled execute flow: builds payload -> dry-run -> confirm.
-    Requires reason field.
-    """
-    task_id = str(payload.get("task_id") or "").strip()
-    reason = str(payload.get("reason") or "").strip()
-    actor = str(payload.get("actor") or "owner").strip()
-    
-    if not task_id:
-        return _execute_error("owner_verification_record", "task_id is required")
-    if not reason:
-        return _execute_error("owner_verification_record", "reason is required for reject decision")
-    
-    verification_payload = {
-        "task_id": task_id,
-        "decision": "reject",
-        "reason": reason,
-        "decided_via": "web_session",
-    }
-    
-    # Step 1: dry-run to get the plan
-    dry_run_response = record_owner_verification(
-        verification_payload,
-        dry_run=True,
-        repo_root=repo_root,
-        actor=actor,
-    )
-    
-    if not dry_run_response.get("ok") or dry_run_response.get("verdict") == "BLOCK":
-        return dry_run_response
-    
-    # Step 2: extract dry_run_id and confirm
-    dry_run_id = dry_run_response.get("dry_run_id")
-    if not dry_run_id:
-        return _execute_error("owner_verification_record", "Failed to register dry-run")
-    
-    # Step 3: execute with owner_confirm
-    owner_token = OWNER_CONFIRMATION_TOKEN if bool(payload.get("owner_confirmed", True)) else None
-    return execute_dry_run(dry_run_id, actor, owner_confirmation_token=owner_token, repo_root=repo_root)
+def read_only_response() -> tuple[int, dict[str, Any]]:
+    """看板写接口下线后的唯一应答(状态码与文案读 board_readonly 声明); 不调用任何写实现。"""
+    decl = board_readonly_declaration()
+    return int(decl["status"]), {"ok": False, "verdict": "BLOCK", "error": decl["error"], "message": decl["message"],
+                                 "message_en": decl["message_en"], "next_step": decl["next_step"]}
 
 
 def dispatch_api_request(
@@ -3195,24 +1542,14 @@ def dispatch_api_request(
     method: str,
     path: str,
     routes: dict[str, Callable[[dict[str, list[str]]], dict[str, Any]]],
-    post_routes: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] | None = None,
-    body: dict[str, Any] | None = None,
 ) -> tuple[int, dict[str, Any]]:
+    """API 分派: GET = 只读路由; 其余方法一律看板只读应答(AIPOS-F171 件③: 原 POST 业务路由表与其写实现入口全部下线, 不修鉴权;
+    鉴权 / 登录通道由 BoardHandler.do_POST 先行处理, 不经本函数)。"""
     parsed = urlparse(path)
     clean_path = parsed.path
     params = parse_qs(parsed.query, keep_blank_values=True)
-    if method == "POST" and post_routes and clean_path in post_routes:
-        return int(HTTPStatus.OK), post_routes[clean_path](body or {})
     if method != "GET":
-        return (
-            int(HTTPStatus.METHOD_NOT_ALLOWED),
-            {
-                "ok": False,
-                "verdict": "BLOCK",
-                "error": "METHOD_NOT_ALLOWED",
-                "message": "Read-only API. Only GET is supported.",
-            },
-        )
+        return read_only_response()
     if clean_path in routes:
         return int(HTTPStatus.OK), routes[clean_path](params)
     return (
@@ -3292,7 +1629,6 @@ def _discover_connection_paths(repo_root: Path | None = None, board_config_path:
         except OSError:
             continue
     return result
-
 
 
 def verify_login_token(
@@ -3610,14 +1946,14 @@ def make_handler(
     repo_root: Path | None = None,
     *,
     board_config_path: Path | None = None,
+    home_root: str | Path | None = None,
     session_store: SessionStore | None = None,
     connection_paths: list[Path] | None = None,
     otc_store: OTCStore | None = None,
     device_store: DeviceCodeStore | None = None,
     auth_log_path: Path | None = None,
 ) -> type[BaseHTTPRequestHandler]:
-    routes = _api_routes(repo_root, board_config_path)
-    post_routes = _api_post_routes(repo_root)
+    routes = _api_routes(repo_root, board_config_path, home_root=home_root)  # AIPOS-F171: 只读 GET 路由; 无 POST 业务路由
     sessions = session_store if session_store is not None else SessionStore()
     # AIPOS-272 FIX-2: 未显式注入时，按 repo_root 发现 connection.json（首选工作区自身）
     conn_paths = connection_paths if connection_paths is not None else _discover_connection_paths(repo_root=repo_root)
@@ -3658,10 +1994,12 @@ def make_handler(
             self._send_json(HTTPStatus.NOT_FOUND, dispatch_api_request(method="GET", path="/missing", routes={})[1])
 
         def _method_not_allowed(self) -> None:
-            self._send_json(
-                HTTPStatus.METHOD_NOT_ALLOWED,
-                dispatch_api_request(method="POST", path="/api/health", routes=routes)[1],
-            )
+            """AIPOS-F171 件③: 非鉴权通道的写请求一律看板只读应答(状态码与文案读 verbs.schema board_readonly)。"""
+            status, payload = read_only_response()
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            if length > 0:
+                self.rfile.read(length)  # 读掉请求体(keep-alive 连接不残留), 不解析不使用
+            self._send_json(HTTPStatus(status), payload)
 
         # ---- AIPOS-270 鉴权辅助 ----
         def _redirect(self, status: int, location: str, *, set_cookie: str | list[str] | None = None) -> None:
@@ -3973,24 +2311,6 @@ def make_handler(
             if path == "/api/auth/device/approve":
                 self._handle_device_approve()
                 return
-            if path in post_routes:
-                length = int(self.headers.get("Content-Length", "0") or "0")
-                raw = self.rfile.read(length) if length > 0 else b"{}"
-                try:
-                    body = json.loads(raw.decode("utf-8") or "{}")
-                except json.JSONDecodeError:
-                    body = {}
-                if not isinstance(body, dict):
-                    body = {}
-                _status, result = dispatch_api_request(
-                    method="POST",
-                    path=self.path,
-                    routes=routes,
-                    post_routes=post_routes,
-                    body=body,
-                )
-                self._send_json(HTTPStatus.OK, result)
-                return
             self._method_not_allowed()
 
         def do_PUT(self) -> None:  # noqa: N802
@@ -4011,8 +2331,8 @@ def make_handler(
     return BoardHandler
 
 
-def run_server(host: str = DEFAULT_BOARD_HOST, port: int = DEFAULT_BOARD_PORT, repo_root: Path | None = None, board_config_path: Path | None = None) -> None:
-    handler = make_handler(repo_root=repo_root, board_config_path=board_config_path)
+def run_server(host: str = DEFAULT_BOARD_HOST, port: int = DEFAULT_BOARD_PORT, repo_root: Path | None = None) -> None:
+    handler = make_handler(repo_root=repo_root)
     with ThreadingHTTPServer((host, port), handler) as httpd:
         print(f"AIPOS board local UI listening on http://{host}:{port}")
         httpd.serve_forever()
@@ -4023,7 +2343,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", default=DEFAULT_BOARD_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_BOARD_PORT)  # AIPOS-F106 件②: config.schema ports.board_default
     parser.add_argument("--repo-root", default=None)
-    parser.add_argument("--board-config", default=None, help="Path to board_config.json (AIPOS-272 FIX-3)")
+    parser.add_argument("--board-config", default=None, help="Retired (AIPOS-F171): the project list is derived from the governance home root; "
+                        "board_config.json is no longer read (accepted for old launch scripts, ignored)")
     return parser.parse_args()
 
 
@@ -4033,9 +2354,10 @@ def main() -> int:
 
     repo_root_arg = args.repo_root or workspace_root_from_env()[0]
     repo_root = Path(repo_root_arg).expanduser().resolve() if repo_root_arg else None
-    board_config_arg = args.board_config
-    board_config_path = Path(board_config_arg).expanduser().resolve() if board_config_arg else None
-    run_server(host=str(args.host), port=int(args.port), repo_root=repo_root, board_config_path=board_config_path)
+    if args.board_config:
+        print("Warning: --board-config is retired (AIPOS-F171): the project list is derived from the governance home root; "
+              "the file is not read", file=sys.stderr)
+    run_server(host=str(args.host), port=int(args.port), repo_root=repo_root)
     return 0
 
 

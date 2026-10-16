@@ -319,6 +319,11 @@
               "type": "string",
               "default_from": "governance_structure.paths.stage_archive",
               "description": "AIPOS-F145 件①: 项目阶段档案(阶段快照)目录(相对治理根或绝对)。未声明 = default_from 所指 governance_structure.paths.stage_archive(lybra 缺省布局 <治理根>/stage_archive/, 存量行为不变); 人肉期接入的项目阶段档案在别处(如 governance/stage_archives/)时经 `lybra project set-paths --key stage_archive_root --value <相对治理根路径>` 声明。唯一读取口 workspace_config.stage_archive_root(= project_paths); 读写方: finalize 阶段闸门 check_stage_archive_gate(判据 timeline_enforcement.stage_level 不变: 目录内 .md 排除 README/index)、brief 阶段坐标、governance-commit 完整性、close 鲜度 WARN、governance add stage 落点、project new 脚手架。default_from 认 governance_structure.paths.<键>(解析 = schema_loader.get_governance_path 的 path, 相对治理根)与 project_json.paths.<本段键>(AIPOS-F147 件③, 同段另一键的取值)。"
+            },
+            "roadmap_file": {
+              "type": "string",
+              "default": "governance/roadmap.yaml",
+              "description": "AIPOS-F171 件①: 本项目结构化路线图声明文件(里程碑 + 验收标准; 相对治理根或绝对)。缺省 = governance/roadmap.yaml; 文件不存在 = 本项目未声明路线图(出卡不提示游离卡, 行为不变)。文件形唯一声明 governance_structure.roadmap; 唯一读写实现 tools/aipos_cli/roadmap.py(经 workspace_config.project_paths 取本键); 改动只经 `lybra roadmap add-milestone / add-criterion / set / remove`(两阶段 + 自动落账 + decision_log 指针)。"
             }
           }
         },
@@ -988,6 +993,44 @@
         "era_boundary": "2026-08-20T00:00:00Z",
         "era_boundary_description": "F2 门生机器标记(record_type/verdict_id/verdict_at)上线时点。此前诞生的裁决无标记=正常, 非违纪。",
         "exemption_rule": "sweep 隔离候选集只扫 queue/claimed 活动卡对应的裁决目录(与收账同源 C3B); 全量 records/ 追溯扫描退役。活动卡目录内的无标记文件才视为手写嫌疑; 非活动卡目录不扫只出声。"
+      }
+    },
+    "roadmap": {
+      "description": "AIPOS-F171 件①(Owner 10-16: 路线图声明放独立 roadmap.yaml, 路径进 config.schema): 每个治理根一份结构化路线图——按 lane(子项目)分组的里程碑, 每个里程碑带可核对的验收标准。落点 = project.json paths.roadmap_file(path_key; 缺省 governance/roadmap.yaml)。本段是文件形的唯一声明(键 / id 式样 / 值域 / 可改字段 / 拒因), 读 / 校验 / 编辑 / 卡挂接判定的唯一实现 tools/aipos_cli/roadmap.py(YAML 读 = frontmatter.parse_yaml_mapping, 写 = record_writer 同一序列化, 零新依赖)。id 在项目内唯一(里程碑与标准同一命名空间)。编辑命令 `lybra roadmap add-milestone / add-criterion / set / remove`(两阶段 verbs.schema two_phase_protocol.roadmap_writers; --confirm 写入后经 board_adapter._auto_generate_decision_log_pointer 生成 decision_log 指针(Record = 路线图文件), 再经 post_write_landing.commands.roadmap_writers 落账)。删除只允许无挂接卡时(挂接判定 = 队列全部状态的卡面 milestone / criteria, card.schema roadmap_link), 有挂接 = 拒 ROADMAP_REMOVE_LINKED(里程碑改 status=dropped)。卡挂接与游离卡判定见 card.schema roadmap_link。",
+      "path_key": "roadmap_file",
+      "top_level_keys": {
+        "required": ["milestones"],
+        "optional": ["description"]
+      },
+      "milestone_keys": {
+        "required": ["id", "lane", "title"],
+        "optional": ["target_date", "status", "criteria"]
+      },
+      "criterion_keys": {
+        "required": ["id", "statement", "verify"],
+        "optional": []
+      },
+      "id_pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+      "target_date_pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "status": {
+        "enum": ["planned", "active", "done", "dropped"],
+        "default": "planned",
+        "description": "里程碑状态; 缺键 = default。dropped = 已放弃(有挂接卡的里程碑不删, 改此值)"
+      },
+      "verify": {
+        "enum": ["auto", "artifact", "owner_check"],
+        "description": "验收标准的核对方式: auto = 审计 PASS 且有运行证据; artifact = 另需产物存在; owner_check = 另需 Owner 抽查确认(推导留 F172/F174)"
+      },
+      "settable_fields": {
+        "milestone": ["title", "lane", "target_date", "status"],
+        "criterion": ["statement", "verify"]
+      },
+      "reject_codes": {
+        "ROADMAP_INVALID": "路线图文件读不出或不合本段声明(逐条列出问题); 编辑命令拒写, 出卡挂接拒校验。出口: 按问题修正文件(或删掉坏文件后用 lybra roadmap 命令重建)",
+        "ROADMAP_ID_DUPLICATE": "id 已存在(里程碑与标准同一命名空间, 项目内唯一)",
+        "ROADMAP_ID_UNKNOWN": "id 不在路线图里(lybra roadmap show 查看)",
+        "ROADMAP_FIELD_NOT_SETTABLE": "该字段不可经 set 修改(可改字段见 settable_fields; id 不可改名——改名会让已挂接卡失联)",
+        "ROADMAP_REMOVE_LINKED": "有卡挂接该里程碑 / 标准, 不可删除(列出挂接卡)。出口: 里程碑改 `lybra roadmap set --id <id> --field status --value dropped`; 标准先把挂接卡经 lybra queue amend 改挂"
       }
     }
   },
