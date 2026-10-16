@@ -1585,6 +1585,18 @@ def _project_json_two_phase_emit(command: str, target: dict[str, Any], outcome: 
     return rc
 
 
+def _render_pi_model_affected(entry: dict[str, Any]) -> str:
+    """AIPOS-F169: set-model 预演/写入的一行影响工位(角色 / 实例 / 位置 / 下次拉起模型变化)。"""
+    from tools.aipos_cli.loop_run_record import model_label
+
+    loc = entry.get("workstation") or {}
+    where = (f"{loc.get('host') or '本机'}:{loc.get('dir')} transport={loc.get('transport')}" if loc.get("found")
+             else f"位置定位不到({loc.get('reason')})" if loc else "无工位")
+    line = (f"影响工位 [{entry['role']}] {entry.get('instance') or '(未声明)'} @ {where}: 下次拉起 "
+            f"{model_label(entry['before'])} → {model_label(entry['after'])}")
+    return line + (f"; {entry['note']}" if entry.get("note") else "")
+
+
 class _RolesIssuerError(RuntimeError):
     """`lybra roles enroll-code / enroll-deliver` 取门客户端失败(拒因 + 出口)。"""
 
@@ -2425,6 +2437,18 @@ def build_parser() -> argparse.ArgumentParser:
     project_setexec_parser.add_argument("--workspace-root", help="Target governance root when the project name is omitted (default: the one containing the current directory)")
     project_setexec_parser.add_argument("--json", action="store_true", help="Output JSON")
     _project_json_two_phase_flags(project_setexec_parser, "set-execution")  # 缺省预演 / --confirm 才写(同一包装)
+    # AIPOS-F169: pi 模型声明写入口(project.json execution.pi_models; 并入 set-execution 族: 同一两阶段包装与写后落账)
+    from tools.aipos_cli.workspace_config import pi_models_declaration
+
+    project_setmodel_parser = project_subparsers.add_parser("set-model", help="AIPOS-F169: declare which pi model the loop launches for this project (project.json execution.pi_models: project default, or per role with --role); the model must be one the local pi already has configured (pi --list-models), otherwise refused with near matches; takes effect on the next launch (in-flight processes unaffected); --dry-run (default) shows the diff and affected workstations, --confirm writes and lands")
+    project_setmodel_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory)")
+    project_setmodel_parser.add_argument("--role", default=None, choices=list(pi_models_declaration()["roles"]), help="Override for one role only (by_role.<role>); omitted = the project default for every role")
+    project_setmodel_parser.add_argument("--model", required=True, metavar="PROVIDER/ID", help="pi model id as listed by `pi --list-models` (<provider>/<model>, e.g. kiwiai/qwen3.7-plus)")
+    project_setmodel_parser.add_argument("--owner-ref", required=True, metavar="TEXT", help="Owner instruction summary or decision record this switch follows (single line, recorded as execution.pi_models.owner_ref)")
+    project_setmodel_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    project_setmodel_parser.add_argument("--workspace-root", help="Target governance root when the project name is omitted (default: the one containing the current directory)")
+    project_setmodel_parser.add_argument("--json", action="store_true", help="Output JSON")
+    _project_json_two_phase_flags(project_setmodel_parser, "set-model")  # 缺省预演 / --confirm 才写(同一包装, 写后落账)
     # AIPOS-F148 件②: Return 摘要来源声明写入口(project.json return_summary_source; 声明 config.schema project_json.return_summary_source;
     # 缺省 transitions artifact_ingest.return.summary_source; 唯一实现 workspace_config.set_return_summary_source)
     project_setsummary_parser = project_subparsers.add_parser("set-return-summary", help="AIPOS-F148: declare where this project's Return carries its one-line summary (project.json return_summary_source: Return frontmatter keys and/or body section markers; unset keys fall back to transitions.schema artifact_ingest.return.summary_source, default = the 一句话结论 section); --dry-run (default) shows the diff, --confirm writes")
@@ -4104,6 +4128,30 @@ def main(argv: list[str] | None = None) -> int:
                     details=[f"execution.{k} = {view[k]!r}" for k in ("default_mode", "subagent_executor", "pi_allowed_task_modes",
                                                                        "pi_executor", "auditor")]
                     + ["各实例已核: 本项目已接入(审计者 / pi 执行者有工位位置); 起草缺省与发卡核身份同读本段"])
+            if args.project_command == "set-model":
+                # AIPOS-F169: 唯一实现 enrollment.set_project_pi_model(pi --list-models 核可用 + project_execution 校验 + update_project_json 唯一写路径)
+                from tools.aipos_cli.enrollment import set_project_pi_model
+                from tools.aipos_cli.workspace_config import ExecutionDeclarationError
+
+                target = _project_write_target(args, home, args.name)
+                if target is None:
+                    return 1
+                try:
+                    outcome = set_project_pi_model(target["project_root"], model=args.model, owner_ref=args.owner_ref, role=args.role,
+                                                   dry_run=not args.confirm)
+                except ExecutionDeclarationError as exc:
+                    print(f"Error: {exc.code}(project.json 未改动)", file=sys.stderr)
+                    for problem in exc.problems:
+                        print(f"  - {problem}", file=sys.stderr)
+                    return 1
+                return _project_json_two_phase_emit(
+                    "set-model", target, {k: outcome[k] for k in ("dry_run", "changed", "written", "diff", "project_json")},
+                    actor=args.actor, json_out=getattr(args, "json", False),
+                    extra={k: outcome[k] for k in ("pi_models", "model", "role", "target_key", "catalog", "affected", "effect_note")},
+                    details=[f"模型可用: {outcome['model']} 在本机 pi 已配置模型中({outcome['catalog']['detail']})",
+                             f"execution.pi_models.{outcome['target_key']} = {outcome['model']}  owner_ref = {args.owner_ref.strip()}"]
+                    + [_render_pi_model_affected(entry) for entry in outcome["affected"]]
+                    + [f"生效: {outcome['effect_note']}"])
             if args.project_command == "set-return-summary":
                 # AIPOS-F148 件②: 唯一实现 workspace_config.set_return_summary_source(声明校验 + update_project_json 唯一写路径)
                 from tools.aipos_cli.workspace_config import ReturnSummarySourceError, set_return_summary_source
@@ -4194,6 +4242,11 @@ def main(argv: list[str] | None = None) -> int:
                     if report.get("privilege_guard"):  # AIPOS-F165 件③: 拉起禁提权状态(applied / disabled / degraded)
                         guard = report["privilege_guard"]
                         print(f"拉起禁提权(no_new_privs): {guard['state']} — {guard['detail']}")
+                    if report.get("pi_model"):  # AIPOS-F169: 该工位下次拉起将用的模型与来源(声明 / pi 缺省)
+                        from tools.aipos_cli.loop_run_record import model_label
+
+                        pm = report["pi_model"]
+                        print(f"拉起模型 [{pm['role']}]: {model_label(pm)}" + (f" — {pm['availability']}" if pm.get("availability") else ""))
                     print(f"check-workstation {args.instance}: {'OK' if report['ok'] else 'FAILED'}")
                 return 0 if report["ok"] else 1
             if args.project_command == "set-repo":

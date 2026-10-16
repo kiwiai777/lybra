@@ -2096,6 +2096,7 @@ def project_execution(project_root: str | Path, *, project: dict[str, Any] | Non
         problems.append("pi_allowed_task_modes 非空时须声明 pi_executor")
     if auditor and auditor in {subagent, pi_exec}:
         problems.append(f"auditor={auditor} 与执行者同一实例(审计恒为独立 pi 工位)")
+    problems.extend(_pi_models_problems(raw.get("pi_models")))  # AIPOS-F169: pi 模型声明同段同一校验(视图不含, 读取口 project_pi_models)
     if problems:
         raise ExecutionDeclarationError("EXECUTION_DECLARATION_INVALID", problems)
     return {"default_mode": mode, "subagent_executor": subagent, "pi_allowed_task_modes": allowed, "pi_executor": pi_exec,
@@ -2128,6 +2129,95 @@ def card_execution_mode(execution: dict[str, Any] | None, card: dict[str, Any] |
     if audit_card or execution_wants_pi(execution, card):
         return EXECUTION_MODE_PI
     return str(execution["default_mode"])
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F169: pi 模型声明 project.json execution.pi_models(声明 config.schema project_json.schema.execution.schema.pi_models)。
+# 唯一读取口 project_pi_models / pi_model_for_role(loop 拉起 / check-workstation / set-model 预演同读); 形校验并入 project_execution
+# (execution 段同一校验, 写前预检与写后复核同走); 唯一写入口 enrollment.set_project_pi_model(`lybra project set-model`)。
+# ---------------------------------------------------------------------------
+
+def pi_models_declaration() -> dict[str, Any]:
+    """config.schema project_json.schema.execution.schema.pi_models。缺 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = execution_declaration()["schema"].get("pi_models")
+    fields = decl.get("schema") if isinstance(decl, dict) else None
+    roles = decl.get("roles") if isinstance(decl, dict) else None
+    if (not isinstance(fields, dict) or not {"default", "by_role", "owner_ref"} <= set(fields)
+            or not isinstance(roles, list) or not roles or not all(isinstance(r, str) and r for r in roles)
+            or not all(isinstance(decl.get(k), str) and decl[k] for k in ("pi_default_label", "effect_note"))
+            or not isinstance(decl.get("near_match_limit"), int) or decl["near_match_limit"] < 1):
+        raise SchemaLoadError("config.schema.json project_json.schema.execution.schema.pi_models(schema {default, by_role, owner_ref} / "
+                              "roles / pi_default_label / effect_note / near_match_limit)未声明齐")
+    return decl
+
+
+def pi_model_id_problem(value: Any) -> str:
+    """模型标识 <provider>/<id> 的形判定(唯一实现): 空串 = 合规, 否则为问题描述。非空单行、无空白、不以 - 起首、不含花括号、
+    斜杠两侧非空(id 本身可再含斜杠)。只判形, 是否已配置由 harness_launch.harness_model_catalog 判。"""
+    if not isinstance(value, str) or not value.strip():
+        return f"模型须为非空串 <provider>/<id>, 实为 {value!r}"
+    text = value.strip()
+    provider, _, ident = text.partition("/")
+    if any(ch.isspace() for ch in text) or text.startswith("-") or "{" in text or "}" in text or not provider or not ident:
+        return f"模型 {value!r} 须为 <provider>/<id>(无空白、不以 - 起首、不含花括号, 如 kiwiai/qwen3.7-plus)"
+    return ""
+
+
+def _pi_models_problems(raw: Any) -> list[str]:
+    from tools.aipos_cli.harness_launch import redact_progress
+
+    decl = pi_models_declaration()
+    if raw is None:
+        return []
+    if not isinstance(raw, dict):
+        return ["pi_models 须为 JSON 对象"]
+    problems = [f"pi_models 未知键 {k}(可写键: {', '.join(decl['schema'])})" for k in raw if k not in decl["schema"]]
+    if raw.get("default") is not None and pi_model_id_problem(raw["default"]):
+        problems.append(f"pi_models.default: {pi_model_id_problem(raw['default'])}")
+    by_role = raw.get("by_role", {})
+    if not isinstance(by_role, dict):
+        problems.append("pi_models.by_role 须为 JSON 对象(键 = 角色)")
+    else:
+        for role, model in by_role.items():
+            if role not in decl["roles"]:
+                problems.append(f"pi_models.by_role 键 {role!r} 不在角色 {decl['roles']}")
+            elif pi_model_id_problem(model):
+                problems.append(f"pi_models.by_role.{role}: {pi_model_id_problem(model)}")
+    ref = raw.get("owner_ref")
+    if ref is not None and (not isinstance(ref, str) or not ref.strip() or "\n" in ref or "\r" in ref or redact_progress(ref) != ref):
+        problems.append(f"pi_models.owner_ref 须为非空单行串且不含凭据字样, 实为 {ref!r}")
+    return problems
+
+
+def project_pi_models(project_root: str | Path, *, project: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """project.json execution.pi_models → {default, by_role, owner_ref}; execution 段或 pi_models 缺 = None(未声明, 拉起不传 --model)。
+    形不合 = ExecutionDeclarationError(EXECUTION_DECLARATION_INVALID, 经 project_execution 同一校验); project.json 不可读 = 原异常上抛。只读。"""
+    data = project if project is not None else read_project_json(project_root)
+    if project_execution(project_root, project=data) is None:
+        return None
+    raw = data["execution"].get("pi_models")
+    if raw is None:
+        return None
+    by_role = raw.get("by_role") or {}
+    return {"default": str(raw["default"]).strip() if raw.get("default") is not None else None,
+            "by_role": {str(k): str(v).strip() for k, v in by_role.items()},
+            "owner_ref": str(raw["owner_ref"]).strip() if raw.get("owner_ref") is not None else None}
+
+
+def pi_model_for_role(project_root: str | Path, role: str, *, project: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F169: 某角色(config.schema pi_models.roles)拉起 pi 时用的模型(唯一判定): by_role.<角色> > default > 未声明。
+    返回 {model: <provider>/<id> | None(= 不传 --model, pi 自身缺省), source: 来源说明, role}。声明不合 = ExecutionDeclarationError 上抛。"""
+    decl = pi_models_declaration()
+    if role not in decl["roles"]:
+        raise ExecutionDeclarationError("EXECUTION_DECLARATION_INVALID", [f"角色 {role!r} 不在 pi_models.roles {decl['roles']}"])
+    models = project_pi_models(project_root, project=project)
+    if models and models["by_role"].get(role):
+        return {"model": models["by_role"][role], "source": f"execution.pi_models.by_role.{role}", "role": role}
+    if models and models["default"]:
+        return {"model": models["default"], "source": "execution.pi_models.default", "role": role}
+    return {"model": None, "source": str(decl["pi_default_label"]), "role": role}
 
 
 # ---------------------------------------------------------------------------

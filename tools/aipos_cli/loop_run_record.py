@@ -501,6 +501,8 @@ class LoopRunRecorder:
             "host": plan.location.get("host"), "workstation": plan.cwd, "pid": harness.pid, "pgid": harness.pgid,
             "remote_pgid": harness.remote_pgid, "process_fingerprint": process_fingerprint(harness.pid),
             "privilege_guard": dict(getattr(harness, "privilege_guard", None) or {}),  # AIPOS-F165 件③: 禁提权实际状态(含降级原因)
+            # AIPOS-F169: 实际传入的模型 {model(None = 未传 --model, pi 缺省), source, role}(verbs.schema run_record.launch_model)
+            "model": dict(getattr(plan, "model", None) or {}) or None,
             "started_at": iso_z(), "ended_at": None, "outcome": None, "returncode": None, "termination": None,
             "activity": {"events": 0, "last_event_at": None, "last_activity_at": None, "last_activity_kind": None,
                          "counts": {}},
@@ -614,7 +616,8 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
     if last is not None:
         act = last.get("activity") or {}
         view["launch"] = {k: last.get(k) for k in ("card", "harness", "transport", "host", "workstation", "pid", "pgid",
-                                                    "remote_pgid", "started_at", "ended_at", "outcome", "returncode", "termination")}
+                                                    "remote_pgid", "started_at", "ended_at", "outcome", "returncode", "termination",
+                                                    "model")}  # AIPOS-F169: model(存量记录无 = None)
         view["launch"].update({"events": act.get("events"), "last_event_at": act.get("last_event_at"),
                                "last_activity_at": act.get("last_activity_at"), "last_activity_kind": act.get("last_activity_kind"),
                                "counts": act.get("counts"), "alive": None, "running_seconds": None, "idle_seconds": None})
@@ -1268,6 +1271,16 @@ def wait_for_next_action(governance_root: Path, task_id: str, seconds: float, *,
     return report
 
 
+def model_label(resolution: Any) -> str:
+    """AIPOS-F169: 拉起模型一处渲染(loop status 拉起行 / set-model 影响工位 / check-workstation 同用):
+    声明了 = `<provider>/<id>(来源)`; 未传 --model = 来源说明(pi 缺省)。"""
+    if not isinstance(resolution, dict):
+        return "?"
+    if resolution.get("model"):
+        return f"{resolution['model']}({resolution.get('source')})"
+    return str(resolution.get("source") or "pi 缺省")
+
+
 def _dur(seconds: Any) -> str:
     if not isinstance(seconds, int):
         return "?"
@@ -1305,12 +1318,13 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
                        f"({cur.get('card')}){waiting} 自 {cur.get('since')}")
         la = v.get("launch")
         if la:
+            model = f" 模型 {model_label(la['model'])}" if la.get("model") else ""  # AIPOS-F169: 存量记录无 model = 不显示
             if la.get("ended_at"):
-                out.append(f"  拉起 {la['harness']} {la['card']} pid={la['pid']} 已收尾: outcome={la.get('outcome')} "
+                out.append(f"  拉起 {la['harness']} {la['card']}{model} pid={la['pid']} 已收尾: outcome={la.get('outcome')} "
                            f"returncode={la.get('returncode')} termination={la.get('termination')}")
             else:
                 alive = {True: "存活", False: "已不在"}.get(la.get("alive"), "未探活")
-                out.append(f"  拉起 {la['harness']} {la['card']} @ {la.get('host') or '本机'}:{la.get('workstation')} "
+                out.append(f"  拉起 {la['harness']} {la['card']}{model} @ {la.get('host') or '本机'}:{la.get('workstation')} "
                            f"pid={la['pid']} pgid={la['pgid']} {alive}"
                            + (f"({la['probe_note']})" if la.get("probe_note") else "") + f", 已运行 {_dur(la.get('running_seconds'))}, "
                            f"距最近输出 {_dur(la.get('idle_seconds'))}")

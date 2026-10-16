@@ -226,7 +226,7 @@ def test_item1_resolver_is_single_implementation_and_cli_has_no_active_project_w
              and n.func.id == "_project_write_target"]
     _show(f"[件①·静态] _project_write_target 调用点 {len(calls)} 处(set-paths/set-meta/set-repos/set-repo/set-workstation/"
           "set-execution/freeze-legacy/dispatch-mode set/export 隐式目标)")
-    assert len(calls) == 11  # AIPOS-F143 件②: + set-execution; AIPOS-F148 件②: + set-return-summary; AIPOS-F161: + relocate-workstation(同一目标解析)
+    assert len(calls) == 12  # AIPOS-F143 件②: + set-execution; AIPOS-F148 件②: + set-return-summary; AIPOS-F161: + relocate-workstation; AIPOS-F169: + set-model(同一目标解析)
     wc_src = (REPO_ROOT / "tools/aipos_cli/workspace_config.py").read_text(encoding="utf-8")
     fn = next(n for n in ast.parse(wc_src).body if isinstance(n, ast.FunctionDef) and n.name == "resolve_project_write_target")
     names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
@@ -251,10 +251,15 @@ def test_item2_first_line_names_target_and_absolute_project_json_for_every_write
         "set-meta": ["--phase", "试运行"],
         # AIPOS-F143 件②: set-execution 写前核实例已接入——先在 beta 接入登记两条 land 事件(子 agent 执行者 + pi 审计工位)
         "set-execution": ["--subagent-executor", "exec.beta.adv", "--auditor", "audit.beta.ws"],
+        # AIPOS-F169: pi 模型声明写入口(同族; 写前核 execution 已声明(上一条 --confirm 写入)+ 假 pi 清单, 不调真实 pi)
+        "set-model": ["--model", "kiwiai/qwen3.7-plus", "--owner-ref", "Owner 指示(夹具)"],
         # AIPOS-F148 件②: Return 摘要来源声明写入口(同一两阶段包装)
         "set-return-summary": ["--frontmatter-key", "result_summary"],
     }
     from tools.aipos_cli.enrollment import _trail_line, _write_trail_line, enrollment_trail_path, subagent_land_detail
+    from test_aipos_f169_pi_model_declaration import install_fake_pi
+
+    install_fake_pi(tmp / "fakebin", monkeypatch)
 
     for inst, role, reason in (("exec.beta.adv", "executor", subagent_land_detail(host="adv", harness="codex", mode="subagent", files=[])),
                                ("audit.beta.ws", "auditor", f"host=fixture workstation={tmp / 'ws-audit'} files=[]")):
