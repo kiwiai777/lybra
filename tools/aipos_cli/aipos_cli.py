@@ -1278,6 +1278,8 @@ def _print_owner_decide(report: dict[str, Any]) -> None:
         if item["category"] == "envelope_warning" and report["choice"] == "renew" or (item.get("facts") or {}).get("reason") == "envelope_renew":
             if item.get("recommend"):
                 print(f"  续签由 Owner 执行: {item['recommend']}")
+            if item.get("board_url"):  # AIPOS-F172: Owner 也可在看板信封页亲自续签
+                print(f"  或 Owner 在看板信封页续签: {item['board_url']}")
     for group in report.get("freeze") or []:
         written = group.get("written") or {}
         where = f" 清单条目 {written.get('entry')}" if written.get("written") else ""
@@ -1291,44 +1293,11 @@ def _print_owner_decide(report: dict[str, Any]) -> None:
         print(landing["line"], file=sys.stdout if landing.get("landed") else sys.stderr)
 
 
-def _envelope_mint_payload(
-    *,
-    policy_id: str,
-    agent_or_role: str,
-    max_tasks: int,
-    task_mode: str | None,
-    expires_at: str,
-    decision_summary: str,
-    actor: str,
-    launch_harnesses: list[str] | None = None,
-    lane_repo: str | list[str] | None = None,
-) -> dict[str, Any]:
-    """信封 payload 唯一构造(--dry-run 本地预演与 --confirm 门路径同读): 门 envelope 路径只要 decision_id + autonomy_policy。"""
-    from tools.aipos_cli.workspace_config import repo_name_set
+def _envelope_mint_payload(**kwargs: Any) -> dict[str, Any]:
+    """信封 payload 唯一构造(AIPOS-F172: 实现收口 envelope_mint.build_mint_payload, CLI 与看板信封页同调)。"""
+    from tools.aipos_cli.envelope_mint import build_mint_payload
 
-    task_selector: dict[str, Any] = {}
-    if task_mode:
-        task_selector["task_mode"] = task_mode
-    lane_repos = repo_name_set(lane_repo)  # AIPOS-F139: 仓集合唯一解析(--lane-repo 可重复)
-    if lane_repos:
-        # AIPOS-F134 件③: lane 选择器(门 owner_decision_writer._normalize_autonomy_policy 按 resolve_card_repo 逐个校验); 缺省 = 不限 lane
-        task_selector["lane_repo"] = lane_repos
-    return {
-        "decision_id": f"envelope-{policy_id}",
-        "actor": actor,
-        "decided_by_ref": actor,
-        "decision_summary": decision_summary,
-        "autonomy_policy": {
-            "policy_id": policy_id,
-            "agent_or_role": agent_or_role,
-            "active_from": iso_z(),
-            "expires_at": expires_at,
-            "max_tasks": max_tasks,
-            "task_selector": task_selector,
-            # AIPOS-F95 件②(b): 拉起授权(缺省 [] = 只手工 /go); 门 owner_decision_writer 按 enums.schema harness.launch 校验
-            "launch_harnesses": list(launch_harnesses or []),
-        },
-    }
+    return build_mint_payload(**kwargs)
 
 
 def _envelope_mint_via_gate(
@@ -1340,100 +1309,27 @@ def _envelope_mint_via_gate(
     token_role: str,
     json_output: bool,
 ) -> int:
-    """逐张经门两阶段签信封: lybra_owner_decision_record_dry_run(workspace_root=目标治理根, 门按凭据 projects 校验项目范围)
-    → _confirm(owner_confirmation_token=OWNER_CONFIRMED; 门另要 owner_confirm scope)。凭据只从 connection.json 读, 只出指纹。
-    任一张门拒 = 停在该张(已落的照实列出), exit 1。输出以门生记录为准(performed_writes)。"""
-    from tools.aipos_cli.confirm_client import (
-        GateAddressError,
-        GateClient,
-        GateError,
-        resolve_gate_base_url,
-        token_fingerprint,
-    )
-    from tools.aipos_cli.two_phase_shell_factory import load_role_token  # AIPOS-F157 件①: 取凭据唯一口(同角色多实例即拒)
-    conn_path = workspace_connection_path(governance_root, connection_target=Path(connection_json) if connection_json else None)
-    if not conn_path.is_file():
-        print(f"Error: 凭据文件不存在: {conn_path}(--connection-json 指向持 {token_role} 凭据的 connection.json, 如门的中央凭据库)", file=sys.stderr)
-        return 1
-    try:
-        token = load_role_token(connection_json_path=str(conn_path), role=token_role)
-    except (OSError, ValueError) as exc:
-        print(f"Error: 读不到 {token_role} 凭据({conn_path}): {exc}", file=sys.stderr)
-        return 1
-    try:
-        # AIPOS-F106 件①: 门基址唯一推导口(委托 ConnectionResolver.resolve_gate_url), 凭据文件须声明 mcp.rpc_url
-        base_url = resolve_gate_base_url(connection_json=conn_path, require_declared=True)
-    except GateAddressError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-    signed: list[dict[str, Any]] = []
-    report: dict[str, Any] = {"ok": False, "operation": "envelope_mint", "via": "gate owner_decision_record envelope path",
-                              "gate_url": base_url, "credential_role": token_role, "credential_fingerprint": token_fingerprint(token),
-                              "governance_root": str(governance_root), "signed": signed, "landing": None}
+    """`envelope mint --confirm` 出声薄壳: 签发与落账全在 envelope_mint.mint_via_gate(AIPOS-F172 收口, 看板同调), 本函数只按 --json / 文本出声。"""
+    from tools.aipos_cli.envelope_mint import mint_via_gate
 
-    def _emit(rc: int, error: str | None = None) -> int:
-        if error:
-            report["error"] = error
-        # AIPOS-F158 件①: 已签各张的门生记录(performed_writes: 决策记录 / 信封 / decision_log 指针)经 N6 同一提交口落账;
-        # 中途门拒 = 已签的照落。落账失败不影响信封生效: 出拒因 + 补账命令, 签发成功时以声明退出码退出(post_write_landing)
-        landing = None
-        if signed:
-            from tools.aipos_cli.governance_commit import land_written_paths
-            from tools.schema_loader import SchemaLoadError
-
-            written_all = [p for item in signed for p in item["written"]]
-            try:
-                landing = land_written_paths(governance_root, written_all, actor,
-                                             command="envelope_mint", policy_ids=" ".join(item["policy_id"] for item in signed))
-            except SchemaLoadError as exc:  # 落账声明不可读 = 不落账(fail-closed), 信封已生效: 拒因出声, exit 1
-                landing = {"landed": False, "exit_code": 1, "reason": str(exc), "paths": written_all,
-                           "line": f"⚠ 落账未完成(写入已生效, 勿重复执行写命令): {exc}"}
-            report["landing"] = {k: v for k, v in landing.items() if k != "line"}
-            if rc == 0 and not landing["landed"]:
-                rc = landing["exit_code"]
-        if json_output:
-            print(render_json(report))
-        else:
-            print(f"envelope mint --confirm via {base_url} (credential {token_role} {report['credential_fingerprint']}) → {governance_root}")
-            for item in signed:
-                print(f"  signed {item['policy_id']} covers {item['agent_or_role']}: decision={item['decision_id']}")
-                for path in item["written"]:
-                    print(f"    wrote {path}")
-            if landing is not None:
-                print(landing["line"], file=sys.stdout if landing["landed"] else sys.stderr)
-            if error:
-                print(f"Error: {error}", file=sys.stderr)
-        return rc
-
-    try:
-        client = GateClient(base_url, token)
-        client.initialize()
-        for payload in payloads:
-            policy = payload["autonomy_policy"]
-            dry = client.call_tool("lybra_owner_decision_record_dry_run", {**payload, "workspace_root": str(governance_root)})
-            if dry.get("verdict") == Verdict.BLOCK or not dry.get("ok", False) or not dry.get("dry_run_token"):
-                reasons = dry.get("blocking_reasons") or dry.get("errors") or dry.get("message") or dry
-                return _emit(1, f"门拒 {policy['policy_id']} 预演: {json.dumps(reasons, ensure_ascii=False)[:800]}")
-            done = client.call_tool("lybra_owner_decision_record_confirm", {
-                "dry_run_token": dry["dry_run_token"],
-                "actor": actor,
-                "owner_confirmation_token": OWNER_CONFIRMATION_TOKEN,
-                "workspace_root": str(governance_root),
-            })
-            if not done.get("ok", False):
-                reasons = done.get("errors") or done.get("message") or done.get("error_code") or done
-                return _emit(1, f"门拒 {policy['policy_id']} 确认: {json.dumps(reasons, ensure_ascii=False)[:800]}")
-            writes = [str(w.get("path")) for w in (done.get("performed_writes") or []) if isinstance(w, dict) and w.get("path")]
-            written_files = [governance_root / w for w in writes]
-            missing = [str(f) for f in written_files if not f.is_file()]
-            if not writes or missing:
-                return _emit(1, f"门应答成功但记录未见落盘({policy['policy_id']}): writes={writes} missing={missing}")
-            signed.append({"policy_id": policy["policy_id"], "agent_or_role": policy["agent_or_role"],
-                           "decision_id": payload["decision_id"], "written": writes})
-    except GateError as exc:
-        return _emit(1, f"门调用失败: {exc}(已签 {len(signed)} 张, 以门生记录为准; 未签的重跑本命令, 已落的 policy_id 会被门拒「already exists」)")
-    report["ok"] = True
-    return _emit(0)
+    report = mint_via_gate(payloads, governance_root=governance_root, actor=actor, connection_json=connection_json, token_role=token_role)
+    if report["early"]:
+        print(f"Error: {report['error']}", file=sys.stderr)
+        return int(report["exit_code"])
+    if json_output:
+        print(render_json({k: v for k, v in report.items() if k not in ("exit_code", "early", "landing_line")
+                           and not (k == "error" and v is None)}))
+    else:
+        print(f"envelope mint --confirm via {report['gate_url']} (credential {token_role} {report['credential_fingerprint']}) → {governance_root}")
+        for item in report["signed"]:
+            print(f"  signed {item['policy_id']} covers {item['agent_or_role']}: decision={item['decision_id']}")
+            for path in item["written"]:
+                print(f"    wrote {path}")
+        if report["landing_line"] is not None:
+            print(report["landing_line"], file=sys.stdout if (report["landing"] or {}).get("landed") else sys.stderr)
+        if report["error"]:
+            print(f"Error: {report['error']}", file=sys.stderr)
+    return int(report["exit_code"])
 
 
 def _migrate_record_type_cli(args: argparse.Namespace) -> int:
@@ -5408,13 +5304,13 @@ def main(argv: list[str] | None = None) -> int:
                     connection_json=getattr(args, "connection_json", None), token_role=args.token_role,
                     json_output=bool(args.json),
                 )
-            results = []
-            for payload in payloads:
-                try:
-                    results.append(record_owner_decision(payload, dry_run=True, repo_root=envelope_root, actor=args.actor))
-                except (FileNotFoundError, OSError, ValueError) as exc:
-                    print(f"Error: {exc}", file=sys.stderr)
-                    return 1
+            from tools.aipos_cli.envelope_mint import mint_preview  # AIPOS-F172: 预演唯一实现(看板信封页同调)
+
+            try:
+                results = mint_preview(payloads, governance_root=envelope_root, actor=args.actor)
+            except (FileNotFoundError, OSError, ValueError) as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
             print(render_json(results[0] if len(results) == 1 else {"ok": all(r.get("ok") for r in results), "dry_run": True, "results": results}))
             return 1 if any(r.get("verdict") == Verdict.BLOCK for r in results) else 0
         

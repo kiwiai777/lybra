@@ -36,6 +36,8 @@
       </button>
       <!-- AIPOS-F170 件④: Owner 待决收件箱只读入口(服务端渲染页 /owner/inbox, 与 lybra owner inbox 同一数据) -->
       <a id="owner-inbox-link" class="owner-inbox-link" href="/owner/inbox" data-owner-inbox-entry="readonly">Owner inbox</a>
+      <!-- AIPOS-F172: envelope page (/owner/envelopes; Owner sessions may renew / mint there, everyone else read-only) -->
+      <a id="owner-envelopes-link" class="owner-inbox-link" href="/owner/envelopes" data-owner-envelopes-entry="owner-write-exception">Envelopes</a>
     </div>
     
     <div id="workspace-grid" class="workspace-grid" data-owner-truth="overview">
@@ -172,6 +174,7 @@
       document.getElementById('section-title').textContent = i18n.t('overview.all_projects');
       document.getElementById('add-project-text').textContent = i18n.t('overview.add_project');
       document.getElementById('owner-inbox-link').textContent = i18n.t('overview.owner_inbox');
+      document.getElementById('owner-envelopes-link').textContent = i18n.t('overview.owner_envelopes');
       document.getElementById('board-readonly-note').textContent = i18n.t('board.readonly_note');
       
       // Modal i18n

@@ -184,6 +184,29 @@ class DeviceCodeStore(_BaseTicketStore):
             }
 
 
+class PreviewTokenStore(_BaseTicketStore):
+    """AIPOS-F172: 看板信封签发的本会话预演令牌(绑定会话指纹 + 参数摘要)。TTL 读声明(verbs.schema board_owner_envelopes.preview_ttl_seconds),
+    单次即焚(take 命中即删, 无论随后判定是否通过), 内存态(重启即失效 = 重新预演)。令牌原文不落日志。"""
+
+    def __init__(self, *, ttl_seconds: int) -> None:
+        super().__init__(ttl_seconds=ttl_seconds, mk_token=_random_otc)
+
+    def issue(self, *, session_ref: str, digest: str) -> str:
+        return self._issue(session_ref=session_ref, digest=digest)
+
+    def take(self, token: str | None) -> tuple[str, dict[str, Any] | None]:
+        """取出并删除。返回 (status, entry): missing(未带)/ unknown(错的或已用过)/ expired(过期)/ ok。"""
+        if not token:
+            return "missing", None
+        with self._lock:
+            entry = self._tickets.pop(token, None)
+        if entry is None:
+            return "unknown", None
+        if self._now() > float(entry.get("expire_at", 0.0)):
+            return "expired", None
+        return "ok", entry
+
+
 def resolve_auth_log_path(repo_root: Path | None) -> Path | None:
     """auth-log 落点 = ``<repo_root>/.lybra/auth-log.jsonl``;repo_root 为 None → None(不落盘)。"""
     if repo_root is None:

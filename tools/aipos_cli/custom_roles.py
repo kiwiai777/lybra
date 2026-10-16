@@ -234,6 +234,21 @@ def role_in_class_group(role_name: str, group: str, project_root: str | Path | N
     return resolve_role_to_class(role_name, project_root, required=True) in role_classes_in_group(group)
 
 
+def instance_role_name_candidates(instance: str) -> list[str]:
+    """AIPOS-F172: 实例名 / 角色名 → 角色名候选(resolve_instance_role_class 第一步的唯一实现, 只读 roles.schema 注册表, 不读门注册表):
+    无点 = 自身(角色名禁含点); 再加首段(naming.template 唯一解析 parse_instance_name; 非三段式取首段)按 naming.prefix 反查的角色名
+    (首段不是任何前缀则首段即角色名)。去重保序; 空 = []。信封「同一驱动方」判定(autonomy_policy.envelope_overview)与本函数同读。"""
+    from tools.aipos_cli.naming_profile import _registry_prefix_mapping, parse_instance_name
+
+    clean = str(instance or "").strip()
+    if not clean:
+        return []
+    parsed = parse_instance_name(clean)
+    head = parsed["prefix"] if parsed else clean.split(".")[0]
+    role_by_prefix = {prefix: role for role, prefix in _registry_prefix_mapping().items()}
+    return list(dict.fromkeys(r for r in (clean if "." not in clean else "", role_by_prefix.get(head, head)) if r))
+
+
 def resolve_instance_role_class(
     instance: str,
     project_root: str | Path | None = None,
@@ -250,16 +265,11 @@ def resolve_instance_role_class(
     角色名 → 角色类只经 resolve_role_to_class(内建 = 自身; 自定义 = 门注册表 role_class)。
     解析不到 → None; required=True → UnknownRoleClass(拒因列实例与试过的角色名)。注册表读不出 = RoleRegistryReadError 照抛。
     """
-    from tools.aipos_cli.naming_profile import _registry_prefix_mapping, parse_instance_name
-
     clean = str(instance or "").strip()
     tried: list[str] = []
     if clean:
-        parsed = parse_instance_name(clean)
-        head = parsed["prefix"] if parsed else clean.split(".")[0]
-        role_by_prefix = {prefix: role for role, prefix in _registry_prefix_mapping().items()}
-        for role_name in (clean if "." not in clean else "", role_by_prefix.get(head, head)):
-            if not role_name or role_name in tried:
+        for role_name in instance_role_name_candidates(clean):
+            if role_name in tried:
                 continue
             tried.append(role_name)
             cls = resolve_role_to_class(role_name, project_root)

@@ -69,6 +69,7 @@ from web.board.auth_otc import (
     OTC_TTL_SECONDS,
     DeviceCodeStore,
     OTCStore,
+    PreviewTokenStore,
     append_auth_log,
     resolve_auth_log_path,
 )
@@ -280,7 +281,7 @@ def _api_routes(repo_root: Path | None, board_config_path: Path | None = None, *
         "/api/external-intake/review": lambda params: get_external_intake_review(repo_root=_resolve_workspace_root(params, repo_root, home_root)),
         "/api/owner-decision-records": lambda params: get_owner_decision_records(repo_root=_resolve_workspace_root(params, repo_root, home_root)),
         # AIPOS-F168 件①: Owner 待决收件箱(跨 home 根全部已注册项目, CLI `lybra owner inbox` 同一数据; home 根 = 服务进程的 resolve_home_root)
-        "/api/owner/inbox": lambda _params: get_owner_inbox(),
+        "/api/owner/inbox": lambda _params: get_owner_inbox(home_root),  # AIPOS-F172: server home root (None = same resolver ladder, unchanged)
         "/api/planner-drafts/review": partial(_get_planner_drafts_review_route, repo_root=repo_root),
         "/api/owner-decisions/review": partial(_get_owner_decisions_review_route, repo_root=repo_root),
         "/api/orchestration/index": lambda params: get_orchestration_index(repo_root=_resolve_workspace_root(params, repo_root, home_root)),
@@ -1691,7 +1692,8 @@ class SessionStore:
         self._sessions: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
 
-    def create(self, *, role: str, scopes: list[str], token_ref: str = "") -> str:
+    def create(self, *, role: str, scopes: list[str], token_ref: str = "", login_method: str = "") -> str:
+        """AIPOS-F172: 另记登录方式 login_method(token / otc / device_code / remember; 信封签发来源写明会话 / 设备标识用)。"""
         session_id = secrets.token_urlsafe(32)
         with self._lock:
             self._sessions[session_id] = {
@@ -1699,6 +1701,7 @@ class SessionStore:
                 "is_owner": role == "owner",
                 "scopes": list(scopes),
                 "token_ref": token_ref,
+                "login_method": login_method,
                 "created_at": _utc_now(),
             }
         return session_id
@@ -1936,6 +1939,7 @@ def is_authorized(
             "is_owner": role == "owner",
             "scopes": scopes,
             "token_ref": token_ref,
+            "login_method": "remember",
             "created_at": _utc_now(),
         }
     
@@ -1952,6 +1956,9 @@ def make_handler(
     otc_store: OTCStore | None = None,
     device_store: DeviceCodeStore | None = None,
     auth_log_path: Path | None = None,
+    preview_store: PreviewTokenStore | None = None,
+    mint_connection_json: Path | None = None,
+    board_audit_log_path: Path | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     routes = _api_routes(repo_root, board_config_path, home_root=home_root)  # AIPOS-F171: 只读 GET 路由; 无 POST 业务路由
     sessions = session_store if session_store is not None else SessionStore()
@@ -1964,6 +1971,21 @@ def make_handler(
     # F-271-3: 长效 cookie secret(持久化到 .lybra/remember_secret)
     from web.board.auth_otc import load_or_create_remember_secret
     remember_secret = load_or_create_remember_secret(repo_root)
+    # AIPOS-F172 写例外①(信封签发): 预演令牌表(TTL 读声明)、签发凭据库(= 看板登录凭据库: 服务进程工作区 .lybra/connection.json, 只在服务端经
+    # envelope_mint → load_role_token 读, 不进应答)、看板审计日志落点(服务进程工作区 .lybra/<声明 audit_log_file>)。显式注入优先(测试)。
+    from tools.aipos_cli.envelope_board import board_envelopes_declaration, resolve_board_audit_log_path
+
+    envelope_decl = board_envelopes_declaration()
+    previews = preview_store if preview_store is not None else PreviewTokenStore(ttl_seconds=int(envelope_decl["preview_ttl_seconds"]))
+    if mint_connection_json is not None:
+        mint_conn = mint_connection_json
+    elif repo_root is not None:
+        from tools.aipos_cli.service_mode import connection_path as _connection_path
+
+        mint_conn = _connection_path(repo_root)
+    else:
+        mint_conn = None
+    board_audit = board_audit_log_path if board_audit_log_path is not None else resolve_board_audit_log_path(repo_root)
 
     class BoardHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -1973,6 +1995,10 @@ def make_handler(
         _device = device
         _auth_log_path = log_path
         _remember_secret = remember_secret
+        _previews = previews
+        _mint_conn = mint_conn
+        _board_audit = board_audit
+        _envelope_paths = {k: str(envelope_decl[k]) for k in ("page_path", "api_path", "write_path")}
 
         def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
             body = _json_bytes(payload)
@@ -2075,7 +2101,7 @@ def make_handler(
             红线:原始 token / OTC 值 / 设备码值均不写日志;auth-log 只记
             时间/方式/角色/token_ref/来源 IP。留痕失败不影响登录(尽力留痕)。"""
             session_id = self._sessions.create(
-                role=info["role"], scopes=info["scopes"], token_ref=info.get("token_ref", "")
+                role=info["role"], scopes=info["scopes"], token_ref=info.get("token_ref", ""), login_method=method
             )
             append_auth_log(
                 self._auth_log_path,
@@ -2218,6 +2244,68 @@ def make_handler(
             )
             self._send_json(HTTPStatus.OK, {"ok": approved, "status": "approved" if approved else "not_approved"})
 
+        # ---- AIPOS-F172 信封页 + Owner 签发写例外 ----
+        def _current_session(self) -> tuple[str | None, dict[str, Any] | None]:
+            """当前请求的会话(会话 cookie; 失效时 remember token 验签所重建的会话, 与 is_authorized 同一判据)。"""
+            cookie_header = self.headers.get("Cookie")
+            sid = parse_session_cookie(cookie_header)
+            info = self._sessions.get(sid)
+            if info is None and self._remember_secret:
+                from web.board.auth_otc import verify_remember_token
+
+                token = parse_remember_cookie(cookie_header)
+                restored = verify_remember_token(self._remember_secret, token) if token else None
+                if restored is not None:
+                    sid = restored["session_id"]
+                    info = self._sessions.get(sid)
+            return (sid, info) if info is not None else (None, None)
+
+        def _send_html(self, text: str) -> None:
+            body = text.encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _handle_envelopes_page(self) -> None:
+            """GET 信封页(服务端渲染): 全部登录会话可看; 只有 Owner 会话渲染表单(owner=True)。"""
+            from tools.aipos_cli.envelope_board import collect_envelopes, render_envelopes_error_html, render_envelopes_html
+            from tools.schema_loader import SchemaLoadError
+
+            _sid, info = self._current_session()
+            try:
+                page = render_envelopes_html(collect_envelopes(home_root), owner=bool(info and info.get("role") == "owner"))
+            except (OSError, ValueError, SchemaLoadError) as exc:
+                page = render_envelopes_error_html(f"{type(exc).__name__}: {exc}")
+            self._send_html(page)
+
+        def _handle_envelopes_api(self) -> None:
+            from tools.aipos_cli.envelope_board import collect_envelopes
+            from tools.schema_loader import SchemaLoadError
+
+            try:
+                self._send_json(HTTPStatus.OK, {"ok": True, "data": collect_envelopes(home_root)})
+            except (OSError, ValueError, SchemaLoadError) as exc:
+                self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": "ENVELOPES_UNREADABLE",
+                                                                   "message": f"{type(exc).__name__}: {exc}"})
+
+        def _handle_envelope_mint(self) -> None:
+            """POST 写例外①(唯一写路由): 全部判定在 envelope_board.handle_mint_request(Owner 会话 / workspace / 预演令牌 / 审计日志)。
+            会话 actor 来自登录会话(role / token_ref / 会话指纹 / 登录方式 / 来源 IP), 不取请求体。"""
+            from tools.aipos_cli.envelope_board import handle_mint_request, session_ref
+
+            sid, info = self._current_session()
+            session = None
+            if info is not None and sid:
+                session = {"role": info.get("role"), "token_ref": info.get("token_ref") or "", "session_ref": session_ref(sid),
+                           "login_method": info.get("login_method") or "", "source_ip": self._source_ip()}
+            status, payload = handle_mint_request(
+                self._read_json_body(), session=session, home_root=home_root, preview_store=self._previews,
+                connection_json=self._mint_conn, audit_log_path=self._board_audit, origin=self.headers.get("Origin"),
+                host=self.headers.get("Host"), content_type=self.headers.get("Content-Type"))
+            self._send_json(HTTPStatus(status), payload)
+
         def do_GET(self) -> None:  # noqa: N802
             # AIPOS-270 鉴权闸门:未登录 302 到 /login(静态资源与公开路径放行)。
             if not self._auth_gate("GET"):
@@ -2257,12 +2345,20 @@ def make_handler(
             if path == "/owner/inbox":
                 from tools.aipos_cli.board_adapter import render_owner_inbox_page
 
-                body = render_owner_inbox_page().encode("utf-8")
+                body = render_owner_inbox_page(home_root).encode("utf-8")
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                return
+
+            # AIPOS-F172: 信封页(服务端渲染)+ 只读数据
+            if path == self._envelope_paths["page_path"]:
+                self._handle_envelopes_page()
+                return
+            if path == self._envelope_paths["api_path"]:
+                self._handle_envelopes_api()
                 return
 
             # AIPOS-251: Overview page as new root
@@ -2310,6 +2406,10 @@ def make_handler(
                 return
             if path == "/api/auth/device/approve":
                 self._handle_device_approve()
+                return
+            # AIPOS-F172 写例外①: Owner 信封签发(声明 verbs.schema board_owner_envelopes.write_path); 其余写请求照旧只读应答
+            if path == self._envelope_paths["write_path"]:
+                self._handle_envelope_mint()
                 return
             self._method_not_allowed()
 

@@ -370,7 +370,7 @@
     }
   },
   "board_readonly": {
-    "description": "AIPOS-F171 件③(Owner 10-16 裁定: web 看板现阶段只读展示、零写入, Owner 交互经顾问 agent; gap #155): 看板全部业务写接口下线——除 allowed_post_paths(鉴权 / 登录通道)外, 任何 POST / PUT / PATCH / DELETE 一律返回 status + 下方应答(不调用任何写实现), 前端不再提供写按钮(需 Owner 动作处给「告诉顾问: …」与对应顾问命令)。不修鉴权(鉴权路由照旧)。唯一实现 web/board/app.py dispatch_api_request(读本段; 原 POST 业务路由表 _api_post_routes 删除)。",
+    "description": "AIPOS-F171 件③(Owner 10-16 裁定: web 看板现阶段只读展示、零写入, Owner 交互经顾问 agent; gap #155): 看板全部业务写接口下线——除 allowed_post_paths(鉴权 / 登录通道)外, 任何 POST / PUT / PATCH / DELETE 一律返回 status + 下方应答(不调用任何写实现), 前端不再提供写按钮(需 Owner 动作处给「告诉顾问: …」与对应顾问命令)。不修鉴权(鉴权路由照旧)。唯一实现 web/board/app.py dispatch_api_request(读本段; 原 POST 业务路由表 _api_post_routes 删除)。AIPOS-F172: 唯一写例外 = Owner 信封签发一条路由(声明 board_owner_envelopes.write_path, 只对 Owner 会话), 其余写请求照旧按本段应答。",
     "status": 405,
     "error": "BOARD_READ_ONLY",
     "message": "看板只读, 请经顾问",
@@ -384,6 +384,162 @@
       "/api/auth/device/poll",
       "/api/auth/device/approve"
     ]
+  },
+  "board_owner_envelopes": {
+    "description": "AIPOS-F172(Owner 10-16 定: 看板只读的例外①——信封授权, 只有 Owner 能做): 看板「信封」页 + Owner 在看板续签 / 新签信封。只读部分 = 按项目列信封(状态唯一推导 autonomy_policy.envelope_overview, 与 Owner 收件箱 / loop status 预警 / brief 同读; 项目 = home 根注册项目唯一枚举 owner_inbox.home_projects)。写例外 = write_path 一条路由(stage=preview|confirm): 只有 Owner 角色会话可调用(其它会话 owner_only), 必带 workspace = home 根推导出的项目名, 预演调 envelope mint 唯一实现 envelope_mint.mint_preview(--dry-run 同一本地 writer)并发本会话预演令牌(绑定会话 + 参数摘要, preview_ttl_seconds 过期, 单次即焚), 确认须携同一令牌与同一参数, 调 envelope_mint.mint_via_gate(--confirm 同一门路径, 含 F158 自动落账); 签发凭据 = 看板登录凭据库(服务进程工作区 .lybra/connection.json)中的 owner 凭据, 只在服务端经 load_role_token 读取, 应答只出指纹; 记录 actor = 登录会话的 Owner 角色, 来源 = 看板(capture_surface), 会话指纹 / 登录方式 / 来源 IP 写进 captured_by 与 decision_rationale。每次预演 / 确认(含被拒)写看板审计日志(服务进程工作区 .lybra/<audit_log_file>, 写不进 = 确认拒签, fail-closed)。除 write_path 外看板其余写路由仍按 board_readonly 应答。唯一实现: tools/aipos_cli/envelope_board.py(视图 / 渲染 / 请求处理)+ web/board/app.py(路由)。",
+    "page_path": "/owner/envelopes",
+    "api_path": "/api/owner/envelopes",
+    "write_path": "/api/owner/envelopes/mint",
+    "script_path": "/envelopes.js",
+    "preview_ttl_seconds": 300,
+    "audit_log_file": "board-audit-log.jsonl",
+    "capture_surface": "board",
+    "token_role": "owner",
+    "owner_role": "owner",
+    "captured_by_template": "board:{role}:{token_ref}:session-{session_ref}",
+    "rationale_template": "来源=看板 Owner 会话(会话指纹 {session_ref}; 登录方式 {login_method}; 来源 IP {source_ip}; 凭据引用 {token_ref})",
+    "decision_summary": {
+      "renew": "看板续签 {template_policy_id} → {policy_id}(覆盖 {agent_or_role}, 额度 {max_tasks}, 到期 {expires_at})",
+      "new": "看板新签 {policy_id}(覆盖 {agent_or_role}, 额度 {max_tasks}, 到期 {expires_at})"
+    },
+    "status_labels": {
+      "warn": "将尽 / 将到期",
+      "exhausted": "额度用尽",
+      "active": "生效",
+      "not_yet_active": "未到生效时间",
+      "superseded": "已被接替",
+      "expired": "已过期",
+      "inactive": "已停用",
+      "invalid": "时间窗读不出",
+      "missing": "信封文件缺失或形不合"
+    },
+    "status_tone": {
+      "warn": "alert",
+      "exhausted": "alert",
+      "active": "ok",
+      "not_yet_active": "ok",
+      "superseded": "muted",
+      "expired": "muted",
+      "inactive": "muted",
+      "invalid": "alert",
+      "missing": "alert"
+    },
+    "texts": {
+      "title": "信封 — {projects} 个项目(home 根 {home_root})",
+      "project_heading": "{project}",
+      "project_paused": "(已暂停)",
+      "current_heading": "当前在用(每个驱动方)",
+      "history_heading": "已接替 / 已过期 / 已停用 {count} 张(折叠)",
+      "none": "该项目没有信封",
+      "driver_none": "{agent_or_role}: 无在用信封(最新 {latest})",
+      "columns": [
+        "policy_id",
+        "驱动方",
+        "作用范围",
+        "用量 / 上限",
+        "到期",
+        "状态"
+      ],
+      "scope_line": "task_mode={task_mode} · lane 仓={lane_repos} · 拉起={launch_harnesses}",
+      "scope_any": "不限",
+      "scope_manual": "只手工 /go",
+      "superseded_by": "被 {policy_id} 接替",
+      "renew_note": "注: {note}",
+      "readonly_hint": "只读视图: 续签 / 新签只对 Owner 登录会话开放; 其他角色请告诉顾问。",
+      "renew_button": "续签 → {policy_id}",
+      "new_heading": "新签信封({project})",
+      "field_agent_or_role": "驱动方(agent_or_role)",
+      "field_task_mode": "task_mode",
+      "field_lane_repo": "lane 仓(逗号分隔, 空 = 不限)",
+      "field_launch_harness": "拉起授权 harness(逗号分隔, 空 = 只手工 /go)",
+      "field_max_tasks": "额度(max_tasks)",
+      "field_expires_at": "到期(ISO8601)",
+      "field_policy_id": "policy_id(空 = 按该驱动方已有最大序号 +1)",
+      "preview_button": "预演",
+      "confirm_button": "确认签发",
+      "cancel_button": "取消",
+      "preview_heading": "预演全文(未写入; 确认后经门签发并落账)",
+      "result_heading": "签发结果",
+      "preview_lines": [
+        "项目: {project}(治理根 {governance_root})",
+        "policy_id: {policy_id}{renew_part}",
+        "影响谁: {agent_or_role}",
+        "范围: task_mode={task_mode} · lane 仓={lane_repos} · 拉起={launch_harnesses}",
+        "额度: {max_tasks} 次",
+        "到期: {expires_at}",
+        "决策摘要: {decision_summary}",
+        "签发身份: actor={actor} · 来源=看板 · {captured_by}",
+        "预演裁决: {verdict}"
+      ],
+      "renew_part": "(续签自 {template_policy_id})",
+      "page_error": "信封页读不出(不猜): {error}"
+    },
+    "errors": {
+      "OWNER_ONLY": {
+        "status": 403,
+        "message": "只有 Owner 登录会话可以签发信封; 其他角色请告诉顾问"
+      },
+      "ORIGIN_MISMATCH": {
+        "status": 403,
+        "message": "请求来源与看板地址不符(跨站请求拒签)"
+      },
+      "WORKSPACE_REQUIRED": {
+        "status": 400,
+        "message": "请求须带 workspace(home 根已注册项目名)"
+      },
+      "WORKSPACE_NOT_IN_HOME": {
+        "status": 400,
+        "message": "workspace {workspace!r} 不是 home 根 {home_root} 的已注册项目: {projects}"
+      },
+      "PARAMS_INVALID": {
+        "status": 400,
+        "message": "参数不合: {detail}"
+      },
+      "TEMPLATE_NOT_CURRENT": {
+        "status": 400,
+        "message": "续签模板 {template_policy_id} 不是该项目当前在用的信封"
+      },
+      "STAGE_INVALID": {
+        "status": 400,
+        "message": "stage 须为 preview 或 confirm"
+      },
+      "PREVIEW_BLOCKED": {
+        "status": 422,
+        "message": "预演被拒(未发预演令牌): {detail}"
+      },
+      "PREVIEW_TOKEN_REQUIRED": {
+        "status": 403,
+        "message": "确认须携带本会话的预演令牌(先预演)"
+      },
+      "PREVIEW_TOKEN_INVALID": {
+        "status": 403,
+        "message": "预演令牌无效或已用过(单次即焚); 请重新预演"
+      },
+      "PREVIEW_TOKEN_EXPIRED": {
+        "status": 403,
+        "message": "预演令牌已过期({ttl} 秒); 请重新预演"
+      },
+      "PREVIEW_SESSION_MISMATCH": {
+        "status": 403,
+        "message": "预演令牌不属于本会话; 请在本会话重新预演"
+      },
+      "PREVIEW_PARAMS_MISMATCH": {
+        "status": 403,
+        "message": "确认参数与预演不一致(预演后改过参数或续签序号已变); 请重新预演"
+      },
+      "AUDIT_LOG_UNAVAILABLE": {
+        "status": 503,
+        "message": "看板审计日志写不进({detail}), 拒签(每次签发须留痕)"
+      },
+      "CREDENTIAL_UNAVAILABLE": {
+        "status": 503,
+        "message": "看板服务进程没有可用的 Owner 签发凭据库(工作区未声明); 请用 CLI: {command}"
+      },
+      "MINT_REJECTED": {
+        "status": 409,
+        "message": "签发未完成: {detail}"
+      }
+    }
   },
   "envelope_trace": {
     "description": "AIPOS-F142 件②: 门侧信封判定诊断行([ENVELOPE_TRACE], autonomy_policy.trace_envelope 逐谓词留痕, 走 stderr)的输出开关唯一声明。开关只在发射处一处判定(autonomy_policy.envelope_trace_enabled), 所有调用方受同一开关约束: CLI(lybra 入口 aipos_cli.main → decide_cli_envelope_trace, 调用结束由 cli_envelope_trace_entry 恢复)缺省关, --verbose(挂在 verbose_commands 所列命令, 唯一挂载口 autonomy_policy.attach_verbose_flags)或调试环境变量 debug_env 开; in-process 嵌套调用(loop 驱动器执行派生命令)沿用外层决定; 不经 CLI 入口的进程(门 MCP 服务, journald 留痕 AIPOS-PRERELEASE-1)取 non_cli_default_enabled。只开关调试轨迹输出, 信封判定逻辑与结果不变; 门拒时的拒因与原因链由各命令照常输出。",
@@ -2728,6 +2884,7 @@
           "ask": "{why}: 定是否续签",
           "recommend": "续签(Owner 执行): {renew_command}",
           "impact": "信封覆盖的 {agent_or_role} 自动推进将在额度用尽 / 到期后停",
+          "decide_board": "  裁决: Owner 在看板「信封」页亲自续签 {board_url}(CLI 仍可: {command})",
           "options": ["renew", "let_expire"]
         }
       },

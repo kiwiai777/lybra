@@ -909,16 +909,18 @@ def next_action_declaration(run_decl: dict[str, Any], contract: dict[str, Any] |
 
 def envelope_warning_view(governance_root: Path, view: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any] | None:
     """AIPOS-F166 件②: 运行所用信封的预警(判定唯一 autonomy_policy.envelope_warning; 用量真相 envelope_usage 现读门侧计数)。
-    达阈值 = {policy_id, state, why, line(声明 envelope.renew.messages.warn 渲染, 含续签命令)}; 否 / 无信封 / 信封缺 = None。"""
-    from tools.aipos_cli.autonomy_policy import envelope_renew_declaration, envelope_usage, envelope_warning, renew_plan
+    达阈值 = {policy_id, state, why, line(声明 envelope.renew.messages.warn 渲染, 含续签命令)}; 否 / 无信封 / 信封缺 = None。
+    AIPOS-F172(gap #160): 状态取信封状态单一推导 autonomy_policy.envelope_status(看板信封页 / 收件箱同读)——已被同驱动方更新信封接替 = 不预警。"""
+    from tools.aipos_cli.autonomy_policy import envelope_renew_declaration, envelope_status, renew_plan
 
     pid = str(view.get("envelope") or "").strip()
     if not pid:
         return None
-    usage = envelope_usage(governance_root, pid, now=now)
-    why = envelope_warning(usage)
-    if not why:
+    row = envelope_status(governance_root, pid, now=now)
+    why = (row or {}).get("why")
+    if not row or row["superseded_by"] or not why:
         return None
+    usage = row["usage"]
     driver = str(view.get("driver") or "").strip()
     plan = renew_plan(governance_root, usage, identities={driver, "advisor"} - {""}, task_id=str(view.get("task_id") or ""), now=now)
     line = envelope_renew_declaration()["messages"]["warn"].format(policy_id=pid, why=why, command=plan["renew_command"])
