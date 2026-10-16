@@ -79,6 +79,24 @@ unrelated change swept into a finalize commit via a broad `git add`.
   root's `loop_runs_root/<card>/` (git-excluded), not `/tmp`; a regression whose process vanished is reported as unfinished
   by `lybra loop status` / `brief` / `next` with the re-run command `lybra regression run --sha <commit>`.
 
+## Advisor update notes (AIPOS-F167)
+- **A card that changes what advisors, auditors or executors see declares it on the card.** The one field is
+  `advisor_notice: {audience: [advisor|auditor|executor], summary, actions[]}` (`schema/card.schema.json`
+  `fields.advisor_notice`). `draft create` / `validate` / `publish` reject a malformed one (`ADVISOR_NOTICE_INVALID`) and warn,
+  without refusing, when a card whose lane touches the product's advisor-visible paths (CLI, schema, charters) has none
+  (`ADVISOR_NOTICE_MISSING`).
+- **The notes are compiled at deploy time, in one place.** After `finalize --deploy` writes a finalization record with
+  `deploy_status: deployed`, the card's `advisor_notice` (plus any not-yet-compiled entry of `docs/advisor_notice_backfill.json`)
+  is written as one update note under the deployed product repo's deploy directory (`.deploy/advisor_updates/`, outside every
+  governance root, shared by all projects). One note per deploy, keyed by deploy commit and release; a card is never compiled
+  twice. A failed compile does not undo the merge or deploy; rerunning the same `finalize --deploy` compiles what is missing.
+- **Advisors see unread notes where they already look.** `lybra charter` (advisor role) starts with, and `lybra loop status`,
+  `lybra next` and `lybra brief` end with, `Lybra 有 N 条未读更新(自 <release>): …; 读完后继续推进, 不必等 Owner`.
+  `lybra updates --actor <instance>` prints the full text; `lybra updates --ack --actor <instance> --confirm` records the
+  instance as having read them (an append-only record under the governance root's `records/advisor_update_acks/<instance>/`,
+  landed through the same governance-commit path as other write commands). Read state is per project and per instance.
+  Only the deployed snapshot and `--dev-tree` read the notes; card worktree tests never see the real ones.
+
 ## Secrets
 - Tokens / API keys are **fingerprint-only** in any output, log, record, report, or commit.
 - `connection.json` is local (`0600`), never committed. LLM keys come from an env var

@@ -632,6 +632,15 @@ def run_brief(
                 for line in unreadable:
                     print(f"  - {line}")
                 print()
+
+            # AIPOS-F167 件③: 末尾「Lybra 未读更新」(四出口同一渲染; 归属视角实例 / 缺省治理根 .lybra/role 实例; 无未读 = 不显示)
+            from tools.aipos_cli.advisor_updates_cli import advisor_banner_lines
+
+            update_banner = advisor_banner_lines(workspace_root, actor)
+            for line in update_banner:
+                print(line)
+            if update_banner:
+                print()
             
             print("=" * 80)
         

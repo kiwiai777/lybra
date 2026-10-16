@@ -161,6 +161,21 @@
           "before": "--before"
         }
       }
+    },
+    "advisor_update_writers": {
+      "description": "AIPOS-F167 件③: `lybra updates --ack` 写已读标记(治理根 records advisor_update_acks/<实例>/, 只追加)同一两阶段语义——旗标注册与其他族同一包装 aipos_cli._project_json_two_phase_flags(family=advisor_update_writers), 旗标名与缺省阶段读 project_json_writers 一处(本段不重复声明)。缺省 = 预演: 打印该实例将标记已读的更新说明(编号 / 生效版本 / 条数)与将写的记录路径, 零写入; --confirm 才写记录并经 lybra_governance_commit.post_write_landing.commands.advisor_update_ack 同一提交口落账。不带 --ack 的 `lybra updates` 只读, 两阶段旗标不适用(给了 = 用法错)。唯一实现 advisor_updates_cli.ack_updates。",
+      "commands": [
+        "updates"
+      ],
+      "flag_help": {
+        "dry_run": "With --ack: preview which update notes would be marked read for --actor and the record path, without writing (default)",
+        "confirm": "With --ack: write the read-marker record for --actor and land it via the governance-commit path (lybra governance-commit --paths), pushing like N6 landing"
+      },
+      "outcome_labels": {
+        "preview": "预览(未写; 加 --confirm 记已读并落账)",
+        "done": "已记已读",
+        "nothing": "无未读(未写)"
+      }
     }
   },
   "warn_behavior": {
@@ -237,7 +252,8 @@
       "workspace roots",
       "migrate record-type",
       "migrate decision-log-pointers",
-      "regression run"
+      "regression run",
+      "updates"
     ],
     "announce_commands": [
       "next",
@@ -2365,7 +2381,8 @@
           "include_frozen": {"type": "boolean", "description": "AIPOS-F141 件①: 也列出存量冻结卡的运行(标 frozen); 缺省不列(lane_view.visible_cards)。给 --task-id = 显式点名, 照列"},
           "json": {"type": "boolean", "description": "JSON 输出"},
           "wait": {"type": "number", "description": "AIPOS-F136 件①: 有界等待秒数(须 --task-id; 0 < 秒数 ≤ wait.max_seconds)。经 agent watch 唯一等待原语 run_fs_watch(expect = 本卡运行记录, expect_ready = 顾问下一动作 ≠ continue_wait)等到可行动或到时, 返回当时状态; 退出码按下一动作(exit_codes)"},
-          "verbose": {"type": "boolean", "description": "AIPOS-F138 件③: 输出门侧信封判定诊断行([ENVELOPE_TRACE], autonomy_policy.trace_envelope 逐谓词留痕, 走 stderr); 缺省不打印(状态结论不被淹没)。只开关输出, 信封判定逻辑不变。AIPOS-F142 件②: 开关统一由 envelope_trace 声明承载"}
+          "verbose": {"type": "boolean", "description": "AIPOS-F138 件③: 输出门侧信封判定诊断行([ENVELOPE_TRACE], autonomy_policy.trace_envelope 逐谓词留痕, 走 stderr); 缺省不打印(状态结论不被淹没)。只开关输出, 信封判定逻辑不变。AIPOS-F142 件②: 开关统一由 envelope_trace 声明承载"},
+          "actor": {"type": "string", "description": "AIPOS-F167 件③: 看状态的顾问实例(只用于末尾「Lybra 未读更新」提示按本实例已读计, 不影响状态判定); 缺省 = 本治理根唯一已接入顾问实例, 多个时按任一实例未读计(advisor_updates_cli.resolve_viewer)"}
         },
         "additionalProperties": false
       },
@@ -2767,6 +2784,66 @@
         "unreadable": {"code": 4, "meaning": "治理根或声明解析失败(无治理根 / project.json 坏 / 母本缺 / 母本含未声明占位), fail-closed"}
       }
     },
+    "lybra_updates": {
+      "description": "AIPOS-F167 件②③(Owner 10-16: 产品更新的「顾问须知」由产品自己送达, Owner 零转述): `lybra updates [--actor <实例>] [--all] [--workspace-root <治理根>] [--json]` 列该顾问实例的未读更新说明全文(--all = 全部, 标已读/未读); `lybra updates --ack --actor <实例> [--dry-run|--confirm]` 记已读(两阶段 two_phase_protocol.advisor_update_writers, 落账 post_write_landing.commands.advisor_update_ack)。更新说明 = 卡面 advisor_notice(card.schema fields.advisor_notice)在部署唯一口汇成的产品侧记录(store), 跨项目共享: 任何接入项目的顾问在其治理根运行本命令读同一份库, 已读按本治理根本实例各记(ack)。四出口(charter 开头 / loop status 末尾 / next 末尾 / brief 末尾)经同一渲染 advisor_updates_cli.advisor_banner_lines 显示「Lybra 有 N 条未读更新」(banner), 无未读 / 库不可用 = 不显示(行为不变); 读不出 = 一行告警(不静默, 不掀翻原命令)。审计/执行体的变化仍走章程渲染(AIPOS-F164), 不重复送达。",
+      "phase": "render",
+      "surface": ["cli"],
+      "cli_command": "lybra updates",
+      "single_implementation": "tools/aipos_cli/advisor_updates.py(声明 / 卡面须知解析与行为变更判据 / 更新说明库定位读写 / 部署后汇总 compile_on_deploy / 已读集合与未读判定 / 提示渲染)+ tools/aipos_cli/advisor_updates_cli.py(查看实例解析 / 已读标记写入与落账 ack_updates / CLI 薄壳 run_updates_cli / 四出口挂载 advisor_banner_lines)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {"type": "string", "description": "顾问实例(已读按本治理根本实例记); 查看缺省 = 本治理根唯一已接入顾问实例, 接入多个(或无)时按「任一顾问实例未读」计、提示命令用占位(advisor_updates_cli.resolve_viewer); --ack 必给, 且须为本治理根已接入实例(enrollment.instance_enrollment)"},
+          "all": {"type": "boolean", "description": "列全部更新说明(标已读/未读); 缺省只列本实例未读"},
+          "ack": {"type": "boolean", "description": "记已读: 把本实例当前未读的更新说明全部标记已读(两阶段, 缺省预演)"},
+          "dry_run": {"type": "boolean", "description": "与 --ack 同用: 预演(缺省)"},
+          "confirm": {"type": "boolean", "description": "与 --ack 同用: 写已读标记记录并落账"},
+          "workspace_root": {"type": "string", "description": "治理根; 缺省自发现(governance_root_resolution)"},
+          "json": {"type": "boolean", "description": "JSON 输出"}
+        },
+        "additionalProperties": false
+      },
+      "store": {
+        "description": "产品侧更新说明库: 运行代码所属产品仓的部署目录(deploy_runtime.default_deploy_current 的父目录, 与 tools/lybra-deploy 同一推导; 部署快照 = 其部署目录)下 subdir, 每次部署汇总一份 JSON(不在任何治理根, 跨项目共享)。读: 运行代码 mode ∈ readable_modes(部署快照 / 入口 --dev-tree)才读; 卡工作树测试 / python -m(mode=worktree)= 库不可用(提示不显示, `lybra updates` 如实说明)——测试与夹具不会读到真实库。写: finalize 部署成功后写进被部署产品仓的部署目录(<产品仓>/.deploy/<subdir>)。文件 JSON 键见 record_keys; 读不出 / 形不合 = 拒因(不静默跳过)。",
+        "subdir": "advisor_updates",
+        "filename": "update_{timestamp}_{commit12}.json",
+        "timestamp_style": "compact",
+        "record_type": "advisor_update",
+        "readable_modes": ["deploy", "dev"],
+        "record_keys": ["record_type", "update_id", "deploy_commit", "release", "deployed_at", "source_project", "source_task_id", "entries"],
+        "entry_keys": ["task_id", "audience", "summary", "actions", "source"]
+      },
+      "compile": {
+        "description": "汇总唯一口 = finalize 写 finalization 记录且 deploy_status=deployed 之后(finalize._ensure_finalization_record → advisor_updates.compile_on_deploy; 主路径 / 续做路径同经此处)。条目 = 本卡卡面 advisor_notice(task_loader.find_task_card 取卡)+ 回填清单 backfill_source(产品仓相对, 部署后的产品仓 HEAD 内容)中尚未汇总过的条目; 去重键 = task_id(库内已有该卡条目 = 不再汇总, 幂等)。无新条目 = 不写(操作行如实说明)。生效版本 = 部署目录 current 的快照名 + VERSION git_commit(gate_drift.read_version_commit)。汇总失败不回滚已完成的合并 / 部署: 操作行出拒因 + 出口(修好后重跑同一条 finalize --deploy: 续做路径再经同一口补汇总)。",
+        "backfill_source": "docs/advisor_notice_backfill.json",
+        "backfill_shape": "{description, entries: [{task_id, audience, summary, actions}]}; 条目形同卡面 advisor_notice(同一校验 parse_advisor_notice), 清单只追加"
+      },
+      "ack": {
+        "record_kind": "advisor_update_acks",
+        "record_type": "advisor_update_ack",
+        "landing_command": "advisor_update_ack",
+        "description": "已读标记 = 治理根记录(transitions record_locations.kinds.advisor_update_acks, 每项目每实例一个目录, 只追加); 已读集合 = 该实例全部记录 acked_update_ids 的并集。写入只经 `lybra updates --ack --confirm`, 落账经 governance_commit.land_written_paths(AIPOS-F158 同一包装)。"
+      },
+      "banner": {
+        "audience": "advisor",
+        "line": "Lybra 有 {count} 条未读更新(自 {since}): {points}; 读完后继续推进, 不必等 Owner",
+        "commands_line": "  看全文: {list_command} · 读完标记已读: {ack_command}",
+        "point": "[{task_id}] {summary}",
+        "points_limit": 3,
+        "more": "…另 {more} 条",
+        "list_command": "lybra updates --workspace-root {governance_root} --actor {instance}",
+        "ack_command": "lybra updates --ack --workspace-root {governance_root} --actor {instance} --confirm",
+        "unknown_viewer": "<你的顾问实例>",
+        "unreadable": "⚠ Lybra 更新说明读不出: {reason}; 出口: lybra updates --workspace-root {governance_root} 看拒因"
+      },
+      "exit_codes": {
+        "ok": {"code": 0, "meaning": "已列出(含无未读 / 库不可用的如实说明)/ 已记已读并落账 / 预演已输出"},
+        "refused": {"code": 1, "meaning": "拒: --ack 缺 --actor / 实例未在本治理根接入 / 库不可用时 --ack(原因与出口在 stderr), 零写入"},
+        "usage": {"code": 2, "meaning": "参数错(--dry-run / --confirm 未与 --ack 同用)"},
+        "landing_failed": {"code": 3, "meaning": "已读标记已写入但落账未完成(= post_write_landing.landing_failed_exit_code; 出拒因 + 补账命令, 勿重复执行)"},
+        "unreadable": {"code": 4, "meaning": "治理根 / 声明 / 更新说明库读不出(fail-closed)"}
+      }
+    },
     "lybra_card_render": {
       "description": "AIPOS-F78 件②: 单一渲染器——把卡的意图面(goal/lane/acceptance/prohibitions/milestones + 工作树/报告落点/卡路径)按 harness 渲染给任何执行引擎。同一源三输出: pi=开工提示三行(/go 复用); codex=Prompt.md+Plan.md 写入工作树根; claude-code=CLAUDE.md 片段。渲染物零门动词/零 token(grep lybra_ = 0)。落点全读项目声明(project.json paths)。",
       "phase": "render",
@@ -2900,6 +2977,11 @@
             "cli": "lybra migrate decision-log-pointers --confirm",
             "scope": "AIPOS-F160 件③: 本次补生成的 decision_log 指针文件(decision_log_pointers.run_pointer_backfill 的 written); 推导不出 / 不补的不入, 决策记录本身不改不入",
             "message_template": "chore(governance): decision_log 指针补生成 {count} 份\n\nActor: {actor}\nType: governance_commit\nCommand: lybra migrate decision-log-pointers --confirm"
+          },
+          "advisor_update_ack": {
+            "cli": "lybra updates --ack --confirm",
+            "scope": "AIPOS-F167 件③: 本次写出的已读标记记录(records advisor_update_acks/<实例>/ack_*.md, 一份); 更新说明库在产品侧部署目录, 不入治理仓",
+            "message_template": "chore(governance): Lybra 更新已读标记 {instance} {count} 份更新说明\n\nActor: {actor}\nType: governance_commit\nCommand: lybra updates --ack --confirm"
           },
           "migrate_record_type": {
             "cli": "lybra migrate record-type --confirm",
