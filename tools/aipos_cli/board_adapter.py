@@ -1066,6 +1066,41 @@ def get_owner_inbox(home_root: str | Path | None = None, *, project: str | None 
     )
 
 
+def get_roadmap_status(repo_root: str | Path | None = None, *, lane: str | None = None) -> dict[str, Any]:
+    """AIPOS-F173: 路线图进度与偏差(看板「路线图与验收」页数据, F174 用)——与 `lybra roadmap status` / Owner 收件箱 roadmap_drift 类别
+    同一推导 roadmap_drift.roadmap_status(只读)。无路线图 = ok + exists False; 路线图 / 阈值读不出 = BLOCK 应答带拒因(点名, 不吞)。"""
+    from tools.aipos_cli.roadmap import RoadmapError
+    from tools.aipos_cli.roadmap_drift import json_view, roadmap_status
+    from tools.aipos_cli.workspace_config import RoadmapDriftThresholdError
+    from tools.schema_loader import SchemaLoadError
+
+    operation = "get_roadmap_status"
+    try:
+        resolved_root = _resolve_repo_root(repo_root)
+        view = roadmap_status(resolved_root, lane=lane)
+    except (RoadmapError, RoadmapDriftThresholdError) as exc:
+        return blocked_response(operation=operation, dry_run=False, category="VALIDATION_ERROR", message=str(exc),
+                                safety_notice=READ_SAFETY_NOTICE)
+    except (OSError, ValueError, SchemaLoadError) as exc:
+        return _normalize_exception(operation, exc, dry_run=False)
+    return make_response(
+        ok=True,
+        verdict=Verdict.PASS,
+        operation=operation,
+        dry_run=False,
+        data=json_view(view),
+        summary={"exists": view["exists"], "milestones": len(view["milestones"]), "signals": len(view["signals"]),
+                 "met": view["totals"]["met"], "total": view["totals"]["total"]},
+        warnings=[],
+        blocking_reasons=[],
+        needs_owner_reasons=[],
+        owner_confirmation_required=False,
+        owner_confirmation_reasons=[],
+        safety_notice=READ_SAFETY_NOTICE,
+        errors=view["errors"],
+    )
+
+
 def get_roadmap_view(repo_root: str | Path | None = None, *, lane: str | None = None) -> dict[str, Any]:
     """AIPOS-F171 件③: 看板项目页里程碑简版(/api/roadmap)的数据——与 `lybra roadmap show` 同一函数 roadmap.roadmap_view(只读)。
     无路线图文件 = ok + exists False(前端整区隐藏); 读不出 / 不合声明 = BLOCK 应答带拒因(点名, 不吞)。"""

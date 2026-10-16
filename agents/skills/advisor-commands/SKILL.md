@@ -28,7 +28,7 @@ role: advisor
 
 | 阶段 | 职责 | 主要命令 |
 |------|------|----------|
-| **N0 出卡** | 起草与发卡(卡挂路线图里程碑, AIPOS-F171) | `lybra draft create/publish`, `lybra queue amend/withdraw`, `lybra roadmap show/add-milestone/add-criterion/set/remove` |
+| **N0 出卡** | 起草与发卡(卡挂路线图里程碑, AIPOS-F171) | `lybra draft create/publish`, `lybra queue amend/withdraw`, `lybra roadmap show/status/add-milestone/add-criterion/set/remove` |
 | **推进** | **Owner 信封授权下, 一条命令把卡从当前节点推到 completed**(产物落盘自动 return→派审→裁决→finalize→close; agent 步只等产物; 信封 `launch_harnesses` 授权时 loop 在工位拉起 harness, 否则手工 `/go`, 见「两种开工模式」) | **`lybra loop --task-id <卡ID>`**(AIPOS-F73D; 替代逐步 `next --run`) |
 | **跟进(持续推进)** | Owner 说一次「推进 <lane>」后不等 Owner 推: 跑 loop → 有界等 → 按产品给的顾问下一动作处理, 只在 owner_needed 停(守则全文在顾问章程「持续推进守则」, 本 skill 不复述) | **`lybra loop status --task-id <卡ID> --wait <秒>`**(AIPOS-F136) |
 | **更新通知** | 产品上线后的顾问须知由产品送达(AIPOS-F167, Owner 不再转述): `lybra charter` 开头 / `loop status`、`next`、`brief` 末尾出现「Lybra 有 N 条未读更新」→ 读 → 记已读 → 继续推进(守则在顾问章程「持续推进守则」, 本 skill 不复述) | **`lybra updates --actor <你的顾问实例>`** → **`lybra updates --ack --actor <你的顾问实例> --confirm`** |
@@ -97,6 +97,22 @@ lybra roadmap remove --workspace-root <治理根> --id <id>                     
 ```
 缺省预演(整份文件 diff + 将生成的 decision_log 指针名, 零写入); `--confirm` 写入、生成 decision_log 指针(路线图变更本身可见)并自动落账。
 文件落点 project.json `paths.roadmap_file`(缺省 `governance/roadmap.yaml`), 格式见 `docs/roadmap.md`; 改动只经本组命令。
+
+#### `lybra roadmap status`(AIPOS-F173: 进度与偏差)
+**何时用**:每次阶段推进前(出下一批卡、标里程碑 done 之前)跑一次看自己 lane; Owner 收件箱出现「路线图偏差」事项时。
+```bash
+lybra roadmap status --workspace-root <治理根> --lane <lane>                          # 只读: 里程碑进度条 / 偏差信号 / 下一步建议
+lybra roadmap status --workspace-root <治理根> --json                                # 同一数据 JSON(看板同读)
+```
+**看到偏差怎么处理**(每条信号输出里都带建议命令, 照做后再跑一次 status 复核):
+- 里程碑逾期 → 经 Owner 同意改目标日 `roadmap set --field target_date`, 或补卡加速; 不再做改 `--field status --value dropped`。
+- 里程碑停滞 → `lybra loop status` 查挂接卡为何不动; 缺卡就补卡挂到该里程碑。
+- 标准无卡覆盖 → 出卡时卡稿写 `"milestone"` / `"criteria"` 覆盖它, 或把已在做的卡 `lybra queue amend` 回挂。
+- 游离卡占比高 → 该挂的卡回挂; 探索 / 修复类卡可不挂(只提示)。
+- 反复返工 → 复核标准是否可核对(`roadmap set --field statement`)或拆卡。
+- 路线图近期被改 → 核对变更经 Owner 同意(看 decision_log 指针)。
+逾期 / 停滞 / 无卡覆盖会自动进 Owner 收件箱(类别 `roadmap_drift`); Owner 裁决后按 `lybra owner inbox` 里的裁决行做。
+阈值在 project.json `roadmap_drift` 段(缺省与含义见 `docs/roadmap.md`「进度与偏差」)。
 
 #### `lybra updates`(AIPOS-F167: Lybra 更新说明 · 记已读)
 **何时用**:`lybra charter` 开头或 `loop status` / `next` / `brief` 末尾出现「Lybra 有 N 条未读更新(自 <版本>): 要点…」时。

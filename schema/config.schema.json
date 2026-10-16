@@ -575,6 +575,21 @@
           "reject_codes": {
             "LAUNCH_RESUME_MAX_INVALID": "launch_resume_max 须为 ≥0 的 JSON 整数"
           }
+        },
+        "roadmap_drift": {
+          "type": "object",
+          "required": false,
+          "description": "AIPOS-F173 件②: 路线图偏差信号的阈值(`lybra roadmap status` / Owner 收件箱 roadmap_drift 类别 / 看板同读推导 roadmap_drift.roadmap_status)。缺段 / 缺键 = 取下方各键 default(行为 = 缺省阈值); 未知键或值形不合 = ROADMAP_DRIFT_INVALID(命令拒、收件箱该项目该类点名进 errors, 不猜成缺省)。唯一读取口 workspace_config.roadmap_drift_thresholds; 写入 = 编辑 project.json 本段(无专用写命令)。",
+          "schema": {
+            "unlinked_window_days": {"type": "integer", "default": 14, "minimum": 1, "description": "游离卡占比的统计窗: 近 N 天新出的卡(卡面 created_at / draft_created_at; 审计卡与已撤卡不计)"},
+            "unlinked_ratio": {"type": "number", "default": 0.3, "minimum": 0, "maximum": 1, "description": "窗内游离卡占比超过此值 = 偏差信号 unlinked_ratio"},
+            "stall_days": {"type": "integer", "default": 7, "minimum": 1, "description": "active 里程碑的挂接卡最近一次推进(卡面 / 门记录 / loop 运行记录的时刻)早于 N 天前 = 偏差信号 stalled"},
+            "rework_rounds": {"type": "integer", "default": 2, "minimum": 1, "description": "同一验收标准的挂接卡返工轮次(卡面 rework_rounds 条数)合计 ≥ 此值 = 偏差信号 rework"},
+            "change_window_days": {"type": "integer", "default": 7, "minimum": 1, "description": "路线图文件近 N 天有变更(decision_log 指针 Record = 路线图文件)= 偏差信号 roadmap_changed"}
+          },
+          "reject_codes": {
+            "ROADMAP_DRIFT_INVALID": "roadmap_drift 段形不合(非对象 / 未知键 / 整数键须为 ≥minimum 的 JSON 整数 / unlinked_ratio 须为 0..1 的数)"
+          }
         }
       }
     }

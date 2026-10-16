@@ -21,6 +21,8 @@ from typing import Any
 POINTER_DECISION_TYPE = "auto_pointer"
 #: 指针正文指向决策记录的行(生成实现写 "**Record**: `<治理根相对路径>`")
 _RECORD_LINE = re.compile(r"^\*\*Record\*\*:\s*`([^`]+)`\s*$", re.M)
+#: 指针正文的决策人行(生成实现写 "**Decided by**: <actor>")
+_DECIDED_BY_LINE = re.compile(r"^\*\*Decided by\*\*:\s*(.+?)\s*$", re.M)
 #: 决策记录类(transitions.schema record_locations.kinds 键)
 DECISION_RECORD_KIND = "owner_decisions"
 
@@ -51,7 +53,9 @@ def backfill_declaration() -> dict[str, Any]:
 def pointer_index(governance_root: Path | str) -> dict[str, Any]:
     """decision_log 月目录下全部自动指针(frontmatter decision_type = auto_pointer, 文件名不限)→ 其 Record 行指向的决策记录。
 
-    返回 {"decision_log_dir": 治理根相对, "by_record": {决策记录相对路径: [指针相对路径…]}, "pointers": n, "unreadable": [拒因…]}。
+    返回 {"decision_log_dir": 治理根相对, "by_record": {决策记录相对路径: [指针相对路径…]}, "pointers": n, "unreadable": [拒因…],
+    "entries": [{path, decided_at, decided_by, summary, records}]}(AIPOS-F173: entries = 每个指针的时刻 / 决策人 / 一句话 / 所指记录,
+    路线图偏差「近期被改」读此, 不另扫目录)。
     目录未建 = 无指针(by_record 为空)。读不出 frontmatter 的 .md 进 unreadable(出声, 不静默跳过); 非指针条目(人写决策条目)不计。"""
     from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
     from tools.schema_loader import resolve_governance_path
@@ -59,6 +63,7 @@ def pointer_index(governance_root: Path | str) -> dict[str, Any]:
     root = Path(governance_root).resolve()
     log_dir = resolve_governance_path("decision_log_dir", root)
     by_record: dict[str, list[str]] = {}
+    entries: list[dict[str, Any]] = []
     unreadable: list[str] = []
     count = 0
     if log_dir.is_dir():
@@ -71,10 +76,15 @@ def pointer_index(governance_root: Path | str) -> dict[str, Any]:
             if str(meta.get("decision_type") or "") != POINTER_DECISION_TYPE:
                 continue
             count += 1
-            for target in _RECORD_LINE.findall(body):
-                by_record.setdefault(Path(target.strip()).as_posix(), []).append(_rel(path, root))
+            records = [Path(target.strip()).as_posix() for target in _RECORD_LINE.findall(body)]
+            for target in records:
+                by_record.setdefault(target, []).append(_rel(path, root))
+            by = _DECIDED_BY_LINE.search(body)
+            summary = next((ln[3:].strip() for ln in body.splitlines() if ln.startswith("## ")), "")
+            entries.append({"path": _rel(path, root), "decided_at": str(meta.get("decided_at") or "") or None,
+                            "decided_by": by.group(1).strip() if by else None, "summary": summary or None, "records": records})
     return {"decision_log_dir": _rel(log_dir, root) if log_dir.is_relative_to(root) else str(log_dir),
-            "by_record": by_record, "pointers": count, "unreadable": unreadable}
+            "by_record": by_record, "pointers": count, "unreadable": unreadable, "entries": entries}
 
 
 def missing_pointer_plan(governance_root: Path | str) -> dict[str, Any]:

@@ -2783,7 +2783,7 @@
       }
     },
     "lybra_owner_inbox": {
-      "description": "AIPOS-F168 件①: `lybra owner inbox [--home-root <home 根>] [--project <项目>] [--json]` —— 跨 home 根下全部已注册项目(唯一枚举 workspace_config._project_candidates: 5_tasks/queue 与 project.json 同在)汇总需 Owner 定的事项: 每项 = 项目 / 卡(或信封)/ 来自哪个顾问实例 / 类别 / 要 Owner 定什么 / 顾问建议(记录中有才显示)/ 影响 / 可选裁决 / 裁决命令。待决判定只读既有真相, 不另记待办: ① loop 运行记录顾问下一动作 owner_needed(每卡最近一次运行, 唯一判定 loop_run_record.loop_status / next_action; 运行记录 owner_ask 结构字段 = lybra_loop_note 补写, 有则优先) ② 卡面 needs_owner(唯一筛选 aipos_cli._filter_needs_owner 经 board_adapter.get_needs_owner, 再只取 categories.needs_owner_card.queue_states 所列可裁决状态) ③ 有效信封预警(唯一判定 autonomy_policy.envelope_warnings) ④ 返工轮次达上限(queue_mutation.rework_max_rounds)且最新常规裁决未过、无针对它的返工节(next_resolver.rework_round_for_verdict) ⑤ 补审 FAIL 未派修复卡(audit_derivation.supplementary_audit_overview, 裁决值域 transitions.schema supplementary_audit.fail_verdicts)。已裁决(该事项的决策记录已在: decision_id = decision.decision_id_prefix + 事项哈希)或已自行解除(真相不再判出)= 不再出现。排序: 阻塞级 rank 升序(1 阻塞 / 2 待定 / 3 预警), 同级按发生时刻早者先。看板(board)页与 API 与 CLI 同读 owner_inbox.collect_inbox。只读: 不写任何文件、不连门、不起进程; 某项目某类真相读不出 = 列入 errors(点名, 不猜不吞)并以 partial 退出。AIPOS-F170 件②: project.json status = paused 的项目(唯一读取口 workspace_config.project_status, 声明 config.schema project_json.status)缺省不列(过滤只在 collect_inbox 一处; 输出点名被隐藏的暂停项目), --include-paused 照列。AIPOS-F170 件①: --stale-before <日期> = 遗留视图(同一 collect_inbox 数据, 只取发生时刻早于该日期者; 发生时刻未知 = 不算遗留), 按项目分组每项一行(卡 / 标题 / 卡住原因 / 建议: 撤回 | 冻结为历史 | 保留, 建议表读 stale.suggest)并给每组同建议的批量裁决命令(lybra_owner_decide --items)。",
+      "description": "AIPOS-F168 件①: `lybra owner inbox [--home-root <home 根>] [--project <项目>] [--json]` —— 跨 home 根下全部已注册项目(唯一枚举 workspace_config._project_candidates: 5_tasks/queue 与 project.json 同在)汇总需 Owner 定的事项: 每项 = 项目 / 卡(或信封)/ 来自哪个顾问实例 / 类别 / 要 Owner 定什么 / 顾问建议(记录中有才显示)/ 影响 / 可选裁决 / 裁决命令。待决判定只读既有真相, 不另记待办: ① loop 运行记录顾问下一动作 owner_needed(每卡最近一次运行, 唯一判定 loop_run_record.loop_status / next_action; 运行记录 owner_ask 结构字段 = lybra_loop_note 补写, 有则优先) ② 卡面 needs_owner(唯一筛选 aipos_cli._filter_needs_owner 经 board_adapter.get_needs_owner, 再只取 categories.needs_owner_card.queue_states 所列可裁决状态) ③ 有效信封预警(唯一判定 autonomy_policy.envelope_warnings) ④ 返工轮次达上限(queue_mutation.rework_max_rounds)且最新常规裁决未过、无针对它的返工节(next_resolver.rework_round_for_verdict) ⑤ 补审 FAIL 未派修复卡(audit_derivation.supplementary_audit_overview, 裁决值域 transitions.schema supplementary_audit.fail_verdicts)。 ⑥ 路线图严重偏差(AIPOS-F173: 推导 roadmap_drift.roadmap_status 中 severity=inbox 的信号——逾期 / 停滞超阈值 / active 里程碑无卡覆盖的标准; 项目无路线图 = 无此类事项)。已裁决(该事项的决策记录已在: decision_id = decision.decision_id_prefix + 事项哈希)或已自行解除(真相不再判出)= 不再出现。排序: 阻塞级 rank 升序(1 阻塞 / 2 待定 / 3 预警), 同级按发生时刻早者先。看板(board)页与 API 与 CLI 同读 owner_inbox.collect_inbox。只读: 不写任何文件、不连门、不起进程; 某项目某类真相读不出 = 列入 errors(点名, 不猜不吞)并以 partial 退出。AIPOS-F170 件②: project.json status = paused 的项目(唯一读取口 workspace_config.project_status, 声明 config.schema project_json.status)缺省不列(过滤只在 collect_inbox 一处; 输出点名被隐藏的暂停项目), --include-paused 照列。AIPOS-F170 件①: --stale-before <日期> = 遗留视图(同一 collect_inbox 数据, 只取发生时刻早于该日期者; 发生时刻未知 = 不算遗留), 按项目分组每项一行(卡 / 标题 / 卡住原因 / 建议: 撤回 | 冻结为历史 | 保留, 建议表读 stale.suggest)并给每组同建议的批量裁决命令(lybra_owner_decide --items)。",
       "phase": "owner",
       "surface": ["cli", "board"],
       "cli_command": "lybra owner inbox",
@@ -2886,6 +2886,15 @@
           "impact": "信封覆盖的 {agent_or_role} 自动推进将在额度用尽 / 到期后停",
           "decide_board": "  裁决: Owner 在看板「信封」页亲自续签 {board_url}(CLI 仍可: {command})",
           "options": ["renew", "let_expire"]
+        },
+        "roadmap_drift": {
+          "label": "路线图偏差",
+          "note": "AIPOS-F173 件③: 严重偏差 = 推导 roadmap_drift.roadmap_status 里 severity=inbox 的信号(声明 verbs.lybra_roadmap.status.signals.*.severity; 现为逾期 / 停滞超阈值 / active 里程碑下无卡覆盖的标准), 每条信号一个事项; 锚点 = 信号 anchor(逾期: 里程碑 + 目标日; 停滞: 里程碑 + 最近推进时刻; 无覆盖: 标准 id), 真相不变 = 同一事项 ID(重算不重复), 已裁决 = 不再出现, 真相变了(改目标日 / 有新推进)= 新事项。来源(告诉哪个顾问)= 信号 advisor(挂接卡最近出卡人, 无卡 = 路线图最近编辑人)。",
+          "rank_by_kind": {"overdue": 2, "stalled": 2, "uncovered": 3},
+          "subject_by_kind": {"overdue": "里程碑 {milestone} 逾期", "stalled": "里程碑 {milestone} 停滞", "uncovered": "标准 {criterion} 无卡覆盖"},
+          "ask": "{reason}: 定补卡推进 / 调路线图 / 知悉",
+          "impact": "里程碑 {milestone}(lane {lane})偏离路线图({kind_label}), 进度 {met}/{total}",
+          "options": ["add_card", "replan", "acknowledge"]
         }
       },
       "options": {
@@ -2901,7 +2910,9 @@
         "rescope": {"label": "改卡面验收 / 拆卡", "advisor_next": "按裁决备注改卡(lybra queue amend …)后续跑: {resume}"},
         "acknowledge": {"label": "知悉, 维持现状", "advisor_next": "Owner 已知悉, 维持现状; 不需顾问动作"},
         "repair": {"label": "派修复卡", "advisor_next": "按裁决派修复卡处理补审问题(FAIL 派生出口): lybra next --task-id {task_id} --workspace-root {governance_root}"},
-        "accept": {"label": "接受原结案, 不修", "advisor_next": "Owner 接受原结案, 补审争议收口, 不需顾问动作"}
+        "accept": {"label": "接受原结案, 不修", "advisor_next": "Owner 接受原结案, 补审争议收口, 不需顾问动作"},
+        "add_card": {"label": "补卡 / 回挂卡推进(路线图不变)", "advisor_next": "按裁决补卡挂到该里程碑 / 标准(卡稿 milestone / criteria), 或回挂游离卡(lybra queue amend), 推进后 `lybra roadmap status --workspace-root {governance_root}` 复核"},
+        "replan": {"label": "调路线图(改目标日 / 状态 / 标准)", "advisor_next": "按裁决改路线图: `lybra roadmap set --workspace-root {governance_root} --id <id> --field <字段> --value <新值>` 预演后 --confirm(自动留 decision_log 指针)"}
       },
       "stale": {
         "description": "AIPOS-F170 件①: `lybra owner inbox --stale-before <日期>` 遗留视图(渲染唯一实现 owner_inbox.render_stale_text, 数据 = collect_inbox 同一事项, 只取 since 早于该日期者)。suggest = 建议裁决(按类别; needs_owner_card 再按队列状态), 值为选项键且须属该事项选项, 否则 = 保留(不批量定); 同项目同建议的事项给一条 --items 批量裁决命令。",
@@ -3021,7 +3032,7 @@
       }
     },
     "lybra_roadmap": {
-      "description": "AIPOS-F171 件①(设计稿 governance/research/2026-10-16-roadmap-verification-design.md, Owner 10-16 同意): 结构化路线图的声明与编辑。`lybra roadmap show [项目] [--lane <lane>] [--json]` 只读: 列里程碑(lane / 状态 / 目标日)与验收标准(核对方式)及各自挂接卡数, 末行游离卡数; 无路线图文件 = 提示首次用法(不报错, 退出 0)。`lybra roadmap add-milestone --id --lane --title [--target-date] [--status]` / `add-criterion --milestone --id --statement --verify` / `set --id --field --value` / `remove --id`: 两阶段(two_phase_protocol.roadmap_writers; 缺省预演, --confirm 写 + decision_log 指针 + 落账 post_write_landing.commands.roadmap_writers)。目标项目解析与 project 族写命令同一实现 workspace_config.resolve_project_write_target(显式项目名 > --workspace-root / 所在治理根; 禁回落 home 级活动项目)。文件形 config.schema governance_structure.roadmap; 卡挂接 card.schema roadmap_link。任何项目同一组命令, 产品不写死项目 / 路径 / 卡号前缀。",
+      "description": "AIPOS-F171 件①(设计稿 governance/research/2026-10-16-roadmap-verification-design.md, Owner 10-16 同意): 结构化路线图的声明与编辑。`lybra roadmap show [项目] [--lane <lane>] [--json]` 只读: 列里程碑(lane / 状态 / 目标日)与验收标准(核对方式)及各自挂接卡数, 末行游离卡数; 无路线图文件 = 提示首次用法(不报错, 退出 0)。`lybra roadmap add-milestone --id --lane --title [--target-date] [--status]` / `add-criterion --milestone --id --statement --verify` / `set --id --field --value` / `remove --id`: 两阶段(two_phase_protocol.roadmap_writers; 缺省预演, --confirm 写 + decision_log 指针 + 落账 post_write_landing.commands.roadmap_writers)。目标项目解析与 project 族写命令同一实现 workspace_config.resolve_project_write_target(显式项目名 > --workspace-root / 所在治理根; 禁回落 home 级活动项目)。文件形 config.schema governance_structure.roadmap; 卡挂接 card.schema roadmap_link。任何项目同一组命令, 产品不写死项目 / 路径 / 卡号前缀。AIPOS-F173: `lybra roadmap status [项目] [--lane <lane>] [--json]` 只读看里程碑进度 / 偏差信号 / 下一步建议(声明 status 段, 推导唯一实现 roadmap_drift.roadmap_status)。",
       "phase": "render",
       "surface": ["cli"],
       "cli_command": "lybra roadmap",
@@ -3054,8 +3065,69 @@
         "unlinked_line": "游离卡(本项目卡未挂里程碑): {count} 张{sample}",
         "decision_summary": "路线图变更 {subcommand} {target}: {detail}"
       },
+      "status": {
+        "description": "AIPOS-F173 件①②③(设计稿「推导」节): `lybra roadmap status [项目] [--lane <lane>] [--json]` 只读——按里程碑算进度(标准满足数 / 总数)、偏差信号与下一步建议; 无路线图文件 = texts.no_roadmap 提示(不报错, 退出 0)。推导唯一实现 tools/aipos_cli/roadmap_drift.roadmap_status(CLI / Owner 收件箱 roadmap_drift 类别 / 看板 board_adapter.get_roadmap_status 同读), 只读既有真相: 路线图文件 + 卡挂接(roadmap.card_links / card_link_status, 游离判定不另写)+ 门记录(next_resolver._read_task_records: 审计裁决 / 补审裁决 / 认领 / 交回 / 结案时刻)+ 卡面 rework_rounds + 运行证据(artifact_ingest.runtime_evidence_requirement + parse_runtime_evidence_section)+ loop 运行记录时刻 + decision_log 指针(decision_log_pointers.pointer_index); 不另记进度。阈值 = project.json roadmap_drift(workspace_config.roadmap_drift_thresholds, 缺省见 config.schema)。",
+        "progress_bar_width": 10,
+        "satisfied_queue_states": ["completed"],
+        "excluded_queue_states": ["withdrawn"],
+        "verify_pending": {
+          "artifact": "待 F175: artifact 核对(产物存在)尚未推导, 本卡先按未满足显示(不臆断)",
+          "owner_check": "待 F175: Owner 抽查确认尚未推导, 本卡先按未满足显示(不臆断)"
+        },
+        "unmet_reasons": {
+          "no_card": "无挂接卡",
+          "not_closed": "挂接卡 {cards} 未结案",
+          "no_pass": "卡 {task_id} 已结案但无审计 PASS 类裁决(最新: {verdict})",
+          "supplementary_fail": "卡 {task_id} 补审裁决 {verdict}({verdict_id}), 争议未收口",
+          "no_evidence": "卡 {task_id} 声明了运行证据, 但审计报告无运行证据节({problem})",
+          "evidence_declaration": "卡 {task_id} 运行证据声明不合({problem})",
+          "unreadable": "卡 {task_id} 的门记录读不出({problem}), 不猜",
+          "pending": "卡 {task_id} 已结案审计通过; {pending}"
+        },
+        "status_mismatch": {
+          "done_unmet": "声明 done 但推导标准满足 {met}/{total}",
+          "planned_moving": "声明 planned 但已有挂接卡在推进 / 已结案({cards}), 应标 active",
+          "met_not_done": "推导标准已全满足({met}/{total}), 可标 done"
+        },
+        "severity_labels": {"inbox": "严重·进 Owner 收件箱", "warn": "提示"},
+        "signals": {
+          "unlinked_ratio": {"label": "游离卡占比高", "severity": "warn", "reason": "近 {days} 天新出卡 {total} 张, 未挂路线图 {unlinked} 张(占 {ratio}%), 超阈值 {threshold}%: {sample}", "advice": "回挂该挂的卡 `lybra --workspace-root {governance_root} queue amend --task-id <卡> --actor <你的顾问实例> --amendments '{{\"milestone\": \"<里程碑id>\"}}' --amendment-reason <理由>`; 出新卡在卡稿写 milestone / criteria; 确为探索 / 修复工作可不挂"},
+          "stalled": {"label": "里程碑停滞", "severity": "inbox", "reason": "active 里程碑 {milestone} 的挂接卡 {cards} 最近一次推进在 {last_at}({idle} 天前), 超阈值 {threshold} 天", "advice": "查挂接卡为何不动 `lybra loop status --workspace-root {governance_root}`; 需新卡就补卡挂 {milestone}; 不再做 = `lybra roadmap set --workspace-root {governance_root} --id {milestone} --field status --value dropped` 预演后 --confirm"},
+          "uncovered": {"label": "标准无卡覆盖", "severity": "inbox", "reason": "active 里程碑 {milestone} 的标准 {criterion}「{statement}」没有任何挂接卡", "advice": "补卡: 卡稿加 \"milestone\": \"{milestone}\", \"criteria\": [\"{criterion}\"] 后 lybra draft create; 已有卡在做 = `lybra --workspace-root {governance_root} queue amend --task-id <卡> --actor <你的顾问实例> --amendments '{{\"milestone\": \"{milestone}\", \"criteria\": [\"{criterion}\"]}}' --amendment-reason <理由>` 回挂"},
+          "rework": {"label": "反复返工", "severity": "warn", "reason": "标准 {criterion}(里程碑 {milestone})的挂接卡 {cards} 返工合计 {rounds} 轮, 达阈值 {threshold}", "advice": "复核标准是否可核对 / 卡是否该拆: 改标准 `lybra roadmap set --workspace-root {governance_root} --id {criterion} --field statement --value <新表述>` 预演后 --confirm, 或拆卡; 看最新裁决 `lybra loop status --workspace-root {governance_root} --task-id <卡>`"},
+          "overdue": {"label": "里程碑逾期", "severity": "inbox", "reason": "里程碑 {milestone} 目标日 {target_date} 已过 {days_over} 天, 状态 {status}, 标准满足 {met}/{total}", "advice": "改目标日 `lybra roadmap set --workspace-root {governance_root} --id {milestone} --field target_date --value <YYYY-MM-DD>` 预演后 --confirm(经 Owner 同意), 或补卡加速; 不再做 = --field status --value dropped"},
+          "roadmap_changed": {"label": "路线图近期被改", "severity": "warn", "reason": "近 {days} 天路线图改了 {count} 次, 最近 {last_at} 由 {last_by}: {last_summary}", "advice": "核对变更是否经 Owner 同意(指针 {last_path}); 变更历史 `lybra roadmap show --workspace-root {governance_root}` 对照 decision_log"}
+        },
+        "next_steps": {
+          "push": "推进 {milestone}: 标准 {criteria} 等挂接卡 {cards} 结案 / 审计通过",
+          "pending_verify": "{milestone}: 标准 {criteria} 的卡已结案, 等 F175 验收核对",
+          "mark_done": "{milestone} 标准已全满足: `lybra roadmap set --workspace-root {governance_root} --id {milestone} --field status --value done` 预演后 --confirm",
+          "mark_active": "{milestone} 已有卡在推进: `lybra roadmap set --workspace-root {governance_root} --id {milestone} --field status --value active` 预演后 --confirm",
+          "activate": "当前无 active 里程碑: 开下一个 `lybra roadmap set --workspace-root {governance_root} --id {milestone} --field status --value active` 预演后 --confirm",
+          "act_on_signal": "严重偏差: 按上方「{label}」建议处理 {subject}(已进 Owner 收件箱)",
+          "none": "无偏差、无待推进项"
+        },
+        "texts": {
+          "header": "路线图状态 {project} · {path}{lane_part} · 里程碑 {milestones} 个 · 标准满足 {met}/{total} · 今天 {today}",
+          "lane_part": " · lane {lane}",
+          "milestone": "[{lane}] {id} ({status}{target_part}) {title}",
+          "target_part": " · 目标 {target_date}",
+          "progress": "    进度 {bar} {met}/{total}{mismatch_part}",
+          "mismatch_part": "  ⚠ {mismatch}",
+          "criterion_met": "    ✓ {id} [{verify}] {statement} — 已满足(卡 {cards})",
+          "criterion_unmet": "    · {id} [{verify}] {statement} — 未满足: {reason}",
+          "signals_header": "偏差信号 {count} 条(阈值: {thresholds}):",
+          "no_signals": "偏差信号: 无(阈值: {thresholds})",
+          "signal": "  [{severity_label}] {label}: {reason}",
+          "advice": "      建议: {advice}",
+          "next_header": "下一步建议:",
+          "next_line": "  - {line}",
+          "errors_header": "读不出的真相({count} 处, 相关结论按未满足 / 不判停滞, 不猜):",
+          "error": "  ⚠ {source}: {error}"
+        }
+      },
       "exit_codes": {
-        "ok": {"code": 0, "meaning": "show 已输出 / 预演通过 / 已写入并落账"},
+        "ok": {"code": 0, "meaning": "show / status 已输出 / 预演通过 / 已写入并落账"},
         "refused": {"code": 1, "meaning": "拒(拒因码见 config.schema governance_structure.roadmap.reject_codes; 零写入)"},
         "usage": {"code": 2, "meaning": "参数错"},
         "landing_failed": {"code": 3, "meaning": "写入已生效但落账未完成(同 post_write_landing.landing_failed_exit_code; 出补账命令)"}
