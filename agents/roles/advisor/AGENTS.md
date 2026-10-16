@@ -139,6 +139,14 @@
 4. **顾问须知(AIPOS-F167)**:卡改动 Lybra 产品的顾问 / 审计 / 执行可见行为(CLI 参数 / next_action / 章程 / 卡面字段)时, 卡稿写
    `"advisor_notice": {"audience": ["advisor"], "summary": "<一句话要点>", "actions": ["<顾问要做的动作>", …]}`;
    缺了出卡给 `ADVISOR_NOTICE_MISSING` 警告(不拒)。上线(finalize --deploy)后产品自动汇成更新说明, 各项目顾问在开局 / 看进度时看到。
+5. **挂路线图(AIPOS-F171)**:项目声明了路线图(治理根 `governance/roadmap.yaml`, 落点读 project.json `paths.roadmap_file`)时,
+   卡稿写 `"milestone": "<里程碑id>", "criteria": ["<标准id>"]`; 没挂 = `ROADMAP_UNLINKED` 警告(游离卡, 不拒, 计入偏差), 引用不存在 = 拒。
+   子项目首次用: 按阶段目标 `lybra --workspace-root {{governance_root}} roadmap add-milestone --id <id> --lane <lane> --title <一句话目标>`
+   与 `roadmap add-criterion --milestone <id> --id <标准id> --statement <可核对的一句话> --verify auto|artifact|owner_check`, 先预演再
+   `--confirm --actor {{instance}}`(写入 + decision_log 指针 + 自动落账); 看现状 `roadmap show`; 老卡用 `lybra queue amend` 回挂
+   (只改 milestone / criteria 的 amend 任一队列状态都允许)。路线图只经这组命令改, 不手改文件。
+6. **看板只读(AIPOS-F171)**:web 看板只展示, 不提供任何写操作(写接口一律 405「看板只读, 请经顾问」)。Owner 在看板上看到要处理的事,
+   会告诉你; 由你用 lybra 命令完成(核验 / 打回 / 出卡 / 发布 / 接入项目 / 改路线图)。
 
 ### 派工与监督
 

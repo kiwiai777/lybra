@@ -28,7 +28,7 @@ role: advisor
 
 | 阶段 | 职责 | 主要命令 |
 |------|------|----------|
-| **N0 出卡** | 起草与发卡 | `lybra draft create/publish`, `lybra queue amend/withdraw` |
+| **N0 出卡** | 起草与发卡(卡挂路线图里程碑, AIPOS-F171) | `lybra draft create/publish`, `lybra queue amend/withdraw`, `lybra roadmap show/add-milestone/add-criterion/set/remove` |
 | **推进** | **Owner 信封授权下, 一条命令把卡从当前节点推到 completed**(产物落盘自动 return→派审→裁决→finalize→close; agent 步只等产物; 信封 `launch_harnesses` 授权时 loop 在工位拉起 harness, 否则手工 `/go`, 见「两种开工模式」) | **`lybra loop --task-id <卡ID>`**(AIPOS-F73D; 替代逐步 `next --run`) |
 | **跟进(持续推进)** | Owner 说一次「推进 <lane>」后不等 Owner 推: 跑 loop → 有界等 → 按产品给的顾问下一动作处理, 只在 owner_needed 停(守则全文在顾问章程「持续推进守则」, 本 skill 不复述) | **`lybra loop status --task-id <卡ID> --wait <秒>`**(AIPOS-F136) |
 | **更新通知** | 产品上线后的顾问须知由产品送达(AIPOS-F167, Owner 不再转述): `lybra charter` 开头 / `loop status`、`next`、`brief` 末尾出现「Lybra 有 N 条未读更新」→ 读 → 记已读 → 继续推进(守则在顾问章程「持续推进守则」, 本 skill 不复述) | **`lybra updates --actor <你的顾问实例>`** → **`lybra updates --ack --actor <你的顾问实例> --confirm`** |
@@ -70,13 +70,33 @@ lybra draft publish --path 5_tasks/drafts/<卡ID小写>.md --actor <你的顾问
 `--actor` = 签发实例(AIPOS-F156): 记入发布记录 actor = 卡归属(共用仓「取下一张只取本子项目的卡」、loop 拒跑别人的卡都按它判);
 按 `--actor` 实例核凭据(治理根连接文件须有该实例的顾问凭据)。同一治理根接入多个顾问实例时必填(缺 = 拒 `PUBLISH_ACTOR_REQUIRED`);
 只接入一个时可省(推断为该实例)。
-**自动校验**:schema 校验(必填/拼错字段)、N0 容量 lint(交付大项>3 会 WARN)、顾问须知(AIPOS-F167: `advisor_notice` 形不合 = 拒 `ADVISOR_NOTICE_INVALID`; 改 Lybra 产品顾问/审计/执行可见面的卡缺它 = 警告 `ADVISOR_NOTICE_MISSING`, 不拒)。
+**自动校验**:schema 校验(必填/拼错字段)、N0 容量 lint(交付大项>3 会 WARN)、顾问须知(AIPOS-F167: `advisor_notice` 形不合 = 拒 `ADVISOR_NOTICE_INVALID`; 改 Lybra 产品顾问/审计/执行可见面的卡缺它 = 警告 `ADVISOR_NOTICE_MISSING`, 不拒)、路线图挂接(AIPOS-F171: 引用不存在 = 拒 `ROADMAP_LINK_INVALID`; 已有路线图而卡未挂 = 警告 `ROADMAP_UNLINKED`, 不拒)。
 
 **卡稿 JSON 写顾问须知**(AIPOS-F167; 卡改 CLI 参数 / next_action / 章程 / 卡面字段等顾问可见行为时写, 上线后产品自动送达各项目顾问):
 ```json
 "advisor_notice": {"audience": ["advisor"], "summary": "<一句话要点>", "actions": ["<顾问要做的动作>"]}
 ```
 `audience` 可含 `advisor` / `auditor` / `executor`(含 `advisor` 才进顾问未读提示; 审计 / 执行体的变化随章程渲染送达)。
+
+**卡稿 JSON 挂路线图**(AIPOS-F171; 项目已声明路线图时写, 见下 `lybra roadmap`):
+```json
+"milestone": "<里程碑id>", "criteria": ["<标准id>"]
+```
+引用不存在 / 标准不属该里程碑 = 拒 `ROADMAP_LINK_INVALID`; 已有路线图而卡没挂 = 警告 `ROADMAP_UNLINKED`(游离卡, 不拒, 计入偏差);
+项目没有路线图文件 = 不校验不警告。
+
+#### `lybra roadmap`(AIPOS-F171: 路线图声明与编辑)
+**何时用**:子项目首次接入结构化路线图(按阶段目标声明里程碑与验收标准)、阶段目标变化、看哪些卡挂在哪个里程碑 / 哪些是游离卡。
+```bash
+lybra roadmap show --workspace-root <治理根> [--lane <lane>]                         # 只读: 里程碑 / 标准 / 挂接卡数 / 游离卡
+lybra roadmap add-milestone --workspace-root <治理根> --id <里程碑id> --lane <lane> --title "<一句话目标>" [--target-date YYYY-MM-DD]   # 先预演
+lybra roadmap add-milestone --workspace-root <治理根> --id <里程碑id> --lane <lane> --title "<一句话目标>" --confirm --actor <你的顾问实例>
+lybra roadmap add-criterion --workspace-root <治理根> --milestone <里程碑id> --id <标准id> --statement "<可核对的一句话>" --verify auto|artifact|owner_check [--confirm --actor <你的顾问实例>]
+lybra roadmap set --workspace-root <治理根> --id <id> --field status --value done [--confirm --actor <你的顾问实例>]
+lybra roadmap remove --workspace-root <治理根> --id <id> [--confirm --actor <你的顾问实例>]    # 有挂接卡 = 拒 ROADMAP_REMOVE_LINKED, 里程碑改 status=dropped
+```
+缺省预演(整份文件 diff + 将生成的 decision_log 指针名, 零写入); `--confirm` 写入、生成 decision_log 指针(路线图变更本身可见)并自动落账。
+文件落点 project.json `paths.roadmap_file`(缺省 `governance/roadmap.yaml`), 格式见 `docs/roadmap.md`; 改动只经本组命令。
 
 #### `lybra updates`(AIPOS-F167: Lybra 更新说明 · 记已读)
 **何时用**:`lybra charter` 开头或 `loop status` / `next` / `brief` 末尾出现「Lybra 有 N 条未读更新(自 <版本>): 要点…」时。
@@ -102,6 +122,11 @@ lybra queue amend --restricted --task-id <卡ID> --actor <你的顾问实例> \
 # 允许字段唯一声明 card.schema restricted_amend.claimed_card_fields = rework_rounds / output_target / lane
 ```
 经门 MCP 改卡(`lybra_queue_amend_dry_run` → `lybra_queue_amend_confirm`)时, 确认只认预演返回的 `dry_run_token`(与返工同一确认令牌口径, AIPOS-F157), 门按预演过的那次修改重放核验后写入。
+**老卡回挂路线图(AIPOS-F171)**: 只改 `milestone` / `criteria` 的 amend 在 pending / claimed / blocked / completed 任一状态都允许(不必 `--restricted`), 引用同出卡校验:
+```bash
+lybra queue amend --task-id <卡ID> --amendments '{"milestone": "<里程碑id>", "criteria": ["<标准id>"]}' \
+  --amendment-reason "回挂路线图" --actor <你的顾问实例>
+```
 
 #### `lybra card render`(AIPOS-F78 件②)
 **何时用**:派子 agent(Claude Code / Codex / pi)开工前, 把卡的意图面渲染成该引擎的开工物。同一源三输出, 渲染物 `grep lybra_` = 0。

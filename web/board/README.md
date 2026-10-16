@@ -69,7 +69,26 @@ ssh -N -L 7117:127.0.0.1:7117 owner@private-host
 
 Deployment templates live under `config/deployment/` and are examples only. AIPOS-84 does not install or enable services.
 
+## Read-only Board (AIPOS-F171)
+
+Owner ruling 2026-10-16: the web Board only shows (onboarding guidance, progress, verification) and never writes; the Owner acts
+through the advisor agent. Every non-GET request other than the auth / login channels (`/api/auth/*`) answers
+**405 `BOARD_READ_ONLY`** ("看板只读, 请经顾问"; declared in `schema/verbs.schema.json` `board_readonly`) without calling any
+writer — the former POST business routes listed below (controlled execute, AI authoring, agent profiles, planner previews,
+project import, verify approve / reject) are offline and their write panels / buttons are hidden in the pages. Authentication is
+unchanged.
+
+- **Project list** = the registered projects of the governance home root (the same enumeration as the Owner inbox,
+  `owner_inbox.home_projects`); `?workspace=<n>` is that list's order and paused projects (`project.json` `status: paused`) are
+  marked. `.lybra/board_config.json` / `--board-config` are retired (file kept, never read). A home root without projects falls
+  back to the single workspace the server runs in.
+- **Milestones** on the project page come from the project's roadmap declaration (`GET /api/roadmap?workspace=<n>`, read-only
+  simple view; same data as `lybra roadmap show`, format in [`docs/roadmap.md`](../../docs/roadmap.md)). The hand-written
+  `governance/project-map.md` is no longer read (`/api/project-map` and the portal header are gone; the file is not deleted).
+
 ## Available Endpoints
+
+- `GET /api/roadmap?workspace=<n>` (AIPOS-F171; replaces the retired `/api/project-map`)
 
 - `GET /api/health`
 - `GET /api/queue`
@@ -92,6 +111,7 @@ Deployment templates live under `config/deployment/` and are examples only. AIPO
 - `GET /api/context-pack/preview?orchestration_id=<ORCHESTRATION_ID>`
 - `GET /api/planner-drafts/review`
 - `GET /api/owner-decisions/review`
+- Retired by AIPOS-F171 (all answer 405 `BOARD_READ_ONLY`, kept here as history):
 - `POST /api/owner-decision/resolve/review`
 - `POST /api/parent-requirement/preview`
 - `POST /api/planner-tick/preview`
