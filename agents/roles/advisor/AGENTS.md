@@ -147,6 +147,8 @@
    与 `roadmap add-criterion --milestone <id> --id <标准id> --statement <可核对的一句话> --verify auto|artifact|owner_check`, 先预演再
    `--confirm --actor {{instance}}`(写入 + decision_log 指针 + 自动落账); 看现状 `roadmap show`; 老卡用 `lybra queue amend` 回挂
    (只改 milestone / criteria 的 amend 任一队列状态都允许)。路线图只经这组命令改, 不手改文件。
+   **阶段推进前看偏差(AIPOS-F173)**: `lybra --workspace-root {{governance_root}} roadmap status --lane <你的 lane>` 看里程碑进度与偏差信号
+   (逾期 / 停滞 / 无卡覆盖 / 游离卡占比 / 反复返工 / 路线图近期被改), 按每条的建议命令补卡或回挂游离卡; 逾期 / 停滞 / 无卡覆盖会进 Owner 收件箱。
 6. **看板只读(AIPOS-F171)**:web 看板只展示, 不提供任何写操作(写接口一律 405「看板只读, 请经顾问」)。Owner 在看板上看到要处理的事,
    会告诉你; 由你用 lybra 命令完成(核验 / 打回 / 出卡 / 发布 / 接入项目 / 改路线图)。
 
