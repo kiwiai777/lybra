@@ -362,6 +362,17 @@
       "required": false,
       "description": "AIPOS-F171 件②: 本卡对应的验收标准 id 列表(须属于 milestone 所指里程碑; 给 criteria 须同时给 milestone)。校验同 milestone。"
     },
+    "artifacts": {
+      "type": "array",
+      "items": {"type": "object"},
+      "required": false,
+      "description": "AIPOS-F175 件②: 本卡交付的验收产物(截图 / 关键输出 / 报告)声明——产物约定只此一个卡面字段。每项 {criterion: 本卡 criteria 里的标准 id, path_glob: 相对卡产物落点的文件 glob, kind: screenshot|output|report}; 卡产物落点 = card_artifacts.dir(缺省 <return_root>/<卡ID>/artifacts/ = 执行体交回落点内, 随项目 project.json paths.return_root 声明)。执行体 / 审计按声明把文件放进落点, 交回 / 审计报告引用; 路线图推导(roadmap_drift.roadmap_status)据此判 artifact / owner_check 标准的产物是否存在, 看板路线图页显示缩略图 / 摘录。形校验唯一实现 roadmap.artifact_problems(出卡与 amend 经 roadmap.link_problems 同调); 缺省 = 不声明, 行为不变。"
+    },
+    "owner_check_ref": {
+      "type": "string",
+      "required": false,
+      "description": "AIPOS-F175 件③: 本卡修复的 Owner 抽查「不符」记录 id(owner_verifications 记录文件名去 .md)。`lybra roadmap verify --result mismatch --confirm` 自动起草修复卡时写入(卡同时挂同一 milestone / criteria); 路线图推导据此把标准显示为「不符·修复卡 <本卡>」。"
+    },
     "referenced_files": {
       "type": "array",
       "items": {"type": "string"},
@@ -1016,7 +1027,8 @@
       "anchor_refs",
       "advisor_notice",
       "milestone",
-      "criteria"
+      "criteria",
+      "artifacts"
     ],
     "body_sections": [
       "Goal",
@@ -1140,5 +1152,16 @@
     "unlinked_warning": "ROADMAP_UNLINKED: 本项目已声明路线图({roadmap}), 本卡未挂里程碑 = 游离卡(不拒, 计入偏差)。出口: 卡稿加 \"milestone\": \"<里程碑id>\", \"criteria\": [\"<标准id>\"](可挂: {milestones}); 老卡用 `lybra queue amend --task-id <卡> --amendments '{{\"milestone\": \"<id>\"}}'` 回挂; 确为探索/修复工作可忽略",
     "invalid": "ROADMAP_LINK_INVALID: {reason}。出口: `lybra roadmap show` 查可挂 id, 或先 `lybra roadmap add-milestone / add-criterion`(预演后 --confirm)",
     "unreadable": "ROADMAP_UNREADABLE: 路线图文件读不出或不合声明, 挂接无法核对: {reason}"
+  },
+  "card_artifacts": {
+    "description": "AIPOS-F175 件②: 卡面验收产物声明(fields.artifacts)的唯一约定。dir = 卡产物落点模板(占位 {return_root} = project.json paths.return_root 经 workspace_config.project_paths 解析, {task_id} = 卡 ID): 落在执行体交回落点 <return_root>/<卡ID>/ 内(roles.schema write_boundary return_slot = 执行体唯一可写的治理面), 项目改落点 = 声明 return_root, 不另立键。entry_keys = 每项的键(required 全给, 未声明的键拒)。kinds = kind 值域。path_glob 只许相对落点(禁绝对路径 / .. / ~), 解析结果须仍在落点内。image_suffixes = 看板显示缩略图的后缀(只这些可经看板只读路由取图), text_suffixes = 显示摘录的后缀(读前 excerpt_bytes 字节)。解析 / 校验 / 取文件唯一实现 tools/aipos_cli/roadmap.py(artifact_problems / card_artifacts / artifact_file), 推导、收件箱、看板同读。",
+    "field": "artifacts",
+    "dir": "{return_root}/{task_id}/artifacts",
+    "entry_keys": {"required": ["criterion", "path_glob", "kind"], "optional": []},
+    "kinds": ["screenshot", "output", "report"],
+    "image_suffixes": [".png", ".jpg", ".jpeg", ".gif", ".webp"],
+    "text_suffixes": [".txt", ".log", ".md", ".json", ".out", ".csv"],
+    "excerpt_bytes": 2000,
+    "invalid": "CARD_ARTIFACTS_INVALID: {reason}。出口: 卡稿 artifacts 每项写 {{\"criterion\": \"<本卡 criteria 里的标准id>\", \"path_glob\": \"<相对产物落点的 glob, 如 home.png>\", \"kind\": \"screenshot|output|report\"}}"
   }
 }

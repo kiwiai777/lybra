@@ -14,6 +14,12 @@
 - 阈值读 project.json roadmap_drift(唯一读取口 workspace_config.roadmap_drift_thresholds, 缺省见 config.schema); 文案 / 信号种类 /
   严重度 / 建议命令读 verbs.schema lybra_roadmap.status(status_declaration 唯一读取口), 禁写死。
 - 任何项目同一组命令: 本模块不写死项目 ID / 路径 / 卡号前缀。
+
+AIPOS-F175 件①(验证状态五态并入本推导, 不另写): 每条标准的验证状态(未验证 / 自动验证通过 / 待 Owner 抽查 / Owner 已确认 / 不符)
+在本模块 _criterion_verification 一处算出, 只读既有真相: 挂接卡审计证据(card_evidence)+ 卡面产物(roadmap.card_artifacts, 声明
+card.schema card_artifacts)+ Owner 抽查记录(既有 owner_verifications 记录, 经 records.load_records 唯一读取; 写口 = `lybra roadmap verify`
+即 roadmap.apply_owner_verification)。文案 / 状态名 / 满足口径读 verbs.schema lybra_roadmap.status.verification。CLI、收件箱 owner_check 类别、
+看板路线图页同读本推导结果(criteria[].state / basis / verifications / fix_cards / evidence[].artifacts)。
 """
 from __future__ import annotations
 
@@ -23,7 +29,11 @@ from typing import Any
 
 #: 信号种类(与 verbs.schema lybra_roadmap.status.signals 键同集; 声明读取处核对)
 SIGNAL_KINDS = ("unlinked_ratio", "stalled", "uncovered", "rework", "overdue", "roadmap_changed")
-_STATUS_KEYS = ("progress_bar_width", "satisfied_queue_states", "excluded_queue_states", "verify_pending", "unmet_reasons",
+#: AIPOS-F175: verification states (keys of verbs.schema lybra_roadmap.status.verification.states; checked where declared)
+VERIFICATION_STATES = ("unverified", "auto_passed", "owner_pending", "owner_confirmed", "mismatch")
+_BASIS_KEYS = ("passed", "evidence_part", "artifact_part", "owner_pending", "owner_record", "refix_pending", "fix_part", "fix_none",
+               "fix_draft", "fix_card")
+_STATUS_KEYS = ("progress_bar_width", "satisfied_queue_states", "excluded_queue_states", "verification", "unmet_reasons",
                 "status_mismatch", "severity_labels", "signals", "next_steps", "texts")
 
 
@@ -48,9 +58,14 @@ def status_declaration() -> dict[str, Any]:
     from tools.aipos_cli.roadmap import roadmap_declaration
 
     verify_enum = roadmap_declaration()["verify"]["enum"]
-    pending = decl["verify_pending"]
-    if not isinstance(pending, dict) or not set(pending) < set(verify_enum):
-        raise SchemaLoadError(f"verbs.lybra_roadmap.status.verify_pending 键须为 verify 值域 {verify_enum} 的真子集(其余 = 可推导)")
+    ver = decl["verification"]
+    if (not isinstance(ver, dict) or set(ver.get("states") or {}) != set(VERIFICATION_STATES)
+            or not isinstance(ver.get("satisfied_state"), dict) or set(ver["satisfied_state"]) != set(verify_enum)
+            or not set(ver["satisfied_state"].values()) <= set(VERIFICATION_STATES)
+            or not set(ver.get("needs_artifacts") or []) <= set(verify_enum)
+            or any(not isinstance((ver.get("basis") or {}).get(k), str) for k in _BASIS_KEYS)):
+        raise SchemaLoadError(f"verbs.lybra_roadmap.status.verification 须有 states(恰为 {list(VERIFICATION_STATES)})/ satisfied_state"
+                              f"(键 = verify 值域 {verify_enum})/ needs_artifacts / basis{list(_BASIS_KEYS)}")
     return decl
 
 
@@ -146,12 +161,14 @@ def _card_truth(root: Path, card: dict[str, Any], errors: list[dict[str, str]], 
     return out
 
 
-def card_evidence(root: Path, card: dict[str, Any], truth: dict[str, Any]) -> dict[str, Any]:
+def card_evidence(root: Path, card: dict[str, Any], truth: dict[str, Any], criterion: str | None = None) -> dict[str, Any]:
     """挂接卡的审计证据(唯一读取; _verify_card 判定与看板「路线图与验收」页证据展示(AIPOS-F174)同读, 看板不另读报告):
     最新常规审计裁决 / 补审裁决(门记录 truth.records)+ 运行证据要求(artifact_ingest.runtime_evidence_requirement)+ 裁决报告运行证据节
     (evidence_refs 指向的报告经 parse_runtime_evidence_section 解析; 取第一份解析出非空运行记录的报告)。
     返回 {task_id, queue_state, verdict, verdict_id, verdict_at, supplementary_verdict, supplementary_verdict_id, unreadable,
-    evidence_required(True / False / None = 声明不合), declaration_problem, report_ref, evidence(运行记录列表 | None), evidence_problem}。只读。"""
+    evidence_required(True / False / None = 声明不合), declaration_problem, report_ref, evidence(运行记录列表 | None), evidence_problem,
+    artifacts}。AIPOS-F175: criterion 给出 = artifacts 为该卡卡面声明的该标准产物(roadmap.card_artifacts 唯一解析; 看板缩略图 / 摘录同读),
+    否则 None。只读。"""
     from tools.aipos_cli.artifact_ingest import (
         RuntimeEvidenceDeclarationError, parse_runtime_evidence_section, runtime_evidence_requirement,
     )
@@ -165,8 +182,12 @@ def card_evidence(root: Path, card: dict[str, Any], truth: dict[str, Any]) -> di
         "verdict_at": _iso(_as_utc(verdict.get("verdict_at"))) if verdict.get("verdict_at") else None,
         "supplementary_verdict": str(supp.get("verdict") or "").upper() or None, "supplementary_verdict_id": supp.get("verdict_id"),
         "unreadable": truth.get("unreadable"), "evidence_required": None, "declaration_problem": None, "report_ref": None,
-        "evidence": None, "evidence_problem": None,
+        "evidence": None, "evidence_problem": None, "artifacts": None, "criterion": criterion,
     }
+    if criterion is not None:
+        from tools.aipos_cli.roadmap import card_artifacts
+
+        out["artifacts"] = card_artifacts(root, card.get("metadata") or {"task_id": out["task_id"]}, criterion=criterion)
     if truth.get("unreadable"):
         return out
     try:
@@ -193,9 +214,10 @@ def card_evidence(root: Path, card: dict[str, Any], truth: dict[str, Any]) -> di
 
 def _verify_card(root: Path, card: dict[str, Any], truth: dict[str, Any], verify: str, decl: dict[str, Any],
                  evidence: dict[str, Any] | None = None) -> tuple[bool, str]:
-    """已结案挂接卡是否达到标准声明的 verify 要求 → (满足, 未满足原因)。
-    auto: 最新常规审计裁决属 PASS 类、补审未判 FAIL、卡声明了运行证据时裁决报告有运行证据节;
-    verify_pending 所列方式(artifact / owner_check): 本卡先按未满足显示原因(待 F175), 不臆断。
+    """已结案挂接卡是否达到自动验证要求 → (通过, 未通过原因)。
+    全部方式: 最新常规审计裁决属 PASS 类、补审未判 FAIL、卡声明了运行证据时裁决报告有运行证据节;
+    AIPOS-F175: verification.needs_artifacts 所列方式(artifact / owner_check)另需卡面 artifacts 声明了该标准的产物且每个 path_glob 在卡产物
+    落点至少匹配一个文件(缺什么写进原因)。owner_check 的 Owner 结论不在此判(见 _criterion_verification)。
     证据读取唯一口 card_evidence(evidence 已算好时直接传入, 不重读)。"""
     from tools.aipos_cli.audit_derivation import supplementary_audit_declaration
     from tools.aipos_cli.next_resolver import _PASS_VERDICTS
@@ -217,10 +239,171 @@ def _verify_card(root: Path, card: dict[str, Any], truth: dict[str, Any], verify
                            problem=ev["declaration_problem"])
     if ev["evidence_required"] and ev["evidence_problem"]:
         return False, _fmt(reasons["no_evidence"], "unmet_reasons.no_evidence", task_id=task_id, problem=ev["evidence_problem"])
-    pending = decl["verify_pending"].get(verify)
-    if pending:
-        return False, _fmt(reasons["pending"], "unmet_reasons.pending", task_id=task_id, pending=pending)
+    if verify in decl["verification"]["needs_artifacts"]:
+        art = ev.get("artifacts") or {}
+        if art.get("problems"):
+            return False, _fmt(reasons["artifact_invalid"], "unmet_reasons.artifact_invalid", task_id=task_id,
+                               problem="; ".join(art["problems"]))
+        if not art.get("entries"):
+            return False, _fmt(reasons["no_artifacts"], "unmet_reasons.no_artifacts", task_id=task_id,
+                               criterion=str(ev.get("criterion") or "?"), verify=verify)
+        missing = [f"[{e['kind']}] {e['path_glob']}" for e in art["entries"] if not e["files"]]
+        if missing:
+            return False, _fmt(reasons["artifact_missing"], "unmet_reasons.artifact_missing", task_id=task_id,
+                               dir=str(art.get("dir_rel") or art.get("dir")), missing=", ".join(missing))
     return True, ""
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F175 件①: 验证状态五态(唯一实现; 只读)
+# ---------------------------------------------------------------------------
+
+def _owner_records(root: Path, task_id: str, criterion: str, results: dict[str, Any], errors: list[dict[str, str]]) -> tuple[list[dict[str, Any]], str | None]:
+    """该卡针对该标准的 Owner 抽查记录(既有 owner_verifications 记录类型, records.load_records 唯一读取)→ (按裁决时刻旧→新, 读不出原因)。
+    记录读不出 = 点名进 errors 且返回原因(调用方不当作已确认, 不猜)。"""
+    from tools.aipos_cli.records import load_records
+
+    try:
+        recs = load_records(root, groups=["owner_verifications"], task_id=task_id).get("owner_verifications") or []
+    except (OSError, ValueError) as exc:
+        problem = f"{type(exc).__name__}: {exc}"
+        errors.append({"source": f"卡 {task_id} 的 Owner 抽查记录", "error": problem})
+        return [], problem
+    out: list[dict[str, Any]] = []
+    problem = None
+    for rec in recs:
+        meta = rec.get("metadata") or {}
+        if rec.get("parse_errors"):
+            problem = f"{rec.get('path')}: {'; '.join(rec['parse_errors'])}"
+            errors.append({"source": f"卡 {task_id} 的 Owner 抽查记录", "error": problem})
+            continue
+        if str(meta.get("criterion") or "") != criterion or str(meta.get("result") or "") not in results:
+            continue
+        out.append({"record_id": rec.get("record_id"), "path": rec.get("path"), "task_id": task_id, "result": str(meta["result"]),
+                    "label": str(results[str(meta["result"])]["label"]), "decided_at": str(meta.get("decided_at") or ""),
+                    "decided_by": meta.get("decided_by"), "relayed_by": meta.get("relayed_by"), "owner_words": meta.get("owner_words"),
+                    "note": meta.get("note"), "fix_task_id": meta.get("fix_task_id")})
+    out.sort(key=lambda r: (r["decided_at"], str(r["record_id"])))
+    return out, problem
+
+
+def _closed_at(card: dict[str, Any]) -> datetime:
+    meta = card.get("metadata") or {}
+    return _as_utc(meta.get("completed_at")) or _card_created(meta) or datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _fix_cards(root: Path, latest: dict[str, Any], all_cards: list[dict[str, Any]], basis: dict[str, Any]) -> list[dict[str, Any]]:
+    """不符记录的修复卡: 记录 fix_task_id + 卡面 owner_check_ref = 该记录 id 的卡; 在队列 = 队列状态, 只在草稿 = 草稿待发布。"""
+    from tools.aipos_cli.draft_validator import expected_draft_relative_path
+
+    by_id = {str(c.get("task_id")): c for c in all_cards}
+    ids = [str(latest["fix_task_id"])] if latest.get("fix_task_id") else []
+    ids += [str(c.get("task_id")) for c in all_cards
+            if str((c.get("metadata") or {}).get("owner_check_ref") or "") == str(latest.get("record_id"))]
+    out = []
+    for task_id in dict.fromkeys(ids):
+        card = by_id.get(task_id)
+        if card is not None:
+            out.append({"task_id": task_id, "queue_state": card.get("queue_state"), "draft": False,
+                        "text": _fmt(basis["fix_card"], "verification.basis.fix_card", task_id=task_id, queue_state=card.get("queue_state"))})
+        elif (root / expected_draft_relative_path(task_id)).is_file():
+            out.append({"task_id": task_id, "queue_state": None, "draft": True,
+                        "text": _fmt(basis["fix_draft"], "verification.basis.fix_draft", task_id=task_id)})
+        else:
+            out.append({"task_id": task_id, "queue_state": None, "draft": False,
+                        "text": _fmt(basis["fix_card"], "verification.basis.fix_card", task_id=task_id, queue_state="?")})
+    return out
+
+
+def _criterion_verification(root: Path, crit: dict[str, Any], crit_cards: list[dict[str, Any]], closed: list[dict[str, Any]],
+                            evidence: dict[str, dict[str, Any]], all_cards: list[dict[str, Any]], decl: dict[str, Any],
+                            errors: list[dict[str, str]], cache: dict[str, Any]) -> dict[str, Any]:
+    """一条标准的验证状态(五态唯一判定)。返回 {satisfied, state, state_label, reason, basis, met_cards, qualified_cards, verify_target,
+    owner_verification, verifications, fix_cards}。qualified = 已结案且自动验证通过(含产物)的挂接卡; owner_check 再看 Owner 抽查记录。"""
+    from tools.aipos_cli.roadmap import verify_declaration
+
+    ver = decl["verification"]
+    basis_t = ver["basis"]
+    reasons = decl["unmet_reasons"]
+    verify = str(crit["verify"])
+    cid = str(crit["id"])
+    out: dict[str, Any] = {"satisfied": False, "state": "unverified", "state_label": "", "reason": None, "basis": None,
+                           "met_cards": [], "qualified_cards": [], "verify_target": None, "verify_target_by": None, "owner_verification": None,
+                           "verifications": [], "fix_cards": []}
+    qualified: list[dict[str, Any]] = []
+    passed: list[str] = []
+    why: list[str] = []
+    if not crit_cards:
+        why.append(str(reasons["no_card"]))
+    elif not closed:
+        why.append(_fmt(reasons["not_closed"], "unmet_reasons.not_closed", cards=_ids(crit_cards)))
+    for card in closed:
+        tid = str(card["task_id"])
+        ev = evidence[tid]
+        ok, text = _verify_card(root, card, _card_truth(root, card, errors, cache), verify, decl, ev)
+        if not ok:
+            why.append(text)
+            continue
+        qualified.append(card)
+        files = [f["rel"] for e in ((ev.get("artifacts") or {}).get("entries") or []) for f in e["files"]]
+        passed.append(_fmt(basis_t["passed"], "verification.basis.passed", task_id=tid, verdict=ev.get("verdict") or "?",
+                           verdict_id=ev.get("verdict_id") or "?",
+                           evidence_part=_fmt(basis_t["evidence_part"], "verification.basis.evidence_part", report_ref=ev["report_ref"])
+                           if ev.get("report_ref") else "",
+                           artifact_part=_fmt(basis_t["artifact_part"], "verification.basis.artifact_part", files=", ".join(files))
+                           if files else ""))
+    out["qualified_cards"] = [str(c["task_id"]) for c in qualified]
+    state = "unverified"
+    detail: list[str] = list(passed)
+    if qualified and verify != "owner_check":
+        state = "auto_passed"
+    elif qualified:
+        results = verify_declaration()["results"]
+        records: list[dict[str, Any]] = []
+        unchecked: list[dict[str, Any]] = []
+        unreadable: list[str] = []
+        for card in qualified:
+            got, problem = _owner_records(root, str(card["task_id"]), cid, results, errors)
+            records += got
+            if problem:
+                unreadable.append(_fmt(reasons["verification_unreadable"], "unmet_reasons.verification_unreadable",
+                                       task_id=str(card["task_id"]), problem=problem))
+            if not got:
+                unchecked.append(card)
+        # same-second records: the one on the later-closed card (the newer deliverable) counts as the latest
+        closed_at = {str(c["task_id"]): _closed_at(c) for c in qualified}
+        records.sort(key=lambda r: (r["decided_at"], closed_at[r["task_id"]], str(r["record_id"])))
+        out["verifications"] = records
+        latest = records[-1] if records else None
+        out["owner_verification"] = latest
+        target_card = max(unchecked or qualified, key=_closed_at)
+        target_meta = target_card.get("metadata") or {}
+        out["verify_target"] = str(target_card["task_id"])
+        out["verify_target_by"] = str(target_meta.get("created_by") or target_meta.get("draft_created_by") or "") or None
+        if latest is None or (latest["result"] == "mismatch" and unchecked):
+            state = "owner_pending"
+            key = "owner_pending" if latest is None else "refix_pending"
+            detail.append(_fmt(basis_t[key], f"verification.basis.{key}", cards=_ids(unchecked)))
+        else:
+            state = str(results[latest["result"]]["state"])
+            record_text = _fmt(basis_t["owner_record"], "verification.basis.owner_record", label=latest["label"],
+                               decided_at=latest["decided_at"] or "?", relayed_by=latest.get("relayed_by") or "?",
+                               owner_words=latest.get("owner_words") or "", record=latest.get("path") or "?")
+            if latest["result"] == "mismatch":
+                out["fix_cards"] = _fix_cards(root, latest, all_cards, basis_t)
+                fix = ", ".join(f["text"] for f in out["fix_cards"])
+                record_text += (_fmt(basis_t["fix_part"], "verification.basis.fix_part", fix=fix) if fix else str(basis_t["fix_none"]))
+            detail.append(record_text)
+        detail += unreadable
+    out["state"] = state
+    out["state_label"] = str(ver["states"][state])
+    out["satisfied"] = state == ver["satisfied_state"][verify]
+    out["met_cards"] = out["qualified_cards"] if out["satisfied"] else []
+    out["basis"] = "; ".join(detail) or None
+    if not out["satisfied"]:
+        out["reason"] = "; ".join(why + ([] if state == "unverified" else detail[len(passed):])) or None
+    return out
+
 
 
 # ---------------------------------------------------------------------------
@@ -316,28 +499,13 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
                 cid = str(crit["id"])
                 crit_cards = [c for c in ms_cards if cid in (c.get("criteria") or [])]
                 closed = [c for c in crit_cards if c.get("queue_state") in satisfied_states]
-                met, reason, met_cards = False, "", []
-                # AIPOS-F174: 每张挂接卡的审计证据(裁决 / 补审 / 运行证据摘录)随行带出, 看板逐条标准展示只读此字段
-                evidence = {str(c["task_id"]): card_evidence(root, c, _card_truth(root, c, errors, cache)) for c in crit_cards}
-                if not crit_cards:
-                    reason = str(decl["unmet_reasons"]["no_card"])
-                elif not closed:
-                    reason = _fmt(decl["unmet_reasons"]["not_closed"], "unmet_reasons.not_closed", cards=_ids(crit_cards))
-                else:
-                    why: list[str] = []
-                    for card in closed:
-                        ok, text = _verify_card(root, card, _card_truth(root, card, errors, cache), str(crit["verify"]), decl,
-                                                evidence[str(card["task_id"])])
-                        if ok:
-                            met_cards.append(card)
-                        else:
-                            why.append(text)
-                    met = bool(met_cards)
-                    reason = "" if met else "; ".join(why)
+                # AIPOS-F174: 每张挂接卡的审计证据(裁决 / 补审 / 运行证据摘录)随行带出, 看板逐条标准展示只读此字段;
+                # AIPOS-F175: 另带该卡卡面声明的本标准产物(evidence[].artifacts)
+                evidence = {str(c["task_id"]): card_evidence(root, c, _card_truth(root, c, errors, cache), cid) for c in crit_cards}
+                verdict_row = _criterion_verification(root, crit, crit_cards, closed, evidence, links["cards"], decl, errors, cache)
                 rounds = sum(_card_truth(root, c, errors, cache)["rework_rounds"] for c in crit_cards) if crit_cards else 0
-                criteria_rows.append({"id": cid, "statement": crit["statement"], "verify": crit["verify"], "satisfied": met,
-                                      "reason": reason or None, "cards": [c["task_id"] for c in crit_cards],
-                                      "met_cards": [c["task_id"] for c in met_cards], "rework_rounds": rounds,
+                criteria_rows.append({"id": cid, "statement": crit["statement"], "verify": crit["verify"], **verdict_row,
+                                      "cards": [c["task_id"] for c in crit_cards], "rework_rounds": rounds,
                                       "closed_cards": [c["task_id"] for c in closed],
                                       "evidence": [evidence[str(c["task_id"])] for c in crit_cards]})
             n_met = sum(1 for r in criteria_rows if r["satisfied"])
@@ -450,9 +618,22 @@ def _next_steps(decl: dict[str, Any], view: dict[str, Any], root: Path, active_s
         if ms["status"] == "active" and moving:
             out.append(_fmt(steps["push"], "next_steps.push", milestone=ms["id"], criteria=", ".join(r["id"] for r in moving),
                             cards=", ".join(dict.fromkeys(c for r in moving for c in r["cards"]))))
-        if waiting:
+        # AIPOS-F175: closed-but-unmet criteria split by verification state
+        by_state: dict[str, list[dict[str, Any]]] = {}
+        for r in waiting:
+            by_state.setdefault(str(r.get("state") or "unverified"), []).append(r)
+        if by_state.get("unverified"):
             out.append(_fmt(steps["pending_verify"], "next_steps.pending_verify", milestone=ms["id"],
-                            criteria=", ".join(r["id"] for r in waiting)))
+                            criteria=", ".join(r["id"] for r in by_state["unverified"])))
+        if by_state.get("owner_pending"):
+            out.append(_fmt(steps["owner_check"], "next_steps.owner_check", milestone=ms["id"], governance_root=gr,
+                            criteria=", ".join(r["id"] for r in by_state["owner_pending"])))
+        if by_state.get("mismatch"):
+            fixes = ", ".join(f["text"] for r in by_state["mismatch"] for f in r.get("fix_cards") or [])
+            basis = decl["verification"]["basis"]
+            out.append(_fmt(steps["mismatch"], "next_steps.mismatch", milestone=ms["id"],
+                            criteria=", ".join(r["id"] for r in by_state["mismatch"]),
+                            fix_part=_fmt(basis["fix_part"], "verification.basis.fix_part", fix=fixes) if fixes else str(basis["fix_none"])))
         if ms["progress"]["total"] and not unmet and ms["status"] != "done":
             out.append(_fmt(steps["mark_done"], "next_steps.mark_done", milestone=ms["id"], governance_root=gr))
         if "planned_moving" in ms["mismatch_codes"]:
@@ -504,7 +685,16 @@ def render_status_text(view: dict[str, Any]) -> str:
         for crit in ms["criteria"]:
             key = "criterion_met" if crit["satisfied"] else "criterion_unmet"
             lines.append(_fmt(texts[key], f"texts.{key}", id=crit["id"], verify=crit["verify"], statement=crit["statement"],
-                              cards=", ".join(crit["met_cards"]), reason=crit["reason"] or ""))
+                              cards=", ".join(crit["met_cards"]), reason=crit["reason"] or "", state_label=crit["state_label"],
+                              basis=crit.get("basis") or ""))
+            # AIPOS-F175: declared artifacts of each linked card (files found in the card artifact dir)
+            for ev in crit.get("evidence") or []:
+                art = ev.get("artifacts") or {}
+                for entry in art.get("entries") or []:
+                    files = ", ".join(f["rel"] for f in entry["files"]) or _fmt(texts["artifact_files_none"], "texts.artifact_files_none",
+                                                                                  dir=art.get("dir_rel") or "?")
+                    lines.append(_fmt(texts["criterion_artifact"], "texts.criterion_artifact", task_id=ev["task_id"], kind=entry["kind"],
+                                      path_glob=entry["path_glob"], files=files))
     thresholds = _threshold_text(view["thresholds"] or {})
     if view["signals"]:
         lines.append(_fmt(texts["signals_header"], "texts.signals_header", count=len(view["signals"]), thresholds=thresholds))
