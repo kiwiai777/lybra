@@ -466,6 +466,13 @@ def artifact_for_route(home_root: str | Path | None, query: dict[str, list[str]]
 
 def collect_overview(home_root: str | Path | None = None) -> dict[str, Any]:
     """总览页: 每项目一张卡片(在途卡 / 待 Owner 项 / 信封 / 路线图摘要 / 接入完成度), 暂停项目标 paused(渲染折叠)。"""
+    from tools.aipos_cli.task_loader import read_request_scope
+
+    with read_request_scope():  # AIPOS-F177 item 3: one request-level read scope (per-project derivations shared)
+        return _collect_overview(home_root)
+
+
+def _collect_overview(home_root: str | Path | None) -> dict[str, Any]:
     from tools.aipos_cli.envelope_board import board_envelope_url
     from tools.aipos_cli.owner_inbox import collect_inbox
 
@@ -506,6 +513,13 @@ def collect_overview(home_root: str | Path | None = None) -> dict[str, Any]:
 
 def collect_onboarding(home_root: str | Path | None = None) -> dict[str, Any]:
     """接入页: 每项目一张清单(项与顺序 = 声明 onboarding_items)。"""
+    from tools.aipos_cli.task_loader import read_request_scope
+
+    with read_request_scope():  # AIPOS-F177 item 3: one request-level read scope (per-project derivations shared)
+        return _collect_onboarding(home_root)
+
+
+def _collect_onboarding(home_root: str | Path | None) -> dict[str, Any]:
     decl = pages_declaration()
     home = home_entries(home_root)
     projects = []
@@ -520,6 +534,13 @@ def collect_onboarding(home_root: str | Path | None = None) -> dict[str, Any]:
 def collect_roadmap(home_root: str | Path | None = None, *, project: str | None = None, milestone: str | None = None) -> dict[str, Any]:
     """路线图与验收页: 选中项目(缺省 = 首个未暂停项目)的 roadmap_status 视图 + 选中里程碑(缺省 = 首个 active, 再缺省首个)。
     项目名不在 home 根注册项目 = selected None + unknown_project(渲染点名, 不猜)。"""
+    from tools.aipos_cli.task_loader import read_request_scope
+
+    with read_request_scope():  # AIPOS-F177 item 3: one request-level read scope (per-project derivations shared)
+        return _collect_roadmap(home_root, project=project, milestone=milestone)
+
+
+def _collect_roadmap(home_root: str | Path | None, *, project: str | None, milestone: str | None) -> dict[str, Any]:
     decl = pages_declaration()
     home = home_entries(home_root)
     entries = home["projects"]

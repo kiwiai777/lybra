@@ -492,21 +492,31 @@ def _instance_events(trail: Path, instance: str) -> dict[str, list[tuple[int, st
 
     返回 {live: 未作废事件, voided: 已作废事件, voids: 指向该实例的作废行}, 元素 = (物理行号 1 起, 行文本 strip 后)。
     作废行的 voids_lines 区间内、且属该实例的事件 = 已作废; 区间外(含作废之后的重接入)仍为 live。"""
-    lines = [line.strip() for line in trail.read_text(encoding="utf-8").splitlines()]
+    lines = _trail_matches(trail)
     voided_numbers: set[int] = set()
     voids: list[tuple[int, str]] = []
-    for lineno, line in enumerate(lines, start=1):
-        match = _VOID_LINE_RE.match(line)
-        if match and match.group("instance") == instance:
-            voided_numbers |= _parse_line_ranges(match.group("ranges"), where=f"{trail}:{lineno}")
+    for lineno, line, void_match, _event in lines:
+        if void_match and void_match.group("instance") == instance:
+            voided_numbers |= _parse_line_ranges(void_match.group("ranges"), where=f"{trail}:{lineno}")
             voids.append((lineno, line))
     out: dict[str, list[tuple[int, str]]] = {"live": [], "voided": [], "voids": voids}
-    for lineno, line in enumerate(lines, start=1):
-        match = _EVENT_LINE_RE.match(line)
+    for lineno, line, _void, match in lines:
         if not match or match.group("instance") != instance or match.group("action") == VOID_ACTION:
             continue
         out["voided" if lineno in voided_numbers else "live"].append((lineno, line))
     return out
+
+
+def _trail_matches(trail: Path) -> list[tuple[int, str, re.Match[str] | None, re.Match[str] | None]]:
+    """日志各行 (物理行号 1 起, strip 后行文本, 作废行匹配, 事件行匹配)。AIPOS-F177 件③: 请求级只读作用域内同一日志只读、只匹配一次
+    (接入页逐实例判定共用; task_loader.request_memo), 作用域外每次现读。"""
+    from tools.aipos_cli.task_loader import request_memo
+
+    def compute() -> list[tuple[int, str, re.Match[str] | None, re.Match[str] | None]]:
+        lines = [line.strip() for line in trail.read_text(encoding="utf-8").splitlines()]
+        return [(lineno, line, _VOID_LINE_RE.match(line), _EVENT_LINE_RE.match(line)) for lineno, line in enumerate(lines, start=1)]
+
+    return request_memo(("enrollment._trail_matches", str(Path(trail).resolve())), compute)
 
 
 def workstation_location(workspace_root: str | Path, instance: str) -> dict[str, Any]:

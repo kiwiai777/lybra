@@ -6,7 +6,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
-from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+from tools.aipos_cli.frontmatter import read_markdown_frontmatter
 from tools.aipos_cli.task_loader import _serialize_dates
 from tools.schema_constants import RecordType
 
@@ -209,13 +209,12 @@ def _build_record(
     parse_errors: list[str] = []
     warnings: list[str] = []
     try:
-        text = path.read_text(encoding="utf-8")
+        metadata, body, parse_warnings, _fence = read_markdown_frontmatter(path)  # AIPOS-F177: per-file cache (unchanged = no re-read)
     except Exception as exc:
-        metadata: dict[str, Any] = {}
+        metadata = {}
         body = ""
         parse_errors.append(f"Read failed: {exc}")
     else:
-        metadata, body, parse_warnings = parse_markdown_frontmatter(text)
         parse_errors.extend(parse_warnings)
 
     id_field = {
@@ -342,32 +341,50 @@ def _build_record(
     return _serialize_dates(record)
 
 
+def _entry_names(directory: Path, *, want_dir: bool) -> list[str]:
+    """AIPOS-F177: sorted names of the sub-directories (want_dir) or files of a directory, symlinks followed, an entry whose
+    type cannot be read = neither (the Path.is_dir / is_file semantics); sorted by name = Path order among siblings."""
+    names: list[str] = []
+    with os.scandir(directory) as it:
+        for entry in it:
+            try:
+                kind_ok = entry.is_dir() if want_dir else entry.is_file()
+            except OSError:
+                kind_ok = False
+            if kind_ok:
+                names.append(entry.name)
+    names.sort()
+    return names
+
+
 def _iter_record_files(root: Path, task_filter: str | None = None) -> list[tuple[Path, str]]:
     if not root.exists():
         return []
     files: list[tuple[Path, str]] = []
-    task_dirs = (
-        [root / task_filter] if task_filter else sorted(path for path in root.iterdir() if path.is_dir())
-    )
+    if task_filter:
+        task_dirs = [root / task_filter]
+        if not task_dirs[0].is_dir():
+            return []
+    else:
+        task_dirs = [root / name for name in _entry_names(root, want_dir=True)]
     for task_dir in task_dirs:
-        if not task_dir.is_dir():
-            continue
-        for path in sorted(task_dir.iterdir()):
-            if path.is_file() and path.suffix == ".md":
-                files.append((path, task_dir.name))
+        task_name = task_dir.name
+        for name in _entry_names(task_dir, want_dir=False):
+            path = task_dir / name
+            if name.endswith(".md") and path.suffix == ".md":  # same suffix rule as before (pathlib's own)
+                files.append((path, task_name))
     return files
 
 
 def _build_owner_decision_record(path: Path, repo_root: Path) -> dict[str, Any]:
     parse_errors: list[str] = []
     try:
-        text = path.read_text(encoding="utf-8")
+        metadata, body, parse_warnings, _fence = read_markdown_frontmatter(path)  # AIPOS-F177: per-file cache (unchanged = no re-read)
     except Exception as exc:
-        metadata: dict[str, Any] = {}
+        metadata = {}
         body = ""
         parse_errors.append(f"Read failed: {exc}")
     else:
-        metadata, body, parse_warnings = parse_markdown_frontmatter(text)
         parse_errors.extend(parse_warnings)
 
     decision_id = metadata.get("decision_id") or path.stem
@@ -426,13 +443,12 @@ def _build_owner_verification_record(
     parse_errors: list[str] = []
     warnings: list[str] = []
     try:
-        text = path.read_text(encoding="utf-8")
+        metadata, body, parse_warnings, _fence = read_markdown_frontmatter(path)  # AIPOS-F177: per-file cache (unchanged = no re-read)
     except Exception as exc:
-        metadata: dict[str, Any] = {}
+        metadata = {}
         body = ""
         parse_errors.append(f"Read failed: {exc}")
     else:
-        metadata, body, parse_warnings = parse_markdown_frontmatter(text)
         parse_errors.extend(parse_warnings)
 
     task_id = metadata.get("task_id") or directory_task_id

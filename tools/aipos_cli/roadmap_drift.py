@@ -437,11 +437,15 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
     相关里程碑不判停滞(不猜)。"""
     from tools.aipos_cli.clock import utc_now
     from tools.aipos_cli.roadmap import LINK_INVALID, LINK_LINKED, LINK_UNLINKED, card_links, load_roadmap, roadmap_declaration
-    from tools.aipos_cli.task_loader import task_card_lookup_scope
+    from tools.aipos_cli.task_loader import lookup_scope_memo, task_card_lookup_scope
     from tools.aipos_cli.workspace_config import roadmap_drift_thresholds
 
     root = Path(governance_root)
-    moment = now or utc_now()
+    if now is None:
+        # AIPOS-F177 件③: 只读作用域(请求级 / 视图级)内同一治理根同一 lane / project 只推导一次, 各调用方拿深拷贝; 作用域外照旧每次现算
+        return lookup_scope_memo(root, f"roadmap_drift.roadmap_status:{lane!r}:{project!r}",
+                                 lambda: roadmap_status(root, lane=lane, project=project, now=utc_now()), copy_out=True)
+    moment = now
     today = moment.date()
     decl = status_declaration()
     rdecl = roadmap_declaration()

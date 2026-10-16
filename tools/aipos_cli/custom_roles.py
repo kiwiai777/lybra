@@ -121,9 +121,18 @@ def load_custom_roles(project_root: str | Path) -> dict[str, dict[str, str]]:
     AIPOS-F115 件③(gap #58): registry UNREADABLE = RoleRegistryReadError (fail-closed). The old
     ``except Exception: return {}`` turned a read error into "role not in registry" (misleading refusal).
     """
-    from tools.mcp_server.http_sse import NoServiceRoleTokens
+    import copy
+
+    from tools.aipos_cli.task_loader import request_memo
 
     home_root = Path(project_root).expanduser().resolve().parent
+    # AIPOS-F177 件③: 请求级只读作用域内同一 home 根只读一次门注册表(接入页逐实例判定共用); 作用域外每次现读(门侧行为不变)
+    return copy.deepcopy(request_memo(("custom_roles.load_custom_roles", str(home_root)), lambda: _load_custom_roles(home_root)))
+
+
+def _load_custom_roles(home_root: Path) -> dict[str, dict[str, str]]:
+    from tools.mcp_server.http_sse import NoServiceRoleTokens
+
     loader = _gate_registry_loader()
     try:
         registry = loader(home_root)

@@ -520,7 +520,15 @@ def collect_inbox(home_root: str | Path | None = None, *, project: str | None = 
     """跨 home 根全部已注册项目(workspace_config._project_candidates 唯一枚举)。返回 {home_root, home_source, projects, items(已排序),
     decided_hidden, paused_hidden, errors}。--project 不在注册清单 = ValueError(用法错, 不猜)。
     AIPOS-F170 件②: project.json status = paused(唯一读取口 workspace_config.project_status)的项目缺省不列(include_paused / 显式 --project
-    照列), 名单进 paused_hidden; status 读不出 / 值不合 = 该项目照列并在 errors 点名(不猜成暂停)。"""
+    照列), 名单进 paused_hidden; status 读不出 / 值不合 = 该项目照列并在 errors 点名(不猜成暂停)。
+    AIPOS-F177 件③: 全程一个请求级只读作用域(task_loader.read_request_scope): 同一项目在各类别间共用卡索引与整根推导(路线图 / 信封)。"""
+    from tools.aipos_cli.task_loader import read_request_scope
+
+    with read_request_scope():
+        return _collect_inbox(home_root, project=project, include_paused=include_paused)
+
+
+def _collect_inbox(home_root: str | Path | None, *, project: str | None, include_paused: bool) -> dict[str, Any]:
     decl = inbox_declaration()
     enumerated = home_projects(home_root)  # AIPOS-F171: 枚举 + 状态读取收为一处(看板项目列表同调)
     home, source = enumerated["home_root"], enumerated["home_source"]

@@ -2208,6 +2208,21 @@ def is_authorized(
     return True
 
 
+def _append_perf_line(log_path: Path, method: str, path: str, started: float) -> None:
+    """AIPOS-F177 item 3 (optional board perf log, separate from the board audit log): one JSON line per request with the
+    server-side time and the frontmatter read-cache counters. Only the path is logged, never the query string (it may
+    carry one-time login codes)."""
+    import time
+
+    from tools.aipos_cli.frontmatter import frontmatter_memo_stats
+
+    record = {"at": _utc_now(), "method": method, "path": path,
+              "server_ms": round((time.perf_counter() - started) * 1000.0, 1), "frontmatter_cache": frontmatter_memo_stats()}
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
 def make_handler(
     repo_root: Path | None = None,
     *,
@@ -2221,6 +2236,7 @@ def make_handler(
     preview_store: PreviewTokenStore | None = None,
     mint_connection_json: Path | None = None,
     board_audit_log_path: Path | None = None,
+    perf_log_path: Path | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     routes = _api_routes(repo_root, board_config_path, home_root=home_root)  # AIPOS-F171: 只读 GET 路由; 无 POST 业务路由
     sessions = session_store if session_store is not None else SessionStore()
@@ -2269,6 +2285,7 @@ def make_handler(
         _envelope_paths = {k: str(envelope_decl[k]) for k in ("page_path", "api_path", "write_path")}
         _readonly_pages = readonly_pages
         _artifact_route = artifact_route
+        _perf_log = Path(perf_log_path) if perf_log_path is not None else None  # AIPOS-F177: optional, off by default
 
         def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
             body = _json_bytes(payload)
@@ -2577,6 +2594,18 @@ def make_handler(
             self._send_json(HTTPStatus(status), payload)
 
         def do_GET(self) -> None:  # noqa: N802
+            if self._perf_log is None:
+                self._route_get()
+                return
+            import time
+
+            started = time.perf_counter()
+            try:
+                self._route_get()
+            finally:
+                _append_perf_line(self._perf_log, "GET", self.path.split("?", 1)[0], started)
+
+        def _route_get(self) -> None:
             # AIPOS-270 鉴权闸门:未登录 302 到 /login(静态资源与公开路径放行)。
             if not self._auth_gate("GET"):
                 return
@@ -2726,8 +2755,9 @@ def make_handler(
     return BoardHandler
 
 
-def run_server(host: str = DEFAULT_BOARD_HOST, port: int = DEFAULT_BOARD_PORT, repo_root: Path | None = None) -> None:
-    handler = make_handler(repo_root=repo_root)
+def run_server(host: str = DEFAULT_BOARD_HOST, port: int = DEFAULT_BOARD_PORT, repo_root: Path | None = None,
+               perf_log_path: Path | None = None) -> None:
+    handler = make_handler(repo_root=repo_root, perf_log_path=perf_log_path)
     with ThreadingHTTPServer((host, port), handler) as httpd:
         print(f"AIPOS board local UI listening on http://{host}:{port}")
         httpd.serve_forever()
@@ -2738,6 +2768,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", default=DEFAULT_BOARD_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_BOARD_PORT)  # AIPOS-F106 件②: config.schema ports.board_default
     parser.add_argument("--repo-root", default=None)
+    parser.add_argument("--perf-log", default=None, help="AIPOS-F177: optional JSON-lines file for per-request server time "
+                        "(separate from the board audit log; off when omitted)")
     parser.add_argument("--board-config", default=None, help="Retired (AIPOS-F171): the project list is derived from the governance home root; "
                         "board_config.json is no longer read (accepted for old launch scripts, ignored)")
     return parser.parse_args()
@@ -2752,7 +2784,8 @@ def main() -> int:
     if args.board_config:
         print("Warning: --board-config is retired (AIPOS-F171): the project list is derived from the governance home root; "
               "the file is not read", file=sys.stderr)
-    run_server(host=str(args.host), port=int(args.port), repo_root=repo_root)
+    perf_log = Path(args.perf_log).expanduser().resolve() if args.perf_log else None
+    run_server(host=str(args.host), port=int(args.port), repo_root=repo_root, perf_log_path=perf_log)
     return 0
 
 
