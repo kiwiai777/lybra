@@ -142,14 +142,14 @@ def test_onboarding_guide_step_points_to_project_new(tmp_path):
 
 
 def test_board_has_no_workspace_init_route():
-    from web.board.app import _api_post_routes, _api_routes, dispatch_api_request
+    # AIPOS-F171 件③: 看板只读 —— POST 业务路由表整体下线(无 _api_post_routes), 任何写请求 405 BOARD_READ_ONLY
+    import web.board.app as board_app
+    from web.board.app import _api_routes, dispatch_api_request
 
-    post_routes = _api_post_routes(None)
-    assert "/api/workspace/init" not in post_routes
-    status, body = dispatch_api_request(method="POST", path="/api/workspace/init", routes=_api_routes(None, None),
-                                        post_routes=post_routes, body={"project_id": "x"})
+    assert not hasattr(board_app, "_api_post_routes")
+    status, body = dispatch_api_request(method="POST", path="/api/workspace/init", routes=_api_routes(None, None))
     print("[③ POST /api/workspace/init] status:", status, body)
-    assert status != 200 and body.get("ok") is False
+    assert status != 200 and body.get("ok") is False and body.get("error") == "BOARD_READ_ONLY"
 
 
 def test_overview_page_points_to_guide_not_init():

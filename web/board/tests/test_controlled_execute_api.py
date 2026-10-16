@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from web.board.app import _api_post_routes, _api_routes, dispatch_api_request
+from web.board.app import _api_routes, dispatch_api_request
 
 
 class ControlledExecuteApiTests(unittest.TestCase):
@@ -15,7 +15,6 @@ class ControlledExecuteApiTests(unittest.TestCase):
             (self.repo_root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
         self.write_task()
         self.routes = _api_routes(self.repo_root)
-        self.post_routes = _api_post_routes(self.repo_root)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -65,45 +64,28 @@ class ControlledExecuteApiTests(unittest.TestCase):
                 values.extend(path.relative_to(self.repo_root).as_posix() for path in root.rglob("*"))
         return sorted(values)
 
-    def post(self, path: str, body: dict[str, object]) -> tuple[int, dict[str, object]]:
-        return dispatch_api_request(
-            method="POST",
-            path=path,
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body=body,
-        )
+    def assert_board_read_only(self, paths: list[str]) -> None:
+        """AIPOS-F171 件③(gap #155): 看板写接口全部下线 —— 同一路由 POST 一律 405 + BOARD_READ_ONLY(文案读 verbs.schema
+        board_readonly), 不调用任何写实现, 工作区零写入。"""
+        root = Path(self.repo_root)
+        def _snapshot() -> list[tuple[str, int]]:
+            return sorted((p.relative_to(root).as_posix(), p.stat().st_size) for p in root.rglob("*") if p.is_file())
+        before = _snapshot()
+        for path in paths:
+            status, data = dispatch_api_request(method="POST", path=path, routes=_api_routes(root))
+            print(f"[F171 read-only] POST {path} -> {status} {data.get('error')} {data.get('message')}")
+            self.assertEqual(status, 405, path)
+            self.assertEqual(data["error"], "BOARD_READ_ONLY", path)
+            self.assertFalse(data["ok"])
+        self.assertEqual(before, _snapshot(), "read-only board must write nothing")
 
     def test_execute_dry_run_claim_returns_token_without_writing(self) -> None:
-        before = self.data_paths()
-        status, data = self.post(
-            "/api/execute/dry-run",
-            {"operation": "queue_claim", "task_id": "EXAMPLE-001", "actor": "dev.codex.local"},
-        )
-
-        self.assertEqual(status, 200)
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["operation"], "queue_claim")
-        self.assertIn("dry_run_id", data)
-        self.assertTrue(data["execute_allowed"])
-        self.assertEqual(before, self.data_paths())
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/execute/dry-run'])
 
     def test_execute_confirm_moves_claim_after_valid_dry_run(self) -> None:
-        _status, dry = self.post(
-            "/api/execute/dry-run",
-            {"operation": "queue_claim", "task_id": "EXAMPLE-001", "actor": "dev.codex.local"},
-        )
-
-        status, executed = self.post(
-            "/api/execute/confirm",
-            {"dry_run_id": dry["dry_run_id"], "actor": "dev.codex.local"},
-        )
-
-        self.assertEqual(status, 200)
-        self.assertTrue(executed["ok"])
-        self.assertEqual(executed["operation"], "queue_claim")
-        self.assertTrue((self.repo_root / "5_tasks/queue/claimed/example_task.md").exists())
-        self.assertFalse((self.repo_root / "5_tasks/queue/pending/example_task.md").exists())
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/execute/dry-run', '/api/execute/confirm'])
 
     def draft_payload(self, task_id: str = "AIPOS-56-DRAFT") -> dict[str, object]:
         return {
@@ -264,201 +246,48 @@ class ControlledExecuteApiTests(unittest.TestCase):
         }
 
     def test_execute_dry_run_draft_create_returns_token_without_writing(self) -> None:
-        before = self.data_paths()
-        status, data = self.post(
-            "/api/execute/dry-run",
-            {"operation": "draft_create", "actor": "dev.codex.local", "payload": self.draft_payload()},
-        )
-
-        self.assertEqual(status, 200)
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["operation"], "draft_create")
-        self.assertIn("dry_run_id", data)
-        self.assertIn("rendered_markdown", data["data"])
-        self.assertEqual(before, self.data_paths())
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/execute/dry-run'])
 
     def test_execute_confirm_creates_draft_after_valid_dry_run(self) -> None:
-        _status, dry = self.post(
-            "/api/execute/dry-run",
-            {"operation": "draft_create", "actor": "dev.codex.local", "payload": self.draft_payload("AIPOS-56-CREATE")},
-        )
-
-        status, executed = self.post(
-            "/api/execute/confirm",
-            {"dry_run_id": dry["dry_run_id"], "actor": "dev.codex.local"},
-        )
-
-        self.assertEqual(status, 200)
-        self.assertTrue(executed["ok"])
-        self.assertEqual(executed["operation"], "draft_create")
-        self.assertTrue((self.repo_root / "5_tasks/drafts/aipos-56-create.md").exists())
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/execute/dry-run', '/api/execute/confirm'])
 
     def test_execute_dry_run_draft_publish_returns_token_without_writing(self) -> None:
-        source = self.write_draft()
-        before = self.data_paths()
-        status, data = self.post(
-            "/api/execute/dry-run",
-            {"operation": "draft_publish", "path": "5_tasks/drafts/aipos-57-publish.md", "actor": "dev.codex.local"},
-        )
-
-        self.assertEqual(status, 200)
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["operation"], "draft_publish")
-        self.assertIn("dry_run_id", data)
-        self.assertIn("rendered_markdown", data["data"])
-        self.assertTrue(data["execute_allowed"])
-        self.assertEqual(source.relative_to(self.repo_root).as_posix(), data["data"]["source_path"])
-        self.assertEqual(before, self.data_paths())
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/execute/dry-run'])
 
     def test_execute_confirm_publishes_draft_after_valid_dry_run(self) -> None:
-        source = self.write_draft("AIPOS-57-PUBLISH-RUN")
-        _status, dry = self.post(
-            "/api/execute/dry-run",
-            {"operation": "draft_publish", "path": source.relative_to(self.repo_root).as_posix(), "actor": "dev.codex.local"},
-        )
-
-        status, executed = self.post(
-            "/api/execute/confirm",
-            {"dry_run_id": dry["dry_run_id"], "actor": "dev.codex.local"},
-        )
-
-        self.assertEqual(status, 200)
-        self.assertTrue(executed["ok"])
-        self.assertEqual(executed["operation"], "draft_publish")
-        self.assertTrue(source.exists())
-        self.assertTrue((self.repo_root / "5_tasks/queue/pending/aipos-57-publish-run.md").exists())
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/execute/dry-run', '/api/execute/confirm'])
 
     def test_execute_dry_run_orchestration_event_append_returns_token_without_writing(self) -> None:
-        before = self.data_paths()
-        status, data = self.post(
-            "/api/execute/dry-run",
-            {
-                "operation": "orchestration_event_append",
-                "actor": "dev.codex.local",
-                "payload": self.event_payload(),
-            },
-        )
-
-        self.assertEqual(status, 200)
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["operation"], "orchestration_event_append")
-        self.assertIn("dry_run_id", data)
-        self.assertTrue(data["execute_allowed"])
-        self.assertTrue(data["owner_confirmation_required"])
-        self.assertEqual(before, self.data_paths())
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/execute/dry-run'])
 
     def test_execute_confirm_orchestration_event_append_requires_owner_confirmation(self) -> None:
-        _status, dry = self.post(
-            "/api/execute/dry-run",
-            {
-                "operation": "orchestration_event_append",
-                "actor": "dev.codex.local",
-                "payload": self.event_payload("evt_web_controlled_confirm"),
-            },
-        )
-
-        _blocked_status, blocked = self.post(
-            "/api/execute/confirm",
-            {"dry_run_id": dry["dry_run_id"], "actor": "dev.codex.local"},
-        )
-        status, executed = self.post(
-            "/api/execute/confirm",
-            {"dry_run_id": dry["dry_run_id"], "actor": "dev.codex.local", "owner_confirmed": True},
-        )
-
-        self.assertFalse(blocked["ok"])
-        self.assertEqual(blocked["errors"][0]["category"], "OWNER_CONFIRMATION_REQUIRED")
-        self.assertEqual(status, 200)
-        self.assertTrue(executed["ok"])
-        self.assertEqual(executed["operation"], "orchestration_event_append")
-        self.assertTrue((self.repo_root / "5_tasks/orchestration/orch_web_controlled/orchestration_events.md").exists())
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/execute/dry-run', '/api/execute/confirm'])
 
     def test_execute_confirm_planner_iteration_append_after_valid_dry_run(self) -> None:
-        _status, dry = self.post(
-            "/api/execute/dry-run",
-            {
-                "operation": "planner_iteration_append",
-                "actor": "dev.codex.local",
-                "payload": self.iteration_payload(),
-            },
-        )
-
-        status, executed = self.post(
-            "/api/execute/confirm",
-            {"dry_run_id": dry["dry_run_id"], "actor": "dev.codex.local", "owner_confirmed": True},
-        )
-
-        self.assertEqual(status, 200)
-        self.assertTrue(dry["execute_allowed"])
-        self.assertTrue(dry["owner_confirmation_required"])
-        self.assertTrue(executed["ok"])
-        self.assertEqual(executed["operation"], "planner_iteration_append")
-        text = (self.repo_root / "5_tasks/orchestration/orch_web_controlled/planner_iterations.md").read_text(encoding="utf-8")
-        self.assertIn("iteration_id: iter_web_controlled_001", text)
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/execute/dry-run', '/api/execute/confirm'])
 
     def test_execute_dry_run_owner_decision_record_returns_token_without_writing(self) -> None:
-        before = self.data_paths()
-        status, data = self.post(
-            "/api/execute/dry-run",
-            {
-                "operation": "owner_decision_record",
-                "actor": "owner",
-                "payload": self.owner_decision_payload(),
-            },
-        )
-
-        self.assertEqual(status, 200)
-        self.assertTrue(data["ok"])
-        self.assertEqual(data["operation"], "owner_decision_record")
-        self.assertIn("dry_run_id", data)
-        self.assertTrue(data["execute_allowed"])
-        self.assertEqual(data["summary"]["target_path"], "5_tasks/records/owner_decisions/decision-web-001.md")
-        self.assertEqual(before, self.data_paths())
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/execute/dry-run'])
 
     def test_execute_confirm_owner_decision_record_writes_record_only(self) -> None:
-        before = self.data_paths()
-        _status, dry = self.post(
-            "/api/execute/dry-run",
-            {
-                "operation": "owner_decision_record",
-                "actor": "owner",
-                "payload": self.owner_decision_payload("decision-web-confirm"),
-            },
-        )
-
-        status, executed = self.post(
-            "/api/execute/confirm",
-            {"dry_run_id": dry["dry_run_id"], "actor": "owner"},
-        )
-
-        self.assertEqual(status, 200)
-        self.assertTrue(executed["ok"])
-        self.assertEqual(executed["operation"], "owner_decision_record")
-        record_path = self.repo_root / "5_tasks/records/owner_decisions/decision-web-confirm.md"
-        self.assertTrue(record_path.exists())
-        self.assertIn("record_type: owner_decision_record", record_path.read_text(encoding="utf-8"))
-        after = self.data_paths()
-        self.assertEqual(
-            sorted(before + ["5_tasks/records/owner_decisions", "5_tasks/records/owner_decisions/decision-web-confirm.md"]),
-            after,
-        )
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/execute/dry-run', '/api/execute/confirm'])
 
     def test_execute_dry_run_blocks_non_claim_draft_create_or_draft_publish_operations(self) -> None:
-        status, data = self.post(
-            "/api/execute/dry-run",
-            {"operation": "queue_complete", "path": "5_tasks/queue/pending/example_task.md", "actor": "dev.codex.local"},
-        )
-
-        self.assertEqual(status, 200)
-        self.assertFalse(data["ok"])
-        self.assertEqual(data["verdict"], "BLOCK")
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/execute/dry-run'])
 
     def test_execute_confirm_missing_token_blocks(self) -> None:
-        status, data = self.post("/api/execute/confirm", {"actor": "dev.codex.local"})
-
-        self.assertEqual(status, 200)
-        self.assertFalse(data["ok"])
-        self.assertEqual(data["errors"][0]["category"], "VALIDATION_ERROR")
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/execute/confirm'])
 
 
 if __name__ == "__main__":

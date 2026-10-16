@@ -3,6 +3,11 @@
 S4: contract (map schema + verify-bench key names) AND real-route assertions.
 S2: graceful hide when project-map.md is absent (fixture assertion).
 
+AIPOS-F171 件③(gap #156): the hand-written governance/project-map.md reading is offline (the file is kept, never read;
+/api/project-map is gone) and so is the portal header built from it; the milestone region now shows the project's
+roadmap declaration (roadmap.yaml, read-only simple view, /api/roadmap = `lybra roadmap show` data). The ProjectMap*
+classes below keep their names but assert the new contract.
+
 These GET the REAL routes over HTTP (mirroring test_real_routes_task_center) and
 assert the two new read surfaces carry the documented schema + that the
 /workspace/<n> page serves the new regions.
@@ -37,6 +42,42 @@ def _get(url: str) -> tuple[int, str]:
         req.add_header("Cookie", _AUTH_COOKIE)
     with urllib.request.urlopen(req, timeout=5) as resp:
         return resp.status, resp.read().decode("utf-8")
+
+
+def _get_any(url: str) -> tuple[int, str]:
+    """GET that returns (status, body) for 4xx too (AIPOS-F171: retired routes answer 404)."""
+    import urllib.error
+
+    try:
+        return _get(url)
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8")
+
+
+def _write_roadmap(root: Path, text: str) -> None:
+    (root / "governance").mkdir(parents=True, exist_ok=True)
+    (root / "governance" / "roadmap.yaml").write_text(text, encoding="utf-8")
+
+
+ROADMAP_YAML = """milestones:
+- id: m1
+  lane: core
+  title: First milestone
+  target_date: '2026-11-30'
+  status: active
+  criteria:
+  - id: c1
+    statement: First criterion holds
+    verify: auto
+- id: m2
+  lane: web
+  title: Second milestone
+"""
+
+
+def _write_card(root: Path, state: str, task_id: str, extra: str = "") -> None:
+    path = root / "5_tasks" / "queue" / state / f"{task_id.lower()}.md"
+    path.write_text(f"---\ntask_id: {task_id}\ntitle: {task_id} title\nstatus: {state}\n{extra}---\n# {task_id}\n", encoding="utf-8")
 
 
 PROJECT_MAP_MD = """---
@@ -103,141 +144,85 @@ class ProjectMapContractTests(_BaseServer):
         for state in ("pending", "claimed", "completed", "blocked"):
             (self.repo_root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
         (self.repo_root / "governance").mkdir(parents=True, exist_ok=True)
+        # 旧手写项目地图仍在盘上(文件不删), 但看板不再读它
         (self.repo_root / "governance" / "project-map.md").write_text(PROJECT_MAP_MD, encoding="utf-8")
-        dl = self.repo_root / "governance" / "direction_log"
-        dl.mkdir(parents=True, exist_ok=True)
-        (dl / "2026-07-direction-decisions.md").write_text(
-            "# DL\n\n## 2026-07-10 — Third decision\n\n## 2026-07-09 — Second decision\n\n"
-            "## 2026-07-07 — First decision\n",
-            encoding="utf-8",
-        )
-        # AIPOS-275 F-275-1: fixture with date-suffixed heading (e.g. "## 2026-07-29(a) — …").
-        (dl / "2026-07b-direction-suffixed.md").write_text(
-            "# DL-b\n\n## 2026-07-29(a) — Suffixed decision\n\n## 2026-07-05 — Plain old entry\n",
-            encoding="utf-8",
-        )
+        _write_roadmap(self.repo_root, ROADMAP_YAML)
+        _write_card(self.repo_root, "pending", "FIX-1", "milestone: m1\ncriteria:\n- c1\n")
+        _write_card(self.repo_root, "completed", "FIX-2", "milestone: m1\n")
+        _write_card(self.repo_root, "claimed", "FIX-3")
         self._start(self.repo_root)
 
     def test_project_map_schema_and_nested_parse(self) -> None:
-        """S1/S4: project-map carries the documented schema; the PyYAML-free
-        targeted parser resolves nested portal (workers list) + milestones
-        (list of maps with refs flow lists) without PyYAML."""
-        status, body = _get(f"{self.base}/api/project-map?workspace=0")
-        self.assertEqual(status, 200)
-        payload = json.loads(body)
-        self.assertTrue(payload["ok"], payload)
-        data = payload["data"]
-        self.assertTrue(data["available"])
-        self.assertEqual(data["map_version"], 1)
-        self.assertEqual(data["updated"], "2026-07-28")
-        # portal nested map + nested workers list parsed.
-        self.assertEqual(data["portal"]["description"], "Fixture portal description")
-        self.assertEqual(data["portal"]["workers"], ["exec.fixture", "audit.fixture"])
-        # milestones: list of maps with refs (flow list) preserved verbatim.
-        self.assertEqual(len(data["milestones"]), 2)
-        self.assertEqual(data["milestones"][0]["id"], "m1")
-        self.assertEqual(data["milestones"][0]["refs"], ["REF-A", "direction_log 2026-06"])
-        # four segments present.
-        self.assertEqual(data["current"], "Currently here at lybra-dev")
-        self.assertEqual(data["in_flight"], ["In flight item"])
-        self.assertEqual(data["next"], ["Next item"])
-        self.assertEqual(data["horizon"], ["Horizon one", "Horizon two"])
+        """AIPOS-F171: /api/project-map(读手写 project-map.md)已下线 = 404, 即使文件仍在; 文件原样保留。"""
+        before = (self.repo_root / "governance" / "project-map.md").read_text(encoding="utf-8")
+        status, body = _get_any(f"{self.base}/api/project-map?workspace=0")
+        print(f"[F171 /api/project-map] {status} {body[:200]}")
+        self.assertEqual(status, 404)
+        self.assertEqual(json.loads(body)["error"], "NOT_FOUND")
+        self.assertEqual((self.repo_root / "governance" / "project-map.md").read_text(encoding="utf-8"), before)
 
     def test_direction_log_recent_latest_three(self) -> None:
-        """The current-node popup carries direction_log latest 3 dated titles."""
-        status, body = _get(f"{self.base}/api/project-map?workspace=0")
+        """AIPOS-F171: /api/roadmap = 路线图声明的里程碑与标准(与 `lybra roadmap show` 同一 roadmap_view)。"""
+        status, body = _get(f"{self.base}/api/roadmap?workspace=0")
+        self.assertEqual(status, 200)
         payload = json.loads(body)
-        dl = payload["data"]["direction_log_recent"]
-        self.assertEqual(len(dl), 3)
-        # Newest first by date (AIPOS-275: suffixed 2026-07-29(a) now tops).
-        self.assertEqual(dl[0]["date"], "2026-07-29")
-        self.assertEqual(dl[0]["title"], "Suffixed decision")
-        self.assertEqual(dl[1]["date"], "2026-07-10")
-        self.assertEqual(dl[1]["title"], "Third decision")
+        print(f"[F171 /api/roadmap] {json.dumps(payload['data'], ensure_ascii=False)}")
+        self.assertTrue(payload["ok"], payload)
+        data = payload["data"]
+        self.assertTrue(data["exists"])
+        self.assertEqual(data["rel"], "governance/roadmap.yaml")
+        self.assertEqual([m["id"] for m in data["milestones"]], ["m1", "m2"])
+        m1 = data["milestones"][0]
+        self.assertEqual((m1["lane"], m1["status"], m1["target_date"]), ("core", "active", "2026-11-30"))
+        self.assertEqual(data["milestones"][1]["status"], "planned")  # 缺键 = 声明 default
+        self.assertEqual(m1["criteria"][0]["id"], "c1")
+        self.assertEqual(m1["criteria"][0]["verify"], "auto")
 
     def test_direction_log_date_suffix_compatible(self) -> None:
-        """AIPOS-275 F-275-1: direction_log entries with parenthetical date
-        suffixes (e.g. '## 2026-07-29(a) — …') are parsed identically to plain
-        date headings. Both formats coexist in the same result set."""
-        status, body = _get(f"{self.base}/api/project-map?workspace=0")
-        payload = json.loads(body)
-        dl = payload["data"]["direction_log_recent"]
-        # The suffixed entry must appear (date=2026-07-29, title='Suffixed decision').
-        dates = [e["date"] for e in dl]
-        self.assertIn("2026-07-29", dates, f"suffixed date 2026-07-29 missing from {dates}")
-        suffixed = [e for e in dl if e["date"] == "2026-07-29"][0]
-        self.assertEqual(suffixed["title"], "Suffixed decision")
-        # Plain entry from the same or other file also present.
-        self.assertIn("2026-07-10", dates)
+        """AIPOS-F171: 挂接卡数与游离卡(未挂里程碑)出自同一判定 roadmap.card_link_status。"""
+        _status, body = _get(f"{self.base}/api/roadmap?workspace=0")
+        data = json.loads(body)["data"]
+        m1 = data["milestones"][0]
+        self.assertEqual(sorted(m1["cards"]), ["FIX-1", "FIX-2"])
+        self.assertEqual(m1["criteria"][0]["cards"], ["FIX-1"])
+        self.assertEqual(data["milestones"][1]["cards"], [])
+        self.assertEqual(data["unlinked"], ["FIX-3"])
 
     def test_portal_header_schema_five_keys(self) -> None:
-        """AIPOS-264 S4: /api/project-map portal carries the documented five keys
-        (description / collab_mode / topology / workers[] / advisor)."""
-        status, body = _get(f"{self.base}/api/project-map?workspace=0")
-        self.assertEqual(status, 200)
-        payload = json.loads(body)
-        self.assertTrue(payload["ok"], payload)
-        portal = payload["data"]["portal"]
-        for key in ("description", "collab_mode", "topology", "workers", "advisor"):
-            self.assertIn(key, portal, f"portal missing key {key}")
-        self.assertEqual(portal["description"], "Fixture portal description")
-        self.assertEqual(portal["collab_mode"], "2-role")
-        self.assertEqual(portal["topology"], "星型")
-        self.assertEqual(portal["workers"], ["exec.fixture", "audit.fixture"])
-        self.assertEqual(portal["advisor"], "advisor.fixture")
-
-    def test_workspace_route_serves_portal_header(self) -> None:
-        """AIPOS-264 S1/S3/S4: the real /workspace/0 route serves the portal-header
-        region (置顶, 里程碑地图之上), the renderPortalHeader hydrator, and the
-        worker→agent-档案 popup wiring (reuses showAgentPopup). Block order:
-        门户头(project-header 之后)→ 里程碑地图 → 验证台 → 任务中心."""
+        """AIPOS-F171: 门户头(project-map.md portal 段)随旧地图下线: 页面无门户区, 无 portal 水合。"""
         status, html = _get(f"{self.base}/workspace/0")
         self.assertEqual(status, 200)
-        self.assertIn('id="portal-header-section"', html)
-        self.assertIn("renderPortalHeader", html)
-        # Worker chips reuse the 261/265 agent 档案 popup.
-        self.assertIn("showAgentPopup", html)
-        self.assertIn("parseWorker", html)
-        # Graceful-hide guard present (S2).
-        self.assertIn("section.hidden = true", html)
-        # Block order: portal-header sits between the workspace header and milestone map.
-        i_header = html.find('id="project-header"')
-        i_portal = html.find('id="portal-header-section"')
-        i_map = html.find('id="milestone-map-section"')
-        for i in (i_header, i_portal, i_map):
+        self.assertNotIn('id="portal-header-section"', html)
+        self.assertNotIn("renderPortalHeader", html)
+        self.assertNotIn("fetch(`/api/project-map", html)
+
+    def test_workspace_route_serves_portal_header(self) -> None:
+        """Block order (AIPOS-F171: portal header retired): project-header → 里程碑区 → 验证台 → 任务中心."""
+        status, html = _get(f"{self.base}/workspace/0")
+        self.assertEqual(status, 200)
+        order = [html.find(f'id="{sid}"') for sid in ("project-header", "milestone-map-section", "verify-bench-section",
+                                                       "task-center-section")]
+        for i in order:
             self.assertGreater(i, -1, "expected section missing")
-        self.assertLess(i_header, i_portal)
-        self.assertLess(i_portal, i_map)
+        self.assertEqual(order, sorted(order))
 
     def test_workspace_route_serves_milestone_map_section(self) -> None:
-        """S1/S4: the real /workspace/0 route serves the milestone-map region.
-        F-262B-1: nodes draw only the marker (text -> popup); only the current
-        node keeps a <=12-char short label; legend + click popup retained."""
+        """AIPOS-F171: 里程碑区改读路线图(只读简版): 页面取 /api/roadmap 并经 renderRoadmap 渲染, 状态 / 核对方式走 i18n 键。"""
         status, html = _get(f"{self.base}/workspace/0")
         self.assertEqual(status, 200)
         self.assertIn('id="milestone-map-section"', html)
-        self.assertIn("项目里程碑", html)
-        # Legend retained.
-        self.assertIn('id="map-legend"', html)
-        # Click-popup carries full detail (zero info loss).
-        self.assertIn("showMilestonePopup", html)
-        # Current node keeps a <=12-char short label.
-        self.assertIn("truncate(d.current, 12)", html)
-        # Non-current node text captions are gone (old per-node caption truncate removed).
-        self.assertNotIn("truncate(caption, 34)", html)
+        self.assertIn('id="map-title" data-i18n="map.title"', html)
+        self.assertIn("/api/roadmap?workspace=", html)
+        self.assertIn("function renderRoadmap(roadmapData)", html)
+        self.assertIn("i18n.t('roadmap.status.'", html)
+        self.assertNotIn("showMilestonePopup", html)
 
     def test_map_updated_badge_in_html(self) -> None:
-        """AIPOS-275 F-275-2: the milestone map section header contains the
-        map-updated-badge element for displaying the 'updated:' date, and the
-        current-position popup carries the mapUpdated field."""
+        """AIPOS-F171: 里程碑区标题旁的 badge 改显示路线图来源路径(roadmap.source_prefix + rel)。"""
         status, html = _get(f"{self.base}/workspace/0")
         self.assertEqual(status, 200)
-        # Badge element present in section header.
         self.assertIn('id="map-updated-badge"', html)
-        # JS hydrator writes the updated date into the badge.
-        self.assertIn("map.updated_prefix", html)
-        # Current-position popup passes mapUpdated.
-        self.assertIn("mapUpdated: d.updated", html)
+        self.assertIn("i18n.t('roadmap.source_prefix') + (d.rel || '')", html)
 
 
 class ProjectMapGracefulHideTests(_BaseServer):
@@ -246,22 +231,20 @@ class ProjectMapGracefulHideTests(_BaseServer):
         self.repo_root = Path(self.temp_dir.name)
         for state in ("pending", "claimed", "completed", "blocked"):
             (self.repo_root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
-        # NOTE: no governance/project-map.md — region must hide.
+        # NOTE: no governance/roadmap.yaml — region must hide.
         self._start(self.repo_root)
 
     def test_no_map_file_hides_gracefully(self) -> None:
-        """S2: absent project-map.md -> available=false (graceful hide)."""
-        status, body = _get(f"{self.base}/api/project-map?workspace=0")
+        """S2 → AIPOS-F171: 无路线图文件 -> exists=false(整区隐藏); 页面带隐藏守卫。"""
+        status, body = _get(f"{self.base}/api/roadmap?workspace=0")
         self.assertEqual(status, 200)
         payload = json.loads(body)
         self.assertTrue(payload["ok"])
-        self.assertFalse(payload["data"]["available"])
-        # The static section is baked into the page (hidden by JS at runtime);
-        # the API contract is the authoritative hide signal.
+        self.assertFalse(payload["data"]["exists"])
         status, html = _get(f"{self.base}/workspace/0")
         self.assertEqual(status, 200)
         self.assertIn('id="milestone-map-section"', html)
-        self.assertIn("section.hidden = true", html)
+        self.assertIn("if (!d.exists) { section.hidden = true; return; }", html)
 
 
 class VerifyBenchContractTests(_BaseServer):
@@ -382,10 +365,12 @@ class VerifyBenchContractTests(_BaseServer):
         self.assertLess(i_vb, i_tc)
 
     def test_routes_are_registered(self) -> None:
-        """S4: both new API routes are registered on the live server (200, not 404)."""
-        for path in ("/api/project-map?workspace=0", "/api/verify-bench?workspace=0"):
+        """S4: the read API routes are registered on the live server (200, not 404); AIPOS-F171: /api/roadmap replaces the
+        retired /api/project-map (404)."""
+        for path in ("/api/roadmap?workspace=0", "/api/verify-bench?workspace=0"):
             status, _body = _get(f"{self.base}{path}")
             self.assertEqual(status, 200, f"{path} not registered")
+        self.assertEqual(_get_any(f"{self.base}/api/project-map?workspace=0")[0], 404)
 
 
 class VerifyBenchClosedLoopExcludedTests(_BaseServer):
@@ -544,48 +529,35 @@ class VerifyBenchOwnerApprovedExcludedTests(_BaseServer):
 
 
 class PortalSegmentAbsentTests(_BaseServer):
-    """AIPOS-264 S2: project-map.md present but WITHOUT a portal segment — the
-    portal region hides gracefully (portal.description empty; the static section
-    stays in the DOM, hidden by the renderPortalHeader guard)."""
+    """AIPOS-264 S2 → AIPOS-F171: the portal header is retired; this class now covers a roadmap file that does not match
+    the declaration (config.schema governance_structure.roadmap): /api/roadmap answers BLOCK with ROADMAP_INVALID (named, not
+    swallowed) and the page renders the error line instead of a stale map."""
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.repo_root = Path(self.temp_dir.name)
         for state in ("pending", "claimed", "completed", "blocked"):
             (self.repo_root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
-        (self.repo_root / "governance").mkdir(parents=True, exist_ok=True)
-        # project-map.md with milestones but NO portal segment.
-        (self.repo_root / "governance" / "project-map.md").write_text(
-            "---\nmap_version: 1\nupdated: 2026-07-28\n"
-            "milestones:\n  - id: m1\n    title: Only milestone\n    refs: []\n"
-            "current: here\n---\n# map\n",
-            encoding="utf-8",
-        )
+        _write_roadmap(self.repo_root, "milestones:\n- id: m1\n  title: lane missing\n  status: someday\n")
         self._start(self.repo_root)
 
     def test_no_portal_segment_yields_empty_portal(self) -> None:
-        """S2: absent portal segment -> portal keys present but empty (hide signal)."""
-        status, body = _get(f"{self.base}/api/project-map?workspace=0")
+        status, body = _get(f"{self.base}/api/roadmap?workspace=0")
         self.assertEqual(status, 200)
         payload = json.loads(body)
-        self.assertTrue(payload["ok"], payload)
-        portal = payload["data"]["portal"]
-        # All five keys present (schema-stable) but empty -> frontend hides.
-        self.assertEqual(portal["description"], "")
-        self.assertEqual(portal["collab_mode"], "")
-        self.assertEqual(portal["topology"], "")
-        self.assertEqual(portal["workers"], [])
-        self.assertEqual(portal["advisor"], "")
+        print(f"[F171 /api/roadmap invalid] {json.dumps(payload, ensure_ascii=False)[:600]}")
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["verdict"], "BLOCK")
+        reason = json.dumps(payload, ensure_ascii=False)
+        self.assertIn("ROADMAP_INVALID", reason)
+        self.assertIn("lane", reason)
+        self.assertIn("someday", reason)
 
     def test_route_serves_portal_hide_guard(self) -> None:
-        """S2: the portal-header section is baked into the page (hidden by JS at
-        runtime when portal.description is empty); the hide guard is present."""
         status, html = _get(f"{self.base}/workspace/0")
         self.assertEqual(status, 200)
-        self.assertIn('id="portal-header-section"', html)
-        self.assertIn("renderPortalHeader", html)
-        # The renderPortalHeader hide guard (no description -> hide).
-        self.assertIn("section.hidden = true", html)
+        self.assertIn("i18n.t('roadmap.error')", html)
+        self.assertNotIn('id="portal-header-section"', html)
 
 
 if __name__ == "__main__":

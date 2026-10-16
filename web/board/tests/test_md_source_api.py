@@ -160,9 +160,10 @@ class MarkdownSourceApiTests(unittest.TestCase):
         self.assertIn("/api/markdown-source", self.routes)
 
     def test_s5f_post_rejected(self) -> None:
+        # AIPOS-F171 件③: 看板只读 —— 非 GET 一律 405 + BOARD_READ_ONLY(文案读 verbs.schema board_readonly)
         status, data = dispatch_api_request(method="POST", path="/api/markdown-source", routes=self.routes)
         self.assertEqual(status, 405)
-        self.assertEqual(data.get("error"), "METHOD_NOT_ALLOWED")
+        self.assertEqual(data.get("error"), "BOARD_READ_ONLY")
 
 
 class TemporaryWorkspace:

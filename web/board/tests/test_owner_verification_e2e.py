@@ -2,6 +2,10 @@
 
 Tests the full HTTP → controlled-execute → disk write flow.
 P0 fix validation: approve/reject must write actual files to disk.
+
+AIPOS-F171 件③(gap #155, Owner 10-16: the Board is read-only): the Board's verify approve/reject write routes are offline
+(cross-project write + weak auth). The three route tests now assert POST /api/verify/approve|reject → 405 BOARD_READ_ONLY and
+zero writes; the controlled-execute plumbing test (backend, not the Board) is unchanged.
 """
 import json
 import shutil
@@ -13,10 +17,7 @@ from tools.aipos_cli.board_adapter import (
     execute_dry_run,
     record_owner_verification,
 )
-from web.board.app import (
-    _owner_verification_approve_route,
-    _owner_verification_reject_route,
-)
+from web.board.app import _api_routes, dispatch_api_request
 
 
 class TestOwnerVerificationE2E(unittest.TestCase):
@@ -31,99 +32,32 @@ class TestOwnerVerificationE2E(unittest.TestCase):
         self.records_dir = self.test_dir / "5_tasks" / "records" / "owner_verifications"
         self.records_dir.mkdir(parents=True, exist_ok=True)
 
+    def _assert_read_only(self, route: str) -> None:
+        def _snapshot() -> list[str]:
+            return sorted(p.relative_to(self.test_dir).as_posix() for p in self.test_dir.rglob("*"))
+        before = _snapshot()
+        status, data = dispatch_api_request(method="POST", path=route, routes=_api_routes(self.test_dir))
+        print(f"[F171 read-only] POST {route} -> {status} {data.get('error')} {data.get('message')}")
+        self.assertEqual(status, 405)
+        self.assertEqual(data["error"], "BOARD_READ_ONLY")
+        self.assertEqual(before, _snapshot(), "read-only board must write nothing")
+
     def tearDown(self) -> None:
         """Clean up test repo."""
         if self.test_dir.exists():
             shutil.rmtree(self.test_dir)
 
     def test_approve_route_writes_record_to_disk(self) -> None:
-        """S1: POST approve → actual file on disk with correct frontmatter."""
-        task_id = "TEST-APPROVE-001"
-        payload = {
-            "task_id": task_id,
-            "owner_confirmed": True,
-            "actor": "test_owner",
-        }
-
-        # Execute approve route
-        response = _owner_verification_approve_route(payload, repo_root=self.test_dir)
-
-        # Assert success
-        self.assertTrue(response.get("ok"), f"Response not ok: {response}")
-        self.assertIn(response.get("verdict"), ["OK", "PASS"], f"Verdict unexpected: {response}")
-        self.assertTrue(response.get("data", {}).get("wrote"), "No write reported")
-
-        # Assert file exists on disk
-        task_records_dir = self.records_dir / task_id
-        self.assertTrue(task_records_dir.exists(), f"Task records dir missing: {task_records_dir}")
-
-        record_files = list(task_records_dir.glob("*.md"))
-        self.assertEqual(len(record_files), 1, f"Expected 1 record file, found {len(record_files)}")
-
-        record_file = record_files[0]
-        content = record_file.read_text(encoding="utf-8")
-
-        # Assert frontmatter fields present
-        self.assertIn("decision: approve", content, "Missing decision field")
-        self.assertIn("decided_via: web_session", content, "Missing decided_via field")
-        self.assertIn("decided_at:", content, "Missing decided_at timestamp")
-        self.assertIn("decided_by:", content, "Missing decided_by field")
+        """AIPOS-F171 件③: 看板只读 —— 原断言看板核验写路由落盘; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self._assert_read_only("/api/verify/approve")
 
     def test_reject_route_writes_record_to_disk(self) -> None:
-        """S1: POST reject → actual file on disk with reason."""
-        task_id = "TEST-REJECT-001"
-        payload = {
-            "task_id": task_id,
-            "reason": "Does not meet acceptance criteria S1",
-            "owner_confirmed": True,
-            "actor": "test_owner",
-        }
-
-        # Execute reject route
-        response = _owner_verification_reject_route(payload, repo_root=self.test_dir)
-
-        # Assert success
-        self.assertTrue(response.get("ok"), f"Response not ok: {response}")
-        self.assertIn(response.get("verdict"), ["OK", "PASS"], f"Verdict unexpected: {response}")
-        self.assertTrue(response.get("data", {}).get("wrote"), "No write reported")
-
-        # Assert file exists on disk
-        task_records_dir = self.records_dir / task_id
-        self.assertTrue(task_records_dir.exists(), f"Task records dir missing: {task_records_dir}")
-
-        record_files = list(task_records_dir.glob("*.md"))
-        self.assertEqual(len(record_files), 1, f"Expected 1 record file, found {len(record_files)}")
-
-        record_file = record_files[0]
-        content = record_file.read_text(encoding="utf-8")
-
-        # Assert frontmatter fields present
-        self.assertIn("decision: reject", content, "Missing decision field")
-        self.assertIn("reason: Does not meet acceptance criteria S1", content, "Missing reason field")
-        self.assertIn("decided_via: web_session", content, "Missing decided_via field")
-        self.assertIn("decided_at:", content, "Missing decided_at timestamp")
-        self.assertIn("decided_by:", content, "Missing decided_by field")
+        """AIPOS-F171 件③: 看板只读 —— 原断言看板核验写路由落盘; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self._assert_read_only("/api/verify/reject")
 
     def test_reject_without_reason_blocks(self) -> None:
-        """Contract: reject requires reason field."""
-        task_id = "TEST-REJECT-NO-REASON"
-        payload = {
-            "task_id": task_id,
-            "owner_confirmed": True,
-            "actor": "test_owner",
-        }
-
-        response = _owner_verification_reject_route(payload, repo_root=self.test_dir)
-
-        # Should block without reason
-        self.assertFalse(response.get("ok"), "Should reject when reason missing")
-        self.assertIn("reason is required", str(response).lower())
-
-        # No file should be written
-        task_records_dir = self.records_dir / task_id
-        if task_records_dir.exists():
-            record_files = list(task_records_dir.glob("*.md"))
-            self.assertEqual(len(record_files), 0, "No file should be written when blocked")
+        """AIPOS-F171 件③: 看板只读 —— 原断言看板核验写路由落盘; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self._assert_read_only("/api/verify/reject")
 
     def test_controlled_execute_flow_approve(self) -> None:
         """Verify controlled-execute plumbing: dry-run → confirm → write."""

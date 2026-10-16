@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from tools.aipos_cli.custom_agent_profiles import load_custom_registry, registry_path
-from web.board.app import _api_post_routes, _api_routes, dispatch_api_request
+from web.board.app import _api_routes, dispatch_api_request
 
 WEB_ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,7 +17,6 @@ class CustomAgentProfileApiTests(unittest.TestCase):
         for state in ("pending", "claimed", "completed", "blocked"):
             (self.repo_root / "5_tasks" / "queue" / state).mkdir(parents=True, exist_ok=True)
         self.routes = _api_routes(self.repo_root)
-        self.post_routes = _api_post_routes(self.repo_root)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -40,128 +39,52 @@ class CustomAgentProfileApiTests(unittest.TestCase):
         instance.update(instance_overrides)
         return {"action": "upsert", "agent_id": "owner_agents", "instance": instance}
 
-    def post(self, path: str, body: dict[str, object]) -> dict[str, object]:
-        status, data = dispatch_api_request(
-            method="POST",
-            path=path,
-            routes=self.routes,
-            post_routes=self.post_routes,
-            body=body,
-        )
-        self.assertEqual(status, 200)
-        return data
-
-    def draft(self, payload: dict[str, object] | None = None, *, actor: str = "owner") -> dict[str, object]:
-        return self.post("/api/agent-profile/draft", {"actor": actor, "payload": payload or self.payload()})
-
-    def confirm(self, preview: dict[str, object], *, actor: str = "owner", owner_confirmed: bool = True) -> dict[str, object]:
-        return self.post(
-            "/api/agent-profile/confirm",
-            {"actor": actor, "owner_confirmed": owner_confirmed, "preview": preview},
-        )
+    def assert_board_read_only(self, paths: list[str]) -> None:
+        """AIPOS-F171 件③(gap #155): 看板写接口全部下线 —— 同一路由 POST 一律 405 + BOARD_READ_ONLY(文案读 verbs.schema
+        board_readonly), 不调用任何写实现, 工作区零写入。"""
+        root = Path(self.repo_root)
+        def _snapshot() -> list[tuple[str, int]]:
+            return sorted((p.relative_to(root).as_posix(), p.stat().st_size) for p in root.rglob("*") if p.is_file())
+        before = _snapshot()
+        for path in paths:
+            status, data = dispatch_api_request(method="POST", path=path, routes=_api_routes(root))
+            print(f"[F171 read-only] POST {path} -> {status} {data.get('error')} {data.get('message')}")
+            self.assertEqual(status, 405, path)
+            self.assertEqual(data["error"], "BOARD_READ_ONLY", path)
+            self.assertFalse(data["ok"])
+        self.assertEqual(before, _snapshot(), "read-only board must write nothing")
 
     def test_upsert_preview_then_confirm_writes_scoped_registry_and_revalidates(self) -> None:
-        target = registry_path(self.repo_root)
-        preview = self.draft()
-
-        self.assertEqual(preview["verdict"], "NEEDS_OWNER")
-        self.assertFalse(target.exists())
-        self.assertEqual(preview["planned_writes"][0]["path"], "0_control_plane/agents/custom_agent_profiles.yaml")
-
-        confirmed = self.confirm(preview)
-
-        self.assertEqual(confirmed["verdict"], "PASS")
-        self.assertTrue(target.exists())
-        self.assertTrue(confirmed["data"]["registry_validation"]["ok"])
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/agent-profile/draft', '/api/agent-profile/confirm'])
 
     def test_bundled_collision_blocks_with_zero_writes(self) -> None:
-        preview = self.draft(self.payload(agent_instance="agent-01"))
-
-        self.assertEqual(preview["verdict"], "BLOCK")
-        self.assertIn("custom canonical agent_instance conflicts with bundled default: agent-01", preview["blocking_reasons"])
-        self.assertFalse(registry_path(self.repo_root).exists())
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/agent-profile/draft'])
 
     def test_confirm_requires_owner_and_matching_actor(self) -> None:
-        preview = self.draft()
-
-        missing_owner = self.confirm(preview, owner_confirmed=False)
-        wrong_actor = self.confirm(preview, actor="other-owner")
-
-        self.assertEqual(missing_owner["verdict"], "BLOCK")
-        self.assertIn("owner confirmation token is required", missing_owner["blocking_reasons"][0])
-        self.assertEqual(wrong_actor["verdict"], "BLOCK")
-        self.assertIn("confirm actor does not match", wrong_actor["blocking_reasons"][0])
-        self.assertFalse(registry_path(self.repo_root).exists())
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/agent-profile/draft', '/api/agent-profile/confirm'])
 
     def test_stale_preview_blocks_with_zero_overwrite(self) -> None:
-        stale = self.draft()
-        self.confirm(self.draft(self.payload(agent_instance="agent-06")))
-
-        result = self.confirm(stale)
-
-        self.assertEqual(result["verdict"], "BLOCK")
-        self.assertIn("profile draft snapshot mismatch", result["blocking_reasons"][0])
-        registry, _blocking = load_custom_registry(self.repo_root)
-        self.assertEqual(registry["profiles"][0]["instances"][0]["agent_instance"], "agent-06")
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/agent-profile/draft', '/api/agent-profile/confirm'])
 
     def test_expired_preview_blocks_with_zero_writes(self) -> None:
-        preview = self.draft()
-        preview["dry_run_expires_at"] = "2000-01-01T00:00:00Z"
-
-        result = self.confirm(preview)
-
-        self.assertEqual(result["verdict"], "BLOCK")
-        self.assertIn("profile draft expired", result["blocking_reasons"][0])
-        self.assertFalse(registry_path(self.repo_root).exists())
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/agent-profile/draft', '/api/agent-profile/confirm'])
 
     def test_display_name_edit_preserves_canonical_identity(self) -> None:
-        self.confirm(self.draft())
-
-        preview = self.draft(self.payload(display_name="Renamed Owner Writer"))
-        confirmed = self.confirm(preview)
-
-        self.assertEqual(confirmed["verdict"], "PASS")
-        registry, _blocking = load_custom_registry(self.repo_root)
-        instance = registry["profiles"][0]["instances"][0]
-        self.assertEqual(instance["agent_instance"], "agent-04")
-        self.assertEqual(instance["display_name"], "Renamed Owner Writer")
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/agent-profile/draft', '/api/agent-profile/confirm'])
 
     def test_capability_edit_is_owner_visible_in_preview(self) -> None:
-        preview = self.draft(self.payload(capabilities=["repo_edit", "test_run"]))
-
-        self.assertEqual(preview["verdict"], "NEEDS_OWNER")
-        self.assertIn("capabilities", preview["summary"]["owner_visible_fields"])
-        self.assertFalse(registry_path(self.repo_root).exists())
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/agent-profile/draft'])
 
     def test_deactivate_and_supersede_are_history_preserving(self) -> None:
-        self.confirm(self.draft())
-        historical = self.repo_root / "5_tasks" / "queue" / "completed" / "historical.md"
-        historical.write_text("agent_instance: agent-04\n", encoding="utf-8")
-
-        deactivate = self.draft({"action": "deactivate", "agent_id": "owner_agents", "agent_instance": "agent-04"})
-        self.confirm(deactivate)
-        supersede = self.draft(
-            {
-                "action": "supersede",
-                "agent_id": "owner_agents",
-                "agent_instance": "agent-04",
-                "replacement": {
-                    "agent_instance": "agent-05",
-                    "display_name": "Replacement Session",
-                    "capabilities": ["repo_edit"],
-                    "provenance": {"vendor": "replacement-vendor"},
-                },
-            }
-        )
-        self.confirm(supersede)
-
-        registry, _blocking = load_custom_registry(self.repo_root)
-        instances = registry["profiles"][0]["instances"]
-        self.assertEqual([item["agent_instance"] for item in instances], ["agent-04", "agent-05"])
-        self.assertEqual(instances[0]["identity_status"], "superseded")
-        self.assertFalse(instances[0]["enabled"])
-        self.assertEqual(instances[1]["supersedes_instance_ids"], ["agent-04"])
-        self.assertEqual(historical.read_text(encoding="utf-8"), "agent_instance: agent-04\n")
+        """AIPOS-F171 件③: 看板只读 —— 本例原断言的看板写/预演行为已下线; 改断言同一路由 405 + BOARD_READ_ONLY + 零写入。"""
+        self.assert_board_read_only(['/api/agent-profile/draft', '/api/agent-profile/confirm'])
 
     def test_static_workbench_has_structured_fields_without_runtime_env_or_yaml_editor(self) -> None:
         html = (WEB_ROOT / "static" / "index.html").read_text(encoding="utf-8")
