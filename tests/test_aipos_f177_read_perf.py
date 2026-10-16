@@ -17,8 +17,10 @@ Items covered:
 from __future__ import annotations
 
 import contextlib
+import difflib
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -419,6 +421,21 @@ def _get(b, path: str) -> str:
 
 
 PAGES = ("/owner/overview", "/owner/inbox", "/owner/roadmap", "/owner/onboarding")
+# commands rendered from "now" (e.g. the onboarding envelope mint `--expires-at <now + N days>`) move with the clock between
+# two requests: two pages are the same when every byte outside ISO instants is equal and every pair of instants is equal or
+# at most a few seconds apart (fixed record instants such as verdict_at must still be equal to the second)
+_INSTANT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+
+
+def _same_page(a: str, b: str) -> bool:
+    from datetime import datetime
+
+    if _INSTANT.split(a) != _INSTANT.split(b):
+        return False
+    pairs = list(zip(_INSTANT.findall(a), _INSTANT.findall(b)))
+    moved = [(x, y) for x, y in pairs if x != y]
+    parse = lambda t: datetime.strptime(t, "%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+    return all(abs((parse(y) - parse(x)).total_seconds()) <= 5 for x, y in moved)
 
 
 def test_item3_board_pages_same_bytes_with_and_without_scope_and_caches(board, monkeypatch):
@@ -435,8 +452,10 @@ def test_item3_board_pages_same_bytes_with_and_without_scope_and_caches(board, m
     clear_records_cache()
     plain = {p: _get(board, p) for p in PAGES}
     for p in PAGES:
-        _show(f"{p}: {len(fast[p])} chars, same with / without scope and caches: {fast[p] == plain[p]}")
-        assert fast[p] == fast_again[p] == plain[p], p
+        _show(f"{p}: {len(fast[p])} chars, byte-identical with / without scope and caches: {fast[p] == plain[p]}")
+        for other in (fast_again[p], plain[p]):
+            diff = "\n".join(difflib.unified_diff(fast[p].splitlines(), other.splitlines(), lineterm="", n=0))
+            assert _same_page(fast[p], other), f"{p}\n{diff[:4000]}"
     assert fm.frontmatter_memo_stats()["file"]["entries"] == 0
 
 
