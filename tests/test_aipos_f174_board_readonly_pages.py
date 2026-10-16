@@ -476,6 +476,14 @@ def test_item5_i18n_keys_single_channel_zh_en():
     missing = sorted(k for k in (used | dynamic) if k not in prefixes and k not in zh)
     assert not missing, missing
     assert set(pages_declaration()["onboarding_items"]) <= set(ONBOARDING_CHECKS)
+    # AIPOS-F174 第 1 轮返工(F-F174R-1): 用 CJK 守卫自身的逐行判定(scan_file_for_cjk)核新增渲染模块零命中——行内注释也算
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("f174_cjk_guard", REPO_ROOT / "web" / "board" / "tests" / "test_aipos288_cjk_source_guard.py")
+    guard = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(guard)
+    hits = guard.scan_file_for_cjk(REPO_ROOT / "web" / "board" / "readonly_pages.py")
+    assert hits == [], hits
     for path in ("web/board/readonly_pages.py",):
         text = (REPO_ROOT / path).read_text(encoding="utf-8")
         code = re.sub(r'""".*?"""', "", text, flags=re.S)

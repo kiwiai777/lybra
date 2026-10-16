@@ -397,5 +397,5 @@ def render_page(page: str, home_root: str | Path | None, params: dict[str, list[
             return render_roadmap(board_pages.collect_roadmap(home_root, project=(params.get(query["project"]) or [None])[0],
                                                               milestone=(params.get(query["milestone"]) or [None])[0]), lang)
         raise ValueError(f"unknown readonly page {page!r}")
-    except (OSError, ValueError, LookupError, RuntimeError, SchemaLoadError) as exc:  # 读不出 = 错误页点名(不吞, 不断连)
+    except (OSError, ValueError, LookupError, RuntimeError, SchemaLoadError) as exc:  # unreadable = error page naming the cause (not swallowed, connection kept)
         return render_error(lang, f"{type(exc).__name__}: {exc}"[:800])
