@@ -2675,7 +2675,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_lane_argument(loop_status_parser)  # AIPOS-F133 件②
     loop_status_parser.add_argument("--actor", default=argparse.SUPPRESS,
                                     help="AIPOS-F167 件③: 看状态的顾问实例(末尾「Lybra 未读更新」按本实例已读计; 不影响状态判定); "
-                                    "缺省 = 治理根 .lybra/role 的实例")
+                                    "缺省 = 本治理根唯一已接入顾问实例(多个时按任一实例未读计)")
     loop_status_parser.add_argument("--wait", type=float, default=None, metavar="SECONDS",
                                     help="AIPOS-F136 件①: 有界等待秒数(须 --task-id; 上限读 verbs.schema lybra_loop_status.wait.max_seconds), "
                                     "经 agent watch 等到顾问下一动作 ≠ continue_wait 或到时, 返回当时状态; 禁 until/sleep 轮询")
@@ -2697,7 +2697,8 @@ def build_parser() -> argparse.ArgumentParser:
              "--ack marks them read for --actor (default preview, --confirm writes the read-marker record and lands it)",
     )
     updates_parser.add_argument("--actor", default=None, help="Advisor instance (read state is per instance in this governance root); "
-                                "viewing defaults to the governance root .lybra/role instance; required with --ack")
+                                "viewing defaults to the only advisor instance enrolled in this governance root (with several, a note counts as "
+                                "unread while any of them has not read it); required with --ack")
     updates_parser.add_argument("--all", action="store_true", help="List every update note (marked read/unread), not only the unread ones")
     updates_parser.add_argument("--ack", action="store_true", help="Mark the currently unread update notes as read for --actor")
     updates_parser.add_argument("--json", action="store_true", help="Output JSON")

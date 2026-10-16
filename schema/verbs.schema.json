@@ -2378,7 +2378,7 @@
           "json": {"type": "boolean", "description": "JSON 输出"},
           "wait": {"type": "number", "description": "AIPOS-F136 件①: 有界等待秒数(须 --task-id; 0 < 秒数 ≤ wait.max_seconds)。经 agent watch 唯一等待原语 run_fs_watch(expect = 本卡运行记录, expect_ready = 顾问下一动作 ≠ continue_wait)等到可行动或到时, 返回当时状态; 退出码按下一动作(exit_codes)"},
           "verbose": {"type": "boolean", "description": "AIPOS-F138 件③: 输出门侧信封判定诊断行([ENVELOPE_TRACE], autonomy_policy.trace_envelope 逐谓词留痕, 走 stderr); 缺省不打印(状态结论不被淹没)。只开关输出, 信封判定逻辑不变。AIPOS-F142 件②: 开关统一由 envelope_trace 声明承载"},
-          "actor": {"type": "string", "description": "AIPOS-F167 件③: 看状态的顾问实例(只用于末尾「Lybra 未读更新」提示按本实例已读计, 不影响状态判定); 缺省 = 治理根 .lybra/role 的实例(advisor_updates_cli.resolve_viewer)"}
+          "actor": {"type": "string", "description": "AIPOS-F167 件③: 看状态的顾问实例(只用于末尾「Lybra 未读更新」提示按本实例已读计, 不影响状态判定); 缺省 = 本治理根唯一已接入顾问实例, 多个时按任一实例未读计(advisor_updates_cli.resolve_viewer)"}
         },
         "additionalProperties": false
       },
@@ -2605,7 +2605,7 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "actor": {"type": "string", "description": "顾问实例(已读按本治理根本实例记); 查看缺省 = 治理根 .lybra/role 的实例; --ack 必给, 且须为本治理根已接入实例(enrollment.instance_enrollment)"},
+          "actor": {"type": "string", "description": "顾问实例(已读按本治理根本实例记); 查看缺省 = 本治理根唯一已接入顾问实例, 接入多个(或无)时按「任一顾问实例未读」计、提示命令用占位(advisor_updates_cli.resolve_viewer); --ack 必给, 且须为本治理根已接入实例(enrollment.instance_enrollment)"},
           "all": {"type": "boolean", "description": "列全部更新说明(标已读/未读); 缺省只列本实例未读"},
           "ack": {"type": "boolean", "description": "记已读: 把本实例当前未读的更新说明全部标记已读(两阶段, 缺省预演)"},
           "dry_run": {"type": "boolean", "description": "与 --ack 同用: 预演(缺省)"},

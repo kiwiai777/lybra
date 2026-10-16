@@ -273,6 +273,18 @@ def test_acceptance2_two_advisors_banner_then_ack_is_per_instance(rig):
               f"B 提示行 {[ln for ln in out_b.splitlines() if ln.startswith('Lybra 有')]} ----")
         assert not _banner_present(out_a), name
         assert _banner_present(out_b), name
+    # 未给 --actor(两个顾问实例): 任一实例未读即显示, 命令用占位; 两人都 ack 后才不显示
+    rc, out, _ = _cli(["loop", "status", "--workspace-root", str(gov)])
+    _show("---- ② 未给 --actor 的 loop status(A 已读 / B 未读)提示原文 ----\n"
+          + "\n".join(ln for ln in out.splitlines() if ln.startswith("Lybra 有") or "看全文:" in ln))
+    assert _banner_present(out) and "--actor <你的顾问实例>" in out
+    rc, out, _ = _cli(["updates", "--workspace-root", str(gov)])
+    _show("---- ② 未给 --actor 的 `lybra updates` 首两行 ----\n" + "\n".join(out.splitlines()[:2]))
+    assert "本治理根接入 2 个顾问实例" in out and "按任一实例未读计" in out
+    rc, out, err = _cli(["updates", "--ack", "--workspace-root", str(gov), "--actor", ADV_B, "--confirm"])
+    assert rc == 0 and "已记已读" in out, out + err
+    rc, out, _ = _cli(["loop", "status", "--workspace-root", str(gov)])
+    assert not _banner_present(out)
     # 重复 ack = 无未读(未写)
     rc, out, _ = _cli(["updates", "--ack", "--workspace-root", str(gov), "--actor", ADV_A, "--confirm"])
     assert rc == 0 and "无未读(未写)" in out and len(sorted((acks / ADV_A).glob("ack_*.md"))) == 1

@@ -1,7 +1,7 @@
 """AIPOS-F167 件③ — 产品内更新通知的送达面(唯一实现): 查看实例解析、四出口提示挂载、`lybra updates [--ack]`、已读标记写入与落账。
 
 核心(声明 / 库读写 / 未读判定 / 提示渲染)在 advisor_updates; 本模块只做「谁在看」「怎么显示」「怎么记已读」:
-- resolve_viewer: 查看实例 = 显式 --actor > 治理根 .lybra/role 的实例(charter_render.workstation_identity, 只读非秘密字段) > 未知。
+- resolve_viewer: 查看实例 = 显式 --actor > 本治理根唯一已接入顾问实例 > 未知(按全部已接入顾问实例「任一未读」计)。
 - advisor_view / advisor_banner_lines: charter 开头、loop status / next / brief 末尾同一渲染; 无未读 / 库不可用 = 不显示,
   读不出 = 一行告警(不静默, 不掀翻原命令)。
 - ack_updates: 已读标记(records advisor_update_acks/<实例>/, 只追加)两阶段写入 + 经 governance_commit.land_written_paths 落账。
@@ -27,44 +27,73 @@ from tools.aipos_cli.advisor_updates import (
 )
 
 
-def resolve_viewer(governance_root: str | Path, actor: str | None = None) -> dict[str, Any]:
-    """查看实例: {instance, source}。显式 actor > 治理根 .lybra/role 顶层实例(顾问工位即治理根) > None(未知, 提示里用占位)。"""
-    from tools.aipos_cli.charter_render import WorkstationIdentityError, is_enrolled_workstation, workstation_identity
+def advisor_instances(governance_root: str | Path) -> list[str]:
+    """本治理根已接入的、角色类 = 提示受众(banner.audience)的实例(接入判定唯一 enrollment.enrolled_instances; 角色类经
+    custom_roles.resolve_role_to_class(land 事件 role)/ resolve_instance_role_class(仅连接文件接入者), 不按实例名前缀判)。"""
+    from tools.aipos_cli.custom_roles import resolve_instance_role_class, resolve_role_to_class
+    from tools.aipos_cli.enrollment import enrolled_instances
 
+    audience = str(updates_declaration()["banner"]["audience"])
+    gov = Path(governance_root)
+    out = []
+    for view in enrolled_instances(gov):
+        cls = resolve_role_to_class(str(view["role"]), gov) if view.get("role") else None
+        if cls is None:
+            pair = resolve_instance_role_class(str(view["instance"]), gov)
+            cls = pair[1] if pair else None
+        if cls == audience:
+            out.append(str(view["instance"]))
+    return out
+
+
+def resolve_viewer(governance_root: str | Path, actor: str | None = None) -> dict[str, Any]:
+    """查看实例: {instance, source, candidates}。显式 actor > 本治理根唯一已接入顾问实例 > 未知(instance=None, candidates = 全部
+    已接入顾问实例: 按「任一实例未读」计, 提示里用占位, 防多顾问项目里一人 ack 后别人看不到)。"""
     name = str(actor or "").strip()
     if name:
-        return {"instance": name, "source": "--actor"}
-    gov = Path(governance_root)
-    if is_enrolled_workstation(gov):
-        try:
-            return {"instance": str(workstation_identity(gov)["instance"]), "source": "治理根 .lybra/role"}
-        except WorkstationIdentityError as exc:
-            return {"instance": None, "source": f"治理根 .lybra/role 身份不可用: {exc}"}
-    return {"instance": None, "source": "未给 --actor 且治理根无 .lybra/role"}
+        return {"instance": name, "source": "--actor", "candidates": [name]}
+    advisors = advisor_instances(governance_root)
+    if len(advisors) == 1:
+        return {"instance": advisors[0], "source": "本治理根唯一已接入顾问实例", "candidates": advisors}
+    why = (f"本治理根接入 {len(advisors)} 个顾问实例({', '.join(advisors)}), 未给 --actor: 按任一实例未读计" if advisors
+           else "本治理根无已接入顾问实例, 未给 --actor: 按全部未读计")
+    return {"instance": None, "source": why, "candidates": advisors}
 
 
-def advisor_view(governance_root: str | Path, actor: str | None = None, *, running: Any = None) -> dict[str, Any]:
-    """{available, reason, store, mode, viewer, updates, acked, unread}; 库 / 已读标记读不出 = AdvisorUpdatesError 上抛。"""
+def _acked_by_viewer(governance_root: str | Path, viewer: dict[str, Any]) -> set[str]:
+    """查看者的已读集合: 确定实例 = 其已读集合; 未知 = 全部候选实例已读集合的交集(无候选 = 空集)。"""
+    sets = [acked_update_ids(governance_root, inst) for inst in viewer["candidates"]]
+    return set.intersection(*sets) if sets else set()
+
+
+def advisor_view(governance_root: str | Path, actor: str | None = None, *, running: Any = None,
+                 skip_viewer_when_empty: bool = False) -> dict[str, Any]:
+    """{available, reason, store, mode, viewer, updates, acked, unread}; 库 / 已读标记读不出 = AdvisorUpdatesError 上抛。
+    库不可用 = 不读治理根(不解析查看者); skip_viewer_when_empty = 库内无提示受众条目时也不解析(四出口提示走此路, 无事零开销)。"""
     located = store_dir_for_running_code(running)
-    viewer = resolve_viewer(governance_root, actor)
     base = {"available": located["available"], "reason": located["reason"], "mode": located["mode"],
-            "store": str(located["store"]) if located["store"] else None, "viewer": viewer,
+            "store": str(located["store"]) if located["store"] else None,
+            "viewer": {"instance": str(actor or "").strip() or None, "source": "未解析(库不可用或无更新)", "candidates": []},
             "updates": [], "acked": [], "unread": []}
     if not located["available"]:
         return base
     updates = load_updates(located["store"])
-    acked = acked_update_ids(governance_root, viewer["instance"]) if viewer["instance"] else set()
-    return {**base, "updates": updates, "acked": sorted(acked), "unread": unread_updates(updates, acked)}
+    if skip_viewer_when_empty and not any(audience_entries(r) for r in updates):
+        return {**base, "updates": updates}
+    viewer = resolve_viewer(governance_root, actor)
+    acked = _acked_by_viewer(governance_root, viewer)
+    return {**base, "viewer": viewer, "updates": updates, "acked": sorted(acked), "unread": unread_updates(updates, acked)}
 
 
 def advisor_banner_lines(governance_root: str | Path, actor: str | None = None, *, running: Any = None) -> list[str]:
     """四出口(charter / loop status / next / brief)同一提示。无未读 / 库不可用 = [](行为不变); 读不出 = 一行告警(出口原文)。"""
+    from tools.aipos_cli.custom_roles import RoleRegistryReadError
     from tools.schema_loader import SchemaLoadError
 
     try:
-        view = advisor_view(governance_root, actor, running=running)
+        view = advisor_view(governance_root, actor, running=running, skip_viewer_when_empty=True)
         return banner_lines(view["unread"], governance_root=governance_root, instance=view["viewer"]["instance"])
-    except (AdvisorUpdatesError, SchemaLoadError, ValueError, OSError, RuntimeError) as exc:
+    except (AdvisorUpdatesError, SchemaLoadError, RoleRegistryReadError, ValueError, OSError, RuntimeError) as exc:
         try:
             template = str(updates_declaration()["banner"]["unreadable"])
         except SchemaLoadError:
