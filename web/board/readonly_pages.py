@@ -162,6 +162,7 @@ def _overview_card(ctx: _Ctx, card: dict[str, Any]) -> str:
         text = ctx.t("rp_ov_roadmap", met=rm["met"], total=rm["total"], milestones=rm["milestones"], signals=rm["signals"], severe=rm["severe"])
         li.append(f"<li class=\"rp-roadmap{' rp-alert' if rm['severe'] else ''}\" data-roadmap=\"declared\" data-signals=\"{rm['signals']}\""
                   f" data-severe=\"{rm['severe']}\"><a href=\"{rm_url}\">{_ESC(text)}</a> {_bar(rm['met'], rm['total'])}</li>")
+    li.append(_upgrade_li(ctx, card.get("upgrade")))
     ob = card["onboarding"]
     li.append(f"<li class=\"rp-onboarding\" data-done=\"{ob['done']}\" data-total=\"{ob['total']}\"><a href=\"{_ESC(ctx.href(ob['url']))}\">"
               f"{_ESC(ctx.t('rp_ov_onboarding', done=ob['done'], total=ob['total']))}</a></li>")
@@ -170,6 +171,19 @@ def _overview_card(ctx: _Ctx, card: dict[str, Any]) -> str:
     return (f"<article class=\"rp-card\" data-project=\"{_ESC(name)}\" data-paused=\"{str(bool(card['paused'])).lower()}\">"
             f"<h2>{_ESC(name)}{badge}</h2><ul>{''.join(li)}</ul>"
             f"<p class=\"rp-card-foot\"><a href=\"{_ESC(detail)}\">{_ESC(ctx.t('rp_ov_detail'))}</a></p></article>")
+
+
+def _upgrade_li(ctx: _Ctx, up: dict[str, Any] | None) -> str:
+    """AIPOS-F176: project upgrade badge (link to the upgrade page; count = pending mechanical steps)."""
+    if not up:
+        return ""
+    url = _ESC(ctx.href(str(up["url"])))
+    if up.get("error"):
+        return f"<li class=\"rp-upgrade rp-err\" data-upgrade-pending=\"\"><a href=\"{url}\">{_ESC(ctx.t('rp_error', error=up['error']))}</a></li>"
+    pending = int(up["pending"])
+    text = ctx.t("rp_ov_upgrade", count=pending) if pending else ctx.t("rp_ov_upgrade_none")
+    return (f"<li class=\"rp-upgrade{' rp-alert' if pending else ''}\" data-upgrade-pending=\"{pending}\"><a href=\"{url}\">"
+            f"{_ESC(text)}</a></li>")
 
 
 def render_overview(data: dict[str, Any], lang: str) -> str:
@@ -410,6 +424,7 @@ def _checklist_html(ctx: _Ctx, proj: dict[str, Any]) -> str:
     return (f"<section class=\"rp-ob-project\" id=\"{_ESC(proj['project'])}\" data-project=\"{_ESC(proj['project'])}\""
             f" data-done=\"{summary['done']}\" data-total=\"{summary['total']}\"><h2>{_ESC(proj['project'])}{badge} "
             f"<span class=\"rp-sub\">{_ESC(ctx.t('rp_ob_summary', done=summary['done'], total=summary['total']))}</span></h2>"
+            f"<ul class=\"rp-upgrade-line\">{_upgrade_li(ctx, proj.get('upgrade'))}</ul>"
             f"<ol class=\"rp-checklist\">{''.join(items)}</ol></section>")
 
 

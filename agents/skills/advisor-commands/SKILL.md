@@ -147,6 +147,15 @@ lybra updates --ack --workspace-root <治理根> --actor <你的顾问实例> --
 已读按「本治理根 × 本实例」记: 你 ack 了, 同项目别的顾问实例仍会看到。读完 → ack → 按须知里的顾问动作做 → 直接继续推进, 不必等 Owner。
 更新说明在产品侧(部署目录)一份, 所有接入项目共用; 卡工作树里 `python -m` 跑不读真实库(如实说明「库不可用」)。
 
+#### `lybra project upgrade`(AIPOS-F176: 项目升级 · 告诉顾问的新能力)
+**何时用**:收到 Lybra 更新后, 或看板总览出现「可升级(N 项)」时。一条命令把本项目跟上最新版本: 配置缺省补齐 / 工位章程同步 / 记录类型补齐 / 决策指针补生成(步骤清单读 `verbs.schema` `lybra_project_upgrade.upgrade_steps`, 各步就是既有命令的同一实现)。
+```bash
+lybra project upgrade <项目名> --home-root <home根>                                         # 预演(缺省, 零写入): 每步会改什么 / 为什么 / 是否已是最新 + 各顾问实例未读更新数
+lybra project upgrade <项目名> --home-root <home根> --confirm --actor <你的顾问实例>          # 依次执行待升级步骤, 各步写后自动落账; 任一步失败即停(已成功步保留)
+lybra project upgrade <项目名> --home-root <home根> --guidance                              # 按钮做不到、需你主动用起来的新能力: 为什么 / 话术含命令 / 完成判据
+```
+幂等: 重跑无事可做。失败(exit 3)按输出的修法修好后重跑同一条命令, 只做剩下的。`--guidance` 各项做到后下次检查即消失(看板升级页同一内容); Owner 也可在看板升级页点「预演升级 → 确认执行」(只对 Owner 会话开放)。
+
 #### `lybra queue amend`
 **何时用**:改卡(如 `needs_owner: true → false` 解放行阻塞)。
 ```bash

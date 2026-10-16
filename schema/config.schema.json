@@ -158,7 +158,7 @@
       }
     },
     "project_json": {
-      "description": "AIPOS-F78 件④ + AIPOS-F89 件① M14: project.json 键的唯一声明表——产品读取的每个 project.json 键都在下方 schema 声明(未声明 = 产品不读; 夹具 tests/test_aipos_f89_project_declaration_single_source.py 守护)。paths 段 = 项目落点声明: Lybra 读声明找 Return/裁决报告/队列/台账, 禁写死 task_cards/…/RETURN.md 或 5_tasks/queue; 缺 paths 段 = 用 default(=现行路径, 0 迁移)。chris 形项目(returns 在 5_tasks/records/returns/<ID>/) 只改声明值不迁目录。唯一读取口: workspace_config.project_paths()(队列根另经 task_loader.queue_root_for 转调, 同一读取口)。",
+      "description": "AIPOS-F176 件①: 键声明带 upgrade_fill=true(须同时有字面量 default)= `lybra project upgrade` 的「配置缺省补齐」步在 project.json 缺该键时写入其 default(写入经 workspace_config.update_project_json 唯一写路径, 缺省 = 行为不变, 只把缺省显式化; 清单只追加; 唯一实现 workspace_config.fill_project_json_defaults)。AIPOS-F78 件④ + AIPOS-F89 件① M14: project.json 键的唯一声明表——产品读取的每个 project.json 键都在下方 schema 声明(未声明 = 产品不读; 夹具 tests/test_aipos_f89_project_declaration_single_source.py 守护)。paths 段 = 项目落点声明: Lybra 读声明找 Return/裁决报告/队列/台账, 禁写死 task_cards/…/RETURN.md 或 5_tasks/queue; 缺 paths 段 = 用 default(=现行路径, 0 迁移)。chris 形项目(returns 在 5_tasks/records/returns/<ID>/) 只改声明值不迁目录。唯一读取口: workspace_config.project_paths()(队列根另经 task_loader.queue_root_for 转调, 同一读取口)。",
       "source_file": "project.json",
       "schema": {
         "project": {
@@ -561,6 +561,7 @@
           "type": "boolean",
           "required": false,
           "default": true,
+          "upgrade_fill": true,
           "description": "AIPOS-F164 件②(gap #149): loop 拉起 pi(执行 / 审计)前核该工位章程新鲜度(判定 = `lybra sync --dry-run` 同一实现 distribution_sync.charter_freshness, F66B 三指纹), 章程过期 / 未渲染 / 核不了时是否先自动 sync 该工位(只本工位, 修复 = `lybra sync` 同一实现 distribution_sync.sync_workstation_charter)再拉起。缺省 true(缺键 = 自动 sync); false = 不自动 sync, 章程不新鲜即拒拉起(结束原因 charter_not_fresh, 给 sync 修法)。值非布尔 = CHARTER_AUTO_SYNC_INVALID(loop 按不自动 sync 处理并在拒因里点名)。唯一读取口 workspace_config.charter_auto_sync; 写入 = 编辑 project.json 本键(无专用写命令)。",
           "reject_codes": {
             "CHARTER_AUTO_SYNC_INVALID": "charter_auto_sync 须为 JSON 布尔(true / false)"
@@ -570,6 +571,7 @@
           "type": "integer",
           "required": false,
           "default": 2,
+          "upgrade_fill": true,
           "minimum": 0,
           "description": "AIPOS-F171B 件②(10-16 chris HBLX-8 实撞: 审计 pi 单发模式半途停笔 exit 0 未写报告): loop 拉起的 pi 以 exit 0 退出而产物未就绪时, 以同一会话 id 续接的最多次数(机制声明 verbs.schema lybra_loop.launch.resume)。缺省 2(缺键 = 2); 0 = 不续接(F171B 前行为)。值须为 ≥0 的 JSON 整数, 否则 LAUNCH_RESUME_MAX_INVALID(loop 不拉起, fail-closed, 拒因点名)。唯一读取口 workspace_config.launch_resume_max; 写入 = 编辑 project.json 本键(无专用写命令)。",
           "reject_codes": {

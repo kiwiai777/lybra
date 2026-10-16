@@ -299,7 +299,7 @@ def _envelope_text(rows: list[dict[str, Any]]) -> str:
                      f" · {r.get('status')} · {r.get('expires_at') or '?'})" for r in rows)
 
 
-def _workstation_instances(f: ProjectFacts) -> list[dict[str, Any]]:
+def workstation_instances(f: ProjectFacts) -> list[dict[str, Any]]:
     """执行方式声明里有工位位置的实例(审计者 / pi 执行者; 子 agent 执行者无工位)。读不出的面由各自清单项点名, 这里跳过。"""
     execution = f.execution().get("value") or {}
     out = []
@@ -313,7 +313,7 @@ def _workstation_instances(f: ProjectFacts) -> list[dict[str, Any]]:
 def _check_charter(f: ProjectFacts, decl: dict[str, Any]) -> dict[str, Any]:
     from tools.aipos_cli.workspace_config import EXECUTION_MODE_PI
 
-    stations = _workstation_instances(f)
+    stations = workstation_instances(f)
     if not stations:
         return _row("charter", "na", [("rp_ob_detail_charter_na", {})])
     got = f.charter_checks()
@@ -464,6 +464,13 @@ def artifact_for_route(home_root: str | Path | None, query: dict[str, list[str]]
     return {"path": path, "content_type": mimetypes.guess_type(path.name)[0] or "application/octet-stream"}
 
 
+def pending_badge(root: Path, project: str, home_root: Path) -> dict[str, Any]:
+    """AIPOS-F176: per-project "upgradable (N)" badge = project_upgrade.pending_badge (single derivation; charter from recorded truth)."""
+    from tools.aipos_cli.project_upgrade import pending_badge as upgrade_badge
+
+    return upgrade_badge(root, project, home_root)
+
+
 def collect_overview(home_root: str | Path | None = None) -> dict[str, Any]:
     """总览页: 每项目一张卡片(在途卡 / 待 Owner 项 / 信封 / 路线图摘要 / 接入完成度), 暂停项目标 paused(渲染折叠)。"""
     from tools.aipos_cli.envelope_board import board_envelope_url
@@ -499,6 +506,7 @@ def collect_overview(home_root: str | Path | None = None) -> dict[str, Any]:
                         "severe": sum(1 for s in view.get("signals") or [] if s.get("severity") == "inbox"),
                         "url": roadmap_url(decl, f.name)},
             "onboarding": {**onboarding_summary(rows), "url": page_url(decl, "onboarding") + f"#{f.name}"},
+            "upgrade": pending_badge(f.root, f.name, home["home_root"]),  # AIPOS-F176: project_upgrade.plan_upgrade (charter = recorded truth)
         })
     return {"decl": decl, "home_root": str(home["home_root"]), "projects": cards,
             "inbox_url": str(decl["nav_links"]["inbox"]), "paused": [c["project"] for c in cards if c["paused"]]}
@@ -513,7 +521,8 @@ def collect_onboarding(home_root: str | Path | None = None) -> dict[str, Any]:
         f = ProjectFacts(entry, home["home_root"])
         rows = onboarding_rows(f, decl)
         projects.append({"project": f.name, "index": entry["index"], "paused": entry["paused"], "governance_root": str(f.root),
-                         "rows": rows, "summary": onboarding_summary(rows), "advisors": f.tell_target()})
+                         "rows": rows, "summary": onboarding_summary(rows), "advisors": f.tell_target(),
+                         "upgrade": pending_badge(f.root, f.name, home["home_root"])})
     return {"decl": decl, "home_root": str(home["home_root"]), "projects": projects}
 
 
