@@ -52,7 +52,7 @@ from tools.aipos_cli.harness_launch import (  # AIPOS-F95: 拉起进程封装(�
     signals_raise_interrupt as _signals_raise_interrupt,
 )
 from tools.aipos_cli.verb_contract import declared_exit_code  # AIPOS-F101 件③: 退出码唯一读取口
-from tools.aipos_cli.loop_run_record import LoopRunRecorder, LoopRunRecordError  # AIPOS-F131: 运行记录 + 日志(唯一实现)
+from tools.aipos_cli.loop_run_record import LoopRunRecorder, LoopRunRecordError, model_label  # AIPOS-F169 model_label; AIPOS-F131: 运行记录 + 日志(唯一实现)
 from tools.aipos_cli.next_resolver import (
     DRIVER_ACTOR_MISSING,
     REPO_ROOT,
@@ -416,6 +416,7 @@ class LaunchPlan:
     kickoff: str = ""
     remote: dict[str, Any] = field(default_factory=dict)  # AIPOS-F110: transport=remote 时 {host, dir, identity_source}
     privilege_guard: dict[str, Any] = field(default_factory=dict)  # AIPOS-F165 件③: harness_launch.privilege_guard_state 判定
+    model: dict[str, Any] = field(default_factory=dict)  # AIPOS-F169: {model(None = 不传 --model), source, role}(pi_model_for_role 判定)
 
     def append_kickoff_note(self, note: str) -> None:
         """AIPOS-F162 件①: 开工提示后附一段(拒因补做); argv 中整参数 kickoff 同步替换(跨机 kickoff 经 stdin 读 self.kickoff)。"""
@@ -427,7 +428,8 @@ class LaunchPlan:
         return {"card": self.card, "harness": self.harness, "instance": self.instance, "launched": not self.refusal,
                 "refusal": self.refusal, "manual_hint": self.manual_hint if self.refusal else "",
                 "workstation": self.location.get("dir"), "host": self.location.get("host"),
-                "transport": self.location.get("transport"), "privilege_guard": dict(self.privilege_guard)}
+                "transport": self.location.get("transport"), "privilege_guard": dict(self.privilege_guard),
+                "model": dict(self.model) or None}
 
 
 def card_harness(task_fm: dict[str, Any]) -> str:
@@ -626,6 +628,17 @@ def plan_launch(governance_root: Path, card: str, *, policy: dict[str, Any] | No
         plan.privilege_guard = privilege_guard_state(decl, governance_root, plan.location.get("transport"))
     except (ValueError, OSError, SchemaLoadError) as exc:
         return refuse(f"拉起禁提权声明不可用(fail-closed, 不拉起): {exc}")
+    # AIPOS-F169: 模型参数唯一注入处(local 与 remote 同一 argv 模板)。声明 = project.json execution.pi_models(pi_model_for_role 唯一判定,
+    # 审计卡 = auditor, 其余 = executor); 未声明 = 不追加(pi 自身缺省); 声明不合 / 模板缺 model 声明 = 不拉起(fail-closed)
+    from tools.aipos_cli.harness_launch import model_launch_args
+    from tools.aipos_cli.workspace_config import pi_model_for_role
+
+    try:
+        plan.model = pi_model_for_role(governance_root, "auditor" if is_audit_card(card, fm) else "executor")
+        if plan.model["model"]:
+            argv_template = argv_template + model_launch_args(template, plan.harness, plan.model["model"])
+    except (ExecutionDeclarationError, ValueError, OSError, SchemaLoadError) as exc:
+        return refuse(f"pi 模型声明不可用(fail-closed, 不拉起): {exc}")
     if plan.location.get("transport") == "remote":
         return _plan_remote_launch(governance_root, plan, decl, argv_template, refuse)
     try:
@@ -776,6 +789,7 @@ def check_workstation(project_root: Path, instance: str, harness: str) -> dict[s
 
     checks: list[dict[str, Any]] = []
     guard: dict[str, Any] = {}  # AIPOS-F165 件③: 拉起禁提权状态(与 plan_launch 同一判定 harness_launch.privilege_guard_state)
+    model: dict[str, Any] = {}  # AIPOS-F169: 该工位下次拉起将用的模型与来源(与 plan_launch 同一判定 pi_model_for_role)
 
     def check(name: str, ok: bool, detail: str) -> bool:
         checks.append({"check": name, "ok": bool(ok), "detail": detail})
@@ -783,7 +797,7 @@ def check_workstation(project_root: Path, instance: str, harness: str) -> dict[s
 
     def report() -> dict[str, Any]:
         return {"ok": all(c["ok"] for c in checks), "instance": instance, "harness": harness, "checks": checks,
-                "privilege_guard": guard or None}
+                "privilege_guard": guard or None, "pi_model": model or None}
 
     try:
         # AIPOS-F146 件②: 身份与模式经 instance_enrollment 一处判定; 工位位置 = 其 workstation(workstation_location 同一读取口)
@@ -805,6 +819,8 @@ def check_workstation(project_root: Path, instance: str, harness: str) -> dict[s
                                            loc.get("transport") if loc.get("found") else None))
     except (ValueError, OSError, SchemaLoadError) as exc:  # 声明不合 = 拉起会被拒(plan_launch 同一判定)
         check("拉起禁提权声明", False, f"{exc}(loop 将拒拉起)")
+    if harness == "pi":
+        _check_pi_model(project_root, instance, loc, model, check, land_role=view.get("role"))
     if not check("land 事件位置", bool(loc.get("found")),
                  f"{loc.get('host') or '(本机, 存量缺 host)'}:{loc.get('dir')} transport={loc.get('transport')}" if loc.get("found")
                  else str(loc.get("reason"))):
@@ -850,6 +866,50 @@ def check_workstation(project_root: Path, instance: str, harness: str) -> dict[s
         reverse = remote_check_reverse(remote_decl, host, str(material["gate_ssh_alias"]), gov)
         check(f"工位→门机 ssh {material['gate_ssh_alias']}(治理根 {gov})", not reverse, reverse or "可达, 门机治理根在")
     return report()
+
+
+def _check_pi_model(project_root: Path, instance: str, loc: dict[str, Any], model: dict[str, Any],
+                    check: Callable[[str, bool, str], bool], *, land_role: Any = None) -> None:
+    """AIPOS-F169: check-workstation 的模型项——该工位下次拉起将用的模型与来源(pi_model_for_role, 与 plan_launch 同一判定;
+    角色 = 本实例是 execution.auditor → auditor / execution.pi_executor → executor, 未在声明中 = 接入 land 事件 role, 再缺 = executor)。
+    只在出问题时记 ✗ 项(声明不合 = loop 将拒拉起; 本机工位声明的模型不在 pi 已配置清单 / 清单取不到 = 拉起后 pi 会失败),
+    正常时只填 model(CLI 单独一行显示, 不增检查项)。"""
+    from tools.aipos_cli.harness_launch import harness_model_catalog, near_models
+    from tools.aipos_cli.workspace_config import (
+        ExecutionDeclarationError,
+        pi_model_for_role,
+        pi_models_declaration,
+        project_execution,
+    )
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        execution = project_execution(project_root) or {}
+        roles = pi_models_declaration()["roles"]
+        role = ("auditor" if execution.get("auditor") == instance else "executor" if execution.get("pi_executor") == instance
+                else str(land_role) if land_role in roles else "executor")
+        model.update(pi_model_for_role(project_root, role))
+    except (ExecutionDeclarationError, ValueError, OSError, SchemaLoadError) as exc:
+        check("pi 模型声明", False, f"{exc}(loop 将拒拉起)")
+        return
+    if not model["model"]:
+        return
+    if loc.get("found") and loc.get("transport") == "remote":
+        model["availability"] = "跨机工位: 本机不核该机 pi 配置(在工位所在机 pi --list-models 核)"
+        return
+    try:
+        catalog = harness_model_catalog("pi")
+    except (ValueError, SchemaLoadError) as exc:
+        check("pi 模型可用", False, f"模型清单声明不可用: {exc}")
+        return
+    if not catalog["ok"]:
+        check("pi 模型可用", False, f"{model['model']}: 本机 pi 已配置模型清单取不到({catalog['detail']})")
+    elif model["model"] not in catalog["models"]:
+        near = near_models(model["model"], catalog["models"], int(pi_models_declaration()["near_match_limit"]))
+        check("pi 模型可用", False, f"{model['model']} 不在本机 pi 已配置模型中({catalog['detail']}); 相近可用模型: {', '.join(near) or '(无)'}"
+                                  "; 改声明: lybra project set-model")
+    else:
+        model["availability"] = f"在本机 pi 已配置模型中({catalog['detail']})"
 
 
 def _session_event(governance_root: Path, card: str, actor: str, label: str, detail: str) -> str:
@@ -901,14 +961,16 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
             step.launch = {**(step.launch or {}), "pid": harness.pid, "pgid": harness.pgid, "remote_pgid": harness.remote_pgid}
             remote_part = f" remote_pgid={harness.remote_pgid}(经 ssh, kickoff 经 stdin)" if plan.remote else ""
             say(f"[{index}] launch: {plan.harness} @ {where} pid={harness.pid} pgid={harness.pgid}{remote_part}(信封 {envelope_id} launch_harnesses 授权; "
-                f"kickoff = 工位 my-tasks --task-id {plan.card} next_card.kickoff; 禁提权 {harness.privilege_guard['state']}: {harness.privilege_guard['detail']})")
+                f"kickoff = 工位 my-tasks --task-id {plan.card} next_card.kickoff; 禁提权 {harness.privilege_guard['state']}: {harness.privilege_guard['detail']}; "
+                f"模型 {model_label(plan.model)})")
             recorder.launch_started(plan, harness)
             if early:
                 raise LoopInterrupted(early[0])
             failure = _session_event(governance_root, plan.card, actor, "harness_launch",
                                      f"harness={plan.harness}; transport={plan.location.get('transport')}; host={plan.location.get('host') or '(本机, 存量缺 host)'}; "
                                      f"workstation={plan.cwd}; pid={harness.pid}; pgid={harness.pgid}; remote_pgid={harness.remote_pgid}; envelope={envelope_id}; "
-                                     f"privilege_guard={harness.privilege_guard['state']}({harness.privilege_guard['detail']})")
+                                     f"privilege_guard={harness.privilege_guard['state']}({harness.privilege_guard['detail']}); "
+                                     f"model={(plan.model or {}).get('model') or '(未传, pi 缺省)'}({(plan.model or {}).get('source')})")
             if failure:
                 outcome = "record_failed"
                 step.ok, step.message = False, f"拉起事件写不进 {plan.card} session record({failure}), 已终止进程组; 拉起须留痕(fail-closed)"

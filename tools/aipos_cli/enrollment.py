@@ -879,6 +879,10 @@ def set_project_execution(
     staged: dict[str, Any] = {}
 
     def _mutate(data: dict[str, Any]) -> None:
+        previous = data.get("execution")
+        # AIPOS-F169: pi_models 由同族 set-model 管, 整段重声明执行方式时原样保留(不随 set-execution 清掉 Owner 选定的模型)
+        if isinstance(previous, dict) and previous.get("pi_models") is not None:
+            section["pi_models"] = previous["pi_models"]
         data["execution"] = section
         staged["view"] = project_execution(project_root, project=data)  # 形不合 = 抛, 零写入
 
@@ -889,6 +893,112 @@ def set_project_execution(
         raise ExecutionDeclarationError("EXECUTION_INSTANCE_NOT_ENROLLED", refusals)
     outcome = update_project_json(project_root, _mutate, verify=project_execution, dry_run=dry_run)
     return {**outcome, "project_json": str(project_json_path(project_root)), "execution": staged.get("view") or view}
+
+
+def _pi_model_affected(project_root: str | Path, execution: dict[str, Any], roles: list[str],
+                       before: dict[str, Any], after: dict[str, Any]) -> list[dict[str, Any]]:
+    """AIPOS-F169: set-model 影响的工位(按角色: auditor = execution.auditor, executor = execution.pi_executor)与下次拉起的模型变化。
+    位置只经 workstation_location(拉起 / check-workstation 同一读取口, 只读本项目 enrollment_log 位置事件); 读不出 = 如实写入条目(不吞)。"""
+    from tools.aipos_cli.workspace_config import pi_model_for_role
+
+    out: list[dict[str, Any]] = []
+    for role in roles:
+        instance = execution.get("auditor") if role == "auditor" else execution.get("pi_executor")
+        entry: dict[str, Any] = {"role": role, "instance": instance,
+                                 "before": pi_model_for_role(project_root, role, project=before),
+                                 "after": pi_model_for_role(project_root, role, project=after)}
+        if not instance:
+            entry["note"] = "未声明 pi 执行工位(execution.pi_executor): 执行类卡由子 agent 做, 本声明暂不影响任何拉起"
+        else:
+            try:
+                loc = workstation_location(project_root, instance)  # 只读位置事件(不读连接文件)
+            except (ValueError, OSError) as exc:
+                loc = {"found": False, "reason": f"工位位置读不出: {exc}"}
+            entry["workstation"] = {k: loc.get(k) for k in ("found", "host", "dir", "transport", "reason")}
+            if loc.get("transport") == "remote":
+                entry["note"] = "跨机工位: 可用性按本机 pi 清单核, 工位所在机的 pi 配置未核(在该机 pi --list-models 核)"
+        out.append(entry)
+    return out
+
+
+def set_project_pi_model(
+    project_root: str | Path,
+    *,
+    model: str,
+    owner_ref: str,
+    role: str | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """AIPOS-F169: `lybra project set-model` 的唯一实现——只写 project.json execution.pi_models(role 缺 = default, 给 = by_role.<角色>;
+    owner_ref = 本次切换的 Owner 指示摘要或决定记录), execution 其余键原样保留。写前: 须已声明 execution 段(PI_MODEL_EXECUTION_UNDECLARED);
+    模型须在本机 pi 已配置模型中(harness_launch.harness_model_catalog 唯一实现; 不在 = PI_MODEL_NOT_CONFIGURED 并列相近可用模型,
+    核不了 = PI_MODEL_CATALOG_UNAVAILABLE)。校验 = project_execution(写前预检 + 写后复核, 经 update_project_json verify)。
+    dry_run(缺省)= 只预演 diff 与影响工位, 零写入。返回 {project_json, dry_run, changed, written, diff, pi_models, model, role,
+    target_key, catalog, affected, effect_note}。"""
+    import copy
+
+    from tools.aipos_cli.harness_launch import harness_model_catalog, near_models
+    from tools.schema_loader import SchemaLoadError
+    from tools.aipos_cli.workspace_config import (
+        ExecutionDeclarationError,
+        pi_model_id_problem,
+        pi_models_declaration,
+        project_execution,
+        project_json_path,
+        project_pi_models,
+        read_project_json,
+        update_project_json,
+    )
+
+    decl = pi_models_declaration()
+    model = str(model or "").strip()
+    if not str(owner_ref or "").strip():
+        raise ExecutionDeclarationError("PI_MODEL_OWNER_REF_REQUIRED", ["--owner-ref 须给 Owner 指示摘要或决定记录(非空)"])
+    if role is not None and role not in decl["roles"]:
+        raise ExecutionDeclarationError("EXECUTION_DECLARATION_INVALID", [f"--role {role!r} 不在 {decl['roles']}"])
+    problem = pi_model_id_problem(model)
+    if problem:
+        raise ExecutionDeclarationError("EXECUTION_DECLARATION_INVALID", [problem])
+    before = read_project_json(project_root)
+    execution = project_execution(project_root, project=before)  # 现有段形不合 = 抛(先修声明)
+    if execution is None:
+        raise ExecutionDeclarationError("PI_MODEL_EXECUTION_UNDECLARED", [
+            f"{project_json_path(project_root)} 无 execution 段; 先 lybra project set-execution 声明执行方式"])
+    try:
+        catalog = harness_model_catalog("pi")
+    except (ValueError, SchemaLoadError) as exc:  # 清单声明不可用 = 核不了(fail-closed)
+        catalog = {"ok": False, "detail": f"模型清单声明不可用: {exc}"}
+    if not catalog["ok"]:
+        raise ExecutionDeclarationError("PI_MODEL_CATALOG_UNAVAILABLE", [catalog["detail"]])
+    if model not in catalog["models"]:
+        near = near_models(model, catalog["models"], int(decl["near_match_limit"]))
+        raise ExecutionDeclarationError("PI_MODEL_NOT_CONFIGURED", [
+            f"{model} 不在本机 pi 已配置模型中({catalog['detail']})",
+            f"相近可用模型: {', '.join(near)}" if near else f"无相近模型; 已配置: {', '.join(catalog['models'])}"])
+    target_key = f"by_role.{role}" if role else "default"
+    staged: dict[str, Any] = {}
+
+    def _mutate(data: dict[str, Any]) -> None:
+        section = data["execution"]
+        current = section.get("pi_models")
+        pm = dict(current) if isinstance(current, dict) else {}
+        by_role = pm.get("by_role") or {}
+        by_role = dict(by_role) if isinstance(by_role, dict) else by_role  # 形不合 = 原样留给 verify 报 EXECUTION_DECLARATION_INVALID
+        if role and isinstance(by_role, dict):
+            by_role[role] = model
+        elif not role:
+            pm["default"] = model
+        pm["by_role"] = by_role
+        pm["owner_ref"] = str(owner_ref).strip()
+        section["pi_models"] = pm
+        staged["after"] = copy.deepcopy(data)
+
+    outcome = update_project_json(project_root, _mutate, verify=project_execution, dry_run=dry_run)
+    after = staged["after"]
+    roles = [role] if role else list(decl["roles"])
+    return {**outcome, "project_json": str(project_json_path(project_root)), "pi_models": project_pi_models(project_root, project=after),
+            "model": model, "role": role, "target_key": target_key, "catalog": {k: catalog[k] for k in ("command", "detail")},
+            "affected": _pi_model_affected(project_root, execution, roles, before, after), "effect_note": str(decl["effect_note"])}
 
 
 def _append_enrollment_trail(

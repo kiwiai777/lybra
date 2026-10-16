@@ -33,6 +33,7 @@
         "set-workstation",
         "set-meta",
         "set-execution",
+        "set-model",
         "set-return-summary"
       ],
       "default_phase": "dry_run",
@@ -2149,6 +2150,7 @@
             "remote": "跨机工位: 门机经 ssh 拉起, 远端进程不施加 no_new_privs(远端机制未实现)"
           }
         },
+        "model": "AIPOS-F169: 拉起 pi 的模型。声明 = project.json execution.pi_models(config.schema; 唯一读取口 workspace_config.pi_model_for_role: by_role.<角色> > default > 未声明), 角色 = 等待目标卡是审计卡(audit_derivation.is_audit_card)→ auditor, 其余 → executor。声明了 = 唯一拉起口 loop_driver.plan_launch 在 enums.schema harness.launch.argv 模板后追加 harness.launch.model.argv(--model <provider>/<id>; local 与 remote 同一模板); 未声明 = 不追加(沿用 pi 自身缺省, 行为不变); 声明不合 / harness 模板缺 model 声明而本项目声明了模型 = 不拉起(fail-closed, 退回手工)。实际传入值记入拉起 session 事件(model=)、运行记录 launches[].model {model, source, role}(model=null = 未传, pi 缺省)与 `lybra loop status` 拉起行(模型 …); `lybra project check-workstation` 显示该工位将用的模型与来源。切换 = `lybra project set-model`(下次拉起生效, 在途进程不受影响)。",
         "manual_hint": {
           "local": "请在 {dir} 的 {harness} 会话敲 /go",
           "remote": "请在 {host}:{dir} 的 {harness} 会话敲 /go(跨机工位)",
@@ -2191,6 +2193,7 @@
         "record_type": "loop_run",
         "log_record_type": "loop_run_log",
         "charter_checks": "AIPOS-F164 件②(gap #149): 每次拉起前章程判定(loop_driver._charter_before_launch)追加一条 charter_checks {card, instance, workstation, outcome, repair_command, detail(经 redact_progress), at}: outcome = fresh(章程最新, 不 sync 直接拉起)/ synced(不新鲜 → 自动 sync 本工位后复核最新, 再拉起)/ sync_failed(自动 sync 失败, 不拉起, 结束原因 charter_sync_failed)/ refused(project.json charter_auto_sync=false, 不拉起, 结束原因 charter_not_fresh)/ not_applicable(跨机工位, 门机不核); 同时 loop 输出(即日志)一行 `[轮] charter: …`。判定 = distribution_sync.charter_freshness(`lybra sync --dry-run` 同一实现), 修复 = distribution_sync.sync_workstation_charter(`lybra sync` 同一实现)。无拉起的运行不出现本键(存量记录形不变)。",
+        "launch_model": "AIPOS-F169: 每次拉起 launches[] 另记 model {model: 实际传入 --model 的 <provider>/<id> 或 null(未声明, pi 缺省), source: 声明来源(execution.pi_models.by_role.<角色> / execution.pi_models.default / pi 缺省), role: executor | auditor}; 无此键的存量记录 = F169 前(未传 --model)。lybra loop status 拉起行显示「模型 <值或 pi 缺省>」。",
         "activity_flush_seconds": 5,
         "activity_flush_note": "拉起进程活动写入节流: 每拉起首条活动立即写, 之后每本秒数至多写一次(等待期 sleeper 每轮调 flush, 静默期也把最后一条落盘); 步骤开始/落定、拉起开始/收尾、结束一律立即写",
         "stall_after_seconds": 900,
@@ -2910,7 +2913,7 @@
           },
           "project_writers": {
             "cli": "lybra project <subcommand> --confirm",
-            "subcommands": ["set-paths", "set-repo", "set-repos", "set-workstation", "set-meta", "set-execution", "set-return-summary", "freeze-legacy", "dispatch-mode set", "relocate-workstation"],
+            "subcommands": ["set-paths", "set-repo", "set-repos", "set-workstation", "set-meta", "set-execution", "set-model", "set-return-summary", "freeze-legacy", "dispatch-mode set", "relocate-workstation"],
             "scope": "AIPOS-F159 件①(gap #144): 写 project.json 的 project 族命令 --confirm 成功后的写出文件(治理根相对): two_phase_protocol.project_json_writers 各命令 = project.json(--confirm 即落, 无改动亦经同一提交口核一次: 范围已落账 = PASS no-op, 前次写后未落账者随之补落); freeze-legacy = 本次追加的清单条目 + 本次补声明 legacy_baseline 时的 project.json(本批无卡可冻 = 无写出, 不落); dispatch-mode set = project.json + 切换留痕文件。AIPOS-F161: relocate-workstation = 本项目 enrollment_log(追加的 relocate 位置事件; 唯一写出, 工位目录在治理仓外不入)。提交身份 = 该命令 --actor(dispatch-mode set 为 --by; 未给 = $USER 或 owner, 与 set-repo / project new 同一缺省)。--dry-run 零写入、不落账。唯一落账点: 写 project.json 的两阶段命令经输出包装 aipos_cli._project_json_two_phase_emit, freeze-legacy / dispatch-mode set 经同一薄壳 aipos_cli._land_project_writes(→ land_written_paths)。不含 project new / import(建治理根本身, 治理根此时可能尚未入治理仓; 向导第 1 步照旧给 governance-commit 与 home git-init)。",
             "message_template": "chore(governance): 项目配置落账 {subcommand} {project}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra project {subcommand} --confirm"
           }

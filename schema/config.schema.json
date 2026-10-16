@@ -468,7 +468,7 @@
         "execution": {
           "type": "object",
           "required": false,
-          "description": "AIPOS-F143 件②(Owner 10-10 定执行方式): 项目执行方式声明。缺省执行类工作(代码/配置等)由顾问派子 agent 做(执行身份 = 本项目「子 agent 执行者」实例 subagent_executor, 其 harness = 该实例子 agent 模式接入登记记下的顾问会话 kind); Owner 明示后, pi_allowed_task_modes 列明的 task_mode 可派 pi 执行工位 pi_executor(loop 自动拉起); 审计恒为独立 pi 审计工位 auditor。缺段 = 未声明, 行为不变(起草不补执行者/审计者, harness 照 card.schema intent_face.harness.default_by_task_mode)。读取方: 起草缺省(draft_writer.create_draft 经 apply_execution_defaults)与发卡核身份(draft_writer.publish_identity_refusals)同读唯一读取口 workspace_config.project_execution; 唯一写入口 `lybra project set-execution [项目] --subagent-executor <实例> --auditor <实例> [--pi-executor <实例> --pi-allowed-task-mode <task_mode>…] [--dry-run|--confirm]`(enrollment.set_project_execution, 经 workspace_config.update_project_json 唯一写路径; 整段声明, 未给的可选键 = 缺省值)。写前核身份: 各实例须为本项目已接入实例(enrollment.instance_enrollment, 与发卡核身份同一判定), 审计者与 pi 执行者须有工位位置(enrollment.workstation_location)。",
+          "description": "AIPOS-F143 件②(Owner 10-10 定执行方式): 项目执行方式声明。缺省执行类工作(代码/配置等)由顾问派子 agent 做(执行身份 = 本项目「子 agent 执行者」实例 subagent_executor, 其 harness = 该实例子 agent 模式接入登记记下的顾问会话 kind); Owner 明示后, pi_allowed_task_modes 列明的 task_mode 可派 pi 执行工位 pi_executor(loop 自动拉起); 审计恒为独立 pi 审计工位 auditor。缺段 = 未声明, 行为不变(起草不补执行者/审计者, harness 照 card.schema intent_face.harness.default_by_task_mode)。读取方: 起草缺省(draft_writer.create_draft 经 apply_execution_defaults)与发卡核身份(draft_writer.publish_identity_refusals)同读唯一读取口 workspace_config.project_execution; 唯一写入口 `lybra project set-execution [项目] --subagent-executor <实例> --auditor <实例> [--pi-executor <实例> --pi-allowed-task-mode <task_mode>…] [--dry-run|--confirm]`(enrollment.set_project_execution, 经 workspace_config.update_project_json 唯一写路径; 整段声明, 未给的可选键 = 缺省值; AIPOS-F169: pi_models 由同族 `lybra project set-model` 管, set-execution 原样保留)。写前核身份: 各实例须为本项目已接入实例(enrollment.instance_enrollment, 与发卡核身份同一判定), 审计者与 pi 执行者须有工位位置(enrollment.workstation_location)。",
           "schema": {
             "default_mode": {
               "type": "string",
@@ -504,10 +504,30 @@
               "type": "string",
               "required": true,
               "description": "独立 pi 审计工位实例名(审计恒为独立 pi, 不随执行方式变化); 须为本项目已接入且有工位位置的实例, 且不等于 subagent_executor / pi_executor。起草缺省 audit_by。"
+            },
+            "pi_models": {
+              "type": "object",
+              "required": false,
+              "default": null,
+              "nullable": true,
+              "description": "AIPOS-F169(Owner 10-16): loop 拉起的 pi 执行体 / 审计体用哪个模型——本项目唯一声明处。缺键 = 未声明: 拉起不传 --model, 沿用 pi 自身缺省(pi 全局 defaultModel, 现为 kiwiai/qwen3.7-plus; 行为不变)。形: {\"default\": \"<provider>/<id>\" | null, \"by_role\": {\"executor\": \"<provider>/<id>\", \"auditor\": \"<provider>/<id>\"}, \"owner_ref\": \"<最近一次切换的 Owner 指示摘要或决定记录>\"}; 取用 = by_role.<角色> > default > pi 缺省(角色: 审计卡 = auditor, 其余 = executor)。模型标识 = pi `--list-models` 所列 <provider>/<model>(enums.schema harness pi launch.model.id_template)。唯一读取口 workspace_config.project_pi_models / pi_model_for_role(loop 拉起 plan_launch 追加 enums.schema harness.launch.model.argv、`lybra project check-workstation` 显示模型与来源、运行记录 launches[].model 同读); 唯一写入口 `lybra project set-model [项目] [--role auditor|executor] --model <provider>/<id> --owner-ref <Owner 指示摘要或决定记录> [--dry-run|--confirm]`(enrollment.set_project_pi_model, 经 update_project_json 唯一写路径; 两阶段与写后落账同 set-execution 族: verbs.schema two_phase_protocol.project_json_writers + lybra_governance_commit.post_write_landing.project_writers)。写前核模型在 pi 已配置模型中(唯一实现 harness_launch.harness_model_catalog = `pi --list-models`; 不在 = PI_MODEL_NOT_CONFIGURED 并列相近可用模型; 核不了 = PI_MODEL_CATALOG_UNAVAILABLE); 只改本键, set-execution 重声明时原样保留本键。生效: 下次拉起; 在途已拉起的进程不受影响(effect_note)。",
+              "schema": {
+                "default": {"type": "string", "required": false, "nullable": true, "description": "项目缺省 pi 模型 <provider>/<id>(null = pi 自身缺省)"},
+                "by_role": {"type": "object", "required": false, "default": {}, "keys": ["executor", "auditor"], "description": "按角色覆盖(值 <provider>/<id>), 优先于 default"},
+                "owner_ref": {"type": "string", "required": false, "description": "最近一次切换的 Owner 指示摘要或决定记录(非空单行串, 禁含凭据字样); set-model 必给"}
+              },
+              "roles": ["executor", "auditor"],
+              "pi_default_label": "pi 缺省(未声明 execution.pi_models, 不传 --model; 由 pi 自身配置定)",
+              "effect_note": "下次 loop 拉起该角色 pi 时生效; 在途已拉起的进程不受影响(进程带的是它启动时的模型), 不重启在途进程",
+              "near_match_limit": 5
             }
           },
           "reject_codes": {
-            "EXECUTION_DECLARATION_INVALID": "execution 段形不合(非对象 / 未知键 / 必填键缺 / 值非非空单行串 / default_mode 或 task_mode 不在值域 / pi_allowed_task_modes 非空而缺 pi_executor / 审计者与执行者同一实例)",
+            "EXECUTION_DECLARATION_INVALID": "execution 段形不合(非对象 / 未知键 / 必填键缺 / 值非非空单行串 / default_mode 或 task_mode 不在值域 / pi_allowed_task_modes 非空而缺 pi_executor / 审计者与执行者同一实例 / pi_models 形不合: 非对象 / 未知键 / 模型非 <provider>/<id> 单行串 / by_role 键不在 roles / owner_ref 非非空单行串或含凭据字样)",
+            "PI_MODEL_EXECUTION_UNDECLARED": "set-model: 本项目未声明 execution 段(模型声明只在 execution 段一处); 出口: 先 lybra project set-execution 声明执行方式, 再 set-model",
+            "PI_MODEL_NOT_CONFIGURED": "set-model: 模型不在本机 pi 已配置模型中(`pi --list-models`); 出口: 从列出的相近可用模型中选, 或先在 pi 配置该模型(Owner 决定)",
+            "PI_MODEL_CATALOG_UNAVAILABLE": "set-model: 本机 pi 已配置模型清单取不到(pi 不在 PATH / 超时 / 非零退出 / 输出无表头); 核不了不写(fail-closed)",
+            "PI_MODEL_OWNER_REF_REQUIRED": "set-model: 缺 --owner-ref(Owner 指示摘要或决定记录); 切换模型须可追溯到 Owner 指示",
             "EXECUTION_INSTANCE_NOT_ENROLLED": "声明的实例不是本项目已接入实例(或审计者 / pi 执行者无工位位置); 出口: 先按 lybra onboarding guide 接入该实例(子 agent 执行者: --executor-mode subagent), 再声明",
             "EXECUTION_PI_NOT_ALLOWED": "卡要派 pi 执行工位, 但其 task_mode 不在 execution.pi_allowed_task_modes(Owner 未明示)或未声明 pi_executor; 出口: 去掉 harness=pi 按缺省派子 agent, 或请 Owner 明示后 lybra project set-execution 追加 --pi-allowed-task-mode"
           }

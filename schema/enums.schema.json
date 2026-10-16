@@ -564,7 +564,7 @@
       ]
     },
     "harness": {
-      "description": "AIPOS-F78 件①: 执行引擎(harness)声明值域。card.schema fields.harness $enum; 缺省由 task_mode 派生(card.schema intent_face.harness.default_by_task_mode)。新 harness = 加一值 + 一个渲染模板, 零代码改动。AIPOS-F95 件②(a): 每值带 launch = lybra loop 在 Owner 信封授权(launch_harnesses)下拉起该 harness 的声明模板——argv 为参数数组(无 shell), 占位仅 {kickoff}(= 工位 `my-tasks --task-id <等待目标卡>` 的 next_card.kickoff 原文, 与工位 `/go <卡号>` 发送文本逐字节相同; AIPOS-F111: 按卡号取, 不要求该卡是工位选卡结果), cwd = 工位目录(enrollment_log land 事件), 模型由工位自身配置定(模板不写模型); events = stdout 事件流格式(loop 按此汇总一行式进度, 未知格式只计数); launch=null = 只支持手工(工位敲 /go)。新 harness = 加一值 + 一模板, 零代码",
+      "description": "AIPOS-F78 件①: 执行引擎(harness)声明值域。card.schema fields.harness $enum; 缺省由 task_mode 派生(card.schema intent_face.harness.default_by_task_mode)。新 harness = 加一值 + 一个渲染模板, 零代码改动。AIPOS-F95 件②(a): 每值带 launch = lybra loop 在 Owner 信封授权(launch_harnesses)下拉起该 harness 的声明模板——argv 为参数数组(无 shell), 占位仅 {kickoff}(= 工位 `my-tasks --task-id <等待目标卡>` 的 next_card.kickoff 原文, 与工位 `/go <卡号>` 发送文本逐字节相同; AIPOS-F111: 按卡号取, 不要求该卡是工位选卡结果), cwd = 工位目录(enrollment_log land 事件), 模型缺省由工位自身配置定(模板不写模型; AIPOS-F169: project.json execution.pi_models 声明后由 loop 按 launch.model.argv 追加 --model); events = stdout 事件流格式(loop 按此汇总一行式进度, 未知格式只计数); launch=null = 只支持手工(工位敲 /go)。新 harness = 加一值 + 一模板, 零代码",
       "values": [
         {
           "value": "pi",
@@ -572,7 +572,15 @@
           "launch": {
             "argv": ["pi", "-p", "{kickoff}", "--mode", "json"],
             "events": "pi-json",
-            "note": "pi 非交互 -p + JSON 事件流(--mode json, 事件格式见 pi 安装包 docs/json.md); 不加 --no-session(会话文件是 F85/F90 报告模型字段的来源)"
+            "note": "pi 非交互 -p + JSON 事件流(--mode json, 事件格式见 pi 安装包 docs/json.md); 不加 --no-session(会话文件是 F85/F90 报告模型字段的来源)",
+            "model": {
+              "description": "AIPOS-F169: pi 模型参数与已配置模型清单的唯一声明。拉起: project.json execution.pi_models 声明了本次角色(审计卡 = auditor, 其余 = executor; by_role 覆盖 default)的模型时, loop 唯一拉起口(loop_driver.plan_launch)在上方 argv 模板后追加本 argv({model} = 声明值 <provider>/<id>, 整参数替换); 未声明 = 不追加(沿用 pi 自身缺省, 行为不变)。可用性核查唯一实现 harness_launch.harness_model_catalog: 执行 [argv[0], *list_args](只列已配置模型, 不发请求), 输出首行为表头(首列 = list_header_first_column), 其后每行前两列 = provider / model, 模型标识 = id_template; 超时 / 非零退出 / 无表头 = 核不了(set-model 拒, 不当可用)。",
+              "argv": ["--model", "{model}"],
+              "list_args": ["--list-models"],
+              "list_timeout_seconds": 60,
+              "list_header_first_column": "provider",
+              "id_template": "{provider}/{model}"
+            }
           }
         },
         {

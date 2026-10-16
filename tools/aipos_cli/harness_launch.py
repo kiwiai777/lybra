@@ -340,6 +340,101 @@ def _no_new_privs_preexec(func: Any) -> Callable[[], None]:
     return _apply
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F169: harness 模型参数与已配置模型清单。声明 enums.schema harness.<值>.launch.model; 拉起追加参数唯一处 = loop_driver.plan_launch
+# (经 model_launch_args), 可用性核查唯一实现 = harness_model_catalog(`pi --list-models`; set-model 与 check-workstation 同读)。
+# ---------------------------------------------------------------------------
+
+_MODEL_KEYS = ("argv", "list_args", "list_timeout_seconds", "list_header_first_column", "id_template")
+
+
+def model_declaration(template: dict[str, Any] | None, harness: str) -> dict[str, Any]:
+    """enums.schema harness.<harness>.launch.model。缺 / 形不合 = ValueError(fail-closed)。"""
+    decl = template.get("model") if isinstance(template, dict) else None
+    if not isinstance(decl, dict) or any(k not in decl for k in _MODEL_KEYS):
+        raise ValueError(f"enums.schema.json harness {harness} launch.model 未声明齐 {list(_MODEL_KEYS)}")
+    argv, args = decl["argv"], decl["list_args"]
+    if (not isinstance(argv, list) or argv.count("{model}") != 1 or not all(isinstance(a, str) and a for a in argv)
+            or any("{" in a and a != "{model}" for a in argv)):
+        raise ValueError(f"harness {harness} launch.model.argv 须为串数组且含且仅含一个整参数 {{model}}: {argv!r}")
+    if not isinstance(args, list) or not args or not all(isinstance(a, str) and a for a in args):
+        raise ValueError(f"harness {harness} launch.model.list_args 须为非空串数组: {args!r}")
+    if "{provider}" not in str(decl["id_template"]) or "{model}" not in str(decl["id_template"]):
+        raise ValueError(f"harness {harness} launch.model.id_template 须含 {{provider}} 与 {{model}}: {decl['id_template']!r}")
+    return decl
+
+
+def model_launch_args(template: dict[str, Any] | None, harness: str, model: str) -> list[str]:
+    """声明的模型 → 追加到拉起 argv 模板后的参数(launch.model.argv, {model} 整参数替换)。"""
+    return [model if a == "{model}" else a for a in model_declaration(template, harness)["argv"]]
+
+
+def harness_model_catalog(harness: str) -> dict[str, Any]:
+    """本机该 harness 已配置的模型清单(唯一实现): 执行 [launch.argv[0], *launch.model.list_args](pi = `pi --list-models`, 只列不发请求),
+    首个首列 = list_header_first_column 的行为表头, 其后每行前两列 → id_template。
+    返回 {ok, models, command, detail}; 可执行不在 PATH / 超时 / 非零退出 / 无表头 = ok False(调用方按核不了处置, 不当可用)。"""
+    import shutil
+    import subprocess
+
+    from tools.aipos_cli.autonomy_policy import launchable_harnesses
+
+    template = launchable_harnesses().get(harness)
+    decl = model_declaration(template, harness)
+    exe = str(template["argv"][0]) if isinstance(template.get("argv"), list) and template["argv"] else ""
+    command = [exe, *[str(a) for a in decl["list_args"]]]
+
+    def fail(detail: str) -> dict[str, Any]:
+        return {"ok": False, "models": [], "command": command, "detail": detail}
+
+    if not exe or not shutil.which(exe):
+        return fail(f"{exe or '(harness 可执行未声明)'} 不在本机 PATH")
+    timeout = float(decl["list_timeout_seconds"])
+    try:
+        proc = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return fail(f"`{' '.join(command)}` 超时({timeout:g}s)")
+    except OSError as exc:
+        return fail(f"`{' '.join(command)}` 起不来: {type(exc).__name__}: {exc}")
+    if proc.returncode != 0:
+        tail = [redact_progress(ln)[:300] for ln in (proc.stderr or "").strip().splitlines()[-3:]]
+        return fail(f"`{' '.join(command)}` exit {proc.returncode}: {' | '.join(tail) or '(无 stderr)'}")
+    header = str(decl["list_header_first_column"])
+    models: list[str] = []
+    seen_header = False
+    for line in (proc.stdout or "").splitlines():
+        cols = line.split()
+        if not cols:
+            continue
+        if not seen_header:
+            seen_header = cols[0] == header
+            continue
+        if len(cols) >= 2:
+            ident = str(decl["id_template"]).replace("{provider}", cols[0]).replace("{model}", cols[1])
+            if ident not in models:
+                models.append(ident)
+    if not seen_header:
+        return fail(f"`{' '.join(command)}` 输出无表头(首列 {header}), 无从解析")
+    return {"ok": True, "models": models, "command": command, "detail": f"`{' '.join(command)}` 列出 {len(models)} 个已配置模型"}
+
+
+def near_models(model: str, models: list[str], limit: int) -> list[str]:
+    """不在清单的模型 → 相近可用模型(至多 limit 个): 同 id 不同 provider / 互为子串 优先, 再按 difflib 相似度。"""
+    import difflib
+
+    want = str(model).strip().lower()
+    want_id = want.partition("/")[2] or want
+    picked: list[str] = []
+    for cand in models:
+        cid = cand.lower().partition("/")[2]
+        if cid == want_id or want_id in cid or (cid and cid in want_id):
+            picked.append(cand)
+    lowered = {c.lower(): c for c in models}
+    for close in difflib.get_close_matches(want, list(lowered), n=limit, cutoff=0.6):
+        if lowered[close] not in picked:
+            picked.append(lowered[close])
+    return picked[:limit]
+
+
 class LaunchedHarness:
     """一次拉起的 harness 进程(新进程组、无 shell)。pump = 注入 watch 的 sleeper(select 阻塞读输出, 非自旋)。
 
