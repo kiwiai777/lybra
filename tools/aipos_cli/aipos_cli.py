@@ -1679,6 +1679,50 @@ def _project_json_two_phase_emit(command: str, target: dict[str, Any], outcome: 
     return rc
 
 
+def _project_upgrade_cli(args: argparse.Namespace, home: Path | None) -> int:
+    """AIPOS-F176 件①③: `lybra project upgrade` 薄壳——目标项目解析 = project 族同一实现(_project_write_target); 预演 / 确认 / 引导全部在
+    project_upgrade(plan_upgrade / run_upgrade / derive_guidance + 同一文本渲染)。--confirm 缺 --actor 或与 --guidance 同用 = 用法错(零写入)。"""
+    from tools.aipos_cli import project_upgrade as pu
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        codes = {k: int(v["code"]) for k, v in pu.upgrade_declaration()["exit_codes"].items()}
+    except SchemaLoadError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    if args.confirm and args.guidance:
+        print("Error: --guidance 只读, 不与 --confirm 同用; 未写入", file=sys.stderr)
+        return codes["usage"]
+    if args.confirm and not str(args.actor or "").strip():
+        print("Error: --confirm 须给 --actor(各步落账提交身份: 实例名或 owner); 未写入", file=sys.stderr)
+        return codes["usage"]
+    target = _project_write_target(args, home, args.name)
+    if target is None:
+        return codes["refused"]
+    root, project = Path(target["project_root"]), str(target["project"])
+    source = str(target["source"])
+    try:
+        if args.guidance:
+            guidance = pu.derive_guidance(root, project=project, home_root=home)
+            print(render_json(guidance) if args.json else "\n".join(pu.render_guidance_lines(guidance)))
+            return codes["ok"]
+        if not args.confirm:
+            plan = pu.plan_upgrade(root, project=project, home_root=home)
+            print(render_json({"target_source": source, **pu.plan_view(plan)}) if args.json
+                  else "\n".join(pu.render_plan_lines(plan, source=source)))
+            return codes["ok"]
+        run = pu.run_upgrade(root, project=project, actor=str(args.actor), home_root=home)
+    except (SchemaLoadError, pu.UpgradeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return codes["refused"]
+    if args.json:
+        print(render_json({"target_source": source, **run}))
+    else:
+        lines = pu.render_run_lines(run, source=source)
+        print("\n".join(lines), file=sys.stdout if run["stopped_at"] is None else sys.stderr)
+    return int(run["exit_code"])
+
+
 def _render_pi_model_affected(entry: dict[str, Any]) -> str:
     """AIPOS-F169: set-model 预演/写入的一行影响工位(角色 / 实例 / 位置 / 下次拉起模型变化)。"""
     from tools.aipos_cli.loop_run_record import model_label
@@ -2522,6 +2566,15 @@ def build_parser() -> argparse.ArgumentParser:
     project_setmeta_parser.add_argument("--workspace-root", help="Target governance root when the project name is omitted (default: the one containing the current directory)")
     project_setmeta_parser.add_argument("--json", action="store_true", help="Output JSON")
     _project_json_two_phase_flags(project_setmeta_parser, "set-meta")  # 缺省预演 / --confirm 才写(与四个写命令同一包装)
+    # AIPOS-F176 件①: 项目升级(预演 / 确认; 步骤清单读 verbs.schema verbs.lybra_project_upgrade.upgrade_steps, 唯一实现 project_upgrade)
+    project_upgrade_parser = project_subparsers.add_parser("upgrade", help="AIPOS-F176: bring the project up to the latest Lybra: governance-truth migrations, config defaults and workstation charter sync in one go; --dry-run (default) lists every step (what would change, why, already current or not) and unread update counts, --confirm --actor runs the pending mechanical steps in order (stop at the first failure); --guidance lists what the advisors must start using themselves")
+    project_upgrade_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory)")
+    project_upgrade_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    project_upgrade_parser.add_argument("--workspace-root", help="Target governance root when the project name is omitted (default: the one containing the current directory)")
+    project_upgrade_parser.add_argument("--actor", default=None, help="Commit identity for landing each step (instance name or owner; required with --confirm)")
+    project_upgrade_parser.add_argument("--guidance", action="store_true", help="Only list, per advisor instance, the new capabilities the button cannot do (why / what to tell the advisor incl. command / done criterion); read-only")
+    project_upgrade_parser.add_argument("--json", action="store_true", help="Output JSON")
+    _project_json_two_phase_flags(project_upgrade_parser, "upgrade", family="project_upgrade_writers")
     # AIPOS-F143 件②: 项目执行方式声明写入口(project.json execution; 声明 config.schema project_json.execution; update_project_json 唯一写路径)
     project_setexec_parser = project_subparsers.add_parser("set-execution", help="AIPOS-F143: declare the project's execution mode (project.json execution: sub-agent executor by default, Owner-approved task modes may go to a pi executor workstation, audits always by an independent pi auditor); every instance must already be enrolled in this project; --dry-run (default) shows the diff, --confirm writes")
     project_setexec_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory)")
@@ -4310,6 +4363,8 @@ def main(argv: list[str] | None = None) -> int:
                 return _project_json_two_phase_emit(
                     "set-paths", target, outcome, actor=args.actor, json_out=getattr(args, "json", False),
                     details=[f"paths.{change['key']}: {change['before']!r} → {change['after']!r}" for change in outcome["changes"]])
+            if args.project_command == "upgrade":
+                return _project_upgrade_cli(args, home)
             if args.project_command == "set-meta":
                 # AIPOS-F127 件③: 唯一实现 workspace_config.set_project_meta(键须 config.schema project_json 已声明; update_project_json 唯一写路径)
                 from tools.aipos_cli.workspace_config import ProjectMetaError, project_meta_declaration, set_project_meta

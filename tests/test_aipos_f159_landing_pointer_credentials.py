@@ -225,7 +225,8 @@ def test_item1_every_project_json_writer_has_one_landing_point():
     writers = verbs["two_phase_protocol"]["project_json_writers"]["commands"]
     landing = verbs["verbs"]["lybra_governance_commit"]["post_write_landing"]["commands"]["project_writers"]
     _show(f"[件①·声明] project_json_writers={writers}; project_writers.subcommands={landing['subcommands']}")
-    assert set(writers) | {"freeze-legacy", "dispatch-mode set", "relocate-workstation"} == set(landing["subcommands"])  # AIPOS-F161: 迁移写接入日志
+    # AIPOS-F161: 迁移写接入日志; AIPOS-F176: project upgrade 配置缺省补齐步写 project.json
+    assert set(writers) | {"freeze-legacy", "dispatch-mode set", "relocate-workstation", "upgrade"} == set(landing["subcommands"])
     assert "{subcommand}" in landing["message_template"] and "{project}" in landing["message_template"]
 
 

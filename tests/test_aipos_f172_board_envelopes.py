@@ -469,7 +469,9 @@ def test_item2_write_path_declared_and_single_route():
     src = (REPO_ROOT / "web" / "board" / "app.py").read_text(encoding="utf-8")
     do_post = src[src.index("def do_POST(self)"):src.index("def do_PUT(self)")]
     assert re.findall(r'if path == "(/api/auth/[^"]+)"', do_post) == board_readonly_declaration()["allowed_post_paths"]
-    assert do_post.count("if path == ") == len(board_readonly_declaration()["allowed_post_paths"]) + 1
+    # AIPOS-F176: write exception 2 (project upgrade) is the only other write route, via the same framework handle_owner_write
+    assert do_post.count("if path == ") == len(board_readonly_declaration()["allowed_post_paths"]) + 2
+    assert 'if path == self._upgrade_paths["write_path"]' in do_post
     assert 'if path == self._envelope_paths["write_path"]' in do_post
     assert board_envelopes_declaration()["write_path"] == "/api/owner/envelopes/mint"
     board_mod = (REPO_ROOT / "tools" / "aipos_cli" / "envelope_board.py").read_text(encoding="utf-8")

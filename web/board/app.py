@@ -793,6 +793,8 @@ Lybra 服务端位置（AIPOS-286）：
         "rp_ov_roadmap": "路线图:标准满足 {met}/{total} · 里程碑 {milestones} 个 · 偏差 {signals} 条(严重 {severe})",
         "rp_ov_roadmap_none": "路线图:未声明",
         "rp_ov_onboarding": "接入:已完成 {done}/{total} 步",
+        "rp_ov_upgrade": "可升级({count} 项)",
+        "rp_ov_upgrade_none": "项目升级:已是最新",
         "rp_ov_detail": "项目详情",
         "rp_rm_title": "路线图与验收 · {project}",
         "rp_rm_projects": "项目",
@@ -1026,6 +1028,8 @@ Important boundaries:
         "rp_ov_roadmap": "Roadmap: criteria met {met}/{total} · {milestones} milestones · {signals} drift signals ({severe} severe)",
         "rp_ov_roadmap_none": "Roadmap: not declared",
         "rp_ov_onboarding": "Onboarding: {done}/{total} steps done",
+        "rp_ov_upgrade": "Upgradable ({count})",
+        "rp_ov_upgrade_none": "Project upgrade: up to date",
         "rp_ov_detail": "Project detail",
         "rp_rm_title": "Roadmap & acceptance · {project}",
         "rp_rm_projects": "Projects",
@@ -2254,6 +2258,10 @@ def make_handler(
     readonly_pages = {str(url): page for page, url in pages_declaration()["pages"].items()}
     # AIPOS-F175: artifact thumbnail route (GET only; path declared in verbs.schema board_readonly_pages.artifact_route)
     artifact_route = str(pages_declaration()["artifact_route"]["path"])
+    # AIPOS-F176 write exception 2 (project upgrade): page + single write route read from verbs.schema verbs.lybra_project_upgrade.board
+    from tools.aipos_cli.project_upgrade import board_declaration as upgrade_board_declaration
+
+    upgrade_decl = upgrade_board_declaration()
 
     class BoardHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -2269,6 +2277,7 @@ def make_handler(
         _envelope_paths = {k: str(envelope_decl[k]) for k in ("page_path", "api_path", "write_path")}
         _readonly_pages = readonly_pages
         _artifact_route = artifact_route
+        _upgrade_paths = {k: str(upgrade_decl[k]) for k in ("page_path", "write_path")}
 
         def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
             body = _json_bytes(payload)
@@ -2576,6 +2585,37 @@ def make_handler(
                 host=self.headers.get("Host"), content_type=self.headers.get("Content-Type"))
             self._send_json(HTTPStatus(status), payload)
 
+        # ---- AIPOS-F176 project upgrade page + Owner write exception 2 (same F172 framework) ----
+        def _handle_upgrade_page(self) -> None:
+            """GET upgrade page (server-rendered): every logged-in session sees it; only Owner sessions get the preview button."""
+            from tools.aipos_cli.project_upgrade import collect_upgrade_page, render_upgrade_error_html, render_upgrade_html
+            from tools.schema_loader import SchemaLoadError
+
+            _sid, info = self._current_session()
+            project = (parse_qs(urlparse(self.path).query).get("project") or [None])[0]
+            try:
+                page = render_upgrade_html(collect_upgrade_page(home_root, project=project), owner=bool(info and info.get("role") == "owner"))
+            except (OSError, ValueError, LookupError, RuntimeError, SchemaLoadError) as exc:
+                page = render_upgrade_error_html(f"{type(exc).__name__}: {exc}")
+            self._send_html(page)
+
+        def _handle_upgrade(self) -> None:
+            """POST write exception 2 (single write route): every check lives in project_upgrade.handle_upgrade_request
+            -> envelope_board.handle_owner_write (Owner session / workspace / preview token / audit log); actor comes from the session."""
+            from tools.aipos_cli.envelope_board import session_ref
+            from tools.aipos_cli.project_upgrade import handle_upgrade_request
+
+            sid, info = self._current_session()
+            session = None
+            if info is not None and sid:
+                session = {"role": info.get("role"), "token_ref": info.get("token_ref") or "", "session_ref": session_ref(sid),
+                           "login_method": info.get("login_method") or "", "source_ip": self._source_ip()}
+            status, payload = handle_upgrade_request(
+                self._read_json_body(), session=session, home_root=home_root, preview_store=self._previews,
+                audit_log_path=self._board_audit, origin=self.headers.get("Origin"), host=self.headers.get("Host"),
+                content_type=self.headers.get("Content-Type"))
+            self._send_json(HTTPStatus(status), payload)
+
         def do_GET(self) -> None:  # noqa: N802
             # AIPOS-270 鉴权闸门:未登录 302 到 /login(静态资源与公开路径放行)。
             if not self._auth_gate("GET"):
@@ -2629,6 +2669,11 @@ def make_handler(
                 return
             if path == self._envelope_paths["api_path"]:
                 self._handle_envelopes_api()
+                return
+
+            # AIPOS-F176: project upgrade page (server-rendered)
+            if path == self._upgrade_paths["page_path"]:
+                self._handle_upgrade_page()
                 return
 
             # AIPOS-F174: 看板只读页(服务端渲染; 数据 tools/aipos_cli/board_pages 只调既有唯一推导, 渲染 web/board/readonly_pages)
@@ -2705,6 +2750,10 @@ def make_handler(
             # AIPOS-F172 写例外①: Owner 信封签发(声明 verbs.schema board_owner_envelopes.write_path); 其余写请求照旧只读应答
             if path == self._envelope_paths["write_path"]:
                 self._handle_envelope_mint()
+                return
+            # AIPOS-F176 write exception 2: Owner project upgrade (declared verbs.lybra_project_upgrade.board.write_path)
+            if path == self._upgrade_paths["write_path"]:
+                self._handle_upgrade()
                 return
             self._method_not_allowed()
 
