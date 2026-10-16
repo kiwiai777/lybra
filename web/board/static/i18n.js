@@ -37,6 +37,10 @@ const translations = {
     'overview.add_project': '新增项目',
     'overview.owner_inbox': 'Owner 待决收件箱',
     'overview.owner_envelopes': '信封',
+    // AIPOS-F174: 看板只读页入口
+    'overview.owner_overview': '项目总览',
+    'overview.owner_roadmap': '路线图与验收',
+    'overview.owner_onboarding': '项目接入',
     // AIPOS-F171 件③: 看板只读 + 项目列表 home 根推导(暂停标注) + 项目页路线图里程碑简版
     'overview.paused': '已暂停',
     'board.readonly_note': '看板只读:新建/导入项目、核验、出卡、发布等写操作请告诉顾问,由顾问用 lybra 命令完成。',
@@ -354,6 +358,10 @@ const translations = {
     'overview.add_project': 'New Project',
     'overview.owner_inbox': 'Owner inbox',
     'overview.owner_envelopes': 'Envelopes',
+    // AIPOS-F174: read-only page entries
+    'overview.owner_overview': 'Project overview',
+    'overview.owner_roadmap': 'Roadmap & acceptance',
+    'overview.owner_onboarding': 'Project onboarding',
     // AIPOS-F171: read-only Board + home-root project list (paused marker) + project-page roadmap milestones (simple view)
     'overview.paused': 'Paused',
     'board.readonly_note': 'The Board is read-only: to create/import a project, verify, draft or publish a card, tell your advisor, who does it with lybra commands.',

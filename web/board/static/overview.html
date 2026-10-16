@@ -38,6 +38,10 @@
       <a id="owner-inbox-link" class="owner-inbox-link" href="/owner/inbox" data-owner-inbox-entry="readonly">Owner inbox</a>
       <!-- AIPOS-F172: envelope page (/owner/envelopes; Owner sessions may renew / mint there, everyone else read-only) -->
       <a id="owner-envelopes-link" class="owner-inbox-link" href="/owner/envelopes" data-owner-envelopes-entry="owner-write-exception">Envelopes</a>
+      <!-- AIPOS-F174: read-only pages (server-rendered; paths declared in verbs.schema board_readonly_pages.pages) -->
+      <a id="owner-overview-link" class="owner-inbox-link" href="/owner/overview" data-readonly-page-entry="overview">Project overview</a>
+      <a id="owner-roadmap-link" class="owner-inbox-link" href="/owner/roadmap" data-readonly-page-entry="roadmap">Roadmap &amp; acceptance</a>
+      <a id="owner-onboarding-link" class="owner-inbox-link" href="/owner/onboarding" data-readonly-page-entry="onboarding">Project onboarding</a>
     </div>
     
     <div id="workspace-grid" class="workspace-grid" data-owner-truth="overview">
@@ -175,6 +179,9 @@
       document.getElementById('add-project-text').textContent = i18n.t('overview.add_project');
       document.getElementById('owner-inbox-link').textContent = i18n.t('overview.owner_inbox');
       document.getElementById('owner-envelopes-link').textContent = i18n.t('overview.owner_envelopes');
+      document.getElementById('owner-overview-link').textContent = i18n.t('overview.owner_overview');
+      document.getElementById('owner-roadmap-link').textContent = i18n.t('overview.owner_roadmap');
+      document.getElementById('owner-onboarding-link').textContent = i18n.t('overview.owner_onboarding');
       document.getElementById('board-readonly-note').textContent = i18n.t('board.readonly_note');
       
       // Modal i18n

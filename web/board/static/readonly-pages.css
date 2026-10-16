@@ -1,0 +1,97 @@
+/* AIPOS-F174: board read-only pages (overview / roadmap & acceptance / onboarding).
+   Class names reuse the project-detail milestone map (roadmap-*) and verify bench (vb-*) skeleton; narrow screens = single column. */
+:root {
+  --rp-bg: #f6f7f9;
+  --rp-panel: #ffffff;
+  --rp-border: #d9dde3;
+  --rp-text: #1f2937;
+  --rp-muted: #6b7280;
+  --rp-accent: #0891b2;
+  --rp-ok: #16a34a;
+  --rp-warn: #d97706;
+  --rp-alert: #dc2626;
+}
+* { box-sizing: border-box; }
+body.rp-page { margin: 0; background: var(--rp-bg); color: var(--rp-text); font: 14px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.rp-page main { max-width: 1180px; margin: 0 auto; padding: 16px; }
+.rp-page h1 { font-size: 20px; margin: 8px 0; }
+.rp-page h2 { font-size: 16px; margin: 12px 0 8px; }
+.rp-page h3 { font-size: 14px; margin: 10px 0 6px; }
+.rp-page a { color: var(--rp-accent); }
+.rp-page code { font-family: ui-monospace, monospace; font-size: 12.5px; background: #eef2f6; padding: 1px 4px; border-radius: 4px; overflow-wrap: anywhere; }
+.rp-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 16px; background: #0f172a; }
+.rp-nav nav { display: flex; flex-wrap: wrap; gap: 6px 14px; flex: 1 1 auto; }
+.rp-nav a { color: #e2e8f0; text-decoration: none; font-size: 13px; }
+.rp-nav a[aria-current="page"] { color: #fff; font-weight: 700; border-bottom: 2px solid var(--rp-accent); }
+.rp-nav .rp-lang { border: 1px solid #475569; border-radius: 4px; padding: 1px 8px; }
+.rp-readonly-note { font-size: 12.5px; color: var(--rp-muted); border-left: 3px solid var(--rp-warn); padding: 4px 10px; background: var(--rp-panel); }
+.rp-sub { color: var(--rp-muted); font-size: 12px; font-weight: 400; }
+.rp-badge { font-size: 11px; font-weight: 700; color: #fff; background: var(--rp-muted); border-radius: 10px; padding: 1px 8px; }
+.rp-err { color: var(--rp-alert); }
+.rp-alert, .rp-alert a { color: var(--rp-alert); font-weight: 600; }
+.rp-bar { display: inline-block; vertical-align: middle; width: 120px; height: 8px; background: #e5e7eb; border-radius: 4px; overflow: hidden; }
+.rp-bar > span { display: block; height: 100%; background: var(--rp-ok); }
+.rp-bar-text { font-size: 12px; color: var(--rp-muted); margin-left: 6px; }
+/* overview cards */
+.rp-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+.rp-card { background: var(--rp-panel); border: 1px solid var(--rp-border); border-radius: 8px; padding: 12px 14px; }
+.rp-card ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.rp-card-foot { margin: 8px 0 0; font-size: 12.5px; }
+.rp-paused { margin-top: 16px; }
+.rp-paused summary { cursor: pointer; color: var(--rp-muted); }
+/* roadmap */
+.rp-projects { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; margin: 6px 0; }
+.rp-projects a[aria-current="page"] { font-weight: 700; }
+.rp-signals { display: grid; gap: 8px; margin: 10px 0; }
+.rp-signal { border-radius: 6px; padding: 8px 12px; border-left: 4px solid var(--rp-warn); background: #fffbeb; }
+.rp-signal.rp-sev-inbox { border-left-color: var(--rp-alert); background: #fef2f2; }
+.rp-signal p { margin: 3px 0; }
+.rp-sev { font-size: 11px; font-weight: 800; color: #fff; background: var(--rp-warn); border-radius: 4px; padding: 1px 6px; }
+.rp-sev-inbox .rp-sev { background: var(--rp-alert); }
+.rp-tell { font-weight: 600; }
+.rp-cmd { font-size: 12.5px; }
+.rp-cmd ul { margin: 2px 0; padding-left: 18px; }
+.rp-cmd-label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--rp-muted); }
+.rp-layout { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: 16px; align-items: start; }
+.rp-left, .rp-right { background: var(--rp-panel); border: 1px solid var(--rp-border); border-radius: 8px; padding: 10px 12px; }
+.roadmap-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.roadmap-ms { border: 1px solid var(--rp-border); border-radius: 6px; padding: 6px 10px; }
+.roadmap-ms.rp-selected { border-color: var(--rp-accent); box-shadow: 0 0 0 1px var(--rp-accent); }
+.roadmap-ms.rp-is-overdue { border-color: var(--rp-alert); }
+.roadmap-ms.roadmap-dropped { opacity: 0.6; }
+.roadmap-ms-head { display: block; text-decoration: none; }
+.roadmap-lane { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--rp-accent); }
+.rp-ms-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--rp-muted); }
+.rp-overdue { color: var(--rp-alert); font-weight: 700; }
+.vb-station { border: 1px solid var(--rp-border); border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; }
+.vb-station.rp-met { border-left: 4px solid var(--rp-ok); }
+.vb-station.rp-unmet { border-left: 4px solid var(--rp-warn); }
+.vb-station-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.vb-station-id { font-family: ui-monospace, monospace; font-size: 12px; color: var(--rp-muted); }
+.vb-station-title { font-weight: 700; overflow-wrap: anywhere; }
+.rp-crit-verify, .rp-crit-state { margin: 4px 0; font-size: 12.5px; }
+.vb-evidence { display: grid; gap: 8px; }
+.vb-ring { background: var(--rp-bg); border-radius: 6px; padding: 6px 8px; }
+.vb-ring-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font-size: 12.5px; }
+.vb-ring-meta { font-family: ui-monospace, monospace; font-size: 11px; color: var(--rp-muted); }
+.vb-ring-body { white-space: pre-wrap; overflow-wrap: anywhere; margin: 4px 0 0; font-size: 12px; }
+.vb-verdict { font-weight: 800; }
+.vb-verdict.is-PASS { color: var(--rp-ok); }
+.vb-verdict.is-FAIL { color: var(--rp-alert); }
+.rp-evidence ul { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 6px; }
+.rp-next { margin-top: 16px; }
+/* onboarding */
+.rp-ob-project { background: var(--rp-panel); border: 1px solid var(--rp-border); border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; }
+.rp-checklist { margin: 0; padding-left: 20px; display: grid; gap: 8px; }
+.rp-ob-item p { margin: 2px 0; }
+.rp-details { margin: 2px 0; padding-left: 18px; font-size: 12.5px; color: var(--rp-muted); overflow-wrap: anywhere; }
+.rp-state { font-size: 11px; font-weight: 800; color: #fff; border-radius: 4px; padding: 1px 6px; background: var(--rp-muted); }
+.rp-state-ok .rp-state { background: var(--rp-ok); }
+.rp-state-todo .rp-state { background: var(--rp-warn); }
+.rp-state-error .rp-state { background: var(--rp-alert); }
+.rp-link { font-size: 12.5px; margin-right: 10px; }
+@media (max-width: 760px) {
+  .rp-layout { grid-template-columns: 1fr; }
+  .rp-cards { grid-template-columns: 1fr; }
+  .rp-bar { width: 90px; }
+}

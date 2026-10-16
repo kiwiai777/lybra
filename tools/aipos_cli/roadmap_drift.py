@@ -5,7 +5,8 @@
 
 防碎片化(卡面硬约束):
 - 本模块是推导的唯一实现: CLI `lybra roadmap status`(aipos_cli 薄壳)、Owner 收件箱 roadmap_drift 类别(owner_inbox._roadmap_items)、
-  看板(board_adapter.get_roadmap_status, 供 F174 页)同读 roadmap_status。
+  看板(board_adapter.get_roadmap_status; AIPOS-F174 只读页经 board_pages 同读)同读 roadmap_status; 每条标准的挂接卡审计证据
+  (裁决 / 补审 / 运行证据摘录)由 card_evidence 随行带出(criteria[].evidence), 看板只渲染。
 - 只读既有真相, 不另记进度: 路线图文件(roadmap.load_roadmap)、卡挂接(roadmap.card_links, 游离判定 card_link_status 不另写)、
   门记录(next_resolver._read_task_records: 裁决 / 补审裁决 / 认领 / 交回 / 结案)、卡面 rework_rounds、运行证据
   (artifact_ingest.runtime_evidence_requirement + parse_runtime_evidence_section)、loop 运行记录(loop_run_record.read_run)、
@@ -145,13 +146,57 @@ def _card_truth(root: Path, card: dict[str, Any], errors: list[dict[str, str]], 
     return out
 
 
-def _verify_card(root: Path, card: dict[str, Any], truth: dict[str, Any], verify: str, decl: dict[str, Any]) -> tuple[bool, str]:
-    """已结案挂接卡是否达到标准声明的 verify 要求 → (满足, 未满足原因)。
-    auto: 最新常规审计裁决属 PASS 类、补审未判 FAIL、卡声明了运行证据时裁决报告有运行证据节;
-    verify_pending 所列方式(artifact / owner_check): 本卡先按未满足显示原因(待 F175), 不臆断。"""
+def card_evidence(root: Path, card: dict[str, Any], truth: dict[str, Any]) -> dict[str, Any]:
+    """挂接卡的审计证据(唯一读取; _verify_card 判定与看板「路线图与验收」页证据展示(AIPOS-F174)同读, 看板不另读报告):
+    最新常规审计裁决 / 补审裁决(门记录 truth.records)+ 运行证据要求(artifact_ingest.runtime_evidence_requirement)+ 裁决报告运行证据节
+    (evidence_refs 指向的报告经 parse_runtime_evidence_section 解析; 取第一份解析出非空运行记录的报告)。
+    返回 {task_id, queue_state, verdict, verdict_id, verdict_at, supplementary_verdict, supplementary_verdict_id, unreadable,
+    evidence_required(True / False / None = 声明不合), declaration_problem, report_ref, evidence(运行记录列表 | None), evidence_problem}。只读。"""
     from tools.aipos_cli.artifact_ingest import (
         RuntimeEvidenceDeclarationError, parse_runtime_evidence_section, runtime_evidence_requirement,
     )
+
+    records = truth.get("records") or {}
+    verdict = records.get("latest_verdict") or {}
+    supp = records.get("latest_supplementary_verdict") or {}
+    out: dict[str, Any] = {
+        "task_id": str(card.get("task_id") or ""), "queue_state": card.get("queue_state"),
+        "verdict": str(verdict.get("verdict") or "").upper() or None, "verdict_id": verdict.get("verdict_id"),
+        "verdict_at": _iso(_as_utc(verdict.get("verdict_at"))) if verdict.get("verdict_at") else None,
+        "supplementary_verdict": str(supp.get("verdict") or "").upper() or None, "supplementary_verdict_id": supp.get("verdict_id"),
+        "unreadable": truth.get("unreadable"), "evidence_required": None, "declaration_problem": None, "report_ref": None,
+        "evidence": None, "evidence_problem": None,
+    }
+    if truth.get("unreadable"):
+        return out
+    try:
+        out["evidence_required"] = runtime_evidence_requirement(None, card.get("metadata") or {}) is not None
+    except RuntimeEvidenceDeclarationError as exc:
+        out["declaration_problem"] = str(exc)
+    problem = "裁决记录无报告引用 evidence_refs"
+    for ref in verdict.get("evidence_refs") or []:
+        report = Path(str(ref)) if Path(str(ref)).is_absolute() else root / str(ref)
+        if not report.is_file():
+            problem = f"报告 {ref} 不存在"
+            continue
+        try:
+            entries, problem = parse_runtime_evidence_section(report.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError) as exc:
+            entries, problem = None, f"报告 {ref} 读不出: {exc}"
+        if entries:
+            out["report_ref"], out["evidence"], problem = str(ref), entries, ""
+            break
+        problem = problem or f"报告 {ref} 运行证据节为空"
+    out["evidence_problem"] = problem or None
+    return out
+
+
+def _verify_card(root: Path, card: dict[str, Any], truth: dict[str, Any], verify: str, decl: dict[str, Any],
+                 evidence: dict[str, Any] | None = None) -> tuple[bool, str]:
+    """已结案挂接卡是否达到标准声明的 verify 要求 → (满足, 未满足原因)。
+    auto: 最新常规审计裁决属 PASS 类、补审未判 FAIL、卡声明了运行证据时裁决报告有运行证据节;
+    verify_pending 所列方式(artifact / owner_check): 本卡先按未满足显示原因(待 F175), 不臆断。
+    证据读取唯一口 card_evidence(evidence 已算好时直接传入, 不重读)。"""
     from tools.aipos_cli.audit_derivation import supplementary_audit_declaration
     from tools.aipos_cli.next_resolver import _PASS_VERDICTS
 
@@ -159,37 +204,19 @@ def _verify_card(root: Path, card: dict[str, Any], truth: dict[str, Any], verify
     task_id = str(card.get("task_id") or "")
     if truth.get("unreadable"):
         return False, _fmt(reasons["unreadable"], "unmet_reasons.unreadable", task_id=task_id, problem=truth["unreadable"])
-    records = truth.get("records") or {}
-    verdict = records.get("latest_verdict") or {}
-    value = str(verdict.get("verdict") or "").upper()
+    ev = evidence if evidence is not None else card_evidence(root, card, truth)
+    value = ev["verdict"] or ""
     if value not in _PASS_VERDICTS:
         return False, _fmt(reasons["no_pass"], "unmet_reasons.no_pass", task_id=task_id, verdict=value or "无裁决记录")
-    supp = records.get("latest_supplementary_verdict") or {}
-    supp_value = str(supp.get("verdict") or "").upper()
+    supp_value = ev["supplementary_verdict"] or ""
     if supp_value and supp_value in {str(v).upper() for v in supplementary_audit_declaration()["fail_verdicts"]}:
         return False, _fmt(reasons["supplementary_fail"], "unmet_reasons.supplementary_fail", task_id=task_id, verdict=supp_value,
-                           verdict_id=str(supp.get("verdict_id") or "?"))
-    try:
-        requirement = runtime_evidence_requirement(None, card.get("metadata") or {})
-    except RuntimeEvidenceDeclarationError as exc:
-        return False, _fmt(reasons["evidence_declaration"], "unmet_reasons.evidence_declaration", task_id=task_id, problem=str(exc))
-    if requirement is not None:
-        problem = "裁决记录无报告引用 evidence_refs"
-        for ref in verdict.get("evidence_refs") or []:
-            report = Path(str(ref)) if Path(str(ref)).is_absolute() else root / str(ref)
-            if not report.is_file():
-                problem = f"报告 {ref} 不存在"
-                continue
-            try:
-                entries, problem = parse_runtime_evidence_section(report.read_text(encoding="utf-8"))
-            except (OSError, UnicodeDecodeError) as exc:
-                entries, problem = None, f"报告 {ref} 读不出: {exc}"
-            if entries:
-                problem = ""
-                break
-            problem = problem or f"报告 {ref} 运行证据节为空"
-        if problem:
-            return False, _fmt(reasons["no_evidence"], "unmet_reasons.no_evidence", task_id=task_id, problem=problem)
+                           verdict_id=str(ev["supplementary_verdict_id"] or "?"))
+    if ev["declaration_problem"]:
+        return False, _fmt(reasons["evidence_declaration"], "unmet_reasons.evidence_declaration", task_id=task_id,
+                           problem=ev["declaration_problem"])
+    if ev["evidence_required"] and ev["evidence_problem"]:
+        return False, _fmt(reasons["no_evidence"], "unmet_reasons.no_evidence", task_id=task_id, problem=ev["evidence_problem"])
     pending = decl["verify_pending"].get(verify)
     if pending:
         return False, _fmt(reasons["pending"], "unmet_reasons.pending", task_id=task_id, pending=pending)
@@ -290,6 +317,8 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
                 crit_cards = [c for c in ms_cards if cid in (c.get("criteria") or [])]
                 closed = [c for c in crit_cards if c.get("queue_state") in satisfied_states]
                 met, reason, met_cards = False, "", []
+                # AIPOS-F174: 每张挂接卡的审计证据(裁决 / 补审 / 运行证据摘录)随行带出, 看板逐条标准展示只读此字段
+                evidence = {str(c["task_id"]): card_evidence(root, c, _card_truth(root, c, errors, cache)) for c in crit_cards}
                 if not crit_cards:
                     reason = str(decl["unmet_reasons"]["no_card"])
                 elif not closed:
@@ -297,7 +326,8 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
                 else:
                     why: list[str] = []
                     for card in closed:
-                        ok, text = _verify_card(root, card, _card_truth(root, card, errors, cache), str(crit["verify"]), decl)
+                        ok, text = _verify_card(root, card, _card_truth(root, card, errors, cache), str(crit["verify"]), decl,
+                                                evidence[str(card["task_id"])])
                         if ok:
                             met_cards.append(card)
                         else:
@@ -308,7 +338,8 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
                 criteria_rows.append({"id": cid, "statement": crit["statement"], "verify": crit["verify"], "satisfied": met,
                                       "reason": reason or None, "cards": [c["task_id"] for c in crit_cards],
                                       "met_cards": [c["task_id"] for c in met_cards], "rework_rounds": rounds,
-                                      "closed_cards": [c["task_id"] for c in closed]})
+                                      "closed_cards": [c["task_id"] for c in closed],
+                                      "evidence": [evidence[str(c["task_id"])] for c in crit_cards]})
             n_met = sum(1 for r in criteria_rows if r["satisfied"])
             n_total = len(criteria_rows)
             truths = [_card_truth(root, c, errors, cache) for c in ms_cards]

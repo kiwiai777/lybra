@@ -685,6 +685,33 @@ def _run_files(directory: Path) -> list[Path]:
     return sorted(p for p in directory.glob("looprun_*.md") if p.is_file()) if directory.is_dir() else []
 
 
+def latest_charter_checks(governance_root: Path, *, contract: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F174: 本项目各工位实例最近一次拉起前章程判定(F164 charter_check 写进运行记录 charter_checks 的原样条目)。
+    看板「项目接入」页的「章程新鲜」项只读此记录真相(判定本身 = 拉起前 distribution_sync.charter_freshness, 已由 loop 记下;
+    看板不重跑 sync --dry-run: 那会读工位凭据并连门)。返回 {checks: {实例: 最新条目(含 card / workstation / outcome / detail /
+    repair_command / at)}, unreadable: [运行记录读不出的原因]}。无运行记录 = 空。只读。"""
+    from tools.aipos_cli.loop_driver import load_loop_contract
+
+    decl = run_record_declaration(contract or load_loop_contract())
+    root = loop_runs_root(Path(governance_root))
+    latest: dict[str, dict[str, Any]] = {}
+    unreadable: list[str] = []
+    for directory in sorted(p for p in root.iterdir() if p.is_dir()) if root.is_dir() else []:
+        for path in _run_files(directory):
+            try:
+                meta = read_run(path, decl)
+            except LoopRunRecordError as exc:
+                unreadable.append(str(exc))
+                continue
+            for entry in meta.get("charter_checks") or []:
+                if not isinstance(entry, dict) or not str(entry.get("instance") or "").strip():
+                    continue
+                name = str(entry["instance"]).strip()
+                if name not in latest or str(entry.get("at") or "") >= str(latest[name].get("at") or ""):
+                    latest[name] = dict(entry)
+    return {"checks": latest, "unreadable": unreadable}
+
+
 def _run_lane(governance_root: Path, task_id: str) -> dict[str, Any]:
     """AIPOS-F133 件①: 运行记录的 lane = 经 task_loader.find_task_card 反查卡面, 再走唯一派生 machine_zone.lane_of_card
     (运行记录不落 lane, 免第二份真相)。找不到卡/多义/卡面读不出 = 未解析 lane(带原因, 照列)。"""
