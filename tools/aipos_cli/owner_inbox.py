@@ -345,26 +345,33 @@ def _supplementary_items(root: Path, project: str, decl: dict[str, Any], home_ro
 
 def _envelope_items(root: Path, project: str, decl: dict[str, Any], home_root: Path | None,
                     errors: list[dict[str, str]]) -> list[dict[str, Any]]:
-    """③ 有效信封达预警阈值(autonomy_policy.envelope_warnings, brief 同读)。"""
-    from tools.aipos_cli.autonomy_policy import envelope_usage, envelope_warnings, renew_plan
+    """③ 仍在用的信封达预警阈值(信封状态单一推导 autonomy_policy.envelope_overview: status=warn, brief / 看板信封页 / loop status 同读;
+    AIPOS-F172(gap #160): 已被同驱动方更新信封接替的旧信封不列)。「裁决」指向看板信封页(Owner 亲自续签; 声明 categories.envelope_warning.decide_board,
+    缺省 = 原 CLI 裁决行), CLI 命令保留。"""
+    from tools.aipos_cli.autonomy_policy import envelope_overview
+    from tools.aipos_cli.envelope_board import board_envelope_url
 
     cat = decl["categories"]["envelope_warning"]
     out: list[dict[str, Any]] = []
-    for warn in envelope_warnings(root):
-        pid = str(warn["policy_id"])
-        usage = envelope_usage(root, pid)
-        who = str(warn.get("agent_or_role") or "")
-        plan = renew_plan(root, usage, identities={who} - {""} or {"advisor"}, task_id="<在推卡>")
+    for row in envelope_overview(root)["envelopes"]:
+        if row["status"] != "warn":
+            continue
+        pid, who = str(row["policy_id"]), str(row["agent_or_role"] or "")
         subject = _fmt(cat["subject"], "categories.envelope_warning.subject", policy_id=pid)
-        out.append(_base_item(
+        item = _base_item(
             decl, project=project, governance_root=root, category="envelope_warning", rank=int(cat["rank"]), subject=subject,
-            anchor=f"{pid}|{usage.get('state')}", source=who,
-            ask=_fmt(cat["ask"], "categories.envelope_warning.ask", why=warn["why"]),
-            recommend=_fmt(cat["recommend"], "categories.envelope_warning.recommend", renew_command=plan["renew_command"]),
+            anchor=f"{pid}|{row['state']}", source=who,
+            ask=_fmt(cat["ask"], "categories.envelope_warning.ask", why=row["why"]),
+            recommend=_fmt(cat["recommend"], "categories.envelope_warning.recommend", renew_command=row["renew_command"]),
             impact=_fmt(cat["impact"], "categories.envelope_warning.impact", agent_or_role=who or "?"),
             options=_option_list(list(cat["options"]), decl), since=None, policy_id=pid, home_root=home_root,
-            facts={"used": warn.get("used"), "max_tasks": warn.get("max_tasks"), "expires_at": warn.get("expires_at"),
-                   "renew_command": plan["renew_command"]}))
+            facts={"used": row["used"], "max_tasks": row["max_tasks"], "expires_at": row["expires_at"],
+                   "renew_command": row["renew_command"], "next_policy_id": row["next_policy_id"]})
+        if cat.get("decide_board"):
+            item["board_url"] = board_envelope_url(project, pid)
+            item["decide_line"] = _fmt(cat["decide_board"], "categories.envelope_warning.decide_board", board_url=item["board_url"],
+                                       command=item["decide_command"])
+        out.append(item)
     return out
 
 
@@ -476,7 +483,8 @@ def _item_lines(item: dict[str, Any], texts: dict[str, Any]) -> list[str]:
     lines.append(_fmt(texts["options"], "texts.options", options=" / ".join(f"{o['key']}={o['label']}" for o in item["options"])))
     if item.get("since"):
         lines.append(_fmt(texts["since"], "texts.since", since=item["since"]))
-    lines.append(_fmt(texts["decide"], "texts.decide", command=item["decide_command"]))
+    # AIPOS-F172: 信封项「裁决」指向看板信封页(同行保留 CLI 命令; 行文读声明 categories.envelope_warning.decide_board)
+    lines.append(item.get("decide_line") or _fmt(texts["decide"], "texts.decide", command=item["decide_command"]))
     return lines
 
 
@@ -521,6 +529,8 @@ def render_inbox_html(inbox: dict[str, Any]) -> str:
                      f" data-rank=\"{item['rank']}\" data-project=\"{esc(item['project'])}\">")
         parts.append(f"<h2>{esc(lines[0])}</h2><ul>")
         parts.extend(f"<li>{esc(line.strip())}</li>" for line in lines[1:])
+        if item.get("board_url"):  # AIPOS-F172: 信封项可点到看板信封页
+            parts.append(f"<li class=\"owner-inbox-board\"><a href=\"{esc(item['board_url'])}\">{esc(item['board_url'])}</a></li>")
         parts.append("</ul></section>")
     if inbox["errors"]:
         parts.append(f"<section class=\"owner-inbox-errors\"><h2>{esc(_fmt(texts['errors_header'], 'texts.errors_header', count=len(inbox['errors'])))}</h2><ul>")

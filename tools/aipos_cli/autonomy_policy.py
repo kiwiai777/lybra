@@ -931,23 +931,140 @@ def envelope_warning(usage: dict[str, Any]) -> str | None:
 
 
 def envelope_warnings(governance_root: Path | str, *, now: datetime | None = None) -> list[dict[str, Any]]:
-    """brief 用: 本项目全部有效信封(state=active)中达预警阈值者 [{policy_id, why, usage}](用尽 / 过期的历史信封不列, 预警只管仍在用的)。"""
+    """brief / Owner 收件箱用: 本项目达预警阈值且仍在用的信封 [{policy_id, why, ...}](判定唯一 envelope_overview: status=warn;
+    用尽 / 过期的历史信封不列; AIPOS-F172(gap #160): 已被同驱动方更新信封接替的旧信封不列)。"""
     out: list[dict[str, Any]] = []
     template = ""
-    for pid in policy_ids(governance_root):
-        usage = envelope_usage(governance_root, pid, now=now)
-        if usage.get("state") != "active":
-            continue
-        why = envelope_warning(usage)
-        if not why:
+    for row in sorted(envelope_overview(governance_root, now=now)["envelopes"], key=lambda r: r["policy_id"]):  # 次序同原(信封 id 升序)
+        if row["status"] != "warn":
             continue
         template = template or envelope_renew_declaration()["messages"]["warn"]
-        who = str((usage.get("policy") or {}).get("agent_or_role") or "")
-        plan = renew_plan(governance_root, usage, identities={who}, task_id="<在推卡>", now=now)
-        out.append({"policy_id": pid, "why": why, "used": usage["used"], "max_tasks": usage["max_tasks"], "expires_at": usage["expires_at"],
-                    "agent_or_role": who, "next_policy_id": plan["next_policy_id"],
-                    "line": f"{template.format(policy_id=pid, why=why, command=plan['renew_command'])}(覆盖 {who})"})
+        pid, who, why = row["policy_id"], row["agent_or_role"], row["why"]
+        out.append({"policy_id": pid, "why": why, "used": row["used"], "max_tasks": row["max_tasks"], "expires_at": row["expires_at"],
+                    "agent_or_role": who, "next_policy_id": row["next_policy_id"],
+                    "line": f"{template.format(policy_id=pid, why=why, command=row['renew_command'])}(覆盖 {who})"})
     return out
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F172: 信封状态单一推导(看板信封页 / Owner 收件箱 F168 / loop status 预警 F166 / brief 共用)。
+# 状态 = envelope_usage(门侧同一用量真相)+ envelope_warning(同一预警阈值)+ 接替关系(本节唯一判定)。
+# ---------------------------------------------------------------------------
+
+#: 展示状态值域(看板文案 / 色读 verbs.schema board_owner_envelopes.status_labels; 键须与此一致)
+ENVELOPE_DISPLAY_STATUSES = ("warn", "exhausted", "active", "not_yet_active", "superseded", "expired", "inactive", "invalid", "missing")
+#: 「当前在用」= 未被接替且处于这些状态(用尽而无接替者 = 仍是该驱动方的当前信封, 待续签)
+_CURRENT_STATUSES = ("warn", "exhausted", "active", "not_yet_active")
+#: 可接替别人的信封状态(新信封自身有效或已签待生效)
+_SUCCESSOR_STATES = ("active", "not_yet_active")
+
+
+def envelope_driver_role(agent_or_role: str) -> str:
+    """信封 agent_or_role → 驱动方角色名(custom_roles.instance_role_name_candidates 唯一实现的末候选: 实例名首段按 naming.prefix 反查;
+    裸角色名 = 自身)。只读 roles.schema 注册表。"""
+    from tools.aipos_cli.custom_roles import instance_role_name_candidates
+
+    cands = instance_role_name_candidates(agent_or_role)
+    return cands[-1] if cands else ""
+
+
+def _same_driver(older: dict[str, Any], newer: dict[str, Any]) -> bool:
+    """同一驱动方: agent_or_role 相同; 或同一角色名且其一写的是裸角色名(角色级信封 ↔ 该角色实例信封, 如 advisor ↔ advisor.<项目>.<机器>)。
+    两个不同的具体实例 = 不同驱动方(并行多顾问各自的信封互不接替)。"""
+    a, b = str(older.get("agent_or_role") or ""), str(newer.get("agent_or_role") or "")
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return envelope_driver_role(a) == envelope_driver_role(b) and ("." not in a or "." not in b)
+
+
+def _scope_covers(newer: dict[str, Any], older: dict[str, Any]) -> bool:
+    """新信封的作用范围 ⊇ 旧信封(task_mode / project / task_ids / lane 仓集合; 新者缺省 = 不限)。范围变窄 = 不算接替(旧信封仍覆盖新者不覆盖的卡)。
+    launch_harnesses 是拉起授权附加项, 不计入范围。"""
+    for key in ("task_selector_task_mode", "task_selector_project"):
+        if newer.get(key) and newer.get(key) != older.get(key):
+            return False
+    for key in ("task_selector_task_ids", "task_selector_lane_repo"):
+        new_set, old_set = set(newer.get(key) or []), set(older.get(key) or [])
+        if new_set and (not old_set or not old_set <= new_set):
+            return False
+    return True
+
+
+def envelope_overview(governance_root: Path | str, *, now: datetime | None = None) -> dict[str, Any]:
+    """一个项目全部信封的状态(唯一推导)。每条 = envelope_usage 用量真相 + 展示状态 status ∈ ENVELOPE_DISPLAY_STATUSES + 接替者 superseded_by
+    + 是否当前在用 current + 预警原因 why(envelope_warning)+ 续签计划(renew_plan: next_policy_id / renew_command / note)。
+
+    接替(gap #160): 旧信封 A 被 B 接替 ⇔ B 自身有效或已签待生效(active / not_yet_active)、B 的 active_from 严格晚于 A、同一驱动方(_same_driver)、
+    B 的范围 ⊇ A(_scope_covers); 取最新的那个 B。active_from 相同 = 不判先后(都不接替)。
+    status: 有效信封被接替 = superseded(不预警); 有效且达阈值 = warn; 其余 = usage.state(用尽 / 过期 / 未生效 / 停用 / 形不合 / 缺失)。
+    current = 未被接替且 status ∈ _CURRENT_STATUSES。返回 {governance_root, envelopes(按 active_from 新→旧, 同刻按 id), drivers}:
+    drivers = 每个驱动方(agent_or_role)一行 {agent_or_role, current: [当前在用 policy_id], latest}。"""
+    from tools.aipos_cli.task_loader import task_card_lookup_scope
+
+    root = Path(governance_root)
+    now = now or utc_now()
+    with task_card_lookup_scope(root):  # 只读推导: 已放行认领计数整根只数一趟(F142 同一作用域, 可重入)
+        return _envelope_overview(root, now)
+
+
+def _envelope_overview(root: Path, now: datetime) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for pid in policy_ids(root):
+        usage = envelope_usage(root, pid, now=now)
+        policy = usage.get("policy") or {}
+        rows.append({"policy_id": pid, "state": usage["state"], "usage": usage, "policy": policy,
+                     "agent_or_role": str(policy.get("agent_or_role") or ""), "_from": _parse_iso(policy.get("active_from"))})
+    for row in rows:
+        best: dict[str, Any] | None = None
+        if row["state"] not in ("missing", "invalid") and row["_from"] is not None:
+            for other in rows:
+                if (other is row or other["state"] not in _SUCCESSOR_STATES or other["_from"] is None or other["_from"] <= row["_from"]
+                        or not _same_driver(row["policy"], other["policy"]) or not _scope_covers(other["policy"], row["policy"])):
+                    continue
+                if best is None or (other["_from"], other["policy_id"]) > (best["_from"], best["policy_id"]):
+                    best = other
+        row["superseded_by"] = best["policy_id"] if best else None
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        usage, policy, state = row["usage"], row["policy"], row["state"]
+        why = envelope_warning(usage) if state in ("active", "exhausted", "expired") else None
+        if state in ("active", "not_yet_active") and row["superseded_by"]:
+            status = "superseded"
+        elif state == "active" and why:
+            status = "warn"
+        else:
+            status = state
+        current = not row["superseded_by"] and status in _CURRENT_STATUSES
+        # 续签计划只为当前在用者算(next_policy_id 要扫全部信封; 历史信封不续签)
+        plan = (renew_plan(root, usage, identities={row["agent_or_role"]} - {""} or {"advisor"}, task_id="<在推卡>", now=now)
+                if policy and current else {"next_policy_id": None, "renew_command": None, "note": ""})
+        out.append({
+            "policy_id": row["policy_id"], "agent_or_role": row["agent_or_role"], "driver_role": envelope_driver_role(row["agent_or_role"]),
+            "state": state, "status": status, "current": current, "superseded_by": row["superseded_by"],
+            "why": why if status in ("warn", "exhausted", "expired") else None,
+            "used": usage.get("used"), "max_tasks": usage.get("max_tasks"), "remaining": usage.get("remaining"),
+            "active_from": policy.get("active_from"), "expires_at": usage.get("expires_at"), "seconds_to_expiry": usage.get("seconds_to_expiry"),
+            "task_mode": policy.get("task_selector_task_mode") or "", "lane_repos": list(policy.get("task_selector_lane_repo") or []),
+            "launch_harnesses": list(policy.get("launch_harnesses") or []), "project_selector": policy.get("task_selector_project") or "",
+            "task_ids": list(policy.get("task_selector_task_ids") or []),
+            "next_policy_id": plan["next_policy_id"], "renew_command": plan["renew_command"], "renew_note": plan["note"],
+            "usage": usage,  # 门侧用量真相原样(续签计划 renew_plan 的入参; 对外展示的调用方自行裁剪)
+        })
+    out.sort(key=lambda r: (str(r["active_from"] or ""), r["policy_id"]), reverse=True)
+    drivers: dict[str, dict[str, Any]] = {}
+    for row in out:  # 新→旧: 每个驱动方首见者 = latest
+        entry = drivers.setdefault(row["agent_or_role"], {"agent_or_role": row["agent_or_role"], "current": [], "latest": row["policy_id"]})
+        if row["current"]:
+            entry["current"].append(row["policy_id"])
+    return {"governance_root": str(root), "envelopes": out, "drivers": list(drivers.values())}
+
+
+def envelope_status(governance_root: Path | str, policy_id: str, *, now: datetime | None = None) -> dict[str, Any] | None:
+    """一个信封在 envelope_overview 里的那一行(loop status 预警按运行所用信封取); 不在声明目录 = None。"""
+    pid = str(policy_id or "").strip()
+    return next((r for r in envelope_overview(governance_root, now=now)["envelopes"] if r["policy_id"] == pid), None)
 
 
 # AIPOS-316: Guard against direct invocation

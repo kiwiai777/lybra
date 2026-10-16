@@ -109,12 +109,14 @@ def test_repo_name_set_single_function():
             repo_name_set(bad)
     # 铸造 / 渲染 / 读 / 判定 / 视图全部经此一个函数(禁第二路径)
     src = {p: (REPO_ROOT / "tools/aipos_cli" / p).read_text(encoding="utf-8")
-           for p in ("autonomy_policy.py", "owner_decision_writer.py", "machine_zone.py", "aipos_cli.py")}
+           for p in ("autonomy_policy.py", "owner_decision_writer.py", "machine_zone.py", "envelope_mint.py")}
     assert src["autonomy_policy.py"].count("repo_name_set(") >= 4  # 渲染 / normalize_policy / match_claim_envelope / select_envelope
-    assert "repo_name_set(" in src["owner_decision_writer.py"] and "repo_name_set(" in src["aipos_cli.py"]
+    # AIPOS-F172: 铸造 payload 构造收口 envelope_mint.build_mint_payload(CLI 与看板信封页同调)
+    assert "repo_name_set(" in src["owner_decision_writer.py"] and "repo_name_set(" in src["envelope_mint.py"]
     assert src["machine_zone.py"].count("repo_name_set(") >= 3  # resolve_lane_filter / lane_filter_label / filter_rows_by_lane
     assert sum((REPO_ROOT / "tools/aipos_cli" / p).read_text(encoding="utf-8").count("def repo_name_set(")
-               for p in ("workspace_config.py", "autonomy_policy.py", "machine_zone.py", "owner_decision_writer.py", "aipos_cli.py")) == 1
+               for p in ("workspace_config.py", "autonomy_policy.py", "machine_zone.py", "owner_decision_writer.py", "aipos_cli.py",
+                         "envelope_mint.py")) == 1
 
 
 # ===========================================================================
