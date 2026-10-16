@@ -1506,7 +1506,7 @@ def _roadmap_command(args: argparse.Namespace) -> int:
 
     command = getattr(args, "roadmap_command", None)
     if not command:
-        print("Error: 缺子命令(show / add-milestone / add-criterion / set / remove)", file=sys.stderr)
+        print("Error: 缺子命令(show / status / add-milestone / add-criterion / set / remove)", file=sys.stderr)
         return 2
     try:
         home, _source = resolve_home_root_with_source(explicit_root=args.home_root)
@@ -1525,10 +1525,16 @@ def _roadmap_command(args: argparse.Namespace) -> int:
             else:
                 print(rm.render_view_text(view))
             return 0
+        if command == "status":  # AIPOS-F173: 只读推导(roadmap_drift.roadmap_status 唯一实现; 收件箱 / 看板同读)
+            from tools.aipos_cli import roadmap_drift
+
+            drift = roadmap_drift.roadmap_status(root, lane=args.lane, project=project)
+            print(render_json(roadmap_drift.json_view(drift)) if args.json else roadmap_drift.render_status_text(drift))
+            return 0
         params = {k: getattr(args, k, None) for k in rm.roadmap_param_keys()}
         outcome = rm.apply_roadmap_change(root, command, params, actor=args.actor, confirm=bool(args.confirm), project=project)
     except rm.RoadmapError as exc:
-        print(f"Error: {exc}(路线图未改动)", file=sys.stderr)
+        print(f"Error: {exc}{'' if command in ('show', 'status') else '(路线图未改动)'}", file=sys.stderr)
         return 1
     except (SchemaLoadError, OSError, ValueError, subprocess.CalledProcessError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -2847,6 +2853,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     _rm_fields = roadmap_cli_fields()
     roadmap_show.add_argument(_rm_fields["lane_filter"]["flag"], dest="lane", default=None, help=_rm_fields["lane_filter"]["help"])
+    # AIPOS-F173: lybra roadmap status —— 里程碑进度 / 偏差信号 / 下一步建议(只读; 推导唯一实现 roadmap_drift.roadmap_status,
+    # 声明 verbs.schema lybra_roadmap.status; 阈值 project.json roadmap_drift)
+    roadmap_status_parser = roadmap_sub.add_parser("status", help="Read-only: per-milestone progress (satisfied criteria / total), "
+                                                   "drift signals (unlinked ratio / stalled / uncovered criteria / repeated rework / "
+                                                   "overdue / recent roadmap changes) and next-step advice; no roadmap file = first-use hint")
+    _roadmap_common(roadmap_status_parser)
+    roadmap_status_parser.add_argument(_rm_fields["lane_filter"]["flag"], dest="lane", default=None, help=_rm_fields["lane_filter"]["help"])
     roadmap_add_ms = roadmap_sub.add_parser("add-milestone", help="Add a milestone (two-phase)")
     roadmap_add_crit = roadmap_sub.add_parser("add-criterion", help="Add an acceptance criterion under a milestone (two-phase)")
     for _rm_parser, _rm_kind in ((roadmap_add_ms, "milestone"), (roadmap_add_crit, "criterion")):

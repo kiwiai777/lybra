@@ -352,8 +352,9 @@ def link_problems(metadata: dict[str, Any], governance_root: str | Path) -> tupl
 
 def card_links(governance_root: str | Path, roadmap: dict[str, Any] | None = None) -> dict[str, Any]:
     """本治理根队列全部状态的卡(task_loader.iter_queue_task_paths 唯一遍历)的挂接判定。
-    返回 {cards: [{task_id, queue_state, path, state, milestone, criteria, problems}], unreadable: [{path, reason}]}。
-    卡面读不出 = 进 unreadable(不当作未挂, 删除判定据此 fail-closed)。"""
+    返回 {cards: [{task_id, queue_state, path, state, milestone, criteria, problems, metadata}], unreadable: [{path, reason}]}。
+    卡面读不出 = 进 unreadable(不当作未挂, 删除判定据此 fail-closed)。AIPOS-F173: 每卡带卡面 metadata(偏差推导 roadmap_drift 读
+    时刻 / 返工轮次 / 运行证据声明, 不再二次读卡)。"""
     from tools.aipos_cli.task_loader import iter_queue_task_paths, load_task_file
 
     root = Path(governance_root)
@@ -367,7 +368,8 @@ def card_links(governance_root: str | Path, roadmap: dict[str, Any] | None = Non
             unreadable.append({"path": task["path"], "reason": "; ".join(task["parse_errors"])})
             continue
         status = card_link_status(task.get("metadata") or {}, roadmap)
-        cards.append({"task_id": task.get("task_id"), "queue_state": task.get("queue_state"), "path": task["path"], **status})
+        cards.append({"task_id": task.get("task_id"), "queue_state": task.get("queue_state"), "path": task["path"], **status,
+                      "metadata": task.get("metadata") or {}})
     return {"cards": cards, "unreadable": unreadable}
 
 

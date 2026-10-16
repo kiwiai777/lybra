@@ -29,7 +29,7 @@ from typing import Any
 VERB = "lybra_owner_inbox"
 DECIDE_VERB = "lybra_owner_decide"
 NOTE_VERB = "lybra_loop_note"
-CATEGORIES = ("loop_owner_needed", "needs_owner_card", "rework_limit", "supplementary_fail", "envelope_warning")
+CATEGORIES = ("loop_owner_needed", "needs_owner_card", "rework_limit", "supplementary_fail", "envelope_warning", "roadmap_drift")
 _DECL_KEYS = ("item_id", "decision", "texts", "rank_labels", "categories", "options", "custom_option", "exit_codes", "stale")
 _DECISION_KEYS = ("decision_id_prefix", "decision_type", "decision_status", "capture_surface", "source_tag", "capture_method",
                   "approval_intent", "redaction_status", "token_ref", "capability_ttl_hours", "external_ref_prefix",
@@ -375,8 +375,40 @@ def _envelope_items(root: Path, project: str, decl: dict[str, Any], home_root: P
     return out
 
 
+def _roadmap_items(root: Path, project: str, decl: dict[str, Any], home_root: Path | None,
+                   errors: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """⑥ AIPOS-F173: 路线图严重偏差 = 推导唯一实现 roadmap_drift.roadmap_status 中 severity=inbox 的信号(声明 verbs.lybra_roadmap.status
+    .signals.*.severity), 每条一个事项; 锚点 = 信号 anchor(真相不变 = 同一事项 ID, 重算不重复)。项目无路线图 = 无事项。
+    推导内某卡记录读不出 = 点名进 errors(不猜)。路线图 / 阈值读不出 = 异常向上(collect_project_inbox 点名该类)。"""
+    from tools.aipos_cli.roadmap_drift import roadmap_status
+    from tools.schema_loader import SchemaLoadError
+
+    cat = decl["categories"]["roadmap_drift"]
+    view = roadmap_status(root, project=project)
+    for err in view["errors"]:
+        errors.append({"project": project, "source": f"路线图偏差: {err['source']}", "error": err["error"]})
+    out: list[dict[str, Any]] = []
+    for sig in view["signals"]:
+        if sig["severity"] != "inbox":
+            continue
+        if sig["kind"] not in (cat.get("rank_by_kind") or {}) or sig["kind"] not in (cat.get("subject_by_kind") or {}):
+            raise SchemaLoadError(f"verbs.{VERB}.categories.roadmap_drift.rank_by_kind / subject_by_kind 缺严重偏差种类 {sig['kind']!r}")
+        facts = sig.get("facts") or {}
+        fill = {"milestone": sig.get("milestone") or "", "criterion": sig.get("criterion") or "", "lane": sig.get("lane") or "",
+                "kind_label": sig["label"], "reason": sig["reason"], "met": facts.get("met", "?"), "total": facts.get("total", "?")}
+        out.append(_base_item(
+            decl, project=project, governance_root=root, category="roadmap_drift", rank=int(cat["rank_by_kind"][sig["kind"]]),
+            subject=sig["subject"], anchor=str(sig["anchor"]), source=str(sig.get("advisor") or ""),
+            ask=_fmt(cat["ask"], "categories.roadmap_drift.ask", **fill), recommend=sig["advice"],
+            impact=_fmt(cat["impact"], "categories.roadmap_drift.impact", **fill),
+            options=_option_list(list(cat["options"]), decl), since=facts.get({"stalled": "last_at", "overdue": "target_date"}.get(sig["kind"], "")),
+            home_root=home_root, facts={"kind": sig["kind"], "milestone": sig.get("milestone"), "criterion": sig.get("criterion"),
+                                        "lane": sig.get("lane"), **facts}))
+    return out
+
+
 _COLLECTORS = (("loop_owner_needed", _loop_items), ("needs_owner_card", _needs_owner_items), ("rework_limit", _rework_items),
-               ("supplementary_fail", _supplementary_items), ("envelope_warning", _envelope_items))
+               ("supplementary_fail", _supplementary_items), ("envelope_warning", _envelope_items), ("roadmap_drift", _roadmap_items))
 
 
 def collect_project_inbox(governance_root: Path, *, project: str | None = None, home_root: Path | None = None,
