@@ -64,6 +64,10 @@ def pages_declaration() -> dict[str, Any]:
         raise SchemaLoadError(f"verbs.schema.json {DECL_KEY}.evidence_excerpt_chars 须为正整数")
     if not all(isinstance(decl["query"].get(k), str) and decl["query"][k] for k in ("project", "milestone")):
         raise SchemaLoadError(f"verbs.schema.json {DECL_KEY}.query(project / milestone)未声明齐")
+    route = decl.get("artifact_route")
+    if (not isinstance(route, dict) or not str(route.get("path") or "").startswith("/")
+            or not all(isinstance((route.get("params") or {}).get(k), str) and route["params"][k] for k in ("project", "task", "file"))):
+        raise SchemaLoadError(f"verbs.schema.json {DECL_KEY}.artifact_route(path 以 / 起首 / params{{project, task, file}})未声明齐(AIPOS-F175)")
     return decl
 
 
@@ -431,6 +435,35 @@ def roadmap_url(decl: dict[str, Any], project: str, milestone: str | None = None
     return page_url(decl, "roadmap", project=project, milestone=milestone)
 
 
+def artifact_url(decl: dict[str, Any], project: str, task_id: str, name: str) -> str:
+    """AIPOS-F175: 卡产物图片的看板只读取图地址(声明 artifact_route)。"""
+    from urllib.parse import urlencode
+
+    route = decl["artifact_route"]
+    params = route["params"]
+    return f"{route['path']}?" + urlencode({params["project"]: project, params["task"]: task_id, params["file"]: name})
+
+
+def artifact_for_route(home_root: str | Path | None, query: dict[str, list[str]]) -> dict[str, Any] | None:
+    """AIPOS-F175: 取图路由的唯一判定入口——项目 = home 根注册枚举(home_entries), 文件 = roadmap.artifact_file(卡面声明 + 落点内 + 图片后缀)。
+    任一不合 = None(路由回 404)。返回 {path, content_type}。只读。"""
+    import mimetypes
+
+    from tools.aipos_cli.roadmap import artifact_file
+
+    params = pages_declaration()["artifact_route"]["params"]
+    values = {k: str((query.get(v) or [""])[0]).strip() for k, v in params.items()}
+    if not all(values.values()):
+        return None
+    entry = next((e for e in home_entries(home_root)["projects"] if e["name"] == values["project"]), None)
+    if entry is None:
+        return None
+    path = artifact_file(entry["root"], values["task"], values["file"])
+    if path is None:
+        return None
+    return {"path": path, "content_type": mimetypes.guess_type(path.name)[0] or "application/octet-stream"}
+
+
 def collect_overview(home_root: str | Path | None = None) -> dict[str, Any]:
     """总览页: 每项目一张卡片(在途卡 / 待 Owner 项 / 信封 / 路线图摘要 / 接入完成度), 暂停项目标 paused(渲染折叠)。"""
     from tools.aipos_cli.envelope_board import board_envelope_url
@@ -518,6 +551,15 @@ def collect_roadmap(home_root: str | Path | None = None, *, project: str | None 
             pick = next((m for m in milestones if m["status"] == "active"), milestones[0] if milestones else None)
         selected["milestone"] = pick["id"] if pick else None
         selected["signal_targets"] = [f.tell_target(s.get("advisor")) for s in view["signals"]]
+        # AIPOS-F175: criteria awaiting the Owner spot check -> "tell <advisor>" targets + the advisor's verify command
+        # (command template = owner inbox owner_check.verify_command, same as the inbox item)
+        from tools.aipos_cli.owner_inbox import inbox_declaration
+
+        template = str(inbox_declaration()["categories"]["owner_check"]["verify_command"])
+        selected["owner_checks"] = {
+            str(row["id"]): {"tell": f.tell_target(row.get("verify_target_by")),
+                             "command": template.format(governance_root=str(f.root), criterion=row["id"])}
+            for ms in milestones for row in ms["criteria"] if row.get("state") == "owner_pending"}
     else:
         from tools.aipos_cli.roadmap import roadmap_texts
 
