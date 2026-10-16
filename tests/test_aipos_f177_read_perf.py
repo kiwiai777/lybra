@@ -508,3 +508,74 @@ def test_item3_perf_log_optional_one_line_per_get_without_query(board, tmp_path)
 def test_item5_single_implementation(symbol, owner):
     hits = _code_hits(symbol)
     assert hits == [owner], (symbol, hits)
+
+
+# ---------------------------------------------------------------------------
+# side fix: same-second verdict ID collision between audit rounds (pre-existing gap exposed by faster loops)
+# ---------------------------------------------------------------------------
+
+_VERDICT_ID_RE = re.compile(r"^verdict_T177-V_\d{8}_\d{6}_(?P<actor>[A-Za-z0-9._-]+)$")
+
+
+def _verdict_rig(tmp_path: Path):
+    from tools.aipos_cli.board_adapter import audit_verdict_record_path
+    from tools.aipos_cli.clock import iso_z
+    from tools.aipos_cli.record_writer import build_runtime_id, render_markdown
+
+    root = tmp_path / "gov"
+    stamp = iso_z()
+    vid = build_runtime_id("verdict", "T177-V", stamp, "audit.f177.h1")
+    path = audit_verdict_record_path(root, "T177-V", vid)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_markdown({"record_type": "audit_verdict_record", "verdict_id": vid, "verdict": "FAIL",
+                                     "reviewed_task_id": "T177-V", "audit_task_id": "T177-VR", "verdict_at": stamp}, "# R1\n"),
+                    encoding="utf-8")
+    return root, stamp, vid, path
+
+
+def test_side_fix_same_second_other_round_takes_next_second_same_format(tmp_path):
+    from tools.aipos_cli.board_adapter import _settle_verdict_id_collision, audit_verdict_record_path
+    from tools.aipos_cli.record_writer import render_markdown
+
+    root, stamp, r1_id, r1_path = _verdict_rig(tmp_path)
+    records = load_records(root)
+    assert records["audit_verdict_index"][r1_id][0]["audit_task_id"] == "T177-VR"
+    ts, r2_id, r2_path, reason = _settle_verdict_id_collision(
+        records, root, reviewed_task_id="T177-V", audit_task_id="T177-VR2", actor_id="audit.f177.h1",
+        timestamp=stamp, verdict_id=r1_id, verdict_path=r1_path)
+    _show(f"R1 {r1_id} -> R2 (same second at first) {r2_id}, reason={reason}")
+    assert reason is None and r2_id != r1_id and ts > stamp and not r2_path.exists()
+    assert _VERDICT_ID_RE.match(r1_id) and _VERDICT_ID_RE.match(r2_id)  # format unchanged: verdict_<reviewed>_<YYYYMMDD_HHMMSS>_<auditor>
+    assert r2_path == audit_verdict_record_path(root, "T177-V", r2_id)
+    r2_path.write_text(render_markdown({"record_type": "audit_verdict_record", "verdict_id": r2_id, "verdict": "PASS",
+                                        "reviewed_task_id": "T177-V", "audit_task_id": "T177-VR2", "verdict_at": ts}, "# R2\n"),
+                       encoding="utf-8")
+    both = load_records(root)["task_audit_verdicts"]["T177-V"]
+    assert sorted(v["verdict_id"] for v in both) == sorted([r1_id, r2_id])
+
+
+def test_side_fix_same_round_resubmission_still_refused(tmp_path):
+    from tools.aipos_cli.board_adapter import _settle_verdict_id_collision
+
+    root, stamp, r1_id, r1_path = _verdict_rig(tmp_path)
+    records = load_records(root)
+    out = _settle_verdict_id_collision(records, root, reviewed_task_id="T177-V", audit_task_id="T177-VR",
+                                       actor_id="audit.f177.h1", timestamp=stamp, verdict_id=r1_id, verdict_path=r1_path)
+    # unchanged -> the caller's existing refusals ("Audit verdict record already exists" + DUPLICATE_AUDIT_VERDICT) apply
+    assert out == (stamp, r1_id, r1_path, None) and r1_path.exists()
+    # a colliding record whose round cannot be read is not waited out either (fail-closed: existing refusal)
+    empty = {"audit_verdict_index": {}}
+    assert _settle_verdict_id_collision(empty, root, reviewed_task_id="T177-V", audit_task_id="T177-VR2", actor_id="audit.f177.h1",
+                                        timestamp=stamp, verdict_id=r1_id, verdict_path=r1_path) == (stamp, r1_id, r1_path, None)
+
+
+def test_side_fix_still_colliding_after_wait_is_fail_closed(tmp_path, monkeypatch):
+    from tools.aipos_cli import board_adapter
+
+    root, stamp, r1_id, r1_path = _verdict_rig(tmp_path)
+    monkeypatch.setattr(board_adapter, "_VERDICT_ID_COLLISION_WAIT_SECONDS", 0.0)
+    ts, vid, path, reason = board_adapter._settle_verdict_id_collision(
+        load_records(root), root, reviewed_task_id="T177-V", audit_task_id="T177-VR2", actor_id="audit.f177.h1",
+        timestamp=stamp, verdict_id=r1_id, verdict_path=r1_path)
+    _show(f"fail-closed reason: {reason}")
+    assert reason is not None and reason.startswith("VERDICT_ID_COLLISION:") and r1_id in reason

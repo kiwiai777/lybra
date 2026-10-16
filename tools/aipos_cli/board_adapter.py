@@ -4436,6 +4436,49 @@ def report_snapshot_declaration() -> dict[str, Any]:
     return decl
 
 
+#: AIPOS-F177: upper bound for waiting out a same-second verdict ID collision with another audit round (seconds)
+_VERDICT_ID_COLLISION_WAIT_SECONDS = 2.0
+
+
+def _settle_verdict_id_collision(
+    records: dict[str, Any],
+    repo_root: Path,
+    *,
+    reviewed_task_id: str,
+    audit_task_id: str,
+    actor_id: str,
+    timestamp: str,
+    verdict_id: str,
+    verdict_path: Path,
+) -> tuple[str, str, Path, str | None]:
+    """AIPOS-F177 (pre-existing gap exposed by faster loops): verdict IDs keep their format verdict_<reviewed>_<YYYYMMDD_HHMMSS>_<auditor>,
+    so two rounds audited by the same instance within one second map to the same record file. When the existing record belongs to
+    ANOTHER audit round (its audit_task_id differs), wait until the next whole second and take a fresh ID, at most
+    _VERDICT_ID_COLLISION_WAIT_SECONDS; still colliding = fail-closed reason. Same round (or a record whose round cannot be read)
+    = returned unchanged, so the existing "already exists" / duplicate-verdict refusals apply as before.
+    Returns (timestamp, verdict_id, verdict_path, collision_reason | None)."""
+    import time
+
+    def other_round(vid: str) -> bool:
+        owners = {str(r.get("audit_task_id") or "") for r in (records.get("audit_verdict_index") or {}).get(vid, [])}
+        return bool(owners) and audit_task_id not in owners
+
+    if not verdict_path.exists() or not other_round(verdict_id):
+        return timestamp, verdict_id, verdict_path, None
+    taken = verdict_id
+    deadline = time.monotonic() + _VERDICT_ID_COLLISION_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        time.sleep(max(0.0, 1.0 - (time.time() % 1.0)) + 0.001)  # to the next whole second
+        timestamp = iso_z()
+        verdict_id = build_runtime_id("verdict", reviewed_task_id, timestamp, actor_id)
+        verdict_path = audit_verdict_record_path(repo_root, reviewed_task_id, verdict_id)
+        if not verdict_path.exists():
+            return timestamp, verdict_id, verdict_path, None
+    return timestamp, verdict_id, verdict_path, (
+        f"VERDICT_ID_COLLISION: 裁决 ID {verdict_id} 与另一审计轮已落裁决 {taken} 同秒撞名, 等待 {_VERDICT_ID_COLLISION_WAIT_SECONDS:g} 秒后仍被占用"
+        "(裁决 ID 秒级粒度); 出口: 稍后重提本轮裁决")
+
+
 def render_report_snapshot(raw: bytes, *, verdict_id: str, reviewed_task_id: str, audit_task_id: str, source_ref: str) -> tuple[str, str]:
     """AIPOS-F89 件③d: 快照内容唯一构造 = 记录头(声明 header_fields, 经单源 record_writer.render_frontmatter_block)+ 换行 + 报告原文
     逐字节。返回 (内容, 报告原文字节 sha256)。门写快照(_audit_report_snapshot_plan)与 AIPOS-F158 记录类型补齐迁移
@@ -4894,6 +4937,14 @@ def _build_audit_verdict_preview(
     timestamp = planned_verdict_at or iso_z()
     verdict_id = planned_verdict_id or build_runtime_id("verdict", str(reviewed_task.get("task_id") or ""), timestamp, canonical_agent_instance or actor)
     verdict_path = audit_verdict_record_path(repo_root, str(reviewed_task.get("task_id") or ""), verdict_id)
+    if planned_verdict_id is None:
+        # AIPOS-F177 附带修复(既有缺口, 提速暴露): 裁决 ID 秒级粒度, 另一审计轮同一秒已落裁决 = 撞名; 等到下一秒重取(上限
+        # _VERDICT_ID_COLLISION_WAIT_SECONDS), 仍撞 = fail-closed 拒因。同一轮重复提交不在此等待, 照旧由下方「已存在 / 幂等第二层」拒。
+        timestamp, verdict_id, verdict_path, collision = _settle_verdict_id_collision(
+            records, repo_root, reviewed_task_id=str(reviewed_task.get("task_id") or ""), audit_task_id=str(audit_task.get("task_id") or ""),
+            actor_id=canonical_agent_instance or actor, timestamp=timestamp, verdict_id=verdict_id, verdict_path=verdict_path)
+        if collision:
+            blocking_reasons.append(collision)
     root = repo_root.resolve()  # AIPOS-240 (F-o3-19): record paths are .resolve()d; symlink-safe render
     verdict_rel = str(verdict_path.resolve().relative_to(root))
     # AIPOS-F90 件②: 审计报告全文快照(与裁决记录同一批受控落盘; 声明 transitions artifact_ingest.verdict.report_snapshot)
