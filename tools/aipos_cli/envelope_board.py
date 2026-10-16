@@ -348,7 +348,7 @@ def params_digest(params: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(params, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def _provenance(decl: dict[str, Any], session: dict[str, Any]) -> dict[str, str]:
+def session_provenance(decl: dict[str, Any], session: dict[str, Any]) -> dict[str, str]:
     values = {"role": session["role"], "token_ref": session.get("token_ref") or "-", "session_ref": session["session_ref"],
               "login_method": session.get("login_method") or "-", "source_ip": session.get("source_ip") or "-"}
     return {"capture_surface": str(decl["capture_surface"]),
@@ -363,7 +363,7 @@ def _payload(params: dict[str, Any], decl: dict[str, Any], session: dict[str, An
                               task_mode=params["task_mode"] or None, expires_at=params["expires_at"],
                               decision_summary=params["decision_summary"], actor=str(session["role"]),  # actor = 登录会话的 Owner 角色(已校验)
                               launch_harnesses=params["launch_harness"], lane_repo=params["lane_repo"] or None,
-                              provenance=_provenance(decl, session))
+                              provenance=session_provenance(decl, session))
 
 
 def preview_lines(params: dict[str, Any], payload: dict[str, Any], verdict: str, decl: dict[str, Any]) -> list[str]:
@@ -393,6 +393,110 @@ def resolve_board_audit_log_path(repo_root: Path | None) -> Path | None:
     return Path(repo_root).expanduser() / ".lybra" / str(board_envelopes_declaration()["audit_log_file"])
 
 
+def handle_owner_write(
+    body: dict[str, Any],
+    *,
+    decl: dict[str, Any],
+    action: str,
+    session: dict[str, Any] | None,
+    home_root: str | Path | None,
+    preview_store: Any,
+    audit_log_path: Path | None,
+    prepare: Any,
+    preview: Any,
+    confirm: Any,
+    pre_confirm: Any = None,
+    origin: str | None = None,
+    host: str | None = None,
+    content_type: str | None = None,
+    now: datetime | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """看板 Owner 写例外的唯一安全框架(AIPOS-F172 写例外①信封签发首用; AIPOS-F176 写例外②项目升级同调, 不另写):
+    Owner 角色会话(角色名读 board_owner_envelopes.owner_role)/ Origin 与 Host 相符 / JSON 请求体 / stage ∈ preview|confirm /
+    workspace = home 根注册项目(resolve_workspace)/ 预演发本会话一次性令牌(绑定会话指纹 + 参数摘要, 令牌表与时效 = F172 同一张)/
+    确认核令牌六类(缺 / 错 / 已用 / 过期 / 他会话 / 改参数)/ 每次预演与确认(含被拒)写看板审计日志, 确认前先写不进 = 拒(fail-closed)。
+
+    decl = 本写例外的声明(取 errors 码表: 状态码与文案); action = 审计日志 action 名。各写例外只给三个回调:
+      prepare(body, project, root, now, session) -> (params, audit_fields, context): 归一参数(摘要据此算, 预演与确认同一归一)
+      preview(params, context) -> 应答附加键(dict); 不可预演 = 抛 MintRequestError("PREVIEW_BLOCKED", detail=…)
+      confirm(params, context) -> (audit_fields, response, error): error 非 None = 执行未成(其审计照记, 再按 error 码拒)
+      pre_confirm(params, context)(可选): 令牌核过后、留痕前的前置拒(如签发凭据库缺)。
+    返回 (HTTP 状态码, 应答)。session = {role, token_ref, session_ref, login_method, source_ip} 或 None(无会话 = 非 Owner)。"""
+    from tools.aipos_cli.clock import utc_now
+
+    frame = board_envelopes_declaration()
+    ttl = int(frame["preview_ttl_seconds"])
+    now = now or utc_now()
+    stage = str(body.get("stage") or "").strip()
+    audit: dict[str, Any] = {"action": action, "stage": stage or None, "workspace": str(body.get("workspace") or "") or None,
+                             "role": (session or {}).get("role"), "token_ref": (session or {}).get("token_ref"),
+                             "session_ref": (session or {}).get("session_ref"), "login_method": (session or {}).get("login_method"),
+                             "source_ip": (session or {}).get("source_ip")}
+
+    def _reject(err: MintRequestError) -> tuple[int, dict[str, Any]]:
+        status, payload = error_response(err, decl)
+        try:
+            append_board_audit(audit_log_path, {**audit, "outcome": err.code, "message": payload["message"]})
+            payload["audit_logged"] = True
+        except OSError as exc:  # refusal wrote nothing; report the audit failure (confirm has its own fail-closed audit check)
+            payload["audit_logged"] = False
+            payload["audit_error"] = f"{type(exc).__name__}: {exc}"
+        return status, payload
+
+    try:
+        if not session or session.get("role") != frame["owner_role"]:
+            raise MintRequestError("OWNER_ONLY")
+        if origin and host and urlparse(origin).netloc != host:
+            raise MintRequestError("ORIGIN_MISMATCH")
+        if "application/json" not in str(content_type or "").lower():
+            raise MintRequestError("PARAMS_INVALID", detail="Content-Type 须为 application/json")
+        if stage not in _STAGES:
+            raise MintRequestError("STAGE_INVALID")
+        project, root = resolve_workspace(body, home_root)
+        params, audit_fields, context = prepare(body, project, root, now, session)
+        audit.update(audit_fields)
+        digest = params_digest(params)
+        if stage == "preview":
+            extra = preview(params, context)
+            token = preview_store.issue(session_ref=session["session_ref"], digest=digest)
+            audit_error = None
+            try:
+                append_board_audit(audit_log_path, {**audit, "outcome": "previewed", "digest": digest})
+            except OSError as exc:  # preview writes nothing; report the audit failure (confirm has its own fail-closed check)
+                audit_error = f"{type(exc).__name__}: {exc}"
+            return 200, {"ok": True, "stage": "preview", "preview_token": token, "expires_in": ttl, **extra,
+                         "audit_logged": audit_error is None, "audit_error": audit_error}
+        status, entry = preview_store.take(str(body.get("preview_token") or "").strip() or None)
+        if status == "missing":
+            raise MintRequestError("PREVIEW_TOKEN_REQUIRED")
+        if status == "expired":
+            raise MintRequestError("PREVIEW_TOKEN_EXPIRED", ttl=ttl)
+        if status != "ok" or entry is None:
+            raise MintRequestError("PREVIEW_TOKEN_INVALID")
+        if entry.get("session_ref") != session["session_ref"]:
+            raise MintRequestError("PREVIEW_SESSION_MISMATCH")
+        if entry.get("digest") != digest:
+            raise MintRequestError("PREVIEW_PARAMS_MISMATCH")
+        if pre_confirm is not None:
+            pre_confirm(params, context)
+        # 每次执行须留痕: 执行前先写一条「确认中」, 写不进 = 拒(fail-closed)
+        try:
+            append_board_audit(audit_log_path, {**audit, "outcome": "confirming", "digest": digest})
+        except OSError as exc:
+            raise MintRequestError("AUDIT_LOG_UNAVAILABLE", detail=f"{type(exc).__name__}: {exc}") from exc
+        result_fields, response, error = confirm(params, context)
+        audit_error = None
+        try:
+            append_board_audit(audit_log_path, {**audit, "digest": digest, **result_fields})
+        except OSError as exc:  # the write already took effect; report the result-audit failure (the confirming line is logged)
+            audit_error = f"{type(exc).__name__}: {exc}"
+        if error is not None:
+            raise error
+        return 200, {**response, "audit_logged": audit_error is None, "audit_error": audit_error}
+    except MintRequestError as err:
+        return _reject(err)
+
+
 def handle_mint_request(
     body: dict[str, Any],
     *,
@@ -406,53 +510,38 @@ def handle_mint_request(
     content_type: str | None = None,
     now: datetime | None = None,
 ) -> tuple[int, dict[str, Any]]:
-    """写例外唯一处理: (HTTP 状态码, 应答)。session = {role, token_ref, session_ref, login_method, source_ip} 或 None(无会话 = 非 Owner)。
+    """写例外①(信封签发): 安全判定全在 handle_owner_write(同一框架); 本函数只给签发的归一 / 预演 / 确认回调。
     preview_store = 预演令牌表(issue(session_ref, digest) / take(token) → (status, entry), web/board/auth_otc.PreviewTokenStore)。"""
-    from tools.aipos_cli.clock import utc_now
-
     decl = board_envelopes_declaration()
-    now = now or utc_now()
-    stage = str(body.get("stage") or "").strip()
-    audit: dict[str, Any] = {"action": "envelope_mint", "stage": stage or None, "workspace": str(body.get("workspace") or "") or None,
-                             "role": (session or {}).get("role"), "token_ref": (session or {}).get("token_ref"),
-                             "session_ref": (session or {}).get("session_ref"), "login_method": (session or {}).get("login_method"),
-                             "source_ip": (session or {}).get("source_ip")}
 
-    def _reject(err: MintRequestError) -> tuple[int, dict[str, Any]]:
-        status, payload = error_response(err, decl)
-        try:
-            append_board_audit(audit_log_path, {**audit, "outcome": err.code, "message": payload["message"]})
-            payload["audit_logged"] = True
-        except OSError as exc:  # 拒签本身未写任何东西; 留痕失败照实出声(确认路径在签发前另有 fail-closed 留痕检查)
-            payload["audit_logged"] = False
-            payload["audit_error"] = f"{type(exc).__name__}: {exc}"
-        return status, payload
-
-    try:
-        if not session or session.get("role") != decl["owner_role"]:
-            raise MintRequestError("OWNER_ONLY")
-        if origin and host and urlparse(origin).netloc != host:
-            raise MintRequestError("ORIGIN_MISMATCH")
-        if "application/json" not in str(content_type or "").lower():
-            raise MintRequestError("PARAMS_INVALID", detail="Content-Type 须为 application/json")
-        if stage not in _STAGES:
-            raise MintRequestError("STAGE_INVALID")
-        project, root = resolve_workspace(body, home_root)
+    def prepare(body: dict[str, Any], project: str, root: Path, now: datetime, session: dict[str, Any]) -> tuple[dict, dict, dict]:
         params = normalize_mint_params(body, project=project, governance_root=root, now=now)
-        audit.update({"project": project, "mode": params["mode"], "policy_id": params["policy_id"],
-                      "template_policy_id": params["template_policy_id"] or None, "max_tasks": params["max_tasks"],
-                      "expires_at": params["expires_at"], "agent_or_role": params["agent_or_role"]})
-        digest = params_digest(params)
-        payload = _payload(params, decl, session)
-        if stage == "preview":
-            return _preview(params, payload, digest, decl, session, preview_store, audit_log_path, audit)
-        return _confirm(body, params, payload, digest, decl, session, preview_store, connection_json, audit_log_path, audit)
-    except MintRequestError as err:
-        return _reject(err)
+        audit_fields = {"project": project, "mode": params["mode"], "policy_id": params["policy_id"],
+                        "template_policy_id": params["template_policy_id"] or None, "max_tasks": params["max_tasks"],
+                        "expires_at": params["expires_at"], "agent_or_role": params["agent_or_role"]}
+        return params, audit_fields, {"payload": _payload(params, decl, session)}
+
+    def preview(params: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        return _preview(params, context["payload"], decl)
+
+    def pre_confirm(params: dict[str, Any], context: dict[str, Any]) -> None:
+        from tools.aipos_cli.autonomy_policy import render_mint_command
+
+        if connection_json is None:
+            raise MintRequestError("CREDENTIAL_UNAVAILABLE", command=render_mint_command(
+                policy_id=params["policy_id"], agent_or_role=params["agent_or_role"], max_tasks=params["max_tasks"],
+                task_mode=params["task_mode"], expires_at=params["expires_at"], decision_summary=params["decision_summary"],
+                governance_root=params["governance_root"], lane_repos=params["lane_repo"], launch_harnesses=params["launch_harness"]))
+
+    def confirm(params: dict[str, Any], context: dict[str, Any]) -> tuple[dict, dict, MintRequestError | None]:
+        return _confirm(params, context["payload"], decl, connection_json)
+
+    return handle_owner_write(body, decl=decl, action="envelope_mint", session=session, home_root=home_root, preview_store=preview_store,
+                              audit_log_path=audit_log_path, prepare=prepare, preview=preview, confirm=confirm, pre_confirm=pre_confirm,
+                              origin=origin, host=host, content_type=content_type, now=now)
 
 
-def _preview(params: dict[str, Any], payload: dict[str, Any], digest: str, decl: dict[str, Any], session: dict[str, Any], store: Any,
-             audit_log_path: Path | None, audit: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+def _preview(params: dict[str, Any], payload: dict[str, Any], decl: dict[str, Any]) -> dict[str, Any]:
     from tools.aipos_cli.envelope_mint import mint_preview
 
     try:
@@ -463,62 +552,26 @@ def _preview(params: dict[str, Any], payload: dict[str, Any], digest: str, decl:
     if verdict == "BLOCK" or not result.get("ok"):
         raise MintRequestError("PREVIEW_BLOCKED", detail=json.dumps(result.get("blocking_reasons") or result.get("errors")
                                                                     or result.get("message"), ensure_ascii=False)[:800])
-    token = store.issue(session_ref=session["session_ref"], digest=digest)
-    audit_error = None
-    try:
-        append_board_audit(audit_log_path, {**audit, "outcome": "previewed", "digest": digest})
-    except OSError as exc:  # 预演零写入; 留痕失败照实出声, 确认时另有 fail-closed 留痕检查
-        audit_error = f"{type(exc).__name__}: {exc}"
     dry = {k: v for k, v in result.items() if k != "dry_run_token"}
     dry["data"] = {k: v for k, v in (result.get("data") or {}).items() if k != "dry_run_token"}
-    return 200, {"ok": True, "stage": "preview", "preview_token": token, "expires_in": int(decl["preview_ttl_seconds"]),
-                 "params": params, "preview_lines": preview_lines(params, payload, verdict, decl), "dry_run": dry,
-                 "audit_logged": audit_error is None, "audit_error": audit_error}
+    return {"params": params, "preview_lines": preview_lines(params, payload, verdict, decl), "dry_run": dry}
 
 
-def _confirm(body: dict[str, Any], params: dict[str, Any], payload: dict[str, Any], digest: str, decl: dict[str, Any],
-             session: dict[str, Any], store: Any, connection_json: Path | None, audit_log_path: Path | None,
-             audit: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    from tools.aipos_cli.autonomy_policy import render_mint_command
+def _confirm(params: dict[str, Any], payload: dict[str, Any], decl: dict[str, Any],
+             connection_json: Path | None) -> tuple[dict[str, Any], dict[str, Any], MintRequestError | None]:
     from tools.aipos_cli.envelope_mint import mint_via_gate
 
-    status, entry = store.take(str(body.get("preview_token") or "").strip() or None)
-    if status == "missing":
-        raise MintRequestError("PREVIEW_TOKEN_REQUIRED")
-    if status == "expired":
-        raise MintRequestError("PREVIEW_TOKEN_EXPIRED", ttl=int(decl["preview_ttl_seconds"]))
-    if status != "ok" or entry is None:
-        raise MintRequestError("PREVIEW_TOKEN_INVALID")
-    if entry.get("session_ref") != session["session_ref"]:
-        raise MintRequestError("PREVIEW_SESSION_MISMATCH")
-    if entry.get("digest") != digest:
-        raise MintRequestError("PREVIEW_PARAMS_MISMATCH")
-    if connection_json is None:
-        raise MintRequestError("CREDENTIAL_UNAVAILABLE", command=render_mint_command(
-            policy_id=params["policy_id"], agent_or_role=params["agent_or_role"], max_tasks=params["max_tasks"], task_mode=params["task_mode"],
-            expires_at=params["expires_at"], decision_summary=params["decision_summary"], governance_root=params["governance_root"],
-            lane_repos=params["lane_repo"], launch_harnesses=params["launch_harness"]))
-    try:  # 每次签发须留痕: 签发前先写一条「确认中」, 写不进 = 拒签(fail-closed)
-        append_board_audit(audit_log_path, {**audit, "outcome": "confirming", "digest": digest})
-    except OSError as exc:
-        raise MintRequestError("AUDIT_LOG_UNAVAILABLE", detail=f"{type(exc).__name__}: {exc}") from exc
     report = mint_via_gate([payload], governance_root=Path(params["governance_root"]), actor=str(payload["actor"]),
                            connection_json=str(connection_json), token_role=str(decl["token_role"]))
     landing = report.get("landing") or {}
-    result = {**audit, "outcome": "signed" if report["signed"] else "mint_rejected", "digest": digest,
-              "credential_fingerprint": report.get("credential_fingerprint"), "signed": report["signed"], "error": report.get("error"),
-              "landing": {k: landing.get(k) for k in ("landed", "verdict", "committed", "pushed", "commit", "exit_code") if k in landing}}
-    audit_error = None
-    try:
-        append_board_audit(audit_log_path, result)
-    except OSError as exc:  # 签发已生效(门生记录为准); 结果留痕失败照实出声(签发前的「确认中」一条已落)
-        audit_error = f"{type(exc).__name__}: {exc}"
+    landing_view = {k: landing.get(k) for k in ("landed", "verdict", "committed", "pushed", "commit", "exit_code") if k in landing}
+    result = {"outcome": "signed" if report["signed"] else "mint_rejected", "credential_fingerprint": report.get("credential_fingerprint"),
+              "signed": report["signed"], "error": report.get("error"), "landing": landing_view}
     if not report["signed"]:
-        raise MintRequestError("MINT_REJECTED", detail=str(report.get("error") or report.get("exit_code")))
-    return 200, {"ok": True, "stage": "confirm", "params": params, "actor": payload["actor"], "captured_by": payload.get("captured_by"),
-                 "capture_surface": payload.get("capture_surface"), "signed": report["signed"], "landing": result["landing"],
-                 "landing_line": report.get("landing_line"), "exit_code": report["exit_code"], "error": report.get("error"),
-                 "audit_logged": audit_error is None, "audit_error": audit_error}
+        return result, {}, MintRequestError("MINT_REJECTED", detail=str(report.get("error") or report.get("exit_code")))
+    return result, {"ok": True, "stage": "confirm", "params": params, "actor": payload["actor"], "captured_by": payload.get("captured_by"),
+                    "capture_surface": payload.get("capture_surface"), "signed": report["signed"], "landing": landing_view,
+                    "landing_line": report.get("landing_line"), "exit_code": report["exit_code"], "error": report.get("error")}, None
 
 
 # AIPOS-316: Guard against direct invocation

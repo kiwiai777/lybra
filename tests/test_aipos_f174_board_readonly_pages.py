@@ -448,7 +448,8 @@ def test_item2_page_paths_declared_and_no_new_write_route():
     assert tuple(decl["pages"].values()) == NEW_PAGES
     src = (REPO_ROOT / "web" / "board" / "app.py").read_text(encoding="utf-8")
     do_post = src[src.index("def do_POST(self)"):src.index("def do_PUT(self)")]
-    assert do_post.count("if path == ") == len(board_readonly_declaration()["allowed_post_paths"]) + 1  # 鉴权通道 + 信封签发(F172), 无新增
+    # 鉴权通道 + 信封签发(F172) + 项目升级(F176 写例外②); 本卡三页无新增写路由
+    assert do_post.count("if path == ") == len(board_readonly_declaration()["allowed_post_paths"]) + 2
     assert "_readonly_pages" not in do_post and "render_page" not in do_post
 
 
