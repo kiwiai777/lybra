@@ -114,6 +114,31 @@ authorization. Declared in `schema/verbs.schema.json` `board_owner_envelopes`; i
   server-side only by `load_role_token`; responses and logs carry fingerprints, never the credential.
 - Owner inbox envelope items now point their decision line to this page (the CLI command stays on the same line).
 
+## Read-only pages: overview / roadmap & acceptance / onboarding (AIPOS-F174)
+
+Owner ruling 2026-10-16: the Board shows onboarding guidance, progress and verification; it does not act. Wherever the Owner
+has to do something, the page says what to tell the advisor ("Tell <advisor instance>: …") and which command the advisor
+runs — no buttons. Paths, checklist items (append-only) and command templates are declared in `schema/verbs.schema.json`
+`board_readonly_pages`; data `tools/aipos_cli/board_pages.py` (calls the existing single derivations only), rendering
+`web/board/readonly_pages.py` (server-side), UI text in the i18n channel `_I18N_TEMPLATES` (zh / en, same keys; `?lang=en`,
+or the language already picked on the Board). All three pages are GET only; any other method answers 405 `BOARD_READ_ONLY`.
+
+- `GET /owner/overview` — one card per registered project of the home root: cards in flight (non-terminal queue states)
+  and closed, items awaiting the Owner (`owner_inbox.collect_inbox`, links to `/owner/inbox`), envelope state
+  (`autonomy_policy.envelope_overview`, links to `/owner/envelopes`), roadmap summary (`roadmap_drift.roadmap_status`, links
+  to the roadmap page) and onboarding completion (links to the onboarding page). Paused projects are folded.
+- `GET /owner/roadmap?project=<name>&milestone=<id>` — drift signals on top (red = goes to the Owner inbox, yellow = hint; each
+  with its reason, "Tell <advisor>: …" and the advised command), milestones by lane on the left (progress bar = met / total
+  criteria, status, target date, overdue in red), the selected milestone's criteria on the right: linked cards with queue
+  state, latest audit verdict (link to the verdict record), runtime evidence excerpt from the audit report
+  (`roadmap_drift.card_evidence`, the same read that decides "met"), and the "pending F175" reason for `artifact` /
+  `owner_check`. A project without a roadmap shows "How to start".
+- `GET /owner/onboarding` — one checklist per project: governance root, advisor / executor / auditor enrolled
+  (`advisor_instances`, `project_execution` + `instance_enrollment`; diagnose with `lybra roles enroll-where`), envelope in use
+  and not running low, workstation charter fresh (the last pre-launch charter check the loop recorded, `charter_checks` in the
+  loop run records — the Board does not re-run `lybra sync --dry-run`), pi model declared, roadmap declared, first card closed.
+  Not-applicable items do not count towards completion.
+
 ## Available Endpoints
 
 - `GET /api/roadmap?workspace=<n>` (AIPOS-F171; replaces the retired `/api/project-map`)

@@ -101,3 +101,10 @@ lybra roadmap status [项目] [--lane <lane>] [--json]        # 只读: 里程�
 ## 看板
 
 看板项目页的里程碑区读本文件(只读简版, `GET /api/roadmap`); 增改里程碑请告诉顾问, 由顾问用上面的命令完成(看板只读, AIPOS-F171)。
+
+「路线图与验收」页(`GET /owner/roadmap?project=<项目>&milestone=<里程碑>`, AIPOS-F174, 只读)把 `roadmap status` 的同一推导画出来:
+顶部偏差红黄条(严重 = 进 Owner 收件箱的那几类, 每条一句原因 +「告诉 <顾问实例>: …」+ 建议命令), 左栏按 lane 列里程碑(进度条 = 已满足标准数 /
+标准总数、状态、目标日, 逾期标红), 右栏是选中里程碑的逐条标准: 挂接卡与队列态、最新审计裁决(可点开裁决记录)、审计报告「独立运行证据」节的
+摘录(命令 / 退出码 / 日志摘要), `artifact` / `owner_check` 方式在 F175 前如实显示「待 F175」。没有路线图的项目显示「如何开始」:
+告诉顾问建路线图, 顾问用上面的 `lybra roadmap add-milestone` / `add-criterion`。看板不另算任何进度: 每条标准的证据由
+`roadmap_drift.card_evidence` 随推导带出(与判定满足与否同一份读取)。
