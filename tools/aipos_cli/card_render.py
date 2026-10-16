@@ -23,6 +23,7 @@ from typing import Any
 from tools.aipos_cli.next_resolver import (
     REPO_ROOT,
     _find_task_in_queue,
+    card_needs_worktree,
     card_report_contract,
     card_report_path,
     card_worktree_location,
@@ -91,6 +92,8 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
     # 与 claim 建树 / my-tasks 开工面同一函数; 解析不到 = ValueError fail-closed)
     code_repo, worktree = card_worktree_location(governance_root, task_id, {**fm, "task_id": task_id})
     branch = card_branch_name(task_id)  # AIPOS-F108 件②: 唯一读取口(声明缺 = SchemaLoadError, 不回落写死)
+    # AIPOS-F178 件②: 是否建树只问唯一判据 card_needs_worktree; 只写治理根的卡开工说明不给工作树/分支, 指向治理根报告落点
+    needs_worktree = card_needs_worktree(governance_root, {**fm, "task_id": task_id})
     # AIPOS-F66B 件③ + F86 件①: 报告落点 = card_report_path(审计卡 verdict_root/<审计卡ID>/<候选>, 执行卡 return_root/<ID>/<候选>;
     # 与派生卡文案 / my-tasks 同一读取口, 禁写死)。
     is_audit = str(fm.get("task_mode") or "").strip().lower() == "audit"
@@ -98,7 +101,7 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
     # AIPOS-F93 件①: 报告必填字段 = 声明单源 card_report_contract(与 my-tasks 开工面 / 落点句 / 认领模板 / 章程同源);
     # 审计卡取证工作树已建时带被审 tip/tree 实值。
     report_contract = card_report_contract(governance_root, task_id, {**fm, "task_id": task_id},
-                                           worktree=worktree if Path(worktree).is_dir() else None)
+                                           worktree=worktree if needs_worktree and Path(worktree).is_dir() else None)
     return_frontmatter = [str(e["key"]) for e in report_contract]
 
     sections = _split_sections(str(body or ""))
@@ -120,8 +123,9 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
         "governance_refs": refs,
         "lane": intent["lane"],
         "code_repo": str(code_repo),
-        "worktree": str(worktree),
-        "branch": branch,
+        "needs_worktree": needs_worktree,
+        "worktree": str(worktree) if needs_worktree else None,
+        "branch": branch if needs_worktree else None,
         "return_path": str(return_path),
         "return_frontmatter": return_frontmatter,
         "report_contract": report_contract,
@@ -139,8 +143,20 @@ def _frontmatter_hint(model: dict[str, Any]) -> str:
     return render_report_frontmatter_clause(model["report_contract"])
 
 
+def _no_worktree_line(model: dict[str, Any]) -> str:
+    """AIPOS-F178 item 2: the single wording for cards that write only the governance root (no worktree / no card branch)."""
+    return (f"不建(本卡只写治理根, 不写产品仓; 判据 enums.schema task_mode.product_repo_write): "
+            f"产物写治理根报告落点 {model['return_path']}")
+
+
 def _common_sections(model: dict[str, Any]) -> list[str]:
     lane = model["lane"]
+    if model["needs_worktree"]:
+        worktree_line = f"- 工作树: `{model['worktree']}`(分支 `{model['branch']}`, 从当前 main 拉)"
+        deliver_line = f"- 代码: 提交到分支 `{model['branch']}`(精确 pathspec add, 不 push)"
+    else:
+        worktree_line = f"- 工作树: {_no_worktree_line(model)}"
+        deliver_line = "- 产品仓: 不改(本卡无卡工作树/卡分支)"
     lines = [
         f"## 目标",
         model["goal"] or model["title"],
@@ -149,7 +165,7 @@ def _common_sections(model: dict[str, Any]) -> list[str]:
         f"- 仓: `{lane.get('repo')}`",
         f"- 允许改动: {', '.join('`' + p + '`' for p in lane.get('paths') or []) or '(未声明)'}",
         f"- 角色: {', '.join(lane.get('roles') or []) or '(未声明)'}",
-        f"- 工作树: `{model['worktree']}`(分支 `{model['branch']}`, 从当前 main 拉)",
+        worktree_line,
         "",
         "## 验收",
         model["acceptance"] or "(见依据条目)",
@@ -158,7 +174,7 @@ def _common_sections(model: dict[str, Any]) -> list[str]:
         model["prohibitions"] or "- 只改车道内路径; 不 push; 不碰治理仓 git; 不调用任何门动词",
         "",
         "## 交付",
-        f"- 代码: 提交到分支 `{model['branch']}`(精确 pathspec add, 不 push)",
+        deliver_line,
         f"- 报告: `{model['return_path']}`(含「## 一句话结论」节)",
         f"- {_frontmatter_hint(model)}",
     ]
@@ -173,8 +189,9 @@ def _common_sections(model: dict[str, Any]) -> list[str]:
 
 
 def render_pi(model: dict[str, Any]) -> dict[str, str]:
+    worktree = f"{model['worktree']} (分支 {model['branch']})" if model["needs_worktree"] else _no_worktree_line(model)
     text = "\n".join([
-        f"工作树: {model['worktree']} (分支 {model['branch']})",
+        f"工作树: {worktree}",
         f"报告落点: {model['return_path']} ({_frontmatter_hint(model)})",
         f"卡路径: {model['card_path']}",
     ]) + "\n"
@@ -184,7 +201,9 @@ def render_pi(model: dict[str, Any]) -> dict[str, str]:
 def render_codex(model: dict[str, Any]) -> dict[str, str]:
     prompt = "\n".join([f"# {model['task_id']} — {model['title']}", "", *_common_sections(model), ""])
     plan_lines = [f"# Plan — {model['task_id']}", "", "## 里程碑", model["milestones"] or "1. 读卡与依据\n2. 在工作树按车道实现\n3. 补夹具入常驻\n4. 提交分支并写 Return", "",
-                  "## 交付清单", f"- [ ] 分支 `{model['branch']}` 有提交, tip 与 Return frontmatter.commit_sha 一致",
+                  "## 交付清单",
+                  (f"- [ ] 分支 `{model['branch']}` 有提交, tip 与 Return frontmatter.commit_sha 一致" if model["needs_worktree"]
+                   else f"- [ ] 不改产品仓({_no_worktree_line(model)})"),
                   f"- [ ] `{model['return_path']}` 落盘, frontmatter 含 {', '.join(model['return_frontmatter'])}",
                   "- [ ] 一句话结论非占位", ""]
     return {"Prompt.md": _redact(prompt), "Plan.md": _redact("\n".join(plan_lines))}
@@ -236,7 +255,12 @@ def run_render_cli(args: Any) -> int:
                 print(f"--- {name} ---")
             print(content, end="" if content.endswith("\n") else "\n")
         return 0
-    out_dir = Path(getattr(args, "out_dir", None) or rendered["model"]["worktree"])
+    target = getattr(args, "out_dir", None) or rendered["model"]["worktree"]
+    if not target:
+        # AIPOS-F178 item 2: governance-root-only card has no worktree to write into
+        print(f"lybra card render: {_no_worktree_line(rendered['model'])}; 用 --out-dir 指定输出目录或 --stdout 只打印", file=sys.stderr)
+        return 1
+    out_dir = Path(target)
     if not out_dir.is_dir():
         print(f"lybra card render: 输出目录不存在 {out_dir}(工作树未建? 用 --out-dir 指定或 --stdout 只打印)", file=sys.stderr)
         return 1

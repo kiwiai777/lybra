@@ -480,6 +480,19 @@ class LoopRunRecorder:
         self._dirty = True
         self.flush(force=True)
 
+    # -- AIPOS-F178 件③: 等待前缺树自动补建(verbs.schema lybra_loop.run_record.worktree_repairs) --
+    def worktree_repair(self, entry: dict[str, Any]) -> None:
+        """一次等待前缺树补建进运行记录 worktree_repairs(卡 / outcome / 工作树 / 修复命令 / detail / 时间; detail 经 redact_progress)。
+        日志行由调用方的 loop 输出(say)写, 本方法不重复写日志。"""
+        from tools.aipos_cli.harness_launch import redact_progress
+
+        record = {k: entry.get(k) for k in ("card", "outcome", "worktree_path", "repair_command")}
+        record["detail"] = redact_progress(str(entry.get("detail") or ""))[:600]
+        record["at"] = iso_z()
+        self.meta.setdefault("worktree_repairs", []).append(record)
+        self._dirty = True
+        self.flush(force=True)
+
     # -- AIPOS-F164 件②: 拉起前章程判定(verbs.schema lybra_loop.run_record.charter_checks) --
     def charter_check(self, entry: dict[str, Any]) -> None:
         """一次拉起前章程判定进运行记录 charter_checks(卡 / 实例 / 工位 / outcome / detail / 修法命令 / 时间; detail 经 redact_progress)。

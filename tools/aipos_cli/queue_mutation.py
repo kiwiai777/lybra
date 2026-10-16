@@ -299,8 +299,12 @@ def repair_bad_frontmatter(
     task_id: str,
     actor: str,
     dry_run: bool = True,
+    *,
+    confirm: bool = False,
 ) -> dict[str, Any]:
     """AIPOS-F65C 件① 入口(`lybra queue repair`)——AIPOS-F87 件② 起委托 state_lint.repair_frontmatter_invalid 唯一实现。
+    AIPOS-F178 件③: 卡面可解析时同一命令接着查「已认领但缺卡工作树」(repair_missing_worktree 唯一实现; confirm=False 预演,
+    confirm=True 且非 dry_run 才建树); 卡面坏 = 先只做规整(规整前无从判定是否须建树), 行为同 F178 前。
 
     原本地正则规整(凡含 `**` 即整行加引号、不验值、不留修复记录、TODO 记录)退役; 现与 `lybra state repair` 同一保值规整:
     仅引号化解析失败的顶层单行标量, 规整后逐字节/逐值核对, 写 records/events/<ID>/event_repair_*.md。输出保留 F65C 字段形。
@@ -330,7 +334,18 @@ def repair_bad_frontmatter(
     repair = repair_frontmatter_invalid(repo_root, task_id, dry_run=dry_run, actor=actor)
     result["frontmatter_repair"] = repair
     if not repair["applicable"]:
-        result["message"] = "No repairs needed (frontmatter appears valid)"
+        # AIPOS-F178 件③: 卡面可解析 → 同一命令再查「已认领但缺卡工作树」(预演缺省, --confirm 建树; --dry-run 恒预演)
+        from tools.aipos_cli.next_resolver import repair_missing_worktree
+
+        worktree = repair_missing_worktree(repo_root, task_id, actor, confirm=bool(confirm) and not dry_run)
+        result["worktree_repair"] = worktree
+        if worktree["verdict"] == "BLOCK":
+            result["verdict"] = "BLOCK"
+            result["blocking_reasons"] = list(worktree["blocking_reasons"])
+        if worktree["action"] == "created":
+            result["repairs_made"] = [worktree["message"]]
+            result["repairs_count"] = 1
+        result["message"] = f"No frontmatter repairs needed (frontmatter appears valid); worktree: {worktree['message']}"
         return result
     result["repairs_made"] = [f"Line {r['line']}: quoted value of {r['key']} (value unchanged)" for r in repair["repairs"]]
     if repair["unresolved"]:
