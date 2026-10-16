@@ -249,7 +249,7 @@ def _card_notice(governance_root: Path, task_id: str) -> dict[str, Any] | None:
     from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
     from tools.aipos_cli.task_loader import find_task_card
 
-    card, _state = find_task_card(governance_root, task_id, states=("claimed", "completed", "pending"))
+    card, _state = find_task_card(governance_root, task_id)  # 全部队列目录(值域读 schema 投影, 不手写子集)
     if card is None:
         return None
     meta, _body, _warnings = parse_markdown_frontmatter(card.read_text(encoding="utf-8"))
