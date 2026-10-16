@@ -212,7 +212,39 @@ def _milestone_item(ctx: _Ctx, project: str, ms: dict[str, Any], *, selected: bo
             f"{_bar(prog['met'], prog['total'], prog.get('ratio'))}</li>")
 
 
-def _evidence_html(ctx: _Ctx, ev: dict[str, Any], workspace_index: int) -> str:
+def _artifacts_html(ctx: _Ctx, ev: dict[str, Any], project: str) -> str:
+    """AIPOS-F175: declared artifacts of this card for the criterion (images = thumbnail via the read-only artifact route, text = excerpt)."""
+    from tools.aipos_cli.board_pages import artifact_url
+
+    art = ev.get("artifacts") or {}
+    if not art.get("entries") and not art.get("problems"):
+        return ""
+    rows = []
+    for entry in art.get("entries") or []:
+        head = _ESC(ctx.t("rp_rm_artifact", kind=entry["kind"], path_glob=entry["path_glob"]))
+        if not entry["files"]:
+            rows.append(f"<li class=\"rp-artifact rp-err\" data-kind=\"{_ESC(entry['kind'])}\" data-files=\"0\">{head} · "
+                        f"{_ESC(ctx.t('rp_rm_artifact_none', dir=art.get('dir_rel') or '?'))}</li>")
+            continue
+        shown = []
+        for item in entry["files"]:
+            if item["media"] == "image":
+                url = _ESC(artifact_url(ctx.decl, project, ev["task_id"], item["name"]))
+                shown.append(f"<figure class=\"rp-artifact-image\"><a href=\"{url}\" title=\"{_ESC(ctx.t('rp_rm_artifact_open'))}\">"
+                             f"<img src=\"{url}\" alt=\"{_ESC(item['rel'])}\" loading=\"lazy\"></a>"
+                             f"<figcaption><code>{_ESC(item['rel'])}</code></figcaption></figure>")
+            elif item["media"] == "text":
+                shown.append(f"<div class=\"rp-artifact-text\"><code>{_ESC(item['rel'])}</code>"
+                             f"<pre class=\"rp-artifact-excerpt\">{_ESC(item.get('excerpt') or '')}</pre></div>")
+            else:
+                shown.append(f"<code class=\"rp-artifact-file\">{_ESC(item['rel'])}</code>")
+        rows.append(f"<li class=\"rp-artifact\" data-kind=\"{_ESC(entry['kind'])}\" data-files=\"{len(entry['files'])}\">{head}"
+                    + "".join(shown) + "</li>")
+    rows.extend(f"<li class=\"rp-artifact rp-err\">{_ESC(ctx.t('rp_error', error=problem))}</li>" for problem in art.get("problems") or [])
+    return f"<ul class=\"rp-artifacts\" data-dir=\"{_ESC(str(art.get('dir_rel') or ''))}\">" + "".join(rows) + "</ul>"
+
+
+def _evidence_html(ctx: _Ctx, ev: dict[str, Any], workspace_index: int, project: str = "") -> str:
     head = [f"<span class=\"rp-card-id\">{_ESC(ctx.t('rp_rm_card', task_id=ev['task_id'], queue_state=ev.get('queue_state') or '?'))}</span>"]
     if ev.get("unreadable"):
         head.append(f"<span class=\"rp-err\">{_ESC(ctx.t('rp_error', error=ev['unreadable']))}</span>")
@@ -248,18 +280,42 @@ def _evidence_html(ctx: _Ctx, ev: dict[str, Any], workspace_index: int) -> str:
         problem = ev.get("declaration_problem") or ev.get("evidence_problem") or "?"
         body = f"<p class=\"rp-evidence rp-err\">{_ESC(ctx.t('rp_rm_evidence_missing', problem=problem))}</p>"
     return (f"<div class=\"vb-ring rp-card-evidence\" data-task-id=\"{_ESC(ev['task_id'])}\"><div class=\"vb-ring-head\">"
-            + " ".join(head) + f"</div>{body}</div>")
+            + " ".join(head) + f"</div>{body}{_artifacts_html(ctx, ev, project)}</div>")
 
 
-def _criterion_html(ctx: _Ctx, crit: dict[str, Any], workspace_index: int) -> str:
+def _verification_html(ctx: _Ctx, crit: dict[str, Any], check: dict[str, Any] | None) -> str:
+    """AIPOS-F175: five-state verification line + basis + latest Owner spot check + fix cards; awaiting check = tell + verify command."""
+    vstate = str(crit.get("state") or "unverified")
+    parts = [f"<p class=\"rp-crit-vstate rp-vstate-{_ESC(vstate)}\" data-state=\"{_ESC(vstate)}\">"
+             f"{_ESC(ctx.t('rp_rm_state', state=ctx.t('rp_rm_state_' + vstate)))}</p>"]
+    if crit.get("basis"):
+        parts.append(f"<p class=\"rp-crit-basis\">{_ESC(ctx.t('rp_rm_basis', basis=crit['basis']))}</p>")
+    rec = crit.get("owner_verification")
+    if rec:
+        parts.append(f"<p class=\"rp-owner-check\" data-result=\"{_ESC(str(rec.get('result') or ''))}\" data-record=\"{_ESC(str(rec.get('path') or ''))}\">"
+                     f"{_ESC(ctx.t('rp_rm_owner_record', label=rec.get('label') or '?', decided_at=rec.get('decided_at') or '?', relayed_by=rec.get('relayed_by') or '?', owner_words=rec.get('owner_words') or ''))}"
+                     f" <span class=\"rp-sub\">{_ESC(ctx.t('rp_rm_history', count=len(crit.get('verifications') or [])))}</span></p>")
+    if crit.get("fix_cards"):
+        parts.append(f"<p class=\"rp-fix\" data-fix=\"{_ESC(','.join(f['task_id'] for f in crit['fix_cards']))}\">"
+                     f"{_ESC(ctx.t('rp_rm_fix', fix=', '.join(f['text'] for f in crit['fix_cards'])))}</p>")
+    if check:
+        parts.append(f"<p class=\"rp-tell\">{_ESC(ctx.tell(check['tell'], 'rp_rm_verify_ask', {'criterion': crit['id']}))}</p>")
+        parts.append(_command_block(ctx, [check["command"]]))
+    return "".join(parts)
+
+
+def _criterion_html(ctx: _Ctx, crit: dict[str, Any], workspace_index: int, project: str = "",
+                    check: dict[str, Any] | None = None) -> str:
     state = ctx.t("rp_rm_crit_met") if crit["satisfied"] else ctx.t("rp_rm_crit_unmet", reason=crit.get("reason") or "?")
-    cards = "".join(_evidence_html(ctx, ev, workspace_index) for ev in crit.get("evidence") or [])
+    cards = "".join(_evidence_html(ctx, ev, workspace_index, project) for ev in crit.get("evidence") or [])
     return (f"<article class=\"vb-station rp-criterion{' rp-met' if crit['satisfied'] else ' rp-unmet'}\" data-criterion=\"{_ESC(crit['id'])}\""
-            f" data-satisfied=\"{str(bool(crit['satisfied'])).lower()}\" data-verify=\"{_ESC(crit['verify'])}\">"
+            f" data-satisfied=\"{str(bool(crit['satisfied'])).lower()}\" data-verify=\"{_ESC(crit['verify'])}\""
+            f" data-state=\"{_ESC(str(crit.get('state') or ''))}\">"
             f"<div class=\"vb-station-head\"><span class=\"vb-station-id\">{_ESC(crit['id'])}</span>"
             f"<span class=\"vb-station-title\">{_ESC(crit['statement'])}</span></div>"
             f"<p class=\"rp-crit-verify\">{_ESC(ctx.t('rp_rm_verify', verify=ctx.t('rp_rm_verify_' + str(crit['verify']))))}</p>"
-            f"<p class=\"rp-crit-state\">{_ESC(state)}</p><div class=\"vb-evidence\">{cards}</div></article>")
+            f"<p class=\"rp-crit-state\">{_ESC(state)}</p>{_verification_html(ctx, crit, check)}"
+            f"<div class=\"vb-evidence\">{cards}</div></article>")
 
 
 def render_roadmap(data: dict[str, Any], lang: str) -> str:
@@ -317,7 +373,8 @@ def render_roadmap(data: dict[str, Any], lang: str) -> str:
         right.append(f"<h2>{_ESC(ctx.t('rp_rm_criteria_title', id=picked['id'], title=picked['title']))}</h2>")
         right.extend(f"<p class=\"rp-mismatch\">{_ESC(ctx.t('rp_rm_mismatch', text=m))}</p>" for m in picked.get("mismatch") or [])
         if picked["criteria"]:
-            right.extend(_criterion_html(ctx, c, int(sel["index"])) for c in picked["criteria"])
+            checks = sel.get("owner_checks") or {}
+            right.extend(_criterion_html(ctx, c, int(sel["index"]), sel["project"], checks.get(str(c["id"]))) for c in picked["criteria"])
         else:
             right.append(f"<p>{_ESC(ctx.t('rp_rm_no_criteria'))}</p>")
     body.append("<div class=\"rp-layout\"><aside class=\"rp-left\">" + "".join(left) + "</aside>"

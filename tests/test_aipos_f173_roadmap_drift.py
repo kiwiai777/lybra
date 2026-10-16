@@ -123,7 +123,7 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     evidence = {runtime_evidence_declaration()["card_field"]: {"required": True, "commands": ["pytest -q"]}}
     # core: K-1 结案 PASS 有运行证据节 → C1 满足; K-2 结案 PASS 但报告缺证据节 + 返工 2 轮 → C2 未满足 + 反复返工;
-    #       K-3 结案 PASS, C3 verify=artifact → 待 F175; K-4 结案 PASS → M2.C5 满足; C4 无卡 → 无卡覆盖
+    #       K-3 结案 PASS, C3 verify=artifact 但卡面未声明产物 → 未验证(AIPOS-F175 五态); K-4 结案 PASS → M2.C5 满足; C4 无卡 → 无卡覆盖
     _card(gov, "completed", "K-1", created_days_ago=10, milestone="M1", criteria=["C1"], completed_at=_iso(-2), **evidence)
     _verdict(gov, "K-1", "PASS", report_text=_report(True), days_ago=2)
     rounds = [{"round": 1, "verdict_ref": "v1", "created_at": _iso(-6)}, {"round": 2, "verdict_ref": "v2", "created_at": _iso(-5)}]
@@ -178,7 +178,9 @@ def test_item1_progress_and_six_signals(rig):
     for cid in ("C1", "C2", "C3", "C4", "C5", "W1C1", "W1C2", "W2C1"):
         _show(f"[①·标准] {cid} satisfied={crit[cid]['satisfied']} reason={crit[cid]['reason']}")
     assert crit["C1"]["satisfied"] and crit["C5"]["satisfied"]
-    assert "无运行证据节" in crit["C2"]["reason"] and "待 F175" in crit["C3"]["reason"] and crit["C4"]["reason"] == "无挂接卡"
+    assert "无运行证据节" in crit["C2"]["reason"] and crit["C4"]["reason"] == "无挂接卡"
+    # AIPOS-F175: artifact 标准的挂接卡未声明产物 = 停在未验证并写缺什么(原「待 F175」占位退役)
+    assert crit["C3"]["state"] == "unverified" and "卡面 artifacts 未声明标准 C3 的产物" in crit["C3"]["reason"]
     assert "未结案" in crit["W1C1"]["reason"]
     assert by_id["W2"]["mismatch_codes"] == ["planned_moving"] and by_id["M2"]["mismatch"] == []
     kinds = {}

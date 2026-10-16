@@ -818,6 +818,20 @@ Lybra 服务端位置（AIPOS-286）：
         "rp_rm_verify_owner_check": "Owner 抽查",
         "rp_rm_crit_met": "已满足",
         "rp_rm_crit_unmet": "未满足:{reason}",
+        "rp_rm_state": "验证状态:{state}",
+        "rp_rm_state_unverified": "未验证",
+        "rp_rm_state_auto_passed": "自动验证通过",
+        "rp_rm_state_owner_pending": "待 Owner 抽查",
+        "rp_rm_state_owner_confirmed": "Owner 已确认",
+        "rp_rm_state_mismatch": "不符",
+        "rp_rm_basis": "依据:{basis}",
+        "rp_rm_artifact": "产物 [{kind}] {path_glob}",
+        "rp_rm_artifact_none": "落点 {dir} 里没有匹配的文件",
+        "rp_rm_artifact_open": "看原图",
+        "rp_rm_owner_record": "Owner 抽查:{label} · {decided_at} · 经 {relayed_by} 转达 · 原话「{owner_words}」",
+        "rp_rm_history": "抽查历史 {count} 条",
+        "rp_rm_fix": "修复卡:{fix}",
+        "rp_rm_verify_ask": "看完标准 {criterion} 的产物后,告诉我「{criterion} 符合」或「{criterion} 不符:哪里不对」",
         "rp_rm_card": "卡 {task_id} · 队列 {queue_state}",
         "rp_rm_verdict": "审计裁决 {verdict}",
         "rp_rm_no_verdict": "尚无审计裁决",
@@ -1037,6 +1051,20 @@ Important boundaries:
         "rp_rm_verify_owner_check": "Owner spot check",
         "rp_rm_crit_met": "Met",
         "rp_rm_crit_unmet": "Not met: {reason}",
+        "rp_rm_state": "Verification: {state}",
+        "rp_rm_state_unverified": "not verified",
+        "rp_rm_state_auto_passed": "auto-verified",
+        "rp_rm_state_owner_pending": "awaiting Owner spot check",
+        "rp_rm_state_owner_confirmed": "confirmed by Owner",
+        "rp_rm_state_mismatch": "mismatch",
+        "rp_rm_basis": "Basis: {basis}",
+        "rp_rm_artifact": "Artifact [{kind}] {path_glob}",
+        "rp_rm_artifact_none": "no matching file in {dir}",
+        "rp_rm_artifact_open": "full size",
+        "rp_rm_owner_record": "Owner spot check: {label} · {decided_at} · relayed by {relayed_by} · Owner said \"{owner_words}\"",
+        "rp_rm_history": "{count} spot-check record(s)",
+        "rp_rm_fix": "Fix card: {fix}",
+        "rp_rm_verify_ask": "after looking at the artifacts of {criterion}: \"{criterion} conforms\" or \"{criterion} does not conform: what is wrong\"",
         "rp_rm_card": "Card {task_id} · queue {queue_state}",
         "rp_rm_verdict": "Audit verdict {verdict}",
         "rp_rm_no_verdict": "No audit verdict yet",
@@ -2224,6 +2252,8 @@ def make_handler(
     from tools.aipos_cli.board_pages import pages_declaration
 
     readonly_pages = {str(url): page for page, url in pages_declaration()["pages"].items()}
+    # AIPOS-F175: artifact thumbnail route (GET only; path declared in verbs.schema board_readonly_pages.artifact_route)
+    artifact_route = str(pages_declaration()["artifact_route"]["path"])
 
     class BoardHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -2238,6 +2268,7 @@ def make_handler(
         _board_audit = board_audit
         _envelope_paths = {k: str(envelope_decl[k]) for k in ("page_path", "api_path", "write_path")}
         _readonly_pages = readonly_pages
+        _artifact_route = artifact_route
 
         def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
             body = _json_bytes(payload)
@@ -2605,6 +2636,24 @@ def make_handler(
                 from web.board.readonly_pages import render_page
 
                 self._send_html(render_page(self._readonly_pages[path], home_root, parse_qs(urlparse(self.path).query)))
+                return
+
+            # AIPOS-F175: card artifact image (declared on the card, inside its artifact dir, image suffix; anything else = 404)
+            if path == self._artifact_route:
+                from tools.aipos_cli.board_pages import artifact_for_route
+
+                found = artifact_for_route(home_root, parse_qs(urlparse(self.path).query))
+                if found is None:
+                    self._not_found()
+                    return
+                body = found["path"].read_bytes()
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", found["content_type"])
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("Content-Security-Policy", "default-src 'none'")
+                self.end_headers()
+                self.wfile.write(body)
                 return
 
             # AIPOS-251: Overview page as new root

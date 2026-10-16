@@ -9,6 +9,11 @@
       出卡(draft_validator)与 amend(board_adapter.amend_task)同调 link_problems: 引用不存在 = 拒, 未挂 = 警告(不拒), 项目无路线图 =
       不校验不警告(行为不变)。卡遍历只经 task_loader.iter_queue_task_paths。
 
+AIPOS-F175 件②③: 卡面验收产物(card.schema fields.artifacts, 约定 card_artifacts)的形校验 artifact_problems(出卡 / amend 经
+      link_problems 同调)、解析 card_artifacts(推导 roadmap_drift 与看板同读)、看板取图判定 artifact_file; Owner 抽查结论两阶段写
+      apply_owner_verification(写既有 owner_verifications 记录, 不符经既有出卡口 draft_writer.create_draft 起草修复卡, 经
+      land_written_paths 落账)。
+
 任何项目同一组命令与声明: 本模块不写死项目 ID / 路径 / 卡号前缀。
 """
 from __future__ import annotations
@@ -21,8 +26,10 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-#: 写命令子命令 → 计划函数(与 verbs.schema two_phase_protocol.roadmap_writers.commands 同集; 夹具锁一致)
-SUBCOMMANDS = ("add-milestone", "add-criterion", "set", "remove")
+#: 写命令子命令(与 verbs.schema two_phase_protocol.roadmap_writers.commands 同集; 夹具锁一致)。前四个经 plan_change 计划;
+#: AIPOS-F175: verify = Owner 抽查结论(apply_owner_verification)
+SUBCOMMANDS = ("add-milestone", "add-criterion", "set", "remove", "verify")
+PLAN_SUBCOMMANDS = SUBCOMMANDS[:4]
 #: 指针 / 落账来源说明
 _ORIGIN = "lybra roadmap {subcommand} --confirm"
 #: 渲染键序(声明里 required + optional 的序即落盘序)
@@ -335,19 +342,22 @@ def link_problems(metadata: dict[str, Any], governance_root: str | Path) -> tupl
     无路线图 = 无拒无警; 引用不合 = 拒 ROADMAP_LINK_INVALID; 未挂 = 警告 ROADMAP_UNLINKED(不拒);
     路线图读不出: 卡给了挂接 = 拒(无法核对), 未给 = 警告。"""
     link = link_declaration()
+    # AIPOS-F175 件②: 卡面 artifacts 形不合 = 拒(与是否声明路线图无关; 唯一判据 artifact_problems)
+    art = artifact_problems(metadata)
+    art_block = [artifacts_declaration()["invalid"].format(reason="; ".join(art))] if art else []
     has_link = any(not _missing(metadata.get(f)) for f in link["fields"])
     try:
         roadmap = load_roadmap(governance_root)
     except RoadmapError as exc:
         message = link["unreadable"].format(reason=str(exc))
-        return ([message], []) if has_link else ([], [message])
+        return ([*art_block, message], []) if has_link else (art_block, [message])
     status = card_link_status(metadata, roadmap)
     if status["state"] == LINK_INVALID:
-        return [link["invalid"].format(reason="; ".join(status["problems"]))], []
+        return [*art_block, link["invalid"].format(reason="; ".join(status["problems"]))], []
     if status["state"] == LINK_UNLINKED:
         ids = [str(ms["id"]) for ms in roadmap["milestones"] if ms.get("status") != "dropped"]
-        return [], [link["unlinked_warning"].format(roadmap=roadmap["rel"], milestones=", ".join(ids) or "(无)")]
-    return [], []
+        return art_block, [link["unlinked_warning"].format(roadmap=roadmap["rel"], milestones=", ".join(ids) or "(无)")]
+    return art_block, []
 
 
 def card_links(governance_root: str | Path, roadmap: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -431,8 +441,8 @@ def plan_change(roadmap: dict[str, Any], subcommand: str, params: dict[str, Any]
     data.setdefault("milestones", [])
     if data["milestones"] is None:
         data["milestones"] = []
-    if subcommand not in SUBCOMMANDS:
-        raise ValueError(f"未知子命令 {subcommand!r}(只认 {SUBCOMMANDS})")
+    if subcommand not in PLAN_SUBCOMMANDS:
+        raise ValueError(f"未知子命令 {subcommand!r}(只认 {PLAN_SUBCOMMANDS})")
     item_id = str(params.get("milestone_id" if subcommand == "add-criterion" else "id") or "").strip()
     if subcommand == "add-milestone":
         new_id = str(params.get("id") or "").strip()
@@ -622,6 +632,348 @@ def render_view_text(view: dict[str, Any]) -> str:
     for bad in view["unreadable_cards"]:
         lines.append(f"  [卡面读不出] {bad['path']}: {bad['reason']}")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F175 件②: 卡面验收产物(card.schema fields.artifacts; 约定 card.schema card_artifacts)
+# ---------------------------------------------------------------------------
+
+def artifacts_declaration() -> dict[str, Any]:
+    """card.schema card_artifacts(唯一读取口; fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = load_schema("card").get("card_artifacts")
+    ok = (isinstance(decl, dict) and isinstance(decl.get("field"), str) and decl["field"]
+          and isinstance(decl.get("dir"), str) and "{task_id}" in decl["dir"] and "{return_root}" in decl["dir"]
+          and isinstance((decl.get("entry_keys") or {}).get("required"), list)
+          and isinstance((decl.get("entry_keys") or {}).get("optional"), list)
+          and {"criterion", "path_glob", "kind"} <= set(decl["entry_keys"]["required"])
+          and all(isinstance(decl.get(k), list) and decl[k] for k in ("kinds", "image_suffixes", "text_suffixes"))
+          and isinstance(decl.get("excerpt_bytes"), int) and not isinstance(decl.get("excerpt_bytes"), bool) and decl["excerpt_bytes"] > 0
+          and isinstance(decl.get("invalid"), str) and decl["invalid"])
+    if not ok:
+        raise SchemaLoadError("card.schema.json card_artifacts(field / dir 含 {return_root} {task_id} / entry_keys{required ⊇ "
+                              "criterion,path_glob,kind; optional} / kinds / image_suffixes / text_suffixes / excerpt_bytes>0 / invalid)未声明齐")
+    from tools.schema_loader import get_card_field_schema
+
+    if get_card_field_schema(decl["field"]) is None:
+        raise SchemaLoadError(f"card.schema.json card_artifacts.field={decl['field']!r} 未在 fields 声明")
+    return decl
+
+
+def _glob_problem(raw: Any) -> str | None:
+    if not _single_line(raw):
+        return "path_glob 须为非空单行文本"
+    text = str(raw).strip()
+    if text.startswith(("/", "~", "\\")) or re.match(r"^[A-Za-z]:", text):
+        return f"path_glob {text!r} 须相对卡产物落点(禁绝对路径 / ~)"
+    if ".." in re.split(r"[\\/]", text):
+        return f"path_glob {text!r} 不得含 .. (禁出产物落点)"
+    return None
+
+
+def artifact_problems(metadata: dict[str, Any]) -> list[str]:
+    """卡面 artifacts 形校验(唯一判据; 出卡 / amend 经 link_problems 同调)。未声明 = []。"""
+    decl = artifacts_declaration()
+    raw = metadata.get(decl["field"])
+    if _missing(raw):
+        return []
+    if not isinstance(raw, list):
+        return [f"{decl['field']} 须为列表(得 {type(raw).__name__})"]
+    keys = decl["entry_keys"]
+    allowed = set(keys["required"]) | set(keys["optional"])
+    criteria = metadata.get("criteria") if isinstance(metadata.get("criteria"), list) else []
+    problems: list[str] = []
+    for i, entry in enumerate(raw):
+        where = f"{decl['field']}[{i}]"
+        if not isinstance(entry, dict):
+            problems.append(f"{where} 须为映射")
+            continue
+        for key in sorted(set(entry) - allowed):
+            problems.append(f"{where} 含未声明的键 {key!r}(允许 {sorted(allowed)})")
+        for key in keys["required"]:
+            if _missing(entry.get(key)):
+                problems.append(f"{where} 缺 {key!r}")
+        crit = entry.get("criterion")
+        if not _missing(crit) and crit not in criteria:
+            problems.append(f"{where} criterion {crit!r} 不在本卡 criteria {criteria}(产物挂在本卡挂接的标准上)")
+        if not _missing(entry.get("kind")) and entry.get("kind") not in decl["kinds"]:
+            problems.append(f"{where} kind={entry.get('kind')!r} 不在值域 {decl['kinds']}")
+        if not _missing(entry.get("path_glob")):
+            glob_problem = _glob_problem(entry.get("path_glob"))
+            if glob_problem:
+                problems.append(f"{where} {glob_problem}")
+    return problems
+
+
+def card_artifact_dir(governance_root: str | Path, task_id: str) -> Path:
+    """卡产物落点 = card_artifacts.dir(return_root 经唯一读取口 workspace_config.project_paths; 在执行体交回落点内)。"""
+    from tools.aipos_cli.workspace_config import project_paths
+
+    root = Path(governance_root)
+    text = artifacts_declaration()["dir"].format(return_root=str(project_paths(root)["return_root"]), task_id=task_id)
+    path = Path(text)
+    return path if path.is_absolute() else root / path
+
+
+def _within(path: Path, base: Path) -> bool:
+    try:
+        path.resolve().relative_to(base.resolve())
+    except (ValueError, OSError):
+        return False
+    return True
+
+
+def card_artifacts(governance_root: str | Path, metadata: dict[str, Any], *, criterion: str | None = None) -> dict[str, Any]:
+    """卡面声明的产物 → 落点内实际文件(唯一解析; 推导 roadmap_drift.card_evidence 与看板同读)。只读。
+    返回 {task_id, dir, dir_rel, declared, problems, entries: [{criterion, kind, path_glob, files: [{rel, name, size, media, excerpt}]}]};
+    criterion 给出 = 只列该标准的项。声明形不合 = problems 非空、entries 空(不猜); 文件读不出 = 该文件不计入(problems 点名)。"""
+    decl = artifacts_declaration()
+    root = Path(governance_root)
+    task_id = str(metadata.get("task_id") or "")
+    base = card_artifact_dir(root, task_id)
+    out: dict[str, Any] = {"task_id": task_id, "dir": str(base), "dir_rel": _rel(base, root), "declared": False,
+                           "problems": [], "entries": []}
+    problems = artifact_problems(metadata)
+    if problems:
+        out["problems"] = problems
+        return out
+    raw = metadata.get(decl["field"]) or []
+    image = {s.lower() for s in decl["image_suffixes"]}
+    text_suffixes = {s.lower() for s in decl["text_suffixes"]}
+    limit = int(decl["excerpt_bytes"])
+    for entry in raw:
+        if criterion is not None and entry.get("criterion") != criterion:
+            continue
+        out["declared"] = True
+        files: list[dict[str, Any]] = []
+        candidates = sorted(base.glob(str(entry["path_glob"]).strip())) if base.is_dir() else []
+        for path in candidates:
+            if not path.is_file() or not _within(path, base):
+                continue
+            suffix = path.suffix.lower()
+            media = "image" if suffix in image else ("text" if suffix in text_suffixes else "other")
+            item: dict[str, Any] = {"rel": _rel(path, root), "name": path.relative_to(base).as_posix(), "media": media,
+                                    "size": None, "excerpt": None}
+            try:
+                item["size"] = path.stat().st_size
+                if media == "text":
+                    with open(path, "rb") as handle:
+                        chunk = handle.read(limit + 1)
+                    clipped = chunk[:limit].decode("utf-8", errors="replace")
+                    item["excerpt"] = clipped + (" …" if len(chunk) > limit else "")
+            except OSError as exc:
+                out["problems"].append(f"产物 {item['rel']} 读不出: {exc}")
+                continue
+            files.append(item)
+        out["entries"].append({"criterion": entry["criterion"], "kind": entry["kind"], "path_glob": str(entry["path_glob"]).strip(),
+                               "files": files})
+    return out
+
+
+def artifact_file(governance_root: str | Path, task_id: str, name: str) -> Path | None:
+    """看板取图判定(唯一): 卡 task_id 的卡面 artifacts 声明匹配到、在卡产物落点内、后缀属 image_suffixes 的文件(name = 落点内相对名)。
+    其余(卡不存在 / 未声明 / 不在落点 / 非图片)= None。只读。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.task_loader import AmbiguousTaskCard, find_task_card
+
+    root = Path(governance_root)
+    try:
+        path, _state = find_task_card(root, str(task_id))
+        if path is None:
+            return None
+        meta, _body = require_frontmatter(path)
+    except (AmbiguousTaskCard, FrontmatterReadError, OSError, ValueError):
+        return None
+    view = card_artifacts(root, meta)
+    for entry in view["entries"]:
+        for item in entry["files"]:
+            if item["name"] == name and item["media"] == "image":
+                return card_artifact_dir(root, str(task_id)) / item["name"]
+    return None
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F175 件③: Owner 抽查结论(`lybra roadmap verify`; 写既有 owner_verifications 记录 + 不符起草修复卡)
+# ---------------------------------------------------------------------------
+
+def verify_declaration() -> dict[str, Any]:
+    """verbs.schema lybra_roadmap.verify(唯一读取口; fail-closed): results 键 = owner_verification_writer.RESULT_DECISIONS 且 decision 一致,
+    state 属 status.verification.states; verifiable_states 属 states; fix_card 模板齐。"""
+    from tools.aipos_cli.owner_verification_writer import RESULT_DECISIONS
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    verb = (load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get("lybra_roadmap") or {}
+    decl = verb.get("verify")
+    states = (((verb.get("status") or {}).get("verification") or {}).get("states") or {})
+    need = ("results", "verifiable_states", "reject_codes", "fix_card", "texts")
+    if not isinstance(decl, dict) or any(k not in decl for k in need):
+        raise SchemaLoadError(f"verbs.schema.json verbs.lybra_roadmap.verify 未声明齐 {list(need)}")
+    results = decl["results"]
+    if (not isinstance(results, dict) or set(results) != set(RESULT_DECISIONS)
+            or any(results[k].get("decision") != RESULT_DECISIONS[k] or results[k].get("state") not in states
+                   or not str(results[k].get("label") or "") for k in results)):
+        raise SchemaLoadError(f"verbs.lybra_roadmap.verify.results 须恰为 {RESULT_DECISIONS} 且 state 属 status.verification.states")
+    if not set(decl["verifiable_states"]) <= set(states):
+        raise SchemaLoadError("verbs.lybra_roadmap.verify.verifiable_states 须属 status.verification.states")
+    fix = decl["fix_card"]
+    if (not isinstance(fix, dict) or not all(isinstance(fix.get(k), str) and fix[k] for k in ("task_id_template", "title_template",
+                                                                                              "body_template", "publish_hint"))
+            or "{round}" not in fix["task_id_template"] or not isinstance(fix.get("inherit_fields"), list)):
+        raise SchemaLoadError("verbs.lybra_roadmap.verify.fix_card(task_id_template 含 {round} / title_template / body_template / "
+                              "publish_hint / inherit_fields)未声明齐")
+    return decl
+
+
+def _verify_reject(code: str, detail: str, decl: dict[str, Any]) -> RoadmapError:
+    hint = str((decl.get("reject_codes") or {}).get(code) or "")
+    return RoadmapError(code, f"{detail}({hint})" if hint else detail)
+
+
+def _fix_task_id(governance_root: Path, source_task_id: str, decl: dict[str, Any]) -> str:
+    """修复卡卡号: 模板序号取首个未占用(队列 + 草稿, draft_validator.find_task_id_collisions 唯一判定)。"""
+    from tools.aipos_cli.draft_validator import find_task_id_collisions
+
+    template = str(decl["fix_card"]["task_id_template"])
+    for round_no in range(1, 1000):
+        candidate = template.format(task_id=source_task_id, round=round_no)
+        if not find_task_id_collisions(governance_root, candidate):
+            return candidate
+    raise ValueError(f"修复卡卡号 {template} 序号 1..999 都已占用")
+
+
+def _fix_draft_payload(governance_root: Path, source_meta: dict[str, Any], *, fix_task_id: str, milestone: str, criterion: str,
+                       statement: str, record_id: str, record_rel: str, relayed_by: str, owner_words: str, note: str | None,
+                       decl: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    fix = decl["fix_card"]
+    meta: dict[str, Any] = {k: copy.deepcopy(source_meta[k]) for k in fix["inherit_fields"] if not _missing(source_meta.get(k))}
+    meta.update({"task_id": fix_task_id, "title": fix["title_template"].format(criterion=criterion, statement=statement),
+                 "status": "pending", "created_by": relayed_by, "milestone": milestone, "criteria": [criterion],
+                 "owner_check_ref": record_id})
+    body = fix["body_template"].format(task_id=fix_task_id, criterion=criterion, statement=statement, record=record_rel,
+                                       relayed_by=relayed_by, owner_words=owner_words, note=note or "-",
+                                       source_task_id=source_meta.get("task_id"),
+                                       artifact_dir=_rel(card_artifact_dir(governance_root, str(source_meta.get("task_id") or "")),
+                                                         governance_root))
+    return meta, body
+
+
+def apply_owner_verification(governance_root: str | Path, *, criterion: str, result: str, relayed_by: str | None,
+                             owner_words: str | None, note: str | None = None, card: str | None = None, actor: str = "owner",
+                             confirm: bool, project: str, push: bool = True) -> dict[str, Any]:
+    """Owner 抽查结论两阶段写(唯一实现)。转达人 / 原话缺 = owner_inbox.InboxUsageError(用法错, 与 owner decide 同一校验)。
+    预演: 推导该标准状态(roadmap_drift.roadmap_status), 核前置, 渲染将写的 owner_verifications 记录(writer dry_run)与不符时的修复卡草稿
+    (draft_writer.create_draft dry_run), 零写入。确认: 写记录 → (不符)写草稿(owner_check_ref = 本次记录 id)→ land_written_paths 落账。
+    拒 = RoadmapError(code ∈ verify.reject_codes)。返回 {dry_run, written, criterion, milestone, task_id, result, label, state_before,
+    state_after, record{path, record_id, rendered}, fix{task_id, path, rendered, publish_hint} | None, fix_error, landing}。
+    确认阶段记录已写而草稿被拒(预演刚过, 极少)= 记录照样落账, fix_error 带拒因(调用方非零退出)。"""
+    from tools.aipos_cli.draft_writer import create_draft
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.owner_inbox import relay_fields
+    from tools.aipos_cli.owner_verification_writer import build_owner_verification_record
+    from tools.aipos_cli.roadmap_drift import roadmap_status, status_declaration
+    from tools.aipos_cli.task_loader import find_task_card
+    from tools.schema_constants import Verdict
+
+    root = Path(governance_root)
+    relayed, words = relay_fields(relayed_by, owner_words)
+    decl = verify_declaration()
+    if result not in decl["results"]:
+        raise ValueError(f"--result 只认 {sorted(decl['results'])}(得 {result!r})")
+    spec = decl["results"][result]
+    states = status_declaration()["verification"]["states"]
+    view = roadmap_status(root, project=project)
+    if not view["exists"]:
+        raise _verify_reject("VERIFY_CRITERION_UNKNOWN", f"项目 {project} 未声明路线图({view['path']} 不存在)", decl)
+    found = next(((ms, row) for ms in view["milestones"] for row in ms["criteria"] if row["id"] == criterion), None)
+    if found is None:
+        raise _verify_reject("VERIFY_CRITERION_UNKNOWN", f"标准 {criterion!r} 不在路线图 {view['rel']}", decl)
+    ms, row = found
+    if row["verify"] != "owner_check":
+        raise _verify_reject("VERIFY_NOT_OWNER_CHECK", f"标准 {criterion} 的 verify = {row['verify']}", decl)
+    if row["state"] not in decl["verifiable_states"]:
+        raise _verify_reject("VERIFY_NOT_READY", f"标准 {criterion} 当前「{row['state_label']}」: {row.get('reason') or '-'}", decl)
+    target = str(card or row["verify_target"] or "")
+    if card and card not in row["qualified_cards"]:
+        raise _verify_reject("VERIFY_CARD_INVALID", f"--card {card} 不在标准 {criterion} 已自动验证通过的挂接卡 {row['qualified_cards']}", decl)
+    fix_task_id = None
+    source_meta: dict[str, Any] = {}
+    if result == "mismatch":
+        card_path, _state = find_task_card(root, target)
+        if card_path is None:
+            raise _verify_reject("VERIFY_CARD_INVALID", f"被抽查卡 {target} 在队列中找不到", decl)
+        source_meta, _body = require_frontmatter(card_path)
+        fix_task_id = _fix_task_id(root, target, decl)
+    payload = {"task_id": target, "decision": spec["decision"], "reason": note or words, "decided_via": "cli", "workspace": project,
+               "milestone": str(ms["id"]), "criterion": criterion, "result": result, "relayed_by": relayed, "owner_words": words,
+               "note": note, "fix_task_id": fix_task_id}
+    record = build_owner_verification_record(root, payload, actor=actor, dry_run=True)
+    out: dict[str, Any] = {"dry_run": not confirm, "written": False, "criterion": criterion, "statement": row["statement"],
+                           "milestone": ms["id"], "task_id": target, "result": result, "label": spec["label"],
+                           "relayed_by": relayed, "owner_words": words, "state_before": row["state_label"],
+                           "state_after": states[spec["state"]], "record": None, "fix": None, "fix_error": None, "landing": None}
+    if record["verdict"] == Verdict.BLOCK:
+        raise _verify_reject("VERIFY_RECORD_BLOCKED", "; ".join(record["blocking_reasons"]), decl)
+
+    def _record_view(res: dict[str, Any]) -> dict[str, Any]:
+        rel = str(res["target_path"])
+        return {"path": rel, "record_id": Path(rel).stem, "rendered": res["rendered_markdown"], "warnings": res["warnings"]}
+
+    def _plan_fix(record_view: dict[str, Any], *, dry_run: bool) -> dict[str, Any]:
+        meta, body = _fix_draft_payload(root, source_meta, fix_task_id=str(fix_task_id), milestone=str(ms["id"]), criterion=criterion,
+                                        statement=str(row["statement"]), record_id=record_view["record_id"], record_rel=record_view["path"],
+                                        relayed_by=relayed, owner_words=words, note=note, decl=decl)
+        res = create_draft(root, meta, body, dry_run=dry_run)
+        if res["verdict"] == Verdict.BLOCK:
+            raise _verify_reject("VERIFY_FIX_DRAFT_BLOCKED", "; ".join(res["blocking_reasons"]), decl)
+        path = str(res.get("target_path") or "")
+        return {"task_id": fix_task_id, "path": path, "rendered": res.get("rendered_markdown"), "warnings": res.get("warnings") or [],
+                "wrote": bool(res.get("wrote")),
+                "publish_hint": decl["fix_card"]["publish_hint"].format(path=path, governance_root=str(root))}
+
+    out["record"] = _record_view(record)
+    if fix_task_id:
+        out["fix"] = _plan_fix(out["record"], dry_run=True)
+    if not confirm:
+        return out
+    written_record = build_owner_verification_record(root, payload, actor=actor, dry_run=False)
+    if written_record["verdict"] == Verdict.BLOCK or not written_record.get("wrote"):
+        raise _verify_reject("VERIFY_RECORD_BLOCKED", "; ".join(written_record["blocking_reasons"]) or "记录未写出", decl)
+    out["record"] = _record_view(written_record)
+    out["written"] = True
+    written = [out["record"]["path"]]
+    if fix_task_id:
+        try:
+            out["fix"] = _plan_fix(out["record"], dry_run=False)
+            written.append(out["fix"]["path"])
+        except RoadmapError as exc:  # record already written: still land it; the draft refusal goes to the caller (not swallowed)
+            out["fix"], out["fix_error"] = None, str(exc)
+    from tools.aipos_cli.governance_commit import land_written_paths
+
+    out["landing"] = land_written_paths(root, written, actor, command="roadmap_writers", push=push, subcommand="verify",
+                                        target=criterion, project=project)
+    after = roadmap_status(root, project=project)
+    row_after = next((r for m in after["milestones"] for r in m["criteria"] if r["id"] == criterion), None)
+    out["state_after"] = row_after["state_label"] if row_after else out["state_after"]
+    return out
+
+
+def render_verify_text(outcome: dict[str, Any], *, project: str, source: str, mode: str) -> list[str]:
+    """`lybra roadmap verify` 文本(文案读 verbs.lybra_roadmap.verify.texts)。"""
+    texts = verify_declaration()["texts"]
+    will = "" if outcome["written"] else texts["will"]
+    lines = [texts["header"].format(project=project, source=source, criterion=outcome["criterion"], statement=outcome["statement"],
+                                    task_id=outcome["task_id"]),
+             texts["outcome"].format(criterion=outcome["criterion"], mode=mode),
+             texts["record"].format(will=will, path=outcome["record"]["path"], label=outcome["label"], relayed_by=outcome["relayed_by"],
+                                    owner_words=outcome["owner_words"]),
+             texts["state"].format(before=outcome["state_before"], after=outcome["state_after"])]
+    fix = outcome.get("fix")
+    if fix:
+        lines.append(texts["fix"].format(will=will, task_id=fix["task_id"], path=fix["path"], milestone=outcome["milestone"],
+                                         criterion=outcome["criterion"], record_id=outcome["record"]["record_id"]))
+        lines.append("  " + fix["publish_hint"])
+    return lines
 
 
 # AIPOS-316: Guard against direct invocation

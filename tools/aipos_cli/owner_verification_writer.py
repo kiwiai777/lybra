@@ -8,6 +8,16 @@ watch mechanism and inform the true-stage derivation.
 Record structure mirrors existing record types (returns/verdicts) — frontmatter
 + markdown body. Append-only: never modifies existing records; repeats allowed
 (last record wins for UI display, but all records preserved for audit trail).
+
+AIPOS-F175 item 3: the same record type / writer carries the Owner spot check of a
+roadmap acceptance criterion (``lybra roadmap verify``). Optional fields
+``workspace`` / ``milestone`` / ``criterion`` / ``result`` / ``relayed_by`` /
+``owner_words`` / ``note`` / ``fix_task_id`` (attribution consistent with
+``lybra owner decide``: decided_by = actor, relayed_by = relaying advisor,
+owner_words = the Owner's own words). When ``criterion`` is given, ``result``,
+``relayed_by`` and ``owner_words`` are required. Old records without them keep
+their meaning. A target file that already exists is refused (append-only: never
+overwrite).
 """
 from __future__ import annotations
 
@@ -25,6 +35,11 @@ from tools.schema_constants import RecordType, Verdict
 TASK_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$")
 ALLOWED_DECISIONS = {"approve", "reject"}
 ALLOWED_DECIDED_VIA = {"web_session", "cli", "mcp", "external"}
+#: AIPOS-F175: spot-check result -> decision (the result vocabulary is declared in
+#: verbs.schema lybra_roadmap.verify.results; this map is checked against it by the caller)
+RESULT_DECISIONS = {"confirm": "approve", "mismatch": "reject"}
+#: AIPOS-F175: optional criterion spot-check fields (frontmatter order)
+CRITERION_FIELDS = ("workspace", "milestone", "criterion", "result", "relayed_by", "owner_words", "note", "fix_task_id")
 
 
 def _normalize_task_id(value: Any, blocking_reasons: list[str]) -> str:
@@ -82,7 +97,7 @@ def _normalize_text(value: Any, field: str, blocking_reasons: list[str], max_len
 
 def _metadata(record: dict[str, Any]) -> dict[str, Any]:
     """Builds frontmatter metadata for the verification record."""
-    return {
+    meta = {
         "record_type": RecordType.OWNER_VERIFICATION,
         "task_id": record["task_id"],
         "decision": record["decision"],
@@ -91,6 +106,11 @@ def _metadata(record: dict[str, Any]) -> dict[str, Any]:
         "decided_via": record["decided_via"],
         "reason": record.get("reason") or None,
     }
+    # AIPOS-F175: criterion spot-check fields only when given (old record shape unchanged)
+    for key in CRITERION_FIELDS:
+        if record.get(key):
+            meta[key] = record[key]
+    return meta
 
 
 def _render_body(record: dict[str, Any]) -> str:
@@ -105,6 +125,16 @@ def _render_body(record: dict[str, Any]) -> str:
         f"**决策方式**: {record['decided_via']}",
         "",
     ]
+    if record.get("criterion"):
+        # AIPOS-F175: roadmap criterion spot check (who relayed, the Owner's words)
+        lines[2:2] = [
+            f"**验收标准**: {record['criterion']}(里程碑 {record.get('milestone') or '?'}, 项目 {record.get('workspace') or '?'})",
+            f"**抽查结论**: {record.get('result')}",
+            f"**转达**: {record.get('relayed_by')}",
+            f"**Owner 原话**: 「{record.get('owner_words')}」",
+        ]
+        if record.get("fix_task_id"):
+            lines[6:6] = [f"**修复卡**: {record['fix_task_id']}"]
     
     if record.get("reason"):
         lines.extend([
@@ -162,6 +192,19 @@ def build_owner_verification_record(
     reason = _normalize_text(payload.get("reason"), "reason", blocking_reasons, max_length=2000, required=False)
     decided_by = _normalize_text(actor or "owner", "decided_by", blocking_reasons, max_length=160, required=True)
     decided_at = iso_z()
+    # AIPOS-F175: criterion spot-check fields (single-line; criterion given = result / relayed_by / owner_words required)
+    extra: dict[str, str] = {}
+    spot_check = bool(payload.get("criterion"))
+    for key in CRITERION_FIELDS:
+        required = spot_check and key in ("criterion", "result", "relayed_by", "owner_words")
+        text = _normalize_text(payload.get(key), key, blocking_reasons, max_length=2000 if key in ("owner_words", "note") else 200,
+                               required=required)
+        if text and key != "note" and "\n" in text:
+            blocking_reasons.append(f"Invalid {key}: must be a single line")
+        if text:
+            extra[key] = text
+    if spot_check and extra.get("result") and RESULT_DECISIONS.get(extra["result"]) != decision:
+        blocking_reasons.append(f"Invalid result: {extra.get('result')!r} does not match decision {decision!r} ({RESULT_DECISIONS})")
     
     # reject decision requires reason
     if decision == "reject" and not reason:
@@ -175,6 +218,7 @@ def build_owner_verification_record(
         "decided_by": decided_by,
         "decided_at": decided_at,
         "decided_via": decided_via,
+        **extra,
     }
     
     # Generate target path with timestamp for uniqueness (append-only)
@@ -187,9 +231,9 @@ def build_owner_verification_record(
     target_path = str(record_root("owner_verifications") / task_id / filename) if task_id else None
     target_file = repo_root / target_path if target_path else None
     
-    # Check if file already exists (should be rare due to timestamp)
+    # AIPOS-F175: append-only = never overwrite; a timestamp collision is refused (retry in the next second)
     if target_file is not None and target_file.exists():
-        warnings.append(f"Verification record already exists (timestamp collision): {target_path}")
+        blocking_reasons.append(f"Verification record already exists (timestamp collision, append-only, not overwritten): {target_path}")
     
     # Render markdown
     rendered_markdown = render_markdown(_metadata(normalized_record), _render_body(normalized_record))

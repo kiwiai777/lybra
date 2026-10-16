@@ -80,6 +80,17 @@ body.rp-page { margin: 0; background: var(--rp-bg); color: var(--rp-text); font:
 .vb-verdict.is-FAIL { color: var(--rp-alert); }
 .rp-evidence ul { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 6px; }
 .rp-next { margin-top: 16px; }
+/* AIPOS-F175: verification states + artifacts */
+.rp-crit-vstate { font-weight: 700; margin: 2px 0; }
+.rp-vstate-auto_passed, .rp-vstate-owner_confirmed { color: var(--rp-ok); }
+.rp-vstate-owner_pending { color: var(--rp-warn); }
+.rp-vstate-mismatch { color: var(--rp-alert); }
+.rp-crit-basis, .rp-owner-check, .rp-fix { font-size: 12.5px; color: var(--rp-muted); margin: 2px 0; overflow-wrap: anywhere; }
+.rp-artifacts { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 6px; }
+.rp-artifact-image { display: inline-block; margin: 4px 8px 0 0; }
+.rp-artifact-image img { max-width: 240px; max-height: 180px; border: 1px solid var(--rp-border); border-radius: 4px; }
+.rp-artifact-image figcaption { font-size: 11.5px; }
+.rp-artifact-excerpt { max-height: 12em; overflow: auto; white-space: pre-wrap; font-size: 12px; }
 /* onboarding */
 .rp-ob-project { background: var(--rp-panel); border: 1px solid var(--rp-border); border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; }
 .rp-checklist { margin: 0; padding-left: 20px; display: grid; gap: 8px; }

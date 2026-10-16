@@ -131,8 +131,14 @@ or the language already picked on the Board). All three pages are GET only; any 
   with its reason, "Tell <advisor>: …" and the advised command), milestones by lane on the left (progress bar = met / total
   criteria, status, target date, overdue in red), the selected milestone's criteria on the right: linked cards with queue
   state, latest audit verdict (link to the verdict record), runtime evidence excerpt from the audit report
-  (`roadmap_drift.card_evidence`, the same read that decides "met"), and the "pending F175" reason for `artifact` /
-  `owner_check`. A project without a roadmap shows "How to start".
+  (`roadmap_drift.card_evidence`, the same read that decides "met"), and (AIPOS-F175) the verification state of each criterion
+  (not verified / auto-verified / awaiting Owner spot check / confirmed by Owner / mismatch) with its basis, the card's
+  declared artifacts (image thumbnails, text excerpts), the latest Owner spot-check record (who relayed it, the Owner's words)
+  and fix cards; a criterion awaiting the spot check shows "Tell <advisor>: conforms / does not conform" and the advisor's
+  `lybra roadmap verify` command. A project without a roadmap shows "How to start".
+- `GET /owner/artifact?project=<name>&task=<card>&file=<name>` (AIPOS-F175) — read-only thumbnail source: only an image the
+  card's `artifacts` declares, inside the card artifact dir (`roadmap.artifact_file`); anything else answers 404. Served with
+  `X-Content-Type-Options: nosniff` and `Content-Security-Policy: default-src 'none'`.
 - `GET /owner/onboarding` — one checklist per project: governance root, advisor / executor / auditor enrolled
   (`advisor_instances`, `project_execution` + `instance_enrollment`; diagnose with `lybra roles enroll-where`), envelope in use
   and not running low, workstation charter fresh (the last pre-launch charter check the loop recorded, `charter_checks` in the

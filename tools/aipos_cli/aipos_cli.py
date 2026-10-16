@@ -1506,7 +1506,7 @@ def _roadmap_command(args: argparse.Namespace) -> int:
 
     command = getattr(args, "roadmap_command", None)
     if not command:
-        print("Error: 缺子命令(show / status / add-milestone / add-criterion / set / remove)", file=sys.stderr)
+        print("Error: 缺子命令(show / status / add-milestone / add-criterion / set / remove / verify)", file=sys.stderr)
         return 2
     try:
         home, _source = resolve_home_root_with_source(explicit_root=args.home_root)
@@ -1531,6 +1531,8 @@ def _roadmap_command(args: argparse.Namespace) -> int:
             drift = roadmap_drift.roadmap_status(root, lane=args.lane, project=project)
             print(render_json(roadmap_drift.json_view(drift)) if args.json else roadmap_drift.render_status_text(drift))
             return 0
+        if command == "verify":  # AIPOS-F175: two-phase, single implementation roadmap.apply_owner_verification
+            return _roadmap_verify(args, root, project, target["source"])
         params = {k: getattr(args, k, None) for k in rm.roadmap_param_keys()}
         outcome = rm.apply_roadmap_change(root, command, params, actor=args.actor, confirm=bool(args.confirm), project=project)
     except rm.RoadmapError as exc:
@@ -1556,6 +1558,40 @@ def _roadmap_command(args: argparse.Namespace) -> int:
         print(f"  decision_log 指针{'' if outcome['written'] else '(将生成)'}: {outcome['pointer']}")
     if outcome.get("pointer_warning"):
         print(f"  ⚠ {outcome['pointer_warning']}", file=sys.stderr)
+    if landing is not None:
+        print(landing["line"], file=sys.stdout if landing["landed"] else sys.stderr)
+    return rc
+
+
+def _roadmap_verify(args: argparse.Namespace, root: Path, project: str, source: str) -> int:
+    """AIPOS-F175 件③: `lybra roadmap verify` 薄壳。缺转达人 / 原话 = 用法错 exit 2(与 owner decide 同一校验); 拒 = exit 1(零写入);
+    落账未完成 = 声明退出码(写入已生效)。"""
+    from tools.aipos_cli import roadmap as rm
+    from tools.aipos_cli.owner_inbox import InboxUsageError
+
+    try:
+        outcome = rm.apply_owner_verification(root, criterion=args.criterion, result=args.result, relayed_by=args.relayed_by,
+                                              owner_words=args.owner_words, note=args.note, card=args.card, actor=args.actor,
+                                              confirm=bool(args.confirm), project=project)
+    except InboxUsageError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    except rm.RoadmapError as exc:
+        print(f"Error: {exc}(零写入)", file=sys.stderr)
+        return 1
+    landing = outcome.get("landing")
+    rc = 0 if landing is None or landing["landed"] else int(landing["exit_code"])
+    if outcome.get("fix_error"):  # record written and landed, fix draft refused: say so, non-zero
+        print(f"Error: {outcome['fix_error']}(抽查记录已写入并落账; 修复卡草稿未写, 顾问按拒因手动出卡)", file=sys.stderr)
+        rc = rc or 1
+    if args.json:
+        print(render_json({"ok": not outcome.get("fix_error"), "command": "verify", "project": project, "target_source": source,
+                           **{k: v for k, v in outcome.items() if k != "landing"}, "landing": _landing_view(landing)}))
+        return rc
+    labels = _two_phase_family_declaration("roadmap_writers")["outcome_labels"]
+    mode = labels["written"] if outcome["written"] else labels["preview"]
+    for line in rm.render_verify_text(outcome, project=project, source=source, mode=mode):
+        print(line)
     if landing is not None:
         print(landing["line"], file=sys.stdout if landing["landed"] else sys.stderr)
     return rc
@@ -2877,9 +2913,25 @@ def build_parser() -> argparse.ArgumentParser:
     _project_json_two_phase_flags(roadmap_add_crit, "add-criterion", family="roadmap_writers")
     _project_json_two_phase_flags(roadmap_set, "set", family="roadmap_writers")
     _project_json_two_phase_flags(roadmap_remove, "remove", family="roadmap_writers")
-    for _roadmap_sub_parser in (roadmap_add_ms, roadmap_add_crit, roadmap_set, roadmap_remove):
+    # AIPOS-F175 件③: lybra roadmap verify —— Owner 抽查结论经顾问记录(写既有 owner_verifications 记录; 不符自动起草修复卡; 两阶段同族)
+    roadmap_verify = roadmap_sub.add_parser("verify", help="AIPOS-F175: record the Owner's spot-check result for an owner_check "
+                                            "criterion (two-phase; writes an owner_verifications record; mismatch also drafts a fix card "
+                                            "linked to the same criterion)")
+    roadmap_verify.add_argument("--criterion", required=True, help="Criterion id (verify = owner_check)")
+    roadmap_verify.add_argument("--result", required=True, choices=["confirm", "mismatch"], help="Owner's result: confirm | mismatch")
+    roadmap_verify.add_argument("--relayed-by", dest="relayed_by", default=None,
+                                help="Advisor instance relaying the Owner's result (owner if the Owner runs it); required")
+    roadmap_verify.add_argument("--owner-words", dest="owner_words", default=None, help="The Owner's own words (one line); required")
+    roadmap_verify.add_argument("--note", default=None, help="Note (goes into the fix card body on mismatch)")
+    roadmap_verify.add_argument("--card", default=None, help="Linked card that was checked (default: the card the derivation "
+                                "says awaits the check)")
+    _project_json_two_phase_flags(roadmap_verify, "verify", family="roadmap_writers")
+    for _roadmap_sub_parser in (roadmap_add_ms, roadmap_add_crit, roadmap_set, roadmap_remove, roadmap_verify):
         _roadmap_common(_roadmap_sub_parser)
-        _roadmap_sub_parser.add_argument(_roadmap_actor["flag"], dest="actor", default=_default_actor(), help=_roadmap_actor["help"])
+        # AIPOS-F175: verify 的 --actor = 抽查记录 decided_by(与 owner decide 一致缺省 owner); 其余写命令照旧
+        _roadmap_sub_parser.add_argument(_roadmap_actor["flag"], dest="actor",
+                                         default="owner" if _roadmap_sub_parser is roadmap_verify else _default_actor(),
+                                         help=_roadmap_actor["help"])
 
     # AIPOS-F78 件②: lybra card render — 卡意图面单一渲染器(pi 三行 / codex Prompt.md+Plan.md / claude-code CLAUDE.md 片段)
     card_parser = subparsers.add_parser("card", help="AIPOS-F78: 卡意图面操作(render)")

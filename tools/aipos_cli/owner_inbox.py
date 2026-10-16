@@ -16,6 +16,9 @@ AIPOS-F170(收件箱清理): 件① 遗留视图 render_stale_text(同一 collec
 blocked 卡经裁决撤回(既有 board_adapter.withdraw_task, 前置放宽 = 带 Owner 裁决引用)/ 冻结为历史(既有 legacy_freeze.plan_freeze_legacy +
 legacy_baseline.write_freeze_entry, owner_policy_ref = 决策记录 ID); 件② 暂停项目过滤只在 collect_inbox(读 workspace_config.project_status);
 件③ 转达归因写进既有记录字段(captured_by = --relayed-by, decision_rationale = Owner 原话), 顾问侧裁决行(ruling_view)显示二者。
+
+AIPOS-F175 件③: owner_check 类别 = 路线图推导(roadmap_drift.roadmap_status, 唯一实现)里验证状态 = 待 Owner 抽查的标准, 附产物 / 步骤 /
+「告诉顾问」话术; 结论经顾问 `lybra roadmap verify`(roadmap.apply_owner_verification)记录, 不经 decide(对本类敲 decide = 用法错, 拒因指路)。
 """
 from __future__ import annotations
 
@@ -29,7 +32,8 @@ from typing import Any
 VERB = "lybra_owner_inbox"
 DECIDE_VERB = "lybra_owner_decide"
 NOTE_VERB = "lybra_loop_note"
-CATEGORIES = ("loop_owner_needed", "needs_owner_card", "rework_limit", "supplementary_fail", "envelope_warning", "roadmap_drift")
+CATEGORIES = ("loop_owner_needed", "needs_owner_card", "rework_limit", "supplementary_fail", "envelope_warning", "roadmap_drift",
+              "owner_check")
 _DECL_KEYS = ("item_id", "decision", "texts", "rank_labels", "categories", "options", "custom_option", "exit_codes", "stale")
 _DECISION_KEYS = ("decision_id_prefix", "decision_type", "decision_status", "capture_surface", "source_tag", "capture_method",
                   "approval_intent", "redaction_status", "token_ref", "capability_ttl_hours", "external_ref_prefix",
@@ -407,8 +411,55 @@ def _roadmap_items(root: Path, project: str, decl: dict[str, Any], home_root: Pa
     return out
 
 
+def _owner_check_items(root: Path, project: str, decl: dict[str, Any], home_root: Path | None,
+                       errors: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """⑦ AIPOS-F175: 验证状态 = owner_pending 的标准(推导唯一实现 roadmap_drift.roadmap_status), 每条一个事项; 锚点 = 标准 + 已自动验证通过的
+    挂接卡 + 已有抽查记录数(新交付 / 新记录 = 新事项)。推导读不出处已由 roadmap_drift 类别点名(不重复进 errors)。项目无路线图 = 无事项。"""
+    from tools.aipos_cli.board_pages import pages_declaration, roadmap_url
+    from tools.aipos_cli.roadmap_drift import roadmap_status
+
+    cat = decl["categories"]["owner_check"]
+    view = roadmap_status(root, project=project)
+    out: list[dict[str, Any]] = []
+    for ms in view["milestones"]:
+        if ms["status"] == "dropped":
+            continue
+        for row in ms["criteria"]:
+            if row.get("state") != "owner_pending":
+                continue
+            cid = str(row["id"])
+            evidence = [ev for ev in row["evidence"] if ev["task_id"] in row["qualified_cards"]]
+            lines = []
+            for ev in evidence:
+                for entry in (ev.get("artifacts") or {}).get("entries") or []:
+                    lines.append(_fmt(cat["artifact_line"], "categories.owner_check.artifact_line", task_id=ev["task_id"], kind=entry["kind"],
+                                      files=", ".join(f["rel"] for f in entry["files"]) or str(cat["no_files"])))
+            advisor = str(row.get("verify_target_by") or "")
+            verify_command = _fmt(cat["verify_command"], "categories.owner_check.verify_command", governance_root=str(root), criterion=cid)
+            fill = {"criterion": cid, "statement": row["statement"], "cards": ", ".join(row["qualified_cards"]),
+                    "artifacts": "; ".join(lines) or str(cat["no_files"]), "milestone": ms["id"], "lane": ms["lane"],
+                    "met": ms["progress"]["met"], "total": ms["progress"]["total"], "advisor": advisor or str(decl["texts"]["unknown_source"])}
+            target_ev = next((ev for ev in evidence if ev["task_id"] == row.get("verify_target")), None)
+            item = _base_item(
+                decl, project=project, governance_root=root, category="owner_check", rank=int(cat["rank"]),
+                subject=_fmt(cat["subject"], "categories.owner_check.subject", **fill),
+                anchor=f"{cid}|{','.join(sorted(row['qualified_cards']))}|{len(row.get('verifications') or [])}", source=advisor,
+                ask=_fmt(cat["ask"], "categories.owner_check.ask", **fill),
+                recommend=_fmt(cat["recommend"], "categories.owner_check.recommend", **fill),
+                impact=_fmt(cat["impact"], "categories.owner_check.impact", **fill),
+                options=_option_list(list(cat["options"]), decl), since=(target_ev or {}).get("verdict_at"), task_id=row.get("verify_target"),
+                home_root=home_root, facts={"milestone": ms["id"], "criterion": cid, "lane": ms["lane"], "verify_command": verify_command,
+                                            "artifacts": [f["rel"] for ev in evidence for e in (ev.get("artifacts") or {}).get("entries") or []
+                                                          for f in e["files"]]})
+            item["decide_line"] = _fmt(cat["decide_line"], "categories.owner_check.decide_line", verify_command=verify_command)
+            item["board_url"] = roadmap_url(pages_declaration(), project, str(ms["id"]))
+            out.append(item)
+    return out
+
+
 _COLLECTORS = (("loop_owner_needed", _loop_items), ("needs_owner_card", _needs_owner_items), ("rework_limit", _rework_items),
-               ("supplementary_fail", _supplementary_items), ("envelope_warning", _envelope_items), ("roadmap_drift", _roadmap_items))
+               ("supplementary_fail", _supplementary_items), ("envelope_warning", _envelope_items), ("roadmap_drift", _roadmap_items),
+               ("owner_check", _owner_check_items))
 
 
 def collect_project_inbox(governance_root: Path, *, project: str | None = None, home_root: Path | None = None,
@@ -849,6 +900,11 @@ def decide(item_ids: str | list[str], choice: str, *, note: str | None = None, h
     relayed, words = relay_fields(relayed_by, owner_words)
     decl = inbox_declaration()
     items, inbox = find_items(ids, home_root=home_root)
+    for item in items:
+        redirect = decl["categories"][item["category"]].get("decide_redirect")
+        if redirect:  # AIPOS-F175: owner_check is recorded via `lybra roadmap verify`, never via decide
+            raise InboxUsageError(_fmt(redirect, f"categories.{item['category']}.decide_redirect", item_id=item["item_id"],
+                                       verify_command=(item.get("facts") or {}).get("verify_command") or ""))
     for item in items:
         keys = [o["key"] for o in item["options"]]
         if choice not in keys:

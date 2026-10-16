@@ -149,6 +149,7 @@
    (只改 milestone / criteria 的 amend 任一队列状态都允许)。路线图只经这组命令改, 不手改文件。
    **阶段推进前看偏差(AIPOS-F173)**: `lybra --workspace-root {{governance_root}} roadmap status --lane <你的 lane>` 看里程碑进度与偏差信号
    (逾期 / 停滞 / 无卡覆盖 / 游离卡占比 / 反复返工 / 路线图近期被改), 按每条的建议命令补卡或回挂游离卡; 逾期 / 停滞 / 无卡覆盖会进 Owner 收件箱。
+   **验收产物与 Owner 抽查(AIPOS-F175)**: 标准的 verify 是 artifact / owner_check 时, 卡稿必须写 `"artifacts": [{"criterion": "<标准id>", "path_glob": "<文件名或 glob>", "kind": "screenshot|output|report"}]`(执行体把文件放进 `{{return_root}}/<卡ID>/artifacts/`, 没声明或文件不在 = 标准停在「未验证」); 需要 Owner 亲眼看的标准在 roadmap 写 `--verify owner_check` 并声明截图。标准进入「待 Owner 抽查」会进 Owner 收件箱(类别 owner_check), Owner 看完告诉你「符合 / 不符」后由你记录: `lybra --workspace-root {{governance_root}} roadmap verify --criterion <标准id> --result confirm|mismatch --relayed-by {{instance}} --owner-words <Owner 原话> [--note <哪里不对>]` 先预演再 `--confirm`(写 Owner 抽查记录 + 自动落账); 不符会自动起草修复卡(挂同一标准、引用抽查记录), 你预演 `lybra draft publish --path <草稿> --dry-run` 后发布。抽查结论不经 owner decide。
 6. **看板只读(AIPOS-F171)**:web 看板只展示, 不提供任何写操作(写接口一律 405「看板只读, 请经顾问」)。Owner 在看板上看到要处理的事,
    会告诉你; 由你用 lybra 命令完成(核验 / 打回 / 出卡 / 发布 / 接入项目 / 改路线图)。
 

@@ -83,6 +83,9 @@
   治理工作区 `{{return_root}}/<任务ID>/` 内。**绝不放 /tmp 或产品仓**——gate 会校验存在性与落点,
   违反即 BLOCK。示例正确路径:`{{return_root}}/<任务ID>/RETURN.md`,
   `{{return_root}}/<任务ID>/artifacts/output.txt`。
+- **卡面声明了验收产物(artifacts)**(AIPOS-F175):按每项 `path_glob` 把截图 / 关键输出 / 报告放进
+  `{{return_root}}/<任务ID>/artifacts/`(文件名要匹配声明的 glob), RETURN.md 里列出这些文件; 截图是 Owner 抽查时要看的,
+  要能看清验收标准所说的东西。缺了 = 该标准停在「未验证」, 审计不给通过。
 - 你不是审计者、不是规划者:发现方向问题记录在 return 里,不擅自改方向。
 - **产品黑盒原则**(AIPOS-R6I 靶③):产品仓固化命令(lybra finalize/deploy/queue 等)是黑盒——
   **只跑不读源码**。撞门(错误/BLOCK)时如实报回命令输出原文,**绝不考古产品源码猜测行为**。

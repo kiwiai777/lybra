@@ -8126,7 +8126,10 @@ def amend_task(
             if not is_valid and error_msg:
                 validation_errors.append(error_msg)
         
-        if set(amendments) & set(_link_decl["fields"]):
+        # AIPOS-F175 件②: 改卡面 artifacts 同经 link_problems(含产物声明形校验 roadmap.artifact_problems, 与出卡同一判据)
+        from tools.aipos_cli.roadmap import artifacts_declaration
+
+        if set(amendments) & {*_link_decl["fields"], artifacts_declaration()["field"]}:
             link_blocking, _link_warnings = link_problems(updated_metadata, resolved_root)
             validation_errors.extend(link_blocking)
 
