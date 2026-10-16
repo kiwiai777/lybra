@@ -1195,6 +1195,81 @@ def _resolve_task_selection(args: argparse.Namespace, tasks: list[dict[str, Any]
 # (签信封逻辑只在门侧 owner_decision_writer 一处; 本 CLI 只构 payload、读凭据、两阶段转发、以门生记录为准输出)
 # ---------------------------------------------------------------------------
 
+def _owner_command(args: argparse.Namespace) -> int:
+    """AIPOS-F168: `lybra owner inbox|decide` 薄壳。inbox: owner_inbox.collect_inbox + render_inbox_text(看板同一数据);
+    decide: owner_inbox.decide(预演 / 确认两阶段)。退出码读 verbs.schema lybra_owner_inbox / lybra_owner_decide(落账失败读 post_write_landing)。"""
+    from tools.aipos_cli.owner_inbox import (
+        DECIDE_VERB,
+        VERB,
+        InboxChoiceInvalid,
+        InboxItemNotFound,
+        collect_inbox,
+        decide,
+        render_inbox_text,
+    )
+    from tools.aipos_cli.verb_contract import declared_exit_code
+
+    action = getattr(args, "owner_action", None)
+    if action == "inbox":
+        try:
+            inbox = collect_inbox(getattr(args, "home_root", None), project=getattr(args, "project", None))
+        except (ValueError, OSError) as exc:
+            print(f"lybra owner inbox: {exc}", file=sys.stderr)
+            return declared_exit_code(VERB, "usage")
+        print(render_json(inbox) if args.json else render_inbox_text(inbox))
+        return declared_exit_code(VERB, "partial" if inbox["errors"] else "ok")
+    if action == "decide":
+        try:
+            report = decide(args.item, args.choice, note=args.note, home_root=getattr(args, "home_root", None), actor=args.actor,
+                            confirm=bool(args.confirm))
+        except InboxItemNotFound as exc:
+            print(f"lybra owner decide: {exc}", file=sys.stderr)
+            return declared_exit_code(DECIDE_VERB, "not_found")
+        except InboxChoiceInvalid as exc:
+            print(f"lybra owner decide: {exc}", file=sys.stderr)
+            return declared_exit_code(DECIDE_VERB, "usage")
+        except (ValueError, OSError) as exc:
+            print(f"lybra owner decide: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return declared_exit_code(DECIDE_VERB, "blocked")
+        landing = report.get("landing")
+        if args.json:
+            print(render_json({**report, "landing": None if landing is None else _landing_view(landing)}))
+        else:
+            _print_owner_decide(report)
+        if report["rc_outcome"] == "landing_failed":
+            return int(landing.get("exit_code") or 1)
+        return declared_exit_code(DECIDE_VERB, report["rc_outcome"])
+    print("lybra owner: 须给子命令 inbox | decide", file=sys.stderr)
+    return 2
+
+
+def _print_owner_decide(report: dict[str, Any]) -> None:
+    item = report["item"]
+    stage = "预演(零写入; 加 --confirm 写入并落账)" if report["stage"] == "preview" else "确认"
+    print(f"lybra owner decide {stage}: {item['item_id']} {item['project']} / {item['subject']} → 选 {report['choice']}"
+          + (f" — 备注: {report['note']}" if report.get("note") else ""))
+    decision = report.get("decision") or {}
+    print(f"  决策记录: {decision.get('target_path') or '-'} verdict={decision.get('verdict')}")
+    for reason in decision.get("blocking_reasons") or []:
+        print(f"  ✗ 拒因: {reason}", file=sys.stderr)
+    release = report.get("release")
+    if report.get("effect"):
+        verdict = (release or {}).get("verdict")
+        print(f"  解除动作 {report['effect']}(既有队列出口): ok={bool((release or {}).get('ok'))} verdict={verdict}")
+        for reason in (release or {}).get("blocking_reasons") or []:
+            print(f"  ✗ 解除拒因: {reason}", file=sys.stderr)
+        for err in (release or {}).get("errors") or []:
+            print(f"  ✗ 解除拒因: {err.get('message') if isinstance(err, dict) else err}", file=sys.stderr)
+    if item["category"] == "envelope_warning" and report["choice"] == "renew" or (item.get("facts") or {}).get("reason") == "envelope_renew":
+        if item.get("recommend"):
+            print(f"  续签由 Owner 执行: {item['recommend']}")
+    for path in report.get("written") or []:
+        print(f"    wrote {path}")
+    landing = report.get("landing")
+    if landing is not None:
+        print(landing["line"], file=sys.stdout if landing.get("landed") else sys.stderr)
+
+
 def _envelope_mint_payload(
     *,
     policy_id: str,
@@ -2677,6 +2752,38 @@ def build_parser() -> argparse.ArgumentParser:
                                     help="AIPOS-F136 件①: 有界等待秒数(须 --task-id; 上限读 verbs.schema lybra_loop_status.wait.max_seconds), "
                                     "经 agent watch 等到顾问下一动作 ≠ continue_wait 或到时, 返回当时状态; 禁 until/sleep 轮询")
     # AIPOS-F138 件③ 的 --verbose 由 AIPOS-F142 件② 统一挂载(verbs.schema envelope_trace.verbose_commands 含 "loop status", 见 build_parser 末)
+    # AIPOS-F168 件③: `lybra loop note` —— 给本卡最近一次运行补写 Owner 待决结构字段(声明 verbs.schema lybra_loop_note; --workspace-root 由
+    # governance_root_resolution.commands 统一挂载)。与父解析器同名参数用 SUPPRESS 缺省, 不覆盖写在 note 之前的同名参数
+    loop_note_parser = loop_actions.add_parser(
+        "note", help="AIPOS-F168: 给本卡最近一次 loop 运行补写「要 Owner 定什么 + 选项 + 顾问建议」(收件箱 lybra owner inbox 据此展示); "
+                     "缺省预演零写入, --confirm 写入并落账")
+    loop_note_parser.add_argument("--task-id", default=argparse.SUPPRESS, help="卡 ID(必填)")
+    loop_note_parser.add_argument("--ask", default=None, help="要 Owner 定什么(一句话)")
+    loop_note_parser.add_argument("--options", dest="note_options", nargs="+", default=None, metavar="KEY=LABEL",
+                                  help="裁决选项, 每项 键=标签(键式样读 verbs.schema lybra_owner_inbox.custom_option.key_pattern)")
+    loop_note_parser.add_argument("--recommend", default=None, help="顾问建议(建议选哪个 + 理由)")
+    loop_note_parser.add_argument("--actor", default=argparse.SUPPRESS, help="补写人(顾问实例); 缺省 = 运行记录 driver")
+    loop_note_parser.add_argument("--confirm", action="store_true", default=False, help="写入并落账; 缺省预演")
+    loop_note_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output JSON")
+
+    # AIPOS-F168 件①②: `lybra owner inbox / decide` —— Owner 待决收件箱与一处裁决(声明 verbs.schema lybra_owner_inbox / lybra_owner_decide;
+    # 全部逻辑在 owner_inbox, 本处只注册参数)
+    owner_parser = subparsers.add_parser("owner", help="AIPOS-F168: Owner 待决收件箱(inbox)与一处裁决(decide)")
+    owner_actions = owner_parser.add_subparsers(dest="owner_action")
+    owner_inbox_parser = owner_actions.add_parser(
+        "inbox", help="跨 home 根全部已注册项目汇总需 Owner 定的事项(要定什么 / 顾问建议 / 影响 / 选项 / 裁决命令); 只读")
+    owner_inbox_parser.add_argument("--home-root", help="home 根; 缺省 = resolve_home_root 同一优先级梯")
+    owner_inbox_parser.add_argument("--project", help="只看该项目(home 根下注册名)")
+    owner_inbox_parser.add_argument("--json", action="store_true", help="JSON 输出(与看板 /api/owner/inbox 同一数据)")
+    owner_decide_parser = owner_actions.add_parser(
+        "decide", help="裁决一个收件箱事项: 缺省预演零写入; --confirm 落 owner_decision_record(+ needs_owner 卡经既有出口解除)并落账")
+    owner_decide_parser.add_argument("--item", required=True, help="事项 ID(收件箱列出的 OI-…)")
+    owner_decide_parser.add_argument("--choice", required=True, help="选项键(该事项列出的选项之一)")
+    owner_decide_parser.add_argument("--note", default=None, help="裁决备注(顾问侧原样显示)")
+    owner_decide_parser.add_argument("--home-root", help="home 根; 缺省 = resolve_home_root 同一优先级梯")
+    owner_decide_parser.add_argument("--actor", default="owner", help="裁决人身份(缺省 owner)")
+    owner_decide_parser.add_argument("--confirm", action="store_true", default=False, help="写入并落账; 缺省预演")
+    owner_decide_parser.add_argument("--json", action="store_true", help="JSON 输出")
 
     # AIPOS-F138 件①: lybra charter — 拉取式输出实例的渲染后章程(他机会话开局经 ssh 读取; 参数由 verbs.schema lybra_charter 生成)
     from tools.aipos_cli.charter_render import add_charter_arguments as _add_charter_arguments
@@ -5179,6 +5286,11 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
 
+    if args.command == "owner":
+        # AIPOS-F168 件①②: 薄壳 —— 全部逻辑在 owner_inbox(收集 / 渲染 / 裁决唯一实现), 退出码读 verbs.schema。跨项目命令(home 根),
+        # 先于下方单治理根解析分派
+        return _owner_command(args)
+
     if args.command == "charter":
         # AIPOS-F138 件①: 只读薄壳 — 全部逻辑在 charter_render(渲染唯一 render_charter)。AIPOS-F144: 先于下方通用治理根解析分派,
         # 治理根由 run_charter_cli 经同一薄壳解析, 解析不出走本命令声明的退出码(lybra_charter.exit_codes.unreadable)
@@ -6031,6 +6143,10 @@ def main(argv: list[str] | None = None) -> int:
     # AIPOS-F71: lybra next — 唯一推导实现
     # AIPOS-F73件②③: --run 机器扣扳机 (推导 + 执行)
     if args.command == "loop":
+        if getattr(args, "loop_action", None) == "note":
+            # AIPOS-F168 件③: 薄壳 — 全部逻辑在 loop_run_record.annotate_owner_ask
+            from tools.aipos_cli.loop_run_record import loop_note_cli
+            return loop_note_cli(args)
         if getattr(args, "loop_action", None) == "status":
             # AIPOS-F131 件②: 只读薄壳 — 全部逻辑在 loop_run_record(判据唯一 judge_run)
             from tools.aipos_cli.loop_run_record import loop_status_cli
@@ -6082,7 +6198,15 @@ def main(argv: list[str] | None = None) -> int:
                     unfinished = unfinished_regressions(Path(ws_root), task_id=args.task_id)
                     if unfinished:
                         result["post_merge_regression_unfinished"] = unfinished
+                    # AIPOS-F168 件②: 本卡最近一条 Owner 收件箱裁决(唯一读取 owner_inbox.next_ruling_lines)
+                    from tools.aipos_cli.owner_inbox import next_ruling_lines
+
+                    ruling_lines = next_ruling_lines(Path(ws_root), args.task_id)
+                    if ruling_lines:
+                        result["owner_ruling"] = ruling_lines
                     print(format_output(result, json_mode=json_mode))
+                    if ruling_lines and not json_mode:
+                        print("\n".join(ruling_lines))
                     return 0 if result.get("derivable") else 1
             else:
                 # 项目级扫描(AIPOS-F133 件②: --lane 经 machine_zone.resolve_lane_filter 校验后交同一过滤函数)

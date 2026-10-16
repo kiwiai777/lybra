@@ -1036,6 +1036,46 @@ def get_owner_decision_records(repo_root: str | Path | None = None) -> dict[str,
         return _normalize_exception(operation, exc, dry_run=False)
 
 
+def get_owner_inbox(home_root: str | Path | None = None, *, project: str | None = None) -> dict[str, Any]:
+    """AIPOS-F168 件①: 看板「Owner 待决」页与 /api/owner/inbox 的数据 —— 与 CLI `lybra owner inbox` 同一函数 owner_inbox.collect_inbox
+    (跨 home 根全部已注册项目; home 根缺省 = resolve_home_root 同一优先级梯)。读不出处进 warnings(点名, 不吞)。只读。"""
+    from tools.aipos_cli.owner_inbox import collect_inbox
+    from tools.schema_loader import SchemaLoadError
+
+    operation = "get_owner_inbox"
+    try:
+        inbox = collect_inbox(home_root, project=project)
+    except (OSError, ValueError, SchemaLoadError) as exc:
+        return _normalize_exception(operation, exc, dry_run=False)
+    warnings = [f"{err['project']}: {err['source']}: {err['error']}" for err in inbox["errors"]]
+    return make_response(
+        ok=True,
+        verdict=Verdict.WARN if warnings else Verdict.PASS,
+        operation=operation,
+        dry_run=False,
+        data=inbox,
+        summary={"count": inbox["count"], "projects": len(inbox["projects"]), "decided_hidden": inbox["decided_hidden"],
+                 "errors": len(inbox["errors"])},
+        warnings=warnings,
+        blocking_reasons=[],
+        needs_owner_reasons=[],
+        owner_confirmation_required=False,
+        owner_confirmation_reasons=[],
+        safety_notice=READ_SAFETY_NOTICE,
+        errors=[],
+    )
+
+
+def render_owner_inbox_page(home_root: str | Path | None = None) -> str:
+    """AIPOS-F168 件①: 看板 /owner/inbox 页 HTML(get_owner_inbox 同一数据 → owner_inbox.render_inbox_html; 读不出 = 错误页, 拒因原文)。"""
+    from tools.aipos_cli.owner_inbox import render_inbox_error_html, render_inbox_html
+
+    response = get_owner_inbox(home_root)
+    if not response.get("ok"):
+        return render_inbox_error_html(json.dumps(response.get("errors") or response.get("message") or response, ensure_ascii=False)[:800])
+    return render_inbox_html(response["data"])
+
+
 def get_orchestration_summary_preview(
     orchestration_id: str | None,
     repo_root: str | Path | None = None,
