@@ -159,7 +159,7 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from tools.aipos_cli.artifact_ingest import runtime_evidence_declaration
 
     evidence = {runtime_evidence_declaration()["card_field"]: {"required": True, "commands": ["pytest -q tests/test_probe.py"]}}
-    # K-1: 结案 PASS + 运行证据节 → C1 满足; K-2: 结案 PASS, C2 verify=artifact → 待 F175; C3 无卡 → 无卡覆盖(严重); M1 逾期(严重)
+    # K-1: 结案 PASS + 运行证据节 → C1 满足; K-2: 结案 PASS, C2 verify=artifact 未声明产物 → 未验证(AIPOS-F175); C3 无卡 → 无卡覆盖(严重); M1 逾期(严重)
     _card(g1, P1, "completed", "K-1", created_days_ago=6, milestone="M1", criteria=["C1"], completed_at=_iso(-1), **evidence)
     vid1 = _verdict(g1, "K-1", "PASS", report_text=_report(True), days_ago=1)
     _card(g1, P1, "completed", "K-2", created_days_ago=6, milestone="M1", criteria=["C2"], completed_at=_iso(-1))
@@ -277,8 +277,9 @@ def test_item1_roadmap_page_progress_signals_criteria_evidence(board):
     assert "<code>pytest -q tests/test_probe.py</code>" in c1 and "退出码 0" in c1 and "3 passed in 0.12s" in c1
     assert "运行证据(摘自 out/audit/K-1R/RETURN.md)" in c1
     c2 = re.search(r'<article class="vb-station rp-criterion rp-unmet" data-criterion="C2".*?</article>', right, re.S).group(0)
-    _show(f"[①·标准 C2(verify=artifact 待 F175) 文本] {_text(c2)}")
-    assert "待 F175" in _html.unescape(c2) and "看产物" in c2 and 'data-verdict="PASS"' in c2
+    _show(f"[①·标准 C2(verify=artifact 未声明产物) 文本] {_text(c2)}")
+    assert "卡面 artifacts 未声明标准 C2 的产物" in _html.unescape(c2) and "看产物" in c2 and 'data-verdict="PASS"' in c2
+    assert 'data-state="unverified"' in c2 and "验证状态:未验证" in _html.unescape(c2)
     c3 = re.search(r'data-criterion="C3".*?</article>', right, re.S).group(0)
     assert "未满足:无挂接卡" in c3
     nxt = _section(page, '<section class="rp-next">', "</section>")
@@ -458,7 +459,7 @@ def test_item2_page_paths_declared_and_no_new_write_route():
 def test_item5_i18n_keys_single_channel_zh_en():
     from tools.aipos_cli.board_pages import ONBOARDING_CHECKS, STATES, pages_declaration
     from tools.aipos_cli.roadmap import roadmap_declaration
-    from tools.aipos_cli.roadmap_drift import status_declaration
+    from tools.aipos_cli.roadmap_drift import VERIFICATION_STATES, status_declaration
     from web.board.app import _I18N_TEMPLATES
 
     zh, en = _I18N_TEMPLATES["zh"], _I18N_TEMPLATES["en"]
@@ -471,8 +472,9 @@ def test_item5_i18n_keys_single_channel_zh_en():
                | {f"rp_rm_verify_{v}" for v in roadmap_declaration()["verify"]["enum"]}
                | {f"rp_sev_{s}" for s in status_declaration()["severity_labels"]}
                | {f"rp_ob_{kind}_{k}" for k in ONBOARDING_CHECKS for kind in ("item", "ask")}
-               | {f"rp_ob_state_{s}" for s in STATES})
-    prefixes = {"rp_rm_status_", "rp_rm_verify_", "rp_sev_", "rp_ob_item_", "rp_ob_ask_", "rp_ob_state_", "rp_ob_"}
+               | {f"rp_ob_state_{s}" for s in STATES}
+               | {f"rp_rm_state_{s}" for s in VERIFICATION_STATES})  # AIPOS-F175: verification five states
+    prefixes = {"rp_rm_status_", "rp_rm_verify_", "rp_sev_", "rp_ob_item_", "rp_ob_ask_", "rp_ob_state_", "rp_ob_", "rp_rm_state_"}
     missing = sorted(k for k in (used | dynamic) if k not in prefixes and k not in zh)
     assert not missing, missing
     assert set(pages_declaration()["onboarding_items"]) <= set(ONBOARDING_CHECKS)
