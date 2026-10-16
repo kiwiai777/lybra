@@ -2673,6 +2673,9 @@ def build_parser() -> argparse.ArgumentParser:
     loop_status_parser.add_argument("--task-id", default=argparse.SUPPRESS, help="卡 ID; 缺省 = 本项目全部未结束的 loop 运行")
     loop_status_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output JSON")
     add_lane_argument(loop_status_parser)  # AIPOS-F133 件②
+    loop_status_parser.add_argument("--actor", default=argparse.SUPPRESS,
+                                    help="AIPOS-F167 件③: 看状态的顾问实例(末尾「Lybra 未读更新」按本实例已读计; 不影响状态判定); "
+                                    "缺省 = 治理根 .lybra/role 的实例")
     loop_status_parser.add_argument("--wait", type=float, default=None, metavar="SECONDS",
                                     help="AIPOS-F136 件①: 有界等待秒数(须 --task-id; 上限读 verbs.schema lybra_loop_status.wait.max_seconds), "
                                     "经 agent watch 等到顾问下一动作 ≠ continue_wait 或到时, 返回当时状态; 禁 until/sleep 轮询")
@@ -2686,6 +2689,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="AIPOS-F138: 输出实例的渲染后章程全文到 stdout(与 sync 同一渲染器; 他机会话开局经 ssh 在治理根所在机读取, 产品不推送)",
     )
     _add_charter_arguments(charter_parser)
+
+    # AIPOS-F167 件③: lybra updates — 看 Lybra 更新说明(顾问须知)与记已读(--ack 两阶段, 族 advisor_update_writers; 声明 verbs.schema lybra_updates)
+    updates_parser = subparsers.add_parser(
+        "updates",
+        help="AIPOS-F167: show Lybra update notes for advisors (unread for --actor by default, --all for every note); "
+             "--ack marks them read for --actor (default preview, --confirm writes the read-marker record and lands it)",
+    )
+    updates_parser.add_argument("--actor", default=None, help="Advisor instance (read state is per instance in this governance root); "
+                                "viewing defaults to the governance root .lybra/role instance; required with --ack")
+    updates_parser.add_argument("--all", action="store_true", help="List every update note (marked read/unread), not only the unread ones")
+    updates_parser.add_argument("--ack", action="store_true", help="Mark the currently unread update notes as read for --actor")
+    updates_parser.add_argument("--json", action="store_true", help="Output JSON")
+    _project_json_two_phase_flags(updates_parser, "updates", family="advisor_update_writers")
 
     # AIPOS-F78 件②: lybra card render — 卡意图面单一渲染器(pi 三行 / codex Prompt.md+Plan.md / claude-code CLAUDE.md 片段)
     card_parser = subparsers.add_parser("card", help="AIPOS-F78: 卡意图面操作(render)")
@@ -5179,6 +5195,12 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
 
+    if args.command == "updates":
+        # AIPOS-F167 件③: 薄壳 — 全部逻辑在 advisor_updates_cli(退出码读 verbs.schema lybra_updates.exit_codes)
+        from tools.aipos_cli.advisor_updates_cli import run_updates_cli
+
+        return run_updates_cli(args)
+
     if args.command == "charter":
         # AIPOS-F138 件①: 只读薄壳 — 全部逻辑在 charter_render(渲染唯一 render_charter)。AIPOS-F144: 先于下方通用治理根解析分派,
         # 治理根由 run_charter_cli 经同一薄壳解析, 解析不出走本命令声明的退出码(lybra_charter.exit_codes.unreadable)
@@ -6083,6 +6105,11 @@ def main(argv: list[str] | None = None) -> int:
                     if unfinished:
                         result["post_merge_regression_unfinished"] = unfinished
                     print(format_output(result, json_mode=json_mode))
+                    if not json_mode:  # AIPOS-F167 件③: 末尾「Lybra 未读更新」(四出口同一渲染; 无未读 = 不显示)
+                        from tools.aipos_cli.advisor_updates_cli import advisor_banner_lines
+
+                        for line in advisor_banner_lines(Path(ws_root)):
+                            print(line)
                     return 0 if result.get("derivable") else 1
             else:
                 # 项目级扫描(AIPOS-F133 件②: --lane 经 machine_zone.resolve_lane_filter 校验后交同一过滤函数)
@@ -6102,6 +6129,12 @@ def main(argv: list[str] | None = None) -> int:
 
                     for row in unfinished_regressions(Path(ws_root)):
                         print(row["line"])
+                    # AIPOS-F167 件③: 末尾「Lybra 未读更新」(按 --actor 视角实例, 缺省治理根 .lybra/role 实例; 无未读 = 不显示)
+                    from tools.aipos_cli.advisor_updates_cli import advisor_banner_lines
+                    from tools.aipos_cli.machine_zone import owner_view_declaration
+
+                    for line in advisor_banner_lines(Path(ws_root), getattr(args, str(owner_view_declaration()["dest"]), None)):
+                        print(line)
                 return 0
         except Exception as exc:
             print(f"Error in lybra next: {exc}", file=sys.stderr)

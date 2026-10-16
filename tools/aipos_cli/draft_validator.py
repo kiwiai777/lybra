@@ -294,6 +294,14 @@ def validate_draft_metadata(
                     _add(blocking_reasons, problem)
                 for note in checked["notes"]:
                     _add(warnings, note)
+        # AIPOS-F167 件①: 顾问须知卡面声明(advisor_notice)形校验 + 改可见面的卡缺须知警告(不拒); 唯一判据 advisor_updates.notice_problems
+        from tools.aipos_cli.advisor_updates import notice_problems
+
+        notice_blocking, notice_warnings = notice_problems(metadata, repo_root)
+        for message in notice_blocking:
+            _add(blocking_reasons, message)
+        for message in notice_warnings:
+            _add(warnings, message)
     else:
         # Fallback to hardcoded validation if schema not available
         for field in DRAFT_REQUIRED_FIELDS:

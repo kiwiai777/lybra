@@ -321,6 +321,7 @@ def _ensure_finalization_record(
     push_status: str | None = None,
     push_status_reason: str | None = None,
     deploy_status_reason: str | None = None,
+    workspace_root: Path | None = None,
 ) -> dict[str, Any]:
     """AIPOS-C3B 大项B③: 写 finalization 记录(必落)。
 
@@ -370,7 +371,31 @@ def _ensure_finalization_record(
     verb = "would be written (dry-run)" if dry_run else "written"
     push_note = f", push_status={fin_result['frontmatter']['push_status']}" if fin_result["frontmatter"].get("push_status") else ""
     operations.append(f"Finalization record {verb}: {fin_result['path']} (deploy_status={fin_result['frontmatter'].get('deploy_status')}{push_note})")
+    if not dry_run and fin_result["frontmatter"].get("deploy_status") == "deployed":
+        _compile_advisor_updates(workspace_root, governance_root, task_id, commit_hash, operations)
     return fin_result
+
+
+def _compile_advisor_updates(workspace_root: Path | None, governance_root: Path, task_id: str, commit_hash: str,
+                             operations: list[str]) -> None:
+    """AIPOS-F167 件②: 部署成功(finalization 记录 deploy_status=deployed)后汇总更新说明——唯一挂点(主路径 / 续做路径的部署成功
+    记录都经 _ensure_finalization_record 写出, 汇总只在此处触发; 实现 advisor_updates.compile_on_deploy, 幂等)。
+    汇总失败不回滚已完成的合并 / 部署(写入已生效): 操作行 + stderr 出拒因与出口(修好后重跑同一条 finalize --deploy, 续做经同一口补汇总)。"""
+    from tools.aipos_cli.advisor_updates import AdvisorNoticeError, AdvisorUpdatesError, compile_on_deploy
+    from tools.schema_loader import SchemaLoadError
+
+    if workspace_root is None:
+        operations.append("⚠ 更新说明未汇总: 调用方未传产品仓根(部署目录不可知); 出口: 经 finalize --deploy 主路径 / 续做路径重跑")
+        return
+    try:
+        result = compile_on_deploy(workspace_root, governance_root, task_id, merge_commit=commit_hash)
+    except (AdvisorNoticeError, AdvisorUpdatesError, SchemaLoadError, OSError, ValueError, RuntimeError) as exc:
+        line = (f"⚠ 更新说明汇总失败(合并 / 部署已生效, 不回滚): {type(exc).__name__}: {exc}; "
+                "出口: 修好原因后重跑同一条 finalize --deploy(续做经同一口补汇总, 已汇总的不重复)")
+        print(line, file=sys.stderr)
+        operations.append(line)
+        return
+    operations.append(result["line"])
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +428,7 @@ _POST_MERGE_ROOTS: tuple[str, ...] = (
     "tools.aipos_cli.task_loader",
     "tools.aipos_cli.workspace_config",
     "tools.aipos_cli.git_exclude",  # AIPOS-F166 件③: 合并后回归日志落运行记录旁, 经 loop_run_record.exclude_run_logs 登记排除(懒导入本模块)
+    "tools.aipos_cli.advisor_updates",  # AIPOS-F167 件②: 部署成功后汇总更新说明(compile_on_deploy; 闭包 = 标准库 + deploy_runtime 与已预载模块)
 )
 # next_resolver 合并后只用 card_branch_name / card_base_branch(纯函数), 不展开其懒导入(展开 = 整个 CLI, 且合并前已加载)
 # AIPOS-F147 件①: governance_commit 只被 post_merge_regression 的 async 后台入口(新进程, 不在 finalize 本进程)懒导入
@@ -412,8 +438,11 @@ _POST_MERGE_ROOTS: tuple[str, ...] = (
 # 不经薄壳选凭据——预载本模块但不展开其懒导入(展开 = loop / 推导核 / 整个 CLI)
 # AIPOS-F166 件③: loop_run_record = 合并后回归的日志落点(loop_runs_dir)/ 排除登记(exclude_run_logs)/ 进程身份(process_fingerprint)唯一
 # 实现; finalize 合并后本进程只调这三个(标准库 + 已预载的 record_writer / workspace_config / git_exclude), 不展开其懒导入(展开 = loop 全链)
+# AIPOS-F167 件②: deploy_runtime = 部署目录布局常量与产品仓推导唯一实现; advisor_updates 合并后只用其布局常量(标准库), 不展开其懒导入
+# (launch 入口懒导入整个 CLI)
 _POST_MERGE_NO_DESCEND = frozenset({"tools.aipos_cli.next_resolver", "tools.aipos_cli.governance_commit",
-                                   "tools.aipos_cli.two_phase_shell_factory", "tools.aipos_cli.loop_run_record"})
+                                   "tools.aipos_cli.two_phase_shell_factory", "tools.aipos_cli.loop_run_record",
+                                   "tools.aipos_cli.deploy_runtime"})
 
 
 def _is_product_module(name: str) -> bool:
@@ -477,6 +506,9 @@ def _preload_post_merge(governance_root: Path, task_id: str, operations: list[st
         importlib.import_module(name)
     record_dir(Path(governance_root), "finalizations", task_id)  # 记录落点声明在合并前读入缓存(合并后不再读新 schema)
     record_dir(Path(governance_root), "deployments")
+    from tools.aipos_cli.advisor_updates import notice_declaration, updates_declaration
+
+    updates_declaration(), notice_declaration()  # AIPOS-F167: 更新说明汇总的声明在合并前读入缓存(合并后不读新 schema)
     if not any(isinstance(finder, _PostMergeImportGuard) for finder in sys.meta_path):
         sys.meta_path.insert(0, _PostMergeImportGuard())
     operations.append(f"AIPOS-F120: 合并前已预载 {len(modules)} 个产品模块(合并后路径的导入闭包), 合并后禁止再从磁盘加载产品模块(同进程不混用新旧代码)")
@@ -757,6 +789,9 @@ def _resume_finalization(
     deploy_pending = deploy_state["deploy_status"] == "not_attempted"
     if existing_records:
         if not push_state["pending"] and not (deploy_pending and deploy):
+            if deploy and not dry_run and deploy_state["deploy_status"] == "deployed":
+                # AIPOS-F167 件②: 已部署卡重跑 finalize --deploy = 补汇总更新说明(同一挂点实现, 幂等; 前次汇总失败的出口)
+                _compile_advisor_updates(workspace_root, governance_root, task_id, merge_commit, operations)
             return None  # 记录已有、推送已完成、部署已完成或未请求 → 维持原行为
         operations.append(f"AIPOS-F130 续做判定: {why}; 推送: {push_state['reason']}; 部署: {deploy_state['reason']}")
     else:
@@ -830,6 +865,7 @@ def _resume_finalization(
         deploy_status=deploy_status, deployment_record_ref=deployment_record_ref, dry_run=dry_run,
         regression=regression, push_status=push_status, push_status_reason=push_state["reason"],
         deploy_status_reason=deploy_state["reason"] if deploy_status in ("skipped", "not_applicable") else None,
+        workspace_root=workspace_root,
     )
     verb = ("DRY-RUN 续做判定: 将" if dry_run else "续做: 已") + ("追加" if existing_records else "补写")
     done = [x for x, on in (("推送", pushed or (dry_run and push_state["pending"])),
@@ -2275,7 +2311,7 @@ def _finalize_task_impl(
                     if verification["verified"]:
                         # AIPOS-F61: 只有实际合并才写 finalization 记录(禁把上一张卡的 commit 当证据)
                         if _actual_merge_happened:
-                            _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations, regression=regression, push_status=clean_push_status, push_status_reason=push_na_reason)
+                            _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations, regression=regression, push_status=clean_push_status, push_status_reason=push_na_reason, workspace_root=workspace_root)
                         else:
                             operations.append("AIPOS-F61: 无实际合并动作, 跳过 finalization 记录(禁写错误 commit 证据)")
                         return {
@@ -2435,7 +2471,7 @@ def _finalize_task_impl(
                     if verification["verified"]:
                         # AIPOS-F61: 只有实际合并才写 finalization 记录
                         if _actual_merge_happened:
-                            _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations, regression=regression, push_status="pushed")
+                            _ensure_finalization_record(governance_root, task_id, actor, current_commit, finalize_check.get("verdict_id"), True, operations, regression=regression, push_status="pushed", workspace_root=workspace_root)
                         else:
                             operations.append("AIPOS-F61: 无实际合并动作, 跳过 finalization 记录(禁写错误 commit 证据)")
                         return {
@@ -2841,7 +2877,7 @@ def _finalize_task_impl(
                 governance_root, task_id, actor, commit_hash, finalize_check.get("verdict_id"), deployed, operations,
                 deploy_status="deployed" if deployed else ((skip_deploy_status or "skipped") if deployment_skipped else "not_attempted"),
                 deploy_status_reason=skip_deploy_reason, regression=regression,
-                push_status=dirty_push_status, push_status_reason=push_na_reason,
+                push_status=dirty_push_status, push_status_reason=push_na_reason, workspace_root=workspace_root,
             )
         
         return {

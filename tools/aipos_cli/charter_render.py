@@ -683,6 +683,19 @@ def run_charter_cli(args: Any) -> int:
     except (FileNotFoundError, SchemaLoadError, ValueError, OSError) as exc:
         print(f"lybra charter: {type(exc).__name__}: {exc}", file=sys.stderr)
         return declared_exit_code(CHARTER_VERB, "unreadable")
+    # AIPOS-F167 件③: 顾问章程开头显示「Lybra 未读更新」(四出口同一渲染 advisor_updates_cli.advisor_banner_lines; 无未读 = 不显示,
+    # 章程全文不变); 审计/执行体章程不显示(其变化随章程渲染送达, AIPOS-F164)
+    from tools.aipos_cli.advisor_updates import updates_declaration
+    from tools.aipos_cli.advisor_updates_cli import advisor_banner_lines
+
+    try:
+        banner_audience = str(updates_declaration()["banner"]["audience"])
+    except SchemaLoadError as exc:
+        print(f"lybra charter: SchemaLoadError: {exc}", file=sys.stderr)
+        return declared_exit_code(CHARTER_VERB, "unreadable")
+    banner = advisor_banner_lines(gov, result["instance"]) if result["role_class"] == banner_audience else []
+    if banner:
+        sys.stdout.write("\n".join(banner) + "\n\n")
     sys.stdout.write(result["text"])
     return declared_exit_code(CHARTER_VERB, "ok")
 

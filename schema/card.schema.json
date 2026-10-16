@@ -251,6 +251,23 @@
         "commands": "array of string (须逐条有运行记录的验证命令; 可空 = 只要求证据节存在且至少一条运行记录)"
       }
     },
+    "advisor_notice": {
+      "type": "object",
+      "required": false,
+      "description": "AIPOS-F167 件①: 本卡上线后要送达顾问的「顾问须知」唯一卡面声明字段(缺省 = 无须知, 行为不变)。形见 shape; audience 值域 = audiences。出卡 draft create / validate / publish 经同一校验(advisor_updates.parse_advisor_notice; 形不合 = BLOCK ADVISOR_NOTICE_INVALID), 原样透传进卡面。汇总只在部署唯一口: finalize --deploy 成功(finalization 记录 deploy_status=deployed)后由 advisor_updates.compile_on_deploy 汇进产品侧更新说明库(verbs.schema lybra_updates.store)。顾问经 charter / loop status / next / brief 出口看到未读提示, `lybra updates` 看全文、`--ack` 记已读; 审计/执行体的变化仍走章程渲染(AIPOS-F164), 不另送达。",
+      "shape": {
+        "audience": "array of string (面向谁; 值 ∈ audiences, 至少一个; 含 advisor 才进顾问未读提示)",
+        "summary": "string (一句话要点, 非空单行)",
+        "actions": "array of string (顾问要做的动作, 每条非空; 可空 = 只告知)"
+      },
+      "audiences": ["advisor", "auditor", "executor"],
+      "behavior_change": {
+        "description": "改变顾问 / 审计 / 执行可见行为的卡(改 CLI 参数 / next_action / 章程 / 卡面字段)缺本字段 = 出卡警告(不拒)。判据唯一实现 advisor_updates.behavior_change_paths: 卡的仓(按卡取仓唯一解析 workspace_config.resolve_card_repo: lane.repo 仓名 / 路径 → project.json 仓清单)与运行代码属同一产品仓(git common dir 相同; 产品仓 = deploy_runtime.default_deploy_current 所在仓, 与部署同一推导)且 lane.paths(缺则 output_target 逗号分隔)任一与 surfaces 重叠(前缀包含, 双向)。surfaces = 产品仓相对路径前缀, 清单只追加。卡的仓不是本产品仓(其他项目的业务仓)或解析不出 = 不判, 不警告。",
+        "surfaces": ["tools/aipos_cli/", "tools/mcp_server/", "schema/", "agents/"],
+        "warning": "ADVISOR_NOTICE_MISSING: 本卡改动 Lybra 产品的顾问/审计/执行可见面({paths}), 卡面缺 advisor_notice——上线后顾问看不到须知, 仍要 Owner 转述。出口: 卡稿加 advisor_notice {{audience: [advisor], summary: <一句话要点>, actions: [<顾问动作>, …]}}; 确无可见变化可忽略本警告(不拒)",
+        "invalid": "ADVISOR_NOTICE_INVALID: {reason}; 形 {{audience: [{audiences}] 至少一个, summary: 非空单行, actions: [非空串, …]}}"
+      }
+    },
     "supplementary_of": {
       "type": "string",
       "required": false,
@@ -985,7 +1002,8 @@
       "harness",
       "lane",
       "governance_refs",
-      "anchor_refs"
+      "anchor_refs",
+      "advisor_notice"
     ],
     "body_sections": [
       "Goal",

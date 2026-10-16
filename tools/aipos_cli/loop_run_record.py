@@ -1409,6 +1409,11 @@ def loop_status_cli(args: Any) -> int:
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:
         print(render_status(report, run_record_declaration(contract)["states"]))
+        # AIPOS-F167 件③: 末尾「Lybra 未读更新」(四出口同一渲染; 无未读 = 不显示; 只影响显示, 不影响状态判定与退出码)
+        from tools.aipos_cli.advisor_updates_cli import advisor_banner_lines
+
+        for line in advisor_banner_lines(governance_root, getattr(args, "actor", None)):
+            print(line)
     if task_id and not report["runs"]:
         return declared_exit_code(STATUS_VERB, "no_run")
     if wait is not None and report.get("deploy_changed"):  # AIPOS-F152 件①: 等待中部署已更新 = 声明出口 deploy_changed
