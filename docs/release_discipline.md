@@ -38,7 +38,7 @@ unrelated change swept into a finalize commit via a broad `git add`.
   `lybra migrate record-type --confirm` commits the records it backfilled, and `lybra migrate decision-log-pointers --confirm`
   commits the pointers it generated (AIPOS-F160). Since AIPOS-F159 the project commands that write
   project.json (`lybra project set-paths` / `set-repo` / `set-repos` / `set-workstation` / `set-meta` / `set-execution` /
-  `set-return-summary`, plus `freeze-legacy` and `dispatch-mode set`) land what they wrote the same way after `--confirm`
+  `set-model` / `set-return-summary`, plus `freeze-legacy` and `dispatch-mode set`) land what they wrote the same way after `--confirm`
   (commit identity `--actor`, default `$USER` or owner; message names the subcommand and project); `--dry-run` still writes
   and lands nothing. If landing fails the write still stands (do not sign again): the command prints the reason and the exact
   `lybra governance-commit --paths …` to re-run, and exits 3.
