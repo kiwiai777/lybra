@@ -86,6 +86,34 @@ unchanged.
   simple view; same data as `lybra roadmap show`, format in [`docs/roadmap.md`](../../docs/roadmap.md)). The hand-written
   `governance/project-map.md` is no longer read (`/api/project-map` and the portal header are gone; the file is not deleted).
 
+## Envelope page + Owner signing (AIPOS-F172, write exception 1)
+
+Owner ruling 2026-10-16: the Board stays read-only except for things only the Owner can do; the first exception is envelope
+authorization. Declared in `schema/verbs.schema.json` `board_owner_envelopes`; implementation `tools/aipos_cli/envelope_board.py`
+(the Board routes only).
+
+- `GET /owner/envelopes` (server-rendered) / `GET /api/owner/envelopes`: per registered project of the home root
+  (`owner_inbox.home_projects`), every envelope with policy_id, covered driver, scope (task_mode, lane repos, launch harness),
+  used / max, expiry and a status colour. Status comes from the single derivation `autonomy_policy.envelope_overview`
+  (shared with the Owner inbox, `lybra loop status` warnings and `lybra brief`): warn / exhausted (red), active, superseded /
+  expired / inactive (grey, folded). An envelope is **superseded** when a newer valid envelope of the same driver (same
+  `agent_or_role`, or role-level vs. that role's instance) with a scope at least as wide exists; superseded envelopes never warn
+  (gap #160). Any logged-in session can view the page; only an Owner-role session gets the forms.
+- `POST /api/owner/envelopes/mint` — the only write route (every other write still answers 405 `BOARD_READ_ONLY`).
+  `stage=preview` runs the `lybra envelope mint --dry-run` implementation (`envelope_mint.mint_preview`) and returns the full
+  preview plus a preview token bound to this session and to a digest of the parameters (TTL `preview_ttl_seconds`, single use);
+  `stage=confirm` with the same parameters and that token runs the `--confirm` implementation (`envelope_mint.mint_via_gate`,
+  gate two-phase signing + F158 automatic landing). Renewal takes the current envelope as template (policy_id = next sequence
+  number via F166 `renew_plan`; only max_tasks and expiry can change); a new envelope takes driver / scope from the form.
+  Guards: non-Owner session 403 `OWNER_ONLY`; `workspace` must be a project name of the home root (missing / unknown = 400);
+  missing / wrong / expired / other-session / reused / parameter-changed token = 403; cross-site `Origin` = 403; the board audit
+  log (`<server workspace>/.lybra/board-audit-log.jsonl`) gets a line for every preview / confirm / refusal, and a confirm whose
+  audit line cannot be written is refused before signing (503). The record's actor is the Owner role of the session, with
+  `capture_surface: board` and the session fingerprint / login method / source IP in `captured_by` and `decision_rationale`.
+  The signing credential is the owner entry of the Board's own login vault (`<server workspace>/.lybra/connection.json`), read
+  server-side only by `load_role_token`; responses and logs carry fingerprints, never the credential.
+- Owner inbox envelope items now point their decision line to this page (the CLI command stays on the same line).
+
 ## Available Endpoints
 
 - `GET /api/roadmap?workspace=<n>` (AIPOS-F171; replaces the retired `/api/project-map`)
