@@ -2668,6 +2668,25 @@ def set_project_meta(project_root: str | Path, values: dict[str, str | None], *,
             "changes": changes, "diff": outcome["diff"]}
 
 
+def project_status(governance_root: str | Path) -> str:
+    """AIPOS-F170 件②: project.json status 的唯一读取口(声明 config.schema project_json.status: enum + default)。
+    缺键 = 声明 default(active, 行为不变); 值不在 enum / project.json 读不出 = ValueError(调用方点名, 不猜成暂停)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    spec = (((load_schema("config").get("configuration_sources") or {}).get("project_json") or {}).get("schema") or {}).get("status")
+    enum = [str(v) for v in (spec or {}).get("enum") or []] if isinstance(spec, dict) else []
+    default = str((spec or {}).get("default") or "") if isinstance(spec, dict) else ""
+    if not enum or default not in enum:
+        raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.status 须声明 enum 与在值域内的 default")
+    data = read_project_json(Path(governance_root))
+    raw = data.get("status") if isinstance(data, dict) else None
+    if raw is None:
+        return default
+    if str(raw) not in enum:
+        raise ValueError(f"{project_json_path(governance_root)} status={raw!r} 不在声明值域 {enum}")
+    return str(raw)
+
+
 # ---------------------------------------------------------------------------
 # AIPOS-F122 件①: 存量冻结清单落点声明(project.json legacy_baseline; 声明表 config.schema
 # configuration_sources.project_json.schema.legacy_baseline)。唯一读取口 project_legacy_baseline / 唯一写入口 set_project_legacy_baseline。

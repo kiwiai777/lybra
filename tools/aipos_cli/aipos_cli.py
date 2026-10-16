@@ -1201,72 +1201,93 @@ def _owner_command(args: argparse.Namespace) -> int:
     from tools.aipos_cli.owner_inbox import (
         DECIDE_VERB,
         VERB,
-        InboxChoiceInvalid,
         InboxItemNotFound,
+        InboxUsageError,
         collect_inbox,
         decide,
         render_inbox_text,
+        render_stale_text,
+        split_item_ids,
+        stale_view,
     )
     from tools.aipos_cli.verb_contract import declared_exit_code
 
     action = getattr(args, "owner_action", None)
     if action == "inbox":
         try:
-            inbox = collect_inbox(getattr(args, "home_root", None), project=getattr(args, "project", None))
-        except (ValueError, OSError) as exc:
+            inbox = collect_inbox(getattr(args, "home_root", None), project=getattr(args, "project", None),
+                                  include_paused=bool(getattr(args, "include_paused", False)))
+            view = stale_view(inbox, args.stale_before) if getattr(args, "stale_before", None) else None
+        except (ValueError, OSError) as exc:  # InboxUsageError(日期不合)同属用法错
             print(f"lybra owner inbox: {exc}", file=sys.stderr)
             return declared_exit_code(VERB, "usage")
-        print(render_json(inbox) if args.json else render_inbox_text(inbox))
+        if view is not None:  # AIPOS-F170 件①: 遗留视图(同一数据)
+            print(render_json(view) if args.json else render_stale_text(view))
+        else:
+            print(render_json(inbox) if args.json else render_inbox_text(inbox))
         return declared_exit_code(VERB, "partial" if inbox["errors"] else "ok")
     if action == "decide":
         try:
-            report = decide(args.item, args.choice, note=args.note, home_root=getattr(args, "home_root", None), actor=args.actor,
+            ids = split_item_ids(getattr(args, "item", None), getattr(args, "items", None))
+            report = decide(ids, args.choice, note=args.note, home_root=getattr(args, "home_root", None), actor=args.actor,
+                            relayed_by=getattr(args, "relayed_by", None), owner_words=getattr(args, "owner_words", None),
                             confirm=bool(args.confirm))
         except InboxItemNotFound as exc:
             print(f"lybra owner decide: {exc}", file=sys.stderr)
             return declared_exit_code(DECIDE_VERB, "not_found")
-        except InboxChoiceInvalid as exc:
+        except InboxUsageError as exc:  # 选项不属该事项 / 缺转达人或原话 / --item 与 --items 不合(AIPOS-F170)
             print(f"lybra owner decide: {exc}", file=sys.stderr)
             return declared_exit_code(DECIDE_VERB, "usage")
         except (ValueError, OSError) as exc:
             print(f"lybra owner decide: {type(exc).__name__}: {exc}", file=sys.stderr)
             return declared_exit_code(DECIDE_VERB, "blocked")
-        landing = report.get("landing")
+        landings = report.get("landings") or []
         if args.json:
-            print(render_json({**report, "landing": None if landing is None else _landing_view(landing)}))
+            print(render_json({**report, "landing": _landing_view(report.get("landing")),
+                               "landings": [_landing_view(lg) for lg in landings]}))
         else:
             _print_owner_decide(report)
         if report["rc_outcome"] == "landing_failed":
-            return int(landing.get("exit_code") or 1)
+            return int(next((lg.get("exit_code") for lg in landings if not lg.get("landed")), 1) or 1)
         return declared_exit_code(DECIDE_VERB, report["rc_outcome"])
     print("lybra owner: 须给子命令 inbox | decide", file=sys.stderr)
     return 2
 
 
 def _print_owner_decide(report: dict[str, Any]) -> None:
-    item = report["item"]
+    """`lybra owner decide` 文本输出(单项 / 批量同一渲染; AIPOS-F170 附转达人与 Owner 原话、冻结组)。"""
     stage = "预演(零写入; 加 --confirm 写入并落账)" if report["stage"] == "preview" else "确认"
-    print(f"lybra owner decide {stage}: {item['item_id']} {item['project']} / {item['subject']} → 选 {report['choice']}"
-          + (f" — 备注: {report['note']}" if report.get("note") else ""))
-    decision = report.get("decision") or {}
-    print(f"  决策记录: {decision.get('target_path') or '-'} verdict={decision.get('verdict')}")
-    for reason in decision.get("blocking_reasons") or []:
-        print(f"  ✗ 拒因: {reason}", file=sys.stderr)
-    release = report.get("release")
-    if report.get("effect"):
-        verdict = (release or {}).get("verdict")
-        print(f"  解除动作 {report['effect']}(既有队列出口): ok={bool((release or {}).get('ok'))} verdict={verdict}")
-        for reason in (release or {}).get("blocking_reasons") or []:
-            print(f"  ✗ 解除拒因: {reason}", file=sys.stderr)
-        for err in (release or {}).get("errors") or []:
-            print(f"  ✗ 解除拒因: {err.get('message') if isinstance(err, dict) else err}", file=sys.stderr)
-    if item["category"] == "envelope_warning" and report["choice"] == "renew" or (item.get("facts") or {}).get("reason") == "envelope_renew":
-        if item.get("recommend"):
-            print(f"  续签由 Owner 执行: {item['recommend']}")
+    entries = report.get("entries") or []
+    head = (f"{entries[0]['item']['item_id']} {entries[0]['item']['project']} / {entries[0]['item']['subject']}" if len(entries) == 1
+            else f"批量 {len(entries)} 项")
+    print(f"lybra owner decide {stage}: {head} → 选 {report['choice']}" + (f" — 备注: {report['note']}" if report.get("note") else ""))
+    print(f"  转达: {report.get('relayed_by')} · Owner 原话: 「{report.get('owner_words')}」")
+    for entry in entries:
+        item, decision = entry["item"], entry.get("decision") or {}
+        prefix = "  " if len(entries) == 1 else f"  [{item['item_id']} {item['project']} / {item['subject']}] "
+        print(f"{prefix}决策记录: {decision.get('target_path') or '-'} verdict={decision.get('verdict')}")
+        for reason in decision.get("blocking_reasons") or []:
+            print(f"  ✗ 拒因: {reason}", file=sys.stderr)
+        release = entry.get("release")
+        if entry.get("effect") and entry["effect"] != "freeze_legacy":
+            print(f"{prefix}解除动作 {entry['effect']}(既有队列出口): ok={bool((release or {}).get('ok'))} verdict={(release or {}).get('verdict')}")
+            for reason in (release or {}).get("blocking_reasons") or []:
+                print(f"  ✗ 解除拒因: {reason}", file=sys.stderr)
+            for err in (release or {}).get("errors") or []:
+                print(f"  ✗ 解除拒因: {err.get('message') if isinstance(err, dict) else err}", file=sys.stderr)
+        if item["category"] == "envelope_warning" and report["choice"] == "renew" or (item.get("facts") or {}).get("reason") == "envelope_renew":
+            if item.get("recommend"):
+                print(f"  续签由 Owner 执行: {item['recommend']}")
+    for group in report.get("freeze") or []:
+        written = group.get("written") or {}
+        where = f" 清单条目 {written.get('entry')}" if written.get("written") else ""
+        print(f"  解除动作 freeze_legacy(既有口 project freeze-legacy): {group['governance_root']} 卡 {', '.join(group['task_ids'])} "
+              f"ok={bool(group.get('ok'))} verdict={group.get('verdict')}{where}")
+        for reason in group.get("blocking_reasons") or []:
+            print(f"  ✗ 冻结拒因: {reason}", file=sys.stderr)
     for path in report.get("written") or []:
         print(f"    wrote {path}")
-    landing = report.get("landing")
-    if landing is not None:
+    for landing in report.get("landings") or []:
         print(landing["line"], file=sys.stdout if landing.get("landed") else sys.stderr)
 
 
@@ -2801,11 +2822,20 @@ def build_parser() -> argparse.ArgumentParser:
         "inbox", help="跨 home 根全部已注册项目汇总需 Owner 定的事项(要定什么 / 顾问建议 / 影响 / 选项 / 裁决命令); 只读")
     owner_inbox_parser.add_argument("--home-root", help="home 根; 缺省 = resolve_home_root 同一优先级梯")
     owner_inbox_parser.add_argument("--project", help="只看该项目(home 根下注册名)")
+    owner_inbox_parser.add_argument("--include-paused", action="store_true", default=False,
+                                    help="AIPOS-F170: 也列 project.json status=paused 的项目(缺省不列)")
+    owner_inbox_parser.add_argument("--stale-before", default=None, metavar="DATE",
+                                    help="AIPOS-F170: 遗留视图——只列发生早于该日期(YYYY-MM-DD / ISO)的事项, 按项目分组每项一行并给批量裁决命令")
     owner_inbox_parser.add_argument("--json", action="store_true", help="JSON 输出(与看板 /api/owner/inbox 同一数据)")
     owner_decide_parser = owner_actions.add_parser(
         "decide", help="裁决一个收件箱事项: 缺省预演零写入; --confirm 落 owner_decision_record(+ needs_owner 卡经既有出口解除)并落账")
-    owner_decide_parser.add_argument("--item", required=True, help="事项 ID(收件箱列出的 OI-…)")
+    owner_decide_parser.add_argument("--item", default=None, help="事项 ID(收件箱列出的 OI-…); 与 --items 二选一")
+    owner_decide_parser.add_argument("--items", default=None, metavar="ID,ID,…",
+                                     help="AIPOS-F170: 逗号分隔的多个事项 ID, 同一裁决批量(整批预演, 任一被拒整批不写); 与 --item 二选一")
     owner_decide_parser.add_argument("--choice", required=True, help="选项键(该事项列出的选项之一)")
+    owner_decide_parser.add_argument("--relayed-by", default=None, metavar="INSTANCE",
+                                     help="AIPOS-F170: 转达裁决的顾问实例(Owner 本人直接敲写 owner); 必填")
+    owner_decide_parser.add_argument("--owner-words", default=None, metavar="TEXT", help="AIPOS-F170: Owner 原话摘要(单行); 必填")
     owner_decide_parser.add_argument("--note", default=None, help="裁决备注(顾问侧原样显示)")
     owner_decide_parser.add_argument("--home-root", help="home 根; 缺省 = resolve_home_root 同一优先级梯")
     owner_decide_parser.add_argument("--actor", default="owner", help="裁决人身份(缺省 owner)")

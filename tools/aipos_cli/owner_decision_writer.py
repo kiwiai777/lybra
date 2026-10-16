@@ -17,6 +17,8 @@ from tools.aipos_cli.record_writer import render_markdown
 DECISION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,127}$")
 #: AIPOS-F160: 决策记录正文「一句话结论」行的行首(_render_body 写出; decision_log 指针补生成 decision_log_pointers 按此读回, 同一出处)
 SUMMARY_LINE_PREFIX = "- Summary: "
+#: AIPOS-F170 件③: 正文「Rationale」行的行首(_render_body 写出; Owner 收件箱裁决按此读回 Owner 原话, 同一出处)
+RATIONALE_LINE_PREFIX = "- Rationale: "
 TAG_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 ALLOWED_DECISION_STATUSES = {"approved", "rejected", "needs_revision", "superseded", "expired"}
 ALLOWED_CAPTURE_SURFACES = {"board", "cli", "mcp", "external_client"}
@@ -240,7 +242,7 @@ def _render_body(record: dict[str, Any]) -> str:
         f"- Type: {record['decision_type']}",
         f"- Status: {record['decision_status']}",
         f"{SUMMARY_LINE_PREFIX}{record['decision_summary']}",
-        f"- Rationale: {record['decision_rationale'] or 'not provided'}",
+        f"{RATIONALE_LINE_PREFIX}{record['decision_rationale'] or 'not provided'}",
         "",
         "## Scope",
         "",

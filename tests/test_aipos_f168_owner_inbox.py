@@ -32,6 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_aipos_f73d_loop_driver import _fm, _write, init_governance_repo  # noqa: E402  — 靶场构件唯一来源
 
 OWNER = "owner"
+# AIPOS-F170 件③: owner decide 必填转达人与 Owner 原话(Owner 本人直接敲 = owner)
+RELAY = ("--relayed-by", OWNER, "--owner-words", "夹具: Owner 本人裁决")
 ALPHA, BETA = "alpha", "beta-x"
 DRIVER_A, DRIVER_B = f"advisor.{ALPHA}.h1", f"advisor.{BETA}.h1"
 
@@ -164,7 +166,8 @@ def test_item1_inbox_aggregates_two_projects_sorted_by_blocking(rig):
     assert [o["key"] for o in a1["options"]] == ["continue", "rework", "pause"]
     b2 = next(i for i in data["items"] if i.get("task_id") == "BETA-2")
     assert b2["rank"] == 1 and b2["source"] == DRIVER_B and "依赖方接口未定" in b2["ask"]
-    assert [o["key"] for o in b2["options"]] == ["new_card", "acknowledge"], "blocked 卡无写路径解除口: 不给 release"
+    # AIPOS-F170 件①: blocked 卡经 Owner 裁决可撤(既有 withdraw 口带裁决引用)/ 冻结为历史(既有 freeze-legacy 口); 仍不给 release
+    assert [o["key"] for o in b2["options"]] == ["withdraw", "freeze_legacy", "new_card", "acknowledge"]
     env = next(i for i in data["items"] if i["category"] == "envelope_warning")
     assert "lybra envelope mint" in env["recommend"] and env["source"] == DRIVER_B
     assert f"--home-root {rig['home']}" in a1["decide_command"]
@@ -252,15 +255,16 @@ def test_item2_decide_loop_item_preview_confirm_and_advisor_reads_ruling(rig):
     _note(rig, "--confirm")
     item = _item(rig, "ALPHA-1")
     before, status = _tree_digest(rig["home"]), _git(rig["home"], "status", "--porcelain", "-uall")
+    relay = ("--relayed-by", DRIVER_A, "--owner-words", "就按适配层来, 接口下季度再说")
     rc, text = _cli("owner", "decide", "--item", item["item_id"], "--choice", "plan_b", "--note", "先上适配层, 接口下季度再改",
-                    "--home-root", str(rig["home"]))
+                    "--home-root", str(rig["home"]), *relay)
     _show(f"---- ② owner decide 预演 原文 exit {rc} ----\n{text}")
     assert rc == 0 and "预演(零写入" in text and "owner-inbox-" in text
     assert _tree_digest(rig["home"]) == before and _git(rig["home"], "status", "--porcelain", "-uall") == status, "预演零写入"
-    rc, text = _cli("owner", "decide", "--item", item["item_id"], "--choice", "nope", "--home-root", str(rig["home"]))
+    rc, text = _cli("owner", "decide", "--item", item["item_id"], "--choice", "nope", "--home-root", str(rig["home"]), *relay)
     assert rc == 2 and "可选: plan_a, plan_b" in text
     rc, text = _cli("owner", "decide", "--item", item["item_id"], "--choice", "plan_b", "--note", "先上适配层, 接口下季度再改",
-                    "--home-root", str(rig["home"]), "--confirm")
+                    "--home-root", str(rig["home"]), "--confirm", *relay)
     _show(f"---- ② owner decide --confirm 原文 exit {rc} ----\n{text}")
     assert rc == 0 and "落账: verdict=PASS" in text
     rec = rig["alpha"] / "5_tasks" / "records" / "owner_decisions" / f"{item['decision_id']}.md"
@@ -276,7 +280,8 @@ def test_item2_decide_loop_item_preview_confirm_and_advisor_reads_ruling(rig):
     # 顾问侧: loop status 读到裁决
     rc, status = _cli("loop", "status", "--task-id", "ALPHA-1", "--workspace-root", str(rig["alpha"]))
     _show(f"---- ② 顾问侧 loop status(裁决后)原文 exit {rc} ----\n{status}")
-    assert "顾问下一动作: advisor_fix(owner_ruled) — Owner 已裁决: 选 plan_b(方案B 加适配层) — 备注: 先上适配层, 接口下季度再改 @" in status
+    assert ("顾问下一动作: advisor_fix(owner_ruled) — Owner 已裁决: 选 plan_b(方案B 加适配层) — 备注: 先上适配层, 接口下季度再改"
+            f"(经 {DRIVER_A} 转达; Owner 原话: 「就按适配层来, 接口下季度再说」) @") in status
     assert "按此继续" in status and f"lybra loop --task-id ALPHA-1 --workspace-root {rig['alpha']} --actor {DRIVER_A} --envelope pol_fixture_1" in status
     from tools.aipos_cli import loop_run_record as lrr
 
@@ -287,18 +292,18 @@ def test_item2_decide_loop_item_preview_confirm_and_advisor_reads_ruling(rig):
     assert "Owner 已裁决: 选 plan_b" in nxt
     # 已裁决 = 不再出现
     assert "ALPHA-1" not in [i.get("task_id") for i in _inbox_json(rig)["items"]]
-    rc, text = _cli("owner", "decide", "--item", item["item_id"], "--choice", "plan_b", "--home-root", str(rig["home"]))
+    rc, text = _cli("owner", "decide", "--item", item["item_id"], "--choice", "plan_b", "--home-root", str(rig["home"]), *relay)
     assert rc == 4 and "收件箱中无事项" in text
 
 
 def test_item2_decide_release_pending_needs_owner_card_via_existing_exit(rig):
     item = _item(rig, "ALPHA-3")
-    assert [o["key"] for o in item["options"]] == ["release", "withdraw", "acknowledge"]
-    rc, text = _cli("owner", "decide", "--item", item["item_id"], "--choice", "release", "--home-root", str(rig["home"]))
+    assert [o["key"] for o in item["options"]] == ["release", "withdraw", "freeze_legacy", "acknowledge"]
+    rc, text = _cli("owner", "decide", "--item", item["item_id"], "--choice", "release", "--home-root", str(rig["home"]), *RELAY)
     _show(f"---- ② decide release 预演 原文 exit {rc} ----\n{text}")
     assert rc == 0 and "解除动作 release_needs_owner(既有队列出口): ok=True" in text
     rc, text = _cli("owner", "decide", "--item", item["item_id"], "--choice", "release", "--note", "需求已澄清",
-                    "--home-root", str(rig["home"]), "--confirm")
+                    "--home-root", str(rig["home"]), "--confirm", *RELAY)
     _show(f"---- ② decide release --confirm 原文 exit {rc} ----\n{text}")
     assert rc == 0 and "落账: verdict=PASS" in text
     card = (rig["alpha"] / "5_tasks" / "queue" / "pending" / "alpha-3.md").read_text(encoding="utf-8")
@@ -315,7 +320,7 @@ def test_item2_decide_release_pending_needs_owner_card_via_existing_exit(rig):
 
 def test_item2_decide_envelope_renew_prints_owner_command(rig):
     item = next(i for i in _inbox_json(rig)["items"] if i["category"] == "envelope_warning")
-    rc, text = _cli("owner", "decide", "--item", item["item_id"], "--choice", "renew", "--home-root", str(rig["home"]), "--confirm")
+    rc, text = _cli("owner", "decide", "--item", item["item_id"], "--choice", "renew", "--home-root", str(rig["home"]), "--confirm", *RELAY)
     _show(f"---- ② decide 信封 renew --confirm 原文 exit {rc} ----\n{text}")
     assert rc == 0 and "续签由 Owner 执行: 续签(Owner 执行): lybra envelope mint" in text
     assert not any(i["category"] == "envelope_warning" for i in _inbox_json(rig)["items"])
@@ -323,7 +328,8 @@ def test_item2_decide_envelope_renew_prints_owner_command(rig):
 
 def test_item2_hyphen_project_record_and_blocked_card_acknowledge(rig):
     item = _item(rig, "BETA-2")
-    rc, text = _cli("owner", "decide", "--item", item["item_id"], "--choice", "acknowledge", "--home-root", str(rig["home"]), "--confirm")
+    rc, text = _cli("owner", "decide", "--item", item["item_id"], "--choice", "acknowledge", "--home-root", str(rig["home"]), "--confirm",
+                    *RELAY)
     _show(f"---- ② decide blocked 卡 acknowledge(连字符项目)原文 exit {rc} ----\n{text}")
     assert rc == 0
     rec = (rig["beta"] / "5_tasks" / "records" / "owner_decisions" / f"{item['decision_id']}.md").read_text(encoding="utf-8")

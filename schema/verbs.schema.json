@@ -69,15 +69,16 @@
         }
       },
       "meta": {
-        "description": "AIPOS-F127 件③: `lybra project set-meta [项目] [--phase <文本>] [--note <文本>] [--dry-run|--confirm]` 写 project.json 顶层说明键(接入方此前只能手改或留旧文)。唯一实现 workspace_config.set_project_meta: 经 update_project_json 唯一写路径(锁 + 预演 diff + 写后复核); 每个键须在 config.schema configuration_sources.project_json.schema 已声明(未声明 = 拒 META_KEY_UNDECLARED, 零写入; 本表只登记 CLI 旗标 → project.json 键, 不声明键的形), 值按该声明 type/enum 校验(非空单行串)。其余键原样保留。",
+        "description": "AIPOS-F127 件③: `lybra project set-meta [项目] [--phase <文本>] [--note <文本>] [--dry-run|--confirm]` 写 project.json 顶层说明键(接入方此前只能手改或留旧文)。唯一实现 workspace_config.set_project_meta: 经 update_project_json 唯一写路径(锁 + 预演 diff + 写后复核); 每个键须在 config.schema configuration_sources.project_json.schema 已声明(未声明 = 拒 META_KEY_UNDECLARED, 零写入; 本表只登记 CLI 旗标 → project.json 键, 不声明键的形), 值按该声明 type/enum 校验(非空单行串)。其余键原样保留。AIPOS-F170 件②: 登记 status(--status paused|active; 声明 config.schema project_json.status, enum 键按值域校验), 暂停项目缺省不进 Owner 收件箱。接入向导只给自由文本键(声明无 enum)的 set-meta 示例行(占位 <META_TEXT> 只对自由文本成立)。",
         "keys": {
           "phase": "--phase",
-          "note": "--note"
+          "note": "--note",
+          "status": "--status"
         },
         "reject_codes": {
           "META_KEY_UNDECLARED": "该键未在 config.schema configuration_sources.project_json.schema 声明(产品不写未声明的 project.json 键)。出口: 先在该处声明此键(type string, required false, 缺省 = 不写即行为不变)",
           "META_VALUE_INVALID": "值不合声明(须为非空单行串; enum 键须在值域)",
-          "META_NOTHING_TO_SET": "至少给一个 --phase / --note"
+          "META_NOTHING_TO_SET": "至少给一个 --phase / --note / --status"
         }
       }
     },
@@ -2577,7 +2578,7 @@
       }
     },
     "lybra_owner_inbox": {
-      "description": "AIPOS-F168 件①: `lybra owner inbox [--home-root <home 根>] [--project <项目>] [--json]` —— 跨 home 根下全部已注册项目(唯一枚举 workspace_config._project_candidates: 5_tasks/queue 与 project.json 同在)汇总需 Owner 定的事项: 每项 = 项目 / 卡(或信封)/ 来自哪个顾问实例 / 类别 / 要 Owner 定什么 / 顾问建议(记录中有才显示)/ 影响 / 可选裁决 / 裁决命令。待决判定只读既有真相, 不另记待办: ① loop 运行记录顾问下一动作 owner_needed(每卡最近一次运行, 唯一判定 loop_run_record.loop_status / next_action; 运行记录 owner_ask 结构字段 = lybra_loop_note 补写, 有则优先) ② 卡面 needs_owner(唯一筛选 aipos_cli._filter_needs_owner 经 board_adapter.get_needs_owner, 再只取 categories.needs_owner_card.queue_states 所列可裁决状态) ③ 有效信封预警(唯一判定 autonomy_policy.envelope_warnings) ④ 返工轮次达上限(queue_mutation.rework_max_rounds)且最新常规裁决未过、无针对它的返工节(next_resolver.rework_round_for_verdict) ⑤ 补审 FAIL 未派修复卡(audit_derivation.supplementary_audit_overview, 裁决值域 transitions.schema supplementary_audit.fail_verdicts)。已裁决(该事项的决策记录已在: decision_id = decision.decision_id_prefix + 事项哈希)或已自行解除(真相不再判出)= 不再出现。排序: 阻塞级 rank 升序(1 阻塞 / 2 待定 / 3 预警), 同级按发生时刻早者先。看板(board)页与 API 与 CLI 同读 owner_inbox.collect_inbox。只读: 不写任何文件、不连门、不起进程; 某项目某类真相读不出 = 列入 errors(点名, 不猜不吞)并以 partial 退出。",
+      "description": "AIPOS-F168 件①: `lybra owner inbox [--home-root <home 根>] [--project <项目>] [--json]` —— 跨 home 根下全部已注册项目(唯一枚举 workspace_config._project_candidates: 5_tasks/queue 与 project.json 同在)汇总需 Owner 定的事项: 每项 = 项目 / 卡(或信封)/ 来自哪个顾问实例 / 类别 / 要 Owner 定什么 / 顾问建议(记录中有才显示)/ 影响 / 可选裁决 / 裁决命令。待决判定只读既有真相, 不另记待办: ① loop 运行记录顾问下一动作 owner_needed(每卡最近一次运行, 唯一判定 loop_run_record.loop_status / next_action; 运行记录 owner_ask 结构字段 = lybra_loop_note 补写, 有则优先) ② 卡面 needs_owner(唯一筛选 aipos_cli._filter_needs_owner 经 board_adapter.get_needs_owner, 再只取 categories.needs_owner_card.queue_states 所列可裁决状态) ③ 有效信封预警(唯一判定 autonomy_policy.envelope_warnings) ④ 返工轮次达上限(queue_mutation.rework_max_rounds)且最新常规裁决未过、无针对它的返工节(next_resolver.rework_round_for_verdict) ⑤ 补审 FAIL 未派修复卡(audit_derivation.supplementary_audit_overview, 裁决值域 transitions.schema supplementary_audit.fail_verdicts)。已裁决(该事项的决策记录已在: decision_id = decision.decision_id_prefix + 事项哈希)或已自行解除(真相不再判出)= 不再出现。排序: 阻塞级 rank 升序(1 阻塞 / 2 待定 / 3 预警), 同级按发生时刻早者先。看板(board)页与 API 与 CLI 同读 owner_inbox.collect_inbox。只读: 不写任何文件、不连门、不起进程; 某项目某类真相读不出 = 列入 errors(点名, 不猜不吞)并以 partial 退出。AIPOS-F170 件②: project.json status = paused 的项目(唯一读取口 workspace_config.project_status, 声明 config.schema project_json.status)缺省不列(过滤只在 collect_inbox 一处; 输出点名被隐藏的暂停项目), --include-paused 照列。AIPOS-F170 件①: --stale-before <日期> = 遗留视图(同一 collect_inbox 数据, 只取发生时刻早于该日期者; 发生时刻未知 = 不算遗留), 按项目分组每项一行(卡 / 标题 / 卡住原因 / 建议: 撤回 | 冻结为历史 | 保留, 建议表读 stale.suggest)并给每组同建议的批量裁决命令(lybra_owner_decide --items)。",
       "phase": "owner",
       "surface": ["cli", "board"],
       "cli_command": "lybra owner inbox",
@@ -2588,6 +2589,8 @@
         "properties": {
           "home_root": {"type": "string", "description": "home 根(项目治理根的容器); 缺省 = workspace_config.resolve_home_root 同一优先级梯(--home-root > LYBRA_HOME_ROOT > ~/.lybra/config.json home_root > ~/.lybra/projects)"},
           "project": {"type": "string", "description": "只看该项目(home 根下目录名); 缺省 = 全部已注册项目"},
+          "include_paused": {"type": "boolean", "description": "AIPOS-F170 件②: 也列 project.json status = paused 的项目(缺省不列)"},
+          "stale_before": {"type": "string", "description": "AIPOS-F170 件①: 遗留视图——只列发生时刻早于该日期(YYYY-MM-DD 或 ISO 时刻, UTC)的事项, 按项目分组每项一行并给批量裁决命令"},
           "json": {"type": "boolean", "description": "JSON 输出(与看板 API 同一数据)"}
         },
         "additionalProperties": false
@@ -2606,8 +2609,9 @@
         "capability_ttl_hours": 24,
         "external_ref_prefix": "owner_inbox:",
         "summary_template": "{category_label}·{subject}: 选 {choice}({label}){note_part}",
-        "authority_boundary": "Owner inbox ruling on {category} for {subject} (records the choice; release / withdraw only via the existing queue exits)",
-        "note": "裁决写成既有 owner_decision_record(owner_decision_writer 全量 AIPOS-110 形, 经门侧同一预演 / 执行 board_adapter.record_owner_decision + execute_dry_run, 含 decision_log 自动指针), 不另立存储。evidence_hash = 所裁事项(收件箱同一数据)规范 JSON 的 sha256; allowed_next_action = 所选选项键; applies_to.external_ref = external_ref_prefix + 事项 ID(顾问侧按此回查)。client_tag = 项目名小写、非 [a-z0-9_] 换 _(owner_decision_writer.TAG_PATTERN); 项目名与之不同时 applies_to 不填 project(writer 校验 client_tag = applies_to.project), 记录落在该项目治理根即项目归属。"
+        "authority_boundary": "Owner inbox ruling on {category} for {subject} (records the choice; release/withdraw/freeze only via existing exits)",
+        "owner_words_prefix": "Owner 原话: ",
+        "note": "裁决写成既有 owner_decision_record(owner_decision_writer 全量 AIPOS-110 形, 经门侧同一预演 / 执行 board_adapter.record_owner_decision + execute_dry_run, 含 decision_log 自动指针), 不另立存储。evidence_hash = 所裁事项(收件箱同一数据)规范 JSON 的 sha256; allowed_next_action = 所选选项键; applies_to.external_ref = external_ref_prefix + 事项 ID(顾问侧按此回查)。client_tag = 项目名小写、非 [a-z0-9_] 换 _(owner_decision_writer.TAG_PATTERN); 项目名与之不同时 applies_to 不填 project(writer 校验 client_tag = applies_to.project), 记录落在该项目治理根即项目归属。AIPOS-F170 件③(转达归因, 写进既有字段不另立): decided_by_ref / approval_actor_ref = --actor(缺省 owner); captured_by / owner_approval_evidence.captured_by = --relayed-by(转达的顾问实例; Owner 本人直接敲 = owner); decision_rationale = owner_words_prefix + --owner-words(Owner 原话摘要; 正文 Rationale 行, 读回口 owner_decision_writer.RATIONALE_LINE_PREFIX)。顾问侧裁决行(texts.relay_part)显示二者; F168 旧记录无前缀 = 不显示转达段。"
       },
       "texts": {
         "header": "Owner 待决收件箱 — {count} 项待定({projects} 个项目; home 根 {home_root})",
@@ -2622,9 +2626,11 @@
         "since": "  发生: {since}",
         "errors_header": "读不出的真相({count} 处, 未计入上表, 不猜):",
         "error": "  ⚠ {project}: {source}: {error}",
-        "decide_command": "lybra owner decide --item {item_id} --choice <选项> [--note <备注>] --home-root {home_root}",
-        "ruling_line": "Owner 已裁决: 选 {choice}({label}){note_part} @ {decided_at}, 按此继续",
+        "decide_command": "lybra owner decide --item {item_id} --choice <选项> --relayed-by <转达的顾问实例|owner> --owner-words <Owner 原话摘要> [--note <备注>] --home-root {home_root}",
+        "ruling_line": "Owner 已裁决: 选 {choice}({label}){note_part}{relay_part} @ {decided_at}, 按此继续",
         "note_part": " — 备注: {note}",
+        "relay_part": "(经 {relayed_by} 转达; Owner 原话: 「{owner_words}」)",
+        "paused_hidden": "(已暂停项目缺省不列: {projects}; 加 --include-paused 查看)",
         "next_hint": "  顾问下一条: {advisor_next}",
         "unknown_source": "(未记录)",
         "page_error": "Owner 待决收件箱读不出(不猜): {error}"
@@ -2646,9 +2652,9 @@
           "queue_states": ["pending", "claimed", "blocked"],
           "rank_by_queue_state": {"blocked": 1, "claimed": 1, "pending": 2},
           "impact_by_queue_state": {"pending": "卡带 needs_owner, 不会被认领推进", "claimed": "在途卡待 Owner 复核", "blocked": "卡已阻塞, 不会被推进"},
-          "options_by_queue_state": {"pending": ["release", "withdraw", "acknowledge"], "claimed": ["withdraw", "acknowledge"], "blocked": ["new_card", "acknowledge"]},
+          "options_by_queue_state": {"pending": ["release", "withdraw", "freeze_legacy", "acknowledge"], "claimed": ["withdraw", "freeze_legacy", "acknowledge"], "blocked": ["withdraw", "freeze_legacy", "new_card", "acknowledge"]},
           "ask": "{reasons}",
-          "note": "blocked 卡无写路径的解除口(queue reopen 仅预演、withdraw 只收 pending/claimed: transitions.schema queue_mutations.transitions), 故只给 new_card / acknowledge"
+          "note": "AIPOS-F170 件①: blocked 卡经 Owner 裁决可撤(既有 queue withdraw 口放宽: transitions.schema queue_mutations.transitions.withdraw.owner_ruling_required_from 所列源状态须带 Owner 裁决引用 = 本记录 decision_id)或冻结为历史(既有 project freeze-legacy 口, 清单条目 owner_policy_ref = 本记录 decision_id); 不另写解除口"
         },
         "rework_limit": {
           "rank": 1,
@@ -2684,11 +2690,27 @@
         "let_expire": {"label": "不续签, 到期 / 用尽即停", "advisor_next": "Owner 不续签: 信封用尽或到期后 loop 停, 不再催签"},
         "release": {"label": "解除 needs_owner, 卡回到可推进", "effect": "release_needs_owner", "advisor_next": "卡已由裁决解除 needs_owner(既有解除口 queue amend), 按常规推进: lybra next --task-id {task_id} --workspace-root {governance_root}"},
         "withdraw": {"label": "撤卡(不再做)", "effect": "withdraw_card", "advisor_next": "卡已由裁决撤回(既有解除口 queue withdraw), 不再推进"},
+        "freeze_legacy": {"label": "冻结为历史(存量冻结: 不再推进、不再进收件箱; 可解冻)", "effect": "freeze_legacy", "advisor_next": "卡已由裁决冻结为历史(既有口 project freeze-legacy), 不再推进; 确需推进先解冻: lybra project freeze-legacy --workspace-root {governance_root} --unfreeze {task_id} --reason <理由> --actor <你的顾问实例> --confirm"},
         "new_card": {"label": "另出新卡承接(本卡不再推进)", "advisor_next": "按裁决出新卡承接剩余问题(lybra draft create …), 本卡按裁决备注收口"},
         "rescope": {"label": "改卡面验收 / 拆卡", "advisor_next": "按裁决备注改卡(lybra queue amend …)后续跑: {resume}"},
         "acknowledge": {"label": "知悉, 维持现状", "advisor_next": "Owner 已知悉, 维持现状; 不需顾问动作"},
         "repair": {"label": "派修复卡", "advisor_next": "按裁决派修复卡处理补审问题(FAIL 派生出口): lybra next --task-id {task_id} --workspace-root {governance_root}"},
         "accept": {"label": "接受原结案, 不修", "advisor_next": "Owner 接受原结案, 补审争议收口, 不需顾问动作"}
+      },
+      "stale": {
+        "description": "AIPOS-F170 件①: `lybra owner inbox --stale-before <日期>` 遗留视图(渲染唯一实现 owner_inbox.render_stale_text, 数据 = collect_inbox 同一事项, 只取 since 早于该日期者)。suggest = 建议裁决(按类别; needs_owner_card 再按队列状态), 值为选项键且须属该事项选项, 否则 = 保留(不批量定); 同项目同建议的事项给一条 --items 批量裁决命令。",
+        "header": "遗留待决(发生早于 {stale_before}) — {count} 项 / {projects} 个项目(home 根 {home_root}; 发生时刻未知的不算遗留)",
+        "empty": "遗留待决(发生早于 {stale_before}): 无({projects} 个项目; home 根 {home_root})",
+        "project_header": "■ {project}({count} 项)",
+        "line": "  {item_id}  {subject}{title_part}  卡住: {ask}  → 建议: {suggest_label}",
+        "title_part": "「{title}」",
+        "batch_line": "  批量{suggest_label}({count} 项): lybra owner decide --items {item_ids} --choice {choice} --relayed-by <转达的顾问实例|owner> --owner-words <Owner 原话摘要> --home-root {home_root}",
+        "keep_label": "保留(单独定)",
+        "suggest_labels": {"withdraw": "撤回", "freeze_legacy": "冻结为历史"},
+        "suggest": {
+          "needs_owner_card": {"pending": "withdraw", "claimed": "freeze_legacy", "blocked": "freeze_legacy"}
+        },
+        "date_invalid": "--stale-before 须为 YYYY-MM-DD 或 ISO 时刻, 得到 {value!r}"
       },
       "custom_option": {"key_pattern": "^[a-z][a-z0-9_]{0,31}$", "advisor_next": "按 Owner 裁决「{label}」处理后续跑: {resume}"},
       "exit_codes": {
@@ -2698,7 +2720,7 @@
       }
     },
     "lybra_owner_decide": {
-      "description": "AIPOS-F168 件②: `lybra owner decide --item <事项ID> --choice <选项> [--note <备注>] [--home-root <home 根>] [--actor <Owner 身份>] [--confirm] [--json]` —— 缺省 = 预演(零写入): 重算收件箱(lybra_owner_inbox 同一 collect_inbox)找到该事项, 校验选项属该事项, 经门侧同一预演 board_adapter.record_owner_decision 出将写的决策记录, 列出解除动作的预演(既有解除口同一函数的 dry_run)。--confirm = 写入: 决策记录经 board_adapter.execute_dry_run(令牌 = 本进程预演; 门侧同一执行, 含 decision_log 自动指针); 选项 effect = release_needs_owner → board_adapter.amend_task(needs_owner / owner_review_required / approval_required 中为真的改 false, 只收 pending 卡) / withdraw_card → board_adapter.withdraw_task, 均为既有队列出口, 不手改卡; 写出文件经 lybra_governance_commit.post_write_landing.commands.owner_decide 同一提交口落账(落账失败: 写入已生效, 出补账命令, 退出码读该声明 landing_failed_exit_code)。解除动作被既有出口拒 = 决策记录照落(Owner 的裁决已发生), 拒因原文输出, exit blocked。之后对应顾问 `lybra loop status --task-id <卡>` 下一动作 = advisor_fix(owner_ruled): detail = 裁决原文 + 时刻, hint = 该选项的 advisor_next(续跑命令); `lybra next --task-id <卡>` 附裁决行。身份: --actor 缺省 owner(本机治理根所在机执行; 与 controlled-execute confirm 同为本机门侧实现, 不经 HTTP 门)。",
+      "description": "AIPOS-F168 件②: `lybra owner decide --item <事项ID> --choice <选项> [--note <备注>] [--home-root <home 根>] [--actor <Owner 身份>] [--confirm] [--json]` —— 缺省 = 预演(零写入): 重算收件箱(lybra_owner_inbox 同一 collect_inbox)找到该事项, 校验选项属该事项, 经门侧同一预演 board_adapter.record_owner_decision 出将写的决策记录, 列出解除动作的预演(既有解除口同一函数的 dry_run)。--confirm = 写入: 决策记录经 board_adapter.execute_dry_run(令牌 = 本进程预演; 门侧同一执行, 含 decision_log 自动指针); 选项 effect = release_needs_owner → board_adapter.amend_task(needs_owner / owner_review_required / approval_required 中为真的改 false, 只收 pending 卡) / withdraw_card → board_adapter.withdraw_task, 均为既有队列出口, 不手改卡; 写出文件经 lybra_governance_commit.post_write_landing.commands.owner_decide 同一提交口落账(落账失败: 写入已生效, 出补账命令, 退出码读该声明 landing_failed_exit_code)。解除动作被既有出口拒 = 决策记录照落(Owner 的裁决已发生), 拒因原文输出, exit blocked(AIPOS-F170 起确认前先整批预演含解除动作, 预演即被拒 = 零写入; 本句只余预演已过、执行时才被拒的情形)。之后对应顾问 `lybra loop status --task-id <卡>` 下一动作 = advisor_fix(owner_ruled): detail = 裁决原文 + 时刻, hint = 该选项的 advisor_next(续跑命令); `lybra next --task-id <卡>` 附裁决行。身份: --actor 缺省 owner(本机治理根所在机执行; 与 controlled-execute confirm 同为本机门侧实现, 不经 HTTP 门)。AIPOS-F170 件③: 必填 --relayed-by <转达的顾问实例>(Owner 本人直接敲 = owner)与 --owner-words <Owner 原话摘要>(单行), 缺 = 拒(usage, 零写入), 写进既有记录字段(见 lybra_owner_inbox.decision.note)。AIPOS-F170 件①: --items <ID,ID,…> = 同一裁决批量(与 --item 二选一): 收件箱只算一次, 全部事项须在且选项须属每一项, 先逐项预演, 任一被拒 = 整批不写(blocked); 确认 = 逐项写决策记录, 解除动作按治理根分组执行(freeze_legacy 同根合成一条清单条目, owner_policy_ref = 本批决策记录 ID), 每个治理根落账一次。blocked 卡 withdraw 经既有 queue withdraw 口(带 Owner 裁决引用 = decision_id)。",
       "phase": "owner",
       "surface": ["cli"],
       "cli_command": "lybra owner decide",
@@ -2706,21 +2728,29 @@
       "parameters": {
         "type": "object",
         "properties": {
-          "item": {"type": "string", "description": "事项 ID(收件箱列出的 OI-…)"},
+          "item": {"type": "string", "description": "事项 ID(收件箱列出的 OI-…); 与 items 二选一"},
+          "items": {"type": "string", "description": "AIPOS-F170 件①: 逗号分隔的多个事项 ID, 同一裁决批量(预演 / 确认); 与 item 二选一"},
           "choice": {"type": "string", "description": "选项键(该事项列出的选项之一)"},
+          "relayed_by": {"type": "string", "description": "AIPOS-F170 件③: 转达裁决的顾问实例(Owner 本人直接敲 = owner); 必填"},
+          "owner_words": {"type": "string", "description": "AIPOS-F170 件③: Owner 原话摘要(单行); 必填"},
           "note": {"type": "string", "description": "裁决备注(进决策记录一句话结论与 rationale, 顾问侧原样显示)"},
           "home_root": {"type": "string", "description": "同 lybra_owner_inbox.home_root"},
           "actor": {"type": "string", "description": "裁决人身份, 缺省 owner"},
           "confirm": {"type": "boolean", "description": "写入; 缺省预演"},
           "json": {"type": "boolean", "description": "JSON 输出"}
         },
-        "required": ["item", "choice"],
+        "required": ["choice", "relayed_by", "owner_words"],
         "additionalProperties": false
+      },
+      "relay": {
+        "owner_self": "owner",
+        "missing": "缺 {flags}: Owner 裁决须写明转达人与 Owner 原话(--relayed-by <转达的顾问实例>, Owner 本人直接敲写 owner; --owner-words <Owner 原话摘要>), 零写入",
+        "invalid": "{flag} 须为非空单行文本, 得到 {value!r}"
       },
       "exit_codes": {
         "ok": {"code": 0, "meaning": "预演通过 / 已写入并落账"},
         "blocked": {"code": 1, "meaning": "决策记录预演被拒(拒因原文), 或解除动作被既有出口拒(决策记录已落)"},
-        "usage": {"code": 2, "meaning": "选项不属该事项 / 参数缺"},
+        "usage": {"code": 2, "meaning": "选项不属该事项 / 参数缺(含缺 --relayed-by / --owner-words、--item 与 --items 都给或都没给)"},
         "not_found": {"code": 4, "meaning": "收件箱中无该事项(已裁决 / 已自行解除 / ID 错)"}
       }
     },

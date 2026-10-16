@@ -95,7 +95,12 @@
      修法固定, 输出「下一条」逐步给出。改卡分支 / 更新交回的步骤**派本卡执行体做**(你仍永不碰产品仓), 执行体交回后用「下一条」
      末行命令续跑 loop, 回到第 2 步。同卡同一例行码连续被拒到声明次数, 产品自动升为 `owner_needed`, 不必你计数。
    - `owner_needed` → **停**, 一次说清要 Owner 定什么(输出 detail 已写事由: 设计分叉 / 授权 / 连败 / 门拒原因)与可选项;
-     Owner 定了再回到第 1 步。
+     Owner 定了再回到第 1 步。**报 owner_needed 前先写进运行记录**(AIPOS-F170): `lybra loop note --task-id <卡ID> --ask <要 Owner 定什么>
+     --options <键=标签> … --recommend <建议选哪个 + 理由> --workspace-root {{governance_root}} --actor {{instance}}` 先预演, 再加 `--confirm`
+     ——Owner 在收件箱(`lybra owner inbox` / 看板 /owner/inbox)看到的就是你写的要定什么 / 选项 / 建议, 不再是泛化拒因。
+     **Owner 口头裁决(对你说的)由你落记录**: `lybra owner decide --item <OI-…> --choice <选项键> --relayed-by {{instance}}
+     --owner-words <Owner 原话摘要>`(`--home-root` 照抄收件箱裁决行; 先预演, 无误再加 `--confirm`, 自动落账)——记录写明是你转达、
+     Owner 原话是什么; 之后 `lybra loop status` 给 `advisor_fix(owner_ruled)`, 按 hint 续跑。Owner 本人直接敲时 `--relayed-by owner`。
 
 **只在 `owner_needed` 时停。** 其余情况你自己往下走, 不问「要不要继续」。
 

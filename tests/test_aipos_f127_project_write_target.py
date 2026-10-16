@@ -329,7 +329,7 @@ def test_item3_set_meta_writes_via_single_write_path_and_declaration():
     from tools.aipos_cli.workspace_config import project_meta_declaration
 
     decl = project_meta_declaration()
-    assert decl["keys"] == {"phase": "--phase", "note": "--note"}
+    assert decl["keys"] == {"phase": "--phase", "note": "--note", "status": "--status"}  # AIPOS-F170 件②: 登记 status(暂停项目)
     wc_src = (REPO_ROOT / "tools/aipos_cli/workspace_config.py").read_text(encoding="utf-8")
     fn = next(n for n in ast.parse(wc_src).body if isinstance(n, ast.FunctionDef) and n.name == "set_project_meta")
     calls = {c.func.id for c in ast.walk(fn) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
@@ -377,7 +377,7 @@ def test_item3_set_meta_real_declaration_phase_note_preview_and_confirm(rig, mon
           + " note=" + json.dumps(declared["note"], ensure_ascii=False))
     assert declared["phase"]["type"] == "string" and declared["note"]["type"] == "string"
     assert declared["phase"]["required"] is False and declared["note"]["required"] is False
-    assert sorted(declared_meta_keys()) == ["note", "phase"]
+    assert sorted(declared_meta_keys()) == ["note", "phase", "status"]  # AIPOS-F170 件②: status 同族(正反例见 test_aipos_f170_inbox_cleanup.py)
     monkeypatch.chdir(rig["beta"])
     pj = rig["beta"] / "project.json"
     a_before, before = _md5(rig["alpha"] / "project.json"), _md5(pj)

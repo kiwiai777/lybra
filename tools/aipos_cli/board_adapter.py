@@ -7679,8 +7679,11 @@ def withdraw_task(
     repo_root: str | Path | None = None,
     owner_confirmation_required_override: bool | None = None,
     owner_confirmation_reasons_override: list[str] | None = None,
+    owner_ruling_ref: str | None = None,
 ) -> dict[str, Any]:
     """AIPOS-315: withdraw a task from pending or claimed queue state.
+    AIPOS-F170 件①: 声明须带 Owner 裁决引用的源目录(transitions.schema withdraw.owner_ruling_required_from, 即 blocked)另需
+    owner_ruling_ref(决策记录 decision_id; 核验唯一实现 queue_mutation.withdraw_owner_ruling_problem)。
     
     Moves task to withdrawn/ state with reason. Does NOT delete any existing
     records (claims/returns/sessions/audit) - those are preserved.
@@ -7763,6 +7766,7 @@ def withdraw_task(
             dry_run=dry_run,
             profiles=profiles,
             with_records=False,
+            owner_ruling_ref=owner_ruling_ref,
         )
         
         # Build response
@@ -7782,6 +7786,7 @@ def withdraw_task(
                     "from_state": result.get("from_state"),
                     "to_state": result.get("to_state"),
                     "reason": str(reason).strip(),
+                    "owner_ruling_ref": result.get("owner_ruling_ref"),
                 },
                 summary={"task_id": result.get("task_id"), "to_state": "withdrawn"},
                 warnings=result.get("warnings", []),
@@ -7823,6 +7828,7 @@ def withdraw_task(
                 "from_state": result.get("from_state"),
                 "to_state": result.get("to_state"),
                 "reason": str(reason).strip(),
+                "owner_ruling_ref": result.get("owner_ruling_ref"),
                 "moved": result.get("moved", False),
                 "wrote": result.get("wrote", False),
             },
