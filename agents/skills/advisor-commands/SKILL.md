@@ -127,9 +127,9 @@ Owner 已确认 / 不符·修复卡 X; auto / artifact 标准到「自动验证�
 #### `lybra roadmap verify`(AIPOS-F175: 记录 Owner 抽查结论)
 **何时用**:Owner 收件箱出现「验收待 Owner 抽查」(类别 `owner_check`, 附截图 / 输出路径与看板路线图页链接), Owner 看完告诉你「符合」或「不符: …」后。
 ```bash
-lybra roadmap verify --workspace-root <治理根> --criterion <标准id> --result confirm --relayed-by <你的顾问实例> --owner-words "<Owner 原话>"            # 先预演
-lybra roadmap verify --workspace-root <治理根> --criterion <标准id> --result confirm --relayed-by <你的顾问实例> --owner-words "<Owner 原话>" --confirm --actor owner
-lybra roadmap verify --workspace-root <治理根> --criterion <标准id> --result mismatch --relayed-by <你的顾问实例> --owner-words "<Owner 原话>" --note "<哪里不对>" --confirm --actor owner
+lybra roadmap verify --workspace-root <治理根> --criterion <标准id> --result confirm --relayed-by <你的顾问实例> --owner-words "<Owner原话摘要>"            # 先预演
+lybra roadmap verify --workspace-root <治理根> --criterion <标准id> --result confirm --relayed-by <你的顾问实例> --owner-words "<Owner原话摘要>" --confirm --actor owner
+lybra roadmap verify --workspace-root <治理根> --criterion <标准id> --result mismatch --relayed-by <你的顾问实例> --owner-words "<Owner原话摘要>" --note "<哪里不对>" --confirm --actor owner
 ```
 写既有 owner_verifications 记录(转达人 + Owner 原话)并自动落账; `--relayed-by` / `--owner-words` 缺 = 用法错(exit 2)。
 不符 = 同次自动起草修复卡(卡号 `<被抽查卡>-oc<N>`, 挂同一 milestone / criteria, `owner_check_ref` = 抽查记录), 输出给出
