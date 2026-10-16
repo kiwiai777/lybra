@@ -611,3 +611,8 @@ main {
   text-decoration: underline;
   color: inherit;
 }
+
+/* AIPOS-F171 件③: 看板只读 —— 写操作控件一律隐藏(后端写接口已下线); 暂停项目标注 */
+[data-board-write] { display: none !important; }
+.board-readonly-note { margin: 0.5rem 0 1rem; padding: 0.5rem 0.75rem; border-left: 3px solid #d97706; background: rgba(217, 119, 6, 0.08); font-size: 13px; line-height: 1.6; }
+.workspace-paused { margin-left: 0.5rem; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; color: #92400e; background: rgba(217, 119, 6, 0.15); }

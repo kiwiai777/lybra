@@ -628,20 +628,18 @@
     .vb-fix-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
     .vb-fix-list li { font-family: ui-monospace, monospace; font-size: 11.5px; padding: 2px 8px; border-radius: 6px; background: rgba(217,119,6,.1); color: #92400e; }
     .vb-actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
-    .vb-btn { padding: 5px 12px; border-radius: 6px; font-size: 12.5px; font-weight: 700; border: 1px solid var(--border-default); background: var(--surface); color: var(--text-secondary); cursor: pointer; transition: all 0.15s ease; }
-    .vb-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .vb-btn.vb-pass { color: #16a34a; border-color: #16a34a; background: rgba(22, 163, 74, 0.05); }
-    .vb-btn.vb-pass:hover:not(:disabled) { background: #16a34a; color: white; }
-    .vb-btn.vb-reject { color: #dc2626; border-color: #dc2626; background: rgba(220, 38, 38, 0.05); }
-    .vb-btn.vb-reject:hover:not(:disabled) { background: #dc2626; color: white; }
-    .vb-btn.vb-verified { background: #16a34a; color: white; border-color: #16a34a; cursor: default; }
-    .vb-btn.vb-rejected { background: #dc2626; color: white; border-color: #dc2626; cursor: default; }
-    .vb-reject-reason { margin-top: 8px; display: none; }
-    .vb-reject-reason.show { display: block; }
-    .vb-reject-reason input { width: 100%; padding: 6px 10px; border: 1px solid var(--border-default); border-radius: 4px; font-size: 13px; }
-    .vb-reject-reason button { margin-top: 6px; padding: 5px 12px; border-radius: 4px; font-size: 12px; font-weight: 700; cursor: pointer; }
-    .vb-reject-reason .confirm { background: #dc2626; color: white; border: 1px solid #dc2626; margin-right: 6px; }
-    .vb-reject-reason .cancel { background: var(--surface); color: var(--text-body); border: 1px solid var(--border-default); }
+    /* AIPOS-F171 件③: 只读核验提示 + 路线图里程碑简版 */
+    .vb-actions.vb-readonly { font-size: 12.5px; color: var(--text-secondary); border-left: 3px solid #d97706; padding: 4px 10px; }
+    .roadmap-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+    .roadmap-ms { border: 1px solid var(--border-default); border-radius: 6px; padding: 8px 12px; }
+    .roadmap-ms.roadmap-dropped { opacity: 0.6; }
+    .roadmap-ms-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+    .roadmap-lane { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--accent); }
+    .roadmap-title { font-size: 14px; overflow-wrap: anywhere; }
+    .roadmap-status, .roadmap-target, .roadmap-cards { font-size: 12px; color: var(--text-secondary); }
+    .roadmap-criteria { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 3px; font-size: 12.5px; }
+    .roadmap-unlinked { margin-top: 10px; font-size: 12.5px; color: var(--text-secondary); }
+    .roadmap-error { color: #dc2626; font-size: 13px; }
     .vb-resolution-note { font-size: 11.5px; color: var(--text-secondary); font-style: italic; margin-top: 6px; }
     .vb-previewable { display: grid; gap: 10px; }
     .vb-preview {
@@ -794,28 +792,15 @@
       <div class="loading" data-i18n="detail.loading">Loading project detail...</div>
     </div>
 
-    <!-- AIPOS-264: 项目门户头 — 置顶(里程碑地图之上)。项目名 + 1-2 句描述 +
-         协作面板(模式/拓扑/牛马阵容/顾问)。静态骨架烘入,JS 从 /api/project-map
-         的 portal 段水合;无 portal 段优雅隐藏(DOM-only)。 -->
-    <section id="portal-header-section" class="detail-section portal-header-section" hidden>
-      <div class="portal-hero">
-        <h2 class="portal-name" id="portal-name">—</h2>
-        <span class="portal-updated" id="portal-updated" hidden></span>
-      </div>
-      <p class="portal-desc" id="portal-desc"></p>
-      <div class="portal-collab" id="portal-collab"></div>
-    </section>
-
-    <!-- AIPOS-262B: 里程碑地图 — 置顶独立区域,任务中心之上。静态标题烘入,JS 从
-         /api/project-map?workspace=N 水合;无 project-map.md 时整区优雅隐藏(DOM-only)。 -->
+    <!-- AIPOS-262B: 里程碑区 — 置顶独立区域,任务中心之上。AIPOS-F171 件③: JS 从 /api/roadmap?workspace=N
+         (项目路线图声明, 只读简版)水合; 无路线图文件时整区隐藏(DOM-only)。旧 project-map.md 读取已下线。 -->
     <section id="milestone-map-section" class="detail-section milestone-map-section" data-owner-truth="milestone-map" hidden>
       <div class="section-header">
         <h3 id="map-title" data-i18n="map.title">Project Milestones</h3>
         <span class="map-updated-badge" id="map-updated-badge" hidden></span>
       </div>
-      <p class="section-hint" id="map-hint" data-i18n="map.hint">Horizontal milestone chart: completed (solid) → current (highlighted) → near-term plan → horizon (dashed). Click a node for details and decision refs.</p>
-      <div id="map-road" class="map-road"></div>
-      <div id="map-legend" class="map-legend" hidden></div>
+      <p class="section-hint" id="map-hint" data-i18n="roadmap.hint">From this project's roadmap declaration (read-only simple view); to add or change milestones, tell your advisor, who uses lybra roadmap commands.</p>
+      <div id="map-road" class="roadmap-road"></div>
     </section>
 
     <!-- AIPOS-262B FIX-1: 验证台 — 静态区块(里程碑地图之后,任务中心之前)。Owner 核验站 +
@@ -930,15 +915,6 @@
       // AIPOS-286 FIX-3: Update page title
       document.title = `${i18n.t('detail.title')} - Lybra`;
       
-      // AIPOS-286 FIX-3: Dynamic CSS for pseudo-element i18n (map current mark)
-      let i18nStyle = document.getElementById('i18n-dynamic-style');
-      if (!i18nStyle) {
-        i18nStyle = document.createElement('style');
-        i18nStyle.id = 'i18n-dynamic-style';
-        document.head.appendChild(i18nStyle);
-      }
-      i18nStyle.textContent = `.map-current-mark::after { content: '${i18n.t('map.legend.current')}'; }`;
-      
       // Update static text
       document.getElementById('page-title').textContent = i18n.t('detail.title');
       document.getElementById('page-subtitle').textContent = i18n.t('detail.subtitle');
@@ -947,7 +923,7 @@
       // AIPOS-266: 四区静态区块标题/提示/子标题/加载占位 (静态烘入 zh 为默认;
       // 切换语言时这里重设,下方各 render* 再以 i18n.t 渲染动态 chrome)。
       document.getElementById('map-title').textContent = i18n.t('map.title');
-      document.getElementById('map-hint').textContent = i18n.t('map.hint');
+      document.getElementById('map-hint').textContent = i18n.t('roadmap.hint');
       document.getElementById('vb-title').textContent = i18n.t('vb.title');
       document.getElementById('vb-hint').textContent = i18n.t('vb.hint');
       document.getElementById('tc-title').textContent = i18n.t('tc.title');
@@ -1030,9 +1006,9 @@
         const needsOwnerResponse = await fetch(`/api/needs-owner?workspace=${workspaceIndex}`);
         const needsOwnerData = await needsOwnerResponse.json();
 
-        // AIPOS-262B: milestone map + verification bench (read-only Owner faces).
-        const mapResponse = await fetch(`/api/project-map?workspace=${workspaceIndex}`);
-        const mapData = await mapResponse.json();
+        // AIPOS-F171 件③: 里程碑区读路线图声明(只读简版; 旧 /api/project-map 下线) + verification bench (read-only Owner faces).
+        const roadmapResponse = await fetch(`/api/roadmap?workspace=${workspaceIndex}`);
+        const roadmapData = await roadmapResponse.json();
         const verifyResponse = await fetch(`/api/verify-bench?workspace=${workspaceIndex}`);
         const verifyBenchData = await verifyResponse.json();
 
@@ -1040,11 +1016,8 @@
         headerHost.replaceChildren();
         headerHost.appendChild(createProjectHeader(workspace));
 
-        // AIPOS-264: 项目门户头 (置顶,里程碑地图之上;无 portal 段优雅隐藏)。
-        renderPortalHeader(mapData, truthData, workspace);
-
-        // AIPOS-262B: milestone map (置顶独立区域;无文件时优雅隐藏)。
-        renderMilestoneMap(mapData);
+        // AIPOS-F171 件③: 路线图里程碑简版(置顶独立区域;无路线图文件时整区隐藏)。
+        renderRoadmap(roadmapData);
 
         // 2) Verify bench (静态区块;needs_owner 并入分组)。
         //    区块序:门户头 → 里程碑地图 → 验证台 → [空板向导] → 任务中心 → 高级/调试。
@@ -1067,379 +1040,64 @@
       }
     }
     
-    // ===== AIPOS-288 FIX-2: 双语字段选择辅助 =====
-    // AIPOS-288 FIX-2: EN mode prefers _en variant; fallback to original if absent.
-    // ZH mode always uses original field (no translation).
-    function i18nField(obj, baseKey) {
-      if (!obj) return '';
-      const lang = i18n.getCurrentLang();
-      if (lang === 'en') {
-        const enKey = baseKey + '_en';
-        const enVal = obj[enKey];
-        if (enVal && String(enVal).trim()) return String(enVal).trim();
-      }
-      const base = obj[baseKey];
-      return base ? String(base).trim() : '';
-    }
-
-    // ===== AIPOS-264: 项目门户头 (项目描述 + 协作面板;无 portal 段优雅隐藏) =====
-    // Renders the portal segment of /api/project-map at the very top (above the
-    // milestone map). Worker chips reuse the 261/265 agent 档案 popup
-    // (showAgentPopup); the per-instance profile is sourced from the owner-truth
-    // activity feed (latest known 档案, already deduped by the backend).
-    function renderPortalHeader(mapData, truthData, workspace) {
-      const section = document.getElementById('portal-header-section');
-      const nameEl = document.getElementById('portal-name');
-      const updatedEl = document.getElementById('portal-updated');
-      const descEl = document.getElementById('portal-desc');
-      const collabEl = document.getElementById('portal-collab');
-      const d = (mapData && mapData.ok !== false && mapData.data) ? mapData.data : null;
-      const portal = (d && d.portal) ? d.portal : null;
-      // S2: graceful hide — no portal segment or no description (the required element).
-      if (!portal || !portal.description) { section.hidden = true; return; }
-      section.hidden = false;
-      nameEl.textContent = workspaceLabel(workspace);
-      if (d && d.updated) { updatedEl.textContent = i18n.t('portal.updated_prefix') + d.updated; updatedEl.hidden = false; }
-      else { updatedEl.hidden = true; }
-      // AIPOS-288 FIX-2: description uses i18nField (EN prefers _en, fallback to original).
-      descEl.textContent = i18nField(portal, 'description');
-      collabEl.replaceChildren();
-      // 协作模式 (AIPOS-288 FIX-2: bilingual support)
-      const collabModeText = i18nField(portal, 'collab_mode');
-      if (collabModeText) {
-        const mode = el('span', 'pc-mode'); mode.textContent = collabModeText;
-        collabEl.appendChild(pcGroup(i18n.t('portal.label.mode'), mode));
-      }
-      // 拓扑 + 极简小图标 (AIPOS-288 FIX-2: bilingual support)
-      const topologyText = i18nField(portal, 'topology');
-      if (topologyText) {
-        const topo = el('span', 'pc-topo');
-        topo.appendChild(topologyIcon(topologyText));
-        const tl = el('span'); tl.textContent = topologyText;
-        topo.appendChild(tl);
-        collabEl.appendChild(pcGroup(i18n.t('portal.label.topology'), topo));
-      }
-      // 牛马阵容(点击复用 agent 档案弹层)
-      // AIPOS-288 FIX-2: workers uses workers_en array in EN mode (fallback to workers).
-      const lang = i18n.getCurrentLang();
-      let workers = Array.isArray(portal.workers) ? portal.workers : [];
-      if (lang === 'en' && Array.isArray(portal.workers_en) && portal.workers_en.length > 0) {
-        workers = portal.workers_en;
-      }
-      if (workers.length > 0) {
-        const profileIndex = buildAgentProfileIndex(truthData);
-        const wrap = el('span', 'pc-workers');
-        workers.forEach(raw => {
-          const w = parseWorker(raw);
-          const chip = document.createElement('button');
-          chip.type = 'button';
-          chip.className = 'worker-chip';
-          chip.title = i18n.t('portal.worker_chip_title');
-          chip.setAttribute('aria-haspopup', 'dialog');
-          if (w.role) { const r = el('span', 'wc-role'); r.textContent = w.role; chip.appendChild(r); }
-          const inst = el('span', 'wc-inst'); inst.textContent = w.instance; chip.appendChild(inst);
-          if (w.harness) { const h = el('span', 'wc-harness'); h.textContent = w.harness; chip.appendChild(h); }
-          chip.addEventListener('click', () => {
-            const info = profileIndex[w.instance];
-            showAgentPopup({
-              role: (info && info.role) || w.role || i18n.t('portal.role.worker_fallback'),
-              instance: w.instance,
-              profile: info ? info.profile : null,
-              round: null,
-            });
-          });
-          wrap.appendChild(chip);
-        });
-        collabEl.appendChild(pcGroup(i18n.t('portal.label.workers'), wrap));
-      }
-      // 顾问信息 (AIPOS-288 FIX-2: advisor uses advisor_en in EN mode; advisor_note_en for note text)
-      let advisorText = portal.advisor;
-      if (lang === 'en' && portal.advisor_en && String(portal.advisor_en).trim()) {
-        advisorText = portal.advisor_en;
-      }
-      if (advisorText) {
-        const adv = parseWorker(advisorText);
-        const box = el('span', 'pc-advisor');
-        const role = el('span', 'adv-role'); role.textContent = adv.role || i18n.t('portal.role.advisor_fallback');
-        box.appendChild(role);
-        const ai = el('span', 'adv-inst'); ai.textContent = adv.instance; box.appendChild(ai);
-        // AIPOS-288 FIX-2: use advisor_note_en for the note part (harness stays as-is).
-        const noteText = i18nField(portal, 'advisor_note');
-        if (adv.harness || adv.desc || noteText) {
-          const dd = el('span', 'adv-desc');
-          // Prefer noteText from advisor_note_en; fallback to adv.desc from parseWorker.
-          dd.textContent = [adv.harness, noteText || adv.desc].filter(Boolean).join(' · '); box.appendChild(dd);
-        }
-        collabEl.appendChild(pcGroup(i18n.t('portal.label.advisor'), box));
-      }
-    }
-
-    // ===== AIPOS-262B: 里程碑地图 (横向图表 + 点节点弹层) =====
-    // Renders the four-segment milestone road from /api/project-map. Hides the
-    // whole section (hidden attr) when the file is absent or empty. DOM-only.
-    function renderMilestoneMap(mapData) {
+    // ===== AIPOS-F171 件③: 路线图里程碑简版(只读; /api/roadmap 与 `lybra roadmap show` 同一数据) =====
+    // 旧项目地图(读手写 governance/project-map.md)与门户头下线; 无路线图文件 = 整区隐藏。
+    function renderRoadmap(roadmapData) {
       const section = document.getElementById('milestone-map-section');
       const road = document.getElementById('map-road');
-      const legend = document.getElementById('map-legend');
-      road.replaceChildren();
-      const d = (mapData && mapData.ok !== false && mapData.data) ? mapData.data : null;
-      if (!d || !d.available) {
-        section.hidden = true;
-        legend.hidden = true;
-        return;
-      }
-      const milestones = Array.isArray(d.milestones) ? d.milestones : [];
-      const inFlight = Array.isArray(d.in_flight) ? d.in_flight : [];
-      const next = Array.isArray(d.next) ? d.next : [];
-      const horizon = Array.isArray(d.horizon) ? d.horizon : [];
-      const nearTerm = inFlight.concat(next);
-      if (milestones.length === 0 && !d.current && nearTerm.length === 0 && horizon.length === 0) {
-        section.hidden = true;
-        legend.hidden = true;
-        return;
-      }
-      section.hidden = false;
-
-      // AIPOS-275 F-275-2: show map updated date in section header.
-      // AIPOS-276: red badge when map is stale (updated > same-window tasks).
       const badge = document.getElementById('map-updated-badge');
-      if (badge) {
-        if (d.updated) {
-          const mapDate = new Date(d.updated);
-          const now = new Date();
-          const daysSince = Math.floor((now - mapDate) / (1000 * 60 * 60 * 24));
-          
-          // Check if stale: map updated >N days ago (use same window as truthData tasks)
-          // Simple heuristic: if map date is >7 days old, show red badge
-          const isStale = daysSince > 7;
-          
-          if (isStale) {
-            badge.textContent = i18n.t('map.stale_badge').replace('{days}', daysSince);
-            badge.className = 'map-updated-badge stale';
-          } else {
-            badge.textContent = i18n.t('map.updated_prefix') + d.updated;
-            badge.className = 'map-updated-badge';
-          }
-          badge.hidden = false;
-        } else {
-          badge.hidden = true;
+      road.replaceChildren();
+      const ok = roadmapData && roadmapData.ok !== false;
+      const d = ok ? (roadmapData.data || {}) : null;
+      if (!ok) {
+        section.hidden = false;
+        const err = el('p', 'roadmap-error');
+        err.textContent = i18n.t('roadmap.error') + ': ' + ((roadmapData && (roadmapData.message || (roadmapData.blocking_reasons || [])[0])) || '');
+        road.appendChild(err);
+        return;
+      }
+      if (!d.exists) { section.hidden = true; return; }
+      section.hidden = false;
+      badge.hidden = false;
+      badge.textContent = i18n.t('roadmap.source_prefix') + (d.rel || '');
+      const list = el('ol', 'roadmap-list');
+      (d.milestones || []).forEach(m => {
+        const item = el('li', 'roadmap-ms roadmap-' + (m.status || 'planned'));
+        const head = el('div', 'roadmap-ms-head');
+        const lane = el('span', 'roadmap-lane'); lane.textContent = m.lane || '';
+        const title = el('strong', 'roadmap-title'); title.textContent = (m.id || '') + ' · ' + (m.title || '');
+        const st = el('span', 'roadmap-status'); st.textContent = i18n.t('roadmap.status.' + (m.status || 'planned'));
+        head.appendChild(lane); head.appendChild(title); head.appendChild(st);
+        if (m.target_date) {
+          const td = el('span', 'roadmap-target'); td.textContent = i18n.t('roadmap.target') + ' ' + m.target_date;
+          head.appendChild(td);
         }
-      }
-
-      // Segment 1: completed milestones (solid dots, linked).
-      // AIPOS-288 FIX-2: milestone title uses i18nField (EN prefers title_en).
-      if (milestones.length > 0) {
-        const seg = el('div', 'map-seg');
-        milestones.forEach((m, i) => {
-          if (i > 0) seg.appendChild(el('span', 'map-link'));
-          const titleText = i18nField(m, 'title');
-          seg.appendChild(mapNode({
-            kind: 'done',
-            onClick: () => showMilestonePopup({
-              kind: i18n.t('map.popup.kind.done'), title: titleText || m.id,
-              desc: titleText || '', refs: m.refs || [],
-            }),
-          }));
-        });
-        road.appendChild(seg);
-      }
-
-      // Current position (highlighted diamond marker).
-      // AIPOS-288 FIX-2: current uses i18nField (EN prefers current_en).
-      if (d.current) {
-        if (milestones.length > 0) road.appendChild(el('span', 'map-link'));
-        const cur = el('div', 'map-current');
-        cur.appendChild(el('span', 'map-current-mark'));
-        const cap = el('span', 'map-current-cap');
-        const currentText = i18nField(d, 'current');
-        cap.textContent = truncate(currentText, 12);
-        cur.appendChild(cap);
-        cur.style.cursor = 'pointer';
-        cur.addEventListener('click', () => showMilestonePopup({
-          kind: i18n.t('map.popup.kind.current'), title: i18n.t('map.popup.current_title'), desc: currentText,
-          refs: [], directionLog: d.direction_log_recent || [],
-          mapUpdated: d.updated || '',
-        }));
-        road.appendChild(cur);
-      }
-
-      // Segment 2: near-term planning (in_flight + next; lighter solid).
-      if (nearTerm.length > 0) {
-        if (milestones.length > 0 || d.current) road.appendChild(el('span', 'map-link'));
-        const seg = el('div', 'map-seg');
-        nearTerm.forEach((label, i) => {
-          if (i > 0) seg.appendChild(el('span', 'map-link'));
-          seg.appendChild(mapNode({
-            kind: 'near',
-            onClick: () => showMilestonePopup({ kind: i18n.t('map.popup.kind.near'), title: label, desc: label, refs: [] }),
-          }));
-        });
-        road.appendChild(seg);
-      }
-
-      // Segment 3: horizon (dashed, faint).
-      if (horizon.length > 0) {
-        if (milestones.length > 0 || d.current || nearTerm.length > 0) road.appendChild(el('span', 'map-link is-dashed'));
-        const seg = el('div', 'map-seg');
-        horizon.forEach((label, i) => {
-          if (i > 0) seg.appendChild(el('span', 'map-link is-dashed'));
-          seg.appendChild(mapNode({
-            kind: 'horizon',
-            onClick: () => showMilestonePopup({ kind: i18n.t('map.popup.kind.horizon'), title: label, desc: label, refs: [] }),
-          }));
-        });
-        road.appendChild(seg);
-      }
-
-      // Legend.
-      legend.hidden = false;
-      legend.replaceChildren();
-      legend.appendChild(legendItem('l-done', i18n.t('map.legend.done')));
-      legend.appendChild(legendItem('l-cur', i18n.t('map.legend.current')));
-      legend.appendChild(legendItem('l-near', i18n.t('map.legend.near')));
-      legend.appendChild(legendItem('l-hor', i18n.t('map.legend.horizon')));
+        const cards = el('span', 'roadmap-cards'); cards.textContent = i18n.t('roadmap.cards') + ' ' + (m.cards || []).length;
+        head.appendChild(cards);
+        item.appendChild(head);
+        if ((m.criteria || []).length > 0) {
+          const crit = el('ul', 'roadmap-criteria');
+          crit.setAttribute('aria-label', i18n.t('roadmap.criteria'));
+          m.criteria.forEach(c => {
+            const li = el('li', 'roadmap-criterion');
+            li.textContent = (c.id || '') + ' [' + i18n.t('roadmap.verify.' + c.verify) + '] ' + (c.statement || '')
+              + ' · ' + i18n.t('roadmap.cards') + ' ' + (c.cards || []).length;
+            crit.appendChild(li);
+          });
+          item.appendChild(crit);
+        }
+        list.appendChild(item);
+      });
+      road.appendChild(list);
+      const unlinked = el('p', 'roadmap-unlinked');
+      unlinked.textContent = i18n.t('roadmap.unlinked') + ': ' + (d.unlinked || []).length;
+      road.appendChild(unlinked);
     }
 
-    // F-262B-1: 节点默认只画点本身(无文本标签);完整信息走点击弹层(零信息丢失)。
-    function mapNode(opts) {
-      const node = document.createElement('button');
-      node.type = 'button';
-      node.className = 'map-node' + (opts.kind === 'near' ? ' is-near' : opts.kind === 'horizon' ? ' is-horizon' : '');
-      node.appendChild(el('span', 'map-dot'));
-      node.addEventListener('click', opts.onClick || (() => {}));
-      return node;
-    }
-    function legendItem(cls, label) {
-      const span = document.createElement('span');
-      const i = el('i', cls);
-      span.appendChild(i);
-      span.appendChild(document.createTextNode(label));
-      return span;
-    }
     function el(tag, cls) {
       const e = document.createElement(tag);
       if (cls) e.className = cls;
       return e;
-    }
-    function truncate(text, n) {
-      const s = String(text || '');
-      return s.length > n ? s.slice(0, n).trimEnd() + '…' : s;
-    }
-
-    // ===== AIPOS-264: 门户头辅助 (worker 串解析 / per-instance 档案索引 / 拓扑图标) =====
-    // Parses "instance(role,harness,desc...)" — the worker/advisor string shape in
-    // project-map.md. Falls back to the bare instance when no parenthetical tail.
-    function parseWorker(raw) {
-      const s = String(raw || '').trim();
-      const m = s.match(/^([^(]+)\((.*)\)\s*$/);
-      if (!m) return { instance: s, role: '', harness: '', desc: '' };
-      const parts = m[2].split(',').map(p => p.trim()).filter(Boolean);
-      return { instance: m[1].trim(), role: parts[0] || '', harness: parts[1] || '', desc: parts.slice(2).join(', ') };
-    }
-
-    // Per-instance latest-known 档案 from the owner-truth activity feed (the backend
-    // already keeps the latest profile per instance, so the first hit is canonical).
-    function buildAgentProfileIndex(truthData) {
-      const idx = {};
-      const feed = (truthData && truthData.data && Array.isArray(truthData.data.activity_feed)) ? truthData.data.activity_feed : [];
-      feed.forEach(ev => {
-        if (ev && ev.agent_info) {
-          const inst = ev.agent_info.instance || ev.actor;
-          if (inst && !idx[inst]) idx[inst] = ev.agent_info;
-        }
-      });
-      return idx;
-    }
-
-    // Minimal topology glyph (星型=hub-spoke / 串型=linear / else=generic graph).
-    function topologyIcon(topology) {
-      const t = String(topology || '');
-      let inner;
-      if (t.includes('星')) {  // i18n-exempt: topology icon detection (data classification, not UI text)
-        inner = '<circle cx="12" cy="12" r="3" fill="currentColor"/>' +
-          '<circle cx="12" cy="3.5" r="1.9" fill="currentColor"/><circle cx="20.5" cy="12" r="1.9" fill="currentColor"/>' +
-          '<circle cx="12" cy="20.5" r="1.9" fill="currentColor"/><circle cx="3.5" cy="12" r="1.9" fill="currentColor"/>' +
-          '<line x1="12" y1="12" x2="12" y2="5.4" stroke="currentColor" stroke-width="1.1"/>' +
-          '<line x1="12" y1="12" x2="18.6" y2="12" stroke="currentColor" stroke-width="1.1"/>' +
-          '<line x1="12" y1="12" x2="12" y2="18.6" stroke="currentColor" stroke-width="1.1"/>' +
-          '<line x1="12" y1="12" x2="5.4" y2="12" stroke="currentColor" stroke-width="1.1"/>';
-      } else if (t.includes('串') || t.includes('线') || t.includes('链')) {  // i18n-exempt: topology icon detection
-        inner = '<line x1="4" y1="12" x2="20" y2="12" stroke="currentColor" stroke-width="1.3"/>' +
-          '<circle cx="5" cy="12" r="1.9" fill="currentColor"/><circle cx="12" cy="12" r="1.9" fill="currentColor"/><circle cx="19" cy="12" r="1.9" fill="currentColor"/>';
-      } else {
-        inner = '<circle cx="7" cy="7" r="1.9" fill="currentColor"/><circle cx="17" cy="7" r="1.9" fill="currentColor"/><circle cx="12" cy="17" r="1.9" fill="currentColor"/>' +
-          '<line x1="7" y1="7" x2="17" y2="7" stroke="currentColor" stroke-width="1.1"/>' +
-          '<line x1="7" y1="7" x2="12" y2="17" stroke="currentColor" stroke-width="1.1"/>' +
-          '<line x1="17" y1="7" x2="12" y2="17" stroke="currentColor" stroke-width="1.1"/>';
-      }
-      const holder = document.createElement('span');
-      holder.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + inner + '</svg>';
-      return holder.firstElementChild;
-    }
-
-    function pcGroup(label, node) {
-      const g = el('span', 'pc-group');
-      const k = el('span', 'pc-k'); k.textContent = label;
-      g.appendChild(k); g.appendChild(node);
-      return g;
-    }
-
-    // Milestone node detail popup (title + desc + refs; current adds direction_log).
-    function showMilestonePopup(info) {
-      const old = document.getElementById('ms-popup-mask') || document.getElementById('agent-popup-mask');
-      if (old) old.remove();
-      const mask = document.createElement('div');
-      mask.id = 'ms-popup-mask';
-      mask.className = 'agent-popup-mask';
-      mask.addEventListener('click', (e) => { if (e.target === mask) mask.remove(); });
-      const box = document.createElement('div');
-      box.className = 'agent-popup ms-popup';
-      const kind = el('div', 'ms-kind'); kind.textContent = info.kind || '';
-      box.appendChild(kind);
-      const h = document.createElement('h4'); h.textContent = info.title || '';
-      box.appendChild(h);
-      if (info.desc && info.desc !== info.title) {
-        const desc = el('div', 'ms-desc'); desc.textContent = info.desc;
-        box.appendChild(desc);
-      }
-      if (info.refs && info.refs.length > 0) {
-        box.appendChild(msSection(i18n.t('map.popup.section.refs')));
-        const ul = document.createElement('ul'); ul.className = 'ms-refs';
-        info.refs.forEach(r => { const li = document.createElement('li'); li.textContent = r; ul.appendChild(li); });
-        box.appendChild(ul);
-      }
-      // AIPOS-275 F-275-2: show map updated date in current-position popup.
-      if (info.mapUpdated) {
-        const upd = el('div', 'ms-map-updated');
-        upd.textContent = i18n.t('map.popup.updated_prefix') + info.mapUpdated;
-        // Insert after the kind label + title, before desc.
-        const h4 = box.querySelector('h4');
-        if (h4 && h4.nextSibling) {
-          box.insertBefore(upd, h4.nextSibling);
-        } else {
-          box.appendChild(upd);
-        }
-      }
-      if (info.directionLog && info.directionLog.length > 0) {
-        box.appendChild(msSection(i18n.t('map.popup.section.direction_log')));
-        const ul = document.createElement('ul'); ul.className = 'ms-dl';
-        info.directionLog.forEach(item => {
-          const li = document.createElement('li');
-          const d = el('span', 'dl-date'); d.textContent = item.date || '';
-          li.appendChild(d); li.appendChild(document.createTextNode(item.title || ''));
-          ul.appendChild(li);
-        });
-        box.appendChild(ul);
-      }
-      const close = document.createElement('button');
-      close.className = 'ap-close'; close.textContent = i18n.t('popup.close');
-      close.addEventListener('click', () => mask.remove());
-      box.appendChild(close);
-      mask.appendChild(box);
-      document.body.appendChild(mask);
-    }
-    function msSection(label) {
-      const s = el('div', 'ms-section'); s.textContent = label; return s;
     }
 
     // ===== AIPOS-272 FIX-4 + AIPOS-286 FIX-2: 空板三步向导 (total_tasks===0 时显示) =====
@@ -1518,102 +1176,6 @@
           alert(i18n.t('onboarding.copy_failed'));
         });
       };
-    }
-
-    // ===== AIPOS-273: 核验按钮功能 (approve/reject) =====
-    async function handleVerificationApprove(taskId, passBtn, rejectBtn, actions) {
-      if (!taskId) return;
-      passBtn.disabled = true;
-      rejectBtn.disabled = true;
-      passBtn.textContent = i18n.t('vb.action.processing') || '处理中...';
-      
-      try {
-        const response = await fetch(`/api/verify/approve`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ task_id: taskId, owner_confirmed: true }),
-        });
-        const result = await response.json();
-        
-        if (result.ok && result.verdict !== 'BLOCK') {
-          passBtn.textContent = '✓ ' + (i18n.t('vb.action.verified') || '已核验');
-          passBtn.className = 'vb-btn vb-verified';
-          rejectBtn.style.display = 'none';
-          // Show success message
-          const msg = el('div', 'vb-success-msg');
-          msg.textContent = i18n.t('vb.success.approved') || '已通过核验，记录已写入';
-          msg.style.cssText = 'margin-top: 8px; color: #16a34a; font-size: 12px; font-weight: 600;';
-          actions.appendChild(msg);
-        } else {
-          passBtn.textContent = i18n.t('vb.action.pass');
-          passBtn.disabled = false;
-          rejectBtn.disabled = false;
-          alert((result.blocking_reasons && result.blocking_reasons[0]) || result.error || i18n.t('alert.operation_failed'));
-        }
-      } catch (err) {
-        passBtn.textContent = i18n.t('vb.action.pass');
-        passBtn.disabled = false;
-        rejectBtn.disabled = false;
-        alert(i18n.t('alert.network_error') + ': ' + err.message);
-      }
-    }
-    
-    function handleVerificationReject(taskId, passBtn, rejectBtn, actions) {
-      if (!taskId) return;
-      // Show reason input
-      const rejectReason = actions.querySelector('.vb-reject-reason');
-      if (rejectReason) {
-        rejectReason.classList.add('show');
-        const input = rejectReason.querySelector('input');
-        if (input) input.focus();
-        passBtn.disabled = true;
-        rejectBtn.disabled = true;
-      }
-    }
-    
-    async function submitReject(taskId, reason, passBtn, rejectBtn, actions, rejectReason) {
-      if (!taskId) return;
-      if (!reason || !reason.trim()) {
-        alert(i18n.t('vb.reject.reason_required') || '请输入打回理由');
-        return;
-      }
-      
-      const confirmBtn = rejectReason.querySelector('.confirm');
-      const cancelBtn = rejectReason.querySelector('.cancel');
-      confirmBtn.disabled = true;
-      cancelBtn.disabled = true;
-      confirmBtn.textContent = i18n.t('vb.action.processing') || '处理中...';
-      
-      try {
-        const response = await fetch(`/api/verify/reject`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ task_id: taskId, reason: reason.trim(), owner_confirmed: true }),
-        });
-        const result = await response.json();
-        
-        if (result.ok && result.verdict !== 'BLOCK') {
-          rejectReason.classList.remove('show');
-          rejectBtn.textContent = '✗ ' + (i18n.t('vb.action.rejected') || '已打回');
-          rejectBtn.className = 'vb-btn vb-rejected';
-          passBtn.style.display = 'none';
-          // Show success message
-          const msg = el('div', 'vb-success-msg');
-          msg.textContent = i18n.t('vb.success.rejected') || '已打回，记录已写入';
-          msg.style.cssText = 'margin-top: 8px; color: #dc2626; font-size: 12px; font-weight: 600;';
-          actions.appendChild(msg);
-        } else {
-          confirmBtn.textContent = i18n.t('vb.reject.confirm') || '确认打回';
-          confirmBtn.disabled = false;
-          cancelBtn.disabled = false;
-          alert((result.blocking_reasons && result.blocking_reasons[0]) || result.error || i18n.t('alert.operation_failed'));
-        }
-      } catch (err) {
-        confirmBtn.textContent = i18n.t('vb.reject.confirm') || '确认打回';
-        confirmBtn.disabled = false;
-        cancelBtn.disabled = false;
-        alert(i18n.t('alert.network_error') + ': ' + err.message);
-      }
     }
 
     // ===== AIPOS-262B FIX-1: 验证台 (静态区块水合;"等我处理"并入分组) =====
@@ -1759,44 +1321,10 @@
       rings.appendChild(vbRing('fix', i18n.t('vb.ring.fix'), { present: (ev.prior_fixes || []).length > 0, fixes: ev.prior_fixes || [] }, vbFixBody));
       techContent.appendChild(rings);
 
-      const actions = el('div', 'vb-actions');
-      const passBtn = el('button', 'vb-btn vb-pass');
-      passBtn.textContent = i18n.t('vb.action.pass');
-      passBtn.type = 'button';
-      passBtn.disabled = false;
-      passBtn.addEventListener('click', () => handleVerificationApprove(s.task_id, passBtn, rejectBtn, actions));
-      
-      const rejectBtn = el('button', 'vb-btn vb-reject');
-      rejectBtn.textContent = i18n.t('vb.action.reject');
-      rejectBtn.type = 'button';
-      rejectBtn.disabled = false;
-      rejectBtn.addEventListener('click', () => handleVerificationReject(s.task_id, passBtn, rejectBtn, actions));
-      
-      actions.appendChild(passBtn);
-      actions.appendChild(rejectBtn);
-      
-      // Reject reason input (hidden by default)
-      const rejectReason = el('div', 'vb-reject-reason');
-      const reasonInput = document.createElement('input');
-      reasonInput.type = 'text';
-      reasonInput.placeholder = i18n.t('vb.reject.reason_placeholder') || '请输入打回理由...';
-      reasonInput.maxLength = 500;
-      rejectReason.appendChild(reasonInput);
-      const confirmBtn = document.createElement('button');
-      confirmBtn.className = 'confirm';
-      confirmBtn.textContent = i18n.t('vb.reject.confirm') || '确认打回';
-      confirmBtn.addEventListener('click', () => submitReject(s.task_id, reasonInput.value, passBtn, rejectBtn, actions, rejectReason));
-      const cancelBtn = document.createElement('button');
-      cancelBtn.className = 'cancel';
-      cancelBtn.textContent = i18n.t('vb.reject.cancel') || '取消';
-      cancelBtn.addEventListener('click', () => {
-        rejectReason.classList.remove('show');
-        passBtn.disabled = false;
-        rejectBtn.disabled = false;
-      });
-      rejectReason.appendChild(confirmBtn);
-      rejectReason.appendChild(cancelBtn);
-      actions.appendChild(rejectReason);
+      // AIPOS-F171 件③: 看板只读 —— 核验通过 / 打回不再提供按钮(写接口已下线), 改为「告诉顾问」提示
+      const actions = el('div', 'vb-actions vb-readonly');
+      actions.dataset.boardReadonly = 'verify';
+      actions.textContent = i18n.t('vb.readonly_hint') + ' (' + (s.task_id || '') + ')';
       
       // AIPOS-274F3: 按钮移出技术细节折叠,站卡展开即常显
       techDetails.appendChild(techContent);
