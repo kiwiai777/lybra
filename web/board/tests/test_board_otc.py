@@ -372,7 +372,7 @@ class AuthLogTests(unittest.TestCase):
 
 
 class LoginPageContractTests(unittest.TestCase):
-    """前端契约:login.html 含设备码 UI + otc_err 提示;login.css 含设备码样式。"""
+    """前端契约:login.html 含设备码 UI + otc_err 提示;看板唯一样式表 readonly-pages.css 含设备码样式(AIPOS-F183)。"""
 
     def setUp(self) -> None:
         self._tmp, self.repo, self.conn_path, self.owner_tok, self.exec_tok = _make_fixture()
@@ -394,7 +394,7 @@ class LoginPageContractTests(unittest.TestCase):
             self.assertIn(needle, body, f"login.html missing {needle!r}")
 
     def test_login_css_has_device_panel(self) -> None:
-        status, body, _sc, _loc = self.server.request("GET", "/login.css")
+        status, body, _sc, _loc = self.server.request("GET", "/readonly-pages.css")
         self.assertEqual(status, 200)
         self.assertIn("device-panel", body)
         self.assertIn("device-code", body)

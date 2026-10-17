@@ -4,13 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Lybra Overview — Multi-Workspace Dashboard</title>
-  <link rel="stylesheet" href="/overview.css">
-  <link rel="stylesheet" href="/i18n.css">
+  <link rel="stylesheet" href="/readonly-pages.css">
 </head>
-<body>
+<body class="lg-ov">
   <header class="top-bar">
     <div class="top-bar-inner">
-      <img src="/assets/lybra_logo_white.png" alt="Lybra" class="brand-logo">
+      <img src="/assets/lybra-logo-black.png" alt="Lybra" class="brand-logo">
       <div style="flex: 1;">
         <h1 class="brand-title" id="page-title">Lybra Overview</h1>
         <p class="brand-subtitle" id="page-subtitle">Multi-workspace command center</p>
@@ -120,7 +119,7 @@
                 <input type="text" id="import-workspace-path" placeholder="~/projects/my-existing-project" />
                 <div class="input-hint" id="import-workspace-hint"></div>
                 <!-- Smart hint: shown when .yaml detected in directory input -->
-                <div id="import-yaml-hint" class="input-hint" style="color: #d97706; display: none; margin-top: 0.25rem;"></div>
+                <div id="import-yaml-hint" class="input-hint" style="color: var(--muted); display: none; margin-top: 0.25rem;"></div>
               </div>
 
               <!-- Mode 2: Structure file input (hidden by default) -->

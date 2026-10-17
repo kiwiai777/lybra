@@ -130,7 +130,7 @@ class BoardAuthHttpTests(unittest.TestCase):
 
     def test_static_assets_served_without_auth(self) -> None:
         """静态资源 + 登录页本身:放行(否则登录页渲染不了)。"""
-        for path, needle in (("/login", "login-form"), ("/login.css", "login-card"), ("/auth-chrome.js", "auth-chrome")):
+        for path, needle in (("/login", "login-form"), ("/readonly-pages.css", "login-card"), ("/auth-chrome.js", "auth-chrome")):
             status, body, _sc, _loc = self.server.request("GET", path)
             self.assertEqual(status, 200, f"{path} should be public")
             self.assertIn(needle, body, f"{path} content mismatch")
@@ -371,7 +371,7 @@ class AuthGatePredicateTests(unittest.TestCase):
     def test_static_asset_predicate(self) -> None:
         from web.board.app import STATIC_DIR
         # real asset files served from STATIC_DIR root
-        for name in ("login.css", "auth-chrome.js"):
+        for name in ("readonly-pages.css", "auth-chrome.js"):
             self.assertTrue(is_static_asset_path(f"/{name}"), f"/{name} is a static asset")
         # html pages are NOT assets (they are protected app pages)
         self.assertFalse(is_static_asset_path("/overview.html"))
@@ -387,7 +387,7 @@ class AuthGatePredicateTests(unittest.TestCase):
         good = f"board_session={sid}"
         # public + static → True with no cookie
         self.assertTrue(is_authorized("/login", "GET", None, store))
-        self.assertTrue(is_authorized("/login.css", "GET", None, store))
+        self.assertTrue(is_authorized("/readonly-pages.css", "GET", None, store))
         # protected, no cookie → False
         self.assertFalse(is_authorized("/api/health", "GET", None, store))
         self.assertFalse(is_authorized("/", "GET", None, store))
@@ -396,7 +396,7 @@ class AuthGatePredicateTests(unittest.TestCase):
         # protected, tampered cookie → False
         self.assertFalse(is_authorized("/api/health", "GET", "board_session=tampered", store))
         # static-asset predicate only applies to GET
-        self.assertFalse(is_authorized("/login.css", "POST", None, store))
+        self.assertFalse(is_authorized("/readonly-pages.css", "POST", None, store))
 
 
 if __name__ == "__main__":

@@ -420,5 +420,5 @@ def test_item3_frontend_hides_write_controls():
     for title in ("AI Task Authoring", "Draft Publish", "Controlled Execute", "Draft Create", "Custom Agent Profiles"):
         head = index.index(f"<h2>{title}</h2>")
         assert "data-board-write" in index[index.rindex("<section", 0, head):head], title
-    for css in ("overview.css", "styles.css"):
-        assert "[data-board-write] { display: none !important; }" in (static / css).read_text(encoding="utf-8")
+    # AIPOS-F183: one stylesheet for the whole board (the former overview.css / styles.css are merged into it)
+    assert "[data-board-write] { display: none !important; }" in (static / "readonly-pages.css").read_text(encoding="utf-8")

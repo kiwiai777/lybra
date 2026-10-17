@@ -162,19 +162,21 @@ class RealRouteTaskCenterTests(unittest.TestCase):
         self.assertIn("blocked-signal", html)
         self.assertIn("stage.blocked", html)
 
-    def test_published_badge_is_purple_on_both_pages(self) -> None:
-        """FIX-3 F-261-6: 已发布 badge is purple on both pages — the landing-page
-        pill (.rp-published in overview.css) and the workspace-detail task badge
-        (.sb-published in project-detail.html) — consistent with the violet
-        published card background; old blue/indigo values gone."""
-        status, css = _get(f"{self.base}/overview.css")
+    def test_published_badge_same_on_both_pages(self) -> None:
+        """FIX-3 F-261-6 kept one look for 已发布 on both pages (landing pill .rp-published, workspace-detail badge
+        .sb-published). AIPOS-F183: both now come from the board's single stylesheet in the official design system
+        (monochromatic green; the former violet / blue / indigo values are gone); the detail page has no inline style."""
+        status, css = _get(f"{self.base}/readonly-pages.css")
         self.assertEqual(status, 200)
-        self.assertIn(".rp-published { background: #7c3aed; }", css)
-        self.assertNotIn(".rp-published { background: #4f46e5; }", css)
+        published = "background: var(--white);\n  color: var(--green);\n  border: 1px solid var(--green);"
+        self.assertIn(".lg-ov .rp-published {\n  " + published, css)
+        self.assertIn(".lg-pd .sb-published {\n  " + published, css)
+        for old in ("#7c3aed", "#4f46e5", "#0284c7"):
+            self.assertNotIn(old, css)
         status, detail = _get(f"{self.base}/workspace/0")
         self.assertEqual(status, 200)
-        self.assertIn(".sb-published { background: #7c3aed; }", detail)
-        self.assertNotIn(".sb-published { background: #0284c7; }", detail)
+        self.assertNotIn("<style", detail)
+        self.assertIn('<link rel="stylesheet" href="/readonly-pages.css">', detail)
 
     def test_aipos261_owner_truth_route_carries_closure_units_and_human_phrasing(self) -> None:
         """AIPOS-261 S5: the live /api/owner-truth route serves closure_units and
