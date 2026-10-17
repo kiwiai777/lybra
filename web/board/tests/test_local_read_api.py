@@ -1340,7 +1340,7 @@ class LocalReadApiTests(unittest.TestCase):
         self.assertIn("textContent", js)
 
     def test_static_css_contains_mobile_owner_review_polish(self) -> None:
-        css = (WEB_ROOT / "static" / "styles.css").read_text(encoding="utf-8")
+        css = (WEB_ROOT / "static" / "readonly-pages.css").read_text(encoding="utf-8")  # AIPOS-F183: the single stylesheet
         self.assertIn(".mobile-review-nav", css)
         self.assertIn("@media (max-width: 640px)", css)
         self.assertIn("position: sticky", css)

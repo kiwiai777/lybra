@@ -14,6 +14,8 @@ from urllib.parse import urlencode
 
 _ESC = html.escape
 _CURRENT = ' aria-current="page"'
+# AIPOS-F183: the brand mark of the top-bar lockup (official design-system asset, copied into static/assets)
+_LOGO = "/assets/lybra-logo-black.png"
 
 
 class _Ctx:
@@ -115,7 +117,8 @@ def _page(ctx: _Ctx, page: str, title: str, body: list[str], *, note_key: str | 
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
         f"<title>{_ESC(title)}</title><link rel=\"stylesheet\" href=\"{_ESC(str(decl['stylesheet']))}\"></head>",
         f"<body class=\"rp-page rp-{_ESC(page)}\" data-readonly-page=\"{_ESC(page)}\" data-lang=\"{_ESC(ctx.lang)}\"{body_attrs}>",
-        f"<header class=\"rp-nav\"><span class=\"rp-brand\">Lybra</span><nav>{links}</nav>{switch}</header>",
+        f"<header class=\"rp-nav\"><span class=\"rp-brand\"><img class=\"rp-logo\" src=\"{_LOGO}\" alt=\"\">Lybra</span>"
+        f"<nav>{links}</nav>{switch}</header>",
         f"<main><h1{h1_attrs}>{_ESC(title)}</h1>",
         *([f"<p class=\"rp-readonly-note\">{_ESC(ctx.t(note_key))}</p>"] if note_key else []),
         *body, "</main>", script, *(f"<script src=\"{_ESC(src)}\"></script>" for src in scripts), "</body></html>"])

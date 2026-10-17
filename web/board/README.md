@@ -198,6 +198,21 @@ or the language already picked on the Board). All three pages are GET only; any 
   default on the board pages (`status.board_hidden`) and in the inbox (`status.inbox_hidden`, together with `paused`).
 - The roadmap's unlinked-card ratio and list only count cards created after their lane's first milestone declaration (from the
   decision_log pointers written by `lybra roadmap add-milestone`); older cards are one "from before the roadmap" line.
+
+### Official design system, one stylesheet (AIPOS-F183)
+
+- The whole board follows the official KiwiAI / Lybra design system (kiwiai-design): monochromatic green, square corners, flat
+  fills and hairlines, 5px green left-border cards, kicker squares, the Lybra logo lockup in a white top bar; no gradients, no
+  shadows, no motion, no icons. Page structure, data, routes and copy are unchanged.
+- `static/readonly-pages.css` is the only stylesheet of every page: the skeleton pages, the login page, the former home
+  `/overview.html`, the legacy project page `/workspace/<n>` (its former inline style block moved in) and the legacy task center
+  `/index.html`. The former `styles.css`, `overview.css`, `login.css`, `i18n.css` and `assets/tokens/*.css` are merged into it;
+  legacy rules are scoped by a body class (`.login-body`, `.lg-ov`, `.lg-pd`, `.lg-tc`), skeleton rules by `.rp-page`.
+- Design tokens are copied verbatim from the design system into the one `:root` block (the board never reads the skill
+  directory at run time); every colour below `:root` is a `var()` of them. Board states stay inside the green system:
+  `--state-ok` (bright green), `--state-warn` (muted sage), `--state-alert` (darkest green, with the wide 11px bar and solid
+  chips). Webfonts are not shipped (32 MB); `--font-sans` is the design system's system stack with CJK fallbacks.
+- The logo is the design-system asset `static/assets/lybra-logo-black.png`.
 - Inbox items read "<project> · card <id> <title>" + "What you are asked"; the CLI lines (item id, options, decide command with the
   home root) are folded under "Show details"; an item that has an authorization request card above only points to it.
 - The overview / onboarding "upgradable (N)" badge is cached per fingerprint (`project_upgrade.pending_badge`: project.json + the
