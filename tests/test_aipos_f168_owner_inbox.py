@@ -403,7 +403,9 @@ def test_item3_board_owner_inbox_page_and_api_same_data(rig, monkeypatch: pytest
         assert f'data-owner-inbox-count="{cli["count"]}"' in page and "Owner 待决收件箱 — 5 项待定" in page
         for item in cli["items"]:
             assert f'data-item-id="{item["item_id"]}"' in page
-        assert "GATE_DESIGN_FORK" in page and "lybra owner decide --item" in page and "<script" not in page
+        # AIPOS-F180: 页面套 F174 骨架(含语言切换内联脚本); 无授权请求 = 不载签发脚本、无表单(仍是只读展示)
+        assert "GATE_DESIGN_FORK" in page and "lybra owner decide --item" in page
+        assert 'src="/envelopes.js"' not in page and "<form" not in page and "data-gr-action" not in page
         status, _ctype, api = get("/api/owner/inbox")
         data = json.loads(api)
         assert data["ok"] and [i["item_id"] for i in data["data"]["items"]] == [i["item_id"] for i in cli["items"]], "API 与 CLI 同一数据"

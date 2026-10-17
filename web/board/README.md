@@ -114,6 +114,41 @@ authorization. Declared in `schema/verbs.schema.json` `board_owner_envelopes`; i
   server-side only by `load_role_token`; responses and logs carry fingerprints, never the credential.
 - Owner inbox envelope items now point their decision line to this page (the CLI command stays on the same line).
 
+## Authorization requests: sign as suggested (AIPOS-F180, same write exception)
+
+What the Owner sees (gap #175 / #170): when a card's loop stopped for lack of an envelope (`no_envelope`) or because its envelope
+ran out (`envelope_renew`), the top of **both** `/owner/inbox` and `/owner/envelopes` shows an "Authorization requests" block.
+Each request is one plain sentence, for example:
+
+> advisor.<project>.<host> asks: open an authorization to write docs only for LANE-HW1 (vendor material), only contracts-x,
+> 6 times, until 2026-10-30. Reason: …
+
+and three buttons (Owner login only; other roles see the sentence and a "tell the advisor" hint):
+
+1. **Sign as suggested** → a confirmation that lists only: for whom / allowed to do what / which repos / how many times / until
+   when / which project / which card → **Confirm and sign** → a result card "Signed pol_…; <advisor> will continue <card>
+   automatically on its next loop run" with **Back to inbox / Back to envelopes / Back to overview**. The raw preview, the dry
+   run and the written record paths are folded under **Show technical details**. A refusal shows a plain reason plus the next
+   step (one per declared error code), never a JSON dump. The top navigation stays visible through every step.
+2. **Edit, then sign** → only three fields: how many times, until (date; stored as that day 23:59:59Z), which repos. Then the
+   same confirmation.
+3. **Decline (tell the advisor)** → nothing is written from the page: it shows the sentence to tell the advisor and the
+   `lybra owner decide --item <OI-…> --choice deny_grant …` command the advisor records it with.
+
+Where the suggestion comes from (one derivation, `tools/aipos_cli/owner_inbox.suggest_grant`, declared in `verbs.schema`
+`lybra_owner_inbox.grant_request`; the CLI `lybra owner inbox` prints the same request as one line): driver = the loop run's
+driver; task mode = the card's `task_mode`; repos = the card's `lane.repo` (or the `project.json` repo name the card resolves
+to); quota = the driver's previous envelope, else `project.json` `grant_request.max_tasks` (default 20); expiry = now +
+`grant_request.days` (default 7); reason = card title; policy_id = F166 `next_policy_id`. The advisor overrides any field with
+`lybra loop note --task-id <card> --grant-mode … --grant-repos … --grant-max-tasks … --grant-expires … --grant-reason … --confirm`.
+
+Signing reuses `POST /api/owner/envelopes/mint` (`mode=new`, parameters = the suggestion, `request_item` = the inbox item id,
+appended to the decision summary) and the whole F172 security frame unchanged; no new write route. Once the envelope covers the
+card for that driver (the loop's own check `loop_driver.find_envelope`), the request leaves the inbox by itself. Pages are
+rendered on the F174 skeleton (`web/board/readonly_pages.render_owner_inbox` / `render_envelopes`); page text is in the board
+i18n channel (`gr_*` keys in `web/board/app.py` `_I18N_TEMPLATES`, zh / en); the single client is `static/envelopes.js` (it also
+drives the renew / new forms with the same plain confirmation).
+
 ## Read-only pages: overview / roadmap & acceptance / onboarding (AIPOS-F174)
 
 Owner ruling 2026-10-16: the Board shows onboarding guidance, progress and verification; it does not act. Wherever the Owner
