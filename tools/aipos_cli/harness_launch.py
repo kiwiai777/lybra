@@ -372,9 +372,11 @@ def model_launch_args(template: dict[str, Any] | None, harness: str, model: str)
 _SESSION_KEYS = ("argv", "id_prefix", "id_pattern")
 
 
-def session_launch_args(template: dict[str, Any] | None, harness: str, card: str) -> tuple[str, list[str]] | None:
+def session_launch_args(template: dict[str, Any] | None, harness: str, card: str,
+                        session_id: str | None = None) -> tuple[str, list[str]] | None:
     """AIPOS-F171B 件②: enums.schema harness.<harness>.launch.session → (新会话 id, 追加到拉起 argv 的参数)。
-    模板无 session 段 = None(不固定会话、不续接, 行为不变); 段形不合 / 生成的 id 不合 id_pattern = ValueError(fail-closed, 不拉起)。"""
+    模板无 session 段 = None(不固定会话、不续接, 行为不变); 段形不合 / 生成的 id 不合 id_pattern = ValueError(fail-closed, 不拉起)。
+    AIPOS-F180B: session_id given = resume that recorded session (same id_pattern check) instead of minting a new id."""
     import secrets
 
     decl = template.get("session") if isinstance(template, dict) else None
@@ -387,7 +389,7 @@ def session_launch_args(template: dict[str, Any] | None, harness: str, card: str
             or any("{" in a and a != "{session_id}" for a in argv)):
         raise ValueError(f"harness {harness} launch.session.argv 须为串数组且含且仅含一个整参数 {{session_id}}: {argv!r}")
     slug = re.sub(r"[^a-z0-9]+", "-", str(card).lower()).strip("-") or "card"
-    session_id = f"{decl['id_prefix']}-{slug}-{secrets.token_hex(6)}"
+    session_id = session_id or f"{decl['id_prefix']}-{slug}-{secrets.token_hex(6)}"
     if not re.fullmatch(str(decl["id_pattern"]), session_id):
         raise ValueError(f"harness {harness} 生成的会话 id {session_id!r} 不合 launch.session.id_pattern {decl['id_pattern']!r}")
     return session_id, [session_id if a == "{session_id}" else a for a in argv]

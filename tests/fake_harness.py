@@ -10,6 +10,11 @@
     early   往 stderr 写几行后 exit 7(验早退 exit 3 附 stderr 末尾)
     stop    AIPOS-F171B: 只发一条纯文字(「let me poll」)即 exit 0、不写产物(半途停笔; 验同会话续接用尽 → 早退)
     stop_once  AIPOS-F171B: 首次(FAKE_PI_RESUMES=0)同 stop, 同会话续接时(FAKE_PI_RESUMES≥1, 假 pi 设)同 work
+    sha_typo_once  AIPOS-F180B (audit card only): first run writes the report with commit_sha missing 3 middle chars (the
+                   F180R shape); on a same-session resume it rewrites only the header commit_sha to the tip
+    sha_typo   AIPOS-F180B: first run as sha_typo_once; on resume rewrites the header with another wrong value (tip[:38])
+    sha_stay   AIPOS-F180B: first run as sha_typo_once; on resume leaves the report untouched and exits 0
+    sha_other  AIPOS-F180B: report commit_sha = FAKE_AUDIT_OTHER_SHA (another real commit = audited the wrong product)
   FAKE_HARNESS_LOG: 目录; 收到的 argv[1](kickoff)按字节原样落 <卡号>.kickoff, cwd 落 <卡号>.cwd(供逐字节比对)
 事件里故意含一行凭据字样、一个未知事件类型、一行非 JSON(验汇总隐去/计数不刷屏)。
 """
@@ -67,7 +72,7 @@ def reviewed_of(task_id: str) -> str | None:
     return match.group(1) if match and match.group(2) != "1" else None
 
 
-def do_work(task_id: str, kickoff: str) -> None:
+def do_work(task_id: str, kickoff: str, sha: str | None = None) -> None:
     report = Path(field(kickoff, "报告落点"))
     if reviewed_of(task_id):
         tip = re.search(r"^- commit_sha: ([0-9a-f]{40})\(", kickoff, re.M)
@@ -76,7 +81,7 @@ def do_work(task_id: str, kickoff: str) -> None:
         emit({"type": "tool_execution_start", "toolCallId": "t2", "toolName": "read", "args": {"path": field(kickoff, "任务卡路径")}})
         report.parent.mkdir(parents=True, exist_ok=True)
         report.write_text(frontmatter({"task_id": task_id, "reviewed_task_id": reviewed_of(task_id), "verdict": "PASS",
-                                       "commit_sha": tip.group(1)},
+                                       "commit_sha": sha or tip.group(1)},
                                       "# 审计报告\n\n## 一句话结论\n逐条复核通过(假 harness)。\n\n## 证据\n- 夹具绿\n"), encoding="utf-8")
         pi_session(report, "fake-audit-model")
     else:
@@ -93,6 +98,22 @@ def do_work(task_id: str, kickoff: str) -> None:
                                       f"# RETURN — {task_id}\n\n## 一句话结论\n完成(假 harness)。\n\n## 改动清单\n- {rel}\n"), encoding="utf-8")
         pi_session(report, "fake-exec-model")
     emit({"type": "tool_execution_end", "toolCallId": "t2", "toolName": "write", "isError": False, "result": {"content": []}})
+
+
+def sha_mode(task_id: str, kickoff: str, mode: str) -> None:
+    """AIPOS-F180B: report-header commit_sha fixture modes (audit card only); resume = FAKE_PI_RESUMES >= 1 (set by fake pi)."""
+    tip = re.search(r"^- commit_sha: ([0-9a-f]{40})\(", kickoff, re.M).group(1)
+    report = Path(field(kickoff, "报告落点"))
+    if os.environ.get("FAKE_PI_RESUMES", "0") == "0":
+        bad = os.environ["FAKE_AUDIT_OTHER_SHA"] if mode == "sha_other" else tip[:20] + tip[23:]
+        do_work(task_id, kickoff, sha=bad)
+        return
+    if mode == "sha_stay":
+        return
+    fixed = tip if mode == "sha_typo_once" else tip[:38]
+    text = report.read_text(encoding="utf-8")
+    report.write_text(re.sub(r"^commit_sha: .*$", f"commit_sha: {fixed}", text, count=1, flags=re.M), encoding="utf-8")
+    pi_session(report, "fake-audit-model")
 
 
 def main() -> int:
@@ -140,6 +161,10 @@ def main() -> int:
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         subprocess.Popen([sys.executable, os.path.abspath(__file__), "--grandchild"])
         time.sleep(600)
+        return 0
+    if mode.startswith("sha_") and reviewed_of(task_id):
+        sha_mode(task_id, kickoff, mode)
+        emit({"type": "agent_end", "messages": []})
         return 0
     do_work(task_id, kickoff)
     emit({"type": "agent_end", "messages": []})
