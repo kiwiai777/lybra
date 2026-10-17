@@ -143,3 +143,50 @@ button.gr-primary { background: var(--rp-accent); border-color: var(--rp-accent)
 .envelope-project { margin: 14px 0; }
 .owner-inbox-item { background: var(--rp-panel); border: 1px solid var(--rp-border); border-radius: 8px; padding: 6px 12px; margin: 8px 0; }
 .owner-inbox-item h2 { font-size: 14px; }
+/* AIPOS-F181: the single board skeleton (tokens above are the only design tokens); project page / subproject grouping /
+   folded commands and technical details / page switches / inbox in plain words / upgrade page on the skeleton. */
+.rp-brand { color: #fff; font-weight: 800; letter-spacing: .5px; margin-right: 6px; }
+.rp-card h2 a { color: inherit; text-decoration: none; }
+.rp-badge-test { background: var(--rp-warn); }
+.rp-toggle { margin: 4px 0 10px; font-size: 12.5px; }
+.rp-toggle a { border: 1px solid var(--rp-border); border-radius: 12px; padding: 2px 10px; background: var(--rp-panel); text-decoration: none; }
+details.rp-cmd, details.rp-tech, details.ib-details { margin: 4px 0; font-size: 12.5px; }
+details.rp-cmd > summary, details.rp-tech > summary, details.ib-details > summary, .rp-closed > summary, .rp-ms-folded > summary {
+  cursor: pointer; color: var(--rp-muted); }
+details.rp-cmd[open], details.rp-tech[open], details.ib-details[open] { background: var(--rp-bg); border-radius: 6px; padding: 4px 8px; }
+.ib-details pre, .rp-tech pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; margin: 4px 0; }
+.rp-frozen { color: var(--rp-muted); font-size: 12.5px; }
+.rp-subs { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 12.5px; }
+.rp-subs th, .rp-subs td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--rp-border); }
+.rp-subs th { color: var(--rp-muted); font-weight: 600; }
+.rp-sub-one { margin: 8px 0 0; font-size: 12.5px; color: var(--rp-muted); }
+.rp-summary { list-style: none; padding: 0; margin: 6px 0 10px; display: grid; gap: 4px; }
+.rp-subnav { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; margin: 6px 0 10px; }
+.rp-subnav a { border: 1px solid var(--rp-border); border-radius: 12px; padding: 1px 10px; background: var(--rp-panel); text-decoration: none; }
+.rp-subnav a[aria-current="page"] { border-color: var(--rp-accent); font-weight: 700; }
+.rp-subproject { background: var(--rp-panel); border: 1px solid var(--rp-border); border-radius: 8px; padding: 8px 14px; margin-bottom: 12px; }
+.rp-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.rp-row { overflow-wrap: anywhere; }
+.rp-card-id { font-family: ui-monospace, monospace; font-size: 12.5px; }
+.rp-row-title { color: var(--rp-text); }
+.rp-chip { display: inline-block; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 0 8px; background: #e5e7eb; color: var(--rp-text); }
+.rp-chip-claimed { background: #cffafe; }
+.rp-chip-blocked { background: #fee2e2; color: var(--rp-alert); }
+.rp-chip-pending { background: #fef3c7; }
+.rp-chip-completed { background: #dcfce7; }
+.rp-closed { margin-top: 8px; }
+.rp-ms-folded { margin-top: 10px; }
+.ib-item h2 { margin: 6px 0 2px; }
+.ib-item p { margin: 3px 0; }
+.ib-kind { font-size: 12.5px; color: var(--rp-muted); }
+.ib-rank-1 { border-left: 4px solid var(--rp-alert); }
+.ib-rank-2 { border-left: 4px solid var(--rp-warn); }
+.ib-ask { font-weight: 600; }
+.owner-inbox-paused { margin: 6px 0 0; }
+/* upgrade page (moved from its former inline style) */
+.upgrade-lines, .upgrade-preview pre { white-space: pre-wrap; background: var(--rp-bg); padding: .6em; border-radius: 6px; overflow-wrap: anywhere; }
+.upgrade-project { background: var(--rp-panel); border: 1px solid var(--rp-border); border-radius: 8px; padding: 8px 14px; margin-bottom: 12px; }
+.upgrade-item { margin: .4em 0; }
+@media (max-width: 760px) {
+  .rp-subs th:nth-child(5), .rp-subs td:nth-child(5) { display: none; }
+}

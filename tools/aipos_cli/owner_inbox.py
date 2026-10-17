@@ -745,13 +745,17 @@ def _collect_inbox(home_root: str | Path | None, *, project: str | None, include
     errors: list[dict[str, str]] = []
     hidden = 0
     paused: list[str] = []
+    # AIPOS-F181 item 3: statuses hidden by default = declaration status.inbox_hidden (paused + test); same flag shows them all
+    from tools.aipos_cli.workspace_config import project_status_visibility
+
+    hidden_statuses = project_status_visibility()["inbox_hidden"]
     for name in names:
         if not include_paused and not project:
             entry = by_name[name]
             status = entry["status"]
             if entry["status_error"]:  # 值不合 / project.json 读不出: 照列并点名
                 errors.append({"project": name, "source": "project.json status", "error": entry["status_error"]})
-            if status == "paused":
+            if status in hidden_statuses:
                 paused.append(name)
                 continue
         part = collect_project_inbox(home / name, project=name, home_root=home, decl=decl, categories=categories)
@@ -767,7 +771,8 @@ def _collect_inbox(home_root: str | Path | None, *, project: str | None, include
 # 渲染(CLI 文本 / 看板 HTML 同一数据)
 # ---------------------------------------------------------------------------
 
-def _item_lines(item: dict[str, Any], texts: dict[str, Any]) -> list[str]:
+def item_lines(item: dict[str, Any], texts: dict[str, Any]) -> list[str]:
+    """One inbox item as the CLI lines (AIPOS-F181: the board folds the same lines into an item's "show details")."""
     lines = [_fmt(texts["item"], "texts.item", **item), _fmt(texts["ask"], "texts.ask", ask=item["ask"])]
     if item.get("grant"):  # AIPOS-F180: authorization request, one plain-language line (same data as the board request card)
         lines.append(grant_line(item))
@@ -801,45 +806,12 @@ def render_inbox_text(inbox: dict[str, Any]) -> str:
         out.append(paused)
     for item in inbox["items"]:
         out.append("")
-        out.extend(_item_lines(item, texts))
+        out.extend(item_lines(item, texts))
     if inbox["errors"]:
         out.append("")
         out.append(_fmt(texts["errors_header"], "texts.errors_header", count=len(inbox["errors"])))
         out.extend(_fmt(texts["error"], "texts.error", **err) for err in inbox["errors"])
     return "\n".join(out)
-
-
-def inbox_title(inbox: dict[str, Any]) -> str:
-    """看板「Owner 待决」页标题(与 CLI 首行同一声明文案)。"""
-    texts = inbox_declaration()["texts"]
-    head = "header" if inbox["items"] else "empty"
-    return _fmt(texts[head], f"texts.{head}", count=inbox["count"], projects=len(inbox["projects"]), home_root=inbox["home_root"])
-
-
-def inbox_sections_html(inbox: dict[str, Any]) -> list[str]:
-    """看板「Owner 待决」页正文段(服务端渲染, 与 CLI 同一数据与同一声明文案; 全部值经 html.escape)。页面骨架(顶部导航 / 样式)由看板
-    F174 骨架 web/board/readonly_pages 套上(AIPOS-F180)。每个事项段 id = item-<事项 ID>(授权请求卡 id = 事项 ID, CLI 链接锚点指向请求卡)。"""
-    texts = inbox_declaration()["texts"]
-    esc = html.escape
-    parts: list[str] = []
-    paused = _paused_line(inbox, texts)
-    if paused:
-        parts.append(f"<p class=\"owner-inbox-paused\">{esc(paused)}</p>")
-    for item in inbox["items"]:
-        lines = _item_lines(item, texts)
-        parts.append(f"<section class=\"owner-inbox-item\" id=\"item-{esc(item['item_id'])}\" data-item-id=\"{esc(item['item_id'])}\""
-                     f" data-category=\"{esc(item['category'])}\" data-rank=\"{item['rank']}\" data-project=\"{esc(item['project'])}\">")
-        parts.append(f"<h2>{esc(lines[0])}</h2><ul>")
-        parts.extend(f"<li>{esc(line.strip())}</li>" for line in lines[1:])
-        # AIPOS-F172: 信封项可点到看板信封页; AIPOS-F180: 授权请求可点到本页请求卡
-        if item.get("board_url"):
-            parts.append(f"<li class=\"owner-inbox-board\"><a href=\"{esc(item['board_url'])}\">{esc(item['board_url'])}</a></li>")
-        parts.append("</ul></section>")
-    if inbox["errors"]:
-        parts.append(f"<section class=\"owner-inbox-errors\"><h2>{esc(_fmt(texts['errors_header'], 'texts.errors_header', count=len(inbox['errors'])))}</h2><ul>")
-        parts.extend(f"<li>{esc(_fmt(texts['error'], 'texts.error', **err).strip())}</li>" for err in inbox["errors"])
-        parts.append("</ul></section>")
-    return parts
 
 
 def render_inbox_error_html(message: str) -> str:

@@ -2884,7 +2884,7 @@ def build_parser() -> argparse.ArgumentParser:
     owner_inbox_parser.add_argument("--home-root", help="home 根; 缺省 = resolve_home_root 同一优先级梯")
     owner_inbox_parser.add_argument("--project", help="只看该项目(home 根下注册名)")
     owner_inbox_parser.add_argument("--include-paused", action="store_true", default=False,
-                                    help="AIPOS-F170: 也列 project.json status=paused 的项目(缺省不列)")
+                                    help="AIPOS-F170: 也列 project.json status=paused 的项目(缺省不列); AIPOS-F181: status=test 的项目同此(声明 status.inbox_hidden)")
     owner_inbox_parser.add_argument("--stale-before", default=None, metavar="DATE",
                                     help="AIPOS-F170: 遗留视图——只列发生早于该日期(YYYY-MM-DD / ISO)的事项, 按项目分组每项一行并给批量裁决命令")
     owner_inbox_parser.add_argument("--json", action="store_true", help="JSON 输出(与看板 /api/owner/inbox 同一数据)")

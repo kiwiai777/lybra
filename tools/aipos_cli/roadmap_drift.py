@@ -433,7 +433,7 @@ def _signal(decl: dict[str, Any], kind: str, *, governance_root: Path, anchor: s
 def roadmap_status(governance_root: str | Path, *, lane: str | None = None, project: str | None = None,
                    now: datetime | None = None) -> dict[str, Any]:
     """路线图进度与偏差(唯一实现; 只读)。返回 {project, path, rel, exists, lane, today, thresholds, milestones, signals, next_steps,
-    unlinked, invalid, unreadable_cards, errors, totals}。无路线图 = exists False(调用方给提示, 不报错)。路线图读不出 = RoadmapError;
+    unlinked(AIPOS-F181: 只含该 lane 建路线图之后出的游离卡), unlinked_before_roadmap(之前的历史游离卡数), invalid, unreadable_cards, errors, totals}。无路线图 = exists False(调用方给提示, 不报错)。路线图读不出 = RoadmapError;
     阈值不合 = RoadmapDriftThresholdError; 声明缺 = SchemaLoadError(都向上, 调用方点名)。某卡门记录读不出 = 进 errors, 相关标准按未满足、
     相关里程碑不判停滞(不猜)。"""
     from tools.aipos_cli.clock import utc_now
@@ -453,7 +453,7 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
     roadmap = load_roadmap(root)
     out: dict[str, Any] = {"project": project, "path": str(roadmap["path"]), "rel": roadmap["rel"], "exists": roadmap["exists"],
                            "lane": lane, "today": today.isoformat(), "thresholds": None, "milestones": [], "signals": [],
-                           "next_steps": [], "unlinked": [], "invalid": [], "unreadable_cards": [], "errors": [],
+                           "next_steps": [], "unlinked": [], "unlinked_before_roadmap": 0, "invalid": [], "unreadable_cards": [], "errors": [],
                            "totals": {"met": 0, "total": 0}}
     if not roadmap["exists"]:
         return out
@@ -466,7 +466,6 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
     with task_card_lookup_scope(root):
         links = card_links(root, roadmap)
         live = [c for c in links["cards"] if c.get("queue_state") not in excluded]
-        out["unlinked"] = [c["task_id"] for c in live if c["state"] == LINK_UNLINKED]
         out["invalid"] = [{"task_id": c["task_id"], "problems": c["problems"]} for c in live if c["state"] == LINK_INVALID]
         out["unreadable_cards"] = links["unreadable"]
         linked = [c for c in live if c["state"] == LINK_LINKED]
@@ -568,13 +567,19 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
                                                   cards=", ".join(crit_row["cards"]), rounds=crit_row["rework_rounds"],
                                                   threshold=thresholds["rework_rounds"], met=n_met, total=n_total, **base))
 
-        # 游离卡占比(全项目; 审计卡不计: 审计卡由产品派生, 挂接看被审卡)
+        # 游离卡占比(全项目; 审计卡不计: 审计卡由产品派生, 挂接看被审卡; AIPOS-F181: 游离卡清单同样不列审计卡)
         from tools.aipos_cli.audit_derivation import is_audit_card
 
         window = int(thresholds["unlinked_window_days"])
         since = moment - timedelta(days=window)
-        recent = [c for c in live if c["state"] in (LINK_LINKED, LINK_UNLINKED, LINK_INVALID)
-                  and not is_audit_card(str(c.get("task_id") or ""), c.get("metadata") or {})
+        # AIPOS-F181 item 3: only cards created once their lane had a roadmap count (start = that lane's first milestone declaration,
+        # lanes without a milestone = the project's first one; read from the decision_log pointers); no pointer at all = no lower bound
+        started = _roadmap_start(root, roadmap, pointers["entries"])
+        own = [c for c in live if not is_audit_card(str(c.get("task_id") or ""), c.get("metadata") or {})]
+        after = [c for c in own if started(c)]
+        out["unlinked"] = [c["task_id"] for c in after if c["state"] == LINK_UNLINKED]
+        out["unlinked_before_roadmap"] = sum(1 for c in own if c["state"] == LINK_UNLINKED and not started(c))
+        recent = [c for c in after if c["state"] in (LINK_LINKED, LINK_UNLINKED, LINK_INVALID)
                   and (_card_created(c.get("metadata") or {}) or since) > since]
         free = [c for c in recent if c["state"] == LINK_UNLINKED]
         if recent:
@@ -597,6 +602,38 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
                 last_path=last_change["path"]))
         out["next_steps"] = _next_steps(decl, out, root, active_seen)
     return out
+
+
+def _roadmap_start(root: Path, roadmap: dict[str, Any], entries: list[dict[str, Any]]) -> Any:
+    """AIPOS-F181: predicate "card created after its lane had a roadmap". Lane of a card = machine_zone.lane_of_card (single lane
+    derivation; milestone lane = the same key, e.g. a repo name); per lane start = earliest add-milestone pointer of its milestones
+    (roadmap.milestone_declared_at), other lanes = the earliest of all milestones (else the earliest pointer to the roadmap file).
+    No pointer at all = every card counts (behaviour unchanged). A card without a creation instant = before (history)."""
+    from tools.aipos_cli.machine_zone import lane_of_card
+    from tools.aipos_cli.roadmap import milestone_declared_at
+
+    declared = milestone_declared_at(roadmap, entries)
+    by_lane: dict[str, datetime] = {}
+    for ms in (roadmap.get("data") or {}).get("milestones") or []:
+        moment = _as_utc(declared["milestones"].get(str(ms.get("id"))))
+        moment = moment.replace(microsecond=0) if moment is not None else None  # card instants are whole seconds
+        lane = str(ms.get("lane") or "")
+        if moment is not None and (lane not in by_lane or moment < by_lane[lane]):
+            by_lane[lane] = moment
+    first = _as_utc(declared["first_pointer"])
+    project_start = min(by_lane.values()) if by_lane else (first.replace(microsecond=0) if first is not None else None)
+    if project_start is None:
+        return lambda card: True
+
+    def started(card: dict[str, Any]) -> bool:
+        meta = card.get("metadata") or {}
+        created = _card_created(meta)
+        if created is None:
+            return False
+        lane = str(lane_of_card(meta, root)["lane"]) if by_lane else ""
+        return created >= by_lane.get(lane, project_start)
+
+    return started
 
 
 def _inbox_subject(kind: str, milestone: str, criterion: str | None) -> str:

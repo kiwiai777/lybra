@@ -1036,7 +1036,7 @@ def get_owner_decision_records(repo_root: str | Path | None = None) -> dict[str,
         return _normalize_exception(operation, exc, dry_run=False)
 
 
-def get_owner_inbox(home_root: str | Path | None = None, *, project: str | None = None) -> dict[str, Any]:
+def get_owner_inbox(home_root: str | Path | None = None, *, project: str | None = None, include_paused: bool = False) -> dict[str, Any]:
     """AIPOS-F168 件①: 看板「Owner 待决」页与 /api/owner/inbox 的数据 —— 与 CLI `lybra owner inbox` 同一函数 owner_inbox.collect_inbox
     (跨 home 根全部已注册项目; home 根缺省 = resolve_home_root 同一优先级梯)。读不出处进 warnings(点名, 不吞)。只读。"""
     from tools.aipos_cli.owner_inbox import collect_inbox
@@ -1044,7 +1044,7 @@ def get_owner_inbox(home_root: str | Path | None = None, *, project: str | None 
 
     operation = "get_owner_inbox"
     try:
-        inbox = collect_inbox(home_root, project=project)
+        inbox = collect_inbox(home_root, project=project, include_paused=include_paused)  # AIPOS-F181: board page switch
     except (OSError, ValueError, SchemaLoadError) as exc:
         return _normalize_exception(operation, exc, dry_run=False)
     warnings = [f"{err['project']}: {err['source']}: {err['error']}" for err in inbox["errors"]]

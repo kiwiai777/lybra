@@ -62,10 +62,21 @@ def _rich(text: Any) -> str:
 
 
 def _command_block(ctx: _Ctx, commands: list[str]) -> str:
+    """Advisor commands, folded (AIPOS-F181: command lines and server paths stay out of the page body)."""
     if not commands:
         return ""
     items = "".join(f"<li>{_rich(c) if '`' in c else '<code>' + _ESC(c) + '</code>'}</li>" for c in commands)
-    return f"<div class=\"rp-cmd\"><span class=\"rp-cmd-label\">{_ESC(ctx.t('rp_command'))}</span><ul>{items}</ul></div>"
+    return f"<details class=\"rp-cmd\"><summary class=\"rp-cmd-label\">{_ESC(ctx.t('rp_command'))}</summary><ul>{items}</ul></details>"
+
+
+def _step_html(ctx: _Ctx, text: Any) -> str:
+    """A derived step sentence: the words before its first command stay visible, the full sentence with the command is folded."""
+    return _ESC(_words(text)) + (_command_text(ctx, text) if "`" in str(text) else "")
+
+
+def _command_text(ctx: _Ctx, text: Any) -> str:
+    """One advisor command paragraph (backticks = <code>), folded like _command_block."""
+    return f"<details class=\"rp-cmd\"><summary class=\"rp-cmd-label\">{_ESC(ctx.t('rp_command'))}</summary><p>{_rich(text)}</p></details>"
 
 
 def _bar(met: int, total: int, ratio: Any = None) -> str:
@@ -78,15 +89,15 @@ def _bar(met: int, total: int, ratio: Any = None) -> str:
 def _page(ctx: _Ctx, page: str, title: str, body: list[str], *, note_key: str | None = "rp_readonly_note", h1_attrs: str = "",
           body_attrs: str = "", scripts: tuple[str, ...] | list[str] = (), current_url: str | None = None) -> str:
     """F174 page skeleton (top nav + stylesheet + language switch). AIPOS-F180: the Owner inbox / envelope pages reuse it with
-    note_key=None (no read-only note: they host the F172 write exception), extra body attributes, page scripts and current_url."""
+    note_key=None (no read-only note: they host the F172 write exception), extra body attributes, page scripts and current_url.
+    AIPOS-F181: the single skeleton of the whole board (the upgrade page too; the board root redirects to the overview); one nav."""
     decl = ctx.decl
     locale = decl["locale"]
-    nav = [("rp_nav_overview", decl["pages"]["overview"]), ("rp_nav_roadmap", decl["pages"]["roadmap"]),
-           ("rp_nav_onboarding", decl["pages"]["onboarding"]), ("rp_nav_inbox", decl["nav_links"]["inbox"]),
-           ("rp_nav_envelopes", _envelope_page()), ("rp_nav_board", decl["nav_links"]["board_home"])]
-    current = _CURRENT
-    links = "".join(f"<a href=\"{_ESC(ctx.href(url) if url != decl['nav_links']['board_home'] else url)}\""
-                    f"{current if url in (decl['pages'].get(page), current_url) else ''}>{_ESC(ctx.t(key))}</a>" for key, url in nav)
+    nav = [("rp_nav_overview", decl["pages"]["overview"]), ("rp_nav_project", decl["pages"]["project"]),
+           ("rp_nav_roadmap", decl["pages"]["roadmap"]), ("rp_nav_inbox", decl["nav_links"]["inbox"]),
+           ("rp_nav_envelopes", _envelope_page()), ("rp_nav_onboarding", decl["pages"]["onboarding"])]
+    links = "".join(f"<a href=\"{_ESC(ctx.href(url))}\"{_CURRENT if url in (decl['pages'].get(page), current_url) else ''}>"
+                    f"{_ESC(ctx.t(key))}</a>" for key, url in nav)
     other = next((code for code in locale["supported"] if code != ctx.lang), None)
     switch = ""
     if other:
@@ -104,10 +115,38 @@ def _page(ctx: _Ctx, page: str, title: str, body: list[str], *, note_key: str | 
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
         f"<title>{_ESC(title)}</title><link rel=\"stylesheet\" href=\"{_ESC(str(decl['stylesheet']))}\"></head>",
         f"<body class=\"rp-page rp-{_ESC(page)}\" data-readonly-page=\"{_ESC(page)}\" data-lang=\"{_ESC(ctx.lang)}\"{body_attrs}>",
-        f"<header class=\"rp-nav\"><nav>{links}</nav>{switch}</header>",
+        f"<header class=\"rp-nav\"><span class=\"rp-brand\">Lybra</span><nav>{links}</nav>{switch}</header>",
         f"<main><h1{h1_attrs}>{_ESC(title)}</h1>",
         *([f"<p class=\"rp-readonly-note\">{_ESC(ctx.t(note_key))}</p>"] if note_key else []),
         *body, "</main>", script, *(f"<script src=\"{_ESC(src)}\"></script>" for src in scripts), "</body></html>"])
+
+
+def _tech(ctx: _Ctx, inner: str, *, css: str = "rp-tech") -> str:
+    """AIPOS-F181: technical details (server paths, ids, raw lines) folded; the summary is the only visible part."""
+    return f"<details class=\"{css}\"><summary>{_ESC(ctx.t('rp_tech'))}</summary>{inner}</details>"
+
+
+def _toggle(ctx: _Ctx, hidden: list[str], show_all: bool, base_url: str, *, show_key: str = "rp_show_hidden",
+            hide_key: str = "rp_hide_hidden") -> str:
+    """AIPOS-F181: the page switch for projects hidden by status (replaces the command-line hint); base_url = this page with its
+    other parameters, the switch adds / drops query.show."""
+    decl = ctx.decl
+    if show_all:
+        return f"<p class=\"rp-toggle\" data-show=\"all\"><a href=\"{_ESC(ctx.href(base_url))}\">{_ESC(ctx.t(hide_key))}</a></p>"
+    if not hidden:
+        return ""
+    sep = "&" if "?" in base_url else "?"
+    url = f"{base_url}{sep}{urlencode({decl['query']['show']: decl['show_all_value']})}"
+    return (f"<p class=\"rp-toggle\" data-hidden=\"{len(hidden)}\"><a href=\"{_ESC(ctx.href(url))}\">"
+            f"{_ESC(ctx.t(show_key, count=len(hidden)))}</a></p>")
+
+
+def _status_badge(ctx: _Ctx, item: dict[str, Any]) -> str:
+    if item.get("paused"):
+        return f" <span class=\"rp-badge\">{_ESC(ctx.t('rp_paused_badge'))}</span>"
+    if item.get("hidden"):
+        return f" <span class=\"rp-badge rp-badge-test\">{_ESC(ctx.t('rp_test_badge'))}</span>"
+    return ""
 
 
 def _js(value: Any) -> str:
@@ -126,18 +165,51 @@ def _envelope_page() -> str:
 # 总览
 # ---------------------------------------------------------------------------
 
+def _state_parts(ctx: _Ctx, by_state: dict[str, int], states: list[str]) -> str:
+    return " · ".join(ctx.t("rp_qs_count", state=ctx.t("rp_qs_" + s), count=by_state[s]) for s in states if by_state.get(s))
+
+
+def _counts_li(ctx: _Ctx, queue: dict[str, Any]) -> list[str]:
+    """AIPOS-F181 item 3: counts from machine_zone.card_stats (frozen legacy cards only as the history line)."""
+    if "error" in queue:
+        return [f"<li class=\"rp-inflight rp-err\">{_ESC(ctx.t('rp_error', error=queue['error']))}</li>"]
+    stats = queue["value"]
+    tot = stats["totals"]
+    detail = _state_parts(ctx, stats["by_state"], stats["groups"]["inflight"])
+    out = [f"<li class=\"rp-inflight\" data-inflight=\"{tot['inflight']}\" data-todo=\"{tot['todo']}\" data-closed=\"{tot['closed']}\""
+           f" data-frozen=\"{stats['frozen']}\">{_ESC(ctx.t('rp_ov_counts', inflight=tot['inflight'], todo=tot['todo'], closed=tot['closed']))}"
+           + (f" <span class=\"rp-sub\">({_ESC(detail)})</span>" if detail else "") + "</li>"]
+    if stats["frozen_error"]:
+        out.append(f"<li class=\"rp-frozen rp-err\">{_ESC(ctx.t('rp_ov_frozen_error', error=stats['frozen_error']))}</li>")
+    elif stats["frozen"]:
+        out.append(f"<li class=\"rp-frozen\" data-frozen=\"{stats['frozen']}\">{_ESC(ctx.t('rp_ov_frozen', count=stats['frozen']))}</li>")
+    return out
+
+
+def _subproject_table(ctx: _Ctx, project: str, stats: dict[str, Any]) -> str:
+    """AIPOS-F181 item 2: project -> subproject counts (one row each, with its advisor); one subproject = one advisor line."""
+    from tools.aipos_cli.board_pages import project_url
+
+    subs = stats["subprojects"]
+    if not subs:
+        return ""
+    if len(subs) == 1:
+        who = subs[0]["advisor"] or ctx.t("rp_sub_no_advisor")
+        return f"<p class=\"rp-sub-one\" data-subproject=\"{_ESC(subs[0]['key'])}\">{_ESC(ctx.t('rp_ov_one_advisor', advisor=who))}</p>"
+    head = "".join(f"<th>{_ESC(ctx.t(k))}</th>" for k in ("rp_sub_head", "rp_sub_inflight", "rp_sub_todo", "rp_sub_closed", "rp_sub_advisor"))
+    rows = []
+    for s in subs:
+        c = s["counts"]
+        url = ctx.href(project_url(ctx.decl, project, s["key"]))
+        rows.append(f"<tr data-subproject=\"{_ESC(s['key'])}\" data-inflight=\"{c['inflight']}\" data-todo=\"{c['todo']}\" data-closed=\"{c['closed']}\">"
+                    f"<td><a href=\"{_ESC(url)}\" title=\"{_ESC(s['key'])}\">{_ESC(s['label'])}</a></td><td>{c['inflight']}</td><td>{c['todo']}</td>"
+                    f"<td>{c['closed']}</td><td class=\"rp-sub\">{_ESC(s['advisor'] or ctx.t('rp_sub_no_advisor'))}</td></tr>")
+    return f"<table class=\"rp-subs\" data-subprojects=\"{len(subs)}\"><thead><tr>{head}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+
+
 def _overview_card(ctx: _Ctx, card: dict[str, Any]) -> str:
     name = str(card["project"])
-    li: list[str] = []
-    queue = card["queue"]
-    if "error" in queue:
-        li.append(f"<li class=\"rp-inflight rp-err\">{_ESC(ctx.t('rp_error', error=queue['error']))}</li>")
-    else:
-        q = queue["value"]
-        states = " · ".join(f"{s} {n}" for s, n in q["inflight"].items())
-        li.append(f"<li class=\"rp-inflight\" data-inflight=\"{q['inflight_total']}\" data-closed=\"{q['closed']}\">"
-                  f"{_ESC(ctx.t('rp_ov_inflight', total=q['inflight_total']))} <span class=\"rp-sub\">({_ESC(states)})</span> · "
-                  f"{_ESC(ctx.t('rp_ov_closed', count=q['closed']))}</li>")
+    li: list[str] = _counts_li(ctx, card["queue"])
     inbox = card["inbox"]
     if inbox["error"]:
         li.append(f"<li class=\"rp-inbox rp-err\">{_ESC(ctx.t('rp_error', error=inbox['error']))}</li>")
@@ -176,11 +248,11 @@ def _overview_card(ctx: _Ctx, card: dict[str, Any]) -> str:
     ob = card["onboarding"]
     li.append(f"<li class=\"rp-onboarding\" data-done=\"{ob['done']}\" data-total=\"{ob['total']}\"><a href=\"{_ESC(ctx.href(ob['url']))}\">"
               f"{_ESC(ctx.t('rp_ov_onboarding', done=ob['done'], total=ob['total']))}</a></li>")
-    badge = f" <span class=\"rp-badge\">{_ESC(ctx.t('rp_paused_badge'))}</span>" if card["paused"] else ""
-    detail = f"/workspace/{int(card['index'])}"
-    return (f"<article class=\"rp-card\" data-project=\"{_ESC(name)}\" data-paused=\"{str(bool(card['paused'])).lower()}\">"
-            f"<h2>{_ESC(name)}{badge}</h2><ul>{''.join(li)}</ul>"
-            f"<p class=\"rp-card-foot\"><a href=\"{_ESC(detail)}\">{_ESC(ctx.t('rp_ov_detail'))}</a></p></article>")
+    subs = _subproject_table(ctx, name, card["queue"]["value"]) if "value" in card["queue"] else ""
+    return (f"<article class=\"rp-card\" data-project=\"{_ESC(name)}\" data-paused=\"{str(bool(card['paused'])).lower()}\""
+            f" data-hidden=\"{str(bool(card.get('hidden'))).lower()}\"><h2><a href=\"{_ESC(ctx.href(card['url']))}\">{_ESC(name)}</a>"
+            f"{_status_badge(ctx, card)}</h2><ul>{''.join(li)}</ul>{subs}"
+            f"<p class=\"rp-card-foot\"><a href=\"{_ESC(ctx.href(card['url']))}\">{_ESC(ctx.t('rp_ov_detail'))}</a></p></article>")
 
 
 def _upgrade_li(ctx: _Ctx, up: dict[str, Any] | None) -> str:
@@ -200,11 +272,99 @@ def render_overview(data: dict[str, Any], lang: str) -> str:
     ctx = _Ctx(data["decl"], lang)
     active = [c for c in data["projects"] if not c["paused"]]
     paused = [c for c in data["projects"] if c["paused"]]
-    body = [f"<section class=\"rp-cards\" data-projects=\"{len(active)}\">" + "".join(_overview_card(ctx, c) for c in active) + "</section>"]
+    body = [_toggle(ctx, data.get("hidden") or [], bool(data.get("show_all")), str(ctx.decl["pages"]["overview"])),
+            f"<section class=\"rp-cards\" data-projects=\"{len(active)}\">" + "".join(_overview_card(ctx, c) for c in active) + "</section>"]
     if paused:
         body.append(f"<details class=\"rp-paused\" data-paused=\"{len(paused)}\"><summary>{_ESC(ctx.t('rp_paused_folded', count=len(paused)))}"
                     "</summary><section class=\"rp-cards\">" + "".join(_overview_card(ctx, c) for c in paused) + "</section></details>")
     return _page(ctx, "overview", ctx.t("rp_ov_title", count=len(data["projects"])), body)
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F181 item 2: project page (cards grouped by subproject; in flight + to do listed, closed folded)
+# ---------------------------------------------------------------------------
+
+def _project_tabs(ctx: _Ctx, data: dict[str, Any], current: str | None) -> str:
+    tabs = [f"<a href=\"{_ESC(ctx.href(p['url']))}\" data-project=\"{_ESC(p['project'])}\"{_CURRENT if p['project'] == current else ''}>"
+            f"{_ESC(p['project'])}{(' (' + _ESC(ctx.t('rp_paused_badge')) + ')') if p['paused'] else ''}"
+            f"{(' (' + _ESC(ctx.t('rp_test_badge')) + ')') if p.get('hidden') else ''}</a>" for p in data["projects"]]
+    return f"<nav class=\"rp-projects\"><span>{_ESC(ctx.t('rp_rm_projects'))}</span>{''.join(tabs)}</nav>"
+
+
+def _subproject_nav(ctx: _Ctx, subs: list[dict[str, Any]], current: str | None, url_for: Any) -> str:
+    """Subproject filter links (same query.subproject on the project page and the roadmap page); one subproject = no filter."""
+    if len(subs) < 2:
+        return ""
+    links = [f"<a href=\"{_ESC(ctx.href(url_for(None)))}\" data-subproject=\"\"{_CURRENT if current is None else ''}>{_ESC(ctx.t('rp_pj_all'))}</a>"]
+    links += [f"<a href=\"{_ESC(ctx.href(url_for(s['key'])))}\" data-subproject=\"{_ESC(s['key'])}\" title=\"{_ESC(s['key'])}\""
+              f"{_CURRENT if current == s['key'] else ''}>{_ESC(s['label'])}</a>" for s in subs]
+    return f"<nav class=\"rp-subnav\"><span>{_ESC(ctx.t('rp_pj_filter'))}</span>{''.join(links)}</nav>"
+
+
+def _card_rows(ctx: _Ctx, rows: list[dict[str, Any]]) -> str:
+    items = []
+    for r in rows:
+        title = f" <span class=\"rp-row-title\">{_ESC(r['title'])}</span>" if r.get("title") else ""
+        items.append(f"<li class=\"rp-row\" data-task-id=\"{_ESC(r['task_id'])}\" data-state=\"{_ESC(r['queue_state'])}\">"
+                     f"<span class=\"rp-chip rp-chip-{_ESC(r['queue_state'])}\">{_ESC(ctx.t('rp_qs_' + r['queue_state']))}</span>"
+                     f" <span class=\"rp-card-id\">{_ESC(r['task_id'])}</span>{title}</li>")
+    return f"<ul class=\"rp-rows\">{''.join(items)}</ul>"
+
+
+def _subproject_section(ctx: _Ctx, sub: dict[str, Any], rows: list[dict[str, Any]]) -> str:
+    mine = [r for r in rows if r["subproject"] == sub["key"]]
+    inflight = [r for r in mine if r["group"] == "inflight"]
+    todo = [r for r in mine if r["group"] == "todo"]
+    closed = [r for r in mine if r["group"] == "closed"]
+    parts = [f"<section class=\"rp-subproject\" data-subproject=\"{_ESC(sub['key'])}\" data-inflight=\"{len(inflight)}\""
+             f" data-todo=\"{len(todo)}\" data-closed=\"{len(closed)}\"><h2 title=\"{_ESC(sub['key'])}\">{_ESC(sub['label'])}"
+             f" <span class=\"rp-sub\">{_ESC(ctx.t('rp_ov_one_advisor', advisor=sub['advisor'] or ctx.t('rp_sub_no_advisor')))}</span></h2>"]
+    if inflight:
+        parts.append(f"<h3>{_ESC(ctx.t('rp_pj_inflight', count=len(inflight)))}</h3>{_card_rows(ctx, inflight)}")
+    if todo:
+        parts.append(f"<h3>{_ESC(ctx.t('rp_pj_todo', count=len(todo)))}</h3>{_card_rows(ctx, todo)}")
+    if not inflight and not todo:
+        parts.append(f"<p class=\"rp-sub\">{_ESC(ctx.t('rp_pj_nothing'))}</p>")
+    if closed:
+        parts.append(f"<details class=\"rp-closed\" data-closed=\"{len(closed)}\"><summary>{_ESC(ctx.t('rp_pj_closed', count=len(closed)))}"
+                     f"</summary>{_card_rows(ctx, closed)}</details>")
+    parts.append("</section>")
+    return "".join(parts)
+
+
+def render_project(data: dict[str, Any], lang: str) -> str:
+    from tools.aipos_cli.board_pages import project_url, roadmap_url
+
+    ctx = _Ctx(data["decl"], lang)
+    sel = data["selected"]
+    page_base = str(ctx.decl["pages"]["project"]) + (f"?{urlencode({ctx.decl['query']['project']: sel['project']})}" if sel else "")
+    body = [_toggle(ctx, data.get("hidden") or [], bool(data.get("show_all")), page_base),
+            _project_tabs(ctx, data, sel["project"] if sel else None)]
+    if data.get("unknown_project"):
+        body.append(f"<p class=\"rp-err\">{_ESC(ctx.t('rp_rm_unknown_project', project=data['unknown_project']))}</p>")
+    if sel is None:
+        if not data["projects"]:
+            body.append(f"<p>{_ESC(ctx.t('rp_rm_no_projects'))}</p>")
+        return _page(ctx, "project", ctx.t("rp_nav_project"), body)
+    title = ctx.t("rp_pj_title", project=sel["project"])
+    if sel.get("error"):
+        body.append(f"<p class=\"rp-err\">{_ESC(ctx.t('rp_error', error=sel['error']))}</p>")
+        return _page(ctx, "project", title, body)
+    stats = sel["stats"]
+    body.append("<ul class=\"rp-summary\">" + "".join(_counts_li(ctx, {"value": stats})) + "</ul>")
+    if sel.get("unknown_subproject"):
+        body.append(f"<p class=\"rp-err\">{_ESC(ctx.t('rp_pj_unknown_sub', subproject=sel['unknown_subproject']))}</p>")
+    body.append(_subproject_nav(ctx, stats["subprojects"], sel["subproject"], lambda key: project_url(ctx.decl, sel["project"], key)))
+    shown = [s for s in stats["subprojects"] if sel["subproject"] in (None, s["key"])]
+    body.extend(_subproject_section(ctx, s, stats["rows"]) for s in shown)
+    if not shown:
+        body.append(f"<p class=\"rp-sub\">{_ESC(ctx.t('rp_pj_nothing'))}</p>")
+    rm_url = roadmap_url(ctx.decl, sel["project"]) + (f"&{urlencode({ctx.decl['query']['subproject']: sel['subproject']})}"
+                                                     if sel["subproject"] else "")
+    body.append(f"<p class=\"rp-card-foot\"><a class=\"rp-link\" href=\"{_ESC(ctx.href(rm_url))}\">{_ESC(ctx.t('rp_pj_roadmap'))}</a>"
+                f"<a class=\"rp-link\" href=\"{_ESC(ctx.href(sel['envelope_url']))}\">{_ESC(ctx.t('rp_pj_envelopes'))}</a>"
+                f"<a class=\"rp-link rp-legacy\" href=\"{_ESC(sel['legacy_url'])}\">{_ESC(ctx.t('rp_pj_legacy'))}</a></p>")
+    return _page(ctx, "project", title, body)
 
 
 # ---------------------------------------------------------------------------
@@ -217,11 +377,10 @@ def _signal_html(ctx: _Ctx, sig: dict[str, Any], targets: list[str]) -> str:
             f" data-milestone=\"{_ESC(str(sig.get('milestone') or ''))}\" data-criterion=\"{_ESC(str(sig.get('criterion') or ''))}\">"
             f"<p class=\"rp-signal-head\"><span class=\"rp-sev\">{_ESC(ctx.t('rp_sev_' + str(sig['severity'])))}</span> "
             f"<strong>{_ESC(sig['label'])}</strong></p><p class=\"rp-reason\">{_ESC(sig['reason'])}</p>"
-            f"<p class=\"rp-tell\">{_ESC(tell)}</p>"
-            f"<div class=\"rp-cmd\"><span class=\"rp-cmd-label\">{_ESC(ctx.t('rp_command'))}</span><p>{_rich(sig['advice'])}</p></div></div>")
+            f"<p class=\"rp-tell\">{_ESC(tell)}</p>{_command_text(ctx, sig['advice'])}</div>")
 
 
-def _milestone_item(ctx: _Ctx, project: str, ms: dict[str, Any], *, selected: bool, overdue: bool) -> str:
+def _milestone_item(ctx: _Ctx, project: str, ms: dict[str, Any], *, selected: bool, overdue: bool, subproject: str | None = None) -> str:
     from tools.aipos_cli.board_pages import roadmap_url
 
     prog = ms["progress"]
@@ -230,10 +389,14 @@ def _milestone_item(ctx: _Ctx, project: str, ms: dict[str, Any], *, selected: bo
     classes = "roadmap-ms" + (" rp-selected" if selected else "") + (" rp-is-overdue" if overdue else "") + \
         (" roadmap-dropped" if ms["status"] == "dropped" else "")
     return (f"<li class=\"{classes}\" data-milestone=\"{_ESC(ms['id'])}\" data-status=\"{_ESC(ms['status'])}\" data-overdue=\"{str(overdue).lower()}\">"
-            f"<a class=\"roadmap-ms-head\" href=\"{_ESC(ctx.href(roadmap_url(ctx.decl, project, ms['id'])))}\">"
+            f"<a class=\"roadmap-ms-head\" href=\"{_ESC(ctx.href(roadmap_url(ctx.decl, project, ms['id']) + _sub_param(ctx, subproject)))}\">"
             f"<span class=\"roadmap-title\">{_ESC(ms['id'])} · {_ESC(ms['title'])}</span></a>"
             f"<div class=\"rp-ms-meta\"><span class=\"roadmap-status\">{_ESC(ctx.t('rp_rm_status_' + str(ms['status'])))}</span>{target}{late}</div>"
             f"{_bar(prog['met'], prog['total'], prog.get('ratio'))}</li>")
+
+
+def _sub_param(ctx: _Ctx, subproject: str | None) -> str:
+    return f"&{urlencode({ctx.decl['query']['subproject']: subproject})}" if subproject else ""
 
 
 def _artifacts_html(ctx: _Ctx, ev: dict[str, Any], project: str) -> str:
@@ -296,7 +459,8 @@ def _evidence_html(ctx: _Ctx, ev: dict[str, Any], workspace_index: int, project:
             log = str(log)
             clipped = log[:limit] + (" …" if len(log) > limit else "")
             rows.append(f"<li class=\"rp-ev-entry\" data-exit-code=\"{_ESC(str(entry.get('exit_code')))}\"><code>{_ESC(str(entry.get('command') or ''))}</code>"
-                        f" <span class=\"vb-ring-meta\">{_ESC(ctx.t('rp_rm_evidence_entry', exit_code=entry.get('exit_code'), worktree=entry.get('worktree') or '?'))}</span>"
+                        f" <span class=\"vb-ring-meta\" title=\"{_ESC(str(entry.get('worktree') or ''))}\">"
+                        f"{_ESC(ctx.t('rp_rm_evidence_entry', exit_code=entry.get('exit_code'), worktree=entry.get('worktree') or '?'))}</span>"
                         f"<pre class=\"vb-ring-body\">{_ESC(clipped)}</pre></li>")
         body = (f"<div class=\"rp-evidence\" data-report=\"{_ESC(str(ev.get('report_ref') or ''))}\"><p>"
                 f"{_ESC(ctx.t('rp_rm_evidence', ref=ev.get('report_ref') or '?'))}</p><ul>{''.join(rows)}</ul></div>")
@@ -343,16 +507,13 @@ def _criterion_html(ctx: _Ctx, crit: dict[str, Any], workspace_index: int, proje
 
 
 def render_roadmap(data: dict[str, Any], lang: str) -> str:
+    from tools.aipos_cli.board_pages import roadmap_url
+
     ctx = _Ctx(data["decl"], lang)
     sel = data["selected"]
-    body: list[str] = []
-    tabs = []
-    for p in data["projects"]:
-        current = sel is not None and p["project"] == sel["project"]
-        badge = f" ({_ESC(ctx.t('rp_paused_badge'))})" if p["paused"] else ""
-        tabs.append(f"<a href=\"{_ESC(ctx.href(p['url']))}\" data-project=\"{_ESC(p['project'])}\"{_CURRENT if current else ''}>"
-                    f"{_ESC(p['project'])}{badge}</a>")
-    body.append(f"<nav class=\"rp-projects\"><span>{_ESC(ctx.t('rp_rm_projects'))}</span>{''.join(tabs)}</nav>")
+    page_base = roadmap_url(ctx.decl, sel["project"]) if sel else str(ctx.decl["pages"]["roadmap"])
+    body: list[str] = [_toggle(ctx, data.get("hidden") or [], bool(data.get("show_all")), page_base),
+                       _project_tabs(ctx, data, sel["project"] if sel else None)]
     if data.get("unknown_project"):
         body.append(f"<p class=\"rp-err\">{_ESC(ctx.t('rp_rm_unknown_project', project=data['unknown_project']))}</p>")
     if sel is None:
@@ -367,9 +528,17 @@ def render_roadmap(data: dict[str, Any], lang: str) -> str:
     if not view.get("exists"):
         tell = ctx.tell(sel["advisors"], "rp_rm_howto_ask", {"project": sel["project"]})
         body.append(f"<section class=\"rp-howto\" data-roadmap=\"none\"><h2>{_ESC(ctx.t('rp_rm_howto_title'))}</h2>"
-                    f"<p class=\"rp-tell\">{_ESC(tell)}</p><div class=\"rp-cmd\"><span class=\"rp-cmd-label\">{_ESC(ctx.t('rp_command'))}</span>"
-                    f"<p>{_rich(sel['no_roadmap_hint'])}</p></div></section>")
+                    f"<p class=\"rp-tell\">{_ESC(tell)}</p>{_command_text(ctx, sel['no_roadmap_hint'])}</section>")
         return _page(ctx, "roadmap", title, body)
+    sub_key = sel.get("subproject")
+    sub_q = ctx.decl["query"]["subproject"]
+
+    def with_sub(url: str, key: str | None) -> str:
+        return url + (f"&{urlencode({sub_q: key})}" if key else "")
+
+    body.append(_subproject_nav(ctx, sel.get("subprojects") or [], sub_key, lambda key: with_sub(roadmap_url(ctx.decl, sel["project"]), key)))
+    if sel.get("unknown_subproject"):
+        body.append(f"<p class=\"rp-err\">{_ESC(ctx.t('rp_pj_unknown_sub', subproject=sel['unknown_subproject']))}</p>")
     totals = view["totals"]
     body.append(f"<p class=\"rp-source\">{_ESC(ctx.t('rp_rm_source', path=view['rel'], today=view['today'], met=totals['met'], total=totals['total']))}"
                 f" {_bar(totals['met'], totals['total'])}</p>")
@@ -383,16 +552,30 @@ def render_roadmap(data: dict[str, Any], lang: str) -> str:
     if sel.get("unknown_milestone"):
         body.append(f"<p class=\"rp-err\">{_ESC(ctx.t('rp_rm_unknown_milestone', milestone=sel['unknown_milestone']))}</p>")
     overdue = {s.get("milestone") for s in view["signals"] if s["kind"] == "overdue"}
-    lanes: dict[str, list[dict[str, Any]]] = {}
-    for ms in view["milestones"]:
-        lanes.setdefault(str(ms["lane"]), []).append(ms)
-    left = [f"<h2>{_ESC(ctx.t('rp_rm_milestones'))}</h2>"]
-    for lane, items in lanes.items():
-        left.append(f"<h3 class=\"roadmap-lane\" data-lane=\"{_ESC(lane)}\">{_ESC(ctx.t('rp_rm_lane', lane=lane))}</h3><ol class=\"roadmap-list\">"
-                    + "".join(_milestone_item(ctx, sel["project"], ms, selected=ms["id"] == sel["milestone"], overdue=ms["id"] in overdue)
-                              for ms in items) + "</ol>")
+    allowed = sel.get("milestone_filter")
+    shown = [ms for ms in view["milestones"] if allowed is None or ms["id"] in allowed]
+    finished = ("done", "dropped")
+
+    def items_by_lane(items: list[dict[str, Any]]) -> str:
+        lanes: dict[str, list[dict[str, Any]]] = {}
+        for ms in items:
+            lanes.setdefault(str(ms["lane"]), []).append(ms)
+        return "".join(
+            f"<h3 class=\"roadmap-lane\" data-lane=\"{_ESC(lane)}\">{_ESC(ctx.t('rp_rm_lane', lane=lane))}</h3><ol class=\"roadmap-list\">"
+            + "".join(_milestone_item(ctx, sel["project"], ms, selected=ms["id"] == sel["milestone"], overdue=ms["id"] in overdue,
+                                      subproject=sub_key) for ms in group) + "</ol>" for lane, group in lanes.items())
+
+    open_items = [ms for ms in shown if ms["status"] not in finished]
+    done_items = [ms for ms in shown if ms["status"] in finished]
+    left = [f"<h2>{_ESC(ctx.t('rp_rm_milestones'))}</h2>", items_by_lane(open_items)]
+    if not shown:
+        left.append(f"<p class=\"rp-sub\">{_ESC(ctx.t('rp_rm_none_for_sub'))}</p>")
+    if done_items:
+        is_open = " open" if any(ms["id"] == sel["milestone"] for ms in done_items) else ""
+        left.append(f"<details class=\"rp-ms-folded\" data-folded=\"{len(done_items)}\"{is_open}><summary>"
+                    f"{_ESC(ctx.t('rp_rm_folded', count=len(done_items)))}</summary>{items_by_lane(done_items)}</details>")
     right: list[str] = []
-    picked = next((m for m in view["milestones"] if m["id"] == sel["milestone"]), None)
+    picked = next((m for m in shown if m["id"] == sel["milestone"]), None)
     if picked is not None:
         right.append(f"<h2>{_ESC(ctx.t('rp_rm_criteria_title', id=picked['id'], title=picked['title']))}</h2>")
         right.extend(f"<p class=\"rp-mismatch\">{_ESC(ctx.t('rp_rm_mismatch', text=m))}</p>" for m in picked.get("mismatch") or [])
@@ -403,9 +586,13 @@ def render_roadmap(data: dict[str, Any], lang: str) -> str:
             right.append(f"<p>{_ESC(ctx.t('rp_rm_no_criteria'))}</p>")
     body.append("<div class=\"rp-layout\"><aside class=\"rp-left\">" + "".join(left) + "</aside>"
                 f"<section class=\"rp-right\" data-milestone=\"{_ESC(str(sel['milestone'] or ''))}\">" + "".join(right) + "</section></div>")
-    extra = [f"<h2>{_ESC(ctx.t('rp_rm_next'))}</h2><ul>" + "".join(f"<li>{_rich(step)}</li>" for step in view["next_steps"]) + "</ul>"]
+    extra = [f"<h2>{_ESC(ctx.t('rp_rm_next'))}</h2><ul>" + "".join(f"<li>{_step_html(ctx, step)}</li>" for step in view["next_steps"]) + "</ul>"]
     if view["unlinked"]:
-        extra.append(f"<p class=\"roadmap-unlinked\">{_ESC(ctx.t('rp_rm_unlinked', count=len(view['unlinked']), cards=', '.join(view['unlinked'])))}</p>")
+        extra.append(f"<p class=\"roadmap-unlinked\" data-unlinked=\"{len(view['unlinked'])}\">"
+                     f"{_ESC(ctx.t('rp_rm_unlinked', count=len(view['unlinked']), cards=', '.join(view['unlinked'])))}</p>")
+    if view.get("unlinked_before_roadmap"):
+        extra.append(f"<p class=\"roadmap-unlinked-before rp-sub\" data-before=\"{view['unlinked_before_roadmap']}\">"
+                     f"{_ESC(ctx.t('rp_rm_unlinked_before', count=view['unlinked_before_roadmap']))}</p>")
     extra.extend(f"<p class=\"rp-err\">{_ESC(ctx.t('rp_rm_invalid', task_id=bad['task_id'], problems='; '.join(bad['problems'])))}</p>"
                  for bad in view["invalid"])
     if view["errors"]:
@@ -419,10 +606,16 @@ def render_roadmap(data: dict[str, Any], lang: str) -> str:
 # 项目接入
 # ---------------------------------------------------------------------------
 
+#: detail lines that only carry server paths: folded into the technical details (AIPOS-F181)
+_TECH_DETAIL_KEYS = ("rp_ob_detail_governance_root",)
+
+
 def _checklist_html(ctx: _Ctx, proj: dict[str, Any]) -> str:
     items = []
     for row in proj["rows"]:
-        details = "".join(f"<li>{_ESC(ctx.t(key, **values))}</li>" for key, values in row["details"])
+        details = "".join(f"<li>{_ESC(ctx.t(key, **values))}</li>" for key, values in row["details"] if key not in _TECH_DETAIL_KEYS)
+        tech = "".join(f"<p>{_ESC(ctx.t(key, **values))}</p>" for key, values in row["details"] if key in _TECH_DETAIL_KEYS)
+        details += f"<li>{_tech(ctx, tech)}</li>" if tech else ""
         tell = f"<p class=\"rp-tell\">{_ESC(ctx.tell(row['tell'], row['ask'][0], row['ask'][1]))}</p>" if row.get("ask") else ""
         links = "".join(f"<a class=\"rp-link\" href=\"{_ESC(ctx.href(url))}\">{_ESC(ctx.t(key))}</a>" for key, url in row["links"])
         items.append(f"<li class=\"rp-ob-item rp-state-{_ESC(row['state'])}\" data-item=\"{_ESC(row['key'])}\" data-state=\"{_ESC(row['state'])}\">"
@@ -430,7 +623,7 @@ def _checklist_html(ctx: _Ctx, proj: dict[str, Any]) -> str:
                      f"<strong>{_ESC(ctx.t('rp_ob_item_' + row['key']))}</strong></p><ul class=\"rp-details\">{details}</ul>"
                      f"{tell}{_command_block(ctx, row['commands'])}{links}</li>")
     summary = proj["summary"]
-    badge = f" <span class=\"rp-badge\">{_ESC(ctx.t('rp_paused_badge'))}</span>" if proj["paused"] else ""
+    badge = _status_badge(ctx, proj)
     return (f"<section class=\"rp-ob-project\" id=\"{_ESC(proj['project'])}\" data-project=\"{_ESC(proj['project'])}\""
             f" data-done=\"{summary['done']}\" data-total=\"{summary['total']}\"><h2>{_ESC(proj['project'])}{badge} "
             f"<span class=\"rp-sub\">{_ESC(ctx.t('rp_ob_summary', done=summary['done'], total=summary['total']))}</span></h2>"
@@ -442,7 +635,8 @@ def render_onboarding(data: dict[str, Any], lang: str) -> str:
     ctx = _Ctx(data["decl"], lang)
     active = [p for p in data["projects"] if not p["paused"]]
     paused = [p for p in data["projects"] if p["paused"]]
-    body = [_checklist_html(ctx, p) for p in active]
+    body = [_toggle(ctx, data.get("hidden") or [], bool(data.get("show_all")), str(ctx.decl["pages"]["onboarding"]))]
+    body += [_checklist_html(ctx, p) for p in active]
     if paused:
         body.append(f"<details class=\"rp-paused\" data-paused=\"{len(paused)}\"><summary>{_ESC(ctx.t('rp_paused_folded', count=len(paused)))}"
                     "</summary>" + "".join(_checklist_html(ctx, p) for p in paused) + "</details>")
@@ -577,14 +771,65 @@ def _grant_section(ctx: _Ctx, requests: list[dict[str, Any]], owner: bool, error
     return out
 
 
+def _words(text: Any) -> str:
+    """The plain-language part of a derived sentence: everything before its first backtick command."""
+    return str(text or "").partition("`")[0].strip().rstrip(":;,\uff1a\uff1b\uff0c")
+
+
+def _inbox_item_html(ctx: _Ctx, item: dict[str, Any], lines: list[str]) -> str:
+    """AIPOS-F181 item 4: one inbox item in plain words (project / card / what you are asked); the engineering lines (item id,
+    options, decide command with the home root) are folded into "show details". An item that already has a plain-language request
+    card above only points to it."""
+    if item.get("task_id"):
+        what = ctx.t("ib_card_title", task_id=item["task_id"], title=item["title"]) if item.get("title") else ctx.t("ib_card", task_id=item["task_id"])
+    else:
+        what = str(item.get("subject") or "")
+    parts = [f"<section class=\"owner-inbox-item ib-item ib-rank-{item['rank']}\" id=\"item-{_ESC(item['item_id'])}\""
+             f" data-item-id=\"{_ESC(item['item_id'])}\" data-category=\"{_ESC(item['category'])}\" data-rank=\"{item['rank']}\""
+             f" data-project=\"{_ESC(item['project'])}\" data-grant=\"{str(bool(item.get('grant'))).lower()}\">",
+             f"<h2>{_ESC(ctx.t('ib_heading', project=item['project'], what=what))}</h2>",
+             f"<p class=\"ib-kind\"><span class=\"rp-chip ib-chip\">{_ESC(str(item['rank_label']))}</span> {_ESC(str(item['category_label']))}</p>"]
+    if item.get("grant"):
+        parts.append(f"<p class=\"ib-grant\"><a href=\"#{_ESC(item['item_id'])}\">{_ESC(ctx.t('ib_grant'))}</a></p>")
+    else:
+        # words before the first command stay visible; the command (with server paths) is in the folded details below
+        parts.append(f"<p class=\"ib-ask\">{_ESC(ctx.t('ib_ask', ask=_words(item['ask'])))}</p>")
+        if item.get("recommend") and _words(item["recommend"]):
+            parts.append(f"<p class=\"ib-recommend\">{_ESC(ctx.t('ib_recommend', recommend=_words(item['recommend'])))}</p>")
+        if item.get("board_url"):
+            parts.append(f"<p class=\"owner-inbox-board\"><a href=\"{_ESC(item['board_url'])}\">{_ESC(ctx.t('ib_board'))}</a></p>")
+    parts.append(f"<details class=\"ib-details\"><summary>{_ESC(ctx.t('ib_details'))}</summary>"
+                 f"<pre>{_ESC(chr(10).join(line.strip() for line in lines))}</pre></details></section>")
+    return "".join(parts)
+
+
+def _inbox_body(ctx: _Ctx, inbox: dict[str, Any], show_all: bool) -> list[str]:
+    from tools.aipos_cli.owner_inbox import inbox_declaration, item_lines
+
+    texts = inbox_declaration()["texts"]
+    base = str(ctx.decl["nav_links"]["inbox"])
+    out = []
+    hidden = list(inbox.get("paused_hidden") or [])
+    if hidden:
+        out.append(f"<p class=\"owner-inbox-paused rp-sub\">{_ESC(ctx.t('ib_hidden', projects=', '.join(hidden)))}</p>")
+    out.append(_toggle(ctx, hidden, show_all, base, show_key="ib_show", hide_key="ib_hide"))
+    out.extend(_inbox_item_html(ctx, item, item_lines(item, texts)) for item in inbox["items"])
+    if inbox["errors"]:
+        rows = "".join(f"<li>{_ESC(ctx.t('ib_error', project=e['project'], source=e['source'], error=e['error']))}</li>" for e in inbox["errors"])
+        out.append(f"<section class=\"owner-inbox-errors\"><h2>{_ESC(ctx.t('ib_errors', count=len(inbox['errors'])))}</h2>"
+                   f"{_tech(ctx, '<ul>' + rows + '</ul>')}</section>")
+    return out
+
+
 def render_owner_inbox(home_root: str | Path | None, params: dict[str, list[str]], *, owner: bool) -> str:
-    """GET /owner/inbox: F168 inbox body (owner_inbox.inbox_sections_html, same data as the API / CLI) on the F174 skeleton, with the
-    authorization requests on top; Owner sessions get the sign client only when there is something to sign."""
+    """GET /owner/inbox: inbox data (owner_inbox.collect_inbox via board_adapter.get_owner_inbox, same data as the API / CLI) rendered
+    in plain words on the F174 skeleton, with the authorization requests on top; Owner sessions get the sign client only when there is
+    something to sign. AIPOS-F181: the paused / test projects switch replaces the command-line hint."""
     import json
 
     from tools.aipos_cli import board_pages
     from tools.aipos_cli.board_adapter import get_owner_inbox
-    from tools.aipos_cli.owner_inbox import grant_requests, inbox_sections_html, inbox_title, render_inbox_error_html
+    from tools.aipos_cli.owner_inbox import grant_requests, render_inbox_error_html
     from tools.schema_loader import SchemaLoadError
 
     lang = "zh"
@@ -592,14 +837,16 @@ def render_owner_inbox(home_root: str | Path | None, params: dict[str, list[str]
         decl = board_pages.pages_declaration()
         lang = resolve_lang(decl, params)
         ctx = _Ctx(decl, lang)
-        response = get_owner_inbox(home_root)
+        show_all = board_pages.show_all_requested(decl, params)
+        response = get_owner_inbox(home_root, include_paused=show_all)
         if not response.get("ok"):
             return render_inbox_error_html(json.dumps(response.get("errors") or response.get("message") or response, ensure_ascii=False)[:800])
         inbox = response["data"]
         requests = grant_requests(inbox)
         signing = owner and bool(requests)
-        body = ([_panel(ctx)] if signing else []) + _grant_section(ctx, requests, owner) + inbox_sections_html(inbox)
-        return _page(ctx, "inbox", inbox_title(inbox), body, note_key=None, h1_attrs=f" data-owner-inbox-count=\"{inbox['count']}\"",
+        body = ([_panel(ctx)] if signing else []) + _grant_section(ctx, requests, owner) + _inbox_body(ctx, inbox, show_all)
+        title = ctx.t("ib_title" if inbox["items"] else "ib_empty", count=inbox["count"], projects=len(inbox["projects"]))
+        return _page(ctx, "inbox", title, body, note_key=None, h1_attrs=f" data-owner-inbox-count=\"{inbox['count']}\"",
                      body_attrs=_owner_attrs(ctx, signing), scripts=[_owner_script()] if signing else [],
                      current_url=str(decl["nav_links"]["inbox"]))
     except (OSError, ValueError, LookupError, RuntimeError, SchemaLoadError) as exc:  # unreadable = error page naming the cause
@@ -608,10 +855,12 @@ def render_owner_inbox(home_root: str | Path | None, params: dict[str, list[str]
 
 def render_envelopes(home_root: str | Path | None, params: dict[str, list[str]], *, owner: bool) -> str:
     """GET envelope page: F172 body (envelope_board.envelopes_page_parts) on the F174 skeleton, authorization requests on top
-    (owner_inbox loop category only); non-Owner sessions get no forms, no buttons and no script."""
+    (owner_inbox loop category only); non-Owner sessions get no forms, no buttons and no script. AIPOS-F181: projects whose status is
+    board_hidden (test) are left out unless the page switch is on."""
     from tools.aipos_cli import board_pages
     from tools.aipos_cli.envelope_board import collect_envelopes, envelopes_page_parts
     from tools.aipos_cli.owner_inbox import collect_inbox, grant_requests
+    from tools.aipos_cli.workspace_config import project_status_visibility
     from tools.schema_loader import SchemaLoadError
 
     lang = "zh"
@@ -619,11 +868,45 @@ def render_envelopes(home_root: str | Path | None, params: dict[str, list[str]],
         decl = board_pages.pages_declaration()
         lang = resolve_lang(decl, params)
         ctx = _Ctx(decl, lang)
-        parts = envelopes_page_parts(collect_envelopes(home_root), owner=owner)
-        inbox = collect_inbox(home_root, categories=("loop_owner_needed",))
-        body = ([_panel(ctx)] if owner else []) + _grant_section(ctx, grant_requests(inbox), owner, len(inbox["errors"])) + parts["sections"]
+        show_all = board_pages.show_all_requested(decl, params)
+        view = collect_envelopes(home_root)
+        board_hidden = project_status_visibility()["board_hidden"]
+        hidden = [p["project"] for p in view["projects"] if p.get("status") in board_hidden]
+        if not show_all:
+            view = {**view, "projects": [p for p in view["projects"] if p["project"] not in hidden]}
+        parts = envelopes_page_parts(view, owner=owner)
+        inbox = collect_inbox(home_root, categories=("loop_owner_needed",), include_paused=show_all)
+        body = ([_panel(ctx)] if owner else []) + [_toggle(ctx, [] if show_all else hidden, show_all, _envelope_page())]
+        body += _grant_section(ctx, grant_requests(inbox), owner, len(inbox["errors"])) + parts["sections"]
         return _page(ctx, "envelopes", parts["title"], body, note_key=None, h1_attrs=parts["h1_attrs"], body_attrs=_owner_attrs(ctx, owner),
                      scripts=[_owner_script()] if owner else [], current_url=_envelope_page())
+    except (OSError, ValueError, LookupError, RuntimeError, SchemaLoadError) as exc:  # unreadable = error page naming the cause
+        return render_error(lang, f"{type(exc).__name__}: {exc}"[:800])
+
+
+def render_upgrade(home_root: str | Path | None, params: dict[str, list[str]], *, owner: bool) -> str:
+    """AIPOS-F181: project upgrade page (F176 write exception 2; body = project_upgrade.upgrade_page_parts) on the same skeleton."""
+    from tools.aipos_cli import board_pages
+    from tools.aipos_cli.project_upgrade import board_declaration, collect_upgrade_page, upgrade_page_parts
+    from tools.aipos_cli.workspace_config import project_status_visibility
+    from tools.schema_loader import SchemaLoadError
+
+    lang = "zh"
+    try:
+        decl = board_pages.pages_declaration()
+        lang = resolve_lang(decl, params)
+        ctx = _Ctx(decl, lang)
+        show_all = board_pages.show_all_requested(decl, params)
+        project = (params.get(decl["query"]["project"]) or [None])[0]
+        view = collect_upgrade_page(home_root, project=project)
+        board_hidden = project_status_visibility()["board_hidden"]
+        hidden = [] if project or show_all else [p["project"] for p in view["projects"] if p.get("status") in board_hidden]
+        view = {**view, "projects": [p for p in view["projects"] if p["project"] not in hidden]}
+        parts = upgrade_page_parts(view, owner=owner)
+        page_path = str(board_declaration()["page_path"])
+        body = [_toggle(ctx, hidden, show_all and not project, page_path)] + parts["sections"]
+        return _page(ctx, "upgrade", parts["title"], body, note_key=None, h1_attrs=parts["h1_attrs"], body_attrs=parts["body_attrs"],
+                     scripts=parts["scripts"], current_url=page_path)
     except (OSError, ValueError, LookupError, RuntimeError, SchemaLoadError) as exc:  # unreadable = error page naming the cause
         return render_error(lang, f"{type(exc).__name__}: {exc}"[:800])
 
@@ -649,14 +932,22 @@ def render_page(page: str, home_root: str | Path | None, params: dict[str, list[
     try:
         decl = board_pages.pages_declaration()
         lang = resolve_lang(decl, params)
+        show_all = board_pages.show_all_requested(decl, params)
+        query = decl["query"]
+
+        def arg(name: str) -> str | None:
+            return (params.get(query[name]) or [None])[0]
+
         if page == "overview":
-            return render_overview(board_pages.collect_overview(home_root), lang)
+            return render_overview(board_pages.collect_overview(home_root, show_all=show_all), lang)
         if page == "onboarding":
-            return render_onboarding(board_pages.collect_onboarding(home_root), lang)
+            return render_onboarding(board_pages.collect_onboarding(home_root, show_all=show_all), lang)
+        if page == "project":
+            return render_project(board_pages.collect_project(home_root, project=arg("project"), subproject=arg("subproject"),
+                                                              show_all=show_all), lang)
         if page == "roadmap":
-            query = decl["query"]
-            return render_roadmap(board_pages.collect_roadmap(home_root, project=(params.get(query["project"]) or [None])[0],
-                                                              milestone=(params.get(query["milestone"]) or [None])[0]), lang)
+            return render_roadmap(board_pages.collect_roadmap(home_root, project=arg("project"), milestone=arg("milestone"),
+                                                              subproject=arg("subproject"), show_all=show_all), lang)
         raise ValueError(f"unknown readonly page {page!r}")
     except (OSError, ValueError, LookupError, RuntimeError, SchemaLoadError) as exc:  # unreadable = error page naming the cause (not swallowed, connection kept)
         return render_error(lang, f"{type(exc).__name__}: {exc}"[:800])

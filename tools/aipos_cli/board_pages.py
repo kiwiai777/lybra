@@ -5,7 +5,7 @@
 
 防碎片化(卡面硬约束), 每个数据面只读一个既有唯一实现, 本模块不另判:
 - 项目枚举 = owner_inbox.home_projects(收件箱 / 看板项目列表 F171 / 信封页 F172 同调); 暂停 = 其 status(workspace_config.project_status)。
-- 在途 / 结案卡数 = task_loader.iter_queue_task_paths(卡遍历唯一口); 在途 = 非终态 queue_state(task_loader.QUEUE_TERMINAL_STATES 之外),
+- 在途 / 待办 / 结案卡数与子项目分组 = machine_zone.card_stats(AIPOS-F181 唯一统计口径: 冻结卡只计历史存量; 声明 lane_view.card_stats);
   结案 = lybra_roadmap.status.satisfied_queue_states(与路线图「挂接卡已结案」同一口径)。
 - 待 Owner 项 = owner_inbox.collect_inbox; 信封 = autonomy_policy.envelope_overview(续签命令 = 其 F166 renew_command);
   路线图进度 / 偏差 / 逐条标准证据 = roadmap_drift.roadmap_status(证据经 roadmap_drift.card_evidence 随行带出, 含 parse_runtime_evidence_section 摘录)。
@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 DECL_KEY = "board_readonly_pages"
-PAGES = ("overview", "roadmap", "onboarding")
+PAGES = ("overview", "project", "roadmap", "onboarding")
 #: 清单项判定(键 = 声明 onboarding_items 的值; 声明里出现未实现的项 = SchemaLoadError, 只追加)
 ONBOARDING_CHECKS = ("governance_root", "advisor", "executor", "auditor", "envelope", "charter", "pi_model", "roadmap", "first_closed")
 _COMMAND_KEYS = ("governance_root", "advisor", "execution_undeclared", "instance_not_enrolled", "envelope_mint", "charter_check",
@@ -62,8 +62,14 @@ def pages_declaration() -> dict[str, Any]:
     chars = decl["evidence_excerpt_chars"]
     if not isinstance(chars, int) or isinstance(chars, bool) or chars < 1:
         raise SchemaLoadError(f"verbs.schema.json {DECL_KEY}.evidence_excerpt_chars 须为正整数")
-    if not all(isinstance(decl["query"].get(k), str) and decl["query"][k] for k in ("project", "milestone")):
-        raise SchemaLoadError(f"verbs.schema.json {DECL_KEY}.query(project / milestone)未声明齐")
+    if not all(isinstance(decl["query"].get(k), str) and decl["query"][k] for k in ("project", "milestone", "subproject", "show")):
+        raise SchemaLoadError(f"verbs.schema.json {DECL_KEY}.query(project / milestone / subproject / show)未声明齐")
+    # AIPOS-F181: root redirect target page / show-all toggle value / legacy project page template
+    if (decl.get("root_redirect") not in PAGES or not isinstance(decl.get("show_all_value"), str) or not decl["show_all_value"]
+            or "{index}" not in str(decl.get("legacy_project_page") or "") or not str(decl["legacy_project_page"]).startswith("/")
+            or not str((decl.get("nav_links") or {}).get("inbox") or "").startswith("/")):
+        raise SchemaLoadError(f"verbs.schema.json {DECL_KEY}: root_redirect ∈ pages / show_all_value / legacy_project_page(/…{{index}}) / "
+                              "nav_links.inbox 未声明齐(AIPOS-F181)")
     route = decl.get("artifact_route")
     if (not isinstance(route, dict) or not str(route.get("path") or "").startswith("/")
             or not all(isinstance((route.get("params") or {}).get(k), str) and route["params"][k] for k in ("project", "task", "file"))):
@@ -92,10 +98,25 @@ def home_entries(home_root: str | Path | None = None) -> dict[str, Any]:
     """home 根注册项目(owner_inbox.home_projects 唯一枚举; 序号 = 看板 ?workspace=<序号> 同一序)。"""
     from tools.aipos_cli.owner_inbox import home_projects
 
+    from tools.aipos_cli.workspace_config import project_status_visibility
+
     enumerated = home_projects(home_root)
+    board_hidden = project_status_visibility()["board_hidden"]  # AIPOS-F181: test / probe projects hidden by default
     entries = [{"name": p["name"], "root": Path(p["root"]), "index": i, "status": p["status"], "paused": p["status"] == "paused",
-                "status_error": p["status_error"]} for i, p in enumerate(enumerated["projects"])]
+                "hidden": p["status"] in board_hidden, "status_error": p["status_error"]} for i, p in enumerate(enumerated["projects"])]
     return {"home_root": Path(enumerated["home_root"]), "home_source": enumerated["home_source"], "projects": entries}
+
+
+def visible_entries(home: dict[str, Any], show_all: bool) -> tuple[list[dict[str, Any]], list[str]]:
+    """AIPOS-F181: projects shown on a board page (status in config.schema status.board_hidden = hidden unless the page toggle
+    query.show = show_all_value) + names of the hidden ones (the page offers the toggle with their count)."""
+    hidden = [e["name"] for e in home["projects"] if e["hidden"]]
+    return ([e for e in home["projects"] if show_all or not e["hidden"]], [] if show_all else hidden)
+
+
+def show_all_requested(decl: dict[str, Any], params: dict[str, list[str]] | None) -> bool:
+    """The page toggle (query.show == show_all_value)."""
+    return (params or {}).get(decl["query"]["show"], [""])[0] == decl["show_all_value"]
 
 
 class ProjectFacts:
@@ -161,16 +182,11 @@ class ProjectFacts:
         return self._get(f"pi_model:{role}", lambda: pi_model_for_role(self.root, role), (OSError, ValueError))
 
     def queue_counts(self) -> dict[str, Any]:
-        from tools.aipos_cli.roadmap_drift import status_declaration
-        from tools.aipos_cli.task_loader import QUEUE_STATES, QUEUE_TERMINAL_STATES, iter_queue_task_paths
+        """AIPOS-F181: card statistics = machine_zone.card_stats (single derivation: frozen legacy cards only counted as history,
+        groups in-flight / to-do / closed, subproject grouping)."""
+        from tools.aipos_cli.machine_zone import card_stats
 
-        def compute() -> dict[str, Any]:
-            closed_states = tuple(status_declaration()["satisfied_queue_states"])
-            inflight = {s: len(iter_queue_task_paths(self.root, states=(s,))) for s in QUEUE_STATES if s not in QUEUE_TERMINAL_STATES}
-            closed = sum(len(iter_queue_task_paths(self.root, states=(s,))) for s in closed_states)
-            return {"inflight": inflight, "inflight_total": sum(inflight.values()), "closed": closed, "closed_states": list(closed_states)}
-
-        return self._get("queue", compute, (OSError, ValueError))
+        return self._get("queue", lambda: card_stats(self.root), (OSError, ValueError, LookupError))
 
     def tell_target(self, preferred: str | None = None) -> list[str]:
         """「告诉谁」: 优先给定实例(信号 advisor), 否则本治理根已接入顾问实例; 都没有 = 空(渲染用「你的顾问」)。"""
@@ -386,7 +402,7 @@ def _check_roadmap(f: ProjectFacts, decl: dict[str, Any]) -> dict[str, Any]:
         return _row("roadmap", "ok", [("rp_ob_detail_roadmap_ok", {"rel": view["rel"], "milestones": len(view["milestones"]),
                                                                    "met": view["totals"]["met"], "total": view["totals"]["total"]})],
                     links=link)
-    hint = roadmap_texts()["no_roadmap"].format(project=f.name, path=view["path"])
+    hint = roadmap_texts()["no_roadmap"].format(project=f.name, path=view["rel"])  # AIPOS-F181: governance-root relative path
     return _row("roadmap", "todo", [("rp_ob_detail_roadmap_none", {"rel": view["rel"]})], ask=("rp_ob_ask_roadmap", {"project": f.name}),
                 commands=[hint], links=link, tell=f.tell_target())
 
@@ -396,10 +412,10 @@ def _check_first_closed(f: ProjectFacts, decl: dict[str, Any]) -> dict[str, Any]
     if "error" in got:
         return _row("first_closed", "error", [("rp_error", {"error": got["error"]})], ask=("rp_ob_ask_first_closed", {"project": f.name}),
                     commands=[_command(decl, "first_closed", **_fill(f))], tell=f.tell_target())
-    counts = got["value"]
-    if counts["closed"]:
-        return _row("first_closed", "ok", [("rp_ob_detail_first_closed_ok", {"count": counts["closed"]})])
-    return _row("first_closed", "todo", [("rp_ob_detail_first_closed_none", {"inflight": counts["inflight_total"]})],
+    totals = got["value"]["totals"]
+    if totals["closed"]:
+        return _row("first_closed", "ok", [("rp_ob_detail_first_closed_ok", {"count": totals["closed"]})])
+    return _row("first_closed", "todo", [("rp_ob_detail_first_closed_none", {"inflight": totals["inflight"] + totals["todo"]})],
                 ask=("rp_ob_ask_first_closed", {"project": f.name}), commands=[_command(decl, "first_closed", **_fill(f))],
                 tell=f.tell_target())
 
@@ -471,30 +487,33 @@ def pending_badge(root: Path, project: str, home_root: Path) -> dict[str, Any]:
     return upgrade_badge(root, project, home_root)
 
 
-def collect_overview(home_root: str | Path | None = None) -> dict[str, Any]:
-    """总览页: 每项目一张卡片(在途卡 / 待 Owner 项 / 信封 / 路线图摘要 / 接入完成度), 暂停项目标 paused(渲染折叠)。"""
+def collect_overview(home_root: str | Path | None = None, *, show_all: bool = False) -> dict[str, Any]:
+    """总览页: 每项目一张卡片(在途 / 待办 / 已结案 + 历史存量 + 子项目分组 / 待 Owner 项 / 信封 / 路线图摘要 / 接入完成度), 暂停项目标 paused
+    (渲染折叠); AIPOS-F181: status ∈ board_hidden(测试项目)缺省不列, show_all = 页面开关。"""
     from tools.aipos_cli.task_loader import read_request_scope
 
     with read_request_scope():  # AIPOS-F177 item 3: one request-level read scope (per-project derivations shared)
-        return _collect_overview(home_root)
+        return _collect_overview(home_root, show_all=show_all)
 
 
-def _collect_overview(home_root: str | Path | None) -> dict[str, Any]:
+def _collect_overview(home_root: str | Path | None, *, show_all: bool) -> dict[str, Any]:
     from tools.aipos_cli.envelope_board import board_envelope_url
     from tools.aipos_cli.owner_inbox import collect_inbox
 
     decl = pages_declaration()
     home = home_entries(home_root)
+    shown, hidden = visible_entries(home, show_all)
     inbox_counts: dict[str, int] = {}
     inbox_error = None
     try:
-        inbox = collect_inbox(home["home_root"])
+        inbox = collect_inbox(home["home_root"], include_paused=show_all)
         for item in inbox["items"]:
             inbox_counts[item["project"]] = inbox_counts.get(item["project"], 0) + 1
     except (OSError, ValueError, LookupError) as exc:
         inbox, inbox_error = None, _err(exc)
+    listed = set(inbox["projects"]) if inbox is not None else set()
     cards = []
-    for entry in home["projects"]:
+    for entry in shown:
         f = ProjectFacts(entry, home["home_root"])
         envelopes = f.envelopes()
         current = [r for r in envelopes.get("value") or [] if r.get("current")]
@@ -502,9 +521,9 @@ def _collect_overview(home_root: str | Path | None) -> dict[str, Any]:
         view = roadmap.get("value") or {}
         rows = onboarding_rows(f, decl)
         cards.append({
-            "project": f.name, "index": entry["index"], "paused": entry["paused"], "status_error": entry["status_error"],
-            "governance_root": str(f.root), "queue": f.queue_counts(),
-            "inbox": {"count": inbox_counts.get(f.name, 0) if inbox is not None and not entry["paused"] else None, "error": inbox_error},
+            "project": f.name, "index": entry["index"], "paused": entry["paused"], "hidden": entry["hidden"], "status": entry["status"],
+            "status_error": entry["status_error"], "governance_root": str(f.root), "queue": f.queue_counts(),
+            "inbox": {"count": inbox_counts.get(f.name, 0) if inbox is not None and f.name in listed else None, "error": inbox_error},
             "envelopes": {"error": envelopes.get("error"), "active": [r["policy_id"] for r in current if r.get("status") == "active"],
                           "low": [r["policy_id"] for r in current if r.get("status") != "active"], "url": board_envelope_url(f.name)},
             "roadmap": {"error": roadmap.get("error"), "exists": bool(view.get("exists")), "milestones": len(view.get("milestones") or []),
@@ -514,64 +533,144 @@ def _collect_overview(home_root: str | Path | None) -> dict[str, Any]:
                         "url": roadmap_url(decl, f.name)},
             "onboarding": {**onboarding_summary(rows), "url": page_url(decl, "onboarding") + f"#{f.name}"},
             "upgrade": pending_badge(f.root, f.name, home["home_root"]),  # AIPOS-F176: project_upgrade.plan_upgrade (charter = recorded truth)
+            "url": project_url(decl, f.name),
         })
-    return {"decl": decl, "home_root": str(home["home_root"]), "projects": cards,
+    return {"decl": decl, "home_root": str(home["home_root"]), "projects": cards, "hidden": hidden, "show_all": show_all,
             "inbox_url": str(decl["nav_links"]["inbox"]), "paused": [c["project"] for c in cards if c["paused"]]}
 
 
-def collect_onboarding(home_root: str | Path | None = None) -> dict[str, Any]:
+def project_url(decl: dict[str, Any], project: str, subproject: str | None = None) -> str:
+    """AIPOS-F181: project page address (query.project / query.subproject)."""
+    return page_url(decl, "project", project=project, subproject=subproject)
+
+
+def collect_onboarding(home_root: str | Path | None = None, *, show_all: bool = False) -> dict[str, Any]:
     """接入页: 每项目一张清单(项与顺序 = 声明 onboarding_items)。"""
     from tools.aipos_cli.task_loader import read_request_scope
 
     with read_request_scope():  # AIPOS-F177 item 3: one request-level read scope (per-project derivations shared)
-        return _collect_onboarding(home_root)
+        return _collect_onboarding(home_root, show_all=show_all)
 
 
-def _collect_onboarding(home_root: str | Path | None) -> dict[str, Any]:
+def _collect_onboarding(home_root: str | Path | None, *, show_all: bool) -> dict[str, Any]:
     decl = pages_declaration()
     home = home_entries(home_root)
+    shown, hidden = visible_entries(home, show_all)
     projects = []
-    for entry in home["projects"]:
+    for entry in shown:
         f = ProjectFacts(entry, home["home_root"])
         rows = onboarding_rows(f, decl)
-        projects.append({"project": f.name, "index": entry["index"], "paused": entry["paused"], "governance_root": str(f.root),
-                         "rows": rows, "summary": onboarding_summary(rows), "advisors": f.tell_target(),
+        projects.append({"project": f.name, "index": entry["index"], "paused": entry["paused"], "hidden": entry["hidden"],
+                         "governance_root": str(f.root), "rows": rows, "summary": onboarding_summary(rows), "advisors": f.tell_target(),
                          "upgrade": pending_badge(f.root, f.name, home["home_root"])})
-    return {"decl": decl, "home_root": str(home["home_root"]), "projects": projects}
+    return {"decl": decl, "home_root": str(home["home_root"]), "projects": projects, "hidden": hidden, "show_all": show_all}
 
 
-def collect_roadmap(home_root: str | Path | None = None, *, project: str | None = None, milestone: str | None = None) -> dict[str, Any]:
+def _pick_entry(home: dict[str, Any], entries: list[dict[str, Any]], project: str | None) -> dict[str, Any] | None:
+    """Selected project: the named one (any registered project, a hidden test project too: it was asked for by name; None if not
+    registered), else the first shown project not paused, else the first shown."""
+    if project:
+        return next((e for e in home["projects"] if e["name"] == project), None)
+    return next((e for e in entries if not e["paused"]), entries[0] if entries else None)
+
+
+def _with_chosen(entries: list[dict[str, Any]], chosen: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Project tabs: the shown projects, plus the chosen one when it is hidden (named explicitly)."""
+    return entries + ([chosen] if chosen is not None and chosen not in entries else [])
+
+
+def _subproject_choice(stats: dict[str, Any] | None, wanted: str | None) -> tuple[str | None, str | None]:
+    """(selected subproject key | None = all, unknown key named back)."""
+    if not wanted:
+        return None, None
+    keys = [s["key"] for s in (stats or {}).get("subprojects") or []]
+    return (wanted, None) if wanted in keys else (None, wanted)
+
+
+def collect_project(home_root: str | Path | None = None, *, project: str | None = None, subproject: str | None = None,
+                    show_all: bool = False) -> dict[str, Any]:
+    """AIPOS-F181 item 2: project page = card_stats of the selected project grouped by subproject (in-flight + to-do listed,
+    closed folded by the renderer). Unknown project / subproject = named back (not guessed)."""
+    from tools.aipos_cli.task_loader import read_request_scope
+
+    with read_request_scope():
+        decl = pages_declaration()
+        home = home_entries(home_root)
+        shown, hidden = visible_entries(home, show_all)
+        chosen = _pick_entry(home, shown, project)
+        out: dict[str, Any] = {"decl": decl, "home_root": str(home["home_root"]), "hidden": hidden, "show_all": show_all,
+                               "projects": [{"project": e["name"], "paused": e["paused"], "hidden": e["hidden"], "url": project_url(decl, e["name"])}
+                                            for e in _with_chosen(shown, chosen)],
+                               "unknown_project": project if project and chosen is None else None, "selected": None}
+        if chosen is None:
+            return out
+        f = ProjectFacts(chosen, home["home_root"])
+        got = f.queue_counts()
+        stats = got.get("value")
+        key, unknown = _subproject_choice(stats, subproject)
+        out["selected"] = {"project": f.name, "index": chosen["index"], "paused": chosen["paused"], "hidden": chosen["hidden"],
+                           "error": got.get("error"), "stats": stats, "subproject": key, "unknown_subproject": unknown,
+                           "legacy_url": str(decl["legacy_project_page"]).format(index=chosen["index"]),
+                           "roadmap_url": roadmap_url(decl, f.name), "envelope_url": _envelope_url(f.name)}
+        return out
+
+
+def _envelope_url(project: str) -> str:
+    from tools.aipos_cli.envelope_board import board_envelope_url
+
+    return board_envelope_url(project)
+
+
+def collect_roadmap(home_root: str | Path | None = None, *, project: str | None = None, milestone: str | None = None,
+                    subproject: str | None = None, show_all: bool = False) -> dict[str, Any]:
     """路线图与验收页: 选中项目(缺省 = 首个未暂停项目)的 roadmap_status 视图 + 选中里程碑(缺省 = 首个 active, 再缺省首个)。
-    项目名不在 home 根注册项目 = selected None + unknown_project(渲染点名, 不猜)。"""
+    项目名不在 home 根注册项目 = selected None + unknown_project(渲染点名, 不猜)。AIPOS-F181: subproject 给出 = 只列该子项目挂接卡所在
+    (或其 lane 下无卡)的里程碑(card_stats 同一子项目推导)。"""
     from tools.aipos_cli.task_loader import read_request_scope
 
     with read_request_scope():  # AIPOS-F177 item 3: one request-level read scope (per-project derivations shared)
-        return _collect_roadmap(home_root, project=project, milestone=milestone)
+        return _collect_roadmap(home_root, project=project, milestone=milestone, subproject=subproject, show_all=show_all)
 
 
-def _collect_roadmap(home_root: str | Path | None, *, project: str | None, milestone: str | None) -> dict[str, Any]:
+def _milestone_filter(view: dict[str, Any], stats: dict[str, Any] | None, key: str | None) -> list[str] | None:
+    """Milestone ids shown for a subproject (None = all): a linked card belongs to it, or no linked card and its lane is one of the
+    subproject's lanes."""
+    if key is None or not stats:
+        return None
+    sub = next((s for s in stats["subprojects"] if s["key"] == key), None)
+    mine = {r["task_id"] for r in stats["rows"] if r["subproject"] == key}
+    lanes = set((sub or {}).get("lanes") or []) | {key}
+    return [ms["id"] for ms in view["milestones"]
+            if any(str(c).upper() in mine for c in ms.get("cards") or []) or (not ms.get("cards") and str(ms.get("lane")) in lanes)]
+
+
+def _collect_roadmap(home_root: str | Path | None, *, project: str | None, milestone: str | None, subproject: str | None,
+                     show_all: bool) -> dict[str, Any]:
     decl = pages_declaration()
     home = home_entries(home_root)
-    entries = home["projects"]
+    entries, hidden = visible_entries(home, show_all)
     names = [e["name"] for e in entries]
-    chosen = None
-    if project:
-        chosen = next((e for e in entries if e["name"] == project), None)
-    else:
-        chosen = next((e for e in entries if not e["paused"]), entries[0] if entries else None)
-    out: dict[str, Any] = {"decl": decl, "home_root": str(home["home_root"]),
-                           "projects": [{"project": e["name"], "paused": e["paused"], "url": roadmap_url(decl, e["name"])} for e in entries],
+    chosen = _pick_entry(home, entries, project)
+    out: dict[str, Any] = {"decl": decl, "home_root": str(home["home_root"]), "hidden": hidden, "show_all": show_all,
+                           "projects": [{"project": e["name"], "paused": e["paused"], "hidden": e["hidden"], "url": roadmap_url(decl, e["name"])}
+                                        for e in _with_chosen(entries, chosen)],
                            "selected": None, "unknown_project": project if project and chosen is None else None, "names": names}
     if chosen is None:
         return out
     f = ProjectFacts(chosen, home["home_root"])
     roadmap = f.roadmap()
     view = roadmap.get("value")
+    stats = f.queue_counts().get("value")
+    key, unknown_sub = _subproject_choice(stats, subproject)
     selected: dict[str, Any] = {"project": f.name, "index": chosen["index"], "paused": chosen["paused"], "governance_root": str(f.root),
                                 "error": roadmap.get("error"), "view": view, "advisors": f.tell_target(), "milestone": None,
-                                "unknown_milestone": None}
+                                "unknown_milestone": None, "subprojects": [{k: s[k] for k in ("key", "label", "advisor")}
+                                                                           for s in (stats or {}).get("subprojects") or []],
+                                "subproject": key, "unknown_subproject": unknown_sub, "milestone_filter": None}
     if view and view.get("exists"):
-        milestones = view["milestones"]
+        allowed = _milestone_filter(view, stats, key)
+        selected["milestone_filter"] = allowed
+        milestones = [m for m in view["milestones"] if allowed is None or m["id"] in allowed]
         pick = None
         if milestone:
             pick = next((m for m in milestones if m["id"] == milestone), None)
@@ -589,11 +688,11 @@ def _collect_roadmap(home_root: str | Path | None, *, project: str | None, miles
         selected["owner_checks"] = {
             str(row["id"]): {"tell": f.tell_target(row.get("verify_target_by")),
                              "command": template.format(governance_root=str(f.root), criterion=row["id"])}
-            for ms in milestones for row in ms["criteria"] if row.get("state") == "owner_pending"}
+            for ms in view["milestones"] for row in ms["criteria"] if row.get("state") == "owner_pending"}
     else:
         from tools.aipos_cli.roadmap import roadmap_texts
 
-        selected["no_roadmap_hint"] = roadmap_texts()["no_roadmap"].format(project=f.name, path=(view or {}).get("path") or "?")
+        selected["no_roadmap_hint"] = roadmap_texts()["no_roadmap"].format(project=f.name, path=(view or {}).get("rel") or "?")
     out["selected"] = selected
     return out
 

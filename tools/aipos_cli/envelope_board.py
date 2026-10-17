@@ -118,7 +118,7 @@ def collect_envelopes(home_root: str | Path | None = None, *, now: datetime | No
     projects: list[dict[str, Any]] = []
     for p in enumerated["projects"]:
         entry: dict[str, Any] = {"project": p["name"], "governance_root": str(p["root"]), "paused": p["status"] == "paused",
-                                 "status_error": p["status_error"], "envelopes": [], "drivers": [], "error": None}
+                                 "status": p["status"], "status_error": p["status_error"], "envelopes": [], "drivers": [], "error": None}
         try:
             overview = envelope_overview(p["root"], now=now)
         except SchemaLoadError:

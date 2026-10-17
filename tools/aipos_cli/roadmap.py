@@ -510,6 +510,24 @@ def plan_change(roadmap: dict[str, Any], subcommand: str, params: dict[str, Any]
     return {"data": data, "target": item_id, "detail": f"删除{'里程碑' if kind == _MILESTONE else '标准'} {item_id}(无挂接卡)"}
 
 
+def milestone_declared_at(roadmap: dict[str, Any], pointer_entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """AIPOS-F181 item 3: when each milestone was declared = the earliest decision_log pointer (Record = this roadmap file) written by
+    `lybra roadmap add-milestone` for it; matched by the summary prefix of the same template the writer uses
+    (texts.decision_summary, subcommand add-milestone, target = milestone id), never by guessing from the file name.
+    Returns {"milestones": {id: ISO instant}, "first_pointer": earliest ISO instant of any pointer to this roadmap | None}."""
+    texts = roadmap_texts()
+    head, _sep, _rest = str(texts["decision_summary"]).partition("{detail}")
+    entries = [e for e in pointer_entries if roadmap["rel"] in (e.get("records") or []) and e.get("decided_at")]
+    stamps = sorted(str(e["decided_at"]) for e in entries)
+    out: dict[str, str] = {}
+    for ms in (roadmap.get("data") or {}).get("milestones") or []:
+        prefix = head.format(subcommand="add-milestone", target=str(ms.get("id")))
+        hits = sorted(str(e["decided_at"]) for e in entries if str(e.get("summary") or "").startswith(prefix))
+        if hits:
+            out[str(ms.get("id"))] = hits[0]
+    return {"milestones": out, "first_pointer": stamps[0] if stamps else None}
+
+
 def _decision_id(subcommand: str, target: str) -> str:
     from tools.aipos_cli.clock import file_slug
 

@@ -770,21 +770,23 @@ Lybra 服务端位置（AIPOS-286）：
         "rp_nav_overview": "项目总览",
         "rp_nav_roadmap": "路线图与验收",
         "rp_nav_onboarding": "项目接入",
-        "rp_nav_inbox": "Owner 待决",
+        "rp_nav_inbox": "待你决定",
         "rp_nav_envelopes": "信封",
-        "rp_nav_board": "看板首页",
+        "rp_nav_project": "项目",
         "rp_lang_other": "English",
         "rp_readonly_note": "本页只读。需要你出手的地方都写好了「告诉顾问」的那句话和顾问要跑的命令:把那句话转告顾问, 由顾问执行。",
         "rp_tell": "告诉 {advisor}:{ask}",
         "rp_advisor_fallback": "你的顾问",
-        "rp_command": "顾问命令",
+        "rp_command": "给顾问的命令(点开)",
         "rp_paused_folded": "已暂停的项目({count} 个)",
         "rp_paused_badge": "已暂停",
         "rp_error": "读不出:{error}",
         "rp_page_error": "页面读不出(拒因原文):{error}",
         "rp_ov_title": "项目总览 · {count} 个项目",
-        "rp_ov_inflight": "在途卡 {total} 张",
-        "rp_ov_closed": "已结案 {count} 张",
+        "rp_ov_counts": "在途 {inflight} 张 · 待办 {todo} 张 · 已结案 {closed} 张",
+        "rp_ov_frozen": "历史存量 {count} 张(已冻结, 不计入上面的数字)",
+        "rp_ov_frozen_error": "冻结清单读不出, 上面的数字按全部卡算:{error}",
+        "rp_ov_one_advisor": "归属顾问:{advisor}",
         "rp_ov_inbox": "待你决定 {count} 件",
         "rp_ov_inbox_paused": "暂停项目不进收件箱",
         "rp_ov_envelope_ok": "信封在用:{policies}",
@@ -841,10 +843,13 @@ Lybra 服务端位置（AIPOS-286）：
         "rp_rm_record_link": "看裁决记录",
         "rp_rm_evidence": "运行证据(摘自 {ref})",
         "rp_rm_evidence_missing": "无运行证据摘录:{problem}",
-        "rp_rm_evidence_entry": "退出码 {exit_code} · 工作树 {worktree}",
+        "rp_rm_evidence_entry": "退出码 {exit_code}",
         "rp_rm_mismatch": "状态与推导不一致:{text}",
         "rp_rm_next": "下一步建议",
-        "rp_rm_unlinked": "游离卡(未挂里程碑){count} 张:{cards}",
+        "rp_rm_unlinked": "游离卡(建路线图后出的卡里未挂里程碑的){count} 张:{cards}",
+        "rp_rm_unlinked_before": "另有建路线图之前的历史卡 {count} 张没挂里程碑, 不算游离卡",
+        "rp_rm_folded": "已完成 / 已放弃的里程碑({count} 个)",
+        "rp_rm_none_for_sub": "这个子项目还没有里程碑",
         "rp_rm_invalid": "挂接不合 {task_id}:{problems}",
         "rp_rm_errors": "读不出的真相 {count} 处(相关标准按未满足、相关里程碑不判停滞)",
         "rp_rm_howto_title": "如何开始",
@@ -899,6 +904,49 @@ Lybra 服务端位置（AIPOS-286）：
         "rp_ob_detail_roadmap_none": "未声明路线图({rel} 不存在)",
         "rp_ob_detail_first_closed_ok": "已结案 {count} 张",
         "rp_ob_detail_first_closed_none": "还没有结案的卡(在途 {inflight} 张)",
+        # AIPOS-F181: one skeleton for the board, project page, subproject grouping, counts without frozen cards, inbox in plain words
+        "rp_tech": "技术详情",
+        "rp_show_hidden": "显示测试项目({count} 个)",
+        "rp_hide_hidden": "隐藏测试项目",
+        "rp_test_badge": "测试",
+        "rp_qs_count": "{state} {count}",
+        "rp_qs_pending": "待认领",
+        "rp_qs_claimed": "进行中",
+        "rp_qs_blocked": "受阻",
+        "rp_qs_completed": "已结案",
+        "rp_qs_withdrawn": "已撤回",
+        "rp_sub_head": "子项目",
+        "rp_sub_inflight": "在途",
+        "rp_sub_todo": "待办",
+        "rp_sub_closed": "已结案",
+        "rp_sub_advisor": "归属顾问",
+        "rp_sub_no_advisor": "(未知)",
+        "rp_pj_title": "项目 · {project}",
+        "rp_pj_all": "全部",
+        "rp_pj_filter": "子项目",
+        "rp_pj_inflight": "在途 {count} 张",
+        "rp_pj_todo": "待办 {count} 张",
+        "rp_pj_closed": "已结案 {count} 张(点开)",
+        "rp_pj_nothing": "没有在途或待办的卡",
+        "rp_pj_unknown_sub": "子项目 {subproject} 不在本项目, 已显示全部",
+        "rp_pj_roadmap": "看路线图",
+        "rp_pj_envelopes": "看信封",
+        "rp_pj_legacy": "旧版任务中心(卡片原文与预览)",
+        "ib_title": "待你决定 · {count} 件({projects} 个项目)",
+        "ib_empty": "待你决定:没有待定事项({projects} 个项目)",
+        "ib_heading": "{project} · {what}",
+        "ib_card": "卡 {task_id}",
+        "ib_card_title": "卡 {task_id}「{title}」",
+        "ib_ask": "要你做什么:{ask}",
+        "ib_recommend": "顾问建议:{recommend}",
+        "ib_grant": "这件事上面已有「待授权请求」卡, 在那里按建议签发",
+        "ib_board": "去信封页处理",
+        "ib_details": "查看详情",
+        "ib_hidden": "已暂停 / 测试项目缺省不列:{projects}",
+        "ib_show": "显示已暂停 / 测试项目({count} 个)",
+        "ib_hide": "隐藏已暂停 / 测试项目",
+        "ib_errors": "有 {count} 处真相读不出(未计入上面, 不猜)",
+        "ib_error": "{project}:{source}:{error}",
         # AIPOS-F180: authorization requests on the inbox / envelope pages (web/board/readonly_pages.py + static/envelopes.js), zh / en same keys
         "gr_section_title": "待授权请求({count})",
         "gr_readonly": "签发只对 Owner 登录会话开放;其他角色看到这里,请告诉顾问。",
@@ -1084,21 +1132,23 @@ Important boundaries:
         "rp_nav_overview": "Project overview",
         "rp_nav_roadmap": "Roadmap & acceptance",
         "rp_nav_onboarding": "Project onboarding",
-        "rp_nav_inbox": "Owner inbox",
+        "rp_nav_inbox": "Your decisions",
         "rp_nav_envelopes": "Envelopes",
-        "rp_nav_board": "Board home",
+        "rp_nav_project": "Projects",
         "rp_lang_other": "中文",
         "rp_readonly_note": "This page is read-only. Wherever your action is needed, it shows what to tell your advisor and the command your advisor runs.",
         "rp_tell": "Tell {advisor}: {ask}",
         "rp_advisor_fallback": "your advisor",
-        "rp_command": "Advisor command",
+        "rp_command": "Commands for your advisor (open)",
         "rp_paused_folded": "Paused projects ({count})",
         "rp_paused_badge": "Paused",
         "rp_error": "Unreadable: {error}",
         "rp_page_error": "Page unreadable (reason verbatim): {error}",
         "rp_ov_title": "Project overview · {count} projects",
-        "rp_ov_inflight": "{total} cards in flight",
-        "rp_ov_closed": "{count} closed",
+        "rp_ov_counts": "In flight {inflight} · To do {todo} · Closed {closed}",
+        "rp_ov_frozen": "Legacy backlog {count} cards (frozen, not counted above)",
+        "rp_ov_frozen_error": "Frozen list unreadable, the numbers above count every card: {error}",
+        "rp_ov_one_advisor": "Advisor: {advisor}",
         "rp_ov_inbox": "{count} awaiting your decision",
         "rp_ov_inbox_paused": "Paused projects stay out of the inbox",
         "rp_ov_envelope_ok": "Envelopes in use: {policies}",
@@ -1155,10 +1205,13 @@ Important boundaries:
         "rp_rm_record_link": "View verdict record",
         "rp_rm_evidence": "Runtime evidence (from {ref})",
         "rp_rm_evidence_missing": "No runtime evidence excerpt: {problem}",
-        "rp_rm_evidence_entry": "exit code {exit_code} · worktree {worktree}",
+        "rp_rm_evidence_entry": "exit code {exit_code}",
         "rp_rm_mismatch": "Status disagrees with the derivation: {text}",
         "rp_rm_next": "Next steps",
-        "rp_rm_unlinked": "{count} unlinked cards: {cards}",
+        "rp_rm_unlinked": "{count} unlinked cards created after the roadmap: {cards}",
+        "rp_rm_unlinked_before": "{count} older cards from before the roadmap have no milestone; they do not count as unlinked",
+        "rp_rm_folded": "Done / dropped milestones ({count})",
+        "rp_rm_none_for_sub": "No milestone for this subproject yet",
         "rp_rm_invalid": "Invalid link {task_id}: {problems}",
         "rp_rm_errors": "{count} unreadable sources (affected criteria count as unmet)",
         "rp_rm_howto_title": "How to start",
@@ -1213,6 +1266,49 @@ Important boundaries:
         "rp_ob_detail_roadmap_none": "No roadmap declared ({rel} does not exist)",
         "rp_ob_detail_first_closed_ok": "{count} cards closed",
         "rp_ob_detail_first_closed_none": "No card closed yet ({inflight} in flight)",
+        # AIPOS-F181: one skeleton for the board, project page, subproject grouping, counts without frozen cards, inbox in plain words
+        "rp_tech": "Technical details",
+        "rp_show_hidden": "Show test projects ({count})",
+        "rp_hide_hidden": "Hide test projects",
+        "rp_test_badge": "Test",
+        "rp_qs_count": "{state} {count}",
+        "rp_qs_pending": "waiting",
+        "rp_qs_claimed": "in progress",
+        "rp_qs_blocked": "blocked",
+        "rp_qs_completed": "closed",
+        "rp_qs_withdrawn": "withdrawn",
+        "rp_sub_head": "Subproject",
+        "rp_sub_inflight": "In flight",
+        "rp_sub_todo": "To do",
+        "rp_sub_closed": "Closed",
+        "rp_sub_advisor": "Advisor",
+        "rp_sub_no_advisor": "(unknown)",
+        "rp_pj_title": "Project · {project}",
+        "rp_pj_all": "All",
+        "rp_pj_filter": "Subproject",
+        "rp_pj_inflight": "In flight ({count})",
+        "rp_pj_todo": "To do ({count})",
+        "rp_pj_closed": "Closed ({count}, click to open)",
+        "rp_pj_nothing": "No card in flight or to do",
+        "rp_pj_unknown_sub": "Subproject {subproject} is not in this project; showing all",
+        "rp_pj_roadmap": "Roadmap",
+        "rp_pj_envelopes": "Envelopes",
+        "rp_pj_legacy": "Classic task center (card text and preview)",
+        "ib_title": "Your decisions · {count} ({projects} projects)",
+        "ib_empty": "Your decisions: nothing pending ({projects} projects)",
+        "ib_heading": "{project} · {what}",
+        "ib_card": "card {task_id}",
+        "ib_card_title": "card {task_id} \"{title}\"",
+        "ib_ask": "What you are asked: {ask}",
+        "ib_recommend": "Advisor suggests: {recommend}",
+        "ib_grant": "This one has an authorization request card above; sign it there as suggested",
+        "ib_board": "Handle it on the envelope page",
+        "ib_details": "Show details",
+        "ib_hidden": "Paused / test projects are not listed: {projects}",
+        "ib_show": "Show paused / test projects ({count})",
+        "ib_hide": "Hide paused / test projects",
+        "ib_errors": "{count} truths could not be read (not counted above, not guessed)",
+        "ib_error": "{project}: {source}: {error}",
         # AIPOS-F180: authorization requests on the inbox / envelope pages (web/board/readonly_pages.py + static/envelopes.js), zh / en same keys
         "gr_section_title": "Authorization requests ({count})",
         "gr_readonly": "Only an Owner login session can sign; other roles, please tell the advisor.",
@@ -2450,6 +2546,7 @@ def make_handler(
         _board_audit = board_audit
         _envelope_paths = {k: str(envelope_decl[k]) for k in ("page_path", "api_path", "write_path")}
         _readonly_pages = readonly_pages
+        _root_redirect = str(pages_declaration()["pages"][pages_declaration()["root_redirect"]])
         _artifact_route = artifact_route
         _perf_log = Path(perf_log_path) if perf_log_path is not None else None  # AIPOS-F177: optional, off by default
         _upgrade_paths = {k: str(upgrade_decl[k]) for k in ("page_path", "write_path")}
@@ -2765,17 +2862,12 @@ def make_handler(
 
         # ---- AIPOS-F176 project upgrade page + Owner write exception 2 (same F172 framework) ----
         def _handle_upgrade_page(self) -> None:
-            """GET upgrade page (server-rendered): every logged-in session sees it; only Owner sessions get the preview button."""
-            from tools.aipos_cli.project_upgrade import collect_upgrade_page, render_upgrade_error_html, render_upgrade_html
-            from tools.schema_loader import SchemaLoadError
+            """GET upgrade page (server-rendered): every logged-in session sees it; only Owner sessions get the preview button.
+            AIPOS-F181: on the board skeleton (web/board/readonly_pages.render_upgrade)."""
+            from web.board.readonly_pages import render_upgrade
 
             _sid, info = self._current_session()
-            project = (parse_qs(urlparse(self.path).query).get("project") or [None])[0]
-            try:
-                page = render_upgrade_html(collect_upgrade_page(home_root, project=project), owner=bool(info and info.get("role") == "owner"))
-            except (OSError, ValueError, LookupError, RuntimeError, SchemaLoadError) as exc:
-                page = render_upgrade_error_html(f"{type(exc).__name__}: {exc}")
-            self._send_html(page)
+            self._send_html(render_upgrade(home_root, parse_qs(urlparse(self.path).query), owner=bool(info and info.get("role") == "owner")))
 
         def _handle_upgrade(self) -> None:
             """POST write exception 2 (single write route): every check lives in project_upgrade.handle_upgrade_request
@@ -2884,9 +2976,10 @@ def make_handler(
                 self.wfile.write(body)
                 return
 
-            # AIPOS-251: Overview page as new root
+            # AIPOS-251: Overview page as new root; AIPOS-F181: the root redirects to the read-only overview (one skeleton for the
+            # whole board; declared board_readonly_pages.root_redirect). The former home stays reachable at /overview.html.
             if path == "/":
-                self._send_file(STATIC_DIR / "overview.html")
+                self._redirect(int(HTTPStatus.FOUND), self._root_redirect)
                 return
             
             # AIPOS-252: Workspace-specific detail view (Owner-friendly)

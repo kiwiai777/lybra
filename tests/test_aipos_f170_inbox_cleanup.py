@@ -204,21 +204,21 @@ def test_item2_paused_project_hidden_by_default(home):
     _show(f"---- ② set-meta --status paused 预演 原文 exit {rc} ----\n{text}")
     assert rc == 0 and "project set-meta gamma: 预览" in text and '+  "status": "paused"' in text.replace('",', '"') and pj.read_text(encoding="utf-8") == before
     rc, text = _cli("project", "set-meta", GAMMA, "--home-root", str(home["home"]), "--status", "frozen")
-    assert rc == 1 and "META_VALUE_INVALID" in text and "['active', 'paused']" in text
+    assert rc == 1 and "META_VALUE_INVALID" in text and "['active', 'paused', 'test']" in text
     rc, text = _cli("project", "set-meta", GAMMA, "--home-root", str(home["home"]), "--status", "paused", "--confirm", "--actor", DRIVER)
     _show(f"---- ② set-meta --status paused --confirm 原文 exit {rc} ----\n{text}")
     assert rc == 0 and "已写入" in text and "落账: verdict=PASS" in text and _clean_and_pushed(home)
     assert json.loads(pj.read_text(encoding="utf-8"))["status"] == "paused"
     rc, text = _inbox(home)
     _show(f"---- ② 缺省视图(gamma 已暂停)原文 exit {rc} ----\n{text}")
-    assert rc == 0 and "GAMMA-1" not in text and "(已暂停项目缺省不列: gamma; 加 --include-paused 查看)" in text
+    assert rc == 0 and "GAMMA-1" not in text and "(已暂停 / 测试项目缺省不列: gamma; 加 --include-paused 查看)" in text
     rc, text = _inbox(home, "--include-paused")
     _show(f"---- ② --include-paused 原文(节选 GAMMA)----\n" + "\n".join(ln for ln in text.splitlines() if "GAMMA" in ln or "gamma" in ln))
-    assert rc == 0 and "GAMMA-1" in text and "已暂停项目缺省不列" not in text
+    assert rc == 0 and "GAMMA-1" in text and "测试项目缺省不列" not in text
     rc, text = _inbox(home, "--project", GAMMA)
     assert rc == 0 and "GAMMA-1" in text, "显式 --project 照列"
     rc, text = _inbox(home, "--stale-before", "2026-10-01")
-    assert "■ gamma" not in text and "已暂停项目缺省不列: gamma" in text
+    assert "■ gamma" not in text and "测试项目缺省不列: gamma" in text
     rc, text = _cli("project", "set-meta", GAMMA, "--home-root", str(home["home"]), "--status", "active", "--confirm", "--actor", DRIVER)
     assert rc == 0 and "GAMMA-1" in _inbox(home)[1], "恢复 active = 照列"
 
@@ -314,7 +314,10 @@ def test_item4_board_overview_has_readonly_inbox_entry(home, monkeypatch: pytest
                 assert resp.status == 200
                 return resp.read().decode("utf-8")
 
-        overview = get("/")
+        # AIPOS-F181: the board root redirects to the read-only overview; its top nav carries the inbox entry
+        root = get("/")
+        assert '<body class="rp-page rp-overview"' in root and 'href="/owner/inbox"' in root.split('<header class="rp-nav">', 1)[1].split("</header>", 1)[0]
+        overview = get("/overview.html")  # former home stays reachable
         entry = next(ln.strip() for ln in overview.splitlines() if "owner-inbox-link" in ln and "<a " in ln)
         _show(f"---- ④ 看板 GET / overview 入口原文 ----\n{entry}")
         assert 'href="/owner/inbox"' in entry and 'data-owner-inbox-entry="readonly"' in entry
@@ -369,7 +372,7 @@ def test_declarations_and_single_implementations():
     assert queue_mutation.withdraw_owner_ruling_states() == ("blocked",)
     assert queue_mutation.ALLOWED_TRANSITIONS["withdraw"] == (("pending", "claimed", "blocked"), "withdrawn")
     status = load_schema("config")["configuration_sources"]["project_json"]["schema"]["status"]
-    assert status["enum"] == ["active", "paused"] and status["default"] == "active" and status["required"] is False
+    assert status["enum"] == ["active", "paused", "test"] and status["default"] == "active" and status["required"] is False
     assert project_meta_declaration()["keys"]["status"] == "--status" and "status" in declared_meta_keys()
     decl = owner_inbox.inbox_declaration()
     assert decl["options"]["freeze_legacy"]["effect"] == "freeze_legacy"
@@ -384,6 +387,6 @@ def test_declarations_and_single_implementations():
     assert "write_text(" not in src and "subprocess" not in src and "\"git\"" not in src
     for literal in ("/home/", "2_projects", "chris", "kiwiai"):
         assert literal not in src.split('"""', 2)[2], f"产品代码写死 {literal!r}"
-    assert src.count("def collect_inbox(") == 1 and src.count("status == \"paused\"") == 1, "暂停过滤只在 collect_inbox 一处"
+    assert src.count("def collect_inbox(") == 1 and src.count("status in hidden_statuses") == 1, "暂停过滤只在 collect_inbox 一处"  # AIPOS-F181: paused + test
     assert subprocess.run(["git", "grep", "-n", "def withdraw_owner_ruling_problem", "--", "tools"], cwd=REPO_ROOT,
                           capture_output=True, text=True).stdout.count("\n") == 1
