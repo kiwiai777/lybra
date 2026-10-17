@@ -191,7 +191,7 @@ lybra card render --task-id <卡ID> --harness claude-code --out-dir <输出目�
 lybra artifact ingest --task-id <卡ID> --kind return --dry-run      # 只校验: 找 Return(声明落点)、必填 frontmatter(commit_sha/tree_hash/branch/model)、分支 tip==commit_sha
 lybra artifact ingest --task-id <卡ID>R --kind verdict --dry-run    # R 卡: 找审计报告(verdict + commit_sha==被审分支 tip)
 ```
-拒因码: INGEST_RETURN_MISSING / INGEST_FRONTMATTER_MISSING / INGEST_TIP_MISMATCH / INGEST_TREE_MISMATCH / INGEST_SUMMARY_MISSING / INGEST_KIND_MISMATCH(exit 4)。通过则走推导核同时给出的同一条 `queue return --confirm` / `audit-verdict --confirm` 薄壳(驱动方 token, actor=卡实例), 并补上产品填写的 `agent_runtime`(运行时模型取自卡面 harness 的会话记录, 取不到记「未声明会话记录」, 与自报不一致标 `model_mismatch`); 裁决入门时门把审计报告全文快照进 `records/audit_verdicts/<卡ID>/report_snapshots/`。
+拒因码: INGEST_RETURN_MISSING / INGEST_FRONTMATTER_MISSING / INGEST_TIP_MISMATCH / INGEST_TREE_MISMATCH / INGEST_SUMMARY_MISSING / INGEST_KIND_MISMATCH(exit 4)。INGEST_TIP_MISMATCH 拒因给两侧完整 sha 与形式诊断(AIPOS-F180B): 形式错误 / 疑似抄错由 loop 同会话续接审计体只改报告头, 真审错了产物按拒因出口重审。通过则走推导核同时给出的同一条 `queue return --confirm` / `audit-verdict --confirm` 薄壳(驱动方 token, actor=卡实例), 并补上产品填写的 `agent_runtime`(运行时模型取自卡面 harness 的会话记录, 取不到记「未声明会话记录」, 与自报不一致标 `model_mismatch`); 裁决入门时门把审计报告全文快照进 `records/audit_verdicts/<卡ID>/report_snapshots/`。
 
 #### `lybra queue withdraw`
 **何时用**:撤卡(malformed/方向错误/重复发卡)。

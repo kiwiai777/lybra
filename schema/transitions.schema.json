@@ -1127,7 +1127,7 @@
       "required_frontmatter": ["verdict", "commit_sha"],
       "field_hints": {
         "verdict": "裁决值, {allowed_verdict_values} 之一",
-        "commit_sha": "被审分支 {branch} tip 的完整 40 位 sha(审的必须是当前产物)"
+        "commit_sha": "被审分支 {branch} tip 的完整 40 位 sha(用 `git rev-parse {branch}` 的输出原样粘贴, 禁手抄; 审的必须是当前产物)"
       },
       "checks": [
         "verdict ∈ N4.record.allowed_verdict_values",
@@ -1222,7 +1222,23 @@
       },
       "derived_command": "lybra artifact ingest --task-id <被审卡ID> --workspace-root <治理根>(action_type=finalize, 信封 allowed_verbs 同 internal finalize)"
     },
-    "exit_codes_ref": "verbs.schema.json verbs.lybra_artifact_ingest.exit_codes(退出码唯一声明处, AIPOS-F101 件③ 删本处重复声明)"
+    "exit_codes_ref": "verbs.schema.json verbs.lybra_artifact_ingest.exit_codes(退出码唯一声明处, AIPOS-F101 件③ 删本处重复声明)",
+    "tip_mismatch_diagnosis": {
+      "description": "AIPOS-F180B 件①(10-17 AIPOS-F180R 实撞: 审计报告 commit_sha 被抄成 36 位, 少中间 4 位; 拒因只打印前 12 位, 两边看起来相同): INGEST_TIP_MISMATCH 拒因打印两侧完整值并附形式诊断。判定处唯一 = artifact_ingest._validate_task_artifact 的 INGEST_TIP_MISMATCH 两处(return / verdict), 实现唯一 = artifact_ingest.tip_mismatch_diagnosis; 结果另落校验结果 tip_diagnosis {tip, commit_sha, kinds, correctable, resolved, text}, loop 经同一校验(validate_task_artifact)取用, 禁第二判定。判定序: 自述值为 ≥ min_resolve_chars 位十六进制且在该仓解析为 tip 以外的提交 = other_commit(唯一不可更正: 真审错了产物); 否则逐条累计: 长度 ≠ 40 = length_invalid; 含 [0-9a-f] 以外字符 = non_hex; 与 tip 公共前缀 ≥ prefix_min_chars 位 = prefix_miscopy; 以上皆无 = not_a_commit。correctable = 命中种类全部 correctable。kinds.<种类>.text 占位: {length} 自述值长度, {chars} 非法字符, {common} 公共前缀位数, {diverge} 首个不同位(从 1 计), {resolved} 解析到的提交。outlets = 审计报告(verdict)拒因的出口句(correctable / not_correctable; not_correctable 之后照旧附 AIPOS-F114 轮次出口); 执行体 Return 出口不变。",
+      "prefix_min_chars": 7,
+      "min_resolve_chars": 7,
+      "kinds": {
+        "length_invalid": {"correctable": true, "text": "长度 {length} 位 ≠ 40(形式错误)"},
+        "non_hex": {"correctable": true, "text": "含非小写十六进制字符 {chars}(形式错误)"},
+        "prefix_miscopy": {"correctable": true, "text": "与 tip 前 {common} 位相同、第 {diverge} 位起不同(疑似抄错)"},
+        "not_a_commit": {"correctable": true, "text": "在被审仓里不是任何提交(疑似抄错)"},
+        "other_commit": {"correctable": false, "text": "指向被审仓里另一个提交 {resolved}(真审错了产物)"}
+      },
+      "outlets": {
+        "correctable": "报告头形式错误, 不是审错了产物: 审计体只把报告头 commit_sha 更正为被审分支 tip(git rev-parse 输出原样), 不改裁决与正文; loop 以同一审计会话自动续接一次(verbs.schema lybra_loop.launch.report_fix), 会话不可续接 = advisor_fix",
+        "not_correctable": "审的不是当前产物"
+      }
+    }
   },
   "supplementary_audit": {
     "description": "AIPOS-F162 件②(chris HBJOTA-58 实撞: 已结案卡审计结论有争议, `audit dispatch` 以「已有通过裁决」拒, 争议无产品出口只能找 Owner): 已结案卡的补充审计出口。复用既有链路, 不另写审计执行路径: 派审 = 同一 audit dispatch(board_adapter.audit_dispatch_task / _build_audit_dispatch_preview, supplementary 分支)派生补审审计卡; 拉起 = 原卡 loop 推导核对已结案原卡给 await_artifact(card=补审卡), loop 走既有审计等待/拉起/裁决入口; 裁决 = 同一 artifact ingest --kind verdict → audit-verdict 门写; FAIL = 同一 audit_derivation.derive_repair_card_on_fail(supplementary 模式)派生修复卡。原卡 closure 记录与原裁决记录不动、不回滚 main; 补审裁决记录带 supplementary_of, 推导核读原卡最新裁决时不计补审裁决。",
