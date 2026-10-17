@@ -23,7 +23,7 @@ import signal
 import socket
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -127,7 +127,9 @@ def _sha256(path: Path) -> str:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    from tools.aipos_cli.clock import utc_now
+
+    return utc_now()
 
 
 def _iso(moment: datetime | None = None) -> str:
@@ -193,13 +195,13 @@ def start_run(governance_root: Path, task_id: str, name: str, cwd: str, command:
         "supervisor": None,
     }
     _write_json_atomic(files["meta"], meta)
+    from tools.aipos_cli.post_merge_regression import _popen_group  # the one detached-session spawn for verification runs
+
     package_root = _package_root()
     env = {**os.environ, "PYTHONPATH": str(package_root)}
     with files["log"].open("ab") as log:
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "tools.aipos_cli.run_long", "supervise", str(directory)],
-            cwd=str(package_root), env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
-        )
+        proc = _popen_group([sys.executable, "-m", "tools.aipos_cli.run_long", "supervise", str(directory)],
+                            cwd=package_root, env=env, stdout=log)
     meta["supervisor"] = {"pid": proc.pid, "process_fingerprint": process_fingerprint(proc.pid)}
     _write_json_atomic(files["meta"], meta)
     view = run_view(directory)
@@ -341,13 +343,9 @@ def run_view(directory: Path, *, local_host: str | None = None) -> dict[str, Any
 
 
 def _parse_iso(text: Any) -> datetime | None:
-    if not isinstance(text, str) or not text.strip():
-        return None
-    try:
-        value = datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    from tools.aipos_cli.loop_run_record import _parse_iso as parse
+
+    return parse(text)
 
 
 def run_status(governance_root: Path, task_id: str, name: str | None = None) -> list[dict[str, Any]]:

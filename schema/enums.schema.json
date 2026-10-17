@@ -215,6 +215,10 @@
           "description": "AIPOS-F147 件②: lybra loop 运行日志头(<loop_runs_root>/<ID>/looprun_*.log; 声明 verbs.schema lybra_loop.run_record.log_record_type; 日志不入库)"
         },
         {
+          "value": "run_long",
+          "description": "AIPOS-F179 件①: lybra run-long 运行 meta(<卡报告落点>/run_long/<名>/run.json; 声明 verbs.schema lybra_run_long.record.record_type; 写入 run_long.start_run)"
+        },
+        {
           "value": "advisor_update_ack",
           "description": "AIPOS-F167 件③: 顾问实例对 Lybra 更新说明的已读标记(records/advisor_update_acks/<实例>/ack_*.md, 只追加; `lybra updates --ack --confirm` 写出并落账; 声明 verbs.schema lybra_updates.ack)"
         },
