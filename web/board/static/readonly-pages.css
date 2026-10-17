@@ -590,6 +590,10 @@ body.rp-page { margin: 0; background: var(--surface-page); color: var(--ink); fo
   margin: 0;
   padding: 0;
 }
+/* The design system has no icon set: the legacy pages' inline SVG glyphs (each sits beside its text label) are not shown. */
+.lg-ov svg {
+  display: none;
+}
 .lg-ov {
   font-family: var(--font-sans);
   font-size: 14.5px;

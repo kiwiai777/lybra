@@ -200,9 +200,9 @@ class TestAIPOS286ServerLocation:
         # Check for ssh-reminder element
         assert 'id="ssh-reminder"' in content, "Should have ssh-reminder element"
         
-        # Check styling (orange left border)
-        assert "#d97706" in content, "Should have orange color (#d97706)"
-        assert "border-left: 3px solid" in content, "Should have left border"
+        # Check styling (left accent bar). AIPOS-F183: official design system - token bar instead of the former orange #d97706
+        assert "border-left: var(--accent-bar) solid var(--muted)" in content, "Should have the design-system left bar"
+        assert "#d97706" not in content, "No raw orange left in the page"
         
         # Check content references
         assert "data-i18n=\"onboarding.ssh_reminder\"" in content, "Should use i18n for ssh_reminder"

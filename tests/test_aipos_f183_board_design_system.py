@@ -143,6 +143,7 @@ def test_cards_and_controls_use_the_design_system_shapes():
         block = css[css.index(rule):css.index("}", css.index(rule))]
         assert "border-left: var(--accent-bar) solid var(--green)" in block and "background: var(--surface-card)" in block, rule
     assert "*, *::before, *::after { box-sizing: border-box; border-radius: var(--radius-none); }" in css
+    assert ".lg-ov svg {\n  display: none;\n}" in css  # no icon set: legacy inline SVG glyphs hidden (labels stay)
     assert ".rp-page h1::before { content: \"\"; display: inline-block; width: 11px; height: 11px; background: var(--green);" in css
     assert ".rp-page button.gr-primary { background: var(--green); border-color: var(--green); color: var(--white); }" in css
     assert ".rp-page .rp-nav { display: flex;" in css and "background: var(--white); border-bottom: var(--border-hairline); }" in css
