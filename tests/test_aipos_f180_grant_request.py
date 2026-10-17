@@ -387,7 +387,7 @@ def test_item2_inbox_and_envelope_pages_show_request_cards(board):
     names = re.findall(r'<input name="(\w+)"', edit)
     _show(f"[件②·修改后签发表单(只露三字段)原文] {edit}")
     assert names == ["max_tasks", "expires_date", "lane_repo"]
-    deny = _plain(re.search(r'<div class="gr-deny" hidden>.*?</div></div>', card).group(0))
+    deny = _plain(re.search(r'<div class="gr-deny" hidden>.*?</details></div>', card).group(0))  # AIPOS-F181: advisor command folded
     _show(f"[件②·不批准(告诉顾问)原文] {deny}")
     assert deny.startswith(f"告诉 {DRIVER}:这次不批准 LANE-HW1 的授权") and f"--item {hw1['item_id']}" in deny
     tech = re.search(r'<details class="gr-tech">.*?</details>', card, re.S).group(0)

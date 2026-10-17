@@ -388,9 +388,11 @@
         "status": {
           "type": "string",
           "required": false,
-          "enum": ["active", "paused"],
+          "enum": ["active", "paused", "test"],
           "default": "active",
-          "description": "AIPOS-F170 件②: 项目推进状态(唯一声明处)。paused = 项目已暂停: Owner 待决收件箱(lybra owner inbox / 看板 /owner/inbox)缺省不列该项目事项(--include-paused 可看), 其余行为不变。缺键 = default(active, 行为不变); 值不在 enum = 读取口报错(收件箱把该项目照列并在 errors 点名, 不猜成暂停)。唯一读取口 workspace_config.project_status; 唯一写入口 `lybra project set-meta [项目] --status paused|active`(set_project_meta 同一两阶段 + 写后自动落账; 旗标登记 verbs.schema two_phase_protocol.project_json_writers.meta.keys)。"
+          "inbox_hidden": ["paused", "test"],
+          "board_hidden": ["test"],
+          "description": "AIPOS-F170 件②: 项目推进状态(唯一声明处)。paused = 项目已暂停: Owner 待决收件箱(lybra owner inbox / 看板 /owner/inbox)缺省不列该项目事项(--include-paused 可看), 其余行为不变。缺键 = default(active, 行为不变); 值不在 enum = 读取口报错(收件箱把该项目照列并在 errors 点名, 不猜成暂停)。唯一读取口 workspace_config.project_status; 唯一写入口 `lybra project set-meta [项目] --status paused|active|test`(set_project_meta 同一两阶段 + 写后自动落账; 旗标登记 verbs.schema two_phase_protocol.project_json_writers.meta.keys)。AIPOS-F181 件③: test = 测试 / 探针项目(只追加值, 缺键行为不变)。inbox_hidden = 收件箱缺省不列的状态(CLI --include-paused / 看板页面开关「显示已暂停 / 测试项目」照列); board_hidden = 看板总览 / 项目 / 路线图 / 接入 / 信封页缺省不列的状态(页面开关照列; paused 不在此列: 总览照旧折叠显示)。两表都须 ⊆ enum, 唯一读取口 workspace_config.project_status_visibility。"
         },
         "custom_roles": {
           "type": "object",

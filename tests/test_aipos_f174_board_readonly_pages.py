@@ -41,7 +41,7 @@ ADV1 = f"advisor.{P1}.h1"
 ADV1B = f"advisor.{P1}.h2"
 EXEC1 = f"exec.{P1}.h1"
 AUD1 = f"audit.{P1}.h1"
-NEW_PAGES = ("/owner/overview", "/owner/roadmap", "/owner/onboarding")
+NEW_PAGES = ("/owner/overview", "/owner/project", "/owner/roadmap", "/owner/onboarding")  # AIPOS-F181: + project page
 
 
 def _show(text: str) -> None:
@@ -165,7 +165,7 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _card(g1, P1, "completed", "K-2", created_days_ago=6, milestone="M1", criteria=["C2"], completed_at=_iso(-1))
     _verdict(g1, "K-2", "PASS", report_text=_report(False), days_ago=1)
     _card(g1, P1, "claimed", "K-3", created_days_ago=1, milestone="W1", criteria=["W1C1"], claimed_at=_iso(-1), created_by=ADV1B)
-    _card(g1, P1, "pending", "K-4", created_days_ago=0.5)
+    _card(g1, P1, "pending", "K-4", created_days_ago=0)  # AIPOS-F181: created after the roadmap (counts as unlinked)
     # 接入: 顾问 + 子 agent 执行者 + 审计工位(本机, 无 host = 缺省本机); 执行方式 + pi 模型声明; 审计工位一次章程核对记录(fresh)
     _land(g1, P1, role="advisor", instance=ADV1, reason=f"workstation={tmp_path / 'ws-adv'} files=['connection.json']")
     _land(g1, P1, role="executor", instance=EXEC1, reason="host=h1 mode=subagent harness=claude-code files=['connection.json']")
@@ -258,16 +258,16 @@ def test_item1_roadmap_page_progress_signals_criteria_evidence(board):
     assert 'data-met="0" data-total="1" data-percent="0"' in w1 and "计划中" in w1 and 'data-overdue="false"' in w1
     assert '<h3 class="roadmap-lane" data-lane="core">' in left and '<h3 class="roadmap-lane" data-lane="web">' in left
     signals = _section(page, '<section class="rp-signals"', "</section>")
-    blocks = re.findall(r'<div class="rp-signal rp-sev-(\w+)" data-kind="(\w+)".*?</div></div>', signals, re.S)
+    blocks = re.findall(r'<div class="rp-signal rp-sev-(\w+)" data-kind="(\w+)".*?</details></div>', signals, re.S)
     _show("[①·偏差红黄条(按严重度排序)] " + json.dumps(blocks))
     kinds = {k: sev for sev, k in blocks}
     assert kinds["overdue"] == "inbox" and kinds["uncovered"] == "inbox" and kinds["roadmap_changed"] == "warn"
     assert [sev for sev, _k in blocks] == sorted((sev for sev, _k in blocks), key=lambda s: 0 if s == "inbox" else 1)
-    overdue = re.search(r'<div class="rp-signal rp-sev-inbox" data-kind="overdue".*?</div></div>', signals, re.S).group(0)
+    overdue = re.search(r'<div class="rp-signal rp-sev-inbox" data-kind="overdue".*?</details></div>', signals, re.S).group(0)
     _show(f"[①·逾期信号 HTML 原文] {overdue}")
     assert "里程碑 M1 目标日" in overdue and f"告诉 {ADV1}:处理路线图偏差「里程碑逾期」" in _html.unescape(overdue)
     assert "<code>lybra roadmap set --workspace-root " in overdue and "--field target_date" in overdue
-    uncovered = re.search(r'data-kind="uncovered".*?</div></div>', signals, re.S).group(0)
+    uncovered = re.search(r'data-kind="uncovered".*?</details></div>', signals, re.S).group(0)
     assert 'data-criterion="C3"' in uncovered and "<code>" in uncovered
     right = _section(page, '<section class="rp-right"', "</section>")
     c1 = re.search(r'<article class="vb-station rp-criterion rp-met" data-criterion="C1".*?</article>', right, re.S).group(0)
@@ -284,7 +284,7 @@ def test_item1_roadmap_page_progress_signals_criteria_evidence(board):
     assert "未满足:无挂接卡" in c3
     nxt = _section(page, '<section class="rp-next">', "</section>")
     _show(f"[①·下一步建议 文本] {_text(nxt)}")
-    assert "游离卡(未挂里程碑)1 张:K-4" in _html.unescape(nxt)
+    assert "游离卡(建路线图后出的卡里未挂里程碑的)1 张:K-4" in _html.unescape(nxt)  # AIPOS-F181 wording
     # 选 W1: 右栏换成 W1 的标准(在途卡无裁决)
     status, page_w1, _h = _request(board, f"/owner/roadmap?project={P1}&milestone=W1")
     right_w1 = _section(page_w1, '<section class="rp-right"', "</section>")
@@ -387,20 +387,21 @@ def test_item1_overview_cards_and_links(board):
     card1 = re.search(rf'<article class="rp-card" data-project="{P1}".*?</article>', page, re.S).group(0)
     card2 = re.search(rf'<article class="rp-card" data-project="{P2}".*?</article>', page, re.S).group(0)
     _show(f"[①·总览卡片 {P1} HTML 原文] {card1}\n[①·总览卡片 {P2} HTML 原文] {card2}")
-    assert 'data-inflight="2" data-closed="2"' in card1 and "在途卡 2 张" in card1 and "已结案 2 张" in card1
+    # AIPOS-F181: in flight / to do / closed from machine_zone.card_stats
+    assert 'data-inflight="1" data-todo="1" data-closed="2"' in card1 and "在途 1 张 · 待办 1 张 · 已结案 2 张" in card1
     assert re.search(r'data-inbox-count="(\d+)"', card1).group(1) == "2"  # 逾期 + 无卡覆盖 两条严重偏差进收件箱
     assert 'href="/owner/inbox"' in card1 and "待你决定 2 件" in card1
     assert 'data-envelope-state="ok"' in card1 and f'href="/owner/envelopes?project={P1}"' in card1 and "pol_alpha_loop_1" in card1
     assert "路线图:标准满足 1/4 · 里程碑 2 个 · 偏差" in _html.unescape(card1) and f'href="/owner/roadmap?project={P1}"' in card1
     assert 'data-met="1" data-total="4"' in card1
-    assert 'data-done="9" data-total="9"' in card1 and f'href="/owner/onboarding#{P1}"' in card1 and 'href="/workspace/0"' in card1
+    assert 'data-done="9" data-total="9"' in card1 and f'href="/owner/onboarding#{P1}"' in card1 and f'href="/owner/project?project={P1}"' in card1
     assert 'data-envelope-state="low"' in card2 and "路线图:未声明" in card2 and 'data-done="1" data-total="7"' in card2
     paused = _section(page, '<details class="rp-paused"', "</details>")
     assert f'data-project="{P3}" data-paused="true"' in paused and "暂停项目不进收件箱" in paused
     nav = _section(page, '<header class="rp-nav">', "</header>")
     _show(f"[①·导航 HTML 原文] {nav}")
     for href in ('href="/owner/overview" aria-current="page"', 'href="/owner/roadmap"', 'href="/owner/onboarding"',
-                 'href="/owner/inbox"', 'href="/owner/envelopes"', 'href="/"'):
+                 'href="/owner/inbox"', 'href="/owner/envelopes"', 'href="/owner/project"'):
         assert href in nav, href
     assert "本页只读" in page and "<form" not in page and "<button" not in page
 
@@ -461,6 +462,7 @@ def test_item5_i18n_keys_single_channel_zh_en():
     from tools.aipos_cli.board_pages import ONBOARDING_CHECKS, STATES, pages_declaration
     from tools.aipos_cli.roadmap import roadmap_declaration
     from tools.aipos_cli.roadmap_drift import VERIFICATION_STATES, status_declaration
+    from tools.aipos_cli.task_loader import QUEUE_STATES
     from web.board.app import _I18N_TEMPLATES
 
     zh, en = _I18N_TEMPLATES["zh"], _I18N_TEMPLATES["en"]
@@ -474,8 +476,9 @@ def test_item5_i18n_keys_single_channel_zh_en():
                | {f"rp_sev_{s}" for s in status_declaration()["severity_labels"]}
                | {f"rp_ob_{kind}_{k}" for k in ONBOARDING_CHECKS for kind in ("item", "ask")}
                | {f"rp_ob_state_{s}" for s in STATES}
-               | {f"rp_rm_state_{s}" for s in VERIFICATION_STATES})  # AIPOS-F175: verification five states
-    prefixes = {"rp_rm_status_", "rp_rm_verify_", "rp_sev_", "rp_ob_item_", "rp_ob_ask_", "rp_ob_state_", "rp_ob_", "rp_rm_state_"}
+               | {f"rp_rm_state_{s}" for s in VERIFICATION_STATES}  # AIPOS-F175: verification five states
+               | {f"rp_qs_{s}" for s in QUEUE_STATES})  # AIPOS-F181: queue state labels
+    prefixes = {"rp_rm_status_", "rp_rm_verify_", "rp_sev_", "rp_ob_item_", "rp_ob_ask_", "rp_ob_state_", "rp_ob_", "rp_rm_state_", "rp_qs_"}
     missing = sorted(k for k in (used | dynamic) if k not in prefixes and k not in zh)
     assert not missing, missing
     assert set(pages_declaration()["onboarding_items"]) <= set(ONBOARDING_CHECKS)
@@ -498,7 +501,7 @@ def test_item5_single_implementations_no_second_derivation():
     pages = (REPO_ROOT / "tools" / "aipos_cli" / "board_pages.py").read_text(encoding="utf-8")
     render = (REPO_ROOT / "web" / "board" / "readonly_pages.py").read_text(encoding="utf-8")
     for name in ("roadmap_status(", "envelope_overview(", "collect_inbox(", "advisor_instances(", "instance_enrollment(",
-                 "latest_charter_checks(", "pi_model_for_role(", "iter_queue_task_paths(", "project_execution(", "home_projects("):
+                 "latest_charter_checks(", "pi_model_for_role(", "card_stats(", "project_execution(", "home_projects("):  # F181: card_stats
         assert name in pages, name
     for banned in ("read_text(", "write_text(", ".glob(", "iterdir(", "GateClient", "sync(", "charter_freshness(", "load_connection_tokens(",
                    "workstation_identity(", "subprocess", "except Exception"):

@@ -366,6 +366,12 @@
         "unattributed_note": "发布记录 actor 未归因(unknown): {reason}; 卡归属回退卡面 created_by(自报)"
       }
     },
+    "card_stats": {
+      "description": "AIPOS-F181 件②③(gap #169/#174): 看板卡统计口径与子项目分组的唯一声明, 唯一实现 machine_zone.card_stats(总览 / 项目页 / 路线图子项目筛选 / 接入清单「首张卡已结案」同读, 禁各页另数)。口径: 冻结 = F122 唯一判定 legacy_baseline.frozen_tasks(经唯一可见卡入口 visible_cards; project.json legacy_baseline 冻结清单 = `lybra project freeze-legacy` 所写, 同一件事)——冻结卡一律不计入在途 / 待办 / 已结案, 只计「历史存量 N 张(已冻结)」一行; 冻结清单读不出 = frozen_error 点名且不隐藏任何卡(fail-closed)。分组: 待办 = todo_states; 已结案 = lybra_roadmap.status.satisfied_queue_states; 在途 = 其余非终态(task_loader.QUEUE_TERMINAL_STATES 之外); 其余终态(撤回)不计。子项目键(唯一推导 machine_zone.card_subproject): 卡有归属顾问(machine_zone.card_owner: 门侧发布记录签发实例, 存量卡回退卡面自报; 且该实例是本项目信封的驱动方 = autonomy_policy.envelope_overview drivers, 任意状态)= 该顾问实例; 审计卡归属不明 = 被审卡的子项目; 都无 = 卡 lane 键(machine_zone.lane_of_card: 卡面 lane.repo → project.json repos 仓名)。只有撤回卡的组不成行。每个子项目给出归属顾问(键即顾问; lane 键 = 有效信封覆盖该 lane 的唯一顾问实例 owner_viewer, 无则空)与涉及的 lane。任何项目同一推导, 不写死项目 / 实例 / 卡号前缀。",
+      "todo_states": [
+        "pending"
+      ]
+    },
     "performance": {
       "description": "AIPOS-F142 件③: 四视图(loop status / next 项目扫描 / needs-owner / brief)性能阈值与回归夹具规模的唯一声明(夹具 tests/test_aipos_f142_view_speed_quiet_trace.py 读本段造临时治理根并测时)。阈值是产品目标(秒); 夹具断言用 阈值 × ci_slack_factor(沙箱/并发 CI 宽裕), 原始耗时与阈值一并打印。实现约束: 一次视图调用全程一个只读作用域(task_loader.task_card_lookup_scope, 可重入): 队列索引一趟、冻结清单重放一次、信封已放行计数一趟(lookup_scope_memo); --task-id 只读该卡运行记录, 已结束运行不探活; 结案取下一张只扫可当选状态(next_resolver.NEXT_CARD_STATES)。",
       "fixture": {
@@ -441,7 +447,7 @@
       "missing": "alert"
     },
     "texts": {
-      "title": "信封 — {projects} 个项目(home 根 {home_root})",
+      "title": "信封 — {projects} 个项目",
       "project_heading": "{project}",
       "project_paused": "(已暂停)",
       "current_heading": "当前在用(每个驱动方)",
@@ -559,20 +565,25 @@
     }
   },
   "board_readonly_pages": {
-    "description": "AIPOS-F174(Owner 10-16 裁定: 看板现阶段只读展示——接入指导 / 进度展示 / 验证展示; 需 Owner 动作处不放按钮, 给「告诉顾问: …」与顾问命令): 看板三张只读页(服务端渲染, 仅 GET, 写方法一律 board_readonly 应答, 不新增任何写路由)。overview = 每项目卡片: 在途卡数(队列唯一遍历 task_loader.iter_queue_task_paths, 在途 = 非终态 queue_state)、待 Owner 项数(owner_inbox.collect_inbox, 链收件箱页)、信封状态(autonomy_policy.envelope_overview, 链信封页)、路线图进度摘要(roadmap_drift.roadmap_status, 链路线图页)、接入完成度(链接入页), 暂停项目(workspace_config.project_status=paused)折叠。roadmap = 选中项目: 顶部偏差红黄条(roadmap_status.signals, 每条一句原因 + 「告诉 <顾问实例>: …」+ 建议命令; 顾问实例 = 信号 advisor, 缺省 = 本治理根已接入顾问 advisor_updates_cli.advisor_instances)、左栏按 lane 列里程碑(进度条 = 推导 met/total、状态、目标日、逾期标红)、右栏选中里程碑的逐条标准(挂接卡 / 队列态 / 审计裁决与链接 / 运行证据摘录 = roadmap_drift.card_evidence 随行带出, 复用 parse_runtime_evidence_section; AIPOS-F175: 每条标准显示验证状态五态(lybra_roadmap.status.verification)与依据、产物缩略图(image_suffixes 经 artifact_route 取图)/ 文本摘录、Owner 抽查记录(转达人 + 原话)与修复卡; 待 Owner 抽查处给「告诉 <顾问>: 符合 / 不符」话术与 `lybra roadmap verify` 命令); 无路线图 = 「如何开始」引导(话术 + lybra_roadmap.texts.no_roadmap 命令)。onboarding = 每项目一张接入清单, 项目与顺序 = onboarding_items(只追加), 每项判定只读既有唯一实现: governance_root = home 根注册枚举 owner_inbox.home_projects(+ project_status 读不出点名); advisor = advisor_updates_cli.advisor_instances; executor / auditor = project.json execution(workspace_config.project_execution)各实例经 enrollment.instance_enrollment(接入唯一判定; 诊断命令 enroll-where), 审计者另须有工位位置; envelope = envelope_overview 当前在用且 status=active(warn / exhausted = 将尽 / 用尽, 给 F166 续签命令与信封页链接); charter = 各本机 pi 工位实例最近一次拉起前章程判定(F164 loop 写进运行记录 charter_checks, 读口 loop_run_record.latest_charter_checks; 看板不重跑 sync --dry-run: 那会读工位凭据并连门), 无记录 = 待办(给 check-workstation 命令); pi_model = workspace_config.pi_model_for_role(审计者恒为 pi 工位; 声明了 pi_executor 再核 executor); roadmap = roadmap_status.exists(未声明给 lybra_roadmap.texts.no_roadmap); first_closed = 结案队列态(lybra_roadmap.status.satisfied_queue_states)至少一张。未完成项给「告诉 <顾问实例>: …」(文案走看板 i18n 单通道 web/board/app.py _I18N_TEMPLATES, zh / en 同键)与 onboarding_commands 命令(占位 {project} / {home_root} / {governance_root} / {instance} / {harness}; 用 F166 / F164 已推导的续签 / 修法命令处原样给出)。语言 = 查询参数 locale.param(缺省 locale.default; 浏览器已在看板选过英文时页内脚本按 locale.storage_key 跳到英文)。唯一实现: tools/aipos_cli/board_pages.py(数据, 只调上列推导)+ web/board/readonly_pages.py(渲染)+ web/board/app.py do_GET(路由读 pages)。",
+    "description": "AIPOS-F174(Owner 10-16 裁定: 看板现阶段只读展示——接入指导 / 进度展示 / 验证展示; 需 Owner 动作处不放按钮, 给「告诉顾问: …」与顾问命令): 看板三张只读页(服务端渲染, 仅 GET, 写方法一律 board_readonly 应答, 不新增任何写路由)。overview = 每项目卡片: 在途卡数(队列唯一遍历 task_loader.iter_queue_task_paths, 在途 = 非终态 queue_state)、待 Owner 项数(owner_inbox.collect_inbox, 链收件箱页)、信封状态(autonomy_policy.envelope_overview, 链信封页)、路线图进度摘要(roadmap_drift.roadmap_status, 链路线图页)、接入完成度(链接入页), 暂停项目(workspace_config.project_status=paused)折叠。roadmap = 选中项目: 顶部偏差红黄条(roadmap_status.signals, 每条一句原因 + 「告诉 <顾问实例>: …」+ 建议命令; 顾问实例 = 信号 advisor, 缺省 = 本治理根已接入顾问 advisor_updates_cli.advisor_instances)、左栏按 lane 列里程碑(进度条 = 推导 met/total、状态、目标日、逾期标红)、右栏选中里程碑的逐条标准(挂接卡 / 队列态 / 审计裁决与链接 / 运行证据摘录 = roadmap_drift.card_evidence 随行带出, 复用 parse_runtime_evidence_section; AIPOS-F175: 每条标准显示验证状态五态(lybra_roadmap.status.verification)与依据、产物缩略图(image_suffixes 经 artifact_route 取图)/ 文本摘录、Owner 抽查记录(转达人 + 原话)与修复卡; 待 Owner 抽查处给「告诉 <顾问>: 符合 / 不符」话术与 `lybra roadmap verify` 命令); 无路线图 = 「如何开始」引导(话术 + lybra_roadmap.texts.no_roadmap 命令)。onboarding = 每项目一张接入清单, 项目与顺序 = onboarding_items(只追加), 每项判定只读既有唯一实现: governance_root = home 根注册枚举 owner_inbox.home_projects(+ project_status 读不出点名); advisor = advisor_updates_cli.advisor_instances; executor / auditor = project.json execution(workspace_config.project_execution)各实例经 enrollment.instance_enrollment(接入唯一判定; 诊断命令 enroll-where), 审计者另须有工位位置; envelope = envelope_overview 当前在用且 status=active(warn / exhausted = 将尽 / 用尽, 给 F166 续签命令与信封页链接); charter = 各本机 pi 工位实例最近一次拉起前章程判定(F164 loop 写进运行记录 charter_checks, 读口 loop_run_record.latest_charter_checks; 看板不重跑 sync --dry-run: 那会读工位凭据并连门), 无记录 = 待办(给 check-workstation 命令); pi_model = workspace_config.pi_model_for_role(审计者恒为 pi 工位; 声明了 pi_executor 再核 executor); roadmap = roadmap_status.exists(未声明给 lybra_roadmap.texts.no_roadmap); first_closed = 结案队列态(lybra_roadmap.status.satisfied_queue_states)至少一张。未完成项给「告诉 <顾问实例>: …」(文案走看板 i18n 单通道 web/board/app.py _I18N_TEMPLATES, zh / en 同键)与 onboarding_commands 命令(占位 {project} / {home_root} / {governance_root} / {instance} / {harness}; 用 F166 / F164 已推导的续签 / 修法命令处原样给出)。语言 = 查询参数 locale.param(缺省 locale.default; 浏览器已在看板选过英文时页内脚本按 locale.storage_key 跳到英文)。唯一实现: tools/aipos_cli/board_pages.py(数据, 只调上列推导)+ web/board/readonly_pages.py(渲染)+ web/board/app.py do_GET(路由读 pages)。AIPOS-F181(gap #169/#173/#174/#179/#182, Owner 10-16/17「易用性还有很多地方需要提高」「交互要做的简单一些」): ① 全站一套骨架: 页面骨架 / 顶部导航 / 设计令牌只在 web/board/readonly_pages._page 与 static/readonly-pages.css 一处; 收件箱 / 信封 / 项目升级页同套; 看板根路径 / 按 root_redirect 302 到总览(旧版首页与项目详情 legacy_project_page 仍可直达, 由项目页页脚「旧版任务中心」链接); 顾问命令与服务器路径只在「给顾问的命令 / 技术详情」折叠内。② project = 项目页: 按子项目(唯一推导 machine_zone.card_stats / card_subproject, 声明 lane_view.card_stats)列在途与待办, 已结案折叠; 查询参数 query.subproject 选子项目(总览 / 项目页 / 路线图同一参数), 路线图页同参数只显示该子项目挂接卡所在的里程碑, 已完成 / 已放弃里程碑折叠。③ 口径: 在途 / 待办 / 已结案计数一律经 card_stats(冻结与 legacy 存量卡不计, 另显示「历史存量 N 张(已冻结)」); project.json status 属 config.schema status.board_hidden(test)的项目在总览 / 项目 / 路线图 / 接入 / 信封页缺省不列, status.inbox_hidden(paused + test)在收件箱缺省不列——页面开关 = 查询参数 query.show=show_all_value(取代命令行式文案「加 --include-paused」)。④ 收件箱: 事项标题人话化(项目 / 卡 / 要你做什么), 工程化明细(事项 ID / 选项 / 裁决命令 / home 根)折叠进「查看详情」; 已有人话请求卡的事项只留一句指向请求卡。",
     "pages": {
       "overview": "/owner/overview",
+      "project": "/owner/project",
       "roadmap": "/owner/roadmap",
       "onboarding": "/owner/onboarding"
     },
     "nav_links": {
-      "board_home": "/",
       "inbox": "/owner/inbox"
     },
+    "root_redirect": "overview",
+    "legacy_project_page": "/workspace/{index}",
+    "show_all_value": "all",
     "stylesheet": "/readonly-pages.css",
     "query": {
       "project": "project",
-      "milestone": "milestone"
+      "milestone": "milestone",
+      "subproject": "sub",
+      "show": "show"
     },
     "artifact_route": {
       "description": "AIPOS-F175 件②: 路线图页逐条标准的产物缩略图取图路由(仅 GET, 登录会话可看, 与三页同一鉴权闸门)。只返回卡面 artifacts 声明且解析在卡产物落点内、后缀属 card.schema card_artifacts.image_suffixes 的文件(唯一判定 roadmap.artifact_file); 其余 = 404。文本产物不经此路由, 页面直接显示摘录(roadmap.card_artifacts excerpt)。",
@@ -3018,7 +3029,7 @@
         "ruling_line": "Owner 已裁决: 选 {choice}({label}){note_part}{relay_part} @ {decided_at}, 按此继续",
         "note_part": " — 备注: {note}",
         "relay_part": "(经 {relayed_by} 转达; Owner 原话: 「{owner_words}」)",
-        "paused_hidden": "(已暂停项目缺省不列: {projects}; 加 --include-paused 查看)",
+        "paused_hidden": "(已暂停 / 测试项目缺省不列: {projects}; 加 --include-paused 查看)",
         "next_hint": "  顾问下一条: {advisor_next}",
         "unknown_source": "(未记录)",
         "page_error": "Owner 待决收件箱读不出(不猜): {error}"
@@ -3601,8 +3612,12 @@
         "write_path": "/api/owner/projects/upgrade",
         "script_path": "/upgrade.js",
         "action": "project_upgrade",
+        "badge_cache": {
+          "description": "AIPOS-F181 件⑤(gap #179: 总览热请求 0.55s 中 0.17s 为角标每请求 21 个 git 子进程): 总览 / 接入页「可升级(N 项)」角标结果按指纹缓存(进程内, 不落盘; 唯一实现 project_upgrade.pending_badge)。指纹 = 治理根(project.json 与治理根所在 git 仓的 HEAD / logs/HEAD 文件状态(每次落账提交即变; index 会被只读 git 命令刷新, 不入指纹), 不起子进程)+ 本项目本机工位目录状态(角标所用 plan 列出的工位)+ 产品声明文件(verbs / config schema)状态; 指纹变或超过 ttl_seconds = 重算。升级页与预演 / 执行恒现算(不读本缓存), 看板写例外②确认执行后清空本缓存。",
+          "ttl_seconds": 300
+        },
         "texts": {
-          "title": "项目升级 — {projects} 个项目(home 根 {home_root})",
+          "title": "项目升级 — {projects} 个项目",
           "project_heading": "{project} · 待升级 {pending} 项 · 需告诉顾问 {guidance} 项",
           "steps_heading": "升级步骤(机械, 按钮一次执行)",
           "guidance_heading": "按钮做不到的: 告诉顾问",
@@ -3612,7 +3627,9 @@
           "preview_heading": "预演全文(未写入; 确认后依次执行并落账)",
           "result_heading": "执行结果",
           "readonly_hint": "只读视图: 执行升级只对 Owner 登录会话开放; 其他角色请告诉顾问运行 lybra project upgrade",
-          "page_error": "升级页读不出(不猜): {error}"
+          "page_error": "升级页读不出(不猜): {error}",
+          "details_summary": "技术详情(预演全文)",
+          "command_summary": "给顾问的命令(点开)"
         },
         "errors": {
           "OWNER_ONLY": {

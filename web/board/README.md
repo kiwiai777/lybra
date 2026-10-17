@@ -161,7 +161,8 @@ or the language already picked on the Board). All three pages are GET only; any 
 - `GET /owner/overview` — one card per registered project of the home root: cards in flight (non-terminal queue states)
   and closed, items awaiting the Owner (`owner_inbox.collect_inbox`, links to `/owner/inbox`), envelope state
   (`autonomy_policy.envelope_overview`, links to `/owner/envelopes`), roadmap summary (`roadmap_drift.roadmap_status`, links
-  to the roadmap page) and onboarding completion (links to the onboarding page). Paused projects are folded.
+  to the roadmap page) and onboarding completion (links to the onboarding page). Paused projects are folded (AIPOS-F181: counts,
+  subprojects and hidden test projects, see below).
 - `GET /owner/roadmap?project=<name>&milestone=<id>` — drift signals on top (red = goes to the Owner inbox, yellow = hint; each
   with its reason, "Tell <advisor>: …" and the advised command), milestones by lane on the left (progress bar = met / total
   criteria, status, target date, overdue in red), the selected milestone's criteria on the right: linked cards with queue
@@ -179,6 +180,29 @@ or the language already picked on the Board). All three pages are GET only; any 
   and not running low, workstation charter fresh (the last pre-launch charter check the loop recorded, `charter_checks` in the
   loop run records — the Board does not re-run `lybra sync --dry-run`), pi model declared, roadmap declared, first card closed.
   Not-applicable items do not count towards completion.
+
+### One skeleton, subprojects, counts, inbox in plain words (AIPOS-F181)
+
+- Every board page (overview, project, roadmap, inbox, envelopes, onboarding, project upgrade) uses the one skeleton
+  `web/board/readonly_pages._page` and the one stylesheet `static/readonly-pages.css` (design tokens declared once in `:root`).
+  `GET /` answers `302 Location: /owner/overview` (`board_readonly_pages.root_redirect`); the former home stays at `/overview.html`
+  and the former project detail at `/workspace/<n>` (linked from the project page footer as the classic task center).
+- Advisor commands and server paths are folded ("Commands for your advisor" / "Technical details"); titles and the page body
+  carry neither. Projects hidden by status get a page switch (`?show=all`) instead of a command-line hint.
+- `GET /owner/project?project=<name>&sub=<subproject>` — cards grouped by subproject (`machine_zone.card_stats`, declared in
+  `verbs.schema lane_view.card_stats`): subproject = the card's owning advisor (`card_owner`), else its lane; in flight and to do
+  listed, closed folded. The overview shows project -> subproject counts with the owning advisor; the roadmap page takes the same
+  `sub` parameter (milestones of that subproject only; done / dropped milestones folded).
+- Counts never include frozen legacy cards (`legacy_baseline.frozen_tasks` through `visible_cards`); a "legacy backlog N cards
+  (frozen)" line shows them. `project.json status` gains `test` (`lybra project set-meta <project> --status test`): hidden by
+  default on the board pages (`status.board_hidden`) and in the inbox (`status.inbox_hidden`, together with `paused`).
+- The roadmap's unlinked-card ratio and list only count cards created after their lane's first milestone declaration (from the
+  decision_log pointers written by `lybra roadmap add-milestone`); older cards are one "from before the roadmap" line.
+- Inbox items read "<project> · card <id> <title>" + "What you are asked"; the CLI lines (item id, options, decide command with the
+  home root) are folded under "Show details"; an item that has an authorization request card above only points to it.
+- The overview / onboarding "upgradable (N)" badge is cached per fingerprint (`project_upgrade.pending_badge`: project.json + the
+  governance repository HEAD / reflog + workstation dirs + declarations, at most `board.badge_cache.ttl_seconds`); a hot overview
+  starts no git subprocess.
 
 ### Read performance (AIPOS-F177)
 

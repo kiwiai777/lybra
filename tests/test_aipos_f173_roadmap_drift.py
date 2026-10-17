@@ -137,12 +137,13 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # web: K-5 在途 20 天无推进 → W1 停滞(出卡人 = 另一顾问实例: 收件箱「告诉哪个顾问」); K-6 在途挂 planned 的 W2 → 状态不一致
     _card(gov, "claimed", "K-5", created_days_ago=20, milestone="W1", criteria=["W1C1", "W1C2"], claimed_at=_iso(-20),
           created_by=OTHER_ADVISOR)
-    _card(gov, "claimed", "K-6", created_days_ago=1, milestone="W2", criteria=["W2C1"], claimed_at=_iso(-1))
-    # 游离卡: K-7 / K-8 / K-9 近期出卡未挂(近 14 天 7 张中 3 张 = 43% > 30%); 审计卡 K-1R 不计入占比; 撤回卡 K-10 不计
+    _card(gov, "claimed", "K-6", created_days_ago=0, milestone="W2", criteria=["W2C1"], claimed_at=_iso(-1))
+    # 游离卡: K-7 / K-8 / K-9 近期出卡未挂; 审计卡 K-1R 不计入占比; 撤回卡 K-10 不计
+    # AIPOS-F181: 只算建路线图之后出的卡(K-1…K-5 早于路线图 = 历史, 不计)→ 窗内 4 张(K-6 挂接 + K-7/8/9 游离)中 3 张 = 75% > 30%
     for tid in ("K-7", "K-8", "K-9"):
-        _card(gov, "pending", tid, created_days_ago=0.5)
-    _card(gov, "completed", "K-1R", created_days_ago=2, task_mode="audit", reviewed_task_id="K-1")
-    _card(gov, "withdrawn", "K-10", created_days_ago=1)
+        _card(gov, "pending", tid, created_days_ago=0)
+    _card(gov, "completed", "K-1R", created_days_ago=0, task_mode="audit", reviewed_task_id="K-1")
+    _card(gov, "withdrawn", "K-10", created_days_ago=0)
     _git(hroot, "add", "-A")
     _git(hroot, "commit", "-q", "-m", "fixture: cards + gate records")
     _git(hroot, "push", "-q", "origin", "main")
@@ -191,7 +192,7 @@ def test_item1_progress_and_six_signals(rig):
     assert [s["milestone"] for s in kinds["overdue"]] == ["M1"] and [s["milestone"] for s in kinds["stalled"]] == ["W1"]
     assert [s["criterion"] for s in kinds["uncovered"]] == ["C4"] and [s["criterion"] for s in kinds["rework"]] == ["C2"]
     ratio = kinds["unlinked_ratio"][0]
-    assert ratio["facts"]["total"] == 7 and ratio["facts"]["unlinked"] == 3, ratio  # 审计卡 / 撤回卡不计
+    assert ratio["facts"]["total"] == 4 and ratio["facts"]["unlinked"] == 3, ratio  # audit / withdrawn / pre-roadmap cards not counted (F181)
     assert kinds["roadmap_changed"][0]["facts"]["count"] == 12 and kinds["roadmap_changed"][0]["facts"]["last_by"] == ADVISOR
     assert {s["kind"] for s in view["signals"] if s["severity"] == "inbox"} == {"overdue", "stalled", "uncovered"}
     assert kinds["stalled"][0]["advisor"] == OTHER_ADVISOR and kinds["uncovered"][0]["advisor"] == ADVISOR
@@ -203,10 +204,10 @@ def test_item1_thresholds_from_project_json_change_result(rig):
     from tools.aipos_cli.workspace_config import RoadmapDriftThresholdError
 
     before = sorted(s["kind"] for s in roadmap_status(rig["gov"])["signals"])
-    _set_thresholds(rig["gov"], stall_days=30, rework_rounds=3, unlinked_ratio=0.5, change_window_days=1)
+    _set_thresholds(rig["gov"], stall_days=30, rework_rounds=3, unlinked_ratio=0.8, change_window_days=1)  # F181: ratio now 75%
     view = roadmap_status(rig["gov"])
     after = sorted(s["kind"] for s in view["signals"])
-    _show(f"[①·阈值] 改前信号 {before}\n[①·阈值] project.json roadmap_drift = stall_days 30 / rework_rounds 3 / unlinked_ratio 0.5 "
+    _show(f"[①·阈值] 改前信号 {before}\n[①·阈值] project.json roadmap_drift = stall_days 30 / rework_rounds 3 / unlinked_ratio 0.8 "
           f"→ 改后信号 {after}; 阈值 {view['thresholds']}")
     assert "stalled" in before and "rework" in before and "unlinked_ratio" in before
     assert after == ["overdue", "roadmap_changed", "uncovered"]

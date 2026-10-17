@@ -170,8 +170,9 @@ class BoardAuthHttpTests(unittest.TestCase):
         # Read面 now reachable for owner.
         status, _b, _sc, _loc = self.server.request("GET", "/api/health", cookie=cookie)
         self.assertEqual(status, 200)
-        status, _b, _sc, _loc = self.server.request("GET", "/", cookie=cookie)
-        self.assertEqual(status, 200)
+        # AIPOS-F181: the board root redirects to the read-only overview (one skeleton for the whole board)
+        status, _b, _sc, loc = self.server.request("GET", "/", cookie=cookie)
+        self.assertEqual((status, loc), (302, "/owner/overview"))
 
     def test_non_owner_login_reads_same_read_surface(self) -> None:
         status, body, sc, _loc = self.server.request("POST", "/api/auth/login", {"token": self.exec_tok})

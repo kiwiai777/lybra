@@ -794,3 +794,144 @@ def group_rows_by_lane(rows: list[dict[str, Any]], governance_root: Path | None 
     rest = sorted(lane for lane in groups if lane not in order and lane != unresolved)
     tail = [unresolved] if unresolved in groups else []
     return {lane: groups[lane] for lane in [*order, *rest, *tail]}
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F181 item 2/3: board card statistics + subproject grouping (declaration verbs.schema lane_view.card_stats).
+# One derivation for the overview / project page / roadmap subproject filter / onboarding "first closed card": frozen cards
+# go through the single visible-card entry (visible_cards -> legacy_baseline.frozen_tasks) and are only counted as history.
+# ---------------------------------------------------------------------------
+
+CARD_GROUPS = ("inflight", "todo", "closed")
+
+
+def card_stats_declaration() -> dict[str, Any]:
+    """verbs.schema lane_view.card_stats (fail-closed): todo_states = non-empty list of non-terminal queue directories."""
+    from tools.aipos_cli.task_loader import QUEUE_STATES, QUEUE_TERMINAL_STATES
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (load_schema("verbs").get("lane_view") or {}).get("card_stats")
+    todo = decl.get("todo_states") if isinstance(decl, dict) else None
+    if (not isinstance(todo, list) or not todo
+            or not all(isinstance(s, str) and s in QUEUE_STATES and s not in QUEUE_TERMINAL_STATES for s in todo)):
+        raise SchemaLoadError(f"verbs.schema.json lane_view.card_stats.todo_states must list non-terminal queue states of {list(QUEUE_STATES)}")
+    return decl
+
+
+def card_state_groups() -> dict[str, tuple[str, ...]]:
+    """Queue state -> board group: todo = declared todo_states; closed = lybra_roadmap.status.satisfied_queue_states; inflight = the
+    other non-terminal states; remaining terminal states (withdrawn) belong to no group."""
+    from tools.aipos_cli.roadmap_drift import status_declaration
+    from tools.aipos_cli.task_loader import QUEUE_STATES, QUEUE_TERMINAL_STATES
+
+    todo = tuple(card_stats_declaration()["todo_states"])
+    closed = tuple(status_declaration()["satisfied_queue_states"])
+    inflight = tuple(s for s in QUEUE_STATES if s not in QUEUE_TERMINAL_STATES and s not in todo and s not in closed)
+    return {"inflight": inflight, "todo": todo, "closed": closed}
+
+
+def subproject_label(key: str) -> str:
+    """Short display name of a subproject key (display only, never a role judgement): an instance name -> its prefix segment
+    (naming_profile.parse_instance_name, the single instance-name parser); a lane that is a path -> the last path segment."""
+    from tools.aipos_cli.naming_profile import parse_instance_name
+
+    text = str(key or "")
+    if "/" in text:
+        return Path(text).name or text
+    parsed = parse_instance_name(text)
+    return str(parsed.get("prefix") or text) if parsed else text
+
+
+def card_subproject(governance_root: Path, row: dict[str, Any], metadata: dict[str, Any] | None,
+                    publishes: dict[str, list[dict[str, Any]]], drivers: set[str]) -> dict[str, Any]:
+    """AIPOS-F181: subproject key of one card (single derivation): the card's owning advisor (card_owner: gate publish record, legacy
+    cards fall back to the self-reported card field) when that instance drives the project (holds one of its envelopes, any state:
+    drivers = autonomy_policy.envelope_overview drivers); otherwise the card's lane key (lane_of_card). Audit cards whose owner is
+    unknown are resolved later by card_stats to the reviewed card's subproject. Returns {subproject, owner, owner_source, lane,
+    lane_error}."""
+    root = Path(governance_root)
+    task_id = _view_card_id(row, metadata)
+    own = card_owner(root, task_id, metadata, publishes=publishes)
+    if own["owner"] and str(own["owner"]) in drivers:
+        return {"subproject": str(own["owner"]), "owner": own["owner"], "owner_source": own["owner_source"], "lane": None,
+                "lane_error": None}
+    lane = lane_of_card(metadata, root)
+    return {"subproject": str(lane["lane"]), "owner": None, "owner_source": own["owner_source"], "publisher": own["owner"],
+            "lane": lane["lane"], "lane_error": lane["lane_error"]}
+
+
+def card_stats(governance_root: Path) -> dict[str, Any]:
+    """AIPOS-F181: the single board card statistics (see card_stats_declaration). Read-only; inside a read scope one derivation
+    per governance root (callers get deep copies). Returns {groups, totals: {inflight, todo, closed}, by_state, frozen, frozen_error,
+    rows: [{task_id, title, queue_state, group, subproject, owner, owner_source, lane, created_at}], subprojects: [{key, label,
+    advisor, lanes, counts, by_state}]}."""
+    from tools.aipos_cli.task_loader import lookup_scope_memo, task_card_lookup_scope
+
+    root = Path(governance_root)
+    with task_card_lookup_scope(root):
+        return lookup_scope_memo(root, "machine_zone.card_stats", lambda: _card_stats(root), copy_out=True)
+
+
+def _card_stats(root: Path) -> dict[str, Any]:
+    from tools.aipos_cli.audit_derivation import audit_card_reviewed_id, is_audit_card
+    from tools.aipos_cli.frontmatter import read_markdown_frontmatter
+    from tools.aipos_cli.task_loader import QUEUE_STATES, iter_queue_task_paths
+
+    groups = card_state_groups()
+    group_of = {state: name for name, states in groups.items() for state in states}
+    entries: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
+    for state in QUEUE_STATES:
+        for path in iter_queue_task_paths(root, states=(state,)):
+            try:
+                meta, _body, warnings, _fence = read_markdown_frontmatter(path)
+            except (OSError, UnicodeDecodeError):
+                meta, warnings = None, ["unreadable"]
+            metadata = meta if isinstance(meta, dict) and not warnings else None
+            # "lane" present = visible_cards does not derive it; card_subproject derives it only for cards without an owner
+            entries.append(({"task_id": (metadata or {}).get("task_id"), "path": str(path), "queue_state": state, "lane": None}, metadata))
+    from tools.aipos_cli.autonomy_policy import envelope_overview
+
+    meta_by_path = {row["path"]: metadata for row, metadata in entries}
+    view = visible_cards(root, entries)
+    publishes = publish_index(root)
+    drivers = {str(d.get("agent_or_role") or "") for d in envelope_overview(root)["drivers"]} - {""}
+    rows: list[dict[str, Any]] = []
+    for row in view["rows"]:
+        metadata = meta_by_path.get(row["path"])
+        sub = card_subproject(root, row, metadata, publishes, drivers)
+        rows.append({"task_id": _view_card_id(row, metadata), "title": str((metadata or {}).get("title") or "").strip() or None,
+                     "queue_state": row["queue_state"], "group": group_of.get(row["queue_state"]), **sub,
+                     "created_at": str((metadata or {}).get("created_at") or (metadata or {}).get("draft_created_at") or "") or None,
+                     "audit_of": (audit_card_reviewed_id(_view_card_id(row, metadata), metadata) or "").upper()
+                     if is_audit_card(_view_card_id(row, metadata), metadata) else None})
+    by_id = {r["task_id"]: r for r in rows}
+    for r in rows:  # an audit card with no known owner joins the reviewed card's subproject
+        reviewed = by_id.get(r["audit_of"] or "")
+        if r["owner"] is None and reviewed is not None and reviewed["owner"]:
+            r.update(subproject=reviewed["subproject"], owner=reviewed["owner"], owner_source=reviewed["owner_source"])
+    subs: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        entry = subs.setdefault(r["subproject"], {"key": r["subproject"], "label": subproject_label(r["subproject"]),
+                                                  "advisor": r["owner"], "lanes": [], "counts": dict.fromkeys(CARD_GROUPS, 0),
+                                                  "by_state": {}})
+        if r["group"]:
+            entry["counts"][r["group"]] += 1
+        entry["by_state"][r["queue_state"]] = entry["by_state"].get(r["queue_state"], 0) + 1
+        lane = r["lane"] if r["lane"] is not None else None
+        if lane and lane not in entry["lanes"]:
+            entry["lanes"].append(lane)
+    for entry in subs.values():
+        if entry["advisor"] is None:  # lane-keyed group: the advisor whose valid envelope covers exactly this lane (if any)
+            lane_key = entry["key"]
+            if lane_key != str(lane_view_declaration()["unresolved_lane"]):
+                viewer = owner_viewer(root, lane=lane_key)
+                entry["advisor"] = viewer["instance"] if viewer else None
+    # a group with nothing in flight, to do or closed (only withdrawn cards) is not a subproject worth a row
+    ordered = sorted((e for e in subs.values() if any(e["counts"].values())),
+                     key=lambda e: (-(e["counts"]["inflight"] + e["counts"]["todo"]), -e["counts"]["closed"], e["key"]))
+    totals = {name: sum(1 for r in rows if r["group"] == name) for name in CARD_GROUPS}
+    by_state: dict[str, int] = {}
+    for r in rows:
+        by_state[r["queue_state"]] = by_state.get(r["queue_state"], 0) + 1
+    return {"groups": {k: list(v) for k, v in groups.items()}, "totals": totals, "by_state": by_state,
+            "frozen": len(view["frozen_hidden"]), "frozen_error": view["frozen_error"], "rows": rows, "subprojects": ordered}

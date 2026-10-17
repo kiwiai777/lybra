@@ -89,8 +89,9 @@ class RealRouteTaskCenterTests(unittest.TestCase):
         self.assertIn('id="task-center-section"', html)
 
     def test_overview_route_serves_real_progress(self) -> None:
-        """GET / (the real landing route) must carry the real-progress rendering."""
-        status, html = _get(f"{self.base}/")
+        """GET / (the real landing route) must carry the real-progress rendering.
+        AIPOS-F181: / now redirects to the read-only overview; the former landing page stays at /overview.html."""
+        status, html = _get(f"{self.base}/overview.html")
         self.assertEqual(status, 200)
         self.assertIn('data-owner-truth="overview"', html)
         self.assertIn("stage_counts", html)
@@ -149,8 +150,9 @@ class RealRouteTaskCenterTests(unittest.TestCase):
     def test_overview_route_drops_queue_display_shows_blocked_signal(self) -> None:
         """FIX-3 F-261-5: landing page / no longer renders the old four-count
         queue display (待认领/进行中/受阻/已完成 = queue raw counts); it carries
-        the three-state pills and a 受阻 anomaly light rendered only when > 0."""
-        status, html = _get(f"{self.base}/")
+        the three-state pills and a 受阻 anomaly light rendered only when > 0.
+        AIPOS-F181: the former landing page is served at /overview.html (/ redirects to the read-only overview)."""
+        status, html = _get(f"{self.base}/overview.html")
         self.assertEqual(status, 200)
         # Old four-count queue display removed (no render loop, no queue-counts class).
         self.assertNotIn("['pending', 'claimed', 'blocked', 'completed']", html)

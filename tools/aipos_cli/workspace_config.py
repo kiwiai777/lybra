@@ -2827,6 +2827,23 @@ def project_status(governance_root: str | Path) -> str:
     return str(raw)
 
 
+def project_status_visibility() -> dict[str, tuple[str, ...]]:
+    """AIPOS-F181 item 3: which project statuses are hidden by default (declaration config.schema project_json.status
+    inbox_hidden / board_hidden, both subsets of its enum; missing or out of range = SchemaLoadError, fail-closed).
+    Returns {"inbox_hidden": (...), "board_hidden": (...)}; the Owner inbox (CLI + board) and the board pages read only this."""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    spec = (((load_schema("config").get("configuration_sources") or {}).get("project_json") or {}).get("schema") or {}).get("status")
+    enum = [str(v) for v in (spec or {}).get("enum") or []] if isinstance(spec, dict) else []
+    out: dict[str, tuple[str, ...]] = {}
+    for key in ("inbox_hidden", "board_hidden"):
+        values = spec.get(key) if isinstance(spec, dict) else None
+        if not isinstance(values, list) or not all(isinstance(v, str) and v in enum for v in values):
+            raise SchemaLoadError(f"config.schema.json configuration_sources.project_json.schema.status.{key} 须为 enum {enum} 的子集")
+        out[key] = tuple(values)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # AIPOS-F122 件①: 存量冻结清单落点声明(project.json legacy_baseline; 声明表 config.schema
 # configuration_sources.project_json.schema.legacy_baseline)。唯一读取口 project_legacy_baseline / 唯一写入口 set_project_legacy_baseline。

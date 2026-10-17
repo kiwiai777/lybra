@@ -17,10 +17,13 @@
 """
 from __future__ import annotations
 
+import copy
 import html
 import importlib
 import json
+import os
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +36,7 @@ _TEXT_KEYS = ("head_preview", "head_confirm", "step_line", "change_line", "detai
               "unread_unavailable", "unread_error", "unread_none", "summary_preview", "summary_confirm", "stopped", "nothing",
               "guidance_head", "guidance_group", "guidance_item", "guidance_say", "guidance_done", "guidance_none", "guidance_error")
 _BOARD_TEXT_KEYS = ("title", "project_heading", "steps_heading", "guidance_heading", "preview_button", "confirm_button", "cancel_button",
-                    "preview_heading", "result_heading", "readonly_hint", "page_error")
+                    "preview_heading", "result_heading", "readonly_hint", "page_error", "details_summary", "command_summary")
 
 
 class UpgradeError(RuntimeError):
@@ -100,6 +103,9 @@ def upgrade_declaration() -> dict[str, Any]:
     for code, spec in board["errors"].items():
         if not isinstance(spec, dict) or not isinstance(spec.get("status"), int) or not str(spec.get("message") or "").strip():
             raise SchemaLoadError(f"{where}.board.errors.{code} 须有 int status 与非空 message")
+    ttl = (board.get("badge_cache") or {}).get("ttl_seconds")
+    if not isinstance(ttl, int) or isinstance(ttl, bool) or ttl < 1:
+        raise SchemaLoadError(f"{where}.board.badge_cache.ttl_seconds must be a positive integer (AIPOS-F181)")
     codes = decl.get("exit_codes") or {}
     if not all(isinstance((codes.get(k) or {}).get("code"), int) for k in ("ok", "refused", "usage", "step_failed")):
         raise SchemaLoadError(f"{where}.exit_codes(ok / refused / usage / step_failed)未声明齐")
@@ -609,17 +615,90 @@ def upgrade_page_url(project: str | None = None) -> str:
     return f"{path}?project={quote(str(project))}" if project else path
 
 
+# AIPOS-F181 item 5: badge results cached per fingerprint (declaration board.badge_cache); process memory only, one lock.
+_BADGE_CACHE: dict[tuple[str, str, str], tuple[tuple[Any, ...], float, dict[str, Any]]] = {}
+_BADGE_CACHE_LOCK = threading.Lock()
+
+
+def _stat_ident(path: Path) -> tuple[Any, ...]:
+    """(path, dev, ino, size, mtime_ns, ctime_ns) of a file / directory; missing = (path, None)."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return (str(path), None)
+    return (str(path), st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
+def _git_dir(root: Path) -> Path | None:
+    """The git directory holding the governance root (walk up for .git; a .git file = `gitdir: <path>`); none = None. No subprocess."""
+    for base in (root, *root.parents):
+        dot = base / ".git"
+        if dot.is_dir():
+            return dot
+        if dot.is_file():
+            try:
+                text = dot.read_text(encoding="utf-8").strip()
+            except OSError:
+                return None
+            if text.startswith("gitdir:"):
+                target = Path(text.split(":", 1)[1].strip())
+                return target if target.is_absolute() else (base / target)
+            return None
+    return None
+
+
+def _badge_fingerprint(root: Path, stations: list[str]) -> tuple[Any, ...]:
+    """Governance root (project.json + the git index / HEAD / logs/HEAD of its repository) + the workstation directories the last plan
+    used + the product declaration files. Any landing (commit) changes the git part; a new run record / enrollment lands the same way."""
+    from tools.aipos_cli.workspace_config import project_json_path
+    from tools.schema_loader import code_repo_schema_root
+
+    parts: list[Any] = [_stat_ident(project_json_path(root))]
+    gdir = _git_dir(root)
+    if gdir is not None:
+        # not the index: read-only git commands refresh it; HEAD / its reflog move on every commit (landing) and checkout
+        parts += [_stat_ident(gdir / name) for name in ("HEAD", "logs/HEAD")]
+    parts += [_stat_ident(Path(ws)) for ws in stations]
+    schemas = Path(code_repo_schema_root())
+    parts += [_stat_ident(schemas / name) for name in ("verbs.schema.json", "config.schema.json")]
+    return tuple(parts)
+
+
+def clear_badge_cache() -> None:
+    """Drop every cached badge (after an upgrade ran through the board write exception; fixtures)."""
+    with _BADGE_CACHE_LOCK:
+        _BADGE_CACHE.clear()
+
+
 def pending_badge(root: Path, project: str, home_root: str | Path | None = None) -> dict[str, Any]:
-    """总览 / 接入页角标: 待升级机械步数(章程步取记录真相, 不连门)。读不出 = {error}(调用方点名)。"""
+    """总览 / 接入页角标: 待升级机械步数(章程步取记录真相, 不连门)。读不出 = {error}(调用方点名)。
+    AIPOS-F181 item 5: result cached per fingerprint (_badge_fingerprint) and at most board.badge_cache.ttl_seconds; errors not cached."""
+    import time
+
     from tools.schema_loader import SchemaLoadError
 
+    ttl = int(board_declaration()["badge_cache"]["ttl_seconds"])
+    key = (str(Path(root).resolve()), str(project), str(home_root or ""))
+    with _BADGE_CACHE_LOCK:
+        cached = _BADGE_CACHE.get(key)
+    if cached is not None and time.monotonic() - cached[1] < ttl:
+        stations = list(cached[2].get("stations") or [])
+        if _badge_fingerprint(Path(root), stations) == cached[0]:
+            return copy.deepcopy({k: v for k, v in cached[2].items() if k != "stations"})
     try:
+        ctx_stations = _Ctx(Path(root), project, home_root, charter_mode="recorded", running=None).stations()
+        stations = [str(v["workstation"].get("dir")) for v in ctx_stations["local"] if v["workstation"].get("dir")]
+        before = _badge_fingerprint(Path(root), stations)
         plan = plan_upgrade(root, project=project, home_root=home_root, charter_mode="recorded", with_guidance=False)
     except SchemaLoadError:
         raise
     except _step_errors() as exc:
         return {"error": _err(exc), "pending": None, "url": upgrade_page_url(project)}
-    return {"error": None, "pending": len(plan["pending"]), "errors": plan["errors"], "url": upgrade_page_url(project)}
+    result = {"error": None, "pending": len(plan["pending"]), "errors": plan["errors"], "url": upgrade_page_url(project)}
+    if not plan["errors"] and _badge_fingerprint(Path(root), stations) == before:  # unchanged while computing = safe to keep
+        with _BADGE_CACHE_LOCK:
+            _BADGE_CACHE[key] = (before, time.monotonic(), {**copy.deepcopy(result), "stations": stations})
+    return result
 
 
 def collect_upgrade_page(home_root: str | Path | None = None, *, project: str | None = None, running: Any = None) -> dict[str, Any]:
@@ -632,7 +711,7 @@ def collect_upgrade_page(home_root: str | Path | None = None, *, project: str | 
         if project and p["name"] != project:
             continue
         entry: dict[str, Any] = {"project": p["name"], "governance_root": str(p["root"]), "paused": p["status"] == "paused",
-                                 "plan": None, "error": None}
+                                 "status": p["status"], "plan": None, "error": None}
         try:
             entry["plan"] = plan_upgrade(p["root"], project=p["name"], home_root=enumerated["home_root"], charter_mode="recorded",
                                          running=running)
@@ -646,8 +725,10 @@ def _pre(lines: list[str]) -> str:
     return "<pre class=\"upgrade-lines\">" + html.escape("\n".join(lines)) + "</pre>"
 
 
-def render_upgrade_html(view: dict[str, Any], *, owner: bool) -> str:
-    """升级页(服务端渲染; 全部值经 html.escape)。owner=False = 只读(无按钮)。界面文字读声明 board.texts; 步骤 / 引导内容 = CLI 同一渲染。"""
+def upgrade_page_parts(view: dict[str, Any], *, owner: bool) -> dict[str, Any]:
+    """升级页正文(服务端渲染; 全部值经 html.escape)。owner=False = 只读(无按钮)。界面文字读声明 board.texts; 步骤 / 引导内容 = CLI 同一渲染。
+    AIPOS-F181: page skeleton (top nav / stylesheet) comes from the board F174 skeleton web/board/readonly_pages.render_upgrade; this
+    function returns {title, h1_attrs, body_attrs, sections, scripts} only."""
     from tools.aipos_cli.envelope_board import board_envelopes_declaration
 
     esc = html.escape
@@ -656,14 +737,9 @@ def render_upgrade_html(view: dict[str, Any], *, owner: bool) -> str:
     title = _fmt(texts["title"], projects=len(view["projects"]), home_root=view["home_root"])
     data_attrs = "".join(f" data-text-{k.replace('_', '-')}=\"{esc(str(texts[k]))}\""
                          for k in ("preview_heading", "result_heading", "confirm_button", "cancel_button"))
-    parts = ["<!doctype html>", "<html lang=\"zh\"><head><meta charset=\"utf-8\">",
-             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
-             f"<title>{esc(title)}</title><link rel=\"stylesheet\" href=\"/styles.css\">",
-             "<style>.upgrade-lines{white-space:pre-wrap;background:#f6f7f9;padding:.6em}.upgrade-preview pre{white-space:pre-wrap;"
-             "background:#f6f7f9;padding:.6em}.upgrade-item{margin:.4em 0}</style></head>",
-             f"<body class=\"owner-upgrade\" data-owner=\"{str(owner).lower()}\" data-write-path=\"{esc(str(board['write_path']))}\""
-             f" data-owner-role=\"{esc(str(board_envelopes_declaration()['owner_role']))}\"{data_attrs}>",
-             f"<main><h1 data-upgrade-projects=\"{len(view['projects'])}\">{esc(title)}</h1>"]
+    body_attrs = (f" data-owner=\"{str(owner).lower()}\" data-write-path=\"{esc(str(board['write_path']))}\""
+                  f" data-owner-role=\"{esc(str(board_envelopes_declaration()['owner_role']))}\"{data_attrs}")
+    parts: list[str] = []
     if not owner:
         parts.append(f"<p class=\"upgrade-readonly\">{esc(texts['readonly_hint'])}</p>")
     if view.get("unknown_project"):
@@ -678,31 +754,34 @@ def render_upgrade_html(view: dict[str, Any], *, owner: bool) -> str:
         guidance = plan["guidance"]
         parts.append(f"<h2 data-pending=\"{len(plan['pending'])}\" data-guidance=\"{guidance['count']}\">"
                      f"{esc(_fmt(texts['project_heading'], project=name, pending=len(plan['pending']), guidance=guidance['count']))}</h2>")
-        parts.append(f"<h3>{esc(texts['steps_heading'])}</h3>" + _pre(render_plan_lines(plan)))
+        # AIPOS-F181: one plain line per step visible; the full CLI preview (governance root / workstation paths) folded
+        states = upgrade_declaration()["step_states"]
+        steps = "".join(f"<li class=\"upgrade-step\" data-step=\"{esc(str(s['name']))}\" data-state=\"{esc(str(s['state']))}\">"
+                        f"{esc(str(s['label']))}: {esc(str(states[s['state']]))}</li>" for s in plan["steps"])
+        parts.append(f"<h3>{esc(texts['steps_heading'])}</h3><ol class=\"upgrade-steps\">{steps}</ol>"
+                     f"<details class=\"rp-tech\"><summary>{esc(texts['details_summary'])}</summary>{_pre(render_plan_lines(plan))}</details>")
         if owner:
             parts.append(f"<p><button type=\"button\" class=\"upgrade-preview-button\" data-workspace=\"{esc(name)}\">"
                          f"{esc(texts['preview_button'])}</button></p>")
         parts.append(f"<h3>{esc(texts['guidance_heading'])}</h3>")
         for group in guidance["groups"]:
+            # AIPOS-F181: the sentence before its first command stays visible, the command (server paths) is folded
             items = "".join(f"<li class=\"upgrade-item\" data-item=\"{esc(item['id'])}\" data-source=\"{esc(item['source'])}\">"
-                            f"<p>{esc(item['why'])}</p><p class=\"upgrade-tell\">{esc(item['tell'])}</p>"
-                            f"<p class=\"upgrade-done\">{esc(item['done_when'])}</p></li>" for item in group["items"])
+                            f"<p>{esc(item['why'])}</p><p class=\"upgrade-tell\">{esc(str(item['tell']).partition('`')[0].strip().rstrip(':;,\uff1a\uff1b\uff0c'))}</p>"
+                            + (f"<details class=\"rp-cmd\"><summary>{esc(texts['command_summary'])}</summary><p>{esc(item['tell'])}</p></details>"
+                               if "`" in str(item["tell"]) else "")
+                            + f"<p class=\"upgrade-done\">{esc(item['done_when'])}</p></li>" for item in group["items"])
             who = group["advisor"] or upgrade_declaration()["guidance"]["unknown_advisor"]
             parts.append(f"<div class=\"upgrade-group\" data-advisor=\"{esc(who)}\" data-items=\"{len(group['items'])}\">"
                          f"<h4>{esc(who)}</h4><ul>{items}</ul></div>")
         parts.extend(f"<p class=\"upgrade-error\">{esc(e['source'])}: {esc(e['error'])}</p>" for e in guidance["errors"])
         parts.append("</section>")
+    scripts: list[str] = []
     if owner:
         parts.append("<section class=\"upgrade-preview\" hidden><h2></h2><pre></pre><div class=\"upgrade-actions\"></div></section>")
-        parts.append(f"<script src=\"{esc(str(board['script_path']))}\"></script>")
-    parts.append("</main></body></html>")
-    return "\n".join(parts)
-
-
-def render_upgrade_error_html(message: str) -> str:
-    text = _fmt(board_declaration()["texts"]["page_error"], error=message)
-    return ("<!doctype html>\n<html lang=\"zh\"><head><meta charset=\"utf-8\"><title>upgrade</title></head>"
-            f"<body class=\"owner-upgrade\"><main><p class=\"upgrade-error\">{html.escape(text)}</p></main></body></html>")
+        scripts.append(str(board["script_path"]))
+    return {"title": title, "h1_attrs": f" data-upgrade-projects=\"{len(view['projects'])}\"", "body_attrs": body_attrs,
+            "sections": parts, "scripts": scripts}
 
 
 def handle_upgrade_request(
@@ -749,7 +828,9 @@ def handle_upgrade_request(
             run = run_upgrade(params["governance_root"], project=params["project"], actor=actor, home_root=home_root, running=running,
                               plan=context["plan"])
         except (UpgradeError, *_step_errors()) as exc:
+            clear_badge_cache()
             return {"outcome": "upgrade_failed", "error": _err(exc)}, {}, MintRequestError("UPGRADE_FAILED", detail=_err(exc))
+        clear_badge_cache()  # AIPOS-F181: steps ran here, badges recompute on the next overview
         lines = render_run_lines(run, source=prov["capture_surface"])
         fields = {"outcome": "upgraded" if run["stopped_at"] is None else "upgrade_failed", "actor": actor,
                   "capture_surface": prov["capture_surface"], "steps": [[s["name"], s["outcome"]] for s in run["steps"]]}

@@ -400,7 +400,8 @@ def test_item3_board_owner_inbox_page_and_api_same_data(rig, monkeypatch: pytest
         _show(f"---- ③ 看板 GET /owner/inbox HTML 原文(status {status}, {ctype}) ----\n{page}")
         assert status == 200 and ctype.startswith("text/html")
         cli = _inbox_json(rig)
-        assert f'data-owner-inbox-count="{cli["count"]}"' in page and "Owner 待决收件箱 — 5 项待定" in page
+        # AIPOS-F181: page title in plain words (no home root); the CLI lines are folded per item under "show details"
+        assert f'data-owner-inbox-count="{cli["count"]}"' in page and "待你决定 · 5 件" in page and str(rig["home"]) not in page.split("<details", 1)[0]
         for item in cli["items"]:
             assert f'data-item-id="{item["item_id"]}"' in page
         # AIPOS-F180: 页面套 F174 骨架(含语言切换内联脚本); 无授权请求 = 不载签发脚本、无表单(仍是只读展示)
