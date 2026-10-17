@@ -329,6 +329,10 @@ def charter_render_context(
     from tools.aipos_cli.post_merge_regression import audit_baseline_command
 
     ctx["regression_baseline_command"] = f"`{audit_baseline_command(gov)}`"
+    # AIPOS-F179 item 1: long verification commands via `lybra run-long` (single rendering run_long.charter_commands)
+    from tools.aipos_cli.run_long import charter_commands
+
+    ctx.update(charter_commands(gov))
     return ctx
 
 

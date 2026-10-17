@@ -2046,7 +2046,7 @@ def build_parser() -> argparse.ArgumentParser:
     queue_amend_parser.add_argument("--amendments", required=True, help="JSON dict of amendments")
     queue_amend_parser.add_argument("--amendment-reason", required=True, help="Reason for amendment")
     queue_amend_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
-    queue_amend_parser.add_argument("--restricted", action="store_true", help="AIPOS-F78 前置零⑤: advisor 对 claimed 卡受限 amend(允许字段读 card.schema restricted_amend.claimed_card_fields: rework_rounds/output_target/lane; 复用 F75 restricted amend)")
+    queue_amend_parser.add_argument("--restricted", action="store_true", help="AIPOS-F78 前置零⑤: advisor 对 claimed 卡受限 amend(允许字段读 card.schema restricted_amend.claimed_card_fields: rework_rounds/output_target/lane/resources; 复用 F75 restricted amend)")
     queue_amend_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     queue_withdraw_parser = queue_subparsers.add_parser("withdraw", help="Withdraw a task from queue")
@@ -3117,6 +3117,28 @@ def build_parser() -> argparse.ArgumentParser:
     regression_run_parser.add_argument("--confirm", action="store_true", help="执行(缺省只预演, 不写任何文件)")
     regression_run_parser.add_argument("--background", action="store_true", help="与 --confirm 同用: 后台执行, 立即返回 pid / 日志 / 进行中记录")
     regression_run_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    # AIPOS-F179 件①: lybra run-long — 长验证命令脱离运行 + 分段等待(声明 verbs.schema lybra_run_long; 唯一实现 run_long)
+    run_long_parser = subparsers.add_parser(
+        "run-long", help="AIPOS-F179: 长验证命令(全量测试 / UI 套件等, 超过 agent bash 工具单次时限)脱离运行 + 日志 / 退出码落卡产物落点 + 分段等待。"
+        "执行体与审计体共用, 不连门、不读凭据。治理根用全局 `lybra --workspace-root <治理根> run-long ...`")
+    run_long_sub = run_long_parser.add_subparsers(dest="run_long_command")
+    run_long_start = run_long_sub.add_parser("start", help="脱离起命令(新会话), 立即返回; 名字已用 = 拒")
+    run_long_start.add_argument("--task-id", required=True, help="卡 ID(执行卡或审计卡); 运行目录落在该卡报告落点下")
+    run_long_start.add_argument("--name", required=True, help="本次运行名(字母数字 . _ -)")
+    run_long_start.add_argument("--cwd", required=True, help="命令执行目录(绝对路径; 审计 = 审计分配工作树, 执行 = 卡工作树)")
+    run_long_start.add_argument("--max-seconds", type=float, default=None, help="命令运行上限秒数(缺省读 verbs.schema lybra_run_long.max_seconds_default)")
+    run_long_start.add_argument("--json", action="store_true", help="Output JSON")
+    run_long_start.add_argument("run_long_argv", nargs=argparse.REMAINDER, help="`--` 之后的命令: 一个参数 = 命令串(经 bash -c); 多个 = argv")
+    run_long_wait = run_long_sub.add_parser("wait", help="等一段(≤ --timeout 秒)直到命令结束; 仍在跑 = exit 3, 再调一次")
+    run_long_wait.add_argument("--task-id", required=True, help="卡 ID")
+    run_long_wait.add_argument("--name", required=True, help="运行名")
+    run_long_wait.add_argument("--timeout", type=float, default=None, help="本段最长等待秒数(取本会话工具单次时限以内; 缺省读声明)")
+    run_long_wait.add_argument("--json", action="store_true", help="Output JSON")
+    run_long_status = run_long_sub.add_parser("status", help="只读: 运行中 / 已结束 + 退出码 / 失联")
+    run_long_status.add_argument("--task-id", required=True, help="卡 ID")
+    run_long_status.add_argument("--name", default=None, help="运行名; 缺省 = 列本卡全部运行")
+    run_long_status.add_argument("--json", action="store_true", help="Output JSON")
 
     # AIPOS-R7A2 靶②: governance-commit (顾问收口一条命令)
     governance_commit_parser = subparsers.add_parser("governance-commit", help="AIPOS-R7A2: N6 收账提交(校验四件→commit→push)")
@@ -4812,6 +4834,21 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         parser.print_help()
         return 2
+
+    if args.command == "run-long":
+        # AIPOS-F179 件①: 薄壳——start / wait / status 全在 run_long(唯一实现), 退出码读声明 verbs.schema lybra_run_long.exit_codes
+        if getattr(args, "run_long_command", None) not in ("start", "wait", "status"):
+            parser.parse_args([args.command, "--help"])
+            return 2
+        from tools.aipos_cli import run_long as run_long_mod
+        from tools.schema_loader import SchemaLoadError
+
+        try:
+            governance_root = Path(_find_repo_root_for_args(args))
+        except (FileNotFoundError, SchemaLoadError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return run_long_mod.exit_code("refused")
+        return run_long_mod.cli(args, governance_root)
 
     if args.command == "regression":
         # AIPOS-F149 件③: 只读薄壳——治理根经唯一薄壳 _find_repo_root_for_args, sha 解析与判据在 post_merge_regression(唯一实现)

@@ -2373,6 +2373,15 @@
         "unprobeable_heartbeat_key": "stall_after_tool_seconds",
         "message": "本卡 loop 已在运行(run {run_id}, pid {pid} @ {host}, 开始 {started_at}, 当前步 {current_step}), 本次启动已拒、未推进任何步; 用 lybra loop status --task-id {task_id} --workspace-root {governance_root} 观察, 勿重复启动(顾问下一动作 continue_wait: 在跑的 loop 会自己续等 / 续接)"
       },
+      "resource_lock": {
+        "description": "AIPOS-F179 件②(10-16 chris HBLX-8 实撞: 审计跑 iOS UI 全量时他卡执行/审计同时段共用模拟器, exit 40 资源冲突): 独占资源按「项目 + 资源」串行。卡面声明唯一字段 card.schema fields.resources(值域 enums.schema exclusive_resource, 形校验唯一实现 loop_run_record.card_resources)。判定与排队挂 loop 拉起入口(loop_driver, 与 F171B 单实例锁同一判据族: 判据 = 本项目运行记录(paths.loop_runs_root 下全部卡)的 resource_lock 段, 不另立锁文件; 存活判定 = lybra loop status 同一 judge_run(进程启动时刻指纹, AIPOS-F137)的 single_instance.live_states, 别机记录按 single_instance 心跳判)。本卡声明了资源的 loop 在首个执行体 / 审计体等待前(拉起或手工开工之前)先落请求(state=waiting, requested_at)再判: 同项目另一运行存活且资源有交集、且其已持有(held)或比本运行更早请求((requested_at, run_id) 在前)= 排队等待(当前步 kind=wait_kind, 提示 = waiting_message, loop status 下一动作 continue_wait 显示占用者); 无 = 持有(held)。等待经唯一等待原语 agent watch(观察根 = loop_runs_root, 每轮重判), 上限 = 本次 --max-wait; 到时仍被占 = 以 end_reason 结束(exit_codes.wait_timeout)。持有到本运行结束(运行记录写结束 = 释放; 进程已死 = loop_dead 不再算存活, 锁随进程结束释放)。两个 loop 同时请求: 双方看到同一顺序, 先者持有、后者排队。判定唯一实现 loop_run_record.resource_conflict; 卡未声明 resources = 不加锁(行为不变)。",
+        "card_field": "resources",
+        "enum": "exclusive_resource",
+        "wait_kind": "resource_wait",
+        "end_reason": "resource_busy",
+        "waiting_message": "独占资源 {resources} 被占用: 卡 {holder_task_id}(run {holder_run_id}, pid {holder_pid} @ {holder_host}, {holder_state} 自 {holder_since}); 本卡 loop 排队等待, 占用者 loop 结束后自动继续",
+        "acquired_message": "独占资源 {resources} 已由本卡 loop 持有(运行结束即释放){waited}"
+      },
       "envelope": {
         "family": "owner_autonomy_policy (5_tasks/policies/<policy_id>.md, 由 `lybra envelope mint` 申领, owner_decision_record 落 grant)",
         "matcher": "autonomy_policy.match_claim_envelope(策略有效+时间窗+agent_or_role 覆盖驱动方身份或 advisor 角色+task_selector 覆盖本卡+count_bound)",
@@ -2538,8 +2547,12 @@
           "envelope_exhausted": "AIPOS-F166 件②: 信封额度用尽(门侧用量真相 已用 ≥ max_tasks), 账务步被拒或启动校验不过(exit_codes.no_envelope; 续签命令见运行记录 envelope_state, envelope.renew)",
           "envelope_expired": "AIPOS-F166 件②: 信封已过期(现在 ≥ expires_at), 账务步被拒或启动校验不过(exit_codes.no_envelope; 续签命令见运行记录 envelope_state, envelope.renew)",
           "already_running": "AIPOS-F171B 件①: 同卡已有存活 loop, 本次启动被拒、未推进任何步(exit_codes.already_running; 见 single_instance; 本记录不计入 loop status 最近一次运行与连败)",
-          "worktree_repair_failed": "AIPOS-F178 件③: 等待目标卡已认领、须建卡工作树(next_resolver.card_needs_worktree)而不在落点, 等待前自动补建(next_resolver.repair_missing_worktree, `lybra queue repair --confirm` 同一实现)失败, 未进入等待(exit_codes.not_derivable; 原因原文在结束原文与运行记录 worktree_repairs 末条 detail; 修法 = 结束原文的 lybra queue repair 命令)"
+          "worktree_repair_failed": "AIPOS-F178 件③: 等待目标卡已认领、须建卡工作树(next_resolver.card_needs_worktree)而不在落点, 等待前自动补建(next_resolver.repair_missing_worktree, `lybra queue repair --confirm` 同一实现)失败, 未进入等待(exit_codes.not_derivable; 原因原文在结束原文与运行记录 worktree_repairs 末条 detail; 修法 = 结束原文的 lybra queue repair 命令)",
+          "resource_busy": "AIPOS-F179 件②: 本卡声明的独占资源(card.schema resources)在 --max-wait 内一直被同项目另一 loop 占用, 未进入执行/审计等待(exit_codes.wait_timeout; 占用者原文在结束原文; 见 resource_lock)",
+          "audit_blocked": "AIPOS-F179 件③: 审计裁决 BLOCK(审计未能完成: 环境 / 资源 / 时长), 推导核给出「修环境后重新派审计」(transitions nodes.N4.audit_blocked; exit_codes.not_derivable; 不计连败)",
+          "audit_blocked_repeated": "AIPOS-F179 件③: 本卡最新连续 BLOCK 裁决数 ≥ transitions nodes.N4.audit_blocked.owner_needed_after(修环境重审后仍 BLOCK), 升 Owner(exit_codes.not_derivable)"
         },
+        "resource_lock": "AIPOS-F179 件②: 卡声明了独占资源的运行另落 resource_lock {resources, card, state(waiting | held), requested_at, held_at, holder(排队时的占用者: run_id / task_id / pid / host / state)}; 无资源声明的运行不出现本键(存量记录形不变)。lybra loop status 运行行显示「独占资源」行; 判定见 lybra_loop.resource_lock。",
         "launch_session": "AIPOS-F171B 件②: 每次拉起 launches[] 另记 session_id(harness 模板声明 session 时 loop 固定的会话 id; 无声明 = null)、resume(0 = 首次拉起, k = 同会话第 k 次续接)、resume_max(本次运行的续接上限, project.json launch_resume_max); 日志每次续接一行 [resume]。lybra loop status 拉起行显示「会话 <id> 续接 k/N」。无此键的存量记录 = F171B 前(未固定会话)。",
         "reexec":"AIPOS-F166 件①: 以 deploy_reexec 结束的运行另落 reexec 段 {to_release, to_commit, at, pid}(新快照与本进程号), 新运行记录落 continues_run = 上一 run_id(lybra loop status 两行分别标明)。无续等的运行不出现这两个键(存量记录形不变)。",
         "envelope_state": "AIPOS-F166 件②: 以 envelope_exhausted / envelope_expired 结束的运行另落 envelope_state {policy_id, state, used, max_tasks, remaining, expires_at, next_policy_id, renew_command, note}(结束时刻的门侧用量真相, autonomy_policy.envelope_usage); lybra loop status 下一动作 owner_needed(envelope_renew) 的 detail/hint 读此段。其余结束原因不落。",
@@ -2642,6 +2655,54 @@
         }
       }
     },
+    "lybra_run_long": {
+      "description": "AIPOS-F179 件①(10-16 chris HBLX-8 实撞: 审计体跑 iOS UI 全量 38 项约 600s, 超过其 bash 工具单次时限 420s 被掐断, 改 nohup 后台又被会话收尾/设备残留破坏, 只能给 BLOCK): `lybra [--workspace-root <治理根>] run-long start --task-id <卡> --name <名> --cwd <目录> [--max-seconds <秒>] -- <命令>` / `run-long wait --task-id <卡> --name <名> [--timeout <秒>]` / `run-long status --task-id <卡> [--name <名>]`(均可加 --json)—— 长验证命令(全量测试 / UI 套件等, 跑得比 agent bash 工具单次时限长)的脱离运行器, 执行体与审计体共用。不是门动词: 不连门、不读凭据、不写记录区, 只在本机起进程并把日志 / 退出码落到卡产物落点。start: 在 record.dir 建运行目录(名字已用 = 拒, 换名, 绝不覆盖既有运行), 写 meta(命令原文 / cwd / 主机 / 开始时间 / 上限), 以新会话(setsid, 不随调用方工具超时或会话结束被收)脱离起 supervisor 跑命令(`--` 后只有一个参数 = 按 shell_argv 执行该命令串, 记录的命令原文即该串; 多个参数 = 按 argv 直接执行), stdout+stderr 落日志; 命令结束时原子写退出码文件、result 记结束时间与日志 sha256; 超 --max-seconds(缺省 max_seconds_default)= 终止命令进程组(TERM, term_grace_seconds 后 KILL), 退出码记 timeout_exit_code; start 立即返回。wait: 经唯一等待原语 agent watch(run_fs_watch, 禁 sleep 自旋)等退出码文件出现或 supervisor 进程消失, 一段 ≤ --timeout 秒(缺省 wait.default_segment_seconds, 上限 wait.max_segment_seconds; 取本会话工具单次时限以内的值), 每段返回进度(已运行秒数 / 日志大小 / 日志末行); 仍在跑 = exit_codes.still_running, 再调一次 wait。status: 只读。存活判定 = 进程启动时刻指纹(loop_run_record.process_alive, AIPOS-F137 同一判活)。运行证据(F162 独立运行证据节)可直接引用运行目录(transitions artifact_ingest.verdict.runtime_evidence.run_long)。",
+      "phase": "workstation",
+      "surface": ["cli"],
+      "cli_command": "lybra run-long",
+      "single_implementation": "tools/aipos_cli/run_long.py(start_run / wait_run / run_status / supervise / evidence_from_record)",
+      "record": {
+        "dir": "{report_dir}/run_long/{name}",
+        "report_dir_note": "report_dir = 卡报告落点所在目录(next_resolver.card_report_path 的父目录: 执行卡 = project.json paths.return_root/<卡ID>, 审计卡 = paths.verdict_root/<审计卡ID>), 路径全读项目声明, 不假设主机",
+        "record_type": "run_long",
+        "meta_file": "run.json",
+        "log_file": "output.log",
+        "exit_file": "exit_code",
+        "result_file": "result.json",
+        "name_pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+      },
+      "shell_argv": ["bash", "-c"],
+      "max_seconds_default": 14400,
+      "timeout_exit_code": 124,
+      "term_grace_seconds": 10,
+      "wait": {
+        "default_segment_seconds": 300,
+        "max_segment_seconds": 3600,
+        "interval_seconds": 2
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subcommand": {"type": "string", "description": "start | wait | status"},
+          "workspace_root": {"type": "string", "description": "治理根(全局 --workspace-root); 缺省自发现(governance_root_resolution)"},
+          "task_id": {"type": "string", "description": "卡 ID(执行卡或审计卡); 运行目录落在该卡报告落点下"},
+          "name": {"type": "string", "description": "本次运行名(record.name_pattern); start / wait 必给; status 不给 = 列本卡全部运行"},
+          "cwd": {"type": "string", "description": "start: 命令执行目录(绝对路径, 须存在; 审计 = 审计分配工作树, 执行 = 卡工作树)"},
+          "max_seconds": {"type": "number", "description": "start: 命令运行上限秒数(缺省 max_seconds_default); 超时终止命令进程组, 退出码记 timeout_exit_code"},
+          "command": {"type": "array", "items": {"type": "string"}, "description": "start: `--` 之后的命令(一个参数 = 命令串经 shell_argv 执行; 多个 = argv)"},
+          "timeout": {"type": "number", "description": "wait: 本段最长等待秒数(0 < 秒数 ≤ wait.max_segment_seconds)"},
+          "json": {"type": "boolean", "description": "JSON 输出"}
+        },
+        "required": ["subcommand", "task_id"],
+        "additionalProperties": false
+      },
+      "exit_codes": {
+        "ok": {"code": 0, "meaning": "start: 已脱离拉起; wait: 命令已结束(命令自身退出码见输出 exit_code 与退出码文件); status: 已输出"},
+        "refused": {"code": 2, "meaning": "拒: 卡找不到 / 名字不合或已用 / cwd 不存在 / 无命令 / 运行不存在 / --timeout 越界(原文给出口)"},
+        "still_running": {"code": 3, "meaning": "wait: 本段到时命令仍在跑(输出进度), 再调一次 wait"},
+        "lost": {"code": 4, "meaning": "wait / status: supervisor 进程已不在而无退出码文件(机器重启 / 被杀), 结果不可得; 换名重跑"}
+      }
+    },
     "lybra_loop_status": {
       "description": "AIPOS-F131 件②: `lybra loop status [--task-id <ID>] [--workspace-root <治理根>] [--json]` —— 读 loop 运行记录(lybra_loop.run_record)+ 本机探活(pid 存在且进程启动时刻指纹一致, AIPOS-F137)+ 判停滞, 输出: 运行中/已结束、当前步与等待对象、拉起进程存活与否/已运行时长/距最近输出多久/最近活动类别与时间、停滞判定(states)、结束原因, 以及记录与日志路径。--task-id 给出 = 该卡最近一次运行(含已结束); 缺省 = 本项目全部未结束的运行。只读, 不写任何文件、不起任何进程、不发信号; 输出不含凭据与会话正文(记录本身不落)。跨机: 在治理根所在机执行(经 ssh 亦可); 记录主机 ≠ 本机 = unprobeable。判据唯一实现 tools/aipos_cli/loop_run_record.judge_run, 禁调用方 tail/grep 原始日志自判。AIPOS-F136 件①: 输出增「顾问下一动作」(next_action 段, 唯一判定 loop_run_record.next_action); `--wait <秒>` 有界等待到可行动或到时(wait 段), 退出码按下一动作。AIPOS-F150: 门拒运行的结构化拒因码(lybra_loop.run_record.end_codes)全部属例行清单(next_action.routine_rejections)= 下一动作 advisor_fix, 人读输出与 --json 均含其修法原文(hint)与拒因码(codes)。",
       "phase": "driver",
@@ -2713,7 +2774,10 @@
           "envelope_exhausted": "owner_needed",
           "envelope_expired": "owner_needed",
           "already_running": "continue_wait",
-          "worktree_repair_failed": "advisor_fix"
+          "worktree_repair_failed": "advisor_fix",
+          "resource_busy": "advisor_fix",
+          "audit_blocked": "advisor_fix",
+          "audit_blocked_repeated": "owner_needed"
         },
         "by_execution_mode": {
           "description": "AIPOS-F156 件①(gap #139): 按本卡执行方式分流的覆盖表(唯一声明, 与 by_end_reason 同节; 判定唯一实现 loop_run_record.next_action)。执行方式 = 运行最后一次等待的卡即本卡(执行体等待; 等审计 / 外部 FINALIZE / 同仓先合入卡的等待不适用)时, 经 workspace_config.card_execution_mode(只读 F143 执行方式声明唯一读取口 workspace_config.project_execution)判出; AIPOS-F157 件③(gap #125): 等待目标实例为无工位的子 agent 执行者(enrollment.instance_enrollment governance_root_mode, 与 lybra_loop.launch.manual_hint.subagent 同一判定 loop_driver.wait_instance_is_subagent)= subagent(未声明 execution 亦然, 等交回超时不再出工位 /go 口径); 未声明 execution 且非子 agent 执行者 / 判不出 = 不覆盖(行为不变)。modes 键 ⊆ config.schema project_json.execution.default_mode 值域。by_end_reason = 该执行方式下覆盖 by_end_reason 的结束原因映射(判为 advisor_fix 的须在 routine_rejections.end_reasons 有修法, 连续计数与其他例行结束原因同一实现); kickoff_detail = 手工等待(reason=manual_kickoff)时顾问下一动作 detail 的前缀(占位 {hint} = 运行记录里的开工提示)。pi 执行工位 / 手工工位(card_execution_mode = pi 或未声明)= 原口径(owner_needed / 向 Owner 说开工提示)。",
@@ -2739,6 +2803,7 @@
           "runtime_evidence_exhausted": "审计补做连败(AIPOS-F162): 审计报告 PASS 类裁决缺卡面要求的独立运行证据, loop 已让审计体按拒因补做到声明上限仍不合格(审计体跑不了声明命令 / 不按格式填 / 只核执行体原件); 请 Owner 定换审计体 / 改卡面运行证据声明 / 仲裁",
           "envelope_exhausted": "授权: 信封额度已用尽(AIPOS-F166), 请 Owner 按 hint 的续签命令签新信封, 签好用原命令续跑 loop",
           "envelope_expired": "授权: 信封已过期(AIPOS-F166), 请 Owner 按 hint 的续签命令签新信封, 签好用原命令续跑 loop",
+          "audit_blocked_repeated": "审计连续 BLOCK(AIPOS-F179 件③): 本卡已按 BLOCK 原因修环境重新派审计, 新一轮仍 BLOCK(连续次数达 transitions nodes.N4.audit_blocked.owner_needed_after), 环境 / 资源 / 时长问题顾问修不动或卡面验收不可在审计环境完成; 请 Owner 定修环境方案 / 改卡面验收 / 换审计环境 / 仲裁",
           "envelope_renew": "信封续签(AIPOS-F166 件②): 结束原因 envelope_exhausted / envelope_expired 的下一动作事由——detail = 当前用量 / 上限 / 到期, hint = 续签命令(policy_id 按该驱动方已有最大序号 +1)"
         },
         "routine_rejections": {
@@ -2752,7 +2817,9 @@
             "worktree": "卡工作树(next_resolver.card_worktree_location, 认领建树同一落点)",
             "base_sync_command": "基线合入卡分支命令(唯一渲染 board_adapter.base_sync_command, 声明 transitions N5.branch_integration.base_sync; 禁 rebase/stash)",
             "actor_arg": "续跑命令的驱动方参数(运行记录 driver; 无 = 空)",
-            "envelope_arg": "续跑命令的信封参数(运行记录 envelope; 无 = 空)"
+            "envelope_arg": "续跑命令的信封参数(运行记录 envelope; 无 = 空)",
+            "reaudit_command": "AIPOS-F179 件③: 重新派审计的命令(唯一渲染 next_resolver.reaudit_command: 既有 lybra audit dispatch 派下一轮审计卡, 派审人 / 信封 = 运行记录 driver / envelope); 下一轮已派出 = 一句「已派 <审计卡>, 无需再派」; 只用于 end_reasons.audit_blocked",
+            "block_reason": "AIPOS-F179 件③: BLOCK 原因摘录(该裁决记录 Findings summary, 截 transitions nodes.N4.audit_blocked.reason_excerpt_chars 字); 只用于 end_reasons.audit_blocked"
           },
           "resume_hint": "lybra loop --task-id {task_id} --workspace-root {governance_root}{actor_arg}{envelope_arg}",
           "codes": {
@@ -2830,6 +2897,22 @@
                 "不改卡、不问 Owner: 读结束原文(或运行记录 worktree_repairs 末条 detail)里补建失败的原因",
                 "在治理根所在机预演: lybra queue repair --task-id {task_id} --actor <驱动方实例> --workspace-root {governance_root}(只读, 输出 worktree_repair 段); 按拒因修: 产品仓不是 git 仓 = project.json repos/code_repo 指向真实产品仓; 落点被占 = 核对该目录是否在途产物; 卡分支 tip 不符 = 核对绑定; 审计卡被审分支不存在 = 先查被审卡交回",
                 "修好后同一命令加 --confirm 补建(幂等: 已在落点不重建), 再用原命令重跑 loop(本修法末行命令)"
+              ]
+            },
+            "resource_busy": {
+              "why_routine": "AIPOS-F179 件②: 本卡声明的独占资源(如 iOS 模拟器)在本次 --max-wait 内一直被同项目另一张卡的 loop 占用, loop 未进入执行/审计等待即停下; 资源被占是排队, 不是失败, 修法固定 = 等占用者 loop 结束后用原命令续跑(或加大 --max-wait 让 loop 自己排队等), 不涉设计判断",
+              "fix": [
+                "不改卡、不问 Owner、不手动抢资源: 占用者见 detail(卡 / run / pid); 用 lybra loop status --task-id <占用者卡> --workspace-root {governance_root} 看它推进到哪",
+                "占用者 loop 结束(或进程已死)即自动释放; 用原命令续跑本卡 loop(本修法末行命令), 建议加大 --max-wait 让 loop 自己排队等(排队期间运行记录与 loop status 显示占用者)"
+              ]
+            },
+            "audit_blocked": {
+              "why_routine": "AIPOS-F179 件③(10-16 chris HBLX-8 实撞): 审计裁决 BLOCK = 审计未能完成(环境 / 资源 / 时长, 如验证命令超过工具单次时限、模拟器被他卡占用), 不是执行产物不合格; 修法固定 = 按 BLOCK 原因修环境 / 资源后重新派审计下一轮(执行产物不变), 不计连败; 同卡连续 BLOCK 达 transitions nodes.N4.audit_blocked.owner_needed_after 次才升 Owner",
+              "fix": [
+                "不改执行产物、不发返工卡: BLOCK 原因摘录 —— {block_reason}",
+                "按原因修环境 / 资源(长验证命令: 审计章程已要求用 lybra run-long 脱离运行 + 分段 wait; 模拟器类资源: 卡面加 resources 声明让 loop 串行; 环境缺件: 在审计工位所在机补齐), 修不了或要改卡面验收 = 升 owner_needed",
+                "修好后重新派审计下一轮: {reaudit_command}",
+                "然后用原命令续跑 loop(本修法末行命令): loop 等新一轮审计卡、拉起审计体"
               ]
             }
           }

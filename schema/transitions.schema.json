@@ -312,6 +312,16 @@
         "audit_dispatched"
       ],
       "to_state": "verdict_issued",
+      "audit_blocked": {
+        "description": "AIPOS-F179 件③(10-16 chris HBLX-8 实撞: 审计在自己工作树独立验证了模块测试/构建/新增 UI 测试, 但 UI 全量超过审计体 bash 单次时限、又遇模拟器资源冲突, 按章程给 BLOCK; 推导核对 BLOCK 无路径(「处理裁决 BLOCK」不可推导)→ 与旧运行连成连败 → owner_needed): 审计裁决 BLOCK = 审计未能完成(环境 / 资源 / 时长), 不是执行产物不合格。判定挂推导核 N4 非 PASS 分支(next_resolver, 与 AIPOS-F155 FAIL 返工同处; 已针对该裁决登记返工轮者仍走返工): 本卡最新常规裁决值 ∈ verdicts = 不可推导, action.type = action_type(triggered_by=advisor): 按 BLOCK 原因修环境 / 资源后重新派审计 R(n+1)(卡号演进 audit_derivation.derive_audit_task_id), 不改执行产物; loop 以 end_reason 结束(verbs.schema lybra_loop_status.next_action.by_end_reason 判 advisor_fix, 附原因摘录与重审命令, 不计连败)。本卡最新连续 BLOCK 裁决数(按裁决记录时间, 与 latest_verdict 同一排序; 补审裁决不计)≥ owner_needed_after = 以 repeated_end_reason 结束(owner_needed)。重审命令唯一渲染 next_resolver.reaudit_command(既有派审动词 lybra audit dispatch, 派审人 / 信封 = 驱动方, 审计实例 = audit_derivation.resolve_audit_instance); 下一轮已派出 = 推导核照常等最新一轮(AIPOS-F112), 不再给重审命令。原因摘录 = 该裁决记录的 Findings summary(owner_truth_view._extract_summary_field, 真相视图读裁决摘要同一函数), 截 reason_excerpt_chars 字。判定唯一实现 next_resolver.audit_block_state。",
+        "verdicts": ["BLOCK"],
+        "action_type": "audit_blocked",
+        "end_reason": "audit_blocked",
+        "repeated_end_reason": "audit_blocked_repeated",
+        "owner_needed_after": 2,
+        "reason_excerpt_chars": 240,
+        "dispatch_reason": "audit_blocked: 重审 {blocked_audit_task_id}(裁决 {verdict_id} = BLOCK, 已按 BLOCK 原因修环境 / 资源; 执行产物不变)"
+      },
       "verdict_stale": {
         "description": "AIPOS-F112(gap #69): 裁决已过期——卡审计 PASS 后卡分支 tip 又变化(典型: finalize 合并冲突, 执行体在卡工作树合 main 解冲突), 最新门生裁决覆盖的 commit ≠ 卡分支 tip。finalize 照 F70 正确 BLOCK「产物已变化,须复审」; 本声明给出复审出口, loop 自动走完, 不再反复撞同一 BLOCK。",
         "state": "verdict_stale",
@@ -1138,6 +1148,10 @@
         "format": "报告正文中以 `## 独立运行证据` 为标题的节, 节内第一个 ```json 代码块 = 运行记录数组, 每条一个对象: command(实际执行的命令行) / worktree(执行所在工作树绝对路径 = 审计卡分配工作树) / exit_code(整数) / 日志二选一: log_excerpt(非空日志摘要)或 log_path(日志绝对路径)+ log_sha256(该文件 sha256, 门核对)",
         "entry_required_fields": ["command", "worktree", "exit_code"],
         "log_fields": {"excerpt": "log_excerpt", "path": "log_path", "sha256": "log_sha256"},
+        "run_long": {
+          "description": "AIPOS-F179 件①: 运行记录可直接引用一次 `lybra run-long` 运行(verbs.schema lybra_run_long): 条目给 field = 该运行目录(或其 meta 文件)的绝对路径时, command / worktree / exit_code / log_path / log_sha256 取自该运行记录(command = 记录的命令原文, worktree = 记录的 --cwd, 日志 = 记录的日志文件, sha256 门现算并与记录收尾时写下的值核对); 条目另写了这几个字段则须与记录一致。运行未收尾(无退出码文件)/ 记录读不出 / 日志被改动 = 该条无效并给拒因。解析唯一实现 run_long.evidence_from_record(门 runtime_evidence_check 调用)。",
+          "field": "run_long"
+        },
         "placeholders": {
           "worktree": "审计卡分配工作树(next_resolver.card_worktree_location(<审计卡>) 唯一推导)",
           "commit_sha": "被审分支 tip(审计报告 commit_sha 同值)",
