@@ -109,7 +109,7 @@ lybra roadmap status [项目] [--lane <lane>] [--json]        # 只读: 里程�
 | 自动验证通过 | `auto` / `artifact` 标准满足上面全部条件(依据: 卡、裁决 id、运行证据报告、产物文件) | `auto` / `artifact` 是 |
 | 待 Owner 抽查 | `owner_check` 标准产物齐且该卡还没有 Owner 结论(或上次判不符后修复卡已自动验证通过 = 待复查) | 否 |
 | Owner 已确认 | 最近一条 Owner 抽查记录 = 符合(依据: 记录路径、转达人、Owner 原话) | `owner_check` 是 |
-| 不符 | 最近一条 Owner 抽查记录 = 不符, 显示「修复卡 <卡号>(草稿待发布 / 队列状态)」 | 否 |
+| 不符 | 最近一条 Owner 抽查记录 = 不符, 显示「修复卡 <卡号>(草稿待发布 / 队列状态 / 待出)」 | 否 |
 
 状态可追溯: `roadmap status --json` 每条标准带 `basis`(依据)与 `verifications`(该标准的全部抽查记录, 时间序)。
 
@@ -136,8 +136,10 @@ lybra roadmap verify [项目] --criterion <标准id> --result confirm|mismatch -
 写既有 `owner_verifications` 记录(`5_tasks/records/owner_verifications/<卡>/verify_<卡>_<时刻>.md`, 字段 workspace / milestone / criterion /
 result / relayed_by / owner_words / note / fix_task_id; 同一秒撞名拒写, 不覆盖)。`--relayed-by` / `--owner-words` 缺 = 用法错 exit 2;
 只认 `verify=owner_check` 且已到待抽查(或已有结论)的标准。**不符**同次自动起草修复卡(卡号 `<被抽查卡>-oc<N>`, 挂同一 milestone /
-criteria, `owner_check_ref` = 抽查记录 id, 承继原卡执行者 / lane / 审计 / artifacts 等), 顾问 `lybra draft publish --path <草稿> --dry-run`
-预演后发布; 修复卡结案审计通过、产物齐后标准回到「待 Owner 抽查」等复查。收件箱里的 owner_check 事项不用 `lybra owner decide`(会被拒并指路)。
+criteria, `owner_check_ref` = 抽查记录 id, 承继原卡执行者 / lane / 审计 / task_class 及其必填字段等; artifacts 只承继挂在本标准上的项,
+原卡没有则不带并在正文提示补声明), 顾问 `lybra draft publish --path <草稿> --dry-run` 预演后发布; 修复卡结案审计通过、产物齐后标准回到
+「待 Owner 抽查」等复查。**起草被拒不连坐**(AIPOS-F180C): 修复卡草稿过不了出卡校验时, 预演照常显示将写的抽查记录并给拒因与手工出卡指引,
+`--confirm` 先写抽查记录并落账、不写草稿、退出码 1; 标准状态「不符 · 修复卡 <卡号>(待出)」, 顾问按指引 `lybra draft create --from-json` 手工出卡。收件箱里的 owner_check 事项不用 `lybra owner decide`(会被拒并指路)。
 
 ## 看板
 

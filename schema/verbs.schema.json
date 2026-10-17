@@ -3271,7 +3271,8 @@
             "fix_part": " · 修复卡 {fix}",
             "fix_none": " · 修复卡未起草",
             "fix_draft": "{task_id}(草稿待发布)",
-            "fix_card": "{task_id}({queue_state})"
+            "fix_card": "{task_id}({queue_state})",
+            "fix_pending": "{task_id}(待出: 自动起草被拒, 顾问按 roadmap verify 输出的指引手工出卡)"
           }
         },
         "unmet_reasons": {
@@ -3334,7 +3335,7 @@
         }
       },
       "verify": {
-        "description": "AIPOS-F175 件③(Owner 10-16 看板只读裁定: 抽查结论经顾问命令记录, 看板只展示并给话术): `lybra roadmap verify --criterion <标准id> --result confirm|mismatch --relayed-by <转达的顾问实例|owner> --owner-words <Owner 原话> [--note] [--card <卡>]`。两阶段(two_phase_protocol.roadmap_writers.verify): 预演零写入; --confirm 写既有 owner_verifications 记录(owner_verification_writer.build_owner_verification_record 唯一写口, 记录类型与落点不变; 补 workspace / milestone / criterion / result / relayed_by / owner_words / note / fix_task_id 字段, 归因与 lybra owner decide 一致: decided_by = --actor 缺省 owner, relayed_by = 转达人, owner_words = Owner 原话)并经 post_write_landing.commands.roadmap_writers 落账。前置: 标准存在且 verify = owner_check(否则 VERIFY_NOT_OWNER_CHECK)、推导状态 ∈ verifiable_states(未验证 = VERIFY_NOT_READY, 拒因带推导原因); 被抽查卡缺省 = 推导给出的待抽查卡(无抽查记录的最近结案者, 都查过 = 最近结案者), --card 须是该标准已自动验证通过的挂接卡。--relayed-by / --owner-words 缺 = 用法错(exit 2, 与 owner decide 同一校验 owner_inbox.relay_fields)。mismatch: 同次自动起草修复卡(既有出卡口 draft_writer.create_draft, 预演 = 其 dry_run 渲染; 卡号 fix_card.task_id_template, 序号取首个未占用; 卡面 milestone / criteria = 同一标准, owner_check_ref = 本次抽查记录 id, created_by = 转达人, 承继字段 fix_card.inherit_fields 读原卡), 草稿经顾问 `lybra draft publish` 预演后发布(不自动发布); 抽查记录 fix_task_id = 该草稿卡号, 标准状态即「不符·修复卡 <卡号>」。唯一实现 roadmap.apply_owner_verification。",
+        "description": "AIPOS-F175 件③(Owner 10-16 看板只读裁定: 抽查结论经顾问命令记录, 看板只展示并给话术): `lybra roadmap verify --criterion <标准id> --result confirm|mismatch --relayed-by <转达的顾问实例|owner> --owner-words <Owner 原话> [--note] [--card <卡>]`。两阶段(two_phase_protocol.roadmap_writers.verify): 预演零写入; --confirm 写既有 owner_verifications 记录(owner_verification_writer.build_owner_verification_record 唯一写口, 记录类型与落点不变; 补 workspace / milestone / criterion / result / relayed_by / owner_words / note / fix_task_id 字段, 归因与 lybra owner decide 一致: decided_by = --actor 缺省 owner, relayed_by = 转达人, owner_words = Owner 原话)并经 post_write_landing.commands.roadmap_writers 落账。前置: 标准存在且 verify = owner_check(否则 VERIFY_NOT_OWNER_CHECK)、推导状态 ∈ verifiable_states(未验证 = VERIFY_NOT_READY, 拒因带推导原因); 被抽查卡缺省 = 推导给出的待抽查卡(无抽查记录的最近结案者, 都查过 = 最近结案者), --card 须是该标准已自动验证通过的挂接卡。--relayed-by / --owner-words 缺 = 用法错(exit 2, 与 owner decide 同一校验 owner_inbox.relay_fields)。mismatch: 同次自动起草修复卡(既有出卡口 draft_writer.create_draft, 预演 = 其 dry_run 渲染; 卡号 fix_card.task_id_template, 序号取首个未占用; 卡面 milestone / criteria = 同一标准, owner_check_ref = 本次抽查记录 id, created_by = 转达人, 承继字段 fix_card.inherit_fields 读原卡, 外加承继来的 task_class 声明的必填字段(enums.schema task_class required_fields, 如 complex 的 planner_agent / reviewer; AIPOS-F180C 真实只读预演撞出); AIPOS-F180C: 承继的 artifacts 只留 criterion = 本标准的项, 过滤后为空 = 不带 artifacts 并在正文用 fix_card.artifacts_missing 提示补声明; 形校验仍走 roadmap.artifact_problems 不放松), 草稿经顾问 `lybra draft publish` 预演后发布(不自动发布); 抽查记录 fix_task_id = 该草稿卡号, 标准状态即「不符·修复卡 <卡号>」。AIPOS-F180C 不连坐: 修复卡起草被拒(VERIFY_FIX_DRAFT_BLOCKED)不拦抽查记录——预演照常渲染将写的记录并报起草拒因与手工出卡指引(fix_card.manual_hint), --confirm 先写记录并落账、不写草稿, 退出码非 0; 标准状态「不符·修复卡 <卡号>(待出)」(status.verification.basis.fix_pending)。唯一实现 roadmap.apply_owner_verification。",
         "results": {
           "confirm": {"label": "符合", "decision": "approve", "state": "owner_confirmed"},
           "mismatch": {"label": "不符", "decision": "reject", "state": "mismatch"}
@@ -3346,14 +3347,17 @@
           "VERIFY_NOT_READY": "标准尚未到待 Owner 抽查(先让挂接卡结案、审计通过、产物齐), 推导原因见上",
           "VERIFY_CARD_INVALID": "--card 须是该标准已自动验证通过的挂接卡",
           "VERIFY_RECORD_BLOCKED": "抽查记录预演被拒(拒因见上), 零写入",
-          "VERIFY_FIX_DRAFT_BLOCKED": "修复卡草稿预演被拒(拒因见上), 零写入"
+          "VERIFY_FIX_DRAFT_BLOCKED": "修复卡草稿起草被拒(拒因见上); 不连坐 Owner 抽查记录(--confirm 照常写入并落账, 退出码非 0), 修复卡按输出的指引手工出卡"
         },
         "fix_card": {
           "task_id_template": "{task_id}-oc{round}",
           "title_template": "修复 Owner 抽查不符: 标准 {criterion}「{statement}」",
           "inherit_fields": ["project", "assigned_to", "agent_instance", "context_bundle", "task_mode", "task_class", "priority", "output_target", "artifact_policy", "harness", "lane", "audit", "audit_by", "audit_runtime_evidence", "artifacts"],
-          "body_template": "# {task_id}\n\n一句话: Owner 抽查标准 {criterion}「{statement}」判不符, 本卡修到 Owner 复查符合。\n\n## 依据\n\n- Owner 抽查记录: {record}(经 {relayed_by} 转达)\n- Owner 原话: 「{owner_words}」\n- 备注: {note}\n- 被抽查卡: {source_task_id}(其产物落点 {artifact_dir})\n\n## 验收\n\n- 修到与标准「{statement}」相符; 按卡面 artifacts 重新产出截图 / 输出放进本卡产物落点, 交回引用\n- 结案后标准回到「待 Owner 抽查」, Owner 复查后顾问 `lybra roadmap verify` 记录\n",
-          "publish_hint": "修复卡草稿 {path}: 顾问预演 `lybra --workspace-root {governance_root} draft publish --path {path} --actor <你的顾问实例> --dry-run` 后去掉 --dry-run 发布"
+          "body_template": "# {task_id}\n\n一句话: Owner 抽查标准 {criterion}「{statement}」判不符, 本卡修到 Owner 复查符合。\n\n## 依据\n\n- Owner 抽查记录: {record}(经 {relayed_by} 转达)\n- Owner 原话: 「{owner_words}」\n- 备注: {note}\n- 被抽查卡: {source_task_id}(其产物落点 {artifact_dir}; 本标准产物 {evidence})\n\n## 验收\n\n{artifacts_note}- 修到与标准「{statement}」相符; 按卡面 artifacts 重新产出截图 / 输出放进本卡产物落点, 交回引用\n- 结案后标准回到「待 Owner 抽查」, Owner 复查后顾问 `lybra roadmap verify` 记录\n",
+          "publish_hint": "修复卡草稿 {path}: 顾问预演 `lybra --workspace-root {governance_root} draft publish --path {path} --actor <你的顾问实例> --dry-run` 后去掉 --dry-run 发布",
+          "artifacts_missing": "- ⚠ 原卡没有挂在 {criterion} 上的产物声明, 本草稿不带 artifacts: 发布前在卡面 artifacts 补声明 {criterion} 的截图 / 输出(owner_check 标准缺产物停在未验证)\n",
+          "evidence_none": "(原卡未声明)",
+          "manual_hint": "手工出卡: 写卡稿 JSON {{\"frontmatter\": {{…}}, \"body\": \"…\"}}(frontmatter 含 task_id = {task_id}, milestone = {milestone}, criteria = [{criterion}], owner_check_ref = {record_id}; artifacts 只声明挂在 {criterion} 上的产物, 正文附 Owner 原话与原卡 {source_task_id} 产物落点), 预演 `lybra --workspace-root {governance_root} draft create --from-json <卡稿.json> --actor <你的顾问实例> --dry-run` 后去掉 --dry-run, 再 draft publish"
         },
         "texts": {
           "header": "目标项目 {project}(来源: {source}) · 标准 {criterion}「{statement}」 · 被抽查卡 {task_id}",
@@ -3362,7 +3366,11 @@
           "state": "  标准状态: {before} → {after}",
           "fix": "  修复卡草稿{will}: {task_id} → {path}(挂 {milestone} / {criterion}, owner_check_ref = {record_id})",
           "will": "(将写)",
-          "blocked": "  拒因: {reason}"
+          "blocked": "  拒因: {reason}",
+          "fix_blocked": "  修复卡草稿{will}: {task_id} 起草被拒(抽查记录{record_state}): {reason}",
+          "record_kept_preview": "照常写入, --confirm 后落账",
+          "record_kept_written": "已写入并落账, 不回滚",
+          "fix_error": "Error: 修复卡 {task_id} 起草被拒, Owner 抽查记录{record_state}; 修复卡待出, 顾问按下方指引手工出卡"
         }
       },
       "exit_codes": {

@@ -32,7 +32,7 @@ SIGNAL_KINDS = ("unlinked_ratio", "stalled", "uncovered", "rework", "overdue", "
 #: AIPOS-F175: verification states (keys of verbs.schema lybra_roadmap.status.verification.states; checked where declared)
 VERIFICATION_STATES = ("unverified", "auto_passed", "owner_pending", "owner_confirmed", "mismatch")
 _BASIS_KEYS = ("passed", "evidence_part", "artifact_part", "owner_pending", "owner_record", "refix_pending", "fix_part", "fix_none",
-               "fix_draft", "fix_card")
+               "fix_draft", "fix_card", "fix_pending")
 _STATUS_KEYS = ("progress_bar_width", "satisfied_queue_states", "excluded_queue_states", "verification", "unmet_reasons",
                 "status_mismatch", "severity_labels", "signals", "next_steps", "texts")
 
@@ -293,7 +293,8 @@ def _closed_at(card: dict[str, Any]) -> datetime:
 
 
 def _fix_cards(root: Path, latest: dict[str, Any], all_cards: list[dict[str, Any]], basis: dict[str, Any]) -> list[dict[str, Any]]:
-    """不符记录的修复卡: 记录 fix_task_id + 卡面 owner_check_ref = 该记录 id 的卡; 在队列 = 队列状态, 只在草稿 = 草稿待发布。"""
+    """不符记录的修复卡: 记录 fix_task_id + 卡面 owner_check_ref = 该记录 id 的卡; 在队列 = 队列状态, 只在草稿 = 草稿待发布,
+    都不在(自动起草被拒, AIPOS-F180C)= 待出。"""
     from tools.aipos_cli.draft_validator import expected_draft_relative_path
 
     by_id = {str(c.get("task_id")): c for c in all_cards}
@@ -310,8 +311,8 @@ def _fix_cards(root: Path, latest: dict[str, Any], all_cards: list[dict[str, Any
             out.append({"task_id": task_id, "queue_state": None, "draft": True,
                         "text": _fmt(basis["fix_draft"], "verification.basis.fix_draft", task_id=task_id)})
         else:
-            out.append({"task_id": task_id, "queue_state": None, "draft": False,
-                        "text": _fmt(basis["fix_card"], "verification.basis.fix_card", task_id=task_id, queue_state="?")})
+            out.append({"task_id": task_id, "queue_state": None, "draft": False, "pending": True,
+                        "text": _fmt(basis["fix_pending"], "verification.basis.fix_pending", task_id=task_id)})
     return out
 
 

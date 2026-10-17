@@ -1565,7 +1565,7 @@ def _roadmap_command(args: argparse.Namespace) -> int:
 
 def _roadmap_verify(args: argparse.Namespace, root: Path, project: str, source: str) -> int:
     """AIPOS-F175 件③: `lybra roadmap verify` 薄壳。缺转达人 / 原话 = 用法错 exit 2(与 owner decide 同一校验); 拒 = exit 1(零写入);
-    落账未完成 = 声明退出码(写入已生效)。"""
+    落账未完成 = 声明退出码(写入已生效); 修复卡起草被拒 = exit 1 但抽查记录照写(预演渲染 / 确认落账, AIPOS-F180C 不连坐)。"""
     from tools.aipos_cli import roadmap as rm
     from tools.aipos_cli.owner_inbox import InboxUsageError
 
@@ -1581,8 +1581,9 @@ def _roadmap_verify(args: argparse.Namespace, root: Path, project: str, source: 
         return 1
     landing = outcome.get("landing")
     rc = 0 if landing is None or landing["landed"] else int(landing["exit_code"])
-    if outcome.get("fix_error"):  # record written and landed, fix draft refused: say so, non-zero
-        print(f"Error: {outcome['fix_error']}(抽查记录已写入并落账; 修复卡草稿未写, 顾问按拒因手动出卡)", file=sys.stderr)
+    if outcome.get("fix_error"):  # AIPOS-F180C: fix draft refused, owner record kept (preview: will write; confirm: landed); non-zero
+        print(rm.verify_declaration()["texts"]["fix_error"].format(task_id=outcome["fix_task_id"],
+                                                                   record_state=rm.verify_record_state(outcome)), file=sys.stderr)
         rc = rc or 1
     if args.json:
         print(render_json({"ok": not outcome.get("fix_error"), "command": "verify", "project": project, "target_source": source,

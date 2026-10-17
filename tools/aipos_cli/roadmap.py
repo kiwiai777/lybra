@@ -797,6 +797,14 @@ def artifact_file(governance_root: str | Path, task_id: str, name: str) -> Path 
 # AIPOS-F175 件③: Owner 抽查结论(`lybra roadmap verify`; 写既有 owner_verifications 记录 + 不符起草修复卡)
 # ---------------------------------------------------------------------------
 
+#: verbs.lybra_roadmap.verify.fix_card text keys (AIPOS-F180C appended artifacts_missing / evidence_none / manual_hint)
+_FIX_CARD_TEXT_KEYS = ("task_id_template", "title_template", "body_template", "publish_hint", "artifacts_missing", "evidence_none",
+                       "manual_hint")
+#: verbs.lybra_roadmap.verify.texts keys (AIPOS-F180C appended fix_blocked / record_kept_* / fix_error)
+_VERIFY_TEXT_KEYS = ("header", "outcome", "record", "state", "fix", "will", "fix_blocked", "record_kept_preview", "record_kept_written",
+                     "fix_error")
+
+
 def verify_declaration() -> dict[str, Any]:
     """verbs.schema lybra_roadmap.verify(唯一读取口; fail-closed): results 键 = owner_verification_writer.RESULT_DECISIONS 且 decision 一致,
     state 属 status.verification.states; verifiable_states 属 states; fix_card 模板齐。"""
@@ -817,11 +825,13 @@ def verify_declaration() -> dict[str, Any]:
     if not set(decl["verifiable_states"]) <= set(states):
         raise SchemaLoadError("verbs.lybra_roadmap.verify.verifiable_states 须属 status.verification.states")
     fix = decl["fix_card"]
-    if (not isinstance(fix, dict) or not all(isinstance(fix.get(k), str) and fix[k] for k in ("task_id_template", "title_template",
-                                                                                              "body_template", "publish_hint"))
+    if (not isinstance(fix, dict) or not all(isinstance(fix.get(k), str) and fix[k] for k in _FIX_CARD_TEXT_KEYS)
             or "{round}" not in fix["task_id_template"] or not isinstance(fix.get("inherit_fields"), list)):
-        raise SchemaLoadError("verbs.lybra_roadmap.verify.fix_card(task_id_template 含 {round} / title_template / body_template / "
-                              "publish_hint / inherit_fields)未声明齐")
+        raise SchemaLoadError(f"verbs.lybra_roadmap.verify.fix_card(task_id_template 含 {{round}} / {' / '.join(_FIX_CARD_TEXT_KEYS[1:])} / "
+                              "inherit_fields)未声明齐")
+    texts = decl["texts"]
+    if not isinstance(texts, dict) or not all(isinstance(texts.get(k), str) and texts[k] for k in _VERIFY_TEXT_KEYS):
+        raise SchemaLoadError(f"verbs.lybra_roadmap.verify.texts 未声明齐 {list(_VERIFY_TEXT_KEYS)}")
     return decl
 
 
@@ -845,16 +855,37 @@ def _fix_task_id(governance_root: Path, source_task_id: str, decl: dict[str, Any
 def _fix_draft_payload(governance_root: Path, source_meta: dict[str, Any], *, fix_task_id: str, milestone: str, criterion: str,
                        statement: str, record_id: str, record_rel: str, relayed_by: str, owner_words: str, note: str | None,
                        decl: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """修复卡草稿(唯一起草口)。承继 fix_card.inherit_fields, 外加承继来的 task_class 声明的必填字段(enums.schema task_class
+    required_fields, 经 task_complexity.task_class_declarations 读; 如 complex 的 planner_agent / reviewer)。AIPOS-F180C: 承继的 artifacts
+    只留挂在本标准(修复卡 criteria)上的项(非映射项原样保留交形校验 artifact_problems 判, 不放松), 过滤后为空 = 不带 artifacts、
+    正文提示补声明; 正文附原卡本标准产物文件。"""
+    from tools.aipos_cli.task_complexity import effective_task_class, task_class_declarations
+
     fix = decl["fix_card"]
-    meta: dict[str, Any] = {k: copy.deepcopy(source_meta[k]) for k in fix["inherit_fields"] if not _missing(source_meta.get(k))}
+    field = artifacts_declaration()["field"]
+    inherit = list(fix["inherit_fields"])
+    if "task_class" in inherit and not _missing(source_meta.get("task_class")):
+        class_decl = task_class_declarations().get(effective_task_class(source_meta)) or {}
+        inherit += [k for k in class_decl.get("required_fields") or [] if k not in inherit]
+    meta: dict[str, Any] = {k: copy.deepcopy(source_meta[k]) for k in inherit if not _missing(source_meta.get(k))}
+    if isinstance(meta.get(field), list):
+        kept = [e for e in meta[field] if not isinstance(e, dict) or e.get("criterion") == criterion]
+        if kept:
+            meta[field] = kept
+        else:
+            meta.pop(field)
     meta.update({"task_id": fix_task_id, "title": fix["title_template"].format(criterion=criterion, statement=statement),
                  "status": "pending", "created_by": relayed_by, "milestone": milestone, "criteria": [criterion],
                  "owner_check_ref": record_id})
+    source_view = card_artifacts(governance_root, source_meta, criterion=criterion)
+    files = [item["rel"] for entry in source_view["entries"] for item in entry["files"]]
     body = fix["body_template"].format(task_id=fix_task_id, criterion=criterion, statement=statement, record=record_rel,
                                        relayed_by=relayed_by, owner_words=owner_words, note=note or "-",
                                        source_task_id=source_meta.get("task_id"),
                                        artifact_dir=_rel(card_artifact_dir(governance_root, str(source_meta.get("task_id") or "")),
-                                                         governance_root))
+                                                         governance_root),
+                                       evidence=", ".join(files) or fix["evidence_none"],
+                                       artifacts_note="" if field in meta else fix["artifacts_missing"].format(criterion=criterion))
     return meta, body
 
 
@@ -865,8 +896,9 @@ def apply_owner_verification(governance_root: str | Path, *, criterion: str, res
     预演: 推导该标准状态(roadmap_drift.roadmap_status), 核前置, 渲染将写的 owner_verifications 记录(writer dry_run)与不符时的修复卡草稿
     (draft_writer.create_draft dry_run), 零写入。确认: 写记录 → (不符)写草稿(owner_check_ref = 本次记录 id)→ land_written_paths 落账。
     拒 = RoadmapError(code ∈ verify.reject_codes)。返回 {dry_run, written, criterion, milestone, task_id, result, label, state_before,
-    state_after, record{path, record_id, rendered}, fix{task_id, path, rendered, publish_hint} | None, fix_error, landing}。
-    确认阶段记录已写而草稿被拒(预演刚过, 极少)= 记录照样落账, fix_error 带拒因(调用方非零退出)。"""
+    state_after, record{path, record_id, rendered}, fix{task_id, path, rendered, publish_hint} | None, fix_error, fix_manual, landing}。
+    AIPOS-F180C 不连坐: 修复卡起草被拒不拦抽查记录——预演照常渲染记录, fix = None、fix_error = 拒因、fix_manual = 手工出卡指引;
+    确认先写记录, 起草预演已被拒则不写草稿, 记录照样落账(调用方见 fix_error 非零退出); 记录 fix_task_id 仍为预留卡号(标准状态「待出」)。"""
     from tools.aipos_cli.draft_writer import create_draft
     from tools.aipos_cli.frontmatter import require_frontmatter
     from tools.aipos_cli.owner_inbox import relay_fields
@@ -911,7 +943,8 @@ def apply_owner_verification(governance_root: str | Path, *, criterion: str, res
     out: dict[str, Any] = {"dry_run": not confirm, "written": False, "criterion": criterion, "statement": row["statement"],
                            "milestone": ms["id"], "task_id": target, "result": result, "label": spec["label"],
                            "relayed_by": relayed, "owner_words": words, "state_before": row["state_label"],
-                           "state_after": states[spec["state"]], "record": None, "fix": None, "fix_error": None, "landing": None}
+                           "state_after": states[spec["state"]], "record": None, "fix": None, "fix_error": None,
+                           "fix_task_id": fix_task_id, "fix_manual": None, "landing": None}
     if record["verdict"] == Verdict.BLOCK:
         raise _verify_reject("VERIFY_RECORD_BLOCKED", "; ".join(record["blocking_reasons"]), decl)
 
@@ -931,9 +964,20 @@ def apply_owner_verification(governance_root: str | Path, *, criterion: str, res
                 "wrote": bool(res.get("wrote")),
                 "publish_hint": decl["fix_card"]["publish_hint"].format(path=path, governance_root=str(root))}
 
+    def _manual(record_view: dict[str, Any]) -> str:
+        return decl["fix_card"]["manual_hint"].format(task_id=fix_task_id, milestone=ms["id"], criterion=criterion,
+                                                      record_id=record_view["record_id"], source_task_id=target,
+                                                      governance_root=str(root))
+
+    def _try_fix(record_view: dict[str, Any], *, dry_run: bool) -> None:
+        try:
+            out["fix"], out["fix_error"], out["fix_manual"] = _plan_fix(record_view, dry_run=dry_run), None, None
+        except RoadmapError as exc:  # draft refused: reported to the caller (non-zero), never rolls back the owner record
+            out["fix"], out["fix_error"], out["fix_manual"] = None, str(exc), _manual(record_view)
+
     out["record"] = _record_view(record)
     if fix_task_id:
-        out["fix"] = _plan_fix(out["record"], dry_run=True)
+        _try_fix(out["record"], dry_run=True)
     if not confirm:
         return out
     written_record = build_owner_verification_record(root, payload, actor=actor, dry_run=False)
@@ -942,12 +986,12 @@ def apply_owner_verification(governance_root: str | Path, *, criterion: str, res
     out["record"] = _record_view(written_record)
     out["written"] = True
     written = [out["record"]["path"]]
-    if fix_task_id:
-        try:
-            out["fix"] = _plan_fix(out["record"], dry_run=False)
+    if fix_task_id and out["fix_error"] is None:
+        _try_fix(out["record"], dry_run=False)
+        if out["fix"] is not None:
             written.append(out["fix"]["path"])
-        except RoadmapError as exc:  # record already written: still land it; the draft refusal goes to the caller (not swallowed)
-            out["fix"], out["fix_error"] = None, str(exc)
+    elif out["fix_error"] is not None:  # preview already refused: no draft write; re-point the hint at the written record id
+        out["fix_manual"] = _manual(out["record"])
     from tools.aipos_cli.governance_commit import land_written_paths
 
     out["landing"] = land_written_paths(root, written, actor, command="roadmap_writers", push=push, subcommand="verify",
@@ -973,7 +1017,17 @@ def render_verify_text(outcome: dict[str, Any], *, project: str, source: str, mo
         lines.append(texts["fix"].format(will=will, task_id=fix["task_id"], path=fix["path"], milestone=outcome["milestone"],
                                          criterion=outcome["criterion"], record_id=outcome["record"]["record_id"]))
         lines.append("  " + fix["publish_hint"])
+    elif outcome.get("fix_error"):  # AIPOS-F180C: draft refused, owner record kept; say why and how to draft by hand
+        lines.append(texts["fix_blocked"].format(will=will, task_id=outcome["fix_task_id"], reason=outcome["fix_error"],
+                                                 record_state=verify_record_state(outcome)))
+        lines.append("  " + str(outcome.get("fix_manual") or ""))
     return lines
+
+
+def verify_record_state(outcome: dict[str, Any]) -> str:
+    """AIPOS-F180C: 修复卡起草被拒时抽查记录的处境文案(预演 = 照常写入; 确认 = 已写入并落账)。"""
+    texts = verify_declaration()["texts"]
+    return texts["record_kept_written"] if outcome["written"] else texts["record_kept_preview"]
 
 
 # AIPOS-316: Guard against direct invocation
