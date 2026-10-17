@@ -332,14 +332,12 @@ def _attach_grant(item: dict[str, Any], root: Path, project: str, *, card_fm: di
 
 def _covered_now(root: Path, task_id: str, card_fm: dict[str, Any], driver: str) -> bool:
     """授权请求已自行解除: 驱动方对本卡已有覆盖信封(loop 同一判据 loop_driver.find_envelope → autonomy_policy.select_envelope)。
-    只读视图不输出逐谓词调试轨迹(envelope_trace_output(False); 判定本身不变)。"""
-    from tools.aipos_cli.autonomy_policy import envelope_trace_output
+    逐谓词调试轨迹照 F142 唯一开关(发射处 trace_envelope 一处判定; 本处不另开关)。"""
     from tools.aipos_cli.loop_driver import find_envelope
 
     if not driver:
         return False
-    with envelope_trace_output(False):
-        policy, _reasons = find_envelope(root, task_id=task_id, task_fm=card_fm, driver_actor=driver)
+    policy, _reasons = find_envelope(root, task_id=task_id, task_fm=card_fm, driver_actor=driver)
     return policy is not None
 
 
