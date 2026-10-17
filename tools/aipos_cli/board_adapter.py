@@ -1133,16 +1133,6 @@ def get_roadmap_view(repo_root: str | Path | None = None, *, lane: str | None = 
     )
 
 
-def render_owner_inbox_page(home_root: str | Path | None = None) -> str:
-    """AIPOS-F168 件①: 看板 /owner/inbox 页 HTML(get_owner_inbox 同一数据 → owner_inbox.render_inbox_html; 读不出 = 错误页, 拒因原文)。"""
-    from tools.aipos_cli.owner_inbox import render_inbox_error_html, render_inbox_html
-
-    response = get_owner_inbox(home_root)
-    if not response.get("ok"):
-        return render_inbox_error_html(json.dumps(response.get("errors") or response.get("message") or response, ensure_ascii=False)[:800])
-    return render_inbox_html(response["data"])
-
-
 def get_orchestration_summary_preview(
     orchestration_id: str | None,
     repo_root: str | Path | None = None,

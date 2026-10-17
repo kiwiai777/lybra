@@ -899,6 +899,85 @@ Lybra 服务端位置（AIPOS-286）：
         "rp_ob_detail_roadmap_none": "未声明路线图({rel} 不存在)",
         "rp_ob_detail_first_closed_ok": "已结案 {count} 张",
         "rp_ob_detail_first_closed_none": "还没有结案的卡(在途 {inflight} 张)",
+        # AIPOS-F180: authorization requests on the inbox / envelope pages (web/board/readonly_pages.py + static/envelopes.js), zh / en same keys
+        "gr_section_title": "待授权请求({count})",
+        "gr_readonly": "签发只对 Owner 登录会话开放;其他角色看到这里,请告诉顾问。",
+        "gr_errors_note": "有 {count} 处真相读不出,可能漏列请求:去收件箱看详情",
+        "gr_sentence": "{advisor} 请求:为 {task_id}{title_part}开一个{mode}的授权,{repos},{count} 次,到 {date}。理由:{reason}",
+        "gr_title_part": "({title})",
+        "gr_repos_part": "仅 {repos}",
+        "gr_repos_any": "不限仓",
+        "gr_mode_code": "改代码",
+        "gr_mode_docs": "只写文档",
+        "gr_mode_governance": "写治理文档",
+        "gr_mode_config": "改配置",
+        "gr_mode_audit": "做审计",
+        "gr_mode_any": "不限模式",
+        "gr_meta": "项目 {project} · 签发后编号 {policy_id} · 停下于 {since}",
+        "gr_btn_sign": "按建议签发",
+        "gr_btn_edit": "修改后签发",
+        "gr_btn_deny": "不批准(告诉顾问)",
+        "gr_edit_max": "几次",
+        "gr_edit_until": "到哪天",
+        "gr_edit_repos": "哪些仓(逗号分隔, 留空 = 不限)",
+        "gr_edit_submit": "看一下再签",
+        "gr_edit_invalid": "「几次」要填大于 0 的整数,「到哪天」要选一个日期。",
+        "gr_deny_tell": "告诉 {advisor}:这次不批准 {task_id} 的授权(可以补一句原因)。顾问会用下面的命令记下你的决定(选项填 deny_grant)。",
+        "gr_tech": "查看技术详情",
+        "gr_confirm_heading": "确认签发这个授权?",
+        "gr_confirm_who": "给谁:{agent}",
+        "gr_confirm_what": "能做什么:{mode}",
+        "gr_confirm_repos": "哪些仓:{repos}",
+        "gr_confirm_count": "几次:{count} 次",
+        "gr_confirm_until": "到哪天:{date}",
+        "gr_confirm_card": "影响哪张卡:{task_id}{title_part}",
+        "gr_confirm_project": "哪个项目:{project}",
+        "gr_confirm_btn": "确认签发",
+        "gr_cancel_btn": "取消",
+        "gr_working": "正在处理,请稍候…",
+        "gr_ok_heading": "已签发 {policy_id}",
+        "gr_ok_continue": "{agent} 下次跑 loop 会自动继续 {task_id}。",
+        "gr_ok_generic": "授权已生效,{agent} 下次跑 loop 就能用。",
+        "gr_back_inbox": "返回收件箱",
+        "gr_back_envelopes": "返回信封页",
+        "gr_back_overview": "回总览",
+        "gr_fail_heading": "没签成",
+        "gr_fail_next": "下一步:{next}",
+        "gr_retry_btn": "刷新后重来",
+        "gr_err_other": "签发没完成:{message}",
+        "gr_next_other": "把这段话发给顾问看看。",
+        "gr_err_OWNER_ONLY": "只有 Owner 登录后才能签发。",
+        "gr_next_OWNER_ONLY": "用 Owner 身份登录看板后再点一次。",
+        "gr_err_ORIGIN_MISMATCH": "这个请求不是从看板页面发出的,为安全起见拒了。",
+        "gr_next_ORIGIN_MISMATCH": "直接在看板页面里操作,不要从别的网站或脚本发。",
+        "gr_err_WORKSPACE_REQUIRED": "请求里没写是哪个项目。",
+        "gr_next_WORKSPACE_REQUIRED": "刷新页面后重来;还不行就告诉顾问。",
+        "gr_err_WORKSPACE_NOT_IN_HOME": "这个项目不在本看板管理的项目里。",
+        "gr_next_WORKSPACE_NOT_IN_HOME": "到「项目接入」页确认项目已接入,或告诉顾问。",
+        "gr_err_PARAMS_INVALID": "填的内容有问题:{message}",
+        "gr_next_PARAMS_INVALID": "改一下次数、日期或仓名再试。",
+        "gr_err_TEMPLATE_NOT_CURRENT": "要续签的那个信封已经不是在用的了(可能刚被别的信封接替)。",
+        "gr_next_TEMPLATE_NOT_CURRENT": "刷新页面,对最新的在用信封再续签。",
+        "gr_err_STAGE_INVALID": "页面发出的请求格式不对。",
+        "gr_next_STAGE_INVALID": "刷新页面后重来。",
+        "gr_err_PREVIEW_BLOCKED": "签发前的检查没过:{message}",
+        "gr_next_PREVIEW_BLOCKED": "把这段话发给顾问,让顾问调整请求后再来。",
+        "gr_err_PREVIEW_TOKEN_REQUIRED": "还没确认就直接签了。",
+        "gr_next_PREVIEW_TOKEN_REQUIRED": "从「按建议签发」重新开始。",
+        "gr_err_PREVIEW_TOKEN_INVALID": "这次确认已经用过了(每次确认只能用一次)。",
+        "gr_next_PREVIEW_TOKEN_INVALID": "刷新页面后重来。",
+        "gr_err_PREVIEW_TOKEN_EXPIRED": "确认等得太久,已经超时。",
+        "gr_next_PREVIEW_TOKEN_EXPIRED": "重新点「按建议签发」,几分钟内确认。",
+        "gr_err_PREVIEW_SESSION_MISMATCH": "确认用的不是这次登录。",
+        "gr_next_PREVIEW_SESSION_MISMATCH": "在同一个浏览器窗口里重新签一次。",
+        "gr_err_PREVIEW_PARAMS_MISMATCH": "确认前内容变了(可能刚有人签了同一个编号)。",
+        "gr_next_PREVIEW_PARAMS_MISMATCH": "刷新页面后重新签。",
+        "gr_err_AUDIT_LOG_UNAVAILABLE": "看板的签发记录写不进去,为保证留痕拒签。",
+        "gr_next_AUDIT_LOG_UNAVAILABLE": "告诉顾问检查看板服务工作区的 .lybra 目录是否可写。",
+        "gr_err_CREDENTIAL_UNAVAILABLE": "看板服务没有可用的 Owner 签发凭据。",
+        "gr_next_CREDENTIAL_UNAVAILABLE": "告诉顾问;也可以在治理根所在机用技术详情里的命令签。",
+        "gr_err_MINT_REJECTED": "门没让签:{message}",
+        "gr_next_MINT_REJECTED": "把这段话发给顾问;如果是编号已存在,刷新页面再签。",
     },
     "en": {
         "advisor_prompt": """You are the Advisor for the {workspace_label}.
@@ -1134,6 +1213,85 @@ Important boundaries:
         "rp_ob_detail_roadmap_none": "No roadmap declared ({rel} does not exist)",
         "rp_ob_detail_first_closed_ok": "{count} cards closed",
         "rp_ob_detail_first_closed_none": "No card closed yet ({inflight} in flight)",
+        # AIPOS-F180: authorization requests on the inbox / envelope pages (web/board/readonly_pages.py + static/envelopes.js), zh / en same keys
+        "gr_section_title": "Authorization requests ({count})",
+        "gr_readonly": "Only an Owner login session can sign; other roles, please tell the advisor.",
+        "gr_errors_note": "{count} source(s) could not be read, some requests may be missing: see the inbox for details",
+        "gr_sentence": "{advisor} asks: open an authorization to {mode} for {task_id}{title_part}, {repos}, {count} times, until {date}. Reason: {reason}",
+        "gr_title_part": " ({title})",
+        "gr_repos_part": "only {repos}",
+        "gr_repos_any": "any repo",
+        "gr_mode_code": "change code",
+        "gr_mode_docs": "write docs only",
+        "gr_mode_governance": "write governance docs",
+        "gr_mode_config": "change config",
+        "gr_mode_audit": "run audits",
+        "gr_mode_any": "work in any task mode",
+        "gr_meta": "Project {project} · will be signed as {policy_id} · stopped at {since}",
+        "gr_btn_sign": "Sign as suggested",
+        "gr_btn_edit": "Edit, then sign",
+        "gr_btn_deny": "Decline (tell the advisor)",
+        "gr_edit_max": "How many times",
+        "gr_edit_until": "Until",
+        "gr_edit_repos": "Which repos (comma-separated, empty = any)",
+        "gr_edit_submit": "Review before signing",
+        "gr_edit_invalid": "\"How many times\" must be a whole number above 0 and \"Until\" must be a date.",
+        "gr_deny_tell": "Tell {advisor}: this authorization for {task_id} is declined (add a reason if you like). The advisor records your decision with the command below (choice deny_grant).",
+        "gr_tech": "Show technical details",
+        "gr_confirm_heading": "Sign this authorization?",
+        "gr_confirm_who": "For: {agent}",
+        "gr_confirm_what": "Allowed to: {mode}",
+        "gr_confirm_repos": "Repos: {repos}",
+        "gr_confirm_count": "How many times: {count}",
+        "gr_confirm_until": "Until: {date}",
+        "gr_confirm_card": "Card affected: {task_id}{title_part}",
+        "gr_confirm_project": "Project: {project}",
+        "gr_confirm_btn": "Confirm and sign",
+        "gr_cancel_btn": "Cancel",
+        "gr_working": "Working, please wait…",
+        "gr_ok_heading": "Signed {policy_id}",
+        "gr_ok_continue": "{agent} will continue {task_id} automatically on its next loop run.",
+        "gr_ok_generic": "The authorization is in effect; {agent} can use it on its next loop run.",
+        "gr_back_inbox": "Back to inbox",
+        "gr_back_envelopes": "Back to envelopes",
+        "gr_back_overview": "Back to overview",
+        "gr_fail_heading": "Not signed",
+        "gr_fail_next": "Next step: {next}",
+        "gr_retry_btn": "Reload and start over",
+        "gr_err_other": "Signing did not complete: {message}",
+        "gr_next_other": "Send this message to the advisor.",
+        "gr_err_OWNER_ONLY": "Only a logged-in Owner can sign.",
+        "gr_next_OWNER_ONLY": "Log in to the board as Owner and click again.",
+        "gr_err_ORIGIN_MISMATCH": "This request did not come from the board page, so it was refused for safety.",
+        "gr_next_ORIGIN_MISMATCH": "Use the board page directly, not another site or a script.",
+        "gr_err_WORKSPACE_REQUIRED": "The request did not say which project.",
+        "gr_next_WORKSPACE_REQUIRED": "Reload the page and start over; if it persists, tell the advisor.",
+        "gr_err_WORKSPACE_NOT_IN_HOME": "This project is not one of the projects this board manages.",
+        "gr_next_WORKSPACE_NOT_IN_HOME": "Check the Onboarding page that the project is set up, or tell the advisor.",
+        "gr_err_PARAMS_INVALID": "Something in the form is not valid: {message}",
+        "gr_next_PARAMS_INVALID": "Fix the number of times, the date or the repo names and try again.",
+        "gr_err_TEMPLATE_NOT_CURRENT": "The envelope you are renewing is no longer the one in use (it may have just been replaced).",
+        "gr_next_TEMPLATE_NOT_CURRENT": "Reload the page and renew the envelope that is now in use.",
+        "gr_err_STAGE_INVALID": "The page sent a malformed request.",
+        "gr_next_STAGE_INVALID": "Reload the page and start over.",
+        "gr_err_PREVIEW_BLOCKED": "The pre-signing check did not pass: {message}",
+        "gr_next_PREVIEW_BLOCKED": "Send this message to the advisor so they can adjust the request.",
+        "gr_err_PREVIEW_TOKEN_REQUIRED": "Signing was attempted without the confirmation step.",
+        "gr_next_PREVIEW_TOKEN_REQUIRED": "Start again from \"Sign as suggested\".",
+        "gr_err_PREVIEW_TOKEN_INVALID": "This confirmation was already used (each confirmation works once).",
+        "gr_next_PREVIEW_TOKEN_INVALID": "Reload the page and start over.",
+        "gr_err_PREVIEW_TOKEN_EXPIRED": "The confirmation waited too long and expired.",
+        "gr_next_PREVIEW_TOKEN_EXPIRED": "Click \"Sign as suggested\" again and confirm within a few minutes.",
+        "gr_err_PREVIEW_SESSION_MISMATCH": "The confirmation does not belong to this login.",
+        "gr_next_PREVIEW_SESSION_MISMATCH": "Sign again in the same browser window.",
+        "gr_err_PREVIEW_PARAMS_MISMATCH": "The details changed before confirming (someone may have just signed the same id).",
+        "gr_next_PREVIEW_PARAMS_MISMATCH": "Reload the page and sign again.",
+        "gr_err_AUDIT_LOG_UNAVAILABLE": "The board could not write its signing log, so it refused to sign (every signing must be logged).",
+        "gr_next_AUDIT_LOG_UNAVAILABLE": "Ask the advisor to check that the board service's .lybra directory is writable.",
+        "gr_err_CREDENTIAL_UNAVAILABLE": "The board service has no Owner signing credential available.",
+        "gr_next_CREDENTIAL_UNAVAILABLE": "Tell the advisor; you can also sign on the governance host with the command in the technical details.",
+        "gr_err_MINT_REJECTED": "The gate refused to sign: {message}",
+        "gr_next_MINT_REJECTED": "Send this message to the advisor; if the id already exists, reload the page and sign again.",
     },
 }
 
@@ -2565,16 +2723,19 @@ def make_handler(
             self.wfile.write(body)
 
         def _handle_envelopes_page(self) -> None:
-            """GET 信封页(服务端渲染): 全部登录会话可看; 只有 Owner 会话渲染表单(owner=True)。"""
-            from tools.aipos_cli.envelope_board import collect_envelopes, render_envelopes_error_html, render_envelopes_html
-            from tools.schema_loader import SchemaLoadError
+            """GET 信封页(服务端渲染): 全部登录会话可看; 只有 Owner 会话渲染表单(owner=True)。
+            AIPOS-F180: F174 page skeleton + authorization requests on top (web/board/readonly_pages.render_envelopes)."""
+            from web.board.readonly_pages import render_envelopes
 
             _sid, info = self._current_session()
-            try:
-                page = render_envelopes_html(collect_envelopes(home_root), owner=bool(info and info.get("role") == "owner"))
-            except (OSError, ValueError, SchemaLoadError) as exc:
-                page = render_envelopes_error_html(f"{type(exc).__name__}: {exc}")
-            self._send_html(page)
+            self._send_html(render_envelopes(home_root, parse_qs(urlparse(self.path).query), owner=bool(info and info.get("role") == "owner")))
+
+        def _handle_owner_inbox_page(self) -> None:
+            """AIPOS-F168 inbox page; AIPOS-F180: F174 page skeleton + authorization request cards (Owner session = sign buttons)."""
+            from web.board.readonly_pages import render_owner_inbox
+
+            _sid, info = self._current_session()
+            self._send_html(render_owner_inbox(home_root, parse_qs(urlparse(self.path).query), owner=bool(info and info.get("role") == "owner")))
 
         def _handle_envelopes_api(self) -> None:
             from tools.aipos_cli.envelope_board import collect_envelopes
@@ -2682,14 +2843,7 @@ def make_handler(
 
             # AIPOS-F168 件①: Owner 待决页(服务端渲染, 与 /api/owner/inbox 同一数据; 文案读 verbs.schema lybra_owner_inbox)
             if path == "/owner/inbox":
-                from tools.aipos_cli.board_adapter import render_owner_inbox_page
-
-                body = render_owner_inbox_page(home_root).encode("utf-8")
-                self.send_response(HTTPStatus.OK)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                self._handle_owner_inbox_page()
                 return
 
             # AIPOS-F172: 信封页(服务端渲染)+ 只读数据

@@ -26,6 +26,12 @@ class _Ctx:
 
         return _generate_text(key, self.lang, **values)
 
+    def raw(self, key: str) -> str:
+        """Unformatted template (handed to the page script, which fills the placeholders); missing key = KeyError (same red line)."""
+        from web.board.app import _I18N_TEMPLATES
+
+        return str(_I18N_TEMPLATES[self.lang if self.lang in _I18N_TEMPLATES else "zh"][key])
+
     def href(self, url: str) -> str:
         """站内链接带上当前语言(缺省语言不带)。"""
         locale = self.decl["locale"]
@@ -69,7 +75,10 @@ def _bar(met: int, total: int, ratio: Any = None) -> str:
             f"<span class=\"rp-bar-text\">{met}/{total}</span>")
 
 
-def _page(ctx: _Ctx, page: str, title: str, body: list[str]) -> str:
+def _page(ctx: _Ctx, page: str, title: str, body: list[str], *, note_key: str | None = "rp_readonly_note", h1_attrs: str = "",
+          body_attrs: str = "", scripts: tuple[str, ...] | list[str] = (), current_url: str | None = None) -> str:
+    """F174 page skeleton (top nav + stylesheet + language switch). AIPOS-F180: the Owner inbox / envelope pages reuse it with
+    note_key=None (no read-only note: they host the F172 write exception), extra body attributes, page scripts and current_url."""
     decl = ctx.decl
     locale = decl["locale"]
     nav = [("rp_nav_overview", decl["pages"]["overview"]), ("rp_nav_roadmap", decl["pages"]["roadmap"]),
@@ -77,7 +86,7 @@ def _page(ctx: _Ctx, page: str, title: str, body: list[str]) -> str:
            ("rp_nav_envelopes", _envelope_page()), ("rp_nav_board", decl["nav_links"]["board_home"])]
     current = _CURRENT
     links = "".join(f"<a href=\"{_ESC(ctx.href(url) if url != decl['nav_links']['board_home'] else url)}\""
-                    f"{current if url == decl['pages'].get(page) else ''}>{_ESC(ctx.t(key))}</a>" for key, url in nav)
+                    f"{current if url in (decl['pages'].get(page), current_url) else ''}>{_ESC(ctx.t(key))}</a>" for key, url in nav)
     other = next((code for code in locale["supported"] if code != ctx.lang), None)
     switch = ""
     if other:
@@ -94,10 +103,11 @@ def _page(ctx: _Ctx, page: str, title: str, body: list[str]) -> str:
         "<!doctype html>", f"<html lang=\"{_ESC(ctx.lang)}\"><head><meta charset=\"utf-8\">",
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
         f"<title>{_ESC(title)}</title><link rel=\"stylesheet\" href=\"{_ESC(str(decl['stylesheet']))}\"></head>",
-        f"<body class=\"rp-page rp-{_ESC(page)}\" data-readonly-page=\"{_ESC(page)}\" data-lang=\"{_ESC(ctx.lang)}\">",
+        f"<body class=\"rp-page rp-{_ESC(page)}\" data-readonly-page=\"{_ESC(page)}\" data-lang=\"{_ESC(ctx.lang)}\"{body_attrs}>",
         f"<header class=\"rp-nav\"><nav>{links}</nav>{switch}</header>",
-        f"<main><h1>{_ESC(title)}</h1>", f"<p class=\"rp-readonly-note\">{_ESC(ctx.t('rp_readonly_note'))}</p>",
-        *body, "</main>", script, "</body></html>"])
+        f"<main><h1{h1_attrs}>{_ESC(title)}</h1>",
+        *([f"<p class=\"rp-readonly-note\">{_ESC(ctx.t(note_key))}</p>"] if note_key else []),
+        *body, "</main>", script, *(f"<script src=\"{_ESC(src)}\"></script>" for src in scripts), "</body></html>"])
 
 
 def _js(value: Any) -> str:
@@ -437,6 +447,185 @@ def render_onboarding(data: dict[str, Any], lang: str) -> str:
         body.append(f"<details class=\"rp-paused\" data-paused=\"{len(paused)}\"><summary>{_ESC(ctx.t('rp_paused_folded', count=len(paused)))}"
                     "</summary>" + "".join(_checklist_html(ctx, p) for p in paused) + "</details>")
     return _page(ctx, "onboarding", ctx.t("rp_ob_title", count=len(data["projects"])), body)
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F180: Owner inbox / envelope pages on the F174 skeleton + "authorization requests" cards.
+# Data = owner_inbox grant suggestion (one derivation, CLI line reads the same); signing reuses the F172 write path
+# (mode=new, parameters = the suggestion); all page text goes through the board i18n channel (gr_* keys).
+# ---------------------------------------------------------------------------
+
+#: i18n templates the page script needs (filled client-side; texts never live in the script itself)
+_GR_JS_KEYS = ("gr_confirm_heading", "gr_confirm_who", "gr_confirm_what", "gr_confirm_repos", "gr_confirm_count", "gr_confirm_until",
+               "gr_confirm_card", "gr_confirm_project", "gr_confirm_btn", "gr_cancel_btn", "gr_working", "gr_tech", "gr_ok_heading",
+               "gr_ok_continue", "gr_ok_generic", "gr_back_inbox", "gr_back_envelopes", "gr_back_overview", "gr_fail_heading",
+               "gr_fail_next", "gr_retry_btn", "gr_repos_any", "gr_title_part", "gr_err_other", "gr_next_other", "gr_edit_invalid")
+
+
+def _task_modes() -> list[str]:
+    from tools.schema_loader import get_enum_values
+
+    return list(get_enum_values("task_mode"))
+
+
+def _mode_label(ctx: _Ctx, mode: str) -> str:
+    return ctx.t("gr_mode_" + mode) if mode in _task_modes() else ctx.t("gr_mode_any")
+
+
+def _owner_links(ctx: _Ctx) -> dict[str, str]:
+    decl = ctx.decl
+    return {"inbox": ctx.href(str(decl["nav_links"]["inbox"])), "envelopes": ctx.href(_envelope_page()),
+            "overview": ctx.href(str(decl["pages"]["overview"]))}
+
+
+def _script_texts(ctx: _Ctx) -> str:
+    """JSON handed to static/envelopes.js (templates, task-mode labels, per-error plain reason + next step, return links)."""
+    import json
+
+    from tools.aipos_cli.envelope_board import board_envelopes_declaration
+    from tools.aipos_cli.owner_inbox import grant_declaration
+
+    codes = list(board_envelopes_declaration()["errors"])
+    data = {"t": {key: ctx.raw(key) for key in _GR_JS_KEYS},
+            "modes": {mode: ctx.t("gr_mode_" + mode) for mode in _task_modes()}, "mode_any": ctx.t("gr_mode_any"),
+            "errors": {code: [ctx.raw("gr_err_" + code), ctx.raw("gr_next_" + code)] for code in codes},
+            "links": _owner_links(ctx), "date_only_time": str(grant_declaration()["date_only_time"])}
+    return json.dumps(data, ensure_ascii=False)
+
+
+def _owner_attrs(ctx: _Ctx, owner: bool) -> str:
+    from tools.aipos_cli.envelope_board import board_envelopes_declaration
+
+    attrs = f" data-owner=\"{str(bool(owner)).lower()}\" data-write-path=\"{_ESC(str(board_envelopes_declaration()['write_path']))}\""
+    return attrs + (f" data-gr-texts=\"{_ESC(_script_texts(ctx))}\"" if owner else "")
+
+
+def _owner_script() -> str:
+    from tools.aipos_cli.envelope_board import board_envelopes_declaration
+
+    return str(board_envelopes_declaration()["script_path"])
+
+
+def _panel(ctx: _Ctx) -> str:
+    """The single sign panel (confirm / success / failure), filled by the page script; technical details folded."""
+    return ("<section class=\"gr-panel\" hidden aria-live=\"polite\"><h2></h2><div class=\"gr-panel-body\"></div>"
+            f"<details class=\"gr-tech gr-panel-tech\" hidden><summary>{_ESC(ctx.t('gr_tech'))}</summary><pre></pre></details>"
+            "<div class=\"gr-panel-actions\"></div></section>")
+
+
+def grant_sentence(ctx: _Ctx, grant: dict[str, Any]) -> str:
+    """One plain-language sentence for an authorization request (board side; CLI line = owner_inbox.grant_line, same data)."""
+    repos = ", ".join(grant["lane_repos"])
+    return ctx.t("gr_sentence", advisor=grant["agent_or_role"], task_id=grant["task_id"],
+                 title_part=ctx.t("gr_title_part", title=grant["title"]) if grant.get("title") else "",
+                 mode=_mode_label(ctx, grant["task_mode"]), repos=ctx.t("gr_repos_part", repos=repos) if repos else ctx.t("gr_repos_any"),
+                 count=grant["max_tasks"], date=str(grant["expires_at"])[:10], reason=grant["reason"])
+
+
+def request_payload(item: dict[str, Any]) -> dict[str, Any]:
+    """What "sign as suggested" posts to the F172 write path (mode=new; parameters = the suggestion; request_item = inbox item id)."""
+    g = item["grant"]
+    return {"workspace": item["project"], "mode": "new", "agent_or_role": g["agent_or_role"], "task_mode": g["task_mode"],
+            "lane_repo": list(g["lane_repos"]), "launch_harness": list(g["launch_harnesses"]), "max_tasks": g["max_tasks"],
+            "expires_at": g["expires_at"], "policy_id": g["policy_id"], "request_item": item["item_id"]}
+
+
+def _grant_card(ctx: _Ctx, item: dict[str, Any], owner: bool) -> str:
+    import json
+
+    g = item["grant"]
+    data = {"payload": request_payload(item), "task_id": g["task_id"], "title": g.get("title") or "", "project": item["project"],
+            "mode_label": _mode_label(ctx, g["task_mode"])}
+    tech_lines = [f"item={item['item_id']} project={item['project']} policy_id={g['policy_id']}"]
+    tech_lines += [f"{key}={g.get(key)!r} ({g['sources'].get(key, '-')})" for key in
+                   ("agent_or_role", "task_mode", "lane_repos", "launch_harnesses", "max_tasks", "expires_at", "reason")]
+    if g.get("previous_policy_id"):
+        tech_lines.append(f"previous_envelope={g['previous_policy_id']}")
+    parts = [f"<article class=\"gr-card\" id=\"{_ESC(item['item_id'])}\" data-request-item=\"{_ESC(item['item_id'])}\""
+             f" data-request-project=\"{_ESC(item['project'])}\" data-request=\"{_ESC(json.dumps(data, ensure_ascii=False))}\">",
+             f"<p class=\"gr-sentence\">{_ESC(grant_sentence(ctx, g))}</p>",
+             f"<p class=\"rp-sub gr-meta\">{_ESC(ctx.t('gr_meta', project=item['project'], policy_id=g['policy_id'], since=item.get('since') or '?'))}</p>"]
+    if owner:
+        repos = ", ".join(g["lane_repos"])
+        parts.append("<div class=\"gr-actions\">"
+                     f"<button type=\"button\" class=\"gr-primary\" data-gr-action=\"sign\">{_ESC(ctx.t('gr_btn_sign'))}</button>"
+                     f"<button type=\"button\" data-gr-action=\"edit\">{_ESC(ctx.t('gr_btn_edit'))}</button>"
+                     f"<button type=\"button\" data-gr-action=\"deny\">{_ESC(ctx.t('gr_btn_deny'))}</button></div>")
+        parts.append("<form class=\"gr-edit\" hidden>"
+                     f"<label>{_ESC(ctx.t('gr_edit_max'))} <input name=\"max_tasks\" type=\"number\" min=\"1\" value=\"{_ESC(str(g['max_tasks']))}\"></label>"
+                     f"<label>{_ESC(ctx.t('gr_edit_until'))} <input name=\"expires_date\" type=\"date\" value=\"{_ESC(str(g['expires_at'])[:10])}\"></label>"
+                     f"<label>{_ESC(ctx.t('gr_edit_repos'))} <input name=\"lane_repo\" type=\"text\" value=\"{_ESC(repos)}\"></label>"
+                     f"<button type=\"submit\">{_ESC(ctx.t('gr_edit_submit'))}</button></form>")
+        tell = ctx.t("gr_deny_tell", advisor=g["agent_or_role"], task_id=g["task_id"])
+        parts.append(f"<div class=\"gr-deny\" hidden><p class=\"rp-tell\">{_ESC(tell)}</p>{_command_block(ctx, [item['decide_command']])}</div>")
+    parts.append(f"<details class=\"gr-tech\"><summary>{_ESC(ctx.t('gr_tech'))}</summary><pre>{_ESC(chr(10).join(tech_lines))}</pre></details>")
+    parts.append("</article>")
+    return "".join(parts)
+
+
+def _grant_section(ctx: _Ctx, requests: list[dict[str, Any]], owner: bool, errors: int = 0) -> list[str]:
+    """"Authorization requests" block at the top of the inbox / envelope pages (nothing pending = nothing rendered)."""
+    if not requests and not errors:
+        return []
+    out = [f"<section class=\"gr-requests\" data-requests=\"{len(requests)}\"><h2>{_ESC(ctx.t('gr_section_title', count=len(requests)))}</h2>"]
+    if not owner and requests:
+        out.append(f"<p class=\"rp-readonly-note\">{_ESC(ctx.t('gr_readonly'))}</p>")
+    out.extend(_grant_card(ctx, item, owner) for item in requests)
+    if errors:
+        out.append(f"<p class=\"rp-err\"><a href=\"{_ESC(_owner_links(ctx)['inbox'])}\">{_ESC(ctx.t('gr_errors_note', count=errors))}</a></p>")
+    out.append("</section>")
+    return out
+
+
+def render_owner_inbox(home_root: str | Path | None, params: dict[str, list[str]], *, owner: bool) -> str:
+    """GET /owner/inbox: F168 inbox body (owner_inbox.inbox_sections_html, same data as the API / CLI) on the F174 skeleton, with the
+    authorization requests on top; Owner sessions get the sign client only when there is something to sign."""
+    import json
+
+    from tools.aipos_cli import board_pages
+    from tools.aipos_cli.board_adapter import get_owner_inbox
+    from tools.aipos_cli.owner_inbox import grant_requests, inbox_sections_html, inbox_title, render_inbox_error_html
+    from tools.schema_loader import SchemaLoadError
+
+    lang = "zh"
+    try:
+        decl = board_pages.pages_declaration()
+        lang = resolve_lang(decl, params)
+        ctx = _Ctx(decl, lang)
+        response = get_owner_inbox(home_root)
+        if not response.get("ok"):
+            return render_inbox_error_html(json.dumps(response.get("errors") or response.get("message") or response, ensure_ascii=False)[:800])
+        inbox = response["data"]
+        requests = grant_requests(inbox)
+        signing = owner and bool(requests)
+        body = ([_panel(ctx)] if signing else []) + _grant_section(ctx, requests, owner) + inbox_sections_html(inbox)
+        return _page(ctx, "inbox", inbox_title(inbox), body, note_key=None, h1_attrs=f" data-owner-inbox-count=\"{inbox['count']}\"",
+                     body_attrs=_owner_attrs(ctx, signing), scripts=[_owner_script()] if signing else [],
+                     current_url=str(decl["nav_links"]["inbox"]))
+    except (OSError, ValueError, LookupError, RuntimeError, SchemaLoadError) as exc:  # unreadable = error page naming the cause
+        return render_error(lang, f"{type(exc).__name__}: {exc}"[:800])
+
+
+def render_envelopes(home_root: str | Path | None, params: dict[str, list[str]], *, owner: bool) -> str:
+    """GET envelope page: F172 body (envelope_board.envelopes_page_parts) on the F174 skeleton, authorization requests on top
+    (owner_inbox loop category only); non-Owner sessions get no forms, no buttons and no script."""
+    from tools.aipos_cli import board_pages
+    from tools.aipos_cli.envelope_board import collect_envelopes, envelopes_page_parts
+    from tools.aipos_cli.owner_inbox import collect_inbox, grant_requests
+    from tools.schema_loader import SchemaLoadError
+
+    lang = "zh"
+    try:
+        decl = board_pages.pages_declaration()
+        lang = resolve_lang(decl, params)
+        ctx = _Ctx(decl, lang)
+        parts = envelopes_page_parts(collect_envelopes(home_root), owner=owner)
+        inbox = collect_inbox(home_root, categories=("loop_owner_needed",))
+        body = ([_panel(ctx)] if owner else []) + _grant_section(ctx, grant_requests(inbox), owner, len(inbox["errors"])) + parts["sections"]
+        return _page(ctx, "envelopes", parts["title"], body, note_key=None, h1_attrs=parts["h1_attrs"], body_attrs=_owner_attrs(ctx, owner),
+                     scripts=[_owner_script()] if owner else [], current_url=_envelope_page())
+    except (OSError, ValueError, LookupError, RuntimeError, SchemaLoadError) as exc:  # unreadable = error page naming the cause
+        return render_error(lang, f"{type(exc).__name__}: {exc}"[:800])
 
 
 # ---------------------------------------------------------------------------

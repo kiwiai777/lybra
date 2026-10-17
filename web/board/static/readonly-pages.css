@@ -106,3 +106,40 @@ body.rp-page { margin: 0; background: var(--rp-bg); color: var(--rp-text); font:
   .rp-cards { grid-template-columns: 1fr; }
   .rp-bar { width: 90px; }
 }
+/* AIPOS-F180: Owner inbox / envelope pages on this skeleton; authorization request cards + the single sign panel.
+   The top nav stays visible through every signing step (sticky). */
+.rp-nav { position: sticky; top: 0; z-index: 10; }
+.gr-requests { margin: 10px 0 16px; }
+.gr-card { background: var(--rp-panel); border: 1px solid var(--rp-border); border-left: 4px solid var(--rp-accent); border-radius: 8px;
+  padding: 10px 14px; margin: 8px 0; }
+.gr-card:target { box-shadow: 0 0 0 2px var(--rp-accent); }
+.gr-sentence { font-size: 15px; font-weight: 600; margin: 2px 0 4px; }
+.gr-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 4px; }
+.gr-actions button, .gr-panel-actions button, .gr-edit button { font: inherit; padding: 5px 12px; border-radius: 6px;
+  border: 1px solid var(--rp-border); background: #fff; cursor: pointer; }
+button.gr-primary { background: var(--rp-accent); border-color: var(--rp-accent); color: #fff; font-weight: 600; }
+.gr-edit { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: end; margin: 6px 0; }
+.gr-edit[hidden], .gr-deny[hidden], .gr-panel[hidden], .gr-tech[hidden], .gr-card[hidden] { display: none; }
+.gr-edit label { display: grid; gap: 2px; font-size: 12.5px; color: var(--rp-muted); }
+.gr-edit input { font: inherit; padding: 4px 6px; border: 1px solid var(--rp-border); border-radius: 4px; }
+.gr-deny { margin: 6px 0; }
+.gr-tech { margin-top: 6px; font-size: 12.5px; }
+.gr-tech summary { cursor: pointer; color: var(--rp-muted); }
+.gr-tech pre { white-space: pre-wrap; background: var(--rp-bg); padding: 6px 8px; border-radius: 4px; overflow-wrap: anywhere; }
+.gr-panel { background: var(--rp-panel); border: 2px solid var(--rp-accent); border-radius: 10px; padding: 10px 16px; margin: 10px 0; }
+.gr-panel[data-state="signed"] { border-color: var(--rp-ok); }
+.gr-panel[data-state="failed"] { border-color: var(--rp-alert); }
+.gr-panel-body p { margin: 4px 0; font-size: 14.5px; }
+.gr-panel-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; }
+.gr-back { font-weight: 600; }
+/* envelope page tables (moved from the former inline style) */
+.envelope-current, .envelope-folded { border-collapse: collapse; width: 100%; background: var(--rp-panel); font-size: 13px; }
+.envelope-current th, .envelope-current td, .envelope-folded th, .envelope-folded td { border-bottom: 1px solid var(--rp-border);
+  padding: 4px 6px; text-align: left; vertical-align: top; }
+.envelope-tone-alert td { color: #b42318; font-weight: 600; }
+.envelope-tone-muted td { color: #8a8f98; }
+.envelope-tone-ok td { color: inherit; }
+.envelope-form label { display: inline-block; margin-right: .5em; }
+.envelope-project { margin: 14px 0; }
+.owner-inbox-item { background: var(--rp-panel); border: 1px solid var(--rp-border); border-radius: 8px; padding: 6px 12px; margin: 8px 0; }
+.owner-inbox-item h2 { font-size: 14px; }

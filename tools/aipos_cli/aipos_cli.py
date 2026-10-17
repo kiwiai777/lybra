@@ -2865,6 +2865,12 @@ def build_parser() -> argparse.ArgumentParser:
                                   help="裁决选项, 每项 键=标签(键式样读 verbs.schema lybra_owner_inbox.custom_option.key_pattern)")
     loop_note_parser.add_argument("--recommend", default=None, help="顾问建议(建议选哪个 + 理由)")
     loop_note_parser.add_argument("--actor", default=argparse.SUPPRESS, help="补写人(顾问实例); 缺省 = 运行记录 driver")
+    # AIPOS-F180 件①: 授权请求结构化建议(写进 owner_ask.grant, 收件箱建议逐字段以此覆盖推导值; 声明 verbs.schema lybra_loop_note / lybra_owner_inbox.grant_request)
+    loop_note_parser.add_argument("--grant-mode", default=None, metavar="TASK_MODE", help="AIPOS-F180: 授权建议 task_mode(如 docs)")
+    loop_note_parser.add_argument("--grant-repos", nargs="+", default=None, metavar="REPO", help="AIPOS-F180: 授权建议 lane 仓(逗号分隔或多值)")
+    loop_note_parser.add_argument("--grant-max-tasks", default=None, metavar="N", help="AIPOS-F180: 授权建议额度(正整数)")
+    loop_note_parser.add_argument("--grant-expires", default=None, metavar="DATE", help="AIPOS-F180: 授权建议到期(YYYY-MM-DD 或带时区 ISO 时刻)")
+    loop_note_parser.add_argument("--grant-reason", default=None, help="AIPOS-F180: 授权理由(一句话; 缺省 = 卡标题)")
     loop_note_parser.add_argument("--confirm", action="store_true", default=False, help="写入并落账; 缺省预演")
     loop_note_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output JSON")
 

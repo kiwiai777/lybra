@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,8 @@ _DECL_KEYS = ("page_path", "api_path", "write_path", "script_path", "preview_ttl
 _TONES = ("alert", "ok", "muted")
 _STAGES = ("preview", "confirm")
 _MODES = ("renew", "new")
+#: AIPOS-F180: inbox item id shape (verbs.schema lybra_owner_inbox.item_id: prefix + hex)
+_REQUEST_ITEM_RE = re.compile(r"[A-Z]{1,8}-[0-9a-f]{6,40}")
 
 
 class MintRequestError(Exception):
@@ -184,28 +187,21 @@ def _table(rows: list[dict[str, Any]], decl: dict[str, Any], *, project: str, ow
     return f"<table class=\"{css}\"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
 
 
-def render_envelopes_html(view: dict[str, Any], *, owner: bool) -> str:
-    """看板「信封」页(服务端渲染; 全部值经 html.escape)。owner=False(非 Owner 会话)= 只读, 不出任何表单。"""
+def envelopes_page_parts(view: dict[str, Any], *, owner: bool) -> dict[str, Any]:
+    """看板「信封」页正文(服务端渲染; 全部值经 html.escape)。owner=False(非 Owner 会话)= 只读, 不出任何表单 / 脚本。
+    AIPOS-F180: 页面骨架(顶部导航 / 样式 / 「待授权请求」段)由看板 F174 骨架 web/board/readonly_pages.render_envelopes 套上;
+    本函数只出 {title, h1_attrs, sections}(Owner 写例外的 body 属性与脚本由骨架按会话角色统一给)。"""
     esc = html.escape
     decl = board_envelopes_declaration()
     texts = decl["texts"]
     title = _fmt(texts["title"], "texts.title", projects=len(view["projects"]), home_root=view["home_root"])
-    data_attrs = "".join(f" data-text-{k.replace('_', '-')}=\"{esc(str(texts[k]))}\""
-                         for k in ("preview_heading", "result_heading", "confirm_button", "cancel_button"))
-    parts = ["<!doctype html>", "<html lang=\"zh\"><head><meta charset=\"utf-8\">",
-             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
-             f"<title>{esc(title)}</title><link rel=\"stylesheet\" href=\"/styles.css\">",
-             "<style>.envelope-tone-alert td{color:#b42318;font-weight:600}.envelope-tone-muted td{color:#8a8f98}"
-             ".envelope-tone-ok td{color:inherit}.envelope-form label{display:inline-block;margin-right:.5em}"
-             ".envelope-preview pre{white-space:pre-wrap;background:#f6f7f9;padding:.6em}</style></head>",
-             f"<body class=\"owner-envelopes\" data-owner=\"{str(owner).lower()}\" data-write-path=\"{esc(str(decl['write_path']))}\"{data_attrs}>",
-             f"<main><h1 data-envelope-projects=\"{len(view['projects'])}\">{esc(title)}</h1>"]
+    parts: list[str] = []
     if not owner:
         parts.append(f"<p class=\"envelope-readonly\">{esc(texts['readonly_hint'])}</p>")
     for proj in view["projects"]:
         name = str(proj["project"])
         heading = _fmt(texts["project_heading"], "texts.project_heading", project=name) + (texts["project_paused"] if proj.get("paused") else "")
-        parts.append(f"<section class=\"envelope-project\" data-project=\"{esc(name)}\"><h2>{esc(heading)}</h2>")
+        parts.append(f"<section class=\"envelope-project\" id=\"project-{esc(name)}\" data-project=\"{esc(name)}\"><h2>{esc(heading)}</h2>")
         if proj.get("error"):
             parts.append(f"<p class=\"envelope-error\">{esc(_fmt(texts['page_error'], 'texts.page_error', error=proj['error']))}</p></section>")
             continue
@@ -229,11 +225,7 @@ def render_envelopes_html(view: dict[str, Any], *, owner: bool) -> str:
         if owner:
             parts.append(_new_form_html(name, decl))
         parts.append("</section>")
-    if owner:
-        parts.append("<section class=\"envelope-preview\" hidden><h2></h2><pre></pre><div class=\"envelope-actions\"></div></section>")
-        parts.append(f"<script src=\"{esc(str(decl['script_path']))}\"></script>")
-    parts.append("</main></body></html>")
-    return "\n".join(parts)
+    return {"title": title, "h1_attrs": f" data-envelope-projects=\"{len(view['projects'])}\"", "sections": parts}
 
 
 def _new_form_html(project: str, decl: dict[str, Any]) -> str:
@@ -245,12 +237,6 @@ def _new_form_html(project: str, decl: dict[str, Any]) -> str:
     return (f"<details class=\"envelope-new\"><summary>{esc(_fmt(t['new_heading'], 'texts.new_heading', project=project))}</summary>"
             f"<form class=\"envelope-form\" data-mode=\"new\" data-workspace=\"{esc(project)}\">{inputs}"
             f"<button type=\"submit\">{esc(t['preview_button'])}</button></form></details>")
-
-
-def render_envelopes_error_html(message: str) -> str:
-    text = _fmt(board_envelopes_declaration()["texts"]["page_error"], "texts.page_error", error=message)
-    return ("<!doctype html>\n<html lang=\"zh\"><head><meta charset=\"utf-8\"><title>envelopes</title></head>"
-            f"<body class=\"owner-envelopes\"><main><p class=\"envelope-error\">{html.escape(text)}</p></main></body></html>")
 
 
 # ---------------------------------------------------------------------------
@@ -339,9 +325,15 @@ def normalize_mint_params(body: dict[str, Any], *, project: str, governance_root
             raise MintRequestError("PARAMS_INVALID", detail=f"policy_id 形不合: {policy_id!r}")
     summary = _fmt(decl["decision_summary"][mode], f"decision_summary.{mode}", template_policy_id=template, policy_id=policy_id,
                    agent_or_role=agent, max_tasks=max_tasks, expires_at=expires_at)
+    # AIPOS-F180: signing from an inbox authorization request carries its item id (traceability only; same mint path)
+    request = str(body.get("request_item") or "").strip()
+    if request:
+        if not _REQUEST_ITEM_RE.fullmatch(request):
+            raise MintRequestError("PARAMS_INVALID", detail=f"request_item 形不合: {request!r}")
+        summary += _fmt(decl["texts"]["request_part"], "texts.request_part", request_item=request)
     return {"project": project, "governance_root": str(governance_root), "mode": mode, "template_policy_id": template,
             "policy_id": policy_id, "agent_or_role": agent, "task_mode": task_mode, "lane_repo": lane, "launch_harness": harness,
-            "max_tasks": max_tasks, "expires_at": expires_at, "decision_summary": summary}
+            "max_tasks": max_tasks, "expires_at": expires_at, "decision_summary": summary, "request_item": request}
 
 
 def params_digest(params: dict[str, Any]) -> str:

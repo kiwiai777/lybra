@@ -322,7 +322,8 @@ def test_item4_board_overview_has_readonly_inbox_entry(home, monkeypatch: pytest
         i18n = get("/i18n.js")
         assert "'overview.owner_inbox': 'Owner 待决收件箱'" in i18n and "'overview.owner_inbox': 'Owner inbox'" in i18n
         page = get("/owner/inbox")
-        assert "<form" not in page and "<script" not in page and "data-owner-inbox-count=" in page, "入口指向只读页"
+        # AIPOS-F180: 页面套 F174 骨架(含语言切换内联脚本); 无授权请求 = 不载签发脚本(仍是只读页)
+        assert "<form" not in page and 'src="/envelopes.js"' not in page and "data-owner-inbox-count=" in page, "入口指向只读页"
     finally:
         server.shutdown()
         server.server_close()
