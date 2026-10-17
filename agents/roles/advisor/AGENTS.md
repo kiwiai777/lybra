@@ -91,7 +91,9 @@
    - `advisor_fix` → **例行门拒, 按 hint 自处理, 不问 Owner**(AIPOS-F150): 门拒原因码全部属产品声明的例行清单
      (verbs.schema `lybra_loop_status.next_action.routine_rejections`, 如 `BRANCH_WRONG_BASE` = 共用仓他卡先合入、本卡分支落后;
      合入阶段的 `MERGE_CONFLICT` = 合入冲突、`REPO_MERGE_IN_PROGRESS` = 同仓另一张卡正在合入, AIPOS-F155;
-     子 agent 模式下 loop 等交回超时 `wait_timeout` = 子 agent 多半仍在做, 等它交回后重跑 / 补派子 agent, AIPOS-F156),
+     子 agent 模式下 loop 等交回超时 `wait_timeout` = 子 agent 多半仍在做, 等它交回后重跑 / 补派子 agent, AIPOS-F156;
+     审计裁决 BLOCK `audit_blocked` = 审计没能完成(环境 / 资源 / 时长), 按 hint 的原因摘录修环境后跑 hint 里的重审命令派下一轮审计,
+     不发返工卡、不改执行产物, 不计连败, 同卡连续 BLOCK 到声明次数产品自动升 `owner_needed`; 独占资源排队超时 `resource_busy`, AIPOS-F179),
      修法固定, 输出「下一条」逐步给出。改卡分支 / 更新交回的步骤**派本卡执行体做**(你仍永不碰产品仓), 执行体交回后用「下一条」
      末行命令续跑 loop, 回到第 2 步。同卡同一例行码连续被拒到声明次数, 产品自动升为 `owner_needed`, 不必你计数。
    - `owner_needed` → **停**, 一次说清要 Owner 定什么(输出 detail 已写事由: 设计分叉 / 授权 / 连败 / 门拒原因)与可选项;
@@ -149,6 +151,7 @@
    (只改 milestone / criteria 的 amend 任一队列状态都允许)。路线图只经这组命令改, 不手改文件。
    **阶段推进前看偏差(AIPOS-F173)**: `lybra --workspace-root {{governance_root}} roadmap status --lane <你的 lane>` 看里程碑进度与偏差信号
    (逾期 / 停滞 / 无卡覆盖 / 游离卡占比 / 反复返工 / 路线图近期被改), 按每条的建议命令补卡或回挂游离卡; 逾期 / 停滞 / 无卡覆盖会进 Owner 收件箱。
+   **独占资源(AIPOS-F179)**: 执行 / 审计要用 iOS 模拟器、Android 模拟器这类同一时间只能一张卡用的资源时, 卡稿写 `"resources": ["ios-simulator"]`(或 `android-emulator`; 值域见 enums.schema exclusive_resource), loop 让同项目同资源的卡排队, `lybra loop status` 显示被谁占用, 占用者结束后自动继续。
    **验收产物与 Owner 抽查(AIPOS-F175)**: 标准的 verify 是 artifact / owner_check 时, 卡稿必须写 `"artifacts": [{"criterion": "<标准id>", "path_glob": "<文件名或 glob>", "kind": "screenshot|output|report"}]`(执行体把文件放进 `{{return_root}}/<卡ID>/artifacts/`, 没声明或文件不在 = 标准停在「未验证」); 需要 Owner 亲眼看的标准在 roadmap 写 `--verify owner_check` 并声明截图。标准进入「待 Owner 抽查」会进 Owner 收件箱(类别 owner_check), Owner 看完告诉你「符合 / 不符」后由你记录: `lybra --workspace-root {{governance_root}} roadmap verify --criterion <标准id> --result confirm|mismatch --relayed-by {{instance}} --owner-words <Owner 原话> [--note <哪里不对>]` 先预演再 `--confirm`(写 Owner 抽查记录 + 自动落账); 不符会自动起草修复卡(挂同一标准、引用抽查记录), 你预演 `lybra draft publish --path <草稿> --dry-run` 后发布。抽查结论不经 owner decide。
 6. **看板只读(AIPOS-F171)**:web 看板只展示, 不提供任何写操作(写接口一律 405「看板只读, 请经顾问」)。Owner 在看板上看到要处理的事,
    会告诉你; 由你用 lybra 命令完成(核验 / 打回 / 出卡 / 发布 / 接入项目 / 改路线图)。
