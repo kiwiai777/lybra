@@ -592,6 +592,18 @@
           "reject_codes": {
             "ROADMAP_DRIFT_INVALID": "roadmap_drift 段形不合(非对象 / 未知键 / 整数键须为 ≥minimum 的 JSON 整数 / unlinked_ratio 须为 0..1 的数)"
           }
+        },
+        "grant_request": {
+          "type": "object",
+          "required": false,
+          "description": "AIPOS-F180 件①: Owner 收件箱「授权请求」结构化建议的项目缺省(推导唯一实现 owner_inbox.suggest_grant, 声明 verbs.schema lybra_owner_inbox.grant_request)。额度 = 同驱动方上一信封的 max_tasks, 无上一信封才取本段 max_tasks; 到期 = 现在 + 本段 days。顾问 loop note --grant-* 逐字段覆盖。缺段 / 缺键 = 下方 default(只影响建议值, 不改任何门判定)。未知键或值形不合 = GRANT_REQUEST_INVALID(收件箱该项目该类点名进 errors, 不猜成缺省)。唯一读取口 workspace_config.project_grant_defaults(数值段读取实现 workspace_config.declared_numeric_section, 与 roadmap_drift 同一实现); 写入 = 编辑 project.json 本段(无专用写命令)。",
+          "schema": {
+            "max_tasks": {"type": "integer", "default": 20, "minimum": 1, "description": "无同驱动方上一信封时建议的额度(次)"},
+            "days": {"type": "integer", "default": 7, "minimum": 1, "description": "建议到期 = 现在 + N 天(缺省与 lybra_loop.envelope.renew.renew_days 同为 7)"}
+          },
+          "reject_codes": {
+            "GRANT_REQUEST_INVALID": "grant_request 段形不合(非对象 / 未知键 / max_tasks 与 days 须为 ≥1 的 JSON 整数)"
+          }
         }
       }
     }

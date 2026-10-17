@@ -17,6 +17,11 @@ blocked 卡经裁决撤回(既有 board_adapter.withdraw_task, 前置放宽 = �
 legacy_baseline.write_freeze_entry, owner_policy_ref = 决策记录 ID); 件② 暂停项目过滤只在 collect_inbox(读 workspace_config.project_status);
 件③ 转达归因写进既有记录字段(captured_by = --relayed-by, decision_rationale = Owner 原话), 顾问侧裁决行(ruling_view)显示二者。
 
+AIPOS-F180(gap #175 / #170): loop 类事项事由 ∈ grant_request.reasons(no_envelope / envelope_renew)= 授权请求: 附结构化建议 grant(唯一推导
+suggest_grant: 驱动方 / 卡面模式 / 卡面仓 / 同驱动方上一信封或项目缺省额度 / 项目缺省到期 / 卡标题 / F166 next_policy_id; 顾问 loop note --grant-*
+逐字段覆盖), CLI 一行人话(grant_line)、看板「待授权请求」卡与「按建议签发」(F172 唯一写路由)同读; 驱动方已有覆盖本卡的信封(loop 同一判据
+loop_driver.find_envelope)= 已自行解除, 不列。
+
 AIPOS-F175 件③: owner_check 类别 = 路线图推导(roadmap_drift.roadmap_status, 唯一实现)里验证状态 = 待 Owner 抽查的标准, 附产物 / 步骤 /
 「告诉顾问」话术; 结论经顾问 `lybra roadmap verify`(roadmap.apply_owner_verification)记录, 不经 decide(对本类敲 decide = 用法错, 拒因指路)。
 """
@@ -172,9 +177,176 @@ def _base_item(decl: dict[str, Any], *, project: str, governance_root: Path, cat
             "decide_command": command, "facts": dict(facts or {})}
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F180 件①: 授权请求结构化建议(唯一推导 suggest_grant; CLI 人话行 / 看板「待授权请求」卡 / 按建议签发同读)
+# ---------------------------------------------------------------------------
+
+_GRANT_KEYS = ("reasons", "date_only_time", "mode_labels", "mode_any", "repos_any", "sources", "texts")
+_GRANT_TEXTS = ("line", "title_part", "repos_part", "decide_board", "unavailable")
+#: owner_ask.grant 字段(顾问 loop note --grant-* 写入; 逐字段覆盖推导值)
+GRANT_FIELDS = ("task_mode", "lane_repos", "max_tasks", "expires_at", "reason")
+
+
+def grant_declaration(decl: dict[str, Any] | None = None) -> dict[str, Any]:
+    """verbs.schema lybra_owner_inbox.grant_request(fail-closed): 键齐; reasons ⊆ loop 下一动作事由; mode_labels 键恰为 enums.schema task_mode。"""
+    from tools.schema_loader import SchemaLoadError, get_enum_values
+
+    g = (decl or inbox_declaration()).get("grant_request")
+    if not isinstance(g, dict) or any(k not in g for k in _GRANT_KEYS) or any(k not in (g.get("texts") or {}) for k in _GRANT_TEXTS):
+        raise SchemaLoadError(f"verbs.{VERB}.grant_request 未声明齐 {list(_GRANT_KEYS)} / texts {list(_GRANT_TEXTS)}")
+    if set(g["mode_labels"]) != set(get_enum_values("task_mode")):
+        raise SchemaLoadError(f"verbs.{VERB}.grant_request.mode_labels 键须恰为 enums.schema task_mode 值域 {get_enum_values('task_mode')}")
+    if not isinstance(g["reasons"], list) or not g["reasons"]:
+        raise SchemaLoadError(f"verbs.{VERB}.grant_request.reasons 须为非空列表")
+    return g
+
+
+def parse_grant_expires(value: Any, *, now: datetime | None = None, decl: dict[str, Any] | None = None) -> str:
+    """授权到期 → ISO8601 UTC(Z)。只给日期(YYYY-MM-DD)= 当日 + 声明 date_only_time; 带时刻须带时区; 须在未来。不合 = ValueError(原文点名)。"""
+    import re
+
+    from tools.aipos_cli.clock import iso_z, utc_now
+
+    raw = str(value or "").strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        raw = raw + str(grant_declaration(decl)["date_only_time"])
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"到期 {value!r} 须为 YYYY-MM-DD 或带时区的 ISO 时刻") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"到期 {value!r} 须带时区(如 Z)或只给日期 YYYY-MM-DD")
+    if parsed <= (now or utc_now()):
+        raise ValueError(f"到期 {value!r} 不在未来")
+    return iso_z(parsed)
+
+
+def normalize_grant_fields(*, task_mode: str | None = None, repos: Any = None, max_tasks: Any = None, expires: str | None = None,
+                           reason: str | None = None, now: datetime | None = None) -> dict[str, Any]:
+    """顾问 --grant-* → owner_ask.grant(只含给出的字段; 唯一校验实现, loop note 调)。不合 = ValueError(点名)。"""
+    from tools.aipos_cli.workspace_config import repo_name_set
+    from tools.schema_loader import get_enum_values
+
+    out: dict[str, Any] = {}
+    if task_mode is not None and str(task_mode).strip():
+        mode = str(task_mode).strip()
+        if mode not in get_enum_values("task_mode"):
+            raise ValueError(f"--grant-mode {mode!r} 不在 task_mode 值域 {get_enum_values('task_mode')}")
+        out["task_mode"] = mode
+    if repos:
+        items = repos if isinstance(repos, list) else [repos]
+        names = repo_name_set([part for text in items for part in str(text).split(",")])
+        if names:
+            out["lane_repos"] = names
+    if max_tasks is not None and str(max_tasks).strip():
+        try:
+            n = int(str(max_tasks).strip())
+        except ValueError as exc:
+            raise ValueError(f"--grant-max-tasks 须为正整数: {max_tasks!r}") from exc
+        if n < 1 or isinstance(max_tasks, bool):
+            raise ValueError(f"--grant-max-tasks 须为正整数: {max_tasks!r}")
+        out["max_tasks"] = n
+    if expires is not None and str(expires).strip():
+        out["expires_at"] = parse_grant_expires(expires, now=now)
+    if reason is not None and str(reason).strip():
+        text = " ".join(str(reason).split())
+        out["reason"] = text
+    return out
+
+
+def suggest_grant(root: Path, project: str, *, task_id: str, card_fm: dict[str, Any], driver: str,
+                  advisor_grant: dict[str, Any] | None = None, now: datetime | None = None) -> dict[str, Any]:
+    """件① 授权建议唯一推导(声明 verbs.schema lybra_owner_inbox.grant_request): 驱动方 = 运行记录 driver; task_mode = 卡面; 仓 = 卡面 lane.repo
+    (未写 = project.json repos 中指向卡所在仓的仓名); 额度 = 同驱动方上一信封, 无则项目缺省; 到期 = 现在 + 项目缺省天数; 理由 = 卡标题;
+    拉起授权 = 同驱动方上一信封; policy_id = F166 next_policy_id。顾问 owner_ask.grant 逐字段覆盖。返回 {..., sources: {字段: 来源键}}。"""
+    from datetime import timedelta
+
+    from tools.aipos_cli.autonomy_policy import card_lane_refs, envelope_overview, next_policy_id
+    from tools.aipos_cli.clock import iso_z, utc_now
+    from tools.aipos_cli.workspace_config import project_grant_defaults, project_repos
+
+    defaults = project_grant_defaults(root)
+    now = now or utc_now()
+    previous = next((r for r in envelope_overview(root)["envelopes"] if r["agent_or_role"] == driver and r.get("max_tasks")), None)
+    sources: dict[str, str] = {}
+    lane = card_fm.get("lane") if isinstance(card_fm.get("lane"), dict) else {}
+    raw_repo = str(lane.get("repo") or "").strip()
+    if raw_repo:
+        repos, sources["lane_repos"] = [raw_repo], "card"
+    else:
+        names = set((project_repos(root).get("items") or {}))
+        repos = [r for r in card_lane_refs(root, card_fm)["refs"] if r in names]
+        sources["lane_repos"] = "derived"
+    grant: dict[str, Any] = {
+        "agent_or_role": driver, "task_mode": str(card_fm.get("task_mode") or "").strip(), "lane_repos": repos,
+        "launch_harnesses": list((previous or {}).get("launch_harnesses") or []),
+        "max_tasks": int(previous["max_tasks"]) if previous else int(defaults["max_tasks"]),
+        "expires_at": iso_z(now + timedelta(days=int(defaults["days"]))),
+        "reason": str(card_fm.get("title") or "").strip() or task_id,
+    }
+    sources.update({"agent_or_role": "derived", "task_mode": "card", "reason": "card", "expires_at": "project_default",
+                    "launch_harnesses": "previous_envelope" if previous else "derived",
+                    "max_tasks": "previous_envelope" if previous else "project_default"})
+    for key in GRANT_FIELDS:
+        value = (advisor_grant or {}).get(key)
+        if value not in (None, "", []):
+            grant[key], sources[key] = (list(value) if isinstance(value, list) else value), "advisor"
+    grant["policy_id"] = next_policy_id(root, identities={driver}, previous=(previous or {}).get("policy_id"), project=project)
+    grant.update({"task_id": task_id, "title": str(card_fm.get("title") or "").strip() or None, "project": project,
+                  "previous_policy_id": (previous or {}).get("policy_id"), "sources": sources})
+    return grant
+
+
+def grant_line(item: dict[str, Any], decl: dict[str, Any] | None = None) -> str:
+    """授权请求一行人话(CLI 收件箱 / 收件箱页事项行同用; 文案读 grant_request.texts)。"""
+    g = grant_declaration(decl)
+    t = g["texts"]
+    grant = item["grant"]
+    repos = ", ".join(grant["lane_repos"])
+    return _fmt(t["line"], "grant_request.texts.line", advisor=grant["agent_or_role"], task_id=grant["task_id"],
+                title_part=_fmt(t["title_part"], "grant_request.texts.title_part", title=grant["title"]) if grant.get("title") else "",
+                mode_label=g["mode_labels"].get(grant["task_mode"]) or g["mode_any"],
+                repos_part=_fmt(t["repos_part"], "grant_request.texts.repos_part", repos=repos) if repos else g["repos_any"],
+                max_tasks=grant["max_tasks"], expires_date=str(grant["expires_at"])[:10], reason=grant["reason"])
+
+
+def _attach_grant(item: dict[str, Any], root: Path, project: str, *, card_fm: dict[str, Any], driver: str,
+                  advisor_grant: dict[str, Any] | None, decl: dict[str, Any]) -> None:
+    """授权请求事项附 grant(建议)/ grant_error(推不出, 原因点名)+ 看板链接与裁决行。"""
+    from tools.aipos_cli.board_pages import pages_declaration
+    from tools.aipos_cli.workspace_config import GrantRequestDefaultsError
+
+    g = grant_declaration(decl)
+    try:
+        if not driver:
+            raise ValueError("运行记录无驱动方(driver)")
+        item["grant"] = suggest_grant(root, project, task_id=str(item["task_id"]), card_fm=card_fm, driver=driver,
+                                      advisor_grant=advisor_grant)
+    except (GrantRequestDefaultsError, OSError, ValueError, LookupError) as exc:  # named in the item (not guessed), item still listed
+        item["grant_error"] = f"{type(exc).__name__}: {exc}"
+        return
+    item["board_url"] = f"{pages_declaration()['nav_links']['inbox']}#{item['item_id']}"
+    item["decide_line"] = _fmt(g["texts"]["decide_board"], "grant_request.texts.decide_board", board_url=item["board_url"],
+                               command=item["decide_command"])
+
+
+def _covered_now(root: Path, task_id: str, card_fm: dict[str, Any], driver: str) -> bool:
+    """授权请求已自行解除: 驱动方对本卡已有覆盖信封(loop 同一判据 loop_driver.find_envelope → autonomy_policy.select_envelope)。
+    只读视图不输出逐谓词调试轨迹(envelope_trace_output(False); 判定本身不变)。"""
+    from tools.aipos_cli.autonomy_policy import envelope_trace_output
+    from tools.aipos_cli.loop_driver import find_envelope
+
+    if not driver:
+        return False
+    with envelope_trace_output(False):
+        policy, _reasons = find_envelope(root, task_id=task_id, task_fm=card_fm, driver_actor=driver)
+    return policy is not None
+
+
 def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path | None, errors: list[dict[str, str]]) -> list[dict[str, Any]]:
     """① 每卡最近一次 loop 运行的顾问下一动作 = owner_needed(唯一判定 loop_run_record.loop_status)。卡已结案 / 撤回 = 已自行解除, 不列;
-    冻结卡 = 四视图同一口径不列。运行记录 owner_ask(lybra loop note 补写)优先于声明缺省文案。"""
+    冻结卡 = 四视图同一口径不列。运行记录 owner_ask(lybra loop note 补写)优先于声明缺省文案。
+    AIPOS-F180: 事由 ∈ grant_request.reasons = 授权请求: 驱动方已有覆盖本卡的信封 = 已自行解除不列; 否则附 grant 建议(suggest_grant)。"""
     from tools.aipos_cli.loop_run_record import loop_runs_root, loop_status
     from tools.aipos_cli.task_loader import find_task_card
 
@@ -202,6 +374,16 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
             continue
         reason = str(na.get("reason") or "")
         ask_rec = view.get("owner_ask") if isinstance(view.get("owner_ask"), dict) else {}
+        driver = str(view.get("driver") or "")
+        grant_request = reason in grant_declaration(decl)["reasons"]
+        card_fm: dict[str, Any] = {}
+        if grant_request:
+            card_fm = _card_frontmatter(card_path, errors, project) or {}
+            try:
+                if card_fm and _covered_now(root, task_id, card_fm, driver):
+                    continue  # AIPOS-F180: envelope now covers this card for the driver = self-resolved, not listed
+            except (OSError, ValueError, LookupError) as exc:  # coverage unreadable = named, item still listed (not guessed resolved)
+                errors.append({"project": project, "source": f"授权请求 {task_id} 信封覆盖判定", "error": f"{type(exc).__name__}: {exc}"})
         if ask_rec.get("options"):
             options = [{"key": str(o.get("key")), "label": str(o.get("label"))} for o in ask_rec["options"] if isinstance(o, dict)]
         else:
@@ -211,20 +393,27 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
             recommend = _fmt(cat["recommend_by_reason"][reason], f"categories.loop_owner_needed.recommend_by_reason.{reason}",
                              hint=str(na.get("hint") or ""), task_id=task_id)
         subject = _fmt(cat["subject"], "categories.loop_owner_needed.subject", task_id=task_id)
-        title = _card_title(card_path, errors, project)
-        out.append(_base_item(
+        title = (str(card_fm.get("title") or "").strip() or None) if card_fm else _card_title(card_path, errors, project)
+        item = _base_item(
             decl, project=project, governance_root=root, category="loop_owner_needed", rank=int(cat["rank"]), subject=subject,
-            anchor=str(view.get("run_id") or ""), source=str(view.get("driver") or ""),
+            anchor=str(view.get("run_id") or ""), source=driver,
             ask=str(ask_rec.get("ask") or na.get("detail") or reason), recommend=recommend,
             impact=_fmt(cat["impact"], "categories.loop_owner_needed.impact", task_id=task_id, reason=reason),
             options=options, since=view.get("ended_at") or view.get("started_at"), task_id=task_id, home_root=home_root, title=title,
             facts={"run_id": view.get("run_id"), "reason": reason, "driver": view.get("driver"), "envelope": view.get("envelope"),
-                   "hint": na.get("hint"), "record_path": view.get("record_path"), "owner_ask_by": ask_rec.get("noted_by")}))
+                   "hint": na.get("hint"), "record_path": view.get("record_path"), "owner_ask_by": ask_rec.get("noted_by")})
+        if grant_request:
+            if card_fm:
+                _attach_grant(item, root, project, card_fm={**card_fm, "task_id": task_id}, driver=driver,
+                              advisor_grant=ask_rec.get("grant") if isinstance(ask_rec.get("grant"), dict) else None, decl=decl)
+            else:
+                item["grant_error"] = f"卡面 {task_id} 读不出"
+        out.append(item)
     return out
 
 
-def _card_title(path: Path | None, errors: list[dict[str, str]], project: str) -> str | None:
-    """卡面 title(遗留视图每项一行用); 卡面读不出 = 点名进 errors, 标题缺省(不猜)。"""
+def _card_frontmatter(path: Path | None, errors: list[dict[str, str]], project: str) -> dict[str, Any] | None:
+    """卡面 frontmatter; 卡面读不出 = 点名进 errors, None(不猜)。"""
     from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
 
     if path is None:
@@ -234,7 +423,13 @@ def _card_title(path: Path | None, errors: list[dict[str, str]], project: str) -
     except FrontmatterReadError as exc:
         errors.append({"project": project, "source": f"卡面 {Path(path).name}", "error": str(exc)})
         return None
-    return str(fm.get("title") or "").strip() or None
+    return fm
+
+
+def _card_title(path: Path | None, errors: list[dict[str, str]], project: str) -> str | None:
+    """卡面 title(遗留视图每项一行用); 卡面读不出 = 点名进 errors, 标题缺省(不猜)。"""
+    fm = _card_frontmatter(path, errors, project)
+    return (str(fm.get("title") or "").strip() or None) if fm else None
 
 
 def _needs_owner_items(root: Path, project: str, decl: dict[str, Any], home_root: Path | None,
@@ -463,8 +658,9 @@ _COLLECTORS = (("loop_owner_needed", _loop_items), ("needs_owner_card", _needs_o
 
 
 def collect_project_inbox(governance_root: Path, *, project: str | None = None, home_root: Path | None = None,
-                          decl: dict[str, Any] | None = None) -> dict[str, Any]:
-    """一个项目治理根的待决事项(未裁决者)+ 读不出处。项目名缺省 = 治理根目录名(home 根下的注册名)。"""
+                          decl: dict[str, Any] | None = None, categories: tuple[str, ...] | None = None) -> dict[str, Any]:
+    """一个项目治理根的待决事项(未裁决者)+ 读不出处。项目名缺省 = 治理根目录名(home 根下的注册名)。
+    categories = 只算这些类别(AIPOS-F180: 信封页「待授权请求」只要 loop 类; 缺省 = 全部)。"""
     from tools.aipos_cli.frontmatter import FrontmatterReadError
     from tools.aipos_cli.task_loader import task_card_lookup_scope
     from tools.schema_loader import SchemaLoadError
@@ -477,6 +673,8 @@ def collect_project_inbox(governance_root: Path, *, project: str | None = None, 
     decided: list[dict[str, Any]] = []
     with task_card_lookup_scope(root):
         for category, collect in _COLLECTORS:
+            if categories is not None and category not in categories:
+                continue
             try:
                 found = collect(root, name, decl, home_root, errors)
             except SchemaLoadError:
@@ -516,7 +714,8 @@ def home_projects(home_root: str | Path | None = None) -> dict[str, Any]:
     return {"home_root": home, "home_source": source, "projects": projects}
 
 
-def collect_inbox(home_root: str | Path | None = None, *, project: str | None = None, include_paused: bool = False) -> dict[str, Any]:
+def collect_inbox(home_root: str | Path | None = None, *, project: str | None = None, include_paused: bool = False,
+                  categories: tuple[str, ...] | None = None) -> dict[str, Any]:
     """跨 home 根全部已注册项目(workspace_config._project_candidates 唯一枚举)。返回 {home_root, home_source, projects, items(已排序),
     decided_hidden, paused_hidden, errors}。--project 不在注册清单 = ValueError(用法错, 不猜)。
     AIPOS-F170 件②: project.json status = paused(唯一读取口 workspace_config.project_status)的项目缺省不列(include_paused / 显式 --project
@@ -525,10 +724,16 @@ def collect_inbox(home_root: str | Path | None = None, *, project: str | None = 
     from tools.aipos_cli.task_loader import read_request_scope
 
     with read_request_scope():
-        return _collect_inbox(home_root, project=project, include_paused=include_paused)
+        return _collect_inbox(home_root, project=project, include_paused=include_paused, categories=categories)
 
 
-def _collect_inbox(home_root: str | Path | None, *, project: str | None, include_paused: bool) -> dict[str, Any]:
+def grant_requests(inbox: dict[str, Any]) -> list[dict[str, Any]]:
+    """AIPOS-F180 件②: 收件箱数据中的授权请求(带 grant 建议的事项; 收件箱页 / 信封页「待授权请求」同读)。"""
+    return [item for item in inbox["items"] if item.get("grant")]
+
+
+def _collect_inbox(home_root: str | Path | None, *, project: str | None, include_paused: bool,
+                   categories: tuple[str, ...] | None = None) -> dict[str, Any]:
     decl = inbox_declaration()
     enumerated = home_projects(home_root)  # AIPOS-F171: 枚举 + 状态读取收为一处(看板项目列表同调)
     home, source = enumerated["home_root"], enumerated["home_source"]
@@ -551,7 +756,7 @@ def _collect_inbox(home_root: str | Path | None, *, project: str | None, include
             if status == "paused":
                 paused.append(name)
                 continue
-        part = collect_project_inbox(home / name, project=name, home_root=home, decl=decl)
+        part = collect_project_inbox(home / name, project=name, home_root=home, decl=decl, categories=categories)
         items += part["items"]
         errors += part["errors"]
         hidden += part["decided_hidden"]
@@ -566,6 +771,11 @@ def _collect_inbox(home_root: str | Path | None, *, project: str | None, include
 
 def _item_lines(item: dict[str, Any], texts: dict[str, Any]) -> list[str]:
     lines = [_fmt(texts["item"], "texts.item", **item), _fmt(texts["ask"], "texts.ask", ask=item["ask"])]
+    if item.get("grant"):  # AIPOS-F180: authorization request, one plain-language line (same data as the board request card)
+        lines.append(grant_line(item))
+    elif item.get("grant_error"):
+        lines.append(_fmt(grant_declaration()["texts"]["unavailable"], "grant_request.texts.unavailable", why=item["grant_error"],
+                          task_id=item.get("task_id") or ""))
     if item.get("recommend"):
         lines.append(_fmt(texts["recommend"], "texts.recommend", recommend=item["recommend"]))
     elif item["category"] == "loop_owner_needed":
@@ -601,34 +811,37 @@ def render_inbox_text(inbox: dict[str, Any]) -> str:
     return "\n".join(out)
 
 
-def render_inbox_html(inbox: dict[str, Any]) -> str:
-    """看板「Owner 待决」页(服务端渲染, 与 CLI 同一数据与同一声明文案; 全部值经 html.escape)。"""
+def inbox_title(inbox: dict[str, Any]) -> str:
+    """看板「Owner 待决」页标题(与 CLI 首行同一声明文案)。"""
+    texts = inbox_declaration()["texts"]
+    head = "header" if inbox["items"] else "empty"
+    return _fmt(texts[head], f"texts.{head}", count=inbox["count"], projects=len(inbox["projects"]), home_root=inbox["home_root"])
+
+
+def inbox_sections_html(inbox: dict[str, Any]) -> list[str]:
+    """看板「Owner 待决」页正文段(服务端渲染, 与 CLI 同一数据与同一声明文案; 全部值经 html.escape)。页面骨架(顶部导航 / 样式)由看板
+    F174 骨架 web/board/readonly_pages 套上(AIPOS-F180)。每个事项段 id = item-<事项 ID>(授权请求卡 id = 事项 ID, CLI 链接锚点指向请求卡)。"""
     texts = inbox_declaration()["texts"]
     esc = html.escape
-    head = "header" if inbox["items"] else "empty"
-    title = _fmt(texts[head], f"texts.{head}", count=inbox["count"], projects=len(inbox["projects"]), home_root=inbox["home_root"])
-    parts = ["<!doctype html>", "<html lang=\"zh\"><head><meta charset=\"utf-8\">",
-             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
-             f"<title>{esc(title)}</title><link rel=\"stylesheet\" href=\"/styles.css\"></head>",
-             "<body class=\"owner-inbox\"><main>", f"<h1 data-owner-inbox-count=\"{inbox['count']}\">{esc(title)}</h1>"]
+    parts: list[str] = []
     paused = _paused_line(inbox, texts)
     if paused:
         parts.append(f"<p class=\"owner-inbox-paused\">{esc(paused)}</p>")
     for item in inbox["items"]:
         lines = _item_lines(item, texts)
-        parts.append(f"<section class=\"owner-inbox-item\" data-item-id=\"{esc(item['item_id'])}\" data-category=\"{esc(item['category'])}\""
-                     f" data-rank=\"{item['rank']}\" data-project=\"{esc(item['project'])}\">")
+        parts.append(f"<section class=\"owner-inbox-item\" id=\"item-{esc(item['item_id'])}\" data-item-id=\"{esc(item['item_id'])}\""
+                     f" data-category=\"{esc(item['category'])}\" data-rank=\"{item['rank']}\" data-project=\"{esc(item['project'])}\">")
         parts.append(f"<h2>{esc(lines[0])}</h2><ul>")
         parts.extend(f"<li>{esc(line.strip())}</li>" for line in lines[1:])
-        if item.get("board_url"):  # AIPOS-F172: 信封项可点到看板信封页
+        # AIPOS-F172: 信封项可点到看板信封页; AIPOS-F180: 授权请求可点到本页请求卡
+        if item.get("board_url"):
             parts.append(f"<li class=\"owner-inbox-board\"><a href=\"{esc(item['board_url'])}\">{esc(item['board_url'])}</a></li>")
         parts.append("</ul></section>")
     if inbox["errors"]:
         parts.append(f"<section class=\"owner-inbox-errors\"><h2>{esc(_fmt(texts['errors_header'], 'texts.errors_header', count=len(inbox['errors'])))}</h2><ul>")
         parts.extend(f"<li>{esc(_fmt(texts['error'], 'texts.error', **err).strip())}</li>" for err in inbox["errors"])
         parts.append("</ul></section>")
-    parts.append("</main></body></html>")
-    return "\n".join(parts)
+    return parts
 
 
 def render_inbox_error_html(message: str) -> str:

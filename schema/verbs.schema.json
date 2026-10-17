@@ -402,7 +402,7 @@
     ]
   },
   "board_owner_envelopes": {
-    "description": "AIPOS-F172(Owner 10-16 定: 看板只读的例外①——信封授权, 只有 Owner 能做): 看板「信封」页 + Owner 在看板续签 / 新签信封。只读部分 = 按项目列信封(状态唯一推导 autonomy_policy.envelope_overview, 与 Owner 收件箱 / loop status 预警 / brief 同读; 项目 = home 根注册项目唯一枚举 owner_inbox.home_projects)。写例外 = write_path 一条路由(stage=preview|confirm): 只有 Owner 角色会话可调用(其它会话 owner_only), 必带 workspace = home 根推导出的项目名, 预演调 envelope mint 唯一实现 envelope_mint.mint_preview(--dry-run 同一本地 writer)并发本会话预演令牌(绑定会话 + 参数摘要, preview_ttl_seconds 过期, 单次即焚), 确认须携同一令牌与同一参数, 调 envelope_mint.mint_via_gate(--confirm 同一门路径, 含 F158 自动落账); 签发凭据 = 看板登录凭据库(服务进程工作区 .lybra/connection.json)中的 owner 凭据, 只在服务端经 load_role_token 读取, 应答只出指纹; 记录 actor = 登录会话的 Owner 角色, 来源 = 看板(capture_surface), 会话指纹 / 登录方式 / 来源 IP 写进 captured_by 与 decision_rationale。每次预演 / 确认(含被拒)写看板审计日志(服务进程工作区 .lybra/<audit_log_file>, 写不进 = 确认拒签, fail-closed)。除 write_path 外看板其余写路由仍按 board_readonly 应答。唯一实现: tools/aipos_cli/envelope_board.py(视图 / 渲染 / 请求处理)+ web/board/app.py(路由)。",
+    "description": "AIPOS-F172(Owner 10-16 定: 看板只读的例外①——信封授权, 只有 Owner 能做): 看板「信封」页 + Owner 在看板续签 / 新签信封。只读部分 = 按项目列信封(状态唯一推导 autonomy_policy.envelope_overview, 与 Owner 收件箱 / loop status 预警 / brief 同读; 项目 = home 根注册项目唯一枚举 owner_inbox.home_projects)。写例外 = write_path 一条路由(stage=preview|confirm): 只有 Owner 角色会话可调用(其它会话 owner_only), 必带 workspace = home 根推导出的项目名, 预演调 envelope mint 唯一实现 envelope_mint.mint_preview(--dry-run 同一本地 writer)并发本会话预演令牌(绑定会话 + 参数摘要, preview_ttl_seconds 过期, 单次即焚), 确认须携同一令牌与同一参数, 调 envelope_mint.mint_via_gate(--confirm 同一门路径, 含 F158 自动落账); 签发凭据 = 看板登录凭据库(服务进程工作区 .lybra/connection.json)中的 owner 凭据, 只在服务端经 load_role_token 读取, 应答只出指纹; 记录 actor = 登录会话的 Owner 角色, 来源 = 看板(capture_surface), 会话指纹 / 登录方式 / 来源 IP 写进 captured_by 与 decision_rationale。每次预演 / 确认(含被拒)写看板审计日志(服务进程工作区 .lybra/<audit_log_file>, 写不进 = 确认拒签, fail-closed)。除 write_path 外看板其余写路由仍按 board_readonly 应答。唯一实现: tools/aipos_cli/envelope_board.py(视图 / 渲染 / 请求处理)+ web/board/app.py(路由)。AIPOS-F180 件②③(gap #175 / #170): 信封页与收件箱页顶部「待授权请求」(数据 = lybra_owner_inbox.grant_request 同一建议)每张一句人话 + 「按建议签发」「修改后签发」(只露额度 / 到期 / 仓)「不批准(告诉顾问)」(不写, 给话术与 owner decide 命令); 签发仍走本 write_path(mode=new + 可选 request_item = 收件箱事项 ID, 决策摘要附 texts.request_part), 安全框架不变; 前端 static/envelopes.js 一个客户端: 确认只显示人话摘要(给谁 / 能做什么 / 哪些仓 / 几次 / 到哪天 / 影响哪张卡), 成功 = 成功卡片 + 返回收件箱 / 信封页 / 总览, 失败 = 人话原因 + 下一步, 原始预演与记录路径折叠在「查看技术详情」; 两页用 F174 页面骨架(顶部导航在签发各步保持), 页面文案走看板 i18n 单通道 web/board/app.py _I18N_TEMPLATES(gr_* 键, zh / en 同键)。",
     "page_path": "/owner/envelopes",
     "api_path": "/api/owner/envelopes",
     "write_path": "/api/owner/envelopes/mint",
@@ -488,6 +488,7 @@
         "预演裁决: {verdict}"
       ],
       "renew_part": "(续签自 {template_policy_id})",
+      "request_part": "(应授权请求 {request_item})",
       "page_error": "信封页读不出(不猜): {error}"
     },
     "errors": {
@@ -2950,7 +2951,7 @@
       "phase": "owner",
       "surface": ["cli", "board"],
       "cli_command": "lybra owner inbox",
-      "single_implementation": "tools/aipos_cli/owner_inbox.collect_inbox / render_inbox_text / render_inbox_html",
+      "single_implementation": "tools/aipos_cli/owner_inbox.collect_inbox / render_inbox_text / inbox_sections_html(AIPOS-F180: 看板页正文段, 骨架 web/board/readonly_pages.render_owner_inbox)",
       "board": {"page": "/owner/inbox", "api": "/api/owner/inbox"},
       "parameters": {
         "type": "object",
@@ -3011,7 +3012,7 @@
           "subject": "卡 {task_id}",
           "impact": "卡 {task_id} 的 loop 已停({reason}), 不再自动推进",
           "default_options": ["continue", "rework", "pause"],
-          "options_by_reason": {"envelope_renew": ["renew", "pause"]},
+          "options_by_reason": {"envelope_renew": ["renew", "deny_grant", "pause"], "no_envelope": ["renew", "deny_grant", "pause"]},
           "recommend_by_reason": {"envelope_renew": "续签新信封(Owner 执行): {hint}"}
         },
         "needs_owner_card": {
@@ -3081,6 +3082,7 @@
         "pause": {"label": "暂停此卡", "advisor_next": "按裁决暂停本卡: 不续跑, 转下一张(lybra next --workspace-root {governance_root})"},
         "renew": {"label": "续签信封", "advisor_next": "Owner 已定续签: 新信封签好(Owner 执行裁决输出里的续签命令)后续跑: {resume}"},
         "let_expire": {"label": "不续签, 到期 / 用尽即停", "advisor_next": "Owner 不续签: 信封用尽或到期后 loop 停, 不再催签"},
+        "deny_grant": {"label": "不批准这次授权(告诉顾问)", "advisor_next": "Owner 不批准这次授权: 不续跑本卡; 按 Owner 原话 / 备注调整请求(lybra loop note --task-id {task_id} --grant-…)或改卡后再请求, 否则转下一张(lybra next --workspace-root {governance_root})"},
         "release": {"label": "解除 needs_owner, 卡回到可推进", "effect": "release_needs_owner", "advisor_next": "卡已由裁决解除 needs_owner(既有解除口 queue amend), 按常规推进: lybra next --task-id {task_id} --workspace-root {governance_root}"},
         "withdraw": {"label": "撤卡(不再做)", "effect": "withdraw_card", "advisor_next": "卡已由裁决撤回(既有解除口 queue withdraw), 不再推进"},
         "freeze_legacy": {"label": "冻结为历史(存量冻结: 不再推进、不再进收件箱; 可解冻)", "effect": "freeze_legacy", "advisor_next": "卡已由裁决冻结为历史(既有口 project freeze-legacy), 不再推进; 确需推进先解冻: lybra project freeze-legacy --workspace-root {governance_root} --unfreeze {task_id} --reason <理由> --actor <你的顾问实例> --confirm"},
@@ -3110,6 +3112,22 @@
         "date_invalid": "--stale-before 须为 YYYY-MM-DD 或 ISO 时刻, 得到 {value!r}"
       },
       "custom_option": {"key_pattern": "^[a-z][a-z0-9_]{0,31}$", "advisor_next": "按 Owner 裁决「{label}」处理后续跑: {resume}"},
+      "grant_request": {
+        "description": "AIPOS-F180 件①(gap #175: 顾问请求里写明了 docs 模式 / 仓 / 额度 / 到期, 产品没把它变成可一键执行的请求): loop_owner_needed 类且下一动作事由 ∈ reasons 的事项 = 授权请求, 事项另带 grant 结构化建议(唯一推导 owner_inbox.suggest_grant; CLI 一行人话、看板「待授权请求」卡与「按建议签发」同读这一份数据): 驱动方 agent_or_role = 运行记录 driver; task_mode = 卡面 task_mode; 仓 = 卡面 lane.repo(未写 = project.json repos 中指向卡所在仓的仓名, 再无 = 不限); 拉起授权 = 同驱动方上一信封的 launch_harnesses(无 = 只手工 /go); 额度 = 同驱动方上一信封 max_tasks, 无则 project.json grant_request.max_tasks(声明 config.schema project_json.grant_request, 缺省 20); 到期 = 现在 + project.json grant_request.days(缺省 7, 与 lybra_loop.envelope.renew.renew_days 同值); 理由 = 卡标题; policy_id = F166 唯一推导 autonomy_policy.next_policy_id(该驱动方同前缀已有最大序号 +1, 前缀取同驱动方上一信封, 无 = pol_<项目>_loop_)。顾问 `lybra loop note --grant-mode/--grant-repos/--grant-max-tasks/--grant-expires/--grant-reason` 写进运行记录 owner_ask.grant, 逐字段覆盖推导值(sources 标明每字段来源)。签发 = 看板复用 F172 写例外 board_owner_envelopes.write_path(mode=new, 参数 = 建议; 不新增写路由)。信封生效即自行解除: 驱动方对本卡已有覆盖信封(loop 同一判据 loop_driver.find_envelope → autonomy_policy.select_envelope)= 事项不再列出。只读: 推导不写任何文件。",
+        "reasons": ["no_envelope", "envelope_renew"],
+        "date_only_time": "T23:59:59Z",
+        "mode_labels": {"code": "改代码", "docs": "只写文档", "governance": "写治理文档", "config": "改配置", "audit": "做审计"},
+        "mode_any": "不限模式",
+        "repos_any": "不限仓",
+        "sources": {"advisor": "顾问 loop note", "card": "卡面", "previous_envelope": "同驱动方上一信封", "project_default": "项目缺省", "derived": "推导"},
+        "texts": {
+          "line": "  授权请求: {advisor} 请求为 {task_id}{title_part}开一个{mode_label}的授权, {repos_part}, {max_tasks} 次, 到 {expires_date}。理由: {reason}",
+          "title_part": "({title})",
+          "repos_part": "仅 {repos}",
+          "decide_board": "  裁决: Owner 在看板「待授权请求」点「按建议签发」 {board_url}(不批准 = {command} 选 deny_grant)",
+          "unavailable": "  授权请求: 推不出建议({why}); 顾问可用 lybra loop note --task-id {task_id} --grant-mode … 写明"
+        }
+      },
       "exit_codes": {
         "ok": {"code": 0, "meaning": "已输出(含无待定事项)"},
         "partial": {"code": 4, "meaning": "已输出, 但有项目 / 类别的真相读不出(errors 段逐条点名; 未计入事项, 不猜)"},
@@ -3152,7 +3170,7 @@
       }
     },
     "lybra_loop_note": {
-      "description": "AIPOS-F168 件③: `lybra loop note --task-id <卡> --ask <要 Owner 定什么> [--options <键=标签> …] [--recommend <顾问建议>] [--workspace-root <治理根>] [--actor <顾问实例>] [--confirm] [--json]` —— 给本卡最近一次 loop 运行记录补写结构字段 owner_ask {ask, options[{key,label}], recommend, noted_by, noted_at}, 收件箱(lybra_owner_inbox)据此展示要定什么 / 选项 / 建议, 不再只见泛化拒因。只许已结束或 loop 进程已不在的运行(state ∈ allowed_states; 运行中的记录由 loop 进程原子重写, 补写会被覆盖 = 拒 run_active)。选项键须合 lybra_owner_inbox.custom_option.key_pattern。缺省 = 预演(零写入, 显示将写的 owner_ask); --confirm = 经 record_writer.render_markdown 原子替换写回(其余字段原样)并经 lybra_governance_commit.post_write_landing.commands.loop_note 同一提交口落账。",
+      "description": "AIPOS-F168 件③: `lybra loop note --task-id <卡> --ask <要 Owner 定什么> [--options <键=标签> …] [--recommend <顾问建议>] [--workspace-root <治理根>] [--actor <顾问实例>] [--confirm] [--json]` —— 给本卡最近一次 loop 运行记录补写结构字段 owner_ask {ask, options[{key,label}], recommend, noted_by, noted_at}, 收件箱(lybra_owner_inbox)据此展示要定什么 / 选项 / 建议, 不再只见泛化拒因。只许已结束或 loop 进程已不在的运行(state ∈ allowed_states; 运行中的记录由 loop 进程原子重写, 补写会被覆盖 = 拒 run_active)。选项键须合 lybra_owner_inbox.custom_option.key_pattern。缺省 = 预演(零写入, 显示将写的 owner_ask); --confirm = 经 record_writer.render_markdown 原子替换写回(其余字段原样)并经 lybra_governance_commit.post_write_landing.commands.loop_note 同一提交口落账。AIPOS-F180 件①: 授权请求结构化建议 --grant-mode <task_mode> / --grant-repos <仓,…> / --grant-max-tasks <N> / --grant-expires <YYYY-MM-DD 或 ISO 时刻> / --grant-reason <理由>(任一即可, 各字段可选)写进 owner_ask.grant {task_mode, lane_repos, max_tasks, expires_at, reason}, 收件箱授权建议(lybra_owner_inbox.grant_request)逐字段以此覆盖推导值; 校验: task_mode ∈ enums.schema task_mode、仓集合经 workspace_config.repo_name_set、额度正整数、到期须在未来(只给日期 = 当日 lybra_owner_inbox.grant_request.date_only_time); 给了 --grant-* 时 --ask 可省(缺省 texts.grant_default_ask)。",
       "phase": "driver",
       "surface": ["cli"],
       "cli_command": "lybra loop note",
@@ -3162,6 +3180,8 @@
         "ask": "  Owner 待决(顾问补写 {noted_by} @ {noted_at}): {ask}",
         "options": "    选项: {options}",
         "recommend": "    顾问建议: {recommend}",
+        "grant": "    授权建议(覆盖推导值): {fields}",
+        "grant_default_ask": "请 Owner 按授权建议签发信封",
         "preview": "loop note 预演(未写入): 运行 {run_id} [{state}] {record_path}; 加 --confirm 写入并落账",
         "written": "loop note 已写入: 运行 {run_id} [{state}] {record_path}"
       },
@@ -3174,16 +3194,21 @@
           "recommend": {"type": "string", "description": "顾问建议(可写建议选哪个及理由)"},
           "workspace_root": {"type": "string"},
           "actor": {"type": "string", "description": "补写人(顾问实例); 缺省 = 运行记录 driver"},
+          "grant_mode": {"type": "string", "description": "AIPOS-F180: 授权建议 task_mode(enums.schema task_mode)"},
+          "grant_repos": {"type": "array", "items": {"type": "string"}, "description": "AIPOS-F180: 授权建议 lane 仓集合(逗号分隔或多值)"},
+          "grant_max_tasks": {"type": "integer", "description": "AIPOS-F180: 授权建议额度(正整数)"},
+          "grant_expires": {"type": "string", "description": "AIPOS-F180: 授权建议到期(YYYY-MM-DD 或带时区 ISO 时刻, 须在未来)"},
+          "grant_reason": {"type": "string", "description": "AIPOS-F180: 授权理由(一句话; 缺省 = 卡标题)"},
           "confirm": {"type": "boolean"},
           "json": {"type": "boolean"}
         },
-        "required": ["task_id", "ask"],
+        "required": ["task_id"],
         "additionalProperties": false
       },
       "exit_codes": {
         "ok": {"code": 0, "meaning": "预演 / 已写入并落账"},
         "run_active": {"code": 1, "meaning": "最近一次运行仍在跑(state 不在 allowed_states), 拒写"},
-        "usage": {"code": 2, "meaning": "缺 --ask / 选项格式不合"},
+        "usage": {"code": 2, "meaning": "缺 --ask(且无 --grant-*)/ 选项格式不合 / --grant-* 值不合"},
         "no_run": {"code": 4, "meaning": "本卡无 loop 运行记录 / 记录读不出"}
       }
     },

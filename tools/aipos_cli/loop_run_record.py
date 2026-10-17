@@ -1769,23 +1769,36 @@ def render_owner_ask(ask: dict[str, Any]) -> list[str]:
         lines.append(str(texts["options"]).format(options=" / ".join(f"{o.get('key')}={o.get('label')}" for o in ask["options"])))
     if ask.get("recommend"):
         lines.append(str(texts["recommend"]).format(recommend=ask["recommend"]))
+    if isinstance(ask.get("grant"), dict) and ask["grant"]:  # AIPOS-F180: structured authorization suggestion (advisor fields)
+        fields = " · ".join(f"{k}={', '.join(v) if isinstance(v, list) else v}" for k, v in ask["grant"].items())
+        lines.append(str(texts["grant"]).format(fields=fields))
     return lines
 
 
 def annotate_owner_ask(governance_root: Path, task_id: str, *, ask: str, options: list[str] | None = None,
                        recommend: str | None = None, actor: str | None = None, confirm: bool = False,
-                       now: datetime | None = None) -> dict[str, Any]:
+                       now: datetime | None = None, grant: dict[str, Any] | None = None) -> dict[str, Any]:
     """件③ 唯一实现: 本卡最近一次运行(与 loop status --task-id 同一取法)state ∈ allowed_states 才写; 预演零写入, 确认 = 读回整份记录
     → 只加 owner_ask → record_writer.render_markdown 原子替换(其余字段与正文原样)→ 经 land_written_paths(loop_note)落账。
-    拒 = LoopNoteRejected(outcome)。返回 {stage, record_path, owner_ask, state, landing}。"""
+    拒 = LoopNoteRejected(outcome)。返回 {stage, record_path, owner_ask, state, landing}。
+    AIPOS-F180: grant = 顾问 --grant-* 原值 {task_mode, repos, max_tasks, expires, reason}(经 owner_inbox.normalize_grant_fields 唯一校验)
+    → owner_ask.grant(只含给出的字段); 给了 grant 时 ask 可省(缺省 texts.grant_default_ask)。"""
     from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
     from tools.aipos_cli.loop_driver import load_loop_contract
     from tools.aipos_cli.record_writer import render_markdown
 
-    if not str(ask or "").strip():
-        raise LoopNoteRejected("usage", "--ask 须为非空的一句话(要 Owner 定什么)")
-    parsed = parse_note_options(options)
+    from tools.aipos_cli.owner_inbox import normalize_grant_fields
+
+    try:
+        grant_fields = normalize_grant_fields(**(grant or {}), now=now)
+    except ValueError as exc:
+        raise LoopNoteRejected("usage", str(exc)) from exc
     decl = note_declaration()
+    if not str(ask or "").strip():
+        if not grant_fields:
+            raise LoopNoteRejected("usage", "--ask 须为非空的一句话(要 Owner 定什么), 或给 --grant-* 授权建议")
+        ask = str(decl["texts"]["grant_default_ask"])
+    parsed = parse_note_options(options)
     rdecl = run_record_declaration(load_loop_contract())
     root = Path(governance_root)
     files = _run_files(loop_runs_dir(root, task_id))
@@ -1803,6 +1816,8 @@ def annotate_owner_ask(governance_root: Path, task_id: str, *, ask: str, options
     path = Path(meta["_path"])
     owner_ask = {"ask": str(ask).strip(), "options": parsed, "recommend": str(recommend or "").strip() or None,
                  "noted_by": str(actor or meta.get("driver") or "").strip() or None, "noted_at": iso_z(now or utc_now())}
+    if grant_fields:
+        owner_ask["grant"] = grant_fields
     report: dict[str, Any] = {"stage": "confirm" if confirm else "preview", "record_path": str(path), "run_id": meta.get("run_id"),
                               "state": state, "owner_ask": owner_ask, "landing": None}
     if not confirm:
@@ -1843,9 +1858,12 @@ def loop_note_cli(args: Any) -> int:
         return declared_exit_code(NOTE_VERB, "usage")
     try:
         root = Path(_find_repo_root_for_args(args))
+        grant = {"task_mode": getattr(args, "grant_mode", None), "repos": getattr(args, "grant_repos", None),
+                 "max_tasks": getattr(args, "grant_max_tasks", None), "expires": getattr(args, "grant_expires", None),
+                 "reason": getattr(args, "grant_reason", None)}
         report = annotate_owner_ask(root, task_id, ask=getattr(args, "ask", None) or "", options=getattr(args, "note_options", None),
                                     recommend=getattr(args, "recommend", None), actor=getattr(args, "actor", None),
-                                    confirm=bool(getattr(args, "confirm", False)))
+                                    confirm=bool(getattr(args, "confirm", False)), grant=grant)
     except LoopNoteRejected as exc:
         print(f"lybra loop note: {exc}", file=sys.stderr)
         return declared_exit_code(NOTE_VERB, exc.outcome)

@@ -2287,23 +2287,40 @@ def roadmap_drift_thresholds(governance_root: str | Path, *, project: dict[str, 
     """AIPOS-F173 件②: 路线图偏差阈值(唯一读取口)。键与缺省 = config.schema project_json.schema.roadmap_drift.schema(逐键 default);
     project.json 缺段 / 缺键 = 缺省; 未知键 / 值形不合 = RoadmapDriftThresholdError(点名); 声明缺 = SchemaLoadError(fail-closed);
     project.json 读不出 = 原异常上抛(不吞成缺省)。返回 {键: 值, "_source": {键: "project.json" | "default"}}。"""
+    return declared_numeric_section(governance_root, "roadmap_drift", "ROADMAP_DRIFT_INVALID", RoadmapDriftThresholdError, project=project)
+
+
+class GrantRequestDefaultsError(ValueError):
+    """AIPOS-F180: project.json grant_request 段不合声明(GRANT_REQUEST_INVALID; 授权建议推导拒, 收件箱点名, 不猜成缺省)。"""
+
+
+def project_grant_defaults(governance_root: str | Path, *, project: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F180 件①: 授权请求建议的项目缺省(唯一读取口; 声明 config.schema project_json.schema.grant_request): {max_tasks, days, _source}。
+    缺段 / 缺键 = 声明 default(行为不变); 未知键 / 值形不合 = GrantRequestDefaultsError(点名)。"""
+    return declared_numeric_section(governance_root, "grant_request", "GRANT_REQUEST_INVALID", GrantRequestDefaultsError, project=project)
+
+
+def declared_numeric_section(governance_root: str | Path, section: str, reject_code: str, error_cls: type[ValueError], *,
+                             project: dict[str, Any] | None = None) -> dict[str, Any]:
+    """project.json 数值键段的唯一读取实现(AIPOS-F173 roadmap_drift 原实现收口; AIPOS-F180 grant_request 同用)。键与缺省 =
+    config.schema project_json.schema.<section>.schema(逐键 {type integer|number, default, minimum?, maximum?}); 缺段 / 缺键 = default;
+    未知键 / 值形不合 = error_cls(reject_code 点名); 声明缺 = SchemaLoadError(fail-closed); project.json 读不出 = 原异常上抛。"""
     from tools.schema_loader import SchemaLoadError, load_schema
 
-    decl = (((load_schema("config").get("configuration_sources") or {}).get("project_json") or {}).get("schema") or {}).get(
-        "roadmap_drift")
+    decl = (((load_schema("config").get("configuration_sources") or {}).get("project_json") or {}).get("schema") or {}).get(section)
     keys = (decl or {}).get("schema") if isinstance(decl, dict) else None
-    why = str(((decl or {}).get("reject_codes") or {}).get("ROADMAP_DRIFT_INVALID") or "").strip() if isinstance(decl, dict) else ""
+    why = str(((decl or {}).get("reject_codes") or {}).get(reject_code) or "").strip() if isinstance(decl, dict) else ""
     if (not isinstance(keys, dict) or not keys or not why
             or any(not isinstance(k, dict) or k.get("type") not in ("integer", "number")
                    or not isinstance(k.get("default"), (int, float)) or isinstance(k.get("default"), bool) for k in keys.values())):
-        raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.roadmap_drift"
-                              "(schema{键: {type integer|number, default}} / reject_codes.ROADMAP_DRIFT_INVALID)未声明齐")
+        raise SchemaLoadError(f"config.schema.json configuration_sources.project_json.schema.{section}"
+                              f"(schema{{键: {{type integer|number, default}}}} / reject_codes.{reject_code})未声明齐")
     data = project if project is not None else read_project_json(governance_root)
-    raw = data.get("roadmap_drift") if isinstance(data, dict) else None
+    raw = data.get(section) if isinstance(data, dict) else None
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
-        raise RoadmapDriftThresholdError(f"ROADMAP_DRIFT_INVALID: project.json roadmap_drift={raw!r}: {why}")
+        raise error_cls(f"{reject_code}: project.json {section}={raw!r}: {why}")
     problems = [f"未知键 {k!r}(允许 {sorted(keys)})" for k in sorted(set(raw) - set(keys))]
     out: dict[str, Any] = {}
     source: dict[str, str] = {}
@@ -2324,7 +2341,7 @@ def roadmap_drift_thresholds(governance_root: str | Path, *, project: dict[str, 
         else:
             out[key], source[key] = value, "project.json"
     if problems:
-        raise RoadmapDriftThresholdError(f"ROADMAP_DRIFT_INVALID: project.json roadmap_drift: {'; '.join(problems)}({why})")
+        raise error_cls(f"{reject_code}: project.json {section}: {'; '.join(problems)}({why})")
     out["_source"] = source
     return out
 
