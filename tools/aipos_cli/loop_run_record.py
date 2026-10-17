@@ -493,6 +493,19 @@ class LoopRunRecorder:
         self._dirty = True
         self.flush(force=True)
 
+    # -- AIPOS-F180B item 2: report-header fix decisions (verbs.schema lybra_loop.run_record.report_fixes) --
+    def report_fix(self, entry: dict[str, Any]) -> None:
+        """One report-header fix decision into report_fixes (card / outcome / kinds / session_id / detail / at; detail via
+        redact_progress). The log line is written by the caller's loop output (say)."""
+        from tools.aipos_cli.harness_launch import redact_progress
+
+        record = {k: entry.get(k) for k in ("card", "outcome", "kinds", "session_id")}
+        record["detail"] = redact_progress(str(entry.get("detail") or ""))[:600]
+        record["at"] = iso_z()
+        self.meta.setdefault("report_fixes", []).append(record)
+        self._dirty = True
+        self.flush(force=True)
+
     # -- AIPOS-F164 件②: 拉起前章程判定(verbs.schema lybra_loop.run_record.charter_checks) --
     def charter_check(self, entry: dict[str, Any]) -> None:
         """一次拉起前章程判定进运行记录 charter_checks(卡 / 实例 / 工位 / outcome / detail / 修法命令 / 时间; detail 经 redact_progress)。
@@ -531,8 +544,9 @@ class LoopRunRecorder:
         self.flush(force=True)
 
     # -- 拉起 --
-    def launch_started(self, plan: Any, harness: Any, *, resume: int = 0) -> None:
-        """一次拉起(resume=0)或同会话第 resume 次续接(AIPOS-F171B 件②)= launches[] 追加一条; 续接另写日志一行 [resume]。"""
+    def launch_started(self, plan: Any, harness: Any, *, resume: int = 0, resume_why: str = "") -> None:
+        """一次拉起(resume=0)或同会话第 resume 次续接(AIPOS-F171B 件②)= launches[] 追加一条; 续接另写日志一行 [resume]。
+        AIPOS-F180B: resume_why = why this resume happened (default = the F171B half-way stop wording)."""
         self._harness = harness
         self._active = {
             "card": plan.card, "harness": plan.harness, "transport": plan.location.get("transport"),
@@ -551,7 +565,7 @@ class LoopRunRecorder:
         self.meta["launches"].append(self._active)
         if resume:
             self.log(f"[resume] {plan.harness} {plan.card} 会话 {self._active['session_id']} 续接 {resume}/{self._active['resume_max']}"
-                     f"(上一轮 exit 0 而产物未就绪)")
+                     f"({resume_why or '上一轮 exit 0 而产物未就绪'})")
         self.log(f"[launch] {plan.harness} {plan.card} pid={harness.pid} pgid={harness.pgid}")
         self._dirty = True
         self.flush(force=True)
@@ -720,6 +734,30 @@ def read_run(path: Path, decl: dict[str, Any]) -> dict[str, Any]:
 
 def _run_files(directory: Path) -> list[Path]:
     return sorted(p for p in directory.glob("looprun_*.md") if p.is_file()) if directory.is_dir() else []
+
+
+def latest_launch_session(governance_root: Path, task_id: str, card: str, *, own: dict[str, Any],
+                          contract: dict[str, Any]) -> dict[str, Any] | None:
+    """AIPOS-F180B item 2: the most recent fixed session the loop launched for `card` (launches[].session_id, F171B), this run's
+    record first, then this task's earlier runs (newest first). Returns {session_id, workstation, run_id, launches} where
+    launches = how many launches[] entries (all runs) used that session; None = no recorded session. Unreadable record = error."""
+    decl = run_record_declaration(contract)
+    metas = [own] + [read_run(p, decl) for p in reversed(_run_files(loop_runs_dir(governance_root, task_id)))
+                     if str(p) != str(own.get("_path") or "") and p.stem != str(own.get("run_id") or "")]
+    found: dict[str, Any] | None = None
+    for meta in metas:
+        for launch in reversed(list(meta.get("launches") or [])):
+            if isinstance(launch, dict) and launch.get("card") == card and str(launch.get("session_id") or "").strip():
+                found = {"session_id": str(launch["session_id"]), "workstation": launch.get("workstation"),
+                         "run_id": meta.get("run_id")}
+                break
+        if found:
+            break
+    if found is None:
+        return None
+    found["launches"] = sum(1 for meta in metas for launch in (meta.get("launches") or [])
+                            if isinstance(launch, dict) and launch.get("session_id") == found["session_id"])
+    return found
 
 
 def latest_charter_checks(governance_root: Path, *, contract: dict[str, Any] | None = None) -> dict[str, Any]:

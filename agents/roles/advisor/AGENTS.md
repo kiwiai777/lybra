@@ -93,7 +93,9 @@
      合入阶段的 `MERGE_CONFLICT` = 合入冲突、`REPO_MERGE_IN_PROGRESS` = 同仓另一张卡正在合入, AIPOS-F155;
      子 agent 模式下 loop 等交回超时 `wait_timeout` = 子 agent 多半仍在做, 等它交回后重跑 / 补派子 agent, AIPOS-F156;
      审计裁决 BLOCK `audit_blocked` = 审计没能完成(环境 / 资源 / 时长), 按 hint 的原因摘录修环境后跑 hint 里的重审命令派下一轮审计,
-     不发返工卡、不改执行产物, 不计连败, 同卡连续 BLOCK 到声明次数产品自动升 `owner_needed`; 独占资源排队超时 `resource_busy`, AIPOS-F179),
+     不发返工卡、不改执行产物, 不计连败, 同卡连续 BLOCK 到声明次数产品自动升 `owner_needed`; 独占资源排队超时 `resource_busy`, AIPOS-F179;
+     审计报告头 commit_sha 抄错 `audit_report_form_error` = 形式错误不是审错产物, loop 已能以同一审计会话续接让审计体只改报告头,
+     续接不了时按「下一条」让审计体改(你永不代改审计报告), AIPOS-F180B),
      修法固定, 输出「下一条」逐步给出。改卡分支 / 更新交回的步骤**派本卡执行体做**(你仍永不碰产品仓), 执行体交回后用「下一条」
      末行命令续跑 loop, 回到第 2 步。同卡同一例行码连续被拒到声明次数, 产品自动升为 `owner_needed`, 不必你计数。
    - `owner_needed` → **停**, 一次说清要 Owner 定什么(输出 detail 已写事由: 设计分叉 / 授权 / 连败 / 门拒原因)与可选项;

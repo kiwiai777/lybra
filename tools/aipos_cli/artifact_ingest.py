@@ -550,9 +550,11 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
             out["category"], out["reasons"] = "INGEST_BRANCH_MISSING", [f"{code_repo}: 分支 {branch} 不存在(frontmatter.branch)"]
             return out
         if tip != commit_sha:
+            # AIPOS-F180B item 1: full values on both sides + form diagnosis (single implementation tip_mismatch_diagnosis)
+            diag = out["tip_diagnosis"] = tip_mismatch_diagnosis(code_repo, tip, commit_sha, branch=branch)
             out["category"] = "INGEST_TIP_MISMATCH"
             out["reasons"] = [
-                f"分支 {branch} tip={tip[:12]} ≠ Return 自述 commit_sha={commit_sha[:12]}。"
+                f"分支 {branch} tip={tip} ≠ Return 自述 commit_sha={commit_sha}。形式诊断: {diag['text']}。"
                 f"出口: 执行体以分支 tip 更新 Return frontmatter(交回的必须是当前产物)"
             ]
             return out
@@ -593,9 +595,13 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         out["category"], out["reasons"] = "INGEST_BRANCH_MISSING", [f"{code_repo}: 被审卡分支 {branch} 不存在"]
         return out
     if tip != commit_sha:
+        # AIPOS-F180B item 1: full values on both sides + form diagnosis; correctable = report header only (loop resumes the
+        # same audit session, verbs.schema lybra_loop.launch.report_fix); other_commit keeps the F114 round outlet
+        diag = out["tip_diagnosis"] = tip_mismatch_diagnosis(code_repo, tip, commit_sha, branch=branch)
+        head = f"被审分支 {branch} tip={tip} ≠ 报告自述 commit_sha={commit_sha}。形式诊断: {diag['text']}"
         out["category"] = "INGEST_TIP_MISMATCH"
-        out["reasons"] = [f"被审分支 {branch} tip={tip[:12]} ≠ 报告自述 commit_sha={commit_sha[:12]}: 审的不是当前产物"
-                          + _stale_round_outlet(workspace_root, task_id, card_fm, reviewed)]
+        out["reasons"] = [f"{head}。出口: {diag['outlet']}" if diag["correctable"]
+                          else f"{head}: {diag['outlet']}" + _stale_round_outlet(workspace_root, task_id, card_fm, reviewed)]
         return out
     # AIPOS-F162 件① / AIPOS-F163: 运行证据硬门的判据在门侧裁决写入唯一口(board_adapter.runtime_evidence_check, 门
     # _build_audit_verdict_preview 对一切裁决提交路径同核); 此处调用同一判据预检, 拒收即不提交(拒因码同门侧)
@@ -875,6 +881,66 @@ def parse_runtime_evidence_section(report_text: str) -> tuple[list[Any] | None, 
     if not isinstance(entries, list):
         return None, f"「{heading}」节 {fence} 代码块须为运行记录数组, 实为 {type(entries).__name__}"
     return entries, ""
+
+
+_TIP_DIAGNOSIS_KINDS = ("length_invalid", "non_hex", "prefix_miscopy", "not_a_commit", "other_commit")
+
+
+def tip_mismatch_declaration() -> dict[str, Any]:
+    """AIPOS-F180B item 1: transitions.schema artifact_ingest.tip_mismatch_diagnosis (single reader). Missing / malformed = SchemaLoadError."""
+    from tools.aipos_cli.next_resolver import _artifact_ingest_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    decl = _artifact_ingest_declaration().get("tip_mismatch_diagnosis")
+    where = "transitions.schema.json artifact_ingest.tip_mismatch_diagnosis"
+    if not isinstance(decl, dict) or not isinstance(decl.get("kinds"), dict) or not isinstance(decl.get("outlets"), dict):
+        raise SchemaLoadError(f"{where} (kinds / outlets) not declared")
+    for key in ("prefix_min_chars", "min_resolve_chars"):
+        if not isinstance(decl.get(key), int) or isinstance(decl.get(key), bool) or decl[key] < 1:
+            raise SchemaLoadError(f"{where}.{key} must be a positive integer")
+    for kind in _TIP_DIAGNOSIS_KINDS:
+        spec = decl["kinds"].get(kind)
+        if not isinstance(spec, dict) or not isinstance(spec.get("correctable"), bool) or not str(spec.get("text") or "").strip():
+            raise SchemaLoadError(f"{where}.kinds.{kind} (correctable bool / text) not declared")
+    if any(not str(decl["outlets"].get(k) or "").strip() for k in ("correctable", "not_correctable")):
+        raise SchemaLoadError(f"{where}.outlets (correctable / not_correctable) not declared")
+    return decl
+
+
+def tip_mismatch_diagnosis(repo: Path, tip: str, commit_sha: str, *, branch: str = "") -> dict[str, Any]:
+    """AIPOS-F180B item 1: form diagnosis of a self-reported commit_sha that differs from the branch tip (single implementation;
+    judged only where INGEST_TIP_MISMATCH is decided). Order per declaration: resolves to another commit = other_commit (the only
+    non-correctable kind); otherwise accumulate length_invalid / non_hex / prefix_miscopy, none of them = not_a_commit.
+    Returns {branch, tip, commit_sha, kinds, correctable, resolved, text, outlet}."""
+    decl = tip_mismatch_declaration()
+    kinds_decl = decl["kinds"]
+    sha = str(commit_sha or "")
+    resolved = None
+    if len(sha) >= int(decl["min_resolve_chars"]) and re.fullmatch(r"[0-9a-fA-F]+", sha):
+        resolved = _git_out(repo, "rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}")
+    hits: list[tuple[str, dict[str, Any]]] = []
+    if resolved and resolved != tip:
+        hits.append(("other_commit", {"resolved": resolved}))
+    else:
+        if len(sha) != 40:
+            hits.append(("length_invalid", {"length": len(sha)}))
+        bad = "".join(sorted(set(re.sub(r"[0-9a-f]", "", sha))))
+        if bad:
+            hits.append(("non_hex", {"chars": bad}))
+        common = len(os.path.commonprefix([sha, str(tip)]))
+        if common >= int(decl["prefix_min_chars"]):
+            hits.append(("prefix_miscopy", {"common": common, "diverge": common + 1}))
+        if not hits:
+            hits.append(("not_a_commit", {}))
+    texts = []
+    for kind, values in hits:
+        text = str(kinds_decl[kind]["text"])
+        for key, value in values.items():
+            text = text.replace("{" + key + "}", str(value))
+        texts.append(text)
+    correctable = all(bool(kinds_decl[kind]["correctable"]) for kind, _v in hits)
+    return {"branch": branch, "tip": tip, "commit_sha": sha, "kinds": [k for k, _v in hits], "correctable": correctable, "resolved": resolved,
+            "text": "; ".join(texts), "outlet": str(decl["outlets"]["correctable" if correctable else "not_correctable"])}
 
 
 def _stale_round_outlet(workspace_root: Path, audit_task_id: str, card_fm: dict[str, Any], reviewed: str) -> str:
