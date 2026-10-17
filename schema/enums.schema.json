@@ -215,6 +215,10 @@
           "description": "AIPOS-F147 件②: lybra loop 运行日志头(<loop_runs_root>/<ID>/looprun_*.log; 声明 verbs.schema lybra_loop.run_record.log_record_type; 日志不入库)"
         },
         {
+          "value": "run_long",
+          "description": "AIPOS-F179 件①: lybra run-long 运行 meta(<卡报告落点>/run_long/<名>/run.json; 声明 verbs.schema lybra_run_long.record.record_type; 写入 run_long.start_run)"
+        },
+        {
           "value": "advisor_update_ack",
           "description": "AIPOS-F167 件③: 顾问实例对 Lybra 更新说明的已读标记(records/advisor_update_acks/<实例>/ack_*.md, 只追加; `lybra updates --ack --confirm` 写出并落账; 声明 verbs.schema lybra_updates.ack)"
         },
@@ -668,6 +672,19 @@
           "value": "remote",
           "supported": true,
           "description": "AIPOS-F110 件①: 跨机(host = land 事件的 ssh 目标)。拉起 = verbs.schema lybra_loop.launch.remote.ssh_argv + [<host>, <远端命令>](ssh -T, 无本地 shell): 远端命令在工位目录以新进程组(set -m 作业)起 harness(同一 harness.launch 模板), kickoff 经 ssh stdin 逐字节传入(不进远端命令行、不经远端 shell 展开), 远端进程组号首行回传; 清理(就绪宽限/超时/早退/SIGINT/SIGTERM/SIGHUP)= 经 ssh 对远端进程组 TERM→KILL, 本地 ssh 子进程组同清。拉起前置: project.json workstations.<实例> 材料访问声明齐(未声明 = 拒拉起并提示补声明)+ ssh 探测可达(不可达 = 不拉起, 退回手工并提示原因)。工位身份 = land 事件实例(门机读不到远端 .lybra/role), 开工提示 = 同一 render_kickoff 附门机材料段。唯一实现 harness_launch(remote_launch_command / probe_remote / LaunchedHarness)"
+        }
+      ]
+    },
+    "exclusive_resource": {
+      "description": "AIPOS-F179 件②(10-16 chris HBLX-8 实撞: 审计跑 iOS UI 全量时他卡执行/审计同时段共用模拟器, 资源冲突 exit 40): 独占资源值域。卡面声明唯一字段 card.schema fields.resources(值 ∈ 本枚举); 判定与排队唯一口 = loop 拉起入口(verbs.schema lybra_loop.resource_lock, 与 F171B 单实例锁同处); 形校验唯一实现 loop_run_record.card_resources(出卡 draft_validator 同调)。新资源 = 本清单追加一值, 零代码改动(只追加)。",
+      "values": [
+        {
+          "value": "ios-simulator",
+          "description": "iOS 模拟器(Xcode simctl 设备): 同一项目同时只给一张卡的执行体或审计体用"
+        },
+        {
+          "value": "android-emulator",
+          "description": "Android 模拟器(emulator / adb 设备): 同一项目同时只给一张卡的执行体或审计体用"
         }
       ]
     }

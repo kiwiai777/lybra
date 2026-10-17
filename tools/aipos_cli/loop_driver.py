@@ -54,6 +54,7 @@ from tools.aipos_cli.harness_launch import (  # AIPOS-F95: 拉起进程封装(�
 from tools.aipos_cli.verb_contract import declared_exit_code  # AIPOS-F101 件③: 退出码唯一读取口
 from tools.aipos_cli.loop_run_record import LoopRunRecorder, LoopRunRecordError, model_label  # AIPOS-F169 model_label; AIPOS-F131: 运行记录 + 日志(唯一实现)
 from tools.aipos_cli.next_resolver import (
+    audit_blocked_declaration,
     DRIVER_ACTOR_MISSING,
     REPO_ROOT,
     _action_type_for_command,
@@ -1406,6 +1407,17 @@ def _drive(
     from tools.aipos_cli.governance_commit import n6_landing_declaration
 
     landing_action = str(n6_landing_declaration()["action_type"])  # AIPOS-F94: N6 落账步(声明 transitions nodes.N6.landing)
+    from tools.aipos_cli.loop_run_record import card_resources
+
+    try:
+        resources = card_resources(task_fm, contract=contract)  # AIPOS-F179 item 2: card.schema resources (single shape check)
+    except ValueError as exc:
+        msg = f"卡面独占资源声明不合, 拒推进(fail-closed): {exc}"
+        say(f"[1] exit {exit_code_for(contract, 'not_derivable')} — {msg}")
+        result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), msg
+        result.missing_records = [msg]
+        return result
+    resources_held = False
 
     for index in range(1, max_steps + 1):
         recorder.sync_steps(steps)  # AIPOS-F131 件①: 上一轮落定的步立即进运行记录
@@ -1502,6 +1514,11 @@ def _drive(
             else:
                 missing = list(derivation.get("missing_records") or [])
                 msg = f"不可推导 @ {node}/{state}: missing={missing}; suggested={derivation.get('suggested_action', '')}"
+                if action.get("type") == audit_blocked_declaration()["action_type"]:
+                    # AIPOS-F179 item 3: audit BLOCK = fix environment then re-audit (advisor_fix, not a consecutive failure);
+                    # repeated BLOCK = owner_needed. End reason comes from the derivation (transitions nodes.N4.audit_blocked).
+                    msg = f"审计裁决 BLOCK @ {node}/{state}: {derivation.get('suggested_action', '')}"
+                    result.reason = str(action.get("end_reason") or "")
                 steps.append(LoopStep(index, "execute", node, state, task_id, ok=False, message=msg))
                 say(f"[{index}] exit 4 — {msg}")
                 result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), msg
@@ -1514,6 +1531,14 @@ def _drive(
                                         node=derivation.get("current_node"), state=derivation.get("current_state"),
                                         actor=driver_actor, say=say, recorder=recorder):
                 return result
+            if resources and not resources_held:
+                # AIPOS-F179 item 2: exclusive resources (card.schema resources) are taken before the first executor / auditor
+                # wait and held until this run ends; queued behind a live holder (judgement loop_run_record.resource_conflict)
+                if _acquire_resources(index, launch_card, governance_root, result, resources=resources, contract=contract,
+                                      node=derivation.get("current_node"), state=derivation.get("current_state"), say=say,
+                                      recorder=recorder, watch=watch, guard=guard, max_wait=max_wait, interval=interval):
+                    return result
+                resources_held = True
 
         if wait_patterns:
             step = LoopStep(index, "wait", derivation.get("current_node"), derivation.get("current_state"), target_card,
@@ -1721,6 +1746,90 @@ def _claimed_worktree_repair(index: int, card: str, governance_root: Path, resul
     result.missing_records, result.suggested_action = [f"卡工作树 {repaired.get('worktree_path') or ''}"], preview_cmd
     result.reason = "worktree_repair_failed"
     return True
+
+
+def _acquire_resources(index: int, card: str, governance_root: Path, result: LoopResult, *, resources: list[str],
+                       contract: dict[str, Any], node: Any, state: Any, say: Callable[[str], None], recorder: LoopRunRecorder,
+                       watch: Callable[..., int], guard: Any, max_wait: float, interval: float) -> bool:
+    """AIPOS-F179 item 2: take the card's exclusive resources (verbs.schema lybra_loop.resource_lock) or queue for them.
+    The request is written first, then judged (loop_run_record.resource_conflict, same liveness as single instance);
+    after marking held the judgement runs once more (an earlier-ordered holder that appeared meanwhile wins, we go back
+    to waiting), so two simultaneous requests never both hold. Busy = wait through the single waiting primitive (agent
+    watch over paths.loop_runs_root, re-judged each poll) within max_wait in total; acquired = return False (caller
+    proceeds to the wait step). Still busy at the bound = this run ends with resource_lock.end_reason (wait_timeout exit
+    code) and True is returned. Unreadable run records = fail-closed (not_derivable)."""
+    from tools.aipos_cli.loop_run_record import loop_runs_root, resource_conflict, resource_lock_declaration
+
+    decl = resource_lock_declaration(contract)
+    names = ", ".join(resources)
+    recorder.resource_request(resources, card)
+    started = utc_now()
+    root = loop_runs_root(governance_root)
+    guard_kw = {"deploy_guard": guard} if guard is not None and getattr(guard, "applicable", False) else {}
+    queued = False
+    failure: list[str] = []
+
+    def judge() -> dict[str, Any] | None:
+        return resource_conflict(governance_root, recorder.meta, contract=contract)
+
+    def stop(outcome: str, reason: str, msg: str) -> bool:
+        say(f"[{index}] exit {exit_code_for(contract, outcome)} — {msg}")
+        result.outcome, result.exit_code, result.message = outcome, exit_code_for(contract, outcome), msg
+        result.reason = reason
+        return True
+
+    def unreadable(why: str) -> bool:
+        return stop("not_derivable", "not_derivable", f"运行记录读不出, 无从判定独占资源 {names} 是否被占, 拒推进(fail-closed): {why}")
+
+    def ready(_matched: list[str]) -> bool:
+        try:
+            current = judge()
+        except LoopRunRecordError as exc:
+            failure.append(str(exc))
+            return True
+        if current is not None:
+            recorder.resource_waiting(current)
+            return False
+        return True
+
+    for _attempt in range(3):
+        try:
+            conflict = judge()
+            if conflict is None:
+                recorder.resource_held()
+                conflict = judge()  # re-check after holding: an earlier-ordered holder wins
+        except LoopRunRecordError as exc:
+            return unreadable(str(exc))
+        if conflict is None:
+            waited = int((utc_now() - started).total_seconds())
+            note = f"; 排队 {waited}s 后获得(占用者已结束)" if queued else ""
+            say(f"[{index}] resource: " + str(decl["acquired_message"]).replace("{resources}", names).replace("{waited}", note))
+            return False
+        recorder.resource_waiting(conflict)
+        if not queued:
+            say(f"[{index}] resource_wait: {conflict['message']}")
+            recorder.step_started(index, str(decl["wait_kind"]), node, state, card,
+                                  waiting_for=[f"resource:{r}" for r in resources], hint=conflict["message"])
+            queued = True
+        remaining = max_wait - (utc_now() - started).total_seconds()
+        if remaining <= 0:
+            break
+        sink = io.StringIO()
+        with contextlib.redirect_stdout(sink):
+            rc = watch(_watch_args(root, ["*/looprun_*.md"], max_wait=remaining, interval=interval), expect_ready=ready, **guard_kw)
+        if failure:
+            return unreadable(failure[0])
+        if rc != declared_exit_code("lybra_agent_watch", "change"):
+            break
+    try:
+        last = judge()
+    except LoopRunRecordError as exc:
+        return unreadable(str(exc))
+    if last is None:
+        recorder.resource_held()
+        say(f"[{index}] resource: " + str(decl["acquired_message"]).replace("{resources}", names).replace("{waited}", ""))
+        return False
+    return stop("wait_timeout", str(decl["end_reason"]), f"等独占资源 {names} 超过 {max_wait:g}s 仍被占用: {last['message']}")
 
 
 def _adopt_own_deploy(index: int, guard: Any, governance_root: Path, task_id: str, *, say: Callable[[str], None],

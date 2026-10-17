@@ -73,7 +73,8 @@ def merge_parent(repo_root: Path, merge_commit: str) -> str:
 
 def _popen_group(cmd: list[str], *, cwd: Path, env: dict[str, str] | None, stdout: Any, stdin: Any = subprocess.DEVNULL) -> subprocess.Popen:
     """本检查唯一的子进程拉起口(测试清单一跑 / async 后台检查): 独立会话(进程组号 = pid), 超时或收尾按组清理, stdin 缺省关闭
-    (AIPOS-F166 件③: async 后台检查 stdin = 管道, 作「进行中记录已落」的握手)。不是 harness 拉起层(agent 拉起唯一在 harness_launch)。"""
+    (AIPOS-F166 件③: async 后台检查 stdin = 管道, 作「进行中记录已落」的握手)。不是 harness 拉起层(agent 拉起唯一在 harness_launch)。
+    AIPOS-F179 件①: lybra run-long 的 supervisor(长验证命令脱离运行)同经此口拉起, 不另设第二处独立会话拉起。"""
     return subprocess.Popen(cmd, cwd=str(cwd), env=env, stdout=stdout, stderr=subprocess.STDOUT, stdin=stdin,
                             text=True, start_new_session=True)
 

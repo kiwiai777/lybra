@@ -506,6 +506,30 @@ class LoopRunRecorder:
         self._dirty = True
         self.flush(force=True)
 
+    # -- AIPOS-F179 item 2: exclusive resource lock (verbs.schema lybra_loop.resource_lock; run_record.resource_lock) --
+    def resource_request(self, resources: list[str], card: str) -> None:
+        """Write the request (state=waiting) before judging; ordering key = (requested_at, run_id)."""
+        self.meta["resource_lock"] = {"resources": list(resources), "card": card, "state": "waiting", "requested_at": iso_z(),
+                                      "held_at": None, "holder": None}
+        self._dirty = True
+        self.flush(force=True)
+
+    def resource_waiting(self, holder: dict[str, Any]) -> None:
+        lock = self.meta.get("resource_lock") or {}
+        view = {k: holder.get(k) for k in ("run_id", "task_id", "pid", "host", "state", "since", "resources")}
+        if lock.get("holder") != view or lock.get("state") != "waiting":
+            lock.update({"state": "waiting", "holder": view})
+            self.meta["resource_lock"] = lock
+            self._dirty = True
+            self.flush(force=True)
+
+    def resource_held(self) -> None:
+        lock = self.meta.get("resource_lock") or {}
+        lock.update({"state": "held", "held_at": iso_z(), "holder": None})
+        self.meta["resource_lock"] = lock
+        self._dirty = True
+        self.flush(force=True)
+
     # -- 拉起 --
     def launch_started(self, plan: Any, harness: Any, *, resume: int = 0) -> None:
         """一次拉起(resume=0)或同会话第 resume 次续接(AIPOS-F171B 件②)= launches[] 追加一条; 续接另写日志一行 [resume]。"""
@@ -642,7 +666,7 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
                                "last_activity_at": act.get("last_activity_at"), "last_activity_kind": act.get("last_activity_kind"),
                                "counts": act.get("counts"), "alive": None, "running_seconds": None, "idle_seconds": None})
     view["deploy"] = meta.get("deploy")  # AIPOS-F152 件①: 本次运行的代码与部署变化(旧记录无此键 = None)
-    for key in ("continues_run", "reexec", "envelope_state", "owner_ask"):  # AIPOS-F166: 续等关联 / 信封用尽真相; AIPOS-F168: Owner 待决结构字段(无 = 不出现, 存量记录形不变)
+    for key in ("continues_run", "reexec", "envelope_state", "owner_ask", "resource_lock"):  # AIPOS-F166: 续等关联 / 信封用尽真相; AIPOS-F168: Owner 待决结构字段(无 = 不出现, 存量记录形不变)
         if meta.get(key):
             view[key] = meta[key]
     if meta.get("status") == "ended":
@@ -804,6 +828,112 @@ def live_run_conflict(governance_root: Path, task_id: str, *, own: dict[str, Any
             message += f"(该运行记录写于主机 {meta.get('host')}, 本机无从探活; 按心跳判存活: 最近写入 {age}s 前)"
         return {**fill, "state": view["state"], "heartbeat_age": age, "message": message}
     return None
+
+
+_RESOURCE_LOCK_KEYS = ("card_field", "enum", "wait_kind", "end_reason", "waiting_message", "acquired_message")
+
+
+def resource_lock_declaration(contract: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F179 item 2: verbs.schema lybra_loop.resource_lock. Missing / malformed = SchemaLoadError (fail-closed)."""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = contract.get("resource_lock") if isinstance(contract, dict) else None
+    run_decl = run_record_declaration(contract)
+    if not isinstance(decl, dict) or any(not decl.get(k) for k in _RESOURCE_LOCK_KEYS):
+        raise SchemaLoadError(f"verbs.schema.json verbs.lybra_loop.resource_lock 未声明齐 {list(_RESOURCE_LOCK_KEYS)}")
+    if decl["end_reason"] not in run_decl["end_reasons"]:
+        raise SchemaLoadError("verbs.schema.json verbs.lybra_loop.resource_lock.end_reason 须为 run_record.end_reasons 已声明者")
+    return decl
+
+
+def card_resources(card_frontmatter: dict[str, Any] | None, *, contract: dict[str, Any] | None = None) -> list[str]:
+    """AIPOS-F179 item 2: the card's exclusive resources (card.schema fields.resources; values = enums.schema
+    exclusive_resource). Single shape check (draft_validator and the loop call this). Absent = []. Malformed =
+    ValueError starting with CARD_RESOURCES_INVALID."""
+    from tools.aipos_cli.loop_driver import load_loop_contract
+    from tools.schema_loader import get_enum_values
+
+    decl = resource_lock_declaration(contract or load_loop_contract())
+    value = (card_frontmatter or {}).get(str(decl["card_field"])) if isinstance(card_frontmatter, dict) else None
+    if value is None or value == []:
+        return []
+    allowed = get_enum_values(str(decl["enum"]))
+    if not isinstance(value, list) or any(not isinstance(v, str) or v not in allowed for v in value):
+        raise ValueError(f"CARD_RESOURCES_INVALID: 卡面 {decl['card_field']} 须为字符串列表, 每项 ∈ enums.schema {decl['enum']} {allowed}, "
+                         f"实为 {value!r}; 出口: 卡稿写 \"{decl['card_field']}\": [\"{allowed[0]}\"]")
+    out: list[str] = []
+    for item in value:
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def resource_wait_line(holder: dict[str, Any], lock_decl: dict[str, Any]) -> str:
+    """Holder line (resource_lock.waiting_message) - one rendering for the loop output, run record hint and loop status detail."""
+    fill = {"resources": ", ".join(holder.get("resources") or []), "holder_task_id": holder.get("task_id"),
+            "holder_run_id": holder.get("run_id"), "holder_pid": holder.get("pid"), "holder_host": holder.get("host"),
+            "holder_state": "持有中" if holder.get("state") == "held" else "排在前面", "holder_since": holder.get("since")}
+    message = str(lock_decl["waiting_message"])
+    for key, value in fill.items():
+        message = message.replace("{" + key + "}", str(value))
+    return message
+
+
+def resource_conflict(governance_root: Path, own: dict[str, Any], *, contract: dict[str, Any], now: datetime | None = None,
+                      local_host: str | None = None) -> dict[str, Any] | None:
+    """AIPOS-F179 item 2: the single resource-lock judgement (loop_driver calls it at the launch entry, next to
+    live_run_conflict). own = this run's record meta with resource_lock already written. Scans every card's run
+    records under paths.loop_runs_root; another run blocks us when it is alive (judge_run live_states, or the
+    unprobeable heartbeat rule of single_instance), shares a resource, and either holds it, or waits with an
+    earlier (requested_at, run_id) while we do not hold it yet. Holders win over waiters in the returned view.
+    Unreadable records = LoopRunRecordError (caller fails closed). Read only."""
+    decl = run_record_declaration(contract)
+    si = single_instance_declaration(contract)
+    lock_decl = resource_lock_declaration(contract)
+    now = now or utc_now()
+    lock = own.get("resource_lock") or {}
+    mine = set(lock.get("resources") or [])
+    if not mine:
+        return None
+    own_id = str(own.get("run_id") or "")
+    own_key = (str(lock.get("requested_at") or ""), own_id)
+    own_held = lock.get("state") == "held"
+    root = loop_runs_root(Path(governance_root))
+    found: list[tuple[int, dict[str, Any]]] = []
+    for directory in sorted(p for p in root.iterdir() if p.is_dir()) if root.is_dir() else []:
+        for path in _run_files(directory):
+            meta = read_run(path, decl)
+            rid = str(meta.get("run_id") or "")
+            other = meta.get("resource_lock") if isinstance(meta.get("resource_lock"), dict) else None
+            if rid == own_id or meta.get("status") == "ended" or not other:
+                continue
+            shared = sorted(mine & set(other.get("resources") or []))
+            state = str(other.get("state") or "")
+            if not shared or state not in ("waiting", "held"):
+                continue
+            other_key = (str(other.get("requested_at") or ""), rid)
+            if state == "held" and own_held and own_key < other_key:
+                continue
+            if state == "waiting" and (own_held or other_key > own_key):
+                continue
+            view = judge_run(meta, decl, now=now, local_host=local_host)
+            age = _seconds(_parse_iso(meta.get("updated_at")), now)
+            if view["state"] == "unprobeable":
+                live = age is not None and age <= int(decl[str(si["unprobeable_heartbeat_key"])])
+            else:
+                live = view["state"] in si["live_states"]
+            if not live:
+                continue
+            since = other.get("held_at") if state == "held" else other.get("requested_at")
+            message = resource_wait_line({"run_id": rid, "task_id": meta.get("task_id"), "pid": meta.get("pid"), "host": meta.get("host"),
+                                          "state": state, "since": since, "resources": shared}, lock_decl)
+            found.append((0 if state == "held" else 1, {"run_id": rid, "task_id": meta.get("task_id"), "pid": meta.get("pid"),
+                                                         "host": meta.get("host"), "state": state, "resources": shared, "since": since,
+                                                         "run_state": view["state"], "message": message}))
+    if not found:
+        return None
+    found.sort(key=lambda item: item[0])
+    return found[0][1]
 
 
 def loop_status(governance_root: Path, task_id: str | None = None, *, now: datetime | None = None,
@@ -1112,6 +1242,13 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
     action = str(rules["by_state"][state])
     if action == "continue_wait":
         cur = view.get("current_step") or {}
+        lock = view.get("resource_lock") or {}
+        if lock.get("state") == "waiting" and lock.get("holder") and cur.get("kind") == _resource_wait_kind():
+            # AIPOS-F179 item 2: queued behind an exclusive-resource holder (detail = holder line from the run record)
+            from tools.aipos_cli.loop_driver import load_loop_contract
+
+            line = resource_wait_line(lock["holder"], resource_lock_declaration(load_loop_contract()))
+            return {"action": action, "reason": "resource_wait", "detail": line, "hint": str(rules["wait_hint"]).format(**fill)}
         if cur.get("kind") == "wait" and cur.get("mode") == "manual":
             what = cur.get("hint") or f"等工位产物 {cur.get('waiting_for')}"
             mode, _note = run_execution_mode(governance_root, view)
@@ -1130,6 +1267,12 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
     elif state == "loop_dead":
         detail = "loop 进程已不在而运行记录未写结束"
     return {"action": action, "reason": state, "detail": detail or state, "hint": str(rules["investigate_hint"]).format(**fill)}
+
+
+def _resource_wait_kind() -> str:
+    from tools.aipos_cli.loop_driver import load_loop_contract
+
+    return str(resource_lock_declaration(load_loop_contract())["wait_kind"])
 
 
 def _envelope_renew_action(view: dict[str, Any], rules: dict[str, Any], reason: str, message: str, fill: dict[str, str]) -> dict[str, Any]:
@@ -1214,6 +1357,12 @@ def _routine_end_reason_action(view: dict[str, Any], rules: dict[str, Any], gove
                 "detail": f"{rules['owner_reasons']['routine_fix_exhausted']}(本卡连续 {streak} 次以 {reason} 结束; 本次: {message})",
                 "hint": str(rules["investigate_hint"]).format(**fill)}
     values = _resume_fill(view, governance_root)
+    from tools.aipos_cli.next_resolver import audit_blocked_declaration, audit_blocked_fix_values
+
+    if reason == str(audit_blocked_declaration()["end_reason"]):
+        # AIPOS-F179 item 3: BLOCK reason excerpt + re-audit command (single rendering next_resolver.reaudit_command)
+        values = {**values, **audit_blocked_fix_values(governance_root, task_id, actor=str(view.get("driver") or ""),
+                                                       policy_ref=str(view.get("envelope") or ""))}
     where = f"end_reasons.{reason}.fix"
     fix = [_render_routine(step, values, where) for step in routine["end_reasons"][reason]["fix"]]
     resume = _render_routine(routine["resume_hint"], values, "resume_hint")
@@ -1464,6 +1613,13 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
         if dep.get("self_deployed_to"):  # AIPOS-F155 件③: 本 loop 自身 finalize 的部署(已采纳为比对基线, 不触发 deploy_changed)
             out.append(f"  部署: 本 loop finalize 自身部署 commit {dep.get('self_deployed_to')}({dep.get('self_deployed_at')}), "
                        f"已采纳为比对基线; 本进程代码仍为快照 {dep.get('release')} commit {dep.get('commit')}")
+        if v.get("resource_lock"):  # AIPOS-F179 item 2
+            rl = v["resource_lock"]
+            holder = rl.get("holder") or {}
+            out.append(f"  独占资源 {', '.join(rl.get('resources') or [])}: {rl.get('state')}"
+                       + (f" 自 {rl.get('held_at')}" if rl.get("state") == "held" else f"(请求 {rl.get('requested_at')})")
+                       + (f"; 占用者 卡 {holder.get('task_id')} run {holder.get('run_id')} pid {holder.get('pid')} @ {holder.get('host')}"
+                          if holder and rl.get("state") == "waiting" else ""))
         if v.get("continues_run"):  # AIPOS-F166 件①
             out.append(f"  续等: 接上一运行 {v['continues_run']}(等待中部署已更新, re-exec 到本运行的部署快照, 从同一等待步续等)")
         if v.get("reexec"):

@@ -368,6 +368,12 @@
       "required": false,
       "description": "AIPOS-F175 件②: 本卡交付的验收产物(截图 / 关键输出 / 报告)声明——产物约定只此一个卡面字段。每项 {criterion: 本卡 criteria 里的标准 id, path_glob: 相对卡产物落点的文件 glob, kind: screenshot|output|report}; 卡产物落点 = card_artifacts.dir(缺省 <return_root>/<卡ID>/artifacts/ = 执行体交回落点内, 随项目 project.json paths.return_root 声明)。执行体 / 审计按声明把文件放进落点, 交回 / 审计报告引用; 路线图推导(roadmap_drift.roadmap_status)据此判 artifact / owner_check 标准的产物是否存在, 看板路线图页显示缩略图 / 摘录。形校验唯一实现 roadmap.artifact_problems(出卡与 amend 经 roadmap.link_problems 同调); 缺省 = 不声明, 行为不变。"
     },
+    "resources": {
+      "type": "array",
+      "items": {"type": "string", "$enum": "exclusive_resource"},
+      "required": false,
+      "description": "AIPOS-F179 件②: 本卡执行/审计要独占的资源(如 iOS 模拟器)——独占资源声明只此一个卡面字段, 值 ∈ enums.schema exclusive_resource(首批 ios-simulator / android-emulator)。loop 拉起入口按「项目 + 资源」排队(verbs.schema lybra_loop.resource_lock): 同项目另一张声明了同一资源的卡的 loop 在用时, 本卡 loop 在执行/审计等待前排队等待(运行记录与 loop status 显示占用者), 占用者 loop 结束(或进程已死, F137 判活)后自动继续; 不并发。形校验唯一实现 loop_run_record.card_resources(出卡 draft_validator 同调, 不合 = 拒 CARD_RESOURCES_INVALID); 缺省 = 不声明, 行为不变。"
+    },
     "owner_check_ref": {
       "type": "string",
       "required": false,
@@ -1028,7 +1034,8 @@
       "advisor_notice",
       "milestone",
       "criteria",
-      "artifacts"
+      "artifacts",
+      "resources"
     ],
     "body_sections": [
       "Goal",
@@ -1137,12 +1144,13 @@
     }
   },
   "restricted_amend": {
-    "description": "AIPOS-F78 前置零⑤(复用 F75 restricted amend): advisor 对 claimed 卡可受限修改的字段清单, 唯一声明。queue_rework 用其子集 {rework_rounds}; `lybra queue amend --restricted` 读全集。",
+    "description": "AIPOS-F78 前置零⑤(复用 F75 restricted amend): advisor 对 claimed 卡可受限修改的字段清单, 唯一声明。queue_rework 用其子集 {rework_rounds}; `lybra queue amend --restricted` 读全集。AIPOS-F179 件②: 追加 resources(在办卡补独占资源声明, 不改工作内容; 形校验同出卡 loop_run_record.card_resources)。",
     "actor_role_class": "advisor",
     "claimed_card_fields": [
       "rework_rounds",
       "output_target",
-      "lane"
+      "lane",
+      "resources"
     ]
   },
   "roadmap_link": {

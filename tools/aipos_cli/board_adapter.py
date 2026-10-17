@@ -4648,11 +4648,30 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
     log_keys = decl["log_fields"]
     audit_resolved = Path(audit_wt).resolve()
     exec_resolved = Path(exec_wt).resolve() if exec_wt else None
+    run_long_key = str((decl.get("run_long") or {}).get("field") or "")
     for index, entry in enumerate(entries, 1):
         label = f"运行记录 #{index}"
         if not isinstance(entry, dict):
             reasons.append(f"{label} 不是对象: {entry!r}")
             continue
+        if run_long_key and entry.get(run_long_key) not in (None, ""):
+            # AIPOS-F179 item 1: the entry references a `lybra run-long` run; command / worktree / exit code / log come from
+            # that record (resolver run_long.evidence_from_record), entry fields given alongside must agree with it
+            from tools.aipos_cli.run_long import evidence_from_record
+
+            fields, problem = evidence_from_record(str(entry[run_long_key]))
+            if fields is None:
+                reasons.append(f"{label} {problem}")
+                continue
+            clash = [k for k in ("command", "worktree", "exit_code") if entry.get(k) not in (None, "")
+                     and (_collapse_ws(entry[k]) != _collapse_ws(fields[k]) if k == "command" else str(entry[k]) != str(fields[k]))]
+            if clash:
+                reasons.append(f"{label} 字段 {', '.join(clash)} 与引用的 run-long 记录 {entry[run_long_key]} 不一致(以记录为准, 删掉或改对)")
+                continue
+            entry = {**{k: v for k, v in entry.items() if k != log_keys["excerpt"]}, **{
+                "command": fields["command"], "worktree": fields["worktree"], "exit_code": fields["exit_code"],
+                log_keys["path"]: fields["log_path"], log_keys["sha256"]: fields["log_sha256"]}}
+            entries[index - 1] = entry
         missing = [k for k in decl["entry_required_fields"] if k not in entry or entry.get(k) in (None, "")]
         if missing:
             reasons.append(f"{label} 缺字段 {', '.join(missing)}")
@@ -8177,6 +8196,15 @@ def amend_task(
             if not is_valid and error_msg:
                 validation_errors.append(error_msg)
         
+        # AIPOS-F179 item 2: exclusive resources keep the draft-time shape check (single check loop_run_record.card_resources)
+        if "resources" in amendments:
+            from tools.aipos_cli.loop_run_record import card_resources
+
+            try:
+                card_resources(updated_metadata)
+            except ValueError as exc:
+                validation_errors.append(str(exc))
+
         # AIPOS-F175 件②: 改卡面 artifacts 同经 link_problems(含产物声明形校验 roadmap.artifact_problems, 与出卡同一判据)
         from tools.aipos_cli.roadmap import artifacts_declaration
 

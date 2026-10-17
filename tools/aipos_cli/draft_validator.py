@@ -302,6 +302,13 @@ def validate_draft_metadata(
             _add(blocking_reasons, message)
         for message in notice_warnings:
             _add(warnings, message)
+        # AIPOS-F179 item 2: exclusive resources (card.schema resources); single shape check loop_run_record.card_resources
+        from tools.aipos_cli.loop_run_record import card_resources
+
+        try:
+            card_resources(metadata)
+        except ValueError as exc:
+            _add(blocking_reasons, str(exc))
         # AIPOS-F171 件②: 路线图挂接(milestone / criteria): 引用不存在 = 拒, 未挂 = 游离卡警告(不拒), 项目无路线图 = 不校验;
         # 唯一判据 roadmap.link_problems(queue amend 同调)
         from tools.aipos_cli.roadmap import link_problems
