@@ -393,6 +393,23 @@
       "ci_slack_factor": 3
     }
   },
+  "lane_overlap": {
+    "description": "AIPOS-F188 件③(10-16 F167/F168/F169 并行同改命令注册段撞 BRANCH_WRONG_BASE / MERGE_CONFLICT, 顾问靠记忆纪律「同改命令注册宜串行」避免, 产品不提示): 同仓车道重叠提示的唯一声明。判定唯一实现 tools/aipos_cli/lane_overlap.lane_overlaps(发卡与 loop 共用一个函数): 本卡与在途卡(inflight_states, 含返工中——返工卡留在 claimed)同一 lane.repo(两卡各经 workspace_config.resolve_card_repo 解析后同一路径)且 lane.paths 前缀相交(按路径段比较; 相交路径 = 两前缀中更具体的那个)= 重叠, 相交路径落在项目豁免前缀下(project.json lane_overlap.exempt_path_prefixes, 唯一读取口 workspace_config.lane_overlap_exemptions, 缺省 tests/ 与 docs/)不报。只提示不拒(Owner 10-16 定): draft publish(含 --dry-run)结果 Warnings 与 lane_overlap 字段(不改 verdict); loop 起跑(本卡认领步执行前)输出 `[轮] lane_overlap: …` 行并写运行记录 lane_overlaps; loop status 显示该运行的 lane_overlaps。卡缺 lane.paths / 仓解析不了 = 不判(不猜), 豁免声明形坏 = 一行点名原因(不影响发卡与起跑)。",
+    "single_implementation": "tools/aipos_cli/lane_overlap.lane_overlaps(判定)/ render_lines(文案)",
+    "inflight_states": [
+      "claimed"
+    ],
+    "surfaces": [
+      "lybra draft publish",
+      "lybra loop(认领前)",
+      "lybra loop status"
+    ],
+    "texts": {
+      "warning": "车道重叠: 本卡 {task_id} 与在途卡 {other} ({other_state}) 同仓 {repo} 重叠路径 {paths}——建议: 等 {other} 合入后再起跑; 或起跑但交回前先 git merge {base} 解冲突再做最终基线",
+      "invalid": "车道重叠提示未判: {reason}"
+    },
+    "run_record_field": "lane_overlaps: 本卡认领步执行前判出的重叠 [{other, other_state, repo, paths, line, at}](无重叠 = 不出现本键, 存量记录形不变)"
+  },
   "board_readonly": {
     "description": "AIPOS-F171 件③(Owner 10-16 裁定: web 看板现阶段只读展示、零写入, Owner 交互经顾问 agent; gap #155): 看板全部业务写接口下线——除 allowed_post_paths(鉴权 / 登录通道)外, 任何 POST / PUT / PATCH / DELETE 一律返回 status + 下方应答(不调用任何写实现), 前端不再提供写按钮(需 Owner 动作处给「告诉顾问: …」与对应顾问命令)。不修鉴权(鉴权路由照旧)。唯一实现 web/board/app.py dispatch_api_request(读本段; 原 POST 业务路由表 _api_post_routes 删除)。AIPOS-F172: 唯一写例外 = Owner 信封签发一条路由(声明 board_owner_envelopes.write_path, 只对 Owner 会话), 其余写请求照旧按本段应答。",
     "status": 405,
@@ -2278,8 +2295,8 @@
         "unreadable": {"code": 3, "meaning": "治理根 / project.json / 声明读取失败(fail-closed)"}
       },
       "layout": {
-        "executor": ["header", "", "start_title", "start_charter", "start_card", "start_worktree", "start_no_worktree", "start_repo", "carried", "remote_note", "", "boundary_title", "boundary_lines", "", "no_write_title", "no_write_governance", "no_write_other_projects", "no_write_harness", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_body", "return_stop", "", "summary"],
-        "auditor": ["header_auditor", "", "start_title", "start_charter", "start_card_auditor", "start_worktree_auditor", "start_repo", "remote_note", "", "boundary_title", "boundary_lines", "", "no_write_title", "no_write_governance", "no_write_product_auditor", "no_write_other_projects", "no_write_harness", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline_auditor", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_body_auditor", "return_stop", "", "summary"],
+        "executor": ["header", "", "start_title", "start_charter", "start_card", "start_worktree", "start_no_worktree", "start_repo", "carried", "remote_note", "", "boundary_title", "boundary_lines", "", "no_write_title", "no_write_governance", "no_write_other_projects", "no_write_harness", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_body", "return_stop", "", "summary"],
+        "auditor": ["header_auditor", "", "start_title", "start_charter", "start_card_auditor", "start_worktree_auditor", "start_repo", "remote_note", "", "boundary_title", "boundary_lines", "", "no_write_title", "no_write_governance", "no_write_product_auditor", "no_write_other_projects", "no_write_harness", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline_auditor", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_body_auditor", "return_stop", "", "summary"],
         "note": "每个键 = texts 的一行模板; \"\" = 空行。模板占位值为 null(本卡不适用, 如无承继 / 本机会话 / 无工位)= 该行省略; 列表占位(*_lines)= 逐项按 item_templates 成行。占位缺 / 值非串 = 渲染失败(fail-closed, 不出半截开工稿)。"
       },
       "role_labels": {"executor": "执行体", "auditor": "审计体"},
@@ -2310,8 +2327,9 @@
         "scratch_title": "## 草稿与日志",
         "scratch": "草稿 / 日志写到 `{scratch_dir}`(自建; 来源 {scratch_source}); 不写治理根, 不写本卡工作树与报告落点以外的他处。",
         "verify_title": "## 验证",
-        "verify_baseline": "- 两边基线: {base} 与本分支最终 tip 各独立串行跑一次全量, 附计数 grep(✓ / ✗ 行数); 最终 tip 必须跑过全量; 交回前若 {base} 已前进, 先在卡工作树 git merge {base} 解冲突再做最终基线; 其他子 agent 可能同时跑全量, 计数异常先串行重跑。",
-        "verify_baseline_auditor": "- 独立全量基线: 被审分支 tip(取证工作树)与 {base} 各独立串行跑一次全量, 附计数 grep(✓ / ✗ 行数), 与执行体报告的计数对照; 不以执行体的日志代替。",
+        "verify_baseline": "- 两边基线: 本分支最终 tip 必须独立跑一次全量, 附计数 grep(✓ / ✗ 行数); {base} 侧先查合并后回归记录基线 `{baseline_command}`(三态, 只读): 已记录 = 直接引用该记录(报告写记录路径与失败集合), 不自跑; 回归在跑 = 先做卡, 交回前再查一次(或加 `--wait <秒>` 有界等待, 到点仍在跑 = 须自跑); 须自跑 = 在草稿目录建 {base} 基线副本(git worktree add --detach, 不碰主检出)串行自跑一次。卡分支须基于所查 sha: 交回前若 {base} 已前进, 先在卡工作树 git merge {base} 解冲突, 再按新 sha 查; 其他子 agent 可能同时跑全量, 计数异常先串行重跑。",
+        "verify_baseline_auditor": "- 独立全量基线: 被审分支 tip(取证工作树)必须独立跑一次全量, 附计数 grep(✓ / ✗ 行数), 与执行体报告的计数对照, 不以执行体的日志代替; {base} 侧先查合并后回归记录基线 `{baseline_command}`(三态, 只读; 以审计章程「独立全量基线」节为准): 已记录 = 以记录失败集合作 {base} 侧基线, 不自跑; 回归在跑 = 先跑被审 tip 一侧, 出裁决前再查(或加 `--wait <秒>`); 须自跑 = 建 {base} 基线副本串行自跑一次。",
+        "verify_baseline_now": "  {base} 侧基线现状(开工稿生成时查, sha {baseline_sha}): {baseline_state}",
         "verify_runall": "- 全量命令: {runall_command}; bash 工具超时设足: {runall_timeout}",
         "verify_long": "- 预计超过 5 分钟的命令用 run-long 跑并分段等完(不得因工具时限放弃、不得以子集代替): 起 {run_long_start}, 等 {run_long_wait}(退出码 3 = 仍在跑, 再等)。",
         "verify_ratchet": "- 棘轮: {ratchet}",
@@ -2336,7 +2354,11 @@
         "scratch_source_declared": "project.json paths.scratch_root",
         "scratch_source_default": "未声明 paths.scratch_root, 取系统临时目录",
         "host_hint_alias": "(ssh 别名 {alias})",
-        "host_hint_undeclared": "; 治理根主机未声明: {hint}"
+        "host_hint_undeclared": "; 治理根主机未声明: {hint}",
+        "baseline_state_recorded": "已记录, 可复用(记录 {ref}; 失败集合 {failure_count} 条)——{base} 侧直接引用该记录, 不自跑",
+        "baseline_state_pending": "合并后回归在跑(卡 {task_id} 起于 {started_at}, 时限 {timeout_seconds}s, 预计最迟 {deadline} 完成)——先做卡, 交回前再查(或加 --wait <秒>)",
+        "baseline_state_self_run_required": "须自跑({reason})——在草稿目录建 {base} 基线副本串行自跑一次",
+        "baseline_state_unavailable": "查询失败({error})——按须自跑处理, 报告写明查询失败原文"
       },
       "item_templates": {
         "boundary_line": "- {surface}: {level} `{path}`({scope})",
@@ -2628,6 +2650,7 @@
         "log_record_type": "loop_run_log",
         "charter_checks": "AIPOS-F164 件②(gap #149): 每次拉起前章程判定(loop_driver._charter_before_launch)追加一条 charter_checks {card, instance, workstation, outcome, repair_command, detail(经 redact_progress), at}: outcome = fresh(章程最新, 不 sync 直接拉起)/ synced(不新鲜 → 自动 sync 本工位后复核最新, 再拉起)/ sync_failed(自动 sync 失败, 不拉起, 结束原因 charter_sync_failed)/ refused(project.json charter_auto_sync=false, 不拉起, 结束原因 charter_not_fresh)/ not_applicable(跨机工位, 门机不核); 同时 loop 输出(即日志)一行 `[轮] charter: …`。判定 = distribution_sync.charter_freshness(`lybra sync --dry-run` 同一实现), 修复 = distribution_sync.sync_workstation_charter(`lybra sync` 同一实现)。无拉起的运行不出现本键(存量记录形不变)。",
         "worktree_repairs": "AIPOS-F178 件③: 等待目标卡(执行体 / 审计体等待)已认领、须建卡工作树(唯一判据 next_resolver.card_needs_worktree)而工作树不在落点时, 等待前自动补建一次并追加一条 worktree_repairs {card, outcome, worktree_path, repair_command, detail(经 redact_progress), at}: outcome = created(经唯一建树入口 _ensure_worktree 补建成功, 写 records/events/<卡>/event_worktree_repair_*.md, 照常进入等待)/ failed(补建失败, 结束原因 worktree_repair_failed); 同时 loop 输出(即日志)一行 `[轮] worktree_repair: …`。实现 = next_resolver.repair_missing_worktree(`lybra queue repair [--confirm]` 同一函数)。无补建的运行不出现本键(存量记录形不变)。",
+        "lane_overlaps": "AIPOS-F188 件③: 本卡认领步执行前(loop 起跑)判出的同仓车道重叠(判定唯一实现 lane_overlap.lane_overlaps, 声明 verbs.schema 顶层 lane_overlap)写 lane_overlaps [{card, other, other_state, repo, paths, line, at}], loop 输出(即日志)每条一行 `[轮] lane_overlap: …`; loop status 原样显示「起跑时 车道重叠: …」。只提示不拒。无重叠 = 不出现本键(存量记录形不变)。",
         "worktree_cleanups": "AIPOS-F187 件③: 本卡结案且已落账(loop 出口 0 那一步)时, 本卡(含审计轮与承继原卡)仍在盘且被保留的工作树(脏 / 在途 / 承继引用 / 读不出 / 删失败; 判据 transitions.schema queue_mutations.worktree_cleanup, 只读 worktree_cleanup.residual_line)追加一条 worktree_cleanups {card, detail(经 redact_progress), at}, loop 输出(即日志)一行 `[轮] worktree_cleanup: …`; 清理本身在结案时由 close_task 完成(结果落 records/events/<卡>/worktree_cleanup_*.md)。无保留的树 = 不出现本键(存量记录形不变)。",
         "report_fixes": "AIPOS-F180B 件②: 裁决入门被拒 INGEST_TIP_MISMATCH 时的修报告头判定(launch.report_fix)每次追加一条 report_fixes {card, outcome, kinds(形式诊断种类), session_id, detail(经 redact_progress), at}: outcome = resumed(同会话续接后报告已改写, 重新入门)/ not_correctable(other_commit, 不续接, 原规则 gate_rejected)/ not_resumable / exhausted / not_rewritten(以 audit_report_form_error 结束); 续接本身另按 launch_session 记 launches[](resume = 该会话第几次续接)。无此判定的运行不出现本键(存量记录形不变)。",
         "launch_model": "AIPOS-F169: 每次拉起 launches[] 另记 model {model: 实际传入 --model 的 <provider>/<id> 或 null(未声明, pi 缺省), source: 声明来源(execution.pi_models.by_role.<角色> / execution.pi_models.default / pi 缺省), role: executor | auditor}; 无此键的存量记录 = F169 前(未传 --model)。lybra loop status 拉起行显示「模型 <值或 pi 缺省>」。",
@@ -2722,6 +2745,104 @@
         "token 永不上屏",
         "禁直调 board_adapter/queue_mutation 做门动作"
       ]
+    },
+    "lybra_regression_baseline": {
+      "description": "AIPOS-F149 件③(gap #89) + AIPOS-F188 件①: `lybra [--workspace-root <治理根>] regression baseline [--sha <提交>] [--repo-root <产品仓>] [--wait <秒>] [--json]` —— main 侧基线按 sha 取已记录的合并后回归失败集合(只读: 不写文件、不起进程、不连门)。执行体(本卡分支一侧必跑全量, main 侧先查本命令)与审计体(被审 tip 一侧必跑, main 侧先查本命令)同一命令、同一判定。三态结论 states: recorded / pending / self_run_required。F188 前只有两态, 合并后回归仍在跑与根本无记录同判 self_run_required(10-18 F187 合并后实测: 事件记录 status=running 仍给须自跑), 调用方无从选择「先做卡、交回前再查」; 现 pending 单列, 给开始时刻、时限与预计最迟完成时刻, 并可 --wait 有界等待(经唯一等待原语 agent_watch_fs.run_fs_watch, 禁 sleep 自旋), 到点仍未完成 = self_run_required。sha 缺省 = 产品仓基线分支当前 HEAD(resolve_audit_sha)。",
+      "phase": "single",
+      "surface": [
+        "cli"
+      ],
+      "cli_command": "lybra regression baseline",
+      "single_implementation": "tools/aipos_cli/post_merge_regression.audit_baseline(三态判定: 记录基线 lookup_recorded_baseline + 在跑判定 regression_states, 不另扫记录)/ loop_run_record.wait_regression_baseline(--wait 有界等待, 经 run_fs_watch; 放在 loop 有界等待所在模块, 不进 finalize 合并后预载闭包)/ render_audit_baseline(人读唯一出口); 命令式样唯一渲染 audit_baseline_command(章程占位 regression_baseline_command / 审计卡取证锚点 / lybra kickoff 开工稿同读)",
+      "states": {
+        "recorded": "已记录, 可复用: 有 merge_commit = 该 sha 且合并后集合完整(merged_complete)的记录——main 侧以记录的失败集合为基线, 不再自跑; 报告引用记录路径与失败集合",
+        "pending": "合并后回归在跑: 该 sha 的回归进行中记录(事件记录 status=running 或 finalization 记录 async_started)其进程仍在(regression_states state=running)——先做本卡 / 被审 tip 一侧, 交回前再查一次, 或 --wait <秒> 有界等待; 到点仍未完成 = self_run_required",
+        "self_run_required": "须自跑: 无该 sha 的记录 / 记录为超时·出错·未完成(进程已不在)·集合不完整 / 进行中记录写于他机判不出 / 记录读不出 / --wait 到点仍在跑——main 侧建基线副本自跑一次"
+      },
+      "json_fields": {
+        "common": [
+          "commit",
+          "sha_source",
+          "governance_root",
+          "status",
+          "unreadable"
+        ],
+        "recorded": [
+          "ref",
+          "failures",
+          "failure_lines",
+          "failure_nodes",
+          "execution",
+          "merged_seconds",
+          "runall_path"
+        ],
+        "pending": [
+          "pending.task_id",
+          "pending.record",
+          "pending.pid",
+          "pending.host",
+          "pending.log",
+          "pending.started_at",
+          "pending.timeout_seconds",
+          "pending.deadline",
+          "pending.elapsed_seconds",
+          "wait_command"
+        ],
+        "self_run_required": [
+          "reasons"
+        ],
+        "wait": [
+          "waited.requested_seconds",
+          "waited.waited_seconds",
+          "waited.outcome(concluded | still_running | process_gone)"
+        ]
+      },
+      "wait": {
+        "max_seconds": 3600,
+        "interval_seconds": 5,
+        "note": "--wait 取值须在 (0, max_seconds] 内; agent 工具单次有时限时取其以内的值, 分段多次查询(每次都是只读查询)",
+        "hint": "{command} --sha {sha} --wait <秒>"
+      },
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sha": {
+            "type": "string",
+            "description": "要查的提交(完整 40 位原样; 短 sha / 引用在产品仓解析); 缺省 = 产品仓基线分支当前 HEAD"
+          },
+          "repo_root": {
+            "type": "string",
+            "description": "解析 sha 用的产品仓; 缺省 = project.json repos.default / code_repo"
+          },
+          "wait": {
+            "type": "number",
+            "description": "pending 时有界等待秒数(到点仍在跑 = self_run_required); 非 pending 时不等待"
+          },
+          "workspace_root": {
+            "type": "string",
+            "description": "治理根; 缺省自发现(governance_root_resolution)"
+          },
+          "json": {
+            "type": "boolean",
+            "description": "JSON 输出(字段见 json_fields)"
+          }
+        },
+        "additionalProperties": false
+      },
+      "exit_codes": {
+        "ok": {
+          "code": 0,
+          "meaning": "结论已输出(三态之一, 见 status / 结论行; 结论本身不改退出码, 存量调用方不变)"
+        },
+        "failed": {
+          "code": 1,
+          "meaning": "sha 解析不出 / 产品仓未声明 / 治理根或声明读不出 / --wait 取值越界(stderr 原文与出口, fail-closed)"
+        },
+        "usage": {
+          "code": 2,
+          "meaning": "参数错(argparse)"
+        }
+      }
     },
     "lybra_regression_run": {
       "description": "AIPOS-F166 件③(gap #153: dev 10-13 夜间重启, F165 合并后的异步回归进程与 /tmp 日志一起丢了, 无事件记录, 产品不知道回归没跑完, 也无补跑命令): `lybra regression run --sha <提交> [--workspace-root <治理根>] [--repo-root <产品仓>] [--task-id <卡>] [--actor <实例>] [--confirm [--background]] [--json]` —— 合并后回归的状态与补跑。缺省 = 预演(只读, 不写任何文件、不起进程): 该提交的回归状态(states)+ 将在哪个产品仓跑哪份测试清单、时限多少、结论落哪份事件记录; --confirm = 前台同步执行(先落「进行中」回归事件记录, 跑完更新同一记录为结论); --confirm --background = 与 finalize async 同一后台入口(post_merge_regression run-async, 启动即落进行中记录)。执行 = F118 合并后回归唯一实现 execute_check(合并结果上跑测试清单、与第一父失败集合比对, 基线优先取记录); 结论 = F149 同一记录格式(records/events/<卡>/post_merge_regression_*.md 的 post_merge_regression 字段, merged_complete=true 即可作下次合并基线与审计 main 侧基线 `lybra regression baseline`)。卡 = 该提交的 finalization / 回归记录所属卡(找不到 = 须 --task-id)。日志落治理根运行记录旁(<loop_runs_root>/<卡ID>/post_merge_regression_<提交前 12 位>_<时刻>.log, 经 git_exclude 不入库), 不落 /tmp。拒: 提交解析不出 / 卡找不到 / 项目未声明 test_contract.runall_path / 该提交回归仍在跑(进程在) / 已有完整结论(pass / new_failures, 不重跑)。记录写完后补落账(governance_commit.reland_after_write, 与 async 后台同一口)。",

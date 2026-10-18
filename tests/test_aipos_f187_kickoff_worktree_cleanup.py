@@ -171,7 +171,7 @@ def test_item1_2_3_lybra_shape_kickoff_hint_and_close_cleanup(rig, tmp_path):
         f"草稿 / 日志写到 `{scratch}`(自建; 来源 project.json paths.scratch_root)",
         f"- 全量命令: `bash tests/run-all.sh 2>&1 | tee {scratch}/runall-<tip|main>.log`",
         f"--task-id {TASK} --name <运行名> --cwd {worktree} -- '<验证命令>'",
-        "- 两边基线: main 与本分支最终 tip 各独立串行跑一次全量",
+        "- 两边基线: 本分支最终 tip 必须独立跑一次全量", "main 侧先查合并后回归记录基线 `lybra --workspace-root",
         f"- 棘轮: {RATCHET}",
         f"- 交回前跑 `pgrep -af \"{RESIDUAL}\"`",
         f"- 报告写到 `{gov / 'task_cards' / TASK / 'RETURN.md'}`",

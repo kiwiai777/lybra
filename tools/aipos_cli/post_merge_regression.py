@@ -200,18 +200,65 @@ def lookup_recorded_baseline(governance_root: Path, commit: str) -> dict[str, An
     return {"failures": None, "unreadable": unreadable, "incomplete": incomplete}
 
 
-#: AIPOS-F149 件③: 审计基线查询的两种结论(输出与 --json 的 status 值)。
+#: AIPOS-F149 件③ + AIPOS-F188 件①: main 侧基线查询的三种结论(输出与 --json 的 status 值; 声明 verbs.schema lybra_regression_baseline.states)。
 AUDIT_BASELINE_RECORDED = "recorded"
+AUDIT_BASELINE_PENDING = "pending"
 AUDIT_BASELINE_SELF_RUN = "self_run_required"
+BASELINE_VERB = "lybra_regression_baseline"
+BASELINE_STATES = (AUDIT_BASELINE_RECORDED, AUDIT_BASELINE_PENDING, AUDIT_BASELINE_SELF_RUN)
+
+
+def baseline_declaration() -> dict[str, Any]:
+    """verbs.schema lybra_regression_baseline(states / wait / exit_codes)唯一读取口。缺 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    decl = (load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get(BASELINE_VERB)
+    wait = decl.get("wait") if isinstance(decl, dict) else None
+    if (not isinstance(decl, dict) or not isinstance(decl.get("states"), dict) or set(decl["states"]) != set(BASELINE_STATES)
+            or not isinstance(wait, dict) or not isinstance(wait.get("hint"), str)
+            or any(not isinstance(wait.get(k), (int, float)) or isinstance(wait.get(k), bool) or wait[k] <= 0
+                   for k in ("max_seconds", "interval_seconds"))
+            or not isinstance(decl.get("exit_codes"), dict)):
+        raise SchemaLoadError(f"verbs.schema.json verbs.{BASELINE_VERB}(states {list(BASELINE_STATES)} / wait.max_seconds / "
+                              "wait.interval_seconds / wait.hint / exit_codes)未声明齐")
+    return decl
+
+
+def _parse_iso(text: Any) -> Any:
+    from datetime import datetime, timezone
+
+    try:
+        moment = datetime.fromisoformat(str(text).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def _pending_view(entry: dict[str, Any], now: Any = None) -> dict[str, Any]:
+    """在跑的回归(regression_states state=running 一条)→ pending 段: 卡 / 记录 / pid / 主机 / 日志 / 开始时刻 / 时限 / 预计最迟完成 / 已运行秒数。
+    开始时刻缺(F166 前 finalization 记录 async_started 无 started_at)= 取 finalized_at; 都缺 = None(不猜)。"""
+    from datetime import timedelta
+
+    from tools.aipos_cli.clock import iso_z, utc_now
+
+    started = _parse_iso(entry.get("started_at")) if entry.get("started_at") else None
+    timeout = entry.get("timeout_seconds")
+    timeout = int(timeout) if isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and timeout > 0 else None
+    now = now or utc_now()
+    return {"task_id": entry.get("task_id"), "record": entry.get("record"), "pid": entry.get("pid"), "host": entry.get("host"),
+            "log": entry.get("log"), "started_at": iso_z(started) if started else None, "timeout_seconds": timeout,
+            "deadline": iso_z(started + timedelta(seconds=timeout)) if started and timeout else None,
+            "elapsed_seconds": int((now - started).total_seconds()) if started else None}
 
 
 def audit_baseline(governance_root: Path, commit: str) -> dict[str, Any]:
-    """AIPOS-F149 件③(gap #89): 审计 main 侧基线按 sha 取已记录的合并后回归失败集合(只读; 判据 = lookup_recorded_baseline,
-    与 finalize 取「记录基线」同一实现, 不另扫记录)。
+    """AIPOS-F149 件③(gap #89) + AIPOS-F188 件①: main 侧基线按 sha 取已记录的合并后回归失败集合(只读; 记录基线判据 =
+    lookup_recorded_baseline, 与 finalize 取「记录基线」同一实现; 在跑判定 = regression_states, 与 loop status / regression run 同一实现)。
 
     有完整记录 = {status: recorded, failures, failure_lines, failure_nodes, ref, execution, merged_seconds}——main 侧不必自跑;
-    无记录 / 记录为超时·出错·异步未落结果·集合不完整 / 记录读不出 = {status: self_run_required, reasons: [...]}——main 侧自跑一次。
-    被审分支一侧无论哪种结论都必须由审计体自跑(本函数不涉被审分支, 独立性不降)。"""
+    该 sha 的回归仍在跑(进程在)= {status: pending, pending: {开始时刻 / 时限 / 预计最迟完成 …}, wait_command}——先做卡, 交回前再查或 --wait;
+    无记录 / 记录为超时·出错·异步未落结果·集合不完整 / 进程已不在 / 他机判不出 / 记录读不出 = {status: self_run_required, reasons: [...]}。
+    被审 / 本卡分支一侧无论哪种结论都必须自跑(本函数不涉该侧, 独立性不降)。"""
     found = lookup_recorded_baseline(governance_root, commit)
     out: dict[str, Any] = {"commit": commit, "governance_root": str(governance_root), "unreadable": list(found["unreadable"])}
     if found["failures"] is not None:
@@ -221,8 +268,18 @@ def audit_baseline(governance_root: Path, commit: str) -> dict[str, Any]:
                    failure_lines=[f for f in failures if "::" not in f], failure_nodes=[f for f in failures if "::" in f],
                    execution=prev.get("execution"), merged_seconds=prev.get("merged_seconds"), runall_path=prev.get("runall_path"))
         return out
+    states = regression_states(Path(governance_root), sha=commit)
+    running = next((e for e in states if e.get("state") == "running"), None)
+    if running is not None:
+        out.update(status=AUDIT_BASELINE_PENDING, pending=_pending_view(running),
+                   wait_command=str(baseline_declaration()["wait"]["hint"]).format(
+                       command=audit_baseline_command(governance_root), sha=commit))
+        return out
     reasons = [f"记录 {item['ref']} 不可作基线: status={item['status']}" + (f"({item['error']})" if item["error"] else "")
                + "——超时 / 出错 / 异步未落结果 / 合并后集合不完整的记录一律不作基线" for item in found["incomplete"]]
+    # AIPOS-F188 件①: 有进行中记录却不在跑 = 写明为什么不能等(进程已不在 / 他机判不出), 补跑命令同 loop status
+    reasons += [f"该 sha 的合并后回归不在跑({e['state']}): {e.get('detail')}" + (f"; 补跑: {e['rerun']}" if e["state"] == "incomplete" else "")
+                for e in states if e.get("state") in ("incomplete", "unprobeable")]
     if not reasons:
         reasons.append(f"无 merge_commit = {commit} 的合并后回归记录(该提交不是经 finalize 合并产生, 或合并后回归关闭/跳过)")
     reasons += list(found["unreadable"])
@@ -282,10 +339,23 @@ def render_audit_baseline(result: dict[str, Any]) -> str:
         lines.append(f"  失败节点 {len(result.get('failure_nodes') or [])} 条:")
         lines += [f"    {item}" for item in result.get("failure_nodes") or []] or ["    (无)"]
         lines.append("下一步: main 侧以本失败集合为基线, 不再自跑; 被审分支一侧仍须自跑一次全量, 按同一口径取失败集合逐条比对。")
+    elif result.get("status") == AUDIT_BASELINE_PENDING:
+        pending = result.get("pending") or {}
+        lines.append("结论: 合并后回归在跑(该 sha 的记录基线尚未落定, 可等)")
+        lines.append(f"  进行中: 卡 {pending.get('task_id')} 记录 {pending.get('record')}(pid {pending.get('pid')} @ {pending.get('host') or '本机'}, "
+                     f"日志 {pending.get('log')})")
+        lines.append(f"  开始 {pending.get('started_at') or '(记录未写开始时刻)'}, 时限 {pending.get('timeout_seconds') or '(未记)'}s, "
+                     f"预计最迟 {pending.get('deadline') or '(不可推算)'} 完成"
+                     + (f"(已运行 {pending['elapsed_seconds']}s)" if isinstance(pending.get("elapsed_seconds"), int) else ""))
+        lines.append(f"下一步: 先做本卡 / 被审分支一侧(该侧仍须自跑一次全量); 交回前再查一次本命令, 或 `{result.get('wait_command')}` "
+                     "有界等待——到点仍未完成 = 须自跑 main 侧。")
     else:
         lines.append("结论: 须自跑 main 侧(无可复用的记录基线)")
         lines += [f"  原因: {reason}" for reason in result.get("reasons") or []]
         lines.append("下一步: main 侧按审计章程建 main 基线副本自跑一次; 被审分支一侧同样自跑一次。")
+    waited = result.get("waited")
+    if waited:
+        lines.append(f"(--wait {waited.get('requested_seconds'):g}s: {waited.get('outcome')}, 实等 {waited.get('waited_seconds')}s)")
     for note in result.get("unreadable") or []:
         if result.get("status") == AUDIT_BASELINE_RECORDED:
             lines.append(f"  注: {note}")
@@ -678,7 +748,9 @@ def regression_states(governance_root: Path, *, task_id: str | None = None, sha:
         path, pmr = running or started
         pid = pmr.get("async_pid")
         log = pmr.get("async_log") or pmr.get("log_dir")
-        entry.update(record=_record_ref(root, path), pid=pid, log=log, host=pmr.get("host"))
+        entry.update(record=_record_ref(root, path), pid=pid, log=log, host=pmr.get("host"),
+                     # AIPOS-F188 件①: pending 基线给开始时刻与时限(F166 前 finalization 记录无 started_at = 退取 finalized_at)
+                     started_at=pmr.get("started_at") or _finalized_at(path), timeout_seconds=pmr.get("timeout_seconds"))
         probe_error = ""
         try:
             if running is not None:
@@ -701,6 +773,19 @@ def regression_states(governance_root: Path, *, task_id: str | None = None, sha:
                                      "机器重启 / 进程被杀)"))
         out.append(entry)
     return out
+
+
+def _finalized_at(path: Path) -> Any:
+    """finalization 记录的 finalized_at(F166 前 async_started 段无 started_at 时作开始时刻); 读不出 / 无 = None(不猜)。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+
+    if not path.name.startswith("finalization_"):
+        return None
+    try:
+        meta, _body = require_frontmatter(path)
+    except (FrontmatterReadError, OSError):
+        return None  # 该记录已在 _recorded_regressions 读过; 此处只取展示用时刻, 读不出 = 不显示开始时刻(pending 段注明未写)
+    return meta.get("finalized_at")
 
 
 def unfinished_regressions(governance_root: Path, *, task_id: str | None = None) -> list[dict[str, Any]]:

@@ -503,6 +503,16 @@ class LoopRunRecorder:
         self._dirty = True
         self.flush(force=True)
 
+    # -- AIPOS-F188 件③: 起跑认领前的同仓车道重叠提示(verbs.schema lybra_loop.run_record.lane_overlaps) --
+    def record_lane_overlaps(self, card: str, overlaps: list[dict[str, Any]]) -> None:
+        """本卡认领前判出的车道重叠进运行记录 lane_overlaps 段: 对方卡 / 状态 / 仓 / 重叠路径 / 提示行 / 时间; loop status 显示。
+        日志行由调用方的 loop 输出(say)写。"""
+        at = iso_z()
+        self.meta["lane_overlaps"] = [{"card": card, **{k: item.get(k) for k in ("other", "other_state", "repo", "paths", "line")}, "at": at}
+                                      for item in overlaps]
+        self._dirty = True
+        self.flush(force=True)
+
     # -- AIPOS-F180B item 2: report-header fix decisions (verbs.schema lybra_loop.run_record.report_fixes) --
     def report_fix(self, entry: dict[str, Any]) -> None:
         """One report-header fix decision into report_fixes (card / outcome / kinds / session_id / detail / at; detail via
@@ -1043,6 +1053,8 @@ def _loop_status(governance_root: Path, task_id: str | None, *, now: datetime | 
         from tools.aipos_cli.owner_inbox import apply_owner_ruling
 
         view["next_action"] = apply_owner_ruling(Path(governance_root), view, view["next_action"])
+        if meta.get("lane_overlaps"):  # AIPOS-F188 件③: 起跑认领前判出的车道重叠(运行记录原样)
+            view["lane_overlaps"] = list(meta["lane_overlaps"])
         warning = envelope_warning_view(Path(governance_root), view, now=now)  # AIPOS-F166 件②: 运行所用信封的用量预警
         if warning:
             view["envelope_warning"] = warning
@@ -1600,6 +1612,74 @@ def wait_for_next_action(governance_root: Path, task_id: str, seconds: float, *,
     return report
 
 
+def wait_regression_baseline(governance_root: Path, commit: str, seconds: float) -> dict[str, Any]:
+    """AIPOS-F188 件①: `regression baseline --wait <秒>`(判定唯一实现 post_merge_regression.audit_baseline; 本函数只做等待, 放在本模块 =
+    loop 有界等待所在处, 且不把等待原语的导入闭包带进 finalize 合并后预载集)——先判一次; pending 时经唯一等待原语 agent_watch_fs.run_fs_watch 有界等待
+    (expect = 进行中记录所在目录的记录文件, 就绪谓词 = 该 sha 不再 pending; stop_when = 回归进程已不在; 禁 sleep 自旋), 醒来重判。
+    到点仍在跑 = self_run_required(原因写明等了多久)。非 pending = 不等待原样返回。结果另带 waited {requested_seconds, waited_seconds, outcome}。
+    秒数越界 = ValueError(声明 wait.max_seconds)。"""
+    import contextlib
+    import io
+    import time
+
+    from tools.aipos_cli.agent_watch_fs import run_fs_watch
+    from tools.aipos_cli.loop_driver import _watch_args
+    from tools.aipos_cli.post_merge_regression import (
+        AUDIT_BASELINE_PENDING, AUDIT_BASELINE_RECORDED, AUDIT_BASELINE_SELF_RUN, BASELINE_VERB, EVENT_TYPE, audit_baseline,
+        baseline_declaration, regression_states,
+    )
+
+    wait = baseline_declaration()["wait"]
+    seconds = float(seconds)
+    if not 0 < seconds <= float(wait["max_seconds"]):
+        raise ValueError(f"--wait 须在 (0, {wait['max_seconds']}] 秒内(verbs.schema {BASELINE_VERB}.wait.max_seconds), 实为 {seconds:g}")
+    result = audit_baseline(governance_root, commit)
+    if result["status"] != AUDIT_BASELINE_PENDING:
+        result["waited"] = {"requested_seconds": seconds, "waited_seconds": 0, "outcome": "not_pending"}
+        return result
+    pending = result["pending"]
+    record = Path(governance_root) / str(pending["record"])
+    entry = next((e for e in regression_states(Path(governance_root), sha=commit) if e.get("state") == "running"), {})
+    fingerprint = _process_fingerprint_of(record, EVENT_TYPE)
+
+    def _concluded(_matched: list[str]) -> bool:
+        return audit_baseline(governance_root, commit)["status"] != AUDIT_BASELINE_PENDING
+
+    interval = min(float(wait["interval_seconds"]), max(0.05, seconds / 10))
+    args = _watch_args(record.parent, ["*.md"], max_wait=seconds, interval=interval)
+    started = time.monotonic()
+    with contextlib.redirect_stdout(io.StringIO()):
+        run_fs_watch(args, expect_ready=_concluded,
+                     stop_when=lambda: not process_alive(entry.get("pid"), fingerprint) if fingerprint else False)
+    waited = int(round(time.monotonic() - started))
+    result = audit_baseline(governance_root, commit)
+    if result["status"] == AUDIT_BASELINE_PENDING:
+        still = result.pop("pending")
+        result.pop("wait_command", None)
+        result.update(status=AUDIT_BASELINE_SELF_RUN, reasons=[
+            f"--wait {seconds:g}s 到点仍在跑(卡 {still.get('task_id')} 记录 {still.get('record')}, pid {still.get('pid')}, "
+            f"起于 {still.get('started_at')}, 预计最迟 {still.get('deadline')} 完成)——不再等, main 侧自跑"])
+        result["waited"] = {"requested_seconds": seconds, "waited_seconds": waited, "outcome": "still_running"}
+        return result
+    concluded = result["status"] == AUDIT_BASELINE_RECORDED or any(
+        e.get("state") == "concluded" for e in regression_states(Path(governance_root), sha=commit))
+    outcome = "concluded" if concluded else "process_gone"
+    result["waited"] = {"requested_seconds": seconds, "waited_seconds": waited, "outcome": outcome}
+    return result
+
+
+def _process_fingerprint_of(record: Path, event_type: str) -> Any:
+    """进行中记录的进程启动时刻指纹(F166 前 finalization 记录无 = None: 不以进程消失为醒点, 只等记录结论或到点)。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+
+    try:
+        meta, _body = require_frontmatter(record)
+    except (FrontmatterReadError, OSError) as exc:
+        raise ValueError(f"进行中记录读不出: {record}: {exc}") from exc
+    pmr = meta.get(event_type) if isinstance(meta.get(event_type), dict) else {}
+    return pmr.get("process_fingerprint")
+
+
 def model_label(resolution: Any) -> str:
     """AIPOS-F169: 拉起模型一处渲染(loop status 拉起行 / set-model 影响工位 / check-workstation 同用):
     声明了 = `<provider>/<id>(来源)`; 未传 --model = 来源说明(pi 缺省)。"""
@@ -1686,6 +1766,8 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
                        f"后续见 continues_run={v['run_id']} 的运行记录" + (f"; re-exec 未成: {rx['failed']}" if rx.get("failed") else ""))
         if v.get("envelope_warning"):  # AIPOS-F166 件②
             out.append(f"  {v['envelope_warning']['line']}")
+        for item in v.get("lane_overlaps") or []:  # AIPOS-F188 件③: 起跑时的车道重叠提示(判于 {at})
+            out.append(f"  起跑时 {item.get('line')}(判于 {item.get('at')})")
         if v.get("note"):
             out.append(f"  注: {v['note']}")
         if v.get("lane_error"):

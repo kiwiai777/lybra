@@ -72,6 +72,10 @@ lybra draft publish --path 5_tasks/drafts/<卡ID小写>.md --actor <你的顾问
 只接入一个时可省(推断为该实例)。
 **自动校验**:schema 校验(必填/拼错字段)、N0 容量 lint(交付大项>3 会 WARN)、顾问须知(AIPOS-F167: `advisor_notice` 形不合 = 拒 `ADVISOR_NOTICE_INVALID`; 改 Lybra 产品顾问/审计/执行可见面的卡缺它 = 警告 `ADVISOR_NOTICE_MISSING`, 不拒)、路线图挂接(AIPOS-F171: 引用不存在 = 拒 `ROADMAP_LINK_INVALID`; 已有路线图而卡未挂 = 警告 `ROADMAP_UNLINKED`, 不拒)。
 
+**并行出卡(AIPOS-F188)**: 发布(含 `--dry-run`)时本卡与在途卡(claimed, 含返工中)同一 lane.repo 且 lane.paths 前缀相交 = Warnings 里出
+「车道重叠」行(对方卡号 / 重叠路径 / 建议「等对方合入后再起跑」或「起跑但交回前先合入 main」), `lybra loop` 起跑认领前与 `lybra loop status`
+同样显示; 只提示不拒, 按提示排序, 不另记「哪些卡宜串行」的纪律。豁免前缀 = project.json `lane_overlap.exempt_path_prefixes`(缺省 tests/、docs/)。
+
 **卡稿 JSON 写顾问须知**(AIPOS-F167; 卡改 CLI 参数 / next_action / 章程 / 卡面字段等顾问可见行为时写, 上线后产品自动送达各项目顾问):
 ```json
 "advisor_notice": {"audience": ["advisor"], "summary": "<一句话要点>", "actions": ["<顾问要做的动作>"]}
@@ -310,7 +314,7 @@ lybra kickoff --task-id <卡ID> --workspace-root <治理根> --json     # 机读
 ```
 输出 = 一份自足开工稿: 身份实例、章程命令(会话在他机 = ssh 拉取式)、卡面路径、工作树 / 分支 / 基于哪个 main sha、承继来源、报告落点与 frontmatter 必填字段、
 车道与写权限边界、禁写清单(治理根除报告落点、其他项目根、工位、门写动作、pi)、硬规矩、草稿目录(project.json `paths.scratch_root`, 缺省系统临时目录, 不落治理根)、
-验证要求(两边全量基线 / 最终 tip 全量 / 棘轮 / 证据复跑一致 / 长命令 run-long)、交回前残留进程检查、写完即止、末尾简短总结。**原样交给子 agent, 本卡特别说明追加在其后; 不再手写开工稿。**
+验证要求(本分支最终 tip 必跑全量; main 侧先查 `lybra regression baseline` 三态——已记录直接引用 / 回归在跑交回前再查 / 须自跑才自跑, 并附开工稿生成时的现状一行(AIPOS-F188); 棘轮 / 证据复跑一致 / 长命令 run-long)、交回前残留进程检查、写完即止、末尾简短总结。**原样交给子 agent, 本卡特别说明追加在其后; 不再手写开工稿。**
 拒(stderr 原文): 卡未认领 / 已结案 / 当前不该本角色动 / 产物已交(与工位 `/go` 同一判据)、实例章程不可取、工作树未建、草稿目录落在治理根内(给 set-paths 出口)。
 项目可声明: `lybra project set-paths <项目> --key scratch_root --value <治理根外绝对路径> --confirm`; project.json `test_contract.ratchet`(棘轮一句话)/ `test_contract.residual_processes`(交回前 pgrep 式样)。
 
