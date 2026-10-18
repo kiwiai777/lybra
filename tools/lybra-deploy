@@ -20,6 +20,11 @@
 
 set -euo pipefail
 
+# AIPOS-F189 件③(F185 遗留): 本脚本里的 python3 一律在主检出 / 快照目录里 `cd … && python3 -m …`(roots / token_resolver /
+# validate / deployment_record 等), 缺省会在主检出 tools/**/__pycache__ 写 pyc(F185 只让守卫不再变红)。统一在此关字节码写入:
+# 本脚本及其起的所有 python3 子进程(含命令替换与 nohup 兜底拉起的门)都继承, 不逐条加 -B, 新增调用零遗漏。
+export PYTHONDONTWRITEBYTECODE=1
+
 # ── paths ───────────────────────────────────────────────────────────────
 # AIPOS-F88 件③: 产品仓根不写死——= 本脚本所在 git 仓的主检出(git common dir 的上级; 从卡工作树调用也落主检出),
 # 与 Python product_repo_root() → schema_loader.code_repo_schema_root「运行代码所在仓」同语义。不在 git 仓内 = 拒。

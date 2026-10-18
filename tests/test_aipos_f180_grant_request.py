@@ -158,6 +158,17 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return {"home": hroot, "gov": gov, "remote": remote, "conn": conn, "tmp": tmp_path, "now": now}
 
 
+@pytest.fixture
+def frozen_clock(rig, monkeypatch: pytest.MonkeyPatch):
+    """AIPOS-F189 件①(gap #166): 授权建议到期 = 当前时刻 + 天数(秒精度, suggest_grant 取产品唯一时钟入口 clock.utc_now);
+    同一测试里 CLI json / CLI 人话行 / 看板页各自推导再逐字比较, 跨秒(人话行按日: 跨零点)边界会偶发不一致。
+    冻结该入口于夹具时刻 rig["now"](同取自该入口), 不另造时间源。只给只读断言的测试用: 写盘测试的记录名同取该入口, 冻结会同秒撞名。"""
+    import tools.aipos_cli.clock as clock
+
+    monkeypatch.setattr(clock, "utc_now", lambda: rig["now"])
+    return rig["now"]
+
+
 def _inbox(rig, *extra: str) -> tuple[int, str]:
     return _cli("owner", "inbox", "--home-root", str(rig["home"]), *extra)
 
@@ -281,7 +292,7 @@ def _panel_html(state: str, heading: str, lines: list[str], tech: list[str], act
 # 件① 请求带建议(临时 home)
 # ===========================================================================
 
-def test_item1_inbox_auto_suggestion_cli_line(rig):
+def test_item1_inbox_auto_suggestion_cli_line(rig, frozen_clock):
     rc, text = _inbox(rig)
     _show(f"---- 件① lybra owner inbox 原文 exit {rc} ----\n{text}")
     assert rc == 0, text
@@ -356,7 +367,7 @@ def test_item1_project_default_and_unreadable_named(rig):
     assert got["max_tasks"] == 20 and got["sources"]["max_tasks"] == "project_default" and got["policy_id"] == f"pol_{P}_loop_1"
     pj["grant_request"] = {"max_tasks": 9, "days": 3}
     pj_path.write_text(json.dumps(pj), encoding="utf-8")
-    got = suggest_grant(rig["gov"], P, task_id="LANE-X", card_fm=fm, driver=f"advisor.{P}.fresh")
+    got = suggest_grant(rig["gov"], P, task_id="LANE-X", card_fm=fm, driver=f"advisor.{P}.fresh", now=rig["now"])
     assert got["max_tasks"] == 9 and got["expires_at"][:10] == _iso(rig["now"] + timedelta(days=3))[:10]
     pj["grant_request"] = {"max_tasks": 0, "bogus": 1}
     pj_path.write_text(json.dumps(pj), encoding="utf-8")
@@ -369,7 +380,7 @@ def test_item1_project_default_and_unreadable_named(rig):
 # 件②③ 看板(测试客户端)
 # ===========================================================================
 
-def test_item2_inbox_and_envelope_pages_show_request_cards(board):
+def test_item2_inbox_and_envelope_pages_show_request_cards(board, frozen_clock):
     data = _inbox_json(board)
     hw1 = _item(data, "LANE-HW1")
     status, page = _request(board, "/owner/inbox")

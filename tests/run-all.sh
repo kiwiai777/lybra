@@ -54,8 +54,6 @@ exit "$overall"
 # lybra-runall: discover
 # lybra-runall: exclude tests/playwright/board.visual.spec.js 需 Playwright 浏览器(npm run test:visual), 非常驻夹具环境
 # ---- 已知存量失败(gap #59; AIPOS-F109 盘点: main bf7623c 隔离 HOME 下同败; 只许删——转绿即红, 删行) ----
-# lybra-runall: known-failure task_cards/AIPOS-276/test_aipos276.py::test_s2_stale_map_publish_warn
-# lybra-runall: known-failure task_cards/AIPOS-276/test_fix1.py::test_f276_1_warnings_in_publish_record
 # lybra-runall: known-failure tests/i18n-bilingual-stability.test.js
 # lybra-runall: known-failure tests/test_aipos_316_guards.py::test_internal_modules_reject_direct_invocation
 # lybra-runall: known-failure tests/test_aipos_316_guards.py::test_rotate_blocks_on_lost_bindings

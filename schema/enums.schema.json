@@ -620,9 +620,11 @@
         {
           "value": "claude-code",
           "description": "Claude Code(CLAUDE.md 片段)",
-          "launch": null
+          "launch": null,
+          "tool_timeout_seconds": 600
         }
-      ]
+      ],
+      "tool_timeout_seconds_note": "AIPOS-F189 件②(gap #191): 每值可选 tool_timeout_seconds = 该 harness 单次工具调用(shell 命令)的时限上限(秒, 正整数; Claude Code 的 bash 工具单次最长 600 秒)。lybra kickoff 验证节按卡面 harness(loop_driver.card_harness: 卡面值, 缺省 card.schema intent_face.harness.default_by_task_mode)取本键: 全量时限(test_contract.post_merge_regression.timeout_seconds)在该时限内 = 同步跑并写设足秒数, 超限 = 一律 run-long; 未声明 = 不写具体秒数, 只教 run-long。唯一读取口 subagent_kickoff.harness_tool_timeout; 值非正整数 = 声明错误(fail-closed)。新 harness 声明时限 = 加一键, 零代码。"
     },
     "workstation_transport": {
       "description": "AIPOS-F95 件③b(Owner 2026-10-04 裁定: 变量现在加, 跨机连接以后做): 工位位置 = {host, dir}, 来源 = 本项目 enrollment_log 中该实例最新的 land 事件(AIPOS-F161: 或 relocate 迁移事件, 见 relocation)(enroll 落地写 host=<主机> workstation=<目录>; 本机 enroll 写本机主机名, enroll_deliver --ssh 写 ssh 目标)。拉起分两层: 先按位置解析启动方式(transport), 再套 harness launch 模板。supported=false 的 transport = 已声明未支持 → loop 不拉起, 退回手工模式并提示 <host>:<dir> 与 /go。以后加远程 = 新增一种 transport 实现(改 supported), 不改分层。AIPOS-F110: remote 已按此补齐(supported=true), 分层不变。",
