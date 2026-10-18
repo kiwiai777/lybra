@@ -8076,7 +8076,7 @@ def supersede_task(
         # AIPOS-F186 件①: 先记新卡承继(carried_from)再搬原卡——承继记录写不成则原卡不搬(决策记录已落照落账)
         amended = amend_task(**carry_amend, dry_run=False)
         if not amended.get("ok"):
-            report["blocking_reasons"].append("决策记录已落, 新卡承继记录被拒(原卡未搬): " + supersede_carry_texts()["amend_refused"].format(
+            report["blocking_reasons"].append("决策记录已落, 新卡承继记录被拒(原卡未搬): " + carry_texts["amend_refused"].format(
                 by=report["by"], reason=json.dumps(amended.get("errors") or amended.get("message"), ensure_ascii=False)[:400]))
             report["line"] = texts["blocked_line"].format(reasons="; ".join(report["blocking_reasons"]))
             return report
@@ -8094,10 +8094,8 @@ def supersede_task(
     report["written"] += [str(moved["source_path"]), str(moved["target_path"])]
     report.update({"ok": True, "verdict": Verdict.PASS, "line": texts["done_line"].format(**fill)})
     if carry_plan is not None and report["carry"]:
-        from tools.aipos_cli.queue_mutation import supersede_carry_texts
-
-        report["carry_line"] = supersede_carry_texts()["done_line"].format(
-            by=report["by"], amendment_id=report["carry"].get("amendment_id") or "(已记同一承继, 未重写)", **carry_plan["carried_from"])
+        report["carry_line"] = carry_texts["done_line"].format(
+            by=report["by"], amendment_id=report["carry"].get("amendment_id") or carry_texts["idempotent_note"], **carry_plan["carried_from"])
     return report
 
 

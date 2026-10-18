@@ -186,7 +186,7 @@ def supersede_texts() -> dict[str, str]:
     return texts
 
 
-SUPERSEDE_CARRY_TEXT_KEYS = ("preview_line", "done_line", "worktree_absent", "dirty_refused", "worktree_unreadable", "no_branch",
+SUPERSEDE_CARRY_TEXT_KEYS = ("preview_line", "done_line", "idempotent_note", "worktree_absent", "dirty_refused", "worktree_unreadable", "no_branch",
                              "successor_not_pending", "successor_branch_exists", "repo_mismatch", "carried_conflict", "amend_refused",
                              "claim_note", "claim_tip_moved", "claim_branch_missing", "claim_invalid", "kickoff_line")
 

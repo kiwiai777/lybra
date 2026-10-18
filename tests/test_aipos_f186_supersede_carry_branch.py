@@ -221,6 +221,24 @@ def test_item2_successor_claimed_and_no_branch_refused(rig: dict) -> None:
     assert rc == 1 and "原卡 PROJ-20 在产品仓 " in out and "无卡分支 card/PROJ-20, 无可承继的工作(零写入)" in out
 
 
+def test_item1_plan_idempotent_and_conflict(rig: dict) -> None:
+    """承继判定唯一实现 supersede_carry_plan: 新卡已记同一承继 = 幂等(不重写); 已记不同承继 = 拒。"""
+    from tools.aipos_cli.queue_mutation import supersede_carry_plan
+
+    repo, gov = rig["repo"], rig["gov"]
+    _product_repo, _tree, tip = _orig_claimed_with_commit(rig)
+    _card(gov, NEW, "pending", extra={"carried_from": {"task_id": ORIG, "branch": f"card/{ORIG}", "tip": tip}})
+    plan = supersede_carry_plan(gov, ORIG, NEW)
+    _show(f"[件①] 已记同一承继: idempotent={plan['idempotent']} problems={plan['problems']}")
+    assert plan["idempotent"] and not plan["problems"]
+    _card(gov, NEW, "pending", extra={"carried_from": {"task_id": ORIG, "branch": f"card/{ORIG}", "tip": "b" * 40}})
+    plan = supersede_carry_plan(gov, ORIG, NEW)
+    _show(f"[件①] 已记不同承继: {plan['problems']}")
+    assert not plan["idempotent"] and any(p.startswith(f"新卡 {NEW} 卡面已记承继 ") for p in plan["problems"])
+    rc, out, _ = _supersede(gov, "--carry-branch", "--confirm")
+    assert rc == 1 and out.startswith("撤换被拒(零写入)") and _queue_card(gov, ORIG)[1].parent.name == "claimed"
+
+
 # ---------------------------------------------------------------------------
 # 件③: 不带 --carry-branch = F184 行为; 结案记录; 审计取证锚点
 # ---------------------------------------------------------------------------
