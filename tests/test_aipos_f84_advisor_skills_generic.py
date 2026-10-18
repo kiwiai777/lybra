@@ -99,6 +99,9 @@ PLACEHOLDER_VALUES = {
     "<可核对的一句话>": "可核对的一句话",
     # AIPOS-F175: Owner 抽查结论(lybra roadmap verify --note)占位
     "<哪里不对>": "分页位置不对",
+    # AIPOS-F185 件②: 撤换在途卡(lybra queue supersede, F184 顾问章程补丁)占位
+    "<原卡>": "PROJ-1",
+    "<新卡>": "PROJ-2",
 }
 PLACEHOLDER_RE = re.compile(r"<[^<>\s'\"]+>")
 #: 已退役的子命令(示例不得再教)

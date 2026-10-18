@@ -236,7 +236,8 @@ lybra next --task-id <卡ID>
 产品命令(tools/aipos_cli/)已覆盖:
 - ✅ 发卡:`lybra draft publish`
 - ✅ 改卡:`lybra queue amend`
-- ✅ 撤卡:`lybra queue withdraw`
+- ✅ 撤卡:`lybra queue withdraw`(写入后自动落账)
+- ✅ Owner 中途改目标 → 撤换:先出新卡并发布, 再 `lybra queue supersede --task-id <原卡> --by <新卡> --actor <你的顾问实例> --owner-words <Owner 原话>`(预演后 `--confirm`;不要以执行体身份 block 原卡)
 - ✅ 派审:`lybra audit dispatch`
 - ✅ 裁决:`lybra audit-verdict`
 - ✅ 信封签发:`lybra envelope mint`
