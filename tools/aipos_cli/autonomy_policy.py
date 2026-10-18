@@ -686,6 +686,7 @@ def select_envelope(
     task: dict[str, Any] | None = None,
     policy_id: str | None = None,
     now: datetime | None = None,
+    notes: list[str] | None = None,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """AIPOS-F103 件④: 信封挑选唯一实现——判据只有 match_claim_envelope(禁第二套有效性/覆盖/选择器判定)。
 
@@ -696,7 +697,10 @@ def select_envelope(
       None = 任务无关(工位 .lybra/role 推导、凭据上下文自发现等无卡场景): 判定对象取该信封自身 task_selector
       (= 「该信封覆盖某张卡」), 其余谓词(有效/时间窗/身份覆盖/选择器非空/额度)照常由 match_claim_envelope 判。
     - policy_id: 给定 = 只核该信封(同一判据重核, 不另挑); 缺省 = 扫描声明目录 policies_dir 全部信封。
-    挑选次序(确定性): 身份三元组次序优先(更具体者先), 同级按信封 id 升序取首个匹配。
+    挑选次序(确定性): 身份三元组次序优先(更具体者先), 同级取最新生效者(active_from 新→旧, 同刻按 id 降序)。
+    AIPOS-F185 件③(gap #163): 扫描时已被同驱动方更新信封接替的旧信封(接替判定唯一实现 _supersession, 看板信封页 / 收件箱同读)不再
+    挑中、不再被消耗——原因写「已被 X 接替」; 原「同级按 id 升序取首个」会先消耗看板已判「已接替」的旧信封。
+    notes(可选, 调用方给列表)= 追加挑选说明(跳过了哪些已接替信封), 供输出写明用的是哪个信封。
     返回 (policy | None, 未匹配原因列表)。"""
     root = Path(governance_root)
     now = now or utc_now()
@@ -723,6 +727,13 @@ def select_envelope(
             reasons.append(f"{pid}: 信封文件缺失或格式不合规(owner_autonomy_policy)")
             continue
         loaded.append((pid, policy, count_preauthorized_claims(root, pid)))
+    successors: dict[str, str | None] = {}
+    if not policy_id:
+        # AIPOS-F185 件③: 最新生效者优先 + 已接替者不挑(接替判定与看板 / 收件箱同一函数 _supersession)
+        loaded.sort(key=lambda item: (_parse_iso(item[1].get("active_from")) or datetime.min.replace(tzinfo=timezone.utc), item[0]),
+                    reverse=True)
+        successors = _supersession([{"policy_id": pid, "state": _usage_state(policy, released, now), "policy": policy,
+                                     "_from": _parse_iso(policy.get("active_from"))} for pid, policy, released in loaded])
     subject: tuple[str, str, str, dict[str, Any] | None] | None = None
     if task is not None:
         subject = envelope_subject(
@@ -737,6 +748,9 @@ def select_envelope(
     last_reason: dict[str, str] = {}
     for agent_instance, actor, claiming_role in triples:
         for pid, policy, released in loaded:
+            if successors.get(pid):
+                last_reason[pid] = f"已被同驱动方更新信封 {successors[pid]} 接替(看板信封页 / 收件箱同一判定), 不再挑中、不再消耗"
+                continue
             if subject is not None:
                 subject_id, subject_mode, subject_project, subject_lane = subject
             else:
@@ -762,6 +776,10 @@ def select_envelope(
                 lane=subject_lane,
             )
             if matched:
+                if notes is not None and not policy_id:
+                    replaced = sorted(old for old, succ in successors.items() if succ == pid)
+                    notes.append(f"挑中信封 {pid}(覆盖本卡与驱动方的有效信封中最新生效者)"
+                                 + (f"; 被它接替的旧信封 {', '.join(replaced)} 不再消耗" if replaced else ""))
                 return policy, []
             last_reason[pid] = reason
     reasons.extend(f"{pid}: {last_reason[pid]}" for pid, _p, _r in loaded if pid in last_reason)
@@ -818,22 +836,31 @@ def envelope_usage(governance_root: Path | str, policy_id: str, *, now: datetime
         return {"policy_id": pid, "state": "missing", "policy": None}
     used = count_preauthorized_claims(root, pid)
     max_tasks = int(policy.get("max_tasks") or 0)
-    frm, exp = _parse_iso(policy.get("active_from")), _parse_iso(policy.get("expires_at"))
-    if policy.get("status") != POLICY_STATUS_ACTIVE or not policy.get("approved_by_owner"):
-        state = "inactive"
-    elif frm is None or exp is None:
-        state = "invalid"
-    elif now < frm:
-        state = "not_yet_active"
-    elif now >= exp:
-        state = "expired"
-    elif max_tasks <= 0 or used >= max_tasks:
-        state = "exhausted"
-    else:
-        state = "active"
+    exp = _parse_iso(policy.get("expires_at"))
+    state = _usage_state(policy, used, now)
     return {"policy_id": pid, "state": state, "used": used, "max_tasks": max_tasks, "remaining": max(0, max_tasks - used),
             "expires_at": policy.get("expires_at"), "seconds_to_expiry": int((exp - now).total_seconds()) if exp else None,
             "policy": policy}
+
+
+def _usage_state(policy: dict[str, Any], used: int, now: datetime) -> str:
+    """已载入信封 + 已放行认领计数 → 用量状态(envelope_usage 与 select_envelope 接替判定同读; 次序与门判定一致: 过期先于额度)。"""
+    try:
+        max_tasks = int(policy.get("max_tasks") or 0)
+    except (TypeError, ValueError):
+        max_tasks = 0
+    frm, exp = _parse_iso(policy.get("active_from")), _parse_iso(policy.get("expires_at"))
+    if policy.get("status") != POLICY_STATUS_ACTIVE or not policy.get("approved_by_owner"):
+        return "inactive"
+    if frm is None or exp is None:
+        return "invalid"
+    if now < frm:
+        return "not_yet_active"
+    if now >= exp:
+        return "expired"
+    if max_tasks <= 0 or used >= max_tasks:
+        return "exhausted"
+    return "active"
 
 
 def next_policy_id(governance_root: Path | str, *, identities: set[str] | list[str], previous: str | None = None,
@@ -992,6 +1019,40 @@ def _scope_covers(newer: dict[str, Any], older: dict[str, Any]) -> bool:
     return True
 
 
+def _supersession(rows: list[dict[str, Any]]) -> dict[str, str | None]:
+    """接替判定唯一实现(AIPOS-F172 gap #160; AIPOS-F185 件③ gap #163 起门挑选信封同读): rows = [{policy_id, state, policy, _from}]
+    → {policy_id: 接替者 policy_id | None}。旧信封 A 被 B 接替 ⇔ B 自身有效或已签待生效(_SUCCESSOR_STATES)、B 的 active_from 严格晚于 A、
+    同一驱动方(_same_driver)、B 的范围 ⊇ A(_scope_covers); 取最新的那个 B。active_from 相同 = 不判先后(都不接替)。
+    缺失 / 形不合 / 时间读不出的信封不被接替(也不接替别人)。"""
+    out: dict[str, str | None] = {}
+    for row in rows:
+        best: dict[str, Any] | None = None
+        if row["state"] not in ("missing", "invalid") and row["_from"] is not None:
+            for other in rows:
+                if (other is row or other["state"] not in _SUCCESSOR_STATES or other["_from"] is None or other["_from"] <= row["_from"]
+                        or not _same_driver(row["policy"], other["policy"]) or not _scope_covers(other["policy"], row["policy"])):
+                    continue
+                if best is None or (other["_from"], other["policy_id"]) > (best["_from"], best["policy_id"]):
+                    best = other
+        out[row["policy_id"]] = best["policy_id"] if best else None
+    return out
+
+
+def envelope_successor(governance_root: Path | str, policy_id: str, *, now: datetime | None = None) -> str | None:
+    """AIPOS-F185 件③: 该信封的接替者(同一接替判定 _supersession, 看板信封页 / 收件箱 / loop status 预警同读); 未被接替 / 不在声明目录 = None。
+    只载入信封与已放行认领计数, 不算续签计划。"""
+    root = Path(governance_root)
+    now = now or utc_now()
+    rows: list[dict[str, Any]] = []
+    for pid in policy_ids(root):
+        policy = load_policy(root, pid)
+        if policy is None:
+            continue
+        rows.append({"policy_id": pid, "state": _usage_state(policy, count_preauthorized_claims(root, pid), now), "policy": policy,
+                     "_from": _parse_iso(policy.get("active_from"))})
+    return _supersession(rows).get(str(policy_id or "").strip())
+
+
 def envelope_overview(governance_root: Path | str, *, now: datetime | None = None) -> dict[str, Any]:
     """一个项目全部信封的状态(唯一推导)。每条 = envelope_usage 用量真相 + 展示状态 status ∈ ENVELOPE_DISPLAY_STATUSES + 接替者 superseded_by
     + 是否当前在用 current + 预警原因 why(envelope_warning)+ 续签计划(renew_plan: next_policy_id / renew_command / note)。
@@ -1019,16 +1080,9 @@ def _envelope_overview(root: Path, now: datetime) -> dict[str, Any]:
         policy = usage.get("policy") or {}
         rows.append({"policy_id": pid, "state": usage["state"], "usage": usage, "policy": policy,
                      "agent_or_role": str(policy.get("agent_or_role") or ""), "_from": _parse_iso(policy.get("active_from"))})
+    successors = _supersession(rows)  # AIPOS-F185 件③: 接替判定唯一实现(门挑选信封 select_envelope 同读)
     for row in rows:
-        best: dict[str, Any] | None = None
-        if row["state"] not in ("missing", "invalid") and row["_from"] is not None:
-            for other in rows:
-                if (other is row or other["state"] not in _SUCCESSOR_STATES or other["_from"] is None or other["_from"] <= row["_from"]
-                        or not _same_driver(row["policy"], other["policy"]) or not _scope_covers(other["policy"], row["policy"])):
-                    continue
-                if best is None or (other["_from"], other["policy_id"]) > (best["_from"], best["policy_id"]):
-                    best = other
-        row["superseded_by"] = best["policy_id"] if best else None
+        row["superseded_by"] = successors[row["policy_id"]]
     out: list[dict[str, Any]] = []
     for row in rows:
         usage, policy, state = row["usage"], row["policy"], row["state"]

@@ -32,7 +32,48 @@ from tools.schema_loader import get_config_port  # stdlib-only leaf; preserves z
 
 
 
-DEFAULT_CONNECTION_JSON = "~/.lybra/agent_credentials.json"
+# AIPOS-F185 件④(gap #168): 原缺省 DEFAULT_CONNECTION_JSON = ~/.lybra/agent_credentials.json(远端 agent 侧单角色凭据, AIPOS-349: 工作区
+# 操作不回落它; 门机上不存在)退役。凭据文件定位并入 F144 治理根解析唯一口: 显式 --connection-json > 治理根(全局/子命令级 --workspace-root >
+# 环境变量 > 所在治理根 > 工位声明, aipos_cli._find_repo_root_for_args → workspace_config.resolve_governance_root)的 .lybra/connection.json
+# (路径原语 service_mode.connection_path); 找不到 = 人话拒因(该放哪 / 用哪个参数), 不猜别的位置。
+
+
+class ConnectionLocateError(ValueError):
+    """看板登录凭据文件定位不到(拒因原文即人话出口)。"""
+
+
+def locate_connection_json(
+    connection_json: str | Path | None,
+    *,
+    governance_root: str | Path | None,
+    root_source: str = "",
+    unresolved: str = "",
+) -> tuple[Path, str]:
+    """``board open`` / ``board approve`` 凭据文件的唯一定位。返回 ``(路径, 来源说明)``; 只定位, 不读 token。
+
+    - ``connection_json`` 给定(--connection-json)= 用它(不存在 = 拒)。
+    - 否则 ``governance_root``(调用方经 F144 唯一薄壳解析; ``root_source`` = 解析来源原文)下 ``.lybra/connection.json``;
+      文件不在 = 拒, 说明该放哪、用哪个参数。
+    - 治理根解析不出(``governance_root`` 为 None, ``unresolved`` = 解析拒因原文)= 拒, 说明在治理根目录运行 / 加 --workspace-root /
+      --connection-json。"""
+    if connection_json is not None and str(connection_json).strip():
+        path = Path(connection_json).expanduser().resolve()
+        if not path.is_file():
+            raise ConnectionLocateError(f"--connection-json 指定的凭据文件 {path} 不存在; 出口: 改成正确路径, 或去掉该参数改用治理根 "
+                                        ".lybra/connection.json(在治理根目录下运行, 或加 --workspace-root <治理根>)")
+        return path, "--connection-json 显式指定"
+    if governance_root is None:
+        raise ConnectionLocateError(f"找不到看板登录用的凭据文件: 治理根解析不出({unresolved or '无治理根'})。出口: cd 到治理根目录再运行, "
+                                    "或加 --workspace-root <治理根>(读其 .lybra/connection.json), 或加 --connection-json <connection.json 路径>")
+    from tools.aipos_cli.service_mode import connection_path
+
+    root = Path(governance_root)
+    path = connection_path(root)
+    if not path.is_file():
+        raise ConnectionLocateError(f"治理根 {root} 下没有凭据文件 {path}。该文件应放在治理根的 .lybra/connection.json(接入 / 签发流程写入, "
+                                    "权限 600, 含 Owner 或角色 token); 凭据在别处时加 --connection-json <路径> 指定, 或用 --workspace-root "
+                                    "指向持有凭据的治理根")
+    return path.resolve(), f"治理根 .lybra/connection.json(治理根解析: {root_source or root})"
 DEFAULT_BOARD_HOST = "127.0.0.1"
 DEFAULT_BOARD_PORT = get_config_port("board_default")  # AIPOS-R4B-1: from config.schema ports.board_default
 _HTTP_TIMEOUT = 8  # loopback,失败要快
@@ -71,7 +112,9 @@ def load_role_token(
     原始 token 仅进程内使用,调用方绝不打印(用 :func:`token_fingerprint` 汇报)。
     """
     from tools.aipos_cli.token_resolver import get_token_for_role_and_project
-    path = Path(connection_json or DEFAULT_CONNECTION_JSON).expanduser().resolve()
+    if connection_json is None or not str(connection_json).strip():
+        raise ConnectionLocateError("未给凭据文件路径(AIPOS-F185: 无隐式缺省, 先经 locate_connection_json 定位)")
+    path = Path(connection_json).expanduser().resolve()
     
     # No project filtering in board_login context (back-compat)
     if role is not None:
@@ -136,9 +179,9 @@ def resolve_board_url(
                 return str(cfg["board_url"]).rstrip("/")
             return f"http://{cfg['board_host']}:{cfg['board_port']}"
 
-    # 回退到 connection.json
-    path = Path(connection_json or DEFAULT_CONNECTION_JSON).expanduser()
-    if path.is_file():
+    # 回退到 connection.json(AIPOS-F185: 无隐式缺省路径; 未给 = 缺省地址)
+    path = Path(connection_json).expanduser() if connection_json is not None and str(connection_json).strip() else None
+    if path is not None and path.is_file():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             board = data.get("board") if isinstance(data, dict) else None

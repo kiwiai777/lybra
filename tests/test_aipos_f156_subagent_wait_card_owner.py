@@ -93,7 +93,7 @@ def test_item1_subagent_wait_timeout_is_routine_advisor_fix(rig):
     _show(f"---- 件①·子 agent 模式等交回超时 lybra loop status --wait 原文 exit {rc} ----\n{out}{err}")
     assert rc == declared_exit_code("lybra_loop_status", "advisor_fix") == 7, out + err
     assert "顾问下一动作: advisor_fix(wait_timeout)" in out and "例行结束 wait_timeout 第 1/3 次" in out
-    assert "不找 Owner: 本卡执行方式 = 顾问派子 agent" in out and "子 agent 仍在做 → 等它提交并写完交回" in out
+    assert "不找 Owner: 本卡执行方式 = 顾问派子 agent" in out and "执行体可能仍在做 → 用原命令重跑 loop 续等" in out  # AIPOS-F185 件①: 超时修法人话
     assert "子 agent 已终止或未派 → 按开工材料派本卡子 agent" in out and "加大 --max-wait" in out
     assert f"lybra loop --task-id {TASK} --workspace-root {gov} --actor {DRIVER} --envelope {POLICY}" in out
     report = json.loads(_cli("loop", "status", "--task-id", TASK, "--workspace-root", str(gov), "--json")[1])

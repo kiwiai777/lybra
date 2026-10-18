@@ -108,6 +108,56 @@ def parameter_default(contract: dict[str, Any], name: str) -> Any:
     return ((contract.get("parameters") or {}).get("properties") or {}).get(name, {}).get("default")
 
 
+_WAIT_LIMIT_MESSAGES = ("source_explicit", "source_default", "source_mode_default", "source_project", "timeout_subagent")
+
+
+def wait_limits_declaration(contract: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F185 件①: verbs.schema lybra_loop.wait_limits(按执行方式的等交回缺省上限 + 人话文案)。缺 / 形不合 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError
+    from tools.aipos_cli.workspace_config import execution_declaration
+
+    decl = contract.get("wait_limits")
+    where = f"verbs.schema.json verbs.{LOOP_VERB}.wait_limits"
+    modes = decl.get("by_execution_mode") if isinstance(decl, dict) else None
+    msgs = decl.get("messages") if isinstance(decl, dict) else None
+    exec_keys = set(execution_declaration()["schema"])
+    if (not isinstance(decl, dict) or decl.get("parameter") != "max_wait" or not isinstance(modes, dict)
+            or any(not isinstance(rule, dict) or isinstance(rule.get("default"), bool) or not isinstance(rule.get("default"), (int, float))
+                   or rule["default"] <= 0 or (rule.get("project_override") is not None and rule["project_override"] not in exec_keys)
+                   for rule in modes.values())
+            or not isinstance(msgs, dict) or any(not isinstance(msgs.get(k), str) or not msgs[k] for k in _WAIT_LIMIT_MESSAGES)):
+        raise SchemaLoadError(f"{where} 未声明齐(parameter=max_wait / by_execution_mode.<方式>.default>0 与 project_override ∈ "
+                              f"config.schema execution 键 / messages {list(_WAIT_LIMIT_MESSAGES)})")
+    return decl
+
+
+def loop_wait_limit(governance_root: Path, task_id: str, task_fm: dict[str, Any], *, contract: dict[str, Any],
+                    explicit: float | None) -> tuple[float, str, str | None]:
+    """AIPOS-F185 件①(gap #187): 本次 loop 每次等交回的上限(唯一读取口)。返回 (秒, 来源说明, 本卡等交回执行方式)。
+    序: 显式 --max-wait > [本卡执行方式有 wait_limits.by_execution_mode 规则] project.json execution.<project_override> > 该规则 default
+    > parameters.max_wait.default。执行方式判定 = loop_run_record.card_wait_execution_mode(与 loop status 下一动作同读); 声明读不出 /
+    不合 = 不按执行方式放宽(行为同未声明), 原因写进来源说明(不吞)。"""
+    from tools.aipos_cli.loop_run_record import card_wait_execution_mode
+    from tools.aipos_cli.workspace_config import ExecutionDeclarationError, project_subagent_max_wait
+
+    decl = wait_limits_declaration(contract)
+    msgs = decl["messages"]
+    note = ""
+    try:
+        mode = card_wait_execution_mode(governance_root, task_id, task_fm)
+    except (ExecutionDeclarationError, OSError, ValueError) as exc:
+        mode, note = None, f"; 执行方式判不出, 不按执行方式放宽({type(exc).__name__}: {exc})"
+    if explicit is not None:
+        return float(explicit), str(msgs["source_explicit"]) + note, mode
+    rule = (decl["by_execution_mode"].get(mode) or {}) if mode else {}
+    if rule:
+        override = project_subagent_max_wait(governance_root) if rule.get("project_override") else None
+        if override is not None:
+            return float(override), str(msgs["source_project"]), mode
+        return float(rule["default"]), str(msgs["source_mode_default"]), mode
+    return float(parameter_default(contract, "max_wait")), str(msgs["source_default"]) + note, mode
+
+
 # ---------------------------------------------------------------------------
 # 结果结构
 # ---------------------------------------------------------------------------
@@ -210,6 +260,7 @@ def find_envelope(
     policy_id: str | None = None,
     now: datetime | None = None,
     driver_role: str | None = None,
+    notes: list[str] | None = None,
 ) -> tuple[dict[str, Any] | None, list[str]]:
     """在项目声明的信封目录(project.json paths.policies_root)找覆盖本卡与驱动方身份的有效 PreAuthorized 信封。
 
@@ -236,6 +287,7 @@ def find_envelope(
         task=task,
         policy_id=policy_id,
         now=now,
+        notes=notes,  # AIPOS-F185 件③: 挑选说明(用了哪个信封 / 被它接替的旧信封)
     )
 
 
@@ -1156,7 +1208,9 @@ def run_loop(
     governance_root = Path(governance_root)
     contract = load_loop_contract()
     max_steps = int(max_steps if max_steps is not None else parameter_default(contract, "max_steps"))
-    max_wait = float(max_wait if max_wait is not None else parameter_default(contract, "max_wait"))
+    # AIPOS-F185 件①: 未显式给 --max-wait 时缺省按本卡执行方式取(loop_wait_limit, 读卡后定); 此处只核显式值
+    explicit_wait = None if max_wait is None else float(max_wait)
+    max_wait = explicit_wait if explicit_wait is not None else float(parameter_default(contract, "max_wait"))
     interval = float(interval if interval is not None else parameter_default(contract, "interval"))
     if max_steps < 1 or max_wait <= 0 or interval <= 0:
         return LoopResult(task_id, "not_derivable", exit_code_for(contract, "not_derivable"),
@@ -1192,6 +1246,8 @@ def run_loop(
         say(f"lybra loop {task_id}: exit 4 — {exc}")
         return LoopResult(task_id, "not_derivable", exit_code_for(contract, "not_derivable"), str(exc),
                           missing_records=stop["missing_records"], suggested_action=stop["suggested_action"])
+    # AIPOS-F185 件①: 等交回上限(显式 > 子 agent 执行方式缺省 / 项目覆盖 > 参数缺省), 来源写进首行
+    max_wait, wait_source, wait_mode = loop_wait_limit(governance_root, task_id, task_fm, contract=contract, explicit=explicit_wait)
     # AIPOS-F78 前置零②: 驱动方身份=显式 --actor → 工位声明(.lybra/role instance)→ connection.json 驱动方 token 实例; 禁占位 advisor
     driver_actor = actor or _driver_actor(governance_root, connection_json=connection_json)
     if not driver_actor:
@@ -1242,7 +1298,8 @@ def run_loop(
         result = _run_enveloped(task_id, governance_root, holder, task_fm=task_fm, driver_actor=driver_actor, policy_id=policy_id,
                                 now=now, connection_json=connection_json, contract=contract, max_steps=max_steps, max_wait=max_wait,
                                 interval=interval, allowed_verbs=allowed_verbs, say=say, derive=derive, execute=execute,
-                                watch=watch, no_launch=no_launch, recorder=recorder, guard=guard, wait_reexec=wait_reexec)
+                                watch=watch, no_launch=no_launch, recorder=recorder, guard=guard, wait_reexec=wait_reexec,
+                                wait_source=wait_source, wait_mode=wait_mode)
     except LoopInterrupted as exc:
         recorder.end(outcome="interrupted", exit_code=128 + exc.signum, reason="interrupted", message=f"收到信号 {exc.signum}",
                      steps=holder.steps)
@@ -1299,14 +1356,28 @@ def _run_enveloped(task_id: str, governance_root: Path, result: LoopResult, *, t
                    max_steps: int, max_wait: float, interval: float, allowed_verbs: set[str], say: _RunOutput,
                    derive: Callable[[str, Path], dict[str, Any]], execute: Callable[..., dict[str, Any]],
                    watch: Callable[..., int], no_launch: bool, recorder: LoopRunRecorder, guard: Any,
-                   wait_reexec: "WaitReexec | None" = None) -> LoopResult:
+                   wait_reexec: "WaitReexec | None" = None, wait_source: str = "", wait_mode: str | None = None) -> LoopResult:
     # 件③ 信封(启动前校验; 无信封 exit 5 带申领出口, 禁裸跑); 身份集合含工位角色名(chris: hbj-advisor)
     # AIPOS-F134 件①: 驱动方角色名按本次驱动方实例取(其凭据条目的 role), 故在 driver_scope 内解析(否则取的是工位声明/首个驱动方)
     with driver_scope(actor=driver_actor, policy_id=policy_id):
         driver_role = _driver_role_name(governance_root, connection_json)
+    choice: list[str] = []
+    if policy_id:
+        # AIPOS-F185 件③(gap #163): 显式 --envelope(续跑命令一律带)已被同驱动方更新信封接替 = 改用接替者(接替判定唯一实现
+        # autonomy_policy._supersession, 看板信封页 / 收件箱同读; 接替者范围 ⊇ 旧信封), 旧信封不再被消耗; 接替者仍经同一判据核验
+        from tools.aipos_cli.autonomy_policy import envelope_successor
+
+        seen = {str(policy_id)}
+        successor = envelope_successor(governance_root, str(policy_id), now=now)
+        while successor and successor not in seen:
+            choice.append(f"显式信封 {policy_id} 已被同驱动方更新信封 {successor} 接替(看板信封页 / 收件箱同一判定), 改用 {successor}, "
+                          f"旧信封不再消耗; 续跑请带 --envelope {successor}")
+            seen.add(successor)
+            policy_id = successor
+            successor = envelope_successor(governance_root, str(policy_id), now=now)
     policy, reasons = find_envelope(
         governance_root, task_id=task_id, task_fm=task_fm, driver_actor=driver_actor, policy_id=policy_id, now=now,
-        driver_role=driver_role,
+        driver_role=driver_role, notes=choice,
     )
     if policy is None and policy_id:
         # AIPOS-F166 件②: 显式 --envelope(续跑命令一律带)的信封额度用尽 / 已过期 = 专门出口(用量/上限/到期 + 续签命令), 不给泛化申领出口
@@ -1325,7 +1396,10 @@ def _run_enveloped(task_id: str, governance_root: Path, result: LoopResult, *, t
         return LoopResult(task_id, "no_envelope", exit_code_for(contract, "no_envelope"), msg, suggested_action=hint)
     envelope_id = str(policy.get("policy_id"))
     recorder.set_envelope(envelope_id)
-    say(f"lybra loop {task_id}: envelope={envelope_id} driver={driver_actor} max_steps={max_steps} max_wait={max_wait}s")
+    wait_note = f"(等交回上限: {wait_source})" if wait_source else ""
+    say(f"lybra loop {task_id}: envelope={envelope_id} driver={driver_actor} max_steps={max_steps} max_wait={max_wait:g}s{wait_note}")
+    for line in choice:  # AIPOS-F185 件③: 写明用的是哪个信封(挑选说明 / 显式信封已被接替而改用)
+        say(f"lybra loop {task_id}: 信封: {line}")
 
     result.envelope = envelope_id
     from tools.aipos_cli.machine_zone import card_owner_refusal
@@ -1342,7 +1416,8 @@ def _run_enveloped(task_id: str, governance_root: Path, result: LoopResult, *, t
             return _drive(task_id, governance_root, result, contract=contract, max_steps=max_steps, max_wait=max_wait,
                           interval=interval, allowed_verbs=allowed_verbs, say=say, derive=derive, execute=execute, watch=watch,
                           connection_json=connection_json, policy=policy, driver_actor=driver_actor, no_launch=no_launch,
-                          recorder=recorder, guard=guard, driver_role=driver_role, task_fm=task_fm, now=now, wait_reexec=wait_reexec)
+                          recorder=recorder, guard=guard, driver_role=driver_role, task_fm=task_fm, now=now, wait_reexec=wait_reexec,
+                          wait_mode=wait_mode)
         except FrontmatterReadError as exc:
             # AIPOS-F100 件②: 推导核之外的回读(落账回读 / 结案判据 / 等待实例)遇记录读不出 = 同一硬停 exit 4 点名文件
             stop = frontmatter_unreadable_stop(task_id, exc)
@@ -1403,6 +1478,7 @@ def _drive(
     task_fm: dict[str, Any] | None = None,
     now: datetime | None = None,
     wait_reexec: "WaitReexec | None" = None,
+    wait_mode: str | None = None,
 ) -> LoopResult:
     steps = result.steps
     launch_decl = launch_declaration(contract)
@@ -1616,6 +1692,12 @@ def _drive(
             if rc != declared_exit_code("lybra_agent_watch", "change"):  # AIPOS-F101 件③: 哨兵退出码读声明
                 step.ok = False
                 step.message = f"等待产物超时/停滞(watch exit {rc}): 等的是 {wait_patterns}"
+                from tools.aipos_cli.workspace_config import EXECUTION_MODE_SUBAGENT
+
+                if wait_mode == EXECUTION_MODE_SUBAGENT and target_card == task_id:
+                    # AIPOS-F185 件①: 子 agent 执行方式等执行体交回超时 = 人话(执行体可能仍在做, 原命令重跑续等; 文案读声明), 技术细节附后
+                    human = str(wait_limits_declaration(contract)["messages"]["timeout_subagent"]).format(card=target_card, max_wait=max_wait)
+                    step.message = f"{human}({step.message})"
                 steps.append(step)
                 say(f"[{index}] exit 3 — {step.message}")
                 result.outcome, result.exit_code, result.message = "wait_timeout", exit_code_for(contract, "wait_timeout"), step.message

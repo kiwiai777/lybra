@@ -2098,10 +2098,32 @@ def project_execution(project_root: str | Path, *, project: dict[str, Any] | Non
     if auditor and auditor in {subagent, pi_exec}:
         problems.append(f"auditor={auditor} 与执行者同一实例(审计恒为独立 pi 工位)")
     problems.extend(_pi_models_problems(raw.get("pi_models")))  # AIPOS-F169: pi 模型声明同段同一校验(视图不含, 读取口 project_pi_models)
+    problems.extend(_subagent_max_wait_problems(raw.get("subagent_max_wait")))  # AIPOS-F185 件①: 同段同一校验(视图不含, 读取口 project_subagent_max_wait)
     if problems:
         raise ExecutionDeclarationError("EXECUTION_DECLARATION_INVALID", problems)
     return {"default_mode": mode, "subagent_executor": subagent, "pi_allowed_task_modes": allowed, "pi_executor": pi_exec,
             "auditor": auditor}
+
+
+def _subagent_max_wait_problems(value: Any) -> list[str]:
+    """AIPOS-F185 件①: execution.subagent_max_wait 形判定(config.schema project_json.execution.schema.subagent_max_wait): 缺 / null = 合规;
+    否则须为 ≥ 声明 minimum 的数(非布尔)。"""
+    if value is None:
+        return []
+    minimum = execution_declaration()["schema"].get("subagent_max_wait", {}).get("minimum", 1)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < minimum:
+        return [f"subagent_max_wait={value!r} 须为 ≥{minimum} 的秒数(或省略 = 用 verbs.schema lybra_loop.wait_limits 缺省)"]
+    return []
+
+
+def project_subagent_max_wait(project_root: str | Path, *, project: dict[str, Any] | None = None) -> float | None:
+    """AIPOS-F185 件①: project.json execution.subagent_max_wait 的唯一读取口(loop_driver.loop_wait_limit 读)。未声明 execution / 缺键 /
+    null = None(用 verbs.schema 声明缺省)。形不合 = ExecutionDeclarationError(经 project_execution 同一校验, 不吞)。"""
+    data = project if project is not None else read_project_json(project_root)
+    if project_execution(project_root, project=data) is None:
+        return None
+    value = data["execution"].get("subagent_max_wait")
+    return None if value is None else float(value)
 
 
 # AIPOS-F156 件①: 卡的执行方式(唯一判定)——只读 F143 执行方式声明(project_execution 规范化视图), 起草缺省「派不派 pi」与
