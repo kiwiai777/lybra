@@ -987,6 +987,37 @@ def build_decision_payload(item: dict[str, Any], choice: str, note: str | None, 
     }
 
 
+def supersede_decision_payload(governance_root: Path, *, task_id: str, by: str, relayed_by: str, owner_words: str,
+                               owner_ref: str | None, from_state: str, decided_at: str, actor: str = "owner") -> dict[str, Any]:
+    """AIPOS-F184 件③: 撤换的 Owner 裁决 = 既有 owner_decision_record(与 decide 同一 payload 构造 build_decision_payload, 同一写路径
+    record_owner_decision + execute_dry_run)。所裁「事项」= 撤换本身(项目 = 治理根目录名, 类别 = 选项键, 主体 = 原卡, 锚点 = 新卡,
+    ID 经 item_id 唯一实现); allowed_next_action = transitions supersede.decision_choice(lybra_owner_inbox.options 同名选项);
+    decided_by_ref = actor(缺省 owner), captured_by = relayed_by(转达的顾问实例), Rationale = Owner 原话。owner_ref 进 refs。"""
+    from tools.aipos_cli.queue_mutation import supersede_declaration
+
+    decl = inbox_declaration()
+    choice = str(supersede_declaration()["decision_choice"])
+    option = decl["options"].get(choice)
+    if not isinstance(option, dict):
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError(f"verbs.{VERB}.options.{choice} 未声明(transitions supersede.decision_choice 引用)")
+    root = Path(governance_root).resolve()
+    project = root.name
+    subject = f"{task_id} [{from_state}] → {by}"
+    iid = item_id(project, choice, task_id, by, decl)
+    item = {"item_id": iid, "project": project, "governance_root": str(root), "category": choice,
+            "category_label": str(option["label"]), "subject": subject, "task_id": task_id, "policy_id": None,
+            "ask": owner_words, "recommend": None, "impact": str(option["advisor_next"]), "anchor": by, "source": relayed_by,
+            "options": [{"key": choice, "label": str(option["label"])}], "decision_id": decision_id_for(iid, decl)}
+    payload = build_decision_payload(item, choice, None, actor, decided_at=decided_at, relayed_by=relayed_by,
+                                     owner_words=owner_words, decl=decl)
+    if owner_ref:
+        payload["refs"] = list(payload["refs"]) + [str(owner_ref)]
+        payload["owner_approval_evidence"]["refs"] = list(payload["owner_approval_evidence"]["refs"]) + [str(owner_ref)]
+    return payload
+
+
 def _effect(item: dict[str, Any], choice: str, decl: dict[str, Any]) -> str | None:
     spec = decl["options"].get(choice) if item["category"] == "needs_owner_card" else None
     return str(spec.get("effect")) if isinstance(spec, dict) and spec.get("effect") else None

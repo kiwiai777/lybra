@@ -123,6 +123,69 @@ def withdraw_owner_ruling_problem(repo_root: Path, task_id: str, owner_ruling_re
     return None, None
 
 
+SUPERSEDE_DECL_KEYS = ("actor_role_class", "successor_states", "decision_choice", "card_fields")
+
+
+def supersede_declaration() -> dict[str, Any]:
+    """AIPOS-F184 件③: 撤换声明唯一读取口 transitions.schema queue_mutations.transitions.supersede(源/目标同 ALLOWED_TRANSITIONS 投影)。
+    缺键 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    spec = ((load_schema("transitions").get("queue_mutations") or {}).get("transitions") or {}).get("supersede")
+    if not isinstance(spec, dict) or "supersede" not in ALLOWED_TRANSITIONS or any(not spec.get(k) for k in SUPERSEDE_DECL_KEYS):
+        raise SchemaLoadError(f"transitions.schema.json queue_mutations.transitions.supersede 未声明齐 {list(SUPERSEDE_DECL_KEYS)}")
+    successor = [str(x) for x in spec["successor_states"]]
+    bad = [x for x in successor if x not in QUEUE_STATES]
+    if bad:
+        raise SchemaLoadError(f"transitions.schema.json queue_mutations.transitions.supersede.successor_states 含非队列目录 {bad}")
+    from_states, to_state = ALLOWED_TRANSITIONS["supersede"]
+    return {**spec, "from_states": from_states, "to_state": to_state, "successor_states": tuple(successor)}
+
+
+def supersede_problems(repo_root: Path, task_id: str, actor: str, supersede: dict[str, Any] | None) -> list[str]:
+    """AIPOS-F184 件③: 撤换前置(唯一判定): 执行者角色类(custom_roles.authorize_instance_class)/ 新卡已在队列且在 successor_states /
+    新卡 ≠ 原卡 / Owner 原话非空单行。返回拒因列表(空 = 通过); 文案读 verbs.lybra_queue_supersede.texts。"""
+    from tools.aipos_cli.custom_roles import authorize_instance_class
+    from tools.aipos_cli.task_loader import find_task_card
+
+    decl = supersede_declaration()
+    texts = supersede_texts()
+    spec = dict(supersede or {})
+    problems: list[str] = []
+    role_gate = authorize_instance_class(str(actor or ""), str(decl["actor_role_class"]), repo_root)
+    if not role_gate["ok"]:
+        problems.append(texts["role_refused"].format(required_class=decl["actor_role_class"], reason=role_gate["reason"]))
+    words = str(spec.get("owner_words") or "")
+    if not words.strip():
+        problems.append(texts["missing_words"])
+    elif "\n" in words or "\r" in words:
+        problems.append(texts["invalid_words"].format(value=words))
+    by = str(spec.get("superseded_by") or "").strip()
+    if not by:
+        problems.append(texts["successor_missing"].format(by="<空>"))
+    elif by.upper() == str(task_id or "").upper():
+        problems.append(texts["successor_self"].format(by=by))
+    else:
+        path, state = find_task_card(repo_root, by)
+        if path is None:
+            problems.append(texts["successor_missing"].format(by=by))
+        elif state not in decl["successor_states"]:
+            problems.append(texts["successor_state"].format(by=by, state=state, states="/".join(decl["successor_states"])))
+    return problems
+
+
+def supersede_texts() -> dict[str, str]:
+    """verbs.schema lybra_queue_supersede.texts(唯一读取口; 缺 = SchemaLoadError)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    texts = (((load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get("lybra_queue_supersede") or {}).get("texts"))
+    need = ("missing_words", "invalid_words", "role_refused", "successor_missing", "successor_state", "successor_self",
+            "worktree_note", "reason_template", "preview_line", "done_line", "blocked_line")
+    if not isinstance(texts, dict) or any(not isinstance(texts.get(k), str) for k in need):
+        raise SchemaLoadError(f"verbs.schema.json verbs.lybra_queue_supersede.texts 未声明齐 {list(need)}")
+    return texts
+
+
 # AIPOS-348: reopen 允许源目录(= 声明 reopen.from_states)
 REOPEN_SOURCE_STATES = ALLOWED_TRANSITIONS["reopen"][0]
 # AIPOS-F87 件①: 卡字段序唯一定义在 record_writer.CARD_FRONTMATTER_ORDER(本名保留为别名, 供既有调用方)。
@@ -368,6 +431,7 @@ def _mutation_metadata(
     report_link: str | None = None,
     claim_id_override: str | None = None,
     session_id_override: str | None = None,
+    supersede: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     timestamp = iso_z()
     if action == RecordType.CLAIM:
@@ -390,6 +454,14 @@ def _mutation_metadata(
     if action == "withdraw":
         assert reason is not None
         return _prepare_withdraw(metadata, actor, timestamp, reason)
+    if action == "supersede":
+        assert reason is not None and supersede is not None
+        from tools.aipos_cli.transition_engine import apply_transition_metadata
+
+        return apply_transition_metadata(metadata=metadata, transition_name="supersede", actor=actor, timestamp=timestamp,
+                                         reason=reason, superseded_by=supersede.get("superseded_by"),
+                                         owner_words=supersede.get("owner_words"), owner_ref=supersede.get("owner_ref"),
+                                         decision_id=supersede.get("decision_id"))
     raise ValueError(f"Unsupported queue mutation action: {action}")
 
 
@@ -622,6 +694,7 @@ def mutate_queue_task(
     claim_id_override: str | None = None,
     session_id_override: str | None = None,
     owner_ruling_ref: str | None = None,
+    supersede: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     # AIPOS-R6A 靶子②: CLI queue mutation 平行路径拆除 — 禁止非 dry-run 执行
     # (绕过 gate 控制执行流程，不产生真实的 claim/return 记录，"卡面假成功")
@@ -641,7 +714,7 @@ def mutate_queue_task(
         raise ValueError(f"Unsupported queue mutation action: {action}")
     if not str(actor or "").strip():
         raise ValueError("--actor is required")
-    if action in {"block", "reopen", "withdraw"} and not str(reason or "").strip():
+    if action in {"block", "reopen", "withdraw", "supersede"} and not str(reason or "").strip():
         raise ValueError("--reason is required and must be non-empty")
     if action == "complete" and not str(report_link or "").strip():
         raise ValueError("--report-link is required and must be non-empty")
@@ -651,11 +724,11 @@ def mutate_queue_task(
     from_states, to_state = ALLOWED_TRANSITIONS[action]
     from_state = " or ".join(from_states)
 
-    # AIPOS-315: withdraw supports multiple source states(值域 = 声明 withdraw.from_states)
-    if action == "withdraw":
+    # AIPOS-315: withdraw supports multiple source states(值域 = 声明 withdraw.from_states); AIPOS-F184: supersede 同(声明 supersede.from_states)
+    if action in ("withdraw", "supersede"):
         actual_state = source_task.get("queue_state")
         if actual_state not in from_states:
-            raise ValueError(f"withdraw only supports {from_state} tasks, found {actual_state}")
+            raise ValueError(f"{action} only supports {from_state} tasks, found {actual_state}")
     
     target_path = queue_root_for(repo_root) / to_state / source_path.name
     source_metadata, source_body, _warnings = _read_task_markdown(source_path)
@@ -675,13 +748,19 @@ def mutate_queue_task(
             result["warnings"].append(note)
         result["owner_ruling_ref"] = str(owner_ruling_ref or "").strip() or None
 
+    # AIPOS-F184 件③: 撤换前置(角色类 / 新卡 / Owner 原话)——判定唯一实现 supersede_problems
+    if action == "supersede":
+        for problem in supersede_problems(repo_root, str(source_task.get("task_id") or ""), actor, supersede):
+            result["blocking_reasons"].append(problem)
+        result["superseded_by"] = str((supersede or {}).get("superseded_by") or "").strip() or None
+
     validation_profiles = profiles if profiles else None
-    # AIPOS-315: withdraw allows any actor (advisor can revoke any task), skip actor validation
-    validation_actor = None if action == "withdraw" else actor
+    # AIPOS-315: withdraw allows any actor (advisor can revoke any task), skip actor validation(AIPOS-F184: supersede 同, 角色类另判)
+    validation_actor = None if action in ("withdraw", "supersede") else actor
     validation = validate_single_task(source_task, current_actor=validation_actor, profiles=validation_profiles)
     if validation["blocking_reasons"]:
         # AIPOS-315: filter out actor-related blocks for withdraw
-        if action == "withdraw":
+        if action in ("withdraw", "supersede"):
             filtered_blocks = [
                 reason for reason in validation["blocking_reasons"]
                 # AIPOS-F133: 撤回不受依赖判据约束(依赖只门认领)
@@ -785,6 +864,7 @@ def mutate_queue_task(
         report_link=str(report_link or "").strip() or None,
         claim_id_override=claim_id_override,
         session_id_override=session_id_override,
+        supersede=supersede,
     )
     rendered_markdown = render_task_markdown(updated_metadata, source_body)
     result["updated_frontmatter"] = updated_metadata
@@ -829,7 +909,7 @@ def mutate_queue_task(
     preview_task["claimed_by"] = updated_metadata.get("claimed_by")
     preview_task["needs_owner"] = updated_metadata.get("needs_owner")
     # AIPOS-315: use same actor logic for preview validation
-    preview_actor = None if action == "withdraw" else actor
+    preview_actor = None if action in ("withdraw", "supersede") else actor
     preview_validation = validate_single_task(preview_task, current_actor=preview_actor, profiles=validation_profiles)
     if preview_validation["blocking_reasons"]:
         for reason_text in preview_validation["blocking_reasons"]:
