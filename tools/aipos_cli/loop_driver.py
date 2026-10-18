@@ -1516,6 +1516,13 @@ def _drive(
                 steps.append(LoopStep(index, "done", "close", "completed", task_id, message="closure 记录存在, 治理已落账"))
                 result.message = (f"{task_id} 已结案(closure 记录存在), 治理已落账(已提交并推送到 {landing.get('upstream')}), "
                                   f"共 {index} 轮")
+                # AIPOS-F187 件③: 结案时 close_task 已清理工作树; 仍保留的(脏 / 承继引用等)报路径与改动计数并进运行记录
+                from tools.aipos_cli.worktree_cleanup import residual_line
+
+                residual = residual_line(governance_root, task_id)
+                if residual:
+                    say(f"[{index}] worktree_cleanup: {residual}")
+                    recorder.worktree_cleanup(task_id, residual)
                 say(f"[{index}] done: {result.message}")
                 return result
 

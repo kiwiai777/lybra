@@ -216,8 +216,6 @@ def supersede_carry_plan(repo_root: Path, task_id: str, by: str) -> dict[str, An
     新卡卡分支已存在 / 两卡解析到不同产品仓 / 新卡已记不同承继。新卡已记同一承继 = idempotent(不重写卡面)。
     返回 {carry: {task_id, branch, tip, worktree_path, worktree_exists, uncommitted, code_repo, successor_branch} | None,
     carried_from: {task_id, branch, tip} | None, problems: [str], idempotent: bool, line: str}。"""
-    import subprocess
-
     from tools.aipos_cli.next_resolver import (
         _read_frontmatter, card_base_branch, card_branch_name, card_carried_from, card_worktree_location, existing_branch_tip,
     )
@@ -251,13 +249,14 @@ def supersede_carry_plan(repo_root: Path, task_id: str, by: str) -> dict[str, An
         return out
     uncommitted = 0
     if worktree.is_dir():
-        proc = subprocess.run(["git", "-C", str(worktree), "status", "--porcelain", "--untracked-files=all"],
-                              capture_output=True, text=True, timeout=30)
-        if proc.returncode != 0:
-            out["problems"].append(texts["worktree_unreadable"].format(task_id=task_id, worktree=worktree,
-                                                                       error=(proc.stderr or proc.stdout).strip()))
+        # AIPOS-F187: 未提交改动计数唯一实现 worktree_cleanup.uncommitted_count(与结案 / 撤回后清理判据同读)
+        from tools.aipos_cli.worktree_cleanup import uncommitted_count
+
+        try:
+            uncommitted = uncommitted_count(worktree)
+        except ValueError as exc:
+            out["problems"].append(texts["worktree_unreadable"].format(task_id=task_id, worktree=worktree, error=str(exc)))
             return out
-        uncommitted = len([ln for ln in proc.stdout.splitlines() if ln.strip()])
     out["carry"] = {"task_id": task_id, "branch": branch, "tip": tip, "worktree_path": str(worktree), "worktree_exists": worktree.is_dir(),
                     "uncommitted": uncommitted, "code_repo": str(code_repo), "successor_branch": successor_branch}
     out["carried_from"] = {"task_id": task_id, "branch": branch, "tip": tip}

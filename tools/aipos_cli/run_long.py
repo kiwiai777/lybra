@@ -209,14 +209,17 @@ def start_run(governance_root: Path, task_id: str, name: str, cwd: str, command:
     return view
 
 
-def charter_commands(governance_root: Path) -> dict[str, str]:
+def charter_commands(governance_root: Path, *, task_id: str | None = None, cwd: str | None = None) -> dict[str, str]:
     """Charter placeholders run_long_start / run_long_wait (single rendering; charter_render_context adds them).
-    Governance root is the declared one; card id / name / work tree / command stay as angle-bracket placeholders."""
+    Governance root is the declared one; card id / name / work tree / command stay as angle-bracket placeholders.
+    AIPOS-F187 item 1: the kickoff brief passes the card id and work tree (same rendering, filled in)."""
     seg = int(declaration()["wait"]["default_segment_seconds"])
     root = shlex.quote(str(governance_root))
+    card = shlex.quote(task_id) if task_id else "<本卡卡号>"
+    tree = shlex.quote(cwd) if cwd else "<本卡工作树>"
     return {
-        "run_long_start": f"`lybra --workspace-root {root} run-long start --task-id <本卡卡号> --name <运行名> --cwd <本卡工作树> -- '<验证命令>'`",
-        "run_long_wait": f"`lybra --workspace-root {root} run-long wait --task-id <本卡卡号> --name <运行名> --timeout {seg}`",
+        "run_long_start": f"`lybra --workspace-root {root} run-long start --task-id {card} --name <运行名> --cwd {tree} -- '<验证命令>'`",
+        "run_long_wait": f"`lybra --workspace-root {root} run-long wait --task-id {card} --name <运行名> --timeout {seg}`",
     }
 
 

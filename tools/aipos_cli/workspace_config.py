@@ -701,7 +701,8 @@ PROJECT_PATH_KEYS = ("return_root", "verdict_root", "queue_root", "task_cards_ro
                      "foundation_backlog", "hard_rules_source", "policies_root",  # AIPOS-F103 件④: 信封目录
                      "loop_runs_root",  # AIPOS-F131 件①: loop 运行记录落点
                      "stage_archive_root",  # AIPOS-F145 件①: 阶段档案目录(缺省 = 声明 default_from)
-                     "roadmap_file")  # AIPOS-F171 件①: 结构化路线图声明文件(缺省 governance/roadmap.yaml; 唯一读写 roadmap.py)
+                     "roadmap_file",  # AIPOS-F171 件①: 结构化路线图声明文件(缺省 governance/roadmap.yaml; 唯一读写 roadmap.py)
+                     "scratch_root")  # AIPOS-F187 件①: 子 agent 草稿 / 日志目录根(可选; 解析与「不得落治理根」校验唯一 subagent_kickoff.scratch_dir)
 #: AIPOS-F145 件①: 阶段档案落点键(唯一读取口 stage_archive_root; 阶段闸门拒因出口按此键渲染)
 STAGE_ARCHIVE_PATH_KEY = "stage_archive_root"
 # AIPOS-F78B 件②: 非路径键(值域读声明 enum), 与布尔 manual_gate_mode 一样不做路径解析
@@ -933,7 +934,10 @@ def project_repos(governance_root: str | Path, *, project: dict[str, Any] | None
             "project_json_exists": exists}
 
 
-TEST_CONTRACT_KEYS = ("runall_path", "require_tests", "test_file_globs", "post_merge_regression", "isolation")
+TEST_CONTRACT_KEYS = ("runall_path", "require_tests", "test_file_globs", "post_merge_regression", "isolation",
+                      "ratchet", "residual_processes")  # AIPOS-F187 件①: 开工稿验证 / 交回节引用的项目声明(人读文本 / pgrep 式样)
+#: AIPOS-F187 件①: test_contract 的非空单行文本键(开工稿引用; 未声明 = None / 声明 default)
+TEST_CONTRACT_TEXT_KEYS = ("ratchet", "residual_processes")
 
 
 def _post_merge_regression_decl(test_contract_decl: dict[str, Any]) -> dict[str, Any]:
@@ -1069,6 +1073,7 @@ def project_test_contract(governance_root: str | Path, repo_path: str | Path | N
             "source": "config.schema test_contract.post_merge_regression 缺省",
         },
         "isolation": isolation_defaults(decl),
+        **_test_contract_text_defaults(decl),
         "source": f"{where}(未声明)",
     }
     if raw in (None, {}):
@@ -1101,6 +1106,13 @@ def project_test_contract(governance_root: str | Path, repo_path: str | Path | N
             )
         if "isolation" in spec:
             result["isolation"] = _apply_isolation(result["isolation"], isolation_keys, spec["isolation"], label)
+        for key in TEST_CONTRACT_TEXT_KEYS:  # AIPOS-F187 件①: 非空单行文本
+            if key in spec:
+                text = spec.get(key)
+                if not isinstance(text, str) or not text.strip() or "\n" in text:
+                    raise ValueError(f"TEST_CONTRACT_INVALID: {label}.{key}={text!r} 须为非空单行字符串")
+                result[key] = text.strip()
+                result[f"{key}_source"] = f"{label}.{key}"
         result["source"] = label
 
     _apply(raw, where)
@@ -1118,6 +1130,22 @@ def project_test_contract(governance_root: str | Path, repo_path: str | Path | N
         if repo_path is not None and _same_path(Path(repo_path), repos["items"][name]):
             _apply(spec, f"{where}.repos[{name!r}]")
     return result
+
+
+def _test_contract_text_defaults(test_contract_decl: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F187 件①: test_contract 文本键(TEST_CONTRACT_TEXT_KEYS)的缺省 = 声明 default(无 default = None)与来源说明。
+    声明缺键 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    out: dict[str, Any] = {}
+    for key in TEST_CONTRACT_TEXT_KEYS:
+        spec = (test_contract_decl.get("schema") or {}).get(key)
+        if not isinstance(spec, dict):
+            raise SchemaLoadError(f"config.schema.json project_json.test_contract.schema.{key} 未声明")
+        default = spec.get("default")
+        out[key] = str(default) if isinstance(default, str) and default.strip() else None
+        out[f"{key}_source"] = f"config.schema test_contract.{key}.default" if out[key] else f"config.schema test_contract.{key}(未声明)"
+    return out
 
 
 def _glob_list_problem(value: Any) -> str | None:

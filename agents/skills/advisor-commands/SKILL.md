@@ -293,14 +293,35 @@ lybra loop status --workspace-root <治理根> --json                          #
 - 门拒码 `BRANCH_WRONG_BASE`(交回时基线已前进)/ `MERGE_CONFLICT`(finalize 合入冲突): 派本卡执行体在卡工作树合入最新基线、解冲突、重测、更新交回 frontmatter, 然后末行命令续跑(走既有重审出口);
 - 门拒码 `REPO_MERGE_IN_PROGRESS`(同仓另一张卡正在合入): 不改卡, 等持锁卡合完后末行命令重跑;
 - 结束原因 `deploy_changed`(他卡部署了新版本, 且发生在执行步之间): 末行命令重跑, 从断点续做(本 loop 自己 finalize 的部署不再触发它)。**手工等待步**(等执行体交回)中他卡部署 = loop 自己换新快照从同一等待步续等(AIPOS-F166, 运行记录旧运行 `deploy_reexec` / 新运行 `continues_run`), 不停、不用重跑; 结束原因 `deploy_reexec` 只在新进程没接上时才是最近一次运行, 同样末行命令重跑;
-- 结束原因 `wait_timeout` 且本卡执行方式 = 顾问派子 agent(project.json `execution`, 或等待目标是子 agent 执行者接入; AIPOS-F156 / F157): 不找 Owner、不敲 `/go`——子 agent 仍在做就等它写完交回后末行命令重跑(可加大 `--max-wait`), 已终止或未派就按开工材料补派; pi 工位 / 手工工位的 `wait_timeout` 仍是 `owner_needed`。
+- 结束原因 `wait_timeout` 且本卡执行方式 = 顾问派子 agent(project.json `execution`, 或等待目标是子 agent 执行者接入; AIPOS-F156 / F157): 不找 Owner、不敲 `/go`——子 agent 仍在做就等它写完交回后末行命令重跑(可加大 `--max-wait`), 已终止或未派就按 `lybra kickoff --task-id <卡ID>` 的开工稿补派; pi 工位 / 手工工位的 `wait_timeout` 仍是 `owner_needed`。
 同卡同一例行原因连续到声明次数仍被拒 = 产品自动升 `owner_needed`, 不必自己计数。
 **信封用尽 / 过期**(AIPOS-F166): 结束原因 `envelope_exhausted` / `envelope_expired` = `owner_needed(envelope_renew)`, detail 给当前用量 / 上限 / 到期, hint = 续签命令(`lybra envelope mint --confirm`, policy_id = 该驱动方同前缀已有最大序号 +1, 范围照抄用尽的信封)——原样转给 Owner 亲自敲, 签好用原命令续跑。剩余 ≤10% 或 ≤3 次、或 ≤24h 到期时 `loop status` / `brief` 先出一行「信封预警」(阈值声明 verbs.schema `lybra_loop.envelope.renew.warn`), 趁早请 Owner 续签。
 **请求授权**(AIPOS-F180): `owner_needed(no_envelope)` / `owner_needed(envelope_renew)` 时收件箱已按卡自动生成授权建议(驱动方 = 你、模式 = 卡面 task_mode、仓 = 卡面 lane.repo、额度 = 你上一信封或项目缺省、到期 = 项目缺省天数、理由 = 卡标题), Owner 在看板「待授权请求」一键「按建议签发」。建议不对就用 loop note 写清要什么: `lybra loop note --task-id <卡> --grant-mode <模式> --grant-repos <仓,…> --grant-max-tasks <N> --grant-expires <YYYY-MM-DD> --grant-reason <一句话理由> --workspace-root <治理根>` 预演后加 `--confirm`(字段可只给一部分; 给了 --grant-* 可不写 --ask)。不要再把 `lybra envelope mint` 长命令贴给 Owner; 签好后收件箱该项自动消失, 用原命令续跑 loop。Owner 不批准 = `lybra owner decide --item <OI-…> --choice deny_grant …` 记下, 按 Owner 原话调整请求或改卡。
 **合并后回归未完成**(AIPOS-F166): 异步回归进程没跑完就没了(机器重启 / 被杀), `loop status` / `brief` / `next` 出一行「合并后回归未完成 … 补跑: `lybra regression run --sha <提交> --workspace-root <治理根>`」: 先原样跑一次(预演, 只读), 再加 `--confirm --actor <驱动方实例>` 补跑(前台; `--background` 后台), 结论落同格式回归事件记录, `lybra regression baseline --sha` 即可复用。仍在跑 / 已有完整结论 = 产品拒。
-**等待中的开工提示**(`continue_wait(manual_kickoff)`): 子 agent 模式 = 「顾问按开工材料派本卡子 agent 执行并写交回」(`lybra my-tasks --actor <执行体实例> --task-id <卡ID>` 给工作树 / 报告落点 / 卡路径), 照做, 不转述给 Owner; 只有 pi / 手工工位才是「请在 <工位> 敲 /go」。
+**等待中的开工提示**(`continue_wait(manual_kickoff)`): 子 agent 模式 = 「顾问派本卡子 agent 执行并写交回, 开工稿 = `lybra kickoff --task-id <卡ID>` 的输出」(AIPOS-F187: 一份自足开工稿, 原样交给子 agent, 可在其后追加本卡特别说明; 不再手写), 照做, 不转述给 Owner; 只有 pi / 手工工位才是「请在 <工位> 敲 /go」。
 **取下一张归属**(`card_done_take_next`, AIPOS-F156): 末行命令只给归属本驱动方实例的下一张(门侧发布记录签发实例 = `draft publish --actor`); 共用仓里其他顾问实例的卡不取。
 **禁止**:tail/grep 原始运行日志自判; until/sleep 轮询(等待只用 `--wait`)。
+
+#### 派子 agent 的开工稿: `lybra kickoff`(AIPOS-F187)
+**何时用**: loop 输出 `continue_wait(manual_kickoff)` 且为子 agent 模式(或 `wait_timeout` 要补派)时, 派本卡执行 / 审计子 agent 前。
+```bash
+lybra kickoff --task-id <卡ID> --workspace-root <治理根>            # 执行卡; 审计卡按卡自动判为审计体开工稿(或显式 --role auditor)
+lybra kickoff --task-id <卡ID> --workspace-root <治理根> --json     # 机读: text + 各段取值
+```
+输出 = 一份自足开工稿: 身份实例、章程命令(会话在他机 = ssh 拉取式)、卡面路径、工作树 / 分支 / 基于哪个 main sha、承继来源、报告落点与 frontmatter 必填字段、
+车道与写权限边界、禁写清单(治理根除报告落点、其他项目根、工位、门写动作、pi)、硬规矩、草稿目录(project.json `paths.scratch_root`, 缺省系统临时目录, 不落治理根)、
+验证要求(两边全量基线 / 最终 tip 全量 / 棘轮 / 证据复跑一致 / 长命令 run-long)、交回前残留进程检查、写完即止、末尾简短总结。**原样交给子 agent, 本卡特别说明追加在其后; 不再手写开工稿。**
+拒(stderr 原文): 卡未认领 / 已结案 / 当前不该本角色动 / 产物已交(与工位 `/go` 同一判据)、实例章程不可取、工作树未建、草稿目录落在治理根内(给 set-paths 出口)。
+项目可声明: `lybra project set-paths <项目> --key scratch_root --value <治理根外绝对路径> --confirm`; project.json `test_contract.ratchet`(棘轮一句话)/ `test_contract.residual_processes`(交回前 pgrep 式样)。
+
+#### 卡工作树清理: 自动 + `lybra project cleanup-worktrees`(AIPOS-F187)
+卡结案(closure 落盘后)/ 撤回 / 撤换后, 产品自动清理该卡工作树与审计工作树(<卡>R、<卡>R2…): 干净 = `git worktree remove`(分支保留); 有未提交改动 = 不碰,
+结案输出与 `loop status` 报路径与改动计数; 被 pending 卡 `carried_from` 引用的原卡树保留到承继卡认领。清理失败不影响结案。存量:
+```bash
+lybra project cleanup-worktrees --workspace-root <治理根>             # 预演(零写入): 逐仓列 删 / 脏 / 在途 / 承继 / 不认识
+lybra project cleanup-worktrees --workspace-root <治理根> --confirm   # 删判为「删」的(分支保留), 其余不动
+```
+脏树(常见: 子 agent 留下的未跟踪草稿)= 看清内容后自己处理(提交到卡分支或删文件), 再跑一次预演。
 
 #### Owner 待决: `lybra loop note` / `lybra owner inbox` / `lybra owner decide`(AIPOS-F168 / F170)
 **何时用**: loop status 给 `owner_needed` 时(怎么停见顾问章程「持续推进守则」)。所有项目需 Owner 定的事集中在一个收件箱, Owner 在那里看、定;

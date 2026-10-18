@@ -1073,7 +1073,7 @@ def _release_writes(resp: dict[str, Any] | None) -> list[str]:
     if not resp or not resp.get("ok"):
         return []
     data = resp.get("data") or {}
-    paths = [data.get(k) for k in ("task_path", "amendment_record_path", "source_path", "target_path")]
+    paths = [data.get(k) for k in ("task_path", "amendment_record_path", "source_path", "target_path", "worktree_cleanup_record")]
     return [str(p) for p in paths if p]
 
 
