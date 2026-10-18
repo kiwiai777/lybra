@@ -2111,6 +2111,11 @@ def build_parser() -> argparse.ArgumentParser:
     queue_supersede_parser.add_argument("--actor", required=True, help="Advisor instance performing the supersede (recorded as the relayer)")
     queue_supersede_parser.add_argument("--owner-words", required=True, help="Owner's words, one line (card face + decision record rationale)")
     queue_supersede_parser.add_argument("--owner-ref", default=None, help="Optional: where the Owner ruled (inbox item id / decision record id / session ref)")
+    # AIPOS-F186: 撤换承继(声明 transitions supersede.carry_branch; 判定唯一实现 queue_mutation.supersede_carry_plan)
+    queue_supersede_parser.add_argument("--carry-branch", action="store_true", default=False,
+                                        help="AIPOS-F186: the new card carries the old card's branch and committed work (new card must be pending "
+                                             "and unclaimed; old card worktree must have no uncommitted changes; the new card branch is created "
+                                             "from the old branch tip when it is claimed; the old branch is kept)")
     queue_supersede_mode = queue_supersede_parser.add_mutually_exclusive_group()
     queue_supersede_mode.add_argument("--dry-run", action="store_true", help="Preview, zero writes (default)")
     queue_supersede_mode.add_argument("--confirm", action="store_true", help="Write the decision record, move the card, land the writes")
@@ -6000,7 +6005,8 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             result = supersede_task(args.task_id, by=args.by, actor=args.actor, owner_words=args.owner_words,
-                                    owner_ref=args.owner_ref, dry_run=not args.confirm, repo_root=repo_root)
+                                    owner_ref=args.owner_ref, dry_run=not args.confirm, repo_root=repo_root,
+                                    carry_branch=bool(getattr(args, "carry_branch", False)))
         except (FileNotFoundError, OSError, ValueError, LookupError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
@@ -6012,6 +6018,8 @@ def main(argv: list[str] | None = None) -> int:
             print(render_json(result))
         else:
             print(result["line"])
+            if result.get("carry_line"):
+                print(f"  {result['carry_line']}")  # AIPOS-F186: 承继(原卡分支 / tip / 工作树 / 未提交改动计数; 确认后 = 新卡卡面已记)
             for warning in result.get("warnings") or []:
                 print(f"  ! {warning}")
             if result.get("decision", {}).get("target_path") and not args.confirm:

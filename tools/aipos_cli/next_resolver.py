@@ -409,6 +409,8 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
     - report_path / report_refusal: 同构(REPORT_LOCATION_UNDECLARED)
     - report_required_frontmatter: 报告必填字段 [{key, hint, value}](AIPOS-F93 件①, card_report_contract); 不可推导 =
       report_refusal REPORT_CONTRACT_UNRESOLVED 且 report_path 置空
+    - carried_from / carried_line: AIPOS-F186 撤换承继来源(card_carried_from; 不承继 = None)与开工提示一句(含先合入当前 base_branch
+      的 base_sync 命令, carried_kickoff_line); 卡面形不合 = carried_line 为拒因原文
     """
     from tools.aipos_cli.workspace_config import CardRepoUnresolved
     from tools.schema_loader import SchemaLoadError
@@ -425,6 +427,13 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
     if not task_id:
         missing = {"code": "TASK_ID_MISSING", "reason": "卡 frontmatter 无 task_id, 工作树/报告落点按卡 ID 推导, 不可推导"}
         return {**view, "worktree_refusal": missing, "report_refusal": missing}
+    # AIPOS-F186 件②: 承继来源(执行体开工材料显示; 提示先把当前 base_branch 合入)
+    try:
+        view["carried_from"] = card_carried_from(fm)
+        view["carried_line"] = carried_kickoff_line(fm, task_id)
+    except (ValueError, SchemaLoadError) as exc:
+        view["carried_from"] = None
+        view["carried_line"] = f"CARRIED_FROM_INVALID: {exc}"
     # AIPOS-F178 件②: 是否建树只问唯一判据 card_needs_worktree; 不建树(只写治理根)= 不给工作树路径, 拒因点名治理根报告落点
     try:
         needs_worktree = card_needs_worktree(workspace_root, {**fm, "task_id": task_id})
@@ -3808,6 +3817,65 @@ def existing_branch_tip(code_repo: Path, branch: str) -> str | None:
     return None
 
 
+_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def card_carried_from(card_frontmatter: dict[str, Any] | None) -> dict[str, str] | None:
+    """AIPOS-F186: 卡面撤换承继(card.schema carried_from; 键名读 supersede.carry_branch.card_field)的唯一读取与形校验。
+    None = 不承继(缺省, 行为不变); 形不合(非对象 / 缺 task_id·branch·tip / tip 非完整 40 位 sha)= ValueError(调用方 fail-closed)。
+    认领建树 _ensure_worktree / my-tasks 开工面 / card render / queue_close 结案记录同读。"""
+    from tools.aipos_cli.queue_mutation import supersede_carry_declaration
+
+    raw = (card_frontmatter or {}).get(supersede_carry_declaration()["card_field"])
+    if raw in (None, "", {}):
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(f"carried_from 须为对象, 得到 {type(raw).__name__}")
+    out = {k: str(raw.get(k) or "").strip() for k in ("task_id", "branch", "tip")}
+    missing = [k for k, v in out.items() if not v]
+    if missing:
+        raise ValueError(f"carried_from 缺 {missing}")
+    if not _FULL_SHA_RE.match(out["tip"]):
+        raise ValueError(f"carried_from.tip {out['tip']!r} 不是完整 40 位 sha")
+    if out["branch"].startswith("-"):
+        raise ValueError(f"carried_from.branch {out['branch']!r} 非法")
+    return out
+
+
+def carried_start_point(code_repo: Path, card_frontmatter: dict[str, Any] | None) -> tuple[dict[str, str] | None, str | None]:
+    """AIPOS-F186 件②: 承继卡认领建树的起点判定(唯一实现, _ensure_worktree 在卡分支尚不存在时调用)。
+    返回 (carried, refusal): 不承继 = (None, None); 承继且原卡分支当前 tip = 记录 = (carried, None)(起点 = carried['tip']);
+    卡面形不合 / 原卡分支已不在 / tip 与记录不符 = (carried 或 None, 拒因原文, 文案 verbs lybra_queue_supersede.carry_texts)。"""
+    from tools.aipos_cli.queue_mutation import supersede_carry_texts
+
+    texts = supersede_carry_texts()
+    try:
+        carried = card_carried_from(card_frontmatter)
+    except ValueError as exc:
+        return None, texts["claim_invalid"].format(reason=exc)
+    if carried is None:
+        return None, None
+    current = existing_branch_tip(code_repo, carried["branch"])
+    if current is None:
+        return carried, texts["claim_branch_missing"].format(repo=code_repo, **carried)
+    if current != carried["tip"]:
+        return carried, texts["claim_tip_moved"].format(current=current, **carried)
+    return carried, None
+
+
+def carried_kickoff_line(card_frontmatter: dict[str, Any] | None, task_id: str) -> str | None:
+    """AIPOS-F186 件②: 开工面(my-tasks / card render)的承继来源一句(含「先把当前 base_branch 合入」的 base_sync 命令); 不承继 = None。
+    卡面形不合 = ValueError(调用方给拒因)。"""
+    carried = card_carried_from(card_frontmatter)
+    if carried is None:
+        return None
+    from tools.aipos_cli.board_adapter import base_sync_command
+    from tools.aipos_cli.queue_mutation import supersede_carry_texts
+
+    base = card_base_branch()
+    return supersede_carry_texts()["kickoff_line"].format(base=base, sync=base_sync_command(card_branch_name(task_id), base), **carried)
+
+
 def _ensure_worktree(workspace_root: Path, task_id: str,
                      card_frontmatter: dict[str, Any] | None = None,
                      *, start_point: str | None = None) -> dict[str, Any]:
@@ -3824,10 +3892,11 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
         card_frontmatter: 卡 frontmatter(门认领时已在手, 免二次查卡); 缺则按 task_id 读卡
         start_point: AIPOS-F123 件①(收编): 卡分支须落在的既有提交(既有分支 tip 完整 sha)。卡分支不存在 = 建在该提交上;
             已存在 = 其 tip 须正好等于该提交, 否则拒(绑定不唯一); 工作树已在落点 = 须检出卡分支且 HEAD = 该提交, 否则拒。
-            缺省 None = 原认领语义(新卡分支起于 base_branch 声明)。
+            缺省 None = 原认领语义(新卡分支起于 base_branch 声明); AIPOS-F186: 缺省且卡面 carried_from(撤换承继)且卡分支尚不存在 =
+            起点取承继记录 tip(carried_start_point 判定, 原卡分支 tip 不符 = 拒)。
 
     Returns:
-        {"ok": bool, "worktree_path": str, "branch": str, "message": str}
+        {"ok": bool, "worktree_path": str, "branch": str, "message": str[, "carried_from": {...}, "carried_line": str]}
     """
     import subprocess
 
@@ -3909,6 +3978,16 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
         )
         branch_exists = result.returncode == 0
 
+        # AIPOS-F186 件②: 撤换承继卡(卡面 carried_from)——卡分支尚不存在时从原卡分支记录 tip 建(而非 base_branch), 原卡分支不动;
+        # 原卡分支已不在 / 当前 tip ≠ 记录 / 卡面形不合 = 拒(门认领据此 BLOCK, 队列与记录零变更)。卡分支已存在 = 复用(认领时已承继)。
+        carried: dict[str, str] | None = None
+        if not branch_exists and not start_point:
+            carried, carry_refusal = carried_start_point(workspace_root, fm_for_mode)
+            if carry_refusal:
+                return {"ok": False, "worktree_path": "", "branch": branch_name, "message": carry_refusal}
+            if carried is not None:
+                start_point = carried["tip"]
+
         if branch_exists and start_point and result.stdout.strip() != start_point:
             # AIPOS-F123 件①: 卡分支已存在且 tip ≠ 绑定提交 = 绑定不唯一(不移动既有分支, 不覆盖产物)
             return {
@@ -3944,12 +4023,19 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
                 "message": f"Failed to create worktree: {result.stderr}",
             }
 
-        return {
+        built = {
             "ok": True,
             "worktree_path": str(worktree_path),
             "branch": branch_name,
             "message": f"Worktree created: {worktree_path}",
         }
+        if carried is not None:
+            from tools.aipos_cli.queue_mutation import supersede_carry_texts
+
+            built["carried_from"] = dict(carried)
+            built["carried_line"] = supersede_carry_texts()["claim_note"].format(**carried)
+            built["message"] += f"; {built['carried_line']}"
+        return built
     except (OSError, subprocess.SubprocessError) as exc:
         return {
             "ok": False,

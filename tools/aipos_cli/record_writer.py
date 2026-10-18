@@ -1436,6 +1436,7 @@ def build_closure_record_markdown(
     related_audit_task_refs: list[str] | None = None,
     warnings: list[str] | None = None,
     submitted_by: str | None = None,  # AIPOS-F73E 件②: 提交身份(驱动方), actor=认领实例
+    carried_from: dict[str, Any] | None = None,  # AIPOS-F186 件③: 撤换承继关系(卡面 carried_from; 无 = 不写)
 ) -> str:
     """Build a closure record markdown document (AIPOS-283/289).
 
@@ -1462,6 +1463,8 @@ def build_closure_record_markdown(
     }
     if related_audit_task_refs:
         metadata["related_audit_task_refs"] = related_audit_task_refs
+    if carried_from:
+        metadata["carried_from"] = {k: str(carried_from.get(k) or "") for k in ("task_id", "branch", "tip")}
     if warnings:
         metadata["warnings"] = warnings
     body = (
@@ -1477,6 +1480,10 @@ def build_closure_record_markdown(
         body += f"\n## Related Audit Tasks\n\n"
         for ref in related_audit_task_refs:
             body += f"- {ref}\n"
+    if carried_from:
+        cf = metadata["carried_from"]
+        body += (f"\n## Carried From (AIPOS-F186)\n\n"
+                 f"- 承继自 `{cf['task_id']}` 分支 `{cf['branch']}`@`{cf['tip']}`(撤换承继: 本卡分支从该 tip 建, 承继提交随本卡审计与合入)\n")
     if warnings:
         body += f"\n## Warnings\n\n"
         for warning in warnings:
@@ -1485,7 +1492,7 @@ def build_closure_record_markdown(
         "record_type", "event_type", "closure_id", "task_id", "task_path",
         "surface", "operation", "actor", "submitted_by", "closed_at", "closure_evidence_type",
         "closure_evidence_ref", "return_record_ref", "related_audit_task_refs",
-        "warnings",
+        "carried_from", "warnings",
     ])
 # ---------------------------------------------------------------------------
 # AIPOS-F64: 单一记录写入器 (唯一实现点)
