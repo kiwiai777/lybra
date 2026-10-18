@@ -2,7 +2,7 @@
 """AIPOS-276: Test suite for project-map anti-staleness machinery.
 
 S1: Old map (含 in_flight) 兼容读 + 新推导正确
-S2: 陈旧夹具触发 publish WARN 且入记录
+S2: (AIPOS-F189 件④ 退役删除: 测的是 AIPOS-F185 已退役的发布时 project-map 新鲜度告警, 永远失败; 退役说明见 tests/test_aipos_f185_small_sweep.py 件⑤)
 S3: 板面红标真机可见（把 updated 改旧实测）
 S4: 零回归
 """
@@ -113,43 +113,6 @@ milestones:
         print("✓ S1 PASS: Old map read with warning, in_flight ignored")
 
 
-def test_s2_stale_map_publish_warn():
-    """S2: 陈旧地图触发 publish WARN (updated 早于最近 return >3天)。"""
-    print("\n=== S2: Stale map publish warning ===")
-    
-    with tempfile.TemporaryDirectory() as tmpdir:
-        repo = Path(tmpdir)
-        (repo / "5_tasks" / "queue").mkdir(parents=True, exist_ok=True)
-        
-        # Write map with old updated date
-        old_date = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%d")
-        _write_map(repo, f"""---
-map_version: 1
-updated: {old_date}
-current: M1
-milestones: []
----
-# Map
-""")
-        
-        # Write a recent return record (3+ days after map update)
-        recent_date = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        _write_return_record(repo, "TEST-STALE", recent_date)
-        
-        # Create and try to publish a draft
-        draft_path = _write_draft(repo, "TEST-PUB")
-        result = publish_draft(repo, draft_path, dry_run=True)
-        
-        # Check for staleness warning
-        warnings = result.get("warnings", [])
-        stale_warn = any("PROJECT_MAP_STALE" in w or "地图更新于" in w for w in warnings)
-        
-        assert stale_warn, f"Expected PROJECT_MAP_STALE warning, got warnings: {warnings}"
-        assert result["verdict"] in ["WARN", "PASS"], f"Unexpected verdict: {result['verdict']}"
-        
-        print("✓ S2 PASS: Stale map triggers publish warning")
-
-
 def test_s3_no_map_graceful():
     """S3: 无地图 / 无 updated 字段优雅降级 (不 WARN 不红标)。"""
     print("\n=== S3: No map graceful degradation ===")
@@ -227,7 +190,6 @@ def main():
     
     try:
         test_s1_old_map_compat()
-        test_s2_stale_map_publish_warn()
         test_s3_no_map_graceful()
         test_s4_fresh_map_no_warn()
         
