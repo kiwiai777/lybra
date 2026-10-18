@@ -11,6 +11,8 @@
   - 写权限边界与全角色硬规矩: roles.schema write_boundary(write_boundary.build_write_boundary)
   - 门交互硬规矩: 项目 paths.hard_rules_source § 0.5(hard_rules_extractor)
   - 全量命令与时限: charter_render.runall_context(project.json test_contract); 长命令: run_long.charter_commands
+  - 时限措辞(AIPOS-F189 件②): 卡面 harness(loop_driver.card_harness)的单次工具时限 enums.schema harness.<值>.tool_timeout_seconds
+    (harness_tool_timeout 唯一读取口): 全量时限在其内 = 同步跑写设足秒数; 超限 = 一律 run-long; 未声明 = 不写秒数只教 run-long
   - 草稿目录: project.json paths.scratch_root(未声明 = 系统临时目录; 落治理根内 = 拒)
   - main 侧基线(AIPOS-F188 件②): 命令 = post_merge_regression.audit_baseline_command, 现状 = post_merge_regression.audit_baseline
     (三态 recorded / pending / self_run_required, 唯一判定; 开工稿只引用其结论, 措辞读 texts.baseline_state_<态>)
@@ -30,7 +32,8 @@ _PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
 TEXT_KEYS = ("ratchet_default", "runall_absent", "runall_absent_timeout", "lane_paths_absent", "repo_line_multi", "repo_line_single",
              "commands_rules_title", "commands_rules_absent", "scratch_source_declared", "scratch_source_default", "host_hint_alias",
              "host_hint_undeclared", "baseline_state_recorded", "baseline_state_pending", "baseline_state_self_run_required",
-             "baseline_state_unavailable")
+             "baseline_state_unavailable", "runall_timing_sync", "runall_timing_run_long", "runall_timing_undeclared",
+             "tool_timeout_source")
 ITEM_KEYS = ("boundary_line", "hard_rule_line", "commands_rule_line")
 REFUSAL_KEYS = ("KICKOFF_ROLE_MISMATCH", "KICKOFF_INSTANCE_MISSING", "KICKOFF_NOT_STARTABLE", "KICKOFF_CHARTER_REFUSED",
                 "KICKOFF_WORKTREE_UNRESOLVED", "KICKOFF_REPORT_UNRESOLVED", "KICKOFF_SCRATCH_IN_GOVERNANCE")
@@ -67,6 +70,40 @@ def kickoff_contract() -> dict[str, Any]:
     if problems:
         raise SchemaLoadError(f"verbs.schema.json verbs.{KICKOFF_VERB} 未声明齐: {sorted(set(problems))}")
     return contract
+
+
+def harness_tool_timeout(harness: str) -> int | None:
+    """AIPOS-F189 件②(gap #191): harness 单次工具调用时限(秒)= enums.schema harness.values[<harness>].tool_timeout_seconds(唯一读取口)。
+    未声明 = None(开工稿不写具体秒数, 只教 run-long); harness 不在值域 / 值非正整数 = 声明错误(SchemaLoadError, fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    decl = (load_schema("enums", code_repo_schema_root()).get("enums") or {}).get("harness")
+    values = decl.get("values") if isinstance(decl, dict) else None
+    if not isinstance(values, list):
+        raise SchemaLoadError("enums.schema.json enums.harness.values 未声明")
+    item = next((v for v in values if isinstance(v, dict) and str(v.get("value")) == harness), None)
+    if item is None:
+        raise SchemaLoadError(f"卡面 harness {harness!r} 不在 enums.schema harness 值域 {[v.get('value') for v in values if isinstance(v, dict)]}")
+    if "tool_timeout_seconds" not in item:
+        return None
+    value = item["tool_timeout_seconds"]
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise SchemaLoadError(f"enums.schema.json harness.{harness}.tool_timeout_seconds={value!r} 须为正整数(秒)")
+    return value
+
+
+def runall_timing(texts: dict[str, Any], harness: str, timeout_seconds: int, runall_timeout: str) -> tuple[str, str]:
+    """AIPOS-F189 件②: 开工稿全量时限句(措辞读 texts.runall_timing_<态>)。返回 (态, 句子); 态 ∈ sync / run_long / undeclared。
+    态判据唯一在此: 卡面 harness 声明了单次工具时限且全量时限(post_merge_regression.timeout_seconds)不超过它 = sync; 超过 = run_long; 未声明 = undeclared。"""
+    tool_timeout = harness_tool_timeout(harness)
+    source = str(texts["tool_timeout_source"]).format(harness=harness)
+    if tool_timeout is None:
+        state = "undeclared"
+    else:
+        state = "sync" if int(timeout_seconds) <= tool_timeout else "run_long"
+    sentence = str(texts[f"runall_timing_{state}"]).format(harness=harness, tool_timeout=tool_timeout, tool_timeout_source=source,
+                                                          runall_timeout=runall_timeout)
+    return state, sentence
 
 
 def _refuse(contract: dict[str, Any], refusal_code: str, **values: Any) -> KickoffRefused:
@@ -289,6 +326,15 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
     long_cmds = charter_commands(gov, task_id=task_id, cwd=str(worktree) if worktree is not None else None)
     report_path = Path(str(view["report_path"]))
     others = _other_project_roots(gov)
+    # AIPOS-F189 件②: 全量时限句按卡面 harness 的单次工具时限(审计卡 = 审计卡卡面 harness; 同 loop 拉起判据 card_harness)
+    from tools.aipos_cli.loop_driver import card_harness
+
+    harness = card_harness(fm)
+    if runall["runall"]:
+        timing_state, timing = runall_timing(texts, harness, int(test_contract["post_merge_regression"]["timeout_seconds"]),
+                                             runall["runall_timeout_seconds"])
+    else:
+        timing_state, timing = "absent", str(texts["runall_absent_timeout"])
     values: dict[str, Any] = {
         "project": project, "task_id": task_id, "title": str(fm.get("title") or task_id), "instance": instance,
         "role_label": labels[card_role], "reviewed_task_id": reviewed or None,
@@ -312,7 +358,7 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
         "commands_rule_lines": commands_rules,
         "scratch_dir": str(scratch), "scratch_source": scratch_source,
         "runall_command": runall["runall_command"] if runall["runall"] else str(texts["runall_absent"]),
-        "runall_timeout": runall["runall_timeout_seconds"] if runall["runall"] else str(texts["runall_absent_timeout"]),
+        "runall_timing": timing, "harness": harness,
         "run_long_start": long_cmds["run_long_start"], "run_long_wait": long_cmds["run_long_wait"],
         "ratchet": test_contract.get("ratchet") or str(texts["ratchet_default"]),
         "residual_pattern": test_contract.get("residual_processes"),
@@ -324,7 +370,7 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
             "values": {k: v for k, v in values.items() if v is not None},
             "sources": {"charter": charter["distribution_id"], "ratchet": test_contract.get("ratchet_source"),
                         "residual_processes": test_contract.get("residual_processes_source"), "scratch": scratch_source,
-                        "remote": remote, "baseline_status": baseline["status"]}}
+                        "remote": remote, "baseline_status": baseline["status"], "runall_timing": timing_state}}
 
 
 def run_kickoff_cli(args: Any) -> int:
