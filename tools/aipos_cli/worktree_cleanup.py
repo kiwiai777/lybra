@@ -99,23 +99,18 @@ def carry_referrers(governance_root: Path, decl: dict[str, Any] | None = None) -
     (形校验唯一 next_resolver.card_carried_from; 形不合的卡面不构成保护, 由认领时拒因暴露)。"""
     from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
     from tools.aipos_cli.next_resolver import card_carried_from
-    from tools.aipos_cli.task_loader import queue_root_for
+    from tools.aipos_cli.task_loader import iter_queue_task_paths
 
     decl = decl or cleanup_declaration()
     out: dict[str, str] = {}
-    root = queue_root_for(Path(governance_root))
-    for state in decl["carry_protect_states"]:
-        directory = root / state
-        if not directory.is_dir():
+    for path in iter_queue_task_paths(Path(governance_root), states=tuple(decl["carry_protect_states"])):  # 卡遍历唯一口
+        try:
+            fm, _body = require_frontmatter(path)
+            carried = card_carried_from(fm)
+        except (FrontmatterReadError, ValueError):
             continue
-        for path in sorted(directory.glob("*.md")):
-            try:
-                fm, _body = require_frontmatter(path)
-                carried = card_carried_from(fm)
-            except (FrontmatterReadError, ValueError):
-                continue
-            if carried:
-                out[carried["task_id"]] = str(fm.get("task_id") or path.stem)
+        if carried:
+            out[carried["task_id"]] = str(fm.get("task_id") or path.stem)
     return out
 
 

@@ -31,7 +31,6 @@ TEXT_KEYS = ("ratchet_default", "runall_absent", "runall_absent_timeout", "lane_
 ITEM_KEYS = ("boundary_line", "hard_rule_line", "commands_rule_line")
 REFUSAL_KEYS = ("KICKOFF_ROLE_MISMATCH", "KICKOFF_INSTANCE_MISSING", "KICKOFF_NOT_STARTABLE", "KICKOFF_CHARTER_REFUSED",
                 "KICKOFF_WORKTREE_UNRESOLVED", "KICKOFF_REPORT_UNRESOLVED", "KICKOFF_SCRATCH_IN_GOVERNANCE")
-ROLES = ("executor", "auditor")
 
 
 class KickoffRefused(ValueError):
@@ -50,14 +49,18 @@ def kickoff_contract() -> dict[str, Any]:
     contract = (load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get(KICKOFF_VERB)
     if not isinstance(contract, dict):
         raise SchemaLoadError(f"verbs.schema.json verbs.{KICKOFF_VERB} 未声明")
+    # 角色集 = 声明参数 role 的值域(唯一声明; 不在代码里另列角色元组)
+    roles = tuple(((((contract.get("parameters") or {}).get("properties") or {}).get("role") or {}).get("enum")) or ())
+    if not roles:
+        raise SchemaLoadError(f"verbs.schema.json verbs.{KICKOFF_VERB}.parameters.properties.role.enum 未声明")
     layout, texts = contract.get("layout") or {}, contract.get("texts") or {}
     items, refusals, labels = contract.get("item_templates") or {}, contract.get("refusals") or {}, contract.get("role_labels") or {}
-    problems = [f"layout.{r}" for r in ROLES if not isinstance(layout.get(r), list) or not layout[r]]
+    problems = [f"layout.{r}" for r in roles if not isinstance(layout.get(r), list) or not layout[r]]
     problems += [f"texts.{k}" for k in TEXT_KEYS if not isinstance(texts.get(k), str)]
-    problems += [f"texts.{k}" for r in ROLES for k in (layout.get(r) or []) if k and not isinstance(texts.get(k), str)]
+    problems += [f"texts.{k}" for r in roles for k in (layout.get(r) or []) if k and not isinstance(texts.get(k), str)]
     problems += [f"item_templates.{k}" for k in ITEM_KEYS if not isinstance(items.get(k), str)]
     problems += [f"refusals.{k}" for k in REFUSAL_KEYS if not isinstance(refusals.get(k), str)]
-    problems += [f"role_labels.{r}" for r in ROLES if not isinstance(labels.get(r), str)]
+    problems += [f"role_labels.{r}" for r in roles if not isinstance(labels.get(r), str)]
     if problems:
         raise SchemaLoadError(f"verbs.schema.json verbs.{KICKOFF_VERB} 未声明齐: {sorted(set(problems))}")
     return contract

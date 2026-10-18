@@ -321,6 +321,25 @@ def test_item1_chris_shape_multi_repo_codex_remote_kickoff(tmp_path, monkeypatch
     assert f"lybra project set-paths {CHRIS} --key scratch_root" in err
 
 
+def test_item1_governance_only_card_kickoff_without_worktree(tmp_path, monkeypatch):
+    """只写治理根的卡(task_mode 不写产品仓, 无 lane.repo; AIPOS-F178 判据)不建树: 开工稿给「不建卡工作树」一行与治理根报告落点,
+    无工作树 / 分支 / 基线行(占位为空 = 行省略), 其余各节照出。"""
+    from tools.aipos_cli.agent_profiles import load_agent_profiles
+    from tools.aipos_cli.queue_mutation import mutate_queue_task
+
+    r = _chris_rig(tmp_path, monkeypatch)
+    gov = r["gov"]
+    f78._card(gov, "HBX-G1", "pending", assigned=CHRIS_EXEC, task_mode="governance", extra={"project": CHRIS, "harness": "codex"})
+    claimed = mutate_queue_task(gov, "claim", task_id="HBX-G1", actor=CHRIS_EXEC, dry_run=False, profiles=load_agent_profiles(gov),
+                                with_records=True)
+    assert claimed.get("moved") and not claimed.get("worktree_created"), claimed
+    rc, brief, err = _cli("kickoff", "--task-id", "HBX-G1", "--workspace-root", str(gov))
+    _show(f"---- 件① 只写治理根的卡 kickoff exit {rc} ----\n{brief}")
+    assert rc == 0, err
+    assert "3. 本卡不建卡工作树 / 卡分支: 本卡只写治理根" in brief and "工作树(认领时已建)" not in brief and "产品仓:" not in brief
+    assert f"- 报告写到 `{gov / '5_tasks' / 'records' / 'returns' / 'HBX-G1' / 'RETURN.md'}`" in brief
+
+
 # ===========================================================================
 # 件③④: 撤回 / 撤换后清理、承继保留、存量批量(F184 rig)
 # ===========================================================================
