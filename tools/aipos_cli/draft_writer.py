@@ -1047,6 +1047,16 @@ def publish_draft(
         "frontmatter": metadata,
         "published_frontmatter": publish_metadata,
     }
+    # AIPOS-F188 件③: 同仓车道重叠提示(判定唯一实现 lane_overlap.lane_overlaps, loop 起跑同读)——只提示不拒, 不改 verdict;
+    # 读派生后的发布稿(lane 缺省已补)。提示进 Warnings 与发布记录 warnings, 结构化结果在 lane_overlap 字段。
+    if isinstance(task_id, str) and task_id:
+        from tools.aipos_cli.lane_overlap import lane_overlaps, render_lines
+
+        result["lane_overlap"] = lane_overlaps(repo_root, task_id, publish_metadata)
+        for line in render_lines(result["lane_overlap"]):
+            for bucket in (result["warnings"], result["validation"]["warnings"], validation["warnings"]):
+                if line not in bucket:
+                    bucket.append(line)
     if dry_run:
         result["wrote"] = False
         result["rendered_markdown"] = rendered_markdown

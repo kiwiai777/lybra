@@ -3191,12 +3191,16 @@ def build_parser() -> argparse.ArgumentParser:
     regression_subparsers = regression_parser.add_subparsers(dest="regression_command")
     regression_baseline_parser = regression_subparsers.add_parser(
         "baseline",
-        help="AIPOS-F149: 按 sha 取已记录的合并后回归失败集合(审计 main 侧基线复用)。结论 recorded = main 侧不必自跑; "
-        "self_run_required = 无该 sha 的记录或记录为超时/未完成/读不出, main 侧须自跑。被审分支一侧无论如何须自跑。"
+        help="AIPOS-F149 / F188: 按 sha 取已记录的合并后回归失败集合(执行体与审计体 main 侧基线复用)。结论 recorded = main 侧不必自跑; "
+        "pending = 该 sha 合并后回归在跑(先做卡, 交回前再查或 --wait 有界等待); "
+        "self_run_required = 无该 sha 的记录或记录为超时/未完成/读不出, main 侧须自跑。本卡 / 被审分支一侧无论如何须自跑。"
         "治理根用全局 `lybra --workspace-root <治理根> regression baseline`(缺省同其他命令的解析梯)",
     )
     regression_baseline_parser.add_argument("--sha", help="要查的提交(完整 40 位原样用; 短 sha/引用在产品仓解析); 缺省 = 产品仓基线分支当前 HEAD")
     regression_baseline_parser.add_argument("--repo-root", help="解析 sha 用的产品仓; 缺省 = project.json repos.default / code_repo")
+    # AIPOS-F188 件①: 三态之 pending(该 sha 合并后回归在跑)可有界等待; 到点仍在跑 = self_run_required(声明 verbs.schema lybra_regression_baseline.wait)
+    regression_baseline_parser.add_argument("--wait", type=float, metavar="<秒>",
+                                            help="AIPOS-F188: 结论为 pending(合并后回归在跑)时有界等待该秒数, 醒来重判; 到点仍在跑 = self_run_required")
     regression_baseline_parser.add_argument("--json", action="store_true", help="Output JSON")
     # AIPOS-F166 件③(gap #153): lybra regression run — 合并后回归状态与补跑(预演缺省, --confirm 执行; 声明 verbs.schema lybra_regression_run)
     regression_run_parser = regression_subparsers.add_parser(
@@ -4981,7 +4985,16 @@ def main(argv: list[str] | None = None) -> int:
         except (FileNotFoundError, ValueError, OSError, SchemaLoadError) as exc:  # 拒因原文 + 出口, 非 0 退出(fail-closed)
             print(f"Error: {exc}", file=sys.stderr)
             return 1
-        result = pmr_mod.audit_baseline(governance_root, commit)
+        if args.wait is not None:  # AIPOS-F188 件①: pending 有界等待(秒数越界 = ValueError, 非 0 退出)
+            try:
+                from tools.aipos_cli.loop_run_record import wait_regression_baseline
+
+                result = wait_regression_baseline(governance_root, commit, args.wait)
+            except (ValueError, OSError, SchemaLoadError) as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                return 1
+        else:
+            result = pmr_mod.audit_baseline(governance_root, commit)
         result["sha_source"] = sha_source
         print(render_json(result) if args.json else pmr_mod.render_audit_baseline(result))
         return 0

@@ -156,7 +156,11 @@
    (逾期 / 停滞 / 无卡覆盖 / 游离卡占比 / 反复返工 / 路线图近期被改), 按每条的建议命令补卡或回挂游离卡; 逾期 / 停滞 / 无卡覆盖会进 Owner 收件箱。
    **独占资源(AIPOS-F179)**: 执行 / 审计要用 iOS 模拟器、Android 模拟器这类同一时间只能一张卡用的资源时, 卡稿写 `"resources": ["ios-simulator"]`(或 `android-emulator`; 值域见 enums.schema exclusive_resource), loop 让同项目同资源的卡排队, `lybra loop status` 显示被谁占用, 占用者结束后自动继续。
    **验收产物与 Owner 抽查(AIPOS-F175)**: 标准的 verify 是 artifact / owner_check 时, 卡稿必须写 `"artifacts": [{"criterion": "<标准id>", "path_glob": "<文件名或 glob>", "kind": "screenshot|output|report"}]`(执行体把文件放进 `{{return_root}}/<卡ID>/artifacts/`, 没声明或文件不在 = 标准停在「未验证」); 需要 Owner 亲眼看的标准在 roadmap 写 `--verify owner_check` 并声明截图。标准进入「待 Owner 抽查」会进 Owner 收件箱(类别 owner_check), Owner 看完告诉你「符合 / 不符」后由你记录: `lybra --workspace-root {{governance_root}} roadmap verify --criterion <标准id> --result confirm|mismatch --relayed-by {{instance}} --owner-words <Owner 原话> [--note <哪里不对>]` 先预演再 `--confirm`(写 Owner 抽查记录 + 自动落账); 不符会自动起草修复卡(挂同一标准、引用抽查记录), 你预演 `lybra draft publish --path <草稿> --dry-run` 后发布。抽查结论不经 owner decide。
-6. **看板只读(AIPOS-F171)**:web 看板只展示, 不提供任何写操作(写接口一律 405「看板只读, 请经顾问」)。Owner 在看板上看到要处理的事,
+6. **并行出卡读产品提示(AIPOS-F188)**:同仓两张卡要不要串行不靠记忆纪律判断——`draft publish`(含 `--dry-run`)与 `lybra loop`
+   起跑(认领前)会检测本卡与在途卡(claimed, 含返工中)的车道重叠(同一 lane.repo、lane.paths 前缀相交), 有则输出「车道重叠」警告:
+   对方卡号、重叠路径、建议「等对方合入后再起跑」或「起跑但交回前先合入 main」; `lybra loop status` 同样显示。只提示不拒, 照建议排序即可。
+   项目可在 project.json `lane_overlap.exempt_path_prefixes` 声明不报的路径前缀(缺省 tests/、docs/, 理由见 config.schema 声明)。
+7. **看板只读(AIPOS-F171)**:web 看板只展示, 不提供任何写操作(写接口一律 405「看板只读, 请经顾问」)。Owner 在看板上看到要处理的事,
    会告诉你; 由你用 lybra 命令完成(核验 / 打回 / 出卡 / 发布 / 接入项目 / 改路线图)。
 
 ### 派工与监督

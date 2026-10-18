@@ -12,6 +12,8 @@
   - 门交互硬规矩: 项目 paths.hard_rules_source § 0.5(hard_rules_extractor)
   - 全量命令与时限: charter_render.runall_context(project.json test_contract); 长命令: run_long.charter_commands
   - 草稿目录: project.json paths.scratch_root(未声明 = 系统临时目录; 落治理根内 = 拒)
+  - main 侧基线(AIPOS-F188 件②): 命令 = post_merge_regression.audit_baseline_command, 现状 = post_merge_regression.audit_baseline
+    (三态 recorded / pending / self_run_required, 唯一判定; 开工稿只引用其结论, 措辞读 texts.baseline_state_<态>)
 只读: 不写文件、不连门、不起进程。
 """
 from __future__ import annotations
@@ -27,7 +29,8 @@ KICKOFF_VERB = "lybra_kickoff"
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
 TEXT_KEYS = ("ratchet_default", "runall_absent", "runall_absent_timeout", "lane_paths_absent", "repo_line_multi", "repo_line_single",
              "commands_rules_title", "commands_rules_absent", "scratch_source_declared", "scratch_source_default", "host_hint_alias",
-             "host_hint_undeclared")
+             "host_hint_undeclared", "baseline_state_recorded", "baseline_state_pending", "baseline_state_self_run_required",
+             "baseline_state_unavailable")
 ITEM_KEYS = ("boundary_line", "hard_rule_line", "commands_rule_line")
 REFUSAL_KEYS = ("KICKOFF_ROLE_MISMATCH", "KICKOFF_INSTANCE_MISSING", "KICKOFF_NOT_STARTABLE", "KICKOFF_CHARTER_REFUSED",
                 "KICKOFF_WORKTREE_UNRESOLVED", "KICKOFF_REPORT_UNRESOLVED", "KICKOFF_SCRATCH_IN_GOVERNANCE")
@@ -149,6 +152,34 @@ def _render(contract: dict[str, Any], role: str, values: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def baseline_state(governance_root: Path, code_repo: Path, contract: dict[str, Any], base: str) -> dict[str, str]:
+    """AIPOS-F188 件②: 开工稿验证节的 main 侧基线——命令(audit_baseline_command)与开工稿生成时的现状一行(三态, 唯一判定
+    post_merge_regression.audit_baseline, 本函数不另写判据)。sha = 卡仓基线分支当前 HEAD(resolve_audit_sha 同一解析)。
+    查询失败 = baseline_state_unavailable 措辞写明原文(不吞, 不猜成已记录)。返回 {baseline_command, baseline_sha, baseline_state, status}。"""
+    from tools.aipos_cli import post_merge_regression as pmr
+    from tools.schema_loader import SchemaLoadError
+
+    texts = contract["texts"]
+    command = pmr.audit_baseline_command(governance_root, code_repo)
+    try:
+        sha, _source = pmr.resolve_audit_sha(governance_root, None, code_repo)
+        result = pmr.audit_baseline(governance_root, sha)
+    except (ValueError, OSError, SchemaLoadError) as exc:
+        return {"baseline_command": command, "baseline_sha": "(不可解析)", "status": "unavailable",
+                "baseline_state": str(texts["baseline_state_unavailable"]).format(error=exc, base=base)}
+    status = str(result["status"])
+    if status == pmr.AUDIT_BASELINE_RECORDED:
+        line = str(texts["baseline_state_recorded"]).format(ref=result.get("ref"), failure_count=len(result.get("failures") or []), base=base)
+    elif status == pmr.AUDIT_BASELINE_PENDING:
+        pending = result.get("pending") or {}
+        line = str(texts["baseline_state_pending"]).format(
+            task_id=pending.get("task_id"), started_at=pending.get("started_at") or "(未记)", deadline=pending.get("deadline") or "(不可推算)",
+            timeout_seconds=pending.get("timeout_seconds") or "(未记)", base=base)
+    else:
+        line = str(texts["baseline_state_self_run_required"]).format(reason="; ".join(result.get("reasons") or []), base=base)
+    return {"baseline_command": command, "baseline_sha": sha, "baseline_state": line, "status": status}
+
+
 def _item_lines(template: str, rows: list[dict[str, Any]]) -> str | None:
     out = [_PLACEHOLDER_RE.sub(lambda m, row=row: str(row.get(m.group(1), "")), template) for row in rows]
     return "\n".join(out) if out else None
@@ -211,6 +242,7 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
     base = card_base_branch()
     worktree = Path(view["worktree_path"]) if needs_worktree else None
     code_repo = branch = base_sha = tip = repo_line = None
+    baseline: dict[str, Any] = {"baseline_command": None, "baseline_sha": None, "baseline_state": None, "status": None}
     if worktree is not None:
         from tools.aipos_cli.next_resolver import card_worktree_location
 
@@ -224,6 +256,7 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
         name = _repo_name(gov, Path(code_repo))
         repo_line = (texts["repo_line_multi"].format(repo_name=name, code_repo=code_repo) if name
                      else texts["repo_line_single"].format(code_repo=code_repo))
+        baseline = baseline_state(gov, Path(code_repo), contract, base)  # AIPOS-F188 件②
     reviewed_card = find_task_card(gov, reviewed)[0] if reviewed else None
     lane_fm = fm
     if reviewed_card is not None and not isinstance(fm.get("lane"), dict):
@@ -264,6 +297,8 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
         "worktree_path": str(worktree) if worktree is not None else None,
         "no_worktree_reason": None if worktree is not None else str(worktree_refusal.get("reason") or ""),
         "branch": branch, "base": base, "base_sha": base_sha, "tip": tip,
+        "baseline_command": baseline["baseline_command"], "baseline_sha": baseline["baseline_sha"],
+        "baseline_state": baseline["baseline_state"],
         "code_repo": str(code_repo) if code_repo else None, "repo_line": repo_line,
         "lane_paths": ", ".join(f"`{p}`" for p in lane_paths) if lane_paths else str(texts["lane_paths_absent"]),
         "carried_line": view.get("carried_line"),
@@ -289,7 +324,7 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
             "values": {k: v for k, v in values.items() if v is not None},
             "sources": {"charter": charter["distribution_id"], "ratchet": test_contract.get("ratchet_source"),
                         "residual_processes": test_contract.get("residual_processes_source"), "scratch": scratch_source,
-                        "remote": remote}}
+                        "remote": remote, "baseline_status": baseline["status"]}}
 
 
 def run_kickoff_cli(args: Any) -> int:

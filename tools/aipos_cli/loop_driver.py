@@ -1744,6 +1744,8 @@ def _drive(
             result.reason = "command_unparseable"
             return result
 
+        if action_type == "claim" and target_card == task_id:  # AIPOS-F188 件③: 起跑认领前提示同仓车道重叠(只提示不拒)
+            _lane_overlap_before_claim(index, task_id, governance_root, task_fm, say=say, recorder=recorder)
         recorder.step_started(index, "execute", node, state, target_card, action=action_type)
         say(f"[{index}] run {action_type} @ {node}/{state} ({target_card}): {command}")
         before = _landed_record(governance_root, action_type, target_card)
@@ -1819,6 +1821,25 @@ def _drive(
     result.outcome, result.exit_code, result.message = "wait_timeout", exit_code_for(contract, "wait_timeout"), msg
     result.reason = "max_steps_exhausted"
     return result
+
+
+def _lane_overlap_before_claim(index: int, card: str, governance_root: Path, task_fm: dict[str, Any] | None, *,
+                               say: Callable[[str], None], recorder: LoopRunRecorder) -> None:
+    """AIPOS-F188 件③: loop 起跑(本卡认领步执行前)的同仓车道重叠提示——判定唯一实现 lane_overlap.lane_overlaps(发卡同读),
+    每条一行 `[轮] lane_overlap: …`(即日志), 有重叠写运行记录 lane_overlaps(loop status 显示)。只提示不拒, 不改推进。"""
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.lane_overlap import lane_overlaps, render_lines
+    from tools.aipos_cli.task_loader import find_task_card
+
+    fm = dict(task_fm or {})
+    if not fm:
+        path, _state = find_task_card(governance_root, card)
+        fm = dict(require_frontmatter(path)[0]) if path is not None else {}
+    result = lane_overlaps(governance_root, card, fm)
+    for line in render_lines(result):
+        say(f"[{index}] lane_overlap: {line}")
+    if result["overlaps"]:
+        recorder.record_lane_overlaps(card, result["overlaps"])
 
 
 def report_fix_declaration(contract: dict[str, Any]) -> dict[str, Any]:

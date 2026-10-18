@@ -622,6 +622,23 @@
           "reject_codes": {
             "GRANT_REQUEST_INVALID": "grant_request 段形不合(非对象 / 未知键 / max_tasks 与 days 须为 ≥1 的 JSON 整数)"
           }
+        },
+        "lane_overlap": {
+          "type": "object",
+          "required": false,
+          "description": "AIPOS-F188 件③: 同仓车道重叠提示的项目声明(提示判定唯一实现 lane_overlap.lane_overlaps; 提示文案 / 在途状态 / 出现处声明 verbs.schema lane_overlap)。发卡(draft publish, 含 --dry-run)与 loop 起跑(认领前)时本卡与在途卡同一 lane.repo 且 lane.paths 前缀相交 = 警告(只提示不拒, Owner 10-16 定)。本段只声明豁免: 重叠路径落在 exempt_path_prefixes 任一前缀下 = 不报。缺段 / 缺键 = default(tests/ 与 docs/ 豁免, 行为 = 缺省提示); 未知键 / 值形不合 = LANE_OVERLAP_INVALID(提示不出、原文点名, 不猜成缺省; 不影响发卡与起跑)。唯一读取口 workspace_config.lane_overlap_exemptions; 写入 = 编辑 project.json 本段(无专用写命令)。",
+          "schema": {
+            "exempt_path_prefixes": {
+              "type": "array",
+              "items": "非空单行字符串(相对产品仓根的路径前缀; 不以 / 开头、不含 ..)",
+              "default": ["tests/", "docs/"],
+              "default_reason": "测试与文档几乎每张卡都会同改(新增测试文件按 test_file_globs 命名即被发现, 文档按节追加), 合并冲突少且易解; 不豁免 = 同仓每对在途卡都报, 噪音淹没真正的代码段重叠(如 10-16 F167/F168/F169 同改命令注册段)。项目要看测试 / 文档重叠就把本键声明为 [](空表 = 不豁免)。",
+              "description": "重叠路径落在任一前缀下 = 不报(前缀按路径段比较: tests/ 豁免 tests/x.py, 不豁免 tests_extra/)"
+            }
+          },
+          "reject_codes": {
+            "LANE_OVERLAP_INVALID": "lane_overlap 段形不合(非对象 / 未知键 / exempt_path_prefixes 须为非空单行相对路径字符串的列表, 不以 / 开头、不含 ..)"
+          }
         }
       }
     }

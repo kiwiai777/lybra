@@ -2350,6 +2350,42 @@ def project_grant_defaults(governance_root: str | Path, *, project: dict[str, An
     return declared_numeric_section(governance_root, "grant_request", "GRANT_REQUEST_INVALID", GrantRequestDefaultsError, project=project)
 
 
+class LaneOverlapDeclarationError(ValueError):
+    """AIPOS-F188: project.json lane_overlap 段不合声明(LANE_OVERLAP_INVALID; 提示不出、原文点名, 不猜成缺省)。"""
+
+
+def lane_overlap_exemptions(governance_root: str | Path, *, project: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F188 件③: 车道重叠提示的豁免路径前缀(唯一读取口; 声明 config.schema project_json.schema.lane_overlap)。
+    返回 {exempt_path_prefixes: [...], source: "project.json" | "default"}。缺段 / 缺键 = 声明 default; 未知键 / 值形不合 =
+    LaneOverlapDeclarationError(点名); 声明缺 = SchemaLoadError(fail-closed); project.json 读不出 = 原异常上抛。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (((load_schema("config").get("configuration_sources") or {}).get("project_json") or {}).get("schema") or {}).get("lane_overlap")
+    keys = (decl or {}).get("schema") if isinstance(decl, dict) else None
+    spec = (keys or {}).get("exempt_path_prefixes") if isinstance(keys, dict) else None
+    why = str(((decl or {}).get("reject_codes") or {}).get("LANE_OVERLAP_INVALID") or "").strip() if isinstance(decl, dict) else ""
+    default = spec.get("default") if isinstance(spec, dict) else None
+    if not why or not isinstance(default, list) or not all(isinstance(p, str) and p.strip() for p in default):
+        raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.lane_overlap"
+                              "(schema.exempt_path_prefixes.default 字符串列表 / reject_codes.LANE_OVERLAP_INVALID)未声明齐")
+    data = project if project is not None else read_project_json(governance_root)
+    raw = data.get("lane_overlap") if isinstance(data, dict) else None
+    if raw is None:
+        return {"exempt_path_prefixes": list(default), "source": "default"}
+    if not isinstance(raw, dict):
+        raise LaneOverlapDeclarationError(f"LANE_OVERLAP_INVALID: project.json lane_overlap={raw!r}: {why}")
+    unknown = sorted(set(raw) - set(keys))
+    value = raw.get("exempt_path_prefixes")
+    if value is None and not unknown:
+        return {"exempt_path_prefixes": list(default), "source": "default"}
+    bad = value is not None and (not isinstance(value, list)
+           or any(not isinstance(p, str) or not p.strip() or "\n" in p or p.startswith("/") or ".." in Path(p).parts for p in value))
+    if unknown or bad:
+        problems = [f"未知键 {k!r}(允许 {sorted(keys)})" for k in unknown] + ([f"exempt_path_prefixes={value!r}"] if bad else [])
+        raise LaneOverlapDeclarationError(f"LANE_OVERLAP_INVALID: project.json lane_overlap: {'; '.join(problems)}({why})")
+    return {"exempt_path_prefixes": [p.strip() for p in value], "source": "project.json"}
+
+
 def declared_numeric_section(governance_root: str | Path, section: str, reject_code: str, error_cls: type[ValueError], *,
                              project: dict[str, Any] | None = None) -> dict[str, Any]:
     """project.json 数值键段的唯一读取实现(AIPOS-F173 roadmap_drift 原实现收口; AIPOS-F180 grant_request 同用)。键与缺省 =
