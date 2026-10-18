@@ -175,7 +175,18 @@ def _lybra_args(step: dict) -> list:
     return [_parse_lybra(seg[1:], "step") for _, l in _iter_command_lines({"steps": [step]}) for seg in _segments(l) if seg[0] == "lybra"]
 
 
-def test_item3_guide_codex_vs_claude_code_default():
+@pytest.fixture
+def frozen_guide_clock(monkeypatch: pytest.MonkeyPatch):
+    """AIPOS-F189 件①(gap #166): 向导的信封 `--expires-at` = 当前时刻 + envelope_days(秒精度), 同一测试里多次生成再逐字比较
+    会在跨秒边界时偶发不一致。冻结被测代码既有的时钟入口(onboarding 模块引用的 clock.utc_now)于一次取值, 不另造时间源。"""
+    import tools.aipos_cli.onboarding as onboarding
+
+    moment = onboarding.utc_now()
+    monkeypatch.setattr(onboarding, "utc_now", lambda: moment)
+    return moment
+
+
+def test_item3_guide_codex_vs_claude_code_default(frozen_guide_clock):
     cc = generate_onboarding_guide(**BASE, advisor_dir="/tmp/f129-session")
     cc_explicit = generate_onboarding_guide(**BASE, advisor_dir="/tmp/f129-session", advisor_harness="claude-code")
     cx = generate_onboarding_guide(**BASE, advisor_harness="codex", advisor_host="mac-probe.local")
