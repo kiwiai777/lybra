@@ -163,8 +163,10 @@ independent pi auditor workstation (AIPOS-F143).
    with `/go`; a sub-agent is handed the card path by the advisor, reads the card, writes its report and stops). Identity
    comes from the land event (role / mode / harness, `enrollment.instance_enrollment`); nothing is written for the sub-agent.
    While `lybra loop` waits for the sub-agent's report it does not try to start anything, and prints the declared hint
-   (`schema/verbs.schema.json` `lybra_loop.launch.manual_hint.subagent`): hand the card to a sub-agent, with the card
-   material from `lybra my-tasks --actor <instance> --task-id <card>`. `lybra project check-workstation` and
+   (`schema/verbs.schema.json` `lybra_loop.launch.manual_hint.subagent`): hand the card to a sub-agent, with the kickoff
+   brief printed by `lybra kickoff --task-id <card>` (AIPOS-F187: identity, charter command, work tree / branch / base sha,
+   report location and required frontmatter, no-write list, verification requirements; the advisor may append card-specific
+   notes after it). `lybra my-tasks --actor <instance> --task-id <card>` still gives the raw card material. `lybra project check-workstation` and
    `my-tasks --workstation` / `--remote-workstation` point a sub-agent instance to the same command instead.
 5. **Launched pi cannot escalate privileges (AIPOS-F165).** Every pi that `lybra loop` starts (executor or auditor) runs with
    the kernel `no_new_privs` flag set just before exec, so `sudo` and other setuid programs cannot gain root. It is on by

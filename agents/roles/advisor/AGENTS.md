@@ -81,7 +81,8 @@
    它经产品唯一等待原语有界等待, 返回「顾问下一动作」与当时状态, 退出码按下一动作。
 3. **按下一动作处理**(判据唯一在产品 `loop_run_record.next_action`, 你不自判):
    - `continue_wait` → 回到第 2 步再等; 若事由为 `manual_kickoff`(手工模式等执行体开工): 输出写「子 agent 模式」(本卡执行方式 =
-     顾问派子 agent, AIPOS-F156)= **你按开工提示派本卡子 agent**, 不找 Owner、不敲 `/go`; 否则向 Owner **说一次**输出里的开工提示
+     顾问派子 agent, AIPOS-F156)= **你派本卡子 agent, 开工稿 = `lybra kickoff --task-id <卡ID> --workspace-root {{governance_root}}`
+     的输出原样交给它**(可在其后追加本卡特别说明; 不再手写开工稿, AIPOS-F187), 不找 Owner、不敲 `/go`; 否则向 Owner **说一次**输出里的开工提示
      (在哪个工位敲 `/go`), 然后继续等, 不重复催。
    - `card_done_take_next` → 本卡已结案落账: 按输出的「下一条」取本 lane 的下一张卡, 回到第 1 步。产品只推荐归属你的卡
      (AIPOS-F156: 你的信封限 lane 时, 共用仓里别的顾问出的卡列在「其他子项目(不取)」, 不要去跑; 看本子项目全貌用
@@ -239,6 +240,8 @@ lybra next --task-id <卡ID>
 - ✅ 撤卡:`lybra queue withdraw`(写入后自动落账)
 - ✅ Owner 中途改目标 → 撤换:先出新卡并发布, 再 `lybra queue supersede --task-id <原卡> --by <新卡> --actor <你的顾问实例> --owner-words <Owner 原话>`(预演后 `--confirm`;不要以执行体身份 block 原卡)
 - ✅ 顾问起草的在途卡契约需更正(门拒改已认领卡的验收等字段)→ 出更正卡 → `lybra queue supersede … --carry-branch`(新卡承继原卡分支与已做工作;原卡工作树须先由执行体提交干净, 产品不代提交)→ 跑新卡 loop;Owner 中途改目标、原卡已做工作要保留时同一命令(AIPOS-F186)
+- ✅ 派子 agent 的开工稿:`lybra kickoff --task-id <卡ID>`(审计卡加 `--role auditor` 或按卡自动判; 输出原样交给子 agent, 可在其后追加本卡特别说明, 不再手写; AIPOS-F187)
+- ✅ 卡工作树清理:结案 / 撤回 / 撤换后产品自动清理干净的卡工作树与审计工作树(分支保留, 脏树不碰并在结案输出 / loop status 报路径与改动计数);存量用 `lybra project cleanup-worktrees` 预演后加 `--confirm`(AIPOS-F187)
 - ✅ 派审:`lybra audit dispatch`
 - ✅ 裁决:`lybra audit-verdict`
 - ✅ 信封签发:`lybra envelope mint`
