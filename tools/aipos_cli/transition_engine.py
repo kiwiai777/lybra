@@ -167,7 +167,24 @@ def apply_transition_metadata(
         if updated.get("active_session_id") not in (None, ""):
             updated["last_session_id"] = updated.get("active_session_id")
         updated.pop("active_session_id", None)
-    
+
+    elif transition_name == "supersede":
+        # AIPOS-F184 件③: 撤换 = withdraw 的带 superseded_by 变体(终态 withdrawn; 声明 transitions.schema
+        # queue_mutations.transitions.supersede, 卡面键 = 其 card_fields)
+        updated = apply_transition_metadata(metadata=metadata, transition_name="withdraw", actor=actor, timestamp=timestamp,
+                                            schema=schema, repo_root=repo_root, reason=extra_fields.get("reason"))
+        if not extra_fields.get("reason"):
+            updated.pop("withdrawal_reason", None)
+        updated["superseded_by"] = str(extra_fields["superseded_by"])
+        updated["superseded_at"] = timestamp
+        updated["superseded_owner_words"] = str(extra_fields["owner_words"])
+        if extra_fields.get("owner_ref"):
+            updated["superseded_owner_ref"] = str(extra_fields["owner_ref"])
+        if extra_fields.get("decision_id"):
+            updated["superseded_decision_id"] = str(extra_fields["decision_id"])
+        # 撤换后不再待 Owner(收件箱该卡事项随卡进 withdrawn 消失; 卡面同步清门控标志)
+        updated["needs_owner"] = False
+
     else:
         raise ValueError(f"Unsupported transition: {transition_name}")
     

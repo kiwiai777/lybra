@@ -1620,18 +1620,19 @@ def _default_actor() -> str:
 
 
 def _land_project_writes(project_root: str | Path, written: list[str | Path], *, actor: str, subcommand: str,
-                         project: str) -> dict[str, Any]:
+                         project: str, command: str = "project_writers", **fields: Any) -> dict[str, Any]:
     """AIPOS-F159 件①(gap #144): project 族写命令 --confirm 后的落账薄壳——复用 F158 写后落账唯一实现
     governance_commit.land_written_paths(N6 同一提交口, 声明 verbs.lybra_governance_commit.post_write_landing.commands.project_writers),
     不另写 git 逻辑。written = 本次写出的文件(绝对或治理根相对), 换算为治理根相对路径作 --paths 白名单。
-    落账声明不可读 = 不落账(fail-closed), 写入已生效: 拒因出声, exit 1(与 envelope mint 同一处置)。返回 land_written_paths 的结果(含 line)。"""
+    落账声明不可读 = 不落账(fail-closed), 写入已生效: 拒因出声, exit 1(与 envelope mint 同一处置)。返回 land_written_paths 的结果(含 line)。
+    AIPOS-F184 件②: command = post_write_landing.commands 的键(缺省 project_writers; 队列写命令 = queue_writers, fields 带 task_id)。"""
     from tools.aipos_cli.governance_commit import land_written_paths
     from tools.schema_loader import SchemaLoadError
 
     root = Path(project_root).resolve()
     rels = sorted({(Path(p).resolve().relative_to(root) if Path(p).is_absolute() else Path(p)).as_posix() for p in written})
     try:
-        return land_written_paths(root, rels, actor, command="project_writers", subcommand=subcommand, project=project)
+        return land_written_paths(root, rels, actor, command=command, subcommand=subcommand, project=project, **fields)
     except SchemaLoadError as exc:
         return {"landed": False, "exit_code": 1, "reason": str(exc), "paths": rels,
                 "line": f"⚠ 落账未完成(写入已生效, 勿重复执行写命令): {exc}"}
@@ -1640,6 +1641,36 @@ def _land_project_writes(project_root: str | Path, written: list[str | Path], *,
 def _landing_view(landing: dict[str, Any] | None) -> dict[str, Any] | None:
     """落账结果的 JSON 视图(去掉供文本输出的 line)。"""
     return None if landing is None else {k: v for k, v in landing.items() if k != "line"}
+
+
+def _queue_write_paths(result: dict[str, Any]) -> list[str]:
+    """AIPOS-F184 件②: 队列写命令本次写出的文件(治理根相对): 卡文件迁移前后路径 + 新增 / 更新的记录(record_writes / record_updates
+    中 wrote / updated 者)。只认已写入(moved / wrote)的结果; 未写入 = []。"""
+    data = result.get("data") if isinstance(result.get("data"), dict) else result
+    if not (data.get("moved") or data.get("wrote")):
+        return []
+    paths = [str(data[k]) for k in ("source_path", "target_path") if data.get(k)]
+    for item in list(result.get("record_writes") or []) + list(result.get("record_updates") or []):
+        if isinstance(item, dict) and item.get("path") and (item.get("wrote") or item.get("updated")):
+            paths.append(str(item["path"]))
+    return paths
+
+
+def _land_queue_write(repo_root: Path, written: list[str], *, actor: str, subcommand: str, task_id: str) -> dict[str, Any] | None:
+    """AIPOS-F184 件②: queue block / reopen / withdraw / supersede 写入成功后的落账(同一薄壳 _land_project_writes → land_written_paths,
+    声明 verbs.lybra_governance_commit.post_write_landing.commands.queue_writers)。无写出 = None(不落)。落账失败不回滚队列状态。"""
+    if not written:
+        return None
+    return _land_project_writes(repo_root, written, actor=actor, subcommand=subcommand, project=Path(repo_root).resolve().name,
+                                command="queue_writers", task_id=task_id)
+
+
+def _emit_landing(landing: dict[str, Any] | None) -> int:
+    """落账结果行输出(成功 stdout / 未完成 stderr)并给退出码: 无落账 / 成功 = 0, 未完成 = 声明 landing_failed_exit_code。"""
+    if landing is None:
+        return 0
+    print(landing["line"], file=sys.stdout if landing["landed"] else sys.stderr)
+    return 0 if landing["landed"] else int(landing["exit_code"])
 
 
 def _project_json_two_phase_emit(command: str, target: dict[str, Any], outcome: dict[str, Any], *, actor: str, json_out: bool,
@@ -2056,6 +2087,19 @@ def build_parser() -> argparse.ArgumentParser:
     queue_withdraw_parser.add_argument("--reason", required=True, help="Reason for withdrawal")
     queue_withdraw_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     queue_withdraw_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    # AIPOS-F184 件③: Owner 中途改目标 → 顾问凭 Owner 原话撤换在途卡(声明 transitions queue_mutations.transitions.supersede /
+    # verbs.lybra_queue_supersede; 唯一实现 board_adapter.supersede_task)
+    queue_supersede_parser = queue_subparsers.add_parser("supersede", help="AIPOS-F184: Owner changed the goal of an in-flight card — the advisor supersedes it with a new card on the Owner's words (pending/claimed/blocked → withdrawn with superseded_by; Owner decision record written; preview by default, --confirm writes and lands)")
+    queue_supersede_parser.add_argument("--task-id", required=True, help="Card being superseded (pending / claimed / blocked)")
+    queue_supersede_parser.add_argument("--by", required=True, help="New card task_id that takes over (must already be in the queue, not withdrawn)")
+    queue_supersede_parser.add_argument("--actor", required=True, help="Advisor instance performing the supersede (recorded as the relayer)")
+    queue_supersede_parser.add_argument("--owner-words", required=True, help="Owner's words, one line (card face + decision record rationale)")
+    queue_supersede_parser.add_argument("--owner-ref", default=None, help="Optional: where the Owner ruled (inbox item id / decision record id / session ref)")
+    queue_supersede_mode = queue_supersede_parser.add_mutually_exclusive_group()
+    queue_supersede_mode.add_argument("--dry-run", action="store_true", help="Preview, zero writes (default)")
+    queue_supersede_mode.add_argument("--confirm", action="store_true", help="Write the decision record, move the card, land the writes")
+    queue_supersede_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     queue_return_repair_parser = queue_subparsers.add_parser("return-repair", help="Repair a stuck return")
     queue_return_repair_parser.add_argument("--task-id", required=True, help="Task ID with stuck return")
@@ -5855,11 +5899,20 @@ def main(argv: list[str] | None = None) -> int:
         except (FileNotFoundError, OSError, ValueError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
+        # AIPOS-F184 件②(gap #165): block / reopen 写入成功后即按路径清单落账(queue_writers; claim 由门 / N6 落账, 不在此)
+        landing = None
+        if args.queue_command in {"block", "reopen"} and not args.dry_run and result.get("verdict") != Verdict.BLOCK:
+            landing = _land_queue_write(repo_root, _queue_write_paths(result), actor=args.actor, subcommand=args.queue_command,
+                                        task_id=str(result.get("task_id") or getattr(args, "task_id", None) or ""))
+            if landing is not None:
+                result["landing"] = _landing_view(landing)
         if args.json:
             print(render_json(result))
         else:
             print(render_queue_mutation_text(result))
-        return 1 if result.get("verdict") == Verdict.BLOCK else 0
+        if result.get("verdict") == Verdict.BLOCK:
+            return 1
+        return _emit_landing(landing) if not args.json else (0 if landing is None or landing["landed"] else int(landing["exit_code"]))
 
     if args.command == "queue" and getattr(args, "queue_command", None) == "amend":
         from tools.aipos_cli.board_adapter import amend_task
@@ -5909,11 +5962,51 @@ def main(argv: list[str] | None = None) -> int:
         except (FileNotFoundError, OSError, ValueError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
+        # AIPOS-F184 件②(gap #165): 撤回写入成功后即按路径清单落账(源路径删除 + withdrawn 新卡面)
+        landing = None
+        if not args.dry_run and result.get("ok") and result.get("verdict") != Verdict.BLOCK:
+            landing = _land_queue_write(repo_root, _queue_write_paths(result), actor=args.actor, subcommand="withdraw",
+                                        task_id=str((result.get("data") or {}).get("task_id") or args.task_id))
+            if landing is not None:
+                result["landing"] = _landing_view(landing)
+        print(render_json(result))
+        if result.get("verdict") == Verdict.BLOCK:
+            return 1
+        if landing is not None and not args.json:
+            return _emit_landing(landing)
+        return 0 if landing is None or landing["landed"] else int(landing["exit_code"])
+
+    if args.command == "queue" and getattr(args, "queue_command", None) == "supersede":
+        # AIPOS-F184 件③: 顾问凭 Owner 裁决撤换在途卡(唯一实现 board_adapter.supersede_task; 写出文件经 queue_writers 落账)
+        from tools.aipos_cli.board_adapter import supersede_task
+
+        try:
+            result = supersede_task(args.task_id, by=args.by, actor=args.actor, owner_words=args.owner_words,
+                                    owner_ref=args.owner_ref, dry_run=not args.confirm, repo_root=repo_root)
+        except (FileNotFoundError, OSError, ValueError, LookupError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        landing = None
+        if args.confirm and result.get("written"):
+            landing = _land_queue_write(repo_root, result["written"], actor=args.actor, subcommand="supersede", task_id=result["task_id"])
+            result["landing"] = _landing_view(landing)
         if args.json:
             print(render_json(result))
         else:
-            print(render_json(result))
-        return 1 if result.get("verdict") == Verdict.BLOCK else 0
+            print(result["line"])
+            for warning in result.get("warnings") or []:
+                print(f"  ! {warning}")
+            if result.get("decision", {}).get("target_path") and not args.confirm:
+                print(f"  决策记录将写: {result['decision']['target_path']}")
+            if args.confirm and result.get("ok"):
+                print("  Owner 收件箱该卡的待决事项随卡进 withdrawn 自动消失")
+        if not result.get("ok"):
+            if landing is not None and not args.json:
+                _emit_landing(landing)
+            return 1
+        if landing is not None and not args.json:
+            return _emit_landing(landing)
+        return 0 if landing is None or landing["landed"] else int(landing["exit_code"])
 
     if args.command == "queue" and getattr(args, "queue_command", None) == "return-repair":
         # AIPOS-370F2: return-repair — diagnose and repair stuck return

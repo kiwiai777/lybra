@@ -7972,6 +7972,88 @@ def withdraw_task(
         return _normalize_exception("queue_withdraw", exc, dry_run=dry_run, actor=_actor_payload(actor))
 
 
+def supersede_task(
+    task_id: str,
+    *,
+    by: str,
+    actor: str,
+    owner_words: str | None,
+    owner_ref: str | None = None,
+    dry_run: bool = True,
+    repo_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """AIPOS-F184 件③(gap #186): 顾问凭 Owner 裁决撤换在途卡(lybra queue supersede 唯一实现)。
+
+    预演(dry_run=True, 零写入): 搬卡预演(queue_mutation.mutate_queue_task supersede: 角色类 / 新卡 / 原话前置 + 卡面校验)+
+    决策记录预演(record_owner_decision, payload = owner_inbox.supersede_decision_payload, 与 owner decide 同一构造)。
+    确认: 先 execute_dry_run 落 owner_decision_record(含 decision_log 自动指针), 再搬卡(卡面记 superseded_* 与决策 id);
+    搬卡被拒 = 决策记录照落(written 照列, 调用方照落账)。不落账(写出文件 written 由 CLI 经 queue_writers 落账)。
+    返回 {ok, verdict, stage, task_id, by, from_state, decision_id, card, decision, blocking_reasons, warnings, written, line}。"""
+    from tools.aipos_cli.controlled_execute import OWNER_CONFIRMATION_TOKEN
+    from tools.aipos_cli.owner_inbox import supersede_decision_payload
+    from tools.aipos_cli.queue_mutation import supersede_texts
+
+    texts = supersede_texts()
+    root = _resolve_repo_root(repo_root)
+    actor_text = str(actor or "").strip()
+    words = str(owner_words or "").strip()  # 内含换行 = supersede_problems 拒(单行)
+    report: dict[str, Any] = {"ok": False, "verdict": Verdict.BLOCK, "stage": "preview" if dry_run else "confirm", "task_id": task_id,
+                              "by": str(by or "").strip(), "actor": actor_text, "owner_words": words, "owner_ref": owner_ref,
+                              "from_state": None, "decision_id": None, "card": None, "decision": None, "blocking_reasons": [],
+                              "warnings": [], "written": [], "line": ""}
+    profiles = load_agent_profiles(root)
+    task = _select_task(root, task_id=task_id, path=None)
+    report["task_id"] = str(task.get("task_id") or task_id)
+    report["from_state"] = str(task.get("queue_state") or "")
+    supersede = {"superseded_by": report["by"], "owner_words": words, "owner_ref": str(owner_ref or "").strip() or None}
+    reason = texts["reason_template"].format(by=report["by"], actor=actor_text, owner_words=words)
+    card_preview = mutate_queue_task(root, "supersede", task_id=report["task_id"], actor=actor_text, reason=reason, dry_run=True,
+                                     profiles=profiles, supersede=supersede)
+    report["card"] = {k: card_preview.get(k) for k in ("verdict", "source_path", "target_path", "from_state", "to_state",
+                                                       "blocking_reasons", "warnings")}
+    report["blocking_reasons"].extend(card_preview.get("blocking_reasons") or [])
+    meta = task.get("metadata") or {}
+    if meta.get("active_worktree_path") or meta.get("active_worktree_branch"):
+        report["warnings"].append(texts["worktree_note"].format(path=meta.get("active_worktree_path") or "-",
+                                                                branch=meta.get("active_worktree_branch") or "-"))
+    payload = supersede_decision_payload(root, task_id=report["task_id"], by=report["by"], relayed_by=actor_text, owner_words=words,
+                                         owner_ref=supersede["owner_ref"], from_state=report["from_state"], decided_at=iso_z())
+    report["decision_id"] = payload["decision_id"]
+    dry = record_owner_decision(payload, dry_run=True, repo_root=root, actor="owner")
+    report["decision"] = {k: dry.get(k) for k in ("ok", "verdict", "blocking_reasons", "warnings", "planned_writes")}
+    report["decision"]["target_path"] = (dry.get("data") or {}).get("target_path")
+    if dry.get("verdict") == Verdict.BLOCK or not dry.get("ok") or not dry.get("dry_run_token"):
+        report["blocking_reasons"].extend(f"决策记录预演被拒: {r}" for r in (dry.get("blocking_reasons") or [])
+                                          or [json.dumps(dry.get("errors") or dry.get("message"), ensure_ascii=False)[:400]])
+    fill = {"task_id": report["task_id"], "from_state": report["from_state"], "by": report["by"], "decision_id": report["decision_id"]}
+    if report["blocking_reasons"]:
+        report["line"] = texts["blocked_line"].format(reasons="; ".join(report["blocking_reasons"]))
+        return report
+    if dry_run:
+        report.update({"ok": True, "verdict": card_preview.get("verdict") or Verdict.PASS, "line": texts["preview_line"].format(**fill)})
+        return report
+    done = execute_dry_run(str(dry["dry_run_token"]), "owner", owner_confirmation_token=OWNER_CONFIRMATION_TOKEN, repo_root=root)
+    report["decision"] = {k: done.get(k) for k in ("ok", "verdict", "blocking_reasons", "warnings", "performed_writes", "errors")}
+    written = [str(w.get("path")) for w in (done.get("performed_writes") or []) if isinstance(w, dict) and w.get("path")]
+    report["written"] = list(written)
+    if not done.get("ok") or not written:
+        report["blocking_reasons"].append("决策记录写入失败(零搬卡): "
+                                          + json.dumps(done.get("errors") or done.get("blocking_reasons"), ensure_ascii=False)[:400])
+        report["line"] = texts["blocked_line"].format(reasons="; ".join(report["blocking_reasons"]))
+        return report
+    moved = mutate_queue_task(root, "supersede", task_id=report["task_id"], actor=actor_text, reason=reason, dry_run=False,
+                              profiles=profiles, supersede={**supersede, "decision_id": report["decision_id"]})
+    report["card"] = {k: moved.get(k) for k in ("verdict", "source_path", "target_path", "from_state", "to_state", "blocking_reasons",
+                                                "warnings", "moved", "wrote")}
+    if not moved.get("moved"):
+        report["blocking_reasons"].extend(f"决策记录已落, 搬卡被拒: {r}" for r in (moved.get("blocking_reasons") or ["(无拒因原文)"]))
+        report["line"] = texts["blocked_line"].format(reasons="; ".join(report["blocking_reasons"]))
+        return report
+    report["written"] += [str(moved["source_path"]), str(moved["target_path"])]
+    report.update({"ok": True, "verdict": Verdict.PASS, "line": texts["done_line"].format(**fill)})
+    return report
+
+
 def restricted_amend_actor_class() -> str:
     """AIPOS-F132 件②: 受限 amend(含 queue_rework 返工节)的执行者角色类——唯一声明 card.schema restricted_amend.actor_role_class。
     缺声明 = SchemaLoadError(fail-closed, 由调用方 _normalize_exception 出声)。"""

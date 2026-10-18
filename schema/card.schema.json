@@ -684,6 +684,37 @@
       "written_by": "transition_engine.apply_transition_metadata(withdraw, 带 reason 时)",
       "description": "AIPOS-F108 件①(M9): 撤回理由"
     },
+    "superseded_by": {
+      "type": "string",
+      "required": false,
+      "written_by": "transition_engine.apply_transition_metadata(supersede)",
+      "description": "AIPOS-F184 件③: 撤换本卡的新卡 task_id(lybra queue supersede; 卡置 withdrawn 终态)"
+    },
+    "superseded_at": {
+      "type": "string",
+      "required": false,
+      "format": "iso8601",
+      "written_by": "transition_engine.apply_transition_metadata(supersede)",
+      "description": "AIPOS-F184 件③: 撤换时间"
+    },
+    "superseded_owner_words": {
+      "type": "string",
+      "required": false,
+      "written_by": "transition_engine.apply_transition_metadata(supersede)",
+      "description": "AIPOS-F184 件③: Owner 原话摘要(顾问转达; 同文落 owner_decision_record Rationale)"
+    },
+    "superseded_owner_ref": {
+      "type": "string",
+      "required": false,
+      "written_by": "transition_engine.apply_transition_metadata(supersede, 给 --owner-ref 时)",
+      "description": "AIPOS-F184 件③: Owner 裁决出处(收件箱事项 ID / 裁决记录 ID / 会话引用; 可选)"
+    },
+    "superseded_decision_id": {
+      "type": "string",
+      "required": false,
+      "written_by": "transition_engine.apply_transition_metadata(supersede)",
+      "description": "AIPOS-F184 件③: 本次撤换写出的 owner_decision_record 的 decision_id"
+    },
     "finalize_task_id": {
       "type": "string",
       "required": false,

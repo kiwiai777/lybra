@@ -645,6 +645,17 @@ def task_landing(governance_root: Path, task_id: str) -> dict[str, Any]:
 RELAND_MARKER = "补落账:"
 
 
+def reland_commit_message(task_id: str, actor: str, what: str) -> str:
+    """AIPOS-F184 件①: 补落账提交信息 = transitions nodes.N6.landing.reland_message_template(与首次「N6 收账 <卡>」区分:
+    10-17 F183 三条同名提交 = 首次 N6 + loop 运行记录终态补落账 + 合并后回归 async 记录补落账, 内容各不相同, 仅提交名相同难辨)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    template = str(n6_landing_declaration().get("reland_message_template") or "")
+    if "{task_id}" not in template or "{actor}" not in template:
+        raise SchemaLoadError("transitions.schema.json nodes.N6.landing.reland_message_template 未声明(须含 {task_id} 与 {actor})")
+    return template.format(task_id=task_id, actor=actor, what=what)
+
+
 def reland_after_write(governance_root: Path, task_id: str, actor: str, *, what: str, push: bool = True) -> dict[str, Any]:
     """AIPOS-F147 件①: 卡结案(N6)之后才落盘的门记录(合并后回归 async 事件记录 / loop 结束时的运行记录终态)写完后补一次落账——
     复用 N6 同一提交口 governance_commit(task 范围精确提交 + 推送; 范围已落账 = no-op), 不另写提交路径。
@@ -659,7 +670,7 @@ def reland_after_write(governance_root: Path, task_id: str, actor: str, *, what:
     if not _read_task_records(root, task_id).get("latest_closure"):
         return {"relanded": False, "verdict": None, "committed": False, "pushed": False,
                 "line": f"{RELAND_MARKER} {task_id} 未结案, {what}由本卡 N6 落账带上(在本卡落账范围内)"}
-    result = governance_commit(root, task_id, actor, push=push)
+    result = governance_commit(root, task_id, actor, push=push, message=reland_commit_message(task_id, actor, what))
     first = next((ln.strip() for ln in str(result.get("message") or "").splitlines() if ln.strip()), "")
     return {"relanded": bool(result.get("committed")), "verdict": result.get("verdict"), "committed": bool(result.get("committed")),
             "pushed": bool(result.get("pushed")),
@@ -1099,6 +1110,249 @@ def _unpushed_local_count(governance_root: Path) -> int | None:
         return None
 
 
+def _push_failed(base: dict[str, Any], operations: list[str], *, reason: str, message: str, verdict: str) -> dict[str, Any]:
+    """推送未完成(_push_local_head 失败出口): 结果骨架经 _push_not_done 封口(verdict != PASS, 末条 PUSH NOT DONE)。"""
+    return {"ok": False, "result": _push_not_done(base, operations, reason=reason, message=message, verdict=verdict)}
+
+
+def _push_local_head(
+    governance_root: Path,
+    commit_hash: str,
+    actor: str,
+    operations: list[str],
+    base_factory: Any,
+) -> dict[str, Any]:
+    """N6 推送唯一实现(AIPOS-F184 件①: 自 _governance_commit_impl 提出, 新提交推送与「无新改动、补推本地未推提交」同用)。
+
+    AIPOS-F79C 件①: fetch 后双向 rev-list 判分歧 — 远端独有=0 → 直接 fast-forward push, 不 rebase、不做脏树检查;
+    件②: 远端独有>0 → 在仓外临时 linked worktree 上 cherry-pick 本地独有提交并在该 worktree push; 共享检出的工作树/索引/
+    他项目未提交文件全程不动(禁 stash/禁整根 add -A/禁 pull --rebase); 冲突 → 清理临时 worktree, 精确列出冲突文件, BLOCK,
+    本地 commit 保留。件③: 任何 pushed=False 都出声(_push_failed → _push_not_done)。
+    base_factory(commit_hash) = 失败时的结果骨架(调用方给 committed 等字段)。
+    返回 {"ok": True, pushed_commit_hash, push_mode, commit_hash(reset --keep 后可能更新)} 或 {"ok": False, "result": 封口结果}。
+    """
+    try:
+        # ① Fetch 远端状态
+        _git_run(["fetch", "origin"], governance_root, timeout=30)
+        operations.append("Fetched from remote")
+
+        current_branch = _git_readonly(["rev-parse", "--abbrev-ref", "HEAD"], governance_root).strip()
+        if current_branch == "HEAD":
+            return _push_failed(
+                base_factory(commit_hash),
+                operations,
+                reason="detached HEAD: no branch to push",
+                message=f"已提交 {commit_hash[:8]}, 但治理仓处于 detached HEAD, 无分支可推。\n可执行出口: cd {governance_root} && git switch <branch> 后重试",
+                verdict=Verdict.BLOCK,
+            )
+        upstream = f"origin/{current_branch}"
+        try:
+            _git_readonly(["rev-parse", "--verify", "--quiet", f"{upstream}^{{commit}}"], governance_root)
+        except subprocess.CalledProcessError:
+            return _push_failed(
+                base_factory(commit_hash),
+                operations,
+                reason=f"no remote-tracking branch {upstream} after fetch",
+                message=(
+                    f"已提交 {commit_hash[:8]}, 但 fetch 后不存在 {upstream}(远端无此分支, 或 remote 未配置)。\n"
+                    f"可执行出口: cd {governance_root} && git push -u origin {current_branch}"
+                ),
+                verdict=Verdict.FAIL,
+            )
+
+        # ② 件①判据: 双向 rev-list(远端独有 / 本地独有)
+        remote_only, local_only = _divergence(governance_root, upstream)
+        operations.append(
+            f"Divergence vs {upstream}: remote-only={remote_only} local-only={local_only} "
+            f"(git rev-list --count HEAD..{upstream} / {upstream}..HEAD)"
+        )
+
+        if remote_only == 0:
+            # 远端未前进 → 直接 fast-forward push; 不 rebase、不做脏树检查、不碰工作树
+            _git_run(["push", "origin", f"HEAD:refs/heads/{current_branch}"], governance_root, timeout=30)
+            pushed_commit_hash = commit_hash
+            push_mode = "fast-forward"
+            operations.append(
+                f"Pushed to remote (fast-forward: {upstream} had not advanced; no rebase, no dirty-tree check, "
+                f"shared checkout untouched)"
+            )
+        else:
+            # 件②: 远端已前进 → 临时 linked worktree 上 cherry-pick + push
+            operations.append(
+                f"Remote has advanced ({remote_only} commit(s) on {upstream} not in local); integrating in a "
+                f"temporary linked worktree outside the shared checkout (no stash / no in-place rebase)"
+            )
+            commits = _local_commits_not_upstream(governance_root, upstream)
+            if commit_hash not in commits:
+                return _push_failed(
+                    base_factory(commit_hash),
+                    operations,
+                    reason=f"commit {commit_hash[:8]} not found among local-only commits vs {upstream}",
+                    message=(
+                        f"已提交 {commit_hash[:8]}, 但 git rev-list --right-only --cherry-pick {upstream}...HEAD "
+                        f"未列出它(现场在提交与 push 之间被改动?), 拒绝整合(fail-closed)。\n"
+                        f"可执行出口: cd {governance_root} && git log --oneline {upstream}...HEAD"
+                    ),
+                    verdict=Verdict.FAIL,
+                )
+            if len(commits) > 1:
+                operations.append(
+                    f"Local branch also carries {len(commits) - 1} earlier unpushed commit(s) not on {upstream}; "
+                    f"they are integrated together in order (a fast-forward push would carry them too)"
+                )
+            outcome = integrate_in_temp_worktree(
+                governance_root, current_branch, commits, actor, operations
+            )
+            if not outcome["ok"]:
+                conflict_files = outcome["conflict_files"]
+                listing = "\n  - ".join(conflict_files) if conflict_files else "(无 unmerged 文件; 见 cherry-pick 输出)"
+                base = base_factory(commit_hash)
+                base["conflict_files"] = conflict_files
+                base["temp_worktree_cleaned"] = outcome["cleaned"]
+                return _push_failed(
+                    base,
+                    operations,
+                    reason=outcome["reason"],
+                    message=(
+                        f"已提交 {commit_hash[:8]}(本地保留), 但与 {upstream} 整合冲突, 未 push(fail-closed)。\n\n"
+                        f"冲突文件({len(conflict_files)}):\n  - {listing}\n\n"
+                        f"临时 worktree 已清理: {outcome['cleaned']}; 共享检出/索引/他项目未提交文件未动。\n\n"
+                        f"可执行出口(先落库冲突文件; 产品尚无 --resolve 出口, 以下为同款临时 worktree 手法, 不碰共享检出):\n"
+                        f"1. 看远端版本: cd {governance_root} && git diff HEAD {upstream} -- <冲突文件>\n"
+                        f"2. 在仓外临时 worktree 解决并推: git worktree add --detach /tmp/gc-resolve {upstream} && cd /tmp/gc-resolve && "
+                        f"git cherry-pick {commit_hash[:8]} → 手工合并冲突文件 → git add -- <冲突文件> && git cherry-pick --continue && "
+                        f"git push origin HEAD:refs/heads/{current_branch}\n"
+                        f"3. 回治理根跟进并清理: cd {governance_root} && git fetch origin && git reset --keep {upstream} && "
+                        f"git worktree remove /tmp/gc-resolve\n"
+                        f"4. 禁 stash/禁整根 add -A/禁 pull --rebase(F69 铁律); 不要在共享检出里改冲突文件后重跑(原 commit 会再次冲突)"
+                    ),
+                    verdict=Verdict.BLOCK,
+                )
+            pushed_commit_hash = outcome["pushed_tip"]
+            push_mode = f"cherry-picked in temp worktree, {len(commits)} commit(s) rewritten"
+            operations.append(
+                f"Pushed to remote from temp worktree ({commit_hash[:8]} -> {pushed_commit_hash[:8]}; "
+                f"temp worktree cleaned={outcome['cleaned']})"
+            )
+
+            # 成功后把本地分支 fast-forward 到远端: fetch → 若本地所有提交都已(按 patch)在远端 → 移动分支.
+            # 因 cherry-pick 改写了哈希, 字面 `git merge --ff-only` 不可能成立(本地有原 commit 对象);
+            # 语义等价物 = `git reset --keep origin/<branch>`: 只更新「远端提交改动过」的文件, 遇到本地
+            # 有改动的同名文件即整体中止(fail-closed); 他项目未提交文件与未跟踪文件全程不动。
+            _git_run(["fetch", "origin"], governance_root, timeout=30)
+            remaining = _local_commits_not_upstream(governance_root, upstream)
+            if remaining:
+                operations.append(
+                    f"Local branch NOT moved: {len(remaining)} local commit(s) still not on {upstream} "
+                    f"({', '.join(c[:8] for c in remaining)}); reported only, nothing touched"
+                )
+            else:
+                overlap = _dirty_overlap_with(governance_root, upstream)
+                if overlap:
+                    operations.append(
+                        f"Local branch NOT moved: {len(overlap)} locally modified/untracked file(s) would be "
+                        f"overwritten by {upstream}: {', '.join(overlap[:10])}"
+                        + (f" (+{len(overlap) - 10} more)" if len(overlap) > 10 else "")
+                        + f"; reported only. Exit: save them, then cd {governance_root} && git reset --keep {upstream}"
+                    )
+                else:
+                    try:
+                        _git_run(["reset", "--keep", upstream], governance_root, timeout=60)
+                    except subprocess.CalledProcessError as exc:
+                        operations.append(
+                            f"WARNING: Local branch NOT moved: git reset --keep {upstream} refused: "
+                            f"{(exc.stderr or '').strip()[:300]}; nothing overwritten, reported only"
+                        )
+                    else:
+                        commit_hash = _git_readonly(["rev-parse", "HEAD"], governance_root).strip()
+                        operations.append(
+                            f"Local branch fast-forwarded to {upstream} ({commit_hash[:8]}) via git reset --keep "
+                            f"(only files changed by remote commits updated; other projects' uncommitted files untouched)"
+                        )
+
+        # AIPOS-F69 大项③: push 后校验远端确实包含本次 commit(禁「push 返回 0 即报成功」)
+        remote_branches = _git_readonly(
+            ["branch", "-r", "--contains", pushed_commit_hash], governance_root
+        ).strip()
+        if not remote_branches:
+            return _push_failed(
+                base_factory(commit_hash),
+                operations,
+                reason=f"push returned 0 but {pushed_commit_hash[:8]} not found in any remote branch",
+                message=(
+                    f"Push 命令返回成功,但远端不包含 commit {pushed_commit_hash[:8]}\n\n"
+                    f"可执行出口:\n"
+                    f"1. 手动检查: git branch -r --contains {pushed_commit_hash[:8]}\n"
+                    f"2. 重试: cd {governance_root} && lybra governance-commit ...(本次 commit 保留)"
+                ),
+                verdict=Verdict.FAIL,
+            )
+        operations.append(
+            f"Verified commit {pushed_commit_hash[:8]} exists in remote: {remote_branches.split()[0]}"
+        )
+        # 件③: --json operations 末条 = push 结果
+        operations.append(f"Push result: pushed {pushed_commit_hash[:8]} to {upstream} ({push_mode})")
+        return {"ok": True, "pushed_commit_hash": pushed_commit_hash, "push_mode": push_mode, "commit_hash": commit_hash}
+
+    except subprocess.CalledProcessError as e:
+        return _push_failed(
+            base_factory(commit_hash),
+            operations,
+            reason=f"git {' '.join(e.cmd[3:5]) if isinstance(e.cmd, list) and len(e.cmd) > 4 else 'command'} failed: {(e.stderr or '').strip()[:300]}",
+            message=f"Committed {commit_hash[:8]} but push failed: {e.stderr}",
+            verdict=Verdict.FAIL,
+        )
+    except subprocess.TimeoutExpired as e:
+        return _push_failed(
+            base_factory(commit_hash),
+            operations,
+            reason=f"git command timed out after {e.timeout}s",
+            message=f"Committed {commit_hash[:8]} but push step timed out: {e.cmd}",
+            verdict=Verdict.FAIL,
+        )
+
+
+
+def _unpushed_scope_commits(governance_root: Path, selected_paths: list[str] | None) -> list[str]:
+    """本地相对上次 fetch 的 origin/<分支> 未推、且触及 selected_paths 的提交(新→旧); 无范围 / 无上游 / detached = []。只读不联网。"""
+    if not selected_paths:
+        return []
+    try:
+        branch = _git_readonly(["rev-parse", "--abbrev-ref", "HEAD"], governance_root).strip()
+        if branch == "HEAD":
+            return []
+        raw = _git_readonly(["rev-list", f"origin/{branch}..HEAD", "--"] + list(selected_paths), governance_root)
+    except subprocess.CalledProcessError:
+        return []
+    return [line for line in raw.split("\n") if line.strip()]
+
+
+def _retry_unpushed_push(governance_root: Path, task_id: str | None, actor: str, selected_paths: list[str] | None,
+                         operations: list[str], *, dry_run: bool) -> dict[str, Any] | None:
+    """AIPOS-F184 件①: 无新改动但范围内有本地未推提交 → 经 _push_local_head 补推送(无新提交, 幂等)。
+    不触及范围 = None(调用方维持原拒)。补推送成功 = PASS(committed=False, pushed=True); 失败 = 封口结果原样(带重试命令)。"""
+    mine = _unpushed_scope_commits(governance_root, selected_paths)
+    if not mine:
+        return None
+    head = _git_readonly(["rev-parse", "HEAD"], governance_root).strip()
+    operations.append(f"Retry push: {len(mine)} unpushed local commit(s) touch this scope ({', '.join(c[:8] for c in mine)}); "
+                      f"no new commit, pushing local HEAD {head[:8]} with the same push implementation")
+
+    def base(h: str) -> dict[str, Any]:
+        return {"verdict": Verdict.FAIL, "task_id": task_id, "actor": actor, "dry_run": dry_run, "completeness_check": None,
+                "committed": False, "pushed": False, "commit_hash": h, "message": "", "operations": operations,
+                "selected_paths": selected_paths, "commit_manifest": None, "unpushed_scope_commits": mine,
+                "unpushed_local_commits": _unpushed_local_count(governance_root)}
+
+    outcome = _push_local_head(governance_root, head, actor, operations, base)
+    if not outcome["ok"]:
+        return outcome["result"]
+    result = base(outcome["commit_hash"])
+    result.update({"verdict": Verdict.PASS, "pushed": True, "retried_push": True,
+                   "message": f"无新改动; 补推送本地未推提交 {len(mine)} 条(范围内)(pushed {str(outcome['pushed_commit_hash'])[:8]})"})
+    return result
+
+
 def governance_commit(
     governance_root: Path,
     task_id: str | None,
@@ -1137,7 +1391,41 @@ def governance_commit(
         result["task_scope"] = task_scope
         ops = result.setdefault("operations", [])
         ops.insert(0, _task_scope_operation(Path(governance_root), task_id, task_scope))
-    return _seal_push_outcome(result, push_requested=bool(push) and not dry_run)
+    return _attach_push_hint(_seal_push_outcome(result, push_requested=bool(push) and not dry_run), Path(governance_root),
+                             task_id, actor, task_scoped=task_scope is not None)
+
+
+def retry_command(governance_root: Path, task_id: str | None, actor: str, selected_paths: list[str] | None, *,
+                  task_scoped: bool) -> str:
+    """推送未完成时的重试命令(同一提交口): 卡范围 = N6 落账命令; --paths = 精确路径命令; 整根 = 治理根 + 身份。"""
+    if task_scoped and task_id:
+        return governance_commit_command(task_id, actor, governance_root)
+    if selected_paths:
+        return governance_commit_paths_command(list(selected_paths), actor, governance_root)
+    import shlex
+
+    return (f"{governance_commit_cli()} --governance-root {shlex.quote(str(governance_root))} --actor {shlex.quote(str(actor))}"
+            + (f" --task-id {shlex.quote(str(task_id))}" if task_id else ""))
+
+
+def _attach_push_hint(result: dict[str, Any], governance_root: Path, task_id: str | None, actor: str, *,
+                      task_scoped: bool) -> dict[str, Any]:
+    """AIPOS-F184 件①(gap #164): 已在本地提交(或补推送)而未推上 = 人话提示 + 重试命令, 置于 message 首行(CLI / 写后落账 /
+    补落账行同读首行), 并出 push_hint / retry_command 字段。重跑同一命令: 无新改动时只补推送(_retry_unpushed_push), 不产生新提交。"""
+    if not result.get("push_requested") or result.get("pushed"):
+        return result
+    if not (result.get("committed") or result.get("unpushed_scope_commits")):
+        return result
+    command = retry_command(governance_root, task_id, actor, result.get("selected_paths"), task_scoped=task_scoped)
+    raw_reason = (result.get("push_result") or {}).get("reason") or str(result.get("verdict"))
+    reason = " | ".join(ln.strip() for ln in str(raw_reason).splitlines() if ln.strip())  # 首行一行说完(拒因多行 stderr 折成一行)
+    sha = str(result.get("commit_hash") or "")[:8]
+    hint = (f"推送未完成: 本地已有提交 {sha}, 但还没推到远端(原因: {reason})。本地提交已保留, 不要重复执行写命令、不要手工 reset;"
+            f" 按原因处理(网络 / 远端权限 / 远端冲突)后重跑: {command}(无新改动时只补推送, 不再产生新提交)")
+    result["push_hint"] = hint
+    result["retry_command"] = command
+    result["message"] = hint + ("\n" + str(result.get("message") or "") if result.get("message") else "")
+    return result
 
 
 def _task_scope_operation(governance_root: Path, task_id: str, task_scope: dict[str, Any]) -> str:
@@ -1360,6 +1648,11 @@ def _governance_commit_impl(
             unpushed = _unpushed_local_count(governance_root) if (push and not dry_run) else None
             if unpushed:
                 operations.append(f"Unpushed local commits vs last-fetched origin: {unpushed}")
+                # AIPOS-F184 件①: 本地未推提交触及本次范围(上次落账已提交、推送未完成)= 重跑同一命令即补推送(同一推送实现),
+                # 不产生新提交; 未触及范围(他人未推提交)维持原拒, 不替人推送。
+                retry = _retry_unpushed_push(governance_root, task_id, actor, selected_paths, operations, dry_run=dry_run)
+                if retry is not None:
+                    return retry
                 return {
                     "verdict": Verdict.BLOCK,
                     "task_id": task_id,
@@ -1699,7 +1992,10 @@ def _governance_commit_impl(
         
         # AIPOS-F79 件③: 暂存集必须与清单逐条相同, 否则拒提交并出声
         # AIPOS-F79C 件④: 同口径 --no-renames; mismatch 时清掉本次暂存(出声记录, 非静默)再拒, 不留半成品
-        staged_set = set(_git_readonly(["diff", "--cached", "--name-only", "--no-renames"], governance_root).split("\n")) - {""}
+        # AIPOS-F184 件①: 核对限本次 pathspec(提交是 --only 清单, 范围外他人此刻暂存的文件不进提交, 也不拦本卡落账;
+        # 预暂存于范围外的既有拒仍在上方 pre-staged 检查)
+        staged_set = set(_git_readonly(["diff", "--cached", "--name-only", "--no-renames", "--"] + stage_pathspec,
+                                       governance_root).split("\n")) - {""}
         manifest_set = set(_manifest_repo_paths(manifest))
         if staged_set != manifest_set:
             extra = sorted(staged_set - manifest_set)
@@ -1731,6 +2027,11 @@ def _governance_commit_impl(
         # Commit with explicit identity
         # AIPOS-F79D 件③: commit 子进程非零退出(pre-commit hook 拒)也走 _unstage_this_run —— 还原预暂存快照,
         # 范围仍限 --paths; 结果带 index_restored=true 与被拒清单。病根: 24 条留 index 反过来挡他项目提交。
+        # AIPOS-F184 件①(gap #164): 只提交清单内的文件——`git commit --only -- <清单逐个文件>`(顶层字面 pathspec), 不提交整个索引。
+        # 病根: 10-16 F173 loop 结束补落账在「范围外预暂存检查」与 commit 之间, 顾问并发 `git add governance/LEDGER.md`,
+        # 旧的无 pathspec commit 把整个索引(含 LEDGER)提交进「N6 收账 AIPOS-F173」, 提交后核对 FAIL → 未推送, ahead 1。
+        # --only: 只取这些路径的工作树内容建临时索引提交(钩子看到的暂存集 = 清单), 他人此刻暂存的文件原样留在索引里。
+        only_pathspec = [f":(top,literal){p}" for p in sorted(manifest_set)]
         try:
             subprocess.run(
                 [
@@ -1739,6 +2040,8 @@ def _governance_commit_impl(
                     "-c", f"user.email={actor}@lybra.local",
                     "commit",
                     "-m", commit_msg,
+                    "--only", "--",
+                    *only_pathspec,
                 ],
                 cwd=str(governance_root),
                 check=True,
@@ -1814,185 +2117,13 @@ def _governance_commit_impl(
         pushed = False
         pushed_commit_hash: str | None = None
         if push:
-            try:
-                # ① Fetch 远端状态
-                _git_run(["fetch", "origin"], governance_root, timeout=30)
-                operations.append("Fetched from remote")
-
-                current_branch = _git_readonly(["rev-parse", "--abbrev-ref", "HEAD"], governance_root).strip()
-                if current_branch == "HEAD":
-                    return _push_not_done(
-                        _result_base(committed=True, commit_hash=commit_hash),
-                        operations,
-                        reason="detached HEAD: no branch to push",
-                        message=f"已提交 {commit_hash[:8]}, 但治理仓处于 detached HEAD, 无分支可推。\n可执行出口: cd {governance_root} && git switch <branch> 后重试",
-                        verdict=Verdict.BLOCK,
-                    )
-                upstream = f"origin/{current_branch}"
-                try:
-                    _git_readonly(["rev-parse", "--verify", "--quiet", f"{upstream}^{{commit}}"], governance_root)
-                except subprocess.CalledProcessError:
-                    return _push_not_done(
-                        _result_base(committed=True, commit_hash=commit_hash),
-                        operations,
-                        reason=f"no remote-tracking branch {upstream} after fetch",
-                        message=(
-                            f"已提交 {commit_hash[:8]}, 但 fetch 后不存在 {upstream}(远端无此分支, 或 remote 未配置)。\n"
-                            f"可执行出口: cd {governance_root} && git push -u origin {current_branch}"
-                        ),
-                        verdict=Verdict.FAIL,
-                    )
-
-                # ② 件①判据: 双向 rev-list(远端独有 / 本地独有)
-                remote_only, local_only = _divergence(governance_root, upstream)
-                operations.append(
-                    f"Divergence vs {upstream}: remote-only={remote_only} local-only={local_only} "
-                    f"(git rev-list --count HEAD..{upstream} / {upstream}..HEAD)"
-                )
-
-                if remote_only == 0:
-                    # 远端未前进 → 直接 fast-forward push; 不 rebase、不做脏树检查、不碰工作树
-                    _git_run(["push", "origin", f"HEAD:refs/heads/{current_branch}"], governance_root, timeout=30)
-                    pushed_commit_hash = commit_hash
-                    push_mode = "fast-forward"
-                    operations.append(
-                        f"Pushed to remote (fast-forward: {upstream} had not advanced; no rebase, no dirty-tree check, "
-                        f"shared checkout untouched)"
-                    )
-                else:
-                    # 件②: 远端已前进 → 临时 linked worktree 上 cherry-pick + push
-                    operations.append(
-                        f"Remote has advanced ({remote_only} commit(s) on {upstream} not in local); integrating in a "
-                        f"temporary linked worktree outside the shared checkout (no stash / no in-place rebase)"
-                    )
-                    commits = _local_commits_not_upstream(governance_root, upstream)
-                    if commit_hash not in commits:
-                        return _push_not_done(
-                            _result_base(committed=True, commit_hash=commit_hash),
-                            operations,
-                            reason=f"commit {commit_hash[:8]} not found among local-only commits vs {upstream}",
-                            message=(
-                                f"已提交 {commit_hash[:8]}, 但 git rev-list --right-only --cherry-pick {upstream}...HEAD "
-                                f"未列出它(现场在提交与 push 之间被改动?), 拒绝整合(fail-closed)。\n"
-                                f"可执行出口: cd {governance_root} && git log --oneline {upstream}...HEAD"
-                            ),
-                            verdict=Verdict.FAIL,
-                        )
-                    if len(commits) > 1:
-                        operations.append(
-                            f"Local branch also carries {len(commits) - 1} earlier unpushed commit(s) not on {upstream}; "
-                            f"they are integrated together in order (a fast-forward push would carry them too)"
-                        )
-                    outcome = integrate_in_temp_worktree(
-                        governance_root, current_branch, commits, actor, operations
-                    )
-                    if not outcome["ok"]:
-                        conflict_files = outcome["conflict_files"]
-                        listing = "\n  - ".join(conflict_files) if conflict_files else "(无 unmerged 文件; 见 cherry-pick 输出)"
-                        base = _result_base(committed=True, commit_hash=commit_hash)
-                        base["conflict_files"] = conflict_files
-                        base["temp_worktree_cleaned"] = outcome["cleaned"]
-                        return _push_not_done(
-                            base,
-                            operations,
-                            reason=outcome["reason"],
-                            message=(
-                                f"已提交 {commit_hash[:8]}(本地保留), 但与 {upstream} 整合冲突, 未 push(fail-closed)。\n\n"
-                                f"冲突文件({len(conflict_files)}):\n  - {listing}\n\n"
-                                f"临时 worktree 已清理: {outcome['cleaned']}; 共享检出/索引/他项目未提交文件未动。\n\n"
-                                f"可执行出口(先落库冲突文件; 产品尚无 --resolve 出口, 以下为同款临时 worktree 手法, 不碰共享检出):\n"
-                                f"1. 看远端版本: cd {governance_root} && git diff HEAD {upstream} -- <冲突文件>\n"
-                                f"2. 在仓外临时 worktree 解决并推: git worktree add --detach /tmp/gc-resolve {upstream} && cd /tmp/gc-resolve && "
-                                f"git cherry-pick {commit_hash[:8]} → 手工合并冲突文件 → git add -- <冲突文件> && git cherry-pick --continue && "
-                                f"git push origin HEAD:refs/heads/{current_branch}\n"
-                                f"3. 回治理根跟进并清理: cd {governance_root} && git fetch origin && git reset --keep {upstream} && "
-                                f"git worktree remove /tmp/gc-resolve\n"
-                                f"4. 禁 stash/禁整根 add -A/禁 pull --rebase(F69 铁律); 不要在共享检出里改冲突文件后重跑(原 commit 会再次冲突)"
-                            ),
-                            verdict=Verdict.BLOCK,
-                        )
-                    pushed_commit_hash = outcome["pushed_tip"]
-                    push_mode = f"cherry-picked in temp worktree, {len(commits)} commit(s) rewritten"
-                    operations.append(
-                        f"Pushed to remote from temp worktree ({commit_hash[:8]} -> {pushed_commit_hash[:8]}; "
-                        f"temp worktree cleaned={outcome['cleaned']})"
-                    )
-
-                    # 成功后把本地分支 fast-forward 到远端: fetch → 若本地所有提交都已(按 patch)在远端 → 移动分支.
-                    # 因 cherry-pick 改写了哈希, 字面 `git merge --ff-only` 不可能成立(本地有原 commit 对象);
-                    # 语义等价物 = `git reset --keep origin/<branch>`: 只更新「远端提交改动过」的文件, 遇到本地
-                    # 有改动的同名文件即整体中止(fail-closed); 他项目未提交文件与未跟踪文件全程不动。
-                    _git_run(["fetch", "origin"], governance_root, timeout=30)
-                    remaining = _local_commits_not_upstream(governance_root, upstream)
-                    if remaining:
-                        operations.append(
-                            f"Local branch NOT moved: {len(remaining)} local commit(s) still not on {upstream} "
-                            f"({', '.join(c[:8] for c in remaining)}); reported only, nothing touched"
-                        )
-                    else:
-                        overlap = _dirty_overlap_with(governance_root, upstream)
-                        if overlap:
-                            operations.append(
-                                f"Local branch NOT moved: {len(overlap)} locally modified/untracked file(s) would be "
-                                f"overwritten by {upstream}: {', '.join(overlap[:10])}"
-                                + (f" (+{len(overlap) - 10} more)" if len(overlap) > 10 else "")
-                                + f"; reported only. Exit: save them, then cd {governance_root} && git reset --keep {upstream}"
-                            )
-                        else:
-                            try:
-                                _git_run(["reset", "--keep", upstream], governance_root, timeout=60)
-                            except subprocess.CalledProcessError as exc:
-                                operations.append(
-                                    f"WARNING: Local branch NOT moved: git reset --keep {upstream} refused: "
-                                    f"{(exc.stderr or '').strip()[:300]}; nothing overwritten, reported only"
-                                )
-                            else:
-                                commit_hash = _git_readonly(["rev-parse", "HEAD"], governance_root).strip()
-                                operations.append(
-                                    f"Local branch fast-forwarded to {upstream} ({commit_hash[:8]}) via git reset --keep "
-                                    f"(only files changed by remote commits updated; other projects' uncommitted files untouched)"
-                                )
-
-                # AIPOS-F69 大项③: push 后校验远端确实包含本次 commit(禁「push 返回 0 即报成功」)
-                remote_branches = _git_readonly(
-                    ["branch", "-r", "--contains", pushed_commit_hash], governance_root
-                ).strip()
-                if not remote_branches:
-                    return _push_not_done(
-                        _result_base(committed=True, commit_hash=commit_hash),
-                        operations,
-                        reason=f"push returned 0 but {pushed_commit_hash[:8]} not found in any remote branch",
-                        message=(
-                            f"Push 命令返回成功,但远端不包含 commit {pushed_commit_hash[:8]}\n\n"
-                            f"可执行出口:\n"
-                            f"1. 手动检查: git branch -r --contains {pushed_commit_hash[:8]}\n"
-                            f"2. 重试: cd {governance_root} && lybra governance-commit ...(本次 commit 保留)"
-                        ),
-                        verdict=Verdict.FAIL,
-                    )
-                operations.append(
-                    f"Verified commit {pushed_commit_hash[:8]} exists in remote: {remote_branches.split()[0]}"
-                )
-                pushed = True
-                # 件③: --json operations 末条 = push 结果
-                operations.append(f"Push result: pushed {pushed_commit_hash[:8]} to {upstream} ({push_mode})")
-
-            except subprocess.CalledProcessError as e:
-                return _push_not_done(
-                    _result_base(committed=True, commit_hash=commit_hash),
-                    operations,
-                    reason=f"git {' '.join(e.cmd[3:5]) if isinstance(e.cmd, list) and len(e.cmd) > 4 else 'command'} failed: {(e.stderr or '').strip()[:300]}",
-                    message=f"Committed {commit_hash[:8]} but push failed: {e.stderr}",
-                    verdict=Verdict.FAIL,
-                )
-            except subprocess.TimeoutExpired as e:
-                return _push_not_done(
-                    _result_base(committed=True, commit_hash=commit_hash),
-                    operations,
-                    reason=f"git command timed out after {e.timeout}s",
-                    message=f"Committed {commit_hash[:8]} but push step timed out: {e.cmd}",
-                    verdict=Verdict.FAIL,
-                )
+            outcome_push = _push_local_head(governance_root, commit_hash, actor, operations,
+                                            lambda h: _result_base(committed=True, commit_hash=h))
+            if not outcome_push["ok"]:
+                return outcome_push["result"]
+            pushed = True
+            pushed_commit_hash = outcome_push["pushed_commit_hash"]
+            commit_hash = outcome_push["commit_hash"]
 
         return {
             "verdict": Verdict.PASS,
