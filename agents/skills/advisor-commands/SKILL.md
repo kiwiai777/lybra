@@ -194,11 +194,23 @@ lybra artifact ingest --task-id <卡ID>R --kind verdict --dry-run    # R 卡: �
 拒因码: INGEST_RETURN_MISSING / INGEST_FRONTMATTER_MISSING / INGEST_TIP_MISMATCH / INGEST_TREE_MISMATCH / INGEST_SUMMARY_MISSING / INGEST_KIND_MISMATCH(exit 4)。INGEST_TIP_MISMATCH 拒因给两侧完整 sha 与形式诊断(AIPOS-F180B): 形式错误 / 疑似抄错由 loop 同会话续接审计体只改报告头, 真审错了产物按拒因出口重审。通过则走推导核同时给出的同一条 `queue return --confirm` / `audit-verdict --confirm` 薄壳(驱动方 token, actor=卡实例), 并补上产品填写的 `agent_runtime`(运行时模型取自卡面 harness 的会话记录, 取不到记「未声明会话记录」, 与自报不一致标 `model_mismatch`); 裁决入门时门把审计报告全文快照进 `records/audit_verdicts/<卡ID>/report_snapshots/`。
 
 #### `lybra queue withdraw`
-**何时用**:撤卡(malformed/方向错误/重复发卡)。
+**何时用**:撤卡(malformed/方向错误/重复发卡)。写入后自动落账(AIPOS-F184, 不再手工补提交)。Owner 改了目标要换新卡承接 → 用下面的 `queue supersede`。
 ```bash
 lybra queue withdraw --task-id <卡ID> --reason "duplicate" \
   --actor <你的顾问实例>
 ```
+
+#### `lybra queue supersede`(AIPOS-F184)
+**何时用**:Owner 中途改了在途卡的目标(原卡 pending / claimed / blocked 均可)。先按新目标出新卡并发布, 再凭 Owner 原话撤换原卡;
+**不要**再以执行体身份 `queue block` 原卡再重出卡(原卡会留在 Owner 收件箱要 Owner 再定一次)。
+```bash
+# ① 预演(缺省, 零写入): 列搬卡与将写的决策记录; 原卡有工作树 / 卡分支时提示保留(由结案清理处理, 不删分支)
+lybra queue supersede --task-id <原卡> --by <新卡> --actor <你的顾问实例> \
+  --owner-words "<Owner原话摘要>" --owner-ref <事项ID>
+# ② 确认: Owner 原话落 owner_decision_record(同 owner decide --relayed-by)→ 原卡置 withdrawn, 卡面记 superseded_by → 自动落账
+lybra queue supersede --task-id <原卡> --by <新卡> --actor <你的顾问实例> --owner-words "<Owner原话摘要>" --confirm
+```
+`--owner-ref` 可选: Owner 在哪里定的(收件箱事项 ID / 裁决记录 ID / 会话引用)。拒: `--actor` 不是顾问角色类实例 / 新卡不在队列或已撤回 / 新卡 = 原卡 / 缺原话。收件箱该卡的待决事项随卡进 withdrawn 自动消失。
 
 #### `lybra queue rework`
 **何时用**:追加返工节到卡面(FAIL 裁决后,点杀清单+验收标准)(顾问职责).

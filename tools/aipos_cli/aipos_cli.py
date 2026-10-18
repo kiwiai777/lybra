@@ -563,6 +563,25 @@ def _run_board_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _board_login_target(args: argparse.Namespace) -> tuple[Path, str, Path | None]:
+    """AIPOS-F185 件④(gap #168): ``board open`` / ``board approve`` 的治理根与凭据文件(唯一定位 board_login.locate_connection_json)。
+    治理根经 F144 唯一薄壳 _find_repo_root_for_args(全局/子命令级 --workspace-root > 环境变量 > 所在治理根 > 工位声明); 显式
+    --connection-json 时治理根可解析不出(看板地址按 connection.json / 缺省)。返回 (凭据文件, 来源说明, 治理根 | None);
+    定位不到 = board_login.ConnectionLocateError(人话拒因)。"""
+    from tools.aipos_cli.board_login import locate_connection_json
+
+    root: Path | None = None
+    unresolved = ""
+    try:
+        root = Path(_find_repo_root_for_args(args))
+    except FileNotFoundError as exc:  # F144 拒因原文(GOVERNANCE_ROOT_UNRESOLVED / CONFLICT)进定位拒因
+        unresolved = str(exc)
+    hit = getattr(args, "_governance_root_hit", None) or {}
+    path, how = locate_connection_json(getattr(args, "connection_json", None), governance_root=root,
+                                       root_source=str(hit.get("source") or ""), unresolved=unresolved)
+    return path, how, root
+
+
 def _run_board_open(args: argparse.Namespace) -> int:
     """AIPOS-271 ``board open``:读 connection.json(文件权即身份)铸 OTC → 开/打看板登录链接。
     
@@ -571,6 +590,7 @@ def _run_board_open(args: argparse.Namespace) -> int:
     import webbrowser
 
     from tools.aipos_cli.board_login import (
+        ConnectionLocateError,
         build_login_url,
         load_role_token,
         mint_otc,
@@ -578,23 +598,19 @@ def _run_board_open(args: argparse.Namespace) -> int:
         token_fingerprint,
     )
 
-    connection_json = getattr(args, "connection_json", None)
     role = getattr(args, "role", None)
+    try:
+        connection_json, how, workspace_root = _board_login_target(args)  # AIPOS-F185 件④: F144 治理根解析梯
+    except ConnectionLocateError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     try:
         token, role_used = load_role_token(connection_json, role=role)
     except (OSError, ValueError, KeyError) as exc:
         print(f"Error: 读取 connection.json 失败 —— {exc}", file=sys.stderr)
         print("提示:用 --connection-json 指定路径,或 --role 指定角色。", file=sys.stderr)
         return 1
-    
-    # F-271-1: 支持工作区自动发现(优先显式参数,否则尝试当前目录)
-    workspace_root = getattr(args, "workspace_root", None)
-    if not workspace_root:
-        try:
-            workspace_root = _resolve_workspace_for_command(args)
-        except Exception:
-            workspace_root = None  # 降级到 connection.json
-    
+
     base_url = resolve_board_url(
         connection_json,
         url=getattr(args, "url", None),
@@ -602,6 +618,7 @@ def _run_board_open(args: argparse.Namespace) -> int:
         port=getattr(args, "port", None),
         workspace_root=workspace_root,
     )
+    print(f"凭据文件: {connection_json}({how})")
     print(f"Board server: {base_url}")
     print(f"身份(角色): {role_used}  token 指纹: {token_fingerprint(token)}")
     try:
@@ -632,28 +649,25 @@ def _run_board_approve(args: argparse.Namespace) -> int:
     F-271-1: 支持免 --workspace-root(单工作区自动发现:按当前目录或环境变量)。
     """
     from tools.aipos_cli.board_login import (
+        ConnectionLocateError,
         approve_device,
         load_role_token,
         resolve_board_url,
         token_fingerprint,
     )
 
-    connection_json = getattr(args, "connection_json", None)
     role = getattr(args, "role", None)
+    try:
+        connection_json, how, workspace_root = _board_login_target(args)  # AIPOS-F185 件④: F144 治理根解析梯
+    except ConnectionLocateError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     try:
         token, role_used = load_role_token(connection_json, role=role)
     except (OSError, ValueError, KeyError) as exc:
         print(f"Error: 读取 connection.json 失败 —— {exc}", file=sys.stderr)
         return 1
-    
-    # F-271-1: 支持工作区自动发现(优先显式参数,否则尝试当前目录)
-    workspace_root = getattr(args, "workspace_root", None)
-    if not workspace_root:
-        try:
-            workspace_root = _resolve_workspace_for_command(args)
-        except Exception:
-            workspace_root = None  # 降级到 connection.json
-    
+
     base_url = resolve_board_url(
         connection_json,
         url=getattr(args, "url", None),
@@ -662,6 +676,7 @@ def _run_board_approve(args: argparse.Namespace) -> int:
         workspace_root=workspace_root,
     )
     code = str(getattr(args, "code", "") or "")
+    print(f"凭据文件: {connection_json}({how})")
     print(f"Board server: {base_url}")
     print(f"身份(角色): {role_used}  token 指纹: {token_fingerprint(token)}")
     try:
@@ -1939,8 +1954,8 @@ def build_parser() -> argparse.ArgumentParser:
     _board_start_parser.add_argument("--host", help="Bind host; defaults to 127.0.0.1")
     _board_start_parser.add_argument("--port", type=int, help=f"Bind port; defaults to {DEFAULT_BOARD_PORT}")
     board_open_parser = board_sub.add_parser("open", help="AIPOS-271: open the Board in the browser with a one-time ticket (no token pasting)")
-    board_open_parser.add_argument("--workspace-root", help="Workspace root for auto-discovery; defaults to current directory or env")
-    board_open_parser.add_argument("--connection-json", help="Override the connection.json path (default <workspace>/.lybra/connection.json)")
+    board_open_parser.add_argument("--workspace-root", help="Governance root whose .lybra/connection.json holds the credential (default: governance-root resolution — env / the governance root containing the current directory / workstation declaration)")
+    board_open_parser.add_argument("--connection-json", help="Override the credential file (default <governance root>/.lybra/connection.json; no other implicit location)")
     board_open_parser.add_argument("--role", help="Role token to read from connection.json; default prefers owner then first available")
     board_open_parser.add_argument("--url", help="Board server base URL; overrides connection.json board.url")
     board_open_parser.add_argument("--host", help="Board server host; overrides connection.json")
@@ -1948,8 +1963,8 @@ def build_parser() -> argparse.ArgumentParser:
     board_open_parser.add_argument("--no-browser", action="store_true", help="Print the login URL instead of opening a browser")
     board_approve_parser = board_sub.add_parser("approve", help="AIPOS-271: approve a cross-machine device code (run on the gate machine)")
     board_approve_parser.add_argument("code", help="6-digit device code shown in the remote browser")
-    board_approve_parser.add_argument("--workspace-root", help="Workspace root for auto-discovery; defaults to current directory or env")
-    board_approve_parser.add_argument("--connection-json", help="Override the connection.json path (default <workspace>/.lybra/connection.json)")
+    board_approve_parser.add_argument("--workspace-root", help="Governance root whose .lybra/connection.json holds the credential (default: governance-root resolution — env / the governance root containing the current directory / workstation declaration)")
+    board_approve_parser.add_argument("--connection-json", help="Override the credential file (default <governance root>/.lybra/connection.json; no other implicit location)")
     board_approve_parser.add_argument("--role", help="Role token to read from connection.json; default prefers owner then first available")
     board_approve_parser.add_argument("--url", help="Board server base URL; overrides connection.json board.url")
     board_approve_parser.add_argument("--host", help="Board server host; overrides connection.json")
@@ -2628,6 +2643,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_setexec_parser.add_argument("--pi-executor", default=None, metavar="INSTANCE", help="pi executor workstation instance (required when --pi-allowed-task-mode is given)")
     project_setexec_parser.add_argument("--pi-allowed-task-mode", action="append", dest="pi_allowed_task_modes", default=[], metavar="TASK_MODE", help="task_mode the Owner explicitly allows to go to the pi executor (repeatable; enums.schema task_mode); unlisted = sub-agent default")
     project_setexec_parser.add_argument("--default-mode", default=None, help="Default execution mode (config.schema project_json.execution.default_mode enum; default subagent)")
+    project_setexec_parser.add_argument("--subagent-max-wait", type=float, default=None, metavar="SECONDS", help="AIPOS-F185: how long `lybra loop` waits for a sub-agent executor/auditor return by default (project.json execution.subagent_max_wait; omitted = keep the current value, absent = verbs.schema lybra_loop.wait_limits default)")
     project_setexec_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_setexec_parser.add_argument("--workspace-root", help="Target governance root when the project name is omitted (default: the one containing the current directory)")
     project_setexec_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -2870,7 +2886,7 @@ def build_parser() -> argparse.ArgumentParser:
     loop_parser.add_argument("--actor", help="驱动方身份(顾问实例); 缺省=治理根 .lybra/role 的 instance, 再缺省 advisor")
     loop_parser.add_argument("--connection-json", help="透传给 next --run 的 connection.json 路径(token 永不上屏)")
     loop_parser.add_argument("--max-steps", type=int, default=None, help="硬上限: 推导轮数(含等待轮); 缺省读 verbs.schema(20)")
-    loop_parser.add_argument("--max-wait", type=float, default=None, help="硬上限: 每次等待产物秒数; 缺省读 verbs.schema(沿用 agent watch 1800)")
+    loop_parser.add_argument("--max-wait", type=float, default=None, help="硬上限: 每次等待产物秒数; 缺省按本卡执行方式读 verbs.schema(子 agent 执行方式 = lybra_loop.wait_limits, project.json execution.subagent_max_wait 可覆盖; 其余沿用 agent watch 1800)")
     loop_parser.add_argument("--interval", type=float, default=None, help="等待轮询间隔秒(经 agent watch, 禁 sleep 自旋); 缺省读 verbs.schema(15)")
     loop_parser.add_argument("--no-launch", action="store_true", default=False,
                              help="AIPOS-F95: 不拉起 harness 进程(即使信封授权), 手工模式: 等待提示「请在 <工位目录> 的 <harness> 会话敲 /go」")
@@ -4466,7 +4482,7 @@ def main(argv: list[str] | None = None) -> int:
                     outcome = set_project_execution(
                         target["project_root"], subagent_executor=args.subagent_executor, auditor=args.auditor,
                         pi_executor=args.pi_executor, pi_allowed_task_modes=list(args.pi_allowed_task_modes or []),
-                        default_mode=args.default_mode, dry_run=not args.confirm)
+                        default_mode=args.default_mode, subagent_max_wait=args.subagent_max_wait, dry_run=not args.confirm)
                 except ExecutionDeclarationError as exc:
                     print(f"Error: {exc.code}(project.json 未改动)", file=sys.stderr)
                     for problem in exc.problems:
@@ -4478,6 +4494,8 @@ def main(argv: list[str] | None = None) -> int:
                     actor=args.actor, json_out=getattr(args, "json", False), extra={"execution": view},
                     details=[f"execution.{k} = {view[k]!r}" for k in ("default_mode", "subagent_executor", "pi_allowed_task_modes",
                                                                        "pi_executor", "auditor")]
+                    + ([f"execution.subagent_max_wait = {args.subagent_max_wait:g}(子 agent 执行方式下 loop 等交回缺省上限, 秒)"]
+                       if args.subagent_max_wait is not None else [])
                     + ["各实例已核: 本项目已接入(审计者 / pi 执行者有工位位置); 起草缺省与发卡核身份同读本段"])
             if args.project_command == "set-model":
                 # AIPOS-F169: 唯一实现 enrollment.set_project_pi_model(pi --list-models 核可用 + project_execution 校验 + update_project_json 唯一写路径)

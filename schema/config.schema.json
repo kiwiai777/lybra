@@ -519,6 +519,14 @@
               "required": true,
               "description": "独立 pi 审计工位实例名(审计恒为独立 pi, 不随执行方式变化); 须为本项目已接入且有工位位置的实例, 且不等于 subagent_executor / pi_executor。起草缺省 audit_by。"
             },
+            "subagent_max_wait": {
+              "type": "number",
+              "required": false,
+              "default": null,
+              "nullable": true,
+              "minimum": 1,
+              "description": "AIPOS-F185 件①(gap #187): 子 agent 执行方式下 `lybra loop` 每次等执行体 / 审计体交回的缺省上限(秒), 覆盖 verbs.schema lybra_loop.wait_limits.by_execution_mode.subagent.default; 缺键 / null = 用该声明缺省。只在本卡执行方式判为子 agent 时生效(pi 拉起模式缺省不变); 显式 --max-wait 仍最优先。读取口 workspace_config.project_subagent_max_wait(形校验并入 project_execution); 写入口 `lybra project set-execution --subagent-max-wait <秒>`(未给 = 原值保留)。"
+            },
             "pi_models": {
               "type": "object",
               "required": false,

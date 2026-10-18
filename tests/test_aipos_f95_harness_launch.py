@@ -554,8 +554,12 @@ def test_discipline_single_source_no_spin_no_daemon_registered():
         src = (REPO_ROOT / rel).read_text(encoding="utf-8")
         assert "sleep(" not in src and "except Exception" not in src and "except:" not in src, rel
         assert "threading.Thread" not in src and "daemon" not in src.lower() and "shell=True" not in src, rel
+    # AIPOS-F185 件⑥(gap #184): 只看产品文件集(runall_discovery.repo_files: git 跟踪 + 未跟踪未忽略), 被忽略的 __pycache__ 残留不算
+    from tools.aipos_cli.runall_discovery import repo_files
+
+    tool_names = [f.rsplit("/", 1)[-1] for f in repo_files(REPO_ROOT) if f.startswith("tools/")]
     for retired in ("agent_supervise", "agent_launch_check", "pump.py"):
-        assert not list((REPO_ROOT / "tools").rglob(f"{retired}*")), retired
+        assert not [n for n in tool_names if n.startswith(retired)], retired
     enums = json.loads((REPO_ROOT / "schema" / "enums.schema.json").read_text(encoding="utf-8"))["enums"]
     launch = {v["value"]: v.get("launch") for v in enums["harness"]["values"]}
     assert launch["pi"]["argv"] == ["pi", "-p", "{kickoff}", "--mode", "json"] and "--no-session" not in launch["pi"]["argv"]

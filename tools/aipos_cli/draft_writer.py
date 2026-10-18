@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
-from datetime import datetime, timezone
 from tools.aipos_cli.clock import iso_z
-from tools.aipos_cli.record_writer import record_dir
 from pathlib import Path
 from typing import Any
 
@@ -39,86 +37,9 @@ except ImportError:
     CARD_POLICY_AVAILABLE = False
 
 
-def _check_project_map_staleness(repo_root: Path, validation: dict[str, Any]) -> None:
-    """AIPOS-276: project-map staleness check (publish gate warning hook).
-    
-    If project-map.md exists and has an 'updated' field that is >3 days older
-    than the most recent return record (收编), append a warning to validation["warnings"].
-    Non-blocking; gracefully degrades if map absent, no updated field, or no returns.
-    """
-    map_path = repo_root / "governance" / "project-map.md"
-    if not map_path.is_file():
-        return  # no map = no check
-    
-    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
-
-    def _note(warning: str) -> None:
-        if warning not in validation["warnings"]:
-            validation["warnings"].append(warning)
-
-    try:
-        # AIPOS-F100 件②: 地图与 return 记录「必须读出」; 读不出不再静默跳过检查, 而是出声点名(仍只告警, 不挡发布)
-        try:
-            meta, _body = require_frontmatter(map_path)
-        except FrontmatterReadError as exc:
-            _note(f"PROJECT_MAP_UNREADABLE (新鲜度未检查: {exc})")
-            return
-        map_updated_str = str(meta.get("updated") or "").strip()
-        if not map_updated_str:
-            return  # no updated field = no check
-        
-        # Parse map updated timestamp
-        map_updated = datetime.fromisoformat(map_updated_str.replace("Z", "+00:00"))
-        if map_updated.tzinfo is None:
-            map_updated = map_updated.replace(tzinfo=timezone.utc)
-        
-        # Find most recent return record (收编 = finalized delivery)
-        returns_root = record_dir(repo_root, "returns")
-        if not returns_root.exists():
-            return  # no returns = no check
-        
-        most_recent_return: datetime | None = None
-        unreadable: list[str] = []
-        for task_dir in returns_root.iterdir():
-            if not task_dir.is_dir():
-                continue
-            for record_file in task_dir.glob("*.md"):
-                try:
-                    record_meta, _record_body = require_frontmatter(record_file)
-                except FrontmatterReadError as exc:
-                    unreadable.append(str(exc))
-                    continue
-                returned_at_str = str(record_meta.get("returned_at") or record_meta.get("created_at") or "").strip()
-                if not returned_at_str:
-                    continue
-                try:
-                    returned_at = datetime.fromisoformat(returned_at_str.replace("Z", "+00:00"))
-                except ValueError:
-                    unreadable.append(f"{record_file}: returned_at 不是 ISO 时间 {returned_at_str!r}")
-                    continue
-                if returned_at.tzinfo is None:
-                    returned_at = returned_at.replace(tzinfo=timezone.utc)
-                if most_recent_return is None or returned_at > most_recent_return:
-                    most_recent_return = returned_at
-        if unreadable:
-            _note(f"PROJECT_MAP_STALENESS_PARTIAL ({len(unreadable)} 份 return 记录读不出, 新鲜度只按可读记录判; 首份: {unreadable[0]})")
-        
-        if most_recent_return is None:
-            return  # no valid return records = no check
-        
-        # Check staleness: map_updated is >3 days before most_recent_return
-        delta = most_recent_return - map_updated
-        if delta.total_seconds() > 3 * 24 * 3600:
-            map_date = map_updated.strftime("%Y-%m-%d")
-            return_date = most_recent_return.strftime("%Y-%m-%d")
-            warning = f"PROJECT_MAP_STALE (地图更新于 {map_date}, 最近收编 {return_date})"
-            if warning not in validation["warnings"]:
-                validation["warnings"].append(warning)
-    
-    except (FileNotFoundError, KeyError, ValueError, OSError) as exc:
-        # Graceful degradation: staleness check is advisory, never fails publish
-        import warnings
-        warnings.warn(f"PROJECT_MAP staleness check failed: {exc}")
+# AIPOS-F185 件⑤(gap #162): 发布时读手写 governance/project-map.md 做新鲜度告警(AIPOS-276)已退役——看板对它的读取 F171 已下线,
+# 路线图改由 governance/roadmap.yaml 声明(lybra roadmap); 地图文件本身不删。不改读 roadmap.yaml 做偏差提示: 路线图是声明而非
+# 随交付手改的快照, 无「多久没更新」的新鲜度可判, 卡与里程碑的挂接偏差已由 roadmap.card_link_status(游离卡)一处判定。
 
 EXTERNAL_INTAKE_EXECUTION_ASSIGNED_TO = "agent-01"
 EXTERNAL_INTAKE_EXECUTION_OUTPUT_TARGET = "workspace_artifacts/external_intake"
@@ -932,10 +853,6 @@ def publish_draft(
             validation["warnings"].append(warning)
         if warning not in validation.setdefault("classification_warnings", []):
             validation["classification_warnings"].append(warning)
-    
-    # AIPOS-276: project-map staleness check (publish gate warning hook)
-    # If project-map.md exists and updated > 3 days before most recent return record, warn.
-    _check_project_map_staleness(repo_root, validation)
     
     # AIPOS-F68 大项②: Machine zone validation - prevent advisor hand-edits
     # Gracefully degrade if schema not available (存量兼容③)

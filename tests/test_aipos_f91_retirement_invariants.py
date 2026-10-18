@@ -131,8 +131,13 @@ def test_runall_location_single_declaration_and_registered():
     from tools.aipos_cli.workspace_config import runall_unregistered  # AIPOS-F109 件④: 登记判据 = 门同一实现(清单 discover = 命中式样即登记)
 
     assert runall_unregistered(["tests/test_aipos_f91_retirement_invariants.py"], runall)[0] == []
-    assert not (REPO_ROOT / "agents" / "harness" / "pi" / "lybra-loop").exists()
-    assert not (REPO_ROOT / "tools" / "connector").exists() and not (REPO_ROOT / "tools" / "turn_advancer").exists()
+    # AIPOS-F185 件⑥(gap #184): 退役判据 = 产品文件集(run-all 发现同一清单 runall_discovery.repo_files: git 跟踪 + 未跟踪未忽略),
+    # 不看目录存在——检出里被 git 忽略的解释器残留(__pycache__/*.pyc)不是产品文件, 不得让守卫在主检出变红
+    from tools.aipos_cli.runall_discovery import repo_files
+
+    files = repo_files(REPO_ROOT)
+    for retired in ("agents/harness/pi/lybra-loop/", "tools/connector/", "tools/turn_advancer/"):
+        assert not [f for f in files if f.startswith(retired)], retired
 
 
 if __name__ == "__main__":

@@ -864,6 +864,7 @@ def set_project_execution(
     pi_executor: str | None = None,
     pi_allowed_task_modes: list[str] | tuple[str, ...] = (),
     default_mode: str | None = None,
+    subagent_max_wait: float | None = None,
     dry_run: bool = True,
 ) -> dict[str, Any]:
     """AIPOS-F143 件②: `lybra project set-execution` 的唯一实现——整段写 project.json execution(未给的可选键 = 声明缺省; 其余键原样保留)。
@@ -893,10 +894,15 @@ def set_project_execution(
         # AIPOS-F169: pi_models 由同族 set-model 管, 整段重声明执行方式时原样保留(不随 set-execution 清掉 Owner 选定的模型)
         if isinstance(previous, dict) and previous.get("pi_models") is not None:
             section["pi_models"] = previous["pi_models"]
+        # AIPOS-F185 件①: 子 agent 等交回上限 —— 给了 = 写; 未给 = 原值保留(同 pi_models, 不随整段重声明清掉)
+        if subagent_max_wait is not None:
+            section["subagent_max_wait"] = subagent_max_wait
+        elif isinstance(previous, dict) and previous.get("subagent_max_wait") is not None:
+            section["subagent_max_wait"] = previous["subagent_max_wait"]
         data["execution"] = section
         staged["view"] = project_execution(project_root, project=data)  # 形不合 = 抛, 零写入
 
-    probe: dict[str, Any] = {"execution": dict(section)}
+    probe: dict[str, Any] = {"execution": {**section, **({"subagent_max_wait": subagent_max_wait} if subagent_max_wait is not None else {})}}
     view = project_execution(project_root, project=probe)
     refusals = execution_instance_refusals(project_root, view or {})
     if refusals:

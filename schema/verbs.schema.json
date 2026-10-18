@@ -2260,6 +2260,23 @@
       ],
       "cli_command": "lybra loop",
       "step_timeout_seconds": 600,
+      "wait_limits": {
+        "description": "AIPOS-F185 件①(gap #187): 等交回上限按本卡执行方式取缺省(判定唯一实现 loop_run_record.card_wait_execution_mode, 与 loop status 下一动作 run_execution_mode 同读: project.json execution 声明的卡执行方式, 或等待目标实例为子 agent 执行者)。子 agent 执行方式下执行体常做到 50 分钟以上(全量基线两边各约 15 分钟), 沿用 1800s 会 wait_timeout 让顾问手工重跑; 故缺省放宽到 by_execution_mode.subagent.default, 项目可在 project.json execution.subagent_max_wait 覆盖; pi 拉起 / 未声明执行方式 = parameters.max_wait.default 不变; 显式 --max-wait 最优先。读取口 loop_driver.loop_wait_limit。",
+        "parameter": "max_wait",
+        "by_execution_mode": {
+          "subagent": {
+            "default": 5400,
+            "project_override": "subagent_max_wait"
+          }
+        },
+        "messages": {
+          "source_explicit": "显式 --max-wait",
+          "source_default": "缺省(verbs.schema lybra_loop.parameters.max_wait.default)",
+          "source_mode_default": "子 agent 执行方式缺省(verbs.schema lybra_loop.wait_limits.by_execution_mode.subagent.default)",
+          "source_project": "项目覆盖(project.json execution.subagent_max_wait)",
+          "timeout_subagent": "等 {card} 交回超过 {max_wait:g}s 仍未就绪: 执行体可能仍在做(子 agent 跑全量测试等长任务很常见), 不是没人开工——用原命令重跑 loop 续等(已落的步不重复); 执行体若已终止再补派。"
+        }
+      },
       "step_timeout_note": "AIPOS-F90 件①(缺陷③): loop/next --run 执行派生命令子进程的硬上限(next_resolver.loop_step_timeout_seconds 唯一读取口, 原写死 120s); 不变量: ≥ 门 initialize(config.schema timeouts.gate_mcp_request_ms) + 两阶段最大 client_timeout_ms×2 + 超时回读一次, 夹具核。",
       "deploy_consistency": {
         "description": "AIPOS-F152 件①(gap #127: F148 长驻 loop 启动于 F147 部署前, 部署后读到新格式声明而内存是旧代码 → 崩): loop 启动时记下本进程运行的部署快照提交(运行代码根 = <部署目录>/releases/<名> 时取其 VERSION git_commit; 判定唯一实现 tools/aipos_cli/deploy_runtime.DeployGuard, VERSION 解析唯一口 gate_drift.read_version_commit), 每步推导前比对 <部署目录>/current 的提交; 变了(含 current 不在 / 不可读)= 以 end_reason deploy_changed、exit_codes.deploy_changed 干净结束, 运行记录 deploy 段写明 from / to 提交, 结束原文第一行即「部署已更新 … 用原命令重跑 loop 从断点续做」。手工模式等待(未拉起 harness)期间也每轮比对(经唯一等待原语 agent_watch_fs.run_fs_watch 的 deploy_guard), 部署一变即醒来结束; 拉起 harness 的等待期间不打断(打断 = 终止进程组, 执行体白干), 等待结束后的下一步前照常比对。非部署快照运行(卡工作树测试 / python -m / lybra --dev-tree 开发开关)= 不适用, 运行记录 deploy.deploy_check=not_applicable 如实标明。同一判定也用于 `lybra agent watch`(lybra_agent_watch.exit_codes.deploy_changed)与 `lybra loop status --wait`(lybra_loop_status.exit_codes.deploy_changed)。",
@@ -2316,7 +2333,7 @@
             "type": "number",
             "default": 1800,
             "minimum": 1,
-            "description": "硬上限: 每次等待产物的秒数(沿用 agent watch --timeout 默认 1800)"
+            "description": "硬上限: 每次等待产物的秒数(沿用 agent watch --timeout 默认 1800); 未给时按本卡执行方式取缺省(AIPOS-F185 件①: 子 agent 执行方式 = wait_limits.by_execution_mode.subagent, project.json execution.subagent_max_wait 可覆盖; 其余 = 本 default)"
           },
           "interval": {
             "type": "number",
@@ -2884,9 +2901,9 @@
               "why_routine": "AIPOS-F156 件①(gap #139): 只在 by_execution_mode.modes.subagent 覆盖时适用(本卡执行方式 = 顾问派子 agent): loop 等交回超 --max-wait 结束, 子 agent 多半仍在做(跑全量测试等长任务), 不是工位没人开工; 修法固定 = 等子 agent 交回后用原命令重跑, 或补派子 agent, 不涉 Owner 授权。pi 执行工位 / 手工工位仍按 by_end_reason(owner_needed: 请 Owner 在工位敲 /go)",
               "fix": [
                 "不找 Owner: 本卡执行方式 = 顾问派子 agent(project.json execution, 或等待目标实例为子 agent 执行者接入), loop 等交回超时是例行等待, 不是工位没人开工",
-                "子 agent 仍在做 → 等它提交并写完交回(RETURN.md)后用原命令重跑 loop(本修法末行命令; 已落的步不重复, 推导核按已落记录续做)",
+                "执行体可能仍在做 → 用原命令重跑 loop 续等(本修法末行命令; 已落的步不重复, 推导核按已落记录续做; 交回一落盘 loop 即醒来接着派审)",
                 "子 agent 已终止或未派 → 按开工材料派本卡子 agent(`lybra my-tasks --actor <本卡 assigned_to> --task-id {task_id}` 给工作树 / 报告落点 / 卡路径), 子 agent 写完交回即止",
-                "建议重跑时加大 --max-wait(秒; 缺省读 verbs.schema lybra_loop.parameters.max_wait), 免子 agent 长任务期间再超时"
+                "子 agent 执行方式下等交回缺省已放宽(verbs.schema lybra_loop.wait_limits.by_execution_mode.subagent.default, 项目可用 lybra project set-execution --subagent-max-wait 覆盖); 仍常超时 = 重跑时加大 --max-wait(秒)"
               ]
             },
             "charter_sync_failed": {

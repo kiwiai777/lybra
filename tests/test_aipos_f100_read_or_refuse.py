@@ -297,21 +297,8 @@ def test_session_progress_update_refuses_unreadable_record(gov: Path):
 # 静默跳过的检查(缺口 #7)
 # ---------------------------------------------------------------------------
 
-def test_project_map_staleness_names_unreadable_files(gov: Path):
-    from tools.aipos_cli.draft_writer import _check_project_map_staleness
-
-    _write(gov / "governance" / "project-map.md", "---\nupdated: '2026-09-01T00:00:00Z'\n---\n# map\n")
-    _write(gov / "5_tasks" / "records" / "returns" / TASK / "return_x.md", f"---\nreturned_at: '2026-10-01T00:00:00Z'\n{BAD_LINE}\n---\n")
-    _write(gov / "5_tasks" / "records" / "returns" / "OTHER" / "return_y.md", "---\nreturned_at: '2026-10-02T00:00:00Z'\n---\n")
-    validation = {"warnings": []}
-    _check_project_map_staleness(gov, validation)
-    _show("draft_writer._check_project_map_staleness", validation["warnings"])
-    assert any(w.startswith("PROJECT_MAP_STALENESS_PARTIAL") and "读不出: " in w for w in validation["warnings"])
-    assert any(w.startswith("PROJECT_MAP_STALE ") for w in validation["warnings"])
-    _write(gov / "governance" / "project-map.md", f"---\nupdated: '2026-09-01T00:00:00Z'\n{BAD_LINE}\n---\n")
-    validation2 = {"warnings": []}
-    _check_project_map_staleness(gov, validation2)
-    assert validation2["warnings"] and validation2["warnings"][0].startswith("PROJECT_MAP_UNREADABLE (新鲜度未检查: 读不出: ")
+# AIPOS-F185 件⑤(gap #162): 原 test_project_map_staleness_names_unreadable_files 随发布时 project-map 新鲜度告警退役删除
+# (被测函数 draft_writer._check_project_map_staleness 已删; 发布不再读 governance/project-map.md, 见 tests/test_aipos_f185_*.py)。
 
 
 def test_lineage_chain_raises_instead_of_ending_early(gov: Path):
