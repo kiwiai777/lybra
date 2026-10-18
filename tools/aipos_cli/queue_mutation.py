@@ -186,6 +186,115 @@ def supersede_texts() -> dict[str, str]:
     return texts
 
 
+SUPERSEDE_CARRY_TEXT_KEYS = ("preview_line", "done_line", "idempotent_note", "worktree_absent", "dirty_refused", "worktree_unreadable", "no_branch",
+                             "successor_not_pending", "successor_branch_exists", "repo_mismatch", "carried_conflict", "amend_refused",
+                             "claim_note", "claim_tip_moved", "claim_branch_missing", "claim_invalid", "kickoff_line")
+
+
+def supersede_carry_declaration() -> dict[str, Any]:
+    """AIPOS-F186: 撤换承继声明唯一读取口 transitions.schema queue_mutations.transitions.supersede.carry_branch
+    ({card_field, successor_states, amendment_type})。缺键 / successor_states 含非队列目录 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    carry = supersede_declaration().get("carry_branch")
+    need = ("card_field", "successor_states", "amendment_type")
+    if not isinstance(carry, dict) or any(not carry.get(k) for k in need):
+        raise SchemaLoadError(f"transitions.schema.json queue_mutations.transitions.supersede.carry_branch 未声明齐 {list(need)}")
+    states = tuple(str(x) for x in carry["successor_states"])
+    bad = [x for x in states if x not in QUEUE_STATES]
+    if bad:
+        raise SchemaLoadError(f"transitions.schema.json queue_mutations.transitions.supersede.carry_branch.successor_states 含非队列目录 {bad}")
+    return {**carry, "card_field": str(carry["card_field"]), "successor_states": states, "amendment_type": str(carry["amendment_type"])}
+
+
+def supersede_carry_plan(repo_root: Path, task_id: str, by: str) -> dict[str, Any]:
+    """AIPOS-F186 件①: `queue supersede --carry-branch` 的承继判定(唯一实现, 只读零写)。
+
+    原卡分支 = next_resolver.card_branch_name(原卡), 产品仓 / 工作树 = card_worktree_location(原卡, 与认领建树同一推导), tip =
+    existing_branch_tip; 未提交改动计数 = 原卡工作树 `git status --porcelain`(含未跟踪; 工作树不在盘 = 0)。
+    拒(problems, 文案 carry_texts): 原卡工作树有未提交改动 / 读不出 / 原卡无卡分支 / 新卡不在 carry_branch.successor_states 或已认领 /
+    新卡卡分支已存在 / 两卡解析到不同产品仓 / 新卡已记不同承继。新卡已记同一承继 = idempotent(不重写卡面)。
+    返回 {carry: {task_id, branch, tip, worktree_path, worktree_exists, uncommitted, code_repo, successor_branch} | None,
+    carried_from: {task_id, branch, tip} | None, problems: [str], idempotent: bool, line: str}。"""
+    import subprocess
+
+    from tools.aipos_cli.next_resolver import (
+        _read_frontmatter, card_base_branch, card_branch_name, card_carried_from, card_worktree_location, existing_branch_tip,
+    )
+    from tools.aipos_cli.task_loader import find_task_card
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved
+
+    decl = supersede_carry_declaration()
+    texts = supersede_carry_texts()
+    out: dict[str, Any] = {"carry": None, "carried_from": None, "problems": [], "idempotent": False, "line": ""}
+    orig_path, _orig_state = find_task_card(repo_root, task_id)
+    new_path, new_state = find_task_card(repo_root, by)
+    if orig_path is None or new_path is None:
+        return out  # 卡不在队列: supersede_problems / 搬卡预演已出拒因
+    orig_fm = {**_read_frontmatter(orig_path), "task_id": task_id}
+    new_fm = {**_read_frontmatter(new_path), "task_id": by}
+    try:
+        code_repo, worktree = card_worktree_location(repo_root, task_id, orig_fm)
+        successor_repo, _successor_tree = card_worktree_location(repo_root, by, new_fm)
+    except CardRepoUnresolved as exc:
+        out["problems"].append(f"{exc.code}: {exc.reason}")
+        return out
+    branch = card_branch_name(task_id)
+    successor_branch = card_branch_name(by)
+    base = card_base_branch()
+    if Path(successor_repo).resolve() != Path(code_repo).resolve():
+        out["problems"].append(texts["repo_mismatch"].format(by=by, successor_repo=successor_repo, task_id=task_id, repo=code_repo))
+        return out
+    tip = existing_branch_tip(code_repo, branch)
+    if tip is None:
+        out["problems"].append(texts["no_branch"].format(task_id=task_id, repo=code_repo, branch=branch))
+        return out
+    uncommitted = 0
+    if worktree.is_dir():
+        proc = subprocess.run(["git", "-C", str(worktree), "status", "--porcelain", "--untracked-files=all"],
+                              capture_output=True, text=True, timeout=30)
+        if proc.returncode != 0:
+            out["problems"].append(texts["worktree_unreadable"].format(task_id=task_id, worktree=worktree,
+                                                                       error=(proc.stderr or proc.stdout).strip()))
+            return out
+        uncommitted = len([ln for ln in proc.stdout.splitlines() if ln.strip()])
+    out["carry"] = {"task_id": task_id, "branch": branch, "tip": tip, "worktree_path": str(worktree), "worktree_exists": worktree.is_dir(),
+                    "uncommitted": uncommitted, "code_repo": str(code_repo), "successor_branch": successor_branch}
+    out["carried_from"] = {"task_id": task_id, "branch": branch, "tip": tip}
+    shown_tree = str(worktree) if worktree.is_dir() else f"{worktree}{texts['worktree_absent']}"
+    out["line"] = texts["preview_line"].format(task_id=task_id, branch=branch, tip=tip, worktree=shown_tree, uncommitted=uncommitted, by=by,
+                                               successor_branch=successor_branch, base=base)
+    if uncommitted:
+        out["problems"].append(texts["dirty_refused"].format(task_id=task_id, worktree=worktree, count=uncommitted, branch=branch))
+    claimed = str(new_fm.get("claim_id") or new_fm.get("claimed_by") or "").strip()
+    if new_state not in decl["successor_states"] or claimed:
+        out["problems"].append(texts["successor_not_pending"].format(by=by, states="/".join(decl["successor_states"]), state=new_state,
+                                                                     claimed=f", 已认领 {claimed}" if claimed else "", base=base))
+    successor_tip = existing_branch_tip(code_repo, successor_branch)
+    if successor_tip is not None:
+        out["problems"].append(texts["successor_branch_exists"].format(by=by, branch=successor_branch, repo=code_repo, tip=successor_tip))
+    try:
+        existing = card_carried_from(new_fm)
+    except ValueError as exc:
+        existing = {"invalid": str(exc)}
+    if existing is not None:
+        if existing == out["carried_from"]:
+            out["idempotent"] = True
+        else:
+            out["problems"].append(texts["carried_conflict"].format(by=by, existing=existing, task_id=task_id, branch=branch, tip=tip))
+    return out
+
+
+def supersede_carry_texts() -> dict[str, str]:
+    """AIPOS-F186: verbs.schema lybra_queue_supersede.carry_texts(撤换承继预演 / 拒因 / 认领建树 / 开工面文案唯一读取口; 缺 = SchemaLoadError)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    texts = (((load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get("lybra_queue_supersede") or {}).get("carry_texts"))
+    if not isinstance(texts, dict) or any(not isinstance(texts.get(k), str) for k in SUPERSEDE_CARRY_TEXT_KEYS):
+        raise SchemaLoadError(f"verbs.schema.json verbs.lybra_queue_supersede.carry_texts 未声明齐 {list(SUPERSEDE_CARRY_TEXT_KEYS)}")
+    return texts
+
+
 # AIPOS-348: reopen 允许源目录(= 声明 reopen.from_states)
 REOPEN_SOURCE_STATES = ALLOWED_TRANSITIONS["reopen"][0]
 # AIPOS-F87 件①: 卡字段序唯一定义在 record_writer.CARD_FRONTMATTER_ORDER(本名保留为别名, 供既有调用方)。
@@ -1030,6 +1139,10 @@ def mutate_queue_task(
         result["worktree_created"] = True
         result["worktree_path"] = str(built_worktree["worktree_path"])
         result["worktree_branch"] = str(built_worktree["branch"])
+        if built_worktree.get("carried_from"):
+            # AIPOS-F186 件②: 撤换承继卡——卡分支从原卡分支记录 tip 建, 认领输出写「承继自 <原卡> <分支>@<tip>」
+            result["worktree_carried_from"] = dict(built_worktree["carried_from"])
+            result["worktree_carried_line"] = str(built_worktree.get("carried_line") or "")
         if built_worktree.get("detached"):
             # AIPOS-F89 件③a: 审计卡取证工作树 = 被审分支 tip 的 detached 只读树
             result["worktree_detached"] = True

@@ -715,6 +715,13 @@
       "written_by": "transition_engine.apply_transition_metadata(supersede)",
       "description": "AIPOS-F184 件③: 本次撤换写出的 owner_decision_record 的 decision_id"
     },
+    "carried_from": {
+      "type": "object",
+      "required": false,
+      "written_by": "board_adapter.supersede_task(lybra queue supersede --carry-branch --confirm, 经 amend_task 写 pending 新卡卡面并落修订记录)",
+      "description": "AIPOS-F186 件①②(gap #190): 撤换承继——本卡卡分支从被撤换原卡的卡分支 tip 起建(而非 base_branch)。缺省(不写)= 不承继, 认领建树行为不变(从 base_branch 拉)。写入方唯一 = queue supersede --carry-branch(新卡须 pending 未认领; 原卡工作树须无未提交改动); 读取方 = next_resolver.card_carried_from(形校验唯一实现): 认领建树 _ensure_worktree(卡分支尚不存在时以 tip 为起点; 原卡分支当前 tip ≠ 记录 = 拒认领)、my-tasks 开工面 / card render 显示承继来源、queue_close 结案记录 carried_from。审计 / 交回 / 合入差异基线仍按 base_branch(承继提交在 base...卡分支 内一并审)。声明 transitions.schema queue_mutations.transitions.supersede.carry_branch。",
+      "shape": {"task_id": "string (被撤换原卡 task_id)", "branch": "string (原卡卡分支名, N5 branch_pattern)", "tip": "string (supersede 确认时原卡分支 tip 完整 40 位 sha)"}
+    },
     "finalize_task_id": {
       "type": "string",
       "required": false,

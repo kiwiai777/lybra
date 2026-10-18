@@ -59,6 +59,9 @@ def render_queue_mutation_text(result: dict[str, Any]) -> str:
     # AIPOS-F88 件①: 认领建卡工作树结果单列(建树失败 = 明确拒因, 不混进 warnings)
     if result.get("worktree_created"):
         lines.append(f"Worktree: {result.get('worktree_path')} (branch {result.get('worktree_branch')})")
+        if result.get("worktree_carried_line"):
+            # AIPOS-F186 件②: 撤换承继(卡分支从原卡分支 tip 建)
+            lines.append(f"  {result.get('worktree_carried_line')}")
     elif result.get("worktree_error"):
         # AIPOS-F90 件①: 建树失败 = 门拒认领(队列与记录未变更)
         lines.append(f"✗ 卡工作树未建立(认领被拒, 队列与记录未变更): {result.get('worktree_error')}")
@@ -95,6 +98,16 @@ def render_my_tasks_text(report: dict[str, Any], actor: str) -> str:
         reasons = task["blocking_reasons"] or task["warnings"] or task["needs_owner_reasons"]
         if reasons:
             lines.append(f"  notes: {', '.join(reasons[:3])}")
+        carried = (task.get("metadata") or {}).get("carried_from")
+        if carried:
+            # AIPOS-F186 件②: 撤换承继来源(开工面 JSON 另有 carried_line 含先合入当前基线的命令)
+            from tools.aipos_cli.next_resolver import carried_kickoff_line
+
+            try:
+                line = carried_kickoff_line(task.get("metadata"), str(task.get("task_id") or ""))
+            except ValueError as exc:
+                line = f"CARRIED_FROM_INVALID: {exc}"
+            lines.append(f"  carried_from: {line}")
     return "\n".join(lines)
 
 

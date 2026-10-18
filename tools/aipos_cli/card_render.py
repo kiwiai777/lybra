@@ -24,6 +24,7 @@ from tools.aipos_cli.next_resolver import (
     REPO_ROOT,
     _find_task_in_queue,
     card_needs_worktree,
+    carried_kickoff_line,
     card_report_contract,
     card_report_path,
     card_worktree_location,
@@ -131,6 +132,8 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
         "report_contract": report_contract,
         "artifact_kind": "verdict" if is_audit else "return",
         "rework_rounds": [r for r in (fm.get("rework_rounds") or []) if isinstance(r, dict) and not r.get("cleared_at")],
+        # AIPOS-F186 件②: 撤换承继来源一句(next_resolver.carried_kickoff_line 唯一渲染; 不承继 = None; 形不合 = ValueError fail-closed)
+        "carried_line": carried_kickoff_line({**fm, "task_id": task_id}, task_id) if needs_worktree else None,
     }
 
 
@@ -152,7 +155,8 @@ def _no_worktree_line(model: dict[str, Any]) -> str:
 def _common_sections(model: dict[str, Any]) -> list[str]:
     lane = model["lane"]
     if model["needs_worktree"]:
-        worktree_line = f"- 工作树: `{model['worktree']}`(分支 `{model['branch']}`, 从当前 main 拉)"
+        worktree_line = (f"- 工作树: `{model['worktree']}`(分支 `{model['branch']}`, 从当前 main 拉)" if not model.get("carried_line")
+                         else f"- 工作树: `{model['worktree']}`(分支 `{model['branch']}`; {model['carried_line']})")
         deliver_line = f"- 代码: 提交到分支 `{model['branch']}`(精确 pathspec add, 不 push)"
     else:
         worktree_line = f"- 工作树: {_no_worktree_line(model)}"
@@ -192,6 +196,7 @@ def render_pi(model: dict[str, Any]) -> dict[str, str]:
     worktree = f"{model['worktree']} (分支 {model['branch']})" if model["needs_worktree"] else _no_worktree_line(model)
     text = "\n".join([
         f"工作树: {worktree}",
+        *([f"承继: {model['carried_line']}"] if model.get("carried_line") else []),
         f"报告落点: {model['return_path']} ({_frontmatter_hint(model)})",
         f"卡路径: {model['card_path']}",
     ]) + "\n"

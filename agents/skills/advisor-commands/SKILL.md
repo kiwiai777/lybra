@@ -212,6 +212,22 @@ lybra queue supersede --task-id <原卡> --by <新卡> --actor <你的顾问实�
 ```
 `--owner-ref` 可选: Owner 在哪里定的(收件箱事项 ID / 裁决记录 ID / 会话引用)。拒: `--actor` 不是顾问角色类实例 / 新卡不在队列或已撤回 / 新卡 = 原卡 / 缺原话。收件箱该卡的待决事项随卡进 withdrawn 自动消失。
 
+**顾问起草的在途卡契约需更正**(AIPOS-F186; 例: 验收条款自相矛盾, 门拒改已认领卡的验收字段)→ 出更正卡 → `supersede --carry-branch` → 跑新卡 loop。
+与 Owner 中途改目标同一命令; 加 `--carry-branch` = 新卡接着原卡分支做, 已做工作不丢、不用手工合并:
+```bash
+# ① 出更正卡并发布(新卡须 pending、未认领)
+lybra draft create --from-json <卡稿JSON> --actor <你的顾问实例>
+lybra draft publish --path <草稿路径> --actor <你的顾问实例>
+# ② 预演: 列原卡分支名 / tip / 工作树路径 / 未提交改动计数(零写入)
+lybra queue supersede --task-id <原卡> --by <新卡> --actor <你的顾问实例> --owner-words "<Owner原话摘要>" --carry-branch
+# ③ 确认: 决策记录 → 新卡卡面记 carried_from {原卡, 分支, tip}(修订记录)→ 原卡 withdrawn → 自动落账
+lybra queue supersede --task-id <原卡> --by <新卡> --actor <你的顾问实例> --owner-words "<Owner原话摘要>" --carry-branch --confirm
+# ④ 跑新卡 loop: 认领时新卡分支从原卡分支 tip 建(原卡分支保留), 开工面提示执行体先把当前 main 合入
+lybra loop --workspace-root <治理根> --task-id <新卡>
+```
+拒: 原卡工作树有未提交改动(产品不代提交 → 先让执行体在原卡分支提交, 再重跑)/ 原卡无卡分支 / 新卡已认领或卡分支已存在 / 新卡已记不同承继。
+认领时原卡分支 tip 已不是记录的那个 = 认领被拒(CARRY_TIP_MOVED), 按当前 tip 重做 supersede 或改出新卡。审计与合入的差异基线仍按 main(承继提交一并审), 结案记录写承继关系; 交回的车道检查同按 main...新卡分支, 更正卡 lane.paths 须覆盖原卡已改的路径。
+
 #### `lybra queue rework`
 **何时用**:追加返工节到卡面(FAIL 裁决后,点杀清单+验收标准)(顾问职责).
 ```bash

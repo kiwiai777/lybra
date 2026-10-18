@@ -238,6 +238,7 @@ lybra next --task-id <卡ID>
 - ✅ 改卡:`lybra queue amend`
 - ✅ 撤卡:`lybra queue withdraw`(写入后自动落账)
 - ✅ Owner 中途改目标 → 撤换:先出新卡并发布, 再 `lybra queue supersede --task-id <原卡> --by <新卡> --actor <你的顾问实例> --owner-words <Owner 原话>`(预演后 `--confirm`;不要以执行体身份 block 原卡)
+- ✅ 顾问起草的在途卡契约需更正(门拒改已认领卡的验收等字段)→ 出更正卡 → `lybra queue supersede … --carry-branch`(新卡承继原卡分支与已做工作;原卡工作树须先由执行体提交干净, 产品不代提交)→ 跑新卡 loop;Owner 中途改目标、原卡已做工作要保留时同一命令(AIPOS-F186)
 - ✅ 派审:`lybra audit dispatch`
 - ✅ 裁决:`lybra audit-verdict`
 - ✅ 信封签发:`lybra envelope mint`

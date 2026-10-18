@@ -6422,7 +6422,8 @@ def execute_dry_run(
             summary={
                 "task_id": result.get("task_id"),
                 "moved": result.get("moved", False),
-                **{k: result[k] for k in ("worktree_created", "worktree_path", "worktree_branch", "worktree_error") if k in result},
+                **{k: result[k] for k in ("worktree_created", "worktree_path", "worktree_branch", "worktree_error",
+                                           "worktree_carried_from", "worktree_carried_line") if k in result},
             },
             planned_writes=list(result.get("planned_writes", [])) + planned_record_writes,
             planned_moves=list(result.get("planned_moves", [])),
@@ -7343,6 +7344,10 @@ def close_task(
 
         closure_evidence_bundle = {"type": evidence_type, "ref": evidence_ref}
         closure_path = closure_record_path(resolved_root, resolved_task_id, closure_id)
+        # AIPOS-F186 件③: 撤换承继关系(卡面 carried_from, 唯一读取 next_resolver.card_carried_from; 形不合 = 拒结案, fail-closed)
+        from tools.aipos_cli.next_resolver import card_carried_from
+
+        closure_carried_from = card_carried_from(selected_task.get("metadata") or fix_card_metadata)
 
         # AIPOS-R6M 大项A①: 卡粒度机器触发 - close时校验卡编年史存在本卡条目
         # 原'decision_log每卡追加'语义废除(73次无人理的WARN遗迹), decision_log改为只记决策粒度
@@ -7514,6 +7519,7 @@ def close_task(
             related_audit_task_refs=related_audit_refs or None,
             warnings=governance_warnings or None,
             submitted_by=str(submitted_by or "").strip() or None,
+            carried_from=closure_carried_from,  # AIPOS-F186 件③: 结案记录写撤换承继关系
         )
         closure_path_resolved = resolved_root / closure_path
         
@@ -7981,6 +7987,7 @@ def supersede_task(
     owner_ref: str | None = None,
     dry_run: bool = True,
     repo_root: str | Path | None = None,
+    carry_branch: bool = False,
 ) -> dict[str, Any]:
     """AIPOS-F184 件③(gap #186): 顾问凭 Owner 裁决撤换在途卡(lybra queue supersede 唯一实现)。
 
@@ -7988,7 +7995,11 @@ def supersede_task(
     决策记录预演(record_owner_decision, payload = owner_inbox.supersede_decision_payload, 与 owner decide 同一构造)。
     确认: 先 execute_dry_run 落 owner_decision_record(含 decision_log 自动指针), 再搬卡(卡面记 superseded_* 与决策 id);
     搬卡被拒 = 决策记录照落(written 照列, 调用方照落账)。不落账(写出文件 written 由 CLI 经 queue_writers 落账)。
-    返回 {ok, verdict, stage, task_id, by, from_state, decision_id, card, decision, blocking_reasons, warnings, written, line}。"""
+    AIPOS-F186 carry_branch=True(`--carry-branch`): 承继判定唯一实现 queue_mutation.supersede_carry_plan(预演列原卡分支 / tip /
+    工作树 / 未提交改动计数; 拒因并入 blocking_reasons, 零写入)+ 新卡卡面预演 amend_task(dry_run); 确认 = 决策记录落盘后先经
+    amend_task 写新卡 carried_from(修订记录随 written 落账; 已记同一承继 = 幂等不重写)再搬原卡。carry_branch=False = F184 行为不变。
+    返回 {ok, verdict, stage, task_id, by, from_state, decision_id, card, decision, carry, blocking_reasons, warnings, written, line,
+    carry_line}。"""
     from tools.aipos_cli.controlled_execute import OWNER_CONFIRMATION_TOKEN
     from tools.aipos_cli.owner_inbox import supersede_decision_payload
     from tools.aipos_cli.queue_mutation import supersede_texts
@@ -8000,7 +8011,7 @@ def supersede_task(
     report: dict[str, Any] = {"ok": False, "verdict": Verdict.BLOCK, "stage": "preview" if dry_run else "confirm", "task_id": task_id,
                               "by": str(by or "").strip(), "actor": actor_text, "owner_words": words, "owner_ref": owner_ref,
                               "from_state": None, "decision_id": None, "card": None, "decision": None, "blocking_reasons": [],
-                              "warnings": [], "written": [], "line": ""}
+                              "warnings": [], "written": [], "line": "", "carry": None, "carry_line": ""}
     profiles = load_agent_profiles(root)
     task = _select_task(root, task_id=task_id, path=None)
     report["task_id"] = str(task.get("task_id") or task_id)
@@ -8016,6 +8027,26 @@ def supersede_task(
     if meta.get("active_worktree_path") or meta.get("active_worktree_branch"):
         report["warnings"].append(texts["worktree_note"].format(path=meta.get("active_worktree_path") or "-",
                                                                 branch=meta.get("active_worktree_branch") or "-"))
+    carry_plan: dict[str, Any] | None = None
+    carry_amend: dict[str, Any] | None = None
+    if carry_branch:
+        # AIPOS-F186 件①: 承继判定(唯一实现 queue_mutation.supersede_carry_plan)+ 新卡卡面预演(既有 pending 卡修订唯一实现 amend_task)
+        from tools.aipos_cli.queue_mutation import supersede_carry_declaration, supersede_carry_plan, supersede_carry_texts
+
+        carry_decl = supersede_carry_declaration()
+        carry_texts = supersede_carry_texts()
+        carry_plan = supersede_carry_plan(root, report["task_id"], report["by"])
+        report["carry"] = {**(carry_plan.get("carry") or {}), "idempotent": carry_plan["idempotent"]} if carry_plan.get("carry") else None
+        report["carry_line"] = carry_plan.get("line") or ""
+        report["blocking_reasons"].extend(carry_plan["problems"])
+        if carry_plan.get("carried_from") and not carry_plan["problems"] and not carry_plan["idempotent"]:
+            carry_amend = {"task_id": report["by"], "actor": actor_text, "amendments": {carry_decl["card_field"]: carry_plan["carried_from"]},
+                           "amendment_reason": reason, "amendment_type": carry_decl["amendment_type"], "repo_root": root}
+            amend_dry = amend_task(**carry_amend, dry_run=True)
+            if not amend_dry.get("ok"):
+                report["blocking_reasons"].append(carry_texts["amend_refused"].format(
+                    by=report["by"], reason=json.dumps(amend_dry.get("errors") or amend_dry.get("blocking_reasons") or amend_dry.get("message"),
+                                                       ensure_ascii=False)[:400]))
     payload = supersede_decision_payload(root, task_id=report["task_id"], by=report["by"], relayed_by=actor_text, owner_words=words,
                                          owner_ref=supersede["owner_ref"], from_state=report["from_state"], decided_at=iso_z())
     report["decision_id"] = payload["decision_id"]
@@ -8041,6 +8072,17 @@ def supersede_task(
                                           + json.dumps(done.get("errors") or done.get("blocking_reasons"), ensure_ascii=False)[:400])
         report["line"] = texts["blocked_line"].format(reasons="; ".join(report["blocking_reasons"]))
         return report
+    if carry_amend is not None:
+        # AIPOS-F186 件①: 先记新卡承继(carried_from)再搬原卡——承继记录写不成则原卡不搬(决策记录已落照落账)
+        amended = amend_task(**carry_amend, dry_run=False)
+        if not amended.get("ok"):
+            report["blocking_reasons"].append("决策记录已落, 新卡承继记录被拒(原卡未搬): " + carry_texts["amend_refused"].format(
+                by=report["by"], reason=json.dumps(amended.get("errors") or amended.get("message"), ensure_ascii=False)[:400]))
+            report["line"] = texts["blocked_line"].format(reasons="; ".join(report["blocking_reasons"]))
+            return report
+        amend_data = amended.get("data") or {}
+        report["written"] += [str(root / str(amend_data["amendment_record_path"])), str(root / str(amend_data["task_path"]))]
+        report["carry"]["amendment_id"] = amend_data.get("amendment_id")
     moved = mutate_queue_task(root, "supersede", task_id=report["task_id"], actor=actor_text, reason=reason, dry_run=False,
                               profiles=profiles, supersede={**supersede, "decision_id": report["decision_id"]})
     report["card"] = {k: moved.get(k) for k in ("verdict", "source_path", "target_path", "from_state", "to_state", "blocking_reasons",
@@ -8051,6 +8093,9 @@ def supersede_task(
         return report
     report["written"] += [str(moved["source_path"]), str(moved["target_path"])]
     report.update({"ok": True, "verdict": Verdict.PASS, "line": texts["done_line"].format(**fill)})
+    if carry_plan is not None and report["carry"]:
+        report["carry_line"] = carry_texts["done_line"].format(
+            by=report["by"], amendment_id=report["carry"].get("amendment_id") or carry_texts["idempotent_note"], **carry_plan["carried_from"])
     return report
 
 
