@@ -7770,10 +7770,16 @@ def close_task(
             except (ValueError, FileNotFoundError, OSError, KeyError):
                 pass
 
+        # AIPOS-F187 件③: closure 落盘且审计卡自动结案后, 清理本卡工作树与审计工作树(干净删、分支保留; 脏不碰只报告;
+        # 承继卡结案时一并清原卡树)。失败只进应答与清理记录, 绝不影响结案(cleanup_after 不抛)。
+        from tools.aipos_cli.worktree_cleanup import cleanup_after
+
+        worktree_cleanup = cleanup_after(resolved_root, resolved_task_id, trigger="close", actor=actor_text)
         combined_warnings = list(mutation_result.get("warnings", []))
         combined_warnings.extend(governance_warnings)
         # AIPOS-F44A ⑥: Add N6 next_step to close success response
         response_data = {
+            "worktree_cleanup": worktree_cleanup,
             "task_id": resolved_task_id,
             "source_path": source_path,
             "target_path": mutation_result.get("target_path"),
@@ -7954,6 +7960,10 @@ def withdraw_task(
                 blocking_reasons=result.get("blocking_reasons", []),
             )
         
+        # AIPOS-F187 件③: 卡进 withdrawn 后清理其工作树 / 审计工作树(干净删、脏不碰; 失败只进输出, 不影响撤回)
+        from tools.aipos_cli.worktree_cleanup import cleanup_after
+
+        worktree_cleanup = cleanup_after(resolved_root, str(result.get("task_id") or selected_task_id), trigger="withdraw", actor=actor_text)
         return make_response(
             ok=True,
             operation=operation,
@@ -7969,6 +7979,8 @@ def withdraw_task(
                 "owner_ruling_ref": result.get("owner_ruling_ref"),
                 "moved": result.get("moved", False),
                 "wrote": result.get("wrote", False),
+                "worktree_cleanup": worktree_cleanup,
+                "worktree_cleanup_record": worktree_cleanup.get("record"),
             },
             summary={"task_id": result.get("task_id"), "withdrawn": True},
             warnings=result.get("warnings", []),
@@ -8096,6 +8108,12 @@ def supersede_task(
     if carry_plan is not None and report["carry"]:
         report["carry_line"] = carry_texts["done_line"].format(
             by=report["by"], amendment_id=report["carry"].get("amendment_id") or carry_texts["idempotent_note"], **carry_plan["carried_from"])
+    # AIPOS-F187 件③: 原卡进 withdrawn 后清理其工作树 / 审计工作树(--carry-branch = 新卡 carried_from 引用, 原卡树保留; 失败不影响撤换)
+    from tools.aipos_cli.worktree_cleanup import cleanup_after
+
+    report["worktree_cleanup"] = cleanup_after(root, report["task_id"], trigger="supersede", actor=actor_text)
+    if report["worktree_cleanup"].get("record"):
+        report["written"].append(str(report["worktree_cleanup"]["record"]))
     return report
 
 

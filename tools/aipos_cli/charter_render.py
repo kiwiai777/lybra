@@ -302,28 +302,11 @@ def charter_render_context(
         ctx[f"{kind}_required_frontmatter"] = render_report_frontmatter_clause(report_frontmatter_contract(kind))
     # AIPOS-F99 件②: 审计「独立全量基线」的测试清单位置 = 项目声明 test_contract.runall_path(唯一读取口
     # workspace_config.project_test_contract, 卡仓取缺省产品仓; 形坏 = ValueError 原样抛, fail-closed); 未声明 = 明确文字, 不留空占位。
-    from tools.aipos_cli.workspace_config import project_test_contract
-
-    test_contract = project_test_contract(gov, code_repo)
-    runall = test_contract.get("runall_path")
-    ctx["runall_path"] = (
-        f"`{runall}`(相对产品仓根; 来源 {test_contract['source']}.runall_path)"
-        if runall
-        else "本项目未声明测试清单(project.json 无 test_contract.runall_path)——独立全量基线跳过, 报告注明「项目未声明 test_contract.runall_path」"
-    )
-    # AIPOS-F137 件③(gap #117/#101): 长测试写法——全量一次的命令式样与 bash 工具超时。超时 = 同一清单全量跑一次的既有时限声明
-    # test_contract.post_merge_regression.timeout_seconds(finalize 合并后回归跑的正是同一清单全量; 同一读取口, 未声明取 config.schema
-    # 缺省), 不另设键、不写死数值; 命令式样只拼声明的清单位置。
-    pmr = test_contract["post_merge_regression"]
-    ctx["runall_command"] = (
-        f"`bash {runall} 2>&1 | tee <本工位临时目录>/runall-<tip|main>.log`"
-        if runall
-        else "(本项目未声明测试清单, 无全量可跑——见第 6 条)"
-    )
-    ctx["runall_timeout_seconds"] = (
-        f"`{int(pmr['timeout_seconds'])}` 秒(来源 {pmr['source']} 的 timeout_seconds"
-        "——同一清单全量跑一次的时限声明)"
-    )
+    # AIPOS-F99 / F137: 全量清单位置 / 命令式样 / 时限三键(渲染唯一 runall_context, AIPOS-F187 开工稿同读); 键表只取三标量(指纹不变)
+    runall_view = runall_context(gov, code_repo)
+    ctx["runall_path"] = runall_view["runall_path"]
+    ctx["runall_command"] = runall_view["runall_command"]
+    ctx["runall_timeout_seconds"] = runall_view["runall_timeout_seconds"]
     # AIPOS-F149 件③(gap #89): main 侧基线复用——审计体按 sha 查已记录的合并后回归失败集合的只读命令(唯一渲染
     # post_merge_regression.audit_baseline_command; 治理根与产品仓读声明, 与审计卡取证锚点同一函数)。
     from tools.aipos_cli.post_merge_regression import audit_baseline_command
@@ -334,6 +317,40 @@ def charter_render_context(
 
     ctx.update(charter_commands(gov))
     return ctx
+
+
+def runall_context(gov: Path, code_repo: Any, *, log_dir: str = "<本工位临时目录>") -> dict[str, Any]:
+    """全量测试清单的命令式样与时限(章程占位 runall_path / runall_command / runall_timeout_seconds 与 AIPOS-F187 开工稿同一渲染)。
+
+    AIPOS-F99 件②: 审计「独立全量基线」的测试清单位置 = 项目声明 test_contract.runall_path(唯一读取口
+    workspace_config.project_test_contract, code_repo = 卡仓 / 缺省产品仓; 形坏 = ValueError 原样抛, fail-closed); 未声明 = 明确文字。
+    AIPOS-F137 件③(gap #117/#101): 长测试写法——全量一次的命令式样与 bash 工具超时。超时 = 同一清单全量跑一次的既有时限声明
+    test_contract.post_merge_regression.timeout_seconds(finalize 合并后回归跑的正是同一清单全量; 同一读取口, 未声明取 config.schema
+    缺省), 不另设键、不写死数值; 命令式样只拼声明的清单位置。log_dir = 日志目录(章程 = 占位; 开工稿 = 本卡草稿目录)。
+    另返回 runall(声明值或 None)与 test_contract(读取结果, 开工稿取 ratchet / residual_processes)。"""
+    from tools.aipos_cli.workspace_config import project_test_contract
+
+    test_contract = project_test_contract(gov, code_repo)
+    runall = test_contract.get("runall_path")
+    pmr = test_contract["post_merge_regression"]
+    return {
+        "runall_path": (
+            f"`{runall}`(相对产品仓根; 来源 {test_contract['source']}.runall_path)"
+            if runall
+            else "本项目未声明测试清单(project.json 无 test_contract.runall_path)——独立全量基线跳过, 报告注明「项目未声明 test_contract.runall_path」"
+        ),
+        "runall_command": (
+            f"`bash {runall} 2>&1 | tee {log_dir}/runall-<tip|main>.log`"
+            if runall
+            else "(本项目未声明测试清单, 无全量可跑——见第 6 条)"
+        ),
+        "runall_timeout_seconds": (
+            f"`{int(pmr['timeout_seconds'])}` 秒(来源 {pmr['source']} 的 timeout_seconds"
+            "——同一清单全量跑一次的时限声明)"
+        ),
+        "runall": runall,
+        "test_contract": test_contract,
+    }
 
 
 def render_context_fingerprint(ctx: dict[str, Any]) -> str:
@@ -633,6 +650,10 @@ def instance_charter(
         "workstation": None if view["governance_root_mode"] else str(workstation),  # 子 agent 无工位
         "executor_mode": identity.get("executor_mode"),
         "governance_root": str(gov),
+        # AIPOS-F187 件①: 开工稿(subagent_kickoff)同一身份判定的非秘密字段——工位根(子 agent = 治理根)、门地址、会话所在机(land 事件 host)
+        "harness_root": str(identity["harness_root"]),
+        "gate_url": str(ctx["gate_url"]),
+        "session_host": view.get("host"),
     }
 
 
@@ -664,7 +685,9 @@ def charter_pull_command(governance_root: str | Path, *, instance: str, role_cla
                  f"--gate-ssh-alias {decl['host_placeholder']} --material-access <一句话> --confirm")
     remote = f"cd {shlex.quote(str(gov))} && {cli} --role {shlex.quote(role_class)} --instance {shlex.quote(instance)}"
     host_text = shlex.quote(host) if host else str(decl["host_placeholder"])
-    return {"command": f"ssh {host_text} {shlex.quote(remote)}", "host": host, "host_declared": host is not None, "host_hint": hint}
+    # AIPOS-F187 件①: local_command = 在治理根所在机运行的同一命令(开工稿给本机会话的子 agent; 不另拼)
+    return {"command": f"ssh {host_text} {shlex.quote(remote)}", "local_command": remote, "host": host, "host_declared": host is not None,
+            "host_hint": hint}
 
 
 def run_charter_cli(args: Any) -> int:

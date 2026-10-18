@@ -1664,7 +1664,7 @@ def _queue_write_paths(result: dict[str, Any]) -> list[str]:
     data = result.get("data") if isinstance(result.get("data"), dict) else result
     if not (data.get("moved") or data.get("wrote")):
         return []
-    paths = [str(data[k]) for k in ("source_path", "target_path") if data.get(k)]
+    paths = [str(data[k]) for k in ("source_path", "target_path", "worktree_cleanup_record") if data.get(k)]  # AIPOS-F187: 清理记录随同落账
     for item in list(result.get("record_writes") or []) + list(result.get("record_updates") or []):
         if isinstance(item, dict) and item.get("path") and (item.get("wrote") or item.get("updated")):
             paths.append(str(item["path"]))
@@ -2640,6 +2640,16 @@ def build_parser() -> argparse.ArgumentParser:
     project_upgrade_parser.add_argument("--guidance", action="store_true", help="Only list, per advisor instance, the new capabilities the button cannot do (why / what to tell the advisor incl. command / done criterion); read-only")
     project_upgrade_parser.add_argument("--json", action="store_true", help="Output JSON")
     _project_json_two_phase_flags(project_upgrade_parser, "upgrade", family="project_upgrade_writers")
+    # AIPOS-F187 件④: 存量卡工作树 / 审计工作树清理(判据 transitions.schema queue_mutations.worktree_cleanup; 唯一实现 worktree_cleanup)
+    project_cleanup_parser = project_subparsers.add_parser(
+        "cleanup-worktrees",
+        help="AIPOS-F187: clean up card and audit work trees of this project across all declared product repos with the same rule as the "
+             "automatic cleanup after close / withdraw (terminal and clean -> git worktree remove, branch kept; dirty -> listed, untouched; "
+             "in flight / carried by a pending card -> kept); --dry-run (default) lists, --confirm removes")
+    project_cleanup_mode = project_cleanup_parser.add_mutually_exclusive_group()
+    project_cleanup_mode.add_argument("--dry-run", action="store_true", help="Preview, zero writes (default)")
+    project_cleanup_mode.add_argument("--confirm", action="store_true", help="Remove the work trees judged removable (branches kept)")
+    project_cleanup_parser.add_argument("--json", action="store_true", help="JSON output")
     # AIPOS-F143 件②: 项目执行方式声明写入口(project.json execution; 声明 config.schema project_json.execution; update_project_json 唯一写路径)
     project_setexec_parser = project_subparsers.add_parser("set-execution", help="AIPOS-F143: declare the project's execution mode (project.json execution: sub-agent executor by default, Owner-approved task modes may go to a pi executor workstation, audits always by an independent pi auditor); every instance must already be enrolled in this project; --dry-run (default) shows the diff, --confirm writes")
     project_setexec_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory)")
@@ -2976,6 +2986,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="AIPOS-F138: 输出实例的渲染后章程全文到 stdout(与 sync 同一渲染器; 他机会话开局经 ssh 在治理根所在机读取, 产品不推送)",
     )
     _add_charter_arguments(charter_parser)
+
+    # AIPOS-F187 件①: lybra kickoff — 子 agent 开工稿由产品生成(声明 verbs.schema lybra_kickoff; 唯一实现 subagent_kickoff)
+    kickoff_parser = subparsers.add_parser(
+        "kickoff",
+        help="AIPOS-F187: print a self-contained kickoff brief for the sub-agent that works a claimed card (identity, charter command, "
+             "work tree / branch / base sha, report location and required frontmatter, write boundary and no-write list, verification "
+             "requirements, residual-process check, stop after the report); read-only; hand it to the sub-agent as is, append card-specific notes after it",
+    )
+    kickoff_parser.add_argument("--task-id", required=True, help="Card id (executor card or audit card)")
+    kickoff_parser.add_argument("--role", choices=["executor", "auditor"], default=None,
+                                help="Brief for this role; default = by the card (audit card = auditor); a mismatch is refused")
+    kickoff_parser.add_argument("--json", action="store_true", help="JSON output (text plus the projected values)")
 
     # AIPOS-F167 件③: lybra updates — 看 Lybra 更新说明(顾问须知)与记已读(--ack 两阶段, 族 advisor_update_writers; 声明 verbs.schema lybra_updates)
     updates_parser = subparsers.add_parser(
@@ -4287,6 +4309,11 @@ def main(argv: list[str] | None = None) -> int:
             return _workspace_roots_command(args)
         parser.print_help()
         return 2
+
+    if args.command == "project" and getattr(args, "project_command", None) == "cleanup-worktrees":
+        # AIPOS-F187 件④: 薄壳 —— 治理根经 _find_repo_root_for_args(子命令级 --workspace-root), 不走 home 根解析
+        from tools.aipos_cli.worktree_cleanup import run_cleanup_cli
+        return run_cleanup_cli(args)
 
     if args.command == "project":
         if not getattr(args, "project_command", None):
@@ -5641,6 +5668,11 @@ def main(argv: list[str] | None = None) -> int:
         # 治理根由 run_charter_cli 经同一薄壳解析, 解析不出走本命令声明的退出码(lybra_charter.exit_codes.unreadable)
         from tools.aipos_cli.charter_render import run_charter_cli
         return run_charter_cli(args)
+
+    if args.command == "kickoff":
+        # AIPOS-F187 件①: 只读薄壳 — 全部逻辑在 subagent_kickoff(渲染唯一 render_kickoff_brief), 治理根经同一薄壳解析
+        from tools.aipos_cli.subagent_kickoff import run_kickoff_cli
+        return run_kickoff_cli(args)
 
     try:
         repo_root = _find_repo_root_for_args(args)

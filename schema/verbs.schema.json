@@ -283,7 +283,9 @@
       "migrate record-type",
       "migrate decision-log-pointers",
       "regression run",
-      "updates"
+      "updates",
+      "kickoff",
+      "project cleanup-worktrees"
     ],
     "announce_commands": [
       "next",
@@ -2252,6 +2254,105 @@
         "note": "与 F95 前 go.ts 字面量文案等义(开工提示只含工作树/报告落点/卡路径/报告必填字段, 零门动词)。任一占位缺值或报告必填字段形变 = 渲染失败, 该卡不入选 next_card(拒因 KICKOFF_UNRESOLVED, fail-closed)。"
       }
     },
+    "lybra_kickoff": {
+      "description": "AIPOS-F187 件①(10-18 顾问实况: 子 agent 执行模式下 loop 的 manual_kickoff 只给「开工材料 my-tasks + 章程 charter」两条命令, 顾问每张卡手写约 60 行开工稿, F184/F185/F186 三份几乎逐字相同; chris 三位 Codex 顾问各写各的): `lybra kickoff --task-id <卡> [--role executor|auditor] [--json] [--workspace-root <治理根>]` —— 输出一份可直接交给子 agent 的自足开工稿(顾问可在其后追加本卡特别说明)。只读: 不写任何文件、不连门、不起进程。开工稿是渲染, 不是第二份规则文本: 骨架与句子只在本条 texts / layout, 值全部取自既有单源——卡面(task_id / title / lane / 认领实例 claimed_by / carried_from)、project.json(repos、paths.return_root / verdict_root / scratch_root、test_contract.runall_path / ratchet / residual_processes)、章程(实例身份与章程可取 = charter_render.instance_charter 同一判定; 写权限边界与全角色硬规矩 = roles.schema write_boundary 经 write_boundary.build_write_boundary; 门交互硬规矩 = 项目 paths.hard_rules_source § 0.5 经 hard_rules_extractor.extract_hard_rules_from_handbook; 全量命令与时限 = charter_render.runall_context; 长命令 = run_long.charter_commands)、开工面(工作树 / 报告落点 / 报告必填字段 / 承继来源 = next_resolver.card_workstation_view, 报告必填行式 = lybra_my_tasks.kickoff.report_field_line)。可开工判据 = next_resolver.kickoff_refusal(与工位 /go 同一判据: 卡不在队列 / 未认领 / 已结案 / 当前不该本角色动 / 产物已交 = 拒, 拒因原文)。角色 = 审计卡(audit_derivation.is_audit_card)→ auditor, 否则 executor; --role 与卡不符 = 拒。实例 = 卡面 claimed_by(缺 = assigned_to)。实例会话所在机(子 agent 接入 land 事件 host)≠ 本机 = 章程命令给 ssh 拉取式(charter_render.charter_pull_command, 主机未声明 = 占位 + 声明出口)并加 remote_note。草稿目录 = paths.scratch_root/<卡ID 小写>(未声明 = 系统临时目录下 config.schema paths.scratch_root.default_system_temp), 落在治理根内 = 拒(KICKOFF_SCRATCH_IN_GOVERNANCE)。唯一实现 tools/aipos_cli/subagent_kickoff.render_kickoff_brief; loop 子 agent 模式等待提示(lybra_loop.launch.manual_hint.subagent)与 loop status 下一动作(lybra_loop_status.next_action.by_execution_mode.modes.subagent.kickoff_detail)指向本命令。",
+      "phase": "render",
+      "surface": ["cli"],
+      "cli_command": "lybra kickoff",
+      "single_implementation": "tools/aipos_cli/subagent_kickoff.render_kickoff_brief(渲染) / run_kickoff_cli(CLI 薄壳)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": {"type": "string", "description": "卡 ID(执行卡或审计卡)"},
+          "role": {"type": "string", "enum": ["executor", "auditor"], "description": "可选: 开工稿角色; 缺省按卡判(审计卡 = auditor); 与卡不符 = 拒"},
+          "json": {"type": "boolean", "description": "JSON 输出(含 text 与各段取值来源)"},
+          "workspace_root": {"type": "string", "description": "治理根; 缺省自发现(governance_root_resolution)"}
+        },
+        "required": ["task_id"],
+        "additionalProperties": false
+      },
+      "exit_codes": {
+        "ok": {"code": 0, "meaning": "开工稿已输出"},
+        "refused": {"code": 1, "meaning": "拒(stderr 拒因原文与出口): 卡不可开工(kickoff_refusal 同一判据)/ --role 与卡不符 / 认领实例缺 / 章程不可取(instance_charter 拒因)/ 工作树未建或不可推导 / 报告落点或必填字段不可推导 / 草稿目录落在治理根内"},
+        "usage": {"code": 2, "meaning": "参数错(argparse)"},
+        "unreadable": {"code": 3, "meaning": "治理根 / project.json / 声明读取失败(fail-closed)"}
+      },
+      "layout": {
+        "executor": ["header", "", "start_title", "start_charter", "start_card", "start_worktree", "start_no_worktree", "start_repo", "carried", "remote_note", "", "boundary_title", "boundary_lines", "", "no_write_title", "no_write_governance", "no_write_other_projects", "no_write_harness", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_body", "return_stop", "", "summary"],
+        "auditor": ["header_auditor", "", "start_title", "start_charter", "start_card_auditor", "start_worktree_auditor", "start_repo", "remote_note", "", "boundary_title", "boundary_lines", "", "no_write_title", "no_write_governance", "no_write_product_auditor", "no_write_other_projects", "no_write_harness", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline_auditor", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_body_auditor", "return_stop", "", "summary"],
+        "note": "每个键 = texts 的一行模板; \"\" = 空行。模板占位值为 null(本卡不适用, 如无承继 / 本机会话 / 无工位)= 该行省略; 列表占位(*_lines)= 逐项按 item_templates 成行。占位缺 / 值非串 = 渲染失败(fail-closed, 不出半截开工稿)。"
+      },
+      "role_labels": {"executor": "执行体", "auditor": "审计体"},
+      "texts": {
+        "header": "你是 {project} 项目的{role_label}(实例 {instance}), 负责完成卡 {task_id}: {title}。用中文写报告。",
+        "header_auditor": "你是 {project} 项目的{role_label}(实例 {instance}), 负责审计卡 {task_id}(被审卡 {reviewed_task_id}): {title}。用中文写报告。",
+        "start_title": "## 开工",
+        "start_charter": "1. 读章程: `{charter_command}`",
+        "start_card": "2. 读卡面全文: `{card_path}`。卡面 governance_refs 与正文里的依据 / 验收 / 硬约束 / 纪律全部是要求, 逐条遵守; 卡面有未销账的返工节 = 以返工节为最新指令。",
+        "start_card_auditor": "2. 读审计卡全文: `{card_path}`(含被审卡验收标准、取证锚点与裁决报告要求), 逐条裁定; 被审卡卡面: `{reviewed_card_path}`。",
+        "start_worktree": "3. 工作树(认领时已建): `{worktree_path}`, 分支 {branch}(基于 {base} {base_sha}; 当前 tip {tip})。代码改动只在这个工作树、只在 {branch} 分支提交(精确 pathspec, 禁 add -A / stash / pull --rebase); 不改主检出 `{code_repo}`, 不改其他卡分支。",
+        "start_no_worktree": "3. 本卡不建卡工作树 / 卡分支: {no_worktree_reason}",
+        "start_worktree_auditor": "3. 取证工作树(认领时已建, 只读, detached 于被审分支 tip): `{worktree_path}`, 被审分支 {branch}(tip {tip}; 差异基线 {base}...{branch}, 合并基 {base_sha})。产品仓对你只读: 不提交、不改文件。",
+        "start_repo": "   产品仓: {repo_line}; 车道(lane.paths): {lane_paths}",
+        "carried": "   {carried_line}",
+        "remote_note": "   注意: 你的会话所在机 {session_host} ≠ 治理根所在机 {gate_host}; 以上路径与以下命令都在 {gate_host} 上, 经 ssh 访问{host_hint}",
+        "boundary_title": "## 写权限边界(单源 roles.schema write_boundary, 与章程同源; 面外路径 = 不许写)",
+        "boundary_lines": "{boundary_lines}",
+        "no_write_title": "## 禁写与禁止动作",
+        "no_write_governance": "- 禁写治理根 `{governance_root}`(唯一例外: 本卡报告落点 `{report_dir}` 及其下 artifacts/、run_long/); 禁对治理仓 git add / commit / push。",
+        "no_write_product_auditor": "- 产品仓只读(审计不提交、不改文件, 取证工作树亦然)。",
+        "no_write_other_projects": "- 禁写其他项目治理根(只读取证允许): {other_projects}",
+        "no_write_harness": "- 禁写工位 `{harness_root}`(章程 / 扩展由分发器写, 自改护栏 = 自我提权)。",
+        "no_gate": "- 禁对门 {gate_url} 的任何写动作(不调 lybra_* 门动词、不读凭据), 禁启动 pi, 禁非预演的 sync / enroll / deploy; 不 kill 非本卡夹具进程。",
+        "hard_rules_title": "## 硬规矩",
+        "hard_rule_lines": "{hard_rule_lines}",
+        "commands_rules": "{commands_rule_lines}",
+        "scratch_title": "## 草稿与日志",
+        "scratch": "草稿 / 日志写到 `{scratch_dir}`(自建; 来源 {scratch_source}); 不写治理根, 不写本卡工作树与报告落点以外的他处。",
+        "verify_title": "## 验证",
+        "verify_baseline": "- 两边基线: {base} 与本分支最终 tip 各独立串行跑一次全量, 附计数 grep(✓ / ✗ 行数); 最终 tip 必须跑过全量; 交回前若 {base} 已前进, 先在卡工作树 git merge {base} 解冲突再做最终基线; 其他子 agent 可能同时跑全量, 计数异常先串行重跑。",
+        "verify_baseline_auditor": "- 独立全量基线: 被审分支 tip(取证工作树)与 {base} 各独立串行跑一次全量, 附计数 grep(✓ / ✗ 行数), 与执行体报告的计数对照; 不以执行体的日志代替。",
+        "verify_runall": "- 全量命令: {runall_command}; bash 工具超时设足: {runall_timeout}",
+        "verify_long": "- 预计超过 5 分钟的命令用 run-long 跑并分段等完(不得因工具时限放弃、不得以子集代替): 起 {run_long_start}, 等 {run_long_wait}(退出码 3 = 仍在跑, 再等)。",
+        "verify_ratchet": "- 棘轮: {ratchet}",
+        "verify_evidence": "- 证据断言必须复跑一致; 没跑或没跑完的项如实写 NOT_RUN 与原因, 绝不写成通过。",
+        "verify_no_poll": "- 等待只准同步执行或 run-long wait, 禁 until / sleep 轮询。",
+        "return_title": "## 交回",
+        "return_processes": "- 交回前跑 `pgrep -af \"{residual_pattern}\"`, 原文附报告(门 serve 进程及其看板子进程除外)。",
+        "return_report": "- 报告写到 `{report_path}`; frontmatter 必填(缺任一项或仍为占位, 报告被拒收; sha 一律 git rev-parse 输出原样粘贴):",
+        "report_field_lines": "{report_field_lines}",
+        "return_body": "- 正文: 每件做了什么、验收原文证据、两边基线计数、残留进程原文、已知局限。",
+        "return_body_auditor": "- 正文: 逐条验收裁定与原文证据、两边独立基线计数、残留进程原文、裁决与理由(以审计卡裁决节为准)。",
+        "return_stop": "- 写完即止, 不运行任何门动词(认领 / 交回 / 裁决 / finalize 由产品做)。",
+        "summary": "最后给顾问一段简短总结: tip sha、改动要点、测试计数、已知局限。",
+        "ratchet_default": "本项目未声明棘轮(project.json test_contract.ratchet); 卡面硬约束列出的基线 / 守卫测试只减不增",
+        "runall_absent": "本项目未声明全量测试清单(project.json test_contract.runall_path), 按卡面验收要求跑并如实写明",
+        "runall_absent_timeout": "(无全量清单)",
+        "lane_paths_absent": "(卡面未声明 lane.paths, 以卡面 output_target 为准)",
+        "repo_line_multi": "{repo_name} = `{code_repo}`(project.json repos.items, 卡 lane.repo)",
+        "repo_line_single": "`{code_repo}`",
+        "commands_rules_title": "门交互硬规矩(单源 {source}):",
+        "commands_rules_absent": "门交互硬规矩以章程为准({source})。",
+        "scratch_source_declared": "project.json paths.scratch_root",
+        "scratch_source_default": "未声明 paths.scratch_root, 取系统临时目录",
+        "host_hint_alias": "(ssh 别名 {alias})",
+        "host_hint_undeclared": "; 治理根主机未声明: {hint}"
+      },
+      "item_templates": {
+        "boundary_line": "- {surface}: {level} `{path}`({scope})",
+        "hard_rule_line": "- {id}: {text}",
+        "commands_rule_line": "  {rule}"
+      },
+      "refusals": {
+        "KICKOFF_ROLE_MISMATCH": "卡 {task_id} 是{card_role_label}卡, --role {role} 不符; 出口: 去掉 --role 或改为 --role {card_role}",
+        "KICKOFF_INSTANCE_MISSING": "卡 {task_id} 卡面无认领实例(claimed_by / assigned_to), 开工稿无身份可写",
+        "KICKOFF_NOT_STARTABLE": "卡 {task_id} 不可开工({code}): {reason}",
+        "KICKOFF_CHARTER_REFUSED": "实例 {instance} 的章程不可取: {reason}",
+        "KICKOFF_WORKTREE_UNRESOLVED": "卡 {task_id} 工作树不可用({code}): {reason}",
+        "KICKOFF_REPORT_UNRESOLVED": "卡 {task_id} 报告落点 / 必填字段不可推导({code}): {reason}",
+        "KICKOFF_SCRATCH_IN_GOVERNANCE": "草稿目录 {scratch_dir} 落在治理根 {governance_root} 内(草稿永不落治理根); 出口: lybra project set-paths {project} --key scratch_root --value <治理根外的绝对路径> --confirm"
+      }
+    },
     "lybra_loop": {
       "description": "AIPOS-F73D 顾问侧驱动器 `lybra loop`: Owner 信封授权下, 有界循环推进一张卡到 completed。每轮 = `next` 推导 → 账务命令经 `next --run` 同一执行体(next_resolver.execute_derived_action)执行并重推导; agent 步(spawn_worker/await_artifact)只调既有 `agent watch --expect` 有界等待产物; 唯一例外 = AIPOS-F95: Owner 信封 launch_harnesses 授权该卡 harness 且条件全满足时, 进入等待前按 enums.schema harness.launch 模板在工位拉起一次 harness 进程(见本条目 launch), 否则退回手工模式(工位敲 /go, 行为同 F95 前); closure 记录存在且治理已落账(transitions nodes.N6.landing 判据)即 exit 0, 结案后未落账先执行 N6 落账步(lybra governance-commit --task-id, AIPOS-F94)。本条目是 loop 退出码/参数/信封动词集合的唯一声明; 代码(tools/aipos_cli/loop_driver.py)只读不写死。",
       "phase": "driver",
@@ -2475,8 +2576,8 @@
           "local": "请在 {dir} 的 {harness} 会话敲 /go",
           "remote": "请在 {host}:{dir} 的 {harness} 会话敲 /go(跨机工位)",
           "unlocated": "请在实例 {instance} 的工位({harness} 会话)敲 /go(工位位置定位不到: {reason})",
-          "subagent": "请顾问在 {harness} 会话派子 agent(实例 {instance}, 无工位)按卡执行并写交回: 开工材料 `lybra my-tasks --actor {instance} --task-id {card}`(工作树 / 报告落点 / 卡路径), 章程 `lybra charter --role executor --instance {instance}`; 子 agent 写完 RETURN.md 即止, loop 等其落盘后继续",
-          "note": "手工模式(未拉起)的等待提示唯一声明; 占位 {dir}/{host}/{harness}/{instance}/{reason}/{card} 由 loop 按工位位置(enrollment_log land 事件)填入。AIPOS-F146 件②: subagent = 等待目标实例为无工位的子 agent 执行者(enrollment.instance_enrollment governance_root_mode, land 事件 mode 属 roles.schema executor_modes credential_landing=governance_root)时的等待提示——loop 不拉起(无工位可拉), 由顾问派子 agent; {harness} = 卡 harness(子 agent 卡缺省 = land 事件记下的顾问会话 kind)"
+          "subagent": "请顾问在 {harness} 会话派子 agent(实例 {instance}, 无工位)按卡执行并写交回: 开工稿 = `lybra kickoff --task-id {card}` 的输出(原样交给子 agent, 可在其后追加本卡特别说明; 含章程命令、工作树 / 分支 / 基线 sha、报告落点与必填字段、禁写清单、验证要求), 不必手写; 子 agent 写完 RETURN.md 即止, loop 等其落盘后继续",
+          "note": "手工模式(未拉起)的等待提示唯一声明; 占位 {dir}/{host}/{harness}/{instance}/{reason}/{card} 由 loop 按工位位置(enrollment_log land 事件)填入。AIPOS-F146 件②: subagent = 等待目标实例为无工位的子 agent 执行者(enrollment.instance_enrollment governance_root_mode, land 事件 mode 属 roles.schema executor_modes credential_landing=governance_root)时的等待提示——loop 不拉起(无工位可拉), 由顾问派子 agent; {harness} = 卡 harness(子 agent 卡缺省 = land 事件记下的顾问会话 kind)。AIPOS-F187 件②: subagent 提示的开工稿 = `lybra kickoff --task-id {card}`(verbs.lybra_kickoff, 顾问不再手写开工稿)"
         },
         "progress_max_chars": 160,
         "progress_note": "stdout 事件流(enums.schema harness.launch.events)逐行汇总为一行式进度(工具调用名+首段参数 / 助手文本首行 / 错误), 每行截断到本字符数; 未知事件类型只计数不刷屏, 结束时一行计数; 凭据字样(token/secret/password/api key/credential/bearer)所在行整行隐去, 长凭据串打码",
@@ -2527,6 +2628,7 @@
         "log_record_type": "loop_run_log",
         "charter_checks": "AIPOS-F164 件②(gap #149): 每次拉起前章程判定(loop_driver._charter_before_launch)追加一条 charter_checks {card, instance, workstation, outcome, repair_command, detail(经 redact_progress), at}: outcome = fresh(章程最新, 不 sync 直接拉起)/ synced(不新鲜 → 自动 sync 本工位后复核最新, 再拉起)/ sync_failed(自动 sync 失败, 不拉起, 结束原因 charter_sync_failed)/ refused(project.json charter_auto_sync=false, 不拉起, 结束原因 charter_not_fresh)/ not_applicable(跨机工位, 门机不核); 同时 loop 输出(即日志)一行 `[轮] charter: …`。判定 = distribution_sync.charter_freshness(`lybra sync --dry-run` 同一实现), 修复 = distribution_sync.sync_workstation_charter(`lybra sync` 同一实现)。无拉起的运行不出现本键(存量记录形不变)。",
         "worktree_repairs": "AIPOS-F178 件③: 等待目标卡(执行体 / 审计体等待)已认领、须建卡工作树(唯一判据 next_resolver.card_needs_worktree)而工作树不在落点时, 等待前自动补建一次并追加一条 worktree_repairs {card, outcome, worktree_path, repair_command, detail(经 redact_progress), at}: outcome = created(经唯一建树入口 _ensure_worktree 补建成功, 写 records/events/<卡>/event_worktree_repair_*.md, 照常进入等待)/ failed(补建失败, 结束原因 worktree_repair_failed); 同时 loop 输出(即日志)一行 `[轮] worktree_repair: …`。实现 = next_resolver.repair_missing_worktree(`lybra queue repair [--confirm]` 同一函数)。无补建的运行不出现本键(存量记录形不变)。",
+        "worktree_cleanups": "AIPOS-F187 件③: 本卡结案且已落账(loop 出口 0 那一步)时, 本卡(含审计轮与承继原卡)仍在盘且被保留的工作树(脏 / 在途 / 承继引用 / 读不出 / 删失败; 判据 transitions.schema queue_mutations.worktree_cleanup, 只读 worktree_cleanup.residual_line)追加一条 worktree_cleanups {card, detail(经 redact_progress), at}, loop 输出(即日志)一行 `[轮] worktree_cleanup: …`; 清理本身在结案时由 close_task 完成(结果落 records/events/<卡>/worktree_cleanup_*.md)。无保留的树 = 不出现本键(存量记录形不变)。",
         "report_fixes": "AIPOS-F180B 件②: 裁决入门被拒 INGEST_TIP_MISMATCH 时的修报告头判定(launch.report_fix)每次追加一条 report_fixes {card, outcome, kinds(形式诊断种类), session_id, detail(经 redact_progress), at}: outcome = resumed(同会话续接后报告已改写, 重新入门)/ not_correctable(other_commit, 不续接, 原规则 gate_rejected)/ not_resumable / exhausted / not_rewritten(以 audit_report_form_error 结束); 续接本身另按 launch_session 记 launches[](resume = 该会话第几次续接)。无此判定的运行不出现本键(存量记录形不变)。",
         "launch_model": "AIPOS-F169: 每次拉起 launches[] 另记 model {model: 实际传入 --model 的 <provider>/<id> 或 null(未声明, pi 缺省), source: 声明来源(execution.pi_models.by_role.<角色> / execution.pi_models.default / pi 缺省), role: executor | auditor}; 无此键的存量记录 = F169 前(未传 --model)。lybra loop status 拉起行显示「模型 <值或 pi 缺省>」。",
         "activity_flush_seconds": 5,
@@ -2825,7 +2927,7 @@
               "by_end_reason": {
                 "wait_timeout": "advisor_fix"
               },
-              "kickoff_detail": "子 agent 模式(本卡执行方式 = 顾问派子 agent; 不找 Owner、不敲 /go): 顾问按开工材料派本卡子 agent 执行并写交回 —— {hint}"
+              "kickoff_detail": "子 agent 模式(本卡执行方式 = 顾问派子 agent; 不找 Owner、不敲 /go): 顾问派本卡子 agent 执行并写交回(开工稿用 lybra kickoff 输出, 不手写) —— {hint}"
             }
           }
         },
@@ -3986,6 +4088,57 @@
         "0": "PASS — committed (and pushed unless no_push), or no-op (nothing to commit within the selection), or dry_run manifest emitted",
         "1": "BLOCK/FAIL — e.g. paths outside governance root (rejected_paths), pre-staged files outside --paths (pre_staged_outside), N6 completeness missing, staged set != manifest, pre-commit guardrail (AIPOS-R6M) rejection, post-commit git show != manifest, push/verification failure",
         "2": "usage error — argparse rejected the arguments (unknown flag / missing --actor)"
+      }
+    },
+    "lybra_project_cleanup_worktrees": {
+      "description": "AIPOS-F187 件④: `lybra project cleanup-worktrees [--dry-run|--confirm] [--json] [--workspace-root <治理根>]` —— 按卡结案 / 撤回自动清理的同一判据(transitions.schema queue_mutations.worktree_cleanup, 唯一实现 worktree_cleanup.judge_worktree)批量处理存量卡工作树与审计工作树, 跨 project.json repos.items 全部仓(无 repos 段 = code_repo)。缺省 = 预演(零写入): 逐仓列出工作树根下每棵卡工作树的判定——已终态且干净 → 删、脏 → 列路径与未提交改动计数(不碰)、在途 → 留、被承继卡引用 → 留、目录名查不到卡 → 不认识(留)。--confirm = 对判为删的执行 `git worktree remove`(不加 --force, 分支保留), 其余不动; 不写治理根(存量清理不落记录, 输出即结果)。顾问在任何项目治理根下可自行运行(由更新通知告知)。主检出与工作树根外的工作树不在清单内。",
+      "phase": "single",
+      "surface": ["cli"],
+      "cli_command": "lybra project cleanup-worktrees",
+      "single_implementation": "tools/aipos_cli/worktree_cleanup.cleanup_project_worktrees(批量) / judge_worktree(判据) / run_cleanup_cli(CLI 薄壳)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dry_run": {"type": "boolean", "description": "预演(缺省), 零写入"},
+          "confirm": {"type": "boolean", "description": "执行: 删判为「删」的工作树(分支保留)"},
+          "json": {"type": "boolean", "description": "JSON 输出"},
+          "workspace_root": {"type": "string", "description": "治理根; 缺省自发现(governance_root_resolution)"}
+        },
+        "additionalProperties": false
+      },
+      "exit_codes": {
+        "ok": {"code": 0, "meaning": "预演完成 / 判为删的工作树已全部删除"},
+        "failed": {"code": 1, "meaning": "--confirm 时有工作树删除失败(逐条原因原文; 其余照常处理)"},
+        "usage": {"code": 2, "meaning": "参数错(--dry-run 与 --confirm 同给)"},
+        "unreadable": {"code": 3, "meaning": "治理根 / project.json / 声明读取失败(fail-closed)"}
+      },
+      "texts": {
+        "header_preview": "工作树清理预演(零写入; 判据 transitions.schema queue_mutations.worktree_cleanup): 项目 {project}",
+        "header_confirm": "工作树清理(已执行): 项目 {project}",
+        "repo_line": "仓 {repo}: 工作树根 {root}, 卡工作树 {count} 个",
+        "repo_unreadable": "仓 {repo}: 工作树列不出({error})",
+        "remove": "  删 {worktree}({task_id} {state}, 干净; 检出 {branch}, 分支保留)",
+        "removed": "  已删 {worktree}({task_id} {state}; 检出 {branch}, 分支保留)",
+        "dirty": "  脏(不碰) {worktree}({task_id} {state}): 未提交改动 {uncommitted} 个",
+        "unreadable": "  读不出(不碰) {worktree}({task_id}): {error}",
+        "in_flight": "  在途(留) {worktree}({task_id} {state})",
+        "carried": "  承继引用(留) {worktree}({task_id}; 被 {by} 的 carried_from 引用, 待其认领)",
+        "failed": "  删失败 {worktree}({task_id}): {error}",
+        "unknown": "  不认识(留) {worktree}: 目录名查不到卡",
+        "summary": "合计: 删 {remove} / 脏 {dirty} / 在途 {in_flight} / 承继 {carried} / 不认识 {unknown} / 读不出 {unreadable} / 失败 {failed}",
+        "confirm_hint": "确认清理: lybra project cleanup-worktrees --workspace-root {governance_root} --confirm",
+        "auto_line": "工作树清理({trigger} {task_id}): 已删 {removed} 棵(分支保留){rest}",
+        "auto_kept": "; 保留 {kept} 棵: {items}",
+        "auto_kept_item": "{worktree}({reason})",
+        "auto_none": "工作树清理({trigger} {task_id}): 无在盘工作树",
+        "auto_error": "工作树清理({trigger} {task_id})未完成, 不影响{trigger}本身: {error}",
+        "reason_dirty": "未提交改动 {uncommitted} 个, 不碰",
+        "reason_in_flight": "{task_id} {state} 在途",
+        "reason_carried": "被 {by} 承继引用",
+        "reason_unreadable": "读不出: {error}",
+        "reason_failed": "删失败: {error}",
+        "reason_removable": "已终态且干净, 尚未清理(lybra project cleanup-worktrees --confirm)",
+        "loop_residual": "本卡保留的工作树: {items}"
       }
     },
     "lybra_project_status": {

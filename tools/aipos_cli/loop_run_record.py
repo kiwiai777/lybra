@@ -493,6 +493,16 @@ class LoopRunRecorder:
         self._dirty = True
         self.flush(force=True)
 
+    # -- AIPOS-F187 件③: 结案后仍保留的工作树(verbs.schema lybra_loop.run_record.worktree_cleanups) --
+    def worktree_cleanup(self, card: str, detail: str) -> None:
+        """结案且已落账时本卡仍保留的工作树一句进运行记录 worktree_cleanups(卡 / detail 经 redact_progress / 时间)。
+        日志行由调用方的 loop 输出(say)写。"""
+        from tools.aipos_cli.harness_launch import redact_progress
+
+        self.meta.setdefault("worktree_cleanups", []).append({"card": card, "detail": redact_progress(str(detail))[:600], "at": iso_z()})
+        self._dirty = True
+        self.flush(force=True)
+
     # -- AIPOS-F180B item 2: report-header fix decisions (verbs.schema lybra_loop.run_record.report_fixes) --
     def report_fix(self, entry: dict[str, Any]) -> None:
         """One report-header fix decision into report_fixes (card / outcome / kinds / session_id / detail / at; detail via
@@ -1486,6 +1496,12 @@ def _take_next(view: dict[str, Any], rules: dict[str, Any], governance_root: Pat
     scan = scan_project_view(Path(governance_root), lane=lane, next_states_only=True, viewer=viewer)
     nxt = pick_next_card(scan["rows"])
     done = message or "已结案并落账"
+    # AIPOS-F187 件③: 结案后本卡仍保留的工作树(脏 / 在途 / 承继引用; 只读判定 worktree_cleanup.residual_line)报路径与改动计数
+    from tools.aipos_cli.worktree_cleanup import residual_line
+
+    residual = residual_line(Path(governance_root), str(view.get("task_id") or "")) if view.get("task_id") else None
+    if residual:
+        done = f"{done}; {residual}"
     others = scan.get("owner_other") or []
     tail = f"; {render_owner_other(others)}" if others else ""
     extra = {"owner_view": viewer, "owner_other": others} if viewer else {}

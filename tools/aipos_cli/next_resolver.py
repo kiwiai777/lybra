@@ -639,22 +639,7 @@ def render_kickoff(next_card: dict[str, Any], *, remote: dict[str, Any] | None =
     (loop 按 land 事件 + project.json workstations 声明给出) → 按声明 remote_material 渲染门机材料段插入模板 {remote_material};
     remote=None(本机工位 / 工位 /go)= 空串, 与 F110 前逐字节相同。"""
     decl = kickoff_declaration()
-    line_decl = decl["report_field_line"]
-    contract = next_card.get("report_required_frontmatter")
-    if not isinstance(contract, list) or not contract:
-        raise KickoffRenderError("report_required_frontmatter 缺或为空")
-    field_lines: list[str] = []
-    for item in contract:
-        if not isinstance(item, dict) or not isinstance(item.get("key"), str) or not item.get("key") or not isinstance(item.get("hint"), str):
-            raise KickoffRenderError(f"report_required_frontmatter 项形变: {item!r}")
-        value = item.get("value")
-        if value is not None and not isinstance(value, str):
-            raise KickoffRenderError(f"report_required_frontmatter[{item['key']}].value 非串: {value!r}")
-        line_template = line_decl.get("with_value" if value else "without_value")
-        if not isinstance(line_template, str) or not line_template:
-            raise KickoffRenderError("verbs.schema.json lybra_my_tasks.kickoff.report_field_line 缺 with_value/without_value")
-        entry = {"key": item["key"], "hint": item["hint"], "value": value or ""}
-        field_lines.append(_KICKOFF_PLACEHOLDER_RE.sub(lambda m: _kickoff_value(entry, m.group(1)), line_template))
+    field_lines = render_report_field_lines(next_card.get("report_required_frontmatter"), decl=decl)
     values = {
         "task_id": next_card.get("task_id"),
         "worktree_path": next_card.get("worktree_path"),
@@ -671,6 +656,27 @@ def render_kickoff(next_card: dict[str, Any], *, remote: dict[str, Any] | None =
             raise KickoffRenderError(f"remote 上下文须为对象: {remote!r}")
         values["remote_material"] = _KICKOFF_PLACEHOLDER_RE.sub(lambda m: _kickoff_value(remote, m.group(1)), material_template)
     return _KICKOFF_PLACEHOLDER_RE.sub(lambda m: _kickoff_value(values, m.group(1)), decl["template"])
+
+
+def render_report_field_lines(contract: Any, *, decl: dict[str, Any] | None = None) -> list[str]:
+    """报告必填字段逐项成行(行式 = verbs.schema lybra_my_tasks.kickoff.report_field_line; 工位 /go 开工提示与 AIPOS-F187 子 agent 开工稿
+    同一渲染)。每项须为 {key: 非空串, hint: 串, value: 串|None}; 列表空 / 项形变 / 行式缺 = KickoffRenderError(fail-closed)。"""
+    line_decl = (decl or kickoff_declaration())["report_field_line"]
+    if not isinstance(contract, list) or not contract:
+        raise KickoffRenderError("report_required_frontmatter 缺或为空")
+    field_lines: list[str] = []
+    for item in contract:
+        if not isinstance(item, dict) or not isinstance(item.get("key"), str) or not item.get("key") or not isinstance(item.get("hint"), str):
+            raise KickoffRenderError(f"report_required_frontmatter 项形变: {item!r}")
+        value = item.get("value")
+        if value is not None and not isinstance(value, str):
+            raise KickoffRenderError(f"report_required_frontmatter[{item['key']}].value 非串: {value!r}")
+        line_template = line_decl.get("with_value" if value else "without_value")
+        if not isinstance(line_template, str) or not line_template:
+            raise KickoffRenderError("verbs.schema.json lybra_my_tasks.kickoff.report_field_line 缺 with_value/without_value")
+        entry = {"key": item["key"], "hint": item["hint"], "value": value or ""}
+        field_lines.append(_KICKOFF_PLACEHOLDER_RE.sub(lambda m, entry=entry: _kickoff_value(entry, m.group(1)), line_template))
+    return field_lines
 
 
 def remote_kickoff_context(workspace_root: Path, instance: str) -> dict[str, str]:

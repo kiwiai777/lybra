@@ -180,6 +180,8 @@
             "require_tests": {"type": "boolean", "optional": true, "description": "true = code 类卡须含测试文件改动(NO_TESTS)"},
             "test_file_globs": {"type": "array", "items": {"type": "string"}, "optional": true, "default": ["test_*.py", "*_test.py", "test_*.sh", "*.test.ts", "*.test.js", "*.spec.ts", "*.spec.js"], "description": "AIPOS-F109 件④: 同一式样亦是 run-all 自动发现的式样(runall_directives discover; 判定唯一实现 workspace_config.is_test_file)。AIPOS-F97 件②: 「测试文件」的文件名式样(fnmatch glob, 按文件名即路径最后一段匹配, 区分大小写, 禁含 /)。缺省 = default(覆盖 lybra 产品仓现有全部自动化测试文件命名: Python test_*.py、shell test_*.sh、TS/JS *.test.ts / *.test.js、Playwright *.spec.js, 另含常见 *_test.py / *.spec.ts); 项目声明 = 整体替换缺省(非追加), 须为非空字符串的非空列表。判据唯一实现 workspace_config.card_test_files: 卡分支改动集(git diff --name-status main...card/<ID>)中删除项 D 排除、重命名/复制取新路径, 文件名命中任一式样且不是 runall_path 本身 = 本卡测试文件(TEST_NOT_IN_RUNALL / NO_TESTS 共用)。代码不写死式样; 新语言 = 加一条 glob"},
             "repos": {"type": "object", "optional": true, "description": "按仓覆盖: 键 = project.json repos.items 仓名, 值同形(不得再嵌 repos); 卡仓(resolve_card_repo)有覆盖取覆盖, 否则取顶层"},
+            "ratchet": {"type": "string", "optional": true, "description": "AIPOS-F187 件①: 本项目(仓)的棘轮做法一句话(人读文本, 非空单行; 如「tests/*_baseline.jsonl 只减不增, 含 CJK 守卫」)。`lybra kickoff` 开工稿验证节原样引用; 未声明 = 开工稿用通用句(verbs.schema lybra_kickoff.texts.ratchet_default)。产品不按此分支判定。repos 覆盖逐键覆盖。"},
+            "residual_processes": {"type": "string", "optional": true, "default": "pytest|run-all|until grep", "description": "AIPOS-F187 件①: 交回前残留进程检查的 `pgrep -af` 式样(非空单行扩展正则)。`lybra kickoff` 开工稿交回节给出 `pgrep -af \"<本式样>\"`(原文附报告)。未声明 = 本 default(通用的测试运行器 / 轮询残留); 项目另有夹具进程(如自起门 / 看板)时整体替换声明。repos 覆盖逐键覆盖。"},
             "post_merge_regression": {
               "type": "object",
               "optional": true,
@@ -202,7 +204,7 @@
             }
           },
           "reject_codes": {
-            "TEST_CONTRACT_INVALID": "test_contract 形不合声明(非对象 / runall_path 非相对路径 / require_tests 非布尔 / test_file_globs 非「非空字符串且不含 / 的非空列表」/ repos 键不在 repos.items / post_merge_regression 非对象、含未声明键、mode/execution 不在 values、timeout_seconds 非正整数、block 配 async / isolation 非对象、含未声明键、mode/network 不在 values)",
+            "TEST_CONTRACT_INVALID": "test_contract 形不合声明(非对象 / runall_path 非相对路径 / require_tests 非布尔 / test_file_globs 非「非空字符串且不含 / 的非空列表」/ repos 键不在 repos.items / post_merge_regression 非对象、含未声明键、mode/execution 不在 values、timeout_seconds 非正整数、block 配 async / isolation 非对象、含未声明键、mode/network 不在 values / AIPOS-F187: ratchet / residual_processes 非「非空单行字符串」)",
             "RUNALL_DIRECTIVE_INVALID": "测试清单文件内声明行形坏(未声明的指令词 / 缺目标 / exclude 缺理由 / 目标重复 / discover 带参数)"
           },
           "runall_directives": {
@@ -324,6 +326,12 @@
               "type": "string",
               "default": "governance/roadmap.yaml",
               "description": "AIPOS-F171 件①: 本项目结构化路线图声明文件(里程碑 + 验收标准; 相对治理根或绝对)。缺省 = governance/roadmap.yaml; 文件不存在 = 本项目未声明路线图(出卡不提示游离卡, 行为不变)。文件形唯一声明 governance_structure.roadmap; 唯一读写实现 tools/aipos_cli/roadmap.py(经 workspace_config.project_paths 取本键); 改动只经 `lybra roadmap add-milestone / add-criterion / set / remove`(两阶段 + 自动落账 + decision_log 指针)。"
+            },
+            "scratch_root": {
+              "type": "string",
+              "optional": true,
+              "default_system_temp": "lybra-scratch/{project}",
+              "description": "AIPOS-F187 件①: 子 agent(执行体 / 审计体)草稿与日志目录根——`lybra kickoff` 开工稿给出的草稿目录 = <本键>/<卡ID 小写>/。须为治理根外的绝对路径(可用 ~/ 开头): 落在治理根内(含相对路径)= 开工稿拒(KICKOFF_SCRATCH_IN_GOVERNANCE, fail-closed), 草稿永不落治理根。未声明 = 系统临时目录(tempfile.gettempdir())下 default_system_temp(占位 {project} = project.json project), 行为对既有项目只是开工稿多一行草稿目录。唯一读取口 workspace_config.project_paths(本键可选, 未声明 = None); 解析与校验唯一实现 subagent_kickoff.scratch_dir。写入口 = `lybra project set-paths <项目> --key scratch_root --value <绝对路径>`(两阶段)。"
             }
           }
         },
