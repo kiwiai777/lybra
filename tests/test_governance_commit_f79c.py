@@ -384,17 +384,29 @@ def test_piece4_manifest_mismatch_unstages_this_run_and_restores_prestaged(rig, 
 # 件③: 无待收内容但本地有未推提交 → 不再谎报「已最新」, BLOCK + PUSH NOT DONE
 # ---------------------------------------------------------------------------
 def test_piece3_noop_with_unpushed_local_commits_is_loud(rig):
-    a = rig["a"]
-    touch_ledger(rig)
-    first = run(rig, push=False, paths=["governance/LEDGER.md"])
-    assert first["verdict"] == Verdict.PASS and first["committed"] is True
-    assert first["push_requested"] is False and first["push_result"] is None
-
+    a, gov = rig["a"], rig["gov"]
+    # 他人的本地未推提交(不触及本次 --paths)→ 仍拒并出声, 不替人推送
+    other = gov / "governance" / "OTHER.md"
+    other.write_text("---\nstatus: active\n---\n# other\n", encoding="utf-8")
+    _git(a, "add", "--", f"{GOV_REL}/governance/OTHER.md")
+    _git(a, "commit", "-q", "-m", "someone else's unpushed commit")
     result = run(rig, paths=["governance/LEDGER.md"])
     assert result["verdict"] == Verdict.BLOCK and result["pushed"] is False
     assert result["unpushed_local_commits"] == 1
     assert result["operations"][-1].startswith(PUSH_NOT_DONE), result["operations"]
     assert "并未「已最新」" in result["message"]
+    _git(a, "push", "-q")
+
+    # AIPOS-F184 件①: 本次范围自己的未推提交(上次落账已提交、推送未完成)→ 重跑同一命令只补推送, 不产生新提交
+    touch_ledger(rig)
+    first = run(rig, push=False, paths=["governance/LEDGER.md"])
+    assert first["verdict"] == Verdict.PASS and first["committed"] is True
+    assert first["push_requested"] is False and first["push_result"] is None
+    local = head(a)
+    retried = run(rig, paths=["governance/LEDGER.md"])
+    assert retried["verdict"] == Verdict.PASS and retried["pushed"] is True and retried["committed"] is False
+    assert retried.get("retried_push") is True and head(a) == local
+    assert retried["operations"][-1].startswith("Push result:"), retried["operations"]
 
     # 真正无事可推(本地无未推提交) → 仍是 F7 no-op 档 PASS/EXIT=0
     _git(a, "push", "-q")
