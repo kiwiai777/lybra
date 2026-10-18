@@ -241,7 +241,8 @@ def test_item2_loop_wait_hint_for_subagent(rig):
     assert run.steps[0].action_type == "claim" and run.steps[0].ok
     hint_line = next(ln for ln in text.splitlines() if "manual:" in ln)
     assert f"请顾问在 codex 会话派子 agent(实例 {EXEC}, 无工位)按卡执行并写交回" in hint_line
-    assert f"lybra my-tasks --actor {EXEC} --task-id {TASK}" in hint_line and f"lybra charter --role executor --instance {EXEC}" in hint_line
+    # AIPOS-F187 件②: 子 agent 等待提示的开工稿 = `lybra kickoff --task-id <卡>`(开工稿内含章程命令 / 工作树 / 报告落点), 不再列 my-tasks + charter 两条
+    assert f"开工稿 = `lybra kickoff --task-id {TASK}` 的输出" in hint_line and "不必手写" in hint_line
     assert "/go" not in hint_line and "工位位置定位不到" not in hint_line
     assert f"实例 {EXEC} 为子 agent 执行者(接入模式 subagent, 无工位), loop 不拉起" in hint_line
     plan = plan_launch(rig.gov, TASK, policy=None, no_launch=False, decl=launch_declaration(load_loop_contract()), already_launched=set())
