@@ -2374,9 +2374,9 @@
         "title": "## 跨机临时验证根(单源 project.json validation_roots; 判定 = write-boundary 面 validation_root, 与章程同源)",
         "relation": "- 与硬规矩衔接: {relation}",
         "declaration": "- 声明 {id}: 主机 {host}(指纹 {fingerprint}), 卡 {task_id}, 实例 {instance}({role_class}), 到期 {expires_at}, Owner 授权 {owner_ref}; 状态 {status}",
-        "directory": "  可写目录 = `{base}/{task_id}/<run-id>/`(只许本卡本活动 run 目录; base 与 `{base}/{task_id}/` 层、他卡 / 他 run / 已结束 run / 撤销或到期后一律拒)",
+        "directory": "  可写目录 = `{base}/{task_id}/<run-id>/`(只许本卡本活动 run 目录; base 与 `{base}/{task_id}/` 层、他卡 / 他 run / 已结束 run / 撤销或到期后一律拒); 目录链(base / 卡层 / run 目录)由产品 helper init-run 在目标主机初始化(只建空目录), 角色不得自行 mkdir base / 卡层",
         "run_active": "  当前活动 run: `{run_id}`(候选 {candidate}, 起于 {started_at}) → 本次只写 `{run_dir}`",
-        "run_none": "  当前无活动 run: 写入前须由顾问 / 驱动方铸 run(`{run_start}`); 执行体 / 审计体不自铸、不先写",
+        "run_none": "  当前无活动 run: 写入前须由顾问 / 驱动方铸 run(`{run_start}`); 执行体 / 审计体不自铸、不先写; 铸 run 后第一步 = 在目标主机运行产品给出的目录链初始化命令(helper init-run; run-start 输出, 或重取本开工稿 / `project validation-root init-command --id {id}`)",
         "run_finish": "  收口: 本次验证结束由顾问 / 驱动方 `{run_finish}`; 收口后再写一律拒",
         "check_dev": "  治理根侧判定(只读): `{check_command}`(退出码 0 允许 / 3 拒; 拒 = 声明缺口, 停线报告, 禁换路径 / 符号链接 / 工具绕过)",
         "helper": "  目标主机侧 realpath 判定(符号链接逃逸只能在目标主机判): 在治理根所在机取 helper `{helper_fetch}`, 存为目标主机 `{helper_path}`, 核 sha256 = {helper_sha256}(shasum -a 256 / sha256sum), 每次写前 `python3 {helper_path} check --run-dir {run_dir} --path <目标> --expect-fingerprint {fingerprint}`; 只认退出码 0 且输出 `ALLOW`, 其余(含无输出 / sha256 不符)= 拒",
@@ -2384,7 +2384,8 @@
         "redirect_title": "  工具写入重定向(先在目标主机只读核验, 核验不过 = BLOCK, 不臆造替代参数):",
         "redirect": "  - [{toolchain}] {render}(核验: {verify}; 来源: {source})",
         "side_effect": "  - 系统服务副作用 `{path}`: {by}; {allowed}; 核验: {verify}",
-        "block": "  - BLOCK / 禁止: {text}"
+        "block": "  - BLOCK / 禁止: {text}",
+        "init_run": "  ① run-start 后第一步 = 目录链初始化(AIPOS-F191): 在目标主机 {host} 运行 `{init_run}`(前半段 = 在治理根所在机取 helper 原文, 远端主机经你访问治理根的通道取得后经管道交给 `python3 -`, helper 不落盘); 只用 mkdir 建缺失的 `{run_dir}` 目录链(新建 0700, 逐级拒软链 / 非目录 / 他人属主 / 不可写祖先; 已建且合规 = 幂等), 证据追加到 run 目录内 `.lybra-vr/init-run.jsonl`; 只认末行 `INIT_OK` + 退出码 0, 其余 = 未建, 停线报告(禁自行 mkdir / sudo / 改参数重试); 之后再按下条把 helper 存入 run 目录做写前判定"
       },
       "item_templates": {
         "boundary_line": "- {surface}: {level} `{path}`({scope})",
@@ -4238,7 +4239,7 @@
       }
     },
     "lybra_project_validation_root": {
-      "description": "AIPOS-F190: `lybra project validation-root declare|revoke|run-start|run-finish|list|helper` —— 跨机临时验证根声明(按项目 / 主机 / 执行或审计实例 / 卡 / run)。declare: --host --base --task-id --instance --owner-ref [--expires-at] [--host-fingerprint] [--actor] [--dry-run|--confirm](远端主机 --confirm 须带目标主机 helper 取得的指纹); revoke --id --reason; run-start --id --candidate <卡仓 40 位 sha>(铸 run-id, 同一声明同时只一个活动 run); run-finish --id --run-id; list 只读; helper 打印主机侧检查入口(纯 python3 标准库单文件)或其 sha256。写动作 = project.json validation_roots 段(只追加条目, 撤销 / 收口写在原条目), 两阶段与写后落账同一包装(two_phase_protocol.project_json_writers; 落账 post_write_landing.commands.project_writers)。判定 = `lybra roles write-boundary --check <路径> --host <主机> --instance <实例> --task-id <卡> --run-id <run> --level mutate`(面 validation_root, 声明 roles.schema write_boundary.validation_root)。",
+      "description": "AIPOS-F190: `lybra project validation-root declare|revoke|run-start|run-finish|list|helper|init-command` —— 跨机临时验证根声明(按项目 / 主机 / 执行或审计实例 / 卡 / run)。declare: --host --base --task-id --instance --owner-ref [--expires-at] [--host-fingerprint] [--actor] [--dry-run|--confirm](远端主机 --confirm 须带目标主机 helper 取得的指纹); revoke --id --reason; run-start --id --candidate <卡仓 40 位 sha>(铸 run-id, 同一声明同时只一个活动 run); run-finish --id --run-id; list 只读; helper 打印主机侧检查入口(纯 python3 标准库单文件)或其 sha256; AIPOS-F191 init-command --id [--instance] 只读打印目标主机目录链初始化命令(helper init-run: 只建空目录链 0700、逐级拒软链 / 非目录 / 他人属主 / 不可写祖先、封印防改参数; 声明须 active 且有活动 run, --instance ≠ 声明实例 = VR_TASK_NOT_OWNED), run-start --confirm 输出与开工稿 / 章程验证根节同一铸造口 validation_root.init_run_command。写动作 = project.json validation_roots 段(只追加条目, 撤销 / 收口写在原条目), 两阶段与写后落账同一包装(two_phase_protocol.project_json_writers; 落账 post_write_landing.commands.project_writers)。判定 = `lybra roles write-boundary --check <路径> --host <主机> --instance <实例> --task-id <卡> --run-id <run> --level mutate`(面 validation_root, 声明 roles.schema write_boundary.validation_root)。",
       "phase": "two_phase",
       "surface": [
         "cli"

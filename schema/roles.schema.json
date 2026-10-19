@@ -414,7 +414,7 @@
         "INSTANCE_REQUIRED": "validation_root 的写判定须给 --instance(声明按实例归属)",
         "NOT_OWN_DECLARATION": "该卡目录的声明属于其他实例(跨角色 / 他实例根; 执行与审计隔离)",
         "NOT_OWN_TASK": "目录卡段 ≠ 本卡(跨卡)",
-        "OUTSIDE_TASK_RUN": "路径在 base 或 <base>/<卡ID> 层, 未进 run 目录(只许写本卡本 run 目录)",
+        "OUTSIDE_TASK_RUN": "路径在 base 或 <base>/<卡ID> 层, 未进 run 目录(只许写本卡本 run 目录); AIPOS-F191: 这两层只经产品 helper init-run 建空目录链(建目录唯一正式步骤, 角色不得自行 mkdir), 文件 / 改名 / 删除仍一律拒; 他实例声明的卡层判 NOT_OWN_DECLARATION",
         "RUN_ID_REQUIRED": "validation_root 的写判定须给 --run-id(由 run-start 铸)",
         "NOT_OWN_RUN": "目录 run 段 ≠ --run-id, 或 run 不属于本声明(跨 run)",
         "RUN_NOT_ACTIVE": "run 已结束(run-finish 后拒)",
