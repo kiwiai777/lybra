@@ -250,6 +250,13 @@
       "harness_root": {
         "root": "harness_root",
         "description": "工位根(章程/扩展/技能由分发器写; 角色自身只读, 自改护栏 = 自我提权)"
+      },
+      "validation_root": {
+        "root": "validation_roots",
+        "per_task": true,
+        "per_run": true,
+        "host_scoped": true,
+        "description": "AIPOS-F190: 跨机临时验证根(按主机声明, project.json validation_roots; `lybra project validation-root`)。mutate 只对 <声明 base>/<本卡ID>/<当前活动 run-id>/ 内; 跨卡 / 跨 run / 跨角色 / 越界 / .. 穿越 / 符号链接逃逸 / 撤销或到期后一律拒(判定见 write_boundary.validation_root)"
       }
     },
     "matrix": {
@@ -260,7 +267,8 @@
         "task_cards": "read",
         "return_slot": "mutate",
         "product_repo": "mutate",
-        "harness_root": "read"
+        "harness_root": "read",
+        "validation_root": "mutate"
       },
       "auditor": {
         "governance_root": "read",
@@ -269,7 +277,8 @@
         "task_cards": "read",
         "verdict_slot": "mutate",
         "product_repo": "read",
-        "harness_root": "read"
+        "harness_root": "read",
+        "validation_root": "mutate"
       },
       "advisor": {
         "governance_root": "read",
@@ -282,7 +291,8 @@
         "return_slot": "mutate",
         "verdict_slot": "mutate",
         "product_repo": "read",
-        "harness_root": "read"
+        "harness_root": "read",
+        "validation_root": "read"
       },
       "planner": {
         "governance_root": "read",
@@ -309,7 +319,7 @@
         "records": "read"
       }
     },
-    "matrix_note": "queue/records 对所有非 owner 角色只读: 账务动词经门铸记录(driver.role_class 的 token), 直接写 = 越界。advisor 的 governance_docs/task_cards 写是治理面(ROLES ⑩ 治理仓 push), 不含产品仓。executor 的 product_repo mutate 受本卡工作树 + lane.paths 双限(与 N3 交回判据②「改动面在界内」同一口径)。",
+    "matrix_note": "queue/records 对所有非 owner 角色只读: 账务动词经门铸记录(driver.role_class 的 token), 直接写 = 越界。advisor 的 governance_docs/task_cards 写是治理面(ROLES ⑩ 治理仓 push), 不含产品仓。executor 的 product_repo mutate 受本卡工作树 + lane.paths 双限(与 N3 交回判据②「改动面在界内」同一口径)。AIPOS-F190: executor / auditor 的 validation_root mutate 只对本实例本卡的声明、本卡本 run 目录(执行与审计各自卡目录 = 隔离); advisor 只读。",
     "hard_rules": [
       {
         "id": "no_retry_after_deny",
@@ -324,7 +334,208 @@
         "evidence": "2026-10-12 chris LANTU-UI3-S1R: 补审声明命令 /usr/bin/node 在审计主机不存在, 审计用实际 node 跑通后被逐字判据拒收, 于是 sudo 建 /usr/bin/node 系统符号链接再逐字重跑(AIPOS-F165)"
       }
     ],
-    "charter_render": "章程渲染物(distribution.schema charter_render_semantics)附本面的该角色行 + hard_rules 为「写权限边界(声明渲染)」节, 所有角色章程同源下发"
+    "charter_render": "章程渲染物(distribution.schema charter_render_semantics)附本面的该角色行 + hard_rules 为「写权限边界(声明渲染)」节, 所有角色章程同源下发",
+    "validation_root": {
+      "description": "AIPOS-F190(chris OTA HBJOTA-60/61 实撞: Mac 上按卡隔离验证在 write-boundary 判 SURFACE_UNDECLARED): 跨机临时验证根——面 validation_root 的判定细则、base 禁区、工具写入重定向与子 agent harness 沙箱渲染的唯一声明。声明存储 = project.json validation_roots(config.schema configuration_sources.project_json.schema.validation_roots); 判定唯一实现 = write_boundary.check_access(经 validation_root.judge_access); 主机身份与主机侧 realpath 判定唯一实现 = tools/aipos_cli/validation_root_helper.py(纯标准库单文件, 治理根侧 import 同一函数)。",
+      "relation_to_hard_rules": "验证根是声明面, 不是硬规则例外: no_privilege_escalation / no_retry_after_deny 照常全量适用; 拒 = 声明缺口, 由顾问改声明(declare / run-start)放行, 角色不得换路径 / 符号链接 / 别的工具绕过; 工具不可避免写全局目录 = BLOCK 并列缺口。",
+      "path_template": "{base}/{task_id}/{run_id}",
+      "run_id_template": "run-{n}",
+      "helper_module": "tools/aipos_cli/validation_root_helper.py",
+      "default_ttl_hours": 72,
+      "max_ttl_hours": 336,
+      "forbidden_bases": {
+        "description": "base 禁区(字面判定, 远端路径同样适用; 本机另按 realpath 复核)。exact = base 不得等于; system_prefixes = base 不得落在其下; home_roots 下第一级 = 用户主目录本身(base 不得等于); home_relative_global = 用户主目录下的全局缓存 / 证书库 / 配置(base 不得落在其下); 另由代码拒: 治理根、project.json repos 各仓(含主检出与其卡工作树根)内或其祖先。清单只追加。",
+        "exact": [
+          "/",
+          "/Users",
+          "/home",
+          "/tmp",
+          "/var",
+          "/Volumes",
+          "/private/tmp",
+          "/private/var",
+          "/mnt",
+          "/media",
+          "/srv"
+        ],
+        "system_prefixes": [
+          "/System",
+          "/usr",
+          "/etc",
+          "/Library",
+          "/private",
+          "/bin",
+          "/sbin",
+          "/opt",
+          "/dev",
+          "/proc",
+          "/sys",
+          "/boot",
+          "/Applications",
+          "/cores",
+          "/root",
+          "/Network",
+          "/snap",
+          "/lib",
+          "/lib64",
+          "/run"
+        ],
+        "home_roots": [
+          "/Users",
+          "/home"
+        ],
+        "home_relative_global": [
+          "Library",
+          ".gradle",
+          ".android",
+          ".m2",
+          ".npm",
+          ".cache",
+          ".config",
+          ".ssh",
+          ".gnupg",
+          ".cocoapods",
+          ".swiftpm",
+          ".lybra",
+          ".codex",
+          ".claude",
+          ".pi",
+          ".local"
+        ]
+      },
+      "check_codes": {
+        "OK": "允许: 本实例本卡本活动 run 目录内",
+        "PATH_NOT_CANONICAL": "路径非规范绝对路径(含 .. / . 段、重复斜杠、结尾斜杠或相对路径)——穿越一律拒",
+        "INSTANCE_REQUIRED": "validation_root 的写判定须给 --instance(声明按实例归属)",
+        "NOT_OWN_DECLARATION": "该卡目录的声明属于其他实例(跨角色 / 他实例根; 执行与审计隔离)",
+        "NOT_OWN_TASK": "目录卡段 ≠ 本卡(跨卡)",
+        "OUTSIDE_TASK_RUN": "路径在 base 或 <base>/<卡ID> 层, 未进 run 目录(只许写本卡本 run 目录)",
+        "RUN_ID_REQUIRED": "validation_root 的写判定须给 --run-id(由 run-start 铸)",
+        "NOT_OWN_RUN": "目录 run 段 ≠ --run-id, 或 run 不属于本声明(跨 run)",
+        "RUN_NOT_ACTIVE": "run 已结束(run-finish 后拒)",
+        "DECLARATION_REVOKED": "声明已撤销",
+        "DECLARATION_EXPIRED": "声明已到期",
+        "HOST_FINGERPRINT_UNBOUND": "声明无主机指纹(只在预演中出现; 未确认的声明不放行)",
+        "HOST_FINGERPRINT_MISMATCH": "调用方 / 本机主机指纹 ≠ 声明指纹(跨机调用)",
+        "SYMLINK_ESCAPE": "目标真实路径逃出 run 目录(符号链接逃逸)",
+        "RUN_DIR_SYMLINK": "run 目录自身真实路径 ≠ 字面(验证根路径含符号链接)",
+        "OUTSIDE_RUN_DIR": "主机侧 helper: 目标不在 run 目录内"
+      },
+      "remote_realpath": {
+        "mode": "host_side_helper",
+        "description": "远端路径在治理根所在机无法 resolve: 治理根侧对远端主机只做字面判定(声明 / 卡 / run / 规范路径), 输出注明「符号链接须在目标主机以 helper 复核」; 目标主机上以 helper check 对 realpath 做同一判定(fail-closed)。取舍理由: 写入发生在目标主机, 在写入处判定真实路径最贴近实际(TOCTOU 窗口最小); 不依赖治理根所在机→目标主机的 ssh 通道(子 agent 项目常不声明, chris workstations=null); helper 纯标准库, 目标主机零安装。"
+      },
+      "tool_redirects": [
+        {
+          "toolchain": "source",
+          "kind": "command",
+          "applies": "候选源码",
+          "render": "固定候选 {candidate} 的源码放 {run_dir}/src(只读同步自治理根所在机产品仓; 正式代码仍只在治理根所在机卡工作树改)",
+          "verify": "git -C {run_dir}/src rev-parse HEAD 输出须 = {candidate}",
+          "source": "chris 缺口报告 2026-10-19 修复要求 2: 固定 dev SHA 同步验证, 正式代码仍在 dev 修改"
+        },
+        {
+          "toolchain": "ios",
+          "kind": "argument",
+          "applies": "xcrun simctl",
+          "render": "xcrun simctl --set {run_dir}/simdevices <子命令>(独立设备集; 禁用缺省设备集)",
+          "verify": "xcrun simctl help(只读): 输出须列出 --set 选项, 否则 BLOCK",
+          "source": "卡面件⑤; 官方文档本卡未取得(治理根所在机非 macOS), 以目标主机只读 `xcrun simctl help` 核实后方可使用"
+        },
+        {
+          "toolchain": "ios",
+          "kind": "argument",
+          "applies": "xcodebuild",
+          "render": "xcodebuild … -derivedDataPath {run_dir}/DerivedData -resultBundlePath {run_dir}/results/<名>.xcresult",
+          "verify": "xcodebuild -help(只读): 输出须列出 -derivedDataPath 与 -resultBundlePath, 否则 BLOCK",
+          "source": "xcodebuild(1) man page(keith.github.io/xcode-man-pages 镜像): -derivedDataPath \"Overrides the folder that should be used for derived data when performing an action on a scheme in a workspace.\"; -resultBundlePath \"Writes a bundle to the specified path with results ...\""
+        },
+        {
+          "toolchain": "ios",
+          "kind": "env",
+          "name": "TMPDIR",
+          "value": "{run_dir}/tmp",
+          "verify": "echo $TMPDIR(只读)= 该值",
+          "source": "POSIX TMPDIR 约定(临时文件目录); 不读 TMPDIR 的工具写 /var/folders 由前后清单核验"
+        },
+        {
+          "toolchain": "android",
+          "kind": "env",
+          "name": "ANDROID_USER_HOME",
+          "value": "{run_dir}/android-user-home",
+          "verify": "env | grep ^ANDROID_(只读)",
+          "source": "developer.android.com/tools/variables: \"Sets the path to the user preferences directory for tools that are part of the Android SDK. Defaults to $HOME/.android/.\""
+        },
+        {
+          "toolchain": "android",
+          "kind": "env",
+          "name": "ANDROID_EMULATOR_HOME",
+          "value": "{run_dir}/android-user-home",
+          "verify": "env | grep ^ANDROID_(只读)",
+          "source": "developer.android.com/tools/variables: \"Sets the path to the user-specific emulator configuration directory. Defaults to $ANDROID_USER_HOME.\""
+        },
+        {
+          "toolchain": "android",
+          "kind": "env",
+          "name": "ANDROID_AVD_HOME",
+          "value": "{run_dir}/avd",
+          "verify": "env | grep ^ANDROID_(只读)",
+          "source": "developer.android.com/tools/variables: \"Sets the path to the directory that contains all AVD-specific files ... The default location is $ANDROID_EMULATOR_HOME/avd/.\""
+        },
+        {
+          "toolchain": "gradle",
+          "kind": "env",
+          "name": "GRADLE_USER_HOME",
+          "value": "{run_dir}/gradle-home",
+          "verify": "env | grep ^GRADLE_(只读)",
+          "source": "docs.gradle.org userguide dependency_caching: 可写缓存位于 $GRADLE_USER_HOME/caches/modules-<版本>"
+        },
+        {
+          "toolchain": "gradle",
+          "kind": "env",
+          "name": "GRADLE_RO_DEP_CACHE",
+          "value": "<目标主机既有依赖缓存: 直接含 modules-2 的目录, 只读复用>",
+          "verify": "ls $GRADLE_RO_DEP_CACHE/modules-2(只读)",
+          "source": "docs.gradle.org userguide dependency_caching: \"point to the directory containing the cache\"; \"It's important that the read-only cache is not written to when other builds may be reading from it.\"; \"If a dependency is missing from the read-only cache, it will be downloaded and added to the writable cache.\"(incubating)"
+        }
+      ],
+      "system_side_effects": [
+        {
+          "path": "~/Library/Logs/CoreSimulator",
+          "by": "CoreSimulator 系统服务自身日志(系统服务副作用, 非 agent 写入)",
+          "allowed": "只许新增 / 追加本 run 设备相关日志",
+          "verify": "run 前后各 helper snapshot 一次再 compare, 变化原文附报告"
+        },
+        {
+          "path": "~/Library/Developer/CoreSimulator/Devices",
+          "by": "缺省设备集(--set 生效时不应变化)",
+          "allowed": "不许变化",
+          "verify": "run 前后 helper snapshot + compare; 有变化 = BLOCK 并列缺口"
+        }
+      ],
+      "block_conditions": [
+        "工具无重定向参数仍写全局目录(如签名 / 描述文件 / 钥匙串导入证书、不带 --set 的 simctl 缺省设备集)= BLOCK 并列缺口, 不静默放行",
+        "真实设备(adb 连接实体机、devicectl 等)、其他模拟器 / 缺省设备集、全局证书库 / 钥匙串、系统目录 = 一律禁止(不在验证根授权内)",
+        "重定向参数在目标主机只读核验(verify)不过 = BLOCK, 不臆造替代参数"
+      ],
+      "harness_sandbox": {
+        "codex": {
+          "render": "codex exec --sandbox workspace-write --add-dir {run_dir} …(或 config.toml: sandbox_mode = \"workspace-write\" 与 [sandbox_workspace_write] writable_roots = [\"{run_dir}\"])",
+          "forbid": "可写根只加本 run 目录; 禁加 base / 主目录 / 全局缓存; 禁 --sandbox danger-full-access 与 --dangerously-bypass-approvals-and-sandbox",
+          "source": "codex-cli 0.144.5 `codex exec --help`: --add-dir \"Additional directories that should be writable alongside the primary workspace\"; learn.chatgpt.com config-reference: sandbox_workspace_write.writable_roots \"Additional writable roots when sandbox_mode = \\\"workspace-write\\\".\""
+        },
+        "claude-code": {
+          "render": "claude --add-dir {run_dir}(允许工具访问的附加目录; 写入是否放行仍以 write-boundary 判定为准)",
+          "forbid": "只加本 run 目录; 禁加 base / 主目录 / 全局缓存",
+          "source": "Claude Code 2.1.214 `claude --help`: --add-dir \"Additional directories to allow tool access to\""
+        },
+        "pi": {
+          "render": "pi 工位护栏若读 write-boundary: 每次写前 `lybra roles write-boundary --check <路径> --host <主机> --instance <实例> --task-id <卡> --run-id <run> --level mutate --json`(退出码 0 允许 / 3 拒, 字段 allowed / code / reason), 远端主机再以 helper check 复核 realpath",
+          "forbid": "kiwiai-pi 不在本声明车道, 此处只给接口; 工位护栏改造另卡",
+          "source": "本声明(AIPOS-F190 件④)"
+        }
+      }
+    }
   },
   "drill_assertion": "Acceptance #1 (new-role drill): add a probe role entry here (with naming prefix + scopes; tools via distribution.schema applies_to_roles) → enroll/distribute/naming all work with ZERO code change → proving 'new role = add one data row'. Drill must be reverted before commit.",
   "driver": {
