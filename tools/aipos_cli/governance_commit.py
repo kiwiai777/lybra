@@ -755,7 +755,7 @@ def land_written_paths(governance_root: Path | str, paths: list[str], actor: str
     skipped_note = f"; 已跳过 {len(skipped)} 个从未入库且已不存在的路径: {', '.join(skipped)}" if skipped else ""  # AIPOS-F193 件①
     if landed:
         line = (f"落账: verdict={result.get('verdict')} committed={bool(result.get('committed'))} pushed={bool(result.get('pushed'))}"
-                + (f" commit={str(commit_hash)[:12]}" if commit_hash else f" — {first[:200]}") + f"({len(selected)} 个文件)" + skipped_note)
+                + (f" commit={str(commit_hash)[:12]}" if commit_hash else f" — {first[:200]}") + f"({len(selected) - len(skipped)} 个文件)" + skipped_note)
     else:
         line = (f"⚠ 落账未完成(写入已生效, 勿重复执行写命令): verdict={result.get('verdict')} committed={bool(result.get('committed'))} "
                 f"pushed={bool(result.get('pushed'))} — {str(reason)[:500]}\n  补账: {remedy}")

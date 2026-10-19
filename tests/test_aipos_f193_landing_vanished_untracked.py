@@ -127,7 +127,8 @@ def test_item3_supersede_carry_branch_on_never_committed_card(rig: dict) -> None
     assert f"{GOV_REL}/5_tasks/queue/pending/{new.lower()}.md" in files
     assert any("/records/owner_decisions/" in f for f in files) and any(f"/records/amendments/{new}/" in f for f in files), files
     assert f"{GOV_REL}/5_tasks/queue/claimed/{orig.lower()}.md" not in files
-    assert f"{SKIP_MARK} " in _landing_line(out, err) and "从未入库且已不存在" in _landing_line(out, err)
+    line = _landing_line(out, err)
+    assert f"({len(files)} 个文件); {SKIP_MARK} 1 个从未入库且已不存在的路径: 5_tasks/queue/claimed/{orig.lower()}.md" in line, line
     assert _git(repo, "rev-parse", "HEAD") == _git(repo, "rev-parse", "origin/main")
     assert not _git(repo, "status", "--porcelain", "--", f"{GOV_REL}/5_tasks/queue/withdrawn", f"{GOV_REL}/5_tasks/queue/pending")
     assert tip  # 承继 tip 存在(卡面断言由 F186 覆盖)
