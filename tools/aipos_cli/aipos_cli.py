@@ -1756,6 +1756,24 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
             for line in vr.render_list_lines(entries):
                 print(f"  {line}")
         return 0
+    if args.vr_command == "init-command":  # AIPOS-F191: 只读重取目标主机目录链初始化命令(唯一铸造口 validation_root.init_command)
+        try:
+            got = vr.init_command(root, args.decl_id, instance=args.instance)
+        except vr.ValidationRootError as exc:
+            print(f"Error: {exc.code}(不铸初始化命令)", file=sys.stderr)
+            for problem in exc.problems:
+                print(f"  - {problem}", file=sys.stderr)
+            return 1
+        except (SchemaLoadError, OSError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(render_json({"project": target["project"], "declaration_id": got["entry"]["id"], "host": got["entry"]["host"],
+                               "run_id": got["run"]["run_id"], "run_dir": got["run_dir"], "command": got["command"]}))
+        else:
+            print(f"声明 {got['entry']['id']} 活动 run {got['run']['run_id']}: 在目标主机 {got['entry']['host']} 运行(只建空目录链 {got['run_dir']}):")
+            print(got["command"])
+        return 0
     action = args.vr_command
     try:
         outcome = vr.apply_validation_root_change(
@@ -2778,7 +2796,7 @@ def build_parser() -> argparse.ArgumentParser:
         "validation-root",
         help="AIPOS-F190: declare a temporary cross-machine validation root (host + base + card + executor/auditor instance; writable = "
              "<base>/<card>/<run-id>/ of the active run only): declare / revoke / run-start / run-finish (--dry-run default, --confirm "
-             "writes project.json and lands it), list, helper (print the host-side check helper)")
+             "writes project.json and lands it), list, helper (print the host-side check helper), init-command (AIPOS-F191: host-side directory-chain init command)")
     project_vr_sub = project_vr_parser.add_subparsers(dest="vr_command", required=True)
 
     def _vr_common(sub: argparse.ArgumentParser) -> None:
@@ -2817,6 +2835,11 @@ def build_parser() -> argparse.ArgumentParser:
     _vr_common(vr_list)
     vr_list.add_argument("--task-id", default=None, help="Only this card")
     vr_list.add_argument("--host", default=None, help="Only this host")
+    vr_init = project_vr_sub.add_parser("init-command", help="AIPOS-F191: print the host-side directory-chain init command (helper init-run) "
+                                                          "for a declaration's active run (read-only)")
+    _vr_common(vr_init)
+    vr_init.add_argument("--id", dest="decl_id", required=True, help="Declaration id")
+    vr_init.add_argument("--instance", default=None, help="Refuse unless the declaration belongs to this instance")
     vr_helper = project_vr_sub.add_parser("helper", help="Print the host-side check helper (pure python3 stdlib single file) or its sha256")
     vr_helper.add_argument("--sha256", action="store_true", help="Print only the helper's sha256")
     vr_helper.add_argument("--home-root", help="Governance home root (unused by helper; accepted for the project family)")

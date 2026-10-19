@@ -12,6 +12,8 @@
     判定入口 = write_boundary.check_access(经本模块 judge_access, 面 validation_root)。
   - 主机身份(指纹)与 realpath 判定 = validation_root_helper(纯标准库单文件, 目标主机同一份); 本模块只 import, 不另写。
   - 开工稿 / 章程同源: render_section_lines(措辞读 verbs.schema lybra_kickoff.validation_root_texts)。
+  - AIPOS-F191 目录链初始化: 目标主机上的空目录链(<base>/<卡ID>/<run-id>)只经 helper init-run 建; 命令唯一铸造口 init_run_command
+    (封印 = helper.init_seal 同一实现), 出口三处同源: run-start --confirm 输出 / 开工稿与章程验证根节 / `validation-root init-command`。
 fail-closed: 声明缺 = SchemaLoadError; 段形不合 = ValidationRootError(VR_DECLARATION_INVALID); 违规 = 拒, 不吞。
 """
 from __future__ import annotations
@@ -35,7 +37,7 @@ ENTRY_KEYS = ("id", "host", "host_fingerprint", "base", "task_id", "instance", "
               "expires_at", "revoked_at", "revoked_by", "revoke_reason", "runs")
 RUN_KEYS = ("run_id", "candidate", "started_at", "started_by", "finished_at", "finished_by")
 TEXT_KEYS = ("title", "relation", "declaration", "directory", "run_active", "run_none", "run_finish", "check_dev", "helper",
-             "sandbox", "redirect_title", "redirect", "side_effect", "block")
+             "sandbox", "redirect_title", "redirect", "side_effect", "block", "init_run")
 ACTIONS = ("declare", "revoke", "run-start", "run-finish")
 
 
@@ -493,6 +495,9 @@ def apply_validation_root_change(governance_root: str | Path, action: str, *, dr
             entry["runs"] = list(entry["runs"]) + [run]
             result = {"entry": entry, "run": run}
             notes.append(f"本次可写目录: {run_directory(entry, run_id)}(run-id 由产品铸; 只此目录可写)")
+            # AIPOS-F191 件②: 下一步 = 在目标主机建目录链(唯一铸造口 init_run_command; 封印不含时刻, 预演所示 = 确认后所铸)
+            notes.append(f"{'确认后' if dry_run else ''}下一步(run-start 后第一步): 在目标主机 {entry['host']} 运行: "
+                         f"{init_run_command(gov, entry, run)}(只建空目录链 0700, 末行 INIT_OK + 退出码 0 = 成功; 角色不得自行 mkdir base / 卡层)")
         else:  # run-finish
             run_id = str(kw.get("run_id") or "").strip()
             run = next((r for r in entry["runs"] if r["run_id"] == run_id), None)
@@ -555,7 +560,13 @@ def judge_access(governance_root: str | Path, *, host: str, raw_path: str, want_
     run_seg = rel[1] if len(rel) > 1 else None
     same_base = [e for e in hits if e["base"] == base_dir]
     if card_seg is None or run_seg is None:
-        return deny("OUTSIDE_TASK_RUN", f"目标 {raw_path} 在 base {base_dir} 或卡目录层, 未进 run 目录(只许 {base_dir}/<本卡>/<活动 run>/ 内)")
+        # AIPOS-F191 件③: base / 卡层只经 helper init-run 建空目录链; 他实例声明的卡层 = 执行与审计互不能建对方卡层
+        owners = sorted({e["instance"] for e in same_base if e["task_id"] == card_seg}) if card_seg else []
+        if owners and instance not in owners:
+            return deny("NOT_OWN_DECLARATION", f"{base_dir}/{card_seg}/ 的声明属于 {owners}, 不是实例 {instance}(执行与审计共用 base 时互不能建 / 写对方卡层)")
+        return deny("OUTSIDE_TASK_RUN", f"目标 {raw_path} 在 base {base_dir} 或卡目录层, 未进 run 目录(只许 {base_dir}/<本卡>/<活动 run>/ 内); "
+                                        "目录链(base / 卡层 / run 目录)只经产品 helper init-run 建空目录(命令见开工稿或 `lybra project "
+                                        "validation-root init-command --id <声明>`), 角色不得自行 mkdir, 此层文件 / 改名 / 删除一律拒")
     if not task_id:
         return deny("NOT_OWN_TASK", f"面 {SURFACE} 的写判定须给 --task-id(本卡)")
     if card_seg != task_id:
@@ -607,6 +618,33 @@ def judge_access(governance_root: str | Path, *, host: str, raw_path: str, want_
                                f"--expect-fingerprint {entry['host_fingerprint']}",
             "reason": (f"本实例 {instance} 本卡 {task_id} 活动 run {run_id} 目录内(主机 {label}, 字面判定); 远端路径在本机不可 resolve, "
                        "符号链接逃逸须在目标主机以 helper check 复核(只认退出码 0 + ALLOW)")}
+
+
+def init_run_command(governance_root: str | Path, entry: dict[str, Any], run: dict[str, Any]) -> str:
+    """AIPOS-F191: 目标主机目录链初始化命令(唯一铸造口)。helper 取自治理根所在机(`project validation-root helper`), 经管道交
+    `python3 -` 运行(run 目录尚不存在, helper 不落盘); 封印 = helper.init_seal(base, run 目录, 指纹, 到期)。调用方保证声明 active 且 run 活动。"""
+    run_dir = run_directory(entry, run["run_id"])
+    seal = helper.init_seal(entry["base"], run_dir, entry["host_fingerprint"], entry["expires_at"])
+    args = " ".join(shlex.quote(str(a)) for a in ("--base", entry["base"], "--run-dir", run_dir, "--expect-fingerprint",
+                                                    entry["host_fingerprint"], "--expires-at", entry["expires_at"], "--seal", seal))
+    return f"{_gov_cmd(Path(governance_root).expanduser().resolve())} project validation-root helper | python3 - init-run {args}"
+
+
+def init_command(governance_root: str | Path, decl_id: str, *, instance: str | None = None) -> dict[str, Any]:
+    """`validation-root init-command` 唯一实现(只读): 声明须 active、有活动 run, 给了 --instance 须为声明实例(执行与审计互不能取对方
+    卡层的命令)。返回 {entry, run, run_dir, command}; 不合 = ValidationRootError。"""
+    gov = Path(governance_root).expanduser().resolve()
+    entry = _find(project_validation_roots(gov), str(decl_id or "").strip())
+    if instance and instance.strip() != entry["instance"]:
+        raise _err("VR_TASK_NOT_OWNED", f"声明 {entry['id']}(卡 {entry['task_id']})属于实例 {entry['instance']}, 不是 {instance.strip()}"
+                                        "(执行与审计隔离: 只得初始化本实例本卡的目录链)")
+    status = declaration_status(entry)
+    if status != "active":
+        raise _err("VR_STATE_CONFLICT", f"声明 {entry['id']} 状态 = {status}, 不铸目录链初始化命令(须为 active)")
+    run = active_run(entry)
+    if run is None:
+        raise _err("VR_STATE_CONFLICT", f"声明 {entry['id']} 无活动 run(已结束 run 不再初始化); 先由顾问 / 驱动方 run-start")
+    return {"entry": entry, "run": run, "run_dir": run_directory(entry, run["run_id"]), "command": init_run_command(gov, entry, run)}
 
 
 def executor_run_dir_refs(governance_root: str | Path, reviewed_task_id: str, texts: list[str]) -> list[str]:
@@ -670,12 +708,15 @@ def render_section_lines(governance_root: str | Path, *, instance: str, task_id:
                   "check_command": (f"{gcmd} roles write-boundary --instance {entry['instance']} --task-id {entry['task_id']} --host {entry['host']} "
                                     f"--run-id {run['run_id'] if run else '<run-id>'} --check <目标路径> --level mutate"),
                   "helper_fetch": f"{gcmd} project validation-root helper", "helper_sha256": helper_sha256(),
-                  "helper_path": f"{run_dir}/.lybra-vr/validation_root_helper.py"}
+                  "helper_path": f"{run_dir}/.lybra-vr/validation_root_helper.py",
+                  "init_run": init_run_command(gov, entry, run) if run and status == "active" else ""}
         lines.append(_fill(texts["declaration"], values))
         lines.append(_fill(texts["directory"], values))
         if status not in ("active", "unbound"):
             continue
         lines.append(_fill(texts["run_active"] if run else texts["run_none"], values))
+        if values["init_run"]:
+            lines.append(_fill(texts["init_run"], values))  # AIPOS-F191 件②: run-start 后第一步 = 目录链初始化
         lines.append(_fill(texts["check_dev"], values))
         if not is_local_host(entry["host"]):
             lines.append(_fill(texts["helper"], values))
