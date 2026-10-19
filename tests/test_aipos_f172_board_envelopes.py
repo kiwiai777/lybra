@@ -236,7 +236,7 @@ def test_item1_envelope_page_rows_status_tone_and_folding(board):
     summary = re.search(r"<summary>(.*?)</summary>", folded_part).group(1)
     _show(f"[件①·折叠摘要] {summary}")
     assert 'data-tone="ok"' in shown["pol_one_loop_9"] and "pol_one_loop_9" in current_part
-    assert 'data-tone="alert"' in shown["pol_one_audit_1"] and "剩余 3/3 次" in shown["pol_one_audit_1"]
+    assert 'data-tone="alert"' in shown["pol_one_audit_1"] and "剩余 3/3 张业务卡" in shown["pol_one_audit_1"]  # AIPOS-F192: 单位 = 业务卡
     assert 'data-status="superseded"' in shown["pol_one_loop_3"] and 'data-tone="muted"' in shown["pol_one_loop_3"]
     assert "被 pol_one_loop_9 接替" in shown["pol_one_loop_3"] and "pol_one_loop_3" in folded_part and "pol_one_loop_3" not in current_part
     assert 'data-status="expired"' in shown["pol_one_loop_2"] and "pol_one_loop_2" in folded_part
@@ -277,7 +277,7 @@ def test_item2_owner_renew_preview_confirm_lands_with_board_provenance(board):
     _show(f"[件②·预演 status={status}]\n" + "\n".join(pre.get("preview_lines") or [json.dumps(pre, ensure_ascii=False)]))
     assert status == 200 and pre["ok"] and pre["params"]["policy_id"] == "pol_one_loop_10"
     assert any(line.startswith(f"影响谁: {ADV1}") for line in pre["preview_lines"])
-    assert "额度: 30 次" in pre["preview_lines"] and any("续签自 pol_one_loop_9" in line for line in pre["preview_lines"])
+    assert "额度: 30 张业务卡(每张卡认领时扣 1; 其交回、审计、返工、合入、结案不另扣、不受额度拦截, 只受到期与撤销约束)" in pre["preview_lines"] and any("续签自 pol_one_loop_9" in line for line in pre["preview_lines"])
     assert pre["dry_run"]["data"]["autonomy_policy_id"] == "pol_one_loop_10" and "dry_run_token" not in json.dumps(pre["dry_run"])
     assert _tree_digest(home) == before, "预演零写入(治理根)"
     status, done = _mint(board, {**body, "stage": "confirm", "preview_token": pre["preview_token"]})

@@ -225,8 +225,9 @@ def _policy(gov: Path, pid: str, *, max_tasks: int, expires_at: str = "2999-01-0
 
 
 def test_item2_envelope_exhausted_mid_run_gets_dedicated_exit_and_renew_command(rig):
-    """gap #152 原样: 信封额度在认领时用完(1/1), 之后的交回步被拒「无覆盖驱动方的有效 autonomy 信封」→ 专门出口(不再泛化 gate_rejected)。"""
-    _policy(rig.gov, POLICY, max_tasks=1)  # 认领即用尽
+    """gap #152 + AIPOS-F192 改口径: 额度按业务卡计——max_tasks=1 的信封放行一张卡后, 该卡交回 / 审计 / 合入 / 结案不再被拒(原 gap #152
+    形「认领用完 1/1 → 交回被拒」不复存在); 第二张新卡才撞「额度已用尽」专门出口(不再泛化 gate_rejected), 续签额度 = 新卡所需 1 张。"""
+    _policy(rig.gov, POLICY, max_tasks=1)  # 认领即用尽(1/1), 本卡后续步骤不受额度拦截
     _policy(rig.gov, "pol_probe_loop_7", max_tasks=5, expires_at="2026-01-02T00:00:00Z")  # 该驱动方同前缀已有最大序号 7(已过期)
     _policy(rig.gov, "pol_other_loop_9", max_tasks=5, agent="advisor.someone-else")  # 别的前缀 / 别的驱动方: 不计
     f90._card(rig.gov, TASK, "pending")
@@ -235,33 +236,37 @@ def test_item2_envelope_exhausted_mid_run_gets_dedicated_exit_and_renew_command(
     res = run_loop(TASK, rig.gov, actor=DRIVER, policy_id=POLICY, out=out, watch=f90._agent_watch(rig, []), interval=0.05,
                    max_wait=5, max_steps=30)
     text = "\n".join(l for l in out.getvalue().splitlines() if not l.startswith("[ENVELOPE"))
-    _show(f"---- ② loop(信封中途用尽)原文 exit {res.exit_code} reason={res.reason} ----\n{text}")
-    assert res.exit_code == exit_code_for(load_loop_contract(), "no_envelope") == 5 and res.outcome == "no_envelope"
-    assert res.reason == "envelope_exhausted"
-    assert res.message.startswith(f"信封 {POLICY} 额度已用尽(已用 1/1 次, 到期 2999-01-01T00:00:00Z): return 步({TASK})被拒, 未执行")
-    assert f"请 Owner 续签(新信封 pol_probe_loop_8 = 该驱动方同前缀已有最大序号 +1, 范围照抄 {POLICY}" in res.message
-    assert res.suggested_action.startswith("lybra envelope mint --confirm --policy-id pol_probe_loop_8 --agent-or-role advisor --max-tasks 1 "
-                                           "--task-mode code --launch-harness pi --expires-at ")
-    assert "门拒原文: 门拒 @ return" in res.message
-    meta = _runs(rig.gov)[-1]
+    _show(f"---- ② loop(max_tasks=1 放行一张卡, 全程)原文 exit {res.exit_code} ----\n{text}")
+    assert res.exit_code == 0 and res.outcome == "completed", text
+    usage = envelope_usage(rig.gov, POLICY)
+    assert (usage["used"], usage["max_tasks"], usage["state"], usage["released_cards"]) == (1, 1, "exhausted", [TASK])
+    assert usage["claim_records"] == 2  # 旧口径(按认领次数)= 执行卡 + 审计卡 2 次; 新口径 1 张业务卡
+
+    task2 = "PROBE-F90-2"
+    f90._card(rig.gov, task2, "pending")
+    out2 = io.StringIO()
+    res2 = run_loop(task2, rig.gov, actor=DRIVER, policy_id=POLICY, out=out2, watch=f90._agent_watch(rig, []), interval=0.05,
+                    max_wait=5, max_steps=30)
+    _show(f"---- ② 第二张新卡(信封已放行 1/1 张)原文 exit {res2.exit_code} reason={res2.reason} ----\n{out2.getvalue()}")
+    assert res2.exit_code == exit_code_for(load_loop_contract(), "no_envelope") == 5 and res2.outcome == "no_envelope"
+    assert res2.reason == "envelope_exhausted"
+    assert res2.message.startswith(f"信封 {POLICY} 额度已用尽(已放行 1/1 张业务卡, 到期 2999-01-01T00:00:00Z): loop 启动校验不过, 未推进任何步")
+    assert f"请 Owner 续签(新信封 pol_probe_loop_8 = 该驱动方同前缀已有最大序号 +1, 范围照抄 {POLICY}" in res2.message
+    assert f"额度: 1 张业务卡(额度 = 业务卡张数, 每张含其审计、返工、合入、结案, 不另扣): 本卡 {task2} 是一张新业务卡, 需 1 张" in res2.message
+    assert res2.suggested_action.startswith("lybra envelope mint --confirm --policy-id pol_probe_loop_8 --agent-or-role advisor --max-tasks 1 "
+                                            "--task-mode code --launch-harness pi --expires-at ")
+    meta = _runs(rig.gov, task2)[-1]
     assert meta["end_reason"] == "envelope_exhausted" and meta["envelope_state"]["next_policy_id"] == "pol_probe_loop_8"
 
-    rc, status, _ = _cli(["loop", "status", "--task-id", TASK, "--workspace-root", str(rig.gov)])
+    rc, status, _ = _cli(["loop", "status", "--task-id", task2, "--workspace-root", str(rig.gov)])
     _show(f"---- ② lybra loop status 原文 exit {rc} ----\n{status}")
-    _rcj, js, _ = _cli(["loop", "status", "--task-id", TASK, "--workspace-root", str(rig.gov), "--json"])
+    _rcj, js, _ = _cli(["loop", "status", "--task-id", task2, "--workspace-root", str(rig.gov), "--json"])
     na = json.loads(js)["next_action"]
     _show("---- ② --json next_action 原文 ----\n" + json.dumps(na, ensure_ascii=False, indent=1))
     assert na["action"] == "owner_needed" and na["reason"] == "envelope_renew" and na["end_reason"] == "envelope_exhausted"
-    assert f"信封 {POLICY} 已用 1/1 次, 到期 2999-01-01T00:00:00Z(额度已用尽); 续签新信封 pol_probe_loop_8" in na["detail"]
-    assert na["hint"] == res.suggested_action
-    assert "顾问下一动作: owner_needed(envelope_renew)" in status and "信封预警: pol_probe_loop_1 额度已用尽(已用 1/1 次)" in status
-
-    # 续跑命令带 --envelope(用尽的那张)→ 启动即专门出口, 不给泛化申领出口
-    out2 = io.StringIO()
-    res2 = run_loop(TASK, rig.gov, actor=DRIVER, policy_id=POLICY, out=out2, watch=f90._agent_watch(rig, []), interval=0.05,
-                    max_wait=5, max_steps=30)
-    _show(f"---- ② 续跑(信封仍用尽)原文 exit {res2.exit_code} reason={res2.reason} ----\n{out2.getvalue()}")
-    assert res2.reason == "envelope_exhausted" and "loop 启动校验不过, 未推进任何步" in res2.message and "pol_probe_loop_8" in res2.message
+    assert f"信封 {POLICY} 已放行 1/1 张业务卡, 到期 2999-01-01T00:00:00Z(额度已用尽); 续签新信封 pol_probe_loop_8" in na["detail"]
+    assert na["hint"] == res2.suggested_action
+    assert "顾问下一动作: owner_needed(envelope_renew)" in status and "信封预警: pol_probe_loop_1 额度已用尽(已放行 1/1 张业务卡)" in status
 
 
 def test_item2_envelope_expired_and_mint_hint_policy_id_plus_one(rig):
@@ -270,7 +275,7 @@ def test_item2_envelope_expired_and_mint_hint_policy_id_plus_one(rig):
     res = run_loop(TASK, rig.gov, actor=DRIVER, policy_id="pol_probe_loop_3", out=io.StringIO(), interval=0.05, max_wait=1, max_steps=3)
     _show(f"---- ② 信封过期 原文 exit {res.exit_code} reason={res.reason} ----\n{res.message}")
     assert res.exit_code == 5 and res.reason == "envelope_expired"
-    assert res.message.startswith("信封 pol_probe_loop_3 已过期(到期 2026-01-02T00:00:00Z; 已用 0/20 次): loop 启动校验不过, 未推进任何步")
+    assert res.message.startswith("信封 pol_probe_loop_3 已过期(到期 2026-01-02T00:00:00Z; 已放行 0/20 张业务卡): loop 启动校验不过, 未推进任何步")
     assert "--policy-id pol_probe_loop_4 " in res.suggested_action  # 同前缀已有 1 / 3 → 4
 
     # 无信封(泛化申领出口)的 policy_id 也不再写死 _1: 该驱动方 pol_<项目>_loop_ 前缀已有最大序号 +1
@@ -297,7 +302,7 @@ def test_item2_remaining_and_expiry_warnings_in_loop_status_and_brief(rig):
         line = next(l for l in status.splitlines() if "信封预警" in l)
         _show(f"[② loop status 预警原文 {pid}] {line.strip()}")
         if pid == "pol_probe_warn_1":
-            assert "信封预警: pol_probe_warn_1 剩余 3/3 次(阈值: ≤3 次或 ≤10%)" in line
+            assert "信封预警: pol_probe_warn_1 剩余 3/3 张业务卡(阈值: ≤3 张或 ≤10%)" in line
         else:
             assert f"信封预警: pol_probe_warn_2 {soon} 到期(剩 4h5" in line and "阈值 ≤24h" in line
         assert "续签: lybra envelope mint --confirm --policy-id" in line
