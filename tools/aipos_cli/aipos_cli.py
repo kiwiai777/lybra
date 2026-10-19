@@ -1726,6 +1726,75 @@ def _project_json_two_phase_emit(command: str, target: dict[str, Any], outcome: 
     return rc
 
 
+def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
+    """AIPOS-F190: `lybra project validation-root` 薄壳。写动作两阶段 = 同一包装(_project_json_two_phase_emit, 写后落账);
+    逻辑全在 validation_root(唯一实现)。拒 = exit 1(拒因码 + 问题, project.json 未改动)。"""
+    from tools.aipos_cli import validation_root as vr
+    from tools.schema_loader import SchemaLoadError
+
+    if args.vr_command == "helper":
+        if args.sha256:
+            print(vr.helper_sha256())
+        else:
+            sys.stdout.write(vr.helper_source())
+        return 0
+    target = _project_write_target(args, home, args.name)
+    if target is None:
+        return 1
+    root = Path(target["project_root"])
+    if args.vr_command == "list":
+        try:
+            entries = vr.project_validation_roots(root)
+        except (vr.ValidationRootError, SchemaLoadError, OSError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        entries = [e for e in entries if (not args.task_id or e["task_id"] == args.task_id) and (not args.host or e["host"] == args.host)]
+        if args.json:
+            print(render_json({"project": target["project"], "declarations": entries, "helper_sha256": vr.helper_sha256()}))
+        else:
+            print(f"项目 {target['project']} 验证根声明(project.json validation_roots):")
+            for line in vr.render_list_lines(entries):
+                print(f"  {line}")
+        return 0
+    action = args.vr_command
+    try:
+        outcome = vr.apply_validation_root_change(
+            root, action, dry_run=not args.confirm, actor=args.actor, host=getattr(args, "host", None), base=getattr(args, "base", None),
+            task_id=getattr(args, "task_id", None), instance=getattr(args, "instance", None), expires_at=getattr(args, "expires_at", None),
+            owner_ref=getattr(args, "owner_ref", None), host_fingerprint=getattr(args, "host_fingerprint", None),
+            decl_id=getattr(args, "decl_id", None), reason=getattr(args, "reason", None), candidate=getattr(args, "candidate", None),
+            run_id=getattr(args, "run_id", None))
+    except vr.ValidationRootError as exc:
+        print(f"Error: {exc.code}(project.json 未改动)", file=sys.stderr)
+        for problem in exc.problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return 1
+    except (SchemaLoadError, OSError) as exc:
+        print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
+        return 1
+    entry, run = outcome["entry"], outcome.get("run")
+    details = [f"声明 {entry['id']}: 主机 {entry['host']}(指纹 {entry['host_fingerprint'] or '(未绑定)'}) 卡 {entry['task_id']} "
+               f"实例 {entry['instance']}({entry['role_class']}) 到期 {entry['expires_at']} owner_ref={entry['owner_ref']}",
+               f"可写目录 = {vr.run_directory(entry, run['run_id'] if run else '<run-id>')}"]
+    if run:
+        details.append(f"run {run['run_id']} 候选 {run['candidate']} 起 {run['started_at']}" + (f" 收口 {run['finished_at']}" if run["finished_at"] else ""))
+    details += list(outcome["notes"])
+    payload = {k: outcome[k] for k in ("dry_run", "changed", "written", "diff", "project_json")}
+    extra = {"action": action, "declaration": entry, "run": run, "notes": outcome["notes"]}
+    json_out = getattr(args, "json", False)
+    if action == "declare":
+        return _project_json_two_phase_emit("validation-root declare", target, payload, actor=args.actor, json_out=json_out,
+                                            extra=extra, details=details)
+    if action == "revoke":
+        return _project_json_two_phase_emit("validation-root revoke", target, payload, actor=args.actor, json_out=json_out,
+                                            extra=extra, details=details)
+    if action == "run-start":
+        return _project_json_two_phase_emit("validation-root run-start", target, payload, actor=args.actor, json_out=json_out,
+                                            extra=extra, details=details)
+    return _project_json_two_phase_emit("validation-root run-finish", target, payload, actor=args.actor, json_out=json_out,
+                                        extra=extra, details=details)
+
+
 def _project_upgrade_cli(args: argparse.Namespace, home: Path | None) -> int:
     """AIPOS-F176 件①③: `lybra project upgrade` 薄壳——目标项目解析 = project 族同一实现(_project_write_target); 预演 / 确认 / 引导全部在
     project_upgrade(plan_upgrade / run_upgrade / derive_guidance + 同一文本渲染)。--confirm 缺 --actor 或与 --guidance 同用 = 用法错(零写入)。"""
@@ -2457,6 +2526,10 @@ def build_parser() -> argparse.ArgumentParser:
     roles_wb_parser.add_argument("--check", metavar="PATH", help="判一次访问: 路径(绝对或相对治理根)")
     roles_wb_parser.add_argument("--level", choices=["read", "append", "mutate"], default="read", help="--check 的请求级别(缺省 read)")
     roles_wb_parser.add_argument("--task-id", help="--check 的卡 ID(per_task 面 / product_repo lane 判定需要)")
+    # AIPOS-F190 件③: 主机维度(验证根面 validation_root 按主机声明; 缺省 = 本机)
+    roles_wb_parser.add_argument("--host", help="AIPOS-F190: host the --check path lives on (validation-root host label; default = this host)")
+    roles_wb_parser.add_argument("--run-id", help="AIPOS-F190: validation run id (minted by `lybra project validation-root run-start`)")
+    roles_wb_parser.add_argument("--host-fingerprint", help="AIPOS-F190: caller host fingerprint (hfp1:..., from the host-side helper) to cross-check the declaration")
     roles_wb_parser.add_argument("--markdown", action="store_true", help="输出章程渲染节(需 --role)")
     roles_wb_parser.add_argument("--json", action="store_true", help="Output JSON")
 
@@ -2700,6 +2773,53 @@ def build_parser() -> argparse.ArgumentParser:
     project_checkws_parser.add_argument("--harness", required=True, help="Harness whose launch template executable must be on the workstation PATH (enums.schema harness.launch)")
     project_checkws_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_checkws_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-F190 件①②: 跨机临时验证根声明(project.json validation_roots; 唯一实现 validation_root.apply_validation_root_change)
+    project_vr_parser = project_subparsers.add_parser(
+        "validation-root",
+        help="AIPOS-F190: declare a temporary cross-machine validation root (host + base + card + executor/auditor instance; writable = "
+             "<base>/<card>/<run-id>/ of the active run only): declare / revoke / run-start / run-finish (--dry-run default, --confirm "
+             "writes project.json and lands it), list, helper (print the host-side check helper)")
+    project_vr_sub = project_vr_parser.add_subparsers(dest="vr_command", required=True)
+
+    def _vr_common(sub: argparse.ArgumentParser) -> None:
+        sub.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory)")
+        sub.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+        sub.add_argument("--workspace-root", help="Target governance root when the project name is omitted")
+        sub.add_argument("--json", action="store_true", help="Output JSON")
+
+    vr_declare = project_vr_sub.add_parser("declare", help="Declare a validation root for one executor or auditor instance on one card")
+    _vr_common(vr_declare)
+    vr_declare.add_argument("--host", required=True, help="Target host label (e.g. the Mac running the validation)")
+    vr_declare.add_argument("--base", required=True, help="Absolute base path on that host; writable = <base>/<task-id>/<run-id>/")
+    vr_declare.add_argument("--task-id", required=True, help="The instance's own card (executor card, or the audit card for an auditor)")
+    vr_declare.add_argument("--instance", required=True, help="Executor or auditor instance enrolled in this project")
+    vr_declare.add_argument("--expires-at", default=None, help="Expiry ISO time YYYY-MM-DDTHH:MM:SSZ (default: declared_at + roles.schema validation_root.default_ttl_hours)")
+    vr_declare.add_argument("--owner-ref", required=True, help="Owner authorization reference (single line, no credentials)")
+    vr_declare.add_argument("--host-fingerprint", default=None, help="Target host fingerprint hfp1:... (run the helper's `fingerprint` on that host; required on --confirm for a remote host)")
+    _project_json_two_phase_flags(vr_declare, "validation-root declare")
+    vr_revoke = project_vr_sub.add_parser("revoke", help="Revoke a declaration (every later write is refused)")
+    _vr_common(vr_revoke)
+    vr_revoke.add_argument("--id", dest="decl_id", required=True, help="Declaration id")
+    vr_revoke.add_argument("--reason", required=True, help="Why (single line)")
+    _project_json_two_phase_flags(vr_revoke, "validation-root revoke")
+    vr_runstart = project_vr_sub.add_parser("run-start", help="Mint a run id for a declaration (only the active run directory is writable)")
+    _vr_common(vr_runstart)
+    vr_runstart.add_argument("--id", dest="decl_id", required=True, help="Declaration id")
+    vr_runstart.add_argument("--candidate", required=True, help="Fixed dev candidate: full 40-hex commit sha in the card's product repo")
+    vr_runstart.add_argument("--host-fingerprint", default=None, help="Optional cross-check against the declared host fingerprint")
+    _project_json_two_phase_flags(vr_runstart, "validation-root run-start")
+    vr_runfinish = project_vr_sub.add_parser("run-finish", help="Close a run (its directory is refused afterwards)")
+    _vr_common(vr_runfinish)
+    vr_runfinish.add_argument("--id", dest="decl_id", required=True, help="Declaration id")
+    vr_runfinish.add_argument("--run-id", required=True, help="Run id to close")
+    _project_json_two_phase_flags(vr_runfinish, "validation-root run-finish")
+    vr_list = project_vr_sub.add_parser("list", help="List validation root declarations and runs (read-only)")
+    _vr_common(vr_list)
+    vr_list.add_argument("--task-id", default=None, help="Only this card")
+    vr_list.add_argument("--host", default=None, help="Only this host")
+    vr_helper = project_vr_sub.add_parser("helper", help="Print the host-side check helper (pure python3 stdlib single file) or its sha256")
+    vr_helper.add_argument("--sha256", action="store_true", help="Print only the helper's sha256")
+    vr_helper.add_argument("--home-root", help="Governance home root (unused by helper; accepted for the project family)")
     # AIPOS-F161: pi 工位迁出共用检出(位置声明唯一来源 = enrollment_log 位置事件; 唯一实现 workstation_relocate.relocate_workstation)
     project_relocate_parser = project_subparsers.add_parser("relocate-workstation", help="AIPOS-F161: move an enrolled pi workstation (auditor / executor) of this project out of its current location (e.g. a git checkout shared with other projects) to a location of its own: preview (default) lists the workstation state (credentials by path/mode/size only), old/new location, affected declarations and in-flight checks; --confirm moves it, syncs the new location, appends a relocate location event to the enrollment log, verifies, leaves a read-only pointer in the old directory and lands the log; --rollback moves it back")
     project_relocate_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory)")
@@ -4488,6 +4608,8 @@ def main(argv: list[str] | None = None) -> int:
                 return _project_json_two_phase_emit(
                     "set-paths", target, outcome, actor=args.actor, json_out=getattr(args, "json", False),
                     details=[f"paths.{change['key']}: {change['before']!r} → {change['after']!r}" for change in outcome["changes"]])
+            if args.project_command == "validation-root":
+                return _validation_root_cli(args, home)
             if args.project_command == "upgrade":
                 return _project_upgrade_cli(args, home)
             if args.project_command == "set-meta":

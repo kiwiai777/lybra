@@ -386,7 +386,7 @@ def test_ratchet_single_implementations_and_declarations():
     pj = load_schema("config")["configuration_sources"]["project_json"]["schema"]["return_summary_source"]
     assert pj["default_from"] == "transitions.artifact_ingest.return.summary_source" and "default" not in pj
     assert "LANE_REPO_REQUIRED" in load_schema("config")["configuration_sources"]["project_json"]["schema"]["repos"]["reject_codes"]
-    assert load_schema("verbs")["two_phase_protocol"]["project_json_writers"]["commands"][-1] == "set-return-summary"
+    assert "set-return-summary" in load_schema("verbs")["two_phase_protocol"]["project_json_writers"]["commands"]  # AIPOS-F190 起族内续登记, 不再是末项
     # 件③: 实例名判据唯一(段切分只经 parse_instance_name), authorize_instance_class 必经它
     cr = code["tools/aipos_cli/custom_roles.py"]
     auth = cr.split("def authorize_instance_class(")[1].split("\ndef ")[0]

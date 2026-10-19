@@ -9,6 +9,8 @@
   - 可开工判据: next_resolver.kickoff_refusal(与工位 /go 同一判据)
   - 实例身份 / 章程可取 / 门地址 / 工位根: charter_render.instance_charter(与 `lybra charter` 同一判定); 章程命令 = charter_pull_command
   - 写权限边界与全角色硬规矩: roles.schema write_boundary(write_boundary.build_write_boundary)
+  - 跨机临时验证根(AIPOS-F190 件④): 本卡本实例的 project.json validation_roots 声明(validation_root.render_section_lines, 与章程同源;
+    无声明 = 该节省略)
   - 门交互硬规矩: 项目 paths.hard_rules_source § 0.5(hard_rules_extractor)
   - 全量命令与时限: charter_render.runall_context(project.json test_contract); 长命令: run_long.charter_commands
   - 时限措辞(AIPOS-F189 件②): 卡面 harness(loop_driver.card_harness)的单次工具时限 enums.schema harness.<值>.tool_timeout_seconds
@@ -330,6 +332,10 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
     from tools.aipos_cli.loop_driver import card_harness
 
     harness = card_harness(fm)
+    # AIPOS-F190 件④: 本卡本实例的跨机验证根(含已撤销 / 到期 = 如实告知一律拒); 沙箱可写根按卡面 harness 渲染
+    from tools.aipos_cli.validation_root import render_section_lines
+
+    validation_lines = render_section_lines(gov, instance=instance, task_id=task_id, harness=harness, include_inactive=True)
     if runall["runall"]:
         timing_state, timing = runall_timing(texts, harness, int(test_contract["post_merge_regression"]["timeout_seconds"]),
                                              runall["runall_timeout_seconds"])
@@ -350,6 +356,7 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
         "carried_line": view.get("carried_line"),
         "session_host": session_host if remote else None, "gate_host": gate_host, "host_hint": host_hint,
         "boundary_lines": _item_lines(items["boundary_line"], rows),
+        "validation_root_lines": "\n".join(validation_lines) if validation_lines else None,
         "governance_root": str(gov), "report_dir": str(report_path.parent),
         "other_projects": ", ".join(f"`{p}`" for p in others) if others else None,
         "harness_root": str(charter["harness_root"]) if charter.get("workstation") else None,

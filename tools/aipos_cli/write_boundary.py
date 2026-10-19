@@ -129,12 +129,16 @@ def _surface_roots(governance_root: Path, decl: dict[str, Any], *, harness_root:
             roots = list(repos["items"].values()) if repos["declared"] else ([repos["code_repo"]] if repos["code_repo"] else [])
         elif root_kind == "harness_root":
             roots = [harness_root] if harness_root else []
+        elif root_kind == "validation_roots":
+            roots = []  # AIPOS-F190: 按主机声明(project.json validation_roots), 不按本机路径前缀匹配; 判定走 validation_root.judge_access
         else:
             raise SchemaLoadError(f"roles.schema write_boundary.surfaces.{name}.root={root_kind!r} 未知")
         out[name] = {
             "roots": [Path(r).expanduser() for r in roots],
             "per_task": bool(spec.get("per_task")),
             "per_task_lane": bool(spec.get("per_task_lane")),
+            "per_run": bool(spec.get("per_run")),
+            "host_scoped": root_kind == "validation_roots",
             "description": str(spec.get("description") or ""),
         }
     return out
@@ -169,6 +173,12 @@ def build_write_boundary(
             if spec is None:
                 raise SchemaLoadError(f"roles.schema write_boundary.matrix.{cls}.{surface} 引用未声明的面")
             _level_rank(decl, str(level))
+            if spec["host_scoped"]:
+                # AIPOS-F190: 验证根按主机声明, 可读面给模板(实际声明 = lybra project validation-root list; 本实例条目随章程同源渲染)
+                rows.append({"role": name, "role_class": cls, "surface": surface, "level": str(level),
+                             "path": "<声明 base>/<task_id>/<run_id>(按主机声明: lybra project validation-root list)",
+                             "scope": "本卡本活动 run 目录(按主机)", "description": spec["description"]})
+                continue
             for root in spec["roots"] or [None]:
                 rows.append({
                     "role": name,
@@ -240,6 +250,10 @@ def check_access(
     level: str,
     task_id: str | None = None,
     harness_root: str | Path | None = None,
+    host: str | None = None,
+    instance: str | None = None,
+    run_id: str | None = None,
+    host_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     """判一次访问: {allowed, reason, code, surface, granted_level, role_class, hard_rules}。
 
@@ -250,6 +264,9 @@ def check_access(
       4. product_repo mutate: 路径须在 <worktree_root>/<task_id>/ 内且在卡 lane.paths 内;
       5. 面外路径 = 未声明 = 拒(code SURFACE_UNDECLARED, 出口: 补声明);
       6. 只读治理永远合法(governance_root 面 read 对所有有行角色成立)。
+      7. AIPOS-F190 主机维度: host 缺省 / 等于本机 = 本机判定; 路径落在该主机 validation_roots 声明 base 内 = 面 validation_root
+         (validation_root.judge_access: 本实例本卡本活动 run 目录才放行; 本机另按 realpath 判符号链接逃逸);
+         他机路径只判 validation_root 面(字面), 不在任何声明 base 内 = SURFACE_UNDECLARED。
     """
     governance_root = Path(governance_root).expanduser().resolve()
     decl = load_write_boundary_declaration()
@@ -259,12 +276,34 @@ def check_access(
     matrix = decl["matrix"].get(cls)
     if not matrix:
         raise WriteBoundaryError(f"角色类 {cls!r} 在 roles.schema write_boundary.matrix 无行; 出口: 补矩阵声明")
-    target = Path(path).expanduser()
-    if not target.is_absolute():
-        target = (governance_root / target)
+    hard_rules = [dict(r) for r in decl["hard_rules"]]
+    # AIPOS-F190: 主机维度 + validation_root 面(先于本机面匹配; base 已在声明时排除治理根 / 产品仓, 与其他面不重叠)
+    from tools.aipos_cli import validation_root as vr
+
+    remote = not vr.is_local_host(host)
+    raw = str(path)
+    raw = raw if remote else str(Path(raw).expanduser()) if raw.startswith("~") else raw
+    if not raw.startswith("/"):
+        if remote:
+            return {"allowed": False, "code": "PATH_NOT_CANONICAL", "surface": vr.SURFACE, "granted_level": None, "role_class": cls,
+                    "reason": f"主机 {host} 上的路径须为绝对路径: {raw!r}", "hard_rules": hard_rules}
+        raw = str(governance_root / raw)
+    granted_vr = str(matrix.get(vr.SURFACE) or "") or None
+    vr_result = vr.judge_access(governance_root, host=str(host or ""), raw_path=raw, want_rank=want_rank, granted=granted_vr,
+                                granted_rank=_level_rank(decl, granted_vr) if granted_vr else None, instance=instance, task_id=task_id,
+                                run_id=run_id, host_fingerprint=host_fingerprint)
+    if vr_result is not None:
+        return {**vr_result, "role_class": cls, "hard_rules": hard_rules}
+    if remote:
+        return {
+            "allowed": False, "code": "SURFACE_UNDECLARED", "surface": None, "granted_level": None, "role_class": cls, "host": host,
+            "reason": (f"主机 {host} 上的路径 {raw} 不在任何验证根声明内(project.json validation_roots); 出口: 顾问 "
+                       "`lybra project validation-root declare` 声明, 禁角色自行突破"),
+            "hard_rules": hard_rules,
+        }
+    target = Path(raw)
     target = target.resolve() if target.exists() else Path(str(target))
     surfaces = _surface_roots(governance_root, decl, harness_root=Path(harness_root).expanduser() if harness_root else None)
-    hard_rules = [dict(r) for r in decl["hard_rules"]]
 
     # 1. 面匹配: 最深根优先(governance_docs 深于 governance_root); 同根并列时优先「本角色有行」的 per_task 面
     #    (lybra 形 return_root = verdict_root = task_cards 三面同根: executor 走 return_slot, auditor 走 verdict_slot)
@@ -387,6 +426,13 @@ def run_write_boundary_cli(args: Any, workspace_root: Path) -> int:
     if instance and not role:
         match = next((i for i in enrolled_instances(workspace_root) if i["instance"] == instance), None)
         if match is None:
+            # AIPOS-F190: 无接入码记录的已接入实例(子 agent land 事件 / 连接文件条目)按实例接入唯一判定取角色
+            from tools.aipos_cli.enrollment import instance_enrollment
+
+            view = instance_enrollment(workspace_root, instance)
+            if view["enrolled"] and view.get("role"):
+                match = {"instance": instance, "role": view["role"]}
+        if match is None:
             print(f"lybra roles write-boundary: 实例 {instance} 不在 enrollment 记录中(--workspace-root {workspace_root})", file=sys.stderr)
             return 1
         role = match["role"]
@@ -399,14 +445,18 @@ def run_write_boundary_cli(args: Any, workspace_root: Path) -> int:
             result = check_access(
                 workspace_root, role=role, path=check_path, level=getattr(args, "level", None) or "read",
                 task_id=getattr(args, "task_id", None), harness_root=getattr(args, "harness_root", None),
+                host=getattr(args, "host", None), instance=instance, run_id=getattr(args, "run_id", None),
+                host_fingerprint=getattr(args, "host_fingerprint", None),
             )
             if getattr(args, "json", False):
                 print(json.dumps(result, ensure_ascii=False, indent=2))
             else:
                 print(f"{'ALLOW' if result['allowed'] else 'DENY'} [{result['code']}] {result['reason']}")
+                if result.get("host_side_check"):
+                    print(f"  目标主机复核(只认退出码 0 + ALLOW): {result['host_side_check']}")
             return 0 if result["allowed"] else 3
         boundary = build_write_boundary(workspace_root, role=role, harness_root=getattr(args, "harness_root", None))
-    except (WriteBoundaryError, SchemaLoadError, OSError, ValueError) as exc:
+    except (WriteBoundaryError, SchemaLoadError, OSError, ValueError) as exc:  # ValidationRootError ⊂ ValueError(段形不合 = 拒, 不放行)
         print(f"lybra roles write-boundary: {exc}", file=sys.stderr)
         return 1
     if getattr(args, "json", False):

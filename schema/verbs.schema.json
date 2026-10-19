@@ -34,7 +34,11 @@
         "set-meta",
         "set-execution",
         "set-model",
-        "set-return-summary"
+        "set-return-summary",
+        "validation-root declare",
+        "validation-root revoke",
+        "validation-root run-start",
+        "validation-root run-finish"
       ],
       "default_phase": "dry_run",
       "flags": {
@@ -2295,8 +2299,8 @@
         "unreadable": {"code": 3, "meaning": "治理根 / project.json / 声明读取失败(fail-closed)"}
       },
       "layout": {
-        "executor": ["header", "", "start_title", "start_charter", "start_card", "start_worktree", "start_no_worktree", "start_repo", "carried", "remote_note", "", "boundary_title", "boundary_lines", "", "no_write_title", "no_write_governance", "no_write_other_projects", "no_write_harness", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_body", "return_stop", "", "summary"],
-        "auditor": ["header_auditor", "", "start_title", "start_charter", "start_card_auditor", "start_worktree_auditor", "start_repo", "remote_note", "", "boundary_title", "boundary_lines", "", "no_write_title", "no_write_governance", "no_write_product_auditor", "no_write_other_projects", "no_write_harness", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline_auditor", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_body_auditor", "return_stop", "", "summary"],
+        "executor": ["header", "", "start_title", "start_charter", "start_card", "start_worktree", "start_no_worktree", "start_repo", "carried", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "no_write_title", "no_write_governance", "no_write_other_projects", "no_write_harness", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_body", "return_stop", "", "summary"],
+        "auditor": ["header_auditor", "", "start_title", "start_charter", "start_card_auditor", "start_worktree_auditor", "start_repo", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "no_write_title", "no_write_governance", "no_write_product_auditor", "no_write_other_projects", "no_write_harness", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline_auditor", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_body_auditor", "return_stop", "", "summary"],
         "note": "每个键 = texts 的一行模板; \"\" = 空行。模板占位值为 null(本卡不适用, 如无承继 / 本机会话 / 无工位)= 该行省略; 列表占位(*_lines)= 逐项按 item_templates 成行。占位缺 / 值非串 = 渲染失败(fail-closed, 不出半截开工稿)。"
       },
       "role_labels": {"executor": "执行体", "auditor": "审计体"},
@@ -2315,6 +2319,7 @@
         "remote_note": "   注意: 你的会话所在机 {session_host} ≠ 治理根所在机 {gate_host}; 以上路径与以下命令都在 {gate_host} 上, 经 ssh 访问{host_hint}",
         "boundary_title": "## 写权限边界(单源 roles.schema write_boundary, 与章程同源; 面外路径 = 不许写)",
         "boundary_lines": "{boundary_lines}",
+        "validation_root_lines": "{validation_root_lines}",
         "no_write_title": "## 禁写与禁止动作",
         "no_write_governance": "- 禁写治理根 `{governance_root}`(唯一例外: 本卡报告落点 `{report_dir}` 及其下 artifacts/、run_long/); 禁对治理仓 git add / commit / push。",
         "no_write_product_auditor": "- 产品仓只读(审计不提交、不改文件, 取证工作树亦然)。",
@@ -2363,6 +2368,23 @@
         "baseline_state_pending": "合并后回归在跑(卡 {task_id} 起于 {started_at}, 时限 {timeout_seconds}s, 预计最迟 {deadline} 完成)——先做卡, 交回前再查(或加 --wait <秒>)",
         "baseline_state_self_run_required": "须自跑({reason})——在草稿目录建 {base} 基线副本串行自跑一次",
         "baseline_state_unavailable": "查询失败({error})——按须自跑处理, 报告写明查询失败原文"
+      },
+      "validation_root_texts": {
+        "description": "AIPOS-F190 件④: 开工稿与章程「跨机临时验证根」节的措辞(同源: validation_root.render_section_lines 唯一渲染, 开工稿 = 本卡声明, 章程 = 本实例有效声明)。占位 {键} 取声明条目与渲染值。",
+        "title": "## 跨机临时验证根(单源 project.json validation_roots; 判定 = write-boundary 面 validation_root, 与章程同源)",
+        "relation": "- 与硬规矩衔接: {relation}",
+        "declaration": "- 声明 {id}: 主机 {host}(指纹 {fingerprint}), 卡 {task_id}, 实例 {instance}({role_class}), 到期 {expires_at}, Owner 授权 {owner_ref}; 状态 {status}",
+        "directory": "  可写目录 = `{base}/{task_id}/<run-id>/`(只许本卡本活动 run 目录; base 与 `{base}/{task_id}/` 层、他卡 / 他 run / 已结束 run / 撤销或到期后一律拒)",
+        "run_active": "  当前活动 run: `{run_id}`(候选 {candidate}, 起于 {started_at}) → 本次只写 `{run_dir}`",
+        "run_none": "  当前无活动 run: 写入前须由顾问 / 驱动方铸 run(`{run_start}`); 执行体 / 审计体不自铸、不先写",
+        "run_finish": "  收口: 本次验证结束由顾问 / 驱动方 `{run_finish}`; 收口后再写一律拒",
+        "check_dev": "  治理根侧判定(只读): `{check_command}`(退出码 0 允许 / 3 拒; 拒 = 声明缺口, 停线报告, 禁换路径 / 符号链接 / 工具绕过)",
+        "helper": "  目标主机侧 realpath 判定(符号链接逃逸只能在目标主机判): 在治理根所在机取 helper `{helper_fetch}`, 存为目标主机 `{helper_path}`, 核 sha256 = {helper_sha256}(shasum -a 256 / sha256sum), 每次写前 `python3 {helper_path} check --run-dir {run_dir} --path <目标> --expect-fingerprint {fingerprint}`; 只认退出码 0 且输出 `ALLOW`, 其余(含无输出 / sha256 不符)= 拒",
+        "sandbox": "  子 agent 沙箱可写根({harness}): {sandbox}; {forbid}(来源 {source})",
+        "redirect_title": "  工具写入重定向(先在目标主机只读核验, 核验不过 = BLOCK, 不臆造替代参数):",
+        "redirect": "  - [{toolchain}] {render}(核验: {verify}; 来源: {source})",
+        "side_effect": "  - 系统服务副作用 `{path}`: {by}; {allowed}; 核验: {verify}",
+        "block": "  - BLOCK / 禁止: {text}"
       },
       "item_templates": {
         "boundary_line": "- {surface}: {level} `{path}`({scope})",
@@ -4190,7 +4212,7 @@
           },
           "project_writers": {
             "cli": "lybra project <subcommand> --confirm",
-            "subcommands": ["set-paths", "set-repo", "set-repos", "set-workstation", "set-meta", "set-execution", "set-model", "set-return-summary", "freeze-legacy", "dispatch-mode set", "relocate-workstation", "upgrade"],
+            "subcommands": ["set-paths", "set-repo", "set-repos", "set-workstation", "set-meta", "set-execution", "set-model", "set-return-summary", "freeze-legacy", "dispatch-mode set", "relocate-workstation", "upgrade", "validation-root declare", "validation-root revoke", "validation-root run-start", "validation-root run-finish"],
             "scope": "AIPOS-F159 件①(gap #144): 写 project.json 的 project 族命令 --confirm 成功后的写出文件(治理根相对): two_phase_protocol.project_json_writers 各命令 = project.json(--confirm 即落, 无改动亦经同一提交口核一次: 范围已落账 = PASS no-op, 前次写后未落账者随之补落); freeze-legacy = 本次追加的清单条目 + 本次补声明 legacy_baseline 时的 project.json(本批无卡可冻 = 无写出, 不落); dispatch-mode set = project.json + 切换留痕文件。AIPOS-F161: relocate-workstation = 本项目 enrollment_log(追加的 relocate 位置事件; 唯一写出, 工位目录在治理仓外不入)。AIPOS-F176: upgrade = `lybra project upgrade --confirm` 配置缺省补齐步写出的 project.json(其余步骤各经自身声明的落账命令: migrate_record_type / migrate_decision_log_pointers; 工位章程在治理仓外不入)。提交身份 = 该命令 --actor(dispatch-mode set 为 --by; 未给 = $USER 或 owner, 与 set-repo / project new 同一缺省)。--dry-run 零写入、不落账。唯一落账点: 写 project.json 的两阶段命令经输出包装 aipos_cli._project_json_two_phase_emit, freeze-legacy / dispatch-mode set 经同一薄壳 aipos_cli._land_project_writes(→ land_written_paths)。不含 project new / import(建治理根本身, 治理根此时可能尚未入治理仓; 向导第 1 步照旧给 governance-commit 与 home git-init)。",
             "message_template": "chore(governance): 项目配置落账 {subcommand} {project}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra project {subcommand} --confirm"
           },
@@ -4213,6 +4235,33 @@
         "0": "PASS — committed (and pushed unless no_push), or no-op (nothing to commit within the selection), or dry_run manifest emitted",
         "1": "BLOCK/FAIL — e.g. paths outside governance root (rejected_paths), pre-staged files outside --paths (pre_staged_outside), N6 completeness missing, staged set != manifest, pre-commit guardrail (AIPOS-R6M) rejection, post-commit git show != manifest, push/verification failure",
         "2": "usage error — argparse rejected the arguments (unknown flag / missing --actor)"
+      }
+    },
+    "lybra_project_validation_root": {
+      "description": "AIPOS-F190: `lybra project validation-root declare|revoke|run-start|run-finish|list|helper` —— 跨机临时验证根声明(按项目 / 主机 / 执行或审计实例 / 卡 / run)。declare: --host --base --task-id --instance --owner-ref [--expires-at] [--host-fingerprint] [--actor] [--dry-run|--confirm](远端主机 --confirm 须带目标主机 helper 取得的指纹); revoke --id --reason; run-start --id --candidate <卡仓 40 位 sha>(铸 run-id, 同一声明同时只一个活动 run); run-finish --id --run-id; list 只读; helper 打印主机侧检查入口(纯 python3 标准库单文件)或其 sha256。写动作 = project.json validation_roots 段(只追加条目, 撤销 / 收口写在原条目), 两阶段与写后落账同一包装(two_phase_protocol.project_json_writers; 落账 post_write_landing.commands.project_writers)。判定 = `lybra roles write-boundary --check <路径> --host <主机> --instance <实例> --task-id <卡> --run-id <run> --level mutate`(面 validation_root, 声明 roles.schema write_boundary.validation_root)。",
+      "phase": "two_phase",
+      "surface": [
+        "cli"
+      ],
+      "cli_command": "lybra project validation-root",
+      "single_implementation": "tools/aipos_cli/validation_root.apply_validation_root_change(写) / project_validation_roots(读) / judge_access(判定, 经 write_boundary.check_access) / render_section_lines(开工稿与章程同源节); 主机侧 tools/aipos_cli/validation_root_helper.py",
+      "exit_codes": {
+        "ok": {
+          "code": 0,
+          "meaning": "预演完成 / 已写入并落账 / 只读输出"
+        },
+        "refused": {
+          "code": 1,
+          "meaning": "声明不合(拒因码 ∈ config.schema project_json.validation_roots.reject_codes; project.json 未改动)"
+        },
+        "usage": {
+          "code": 2,
+          "meaning": "参数错"
+        },
+        "landing_failed": {
+          "code": 3,
+          "meaning": "写入已生效但落账未完成(post_write_landing.landing_failed_exit_code)"
+        }
       }
     },
     "lybra_project_cleanup_worktrees": {

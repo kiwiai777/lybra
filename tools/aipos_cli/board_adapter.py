@@ -4668,6 +4668,20 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
             continue
         command = str(entry.get("command"))
         label = f"{label}(command={_collapse_ws(command)!r})"
+        # AIPOS-F190 件②: 审计不得写或引用被审执行卡的跨机验证 run 目录作为自身运行证据(声明 project.json validation_roots)
+        from tools.aipos_cli.validation_root import ValidationRootError, executor_run_dir_refs
+
+        try:
+            run_refs = executor_run_dir_refs(workspace_root, reviewed, [command, str(entry.get("worktree") or ""),
+                                                                         str(entry.get(log_keys["path"]) or ""),
+                                                                         str(entry.get(log_keys["excerpt"]) or "")])
+        except ValidationRootError as exc:
+            reasons.append(f"{label} 验证根声明读不出, 无从核对是否引用执行 run 目录(fail-closed): {exc}")
+            continue
+        if run_refs:
+            reasons.append(f"{label} 引用被审执行卡 {reviewed} 的验证 run 目录 {', '.join(run_refs)}(执行 run 的运行 / 产物不构成审计独立"
+                           "运行证据; 审计须在本审计卡自己的验证 run 目录重跑)")
+            continue
         exit_code = entry.get("exit_code")
         if isinstance(exit_code, bool) or not isinstance(exit_code, int):
             reasons.append(f"{label} exit_code 须为整数, 实为 {exit_code!r}")
