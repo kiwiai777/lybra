@@ -227,8 +227,8 @@ def test_item1_resolver_is_single_implementation_and_cli_has_no_active_project_w
     _show(f"[件①·静态] _project_write_target 调用点 {len(calls)} 处(set-paths/set-meta/set-repos/set-repo/set-workstation/"
           "set-execution/freeze-legacy/dispatch-mode set/export 隐式目标)")
     # AIPOS-F143 件②: + set-execution; AIPOS-F148 件②: + set-return-summary; AIPOS-F161: + relocate-workstation; AIPOS-F169: + set-model;
-    # AIPOS-F171: + lybra roadmap(同一目标解析); AIPOS-F176: + project upgrade(同一目标解析)
-    assert len(calls) == 14
+    # AIPOS-F171: + lybra roadmap(同一目标解析); AIPOS-F176: + project upgrade(同一目标解析); AIPOS-F190: + project validation-root(同一目标解析)
+    assert len(calls) == 15
     wc_src = (REPO_ROOT / "tools/aipos_cli/workspace_config.py").read_text(encoding="utf-8")
     fn = next(n for n in ast.parse(wc_src).body if isinstance(n, ast.FunctionDef) and n.name == "resolve_project_write_target")
     names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
@@ -269,7 +269,9 @@ def test_item2_first_line_names_target_and_absolute_project_json_for_every_write
                                                                           instance=inst, project="beta", by="t", reason=reason))
     from tools.schema_loader import load_schema
 
-    assert sorted(load_schema("verbs")["two_phase_protocol"]["project_json_writers"]["commands"]) == sorted(argvs)
+    # AIPOS-F190: validation-root 四个写动作(两词子命令)同族, 首行 / 次行原文正反例见 test_aipos_f190_validation_root.py
+    assert sorted(c for c in load_schema("verbs")["two_phase_protocol"]["project_json_writers"]["commands"]
+                  if not c.startswith("validation-root ")) == sorted(argvs)
     for command, extra in argvs.items():
         for flags in ([], ["--confirm"]):
             rc, out, err = _cli("project", command, "beta", "--home-root", str(rig["home"]), *extra, *flags)
