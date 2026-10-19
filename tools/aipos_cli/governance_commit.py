@@ -182,6 +182,33 @@ def resolve_commit_paths(
     return {"selected": True, "paths": accepted, "source": source, "rejected": [], "message": None}
 
 
+VANISHED_UNTRACKED_LINE = "已跳过 {count} 个从未入库且已不存在的路径(无可落内容, 不进暂存与提交): {paths}"
+
+
+def classify_missing_paths(governance_root: Path, selected_paths: list[str]) -> dict[str, list[str]]:
+    """AIPOS-F193: 白名单中工作树已不存在的条目分两类(只读 git ls-files, 治理根相对):
+    - vanished_untracked: 索引与 HEAD 均无(从未入库, 如人肉期接入项目发布 / 认领后未提交、随后被队列写命令挪走的原卡路径)
+      = 无可落内容, 从暂存与提交 pathspec 剔除;
+    - staged_deleted: HEAD 有、索引无(已 git rm 的删除)= 删除已在索引, 只不再 git add(同样会报 pathspec 不匹配), 照常作删除提交。
+    已跟踪且在工作树被删除(索引仍有)的条目不在此列, 由 git add -A 暂存删除。git 读失败抛 CalledProcessError(调用方 fail-closed)。"""
+    missing = [p for p in selected_paths if not os.path.lexists(Path(governance_root) / p)]
+    if not missing:
+        return {"vanished_untracked": [], "staged_deleted": []}
+    literal = [f":(literal){p}" for p in missing]
+    in_index = _split_nul(_git_readonly(["ls-files", "-z", "--"] + literal, governance_root))
+    has_head = subprocess.run(["git", "rev-parse", "--verify", "-q", "HEAD^{commit}"], cwd=str(governance_root),
+                              capture_output=True, text=True).returncode == 0
+    in_index_or_head = (_split_nul(_git_readonly(["ls-files", "-z", "--with-tree=HEAD", "--"] + literal, governance_root))
+                        if has_head else in_index)
+
+    def matched(path: str, entries: list[str]) -> bool:
+        prefix = path.rstrip("/") + "/"
+        return any(e == path or e.startswith(prefix) for e in entries)
+
+    return {"vanished_untracked": [p for p in missing if not matched(p, in_index_or_head)],
+            "staged_deleted": [p for p in missing if matched(p, in_index_or_head) and not matched(p, in_index)]}
+
+
 def _git_ws_prefix(governance_root: Path) -> str:
     """治理根在 git 仓内的相对前缀(如 ``2_projects/chris-huibojin/``; 仓根即治理根时为 ``""``)。"""
     return _git_readonly(["rev-parse", "--show-prefix"], governance_root).strip()
@@ -706,7 +733,8 @@ def land_written_paths(governance_root: Path | str, paths: list[str], actor: str
                        **fields: Any) -> dict[str, Any]:
     """AIPOS-F158: 写后落账唯一实现——paths(治理根相对, 本次写出的文件)经 governance_commit 精确提交并推送(推送策略同 N6 落账)。
     范围已落账 = governance_commit PASS no-op(幂等)。落账失败不回滚已写内容(写入已生效), 结果带拒因原文与补账命令。
-    返回 {landed, verdict, committed, pushed, commit_hash, reason, remedy, exit_code, operations, line}; line 供调用方原样输出。"""
+    返回 {landed, verdict, committed, pushed, commit_hash, reason, remedy, exit_code, operations, skipped_vanished_untracked, line};
+    line 供调用方原样输出(AIPOS-F193: 有从未入库且已不存在而被剔除的路径时行尾列出)。"""
     root = Path(governance_root)
     decl = post_write_landing_declaration()
     spec = decl["commands"].get(command)
@@ -723,16 +751,18 @@ def land_written_paths(governance_root: Path | str, paths: list[str], actor: str
     push_reason = (result.get("push_result") or {}).get("reason")
     reason = None if landed else (push_reason or first or str(result.get("verdict")))
     commit_hash = result.get("commit_hash")
+    skipped = list(result.get("skipped_vanished_untracked") or [])
+    skipped_note = f"; 已跳过 {len(skipped)} 个从未入库且已不存在的路径: {', '.join(skipped)}" if skipped else ""  # AIPOS-F193 件①
     if landed:
         line = (f"落账: verdict={result.get('verdict')} committed={bool(result.get('committed'))} pushed={bool(result.get('pushed'))}"
-                + (f" commit={str(commit_hash)[:12]}" if commit_hash else f" — {first[:200]}") + f"({len(selected)} 个文件)")
+                + (f" commit={str(commit_hash)[:12]}" if commit_hash else f" — {first[:200]}") + f"({len(selected) - len(skipped)} 个文件)" + skipped_note)
     else:
         line = (f"⚠ 落账未完成(写入已生效, 勿重复执行写命令): verdict={result.get('verdict')} committed={bool(result.get('committed'))} "
                 f"pushed={bool(result.get('pushed'))} — {str(reason)[:500]}\n  补账: {remedy}")
     return {"landed": landed, "verdict": result.get("verdict"), "committed": bool(result.get("committed")),
             "pushed": bool(result.get("pushed")), "commit_hash": commit_hash, "paths": selected, "reason": reason,
             "remedy": None if landed else remedy, "exit_code": 0 if landed else int(decl["landing_failed_exit_code"]),
-            "operations": list(result.get("operations") or []), "line": line}
+            "operations": list(result.get("operations") or []), "skipped_vanished_untracked": skipped, "line": line}
 
 
 def check_governance_completeness(
@@ -1379,11 +1409,17 @@ def governance_commit(
         task_scope = early["task_scope"]
         paths = list(task_scope["paths"])
     guardrail_sink: dict[str, Any] = {}
+    skipped: list[str] = []
     result = _governance_commit_impl(
         governance_root, task_id, actor,
         repo_root=repo_root, dry_run=dry_run, push=push, message=message, paths=paths, paths_file=paths_file,
-        guardrail_sink=guardrail_sink,
+        guardrail_sink=guardrail_sink, skipped_sink=skipped,
     )
+    # AIPOS-F193 件①: 从未入库且已不存在的路径已从暂存与提交剔除——结果字段 + 消息尾行出声(不报错)
+    result["skipped_vanished_untracked"] = sorted(skipped)
+    if skipped:
+        result["message"] = (str(result.get("message") or "") + "\n"
+                             + VANISHED_UNTRACKED_LINE.format(count=len(skipped), paths=", ".join(sorted(skipped)))).lstrip("\n")
     # AIPOS-F128 件③: 四检放行时 --json 同步带报告(含 b4_exemptions 计数与逐文件依据); 拒时 BLOCK 结果已带
     if guardrail_sink.get("report") is not None:
         result.setdefault("guardrail_report", guardrail_sink["report"])
@@ -1555,6 +1591,7 @@ def _governance_commit_impl(
     paths: list[str] | None = None,
     paths_file: Path | str | None = None,
     guardrail_sink: dict[str, Any] | None = None,
+    skipped_sink: list[str] | None = None,
 ) -> dict[str, Any]:
     """N6 收账提交:校验四件 → commit → push。
 
@@ -1632,7 +1669,37 @@ def _governance_commit_impl(
     # AIPOS-F7 大项B①: 先查 git status — 无待收内容 → info "无待收内容, 治理仓已最新" + EXIT=0
     # (F4 no-op 档)。放在完整性校验之前:仓已干净则无需校验,避免无变更场景误触 BLOCK。
     # AIPOS-F79: 有 --paths 时 status 限定到白名单 pathspec(选定路径外的变更与本次无关)
+    add_skip: set[str] = set()
     try:
+        # AIPOS-F193 件①: 白名单中「工作树不存在且 git 从未跟踪」的条目 = 无可落内容, 从暂存与提交 pathspec 剔除并出声(不报错);
+        # 剔除后为空 = no-op PASS。已 git rm 的删除(HEAD 有、索引无)不再 git add(删除已在索引), 照常作删除提交。
+        # 唯一落账实现在此一处剔除(N6 / 写后落账 / --paths 手工补账同口径受益), 禁各调用方各自过滤。
+        if selected_paths:
+            missing = classify_missing_paths(governance_root, selected_paths)
+            vanished = missing["vanished_untracked"]
+            add_skip = set(missing["staged_deleted"])
+            if vanished:
+                selected_paths = [p for p in selected_paths if p not in set(vanished)]
+                operations.append(VANISHED_UNTRACKED_LINE.format(count=len(vanished), paths=", ".join(vanished)))
+                if skipped_sink is not None:
+                    skipped_sink.extend(vanished)
+                if not selected_paths:
+                    operations.append("No changes to commit (all --paths entries never tracked and gone)")
+                    return {
+                        "verdict": Verdict.PASS,
+                        "task_id": task_id,
+                        "actor": actor,
+                        "dry_run": dry_run,
+                        "completeness_check": None,
+                        "committed": False,
+                        "pushed": False,
+                        "commit_hash": None,
+                        "message": "无待收内容, 选定路径均为从未入库且已不存在的路径",
+                        "severity": "info",
+                        "operations": operations,
+                        "selected_paths": [],
+                        "commit_manifest": None,
+                    }
         status_result = subprocess.run(
             ["git", "status", "--porcelain", "--"] + (selected_paths if selected_paths else []),
             cwd=str(governance_root),
@@ -1932,14 +1999,18 @@ def _governance_commit_impl(
         if selected_paths:
             # AIPOS-F79 件①: 只 stage 白名单 pathspec, 绝不整根 add -A
             # AIPOS-F79C 件④: -A 限定在 <paths> 内 — 目录 pathspec 内的删除也必须暂存(这不是整根 add -A)
-            subprocess.run(
-                ["git", "add", "-A", "--"] + selected_paths,
-                cwd=str(governance_root),
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            operations.append(f"Staged whitelist only (git add -A -- {' '.join(selected_paths)} in {governance_root}; deletions within these paths included)")
+            # AIPOS-F193 件①: 已 git rm 的删除(索引与工作树均无)不再 add(pathspec 不匹配), 删除已在索引, 由 --only 照常提交
+            add_paths = [p for p in selected_paths if p not in add_skip]
+            if add_paths:
+                subprocess.run(
+                    ["git", "add", "-A", "--"] + add_paths,
+                    cwd=str(governance_root),
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            operations.append(f"Staged whitelist only (git add -A -- {' '.join(add_paths)} in {governance_root}; deletions within these paths included)"
+                              + (f"; already-staged deletions not re-added: {', '.join(sorted(add_skip))}" if add_skip else ""))
         else:
             # AIPOS-R8B 大项A: Stage all changes in governance repo with pathspec限定到 governance_root
             # 防止 git add -A 越界 stage 其他项目(如 kiwiaiagency)的文件
