@@ -257,11 +257,12 @@ def normalize_grant_fields(*, task_mode: str | None = None, repos: Any = None, m
 def suggest_grant(root: Path, project: str, *, task_id: str, card_fm: dict[str, Any], driver: str,
                   advisor_grant: dict[str, Any] | None = None, now: datetime | None = None) -> dict[str, Any]:
     """件① 授权建议唯一推导(声明 verbs.schema lybra_owner_inbox.grant_request): 驱动方 = 运行记录 driver; task_mode = 卡面; 仓 = 卡面 lane.repo
-    (未写 = project.json repos 中指向卡所在仓的仓名); 额度 = 同驱动方上一信封, 无则项目缺省; 到期 = 现在 + 项目缺省天数; 理由 = 卡标题;
+    (未写 = project.json repos 中指向卡所在仓的仓名); 额度(AIPOS-F192: 业务卡张数, 不再照抄上一信封)= project.json grant_request.max_tasks
+    显式声明者, 否则本卡所需(autonomy_policy.envelope_card_need, 与 loop 续签同一推导); 到期 = 现在 + 项目缺省天数; 理由 = 卡标题;
     拉起授权 = 同驱动方上一信封; policy_id = F166 next_policy_id。顾问 owner_ask.grant 逐字段覆盖。返回 {..., sources: {字段: 来源键}}。"""
     from datetime import timedelta
 
-    from tools.aipos_cli.autonomy_policy import card_lane_refs, envelope_overview, next_policy_id
+    from tools.aipos_cli.autonomy_policy import card_lane_refs, envelope_card_need, envelope_overview, envelope_usage, next_policy_id
     from tools.aipos_cli.clock import iso_z, utc_now
     from tools.aipos_cli.workspace_config import project_grant_defaults, project_repos
 
@@ -277,23 +278,26 @@ def suggest_grant(root: Path, project: str, *, task_id: str, card_fm: dict[str, 
         names = set((project_repos(root).get("items") or {}))
         repos = [r for r in card_lane_refs(root, card_fm)["refs"] if r in names]
         sources["lane_repos"] = "derived"
+    # AIPOS-F192: 额度 = 业务卡张数——项目显式声明优先, 否则本卡所需(本卡对上一信封的放行状态; 无上一信封 = 新卡 1 张)
+    explicit = (defaults.get("_source") or {}).get("max_tasks") == "project.json"
+    need = envelope_card_need(root, envelope_usage(root, previous["policy_id"], now=now) if previous else {}, task_id=task_id)
     grant: dict[str, Any] = {
         "agent_or_role": driver, "task_mode": str(card_fm.get("task_mode") or "").strip(), "lane_repos": repos,
         "launch_harnesses": list((previous or {}).get("launch_harnesses") or []),
-        "max_tasks": int(previous["max_tasks"]) if previous else int(defaults["max_tasks"]),
+        "max_tasks": int(defaults["max_tasks"]) if explicit else int(need["max_tasks"]),
         "expires_at": iso_z(now + timedelta(days=int(defaults["days"]))),
         "reason": str(card_fm.get("title") or "").strip() or task_id,
     }
     sources.update({"agent_or_role": "derived", "task_mode": "card", "reason": "card", "expires_at": "project_default",
                     "launch_harnesses": "previous_envelope" if previous else "derived",
-                    "max_tasks": "previous_envelope" if previous else "project_default"})
+                    "max_tasks": "project_default" if explicit else "card_need"})
     for key in GRANT_FIELDS:
         value = (advisor_grant or {}).get(key)
         if value not in (None, "", []):
             grant[key], sources[key] = (list(value) if isinstance(value, list) else value), "advisor"
     grant["policy_id"] = next_policy_id(root, identities={driver}, previous=(previous or {}).get("policy_id"), project=project)
     grant.update({"task_id": task_id, "title": str(card_fm.get("title") or "").strip() or None, "project": project,
-                  "previous_policy_id": (previous or {}).get("policy_id"), "sources": sources})
+                  "previous_policy_id": (previous or {}).get("policy_id"), "sources": sources, "quota_basis": need["basis"]})
     return grant
 
 

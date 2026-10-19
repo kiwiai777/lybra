@@ -738,6 +738,8 @@ def _grant_card(ctx: _Ctx, item: dict[str, Any], owner: bool) -> str:
                    ("agent_or_role", "task_mode", "lane_repos", "launch_harnesses", "max_tasks", "expires_at", "reason")]
     if g.get("previous_policy_id"):
         tech_lines.append(f"previous_envelope={g['previous_policy_id']}")
+    if g.get("quota_basis"):
+        tech_lines.append(f"quota_basis={g['quota_basis']}")  # AIPOS-F192: suggested count = business cards (envelope_card_need)
     parts = [f"<article class=\"gr-card\" id=\"{_ESC(item['item_id'])}\" data-request-item=\"{_ESC(item['item_id'])}\""
              f" data-request-project=\"{_ESC(item['project'])}\" data-request=\"{_ESC(json.dumps(data, ensure_ascii=False))}\">",
              f"<p class=\"gr-sentence\">{_ESC(grant_sentence(ctx, g))}</p>",

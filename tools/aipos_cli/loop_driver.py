@@ -313,20 +313,22 @@ def _envelope_ending(governance_root: Path, envelope_id: str | None, *, task_id:
     """AIPOS-F166 件②(gap #152): 信封被拒时读门侧用量真相(autonomy_policy.envelope_usage, 与门 count_bound / 时间窗同一计数)判是否
     「额度用尽 / 已过期」。是 = {reason(envelope_exhausted|envelope_expired), message(用量/上限/到期 + 续签命令), suggested_action(续签命令),
     state(运行记录 envelope_state)}; 否(信封仍有效 / 缺 / 撤销等)= None, 调用方照旧出口。文案与结束原因名读声明 lybra_loop.envelope.renew。"""
-    from tools.aipos_cli.autonomy_policy import envelope_renew_declaration, envelope_usage, renew_plan
+    from tools.aipos_cli.autonomy_policy import card_released_by_envelope, envelope_renew_declaration, envelope_usage, renew_plan
 
     if not envelope_id:
         return None
     usage = envelope_usage(governance_root, envelope_id, now=now)
     if usage.get("state") not in ("exhausted", "expired"):
         return None
+    if usage.get("state") == "exhausted" and card_released_by_envelope(governance_root, envelope_id, task_id):
+        return None  # AIPOS-F192: 本卡链已由该信封放行 = 额度不拦本卡后续步骤, 拒因不是「用尽」, 照旧出口(不误导去续签)
     decl = envelope_renew_declaration()
     identities = {driver_actor, DRIVER_ROLE} | ({driver_role} if driver_role else set())
     plan = renew_plan(governance_root, usage, identities=identities, task_id=task_id, card_task_mode=str(task_fm.get("task_mode") or ""), now=now)
     head = decl["messages"][usage["state"]].format(policy_id=usage["policy_id"], used=usage["used"], max_tasks=usage["max_tasks"],
                                                     expires_at=usage["expires_at"], what=what)
     renew = decl["messages"]["renew"].format(next_policy_id=plan["next_policy_id"], policy_id=usage["policy_id"], command=plan["renew_command"])
-    message = "\n".join([head, renew] + ([f"  注: {plan['note']}"] if plan["note"] else []))
+    message = "\n".join([head, renew, plan["quota_line"]] + ([f"  注: {plan['note']}"] if plan["note"] else []))
     state = {k: usage.get(k) for k in ("policy_id", "state", "used", "max_tasks", "remaining", "expires_at")}
     state.update(plan)
     return {"reason": str(decl["end_reasons"][usage["state"]]), "message": message, "suggested_action": plan["renew_command"], "state": state}

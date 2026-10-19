@@ -391,7 +391,7 @@ class LoopRunRecorder:
     def set_envelope_state(self, state: dict[str, Any]) -> None:
         """件②: 信封用尽 / 过期时的门侧用量真相与续签命令(verbs.schema lybra_loop.run_record.envelope_state)。"""
         self.meta["envelope_state"] = {k: state.get(k) for k in ("policy_id", "state", "used", "max_tasks", "remaining", "expires_at",
-                                                                  "next_policy_id", "renew_command", "note")}
+                                                                  "next_policy_id", "renew_command", "note", "quota_line")}
         self._dirty = True
         self.flush(force=True)
 
@@ -1346,9 +1346,11 @@ def _envelope_renew_action(view: dict[str, Any], rules: dict[str, Any], reason: 
     st = view.get("envelope_state") or {}
     parts = [str(rules["owner_reasons"][reason])]
     if st:
-        parts.append(f"信封 {st.get('policy_id')} 已用 {st.get('used')}/{st.get('max_tasks')} 次, 到期 {st.get('expires_at')}"
+        parts.append(f"信封 {st.get('policy_id')} 已放行 {st.get('used')}/{st.get('max_tasks')} 张业务卡, 到期 {st.get('expires_at')}"
                      f"({'额度已用尽' if st.get('state') == 'exhausted' else '已过期' if st.get('state') == 'expired' else st.get('state')})"
                      f"; 续签新信封 {st.get('next_policy_id')}")
+        if st.get("quota_line"):
+            parts.append(str(st["quota_line"]).strip())  # AIPOS-F192: 续签额度 = 业务卡张数(本卡所需 / 新卡数)
         if st.get("note"):
             parts.append(f"注: {st['note']}")
     elif message:
