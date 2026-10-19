@@ -316,6 +316,15 @@ def charter_render_context(
     from tools.aipos_cli.run_long import charter_commands
 
     ctx.update(charter_commands(gov))
+    # AIPOS-F190 件④: 本实例有效的跨机临时验证根(project.json validation_roots; 与开工稿同一渲染 validation_root.render_section_lines)。
+    # 只在有声明时入键(无声明 = 指纹不变, 章程不变); 声明变 = 指纹变 = 重渲染。
+    from tools.aipos_cli.validation_root import render_section_lines
+
+    harness = identity.get("harness")
+    harness_kind = str((harness.get("kind") if isinstance(harness, dict) else harness) or "").strip() or None
+    section = render_section_lines(gov, instance=str(identity["instance"]), harness=harness_kind)
+    if section:
+        ctx["validation_roots_section"] = "\n".join(section)
     return ctx
 
 
@@ -472,6 +481,8 @@ def render_charter(master_text: str, ctx: dict[str, Any]) -> str:
     ]
     boundary = build_write_boundary(ctx["governance_root"], role=ctx["role"], harness_root=ctx["harness_root"])
     wb_section = render_write_boundary_markdown(boundary, role=ctx["role"]).rstrip("\n")
+    if ctx.get("validation_roots_section"):
+        wb_section += "\n\n" + str(ctx["validation_roots_section"])  # AIPOS-F190 件④: 写权限节同源列出本实例验证根
     marker = f"{CHARTER_RENDER_MARKER} master_sha256={master_sha} context_sha256={ctx_sha} product_commit={ctx['product_commit']} -->"
     return body + "\n" + "\n".join(trailer) + "\n" + wb_section + "\n\n" + marker + "\n"
 
