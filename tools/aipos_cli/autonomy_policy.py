@@ -414,42 +414,190 @@ def load_policy(repo_root: Path, policy_id: str) -> dict[str, Any] | None:
 
 
 def count_preauthorized_claims(repo_root: Path, policy_id: str) -> int:
-    """Count already-landed PreAuthorized claim records attributed to this policy. Stateless and
-    auditable (R-1 count bound): the gate re-derives the count from truth every match.
+    """信封用量(唯一计数; 门 count_bound / loop / 收件箱 / 看板 / 续签建议同读)。Stateless and auditable (R-1 count bound): the gate
+    re-derives the count from truth every match.
 
-    AIPOS-F142 件①: 计数判据不变; 只读视图作用域(task_loader.task_card_lookup_scope)内, 认领记录只遍历一趟、一次得出全部信封的计数
-    (lookup_scope_memo; 原每卡 × 每信封各全量 rglob 一遍, lybra 30 信封 × 900 认领记录 = 单卡 25 秒)。作用域外(门 claim 的
-    放行判定)每次现读现数, 行为不变。"""
+    AIPOS-F192: 单位 = 业务卡(根卡)——已落盘 PreAuthorized 认领记录(owner_policy_ref = 本信封)的卡经 envelope_root_task_id 归到根卡后去重
+    (审计卡 / 复审卡 / 补审卡 / 返工派生卡 / FINALIZE 卡的认领归属根卡, 不另扣; 声明 verbs.schema lybra_loop.envelope.quota)。
+    AIPOS-F142 件①: 只读视图作用域(task_loader.task_card_lookup_scope)内, 认领记录只遍历一趟、一次得出全部信封的根卡集
+    (lookup_scope_memo); 作用域外(门 claim 的放行判定)每次现读现数。"""
+    return len(released_business_cards(repo_root, policy_id))
+
+
+def released_business_cards(repo_root: Path, policy_id: str) -> dict[str, list[str]]:
+    """AIPOS-F192: 本信封已放行的根业务卡 {根卡: [经本信封认领的卡(根卡自身或其派生卡), …]}(count_preauthorized_claims 的唯一来源)。"""
+    from tools.aipos_cli.task_loader import lookup_scope_memo
+
+    pid = str(policy_id or "").strip()
+    if not pid:
+        return {}
+    roots = lookup_scope_memo(Path(repo_root), "autonomy_policy.preauthorized_claim_roots",
+                              lambda: _preauthorized_claim_roots(Path(repo_root)))
+    return {root: list(tids) for root, tids in (roots["roots"].get(pid) or {}).items()}
+
+
+def preauthorized_claim_records(repo_root: Path, policy_id: str) -> int:
+    """AIPOS-F192 对照用: 本信封名下 PreAuthorized 认领记录条数(旧口径「按认领次数计」; 只供存量重算前后对照展示, 不参与任何判定)。"""
     from tools.aipos_cli.task_loader import lookup_scope_memo
 
     pid = str(policy_id or "").strip()
     if not pid:
         return 0
-    return int(lookup_scope_memo(Path(repo_root), "autonomy_policy.preauthorized_claim_counts",
-                                 lambda: _preauthorized_claim_counts(Path(repo_root))).get(pid, 0))
+    roots = lookup_scope_memo(Path(repo_root), "autonomy_policy.preauthorized_claim_roots",
+                              lambda: _preauthorized_claim_roots(Path(repo_root)))
+    return int(roots["records"].get(pid, 0))
 
 
-def _preauthorized_claim_counts(repo_root: Path) -> dict[str, int]:
-    """已落盘 PreAuthorized 认领记录按 owner_policy_ref 计数(count_preauthorized_claims 的唯一判据)。"""
+def _preauthorized_claim_roots(repo_root: Path) -> dict[str, dict[str, Any]]:
+    """已落盘 PreAuthorized 认领记录按 owner_policy_ref 归组, 认领卡归到根卡(envelope_root_task_id): {roots: {pid: {根卡: [卡]}},
+    records: {pid: 认领记录条数}}。认领记录无 task_id(形不合)= 以记录相对路径自成一根(只多不少)。整根只遍历一趟(队列索引共用一个只读作用域)。"""
+    from tools.aipos_cli.task_loader import task_card_lookup_scope
+
     claims_root = (repo_root / record_root("claims")).resolve()
-    counts: dict[str, int] = {}
-    if not claims_root.is_dir():
-        return counts
-    for path in claims_root.rglob("*.md"):
-        if not path.is_file():
+    pairs: list[tuple[str, str]] = []
+    if claims_root.is_dir():
+        for path in sorted(claims_root.rglob("*.md")):
+            if not path.is_file():
+                continue
+            try:
+                metadata, _body, _warn, _fence = read_markdown_frontmatter(path)  # AIPOS-F177: per-file cache (unchanged record = no re-read)
+            except OSError:
+                continue
+            if not isinstance(metadata, dict):
+                continue
+            if str(metadata.get("autonomy_mode") or "").strip() != AUTONOMY_MODE_PREAUTHORIZED:
+                continue
+            ref = str(metadata.get("owner_policy_ref") or "").strip()
+            if ref:
+                pairs.append((ref, str(metadata.get("task_id") or "").strip() or f"<claim {path.relative_to(claims_root).as_posix()}>"))
+    roots: dict[str, dict[str, list[str]]] = {}
+    records: dict[str, int] = {}
+    with task_card_lookup_scope(repo_root):
+        for ref, task_id in pairs:
+            records[ref] = records.get(ref, 0) + 1
+            root = envelope_root_task_id(repo_root, task_id) if not task_id.startswith("<claim ") else task_id
+            bucket = roots.setdefault(ref, {}).setdefault(root, [])
+            if task_id not in bucket:
+                bucket.append(task_id)
+    return {"roots": roots, "records": records}
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F192: 额度单位 = 业务卡(根卡)。派生关系只读卡面字段(verbs.schema lybra_loop.envelope.quota.parent_links), 禁按卡号字符串猜。
+# ---------------------------------------------------------------------------
+
+_QUOTA_KEYS = ("unit_label", "parent_links", "max_depth", "renew_quota")
+
+
+def envelope_quota_declaration() -> dict[str, Any]:
+    """verbs.schema lybra_loop.envelope.quota(fail-closed): 键齐; parent_links 每项有 field / kind; renew_quota 有 line / basis 四式 / state_labels。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = loop_envelope_declaration().get("quota")
+    links = (decl or {}).get("parent_links") if isinstance(decl, dict) else None
+    renew = (decl or {}).get("renew_quota") if isinstance(decl, dict) else None
+    if (not isinstance(decl, dict) or any(k not in decl for k in _QUOTA_KEYS) or not isinstance(links, list) or not links
+            or any(not isinstance(l, dict) or not str(l.get("field") or "").strip() or not str(l.get("kind") or "").strip() for l in links)
+            or not isinstance(decl.get("max_depth"), int) or isinstance(decl.get("max_depth"), bool) or decl["max_depth"] < 1
+            or not isinstance(renew, dict) or not isinstance(renew.get("line"), str)
+            or any(not isinstance((renew.get("basis") or {}).get(k), str) for k in ("card_released", "card_new", "card_carry", "batch"))
+            or not isinstance(renew.get("state_labels"), dict)):
+        raise SchemaLoadError("verbs.schema.json verbs.lybra_loop.envelope.quota 未声明齐(unit_label / parent_links[{field, kind}] / "
+                              "max_depth≥1 / renew_quota{line, basis{card_released, card_new, card_carry, batch}, state_labels})")
+    return decl
+
+
+def _card_frontmatter_for(repo_root: Path, task_id: str) -> dict[str, Any] | None:
+    """队列里该卡的 frontmatter(查找唯一 task_loader.find_task_card); 不在队列 / 多义 / 读不出 = None(派生链在此止步)。"""
+    from tools.aipos_cli.task_loader import AmbiguousTaskCard, find_task_card
+
+    try:
+        path, _queue = find_task_card(repo_root, task_id)
+    except AmbiguousTaskCard:
+        return None
+    if path is None:
+        return None
+    try:
+        metadata, _body, _warn, _fence = read_markdown_frontmatter(path)
+    except OSError:
+        return None
+    return metadata if isinstance(metadata, dict) else None
+
+
+def _declared_parent(repo_root: Path, task_id: str, fm: dict[str, Any], links: list[dict[str, Any]]) -> str:
+    """按声明 parent_links 次序取首个命中的派生来源卡号; 无 = ""。parent_declares=finalize_task_id: 来源卡按 FINALIZE 卡号规则
+    (next_resolver.finalize_task_id_for, transitions artifact_ingest.finalization 唯一声明)推出的卡号须恰为本卡, 否则不认。"""
+    mode = str(fm.get("task_mode") or "").strip().lower()
+    for link in links:
+        want_mode = str(link.get("task_mode") or "").strip().lower()
+        if want_mode and mode != want_mode:
             continue
-        try:
-            metadata, _body, _warn, _fence = read_markdown_frontmatter(path)  # AIPOS-F177: per-file cache (unchanged record = no re-read)
-        except OSError:
+        value = fm.get(str(link["field"]))
+        parent = str(value).strip() if isinstance(value, (str, int)) else ""
+        if not parent or parent == task_id:
             continue
-        if not isinstance(metadata, dict):
-            continue
-        if str(metadata.get("autonomy_mode") or "").strip() != AUTONOMY_MODE_PREAUTHORIZED:
-            continue
-        ref = str(metadata.get("owner_policy_ref") or "").strip()
-        if ref:
-            counts[ref] = counts.get(ref, 0) + 1
-    return counts
+        if str(link.get("parent_declares") or "") == "finalize_task_id":
+            from tools.aipos_cli.next_resolver import finalize_task_id_for  # 延迟导入(next_resolver 依赖本模块)
+
+            parent_fm = _card_frontmatter_for(repo_root, parent)
+            if parent_fm is None or finalize_task_id_for(parent, parent_fm) != task_id:
+                continue
+        return parent
+    return ""
+
+
+def envelope_root_task_id(governance_root: Path | str, task_id: str) -> str:
+    """AIPOS-F192: 卡的根业务卡(唯一判据): 沿声明 parent_links(审计 / 复审 / 补审 → 被审卡; 返工派生卡 → 审计卡 → 被审卡; FINALIZE 卡 → 被审卡)
+    逐级上溯到无来源字段的卡。卡不在队列 = 该卡自成根(链在此止步; 来源字段已指明的上级卡号照样作根)。链长超 max_depth 或成环 = 原卡自成根
+    (fail-safe: 不借别的卡的放行)。只读; 只读作用域内按卡缓存。"""
+    from tools.aipos_cli.task_loader import lookup_scope_memo, task_card_lookup_scope
+
+    root = Path(governance_root)
+    start = str(task_id or "").strip()
+    if not start:
+        return ""
+    decl = envelope_quota_declaration()
+    links = list(decl["parent_links"])
+    with task_card_lookup_scope(root):
+        cache = lookup_scope_memo(root, "autonomy_policy.envelope_root_cache", dict)
+        if start in cache:
+            return cache[start]
+        chain = [start]
+        result = start
+        for _step in range(int(decl["max_depth"]) + 1):
+            current = chain[-1]
+            fm = _card_frontmatter_for(root, current)
+            parent = _declared_parent(root, current, fm, links) if fm is not None else ""
+            if not parent:
+                result = current
+                break
+            if parent in chain:  # 成环 = 原卡自成根
+                result = start
+                break
+            chain.append(parent)
+        else:  # 链长超上限 = 原卡自成根
+            result = start
+        cache[start] = result
+        return result
+
+
+def card_released_by_envelope(repo_root: Path | str, policy_id: str, task_id: str) -> bool:
+    """AIPOS-F192: 「卡已在本信封放行」唯一判据——该卡的根业务卡 ∈ 本信封已放行根卡集(本卡或其根卡 / 同链派生卡曾经本信封 PreAuthorized 认领)。
+    是 = 该卡后续步骤不受额度拦截(match_claim_envelope card_released=True; 时间窗 / 撤销 / 身份 / 选择器照判)。"""
+    return envelope_quota_state(repo_root, policy_id, task_id)["card_released"]
+
+
+def envelope_quota_state(repo_root: Path | str, policy_id: str, task_id: str | None) -> dict[str, Any]:
+    """AIPOS-F192: 一次读出 {used(本信封已放行根业务卡数), card_released(本卡链已由本信封放行), root(本卡根卡)}——门逐请求核验与
+    select_envelope 同读; 一个只读作用域内共用一趟队列索引与认领记录遍历。task_id 空 = card_released False。"""
+    from tools.aipos_cli.task_loader import task_card_lookup_scope
+
+    root = Path(repo_root)
+    with task_card_lookup_scope(root):
+        cards = released_business_cards(root, policy_id)
+        tid = str(task_id or "").strip()
+        card_root = envelope_root_task_id(root, tid) if tid else ""
+        return {"used": len(cards), "card_released": bool(card_root) and card_root in cards, "root": card_root}
 
 
 def card_lane_refs(governance_root: Path | str, card_frontmatter: dict[str, Any] | None) -> dict[str, Any]:
@@ -529,6 +677,7 @@ def match_claim_envelope(
     released_count: int,
     claiming_role: str | None = None,
     lane: dict[str, Any] | None = None,
+    card_released: bool = False,
 ) -> tuple[bool, str, str | None]:
     """Strict-AND envelope match for a claim. Returns (matched, reason, error_code). Every predicate must
     hold; any miss returns matched=False with a human reason and error_code (maps to transitions.schema.json
@@ -542,6 +691,8 @@ def match_claim_envelope(
     card_lane_refs); 选择器值须在其 refs 内。带 lane 选择器而调用方未给 lane / 卡仓解析不到 = 不匹配(fail-closed, 原因链带原文)。
     AIPOS-F139: 选择器 = 仓集合(workspace_config.repo_name_set 唯一解析; 单值存量信封 = 单元素集合), 集合任一仓在 refs 内即命中;
     不命中原因链列出整个集合。lane 判定只在此处。
+    AIPOS-F192: card_released = 本卡链已由本信封放行(唯一判据 card_released_by_envelope / envelope_quota_state, 调用方读出后传入)——
+    额度谓词 count_bound 放行(后续步骤只受有效 / 时间窗 / 撤销 / 身份 / 选择器约束); 缺省 False = 原口径(released_count < max_tasks)。
     """
     # ── evaluate every predicate (full picture for the trace) ─────────────
     is_dict = isinstance(policy, dict)
@@ -588,7 +739,7 @@ def match_claim_envelope(
         "project": (not sel_project) or (str(project or "").strip() == sel_project),
         "lane_repo": lane_ok,
         "max_tasks_positive": max_tasks > 0,
-        "count_bound": released_count < max_tasks,
+        "count_bound": bool(card_released) or released_count < max_tasks,
     }
 
     # ── first-failing reason (preserves original short-circuit order & strings) ──
@@ -644,9 +795,13 @@ def match_claim_envelope(
     elif max_tasks <= 0:
         reason = "policy max_tasks is not a positive bound"
         error_code = None  # invalid max_tasks (config error)
-    elif released_count >= max_tasks:
-        reason = f"policy count bound reached ({released_count}/{max_tasks})"
+    elif released_count >= max_tasks and not card_released:
+        reason = f"policy count bound reached ({released_count}/{max_tasks} business cards)"
         error_code = ENVELOPE_ERROR_QUOTA_EXHAUSTED
+    elif card_released:
+        reason = (f"matched policy {policy.get('policy_id')} (card chain already released by this envelope; "
+                  f"later steps not quota-bound; released {released_count}/{max_tasks} business cards)")
+        error_code = None  # success, no error
     else:
         reason = f"matched policy {policy.get('policy_id')} (released {released_count}/{max_tasks})"
         error_code = None  # success, no error
@@ -664,6 +819,7 @@ def match_claim_envelope(
             "claiming_role": claiming_role,
             "now": now.isoformat(),
             "released_count": released_count,
+            "card_released": bool(card_released),
             "policy_agent_or_role": covered,
             "policy_task_selector": {"task_mode": sel_mode, "project": sel_project, "task_ids": sel_ids, "lane_repo": sel_lane},
             "lane": lane,
@@ -719,14 +875,21 @@ def select_envelope(
         except ValueError:
             shown = f"{pdir}/"
         return None, [f"{shown} 下没有任何信封"]
+    from tools.aipos_cli.task_loader import task_card_lookup_scope
+
     loaded: list[tuple[str, dict[str, Any], int]] = []
     reasons: list[str] = []
-    for pid in candidates:
-        policy = load_policy(root, pid)
-        if policy is None:
-            reasons.append(f"{pid}: 信封文件缺失或格式不合规(owner_autonomy_policy)")
-            continue
-        loaded.append((pid, policy, count_preauthorized_claims(root, pid)))
+    released_card: dict[str, bool] = {}  # AIPOS-F192: 本卡链已由该信封放行 = 额度不拦(唯一判据 envelope_quota_state)
+    task_key = str((task or {}).get("task_id") or "").strip()
+    with task_card_lookup_scope(root):  # 只读: 认领记录遍历与队列索引各一趟(多候选信封共用)
+        for pid in candidates:
+            policy = load_policy(root, pid)
+            if policy is None:
+                reasons.append(f"{pid}: 信封文件缺失或格式不合规(owner_autonomy_policy)")
+                continue
+            quota = envelope_quota_state(root, pid, task_key or None)
+            loaded.append((pid, policy, int(quota["used"])))
+            released_card[pid] = bool(quota["card_released"])
     successors: dict[str, str | None] = {}
     if not policy_id:
         # AIPOS-F185 件③: 最新生效者优先 + 已接替者不挑(接替判定与看板 / 收件箱同一函数 _supersession)
@@ -774,6 +937,7 @@ def select_envelope(
                 released_count=released,
                 claiming_role=claiming_role,
                 lane=subject_lane,
+                card_released=released_card.get(pid, False),
             )
             if matched:
                 if notes is not None and not policy_id:
@@ -825,8 +989,8 @@ def envelope_guard_codes() -> list[str]:
 
 
 def envelope_usage(governance_root: Path | str, policy_id: str, *, now: datetime | None = None) -> dict[str, Any]:
-    """一个信封的用量真相(唯一实现): 读门侧同一判据——信封文件 load_policy + 已放行认领计数 count_preauthorized_claims(门 match_claim_envelope
-    的 count_bound 即此计数)+ 时间窗。state: missing(信封文件缺 / 形不合)/ inactive(status≠active 或未获 Owner 批准)/ invalid(时间窗读不出)/
+    """一个信封的用量真相(唯一实现): 读门侧同一判据——信封文件 load_policy + 已放行计数 count_preauthorized_claims(门 match_claim_envelope
+    的 count_bound 即此计数; AIPOS-F192: 单位 = 根业务卡, released_cards = 已放行根卡, claim_records = 认领记录条数仅供新旧口径对照)+ 时间窗。state: missing(信封文件缺 / 形不合)/ inactive(status≠active 或未获 Owner 批准)/ invalid(时间窗读不出)/
     not_yet_active / expired / exhausted / active —— 次序与门判定一致(过期先于额度)。"""
     root = Path(governance_root)
     now = now or utc_now()
@@ -834,13 +998,18 @@ def envelope_usage(governance_root: Path | str, policy_id: str, *, now: datetime
     policy = load_policy(root, pid) if pid else None
     if policy is None:
         return {"policy_id": pid, "state": "missing", "policy": None}
-    used = count_preauthorized_claims(root, pid)
+    from tools.aipos_cli.task_loader import task_card_lookup_scope
+
+    with task_card_lookup_scope(root):  # AIPOS-F192: 用量 = 已放行根业务卡数(认领记录与队列索引同一趟)
+        cards = released_business_cards(root, pid)
+        claim_records = preauthorized_claim_records(root, pid)
+    used = len(cards)
     max_tasks = int(policy.get("max_tasks") or 0)
     exp = _parse_iso(policy.get("expires_at"))
     state = _usage_state(policy, used, now)
     return {"policy_id": pid, "state": state, "used": used, "max_tasks": max_tasks, "remaining": max(0, max_tasks - used),
             "expires_at": policy.get("expires_at"), "seconds_to_expiry": int((exp - now).total_seconds()) if exp else None,
-            "policy": policy}
+            "released_cards": sorted(cards), "claim_records": claim_records, "policy": policy}
 
 
 def _usage_state(policy: dict[str, Any], used: int, now: datetime) -> str:
@@ -913,8 +1082,9 @@ def render_mint_command(*, policy_id: str, agent_or_role: str, max_tasks: int, t
 
 def renew_plan(governance_root: Path | str, usage: dict[str, Any], *, identities: set[str] | list[str], task_id: str,
                card_task_mode: str = "", now: datetime | None = None) -> dict[str, Any]:
-    """用尽 / 过期信封的续签计划: {next_policy_id, renew_command, note}。范围照抄该信封(agent_or_role / max_tasks / task_mode(信封无则取本卡)/
-    lane_repo / launch_harnesses); 信封另有 mint 不支持的选择器(task_selector_project / task_selector_task_ids)= note 写明, 命令不丢范围之外的东西。"""
+    """用尽 / 过期信封的续签计划: {next_policy_id, renew_command, note, max_tasks, card_need, quota_line}。范围照抄该信封(agent_or_role / task_mode
+    (信封无则取本卡)/ lane_repo / launch_harnesses); 信封另有 mint 不支持的选择器(task_selector_project / task_selector_task_ids)= note 写明,
+    命令不丢范围之外的东西。AIPOS-F192: 额度不再照抄原值——唯一推导 envelope_card_need(本卡已放行 = 0 / 新卡 = 1; 无具体卡 = 原额度批量)。"""
     from datetime import timedelta
 
     decl = envelope_renew_declaration()
@@ -923,16 +1093,55 @@ def renew_plan(governance_root: Path | str, usage: dict[str, Any], *, identities
     pid = str(usage.get("policy_id") or "")
     nxt = next_policy_id(governance_root, identities=identities, previous=pid or None, project=str(policy.get("task_selector_project") or ""))
     expires = (now + timedelta(days=int(decl["renew_days"]))).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    need = envelope_card_need(governance_root, usage, task_id=task_id)
     command = render_mint_command(
         policy_id=nxt, agent_or_role=str(policy.get("agent_or_role") or next(iter(sorted(identities)), "advisor")),
-        max_tasks=int(policy.get("max_tasks") or usage.get("max_tasks") or 1),
+        max_tasks=int(need["max_tasks"]),
         task_mode=str(policy.get("task_selector_task_mode") or card_task_mode or ""), expires_at=expires,
         decision_summary=f"renew {pid} ({usage.get('state')}) for {task_id}", governance_root=governance_root,
         lane_repos=list(policy.get("task_selector_lane_repo") or []), launch_harnesses=list(policy.get("launch_harnesses") or []))
     unexpressible = [f"{k}={policy.get(k)!r}" for k in ("task_selector_project", "task_selector_task_ids") if policy.get(k)]
     note = (f"原信封另有 {', '.join(unexpressible)}(envelope mint 无对应参数, 续签命令只照抄可表达的范围; 如需同样收窄请 Owner 另定)"
             if unexpressible else "")
-    return {"next_policy_id": nxt, "renew_command": command, "note": note}
+    return {"next_policy_id": nxt, "renew_command": command, "note": note, "max_tasks": int(need["max_tasks"]), "card_need": need["need"],
+            "quota_line": need["line"]}
+
+
+def envelope_card_need(governance_root: Path | str, usage: dict[str, Any], *, task_id: str) -> dict[str, Any]:
+    """AIPOS-F192: 续签 / 授权建议额度的唯一推导(声明 verbs.schema lybra_loop.envelope.quota.renew_quota; renew_plan 与 owner_inbox.suggest_grant 同读)。
+    task_id 是队列里的卡: 本卡链已由 usage 所指信封放行且该信封仍在时间窗内(active / exhausted)= need 0(后续步骤已不受额度限制, 本卡无需续签;
+    命令额度 1 只为之后的新卡); 曾放行但信封已过期 / 撤销等 = need 1(新信封承接本卡); 未放行 = need 1(新业务卡)。
+    task_id 不是卡(信封页 / brief 的当前信封续签, 无在推卡)= need None, 额度沿用原信封(批量授权)。
+    返回 {need, max_tasks, basis, line, released}。"""
+    from tools.aipos_cli.task_loader import AmbiguousTaskCard, find_task_card
+
+    decl = envelope_quota_declaration()
+    renew = decl["renew_quota"]
+    root = Path(governance_root)
+    policy = usage.get("policy") or {}
+    pid = str(usage.get("policy_id") or "").strip()
+    state = str(usage.get("state") or "")
+    tid = str(task_id or "").strip()
+    try:
+        is_card = bool(tid) and find_task_card(root, tid)[0] is not None
+    except AmbiguousTaskCard:
+        is_card = True  # 多义仍是卡号(按卡口径给 1, 不猜成批量)
+    released = False
+    if not is_card:
+        need, max_tasks = None, int(policy.get("max_tasks") or usage.get("max_tasks") or 1)
+        basis = renew["basis"]["batch"].format(max_tasks=max_tasks)
+    else:
+        released = bool(pid) and card_released_by_envelope(root, pid, tid)
+        if released and state in ("active", "exhausted"):
+            need, basis = 0, renew["basis"]["card_released"].format(task_id=tid, policy_id=pid)
+        elif released:
+            label = str(renew["state_labels"].get(state) or state)
+            need, basis = 1, renew["basis"]["card_carry"].format(task_id=tid, policy_id=pid, state_label=label)
+        else:
+            need, basis = 1, renew["basis"]["card_new"].format(task_id=tid)
+        max_tasks = max(1, need)
+    line = renew["line"].format(max_tasks=max_tasks, unit=decl["unit_label"], basis=basis)
+    return {"need": need, "max_tasks": max_tasks, "basis": basis, "line": line, "released": released}
 
 
 def envelope_warning(usage: dict[str, Any]) -> str | None:
@@ -942,7 +1151,7 @@ def envelope_warning(usage: dict[str, Any]) -> str | None:
     warn = decl["warn"]
     state = usage.get("state")
     if state == "exhausted":
-        return f"额度已用尽(已用 {usage.get('used')}/{usage.get('max_tasks')} 次)"
+        return f"额度已用尽(已放行 {usage.get('used')}/{usage.get('max_tasks')} 张业务卡)"
     if state == "expired":
         return f"已过期(到期 {usage.get('expires_at')})"
     if state != "active":
@@ -950,7 +1159,7 @@ def envelope_warning(usage: dict[str, Any]) -> str | None:
     reasons: list[str] = []
     remaining, max_tasks = int(usage.get("remaining") or 0), int(usage.get("max_tasks") or 0)
     if remaining <= int(warn["remaining_count"]) or remaining <= float(warn["remaining_ratio"]) * max_tasks:
-        reasons.append(f"剩余 {remaining}/{max_tasks} 次(阈值: ≤{warn['remaining_count']} 次或 ≤{float(warn['remaining_ratio']):.0%})")
+        reasons.append(f"剩余 {remaining}/{max_tasks} 张业务卡(阈值: ≤{warn['remaining_count']} 张或 ≤{float(warn['remaining_ratio']):.0%})")
     seconds = usage.get("seconds_to_expiry")
     if isinstance(seconds, int) and seconds <= float(warn["expiry_hours"]) * 3600:
         reasons.append(f"{usage.get('expires_at')} 到期(剩 {seconds // 3600}h{(seconds % 3600) // 60:02d}m, 阈值 ≤{warn['expiry_hours']}h)")

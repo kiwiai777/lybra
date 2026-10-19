@@ -168,7 +168,7 @@ def test_item3_one_pass_per_view_call_not_per_card(big, monkeypatch):
 
     calls = {"index": 0, "replay": 0, "claims": 0}
     orig_index, orig_replay, orig_claims = (task_loader._frontmatter_task_id, legacy_baseline._replay_manifest,
-                                            autonomy_policy._preauthorized_claim_counts)
+                                            autonomy_policy._preauthorized_claim_roots)
 
     def index(path):
         calls["index"] += 1
@@ -184,7 +184,7 @@ def test_item3_one_pass_per_view_call_not_per_card(big, monkeypatch):
 
     monkeypatch.setattr(task_loader, "_frontmatter_task_id", index)
     monkeypatch.setattr(legacy_baseline, "_replay_manifest", replay)
-    monkeypatch.setattr(autonomy_policy, "_preauthorized_claim_counts", claims)
+    monkeypatch.setattr(autonomy_policy, "_preauthorized_claim_roots", claims)
     root = big["root"]
     queue_files = len(task_loader.iter_queue_task_paths(root))
     for label, argv in (("next", ["next", "--workspace-root", str(root)]),

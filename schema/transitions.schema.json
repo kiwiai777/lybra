@@ -1318,7 +1318,7 @@
       },
       "quota_exhausted": {
         "error_code": "ENVELOPE_QUOTA_EXHAUSTED",
-        "error_message": "信封额度已用尽 (released_count >= max_tasks)",
+        "error_message": "信封额度已用尽 (本信封已放行的业务卡数 >= max_tasks; AIPOS-F192: 已由本信封放行的卡, 其后续步骤不受此限)",
         "severity": "needs_human",
         "next_step": {
           "audience": "advisor",

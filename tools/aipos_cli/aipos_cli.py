@@ -2910,7 +2910,7 @@ def build_parser() -> argparse.ArgumentParser:
     # AIPOS-F92 件①: --policy-id / --agent-or-role 可重复且按出现顺序成对(一条命令签一组信封, 每张走同一门路径)
     envelope_mint_parser.add_argument("--policy-id", action="append", required=True, help="Policy ID (repeatable; paired in order with --agent-or-role)")
     envelope_mint_parser.add_argument("--agent-or-role", action="append", required=True, help="Agent instance or role covered (repeatable; paired in order with --policy-id)")
-    envelope_mint_parser.add_argument("--max-tasks", type=int, required=True, help="Maximum tasks allowed")
+    envelope_mint_parser.add_argument("--max-tasks", type=int, required=True, help="Quota in business cards (AIPOS-F192): each card counts once when claimed under this envelope; its return, audit (incl. re-audits), rework, merge and close are not counted again and are not blocked by the quota, only by expiry and revocation")
     envelope_mint_parser.add_argument("--task-mode", help="Task mode selector (e.g., code)")
     envelope_mint_parser.add_argument("--lane-repo", dest="lane_repo", action="append", default=None,
                                       help="AIPOS-F134/F139: lane selector — only cards whose lane.repo resolves to one of these repos (name in project.json "

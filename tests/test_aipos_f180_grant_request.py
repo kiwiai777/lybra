@@ -302,7 +302,9 @@ def test_item1_inbox_auto_suggestion_cli_line(rig, frozen_clock):
     g = hw1["grant"]
     _show("[件①·LANE-HW1 自动建议] " + json.dumps(g, ensure_ascii=False, sort_keys=True))
     assert g["agent_or_role"] == DRIVER and g["task_mode"] == "docs" and g["lane_repos"] == ["contracts-x"]
-    assert g["max_tasks"] == 40 and g["sources"]["max_tasks"] == "previous_envelope" and g["previous_policy_id"] == "pol_f180_lane_loop_3"
+    # AIPOS-F192: 额度 = 业务卡张数(本卡所需 1 张), 不再照抄同驱动方上一信封的 40
+    assert g["max_tasks"] == 1 and g["sources"]["max_tasks"] == "card_need" and g["previous_policy_id"] == "pol_f180_lane_loop_3"
+    assert g["quota_basis"] == "本卡 LANE-HW1 是一张新业务卡, 需 1 张"
     assert g["policy_id"] == "pol_f180_lane_loop_4", "F166 next_policy_id: 同驱动方同前缀最大序号 +1"
     assert g["reason"] == HW1_TITLE and g["sources"]["reason"] == "card" and g["sources"]["lane_repos"] == "card"
     assert g["expires_at"][:10] == _iso(rig["now"] + timedelta(days=7))[:10] and g["sources"]["expires_at"] == "project_default"
@@ -310,10 +312,10 @@ def test_item1_inbox_auto_suggestion_cli_line(rig, frozen_clock):
     _show("[件①·LANE-UI2 自动建议(envelope_renew)] " + json.dumps(u, ensure_ascii=False, sort_keys=True))
     assert ui2["facts"]["reason"] == "envelope_renew" and u["agent_or_role"] == DRIVER2 and u["task_mode"] == "code"
     assert u["lane_repos"] == ["web-x"] and u["sources"]["lane_repos"] == "derived", "未写 lane.repo = project.json 里指向卡所在仓的仓名"
-    assert u["max_tasks"] == 2 and u["policy_id"] == "pol_f180_side_2"
+    assert u["max_tasks"] == 1 and u["sources"]["max_tasks"] == "card_need" and u["policy_id"] == "pol_f180_side_2"  # AIPOS-F192: 原 2
     line = next(ln for ln in text.splitlines() if "授权请求:" in ln and "LANE-HW1" in ln)
     _show(f"[件①·CLI 人话行原文] {line.strip()}")
-    assert line.strip() == (f"授权请求: {DRIVER} 请求为 LANE-HW1({HW1_TITLE})开一个只写文档的授权, 仅 contracts-x, 40 次, "
+    assert line.strip() == (f"授权请求: {DRIVER} 请求为 LANE-HW1({HW1_TITLE})开一个只写文档的授权, 仅 contracts-x, 1 张业务卡(每张含其审计与返工), "
                             f"到 {g['expires_at'][:10]}。理由: {HW1_TITLE}")
     decide = next(ln for ln in text.split("LANE-HW1", 1)[1].splitlines() if ln.strip().startswith("裁决:"))
     _show(f"[件①·裁决行原文] {decide.strip()}")
@@ -351,24 +353,25 @@ def test_item1_loop_note_grant_overrides_and_validation(rig):
     assert g["sources"]["task_mode"] == "card" and g["lane_repos"] == ["contracts-x"]
     line = next(ln for ln in text.splitlines() if "授权请求:" in ln and "LANE-HW1" in ln)
     _show(f"[件①·覆盖后 CLI 人话行原文] {line.strip()}")
-    assert line.strip().endswith(f"仅 contracts-x, 6 次, 到 {until}。理由: 只补 contracts-x 文档准备, 不改代码")
+    assert line.strip().endswith(f"仅 contracts-x, 6 张业务卡(每张含其审计与返工), 到 {until}。理由: 只补 contracts-x 文档准备, 不改代码")
     msg = _git(rig["home"], "log", "-1", "--format=%s")
     assert _git(rig["home"], "status", "--porcelain", "-uall") == "", f"loop note 写后已落账: {msg}"
 
 
 def test_item1_project_default_and_unreadable_named(rig):
-    """无同驱动方上一信封 = 额度取 project.json grant_request(缺省 20); 段形不合 = 收件箱点名, 事项照列(不猜)。"""
+    """AIPOS-F192: 额度 = project.json grant_request.max_tasks 显式声明者, 未声明 = 本卡所需(1 张业务卡; 原缺省 20); 段形不合 = 收件箱点名, 事项照列(不猜)。"""
     from tools.aipos_cli.owner_inbox import suggest_grant
 
     pj_path = rig["gov"] / "project.json"
     pj = json.loads(pj_path.read_text(encoding="utf-8"))
     fm = {"task_id": "LANE-X", "task_mode": "docs", "title": "x", "lane": {"repo": "contracts-x"}}
     got = suggest_grant(rig["gov"], P, task_id="LANE-X", card_fm=fm, driver=f"advisor.{P}.fresh")
-    assert got["max_tasks"] == 20 and got["sources"]["max_tasks"] == "project_default" and got["policy_id"] == f"pol_{P}_loop_1"
+    assert got["max_tasks"] == 1 and got["sources"]["max_tasks"] == "card_need" and got["policy_id"] == f"pol_{P}_loop_1"
     pj["grant_request"] = {"max_tasks": 9, "days": 3}
     pj_path.write_text(json.dumps(pj), encoding="utf-8")
     got = suggest_grant(rig["gov"], P, task_id="LANE-X", card_fm=fm, driver=f"advisor.{P}.fresh", now=rig["now"])
-    assert got["max_tasks"] == 9 and got["expires_at"][:10] == _iso(rig["now"] + timedelta(days=3))[:10]
+    assert got["max_tasks"] == 9 and got["sources"]["max_tasks"] == "project_default"
+    assert got["expires_at"][:10] == _iso(rig["now"] + timedelta(days=3))[:10]
     pj["grant_request"] = {"max_tasks": 0, "bogus": 1}
     pj_path.write_text(json.dumps(pj), encoding="utf-8")
     rc, text = _inbox(rig)
@@ -389,7 +392,7 @@ def test_item2_inbox_and_envelope_pages_show_request_cards(board, frozen_clock):
     _show(f"---- 件②·收件箱页请求卡 HTML 原文 ----\n{card}")
     sentence = _plain(re.search(r'<p class="gr-sentence">.*?</p>', card).group(0))
     _show(f"[件②·请求卡人话原文] {sentence}")
-    assert sentence == (f"{DRIVER} 请求:为 LANE-HW1({HW1_TITLE})开一个只写文档的授权,仅 contracts-x,40 次,到 "
+    assert sentence == (f"{DRIVER} 请求:为 LANE-HW1({HW1_TITLE})开一个只写文档的授权,仅 contracts-x,1 张业务卡(每张含其审计与返工),到 "
                         f"{hw1['grant']['expires_at'][:10]}。理由:{HW1_TITLE}")
     buttons = re.findall(r'<button type="button"[^>]*data-gr-action="(\w+)">(.*?)</button>', card)
     _show(f"[件②·按钮] {buttons}")
@@ -406,7 +409,7 @@ def test_item2_inbox_and_envelope_pages_show_request_cards(board, frozen_clock):
     assert "<details class=\"gr-tech\">" in tech and " open" not in tech and "policy_id=pol_f180_lane_loop_4" in tech
     req = _card_request(card)
     assert req["payload"] == {"workspace": P, "mode": "new", "agent_or_role": DRIVER, "task_mode": "docs", "lane_repo": ["contracts-x"],
-                              "launch_harness": [], "max_tasks": 40, "expires_at": hw1["grant"]["expires_at"],
+                              "launch_harness": [], "max_tasks": 1, "expires_at": hw1["grant"]["expires_at"],
                               "policy_id": "pol_f180_lane_loop_4", "request_item": hw1["item_id"]}
     # F174 skeleton: top nav on the page; owner sign client loaded; no read-only note on this page
     nav = re.search(r'<header class="rp-nav">.*?</header>', page).group(0)
@@ -457,7 +460,10 @@ def test_item3_sign_as_suggested_end_to_end_and_item_disappears(board):
     # 信封生效 = 该请求自行解除: CLI 与看板都不再列
     after = _inbox_json(board)
     _show(f"[件③·签发后收件箱] 事项 {[(i['category'], i.get('task_id')) for i in after['items']]} (签前 {data['count']} 项, 签后 {after['count']} 项)")
-    assert _item(after, "LANE-HW1") is None and _item(after, "LANE-UI2") is not None and after["count"] == data["count"] - 1
+    # AIPOS-F192: 建议额度 = 1 张业务卡 → 新信封 1/1 张即达 F166 剩余额度预警阈值(≤3), 收件箱多一条该信封的 envelope_warning
+    fresh_warn = [i for i in after["items"] if i["category"] == "envelope_warning" and "pol_f180_lane_loop_4" in json.dumps(i, ensure_ascii=False)]
+    assert _item(after, "LANE-HW1") is None and _item(after, "LANE-UI2") is not None
+    assert after["count"] == data["count"] - 1 + len(fresh_warn) and len(fresh_warn) <= 1
     status, page_after = _request(board, "/owner/inbox")
     assert hw1["item_id"] not in page_after and "待授权请求(1)" in page_after
     rc, text = _inbox(board)
@@ -684,7 +690,7 @@ def test_item3_real_client_script_plain_confirm_success_and_failure(board, tmp_p
     conf = out["after_preview"]
     until = pre["params"]["expires_at"][:10]
     assert conf["state"] == "confirm" and conf["heading"] == "确认签发这个授权?" and conf["hidden"] is False
-    assert conf["lines"] == [f"给谁:{DRIVER}", "能做什么:只写文档", "哪些仓:contracts-x", "几次:40 次", f"到哪天:{until}",
+    assert conf["lines"] == [f"给谁:{DRIVER}", "能做什么:只写文档", "哪些仓:contracts-x", "几张卡:1 张业务卡(每张卡认领时扣 1;其交回、审计、返工、合入、结案不另扣,只受到期与撤销约束)", f"到哪天:{until}",
                              f"哪个项目:{P}", f"影响哪张卡:LANE-HW1({HW1_TITLE})"]
     assert conf["tech_hidden"] is False and conf["tech_open"] is False and "dry_run_token" not in conf["tech"], "技术详情默认折叠"
     assert [a["text"] for a in conf["actions"]] == ["确认签发", "取消"]

@@ -37,8 +37,8 @@ from tools.aipos_cli.board_adapter import (
 from tools.aipos_cli.autonomy_policy import (
     AUTONOMY_MODE_PREAUTHORIZED,
     AUTONOMY_MODE_SUPERVISED,
-    count_preauthorized_claims,
     driver_envelope_identities,
+    envelope_quota_state,
     envelope_subject,
     load_policy,
     match_claim_envelope,
@@ -2148,11 +2148,13 @@ def _match_envelope_for_identities(
     identities: list[tuple[str, str, str | None]],
     released_count: int,
     audit_subject_rule: bool = True,
+    card_released: bool = False,
 ) -> tuple[bool, str, str | None]:
     """AIPOS-F134: 门侧逐请求核验给定信封——判定对象经 autonomy_policy.envelope_subject(与 loop 同一主体规则; 信封带
     task_selector_lane_repo 时解析卡 lane 指称), 身份三元组(驱动方 = driver_envelope_identities, 与 loop find_envelope 同一构造)
     逐个交 match_claim_envelope(唯一判据), 任一匹配即放行。未匹配原因取首个已过身份覆盖的三元组(否则末个), 与原单次调用同口径。
-    audit_subject_rule=False(驱动方非认领动词, 既有口径): 判定对象 = 本卡自身字段(不做审计卡→被审卡映射), lane 亦取本卡。"""
+    audit_subject_rule=False(驱动方非认领动词, 既有口径): 判定对象 = 本卡自身字段(不做审计卡→被审卡映射), lane 亦取本卡。
+    AIPOS-F192: card_released = 本卡链已由该信封放行(autonomy_policy.envelope_quota_state 唯一判据)= 额度谓词不拦, 原样交 match_claim_envelope。"""
     subject_id, subject_mode, subject_project, subject_lane = envelope_subject(
         repo_root, task_id=str(snapshot.get("task_id") or task_id or ""), task_mode=str(snapshot.get("task_mode") or ""),
         project=str(snapshot.get("project") or ""),
@@ -2165,7 +2167,7 @@ def _match_envelope_for_identities(
         matched, reason, error_code = match_claim_envelope(
             policy=policy, task_id=subject_id, task_mode=subject_mode, project=subject_project,
             agent_instance=agent_instance, actor=actor, now=now, released_count=released_count,
-            claiming_role=claiming_role, lane=subject_lane,
+            claiming_role=claiming_role, lane=subject_lane, card_released=card_released,
         )
         if matched:
             return matched, reason, error_code
@@ -2219,16 +2221,20 @@ def _match_driver_envelope(
                                      "Check the task_id; cards are matched by frontmatter task_id, not file name.")
     bound = str(cap.get("agent_instance") or "").strip()
     role_name = str(cap.get("role") or "").strip()
-    released = count_preauthorized_claims(repo_root, policy_ref)
+    # AIPOS-F192: 用量 = 已放行根业务卡数; 本卡链已由本信封放行 = 后续步骤(交回 / 派审 / 裁决 / 合入 / 结案)不受额度拦截
+    quota = envelope_quota_state(repo_root, policy_ref, str(snapshot.get("task_id") or task_id or ""))
+    released = int(quota["used"])
     # 身份集合 = {token 绑定实例(缺则角色类), 角色类, 角色名}——信封 agent_or_role 写其一即覆盖驱动方
     # AIPOS-F134 件①: 集合唯一构造 autonomy_policy.driver_envelope_identities(loop find_envelope 同用); 件③: 判定对象 + lane 经 envelope_subject
     matched, reason, error_code = _match_envelope_for_identities(
         repo_root, policy=policy, snapshot=snapshot, task_id=task_id,
         identities=driver_envelope_identities(bound, role_name, driver_identity), released_count=released, audit_subject_rule=False,
+        card_released=bool(quota["card_released"]),
     )
     trace_envelope({"phase": "_match_driver_envelope", "verb": verb, "task_id": task_id, "owner_policy_ref": policy_ref,
                     "driver_identity": driver_identity, "bound": bound, "role": role_name, "matched": matched, "reason": reason,
-                    "error_code": error_code})
+                    "error_code": error_code, "released_count": released, "card_released": bool(quota["card_released"]),
+                    "card_root": quota["root"]})
     if not matched:
         return None, _envelope_rejection(error_code or "ENVELOPE_AGENT_NOT_COVERED", reason, verb=verb)
     return policy_ref, None
@@ -2329,7 +2335,9 @@ def _match_claim_envelope(
         _emit("queue_state_guard", None, None, policy_loaded=True, snapshot_loaded=True,
               queue_state=queue_state, reason="envelope covers pending tasks only")
         return None, None, None, None
-    released = count_preauthorized_claims(repo_root, owner_policy_ref)
+    # AIPOS-F192: 用量 = 已放行根业务卡数; 本卡(审计卡 / 复审卡 / 返工派生卡等)链已由本信封放行 = 认领不另扣、不受额度拦截
+    quota = envelope_quota_state(repo_root, owner_policy_ref, str(snapshot.get("task_id") or task_id or ""))
+    released = int(quota["used"])
     # AIPOS-363 S4: carry the calling role so an envelope may name an AIPOS-352 custom role
     # (e.g. agent_or_role: kaia-asst) and still match an agent claiming under that role.
     # The role is read from the Owner-minted capability token (authoritative, not self-reported).
@@ -2340,10 +2348,12 @@ def _match_claim_envelope(
                   else [(envelope_instance, envelope_actor, claiming_role or None)])
     matched, inner_reason, error_code = _match_envelope_for_identities(
         repo_root, policy=policy, snapshot=snapshot, task_id=str(task_id or ""), identities=identities, released_count=released,
+        card_released=bool(quota["card_released"]),
     )
     _emit("final", owner_policy_ref if matched else None, None,
           policy_loaded=True, snapshot_loaded=True, queue_state=queue_state,
-          released_count=released, inner_matched=matched, inner_reason=inner_reason,
+          released_count=released, card_released=bool(quota["card_released"]), card_root=quota["root"],
+          inner_matched=matched, inner_reason=inner_reason,
           error_code=error_code, release_switch=matched)
     # AIPOS-F44A ①: Compute quota info for matched envelopes (remaining count + low water warning)
     quota_info = None
@@ -2356,6 +2366,7 @@ def _match_claim_envelope(
                     "released": released,
                     "max_tasks": max_tasks,
                     "remaining": remaining,
+                    "card_released": bool(quota["card_released"]),  # AIPOS-F192: 本卡链已由本信封放行(本次认领不另扣)
                 }
                 # Low water warning: remaining ≤ 10% of max_tasks
                 if remaining <= max_tasks * 0.1:
