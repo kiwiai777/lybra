@@ -27,7 +27,7 @@ from typing import Any
 from tools.aipos_cli import validation_root_helper as helper
 
 SURFACE = "validation_root"
-ROLE_CLASSES = ("executor", "auditor")
+CARD_KINDS = ("execution_card", "audit_card")
 _HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
@@ -66,10 +66,20 @@ def declaration() -> dict[str, Any]:
     if not isinstance(fb, dict) or any(not isinstance(fb.get(k), list) for k in ("exact", "system_prefixes", "home_roots", "home_relative_global")):
         raise SchemaLoadError("roles.schema.json write_boundary.validation_root.forbidden_bases(exact / system_prefixes / home_roots / "
                               "home_relative_global)未声明")
+    kinds = {k: v for k, v in (decl.get("card_kind_by_class") or {}).items() if k != "description"}
+    writers = sorted(cls for cls, row in load_write_boundary_declaration()["matrix"].items() if (row or {}).get(SURFACE) == "mutate")
+    if sorted(kinds) != writers or any(v not in CARD_KINDS for v in kinds.values()):
+        raise SchemaLoadError(f"roles.schema.json write_boundary.validation_root.card_kind_by_class 须恰覆盖 matrix 中 {SURFACE}=mutate 的类 "
+                              f"{writers}, 值 ∈ {list(CARD_KINDS)}")
     for key in ("default_ttl_hours", "max_ttl_hours"):
         if isinstance(decl[key], bool) or not isinstance(decl[key], int) or decl[key] <= 0:
             raise SchemaLoadError(f"roles.schema.json write_boundary.validation_root.{key} 须为正整数(小时)")
     return decl
+
+
+def card_kinds() -> dict[str, str]:
+    """可声明验证根的角色类 → 卡种(roles.schema write_boundary.validation_root.card_kind_by_class; 唯一声明)。"""
+    return {k: str(v) for k, v in declaration()["card_kind_by_class"].items() if k != "description"}
 
 
 def reject_codes() -> dict[str, str]:
@@ -161,8 +171,8 @@ def project_validation_roots(governance_root: str | Path, *, project: dict[str, 
         if entry["id"] in seen:
             raise _err("VR_DECLARATION_INVALID", f"{at}.id={entry['id']!r} 重复")
         seen.add(entry["id"])
-        if entry["role_class"] not in ROLE_CLASSES:
-            raise _err("VR_DECLARATION_INVALID", f"{at}.role_class={entry['role_class']!r} 不在 {list(ROLE_CLASSES)}")
+        if entry["role_class"] not in card_kinds():
+            raise _err("VR_DECLARATION_INVALID", f"{at}.role_class={entry['role_class']!r} 不在 {sorted(card_kinds())}")
         if entry["host_fingerprint"] is not None and not helper.is_fingerprint(entry["host_fingerprint"]):
             raise _err("VR_DECLARATION_INVALID", f"{at}.host_fingerprint={entry['host_fingerprint']!r} 须为 hfp1 指纹或 null")
         problem = helper.canonical_problem(entry["base"])
@@ -295,8 +305,9 @@ def instance_role_class(governance_root: Path, instance: str) -> str:
     except WriteBoundaryError as exc:
         raise _err("VR_INSTANCE_NOT_ENROLLED", f"实例 {instance} 的角色 {view['role']!r} 解析不到角色类: {exc}") from exc
     level = (load_write_boundary_declaration()["matrix"].get(cls) or {}).get(SURFACE)
-    if cls not in ROLE_CLASSES or level != "mutate":
-        raise _err("VR_ROLE_NOT_ALLOWED", f"实例 {instance} 的角色类 {cls} 对 {SURFACE} 声明级别 = {level or '无行'}(只 executor / auditor 可声明验证根)")
+    if cls not in card_kinds() or level != "mutate":
+        raise _err("VR_ROLE_NOT_ALLOWED", f"实例 {instance} 的角色类 {cls} 对 {SURFACE} 声明级别 = {level or '无行'}"
+                                          f"(可声明验证根的类: {sorted(card_kinds())})")
     return cls
 
 
@@ -308,7 +319,7 @@ def task_ownership_problems(governance_root: Path, *, instance: str, role_class:
 
     fm = _card_fm(governance_root, task_id)
     audit = is_audit_card(task_id, fm or None)
-    if role_class == "executor":
+    if card_kinds()[role_class] == "execution_card":
         if audit:
             return [f"卡 {task_id} 是审计卡; 执行实例 {instance} 只得声明执行卡目录(执行与审计隔离)"]
         if fm is None:
@@ -361,7 +372,7 @@ def _candidate_problem(governance_root: Path, entry: dict[str, Any], candidate: 
 
     if not _SHA_RE.match(candidate):
         return f"候选 {candidate!r} 须为完整 40 位小写 sha"
-    card = entry["task_id"] if entry["role_class"] == "executor" else audit_card_reviewed_id(entry["task_id"], _card_fm(governance_root, entry["task_id"]))
+    card = entry["task_id"] if card_kinds()[entry["role_class"]] == "execution_card" else audit_card_reviewed_id(entry["task_id"], _card_fm(governance_root, entry["task_id"]))
     fm = _card_fm(governance_root, card) if card else None
     if fm is None:
         return f"卡 {card or entry['task_id']} 不在队列, 无从核候选所在仓"
@@ -603,7 +614,7 @@ def executor_run_dir_refs(governance_root: str | Path, reviewed_task_id: str, te
     if not reviewed_task_id:
         return []
     prefixes = sorted({f"{e['base']}/{e['task_id']}" for e in project_validation_roots(governance_root)
-                       if e["task_id"] == reviewed_task_id and e["role_class"] == "executor"})
+                       if e["task_id"] == reviewed_task_id and card_kinds().get(e["role_class"]) == "execution_card"})
     hits: list[str] = []
     for prefix in prefixes:
         pattern = re.compile(re.escape(prefix) + r"(?=$|/|[\s'\"`])")

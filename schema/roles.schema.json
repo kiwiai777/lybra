@@ -339,6 +339,11 @@
       "description": "AIPOS-F190(chris OTA HBJOTA-60/61 实撞: Mac 上按卡隔离验证在 write-boundary 判 SURFACE_UNDECLARED): 跨机临时验证根——面 validation_root 的判定细则、base 禁区、工具写入重定向与子 agent harness 沙箱渲染的唯一声明。声明存储 = project.json validation_roots(config.schema configuration_sources.project_json.schema.validation_roots); 判定唯一实现 = write_boundary.check_access(经 validation_root.judge_access); 主机身份与主机侧 realpath 判定唯一实现 = tools/aipos_cli/validation_root_helper.py(纯标准库单文件, 治理根侧 import 同一函数)。",
       "relation_to_hard_rules": "验证根是声明面, 不是硬规则例外: no_privilege_escalation / no_retry_after_deny 照常全量适用; 拒 = 声明缺口, 由顾问改声明(declare / run-start)放行, 角色不得换路径 / 符号链接 / 别的工具绕过; 工具不可避免写全局目录 = BLOCK 并列缺口。",
       "path_template": "{base}/{task_id}/{run_id}",
+      "card_kind_by_class": {
+        "description": "可声明验证根的角色类(= matrix 中 validation_root 为 mutate 的类)各自只得声明的卡种: execution_card = 本实例为 assigned_to / claimed_by 的非审计卡; audit_card = 审计卡(audit_derivation.is_audit_card)且归本实例审。执行与审计隔离由此一处声明。",
+        "executor": "execution_card",
+        "auditor": "audit_card"
+      },
       "run_id_template": "run-{n}",
       "helper_module": "tools/aipos_cli/validation_root_helper.py",
       "default_ttl_hours": 72,
