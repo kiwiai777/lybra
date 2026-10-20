@@ -4575,6 +4575,68 @@ def _collapse_ws(text: str) -> str:
     return " ".join(str(text).split())
 
 
+def _candidate_run_problem(workspace_root: Path, audit_task_id: str, entry: dict[str, Any],
+                           subject: dict[str, str]) -> tuple[dict[str, str], str | None]:
+    """AIPOS-F199 件①: 固定候选卡一条运行记录(已过必填 / 执行 run 引用 / exit_code 核对)的验证根 run 判据(只供 runtime_evidence_check 调用,
+    规则声明 transitions runtime_evidence.candidate_subject.rules)。run 定位 / 归属 / src-verify 核对全部复用 validation_root 唯一实现。
+    返回 (该 run 的占位值, 拒因或 None)。"""
+    import hashlib
+
+    from tools.aipos_cli.artifact_ingest import runtime_evidence_declaration
+    from tools.aipos_cli.validation_root import (
+        ValidationRootError, card_kinds, declaration_status, is_local_host, locate_run, src_verify_evidence_check, task_ownership_problems,
+    )
+    from tools.aipos_cli.validation_root_helper import SRC_DIR_NAME, canonical_problem, is_within
+
+    run_dir, run_id = str(entry.get("run_dir") or "").strip(), str(entry.get("run_id") or "").strip()
+    problem = canonical_problem(run_dir)
+    if problem:
+        return {}, f"run_dir {problem}"
+    try:
+        decl_entry, run = locate_run(workspace_root, run_dir, run_id)
+    except ValidationRootError as exc:
+        return {}, f"验证根声明读不出, 无从核对 run 归属(fail-closed): {exc}"
+    if decl_entry is None:
+        return {}, (f"run_dir {run_dir}(run_id {run_id})不是任何验证根声明的 run 目录(project.json validation_roots; 按声明 path_template 反查不到); "
+                    "须为本审计卡声明并 run-start 的 run")
+    where = f"run {run_id}(声明 {decl_entry['id']}: 卡 {decl_entry['task_id']} 实例 {decl_entry['instance']} 角色类 {decl_entry['role_class']})"
+    if decl_entry["task_id"] != audit_task_id:
+        return {}, f"{where} 是卡 {decl_entry['task_id']} 的 run, 不是本审计卡 {audit_task_id} 的(他卡 run 不构成本卡审计运行证据)"
+    if card_kinds().get(decl_entry["role_class"]) != "audit_card":
+        return {}, f"{where} 不是审计实例的声明(执行 / 审计隔离)"
+    owned = task_ownership_problems(Path(workspace_root), instance=decl_entry["instance"], role_class=decl_entry["role_class"], task_id=audit_task_id)
+    if owned:
+        return {}, f"{where} 不属本审计实例: {'; '.join(owned)}"
+    if declaration_status(decl_entry) == "revoked":
+        return {}, f"{where} 所在声明已于 {decl_entry['revoked_at']} 撤销({decl_entry['revoke_reason']}), 其 run 不作运行证据"
+    if run is None:
+        return {}, f"{where} 未开启(声明 runs 中无 {run_id}; 先由顾问 run-start, 候选 = 卡面固定候选)"
+    if run["candidate"] != subject["commit_sha"]:
+        return {}, f"{where} 候选 {run['candidate']} ≠ 被审卡卡面固定候选 {subject['commit_sha']}"
+    if not is_local_host(decl_entry["host"]):
+        return {}, (f"{where} 在主机 {decl_entry['host']}(非治理根所在机), 裁决入口读不到 run 内送达核对证据与日志(fail-closed); "
+                    "卡面声明的命令须在治理根所在机的审计 run 运行")
+    src = src_verify_evidence_check(decl_entry, run, candidate=subject["commit_sha"], tree=subject["tree_hash"])
+    if src:
+        return {}, f"{where} 源码封签不过: {'; '.join(src)}"
+    worktree = str(entry.get("worktree") or "").strip()
+    if worktree and not is_within(str(Path(worktree).expanduser()), run_dir):
+        return {}, f"{where} 运行目录(worktree / run-long --cwd){worktree} 不在本 run 目录 {run_dir} 内"
+    keys = runtime_evidence_declaration()["log_fields"]
+    log_path, log_sha = str(entry.get(keys["path"]) or "").strip(), str(entry.get(keys["sha256"]) or "").strip().lower()
+    log_file = Path(log_path).expanduser()
+    if not log_file.is_absolute():
+        return {}, f"{keys['path']} 须为绝对路径, 实为 {log_path}"
+    try:
+        actual = hashlib.sha256(log_file.read_bytes()).hexdigest()
+    except OSError as exc:
+        return {}, f"日志 {log_path} 不可读: {exc}"
+    if actual != log_sha:
+        return {}, f"日志 {log_path} sha256={actual[:12]} ≠ 报告自述 {log_sha[:12]}"
+    return {"run_dir": run_dir, "src_dir": f"{run_dir}/{SRC_DIR_NAME}", "candidate": subject["commit_sha"],
+            "candidate_tree": subject["tree_hash"]}, None
+
+
 def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: dict[str, Any], *,
                            report_path: Path | str | None = None, report_fm: dict[str, Any] | None = None,
                            verdict: str | None = None, reviewed_task_id: str | None = None,
@@ -4588,7 +4650,10 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
     verdict = 门收到的裁决值(缺省读报告 frontmatter); reviewed_task_id / reviewed_fm 缺省按报告或审计卡推导;
     report_path 缺省 = 推导核唯一就绪判据 next_resolver._check_verdict_artifact 命中的报告; commit_sha 缺省读报告。
     不适用: 裁决不在 applies_to_verdicts(FAIL 等不受限) / 审计卡与被审卡都未声明 required=true(此时零额外读盘)。
-    审计分配工作树 = next_resolver.card_worktree_location(<审计卡>)(认领建树同一推导); 被审执行卡工作树同一函数(被审卡号)。"""
+    审计分配工作树 = next_resolver.card_worktree_location(<审计卡>)(认领建树同一推导); 被审执行卡工作树同一函数(被审卡号)。
+    AIPOS-F199 件①: 被审卡交付主体为固定候选(next_resolver.candidate_subject_values 非 None, enums.schema task_mode.candidate_subject)=
+    不推导审计工作树, 每条记录绑定审计实例自己的验证根 run(_candidate_run_problem; 声明 runtime_evidence.candidate_subject), 声明命令按该条
+    run 的占位值渲染后逐字匹配; 旧占位 {worktree}/{commit_sha}/{tree_hash} = declaration_invalid_category + 迁移提示。其余卡行为不变。"""
     import hashlib
 
     from tools.aipos_cli.artifact_ingest import (
@@ -4618,14 +4683,34 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
         return None
     category = str(decl["rejection_category"])
     heading = str(decl["section_heading"])
-    outlet = (f"出口: 审计体在自己的审计分配工作树重跑卡面声明的验证命令, 按 transitions.schema artifact_ingest.verdict.runtime_evidence.format "
-              f"把每条命令/工作树/退出码/日志写进报告「{heading}」节; 跑不了(环境/时长)= 给 FAIL 或 BLOCK 并写原因, 不得以核执行体原件 hash/退出码代替。"
-              + runtime_evidence_guidance())  # AIPOS-F165 件②: 固定指引(声明命令不可执行 → BLOCK; 严禁提权/改系统凑命令)
+    # AIPOS-F199 件①: 按被审卡交付主体分形(enums.schema task_mode.candidate_subject, F196 唯一判据)——固定候选卡(validation 等)与其审计卡
+    # 都不建树, 证据绑定审计实例自己的验证根 run(声明 runtime_evidence.candidate_subject); 其余卡照旧核审计分配工作树(行为不变)
+    from tools.aipos_cli.artifact_ingest import (
+        render_candidate_evidence_command, runtime_evidence_candidate_declaration, runtime_evidence_legacy_problems,
+    )
+    from tools.aipos_cli.next_resolver import CandidateSubjectError, candidate_subject_values
+
     try:
-        code_repo, audit_wt = card_worktree_location(workspace_root, audit_task_id, audit_fm)
-        exec_wt = card_worktree_location(workspace_root, reviewed, reviewed_fm)[1] if reviewed else None
-    except (CardRepoUnresolved, SchemaLoadError, OSError, ValueError) as exc:
-        return {"category": category, "reasons": [f"审计分配工作树不可推导, 无从核对运行证据(fail-closed): {exc}"]}
+        subject = candidate_subject_values(workspace_root, reviewed, reviewed_fm or {}) if reviewed else None
+    except CandidateSubjectError as exc:
+        return {"category": category, "reasons": [f"被审卡 {reviewed} 固定候选不可用, 无从核对验证 run 运行证据(fail-closed): {exc}; "
+                                                  "出口: 顾问 lybra queue amend 修正来源卡 / 候选(enums.schema task_mode.candidate_subject)"]}
+    cand_decl = runtime_evidence_candidate_declaration() if subject is not None else {}
+    if subject is not None:
+        legacy = runtime_evidence_legacy_problems(requirement, reviewed, reviewed_fm)
+        if legacy:  # 旧占位在候选卡上永远渲染不出审计 run 的命令: 给迁移提示(声明问题, 审计体补不了), 不静默当缺记录
+            return {"category": str(decl["declaration_invalid_category"]), "reasons": legacy}
+        outlet = str(cand_decl["outlet"]).format(heading=heading) + runtime_evidence_guidance()
+        code_repo = audit_wt = exec_wt = None
+    else:
+        outlet = (f"出口: 审计体在自己的审计分配工作树重跑卡面声明的验证命令, 按 transitions.schema artifact_ingest.verdict.runtime_evidence.format "
+                  f"把每条命令/工作树/退出码/日志写进报告「{heading}」节; 跑不了(环境/时长)= 给 FAIL 或 BLOCK 并写原因, 不得以核执行体原件 hash/退出码代替。"
+                  + runtime_evidence_guidance())  # AIPOS-F165 件②: 固定指引(声明命令不可执行 → BLOCK; 严禁提权/改系统凑命令)
+        try:
+            code_repo, audit_wt = card_worktree_location(workspace_root, audit_task_id, audit_fm)
+            exec_wt = card_worktree_location(workspace_root, reviewed, reviewed_fm)[1] if reviewed else None
+        except (CardRepoUnresolved, SchemaLoadError, OSError, ValueError) as exc:
+            return {"category": category, "reasons": [f"审计分配工作树不可推导, 无从核对运行证据(fail-closed): {exc}"]}
     if report_path is None:
         report_path = _check_verdict_artifact(workspace_root, audit_task_id)
         if report_path is None:
@@ -4635,8 +4720,11 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
     if report_fm is None:
         report_fm = _read_frontmatter(Path(report_path), allow_missing_block=True)
     commit_sha = str(commit_sha or (report_fm or {}).get("commit_sha") or "").strip()
-    tree_hash = _git_out(code_repo, "rev-parse", f"{commit_sha}^{{tree}}") if commit_sha else None
-    values = {"worktree": str(audit_wt), "commit_sha": commit_sha, "tree_hash": tree_hash or ""}
+    if subject is None:
+        tree_hash = _git_out(code_repo, "rev-parse", f"{commit_sha}^{{tree}}") if commit_sha else None
+        values = {"worktree": str(audit_wt), "commit_sha": commit_sha, "tree_hash": tree_hash or ""}
+    else:
+        values = {}
 
     def render(command: str) -> str:
         for name in decl["placeholders"]:
@@ -4653,8 +4741,9 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
         return {"category": category, "reasons": [where + problem + f"; 卡面要求独立运行证据(来源 {requirement['source']})。{outlet}"]}
     reasons: list[str] = []
     valid_commands: list[str] = []
+    valid_runs: list[tuple[str, dict[str, str]]] = []  # AIPOS-F199: 固定候选卡 (实跑命令, 该条 run 的占位值)
     log_keys = decl["log_fields"]
-    audit_resolved = Path(audit_wt).resolve()
+    audit_resolved = Path(audit_wt).resolve() if audit_wt is not None else None
     exec_resolved = Path(exec_wt).resolve() if exec_wt else None
     run_long_key = str((decl.get("run_long") or {}).get("field") or "")
     for index, entry in enumerate(entries, 1):
@@ -4680,9 +4769,11 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
                 "command": fields["command"], "worktree": fields["worktree"], "exit_code": fields["exit_code"],
                 log_keys["path"]: fields["log_path"], log_keys["sha256"]: fields["log_sha256"]}}
             entries[index - 1] = entry
-        missing = [k for k in decl["entry_required_fields"] if k not in entry or entry.get(k) in (None, "")]
+        required_fields = cand_decl["entry_required_fields"] if subject is not None else decl["entry_required_fields"]
+        missing = [k for k in required_fields if k not in entry or entry.get(k) in (None, "")]
         if missing:
-            reasons.append(f"{label} 缺字段 {', '.join(missing)}")
+            reasons.append(f"{label} 缺字段 {', '.join(missing)}"
+                           + ("(固定候选卡: 运行记录绑定审计自己的验证根 run, 日志须为文件 + sha256)" if subject is not None else ""))
             continue
         command = str(entry.get("command"))
         label = f"{label}(command={_collapse_ws(command)!r})"
@@ -4692,7 +4783,8 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
         try:
             run_refs = executor_run_dir_refs(workspace_root, reviewed, [command, str(entry.get("worktree") or ""),
                                                                          str(entry.get(log_keys["path"]) or ""),
-                                                                         str(entry.get(log_keys["excerpt"]) or "")])
+                                                                         str(entry.get(log_keys["excerpt"]) or ""),
+                                                                         str(entry.get("run_dir") or "")])
         except ValidationRootError as exc:
             reasons.append(f"{label} 验证根声明读不出, 无从核对是否引用执行 run 目录(fail-closed): {exc}")
             continue
@@ -4703,6 +4795,13 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
         exit_code = entry.get("exit_code")
         if isinstance(exit_code, bool) or not isinstance(exit_code, int):
             reasons.append(f"{label} exit_code 须为整数, 实为 {exit_code!r}")
+            continue
+        if subject is not None:
+            run_values, problem = _candidate_run_problem(workspace_root, audit_task_id, entry, subject)
+            if problem:
+                reasons.append(f"{label} {problem}")
+                continue
+            valid_runs.append((_collapse_ws(command), run_values))
             continue
         worktree = Path(str(entry.get("worktree"))).expanduser()
         resolved = worktree.resolve() if worktree.is_absolute() else None
@@ -4739,7 +4838,24 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
     if not entries:
         reasons.append("「独立运行证据」节运行记录为空")
     ran = [_collapse_ws(str(e.get("command"))) for e in entries if isinstance(e, dict) and e.get("command") not in (None, "")]
+    if subject is not None:  # 差异说明用: 有效 run 的占位值, 都无效时按各条自述 run_dir 试渲染(只作拒因说明, 判据不变)
+        from tools.aipos_cli.validation_root_helper import SRC_DIR_NAME
+
+        probes = [v for _got, v in valid_runs] or [
+            {"run_dir": str(e["run_dir"]).rstrip("/"), "src_dir": f"{str(e['run_dir']).rstrip('/')}/{SRC_DIR_NAME}",
+             "candidate": subject["commit_sha"], "candidate_tree": subject["tree_hash"]}
+            for e in entries if isinstance(e, dict) and str(e.get("run_dir") or "").strip()]
     for declared in requirement["commands"]:
+        if subject is not None:  # AIPOS-F199: 每条有效记录按其自身 run 的占位值渲染声明命令, 逐字一致即算该条已运行
+            if any(_collapse_ws(render_candidate_evidence_command(declared, run_values)) == got for got, run_values in valid_runs):
+                continue
+            shown = _collapse_ws(render_candidate_evidence_command(declared, probes[0])) if probes else declared
+            if shown in ran:  # 命令跑了, 但该条记录不合格(拒因已在上方逐条列出)
+                reasons.append(f"卡面声明的命令 {shown!r}(声明原文 {declared!r})只有不合格的运行记录(见上列该条拒因), 不算已运行")
+                continue
+            reasons.append(f"卡面声明的命令缺有效运行记录: {shown!r}(声明原文 {declared!r}; 须在审计实例自己的验证根 run 运行, 占位按该条 run 渲染后"
+                           "命令逐字一致); " + runtime_evidence_command_diff(shown, ran))
+            continue
         rendered = render(declared)
         if rendered not in valid_commands:
             reasons.append(f"卡面声明的命令缺有效运行记录: {rendered!r}(声明原文 {declared!r}; 须在审计分配工作树运行, 命令逐字一致); "

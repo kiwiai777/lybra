@@ -2308,7 +2308,7 @@
       },
       "layout": {
         "executor": ["header", "", "start_title", "start_charter", "start_card", "start_worktree", "start_no_worktree", "start_repo", "carried", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "no_write_title", "no_write_governance", "no_write_other_projects", "no_write_harness", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_code_files", "return_body", "return_stop", "", "summary"],
-        "auditor": ["header_auditor", "", "start_title", "start_charter", "start_card_auditor", "start_worktree_auditor", "start_repo", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "no_write_title", "no_write_governance", "no_write_product_auditor", "no_write_other_projects", "no_write_harness", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline_auditor", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_code_files", "return_body_auditor", "return_stop", "", "summary"],
+        "auditor": ["header_auditor", "", "start_title", "start_charter", "start_card_auditor", "start_worktree_auditor", "start_repo", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "runtime_evidence_lines", "", "no_write_title", "no_write_governance", "no_write_product_auditor", "no_write_other_projects", "no_write_harness", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline_auditor", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_code_files", "return_body_auditor", "return_stop", "", "summary"],
         "note": "每个键 = texts 的一行模板; \"\" = 空行。模板占位值为 null(本卡不适用, 如无承继 / 本机会话 / 无工位)= 该行省略; 列表占位(*_lines)= 逐项按 item_templates 成行。占位缺 / 值非串 = 渲染失败(fail-closed, 不出半截开工稿)。"
       },
       "role_labels": {"executor": "执行体", "auditor": "审计体"},
@@ -2328,6 +2328,7 @@
         "boundary_title": "## 写权限边界(单源 roles.schema write_boundary, 与章程同源; 面外路径 = 不许写)",
         "boundary_lines": "{boundary_lines}",
         "validation_root_lines": "{validation_root_lines}",
+        "runtime_evidence_lines": "{runtime_evidence_lines}",
         "no_write_title": "## 禁写与禁止动作",
         "no_write_governance": "- 禁写治理根 `{governance_root}`(唯一例外: 本卡报告落点 `{report_dir}` 及其下 artifacts/、run_long/); 禁对治理仓 git add / commit / push。",
         "no_write_product_auditor": "- 产品仓只读(审计不提交、不改文件, 取证工作树亦然)。",

@@ -35,6 +35,10 @@
    卡面声明 `audit_runtime_evidence`(审计卡「独立运行证据要求」段会列出命令)时, PASS / PASS_WITH_NOTES 报告**必须**按结构化
    `## 独立运行证据` 节填写(节内一个 json 代码块: 每条 command / worktree / exit_code / 日志摘要或日志路径+sha256), 声明的每条命令都要有记录;
    缺节、工作树不是你的分配工作树、命令缺一条 = 裁决入口拒收, 循环会让你补做。
+   **被审卡交付主体为固定候选(validation 等验证卡, AIPOS-F199)**: 你与执行体都不建产品工作树, 独立核验 = 在**你自己的验证根 run**
+   (审计卡声明 → run-start → init-run → 候选源码送达 → src-verify 末行 SRC_OK)里重跑卡面命令(占位 `{run_dir}` / `{src_dir}` / `{candidate}` /
+   `{candidate_tree}`), 每条记录填 command / run_id / run_dir / exit_code / log_path / log_sha256(步骤与实值见开工稿「验证卡运行证据步骤」);
+   用执行实例的 run / 他卡的 run / 未 run-start 的 run / 无 SRC_OK 的 run = 裁决入口拒收。
    **跑不了**(环境缺失 / 时长超出)= 给 **FAIL 或 BLOCK** 并写明原因, **不得以结构取证替代给 PASS 类裁决**。
    实撞:chris OTA 一天两撞——审计只在审计树跑入口预检、完整诊断链只核执行体原件 hash 与退出码即判 PASS_WITH_NOTES 并合入。
 10. **禁提权、禁改工作树与治理落点之外(AIPOS-F165 硬条款)**:条文 = 本章程「写权限边界」节硬规矩 `no_privilege_escalation`

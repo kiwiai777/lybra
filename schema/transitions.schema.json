@@ -1219,6 +1219,41 @@
         },
         "command_match": "卡声明的每条命令按占位渲染后, 与某条运行记录的 command 在空白折叠后逐字相等; 加参数(如 --preflight-only)即不算该条已运行",
         "worktree_rule": "每条运行记录的 worktree 解析后须 = 审计卡分配工作树; = 被审执行卡工作树单列拒因(执行体原件不算独立核验)",
+        "candidate_subject": {
+          "description": "AIPOS-F199 件①(10-20 chris OTA HBJOTA-61V 实证, gap #204): 被审卡交付主体为固定候选(enums.schema task_mode.candidate_subject, F196 唯一判据 next_resolver.card_candidate_subject; validation 等)时, 被审卡与其审计卡都不建卡工作树, 执行与审计各在自己声明的验证根 run 里验证固定源码——审计运行证据改为绑定审计实例自己的验证根 run, 不再推导 / 要求审计产品工作树。判据仍在 runtime_evidence_check 唯一实现内分形(其余卡照旧核审计分配工作树, 行为不变); run / 候选 / 源码封签 / 指纹核对复用 validation_root(F190/F191/F194/F197)唯一实现: 运行记录所在 run = validation_root.locate_run(声明 path_template 反查), 归属 = validation_root.task_ownership_problems(审计卡 + 审计实例), 源码封签 = validation_root.src_verify_evidence_check(helper src-verify 写在 run 目录的 .lybra-vr/src-verify.jsonl 末条)。audit_runtime_evidence.required 语义与执行 / 审计隔离(executor_run_dir_refs)保留。",
+          "entry_required_fields": ["command", "run_id", "run_dir", "exit_code", "log_path", "log_sha256"],
+          "placeholders": {
+            "run_dir": "审计实例自己的验证根 run 目录(运行记录 run_dir, 须 = 该声明 path_template 渲染值)",
+            "src_dir": "本 run 内送达的候选源码目录 <run_dir>/src(helper SRC_DIR_NAME)",
+            "candidate": "被审卡卡面固定候选 40 位 sha(validation_candidate)",
+            "candidate_tree": "固定候选的 tree(候选所在仓 git rev-parse <候选>^{tree})"
+          },
+          "legacy_placeholders": ["worktree", "commit_sha", "tree_hash"],
+          "rules": [
+            "run_dir 须为某验证根声明 path_template 渲染出的 run 目录(绝对路径), run_id 与之对应",
+            "该声明须为本审计卡(task_id = 审计卡号)且属本审计实例(validation_root.task_ownership_problems); 执行实例的 run / 他卡的 run 一律拒",
+            "该 run 须已由 run-start 开启(活动或已正常收口); 声明已撤销 = 拒",
+            "run 记录候选 = 被审卡卡面固定候选",
+            "run 目录 .lybra-vr/src-verify.jsonl 末条 = SRC_OK(ok=true)且 tree = 候选 tree、run_dir / 候选 / 主机指纹与声明一致",
+            "日志必须是文件: log_path 绝对路径存在且 sha256 = log_sha256(不接受只给 log_excerpt); 运行记录给 worktree(如 run-long 的 --cwd)时须在本 run 目录内",
+            "run 在非本机(治理根所在机)主机 = 门读不到 run 内证据 = 拒(fail-closed), 卡面声明的命令须在治理根所在机的审计 run 运行"
+          ],
+          "legacy_hint": "卡 {task_id} 交付主体为固定候选(task_mode={task_mode}), 审计不建产品工作树, 卡面 {card_field} 命令 {command!r} 用了旧占位 {legacy}; 迁移: 改用 {{run_dir}} / {{src_dir}} / {{candidate}} / {{candidate_tree}}(审计实例自己的验证根 run 目录 / 本 run 送达的候选源码 / 固定候选 / 候选 tree), 如 {{worktree}} → {{src_dir}}、{{commit_sha}} → {{candidate}}、{{tree_hash}} → {{candidate_tree}}; 出口: 顾问 lybra queue amend 修正卡面声明(未认领卡)后重推导",
+          "outlet": "出口: 审计体按开工稿 / 审计卡「验证卡运行证据步骤」在本审计卡自己的验证根 run 里(run-start → init-run → 源码送达 → src-verify SRC_OK)重跑卡面声明的命令, 按 transitions.schema artifact_ingest.verdict.runtime_evidence.candidate_subject 把每条 command / run_id / run_dir / exit_code / log_path / log_sha256 写进报告「{heading}」节; 跑不了(环境 / 时长)= 给 FAIL 或 BLOCK 并写原因, 不得以执行实例的 run 或其产物代替。",
+          "steps_title": "### 验证卡运行证据步骤(AIPOS-F199: 被审卡交付主体为固定候选, 审计不建产品工作树, 证据绑定你自己的验证根 run)",
+          "steps": [
+            "① 验证根声明(审计实例 {audit_instance} 自己的, 卡号 = 审计卡 {audit_task_id}; 执行实例的声明 / run 一律不算): {declare_state}",
+            "② 起 run(候选 = 卡面固定候选 {candidate}): {run_state}",
+            "③ 目录链初始化(目标主机): {init_run}",
+            "④ 候选源码送达: {src_deliver}",
+            "⑤ 送达核对(末行 SRC_OK = 送达树即候选 tree {candidate_tree}; 证据落 {run_dir}/.lybra-vr/src-verify.jsonl, 裁决入口核对): {src_verify}",
+            "⑥ 在本 run 按卡面声明命令运行(占位 {{run_dir}} = {run_dir}, {{src_dir}} = {src_dir}, {{candidate}} = {candidate}, {{candidate_tree}} = {candidate_tree}; 渲染后逐字一致; 长命令用 run-long, --cwd 在本 run 目录内):",
+            "⑦ 「{heading}」节每条填 command / run_id / run_dir / exit_code / log_path / log_sha256(或 {{\"run_long\": \"<运行目录>\", \"run_id\": \"{run_id}\", \"run_dir\": \"{run_dir}\"}}, 命令 / 退出码 / 日志由产品从运行记录取)"
+          ],
+          "commands_after_step": 6,
+          "command_line": "   - `{command}`",
+          "pending": "(run-start 后由产品给出: lybra project validation-root init-command --id <声明>)"
+        },
         "rejection_category": "RUNTIME_EVIDENCE_MISSING",
         "declaration_invalid_category": "RUNTIME_EVIDENCE_DECLARATION_INVALID",
         "executable_check": {
