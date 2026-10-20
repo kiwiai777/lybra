@@ -228,7 +228,8 @@ def test_item1_resolver_is_single_implementation_and_cli_has_no_active_project_w
           "set-execution/freeze-legacy/dispatch-mode set/export 隐式目标)")
     # AIPOS-F143 件②: + set-execution; AIPOS-F148 件②: + set-return-summary; AIPOS-F161: + relocate-workstation; AIPOS-F169: + set-model;
     # AIPOS-F171: + lybra roadmap(同一目标解析); AIPOS-F176: + project upgrade(同一目标解析); AIPOS-F190: + project validation-root(同一目标解析)
-    assert len(calls) == 15
+    # AIPOS-F198: + project workstation-plan(同一目标解析)
+    assert len(calls) == 16
     wc_src = (REPO_ROOT / "tools/aipos_cli/workspace_config.py").read_text(encoding="utf-8")
     fn = next(n for n in ast.parse(wc_src).body if isinstance(n, ast.FunctionDef) and n.name == "resolve_project_write_target")
     names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}

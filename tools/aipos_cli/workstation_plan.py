@@ -435,10 +435,7 @@ def build_plan(root: str | Path, *, project: str, home_root: str | Path | None =
             steps["envelope"].update(state="done", detail=f"{inst} {t['enrollment_enrolled']}")
             steps["enroll"].update(state="done", detail=f"{inst} @ {view.get('dir') or '-'}")
         else:
-            from tools.aipos_cli.autonomy_policy import envelope_trace_output
-
-            with envelope_trace_output(False):  # 只读视图: 不打门侧信封诊断行(判定与结果不变; 同 loop status)
-                policy, reason = derive_effective_owner_policy_ref(gov, role=role, agent_instance=inst)
+            policy, reason = derive_effective_owner_policy_ref(gov, role=role, agent_instance=inst)  # 诊断行开关 = F142 唯一开关(CLI 缺省关)
             if policy:
                 steps["envelope"].update(state="done", detail=f"{policy}")
             else:
