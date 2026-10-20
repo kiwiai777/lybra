@@ -1374,11 +1374,10 @@ def _integrate_card_branch(
     if not _git_branch_exists(workspace_root, branch_name):
         # AIPOS-F61: 代码任务分支不存在 = 硬 BLOCK(禁假报成功 + 写错误 finalization 记录)
         # 非代码任务(无 output_target 或 task_mode != code)仍允许跳过
-        is_code_task = (
-            bool(needs_worktree)
-            or task_mode == "code"
-            or (output_target and str(output_target).strip())
-        )
+        # AIPOS-F197: 卡面写明 task_mode 且调用方已按唯一判据 card_needs_worktree 判为不建树(只写治理根的 docs 等卡)= output_target
+        # 不再误判代码任务; task_mode 缺(存量卡)或未传 needs_worktree(旧调用面)= 照 F61 按 output_target 判
+        output_counts = bool(output_target and str(output_target).strip()) and (needs_worktree is None or not task_mode)
+        is_code_task = bool(needs_worktree) or task_mode == "code" or output_counts
         if is_code_task:
             similar = _find_similar_branches(workspace_root, task_id)
             similar_text = ", ".join(similar[:5]) if similar else "(无相近分支)"
@@ -1646,6 +1645,68 @@ def _finalize_candidate_subject(task_id: str, actor: str, workspace_root: Path, 
             "message": f"{'DRY-RUN: ' if dry_run else ''}{reason}; finalization 记录{'将写' if dry_run else '已写'} {fin.get('path')}"}
 
 
+def _card_is_governance_outputs(governance_root: Path, task_id: str) -> bool:
+    """AIPOS-F197: 卡是否只写治理根(next_resolver.card_governance_outputs 唯一判据); 卡读不出 = False(走既有拒, fail-closed)。"""
+    from tools.aipos_cli.next_resolver import _find_task_in_queue, _read_frontmatter, card_governance_outputs
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        task_path, _q = _find_task_in_queue(governance_root, task_id)
+        if not task_path:
+            return False
+        return card_governance_outputs(governance_root, {**_read_frontmatter(task_path), "task_id": task_id})
+    except (OSError, ValueError, SchemaLoadError):
+        return False
+
+
+def _finalize_governance_outputs(task_id: str, actor: str, workspace_root: Path, governance_root: Path, *, dry_run: bool,
+                                 operations: list[str]) -> dict[str, Any] | None:
+    """AIPOS-F197 件②: 只写治理根的卡(声明独立审计时走到 N5; enums.schema task_mode.governance_outputs_subject)的 N5——无合入。
+    None = 本卡不适用(走既有路径)。判定: 门生 PASS 族裁决(check_task_can_finalize)且其 artifact_subject.outputs_digest = 交回绑定指纹 =
+    此刻指纹(next_resolver.governance_outputs_recheck 唯一实现); 通过 = 写 finalization 记录(_ensure_finalization_record 唯一写口:
+    merge_commit = `outputs:<指纹>`, deploy_status / push_status = not_applicable 并写明原因), 不碰产品仓 git。"""
+    from tools.aipos_cli.next_resolver import _find_task_in_queue, _read_frontmatter, card_governance_outputs, governance_outputs_recheck
+
+    task_path, _q = _find_task_in_queue(governance_root, task_id)
+    if not task_path:
+        return None
+    fm = _read_frontmatter(task_path)
+    if not card_governance_outputs(governance_root, {**fm, "task_id": task_id}):
+        return None
+    base = {"task_id": task_id, "actor": actor, "dry_run": dry_run, "integrity_check": None, "branch_check": None, "committed": False,
+            "pushed": False, "deployed": False, "deployment_error": None, "operations": operations}
+    recheck = governance_outputs_recheck(governance_root, task_id, fm, allow_legacy=True)
+    operations.append(f"AIPOS-F197: 本卡只写治理根(交付主体 = 产出清单); N5 无合入; 产出核对: {recheck['reason']}")
+    if not recheck["ok"]:
+        return {**base, "verdict": Verdict.BLOCK, "can_finalize": False, "deployment_skipped": False, "commit_hash": None,
+                "category": recheck["code"], "message": f"BLOCKED: {recheck['reason']}"}
+    legacy = bool(recheck["legacy"])  # 存量交回无绑定: 沿 F70 legacy 口径警告放行(记录标 legacy)
+    digest = (recheck["bound"] or recheck["current"] or {}).get("outputs_digest") or "legacy-unbound"
+    check = check_task_can_finalize(task_id, governance_root)
+    bound_by_verdict = str((check.get("artifact_subject") or {}).get("outputs_digest") or "").strip()
+    operations.append(f"Checked finalize eligibility (裁决须绑产出清单指纹 {digest[:12]}): {check['reason']}; 裁决绑定 {bound_by_verdict[:12] or '(缺)'}")
+    if not check["can_finalize"] or (not legacy and bound_by_verdict != digest):
+        why = check["reason"] if not check["can_finalize"] else (
+            f"裁决 artifact_subject.outputs_digest={bound_by_verdict or '(缺)'} ≠ 交回绑定指纹 {digest}(裁决未覆盖当前产出, 须复审)")
+        return {**base, "verdict": Verdict.BLOCK, "can_finalize": False, "deployment_skipped": False, "commit_hash": None,
+                "category": "INGEST_OUTPUTS_CHANGED" if check["can_finalize"] else "VERDICT_NOT_PASS",
+                "message": f"BLOCKED: {why}", "verdict_check": check}
+    reason = (f"只写治理根的卡(task_mode={fm.get('task_mode') or '?'})不写产品仓: N5 无合入, 不推送不部署; 交付主体 = 交回绑定的产出清单 "
+              f"(指纹 {digest}, {len((recheck['bound'] or recheck['current'] or {}).get('outputs') or [])} 个文件)"
+              + ("; legacy: 交回记录无产出清单绑定, 警告放行" if legacy else ""))
+    regression = {"status": "skipped", "action": "none", "mode": "n/a", "reason": "只写治理根的卡无合入(AIPOS-F197)",
+                  "summary": "合并后回归: 不适用(只写治理根的卡无合入, AIPOS-F197)"}
+    operations.append(regression["summary"])
+    marker = f"outputs:{digest}"
+    fin = _ensure_finalization_record(governance_root, task_id, actor, marker, check.get("verdict_id"), False, operations,
+                                      deploy_status="not_applicable", deploy_status_reason=reason, dry_run=dry_run, regression=regression,
+                                      push_status="not_applicable", push_status_reason=reason, workspace_root=workspace_root)
+    integrate = {"branch_name": None, "blocked": False, "conflict_files": [], "action": "skipped_no_integration", "message": reason}
+    return {**base, "verdict": Verdict.PASS, "can_finalize": True, "deployment_skipped": True, "commit_hash": marker,
+            "push_status": "not_applicable", "branch_integration": integrate, "finalization_record": fin.get("path"),
+            "message": f"{'DRY-RUN: ' if dry_run else ''}{reason}; finalization 记录{'将写' if dry_run else '已写'} {fin.get('path')}"}
+
+
 def finalize_task(
     task_id: str,
     actor: str,
@@ -1785,12 +1846,14 @@ def _finalize_task_impl(
     
     # AIPOS-R6A 靶子⑦: finalize 场地根治 — 硬拒治理仓 git 操作
     # workspace_root 必须是产品仓，绝不能是治理仓（218f8b7 实证：治理仓大扫除卷入 agency 记录）
+    # AIPOS-F197 件②: 只写治理根的卡 N5 无合入、零 git 操作(_finalize_governance_outputs), 推导核给 --workspace-root = 治理根, 此拒不适用
     try:
         ws_resolved = workspace_root.resolve()
         gov_resolved = governance_root.resolve()
         
         # 检查 workspace_root 是否在治理仓路径下
-        if ws_resolved == gov_resolved or str(ws_resolved).startswith(str(gov_resolved) + "/"):
+        if ((ws_resolved == gov_resolved or str(ws_resolved).startswith(str(gov_resolved) + "/"))
+                and not _card_is_governance_outputs(governance_root, task_id)):
             return {
                 "verdict": Verdict.BLOCK,
                 "task_id": task_id,
@@ -1873,6 +1936,10 @@ def _finalize_task_impl(
     candidate_result = _finalize_candidate_subject(task_id, actor, workspace_root, governance_root, dry_run=dry_run, operations=operations)
     if candidate_result is not None:
         return candidate_result
+    # AIPOS-F197 件②: 只写治理根的卡(声明独立审计时)= N5 无合入——裁决须绑交回时的产出清单指纹, 写 finalization 记录后照常 N6 结案
+    governance_result = _finalize_governance_outputs(task_id, actor, workspace_root, governance_root, dry_run=dry_run, operations=operations)
+    if governance_result is not None:
+        return governance_result
 
     # AIPOS-FND-14: display-only — surface the audit report frontmatter verdict (declared verdict_root, governance
     # root; AIPOS-F89 件① H9) alongside the real gate verdict for operator visibility. Never judged.

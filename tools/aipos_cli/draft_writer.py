@@ -428,6 +428,17 @@ def apply_signer_created_by(metadata: dict[str, Any], signer: dict[str, Any]) ->
     return ""
 
 
+def _governance_root_lane_ref_text() -> str:
+    """AIPOS-F197: 拒因出口里的「只写治理根」保留值(声明 card.schema intent_face.lane.governance_root_ref; 读不出 = 声明位说明)。"""
+    from tools.aipos_cli.workspace_config import governance_root_lane_ref
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        return governance_root_lane_ref()
+    except SchemaLoadError as exc:
+        return f"<card.schema intent_face.lane.governance_root_ref 读不出: {exc}>"
+
+
 def multi_repo_lane_refusal(repo_root: Path, metadata: dict[str, Any]) -> str:
     """AIPOS-F148 件①(gap #123): 多仓项目发卡必写 lane.repo 的唯一判据——project.json repos.items ≥ 2 而卡稿 lane.repo 缺 =
     拒因原文(LANE_REPO_REQUIRED, 列出仓名); 单仓项目(无 repos 段 / items 仅 1 项)或已写 lane.repo = ""(行为不变)。
@@ -449,7 +460,8 @@ def multi_repo_lane_refusal(repo_root: Path, metadata: dict[str, Any]) -> str:
         return ""
     return (f"LANE_REPO_REQUIRED: 本项目声明了 {len(names)} 个产品仓 {names}(project.json repos.items), 卡稿未写 lane.repo——"
             f"多仓项目不按 repos.default({repos['default']})缺省派生, 卡须写明属于哪个仓。"
-            f"出口: 草稿 frontmatter 写 lane.repo: <{' | '.join(names)}>(一卡一仓, 跨仓改动拆卡)后重发")
+            f"出口: 草稿 frontmatter 写 lane.repo: <{' | '.join(names)}>(一卡一仓, 跨仓改动拆卡)后重发; 只写治理根的文档 / 配置卡写 "
+            f"lane.repo: {_governance_root_lane_ref_text()}(AIPOS-F197, 不建卡工作树)")
 
 
 def publish_identity_refusals(repo_root: Path, metadata: dict[str, Any], *,

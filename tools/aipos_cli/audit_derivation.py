@@ -203,18 +203,33 @@ def build_gate_territory_discipline_section(
     )
 
 
-def zero_gate_report_sentence(report_location: str, reviewed_task_id: str | None = None) -> str:
+def zero_gate_report_sentence(report_location: str, reviewed_task_id: str | None = None,
+                              governance_root: Path | None = None) -> str:
     """AIPOS-F80 件①: 零门审计卡的落点句(唯一措辞)。落点值只接 render_audit_report_location 的输出。
     AIPOS-F93 件①: 句内带报告必填 frontmatter(声明 artifact_ingest.verdict 单源渲染 report_frontmatter_clause), F92R 缺 commit_sha 被拒的病根。"""
-    return f"报告写到 `{report_location}`; {report_frontmatter_clause(reviewed_task_id)}; 写完即止, 认领与裁决提交由驱动方完成。"
+    return (f"报告写到 `{report_location}`; {report_frontmatter_clause(reviewed_task_id, governance_root)}; "
+            "写完即止, 认领与裁决提交由驱动方完成。")
 
 
-def report_frontmatter_clause(reviewed_task_id: str | None) -> str:
-    """AIPOS-F93 件①: 审计卡正文的报告必填字段句(next_resolver.render_report_frontmatter_clause 单源; 分支 = 被审卡分支)。"""
-    from tools.aipos_cli.next_resolver import render_report_frontmatter_clause, report_frontmatter_contract
+def report_frontmatter_clause(reviewed_task_id: str | None, governance_root: Path | None = None) -> str:
+    """AIPOS-F93 件①: 审计卡正文的报告必填字段句(next_resolver.render_report_frontmatter_clause 单源; 分支 = 被审卡分支)。
+    AIPOS-F197 件②: 给了治理根且被审卡只写治理根(card_report_is_governance)= verdict.governance_root 分形(verdict + 交回绑定的 outputs_digest)。"""
+    from tools.aipos_cli.next_resolver import (card_report_is_governance, governance_outputs_return_binding, render_report_frontmatter_clause,
+                                               report_frontmatter_contract)
+    from tools.schema_loader import SchemaLoadError
 
-    return render_report_frontmatter_clause(
-        report_frontmatter_contract("verdict", branch_task_id=str(reviewed_task_id or "").strip() or None))
+    reviewed = str(reviewed_task_id or "").strip() or None
+    governance = False
+    if governance_root is not None and reviewed:
+        try:
+            governance = card_report_is_governance(Path(governance_root), reviewed)
+        except (OSError, ValueError, SchemaLoadError):  # 被审卡读不出: 落点句按建树卡契约(入门时按卡面再判, fail-closed 在入口)
+            governance = False
+    if governance:
+        bound = governance_outputs_return_binding(Path(governance_root), reviewed) or {}
+        return render_report_frontmatter_clause(report_frontmatter_contract(
+            "verdict", branch_task_id=reviewed, governance=True, subject={"outputs_digest": str(bound.get("outputs_digest") or "")}))
+    return render_report_frontmatter_clause(report_frontmatter_contract("verdict", branch_task_id=reviewed))
 
 
 def build_zero_gate_delivery_section(
@@ -233,7 +248,7 @@ def build_zero_gate_delivery_section(
     )
     return (
         "\n## 交付纪律(AIPOS-F80 件①: 审计体零门)\n\n"
-        f"- {zero_gate_report_sentence(report_location, source_task_id)}\n"
+        f"- {zero_gate_report_sentence(report_location, source_task_id, repo_root)}\n"
         "- 你不连门、不读凭据、不调任何门动词; 队列与记录区是门领地, 只读不写(裁决由驱动方经门落盘)。\n"
     )
 
@@ -255,7 +270,7 @@ def zero_gate_audit_body(body: str, governance_root: Path | None, audit_task_id:
     out = re.sub(_GATE_TERRITORY_SECTION_RE, "", body, flags=re.DOTALL)
     out = re.sub(
         _REPORT_LOCATION_LINE_RE,
-        lambda _m: f"- **报告落位**:{zero_gate_report_sentence(report_location, reviewed_task_id)}",
+        lambda _m: f"- **报告落位**:{zero_gate_report_sentence(report_location, reviewed_task_id, governance_root)}",
         out,
         flags=re.MULTILINE,
     )
@@ -661,9 +676,9 @@ def build_derived_audit_task(
     gate_mode = card_carries_gate_contract_section(audit_metadata, repo_root)
     if gate_mode:
         report_line = (f"- **报告落位**:`{report_location}`(审计报告归审计卡 ID 目录; 裁决记录由门落 records/, 不是你的落点);"
-                       f" {report_frontmatter_clause(source_task_id)}。")
+                       f" {report_frontmatter_clause(source_task_id, repo_root)}。")
     else:
-        report_line = f"- **报告落位**:{zero_gate_report_sentence(report_location, source_task_id)}"
+        report_line = f"- **报告落位**:{zero_gate_report_sentence(report_location, source_task_id, repo_root)}"
 
     # Build body (mechanical signpost) — AIPOS-338 S2: fixed audit instructions
     artifact_list = "\n".join(f"- `{ref}`" for ref in artifact_refs) if artifact_refs else "- (see return record)"

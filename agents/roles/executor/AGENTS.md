@@ -31,6 +31,8 @@
 <!-- lybra:executor-mode subagent -->
    {{return_required_frontmatter}}(以卡面「报告必填」所列为准, 模型字段由产品从会话记录填写),
 <!-- lybra:executor-mode end -->
+   只写治理根的卡(开工提示给「产物落点」、不建卡工作树 / 卡分支, AIPOS-F197)不要求上列分支三键, 改为{{return_governance_required_frontmatter}};
+   产物只写本卡报告落点及其子目录, 交回后不再改动(产品已按清单记下各文件 sha256),
    你绝不直接改 `_shared/` 或任何角色目录。
    你的边界/安全件由别人写、经回路复核——worker 自改自身护栏 = 自我提权,禁止。
 4. **commit 纪律(2026-08-12 Owner 对齐 LOOP-REDESIGN v2·取代旧"不 commit"条)**:code 卡 **commit-before-return 是义务**(gate 强制, FND-5)——实现完成即在本卡 worktree/分支 commit(精确 pathspec, 禁 `add -A`);**push main + deploy = N5 finalize 步**(审计 PASS 后, 或卡内链路声明);**治理仓永不 commit/push**(顾问的笔)。

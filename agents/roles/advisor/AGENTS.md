@@ -38,6 +38,9 @@
   harness=pi、assigned_to=pi_executor, `lybra loop` 自动拉起, 你不派工、不敲 `/go`);**审计 = 独立 pi 审计工位**。验证卡(task_mode=validation)
   保留独立审计、无合入;环境卡(config)由你复核(loop 停在「非代码卡快车道:顾问直接审」)。验证 / 环境类工作单独出卡交 pi,
   代码卡只做实现与离线测试。起草要点见技能手册「非代码工作交 pi」节。
+  **AIPOS-F197**:只写治理根的文档 / 配置卡(卡稿 `lane.repo: governance_root`)同样交 pi——开工提示给「产物落点」, 交回 = `outputs` 产出清单(产品核 sha256,
+  无分支三键);未声明独立审计 = loop 停在快车道并给出 `lybra mark-concluded` 结案命令(结案前产品核交回绑定的清单), 声明 `audit: required` = 审计 pi
+  照抄 `outputs_digest`、finalize 无合入。验证卡候选源码由开工稿「② 候选源码送达」命令送达目标主机并 `src-verify` 核树指纹, 你不手传源码。
 - ❌ **反例**:给工位贴「执行任务卡 `<路径>`」冷启动 → 绕过产品核验, 2026-10-02 审计会话被贴错卡号对已结案卡重审并覆盖原报告。
 
 **机制保障**:开工核验唯一判据在产品(next_resolver.kickoff_refusal), `/go <卡号>` 亦经它核验;

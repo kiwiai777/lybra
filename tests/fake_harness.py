@@ -18,6 +18,11 @@
     validate   AIPOS-F196 (executor card only): fixed-candidate validation card (no worktree): run the kickoff's validation-root
                ssh commands (directory-chain init-run, then helper check of the screenshot path), write a fake screenshot into the
                run directory over `ssh <alias>`, copy it to the report slot artifacts/, write RETURN with the product-given values
+               (AIPOS-F197: between init-run and the screenshot, deliver the candidate source with the kickoff's command and run the
+               kickoff's src-verify; both outputs go to artifacts/commands.txt)
+    docs       AIPOS-F197 (executor card only): governance-root-only card (no worktree): write a doc into the report slot artifacts/
+               named by the kickoff's「产物落点」and a RETURN whose frontmatter `outputs` lists it (no branch keys)
+  审计卡: 开工提示给出 `- outputs_digest: <值>(` (AIPOS-F197 被审卡只写治理根)= 报告写 verdict + outputs_digest(照抄), 否则写被审 tip
   FAKE_HARNESS_LOG: 目录; 收到的 argv[1](kickoff)按字节原样落 <卡号>.kickoff, cwd 落 <卡号>.cwd(供逐字节比对)
 事件里故意含一行凭据字样、一个未知事件类型、一行非 JSON(验汇总隐去/计数不刷屏)。
 """
@@ -77,6 +82,16 @@ def reviewed_of(task_id: str) -> str | None:
 
 def do_work(task_id: str, kickoff: str, sha: str | None = None) -> None:
     report = Path(field(kickoff, "报告落点"))
+    digest = re.search(r"^- outputs_digest: ([0-9a-f]{64})\(", kickoff, re.M)
+    if reviewed_of(task_id) and digest:
+        # AIPOS-F197: 被审卡只写治理根 = 报告绑产品给出的产出清单指纹(照抄)
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(frontmatter({"task_id": task_id, "reviewed_task_id": reviewed_of(task_id), "verdict": "PASS",
+                                       "outputs_digest": digest.group(1)},
+                                      "# 审计报告\n\n## 一句话结论\n产出清单逐项复核通过(假 harness)。\n"), encoding="utf-8")
+        pi_session(report, "fake-audit-model")
+        emit({"type": "tool_execution_end", "toolCallId": "t2", "toolName": "write", "isError": False, "result": {"content": []}})
+        return
     if reviewed_of(task_id):
         tip = re.search(r"^- commit_sha: ([0-9a-f]{40})\(", kickoff, re.M)
         if not tip:
@@ -116,6 +131,16 @@ def do_validate(task_id: str, kickoff: str) -> None:
     log.append(f"$ {init}\nexit {proc.returncode}\n{proc.stdout.strip()}{proc.stderr.strip()}")
     if proc.returncode != 0 or not proc.stdout.strip().splitlines()[-1].startswith("INIT_OK"):
         raise SystemExit("fake_harness: init-run failed:\n" + log[-1])
+    # AIPOS-F197 件④: 候选源码送达 + 目标主机核树指纹(命令只取自开工提示; 本机形 / ssh 形同一取法)
+    src_line = next((ln for ln in kickoff.splitlines() if "② 候选源码送达" in ln), "")
+    if src_line:
+        deliver = (re.search(r"运行 `([^`]+)`\(只把已提交", src_line) or re.search(r"解到 `[^`]+`: `([^`]+)`; 再核对", src_line)).group(1)
+        verify = re.search(r"\): `([^`]+)`; 只认末行 `SRC_OK`", src_line).group(1)
+        for label, command in (("deliver", deliver), ("verify", verify)):
+            proc = subprocess.run(["bash", "-o", "pipefail", "-c", command], capture_output=True, text=True, timeout=120)
+            log.append(f"$ {command}\nexit {proc.returncode}\n{proc.stdout.strip()}{proc.stderr.strip()}")
+            if proc.returncode != 0 or (label == "verify" and not proc.stdout.strip().splitlines()[-1].startswith("SRC_OK")):
+                raise SystemExit(f"fake_harness: source {label} failed:\n" + log[-1])
     target = f"{run_dir}/screenshot.png"
     command = check.replace("<目标>", target)
     proc = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=120)
@@ -132,6 +157,22 @@ def do_validate(task_id: str, kickoff: str) -> None:
     emit({"type": "tool_execution_start", "toolCallId": "t2", "toolName": "bash", "args": {"command": f"ssh {alias} (validation run)"}})
     report.write_text(frontmatter(values, f"# RETURN — {task_id}\n\n## 一句话结论\n固定候选验证完成(假 harness): 截图见 artifacts/screenshot.png。\n\n"
                                           f"## 证据\n- run 目录 {run_dir}\n- artifacts/commands.txt\n"), encoding="utf-8")
+    pi_session(report, "fake-exec-model")
+    emit({"type": "tool_execution_end", "toolCallId": "t2", "toolName": "write", "isError": False, "result": {"content": []}})
+
+
+def do_docs(task_id: str, kickoff: str) -> None:
+    """AIPOS-F197: governance-root-only card (no worktree) driven only by the product kickoff text (产物落点 + outputs contract)."""
+    note = field(kickoff, "产物落点")
+    report = Path(field(kickoff, "报告落点"))
+    if "- outputs: (" not in kickoff or "commit_sha" in kickoff:
+        raise SystemExit("fake_harness: governance-root kickoff 缺 outputs 契约或仍要求分支三键")
+    doc = report.parent / "artifacts" / f"{task_id.lower()}-guide.md"
+    doc.parent.mkdir(parents=True, exist_ok=True)
+    doc.write_text(f"# {task_id} 文档产物(假 harness)\n\n依据开工提示: {note[:40]}…\n", encoding="utf-8")
+    emit({"type": "tool_execution_start", "toolCallId": "t2", "toolName": "write", "args": {"path": str(doc)}})
+    report.write_text(f"---\noutputs:\n- {doc}\n---\n# RETURN — {task_id}\n\n## 一句话结论\n文档已写到报告落点 artifacts/(假 harness)。\n",
+                      encoding="utf-8")
     pi_session(report, "fake-exec-model")
     emit({"type": "tool_execution_end", "toolCallId": "t2", "toolName": "write", "isError": False, "result": {"content": []}})
 
@@ -204,6 +245,10 @@ def main() -> int:
         return 0
     if mode == "validate" and not reviewed_of(task_id):
         do_validate(task_id, kickoff)
+        emit({"type": "agent_end", "messages": []})
+        return 0
+    if mode == "docs" and not reviewed_of(task_id):
+        do_docs(task_id, kickoff)
         emit({"type": "agent_end", "messages": []})
         return 0
     do_work(task_id, kickoff)

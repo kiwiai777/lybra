@@ -23,7 +23,7 @@ from typing import Any
 from tools.aipos_cli.next_resolver import (
     REPO_ROOT,
     _find_task_in_queue,
-    card_kickoff_without_worktree,
+    card_follows_candidate_subject,
     card_needs_worktree,
     carried_kickoff_line,
     card_report_contract,
@@ -126,8 +126,8 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
         "lane": intent["lane"],
         "code_repo": str(code_repo),
         "needs_worktree": needs_worktree,
-        # AIPOS-F196 件①: 固定候选验证卡(及其审计卡)不建树的说明不同于「只写治理根」(判据 next_resolver.card_kickoff_without_worktree)
-        "candidate_subject": (not needs_worktree) and card_kickoff_without_worktree(governance_root, {**fm, "task_id": task_id}),
+        # AIPOS-F196 件①: 固定候选验证卡(及其审计卡)不建树的说明不同于「只写治理根」(判据 next_resolver.card_follows_candidate_subject)
+        "candidate_subject": (not needs_worktree) and card_follows_candidate_subject(governance_root, {**fm, "task_id": task_id}),
         "worktree": str(worktree) if needs_worktree else None,
         "branch": branch if needs_worktree else None,
         "return_path": str(return_path),

@@ -462,6 +462,33 @@ lybra loop --task-id <卡ID> --workspace-root <治理根>
 ```
    loop 自动拉起 pi(开工提示含本卡验证根节与经 ssh 的命令); 交回 → 派审 → 审计 pi → 裁决绑候选 → finalize(无合入)→ 结案。
    收口: 验证结束 `validation-root run-finish`(绑定了模拟器带 `--sim-evidence`)。
+   **候选源码送达(AIPOS-F197)**: run-start 输出与开工稿(章程验证根节同源)在目录链初始化之后给「② 候选源码送达」两条命令——
+   送达 = 在治理根所在机 `git -C <候选所在仓> archive --prefix=src/ <候选> | ssh <别名> 'tar -x -C <run 目录>'`(只送已提交的候选树;
+   pi 在目标主机本机时为本机 `| tar -x -C <run 目录>` 形); 核对 = helper `src-verify`(目标主机按 git 规则算 `<run 目录>/src` 的 tree 指纹,
+   须 = 候选 tree, 末行 `SRC_OK`; 混入未提交改动 / 送错版本 = `DENY SRC_TREE_MISMATCH`, 改参凑指纹 = `SRC_SEAL_MISMATCH`), 证据在 run 目录
+   `.lybra-vr/src-verify.jsonl`。执行体与审计体照抄开工稿命令, 你不手传源码、不让执行体 rsync / scp; 重取命令 = 重取开工稿或
+```bash
+lybra project validation-root init-command <项目名> --home-root <home根> --id <声明id> --json
+```
+   (`source_delivery` 字段)。验证卡起草要点: 正文写清「先送达候选源码并核对 SRC_OK, 再构建 / 起模拟器」, 截图与 src-verify 证据同列报告。
+
+#### 文档 / 配置卡只写治理根交 pi(AIPOS-F197: 不建卡工作树, 交回 = 产出清单)
+**何时用**: 文档 / 治理 / 配置类卡的产物只落治理根(不写任何产品仓)。任何项目同一组命令, 在治理根所在机运行。
+1. **起草**: 卡稿 `task_mode: docs`(或 governance / config)、**`lane.repo: governance_root`**(保留值 = 只写治理根; 不写 lane.repo 会按
+   缺省派生到产品仓 = 写仓卡: 建卡分支, 交回仍是分支三键, 裁决 artifact_subject 门侧强制绑分支 tip)、`output_target: <报告落点>/artifacts/`、`artifacts`(要抽查的产物 path_glob);
+   要独立审计就写 `audit: required` + `audit_by`(否则由你复核)。不写 harness / assigned_to = 按 `set-execution` 缺省派 pi 执行工位。
+2. **开工**: loop 自动拉起 pi; 开工提示给「产物落点」(只写本卡报告落点及其子目录, 写权限边界判定; 不提分支 / 工作树)与报告必填
+   `outputs`(产出文件清单); 子 agent 开工稿(`lybra kickoff`)同一契约。
+3. **交回**: 产物入口按 `outputs` 逐个核对(存在 / 普通文件 / 非符号链接 / 写权限边界放行)并算 sha256, 门交回记录绑定清单指纹;
+   拒因 `INGEST_OUTPUTS_INVALID` / `INGEST_OUTPUT_MISSING` / `INGEST_OUTPUT_OUT_OF_BOUNDARY` 原文给出口(执行体修正后 loop 自动重试)。
+4. **你复核结案**(未声明独立审计): loop 停在「非代码卡快车道(只写治理根)」并给出结案命令(带交回绑定指纹); 复核产出后先预演再确认:
+```bash
+lybra mark-concluded --task-id <卡ID> --actor <你的顾问实例> --report-path <Return相对路径> --conclusion-note "顾问复核: 产出清单逐项核对通过" --dry-run
+```
+   (`--report-path` 用 loop 结束原文给出的 Return 相对路径; 去掉 `--dry-run` 即结案)。交回后产出被改 = 拒 `INGEST_OUTPUTS_CHANGED`(让执行体按改后产出
+   重写 Return, loop 重交回)。之后 N6 落账照常由 loop / `lybra next` 给出。
+5. **声明独立审计**: 审计 pi 开工提示「工作树: 不建(被审卡只写治理根…)」, 报告必填 `verdict` + `outputs_digest`(产品给值, 照抄); 入口与门侧裁决
+   都核「此刻清单指纹 = 交回绑定」; finalize 无合入(finalization `merge_commit = outputs:<指纹>`, 不推送不部署)后结案。
 
 #### `lybra mark-concluded` / `lybra queue close --conclusion-note`(AIPOS-F78 前置零⑨)
 **何时用**:已 PASS 但不走 finalize 的卡(如产物由续卡承接):
@@ -517,7 +544,8 @@ lybra next --actor <你的顾问实例>   # 项目扫描按归属看(AIPOS-F156)
 ### ⚖️ 审非代码卡(N4 分路)
 
 #### `lybra audit-verdict`
-**何时用**:你审非代码卡(docs/governance/config)时提交裁决。
+**何时用**:你审非代码卡(docs/governance/config)时提交裁决。只写治理根的卡(无卡分支, AIPOS-F197)按上文「文档 / 配置卡只写治理根交 pi」第 4 步
+`lybra mark-concluded` 结案(结案前产品核交回绑定的产出清单), 不走本命令。
 ```bash
 lybra audit-verdict --reviewed-task-id <卡ID> --verdict PASS \
   --actor <你的顾问实例> --findings-summary "..."            # 两阶段: 先预演

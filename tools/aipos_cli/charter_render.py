@@ -300,6 +300,9 @@ def charter_render_context(
 
     for kind in ("return", "verdict"):
         ctx[f"{kind}_required_frontmatter"] = render_report_frontmatter_clause(report_frontmatter_contract(kind))
+        # AIPOS-F197 件②: 只写治理根的卡(及其审计卡)的契约分形(transitions artifact_ingest.<kind>.governance_root), 同一渲染
+        ctx[f"{kind}_governance_required_frontmatter"] = render_report_frontmatter_clause(
+            report_frontmatter_contract(kind, governance=True, report_dir=f"{paths['return_root']}/<卡ID>/"))
     # AIPOS-F195 件①: 报告落点不得放代码文件(与开工稿同一渲染 governance_guardrails.slot_code_rule_text; 判据只读 code_files_blacklist)
     from tools.aipos_cli.governance_guardrails import load_guardrail_declarations, slot_code_rule_text
 

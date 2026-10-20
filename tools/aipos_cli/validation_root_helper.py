@@ -35,6 +35,11 @@ tools/aipos_cli/validation_root.py 直接 import 本模块的同名函数(声明
       <run>/.lybra-vr/xcode-side-effects.json; after 列出新增 / 删除 / 变更(系统副作用: 不删除、不冒充 run 产物), 退出码 0。
   三个 sim-* 与 sys-snapshot 全部 fail-closed: 退出码 3 = 拒(DENY 行给原因), 2 = 用法或环境错。
 
+  AIPOS-F197 候选源码送达核对(源码由治理根所在机 `git -C <候选仓> archive --prefix=src/ <候选> | … tar -x -C <run>` 送入, 完整命令由产品铸):
+  python3 - src-verify --run-dir <run> --candidate <候选 sha> --expect-tree <候选 tree> --expect-fingerprint <hfp1:…> --seal <vrs1:…>
+      按 git 规则对 <run>/src 算 tree 指纹(根下 .git 不计), 须 = 候选 tree(混入改动 / 多出缺文件 / 错版本 = 拒); 证据追加
+      <run>/.lybra-vr/src-verify.jsonl; 末行 `SRC_OK …` + 退出码 0 = 送达树即候选; 其余一律视为未送达。
+
 判定(全部 fail-closed):
   1. 本机指纹 = --expect-fingerprint, 否则 HOST_FINGERPRINT_MISMATCH(跨机调用核对);
   2. run 目录与目标须为规范绝对路径(无 `..` / `.` / 重复斜杠), 否则 PATH_NOT_CANONICAL;
@@ -331,6 +336,111 @@ def init_run(base: str, run_dir: str) -> dict[str, Any]:
     existing = plan["existing"] + [p for p in plan["missing"] if p not in created]
     modes = {p: oct(os.lstat(p).st_mode & 0o7777) for p in [*existing, *created] if is_within(p, base)}
     return {**plan, "existing": existing, "created": created, "modes": modes}
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F197 件④: 候选源码送达核对(src-verify): run 目录内 src/ 的 git tree 指纹 = 候选 tree(不含未提交改动 / 错版本)
+# ---------------------------------------------------------------------------
+
+SRC_DIR_NAME = "src"
+SRC_EVIDENCE = ".lybra-vr/src-verify.jsonl"
+_SRC_SEAL_RE = re.compile(r"^vrs1:[0-9a-f]{32}$")
+_TREE_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def src_seal(run_dir: str, candidate: str, tree: str, fingerprint: str) -> str:
+    """src-verify 命令的完整性封印(治理根侧铸命令与主机侧核对同一实现; 同 init_seal: 无密钥, 只防手改参数)。"""
+    payload = "\n".join(("lybra-vr-src-v1", run_dir, candidate, tree, fingerprint))
+    return "vrs1:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
+def _git_object(kind: bytes, data: bytes) -> str:
+    return hashlib.sha1(kind + b" " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
+
+
+def git_tree_hash(root: str) -> dict[str, Any]:
+    """目录树按 git 规则算 tree 指纹(纯标准库, 目标主机零安装): 普通文件 = blob(100644, 属主可执行 = 100755), 符号链接 = blob(链接目标,
+    120000), 目录 = 子 tree(40000; 空目录 git 不记, 跳过); 条目按 git 序(目录名按「名/」比较)。根下 `.git` 不计入(记 git_dir_present)。
+    其他类型(设备 / fifo / socket)= problems(fail-closed)。返回 {tree, files, symlinks, git_dir_present, problems}。"""
+    import stat as stat_mod
+
+    out: dict[str, Any] = {"tree": None, "files": 0, "symlinks": 0, "git_dir_present": False, "problems": []}
+
+    def tree_of(directory: str, top: bool) -> str | None:
+        entries: list[tuple[bytes, bytes, str]] = []
+        for name in os.listdir(directory):
+            if top and name == ".git":
+                out["git_dir_present"] = True
+                continue
+            path = os.path.join(directory, name)
+            st = os.lstat(path)
+            raw = os.fsencode(name)
+            if stat_mod.S_ISLNK(st.st_mode):
+                entries.append((raw, b"120000", _git_object(b"blob", os.fsencode(os.readlink(path)))))
+                out["symlinks"] += 1
+            elif stat_mod.S_ISDIR(st.st_mode):
+                sub = tree_of(path, False)
+                if sub is not None:
+                    entries.append((raw + b"/", b"40000", sub))
+            elif stat_mod.S_ISREG(st.st_mode):
+                with open(path, "rb") as handle:
+                    data = handle.read()
+                entries.append((raw, b"100755" if st.st_mode & stat_mod.S_IXUSR else b"100644", _git_object(b"blob", data)))
+                out["files"] += 1
+            else:
+                out["problems"].append(f"{path}: 非普通文件 / 目录 / 符号链接(mode {oct(st.st_mode)})")
+        if not entries:
+            return None
+        entries.sort(key=lambda e: e[0])
+        body = b"".join(mode + b" " + (name[:-1] if name.endswith(b"/") else name) + b"\0" + bytes.fromhex(sha)
+                        for name, mode, sha in entries)
+        return _git_object(b"tree", body)
+
+    out["tree"] = tree_of(root, True) or _git_object(b"tree", b"")
+    return out
+
+
+def _src_verify_cli(args: argparse.Namespace) -> int:
+    """src-verify: 核本 run 的 src/ = 候选 tree(封印核参数 → run 目录合规 → 算 tree → 比对), 证据追加 run 目录 .lybra-vr/src-verify.jsonl。"""
+    if not _SRC_SEAL_RE.match(args.seal or "") or not _TREE_RE.match(args.expect_tree or "") or not _TREE_RE.match(args.candidate or ""):
+        print("DENY [SRC_SEAL_MISMATCH] --seal / --expect-tree / --candidate 形不合(命令须原样取自产品)")
+        return EXIT_DENY
+    if src_seal(args.run_dir, args.candidate, args.expect_tree, args.expect_fingerprint) != args.seal:
+        print("DENY [SRC_SEAL_MISMATCH] 参数与产品铸的封印不符(run 目录 / 候选 / 期望 tree / 指纹被改动; 命令须原样取自产品)")
+        return EXIT_DENY
+    problem = _run_dir_problem(args.run_dir, SRC_EVIDENCE)
+    if problem:
+        print(f"DENY {problem}")
+        return EXIT_DENY
+    src = posixpath.join(args.run_dir, SRC_DIR_NAME)
+    verdict = judge_realpath(args.run_dir, src)
+    if not verdict["allowed"]:
+        print(f"DENY [{verdict['code']}] {verdict['reason']}")
+        return EXIT_DENY
+    if os.path.islink(src) or not os.path.isdir(src):
+        print(f"DENY [SRC_MISSING] {src} 不存在或不是真实目录(先按开工稿运行候选源码送达命令)")
+        return EXIT_DENY
+    got = git_tree_hash(src)
+    ok = not got["problems"] and got["tree"] == args.expect_tree
+    record = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "host": host_label(), "fingerprint": args.expect_fingerprint,
+              "run_dir": args.run_dir, "src": src, "candidate": args.candidate, "expect_tree": args.expect_tree, "actual_tree": got["tree"],
+              "files": got["files"], "symlinks": got["symlinks"], "git_dir_present": got["git_dir_present"], "problems": got["problems"],
+              "ok": ok}
+    evidence = posixpath.join(args.run_dir, SRC_EVIDENCE)
+    try:
+        os.makedirs(posixpath.dirname(evidence), mode=0o700, exist_ok=True)
+        with open(evidence, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    except OSError as exc:
+        print(f"ERROR [SRC_EVIDENCE_UNWRITABLE] {evidence}: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    if not ok:
+        why = "; ".join(got["problems"]) if got["problems"] else (
+            f"送达树 tree={got['tree']} ≠ 候选 {args.candidate} 的 tree {args.expect_tree}(混入未提交改动 / 多出或缺文件 / 送错版本)")
+        print(f"DENY [SRC_TREE_MISMATCH] {why}; 证据 {evidence}; 出口: 删掉 {src} 后按产品给的送达命令重送(禁手改 src 凑指纹)")
+        return EXIT_DENY
+    print(f"SRC_OK candidate={args.candidate} tree={got['tree']} files={got['files']} evidence={evidence}")
+    return EXIT_ALLOW
 
 
 # ---------------------------------------------------------------------------
@@ -778,6 +888,13 @@ def _parser() -> argparse.ArgumentParser:
     side.add_argument("--phase", required=True, choices=("before", "after"))
     side.add_argument("--pattern", action="append", default=[])
     side.add_argument("--temp-dir", default=None, help="System temp dir (default: getconf DARWIN_USER_TEMP_DIR)")
+    srcv = sub.add_parser("src-verify", help="AIPOS-F197: verify <run-dir>/src (delivered by `git archive <candidate> | tar -x`) hashes to the "
+                                             "candidate's git tree (no uncommitted edits / wrong version); evidence in the run directory")
+    srcv.add_argument("--run-dir", required=True)
+    srcv.add_argument("--candidate", required=True)
+    srcv.add_argument("--expect-tree", required=True)
+    srcv.add_argument("--expect-fingerprint", required=True)
+    srcv.add_argument("--seal", required=True)
     cmp_ = sub.add_parser("compare", help="Compare two snapshots; exit 0 unchanged, 4 changed")
     cmp_.add_argument("before")
     cmp_.add_argument("after")
@@ -856,6 +973,16 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_ALLOW
     if args.command == "init-run":
         return _init_run_cli(args)
+    if args.command == "src-verify":  # AIPOS-F197 件④
+        problem = _own_fingerprint_problem(args.expect_fingerprint)
+        if problem:
+            print(f"DENY {problem}")
+            return EXIT_DENY
+        try:
+            return _src_verify_cli(args)
+        except OSError as exc:
+            print(f"ERROR [HOST_IO_FAILED] {type(exc).__name__}: {exc}", file=sys.stderr)
+            return EXIT_ERROR
     if args.command in ("sim-create", "sim-verify", "sim-delete", "sys-snapshot"):
         problem = _own_fingerprint_problem(args.expect_fingerprint)
         if problem:

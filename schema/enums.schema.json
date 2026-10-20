@@ -267,7 +267,7 @@
       "product_repo_write": {
         "description": "AIPOS-F178(10-16 chris 岚图 LANTU-HW1 实撞: task_mode=docs + lane.repo=lantu-contracts 的卡认领成功却未建卡工作树, 开工说明却指向 <仓>/.worktrees/<ID>): 「卡是否写产品仓 = 是否建卡工作树」的唯一判据声明。每个值带 writes_product_repo(该模式缺省是否写产品仓); 卡面 lane.repo 显式出现且解析到的仓不是治理根自身 = 写仓(不论模式); 审计卡(audit)本身不写仓, 其只读取证工作树跟随被审卡(被审卡写仓 = 建取证树)。认领建树(queue_mutation)/ loop 认领后核验与自动补建 / `lybra queue repair` 缺树修复 / my-tasks 开工面 / card render 开工说明 / write_boundary / finalize 缺分支判定 / 审计裁决绑卡分支 tip 全部先问这一个判据, 禁第二判据。缺值或未知 task_mode = 缺省不写仓(行为同 F178 前)。",
         "single_implementation": "tools/aipos_cli/next_resolver.card_needs_worktree",
-        "lane_repo_rule": "卡面 lane.repo 非空且经 workspace_config.resolve_card_repo 解析到的仓 ≠ 治理根自身 = 写仓; 解析失败 = 按写仓(建树时给出拒因, fail-closed)。AIPOS-F196 例外: 交付主体为固定候选的模式(值带 subject=candidate, 见 candidate_subject)的 lane.repo = 候选所在仓(只读取证), 不算写仓, 不建卡工作树 / 卡分支",
+        "lane_repo_rule": "卡面 lane.repo 非空且经 workspace_config.resolve_card_repo 解析到的仓 ≠ 治理根自身 = 写仓; 解析失败 = 按写仓(建树时给出拒因, fail-closed)。AIPOS-F196 例外: 交付主体为固定候选的模式(值带 subject=candidate, 见 candidate_subject)的 lane.repo = 候选所在仓(只读取证), 不算写仓, 不建卡工作树 / 卡分支。AIPOS-F197: lane.repo 写保留值 card.schema intent_face.lane.governance_root_ref(governance_root)= 解析到治理根自身 = 不写仓(只写治理根的卡显式声明; 缺 lane.repo 的缺省派生不变)",
         "audit_rule": "审计卡 = 被审卡是否写仓(被审卡查不到 / 审计卡缺被审卡字段 = 按需建, 建树时给出拒因)"
       },
       "independent_audit": {
@@ -286,6 +286,11 @@
           "VALIDATION_CANDIDATE_INVALID": "候选不是完整 40 位小写 sha, 或不是卡 lane.repo 解析仓中已有提交",
           "VALIDATION_SOURCE_UNKNOWN": "来源卡不在任何队列目录(须为本项目已发布的卡)"
         }
+      },
+      "governance_outputs_subject": {
+        "description": "AIPOS-F197(gap #178/#201/#202, Owner 10-20: 非代码工作含文档一律拉 pi): 显式声明只写治理根的执行卡 = task_mode 为已声明的不写仓模式(docs / governance / config 等; writes_product_repo=false, 非固定候选, 非 audit)且卡面 lane.repo 非空、经唯一解析落到治理根自身(起草写保留值 card.schema intent_face.lane.governance_root_ref = governance_root; 无仓声明项目派生的治理根路径同此)= 不建卡工作树(唯一判据 card_needs_worktree = false), 交付主体 = 本卡写到治理根(报告落点)的产出文件清单。缺 lane.repo / 缺 task_mode 的存量不建树卡不算(行为同 F178); 缺 lane.repo 时发卡缺省派生到产品仓 = 写仓卡(行为不变)。一处声明的全部后果: ①开工面: 照常入选工位 next_card, 开工提示按 verbs.schema lybra_my_tasks.kickoff.template_governance_root 渲染(产物落点说明, 不提分支 / 工作树); 其审计卡(audit: required 时)不建取证树, 按 template_no_worktree; ②交回契约 = transitions.schema artifact_ingest.return.governance_root(Return frontmatter outputs 产出清单, 无分支三键; 产品计算并核对各文件 sha256, 交回记录绑定清单指纹); ③顾问复核(independent_audit=false 缺省)= loop 停在快车道并给出 `lybra mark-concluded --report-path <Return>` 结案命令, 结案前核此刻清单指纹 = 交回绑定; 声明独立审计 = 审计报告契约 artifact_ingest.verdict.governance_root(verdict + outputs_digest), 裁决 artifact_subject = 产出清单主体; ④N5 无合入: finalize 不碰产品仓 git, 核裁决绑定指纹 = 此刻指纹后写 finalization 记录(merge_commit = `outputs:<清单指纹>`, deploy_status / push_status = not_applicable 并写明原因), 照常 N6 结案。",
+        "single_implementation": "tools/aipos_cli/next_resolver.card_governance_outputs",
+        "subject_kind": "governance_outputs"
       },
       "routing_rules": {
         "code": "Full workflow N0→N6 (all nodes including independent audit N4 and finalize N5)",

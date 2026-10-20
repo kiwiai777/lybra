@@ -438,15 +438,15 @@
           "toolchain": "source",
           "kind": "command",
           "applies": "候选源码",
-          "render": "固定候选 {candidate} 的源码放 {run_dir}/src(只读同步自治理根所在机产品仓; 正式代码仍只在治理根所在机卡工作树改)",
-          "verify": "git -C {run_dir}/src rev-parse HEAD 输出须 = {candidate}",
-          "source": "chris 缺口报告 2026-10-19 修复要求 2: 固定 dev SHA 同步验证, 正式代码仍在 dev 修改"
+          "render": "固定候选 {candidate} 的源码只经产品铸的送达命令放 {src_dir}(AIPOS-F197: 命令见上文「② 候选源码送达」, 只送已提交的候选树; 禁从工作区 / 其他提交拷源码, 正式代码仍只在治理根所在机卡工作树改)",
+          "verify": "上文送达核对 src-verify 末行 SRC_OK + 退出码 0(目标主机按 git 规则算 {src_dir} 的 tree 指纹 = 候选 tree {src_tree})",
+          "source": "chris 缺口报告 2026-10-19 修复要求 2: 固定 dev SHA 同步验证, 正式代码仍在 dev 修改; AIPOS-F197(gap #202): 送达改为产品标准命令(git archive <候选> | tar -x)+ 目标主机树指纹核对"
         },
         {
           "toolchain": "ios",
           "kind": "command",
           "applies": "xcrun simctl create / delete(AIPOS-F194 本 run 专用模拟器; 只经 helper sim-create / sim-delete 调用, 角色不直接调 simctl)",
-          "render": "python3 {helper_path} sim-create --run-dir {run_dir} --expect-fingerprint {fingerprint} --device-type <设备型号 id> --runtime <运行时 id>(helper 内 = `xcrun simctl create {sim_name} <设备型号> <运行时>`, 在 Xcode 缺省设备集新建本 run 这一台); 结束 = helper sim-delete(内 = `xcrun simctl delete <本 run UDID>`)",
+          "render": "{sim_create}(AIPOS-F197: 按形态渲染——本机 = python3 <run 内 helper> …, 经 ssh = helper 管道 ssh 形; helper 内 = `xcrun simctl create {sim_name} <设备型号> <运行时>`, 在 Xcode 缺省设备集新建本 run 这一台); 结束 = {sim_delete}(内 = `xcrun simctl delete <本 run UDID>`)",
           "verify": "xcrun simctl help create 与 xcrun simctl help delete(只读): 用法须为 `create <name> <device type id> [<runtime id>]` 与 `delete <device> …`, 否则 BLOCK",
           "source": "Apple 未公开发布 simctl 文档(无 man 页 / 网页); 用法以目标主机 `xcrun simctl help create|delete` 为准——本卡 NOT_VERIFIED(治理根所在机非 macOS), 公开实践佐证: WebKit Tools/Scripts/webkitpy/xcode/simulated_device.py 与 Chromium ios/build/bots/scripts/iossim_util.py 均以 `xcrun simctl create <名> <设备型号 id> <运行时 id>` 建台、stdout 取 UDID"
         },

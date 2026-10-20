@@ -1054,7 +1054,9 @@ def build_mcp_return_record_markdown(
         metadata["agent_runtime"] = dict(agent_runtime)
     # AIPOS-F114 件①: 门交回记录绑定被交回产物(卡分支此刻 tip; next_resolver.return_binding_subject), 交回过期判据读它;
     # 非代码卡/不可解析时不带(与存量记录同形)
-    if isinstance(artifact_subject, dict) and str(artifact_subject.get("commit_sha") or "").strip():
+    # AIPOS-F197 件②: 只写治理根的卡 = 产出清单主体(outputs_digest, next_resolver.governance_outputs_manifest)
+    if isinstance(artifact_subject, dict) and (str(artifact_subject.get("commit_sha") or "").strip()
+                                               or str(artifact_subject.get("outputs_digest") or "").strip()):
         metadata["artifact_subject"] = dict(artifact_subject)
     
     # AIPOS-F49-fix1: self_check_waived 标记（Owner 强制放行）
@@ -1648,7 +1650,7 @@ def _skeleton_frontmatter(contract: list[dict[str, Any]]) -> str:
     return render_frontmatter_block({str(e["key"]): f"(待填写: {e['hint']})" for e in contract}, keys) + "\n"
 
 
-def build_return_skeleton_markdown(task_id: str) -> str:
+def build_return_skeleton_markdown(task_id: str, contract: list[dict[str, Any]] | None = None) -> str:
     """Build RETURN.md skeleton with fixed section headings (AIPOS-F65A 大项①).
     
     Claim confirm 时门在声明位创建骨架, 执行体只填不选址。
@@ -1666,7 +1668,8 @@ def build_return_skeleton_markdown(task_id: str) -> str:
     # 声明缺 = SchemaLoadError 向上抛(fail-closed: 原「出声后出无 frontmatter 骨架」退役——无键模板会让执行体照抄出被拒报告)。
     from tools.aipos_cli.next_resolver import report_frontmatter_contract
 
-    contract = report_frontmatter_contract("return", branch_task_id=task_id)
+    # AIPOS-F197 件②: contract = 调用方按卡给出的契约(只写治理根的卡 = return.governance_root 分形: outputs 产出清单); 缺 = 建树卡契约
+    contract = contract if contract is not None else report_frontmatter_contract("return", branch_task_id=task_id)
     frontmatter = _skeleton_frontmatter(contract)
     return frontmatter + f"""# RETURN — {task_id}
 
@@ -1695,7 +1698,8 @@ def build_return_skeleton_markdown(task_id: str) -> str:
 """
 
 
-def build_verdict_skeleton_markdown(audit_task_id: str, reviewed_task_id: str | None = None) -> str:
+def build_verdict_skeleton_markdown(audit_task_id: str, reviewed_task_id: str | None = None,
+                                   contract: list[dict[str, Any]] | None = None) -> str:
     """AIPOS-F89 件③c: 审计卡认领时的报告空模板(与真实报告同名同位: next_resolver.card_report_path)。
 
     frontmatter 键 = transitions artifact_ingest.verdict.required_frontmatter(verdict / commit_sha), 值为 `(待填写` 占位;
@@ -1706,7 +1710,9 @@ def build_verdict_skeleton_markdown(audit_task_id: str, reviewed_task_id: str | 
 
     subject = reviewed_task_id or "<被审卡ID>"
     # AIPOS-F93 件①: 键与逐键说明 = report_frontmatter_contract(声明单源, 分支 = 被审卡分支)
-    frontmatter = _skeleton_frontmatter(report_frontmatter_contract("verdict", branch_task_id=reviewed_task_id or None))
+    # AIPOS-F197 件②: contract = 调用方按卡给出的契约(被审卡只写治理根 = verdict.governance_root 分形); 缺 = 建树卡契约
+    frontmatter = _skeleton_frontmatter(contract if contract is not None
+                                        else report_frontmatter_contract("verdict", branch_task_id=reviewed_task_id or None))
     return frontmatter + f"""# 审计报告 — {audit_task_id}(被审 {subject})
 
 ## 一句话结论
