@@ -4279,7 +4279,7 @@
             "envelope": {
               "label": "Owner 签覆盖 pi 执行工位的信封",
               "why": "工位类角色接入须有覆盖该实例的生效 PreAuthorized 信封, 否则接入命令拒 ENROLL_ENVELOPE_MISSING; 由 Owner 亲自签发(或在看板信封页签发), 顾问不代签",
-              "expect": "预演列信封内容(未签); --confirm 经门签发并自动落账; 之后本页该步显示已完成",
+              "expect": "预演列信封内容(未签); --confirm 经门签发并自动落账; 之后本页该步显示已完成。要 loop 自动拉起该 pi 工位, 信封加 --launch-harness pi; --task-mode 只能选一种(去掉 = 不限卡类型)",
               "refused": "原样转告 Owner; 不补签未授权信封"
             },
             "enroll": {
@@ -4453,7 +4453,7 @@
             "envelope": {
               "label": "Owner signs an envelope covering the pi executor workstation",
               "why": "Enrolling a workstation role needs an active PreAuthorized envelope covering that instance, otherwise enrolment is refused with ENROLL_ENVELOPE_MISSING; the Owner signs it personally (or on the board envelope page), never the advisor",
-              "expect": "The preview lists the envelope (nothing signed); --confirm signs through the gate and lands it; this step then shows done",
+              "expect": "The preview lists the envelope (nothing signed); --confirm signs through the gate and lands it; this step then shows done. For the loop to launch this pi workstation add --launch-harness pi; --task-mode takes one type (drop it = any card type)",
               "refused": "Pass it to the Owner as is; never sign an envelope the Owner did not authorise"
             },
             "enroll": {

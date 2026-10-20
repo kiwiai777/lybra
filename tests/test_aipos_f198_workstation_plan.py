@@ -319,9 +319,9 @@ def _snapshot(name: str, page: str) -> None:
         return
     css = (REPO_ROOT / "web" / "board" / "static" / "readonly-pages.css").read_text(encoding="utf-8")
     Path(out).mkdir(parents=True, exist_ok=True)
-    page = re.sub(r"<details", "<details open", page)  # 截图展开折叠段(命令 / 话术 / 完整计划)
-    (Path(out) / f"{name}.html").write_text(page.replace('<link rel="stylesheet" href="/readonly-pages.css">', f"<style>{css}</style>"),
-                                            encoding="utf-8")
+    inline = page.replace('<link rel="stylesheet" href="/readonly-pages.css">', f"<style>{css}</style>")
+    (Path(out) / f"{name}.html").write_text(inline, encoding="utf-8")  # 原样(折叠段收起 = Owner 打开时所见)
+    (Path(out) / f"{name}-open.html").write_text(re.sub(r"<details", "<details open", inline), encoding="utf-8")  # 折叠段展开
 
 
 def _page_url(project: str, *, lang: str | None = None, pi_executor: str | None = None, modes: str = MODES, host: bool = True) -> str:
