@@ -350,6 +350,25 @@ body.rp-page { margin: 0; background: var(--surface-page); color: var(--ink); fo
 .rp-page .upgrade-project { background: var(--surface-card); border: var(--border-hairline); border-left: var(--accent-bar) solid var(--green);
   padding: 12px 20px; margin-bottom: 14px; }
 .rp-page .upgrade-item { margin: .4em 0; }
+/* workstation page (AIPOS-F198): status table, risks, GET form for the target division, plan steps, advisor messages */
+.rp-page .ws-intro { color: var(--muted); font-size: var(--text-note); margin: 6px 0 10px; }
+.rp-page .ws-status, .rp-page .ws-choose, .rp-page .ws-plan, .rp-page .ws-prompts { background: var(--surface-card); border: var(--border-hairline);
+  border-left: var(--accent-bar) solid var(--green); padding: 12px 20px; margin-bottom: 14px; }
+.rp-page .ws-table th { width: 12em; vertical-align: top; }
+.rp-page .ws-table tr.rp-alert th { border-left: var(--accent-bar) solid var(--state-alert); }
+.rp-page .ws-risks li.rp-alert { margin: 3px 0; }
+.rp-page .ws-form { display: grid; gap: 8px; max-width: 46em; }
+.rp-page .ws-modes { border: var(--border-hairline); padding: 6px 12px; margin: 0; background: var(--white); }
+.rp-page .ws-modes legend { font-size: var(--text-small); color: var(--muted); padding: 0 4px; }
+.rp-page .ws-check { margin-right: 1.2em; }
+.rp-page .ws-field { display: grid; gap: 2px; font-size: var(--text-small); color: var(--muted); }
+.rp-page .ws-field input { color: var(--ink); }
+.rp-page .ws-steps { margin: 0; padding-left: 22px; display: grid; gap: 6px; }
+.rp-page .ws-why { margin: 2px 0; font-size: var(--text-note); }
+.rp-page .ws-chip-pending { background: var(--state-alert); color: var(--white); border-color: var(--state-alert); }
+.rp-page .ws-chip-done { background: var(--green-bright); color: var(--white); border-color: var(--green-bright); }
+.rp-page .ws-chip-check { background: var(--white); color: var(--green); border-color: var(--green); }
+.rp-page .ws-nothing { font-weight: 600; color: var(--green); }
 @media (max-width: 760px) {
   .rp-page .rp-subs th:nth-child(5), .rp-page .rp-subs td:nth-child(5) { display: none; }
 }

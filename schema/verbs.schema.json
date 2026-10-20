@@ -4062,6 +4062,470 @@
         }
       }
     },
+    "lybra_project_workstation_plan": {
+      "description": "AIPOS-F198(Owner 10-20: 「工位的设置和切换能否产品化? 看板上每个项目里有一个工位设置, 切换后可以指导用户转给顾问提示词来切换, 顾问切换用的都是产品指令」; chris 非代码交 pi 切换由顾问手写长提示词、依赖顺序靠人记的产品化): `lybra project workstation-plan [项目] [--home-root] [--workspace-root] [--pi-modes validation,config,docs] [--pi-executor <实例>] [--workspace <工位目录>] [--host <主机> --ssh-alias <别名>] [--owner-ref <已有 Owner 决策引用>] [--lang zh|en] [--json]` 与看板 board.page_path「工位设置」页同一推导、同一文本(只读, 零写入, 不连门, 不取凭据值)。现状: 子 agent 执行者 / pi 执行工位 / 审计工位(实例、接入状态 = enrollment.instance_enrollment, 工位位置 = 其 workstation_location, 章程状态 = distribution_sync.charter_local_state: sync --dry-run 同一判据换本产品树清单, 手写判定 = hand_maintained_charters)、pi_allowed_task_modes(workspace_config.project_execution)、目标主机 ssh 别名(validation_root.project_validation_hosts)、验证根声明摘要(project_validation_roots + declaration_status)、各卡类型派给谁(workspace_config.card_execution_mode + next_resolver.task_mode_independent_audit), 缺项与风险人话标出。目标分工(卡类型交 pi / pi 执行工位实例与工位目录 / 目标主机与 ssh 别名 / 已有 Owner 决策引用)= CLI 参数或看板 URL 参数(board.params; 选择不写服务器)。计划 = steps 依赖序(只追加): 决策日志记录 Owner 分工 → Owner 签覆盖信封(workstation_wiring.derive_effective_owner_policy_ref 判覆盖; 出口命令 envelope_mint_exit)→ 接入(roles enroll-deliver; 全局 --workspace-root 定治理根)→ 手写章程正式接管(sync --adopt-hand-charter)/ 章程同步 → set-execution → validation-root set-host → 核验(check-workstation)→ 通知专项顾问; 每步现状推导(已完成 / 待办 / 不适用), 待办给预演与确认两条命令、预期要点与被拒处理; 生成两段话术(给项目总顾问 = 只列待办步; 给各专项顾问 = 目标分工下各卡类型分派规则, 与 F196/F197 顾问技能同源)。看板不新增写例外(Owner 10-16 只读 + 两写例外不变)。换项目: 任何项目同一组命令与声明, 不写死项目 ID / 路径 / 卡号前缀; 换机器: 路径全读 project.json 与接入日志, 工位在他机 = 章程不核(标出); 配置演进: 不新增 project.json 键, 步骤 / 文案只追加。",
+      "phase": "render",
+      "surface": [
+        "cli",
+        "board"
+      ],
+      "cli_command": "lybra project workstation-plan",
+      "single_implementation": "tools/aipos_cli/workstation_plan.py(declaration / collect_status / build_plan / render_lines / collect_page)+ distribution_sync.charter_local_state(章程状态)+ web/board/readonly_pages.render_workstation(渲染)+ web/board/app.py(路由)",
+      "offered_pi_modes": [
+        "validation",
+        "config",
+        "docs"
+      ],
+      "routing_modes": [
+        "code",
+        "validation",
+        "config",
+        "docs",
+        "governance"
+      ],
+      "steps": [
+        {
+          "name": "decision",
+          "by": "advisor"
+        },
+        {
+          "name": "envelope",
+          "by": "owner"
+        },
+        {
+          "name": "enroll",
+          "by": "advisor"
+        },
+        {
+          "name": "charter_adopt",
+          "by": "advisor"
+        },
+        {
+          "name": "charter_sync",
+          "by": "advisor"
+        },
+        {
+          "name": "execution",
+          "by": "advisor"
+        },
+        {
+          "name": "ssh_host",
+          "by": "advisor"
+        },
+        {
+          "name": "verify",
+          "by": "advisor"
+        },
+        {
+          "name": "notify",
+          "by": "advisor"
+        }
+      ],
+      "step_states": [
+        "pending",
+        "done",
+        "na",
+        "check"
+      ],
+      "decision": {
+        "title": "Owner workstation division {project}",
+        "body": "Owner 定分工: {division}。代码卡由子 agent 执行, 审计由独立 pi 审计工位 {auditor} 执行。计划由 lybra project workstation-plan 生成, 实际状态以产品记录为准。"
+      },
+      "commands": {
+        "decision_preview": "lybra governance add decision --governance-root {governance_root} --title {title} --body {body} --dry-run",
+        "decision_confirm": "lybra governance add decision --governance-root {governance_root} --title {title} --body {body}",
+        "decision_land": "lybra governance-commit --governance-root {governance_root} --actor {advisor} --paths {decision_rel}",
+        "enroll_preview": "lybra --workspace-root {governance_root} roles enroll-deliver --role {role} --instance {instance} --governance-root {governance_root} --workspace {workspace} --actor {advisor} --owner-authorization-ref {policy} --dry-run",
+        "enroll_confirm": "lybra --workspace-root {governance_root} roles enroll-deliver --role {role} --instance {instance} --governance-root {governance_root} --workspace {workspace} --actor {advisor} --owner-authorization-ref {policy} --confirm",
+        "execution_preview": "lybra project set-execution --workspace-root {governance_root} --subagent-executor {subagent} --auditor {auditor}{extra} --dry-run",
+        "execution_confirm": "lybra project set-execution --workspace-root {governance_root} --subagent-executor {subagent} --auditor {auditor}{extra} --confirm --actor {advisor}",
+        "ssh_host_preview": "lybra project validation-root set-host --workspace-root {governance_root} --host {host} --ssh-alias {alias} --owner-ref {owner_ref} --dry-run",
+        "ssh_host_confirm": "lybra project validation-root set-host --workspace-root {governance_root} --host {host} --ssh-alias {alias} --owner-ref {owner_ref} --confirm --actor {advisor}",
+        "verify": "lybra project check-workstation {project} --home-root {home_root} --instance {instance} --harness {harness}"
+      },
+      "placeholders": {
+        "advisor": "<你的顾问实例>",
+        "policy": "<信封ID>",
+        "workspace": "<工位目录>",
+        "pi_executor": "<pi执行实例>",
+        "subagent": "<子agent执行实例>",
+        "auditor": "<审计实例>"
+      },
+      "texts": {
+        "zh": {
+          "title": "工位设置 · {project}",
+          "title_none": "工位设置",
+          "intro": "看清现在谁在做哪类卡、哪些工位没接好; 选好想要的分工后, 生成交给顾问的切换提示词。看板不执行任何切换, 由顾问用产品命令执行。",
+          "head": "工位设置 · 项目 {project}(治理根 {governance_root})",
+          "status_heading": "现状",
+          "row_subagent": "子 agent 执行者",
+          "row_pi_executor": "pi 执行工位",
+          "row_auditor": "审计工位",
+          "row_pi_modes": "交 pi 的卡类型",
+          "row_hosts": "目标主机与 ssh 别名",
+          "row_validation_roots": "验证根声明",
+          "row_line": "{label}: {value}",
+          "instance_value": "{instance}({enrollment})",
+          "workstation_value": "工位 {dir}",
+          "charter_value": "章程: {state}",
+          "undeclared": "(未声明)",
+          "enrollment_enrolled": "已接入",
+          "enrollment_not_enrolled": "未接入",
+          "enrollment_no_workstation": "已接入但无工位位置",
+          "enrollment_error": "接入状态读不出",
+          "charter_current": "产品渲染(最新)",
+          "charter_stale": "产品渲染已过期(需同步)",
+          "charter_missing": "缺失",
+          "charter_hand_maintained": "手写受保护(须正式接管)",
+          "charter_not_workstation": "工位未接入(无 .lybra/role)",
+          "charter_other_project": "非本项目工位",
+          "charter_unverifiable": "核不了",
+          "charter_remote": "工位在他机(本机不核)",
+          "modes_none": "(无: 全部卡由子 agent 执行)",
+          "list_sep": "、",
+          "host_value": "{host} → ssh 别名 {alias}",
+          "host_no_alias": "{host} → 未声明 ssh 别名",
+          "none": "(无)",
+          "vr_value": "{total} 条(生效 {active} / 已到期 {expired} / 已撤销 {revoked} / 未绑定 {unbound}); 进行中 run {runs}; 主机 {hosts}",
+          "routing_heading": "各卡类型当前派给谁",
+          "route_line": "{mode} → {who}; 审计: {audit}",
+          "route_pi": "pi 执行工位 {instance}(loop 自动拉起)",
+          "route_subagent": "子 agent {instance}(顾问派工)",
+          "route_undeclared": "未声明执行方式(按卡面 assigned_to)",
+          "audit_independent": "独立审计 {auditor}",
+          "audit_advisor": "顾问复核",
+          "audit_row": "审计卡 → 审计工位 {auditor}",
+          "risks_heading": "风险",
+          "risk_line": "⚠ {text}",
+          "risk_execution_undeclared": "执行方式未声明: 卡按卡面 assigned_to 派; 先声明执行方式(下方计划含声明一步)",
+          "risk_execution_error": "执行方式声明读不出: {error}",
+          "risk_instance": "{role} {instance}: {state}",
+          "risk_charter": "{role} {instance} 章程: {state}",
+          "risk_host_no_alias": "验证根声明用到目标主机 {host}, 但未声明 ssh 别名(pi 在本机经 ssh 操作该主机时需要)",
+          "risk_vr_error": "验证根声明读不出: {error}",
+          "risk_target_no_pi": "目标要把卡交 pi, 但没有选 pi 执行工位实例",
+          "risk_target_no_dir": "pi 执行工位 {instance} 未接入, 也没有给工位目录",
+          "risk_target_dir_differs": "pi 执行工位 {instance} 已接入于 {current}, 与所选目录 {chosen} 不同(迁移工位用 lybra project relocate-workstation)",
+          "risk_target_slot_taken": "工位目录 {dir} 已登记实例 {other}, 不是 {instance}",
+          "risk_target_no_host": "验证卡交 pi, 但没有选目标主机与 ssh 别名(验证在他机时需要)",
+          "risk_candidates_error": "工位候选读不出: {error}",
+          "target_heading": "目标分工",
+          "target_pi": "{modes} 交 pi 执行工位 {instance}(工位 {dir}); 其余卡类型仍由子 agent 执行",
+          "target_none": "不交 pi: 全部卡由子 agent 执行",
+          "target_host": "目标主机 {host} 经 ssh 别名 {alias}",
+          "target_owner_ref": "Owner 决策引用: {ref}",
+          "plan_heading": "计划(按依赖排序; 看板不执行, 由顾问用产品命令执行; 每步先预演后确认)",
+          "step_line": "{n}. [{state}] {label}",
+          "state_pending": "待办",
+          "state_done": "已完成",
+          "state_na": "不适用",
+          "state_check": "核验",
+          "step_detail": "   现状: {detail}",
+          "step_why": "   为什么: {why}",
+          "step_by_owner": "   由谁: Owner 亲自执行(或看板信封页 {url})",
+          "step_preview": "   预演: {command}",
+          "step_confirm": "   确认: {command}",
+          "step_land": "   落账: {command}",
+          "step_check": "   核验: {command}",
+          "step_expect": "   预期: {expect}",
+          "step_refused": "   被拒: {refused}",
+          "nothing": "目标与现状一致, 无需切换。",
+          "lead_heading": "给项目总顾问的话(执行切换)",
+          "specialist_heading": "给各专项顾问的话(分派规则)",
+          "lead_intro": "请按 Owner 定的分工, 用产品命令完成项目 {project} 的工位切换。看板不执行, 由你执行: 每步先预演核对输出, 再确认; 被拒原样报告 Owner, 不换方式绕过、不手改 project.json、不读凭据。",
+          "lead_target": "目标: {target}",
+          "lead_skip": "{n}. {label}: 已完成, 跳过",
+          "lead_nothing": "现状已符合目标分工, 无需执行切换命令; 运行核验命令确认即可。",
+          "lead_outro": "全部完成后运行核验命令, 再把「给各专项顾问的话」原样转给各专项顾问。",
+          "specialist_intro": "项目 {project} 的卡类型分派(Owner 决策: {ref}):",
+          "specialist_rule": "- {mode}: {who}; 审计: {audit}",
+          "specialist_audit": "- 审计卡: 独立 pi 审计工位 {auditor}",
+          "specialist_outro": "起草时不写 harness / assigned_to 即按执行方式声明缺省派; 代码卡只做实现与离线测试, 验证 / 环境类工作单独出卡交 pi。起草要点见顾问技能手册「非代码工作交 pi」「文档 / 配置卡只写治理根交 pi」两节。在途卡不自动重派。",
+          "ref_pending": "<第 1 步写出的决策记录>",
+          "form_heading": "选择目标分工",
+          "form_note": "选择只在本页地址里(URL 参数), 不写服务器; 生成的提示词转给顾问执行。",
+          "form_modes": "交 pi 的卡类型",
+          "form_pi_executor": "pi 执行工位实例(既有或新实例)",
+          "form_workspace": "工位目录(既有工位可留空)",
+          "form_host": "目标主机(可空)",
+          "form_ssh_alias": "ssh 别名",
+          "form_owner_ref": "已有 Owner 决策引用(可空)",
+          "form_submit": "生成计划",
+          "board_note": "看板不执行切换: 把下面的话复制给顾问, 由顾问用产品命令执行。",
+          "plan_text_summary": "完整计划(与 lybra project workstation-plan 同一文本)",
+          "copy_summary": "展开复制",
+          "input_error": "输入不合法: {error}",
+          "error_mode": "卡类型 {mode} 不在可选值 {allowed}",
+          "error_instance": "实例名 {instance} 不合命名模板(<前缀>.<项目>.<主机>)",
+          "error_instance_reserved": "pi 执行工位不能是审计工位或子 agent 执行者({instance})",
+          "error_workspace": "工位目录须为绝对路径: {workspace}",
+          "error_host": "目标主机与 ssh 别名须成对给出, 且只含字母数字 . _ - @: {value}",
+          "error_owner_ref": "Owner 决策引用须为非空单行: {value}",
+          "page_error": "工位设置页读不出: {error}",
+          "unknown_project": "未注册项目: {project}",
+          "projects_label": "项目",
+          "mode_code": "代码卡",
+          "mode_validation": "验证卡",
+          "mode_config": "环境卡",
+          "mode_docs": "文档卡",
+          "mode_governance": "治理卡",
+          "steps": {
+            "decision": {
+              "label": "决策日志记录 Owner 分工",
+              "why": "后续各步的 Owner 引用(--owner-ref)指向这条决策; 实际状态以产品记录为准",
+              "expect": "预演给出将写的 decision_log 路径与正文; 确认后输出 Created decision_log entry: <路径>, 再按落账命令提交",
+              "refused": "File already exists = 同日同题已有记录: 用该记录作 Owner 引用(本页「已有 Owner 决策引用」填它, 或 CLI --owner-ref)重新生成计划"
+            },
+            "envelope": {
+              "label": "Owner 签覆盖 pi 执行工位的信封",
+              "why": "工位类角色接入须有覆盖该实例的生效 PreAuthorized 信封, 否则接入命令拒 ENROLL_ENVELOPE_MISSING; 由 Owner 亲自签发(或在看板信封页签发), 顾问不代签",
+              "expect": "预演列信封内容(未签); --confirm 经门签发并自动落账; 之后本页该步显示已完成。要 loop 自动拉起该 pi 工位, 信封加 --launch-harness pi; --task-mode 只能选一种(去掉 = 不限卡类型)",
+              "refused": "原样转告 Owner; 不补签未授权信封"
+            },
+            "enroll": {
+              "label": "接入 pi 执行工位(签码 + 接入一体, 码不出进程)",
+              "why": "执行方式声明要求 pi 执行工位已接入本项目, 否则声明命令拒 EXECUTION_INSTANCE_NOT_ENROLLED; 工位目录不迁移",
+              "expect": "预演列角色 / 实例 / 治理根 / 落点 / 覆盖信封(不签码、零写入); 确认后接入日志多一行 land(workstation=<工位目录>)",
+              "refused": "ENROLL_ENVELOPE_MISSING = 回到「Owner 签信封」一步; 其他拒因原样报告, 不换方式绕过"
+            },
+            "charter_adopt": {
+              "label": "正式接管工位手写章程",
+              "why": "工位 AGENTS.md 是带手工维护标记的手写章程, sync(含 loop 拉起前自动 sync)一律拒覆盖(CHARTER_HAND_MAINTAINED); 正式解除只走产品命令且须 Owner 裁决引用, 禁手删标记",
+              "expect": "预演列将备份的路径(would-backup); 执行后原章程备份为 AGENTS.md.hand-maintained-<时刻>.bak(不删), 采纳记录在工位 .lybra/charter-adoptions.jsonl, 章程变为产品渲染; 工位仓若是 Owner 的集中仓, 备份与新章程由 Owner 提交",
+              "refused": "原样报告; 不手改章程、不删标记"
+            },
+            "charter_sync": {
+              "label": "同步工位章程(产品渲染)",
+              "why": "工位章程缺失或不是最新的产品渲染; loop 拉起前也会自动 sync, 先同步可提前暴露问题",
+              "expect": "预演列 would-render 章程件; 执行后核验命令里章程新鲜度为 ✓",
+              "refused": "原样报告(输出自带拒因与下一步)"
+            },
+            "execution": {
+              "label": "声明执行方式(哪些卡类型交 pi 执行工位)",
+              "why": "列内卡类型起草缺省 harness=pi、assigned_to=pi 执行工位, loop 自动拉起; 代码卡不列 = 仍由子 agent 执行; 审计恒为独立 pi 审计工位",
+              "expect": "预演列 project.json execution diff(零写入); 确认后写入并自动落账",
+              "refused": "EXECUTION_INSTANCE_NOT_ENROLLED = 先完成接入一步; 其他拒因原样报告, 不手改 project.json"
+            },
+            "ssh_host": {
+              "label": "声明目标主机 ssh 别名",
+              "why": "pi 在治理根所在机经 ssh 操作目标主机(如 Mac)时, 开工提示 / 章程验证根节 / init-command 才渲染 ssh <别名> 形; 约束 = 章程 + 目标主机 helper 自查 + 审计追责(无硬沙箱)",
+              "expect": "预演列 validation_roots.hosts diff(零写入); 确认后写入并自动落账",
+              "refused": "原样报告; 别名须是治理根所在机 ~/.ssh/config 的 Host 名"
+            },
+            "verify": {
+              "label": "核验 pi 执行工位",
+              "why": "接入位置、章程新鲜度、拉起条件一次核(只读)",
+              "expect": "各项 ✓(章程新鲜度 ✓)",
+              "refused": "✗ 项按输出给的修法命令处理"
+            },
+            "notify": {
+              "label": "把分工说明转给各专项顾问",
+              "why": "专项顾问按卡类型起草与派工, 须知道新分工; 在途卡不自动重派",
+              "expect": "各专项顾问收到下方「给各专项顾问的话」",
+              "refused": "-"
+            }
+          }
+        },
+        "en": {
+          "title": "Workstations · {project}",
+          "title_none": "Workstations",
+          "intro": "See who works which card types now and which workstations are not wired up; pick the division you want and get the switch-over message for the advisor. The board runs no switch: the advisor runs the product commands.",
+          "head": "Workstations · project {project} (governance root {governance_root})",
+          "status_heading": "Now",
+          "row_subagent": "Sub-agent executor",
+          "row_pi_executor": "pi executor workstation",
+          "row_auditor": "Auditor workstation",
+          "row_pi_modes": "Card types sent to pi",
+          "row_hosts": "Target hosts and ssh aliases",
+          "row_validation_roots": "Validation-root declarations",
+          "row_line": "{label}: {value}",
+          "instance_value": "{instance} ({enrollment})",
+          "workstation_value": "workstation {dir}",
+          "charter_value": "charter: {state}",
+          "undeclared": "(not declared)",
+          "enrollment_enrolled": "enrolled",
+          "enrollment_not_enrolled": "not enrolled",
+          "enrollment_no_workstation": "enrolled, no workstation location",
+          "enrollment_error": "enrolment state unreadable",
+          "charter_current": "product rendering (latest)",
+          "charter_stale": "product rendering out of date (sync needed)",
+          "charter_missing": "missing",
+          "charter_hand_maintained": "hand-written, protected (formal takeover needed)",
+          "charter_not_workstation": "workstation not enrolled (no .lybra/role)",
+          "charter_other_project": "workstation of another project",
+          "charter_unverifiable": "cannot be checked",
+          "charter_remote": "workstation on another machine (not checked here)",
+          "modes_none": "(none: every card goes to the sub-agent)",
+          "list_sep": ", ",
+          "host_value": "{host} → ssh alias {alias}",
+          "host_no_alias": "{host} → no ssh alias declared",
+          "none": "(none)",
+          "vr_value": "{total} (active {active} / expired {expired} / revoked {revoked} / unbound {unbound}); runs in progress {runs}; hosts {hosts}",
+          "routing_heading": "Who gets each card type now",
+          "route_line": "{mode} → {who}; audit: {audit}",
+          "route_pi": "pi executor {instance} (launched by the loop)",
+          "route_subagent": "sub-agent {instance} (dispatched by the advisor)",
+          "route_undeclared": "execution mode not declared (card assigned_to)",
+          "audit_independent": "independent audit {auditor}",
+          "audit_advisor": "advisor review",
+          "audit_row": "audit cards → auditor workstation {auditor}",
+          "risks_heading": "Risks",
+          "risk_line": "⚠ {text}",
+          "risk_execution_undeclared": "Execution mode not declared: cards follow their assigned_to; declare it first (the plan below has that step)",
+          "risk_execution_error": "Execution declaration unreadable: {error}",
+          "risk_instance": "{role} {instance}: {state}",
+          "risk_charter": "{role} {instance} charter: {state}",
+          "risk_host_no_alias": "Validation-root declarations use target host {host} but no ssh alias is declared (needed when the local pi works that host over ssh)",
+          "risk_vr_error": "Validation-root declarations unreadable: {error}",
+          "risk_target_no_pi": "The target sends cards to pi but no pi executor instance is chosen",
+          "risk_target_no_dir": "pi executor {instance} is not enrolled and no workstation directory is given",
+          "risk_target_dir_differs": "pi executor {instance} is enrolled at {current}, not the chosen directory {chosen} (move a workstation with lybra project relocate-workstation)",
+          "risk_target_slot_taken": "Workstation directory {dir} is registered to {other}, not {instance}",
+          "risk_target_no_host": "Validation cards go to pi but no target host and ssh alias are chosen (needed when validating on another machine)",
+          "risk_candidates_error": "Workstation candidates unreadable: {error}",
+          "target_heading": "Target division",
+          "target_pi": "{modes} go to pi executor {instance} (workstation {dir}); other card types stay with the sub-agent",
+          "target_none": "Nothing to pi: every card goes to the sub-agent",
+          "target_host": "target host {host} over ssh alias {alias}",
+          "target_owner_ref": "Owner decision reference: {ref}",
+          "plan_heading": "Plan (dependency order; the board runs nothing, the advisor runs product commands; preview first, then confirm)",
+          "step_line": "{n}. [{state}] {label}",
+          "state_pending": "to do",
+          "state_done": "done",
+          "state_na": "n/a",
+          "state_check": "check",
+          "step_detail": "   now: {detail}",
+          "step_why": "   why: {why}",
+          "step_by_owner": "   by: the Owner personally (or the board envelope page {url})",
+          "step_preview": "   preview: {command}",
+          "step_confirm": "   confirm: {command}",
+          "step_land": "   land: {command}",
+          "step_check": "   check: {command}",
+          "step_expect": "   expect: {expect}",
+          "step_refused": "   if refused: {refused}",
+          "nothing": "The target matches the current state; nothing to switch.",
+          "lead_heading": "Message for the project lead advisor (runs the switch)",
+          "specialist_heading": "Message for the specialist advisors (dispatch rules)",
+          "lead_intro": "Please switch the workstations of project {project} to the Owner's division of work with product commands. The board runs nothing, you do: preview each step and check the output, then confirm; report any refusal to the Owner as is, never work around it, never edit project.json by hand, never read credentials.",
+          "lead_target": "Target: {target}",
+          "lead_skip": "{n}. {label}: done, skip",
+          "lead_nothing": "The current state already matches the target; no switch command needed, run the check command to confirm.",
+          "lead_outro": "When everything is done run the check command, then pass the \"message for the specialist advisors\" to every specialist advisor as is.",
+          "specialist_intro": "Card-type dispatch for project {project} (Owner decision: {ref}):",
+          "specialist_rule": "- {mode}: {who}; audit: {audit}",
+          "specialist_audit": "- audit cards: independent pi auditor {auditor}",
+          "specialist_outro": "Drafts without harness / assigned_to follow the declared execution mode; code cards only implement and test offline, validation / environment work gets its own card for pi. Drafting notes: advisor skill handbook sections on non-code work for pi and governance-root-only docs / config cards. Cards in flight are not re-dispatched automatically.",
+          "ref_pending": "<decision record written in step 1>",
+          "form_heading": "Choose the target division",
+          "form_note": "Your choice only lives in this page address (URL parameters), nothing is written on the server; hand the generated message to the advisor.",
+          "form_modes": "Card types sent to pi",
+          "form_pi_executor": "pi executor instance (existing or new)",
+          "form_workspace": "Workstation directory (empty for an existing workstation)",
+          "form_host": "Target host (optional)",
+          "form_ssh_alias": "ssh alias",
+          "form_owner_ref": "Existing Owner decision reference (optional)",
+          "form_submit": "Generate the plan",
+          "board_note": "The board runs no switch: copy the messages below to the advisor, who runs the product commands.",
+          "plan_text_summary": "Full plan (same text as lybra project workstation-plan)",
+          "copy_summary": "Open to copy",
+          "input_error": "Invalid input: {error}",
+          "error_mode": "Card type {mode} is not one of {allowed}",
+          "error_instance": "Instance name {instance} does not follow the naming template (<prefix>.<project>.<host>)",
+          "error_instance_reserved": "The pi executor cannot be the auditor or the sub-agent executor ({instance})",
+          "error_workspace": "The workstation directory must be an absolute path: {workspace}",
+          "error_host": "Target host and ssh alias go together and only use letters, digits, . _ - @: {value}",
+          "error_owner_ref": "The Owner decision reference must be one non-empty line: {value}",
+          "page_error": "Workstation page unreadable: {error}",
+          "unknown_project": "Unregistered project: {project}",
+          "projects_label": "Projects",
+          "mode_code": "code cards",
+          "mode_validation": "validation cards",
+          "mode_config": "environment cards",
+          "mode_docs": "docs cards",
+          "mode_governance": "governance cards",
+          "steps": {
+            "decision": {
+              "label": "Record the Owner's division of work in the decision log",
+              "why": "Later steps cite this decision as the Owner reference (--owner-ref); the actual state is what the product records",
+              "expect": "The preview shows the decision_log path and text to be written; confirm prints Created decision_log entry: <path>, then land it with the landing command",
+              "refused": "File already exists = a record with the same title exists today: cite it as the Owner reference (fill \"existing Owner decision\" on this page, or CLI --owner-ref) and regenerate the plan"
+            },
+            "envelope": {
+              "label": "Owner signs an envelope covering the pi executor workstation",
+              "why": "Enrolling a workstation role needs an active PreAuthorized envelope covering that instance, otherwise enrolment is refused with ENROLL_ENVELOPE_MISSING; the Owner signs it personally (or on the board envelope page), never the advisor",
+              "expect": "The preview lists the envelope (nothing signed); --confirm signs through the gate and lands it; this step then shows done. For the loop to launch this pi workstation add --launch-harness pi; --task-mode takes one type (drop it = any card type)",
+              "refused": "Pass it to the Owner as is; never sign an envelope the Owner did not authorise"
+            },
+            "enroll": {
+              "label": "Enrol the pi executor workstation (code issued and redeemed in one process)",
+              "why": "Declaring the execution mode needs the pi executor enrolled in this project, otherwise it is refused with EXECUTION_INSTANCE_NOT_ENROLLED; the workstation directory is not moved",
+              "expect": "The preview lists role / instance / governance root / target / covering envelope (no code issued, zero writes); after confirm the enrolment log has a land line (workstation=<dir>)",
+              "refused": "ENROLL_ENVELOPE_MISSING = go back to the Owner envelope step; report any other refusal as is, never work around it"
+            },
+            "charter_adopt": {
+              "label": "Formally take over the hand-written workstation charter",
+              "why": "The workstation AGENTS.md is a hand-written charter with a hand-maintained marker; sync (including the automatic sync before a loop launch) refuses to overwrite it (CHARTER_HAND_MAINTAINED); only the product command with an Owner decision reference lifts it, never delete the marker by hand",
+              "expect": "The preview lists the backup path (would-backup); afterwards the old charter is kept as AGENTS.md.hand-maintained-<time>.bak, the adoption is logged in the workstation .lybra/charter-adoptions.jsonl and the charter is the product rendering; in an Owner-managed central workstation repo the Owner commits the backup and the new charter",
+              "refused": "Report as is; do not edit the charter or delete the marker"
+            },
+            "charter_sync": {
+              "label": "Sync the workstation charter (product rendering)",
+              "why": "The workstation charter is missing or not the latest product rendering; the loop also syncs before a launch, syncing first surfaces problems early",
+              "expect": "The preview lists would-render charter files; afterwards the check command shows charter freshness ✓",
+              "refused": "Report as is (the output carries the reason and the next step)"
+            },
+            "execution": {
+              "label": "Declare the execution mode (which card types go to the pi executor)",
+              "why": "Listed card types are drafted with harness=pi and assigned_to=the pi executor by default and launched by the loop; code cards stay with the sub-agent; audits always go to the independent pi auditor",
+              "expect": "The preview shows the project.json execution diff (zero writes); confirm writes it and lands it",
+              "refused": "EXECUTION_INSTANCE_NOT_ENROLLED = finish the enrolment step first; report any other refusal as is, never edit project.json by hand"
+            },
+            "ssh_host": {
+              "label": "Declare the target host ssh alias",
+              "why": "When the pi on the governance-root machine works a target host (e.g. a Mac) over ssh, kickoff / charter validation-root section / init-command render the ssh <alias> form; constraints = charter + target-host helper self-check + audit (no hard sandbox)",
+              "expect": "The preview shows the validation_roots.hosts diff (zero writes); confirm writes it and lands it",
+              "refused": "Report as is; the alias must be a Host entry of ~/.ssh/config on the governance-root machine"
+            },
+            "verify": {
+              "label": "Check the pi executor workstation",
+              "why": "Location, charter freshness and launch conditions checked at once (read-only)",
+              "expect": "Every item ✓ (charter freshness ✓)",
+              "refused": "Fix ✗ items with the command the output gives"
+            },
+            "notify": {
+              "label": "Pass the division of work to every specialist advisor",
+              "why": "Specialist advisors draft and dispatch by card type and must know the new division; cards in flight are not re-dispatched automatically",
+              "expect": "Every specialist advisor received the \"message for the specialist advisors\" below",
+              "refused": "-"
+            }
+          }
+        }
+      },
+      "board": {
+        "description": "看板「工位设置」页(只读, 仅 GET; 不新增写例外): 项目 = board_readonly_pages.query.project; 目标分工 = 下列 URL 参数(GET 表单提交到本页, 不写服务器); 语言 = board_readonly_pages.locale。页面正文(现状 / 风险 / 派给谁 / 计划步骤状态)可见, 命令与服务器路径折叠; 完整计划 <pre class=\"ws-plan-text\"> = CLI 文本逐字节同一。",
+        "page_path": "/owner/workstation",
+        "params": {
+          "pi_mode": "pi_mode",
+          "pi_executor": "pi_executor",
+          "workspace": "workspace",
+          "host": "host",
+          "ssh_alias": "ssh_alias",
+          "owner_ref": "owner_ref",
+          "submitted": "plan"
+        }
+      },
+      "exit_codes": {
+        "ok": {
+          "code": 0
+        },
+        "refused": {
+          "code": 1
+        },
+        "usage": {
+          "code": 2
+        }
+      }
+    },
     "lybra_updates": {
       "description": "AIPOS-F167 件②③(Owner 10-16: 产品更新的「顾问须知」由产品自己送达, Owner 零转述): `lybra updates [--actor <实例>] [--all] [--workspace-root <治理根>] [--json]` 列该顾问实例的未读更新说明全文(--all = 全部, 标已读/未读); `lybra updates --ack --actor <实例> [--dry-run|--confirm]` 记已读(两阶段 two_phase_protocol.advisor_update_writers, 落账 post_write_landing.commands.advisor_update_ack)。更新说明 = 卡面 advisor_notice(card.schema fields.advisor_notice)在部署唯一口汇成的产品侧记录(store), 跨项目共享: 任何接入项目的顾问在其治理根运行本命令读同一份库, 已读按本治理根本实例各记(ack)。四出口(charter 开头 / loop status 末尾 / next 末尾 / brief 末尾)经同一渲染 advisor_updates_cli.advisor_banner_lines 显示「Lybra 有 N 条未读更新」(banner), 无未读 / 库不可用 = 不显示(行为不变); 读不出 = 一行告警(不静默, 不掀翻原命令)。审计/执行体的变化仍走章程渲染(AIPOS-F164), 不重复送达。",
       "phase": "render",
