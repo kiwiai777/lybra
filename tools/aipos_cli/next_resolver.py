@@ -322,14 +322,125 @@ def task_mode_writes_product_repo(task_mode: str) -> bool:
     return False
 
 
+def _task_mode_entry(task_mode: str) -> dict[str, Any] | None:
+    """enums.schema task_mode.values 中该值的条目(未知 / 缺 = None)。声明缺 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = ((load_schema("enums", REPO_ROOT).get("enums") or {}).get("task_mode") or {})
+    values = decl.get("values")
+    if not isinstance(values, list):
+        raise SchemaLoadError("enums.schema.json enums.task_mode.values 未声明")
+    mode = str(task_mode or "").strip().lower()
+    return next((item for item in values if isinstance(item, dict) and str(item.get("value") or "").strip().lower() == mode), None)
+
+
+def task_mode_independent_audit(task_mode: str) -> bool:
+    """AIPOS-F196 件①: 该 task_mode 交回后是否走独立审计(唯一读取口: enums.schema task_mode.values[].independent_audit)。
+    缺值 / 未知 task_mode = False(行为同 F196 前: 只有 code 走独立审计——code 条目声明 true)。声明形变 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = ((load_schema("enums", REPO_ROOT).get("enums") or {}).get("task_mode") or {})
+    if not isinstance(decl.get("independent_audit"), dict):
+        raise SchemaLoadError("enums.schema.json enums.task_mode.independent_audit 未声明(AIPOS-F196)")
+    entry = _task_mode_entry(task_mode)
+    if entry is None:
+        return False
+    flag = entry.get("independent_audit", False)
+    if not isinstance(flag, bool):
+        raise SchemaLoadError(f"enums.schema.json task_mode={task_mode!r} independent_audit 须为布尔(AIPOS-F196)")
+    return flag
+
+
+class CandidateSubjectError(ValueError):
+    """AIPOS-F196: subject=candidate 模式卡的来源卡 / 候选声明不合(code ∈ enums.schema task_mode.candidate_subject.reject_codes)。"""
+
+    def __init__(self, code: str, reason: str):
+        super().__init__(f"{code}: {reason}")
+        self.code = code
+        self.reason = reason
+
+
+def candidate_subject_declaration() -> dict[str, Any]:
+    """enums.schema task_mode.candidate_subject(字段名 / 拒因码)。缺 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (((load_schema("enums", REPO_ROOT).get("enums") or {}).get("task_mode") or {}).get("candidate_subject"))
+    fields = decl.get("fields") if isinstance(decl, dict) else None
+    codes = decl.get("reject_codes") if isinstance(decl, dict) else None
+    if (not isinstance(fields, dict) or not all(isinstance(fields.get(k), str) and fields[k] for k in ("source", "candidate"))
+            or not isinstance(codes, dict) or not all(codes.get(k) for k in (
+                "VALIDATION_SUBJECT_MISSING", "VALIDATION_CANDIDATE_INVALID", "VALIDATION_SOURCE_UNKNOWN"))):
+        raise SchemaLoadError("enums.schema.json enums.task_mode.candidate_subject(fields.source / fields.candidate / reject_codes)未声明齐(AIPOS-F196)")
+    return decl
+
+
+def task_mode_subject_is_candidate(task_mode: str) -> bool:
+    """AIPOS-F196 件①: 该模式的交付主体是否为固定候选(enums.schema task_mode.values[].subject == candidate; 缺 = 卡分支)。"""
+    entry = _task_mode_entry(task_mode)
+    return bool(entry) and str(entry.get("subject") or "").strip() == "candidate"
+
+
+_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def card_candidate_subject(card_frontmatter: dict[str, Any] | None) -> dict[str, str] | None:
+    """AIPOS-F196 件①: 卡的固定候选主体唯一读取口。非 subject=candidate 模式 = None; 是 = {source, candidate}(卡面字段名读
+    enums.schema task_mode.candidate_subject.fields)。缺字段 / 候选非完整 40 位小写 sha = CandidateSubjectError(fail-closed, 不当缺省放行)。
+    只做形校验; 候选是否为仓中已有提交由 candidate_subject_values / 起草发卡核验(要读 git)。"""
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    if not task_mode_subject_is_candidate(str(fm.get("task_mode") or "")):
+        return None
+    decl = candidate_subject_declaration()
+    source_key, candidate_key = decl["fields"]["source"], decl["fields"]["candidate"]
+    source = str(fm.get(source_key) or "").strip()
+    candidate = str(fm.get(candidate_key) or "").strip()
+    if not source or not candidate:
+        missing = [k for k, v in ((source_key, source), (candidate_key, candidate)) if not v]
+        raise CandidateSubjectError("VALIDATION_SUBJECT_MISSING", f"task_mode={fm.get('task_mode')} 卡缺 {', '.join(missing)}"
+                                    f"(来源卡号 + 固定候选 40 位 sha 必填; 声明 enums.schema task_mode.candidate_subject)")
+    if not _FULL_SHA_RE.match(candidate):
+        raise CandidateSubjectError("VALIDATION_CANDIDATE_INVALID", f"{candidate_key}={candidate!r} 须为完整 40 位小写 sha")
+    return {"source": source, "candidate": candidate}
+
+
+def candidate_subject_values(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None) -> dict[str, str] | None:
+    """AIPOS-F196 件①: 固定候选主体的实值 {repository, commit_sha, tree_hash, branch, source, repo_path}(交回 / 审计报告契约给值、入口核对、
+    裁决 artifact_subject 同读)。commit_sha = 卡面候选; tree_hash = 候选 tree(卡 lane.repo 解析仓 git rev-parse); branch = 来源卡卡分支名
+    (card_branch_name, 说明候选出处, 入口只核等于本值)。非 candidate 模式 = None。候选不在仓 / 仓不可解析 = CandidateSubjectError。"""
+    import subprocess
+
+    subject = card_candidate_subject(card_frontmatter)
+    if subject is None:
+        return None
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved
+
+    try:
+        repo = _card_repo_root(workspace_root, task_id, card_frontmatter or {}, allow_governance_root=False)
+    except CardRepoUnresolved as exc:
+        raise CandidateSubjectError("VALIDATION_CANDIDATE_INVALID", f"卡 {task_id} 的候选所在仓(lane.repo)不可解析: {exc}") from exc
+    try:
+        proc = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"{subject['candidate']}^{{tree}}"],
+                              capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CandidateSubjectError("VALIDATION_CANDIDATE_INVALID", f"读候选 {subject['candidate']} 失败({repo}): {exc}") from exc
+    tree = proc.stdout.strip()
+    if proc.returncode != 0 or not _FULL_SHA_RE.match(tree):
+        raise CandidateSubjectError("VALIDATION_CANDIDATE_INVALID", f"候选 {subject['candidate']} 不是卡 {task_id} 候选所在仓 {repo} 中已有提交")
+    return {"repository": Path(repo).name, "commit_sha": subject["candidate"], "tree_hash": tree,
+            "branch": card_branch_name(subject["source"]), "source": subject["source"], "repo_path": str(repo)}
+
+
 def card_writes_product_repo(workspace_root: Path, card_frontmatter: dict[str, Any] | None) -> bool:
     """AIPOS-F178 件①: 非审计卡是否写产品仓 = task_mode 缺省(enums.schema writes_product_repo)或卡面 lane.repo 显式出现且
-    解析到的仓不是治理根自身(workspace_config.resolve_card_repo 唯一解析); lane.repo 解析失败 = 按写仓(建树时给出拒因, fail-closed)。"""
+    解析到的仓不是治理根自身(workspace_config.resolve_card_repo 唯一解析); lane.repo 解析失败 = 按写仓(建树时给出拒因, fail-closed)。
+    AIPOS-F196: 交付主体为固定候选的模式(subject=candidate)lane.repo = 候选所在仓(只读取证), 恒不写仓。"""
     from tools.aipos_cli.workspace_config import CardRepoUnresolved
 
     fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
     if task_mode_writes_product_repo(str(fm.get("task_mode") or "")):
         return True
+    if task_mode_subject_is_candidate(str(fm.get("task_mode") or "")):
+        return False
     lane = fm.get("lane") if isinstance(fm.get("lane"), dict) else {}
     if not str(lane.get("repo") or "").strip():
         return False
@@ -360,6 +471,21 @@ def card_needs_worktree(workspace_root: Path, card_frontmatter: dict[str, Any] |
     # reviewed card without task_mode keeps the pre-F178 reading (treated as code)
     return card_writes_product_repo(workspace_root, {**reviewed_fm, "task_id": str(reviewed_fm.get("task_id") or reviewed),
                                                      "task_mode": str(reviewed_fm.get("task_mode") or "code")})
+
+
+def card_kickoff_without_worktree(workspace_root: Path, card_frontmatter: dict[str, Any] | None) -> bool:
+    """AIPOS-F196 件①: 不建卡工作树也照常在工位开工的卡 = 交付主体为固定候选的卡(enums.schema task_mode.candidate_subject; validation)
+    及其审计卡(跟随被审卡)。其余不建树卡(只写治理根)照 F178 不入选 next_card。被审卡查不到 = False(不放宽)。"""
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    reviewed = forensic_subject(fm)
+    if reviewed is None:
+        return task_mode_subject_is_candidate(str(fm.get("task_mode") or ""))
+    if not reviewed:
+        return False
+    task_path, _ = _find_task_in_queue(workspace_root, reviewed)
+    if task_path is None:
+        return False
+    return task_mode_subject_is_candidate(str(_read_frontmatter(task_path).get("task_mode") or ""))
 
 
 def card_worktree_location(workspace_root: Path, task_id: str,
@@ -441,16 +567,28 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
         needs_worktree = True
         view["worktree_refusal"] = {"code": "WORKTREE_ROOT_UNDECLARED", "reason": f"是否建卡工作树不可判定(AIPOS-F178 判据): {exc}"}
     view["worktree_required"] = needs_worktree
+    try:
+        view["kickoff_without_worktree"] = card_kickoff_without_worktree(workspace_root, fm)
+    except (SchemaLoadError, OSError, ValueError) as exc:
+        view["kickoff_without_worktree"] = False
+        view["worktree_refusal"] = view["worktree_refusal"] or {"code": "VALIDATION_SUBJECT_UNRESOLVED", "reason": f"固定候选卡判定失败: {exc}"}
     if view["worktree_refusal"] is None and not needs_worktree:
         try:
             where = str(card_report_path(workspace_root, task_id, fm))
         except (SchemaLoadError, OSError, ValueError) as exc:
             where = f"(报告落点不可推导: {exc})"
-        view["worktree_refusal"] = {
-            "code": "WORKTREE_NOT_REQUIRED",
-            "reason": (f"本卡只写治理根(不写产品仓, 不建卡工作树/卡分支; 判据 enums.schema task_mode.product_repo_write): "
-                       f"产物写治理根报告落点 {where}; 工位开工提示只给建树卡, 本卡开工说明见卡渲染物(card render)"),
-        }
+        if view["kickoff_without_worktree"]:
+            view["worktree_refusal"] = {
+                "code": "WORKTREE_NOT_REQUIRED",
+                "reason": (f"不建(交付主体 = 来源卡的固定候选, 不写产品仓源码; 判据 enums.schema task_mode.candidate_subject): "
+                           f"产物只落本卡验证根(本卡本活动 run 目录)与报告落点 {where}"),
+            }
+        else:
+            view["worktree_refusal"] = {
+                "code": "WORKTREE_NOT_REQUIRED",
+                "reason": (f"本卡只写治理根(不写产品仓, 不建卡工作树/卡分支; 判据 enums.schema task_mode.product_repo_write): "
+                           f"产物写治理根报告落点 {where}; 工位开工提示只给建树卡, 本卡开工说明见卡渲染物(card render)"),
+            }
     elif view["worktree_refusal"] is None:
         try:
             _code_repo, worktree = card_worktree_location(workspace_root, task_id, fm)
@@ -466,6 +604,19 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
                     "code": "WORKTREE_NOT_CREATED",
                     "reason": f"工作树 {worktree} 尚未建立: 认领由驱动方完成并建树, 工位等待驱动方完成认领; 持续存在按 block-and-report 上报",
                 }
+    # AIPOS-F196 件③: 本卡验证根节(validation_root.render_section_lines, 与章程同源; 实例 = 认领实例, 缺 = assigned_to)。
+    # 声明读不出 = 开工面拒因(VALIDATION_ROOT_UNRESOLVED, select_next_card 不入选; fail-closed, 不出缺节的开工提示)
+    view["validation_root_lines"] = []
+    instance = str(fm.get("claimed_by") or fm.get("assigned_to") or "").strip()
+    if instance:
+        from tools.aipos_cli.validation_root import ValidationRootError, render_section_lines
+
+        try:
+            view["validation_root_lines"] = render_section_lines(workspace_root, instance=instance, task_id=task_id,
+                                                                 harness=str(fm.get("harness") or "").strip() or None,
+                                                                 include_inactive=True)
+        except (ValidationRootError, SchemaLoadError, OSError, ValueError) as exc:
+            view["validation_root_refusal"] = {"code": "VALIDATION_ROOT_UNRESOLVED", "reason": f"本卡验证根节不可渲染: {exc}"}
     try:
         view["report_path"] = str(card_report_path(workspace_root, task_id, fm))
     except (SchemaLoadError, OSError, ValueError) as exc:
@@ -490,6 +641,15 @@ def card_report_contract(workspace_root: Path, task_id: str, card_frontmatter: d
     (= 取证工作树 HEAD, 认领时由门建于被审分支 tip)。取证工作树在盘但读不出 HEAD = ValueError(fail-closed, 不给空值)。"""
     fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
     reviewed = forensic_subject(fm)
+    # AIPOS-F196 件①: 交付主体为固定候选的卡(validation)及其审计卡: 三键实值 = 候选(candidate_subject_values 唯一实值), 不读卡分支 / 取证树
+    subject_id, subject_fm = (task_id, fm) if reviewed is None else (reviewed, None)
+    if reviewed:
+        reviewed_path, _q = _find_task_in_queue(workspace_root, reviewed)
+        subject_fm = _read_frontmatter(reviewed_path) if reviewed_path else {}
+    candidate = candidate_subject_values(workspace_root, subject_id, subject_fm) if subject_fm is not None else None
+    if candidate is not None:
+        return report_frontmatter_contract("return" if reviewed is None else "verdict", branch_task_id=candidate["source"],
+                                           subject=candidate, branch_pattern=branch_pattern, candidate=True)
     if reviewed is None:
         return report_frontmatter_contract("return", branch_task_id=task_id, branch_pattern=branch_pattern)
     subject = forensic_worktree_subject(worktree) if worktree is not None else None
@@ -640,6 +800,9 @@ def render_kickoff(next_card: dict[str, Any], *, remote: dict[str, Any] | None =
     remote=None(本机工位 / 工位 /go)= 空串, 与 F110 前逐字节相同。"""
     decl = kickoff_declaration()
     field_lines = render_report_field_lines(next_card.get("report_required_frontmatter"), decl=decl)
+    vr_lines = next_card.get("validation_root_lines") or []
+    if not isinstance(vr_lines, list) or not all(isinstance(x, str) for x in vr_lines):
+        raise KickoffRenderError(f"validation_root_lines 须为串列表: {vr_lines!r}")
     values = {
         "task_id": next_card.get("task_id"),
         "worktree_path": next_card.get("worktree_path"),
@@ -647,7 +810,16 @@ def render_kickoff(next_card: dict[str, Any], *, remote: dict[str, Any] | None =
         "card_path": next_card.get("card_path"),
         "report_field_lines": "\n".join(field_lines),
         "remote_material": "",
+        # AIPOS-F196 件③: 本卡验证根节(章程同源); 无声明 = 空串(与 F196 前逐字节相同)
+        "validation_root": ("\n\n" + "\n".join(vr_lines)) if vr_lines else "",
     }
+    template = decl["template"]
+    if "worktree_note" in next_card:
+        # AIPOS-F196 件①: 不建树的固定候选卡(validation 及其审计卡)= template_no_worktree
+        template = decl.get("template_no_worktree")
+        if not isinstance(template, str) or not template:
+            raise KickoffRenderError("verbs.schema.json verbs.lybra_my_tasks.kickoff.template_no_worktree 未声明")
+        values["worktree_note"] = next_card.get("worktree_note")
     if remote is not None:
         material_template = decl.get("remote_material")
         if not isinstance(material_template, str) or not material_template:
@@ -655,7 +827,7 @@ def render_kickoff(next_card: dict[str, Any], *, remote: dict[str, Any] | None =
         if not isinstance(remote, dict):
             raise KickoffRenderError(f"remote 上下文须为对象: {remote!r}")
         values["remote_material"] = _KICKOFF_PLACEHOLDER_RE.sub(lambda m: _kickoff_value(remote, m.group(1)), material_template)
-    return _KICKOFF_PLACEHOLDER_RE.sub(lambda m: _kickoff_value(values, m.group(1)), decl["template"])
+    return _KICKOFF_PLACEHOLDER_RE.sub(lambda m: _kickoff_value(values, m.group(1)), template)
 
 
 def render_report_field_lines(contract: Any, *, decl: dict[str, Any] | None = None) -> list[str]:
@@ -714,7 +886,7 @@ def _kickoff_value(values: dict[str, Any], name: str) -> str:
     if name not in values:
         raise KickoffRenderError(f"开工提示模板占位 {{{name}}} 未知")
     value = values[name]
-    if not isinstance(value, str) or (not value and name not in ("value", "hint", "remote_material")):
+    if not isinstance(value, str) or (not value and name not in ("value", "hint", "remote_material", "validation_root")):
         raise KickoffRenderError(f"开工提示占位 {{{name}}} 缺值")
     return value
 
@@ -750,19 +922,22 @@ def select_next_card(cards: list[dict[str, Any]], *, remote: dict[str, Any] | No
             excluded.append({"task_id": task_id, "code": str(kickoff.get("code") or "NOT_YOUR_TURN"), "reason": str(kickoff.get("reason") or "")})
             continue
         refusal = card.get("worktree_refusal") if isinstance(card.get("worktree_refusal"), dict) else {}
-        if card.get("worktree_required") is False:
+        no_tree_kickoff = card.get("worktree_required") is False and card.get("kickoff_without_worktree") is True
+        if card.get("worktree_required") is False and not no_tree_kickoff:
             # AIPOS-F178 件②: 只写治理根的卡不建树, 拒因原样点名治理根报告落点(不再指向不存在的工作树路径)
             excluded.append({"task_id": task_id, "code": str(refusal.get("code") or "WORKTREE_NOT_REQUIRED"),
                              "reason": str(refusal.get("reason") or "本卡只写治理根, 不建卡工作树")})
             continue
-        if not card.get("worktree_path"):
+        if no_tree_kickoff:
+            pass  # AIPOS-F196 件①: 交付主体为固定候选的卡(validation 及其审计卡)不建树也照常开工(开工提示 template_no_worktree)
+        elif not card.get("worktree_path"):
             excluded.append({
                 "task_id": task_id,
                 "code": str(refusal.get("code") or "WORKTREE_UNRESOLVED"),
                 "reason": f"工作树不可推导: {refusal.get('reason') or '产品未给出拒因'}; 按 block-and-report 上报",
             })
             continue
-        if card.get("worktree_exists") is not True:
+        elif card.get("worktree_exists") is not True:
             excluded.append({
                 "task_id": task_id,
                 "code": str(refusal.get("code") or "WORKTREE_NOT_CREATED"),
@@ -776,6 +951,11 @@ def select_next_card(cards: list[dict[str, Any]], *, remote: dict[str, Any] | No
                 "code": str(report_refusal.get("code") or "REPORT_LOCATION_UNDECLARED"),
                 "reason": f"报告落点不可推导: {report_refusal.get('reason') or '产品未给出拒因'}; 按 block-and-report 上报",
             })
+            continue
+        vr_refusal = card.get("validation_root_refusal") if isinstance(card.get("validation_root_refusal"), dict) else None
+        if vr_refusal:
+            excluded.append({"task_id": task_id, "code": str(vr_refusal.get("code") or "VALIDATION_ROOT_UNRESOLVED"),
+                             "reason": f"{vr_refusal.get('reason')}; 按 block-and-report 上报"})
             continue
         contract = card.get("report_required_frontmatter")
         if not isinstance(contract, list) or not contract:
@@ -807,6 +987,11 @@ def select_next_card(cards: list[dict[str, Any]], *, remote: dict[str, Any] | No
             "report_required_frontmatter": chosen.get("report_required_frontmatter"),
             "claimed_at": claimed_at.isoformat() if hasattr(claimed_at, "isoformat") else claimed_at,
         }
+        if chosen.get("kickoff_without_worktree") is True and chosen.get("worktree_required") is False:
+            # AIPOS-F196 件①: 不建树的验证卡: 开工提示写明不建树原因 + 本卡验证根节(card_workstation_view 给出, 章程同源)
+            next_card["worktree_note"] = str((chosen.get("worktree_refusal") or {}).get("reason") or "")
+        if chosen.get("validation_root_lines"):
+            next_card["validation_root_lines"] = list(chosen["validation_root_lines"])
         # AIPOS-F95 件①: 完整开工提示由产品按声明渲染(工位 /go 与 loop 拉起同读本字段, 逐字节相同); 渲染不出 = 不开工(fail-closed)
         try:
             next_card["kickoff"] = render_kickoff(next_card, remote=remote)
@@ -1947,13 +2132,14 @@ REPORT_KINDS = ("return", "verdict")
 
 def report_frontmatter_contract(kind: str, *, branch_task_id: str | None = None,
                                 subject: dict[str, str] | None = None,
-                                branch_pattern: str | None = None) -> list[dict[str, Any]]:
+                                branch_pattern: str | None = None, candidate: bool = False) -> list[dict[str, Any]]:
     """报告必填 frontmatter 契约(唯一渲染源): [{key, hint, value}], 键序 = 声明 required_frontmatter。
 
     - kind: return(执行卡 Return)/ verdict(审计报告)。
     - branch_task_id: 报告对应的卡分支所属卡(执行卡 = 本卡, 审计卡 = 被审卡); 缺 = 分支声明套占位卡号(card/<卡ID>)。
     - subject: 产品已知的实值(审计卡 = 取证工作树 HEAD 的 {commit_sha, tree_hash}); 有值的键 value=实值, 提示带 tree, agent 照抄。
     - branch_pattern: 调用方已读的分支声明(machine_zone 按 product_root 读 N5.branch_integration); 缺 = card_branch_name。
+    - candidate: AIPOS-F196 交付主体为固定候选(validation 卡与其审计卡): subject = candidate_subject_values 三键实值, 提示写明是固定候选。
     键缺说明(field_hints 未声明该键)= 通用提示「按声明填写实值」(仍列出, 不漏键)。声明缺 = SchemaLoadError(fail-closed)。
     """
     if kind not in REPORT_KINDS:
@@ -1974,7 +2160,11 @@ def report_frontmatter_contract(kind: str, *, branch_task_id: str | None = None,
         template = str(hints.get(key) or "按声明填写实值")
         hint = template.replace("{branch}", branch).replace("{allowed_verdict_values}", verdict_values or "裁决值")
         value = str(values.get(key) or "").strip() or None
-        if value and key == "commit_sha" and values.get("tree_hash"):
+        if value and candidate:
+            what = {"commit_sha": f"来源卡 {branch_task_id} 的固定候选", "tree_hash": "固定候选的 tree",
+                    "branch": f"来源卡 {branch_task_id} 的卡分支名(说明候选出处)"}.get(key, "按声明")
+            hint = f"{what}; 产品给出, 照抄(本卡交付主体 = 固定候选; 验证卡不建卡分支、不提交产品仓)"
+        elif value and key == "commit_sha" and values.get("tree_hash"):
             hint = f"{hint}; 产品给出: {branch} tip = {value}, tree = {values['tree_hash']}(取证工作树 HEAD), 照抄"
         entries.append({"key": key, "hint": hint, "value": value})
     return entries
@@ -2778,6 +2968,25 @@ def _derive_next_step(
             }
         artifact_subject = _extract_artifact_subject_from_branch(reviewed_repo, reviewed_task_id,
                                                                  "code" if reviewed_has_branch else reviewed_task_mode)
+        # AIPOS-F196 件①: 交付主体为固定候选的被审卡(validation)= 裁决绑候选(candidate_subject_values 唯一实值, 门侧同核)
+        try:
+            candidate_values = candidate_subject_values(workspace_root, reviewed_task_id, reviewed_fm)
+        except CandidateSubjectError as exc:
+            return {
+                "task_id": task_id,
+                "derivable": False,
+                "current_node": "audit_verdict",
+                "current_state": "claimed",
+                "triggered_by": "advisor",
+                "command": "",
+                "verb": "lybra_audit_verdict_dry_run",
+                "missing_records": [f"被审卡 {reviewed_task_id} 固定候选不可用: {exc}"],
+                "suggested_action": f"顾问 lybra queue amend 修正被审卡 {reviewed_task_id} 的来源卡 / 候选后重推导",
+                "notes": f"N4: 被审卡固定候选不合({exc.code}), 裁决 artifact_subject 无据(AIPOS-F196)",
+                "action": {"type": "artifact_invalid", "card": reviewed_task_id, "path": ""},
+            }
+        if candidate_values is not None:
+            artifact_subject = {k: candidate_values[k] for k in ("repository", "commit_sha", "tree_hash")}
         # AIPOS-F78B 件③: 驱动方信封(覆盖被审卡, 与 loop 同一判据)在 → 一阶段 PreAuthorized; 否则 Supervised 形(执行时 exit 5)
         driver_policy = _driver_envelope_ref(workspace_root, reviewed_task_id, reviewed_fm, conn_arg)
         
@@ -3141,7 +3350,7 @@ def _derive_next_step(
             
             # N2→N3: 已 return + 未派审 → 派审。AIPOS-F73D: 审计卡由派审动作生成(transitions N3.automation.creates_audit_card),
             # 执行体零门(F73C)后不再"自产审计卡"; 审计卡已存在时派审幂等(AIPOS-C1 大项C②)。
-            if not latest_audit_dispatch and (task_mode == "code" or audit_required):
+            if not latest_audit_dispatch and (task_mode_independent_audit(str(task_mode or "")) or audit_required):  # AIPOS-F196: 读声明
                 audit_id = f"{task_id}R"
                 # AIPOS-F103 件④: 信封 = 覆盖驱动方与本卡的有效信封(唯一挑选 autonomy_policy.select_envelope, 经 _driver_envelope_ref)
                 policy_ref = _driver_envelope_ref(workspace_root, task_id, fm, conn_arg)
@@ -3203,8 +3412,8 @@ def _derive_next_step(
                     "suggested_action": "派发审计",
                     "notes": "N2→N3: 已 return, 需派审" + ("(审计卡已存在, 派审幂等)" if has_audit_card else "(派审生成审计卡)"),
                 }
-            # 非代码卡,不需要独立审计
-            if task_mode not in ("code",) and not audit_required:
+            # 非代码卡,不需要独立审计(AIPOS-F196: 是否独立审计读声明 enums.schema task_mode.independent_audit)
+            if not task_mode_independent_audit(str(task_mode or "")) and not audit_required:
                 return {
                     "task_id": task_id,
                     "derivable": True,
@@ -4545,7 +4754,11 @@ def _execute_derived_action(
         }
 
     # AIPOS-F73件② + F78C: return 前先检查分支提交(卡分支活在该卡声明的产品仓 resolve_card_repo)
-    if action_type == "return":
+    # AIPOS-F196 件①: 不建卡分支的卡(card_needs_worktree 唯一判据; 固定候选验证卡)无分支可查, 交回产物由入口按候选核(validate_task_artifact)
+    _return_task_path, _q = _find_task_in_queue(workspace_root, task_id) if action_type == "return" else (None, None)
+    _return_needs_branch = (card_needs_worktree(workspace_root, {**_read_frontmatter(_return_task_path), "task_id": task_id})
+                            if _return_task_path else True)
+    if action_type == "return" and _return_needs_branch:
         from tools.aipos_cli.workspace_config import CardRepoUnresolved
 
         try:

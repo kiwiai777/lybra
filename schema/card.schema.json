@@ -38,7 +38,7 @@
       "type": "string",
       "required": true,
       "$enum": "task_mode",
-      "description": "Task mode - determines workflow routing (code=full N0-N6; docs/governance/config=skip N4/N5)"
+      "description": "Task mode - determines workflow routing (code=full N0-N6; docs/governance/config=skip N4/N5; AIPOS-F196 validation=independent audit of a fixed candidate, no merge at N5; per-value semantics in enums.schema task_mode)"
     },
     "task_class": {
       "type": "string",
@@ -722,6 +722,18 @@
       "description": "AIPOS-F186 件①②(gap #190): 撤换承继——本卡卡分支从被撤换原卡的卡分支 tip 起建(而非 base_branch)。缺省(不写)= 不承继, 认领建树行为不变(从 base_branch 拉)。写入方唯一 = queue supersede --carry-branch(新卡须 pending 未认领; 原卡工作树须无未提交改动); 读取方 = next_resolver.card_carried_from(形校验唯一实现): 认领建树 _ensure_worktree(卡分支尚不存在时以 tip 为起点; 原卡分支当前 tip ≠ 记录 = 拒认领)、my-tasks 开工面 / card render 显示承继来源、queue_close 结案记录 carried_from。审计 / 交回 / 合入差异基线仍按 base_branch(承继提交在 base...卡分支 内一并审)。声明 transitions.schema queue_mutations.transitions.supersede.carry_branch。",
       "shape": {"task_id": "string (被撤换原卡 task_id)", "branch": "string (原卡卡分支名, N5 branch_pattern)", "tip": "string (supersede 确认时原卡分支 tip 完整 40 位 sha)"}
     },
+    "validation_source_task": {
+      "type": "string",
+      "required": false,
+      "written_by": "顾问(起草卡稿)",
+      "description": "AIPOS-F196 件①: subject=candidate 模式(task_mode=validation)的来源卡号——被验证的固定候选来自哪张卡(该卡须已在队列)。该模式必填, 其他模式不读; 形与语义唯一声明 enums.schema task_mode.candidate_subject, 唯一读取口 next_resolver.card_candidate_subject"
+    },
+    "validation_candidate": {
+      "type": "string",
+      "required": false,
+      "written_by": "顾问(起草卡稿)",
+      "description": "AIPOS-F196 件①: subject=candidate 模式的固定候选——卡 lane.repo 解析仓中已有提交的完整 40 位 sha(起草 / 发卡即核, fail-closed)。交回 / 审计报告 commit_sha 与裁决 artifact_subject 一律 = 本值; 验证根 run-start --candidate 须等于本值。唯一读取口 next_resolver.card_candidate_subject"
+    },
     "finalize_task_id": {
       "type": "string",
       "required": false,
@@ -961,6 +973,8 @@
       "agent_instance",
       "context_bundle",
       "task_mode",
+      "validation_source_task",
+      "validation_candidate",
       "task_class",
       "complexity_note",
       "model_tier",
@@ -1100,7 +1114,8 @@
         "docs": "pi",
         "governance": "pi",
         "config": "pi",
-        "audit": "pi"
+        "audit": "pi",
+        "validation": "pi"
       },
       "renderers": {
         "pi": "开工提示三行(工作树/报告落点/卡路径), /go 复用",

@@ -361,6 +361,13 @@ def check_access(
         if not card_needs_worktree(governance_root, {**card_fm, "task_id": task_id}):
             # AIPOS-F178 件②: 只写治理根的卡不建卡工作树(唯一判据 card_needs_worktree), 产品仓无本卡可写处; 点名治理根报告落点
             report = card_report_path(governance_root, task_id, card_fm)
+            from tools.aipos_cli.next_resolver import card_kickoff_without_worktree
+
+            if card_kickoff_without_worktree(governance_root, {**card_fm, "task_id": task_id}):
+                # AIPOS-F196 件①: 固定候选验证卡(及其审计卡)不写产品仓源码; 产物只落验证根与报告落点
+                return {**base, "allowed": False, "code": "CARD_NO_WORKTREE",
+                        "reason": (f"卡 {task_id} 交付主体 = 固定候选(判据 enums.schema task_mode.candidate_subject), 不写产品仓源码, "
+                                   f"product_repo 的 {want} 一律拒; 产物只落本卡验证根(validation_root 面)与报告落点 {report}")}
             return {**base, "allowed": False, "code": "CARD_NO_WORKTREE",
                     "reason": (f"卡 {task_id} 只写治理根(不写产品仓, 不建卡工作树; 判据 enums.schema task_mode.product_repo_write), "
                                f"product_repo 的 {want} 一律拒; 产物写治理根报告落点 {report}")}

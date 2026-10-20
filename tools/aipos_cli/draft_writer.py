@@ -343,6 +343,37 @@ def apply_execution_defaults(metadata: dict[str, Any], repo_root: Path) -> list[
     return []
 
 
+def candidate_subject_refusals(repo_root: Path, metadata: dict[str, Any]) -> list[str]:
+    """AIPOS-F196 件①: 固定候选卡(enums.schema task_mode.candidate_subject; validation)起草 / 发卡同一判据。非该模式 = []。
+    来源卡号 + 固定候选必填(next_resolver.card_candidate_subject 形校验); 来源卡须在队列(VALIDATION_SOURCE_UNKNOWN); 候选须为卡 lane.repo
+    解析仓中已有提交(candidate_subject_values 唯一实值; VALIDATION_CANDIDATE_INVALID)。拒因带出口。"""
+    from tools.aipos_cli.next_resolver import CandidateSubjectError, _find_task_in_queue, candidate_subject_values, card_candidate_subject
+
+    try:
+        subject = card_candidate_subject(metadata)
+    except CandidateSubjectError as exc:
+        return [f"AIPOS-F196 {exc}。出口: 卡稿 frontmatter 写来源卡与固定候选(validation_source_task / validation_candidate)后重发"]
+    if subject is None:
+        return []
+    from tools.aipos_cli.next_resolver import candidate_subject_declaration
+
+    codes = candidate_subject_declaration()["reject_codes"]
+    refusals: list[str] = []
+    try:
+        source_path, _q = _find_task_in_queue(repo_root, subject["source"])
+    except ValueError as exc:
+        source_path = None
+        refusals.append(f"AIPOS-F196 VALIDATION_SOURCE_UNKNOWN: 来源卡 {subject['source']} 查找失败: {exc}")
+    if source_path is None and not refusals:
+        refusals.append(f"AIPOS-F196 VALIDATION_SOURCE_UNKNOWN: 来源卡 {subject['source']} 不在任何队列目录({codes['VALIDATION_SOURCE_UNKNOWN']})。"
+                        "出口: 写本项目已发布的来源卡号")
+    try:
+        candidate_subject_values(repo_root, str(metadata.get("task_id") or ""), metadata)
+    except CandidateSubjectError as exc:
+        refusals.append(f"AIPOS-F196 {exc}。出口: 候选取来源卡所在仓的完整提交 sha(git rev-parse <提交>), 卡稿 lane.repo 写该仓")
+    return refusals
+
+
 def resolve_publish_signer(repo_root: Path, actor: str | None, connection_json: str | None) -> dict[str, Any]:
     """AIPOS-F156 件③: `lybra draft create|publish` 的签发实例唯一判定(声明 verbs.schema lane_view.owner_view.publish_signer)。
     返回 {actor: 实例 | None, source: explicit|inferred|unattributed, refusal: 拒因原文("" = 放行), note: 未归因说明}。
@@ -448,7 +479,9 @@ def publish_identity_refusals(repo_root: Path, metadata: dict[str, Any], *,
             refusals.append(refusal)
     checks: list[tuple[str, str, bool]] = [("assigned_to", str(metadata.get("assigned_to") or "").strip(), harness == "pi")]
     auditor = str(metadata.get("audit_by") or "").strip()
-    if not auditor and task_mode == "code" and str(metadata.get("audit") or "").strip().lower() != "none":
+    from tools.aipos_cli.next_resolver import task_mode_independent_audit
+
+    if not auditor and task_mode_independent_audit(task_mode) and str(metadata.get("audit") or "").strip().lower() != "none":
         from tools.aipos_cli.audit_derivation import resolve_audit_instance
 
         try:
@@ -525,6 +558,8 @@ def create_draft(
             _intent_warnings.extend(_intent["blocking_reasons"])
     except _IntentSchemaLoadError as e:
         _intent_warnings.append(f"harness/lane 派生失败(声明缺失): {e}")
+    # AIPOS-F196 件①: 固定候选卡(validation)起草即核来源卡与候选(fail-closed; 与发卡同一判据 candidate_subject_refusals)
+    project_reasons = [*project_reasons, *candidate_subject_refusals(repo_root, normalized)]
     
     # AIPOS-F76 件①: Inject machine-generated 工作纪律 section into body
     # Use the single-source derive function (F68 established, now wiring to create path)
@@ -1008,6 +1043,10 @@ def publish_draft(
         identity_reasons, result["identity_check"] = publish_identity_refusals(repo_root, publish_metadata,
                                                                                draft_metadata=_draft_intent_metadata)
         for reason in identity_reasons:
+            if reason not in validation["blocking_reasons"]:
+                validation["blocking_reasons"].append(reason)
+        # AIPOS-F196 件①: 固定候选卡(validation)发卡核来源卡与候选(与起草同一判据)
+        for reason in candidate_subject_refusals(repo_root, publish_metadata):
             if reason not in validation["blocking_reasons"]:
                 validation["blocking_reasons"].append(reason)
 

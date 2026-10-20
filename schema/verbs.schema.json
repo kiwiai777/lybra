@@ -39,7 +39,8 @@
         "validation-root revoke",
         "validation-root run-start",
         "validation-root run-finish",
-        "validation-root sim-bind"
+        "validation-root sim-bind",
+        "validation-root set-host"
       ],
       "default_phase": "dry_run",
       "flags": {
@@ -2258,7 +2259,9 @@
       "surface": ["cli"],
       "cli_command": "lybra my-tasks",
       "kickoff": {
-        "template": "已认领任务卡 {task_id}。\n\n工作树路径: {worktree_path}\n报告落点: {report_path}\n任务卡路径: {card_path}{remote_material}\n报告 frontmatter 必填(产品给出; 缺任一项或仍为占位, 报告被拒收):\n{report_field_lines}\n\n按你的 AGENTS.md 执行，完成后写报告到报告落点。",
+        "template": "已认领任务卡 {task_id}。\n\n工作树路径: {worktree_path}\n报告落点: {report_path}\n任务卡路径: {card_path}{remote_material}\n报告 frontmatter 必填(产品给出; 缺任一项或仍为占位, 报告被拒收):\n{report_field_lines}{validation_root}\n\n按你的 AGENTS.md 执行，完成后写报告到报告落点。",
+        "template_no_worktree": "已认领任务卡 {task_id}。\n\n工作树: {worktree_note}\n报告落点: {report_path}\n任务卡路径: {card_path}{remote_material}\n报告 frontmatter 必填(产品给出; 缺任一项或仍为占位, 报告被拒收):\n{report_field_lines}{validation_root}\n\n按你的 AGENTS.md 执行，完成后写报告到报告落点。",
+        "template_no_worktree_note": "AIPOS-F196 件①: 交付主体为固定候选的卡(enums.schema task_mode.candidate_subject: validation 卡及其审计卡)不建卡工作树, 照常入选 next_card, 开工提示按 template_no_worktree 渲染(worktree_note = card_workstation_view 的不建树说明); 其余不建树卡(只写治理根)照 F178 不入选。",
         "report_field_line": {
           "with_value": "- {key}: {value}({hint})",
           "without_value": "- {key}: ({hint})"
@@ -2269,7 +2272,9 @@
           "report_path": "next_card.report_path",
           "card_path": "next_card.card_path",
           "report_field_lines": "next_card.report_required_frontmatter 逐项按 report_field_line 成行(声明 transitions artifact_ingest 单源; 审计卡附被审 tip/tree 实值), 以换行连接",
-          "remote_material": "AIPOS-F110 件②: 本机工位 = 空串(开工提示与 F110 前逐字节相同); 跨机工位 = 按 remote_material 模板渲染的门机材料段(`my-tasks --remote-workstation` 经 next_resolver.remote_kickoff_context 取上下文交 render_kickoff; lybra loop 拉起跨机工位时传该参数)"
+          "remote_material": "AIPOS-F110 件②: 本机工位 = 空串(开工提示与 F110 前逐字节相同); 跨机工位 = 按 remote_material 模板渲染的门机材料段(`my-tasks --remote-workstation` 经 next_resolver.remote_kickoff_context 取上下文交 render_kickoff; lybra loop 拉起跨机工位时传该参数)",
+          "worktree_note": "AIPOS-F196: 只用于 template_no_worktree = next_card.worktree_note(不建树说明: 交付主体 = 固定候选, 产物只落验证根与报告落点)",
+          "validation_root": "AIPOS-F196 件③: 本卡(本实例)验证根节 = validation_root.render_section_lines(实例 = 卡认领实例, 卡 = 本卡, harness = 卡面 harness, 含已撤销 / 到期, 与章程同源); 无声明 = 空串(开工提示与 F196 前逐字节相同); 有 = 空行 + 节文本(经 ssh 操作目标主机时含 ssh 命令)"
         },
         "remote_material": "\n以上工作树、报告落点、任务卡均在门机 {gate_host}(治理根 {governance_root}), 不在你的工位 {workstation_host} 本地; 门机在你的工位上的 ssh 别名: {gate_ssh_alias}; 材料访问方式(项目声明): {material_access}",
         "remote_material_note": "AIPOS-F110 件②: 占位 gate_host = 门机(驱动方)主机名, governance_root = 门机治理根, workstation_host = land 事件 host, gate_ssh_alias / material_access = project.json workstations.<实例> 声明(远端视角)。占位缺值 = 渲染失败(fail-closed); 声明值含凭据字样在读声明时即拒。",
@@ -2389,7 +2394,10 @@
         "block": "  - BLOCK / 禁止: {text}",
         "init_run": "  ① run-start 后第一步 = 目录链初始化(AIPOS-F191): 在目标主机 {host} 运行 `{init_run}`(前半段 = 在治理根所在机取 helper 原文, 远端主机经你访问治理根的通道取得后经管道交给 `python3 -`, helper 不落盘); 只用 mkdir 建缺失的 `{run_dir}` 目录链(新建 0700, 逐级拒软链 / 非目录 / 他人属主 / 不可写祖先; 已建且合规 = 幂等), 证据追加到 run 目录内 `.lybra-vr/init-run.jsonl`; 只认末行 `INIT_OK` + 退出码 0, 其余 = 未建, 停线报告(禁自行 mkdir / sudo / 改参数重试); 之后再按下条把 helper 存入 run 目录做写前判定",
         "sim_title": "  iOS 本 run 专用模拟器(AIPOS-F194; 需 iOS 模拟器 / XCTest UI 时按序做; 本 run 名 `{sim_name}`, 只写 `~/{devices_rel}/{sim_udid}/` 这一台, 其他 UDID / 整个 Devices 目录 / Xcode 全局缓存不放行; 不用 `simctl --set` 独立设备集——已撤下, Xcode 不支持 XCTest 连接自定义设备集):",
-        "sim_step": "  {n}. {text}"
+        "sim_step": "  {n}. {text}",
+        "ssh_mode": "  经 ssh 操作目标主机(AIPOS-F196; 本实例工位在治理根所在机 {gate_host}, 目标主机 {host} 的 ssh 别名 = {ssh_alias}, 项目声明 project.json validation_roots.hosts): 凡在目标主机执行的命令一律 `ssh {ssh_alias} '<命令>'`(下文写作「在目标主机运行」的命令同此); 只写本 run 验证根 `{run_dir}`; helper 子命令(init-run / check / sim-* / sys-snapshot)一律经 ssh 调用 `{helper_pipe} 'python3 - <子命令> …'`(helper 由治理根所在机产品给出、经管道送入, 不存入目标主机; 下文写作 `python3 {helper_path} <子命令>` 的同此改写); 禁对目标主机其他路径写、禁 sudo / su / doas、禁改 ssh 配置(~/.ssh 下任何文件、ssh_config、authorized_keys)、禁 ssh 端口转发 / 代理跳板; ssh 不可达或被拒 = 停线报告(禁换别名 / 换主机名 / 换用户重试)",
+        "init_run_ssh": "  ① run-start 后第一步 = 目录链初始化(AIPOS-F191; 经 ssh, AIPOS-F196): 在治理根所在机运行 `{init_run}`(helper 由产品给出经管道送到目标主机 {host} 的 `python3 -`, 不落盘); 只用 mkdir 建缺失的 `{run_dir}` 目录链(新建 0700, 逐级拒软链 / 非目录 / 他人属主 / 不可写祖先; 已建且合规 = 幂等), 证据追加到 run 目录内 `.lybra-vr/init-run.jsonl`; 只认末行 `INIT_OK` + 退出码 0, 其余 = 未建, 停线报告(禁自行 mkdir / sudo / 改参数重试)",
+        "helper_ssh": "  目标主机侧 realpath 判定(符号链接逃逸只能在目标主机判; 经 ssh): 每次写前在治理根所在机运行 `{check_ssh}`; 只认退出码 0 且输出 `ALLOW`, 其余(含无输出 / ssh 失败)= 拒"
       },
       "item_templates": {
         "boundary_line": "- {surface}: {level} `{path}`({scope})",
@@ -3461,7 +3469,7 @@
         "description": "AIPOS-F180 件①(gap #175: 顾问请求里写明了 docs 模式 / 仓 / 额度 / 到期, 产品没把它变成可一键执行的请求): loop_owner_needed 类且下一动作事由 ∈ reasons 的事项 = 授权请求, 事项另带 grant 结构化建议(唯一推导 owner_inbox.suggest_grant; CLI 一行人话、看板「待授权请求」卡与「按建议签发」同读这一份数据): 驱动方 agent_or_role = 运行记录 driver; task_mode = 卡面 task_mode; 仓 = 卡面 lane.repo(未写 = project.json repos 中指向卡所在仓的仓名, 再无 = 不限); 拉起授权 = 同驱动方上一信封的 launch_harnesses(无 = 只手工 /go); 额度(AIPOS-F192: 业务卡张数, 不再照抄上一信封)= project.json grant_request.max_tasks 显式声明者, 否则本卡所需(autonomy_policy.envelope_card_need, 一张新业务卡 = 1); 到期 = 现在 + project.json grant_request.days(缺省 7, 与 lybra_loop.envelope.renew.renew_days 同值); 理由 = 卡标题; policy_id = F166 唯一推导 autonomy_policy.next_policy_id(该驱动方同前缀已有最大序号 +1, 前缀取同驱动方上一信封, 无 = pol_<项目>_loop_)。顾问 `lybra loop note --grant-mode/--grant-repos/--grant-max-tasks/--grant-expires/--grant-reason` 写进运行记录 owner_ask.grant, 逐字段覆盖推导值(sources 标明每字段来源)。签发 = 看板复用 F172 写例外 board_owner_envelopes.write_path(mode=new, 参数 = 建议; 不新增写路由)。信封生效即自行解除: 驱动方对本卡已有覆盖信封(loop 同一判据 loop_driver.find_envelope → autonomy_policy.select_envelope)= 事项不再列出。只读: 推导不写任何文件。",
         "reasons": ["no_envelope", "envelope_renew"],
         "date_only_time": "T23:59:59Z",
-        "mode_labels": {"code": "改代码", "docs": "只写文档", "governance": "写治理文档", "config": "改配置", "audit": "做审计"},
+        "mode_labels": {"code": "改代码", "docs": "只写文档", "governance": "写治理文档", "config": "改配置", "audit": "做审计", "validation": "做固定候选验证"},
         "mode_any": "不限模式",
         "repos_any": "不限仓",
         "sources": {"advisor": "顾问 loop note", "card": "卡面", "previous_envelope": "同驱动方上一信封", "project_default": "项目缺省", "derived": "推导", "card_need": "本卡所需(AIPOS-F192: 额度 = 业务卡张数)"},
@@ -4260,7 +4268,7 @@
           },
           "project_writers": {
             "cli": "lybra project <subcommand> --confirm",
-            "subcommands": ["set-paths", "set-repo", "set-repos", "set-workstation", "set-meta", "set-execution", "set-model", "set-return-summary", "freeze-legacy", "dispatch-mode set", "relocate-workstation", "upgrade", "validation-root declare", "validation-root revoke", "validation-root run-start", "validation-root run-finish", "validation-root sim-bind"],
+            "subcommands": ["set-paths", "set-repo", "set-repos", "set-workstation", "set-meta", "set-execution", "set-model", "set-return-summary", "freeze-legacy", "dispatch-mode set", "relocate-workstation", "upgrade", "validation-root declare", "validation-root revoke", "validation-root run-start", "validation-root run-finish", "validation-root sim-bind", "validation-root set-host"],
             "scope": "AIPOS-F159 件①(gap #144): 写 project.json 的 project 族命令 --confirm 成功后的写出文件(治理根相对): two_phase_protocol.project_json_writers 各命令 = project.json(--confirm 即落, 无改动亦经同一提交口核一次: 范围已落账 = PASS no-op, 前次写后未落账者随之补落); freeze-legacy = 本次追加的清单条目 + 本次补声明 legacy_baseline 时的 project.json(本批无卡可冻 = 无写出, 不落); dispatch-mode set = project.json + 切换留痕文件。AIPOS-F161: relocate-workstation = 本项目 enrollment_log(追加的 relocate 位置事件; 唯一写出, 工位目录在治理仓外不入)。AIPOS-F176: upgrade = `lybra project upgrade --confirm` 配置缺省补齐步写出的 project.json(其余步骤各经自身声明的落账命令: migrate_record_type / migrate_decision_log_pointers; 工位章程在治理仓外不入)。提交身份 = 该命令 --actor(dispatch-mode set 为 --by; 未给 = $USER 或 owner, 与 set-repo / project new 同一缺省)。--dry-run 零写入、不落账。唯一落账点: 写 project.json 的两阶段命令经输出包装 aipos_cli._project_json_two_phase_emit, freeze-legacy / dispatch-mode set 经同一薄壳 aipos_cli._land_project_writes(→ land_written_paths)。不含 project new / import(建治理根本身, 治理根此时可能尚未入治理仓; 向导第 1 步照旧给 governance-commit 与 home git-init)。",
             "message_template": "chore(governance): 项目配置落账 {subcommand} {project}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra project {subcommand} --confirm"
           },

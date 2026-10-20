@@ -1603,6 +1603,49 @@ def _acquire_repo_merge_lock(
     return None
 
 
+def _finalize_candidate_subject(task_id: str, actor: str, workspace_root: Path, governance_root: Path, *, dry_run: bool,
+                                operations: list[str]) -> dict[str, Any] | None:
+    """AIPOS-F196 件①: 固定候选卡(validation)的 N5——无合入。None = 本卡非 candidate 模式(走既有分支整合)。
+    判定: 卡面 → next_resolver.candidate_subject_values(唯一实值; 不合 = BLOCK 拒因原文); 裁决 = 门生 PASS 族且 artifact_subject 精确覆盖候选
+    (check_task_can_finalize, F70 同一判定); 通过 = 写 finalization 记录(_ensure_finalization_record 唯一写口: commit = merge_commit = 候选,
+    deploy_status / push_status = not_applicable 并写明原因), 不碰产品仓 git(不合并 / 不推送 / 不部署)。"""
+    from tools.aipos_cli.next_resolver import CandidateSubjectError, _find_task_in_queue, _read_frontmatter, candidate_subject_values
+
+    task_path, _q = _find_task_in_queue(governance_root, task_id)
+    if not task_path:
+        return None
+    fm = _read_frontmatter(task_path)
+    base = {"task_id": task_id, "actor": actor, "dry_run": dry_run, "integrity_check": None, "branch_check": None, "committed": False,
+            "pushed": False, "deployed": False, "deployment_error": None, "operations": operations}
+    try:
+        values = candidate_subject_values(governance_root, task_id, fm)
+    except CandidateSubjectError as exc:
+        operations.append(f"BLOCK: 固定候选卡声明不合: {exc}")
+        return {**base, "verdict": Verdict.BLOCK, "can_finalize": False, "deployment_skipped": False, "commit_hash": None,
+                "category": exc.code, "message": f"BLOCKED: {exc}; 出口: 顾问 lybra queue amend 修正来源卡 / 候选后重跑 finalize"}
+    if values is None:
+        return None
+    candidate = values["commit_sha"]
+    operations.append(f"AIPOS-F196: 本卡交付主体 = 来源卡 {values['source']} 的固定候选 {candidate}(仓 {values['repo_path']}); N5 无合入")
+    check = check_task_can_finalize(task_id, governance_root, commit_sha=candidate)
+    operations.append(f"Checked finalize eligibility (裁决须覆盖候选 {candidate[:12]}): {check['reason']}")
+    if not check["can_finalize"]:
+        return {**base, "verdict": Verdict.BLOCK, "can_finalize": False, "deployment_skipped": False, "commit_hash": None,
+                "message": f"BLOCKED: {check['reason']}", "verdict_check": check}
+    reason = (f"验证卡(task_mode={fm.get('task_mode')})不写产品仓源码: N5 无合入, 不推送不部署; 交付主体 = 来源卡 {values['source']} "
+              f"的固定候选 {candidate}")
+    regression = {"status": "skipped", "action": "none", "mode": "n/a", "reason": "验证卡无合入(AIPOS-F196)"}
+    regression["summary"] = f"合并后回归: 不适用(验证卡无合入, AIPOS-F196)"
+    operations.append(regression["summary"])
+    fin = _ensure_finalization_record(governance_root, task_id, actor, candidate, check.get("verdict_id"), False, operations,
+                                      deploy_status="not_applicable", deploy_status_reason=reason, dry_run=dry_run, regression=regression,
+                                      push_status="not_applicable", push_status_reason=reason, workspace_root=workspace_root)
+    integrate = {"branch_name": None, "blocked": False, "conflict_files": [], "action": "skipped_no_integration", "message": reason}
+    return {**base, "verdict": Verdict.PASS, "can_finalize": True, "deployment_skipped": True, "commit_hash": candidate,
+            "push_status": "not_applicable", "branch_integration": integrate, "finalization_record": fin.get("path"),
+            "message": f"{'DRY-RUN: ' if dry_run else ''}{reason}; finalization 记录{'将写' if dry_run else '已写'} {fin.get('path')}"}
+
+
 def finalize_task(
     task_id: str,
     actor: str,
@@ -1824,6 +1867,12 @@ def _finalize_task_impl(
             "message": f"BLOCKED: {claimer_check['reason']}",
             "operations": operations,
         }
+
+    # AIPOS-F196 件①: 交付主体为固定候选的卡(validation; enums.schema task_mode.candidate_subject)= N5 无合入——不合并 / 不推送 / 不部署,
+    # 裁决须精确覆盖候选, 写 finalization 记录(commit = merge_commit = 候选, 写明无合入)后照常 N6 结案
+    candidate_result = _finalize_candidate_subject(task_id, actor, workspace_root, governance_root, dry_run=dry_run, operations=operations)
+    if candidate_result is not None:
+        return candidate_result
 
     # AIPOS-FND-14: display-only — surface the audit report frontmatter verdict (declared verdict_root, governance
     # root; AIPOS-F89 件① H9) alongside the real gate verdict for operator visibility. Never judged.

@@ -119,20 +119,37 @@ def derive_machine_zone_纪律段(
         
         lines.append("## 工作纪律")
         lines.append("")
-        lines.append(f"- **分支**: `{branch_name}` (读自 transitions.schema.json N5.branch_integration.branch_pattern)")
-        lines.append("- **工作起点**: 从当前 main 拉取")
+        from tools.aipos_cli.next_resolver import (
+            CandidateSubjectError, card_candidate_subject, card_report_contract, card_report_path, render_report_frontmatter_clause,
+        )
+
+        card_fm = {**metadata, "task_id": task_id}
+        # AIPOS-F196 件①: 固定候选卡(validation)不建卡分支 / 工作树, 不写产品仓源码(enums.schema task_mode.candidate_subject)
+        try:
+            candidate = card_candidate_subject(card_fm)
+            candidate_problem = ""
+        except CandidateSubjectError as exc:
+            candidate, candidate_problem = None, str(exc)
+        if candidate is not None or candidate_problem:
+            subject = (f"来源卡 {candidate['source']} 的固定候选 `{candidate['candidate']}`" if candidate
+                       else f"(固定候选不合: {candidate_problem})")
+            lines.append(f"- **分支**: 不建(交付主体 = {subject}; 不写产品仓源码, 产物只落验证根与报告落点; 判据 enums.schema task_mode.candidate_subject)")
+            lines.append("- **工作起点**: 固定候选(只读取证; 验证根 run-start 的候选须等于卡面候选)")
+        else:
+            lines.append(f"- **分支**: `{branch_name}` (读自 transitions.schema.json N5.branch_integration.branch_pattern)")
+            lines.append("- **工作起点**: 从当前 main 拉取")
         
         # AIPOS-F89 件① H9: 报告落点唯一读取口 next_resolver.card_report_path(执行卡 = project.json paths.return_root,
         # 审计卡 = paths.verdict_root; 文件候选读 transitions artifact_ingest)。原读 config.schema
         # governance_structure.paths.task_cards(第二份声明)已删。声明读取失败 = 向上抛(fail-closed)。
-        from tools.aipos_cli.next_resolver import card_report_contract, card_report_path, render_report_frontmatter_clause
-
-        card_fm = {**metadata, "task_id": task_id}
         report_path = card_report_path(governance_root, task_id, card_fm)
         lines.append(f"- **报告落点**: `{report_path}` (读自项目 project.json paths 声明)")
         # AIPOS-F93 件①: 报告必填字段(声明 transitions artifact_ingest 单源渲染, 与派生审计卡 / my-tasks / 认领模板 / 章程同源)
-        contract = card_report_contract(governance_root, task_id, card_fm, branch_pattern=branch_pattern)
-        lines.append(f"- **报告必填**: {render_report_frontmatter_clause(contract)}")
+        try:
+            contract = card_report_contract(governance_root, task_id, card_fm, branch_pattern=branch_pattern)
+            lines.append(f"- **报告必填**: {render_report_frontmatter_clause(contract)}")
+        except CandidateSubjectError as exc:  # 起草 / 发卡另有拒因(candidate_subject_refusals), 此处只如实写明
+            lines.append(f"- **报告必填**: 不可推导(固定候选不合: {exc}; 发卡前须修正)")
         
         lines.append("- **治理仓**: 永远停在 main 分支，不 commit")
         lines.append("- **写完停手**: 等待托管/审计，不自行 push")
