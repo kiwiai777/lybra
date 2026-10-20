@@ -400,6 +400,89 @@ def _is_charter(dist: dict[str, Any]) -> bool:
     return str(dist.get("kind") or "") == "charter"
 
 
+def hand_maintained_guard_declaration() -> dict[str, Any]:
+    """distribution.schema charter_render_semantics.hand_maintained_guard(AIPOS-F196 件②)。缺 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (load_schema("distribution").get("charter_render_semantics") or {}).get("hand_maintained_guard")
+    markers = decl.get("markers") if isinstance(decl, dict) else None
+    if (not isinstance(markers, list) or not markers or not all(isinstance(m, str) and m for m in markers)
+            or not all(isinstance(decl.get(k), str) and decl[k] for k in ("refusal_code", "adopt_flag", "owner_ref_flag", "backup_template",
+                                                                           "adoption_log"))):
+        raise SchemaLoadError("distribution.schema.json charter_render_semantics.hand_maintained_guard(markers / refusal_code / adopt_flag / "
+                              "owner_ref_flag / backup_template / adoption_log)未声明齐(AIPOS-F196)")
+    return decl
+
+
+def hand_maintained_charters(harness_root: Path, diffs: list[dict[str, Any]], local_manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """AIPOS-F196 件②: 本次将重渲染的章程落点中「手写章程带手工维护标记且不是产品渲染物」者(判定唯一实现)。
+    判据: 落点文件在 + 含声明 markers 之一 + (本地清单无渲染指纹, 或副本 sha256 ≠ 记录的 rendered_sha256)。返回 [{path, markers, sha256, reason}]。"""
+    decl = hand_maintained_guard_declaration()
+    found: list[dict[str, Any]] = []
+    for item in diffs:
+        dist = item["dist"]
+        if not _is_charter(dist):
+            continue
+        for rel in item["paths"]:
+            dest = _file_target_path(harness_root, dist, rel)
+            if not dest.is_file():
+                continue
+            text = dest.read_text(encoding="utf-8", errors="replace")
+            hits = [m for m in decl["markers"] if m in text]
+            if not hits:
+                continue
+            recorded = _recorded_file(local_manifest, str(dist["distribution_id"]), rel) or {}
+            sha = _sha256_file(dest)
+            if recorded.get("rendered_sha256") and recorded["rendered_sha256"] == sha:
+                continue  # 产品渲染物本身(母本含同字样): 不算手写章程
+            found.append({"path": str(dest), "markers": hits, "sha256": sha,
+                          "reason": (item.get("reasons") or {}).get(rel, "differs")})
+    return found
+
+
+def hand_charter_refusal(harness_root: Path, governance_root: Path | None, hand: list[dict[str, Any]]) -> str:
+    """拒覆盖原文(CHARTER_HAND_MAINTAINED + 正式解除出口; 声明 hand_maintained_guard)。"""
+    decl = hand_maintained_guard_declaration()
+    paths = ", ".join(f"{h['path']}(标记 {h['markers']})" for h in hand)
+    gov = f" --workspace-root {governance_root}" if governance_root else ""
+    return (f"{decl['refusal_code']}: 工位章程落点是手工维护章程(带标记, 非产品渲染物): {paths}; sync 不覆盖(含 dry-run / loop 拉起前自动 sync)。"
+            f"正式解除(单工位, 须 Owner 裁决引用; 原章程备份保留不删): lybra sync --harness-root {harness_root}{gov} "
+            f"{decl['adopt_flag']} {decl['owner_ref_flag']} <Owner 裁决引用>(先加 --dry-run 预演备份路径)")
+
+
+def adopt_hand_charters(harness_root: Path, hand: list[dict[str, Any]], *, owner_ref: str, dry_run: bool) -> list[dict[str, Any]]:
+    """AIPOS-F196 件②: 正式解除手工维护标记 = 备份原章程(backup_template, 不删、不覆盖已有备份)+ 追加采纳记录(adoption_log)。
+    dry_run = 只算计划。owner_ref 须非空单行且不含凭据字样(否则 ValueError)。返回 [{path, backup, sha256, owner_ref, adopted_at}]。"""
+    import shutil
+
+    from tools.aipos_cli.harness_launch import redact_progress
+
+    decl = hand_maintained_guard_declaration()
+    ref = str(owner_ref or "").strip()
+    if not ref or "\n" in ref or redact_progress(ref) != ref:
+        raise ValueError(f"{decl['owner_ref_flag']} 须为非空单行 Owner 裁决引用且不含凭据字样")
+    stamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
+    plan: list[dict[str, Any]] = []
+    for h in hand:
+        src = Path(h["path"])
+        backup = src.with_name(decl["backup_template"].format(name=src.name, stamp=stamp))
+        if backup.exists():
+            raise ValueError(f"备份落点 {backup} 已存在, 不覆盖; 稍后重跑")
+        plan.append({"path": str(src), "backup": str(backup), "sha256": h["sha256"], "markers": h["markers"], "owner_ref": ref,
+                     "adopted_at": utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")})
+    if dry_run:
+        return plan
+    log = harness_root / decl["adoption_log"]
+    log.parent.mkdir(parents=True, exist_ok=True)
+    for entry in plan:
+        shutil.copy2(entry["path"], entry["backup"])
+        if _sha256_file(Path(entry["backup"])) != entry["sha256"]:
+            raise ValueError(f"备份 {entry['backup']} sha256 与原件不符, 中止(原件未动)")
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({**entry, "by": "lybra sync --adopt-hand-charter"}, ensure_ascii=False) + "\n")
+    return plan
+
+
 def _charter_render_reason(
     local_path: Path,
     remote_file: dict[str, Any],
@@ -1056,8 +1139,11 @@ def sync(
     governance_root: Path | None = None,
     project: str | None = None,
     dry_run: bool = False,
+    adopt_hand_charter: str | None = None,
 ) -> dict[str, Any]:
     """执行一次单工位 sync。返回结构化结果。
+    AIPOS-F196 件②: 章程落点是带手工维护标记的手写章程 = 拒覆盖(CHARTER_HAND_MAINTAINED); adopt_hand_charter = Owner 裁决引用 → 备份原章程 +
+    采纳记录后照常渲染(hand_maintained_guard 声明)。
 
     AIPOS-F66B 件①: 先判工位项目归属(project 显式范围 ≠ 工位实例项目段 → status=skipped, 零写入, 不连门);
     charter 走 apply_charter_render(母本 + 声明渲染), manifest 记三指纹; dry_run 零写入只列计划。
@@ -1120,6 +1206,16 @@ def sync(
         pi_mount_report=mount_report,
     )
 
+    # AIPOS-F196 件②: 手写章程(带手工维护标记, 非产品渲染物)= 拒覆盖, 除非带 Owner 裁决引用正式采纳(备份保留)
+    hand = hand_maintained_charters(ctx["harness_root"], diffs, _load_local_manifest(ctx["harness_root"], ctx["role"])) if render_ctx is not None else []
+    adoption: list[dict[str, Any]] = []
+    if hand and not adopt_hand_charter:
+        refusal = hand_charter_refusal(ctx["harness_root"], governance_root, hand)
+        return {"ok": False, "status": "refused", "code": hand_maintained_guard_declaration()["refusal_code"], "error": refusal,
+                "role": ctx["role"], "harness_root": str(ctx["harness_root"]), "hand_maintained": hand, "dry_run": dry_run}
+    if hand:
+        adoption = adopt_hand_charters(ctx["harness_root"], hand, owner_ref=adopt_hand_charter, dry_run=dry_run)
+
     plan = []
     for item in diffs:
         dist = item["dist"]
@@ -1152,6 +1248,7 @@ def sync(
         # AIPOS-F83 件③: .pi 悬空挂载 —— 回收项已并入 would_prune; 声明内暂缺 / 非接线形态只告警不删
         "pi_mount_prune": list(mount_report.get("prune") or []),
         "pi_mount_warnings": list(mount_report.get("declared_missing") or []) + list(mount_report.get("foreign") or []),
+        "hand_charter_adoption": adoption,
     }
     if dry_run:
         return {**base_result, "files_fetched": 0, "files_pruned": 0, "changes": [], "pruned_files": [], "prune_errors": [],
@@ -1431,8 +1528,10 @@ def sync_many(
     dry_run: bool = False,
     gate_url: str | None = None,
     token: str | None = None,
+    adopt_hand_charter: str | None = None,
 ) -> dict[str, Any]:
     """AIPOS-F66B 件①: 工位根或工位父根 → 逐工位按项目归属过滤后 sync。
+    AIPOS-F196 件②: adopt_hand_charter(手写章程正式采纳)只对单工位; 多工位带此参数 = ValueError(禁批量解除)。
 
     多工位时项目范围必须显式(--project 或 --workspace-root), 禁猜; 单工位缺省 = 工位自身项目。
     每工位独立 fail-closed(一工位出错不阻断其余, 总 ok = 无错误); 非 dry-run 写运行清单 <父根>/_distributed/.version-sync(含 skipped)。
@@ -1443,6 +1542,9 @@ def sync_many(
     workstations = discover_workstations(root)
     multi = len(workstations) > 1 or workstations[0] != root
     scope = _scope_project(project=project, governance_root=governance_root)
+    if multi and adopt_hand_charter:
+        raise ValueError(f"--harness-root {root} 是工位父根({len(workstations)} 个工位): 手写章程采纳(--adopt-hand-charter)只对单工位, "
+                         "--harness-root 给该工位目录(禁批量解除)")
     if multi and not scope:
         raise ValueError(
             f"--harness-root {root} 下有 {len(workstations)} 个工位, 多工位 sync 必须显式项目范围(禁猜): "
@@ -1456,7 +1558,8 @@ def sync_many(
             entries.append({"harness_root": str(ws), "status": "error", "reason": str(exc)})
             continue
         try:
-            result = sync(harness_root=ws, gate_url=gate_url, token=token, governance_root=governance_root, project=scope, dry_run=dry_run)
+            result = sync(harness_root=ws, gate_url=gate_url, token=token, governance_root=governance_root, project=scope, dry_run=dry_run,
+                          adopt_hand_charter=adopt_hand_charter)
         except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
             entries.append({"harness_root": str(ws), "status": "error", "workstation": _public_identity(identity), "reason": f"{exc.__class__.__name__}: {exc}"})
             continue
@@ -1641,6 +1744,9 @@ def render_sync_text(run: dict[str, Any]) -> str:
         if e.get("reason") and e["status"] in ("skipped", "error"):
             lines.append(f"      {e['reason']}")
         r = e.get("result") or {}
+        for a in r.get("hand_charter_adoption") or []:  # AIPOS-F196 件②
+            lines.append(f"      {'would-backup' if run.get('dry_run') else 'backed-up'}(手写章程采纳, owner_ref={a['owner_ref']}): "
+                         f"{a['path']} → {a['backup']} (sha256 {a['sha256'][:12]}…, 标记 {a['markers']})")
         if r and e["status"] in ("dry-run", "synced"):
             lines.append(f"      product_commit={r.get('product_commit')} distributions_checked={r.get('distributions_checked')} governance_root={r.get('governance_root')}")
             for p in r.get("plan") or []:
@@ -1679,6 +1785,18 @@ def render_sync_text(run: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _adopt_owner_ref(args: Any) -> str | None:
+    """--adopt-hand-charter 须与 --owner-ref 同给(缺 = ValueError); 未给采纳旗标 = None。"""
+    if not getattr(args, "adopt_hand_charter", False):
+        if getattr(args, "owner_ref", None):
+            raise ValueError("--owner-ref 只与 --adopt-hand-charter 同用(手写章程正式采纳, AIPOS-F196)")
+        return None
+    ref = str(getattr(args, "owner_ref", None) or "").strip()
+    if not ref:
+        raise ValueError("--adopt-hand-charter 须同给 --owner-ref <Owner 裁决引用>(AIPOS-F196: 手工维护标记只经 Owner 裁决正式解除)")
+    return ref
+
+
 def run_sync_cli(args: Any) -> int:
     harness_root = getattr(args, "harness_root", None) or os.environ.get("LYBRA_HARNESS_ROOT") or None
     json_mode = bool(getattr(args, "json", False))
@@ -1694,6 +1812,7 @@ def run_sync_cli(args: Any) -> int:
             dry_run=bool(getattr(args, "dry_run", False)),
             gate_url=getattr(args, "gate_url", None),
             token=getattr(args, "token", None),
+            adopt_hand_charter=_adopt_owner_ref(args),
         )
     except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
         if json_mode:
