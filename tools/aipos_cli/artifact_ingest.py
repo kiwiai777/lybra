@@ -845,10 +845,13 @@ def runtime_evidence_command_words(command: str) -> list[str]:
     return words
 
 
-def check_runtime_evidence_declaration(raw: Any, *, governance_root: Path | str, audit_instance: str | None) -> dict[str, Any]:
+def check_runtime_evidence_declaration(raw: Any, *, governance_root: Path | str, audit_instance: str | None,
+                                       card_task_id: str | None = None, card_frontmatter: dict[str, Any] | None = None) -> dict[str, Any]:
     """运行证据声明校验唯一处(出卡 draft create/publish 与补审派发 audit dispatch --supplementary 同调): 形校验(同裁决入口
     parse_runtime_evidence_declaration)+ 派发前可执行核查。返回 {requirement, problems: [拒因原文], notes: [未核提示]}。
-    形不合 = RuntimeEvidenceDeclarationError。problems 非空 = 调用方拒(预演报错, --confirm 拒)。"""
+    形不合 = RuntimeEvidenceDeclarationError。problems 非空 = 调用方拒(预演报错, --confirm 拒)。
+    AIPOS-F199 件①: card_frontmatter(声明所在卡)交付主体为固定候选且命令用旧占位 = declaration_invalid_category 拒因 + 迁移提示
+    (runtime_evidence_legacy_problems 唯一判据; 裁决入口同判); 候选声明本身不合由起草 F196 判据报, 此处不重复。"""
     import socket
 
     requirement = parse_runtime_evidence_declaration(raw)
@@ -856,13 +859,21 @@ def check_runtime_evidence_declaration(raw: Any, *, governance_root: Path | str,
     if requirement is None:
         return out
     decl = runtime_evidence_declaration()
+    if card_frontmatter is not None:
+        from tools.aipos_cli.next_resolver import CandidateSubjectError
+
+        try:
+            legacy = runtime_evidence_legacy_problems(requirement, str(card_task_id or card_frontmatter.get("task_id") or ""), card_frontmatter)
+        except CandidateSubjectError:  # 候选声明不合: 起草 F196 判据(VALIDATION_*)已拒并给出口, 此处不二报
+            legacy = []
+        out["problems"].extend(f"{decl['declaration_invalid_category']}: {p}" for p in legacy)
     check = decl.get("executable_check")
     needed = ("category", "privilege_category", "privilege_commands", "fix_hint", "unverified_note")
     if not isinstance(check, dict) or any(not check.get(k) for k in needed):
         from tools.schema_loader import SchemaLoadError
 
         raise SchemaLoadError(f"transitions.schema.json artifact_ingest.verdict.runtime_evidence.executable_check({'/'.join(needed)})未声明")
-    placeholders = ["{" + str(k) + "}" for k in decl["placeholders"]]
+    placeholders = ["{" + str(k) + "}" for k in (*decl["placeholders"], *runtime_evidence_candidate_declaration()["placeholders"])]
     privileged = {str(c) for c in check["privilege_commands"]}
     location: dict[str, Any] = {}
     basis = ""
@@ -933,11 +944,93 @@ def runtime_evidence_command_diff(declared: str, ran: list[str]) -> str:
     return f"逐条差异: 声明 `{declared}` vs 最接近的实跑 `{closest}`: " + ("; ".join(parts) or "仅空白不同")
 
 
-def render_runtime_evidence_requirement(requirement: dict[str, Any]) -> str:
-    """审计卡正文「独立运行证据要求」段(唯一渲染; 派生审计卡与手动/补充派审同读): 命令清单 + 证据节格式 + 示例。"""
+def runtime_evidence_candidate_declaration() -> dict[str, Any]:
+    """AIPOS-F199 件①: transitions runtime_evidence.candidate_subject(固定候选卡审计证据绑定审计自己的验证根 run)唯一读取口。缺 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = runtime_evidence_declaration().get("candidate_subject")
+    needed = ("entry_required_fields", "placeholders", "legacy_placeholders", "legacy_hint", "outlet", "steps_title", "steps", "command_line",
+              "pending")
+    if not isinstance(decl, dict) or any(not decl.get(k) for k in needed):
+        raise SchemaLoadError(f"transitions.schema.json artifact_ingest.verdict.runtime_evidence.candidate_subject({'/'.join(needed)})未声明")
+    return decl
+
+
+def render_candidate_evidence_command(command: str, values: dict[str, Any]) -> str:
+    """AIPOS-F199: 固定候选卡声明命令的占位渲染(唯一实现; 裁决入口逐字匹配与开工稿 / 派审步骤同用)。占位名读 candidate_subject.placeholders;
+    values 缺某占位 = 原样保留(开工稿未起 run 时)。"""
+    for name in runtime_evidence_candidate_declaration()["placeholders"]:
+        if name in values and values[name] not in (None, ""):
+            command = command.replace("{" + str(name) + "}", str(values[name]))
+    return command
+
+
+def runtime_evidence_legacy_problems(requirement: dict[str, Any] | None, card_task_id: str, card_fm: dict[str, Any] | None) -> list[str]:
+    """AIPOS-F199 件①: 固定候选卡(next_resolver.card_candidate_subject)的声明命令仍用旧占位({worktree}/{commit_sha}/{tree_hash})= 迁移提示原文
+    (每条一句; 非候选卡 / 无要求 = [])。候选声明本身不合 = CandidateSubjectError 上抛(调用方各自给拒因)。"""
+    from tools.aipos_cli.next_resolver import card_candidate_subject
+
+    if not requirement or card_candidate_subject(card_fm) is None:
+        return []
+    decl = runtime_evidence_candidate_declaration()
+    out: list[str] = []
+    for command in requirement.get("commands") or []:
+        legacy = [f"{{{name}}}" for name in decl["legacy_placeholders"] if "{" + str(name) + "}" in command]
+        if legacy:
+            out.append(str(decl["legacy_hint"]).format(task_id=card_task_id, task_mode=(card_fm or {}).get("task_mode"),
+                                                       card_field=runtime_evidence_declaration()["card_field"], command=command,
+                                                       legacy=" / ".join(legacy)))
+    return out
+
+
+def render_candidate_evidence_steps(governance_root: Path | str, *, audit_task_id: str, audit_instance: str | None, reviewed_task_id: str,
+                                    reviewed_fm: dict[str, Any] | None, requirement: dict[str, Any] | None) -> list[str]:
+    """AIPOS-F199 件②: 审计「验证卡运行证据步骤」(派审注入 / 开工稿同一渲染; 步骤措辞读 candidate_subject.steps, 渲染值与命令读
+    validation_root.candidate_evidence_values 唯一铸造口)。被审卡非固定候选 = []。候选不可用 = CandidateSubjectError 上抛。"""
+    from tools.aipos_cli.next_resolver import candidate_subject_values
+    from tools.aipos_cli.validation_root import candidate_evidence_values
+
+    subject = candidate_subject_values(Path(governance_root), reviewed_task_id, reviewed_fm or {})
+    if subject is None:
+        return []
+    decl = runtime_evidence_candidate_declaration()
+    values = candidate_evidence_values(governance_root, audit_task_id=audit_task_id, audit_instance=str(audit_instance or ""),
+                                       candidate=subject["commit_sha"], candidate_tree=subject["tree_hash"])
+    values["heading"] = str(runtime_evidence_declaration()["section_heading"])
+    known = {k: v for k, v in values.items() if not str(v).startswith("<")}
+    lines = [str(decl["steps_title"])]
+    after = decl.get("commands_after_step")
+    for index, step in enumerate(decl["steps"], 1):
+        lines.append(str(step).format(**values))
+        if index == after:  # 声明命令逐条(占位按已知值渲染), 位置读声明 commands_after_step
+            lines.extend(str(decl["command_line"]).format(command=render_candidate_evidence_command(c, known))
+                         for c in (requirement or {}).get("commands") or [])
+    lines.extend(f"   ⚠ {p}" for p in runtime_evidence_legacy_problems(requirement, reviewed_task_id, reviewed_fm))
+    return lines
+
+
+def render_runtime_evidence_requirement(requirement: dict[str, Any], *, candidate_steps: list[str] | None = None) -> str:
+    """审计卡正文「独立运行证据要求」段(唯一渲染; 派生审计卡与手动/补充派审同读): 命令清单 + 证据节格式 + 示例。
+    AIPOS-F199 件②: candidate_steps(被审卡交付主体为固定候选, render_candidate_evidence_steps)= 证据绑定审计自己的验证根 run, 不提审计分配工作树。"""
     decl = runtime_evidence_declaration()
     keys = decl["log_fields"]
     heading = str(decl["section_heading"])
+    if candidate_steps:
+        cand = runtime_evidence_candidate_declaration()
+        lines = ["", "## 独立运行证据要求(AIPOS-F162: 裁决入口硬门; AIPOS-F199: 固定候选卡绑定审计自己的验证根 run)", "",
+                 f"- 本卡声明 {decl['card_field']}.required=true: PASS / PASS_WITH_NOTES 报告必须含 `## {heading}` 节, 否则裁决入口拒收"
+                 f"({decl['rejection_category']}), loop 让你补做",
+                 "- 独立核验 = 在**你自己的验证根 run**(审计卡声明的 run, 不是执行实例的 run)重跑下列命令; 只核执行体原件 hash/退出码不算; "
+                 "跑不了(环境/时长)给 FAIL 或 BLOCK 并写原因",
+                 f"- 命令占位: {', '.join('{' + str(k) + '}' for k in cand['placeholders'])}(本 run 目录 / 本 run 送达的候选源码 / 固定候选 / 候选 tree), "
+                 "记录里写渲染后的实际命令, 逐字一致",
+                 f"- {runtime_evidence_guidance()}", "", *candidate_steps, "",
+                 f"证据节格式(节内第一个 ```{decl['block_language']} 块; 每条必填 {', '.join(cand['entry_required_fields'])}):", "",
+                 f"```{decl['block_language']}",
+                 '[{"command": "<实际命令>", "run_id": "<run-id>", "run_dir": "<本 run 目录绝对路径>", "exit_code": 0, '
+                 f'"{keys["path"]}": "<日志绝对路径>", "{keys["sha256"]}": "<sha256>"' + "}]",
+                 "```", ""]
+        return "\n".join(lines)
     lines = ["", "## 独立运行证据要求(AIPOS-F162: 裁决入口硬门)", "",
              f"- 本卡声明 {decl['card_field']}.required=true: PASS / PASS_WITH_NOTES 报告必须含 `## {heading}` 节, 否则裁决入口拒收"
              f"({decl['rejection_category']}), loop 让你补做",

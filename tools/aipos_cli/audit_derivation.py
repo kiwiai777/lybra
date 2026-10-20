@@ -122,20 +122,39 @@ def build_forensic_anchor_section(
         f"- **报告落点绝对路径**: `{report_location}` (治理根 verdict_root/<审计卡ID>/, 声明渲染; 禁落被审卡目录、禁落产品仓)\n"
         f"{baseline_line}"
         "- **不存在结论必须附**: `pwd` + 命令 + 输出(三条缺一即无效证据)\n"
-    ) + _runtime_evidence_section(audit_metadata, source_metadata)
+    ) + _runtime_evidence_section(audit_metadata, source_metadata, repo_root=repo_root, source_task_id=source_task_id,
+                                  audit_task_id=audit_task_id or derive_audit_task_id(source_task_id, repo_root=None))
 
 
-def _runtime_evidence_section(audit_metadata: dict[str, Any] | None, source_metadata: dict[str, Any] | None) -> str:
-    """AIPOS-F162 件①: 审计卡正文的独立运行证据要求段(未声明 = 空串; 声明形不对 = 点名, 裁决入口届时 fail-closed 拒)。"""
+def _runtime_evidence_section(audit_metadata: dict[str, Any] | None, source_metadata: dict[str, Any] | None, *,
+                              repo_root: Path | None = None, source_task_id: str = "", audit_task_id: str = "") -> str:
+    """AIPOS-F162 件①: 审计卡正文的独立运行证据要求段(未声明 = 空串; 声明形不对 = 点名, 裁决入口届时 fail-closed 拒)。
+    AIPOS-F199 件②: 被审卡交付主体为固定候选 = 附「验证卡运行证据步骤」(artifact_ingest.render_candidate_evidence_steps, 开工稿同一渲染);
+    治理根不可得(手动派审未给)= 步骤按占位渲染不出, 只给段落(不猜)。"""
     from tools.aipos_cli.artifact_ingest import (
-        RuntimeEvidenceDeclarationError, render_runtime_evidence_requirement, runtime_evidence_requirement,
+        RuntimeEvidenceDeclarationError, render_candidate_evidence_steps, render_runtime_evidence_requirement, runtime_evidence_requirement,
     )
+    from tools.aipos_cli.next_resolver import CandidateSubjectError, card_candidate_subject
 
     try:
         requirement = runtime_evidence_requirement(audit_metadata, source_metadata)
     except RuntimeEvidenceDeclarationError as exc:
         return f"\n## 独立运行证据要求(AIPOS-F162)\n\n- 卡面声明不合: {exc}; 裁决入口将拒收, 先请顾问修正卡面声明\n"
-    return render_runtime_evidence_requirement(requirement) if requirement else ""
+    if not requirement:
+        return ""
+    steps: list[str] = []
+    try:
+        candidate = card_candidate_subject(source_metadata)
+        if candidate is not None and repo_root is not None:
+            instance = next((str((audit_metadata or {}).get(k) or "").strip() for k in ("claimed_by", "agent_instance", "assigned_to")
+                             if str((audit_metadata or {}).get(k) or "").strip()), "") or resolve_audit_instance(source_metadata or {}, repo_root)
+            steps = render_candidate_evidence_steps(repo_root, audit_task_id=audit_task_id, audit_instance=instance,
+                                                    reviewed_task_id=source_task_id, reviewed_fm=source_metadata, requirement=requirement)
+        elif candidate is not None:
+            steps = ["### 验证卡运行证据步骤(AIPOS-F199): 治理根未给, 步骤以开工稿为准(lybra kickoff --task-id <审计卡>)"]
+    except (CandidateSubjectError, ValueError, OSError) as exc:
+        steps = [f"### 验证卡运行证据步骤(AIPOS-F199): 渲染不出({exc}); 裁决入口将按固定候选判据核对, 先请顾问修正卡面"]
+    return render_runtime_evidence_requirement(requirement, candidate_steps=steps or None)
 
 
 def build_gate_territory_discipline_section(

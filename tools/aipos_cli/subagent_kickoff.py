@@ -342,6 +342,8 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
     from tools.aipos_cli.validation_root import render_section_lines
 
     validation_lines = render_section_lines(gov, instance=instance, task_id=task_id, harness=harness, include_inactive=True)
+    evidence_lines = _candidate_evidence_lines(gov, task_id=task_id, fm=fm, instance=instance, reviewed=reviewed,
+                                               reviewed_card=reviewed_card) if card_role == "auditor" else []
     if runall["runall"]:
         timing_state, timing = runall_timing(texts, harness, int(test_contract["post_merge_regression"]["timeout_seconds"]),
                                              runall["runall_timeout_seconds"])
@@ -363,6 +365,7 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
         "session_host": session_host if remote else None, "gate_host": gate_host, "host_hint": host_hint,
         "boundary_lines": _item_lines(items["boundary_line"], rows),
         "validation_root_lines": "\n".join(validation_lines) if validation_lines else None,
+        "runtime_evidence_lines": "\n".join(evidence_lines) if evidence_lines else None,  # AIPOS-F199 件②: 验证卡审计证据步骤
         "governance_root": str(gov), "report_dir": str(report_path.parent),
         "other_projects": ", ".join(f"`{p}`" for p in others) if others else None,
         "harness_root": str(charter["harness_root"]) if charter.get("workstation") else None,
@@ -386,6 +389,31 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
             "sources": {"charter": charter["distribution_id"], "ratchet": test_contract.get("ratchet_source"),
                         "residual_processes": test_contract.get("residual_processes_source"), "scratch": scratch_source,
                         "remote": remote, "baseline_status": baseline["status"], "runall_timing": timing_state}}
+
+
+def _candidate_evidence_lines(gov: Path, *, task_id: str, fm: dict[str, Any], instance: str, reviewed: str,
+                              reviewed_card: Path | None) -> list[str]:
+    """AIPOS-F199 件②: 审计开工稿「验证卡运行证据步骤」(被审卡交付主体为固定候选且声明 audit_runtime_evidence.required; 派审注入同一渲染
+    artifact_ingest.render_candidate_evidence_steps)。不适用 = []。声明 / 候选不合 = 拒因一行(开工照常, 裁决入口同判据 fail-closed)。"""
+    from tools.aipos_cli.artifact_ingest import (
+        RuntimeEvidenceDeclarationError, render_candidate_evidence_steps, runtime_evidence_requirement,
+    )
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.next_resolver import CandidateSubjectError, card_candidate_subject
+
+    if not reviewed or reviewed_card is None:
+        return []
+    reviewed_fm, _body = require_frontmatter(reviewed_card)
+    try:
+        if card_candidate_subject(reviewed_fm) is None:
+            return []
+        requirement = runtime_evidence_requirement(fm, reviewed_fm)
+        if requirement is None:
+            return []
+        return render_candidate_evidence_steps(gov, audit_task_id=task_id, audit_instance=instance, reviewed_task_id=reviewed,
+                                               reviewed_fm=reviewed_fm, requirement=requirement)
+    except (CandidateSubjectError, RuntimeEvidenceDeclarationError) as exc:
+        return [f"### 验证卡运行证据步骤(AIPOS-F199): 渲染不出({exc}); 裁决入口将同判据拒收, 停线报告顾问修正卡面"]
 
 
 def run_kickoff_cli(args: Any) -> int:

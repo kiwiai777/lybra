@@ -1045,6 +1045,99 @@ def executor_run_dir_refs(governance_root: str | Path, reviewed_task_id: str, te
 
 
 # ---------------------------------------------------------------------------
+# AIPOS-F199 件①: 固定候选卡(validation)审计运行证据绑定审计自己的验证根 run(运行证据判据 board_adapter.runtime_evidence_check 调用)
+# ---------------------------------------------------------------------------
+
+def locate_run(governance_root: str | Path, run_dir: str, run_id: str, *,
+               entries: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """运行记录给出的 run 目录 → (声明, run)。声明 = path_template 以该 run_id 渲染后 = run_dir 的那条(唯一推导 run_directory 反查);
+    run = 该声明 runs 中 run_id 的记录(未 run-start = None)。无声明渲染出该目录 = (None, None)。只读。"""
+    text = str(run_dir or "").rstrip("/")
+    rid = str(run_id or "").strip()
+    if not text or not rid:
+        return None, None
+    for entry in entries if entries is not None else project_validation_roots(governance_root):
+        if run_directory(entry, rid) == text:
+            return entry, next((r for r in entry.get("runs") or [] if r.get("run_id") == rid), None)
+    return None, None
+
+
+def src_verify_evidence_check(entry: dict[str, Any], run: dict[str, Any], *, candidate: str, tree: str) -> list[str]:
+    """run 目录内 helper src-verify 证据(SRC_EVIDENCE 末条)核对: SRC_OK(ok)且 实际 tree = 期望 tree = 候选 tree、run 目录 / 候选 / 主机指纹
+    与声明一致。返回问题原文(空 = 通过)。读治理根所在机文件系统: 调用方保证 run 在本机(is_local_host)。"""
+    import json
+
+    run_dir = run_directory(entry, run["run_id"])
+    path = Path(posixpath.join(run_dir, helper.SRC_EVIDENCE))
+    try:
+        lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    except FileNotFoundError:
+        return [f"run 目录无送达核对证据 {path}(未运行 src-verify; 先按开工稿送达候选源码并核对, 末行 SRC_OK)"]
+    except (OSError, UnicodeDecodeError) as exc:
+        return [f"送达核对证据 {path} 读不出({exc})"]
+    if not lines:
+        return [f"送达核对证据 {path} 为空(未运行 src-verify)"]
+    try:
+        rec = json.loads(lines[-1])
+    except ValueError as exc:
+        return [f"送达核对证据 {path} 末条不是 JSON({exc})"]
+    if not isinstance(rec, dict):
+        return [f"送达核对证据 {path} 末条不是对象"]
+    problems: list[str] = []
+    if rec.get("ok") is not True:
+        problems.append(f"送达核对证据 {path} 末条不是 SRC_OK(ok={rec.get('ok')!r}, actual_tree={rec.get('actual_tree')}, "
+                        f"problems={rec.get('problems')}); 删掉 src 后按产品给的送达命令重送并重新核对")
+    for key, want in (("run_dir", run_dir), ("candidate", candidate), ("expect_tree", tree), ("actual_tree", tree),
+                      ("fingerprint", entry.get("host_fingerprint"))):
+        if rec.get(key) != want:
+            problems.append(f"送达核对证据 {path} 末条 {key}={rec.get(key)!r} ≠ {want!r}")
+    return problems
+
+
+def candidate_evidence_values(governance_root: str | Path, *, audit_task_id: str, audit_instance: str, candidate: str,
+                              candidate_tree: str) -> dict[str, str]:
+    """AIPOS-F199 件②: 审计「验证卡运行证据步骤」渲染值(派审注入 / 开工稿同一函数; 命令全部出自本模块唯一铸造口 init_run_command /
+    source_delivery)。本审计卡本实例的声明: 无 = 给顾问 declare 命令; 有、无活动 run = run-start 命令; 有活动 run = 本 run 目录与三条命令。"""
+    gov = Path(governance_root).expanduser().resolve()
+    gcmd = _gov_cmd(gov)
+    pending = "<run-start 后由产品给出>"
+    values = {"audit_task_id": audit_task_id, "audit_instance": audit_instance or "<审计实例>", "candidate": candidate,
+              "candidate_tree": candidate_tree, "run_id": "<run-id>", "run_dir": "<run_dir>", "src_dir": f"<run_dir>/{helper.SRC_DIR_NAME}",
+              "init_run": pending, "src_deliver": pending, "src_verify": pending}
+    now = _now()
+    mine = [e for e in project_validation_roots(gov)
+            if e["task_id"] == audit_task_id and e["instance"] == audit_instance and card_kinds().get(e["role_class"]) == "audit_card"]
+    live = [e for e in mine if declaration_status(e, now) in ("active", "unbound")]
+    if not live:
+        values["declare_state"] = (
+            ("已有声明均失效(" + ", ".join(f"{e['id']}={declaration_status(e, now)}" for e in mine) + "); " if mine else "未声明; ")
+            + f"顾问先预演再 --confirm: `{gcmd} project validation-root declare --host <目标主机> --base <base> --task-id {audit_task_id} "
+            f"--instance {audit_instance or '<审计实例>'} --owner-ref <Owner 授权引用> --host-fingerprint <hfp1:…> --actor <顾问实例>`"
+            "(本机主机可省 --host-fingerprint)")
+        values["run_state"] = "声明后由顾问 run-start(候选须 = 卡面候选)"
+        return values
+    entry = live[-1]
+    values["declare_state"] = f"{entry['id']}(主机 {entry['host']}, 状态 {declaration_status(entry, now)}, 到期 {entry['expires_at']})"
+    run = active_run(entry)
+    if run is None:
+        values["run_state"] = (f"无活动 run; 顾问: `{gcmd} project validation-root run-start --id {entry['id']} --candidate {candidate} "
+                               "--confirm --actor <顾问实例>`")
+        return values
+    run_dir = run_directory(entry, run["run_id"])
+    values.update({"run_state": f"活动 run {run['run_id']}(候选 {run['candidate']}) → {run_dir}", "run_id": run["run_id"], "run_dir": run_dir,
+                   "src_dir": f"{run_dir}/{helper.SRC_DIR_NAME}"})
+    if declaration_status(entry, now) == "active":
+        values["init_run"] = init_run_command(gov, entry, run)
+        try:
+            delivery = source_delivery(gov, entry, run)
+        except ValidationRootError as exc:
+            values.update({"src_deliver": f"(送达命令不可铸: {exc}; 停线报告)", "src_verify": f"(核对命令不可铸: {exc.code})"})
+        else:
+            values.update({"src_deliver": delivery["deliver"], "src_verify": delivery["verify"]})
+    return values
+
+
+# ---------------------------------------------------------------------------
 # 渲染: 开工稿 / 章程同源节、list 视图、helper 下发
 # ---------------------------------------------------------------------------
 
