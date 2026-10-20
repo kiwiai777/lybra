@@ -95,6 +95,15 @@ def append_governance_doc_line(trail: Path, line: str, *, title: str, repo_root:
     return trail
 
 
+def decision_entry_path(governance_root: Path, *, title: str = "", repo_root: Path | None = None) -> Path:
+    """decision_log 条目落点(唯一命名: <decision_log>/YYYY-MM/YYYY-MM-DD-<slug>.md; add_decision 与 AIPOS-F198 workstation-plan 预告引用同调)。"""
+    decl = _get_file_declaration("decision_log_entry", repo_root)
+    target_dir = _resolve_target_dir(decl["path_key"], governance_root, repo_root)
+    today = _today_str()
+    slug = _slugify(title) if title else "decision"
+    return target_dir / today[:7] / f"{today}-{slug}.md"
+
+
 def add_decision(
     governance_root: Path,
     *,
@@ -110,13 +119,7 @@ def add_decision(
     声明来源: config.schema governance_structure.file_declarations.decision_log_entry
     """
     decl = _get_file_declaration("decision_log_entry", repo_root)
-    target_dir = _resolve_target_dir(decl["path_key"], governance_root, repo_root)
-
-    # 命名: YYYY-MM/YYYY-MM-DD-<slug>.md
-    today = _today_str()
-    month_dir = today[:7]  # YYYY-MM
-    slug = _slugify(title) if title else "decision"
-    filename = f"{today}-{slug}.md"
+    file_path = decision_entry_path(governance_root, title=title, repo_root=repo_root)
 
     # 构建 frontmatter
     template_fm = dict(decl.get("template_frontmatter", {}))
@@ -145,9 +148,7 @@ def add_decision(
 
     content = "\n".join(content_parts) + "\n"
 
-    # 目标路径
-    file_dir = target_dir / month_dir
-    file_path = file_dir / filename
+    file_dir = file_path.parent
 
     if dry_run:
         return {

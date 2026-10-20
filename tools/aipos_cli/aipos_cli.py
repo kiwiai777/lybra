@@ -1877,6 +1877,41 @@ def _project_upgrade_cli(args: argparse.Namespace, home: Path | None) -> int:
     return int(run["exit_code"])
 
 
+def _project_workstation_plan_cli(args: argparse.Namespace, home: Path | None) -> int:
+    """AIPOS-F198: `lybra project workstation-plan` 薄壳——目标项目解析 = project 族同一实现(_project_write_target); 现状 / 计划 / 话术 / 文本
+    全部在 workstation_plan(看板工位设置页同一推导与同一文本)。只读。"""
+    from tools.aipos_cli import workstation_plan as wp
+    from tools.aipos_cli.board_pages import pages_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        codes = {k: int(v["code"]) for k, v in wp.declaration()["exit_codes"].items()}
+        locale = pages_declaration()["locale"]
+    except SchemaLoadError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    lang = args.lang or str(locale["default"])
+    if lang not in locale["supported"]:
+        print(f"Error: --lang {lang} 不在 {list(locale['supported'])}", file=sys.stderr)
+        return codes["usage"]
+    target = _project_write_target(args, home, args.name)
+    if target is None:
+        return codes["refused"]
+    try:
+        modes = None if args.pi_modes is None else [m for m in str(args.pi_modes).split(",") if m.strip()]
+        goal = wp.normalize_target(pi_modes=modes, pi_executor=args.pi_executor, workspace=args.workspace, host=args.host,
+                                   ssh_alias=args.ssh_alias, owner_ref=args.owner_ref, lang=lang)
+        plan = wp.build_plan(target["project_root"], project=str(target["project"]), home_root=home, target=goal, lang=lang)
+    except wp.TargetError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return codes["usage"]
+    except SchemaLoadError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return codes["refused"]
+    print(render_json(wp.plan_view(plan)) if args.json else "\n".join(plan["lines"]))
+    return codes["ok"]
+
+
 def _render_pi_model_affected(entry: dict[str, Any]) -> str:
     """AIPOS-F169: set-model 预演/写入的一行影响工位(角色 / 实例 / 位置 / 下次拉起模型变化)。"""
     from tools.aipos_cli.loop_run_record import model_label
@@ -2756,6 +2791,24 @@ def build_parser() -> argparse.ArgumentParser:
     project_upgrade_parser.add_argument("--guidance", action="store_true", help="Only list, per advisor instance, the new capabilities the button cannot do (why / what to tell the advisor incl. command / done criterion); read-only")
     project_upgrade_parser.add_argument("--json", action="store_true", help="Output JSON")
     _project_json_two_phase_flags(project_upgrade_parser, "upgrade", family="project_upgrade_writers")
+    # AIPOS-F198: 工位设置 —— 现状 + 目标分工的切换计划与「告诉顾问」话术(只读; 看板工位设置页同一推导, 唯一实现 workstation_plan)
+    project_wsplan_parser = project_subparsers.add_parser(
+        "workstation-plan",
+        help="AIPOS-F198: show the project's execution mode and workstations (sub-agent executor, pi executor, auditor, card types sent to "
+             "pi, target hosts / ssh aliases, validation roots, charter state) and, for a target division of work, the switch-over plan: "
+             "product commands in dependency order (preview first, then confirm; done steps marked) plus the messages for the lead advisor "
+             "and the specialist advisors; read-only, same text as the board workstation page")
+    project_wsplan_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory)")
+    project_wsplan_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    project_wsplan_parser.add_argument("--workspace-root", help="Target governance root when the project name is omitted")
+    project_wsplan_parser.add_argument("--pi-modes", default=None, metavar="MODES", help="Comma-separated card types to send to the pi executor (verbs.schema lybra_project_workstation_plan.offered_pi_modes, e.g. validation,config,docs); '' = none; omitted = keep the current declaration")
+    project_wsplan_parser.add_argument("--pi-executor", default=None, metavar="INSTANCE", help="pi executor workstation instance (existing or new; default = the declared one)")
+    project_wsplan_parser.add_argument("--workspace", default=None, metavar="DIR", help="Workstation directory of the pi executor (default = its enrolled location / the discovered workstation)")
+    project_wsplan_parser.add_argument("--host", default=None, help="Target host label the pi works over ssh (with --ssh-alias)")
+    project_wsplan_parser.add_argument("--ssh-alias", default=None, help="ssh alias of the target host on the governance-root machine (with --host)")
+    project_wsplan_parser.add_argument("--owner-ref", default=None, help="Existing Owner decision reference (the decision-log step is then done)")
+    project_wsplan_parser.add_argument("--lang", default=None, help="Text language (board locale.supported; default board locale.default)")
+    project_wsplan_parser.add_argument("--json", action="store_true", help="Output JSON")
     # AIPOS-F187 件④: 存量卡工作树 / 审计工作树清理(判据 transitions.schema queue_mutations.worktree_cleanup; 唯一实现 worktree_cleanup)
     project_cleanup_parser = project_subparsers.add_parser(
         "cleanup-worktrees",
@@ -4678,6 +4731,8 @@ def main(argv: list[str] | None = None) -> int:
                 return _validation_root_cli(args, home)
             if args.project_command == "upgrade":
                 return _project_upgrade_cli(args, home)
+            if args.project_command == "workstation-plan":
+                return _project_workstation_plan_cli(args, home)
             if args.project_command == "set-meta":
                 # AIPOS-F127 件③: 唯一实现 workspace_config.set_project_meta(键须 config.schema project_json 已声明; update_project_json 唯一写路径)
                 from tools.aipos_cli.workspace_config import ProjectMetaError, project_meta_declaration, set_project_meta

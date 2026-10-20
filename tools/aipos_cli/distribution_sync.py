@@ -417,27 +417,33 @@ def hand_maintained_guard_declaration() -> dict[str, Any]:
 def hand_maintained_charters(harness_root: Path, diffs: list[dict[str, Any]], local_manifest: dict[str, Any]) -> list[dict[str, Any]]:
     """AIPOS-F196 件②: 本次将重渲染的章程落点中「手写章程带手工维护标记且不是产品渲染物」者(判定唯一实现)。
     判据: 落点文件在 + 含声明 markers 之一 + (本地清单无渲染指纹, 或副本 sha256 ≠ 记录的 rendered_sha256)。返回 [{path, markers, sha256, reason}]。"""
-    decl = hand_maintained_guard_declaration()
     found: list[dict[str, Any]] = []
     for item in diffs:
         dist = item["dist"]
         if not _is_charter(dist):
             continue
         for rel in item["paths"]:
-            dest = _file_target_path(harness_root, dist, rel)
-            if not dest.is_file():
-                continue
-            text = dest.read_text(encoding="utf-8", errors="replace")
-            hits = [m for m in decl["markers"] if m in text]
-            if not hits:
-                continue
-            recorded = _recorded_file(local_manifest, str(dist["distribution_id"]), rel) or {}
-            sha = _sha256_file(dest)
-            if recorded.get("rendered_sha256") and recorded["rendered_sha256"] == sha:
-                continue  # 产品渲染物本身(母本含同字样): 不算手写章程
-            found.append({"path": str(dest), "markers": hits, "sha256": sha,
-                          "reason": (item.get("reasons") or {}).get(rel, "differs")})
+            hit = hand_maintained_file(_file_target_path(harness_root, dist, rel),
+                                       _recorded_file(local_manifest, str(dist["distribution_id"]), rel))
+            if hit is not None:
+                found.append({**hit, "reason": (item.get("reasons") or {}).get(rel, "differs")})
     return found
+
+
+def hand_maintained_file(dest: Path, recorded: dict[str, Any] | None) -> dict[str, Any] | None:
+    """AIPOS-F196 件②判据的单文件形(AIPOS-F198 抽出, hand_maintained_charters 与 charter_local_state 同调, 禁第二判据): 落点文件在 +
+    含声明 markers 之一 + (无渲染指纹记录, 或副本 sha256 ≠ 记录的 rendered_sha256)= {path, markers, sha256}; 否则 None。"""
+    decl = hand_maintained_guard_declaration()
+    if not dest.is_file():
+        return None
+    text = dest.read_text(encoding="utf-8", errors="replace")
+    hits = [m for m in decl["markers"] if m in text]
+    if not hits:
+        return None
+    sha = _sha256_file(dest)
+    if (recorded or {}).get("rendered_sha256") and (recorded or {})["rendered_sha256"] == sha:
+        return None  # 产品渲染物本身(母本含同字样): 不算手写章程
+    return {"path": str(dest), "markers": hits, "sha256": sha}
 
 
 def hand_charter_refusal(harness_root: Path, governance_root: Path | None, hand: list[dict[str, Any]]) -> str:
@@ -1707,6 +1713,72 @@ def charter_freshness(harness_root: str | Path, governance_root: str | Path) -> 
         out.update(fresh=True, state="no_charter", detail="本工位分发清单无章程件(无可核)")
         return out
     out.update(fresh=True, state="fresh", detail=f"章程件 {', '.join(charters)} 渲染指纹与母本 / 声明一致(product_commit={result.get('product_commit')})")
+    return out
+
+
+#: AIPOS-F198: charter_local_state 的状态值(看板 / `lybra project workstation-plan` 文案键同名, 声明 verbs.lybra_project_workstation_plan.charter_states)
+CHARTER_LOCAL_STATES = ("current", "stale", "missing", "hand_maintained", "not_workstation", "other_project", "unverifiable")
+
+
+def charter_local_state(harness_root: str | Path, governance_root: str | Path) -> dict[str, Any]:
+    """AIPOS-F198: 本机工位章程状态, 只读、不连门、不取凭据值(看板与 `lybra project workstation-plan` 用; loop 拉起前核仍是 charter_freshness)。
+
+    判据 = `lybra sync --dry-run` 同一实现, 只把门清单换成同一构建器在本产品树的结果: 清单 = workstation_wiring.declared_role_distributions
+    (门 lybra_distribution_manifest 同一 build_role_manifest)按工位 harness 取条目; 渲染态 = compute_diffs(F66B 三指纹 _charter_render_reason,
+    prune=False); 手写章程 = hand_maintained_charters(F196 判据)。身份 = charter_render.workstation_identity(.lybra/role; 连接文件只取非秘密字段)。
+    返回 {state ∈ CHARTER_LOCAL_STATES, path, detail, markers, instance, role}:
+      current = 产品渲染物且最新; stale = 需重渲染(母本 / 声明变、无渲染指纹、本地改动); missing = 章程落点无文件;
+      hand_maintained = 带手工维护标记的手写章程(sync 拒覆盖, 正式解除 = --adopt-hand-charter); not_workstation = 目录不在或无 .lybra/role;
+      other_project = 工位实例项目段 ≠ 本治理根项目(sync 会跳过); unverifiable = 身份 / 角色 / 声明读不出(detail 原文)。"""
+    from tools.aipos_cli.charter_render import (
+        WorkstationIdentityError,
+        charter_render_context,
+        is_enrolled_workstation,
+        workstation_identity,
+    )
+    from tools.aipos_cli.custom_roles import RoleRegistryReadError, UnknownRoleClass, resolve_role_to_class
+    from tools.aipos_cli.workspace_config import read_project_json
+    from tools.aipos_cli.workstation_wiring import declared_role_distributions
+    from tools.distribution_manifest import REPO_ROOT, get_product_commit
+
+    ws, gov = Path(harness_root).expanduser(), Path(governance_root).expanduser().resolve()
+    out: dict[str, Any] = {"state": "unverifiable", "path": None, "detail": "", "markers": [], "instance": None, "role": None}
+    if not ws.is_dir() or not is_enrolled_workstation(ws):
+        out.update(state="not_workstation", detail=f"{ws}: {'目录不在' if not ws.is_dir() else '无 .lybra/role(未接入工位)'}")
+        return out
+    try:
+        identity = workstation_identity(ws)
+        out.update(instance=identity["instance"], role=identity["role"])
+        project = str(read_project_json(gov).get("project") or "").strip()
+        if identity["project"] != project:
+            out.update(state="other_project", detail=f"实例 {identity['instance']} 项目段={identity['project']!r} ≠ {project!r}")
+            return out
+        role_class = str(resolve_role_to_class(str(identity["role"]), gov, required=True))
+        harness = workstation_harness(ws.resolve())
+        remote = {"distributions": harness_distributions(declared_role_distributions(str(identity["role"]), role_class), harness["kind"])}
+        ctx = charter_render_context(gov, identity=identity, product_commit=get_product_commit(REPO_ROOT))
+        diffs, _declared, _prune = compute_diffs(ws.resolve(), remote, render_context=ctx, role=str(identity["role"]), prune=False)
+        hand = hand_maintained_charters(ws.resolve(), diffs, _load_local_manifest(ws.resolve(), str(identity["role"])))
+    except (WorkstationIdentityError, UnknownRoleClass, RoleRegistryReadError, FileNotFoundError, ValueError, OSError, KeyError) as exc:
+        out["detail"] = _one_line(f"{type(exc).__name__}: {exc}")
+        return out
+    charters = [d for d in remote["distributions"] if _is_charter(d)]
+    if not charters:
+        out.update(state="unverifiable", detail=f"角色 {identity['role']} 在 harness={harness['kind']} 下无章程分发条目")
+        return out
+    first = charters[0]
+    out["path"] = str(_file_target_path(ws.resolve(), first, str(first["files"][0]["path"])))
+    if hand:
+        out.update(state="hand_maintained", markers=list(hand[0]["markers"]), path=hand[0]["path"],
+                   detail=f"{hand[0]['path']}(标记 {hand[0]['markers']})")
+        return out
+    stale = [(rel, why) for item in diffs if _is_charter(item["dist"]) for rel, why in (item.get("reasons") or {}).items()]
+    if any(why == "missing" for _rel, why in stale):
+        out.update(state="missing", detail=f"{out['path']} 不存在")
+    elif stale:
+        out.update(state="stale", detail="; ".join(f"{rel} {why}" for rel, why in stale))
+    else:
+        out.update(state="current", detail=f"{out['path']} 渲染指纹与母本 / 声明一致")
     return out
 
 
