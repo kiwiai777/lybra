@@ -1245,6 +1245,9 @@ def _check_routine_rejections(routine: Any) -> None:
         if not re.fullmatch(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+", str(code)) or not isinstance(fix, list) or not fix \
                 or any(not isinstance(s, str) or not s.strip() for s in fix):
             raise SchemaLoadError(f"{where}.codes.{code}: 码须为门侧错误码形且 fix 为非空字符串的非空列表")
+    probe = routine.get("landing_probe")  # AIPOS-F195 件③: 可选; 在则 end_reasons 为非空列表(码读 transitions N6.landing.slot_code_files)
+    if probe is not None and (not isinstance(probe, dict) or not isinstance(probe.get("end_reasons"), list) or not probe["end_reasons"]):
+        raise SchemaLoadError(f"{where}.landing_probe 须含非空 end_reasons 列表")
 
 
 def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root: Path,
@@ -1292,11 +1295,16 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
         if action == "owner_needed" and reason in (rules["envelope_renew"].get("end_reasons") or []):
             return _envelope_renew_action(view, rules, reason, message, fill)  # AIPOS-F166 件②: 信封续签专门出口
         if action == "owner_needed":
+            probe_note = ""
+            if not view.get("end_codes"):  # AIPOS-F195 件③: 落账被拒而无码 = N6 同一提交口预演复核(拒因仅为产物槽代码文件 = 例行)
+                probed, probe_note = _landing_probe_codes(view, rules, governance_root, reason)
+                if probed:
+                    view = {**view, "end_codes": probed}
             routine = _routine_action(view, rules, governance_root, reason, message, earlier_end_codes)
             if routine is not None:
                 return routine
             return {"action": action, "reason": reason, "detail": f"{rules['owner_reasons'][reason]}" + (f" — {message}" if message else "")
-                    + (f"({mode_note})" if mode_note else ""),
+                    + (f"({mode_note})" if mode_note else "") + (f"({probe_note})" if probe_note else ""),
                     "hint": str(rules["investigate_hint"]).format(**fill)}
         if action == "continue_wait":  # AIPOS-F171B 件①: already_running = 另一个 loop 在跑, 继续等它(提示同运行中)
             return {"action": action, "reason": reason, "detail": message or reason, "hint": str(rules["wait_hint"]).format(**fill)}
@@ -1360,6 +1368,35 @@ def _envelope_renew_action(view: dict[str, Any], rules: dict[str, Any], reason: 
     if st:
         out["envelope_state"] = dict(st)
     return out
+
+
+def _landing_probe_codes(view: dict[str, Any], rules: dict[str, Any], governance_root: Path, reason: str) -> tuple[list[str], str]:
+    """AIPOS-F195 件③(声明 routine_rejections.landing_probe): 落账被拒且无码的运行 → 以 N6 同一提交口(governance_commit, task 范围
+    --dry-run; 只读)复核本卡: 预演 PASS 且将排除产物槽代码文件 = [声明码](拒因仅为产物槽代码文件, 原命令重跑即走 N6 处置);
+    否则 []。预演出错 = [] + 原文(调用方写进 detail, owner_needed 照旧)。返回 (码列表, 说明)。"""
+    probe = (rules.get("routine_rejections") or {}).get("landing_probe")
+    if not isinstance(probe, dict) or reason not in (probe.get("end_reasons") or []):
+        return [], ""
+    task_id = str(view.get("task_id") or "").strip()
+    if not task_id:
+        return [], ""
+    from tools.aipos_cli.governance_commit import N6_LANDING_ACTOR_PLACEHOLDER, governance_commit
+
+    try:
+        result = governance_commit(Path(governance_root), task_id, str(view.get("driver") or "").strip() or N6_LANDING_ACTOR_PLACEHOLDER,
+                                   dry_run=True, push=False)
+    except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        return [], f"N6 预演复核出错: {type(exc).__name__}: {exc}"
+    if str(result.get("verdict")) == "PASS" and result.get("excluded_code_files"):
+        from tools.aipos_cli.governance_commit import n6_landing_declaration
+        from tools.schema_loader import SchemaLoadError
+
+        code = str((n6_landing_declaration().get("slot_code_files") or {}).get("probe_code") or "")
+        if code not in ((rules.get("routine_rejections") or {}).get("codes") or {}):
+            raise SchemaLoadError(f"transitions nodes.N6.landing.slot_code_files.probe_code {code!r} 未在 verbs.{STATUS_VERB}"
+                                  f".next_action.routine_rejections.codes 声明修法")
+        return [code], ""
+    return [], ""
 
 
 def _routine_action(view: dict[str, Any], rules: dict[str, Any], governance_root: Path, reason: str, message: str,

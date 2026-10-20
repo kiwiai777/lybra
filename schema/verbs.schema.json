@@ -2300,8 +2300,8 @@
         "unreadable": {"code": 3, "meaning": "治理根 / project.json / 声明读取失败(fail-closed)"}
       },
       "layout": {
-        "executor": ["header", "", "start_title", "start_charter", "start_card", "start_worktree", "start_no_worktree", "start_repo", "carried", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "no_write_title", "no_write_governance", "no_write_other_projects", "no_write_harness", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_body", "return_stop", "", "summary"],
-        "auditor": ["header_auditor", "", "start_title", "start_charter", "start_card_auditor", "start_worktree_auditor", "start_repo", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "no_write_title", "no_write_governance", "no_write_product_auditor", "no_write_other_projects", "no_write_harness", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline_auditor", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_body_auditor", "return_stop", "", "summary"],
+        "executor": ["header", "", "start_title", "start_charter", "start_card", "start_worktree", "start_no_worktree", "start_repo", "carried", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "no_write_title", "no_write_governance", "no_write_other_projects", "no_write_harness", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_code_files", "return_body", "return_stop", "", "summary"],
+        "auditor": ["header_auditor", "", "start_title", "start_charter", "start_card_auditor", "start_worktree_auditor", "start_repo", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "no_write_title", "no_write_governance", "no_write_product_auditor", "no_write_other_projects", "no_write_harness", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline_auditor", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_code_files", "return_body_auditor", "return_stop", "", "summary"],
         "note": "每个键 = texts 的一行模板; \"\" = 空行。模板占位值为 null(本卡不适用, 如无承继 / 本机会话 / 无工位)= 该行省略; 列表占位(*_lines)= 逐项按 item_templates 成行。占位缺 / 值非串 = 渲染失败(fail-closed, 不出半截开工稿)。"
       },
       "role_labels": {"executor": "执行体", "auditor": "审计体"},
@@ -2345,6 +2345,7 @@
         "return_processes": "- 交回前跑 `pgrep -af \"{residual_pattern}\"`, 原文附报告(门 serve 进程及其看板子进程除外)。",
         "return_report": "- 报告写到 `{report_path}`; frontmatter 必填(缺任一项或仍为占位, 报告被拒收; sha 一律 git rev-parse 输出原样粘贴):",
         "report_field_lines": "{report_field_lines}",
+        "return_code_files": "- {report_code_rule}",
         "return_body": "- 正文: 每件做了什么、验收原文证据、两边基线计数、残留进程原文、已知局限。",
         "return_body_auditor": "- 正文: 逐条验收裁定与原文证据、两边独立基线计数、残留进程原文、裁决与理由(以审计卡裁决节为准)。",
         "return_stop": "- 写完即止, 不运行任何门动词(认领 / 交回 / 裁决 / finalize 由产品做)。",
@@ -3108,7 +3109,7 @@
         },
         "owner_reasons": {
           "gate_rejected": "门拒: 按拒因原文裁定(设计分叉 / 越界 / 冲突), 改卡或仲裁后续跑",
-          "landing_rejected": "N6 落账被拒(他人暂存 / 提交门护栏 / 推送未完成): 由 Owner 定怎么处理他人改动后续跑",
+          "landing_rejected": "N6 落账被拒(他人暂存 / 提交门护栏 / 推送未完成): 由 Owner 定怎么处理他人改动后续跑(拒因仅为产物槽代码文件 = 例行, 见 routine_rejections.landing_probe)",
           "no_envelope": "授权: 无有效信封(缺 / 过期 / 额度用尽), 请 Owner 签发或续额",
           "verb_not_authorized": "授权: 信封未授权该动词, 请 Owner 决定是否扩授权",
           "manual_required": "需人工裁定: 推导核给不出可执行命令(见 detail 的建议动作)",
@@ -3164,7 +3165,26 @@
                 "执行体把交回报告 frontmatter commit_sha / tree_hash 改为卡分支新 tip(git rev-parse {branch} / git rev-parse {branch}^{{tree}}), 正文补解冲突与定向测试证据",
                 "顾问用原命令续跑 loop(本修法末行命令): 裁决覆盖的 tip 已变, loop 走既有 verdict_stale 重交回 → 下一轮审计, 不手工干预"
               ]
+            },
+            "INGEST_CODE_FILE_IN_SLOT": {
+              "why_routine": "AIPOS-F195 件①: 交回 / 审计报告入门(artifact_ingest)查出报告落点(含 artifacts/、run_long/)里有代码文件(config.schema governance_worktree.path_constraints.artifact_slot_code_files.ingest_category, 拒因原文列文件与 sha256), 不入门——治理仓零代码文件, 放任则结案后 N6 落账被提交门 B① 拒; 修法固定 = 写该报告的执行体 / 审计体把脚本移出落点或改存 .txt, 不涉设计判断",
+              "fix": [
+                "不改卡、不问 Owner、顾问不代改报告落点: 拒因原文列出落点内的代码文件(路径 / sha256)",
+                "派写该报告的本卡执行体(审计报告被拒 = 本审计卡审计体): 脚本 / 驱动程序移出报告落点, 放卡工作树或草稿目录; 确需作证据 = 改存为 <名>.<扩展>.txt(如 run.py → run.py.txt), 并在报告写明来源与 sha256; 改完即停",
+                "顾问用原命令续跑 loop(本修法末行命令): 推导核重新入门同一份报告"
+              ]
+            },
+            "ARTIFACT_SLOT_CODE_FILES": {
+              "why_routine": "AIPOS-F195 件③(10-20 chris 岚图 LANTU-SW13F1 实撞): N6 落账被拒的拒因只有产物槽(报告落点)内的代码文件——由 landing_probe 以 N6 同一提交口预演复核判出(预演通过且将排除产物槽代码文件); 新版 N6 对它们按声明正式处置(不入库、同槽清单记 sha256 并入库、原文件留盘), 卡已结案的不重复合入 / 结案, 只补 N6; 修法固定 = 原命令重跑 loop, 不涉设计判断",
+              "fix": [
+                "不改卡、不碰产品仓与报告落点、不问 Owner: 本卡已审结, 只差 N6 落账; 落账拒因仅为产物槽内代码文件(N6 预演已确认: 将排除并记清单)",
+                "顾问用原命令重跑 loop(本修法末行命令): 推导核按已落记录只派 N6 落账步(已结案不重复合入 / 结案), 结果行写明「已排除 N 个代码文件, 清单已入库」; 预览: lybra governance-commit --task-id {task_id} --governance-root {governance_root}{actor_arg} --dry-run"
+              ]
             }
+          },
+          "landing_probe": {
+            "description": "AIPOS-F195 件③: 落账被拒(end_reasons 所列)且运行记录 end_codes 为空(F195 前的运行记录 / 拒因首行无码)时, 下一动作判定以 N6 同一提交口预演复核本卡(governance_commit.governance_commit --dry-run, task 范围; 只读, 不写清单、不暂存): 预演 PASS 且将排除产物槽内代码文件(结果 excluded_code_files 非空)= 拒因仅为产物槽代码文件, 视同 end_codes [码] 走例行修法(advisor_fix, 连续计数同一实现); 码 = transitions nodes.N6.landing.slot_code_files.probe_code(唯一声明, 须在 codes 内有修法, 缺 = SchemaLoadError); 预演仍拒 / 无可排除 / 预演本身出错 = 照旧 owner_needed(出错原文进 detail)。只在 lybra loop status --task-id(该卡最近一次运行)判定时预演; 唯一实现 loop_run_record._landing_probe_codes。",
+            "end_reasons": ["landing_rejected"]
           },
           "end_reasons": {
             "deploy_changed": {

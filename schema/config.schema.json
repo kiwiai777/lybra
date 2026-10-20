@@ -1316,7 +1316,20 @@
         "**/*.cpp",
         "**/*.sh",
         "**/*.bash"
-      ]
+      ],
+      "artifact_slot_code_files": {
+        "description": "AIPOS-F195(10-20 chris 岚图 LANTU-SW13F1 实撞: 执行体为跑 main 侧基线临时写的 run.py 留在报告落点 artifacts/, 交回入门与派审都不查, 结案后 N6 落账才被提交门 B① 拒, loop 以 landing_rejected 停在 owner_needed 且无正式恢复路径): 报告落点(产物槽)里的代码文件两处处置, 代码文件判据只读本节上方 code_files_blacklist(唯一实现 governance_guardrails.is_code_file), 产物槽 = governance_structure.file_declarations.record_file.required_frontmatter_exemptions.artifact_slot.project_paths_keys 所列 project.json 落点 <落点>/<ID>/**(唯一解析 governance_guardrails.artifact_slot_roots)。件① 入门即拦: 交回 / 审计报告 / 外部 FINALIZE 交回入门(artifact_ingest._validate_task_artifact, 与产物形校验同处)时报告落点 <落点>/<卡ID>/ 下(含 artifacts/、run_long/ 等子目录)出现代码文件 = 拒(ingest_category), 拒因列文件与修法(texts.ingest_reason); 开工稿(lybra kickoff)与执行 / 审计章程同读 texts.rule(唯一渲染 governance_guardrails.slot_code_rule_text)。件② N6 处置: 唯一落账实现 governance_commit 遇产物槽内新增(未跟踪 / 已暂存新增)代码文件 = 不入库(暂存 pathspec 排除), 在同槽写 excluded_manifest_name(路径 / sha256 / 大小 / 原因, 只追加)一并落账, 原文件留盘不删; 结果行 texts.n6_excluded_line(预演 texts.n6_dry_run_line); 已记入清单且 sha256 未变的槽内代码文件不算未落账(落账判据 governance_landing 同读)。槽外代码文件与已跟踪代码文件的修改仍按 B① 拒(提交门护栏不放宽, 治理仓仍零代码文件)。产物槽声明(artifact_slot.project_paths_keys)缺 = 无槽, N6 不排除(照旧 B① 拒), 入门检查照常(只看本卡报告落点目录)。本段缺 = 两处处置都不生效(行为同 F195 前); 段在而形不合 = fail-closed(GuardrailDeclarationError)。",
+        "ingest_category": "INGEST_CODE_FILE_IN_SLOT",
+        "excluded_manifest_name": "code-files-excluded.json",
+        "manifest_kind": "code_files_excluded",
+        "texts": {
+          "rule": "报告落点 {slot}(含 artifacts/、run_long/ 等子目录)内不得放代码文件(扩展名 {extensions}; 来源 config.schema code_files_blacklist, 治理仓零代码文件): 有则交回 / 审计报告入门即拒。脚本 / 驱动程序放卡工作树或草稿目录, 不进报告落点; 确需作证据 = 改存为 <名>.<扩展>.txt(如 run.py → run.py.txt), 并在报告写明来源与 sha256。",
+          "ingest_reason": "{category}: 报告落点 {slot} 内有 {count} 个代码文件(扩展名 ∈ config.schema code_files_blacklist: {extensions}; 治理仓零代码文件, 结案后 N6 落账会被提交门 B① 拒): {files}。修法: ① 脚本 / 驱动程序移出报告落点, 放卡工作树或草稿目录; ② 确需作证据 = 改存为 <名>.<扩展>.txt(如 run.py → run.py.txt), 并在报告写明来源与 sha256。改好后用原命令续跑 loop(重新入门)",
+          "n6_excluded_line": "已排除 {count} 个代码文件(产物槽内, 不入库、原文件留盘), 清单已入库: {manifests}",
+          "n6_dry_run_line": "将排除 {count} 个代码文件(产物槽内, 不入库、原文件留盘), 清单将写入: {manifests} —— {files}",
+          "manifest_reason": "产物槽内代码文件(config.schema code_files_blacklist): 治理仓零代码文件(提交门 B①), N6 落账不入库; 原文件留盘作证据, 指纹记于本清单"
+        }
+      }
     },
     "merge_convergence": {
       "description": "merge 收敛动词 — 一条命令合所有 gov/<project> 回 main 并 push",

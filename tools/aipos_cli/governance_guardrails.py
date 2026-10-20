@@ -82,6 +82,8 @@ class GuardrailDeclarations:
     frozen_label: str = ""
     # AIPOS-F147 件②: B④ 取值检查 {字段: (枚举名, 允许值)}(config.schema file_declarations.record_file.value_enums; 缺 = 不查取值)
     record_value_enums: tuple[tuple[str, str, frozenset[str]], ...] = ()
+    # AIPOS-F195: 产物槽内代码文件处置声明(config.schema governance_worktree.path_constraints.artifact_slot_code_files; 缺 = None, 不处置)
+    slot_code: "SlotCodeDeclaration | None" = None
 
     @property
     def gov_segment(self) -> str:
@@ -90,6 +92,21 @@ class GuardrailDeclarations:
     @property
     def tasks_segment(self) -> str:
         return self.tasks_root_rel.split("/")[0]
+
+
+@dataclass(frozen=True)
+class SlotCodeDeclaration:
+    """AIPOS-F195: 产物槽代码文件处置声明(入门拒因码 / N6 清单文件名与种类 / 文案)。"""
+    ingest_category: str
+    manifest_name: str
+    manifest_kind: str
+    texts: tuple[tuple[str, str], ...]
+
+    def text(self, key: str, **values: Any) -> str:
+        return dict(self.texts)[key].format(**values)
+
+
+SLOT_CODE_TEXT_KEYS = ("rule", "ingest_reason", "n6_excluded_line", "n6_dry_run_line", "manifest_reason")
 
 
 @dataclass
@@ -206,6 +223,7 @@ def load_guardrail_declarations(schema_dir: Path | None = None) -> GuardrailDecl
 
     slot_keys, slot_label, frozen_exempt, frozen_label = _load_b4_exemptions(file_decls, schema_path)
     value_enums = _load_b4_value_enums(file_decls, record_fm, schema_dir, schema_path)
+    slot_code = _load_slot_code(path_constraints, extensions, schema_path)
 
     return GuardrailDeclarations(
         schema_path=schema_path,
@@ -223,7 +241,29 @@ def load_guardrail_declarations(schema_dir: Path | None = None) -> GuardrailDecl
         legacy_frozen_exempt=frozen_exempt,
         frozen_label=frozen_label,
         record_value_enums=value_enums,
+        slot_code=slot_code,
     )
+
+
+def _load_slot_code(path_constraints: dict[str, Any], extensions: tuple[str, ...], schema_path: Path) -> SlotCodeDeclaration | None:
+    """AIPOS-F195: 读 path_constraints.artifact_slot_code_files。段缺 = None(两处处置都不生效, 行为不变); 段在而形不合 = fail-closed。
+    N6 处置的槽 = record_file.required_frontmatter_exemptions.artifact_slot.project_paths_keys(未声明 = 无槽, N6 不排除, 照旧 B① 拒);
+    入门检查只看本卡报告落点目录, 不依赖该声明。"""
+    where = f"config.schema governance_worktree.path_constraints.artifact_slot_code_files at {schema_path}"
+    decl = path_constraints.get("artifact_slot_code_files")
+    if decl is None:
+        return None
+    texts = decl.get("texts") if isinstance(decl, dict) else None
+    scalars = {k: decl.get(k) for k in ("ingest_category", "excluded_manifest_name", "manifest_kind")} if isinstance(decl, dict) else {}
+    if (not isinstance(texts, dict) or any(not isinstance(texts.get(k), str) or not texts[k].strip() for k in SLOT_CODE_TEXT_KEYS)
+            or any(not isinstance(v, str) or not v.strip() for v in scalars.values()) or not scalars):
+        raise GuardrailDeclarationError(f"{where}: 须含 ingest_category / excluded_manifest_name / manifest_kind 与 texts.{list(SLOT_CODE_TEXT_KEYS)}")
+    manifest_name = scalars["excluded_manifest_name"].strip()
+    if "/" in manifest_name or manifest_name.rsplit(".", 1)[-1].lower() in extensions:
+        raise GuardrailDeclarationError(f"{where}: excluded_manifest_name 须为不含 / 的非代码文件名")
+    return SlotCodeDeclaration(ingest_category=scalars["ingest_category"].strip(), manifest_name=scalars["excluded_manifest_name"].strip(),
+                               manifest_kind=scalars["manifest_kind"].strip(),
+                               texts=tuple((k, str(texts[k])) for k in SLOT_CODE_TEXT_KEYS))
 
 
 def _load_b4_value_enums(file_decls: dict[str, Any], record_fm: tuple[str, ...], schema_dir: Path,
@@ -344,19 +384,10 @@ def _exemption_context(repo_root: Path, prefix: str, decls: GuardrailDeclaration
     from tools.schema_loader import SchemaLoadError
 
     if decls.slot_path_keys:
-        from tools.aipos_cli.workspace_config import project_paths
-
-        try:
-            declared = project_paths(gov_root)
-        except (SchemaLoadError, ValueError, OSError) as exc:
-            raise GuardrailDeclarationError(
-                f"B④ 产物槽豁免读不出 {gov_root} 的 project.json paths 声明(fail-closed): {exc}"
-            ) from exc
-        for key in decls.slot_path_keys:
-            rel = _repo_rel(repo_root, Path(declared[key]))
+        for key, slot_root, origin in artifact_slot_roots(gov_root, decls, what="B④ 产物槽豁免"):
+            rel = _repo_rel(repo_root, slot_root)
             if not rel:
                 continue
-            origin = "declared" if declared["declared"].get(key) else "config.schema default"
             slots.append((key, rel, f"project.json paths.{key} → {rel}/<ID>/ ({origin})"))
     if decls.legacy_frozen_exempt:
         from tools.aipos_cli.legacy_baseline import frozen_tasks
@@ -368,6 +399,62 @@ def _exemption_context(repo_root: Path, prefix: str, decls: GuardrailDeclaration
                 f"B④ 冻结卡豁免读不出 {gov_root} 的存量冻结清单(fail-closed): {exc}"
             ) from exc
     return _ExemptionContext(slots=tuple(slots), frozen=frozen, gov_root=gov_root)
+
+
+def artifact_slot_roots(gov_root: Path, decls: GuardrailDeclarations, *, what: str = "产物槽") -> list[tuple[str, Path, str]]:
+    """产物槽根(唯一解析): [(声明键, 槽根绝对路径, 来源 declared|config.schema default)], 键 = record_file.required_frontmatter_exemptions
+    .artifact_slot.project_paths_keys, 值读 project.json paths(唯一读取口 workspace_config.project_paths)。槽 = <槽根>/<ID>/**。
+    B④ 豁免(AIPOS-F128)与产物槽代码文件处置(AIPOS-F195)同读。读不出 = GuardrailDeclarationError(fail-closed)。"""
+    from tools.aipos_cli.workspace_config import project_paths
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        declared = project_paths(Path(gov_root))
+    except (SchemaLoadError, ValueError, OSError) as exc:
+        raise GuardrailDeclarationError(f"{what}读不出 {gov_root} 的 project.json paths 声明(fail-closed): {exc}") from exc
+    return [(key, Path(declared[key]), "declared" if declared["declared"].get(key) else "config.schema default")
+            for key in decls.slot_path_keys]
+
+
+def is_code_file(path: str, decls: GuardrailDeclarations) -> bool:
+    """B① 代码文件判据唯一实现: 文件名扩展名(小写)∈ config.schema code_files_blacklist 的 `**/*.<ext>` 扩展名集。"""
+    name = str(path).rsplit("/", 1)[-1]
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    return bool(ext) and ext in decls.code_extensions
+
+
+def file_sha256(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def slot_code_files_in_dir(slot_dir: Path, decls: GuardrailDeclarations) -> list[dict[str, Any]]:
+    """AIPOS-F195 件①: 报告落点目录(含各级子目录, 不跟随目录符号链接)下的代码文件 [{path(落点相对 posix), sha256, size}], 按路径排序。
+    目录不存在 = 空。判据 = is_code_file(唯一)。"""
+    root = Path(slot_dir)
+    if not root.is_dir():
+        return []
+    out: list[dict[str, Any]] = []
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in filenames:
+            full = Path(dirpath) / name
+            if not is_code_file(name, decls) or not full.is_file():
+                continue
+            out.append({"path": full.relative_to(root).as_posix(), "sha256": file_sha256(full), "size": full.stat().st_size})
+    return sorted(out, key=lambda item: item["path"])
+
+
+def slot_code_rule_text(slot: str, decls: GuardrailDeclarations | None = None) -> str | None:
+    """AIPOS-F195 件①: 报告落点不得放代码文件的规则句(开工稿 / 执行与审计章程同读, 唯一渲染)。声明缺 = None(不出该句)。"""
+    decls = decls if decls is not None else load_guardrail_declarations()
+    if decls.slot_code is None:
+        return None
+    return decls.slot_code.text("rule", slot=slot, extensions=", ".join(f".{e}" for e in decls.code_extensions))
 
 
 def _b4_exemption(file: str, records_prefix: str, ctx: _ExemptionContext,
@@ -487,10 +574,8 @@ def check_entries(
         on_disk = abs_path.is_file()
 
         # B①: 代码文件禁止(新增/修改且在盘上; 删除代码文件不拦, 与原 hook ACM 同义)
-        if status in (STATUS_ADDED, STATUS_MODIFIED) and on_disk:
-            ext = file.rsplit(".", 1)[-1].lower() if "." in file.rsplit("/", 1)[-1] else ""
-            if ext and ext in decls.code_extensions:
-                add(file, CHECK_B1, "Code file forbidden in governance repo (B①)")
+        if status in (STATUS_ADDED, STATUS_MODIFIED) and on_disk and is_code_file(file, decls):
+            add(file, CHECK_B1, "Code file forbidden in governance repo (B①)")
 
         # B②: 治理文档 .md 须带声明 frontmatter
         if status in (STATUS_ADDED, STATUS_MODIFIED) and on_disk and file.startswith(gov_docs_prefix) and file.endswith(".md"):

@@ -300,6 +300,12 @@ def charter_render_context(
 
     for kind in ("return", "verdict"):
         ctx[f"{kind}_required_frontmatter"] = render_report_frontmatter_clause(report_frontmatter_contract(kind))
+    # AIPOS-F195 件①: 报告落点不得放代码文件(与开工稿同一渲染 governance_guardrails.slot_code_rule_text; 判据只读 code_files_blacklist)
+    from tools.aipos_cli.governance_guardrails import load_guardrail_declarations, slot_code_rule_text
+
+    guard_decls = load_guardrail_declarations()
+    for kind, slot in (("return", f"`{paths['return_root']}/<卡ID>/`"), ("verdict", f"`{paths['verdict_root']}/<审计卡ID>/`")):
+        ctx[f"{kind}_slot_code_rule"] = slot_code_rule_text(slot, guard_decls) or "(本产品未声明报告落点代码文件规则)"
     # AIPOS-F99 件②: 审计「独立全量基线」的测试清单位置 = 项目声明 test_contract.runall_path(唯一读取口
     # workspace_config.project_test_contract, 卡仓取缺省产品仓; 形坏 = ValueError 原样抛, fail-closed); 未声明 = 明确文字, 不留空占位。
     # AIPOS-F99 / F137: 全量清单位置 / 命令式样 / 时限三键(渲染唯一 runall_context, AIPOS-F187 开工稿同读); 键表只取三标量(指纹不变)

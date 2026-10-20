@@ -224,6 +224,12 @@ def _item_lines(template: str, rows: list[dict[str, Any]]) -> str | None:
     return "\n".join(out) if out else None
 
 
+def _report_code_rule(report_dir: Path) -> str | None:
+    from tools.aipos_cli.governance_guardrails import slot_code_rule_text
+
+    return slot_code_rule_text(f"`{report_dir}/`")
+
+
 def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str | None = None) -> dict[str, Any]:
     """一张已认领卡的子 agent 开工稿(唯一实现)。返回 {ok, task_id, role, instance, text, values}。
     拒 = KickoffRefused(code, 原文); 声明 / 治理根坏 = SchemaLoadError / ValueError / OSError 上抛(fail-closed)。"""
@@ -370,6 +376,8 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
         "ratchet": test_contract.get("ratchet") or str(texts["ratchet_default"]),
         "residual_pattern": test_contract.get("residual_processes"),
         "report_path": str(report_path),
+        # AIPOS-F195 件①: 报告落点不得放代码文件(与章程同一渲染; 声明缺 = 该行省略)
+        "report_code_rule": _report_code_rule(report_path.parent),
         "report_field_lines": "\n".join(f"  {line}" for line in render_report_field_lines(view.get("report_required_frontmatter"))),
     }
     text = _render(contract, card_role, values)
