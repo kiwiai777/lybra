@@ -1932,8 +1932,28 @@ class _RolesIssuerError(RuntimeError):
         self.next_step = next_step
 
 
+def _roles_issuer_root(args: argparse.Namespace) -> tuple[Path, str]:
+    """AIPOS-F199 件③(gap #203): 签码命令(roles enroll-code / enroll-deliver)凭据所在治理根的唯一定位 → (治理根, 来源说明)。
+    序: 显式 --workspace-root(全局或 roles 级; 原取法不变)> 本命令 --governance-root(enroll_deliver.resolve_local_governance_root:
+    本机已建治理根 / 已登记项目名)> F144 治理根唯一解析梯(_find_repo_root_for_args: 环境变量 > 当前目录所在治理根 > 工位声明; board approve
+    F185 同法)。原缺省走 AIPOS-226 home 模型, 在别的项目治理根目录下运行仍取活动项目(lybra)的 connection.json(chris 实撞)。
+    解析不出 = FileNotFoundError / ValueError(拒因原文), 调用方停线报错, 不回落活动项目。"""
+    from tools.aipos_cli.enroll_deliver import resolve_local_governance_root
+    from tools.aipos_cli.workspace_config import merge_workspace_root_flags
+
+    explicit = merge_workspace_root_flags(getattr(args, "global_workspace_root", None), getattr(args, "workspace_root", None))
+    if explicit:
+        return Path(_resolve_workspace_for_command(args)), f"--workspace-root {explicit}"
+    governance_root = str(getattr(args, "governance_root", "") or "").strip()
+    if governance_root:
+        return resolve_local_governance_root(governance_root), f"--governance-root {governance_root}"
+    root = Path(_find_repo_root_for_args(args))
+    hit = getattr(args, "_governance_root_hit", None) or {}
+    return root, str(hit.get("source") or root)
+
+
 def _roles_issuer_client(workspace_root: Path, connection_target: Path | None, token_role: str,
-                         actor: str | None = None) -> tuple[Any, dict[str, Any], str, str | None]:
+                         actor: str | None = None, *, root_source: str = "") -> tuple[Any, dict[str, Any], str, str | None]:
     """签码命令(roles enroll-code / enroll-deliver, AIPOS-F151 同一取法)的门客户端: <workspace>/.lybra/connection.json(或 --connection-json)
     声明的门基址(唯一推导口 resolve_gate_base_url, 须声明 mcp.rpc_url)+ 门凭据。
     凭据原文只在进程内作 HTTP Authorization, 永不上 argv / 不回显。返回 (client, connection 数据, 实际凭据角色, 签发实例或 None)。
@@ -1946,10 +1966,13 @@ def _roles_issuer_client(workspace_root: Path, connection_target: Path | None, t
     from tools.aipos_cli.two_phase_shell_factory import DriverTokenError, load_role_token, signer_role_for_actor
 
     conn_path = workspace_connection_path(workspace_root, connection_target=connection_target)
+    # AIPOS-F199 件③: 拒因写明实际读取的凭据文件与其来源(--connection-json / 治理根解析来源)
+    origin = "--connection-json 显式指定" if connection_target is not None else f"治理根 {workspace_root} 的 .lybra/connection.json(治理根: {root_source or workspace_root})"
     if not conn_path.exists():
-        raise _RolesIssuerError(f"local connection.json not found: {conn_path}",
-                                "在治理工作区运行本命令(或 --connection-json 指定本机 connection.json); "
+        raise _RolesIssuerError(f"local connection.json not found: {conn_path}(读取来源: {origin})",
+                                "在治理工作区运行本命令(或 --governance-root / --workspace-root 指向持有签发凭据的治理根, 或 --connection-json 指定本机 connection.json); "
                                 "薄壳只调门动词, 没有(也不许有)本地发码路径。")
+    print(f"签码凭据文件: {conn_path}(读取来源: {origin})", file=sys.stderr)
     conn_data = json.loads(conn_path.read_text(encoding="utf-8"))
     try:
         base_url = resolve_gate_base_url(connection_json=conn_path, require_declared=True)
@@ -1961,7 +1984,7 @@ def _roles_issuer_client(workspace_root: Path, connection_target: Path | None, t
             role = signer_role_for_actor(connection_json_path=str(conn_path), actor=signer, repo_root=workspace_root)
             token = load_role_token(connection_json_path=str(conn_path), role=role, agent_instance=signer)
         except ValueError as exc:  # DriverTokenError(未接入 / 非驱动方角色类 / 与 loop 驱动方冲突)及读失败: 拒, 不回落按角色取
-            raise _RolesIssuerError(f"签发实例 --actor {signer} 取凭据被拒: {exc}",
+            raise _RolesIssuerError(f"签发实例 --actor {signer} 取凭据被拒({conn_path}; 读取来源: {origin}): {exc}",
                                     f"--actor 写本治理根已接入的顾问实例(其凭据在 {conn_path}), 或去掉 --actor 用 --token-role 按角色取"
                                     "(同角色多实例时必须 --actor)。") from exc
         return GateClient(base_url, token, timeout=30.0), conn_data, role, signer
@@ -1973,7 +1996,7 @@ def _roles_issuer_client(workspace_root: Path, connection_target: Path | None, t
         except ValueError:  # 该角色无可用条目(TokenResolutionError 族)/ 读失败: 按既有序试下一个角色, 全无 = 下方拒
             continue
         return GateClient(base_url, token, timeout=30.0), conn_data, candidate_role, None
-    raise _RolesIssuerError(f"no usable role token ({token_role}/owner) in {conn_path}",
+    raise _RolesIssuerError(f"no usable role token ({token_role}/owner) in {conn_path}(读取来源: {origin})",
                             "用 --actor <签发实例> 或 --token-role 指定, 或先在本机 enroll 出顾问/Owner 凭据。")
 
 
@@ -3988,7 +4011,21 @@ def main(argv: list[str] | None = None) -> int:
                 # 其他 roles 命令需要完整 workspace 结构
                 conn_override = getattr(args, "connection_json", None)
                 connection_target = Path(conn_override).expanduser() if conn_override else None
-                workspace_root = _resolve_workspace_for_command(args)
+                issuer_root_source = ""
+                if args.roles_command in ("enroll-code", "enroll-deliver"):
+                    # AIPOS-F199 件③(gap #203): 签码凭据按 --workspace-root > --governance-root > F144 解析梯定位(_roles_issuer_root 唯一实现)
+                    try:
+                        workspace_root, issuer_root_source = _roles_issuer_root(args)
+                    except (FileNotFoundError, ValueError) as exc:
+                        if connection_target is not None:  # 显式 --connection-json: 凭据文件已指明, 治理根仅作接入判定, 按原取法(行为不变)
+                            workspace_root, issuer_root_source = _resolve_workspace_for_command(args), f"原取法(治理根解析: {exc})"
+                        else:
+                            print(f"Error: roles {args.roles_command}: 签发凭据所在治理根解析不出: {exc}", file=sys.stderr)
+                            print("下一步: 在持有签发凭据的治理根目录下运行, 或加 --governance-root <治理根> / --workspace-root <治理根>, "
+                                  "或 --connection-json <connection.json 路径>", file=sys.stderr)
+                            return 1
+                else:
+                    workspace_root = _resolve_workspace_for_command(args)
             if args.roles_command == "write-boundary":
                 # AIPOS-F66B 件②: 薄壳, 全部逻辑在 write_boundary(唯一读取口)
                 from tools.aipos_cli.write_boundary import run_write_boundary_cli
@@ -4213,7 +4250,8 @@ def main(argv: list[str] | None = None) -> int:
                 try:
                     # AIPOS-F157 件①: --actor = 签发实例(按实例取凭据唯一口); 缺 = 按角色取, 同角色多实例即拒
                     client, conn_data, token_role_used, signer = _roles_issuer_client(
-                        workspace_root, connection_target, token_role, str(getattr(args, "actor", "") or "").strip() or None)
+                        workspace_root, connection_target, token_role, str(getattr(args, "actor", "") or "").strip() or None,
+                        root_source=issuer_root_source)
                 except _RolesIssuerError as exc:
                     return _enroll_code_fail(str(exc), next_step=exc.next_step)
                 # ② 治理根(F24A): 显式参数优先, 缺省=本机 connection.json 的 workspace_root —— 显式化传入, 码内治理根不再依赖门进程环境解析
@@ -4311,7 +4349,8 @@ def main(argv: list[str] | None = None) -> int:
                 try:
                     client, _conn, token_role_used, signer = _roles_issuer_client(
                         workspace_root, connection_target, str(getattr(args, "token_role", "advisor") or "advisor"),
-                        str(getattr(args, "actor", "") or "").strip() or None)  # AIPOS-F157 件①: 与 enroll-code 同一取法
+                        str(getattr(args, "actor", "") or "").strip() or None,  # AIPOS-F157 件①: 与 enroll-code 同一取法
+                        root_source=issuer_root_source)
                 except _RolesIssuerError as exc:
                     print(f"Error: {exc}", file=sys.stderr)
                     print(f"下一步: {exc.next_step}", file=sys.stderr)
