@@ -424,7 +424,10 @@
         "HOST_FINGERPRINT_MISMATCH": "调用方 / 本机主机指纹 ≠ 声明指纹(跨机调用)",
         "SYMLINK_ESCAPE": "目标真实路径逃出 run 目录(符号链接逃逸)",
         "RUN_DIR_SYMLINK": "run 目录自身真实路径 ≠ 字面(验证根路径含符号链接)",
-        "OUTSIDE_RUN_DIR": "主机侧 helper: 目标不在 run 目录内"
+        "OUTSIDE_RUN_DIR": "主机侧 helper: 目标不在 run 目录内",
+        "SIM_OUTSIDE_DEVICE": "AIPOS-F194: 目标是 Xcode 缺省设备集 Devices 目录本身或其顶层服务维护项(device_set.plist 等)——整个 Devices 目录不放行",
+        "SIM_NOT_BOUND": "AIPOS-F194: 设备 UDID 未绑定于任何本 run 记录(只放行本 run 新建并 sim-bind 的那一台)",
+        "SIM_NOT_OWN_RUN": "AIPOS-F194: 设备 UDID 绑定于他 run / 他卡 / 他实例(审计复用执行 run 的 UDID 同此拒), 或主机侧 device.plist 名不是本 run 名"
       },
       "remote_realpath": {
         "mode": "host_side_helper",
@@ -441,19 +444,19 @@
         },
         {
           "toolchain": "ios",
-          "kind": "argument",
-          "applies": "xcrun simctl",
-          "render": "xcrun simctl --set {run_dir}/simdevices <子命令>(独立设备集; 禁用缺省设备集)",
-          "verify": "xcrun simctl help(只读): 输出须列出 --set 选项, 否则 BLOCK",
-          "source": "卡面件⑤; 官方文档本卡未取得(治理根所在机非 macOS), 以目标主机只读 `xcrun simctl help` 核实后方可使用"
+          "kind": "command",
+          "applies": "xcrun simctl create / delete(AIPOS-F194 本 run 专用模拟器; 只经 helper sim-create / sim-delete 调用, 角色不直接调 simctl)",
+          "render": "python3 {helper_path} sim-create --run-dir {run_dir} --expect-fingerprint {fingerprint} --device-type <设备型号 id> --runtime <运行时 id>(helper 内 = `xcrun simctl create {sim_name} <设备型号> <运行时>`, 在 Xcode 缺省设备集新建本 run 这一台); 结束 = helper sim-delete(内 = `xcrun simctl delete <本 run UDID>`)",
+          "verify": "xcrun simctl help create 与 xcrun simctl help delete(只读): 用法须为 `create <name> <device type id> [<runtime id>]` 与 `delete <device> …`, 否则 BLOCK",
+          "source": "Apple 未公开发布 simctl 文档(无 man 页 / 网页); 用法以目标主机 `xcrun simctl help create|delete` 为准——本卡 NOT_VERIFIED(治理根所在机非 macOS), 公开实践佐证: WebKit Tools/Scripts/webkitpy/xcode/simulated_device.py 与 Chromium ios/build/bots/scripts/iossim_util.py 均以 `xcrun simctl create <名> <设备型号 id> <运行时 id>` 建台、stdout 取 UDID"
         },
         {
           "toolchain": "ios",
           "kind": "argument",
-          "applies": "xcodebuild",
-          "render": "xcodebuild … -derivedDataPath {run_dir}/DerivedData -resultBundlePath {run_dir}/results/<名>.xcresult",
-          "verify": "xcodebuild -help(只读): 输出须列出 -derivedDataPath 与 -resultBundlePath, 否则 BLOCK",
-          "source": "xcodebuild(1) man page(keith.github.io/xcode-man-pages 镜像): -derivedDataPath \"Overrides the folder that should be used for derived data when performing an action on a scheme in a workspace.\"; -resultBundlePath \"Writes a bundle to the specified path with results ...\""
+          "applies": "xcodebuild(每个动作)",
+          "render": "xcodebuild <动作> … -destination 'platform=iOS Simulator,id={sim_udid}' -derivedDataPath {run_dir}/DerivedData -resultBundlePath {run_dir}/results/<动作>.xcresult(每个动作三参数齐; 结果包路径须不存在, 重跑换名)",
+          "verify": "xcodebuild -help(只读): 输出须列出 -destination、-derivedDataPath 与 -resultBundlePath, 否则 BLOCK",
+          "source": "xcodebuild(1) man page(keith.github.io/xcode-man-pages 镜像): -derivedDataPath \"Overrides the folder that should be used for derived data when performing an action on a scheme in a workspace.\"; -resultBundlePath \"Writes a bundle to the specified path with results from performing an action on a scheme in a workspace.\" \"If the path already exists, xcodebuild will exit with an error.\"; -destination 的 id 键 \"The identifier of the simulated device to use\", \"A valid destination specifier must provide either id or name, but not both.\""
         },
         {
           "toolchain": "ios",
@@ -513,16 +516,66 @@
         },
         {
           "path": "~/Library/Developer/CoreSimulator/Devices",
-          "by": "缺省设备集(--set 生效时不应变化)",
-          "allowed": "不许变化",
-          "verify": "run 前后 helper snapshot + compare; 有变化 = BLOCK 并列缺口"
+          "by": "Xcode 缺省设备集(AIPOS-F194: 本 run 在其中新建一台专用模拟器)",
+          "allowed": "只许多出并最终删除本 run 专用模拟器这一台(UDID 绑定在本 run 记录); 顶层 device_set.plist 等 CoreSimulator 服务维护性写入 = 系统服务副作用(记入证据, 不判失败); 其他 UDID 不许变化",
+          "verify": "helper sim-create / sim-verify / sim-delete 前后对 Devices 顶层 UDID 清单比对, 证据 .lybra-vr/simulator.json; 收口 run-finish --sim-evidence 同一函数核对"
+        },
+        {
+          "path": "<Darwin 用户临时目录>(getconf DARWIN_USER_TEMP_DIR, 即 /var/folders/…/T)顶层 ResultBundle_* 等",
+          "by": "Xcode 自写(TMPDIR 已指到 run 内仍写; chris HBLX-21B 10-20 实证 /var/folders/…/T/ResultBundle_2026-20-10_00-53-0042.xcresult)",
+          "allowed": "系统副作用: 不删除、不冒充 run 产物; 新增项记入证据, 审计可见",
+          "verify": "helper sys-snapshot --phase before / after(匹配项见 ios_simulator.xcode_temp_side_effects.patterns), 证据 .lybra-vr/xcode-side-effects.json"
         }
       ],
       "block_conditions": [
-        "工具无重定向参数仍写全局目录(如签名 / 描述文件 / 钥匙串导入证书、不带 --set 的 simctl 缺省设备集)= BLOCK 并列缺口, 不静默放行",
-        "真实设备(adb 连接实体机、devicectl 等)、其他模拟器 / 缺省设备集、全局证书库 / 钥匙串、系统目录 = 一律禁止(不在验证根授权内)",
+        "工具无重定向参数仍写全局目录(如签名 / 描述文件 / 钥匙串导入证书)= BLOCK 并列缺口, 不静默放行",
+        "simctl / xcodebuild 触及本 run 专用模拟器以外的设备(boot / erase / delete / install 他台、-destination 用他台 UDID 或 name=)、`simctl delete all|unavailable`、`simctl erase all` = 禁止; 本 run 这一台只经 helper sim-create 新建、sim-delete 删除",
+        "真实设备(adb 连接实体机、devicectl 等)、本 run 专用模拟器以外的模拟器 / 缺省设备集其余部分、全局证书库 / 钥匙串、系统目录 = 一律禁止(不在验证根授权内)",
         "重定向参数在目标主机只读核验(verify)不过 = BLOCK, 不臆造替代参数"
       ],
+      "ios_simulator": {
+        "description": "AIPOS-F194(Owner 10-20 裁定「本次运行专用模拟器(推荐)」; chris 理想 HBLX-21B 实撞): iOS 界面测试隔离 = 在 Xcode 缺省设备集中由本 run 新建一台专用模拟器(名含卡与 run-id), 只写该 UDID 的设备目录, 结束删除, 前后比对证明只多出并只删除这一台; 编译产物 / 测试结果 / 临时目录仍全在 run 目录(OTA 原需求「系统管理位置的最小必要范围及验证方式, 不以整个用户目录放行」)。UDID 绑定在 project.json 本 run 记录(validation_roots.declarations[].runs[].simulator, 与 run-id 同一处, 不另立登记文件; 写 = `project validation-root sim-bind` / `run-finish --sim-evidence`); 主机侧建 / 核 / 删 = helper sim-create / sim-verify / sim-delete(只调 simctl create / delete <本 run UDID>, 不 boot / erase / delete 他台); 写判定 = write_boundary.check_access(面 validation_root, scope ios_simulator)。",
+        "name_template": "lybra-{task_id}-{run_id}",
+        "devices_rel": "Library/Developer/CoreSimulator/Devices",
+        "writable": "~/Library/Developer/CoreSimulator/Devices/<本 run UDID>/(仅此一台; 本实例本卡本活动 run 经 sim-bind 绑定的 UDID)",
+        "service_side_effects": "CoreSimulator 系统服务对 Devices 顶层 device_set.plist 等的维护性写入 = 系统服务副作用(helper 快照记入证据, 不判失败, 不是角色写面)",
+        "not_allowed": [
+          "其他 UDID 的设备目录(他 run / 他卡 / 他角色 / 非本 run 新建的既有设备)",
+          "整个 Devices 目录及其顶层文件",
+          "Xcode 全局缓存(~/Library/Developer/Xcode/DerivedData 等; 编译产物一律 -derivedDataPath 落 run 目录)",
+          "审计 run 复用执行 run 的 UDID(审计须新建自己的专用模拟器; sim-bind 拒复用, 运行证据校验拒引用)"
+        ],
+        "evidence_file": ".lybra-vr/simulator.json",
+        "side_evidence_file": ".lybra-vr/xcode-side-effects.json",
+        "xcodebuild_actions": [
+          "build-for-testing",
+          "test-without-building"
+        ],
+        "xcodebuild_template": "xcodebuild {action} <-project|-workspace …> -scheme <scheme> -destination 'platform=iOS Simulator,id={sim_udid}' -derivedDataPath {run_dir}/DerivedData -resultBundlePath {run_dir}/results/{action}.xcresult",
+        "xcode_temp_side_effects": {
+          "dir": "Darwin 用户临时目录(getconf DARWIN_USER_TEMP_DIR; 不读 TMPDIR——TMPDIR 已重定向到 run 内)",
+          "patterns": [
+            "ResultBundle_*"
+          ],
+          "description": "Xcode 自写系统临时目录的顶层匹配项(清单只追加; 首项来自 chris HBLX-21B 10-20 实证)。helper sys-snapshot 在 run 前后快照, 新增 / 删除 / 变更项记入证据(不删除、不冒充 run 产物, 审计可见)。"
+        },
+        "steps": [
+          "只读核验(目标主机): `xcrun simctl help create`、`xcrun simctl help delete`、`xcodebuild -help` 须列出所需用法与 -destination / -derivedDataPath / -resultBundlePath; 不符 = BLOCK, 不臆造替代参数",
+          "系统临时目录前快照: `{side_before}`(末行 SIDE_BEFORE + 退出码 0)",
+          "建本 run 专用模拟器 {sim_name}: `{sim_create}`(设备型号 / 运行时取 `xcrun simctl list devicetypes` / `xcrun simctl list runtimes` 所列 id); 只认末行 `SIM_CREATED udid=…` + 退出码 0, 其余(多出他台 / 少了设备)= 停线报告",
+          "绑定(顾问 / 驱动方, 治理根所在机): `{sim_bind}`(UDID 写进本 run 记录; 未绑定前该设备目录写判定一律 SIM_NOT_BOUND)",
+          "每个 xcodebuild 动作三参数齐(-destination 本 run UDID / -derivedDataPath / -resultBundlePath 落 run 目录; 结果包路径须不存在, 重跑换名): {xcodebuild_actions}",
+          "运行中核验(可多次): `{sim_verify}`(末行 SIM_OK = 只多出本 run 这一台)",
+          "删除本 run 这一台: `{sim_delete}`(先核 device.plist 名 = {sim_name} 再删; 只认末行 `SIM_DELETED` + 退出码 0, 删错他台 / 未删除 = 停线报告)",
+          "系统临时目录后快照: `{side_after}`(SIDE_EFFECT 行 = Xcode 自写系统副作用, 不删除、不冒充 run 产物, 原文附报告)",
+          "证据回传: `{sim_evidence}` 与 `{side_evidence}` 原样复制进本卡报告落点 artifacts/; 收口由顾问 / 驱动方 `{run_finish_sim}`(核对未删除 / 多出他台 = 收口拒)"
+        ],
+        "retracted": {
+          "scheme": "xcrun simctl --set {run_dir}/simdevices(独立设备集; AIPOS-F190 件⑤)",
+          "retracted_at": "2026-10-20",
+          "reason": "Xcode 不支持 XCTest 连接自定义设备集: simctl 公开帮助支持 --set, 但 xcodebuild 无受支持参数让 XCTest 使用自定义设备集; chris 理想 HBLX-21B run-4 `xcodebuild -IDECustomDeviceSetPath … -showdestinations` 退出 64 `invalid option -IDECustomDeviceSetPath`(证据 chris 治理根 5_tasks/records/returns/HBLX-21B/artifacts/validation-blocker-20261020.md/.json, 提交 c626175b)。Owner 10-20 裁定改为本 run 专用模拟器(本段)。"
+        }
+      },
       "harness_sandbox": {
         "codex": {
           "render": "codex exec --sandbox workspace-write --add-dir {run_dir} …(或 config.toml: sandbox_mode = \"workspace-write\" 与 [sandbox_workspace_write] writable_roots = [\"{run_dir}\"])",

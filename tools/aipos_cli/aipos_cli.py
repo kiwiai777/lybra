@@ -1781,7 +1781,7 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
             task_id=getattr(args, "task_id", None), instance=getattr(args, "instance", None), expires_at=getattr(args, "expires_at", None),
             owner_ref=getattr(args, "owner_ref", None), host_fingerprint=getattr(args, "host_fingerprint", None),
             decl_id=getattr(args, "decl_id", None), reason=getattr(args, "reason", None), candidate=getattr(args, "candidate", None),
-            run_id=getattr(args, "run_id", None))
+            run_id=getattr(args, "run_id", None), udid=getattr(args, "udid", None), sim_evidence=getattr(args, "sim_evidence", None))
     except vr.ValidationRootError as exc:
         print(f"Error: {exc.code}(project.json 未改动)", file=sys.stderr)
         for problem in exc.problems:
@@ -1796,6 +1796,9 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
                f"可写目录 = {vr.run_directory(entry, run['run_id'] if run else '<run-id>')}"]
     if run:
         details.append(f"run {run['run_id']} 候选 {run['candidate']} 起 {run['started_at']}" + (f" 收口 {run['finished_at']}" if run["finished_at"] else ""))
+        if run.get("simulator"):  # AIPOS-F194: 本 run 专用模拟器(与 run-id 同一处)
+            sim = run["simulator"]
+            details.append(f"专用模拟器 {sim['name']} udid={sim['udid']}" + (f" 删除核对通过 {sim['verified_at']}" if sim.get("verified_at") else ""))
     details += list(outcome["notes"])
     payload = {k: outcome[k] for k in ("dry_run", "changed", "written", "diff", "project_json")}
     extra = {"action": action, "declaration": entry, "run": run, "notes": outcome["notes"]}
@@ -1808,6 +1811,9 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
                                             extra=extra, details=details)
     if action == "run-start":
         return _project_json_two_phase_emit("validation-root run-start", target, payload, actor=args.actor, json_out=json_out,
+                                            extra=extra, details=details)
+    if action == "sim-bind":
+        return _project_json_two_phase_emit("validation-root sim-bind", target, payload, actor=args.actor, json_out=json_out,
                                             extra=extra, details=details)
     return _project_json_two_phase_emit("validation-root run-finish", target, payload, actor=args.actor, json_out=json_out,
                                         extra=extra, details=details)
@@ -2795,7 +2801,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_vr_parser = project_subparsers.add_parser(
         "validation-root",
         help="AIPOS-F190: declare a temporary cross-machine validation root (host + base + card + executor/auditor instance; writable = "
-             "<base>/<card>/<run-id>/ of the active run only): declare / revoke / run-start / run-finish (--dry-run default, --confirm "
+             "<base>/<card>/<run-id>/ of the active run only): declare / revoke / run-start / run-finish / sim-bind (--dry-run default, --confirm "
              "writes project.json and lands it), list, helper (print the host-side check helper), init-command (AIPOS-F191: host-side directory-chain init command)")
     project_vr_sub = project_vr_parser.add_subparsers(dest="vr_command", required=True)
 
@@ -2830,7 +2836,17 @@ def build_parser() -> argparse.ArgumentParser:
     _vr_common(vr_runfinish)
     vr_runfinish.add_argument("--id", dest="decl_id", required=True, help="Declaration id")
     vr_runfinish.add_argument("--run-id", required=True, help="Run id to close")
+    vr_runfinish.add_argument("--sim-evidence", default=None, help="AIPOS-F194: local copy of the run's .lybra-vr/simulator.json (required when the "
+                                                                   "run has a bound simulator; checks only that one was created and deleted)")
     _project_json_two_phase_flags(vr_runfinish, "validation-root run-finish")
+    vr_simbind = project_vr_sub.add_parser("sim-bind", help="AIPOS-F194: bind this run's own iOS simulator UDID (created on the host by the helper's "
+                                                         "sim-create) into the run record; only that device directory becomes writable")
+    _vr_common(vr_simbind)
+    vr_simbind.add_argument("--id", dest="decl_id", required=True, help="Declaration id")
+    vr_simbind.add_argument("--run-id", required=True, help="Active run id")
+    vr_simbind.add_argument("--udid", required=True, help="UDID printed by the helper's sim-create (SIM_CREATED udid=...)")
+    vr_simbind.add_argument("--sim-evidence", default=None, help="Optional local copy of the run's .lybra-vr/simulator.json (creation is verified)")
+    _project_json_two_phase_flags(vr_simbind, "validation-root sim-bind")
     vr_list = project_vr_sub.add_parser("list", help="List validation root declarations and runs (read-only)")
     _vr_common(vr_list)
     vr_list.add_argument("--task-id", default=None, help="Only this card")

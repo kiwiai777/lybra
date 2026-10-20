@@ -12,6 +12,10 @@
     判定入口 = write_boundary.check_access(经本模块 judge_access, 面 validation_root)。
   - 主机身份(指纹)与 realpath 判定 = validation_root_helper(纯标准库单文件, 目标主机同一份); 本模块只 import, 不另写。
   - 开工稿 / 章程同源: render_section_lines(措辞读 verbs.schema lybra_kickoff.validation_root_texts)。
+  - AIPOS-F194 iOS 本 run 专用模拟器(Owner 10-20 定, 取代已撤下的 simctl --set 独立设备集): 声明 roles.schema
+    write_boundary.validation_root.ios_simulator; UDID 绑定在 project.json 本 run 记录(runs[].simulator, 与 run-id 同一处, 不另立登记文件;
+    写入口 apply_validation_root_change sim-bind / run-finish --sim-evidence); 主机侧建 / 核 / 删与证据核对 = helper sim-* 与
+    helper.verify_sim_evidence(治理根侧 run-finish 同一函数); 设备目录写判定 = judge_access(同面 validation_root, scope ios_simulator)。
   - AIPOS-F191 目录链初始化: 目标主机上的空目录链(<base>/<卡ID>/<run-id>)只经 helper init-run 建; 命令唯一铸造口 init_run_command
     (封印 = helper.init_seal 同一实现), 出口三处同源: run-start --confirm 输出 / 开工稿与章程验证根节 / `validation-root init-command`。
 fail-closed: 声明缺 = SchemaLoadError; 段形不合 = ValidationRootError(VR_DECLARATION_INVALID); 违规 = 拒, 不吞。
@@ -36,9 +40,11 @@ _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 ENTRY_KEYS = ("id", "host", "host_fingerprint", "base", "task_id", "instance", "role_class", "owner_ref", "declared_by", "declared_at",
               "expires_at", "revoked_at", "revoked_by", "revoke_reason", "runs")
 RUN_KEYS = ("run_id", "candidate", "started_at", "started_by", "finished_at", "finished_by")
+RUN_OPTIONAL_KEYS = ("simulator",)  # AIPOS-F194: 缺键 = 本 run 未绑定专用模拟器(行为不变)
+SIM_KEYS = ("udid", "name", "bound_at", "bound_by", "verified_at", "verified_by", "evidence_sha256")
 TEXT_KEYS = ("title", "relation", "declaration", "directory", "run_active", "run_none", "run_finish", "check_dev", "helper",
-             "sandbox", "redirect_title", "redirect", "side_effect", "block", "init_run")
-ACTIONS = ("declare", "revoke", "run-start", "run-finish")
+             "sandbox", "redirect_title", "redirect", "side_effect", "block", "init_run", "sim_title", "sim_step")
+ACTIONS = ("declare", "revoke", "run-start", "run-finish", "sim-bind")
 
 
 class ValidationRootError(ValueError):
@@ -79,6 +85,24 @@ def declaration() -> dict[str, Any]:
     return decl
 
 
+def ios_simulator_declaration() -> dict[str, Any]:
+    """AIPOS-F194: roles.schema write_boundary.validation_root.ios_simulator(本 run 专用模拟器: 命名 / 可写面 / 证据 / 动作模板 / 步骤)。
+    缺键 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError
+
+    sim = declaration().get("ios_simulator")
+    needed = ("name_template", "devices_rel", "writable", "evidence_file", "side_evidence_file", "xcodebuild_actions", "xcodebuild_template",
+              "xcode_temp_side_effects", "steps", "not_allowed", "retracted")
+    if not isinstance(sim, dict) or any(k not in sim for k in needed):
+        raise SchemaLoadError(f"roles.schema.json write_boundary.validation_root.ios_simulator({' / '.join(needed)})未声明齐")
+    patterns = (sim["xcode_temp_side_effects"] or {}).get("patterns")
+    if not isinstance(patterns, list) or not patterns or not all(isinstance(p, str) and p and "/" not in p for p in patterns):
+        raise SchemaLoadError("roles.schema.json write_boundary.validation_root.ios_simulator.xcode_temp_side_effects.patterns 须为非空顶层名 glob 列表")
+    if not isinstance(sim["steps"], list) or not all(isinstance(t, str) and t for t in sim["steps"]):
+        raise SchemaLoadError("roles.schema.json write_boundary.validation_root.ios_simulator.steps 须为非空串列表")
+    return sim
+
+
 def card_kinds() -> dict[str, str]:
     """可声明验证根的角色类 → 卡种(roles.schema write_boundary.validation_root.card_kind_by_class; 唯一声明)。"""
     return {k: str(v) for k, v in declaration()["card_kind_by_class"].items() if k != "description"}
@@ -91,7 +115,8 @@ def reject_codes() -> dict[str, str]:
     decl = (((load_schema("config").get("configuration_sources") or {}).get("project_json") or {}).get("schema") or {}).get("validation_roots")
     codes = decl.get("reject_codes") if isinstance(decl, dict) else None
     needed = ("VR_DECLARATION_INVALID", "VR_BASE_FORBIDDEN", "VR_INSTANCE_NOT_ENROLLED", "VR_ROLE_NOT_ALLOWED", "VR_TASK_NOT_OWNED",
-              "VR_HOST_FINGERPRINT_REQUIRED", "VR_HOST_FINGERPRINT_MISMATCH", "VR_NOT_FOUND", "VR_STATE_CONFLICT", "VR_CANDIDATE_INVALID")
+              "VR_HOST_FINGERPRINT_REQUIRED", "VR_HOST_FINGERPRINT_MISMATCH", "VR_NOT_FOUND", "VR_STATE_CONFLICT", "VR_CANDIDATE_INVALID",
+              "VR_SIM_INVALID", "VR_SIM_EVIDENCE_REJECTED")
     if not isinstance(codes, dict) or any(not codes.get(k) for k in needed):
         raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.validation_roots.reject_codes 未声明齐")
     return codes
@@ -188,8 +213,15 @@ def project_validation_roots(governance_root: str | Path, *, project: dict[str, 
             raise _err("VR_DECLARATION_INVALID", f"{at}.runs 须为列表")
         for rindex, run in enumerate(entry["runs"]):
             rat = f"{at}.runs[{rindex}]"
-            if not isinstance(run, dict) or set(run) != set(RUN_KEYS):
-                raise _err("VR_DECLARATION_INVALID", f"{rat} 键须恰为 {list(RUN_KEYS)}")
+            if not isinstance(run, dict) or not set(RUN_KEYS) <= set(run) or set(run) - set(RUN_KEYS) - set(RUN_OPTIONAL_KEYS):
+                raise _err("VR_DECLARATION_INVALID", f"{rat} 键须为 {list(RUN_KEYS)}(可选 {list(RUN_OPTIONAL_KEYS)})")
+            sim = run.get("simulator")
+            if sim is not None:
+                if not isinstance(sim, dict) or set(sim) != set(SIM_KEYS) or not helper.is_udid(sim.get("udid")):
+                    raise _err("VR_DECLARATION_INVALID", f"{rat}.simulator 键须恰为 {list(SIM_KEYS)} 且 udid 为 UDID")
+                _parse_iso(sim["bound_at"], f"{rat}.simulator.bound_at")
+                if sim["verified_at"] is not None:
+                    _parse_iso(sim["verified_at"], f"{rat}.simulator.verified_at")
             if not isinstance(run["run_id"], str) or "/" in run["run_id"] or helper.canonical_problem("/" + run["run_id"]):
                 raise _err("VR_DECLARATION_INVALID", f"{rat}.run_id={run['run_id']!r} 不合法")
             if not isinstance(run["candidate"], str) or not _SHA_RE.match(run["candidate"]):
@@ -214,6 +246,34 @@ def declaration_status(entry: dict[str, Any], now: datetime | None = None) -> st
 
 def active_run(entry: dict[str, Any]) -> dict[str, Any] | None:
     return next((r for r in entry.get("runs") or [] if not r.get("finished_at")), None)
+
+
+def simulator_name(entry: dict[str, Any], run_id: str) -> str:
+    """本 run 专用模拟器名(ios_simulator.name_template; 与 helper.sim_name 同值, 测试断言一致)。"""
+    template = str(ios_simulator_declaration()["name_template"])
+    return template.replace("{task_id}", entry["task_id"]).replace("{run_id}", run_id)
+
+
+def bound_simulators(entries: list[dict[str, Any]]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """全部已绑定专用模拟器的 (声明, run)(UDID 不得跨 run 复用的判据来源)。"""
+    return [(e, r) for e in entries for r in e.get("runs") or [] if isinstance(r.get("simulator"), dict)]
+
+
+def sim_evidence_check(entry: dict[str, Any], run: dict[str, Any], evidence_path: str, *, expect_udid: str | None,
+                       require_deleted: bool = True) -> dict[str, Any]:
+    """治理根侧读主机侧证据(helper 写的 simulator.json 的治理根所在机副本)并以 helper.verify_sim_evidence 同一函数核对。
+    返回 {ok, problems, service, udid, sha256}; 读不出 = ok False。"""
+    import json
+
+    path = Path(str(evidence_path or "")).expanduser()
+    try:
+        raw = path.read_bytes()
+        data = json.loads(raw.decode("utf-8"))
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "problems": [f"--sim-evidence {path} 读不出({exc})"], "service": [], "udid": None, "sha256": None}
+    verdict = helper.verify_sim_evidence(data, run_dir=run_directory(entry, run["run_id"]), expect_udid=expect_udid,
+                                         require_deleted=require_deleted)
+    return {**verdict, "sha256": hashlib.sha256(raw).hexdigest()}
 
 
 def run_directory(entry: dict[str, Any], run_id: str) -> str:
@@ -498,6 +558,35 @@ def apply_validation_root_change(governance_root: str | Path, action: str, *, dr
             # AIPOS-F191 件②: 下一步 = 在目标主机建目录链(唯一铸造口 init_run_command; 封印不含时刻, 预演所示 = 确认后所铸)
             notes.append(f"{'确认后' if dry_run else ''}下一步(run-start 后第一步): 在目标主机 {entry['host']} 运行: "
                          f"{init_run_command(gov, entry, run)}(只建空目录链 0700, 末行 INIT_OK + 退出码 0 = 成功; 角色不得自行 mkdir base / 卡层)")
+        elif action == "sim-bind":
+            # AIPOS-F194 件②④: 本 run 专用模拟器 UDID 绑定进本 run 记录(与 run-id 同一处); 审计 run 须新建自己的, 不得复用他 run UDID
+            run_id = str(kw.get("run_id") or "").strip()
+            run = next((r for r in entry["runs"] if r["run_id"] == run_id), None)
+            if run is None:
+                raise _err("VR_NOT_FOUND", f"声明 {decl_id} 无 run {run_id!r}")
+            if status != "active" or run["finished_at"]:
+                raise _err("VR_STATE_CONFLICT", f"声明 {decl_id} 状态 = {status}, run {run_id} {'已收口' if run['finished_at'] else '活动'}; "
+                                                "只对 active 声明的活动 run 绑定专用模拟器")
+            udid = str(kw.get("udid") or "").strip()
+            if not helper.is_udid(udid):
+                raise _err("VR_SIM_INVALID", f"--udid {udid!r} 不是 UDID(取目标主机 helper sim-create 末行 SIM_CREATED udid=…)")
+            if run.get("simulator"):
+                raise _err("VR_SIM_INVALID", f"run {run_id} 已绑定专用模拟器 {run['simulator']['udid']}(一个 run 只一台, 不改绑)")
+            reused = [f"{e['id']}/{r['run_id']}(卡 {e['task_id']} 实例 {e['instance']})" for e, r in bound_simulators(entries)
+                      if r["simulator"]["udid"].upper() == udid.upper()]
+            if reused:
+                raise _err("VR_SIM_INVALID", f"UDID {udid} 已绑定于 {reused}; 每个 run(含审计 run)须新建自己的专用模拟器, 不得复用他 run 的 UDID")
+            sim = {"udid": udid, "name": simulator_name(entry, run_id), "bound_at": _iso(now), "bound_by": actor, "verified_at": None,
+                   "verified_by": None, "evidence_sha256": None}
+            if kw.get("sim_evidence"):
+                check = sim_evidence_check(entry, run, str(kw["sim_evidence"]), expect_udid=udid, require_deleted=False)
+                if not check["ok"]:
+                    raise _err("VR_SIM_EVIDENCE_REJECTED", *[f"绑定拒: {p}" for p in check["problems"]])
+            run = {**run, "simulator": sim}
+            entry["runs"] = [run if r["run_id"] == run_id else r for r in entry["runs"]]
+            result = {"entry": entry, "run": run}
+            notes.append(f"本 run 专用模拟器 {sim['name']}({udid})只此一台设备目录可写; 结束须在目标主机 sim-delete, 收口 run-finish 带 "
+                         "--sim-evidence <simulator.json 在治理根所在机的副本> 核对「只多出并只删除这一台」")
         else:  # run-finish
             run_id = str(kw.get("run_id") or "").strip()
             run = next((r for r in entry["runs"] if r["run_id"] == run_id), None)
@@ -505,7 +594,26 @@ def apply_validation_root_change(governance_root: str | Path, action: str, *, dr
                 raise _err("VR_NOT_FOUND", f"声明 {decl_id} 无 run {run_id!r}")
             if run["finished_at"]:
                 raise _err("VR_STATE_CONFLICT", f"run {run_id} 已于 {run['finished_at']} 收口")
-            run = {**run, "finished_at": _iso(now), "finished_by": actor}
+            sim = run.get("simulator")
+            evidence_path = str(kw.get("sim_evidence") or "").strip()
+            if sim and not evidence_path:
+                raise _err("VR_SIM_EVIDENCE_REJECTED", f"run {run_id} 绑定了专用模拟器 {sim['name']}({sim['udid']}), 收口须带 --sim-evidence "
+                                                       f"<目标主机 {run_directory(entry, run_id)}/{ios_simulator_declaration()['evidence_file']} "
+                                                       "在治理根所在机的副本>; 未删除 / 无证据不收口")
+            if evidence_path:
+                check = sim_evidence_check(entry, run, evidence_path, expect_udid=sim["udid"] if sim else None)
+                if not check["ok"]:
+                    raise _err("VR_SIM_EVIDENCE_REJECTED", *[f"收口拒: {p}" for p in check["problems"]])
+                if not sim:
+                    reused = [f"{e['id']}/{r['run_id']}" for e, r in bound_simulators(entries)
+                              if r["simulator"]["udid"].upper() == str(check["udid"]).upper()]
+                    if reused:
+                        raise _err("VR_SIM_INVALID", f"证据 UDID {check['udid']} 已绑定于 {reused}(不得复用他 run 的 UDID)")
+                    sim = {"udid": check["udid"], "name": simulator_name(entry, run_id), "bound_at": _iso(now), "bound_by": actor}
+                    notes.append("本 run 未经 sim-bind: 收口按证据补记专用模拟器(运行中写判定未按 UDID 放行过)")
+                sim = {**sim, "verified_at": _iso(now), "verified_by": actor, "evidence_sha256": check["sha256"]}
+                notes.append(f"专用模拟器证据核对通过: 只多出并只删除 {sim['udid']}" + (f"; 系统服务副作用 {check['service']}" if check["service"] else ""))
+            run = {**run, "finished_at": _iso(now), "finished_by": actor, **({"simulator": sim} if sim else {})}
             entry["runs"] = [run if r["run_id"] == run_id else r for r in entry["runs"]]
             result = {"entry": entry, "run": run}
             notes.append(f"run {run_id} 收口后其目录一律拒写(RUN_NOT_ACTIVE)")
@@ -534,6 +642,11 @@ def judge_access(governance_root: str | Path, *, host: str, raw_path: str, want_
     entries = [e for e in project_validation_roots(gov) if (is_local_host(e["host"]) if local else e["host"] == host)]
     if not entries:
         return None
+    sim_hit = _sim_target(raw_path, local=local)
+    if sim_hit is not None:
+        return _judge_sim_access(entries, sim_hit, raw_path=raw_path, label=label, local=local, want_rank=want_rank, granted=granted,
+                                 granted_rank=granted_rank, instance=instance, task_id=task_id, run_id=run_id,
+                                 host_fingerprint=host_fingerprint)
     normalized = posixpath.normpath(raw_path) if raw_path.startswith("/") else raw_path
     hits = [e for e in entries if helper.is_within(raw_path, e["base"]) or helper.is_within(normalized, e["base"])]
     if not hits:
@@ -620,6 +733,96 @@ def judge_access(governance_root: str | Path, *, host: str, raw_path: str, want_
                        "符号链接逃逸须在目标主机以 helper check 复核(只认退出码 0 + ALLOW)")}
 
 
+def _sim_target(raw_path: str, *, local: bool) -> dict[str, Any] | None:
+    """路径是否落在某用户主目录的 Xcode 缺省设备集(<home_roots>/<用户>/<devices_rel>, 本机另认 ~)内: 返回 {devices_dir, udid_seg}; 否则 None。
+    字面判定(先 normpath 防 .. 绕开识别; 非规范路径由调用方拒)。"""
+    if not raw_path.startswith("/"):
+        return None
+    rel = str(ios_simulator_declaration()["devices_rel"]).strip("/")
+    normalized = posixpath.normpath(raw_path)
+    homes = [str(h).rstrip("/") for h in declaration()["forbidden_bases"]["home_roots"]]
+    candidates: list[str] = []
+    parts = normalized.split("/")[1:]
+    if len(parts) >= 2 and "/" + parts[0] in homes:
+        candidates.append("/" + "/".join(parts[:2]))
+    if local:
+        candidates.append(str(Path.home()))
+    for home in candidates:
+        ddir = f"{home}/{rel}"
+        if helper.is_within(normalized, ddir) or helper.is_within(raw_path, ddir):
+            rest = normalized[len(ddir):].lstrip("/").split("/") if normalized != ddir else []
+            return {"devices_dir": ddir, "udid_seg": rest[0] if rest and rest[0] else None}
+    return None
+
+
+def _judge_sim_access(entries: list[dict[str, Any]], hit: dict[str, Any], *, raw_path: str, label: str, local: bool, want_rank: int,
+                      granted: str | None, granted_rank: int | None, instance: str | None, task_id: str | None, run_id: str | None,
+                      host_fingerprint: str | None) -> dict[str, Any]:
+    """AIPOS-F194 件④: Xcode 缺省设备集内的写判定(同面 validation_root, scope ios_simulator)。只放行本实例本卡本活动 run 绑定的
+    那一台 UDID 设备目录; 整个 Devices 目录 / 服务维护项(device_set.plist 等)/ 未绑定 UDID / 他 run·他卡·他角色(含审计复用执行 UDID)一律拒。"""
+    base: dict[str, Any] = {"surface": SURFACE, "scope": "ios_simulator", "granted_level": granted, "host": label}
+
+    def deny(code: str, reason: str, **extra: Any) -> dict[str, Any]:
+        return {**base, **extra, "allowed": False, "code": code, "reason": reason}
+
+    problem = helper.canonical_problem(raw_path)
+    if problem:
+        return deny("PATH_NOT_CANONICAL", f"目标{problem}(设备集内路径须规范, 穿越一律拒)")
+    if not granted or granted_rank is None:
+        return deny("ROLE_NO_ROW", f"角色类对面 {SURFACE} 无声明行(roles.schema write_boundary.matrix); 出口: 补矩阵声明")
+    if want_rank > granted_rank:
+        return deny("LEVEL_EXCEEDED", f"面 {SURFACE} 声明级别={granted}, 请求级别超出")
+    if want_rank == 0:
+        return {**base, "allowed": True, "code": "OK", "reason": f"面 {SURFACE}(ios_simulator)只读(主机 {label})"}
+    udid = hit["udid_seg"]
+    if udid is None or not helper.is_udid(udid):
+        return deny("SIM_OUTSIDE_DEVICE", f"目标 {raw_path} 是 Xcode 缺省设备集 {hit['devices_dir']} 本身或其顶层服务维护项(如 device_set.plist)"
+                                          "——整个 Devices 目录不放行; 服务维护性写入属 CoreSimulator 系统服务副作用, 不是角色写面")
+    if not instance:
+        return deny("INSTANCE_REQUIRED", f"面 {SURFACE} 的写判定须给 --instance(声明按实例归属)")
+    bound = [(e, r) for e, r in bound_simulators(entries) if r["simulator"]["udid"].upper() == udid.upper()]
+    if not bound:
+        return deny("SIM_NOT_BOUND", f"设备 {udid} 未绑定于主机 {label} 任何本 run 记录(只放行经 helper sim-create 新建并由顾问 sim-bind "
+                                     "绑定的本 run 专用模拟器; 他台设备一律拒)")
+    entry, run = bound[0]
+    if entry["instance"] != instance or entry["task_id"] != (task_id or "") or run["run_id"] != (run_id or ""):
+        return deny("SIM_NOT_OWN_RUN", f"设备 {udid} 绑定于 {entry['id']} {run['run_id']}(卡 {entry['task_id']}, 实例 {entry['instance']}), "
+                                       f"不是实例 {instance} 卡 {task_id or '(未给)'} run {run_id or '(未给)'} 的专用模拟器"
+                                       "(他 run / 他卡 / 他角色拒; 审计 run 须新建自己的, 不得复用执行 run 的 UDID)")
+    now = _now()
+    status = declaration_status(entry, now)
+    if status == "revoked":
+        return deny("DECLARATION_REVOKED", f"声明 {entry['id']} 已于 {entry['revoked_at']} 被 {entry['revoked_by']} 撤销({entry['revoke_reason']})")
+    if status == "expired":
+        return deny("DECLARATION_EXPIRED", f"声明 {entry['id']} 已于 {entry['expires_at']} 到期")
+    if status == "unbound":
+        return deny("HOST_FINGERPRINT_UNBOUND", f"声明 {entry['id']} 无主机指纹(未确认), 不放行")
+    if host_fingerprint and host_fingerprint != entry["host_fingerprint"]:
+        return deny("HOST_FINGERPRINT_MISMATCH", f"调用方主机指纹 {host_fingerprint} ≠ 声明 {entry['id']} 的 {entry['host_fingerprint']}(跨机调用)")
+    if run["finished_at"]:
+        return deny("RUN_NOT_ACTIVE", f"run {run['run_id']} 已于 {run['finished_at']} 收口(已结束 run 的专用模拟器一律拒)")
+    run_dir = run_directory(entry, run["run_id"])
+    device_dir = f"{hit['devices_dir']}/{udid}"
+    extra = {"run_dir": run_dir, "declaration_id": entry["id"], "simulator_udid": udid, "device_dir": device_dir}
+    if local:
+        try:
+            here = helper.host_fingerprint()
+        except helper.HostIdentityError as exc:
+            return deny("HOST_FINGERPRINT_MISMATCH", f"本机指纹读不出({exc}), fail-closed 拒", **extra)
+        if here != entry["host_fingerprint"]:
+            return deny("HOST_FINGERPRINT_MISMATCH", f"本机指纹 {here} ≠ 声明 {entry['id']} 的 {entry['host_fingerprint']}", **extra)
+        verdict = helper.judge_realpath(device_dir, raw_path)
+        if not verdict["allowed"]:
+            return deny(verdict["code"], verdict["reason"], **extra)
+    reason = f"本实例 {instance} 本卡 {task_id} 活动 run {run['run_id']} 的专用模拟器 {run['simulator']['name']}({udid})设备目录内(主机 {label})"
+    if local:
+        return {**base, **extra, "allowed": True, "code": "OK", "reason": reason}
+    return {**base, **extra, "allowed": True, "code": "OK",
+            "host_side_check": f"python3 validation_root_helper.py check --run-dir {shlex.quote(run_dir)} --sim-udid {udid} "
+                               f"--path {shlex.quote(raw_path)} --expect-fingerprint {entry['host_fingerprint']}",
+            "reason": reason + "; 字面判定, 符号链接逃逸与 device.plist 名须在目标主机以 helper check --sim-udid 复核(只认退出码 0 + ALLOW)"}
+
+
 def init_run_command(governance_root: str | Path, entry: dict[str, Any], run: dict[str, Any]) -> str:
     """AIPOS-F191: 目标主机目录链初始化命令(唯一铸造口)。helper 取自治理根所在机(`project validation-root helper`), 经管道交
     `python3 -` 运行(run 目录尚不存在, helper 不落盘); 封印 = helper.init_seal(base, run 目录, 指纹, 到期)。调用方保证声明 active 且 run 活动。"""
@@ -651,13 +854,20 @@ def executor_run_dir_refs(governance_root: str | Path, reviewed_task_id: str, te
     """运行证据校验对接: 运行记录文本中引用了被审执行卡的验证目录(<base>/<被审卡>/)= 返回命中的目录(审计不得以执行 run 作自身证据)。"""
     if not reviewed_task_id:
         return []
-    prefixes = sorted({f"{e['base']}/{e['task_id']}" for e in project_validation_roots(governance_root)
-                       if e["task_id"] == reviewed_task_id and card_kinds().get(e["role_class"]) == "execution_card"})
+    executor_entries = [e for e in project_validation_roots(governance_root)
+                        if e["task_id"] == reviewed_task_id and card_kinds().get(e["role_class"]) == "execution_card"]
+    prefixes = sorted({f"{e['base']}/{e['task_id']}" for e in executor_entries})
     hits: list[str] = []
     for prefix in prefixes:
         pattern = re.compile(re.escape(prefix) + r"(?=$|/|[\s'\"`])")
         if any(pattern.search(str(text or "")) for text in texts):
             hits.append(prefix + "/")
+    # AIPOS-F194 件④: 审计不得引用执行 run 的专用模拟器 UDID(须新建自己的)
+    for entry, run in bound_simulators(executor_entries):
+        udid = run["simulator"]["udid"]
+        pattern = re.compile(r"(?<![0-9A-Fa-f-])" + re.escape(udid) + r"(?![0-9A-Fa-f-])", re.IGNORECASE)
+        if any(pattern.search(str(text or "")) for text in texts):
+            hits.append(f"专用模拟器 {udid}(执行 {entry['id']} {run['run_id']})")
     return hits
 
 
@@ -710,6 +920,7 @@ def render_section_lines(governance_root: str | Path, *, instance: str, task_id:
                   "helper_fetch": f"{gcmd} project validation-root helper", "helper_sha256": helper_sha256(),
                   "helper_path": f"{run_dir}/.lybra-vr/validation_root_helper.py",
                   "init_run": init_run_command(gov, entry, run) if run and status == "active" else ""}
+        values.update(_sim_values(gov, entry, run, values))
         lines.append(_fill(texts["declaration"], values))
         lines.append(_fill(texts["directory"], values))
         if status not in ("active", "unbound"):
@@ -732,10 +943,41 @@ def render_section_lines(governance_root: str | Path, *, instance: str, task_id:
                                                    "verify": _fill(str(item.get("verify") or ""), values), "source": item.get("source") or ""}))
         for item in decl["system_side_effects"]:
             lines.append(_fill(texts["side_effect"], item))
+        lines.append(_fill(texts["sim_title"], values))  # AIPOS-F194: iOS 本 run 专用模拟器步骤(声明 ios_simulator.steps)
+        for n, step in enumerate(ios_simulator_declaration()["steps"], 1):
+            lines.append(_fill(texts["sim_step"], {"n": n, "text": _fill(step, values)}))
         for text in decl["block_conditions"]:
             lines.append(_fill(texts["block"], {"text": text}))
         lines.append(_fill(texts["run_finish"], values))
     return lines
+
+
+def _sim_values(governance_root: Path, entry: dict[str, Any], run: dict[str, Any] | None, values: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F194: 开工稿 / 章程「本 run 专用模拟器」步骤的渲染值(命令全由声明 + 本 run 记录铸; 未绑定 = UDID 占位)。"""
+    sim_decl = ios_simulator_declaration()
+    run_id = run["run_id"] if run else "<run-id>"
+    bound = (run or {}).get("simulator") or {}
+    udid = bound.get("udid") or "<本 run UDID(sim-create 末行 SIM_CREATED udid=…)>"
+    helper_cmd = f"python3 {values['helper_path']}"
+    common = f"--run-dir {values['run_dir']} --expect-fingerprint {values['fingerprint']}"
+    patterns = " ".join(f"--pattern {shlex.quote(p)}" for p in sim_decl["xcode_temp_side_effects"]["patterns"])
+    gcmd = _gov_cmd(governance_root)
+    evidence = f"{values['run_dir']}/{sim_decl['evidence_file']}"
+    sim_values = {"sim_name": simulator_name(entry, run_id), "sim_udid": udid, "devices_rel": sim_decl["devices_rel"],
+                  "sim_evidence": evidence, "side_evidence": f"{values['run_dir']}/{sim_decl['side_evidence_file']}",
+                  "sim_create": f"{helper_cmd} sim-create {common} --device-type <设备型号 id> --runtime <运行时 id>",
+                  "sim_verify": f"{helper_cmd} sim-verify {common}", "sim_delete": f"{helper_cmd} sim-delete {common}",
+                  "side_before": f"{helper_cmd} sys-snapshot {common} --phase before {patterns}",
+                  "side_after": f"{helper_cmd} sys-snapshot {common} --phase after {patterns}",
+                  "sim_bind": f"{gcmd} project validation-root sim-bind --id {entry['id']} --run-id {run_id} --udid {bound.get('udid') or '<UDID>'} "
+                              "--confirm --actor <顾问实例>",
+                  "run_finish_sim": f"{gcmd} project validation-root run-finish --id {entry['id']} --run-id {run_id} --sim-evidence "
+                                    "<simulator.json 在治理根所在机的副本> --confirm --actor <顾问实例>"}
+    actions = []
+    for action in sim_decl["xcodebuild_actions"]:
+        actions.append(_fill(str(sim_decl["xcodebuild_template"]), {**values, **sim_values, "action": action}))
+    sim_values["xcodebuild_actions"] = "; ".join(f"`{a}`" for a in actions)
+    return sim_values
 
 
 def render_list_lines(entries: list[dict[str, Any]]) -> list[str]:
@@ -753,6 +995,10 @@ def render_list_lines(entries: list[dict[str, Any]]) -> list[str]:
             state = f"finished {r['finished_at']} by {r['finished_by']}" if r["finished_at"] else "ACTIVE"
             out.append(f"    run {r['run_id']}  candidate={r['candidate']}  started {r['started_at']} by {r['started_by']}  {state}"
                        + ("" if r["finished_at"] else f"  → {run_directory(e, r['run_id'])}"))
+            sim = r.get("simulator")
+            if sim:
+                out.append(f"      专用模拟器 {sim['name']} udid={sim['udid']} 绑定 {sim['bound_at']} by {sim['bound_by']}"
+                           + (f"  删除核对通过 {sim['verified_at']}(证据 sha256 {sim['evidence_sha256'][:12]}…)" if sim["verified_at"] else "  (未核删除)"))
         if run is None and declaration_status(e, now) == "active":
             out.append("    (无活动 run: 写前须 run-start)")
     return out

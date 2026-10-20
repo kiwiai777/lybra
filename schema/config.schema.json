@@ -470,7 +470,7 @@
           "type": "object",
           "required": false,
           "default": null,
-          "description": "AIPOS-F190: 跨机临时验证根声明(按 项目 / 主机 / 执行或审计实例 / 卡 / run 的有限可写根)。缺段 = 无声明(行为不变: validation_root 面无根, 远端路径照旧 SURFACE_UNDECLARED)。存储取舍: 放 project.json 而非另立治理记录——声明是项目配置(哪台机哪个目录归谁写), 读取方(write-boundary 判定 / 章程渲染 / 开工稿 / 运行证据校验)本就经 project.json 唯一读取口; 写入复用 project.json 唯一写路径 update_project_json(锁 + 写前预检 + 写后复核)与两阶段预演 diff / 自动落账包装(verbs.schema two_phase_protocol.project_json_writers), 提交史 = 追溯; 条目只追加不删除, 撤销 / run 收口写在原条目上(revoked_* / finished_*), 可追溯 declared_by / owner_ref / 撤销。唯一读取口 validation_root.project_validation_roots; 唯一写入口 validation_root.apply_validation_root_change(`lybra project validation-root declare|revoke|run-start|run-finish`)。",
+          "description": "AIPOS-F190: 跨机临时验证根声明(按 项目 / 主机 / 执行或审计实例 / 卡 / run 的有限可写根)。缺段 = 无声明(行为不变: validation_root 面无根, 远端路径照旧 SURFACE_UNDECLARED)。存储取舍: 放 project.json 而非另立治理记录——声明是项目配置(哪台机哪个目录归谁写), 读取方(write-boundary 判定 / 章程渲染 / 开工稿 / 运行证据校验)本就经 project.json 唯一读取口; 写入复用 project.json 唯一写路径 update_project_json(锁 + 写前预检 + 写后复核)与两阶段预演 diff / 自动落账包装(verbs.schema two_phase_protocol.project_json_writers), 提交史 = 追溯; 条目只追加不删除, 撤销 / run 收口写在原条目上(revoked_* / finished_*), 可追溯 declared_by / owner_ref / 撤销。唯一读取口 validation_root.project_validation_roots; 唯一写入口 validation_root.apply_validation_root_change(`lybra project validation-root declare|revoke|run-start|run-finish|sim-bind`)。",
           "schema": {
             "declarations": {
               "type": "array",
@@ -491,7 +491,7 @@
                 "revoked_at": "撤销时刻(null = 未撤销)",
                 "revoked_by": "撤销者",
                 "revoke_reason": "撤销原因",
-                "runs": "run 列表(只追加): {run_id, candidate(固定候选 40 位 sha), started_at, started_by, finished_at, finished_by}"
+                "runs": "run 列表(只追加): {run_id, candidate(固定候选 40 位 sha), started_at, started_by, finished_at, finished_by[, simulator]}; AIPOS-F194 可选键 simulator(缺省 = 缺键 = 本 run 未绑定专用模拟器, 行为不变)= {udid, name(lybra-<卡>-<run>), bound_at, bound_by, verified_at, verified_by, evidence_sha256}: `validation-root sim-bind` 写入(UDID 与 run-id 同一处), `run-finish --sim-evidence` 核对删除后补 verified_* 与证据 sha256(声明 roles.schema write_boundary.validation_root.ios_simulator)"
               }
             }
           },
@@ -505,7 +505,9 @@
             "VR_HOST_FINGERPRINT_MISMATCH": "给出的主机指纹 ≠ 声明指纹",
             "VR_NOT_FOUND": "声明 id / run-id 不存在",
             "VR_STATE_CONFLICT": "状态不允许(已撤销 / 已到期 / 已有活动 run / 无此活动 run)",
-            "VR_CANDIDATE_INVALID": "候选不是卡仓中已有提交的完整 40 位 sha"
+            "VR_CANDIDATE_INVALID": "候选不是卡仓中已有提交的完整 40 位 sha",
+            "VR_SIM_INVALID": "AIPOS-F194: 专用模拟器绑定不合(UDID 形不合 / 本 run 已绑定 / UDID 已绑定于他 run, 含审计复用执行 run 的 UDID)",
+            "VR_SIM_EVIDENCE_REJECTED": "AIPOS-F194: 专用模拟器证据核对不过(绑定了却无证据 / 未删除 / 多出他台 / 删错他台 / 他 run 证据 / 名或 UDID 不符); 收口或绑定被拒"
           }
         },
         "launch_guard": {

@@ -423,8 +423,9 @@ def test_item5_6_kickoff_and_charter_render(rig):
         f"子 agent 沙箱可写根(codex): codex exec --sandbox workspace-write --add-dir {run_dir}",
         f'writable_roots = ["{run_dir}"]',
         "禁 --sandbox danger-full-access",
-        f"[ios] xcrun simctl --set {run_dir}/simdevices <子命令>",
-        f"-derivedDataPath {run_dir}/DerivedData -resultBundlePath {run_dir}/results/<名>.xcresult",
+        # AIPOS-F194: simctl --set 独立设备集已撤下(Xcode 不支持 XCTest 连接自定义设备集), 改本 run 专用模拟器
+        f"[ios] python3 {run_dir}/.lybra-vr/validation_root_helper.py sim-create --run-dir {run_dir}",
+        f"-derivedDataPath {run_dir}/DerivedData -resultBundlePath {run_dir}/results/<动作>.xcresult",
         f"[android] ANDROID_USER_HOME={run_dir}/android-user-home", f"[android] ANDROID_AVD_HOME={run_dir}/avd",
         f"[android] ANDROID_EMULATOR_HOME={run_dir}/android-user-home",
         f"[gradle] GRADLE_USER_HOME={run_dir}/gradle-home", "[gradle] GRADLE_RO_DEP_CACHE=<目标主机既有依赖缓存",
