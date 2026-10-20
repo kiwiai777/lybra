@@ -4581,6 +4581,7 @@ def _candidate_run_problem(workspace_root: Path, audit_task_id: str, entry: dict
     规则声明 transitions runtime_evidence.candidate_subject.rules)。run 定位 / 归属 / src-verify 核对全部复用 validation_root 唯一实现。
     返回 (该 run 的占位值, 拒因或 None)。"""
     import hashlib
+    import posixpath
 
     from tools.aipos_cli.artifact_ingest import runtime_evidence_declaration
     from tools.aipos_cli.validation_root import (
@@ -4620,7 +4621,7 @@ def _candidate_run_problem(workspace_root: Path, audit_task_id: str, entry: dict
     if src:
         return {}, f"{where} 源码封签不过: {'; '.join(src)}"
     worktree = str(entry.get("worktree") or "").strip()
-    if worktree and not is_within(str(Path(worktree).expanduser()), run_dir):
+    if worktree and not is_within(posixpath.normpath(str(Path(worktree).expanduser())), run_dir):
         return {}, f"{where} 运行目录(worktree / run-long --cwd){worktree} 不在本 run 目录 {run_dir} 内"
     keys = runtime_evidence_declaration()["log_fields"]
     log_path, log_sha = str(entry.get(keys["path"]) or "").strip(), str(entry.get(keys["sha256"]) or "").strip().lower()

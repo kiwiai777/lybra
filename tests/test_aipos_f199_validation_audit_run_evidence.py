@@ -490,3 +490,32 @@ def test_single_source_runtime_evidence_candidate():
     cand = decl["artifact_ingest"]["verdict"]["runtime_evidence"]["candidate_subject"]
     _show(f"[单源] candidate_subject.entry_required_fields={cand['entry_required_fields']} placeholders={list(cand['placeholders'])}")
     assert list(cand["placeholders"]) == ["run_dir", "src_dir", "candidate", "candidate_tree"]
+
+
+def test_item1_cwd_outside_run_and_remote_host_fail_closed(vrig):
+    """运行目录(run-long --cwd / worktree)须在本 run 内; run 在非治理根所在机 = 门读不到 run 内证据 = 拒(fail-closed)。"""
+    from test_aipos_f196_validation_to_pi import HOST, _fp
+
+    gov, base = vrig.gov, vrig.base
+    candidate, tree = _setup_cards(vrig)
+    decl = _declare(gov, base, VALR, AUDITOR)
+    _run_start(gov, decl, candidate)
+    run = _prepare_run(gov, decl)
+    entries = _exec_commands(run, candidate, tree)
+    outside = [{**entries[0], "worktree": str(vrig.code_repo)}, entries[1]]
+    bad = _check(gov, VALR, VAL, candidate, outside)
+    _show("[件① 拒·运行目录不在本 run]\n  " + bad["reasons"][0])
+    assert f"运行目录(worktree / run-long --cwd){vrig.code_repo} 不在本 run 目录 {run} 内" in bad["reasons"][0]
+    sneaky = [{**entries[0], "worktree": f"{run}/src/../../run-9"}, entries[1]]
+    assert "不在本 run 目录" in _check(gov, VALR, VAL, candidate, sneaky)["reasons"][0]
+
+    rc, out, err = _vr(gov, "declare", "--host", HOST, "--base", base / "remote", "--task-id", VAL2R, "--instance", AUDITOR,
+                       "--owner-ref", OWNER_REF, "--host-fingerprint", _fp(), "--actor", DRIVER, "--confirm")
+    assert rc == 0, out + err
+    remote_decl = f"vr-{VAL2R.lower()}-auditor-1"
+    _run_start(gov, remote_decl, candidate)
+    rdir = base / "remote" / VAL2R / "run-1"
+    remote_entries = [{**e, "run_id": "run-1", "run_dir": str(rdir)} for e in entries]
+    bad = _check(gov, VAL2R, VAL2, candidate, remote_entries)
+    _show("[件① 拒·run 在非治理根所在机(fail-closed)]\n  " + bad["reasons"][0])
+    assert f"在主机 {HOST}(非治理根所在机), 裁决入口读不到 run 内送达核对证据与日志(fail-closed)" in bad["reasons"][0]
