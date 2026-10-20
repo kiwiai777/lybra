@@ -474,10 +474,6 @@ def _simctl(*args: str) -> dict[str, Any]:
     return {"argv": argv, "exit": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
 
 
-def _now_iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
-
 def _write_json_in_run(run_dir: str, rel: str, data: Any) -> str | None:
     """证据只写进本 run 目录(落点先经 judge_realpath); 返回问题原文或 None。"""
     path = posixpath.join(run_dir, rel)
@@ -542,7 +538,7 @@ def _sim_create_cli(args: argparse.Namespace) -> int:
             device_name, name_problem = device_plist_name(device)
     evidence = {"schema": SIM_EVIDENCE_SCHEMA, "run_dir": args.run_dir, "name": name, "udid": udid, "device_type": args.device_type,
                 "runtime": args.runtime, "devices_dir": ddir, "host": host_label(), "fingerprint": args.expect_fingerprint,
-                "create": {"at": _now_iso(), **result, "before": before, "after": after, "device_name": device_name,
+                "create": {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **result, "before": before, "after": after, "device_name": device_name,
                            "device_name_problem": name_problem},
                 "delete": None, "verifies": []}
     problem = _write_json_in_run(args.run_dir, SIM_EVIDENCE, evidence)
@@ -582,7 +578,7 @@ def _sim_verify_cli(args: argparse.Namespace) -> int:
         return EXIT_DENY
     current = devices_listing(str(evidence.get("devices_dir") or devices_dir()))
     verdict = verify_sim_evidence(evidence, run_dir=args.run_dir, require_deleted=False, current=current)
-    evidence.setdefault("verifies", []).append({"at": _now_iso(), "current": current, "problems": verdict["problems"]})
+    evidence.setdefault("verifies", []).append({"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "current": current, "problems": verdict["problems"]})
     problem = _write_json_in_run(args.run_dir, SIM_EVIDENCE, evidence)
     if problem:
         print(f"DENY {problem}")
@@ -624,7 +620,7 @@ def _sim_delete_cli(args: argparse.Namespace) -> int:
     before = devices_listing(ddir)
     result = _simctl("delete", udid)
     after = devices_listing(ddir)
-    evidence["delete"] = {"at": _now_iso(), **result, "before": before, "after": after}
+    evidence["delete"] = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **result, "before": before, "after": after}
     problem = _write_json_in_run(args.run_dir, SIM_EVIDENCE, evidence)
     if problem:
         print(f"DENY {problem}")
@@ -692,7 +688,7 @@ def _sys_snapshot_cli(args: argparse.Namespace) -> int:
             print(f"DENY [SIDE_BEFORE_EXISTS] 本 run 已有前快照 {path}(一个 run 只取一次前快照, 不覆盖)")
             return EXIT_DENY
         data = {"schema": SIDE_EVIDENCE_SCHEMA, "run_dir": args.run_dir, "temp_dir": temp_dir, "patterns": patterns,
-                "before_at": _now_iso(), "before": temp_listing(temp_dir, patterns), "after": None, "added": [], "removed": [], "changed": []}
+                "before_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "before": temp_listing(temp_dir, patterns), "after": None, "added": [], "removed": [], "changed": []}
         problem = _write_json_in_run(args.run_dir, SIDE_EVIDENCE, data)
         if problem:
             print(f"DENY {problem}")
@@ -707,7 +703,7 @@ def _sys_snapshot_cli(args: argparse.Namespace) -> int:
         return EXIT_DENY
     after = temp_listing(temp_dir, patterns)
     before = data.get("before") or {}
-    data.update({"after_at": _now_iso(), "after": after, "added": sorted(set(after) - set(before)), "removed": sorted(set(before) - set(after)),
+    data.update({"after_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "after": after, "added": sorted(set(after) - set(before)), "removed": sorted(set(before) - set(after)),
                  "changed": sorted(n for n in set(after) & set(before) if after[n] != before[n])})
     problem = _write_json_in_run(args.run_dir, SIDE_EVIDENCE, data)
     if problem:
