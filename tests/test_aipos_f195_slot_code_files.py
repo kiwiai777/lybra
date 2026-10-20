@@ -163,6 +163,30 @@ def test_item1_kickoff_and_charters_render_the_same_rule():
     assert "slot_code_rule_text" in src and "slot_code_rule_text" in (REPO_ROOT / "tools" / "aipos_cli" / "charter_render.py").read_text(encoding="utf-8")
 
 
+def test_item1_ingest_rejection_is_routine_advisor_fix(tmp_path, monkeypatch):
+    """loop 门拒原文(execute_derived_action 产物入口)抽得 INGEST_CODE_FILE_IN_SLOT = 例行码 → advisor_fix(派写报告者移出脚本, 原命令续跑)。"""
+    from tools.aipos_cli import loop_run_record as lrr
+    from tools.aipos_cli import next_resolver as nr
+    from tools.aipos_cli.loop_driver import load_loop_contract
+
+    task_id = "F195-ING-LOOP"
+    gov, _code_repo, sha, tree, ret = _ingest_setup(tmp_path, monkeypatch, "chris", task_id)
+    _write(ret, _return_text(task_id, sha, tree))
+    _write(ret.parent / "artifacts" / "run.py", RUN_PY)
+    command = f"lybra artifact ingest --task-id {task_id} --kind return --workspace-root {gov}"
+    out = nr.execute_derived_action({"derivable": True, "task_id": task_id, "current_node": "claim", "command": command}, gov, None)
+    msg = f"门拒 @ return ({task_id}) exit {out['exit_code']}: {out['message']}\n{out['output']}"  # loop_driver 门拒结束原文同形
+    decl = lrr.run_record_declaration(load_loop_contract())
+    codes = lrr.extract_end_codes(msg, decl)
+    assert out["ok"] is False and codes == ["INGEST_CODE_FILE_IN_SLOT"], (out, codes)
+    view = {"task_id": task_id, "run_id": "r", "state": "ended", "end_reason": "gate_rejected", "end_message": msg.splitlines()[0],
+            "end_codes": codes, "driver": DRIVER, "envelope": POLICY}
+    na = lrr.next_action(view, lrr.next_action_declaration(decl), governance_root=gov)
+    _show(f"[件①·loop] 入门拒 → 下一动作 {na['action']}({na['reason']}) codes={na.get('codes')}\n{na['hint']}")
+    assert na["action"] == "advisor_fix" and na["codes"] == ["INGEST_CODE_FILE_IN_SLOT"]
+    assert "run.py → run.py.txt" in na["hint"] and na["hint"].splitlines()[-1].startswith(f"lybra loop --task-id {task_id}")
+
+
 # ===========================================================================
 # 件② 已审结卡 N6: 产物槽内代码文件正式处置
 # ===========================================================================
