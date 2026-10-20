@@ -973,8 +973,6 @@
       "agent_instance",
       "context_bundle",
       "task_mode",
-      "validation_source_task",
-      "validation_candidate",
       "task_class",
       "complexity_note",
       "model_tier",

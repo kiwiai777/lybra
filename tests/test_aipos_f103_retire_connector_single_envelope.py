@@ -317,7 +317,8 @@ def test_next_resolver_dispatch_uses_driver_envelope():
 
     assert not hasattr(nr, "_resolve_active_policy")
     src = Path(nr.__file__).read_text(encoding="utf-8")
-    block = src[src.index('if not latest_audit_dispatch and (task_mode == "code" or audit_required):'):]
+    # AIPOS-F196: 派审条件读声明(task_mode_independent_audit), 不再写死 task_mode == "code"; 锚点随之更新
+    block = src[src.index('if not latest_audit_dispatch and (task_mode_independent_audit('):]
     block = block[: block.index("return {")]
     assert "policy_ref = _driver_envelope_ref(workspace_root, task_id, fm, conn_arg)" in block
     assert "driver_policy or policy_ref" not in src
