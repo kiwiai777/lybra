@@ -1154,7 +1154,12 @@
         "paths": "output_target 解析出的路径片段(含 / 或 . 的 token; 与交回判据同一解析函数 machine_zone.parse_output_target_paths)",
         "roles": "assigned_to/agent_instance 经 roles 注册表解析出的角色类"
       },
-      "missing_rule": "lane 缺失时按 derive 派生; output_target 亦缺/解析为空 = LANE_REQUIRED 拒发布"
+      "missing_rule": "lane 缺失时按 derive 派生; output_target 亦缺/解析为空 = LANE_REQUIRED 拒发布",
+      "governance_root_ref": {
+        "value": "governance_root",
+        "description": "AIPOS-F197 件①(gap #178/#201): 卡面 lane.repo 写本保留值 = 本卡只写治理根(不写任何产品仓)。唯一解析 workspace_config.resolve_card_repo 把它解析为治理根自身, 于是「卡是否写产品仓 = 是否建卡工作树」判据(next_resolver.card_needs_worktree, enums.schema task_mode.product_repo_write lane_repo_rule: 解析到治理根自身 = 不写仓)原样得出不建树, 交回契约走 transitions artifact_ingest.return.governance_root(产出清单)。只允许 writes_product_repo=false 且非固定候选(subject=candidate)的 task_mode(docs / governance / config 等), 其余模式写本值 = 发布拒(LANE_REPO_UNDECLARED, 出口: 改写产品仓名或改 task_mode); allow_governance_root=False 的解析(finalize 等)= 拒。缺 lane.repo 时的缺省派生不变(repos.default / code_repo; 缺省 = 行为不变)。保留值不得同时作 project.json repos.items 仓名(同名 = REPOS_CONFLICT)。",
+        "single_implementation": "tools/aipos_cli/workspace_config.governance_root_lane_ref"
+      }
     },
     "gate_verb_check": {
       "description": "AIPOS-F78 前置零⑧: publish 的「意图面不含门动词」校验只匹配 verbs.schema 注册的 MCP 动词全名(surface 含 mcp), 整词匹配, 只扫意图面正文(frontmatter 的策略 id/governance_refs 文档引用不在扫描面)",

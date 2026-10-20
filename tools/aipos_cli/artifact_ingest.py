@@ -496,7 +496,13 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         out["ok"], out["category"], out["exit_code"] = True, "OK", INGEST_EXIT_RECORDED
         return out
 
+    # AIPOS-F197 件②: 只写治理根的卡(及其审计卡)交回契约分形(transitions artifact_ingest.<return|verdict>.governance_root):
+    # 不核卡仓 / 卡分支(本卡无卡分支, 治理根不是产品仓), 改核产出清单(唯一实现 next_resolver.governance_outputs_manifest)
+    from tools.aipos_cli.next_resolver import card_governance_outputs
+
+    governance = card_governance_outputs(workspace_root, {**card_fm, "task_id": str(card_fm.get("task_id") or task_id)})
     # AIPOS-F78C 件②: 核 tip/被审分支的仓 = 该卡(R 卡: 被审卡)声明的仓; 解析不到 = 声明缺失出口(非崩溃), 不进 git
+    repo_fm: dict[str, Any] = {}
     if is_audit:
         reviewed_for_repo = audit_card_reviewed_id(task_id, card_fm)
         try:
@@ -505,9 +511,9 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
             out["category"], out["reasons"] = "TASK_AMBIGUOUS", [str(exc)]
             return out
         repo_fm = _read_frontmatter(reviewed_path) if reviewed_path else {}
-        code_repo, repo_problem = _code_repo_for(workspace_root, reviewed_for_repo, repo_fm)
+        code_repo, repo_problem = (workspace_root, {}) if governance else _code_repo_for(workspace_root, reviewed_for_repo, repo_fm)
     else:
-        code_repo, repo_problem = _code_repo_for(workspace_root, task_id, card_fm)
+        code_repo, repo_problem = (workspace_root, {}) if governance else _code_repo_for(workspace_root, task_id, card_fm)
     if code_repo is None:
         out["category"], out["reasons"] = repo_problem["category"], repo_problem["reasons"]
         return out
@@ -530,11 +536,12 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
             return out
         fm = _read_frontmatter(path, allow_missing_block=True)
         out["frontmatter"] = fm
-        missing = missing_return_frontmatter(fm)
+        missing = missing_return_frontmatter(fm, governance=governance)
         if missing:
+            where = "return.governance_root.required_frontmatter(只写治理根卡: 产出清单, 无分支三键)" if governance else "return.required_frontmatter"
             out["category"] = "INGEST_FRONTMATTER_MISSING"
             out["reasons"] = [
-                f"{path}: frontmatter 缺 {', '.join(missing)}(声明: transitions.schema artifact_ingest.return.required_frontmatter)。"
+                f"{path}: frontmatter 缺 {', '.join(missing)}(声明: transitions.schema artifact_ingest.{where})。"
                 f"出口: 执行体补齐后产品自动重试(loop 重推导)"
             ]
             return out
@@ -556,6 +563,20 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
             return out
         if not extract_return_summary_text(content, summary_source):
             out["category"], out["reasons"] = "INGEST_SUMMARY_MISSING", [return_summary_missing_text(path, summary_source)]
+            return out
+        if governance:
+            # AIPOS-F197 件②: 产出清单逐个核对并计算 sha256(唯一实现 governance_outputs_manifest; 门交回记录随后绑定同一清单)
+            from tools.aipos_cli.next_resolver import GovernanceOutputsError, governance_outputs_manifest
+
+            try:
+                manifest = governance_outputs_manifest(workspace_root, task_id, card_fm, fm)
+            except GovernanceOutputsError as exc:
+                out["category"], out["reasons"] = exc.code, [
+                    f"{path}: {exc.reason}(声明: transitions.schema artifact_ingest.return.governance_root)。出口: 执行体修正产出或 "
+                    f"Return frontmatter outputs 后产品自动重试(loop 重推导)"]
+                return out
+            out["outputs_manifest"] = manifest
+            out["ok"], out["category"], out["exit_code"] = True, "OK", INGEST_EXIT_RECORDED
             return out
         # AIPOS-F78C 件③: Return 自述 repo(可选, 声明 artifact_ingest.return.optional_frontmatter)须与卡 lane.repo 解析仓一致
         optional = [str(k) for k in (decl.get("optional_frontmatter") or [])]
@@ -624,12 +645,34 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
     # AIPOS-F89 件③c: 报告完成判据唯一实现 next_resolver.missing_verdict_frontmatter(占位 = 未填, 空模板不算产物)
     from tools.aipos_cli.next_resolver import card_branch_name, missing_verdict_frontmatter
 
-    missing = missing_verdict_frontmatter(fm)
+    missing = missing_verdict_frontmatter(fm, governance=governance)
     if missing:
+        where = "verdict.governance_root.required_frontmatter" if governance else "verdict.required_frontmatter"
         out["category"] = "INGEST_FRONTMATTER_MISSING"
-        out["reasons"] = [f"{path}: frontmatter 缺 {', '.join(missing)}(声明: transitions.schema artifact_ingest.verdict.required_frontmatter)"]
+        out["reasons"] = [f"{path}: frontmatter 缺 {', '.join(missing)}(声明: transitions.schema artifact_ingest.{where})"]
         return out
     reviewed = str(fm.get("reviewed_task_id") or "").strip() or audit_card_reviewed_id(task_id, card_fm)
+    if governance:
+        # AIPOS-F197 件②: 被审卡只写治理根 = 报告 outputs_digest 须 = 交回绑定指纹 = 此刻指纹(governance_outputs_recheck 唯一实现)
+        from tools.aipos_cli.next_resolver import governance_outputs_recheck
+
+        recheck = governance_outputs_recheck(workspace_root, reviewed, repo_fm)
+        reported = str(fm.get("outputs_digest") or "").strip()
+        if not recheck["ok"] or reported != str((recheck.get("bound") or {}).get("outputs_digest") or ""):
+            out["category"] = recheck["code"] if not recheck["ok"] else "INGEST_OUTPUTS_CHANGED"
+            out["reasons"] = [recheck["reason"] if not recheck["ok"] else
+                              f"{path}: 报告 outputs_digest={reported!r} ≠ 被审卡 {reviewed} 交回绑定指纹 "
+                              f"{recheck['bound']['outputs_digest']}(审的必须是交回的那份产出); 出口: 报告照抄开工提示里产品给出的值"]
+            return out
+        from tools.aipos_cli.board_adapter import runtime_evidence_check
+
+        evidence = runtime_evidence_check(workspace_root, task_id, card_fm, report_path=path, report_fm=fm)
+        if evidence is not None:
+            out["category"], out["reasons"] = evidence["category"], evidence["reasons"]
+            return out
+        out["outputs_manifest"] = recheck["current"]
+        out["ok"], out["category"], out["exit_code"] = True, "OK", INGEST_EXIT_RECORDED
+        return out
     # AIPOS-F196 件①: 被审卡交付主体为固定候选(validation)= 报告 commit_sha 核候选, 不核被审卡分支 tip
     candidate_check = _candidate_subject_check(workspace_root, reviewed, repo_fm, fm, path, kind="verdict")
     if candidate_check is not None:

@@ -2261,7 +2261,8 @@
       "kickoff": {
         "template": "已认领任务卡 {task_id}。\n\n工作树路径: {worktree_path}\n报告落点: {report_path}\n任务卡路径: {card_path}{remote_material}\n报告 frontmatter 必填(产品给出; 缺任一项或仍为占位, 报告被拒收):\n{report_field_lines}{validation_root}\n\n按你的 AGENTS.md 执行，完成后写报告到报告落点。",
         "template_no_worktree": "已认领任务卡 {task_id}。\n\n工作树: {worktree_note}\n报告落点: {report_path}\n任务卡路径: {card_path}{remote_material}\n报告 frontmatter 必填(产品给出; 缺任一项或仍为占位, 报告被拒收):\n{report_field_lines}{validation_root}\n\n按你的 AGENTS.md 执行，完成后写报告到报告落点。",
-        "template_no_worktree_note": "AIPOS-F196 件①: 交付主体为固定候选的卡(enums.schema task_mode.candidate_subject: validation 卡及其审计卡)不建卡工作树, 照常入选 next_card, 开工提示按 template_no_worktree 渲染(worktree_note = card_workstation_view 的不建树说明); 其余不建树卡(只写治理根)照 F178 不入选。",
+        "template_governance_root": "已认领任务卡 {task_id}。\n\n产物落点: {outputs_note}\n报告落点: {report_path}\n任务卡路径: {card_path}{remote_material}\n报告 frontmatter 必填(产品给出; 缺任一项或仍为占位, 报告被拒收):\n{report_field_lines}{validation_root}\n\n按你的 AGENTS.md 执行，完成后写报告到报告落点。",
+        "template_no_worktree_note": "AIPOS-F196 件①: 交付主体为固定候选的卡(enums.schema task_mode.candidate_subject: validation 卡及其审计卡)不建卡工作树, 照常入选 next_card, 开工提示按 template_no_worktree 渲染(worktree_note = card_workstation_view 的不建树说明)。AIPOS-F197 件①: 不建树判据仍唯一 next_resolver.card_needs_worktree; 显式声明只写治理根的执行卡(next_resolver.card_governance_outputs: task_mode docs / governance / config + lane.repo 解析到治理根, 保留值 governance_root; 交回契约 transitions artifact_ingest.return.governance_root)同样入选 next_card, 按 template_governance_root 渲染(outputs_note = 产物落点说明, 不提分支 / 工作树); 其审计卡与固定候选卡按 template_no_worktree; 缺 lane.repo / 缺 task_mode 的存量不建树卡照 F178 不入选。",
         "report_field_line": {
           "with_value": "- {key}: {value}({hint})",
           "without_value": "- {key}: ({hint})"
@@ -2273,7 +2274,8 @@
           "card_path": "next_card.card_path",
           "report_field_lines": "next_card.report_required_frontmatter 逐项按 report_field_line 成行(声明 transitions artifact_ingest 单源; 审计卡附被审 tip/tree 实值), 以换行连接",
           "remote_material": "AIPOS-F110 件②: 本机工位 = 空串(开工提示与 F110 前逐字节相同); 跨机工位 = 按 remote_material 模板渲染的门机材料段(`my-tasks --remote-workstation` 经 next_resolver.remote_kickoff_context 取上下文交 render_kickoff; lybra loop 拉起跨机工位时传该参数)",
-          "worktree_note": "AIPOS-F196: 只用于 template_no_worktree = next_card.worktree_note(不建树说明: 交付主体 = 固定候选, 产物只落验证根与报告落点)",
+          "worktree_note": "AIPOS-F196: 只用于 template_no_worktree = next_card.worktree_note(不建树说明: 交付主体 = 固定候选, 产物只落验证根与报告落点; AIPOS-F197: 只写治理根卡的审计卡 = 审计对象是被审卡交回绑定的治理根产出清单)",
+          "outputs_note": "AIPOS-F197 件①: 只用于 template_governance_root = next_card.outputs_note(只写治理根: 产物写本卡报告落点及其子目录, 受写权限边界判定; 报告 frontmatter outputs 列产出文件, 产品计算并核对 sha256)",
           "validation_root": "AIPOS-F196 件③: 本卡(本实例)验证根节 = validation_root.render_section_lines(实例 = 卡认领实例, 卡 = 本卡, harness = 卡面 harness, 含已撤销 / 到期, 与章程同源); 无声明 = 空串(开工提示与 F196 前逐字节相同); 有 = 空行 + 节文本(经 ssh 操作目标主机时含 ssh 命令)"
         },
         "remote_material": "\n以上工作树、报告落点、任务卡均在门机 {gate_host}(治理根 {governance_root}), 不在你的工位 {workstation_host} 本地; 门机在你的工位上的 ssh 别名: {gate_ssh_alias}; 材料访问方式(项目声明): {material_access}",
@@ -2397,6 +2399,9 @@
         "sim_step": "  {n}. {text}",
         "ssh_mode": "  经 ssh 操作目标主机(AIPOS-F196; 本实例工位在治理根所在机 {gate_host}, 目标主机 {host} 的 ssh 别名 = {ssh_alias}, 项目声明 project.json validation_roots.hosts): 凡在目标主机执行的命令一律 `ssh {ssh_alias} '<命令>'`(下文写作「在目标主机运行」的命令同此); 只写本 run 验证根 `{run_dir}`; helper 子命令(init-run / check / sim-* / sys-snapshot)一律经 ssh 调用 `{helper_pipe} 'python3 - <子命令> …'`(helper 由治理根所在机产品给出、经管道送入, 不存入目标主机; 下文写作 `python3 {helper_path} <子命令>` 的同此改写); 禁对目标主机其他路径写、禁 sudo / su / doas、禁改 ssh 配置(~/.ssh 下任何文件、ssh_config、authorized_keys)、禁 ssh 端口转发 / 代理跳板; ssh 不可达或被拒 = 停线报告(禁换别名 / 换主机名 / 换用户重试)",
         "init_run_ssh": "  ① run-start 后第一步 = 目录链初始化(AIPOS-F191; 经 ssh, AIPOS-F196): 在治理根所在机运行 `{init_run}`(helper 由产品给出经管道送到目标主机 {host} 的 `python3 -`, 不落盘); 只用 mkdir 建缺失的 `{run_dir}` 目录链(新建 0700, 逐级拒软链 / 非目录 / 他人属主 / 不可写祖先; 已建且合规 = 幂等), 证据追加到 run 目录内 `.lybra-vr/init-run.jsonl`; 只认末行 `INIT_OK` + 退出码 0, 其余 = 未建, 停线报告(禁自行 mkdir / sudo / 改参数重试)",
+        "src_deliver": "  ② 候选源码送达(AIPOS-F197; 目录链初始化之后): 前半段在治理根所在机(候选仓所在机)运行, 只把已提交的固定候选 {candidate} 的树打包, 目标主机 {host} 经你访问治理根的通道取得后交给 tar 解到 `{src_dir}`: `{src_deliver}`; 再核对(目标主机按 git 规则算 `{src_dir}` 的 tree 指纹, 须 = 候选 tree {src_tree}; 混入未提交改动 / 多出缺文件 / 错版本 = 拒): `{src_verify}`; 只认末行 `SRC_OK` + 退出码 0, 证据追加 run 目录内 `.lybra-vr/src-verify.jsonl`; 不过 = 删掉 `{src_dir}` 后按原命令重送, 禁手改 src 凑指纹、禁从工作区 / 其他提交拷源码(正式代码仍只在治理根所在机卡工作树改)",
+        "src_deliver_ssh": "  ② 候选源码送达(AIPOS-F197; 经 ssh, 目录链初始化之后): 在治理根所在机运行 `{src_deliver}`(只把已提交的固定候选 {candidate} 的树打包, 经 ssh {ssh_alias} 交目标主机 {host} 的 tar 解到 `{src_dir}`); 再核对(目标主机按 git 规则算 `{src_dir}` 的 tree 指纹, 须 = 候选 tree {src_tree}; 混入未提交改动 / 多出缺文件 / 错版本 = 拒): `{src_verify}`; 只认末行 `SRC_OK` + 退出码 0, 证据追加 run 目录内 `.lybra-vr/src-verify.jsonl`; 不过 = 删掉 `{src_dir}` 后按原命令重送, 禁手改 src 凑指纹、禁从工作区 / 其他提交拷源码、禁 rsync / scp 等另送(正式代码仍只在治理根所在机卡工作树改)",
+        "src_pending": "(铸 run 后由产品给出: 重取本开工稿或 `project validation-root init-command --id <声明id>`)",
         "helper_ssh": "  目标主机侧 realpath 判定(符号链接逃逸只能在目标主机判; 经 ssh): 每次写前在治理根所在机运行 `{check_ssh}`; 只认退出码 0 且输出 `ALLOW`, 其余(含无输出 / ssh 失败)= 拒"
       },
       "item_templates": {

@@ -1134,6 +1134,30 @@
         "not_ready": "Return 已落盘而所有摘要来源都取不到: 若必填 frontmatter(required_frontmatter)也仍为占位 = 执行体还在写(认领骨架), loop 继续等待; 必填 frontmatter 已填实值(执行体已自认交回)而摘要缺 = 推导核判 artifact_invalid(loop exit 4), missing_records 原文列出所查的 frontmatter 键与正文节标记及补法, 不再空等到超时。声明不合(RETURN_SUMMARY_SOURCE_INVALID)= 同判 artifact_invalid 并给出口(fail-closed)。",
         "verdict_reports": "审计报告的 findings_summary 提取同一解析、取本节缺省(审计报告是产品模板, 不读项目覆盖)"
       },
+      "governance_root": {
+        "description": "AIPOS-F197 件②(gap #178/#201): 只写治理根的执行卡(不建卡工作树 / 卡分支, 判据唯一 next_resolver.card_needs_worktree; 交付主体非固定候选 enums.schema task_mode.candidate_subject)的交回契约分形——无分支三键(commit_sha / tree_hash / branch 不要求), 改为治理根落点证据: Return frontmatter 列产出文件清单, 产品逐个计算 sha256 并核对(存在 / 普通文件 / 非符号链接 / 真实路径在治理根内 / 写权限边界对本卡执行角色放行 mutate), 得产出清单与清单指纹。交回记录(门 queue_return)绑定该清单(next_resolver.return_binding_subject: artifact_subject.kind=governance_outputs), 顾问复核结案(mark-concluded)/ 声明独立审计时的裁决(入口 + 门侧裁决预演)/ N5 无合入 finalize 同核「此刻清单指纹 = 交回绑定指纹」, 交回后产出被改 = 拒(须重交回)。建树卡契约(上两层 required_frontmatter / checks)不变。",
+        "applies": "card_needs_worktree == false 且非 subject=candidate 的执行卡(task_mode docs / governance / config 等只写治理根的卡); 其审计卡(声明 audit: required 时)按 verdict.governance_root",
+        "single_implementation": "tools/aipos_cli/next_resolver.governance_outputs_manifest(读取口 card_governance_outputs 判适用; 契约渲染 report_frontmatter_contract(governance=True); ingest artifact_ingest._validate_task_artifact; 门交回绑定 return_binding_subject)",
+        "required_frontmatter": ["outputs"],
+        "field_hints": {
+          "outputs": "本卡产出文件清单(YAML 列表, 每项一个文件路径: 治理根相对路径如 {report_dir}artifacts/<文件>, 或绝对路径; 只能是写权限边界对本卡放行之处 = 本卡报告落点 {report_dir} 及其子目录; 产品逐个计算 sha256 并核对, 交回后不得再改)"
+        },
+        "checks": [
+          "outputs 须为非空串列表(单个串按一项), 否则拒(INGEST_OUTPUTS_INVALID)",
+          "每项: 路径不得含 `..` 段; 须存在、为普通文件且自身不是符号链接(INGEST_OUTPUT_MISSING); 真实路径须在治理根内且与字面一致(无符号链接逃逸), 并经 write_boundary.check_access(角色 executor, level=mutate, task_id=本卡)放行(INGEST_OUTPUT_OUT_OF_BOUNDARY, 拒因原文带边界判定码)",
+          "不核卡 lane.repo / 卡分支 tip(本卡无卡分支; 治理根不是产品仓)",
+          "摘要 / 报告落点代码文件检查同建树卡(INGEST_SUMMARY_MISSING / INGEST_CODE_FILE_IN_SLOT)"
+        ],
+        "digest_rule": "files = 按治理根相对路径排序的 [{path, sha256, size}]; outputs_digest = sha256(逐行 `<sha256>  <path>\\n` 拼接的 UTF-8 字节); 交回记录 artifact_subject = {kind: governance_outputs, repository: 治理根目录名, outputs_digest, outputs: [`<sha256>  <path>`, …]}",
+        "reject_codes": {
+          "INGEST_OUTPUTS_INVALID": "Return frontmatter outputs 缺 / 非串列表 / 含空项或 .. 段",
+          "INGEST_OUTPUT_MISSING": "清单中的文件不存在、不是普通文件或自身是符号链接",
+          "INGEST_OUTPUT_OUT_OF_BOUNDARY": "清单中的文件真实路径不在治理根内(含符号链接逃逸)或写权限边界不放行本卡执行角色写该处",
+          "INGEST_OUTPUTS_CHANGED": "复核 / 裁决 / finalize 时此刻产出清单指纹 ≠ 交回记录绑定的指纹(交回后产出被改); 审计报告入口(artifact ingest --kind verdict)另要求交回记录有绑定(无 = 须经产物入口重交回)"
+        },
+        "legacy_rule": "最新交回记录无产出清单绑定(F197 前的存量交回; F197 起门 queue_return 对只写治理根的卡以同一实现核清单, 不合即拒, 不再落无绑定交回)= 门侧裁决预演 / mark-concluded / finalize 沿 AIPOS-F70 legacy 裁决口径警告放行(警告原文给重交回出口, finalization 记录标 legacy); 审计报告入口(artifact ingest --kind verdict)不放行。唯一实现 next_resolver.governance_outputs_recheck(allow_legacy)",
+        "gate_check": "门 queue_return(一切交回提交路径汇入)对只写治理根的卡先以 governance_outputs_manifest 核 Return outputs 清单, 不合 = blocking_reasons `<拒因码>: …`, 交回不落; 合规 = 交回记录 artifact_subject 绑定清单(return_binding_subject)"
+      },
       "submits_via": "lybra queue return --confirm(驱动方 token, actor=claim 记录实例, completion_report_ref=Return 相对路径, artifact_refs=[Return 相对路径], actual_model=产品按会话记录定位器填写的运行时模型 AIPOS-F90 件②; frontmatter.model 只作对照)"
     },
     "verdict": {
@@ -1159,6 +1183,18 @@
       ],
       "submits_via": "lybra audit-verdict --confirm(驱动方 token, artifact_subject 从被审分支 tip 取 commit_sha/tree_hash, agent_runtime=产品按会话记录定位器填写的运行时模型 AIPOS-F90 件②)",
       "derived_command": "AIPOS-F90 件②: 推导核对 return/verdict 步给驱动方的命令 = `lybra artifact ingest --task-id <ID> --kind <return|verdict> --workspace-root <治理根>`; 入口内部执行推导核同时给出的 shell_command(唯一构建), 驱动方不再手提 audit-verdict / queue return",
+      "governance_root": {
+        "description": "AIPOS-F197 件②: 被审卡只写治理根(return.governance_root 适用)时审计报告的契约分形——不核被审卡分支, 改核产出清单指纹: 必填 verdict + outputs_digest(= 被审卡交回记录绑定的指纹, 产品给值, 审计体照抄); 入口(artifact ingest --kind verdict)与门侧裁决预演(board_adapter._build_audit_verdict_preview)同核「报告 outputs_digest = 交回绑定指纹 = 此刻指纹」, 裁决 artifact_subject = 交回绑定的产出清单主体(kind=governance_outputs)。",
+        "required_frontmatter": ["verdict", "outputs_digest"],
+        "field_hints": {
+          "verdict": "裁决值, {allowed_verdict_values} 之一",
+          "outputs_digest": "被审卡交回时产品计算的产出清单指纹(64 位 sha256; 产品给出, 照抄; 审的必须是交回的那份产出)"
+        },
+        "checks": [
+          "outputs_digest == 被审卡最新交回记录 artifact_subject.outputs_digest == 此刻按交回 Return 的 outputs 重算的指纹, 否则拒(INGEST_OUTPUTS_CHANGED)",
+          "运行证据硬门 / 报告落点代码文件检查同建树卡"
+        ]
+      },
       "runtime_evidence": {
         "description": "AIPOS-F162 件①(chris OTA HBJOTA-57R/58R 实撞: 卡面要求「实际运行逐条独立核验」只在文字里, 审计只在审计树跑 preflight、核执行体原件 hash/退出码即判 PASS_WITH_NOTES 并合入): 运行证据硬门。卡声明 card_field.required=true 时, 审计报告 PASS 类裁决须含结构化「独立运行证据」节; 门侧裁决写入唯一口(enforcement_point)逐条核对, 缺 = 拒收 rejection_category 并列出缺哪条(AIPOS-F163 gap #148: F162 原只在 artifact ingest --kind verdict 核, 手敲 audit-verdict --confirm 直提可绕, 现下沉门侧, 一切提交路径同核)。FAIL 等非 PASS 类裁决不受限; 卡未声明 = 行为不变。推导核对同一报告同一判据先行(loop 视为审计产物不合格, 让审计体补做, 见 loop)。",
         "single_implementation": "tools/aipos_cli/board_adapter.runtime_evidence_check(AIPOS-F163 自 artifact_ingest 下沉; 门 _build_audit_verdict_preview、artifact_ingest._validate_task_artifact 入门前预检、推导核 next_resolver 审计卡裁决步同读; 要求解析 artifact_ingest.runtime_evidence_requirement)",

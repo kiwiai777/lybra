@@ -2105,10 +2105,15 @@ def _create_return_skeleton(repo_root: Path, task_id: str,
         if skeleton_path.exists():
             return None  # Only create if doesn't exist (idempotent)
         reviewed = forensic_subject(fm)
+        # AIPOS-F197 件②: 只写治理根的卡(及其审计卡)= 契约分形(产出清单 / outputs_digest); 其余卡模板不变
+        from tools.aipos_cli.next_resolver import card_governance_outputs, card_report_contract
+
+        governance = card_governance_outputs(Path(repo_root), {**fm, "task_id": str(fm.get("task_id") or task_id)})
+        contract = card_report_contract(Path(repo_root), task_id, {**fm, "task_id": task_id}) if governance else None
         if reviewed is not None:
-            content, record_type = build_verdict_skeleton_markdown(task_id, reviewed or None), "verdict_skeleton"
+            content, record_type = build_verdict_skeleton_markdown(task_id, reviewed or None, contract), "verdict_skeleton"
         else:
-            content, record_type = build_return_skeleton_markdown(task_id), "return_skeleton"
+            content, record_type = build_return_skeleton_markdown(task_id, contract), "return_skeleton"
         skeleton_path.parent.mkdir(parents=True, exist_ok=True)
         skeleton_path.write_text(content, encoding="utf-8")
         try:
@@ -3402,7 +3407,20 @@ def _build_return_preview(
     # AIPOS-R4B-2 N3: 交回门按卡 scope — 只检查本卡声明的路径，不全仓扫描
     task_mode = str(source_metadata.get("task_mode") or "").strip()
     artifact_policy = str(source_metadata.get("artifact_policy") or "").strip()
-    if task_mode == "code" or artifact_policy == "formal_write":
+    # AIPOS-F197 件②: 只写治理根的卡(next_resolver.card_governance_outputs)不写产品仓、无卡分支, 产出在治理根由 N6 落账提交——
+    # 无「代码未提交」可查(交回绑定产出清单指纹代之, return_binding_subject)
+    from tools.aipos_cli.next_resolver import card_governance_outputs
+
+    governance_outputs = card_governance_outputs(repo_root, {**source_metadata, "task_id": str(task.get("task_id") or "")})
+    if governance_outputs:
+        # 门侧同核产出清单(与产物入口同一实现 governance_outputs_manifest; 手工 queue return 不绕过): 清单不合 = 拒, 不落无绑定交回
+        from tools.aipos_cli.next_resolver import GovernanceOutputsError, governance_outputs_manifest
+
+        try:
+            governance_outputs_manifest(repo_root, str(task.get("task_id") or ""), source_metadata)
+        except GovernanceOutputsError as exc:
+            blocking_reasons.append(f"{exc.code}: AIPOS-F197 只写治理根的卡交回须带合规产出清单(Return frontmatter outputs): {exc.reason}")
+    if (task_mode == "code" or artifact_policy == "formal_write") and not governance_outputs:
         current_task_id = str(task.get("task_id") or "")
         try:
             product_repo_root = _resolve_product_code_repo(repo_root, source_metadata)  # AIPOS-F78C: 卡声明的仓
@@ -4796,28 +4814,50 @@ def _build_audit_verdict_preview(
     if normalized_verdict not in valid_verdicts:
         blocking_reasons.append(f"INVALID_VERDICT: verdict must be one of {sorted(valid_verdicts)}")
 
-    # AIPOS-F70: artifact_subject fail-closed 校验 (task_mode=code 的被审卡必须提供)
+    # AIPOS-F70: artifact_subject fail-closed 校验(AIPOS-F197 件③: 适用 = 被审卡写产品仓——按审计卡问唯一判据
+    # next_resolver.card_needs_worktree(审计卡跟随被审卡; 被审卡缺 task_mode = 按代码卡读), 写仓 docs 等卡与代码卡同强制; 原按 task_mode == code)
     # 读取被审任务的 task_mode
     reviewed_task_mode = str(reviewed_metadata.get("task_mode") or "").strip()
     # AIPOS-F196 件①: 交付主体为固定候选的被审卡(validation)= 裁决 artifact_subject 必须精确是该候选(唯一读取口 card_candidate_subject)
-    from tools.aipos_cli.next_resolver import CandidateSubjectError, card_candidate_subject
+    from tools.aipos_cli.next_resolver import (CandidateSubjectError, card_candidate_subject, card_governance_outputs, card_needs_worktree,
+                                               governance_outputs_recheck)
 
     try:
         reviewed_candidate = card_candidate_subject(reviewed_metadata)
     except CandidateSubjectError as exc:
         reviewed_candidate = None
         blocking_reasons.append(f"AIPOS-F196: 被审卡固定候选声明不合: {exc}")
+    audit_card_view = {**audit_metadata, "task_id": str(audit_metadata.get("task_id") or audit_task.get("task_id") or ""),
+                       "task_mode": "audit", "reviewed_task_id": str(reviewed_task.get("task_id") or reviewed_task_id)}
+    reviewed_writes_repo = card_needs_worktree(repo_root, audit_card_view)
+    reviewed_governance = (reviewed_candidate is None and not reviewed_writes_repo
+                           and card_governance_outputs(repo_root, audit_card_view))
     if reviewed_candidate is not None:
         audited = str((artifact_subject or {}).get("commit_sha") or "").strip() if isinstance(artifact_subject, dict) else ""
         if audited != reviewed_candidate["candidate"]:
             blocking_reasons.append(
                 f"AIPOS-F196: 被审卡 task_mode={reviewed_task_mode} 的交付主体 = 固定候选 {reviewed_candidate['candidate']}, "
                 f"裁决 artifact_subject.commit_sha={audited or '(缺)'} 不符(fail-closed)")
-    elif reviewed_task_mode == "code":
+    elif reviewed_governance:
+        # AIPOS-F197 件②: 被审卡只写治理根 = 裁决绑交回时产品绑定的产出清单(此刻指纹须 = 交回绑定; 唯一实现 governance_outputs_recheck);
+        # 提交方给了 outputs_digest 须与之相等; 裁决记录 artifact_subject = 交回绑定主体(门算, 不信提交值)
+        recheck = governance_outputs_recheck(repo_root, str(reviewed_task.get("task_id") or reviewed_task_id), reviewed_metadata,
+                                             allow_legacy=True)
+        offered = str((artifact_subject or {}).get("outputs_digest") or "").strip() if isinstance(artifact_subject, dict) else ""
+        if not recheck["ok"]:
+            blocking_reasons.append(f"AIPOS-F197: {recheck['code']}: {recheck['reason']}")
+        elif recheck["legacy"]:
+            warnings.append(f"AIPOS-F197: {recheck['reason']}")  # 存量交回无绑定: 沿 F70 legacy 口径警告放行(裁决不带产出清单主体)
+        elif offered and offered != recheck["bound"]["outputs_digest"]:
+            blocking_reasons.append(f"AIPOS-F197: INGEST_OUTPUTS_CHANGED: 裁决 artifact_subject.outputs_digest={offered} ≠ 被审卡交回绑定 "
+                                    f"{recheck['bound']['outputs_digest']}(审的必须是交回的那份产出)")
+        else:
+            artifact_subject = {k: recheck["bound"][k] for k in ("kind", "repository", "outputs_digest", "outputs") if k in recheck["bound"]}
+    elif reviewed_writes_repo:
         if not artifact_subject or not isinstance(artifact_subject, dict):
             blocking_reasons.append(
-                "AIPOS-F70: task_mode=code 的被审卡必须提供 artifact_subject 参数 "
-                "(repository + commit_sha + tree_hash), 缺失即 BLOCK (fail-closed)"
+                f"AIPOS-F70: 被审卡写产品仓(task_mode={reviewed_task_mode or 'unspecified'}; 判据 next_resolver.card_needs_worktree)必须提供 "
+                "artifact_subject 参数 (repository + commit_sha + tree_hash), 缺失即 BLOCK (fail-closed)"
             )
         else:
             # 校验必需字段
@@ -4836,7 +4876,7 @@ def _build_audit_verdict_preview(
             if missing_fields:
                 blocking_reasons.append(
                     f"AIPOS-F70: artifact_subject 缺少必需字段: {', '.join(missing_fields)}. "
-                    "task_mode=code 必须提供完整的 repository + commit_sha + tree_hash"
+                    "被审卡写产品仓(card_needs_worktree)必须提供完整的 repository + commit_sha + tree_hash"
                 )
             else:
                 # 校验 commit_sha 和 tree_hash 格式 (40字符十六进制)
@@ -4850,10 +4890,10 @@ def _build_audit_verdict_preview(
                         f"AIPOS-F70: artifact_subject.tree_hash 格式错误 (应为40字符十六进制): '{tree_hash}'"
                     )
     elif artifact_subject:
-        # 非 code 类卡提供了 artifact_subject -> 记录但不阻塞(前向兼容)
+        # 不写产品仓的卡提供了 artifact_subject -> 记录但不阻塞(前向兼容)
         warnings.append(
             f"AIPOS-F70: task_mode={reviewed_task_mode or 'unspecified'} 的卡提供了 artifact_subject, "
-            "将记录到裁决但不强制要求 (当前仅 task_mode=code 强制)"
+            "将记录到裁决但不强制要求 (只对写产品仓的被审卡强制, 判据 card_needs_worktree)"
         )
 
     # AIPOS-R4A: 允许已 completed 的 R 卡接受复审裁决（修实撞②）
@@ -6952,6 +6992,23 @@ def mark_concluded_task(
                 },
                 safety_notice="AIPOS-C1: mark-concluded precondition: no formal verdict allowed. Use queue_close for cards with verdicts.",
             )
+        # AIPOS-F197 件②: 只写治理根的卡已经门交回 = 顾问复核结案前核「此刻产出清单指纹 = 交回绑定」(governance_outputs_recheck 唯一实现);
+        # 交回后产出被改 / 交回记录无绑定 = 拒(执行体重交回), 复核的必须是交回的那份产出
+        from tools.aipos_cli.next_resolver import card_governance_outputs, governance_outputs_recheck
+
+        outputs_check = None
+        if (card_governance_outputs(resolved_root, {**fm, "task_id": tid})
+                and records.get("task_returns", {}).get(tid)):
+            outputs_check = governance_outputs_recheck(resolved_root, tid, fm, allow_legacy=True)
+            if not outputs_check["ok"]:
+                return blocked_response(
+                    operation=operation,
+                    dry_run=dry_run,
+                    category="VALIDATION_ERROR",
+                    message=f"AIPOS-F197: {outputs_check['code']}: 顾问复核结案拒: {outputs_check['reason']}",
+                    actor=_actor_payload(actor_text),
+                    data={"task_id": tid, "outputs_check": {k: outputs_check.get(k) for k in ("code", "reason", "bound")}},
+                )
         closure_ref = report_ref or f"note:{note[:80]}"
         if dry_run:
             return make_response(

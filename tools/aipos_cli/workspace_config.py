@@ -1331,6 +1331,18 @@ def repo_name_set(value: Any) -> list[str]:
     return names
 
 
+def governance_root_lane_ref() -> str:
+    """AIPOS-F197 件①: 卡面 lane.repo「只写治理根」保留值(唯一声明 card.schema intent_face.lane.governance_root_ref.value)。
+    缺 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = ((load_schema("card").get("intent_face") or {}).get("lane") or {}).get("governance_root_ref")
+    value = decl.get("value") if isinstance(decl, dict) else None
+    if not isinstance(value, str) or not value.strip():
+        raise SchemaLoadError("card.schema.json intent_face.lane.governance_root_ref.value 未声明(AIPOS-F197)")
+    return value.strip()
+
+
 def _match_repo_ref(ref: str, repos: dict[str, Any], governance_root: Path) -> Path | None:
     """仓引用(仓名或绝对路径)→ 清单内路径; 无清单时只允许 code_repo(缺则治理根自身)。匹配不到 = None。"""
     if repos["declared"]:
@@ -1366,6 +1378,15 @@ def resolve_card_repo(
     ref = str(lane.get("repo") or "").strip()
     task_id = str(fm.get("task_id") or "<card>")
     repos = project_repos(root)
+    if ref and ref == governance_root_lane_ref():
+        # AIPOS-F197 件①: 「只写治理根」保留值 = 治理根自身(卡不写产品仓; card_needs_worktree 据此不建树)
+        if ref in repos["items"]:
+            raise CardRepoUnresolved("REPOS_CONFLICT", f"卡 {task_id} lane.repo={ref!r} 是「只写治理根」保留值(card.schema intent_face.lane."
+                                                       f"governance_root_ref), 却也是 project.json repos.items 仓名; 出口: 仓改名")
+        if not allow_governance_root:
+            raise CardRepoUnresolved("LANE_REPO_UNDECLARED", f"卡 {task_id} lane.repo={ref!r} = 只写治理根(不写产品仓), 无产品仓可解析"
+                                                             f"(此处须为产品仓)")
+        return root
     if ref:
         matched = _match_repo_ref(ref, repos, root)
         if matched is None:

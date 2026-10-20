@@ -363,6 +363,14 @@ def derive_intent_declarations(
         try:
             if repo:
                 resolve_card_repo(governance_root, {**metadata, "lane": {**raw_lane, "repo": repo}})
+                # AIPOS-F197 件①: 「只写治理根」保留值只给不写产品仓的模式(writes_product_repo=false 且非固定候选)
+                from tools.aipos_cli.next_resolver import task_mode_subject_is_candidate, task_mode_writes_product_repo
+                from tools.aipos_cli.workspace_config import governance_root_lane_ref
+
+                mode = str(metadata.get("task_mode") or "")
+                if repo == governance_root_lane_ref() and (task_mode_writes_product_repo(mode) or task_mode_subject_is_candidate(mode)):
+                    blocking.append(f"LANE_REPO_UNDECLARED: lane.repo={repo!r}(只写治理根)不适用于 task_mode={mode or '(缺)'}"
+                                    "(该模式写产品仓或交付主体为固定候选); 出口: lane.repo 改写产品仓名, 或改 task_mode 为 docs / governance / config")
             else:
                 repo = default_lane_repo(governance_root)
                 derived.append("lane.repo")

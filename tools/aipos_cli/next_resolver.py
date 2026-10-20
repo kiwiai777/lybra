@@ -473,9 +473,11 @@ def card_needs_worktree(workspace_root: Path, card_frontmatter: dict[str, Any] |
                                                      "task_mode": str(reviewed_fm.get("task_mode") or "code")})
 
 
-def card_kickoff_without_worktree(workspace_root: Path, card_frontmatter: dict[str, Any] | None) -> bool:
-    """AIPOS-F196 件①: 不建卡工作树也照常在工位开工的卡 = 交付主体为固定候选的卡(enums.schema task_mode.candidate_subject; validation)
-    及其审计卡(跟随被审卡)。其余不建树卡(只写治理根)照 F178 不入选 next_card。被审卡查不到 = False(不放宽)。"""
+def card_follows_candidate_subject(workspace_root: Path, card_frontmatter: dict[str, Any] | None) -> bool:
+    """AIPOS-F196 件①(F197 自 card_kickoff_without_worktree 更名; 开工面是否放行不建树卡改由 card_workstation_view 按
+    本函数 / card_governance_outputs 判, 原函数无调用方后删除): 交付主体为固定候选的卡(enums.schema task_mode.candidate_subject;
+    validation)及其审计卡(跟随被审卡)。用于不建树卡的开工放行与说明措辞分流(card render / write_boundary / 开工面); 是否建树仍只问
+    card_needs_worktree。被审卡查不到 = False。"""
     fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
     reviewed = forensic_subject(fm)
     if reviewed is None:
@@ -486,6 +488,153 @@ def card_kickoff_without_worktree(workspace_root: Path, card_frontmatter: dict[s
     if task_path is None:
         return False
     return task_mode_subject_is_candidate(str(_read_frontmatter(task_path).get("task_mode") or ""))
+
+
+class GovernanceOutputsError(ValueError):
+    """AIPOS-F197 件②: 只写治理根卡的产出清单不合(code ∈ transitions.schema artifact_ingest.return.governance_root.reject_codes)。"""
+
+    def __init__(self, code: str, reason: str):
+        super().__init__(f"{code}: {reason}")
+        self.code = code
+        self.reason = reason
+
+
+def governance_outputs_declaration() -> dict[str, Any]:
+    """transitions.schema artifact_ingest.return.governance_root(只写治理根卡的交回契约)。缺 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = (_artifact_ingest_declaration().get("return") or {}).get("governance_root")
+    keys = decl.get("required_frontmatter") if isinstance(decl, dict) else None
+    codes = decl.get("reject_codes") if isinstance(decl, dict) else None
+    if (not isinstance(keys, list) or not keys or not isinstance(decl.get("field_hints"), dict) or not isinstance(codes, dict)
+            or not all(codes.get(k) for k in ("INGEST_OUTPUTS_INVALID", "INGEST_OUTPUT_MISSING", "INGEST_OUTPUT_OUT_OF_BOUNDARY",
+                                              "INGEST_OUTPUTS_CHANGED"))):
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.return.governance_root(required_frontmatter / field_hints / "
+                              "reject_codes)未声明齐(AIPOS-F197)")
+    return decl
+
+
+def card_governance_outputs(workspace_root: Path, card_frontmatter: dict[str, Any] | None) -> bool:
+    """AIPOS-F197: 卡的交付主体是否为治理根产出清单(enums.schema task_mode.governance_outputs_subject 唯一读取口)= 显式声明只写治理根:
+    task_mode 为已声明的不写仓模式(writes_product_repo=false, 非固定候选, 非 audit)且卡面 lane.repo 非空、经唯一解析落到治理根自身
+    (保留值 card.schema intent_face.lane.governance_root_ref, 或无仓声明项目里派生的治理根路径)——即不建卡工作树(card_needs_worktree 的否)。
+    缺 lane.repo / 缺 task_mode 的存量卡不算(行为同 F178: 不建树、不入选开工)。审计卡跟随被审卡(被审卡缺 task_mode = 按代码卡读)。"""
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    reviewed = forensic_subject(fm)
+    if reviewed is not None:
+        if not reviewed:
+            return False
+        task_path, _ = _find_task_in_queue(workspace_root, reviewed)
+        if task_path is None:
+            return False
+        reviewed_fm = _read_frontmatter(task_path)
+        fm = {**reviewed_fm, "task_id": str(reviewed_fm.get("task_id") or reviewed),
+              "task_mode": str(reviewed_fm.get("task_mode") or "code")}
+    mode = str(fm.get("task_mode") or "").strip()
+    entry = _task_mode_entry(mode) if mode else None
+    if (entry is None or mode.lower() == "audit" or task_mode_writes_product_repo(mode) or task_mode_subject_is_candidate(mode)):
+        return False
+    lane = fm.get("lane") if isinstance(fm.get("lane"), dict) else {}
+    if not str(lane.get("repo") or "").strip():
+        return False
+    return not card_needs_worktree(workspace_root, fm)
+
+
+def governance_outputs_manifest(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None = None,
+                                return_frontmatter: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F197 件②: 只写治理根卡的产出清单与指纹(唯一实现; 产物入口核对、门交回绑定、顾问复核结案 / 裁决 / finalize 复核同读)。
+
+    清单来源 = 本卡 Return frontmatter outputs(return_frontmatter 缺 = 读声明落点的 Return)。逐项核对(transitions.schema
+    artifact_ingest.return.governance_root.checks): 无 `..` 段、存在、普通文件、自身非符号链接、真实路径在治理根内且 = 字面、
+    write_boundary.check_access(executor, mutate, 本卡)放行。返回 {kind, repository, outputs_digest, files[{path, sha256, size}], outputs};
+    不合 = GovernanceOutputsError(code 读声明 reject_codes)。只读。"""
+    import hashlib
+
+    decl = governance_outputs_declaration()
+    gov = Path(workspace_root).expanduser().resolve()
+    if return_frontmatter is None:
+        found = find_return_artifact(gov, task_id)
+        if found is None:
+            raise GovernanceOutputsError("INGEST_OUTPUTS_INVALID", f"卡 {task_id} 的 Return 不在声明落点 {return_artifact_dir(gov, task_id)}")
+        return_frontmatter = _read_frontmatter(found, allow_missing_block=True)
+    key = str(decl["required_frontmatter"][0])
+    raw = return_frontmatter.get(key) if isinstance(return_frontmatter, dict) else None
+    items = [raw] if isinstance(raw, str) else raw
+    if (not isinstance(items, list) or not items
+            or any(not isinstance(i, str) or not i.strip() or _is_placeholder_value(i) for i in items)):
+        raise GovernanceOutputsError("INGEST_OUTPUTS_INVALID", f"Return frontmatter {key} 须为非空串列表(产出文件路径), 现为 {raw!r}")
+    from tools.aipos_cli.write_boundary import WriteBoundaryError, check_access
+
+    files: dict[str, dict[str, Any]] = {}
+    for item in items:
+        text = item.strip()
+        if ".." in Path(text).parts:
+            raise GovernanceOutputsError("INGEST_OUTPUTS_INVALID", f"{key} 项 {text!r} 含 `..` 段")
+        literal = Path(text).expanduser()
+        literal = literal if literal.is_absolute() else gov / literal
+        if literal.is_symlink() or not literal.is_file():
+            what = "是符号链接" if literal.is_symlink() else ("不是普通文件" if literal.exists() else "不存在")
+            raise GovernanceOutputsError("INGEST_OUTPUT_MISSING", f"{key} 项 {text!r} → {literal} {what}")
+        real = literal.resolve()
+        try:
+            rel = real.relative_to(gov).as_posix()
+        except ValueError:
+            raise GovernanceOutputsError("INGEST_OUTPUT_OUT_OF_BOUNDARY", f"{key} 项 {text!r} 真实路径 {real} 不在治理根 {gov} 内") from None
+        if str(real) != os.path.abspath(str(literal)):
+            raise GovernanceOutputsError("INGEST_OUTPUT_OUT_OF_BOUNDARY", f"{key} 项 {text!r} 经符号链接解析到 {real}(字面 {literal}), 不放行")
+        try:
+            verdict = check_access(gov, role="executor", path=real, level="mutate", task_id=task_id)
+        except (WriteBoundaryError, OSError, ValueError) as exc:
+            raise GovernanceOutputsError("INGEST_OUTPUT_OUT_OF_BOUNDARY", f"{key} 项 {rel} 写权限边界不可判定(fail-closed): {exc}") from exc
+        if not verdict.get("allowed"):
+            raise GovernanceOutputsError("INGEST_OUTPUT_OUT_OF_BOUNDARY",
+                                         f"{key} 项 {rel} 写权限边界不放行本卡执行角色写该处: [{verdict.get('code')}] {verdict.get('reason')}")
+        data = real.read_bytes()
+        files[rel] = {"path": rel, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+    ordered = [files[k] for k in sorted(files)]
+    lines = [f"{f['sha256']}  {f['path']}" for f in ordered]
+    digest = hashlib.sha256("".join(line + "\n" for line in lines).encode("utf-8")).hexdigest()
+    return {"kind": "governance_outputs", "repository": gov.name, "outputs_digest": digest, "files": ordered, "outputs": lines}
+
+
+def governance_outputs_return_binding(workspace_root: Path, task_id: str) -> dict[str, Any] | None:
+    """AIPOS-F197: 本卡最新门交回记录绑定的产出清单主体(artifact_subject.kind = governance_outputs); 无记录 / 无绑定 = None。"""
+    records = _read_task_records(workspace_root, task_id)
+    latest = records.get("latest_return") or {}
+    subject = latest.get("artifact_subject") if isinstance(latest.get("artifact_subject"), dict) else None
+    if not subject or str(subject.get("kind") or "") != "governance_outputs" or not str(subject.get("outputs_digest") or "").strip():
+        return None
+    return dict(subject)
+
+
+def governance_outputs_recheck(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None = None, *,
+                               allow_legacy: bool = False) -> dict[str, Any]:
+    """AIPOS-F197 件②: 复核结案 / 裁决 / finalize 前的「此刻清单指纹 = 交回绑定指纹」核对(唯一实现)。
+    返回 {ok, code, legacy, bound, current, reason}: 绑定在且此刻清单合规且指纹相等 = ok; 不等 / 此刻清单不合 = ok False
+    (码 INGEST_OUTPUTS_CHANGED 或清单拒因码)。最新交回记录无产出清单绑定(F197 前存量交回 / 未经产物入口)= allow_legacy 时 ok + legacy
+    (沿 AIPOS-F70 legacy 裁决口径: 调用方出警告放行), 否则 ok False(产物入口 / 审计报告入口要求绑定)。"""
+    bound = governance_outputs_return_binding(workspace_root, task_id)
+    try:
+        current = governance_outputs_manifest(workspace_root, task_id, card_frontmatter)
+        current_problem = None
+    except GovernanceOutputsError as exc:
+        current, current_problem = None, exc
+    if bound is None:
+        reason = (f"卡 {task_id} 最新交回记录无产出清单绑定(artifact_subject.kind=governance_outputs; F197 前存量交回或未经产物入口); "
+                  f"出口: 经产物入口重交回(lybra artifact ingest --task-id {task_id} --kind return)")
+        if allow_legacy:
+            return {"ok": True, "code": "LEGACY_NO_BINDING", "legacy": True, "bound": None, "current": current,
+                    "reason": f"警告(legacy, 沿 AIPOS-F70 口径放行): {reason}"}
+        return {"ok": False, "code": "INGEST_OUTPUTS_CHANGED", "legacy": True, "bound": None, "current": current, "reason": reason}
+    if current_problem is not None:
+        return {"ok": False, "code": current_problem.code, "legacy": False, "bound": bound, "current": None,
+                "reason": f"此刻产出清单不合: {current_problem}"}
+    if current["outputs_digest"] != bound["outputs_digest"]:
+        return {"ok": False, "code": "INGEST_OUTPUTS_CHANGED", "legacy": False, "bound": bound, "current": current,
+                "reason": (f"卡 {task_id} 交回后产出被改: 交回绑定指纹 {bound['outputs_digest']} ≠ 此刻 {current['outputs_digest']}"
+                           f"(交回 {bound.get('outputs')}; 此刻 {current['outputs']}); 出口: 执行体按改后产出重写 Return 后重交回")}
+    return {"ok": True, "code": "OK", "legacy": False, "bound": bound, "current": current,
+            "reason": f"产出清单指纹 {current['outputs_digest']} = 交回绑定"}
 
 
 def card_worktree_location(workspace_root: Path, task_id: str,
@@ -567,28 +716,51 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
         needs_worktree = True
         view["worktree_refusal"] = {"code": "WORKTREE_ROOT_UNDECLARED", "reason": f"是否建卡工作树不可判定(AIPOS-F178 判据): {exc}"}
     view["worktree_required"] = needs_worktree
-    try:
-        view["kickoff_without_worktree"] = card_kickoff_without_worktree(workspace_root, fm)
-    except (SchemaLoadError, OSError, ValueError) as exc:
-        view["kickoff_without_worktree"] = False
-        view["worktree_refusal"] = view["worktree_refusal"] or {"code": "VALIDATION_SUBJECT_UNRESOLVED", "reason": f"固定候选卡判定失败: {exc}"}
+    # AIPOS-F197 件①: 不建树卡中固定候选卡(F196)与显式声明只写治理根的卡(card_governance_outputs)及其审计卡照常开工; 措辞分流:
+    # 固定候选卡 / 只写治理根的执行卡(outputs_note → template_governance_root)/ 只写治理根卡的审计卡 / 其余存量不建树卡(不入选, F178)
+    candidate_card = governance_card = False
+    if view["worktree_refusal"] is None and not needs_worktree:
+        try:
+            candidate_card = card_follows_candidate_subject(workspace_root, fm)
+            governance_card = not candidate_card and card_governance_outputs(workspace_root, {**fm, "task_id": task_id})
+        except (SchemaLoadError, OSError, ValueError) as exc:
+            view["worktree_refusal"] = {"code": "VALIDATION_SUBJECT_UNRESOLVED", "reason": f"不建树卡的交付主体判定失败: {exc}"}
+    view["kickoff_without_worktree"] = view["worktree_refusal"] is None and (candidate_card or governance_card)
     if view["worktree_refusal"] is None and not needs_worktree:
         try:
             where = str(card_report_path(workspace_root, task_id, fm))
         except (SchemaLoadError, OSError, ValueError) as exc:
             where = f"(报告落点不可推导: {exc})"
-        if view["kickoff_without_worktree"]:
+        if candidate_card:
             view["worktree_refusal"] = {
                 "code": "WORKTREE_NOT_REQUIRED",
                 "reason": (f"不建(交付主体 = 来源卡的固定候选, 不写产品仓源码; 判据 enums.schema task_mode.candidate_subject): "
                            f"产物只落本卡验证根(本卡本活动 run 目录)与报告落点 {where}"),
             }
-        else:
+        elif governance_card and forensic_subject(fm) is not None:
+            view["worktree_refusal"] = {
+                "code": "WORKTREE_NOT_REQUIRED",
+                "reason": (f"不建(被审卡只写治理根, 审计对象 = 被审卡交回时产品绑定的治理根产出清单; 判据 enums.schema "
+                           f"task_mode.governance_outputs_subject): 审计报告写 {where}"),
+            }
+        elif not governance_card:
+            # AIPOS-F178 件②: 缺 lane.repo / 缺 task_mode 的存量不建树卡不入选开工, 拒因点名治理根报告落点与 F197 显式声明出口
             view["worktree_refusal"] = {
                 "code": "WORKTREE_NOT_REQUIRED",
                 "reason": (f"本卡只写治理根(不写产品仓, 不建卡工作树/卡分支; 判据 enums.schema task_mode.product_repo_write): "
-                           f"产物写治理根报告落点 {where}; 工位开工提示只给建树卡, 本卡开工说明见卡渲染物(card render)"),
+                           f"产物写治理根报告落点 {where}; 工位开工提示只给建树卡与显式声明只写治理根的卡(AIPOS-F197: 卡面 task_mode "
+                           f"docs / governance / config + lane.repo: governance_root), 本卡开工说明见卡渲染物(card render)"),
             }
+        else:
+            slot = str(Path(where).parent)
+            view["worktree_refusal"] = {
+                "code": "WORKTREE_NOT_REQUIRED",
+                "reason": (f"本卡只写治理根(不写产品仓, 不建卡工作树/卡分支; 判据 enums.schema task_mode.product_repo_write): "
+                           f"产物写治理根报告落点 {where}"),
+            }
+            view["outputs_note"] = (f"只写治理根——产物写本卡报告落点目录 {slot}/ 及其子目录(如 {slot}/artifacts/; 写权限边界判定, "
+                                    f"其余治理根路径与产品仓一律不写); 报告 frontmatter outputs 逐项列出产出文件, 产品逐个计算 sha256 "
+                                    f"并核对, 交回后不再改动(判据 enums.schema task_mode.governance_outputs_subject)")
     elif view["worktree_refusal"] is None:
         try:
             _code_repo, worktree = card_worktree_location(workspace_root, task_id, fm)
@@ -650,10 +822,26 @@ def card_report_contract(workspace_root: Path, task_id: str, card_frontmatter: d
     if candidate is not None:
         return report_frontmatter_contract("return" if reviewed is None else "verdict", branch_task_id=candidate["source"],
                                            subject=candidate, branch_pattern=branch_pattern, candidate=True)
+    # AIPOS-F197 件②: 只写治理根的执行卡(交回 = 产出清单, 无分支三键)/ 其审计卡(verdict + 交回绑定的 outputs_digest, 产品给值)
+    if card_governance_outputs(workspace_root, {**fm, "task_id": task_id}):
+        if reviewed is None:
+            return report_frontmatter_contract("return", governance=True, report_dir=_report_dir_hint(workspace_root, task_id))
+        bound = governance_outputs_return_binding(workspace_root, reviewed) if reviewed else None
+        return report_frontmatter_contract("verdict", branch_task_id=reviewed or None, governance=True,
+                                           subject={"outputs_digest": str((bound or {}).get("outputs_digest") or "")})
     if reviewed is None:
         return report_frontmatter_contract("return", branch_task_id=task_id, branch_pattern=branch_pattern)
     subject = forensic_worktree_subject(worktree) if worktree is not None else None
     return report_frontmatter_contract("verdict", branch_task_id=reviewed or None, subject=subject, branch_pattern=branch_pattern)
+
+
+def _report_dir_hint(workspace_root: Path, task_id: str) -> str:
+    """本卡报告落点目录(治理根相对, 带尾 /; 落点根在治理根外 = 绝对路径)——契约提示占位 {report_dir} 的值。"""
+    directory = return_artifact_dir(workspace_root, task_id)
+    try:
+        return directory.resolve().relative_to(Path(workspace_root).resolve()).as_posix() + "/"
+    except ValueError:
+        return str(directory) + "/"
 
 
 def forensic_worktree_subject(worktree: Path) -> dict[str, str]:
@@ -683,7 +871,9 @@ NEXT_CARD_RULE: dict[str, Any] = {
         "queue_state == claimed",
         "卡面 frontmatter 可解析(产品唯一读取口 parse_markdown_frontmatter 无告警)",
         "worktree_exists == true(工作树由驱动方认领时建立; AIPOS-F89 件③a: 审计卡 = 被审分支 tip 的只读 detached 取证工作树; "
-        "AIPOS-F178: worktree_required == false 的只写治理根卡不入选, 拒因 WORKTREE_NOT_REQUIRED 点名治理根报告落点)",
+        "AIPOS-F178/F196/F197: worktree_required == false(判据唯一 card_needs_worktree)且 kickoff_without_worktree(固定候选卡 / 显式声明只写治理根的卡"
+        "及其审计卡)= 不要求工作树, 照常入选, 开工提示按 template_governance_root / template_no_worktree 渲染; 其余不建树存量卡不入选, 拒因 "
+        "WORKTREE_NOT_REQUIRED 点名治理根报告落点)",
         "report_path 可推导(开工提示必需的报告落点)",
         "report_required_frontmatter 可推导(AIPOS-F93 件①: 报告必填字段, 声明 transitions artifact_ingest 单源; 审计卡附被审 tip/tree)",
         "kickoff_refusal 为空(AIPOS-F90 件③: 本实例在办、未结案、产物未交——判据 next_resolver.kickoff_refusal)",
@@ -814,7 +1004,13 @@ def render_kickoff(next_card: dict[str, Any], *, remote: dict[str, Any] | None =
         "validation_root": ("\n\n" + "\n".join(vr_lines)) if vr_lines else "",
     }
     template = decl["template"]
-    if "worktree_note" in next_card:
+    if "outputs_note" in next_card:
+        # AIPOS-F197 件①: 只写治理根的执行卡 = template_governance_root
+        template = decl.get("template_governance_root")
+        if not isinstance(template, str) or not template:
+            raise KickoffRenderError("verbs.schema.json verbs.lybra_my_tasks.kickoff.template_governance_root 未声明")
+        values["outputs_note"] = next_card.get("outputs_note")
+    elif "worktree_note" in next_card:
         # AIPOS-F196 件①: 不建树的固定候选卡(validation 及其审计卡)= template_no_worktree
         template = decl.get("template_no_worktree")
         if not isinstance(template, str) or not template:
@@ -924,12 +1120,13 @@ def select_next_card(cards: list[dict[str, Any]], *, remote: dict[str, Any] | No
         refusal = card.get("worktree_refusal") if isinstance(card.get("worktree_refusal"), dict) else {}
         no_tree_kickoff = card.get("worktree_required") is False and card.get("kickoff_without_worktree") is True
         if card.get("worktree_required") is False and not no_tree_kickoff:
-            # AIPOS-F178 件②: 只写治理根的卡不建树, 拒因原样点名治理根报告落点(不再指向不存在的工作树路径)
+            # AIPOS-F178 件②: 存量不建树卡(未显式声明只写治理根)不入选, 拒因原样点名治理根报告落点; 判定失败同此转述
             excluded.append({"task_id": task_id, "code": str(refusal.get("code") or "WORKTREE_NOT_REQUIRED"),
                              "reason": str(refusal.get("reason") or "本卡只写治理根, 不建卡工作树")})
             continue
         if no_tree_kickoff:
-            pass  # AIPOS-F196 件①: 交付主体为固定候选的卡(validation 及其审计卡)不建树也照常开工(开工提示 template_no_worktree)
+            # AIPOS-F196 件① + F197 件①: 不建树卡(固定候选卡、只写治理根的卡及其审计卡; 唯一判据 card_needs_worktree)照常开工
+            pass
         elif not card.get("worktree_path"):
             excluded.append({
                 "task_id": task_id,
@@ -988,8 +1185,12 @@ def select_next_card(cards: list[dict[str, Any]], *, remote: dict[str, Any] | No
             "claimed_at": claimed_at.isoformat() if hasattr(claimed_at, "isoformat") else claimed_at,
         }
         if chosen.get("kickoff_without_worktree") is True and chosen.get("worktree_required") is False:
-            # AIPOS-F196 件①: 不建树的验证卡: 开工提示写明不建树原因 + 本卡验证根节(card_workstation_view 给出, 章程同源)
-            next_card["worktree_note"] = str((chosen.get("worktree_refusal") or {}).get("reason") or "")
+            if chosen.get("outputs_note"):
+                # AIPOS-F197 件①: 只写治理根的执行卡 = template_governance_root(产物落点说明, 不提分支 / 工作树)
+                next_card["outputs_note"] = str(chosen["outputs_note"])
+            else:
+                # AIPOS-F196 件①: 不建树的验证卡 / 审计卡: 开工提示写明不建树原因 + 本卡验证根节(card_workstation_view 给出, 章程同源)
+                next_card["worktree_note"] = str((chosen.get("worktree_refusal") or {}).get("reason") or "")
         if chosen.get("validation_root_lines"):
             next_card["validation_root_lines"] = list(chosen["validation_root_lines"])
         # AIPOS-F95 件①: 完整开工提示由产品按声明渲染(工位 /go 与 loop 拉起同读本字段, 逐字节相同); 渲染不出 = 不开工(fail-closed)
@@ -1615,7 +1816,8 @@ def return_summary_status(workspace_root: Path, task_id: str) -> dict[str, Any]:
         from tools.aipos_cli.frontmatter import FrontmatterReadError
 
         try:
-            out["submitted"] = not missing_return_frontmatter(_read_frontmatter(path, allow_missing_block=True))
+            out["submitted"] = not missing_return_frontmatter(_read_frontmatter(path, allow_missing_block=True),
+                                                              governance=card_report_is_governance(workspace_root, task_id))
         except FrontmatterReadError:
             out["submitted"] = False  # frontmatter 读不出 = 不能断定已交(推导核交回步另按 F100 件② 判 frontmatter_unreadable)
     return out
@@ -1657,7 +1859,8 @@ def _check_verdict_artifact(workspace_root: Path, task_id: str, card_frontmatter
         if cand in seen or not cand.is_file():
             continue
         seen.add(cand)
-        if verdict_report_submitted(_read_frontmatter(cand, allow_missing_block=True)):
+        if verdict_report_submitted(_read_frontmatter(cand, allow_missing_block=True),
+                                    governance=card_report_is_governance(workspace_root, task_id, card_frontmatter)):
             return cand
     return None
 
@@ -1933,8 +2136,18 @@ def verdict_staleness(workspace_root: Path, task_id: str, card_frontmatter: dict
 
 def return_binding_subject(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None) -> dict[str, str] | None:
     """AIPOS-F114 件①: 门 queue_return 落交回记录时绑定的被交回产物主体 = 卡分支此刻 tip {repository, commit_sha, tree_hash, branch}
+    (AIPOS-F197: 只写治理根的卡 = 产出清单主体 {kind=governance_outputs, repository, outputs_digest, outputs})
     (_card_branch_tip 唯一读取, 与裁决绑 tip / 过期判据同一函数)。非代码卡 / 产品仓不可解析 / 无卡分支 = None
     (交回记录不带绑定, 与存量记录同形; 代码卡经产物入口交回时入口已核 Return commit_sha == 此 tip)。"""
+    # AIPOS-F197 件②: 只写治理根的卡 = 绑定产出清单(governance_outputs_manifest 唯一实现; 门 queue_return 先以同一实现核清单, 不合即拒,
+    # 故此处清单不合只在门外调用出现 = 不带绑定)
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    if card_governance_outputs(workspace_root, {**fm, "task_id": task_id}):
+        try:
+            manifest = governance_outputs_manifest(workspace_root, task_id, fm)
+        except GovernanceOutputsError:
+            return None
+        return {k: manifest[k] for k in ("kind", "repository", "outputs_digest", "outputs")}
     tip = _card_branch_tip(workspace_root, task_id, card_frontmatter)
     return {**tip[1], "branch": tip[2]} if tip else None
 
@@ -2079,9 +2292,26 @@ def _is_placeholder_value(value: Any) -> bool:
     return not text or text.startswith(_RETURN_PLACEHOLDER_PREFIX) or text.startswith("<")
 
 
-def required_verdict_frontmatter() -> list[str]:
-    """审计报告必填 frontmatter 键(唯一声明: transitions artifact_ingest.verdict.required_frontmatter)。"""
-    keys = list(_artifact_ingest_declaration()["verdict"].get("required_frontmatter") or [])
+def _report_declaration(kind: str, governance: bool = False) -> dict[str, Any]:
+    """报告契约声明节: transitions artifact_ingest.<return|verdict>; AIPOS-F197 governance=True = 其 governance_root 分形
+    (只写治理根的执行卡 / 其审计卡)。缺 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = _artifact_ingest_declaration()[kind]
+    if not governance:
+        return decl
+    if kind == "return":
+        return governance_outputs_declaration()
+    sub = decl.get("governance_root") if isinstance(decl, dict) else None
+    if not isinstance(sub, dict) or not isinstance(sub.get("required_frontmatter"), list) or not isinstance(sub.get("field_hints"), dict):
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.verdict.governance_root(required_frontmatter / field_hints)未声明(AIPOS-F197)")
+    return sub
+
+
+def required_verdict_frontmatter(*, governance: bool = False) -> list[str]:
+    """审计报告必填 frontmatter 键(唯一声明: transitions artifact_ingest.verdict.required_frontmatter; AIPOS-F197 governance=True =
+    被审卡只写治理根时的分形 verdict.governance_root.required_frontmatter)。"""
+    keys = list(_report_declaration("verdict", governance).get("required_frontmatter") or [])
     if not keys:
         from tools.schema_loader import SchemaLoadError
 
@@ -2089,27 +2319,28 @@ def required_verdict_frontmatter() -> list[str]:
     return [str(k) for k in keys]
 
 
-def missing_verdict_frontmatter(frontmatter: dict[str, Any]) -> list[str]:
+def missing_verdict_frontmatter(frontmatter: dict[str, Any], *, governance: bool = False) -> list[str]:
     """审计报告缺失的必填 frontmatter 键(空值/占位视为缺)。AIPOS-F89 件③c: 报告完成判据(artifact_ingest.verdict.readiness)
-    = 本函数返回空; 认领时生成的同名同位空模板(全占位)不算完成。"""
-    return [k for k in required_verdict_frontmatter() if _is_placeholder_value(frontmatter.get(k))]
+    = 本函数返回空; 认领时生成的同名同位空模板(全占位)不算完成。AIPOS-F197: governance = 被审卡只写治理根(card_governance_outputs)。"""
+    return [k for k in required_verdict_frontmatter(governance=governance) if _is_placeholder_value(frontmatter.get(k))]
 
 
-def verdict_report_submitted(frontmatter: dict[str, Any]) -> bool:
+def verdict_report_submitted(frontmatter: dict[str, Any], *, governance: bool = False) -> bool:
     """AIPOS-F89 件③c: 审计报告「已动笔」= 至少一个声明必填键已填实值(认领时的空模板全为占位 = 未交, 继续等待)。
     已交但未填全 → 推导核判 artifact_invalid(loop 硬停点名缺项), 不当完成也不空等。"""
-    return any(not _is_placeholder_value(frontmatter.get(k)) for k in required_verdict_frontmatter())
+    return any(not _is_placeholder_value(frontmatter.get(k)) for k in required_verdict_frontmatter(governance=governance))
 
 
-def verdict_report_ready(frontmatter: dict[str, Any]) -> bool:
+def verdict_report_ready(frontmatter: dict[str, Any], *, governance: bool = False) -> bool:
     """AIPOS-F89 件③c: 审计报告「写完」的唯一判据(推导核 / loop 等待 / artifact ingest / 开工核验同读):
-    声明的必填 frontmatter(verdict / commit_sha)全部已填且非占位。文件存在 ≠ 完成。"""
-    return not missing_verdict_frontmatter(frontmatter)
+    声明的必填 frontmatter(verdict / commit_sha; AIPOS-F197 被审卡只写治理根 = verdict / outputs_digest)全部已填且非占位。文件存在 ≠ 完成。"""
+    return not missing_verdict_frontmatter(frontmatter, governance=governance)
 
 
-def required_return_frontmatter() -> list[str]:
-    """Return 必填 frontmatter 键(唯一声明: transitions artifact_ingest.return.required_frontmatter)。"""
-    keys = list(_artifact_ingest_declaration()["return"].get("required_frontmatter") or [])
+def required_return_frontmatter(*, governance: bool = False) -> list[str]:
+    """Return 必填 frontmatter 键(唯一声明: transitions artifact_ingest.return.required_frontmatter; AIPOS-F197 governance=True =
+    只写治理根卡的分形 return.governance_root.required_frontmatter, 无分支三键)。"""
+    keys = list(_report_declaration("return", governance).get("required_frontmatter") or [])
     if not keys:
         from tools.schema_loader import SchemaLoadError
 
@@ -2117,9 +2348,21 @@ def required_return_frontmatter() -> list[str]:
     return [str(k) for k in keys]
 
 
-def missing_return_frontmatter(frontmatter: dict[str, Any]) -> list[str]:
-    """缺失的 Return 必填 frontmatter 键列表(空值/占位视为缺)。"""
-    return [k for k in required_return_frontmatter() if _is_placeholder_value(frontmatter.get(k))]
+def missing_return_frontmatter(frontmatter: dict[str, Any], *, governance: bool = False) -> list[str]:
+    """缺失的 Return 必填 frontmatter 键列表(空值/占位视为缺)。AIPOS-F197: governance = 本卡只写治理根(card_governance_outputs)。"""
+    return [k for k in required_return_frontmatter(governance=governance) if _is_placeholder_value(frontmatter.get(k))]
+
+
+def card_report_is_governance(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None = None) -> bool:
+    """AIPOS-F197: 该卡(执行卡或审计卡)的报告契约是否取 governance_root 分形(= card_governance_outputs; 卡不在队列 = False)。
+    card_frontmatter 缺 = 按 task_id 读队列卡面。判定读不出(声明 / 卡面)= 异常上抛, 调用方 fail-closed。"""
+    fm = card_frontmatter
+    if fm is None:
+        task_path, _q = _find_task_in_queue(workspace_root, task_id)
+        if task_path is None:
+            return False
+        fm = _read_frontmatter(task_path)
+    return card_governance_outputs(workspace_root, {**fm, "task_id": str(fm.get("task_id") or task_id)})
 
 
 # ---------------------------------------------------------------------------
@@ -2132,7 +2375,8 @@ REPORT_KINDS = ("return", "verdict")
 
 def report_frontmatter_contract(kind: str, *, branch_task_id: str | None = None,
                                 subject: dict[str, str] | None = None,
-                                branch_pattern: str | None = None, candidate: bool = False) -> list[dict[str, Any]]:
+                                branch_pattern: str | None = None, candidate: bool = False,
+                                governance: bool = False, report_dir: str | None = None) -> list[dict[str, Any]]:
     """报告必填 frontmatter 契约(唯一渲染源): [{key, hint, value}], 键序 = 声明 required_frontmatter。
 
     - kind: return(执行卡 Return)/ verdict(审计报告)。
@@ -2140,12 +2384,14 @@ def report_frontmatter_contract(kind: str, *, branch_task_id: str | None = None,
     - subject: 产品已知的实值(审计卡 = 取证工作树 HEAD 的 {commit_sha, tree_hash}); 有值的键 value=实值, 提示带 tree, agent 照抄。
     - branch_pattern: 调用方已读的分支声明(machine_zone 按 product_root 读 N5.branch_integration); 缺 = card_branch_name。
     - candidate: AIPOS-F196 交付主体为固定候选(validation 卡与其审计卡): subject = candidate_subject_values 三键实值, 提示写明是固定候选。
+    - governance: AIPOS-F197 只写治理根的执行卡(return: outputs 产出清单, 无分支三键)/ 其审计卡(verdict: verdict + outputs_digest,
+      subject = 交回绑定的 {outputs_digest}); report_dir = 本卡报告落点目录(治理根相对, 带尾 /; 缺 = `<报告落点>/`), 填提示占位 {report_dir}。
     键缺说明(field_hints 未声明该键)= 通用提示「按声明填写实值」(仍列出, 不漏键)。声明缺 = SchemaLoadError(fail-closed)。
     """
     if kind not in REPORT_KINDS:
         raise ValueError(f"report_frontmatter_contract: kind={kind!r} 不在 {REPORT_KINDS}")
-    keys = required_return_frontmatter() if kind == "return" else required_verdict_frontmatter()
-    hints = _artifact_ingest_declaration()[kind].get("field_hints") or {}
+    keys = required_return_frontmatter(governance=governance) if kind == "return" else required_verdict_frontmatter(governance=governance)
+    hints = _report_declaration(kind, governance).get("field_hints") or {}
     if not isinstance(hints, dict):
         from tools.schema_loader import SchemaLoadError
 
@@ -2158,7 +2404,8 @@ def report_frontmatter_contract(kind: str, *, branch_task_id: str | None = None,
     entries: list[dict[str, Any]] = []
     for key in keys:
         template = str(hints.get(key) or "按声明填写实值")
-        hint = template.replace("{branch}", branch).replace("{allowed_verdict_values}", verdict_values or "裁决值")
+        hint = (template.replace("{branch}", branch).replace("{allowed_verdict_values}", verdict_values or "裁决值")
+                .replace("{report_dir}", report_dir or "<报告落点>/"))
         value = str(values.get(key) or "").strip() or None
         if value and candidate:
             what = {"commit_sha": f"来源卡 {branch_task_id} 的固定候选", "tree_hash": "固定候选的 tree",
@@ -2902,7 +3149,7 @@ def _derive_next_step(
             return _not_derivable_no_claim(task_id, node="audit_verdict", state="claimed", verb="lybra_audit_verdict_dry_run",
                                            triggered_by="auditor", notes="N4: 审计卡有 VERDICT 报告但无 claim 记录, 裁决 actor 无据(AIPOS-F73E 件①)")
         # AIPOS-F89 件③c: 报告完成判据(artifact_ingest.verdict.readiness)不成立 = 已交未完成 → 硬停点名缺项(不空等, 不入门)
-        unfilled = missing_verdict_frontmatter(verdict_fm)
+        unfilled = missing_verdict_frontmatter(verdict_fm, governance=card_report_is_governance(workspace_root, task_id, fm))
         if unfilled:
             return {
                 "task_id": task_id,
@@ -3271,7 +3518,9 @@ def _derive_next_step(
                     from tools.aipos_cli.workspace_config import CardRepoUnresolved
 
                     try:
-                        code_repo_root = _card_repo_root(workspace_root, task_id, fm, allow_governance_root=False)
+                        # AIPOS-F197 件②: 只写治理根的卡 N5 无合入(finalize 不碰产品仓 git)= --workspace-root 取治理根, 不解析产品仓
+                        code_repo_root = (Path(workspace_root) if card_governance_outputs(workspace_root, {**fm, "task_id": task_id})
+                                          else _card_repo_root(workspace_root, task_id, fm, allow_governance_root=False))
                     except CardRepoUnresolved as exc:
                         return {
                             "task_id": task_id,
@@ -3414,6 +3663,28 @@ def _derive_next_step(
                 }
             # 非代码卡,不需要独立审计(AIPOS-F196: 是否独立审计读声明 enums.schema task_mode.independent_audit)
             if not task_mode_independent_audit(str(task_mode or "")) and not audit_required:
+                if card_governance_outputs(workspace_root, {**fm, "task_id": task_id}):
+                    # AIPOS-F197 件②: 只写治理根的卡 = 顾问复核交回绑定的产出清单后结案(mark-concluded 结案前核此刻指纹 = 交回绑定)
+                    bound = governance_outputs_return_binding(workspace_root, task_id) or {}
+                    try:
+                        report_ref = str(_return_artifact_path(workspace_root, task_id).resolve().relative_to(Path(workspace_root).resolve()))
+                    except ValueError:
+                        report_ref = str(_return_artifact_path(workspace_root, task_id))
+                    close_cmd = (f"lybra --workspace-root {workspace_root} mark-concluded --task-id {task_id} --actor <你的顾问实例> "
+                                 f"--report-path {report_ref} --conclusion-note \"顾问复核: <结论>\"")
+                    return {
+                        "task_id": task_id,
+                        "derivable": True,
+                        "current_node": "return",
+                        "current_state": "claimed",
+                        "triggered_by": "advisor",
+                        "command": (f"# 非代码卡(task_mode={task_mode}, 只写治理根):顾问复核交回的产出清单"
+                                    f"(指纹 {bound.get('outputs_digest') or '(交回记录无绑定)'})后结案: {close_cmd}"),
+                        "verb": "lybra_mark_concluded",
+                        "missing_records": [],
+                        "suggested_action": f"顾问复核产出清单 {bound.get('outputs') or []} 后结案(先加 --dry-run 预演)",
+                        "notes": "非代码卡快车道(只写治理根, AIPOS-F197):顾问复核后 mark-concluded 结案",
+                    }
                 return {
                     "task_id": task_id,
                     "derivable": True,
@@ -3461,11 +3732,14 @@ def _derive_next_step(
             # AIPOS-F78 件③: Return 必填 frontmatter(transitions artifact_ingest.return.required_frontmatter)缺 = 不可推导
             # (action=artifact_invalid, loop 据此 exit 4 而非空等), 齐则派生与 ingest 同一条 return 命令
             return_path = _return_artifact_path(workspace_root, task_id)
-            missing_fm = missing_return_frontmatter(_read_frontmatter(return_path, allow_missing_block=True))
+            governance_card = card_governance_outputs(workspace_root, {**fm, "task_id": task_id})  # AIPOS-F197 件②: 交回契约分形
+            missing_fm = missing_return_frontmatter(_read_frontmatter(return_path, allow_missing_block=True), governance=governance_card)
             if missing_fm:
                 # AIPOS-F123 件①: 拒因原文带补法(逐键说明 = 报告必填契约单源 report_frontmatter_contract, 分支 = 本卡分支)——
                 # 收编的人肉期手写 Return 常缺这三项, 出口须能照做
-                how = {e["key"]: e["hint"] for e in report_frontmatter_contract("return", branch_task_id=task_id)}
+                how = {e["key"]: e["hint"] for e in (
+                    report_frontmatter_contract("return", governance=True, report_dir=_report_dir_hint(workspace_root, task_id))
+                    if governance_card else report_frontmatter_contract("return", branch_task_id=task_id))}
                 return {
                     "task_id": task_id,
                     "derivable": False,
