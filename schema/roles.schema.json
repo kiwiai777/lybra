@@ -429,6 +429,17 @@
         "SIM_NOT_BOUND": "AIPOS-F194: 设备 UDID 未绑定于任何本 run 记录(只放行本 run 新建并 sim-bind 的那一台)",
         "SIM_NOT_OWN_RUN": "AIPOS-F194: 设备 UDID 绑定于他 run / 他卡 / 他实例(审计复用执行 run 的 UDID 同此拒), 或主机侧 device.plist 名不是本 run 名"
       },
+      "run_evidence": {
+        "description": "AIPOS-F200(gap #205: 审计 run 在 Mac 等远端主机时门读不到 run 内证据, chris 理想 iOS UI 将撞): 远端 run 证据取回声明(唯一)。run 收尾(仍活动时)在目标主机以产品铸的 helper evidence-manifest 列本 run 证据目录(include_dirs)下文件(相对路径 / 大小 / sha256)+ 主机指纹 + 封签写 <run>/.lybra-vr/evidence-manifest.json; 治理根所在机 `lybra project validation-root evidence-fetch --id <审计声明> --run-id <run>` 经 project.json validation_roots.hosts 声明的 ssh 别名只读拉取(helper evidence-bundle: 清单 + 清单内文件, 不跟软链 / 越界 / 超限即拒)到审计报告落点副本 <verdict_root>/<审计卡>/<copy_subdir>/<run_id>/, 逐个核 sha256; 裁决入口对远端 run 读副本, 判据与本机 run 同一函数(归属 / 已开启或收口 / 候选 / src-verify SRC_OK / 日志指纹 / 命令逐字), 只换读取源。只认审计实例的声明(执行 run 证据随交回, 不经此命令)。代码文件扩展名(config.schema code_files_blacklist)不取回(清单记 skipped; 报告落点零代码文件, AIPOS-F195)。上限缺省即本段, 改上限 = 改本声明(产品卡)。",
+        "include_dirs": [".lybra-vr", "logs", "evidence"],
+        "copy_subdir": "run_evidence",
+        "copy_layout": {"manifest": "manifest.json", "fetch_record": "fetch.json", "files": "files"},
+        "max_file_bytes": 33554432,
+        "max_total_bytes": 134217728,
+        "max_files": 1000,
+        "fetch_timeout_seconds": 600,
+        "log_rule": "远端 run 的运行记录 log_path 须为目标主机上本 run 目录内的路径(建议 <run>/logs/<名>.log)且在取回清单内; 裁决入口读副本 files/<相对路径> 核 sha256"
+      },
       "remote_realpath": {
         "mode": "host_side_helper",
         "description": "远端路径在治理根所在机无法 resolve: 治理根侧对远端主机只做字面判定(声明 / 卡 / run / 规范路径), 输出注明「符号链接须在目标主机以 helper 复核」; 目标主机上以 helper check 对 realpath 做同一判定(fail-closed)。取舍理由: 写入发生在目标主机, 在写入处判定真实路径最贴近实际(TOCTOU 窗口最小); 不依赖治理根所在机→目标主机的 ssh 通道(子 agent 项目常不声明, chris workstations=null); helper 纯标准库, 目标主机零安装。"

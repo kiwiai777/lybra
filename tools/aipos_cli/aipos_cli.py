@@ -1781,6 +1781,31 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
             print(f"声明 {got['entry']['id']} 活动 run {got['run']['run_id']}: {where}(只建空目录链 {got['run_dir']}):")
             print(got["command"])  # 末行 = 目录链初始化命令(行为不变); AIPOS-F197 候选源码送达命令见 --json source_delivery / 开工稿 / run-start 输出
         return 0
+    if args.vr_command == "evidence-fetch":  # AIPOS-F200 件②: 远端审计 run 证据取回(唯一实现 validation_root.evidence_fetch; 不写 project.json)
+        try:
+            got = vr.evidence_fetch(root, args.decl_id, args.run_id)
+        except vr.ValidationRootError as exc:
+            print(f"Error: {exc.code}(副本未落 / 未改动)", file=sys.stderr)
+            for problem in exc.problems:
+                print(f"  - {problem}", file=sys.stderr)
+            return 1
+        except (SchemaLoadError, OSError) as exc:
+            print(f"Error: {exc}(副本未落 / 未改动)", file=sys.stderr)
+            return 1
+        if args.json:
+            print(render_json({"project": target["project"], "declaration_id": got["entry"]["id"], "host": got["entry"]["host"],
+                               "run_id": got["run"]["run_id"], "copy_dir": got["copy_dir"], "manifest_sha256": got["manifest_sha256"],
+                               "files": got["files"], "bytes": got["bytes"], "skipped": got["skipped"], "ssh_alias": got["ssh_alias"],
+                               "notes": got["notes"]}))
+        else:
+            print(f"声明 {got['entry']['id']} run {got['run']['run_id']}(主机 {got['entry']['host']}, 经 ssh {got['ssh_alias']})证据已取回并逐个核对: "
+                  f"{got['files']} 个文件 {got['bytes']} 字节, 清单 sha256 {got['manifest_sha256']}")
+            for item in got["skipped"]:
+                print(f"  未取回 {item['path']}: {item['reason']}")
+            for note in got["notes"]:
+                print(f"  {note}")
+            print(f"FETCH_OK copy_dir={got['copy_dir']}")
+        return 0
     action = args.vr_command
     try:
         outcome = vr.apply_validation_root_change(
@@ -2959,6 +2984,13 @@ def build_parser() -> argparse.ArgumentParser:
     _vr_common(vr_init)
     vr_init.add_argument("--id", dest="decl_id", required=True, help="Declaration id")
     vr_init.add_argument("--instance", default=None, help="Refuse unless the declaration belongs to this instance")
+    vr_fetch = project_vr_sub.add_parser("evidence-fetch", help="AIPOS-F200: fetch a remote audit run's evidence (files listed by the host-side "
+                                                              "helper evidence-manifest) over the host's declared ssh alias into the audit report "
+                                                              "slot copy <verdict_root>/<audit card>/run_evidence/<run-id>/, verifying every sha256; "
+                                                              "read-only on the target host, does not write project.json")
+    _vr_common(vr_fetch)
+    vr_fetch.add_argument("--id", dest="decl_id", required=True, help="Audit instance's declaration id")
+    vr_fetch.add_argument("--run-id", default=None, help="Run id (default: the active run, else the last run)")
     vr_helper = project_vr_sub.add_parser("helper", help="Print the host-side check helper (pure python3 stdlib single file) or its sha256")
     vr_helper.add_argument("--sha256", action="store_true", help="Print only the helper's sha256")
     vr_helper.add_argument("--home-root", help="Governance home root (unused by helper; accepted for the project family)")

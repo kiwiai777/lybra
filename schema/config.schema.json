@@ -520,7 +520,8 @@
             "VR_CANDIDATE_INVALID": "候选不是卡仓中已有提交的完整 40 位 sha",
             "VR_SIM_INVALID": "AIPOS-F194: 专用模拟器绑定不合(UDID 形不合 / 本 run 已绑定 / UDID 已绑定于他 run, 含审计复用执行 run 的 UDID)",
             "VR_SIM_EVIDENCE_REJECTED": "AIPOS-F194: 专用模拟器证据核对不过(绑定了却无证据 / 未删除 / 多出他台 / 删错他台 / 他 run 证据 / 名或 UDID 不符); 收口或绑定被拒",
-            "VR_HOST_ALIAS_INVALID": "AIPOS-F196: set-host 参数不合(主机标签非法 / 主机是本机 / ssh 别名非法)"
+            "VR_HOST_ALIAS_INVALID": "AIPOS-F196: set-host 参数不合(主机标签非法 / 主机是本机 / ssh 别名非法)",
+            "VR_EVIDENCE_REJECTED": "AIPOS-F200: 远端 run 证据取回不合(声明非审计实例 / 主机是本机 / 未声明 ssh 别名 / 主机侧清单缺失或封签不符 / 清单外或越界路径 / 软链 / 超限 / sha256 不符); 副本未落"
           }
         },
         "launch_guard": {

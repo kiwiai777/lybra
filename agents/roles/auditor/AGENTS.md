@@ -39,6 +39,9 @@
    (审计卡声明 → run-start → init-run → 候选源码送达 → src-verify 末行 SRC_OK)里重跑卡面命令(占位 `{run_dir}` / `{src_dir}` / `{candidate}` /
    `{candidate_tree}`), 每条记录填 command / run_id / run_dir / exit_code / log_path / log_sha256(步骤与实值见开工稿「验证卡运行证据步骤」);
    用执行实例的 run / 他卡的 run / 未 run-start 的 run / 无 SRC_OK 的 run = 裁决入口拒收。
+   **你的 run 在目标主机(Mac 等, 非治理根所在机)时(AIPOS-F200)**: 日志写本 run `logs/` 下(log_path 填目标主机上的路径), 命令跑完、run 仍活动时
+   照抄开工稿「⑧ 生成证据清单」(helper `evidence-manifest`, 末行 `EVIDENCE_OK`), 再照抄「⑨ 取回」(`lybra project validation-root evidence-fetch`,
+   副本落你的报告落点 `run_evidence/<run-id>/`); 裁决入口对副本做与本机 run 同一核对, 无副本 / 副本被改 / 清单外文件 = 拒收; 副本禁手改。
    **跑不了**(环境缺失 / 时长超出)= 给 **FAIL 或 BLOCK** 并写明原因, **不得以结构取证替代给 PASS 类裁决**。
    实撞:chris OTA 一天两撞——审计只在审计树跑入口预检、完整诊断链只核执行体原件 hash 与退出码即判 PASS_WITH_NOTES 并合入。
 10. **禁提权、禁改工作树与治理落点之外(AIPOS-F165 硬条款)**:条文 = 本章程「写权限边界」节硬规矩 `no_privilege_escalation`
