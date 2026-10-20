@@ -393,7 +393,18 @@
       "rendered_sha256"
     ],
     "single_implementation": "tools/aipos_cli/charter_render.py (render_charter / charter_render_context / workstation_identity); 消费方 tools/aipos_cli/distribution_sync.py (apply_charter_render) 与 tools/distribute_tools.py (_primitive_render_charter)",
-    "master_edit_note": "母本 agents/roles/<class>/AGENTS.md 中的项目专有字面(~/projects/lybra 等)改为占位属母本车道(agents/roles/), 本卡车道外, 登记待办; 渲染尾节已提供全部项目专有值, 母本无占位时渲染物 = 母本原文 + 尾节。"
+    "master_edit_note": "母本 agents/roles/<class>/AGENTS.md 中的项目专有字面(~/projects/lybra 等)改为占位属母本车道(agents/roles/), 本卡车道外, 登记待办; 渲染尾节已提供全部项目专有值, 母本无占位时渲染物 = 母本原文 + 尾节。",
+    "hand_maintained_guard": {
+      "description": "AIPOS-F196 件②(Owner 10-20 定: 复用 kiwiai-dev 既有 hbj-coder 工位作 chris 非代码执行 pi; 该工位 AGENTS.md 为 08-30 人工编排期手写章程, 含「禁止 Lybra 分发器覆盖」注释): 工位章程落点上的手写章程带手工维护标记且不是产品渲染物(本地清单无渲染指纹, 或副本 ≠ 记录的渲染物)= sync 拒覆盖(含 --dry-run、loop 拉起前自动 sync、project upgrade 同走 sync, 一处判定), 拒因 refusal_code 并给正式解除出口; 解除 = 单工位 `lybra sync --harness-root <工位> --workspace-root <治理根> --adopt-hand-charter --owner-ref <Owner 裁决引用>`: 原章程按 backup_template 备份保留(不删、不覆盖已有备份), 采纳记录追加到工位 adoption_log(owner_ref / 原件 sha256 / 备份路径 / 时刻), 之后按产品渲染覆盖(F66B 声明缺口 diff 照常出声)。--dry-run 加同旗标 = 预演将备份的路径, 零写入。禁手删标记绕过: 标记只经本出口解除。",
+      "markers": ["禁止 Lybra 分发器", "禁止分发器覆盖", "lybra:hand-maintained"],
+      "refusal_code": "CHARTER_HAND_MAINTAINED",
+      "adopt_flag": "--adopt-hand-charter",
+      "owner_ref_flag": "--owner-ref",
+      "backup_template": "{name}.hand-maintained-{stamp}.bak",
+      "adoption_log": ".lybra/charter-adoptions.jsonl",
+      "multi_workstation": "采纳只对单工位(--harness-root 给工位根); 工位父根多工位 sync 带采纳旗标 = 拒(禁批量解除)",
+      "single_implementation": "tools/aipos_cli/distribution_sync.hand_maintained_charters(判定) / adopt_hand_charters(备份 + 采纳记录); 消费方 distribution_sync.sync"
+    }
   },
   "workstation_ownership_semantics": {
     "description": "AIPOS-F66B 件① 硬前置: 任何分发条目的目标工位按其 .lybra/role 实例的项目段过滤(2026-09-05 chris hbj-coder 工位被写入 lybra 执行体章程的根治)",

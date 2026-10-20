@@ -575,6 +575,11 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
                     "出口: 一卡一仓——执行体把产物提交到卡声明的仓, 或修正 Return frontmatter repo; 跨仓改动拆卡"
                 ]
                 return out
+        # AIPOS-F196 件①: 交付主体为固定候选的卡(validation)= 核候选三键(candidate_subject_values 唯一实值), 不核卡分支 tip
+        candidate_check = _candidate_subject_check(workspace_root, task_id, card_fm, fm, path, kind="return")
+        if candidate_check is not None:
+            out.update(candidate_check)
+            return out
         branch = str(fm.get("branch")).strip()
         commit_sha = str(fm.get("commit_sha")).strip()
         tree_hash = str(fm.get("tree_hash")).strip()
@@ -625,6 +630,18 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         out["reasons"] = [f"{path}: frontmatter 缺 {', '.join(missing)}(声明: transitions.schema artifact_ingest.verdict.required_frontmatter)"]
         return out
     reviewed = str(fm.get("reviewed_task_id") or "").strip() or audit_card_reviewed_id(task_id, card_fm)
+    # AIPOS-F196 件①: 被审卡交付主体为固定候选(validation)= 报告 commit_sha 核候选, 不核被审卡分支 tip
+    candidate_check = _candidate_subject_check(workspace_root, reviewed, repo_fm, fm, path, kind="verdict")
+    if candidate_check is not None:
+        if candidate_check["ok"]:
+            from tools.aipos_cli.board_adapter import runtime_evidence_check
+
+            evidence = runtime_evidence_check(workspace_root, task_id, card_fm, report_path=path, report_fm=fm)
+            if evidence is not None:
+                out["category"], out["reasons"] = evidence["category"], evidence["reasons"]
+                return out
+        out.update(candidate_check)
+        return out
     branch = card_branch_name(reviewed)  # AIPOS-F108 件②: 唯一读取口(声明缺 = SchemaLoadError, 不回落写死)
     tip = _git_out(code_repo, "rev-parse", "--verify", f"{branch}^{{commit}}")
     commit_sha = str(fm.get("commit_sha")).strip()
@@ -650,6 +667,30 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         return out
     out["ok"], out["category"], out["exit_code"] = True, "OK", INGEST_EXIT_RECORDED
     return out
+
+
+def _candidate_subject_check(workspace_root: Path, subject_task_id: str, subject_fm: dict[str, Any] | None, report_fm: dict[str, Any],
+                             path: Path, *, kind: str) -> dict[str, Any] | None:
+    """AIPOS-F196 件①: 交付主体为固定候选的卡(enums.schema task_mode.candidate_subject)的报告核对(return / verdict 同一实现)。
+    None = 被核卡非 candidate 模式(调用方走卡分支 tip 判据); 否则 {ok, category, reasons[, exit_code]}:
+    候选声明不合 = INGEST_CANDIDATE_INVALID; 报告三键(return: commit_sha / tree_hash / branch; verdict: commit_sha)≠ 产品给值 = INGEST_CANDIDATE_MISMATCH。"""
+    from tools.aipos_cli.next_resolver import CandidateSubjectError, candidate_subject_values
+
+    try:
+        values = candidate_subject_values(workspace_root, subject_task_id, subject_fm or {})
+    except CandidateSubjectError as exc:
+        return {"ok": False, "category": "INGEST_CANDIDATE_INVALID",
+                "reasons": [f"卡 {subject_task_id} 固定候选不可用: {exc}。出口: 顾问 lybra queue amend 修正来源卡 / 候选(enums.schema task_mode.candidate_subject)"]}
+    if values is None:
+        return None
+    keys = ("commit_sha", "tree_hash", "branch") if kind == "return" else ("commit_sha",)
+    wrong = [f"{k}={str(report_fm.get(k) or '').strip()!r} ≠ 产品给出 {values[k]}" for k in keys
+             if str(report_fm.get(k) or "").strip() != values[k]]
+    if wrong:
+        return {"ok": False, "category": "INGEST_CANDIDATE_MISMATCH",
+                "reasons": [f"{path}: 本卡交付主体 = 来源卡 {values['source']} 的固定候选 {values['commit_sha']}(验证卡不建卡分支): "
+                            + "; ".join(wrong) + "。出口: 报告 frontmatter 照抄开工提示里产品给出的值"]}
+    return {"ok": True, "category": "OK", "reasons": [], "exit_code": INGEST_EXIT_RECORDED}
 
 
 # ---------------------------------------------------------------------------

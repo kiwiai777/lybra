@@ -243,14 +243,19 @@ def test_item2_draft_defaults_follow_declaration_three_states(tmp_path, monkeypa
     fb = fm_of(b)
     _show(f"[件②·pi 例外] verdict={b['verdict']} assigned_to={fb['assigned_to']} harness={fb['harness']} audit_by={fb['audit_by']}")
     assert b["verdict"] != "BLOCK" and (fb["assigned_to"], fb["harness"], fb["audit_by"]) == (PIX, "pi", AUDITOR)
-    # 未列明的 task_mode 要 pi = 拒(不静默改派); 未明示要 pi 的 config 卡 = 按缺省子 agent
+    # 未列明的 task_mode 要 pi = 拒(不静默改派)
     c = create_draft(gov, _meta("F143-PI-NO", harness="pi"), "## Goal\n\nx\n", dry_run=True)
     _show(f"[件②·pi 未列明拒] verdict={c['verdict']} {c['blocking_reasons'][0]}")
     assert c["verdict"] == "BLOCK" and "EXECUTION_PI_NOT_ALLOWED" in c["blocking_reasons"][0]
+    # AIPOS-F196 件②(Owner 10-20 定: 非代码工作交 pi): 卡稿未给 harness / assigned_to 而 task_mode 在 Owner 明示列内 = 缺省派 pi
+    # (原 F143「须显式要 pi」改为列内缺省 pi); 卡稿显式给子 agent harness = 照卡稿(不静默改派)
     d = create_draft(gov, _meta("F143-CFG", task_mode="config"), "## Goal\n\nx\n")
     fd = fm_of(d)
-    _show(f"[件②·config 未明示 = 缺省] assigned_to={fd['assigned_to']} harness={fd['harness']}")
-    assert (fd["assigned_to"], fd["harness"]) == (SUB, "claude-code")
+    _show(f"[件②·config 列内缺省 = pi(F196)] assigned_to={fd['assigned_to']} harness={fd['harness']}")
+    assert (fd["assigned_to"], fd["harness"]) == (PIX, "pi")
+    d2 = create_draft(gov, _meta("F143-CFG-SUB", task_mode="config", harness="claude-code"), "## Goal\n\nx\n")
+    fd2 = fm_of(d2)
+    assert (fd2["assigned_to"], fd2["harness"]) == (SUB, "claude-code")
     # 审计者恒为声明的独立 pi 审计工位(卡稿写了 audit_by 原样保留, 交发卡核身份判)
     e = create_draft(gov, _meta("F143-AUD", audit_by=AUDITOR), "## Goal\n\nx\n", dry_run=True)
     assert e["verdict"] != "BLOCK"

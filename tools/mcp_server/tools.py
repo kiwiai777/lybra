@@ -301,9 +301,12 @@ def _generate_next_action(current_state: str, task_mode: str, operation: str) ->
             "auth_note": "328机制：executor持dry_run_token自行confirm, owner_confirmation_token为参数字面量OWNER_CONFIRMED（非秘密，公开常量）",
         }
     
-    # N3 return confirm -> N4 audit (code) 或 N6 close (docs/governance/config)
+    # N3 return confirm -> N4 audit (独立审计模式: code / validation) 或 N6 close (docs/governance/config)
+    # AIPOS-F196: 是否独立审计读声明(enums.schema task_mode.independent_audit, 唯一读取口 next_resolver.task_mode_independent_audit)
+    from tools.aipos_cli.next_resolver import task_mode_independent_audit
+
     if operation == "return_confirm" and current_state == "returned":
-        if task_mode == "code":
+        if task_mode_independent_audit(task_mode):
             return {
                 "verb": "lybra_audit_dispatch",
                 "params_hint": "等待 owner/advisor 派审；auditor 认领 R 卡后执行独立审计",

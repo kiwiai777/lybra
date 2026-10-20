@@ -102,6 +102,17 @@ PLACEHOLDER_VALUES = {
     # AIPOS-F185 件②: 撤换在途卡(lybra queue supersede, F184 顾问章程补丁)占位
     "<原卡>": "PROJ-1",
     "<新卡>": "PROJ-2",
+    # AIPOS-F196: 非代码工作交 pi(pi 执行工位接入 / 手写章程接管 / 执行方式 / 目标主机 ssh / 验证根)占位
+    "<执行角色>": "executor",
+    "<Owner裁决引用>": "Owner-ruling-fixture",
+    "<子agent执行实例>": "exec.proj.advhost",
+    "<主机标签>": "mac-probe",
+    "<ssh别名>": "mac-probe",
+    "<Owner授权>": "Owner-grant-fixture",
+    "<目标主机base>": "/Users/probe/proj/scratch",
+    "<主机指纹>": "hfp1:0123456789abcdef0123456789abcdef",
+    "<声明id>": "vr-proj-1-executor-1",
+    "<卡面候选>": "0123456789abcdef0123456789abcdef01234567",
 }
 PLACEHOLDER_RE = re.compile(r"<[^<>\s'\"]+>")
 #: 已退役的子命令(示例不得再教)

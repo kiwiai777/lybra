@@ -43,8 +43,11 @@ RUN_KEYS = ("run_id", "candidate", "started_at", "started_by", "finished_at", "f
 RUN_OPTIONAL_KEYS = ("simulator",)  # AIPOS-F194: 缺键 = 本 run 未绑定专用模拟器(行为不变)
 SIM_KEYS = ("udid", "name", "bound_at", "bound_by", "verified_at", "verified_by", "evidence_sha256")
 TEXT_KEYS = ("title", "relation", "declaration", "directory", "run_active", "run_none", "run_finish", "check_dev", "helper",
-             "sandbox", "redirect_title", "redirect", "side_effect", "block", "init_run", "sim_title", "sim_step")
-ACTIONS = ("declare", "revoke", "run-start", "run-finish", "sim-bind")
+             "sandbox", "redirect_title", "redirect", "side_effect", "block", "init_run", "sim_title", "sim_step", "ssh_mode", "helper_ssh", "init_run_ssh")
+ACTIONS = ("declare", "revoke", "run-start", "run-finish", "sim-bind", "set-host")
+# AIPOS-F196 件③: 目标主机 ssh 访问声明(project.json validation_roots.hosts.<主机标签>; 声明 config.schema validation_roots.schema.hosts)
+HOST_ENTRY_KEYS = ("ssh_alias", "owner_ref", "declared_by", "declared_at")
+_SSH_ALIAS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$")
 
 
 class ValidationRootError(ValueError):
@@ -116,7 +119,7 @@ def reject_codes() -> dict[str, str]:
     codes = decl.get("reject_codes") if isinstance(decl, dict) else None
     needed = ("VR_DECLARATION_INVALID", "VR_BASE_FORBIDDEN", "VR_INSTANCE_NOT_ENROLLED", "VR_ROLE_NOT_ALLOWED", "VR_TASK_NOT_OWNED",
               "VR_HOST_FINGERPRINT_REQUIRED", "VR_HOST_FINGERPRINT_MISMATCH", "VR_NOT_FOUND", "VR_STATE_CONFLICT", "VR_CANDIDATE_INVALID",
-              "VR_SIM_INVALID", "VR_SIM_EVIDENCE_REJECTED")
+              "VR_SIM_INVALID", "VR_SIM_EVIDENCE_REJECTED", "VR_HOST_ALIAS_INVALID")
     if not isinstance(codes, dict) or any(not codes.get(k) for k in needed):
         raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.validation_roots.reject_codes 未声明齐")
     return codes
@@ -183,8 +186,10 @@ def project_validation_roots(governance_root: str | Path, *, project: dict[str, 
     if raw is None:
         return []
     where = "project.json validation_roots"
-    if not isinstance(raw, dict) or set(raw) != {"declarations"} or not isinstance(raw["declarations"], list):
-        raise _err("VR_DECLARATION_INVALID", f"{where} 须为 {{declarations: [...]}}")
+    if (not isinstance(raw, dict) or "declarations" not in raw or set(raw) - {"declarations", "hosts"}
+            or not isinstance(raw["declarations"], list)):
+        raise _err("VR_DECLARATION_INVALID", f"{where} 须为 {{declarations: [...][, hosts: {{...}}]}}")
+    project_validation_hosts(governance_root, project=data)  # AIPOS-F196 件③: hosts 段同一形校验(写前预检 / 写后复核同走)
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
     for index, entry in enumerate(raw["declarations"]):
@@ -231,6 +236,64 @@ def project_validation_roots(governance_root: str | Path, *, project: dict[str, 
                 _parse_iso(run["finished_at"], f"{rat}.finished_at")
         out.append(entry)
     return out
+
+
+def project_validation_hosts(governance_root: str | Path, *, project: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+    """AIPOS-F196 件③: project.json validation_roots.hosts(目标主机标签 → {ssh_alias, owner_ref, declared_by, declared_at})唯一读取口。
+    缺段 / 缺键 = {}(行为不变: 不渲染 ssh 命令)。形不合 = ValidationRootError(VR_DECLARATION_INVALID)。只读。"""
+    from tools.aipos_cli.workspace_config import read_project_json
+
+    data = project if project is not None else read_project_json(governance_root)
+    raw = (data.get("validation_roots") or {}) if isinstance(data.get("validation_roots"), dict) else {}
+    hosts = raw.get("hosts")
+    if hosts is None:
+        return {}
+    where = "project.json validation_roots.hosts"
+    if not isinstance(hosts, dict):
+        raise _err("VR_DECLARATION_INVALID", f"{where} 须为 {{<主机标签>: {{{', '.join(HOST_ENTRY_KEYS)}}}}}")
+    out: dict[str, dict[str, Any]] = {}
+    for label, entry in hosts.items():
+        at = f"{where}.{label}"
+        if not isinstance(label, str) or not _HOST_RE.match(label):
+            raise _err("VR_DECLARATION_INVALID", f"{at}: 主机标签须为 [A-Za-z0-9._-]")
+        if not isinstance(entry, dict) or set(entry) != set(HOST_ENTRY_KEYS):
+            raise _err("VR_DECLARATION_INVALID", f"{at} 键须恰为 {list(HOST_ENTRY_KEYS)}")
+        if not isinstance(entry["ssh_alias"], str) or not _SSH_ALIAS_RE.match(entry["ssh_alias"]):
+            raise _err("VR_DECLARATION_INVALID", f"{at}.ssh_alias={entry['ssh_alias']!r} 须为 ssh 别名([A-Za-z0-9._@-], 不以 - 起首, 无空白)")
+        for key in ("owner_ref", "declared_by"):
+            if not isinstance(entry[key], str) or not entry[key].strip() or "\n" in entry[key]:
+                raise _err("VR_DECLARATION_INVALID", f"{at}.{key} 须为非空单行串")
+        _parse_iso(entry["declared_at"], f"{at}.declared_at")
+        out[label] = dict(entry)
+    return out
+
+
+def ssh_alias_for(governance_root: str | Path, entry: dict[str, Any]) -> str | None:
+    """AIPOS-F196 件③: 本声明是否「执行实例在治理根所在机、经 ssh 操作目标主机」= 目标主机非本机 + 实例工位在本机(enrollment.workstation_location
+    transport=local, 与 loop 拉起同一判定)+ 项目声明了该主机的 ssh 别名(project_validation_hosts)。是 = 别名; 否 = None(渲染照 F190-F194:
+    执行实例在目标主机)。接入登记读不出 = None(不猜)。"""
+    from tools.aipos_cli.enrollment import workstation_location
+
+    if is_local_host(entry.get("host")):
+        return None
+    alias = (project_validation_hosts(governance_root).get(str(entry.get("host") or "")) or {}).get("ssh_alias")
+    if not alias:
+        return None
+    try:
+        loc = workstation_location(governance_root, str(entry.get("instance") or ""))
+    except (OSError, ValueError):
+        return None
+    return alias if loc.get("found") and loc.get("transport") == "local" else None
+
+
+def ssh_command(alias: str, remote: str) -> str:
+    """经 ssh 在目标主机执行一条命令(唯一拼接口): `ssh <别名> '<命令>'`(远端命令整体单引号, 远端 shell 只解析一次)。"""
+    return f"ssh {shlex.quote(alias)} {shlex.quote(remote)}"
+
+
+def helper_pipe_command(governance_root: str | Path, alias: str, remote_args: str) -> str:
+    """helper 经管道送目标主机执行(唯一拼接口): `<lybra> project validation-root helper | ssh <别名> 'python3 - <子命令与参数>'`。"""
+    return f"{_gov_cmd(Path(governance_root).expanduser().resolve())} project validation-root helper | {ssh_command(alias, 'python3 - ' + remote_args)}"
 
 
 def declaration_status(entry: dict[str, Any], now: datetime | None = None) -> str:
@@ -438,6 +501,15 @@ def _candidate_problem(governance_root: Path, entry: dict[str, Any], candidate: 
     fm = _card_fm(governance_root, card) if card else None
     if fm is None:
         return f"卡 {card or entry['task_id']} 不在队列, 无从核候选所在仓"
+    # AIPOS-F196 件①: 固定候选卡(validation; 审计卡按被审卡)的 run 候选须等于卡面候选(next_resolver.card_candidate_subject 唯一读取口)
+    from tools.aipos_cli.next_resolver import CandidateSubjectError, card_candidate_subject
+
+    try:
+        declared = card_candidate_subject(fm)
+    except CandidateSubjectError as exc:
+        return f"卡 {card} 固定候选声明不合: {exc}"
+    if declared is not None and candidate != declared["candidate"]:
+        return f"卡 {card} 是固定候选卡(task_mode={fm.get('task_mode')}), run 候选须 = 卡面候选 {declared['candidate']}, 给出的是 {candidate}"
     try:
         repo = resolve_card_repo(governance_root, fm)
     except CardRepoUnresolved as exc:
@@ -523,6 +595,32 @@ def apply_validation_root_change(governance_root: str | Path, action: str, *, dr
             section = data.get("validation_roots") or {"declarations": []}
             section["declarations"] = list(section.get("declarations") or []) + [entry]
             data["validation_roots"] = section
+    elif action == "set-host":
+        # AIPOS-F196 件③: 目标主机 ssh 访问声明(执行 / 审计实例在治理根所在机经 ssh 操作目标主机); 同标签重声明 = 覆盖(提交史可追溯)
+        host = str(kw.get("host") or "").strip()
+        alias = str(kw.get("ssh_alias") or "").strip()
+        if not _HOST_RE.match(host):
+            raise _err("VR_HOST_ALIAS_INVALID", f"--host {host!r} 须为主机标签([A-Za-z0-9._-], 不含空白)")
+        if is_local_host(host):
+            raise _err("VR_HOST_ALIAS_INVALID", f"--host {host} 是本机(治理根所在机), 无需 ssh 声明")
+        if not _SSH_ALIAS_RE.match(alias):
+            raise _err("VR_HOST_ALIAS_INVALID", f"--ssh-alias {alias!r} 须为 ssh 别名([A-Za-z0-9._@-], 不以 - 起首, 无空白; 即本机 ~/.ssh/config 的 Host 名)")
+        owner_ref = _single_line(kw.get("owner_ref"), "--owner-ref")
+        host_entry = {"ssh_alias": alias, "owner_ref": owner_ref, "declared_by": actor, "declared_at": _iso(now)}
+        previous = project_validation_hosts(gov).get(host)
+        if previous:
+            notes.append(f"主机 {host} 原声明 ssh_alias={previous['ssh_alias']}(by {previous['declared_by']} @ {previous['declared_at']}), 本次覆盖")
+        users = sorted({e["instance"] for e in entries if e["host"] == host and declaration_status(e, now) in ("active", "unbound")})
+        notes.append(f"生效: 本主机有效声明的实例 {users or '(暂无)'} 中工位在本机(治理根所在机)者, 开工稿 / 章程验证根节改为经 `ssh {alias}` "
+                     "操作目标主机的命令(helper 经管道送入, 不落目标主机); 执行实例在目标主机本机的照旧")
+        result = {"entry": None, "run": None, "host": {host: host_entry}}
+
+        def mutate(data: dict[str, Any]) -> None:
+            section = data.get("validation_roots") or {"declarations": []}
+            hosts = dict(section.get("hosts") or {})
+            hosts[host] = host_entry
+            section["hosts"] = hosts
+            data["validation_roots"] = section
     else:
         decl_id = str(kw.get("decl_id") or "").strip()
         entry = dict(_find(entries, decl_id))
@@ -556,7 +654,9 @@ def apply_validation_root_change(governance_root: str | Path, action: str, *, dr
             result = {"entry": entry, "run": run}
             notes.append(f"本次可写目录: {run_directory(entry, run_id)}(run-id 由产品铸; 只此目录可写)")
             # AIPOS-F191 件②: 下一步 = 在目标主机建目录链(唯一铸造口 init_run_command; 封印不含时刻, 预演所示 = 确认后所铸)
-            notes.append(f"{'确认后' if dry_run else ''}下一步(run-start 后第一步): 在目标主机 {entry['host']} 运行: "
+            where = (f"在治理根所在机运行(经 ssh {ssh_alias_for(gov, entry)} 到目标主机 {entry['host']})" if ssh_alias_for(gov, entry)
+                     else f"在目标主机 {entry['host']} 运行")
+            notes.append(f"{'确认后' if dry_run else ''}下一步(run-start 后第一步): {where}: "
                          f"{init_run_command(gov, entry, run)}(只建空目录链 0700, 末行 INIT_OK + 退出码 0 = 成功; 角色不得自行 mkdir base / 卡层)")
         elif action == "sim-bind":
             # AIPOS-F194 件②④: 本 run 专用模拟器 UDID 绑定进本 run 记录(与 run-id 同一处); 审计 run 须新建自己的, 不得复用他 run UDID
@@ -825,11 +925,15 @@ def _judge_sim_access(entries: list[dict[str, Any]], hit: dict[str, Any], *, raw
 
 def init_run_command(governance_root: str | Path, entry: dict[str, Any], run: dict[str, Any]) -> str:
     """AIPOS-F191: 目标主机目录链初始化命令(唯一铸造口)。helper 取自治理根所在机(`project validation-root helper`), 经管道交
-    `python3 -` 运行(run 目录尚不存在, helper 不落盘); 封印 = helper.init_seal(base, run 目录, 指纹, 到期)。调用方保证声明 active 且 run 活动。"""
+    `python3 -` 运行(run 目录尚不存在, helper 不落盘); 封印 = helper.init_seal(base, run 目录, 指纹, 到期)。调用方保证声明 active 且 run 活动。
+    AIPOS-F196 件③: 执行实例在治理根所在机、经 ssh 操作目标主机(ssh_alias_for)= `… helper | ssh <别名> 'python3 - init-run …'`(三出口同源)。"""
     run_dir = run_directory(entry, run["run_id"])
     seal = helper.init_seal(entry["base"], run_dir, entry["host_fingerprint"], entry["expires_at"])
     args = " ".join(shlex.quote(str(a)) for a in ("--base", entry["base"], "--run-dir", run_dir, "--expect-fingerprint",
                                                     entry["host_fingerprint"], "--expires-at", entry["expires_at"], "--seal", seal))
+    alias = ssh_alias_for(governance_root, entry)
+    if alias:
+        return helper_pipe_command(governance_root, alias, f"init-run {args}")
     return f"{_gov_cmd(Path(governance_root).expanduser().resolve())} project validation-root helper | python3 - init-run {args}"
 
 
@@ -847,7 +951,8 @@ def init_command(governance_root: str | Path, decl_id: str, *, instance: str | N
     run = active_run(entry)
     if run is None:
         raise _err("VR_STATE_CONFLICT", f"声明 {entry['id']} 无活动 run(已结束 run 不再初始化); 先由顾问 / 驱动方 run-start")
-    return {"entry": entry, "run": run, "run_dir": run_directory(entry, run["run_id"]), "command": init_run_command(gov, entry, run)}
+    return {"entry": entry, "run": run, "run_dir": run_directory(entry, run["run_id"]), "command": init_run_command(gov, entry, run),
+            "ssh_alias": ssh_alias_for(gov, entry)}
 
 
 def executor_run_dir_refs(governance_root: str | Path, reviewed_task_id: str, texts: list[str]) -> list[str]:
@@ -920,17 +1025,25 @@ def render_section_lines(governance_root: str | Path, *, instance: str, task_id:
                   "helper_fetch": f"{gcmd} project validation-root helper", "helper_sha256": helper_sha256(),
                   "helper_path": f"{run_dir}/.lybra-vr/validation_root_helper.py",
                   "init_run": init_run_command(gov, entry, run) if run and status == "active" else ""}
-        values.update(_sim_values(gov, entry, run, values))
+        # AIPOS-F196 件③: 执行实例在治理根所在机、经 ssh 操作目标主机(ssh_alias_for 唯一判定)→ 目标主机命令一律 ssh 形, helper 经管道送入
+        alias = ssh_alias_for(gov, entry) if status in ("active", "unbound") else None
+        values.update({"ssh_alias": alias or "", "gate_host": local_host_label(),
+                       "helper_pipe": f"{gcmd} project validation-root helper | ssh {shlex.quote(alias)}" if alias else "",
+                       "check_ssh": helper_pipe_command(gov, alias, f"check --run-dir {shlex.quote(run_dir)} --path <目标> "
+                                                                    f"--expect-fingerprint {values['fingerprint']}") if alias else ""})
+        values.update(_sim_values(gov, entry, run, values, alias=alias))
         lines.append(_fill(texts["declaration"], values))
         lines.append(_fill(texts["directory"], values))
         if status not in ("active", "unbound"):
             continue
+        if alias:
+            lines.append(_fill(texts["ssh_mode"], values))  # AIPOS-F196 件③: 经 ssh 操作目标主机的总则(只写本 run 验证根 / 禁 sudo / 禁改 ssh 配置)
         lines.append(_fill(texts["run_active"] if run else texts["run_none"], values))
         if values["init_run"]:
-            lines.append(_fill(texts["init_run"], values))  # AIPOS-F191 件②: run-start 后第一步 = 目录链初始化
+            lines.append(_fill(texts["init_run_ssh" if alias else "init_run"], values))  # AIPOS-F191 件②: run-start 后第一步 = 目录链初始化
         lines.append(_fill(texts["check_dev"], values))
         if not is_local_host(entry["host"]):
-            lines.append(_fill(texts["helper"], values))
+            lines.append(_fill(texts["helper_ssh"] if alias else texts["helper"], values))
         kinds = [harness] if harness and harness in sandboxes else sorted(sandboxes)
         for kind in kinds:
             spec = sandboxes[kind]
@@ -952,23 +1065,28 @@ def render_section_lines(governance_root: str | Path, *, instance: str, task_id:
     return lines
 
 
-def _sim_values(governance_root: Path, entry: dict[str, Any], run: dict[str, Any] | None, values: dict[str, Any]) -> dict[str, Any]:
-    """AIPOS-F194: 开工稿 / 章程「本 run 专用模拟器」步骤的渲染值(命令全由声明 + 本 run 记录铸; 未绑定 = UDID 占位)。"""
+def _sim_values(governance_root: Path, entry: dict[str, Any], run: dict[str, Any] | None, values: dict[str, Any], *,
+                alias: str | None = None) -> dict[str, Any]:
+    """AIPOS-F194: 开工稿 / 章程「本 run 专用模拟器」步骤的渲染值(命令全由声明 + 本 run 记录铸; 未绑定 = UDID 占位)。
+    AIPOS-F196 件③: alias = 经 ssh 操作目标主机(ssh_alias_for)→ helper 子命令一律 `… helper | ssh <别名> 'python3 - <子命令> …'`。"""
     sim_decl = ios_simulator_declaration()
     run_id = run["run_id"] if run else "<run-id>"
     bound = (run or {}).get("simulator") or {}
     udid = bound.get("udid") or "<本 run UDID(sim-create 末行 SIM_CREATED udid=…)>"
-    helper_cmd = f"python3 {values['helper_path']}"
     common = f"--run-dir {values['run_dir']} --expect-fingerprint {values['fingerprint']}"
     patterns = " ".join(f"--pattern {shlex.quote(p)}" for p in sim_decl["xcode_temp_side_effects"]["patterns"])
+
+    def helper_cmd(sub: str) -> str:
+        return helper_pipe_command(governance_root, alias, sub) if alias else f"python3 {values['helper_path']} {sub}"
+
     gcmd = _gov_cmd(governance_root)
     evidence = f"{values['run_dir']}/{sim_decl['evidence_file']}"
     sim_values = {"sim_name": simulator_name(entry, run_id), "sim_udid": udid, "devices_rel": sim_decl["devices_rel"],
                   "sim_evidence": evidence, "side_evidence": f"{values['run_dir']}/{sim_decl['side_evidence_file']}",
-                  "sim_create": f"{helper_cmd} sim-create {common} --device-type <设备型号 id> --runtime <运行时 id>",
-                  "sim_verify": f"{helper_cmd} sim-verify {common}", "sim_delete": f"{helper_cmd} sim-delete {common}",
-                  "side_before": f"{helper_cmd} sys-snapshot {common} --phase before {patterns}",
-                  "side_after": f"{helper_cmd} sys-snapshot {common} --phase after {patterns}",
+                  "sim_create": helper_cmd(f"sim-create {common} --device-type <设备型号 id> --runtime <运行时 id>"),
+                  "sim_verify": helper_cmd(f"sim-verify {common}"), "sim_delete": helper_cmd(f"sim-delete {common}"),
+                  "side_before": helper_cmd(f"sys-snapshot {common} --phase before {patterns}"),
+                  "side_after": helper_cmd(f"sys-snapshot {common} --phase after {patterns}"),
                   "sim_bind": f"{gcmd} project validation-root sim-bind --id {entry['id']} --run-id {run_id} --udid {bound.get('udid') or '<UDID>'} "
                               "--confirm --actor <顾问实例>",
                   "run_finish_sim": f"{gcmd} project validation-root run-finish --id {entry['id']} --run-id {run_id} --sim-evidence "

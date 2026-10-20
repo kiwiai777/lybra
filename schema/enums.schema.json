@@ -267,40 +267,70 @@
       "product_repo_write": {
         "description": "AIPOS-F178(10-16 chris 岚图 LANTU-HW1 实撞: task_mode=docs + lane.repo=lantu-contracts 的卡认领成功却未建卡工作树, 开工说明却指向 <仓>/.worktrees/<ID>): 「卡是否写产品仓 = 是否建卡工作树」的唯一判据声明。每个值带 writes_product_repo(该模式缺省是否写产品仓); 卡面 lane.repo 显式出现且解析到的仓不是治理根自身 = 写仓(不论模式); 审计卡(audit)本身不写仓, 其只读取证工作树跟随被审卡(被审卡写仓 = 建取证树)。认领建树(queue_mutation)/ loop 认领后核验与自动补建 / `lybra queue repair` 缺树修复 / my-tasks 开工面 / card render 开工说明 / write_boundary / finalize 缺分支判定 / 审计裁决绑卡分支 tip 全部先问这一个判据, 禁第二判据。缺值或未知 task_mode = 缺省不写仓(行为同 F178 前)。",
         "single_implementation": "tools/aipos_cli/next_resolver.card_needs_worktree",
-        "lane_repo_rule": "卡面 lane.repo 非空且经 workspace_config.resolve_card_repo 解析到的仓 ≠ 治理根自身 = 写仓; 解析失败 = 按写仓(建树时给出拒因, fail-closed)",
+        "lane_repo_rule": "卡面 lane.repo 非空且经 workspace_config.resolve_card_repo 解析到的仓 ≠ 治理根自身 = 写仓; 解析失败 = 按写仓(建树时给出拒因, fail-closed)。AIPOS-F196 例外: 交付主体为固定候选的模式(值带 subject=candidate, 见 candidate_subject)的 lane.repo = 候选所在仓(只读取证), 不算写仓, 不建卡工作树 / 卡分支",
         "audit_rule": "审计卡 = 被审卡是否写仓(被审卡查不到 / 审计卡缺被审卡字段 = 按需建, 建树时给出拒因)"
+      },
+      "independent_audit": {
+        "description": "AIPOS-F196 件①: 该模式卡交回后是否走独立审计(N3 派审 → N4 独立审计工位裁决)的唯一声明。每值带 independent_audit(布尔): true = 交回即派审; false = 顾问复核(卡面 audit: required 仍可显式打开独立审计)。读取方: 推导核派审 / 非代码快车道分流(next_resolver.derive_next_step)、门 next_action 提示(mcp_server.tools._generate_next_action)、发卡核审计者缺省(draft_writer.publish_identity_refusals)全部只问读取口, 禁写死 task_mode == code。缺值 / 未知 task_mode = false(行为同 F196 前: 只有 code 走独立审计)。",
+        "single_implementation": "tools/aipos_cli/next_resolver.task_mode_independent_audit"
+      },
+      "candidate_subject": {
+        "description": "AIPOS-F196 件①(Owner 10-20 定: 非代码工作交 pi, 验证卡保留独立审计): 值带 subject=candidate 的模式(validation)= 对来源卡的固定候选 sha 做环境构建 / 模拟器构建运行 / 截图与运行证据, 交付主体是那个候选提交本身, 不是卡分支。一处声明的全部后果: ①不写产品仓源码——lane.repo = 候选所在仓(只读取证), 不建卡工作树 / 卡分支(next_resolver.card_writes_product_repo); 产物只落验证根(project.json validation_roots, 本卡本活动 run 目录)与治理根报告落点; ②卡面必填来源卡与候选(fields), 起草 / 发卡即核(候选须为 lane.repo 解析仓中已有提交的完整 40 位 sha; 来源卡须在队列), 验证根 run-start 的候选须等于卡面候选; ③交回 / 审计报告 frontmatter 三键由产品给值(commit_sha = 候选, tree_hash = 候选 tree, branch = 来源卡卡分支名), 入口核候选而非卡分支 tip; ④独立审计(independent_audit=true), 裁决 artifact_subject = 候选(门侧同核); ⑤N5 无合入: finalize 不合并 / 不推送 / 不部署, 写 finalization 记录(commit = merge_commit = 候选, deploy_status / push_status = not_applicable 并写明「验证卡无合入」)后照常 N6 结案; ⑥开工面: 不建树的验证卡与其审计卡照常入选工位 next_card, 开工提示按 kickoff.template_no_worktree 渲染(含本卡验证根节, 经 ssh 操作目标主机时含 ssh 命令)。",
+        "fields": {
+          "source": "validation_source_task",
+          "candidate": "validation_candidate"
+        },
+        "single_implementation": "tools/aipos_cli/next_resolver.card_candidate_subject",
+        "reject_codes": {
+          "VALIDATION_SUBJECT_MISSING": "subject=candidate 模式卡缺来源卡(validation_source_task)或候选(validation_candidate)",
+          "VALIDATION_CANDIDATE_INVALID": "候选不是完整 40 位小写 sha, 或不是卡 lane.repo 解析仓中已有提交",
+          "VALIDATION_SOURCE_UNKNOWN": "来源卡不在任何队列目录(须为本项目已发布的卡)"
+        }
       },
       "routing_rules": {
         "code": "Full workflow N0→N6 (all nodes including independent audit N4 and finalize N5)",
         "docs": "Skip N4/N5, advisor review replaces independent audit",
         "governance": "Skip N4/N5, advisor review replaces independent audit",
-        "config": "Skip N4/N5, advisor review replaces independent audit"
+        "config": "Skip N4/N5, advisor review replaces independent audit",
+        "validation": "AIPOS-F196: N0→N4 with independent audit of the fixed candidate (no card worktree/branch); N5 = no merge/push/deploy (finalization record states integration none), N6 close"
       },
       "values": [
         {
           "value": "code",
           "description": "Code implementation task - full workflow with independent audit",
-          "writes_product_repo": true
+          "writes_product_repo": true,
+          "independent_audit": true
         },
         {
           "value": "docs",
           "description": "Documentation task - advisor review, skip independent audit",
-          "writes_product_repo": false
+          "writes_product_repo": false,
+          "independent_audit": false
         },
         {
           "value": "governance",
           "description": "Governance task - advisor review, skip independent audit",
-          "writes_product_repo": false
+          "writes_product_repo": false,
+          "independent_audit": false
         },
         {
           "value": "config",
-          "description": "Configuration task - advisor review, skip independent audit",
-          "writes_product_repo": false
+          "description": "Configuration task (environment build / configuration) - advisor review, skip independent audit",
+          "writes_product_repo": false,
+          "independent_audit": false
         },
         {
           "value": "audit",
           "description": "Audit task (R cards) - gate-generated to review completed work",
-          "writes_product_repo": false
+          "writes_product_repo": false,
+          "independent_audit": false
+        },
+        {
+          "value": "validation",
+          "description": "AIPOS-F196: validation of a fixed candidate sha of a source card (environment build, simulator/emulator build and run, screenshots and run evidence on the declared validation root); never writes product source; independent audit; no merge at N5",
+          "writes_product_repo": false,
+          "independent_audit": true,
+          "subject": "candidate"
         }
       ]
     },

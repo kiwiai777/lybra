@@ -80,7 +80,8 @@ def test_item1_declaration_and_single_criterion(tmp_path, monkeypatch):
     enums = json.loads((REPO_ROOT / "schema" / "enums.schema.json").read_text(encoding="utf-8"))["enums"]["task_mode"]
     flags = {v["value"]: v["writes_product_repo"] for v in enums["values"]}
     _show(f"[item1 declaration] writes_product_repo={flags} single_implementation={enums['product_repo_write']['single_implementation']}")
-    assert flags == {"code": True, "docs": False, "governance": False, "config": False, "audit": False}
+    # AIPOS-F196: 值域只追加(validation = 固定候选验证, 不写产品仓)
+    assert flags == {"code": True, "docs": False, "governance": False, "config": False, "audit": False, "validation": False}
     assert enums["product_repo_write"]["single_implementation"] == "tools/aipos_cli/next_resolver.card_needs_worktree"
 
     gov, repos = _dual_gov(tmp_path, monkeypatch)

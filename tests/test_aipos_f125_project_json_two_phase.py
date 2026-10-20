@@ -31,7 +31,7 @@ COMMANDS = ("set-paths", "set-repo", "set-repos", "set-workstation")
 # (键须 config.schema project_json 已声明, 本文件的逐命令写入参数化只覆盖上面四个)
 DECLARED_COMMANDS = COMMANDS + ("set-meta", "set-execution", "set-model", "set-return-summary",
                                 "validation-root declare", "validation-root revoke", "validation-root run-start", "validation-root run-finish",
-                                "validation-root sim-bind")  # AIPOS-F190: validation-root 四写动作同族(正反例见 test_aipos_f190_validation_root.py); AIPOS-F194: sim-bind 同族(正反例见 test_aipos_f194_ios_run_simulator.py); AIPOS-F169: set-model 同族(正反例见 test_aipos_f169_pi_model_declaration.py); AIPOS-F143 件②: set-execution 登记于同一声明(正反例见 test_aipos_f143_execution_mode.py); AIPOS-F148 件②: set-return-summary 同(正反例见 test_aipos_f148_card_return_declarations.py)
+                                "validation-root sim-bind", "validation-root set-host")  # AIPOS-F196: set-host 同族(正反例见 test_aipos_f196_validation_to_pi.py); AIPOS-F190: validation-root 四写动作同族(正反例见 test_aipos_f190_validation_root.py); AIPOS-F194: sim-bind 同族(正反例见 test_aipos_f194_ios_run_simulator.py); AIPOS-F169: set-model 同族(正反例见 test_aipos_f169_pi_model_declaration.py); AIPOS-F143 件②: set-execution 登记于同一声明(正反例见 test_aipos_f143_execution_mode.py); AIPOS-F148 件②: set-return-summary 同(正反例见 test_aipos_f148_card_return_declarations.py)
 SECRET = "lybra_tok_F125SECRETabcdefghijklmnopqrstuvwxyz0123456789"
 PREVIEW = "预览(未写; 加 --confirm 写入)"
 

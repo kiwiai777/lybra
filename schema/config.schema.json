@@ -493,6 +493,18 @@
                 "revoke_reason": "撤销原因",
                 "runs": "run 列表(只追加): {run_id, candidate(固定候选 40 位 sha), started_at, started_by, finished_at, finished_by[, simulator]}; AIPOS-F194 可选键 simulator(缺省 = 缺键 = 本 run 未绑定专用模拟器, 行为不变)= {udid, name(lybra-<卡>-<run>), bound_at, bound_by, verified_at, verified_by, evidence_sha256}: `validation-root sim-bind` 写入(UDID 与 run-id 同一处), `run-finish --sim-evidence` 核对删除后补 verified_* 与证据 sha256(声明 roles.schema write_boundary.validation_root.ios_simulator)"
               }
+            },
+            "hosts": {
+              "type": "object",
+              "required": false,
+              "default": null,
+              "description": "AIPOS-F196 件③(Owner 10-20 定: dev 上的 pi 经 ssh 操作 Mac): 目标主机 ssh 访问声明, 键 = 声明条目所用主机标签(host), 值 = {ssh_alias(治理根所在机 ~/.ssh/config 的 Host 名), owner_ref, declared_by, declared_at}。缺段 / 缺键 = 行为不变(执行实例在目标主机本机, 开工稿与章程照 F190-F194 渲染)。生效条件(validation_root.ssh_alias_for 唯一判定): 声明条目主机非本机 + 该实例工位在治理根所在机(enrollment.workstation_location transport=local, 与 loop 拉起同一判定)+ 本段声明了该主机别名 → 开工稿 / 章程验证根节与 init-command / run-start 输出改为治理根所在机经 `ssh <别名> '<命令>'` 操作目标主机, helper 子命令经管道 `lybra … helper | ssh <别名> 'python3 - <子命令> …'`(不落目标主机)。约束 = 章程 + 目标主机 helper 自查 + 审计追责(无硬沙箱, Owner 已知悉)。唯一读取口 validation_root.project_validation_hosts; 唯一写入口 `lybra project validation-root set-host --host <标签> --ssh-alias <别名> --owner-ref <Owner 授权> [--dry-run|--confirm]`(apply_validation_root_change set-host, 经 update_project_json; 同标签重声明 = 覆盖, 提交史可追溯)。",
+              "entry_schema": {
+                "ssh_alias": "ssh 别名([A-Za-z0-9._@-], 不以 - 起首, 无空白)",
+                "owner_ref": "Owner 授权引用(单行, 禁凭据)",
+                "declared_by": "声明者(--actor)",
+                "declared_at": "声明时刻 ISO Z"
+              }
             }
           },
           "reject_codes": {
@@ -507,7 +519,8 @@
             "VR_STATE_CONFLICT": "状态不允许(已撤销 / 已到期 / 已有活动 run / 无此活动 run)",
             "VR_CANDIDATE_INVALID": "候选不是卡仓中已有提交的完整 40 位 sha",
             "VR_SIM_INVALID": "AIPOS-F194: 专用模拟器绑定不合(UDID 形不合 / 本 run 已绑定 / UDID 已绑定于他 run, 含审计复用执行 run 的 UDID)",
-            "VR_SIM_EVIDENCE_REJECTED": "AIPOS-F194: 专用模拟器证据核对不过(绑定了却无证据 / 未删除 / 多出他台 / 删错他台 / 他 run 证据 / 名或 UDID 不符); 收口或绑定被拒"
+            "VR_SIM_EVIDENCE_REJECTED": "AIPOS-F194: 专用模拟器证据核对不过(绑定了却无证据 / 未删除 / 多出他台 / 删错他台 / 他 run 证据 / 名或 UDID 不符); 收口或绑定被拒",
+            "VR_HOST_ALIAS_INVALID": "AIPOS-F196: set-host 参数不合(主机标签非法 / 主机是本机 / ssh 别名非法)"
           }
         },
         "launch_guard": {
@@ -557,7 +570,7 @@
               "items": {
                 "$enum": "task_mode"
               },
-              "description": "Owner 明示允许派 pi 执行工位的 task_mode 列表(值域 enums.schema task_mode); 未列明 = 按缺省(子 agent)。起草卡显式给 harness=pi(或 assigned_to=pi_executor)且 task_mode 在列才派 pi; 不在列 = 起草/发卡拒 EXECUTION_PI_NOT_ALLOWED。"
+              "description": "Owner 明示允许派 pi 执行工位的 task_mode 列表(值域 enums.schema task_mode); 未列明 = 按缺省(子 agent)。起草卡显式给 harness=pi(或 assigned_to=pi_executor)且 task_mode 在列才派 pi; 不在列 = 起草/发卡拒 EXECUTION_PI_NOT_ALLOWED。AIPOS-F196 件②(Owner 10-20 定: 只有代码卡由顾问派子 agent, 其他非代码工作拉 pi): 卡稿既未给 harness 也未给 assigned_to 而 task_mode 在列 = 起草缺省 harness=pi、assigned_to=pi_executor(loop 自动拉起); 判定唯一 workspace_config.execution_wants_pi。chris 形: --pi-allowed-task-mode validation --pi-allowed-task-mode config --pi-allowed-task-mode docs(code 不列 = 仍子 agent)。"
             },
             "pi_executor": {
               "type": "string",

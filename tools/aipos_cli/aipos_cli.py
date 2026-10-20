@@ -1745,16 +1745,19 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
     if args.vr_command == "list":
         try:
             entries = vr.project_validation_roots(root)
+            hosts = vr.project_validation_hosts(root)  # AIPOS-F196 件③
         except (vr.ValidationRootError, SchemaLoadError, OSError, ValueError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
         entries = [e for e in entries if (not args.task_id or e["task_id"] == args.task_id) and (not args.host or e["host"] == args.host)]
         if args.json:
-            print(render_json({"project": target["project"], "declarations": entries, "helper_sha256": vr.helper_sha256()}))
+            print(render_json({"project": target["project"], "declarations": entries, "hosts": hosts, "helper_sha256": vr.helper_sha256()}))
         else:
             print(f"项目 {target['project']} 验证根声明(project.json validation_roots):")
             for line in vr.render_list_lines(entries):
                 print(f"  {line}")
+            for label, h in sorted(hosts.items()):
+                print(f"  目标主机 {label}: ssh 别名 {h['ssh_alias']}(owner_ref={h['owner_ref']}, by {h['declared_by']} @ {h['declared_at']})")
         return 0
     if args.vr_command == "init-command":  # AIPOS-F191: 只读重取目标主机目录链初始化命令(唯一铸造口 validation_root.init_command)
         try:
@@ -1769,9 +1772,12 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
             return 1
         if args.json:
             print(render_json({"project": target["project"], "declaration_id": got["entry"]["id"], "host": got["entry"]["host"],
-                               "run_id": got["run"]["run_id"], "run_dir": got["run_dir"], "command": got["command"]}))
+                               "run_id": got["run"]["run_id"], "run_dir": got["run_dir"], "command": got["command"],
+                               "ssh_alias": got.get("ssh_alias")}))
         else:
-            print(f"声明 {got['entry']['id']} 活动 run {got['run']['run_id']}: 在目标主机 {got['entry']['host']} 运行(只建空目录链 {got['run_dir']}):")
+            where = (f"在治理根所在机运行(经 ssh {got['ssh_alias']} 到目标主机 {got['entry']['host']})" if got.get("ssh_alias")
+                     else f"在目标主机 {got['entry']['host']} 运行")
+            print(f"声明 {got['entry']['id']} 活动 run {got['run']['run_id']}: {where}(只建空目录链 {got['run_dir']}):")
             print(got["command"])
         return 0
     action = args.vr_command
@@ -1781,7 +1787,8 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
             task_id=getattr(args, "task_id", None), instance=getattr(args, "instance", None), expires_at=getattr(args, "expires_at", None),
             owner_ref=getattr(args, "owner_ref", None), host_fingerprint=getattr(args, "host_fingerprint", None),
             decl_id=getattr(args, "decl_id", None), reason=getattr(args, "reason", None), candidate=getattr(args, "candidate", None),
-            run_id=getattr(args, "run_id", None), udid=getattr(args, "udid", None), sim_evidence=getattr(args, "sim_evidence", None))
+            run_id=getattr(args, "run_id", None), udid=getattr(args, "udid", None), sim_evidence=getattr(args, "sim_evidence", None),
+            ssh_alias=getattr(args, "ssh_alias", None))
     except vr.ValidationRootError as exc:
         print(f"Error: {exc.code}(project.json 未改动)", file=sys.stderr)
         for problem in exc.problems:
@@ -1790,6 +1797,14 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
     except (SchemaLoadError, OSError) as exc:
         print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
         return 1
+    json_out = getattr(args, "json", False)
+    payload = {k: outcome[k] for k in ("dry_run", "changed", "written", "diff", "project_json")}
+    if action == "set-host":  # AIPOS-F196 件③: 目标主机 ssh 访问声明(project.json validation_roots.hosts)
+        (label, host_entry), = outcome["host"].items()
+        details = [f"主机 {label}: ssh 别名 {host_entry['ssh_alias']} owner_ref={host_entry['owner_ref']} declared_by={host_entry['declared_by']}",
+                   *outcome["notes"]]
+        return _project_json_two_phase_emit("validation-root set-host", target, payload, actor=args.actor, json_out=json_out,
+                                            extra={"action": action, "host": outcome["host"], "notes": outcome["notes"]}, details=details)
     entry, run = outcome["entry"], outcome.get("run")
     details = [f"声明 {entry['id']}: 主机 {entry['host']}(指纹 {entry['host_fingerprint'] or '(未绑定)'}) 卡 {entry['task_id']} "
                f"实例 {entry['instance']}({entry['role_class']}) 到期 {entry['expires_at']} owner_ref={entry['owner_ref']}",
@@ -1800,9 +1815,7 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
             sim = run["simulator"]
             details.append(f"专用模拟器 {sim['name']} udid={sim['udid']}" + (f" 删除核对通过 {sim['verified_at']}" if sim.get("verified_at") else ""))
     details += list(outcome["notes"])
-    payload = {k: outcome[k] for k in ("dry_run", "changed", "written", "diff", "project_json")}
     extra = {"action": action, "declaration": entry, "run": run, "notes": outcome["notes"]}
-    json_out = getattr(args, "json", False)
     if action == "declare":
         return _project_json_two_phase_emit("validation-root declare", target, payload, actor=args.actor, json_out=json_out,
                                             extra=extra, details=details)
@@ -2146,6 +2159,11 @@ def build_parser() -> argparse.ArgumentParser:
     sync_parser.add_argument("--gate-url", default=None, help="Gate MCP URL (auto from .lybra if omitted)")
     sync_parser.add_argument("--token", default=None, help="Bearer token (auto from .lybra connection.json if omitted)")
     sync_parser.add_argument("--json", action="store_true", help="Output JSON")
+    sync_parser.add_argument("--adopt-hand-charter", action="store_true",
+                             help="AIPOS-F196: formally take over a hand-maintained workstation charter (one carrying a hand-maintained marker such as "
+                                  "「禁止 Lybra 分发器覆盖」): back the original up (never deleted), log the adoption, then render the product charter; "
+                                  "single workstation only, requires --owner-ref; add --dry-run to preview the backup path")
+    sync_parser.add_argument("--owner-ref", default=None, help="AIPOS-F196: Owner decision reference authorizing --adopt-hand-charter (single line, no credentials)")
 
     queue_claim_parser = queue_subparsers.add_parser("claim", help="Move a task from pending to claimed")
     _queue_mutation_arguments(queue_claim_parser)
@@ -2847,6 +2865,14 @@ def build_parser() -> argparse.ArgumentParser:
     vr_simbind.add_argument("--udid", required=True, help="UDID printed by the helper's sim-create (SIM_CREATED udid=...)")
     vr_simbind.add_argument("--sim-evidence", default=None, help="Optional local copy of the run's .lybra-vr/simulator.json (creation is verified)")
     _project_json_two_phase_flags(vr_simbind, "validation-root sim-bind")
+    vr_sethost = project_vr_sub.add_parser("set-host", help="AIPOS-F196: declare how instances on this (governance-root) machine reach a target "
+                                                         "host over ssh (project.json validation_roots.hosts.<host> = ssh alias); kickoff / charter "
+                                                         "validation-root sections then render `ssh <alias> ...` commands and pipe the helper")
+    _vr_common(vr_sethost)
+    vr_sethost.add_argument("--host", required=True, help="Target host label used by the declarations (e.g. kiwiai-mac)")
+    vr_sethost.add_argument("--ssh-alias", required=True, help="ssh alias on this machine (a Host entry of ~/.ssh/config), e.g. kiwiai-mac")
+    vr_sethost.add_argument("--owner-ref", required=True, help="Owner authorization reference (single line, no credentials)")
+    _project_json_two_phase_flags(vr_sethost, "validation-root set-host")
     vr_list = project_vr_sub.add_parser("list", help="List validation root declarations and runs (read-only)")
     _vr_common(vr_list)
     vr_list.add_argument("--task-id", default=None, help="Only this card")

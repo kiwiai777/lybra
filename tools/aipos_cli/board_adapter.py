@@ -4799,7 +4799,21 @@ def _build_audit_verdict_preview(
     # AIPOS-F70: artifact_subject fail-closed 校验 (task_mode=code 的被审卡必须提供)
     # 读取被审任务的 task_mode
     reviewed_task_mode = str(reviewed_metadata.get("task_mode") or "").strip()
-    if reviewed_task_mode == "code":
+    # AIPOS-F196 件①: 交付主体为固定候选的被审卡(validation)= 裁决 artifact_subject 必须精确是该候选(唯一读取口 card_candidate_subject)
+    from tools.aipos_cli.next_resolver import CandidateSubjectError, card_candidate_subject
+
+    try:
+        reviewed_candidate = card_candidate_subject(reviewed_metadata)
+    except CandidateSubjectError as exc:
+        reviewed_candidate = None
+        blocking_reasons.append(f"AIPOS-F196: 被审卡固定候选声明不合: {exc}")
+    if reviewed_candidate is not None:
+        audited = str((artifact_subject or {}).get("commit_sha") or "").strip() if isinstance(artifact_subject, dict) else ""
+        if audited != reviewed_candidate["candidate"]:
+            blocking_reasons.append(
+                f"AIPOS-F196: 被审卡 task_mode={reviewed_task_mode} 的交付主体 = 固定候选 {reviewed_candidate['candidate']}, "
+                f"裁决 artifact_subject.commit_sha={audited or '(缺)'} 不符(fail-closed)")
+    elif reviewed_task_mode == "code":
         if not artifact_subject or not isinstance(artifact_subject, dict):
             blocking_reasons.append(
                 "AIPOS-F70: task_mode=code 的被审卡必须提供 artifact_subject 参数 "

@@ -2163,11 +2163,17 @@ EXECUTION_MODE_SUBAGENT = "subagent"
 
 
 def execution_wants_pi(execution: dict[str, Any], card: dict[str, Any] | None) -> bool:
-    """卡要派 pi 执行工位: harness=pi, 或未给 harness 而 assigned_to = 声明的 pi_executor(起草缺省与卡执行方式同一谓词)。"""
+    """卡要派 pi 执行工位: harness=pi, 或未给 harness 而 assigned_to = 声明的 pi_executor(起草缺省与卡执行方式同一谓词)。
+    AIPOS-F196 件②(Owner 10-20 定: 非代码工作交 pi): 卡稿既未给 harness 也未给 assigned_to, 而其 task_mode 在 Owner 明示的
+    pi_allowed_task_modes 内且声明了 pi_executor = 缺省派 pi(validation / config / docs 等); 不在列(如 code)= 缺省子 agent(行为不变)。"""
     fm = card if isinstance(card, dict) else {}
     harness = str(fm.get("harness") or "").strip()
     assigned = str(fm.get("assigned_to") or "").strip()
-    return harness == EXECUTION_MODE_PI or (not harness and bool(assigned) and assigned == execution.get("pi_executor"))
+    if harness == EXECUTION_MODE_PI or (not harness and bool(assigned) and assigned == execution.get("pi_executor")):
+        return True
+    mode = str(fm.get("task_mode") or "").strip()
+    return (not harness and not assigned and bool(execution.get("pi_executor"))
+            and mode in (execution.get("pi_allowed_task_modes") or []))
 
 
 def card_execution_mode(execution: dict[str, Any] | None, card: dict[str, Any] | None, *, audit_card: bool = False) -> str | None:

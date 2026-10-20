@@ -421,6 +421,48 @@ lybra project check-workstation <项目名> --home-root <home根> --instance <�
 ```
 按角色覆盖优先于项目缺省; 执行 / 审计章程不变(模型对执行体透明)。跨机工位: 可用性按本机 pi 清单核, 工位所在机的 pi 配置在该机 `pi --list-models` 核。
 
+#### 非代码工作交 pi(AIPOS-F196: 验证卡 task_mode=validation + pi 执行工位 + 经 ssh 操作目标主机)
+**分工**(Owner 10-20 定, 任何项目同一组命令, 在治理根所在机运行): 代码卡 = 你派子 agent(`lybra kickoff`); 验证 / 环境 / 文档卡 = pi 执行工位
+(loop 自动拉起, 你不派工); 审计 = 独立 pi 审计工位。验证卡保留独立审计、N5 无合入(finalize 写明「验证卡无合入」, 不合并不推送不部署); 环境卡(config)
+由你复核(loop 停在「非代码卡快车道:顾问直接审」)。代码卡只做实现与离线测试, 验证 / 环境类工作单独出卡交 pi。
+
+1. **pi 执行工位接入**(工位目录不迁移; 已有手写章程的工位先接管; enroll-deliver 预演后加 `--confirm`):
+```bash
+lybra roles enroll-deliver --role <执行角色> --instance <执行体实例> --governance-root <治理根> --workspace <工位目录> --owner-authorization-ref <信封ID> --dry-run
+lybra sync --harness-root <工位目录> --workspace-root <治理根> --dry-run
+```
+   工位 AGENTS.md 若是带手工维护标记(如「禁止 Lybra 分发器覆盖」)的手写章程, sync(含 loop 拉起前自动 sync)一律拒覆盖并给出口 `CHARTER_HAND_MAINTAINED`;
+   正式解除只走产品命令且须 Owner 裁决引用(禁手删标记): 先预演备份路径, 再执行; 原章程备份为 `AGENTS.md.hand-maintained-<时刻>.bak`(不删), 采纳记录在
+   工位 `.lybra/charter-adoptions.jsonl`; 之后 `check-workstation` 章程新鲜度应为 ✓
+```bash
+lybra sync --harness-root <工位目录> --workspace-root <治理根> --adopt-hand-charter --owner-ref <Owner裁决引用> --dry-run
+lybra sync --harness-root <工位目录> --workspace-root <治理根> --adopt-hand-charter --owner-ref <Owner裁决引用>
+lybra project check-workstation <项目名> --home-root <home根> --instance <执行体实例> --harness pi
+```
+   工位仓若是 Owner 的集中仓(多机同步), 备份文件与渲染后的章程由 Owner 提交同步, 你不 commit 工位仓。
+2. **声明执行方式**(列内 task_mode 起草缺省 harness=pi、assigned_to=pi 执行实例; code 不列 = 仍子 agent; 预演后同参加 `--confirm --actor <你的顾问实例>`):
+```bash
+lybra project set-execution <项目名> --home-root <home根> --subagent-executor <子agent执行实例> --auditor <审计体实例> --pi-executor <执行体实例> --pi-allowed-task-mode validation --pi-allowed-task-mode config --pi-allowed-task-mode docs --dry-run
+```
+3. **pi 经 ssh 操作目标主机**(pi 工位在治理根所在机, 验证在他机如 Mac): 声明目标主机的 ssh 别名(治理根所在机 `~/.ssh/config` 的 Host 名);
+   之后该主机上「工位在本机」实例的验证根节 / 开工提示 / `init-command` 一律给 `ssh <别名> '<命令>'`, helper 经管道送入(不落目标主机)。约束 = 章程 + 目标主机
+   helper 自查 + 审计追责(无硬沙箱, Owner 已知悉); 预演后同参加 `--confirm --actor <你的顾问实例>`
+```bash
+lybra project validation-root set-host <项目名> --home-root <home根> --host <主机标签> --ssh-alias <ssh别名> --owner-ref <Owner授权> --dry-run
+```
+4. **起草验证卡**(卡稿 frontmatter): `task_mode: validation`、`validation_source_task: <来源卡>`、`validation_candidate: <来源卡所在仓的完整 40 位提交 sha>`、
+   `lane.repo: <候选所在仓>`(只读取证, 不建卡工作树)、`output_target: <报告落点 artifacts/ 说明>`、`artifacts`(截图 path_glob)。起草 / 发卡即核候选与来源卡
+   (`VALIDATION_SUBJECT_MISSING` / `VALIDATION_CANDIDATE_INVALID` / `VALIDATION_SOURCE_UNKNOWN`); 不写 harness / assigned_to 即按第 2 步缺省派 pi。
+   正文写清: 验证目标与步骤、要的截图 / 运行证据、iOS 需模拟器时按开工提示的「iOS 本 run 专用模拟器」九步(建台 → 绑定 → 三参数 xcodebuild → 核验 → 删台 → 证据回传)。
+5. **发卡后**: 为验证卡的 pi 执行实例声明验证根并铸 run(候选须 = 卡面候选), 审计卡另声明审计实例自己的验证根(审计 run 须新建自己的模拟器):
+```bash
+lybra project validation-root declare <项目名> --home-root <home根> --host <主机标签> --base <目标主机base> --task-id <卡ID> --instance <执行体实例> --owner-ref <Owner授权> --host-fingerprint <主机指纹> --confirm --actor <你的顾问实例>
+lybra project validation-root run-start <项目名> --home-root <home根> --id <声明id> --candidate <卡面候选> --confirm --actor <你的顾问实例>
+lybra loop --task-id <卡ID> --workspace-root <治理根>
+```
+   loop 自动拉起 pi(开工提示含本卡验证根节与经 ssh 的命令); 交回 → 派审 → 审计 pi → 裁决绑候选 → finalize(无合入)→ 结案。
+   收口: 验证结束 `validation-root run-finish`(绑定了模拟器带 `--sim-evidence`)。
+
 #### `lybra mark-concluded` / `lybra queue close --conclusion-note`(AIPOS-F78 前置零⑨)
 **何时用**:已 PASS 但不走 finalize 的卡(如产物由续卡承接):
 ```bash

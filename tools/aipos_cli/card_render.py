@@ -23,6 +23,7 @@ from typing import Any
 from tools.aipos_cli.next_resolver import (
     REPO_ROOT,
     _find_task_in_queue,
+    card_kickoff_without_worktree,
     card_needs_worktree,
     carried_kickoff_line,
     card_report_contract,
@@ -125,6 +126,8 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
         "lane": intent["lane"],
         "code_repo": str(code_repo),
         "needs_worktree": needs_worktree,
+        # AIPOS-F196 件①: 固定候选验证卡(及其审计卡)不建树的说明不同于「只写治理根」(判据 next_resolver.card_kickoff_without_worktree)
+        "candidate_subject": (not needs_worktree) and card_kickoff_without_worktree(governance_root, {**fm, "task_id": task_id}),
         "worktree": str(worktree) if needs_worktree else None,
         "branch": branch if needs_worktree else None,
         "return_path": str(return_path),
@@ -147,7 +150,11 @@ def _frontmatter_hint(model: dict[str, Any]) -> str:
 
 
 def _no_worktree_line(model: dict[str, Any]) -> str:
-    """AIPOS-F178 item 2: the single wording for cards that write only the governance root (no worktree / no card branch)."""
+    """AIPOS-F178 item 2: the single wording for cards that write only the governance root (no worktree / no card branch).
+    AIPOS-F196: fixed-candidate validation cards (and their audit cards) = product artifacts on the validation root + report slot."""
+    if model.get("candidate_subject"):
+        return (f"不建(交付主体 = 来源卡的固定候选, 不写产品仓源码; 判据 enums.schema task_mode.candidate_subject): "
+                f"产物只落本卡验证根与报告落点 {model['return_path']}")
     return (f"不建(本卡只写治理根, 不写产品仓; 判据 enums.schema task_mode.product_repo_write): "
             f"产物写治理根报告落点 {model['return_path']}")
 
