@@ -46,7 +46,9 @@ role: advisor
 - [ ] **正例**:修复卡 = 纯修复批;验证收账另出一张验证卡(依赖修复卡),链式依赖清晰。
 - [ ] **AIPOS-F196**:环境构建 / 模拟器构建运行 / 截图取证这类「对固定候选的验证」出 `task_mode: validation` 卡(写 `validation_source_task` 来源卡 +
   `validation_candidate` 完整 40 位候选 sha + `lane.repo` 候选所在仓), 交 pi 执行工位、保留独立审计、不写产品仓源码、无合入;代码卡只做实现与离线测试,
-  不把「在目标主机构建验证」塞进代码卡(详见 advisor-commands「非代码工作交 pi」节)。
+  不把「在目标主机构建验证」塞进代码卡(详见 advisor-commands「非代码工作交 pi」节)。正文写清「先按开工稿送达候选源码并核对 SRC_OK(AIPOS-F197), 再构建」。
+- [ ] **AIPOS-F197**:只写治理根的文档 / 配置卡写 **`lane.repo: governance_root`**(保留值; 不写 lane.repo = 缺省派生到产品仓 = 写仓卡, 建卡分支、交回分支三键、裁决绑 tip), `output_target` 写
+  `<报告落点>/artifacts/`, 正文写清要哪些产出文件; 交回由执行体在 Return frontmatter `outputs` 列产出清单(产品核 sha256), 卡面不再要求 commit_sha / branch。
 
 ### ✅ 执行体上下文预算(冷启动知识入口)
 - [ ] 卡内**知识入口**指向的文档总量 < 执行体一次会话能消化的上限(约 50-100k tokens)。

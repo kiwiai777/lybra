@@ -113,6 +113,8 @@ PLACEHOLDER_VALUES = {
     "<主机指纹>": "hfp1:0123456789abcdef0123456789abcdef",
     "<声明id>": "vr-proj-1-executor-1",
     "<卡面候选>": "0123456789abcdef0123456789abcdef01234567",
+    # AIPOS-F197: 只写治理根的卡顾问复核结案(mark-concluded --report-path)占位
+    "<Return相对路径>": "task_cards/PROJ-1/RETURN.md",
 }
 PLACEHOLDER_RE = re.compile(r"<[^<>\s'\"]+>")
 #: 已退役的子命令(示例不得再教)
