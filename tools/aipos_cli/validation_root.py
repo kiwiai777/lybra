@@ -43,7 +43,8 @@ RUN_KEYS = ("run_id", "candidate", "started_at", "started_by", "finished_at", "f
 RUN_OPTIONAL_KEYS = ("simulator",)  # AIPOS-F194: 缺键 = 本 run 未绑定专用模拟器(行为不变)
 SIM_KEYS = ("udid", "name", "bound_at", "bound_by", "verified_at", "verified_by", "evidence_sha256")
 TEXT_KEYS = ("title", "relation", "declaration", "directory", "run_active", "run_none", "run_finish", "check_dev", "helper",
-             "sandbox", "redirect_title", "redirect", "side_effect", "block", "init_run", "sim_title", "sim_step", "ssh_mode", "helper_ssh", "init_run_ssh")
+             "sandbox", "redirect_title", "redirect", "side_effect", "block", "init_run", "sim_title", "sim_step", "ssh_mode", "helper_ssh", "init_run_ssh",
+             "src_deliver", "src_deliver_ssh", "src_pending")
 ACTIONS = ("declare", "revoke", "run-start", "run-finish", "sim-bind", "set-host")
 # AIPOS-F196 件③: 目标主机 ssh 访问声明(project.json validation_roots.hosts.<主机标签>; 声明 config.schema validation_roots.schema.hosts)
 HOST_ENTRY_KEYS = ("ssh_alias", "owner_ref", "declared_by", "declared_at")
@@ -489,16 +490,70 @@ def _find(entries: list[dict[str, Any]], decl_id: str) -> dict[str, Any]:
     return entry
 
 
+def _candidate_card(governance_root: Path, entry: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
+    """声明的候选所属卡(执行卡 = 本卡; 审计卡 = 被审卡)与其卡面(不在队列 = None)。run-start 候选核对与源码送达同读。"""
+    from tools.aipos_cli.audit_derivation import audit_card_reviewed_id
+
+    card = entry["task_id"] if card_kinds()[entry["role_class"]] == "execution_card" else audit_card_reviewed_id(entry["task_id"], _card_fm(governance_root, entry["task_id"]))
+    return card, (_card_fm(governance_root, card) if card else None)
+
+
+def candidate_source(governance_root: str | Path, entry: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F197 件④: 本 run 候选的源码来源 {card, repo, candidate, tree}(候选所在仓 = 候选所属卡 lane.repo 经 resolve_card_repo 唯一解析,
+    与 run-start 候选核对同读; tree = git rev-parse <候选>^{tree})。解析不到 = ValidationRootError(VR_CANDIDATE_INVALID, fail-closed)。"""
+    import subprocess
+
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved, resolve_card_repo
+
+    gov = Path(governance_root).expanduser().resolve()
+    candidate = str(run.get("candidate") or "")
+    card, fm = _candidate_card(gov, entry)
+    if fm is None:
+        raise _err("VR_CANDIDATE_INVALID", f"卡 {card or entry['task_id']} 不在队列, 无从定位候选所在仓")
+    try:
+        repo = resolve_card_repo(gov, fm)
+    except CardRepoUnresolved as exc:
+        raise _err("VR_CANDIDATE_INVALID", f"卡 {card} 的产品仓解析不到: {exc}") from exc
+    proc = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"{candidate}^{{tree}}"], capture_output=True, text=True,
+                          timeout=30)
+    tree = proc.stdout.strip()
+    if proc.returncode != 0 or not _SHA_RE.match(tree):
+        raise _err("VR_CANDIDATE_INVALID", f"候选 {candidate} 不是卡 {card} 产品仓 {repo} 中已有提交")
+    return {"card": card, "repo": str(repo), "candidate": candidate, "tree": tree}
+
+
+def source_delivery(governance_root: str | Path, entry: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F197 件④: 候选源码送达命令(唯一铸造口; 开工稿 / 章程验证根节 / run-start 输出 / init-command 同源)。
+    送达 = 治理根所在机 `git -C <候选仓> archive --format=tar --prefix=src/ <候选> | <目标主机> tar -x -C <run 目录>`(只送已提交的候选树,
+    不含工作区未提交改动); 核对 = helper src-verify(目标主机上按 git 规则算 <run>/src 的 tree 指纹 = 候选 tree, 封印防改参, 证据进 run 目录)。
+    形态 = ssh_alias_for(执行实例在治理根所在机、经 ssh 操作目标主机 → `… | ssh <别名> 'tar -x …'` 与 helper 管道 ssh 形); 否则本机形
+    (前半段在治理根所在机运行, 目标主机经访问治理根的通道取得后交本机 tar / python3 -)。返回 {src_dir, deliver, verify, candidate, tree, repo, ssh_alias}。"""
+    gov = Path(governance_root).expanduser().resolve()
+    src = candidate_source(gov, entry, run)
+    run_dir = run_directory(entry, run["run_id"])
+    archive = f"git -C {shlex.quote(src['repo'])} archive --format=tar --prefix={helper.SRC_DIR_NAME}/ {src['candidate']}"
+    seal = helper.src_seal(run_dir, src["candidate"], src["tree"], entry["host_fingerprint"])
+    args = " ".join(shlex.quote(str(a)) for a in ("--run-dir", run_dir, "--candidate", src["candidate"], "--expect-tree", src["tree"],
+                                                    "--expect-fingerprint", entry["host_fingerprint"], "--seal", seal))
+    alias = ssh_alias_for(gov, entry)
+    if alias:
+        deliver = f"{archive} | {ssh_command(alias, f'tar -x -C {shlex.quote(run_dir)}')}"
+        verify = helper_pipe_command(gov, alias, f"src-verify {args}")
+    else:
+        deliver = f"{archive} | tar -x -C {shlex.quote(run_dir)}"
+        verify = f"{_gov_cmd(gov)} project validation-root helper | python3 - src-verify {args}"
+    return {"src_dir": f"{run_dir}/{helper.SRC_DIR_NAME}", "deliver": deliver, "verify": verify, "candidate": src["candidate"],
+            "tree": src["tree"], "repo": src["repo"], "ssh_alias": alias}
+
+
 def _candidate_problem(governance_root: Path, entry: dict[str, Any], candidate: str) -> str | None:
     import subprocess
 
-    from tools.aipos_cli.audit_derivation import audit_card_reviewed_id
     from tools.aipos_cli.workspace_config import CardRepoUnresolved, resolve_card_repo
 
     if not _SHA_RE.match(candidate):
         return f"候选 {candidate!r} 须为完整 40 位小写 sha"
-    card = entry["task_id"] if card_kinds()[entry["role_class"]] == "execution_card" else audit_card_reviewed_id(entry["task_id"], _card_fm(governance_root, entry["task_id"]))
-    fm = _card_fm(governance_root, card) if card else None
+    card, fm = _candidate_card(governance_root, entry)
     if fm is None:
         return f"卡 {card or entry['task_id']} 不在队列, 无从核候选所在仓"
     # AIPOS-F196 件①: 固定候选卡(validation; 审计卡按被审卡)的 run 候选须等于卡面候选(next_resolver.card_candidate_subject 唯一读取口)
@@ -658,6 +713,15 @@ def apply_validation_root_change(governance_root: str | Path, action: str, *, dr
                      else f"在目标主机 {entry['host']} 运行")
             notes.append(f"{'确认后' if dry_run else ''}下一步(run-start 后第一步): {where}: "
                          f"{init_run_command(gov, entry, run)}(只建空目录链 0700, 末行 INIT_OK + 退出码 0 = 成功; 角色不得自行 mkdir base / 卡层)")
+            # AIPOS-F197 件④: 第二步 = 候选源码送达 + 目标主机核树指纹(唯一铸造口 source_delivery, 开工稿 / 章程 / init-command 同源)
+            try:
+                delivery = source_delivery(gov, entry, run)
+            except ValidationRootError as exc:
+                notes.append(f"候选源码送达命令不可铸(执行体见开工稿拒因, 停线): {exc}")
+            else:
+                notes.append(f"第二步(候选源码送达, 在治理根所在机运行): {delivery['deliver']}")
+                notes.append(f"第三步(送达核对: 目标主机算 {delivery['src_dir']} 的 tree 指纹 = 候选 tree {delivery['tree']}): {delivery['verify']}"
+                             f"(末行 SRC_OK + 退出码 0 = 送达树即候选; 混入改动 / 错版本 = DENY SRC_TREE_MISMATCH)")
         elif action == "sim-bind":
             # AIPOS-F194 件②④: 本 run 专用模拟器 UDID 绑定进本 run 记录(与 run-id 同一处); 审计 run 须新建自己的, 不得复用他 run UDID
             run_id = str(kw.get("run_id") or "").strip()
@@ -951,8 +1015,12 @@ def init_command(governance_root: str | Path, decl_id: str, *, instance: str | N
     run = active_run(entry)
     if run is None:
         raise _err("VR_STATE_CONFLICT", f"声明 {entry['id']} 无活动 run(已结束 run 不再初始化); 先由顾问 / 驱动方 run-start")
+    try:
+        delivery: dict[str, Any] = source_delivery(gov, entry, run)
+    except ValidationRootError as exc:
+        delivery = {"error": str(exc)}
     return {"entry": entry, "run": run, "run_dir": run_directory(entry, run["run_id"]), "command": init_run_command(gov, entry, run),
-            "ssh_alias": ssh_alias_for(gov, entry)}
+            "ssh_alias": ssh_alias_for(gov, entry), "source_delivery": delivery}
 
 
 def executor_run_dir_refs(governance_root: str | Path, reviewed_task_id: str, texts: list[str]) -> list[str]:
@@ -1032,6 +1100,17 @@ def render_section_lines(governance_root: str | Path, *, instance: str, task_id:
                        "check_ssh": helper_pipe_command(gov, alias, f"check --run-dir {shlex.quote(run_dir)} --path <目标> "
                                                                     f"--expect-fingerprint {values['fingerprint']}") if alias else ""})
         values.update(_sim_values(gov, entry, run, values, alias=alias))
+        # AIPOS-F197 件④: 候选源码送达 + 目标主机核树指纹(唯一铸造口 source_delivery; 无活动 run = 占位说明)
+        values.update({"src_dir": f"{run_dir}/{helper.SRC_DIR_NAME}", "src_deliver": "", "src_verify": "", "src_tree": "<候选 tree>"})
+        if run and status == "active":
+            try:
+                delivery = source_delivery(gov, entry, run)
+            except ValidationRootError as exc:  # 铸不出 = 命令位写拒因(执行体停线报告), 不出可执行的错命令
+                values.update({"src_deliver": f"(送达命令不可铸: {exc}; 停线报告)", "src_verify": f"(核对命令不可铸: {exc.code})"})
+            else:
+                values.update({"src_deliver": delivery["deliver"], "src_verify": delivery["verify"], "src_tree": delivery["tree"]})
+        else:
+            values.update({"src_deliver": texts["src_pending"], "src_verify": texts["src_pending"]})
         lines.append(_fill(texts["declaration"], values))
         lines.append(_fill(texts["directory"], values))
         if status not in ("active", "unbound"):
@@ -1041,6 +1120,7 @@ def render_section_lines(governance_root: str | Path, *, instance: str, task_id:
         lines.append(_fill(texts["run_active"] if run else texts["run_none"], values))
         if values["init_run"]:
             lines.append(_fill(texts["init_run_ssh" if alias else "init_run"], values))  # AIPOS-F191 件②: run-start 后第一步 = 目录链初始化
+            lines.append(_fill(texts["src_deliver_ssh" if alias else "src_deliver"], values))  # AIPOS-F197 件④: 第二步 = 候选源码送达与核对
         lines.append(_fill(texts["check_dev"], values))
         if not is_local_host(entry["host"]):
             lines.append(_fill(texts["helper_ssh"] if alias else texts["helper"], values))

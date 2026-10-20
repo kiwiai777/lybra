@@ -1770,15 +1770,16 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
         except (SchemaLoadError, OSError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
+        delivery = got.get("source_delivery") or {}
         if args.json:
             print(render_json({"project": target["project"], "declaration_id": got["entry"]["id"], "host": got["entry"]["host"],
                                "run_id": got["run"]["run_id"], "run_dir": got["run_dir"], "command": got["command"],
-                               "ssh_alias": got.get("ssh_alias")}))
+                               "ssh_alias": got.get("ssh_alias"), "source_delivery": delivery}))
         else:
             where = (f"在治理根所在机运行(经 ssh {got['ssh_alias']} 到目标主机 {got['entry']['host']})" if got.get("ssh_alias")
                      else f"在目标主机 {got['entry']['host']} 运行")
             print(f"声明 {got['entry']['id']} 活动 run {got['run']['run_id']}: {where}(只建空目录链 {got['run_dir']}):")
-            print(got["command"])
+            print(got["command"])  # 末行 = 目录链初始化命令(行为不变); AIPOS-F197 候选源码送达命令见 --json source_delivery / 开工稿 / run-start 输出
         return 0
     action = args.vr_command
     try:
