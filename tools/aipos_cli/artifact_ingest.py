@@ -950,7 +950,7 @@ def runtime_evidence_candidate_declaration() -> dict[str, Any]:
 
     decl = runtime_evidence_declaration().get("candidate_subject")
     needed = ("entry_required_fields", "placeholders", "legacy_placeholders", "legacy_hint", "outlet", "steps_title", "steps", "command_line",
-              "pending")
+              "pending", "remote_steps")
     if not isinstance(decl, dict) or any(not decl.get(k) for k in needed):
         raise SchemaLoadError(f"transitions.schema.json artifact_ingest.verdict.runtime_evidence.candidate_subject({'/'.join(needed)})未声明")
     return decl
@@ -1005,6 +1005,8 @@ def render_candidate_evidence_steps(governance_root: Path | str, *, audit_task_i
         if index == after:  # 声明命令逐条(占位按已知值渲染), 位置读声明 commands_after_step
             lines.extend(str(decl["command_line"]).format(command=render_candidate_evidence_command(c, known))
                          for c in (requirement or {}).get("commands") or [])
+    if values.get("remote"):  # AIPOS-F200 件④: 审计 run 在远端主机 = 证据清单 + 取回副本两步(声明 candidate_subject.remote_steps)
+        lines.extend(str(step).format(**values) for step in decl.get("remote_steps") or [])
     lines.extend(f"   ⚠ {p}" for p in runtime_evidence_legacy_problems(requirement, reviewed_task_id, reviewed_fm))
     return lines
 

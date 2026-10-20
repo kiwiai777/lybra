@@ -1236,7 +1236,12 @@
             "run 记录候选 = 被审卡卡面固定候选",
             "run 目录 .lybra-vr/src-verify.jsonl 末条 = SRC_OK(ok=true)且 tree = 候选 tree、run_dir / 候选 / 主机指纹与声明一致",
             "日志必须是文件: log_path 绝对路径存在且 sha256 = log_sha256(不接受只给 log_excerpt); 运行记录给 worktree(如 run-long 的 --cwd)时须在本 run 目录内",
-            "run 在非本机(治理根所在机)主机 = 门读不到 run 内证据 = 拒(fail-closed), 卡面声明的命令须在治理根所在机的审计 run 运行"
+            "run 在非本机(治理根所在机)主机 = 门读不到 run 内证据 = 拒(fail-closed), 卡面声明的命令须在治理根所在机的审计 run 运行",
+            "AIPOS-F200(gap #205): run 在远端主机时改读审计报告落点副本 <verdict_root>/<审计卡>/run_evidence/<run_id>/(由 evidence-manifest → evidence-fetch 产出; 声明 roles.schema write_boundary.validation_root.run_evidence): 副本须经 validation_root.evidence_copy_check(清单形 / 封签 / run 目录 / 候选 / 主机指纹 = 声明, 取回记录与清单 sha256 互证, 无软链 / 清单外文件 / 代码文件, 清单内文件齐全且 sha256 一致)再走与本机 run 同一核对(src-verify 读副本 files/.lybra-vr/src-verify.jsonl; 日志 log_path 须在远端 run 目录内且在取回清单内, 读副本文件核 sha256); 无副本 / 副本不过 = 拒并给清单与取回命令"
+          ],
+          "remote_steps": [
+            "⑧ run 在目标主机 {host}(非治理根所在机)时, 运行记录的日志须写在本 run 的证据目录内(建议 {run_dir}/logs/; 证据目录 = {evidence_dirs}; log_path 填目标主机上的路径; run-long 日志在治理根所在机, 远端 run 不适用); 卡面命令全部跑完、run 仍活动时生成证据清单(AIPOS-F200; 末行 EVIDENCE_OK): {evidence_manifest}",
+            "⑨ 在治理根所在机取回证据到审计报告落点副本 {evidence_copy}(经声明 ssh 别名只读拉取清单内文件并逐个核 sha256; 裁决入口对副本做与本机 run 同一核对, 副本禁手改): {evidence_fetch}"
           ],
           "legacy_hint": "卡 {task_id} 交付主体为固定候选(task_mode={task_mode}), 审计不建产品工作树, 卡面 {card_field} 命令 {command!r} 用了旧占位 {legacy}; 迁移: 改用 {{run_dir}} / {{src_dir}} / {{candidate}} / {{candidate_tree}}(审计实例自己的验证根 run 目录 / 本 run 送达的候选源码 / 固定候选 / 候选 tree), 如 {{worktree}} → {{src_dir}}、{{commit_sha}} → {{candidate}}、{{tree_hash}} → {{candidate_tree}}; 出口: 顾问 lybra queue amend 修正卡面声明(未认领卡)后重推导",
           "outlet": "出口: 审计体按开工稿 / 审计卡「验证卡运行证据步骤」在本审计卡自己的验证根 run 里(run-start → init-run → 源码送达 → src-verify SRC_OK)重跑卡面声明的命令, 按 transitions.schema artifact_ingest.verdict.runtime_evidence.candidate_subject 把每条 command / run_id / run_dir / exit_code / log_path / log_sha256 写进报告「{heading}」节; 跑不了(环境 / 时长)= 给 FAIL 或 BLOCK 并写原因, 不得以执行实例的 run 或其产物代替。",

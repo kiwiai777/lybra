@@ -23,6 +23,7 @@ fail-closed: 声明缺 = SchemaLoadError; 段形不合 = ValidationRootError(VR_
 from __future__ import annotations
 
 import hashlib
+import os
 import posixpath
 import re
 import shlex
@@ -44,7 +45,7 @@ RUN_OPTIONAL_KEYS = ("simulator",)  # AIPOS-F194: 缺键 = 本 run 未绑定专�
 SIM_KEYS = ("udid", "name", "bound_at", "bound_by", "verified_at", "verified_by", "evidence_sha256")
 TEXT_KEYS = ("title", "relation", "declaration", "directory", "run_active", "run_none", "run_finish", "check_dev", "helper",
              "sandbox", "redirect_title", "redirect", "side_effect", "block", "init_run", "sim_title", "sim_step", "ssh_mode", "helper_ssh", "init_run_ssh",
-             "src_deliver", "src_deliver_ssh", "src_pending")
+             "src_deliver", "src_deliver_ssh", "src_pending", "evidence_fetch")
 ACTIONS = ("declare", "revoke", "run-start", "run-finish", "sim-bind", "set-host")
 # AIPOS-F196 件③: 目标主机 ssh 访问声明(project.json validation_roots.hosts.<主机标签>; 声明 config.schema validation_roots.schema.hosts)
 HOST_ENTRY_KEYS = ("ssh_alias", "owner_ref", "declared_by", "declared_at")
@@ -120,7 +121,7 @@ def reject_codes() -> dict[str, str]:
     codes = decl.get("reject_codes") if isinstance(decl, dict) else None
     needed = ("VR_DECLARATION_INVALID", "VR_BASE_FORBIDDEN", "VR_INSTANCE_NOT_ENROLLED", "VR_ROLE_NOT_ALLOWED", "VR_TASK_NOT_OWNED",
               "VR_HOST_FINGERPRINT_REQUIRED", "VR_HOST_FINGERPRINT_MISMATCH", "VR_NOT_FOUND", "VR_STATE_CONFLICT", "VR_CANDIDATE_INVALID",
-              "VR_SIM_INVALID", "VR_SIM_EVIDENCE_REJECTED", "VR_HOST_ALIAS_INVALID")
+              "VR_SIM_INVALID", "VR_SIM_EVIDENCE_REJECTED", "VR_HOST_ALIAS_INVALID", "VR_EVIDENCE_REJECTED")
     if not isinstance(codes, dict) or any(not codes.get(k) for k in needed):
         raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.validation_roots.reject_codes 未声明齐")
     return codes
@@ -1062,13 +1063,15 @@ def locate_run(governance_root: str | Path, run_dir: str, run_id: str, *,
     return None, None
 
 
-def src_verify_evidence_check(entry: dict[str, Any], run: dict[str, Any], *, candidate: str, tree: str) -> list[str]:
+def src_verify_evidence_check(entry: dict[str, Any], run: dict[str, Any], *, candidate: str, tree: str,
+                              files_root: Path | None = None) -> list[str]:
     """run 目录内 helper src-verify 证据(SRC_EVIDENCE 末条)核对: SRC_OK(ok)且 实际 tree = 期望 tree = 候选 tree、run 目录 / 候选 / 主机指纹
-    与声明一致。返回问题原文(空 = 通过)。读治理根所在机文件系统: 调用方保证 run 在本机(is_local_host)。"""
+    与声明一致。返回问题原文(空 = 通过)。读治理根所在机文件系统: run 在本机(is_local_host)= 读 run 目录;
+    AIPOS-F200: run 在远端 = files_root(取回副本 files/, 已经 evidence_copy_check 核过)下同一相对路径, 判据不变(只换读取源)。"""
     import json
 
     run_dir = run_directory(entry, run["run_id"])
-    path = Path(posixpath.join(run_dir, helper.SRC_EVIDENCE))
+    path = Path(files_root) / helper.SRC_EVIDENCE if files_root is not None else Path(posixpath.join(run_dir, helper.SRC_EVIDENCE))
     try:
         lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
     except FileNotFoundError:
@@ -1103,7 +1106,7 @@ def candidate_evidence_values(governance_root: str | Path, *, audit_task_id: str
     pending = "<run-start 后由产品给出>"
     values = {"audit_task_id": audit_task_id, "audit_instance": audit_instance or "<审计实例>", "candidate": candidate,
               "candidate_tree": candidate_tree, "run_id": "<run-id>", "run_dir": "<run_dir>", "src_dir": f"<run_dir>/{helper.SRC_DIR_NAME}",
-              "init_run": pending, "src_deliver": pending, "src_verify": pending}
+              "init_run": pending, "src_deliver": pending, "src_verify": pending, "remote": "", "host": ""}
     now = _now()
     mine = [e for e in project_validation_roots(gov)
             if e["task_id"] == audit_task_id and e["instance"] == audit_instance and card_kinds().get(e["role_class"]) == "audit_card"]
@@ -1118,6 +1121,11 @@ def candidate_evidence_values(governance_root: str | Path, *, audit_task_id: str
         return values
     entry = live[-1]
     values["declare_state"] = f"{entry['id']}(主机 {entry['host']}, 状态 {declaration_status(entry, now)}, 到期 {entry['expires_at']})"
+    # AIPOS-F200 件④: run 在远端主机 = 追加「生成证据清单 → 取回副本」两步(remote_steps; 命令出自唯一铸造口)
+    remote = not is_local_host(entry["host"])
+    values.update({"remote": "1" if remote else "", "host": entry["host"], "evidence_manifest": pending, "evidence_fetch": pending,
+                   "evidence_copy": str(run_evidence_copy_dir(gov, entry, "<run-id>")),
+                   "evidence_dirs": " / ".join(f"<run_dir>/{d}" for d in run_evidence_declaration()["include_dirs"])})
     run = active_run(entry)
     if run is None:
         values["run_state"] = (f"无活动 run; 顾问: `{gcmd} project validation-root run-start --id {entry['id']} --candidate {candidate} "
@@ -1126,8 +1134,14 @@ def candidate_evidence_values(governance_root: str | Path, *, audit_task_id: str
     run_dir = run_directory(entry, run["run_id"])
     values.update({"run_state": f"活动 run {run['run_id']}(候选 {run['candidate']}) → {run_dir}", "run_id": run["run_id"], "run_dir": run_dir,
                    "src_dir": f"{run_dir}/{helper.SRC_DIR_NAME}"})
+    if remote:
+        values.update({"evidence_copy": str(run_evidence_copy_dir(gov, entry, run["run_id"])),
+                       "evidence_dirs": " / ".join(f"{run_dir}/{d}" for d in run_evidence_declaration()["include_dirs"])})
     if declaration_status(entry, now) == "active":
         values["init_run"] = init_run_command(gov, entry, run)
+        if remote:
+            values.update({"evidence_manifest": evidence_manifest_command(gov, entry, run),
+                           "evidence_fetch": evidence_fetch_command(gov, entry, run["run_id"])})
         try:
             delivery = source_delivery(gov, entry, run)
         except ValidationRootError as exc:
@@ -1135,6 +1149,314 @@ def candidate_evidence_values(governance_root: str | Path, *, audit_task_id: str
         else:
             values.update({"src_deliver": delivery["deliver"], "src_verify": delivery["verify"]})
     return values
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F200: 远端 run 证据取回(evidence-manifest 命令铸造 / evidence-fetch / 副本核对; 裁决入口 board_adapter._candidate_run_problem 调用)
+# ---------------------------------------------------------------------------
+
+EVIDENCE_FETCH_SCHEMA = "lybra-vr-evidence-fetch-v1"
+
+
+def run_evidence_declaration() -> dict[str, Any]:
+    """roles.schema write_boundary.validation_root.run_evidence(证据目录 / 副本落点 / 上限 / 取回时限)。缺键或形不合 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = declaration().get("run_evidence")
+    needed = ("include_dirs", "copy_subdir", "copy_layout", "max_file_bytes", "max_total_bytes", "max_files", "fetch_timeout_seconds", "log_rule")
+    if not isinstance(decl, dict) or any(k not in decl for k in needed):
+        raise SchemaLoadError(f"roles.schema.json write_boundary.validation_root.run_evidence({' / '.join(needed)})未声明齐")
+    layout = decl["copy_layout"]
+    if (not isinstance(decl["include_dirs"], list) or not decl["include_dirs"]
+            or any(not isinstance(d, str) or helper.canonical_problem("/" + d) or d.startswith("/") for d in decl["include_dirs"])
+            or not isinstance(layout, dict) or set(layout) != {"manifest", "fetch_record", "files"}
+            or any(not isinstance(v, str) or not v or "/" in v for v in layout.values())
+            or not isinstance(decl["copy_subdir"], str) or not decl["copy_subdir"] or "/" in decl["copy_subdir"]
+            or any(isinstance(decl[k], bool) or not isinstance(decl[k], int) or decl[k] <= 0
+                   for k in ("max_file_bytes", "max_total_bytes", "max_files", "fetch_timeout_seconds"))):
+        raise SchemaLoadError("roles.schema.json write_boundary.validation_root.run_evidence 形不合(include_dirs 规范相对路径非空列表 / "
+                              "copy_layout 恰 manifest·fetch_record·files 单段名 / copy_subdir 单段名 / 上限与时限正整数)")
+    return decl
+
+
+def evidence_limits() -> dict[str, int]:
+    decl = run_evidence_declaration()
+    return {k: int(decl[k]) for k in helper.EVIDENCE_LIMIT_KEYS}
+
+
+def evidence_skip_extensions() -> list[str]:
+    """不取回的扩展名 = 治理仓代码文件黑名单(config.schema code_files_blacklist; 判据唯一读取 governance_guardrails, AIPOS-F195)。"""
+    from tools.aipos_cli.governance_guardrails import load_guardrail_declarations
+
+    return sorted(load_guardrail_declarations().code_extensions)
+
+
+def is_audit_declaration(entry: dict[str, Any]) -> bool:
+    return card_kinds().get(str(entry.get("role_class") or "")) == "audit_card"
+
+
+def evidence_manifest_command(governance_root: str | Path, entry: dict[str, Any], run: dict[str, Any]) -> str:
+    """AIPOS-F200 件①: 目标主机证据清单命令(唯一铸造口; 开工稿 / 派审注入 / 章程验证根节 / 取回拒因同源)。封印 = helper.evidence_seal
+    (run 目录 / 候选 / 指纹 / 证据目录 / 不取回扩展名 / 上限); 形态同 src-verify: 经 ssh 操作目标主机(ssh_alias_for)= helper 管道 ssh 形, 否则本机形。"""
+    gov = Path(governance_root).expanduser().resolve()
+    run_dir = run_directory(entry, run["run_id"])
+    include, skip, limits = list(run_evidence_declaration()["include_dirs"]), evidence_skip_extensions(), evidence_limits()
+    seal = helper.evidence_seal(run_dir, run["candidate"], entry["host_fingerprint"], include, skip, limits)
+    argv: list[str] = ["--run-dir", run_dir, "--candidate", run["candidate"], "--expect-fingerprint", entry["host_fingerprint"]]
+    for d in include:
+        argv += ["--include", d]
+    for e in skip:
+        argv += ["--skip-ext", e]
+    argv += ["--max-file-bytes", str(limits["max_file_bytes"]), "--max-total-bytes", str(limits["max_total_bytes"]), "--max-files",
+             str(limits["max_files"]), "--seal", seal]
+    args = " ".join(shlex.quote(a) for a in argv)
+    alias = ssh_alias_for(gov, entry)
+    if alias:
+        return helper_pipe_command(gov, alias, f"evidence-manifest {args}")
+    return f"{_gov_cmd(gov)} project validation-root helper | python3 - evidence-manifest {args}"
+
+
+def evidence_fetch_command(governance_root: str | Path, entry: dict[str, Any], run_id: str) -> str:
+    """AIPOS-F200 件②: 治理根所在机取回命令(唯一铸造口)。"""
+    return f"{_gov_cmd(Path(governance_root).expanduser().resolve())} project validation-root evidence-fetch --id {entry['id']} --run-id {run_id}"
+
+
+def run_evidence_copy_dir(governance_root: str | Path, entry: dict[str, Any], run_id: str) -> Path:
+    """副本落点 = 审计报告落点(next_resolver.verdict_artifact_dir, 声明 paths.verdict_root)/<copy_subdir>/<run_id>。"""
+    from tools.aipos_cli.next_resolver import verdict_artifact_dir
+
+    return verdict_artifact_dir(Path(governance_root).expanduser().resolve(), entry["task_id"]) / run_evidence_declaration()["copy_subdir"] / run_id
+
+
+def evidence_copy_check(governance_root: str | Path, entry: dict[str, Any], run: dict[str, Any], copy_dir: Path) -> dict[str, Any]:
+    """AIPOS-F200 件③: 取回副本核对(evidence-fetch 落盘前与裁决入口同一函数)。副本 = {manifest.json, fetch.json, files/<清单路径>}:
+    清单形 / 封签 / run 目录 / 候选 / 主机指纹(= 声明)/ 证据目录与上限(= 现行声明)、取回记录与清单 sha256 互证、副本内无软链、
+    清单内文件齐全且大小与 sha256 一致、无清单外文件、无代码文件。返回 {ok, problems, manifest, files_root, listed}。"""
+    import json
+    import stat as stat_mod
+
+    decl = run_evidence_declaration()
+    layout = decl["copy_layout"]
+    out: dict[str, Any] = {"ok": False, "problems": [], "manifest": None, "files_root": copy_dir / layout["files"], "listed": set()}
+    problems: list[str] = out["problems"]
+    if os.path.islink(copy_dir) or not copy_dir.is_dir():
+        problems.append(f"审计报告落点无取回副本 {copy_dir}")
+        return out
+    present: dict[str, os.stat_result] = {}
+    for current, dirs, names in os.walk(copy_dir, followlinks=False):
+        for name in [*dirs, *names]:
+            full = Path(current) / name
+            st = os.lstat(full)
+            rel = full.relative_to(copy_dir).as_posix()
+            if stat_mod.S_ISLNK(st.st_mode):
+                problems.append(f"副本内 {rel} 是符号链接(副本只收普通文件)")
+            elif stat_mod.S_ISREG(st.st_mode):
+                present[rel] = st
+            elif not stat_mod.S_ISDIR(st.st_mode):
+                problems.append(f"副本内 {rel} 不是普通文件")
+    manifest_path, fetch_path = copy_dir / layout["manifest"], copy_dir / layout["fetch_record"]
+    try:
+        manifest_raw = manifest_path.read_bytes()
+        manifest = json.loads(manifest_raw.decode("utf-8"))
+    except (OSError, ValueError) as exc:
+        problems.append(f"副本清单 {manifest_path} 读不出({exc})")
+        return out
+    expect_fp = str(entry.get("host_fingerprint") or "")
+    problems.extend(f"副本{p}" for p in helper.evidence_manifest_problems(manifest, run_dir=run_directory(entry, run["run_id"]), fingerprint=expect_fp))
+    if problems:
+        return out
+    out["manifest"] = manifest
+    want = {"candidate": run["candidate"], "task_id": entry["task_id"], "run_id": run["run_id"], "include": list(decl["include_dirs"]),
+            "skip_ext": evidence_skip_extensions(), "limits": evidence_limits()}
+    for key, value in want.items():
+        if manifest[key] != value:
+            problems.append(f"副本清单 {key}={manifest[key]!r} ≠ {value!r}(现行声明 / 本 run 记录)")
+    manifest_sha = hashlib.sha256(manifest_raw).hexdigest()
+    try:
+        fetch = json.loads(fetch_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        problems.append(f"副本取回记录 {fetch_path} 读不出({exc}; 副本须由 evidence-fetch 产出)")
+        fetch = None
+    if fetch is not None:
+        if not isinstance(fetch, dict) or fetch.get("schema") != EVIDENCE_FETCH_SCHEMA:
+            problems.append(f"副本取回记录 {fetch_path} schema ≠ {EVIDENCE_FETCH_SCHEMA}")
+        else:
+            for key, value in (("manifest_sha256", manifest_sha), ("declaration_id", entry["id"]), ("run_id", run["run_id"]),
+                               ("fingerprint", expect_fp)):
+                if fetch.get(key) != value:
+                    problems.append(f"副本取回记录 {key}={fetch.get(key)!r} ≠ {value!r}(清单与取回记录互证不过)")
+    files_prefix = layout["files"] + "/"
+    listed = {item["path"]: item for item in manifest["files"]}
+    out["listed"] = set(listed)
+    for rel in sorted(present):
+        if rel in (layout["manifest"], layout["fetch_record"]):
+            continue
+        if not rel.startswith(files_prefix) or rel[len(files_prefix):] not in listed:
+            problems.append(f"副本内 {rel} 是清单外文件")
+    from tools.aipos_cli.governance_guardrails import file_sha256, is_code_file, load_guardrail_declarations
+
+    guard = load_guardrail_declarations()
+    for rel, item in sorted(listed.items()):
+        if is_code_file(rel, guard):
+            problems.append(f"清单路径 {rel} 是代码文件(报告落点零代码文件, AIPOS-F195)")
+            continue
+        st = present.get(files_prefix + rel)
+        if st is None:
+            problems.append(f"副本缺清单内文件 {rel}(取回缺失)")
+            continue
+        got = file_sha256(copy_dir / layout["files"] / rel)
+        if st.st_size != item["size"] or got != item["sha256"]:
+            problems.append(f"副本文件 {rel} sha256={got[:12]} 大小 {st.st_size} ≠ 清单 {item['sha256'][:12]} / {item['size']}(副本被改)")
+    out["ok"] = not problems
+    return out
+
+
+def remote_run_evidence(governance_root: str | Path, entry: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
+    """裁决入口对远端 run 的读取源(board_adapter._candidate_run_problem 唯一调用): 副本核对 + 出口命令。
+    返回 {ok, problems, copy_dir, files_root, listed, run_dir, outlet}。"""
+    run_dir = run_directory(entry, run["run_id"])
+    copy_dir = run_evidence_copy_dir(governance_root, entry, run["run_id"])
+    checked = evidence_copy_check(governance_root, entry, run, copy_dir)
+    alias = (project_validation_hosts(governance_root).get(str(entry.get("host") or "")) or {}).get("ssh_alias")
+    try:
+        manifest_cmd = evidence_manifest_command(governance_root, entry, run)
+    except (ValidationRootError, OSError, ValueError) as exc:
+        manifest_cmd = f"(清单命令不可铸: {exc})"
+    fetch = evidence_fetch_command(governance_root, entry, run["run_id"])
+    outlet = (f"出口: 运行完成后(run 仍活动时)在目标主机生成证据清单 `{manifest_cmd}`, 再在治理根所在机取回 `{fetch}`"
+              + ("" if alias else f"(主机 {entry['host']} 未声明 ssh 别名: 先由顾问 `{_gov_cmd(Path(governance_root).expanduser().resolve())} "
+                                  f"project validation-root set-host --host {entry['host']} --ssh-alias <别名> --owner-ref <Owner 授权>`)")
+              + "; 副本被改 / 缺失 = 重新取回, 禁手改副本")
+    return {**checked, "copy_dir": copy_dir, "run_dir": run_dir, "outlet": outlet}
+
+
+def evidence_log_file(view: dict[str, Any], log_path: str) -> tuple[Path | None, str | None]:
+    """远端 run 的运行记录日志(目标主机上本 run 目录内路径)→ 副本文件; 不在本 run 目录 / 不在取回清单 = 拒因。"""
+    norm = posixpath.normpath(str(log_path or ""))
+    run_dir = view["run_dir"]
+    if not norm.startswith("/") or not helper.is_within(norm, run_dir) or norm == run_dir:
+        return None, (f"日志 {log_path} 不在远端 run 目录 {run_dir} 内(远端 run 的日志须写在本 run 内并随证据清单取回; "
+                      f"{run_evidence_declaration()['log_rule']})")
+    rel = norm[len(run_dir) + 1:]
+    if rel not in view["listed"]:
+        return None, f"日志 {log_path} 不在取回清单内(清单生成于运行完成前 / 写在证据目录 {run_evidence_declaration()['include_dirs']} 外; 重生成清单并重新取回)"
+    return Path(view["files_root"]) / rel, None
+
+
+def evidence_fetch(governance_root: str | Path, decl_id: str, run_id: str | None = None) -> dict[str, Any]:
+    """AIPOS-F200 件②: `validation-root evidence-fetch` 唯一实现。经 project.json validation_roots.hosts 声明的 ssh 别名在目标主机运行
+    helper evidence-bundle(只读; helper 经 stdin 送入, 不落目标主机), 解 tar 只收普通文件、规范路径、清单内文件, 落临时目录 → 写取回记录 →
+    evidence_copy_check(与裁决入口同一函数)→ 通过才原子替换副本 <审计报告落点>/<copy_subdir>/<run_id>/。任一不合 = VR_EVIDENCE_REJECTED(副本不动)。
+    返回 {copy_dir, manifest_sha256, files, bytes, skipped, notes}。"""
+    import io
+    import json
+    import shutil
+    import subprocess
+    import tarfile
+
+    from tools.aipos_cli.governance_guardrails import file_sha256
+
+    gov = Path(governance_root).expanduser().resolve()
+    entry = _find(project_validation_roots(gov), str(decl_id or "").strip())
+    if not is_audit_declaration(entry):
+        raise _err("VR_EVIDENCE_REJECTED", f"声明 {entry['id']} 属{entry['role_class']}实例 {entry['instance']}; 证据取回只供审计实例自己的 run"
+                                           "(执行 run 证据随交回; 审计不得以执行 run 作自身证据)")
+    if is_local_host(entry["host"]):
+        raise _err("VR_EVIDENCE_REJECTED", f"声明 {entry['id']} 主机 {entry['host']} 是本机(治理根所在机): 裁决入口直接读 run 目录, 无需取回")
+    rid = str(run_id or "").strip()
+    run = next((r for r in entry["runs"] if r["run_id"] == rid), None) if rid else (active_run(entry) or (entry["runs"][-1] if entry["runs"] else None))
+    if run is None:
+        raise _err("VR_NOT_FOUND", f"声明 {entry['id']} 无 run {rid or '(未 run-start)'}")
+    alias = (project_validation_hosts(gov).get(entry["host"]) or {}).get("ssh_alias")
+    if not alias:
+        raise _err("VR_EVIDENCE_REJECTED", f"主机 {entry['host']} 未声明 ssh 别名(project.json validation_roots.hosts); 先由顾问 "
+                                           f"`{_gov_cmd(gov)} project validation-root set-host --host {entry['host']} --ssh-alias <别名> --owner-ref <Owner 授权>`")
+    decl = run_evidence_declaration()
+    layout, limits = decl["copy_layout"], evidence_limits()
+    run_dir = run_directory(entry, run["run_id"])
+    remote = "python3 - evidence-bundle " + " ".join(shlex.quote(a) for a in ("--run-dir", run_dir, "--expect-fingerprint", entry["host_fingerprint"]))
+    try:
+        proc = subprocess.run(["ssh", alias, remote], input=helper_source().encode("utf-8"), capture_output=True,
+                              timeout=int(decl["fetch_timeout_seconds"]))
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise _err("VR_EVIDENCE_REJECTED", f"经 ssh {alias} 取回失败({type(exc).__name__}: {exc})") from exc
+    err_text = proc.stderr.decode("utf-8", "replace").strip()
+    if proc.returncode != 0:
+        lines = [ln for ln in err_text.splitlines() if ln.strip()] or [f"(无输出, 退出码 {proc.returncode})"]
+        hint = []
+        if "EVIDENCE_MANIFEST_MISSING" in err_text or "EVIDENCE_FILE_CHANGED" in err_text or "EVIDENCE_MANIFEST_INVALID" in err_text:
+            hint = [f"出口: 在目标主机(run 仍活动时)运行产品铸的清单命令 `{evidence_manifest_command(gov, entry, run)}` 后重新取回"]
+        raise _err("VR_EVIDENCE_REJECTED", f"目标主机 {entry['host']}(经 ssh {alias})打包拒绝(退出码 {proc.returncode}):", *lines, *hint)
+    copy_dir = run_evidence_copy_dir(gov, entry, run["run_id"])
+    parent = copy_dir.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    if os.path.islink(parent) or os.path.islink(copy_dir):
+        raise _err("VR_EVIDENCE_REJECTED", f"副本落点 {copy_dir} 或其父目录是符号链接")
+    tmp = parent / f".{run['run_id']}.fetch-{os.getpid()}"
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    tmp.mkdir(mode=0o700)
+    budget = limits["max_total_bytes"] + limits["max_file_bytes"]  # 清单自身另计一份单文件上限
+    try:
+        problems: list[str] = []
+        seen: set[str] = set()
+        try:
+            with tarfile.open(fileobj=io.BytesIO(proc.stdout), mode="r:") as tar:
+                for member in tar:
+                    name = member.name
+                    if not member.isreg():
+                        problems.append(f"打包内 {name!r} 不是普通文件(软链 / 目录 / 设备一律拒)")
+                        continue
+                    if name in seen:
+                        problems.append(f"打包内 {name!r} 重复")
+                        continue
+                    seen.add(name)
+                    if name == layout["manifest"]:
+                        target = tmp / layout["manifest"]
+                    elif name.startswith("files/") and not helper.evidence_rel_problem(name[len("files/"):], list(decl["include_dirs"])):
+                        target = tmp / layout["files"] / name[len("files/"):]
+                    else:
+                        problems.append(f"打包内 {name!r} 不是清单或证据目录内的规范路径(越界)")
+                        continue
+                    if member.size > limits["max_file_bytes"] or member.size > budget:
+                        problems.append(f"打包内 {name!r} 大小 {member.size} 超上限")
+                        continue
+                    budget -= member.size
+                    handle = tar.extractfile(member)
+                    data = handle.read() if handle is not None else b""
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(data)
+        except tarfile.TarError as exc:
+            problems.append(f"打包流解不开({exc})")
+        if problems:
+            raise _err("VR_EVIDENCE_REJECTED", *problems)
+        manifest_file = tmp / layout["manifest"]
+        if not manifest_file.is_file():
+            raise _err("VR_EVIDENCE_REJECTED", "打包内无清单 manifest.json")
+        manifest_sha = file_sha256(manifest_file)
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        record = {"schema": EVIDENCE_FETCH_SCHEMA, "fetched_at": _iso(_now()), "declaration_id": entry["id"], "task_id": entry["task_id"],
+                  "instance": entry["instance"], "host": entry["host"], "ssh_alias": alias, "fingerprint": entry["host_fingerprint"],
+                  "run_id": run["run_id"], "run_dir": run_dir, "manifest_sha256": manifest_sha, "host_report": err_text.splitlines()[-1:]}
+        (tmp / layout["fetch_record"]).write_text(json.dumps(record, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+        checked = evidence_copy_check(gov, entry, run, tmp)
+        if not checked["ok"]:
+            raise _err("VR_EVIDENCE_REJECTED", *checked["problems"])
+        old = parent / f".{run['run_id']}.old-{os.getpid()}"
+        if copy_dir.exists():
+            os.replace(copy_dir, old)
+        os.replace(tmp, copy_dir)
+        if old.exists():
+            shutil.rmtree(old)
+    except BaseException:
+        if tmp.exists():
+            shutil.rmtree(tmp)
+        raise
+    files = manifest.get("files") or []
+    return {"entry": entry, "run": run, "copy_dir": str(copy_dir), "manifest_sha256": manifest_sha, "files": len(files),
+            "bytes": sum(int(f.get("size") or 0) for f in files), "skipped": manifest.get("skipped") or [], "ssh_alias": alias,
+            "notes": [f"副本 = {copy_dir}(清单 {layout['manifest']} / 取回记录 {layout['fetch_record']} / 证据 {layout['files']}/); 裁决入口对副本做与本机 run 同一核对",
+                      "副本由产品命令产出, 禁手改(改 = 裁决入口拒); 远端证据更新后重新生成清单并重新取回(覆盖)"]}
 
 
 # ---------------------------------------------------------------------------
@@ -1214,6 +1536,12 @@ def render_section_lines(governance_root: str | Path, *, instance: str, task_id:
         if values["init_run"]:
             lines.append(_fill(texts["init_run_ssh" if alias else "init_run"], values))  # AIPOS-F191 件②: run-start 后第一步 = 目录链初始化
             lines.append(_fill(texts["src_deliver_ssh" if alias else "src_deliver"], values))  # AIPOS-F197 件④: 第二步 = 候选源码送达与核对
+            if not is_local_host(entry["host"]) and is_audit_declaration(entry):  # AIPOS-F200 件④: 审计 run 在远端 = 证据清单 + 取回
+                lines.append(_fill(texts["evidence_fetch"], {
+                    **values, "evidence_manifest": evidence_manifest_command(gov, entry, run),
+                    "evidence_fetch": evidence_fetch_command(gov, entry, run["run_id"]),
+                    "evidence_copy": str(run_evidence_copy_dir(gov, entry, run["run_id"])),
+                    "evidence_dirs": " / ".join(f"{run_dir}/{d}" for d in run_evidence_declaration()["include_dirs"])}))
         lines.append(_fill(texts["check_dev"], values))
         if not is_local_host(entry["host"]):
             lines.append(_fill(texts["helper_ssh"] if alias else texts["helper"], values))

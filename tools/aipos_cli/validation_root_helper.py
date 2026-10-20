@@ -40,6 +40,15 @@ tools/aipos_cli/validation_root.py 直接 import 本模块的同名函数(声明
       按 git 规则对 <run>/src 算 tree 指纹(根下 .git 不计), 须 = 候选 tree(混入改动 / 多出缺文件 / 错版本 = 拒); 证据追加
       <run>/.lybra-vr/src-verify.jsonl; 末行 `SRC_OK …` + 退出码 0 = 送达树即候选; 其余一律视为未送达。
 
+  AIPOS-F200 远端 run 证据取回(审计 run 在目标主机时; 完整命令由产品铸: 开工稿「验证卡运行证据步骤」/ 章程验证根节):
+  python3 - evidence-manifest --run-dir <run> --candidate <候选 sha> --expect-fingerprint <hfp1:…> --include <证据目录>… --skip-ext <扩展名>…
+          --max-file-bytes <n> --max-total-bytes <n> --max-files <n> --seal <vre1:…>
+      列 run 目录内声明证据目录下的文件(相对路径 / 大小 / sha256)+ 主机指纹 + 封签, 写 <run>/.lybra-vr/evidence-manifest.json;
+      软链 / 非普通文件 / 超限 = 拒; 代码文件扩展名不取回(记 skipped)。末行 `EVIDENCE_OK manifest=… sha256=…` + 退出码 0。
+  python3 - evidence-bundle --run-dir <run> --expect-fingerprint <hfp1:…>
+      只读: 核清单(形 / 封签 / run 目录 / 指纹)与清单内每个文件(不跟软链、真实路径在 run 内、大小与 sha256 一致), 全过才向 stdout
+      写 tar 流(manifest.json + files/<相对路径>); 由治理根所在机 `lybra project validation-root evidence-fetch` 经 ssh 别名调用。
+
 判定(全部 fail-closed):
   1. 本机指纹 = --expect-fingerprint, 否则 HOST_FINGERPRINT_MISMATCH(跨机调用核对);
   2. run 目录与目标须为规范绝对路径(无 `..` / `.` / 重复斜杠), 否则 PATH_NOT_CANONICAL;
@@ -440,6 +449,265 @@ def _src_verify_cli(args: argparse.Namespace) -> int:
         print(f"DENY [SRC_TREE_MISMATCH] {why}; 证据 {evidence}; 出口: 删掉 {src} 后按产品给的送达命令重送(禁手改 src 凑指纹)")
         return EXIT_DENY
     print(f"SRC_OK candidate={args.candidate} tree={got['tree']} files={got['files']} evidence={evidence}")
+    return EXIT_ALLOW
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F200 远端 run 证据清单(evidence-manifest)与只读打包(evidence-bundle): 审计 run 在目标主机时, 治理根所在机经声明 ssh 别名
+# 取回清单内证据到审计报告落点副本, 裁决入口对副本做与本机 run 同一核对(清单 / 封签 / 副本核对 = 本节 + validation_root.evidence_copy_check)
+# ---------------------------------------------------------------------------
+
+EVIDENCE_MANIFEST = ".lybra-vr/evidence-manifest.json"
+EVIDENCE_SCHEMA = "lybra-vr-evidence-v1"
+_EVIDENCE_SEAL_RE = re.compile(r"^vre1:[0-9a-f]{32}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+EVIDENCE_MANIFEST_KEYS = ("schema", "at", "host", "fingerprint", "run_dir", "task_id", "run_id", "candidate", "include", "skip_ext", "limits",
+                          "seal", "files", "skipped", "total_bytes")
+EVIDENCE_LIMIT_KEYS = ("max_file_bytes", "max_total_bytes", "max_files")
+
+
+def evidence_seal(run_dir: str, candidate: str, fingerprint: str, include: list[str], skip_ext: list[str], limits: dict[str, int]) -> str:
+    """evidence-manifest 命令的完整性封印(治理根侧铸命令、主机侧核对、取回与裁决入口复核同一实现; 同 init_seal: 无密钥, 只防手改参数)。"""
+    payload = "\n".join(("lybra-vr-evidence-v1", run_dir, candidate, fingerprint, ",".join(include), ",".join(skip_ext),
+                         *(str(limits.get(k)) for k in EVIDENCE_LIMIT_KEYS)))
+    return "vre1:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
+def evidence_rel_problem(rel: Any, include: list[str]) -> str | None:
+    """清单内相对路径判据(主机侧打包与治理根侧副本核对同一实现): 规范相对路径、落在声明证据目录内、不是清单自身。"""
+    if not isinstance(rel, str) or not rel or rel.startswith("/"):
+        return f"清单路径 {rel!r} 须为相对路径"
+    problem = canonical_problem("/" + rel)
+    if problem:
+        return f"清单路径 {rel!r} 不规范({problem})"
+    if rel == EVIDENCE_MANIFEST:
+        return f"清单路径 {rel!r} 是清单自身"
+    if not any(is_within("/" + rel, "/" + d) and rel != d for d in include):
+        return f"清单路径 {rel!r} 不在证据目录 {include} 内(越界)"
+    return None
+
+
+def evidence_manifest_problems(manifest: Any, *, run_dir: str, fingerprint: str) -> list[str]:
+    """清单形 + 封签自洽 + run 目录 / 主机指纹核对(主机侧打包与治理根侧副本核对同一实现)。返回问题原文(空 = 通过)。"""
+    if not isinstance(manifest, dict) or set(manifest) != set(EVIDENCE_MANIFEST_KEYS):
+        keys = sorted(manifest) if isinstance(manifest, dict) else type(manifest).__name__
+        return [f"证据清单键须恰为 {list(EVIDENCE_MANIFEST_KEYS)}, 实为 {keys}"]
+    problems: list[str] = []
+    if manifest["schema"] != EVIDENCE_SCHEMA:
+        problems.append(f"证据清单 schema={manifest['schema']!r} ≠ {EVIDENCE_SCHEMA}")
+    include, skip_ext, limits = manifest["include"], manifest["skip_ext"], manifest["limits"]
+    if (not isinstance(include, list) or not all(isinstance(d, str) and d for d in include) or not isinstance(skip_ext, list)
+            or not all(isinstance(e, str) for e in skip_ext) or not isinstance(limits, dict) or set(limits) != set(EVIDENCE_LIMIT_KEYS)
+            or not all(isinstance(limits[k], int) and not isinstance(limits[k], bool) and limits[k] > 0 for k in EVIDENCE_LIMIT_KEYS)):
+        return problems + ["证据清单 include / skip_ext / limits 形不合"]
+    for key, want in (("run_dir", run_dir), ("fingerprint", fingerprint)):
+        if manifest[key] != want:
+            problems.append(f"证据清单 {key}={manifest[key]!r} ≠ {want!r}")
+    candidate = manifest["candidate"]
+    if not isinstance(candidate, str) or not _TREE_RE.match(candidate):
+        problems.append(f"证据清单 candidate={candidate!r} 不是 40 位 sha")
+    elif manifest["seal"] != evidence_seal(manifest["run_dir"], candidate, manifest["fingerprint"], include, skip_ext, limits):
+        problems.append("证据清单封签不符(run 目录 / 候选 / 主机指纹 / 证据目录 / 上限被改动; 清单须由产品铸的 evidence-manifest 命令生成)")
+    files = manifest["files"]
+    if not isinstance(files, list):
+        return problems + ["证据清单 files 须为列表"]
+    seen: set[str] = set()
+    total = 0
+    for item in files:
+        if not isinstance(item, dict) or set(item) != {"path", "size", "sha256"}:
+            problems.append(f"证据清单条目 {item!r} 键须恰为 path / size / sha256")
+            continue
+        rel_problem = evidence_rel_problem(item["path"], include)
+        if rel_problem:
+            problems.append(rel_problem)
+            continue
+        if item["path"] in seen:
+            problems.append(f"清单路径 {item['path']!r} 重复")
+        seen.add(item["path"])
+        if not isinstance(item["size"], int) or isinstance(item["size"], bool) or item["size"] < 0 or not _SHA256_RE.match(str(item["sha256"])):
+            problems.append(f"清单条目 {item['path']!r} size / sha256 形不合")
+            continue
+        if item["size"] > limits["max_file_bytes"]:
+            problems.append(f"清单条目 {item['path']!r} 大小 {item['size']} 超单文件上限 {limits['max_file_bytes']}")
+        total += item["size"]
+    if len(files) > limits["max_files"]:
+        problems.append(f"清单文件数 {len(files)} 超上限 {limits['max_files']}")
+    if total > limits["max_total_bytes"] or manifest["total_bytes"] != total:
+        problems.append(f"清单总字节 {total}(自述 {manifest['total_bytes']!r})超上限 {limits['max_total_bytes']} 或自述不符")
+    return problems
+
+
+def _read_nofollow(path: str) -> bytes:
+    """只读一个普通文件(O_NOFOLLOW: 末段是符号链接 = OSError; 非普通文件 = OSError)。"""
+    import stat as stat_mod
+
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        if not stat_mod.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"{path} 不是普通文件")
+        chunks = []
+        while True:
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def build_evidence_manifest(run_dir: str, *, candidate: str, fingerprint: str, include: list[str], skip_ext: list[str],
+                            limits: dict[str, int]) -> dict[str, Any]:
+    """在本机列 run 目录内声明证据目录(include)下的文件(相对路径 / 大小 / sha256)。符号链接 / 非普通文件 / 越界 / 超限 = 拒(fail-closed);
+    扩展名在 skip_ext(治理仓代码文件黑名单)的文件不取回, 记入 skipped(裁决入口引用它即「不在清单内」拒)。返回 {ok, code, reason, manifest}。"""
+    import stat as stat_mod
+
+    def deny(code: str, reason: str) -> dict[str, Any]:
+        return {"ok": False, "code": code, "reason": reason, "manifest": None}
+
+    parts = run_dir.rstrip("/").split("/")
+    files: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    total = 0
+    for rel_dir in include:
+        problem = canonical_problem("/" + rel_dir) if rel_dir and not rel_dir.startswith("/") else f"证据目录 {rel_dir!r} 须为相对路径"
+        if problem:
+            return deny("EVIDENCE_PATH_INVALID", f"证据目录 {rel_dir!r}: {problem}")
+        top = posixpath.join(run_dir, rel_dir)
+        if not os.path.lexists(top):
+            continue
+        verdict = judge_realpath(run_dir, top)
+        if not verdict["allowed"]:
+            return deny("EVIDENCE_SYMLINK" if verdict["code"] in ("SYMLINK_ESCAPE", "RUN_DIR_SYMLINK") else verdict["code"],
+                        f"证据目录 {top}: {verdict['reason']}")
+        if os.path.islink(top) or not os.path.isdir(top):
+            return deny("EVIDENCE_SYMLINK", f"证据目录 {top} 是符号链接或不是目录")
+        for current, dirs, names in os.walk(top, followlinks=False):
+            dirs.sort()
+            for name in [*sorted(dirs), *sorted(names)]:
+                full = posixpath.join(current, name)
+                st = os.lstat(full)
+                rel = full[len(run_dir) + 1:]
+                if stat_mod.S_ISLNK(st.st_mode):
+                    return deny("EVIDENCE_SYMLINK", f"{full} 是符号链接(证据目录内不得有软链, 防越界取回)")
+                if stat_mod.S_ISDIR(st.st_mode):
+                    continue
+                if not stat_mod.S_ISREG(st.st_mode):
+                    return deny("EVIDENCE_NOT_REGULAR", f"{full} 不是普通文件(mode {oct(st.st_mode)})")
+                if rel == EVIDENCE_MANIFEST or rel == EVIDENCE_MANIFEST + ".tmp":
+                    continue
+                ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+                if ext and ext in skip_ext:
+                    skipped.append({"path": rel, "reason": f"扩展名 .{ext} 属治理仓代码文件黑名单, 不进审计报告落点(须作证据 = 改存为 {name}.txt)"})
+                    continue
+                if st.st_size > limits["max_file_bytes"]:
+                    return deny("EVIDENCE_TOO_LARGE", f"{full} 大小 {st.st_size} 超单文件上限 {limits['max_file_bytes']}"
+                                                      "(roles.schema validation_root.run_evidence.max_file_bytes)")
+                data = _read_nofollow(full)
+                files.append({"path": rel, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+                total += len(data)
+                if len(files) > limits["max_files"] or total > limits["max_total_bytes"]:
+                    return deny("EVIDENCE_TOO_LARGE", f"证据合计超上限(文件数 {len(files)} / {limits['max_files']}, 字节 {total} / "
+                                                      f"{limits['max_total_bytes']}; roles.schema validation_root.run_evidence)")
+    files.sort(key=lambda f: f["path"])
+    manifest = {"schema": EVIDENCE_SCHEMA, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "host": host_label(),
+                "fingerprint": fingerprint, "run_dir": run_dir, "task_id": parts[-2], "run_id": parts[-1], "candidate": candidate,
+                "include": list(include), "skip_ext": list(skip_ext), "limits": dict(limits),
+                "seal": evidence_seal(run_dir, candidate, fingerprint, include, skip_ext, limits), "files": files, "skipped": skipped,
+                "total_bytes": total}
+    return {"ok": True, "code": "OK", "reason": "", "manifest": manifest}
+
+
+def _evidence_limits(args: argparse.Namespace) -> dict[str, int]:
+    return {"max_file_bytes": args.max_file_bytes, "max_total_bytes": args.max_total_bytes, "max_files": args.max_files}
+
+
+def _evidence_manifest_cli(args: argparse.Namespace) -> int:
+    """evidence-manifest: 封印核参数 → run 目录合规 → 列证据 → 清单写 <run>/.lybra-vr/evidence-manifest.json; 末行 EVIDENCE_OK。"""
+    limits = _evidence_limits(args)
+    if (not _EVIDENCE_SEAL_RE.match(args.seal or "") or not _TREE_RE.match(args.candidate or "")
+            or any(v <= 0 for v in limits.values())):
+        print("DENY [EVIDENCE_SEAL_MISMATCH] --seal / --candidate / 上限形不合(命令须原样取自产品)")
+        return EXIT_DENY
+    if evidence_seal(args.run_dir, args.candidate, args.expect_fingerprint, args.include, args.skip_ext, limits) != args.seal:
+        print("DENY [EVIDENCE_SEAL_MISMATCH] 参数与产品铸的封印不符(run 目录 / 候选 / 指纹 / 证据目录 / 上限被改动; 命令须原样取自产品)")
+        return EXIT_DENY
+    problem = _run_dir_problem(args.run_dir, EVIDENCE_MANIFEST)
+    if problem:
+        print(f"DENY {problem}")
+        return EXIT_DENY
+    result = build_evidence_manifest(args.run_dir, candidate=args.candidate, fingerprint=args.expect_fingerprint, include=args.include,
+                                     skip_ext=args.skip_ext, limits=limits)
+    if not result["ok"]:
+        print(f"DENY [{result['code']}] {result['reason']}")
+        return EXIT_DENY
+    manifest = result["manifest"]
+    problem = _write_json_in_run(args.run_dir, EVIDENCE_MANIFEST, manifest)
+    if problem:
+        print(f"DENY {problem}")
+        return EXIT_DENY
+    path = posixpath.join(args.run_dir, EVIDENCE_MANIFEST)
+    digest = hashlib.sha256(_read_nofollow(path)).hexdigest()
+    for item in manifest["skipped"]:
+        print(f"skipped {item['path']}: {item['reason']}")
+    print(f"EVIDENCE_OK manifest={path} sha256={digest} files={len(manifest['files'])} bytes={manifest['total_bytes']} "
+          f"fingerprint={manifest['fingerprint']}")
+    return EXIT_ALLOW
+
+
+def _evidence_bundle_cli(args: argparse.Namespace) -> int:
+    """evidence-bundle(只读): 读本 run 清单 → 清单形 / 封签 / run 目录 / 指纹核对 → 逐个核清单内文件(O_NOFOLLOW、真实路径在 run 内、
+    大小与 sha256 = 清单)→ 全部通过才向 stdout 写 tar 流(manifest.json + files/<相对路径>); 任一不过 = stderr 写 DENY、stdout 无输出、退出 3。"""
+    import io
+    import tarfile
+
+    def deny(code: str, reason: str) -> int:
+        print(f"DENY [{code}] {reason}", file=sys.stderr)
+        return EXIT_DENY
+
+    problem = _run_dir_problem(args.run_dir, EVIDENCE_MANIFEST)
+    if problem:
+        return deny("RUN_DIR_INVALID", problem)
+    path = posixpath.join(args.run_dir, EVIDENCE_MANIFEST)
+    try:
+        raw = _read_nofollow(path)
+    except FileNotFoundError:
+        return deny("EVIDENCE_MANIFEST_MISSING", f"{path} 不存在(先在目标主机运行产品铸的 evidence-manifest 命令生成证据清单)")
+    except OSError as exc:
+        return deny("EVIDENCE_SYMLINK", f"{path} 读不出或不是普通文件({exc})")
+    try:
+        manifest = json.loads(raw.decode("utf-8"))
+    except ValueError as exc:
+        return deny("EVIDENCE_MANIFEST_INVALID", f"{path} 不是 JSON({exc})")
+    problems = evidence_manifest_problems(manifest, run_dir=args.run_dir, fingerprint=args.expect_fingerprint)
+    if problems:
+        return deny("EVIDENCE_MANIFEST_INVALID", "; ".join(problems))
+    payloads: list[tuple[str, bytes]] = []
+    for item in manifest["files"]:
+        full = posixpath.join(args.run_dir, item["path"])
+        verdict = judge_realpath(args.run_dir, full)
+        if not verdict["allowed"]:
+            return deny("EVIDENCE_SYMLINK", f"{item['path']}: {verdict['reason']}")
+        try:
+            data = _read_nofollow(full)
+        except FileNotFoundError:
+            return deny("EVIDENCE_FILE_MISSING", f"清单内文件 {full} 不存在(清单生成后被删)")
+        except OSError as exc:
+            return deny("EVIDENCE_SYMLINK", f"清单内文件 {full} 是符号链接或不是普通文件({exc})")
+        digest = hashlib.sha256(data).hexdigest()
+        if len(data) != item["size"] or digest != item["sha256"]:
+            return deny("EVIDENCE_FILE_CHANGED", f"清单内文件 {full} 现 sha256={digest[:12]} 大小 {len(data)} ≠ 清单 {item['sha256'][:12]} / "
+                                                 f"{item['size']}(清单生成后被改; 重新生成清单须在 run 活动时由产品命令完成)")
+        payloads.append((f"files/{item['path']}", data))
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w", format=tarfile.PAX_FORMAT) as tar:
+        for name, data in [("manifest.json", raw), *payloads]:
+            info = tarfile.TarInfo(name)
+            info.size, info.mode, info.mtime, info.type = len(data), 0o600, 0, tarfile.REGTYPE
+            tar.addfile(info, io.BytesIO(data))
+    sys.stdout.buffer.write(buffer.getvalue())
+    sys.stdout.buffer.flush()
+    print(f"BUNDLE_OK files={len(payloads)} bytes={manifest['total_bytes']}", file=sys.stderr)
     return EXIT_ALLOW
 
 
@@ -895,6 +1163,21 @@ def _parser() -> argparse.ArgumentParser:
     srcv.add_argument("--expect-tree", required=True)
     srcv.add_argument("--expect-fingerprint", required=True)
     srcv.add_argument("--seal", required=True)
+    evm = sub.add_parser("evidence-manifest", help="AIPOS-F200: list this run's evidence files (declared evidence dirs; path / size / sha256) "
+                                                   "with host fingerprint and seal into <run-dir>/.lybra-vr/evidence-manifest.json")
+    evm.add_argument("--run-dir", required=True)
+    evm.add_argument("--candidate", required=True)
+    evm.add_argument("--expect-fingerprint", required=True)
+    evm.add_argument("--include", action="append", default=[], help="Evidence dir relative to the run dir (repeatable; sealed)")
+    evm.add_argument("--skip-ext", action="append", default=[], help="File extension not fetched (code files; repeatable; sealed)")
+    evm.add_argument("--max-file-bytes", type=int, required=True)
+    evm.add_argument("--max-total-bytes", type=int, required=True)
+    evm.add_argument("--max-files", type=int, required=True)
+    evm.add_argument("--seal", required=True)
+    evb = sub.add_parser("evidence-bundle", help="AIPOS-F200: read-only; verify the run's evidence manifest and every listed file, then write a "
+                                                 "tar stream (manifest.json + files/<path>) to stdout; any mismatch = DENY on stderr, exit 3")
+    evb.add_argument("--run-dir", required=True)
+    evb.add_argument("--expect-fingerprint", required=True)
     cmp_ = sub.add_parser("compare", help="Compare two snapshots; exit 0 unchanged, 4 changed")
     cmp_.add_argument("before")
     cmp_.add_argument("after")
@@ -980,6 +1263,16 @@ def main(argv: list[str] | None = None) -> int:
             return EXIT_DENY
         try:
             return _src_verify_cli(args)
+        except OSError as exc:
+            print(f"ERROR [HOST_IO_FAILED] {type(exc).__name__}: {exc}", file=sys.stderr)
+            return EXIT_ERROR
+    if args.command in ("evidence-manifest", "evidence-bundle"):  # AIPOS-F200
+        problem = _own_fingerprint_problem(args.expect_fingerprint)
+        if problem:
+            print(f"DENY {problem}", file=sys.stderr if args.command == "evidence-bundle" else sys.stdout)
+            return EXIT_DENY
+        try:
+            return _evidence_manifest_cli(args) if args.command == "evidence-manifest" else _evidence_bundle_cli(args)
         except OSError as exc:
             print(f"ERROR [HOST_IO_FAILED] {type(exc).__name__}: {exc}", file=sys.stderr)
             return EXIT_ERROR

@@ -4585,7 +4585,8 @@ def _candidate_run_problem(workspace_root: Path, audit_task_id: str, entry: dict
 
     from tools.aipos_cli.artifact_ingest import runtime_evidence_declaration
     from tools.aipos_cli.validation_root import (
-        ValidationRootError, card_kinds, declaration_status, is_local_host, locate_run, src_verify_evidence_check, task_ownership_problems,
+        ValidationRootError, card_kinds, declaration_status, evidence_log_file, is_local_host, locate_run, remote_run_evidence,
+        src_verify_evidence_check, task_ownership_problems,
     )
     from tools.aipos_cli.validation_root_helper import SRC_DIR_NAME, canonical_problem, is_within
 
@@ -4614,10 +4615,18 @@ def _candidate_run_problem(workspace_root: Path, audit_task_id: str, entry: dict
         return {}, f"{where} 未开启(声明 runs 中无 {run_id}; 先由顾问 run-start, 候选 = 卡面固定候选)"
     if run["candidate"] != subject["commit_sha"]:
         return {}, f"{where} 候选 {run['candidate']} ≠ 被审卡卡面固定候选 {subject['commit_sha']}"
+    remote = None
     if not is_local_host(decl_entry["host"]):
-        return {}, (f"{where} 在主机 {decl_entry['host']}(非治理根所在机), 裁决入口读不到 run 内送达核对证据与日志(fail-closed); "
-                    "卡面声明的命令须在治理根所在机的审计 run 运行")
-    src = src_verify_evidence_check(decl_entry, run, candidate=subject["commit_sha"], tree=subject["tree_hash"])
+        # AIPOS-F200 件③: 远端 run 改读审计报告落点副本(evidence-manifest → evidence-fetch 产出), 副本核对过后判据与本机 run 同一(只换读取源)
+        try:
+            remote = remote_run_evidence(workspace_root, decl_entry, run)
+        except (ValidationRootError, OSError, ValueError) as exc:
+            return {}, f"{where} 在主机 {decl_entry['host']}(非治理根所在机), 取回副本核对不了(fail-closed): {exc}"
+        if not remote["ok"]:
+            return {}, (f"{where} 在主机 {decl_entry['host']}(非治理根所在机), 裁决入口读不到 run 内送达核对证据与日志(fail-closed); "
+                        f"取回副本 {remote['copy_dir']} 不可用: {'; '.join(remote['problems'])}; {remote['outlet']}")
+    src = src_verify_evidence_check(decl_entry, run, candidate=subject["commit_sha"], tree=subject["tree_hash"],
+                                    files_root=remote["files_root"] if remote else None)
     if src:
         return {}, f"{where} 源码封签不过: {'; '.join(src)}"
     worktree = str(entry.get("worktree") or "").strip()
@@ -4628,6 +4637,11 @@ def _candidate_run_problem(workspace_root: Path, audit_task_id: str, entry: dict
     log_file = Path(log_path).expanduser()
     if not log_file.is_absolute():
         return {}, f"{keys['path']} 须为绝对路径, 实为 {log_path}"
+    if remote:  # AIPOS-F200: 远端 run 的日志 = 目标主机本 run 内路径, 读取副本 files/<相对路径>
+        mapped, problem = evidence_log_file(remote, log_path)
+        if problem:
+            return {}, f"{where} {problem}"
+        log_file = mapped
     try:
         actual = hashlib.sha256(log_file.read_bytes()).hexdigest()
     except OSError as exc:
