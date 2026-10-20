@@ -429,10 +429,10 @@ lybra project check-workstation <项目名> --home-root <home根> --instance <�
 **先生成切换计划(AIPOS-F198)**: 下面各步的命令、顺序与「哪些已完成」由产品推导, 不手写——Owner 在看板项目「工位设置」页选好目标分工后转给你的提示词,
 与下面命令输出同一份(只读, 零写入); 照它逐步先预演后确认, 被拒原样报告 Owner:
 ```bash
-lybra project workstation-plan <项目名> --home-root <home根> --pi-modes validation,config,docs --pi-executor <执行体实例> [--workspace <工位目录>] [--host <主机标签> --ssh-alias <ssh别名>] [--owner-ref <Owner裁决引用>]
+lybra project workstation-plan <项目名> --home-root <home根> --pi-modes validation,config,docs --pi-executor <执行体实例> --workspace <工位目录> --host <主机标签> --ssh-alias <ssh别名>
 ```
 输出含: 现状(子 agent 执行者 / pi 执行工位 / 审计工位的接入与章程状态、交 pi 的卡类型、目标主机 ssh 别名、验证根摘要、各卡类型派给谁)、风险、
-依赖序步骤(决策日志 → Owner 签覆盖信封 → 接入 → 手写章程接管 / 章程同步 → set-execution → set-host → 核验 → 通知专项顾问)、给项目总顾问与给各专项顾问的两段话术。
+依赖序步骤(决策日志 → Owner 签覆盖信封 → 接入 → 手写章程接管 / 章程同步 → set-execution → set-host → 核验 → 通知专项顾问)、给项目总顾问与给各专项顾问的两段话术。--workspace(既有工位可省)、--host / --ssh-alias(不经 ssh 可省)可省; Owner 已有决策记录时加 --owner-ref 引用它(决策步即为已完成)。
 
 1. **pi 执行工位接入**(工位目录不迁移; 已有手写章程的工位先接管; enroll-deliver 预演后加 `--confirm`):
 ```bash
