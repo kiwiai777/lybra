@@ -15,6 +15,9 @@
     sha_typo   AIPOS-F180B: first run as sha_typo_once; on resume rewrites the header with another wrong value (tip[:38])
     sha_stay   AIPOS-F180B: first run as sha_typo_once; on resume leaves the report untouched and exits 0
     sha_other  AIPOS-F180B: report commit_sha = FAKE_AUDIT_OTHER_SHA (another real commit = audited the wrong product)
+    validate   AIPOS-F196 (executor card only): fixed-candidate validation card (no worktree): run the kickoff's validation-root
+               ssh commands (directory-chain init-run, then helper check of the screenshot path), write a fake screenshot into the
+               run directory over `ssh <alias>`, copy it to the report slot artifacts/, write RETURN with the product-given values
   FAKE_HARNESS_LOG: 目录; 收到的 argv[1](kickoff)按字节原样落 <卡号>.kickoff, cwd 落 <卡号>.cwd(供逐字节比对)
 事件里故意含一行凭据字样、一个未知事件类型、一行非 JSON(验汇总隐去/计数不刷屏)。
 """
@@ -100,6 +103,39 @@ def do_work(task_id: str, kickoff: str, sha: str | None = None) -> None:
     emit({"type": "tool_execution_end", "toolCallId": "t2", "toolName": "write", "isError": False, "result": {"content": []}})
 
 
+def do_validate(task_id: str, kickoff: str) -> None:
+    """AIPOS-F196: validation card (fixed candidate, no worktree) driven only by the product kickoff text."""
+    report = Path(field(kickoff, "报告落点"))
+    values = dict(re.findall(r"^- (commit_sha|tree_hash|branch): (\S+?)\(", kickoff, re.M))
+    alias = re.search(r"ssh 别名 = (\S+?), ", kickoff).group(1)
+    run_dir = re.search(r"本次只写 `([^`]+)`", kickoff).group(1)
+    init = re.search(r"在治理根所在机运行 `([^`]+)`\(helper 由产品给出", kickoff).group(1)
+    check = re.search(r"每次写前在治理根所在机运行 `([^`]+)`", kickoff).group(1)
+    log = []
+    proc = subprocess.run(["bash", "-c", init], capture_output=True, text=True, timeout=120)
+    log.append(f"$ {init}\nexit {proc.returncode}\n{proc.stdout.strip()}{proc.stderr.strip()}")
+    if proc.returncode != 0 or not proc.stdout.strip().splitlines()[-1].startswith("INIT_OK"):
+        raise SystemExit("fake_harness: init-run failed:\n" + log[-1])
+    target = f"{run_dir}/screenshot.png"
+    command = check.replace("<目标>", target)
+    proc = subprocess.run(["bash", "-c", command], capture_output=True, text=True, timeout=120)
+    log.append(f"$ {command}\nexit {proc.returncode}\n{proc.stdout.strip()}{proc.stderr.strip()}")
+    if proc.returncode != 0 or "ALLOW" not in proc.stdout:
+        raise SystemExit("fake_harness: helper check refused:\n" + log[-1])
+    write = f"printf 'fake-png-{task_id}' > {target}"
+    proc = subprocess.run(["ssh", alias, write], capture_output=True, text=True, timeout=60)
+    log.append(f"$ ssh {alias} {write!r}\nexit {proc.returncode}")
+    shot = report.parent / "artifacts" / "screenshot.png"
+    shot.parent.mkdir(parents=True, exist_ok=True)
+    shot.write_bytes(Path(target).read_bytes())
+    (report.parent / "artifacts" / "commands.txt").write_text("\n\n".join(log) + "\n", encoding="utf-8")
+    emit({"type": "tool_execution_start", "toolCallId": "t2", "toolName": "bash", "args": {"command": f"ssh {alias} (validation run)"}})
+    report.write_text(frontmatter(values, f"# RETURN — {task_id}\n\n## 一句话结论\n固定候选验证完成(假 harness): 截图见 artifacts/screenshot.png。\n\n"
+                                          f"## 证据\n- run 目录 {run_dir}\n- artifacts/commands.txt\n"), encoding="utf-8")
+    pi_session(report, "fake-exec-model")
+    emit({"type": "tool_execution_end", "toolCallId": "t2", "toolName": "write", "isError": False, "result": {"content": []}})
+
+
 def sha_mode(task_id: str, kickoff: str, mode: str) -> None:
     """AIPOS-F180B: report-header commit_sha fixture modes (audit card only); resume = FAKE_PI_RESUMES >= 1 (set by fake pi)."""
     tip = re.search(r"^- commit_sha: ([0-9a-f]{40})\(", kickoff, re.M).group(1)
@@ -164,6 +200,10 @@ def main() -> int:
         return 0
     if mode.startswith("sha_") and reviewed_of(task_id):
         sha_mode(task_id, kickoff, mode)
+        emit({"type": "agent_end", "messages": []})
+        return 0
+    if mode == "validate" and not reviewed_of(task_id):
+        do_validate(task_id, kickoff)
         emit({"type": "agent_end", "messages": []})
         return 0
     do_work(task_id, kickoff)

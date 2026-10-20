@@ -33,6 +33,11 @@
 - ✅ **推进**:`lybra loop --task-id <卡ID>`——认领(信封一段式, 门内同步建工作树)、交回与裁决经产物入口入门、
   派审、finalize、close 全由产品执行;顾问不写任何直接调门接口的脚本。
 - ✅ **派生子 agent(非 pi 引擎)**:开工物只用 `lybra card render --task-id <卡ID> --harness <引擎>` 的渲染物。
+- ✅ **分工(AIPOS-F196, Owner 10-20 定)**:**代码卡 = 你派子 agent**(loop 等待提示 `manual_kickoff` 子 agent 模式, 开工稿
+  `lybra kickoff`);**验证 / 环境 / 文档卡 = pi 执行工位**(project.json `execution.pi_allowed_task_modes` 列内的 task_mode 起草缺省
+  harness=pi、assigned_to=pi_executor, `lybra loop` 自动拉起, 你不派工、不敲 `/go`);**审计 = 独立 pi 审计工位**。验证卡(task_mode=validation)
+  保留独立审计、无合入;环境卡(config)由你复核(loop 停在「非代码卡快车道:顾问直接审」)。验证 / 环境类工作单独出卡交 pi,
+  代码卡只做实现与离线测试。起草要点见技能手册「非代码工作交 pi」节。
 - ❌ **反例**:给工位贴「执行任务卡 `<路径>`」冷启动 → 绕过产品核验, 2026-10-02 审计会话被贴错卡号对已结案卡重审并覆盖原报告。
 
 **机制保障**:开工核验唯一判据在产品(next_resolver.kickoff_refusal), `/go <卡号>` 亦经它核验;
@@ -245,6 +250,9 @@ lybra next --task-id <卡ID>
 - ✅ Owner 中途改目标 → 撤换:先出新卡并发布, 再 `lybra queue supersede --task-id <原卡> --by <新卡> --actor <你的顾问实例> --owner-words <Owner 原话>`(预演后 `--confirm`;不要以执行体身份 block 原卡)
 - ✅ 顾问起草的在途卡契约需更正(门拒改已认领卡的验收等字段)→ 出更正卡 → `lybra queue supersede … --carry-branch`(新卡承继原卡分支与已做工作;原卡工作树须先由执行体提交干净, 产品不代提交)→ 跑新卡 loop;Owner 中途改目标、原卡已做工作要保留时同一命令(AIPOS-F186)
 - ✅ 派子 agent 的开工稿:`lybra kickoff --task-id <卡ID>`(审计卡加 `--role auditor` 或按卡自动判; 输出原样交给子 agent, 可在其后追加本卡特别说明, 不再手写; AIPOS-F187)
+- ✅ 非代码工作交 pi:`lybra project set-execution … --pi-executor <pi 执行工位> --pi-allowed-task-mode validation --pi-allowed-task-mode config --pi-allowed-task-mode docs`(先 `--dry-run`);
+  pi 经 ssh 操作目标主机:`lybra project validation-root set-host --host <主机标签> --ssh-alias <ssh 别名> --owner-ref <Owner 授权>`;
+  手写工位章程正式接管:`lybra sync --harness-root <工位> --workspace-root {{governance_root}} --adopt-hand-charter --owner-ref <Owner 裁决引用>`(原章程备份保留, AIPOS-F196)
 - ✅ 卡工作树清理:结案 / 撤回 / 撤换后产品自动清理干净的卡工作树与审计工作树(分支保留, 脏树不碰并在结案输出 / loop status 报路径与改动计数);存量用 `lybra project cleanup-worktrees` 预演后加 `--confirm`(AIPOS-F187)
 - ✅ 派审:`lybra audit dispatch`
 - ✅ 裁决:`lybra audit-verdict`
