@@ -94,10 +94,19 @@ def _fetch(gov: Path, decl: str, run_id: str) -> tuple[int, str, str]:
     return _vr(gov, "evidence-fetch", "--id", decl, "--run-id", run_id)
 
 
+def _fake_ssh_double_dash(rig_) -> None:  # noqa: ANN001
+    """F196 假 ssh 增认 `ssh -- <别名> <命令>`(evidence-fetch 经 enroll_deliver.ssh_argv 唯一拼接口调用); 其余行为不变(记录别名, 就地 sh 执行, stdin 透传)。"""
+    fake = Path(os.environ["PATH"].split(os.pathsep)[0]) / "ssh"
+    assert fake.is_file() and str(fake).startswith(str(rig_.gov.parent)), fake
+    fake.write_text('#!/bin/sh\n[ "$1" = "--" ] && shift\nalias="$1"; shift\nprintf \'%s\\t%s\\n\' "$alias" "$*" >> "$FAKE_SSH_LOG"\n'
+                    'exec sh -c "$*"\n', encoding="utf-8")
+
+
 @pytest.fixture
 def remote(vrig):  # noqa: F811
     """远端审计 run 已就绪: 验证卡 + 审计实例在 sim-mac 的声明 + 别名 + run-start + 目录链 / 送达 / SRC_OK + 卡面命令已在本 run 运行。"""
     gov, base = vrig.gov, vrig.base
+    _fake_ssh_double_dash(vrig)
     candidate, tree = _setup_cards(vrig)
     _set_host(gov)
     decl = _declare_remote(gov, base, VALR, AUDITOR)

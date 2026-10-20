@@ -1374,11 +1374,12 @@ def evidence_fetch(governance_root: str | Path, decl_id: str, run_id: str | None
     decl = run_evidence_declaration()
     layout, limits = decl["copy_layout"], evidence_limits()
     run_dir = run_directory(entry, run["run_id"])
-    remote = "python3 - evidence-bundle " + " ".join(shlex.quote(a) for a in ("--run-dir", run_dir, "--expect-fingerprint", entry["host_fingerprint"]))
+    from tools.aipos_cli.enroll_deliver import ssh_argv  # 本机 ssh 调用唯一拼接口(`ssh -- <别名> <逐参转义命令>`, 拒 '-' 起首别名)
+
     try:
-        proc = subprocess.run(["ssh", alias, remote], input=helper_source().encode("utf-8"), capture_output=True,
-                              timeout=int(decl["fetch_timeout_seconds"]))
-    except (OSError, subprocess.SubprocessError) as exc:
+        argv = ssh_argv(alias, ["python3", "-", "evidence-bundle", "--run-dir", run_dir, "--expect-fingerprint", entry["host_fingerprint"]])
+        proc = subprocess.run(argv, input=helper_source().encode("utf-8"), capture_output=True, timeout=int(decl["fetch_timeout_seconds"]))
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
         raise _err("VR_EVIDENCE_REJECTED", f"经 ssh {alias} 取回失败({type(exc).__name__}: {exc})") from exc
     err_text = proc.stderr.decode("utf-8", "replace").strip()
     if proc.returncode != 0:
