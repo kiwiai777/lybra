@@ -770,6 +770,7 @@ Lybra 服务端位置（AIPOS-286）：
         "rp_nav_overview": "项目总览",
         "rp_nav_roadmap": "路线图与验收",
         "rp_nav_onboarding": "项目接入",
+        "rp_nav_workstation": "工位设置",
         "rp_nav_inbox": "待你决定",
         "rp_nav_envelopes": "信封",
         "rp_nav_project": "项目",
@@ -931,6 +932,7 @@ Lybra 服务端位置（AIPOS-286）：
         "rp_pj_unknown_sub": "子项目 {subproject} 不在本项目, 已显示全部",
         "rp_pj_roadmap": "看路线图",
         "rp_pj_envelopes": "看信封",
+        "rp_pj_workstation": "工位设置(谁做哪类卡)",
         "rp_pj_legacy": "旧版任务中心(卡片原文与预览)",
         "ib_title": "待你决定 · {count} 件({projects} 个项目)",
         "ib_empty": "待你决定:没有待定事项({projects} 个项目)",
@@ -1133,6 +1135,7 @@ Important boundaries:
         "rp_nav_overview": "Project overview",
         "rp_nav_roadmap": "Roadmap & acceptance",
         "rp_nav_onboarding": "Project onboarding",
+        "rp_nav_workstation": "Workstations",
         "rp_nav_inbox": "Your decisions",
         "rp_nav_envelopes": "Envelopes",
         "rp_nav_project": "Projects",
@@ -1294,6 +1297,7 @@ Important boundaries:
         "rp_pj_unknown_sub": "Subproject {subproject} is not in this project; showing all",
         "rp_pj_roadmap": "Roadmap",
         "rp_pj_envelopes": "Envelopes",
+        "rp_pj_workstation": "Workstations (who works which card types)",
         "rp_pj_legacy": "Classic task center (card text and preview)",
         "ib_title": "Your decisions · {count} ({projects} projects)",
         "ib_empty": "Your decisions: nothing pending ({projects} projects)",
@@ -2534,6 +2538,10 @@ def make_handler(
     from tools.aipos_cli.project_upgrade import board_declaration as upgrade_board_declaration
 
     upgrade_decl = upgrade_board_declaration()
+    # AIPOS-F198: workstation page (read-only, GET only; path read from verbs.schema verbs.lybra_project_workstation_plan.board)
+    from tools.aipos_cli.workstation_plan import declaration as workstation_plan_declaration
+
+    workstation_page = str(workstation_plan_declaration()["board"]["page_path"])
 
     class BoardHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -2552,6 +2560,7 @@ def make_handler(
         _artifact_route = artifact_route
         _perf_log = Path(perf_log_path) if perf_log_path is not None else None  # AIPOS-F177: optional, off by default
         _upgrade_paths = {k: str(upgrade_decl[k]) for k in ("page_path", "write_path")}
+        _workstation_page = workstation_page
 
         def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
             body = _json_bytes(payload)
@@ -2951,6 +2960,13 @@ def make_handler(
             # AIPOS-F176: project upgrade page (server-rendered)
             if path == self._upgrade_paths["page_path"]:
                 self._handle_upgrade_page()
+                return
+
+            # AIPOS-F198: workstation page (server-rendered, read-only; the board writes nothing, the advisor runs product commands)
+            if path == self._workstation_page:
+                from web.board.readonly_pages import render_workstation
+
+                self._send_html(render_workstation(home_root, parse_qs(urlparse(self.path).query)))
                 return
 
             # AIPOS-F174: 看板只读页(服务端渲染; 数据 tools/aipos_cli/board_pages 只调既有唯一推导, 渲染 web/board/readonly_pages)

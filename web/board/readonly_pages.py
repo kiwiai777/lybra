@@ -97,7 +97,8 @@ def _page(ctx: _Ctx, page: str, title: str, body: list[str], *, note_key: str | 
     locale = decl["locale"]
     nav = [("rp_nav_overview", decl["pages"]["overview"]), ("rp_nav_project", decl["pages"]["project"]),
            ("rp_nav_roadmap", decl["pages"]["roadmap"]), ("rp_nav_inbox", decl["nav_links"]["inbox"]),
-           ("rp_nav_envelopes", _envelope_page()), ("rp_nav_onboarding", decl["pages"]["onboarding"])]
+           ("rp_nav_envelopes", _envelope_page()), ("rp_nav_onboarding", decl["pages"]["onboarding"]),
+           ("rp_nav_workstation", _workstation_page())]
     links = "".join(f"<a href=\"{_ESC(ctx.href(url))}\"{_CURRENT if url in (decl['pages'].get(page), current_url) else ''}>"
                     f"{_ESC(ctx.t(key))}</a>" for key, url in nav)
     other = next((code for code in locale["supported"] if code != ctx.lang), None)
@@ -162,6 +163,13 @@ def _envelope_page() -> str:
     from tools.aipos_cli.envelope_board import board_envelopes_declaration
 
     return str(board_envelopes_declaration()["page_path"])
+
+
+def _workstation_page(project: str | None = None) -> str:
+    """AIPOS-F198: workstation page address (declared verbs.lybra_project_workstation_plan.board.page_path)."""
+    from tools.aipos_cli.workstation_plan import page_url
+
+    return page_url(project)
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +374,8 @@ def render_project(data: dict[str, Any], lang: str) -> str:
                                                      if sel["subproject"] else "")
     body.append(f"<p class=\"rp-card-foot\"><a class=\"rp-link\" href=\"{_ESC(ctx.href(rm_url))}\">{_ESC(ctx.t('rp_pj_roadmap'))}</a>"
                 f"<a class=\"rp-link\" href=\"{_ESC(ctx.href(sel['envelope_url']))}\">{_ESC(ctx.t('rp_pj_envelopes'))}</a>"
+                f"<a class=\"rp-link rp-workstation-link\" href=\"{_ESC(ctx.href(_workstation_page(sel['project'])))}\">"
+                f"{_ESC(ctx.t('rp_pj_workstation'))}</a>"
                 f"<a class=\"rp-link rp-legacy\" href=\"{_ESC(sel['legacy_url'])}\">{_ESC(ctx.t('rp_pj_legacy'))}</a></p>")
     return _page(ctx, "project", title, body)
 
@@ -912,6 +922,138 @@ def render_upgrade(home_root: str | Path | None, params: dict[str, list[str]], *
         body = [_toggle(ctx, hidden, show_all and not project, page_path)] + parts["sections"]
         return _page(ctx, "upgrade", parts["title"], body, note_key=None, h1_attrs=parts["h1_attrs"], body_attrs=parts["body_attrs"],
                      scripts=parts["scripts"], current_url=page_path)
+    except (OSError, ValueError, LookupError, RuntimeError, SchemaLoadError) as exc:  # unreadable = error page naming the cause
+        return render_error(lang, f"{type(exc).__name__}: {exc}"[:800])
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F198: workstation page (read-only; status / risks / routing / GET form for the target / plan steps / messages for the advisors)
+# ---------------------------------------------------------------------------
+
+def _ws_status(ctx: _Ctx, t: dict[str, Any], plan: dict[str, Any]) -> str:
+    from tools.aipos_cli.workstation_plan import instance_parts, status_rows
+
+    rows = []
+    texts_by_key = dict(status_rows(plan, t))
+    for key, view_key in (("row_subagent", "subagent"), ("row_pi_executor", "pi_executor"), ("row_auditor", "auditor")):
+        parts = instance_parts(t, plan["status"][view_key])
+        extra = (f" <span class=\"rp-sub\">{_ESC(parts['charter'])}</span>" if parts["charter"] else "")
+        where = _tech(ctx, f"<code>{_ESC(parts['where'])}</code>") if parts["where"] else ""
+        rows.append(f"<tr class=\"ws-row{'' if parts['ok'] else ' rp-alert'}\" data-row=\"{_ESC(view_key)}\""
+                    f" data-enrollment=\"{_ESC(str(parts['enrollment'] or ''))}\" data-charter=\"{_ESC(str(parts['charter_state'] or ''))}\">"
+                    f"<th>{_ESC(t[key])}</th><td>{_ESC(parts['who'])}{extra}{where}</td></tr>")
+    for key in ("row_pi_modes", "row_hosts", "row_validation_roots"):
+        rows.append(f"<tr class=\"ws-row\" data-row=\"{_ESC(key)}\"><th>{_ESC(t[key])}</th><td>{_ESC(texts_by_key[key])}</td></tr>")
+    return (f"<section class=\"ws-status\"><h2>{_ESC(t['status_heading'])}</h2>"
+            f"<table class=\"rp-subs ws-table\"><tbody>{''.join(rows)}</tbody></table></section>")
+
+
+def _ws_form(t: dict[str, Any], plan: dict[str, Any], lang: str, query: dict[str, Any], locale: dict[str, Any]) -> str:
+    from tools.aipos_cli.workstation_plan import declaration
+
+    decl = declaration()
+    names = decl["board"]["params"]
+    tgt = plan["target"]
+    st = plan["status"]
+    boxes = "".join(f"<label class=\"ws-check\"><input type=\"checkbox\" name=\"{_ESC(names['pi_mode'])}\" value=\"{_ESC(m)}\""
+                    f"{' checked' if m in tgt['pi_modes'] else ''}> {_ESC(t['mode_' + m])}</label>" for m in decl["offered_pi_modes"])
+    insts = "".join(f"<option value=\"{_ESC(c['instance'])}\"></option>" for c in st["candidates"]["items"])
+    dirs = "".join(f"<option value=\"{_ESC(c['dir'])}\"></option>" for c in st["candidates"]["items"])
+    hosts = sorted(set(st["validation"]["hosts"]) | set(st["validation"]["used_hosts"]))
+    host_opts = "".join(f"<option value=\"{_ESC(h)}\"></option>" for h in hosts)
+    alias_opts = "".join(f"<option value=\"{_ESC(a)}\"></option>" for a in sorted(set(st["validation"]["hosts"].values())))
+
+    def field(key: str, label: str, value: Any, datalist: str = "") -> str:
+        listed = f" list=\"ws-list-{_ESC(key)}\"" if datalist else ""
+        options = f"<datalist id=\"ws-list-{_ESC(key)}\">{datalist}</datalist>" if datalist else ""
+        return (f"<label class=\"ws-field\"><span>{_ESC(label)}</span><input type=\"text\" name=\"{_ESC(names[key])}\""
+                f" value=\"{_ESC(str(value or ''))}\"{listed}>{options}</label>")
+
+    hidden = (f"<input type=\"hidden\" name=\"{_ESC(str(query['project']))}\" value=\"{_ESC(plan['project'])}\">"
+              f"<input type=\"hidden\" name=\"{_ESC(names['submitted'])}\" value=\"1\">"
+              + (f"<input type=\"hidden\" name=\"{_ESC(str(locale['param']))}\" value=\"{_ESC(lang)}\">"
+                 if lang != locale["default"] else ""))
+    return (f"<section class=\"ws-choose\"><h2>{_ESC(t['form_heading'])}</h2><p class=\"rp-sub\">{_ESC(t['form_note'])}</p>"
+            f"<form class=\"ws-form\" method=\"get\" action=\"{_ESC(str(decl['board']['page_path']))}\">{hidden}"
+            f"<fieldset class=\"ws-modes\"><legend>{_ESC(t['form_modes'])}</legend>{boxes}</fieldset>"
+            + field("pi_executor", t["form_pi_executor"], tgt["pi_executor"], insts)
+            + field("workspace", t["form_workspace"], tgt["workspace"], dirs)
+            + field("host", t["form_host"], tgt["host"], host_opts)
+            + field("ssh_alias", t["form_ssh_alias"], tgt["ssh_alias"], alias_opts)
+            + field("owner_ref", t["form_owner_ref"], tgt["owner_ref"])
+            + f"<p><button type=\"submit\">{_ESC(t['form_submit'])}</button></p></form></section>")
+
+
+def _ws_steps(t: dict[str, Any], plan: dict[str, Any], ctx: _Ctx) -> str:
+    from tools.aipos_cli.workstation_plan import step_lines
+
+    items = []
+    for n, step in enumerate(plan["steps"], 1):
+        st = t["steps"][step["name"]]
+        head = (f"<span class=\"rp-chip ws-chip ws-chip-{_ESC(step['state'])}\">{_ESC(t['state_' + step['state']])}</span> "
+                f"<span class=\"ws-step-label\">{_ESC(st['label'])}</span>")
+        more = ""
+        if step["state"] in ("pending", "check"):
+            more = (f"<p class=\"ws-why\">{_ESC(st['why'])}</p><details class=\"rp-cmd\"><summary class=\"rp-cmd-label\">"
+                    f"{_ESC(ctx.t('rp_command'))}</summary><pre class=\"upgrade-lines\">"
+                    f"{_ESC(chr(10).join(line.strip() for line in step_lines(plan, t, step, n)[1:]))}</pre></details>")
+        elif step["detail"]:
+            more = _tech(ctx, f"<p>{_ESC(step['detail'])}</p>")
+        items.append(f"<li class=\"ws-step\" data-step=\"{_ESC(step['name'])}\" data-state=\"{_ESC(step['state'])}\">{head}{more}</li>")
+    nothing = "" if plan["changes"] else f"<p class=\"ws-nothing\">{_ESC(t['nothing'])}</p>"
+    return (f"<section class=\"ws-plan\" data-changes=\"{str(bool(plan['changes'])).lower()}\"><h2>{_ESC(t['plan_heading'])}</h2>"
+            f"{nothing}<ol class=\"ws-steps\">{''.join(items)}</ol></section>")
+
+
+def render_workstation(home_root: str | Path | None, params: dict[str, list[str]]) -> str:
+    """AIPOS-F198: workstation page (read-only; data = tools/aipos_cli/workstation_plan.collect_page, the same derivation and the same
+    full text as `lybra project workstation-plan`). The target division lives in the URL (GET form); nothing is written."""
+    from tools.aipos_cli import board_pages
+    from tools.aipos_cli import workstation_plan as wp
+    from tools.aipos_cli.workstation_plan import risk_texts, routing_lines, target_text
+    from tools.schema_loader import SchemaLoadError
+
+    lang = "zh"
+    try:
+        decl = board_pages.pages_declaration()
+        lang = resolve_lang(decl, params)
+        ctx = _Ctx(decl, lang)
+        t = wp.texts(lang)
+        show_all = board_pages.show_all_requested(decl, params)
+        data = wp.collect_page(home_root, params, lang=lang, show_all=show_all)
+        plan = data["selected"]
+        page_path = _workstation_page()
+        base = _workstation_page(plan["project"]) if plan else page_path
+        body = [_toggle(ctx, data.get("hidden") or [], bool(data.get("show_all")), base),
+                _project_tabs(ctx, data, plan["project"] if plan else None), f"<p class=\"ws-intro\">{_ESC(t['intro'])}</p>"]
+        if data.get("unknown_project"):
+            body.append(f"<p class=\"rp-err\">{_ESC(t['unknown_project'].format(project=data['unknown_project']))}</p>")
+        if plan is None:
+            return _page(ctx, "workstation", t["title_none"], body, current_url=page_path)
+        if data.get("input_error"):
+            body.append(f"<p class=\"rp-err ws-input-error\">{_ESC(t['input_error'].format(error=data['input_error']))}</p>")
+        body.append(_ws_status(ctx, t, plan))
+        routing = [*routing_lines(plan["status"]["routing"], t)]
+        auditor = (plan["status"]["execution"] or {}).get("auditor")
+        if auditor:
+            routing.append(t["audit_row"].format(auditor=auditor))
+        body.append(f"<section class=\"ws-routing\"><h2>{_ESC(t['routing_heading'])}</h2><ul>"
+                    + "".join(f"<li>{_ESC(line)}</li>" for line in routing) + "</ul></section>")
+        risks = risk_texts(plan, t)
+        body.append(f"<section class=\"ws-risks\" data-risks=\"{len(risks)}\"><h2>{_ESC(t['risks_heading'])}</h2><ul>"
+                    + ("".join(f"<li class=\"rp-alert\">{_ESC(r)}</li>" for r in risks) or f"<li>{_ESC(t['none'])}</li>") + "</ul></section>")
+        body.append(_ws_form(t, plan, lang, decl["query"], decl["locale"]))
+        body.append(f"<section class=\"ws-target\"><h2>{_ESC(t['target_heading'])}</h2><p>{_ESC(target_text(plan, t))}</p></section>")
+        body.append(_ws_steps(t, plan, ctx))
+        prompts = [f"<section class=\"ws-prompts\"><p class=\"rp-tell\">{_ESC(t['board_note'])}</p>"]
+        for key, heading in (("lead", "lead_heading"), ("specialist", "specialist_heading")):
+            prompts.append(f"<h2>{_ESC(t[heading])}</h2><details class=\"rp-cmd ws-prompt\" data-prompt=\"{key}\"><summary class=\"rp-cmd-label\">"
+                           f"{_ESC(t['copy_summary'])}</summary><pre class=\"upgrade-lines ws-prompt-text\">"
+                           f"{_ESC(chr(10).join(plan['prompts'][key]))}</pre></details>")
+        prompts.append(f"<details class=\"rp-tech ws-full\"><summary>{_ESC(t['plan_text_summary'])}</summary>"
+                       f"<pre class=\"upgrade-lines ws-plan-text\">{_ESC(chr(10).join(plan['lines']))}</pre></details></section>")
+        body.extend(prompts)
+        return _page(ctx, "workstation", t["title"].format(project=plan["project"]), body, current_url=page_path)
     except (OSError, ValueError, LookupError, RuntimeError, SchemaLoadError) as exc:  # unreadable = error page naming the cause
         return render_error(lang, f"{type(exc).__name__}: {exc}"[:800])
 
