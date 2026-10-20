@@ -378,6 +378,29 @@ def _external_finalize_pending(workspace_root: Path, task_id: str) -> tuple[bool
     return (bool(verdict) and verdict in allowed and not has_finalization), records
 
 
+def slot_code_refusal(slot_dir: Path) -> dict[str, Any] | None:
+    """AIPOS-F195 件①: 报告落点(含 artifacts/、run_long/ 等子目录)出现代码文件 = 拒入门(交回 / 审计报告 / 外部 FINALIZE 交回同此)。
+    判据 = governance_guardrails.is_code_file(只读 config.schema code_files_blacklist), 拒因码与文案读 config.schema
+    governance_worktree.path_constraints.artifact_slot_code_files(声明缺 = 不查, 行为不变; 声明坏 = 拒 INGEST_DECLARATION_MISSING)。
+    返回 None(无代码文件)或 {category, reasons, code_files}。"""
+    from tools.aipos_cli.governance_guardrails import GuardrailDeclarationError, load_guardrail_declarations, slot_code_files_in_dir
+
+    try:
+        decls = load_guardrail_declarations()
+    except GuardrailDeclarationError as exc:
+        return {"category": "INGEST_DECLARATION_MISSING", "reasons": [f"报告落点代码文件检查的声明不可用(fail-closed): {exc}"], "code_files": []}
+    if decls.slot_code is None:
+        return None
+    found = slot_code_files_in_dir(Path(slot_dir), decls)
+    if not found:
+        return None
+    files = "; ".join(f"{item['path']}(sha256 {item['sha256']}, {item['size']} 字节)" for item in found)
+    category = decls.slot_code.ingest_category
+    reason = decls.slot_code.text("ingest_reason", category=category, slot=str(slot_dir), count=len(found), files=files,
+                                  extensions=", ".join(f".{e}" for e in decls.code_extensions))
+    return {"category": category, "reasons": [reason], "code_files": found}
+
+
 def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]:
     """校验一张卡的产物(见 _validate_task_artifact)。AIPOS-F100 件②: 卡/记录/产物 frontmatter 读不出 = 拒
     INGEST_FRONTMATTER_UNREADABLE(原文点名文件与行号), 不取缺省继续校验。"""
@@ -411,6 +434,7 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         invalid_finalization_frontmatter,
         missing_return_frontmatter,
         return_artifact_dir,
+        verdict_artifact_dir,
     )
     from tools.aipos_cli.audit_derivation import audit_card_reviewed_id, is_audit_card
     from tools.aipos_cli.task_loader import AmbiguousTaskCard
@@ -458,6 +482,10 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
             ]
             return out
         out["path"] = str(path)
+        refusal = slot_code_refusal(return_artifact_dir(workspace_root, fin_id))  # AIPOS-F195 件①
+        if refusal is not None:
+            out["category"], out["reasons"], out["code_files"] = refusal["category"], refusal["reasons"], refusal["code_files"]
+            return out
         fm = _read_frontmatter(path, allow_missing_block=True)
         out["frontmatter"] = fm
         problems = invalid_finalization_frontmatter(fm)
@@ -495,6 +523,11 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
             ]
             return out
         out["path"] = str(path)
+        # AIPOS-F195 件①: 报告落点里的代码文件入门即拦(与产物形校验同处, 早于结案后 N6 提交门 B①)
+        refusal = slot_code_refusal(return_artifact_dir(workspace_root, task_id))
+        if refusal is not None:
+            out["category"], out["reasons"], out["code_files"] = refusal["category"], refusal["reasons"], refusal["code_files"]
+            return out
         fm = _read_frontmatter(path, allow_missing_block=True)
         out["frontmatter"] = fm
         missing = missing_return_frontmatter(fm)
@@ -577,6 +610,10 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         ]
         return out
     out["path"] = str(path)
+    refusal = slot_code_refusal(verdict_artifact_dir(workspace_root, task_id))  # AIPOS-F195 件①: 审计落点同理
+    if refusal is not None:
+        out["category"], out["reasons"], out["code_files"] = refusal["category"], refusal["reasons"], refusal["code_files"]
+        return out
     fm = _read_frontmatter(path, allow_missing_block=True)
     out["frontmatter"] = fm
     # AIPOS-F89 件③c: 报告完成判据唯一实现 next_resolver.missing_verdict_frontmatter(占位 = 未填, 空模板不算产物)

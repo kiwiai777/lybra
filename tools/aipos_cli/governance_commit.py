@@ -77,6 +77,25 @@ def _split_nul(raw: str) -> list[str]:
     return [t for t in raw.split("\0") if t != ""]
 
 
+def _porcelain_entries(raw: str) -> list[tuple[str, str]]:
+    """``git status --porcelain -z`` → [(XY, 仓根相对路径)]; 重命名 / 复制条目的源路径 token 跳过。"""
+    tokens = _split_nul(raw)
+    out: list[tuple[str, str]] = []
+    i = 0
+    while i < len(tokens):
+        entry = tokens[i]
+        i += 1
+        if entry[:1] in ("R", "C"):
+            i += 1
+        out.append((entry[:2], entry[3:]))
+    return out
+
+
+def _strip_ws_prefix(prefix: str, repo_path: str) -> str:
+    """仓根相对 → 治理根相对(prefix = _git_ws_prefix; 治理根即仓根时原样)。"""
+    return repo_path[len(prefix):] if prefix and repo_path.startswith(prefix) else repo_path
+
+
 def resolve_commit_paths(
     governance_root: Path,
     paths: list[str] | None,
@@ -625,14 +644,19 @@ def governance_landing(governance_root: Path, scopes: dict[str, list[str]]) -> d
         return repo_path[len(prefix):] if prefix and repo_path.startswith(prefix) else repo_path
 
     dirty: list[str] = []
-    tokens = _split_nul(_git_readonly(["status", "--porcelain", "--untracked-files=all", "-z", "--", "."], root))
-    i = 0
-    while i < len(tokens):
-        entry = tokens[i]
-        i += 1
-        if entry[:1] in ("R", "C"):
-            i += 1  # 重命名/复制条目带源路径 token(本读取未关 rename 检测, 源路径随后作为独立 token)
-        dirty.append(gov_rel(entry[3:]))
+    untracked: list[str] = []
+    for xy, repo_path in _porcelain_entries(_git_readonly(["status", "--porcelain", "--untracked-files=all", "-z", "--", "."], root)):
+        dirty.append(gov_rel(repo_path))
+        if xy == "??":
+            untracked.append(gov_rel(repo_path))
+    # AIPOS-F195 件②: 已记入同槽清单且 sha256 未变的产物槽代码文件 = N6 已按声明排除(原文件留盘), 不算未落账;
+    # 处置声明读不出 = 不剔除(仍算未落账, fail-closed)并在原因里写明
+    settle_note = ""
+    try:
+        settled = recorded_slot_code_files(root, untracked) if untracked else set()
+    except (ValueError, OSError, RuntimeError) as exc:  # RuntimeError ⊇ GuardrailDeclarationError
+        settled, settle_note = set(), f"产物槽代码文件排除清单不可判({exc})"
+    dirty = [d for d in dirty if d not in settled]
     upstream: str | None
     try:
         upstream = _git_readonly(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], root).strip() or None
@@ -650,7 +674,8 @@ def governance_landing(governance_root: Path, scopes: dict[str, list[str]]) -> d
         if not paths:
             reasons.append("卡范围推导为空(队列无卡文件、无记录、无台账)")
         if unc:
-            reasons.append(f"未跟踪/未提交 {len(unc)} 个: " + ", ".join(unc[:5]) + (f" …(+{len(unc) - 5})" if len(unc) > 5 else ""))
+            reasons.append(f"未跟踪/未提交 {len(unc)} 个: " + ", ".join(unc[:5]) + (f" …(+{len(unc) - 5})" if len(unc) > 5 else "")
+                           + (f"; {settle_note}" if settle_note else ""))
         if upstream is None:
             reasons.append("当前分支无上游(@{u}), 无从证明已推送")
         elif unp:
@@ -920,6 +945,155 @@ def check_governance_completeness(
         "missing": missing,
         "details": details,
     }
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F195 件②: 产物槽内代码文件的 N6 处置(唯一落账实现在此一处; 落账判据 governance_landing 同读)
+#
+# 病根(10-20 chris 岚图 LANTU-SW13F1): 已审结卡报告落点 artifacts/ 里留着执行体临时写的 run.py, N6 落账整批被提交门 B① 拒,
+# loop landing_rejected 停在 owner_needed, 无正式出口。处置 = 产物槽(record_file.required_frontmatter_exemptions.artifact_slot 所列
+# project.json 落点 <落点>/<ID>/**)内新增(未跟踪 / 已暂存新增)代码文件不入库(暂存 pathspec 排除), 同槽写清单
+# (config.schema governance_worktree.path_constraints.artifact_slot_code_files.excluded_manifest_name: 路径 / sha256 / 大小 / 原因,
+# 只追加)一并落账, 原文件留盘不删。槽外代码文件与已跟踪代码文件的修改照旧被 B① 拒(提交门护栏不放宽, 治理仓仍零代码文件)。
+# ---------------------------------------------------------------------------
+
+def _slot_code_declarations(repo_root: Path | None):
+    """产物槽代码文件处置的声明(governance_guardrails.load_guardrail_declarations 唯一读取口; 与四检同一 schema 目录序)。"""
+    from tools.aipos_cli.governance_guardrails import load_guardrail_declarations, resolve_schema_dir
+
+    return load_guardrail_declarations(resolve_schema_dir(repo_root))
+
+
+def _read_exclusion_manifest(path: Path) -> dict[str, Any]:
+    """读同槽已有清单; 不存在 = 空。读不出 / 形不合 = ValueError(fail-closed: 不覆盖他人写坏的清单)。"""
+    import json
+
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"代码文件排除清单读不出 {path}: {exc.__class__.__name__}: {exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("files"), list):
+        raise ValueError(f"代码文件排除清单形不合 {path}: 须为含 files 列表的对象")
+    return data
+
+
+def slot_code_candidates(governance_root: Path, gov_rel_paths: list[str], *, decls: Any) -> list[dict[str, Any]]:
+    """gov_rel_paths(治理根相对)中落在产物槽 <槽根>/<ID>/** 内的代码文件(判据 governance_guardrails.is_code_file, 槽根
+    governance_guardrails.artifact_slot_roots, 均唯一实现)。返回 [{path, slot_dir, slot_key, task_id, rel, sha256, size, recorded,
+    manifest}](recorded = 同槽清单已记且 sha256 未变)。声明缺(decls.slot_code is None)= 空列表(不处置)。"""
+    from tools.aipos_cli.governance_guardrails import artifact_slot_roots, file_sha256, is_code_file
+
+    if decls.slot_code is None:
+        return []
+    code_paths = [p for p in gov_rel_paths if is_code_file(p, decls)]
+    if not code_paths:
+        return []
+    root = Path(governance_root)
+    slots = [(key, rel) for key, slot_root, _origin in artifact_slot_roots(root, decls, what="产物槽代码文件处置")
+             for rel in [_gov_rel(root, slot_root)] if rel]
+    manifests: dict[str, dict[str, Any]] = {}
+    out: list[dict[str, Any]] = []
+    for path in code_paths:
+        hit = next(((key, slot_rel) for key, slot_rel in slots
+                    if path.startswith(f"{slot_rel}/") and len(path[len(slot_rel) + 1:].split("/")) >= 2), None)
+        full = root / path
+        if hit is None or not full.is_file():
+            continue
+        key, slot_rel = hit
+        task_id = path[len(slot_rel) + 1:].split("/")[0]
+        slot_dir = f"{slot_rel}/{task_id}"
+        manifest_rel = f"{slot_dir}/{decls.slot_code.manifest_name}"
+        if manifest_rel not in manifests:
+            manifests[manifest_rel] = _read_exclusion_manifest(root / manifest_rel)
+        rel = path[len(slot_dir) + 1:]
+        sha = file_sha256(full)
+        recorded = any(isinstance(e, dict) and e.get("path") == rel and e.get("sha256") == sha
+                       for e in manifests[manifest_rel].get("files") or [])
+        out.append({"path": path, "slot_dir": slot_dir, "slot_key": key, "task_id": task_id, "rel": rel, "sha256": sha,
+                    "size": full.stat().st_size, "recorded": recorded, "manifest": manifest_rel})
+    return out
+
+
+def recorded_slot_code_files(governance_root: Path, gov_rel_paths: list[str], *, repo_root: Path | None = None) -> set[str]:
+    """已记入同槽清单且 sha256 未变的产物槽代码文件(治理根相对)——落账判据与「有无待收内容」判定不算它们未落账。"""
+    candidates = [p for p in gov_rel_paths if p]
+    if not candidates:
+        return set()
+    decls = _slot_code_declarations(repo_root)
+    return {item["path"] for item in slot_code_candidates(Path(governance_root), candidates, decls=decls) if item["recorded"]}
+
+
+def _write_exclusion_manifests(governance_root: Path, items: list[dict[str, Any]], actor: str, *, decls: Any) -> list[str]:
+    """未记的排除项追加进各槽清单(原子替换写)。返回写过的清单路径(治理根相对)。"""
+    import json
+
+    from tools.aipos_cli.clock import iso_z
+
+    root = Path(governance_root)
+    written: list[str] = []
+    now = iso_z()
+    for manifest_rel in sorted({i["manifest"] for i in items if not i["recorded"]}):
+        path = root / manifest_rel
+        data = _read_exclusion_manifest(path)
+        group = [i for i in items if i["manifest"] == manifest_rel and not i["recorded"]]
+        files = list(data.get("files") or [])
+        files += [{"path": i["rel"], "sha256": i["sha256"], "size": i["size"], "reason": decls.slot_code.text("manifest_reason"),
+                   "excluded_at": now, "excluded_by": actor} for i in group]
+        first = group[0]
+        payload = {"kind": decls.slot_code.manifest_kind, "task_id": data.get("task_id") or first["task_id"],
+                   "slot": first["slot_dir"], "slot_key": first["slot_key"],
+                   "basis": "config.schema governance_worktree.path_constraints.artifact_slot_code_files (AIPOS-F195)",
+                   "files": files}
+        tmp = path.with_name(f".{path.name}.tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+        written.append(manifest_rel)
+    return written
+
+
+def _drop_from_manifest(manifest: dict[str, Any], repo_paths: set[str]) -> dict[str, Any]:
+    files = [f for f in manifest["files"] if f["repo_path"] not in repo_paths]
+    counts = {MANIFEST_MODIFIED: 0, MANIFEST_ADDED: 0, MANIFEST_DELETED: 0, MANIFEST_UNTRACKED: 0}
+    for f in files:
+        counts[f["status"]] += 1
+    counts["total"] = len(files)
+    return {**manifest, "files": files, "counts": counts}
+
+
+def _exclude_spec(repo_path: str) -> str:
+    """暂存 / 核对 pathspec 的排除项(仓根相对字面路径)。"""
+    return f":(top,exclude,literal){repo_path}"
+
+
+def _apply_slot_code_exclusion(governance_root: Path, manifest: dict[str, Any], selected_paths: list[str] | None,
+                               repo_root: Path | None, actor: str, *, dry_run: bool) -> dict[str, Any]:
+    """清单中产物槽内新增代码文件 → 不入库: 从清单剔除; 非预演时把未记者追加进同槽清单并把清单纳入本次提交。
+    返回 {excluded: [项], manifests: [清单路径], written: [本次写的], manifest: 新清单, selected_paths, exclude_specs, line}。
+    声明 / 清单读不出 = GuardrailDeclarationError / ValueError 原样抛(调用方 fail-closed)。"""
+    decls = _slot_code_declarations(repo_root)
+    added = [f for f in manifest["files"] if f["status"] in (MANIFEST_UNTRACKED, MANIFEST_ADDED)]
+    items = slot_code_candidates(Path(governance_root), [f["path"] for f in added], decls=decls)
+    none = {"excluded": [], "manifests": [], "written": [], "manifest": manifest, "selected_paths": selected_paths,
+            "exclude_specs": [], "line": ""}
+    if not items:
+        return none
+    by_gov = {f["path"]: f["repo_path"] for f in added}
+    excluded_repo = {by_gov[i["path"]] for i in items}
+    manifests = sorted({i["manifest"] for i in items})
+    files_text = ", ".join(f"{i['path']}(sha256 {i['sha256'][:12]}…)" for i in items)
+    written: list[str] = []
+    if dry_run:
+        line = decls.slot_code.text("n6_dry_run_line", count=len(items), manifests=", ".join(manifests), files=files_text)
+    else:
+        written = _write_exclusion_manifests(Path(governance_root), items, actor, decls=decls)
+        if selected_paths is not None:
+            selected_paths = list(selected_paths) + [m for m in manifests if not any(_under(m, p) for p in selected_paths)]
+        manifest = collect_commit_manifest(governance_root, selected_paths)
+        line = decls.slot_code.text("n6_excluded_line", count=len(items), manifests=", ".join(manifests))
+    return {"excluded": items, "manifests": manifests, "written": written, "manifest": _drop_from_manifest(manifest, excluded_repo),
+            "selected_paths": selected_paths, "exclude_specs": [_exclude_spec(p) for p in sorted(excluded_repo)], "line": line}
 
 
 # ---------------------------------------------------------------------------
@@ -1410,11 +1584,19 @@ def governance_commit(
         paths = list(task_scope["paths"])
     guardrail_sink: dict[str, Any] = {}
     skipped: list[str] = []
+    exclusion: dict[str, Any] = {}
     result = _governance_commit_impl(
         governance_root, task_id, actor,
         repo_root=repo_root, dry_run=dry_run, push=push, message=message, paths=paths, paths_file=paths_file,
-        guardrail_sink=guardrail_sink, skipped_sink=skipped,
+        guardrail_sink=guardrail_sink, skipped_sink=skipped, exclusion_sink=exclusion,
     )
+    # AIPOS-F195 件②: 产物槽代码文件排除——结果字段 + 消息首行尾出声(预演 = 将排除; 已提交 = 已排除, 清单已入库)
+    result["excluded_code_files"] = [{k: i[k] for k in ("path", "sha256", "size", "manifest", "recorded")}
+                                     for i in exclusion.get("excluded") or []]
+    result["code_files_excluded_manifests"] = list(exclusion.get("manifests") or [])
+    if exclusion.get("excluded") and (dry_run or result.get("committed")):
+        head, _sep, rest = str(result.get("message") or "").partition("\n")
+        result["message"] = f"{head}; {exclusion['line']}" + (f"\n{rest}" if rest else "")
     # AIPOS-F193 件①: 从未入库且已不存在的路径已从暂存与提交剔除——结果字段 + 消息尾行出声(不报错)
     result["skipped_vanished_untracked"] = sorted(skipped)
     if skipped:
@@ -1592,6 +1774,7 @@ def _governance_commit_impl(
     paths_file: Path | str | None = None,
     guardrail_sink: dict[str, Any] | None = None,
     skipped_sink: list[str] | None = None,
+    exclusion_sink: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """N6 收账提交:校验四件 → commit → push。
 
@@ -1701,13 +1884,30 @@ def _governance_commit_impl(
                         "commit_manifest": None,
                     }
         status_result = subprocess.run(
-            ["git", "status", "--porcelain", "--"] + (selected_paths if selected_paths else []),
+            ["git", "-c", "core.quotepath=false", "status", "--porcelain", "--untracked-files=all", "-z", "--"]
+            + (selected_paths if selected_paths else []),
             cwd=str(governance_root),
             check=True,
             capture_output=True,
             text=True,
         )
-        has_changes = bool(status_result.stdout.strip())
+        # AIPOS-F195 件②: 已记入同槽清单且 sha256 未变的产物槽代码文件(N6 已排除、原文件留盘)不算待收内容
+        changed = _porcelain_entries(status_result.stdout)
+        ws_prefix = _git_ws_prefix(governance_root) if changed else ""
+        untracked = [_strip_ws_prefix(ws_prefix, path) for xy, path in changed if xy == "??"]
+        try:
+            settled = recorded_slot_code_files(governance_root, untracked, repo_root=repo_root) if untracked else set()
+        except (ValueError, OSError, RuntimeError) as exc:  # RuntimeError ⊇ GuardrailDeclarationError(声明不可用)
+            operations.append(f"Slot code files: FAIL — {exc}")
+            return {
+                "verdict": Verdict.FAIL, "task_id": task_id, "actor": actor, "dry_run": dry_run, "completeness_check": None,
+                "committed": False, "pushed": False, "commit_hash": None,
+                "message": f"产物槽代码文件处置不可用, 拒绝放行(fail-closed): {exc}",
+                "operations": operations, "selected_paths": selected_paths, "commit_manifest": None,
+            }
+        has_changes = any(not (xy == "??" and _strip_ws_prefix(ws_prefix, path) in settled) for xy, path in changed)
+        if settled:
+            operations.append(f"Slot code files already excluded and recorded (not pending): {len(settled)}")
         
         if not has_changes:
             operations.append("No changes to commit" + (" (within --paths)" if selected_paths else ""))
@@ -1856,6 +2056,27 @@ def _governance_commit_impl(
         
         # AIPOS-F79 件②: 只读取得将提交文件清单(不 add/不 reset/不 stash)
         manifest = collect_commit_manifest(governance_root, selected_paths)
+        # AIPOS-F195 件②: 产物槽内新增代码文件不入库(同槽清单记 sha256 并一并落账, 原文件留盘); 槽外代码文件照旧交四检 B① 拒
+        try:
+            exclusion = _apply_slot_code_exclusion(governance_root, manifest, selected_paths, repo_root, actor, dry_run=dry_run)
+        except (ValueError, OSError, RuntimeError) as exc:  # RuntimeError ⊇ GuardrailDeclarationError(声明不可用)
+            operations.append(f"Slot code files: FAIL — {exc}")
+            return {
+                "verdict": Verdict.FAIL, "task_id": task_id, "actor": actor, "dry_run": dry_run, "completeness_check": completeness,
+                "committed": False, "pushed": False, "commit_hash": None,
+                "message": f"产物槽代码文件处置不可用, 拒绝放行(fail-closed): {exc}",
+                "operations": operations, "selected_paths": selected_paths, "commit_manifest": manifest,
+            }
+        manifest, selected_paths = exclusion["manifest"], exclusion["selected_paths"]
+        exclude_specs = list(exclusion["exclude_specs"])
+        if exclusion["excluded"]:
+            operations.append(
+                f"Slot code files excluded (not committed, kept on disk): {len(exclusion['excluded'])} — "
+                + ", ".join(i["path"] for i in exclusion["excluded"])
+                + f"; manifest(s): {', '.join(exclusion['manifests'])}" + (" (dry-run: not written)" if dry_run else "")
+            )
+            if exclusion_sink is not None:
+                exclusion_sink.update(exclusion)
         for w in manifest["warnings"]:
             operations.append(w)
         operations.append(
@@ -1977,7 +2198,7 @@ def _governance_commit_impl(
             "commit_manifest": manifest,
         }
 
-    stage_pathspec = list(selected_paths) if selected_paths else ["."]
+    stage_pathspec = (list(selected_paths) if selected_paths else ["."]) + exclude_specs  # AIPOS-F195: 槽内代码文件排除
 
     def _unstage_this_run(saved_index_tree: str | None) -> None:
         """AIPOS-F79C 件④: 拒提交时清掉本次暂存(git reset -- <pathspec>, 范围仍限 --paths), 不留半成品;
@@ -2003,7 +2224,7 @@ def _governance_commit_impl(
             add_paths = [p for p in selected_paths if p not in add_skip]
             if add_paths:
                 subprocess.run(
-                    ["git", "add", "-A", "--"] + add_paths,
+                    ["git", "add", "-A", "--"] + add_paths + exclude_specs,
                     cwd=str(governance_root),
                     check=True,
                     capture_output=True,
@@ -2016,7 +2237,7 @@ def _governance_commit_impl(
             # 防止 git add -A 越界 stage 其他项目(如 kiwiaiagency)的文件
             # AIPOS-F79: 整根模式仅限 lybra 自身工作区; 他项目一律 --paths
             subprocess.run(
-                ["git", "add", "-A", "--", "."],
+                ["git", "add", "-A", "--", "."] + exclude_specs,
                 cwd=str(governance_root),
                 check=True,
                 capture_output=True,
