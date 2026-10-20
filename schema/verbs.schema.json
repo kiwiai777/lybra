@@ -38,7 +38,8 @@
         "validation-root declare",
         "validation-root revoke",
         "validation-root run-start",
-        "validation-root run-finish"
+        "validation-root run-finish",
+        "validation-root sim-bind"
       ],
       "default_phase": "dry_run",
       "flags": {
@@ -2385,7 +2386,9 @@
         "redirect": "  - [{toolchain}] {render}(核验: {verify}; 来源: {source})",
         "side_effect": "  - 系统服务副作用 `{path}`: {by}; {allowed}; 核验: {verify}",
         "block": "  - BLOCK / 禁止: {text}",
-        "init_run": "  ① run-start 后第一步 = 目录链初始化(AIPOS-F191): 在目标主机 {host} 运行 `{init_run}`(前半段 = 在治理根所在机取 helper 原文, 远端主机经你访问治理根的通道取得后经管道交给 `python3 -`, helper 不落盘); 只用 mkdir 建缺失的 `{run_dir}` 目录链(新建 0700, 逐级拒软链 / 非目录 / 他人属主 / 不可写祖先; 已建且合规 = 幂等), 证据追加到 run 目录内 `.lybra-vr/init-run.jsonl`; 只认末行 `INIT_OK` + 退出码 0, 其余 = 未建, 停线报告(禁自行 mkdir / sudo / 改参数重试); 之后再按下条把 helper 存入 run 目录做写前判定"
+        "init_run": "  ① run-start 后第一步 = 目录链初始化(AIPOS-F191): 在目标主机 {host} 运行 `{init_run}`(前半段 = 在治理根所在机取 helper 原文, 远端主机经你访问治理根的通道取得后经管道交给 `python3 -`, helper 不落盘); 只用 mkdir 建缺失的 `{run_dir}` 目录链(新建 0700, 逐级拒软链 / 非目录 / 他人属主 / 不可写祖先; 已建且合规 = 幂等), 证据追加到 run 目录内 `.lybra-vr/init-run.jsonl`; 只认末行 `INIT_OK` + 退出码 0, 其余 = 未建, 停线报告(禁自行 mkdir / sudo / 改参数重试); 之后再按下条把 helper 存入 run 目录做写前判定",
+        "sim_title": "  iOS 本 run 专用模拟器(AIPOS-F194; 需 iOS 模拟器 / XCTest UI 时按序做; 本 run 名 `{sim_name}`, 只写 `~/{devices_rel}/{sim_udid}/` 这一台, 其他 UDID / 整个 Devices 目录 / Xcode 全局缓存不放行; 不用 `simctl --set` 独立设备集——已撤下, Xcode 不支持 XCTest 连接自定义设备集):",
+        "sim_step": "  {n}. {text}"
       },
       "item_templates": {
         "boundary_line": "- {surface}: {level} `{path}`({scope})",
@@ -4237,7 +4240,7 @@
           },
           "project_writers": {
             "cli": "lybra project <subcommand> --confirm",
-            "subcommands": ["set-paths", "set-repo", "set-repos", "set-workstation", "set-meta", "set-execution", "set-model", "set-return-summary", "freeze-legacy", "dispatch-mode set", "relocate-workstation", "upgrade", "validation-root declare", "validation-root revoke", "validation-root run-start", "validation-root run-finish"],
+            "subcommands": ["set-paths", "set-repo", "set-repos", "set-workstation", "set-meta", "set-execution", "set-model", "set-return-summary", "freeze-legacy", "dispatch-mode set", "relocate-workstation", "upgrade", "validation-root declare", "validation-root revoke", "validation-root run-start", "validation-root run-finish", "validation-root sim-bind"],
             "scope": "AIPOS-F159 件①(gap #144): 写 project.json 的 project 族命令 --confirm 成功后的写出文件(治理根相对): two_phase_protocol.project_json_writers 各命令 = project.json(--confirm 即落, 无改动亦经同一提交口核一次: 范围已落账 = PASS no-op, 前次写后未落账者随之补落); freeze-legacy = 本次追加的清单条目 + 本次补声明 legacy_baseline 时的 project.json(本批无卡可冻 = 无写出, 不落); dispatch-mode set = project.json + 切换留痕文件。AIPOS-F161: relocate-workstation = 本项目 enrollment_log(追加的 relocate 位置事件; 唯一写出, 工位目录在治理仓外不入)。AIPOS-F176: upgrade = `lybra project upgrade --confirm` 配置缺省补齐步写出的 project.json(其余步骤各经自身声明的落账命令: migrate_record_type / migrate_decision_log_pointers; 工位章程在治理仓外不入)。提交身份 = 该命令 --actor(dispatch-mode set 为 --by; 未给 = $USER 或 owner, 与 set-repo / project new 同一缺省)。--dry-run 零写入、不落账。唯一落账点: 写 project.json 的两阶段命令经输出包装 aipos_cli._project_json_two_phase_emit, freeze-legacy / dispatch-mode set 经同一薄壳 aipos_cli._land_project_writes(→ land_written_paths)。不含 project new / import(建治理根本身, 治理根此时可能尚未入治理仓; 向导第 1 步照旧给 governance-commit 与 home git-init)。",
             "message_template": "chore(governance): 项目配置落账 {subcommand} {project}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra project {subcommand} --confirm"
           },
@@ -4263,7 +4266,7 @@
       }
     },
     "lybra_project_validation_root": {
-      "description": "AIPOS-F190: `lybra project validation-root declare|revoke|run-start|run-finish|list|helper|init-command` —— 跨机临时验证根声明(按项目 / 主机 / 执行或审计实例 / 卡 / run)。declare: --host --base --task-id --instance --owner-ref [--expires-at] [--host-fingerprint] [--actor] [--dry-run|--confirm](远端主机 --confirm 须带目标主机 helper 取得的指纹); revoke --id --reason; run-start --id --candidate <卡仓 40 位 sha>(铸 run-id, 同一声明同时只一个活动 run); run-finish --id --run-id; list 只读; helper 打印主机侧检查入口(纯 python3 标准库单文件)或其 sha256; AIPOS-F191 init-command --id [--instance] 只读打印目标主机目录链初始化命令(helper init-run: 只建空目录链 0700、逐级拒软链 / 非目录 / 他人属主 / 不可写祖先、封印防改参数; 声明须 active 且有活动 run, --instance ≠ 声明实例 = VR_TASK_NOT_OWNED), run-start --confirm 输出与开工稿 / 章程验证根节同一铸造口 validation_root.init_run_command。写动作 = project.json validation_roots 段(只追加条目, 撤销 / 收口写在原条目), 两阶段与写后落账同一包装(two_phase_protocol.project_json_writers; 落账 post_write_landing.commands.project_writers)。判定 = `lybra roles write-boundary --check <路径> --host <主机> --instance <实例> --task-id <卡> --run-id <run> --level mutate`(面 validation_root, 声明 roles.schema write_boundary.validation_root)。",
+      "description": "AIPOS-F190: `lybra project validation-root declare|revoke|run-start|run-finish|sim-bind|list|helper|init-command` —— 跨机临时验证根声明(按项目 / 主机 / 执行或审计实例 / 卡 / run)。declare: --host --base --task-id --instance --owner-ref [--expires-at] [--host-fingerprint] [--actor] [--dry-run|--confirm](远端主机 --confirm 须带目标主机 helper 取得的指纹); revoke --id --reason; run-start --id --candidate <卡仓 40 位 sha>(铸 run-id, 同一声明同时只一个活动 run); run-finish --id --run-id; list 只读; helper 打印主机侧检查入口(纯 python3 标准库单文件)或其 sha256; AIPOS-F191 init-command --id [--instance] 只读打印目标主机目录链初始化命令(helper init-run: 只建空目录链 0700、逐级拒软链 / 非目录 / 他人属主 / 不可写祖先、封印防改参数; 声明须 active 且有活动 run, --instance ≠ 声明实例 = VR_TASK_NOT_OWNED), run-start --confirm 输出与开工稿 / 章程验证根节同一铸造口 validation_root.init_run_command。AIPOS-F194: sim-bind --id --run-id --udid [--sim-evidence <simulator.json 副本>](本 run 专用模拟器 UDID 写进本 run 记录; 只对 active 声明的活动 run, 一 run 一台, UDID 不得复用他 run——审计须新建自己的; 拒因 VR_SIM_INVALID / VR_SIM_EVIDENCE_REJECTED); run-finish 加 --sim-evidence(本 run 绑定了专用模拟器 = 必带; 以 helper.verify_sim_evidence 同一函数核对「只多出并只删除这一台、其他设备未变」, 未删除 / 多出他台 / 删错他台 = 收口拒; 未经 sim-bind 但带证据 = 按证据补记)。写动作 = project.json validation_roots 段(只追加条目, 撤销 / 收口写在原条目), 两阶段与写后落账同一包装(two_phase_protocol.project_json_writers; 落账 post_write_landing.commands.project_writers)。判定 = `lybra roles write-boundary --check <路径> --host <主机> --instance <实例> --task-id <卡> --run-id <run> --level mutate`(面 validation_root, 声明 roles.schema write_boundary.validation_root)。",
       "phase": "two_phase",
       "surface": [
         "cli"

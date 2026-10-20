@@ -21,6 +21,20 @@ tools/aipos_cli/validation_root.py 直接 import 本模块的同名函数(声明
       逐级拒软链 / 非目录 / 他人属主, 最近已存在祖先当前用户不可写(须提权的位置)= 拒并给人话出口;
       已存在且合规 = 幂等(退出 0)。末行 `INIT_OK …` + 退出码 0 = 成功; 其余(3 = 拒 / 2 = 用法或环境错)一律视为未建。
 
+  AIPOS-F194 iOS 本 run 专用模拟器(Owner 10-20 定; 声明 roles.schema write_boundary.validation_root.ios_simulator; 只调
+  `xcrun simctl create` / `xcrun simctl delete <本 run UDID>`, 不 boot / erase / delete 他台, 不 delete all / unavailable):
+  python3 validation_root_helper.py sim-create --run-dir <run> --expect-fingerprint <hfp1:…> --device-type <设备型号 id> --runtime <运行时 id>
+      在 Xcode 缺省设备集(~/Library/Developer/CoreSimulator/Devices)由本 run 新建一台 lybra-<卡ID>-<run-id>; 前后对 Devices
+      顶层 UDID 清单拍快照, 新 UDID 与快照写 <run>/.lybra-vr/simulator.json; 末行 `SIM_CREATED udid=…` + 退出码 0 = 只多出这一台。
+  python3 validation_root_helper.py sim-verify --run-dir <run> --expect-fingerprint <hfp1:…>
+      运行中核验: 当前 Devices 顶层 = 建前清单 + 本 run 这一台(只多出这一台、未删他台); 末行 `SIM_OK` + 退出码 0。
+  python3 validation_root_helper.py sim-delete --run-dir <run> --expect-fingerprint <hfp1:…>
+      删除本 run 这一台(先核设备目录真实存在且 device.plist name = 本 run 名), 再比对「只少了这一台、其他设备未变」; 末行 `SIM_DELETED`。
+  python3 validation_root_helper.py sys-snapshot --run-dir <run> --expect-fingerprint <hfp1:…> --phase before|after --pattern <glob>…
+      Xcode 自写系统临时目录(Darwin 用户临时目录, `getconf DARWIN_USER_TEMP_DIR`; 或 --temp-dir)顶层匹配项的前后快照, 写
+      <run>/.lybra-vr/xcode-side-effects.json; after 列出新增 / 删除 / 变更(系统副作用: 不删除、不冒充 run 产物), 退出码 0。
+  三个 sim-* 与 sys-snapshot 全部 fail-closed: 退出码 3 = 拒(DENY 行给原因), 2 = 用法或环境错。
+
 判定(全部 fail-closed):
   1. 本机指纹 = --expect-fingerprint, 否则 HOST_FINGERPRINT_MISMATCH(跨机调用核对);
   2. run 目录与目标须为规范绝对路径(无 `..` / `.` / 重复斜杠), 否则 PATH_NOT_CANONICAL;
@@ -39,10 +53,12 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import fnmatch
 import hashlib
 import json
 import os
 import platform
+import plistlib
 import posixpath
 import re
 import socket
@@ -59,6 +75,16 @@ _SEAL_RE = re.compile(r"^vri1:[0-9a-f]{32}$")
 _ISO_Z_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 INIT_EVIDENCE = ".lybra-vr/init-run.jsonl"
 EXIT_ALLOW, EXIT_ERROR, EXIT_DENY, EXIT_CHANGED = 0, 2, 3, 4
+# AIPOS-F194: 本 run 专用模拟器(值 = roles.schema write_boundary.validation_root.ios_simulator 同名键; 本文件在目标主机脱离产品运行,
+# 不读 schema, 两处一致由测试 test_aipos_f194 断言)
+SIM_NAME_TEMPLATE = "lybra-{task_id}-{run_id}"
+SIM_DEVICES_REL = "Library/Developer/CoreSimulator/Devices"
+SIM_EVIDENCE = ".lybra-vr/simulator.json"
+SIDE_EVIDENCE = ".lybra-vr/xcode-side-effects.json"
+SIM_EVIDENCE_SCHEMA = "lybra-vr-sim-v1"
+SIDE_EVIDENCE_SCHEMA = "lybra-vr-side-v1"
+_UDID_RE = re.compile(r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$")
+SIMCTL_TIMEOUT_SECONDS = 600
 
 
 class HostIdentityError(RuntimeError):
@@ -308,6 +334,413 @@ def init_run(base: str, run_dir: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# AIPOS-F194 iOS 本 run 专用模拟器: 缺省设备集内本 run 新建一台, 只写该 UDID, 结束删除, 前后比对
+# ---------------------------------------------------------------------------
+
+def is_udid(value: Any) -> bool:
+    return isinstance(value, str) and bool(_UDID_RE.match(value))
+
+
+def sim_name(run_dir: str) -> str:
+    """本 run 专用模拟器名 = lybra-<卡ID>-<run-id>(取 run 目录末两段; 声明 ios_simulator.name_template)。"""
+    parts = run_dir.rstrip("/").split("/")
+    if len(parts) < 3 or not parts[-1] or not parts[-2]:
+        raise ValueError(f"run 目录 {run_dir!r} 须为 <base>/<卡ID>/<run-id>")
+    return SIM_NAME_TEMPLATE.replace("{task_id}", parts[-2]).replace("{run_id}", parts[-1])
+
+
+def devices_dir(home: str | None = None) -> str:
+    """Xcode 缺省设备集目录 = <用户主目录>/Library/Developer/CoreSimulator/Devices(home 缺省 = 本机 ~)。"""
+    return posixpath.join(home if home is not None else os.path.expanduser("~"), SIM_DEVICES_REL)
+
+
+def devices_listing(path: str) -> dict[str, Any]:
+    """Devices 顶层快照(只读, 不跟随符号链接): udids = UDID 形目录名(设备); service = 其余顶层项(如 device_set.plist,
+    CoreSimulator 服务维护性写入 = 系统服务副作用){名: [类型, 大小, mtime 整秒]}。目录不存在 = exists false(如实记)。"""
+    if not os.path.isdir(path):
+        return {"exists": False, "udids": [], "service": {}}
+    udids: list[str] = []
+    service: dict[str, list[Any]] = {}
+    for name in sorted(os.listdir(path)):
+        full = os.path.join(path, name)
+        st = os.lstat(full)
+        kind = "link" if os.path.islink(full) else "dir" if os.path.isdir(full) else "file"
+        if kind == "dir" and is_udid(name):
+            udids.append(name)
+        else:
+            service[name] = [kind, int(st.st_size), int(st.st_mtime)]
+    return {"exists": True, "udids": udids, "service": service}
+
+
+def listing_diff(before: dict[str, Any], after: dict[str, Any]) -> dict[str, list[str]]:
+    """两次顶层快照之差: added / removed(UDID), service(服务维护项变化 +/-/~ 名)。"""
+    b, a = set(before.get("udids") or []), set(after.get("udids") or [])
+    bs, as_ = before.get("service") or {}, after.get("service") or {}
+    service = [f"+ {n}" for n in sorted(set(as_) - set(bs))] + [f"- {n}" for n in sorted(set(bs) - set(as_))]
+    service += [f"~ {n}" for n in sorted(set(as_) & set(bs)) if as_[n] != bs[n]]
+    return {"added": sorted(a - b), "removed": sorted(b - a), "service": service}
+
+
+def device_plist_name(device_dir: str) -> tuple[str | None, str | None]:
+    """读 <设备目录>/device.plist 的 name(plistlib, XML / 二进制均可)。返回 (name, 问题)。"""
+    path = os.path.join(device_dir, "device.plist")
+    try:
+        with open(path, "rb") as handle:
+            data = plistlib.load(handle)
+    except (OSError, ValueError, plistlib.InvalidFileException) as exc:
+        return None, f"{path} 读不出({exc})"
+    name = data.get("name") if isinstance(data, dict) else None
+    if not isinstance(name, str) or not name:
+        return None, f"{path} 无 name 键"
+    return name, None
+
+
+def verify_sim_evidence(evidence: Any, *, run_dir: str, expect_udid: str | None = None, require_deleted: bool = True,
+                        current: dict[str, Any] | None = None) -> dict[str, Any]:
+    """本 run 专用模拟器证据核对(目标主机 sim-* 与治理根侧 run-finish 同一实现; 只读纯函数)。
+    判据: ①证据形 / run 目录 / 名 = lybra-<卡>-<run> / UDID 形与(给出时)= 绑定 UDID; ②建: simctl 退出 0, 建前→建后只多出这一台、
+    未少任何一台, device.plist name = 本 run 名; ③(require_deleted)删: simctl 退出 0, 删前有这一台, 删前→删后只少这一台、未多出,
+    且删后清单 = 建前清单(其他设备未变); ④(current 给出 = 运行中核验)当前清单 = 建前清单 + 这一台。
+    返回 {ok, problems: [...], service: [...](服务维护项变化, 记为系统服务副作用, 不判失败), udid, name}。"""
+    problems: list[str] = []
+    service: list[str] = []
+    if not isinstance(evidence, dict) or evidence.get("schema") != SIM_EVIDENCE_SCHEMA:
+        return {"ok": False, "problems": [f"证据不是 {SIM_EVIDENCE_SCHEMA}(须原样取自 helper sim-create 写的 {SIM_EVIDENCE})"], "service": [],
+                "udid": None, "name": None}
+    try:
+        want_name = sim_name(run_dir)
+    except ValueError as exc:
+        return {"ok": False, "problems": [str(exc)], "service": [], "udid": None, "name": None}
+    udid, name = evidence.get("udid"), evidence.get("name")
+    if evidence.get("run_dir") != run_dir:
+        problems.append(f"证据 run 目录 {evidence.get('run_dir')!r} ≠ 本 run {run_dir}(他 run 的证据)")
+    if name != want_name:
+        problems.append(f"证据模拟器名 {name!r} ≠ 本 run 名 {want_name}")
+    if not is_udid(udid):
+        problems.append(f"证据 UDID {udid!r} 不是 UDID(simctl create 未成功或输出不合)")
+    elif expect_udid is not None and udid != expect_udid:
+        problems.append(f"证据 UDID {udid} ≠ 本 run 绑定的 {expect_udid}(他台 / 他 run 的模拟器)")
+    create = evidence.get("create") if isinstance(evidence.get("create"), dict) else None
+    if create is None:
+        problems.append("证据缺建台记录 create")
+        return {"ok": False, "problems": problems, "service": service, "udid": udid, "name": name}
+    if create.get("exit") != 0:
+        problems.append(f"simctl create 退出码 {create.get('exit')!r}(≠ 0): {str(create.get('stderr') or '').strip()[:300]}")
+    d = listing_diff(create.get("before") or {}, create.get("after") or {})
+    service += [f"建台 {x}" for x in d["service"]]
+    if d["added"] != ([udid] if is_udid(udid) else []):
+        problems.append(f"建台前后多出的设备 = {d['added'] or '(无)'}, 应只多出本 run 这一台 {udid}(多出他台 = 拒)")
+    if d["removed"]:
+        problems.append(f"建台前后少了设备 {d['removed']}(不得删除 / 改动他台)")
+    if create.get("device_name") != want_name:
+        problems.append(f"新设备 device.plist name = {create.get('device_name')!r}, 应为 {want_name}"
+                        + (f"({create.get('device_name_problem')})" if create.get("device_name_problem") else ""))
+    origin = sorted(create.get("before", {}).get("udids") or [])
+    if current is not None:
+        cd = listing_diff(create.get("before") or {}, current)
+        service += [f"运行中 {x}" for x in cd["service"]]
+        if cd["added"] != ([udid] if is_udid(udid) else []) or cd["removed"]:
+            problems.append(f"运行中 Devices 相对建前: 多出 {cd['added'] or '(无)'} / 少了 {cd['removed'] or '(无)'}; 应只多出本 run 这一台 {udid}")
+    if require_deleted:
+        delete = evidence.get("delete") if isinstance(evidence.get("delete"), dict) else None
+        if delete is None:
+            problems.append(f"本 run 专用模拟器 {udid} 未删除(证据无删除记录; 先在目标主机 sim-delete)")
+        else:
+            if delete.get("exit") != 0:
+                problems.append(f"simctl delete 退出码 {delete.get('exit')!r}(≠ 0): {str(delete.get('stderr') or '').strip()[:300]}")
+            dd = listing_diff(delete.get("before") or {}, delete.get("after") or {})
+            service += [f"删台 {x}" for x in dd["service"]]
+            if udid not in (delete.get("before") or {}).get("udids", []):
+                problems.append(f"删台前清单无本 run 这一台 {udid}")
+            if dd["removed"] != ([udid] if is_udid(udid) else []):
+                problems.append(f"删台前后少了的设备 = {dd['removed'] or '(无)'}, 应只少本 run 这一台 {udid}(删错他台 / 未删除 = 拒)")
+            if dd["added"]:
+                problems.append(f"删台前后多出设备 {dd['added']}")
+            final = sorted((delete.get("after") or {}).get("udids") or [])
+            if final != origin:
+                extra, gone = sorted(set(final) - set(origin)), sorted(set(origin) - set(final))
+                problems.append(f"删台后清单 ≠ 建台前清单(其他设备有变: 多 {extra or '(无)'} / 少 {gone or '(无)'}); 若确认非本 run 所为, "
+                                "由顾问在报告写明并撤销声明处理, 不放行收口")
+    return {"ok": not problems, "problems": problems, "service": service, "udid": udid, "name": name}
+
+
+def _simctl(*args: str) -> dict[str, Any]:
+    """只调 `xcrun simctl create|delete`(调用方保证参数); 返回 {argv, exit, stdout, stderr}。工具缺 = exit None + 原因。"""
+    argv = ["xcrun", "simctl", *args]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=SIMCTL_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"argv": argv, "exit": None, "stdout": "", "stderr": f"{type(exc).__name__}: {exc}"}
+    return {"argv": argv, "exit": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
+
+
+def _now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _write_json_in_run(run_dir: str, rel: str, data: Any) -> str | None:
+    """证据只写进本 run 目录(落点先经 judge_realpath); 返回问题原文或 None。"""
+    path = posixpath.join(run_dir, rel)
+    verdict = judge_realpath(run_dir, path)
+    if not verdict["allowed"]:
+        return f"[{verdict['code']}] 证据落点 {verdict['reason']}"
+    os.makedirs(posixpath.dirname(path), mode=0o700, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, ensure_ascii=False, indent=1, sort_keys=True)
+        handle.write("\n")
+    os.replace(tmp, path)
+    return None
+
+
+def _read_json(path: str) -> tuple[Any, str | None]:
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle), None
+    except FileNotFoundError:
+        return None, f"{path} 不存在"
+    except (OSError, ValueError) as exc:
+        return None, f"{path} 读不出({exc})"
+
+
+def _run_dir_problem(run_dir: str, rel: str) -> str | None:
+    """sim-* / sys-snapshot 前置: run 目录规范、已由 init-run 建出、真实路径 = 字面, 证据落点在 run 目录内。"""
+    verdict = judge_realpath(run_dir, posixpath.join(run_dir, rel))
+    if not verdict["allowed"]:
+        return f"[{verdict['code']}] {verdict['reason']}"
+    if not os.path.isdir(run_dir):
+        return f"[RUN_DIR_MISSING] run 目录 {run_dir} 不存在(先按开工稿运行 init-run 建目录链)"
+    return None
+
+
+def _sim_create_cli(args: argparse.Namespace) -> int:
+    problem = _run_dir_problem(args.run_dir, SIM_EVIDENCE)
+    if problem:
+        print(f"DENY {problem}")
+        return EXIT_DENY
+    evidence_path = posixpath.join(args.run_dir, SIM_EVIDENCE)
+    if os.path.lexists(evidence_path):
+        print(f"DENY [SIM_ALREADY_CREATED] 本 run 已建过专用模拟器(证据 {evidence_path}); 一个 run 只建一台, 不重建 / 不覆盖证据")
+        return EXIT_DENY
+    for label, value in (("--device-type", args.device_type), ("--runtime", args.runtime)):
+        if not value or value.startswith("-") or any(ch.isspace() for ch in value):
+            print(f"DENY [SIM_ARGS_INVALID] {label} {value!r} 须为单个标识(xcrun simctl list devicetypes / runtimes 所列 id)")
+            return EXIT_DENY
+    name = sim_name(args.run_dir)
+    ddir = devices_dir()
+    before = devices_listing(ddir)
+    result = _simctl("create", name, args.device_type, args.runtime)
+    out_lines = [ln.strip() for ln in str(result["stdout"] or "").splitlines() if ln.strip()]
+    udid = out_lines[-1] if result["exit"] == 0 and out_lines and is_udid(out_lines[-1]) else None
+    after = devices_listing(ddir)
+    device_name, name_problem = (None, "未取得 UDID")
+    if udid is not None:
+        device = posixpath.join(ddir, udid)
+        if os.path.islink(device) or not os.path.isdir(device):
+            name_problem = f"{device} 不是真实目录"
+        else:
+            device_name, name_problem = device_plist_name(device)
+    evidence = {"schema": SIM_EVIDENCE_SCHEMA, "run_dir": args.run_dir, "name": name, "udid": udid, "device_type": args.device_type,
+                "runtime": args.runtime, "devices_dir": ddir, "host": host_label(), "fingerprint": args.expect_fingerprint,
+                "create": {"at": _now_iso(), **result, "before": before, "after": after, "device_name": device_name,
+                           "device_name_problem": name_problem},
+                "delete": None, "verifies": []}
+    problem = _write_json_in_run(args.run_dir, SIM_EVIDENCE, evidence)
+    if problem:
+        print(f"DENY {problem}")
+        return EXIT_DENY
+    verdict = verify_sim_evidence(evidence, run_dir=args.run_dir, require_deleted=False)
+    d = listing_diff(before, after)
+    print(f"devices {ddir}: 建前 {len(before['udids'])} 台 → 建后 {len(after['udids'])} 台; 多出 {d['added'] or '(无)'} 少了 {d['removed'] or '(无)'}")
+    for line in verdict["service"]:
+        print(f"service-side-effect {line}")
+    if not verdict["ok"]:
+        for line in verdict["problems"]:
+            print(f"DENY [SIM_CREATE_UNVERIFIED] {line}")
+        print(f"证据 {posixpath.join(args.run_dir, SIM_EVIDENCE)}(已建出的本 run 设备如有, 只能经 sim-delete 删除; 不碰他台)")
+        return EXIT_DENY
+    print(f"SIM_CREATED udid={udid} name={name} evidence={posixpath.join(args.run_dir, SIM_EVIDENCE)}")
+    return EXIT_ALLOW
+
+
+def _load_sim_evidence(run_dir: str) -> tuple[dict[str, Any] | None, str | None]:
+    problem = _run_dir_problem(run_dir, SIM_EVIDENCE)
+    if problem:
+        return None, problem
+    data, problem = _read_json(posixpath.join(run_dir, SIM_EVIDENCE))
+    if problem:
+        return None, f"[SIM_EVIDENCE_MISSING] {problem}(本 run 未经 sim-create 建台)"
+    if not isinstance(data, dict) or data.get("schema") != SIM_EVIDENCE_SCHEMA:
+        return None, f"[SIM_EVIDENCE_INVALID] 证据形不合(须为 {SIM_EVIDENCE_SCHEMA})"
+    return data, None
+
+
+def _sim_verify_cli(args: argparse.Namespace) -> int:
+    evidence, problem = _load_sim_evidence(args.run_dir)
+    if problem:
+        print(f"DENY {problem}")
+        return EXIT_DENY
+    current = devices_listing(str(evidence.get("devices_dir") or devices_dir()))
+    verdict = verify_sim_evidence(evidence, run_dir=args.run_dir, require_deleted=False, current=current)
+    evidence.setdefault("verifies", []).append({"at": _now_iso(), "current": current, "problems": verdict["problems"]})
+    problem = _write_json_in_run(args.run_dir, SIM_EVIDENCE, evidence)
+    if problem:
+        print(f"DENY {problem}")
+        return EXIT_DENY
+    for line in verdict["service"]:
+        print(f"service-side-effect {line}")
+    if not verdict["ok"]:
+        for line in verdict["problems"]:
+            print(f"DENY [SIM_SET_CHANGED] {line}")
+        return EXIT_DENY
+    print(f"SIM_OK udid={evidence['udid']} 当前只多出本 run 这一台")
+    return EXIT_ALLOW
+
+
+def _sim_delete_cli(args: argparse.Namespace) -> int:
+    evidence, problem = _load_sim_evidence(args.run_dir)
+    if problem:
+        print(f"DENY {problem}")
+        return EXIT_DENY
+    if evidence.get("delete") is not None:
+        print(f"DENY [SIM_ALREADY_DELETED] 本 run 已执行过删除(证据 {posixpath.join(args.run_dir, SIM_EVIDENCE)}), 不重复删除")
+        return EXIT_DENY
+    pre = verify_sim_evidence(evidence, run_dir=args.run_dir, require_deleted=False)
+    udid = evidence.get("udid")
+    if not is_udid(udid) or evidence.get("name") != sim_name(args.run_dir):
+        for line in pre["problems"] or ["证据无本 run UDID"]:
+            print(f"DENY [SIM_NOT_OWN] {line}")
+        return EXIT_DENY
+    ddir = str(evidence.get("devices_dir") or devices_dir())
+    device = posixpath.join(ddir, udid)
+    if os.path.islink(device) or not os.path.isdir(device):
+        print(f"DENY [SIM_NOT_OWN] {device} 不是真实目录(已不存在或被替换), 不删除")
+        return EXIT_DENY
+    device_name, name_problem = device_plist_name(device)
+    if device_name != evidence["name"]:
+        print(f"DENY [SIM_NOT_OWN] {device} 的 device.plist name = {device_name!r}{f'({name_problem})' if name_problem else ''}, "
+              f"不是本 run 的 {evidence['name']}——不删除(防删错他台)")
+        return EXIT_DENY
+    before = devices_listing(ddir)
+    result = _simctl("delete", udid)
+    after = devices_listing(ddir)
+    evidence["delete"] = {"at": _now_iso(), **result, "before": before, "after": after}
+    problem = _write_json_in_run(args.run_dir, SIM_EVIDENCE, evidence)
+    if problem:
+        print(f"DENY {problem}")
+        return EXIT_DENY
+    verdict = verify_sim_evidence(evidence, run_dir=args.run_dir, require_deleted=True)
+    d = listing_diff(before, after)
+    print(f"devices {ddir}: 删前 {len(before['udids'])} 台 → 删后 {len(after['udids'])} 台; 少了 {d['removed'] or '(无)'} 多出 {d['added'] or '(无)'}")
+    for line in verdict["service"]:
+        print(f"service-side-effect {line}")
+    if not verdict["ok"]:
+        for line in verdict["problems"]:
+            print(f"DENY [SIM_DELETE_UNVERIFIED] {line}")
+        return EXIT_DENY
+    print(f"SIM_DELETED udid={udid} name={evidence['name']} 前后比对: 只多出并只删除这一台 evidence={posixpath.join(args.run_dir, SIM_EVIDENCE)}")
+    return EXIT_ALLOW
+
+
+def darwin_user_temp_dir() -> str:
+    """Darwin 用户临时目录(`getconf DARWIN_USER_TEMP_DIR`; 不读 TMPDIR——TMPDIR 已被重定向到 run 内)。读不出 = HostIdentityError 同类拒。"""
+    try:
+        proc = subprocess.run(["getconf", "DARWIN_USER_TEMP_DIR"], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HostIdentityError(f"getconf DARWIN_USER_TEMP_DIR 失败: {exc}") from exc
+    value = (proc.stdout or "").strip().rstrip("/")
+    if proc.returncode != 0 or not value.startswith("/"):
+        raise HostIdentityError(f"getconf DARWIN_USER_TEMP_DIR 无可用输出(退出码 {proc.returncode})")
+    return value
+
+
+def temp_listing(temp_dir: str, patterns: list[str]) -> dict[str, list[Any]]:
+    """系统临时目录顶层与 patterns 匹配的项 {名: [类型, 大小, mtime 整秒]}(只读, 不进入, 不跟随链接)。"""
+    out: dict[str, list[Any]] = {}
+    if not os.path.isdir(temp_dir):
+        return out
+    for name in sorted(os.listdir(temp_dir)):
+        if any(fnmatch.fnmatchcase(name, p) for p in patterns):
+            full = os.path.join(temp_dir, name)
+            st = os.lstat(full)
+            kind = "link" if os.path.islink(full) else "dir" if os.path.isdir(full) else "file"
+            out[name] = [kind, int(st.st_size), int(st.st_mtime)]
+    return out
+
+
+def _sys_snapshot_cli(args: argparse.Namespace) -> int:
+    problem = _run_dir_problem(args.run_dir, SIDE_EVIDENCE)
+    if problem:
+        print(f"DENY {problem}")
+        return EXIT_DENY
+    patterns = [p for p in (args.pattern or []) if p]
+    if not patterns or any("/" in p for p in patterns):
+        print("DENY [SIDE_PATTERN_INVALID] --pattern 须至少一个且为顶层名 glob(取自开工稿, 声明 ios_simulator.xcode_temp_side_effects)")
+        return EXIT_DENY
+    try:
+        temp_dir = args.temp_dir.rstrip("/") if args.temp_dir else darwin_user_temp_dir()
+    except HostIdentityError as exc:
+        print(f"ERROR [TEMP_DIR_UNREADABLE] {exc}(非 macOS 或 getconf 不可用; 显式 --temp-dir 给出系统临时目录)", file=sys.stderr)
+        return EXIT_ERROR
+    if canonical_problem(temp_dir):
+        print(f"DENY [PATH_NOT_CANONICAL] --temp-dir {canonical_problem(temp_dir)}")
+        return EXIT_DENY
+    path = posixpath.join(args.run_dir, SIDE_EVIDENCE)
+    data, read_problem = _read_json(path)
+    if args.phase == "before":
+        if data is not None:
+            print(f"DENY [SIDE_BEFORE_EXISTS] 本 run 已有前快照 {path}(一个 run 只取一次前快照, 不覆盖)")
+            return EXIT_DENY
+        data = {"schema": SIDE_EVIDENCE_SCHEMA, "run_dir": args.run_dir, "temp_dir": temp_dir, "patterns": patterns,
+                "before_at": _now_iso(), "before": temp_listing(temp_dir, patterns), "after": None, "added": [], "removed": [], "changed": []}
+        problem = _write_json_in_run(args.run_dir, SIDE_EVIDENCE, data)
+        if problem:
+            print(f"DENY {problem}")
+            return EXIT_DENY
+        print(f"SIDE_BEFORE {len(data['before'])} 项 temp_dir={temp_dir} patterns={patterns} evidence={path}")
+        return EXIT_ALLOW
+    if data is None or not isinstance(data, dict) or data.get("schema") != SIDE_EVIDENCE_SCHEMA:
+        print(f"DENY [SIDE_BEFORE_MISSING] 无前快照({read_problem or '证据形不合'}); 先 --phase before")
+        return EXIT_DENY
+    if data.get("temp_dir") != temp_dir or data.get("patterns") != patterns:
+        print(f"DENY [SIDE_SCOPE_MISMATCH] 后快照的 temp_dir / patterns 须与前快照一致({data.get('temp_dir')} {data.get('patterns')})")
+        return EXIT_DENY
+    after = temp_listing(temp_dir, patterns)
+    before = data.get("before") or {}
+    data.update({"after_at": _now_iso(), "after": after, "added": sorted(set(after) - set(before)), "removed": sorted(set(before) - set(after)),
+                 "changed": sorted(n for n in set(after) & set(before) if after[n] != before[n])})
+    problem = _write_json_in_run(args.run_dir, SIDE_EVIDENCE, data)
+    if problem:
+        print(f"DENY {problem}")
+        return EXIT_DENY
+    for key, mark in (("added", "+"), ("removed", "-"), ("changed", "~")):
+        for name in data[key]:
+            print(f"SIDE_EFFECT {mark} {posixpath.join(temp_dir, name)}")
+    total = len(data["added"]) + len(data["removed"]) + len(data["changed"])
+    print(f"SIDE_EFFECTS {total} 处(Xcode 自写系统临时目录 = 系统副作用: 已记入 {path}, 未删除, 不是 run 产物)")
+    return EXIT_ALLOW
+
+
+def judge_sim_target(run_dir: str, udid: str, target: str, home: str | None = None) -> dict[str, Any]:
+    """主机侧本 run 专用模拟器设备目录判定: 目标真实路径须在 <Devices>/<udid> 内, 设备目录真实 = 字面, device.plist name = 本 run 名。"""
+    if not is_udid(udid):
+        return {"allowed": False, "code": "SIM_NOT_BOUND", "reason": f"--sim-udid {udid!r} 不是 UDID", "real_target": None, "real_run_dir": None}
+    device = posixpath.join(devices_dir(home), udid)
+    verdict = judge_realpath(device, target)
+    if not verdict["allowed"]:
+        return verdict
+    try:
+        want = sim_name(run_dir)
+    except ValueError as exc:
+        return {"allowed": False, "code": "PATH_NOT_CANONICAL", "reason": str(exc), "real_target": None, "real_run_dir": None}
+    name, problem = device_plist_name(device)
+    if name != want:
+        return {"allowed": False, "code": "SIM_NOT_OWN_RUN", "reason": f"设备 {udid} 的 device.plist name = {name!r}"
+                f"{f'({problem})' if problem else ''}, 不是本 run 的 {want}", "real_target": verdict["real_target"], "real_run_dir": None}
+    return {**verdict, "reason": f"目标真实路径 {verdict['real_target']} 在本 run 专用模拟器 {want}({udid})设备目录内"}
+
+
+# ---------------------------------------------------------------------------
 # CLI(目标主机上运行)
 # ---------------------------------------------------------------------------
 
@@ -330,6 +763,25 @@ def _parser() -> argparse.ArgumentParser:
     init.add_argument("--expect-fingerprint", required=True)
     init.add_argument("--expires-at", required=True)
     init.add_argument("--seal", required=True)
+    check.add_argument("--sim-udid", default=None, help="AIPOS-F194: judge a path inside this run's own simulator device directory "
+                                                          "(~/Library/Developer/CoreSimulator/Devices/<udid>) instead of the run directory")
+    for verb, text in (("sim-create", "AIPOS-F194: create this run's own simulator lybra-<card>-<run> in the default device set "
+                                      "(xcrun simctl create), snapshot the Devices UDID list before/after, write evidence into the run directory"),
+                       ("sim-verify", "AIPOS-F194: verify the Devices UDID list = before-create list + this run's simulator only"),
+                       ("sim-delete", "AIPOS-F194: delete this run's simulator only (xcrun simctl delete <udid>) and verify only it is gone")):
+        sp = sub.add_parser(verb, help=text)
+        sp.add_argument("--run-dir", required=True)
+        sp.add_argument("--expect-fingerprint", required=True)
+        if verb == "sim-create":
+            sp.add_argument("--device-type", required=True, help="Device type id (xcrun simctl list devicetypes)")
+            sp.add_argument("--runtime", required=True, help="Runtime id (xcrun simctl list runtimes)")
+    side = sub.add_parser("sys-snapshot", help="AIPOS-F194: snapshot Xcode's own writes in the Darwin user temp dir (top-level entries "
+                                               "matching --pattern) before/after the run; evidence in the run directory, nothing deleted")
+    side.add_argument("--run-dir", required=True)
+    side.add_argument("--expect-fingerprint", required=True)
+    side.add_argument("--phase", required=True, choices=("before", "after"))
+    side.add_argument("--pattern", action="append", default=[])
+    side.add_argument("--temp-dir", default=None, help="System temp dir (default: getconf DARWIN_USER_TEMP_DIR)")
     cmp_ = sub.add_parser("compare", help="Compare two snapshots; exit 0 unchanged, 4 changed")
     cmp_.add_argument("before")
     cmp_.add_argument("after")
@@ -408,11 +860,27 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_ALLOW
     if args.command == "init-run":
         return _init_run_cli(args)
+    if args.command in ("sim-create", "sim-verify", "sim-delete", "sys-snapshot"):
+        problem = _own_fingerprint_problem(args.expect_fingerprint)
+        if problem:
+            print(f"DENY {problem}")
+            return EXIT_DENY
+        handler = {"sim-create": _sim_create_cli, "sim-verify": _sim_verify_cli, "sim-delete": _sim_delete_cli,
+                   "sys-snapshot": _sys_snapshot_cli}[args.command]
+        try:
+            return handler(args)
+        except OSError as exc:
+            print(f"ERROR [HOST_IO_FAILED] {type(exc).__name__}: {exc}", file=sys.stderr)
+            return EXIT_ERROR
     if args.command == "check":
         problem = _own_fingerprint_problem(args.expect_fingerprint)
         if problem:
             print(f"DENY {problem}")
             return EXIT_DENY
+        if args.sim_udid is not None:
+            result = judge_sim_target(args.run_dir, args.sim_udid, args.path)
+            print(f"{'ALLOW' if result['allowed'] else 'DENY'} [{result['code']}] {result['reason']}")
+            return EXIT_ALLOW if result["allowed"] else EXIT_DENY
         result = judge_realpath(args.run_dir, args.path)
         print(f"{'ALLOW' if result['allowed'] else 'DENY'} [{result['code']}] {result['reason']}")
         return EXIT_ALLOW if result["allowed"] else EXIT_DENY
