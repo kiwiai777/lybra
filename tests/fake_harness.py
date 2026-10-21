@@ -20,6 +20,10 @@
                run directory over `ssh <alias>`, copy it to the report slot artifacts/, write RETURN with the product-given values
                (AIPOS-F197: between init-run and the screenshot, deliver the candidate source with the kickoff's command and run the
                kickoff's src-verify; both outputs go to artifacts/commands.txt)
+    validate_outputs_once  AIPOS-F204 (executor card only): first run as validate, but the RETURN frontmatter is the LANTU-VALID1
+               shape (outputs list + candidate / tree keys, no commit_sha / tree_hash / branch); on a same-session resume it copies the
+               product values out of the resume instruction (FAKE_PI_PROMPT, `key = value(`) and rewrites only the frontmatter
+    validate_outputs       AIPOS-F204: first run as validate_outputs_once; on resume rewrites the frontmatter still wrong (adds a key)
     docs       AIPOS-F197 (executor card only): governance-root-only card (no worktree): write a doc into the report slot artifacts/
                named by the kickoff's「产物落点」and a RETURN whose frontmatter `outputs` lists it (no branch keys)
   审计卡: 开工提示给出 `- outputs_digest: <值>(` (AIPOS-F197 被审卡只写治理根)= 报告写 verdict + outputs_digest(照抄), 否则写被审 tip
@@ -161,6 +165,29 @@ def do_validate(task_id: str, kickoff: str) -> None:
     emit({"type": "tool_execution_end", "toolCallId": "t2", "toolName": "write", "isError": False, "result": {"content": []}})
 
 
+def validate_outputs_mode(task_id: str, kickoff: str, mode: str) -> None:
+    """AIPOS-F204: validation card whose executor writes the governance-root outputs contract instead of the three product keys."""
+    report = Path(field(kickoff, "报告落点"))
+    if os.environ.get("FAKE_PI_RESUMES", "0") == "0":
+        do_validate(task_id, kickoff)
+        values = dict(re.findall(r"^- (commit_sha|tree_hash): (\S+?)\(", kickoff, re.M))
+        body = report.read_text(encoding="utf-8").split("---\n", 2)[2]
+        outputs = sorted(str(p) for p in (report.parent / "artifacts").iterdir())
+        report.write_text(f"---\ntask_id: {task_id}\noutputs:\n" + "".join(f"  - {o}\n" for o in outputs)
+                          + f"candidate: {values['commit_sha']}\ntree: {values['tree_hash']}\n---\n" + body, encoding="utf-8")
+        return
+    text = report.read_text(encoding="utf-8")
+    body = text.split("---\n", 2)[2]
+    if mode == "validate_outputs":
+        report.write_text(text.replace("---\n", "---\nretried: yes\n", 1), encoding="utf-8")
+    else:
+        values = dict(re.findall(r"(commit_sha|tree_hash|branch) = (\S+?)\(", os.environ.get("FAKE_PI_PROMPT", "")))
+        if set(values) != {"commit_sha", "tree_hash", "branch"}:
+            raise SystemExit(f"fake_harness: resume instruction lacks product values: {os.environ.get('FAKE_PI_PROMPT')!r}")
+        report.write_text(frontmatter({"task_id": task_id, **values}, body), encoding="utf-8")
+    pi_session(report, "fake-exec-model")
+
+
 def do_docs(task_id: str, kickoff: str) -> None:
     """AIPOS-F197: governance-root-only card (no worktree) driven only by the product kickoff text (产物落点 + outputs contract)."""
     note = field(kickoff, "产物落点")
@@ -241,6 +268,10 @@ def main() -> int:
         return 0
     if mode.startswith("sha_") and reviewed_of(task_id):
         sha_mode(task_id, kickoff, mode)
+        emit({"type": "agent_end", "messages": []})
+        return 0
+    if mode in ("validate_outputs_once", "validate_outputs") and not reviewed_of(task_id):
+        validate_outputs_mode(task_id, kickoff, mode)
         emit({"type": "agent_end", "messages": []})
         return 0
     if mode == "validate" and not reviewed_of(task_id):

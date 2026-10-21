@@ -539,10 +539,12 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         missing = missing_return_frontmatter(fm, governance=governance)
         if missing:
             where = "return.governance_root.required_frontmatter(只写治理根卡: 产出清单, 无分支三键)" if governance else "return.required_frontmatter"
+            # AIPOS-F204 件①: 补法 = 本卡开工提示同一契约(候选主体卡 = 产品给值; 误用另一契约另附说明), 唯一实现 return_header_problem
+            problem = out["header_problem"] = return_header_problem(workspace_root, task_id, card_fm, fm, missing=missing)
             out["category"] = "INGEST_FRONTMATTER_MISSING"
             out["reasons"] = [
                 f"{path}: frontmatter 缺 {', '.join(missing)}(声明: transitions.schema artifact_ingest.{where})。"
-                f"出口: 执行体补齐后产品自动重试(loop 重推导)"
+                f"出口: 执行体补齐后产品自动重试(loop 重推导)。补法: {problem['fix']}" + (f"。{problem['note']}" if problem["note"] else "")
             ]
             return out
         try:
@@ -599,6 +601,9 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         # AIPOS-F196 件①: 交付主体为固定候选的卡(validation)= 核候选三键(candidate_subject_values 唯一实值), 不核卡分支 tip
         candidate_check = _candidate_subject_check(workspace_root, task_id, card_fm, fm, path, kind="return")
         if candidate_check is not None:
+            mismatched = candidate_check.pop("mismatched", None)
+            if mismatched:  # AIPOS-F204 件②: 三键 ≠ 产品给值 = 报告头可纠正(判定与补法唯一实现 return_header_problem)
+                out["header_problem"] = return_header_problem(workspace_root, task_id, card_fm, fm, mismatched=mismatched)
             out.update(candidate_check)
             return out
         branch = str(fm.get("branch")).strip()
@@ -611,6 +616,7 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         if tip != commit_sha:
             # AIPOS-F180B item 1: full values on both sides + form diagnosis (single implementation tip_mismatch_diagnosis)
             diag = out["tip_diagnosis"] = tip_mismatch_diagnosis(code_repo, tip, commit_sha, branch=branch)
+            out["header_problem"] = return_header_problem(workspace_root, task_id, card_fm, fm, form=diag)  # AIPOS-F204 件②
             out["category"] = "INGEST_TIP_MISMATCH"
             out["reasons"] = [
                 f"分支 {branch} tip={tip} ≠ Return 自述 commit_sha={commit_sha}。形式诊断: {diag['text']}。"
@@ -619,6 +625,8 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
             return out
         tree = _git_out(code_repo, "rev-parse", f"{commit_sha}^{{tree}}")
         if tree != tree_hash:
+            if tree:  # AIPOS-F204 件②: tree_hash 写错 = 报告头可纠正(应为该 commit 的 tree)
+                out["header_problem"] = return_header_problem(workspace_root, task_id, card_fm, fm, mismatched={"tree_hash": (tree_hash, tree)})
             out["category"] = "INGEST_TREE_MISMATCH"
             out["reasons"] = [f"{commit_sha[:12]} tree={str(tree)[:12]} ≠ Return 自述 tree_hash={tree_hash[:12]}"]
             return out
@@ -727,13 +735,105 @@ def _candidate_subject_check(workspace_root: Path, subject_task_id: str, subject
     if values is None:
         return None
     keys = ("commit_sha", "tree_hash", "branch") if kind == "return" else ("commit_sha",)
-    wrong = [f"{k}={str(report_fm.get(k) or '').strip()!r} ≠ 产品给出 {values[k]}" for k in keys
-             if str(report_fm.get(k) or "").strip() != values[k]]
+    mismatched = {k: (str(report_fm.get(k) or "").strip(), values[k]) for k in keys if str(report_fm.get(k) or "").strip() != values[k]}
+    wrong = [f"{k}={got!r} ≠ 产品给出 {want}" for k, (got, want) in mismatched.items()]
     if wrong:
-        return {"ok": False, "category": "INGEST_CANDIDATE_MISMATCH",
+        return {"ok": False, "category": "INGEST_CANDIDATE_MISMATCH", "mismatched": mismatched,
                 "reasons": [f"{path}: 本卡交付主体 = 来源卡 {values['source']} 的固定候选 {values['commit_sha']}(验证卡不建卡分支): "
                             + "; ".join(wrong) + "。出口: 报告 frontmatter 照抄开工提示里产品给出的值"]}
     return {"ok": True, "category": "OK", "reasons": [], "exit_code": INGEST_EXIT_RECORDED}
+
+
+def header_fix_declaration() -> dict[str, Any]:
+    """AIPOS-F204: transitions.schema artifact_ingest.return.header_fix(唯一读取口)。缺 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.aipos_cli.next_resolver import _artifact_ingest_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    decl = (_artifact_ingest_declaration().get("return") or {}).get("header_fix")
+    kinds = decl.get("correctable_kinds") if isinstance(decl, dict) else None
+    misuse = decl.get("contract_misuse") if isinstance(decl, dict) else None
+    if (not isinstance(kinds, list) or not kinds or not isinstance(misuse, dict)
+            or any(not isinstance(misuse.get(k), str) or not misuse[k].strip() for k in ("candidate", "branch", "governance"))):
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.return.header_fix(correctable_kinds / contract_misuse.candidate|branch|"
+                              "governance)未声明齐(AIPOS-F204)")
+    return decl
+
+
+def return_header_problem(workspace_root: Path, task_id: str, card_fm: dict[str, Any], return_fm: dict[str, Any], *,
+                          missing: list[str] | None = None, mismatched: dict[str, tuple[str, str]] | None = None,
+                          form: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F204 件①②(声明 transitions artifact_ingest.return.header_fix): 执行卡交回报告头错误的唯一判定与补法渲染。
+
+    调用方给出已判定的错处(missing = 缺 / 占位的必填键; mismatched = {键: (报告值, 应为值)}; form = 卡分支 tip_mismatch_diagnosis 结果);
+    契约分形与逐键说明 = 本卡开工提示同一契约(next_resolver.card_report_contract), 另判误用另一契约的键(contract_misuse)。
+    返回 {contract, kinds, missing, mismatched, misused, correctable, problem, fix, note, keys}:
+      fix = 需改键逐键 `键 = 产品给值(说明)`(产品无值 = `键 = 说明`); note = 误用另一契约的说明句(无 = 空);
+      problem = 判定原文(拒因 / 修头指令同读)。候选声明不合 = contract=invalid、correctable=False(出口照旧 amend)。"""
+    from tools.aipos_cli.next_resolver import (
+        CandidateSubjectError, _is_placeholder_value, candidate_subject_values, card_branch_name, card_governance_outputs,
+        card_report_contract, required_return_frontmatter,
+    )
+
+    decl = header_fix_declaration()
+    fm = {**(card_fm or {}), "task_id": str((card_fm or {}).get("task_id") or task_id)}
+    missing = [str(k) for k in (missing or [])]
+    mismatched = dict(mismatched or {})
+    out: dict[str, Any] = {"contract": "", "kinds": [], "missing": missing, "mismatched": {k: list(v) for k, v in mismatched.items()},
+                           "misused": [], "correctable": False, "problem": "", "fix": "", "note": "", "keys": []}
+    try:
+        candidate = candidate_subject_values(Path(workspace_root), task_id, fm)
+        governance = candidate is None and card_governance_outputs(Path(workspace_root), fm)
+        entries = card_report_contract(Path(workspace_root), task_id, fm)
+    except CandidateSubjectError as exc:
+        out["contract"] = "invalid"
+        out["problem"] = f"卡 {task_id} 固定候选不可用({exc}), 产品给不出交回三键"
+        out["fix"] = "顾问 lybra queue amend 修正来源卡 / 候选(enums.schema task_mode.candidate_subject)"
+        return out
+    contract = "candidate" if candidate is not None else "governance" if governance else "branch"
+    out["contract"] = contract
+    keys = [str(e["key"]) for e in entries]
+    out["keys"] = keys
+    other_keys = required_return_frontmatter(governance=not governance)
+    misused = [k for k in other_keys if k not in keys and not _is_placeholder_value((return_fm or {}).get(k))]
+    out["misused"] = misused
+    expected = {str(e["key"]): e.get("value") for e in entries}
+    hints = {str(e["key"]): str(e["hint"]) for e in entries}
+    kinds: list[str] = []
+    parts: list[str] = []
+    need: list[str] = []
+    if missing:
+        kinds.append("missing")
+        parts.append(f"缺 {', '.join(missing)}")
+        need += missing
+    if mismatched:
+        kinds.append("mismatch")
+        parts.append("; ".join(f"{k}={got!r} ≠ 应为 {want}" for k, (got, want) in mismatched.items()))
+        for key, (_got, want) in mismatched.items():
+            expected[key] = want
+            need.append(key)
+    if form:
+        kinds.append("form")
+        parts.append(f"commit_sha={form.get('commit_sha')} ≠ 卡分支 {form.get('branch')} tip={form.get('tip')}(形式诊断: {form.get('text')})")
+        expected["commit_sha"] = str(form.get("tip") or "") or expected.get("commit_sha")
+        need.append("commit_sha")
+    if misused:
+        kinds.append("contract_misuse")
+        what = {"candidate": candidate or {}, "branch": {"branch": card_branch_name(task_id)}}.get(contract, {})
+        note = str(decl["contract_misuse"][contract])
+        for key, value in (("source", what.get("source", "")), ("branch", what.get("branch", "")), ("keys", " / ".join(keys)),
+                           ("misused", " / ".join(misused))):
+            note = note.replace("{" + key + "}", str(value))
+        out["note"] = note
+        parts.append(note)
+    out["kinds"] = kinds
+    ordered = [k for k in keys if k in need] + [k for k in need if k not in keys]
+    out["fix"] = "; ".join(f"{k} = {expected[k]}({hints[k]})" if expected.get(k) and k in hints else
+                           f"{k} = {expected[k]}" if expected.get(k) else f"{k} = {hints.get(k, '按声明填写实值')}"
+                           for k in dict.fromkeys(ordered))
+    out["problem"] = "; ".join(p for p in parts if p)
+    allowed = {str(k) for k in decl["correctable_kinds"]}
+    out["correctable"] = bool(kinds) and all(k in allowed for k in kinds) and (form is None or bool(form.get("correctable")))
+    return out
 
 
 # ---------------------------------------------------------------------------

@@ -1163,6 +1163,15 @@
         "legacy_rule": "最新交回记录无产出清单绑定(F197 前的存量交回; F197 起门 queue_return 对只写治理根的卡以同一实现核清单, 不合即拒, 不再落无绑定交回)= 门侧裁决预演 / mark-concluded / finalize 沿 AIPOS-F70 legacy 裁决口径警告放行(警告原文给重交回出口, finalization 记录标 legacy); 审计报告入口(artifact ingest --kind verdict)不放行。唯一实现 next_resolver.governance_outputs_recheck(allow_legacy)",
         "gate_check": "门 queue_return(一切交回提交路径汇入)对只写治理根的卡先以 governance_outputs_manifest 核 Return outputs 清单, 不合 = blocking_reasons `<拒因码>: …`, 交回不落; 合规 = 交回记录 artifact_subject 绑定清单(return_binding_subject)"
       },
+      "header_fix": {
+        "description": "AIPOS-F204 件①②(10-21 chris 岚图 LANTU-VALID1 实撞: validation 卡的 pi 开工提示给出「commit_sha / tree_hash / branch = 产品给值照抄」, pi 却写成只写治理根卡的 outputs 契约; 推导核拒因的补法却是「卡分支 card/<本卡> tip」, 对候选主体卡错误, pi 拉起的执行体无出口只能停线): 执行体交回报告头(frontmatter)可纠正错误的唯一判定与补法渲染。契约分形 = 本卡开工提示同一契约(next_resolver.card_report_contract: candidate = 固定候选三键产品给值 / governance = outputs 产出清单 / branch = 卡分支三键)。种类: missing(必填键缺或占位)/ mismatch(候选主体卡三键 ≠ 产品给值 INGEST_CANDIDATE_MISMATCH, 或 tree_hash ≠ 该 commit 的 tree INGEST_TREE_MISMATCH)/ form(卡分支 tip ≠ 自述 commit_sha 且形式诊断 correctable, 唯一实现 tip_mismatch_diagnosis)/ contract_misuse(写了另一契约的键: 非治理根卡写 outputs, 治理根卡写分支三键)。correctable = 种类全在 correctable_kinds 且产品给得出补法(候选声明不合 = 不可更正, 照旧出口)。补法 = 逐键 `键 = 产品给值(说明)`(产品无值的键 = `键 = 说明`, 与改动前逐字相同); 误用另一契约 = 另附 contract_misuse.<分形> 句。推导核交回节点缺键拒因(next_resolver artifact_invalid suggested_action)、artifact ingest 拒因(校验结果另落 header_problem)与 loop 修交回报告头指令(verbs.schema lybra_loop.launch.report_fix.executor)同读, 禁第二份补法。只修 frontmatter, 不改正文与产物。唯一实现 artifact_ingest.return_header_problem。",
+        "correctable_kinds": ["missing", "mismatch", "form", "contract_misuse"],
+        "contract_misuse": {
+          "candidate": "本卡为验证卡(交付主体 = 来源卡 {source} 的固定候选, 不建卡分支): 交回用 {keys} 三键(产品给值, 照抄), 不用 {misused} 契约(那是只写治理根卡的产出清单契约), 删去 {misused} 键",
+          "branch": "本卡为代码卡(交付主体 = 卡分支 {branch}): 交回用 {keys} 三键, 不用 {misused} 契约(那是只写治理根卡的产出清单契约), 删去 {misused} 键",
+          "governance": "本卡只写治理根(不建卡工作树 / 卡分支): 交回用 {keys} 产出清单契约, 不用 {misused}(那是写产品仓卡的分支三键契约), 删去这些键"
+        }
+      },
       "submits_via": "lybra queue return --confirm(驱动方 token, actor=claim 记录实例, completion_report_ref=Return 相对路径, artifact_refs=[Return 相对路径], actual_model=产品按会话记录定位器填写的运行时模型 AIPOS-F90 件②; frontmatter.model 只作对照)"
     },
     "verdict": {

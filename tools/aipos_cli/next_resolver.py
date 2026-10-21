@@ -3827,13 +3827,15 @@ def _derive_next_step(
             # (action=artifact_invalid, loop 据此 exit 4 而非空等), 齐则派生与 ingest 同一条 return 命令
             return_path = _return_artifact_path(workspace_root, task_id)
             governance_card = card_governance_outputs(workspace_root, {**fm, "task_id": task_id})  # AIPOS-F197 件②: 交回契约分形
-            missing_fm = missing_return_frontmatter(_read_frontmatter(return_path, allow_missing_block=True), governance=governance_card)
+            return_fm = _read_frontmatter(return_path, allow_missing_block=True)
+            missing_fm = missing_return_frontmatter(return_fm, governance=governance_card)
             if missing_fm:
-                # AIPOS-F123 件①: 拒因原文带补法(逐键说明 = 报告必填契约单源 report_frontmatter_contract, 分支 = 本卡分支)——
-                # 收编的人肉期手写 Return 常缺这三项, 出口须能照做
-                how = {e["key"]: e["hint"] for e in (
-                    report_frontmatter_contract("return", governance=True, report_dir=_report_dir_hint(workspace_root, task_id))
-                    if governance_card else report_frontmatter_contract("return", branch_task_id=task_id))}
+                # AIPOS-F123 件①: 拒因原文带补法(逐键说明 = 报告必填契约单源 report_frontmatter_contract)——收编的人肉期手写 Return
+                # 常缺这三项, 出口须能照做。AIPOS-F204 件①: 补法 = 本卡开工提示同一契约(候选主体卡 = 产品给值照抄, 非「卡分支
+                # card/<本卡> tip」; 误用另一契约另附说明), 判定与渲染唯一实现 artifact_ingest.return_header_problem(ingest 拒因同读)
+                from tools.aipos_cli.artifact_ingest import return_header_problem
+
+                problem = return_header_problem(workspace_root, task_id, fm, return_fm, missing=missing_fm)
                 return {
                     "task_id": task_id,
                     "derivable": False,
@@ -3844,8 +3846,8 @@ def _derive_next_step(
                     "verb": "lybra_queue_return_dry_run",
                     "missing_records": [f"Return frontmatter 缺 {k}" for k in missing_fm],
                     "suggested_action": (f"执行体在 {return_path} 的 frontmatter 补齐 {', '.join(missing_fm)}"
-                                         f"(声明: transitions.schema artifact_ingest.return.required_frontmatter)。补法: "
-                                         + "; ".join(f"{k} = {how.get(k, '按声明填写实值')}" for k in missing_fm)),
+                                         f"(声明: transitions.schema artifact_ingest.return.required_frontmatter)。补法: {problem['fix']}"
+                                         + (f"。{problem['note']}" if problem["note"] else "")),
                     "notes": "Return 已落盘但必填 frontmatter 不齐, 产品无法铸交回记录(AIPOS-F78 件③ fail-closed)",
                     "action": {"type": "artifact_invalid", "card": task_id, "path": str(return_path)},
                 }
