@@ -486,13 +486,13 @@ def task_ownership_problems(governance_root: Path, *, instance: str, role_class:
 
 
 def _single_line(value: Any, name: str) -> str:
-    from tools.aipos_cli.harness_launch import redact_progress
+    from tools.aipos_cli.harness_launch import READABLE_REF_HINT, redact_progress
 
     text = str(value or "").strip()
     if not text or "\n" in text or "\r" in text:
         raise _err("VR_DECLARATION_INVALID", f"{name} 须为非空单行串")
     if redact_progress(text) != text:
-        raise _err("VR_DECLARATION_INVALID", f"{name} 含凭据字样或长不透明串")
+        raise _err("VR_DECLARATION_INVALID", f"{name} 含凭据字样或长不透明串({READABLE_REF_HINT})")
     return text
 
 

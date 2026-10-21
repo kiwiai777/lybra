@@ -2266,7 +2266,9 @@ def _pi_models_problems(raw: Any) -> list[str]:
                 problems.append(f"pi_models.by_role.{role}: {pi_model_id_problem(model)}")
     ref = raw.get("owner_ref")
     if ref is not None and (not isinstance(ref, str) or not ref.strip() or "\n" in ref or "\r" in ref or redact_progress(ref) != ref):
-        problems.append(f"pi_models.owner_ref 须为非空单行串且不含凭据字样, 实为 {ref!r}")
+        from tools.aipos_cli.harness_launch import READABLE_REF_HINT
+
+        problems.append(f"pi_models.owner_ref 须为非空单行串且不含凭据字样, 实为 {ref!r}({READABLE_REF_HINT})")
     return problems
 
 

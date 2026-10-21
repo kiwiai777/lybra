@@ -466,7 +466,9 @@ def adopt_hand_charters(harness_root: Path, hand: list[dict[str, Any]], *, owner
     decl = hand_maintained_guard_declaration()
     ref = str(owner_ref or "").strip()
     if not ref or "\n" in ref or redact_progress(ref) != ref:
-        raise ValueError(f"{decl['owner_ref_flag']} 须为非空单行 Owner 裁决引用且不含凭据字样")
+        from tools.aipos_cli.harness_launch import READABLE_REF_HINT
+
+        raise ValueError(f"{decl['owner_ref_flag']} 须为非空单行 Owner 裁决引用且不含凭据字样({READABLE_REF_HINT})")
     stamp = utc_now().strftime("%Y%m%dT%H%M%SZ")
     plan: list[dict[str, Any]] = []
     for h in hand:
