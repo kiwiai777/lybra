@@ -1690,20 +1690,21 @@ def _emit_landing(landing: dict[str, Any] | None) -> int:
 
 def _project_json_two_phase_emit(command: str, target: dict[str, Any], outcome: dict[str, Any], *, actor: str, json_out: bool,
                                  details: list[str] | tuple[str, ...] = (), extra: dict[str, Any] | None = None,
-                                 via: str = "") -> int:
+                                 via: str = "", extra_written: list[str] | tuple[str, ...] = ()) -> int:
     """写 project.json 的命令同一输出: 首行 = 目标项目名 + 来源 + project.json 绝对路径(AIPOS-F127 件②, 文案读声明 target_line),
     次行状态(已写入 / 无改动 / 预览)+ 命令自述的改动行 + project.json unified diff。target = workspace_config.resolve_project_write_target
     的结果(各命令目标解析同一实现)。只涉 project.json(update_project_json 的结果), 不读不印 connection.json / 凭据。--json = 同一内容的 JSON。
 
     AIPOS-F159 件①(gap #144): 本族唯一落账点——确认阶段(outcome dry_run=False)写后即经 _land_project_writes 落 project.json
     (提交身份 = actor; 无改动亦核一次: 范围已落账 = PASS no-op, 前次写后未落账者随之补落); 预演零写入、不落账。
-    返回退出码: 落账成功 / 预演 = 0, 落账未完成 = 声明的 landing_failed_exit_code(写入已生效, 出拒因 + 补账命令)。"""
+    返回退出码: 落账成功 / 预演 = 0, 落账未完成 = 声明的 landing_failed_exit_code(写入已生效, 出拒因 + 补账命令)。
+    AIPOS-F203 件①: extra_written = 本次随 project.json 一并写出的治理根文件(validation-root run-start 新存的 helper 快照), 同一提交落账。"""
     decl = _project_json_writers_declaration()
     labels = decl["outcome_labels"]
     project_name = target["project"]
     landing = None
     if not outcome.get("dry_run", True):
-        landing = _land_project_writes(target["project_root"], [outcome["project_json"]], actor=actor, subcommand=command,
+        landing = _land_project_writes(target["project_root"], [outcome["project_json"], *extra_written], actor=actor, subcommand=command,
                                        project=project_name)
     rc = 0 if landing is None or landing["landed"] else int(landing["exit_code"])
     if json_out:
@@ -1733,15 +1734,37 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
     from tools.schema_loader import SchemaLoadError
 
     if args.vr_command == "helper":
-        if args.sha256:
-            print(vr.helper_sha256())
-        else:
-            sys.stdout.write(vr.helper_source())
-        return 0
+        if bool(args.decl_id) != bool(args.run_id):
+            print("Error: --id 与 --run-id 须同给(按 run 取本 run 固定的 helper); 都不给 = 当前部署版", file=sys.stderr)
+            return 2
+        if not args.decl_id:
+            if args.sha256:
+                print(vr.helper_sha256())
+            else:
+                sys.stdout.write(vr.helper_source())
+            return 0
     target = _project_write_target(args, home, args.name)
     if target is None:
         return 1
     root = Path(target["project_root"])
+    if args.vr_command == "helper":  # AIPOS-F203 件②: 按 run 查询口(唯一实现 validation_root.run_helper_lookup); 项目脚本运行时取摘要, 禁写死
+        try:
+            got = vr.run_helper_lookup(root, args.decl_id, args.run_id)
+        except vr.ValidationRootError as exc:
+            print(f"Error: {exc.code}(不下发 helper)", file=sys.stderr)
+            for problem in exc.problems:
+                print(f"  - {problem}", file=sys.stderr)
+            return 1
+        except (SchemaLoadError, OSError) as exc:
+            print(f"Error: {exc}(不下发 helper)", file=sys.stderr)
+            return 1
+        if got["note"]:
+            print(f"注意: {got['note']}", file=sys.stderr)  # 旧 run 标注走 stderr, stdout 只有 helper 原文 / 摘要(管道与脚本取值不受影响)
+        if args.sha256:
+            print(got["sha256"])
+        else:
+            sys.stdout.write(got["source"])
+        return 0
     if args.vr_command == "list":
         try:
             entries = vr.project_validation_roots(root)
@@ -1848,9 +1871,10 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
     if action == "revoke":
         return _project_json_two_phase_emit("validation-root revoke", target, payload, actor=args.actor, json_out=json_out,
                                             extra=extra, details=details)
-    if action == "run-start":
+    if action == "run-start":  # AIPOS-F203 件①: 新存的 helper 快照随 project.json 同一提交落账
+        extra["helper_snapshot"] = outcome.get("helper_snapshot")
         return _project_json_two_phase_emit("validation-root run-start", target, payload, actor=args.actor, json_out=json_out,
-                                            extra=extra, details=details)
+                                            extra=extra, details=details, extra_written=list(outcome.get("written_paths") or []))
     if action == "sim-bind":
         return _project_json_two_phase_emit("validation-root sim-bind", target, payload, actor=args.actor, json_out=json_out,
                                             extra=extra, details=details)
@@ -2991,9 +3015,15 @@ def build_parser() -> argparse.ArgumentParser:
     _vr_common(vr_fetch)
     vr_fetch.add_argument("--id", dest="decl_id", required=True, help="Audit instance's declaration id")
     vr_fetch.add_argument("--run-id", default=None, help="Run id (default: the active run, else the last run)")
-    vr_helper = project_vr_sub.add_parser("helper", help="Print the host-side check helper (pure python3 stdlib single file) or its sha256")
+    vr_helper = project_vr_sub.add_parser("helper", help="Print the host-side check helper (pure python3 stdlib single file) or its sha256; "
+                                                      "AIPOS-F203: with --id/--run-id print the helper pinned to that run at run-start "
+                                                      "(product upgrades do not change it; project scripts query this at run time)")
+    vr_helper.add_argument("name", nargs="?", default=None, help="Established project name (only with --id/--run-id; default: the project.json#project of --workspace-root / the governance root containing the current directory)")
     vr_helper.add_argument("--sha256", action="store_true", help="Print only the helper's sha256")
-    vr_helper.add_argument("--home-root", help="Governance home root (unused by helper; accepted for the project family)")
+    vr_helper.add_argument("--id", dest="decl_id", default=None, help="AIPOS-F203: declaration id (with --run-id: the helper pinned to that run)")
+    vr_helper.add_argument("--run-id", default=None, help="AIPOS-F203: run id (with --id)")
+    vr_helper.add_argument("--workspace-root", help="Target governance root when the project name is omitted (only with --id/--run-id)")
+    vr_helper.add_argument("--home-root", help="Governance home root (only with --id/--run-id; accepted for the project family)")
     # AIPOS-F161: pi 工位迁出共用检出(位置声明唯一来源 = enrollment_log 位置事件; 唯一实现 workstation_relocate.relocate_workstation)
     project_relocate_parser = project_subparsers.add_parser("relocate-workstation", help="AIPOS-F161: move an enrolled pi workstation (auditor / executor) of this project out of its current location (e.g. a git checkout shared with other projects) to a location of its own: preview (default) lists the workstation state (credentials by path/mode/size only), old/new location, affected declarations and in-flight checks; --confirm moves it, syncs the new location, appends a relocate location event to the enrollment log, verifies, leaves a read-only pointer in the old directory and lands the log; --rollback moves it back")
     project_relocate_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory)")
