@@ -27,6 +27,10 @@ AIPOS-F201(授权类小事看板闭环): 件① needs_owner pending 卡的 relea
 launch_harnesses=[pi]; 件③「告诉哪位顾问做什么」话术(声明 lybra_owner_inbox.relay, 中英): 每项转达对象 relay_target、看板每个选项的话术
 choice_script、已签发 / 已裁决而顾问未接着做的「已定待转达」relays(从既有真相推导, 按顾问合并 relay_groups / relay_lines, CLI 与看板同文)。
 
+AIPOS-F202(审计连续 BLOCK 的正式恢复入口): loop 类事由 audit_blocked_repeated 的事项选项含 reaudit(声明 pinned_options_by_reason: 顾问 loop note
+写了自定义选项也恒列); 选 reaudit = 既有 decide 同一写路径落决策记录, 推导核以该裁决为界重算连续 BLOCK(next_resolver.audit_block_state)。
+reaudit_hint: 此前「等修复」类裁决(after_choices)之后运行记录部署提交已变 = 事项附提示行(CLI 与看板同读 item.reaudit_hint)。
+
 AIPOS-F175 件③: owner_check 类别 = 路线图推导(roadmap_drift.roadmap_status, 唯一实现)里验证状态 = 待 Owner 抽查的标准, 附产物 / 步骤 /
 「告诉顾问」话术; 结论经顾问 `lybra roadmap verify`(roadmap.apply_owner_verification)记录, 不经 decide(对本类敲 decide = 用法错, 拒因指路)。
 """
@@ -86,9 +90,15 @@ def inbox_declaration() -> dict[str, Any]:
     for name, cat in decl["categories"].items():
         for field in ("default_options", "options"):
             referenced |= set(cat.get(field) or [])
-        for table in ("options_by_reason", "options_by_queue_state"):
+        for table in ("options_by_reason", "options_by_queue_state", "pinned_options_by_reason"):  # AIPOS-F202: pinned
             for keys in (cat.get(table) or {}).values():
                 referenced |= set(keys)
+        hint = cat.get("reaudit_hint")
+        if hint is not None:  # AIPOS-F202: reaudit hint after a "wait for the fix" ruling
+            if (not isinstance(hint, dict) or not isinstance(hint.get("reasons"), list) or not isinstance(hint.get("after_choices"), list)
+                    or not str(hint.get("text") or "").strip() or not isinstance(hint.get("commit_chars"), int) or hint["commit_chars"] < 1):
+                raise SchemaLoadError(f"verbs.{VERB}.categories.{name}.reaudit_hint 须有 reasons / after_choices(列表)、非空 text 与 ≥1 整数 commit_chars")
+            referenced |= set(hint["after_choices"])
         referenced |= set(cat.get("choice_refused_by_queue_state") or {})  # AIPOS-F201: refusal texts are keyed by option
     stale = decl["stale"]
     for cat_name, rule in (stale.get("suggest") or {}).items():
@@ -427,6 +437,9 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
             options = [{"key": str(o.get("key")), "label": str(o.get("label"))} for o in ask_rec["options"] if isinstance(o, dict)]
         else:
             options = _option_list(list((cat.get("options_by_reason") or {}).get(reason) or cat["default_options"]), decl)
+        # AIPOS-F202: options pinned for this reason (e.g. reaudit on audit_blocked_repeated) stay offered after the advisor's own
+        options += _option_list([k for k in (cat.get("pinned_options_by_reason") or {}).get(reason) or []
+                                 if k not in {o["key"] for o in options}], decl)
         recommend = ask_rec.get("recommend") or None
         if not recommend and reason in (cat.get("recommend_by_reason") or {}):
             recommend = _fmt(cat["recommend_by_reason"][reason], f"categories.loop_owner_needed.recommend_by_reason.{reason}",
@@ -442,6 +455,11 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
             facts={"run_id": view.get("run_id"), "reason": reason, "driver": view.get("driver"), "envelope": view.get("envelope"),
                    "hint": na.get("hint"), "record_path": view.get("record_path"), "owner_ask_by": ask_rec.get("noted_by")})
         item["relay_to"] = driver or None  # AIPOS-F201: the loop driver is the advisor to tell
+        try:
+            item["reaudit_hint"] = reaudit_hint(root, project, task_id=task_id, view=view, reason=reason, decl=decl)
+        except (OSError, ValueError, LookupError, RuntimeError) as exc:  # hint unreadable = named in errors, item still listed
+            item["reaudit_hint"] = None
+            errors.append({"project": project, "source": f"重新派审提示 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
         if grant_request:
             if card_fm:
                 _attach_grant(item, root, project, card_fm={**card_fm, "task_id": task_id}, driver=driver,
@@ -450,6 +468,41 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
                 item["grant_error"] = f"卡面 {task_id} 读不出"
         out.append(item)
     return out
+
+
+def reaudit_hint(root: Path, project: str, *, task_id: str, view: dict[str, Any], reason: str, decl: dict[str, Any]) -> str | None:
+    """AIPOS-F202: hint line on a loop item whose reason ∈ reaudit_hint.reasons — the card's latest ruling with a choice in
+    after_choices ("wait for the fix") was made on an earlier run, and this run's recorded deploy commit (run record deploy.commit)
+    differs from that run's = "the fix may be live, re-audit can be chosen". Either commit not recorded = None (not guessed).
+    Ruled run = the run whose loop item id (item_id, same construction as _loop_items) is the ruling's external_ref.
+    Records unreadable = raised (caller names it in errors)."""
+    spec = decl["categories"]["loop_owner_needed"].get("reaudit_hint")
+    if not isinstance(spec, dict) or reason not in spec["reasons"]:
+        return None
+    current = str((view.get("deploy") or {}).get("commit") or "")
+    if not current:
+        return None
+    after = {str(c) for c in spec["after_choices"]}
+    rulings = [r for r in _all_rulings(root, decl) if str(r.get("task_id") or "") == task_id and str(r.get("allowed_next_action") or "") in after]
+    if not rulings:
+        return None
+    cat = decl["categories"]["loop_owner_needed"]
+    subject = _fmt(cat["subject"], "categories.loop_owner_needed.subject", task_id=task_id)
+    runs = {item_id(project, "loop_owner_needed", subject, str(m.get("run_id") or ""), decl): m for m in _run_metas(root, task_id)}
+    prefix = str(decl["decision"]["external_ref_prefix"])
+    ruling = rulings[-1]
+    ext = str(ruling.get("external_ref") or "")
+    ruled = runs.get(ext[len(prefix):]) if ext.startswith(prefix) else None
+    if ruled is None or str(ruled.get("run_id") or "") == str(view.get("run_id") or ""):
+        return None
+    before = str((ruled.get("deploy") or {}).get("commit") or "")
+    if not before or before == current:
+        return None
+    choice = str(ruling.get("allowed_next_action") or "")
+    n = int(spec["commit_chars"])
+    return _fmt(spec["text"], "categories.loop_owner_needed.reaudit_hint.text",
+                label=str((decl["options"].get(choice) or {}).get("label") or choice), decision_id=str(ruling.get("decision_id") or "?"),
+                decided_at=str(ruling.get("decided_at") or "?"), from_commit=before[:n], to_commit=current[:n])
 
 
 def _card_frontmatter(path: Path | None, errors: list[dict[str, str]], project: str) -> dict[str, Any] | None:
@@ -1142,6 +1195,8 @@ def item_lines(item: dict[str, Any], texts: dict[str, Any]) -> list[str]:
     lines.append(_fmt(texts["options"], "texts.options", options=" / ".join(f"{o['key']}={o['label']}" for o in item["options"])))
     if item.get("since"):
         lines.append(_fmt(texts["since"], "texts.since", since=item["since"]))
+    if item.get("reaudit_hint"):  # AIPOS-F202: a "wait for the fix" ruling, deploy changed since = re-audit can be chosen
+        lines.append(_fmt(texts["hint"], "texts.hint", hint=item["reaudit_hint"]))
     if item.get("relay_to"):  # AIPOS-F201: the advisor the Owner tells (board: one message per option)
         lines.append(_fmt(texts["relay_to"], "texts.relay_to", advisor=item["relay_to"]))
     # AIPOS-F172: 信封项「裁决」指向看板信封页(同行保留 CLI 命令; 行文读声明 categories.envelope_warning.decide_board)

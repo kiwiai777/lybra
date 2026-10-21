@@ -817,6 +817,8 @@ def _inbox_item_html(ctx: _Ctx, item: dict[str, Any], lines: list[str]) -> str:
         parts.append(f"<p class=\"ib-ask\">{_ESC(ctx.t('ib_ask', ask=_words(item['ask'])))}</p>")
         if item.get("recommend") and _words(item["recommend"]):
             parts.append(f"<p class=\"ib-recommend\">{_ESC(ctx.t('ib_recommend', recommend=_words(item['recommend'])))}</p>")
+        if item.get("reaudit_hint"):  # AIPOS-F202: fix may be live after a "wait for the fix" ruling (same line as the CLI)
+            parts.append(f"<p class=\"rp-tell ib-hint\">{_ESC(item['reaudit_hint'])}</p>")
         if item.get("board_url"):
             parts.append(f"<p class=\"owner-inbox-board\"><a href=\"{_ESC(item['board_url'])}\">{_ESC(ctx.t('ib_board'))}</a></p>")
         parts.append(_choice_messages(ctx, item))

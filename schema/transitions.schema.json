@@ -320,7 +320,12 @@
         "repeated_end_reason": "audit_blocked_repeated",
         "owner_needed_after": 2,
         "reason_excerpt_chars": 240,
-        "dispatch_reason": "audit_blocked: 重审 {blocked_audit_task_id}(裁决 {verdict_id} = BLOCK, 已按 BLOCK 原因修环境 / 资源; 执行产物不变)"
+        "dispatch_reason": "audit_blocked: 重审 {blocked_audit_task_id}(裁决 {verdict_id} = BLOCK, 已按 BLOCK 原因修环境 / 资源; 执行产物不变)",
+        "owner_reaudit": {
+          "description": "AIPOS-F202(10-21 chris 理想 HBLX-21B 实撞: 审计 HBLX-21BR / HBLX-21BR2 连续 BLOCK 升 Owner, Owner 定「等产品修复」, 修复上线后续跑 loop 仍 1 秒即 audit_blocked_repeated, 无正式恢复入口): 连续 BLOCK 的正式恢复入口。Owner 在收件箱对本卡选 choices 所列选项(lybra_owner_inbox.options, 人话「环境 / 产品已修好, 重新派审」), 顾问 lybra owner decide 落既有 owner_decision_record(同一写路径, 自动落账)。连续 BLOCK 计数(audit_block_state 唯一实现)以本卡最近一条选 choices 的收件箱裁决(owner_inbox.rulings_for_task 同一读取口, 按 decided_at)为界, 只数裁决之后的 BLOCK(裁决时刻 = decided_at; 裁决记录时刻 = 裁决记录 verdict_at, 读不出退回记录 mtime)。最新常规裁决仍是界前 BLOCK(界后 0 次)且下一轮未派 = 推导核可推导: 派下一轮审计(既有派审动词 lybra audit dispatch, 卡号演进 audit_derivation.derive_audit_task_id, 派审人 / 信封 = 驱动方, 派审理由 = dispatch_reason), loop 执行后照常等待 / 拉起新一轮审计; 新一轮再 BLOCK = 界后计数从 1 起, 达 owner_needed_after 再升 Owner(repeated_end_reason)。历史裁决 / 审计卡 / 运行记录不改不删, 不重置历史。无此类裁决 = 行为不变。",
+          "choices": ["reaudit"],
+          "dispatch_reason": "owner_reaudit: Owner 裁决 {decision_id} 重新派审(上一轮 {blocked_audit_task_id} 裁决 {verdict_id} = BLOCK; 连续 BLOCK 自该裁决起重新计数; 执行产物不变)"
+        }
       },
       "verdict_stale": {
         "description": "AIPOS-F112(gap #69): 裁决已过期——卡审计 PASS 后卡分支 tip 又变化(典型: finalize 合并冲突, 执行体在卡工作树合 main 解冲突), 最新门生裁决覆盖的 commit ≠ 卡分支 tip。finalize 照 F70 正确 BLOCK「产物已变化,须复审」; 本声明给出复审出口, loop 自动走完, 不再反复撞同一 BLOCK。",

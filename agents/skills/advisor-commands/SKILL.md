@@ -353,6 +353,11 @@ lybra owner decide --items <事项ID>,<事项ID> --choice freeze_legacy --relaye
    **看板转达话术**(AIPOS-F201): Owner 在看板收件箱每个待决项的每个选项下都能复制一段「告诉 <驱动顾问>」的话术(点名你、带上面这条预演命令与下一步);
    Owner 签发 / 定夺后, 收件箱顶部「已定待转达」(CLI `lybra owner inbox` 末段同文)按顾问合并列出你还没接着做的事(信封 id / 决策 id + 下一条命令),
    你接着做(续跑 loop / 认领)后自动消失。驱动顾问 = 本卡最近 loop 运行的 driver, 无运行 = 卡面 planner_agent / created_by。
+   **重新派审**(AIPOS-F202): 审计连续 BLOCK 升 Owner(`owner_needed(audit_blocked_repeated)`)的事项恒有选项 `reaudit`=「环境 / 产品已修好, 重新派审」
+   (另有 `wait_product`=等修复、`rescope` 改卡面验收等)。Owner 定后 `lybra owner decide --item <OI-…> --choice reaudit --relayed-by <你的顾问实例> --owner-words "<Owner原话>" --home-root <home根>`
+   预演再 `--confirm`(可加 `--note <修了什么>`), 然后原命令重跑 loop: 连续 BLOCK 以该裁决为界重新计数, 产品派下一轮审计(R 序号续增)并照常拉起审计;
+   新一轮再 BLOCK 1 次 = 例行修环境重审, 连续到声明次数再升 Owner。历史裁决 / 审计卡不改, 不要手改记录或「重置次数」。之前选过 `wait_product`、
+   之后部署已更新的, 收件箱该卡新事项多一行「提示: … 可选重新派审」。
    blocked 卡的裁决可选 `withdraw`(经既有撤卡口, 记录带裁决引用)或 `freeze_legacy`(经既有存量冻结口, 清单条目带裁决引用)。之后对应卡
    `lybra loop status` 给 `advisor_fix(owner_ruled)`, detail 显示裁决、转达人与 Owner 原话, 按 hint 续跑; `lybra next --task-id` 附同一裁决行(自定义选项显示标签)。
 4. **项目暂停 / 恢复**(Owner 说「某项目先停」; 暂停项目的事项不再刷屏收件箱, 其余行为不变; 先预演, 再确认, 自动落账; 恢复 = `--status active`):
