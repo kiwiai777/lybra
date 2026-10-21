@@ -22,6 +22,11 @@ suggest_grant: 驱动方 / 卡面模式 / 卡面仓 / 同驱动方上一信封�
 逐字段覆盖), CLI 一行人话(grant_line)、看板「待授权请求」卡与「按建议签发」(F172 唯一写路由)同读; 驱动方已有覆盖本卡的信封(loop 同一判据
 loop_driver.find_envelope)= 已自行解除, 不列。
 
+AIPOS-F201(授权类小事看板闭环): 件① needs_owner pending 卡的 release 选项 =「放行继续」(既有 amend 出口, 修订理由带决策记录 ID 与 Owner 原话;
+已认领 / 已阻塞的卡选 release = 声明拒因 choice_refused_by_queue_state); 件② 授权建议对派 pi 工位的卡(workspace_config.card_execution_mode)给
+launch_harnesses=[pi]; 件③「告诉哪位顾问做什么」话术(声明 lybra_owner_inbox.relay, 中英): 每项转达对象 relay_target、看板每个选项的话术
+choice_script、已签发 / 已裁决而顾问未接着做的「已定待转达」relays(从既有真相推导, 按顾问合并 relay_groups / relay_lines, CLI 与看板同文)。
+
 AIPOS-F175 件③: owner_check 类别 = 路线图推导(roadmap_drift.roadmap_status, 唯一实现)里验证状态 = 待 Owner 抽查的标准, 附产物 / 步骤 /
 「告诉顾问」话术; 结论经顾问 `lybra roadmap verify`(roadmap.apply_owner_verification)记录, 不经 decide(对本类敲 decide = 用法错, 拒因指路)。
 """
@@ -84,6 +89,7 @@ def inbox_declaration() -> dict[str, Any]:
         for table in ("options_by_reason", "options_by_queue_state"):
             for keys in (cat.get(table) or {}).values():
                 referenced |= set(keys)
+        referenced |= set(cat.get("choice_refused_by_queue_state") or {})  # AIPOS-F201: refusal texts are keyed by option
     stale = decl["stale"]
     for cat_name, rule in (stale.get("suggest") or {}).items():
         if cat_name not in decl["categories"]:
@@ -174,7 +180,7 @@ def _base_item(decl: dict[str, Any], *, project: str, governance_root: Path, cat
             "subject": subject, "task_id": task_id, "policy_id": policy_id, "title": str(title or "").strip() or None,
             "source": source or str(decl["texts"]["unknown_source"]), "ask": ask, "recommend": recommend or None, "impact": impact,
             "options": options, "since": since, "anchor": anchor, "decision_id": decision_id_for(iid, decl),
-            "decide_command": command, "facts": dict(facts or {})}
+            "decide_command": command, "facts": dict(facts or {}), "home_root": str(home_root) if home_root else None}
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +188,7 @@ def _base_item(decl: dict[str, Any], *, project: str, governance_root: Path, cat
 # ---------------------------------------------------------------------------
 
 _GRANT_KEYS = ("reasons", "date_only_time", "mode_labels", "mode_any", "repos_any", "sources", "texts")
-_GRANT_TEXTS = ("line", "title_part", "repos_part", "decide_board", "unavailable")
+_GRANT_TEXTS = ("line", "title_part", "repos_part", "launch_part", "decide_board", "unavailable")
 #: owner_ask.grant 字段(顾问 loop note --grant-* 写入; 逐字段覆盖推导值)
 GRANT_FIELDS = ("task_mode", "lane_repos", "max_tasks", "expires_at", "reason")
 
@@ -259,7 +265,9 @@ def suggest_grant(root: Path, project: str, *, task_id: str, card_fm: dict[str, 
     """件① 授权建议唯一推导(声明 verbs.schema lybra_owner_inbox.grant_request): 驱动方 = 运行记录 driver; task_mode = 卡面; 仓 = 卡面 lane.repo
     (未写 = project.json repos 中指向卡所在仓的仓名); 额度(AIPOS-F192: 业务卡张数, 不再照抄上一信封)= project.json grant_request.max_tasks
     显式声明者, 否则本卡所需(autonomy_policy.envelope_card_need, 与 loop 续签同一推导); 到期 = 现在 + 项目缺省天数; 理由 = 卡标题;
-    拉起授权 = 同驱动方上一信封; policy_id = F166 next_policy_id。顾问 owner_ask.grant 逐字段覆盖。返回 {..., sources: {字段: 来源键}}。"""
+    拉起授权 = 本卡执行方式派 pi 工位(AIPOS-F201 件②: workspace_config.card_execution_mode 唯一判定, 与 loop 拉起 / 工位设置同读; 项目未声明
+    execution 时卡面 harness = pi 同判)= [pi], 否则同驱动方上一信封; policy_id = F166 next_policy_id。顾问 owner_ask.grant 逐字段覆盖。
+    返回 {..., sources: {字段: 来源键}}。"""
     from datetime import timedelta
 
     from tools.aipos_cli.autonomy_policy import card_lane_refs, envelope_card_need, envelope_overview, envelope_usage, next_policy_id
@@ -281,15 +289,16 @@ def suggest_grant(root: Path, project: str, *, task_id: str, card_fm: dict[str, 
     # AIPOS-F192: 额度 = 业务卡张数——项目显式声明优先, 否则本卡所需(本卡对上一信封的放行状态; 无上一信封 = 新卡 1 张)
     explicit = (defaults.get("_source") or {}).get("max_tasks") == "project.json"
     need = envelope_card_need(root, envelope_usage(root, previous["policy_id"], now=now) if previous else {}, task_id=task_id)
+    routed_pi = _card_routes_to_pi(root, card_fm)
     grant: dict[str, Any] = {
         "agent_or_role": driver, "task_mode": str(card_fm.get("task_mode") or "").strip(), "lane_repos": repos,
-        "launch_harnesses": list((previous or {}).get("launch_harnesses") or []),
+        "launch_harnesses": [routed_pi] if routed_pi else list((previous or {}).get("launch_harnesses") or []),
         "max_tasks": int(defaults["max_tasks"]) if explicit else int(need["max_tasks"]),
         "expires_at": iso_z(now + timedelta(days=int(defaults["days"]))),
         "reason": str(card_fm.get("title") or "").strip() or task_id,
     }
     sources.update({"agent_or_role": "derived", "task_mode": "card", "reason": "card", "expires_at": "project_default",
-                    "launch_harnesses": "previous_envelope" if previous else "derived",
+                    "launch_harnesses": "card_execution" if routed_pi else ("previous_envelope" if previous else "derived"),
                     "max_tasks": "project_default" if explicit else "card_need"})
     for key in GRANT_FIELDS:
         value = (advisor_grant or {}).get(key)
@@ -299,6 +308,18 @@ def suggest_grant(root: Path, project: str, *, task_id: str, card_fm: dict[str, 
     grant.update({"task_id": task_id, "title": str(card_fm.get("title") or "").strip() or None, "project": project,
                   "previous_policy_id": (previous or {}).get("policy_id"), "sources": sources, "quota_basis": need["basis"]})
     return grant
+
+
+def _card_routes_to_pi(root: Path, card_fm: dict[str, Any]) -> str | None:
+    """AIPOS-F201 件②: 本卡执行方式 = pi 工位 → 拉起授权 harness 名(EXECUTION_MODE_PI), 否则 None。判定唯一 workspace_config.card_execution_mode
+    (项目 execution 段: harness=pi / assigned_to=pi_executor / task_mode ∈ pi_allowed_task_modes); 项目未声明 execution = 卡面 harness 是否为 pi
+    (execution_wants_pi 首谓词同口径)。execution 段形不合 = ExecutionDeclarationError(ValueError)向上, 授权建议点名推不出(不猜)。"""
+    from tools.aipos_cli.workspace_config import EXECUTION_MODE_PI, card_execution_mode, project_execution
+
+    mode = card_execution_mode(project_execution(root), card_fm)
+    if mode is None:
+        mode = EXECUTION_MODE_PI if str(card_fm.get("harness") or "").strip() == EXECUTION_MODE_PI else None
+    return EXECUTION_MODE_PI if mode == EXECUTION_MODE_PI else None
 
 
 def grant_line(item: dict[str, Any], decl: dict[str, Any] | None = None) -> str:
@@ -311,6 +332,8 @@ def grant_line(item: dict[str, Any], decl: dict[str, Any] | None = None) -> str:
                 title_part=_fmt(t["title_part"], "grant_request.texts.title_part", title=grant["title"]) if grant.get("title") else "",
                 mode_label=g["mode_labels"].get(grant["task_mode"]) or g["mode_any"],
                 repos_part=_fmt(t["repos_part"], "grant_request.texts.repos_part", repos=repos) if repos else g["repos_any"],
+                launch_part=(_fmt(t["launch_part"], "grant_request.texts.launch_part", harnesses=", ".join(grant["launch_harnesses"]))
+                             if grant.get("launch_harnesses") else ""),
                 max_tasks=grant["max_tasks"], expires_date=str(grant["expires_at"])[:10], reason=grant["reason"])
 
 
@@ -334,21 +357,23 @@ def _attach_grant(item: dict[str, Any], root: Path, project: str, *, card_fm: di
                                command=item["decide_command"])
 
 
-def _covered_now(root: Path, task_id: str, card_fm: dict[str, Any], driver: str) -> bool:
-    """授权请求已自行解除: 驱动方对本卡已有覆盖信封(loop 同一判据 loop_driver.find_envelope → autonomy_policy.select_envelope)。
+def _covered_now(root: Path, task_id: str, card_fm: dict[str, Any], driver: str) -> dict[str, Any] | None:
+    """授权请求已自行解除: 驱动方对本卡已有覆盖信封(loop 同一判据 loop_driver.find_envelope → autonomy_policy.select_envelope)= 该信封, 否则 None。
     逐谓词调试轨迹照 F142 唯一开关(发射处 trace_envelope 一处判定; 本处不另开关)。"""
     from tools.aipos_cli.loop_driver import find_envelope
 
     if not driver:
-        return False
+        return None
     policy, _reasons = find_envelope(root, task_id=task_id, task_fm=card_fm, driver_actor=driver)
-    return policy is not None
+    return policy
 
 
-def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path | None, errors: list[dict[str, str]]) -> list[dict[str, Any]]:
+def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path | None, errors: list[dict[str, str]],
+                relays: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """① 每卡最近一次 loop 运行的顾问下一动作 = owner_needed(唯一判定 loop_run_record.loop_status)。卡已结案 / 撤回 = 已自行解除, 不列;
     冻结卡 = 四视图同一口径不列。运行记录 owner_ask(lybra loop note 补写)优先于声明缺省文案。
-    AIPOS-F180: 事由 ∈ grant_request.reasons = 授权请求: 驱动方已有覆盖本卡的信封 = 已自行解除不列; 否则附 grant 建议(suggest_grant)。"""
+    AIPOS-F180: 事由 ∈ grant_request.reasons = 授权请求: 驱动方已有覆盖本卡的信封 = 已自行解除不列; 否则附 grant 建议(suggest_grant)。
+    AIPOS-F201 件③: 已自行解除(签发生效)而本卡最近运行仍停在该请求 = 顾问未续跑 → relays 收一条「已签发」转达(窗口内)。"""
     from tools.aipos_cli.loop_run_record import loop_runs_root, loop_status
     from tools.aipos_cli.task_loader import find_task_card
 
@@ -372,6 +397,12 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
             continue
         view = runs[-1]
         na = view.get("next_action") or {}
+        if na.get("action") == "advisor_fix" and na.get("reason") == "owner_ruled" and not view.get("frozen"):
+            # AIPOS-F201 item 3 (a): ruled (loop status already reads the ruling) but this run is still the latest = not re-run yet
+            entry = _ruled_loop_relay(root, project, task_id=task_id, view=view, na=na, decl=decl) if relays is not None else None
+            if entry is not None:
+                relays.append(entry)
+            continue
         if na.get("action") != "owner_needed" or view.get("frozen"):
             continue
         reason = str(na.get("reason") or "")
@@ -382,10 +413,16 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
         if grant_request:
             card_fm = _card_frontmatter(card_path, errors, project) or {}
             try:
-                if card_fm and _covered_now(root, task_id, card_fm, driver):
-                    continue  # AIPOS-F180: envelope now covers this card for the driver = self-resolved, not listed
+                covering = _covered_now(root, task_id, card_fm, driver) if card_fm else None
             except (OSError, ValueError, LookupError) as exc:  # coverage unreadable = named, item still listed (not guessed resolved)
+                covering = None
                 errors.append({"project": project, "source": f"授权请求 {task_id} 信封覆盖判定", "error": f"{type(exc).__name__}: {exc}"})
+            if covering is not None:  # AIPOS-F180: envelope now covers this card for the driver = self-resolved, not listed
+                if relays is not None:  # AIPOS-F201 item 3: signed but the advisor has not re-run the loop yet = relay
+                    entry = _envelope_relay(root, project, task_id=task_id, driver=driver, policy=covering, decl=decl)
+                    if entry is not None:
+                        relays.append(entry)
+                continue
         if ask_rec.get("options"):
             options = [{"key": str(o.get("key")), "label": str(o.get("label"))} for o in ask_rec["options"] if isinstance(o, dict)]
         else:
@@ -404,6 +441,7 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
             options=options, since=view.get("ended_at") or view.get("started_at"), task_id=task_id, home_root=home_root, title=title,
             facts={"run_id": view.get("run_id"), "reason": reason, "driver": view.get("driver"), "envelope": view.get("envelope"),
                    "hint": na.get("hint"), "record_path": view.get("record_path"), "owner_ask_by": ask_rec.get("noted_by")})
+        item["relay_to"] = driver or None  # AIPOS-F201: the loop driver is the advisor to tell
         if grant_request:
             if card_fm:
                 _attach_grant(item, root, project, card_fm={**card_fm, "task_id": task_id}, driver=driver,
@@ -673,25 +711,35 @@ def collect_project_inbox(governance_root: Path, *, project: str | None = None, 
     errors: list[dict[str, str]] = []
     items: list[dict[str, Any]] = []
     decided: list[dict[str, Any]] = []
+    relays: list[dict[str, Any]] = []
     with task_card_lookup_scope(root):
         for category, collect in _COLLECTORS:
             if categories is not None and category not in categories:
                 continue
             try:
-                found = collect(root, name, decl, home_root, errors)
+                found = collect(root, name, decl, home_root, errors, relays) if collect is _loop_items else collect(root, name, decl, home_root, errors)
             except SchemaLoadError:
                 raise  # 声明坏 = 整个命令拒(不是某项目的真相问题)
             except (OSError, ValueError, LookupError, RuntimeError, FrontmatterReadError) as exc:
                 errors.append({"project": name, "source": decl["categories"][category]["label"], "error": f"{type(exc).__name__}: {exc}"})
                 continue
             for item in found:
+                if "relay_to" not in item:  # AIPOS-F201 item 3: the advisor to tell (card driver / item source)
+                    item["relay_to"] = _relay_target(root, item, errors, decl)
                 try:
                     ruling = read_ruling(root, item["item_id"], decl)
                 except FrontmatterReadError as exc:
                     errors.append({"project": name, "source": f"裁决记录 {item['decision_id']}", "error": str(exc)})
                     continue
                 (decided if ruling else items).append(item)
-    return {"project": name, "governance_root": str(root), "items": items, "decided_hidden": len(decided), "errors": errors}
+                if ruling:  # AIPOS-F201 item 3 (a): ruled, but the truth still stands = the advisor has not continued
+                    entry = _decision_relay(root, item, ruling, decl)
+                    if entry is not None:
+                        relays.append(entry)
+        if categories is None or "needs_owner_card" in categories:
+            relays += _released_relays(root, name, decl, errors)  # AIPOS-F201 item 3 (b)
+    return {"project": name, "governance_root": str(root), "items": items, "decided_hidden": len(decided), "errors": errors,
+            "relays": relays}
 
 
 def _sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
@@ -734,6 +782,303 @@ def grant_requests(inbox: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in inbox["items"] if item.get("grant")]
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F201 件①③: 「告诉哪位顾问、做什么」话术(声明 verbs.schema lybra_owner_inbox.relay, 中英; CLI 与看板同读同文)
+# ---------------------------------------------------------------------------
+
+_RELAY_KEYS = ("window_days", "skip_choices", "driver_fields", "commands", "texts")
+_RELAY_COMMANDS = ("decide", "resume_no_task")
+_RELAY_TEXTS = ("section_heading", "section_note", "cli_heading", "tell", "lead", "entry_decision", "words_part", "entry_envelope",
+                "launch_part", "notes", "choice_heading", "choice_summary", "choice_body", "choice_owner_words", "signed_note",
+                "unknown_advisor")
+#: 卡面「要 Owner 定」标志(与 needs_owner 类事项 flags 同一组; 仍为真 = 事项仍在, 不算已放行)
+_OWNER_FLAGS = ("needs_owner", "owner_review_required", "approval_required")
+
+
+def relay_declaration(decl: dict[str, Any] | None = None) -> dict[str, Any]:
+    """verbs.schema lybra_owner_inbox.relay(fail-closed): 键齐; window_days 正整数; skip_choices ⊆ options; driver_fields 非空字符串列表;
+    命令模板齐; 文案语言恰为看板 locale.supported 且每种语言 _RELAY_TEXTS 齐(F198 话术声明同一形)。"""
+    from tools.aipos_cli.board_pages import pages_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    d = decl or inbox_declaration()
+    r = d.get("relay")
+    where = f"verbs.{VERB}.relay"
+    if not isinstance(r, dict) or any(k not in r for k in _RELAY_KEYS):
+        raise SchemaLoadError(f"{where} 未声明齐 {list(_RELAY_KEYS)}")
+    if not isinstance(r["window_days"], int) or isinstance(r["window_days"], bool) or r["window_days"] < 1:
+        raise SchemaLoadError(f"{where}.window_days 须为正整数")
+    if not isinstance(r["skip_choices"], list) or not set(r["skip_choices"]) <= set(d["options"]):
+        raise SchemaLoadError(f"{where}.skip_choices 须为 options 内的选项键列表")
+    if not isinstance(r["driver_fields"], list) or not r["driver_fields"] or not all(isinstance(f, str) and f for f in r["driver_fields"]):
+        raise SchemaLoadError(f"{where}.driver_fields 须为非空字段名列表")
+    if not all(isinstance((r["commands"] or {}).get(k), str) and r["commands"][k] for k in _RELAY_COMMANDS):
+        raise SchemaLoadError(f"{where}.commands 未声明齐 {list(_RELAY_COMMANDS)}")
+    supported = list(pages_declaration()["locale"]["supported"])
+    if sorted(r["texts"]) != sorted(supported):
+        raise SchemaLoadError(f"{where}.texts 语言须恰为看板 locale.supported {supported}")
+    for lang, table in r["texts"].items():
+        missing = [k for k in _RELAY_TEXTS if not isinstance((table or {}).get(k), str)]
+        if missing:
+            raise SchemaLoadError(f"{where}.texts.{lang} 缺 {missing}")
+    return r
+
+
+def relay_texts(lang: str | None = None) -> dict[str, str]:
+    """一种语言的话术文案(未知 / 缺省 = 看板缺省语言; CLI 用缺省语言)。"""
+    from tools.aipos_cli.board_pages import pages_declaration
+
+    table = relay_declaration()["texts"]
+    default = str(pages_declaration()["locale"]["default"])
+    return table[lang] if lang in table else table[default]
+
+
+def _run_metas(root: Path, task_id: str) -> list[dict[str, Any]]:
+    """本卡 loop 运行记录(旧→新; owner_ask_labels 同一读法)。读不出 = LoopRunRecordError 向上(不吞)。"""
+    from tools.aipos_cli.loop_driver import load_loop_contract
+    from tools.aipos_cli.loop_run_record import _run_files, loop_runs_dir, read_run, run_record_declaration
+
+    directory = loop_runs_dir(Path(root), task_id)
+    if not directory.is_dir():
+        return []
+    rdecl = run_record_declaration(load_loop_contract())
+    return sorted((read_run(p, rdecl) for p in _run_files(directory)),
+                  key=lambda m: (str(m.get("started_at") or ""), str(m.get("run_id") or "")))
+
+
+def card_driver(root: Path, task_id: str, card_fm: dict[str, Any] | None, decl: dict[str, Any] | None = None) -> str | None:
+    """卡的驱动顾问(话术转达对象): 本卡最近一次 loop 运行的 driver; 无运行 = 卡面 relay.driver_fields 依序首个非空; 都无 = None。"""
+    runs = _run_metas(Path(root), task_id) if task_id else []
+    driver = next((str(m.get("driver") or "").strip() for m in reversed(runs) if str(m.get("driver") or "").strip()), "")
+    if driver:
+        return driver
+    fm = card_fm or {}
+    return next((str(fm.get(f) or "").strip() for f in relay_declaration(decl)["driver_fields"] if str(fm.get(f) or "").strip()), None)
+
+
+def _relay_target(root: Path, item: dict[str, Any], errors: list[dict[str, str]], decl: dict[str, Any]) -> str | None:
+    """事项的转达对象: 有卡 = card_driver(卡面 / 运行记录读不出 = 点名进 errors, 退回事项来源); 无卡 = 事项来源。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.task_loader import find_task_card
+
+    source = str(item.get("source") or "").strip() or None
+    task_id = str(item.get("task_id") or "")
+    if not task_id:
+        return source
+    try:
+        path, _state = find_task_card(root, task_id)
+        fm = require_frontmatter(Path(path))[0] if path else {}
+        return card_driver(root, task_id, fm, decl) or source
+    except (OSError, ValueError, LookupError, RuntimeError, FrontmatterReadError) as exc:
+        errors.append({"project": item["project"], "source": f"转达对象 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
+        return source
+
+
+def _resume_for(root: Path, task_id: str | None, advisor: str | None, envelope: str | None = None) -> str:
+    """顾问续跑命令: 有卡 = loop status 续跑提示同一模板(routine_rejections.resume_hint, 占位同 loop_run_record._resume_fill);
+    无卡 = relay.commands.resume_no_task。"""
+    from tools.aipos_cli.loop_run_record import _resume_fill, status_contract
+
+    if not task_id:
+        return _fmt(relay_declaration()["commands"]["resume_no_task"], "relay.commands.resume_no_task", governance_root=str(root))
+    view = {"task_id": task_id, "driver": advisor or "", "envelope": envelope or ""}
+    return _fmt(status_contract()["next_action"]["routine_rejections"]["resume_hint"], "resume_hint", **_resume_fill(view, Path(root)))
+
+
+def option_next(decl: dict[str, Any], choice: str, label: str, *, resume: str, task_id: str | None, governance_root: Path) -> str:
+    """选项的顾问下一步(options.<键>.advisor_next; 自定义选项 = custom_option.advisor_next)。裁决行 ruling_view 与话术同用。"""
+    spec = decl["options"].get(choice)
+    template = (spec or {}).get("advisor_next") or decl["custom_option"]["advisor_next"]
+    return _fmt(template, "options.advisor_next", resume=resume, task_id=task_id or "", governance_root=str(governance_root), label=label)
+
+
+def _within_window(text: Any, decl: dict[str, Any]) -> bool:
+    """发生时刻在 relay.window_days 天内; 时刻读不出 = True(照列, 不猜成过期)。"""
+    from tools.aipos_cli.clock import utc_now
+
+    when = _parse_utc(text)
+    return when is None or when >= utc_now() - timedelta(days=int(relay_declaration(decl)["window_days"]))
+
+
+def _decision_relay(root: Path, item: dict[str, Any], ruling: dict[str, Any], decl: dict[str, Any]) -> dict[str, Any] | None:
+    """(a) 已裁决而真相仍在的事项 → 一条转达(skip_choices / 窗口外 = None)。"""
+    choice = str(ruling.get("allowed_next_action") or "")
+    if choice in relay_declaration(decl)["skip_choices"] or not _within_window(ruling.get("decided_at"), decl):
+        return None
+    facts = item.get("facts") or {}
+    advisor = item.get("relay_to")
+    labels = {o["key"]: o["label"] for o in item["options"]}
+    label = str((decl["options"].get(choice) or {}).get("label") or labels.get(choice) or choice)
+    resume = _resume_for(root, item.get("task_id"), advisor, facts.get("envelope") if item["category"] == "loop_owner_needed" else None)
+    return {"kind": "decision", "advisor": advisor, "project": item["project"], "governance_root": str(root),
+            "task_id": item.get("task_id"), "subject": item["subject"], "item_id": item["item_id"],
+            "decision_id": ruling.get("decision_id") or item["decision_id"], "choice": choice, "label": label,
+            "owner_words": ruling.get("owner_words"), "done_at": ruling.get("decided_at"),
+            "advisor_next": option_next(decl, choice, label, resume=resume, task_id=item.get("task_id"), governance_root=root)}
+
+
+def _ruled_loop_relay(root: Path, project: str, *, task_id: str, view: dict[str, Any], na: dict[str, Any],
+                      decl: dict[str, Any]) -> dict[str, Any] | None:
+    """(a) loop 类: 本卡最近运行的下一动作已是 advisor_fix(owner_ruled)(loop_run_record → apply_owner_ruling 同一判定)= Owner 已裁决、驱动方未续跑
+    → 一条转达; 下一步 = 该裁决的 advisor_next(loop status hint 同文)。skip_choices / 窗口外 = None。"""
+    rv = na.get("owner_ruling") if isinstance(na.get("owner_ruling"), dict) else {}
+    choice = str(rv.get("choice") or "")
+    if not choice or choice in relay_declaration(decl)["skip_choices"] or not _within_window(rv.get("decided_at"), decl):
+        return None
+    return {"kind": "decision", "advisor": str(view.get("driver") or "") or None, "project": project, "governance_root": str(root),
+            "task_id": task_id, "subject": _fmt(decl["categories"]["loop_owner_needed"]["subject"], "categories.loop_owner_needed.subject",
+                                                task_id=task_id),
+            "item_id": na.get("inbox_item_id"), "decision_id": rv.get("decision_id"), "choice": choice, "label": rv.get("label") or choice,
+            "owner_words": rv.get("owner_words"), "done_at": rv.get("decided_at"), "advisor_next": str(rv.get("advisor_next") or "")}
+
+
+def _all_rulings(root: Path, decl: dict[str, Any]) -> list[dict[str, Any]]:
+    """收件箱裁决记录全部(decision_type = 声明 decision_type), 按裁决时刻旧→新。读不出 = 向上。"""
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.record_writer import record_root
+
+    d = decl["decision"]
+    directory = Path(root) / record_root("owner_decisions")
+    out: list[dict[str, Any]] = []
+    if not directory.is_dir():
+        return out
+    for path in sorted(directory.glob(f"{d['decision_id_prefix']}*.md")):
+        fm, body = require_frontmatter(path)
+        if str(fm.get("decision_type") or "") == d["decision_type"]:
+            out.append(_ruling_record(path, fm, body))
+    out.sort(key=lambda r: str(r.get("decided_at") or ""))
+    return out
+
+
+def _released_relays(root: Path, project: str, decl: dict[str, Any], errors: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """(b) 选项 effect = release_needs_owner 的裁决(窗口内)已解除标志、卡仍 pending、裁决后本卡无新 loop 运行 = 顾问未推进 → 转达。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.task_loader import find_task_card
+
+    release = {k for k, v in decl["options"].items() if v.get("effect") == "release_needs_owner"}
+    out: list[dict[str, Any]] = []
+    try:
+        rulings = _all_rulings(root, decl)
+    except (OSError, ValueError, FrontmatterReadError) as exc:
+        errors.append({"project": project, "source": "已放行转达: 裁决记录", "error": f"{type(exc).__name__}: {exc}"})
+        return out
+    cat = decl["categories"]["needs_owner_card"]
+    for ruling in rulings:
+        choice = str(ruling.get("allowed_next_action") or "")
+        task_id = str(ruling.get("task_id") or "")
+        if choice not in release or not task_id or not _within_window(ruling.get("decided_at"), decl):
+            continue
+        try:
+            path, state = find_task_card(root, task_id)
+            if state != "pending" or path is None:
+                continue
+            fm = require_frontmatter(Path(path))[0]
+            if any(fm.get(f) is True for f in _OWNER_FLAGS):
+                continue
+            decided = _parse_utc(ruling.get("decided_at"))
+            runs = _run_metas(root, task_id)
+            if decided is not None and any((_parse_utc(m.get("started_at")) or decided) >= decided for m in runs):
+                continue  # a loop run started at / after the ruling = the advisor has continued (second-precision clocks)
+            advisor = card_driver(root, task_id, fm, decl)
+        except (OSError, ValueError, LookupError, RuntimeError, FrontmatterReadError) as exc:
+            errors.append({"project": project, "source": f"已放行转达 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        label = str(decl["options"][choice]["label"])
+        resume = _resume_for(root, task_id, advisor)
+        out.append({"kind": "decision", "advisor": advisor, "project": project, "governance_root": str(root), "task_id": task_id,
+                    "subject": _fmt(cat["subject"], "categories.needs_owner_card.subject", task_id=task_id, queue_state=state),
+                    "item_id": None, "decision_id": ruling.get("decision_id"), "choice": choice, "label": label,
+                    "owner_words": ruling.get("owner_words"), "done_at": ruling.get("decided_at"),
+                    "advisor_next": option_next(decl, choice, label, resume=resume, task_id=task_id, governance_root=root)})
+    return out
+
+
+def _envelope_relay(root: Path, project: str, *, task_id: str, driver: str, policy: dict[str, Any],
+                    decl: dict[str, Any]) -> dict[str, Any] | None:
+    """(c) 授权请求已被签发的信封覆盖(窗口内按信封 active_from)而本卡最近运行仍停在该请求 → 一条「已签发」转达。"""
+    if not _within_window(policy.get("active_from"), decl):
+        return None
+    pid = str(policy.get("policy_id") or "")
+    return {"kind": "envelope", "advisor": driver or None, "project": project, "governance_root": str(root), "task_id": task_id,
+            "policy_id": pid, "launch_harnesses": list(policy.get("launch_harnesses") or []), "done_at": policy.get("active_from"),
+            "resume": _resume_for(root, task_id, driver, pid)}
+
+
+def relay_groups(relays: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按转达对象合并(同一顾问一段); 段按顾问名、段内按发生时刻 / 项目 / 卡排序。转达对象未知的单独一段(advisor None)。"""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for entry in relays:
+        groups.setdefault(str(entry.get("advisor") or ""), []).append(entry)
+    return [{"advisor": name or None,
+             "entries": sorted(rows, key=lambda e: (str(e.get("done_at") or ""), e["project"], str(e.get("task_id") or "")))}
+            for name, rows in sorted(groups.items())]
+
+
+def relay_entry_line(entry: dict[str, Any], n: int, t: dict[str, str]) -> str:
+    if entry["kind"] == "envelope":
+        harnesses = ", ".join(entry.get("launch_harnesses") or [])
+        return _fmt(t["entry_envelope"], "relay.texts.entry_envelope", n=n, project=entry["project"], task_id=entry["task_id"],
+                    policy_id=entry["policy_id"], advisor=entry.get("advisor") or t["unknown_advisor"],
+                    launch_part=_fmt(t["launch_part"], "relay.texts.launch_part", harnesses=harnesses) if harnesses else "",
+                    resume=entry["resume"])
+    words = entry.get("owner_words")
+    return _fmt(t["entry_decision"], "relay.texts.entry_decision", n=n, project=entry["project"], subject=entry["subject"],
+                label=entry["label"], decision_id=entry.get("decision_id") or "?",
+                words_part=_fmt(t["words_part"], "relay.texts.words_part", owner_words=words) if words else "",
+                advisor_next=entry["advisor_next"])
+
+
+def relay_lines(group: dict[str, Any], lang: str | None = None) -> list[str]:
+    """一段转达话术(CLI 收件箱段 / 看板「已定待转达」/ JSON 同一函数同一文字): 告诉 X + 引导 + 逐条 + 注意事项。"""
+    t = relay_texts(lang)
+    entries = group["entries"]
+    lines = [_fmt(t["tell"], "relay.texts.tell", advisor=group.get("advisor") or t["unknown_advisor"]),
+             _fmt(t["lead"], "relay.texts.lead", count=len(entries))]
+    lines += [relay_entry_line(entry, n, t) for n, entry in enumerate(entries, 1)]
+    lines.append(t["notes"])
+    return lines
+
+
+def choice_script(item: dict[str, Any], choice: str, lang: str | None = None) -> list[str]:
+    """件①③ 看板选项话术: Owner 在看板选定该选项后复制给转达对象——owner decide 预演命令(转达人 = 转达对象, Owner 原话 = choice_owner_words)、
+    --confirm 方法与该选项 advisor_next(续跑命令同 loop status)。只生成文字, 不写任何东西。"""
+    import shlex
+
+    decl = inbox_declaration()
+    r = relay_declaration(decl)
+    t = relay_texts(lang)
+    label = next(o["label"] for o in item["options"] if o["key"] == choice)
+    advisor = item.get("relay_to") or t["unknown_advisor"]
+    words = _fmt(t["choice_owner_words"], "relay.texts.choice_owner_words", label=label)
+    home = item.get("home_root") or str(Path(item["governance_root"]).parent)
+    preview = _fmt(r["commands"]["decide"], "relay.commands.decide", item_id=item["item_id"], choice=shlex.quote(choice),
+                   advisor=shlex.quote(advisor), owner_words=shlex.quote(words), home_root=shlex.quote(home))
+    root = Path(item["governance_root"])
+    resume = _resume_for(root, item.get("task_id"), item.get("relay_to"),
+                         (item.get("facts") or {}).get("envelope") if item["category"] == "loop_owner_needed" else None)
+    nxt = option_next(decl, choice, label, resume=resume, task_id=item.get("task_id"), governance_root=root)
+    return [_fmt(t["tell"], "relay.texts.tell", advisor=advisor),
+            _fmt(t["choice_body"], "relay.texts.choice_body", project=item["project"], subject=item["subject"], label=label,
+                 preview=preview, advisor_next=nxt),
+            t["notes"]]
+
+
+def choice_scripts_offered(item: dict[str, Any], decl: dict[str, Any] | None = None) -> bool:
+    """看板给该事项逐选项话术: 授权请求(有请求卡)与经别处记录的类别(decide_redirect, 如验收抽查)除外。"""
+    d = decl or inbox_declaration()
+    return not item.get("grant") and not d["categories"][item["category"]].get("decide_redirect")
+
+
+def signed_relay(item: dict[str, Any], lang: str | None = None, *, policy_placeholder: str = "{policy_id}") -> list[str]:
+    """授权请求按建议签发成功后的转达段(看板签发面板用; policy_id 留占位, 页脚本以写路由实际签发的 id 填)。与「已定待转达」同一段落形。"""
+    g = item["grant"]
+    root = Path(item["governance_root"])
+    entry = {"kind": "envelope", "advisor": g["agent_or_role"], "project": item["project"], "task_id": item["task_id"],
+             "policy_id": policy_placeholder, "launch_harnesses": list(g.get("launch_harnesses") or []),
+             "resume": _resume_for(root, item["task_id"], g["agent_or_role"], policy_placeholder)}
+    return relay_lines({"advisor": g["agent_or_role"], "entries": [entry]}, lang)
+
+
 def _collect_inbox(home_root: str | Path | None, *, project: str | None, include_paused: bool,
                    categories: tuple[str, ...] | None = None) -> dict[str, Any]:
     decl = inbox_declaration()
@@ -747,6 +1092,7 @@ def _collect_inbox(home_root: str | Path | None, *, project: str | None, include
         names = [project]
     items: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
+    relays: list[dict[str, Any]] = []
     hidden = 0
     paused: list[str] = []
     # AIPOS-F181 item 3: statuses hidden by default = declaration status.inbox_hidden (paused + test); same flag shows them all
@@ -765,10 +1111,15 @@ def _collect_inbox(home_root: str | Path | None, *, project: str | None, include
         part = collect_project_inbox(home / name, project=name, home_root=home, decl=decl, categories=categories)
         items += part["items"]
         errors += part["errors"]
+        relays += part["relays"]
         hidden += part["decided_hidden"]
     items.sort(key=_sort_key)
+    groups = relay_groups(relays)
+    for group in groups:  # AIPOS-F201: JSON / API carry the paragraph in the default language (the CLI text, byte for byte)
+        group["lines"] = relay_lines(group)
     return {"home_root": str(home), "home_source": source, "projects": [n for n in names if n not in paused], "items": items,
-            "decided_hidden": hidden, "paused_hidden": paused, "errors": errors, "count": len(items)}
+            "decided_hidden": hidden, "paused_hidden": paused, "errors": errors, "count": len(items), "relays": groups,
+            "relay_count": len(groups)}
 
 
 # ---------------------------------------------------------------------------
@@ -791,6 +1142,8 @@ def item_lines(item: dict[str, Any], texts: dict[str, Any]) -> list[str]:
     lines.append(_fmt(texts["options"], "texts.options", options=" / ".join(f"{o['key']}={o['label']}" for o in item["options"])))
     if item.get("since"):
         lines.append(_fmt(texts["since"], "texts.since", since=item["since"]))
+    if item.get("relay_to"):  # AIPOS-F201: the advisor the Owner tells (board: one message per option)
+        lines.append(_fmt(texts["relay_to"], "texts.relay_to", advisor=item["relay_to"]))
     # AIPOS-F172: 信封项「裁决」指向看板信封页(同行保留 CLI 命令; 行文读声明 categories.envelope_warning.decide_board)
     lines.append(item.get("decide_line") or _fmt(texts["decide"], "texts.decide", command=item["decide_command"]))
     return lines
@@ -811,6 +1164,14 @@ def render_inbox_text(inbox: dict[str, Any]) -> str:
     for item in inbox["items"]:
         out.append("")
         out.extend(item_lines(item, texts))
+    groups = inbox.get("relays") or []
+    if groups:  # AIPOS-F201 item 3: decided / signed, the advisor has not continued yet (same paragraphs as the board)
+        rt = relay_texts()
+        out.append("")
+        out.append(_fmt(rt["cli_heading"], "relay.texts.cli_heading", count=len(groups)))
+        for group in groups:
+            out.append("")
+            out.extend("  " + line for line in (group.get("lines") or relay_lines(group)))
     if inbox["errors"]:
         out.append("")
         out.append(_fmt(texts["errors_header"], "texts.errors_header", count=len(inbox["errors"])))
@@ -1027,11 +1388,15 @@ def _effect(item: dict[str, Any], choice: str, decl: dict[str, Any]) -> str | No
     return str(spec.get("effect")) if isinstance(spec, dict) and spec.get("effect") else None
 
 
-def _ruling_reason(decision_ids: list[str], item_ids: list[str]) -> str:
-    return f"Owner inbox ruling {', '.join(decision_ids)} ({', '.join(item_ids)})"
+def _ruling_reason(decision_ids: list[str], item_ids: list[str], owner_words: str | None = None) -> str:
+    """解除动作的理由(修订 / 撤回 / 冻结记录): 决策记录 ID + 事项 ID; AIPOS-F201 件①: 带 Owner 原话(声明 decision.owner_words_prefix 起头)。"""
+    base = f"Owner inbox ruling {', '.join(decision_ids)} ({', '.join(item_ids)})"
+    words = str(owner_words or "").strip()
+    return f"{base}; {inbox_declaration()['decision']['owner_words_prefix']}{words}" if words else base
 
 
-def _release_preview(item: dict[str, Any], effect: str | None, actor: str, decision_id: str, *, dry_run: bool) -> dict[str, Any] | None:
+def _release_preview(item: dict[str, Any], effect: str | None, actor: str, decision_id: str, *, dry_run: bool,
+                     owner_words: str | None = None) -> dict[str, Any] | None:
     """逐卡解除动作 = 既有队列出口(不手改卡): release_needs_owner → board_adapter.amend_task(只收 pending, 改为真的 needs_owner 类标志);
     withdraw_card → board_adapter.withdraw_task(AIPOS-F170: 带 Owner 裁决引用 owner_ruling_ref = decision_id, blocked 卡凭此可撤)。
     freeze_legacy 按治理根成批, 见 _freeze_group。dry_run=True 预演、False 执行; 无 effect = None。"""
@@ -1040,7 +1405,7 @@ def _release_preview(item: dict[str, Any], effect: str | None, actor: str, decis
     if not effect or effect == "freeze_legacy":
         return None
     root = Path(item["governance_root"])
-    reason = _ruling_reason([decision_id], [item["item_id"]])
+    reason = _ruling_reason([decision_id], [item["item_id"]], owner_words)
     if effect == "release_needs_owner":
         flags = list((item.get("facts") or {}).get("flags") or []) or ["needs_owner"]
         return amend_task(task_id=item["task_id"], actor=actor, amendments={f: False for f in flags}, amendment_reason=reason,
@@ -1053,7 +1418,7 @@ def _release_preview(item: dict[str, Any], effect: str | None, actor: str, decis
     raise SchemaLoadError(f"verbs.{VERB}.options.*.effect 未知: {effect!r}")
 
 
-def _freeze_group(root: Path, entries: list[dict[str, Any]], actor: str, *, dry_run: bool) -> dict[str, Any]:
+def _freeze_group(root: Path, entries: list[dict[str, Any]], actor: str, *, dry_run: bool, owner_words: str | None = None) -> dict[str, Any]:
     """AIPOS-F170 件①: 同一治理根内裁决为 freeze_legacy 的卡 = 一条存量冻结清单条目(既有口 legacy_freeze.plan_freeze_legacy 选卡 +
     legacy_baseline.write_freeze_entry 落条目; owner_policy_ref = 本批决策记录 ID)。返回 {ok, verdict, plan, written, blocking_reasons}。"""
     from tools.aipos_cli.legacy_baseline import LegacyBaselineError, write_freeze_entry
@@ -1063,7 +1428,8 @@ def _freeze_group(root: Path, entries: list[dict[str, Any]], actor: str, *, dry_
     decision_ids = [str(e["item"]["decision_id"]) for e in entries]
     try:
         plan = plan_freeze_legacy(root, task_ids=task_ids)
-        written = None if dry_run else write_freeze_entry(root, plan, reason=_ruling_reason(decision_ids, [e["item"]["item_id"] for e in entries]),
+        written = None if dry_run else write_freeze_entry(root, plan, reason=_ruling_reason(decision_ids, [e["item"]["item_id"] for e in entries],
+                                                                                         owner_words),
                                                           actor=actor, owner_policy_ref=",".join(decision_ids))
     except (LegacyBaselineError, OSError) as exc:
         return {"ok": False, "verdict": "BLOCK", "plan": None, "written": None, "blocking_reasons": [f"{type(exc).__name__}: {exc}"],
@@ -1134,6 +1500,12 @@ def decide(item_ids: str | list[str], choice: str, *, note: str | None = None, h
     for item in items:
         keys = [o["key"] for o in item["options"]]
         if choice not in keys:
+            # AIPOS-F201 item 1: an option this card's queue state cannot take = the declared reason (e.g. release on a claimed card)
+            refused = (decl["categories"][item["category"]].get("choice_refused_by_queue_state") or {}).get(choice) or {}
+            state = str((item.get("facts") or {}).get("queue_state") or "")
+            if state in refused:
+                raise InboxChoiceInvalid(_fmt(refused[state], f"categories.{item['category']}.choice_refused_by_queue_state.{choice}.{state}",
+                                              task_id=item.get("task_id") or "", queue_state=state, options=", ".join(keys)))
             raise InboxChoiceInvalid(f"选项 {choice!r} 不属事项 {item['item_id']}; 可选: {', '.join(keys)}")
     decided_at = iso_z()
     report: dict[str, Any] = {"ok": False, "stage": "confirm" if confirm else "preview", "choice": choice, "note": note, "actor": actor,
@@ -1153,7 +1525,7 @@ def decide(item_ids: str | list[str], choice: str, *, note: str | None = None, h
         if dry.get("verdict") == "BLOCK" or not dry.get("ok") or not dry.get("dry_run_token"):
             report["rc_outcome"] = "blocked"
         tokens.append(str(dry.get("dry_run_token") or ""))
-        entry["release"] = _release_preview(item, effect, actor, item["decision_id"], dry_run=True)
+        entry["release"] = _release_preview(item, effect, actor, item["decision_id"], dry_run=True, owner_words=words)
         if _release_blocked(entry["release"]):
             report["rc_outcome"] = "blocked"
     groups: dict[str, list[dict[str, Any]]] = {}
@@ -1161,7 +1533,7 @@ def decide(item_ids: str | list[str], choice: str, *, note: str | None = None, h
         if entry["effect"] == "freeze_legacy":
             groups.setdefault(entry["item"]["governance_root"], []).append(entry)
     for root_text, entries in groups.items():
-        group = _freeze_group(Path(root_text), entries, actor, dry_run=True)
+        group = _freeze_group(Path(root_text), entries, actor, dry_run=True, owner_words=words)
         report["freeze"].append({"governance_root": root_text, **group})
         if _release_blocked(group):
             report["rc_outcome"] = "blocked"
@@ -1182,7 +1554,7 @@ def decide(item_ids: str | list[str], choice: str, *, note: str | None = None, h
             failed = True
             continue
         entry["decision"]["target_path"] = written[0]
-        entry["release"] = _release_preview(item, entry["effect"], actor, item["decision_id"], dry_run=False)
+        entry["release"] = _release_preview(item, entry["effect"], actor, item["decision_id"], dry_run=False, owner_words=words)
         written += _release_writes(entry["release"])
         failed = failed or _release_blocked(entry["release"])
         entry["written"] = written
@@ -1192,7 +1564,7 @@ def decide(item_ids: str | list[str], choice: str, *, note: str | None = None, h
         ready = [e for e in entries if e["written"]]  # 决策记录已落的才冻结(引用须真实)
         if not ready:
             continue
-        group = _freeze_group(Path(root_text), ready, actor, dry_run=False)
+        group = _freeze_group(Path(root_text), ready, actor, dry_run=False, owner_words=words)
         report["freeze"].append({"governance_root": root_text, **group})
         failed = failed or _release_blocked(group)
         written_entry = (group.get("written") or {})
@@ -1265,8 +1637,7 @@ def ruling_view(ruling: dict[str, Any], decl: dict[str, Any], *, resume: str, ta
                   if words else "")
     line = _fmt(decl["texts"]["ruling_line"], "texts.ruling_line", choice=choice, label=label, note_part=note_part,
                 relay_part=relay_part, decided_at=str(ruling.get("decided_at") or "?"))
-    template = (spec or {}).get("advisor_next") or decl["custom_option"]["advisor_next"]
-    advisor_next = _fmt(template, "options.advisor_next", resume=resume, task_id=task_id, governance_root=str(governance_root), label=label)
+    advisor_next = option_next(decl, choice, label, resume=resume, task_id=task_id, governance_root=Path(governance_root))
     return {"choice": choice, "label": label, "note": note or None, "relayed_by": ruling.get("relayed_by"), "owner_words": words or None,
             "decided_at": ruling.get("decided_at"),
             "decision_id": ruling.get("decision_id"), "record": ruling.get("_path"), "line": line, "advisor_next": advisor_next}
@@ -1296,21 +1667,7 @@ def apply_owner_ruling(governance_root: Path, view: dict[str, Any], na: dict[str
 
 def rulings_for_task(governance_root: Path, task_id: str) -> list[dict[str, Any]]:
     """该卡的收件箱裁决(决策记录 decision_type = 声明 decision_type 且 task_id = 该卡), 按裁决时刻旧→新。读不出 = 向上。"""
-    from tools.aipos_cli.frontmatter import require_frontmatter
-    from tools.aipos_cli.record_writer import record_root
-
-    decl = inbox_declaration()
-    d = decl["decision"]
-    directory = Path(governance_root) / record_root("owner_decisions")
-    out: list[dict[str, Any]] = []
-    if not directory.is_dir():
-        return out
-    for path in sorted(directory.glob(f"{d['decision_id_prefix']}*.md")):
-        fm, body = require_frontmatter(path)
-        if str(fm.get("decision_type") or "") == d["decision_type"] and str(fm.get("task_id") or "") == str(task_id):
-            out.append(_ruling_record(path, fm, body))
-    out.sort(key=lambda r: str(r.get("decided_at") or ""))
-    return out
+    return [r for r in _all_rulings(Path(governance_root), inbox_declaration()) if str(r.get("task_id") or "") == str(task_id)]
 
 
 def owner_ask_labels(governance_root: Path, task_id: str) -> dict[str, str]:

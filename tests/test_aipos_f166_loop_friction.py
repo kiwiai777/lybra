@@ -290,7 +290,9 @@ def test_item2_envelope_expired_and_mint_hint_policy_id_plus_one(rig):
 
 def test_item2_remaining_and_expiry_warnings_in_loop_status_and_brief(rig):
     soon = (utc_now() + timedelta(hours=5)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    _policy(rig.gov, "pol_probe_warn_1", max_tasks=3)  # 剩余 3 次(≤3)
+    _policy(rig.gov, "pol_probe_warn_1", max_tasks=4)  # 用过 1 张、剩余 3 张(≤3); AIPOS-F201 件④: 未用过(used=0)的信封不报剩余预警
+    f90._write(rig.gov / "5_tasks" / "records" / "claims" / "T-pol_probe_warn_1-0" / "claim.md",
+               "---\nrecord_type: claim_record\nautonomy_mode: PreAuthorized\nowner_policy_ref: pol_probe_warn_1\n---\n")
     _policy(rig.gov, "pol_probe_warn_2", max_tasks=40, expires_at=soon)  # 5 小时后到期(≤24h)
     _policy(rig.gov, "pol_probe_calm_1", max_tasks=40)  # 不预警
     f90._card(rig.gov, TASK, "pending")
@@ -302,7 +304,7 @@ def test_item2_remaining_and_expiry_warnings_in_loop_status_and_brief(rig):
         line = next(l for l in status.splitlines() if "信封预警" in l)
         _show(f"[② loop status 预警原文 {pid}] {line.strip()}")
         if pid == "pol_probe_warn_1":
-            assert "信封预警: pol_probe_warn_1 剩余 3/3 张业务卡(阈值: ≤3 张或 ≤10%)" in line
+            assert "信封预警: pol_probe_warn_1 剩余 3/4 张业务卡(阈值: ≤3 张或 ≤10%)" in line
         else:
             assert f"信封预警: pol_probe_warn_2 {soon} 到期(剩 4h5" in line and "阈值 ≤24h" in line
         assert "续签: lybra envelope mint --confirm --policy-id" in line

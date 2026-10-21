@@ -121,6 +121,7 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _policy(g1, "pol_one_side_1", who=ADV1B, max_tasks=40, active_from=now - 3 * d, expires_at=now + 20 * d)
     _policy(g1, "pol_one_audit_1", who=AUD1, max_tasks=3, active_from=now - 2 * d, expires_at=now + 20 * d, task_mode="audit")
     _claims(g1, "pol_one_loop_9", 2)
+    _claims(g1, "pol_one_audit_1", 1)  # AIPOS-F201 件④: 未用过(used=0)的信封不报剩余预警; 用过 1 张、剩余 2/3 = 照报
     # P2: 用尽(无接替者 = 仍是当前, 待续签)+ 生效中的另一驱动方信封
     _policy(g2, "pol_two_loop_1", who=ADV2, max_tasks=2, active_from=now - 2 * d, expires_at=now + 10 * d)
     _claims(g2, "pol_two_loop_1", 2)
@@ -236,7 +237,7 @@ def test_item1_envelope_page_rows_status_tone_and_folding(board):
     summary = re.search(r"<summary>(.*?)</summary>", folded_part).group(1)
     _show(f"[件①·折叠摘要] {summary}")
     assert 'data-tone="ok"' in shown["pol_one_loop_9"] and "pol_one_loop_9" in current_part
-    assert 'data-tone="alert"' in shown["pol_one_audit_1"] and "剩余 3/3 张业务卡" in shown["pol_one_audit_1"]  # AIPOS-F192: 单位 = 业务卡
+    assert 'data-tone="alert"' in shown["pol_one_audit_1"] and "剩余 2/3 张业务卡" in shown["pol_one_audit_1"]  # AIPOS-F192: 单位 = 业务卡
     assert 'data-status="superseded"' in shown["pol_one_loop_3"] and 'data-tone="muted"' in shown["pol_one_loop_3"]
     assert "被 pol_one_loop_9 接替" in shown["pol_one_loop_3"] and "pol_one_loop_3" in folded_part and "pol_one_loop_3" not in current_part
     assert 'data-status="expired"' in shown["pol_one_loop_2"] and "pol_one_loop_2" in folded_part

@@ -726,6 +726,7 @@ def grant_sentence(ctx: _Ctx, grant: dict[str, Any]) -> str:
     return ctx.t("gr_sentence", advisor=grant["agent_or_role"], task_id=grant["task_id"],
                  title_part=ctx.t("gr_title_part", title=grant["title"]) if grant.get("title") else "",
                  mode=_mode_label(ctx, grant["task_mode"]), repos=ctx.t("gr_repos_part", repos=repos) if repos else ctx.t("gr_repos_any"),
+                 launch=ctx.t("gr_launch_part", harnesses=", ".join(grant["launch_harnesses"])) if grant.get("launch_harnesses") else "",
                  count=grant["max_tasks"], date=str(grant["expires_at"])[:10], reason=grant["reason"])
 
 
@@ -740,9 +741,14 @@ def request_payload(item: dict[str, Any]) -> dict[str, Any]:
 def _grant_card(ctx: _Ctx, item: dict[str, Any], owner: bool) -> str:
     import json
 
+    from tools.aipos_cli.owner_inbox import relay_texts, signed_relay
+
     g = item["grant"]
+    # AIPOS-F201 item 3: after signing, the panel shows the paragraph to copy to the driving advisor ({policy_id} = filled by the
+    # page script with the id the write path actually signed)
     data = {"payload": request_payload(item), "task_id": g["task_id"], "title": g.get("title") or "", "project": item["project"],
-            "mode_label": _mode_label(ctx, g["task_mode"])}
+            "mode_label": _mode_label(ctx, g["task_mode"]), "relay": "\n".join(signed_relay(item, ctx.lang)),
+            "relay_note": relay_texts(ctx.lang)["signed_note"].format(advisor=g["agent_or_role"], task_id=g["task_id"])}
     tech_lines = [f"item={item['item_id']} project={item['project']} policy_id={g['policy_id']}"]
     tech_lines += [f"{key}={g.get(key)!r} ({g['sources'].get(key, '-')})" for key in
                    ("agent_or_role", "task_mode", "lane_repos", "launch_harnesses", "max_tasks", "expires_at", "reason")]
@@ -813,9 +819,48 @@ def _inbox_item_html(ctx: _Ctx, item: dict[str, Any], lines: list[str]) -> str:
             parts.append(f"<p class=\"ib-recommend\">{_ESC(ctx.t('ib_recommend', recommend=_words(item['recommend'])))}</p>")
         if item.get("board_url"):
             parts.append(f"<p class=\"owner-inbox-board\"><a href=\"{_ESC(item['board_url'])}\">{_ESC(ctx.t('ib_board'))}</a></p>")
+        parts.append(_choice_messages(ctx, item))
     parts.append(f"<details class=\"ib-details\"><summary>{_ESC(ctx.t('ib_details'))}</summary>"
                  f"<pre>{_ESC(chr(10).join(line.strip() for line in lines))}</pre></details></section>")
     return "".join(parts)
+
+
+def _choice_messages(ctx: _Ctx, item: dict[str, Any]) -> str:
+    """AIPOS-F201 items 1 / 3: one copyable message per option for the advisor to tell (owner_inbox.choice_script, declared texts in the
+    page language). Read-only: the Owner picks an option by copying its message; the named advisor records it with product commands."""
+    from tools.aipos_cli.owner_inbox import choice_script, choice_scripts_offered, relay_texts
+
+    if not choice_scripts_offered(item) or not item.get("options"):
+        return ""
+    t = relay_texts(ctx.lang)
+    advisor = item.get("relay_to") or t["unknown_advisor"]
+    rows = []
+    for option in item["options"]:
+        text = "\n".join(choice_script(item, option["key"], ctx.lang))
+        rows.append(f"<details class=\"rp-cmd ib-choice\" data-choice=\"{_ESC(option['key'])}\"><summary class=\"rp-cmd-label\">"
+                    f"{_ESC(t['choice_summary'].format(label=option['label'], advisor=advisor))}</summary>"
+                    f"<pre class=\"upgrade-lines ib-choice-text\">{_ESC(text)}</pre></details>")
+    return (f"<div class=\"ib-choices\" data-relay-to=\"{_ESC(item.get('relay_to') or '')}\">"
+            f"<p class=\"rp-sub ib-choices-head\">{_ESC(t['choice_heading'].format(advisor=advisor))}</p>{''.join(rows)}</div>")
+
+
+def _relay_section(ctx: _Ctx, inbox: dict[str, Any]) -> list[str]:
+    """AIPOS-F201 item 3: "decided, to relay" (signed / ruled, the advisor has not continued yet), one paragraph per advisor; the same
+    lines as the CLI section (owner_inbox.relay_lines). Nothing to relay = nothing rendered."""
+    from tools.aipos_cli.owner_inbox import relay_lines, relay_texts
+
+    groups = inbox.get("relays") or []
+    if not groups:
+        return []
+    t = relay_texts(ctx.lang)
+    out = [f"<section class=\"ib-relays\" data-relays=\"{len(groups)}\"><h2>{_ESC(t['section_heading'].format(count=len(groups)))}</h2>"
+           f"<p class=\"rp-sub\">{_ESC(t['section_note'])}</p>"]
+    for group in groups:
+        lines = relay_lines(group, ctx.lang)
+        out.append(f"<article class=\"ib-relay\" data-advisor=\"{_ESC(group.get('advisor') or '')}\" data-entries=\"{len(group['entries'])}\">"
+                   f"<p class=\"rp-tell\">{_ESC(lines[0])}</p><pre class=\"upgrade-lines ib-relay-text\">{_ESC(chr(10).join(lines))}</pre></article>")
+    out.append("</section>")
+    return out
 
 
 def _inbox_body(ctx: _Ctx, inbox: dict[str, Any], show_all: bool) -> list[str]:
@@ -859,7 +904,8 @@ def render_owner_inbox(home_root: str | Path | None, params: dict[str, list[str]
         inbox = response["data"]
         requests = grant_requests(inbox)
         signing = owner and bool(requests)
-        body = ([_panel(ctx)] if signing else []) + _grant_section(ctx, requests, owner) + _inbox_body(ctx, inbox, show_all)
+        body = (([_panel(ctx)] if signing else []) + _relay_section(ctx, inbox) + _grant_section(ctx, requests, owner)
+                + _inbox_body(ctx, inbox, show_all))
         title = ctx.t("ib_title" if inbox["items"] else "ib_empty", count=inbox["count"], projects=len(inbox["projects"]))
         return _page(ctx, "inbox", title, body, note_key=None, h1_attrs=f" data-owner-inbox-count=\"{inbox['count']}\"",
                      body_attrs=_owner_attrs(ctx, signing), scripts=[_owner_script()] if signing else [],

@@ -2608,7 +2608,9 @@
           "warn": {
             "remaining_ratio": 0.1,
             "remaining_count": 3,
-            "expiry_hours": 24
+            "expiry_hours": 24,
+            "unused_exempt": true,
+            "unused_exempt_note": "AIPOS-F201 件④(gap #196 / #206): 额度按业务卡计后建议额度常为 1, 刚签发未用的信封(已放行 used = 0)即落在「剩余 ≤ remaining_count」内。unused_exempt = true: used = 0 的有效信封不报「剩余不足」(到期临近仍按 expiry_hours 报; 用过一次起剩余预警照旧)。缺省(未写)= false = 原口径(行为不变)。唯一判定 autonomy_policy.envelope_warning。"
           },
           "messages": {
             "exhausted": "信封 {policy_id} 额度已用尽(已放行 {used}/{max_tasks} 张业务卡, 到期 {expires_at}): {what}",
@@ -3360,6 +3362,7 @@
         "relay_part": "(经 {relayed_by} 转达; Owner 原话: 「{owner_words}」)",
         "paused_hidden": "(已暂停 / 测试项目缺省不列: {projects}; 加 --include-paused 查看)",
         "next_hint": "  顾问下一条: {advisor_next}",
+        "relay_to": "  转达对象: {advisor}",
         "unknown_source": "(未记录)",
         "page_error": "Owner 待决收件箱读不出(不猜): {error}"
       },
@@ -3382,7 +3385,13 @@
           "impact_by_queue_state": {"pending": "卡带 needs_owner, 不会被认领推进", "claimed": "在途卡待 Owner 复核", "blocked": "卡已阻塞, 不会被推进"},
           "options_by_queue_state": {"pending": ["release", "withdraw", "freeze_legacy", "acknowledge"], "claimed": ["withdraw", "freeze_legacy", "acknowledge"], "blocked": ["withdraw", "freeze_legacy", "new_card", "acknowledge"]},
           "ask": "{reasons}",
-          "note": "AIPOS-F170 件①: blocked 卡经 Owner 裁决可撤(既有 queue withdraw 口放宽: transitions.schema queue_mutations.transitions.withdraw.owner_ruling_required_from 所列源状态须带 Owner 裁决引用 = 本记录 decision_id)或冻结为历史(既有 project freeze-legacy 口, 清单条目 owner_policy_ref = 本记录 decision_id); 不另写解除口"
+          "choice_refused_by_queue_state": {
+            "release": {
+              "claimed": "卡 {task_id} 已认领(claimed), 不能放行: 放行只解除未认领(pending)卡的 needs_owner 拦截, 在途卡由驱动方按卡面推进(要换目标用撤换 lybra queue supersede); 本事项可选: {options}",
+              "blocked": "卡 {task_id} 已阻塞(blocked), 不能放行: 放行不解除阻塞; 本事项可选: {options}"
+            }
+          },
+          "note": "AIPOS-F201 件①: choice_refused_by_queue_state = 某选项对该队列状态的卡不可用时的拒因(decide 用法错 usage, 零写入; 如 release 只对 pending 卡: 已认领 / 已阻塞的卡拒并说明原因; 已结案的卡不在收件箱 = 收件箱中无该事项)。AIPOS-F170 件①: blocked 卡经 Owner 裁决可撤(既有 queue withdraw 口放宽: transitions.schema queue_mutations.transitions.withdraw.owner_ruling_required_from 所列源状态须带 Owner 裁决引用 = 本记录 decision_id)或冻结为历史(既有 project freeze-legacy 口, 清单条目 owner_policy_ref = 本记录 decision_id); 不另写解除口"
         },
         "rework_limit": {
           "rank": 1,
@@ -3442,7 +3451,7 @@
         "renew": {"label": "续签信封", "advisor_next": "Owner 已定续签: 新信封签好(Owner 执行裁决输出里的续签命令)后续跑: {resume}"},
         "let_expire": {"label": "不续签, 到期 / 用尽即停", "advisor_next": "Owner 不续签: 信封用尽或到期后 loop 停, 不再催签"},
         "deny_grant": {"label": "不批准这次授权(告诉顾问)", "advisor_next": "Owner 不批准这次授权: 不续跑本卡; 按 Owner 原话 / 备注调整请求(lybra loop note --task-id {task_id} --grant-…)或改卡后再请求, 否则转下一张(lybra next --workspace-root {governance_root})"},
-        "release": {"label": "解除 needs_owner, 卡回到可推进", "effect": "release_needs_owner", "advisor_next": "卡已由裁决解除 needs_owner(既有解除口 queue amend), 按常规推进: lybra next --task-id {task_id} --workspace-root {governance_root}"},
+        "release": {"label": "放行继续(解除 needs_owner, 按现状推进)", "effect": "release_needs_owner", "advisor_next": "卡已由裁决放行(解除 needs_owner, 既有解除口 queue amend, 修订理由带决策记录与 Owner 原话), 按常规推进: `{resume}`"},
         "withdraw": {"label": "撤卡(不再做)", "effect": "withdraw_card", "advisor_next": "卡已由裁决撤回(既有解除口 queue withdraw), 不再推进"},
         "freeze_legacy": {"label": "冻结为历史(存量冻结: 不再推进、不再进收件箱; 可解冻)", "effect": "freeze_legacy", "advisor_next": "卡已由裁决冻结为历史(既有口 project freeze-legacy), 不再推进; 确需推进先解冻: lybra project freeze-legacy --workspace-root {governance_root} --unfreeze {task_id} --reason <理由> --actor <你的顾问实例> --confirm"},
         "new_card": {"label": "另出新卡承接(本卡不再推进)", "advisor_next": "按裁决出新卡承接剩余问题(lybra draft create …), 本卡按裁决备注收口"},
@@ -3473,19 +3482,68 @@
       },
       "custom_option": {"key_pattern": "^[a-z][a-z0-9_]{0,31}$", "advisor_next": "按 Owner 裁决「{label}」处理后续跑: {resume}"},
       "grant_request": {
-        "description": "AIPOS-F180 件①(gap #175: 顾问请求里写明了 docs 模式 / 仓 / 额度 / 到期, 产品没把它变成可一键执行的请求): loop_owner_needed 类且下一动作事由 ∈ reasons 的事项 = 授权请求, 事项另带 grant 结构化建议(唯一推导 owner_inbox.suggest_grant; CLI 一行人话、看板「待授权请求」卡与「按建议签发」同读这一份数据): 驱动方 agent_or_role = 运行记录 driver; task_mode = 卡面 task_mode; 仓 = 卡面 lane.repo(未写 = project.json repos 中指向卡所在仓的仓名, 再无 = 不限); 拉起授权 = 同驱动方上一信封的 launch_harnesses(无 = 只手工 /go); 额度(AIPOS-F192: 业务卡张数, 不再照抄上一信封)= project.json grant_request.max_tasks 显式声明者, 否则本卡所需(autonomy_policy.envelope_card_need, 一张新业务卡 = 1); 到期 = 现在 + project.json grant_request.days(缺省 7, 与 lybra_loop.envelope.renew.renew_days 同值); 理由 = 卡标题; policy_id = F166 唯一推导 autonomy_policy.next_policy_id(该驱动方同前缀已有最大序号 +1, 前缀取同驱动方上一信封, 无 = pol_<项目>_loop_)。顾问 `lybra loop note --grant-mode/--grant-repos/--grant-max-tasks/--grant-expires/--grant-reason` 写进运行记录 owner_ask.grant, 逐字段覆盖推导值(sources 标明每字段来源)。签发 = 看板复用 F172 写例外 board_owner_envelopes.write_path(mode=new, 参数 = 建议; 不新增写路由)。信封生效即自行解除: 驱动方对本卡已有覆盖信封(loop 同一判据 loop_driver.find_envelope → autonomy_policy.select_envelope)= 事项不再列出。只读: 推导不写任何文件。",
+        "description": "AIPOS-F180 件①(gap #175: 顾问请求里写明了 docs 模式 / 仓 / 额度 / 到期, 产品没把它变成可一键执行的请求): loop_owner_needed 类且下一动作事由 ∈ reasons 的事项 = 授权请求, 事项另带 grant 结构化建议(唯一推导 owner_inbox.suggest_grant; CLI 一行人话、看板「待授权请求」卡与「按建议签发」同读这一份数据): 驱动方 agent_or_role = 运行记录 driver; task_mode = 卡面 task_mode; 仓 = 卡面 lane.repo(未写 = project.json repos 中指向卡所在仓的仓名, 再无 = 不限); 拉起授权 = 本卡执行方式派 pi 工位(AIPOS-F201 件②: workspace_config.card_execution_mode 唯一判定; 项目未声明 execution 时卡面 harness = pi 同判)= [pi], 否则同驱动方上一信封的 launch_harnesses(无 = 只手工 /go; 人话行 texts.launch_part 只在有拉起授权时出现); 额度(AIPOS-F192: 业务卡张数, 不再照抄上一信封)= project.json grant_request.max_tasks 显式声明者, 否则本卡所需(autonomy_policy.envelope_card_need, 一张新业务卡 = 1); 到期 = 现在 + project.json grant_request.days(缺省 7, 与 lybra_loop.envelope.renew.renew_days 同值); 理由 = 卡标题; policy_id = F166 唯一推导 autonomy_policy.next_policy_id(该驱动方同前缀已有最大序号 +1, 前缀取同驱动方上一信封, 无 = pol_<项目>_loop_)。顾问 `lybra loop note --grant-mode/--grant-repos/--grant-max-tasks/--grant-expires/--grant-reason` 写进运行记录 owner_ask.grant, 逐字段覆盖推导值(sources 标明每字段来源)。签发 = 看板复用 F172 写例外 board_owner_envelopes.write_path(mode=new, 参数 = 建议; 不新增写路由)。信封生效即自行解除: 驱动方对本卡已有覆盖信封(loop 同一判据 loop_driver.find_envelope → autonomy_policy.select_envelope)= 事项不再列出。只读: 推导不写任何文件。",
         "reasons": ["no_envelope", "envelope_renew"],
         "date_only_time": "T23:59:59Z",
         "mode_labels": {"code": "改代码", "docs": "只写文档", "governance": "写治理文档", "config": "改配置", "audit": "做审计", "validation": "做固定候选验证"},
         "mode_any": "不限模式",
         "repos_any": "不限仓",
-        "sources": {"advisor": "顾问 loop note", "card": "卡面", "previous_envelope": "同驱动方上一信封", "project_default": "项目缺省", "derived": "推导", "card_need": "本卡所需(AIPOS-F192: 额度 = 业务卡张数)"},
+        "sources": {"advisor": "顾问 loop note", "card": "卡面", "previous_envelope": "同驱动方上一信封", "project_default": "项目缺省", "derived": "推导", "card_need": "本卡所需(AIPOS-F192: 额度 = 业务卡张数)", "card_execution": "本卡执行方式派 pi 工位(AIPOS-F201: workspace_config.card_execution_mode)"},
         "texts": {
-          "line": "  授权请求: {advisor} 请求为 {task_id}{title_part}开一个{mode_label}的授权, {repos_part}, {max_tasks} 张业务卡(每张含其审计与返工), 到 {expires_date}。理由: {reason}",
+          "line": "  授权请求: {advisor} 请求为 {task_id}{title_part}开一个{mode_label}的授权, {repos_part}{launch_part}, {max_tasks} 张业务卡(每张含其审计与返工), 到 {expires_date}。理由: {reason}",
           "title_part": "({title})",
           "repos_part": "仅 {repos}",
+          "launch_part": ", 允许 loop 拉起 {harnesses} 工位",
           "decide_board": "  裁决: Owner 在看板「待授权请求」点「按建议签发」 {board_url}(不批准 = {command} 选 deny_grant)",
           "unavailable": "  授权请求: 推不出建议({why}); 顾问可用 lybra loop note --task-id {task_id} --grant-mode … 写明"
+        }
+      },
+      "relay": {
+        "description": "AIPOS-F201 件①③(Owner 10-21: 授权类小事从看板指导 Owner 转达顾问继续, 不再由 Lybra 顾问读截图代签 + 手写转达稿): 「告诉哪位顾问、做什么」的可复制话术, 唯一推导 owner_inbox(relay_target / choice_script / relay_groups / relay_lines), CLI `lybra owner inbox` 与看板收件箱页同读同文(语言 = 看板 locale; CLI 用缺省语言)。看板不新增写例外: 话术只生成文字, 记录 / 解除 / 推进全由被点名的顾问用产品命令做(写命令先预演后 --confirm)。① 转达对象(relay_target): 有卡的事项 = 该卡驱动顾问——本卡最近一次 loop 运行的 driver, 无运行 = 卡面 driver_fields 依序首个非空(planner_agent / created_by / draft_created_by); 无卡的事项(信封预警 / 路线图)= 事项来源(信封 agent_or_role / 信号 advisor)。② 选项话术(choice_script, 看板每个待决项每个选项各一段, 授权请求卡与验收抽查除外——前者在请求卡上签发 / 不批准, 后者经 roadmap verify): Owner 在看板选定后复制给转达对象, 内含该选项的 owner decide 预演命令(commands.decide, 转达人 = 转达对象, Owner 原话 = texts.choice_owner_words)、确认方法与该选项 advisor_next。③ 已定待转达(relays): Owner 已签发 / 已裁决、被点名顾问还没接着做的事, 从既有真相推导, 不另记待办——(a) 已裁决事项真相仍在(loop 运行记录仍停在同一次运行等)= 顾问未续跑; (b) 选项 effect = release_needs_owner 的裁决已解除 needs_owner、卡仍 pending、裁决后本卡无新 loop 运行 = 顾问未推进; (c) 授权请求的驱动方已有覆盖本卡的信封(签发生效)而本卡最近运行仍停在该授权请求 = 顾问未续跑。skip_choices 所列选项(不需顾问动作)不进 ③; 发生时刻(裁决 decided_at / 信封 active_from)早于 window_days 天的不进 ③(时刻读不出 = 照列, 不猜)。按转达对象合并: 同一顾问的多件事合成一段(texts.tell + lead + 逐条 entry_* + notes)。顾问接着做后(新运行 / 认领)真相变 = 自动消失。",
+        "window_days": 7,
+        "skip_choices": ["acknowledge", "accept", "let_expire"],
+        "driver_fields": ["planner_agent", "created_by", "draft_created_by"],
+        "commands": {
+          "decide": "lybra owner decide --item {item_id} --choice {choice} --relayed-by {advisor} --owner-words {owner_words} --home-root {home_root}",
+          "resume_no_task": "lybra next --workspace-root {governance_root}"
+        },
+        "texts": {
+          "zh": {
+            "section_heading": "已定待转达 · 告诉顾问继续({count} 段)",
+            "section_note": "下面是你已签发 / 已决定、但顾问还没接着做的事, 按顾问合并成段; 把整段复制给对应顾问即可。顾问接着做之后这里自动消失。",
+            "cli_heading": "已定待转达 — {count} 段(复制给对应顾问; 顾问接着做后自动消失):",
+            "tell": "告诉 {advisor}:",
+            "lead": "Owner 已处理下面 {count} 件事, 请用产品命令接着做(写命令一律先预演, 核对无误再加 --confirm):",
+            "entry_decision": "{n}. {project} {subject}: Owner 已定「{label}」(决策记录 {decision_id}{words_part})。下一步: {advisor_next}",
+            "words_part": "; Owner 原话「{owner_words}」",
+            "entry_envelope": "{n}. {project} 卡 {task_id}: Owner 已签发信封 {policy_id}(覆盖 {advisor}{launch_part})。下一步: `{resume}`",
+            "launch_part": "; 允许 loop 拉起 {harnesses} 工位",
+            "notes": "注意: 只用产品命令推进, 不手改卡面 / 记录; 命令被拒 = 原样转述拒因, 不绕过。",
+            "choice_heading": "你定了哪个选项, 就把对应的话术复制给 {advisor}:",
+            "choice_summary": "选「{label}」→ 给 {advisor} 的话术",
+            "choice_body": "Owner 在看板对 {project} {subject} 选了「{label}」。请先预演记录这个决定: `{preview}`; 核对预演无误后同一命令末尾加 --confirm 落记录(自动落账)。记录后: {advisor_next}",
+            "choice_owner_words": "看板选「{label}」",
+            "signed_note": "{advisor} 还不知道你已签发: 把下面这段复制给它, 它会接着推进 {task_id}。",
+            "unknown_advisor": "<该卡驱动顾问>"
+          },
+          "en": {
+            "section_heading": "Decided, to relay · tell the advisors to continue ({count})",
+            "section_note": "Things you have signed / decided that the advisor has not picked up yet, one paragraph per advisor; copy the whole paragraph to that advisor. Each one disappears once the advisor continues.",
+            "cli_heading": "Decided, to relay — {count} paragraph(s) (copy to each advisor; disappears once the advisor continues):",
+            "tell": "Tell {advisor}:",
+            "lead": "The Owner has handled the {count} thing(s) below; continue with product commands (every write command: preview first, add --confirm once it checks out):",
+            "entry_decision": "{n}. {project} {subject}: the Owner chose \"{label}\" (decision record {decision_id}{words_part}). Next: {advisor_next}",
+            "words_part": "; Owner's words \"{owner_words}\"",
+            "entry_envelope": "{n}. {project} card {task_id}: the Owner signed envelope {policy_id} (covering {advisor}{launch_part}). Next: `{resume}`",
+            "launch_part": "; the loop may start the {harnesses} workstation",
+            "notes": "Note: move on only with product commands, never hand-edit cards / records; a refused command = relay its reason as is, do not work around it.",
+            "choice_heading": "Whichever option you pick, copy its message to {advisor}:",
+            "choice_summary": "Pick \"{label}\" → message for {advisor}",
+            "choice_body": "On the board the Owner chose \"{label}\" for {project} {subject}. Preview recording this decision first: `{preview}`; once the preview checks out, run the same command with --confirm appended (it lands automatically). Then: {advisor_next}",
+            "choice_owner_words": "picked on the board: {label}",
+            "signed_note": "{advisor} does not know you signed yet: copy the paragraph below to it and it will continue {task_id}.",
+            "unknown_advisor": "<the card's driving advisor>"
+          }
         }
       },
       "exit_codes": {
