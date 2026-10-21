@@ -259,11 +259,13 @@ def test_item4_kickoff_and_charter_sentence(rig):
     _show(f"[件② 开工稿 helper 取用行] {helper_line}")
     assert f"`lybra --workspace-root {gov} project validation-root helper --id {EXEC_DECL} --run-id run-1`" in helper_line
     assert f"核 sha256 = {sha}" in helper_line
-    rc, charter, err = _cli("charter", "--role", "executor", "--instance", EXEC, "--workspace-root", gov)
-    section = charter[charter.index("## 🔴 写权限边界"):]
-    assert rc == 0 and pin in section, "章程写权限节同源(同一句)"
-    rc, charter, err = _cli("charter", "--role", "auditor", "--instance", AUD, "--workspace-root", gov)
-    assert rc == 0 and "验证 helper 按 run 固定(AIPOS-F203)" in charter and "--id vr-hbx-60r-auditor-1 --run-id <run-id> --sha256" in charter
+    # AIPOS-F206: 章程验证根节只留通用规则——本 run 固定 helper 的规则(运行时取摘要 / 禁写死)以通用句留章程, 本 run 摘要与命令只在开工稿
+    generic = f"lybra --workspace-root {gov} project validation-root helper --id <声明> --run-id <run-id> --sha256"
+    for role, inst in (("executor", EXEC), ("auditor", AUD)):
+        rc, charter, err = _cli("charter", "--role", role, "--instance", inst, "--workspace-root", gov)
+        section = charter[charter.index("## 🔴 写权限边界"):]
+        assert rc == 0 and "验证 helper 按 run 固定(AIPOS-F203)" in section and f"`{generic}` 的输出" in section, err
+        assert "禁在脚本 / 卡面写死摘要" in section and pin not in section and sha not in section and EXEC_DECL not in section
 
 
 # ===========================================================================

@@ -464,7 +464,9 @@ def test_item2_kickoff_and_charter_ios_template(rig):
     assert "simdevices" not in brief and "xcrun simctl --set" not in brief
     rc, charter, err = _cli("charter", "--role", "executor", "--instance", EXEC, "--workspace-root", gov)
     assert rc == 0, err
-    assert f"-destination 'platform=iOS Simulator,id={udid}'" in charter and f"{helper} sim-delete {common}" in charter, "章程同源"
+    # AIPOS-F206: 章程只留通用规则(iOS 只用本 run 专用模拟器), 本 run UDID / helper 命令只在开工稿(上文已核)
+    assert "iOS 界面测试只用本 run 专用模拟器(helper sim-create 新建 / sim-delete 删除, 一 run 一台)" in charter
+    assert udid not in charter and f"{helper} sim-delete {common}" not in charter, "章程不列本 run 明细"
 
 
 # ===========================================================================

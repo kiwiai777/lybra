@@ -235,7 +235,9 @@ def test_item4_run_start_output_kickoff_and_charter(rig):
 
     rc, charter, err = _cli("charter", "--role", "executor", "--instance", EXEC, "--workspace-root", gov)
     section = charter[charter.index("## 🔴 写权限边界"):]
-    assert rc == 0 and f"`{command}`" in section and "角色不得自行 mkdir base / 卡层" in section, "章程写权限节同源"
+    # AIPOS-F206: 章程只留通用规则(目录链只经 helper init-run), 本 run 的 init-run 命令只在开工稿(上文已核)
+    assert rc == 0 and "目录链只经产品 helper init-run 在目标主机建空目录, 角色不得自行 mkdir base / 卡层" in section
+    assert f"`{command}`" not in section and "run-1" not in section, "章程不列本 run 命令明细"
 
 
 def test_single_source_seal_and_helper_stdlib():

@@ -510,6 +510,13 @@ def _charter_render_reason(
         return f"unreadable({exc})"
     if local_sha != recorded["rendered_sha256"]:
         return "local_edit(工位本地改动 = 声明缺口, 将覆盖并报 diff)"
+    # AIPOS-F206 件③: 指纹一致但工位章程超体积上限(上限声明后的旧渲染物)= 需重渲染; 渲染仍超限 = render_charter 拒(sync 失败, loop 不拉起)
+    from tools.aipos_cli.charter_render import charter_size_guard
+
+    guard = charter_size_guard()
+    size = local_path.stat().st_size
+    if size > int(guard["max_bytes"]):
+        return str(guard["oversize_reason"]).format(size=size, max_bytes=guard["max_bytes"])
     return None
 
 

@@ -776,7 +776,7 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
                     "code": "WORKTREE_NOT_CREATED",
                     "reason": f"工作树 {worktree} 尚未建立: 认领由驱动方完成并建树, 工位等待驱动方完成认领; 持续存在按 block-and-report 上报",
                 }
-    # AIPOS-F196 件③: 本卡验证根节(validation_root.render_section_lines, 与章程同源; 实例 = 认领实例, 缺 = assigned_to)。
+    # AIPOS-F196 件③: 本卡验证根节(validation_root.render_section_lines; AIPOS-F206: 明细只在开工提示, 章程只留通用段; 实例 = 认领实例, 缺 = assigned_to)。
     # 声明读不出 = 开工面拒因(VALIDATION_ROOT_UNRESOLVED, select_next_card 不入选; fail-closed, 不出缺节的开工提示)
     view["validation_root_lines"] = []
     instance = str(fm.get("claimed_by") or fm.get("assigned_to") or "").strip()

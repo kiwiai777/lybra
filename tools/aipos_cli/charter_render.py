@@ -325,13 +325,11 @@ def charter_render_context(
     from tools.aipos_cli.run_long import charter_commands
 
     ctx.update(charter_commands(gov))
-    # AIPOS-F190 件④: 本实例有效的跨机临时验证根(project.json validation_roots; 与开工稿同一渲染 validation_root.render_section_lines)。
-    # 只在有声明时入键(无声明 = 指纹不变, 章程不变); 声明变 = 指纹变 = 重渲染。
-    from tools.aipos_cli.validation_root import render_section_lines
+    # AIPOS-F190 件④ → AIPOS-F206 件①: 章程验证根节只渲染与声明条数无关的通用段(validation_root.render_charter_section_lines;
+    # 本卡声明 / run / 命令只进开工提示 render_section_lines)。项目无声明 = 不入键(指纹不变, 章程不变); 有声明 = 通用段, 声明 / run 变不再改章程。
+    from tools.aipos_cli.validation_root import render_charter_section_lines
 
-    harness = identity.get("harness")
-    harness_kind = str((harness.get("kind") if isinstance(harness, dict) else harness) or "").strip() or None
-    section = render_section_lines(gov, instance=str(identity["instance"]), harness=harness_kind)
+    section = render_charter_section_lines(gov, instance=str(identity["instance"]), role_class=role_class)
     if section:
         ctx["validation_roots_section"] = "\n".join(section)
     return ctx
@@ -493,7 +491,60 @@ def render_charter(master_text: str, ctx: dict[str, Any]) -> str:
     if ctx.get("validation_roots_section"):
         wb_section += "\n\n" + str(ctx["validation_roots_section"])  # AIPOS-F190 件④: 写权限节同源列出本实例验证根
     marker = f"{CHARTER_RENDER_MARKER} master_sha256={master_sha} context_sha256={ctx_sha} product_commit={ctx['product_commit']} -->"
-    return body + "\n" + "\n".join(trailer) + "\n" + wb_section + "\n\n" + marker + "\n"
+    rendered = body + "\n" + "\n".join(trailer) + "\n" + wb_section + "\n\n" + marker + "\n"
+    check_charter_size(rendered, instance=str(ctx.get("instance") or ""), role=str(ctx.get("role") or ""))
+    return rendered
+
+
+class CharterOversize(ValueError):
+    """AIPOS-F206 件③: 章程渲染物超 roles.schema charter_size_guard.max_bytes(fail-closed 拒渲染; 消息带各节字节数与出口)。"""
+
+    def __init__(self, message: str, *, size: int, max_bytes: int):
+        super().__init__(message)
+        self.size = size
+        self.max_bytes = max_bytes
+
+
+def charter_size_guard() -> dict[str, Any]:
+    """AIPOS-F206 件③: roles.schema charter_size_guard(max_bytes / validation_root_section_max_bytes / refusal_code / oversize_reason)。
+    缺 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = load_schema("roles").get("charter_size_guard")
+    ints = ("max_bytes", "validation_root_section_max_bytes")
+    if not isinstance(decl, dict) or any(not isinstance(decl.get(k), int) or isinstance(decl.get(k), bool) or decl[k] <= 0 for k in ints) \
+            or any(not isinstance(decl.get(k), str) or not decl[k] for k in ("refusal_code", "oversize_reason")):
+        raise SchemaLoadError("roles.schema.json charter_size_guard(max_bytes / validation_root_section_max_bytes 正整数, "
+                              "refusal_code / oversize_reason 串)未声明齐")
+    return decl
+
+
+def charter_section_sizes(text: str) -> list[tuple[str, int]]:
+    """章程按 `## ` 二级标题切节的 utf-8 字节数(首节前文 = 「(开头)」), 供超限拒因与对照证据。"""
+    sizes: list[tuple[str, int]] = []
+    name, size = "(开头)", 0
+    for line in text.splitlines(keepends=True):
+        if line.startswith("## "):
+            sizes.append((name, size))
+            name, size = line.strip()[3:], 0
+        size += len(line.encode("utf-8"))
+    sizes.append((name, size))
+    return [(n, s) for n, s in sizes if s]
+
+
+def check_charter_size(rendered: str, *, instance: str = "", role: str = "") -> int:
+    """AIPOS-F206 件③: 渲染物 utf-8 字节数 > charter_size_guard.max_bytes = CharterOversize(拒渲染, 不落半成品)。返回字节数。"""
+    guard = charter_size_guard()
+    size = len(rendered.encode("utf-8"))
+    limit = int(guard["max_bytes"])
+    if size > limit:
+        top = sorted(charter_section_sizes(rendered), key=lambda item: -item[1])[:3]
+        raise CharterOversize(
+            f"{guard['refusal_code']}: 实例 {instance or '?'}(角色 {role or '?'})章程渲染 {size} 字节 > 上限 {limit} 字节"
+            f"(roles.schema charter_size_guard.max_bytes); 最大的节: " + "; ".join(f"「{n[:40]}」{s} 字节" for n, s in top)
+            + "; 拒渲染(不拉起必爆上下文的会话)。出口: 本卡 / 本 run 的明细只进开工提示(my-tasks kickoff / lybra kickoff), "
+            "章程母本或声明瘦身由产品仓出卡, 禁调高上限绕过", size=size, max_bytes=limit)
+    return size
 
 
 def charter_fingerprints(master_text: str, ctx: dict[str, Any], rendered: str) -> dict[str, str]:

@@ -2276,7 +2276,7 @@
           "remote_material": "AIPOS-F110 件②: 本机工位 = 空串(开工提示与 F110 前逐字节相同); 跨机工位 = 按 remote_material 模板渲染的门机材料段(`my-tasks --remote-workstation` 经 next_resolver.remote_kickoff_context 取上下文交 render_kickoff; lybra loop 拉起跨机工位时传该参数)",
           "worktree_note": "AIPOS-F196: 只用于 template_no_worktree = next_card.worktree_note(不建树说明: 交付主体 = 固定候选, 产物只落验证根与报告落点; AIPOS-F197: 只写治理根卡的审计卡 = 审计对象是被审卡交回绑定的治理根产出清单)",
           "outputs_note": "AIPOS-F197 件①: 只用于 template_governance_root = next_card.outputs_note(只写治理根: 产物写本卡报告落点及其子目录, 受写权限边界判定; 报告 frontmatter outputs 列产出文件, 产品计算并核对 sha256)",
-          "validation_root": "AIPOS-F196 件③: 本卡(本实例)验证根节 = validation_root.render_section_lines(实例 = 卡认领实例, 卡 = 本卡, harness = 卡面 harness, 含已撤销 / 到期, 与章程同源); 无声明 = 空串(开工提示与 F196 前逐字节相同); 有 = 空行 + 节文本(经 ssh 操作目标主机时含 ssh 命令)"
+          "validation_root": "AIPOS-F196 件③: 本卡(本实例)验证根节 = validation_root.render_section_lines(实例 = 卡认领实例, 卡 = 本卡, harness = 卡面 harness, 含已撤销 / 到期; AIPOS-F206: 本卡声明 / run / 命令明细只在开工提示, 章程只留通用段 render_charter_section_lines); 无声明 = 空串(开工提示与 F196 前逐字节相同); 有 = 空行 + 节文本(经 ssh 操作目标主机时含 ssh 命令)"
         },
         "remote_material": "\n以上工作树、报告落点、任务卡均在门机 {gate_host}(治理根 {governance_root}), 不在你的工位 {workstation_host} 本地; 门机在你的工位上的 ssh 别名: {gate_ssh_alias}; 材料访问方式(项目声明): {material_access}",
         "remote_material_note": "AIPOS-F110 件②: 占位 gate_host = 门机(驱动方)主机名, governance_root = 门机治理根, workstation_host = land 事件 host, gate_ssh_alias / material_access = project.json workstations.<实例> 声明(远端视角)。占位缺值 = 渲染失败(fail-closed); 声明值含凭据字样在读声明时即拒。",
@@ -2380,9 +2380,20 @@
         "baseline_state_unavailable": "查询失败({error})——按须自跑处理, 报告写明查询失败原文"
       },
       "validation_root_texts": {
-        "description": "AIPOS-F190 件④: 开工稿与章程「跨机临时验证根」节的措辞(同源: validation_root.render_section_lines 唯一渲染, 开工稿 = 本卡声明, 章程 = 本实例有效声明)。占位 {键} 取声明条目与渲染值。",
+        "description": "AIPOS-F190 件④: 开工稿与章程「跨机临时验证根」节的措辞(同源)。AIPOS-F206: 开工稿 = 本卡声明 / run / 命令全集(validation_root.render_section_lines 唯一渲染, my-tasks next_card.kickoff 与 lybra kickoff 同读); 章程 = 只渲染与声明条数无关的通用段(validation_root.render_charter_section_lines: title + relation + charter_scope + charter_rules + 声明 block_conditions; 不列任何声明 / run / 命令明细, 长度上限 roles.schema charter_size_guard.validation_root_section_max_bytes)。占位 {键} 取声明条目与渲染值。",
         "title": "## 跨机临时验证根(单源 project.json validation_roots; 判定 = write-boundary 面 validation_root, 与章程同源)",
         "relation": "- 与硬规矩衔接: {relation}",
+        "charter_scope": "- 本节只写通用规则, 与本项目验证根声明条数无关(AIPOS-F206); 本卡的验证根声明、可写目录、run、目录链初始化 / 候选源码送达 / 写前判定 / helper 取用 / 子 agent 沙箱可写根 / 工具写入重定向 / 本 run 专用模拟器 / 证据取回 / 收口的具体命令只在本卡开工提示的同名节里(工位 `/go` = my-tasks next_card.kickoff; 子 agent 开工稿 = `{kickoff_command}`), 一律以开工提示为准、照抄不自拼; 开工提示无此节 = 本卡无验证根声明, 他机路径一律不写(write-boundary 判 SURFACE_UNDECLARED)",
+        "charter_rules": [
+          "- 可写范围: 只 = `{path_template}` 中本卡、本实例、当前活动 run 的目录; base 层与卡层、他卡 / 他 run / 已结束 run / 撤销或到期后一律拒; 目录链只经产品 helper init-run 在目标主机建空目录, 角色不得自行 mkdir base / 卡层",
+          "- run 绑定: run 由顾问 / 驱动方 `project validation-root run-start` 铸、`run-finish` 收口, 执行体 / 审计体不自铸、不收口; 无活动 run = 不写; 执行与审计各用自己的声明与 run, 审计不复用执行 run 与其模拟器",
+          "- 写前判定: 治理根侧 `{check_command}`(退出码 0 允许 / 3 拒); 目标主机在他机 = 再以目标主机 helper check 复核 realpath(只认退出码 0 且输出 ALLOW); 拒 = 声明缺口, 停线报告, 禁换路径 / 符号链接 / 工具绕过",
+          "- 验证 helper 按 run 固定(AIPOS-F203): run-start 时固定当时部署版, 本 run 的 init-run / src-verify / sim-* / sys-snapshot / check / evidence-* 等 helper 命令一律取本 run 固定版(`{helper_fetch} --id <声明> --run-id <run-id>`; 具体命令与 sha256 以开工提示为准), 产品升级部署不影响进行中 run; 禁自写 / 改写 helper; 项目脚本如需核 helper 摘要, 运行时取 `{helper_fetch} --id <声明> --run-id <run-id> --sha256` 的输出, 禁在脚本 / 卡面写死摘要或路径(写死 = 每次产品升级即被打断)",
+          "- 候选源码: 只经产品铸的送达命令送固定候选 sha 的已提交树, 目标主机树指纹核对通过(SRC_OK)才用; 禁从工作区 / 其他提交拷源码, 正式代码只在治理根所在机卡工作树改",
+          "- 证据: 日志 / 截图 / 测试结果写本 run 目录内; 审计 run 在他机 = 按开工提示生成证据清单并取回副本到审计报告落点, 副本禁手改",
+          "- 工具写入重定向原则: 构建产物 / 依赖缓存 / 测试结果 / 临时目录一律重定向进本 run 目录(参数照开工提示逐项, 先在目标主机只读核验, 不过 = BLOCK, 不臆造替代参数); iOS 界面测试只用本 run 专用模拟器(helper sim-create 新建 / sim-delete 删除, 一 run 一台); Android / Gradle 等工具链同理只写本 run 目录; 系统服务自写(如 Xcode 系统临时目录)只记为系统副作用, 不删除、不冒充 run 产物",
+          "- 经 ssh 操作目标主机(项目声明了 ssh 别名时): 只写本 run 验证根; 禁 sudo / su / doas、禁改 ssh 配置、禁端口转发 / 代理跳板; ssh 不可达或被拒 = 停线报告(禁换别名 / 主机名 / 用户重试)"
+        ],
         "declaration": "- 声明 {id}: 主机 {host}(指纹 {fingerprint}), 卡 {task_id}, 实例 {instance}({role_class}), 到期 {expires_at}, Owner 授权 {owner_ref}; 状态 {status}",
         "directory": "  可写目录 = `{base}/{task_id}/<run-id>/`(只许本卡本活动 run 目录; base 与 `{base}/{task_id}/` 层、他卡 / 他 run / 已结束 run / 撤销或到期后一律拒); 目录链(base / 卡层 / run 目录)由产品 helper init-run 在目标主机初始化(只建空目录), 角色不得自行 mkdir base / 卡层",
         "run_active": "  当前活动 run: `{run_id}`(候选 {candidate}, 起于 {started_at}) → 本次只写 `{run_dir}`",
@@ -4877,7 +4888,7 @@
         "cli"
       ],
       "cli_command": "lybra project validation-root",
-      "single_implementation": "tools/aipos_cli/validation_root.apply_validation_root_change(写) / project_validation_roots(读) / judge_access(判定, 经 write_boundary.check_access) / render_section_lines(开工稿与章程同源节) / evidence_fetch + evidence_copy_check(AIPOS-F200 远端 run 证据取回与副本核对); 主机侧 tools/aipos_cli/validation_root_helper.py",
+      "single_implementation": "tools/aipos_cli/validation_root.apply_validation_root_change(写) / project_validation_roots(读) / judge_access(判定, 经 write_boundary.check_access) / render_section_lines(开工稿本卡验证根节) / render_charter_section_lines(章程通用段, AIPOS-F206) / evidence_fetch + evidence_copy_check(AIPOS-F200 远端 run 证据取回与副本核对); 主机侧 tools/aipos_cli/validation_root_helper.py",
       "exit_codes": {
         "ok": {
           "code": 0,

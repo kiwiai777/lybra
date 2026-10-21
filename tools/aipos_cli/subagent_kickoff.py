@@ -9,7 +9,7 @@
   - 可开工判据: next_resolver.kickoff_refusal(与工位 /go 同一判据)
   - 实例身份 / 章程可取 / 门地址 / 工位根: charter_render.instance_charter(与 `lybra charter` 同一判定); 章程命令 = charter_pull_command
   - 写权限边界与全角色硬规矩: roles.schema write_boundary(write_boundary.build_write_boundary)
-  - 跨机临时验证根(AIPOS-F190 件④): 本卡本实例的 project.json validation_roots 声明(validation_root.render_section_lines, 与章程同源;
+  - 跨机临时验证根(AIPOS-F190 件④): 本卡本实例的 project.json validation_roots 声明(validation_root.render_section_lines; AIPOS-F206: 明细只在开工稿, 章程只留通用段;
     无声明 = 该节省略)
   - 门交互硬规矩: 项目 paths.hard_rules_source § 0.5(hard_rules_extractor)
   - 全量命令与时限: charter_render.runall_context(project.json test_contract); 长命令: run_long.charter_commands
