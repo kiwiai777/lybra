@@ -332,6 +332,11 @@
               "optional": true,
               "default_system_temp": "lybra-scratch/{project}",
               "description": "AIPOS-F187 件①: 子 agent(执行体 / 审计体)草稿与日志目录根——`lybra kickoff` 开工稿给出的草稿目录 = <本键>/<卡ID 小写>/。须为治理根外的绝对路径(可用 ~/ 开头): 落在治理根内(含相对路径)= 开工稿拒(KICKOFF_SCRATCH_IN_GOVERNANCE, fail-closed), 草稿永不落治理根。未声明 = 系统临时目录(tempfile.gettempdir())下 default_system_temp(占位 {project} = project.json project), 行为对既有项目只是开工稿多一行草稿目录。唯一读取口 workspace_config.project_paths(本键可选, 未声明 = None); 解析与校验唯一实现 subagent_kickoff.scratch_dir。写入口 = `lybra project set-paths <项目> --key scratch_root --value <绝对路径>`(两阶段)。"
+            },
+            "validation_helper_root": {
+              "type": "string",
+              "default": "5_tasks/validation_root_helpers",
+              "description": "AIPOS-F203 件①: 验证 helper 按 run 固定的快照库(相对治理根或绝对; 内容寻址, 文件名 = roles.schema write_boundary.validation_root.helper_pinning.snapshot_filename, 非代码扩展名, 遵 AIPOS-F195 治理仓零代码文件; 缺省不放 records/ 下——records/** 新文件须带记录 frontmatter(护栏 B④), 快照须与 helper 原文逐字节一致)。`project validation-root run-start --confirm` 把当时部署的 helper 原文存一份(同摘要已在 = 复用, 内容不符 = 拒 VR_HELPER_SNAPSHOT_INVALID), 本 run 记录 runs[].helper_sha256 记其摘要; 该 run 的 init-run / src-verify / sim-* / evidence-* 命令与 `validation-root helper --id <声明> --run-id <run>` 一律下发这份快照, 产品升级不改进行中 run。缺省 = 行为对既有项目只是多出该目录; 快照随 run-start 同一落账提交(post_write_landing.commands.project_writers)。唯一读取口 workspace_config.project_paths; 读写唯一实现 validation_root.pin_helper_snapshot / run_helper。"
             }
           }
         },
@@ -491,7 +496,7 @@
                 "revoked_at": "撤销时刻(null = 未撤销)",
                 "revoked_by": "撤销者",
                 "revoke_reason": "撤销原因",
-                "runs": "run 列表(只追加): {run_id, candidate(固定候选 40 位 sha), started_at, started_by, finished_at, finished_by[, simulator]}; AIPOS-F194 可选键 simulator(缺省 = 缺键 = 本 run 未绑定专用模拟器, 行为不变)= {udid, name(lybra-<卡>-<run>), bound_at, bound_by, verified_at, verified_by, evidence_sha256}: `validation-root sim-bind` 写入(UDID 与 run-id 同一处), `run-finish --sim-evidence` 核对删除后补 verified_* 与证据 sha256(声明 roles.schema write_boundary.validation_root.ios_simulator)"
+                "runs": "run 列表(只追加): {run_id, candidate(固定候选 40 位 sha), started_at, started_by, finished_at, finished_by[, simulator]}; AIPOS-F194 可选键 simulator(缺省 = 缺键 = 本 run 未绑定专用模拟器, 行为不变)= {udid, name(lybra-<卡>-<run>), bound_at, bound_by, verified_at, verified_by, evidence_sha256}: `validation-root sim-bind` 写入(UDID 与 run-id 同一处), `run-finish --sim-evidence` 核对删除后补 verified_* 与证据 sha256(声明 roles.schema write_boundary.validation_root.ios_simulator); AIPOS-F203 可选键 helper_sha256(缺键 = 旧 run, run-start 早于按 run 固定 helper: 取用按当前部署版并标注)= 本 run 固定的验证 helper 摘要(64 位 hex), run-start --confirm 写入, 快照原文在 paths.validation_helper_root/<摘要>.py.txt"
               }
             },
             "hosts": {
@@ -521,7 +526,8 @@
             "VR_SIM_INVALID": "AIPOS-F194: 专用模拟器绑定不合(UDID 形不合 / 本 run 已绑定 / UDID 已绑定于他 run, 含审计复用执行 run 的 UDID)",
             "VR_SIM_EVIDENCE_REJECTED": "AIPOS-F194: 专用模拟器证据核对不过(绑定了却无证据 / 未删除 / 多出他台 / 删错他台 / 他 run 证据 / 名或 UDID 不符); 收口或绑定被拒",
             "VR_HOST_ALIAS_INVALID": "AIPOS-F196: set-host 参数不合(主机标签非法 / 主机是本机 / ssh 别名非法)",
-            "VR_EVIDENCE_REJECTED": "AIPOS-F200: 远端 run 证据取回不合(声明非审计实例 / 主机是本机 / 未声明 ssh 别名 / 主机侧清单缺失或封签不符 / 清单外或越界路径 / 软链 / 超限 / sha256 不符); 副本未落"
+            "VR_EVIDENCE_REJECTED": "AIPOS-F200: 远端 run 证据取回不合(声明非审计实例 / 主机是本机 / 未声明 ssh 别名 / 主机侧清单缺失或封签不符 / 清单外或越界路径 / 软链 / 超限 / sha256 不符); 副本未落",
+            "VR_HELPER_SNAPSHOT_INVALID": "AIPOS-F203: 本 run 固定的 helper 快照不可用(快照库同名文件内容与摘要不符 / run 记录了摘要但快照缺失或被改); 不下发、不铸命令, 出口: 由顾问收口该 run 后重新 run-start"
           }
         },
         "launch_guard": {

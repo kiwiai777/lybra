@@ -702,7 +702,8 @@ PROJECT_PATH_KEYS = ("return_root", "verdict_root", "queue_root", "task_cards_ro
                      "loop_runs_root",  # AIPOS-F131 件①: loop 运行记录落点
                      "stage_archive_root",  # AIPOS-F145 件①: 阶段档案目录(缺省 = 声明 default_from)
                      "roadmap_file",  # AIPOS-F171 件①: 结构化路线图声明文件(缺省 governance/roadmap.yaml; 唯一读写 roadmap.py)
-                     "scratch_root")  # AIPOS-F187 件①: 子 agent 草稿 / 日志目录根(可选; 解析与「不得落治理根」校验唯一 subagent_kickoff.scratch_dir)
+                     "scratch_root",  # AIPOS-F187 件①: 子 agent 草稿 / 日志目录根(可选; 解析与「不得落治理根」校验唯一 subagent_kickoff.scratch_dir)
+                     "validation_helper_root")  # AIPOS-F203 件①: 验证 helper 按 run 固定的快照库(内容寻址; 读写唯一 validation_root)
 #: AIPOS-F145 件①: 阶段档案落点键(唯一读取口 stage_archive_root; 阶段闸门拒因出口按此键渲染)
 STAGE_ARCHIVE_PATH_KEY = "stage_archive_root"
 # AIPOS-F78B 件②: 非路径键(值域读声明 enum), 与布尔 manual_gate_mode 一样不做路径解析

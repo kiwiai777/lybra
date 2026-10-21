@@ -2404,7 +2404,8 @@
         "src_deliver_ssh": "  ② 候选源码送达(AIPOS-F197; 经 ssh, 目录链初始化之后): 在治理根所在机运行 `{src_deliver}`(只把已提交的固定候选 {candidate} 的树打包, 经 ssh {ssh_alias} 交目标主机 {host} 的 tar 解到 `{src_dir}`); 再核对(目标主机按 git 规则算 `{src_dir}` 的 tree 指纹, 须 = 候选 tree {src_tree}; 混入未提交改动 / 多出缺文件 / 错版本 = 拒): `{src_verify}`; 只认末行 `SRC_OK` + 退出码 0, 证据追加 run 目录内 `.lybra-vr/src-verify.jsonl`; 不过 = 删掉 `{src_dir}` 后按原命令重送, 禁手改 src 凑指纹、禁从工作区 / 其他提交拷源码、禁 rsync / scp 等另送(正式代码仍只在治理根所在机卡工作树改)",
         "src_pending": "(铸 run 后由产品给出: 重取本开工稿或 `project validation-root init-command --id <声明id>`)",
         "evidence_fetch": "  ③ 远端 run 证据取回(AIPOS-F200; 审计 run 在目标主机 {host} 时, 裁决入口读不到 run 内证据, 改读审计报告落点副本): 运行记录的日志写在本 run `{run_dir}/logs/` 下(截图等证据放 `{run_dir}/evidence/`); 卡面命令全部跑完、run 仍活动时生成证据清单 `{evidence_manifest}`(列证据目录 {evidence_dirs} 下文件 + sha256 + 主机指纹 + 封签; 只认末行 `EVIDENCE_OK` + 退出码 0); 再在治理根所在机取回 `{evidence_fetch}`(经声明 ssh 别名只读拉取清单内文件逐个核 sha256, 副本落 `{evidence_copy}`); 副本禁手改, 证据更新 = 重生成清单并重新取回",
-        "helper_ssh": "  目标主机侧 realpath 判定(符号链接逃逸只能在目标主机判; 经 ssh): 每次写前在治理根所在机运行 `{check_ssh}`; 只认退出码 0 且输出 `ALLOW`, 其余(含无输出 / ssh 失败)= 拒"
+        "helper_ssh": "  目标主机侧 realpath 判定(符号链接逃逸只能在目标主机判; 经 ssh): 每次写前在治理根所在机运行 `{check_ssh}`; 只认退出码 0 且输出 `ALLOW`, 其余(含无输出 / ssh 失败)= 拒",
+        "helper_pin": "  验证 helper 按 run 固定(AIPOS-F203): {helper_pin_state}; 本 run 的 init-run / src-verify / sim-* / sys-snapshot / check / evidence-* 等 helper 命令一律取本 run 固定版(`{helper_fetch}`), 产品升级部署不影响进行中 run; 项目脚本如需核 helper 摘要, 运行时取 `{helper_sha_query}` 的输出, 禁在脚本 / 卡面写死摘要(写死 = 每次产品升级即被打断)"
       },
       "item_templates": {
         "boundary_line": "- {surface}: {level} `{path}`({scope})",
@@ -4631,7 +4632,18 @@
       "compile": {
         "description": "汇总唯一口 = finalize 写 finalization 记录且 deploy_status=deployed 之后(finalize._ensure_finalization_record → advisor_updates.compile_on_deploy; 主路径 / 续做路径同经此处)。条目 = 本卡卡面 advisor_notice(task_loader.find_task_card 取卡)+ 回填清单 backfill_source(产品仓相对, 部署后的产品仓 HEAD 内容)中尚未汇总过的条目; 去重键 = task_id(库内已有该卡条目 = 不再汇总, 幂等)。无新条目 = 不写(操作行如实说明)。生效版本 = 部署目录 current 的快照名 + VERSION git_commit(gate_drift.read_version_commit)。汇总失败不回滚已完成的合并 / 部署: 操作行出拒因 + 出口(修好后重跑同一条 finalize --deploy: 续做路径再经同一口补汇总)。",
         "backfill_source": "docs/advisor_notice_backfill.json",
-        "backfill_shape": "{description, entries: [{task_id, audience, summary, actions}]}; 条目形同卡面 advisor_notice(同一校验 parse_advisor_notice), 清单只追加"
+        "backfill_shape": "{description, entries: [{task_id, audience, summary, actions}]}; 条目形同卡面 advisor_notice(同一校验 parse_advisor_notice), 清单只追加",
+        "helper_change": {
+          "description": "AIPOS-F203 件③: 部署的版本若改了验证 helper(roles.schema write_boundary.validation_root.helper_module), 汇总时自动附一条兼容说明(source = helper_change, task_id = 本卡): 摘要 旧→新(部署提交的第一父提交 vs 部署提交里的 helper 原文 sha256)、子命令新增 / 移除 / 参数变化(静态解析 helper 的 argparse 声明)、进行中 run 不受影响。helper 未变 = 不附; 读不出 = 汇总失败(拒因 + 出口, 同 compile)。`lybra updates` 可见。唯一实现 advisor_updates.helper_change_entry(只用标准库 + git, 不导入验证根模块)。",
+          "audience": ["advisor", "executor", "auditor"],
+          "summary": "验证 helper 摘要变化: {old12} → {new12}(子命令 新增 {added} / 移除 {removed} / 参数变化 {changed}); 进行中 run 不受影响(按 run 固定 run-start 时版本), 新 run 用新版",
+          "actions": [
+            "项目脚本如需核 helper 摘要, 运行时取 `lybra project validation-root helper --id <声明> --run-id <run> --sha256`, 禁写死",
+            "进行中 run 需用新增 / 变化的子命令 = 由顾问收口该 run 后重新 run-start(新 run 固定新版)"
+          ],
+          "none": "无",
+          "absent": "(无)"
+        }
       },
       "ack": {
         "record_kind": "advisor_update_acks",
@@ -4811,7 +4823,7 @@
           "project_writers": {
             "cli": "lybra project <subcommand> --confirm",
             "subcommands": ["set-paths", "set-repo", "set-repos", "set-workstation", "set-meta", "set-execution", "set-model", "set-return-summary", "freeze-legacy", "dispatch-mode set", "relocate-workstation", "upgrade", "validation-root declare", "validation-root revoke", "validation-root run-start", "validation-root run-finish", "validation-root sim-bind", "validation-root set-host"],
-            "scope": "AIPOS-F159 件①(gap #144): 写 project.json 的 project 族命令 --confirm 成功后的写出文件(治理根相对): two_phase_protocol.project_json_writers 各命令 = project.json(--confirm 即落, 无改动亦经同一提交口核一次: 范围已落账 = PASS no-op, 前次写后未落账者随之补落); freeze-legacy = 本次追加的清单条目 + 本次补声明 legacy_baseline 时的 project.json(本批无卡可冻 = 无写出, 不落); dispatch-mode set = project.json + 切换留痕文件。AIPOS-F161: relocate-workstation = 本项目 enrollment_log(追加的 relocate 位置事件; 唯一写出, 工位目录在治理仓外不入)。AIPOS-F176: upgrade = `lybra project upgrade --confirm` 配置缺省补齐步写出的 project.json(其余步骤各经自身声明的落账命令: migrate_record_type / migrate_decision_log_pointers; 工位章程在治理仓外不入)。提交身份 = 该命令 --actor(dispatch-mode set 为 --by; 未给 = $USER 或 owner, 与 set-repo / project new 同一缺省)。--dry-run 零写入、不落账。唯一落账点: 写 project.json 的两阶段命令经输出包装 aipos_cli._project_json_two_phase_emit, freeze-legacy / dispatch-mode set 经同一薄壳 aipos_cli._land_project_writes(→ land_written_paths)。不含 project new / import(建治理根本身, 治理根此时可能尚未入治理仓; 向导第 1 步照旧给 governance-commit 与 home git-init)。",
+            "scope": "AIPOS-F159 件①(gap #144): 写 project.json 的 project 族命令 --confirm 成功后的写出文件(治理根相对): two_phase_protocol.project_json_writers 各命令 = project.json(--confirm 即落, 无改动亦经同一提交口核一次: 范围已落账 = PASS no-op, 前次写后未落账者随之补落); freeze-legacy = 本次追加的清单条目 + 本次补声明 legacy_baseline 时的 project.json(本批无卡可冻 = 无写出, 不落); dispatch-mode set = project.json + 切换留痕文件。AIPOS-F161: relocate-workstation = 本项目 enrollment_log(追加的 relocate 位置事件; 唯一写出, 工位目录在治理仓外不入)。AIPOS-F176: upgrade = `lybra project upgrade --confirm` 配置缺省补齐步写出的 project.json(其余步骤各经自身声明的落账命令: migrate_record_type / migrate_decision_log_pointers; 工位章程在治理仓外不入)。提交身份 = 该命令 --actor(dispatch-mode set 为 --by; 未给 = $USER 或 owner, 与 set-repo / project new 同一缺省)。--dry-run 零写入、不落账。唯一落账点: 写 project.json 的两阶段命令经输出包装 aipos_cli._project_json_two_phase_emit, freeze-legacy / dispatch-mode set 经同一薄壳 aipos_cli._land_project_writes(→ land_written_paths)。不含 project new / import(建治理根本身, 治理根此时可能尚未入治理仓; 向导第 1 步照旧给 governance-commit 与 home git-init)。 AIPOS-F203 件①: validation-root run-start = project.json + 本次新存的验证 helper 快照(paths.validation_helper_root/<摘要>.py.txt; 同摘要已在 = 无新文件)。",
             "message_template": "chore(governance): 项目配置落账 {subcommand} {project}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra project {subcommand} --confirm"
           },
           "roadmap_writers": {
