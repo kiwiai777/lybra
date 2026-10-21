@@ -2388,7 +2388,7 @@
           "- 可写范围: 只 = `{path_template}` 中本卡、本实例、当前活动 run 的目录; base 层与卡层、他卡 / 他 run / 已结束 run / 撤销或到期后一律拒; 目录链只经产品 helper init-run 在目标主机建空目录, 角色不得自行 mkdir base / 卡层",
           "- run 绑定: run 由顾问 / 驱动方 `project validation-root run-start` 铸、`run-finish` 收口, 执行体 / 审计体不自铸、不收口; 无活动 run = 不写; 执行与审计各用自己的声明与 run, 审计不复用执行 run 与其模拟器",
           "- 写前判定: 治理根侧 `{check_command}`(退出码 0 允许 / 3 拒); 目标主机在他机 = 再以目标主机 helper check 复核 realpath(只认退出码 0 且输出 ALLOW); 拒 = 声明缺口, 停线报告, 禁换路径 / 符号链接 / 工具绕过",
-          "- helper 取用: 目标主机 helper 只用开工提示给出的产品取用命令(本 run 固定版本与 sha256 以开工提示为准), 禁自写 / 改写 helper; 项目脚本需核 helper 摘要 = 运行时向产品查询, 禁在脚本 / 卡面写死摘要或路径",
+          "- 验证 helper 按 run 固定(AIPOS-F203): run-start 时固定当时部署版, 本 run 的 init-run / src-verify / sim-* / sys-snapshot / check / evidence-* 等 helper 命令一律取本 run 固定版(`{helper_fetch} --id <声明> --run-id <run-id>`; 具体命令与 sha256 以开工提示为准), 产品升级部署不影响进行中 run; 禁自写 / 改写 helper; 项目脚本如需核 helper 摘要, 运行时取 `{helper_fetch} --id <声明> --run-id <run-id> --sha256` 的输出, 禁在脚本 / 卡面写死摘要或路径(写死 = 每次产品升级即被打断)",
           "- 候选源码: 只经产品铸的送达命令送固定候选 sha 的已提交树, 目标主机树指纹核对通过(SRC_OK)才用; 禁从工作区 / 其他提交拷源码, 正式代码只在治理根所在机卡工作树改",
           "- 证据: 日志 / 截图 / 测试结果写本 run 目录内; 审计 run 在他机 = 按开工提示生成证据清单并取回副本到审计报告落点, 副本禁手改",
           "- 工具写入重定向原则: 构建产物 / 依赖缓存 / 测试结果 / 临时目录一律重定向进本 run 目录(参数照开工提示逐项, 先在目标主机只读核验, 不过 = BLOCK, 不臆造替代参数); iOS 界面测试只用本 run 专用模拟器(helper sim-create 新建 / sim-delete 删除, 一 run 一台); Android / Gradle 等工具链同理只写本 run 目录; 系统服务自写(如 Xcode 系统临时目录)只记为系统副作用, 不删除、不冒充 run 产物",

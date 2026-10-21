@@ -1796,6 +1796,7 @@ def render_charter_section_lines(governance_root: str | Path, *, instance: str, 
         "kickoff_command": f"{gcmd} kickoff --task-id <本卡ID>",
         "check_command": (f"{gcmd} roles write-boundary --instance {instance} --task-id <本卡ID> --host <主机> "
                           "--run-id <run-id> --check <目标路径> --level mutate"),
+        "helper_fetch": helper_fetch_command(gov),  # AIPOS-F203 取用命令唯一铸造口(无声明 / run = 通用前缀)
     }
     lines = [texts["title"], _fill(texts["relation"], {"relation": decl["relation_to_hard_rules"]}),
              _fill(charter_texts["charter_scope"], values)]
