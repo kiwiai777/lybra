@@ -50,7 +50,7 @@ RUN_OPTIONAL_KEYS = ("simulator", "helper_sha256")  # AIPOS-F194: 缺键 = 未�
 SIM_KEYS = ("udid", "name", "bound_at", "bound_by", "verified_at", "verified_by", "evidence_sha256")
 TEXT_KEYS = ("title", "relation", "declaration", "directory", "run_active", "run_none", "run_finish", "check_dev", "helper",
              "sandbox", "redirect_title", "redirect", "side_effect", "block", "init_run", "sim_title", "sim_step", "ssh_mode", "helper_ssh", "init_run_ssh",
-             "src_deliver", "src_deliver_ssh", "src_pending", "evidence_fetch", "helper_pin")
+             "src_deliver", "src_deliver_ssh", "src_pending", "evidence_fetch", "helper_pin", "binding", "binding_invalid", "binding_undeclared")
 ACTIONS = ("declare", "revoke", "run-start", "run-finish", "sim-bind", "set-host")
 # AIPOS-F196 件③: 目标主机 ssh 访问声明(project.json validation_roots.hosts.<主机标签>; 声明 config.schema validation_roots.schema.hosts)
 HOST_ENTRY_KEYS = ("ssh_alias", "owner_ref", "declared_by", "declared_at")
@@ -515,27 +515,44 @@ def _candidate_card(governance_root: Path, entry: dict[str, Any]) -> tuple[str, 
     return card, (_card_fm(governance_root, card) if card else None)
 
 
-def candidate_source(governance_root: str | Path, entry: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
-    """AIPOS-F197 件④: 本 run 候选的源码来源 {card, repo, candidate, tree}(候选所在仓 = 候选所属卡 lane.repo 经 resolve_card_repo 唯一解析,
-    与 run-start 候选核对同读; tree = git rev-parse <候选>^{tree})。解析不到 = ValidationRootError(VR_CANDIDATE_INVALID, fail-closed)。"""
-    import subprocess
+def _candidate_repo(governance_root: Path, card: str, fm: dict[str, Any]) -> tuple[Path | None, str, str | None]:
+    """候选所在仓(AIPOS-F205: 唯一解析 next_resolver.card_candidate_repo——环境卡候选绑定 = 来源卡 lane.repo, 其余 = 候选所属卡 lane.repo,
+    行为不变)。返回 (仓 | None, 仓所依说明「卡 X 产品仓」/「卡 X 来源卡 S 的产品仓」, 拒因 | None)。run-start 核对与源码送达同读。"""
+    from tools.aipos_cli.next_resolver import CandidateSubjectError, card_candidate_repo, card_environment_binding
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved
 
-    from tools.aipos_cli.workspace_config import CardRepoUnresolved, resolve_card_repo
+    try:
+        binding = card_environment_binding(fm)
+        located = card_candidate_repo(governance_root, card, fm)
+    except CandidateSubjectError as exc:
+        return None, f"卡 {card}", f"卡 {card} 候选绑定不合: {exc}"
+    except CardRepoUnresolved as exc:
+        where = f"卡 {card} 来源卡 {binding['source']} 的产品仓" if binding else f"卡 {card} 的产品仓"
+        return None, where, f"{where}解析不到: {exc}"
+    repo = located["repo"]
+    where = (f"卡 {card} 来源卡 {located['source']} 的产品仓 {repo}(候选所在仓按来源卡 lane.repo 解析, AIPOS-F205)" if located["source"]
+             else f"卡 {card} 产品仓 {repo}")
+    return repo, where, None
+
+
+def candidate_source(governance_root: str | Path, entry: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F197 件④: 本 run 候选的源码来源 {card, repo, candidate, tree}(候选所在仓 = _candidate_repo 唯一解析(AIPOS-F205: 环境卡候选绑定
+    按来源卡 lane.repo), 与 run-start 候选核对同读; tree = git rev-parse <候选>^{tree})。解析不到 = ValidationRootError(VR_CANDIDATE_INVALID, fail-closed)。"""
+    import subprocess
 
     gov = Path(governance_root).expanduser().resolve()
     candidate = str(run.get("candidate") or "")
     card, fm = _candidate_card(gov, entry)
     if fm is None:
         raise _err("VR_CANDIDATE_INVALID", f"卡 {card or entry['task_id']} 不在队列, 无从定位候选所在仓")
-    try:
-        repo = resolve_card_repo(gov, fm)
-    except CardRepoUnresolved as exc:
-        raise _err("VR_CANDIDATE_INVALID", f"卡 {card} 的产品仓解析不到: {exc}") from exc
+    repo, where, problem = _candidate_repo(gov, card, fm)
+    if problem or repo is None:
+        raise _err("VR_CANDIDATE_INVALID", problem or f"{where}解析不到")
     proc = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"{candidate}^{{tree}}"], capture_output=True, text=True,
                           timeout=30)
     tree = proc.stdout.strip()
     if proc.returncode != 0 or not _SHA_RE.match(tree):
-        raise _err("VR_CANDIDATE_INVALID", f"候选 {candidate} 不是卡 {card} 产品仓 {repo} 中已有提交")
+        raise _err("VR_CANDIDATE_INVALID", f"候选 {candidate} 不是{where} 中已有提交")
     return {"card": card, "repo": str(repo), "candidate": candidate, "tree": tree}
 
 
@@ -566,29 +583,28 @@ def source_delivery(governance_root: str | Path, entry: dict[str, Any], run: dic
 def _candidate_problem(governance_root: Path, entry: dict[str, Any], candidate: str) -> str | None:
     import subprocess
 
-    from tools.aipos_cli.workspace_config import CardRepoUnresolved, resolve_card_repo
-
     if not _SHA_RE.match(candidate):
         return f"候选 {candidate!r} 须为完整 40 位小写 sha"
     card, fm = _candidate_card(governance_root, entry)
     if fm is None:
         return f"卡 {card or entry['task_id']} 不在队列, 无从核候选所在仓"
-    # AIPOS-F196 件①: 固定候选卡(validation; 审计卡按被审卡)的 run 候选须等于卡面候选(next_resolver.card_candidate_subject 唯一读取口)
-    from tools.aipos_cli.next_resolver import CandidateSubjectError, card_candidate_subject
+    # AIPOS-F196 件①: 固定候选卡(validation; 审计卡按被审卡)的 run 候选须等于卡面候选; AIPOS-F205: 环境卡候选绑定同此
+    # (统一读取口 next_resolver.card_bound_candidate)
+    from tools.aipos_cli.next_resolver import CandidateSubjectError, card_bound_candidate
 
     try:
-        declared = card_candidate_subject(fm)
+        declared = card_bound_candidate(fm)
     except CandidateSubjectError as exc:
         return f"卡 {card} 固定候选声明不合: {exc}"
     if declared is not None and candidate != declared["candidate"]:
-        return f"卡 {card} 是固定候选卡(task_mode={fm.get('task_mode')}), run 候选须 = 卡面候选 {declared['candidate']}, 给出的是 {candidate}"
-    try:
-        repo = resolve_card_repo(governance_root, fm)
-    except CardRepoUnresolved as exc:
-        return f"卡 {card} 的产品仓解析不到: {exc}"
+        kind = "固定候选卡" if declared["kind"] == "subject" else f"绑定固定候选的环境卡(来源卡 {declared['source']})"
+        return f"卡 {card} 是{kind}(task_mode={fm.get('task_mode')}), run 候选须 = 卡面候选 {declared['candidate']}, 给出的是 {candidate}"
+    repo, where, problem = _candidate_repo(governance_root, card, fm)
+    if problem or repo is None:
+        return problem or f"{where}解析不到"
     proc = subprocess.run(["git", "-C", str(repo), "cat-file", "-e", f"{candidate}^{{commit}}"], capture_output=True, text=True, timeout=30)
     if proc.returncode != 0:
-        return f"候选 {candidate} 不是卡 {card} 产品仓 {repo} 中已有提交"
+        return f"候选 {candidate} 不是{where} 中已有提交"
     return None
 
 
@@ -1626,20 +1642,23 @@ def render_section_lines(governance_root: str | Path, *, instance: str, task_id:
     entries = [e for e in project_validation_roots(gov) if e["instance"] == instance and (task_id is None or e["task_id"] == task_id)]
     if not include_inactive:
         entries = [e for e in entries if declaration_status(e, now) in ("active", "unbound")]
-    if not entries:
+    binding_lines = (_binding_lines(gov, instance=instance, task_id=task_id, has_entries=any(
+        declaration_status(e, now) in ("active", "unbound") for e in entries)) if task_id else [])
+    if not entries and not binding_lines:
         return []
     texts, decl = section_texts(), declaration()
-    lines = [texts["title"], _fill(texts["relation"], {"relation": decl["relation_to_hard_rules"]})]
+    lines = [texts["title"], _fill(texts["relation"], {"relation": decl["relation_to_hard_rules"]}), *binding_lines]
     sandboxes = decl["harness_sandbox"]
     gcmd = _gov_cmd(gov)
     for entry in entries:
         status = declaration_status(entry, now)
         run = active_run(entry)
         run_dir = run_directory(entry, run["run_id"]) if run else run_directory(entry, "<run-id>")
+        bound = _bound_candidate_text(gov, entry)
         values = {**entry, "status": status, "fingerprint": entry["host_fingerprint"] or "(未绑定)", "run_dir": run_dir,
                   "run_id": run["run_id"] if run else "<run-id>", "candidate": run["candidate"] if run else "<候选 sha>",
                   "started_at": run["started_at"] if run else "",
-                  "run_start": f"{gcmd} project validation-root run-start --id {entry['id']} --candidate <dev 候选 40 位 sha> --confirm --actor <顾问实例>",
+                  "run_start": f"{gcmd} project validation-root run-start --id {entry['id']} --candidate {bound} --confirm --actor <顾问实例>",
                   "run_finish": f"{gcmd} project validation-root run-finish --id {entry['id']} --run-id {run['run_id'] if run else '<run-id>'} --confirm --actor <顾问实例>",
                   "check_command": (f"{gcmd} roles write-boundary --instance {entry['instance']} --task-id {entry['task_id']} --host {entry['host']} "
                                     f"--run-id {run['run_id'] if run else '<run-id>'} --check <目标路径> --level mutate"),
@@ -1702,6 +1721,46 @@ def render_section_lines(governance_root: str | Path, *, instance: str, task_id:
         for text in decl["block_conditions"]:
             lines.append(_fill(texts["block"], {"text": text}))
         lines.append(_fill(texts["run_finish"], values))
+    return lines
+
+
+def _bound_candidate_text(governance_root: Path, entry: dict[str, Any]) -> str:
+    """开工稿 run-start 命令的候选位: 候选所属卡面有固定候选(固定候选卡 / AIPOS-F205 环境卡候选绑定; 统一读取口
+    next_resolver.card_bound_candidate)= 该 sha; 否则 / 声明不合 = 占位(不合的拒因由 run-start 核对给出)。"""
+    from tools.aipos_cli.next_resolver import CandidateSubjectError, card_bound_candidate
+
+    _card, fm = _candidate_card(governance_root, entry)
+    try:
+        bound = card_bound_candidate(fm) if fm is not None else None
+    except CandidateSubjectError:
+        bound = None
+    return bound["candidate"] if bound else "<dev 候选 40 位 sha>"
+
+
+def _binding_lines(governance_root: Path, *, instance: str, task_id: str, has_entries: bool) -> list[str]:
+    """AIPOS-F205 件①: 环境卡候选绑定的开工提示行(只开工提示按本卡渲染, 章程不列, AIPOS-F206)。卡面无绑定 = [](行为不变)。
+    绑定合法 = binding 行(候选 / tree / 来源卡 / 候选所在仓 + 制品只写本卡验证根、交付走本卡交回契约); 本实例本卡尚无声明 =
+    再加 binding_undeclared(顾问声明出口, 执行体停线); 绑定不合 = binding_invalid(拒因原文, 停线)。实值唯一读取口
+    next_resolver.environment_binding_values。"""
+    from tools.aipos_cli.next_resolver import CandidateSubjectError, card_environment_binding, environment_binding_values
+
+    fm = _card_fm(governance_root, task_id)
+    if fm is None:
+        return []
+    texts = section_texts()
+    try:
+        if card_environment_binding(fm) is None:
+            return []
+        view = environment_binding_values(governance_root, task_id, fm)
+    except CandidateSubjectError as exc:
+        return [_fill(texts["binding_invalid"], {"reason": str(exc)})]
+    lines = [_fill(texts["binding"], {"candidate": view["candidate"], "tree": view["tree"], "source": view["source"], "repo": view["repo_path"]})]
+    if not has_entries:
+        gcmd = _gov_cmd(governance_root)
+        lines.append(_fill(texts["binding_undeclared"], {
+            "declare": (f"{gcmd} project validation-root declare --host <目标主机标签> --base <验证 base 绝对路径> --task-id {task_id} "
+                        f"--instance {instance} --owner-ref <Owner 授权出处> --confirm --actor <顾问实例>"),
+            "run_start": f"{gcmd} project validation-root run-start --id <声明 id> --candidate {view['candidate']} --confirm --actor <顾问实例>"}))
     return lines
 
 

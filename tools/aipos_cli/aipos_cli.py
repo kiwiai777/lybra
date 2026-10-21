@@ -2312,7 +2312,7 @@ def build_parser() -> argparse.ArgumentParser:
     queue_amend_parser.add_argument("--amendments", required=True, help="JSON dict of amendments")
     queue_amend_parser.add_argument("--amendment-reason", required=True, help="Reason for amendment")
     queue_amend_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
-    queue_amend_parser.add_argument("--restricted", action="store_true", help="AIPOS-F78 前置零⑤: advisor 对 claimed 卡受限 amend(允许字段读 card.schema restricted_amend.claimed_card_fields: rework_rounds/output_target/lane/resources; 复用 F75 restricted amend)")
+    queue_amend_parser.add_argument("--restricted", action="store_true", help="AIPOS-F78 前置零⑤: advisor 对 claimed 卡受限 amend(允许字段读 card.schema restricted_amend.claimed_card_fields: rework_rounds/output_target/lane/resources/validation_source_task/validation_candidate; 复用 F75 restricted amend)")
     queue_amend_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     queue_withdraw_parser = queue_subparsers.add_parser("withdraw", help="Withdraw a task from queue")
@@ -2973,7 +2973,7 @@ def build_parser() -> argparse.ArgumentParser:
     vr_runstart = project_vr_sub.add_parser("run-start", help="Mint a run id for a declaration (only the active run directory is writable)")
     _vr_common(vr_runstart)
     vr_runstart.add_argument("--id", dest="decl_id", required=True, help="Declaration id")
-    vr_runstart.add_argument("--candidate", required=True, help="Fixed dev candidate: full 40-hex commit sha in the card's product repo")
+    vr_runstart.add_argument("--candidate", required=True, help="Fixed dev candidate: full 40-hex commit sha in the card's product repo (AIPOS-F205: an environment card bound via validation_source_task / validation_candidate = the source card's product repo, and it must equal the card's validation_candidate)")
     vr_runstart.add_argument("--host-fingerprint", default=None, help="Optional cross-check against the declared host fingerprint")
     _project_json_two_phase_flags(vr_runstart, "validation-root run-start")
     vr_runfinish = project_vr_sub.add_parser("run-finish", help="Close a run (its directory is refused afterwards)")

@@ -287,6 +287,16 @@
           "VALIDATION_SOURCE_UNKNOWN": "来源卡不在任何队列目录(须为本项目已发布的卡)"
         }
       },
+      "candidate_binding": {
+        "description": "AIPOS-F205(chris 岚图 LANTU-ENV3 实撞: config 卡 lane.repo=governance_root, 验证根 run-start 候选按本卡 lane.repo 解析到治理根自身 = VR_CANDIDATE_INVALID): 环境卡(依赖准备 / 缓存快照等)可选绑定一个固定候选与专用验证根。task_modes 内模式的卡可在卡面声明来源卡 + 候选(字段名同 candidate_subject.fields), 缺省(两字段皆缺)= 行为不变。一处声明的全部后果: ①候选所在仓 = 来源卡 lane.repo 经 workspace_config.resolve_card_repo 唯一解析(不按本卡 lane.repo; 来源卡须在队列, 其仓须为产品仓); ②起草 / 发卡 / queue amend(含已认领卡 --restricted)同一判据 draft_writer.candidate_subject_refusals(形校验与拒因码复用 candidate_subject.reject_codes, 另加 VALIDATION_BINDING_MODE); ③验证根 run-start 的候选须 = 卡面候选且为来源卡仓已有提交, 源码送达从来源卡仓 git archive(validation_root 唯一实现 _candidate_problem / candidate_source); ④开工提示验证根节注明绑定与「环境制品(依赖缓存 / 临时 HOME / settings / 下载工具)只写本卡验证根本活动 run 目录, 产出报告走本卡交回契约」(无声明时给顾问声明出口); ⑤交付契约不变: 不是固定候选主体卡(交付主体仍按 task_mode 与 lane 判, 只写治理根卡仍 outputs + 顾问复核), 不建卡工作树 / 卡分支的判据(card_needs_worktree)不读本绑定。",
+        "single_implementation": "tools/aipos_cli/next_resolver.card_environment_binding",
+        "repo_implementation": "tools/aipos_cli/next_resolver.card_candidate_repo",
+        "fields_from": "candidate_subject.fields",
+        "task_modes": ["config", "docs", "governance"],
+        "reject_codes": {
+          "VALIDATION_BINDING_MODE": "该 task_mode 不在 candidate_binding.task_modes(写仓模式 code 的候选即卡分支, 固定候选模式 validation 走 candidate_subject)"
+        }
+      },
       "governance_outputs_subject": {
         "description": "AIPOS-F197(gap #178/#201/#202, Owner 10-20: 非代码工作含文档一律拉 pi): 显式声明只写治理根的执行卡 = task_mode 为已声明的不写仓模式(docs / governance / config 等; writes_product_repo=false, 非固定候选, 非 audit)且卡面 lane.repo 非空、经唯一解析落到治理根自身(起草写保留值 card.schema intent_face.lane.governance_root_ref = governance_root; 无仓声明项目派生的治理根路径同此)= 不建卡工作树(唯一判据 card_needs_worktree = false), 交付主体 = 本卡写到治理根(报告落点)的产出文件清单。缺 lane.repo / 缺 task_mode 的存量不建树卡不算(行为同 F178); 缺 lane.repo 时发卡缺省派生到产品仓 = 写仓卡(行为不变)。一处声明的全部后果: ①开工面: 照常入选工位 next_card, 开工提示按 verbs.schema lybra_my_tasks.kickoff.template_governance_root 渲染(产物落点说明, 不提分支 / 工作树); 其审计卡(audit: required 时)不建取证树, 按 template_no_worktree; ②交回契约 = transitions.schema artifact_ingest.return.governance_root(Return frontmatter outputs 产出清单, 无分支三键; 产品计算并核对各文件 sha256, 交回记录绑定清单指纹); ③顾问复核(independent_audit=false 缺省)= loop 停在快车道并给出 `lybra mark-concluded --report-path <Return>` 结案命令, 结案前核此刻清单指纹 = 交回绑定; 声明独立审计 = 审计报告契约 artifact_ingest.verdict.governance_root(verdict + outputs_digest), 裁决 artifact_subject = 产出清单主体; ④N5 无合入: finalize 不碰产品仓 git, 核裁决绑定指纹 = 此刻指纹后写 finalization 记录(merge_commit = `outputs:<清单指纹>`, deploy_status / push_status = not_applicable 并写明原因), 照常 N6 结案。",
         "single_implementation": "tools/aipos_cli/next_resolver.card_governance_outputs",

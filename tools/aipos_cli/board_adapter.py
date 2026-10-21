@@ -8556,6 +8556,16 @@ def amend_task(
             except ValueError as exc:
                 validation_errors.append(str(exc))
 
+        # AIPOS-F205 件③: 改来源卡 / 候选(固定候选卡与环境卡候选绑定)= 与起草发卡同一判据 draft_writer.candidate_subject_refusals
+        # (字段名读 enums.schema task_mode.candidate_subject.fields; 已认领卡经 --restricted, 允许字段 card.schema restricted_amend)
+        from tools.aipos_cli.next_resolver import candidate_subject_declaration
+
+        if set(amendments) & set(candidate_subject_declaration()["fields"].values()):
+            from tools.aipos_cli.draft_writer import candidate_subject_refusals
+
+            validation_errors.extend(candidate_subject_refusals(resolved_root, {**updated_metadata,
+                                                                                "task_id": str(updated_metadata.get("task_id") or task.get("task_id") or "")}))
+
         # AIPOS-F175 件②: 改卡面 artifacts 同经 link_problems(含产物声明形校验 roadmap.artifact_problems, 与出卡同一判据)
         from tools.aipos_cli.roadmap import artifacts_declaration
 

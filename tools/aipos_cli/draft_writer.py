@@ -354,7 +354,7 @@ def candidate_subject_refusals(repo_root: Path, metadata: dict[str, Any]) -> lis
     except CandidateSubjectError as exc:
         return [f"AIPOS-F196 {exc}。出口: 卡稿 frontmatter 写来源卡与固定候选(validation_source_task / validation_candidate)后重发"]
     if subject is None:
-        return []
+        return environment_binding_refusals(repo_root, metadata)
     from tools.aipos_cli.next_resolver import candidate_subject_declaration
 
     codes = candidate_subject_declaration()["reject_codes"]
@@ -372,6 +372,20 @@ def candidate_subject_refusals(repo_root: Path, metadata: dict[str, Any]) -> lis
     except CandidateSubjectError as exc:
         refusals.append(f"AIPOS-F196 {exc}。出口: 候选取来源卡所在仓的完整提交 sha(git rev-parse <提交>), 卡稿 lane.repo 写该仓")
     return refusals
+
+
+def environment_binding_refusals(repo_root: Path, metadata: dict[str, Any]) -> list[str]:
+    """AIPOS-F205 件①: 环境卡可选候选绑定(enums.schema task_mode.candidate_binding)起草 / 发卡 / queue amend 同一判据(经
+    candidate_subject_refusals 调入)。未声明 = []。形校验 = next_resolver.card_environment_binding; 来源卡在队列 + 候选是来源卡仓已有提交 =
+    environment_binding_values(候选所在仓按来源卡 lane.repo 唯一解析, 不按本卡 lane.repo)。拒因带出口。"""
+    from tools.aipos_cli.next_resolver import CandidateSubjectError, environment_binding_values
+
+    try:
+        environment_binding_values(repo_root, str(metadata.get("task_id") or ""), metadata)
+    except CandidateSubjectError as exc:
+        return [f"AIPOS-F205 {exc}。出口: 来源卡写本项目已发布的卡号, 候选取该来源卡产品仓(其 lane.repo)的完整提交 sha(git rev-parse <提交>); "
+                "不需绑定候选 = 两字段都不写"]
+    return []
 
 
 def resolve_publish_signer(repo_root: Path, actor: str | None, connection_json: str | None) -> dict[str, Any]:

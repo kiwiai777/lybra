@@ -407,8 +407,6 @@ def candidate_subject_values(workspace_root: Path, task_id: str, card_frontmatte
     """AIPOS-F196 件①: 固定候选主体的实值 {repository, commit_sha, tree_hash, branch, source, repo_path}(交回 / 审计报告契约给值、入口核对、
     裁决 artifact_subject 同读)。commit_sha = 卡面候选; tree_hash = 候选 tree(卡 lane.repo 解析仓 git rev-parse); branch = 来源卡卡分支名
     (card_branch_name, 说明候选出处, 入口只核等于本值)。非 candidate 模式 = None。候选不在仓 / 仓不可解析 = CandidateSubjectError。"""
-    import subprocess
-
     subject = card_candidate_subject(card_frontmatter)
     if subject is None:
         return None
@@ -418,16 +416,126 @@ def candidate_subject_values(workspace_root: Path, task_id: str, card_frontmatte
         repo = _card_repo_root(workspace_root, task_id, card_frontmatter or {}, allow_governance_root=False)
     except CardRepoUnresolved as exc:
         raise CandidateSubjectError("VALIDATION_CANDIDATE_INVALID", f"卡 {task_id} 的候选所在仓(lane.repo)不可解析: {exc}") from exc
-    try:
-        proc = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"{subject['candidate']}^{{tree}}"],
-                              capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise CandidateSubjectError("VALIDATION_CANDIDATE_INVALID", f"读候选 {subject['candidate']} 失败({repo}): {exc}") from exc
-    tree = proc.stdout.strip()
-    if proc.returncode != 0 or not _FULL_SHA_RE.match(tree):
-        raise CandidateSubjectError("VALIDATION_CANDIDATE_INVALID", f"候选 {subject['candidate']} 不是卡 {task_id} 候选所在仓 {repo} 中已有提交")
+    tree = _candidate_tree(repo, subject["candidate"], f"卡 {task_id} 候选所在仓 {repo}")
     return {"repository": Path(repo).name, "commit_sha": subject["candidate"], "tree_hash": tree,
             "branch": card_branch_name(subject["source"]), "source": subject["source"], "repo_path": str(repo)}
+
+
+def _candidate_tree(repo: Path, candidate: str, where: str) -> str:
+    """候选在仓中的 tree(git rev-parse <候选>^{tree}); 不是已有提交 / 读失败 = CandidateSubjectError(VALIDATION_CANDIDATE_INVALID)。
+    固定候选主体(candidate_subject_values)与环境卡候选绑定(environment_binding_values)同一核对。"""
+    import subprocess
+
+    try:
+        proc = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"{candidate}^{{tree}}"],
+                              capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CandidateSubjectError("VALIDATION_CANDIDATE_INVALID", f"读候选 {candidate} 失败({repo}): {exc}") from exc
+    tree = proc.stdout.strip()
+    if proc.returncode != 0 or not _FULL_SHA_RE.match(tree):
+        raise CandidateSubjectError("VALIDATION_CANDIDATE_INVALID", f"候选 {candidate} 不是{where} 中已有提交")
+    return tree
+
+
+def candidate_binding_declaration() -> dict[str, Any]:
+    """AIPOS-F205: enums.schema task_mode.candidate_binding(适用模式 task_modes / 拒因码), 字段名经 fields_from 取
+    candidate_subject.fields(不另立第二份)。缺 / 形变 / 适用模式不是已声明的不写仓非固定候选模式 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (((load_schema("enums", REPO_ROOT).get("enums") or {}).get("task_mode") or {}).get("candidate_binding"))
+    modes = decl.get("task_modes") if isinstance(decl, dict) else None
+    codes = decl.get("reject_codes") if isinstance(decl, dict) else None
+    if (not isinstance(modes, list) or not modes or not all(isinstance(m, str) and m for m in modes) or not isinstance(codes, dict)
+            or not codes.get("VALIDATION_BINDING_MODE") or decl.get("fields_from") != "candidate_subject.fields"):
+        raise SchemaLoadError("enums.schema.json enums.task_mode.candidate_binding(task_modes / reject_codes.VALIDATION_BINDING_MODE / "
+                              "fields_from=candidate_subject.fields)未声明齐(AIPOS-F205)")
+    for mode in modes:
+        entry = _task_mode_entry(mode)
+        if entry is None or entry.get("writes_product_repo") is not False or task_mode_subject_is_candidate(mode) or mode.lower() == "audit":
+            raise SchemaLoadError(f"enums.schema.json task_mode.candidate_binding.task_modes 含 {mode!r}: 须为已声明、writes_product_repo=false、"
+                                  "非固定候选、非 audit 的模式(AIPOS-F205)")
+    return {**decl, "fields": candidate_subject_declaration()["fields"]}
+
+
+def card_environment_binding(card_frontmatter: dict[str, Any] | None) -> dict[str, str] | None:
+    """AIPOS-F205 件①: 环境卡(enums.schema task_mode.candidate_binding.task_modes; config / docs / governance)可选候选绑定的唯一读取口。
+    固定候选模式(validation)= None(其候选是交付主体, 走 card_candidate_subject); 两字段皆缺 = None(缺省 = 行为不变)。
+    声明了 = {source, candidate}; 模式不适用 = VALIDATION_BINDING_MODE; 只写其一 = VALIDATION_SUBJECT_MISSING; 候选非完整 40 位小写 sha =
+    VALIDATION_CANDIDATE_INVALID(CandidateSubjectError, fail-closed)。只做形校验; 来源卡在队列 / 候选是来源卡仓已有提交由 environment_binding_values 核。"""
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    mode = str(fm.get("task_mode") or "").strip()
+    if task_mode_subject_is_candidate(mode):
+        return None
+    decl = candidate_binding_declaration()
+    source_key, candidate_key = decl["fields"]["source"], decl["fields"]["candidate"]
+    source = str(fm.get(source_key) or "").strip()
+    candidate = str(fm.get(candidate_key) or "").strip()
+    if not source and not candidate:
+        return None
+    if mode.lower() not in {m.lower() for m in decl["task_modes"]}:
+        raise CandidateSubjectError("VALIDATION_BINDING_MODE", f"task_mode={mode or '(缺)'} 卡不得声明 {source_key} / {candidate_key}"
+                                    f"(可选候选绑定只限 {decl['task_modes']}; 声明 enums.schema task_mode.candidate_binding)")
+    if not source or not candidate:
+        missing = [k for k, v in ((source_key, source), (candidate_key, candidate)) if not v]
+        raise CandidateSubjectError("VALIDATION_SUBJECT_MISSING", f"task_mode={mode} 卡的候选绑定缺 {', '.join(missing)}"
+                                    "(来源卡号 + 固定候选 40 位 sha 须成对声明; 声明 enums.schema task_mode.candidate_binding)")
+    if not _FULL_SHA_RE.match(candidate):
+        raise CandidateSubjectError("VALIDATION_CANDIDATE_INVALID", f"{candidate_key}={candidate!r} 须为完整 40 位小写 sha")
+    return {"source": source, "candidate": candidate}
+
+
+def card_bound_candidate(card_frontmatter: dict[str, Any] | None) -> dict[str, str] | None:
+    """AIPOS-F205: 卡面固定候选的统一读取口(验证根 run-start 候选须 = 本值)。固定候选主体卡 = card_candidate_subject + kind=subject;
+    环境卡候选绑定 = card_environment_binding + kind=environment; 都无 = None。形不合 = CandidateSubjectError。"""
+    subject = card_candidate_subject(card_frontmatter)
+    if subject is not None:
+        return {**subject, "kind": "subject"}
+    binding = card_environment_binding(card_frontmatter)
+    return {**binding, "kind": "environment"} if binding is not None else None
+
+
+def card_candidate_repo(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None, *,
+                        allow_governance_root: bool = True) -> dict[str, Any]:
+    """AIPOS-F205 件②: 卡的候选所在仓唯一解析(验证根 run-start 候选核对 / 源码送达 / 起草发卡绑定核验同读)。
+    环境卡候选绑定(card_environment_binding 非 None)= 来源卡 lane.repo 经 workspace_config.resolve_card_repo 唯一解析(产品仓, 不接受治理根;
+    来源卡不在队列 = CandidateSubjectError VALIDATION_SOURCE_UNKNOWN); 其余 = 本卡 lane.repo(行为不变, allow_governance_root 由调用方定)。
+    返回 {repo: Path, card: 解析所依卡号, source: 来源卡号 | None}。仓解析不到 = CardRepoUnresolved(原样抛, 调用方转拒因)。"""
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    binding = card_environment_binding(fm)
+    if binding is None:
+        return {"repo": Path(_card_repo_root(workspace_root, task_id, fm, allow_governance_root=allow_governance_root)), "card": task_id,
+                "source": None}
+    source = binding["source"]
+    try:
+        source_path, _q = _find_task_in_queue(workspace_root, source)
+    except ValueError as exc:
+        raise CandidateSubjectError("VALIDATION_SOURCE_UNKNOWN", f"卡 {task_id} 的来源卡 {source} 查找失败: {exc}") from exc
+    if source_path is None:
+        raise CandidateSubjectError("VALIDATION_SOURCE_UNKNOWN", f"卡 {task_id} 的来源卡 {source} 不在任何队列目录(须为本项目已发布的卡), "
+                                    "无从定位候选所在仓")
+    source_fm = _read_frontmatter(source_path)
+    repo = _card_repo_root(workspace_root, source, {**source_fm, "task_id": source}, allow_governance_root=False)
+    return {"repo": Path(repo), "card": source, "source": source}
+
+
+def environment_binding_values(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None) -> dict[str, str] | None:
+    """AIPOS-F205 件①: 环境卡候选绑定的实值 {source, candidate, tree, repo_path, repository}(起草 / 发卡 / amend 核验、开工提示同读)。
+    未声明绑定 = None。来源卡不在队列 = VALIDATION_SOURCE_UNKNOWN; 来源卡仓不可解析 / 候选不是来源卡仓已有提交 = VALIDATION_CANDIDATE_INVALID。
+    不改交付主体: 交回 / 裁决契约仍按 task_mode 与 lane 判(只写治理根卡 = outputs)。"""
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved
+
+    binding = card_environment_binding(card_frontmatter)
+    if binding is None:
+        return None
+    try:
+        located = card_candidate_repo(workspace_root, task_id, card_frontmatter)
+    except CardRepoUnresolved as exc:
+        raise CandidateSubjectError("VALIDATION_CANDIDATE_INVALID", f"卡 {task_id} 的来源卡 {binding['source']} 的产品仓(lane.repo)不可解析: "
+                                    f"{exc}") from exc
+    repo = located["repo"]
+    tree = _candidate_tree(repo, binding["candidate"], f"卡 {task_id} 来源卡 {binding['source']} 的产品仓 {repo}")
+    return {"source": binding["source"], "candidate": binding["candidate"], "tree": tree, "repo_path": str(repo),
+            "repository": Path(repo).name}
 
 
 def card_writes_product_repo(workspace_root: Path, card_frontmatter: dict[str, Any] | None) -> bool:

@@ -47,6 +47,8 @@ role: advisor
 - [ ] **AIPOS-F196**:环境构建 / 模拟器构建运行 / 截图取证这类「对固定候选的验证」出 `task_mode: validation` 卡(写 `validation_source_task` 来源卡 +
   `validation_candidate` 完整 40 位候选 sha + `lane.repo` 候选所在仓), 交 pi 执行工位、保留独立审计、不写产品仓源码、无合入;代码卡只做实现与离线测试,
   不把「在目标主机构建验证」塞进代码卡(详见 advisor-commands「非代码工作交 pi」节)。正文写清「先按开工稿送达候选源码并核对 SRC_OK(AIPOS-F197), 再构建」。
+- [ ] **AIPOS-F205**:环境卡(config / docs / governance)要在专用验证根为固定候选准备依赖 / 缓存时, 成对写 `validation_source_task` + `validation_candidate`
+  (候选 = 来源卡产品仓的完整 40 位 sha; 候选仓按来源卡 lane.repo 解析), 本卡 lane 与交付契约不变(只写治理根仍 `outputs` + 顾问复核);code / validation 卡不用此绑定。
 - [ ] **AIPOS-F197**:只写治理根的文档 / 配置卡写 **`lane.repo: governance_root`**(保留值; 不写 lane.repo = 缺省派生到产品仓 = 写仓卡, 建卡分支、交回分支三键、裁决绑 tip), `output_target` 写
   `<报告落点>/artifacts/`, 正文写清要哪些产出文件; 交回由执行体在 Return frontmatter `outputs` 列产出清单(产品核 sha256), 卡面不再要求 commit_sha / branch。
 

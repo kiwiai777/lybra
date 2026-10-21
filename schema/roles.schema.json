@@ -521,6 +521,14 @@
           "value": "<目标主机既有依赖缓存: 直接含 modules-2 的目录, 只读复用>",
           "verify": "ls $GRADLE_RO_DEP_CACHE/modules-2(只读)",
           "source": "docs.gradle.org userguide dependency_caching: \"point to the directory containing the cache\"; \"It's important that the read-only cache is not written to when other builds may be reading from it.\"; \"If a dependency is missing from the read-only cache, it will be downloaded and added to the writable cache.\"(incubating)"
+        },
+        {
+          "toolchain": "maven",
+          "kind": "argument",
+          "applies": "mvn(每次调用; AIPOS-F205 环境卡依赖准备 / 离线构建)",
+          "render": "mvn -Dmaven.repo.local={run_dir}/m2/repository -s {run_dir}/m2/settings.xml …(本地仓库与用户 settings 都在本 run 目录; 只读复用既有缓存 = 拷入或作只读源, 不写原缓存; 禁用默认 ~/.m2 与全局 settings)",
+          "verify": "mvn -v(只读)可执行; 本 run 目录内 m2/settings.xml 存在且 localRepository 指本 run 目录",
+          "source": "maven.apache.org settings reference: localRepository 缺省 ${user.home}/.m2/repository, 可经 maven.repo.local 属性改; mvn 命令行 -s <文件> = Alternate path for the user settings file"
         }
       ],
       "system_side_effects": [

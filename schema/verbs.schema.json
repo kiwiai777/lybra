@@ -2416,7 +2416,10 @@
         "src_pending": "(铸 run 后由产品给出: 重取本开工稿或 `project validation-root init-command --id <声明id>`)",
         "evidence_fetch": "  ③ 远端 run 证据取回(AIPOS-F200; 审计 run 在目标主机 {host} 时, 裁决入口读不到 run 内证据, 改读审计报告落点副本): 运行记录的日志写在本 run `{run_dir}/logs/` 下(截图等证据放 `{run_dir}/evidence/`); 卡面命令全部跑完、run 仍活动时生成证据清单 `{evidence_manifest}`(列证据目录 {evidence_dirs} 下文件 + sha256 + 主机指纹 + 封签; 只认末行 `EVIDENCE_OK` + 退出码 0); 再在治理根所在机取回 `{evidence_fetch}`(经声明 ssh 别名只读拉取清单内文件逐个核 sha256, 副本落 `{evidence_copy}`); 副本禁手改, 证据更新 = 重生成清单并重新取回",
         "helper_ssh": "  目标主机侧 realpath 判定(符号链接逃逸只能在目标主机判; 经 ssh): 每次写前在治理根所在机运行 `{check_ssh}`; 只认退出码 0 且输出 `ALLOW`, 其余(含无输出 / ssh 失败)= 拒",
-        "helper_pin": "  验证 helper 按 run 固定(AIPOS-F203): {helper_pin_state}; 本 run 的 init-run / src-verify / sim-* / sys-snapshot / check / evidence-* 等 helper 命令一律取本 run 固定版(`{helper_fetch}`), 产品升级部署不影响进行中 run; 项目脚本如需核 helper 摘要, 运行时取 `{helper_sha_query}` 的输出, 禁在脚本 / 卡面写死摘要(写死 = 每次产品升级即被打断)"
+        "helper_pin": "  验证 helper 按 run 固定(AIPOS-F203): {helper_pin_state}; 本 run 的 init-run / src-verify / sim-* / sys-snapshot / check / evidence-* 等 helper 命令一律取本 run 固定版(`{helper_fetch}`), 产品升级部署不影响进行中 run; 项目脚本如需核 helper 摘要, 运行时取 `{helper_sha_query}` 的输出, 禁在脚本 / 卡面写死摘要(写死 = 每次产品升级即被打断)",
+        "binding": "- 本卡绑定固定候选(AIPOS-F205; 卡面 validation_source_task / validation_candidate, 声明 enums.schema task_mode.candidate_binding): 候选 {candidate}(tree {tree}), 来源卡 {source}, 候选所在仓 = 来源卡产品仓 `{repo}`(按来源卡 lane.repo 解析, 不按本卡 lane.repo); run-start 的候选须 = 本候选, 候选源码只经产品铸的送达命令从该仓送进本 run 目录。环境制品(依赖缓存 / 临时 HOME / settings / 下载工具 / 临时脚本)只写本卡验证根本活动 run 目录, 禁写全局缓存(~/.m2 / ~/.gradle 等)、原有缓存、产品仓与治理根; 交付仍走本卡交回契约(报告与产出清单写报告落点, 只写治理根卡 = frontmatter outputs + 顾问复核), 依赖 / 缓存 / 源码等制品不入报告落点",
+        "binding_invalid": "- 本卡候选绑定不合(AIPOS-F205): {reason}; 验证根不可用, 停线报告(出口: 顾问 `lybra queue amend` 修正来源卡 / 候选, 已认领卡加 --restricted)",
+        "binding_undeclared": "- 本卡尚无验证根声明(AIPOS-F205): 环境制品无处可写 = 停线报告(BLOCK), 不以卡面文字代替授权、不自建目录、不写全局缓存或治理根凑数; 出口(顾问 / 驱动方): `{declare}` 声明本卡专用验证根, 再 `{run_start}` 铸 run, 之后重取本开工提示(含目录链初始化 / 候选源码送达 / 送达核对 / 写前判定命令)"
       },
       "item_templates": {
         "boundary_line": "- {surface}: {level} `{path}`({scope})",
