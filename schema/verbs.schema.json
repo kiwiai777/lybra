@@ -2694,11 +2694,18 @@
           "prompt_note": "续接指令唯一声明; 占位 {artifact} = 本次等待的产物落点(等待产物候选首项, 治理根下绝对路径)"
         },
         "report_fix": {
-          "description": "AIPOS-F180B 件②(10-17 AIPOS-F180R 实撞: 审计 PASS 类报告 commit_sha 被抄成 37 位(少中间 3 位), 裁决入门正确拒 INGEST_TIP_MISMATCH, loop 以 gate_rejected 升 Owner; 顾问不能代改审计报告, 只能整轮重审): 裁决入门(verdict 步)被拒且产物入口形式诊断 correctable(transitions artifact_ingest.tip_mismatch_diagnosis; loop 经同一校验 artifact_ingest.validate_task_artifact 取 tip_diagnosis, 不另判)= 以该审计卡最近一次拉起的固定会话(运行记录 launches[].session_id: 本运行优先, 其次本卡更早的运行)同会话续接一次: 拉起判定复用 loop_driver.plan_launch(resume_session = 该会话 id, 只跳过开工提示与「本运行已拉起」两项, 其余授权 / 工位 / 身份 / 模型 / 会话声明照常核), 指令 = prompt, 拉起与等待复用唯一拉起口 _launch_once(F171B 同会话续接); 等到报告内容改写后重推导、重新入门。每张审计卡每次运行至多 max_per_run 次。每次判定进运行记录 report_fixes {card, outcome, kinds, session_id, detail, at}(outcome ∈ resumed / not_correctable / not_resumable / exhausted / not_rewritten)+ 日志一行 `[轮] report_fix: …`。诊断不可更正(other_commit = 真审错了产物)= 不续接, 按原规则 gate_rejected(拒因附重审出口)。会话不可续接(无该审计卡会话记录 / 拉起判定拒 / 工位已变)、本运行续接已用尽、续接后报告未改写或等待超时 = 以 end_reason 结束(exit_codes.gate_rejected; loop status by_end_reason = advisor_fix, 修法 next_action.routine_rejections.end_reasons.<end_reason>), 不升 Owner。唯一实现 loop_driver._audit_report_fix。",
+          "description": "AIPOS-F180B 件②(10-17 AIPOS-F180R 实撞: 审计 PASS 类报告 commit_sha 被抄成 37 位(少中间 3 位), 裁决入门正确拒 INGEST_TIP_MISMATCH, loop 以 gate_rejected 升 Owner; 顾问不能代改审计报告, 只能整轮重审): 裁决入门(verdict 步)被拒且产物入口形式诊断 correctable(transitions artifact_ingest.tip_mismatch_diagnosis; loop 经同一校验 artifact_ingest.validate_task_artifact 取 tip_diagnosis, 不另判)= 以该审计卡最近一次拉起的固定会话(运行记录 launches[].session_id: 本运行优先, 其次本卡更早的运行)同会话续接一次: 拉起判定复用 loop_driver.plan_launch(resume_session = 该会话 id, 只跳过开工提示与「本运行已拉起」两项, 其余授权 / 工位 / 身份 / 模型 / 会话声明照常核), 指令 = prompt, 拉起与等待复用唯一拉起口 _launch_once(F171B 同会话续接); 等到报告内容改写后重推导、重新入门。每张审计卡每次运行至多 max_per_run 次。每次判定进运行记录 report_fixes {card, role, outcome, kinds, session_id, detail, at}(role = auditor / executor, 执行体交回报告头见 executor; outcome ∈ resumed / not_correctable / not_resumable / exhausted / not_rewritten)+ 日志一行 `[轮] report_fix: …`。诊断不可更正(other_commit = 真审错了产物)= 不续接, 按原规则 gate_rejected(拒因附重审出口)。会话不可续接(无该审计卡会话记录 / 拉起判定拒 / 工位已变)、本运行续接已用尽、续接后报告未改写或等待超时 = 以 end_reason 结束(exit_codes.gate_rejected; loop status by_end_reason = advisor_fix, 修法 next_action.routine_rejections.end_reasons.<end_reason>), 不升 Owner。唯一实现 loop_driver._audit_report_fix。",
           "max_per_run": 1,
           "end_reason": "audit_report_form_error",
           "prompt": "你的审计报告 {artifact} 的 frontmatter commit_sha 与被审分支 {branch} 的 tip 不符: 报告写的是 {commit_sha}, 分支 tip 是 {tip}(形式诊断: {diagnosis})。只把报告头 commit_sha 更正为 `git rev-parse {branch}` 的输出原样粘贴(禁手抄), 不改裁决与正文结论; 若你审的确实不是这个提交, 把裁决改写为 BLOCK 并说明原因。改完即停。",
-          "prompt_note": "修报告头指令唯一声明; 占位 {artifact} = 审计报告(裁决入口所读同一份)绝对路径, {branch} = 被审分支, {commit_sha} / {tip} = 两侧完整值, {diagnosis} = 形式诊断原文"
+          "prompt_note": "修报告头指令唯一声明; 占位 {artifact} = 审计报告(裁决入口所读同一份)绝对路径, {branch} = 被审分支, {commit_sha} / {tip} = 两侧完整值, {diagnosis} = 形式诊断原文",
+          "executor": {
+            "description": "AIPOS-F204 件②(10-21 chris 岚图 LANTU-VALID1 实撞: validation 卡的 pi 把交回报告头写成 outputs 契约, 推导核 artifact_invalid 停线, pi 模式无出口): 同一机制扩到 pi 拉起的执行体交回报告头。触发 = 本卡(执行卡)交回因报告头可纠正错误被拒——推导核交回节点 artifact_invalid(必填键缺)或交回步(artifact ingest --kind return)被拒; 判定只读产物入口同一校验(artifact_ingest.validate_task_artifact 的 header_problem, 判定与补法唯一实现 artifact_ingest.return_header_problem, 声明 transitions artifact_ingest.return.header_fix), 不另判。header_problem.correctable = 以本卡最近一次拉起的固定会话(运行记录 launches[].session_id, 本运行优先)同会话续接执行体一次, 指令 = prompt(只修报告头 frontmatter, 给出正确值; 不改正文与产物), 拉起判定 / 拉起与等待 / 记录与审计卡同一实现(plan_launch resume_session / _launch_once); 报告改写后原步骤续跑(重推导、重新入门)。每张执行卡每次运行至多 max_per_run 次。不可更正(候选声明不合等)= 不续接, 照原规则结束。会话不可续接(子 agent / 手工工位 / 无会话记录 / 拉起判定拒 / 工位已变)、本运行续接已用尽、续接后报告未改写或等待超时 = 以 end_reason 结束(exit_codes.not_derivable; loop status by_end_reason = advisor_fix, 修法 next_action.routine_rejections.end_reasons.<end_reason>, 子 agent 模式由顾问把修头指令派给执行子 agent), 不升 Owner。运行记录 report_fixes 本键条目 role = executor。唯一实现 loop_driver._report_fix(role=executor)。",
+            "max_per_run": 1,
+            "end_reason": "return_report_form_error",
+            "prompt": "你的交回报告 {artifact} 的 frontmatter 不合本卡交回契约: {problem}。只改报告头(frontmatter)逐键改为: {fix}。不改正文结论、不改产物与报告落点里的其他文件、不提交产品仓; 改完即停。",
+            "prompt_note": "修交回报告头指令唯一声明; 占位 {artifact} = 交回报告(产物入口所读同一份)绝对路径, {problem} = header_problem.problem(判定原文), {fix} = header_problem.fix(逐键补法, 含产品给值)"
+          }
         },
         "remote": {
           "description": "AIPOS-F110 件①: transport=remote(enums.schema workstation_transport)的拉起声明。ssh 目标 = 该实例最新 land 事件 host(enroll_deliver --ssh 写入的 ssh 目标), 不另设声明位。拉起 argv = ssh_argv + [<host>, <远端命令>]; 远端命令 = 固定 sh 脚本 + 逐个 shell 引号化的参数(工位目录 + harness.launch.argv 模板原样, 含 {kickoff} 占位)——kickoff 不进命令行, 经 ssh stdin 逐字节传入, 远端脚本按字节读尽 stdin 后整参数替换 {kickoff}(kickoff 原文中的 ` $( ${ 换行等 shell 元字符不经任何 shell 展开); 远端 set -m 作业 = 新进程组, 组号以 pgid_marker 行首行回传(stdout 其余行照常按 events 汇总)。实现唯一: tools/aipos_cli/harness_launch.py(remote_launch_command / probe_remote / LaunchedHarness / terminate_group)。",
@@ -2724,7 +2731,7 @@
         "worktree_repairs": "AIPOS-F178 件③: 等待目标卡(执行体 / 审计体等待)已认领、须建卡工作树(唯一判据 next_resolver.card_needs_worktree)而工作树不在落点时, 等待前自动补建一次并追加一条 worktree_repairs {card, outcome, worktree_path, repair_command, detail(经 redact_progress), at}: outcome = created(经唯一建树入口 _ensure_worktree 补建成功, 写 records/events/<卡>/event_worktree_repair_*.md, 照常进入等待)/ failed(补建失败, 结束原因 worktree_repair_failed); 同时 loop 输出(即日志)一行 `[轮] worktree_repair: …`。实现 = next_resolver.repair_missing_worktree(`lybra queue repair [--confirm]` 同一函数)。无补建的运行不出现本键(存量记录形不变)。",
         "lane_overlaps": "AIPOS-F188 件③: 本卡认领步执行前(loop 起跑)判出的同仓车道重叠(判定唯一实现 lane_overlap.lane_overlaps, 声明 verbs.schema 顶层 lane_overlap)写 lane_overlaps [{card, other, other_state, repo, paths, line, at}], loop 输出(即日志)每条一行 `[轮] lane_overlap: …`; loop status 原样显示「起跑时 车道重叠: …」。只提示不拒。无重叠 = 不出现本键(存量记录形不变)。",
         "worktree_cleanups": "AIPOS-F187 件③: 本卡结案且已落账(loop 出口 0 那一步)时, 本卡(含审计轮与承继原卡)仍在盘且被保留的工作树(脏 / 在途 / 承继引用 / 读不出 / 删失败; 判据 transitions.schema queue_mutations.worktree_cleanup, 只读 worktree_cleanup.residual_line)追加一条 worktree_cleanups {card, detail(经 redact_progress), at}, loop 输出(即日志)一行 `[轮] worktree_cleanup: …`; 清理本身在结案时由 close_task 完成(结果落 records/events/<卡>/worktree_cleanup_*.md)。无保留的树 = 不出现本键(存量记录形不变)。",
-        "report_fixes": "AIPOS-F180B 件②: 裁决入门被拒 INGEST_TIP_MISMATCH 时的修报告头判定(launch.report_fix)每次追加一条 report_fixes {card, outcome, kinds(形式诊断种类), session_id, detail(经 redact_progress), at}: outcome = resumed(同会话续接后报告已改写, 重新入门)/ not_correctable(other_commit, 不续接, 原规则 gate_rejected)/ not_resumable / exhausted / not_rewritten(以 audit_report_form_error 结束); 续接本身另按 launch_session 记 launches[](resume = 该会话第几次续接)。无此判定的运行不出现本键(存量记录形不变)。",
+        "report_fixes": "AIPOS-F180B 件②: 裁决入门被拒 INGEST_TIP_MISMATCH 时的修报告头判定(launch.report_fix)每次追加一条 report_fixes {card, role, outcome, kinds(形式诊断种类), session_id, detail(经 redact_progress), at}(AIPOS-F204: role = auditor; 执行体交回报告头判定 launch.report_fix.executor 同键追加 role = executor 的条目, kinds = header_problem 种类, 以 return_report_form_error 结束): outcome = resumed(同会话续接后报告已改写, 重新入门)/ not_correctable(other_commit, 不续接, 原规则 gate_rejected)/ not_resumable / exhausted / not_rewritten(以 audit_report_form_error 结束); 续接本身另按 launch_session 记 launches[](resume = 该会话第几次续接)。无此判定的运行不出现本键(存量记录形不变)。",
         "launch_model": "AIPOS-F169: 每次拉起 launches[] 另记 model {model: 实际传入 --model 的 <provider>/<id> 或 null(未声明, pi 缺省), source: 声明来源(execution.pi_models.by_role.<角色> / execution.pi_models.default / pi 缺省), role: executor | auditor}; 无此键的存量记录 = F169 前(未传 --model)。lybra loop status 拉起行显示「模型 <值或 pi 缺省>」。",
         "activity_flush_seconds": 5,
         "activity_flush_note": "拉起进程活动写入节流: 每拉起首条活动立即写, 之后每本秒数至多写一次(等待期 sleeper 每轮调 flush, 静默期也把最后一条落盘); 步骤开始/落定、拉起开始/收尾、结束一律立即写",
@@ -2785,7 +2792,8 @@
           "resource_busy": "AIPOS-F179 件②: 本卡声明的独占资源(card.schema resources)在 --max-wait 内一直被同项目另一 loop 占用, 未进入执行/审计等待(exit_codes.wait_timeout; 占用者原文在结束原文; 见 resource_lock)",
           "audit_blocked": "AIPOS-F179 件③: 审计裁决 BLOCK(审计未能完成: 环境 / 资源 / 时长), 推导核给出「修环境后重新派审计」(transitions nodes.N4.audit_blocked; exit_codes.not_derivable; 不计连败)",
           "audit_blocked_repeated": "AIPOS-F179 件③: 本卡最新连续 BLOCK 裁决数 ≥ transitions nodes.N4.audit_blocked.owner_needed_after(修环境重审后仍 BLOCK), 升 Owner(exit_codes.not_derivable); AIPOS-F202: 计数以本卡最近一条「重新派审」收件箱裁决为界(transitions nodes.N4.audit_blocked.owner_reaudit)",
-          "audit_report_form_error": "AIPOS-F180B 件②: 裁决入门被拒 INGEST_TIP_MISMATCH 且形式诊断 correctable(报告头 commit_sha 形式错误 / 疑似抄错), 但审计会话不可续接 / 本运行续接已用尽 / 续接后报告未改写(见 launch.report_fix; exit_codes.gate_rejected; 判定原文在结束原文与运行记录 report_fixes 末条 detail)"
+          "audit_report_form_error": "AIPOS-F180B 件②: 裁决入门被拒 INGEST_TIP_MISMATCH 且形式诊断 correctable(报告头 commit_sha 形式错误 / 疑似抄错), 但审计会话不可续接 / 本运行续接已用尽 / 续接后报告未改写(见 launch.report_fix; exit_codes.gate_rejected; 判定原文在结束原文与运行记录 report_fixes 末条 detail)",
+          "return_report_form_error": "AIPOS-F204 件②: 执行体交回报告头可纠正错误(缺键 / 值不符产品给值 / 形式错 / 误用另一契约; transitions artifact_ingest.return.header_fix), 但执行会话不可续接 / 本运行续接已用尽 / 续接后报告未改写(见 launch.report_fix.executor; exit_codes.not_derivable; 判定原文在结束原文与运行记录 report_fixes 末条 detail)"
         },
         "resource_lock": "AIPOS-F179 件②: 卡声明了独占资源的运行另落 resource_lock {resources, card, state(waiting | held), requested_at, held_at, holder(排队时的占用者: run_id / task_id / pid / host / state)}; 无资源声明的运行不出现本键(存量记录形不变)。lybra loop status 运行行显示「独占资源」行; 判定见 lybra_loop.resource_lock。",
         "launch_session": "AIPOS-F171B 件②: 每次拉起 launches[] 另记 session_id(harness 模板声明 session 时 loop 固定的会话 id; 无声明 = null)、resume(0 = 首次拉起, k = 同会话第 k 次续接)、resume_max(本次运行的续接上限, project.json launch_resume_max); 日志每次续接一行 [resume]。lybra loop status 拉起行显示「会话 <id> 续接 k/N」。无此键的存量记录 = F171B 前(未固定会话)。",
@@ -3111,7 +3119,8 @@
           "resource_busy": "advisor_fix",
           "audit_blocked": "advisor_fix",
           "audit_blocked_repeated": "owner_needed",
-          "audit_report_form_error": "advisor_fix"
+          "audit_report_form_error": "advisor_fix",
+          "return_report_form_error": "advisor_fix"
         },
         "by_execution_mode": {
           "description": "AIPOS-F156 件①(gap #139): 按本卡执行方式分流的覆盖表(唯一声明, 与 by_end_reason 同节; 判定唯一实现 loop_run_record.next_action)。执行方式 = 运行最后一次等待的卡即本卡(执行体等待; 等审计 / 外部 FINALIZE / 同仓先合入卡的等待不适用)时, 经 workspace_config.card_execution_mode(只读 F143 执行方式声明唯一读取口 workspace_config.project_execution)判出; AIPOS-F157 件③(gap #125): 等待目标实例为无工位的子 agent 执行者(enrollment.instance_enrollment governance_root_mode, 与 lybra_loop.launch.manual_hint.subagent 同一判定 loop_driver.wait_instance_is_subagent)= subagent(未声明 execution 亦然, 等交回超时不再出工位 /go 口径); 未声明 execution 且非子 agent 执行者 / 判不出 = 不覆盖(行为不变)。modes 键 ⊆ config.schema project_json.execution.default_mode 值域。by_end_reason = 该执行方式下覆盖 by_end_reason 的结束原因映射(判为 advisor_fix 的须在 routine_rejections.end_reasons 有修法, 连续计数与其他例行结束原因同一实现); kickoff_detail = 手工等待(reason=manual_kickoff)时顾问下一动作 detail 的前缀(占位 {hint} = 运行记录里的开工提示)。pi 执行工位 / 手工工位(card_execution_mode = pi 或未声明)= 原口径(owner_needed / 向 Owner 说开工提示)。",
@@ -3153,7 +3162,8 @@
             "actor_arg": "续跑命令的驱动方参数(运行记录 driver; 无 = 空)",
             "envelope_arg": "续跑命令的信封参数(运行记录 envelope; 无 = 空)",
             "reaudit_command": "AIPOS-F179 件③: 重新派审计的命令(唯一渲染 next_resolver.reaudit_command: 既有 lybra audit dispatch 派下一轮审计卡, 派审人 / 信封 = 运行记录 driver / envelope); 下一轮已派出 = 一句「已派 <审计卡>, 无需再派」; 只用于 end_reasons.audit_blocked",
-            "block_reason": "AIPOS-F179 件③: BLOCK 原因摘录(该裁决记录 Findings summary, 截 transitions nodes.N4.audit_blocked.reason_excerpt_chars 字); 只用于 end_reasons.audit_blocked"
+            "block_reason": "AIPOS-F179 件③: BLOCK 原因摘录(该裁决记录 Findings summary, 截 transitions nodes.N4.audit_blocked.reason_excerpt_chars 字); 只用于 end_reasons.audit_blocked",
+            "header_fix_prompt": "AIPOS-F204 件③: 修交回报告头指令原文(verbs.schema lybra_loop.launch.report_fix.executor.prompt, 按本卡此刻的交回以 artifact_ingest.return_header_problem 填实值; 此刻已无可更正问题 = 一句说明); 只用于 end_reasons.return_report_form_error"
           },
           "resume_hint": "lybra loop --task-id {task_id} --workspace-root {governance_root}{actor_arg}{envelope_arg}",
           "codes": {
@@ -3276,7 +3286,20 @@
                 "审计会话不可续接(子 agent 审计 / 手工工位 / 无会话记录)= 顾问把修报告头指令(verbs.schema lybra_loop.launch.report_fix.prompt, 占位按结束原文填两侧完整值)交给本审计卡的审计实例执行(派审计子 agent 或在审计工位会话里转述), 审计体改完即停",
                 "审计体确认所审不是该提交 = 它改写 BLOCK, 之后按 audit_blocked 出口重派下一轮审计(在途轮零裁决时直接 lybra audit dispatch 会被门以 AUDIT_ALREADY_DISPATCHED 拒)"
               ]
+            },
+            "return_report_form_error": {
+              "why_routine": "AIPOS-F204 件②③(10-21 chris 岚图 LANTU-VALID1 实撞): 执行体交回报告头不合本卡交回契约(缺键 / 值不符产品给值 / 形式错 / 误用另一契约, 判定与补法见 transitions artifact_ingest.return.header_fix), 不是产物问题; 修法固定 = 让执行体只改报告头后重新入门, 不涉设计判断, 不升 Owner",
+              "fix": [
+                "不代改交回报告(执行体的笔)、不改产物、不问 Owner: 拒因与产品给值的补法原文见只读复核 lybra artifact ingest --task-id {task_id} --kind return --workspace-root {governance_root} --dry-run",
+                "执行会话可续接(pi 拉起, 运行记录 launches[] 有本卡 session_id, 工位未变)= 直接用原命令续跑 loop(本修法末行命令): loop 以该会话续接一次只修报告头(launch.report_fix.executor), 改好即重新入门、照常派审",
+                "执行会话不可续接(子 agent / 手工工位 / 无会话记录)= 顾问把下面的修头指令原文派给本卡执行实例(派执行子 agent 或在工位会话转述), 执行体改完即停: {header_fix_prompt}",
+                "执行体改完后用原命令续跑 loop(本修法末行命令); 同卡连续以本原因结束达 repeat_owner_needed 次产品升 Owner"
+              ]
             }
+          },
+          "return_header_probe": {
+            "description": "AIPOS-F204 件③: 以 end_reasons 所列结束原因(F204 前 loop 对执行体交回报告头错误以 artifact_invalid 停线)结束的本卡最近一次运行, 下一动作判定时以产物入口同一校验(artifact_ingest.validate_task_artifact 的 header_problem; 只读)复核本卡此刻的交回: header_problem.correctable = 视同以 launch.report_fix.executor.end_reason 结束(advisor_fix, 修法与连续计数同该结束原因)——原命令重跑 loop 即进入同会话修报告头; 否则 / 复核出错 = 照旧(出错原文进 detail)。唯一实现 loop_run_record._return_header_probe。",
+            "end_reasons": ["artifact_invalid"]
           }
         },
         "envelope_renew": {

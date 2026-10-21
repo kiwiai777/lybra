@@ -515,11 +515,11 @@ class LoopRunRecorder:
 
     # -- AIPOS-F180B item 2: report-header fix decisions (verbs.schema lybra_loop.run_record.report_fixes) --
     def report_fix(self, entry: dict[str, Any]) -> None:
-        """One report-header fix decision into report_fixes (card / outcome / kinds / session_id / detail / at; detail via
-        redact_progress). The log line is written by the caller's loop output (say)."""
+        """One report-header fix decision into report_fixes (card / role / outcome / kinds / session_id / detail / at; detail via
+        redact_progress; AIPOS-F204: role = auditor | executor). The log line is written by the caller's loop output (say)."""
         from tools.aipos_cli.harness_launch import redact_progress
 
-        record = {k: entry.get(k) for k in ("card", "outcome", "kinds", "session_id")}
+        record = {k: entry.get(k) for k in ("card", "role", "outcome", "kinds", "session_id")}
         record["detail"] = redact_progress(str(entry.get("detail") or ""))[:600]
         record["at"] = iso_z()
         self.meta.setdefault("report_fixes", []).append(record)
@@ -1134,6 +1134,18 @@ def next_action_declaration(run_decl: dict[str, Any], contract: dict[str, Any] |
         if not isinstance(fix, list) or not fix or any(not isinstance(x, str) or not x.strip() for x in fix):
             raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.by_end_reason.{reason} = advisor_fix, 但 routine_rejections.end_reasons."
                                   f"{reason}.fix 未声明为非空字符串的非空列表")
+    # AIPOS-F204 件③: 交回报告头复核(可选)——所列结束原因须已声明; 复核成立时视同的结束原因(launch.report_fix.executor.end_reason)
+    # 须 by_end_reason = advisor_fix(上一条已保证其有修法)
+    probe = decl["routine_rejections"].get("return_header_probe")
+    if probe is not None:
+        ends = probe.get("end_reasons") if isinstance(probe, dict) else None
+        if not isinstance(ends, list) or not ends or set(ends) - reasons:
+            raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.routine_rejections.return_header_probe.end_reasons 须为已声明结束原因的非空列表")
+        from tools.aipos_cli.loop_driver import load_loop_contract, report_fix_declaration
+
+        as_reason = str(report_fix_declaration(load_loop_contract(), "executor")["end_reason"])
+        if decl["by_end_reason"].get(as_reason) != "advisor_fix":
+            raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.by_end_reason.{as_reason} 须为 advisor_fix(return_header_probe 视同的结束原因)")
     return decl
 
 
@@ -1270,6 +1282,13 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
                                      f"{STATUS_VERB}.next_action.by_end_reason(记录与声明不符, 拒判下一动作)")
         action = str(rules["by_end_reason"][reason])
         message = str(view.get("end_message") or "")
+        probed_from, probe_note = "", ""
+        if action != "advisor_fix":
+            # AIPOS-F204 件③: 以 artifact_invalid 停线的运行(F204 前执行体交回报告头错误即此)= 以产物入口同一校验复核本卡此刻的交回;
+            # 报告头可纠正 = 视同例行结束原因 return_report_form_error(原命令重跑 loop 即同会话修报告头)
+            as_reason, probe_note = _return_header_probe(view, rules, governance_root, reason)
+            if as_reason:
+                probed_from, reason, action = reason, as_reason, "advisor_fix"
         mode_note = ""
         if any(reason in (m.get("by_end_reason") or {}) for m in ((rules.get("by_execution_mode") or {}).get("modes") or {}).values()):
             # AIPOS-F156 件①: 本卡执行方式覆盖(如子 agent 模式等交回超时 = 例行); 判不出 = 原口径, 原因进 detail
@@ -1291,6 +1310,9 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
             return {"action": action, "reason": reason, **_take_next(view, rules, governance_root, message)}
         if action == "advisor_fix":  # AIPOS-F152 件①: 结束原因本身属例行(routine_rejections.end_reasons, 如 deploy_changed)
             routine = _routine_end_reason_action(view, rules, governance_root, reason, message, earlier_end_reasons)
+            if probed_from:
+                routine = {**routine, "end_reason": probed_from,
+                           "detail": f"{routine['detail']}(运行以 {probed_from} 结束; 复核本卡此刻交回 = 报告头可纠正, AIPOS-F204)"}
             return {**routine, "execution_mode": view["execution_mode"]} if view.get("execution_mode") else routine
         if action == "owner_needed" and reason in (rules["envelope_renew"].get("end_reasons") or []):
             return _envelope_renew_action(view, rules, reason, message, fill)  # AIPOS-F166 件②: 信封续签专门出口
@@ -1308,7 +1330,8 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
                     "hint": str(rules["investigate_hint"]).format(**fill)}
         if action == "continue_wait":  # AIPOS-F171B 件①: already_running = 另一个 loop 在跑, 继续等它(提示同运行中)
             return {"action": action, "reason": reason, "detail": message or reason, "hint": str(rules["wait_hint"]).format(**fill)}
-        return {"action": action, "reason": reason, "detail": message or reason, "hint": str(rules["investigate_hint"]).format(**fill)}
+        return {"action": action, "reason": reason, "detail": (message or reason) + (f"({probe_note})" if probe_note else ""),
+                "hint": str(rules["investigate_hint"]).format(**fill)}
     if state not in rules["by_state"]:
         raise LoopRunRecordError(f"状态 {state!r} 不在 verbs.schema {STATUS_VERB}.next_action.by_state")
     action = str(rules["by_state"][state])
@@ -1399,6 +1422,45 @@ def _landing_probe_codes(view: dict[str, Any], rules: dict[str, Any], governance
     return [], ""
 
 
+def _return_header_probe(view: dict[str, Any], rules: dict[str, Any], governance_root: Path, reason: str) -> tuple[str, str]:
+    """AIPOS-F204 件③(声明 routine_rejections.return_header_probe): 以所列结束原因结束的运行 → 以产物入口同一校验
+    (artifact_ingest.validate_task_artifact 的 header_problem; 只读)复核本卡此刻的交回: 报告头可纠正 = (视同结束原因, "");
+    否则 ("", "")。复核出错 = ("", 原文)(调用方写进 detail, 照旧判)。"""
+    probe = (rules.get("routine_rejections") or {}).get("return_header_probe")
+    if not isinstance(probe, dict) or reason not in (probe.get("end_reasons") or []):
+        return "", ""
+    task_id = str(view.get("task_id") or "").strip()
+    if not task_id:
+        return "", ""
+    from tools.aipos_cli.artifact_ingest import validate_task_artifact
+    from tools.aipos_cli.loop_driver import load_loop_contract, report_fix_declaration
+
+    try:
+        check = validate_task_artifact(task_id, Path(governance_root))
+    except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        return "", f"交回报告头复核出错: {type(exc).__name__}: {exc}"
+    problem = check.get("header_problem")
+    if isinstance(problem, dict) and problem.get("correctable"):
+        return str(report_fix_declaration(load_loop_contract(), "executor")["end_reason"]), ""
+    return "", ""
+
+
+def header_fix_prompt_value(governance_root: Path, task_id: str) -> str:
+    """AIPOS-F204 件③: 修法占位 {header_fix_prompt} 的实值 = 按本卡此刻交回渲染的修交回报告头指令(唯一渲染
+    loop_driver.executor_report_fix_prompt; 判定 artifact_ingest.return_header_problem); 此刻已无可纠正问题 / 复核出错 = 一句说明。"""
+    from tools.aipos_cli.artifact_ingest import validate_task_artifact
+    from tools.aipos_cli.loop_driver import executor_report_fix_prompt, load_loop_contract
+
+    try:
+        check = validate_task_artifact(task_id, Path(governance_root))
+    except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        return f"(复核本卡交回出错, 给不出指令: {type(exc).__name__}: {exc})"
+    problem = check.get("header_problem")
+    if not isinstance(problem, dict) or not problem.get("correctable"):
+        return f"(本卡此刻的交回报告头已无可纠正问题: 入口校验 {check.get('category') or 'OK'}; 直接用原命令续跑 loop)"
+    return executor_report_fix_prompt(load_loop_contract(), str(check.get("path") or ""), problem)
+
+
 def _routine_action(view: dict[str, Any], rules: dict[str, Any], governance_root: Path, reason: str, message: str,
                     earlier_end_codes: list[Any] | None) -> dict[str, Any] | None:
     """AIPOS-F150 件②: owner_needed 类结束 → 例行门拒判定。end_codes 为空或含非例行码 = None(调用方照旧 owner_needed)。
@@ -1466,6 +1528,8 @@ def _routine_end_reason_action(view: dict[str, Any], rules: dict[str, Any], gove
         # AIPOS-F179 item 3: BLOCK reason excerpt + re-audit command (single rendering next_resolver.reaudit_command)
         values = {**values, **audit_blocked_fix_values(governance_root, task_id, actor=str(view.get("driver") or ""),
                                                        policy_ref=str(view.get("envelope") or ""))}
+    if any("{header_fix_prompt}" in str(step) for step in routine["end_reasons"][reason]["fix"]):
+        values = {**values, "header_fix_prompt": header_fix_prompt_value(governance_root, task_id)}  # AIPOS-F204 件③
     where = f"end_reasons.{reason}.fix"
     fix = [_render_routine(step, values, where) for step in routine["end_reasons"][reason]["fix"]]
     resume = _render_routine(routine["resume_hint"], values, "resume_hint")

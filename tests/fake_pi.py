@@ -9,7 +9,8 @@
   pi -p <prompt> --mode json [--model <id>] --session-id <id>
                               AIPOS-F171B: 会话按 id 落 FAKE_HARNESS_LOG/pi_sessions/<id>.json(首次 = 记下 kickoff; 已存在 = 同会话续接,
                               追加本次指令)。续接时 argv 落 <卡号>.argv.resume<k>.json(指令显示为 <resume>), 指令原文落
-                              <卡号>.resume<k>.prompt; exec 假 harness 时传原 kickoff, 环境 FAKE_PI_RESUMES=<k>(首次 0)。
+                              <卡号>.resume<k>.prompt; exec 假 harness 时传原 kickoff, 环境 FAKE_PI_RESUMES=<k>(首次 0);
+                              AIPOS-F204: 续接指令原文另经环境 FAKE_PI_PROMPT 交假 harness(首次 = 空)。
 """
 from __future__ import annotations
 
@@ -59,6 +60,7 @@ def launch(argv: list[str]) -> int:
     if resumes:
         Path(log, f"{card}.resume{resumes}.prompt").write_text(prompt, encoding="utf-8")
     os.environ["FAKE_PI_RESUMES"] = str(resumes)
+    os.environ["FAKE_PI_PROMPT"] = prompt if resumes else ""  # AIPOS-F204: the resume instruction (report-header fix values)
     os.execv(sys.executable, [sys.executable, str(FAKE_HARNESS), kickoff])
     return 0  # 不可达(execv 替换进程)
 
