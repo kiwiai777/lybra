@@ -1743,12 +1743,13 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
             else:
                 sys.stdout.write(vr.helper_source())
             return 0
-        # AIPOS-F203 件②: 按 run 查询口(唯一实现 validation_root.run_helper_lookup); 项目脚本运行时取摘要, 禁写死
-        target = _project_write_target(args, home, args.name)
-        if target is None:
-            return 1
+    target = _project_write_target(args, home, args.name)
+    if target is None:
+        return 1
+    root = Path(target["project_root"])
+    if args.vr_command == "helper":  # AIPOS-F203 件②: 按 run 查询口(唯一实现 validation_root.run_helper_lookup); 项目脚本运行时取摘要, 禁写死
         try:
-            got = vr.run_helper_lookup(Path(target["project_root"]), args.decl_id, args.run_id)
+            got = vr.run_helper_lookup(root, args.decl_id, args.run_id)
         except vr.ValidationRootError as exc:
             print(f"Error: {exc.code}(不下发 helper)", file=sys.stderr)
             for problem in exc.problems:
@@ -1764,10 +1765,6 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
         else:
             sys.stdout.write(got["source"])
         return 0
-    target = _project_write_target(args, home, args.name)
-    if target is None:
-        return 1
-    root = Path(target["project_root"])
     if args.vr_command == "list":
         try:
             entries = vr.project_validation_roots(root)
