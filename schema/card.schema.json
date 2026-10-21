@@ -377,7 +377,7 @@
     "owner_check_ref": {
       "type": "string",
       "required": false,
-      "description": "AIPOS-F175 件③: 本卡修复的 Owner 抽查「不符」记录 id(owner_verifications 记录文件名去 .md)。`lybra roadmap verify --result mismatch --confirm` 自动起草修复卡时写入(卡同时挂同一 milestone / criteria); 路线图推导据此把标准显示为「不符·修复卡 <本卡>」。"
+      "description": "AIPOS-F175 件③: 本卡修复的 Owner 抽查「不符」记录 id(owner_verifications 记录文件名去 .md)。`lybra roadmap verify --result mismatch --confirm` 自动起草修复卡时写入(卡同时挂同一 milestone / criteria); 路线图推导据此把标准显示为「不符·修复卡 <本卡>」。AIPOS-F207: `lybra queue correct --confirm` 发布的承接卡写 = 本次 Owner 纠正决策记录的 decision_id(争议标记 followup_task_id 同指本卡), 推导显示「不符·承接卡 <本卡>」。"
     },
     "referenced_files": {
       "type": "array",
@@ -745,6 +745,13 @@
       "required": false,
       "written_by": "board_adapter mark_concluded / close(conclusion_note 参数, verbs.schema 声明)",
       "description": "AIPOS-F108 件①(M9): 结卡说明(含承接声明时登记承接世系 continuation_task_id)"
+    },
+    "conclusion_outcome": {
+      "type": "string",
+      "required": false,
+      "enum": ["pass", "block"],
+      "written_by": "board_adapter.mark_concluded_task(--outcome, 缺省 dependency_gate.conclusion.default_outcome)",
+      "description": "AIPOS-F207 件①: 顾问复核结案(mark-concluded)的结论 pass | block——依赖判定(task_complexity.closure_state)与门生 closure 等价: pass = 满足 closure 依赖, block = 不满足(拒因提示改依赖); F207 前存量卡无本键 = 按 dependency_gate.conclusion.legacy_block_pattern 读 conclusion_note"
     },
     "draft_validation_summary": {
       "type": "string",
@@ -1193,10 +1200,28 @@
     "description": "AIPOS-F133 件③: 依赖满足判据唯一声明——卡 depends_on 的每一项都满足 dependency_condition 才算依赖满足(全部, 非任一); 判据只读被依赖卡的门生记录(record_writer.gate_record_files / 裁决另经 audit_helpers.is_gate_born_verdict_metadata), 不读卡面自报字段(dependency_executor_status / dependency_audit_readiness / dependency_audit_status 降为展示用运行时字段)。唯一实现 task_complexity.dependencies_satisfied(unmet_dependencies 给拒因); 认领(queue_mutation claim 全部 task_class; validator 对 dependency_gate=true 的 task_class 另要求声明条件)、推导核 pending→claim 与 lybra next「下一张」共用。卡缺 dependency_condition = default_condition。",
     "default_condition": "closure",
     "conditions": {
-      "closure": {"record_kind": "closures", "description": "被依赖卡已结案(门生 N6 结案记录在)"},
+      "closure": {"record_kind": "closures", "accepts_conclusion": true, "description": "被依赖卡已结案(门生 N6 结案记录在; AIPOS-F207: 或顾问复核结案且结论 pass, 见 conclusion)"},
       "executor_completion": {"record_kind": "returns", "description": "被依赖卡执行体已交回(门生 return 记录在)"},
       "audit_readiness": {"record_kind": "returns", "description": "被依赖卡已交回可审(门生 return 记录在)"},
       "audit_pass": {"record_kind": "audit_verdicts", "requires_pass_verdict": true, "description": "被依赖卡有门生 PASS 裁决记录(PASS 值域 = task_complexity.AUDIT_PASS_VALUES)"}
+    },
+    "conclusion": {
+      "description": "AIPOS-F207 件①(gap #215, chris 岚图 LANTU-ENV3 实撞): 顾问复核结案(lybra mark-concluded)与门生 closure 在依赖判定上等价——唯一判定 task_complexity.closure_state(依赖判据 unmet_dependencies 与 loop 结案出口 loop_driver._has_closure 同读)。被依赖卡在 queue_state 且卡面 marker_field = marker_value(mark-concluded 写入)= 顾问复核结案; 结论 = 卡面 outcome_field(mark-concluded --outcome 写入, 值域 outcomes); 缺(F207 前存量)= conclusion_note 匹配 legacy_block_pattern 判 block, 否则 default_outcome。outcomes.<值>.satisfies = 是否满足 accepts_conclusion 的条件; 不满足 = 拒因 block_refusal(提示改依赖为承接卡或移除: queue amend)。",
+      "queue_state": "completed",
+      "marker_field": "auto_closed_by",
+      "marker_value": "AIPOS-354_mark_concluded",
+      "outcome_field": "conclusion_outcome",
+      "note_field": "conclusion_note",
+      "outcomes": {"pass": {"satisfies": true}, "block": {"satisfies": false}},
+      "default_outcome": "pass",
+      "legacy_block_pattern": "(?<![A-Za-z])BLOCK(?:ED)?(?![A-Za-z])",
+      "block_refusal": "DEPENDENCY_CONCLUDED_BLOCK: 依赖卡 {dep} 以 BLOCK 结案(顾问复核结案 mark-concluded; 结论来源 {source}{note_part}), 不满足 {condition}。出口: 依赖卡以 BLOCK 结案, 请改依赖为承接卡或移除(queue amend): `lybra --workspace-root {governance_root} queue amend --task-id {task_id} --actor <你的顾问实例> --amendments '{amend_json}' --amendment-reason \"{dep} 以 BLOCK 结案, 移除该依赖\" --dry-run`(核对后去掉 --dry-run)",
+      "default_note": "mark-concluded 未给 --outcome, 按缺省 {outcome} 记结论(不读 conclusion_note 判); conclusion_note 含 BLOCK 字样 = 本卡实为 BLOCK 结案时请加 --outcome block 重做预演"
+    },
+    "disputes": {
+      "description": "AIPOS-F207 件②: Owner 纠正已结案卡(lybra queue correct)后, 原 closure / 裁决不改, 只追加争议标记记录(task_complexity.closure_disputes 唯一读取)。record_kinds 所列记录类的依赖条件(依赖已结案 / 审计通过)遇被依赖卡有争议标记 = 不满足, 拒因 refusal(改依赖为承接卡)。",
+      "record_kinds": ["closures", "audit_verdicts"],
+      "refusal": "DEPENDENCY_CLOSURE_DISPUTED: 依赖卡 {dep} 的结案已被 Owner 纠正(决策 {decision_id}; 承接卡 {followup}), 原结案不再满足 {condition}。出口: 改依赖为承接卡(queue amend): `lybra --workspace-root {governance_root} queue amend --task-id {task_id} --actor <你的顾问实例> --amendments '{amend_json}' --amendment-reason \"{dep} 结案被 Owner 纠正, 改依赖承接卡 {followup}\" --dry-run`"
     }
   },
   "restricted_amend": {

@@ -3883,6 +3883,7 @@ def _derive_next_step(
                         "command": (f"# 非代码卡(task_mode={task_mode}, 只写治理根):顾问复核交回的产出清单"
                                     f"(指纹 {bound.get('outputs_digest') or '(交回记录无绑定)'})后结案: {close_cmd}"),
                         "verb": "lybra_mark_concluded",
+                        "advisor_command": close_cmd,  # AIPOS-F207 件③: loop status advisor_review_close 的 hint 读此(不解析注释行)
                         "missing_records": [],
                         "suggested_action": f"顾问复核产出清单 {bound.get('outputs') or []} 后结案(先加 --dry-run 预演)",
                         "notes": "非代码卡快车道(只写治理根, AIPOS-F197):顾问复核后 mark-concluded 结案",

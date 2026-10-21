@@ -2340,6 +2340,20 @@ def build_parser() -> argparse.ArgumentParser:
     queue_supersede_mode.add_argument("--confirm", action="store_true", help="Write the decision record, move the card, land the writes")
     queue_supersede_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    # AIPOS-F207 件②: Owner 纠正已结案卡(声明 transitions queue_mutations.correct / verbs.lybra_queue_correct; 唯一实现 board_adapter.correct_closed_task)
+    queue_correct_parser = queue_subparsers.add_parser("correct", help="AIPOS-F207: the Owner overturns a closed card — record the correction (owner decision record), mark the original closure / verdict as disputed (records untouched), publish a follow-up card inheriting lane / criteria (preview by default, --confirm writes and lands)")
+    queue_correct_parser.add_argument("--task-id", required=True, help="Closed card being corrected (completed)")
+    queue_correct_parser.add_argument("--relayed-by", default=None, help="Advisor instance relaying the Owner's words (decision captured_by; follow-up card created_by and publish signer)")
+    queue_correct_parser.add_argument("--owner-words", default=None, help="Owner's words, one line")
+    queue_correct_parser.add_argument("--reason", default=None, help="Optional: why the closure was wrong")
+    queue_correct_parser.add_argument("--followup-title", default=None, help="Optional: follow-up card title")
+    queue_correct_parser.add_argument("--owner-ref", default=None, help="Optional: where the Owner ruled (session ref / inbox item id)")
+    queue_correct_parser.add_argument("--connection-json", default=None, help="Credential file for the publish signer check (default: governance root .lybra/connection.json)")
+    queue_correct_mode = queue_correct_parser.add_mutually_exclusive_group()
+    queue_correct_mode.add_argument("--dry-run", action="store_true", help="Preview, zero writes (default)")
+    queue_correct_mode.add_argument("--confirm", action="store_true", help="Write the decision, dispute marker and follow-up card, then land the writes")
+    queue_correct_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     queue_return_repair_parser = queue_subparsers.add_parser("return-repair", help="Repair a stuck return")
     queue_return_repair_parser.add_argument("--task-id", required=True, help="Task ID with stuck return")
     queue_return_repair_parser.add_argument("--actor", required=True, help="Actor performing the repair")
@@ -3487,6 +3501,12 @@ def build_parser() -> argparse.ArgumentParser:
     mark_concluded_parser.add_argument("--actor", default="system", help="Actor marking concluded")
     mark_concluded_parser.add_argument("--report-path", help="Report path (optional)")
     mark_concluded_parser.add_argument("--conclusion-note", help="Conclusion note (optional)")
+    # AIPOS-F207 件①: 顾问复核结论(值域 card.schema dependency_gate.conclusion.outcomes); block = 不满足他卡 closure 依赖
+    from tools.aipos_cli.task_complexity import conclusion_outcomes
+
+    mark_concluded_parser.add_argument("--outcome", choices=list(conclusion_outcomes()), default=None,
+                                       help="AIPOS-F207: review conclusion pass|block (block = does not satisfy other cards' closure "
+                                            "dependency, same as gate closure judgement); default pass with a hint")
     mark_concluded_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     mark_concluded_parser.add_argument("--json", action="store_true", help="Output JSON")
 
@@ -6423,6 +6443,39 @@ def main(argv: list[str] | None = None) -> int:
             return _emit_landing(landing)
         return 0 if landing is None or landing["landed"] else int(landing["exit_code"])
 
+    if args.command == "queue" and getattr(args, "queue_command", None) == "correct":
+        # AIPOS-F207 件②: Owner 纠正已结案卡(唯一实现 board_adapter.correct_closed_task; 写出文件经 queue_writers 落账)
+        from tools.aipos_cli.board_adapter import correct_closed_task, render_correct_text
+        from tools.aipos_cli.owner_inbox import InboxUsageError
+
+        try:
+            result = correct_closed_task(args.task_id, relayed_by=args.relayed_by, owner_words=args.owner_words, reason=args.reason,
+                                         followup_title=args.followup_title, owner_ref=args.owner_ref, dry_run=not args.confirm,
+                                         repo_root=repo_root, connection_json=_queue_gate_connection_json(args, repo_root))
+        except InboxUsageError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
+        except (FileNotFoundError, OSError, ValueError, LookupError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        landing = None
+        if args.confirm and result.get("written"):
+            landing = _land_queue_write(repo_root, result["written"], actor=str(result.get("relayed_by") or args.relayed_by),
+                                        subcommand="correct", task_id=result["task_id"])
+            result["landing"] = _landing_view(landing)
+        if args.json:
+            print(render_json(result))
+        else:
+            for line in render_correct_text(result):
+                print(line)
+        if not result.get("ok"):
+            if landing is not None and not args.json:
+                _emit_landing(landing)
+            return 1
+        if landing is not None and not args.json:
+            return _emit_landing(landing)
+        return 0 if landing is None or landing["landed"] else int(landing["exit_code"])
+
     if args.command == "queue" and getattr(args, "queue_command", None) == "return-repair":
         # AIPOS-370F2: return-repair — diagnose and repair stuck return
         from tools.aipos_cli.task_loader import find_task_by_id
@@ -7826,6 +7879,7 @@ def main(argv: list[str] | None = None) -> int:
                 report_path=args.report_path,
                 conclusion_note=args.conclusion_note,
                 dry_run=args.dry_run,
+                outcome=args.outcome,
             )
         except (FileNotFoundError, OSError, ValueError) as exc:
             error_msg = f"Error: {exc}"

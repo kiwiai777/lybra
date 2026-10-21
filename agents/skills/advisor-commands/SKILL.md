@@ -232,6 +232,21 @@ lybra loop --workspace-root <治理根> --task-id <新卡>
 拒: 原卡工作树有未提交改动(产品不代提交 → 先让执行体在原卡分支提交, 再重跑)/ 原卡无卡分支 / 新卡已认领或卡分支已存在 / 新卡已记不同承继。
 认领时原卡分支 tip 已不是记录的那个 = 认领被拒(CARRY_TIP_MOVED), 按当前 tip 重做 supersede 或改出新卡。审计与合入的差异基线仍按 main(承继提交一并审), 结案记录写承继关系; 交回的车道检查同按 main...新卡分支, 更正卡 lane.paths 须覆盖原卡已改的路径。
 
+#### `lybra queue correct`(AIPOS-F207)
+**何时用**:Owner 推翻**已结案**的卡(审计误判通过 / 顾问误结案, 要按原范围重做)。在途卡改目标用上面的 `queue supersede`;
+**不要**手改卡面 / 记录, 也不要另起一张不挂原卡的新卡(路线图标准与依赖会仍认原结案)。
+```bash
+# ① 预演(缺省, 零写入): 列原结案链(closure / 裁决 / 交回 + sha256)、将写的决策记录、争议标记、承接卡草稿与路线图标准变化
+lybra queue correct --task-id <已结案卡> --relayed-by <你的顾问实例> --owner-words "<Owner原话>" --reason "<原结案错在哪>"
+# ② 确认: 决策记录(同 owner decide --relayed-by)→ 争议标记(原记录不改)→ 承接卡起草并发布(继承 lane / milestone / criteria /
+#    task_mode / harness, 卡专属落点改指承接卡)→ 自动落账; 输出承接卡 loop 命令
+lybra queue correct --task-id <已结案卡> --relayed-by <你的顾问实例> --owner-words "<Owner原话>" --reason "<原结案错在哪>" --confirm
+# ③ 按输出跑承接卡 loop
+```
+承接卡号 = `<原卡>C<序号>`(首个未占用); `--followup-title` 可改标题。之后: 依赖原卡的卡认领被拒并提示改依赖为承接卡(`queue amend`);
+路线图该卡挂的标准(无其他已验证卡时)= 「不符」· 承接卡; 收件箱「已定待转达」在承接卡开跑前给转达话术。拒: 卡不在 completed /
+`--relayed-by` 不是顾问角色类实例 / 该卡已纠正过(承接卡结案后仍不符 = 纠正承接卡)。承接卡发布被拒 = 决策与争议标记照落账, 输出手工发布命令。
+
 #### `lybra queue rework`
 **何时用**:追加返工节到卡面(FAIL 裁决后,点杀清单+验收标准)(顾问职责).
 ```bash
@@ -520,7 +535,9 @@ lybra project validation-root run-start <项目名> --home-root <home根> --id <
 ```bash
 lybra mark-concluded --task-id <卡ID> --actor <你的顾问实例> --report-path <Return相对路径> --conclusion-note "顾问复核: 产出清单逐项核对通过" --dry-run
 ```
-   (`--report-path` 用 loop 结束原文给出的 Return 相对路径; 去掉 `--dry-run` 即结案)。交回后产出被改 = 拒 `INGEST_OUTPUTS_CHANGED`(让执行体按改后产出
+   (`--report-path` 用 loop 结束原文给出的 Return 相对路径; 去掉 `--dry-run` 即结案)。**执行体如实 BLOCK、你按 BLOCK 结案**时加
+   `--outcome block`(AIPOS-F207): 依赖本卡的卡不会被当作满足(与门生结案同一判定), 认领拒因提示改依赖为承接卡或移除(`queue amend`);
+   不写 `--outcome` = 按 pass 记并提示。loop 停在这一步时 `lybra loop status` 给 advisor_fix(顾问复核结案), 不进 Owner 收件箱。交回后产出被改 = 拒 `INGEST_OUTPUTS_CHANGED`(让执行体按改后产出
    重写 Return, loop 重交回)。之后 N6 落账照常由 loop / `lybra next` 给出。
 5. **声明独立审计**: 审计 pi 开工提示「工作树: 不建(被审卡只写治理根…)」, 报告必填 `verdict` + `outputs_digest`(产品给值, 照抄); 入口与门侧裁决
    都核「此刻清单指纹 = 交回绑定」; finalize 无合入(finalization `merge_commit = outputs:<指纹>`, 不推送不部署)后结案。

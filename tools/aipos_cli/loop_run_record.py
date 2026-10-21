@@ -1114,6 +1114,11 @@ def next_action_declaration(run_decl: dict[str, Any], contract: dict[str, Any] |
                               f"owner_needed 缺事由 {owner_gaps + escalations}"
                               f"(须覆盖 lybra_loop.run_record.states / end_reasons)")
     _check_routine_rejections(decl["routine_rejections"])
+    review = decl.get("advisor_review_close")  # AIPOS-F207 件③: 可选; 在则结束原因须已声明、文案齐
+    if review is not None and (not isinstance(review, dict) or not isinstance(review.get("end_reasons"), list)
+                               or set(review["end_reasons"]) - reasons or not isinstance(review.get("verbs"), list) or not review["verbs"]
+                               or any(not isinstance(review.get(k), str) or not review[k] for k in ("detail", "hint"))):
+        raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.advisor_review_close 须含已声明结束原因的 end_reasons、非空 verbs 与 detail / hint")
     # AIPOS-F166 件②: 信封续签映射——所列结束原因须已声明、by_end_reason 判 owner_needed, reason 须有事由
     renew = decl["envelope_renew"]
     renew_ends = renew.get("end_reasons") if isinstance(renew, dict) else None
@@ -1317,6 +1322,9 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
         if action == "owner_needed" and reason in (rules["envelope_renew"].get("end_reasons") or []):
             return _envelope_renew_action(view, rules, reason, message, fill)  # AIPOS-F166 件②: 信封续签专门出口
         if action == "owner_needed":
+            review = _advisor_review_close(view, rules, governance_root, reason)
+            if review is not None:  # AIPOS-F207 件③: 推导核建议 = 顾问复核结案 → 顾问自处理, 不进 Owner 收件箱
+                return review
             probe_note = ""
             if not view.get("end_codes"):  # AIPOS-F195 件③: 落账被拒而无码 = N6 同一提交口预演复核(拒因仅为产物槽代码文件 = 例行)
                 probed, probe_note = _landing_probe_codes(view, rules, governance_root, reason)
@@ -1362,6 +1370,30 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
     elif state == "loop_dead":
         detail = "loop 进程已不在而运行记录未写结束"
     return {"action": action, "reason": state, "detail": detail or state, "hint": str(rules["investigate_hint"]).format(**fill)}
+
+
+def _advisor_review_close(view: dict[str, Any], rules: dict[str, Any], governance_root: Path, reason: str) -> dict[str, Any] | None:
+    """AIPOS-F207 件③(声明 next_action.advisor_review_close): 所列结束原因的运行, 推导核此刻对本卡的建议动词 ∈ verbs = advisor_fix
+    (reason advisor_review_close; hint = 推导核给的顾问命令加 --dry-run)。推导唯一 next_resolver.derive_next_step; 不适用 / 推导核已不给该动词 = None。"""
+    spec = rules.get("advisor_review_close")
+    task_id = str(view.get("task_id") or "").strip()
+    if not isinstance(spec, dict) or reason not in (spec.get("end_reasons") or []) or not task_id:
+        return None
+    from tools.aipos_cli.next_resolver import derive_next_step
+
+    try:
+        derivation = derive_next_step(task_id, Path(governance_root))
+    except (OSError, ValueError, LookupError) as exc:  # 推导不了 = 不改判(原 owner_needed 照旧, 原因见 lybra next)
+        return {"action": "owner_needed", "reason": reason, "end_reason": reason,
+                "detail": f"{rules['owner_reasons'][reason]}(顾问复核结案判定推导出错: {type(exc).__name__}: {exc})",
+                "hint": str(rules["investigate_hint"]).format(task_id=task_id, governance_root=str(governance_root))}
+    command = str(derivation.get("advisor_command") or "").strip()
+    if str(derivation.get("verb") or "") not in spec["verbs"] or not command:
+        return None
+    fill = {"task_id": task_id, "command": command, "suggested_action": str(derivation.get("suggested_action") or ""),
+            "governance_root": str(governance_root)}
+    return {"action": "advisor_fix", "reason": "advisor_review_close", "end_reason": reason,
+            "detail": str(spec["detail"]).format(**fill), "hint": str(spec["hint"]).format(**fill)}
 
 
 def _resource_wait_kind() -> str:

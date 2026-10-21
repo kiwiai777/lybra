@@ -87,7 +87,109 @@ def dependency_gate_declaration() -> dict[str, Any]:
             raise SchemaLoadError(f"card.schema.json dependency_gate.conditions.{name} 缺 record_kind")
     if decl.get("default_condition") not in conditions:
         raise SchemaLoadError("card.schema.json dependency_gate.default_condition 未声明或不在 conditions 内")
+    # AIPOS-F207 件①②: 顾问复核结案(conclusion)与 Owner 纠正争议标记(disputes)声明
+    conclusion = decl.get("conclusion")
+    need = ("queue_state", "marker_field", "marker_value", "outcome_field", "note_field", "outcomes", "default_outcome",
+            "legacy_block_pattern", "block_refusal", "default_note")
+    if not isinstance(conclusion, dict) or any(not conclusion.get(k) for k in need):
+        raise SchemaLoadError(f"card.schema.json dependency_gate.conclusion 未声明齐 {list(need)}")
+    outcomes = conclusion["outcomes"]
+    if (not isinstance(outcomes, dict) or conclusion["default_outcome"] not in outcomes
+            or any(not isinstance(v, dict) or not isinstance(v.get("satisfies"), bool) for v in outcomes.values())):
+        raise SchemaLoadError("card.schema.json dependency_gate.conclusion.outcomes 须为 {值: {satisfies: bool}} 且含 default_outcome")
+    disputes = decl.get("disputes")
+    if (not isinstance(disputes, dict) or not isinstance(disputes.get("record_kinds"), list)
+            or not str(disputes.get("refusal") or "")):
+        raise SchemaLoadError("card.schema.json dependency_gate.disputes(record_kinds / refusal)未声明齐")
     return decl
+
+
+def conclusion_outcomes() -> tuple[str, ...]:
+    """AIPOS-F207 件①: mark-concluded --outcome 值域(card.schema dependency_gate.conclusion.outcomes 键, 声明序)。"""
+    return tuple(dependency_gate_declaration()["conclusion"]["outcomes"])
+
+
+def conclusion_view(metadata: dict[str, Any]) -> dict[str, Any] | None:
+    """AIPOS-F207 件①: 卡面 → 顾问复核结案结论(唯一解析)。非顾问复核结案(卡面无 marker)= None。
+    返回 {outcome, source(explicit | legacy_note | default), note, satisfies}; 卡面 outcome 值不在声明 = ValueError(fail-closed, 不猜)。"""
+    import re
+
+    decl = dependency_gate_declaration()["conclusion"]
+    if _text(metadata.get(decl["marker_field"])) != str(decl["marker_value"]):
+        return None
+    note = _text(metadata.get(decl["note_field"]))
+    raw = _lower(metadata.get(decl["outcome_field"]))
+    if raw:
+        if raw not in decl["outcomes"]:
+            raise ValueError(f"卡 {metadata.get('task_id')} 的 {decl['outcome_field']}={raw!r} 不在 {list(decl['outcomes'])}")
+        outcome, source = raw, "explicit"
+    elif re.search(str(decl["legacy_block_pattern"]), note):
+        outcome, source = "block", "legacy_note"
+    else:
+        outcome, source = str(decl["default_outcome"]), "default"
+    return {"outcome": outcome, "source": source, "note": note, "satisfies": bool(decl["outcomes"][outcome]["satisfies"])}
+
+
+def dispute_event_type() -> str:
+    """AIPOS-F207 件②: Owner 纠正争议标记的事件类型(transitions.schema queue_mutations.correct.dispute_event_type; 该声明全段由
+    queue_mutation.correct_declaration 校验)。缺 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    value = str(((load_schema("transitions").get("queue_mutations") or {}).get("correct") or {}).get("dispute_event_type") or "")
+    if not value:
+        raise SchemaLoadError("transitions.schema.json queue_mutations.correct.dispute_event_type 未声明")
+    return value
+
+
+def closure_disputes(governance_root: "Path", task_id: str) -> list[dict[str, Any]]:
+    """AIPOS-F207 件②: 卡的 Owner 纠正争议标记(records/events/<卡>/<dispute_event_type>_*.md; 唯一读取——结案口径 closure_state /
+    依赖判定、路线图推导 roadmap_drift、收件箱转达、queue correct 重复判定同读)。按标记时刻旧→新。原 closure / 裁决记录不改。
+    返回 [{path, decision_id, followup_task_id, owner_words, relayed_by, reason, marked_at, disputed_records}]; 读不出 = 原异常上抛。"""
+    from pathlib import Path as _Path
+
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.record_writer import record_dir, record_files_with_prefix  # 延迟: record_writer→records→task_loader→本模块 循环
+
+    event_type = dispute_event_type()
+    out: list[dict[str, Any]] = []
+    for path in record_files_with_prefix(record_dir(_Path(governance_root), "events", task_id), event_type):
+        fm, _body = require_frontmatter(path)
+        if str(fm.get("event_type") or "") != event_type:
+            continue
+        out.append({"path": str(path), "decision_id": fm.get("decision_id"), "followup_task_id": fm.get("followup_task_id"),
+                    "owner_words": fm.get("owner_words"), "relayed_by": fm.get("relayed_by"), "reason": fm.get("reason"),
+                    "marked_at": str(fm.get("timestamp") or ""), "disputed_records": fm.get("disputed_records") or []})
+    out.sort(key=lambda d: (d["marked_at"], d["path"]))
+    return out
+
+
+def closure_state(governance_root: "Path", task_id: str) -> dict[str, Any]:
+    """AIPOS-F207 件①: 卡的结案口径唯一判定(依赖判据 unmet_dependencies 与 loop 结案出口 loop_driver._has_closure 同读)。
+    门生 closure 记录在 = kind closure; 否则卡在 conclusion.queue_state 且为顾问复核结案 = kind conclusion(+ conclusion_view);
+    否则 kind None。另带 disputes = Owner 纠正争议标记(task_complexity.closure_disputes 唯一读取; 原记录不改)。
+    返回 {task_id, kind, closure_files, conclusion, disputes}。卡面 / 记录读不出 = 原异常上抛(调用方点名, 不当作已结案)。"""
+    from pathlib import Path as _Path
+
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.record_writer import gate_record_files, record_dir  # 延迟: record_writer→records→task_loader→本模块 循环
+    from tools.aipos_cli.task_loader import find_task_card
+
+    root = _Path(governance_root)
+    decl = dependency_gate_declaration()["conclusion"]
+    files = gate_record_files(record_dir(root, "closures", task_id), "closures")
+    out: dict[str, Any] = {"task_id": task_id, "kind": None, "closure_files": [str(p) for p in files], "conclusion": None,
+                           "disputes": closure_disputes(root, task_id)}
+    if files:
+        out["kind"] = "closure"
+        return out
+    path, _state = find_task_card(root, task_id, states=(str(decl["queue_state"]),))
+    if path is None:
+        return out
+    meta, _body = require_frontmatter(path)
+    view = conclusion_view({**meta, "task_id": task_id})
+    if view is not None:
+        out["kind"], out["conclusion"] = "conclusion", view
+    return out
 
 
 def unmet_dependencies(metadata: dict[str, Any], governance_root: "Path | None") -> list[str]:
@@ -117,7 +219,29 @@ def unmet_dependencies(metadata: dict[str, Any], governance_root: "Path | None")
     kind = str(spec["record_kind"])
     root = _Path(governance_root)
     unmet: list[str] = []
+    gate = dependency_gate_declaration()
     for dep in depends_on:
+        # AIPOS-F207 件①②: 结案口径唯一判定 closure_state(顾问复核结案结论 / Owner 纠正争议标记)
+        if spec.get("accepts_conclusion") is True or kind in gate["disputes"]["record_kinds"]:
+            try:
+                state = closure_state(root, dep)
+            except (OSError, ValueError, FrontmatterReadError) as exc:
+                unmet.append(f"DEPENDENCY_UNMET: 依赖 {dep} 的结案口径读不出(fail-closed): {type(exc).__name__}: {exc}")
+                continue
+            if state["disputes"] and kind in gate["disputes"]["record_kinds"]:
+                latest = state["disputes"][-1]
+                unmet.append(_dependency_refusal(gate["disputes"]["refusal"], metadata, depends_on, dep, condition, root,
+                                                 decision_id=latest.get("decision_id") or "?",
+                                                 followup=latest.get("followup_task_id") or "?",
+                                                 replace=latest.get("followup_task_id")))
+                continue
+            if spec.get("accepts_conclusion") is True and state["kind"] == "conclusion":
+                view = state["conclusion"]
+                if not view["satisfies"]:
+                    note = view["note"]
+                    unmet.append(_dependency_refusal(gate["conclusion"]["block_refusal"], metadata, depends_on, dep, condition, root,
+                                                     source=view["source"], note_part=f"; 结论说明「{note[:120]}」" if note else ""))
+                continue
         files = gate_record_files(record_dir(root, kind, dep), kind)
         satisfied = bool(files)
         problems: list[str] = []
@@ -142,6 +266,20 @@ def unmet_dependencies(metadata: dict[str, Any], governance_root: "Path | None")
                 f"出口: 先把 {dep} 推进到满足 {condition}, 本卡再认领(判据 card.schema dependency_gate)"
             )
     return unmet
+
+
+def _dependency_refusal(template: str, metadata: dict[str, Any], depends_on: list[str], dep: str, condition: str, root: "Path",
+                        replace: str | None = None, **values: Any) -> str:
+    """AIPOS-F207: 依赖拒因(声明模板)+ 出口 queue amend 预演命令(depends_on 去掉 dep; replace = 改依赖的承接卡, 非本卡且未列才换入)。"""
+    import json
+
+    task_id = _text(metadata.get("task_id")) or "<本卡>"
+    remaining = [d for d in depends_on if d != dep]
+    if replace and replace not in remaining and replace != task_id:
+        remaining.append(replace)
+    amend_json = json.dumps({"depends_on": remaining}, ensure_ascii=False)
+    return str(template).format(dep=dep, condition=condition, governance_root=str(root), task_id=task_id, amend_json=amend_json,
+                                **values)
 
 
 def dependencies_satisfied(metadata: dict[str, Any], governance_root: "Path | None") -> bool:

@@ -281,6 +281,17 @@ def validate_output_target_coverage(
 # 派生规则只声明在 card.schema.json intent_face 一处; 本模块只读不写死。
 # ---------------------------------------------------------------------------
 
+def machine_zone_section_titles() -> tuple[str, ...]:
+    """AIPOS-F207: 卡正文机器区节名(card.schema machine_zone.body_sections[].section_name; 发布按卡重新派生)。缺 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    sections = ((load_schema("card").get("machine_zone") or {}).get("body_sections")) or []
+    names = tuple(str(e.get("section_name") or "").strip() for e in sections if isinstance(e, dict))
+    if not names or any(not n for n in names):
+        raise SchemaLoadError("card.schema.json machine_zone.body_sections[].section_name 未声明")
+    return names
+
+
 def intent_face_declaration(repo_root: Path | None = None) -> dict[str, Any]:
     """读 card.schema intent_face(缺 = SchemaLoadError, fail-closed)。"""
     from tools.schema_loader import SchemaLoadError, load_schema

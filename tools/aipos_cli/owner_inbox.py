@@ -791,6 +791,7 @@ def collect_project_inbox(governance_root: Path, *, project: str | None = None, 
                         relays.append(entry)
         if categories is None or "needs_owner_card" in categories:
             relays += _released_relays(root, name, decl, errors)  # AIPOS-F201 item 3 (b)
+            relays += _correction_relays(root, name, decl, errors)  # AIPOS-F207 件②: 纠正已记、承接卡未开跑
     return {"project": name, "governance_root": str(root), "items": items, "decided_hidden": len(decided), "errors": errors,
             "relays": relays}
 
@@ -1043,6 +1044,49 @@ def _released_relays(root: Path, project: str, decl: dict[str, Any], errors: lis
                     "item_id": None, "decision_id": ruling.get("decision_id"), "choice": choice, "label": label,
                     "owner_words": ruling.get("owner_words"), "done_at": ruling.get("decided_at"),
                     "advisor_next": option_next(decl, choice, label, resume=resume, task_id=task_id, governance_root=root)})
+    return out
+
+
+def _correction_relays(root: Path, project: str, decl: dict[str, Any], errors: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """AIPOS-F207 件②(已定待转达): Owner 纠正已结案卡的裁决(选项 = transitions queue_mutations.correct.decision_choice, 窗口内)已记、
+    其争议标记(task_complexity.closure_disputes)所列承接卡仍 pending 且裁决后承接卡无 loop 运行 = 顾问未推进 → 转达(下一步 = 承接卡续跑命令)。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.queue_mutation import correct_declaration
+    from tools.aipos_cli.task_complexity import closure_disputes
+    from tools.aipos_cli.task_loader import find_task_card
+
+    choice = str(correct_declaration()["decision_choice"])
+    out: list[dict[str, Any]] = []
+    try:
+        rulings = [r for r in _all_rulings(root, decl) if str(r.get("allowed_next_action") or "") == choice]
+    except (OSError, ValueError, FrontmatterReadError) as exc:
+        errors.append({"project": project, "source": "纠正转达: 裁决记录", "error": f"{type(exc).__name__}: {exc}"})
+        return out
+    for ruling in rulings:
+        task_id = str(ruling.get("task_id") or "")
+        if not task_id or not _within_window(ruling.get("decided_at"), decl):
+            continue
+        try:
+            dispute = next((d for d in closure_disputes(root, task_id) if d.get("decision_id") == ruling.get("decision_id")), None)
+            followup = str((dispute or {}).get("followup_task_id") or "")
+            if not followup:
+                continue
+            path, state = find_task_card(root, followup)
+            if state != "pending" or path is None:
+                continue  # 未发布(纠正输出已给手工发布命令)/ 已认领推进 = 不转达
+            decided = _parse_utc(ruling.get("decided_at"))
+            if decided is not None and any((_parse_utc(m.get("started_at")) or decided) >= decided for m in _run_metas(root, followup)):
+                continue
+            advisor = card_driver(root, followup, require_frontmatter(Path(path))[0], decl)
+        except (OSError, ValueError, LookupError, RuntimeError, FrontmatterReadError) as exc:
+            errors.append({"project": project, "source": f"纠正转达 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        label = str(decl["options"][choice]["label"])
+        out.append({"kind": "decision", "advisor": advisor, "project": project, "governance_root": str(root), "task_id": task_id,
+                    "subject": f"{task_id} → {followup}", "item_id": None, "decision_id": ruling.get("decision_id"), "choice": choice,
+                    "label": label, "owner_words": ruling.get("owner_words"), "done_at": ruling.get("decided_at"),
+                    "advisor_next": option_next(decl, choice, label, resume=_resume_for(root, followup, advisor), task_id=task_id,
+                                                governance_root=root)})
     return out
 
 
@@ -1407,35 +1451,44 @@ def build_decision_payload(item: dict[str, Any], choice: str, note: str | None, 
     }
 
 
-def supersede_decision_payload(governance_root: Path, *, task_id: str, by: str, relayed_by: str, owner_words: str,
-                               owner_ref: str | None, from_state: str, decided_at: str, actor: str = "owner") -> dict[str, Any]:
-    """AIPOS-F184 件③: 撤换的 Owner 裁决 = 既有 owner_decision_record(与 decide 同一 payload 构造 build_decision_payload, 同一写路径
-    record_owner_decision + execute_dry_run)。所裁「事项」= 撤换本身(项目 = 治理根目录名, 类别 = 选项键, 主体 = 原卡, 锚点 = 新卡,
-    ID 经 item_id 唯一实现); allowed_next_action = transitions supersede.decision_choice(lybra_owner_inbox.options 同名选项);
-    decided_by_ref = actor(缺省 owner), captured_by = relayed_by(转达的顾问实例), Rationale = Owner 原话。owner_ref 进 refs。"""
-    from tools.aipos_cli.queue_mutation import supersede_declaration
-
+def queue_ruling_payload(governance_root: Path, *, choice: str, task_id: str, anchor: str, subject: str, relayed_by: str,
+                         owner_words: str, owner_ref: str | None, decided_at: str, note: str | None = None,
+                         actor: str = "owner") -> dict[str, Any]:
+    """队列写命令记 Owner 裁决的唯一构造(AIPOS-F184 supersede / AIPOS-F207 queue correct 共用): 所裁「事项」= 该写动作本身
+    (项目 = 治理根目录名, 类别 = 选项键 choice, 主体 = subject, 锚点 = anchor, ID 经 item_id 唯一实现); 记录 = 既有
+    owner_decision_record(与 decide 同一 payload 构造 build_decision_payload, 同一写路径 record_owner_decision + execute_dry_run);
+    allowed_next_action = choice(lybra_owner_inbox.options 同名选项, 未声明 = SchemaLoadError); decided_by_ref = actor(缺省 owner),
+    captured_by = relayed_by, Rationale = Owner 原话; note 进决策摘要; owner_ref 进 refs。"""
     decl = inbox_declaration()
-    choice = str(supersede_declaration()["decision_choice"])
     option = decl["options"].get(choice)
     if not isinstance(option, dict):
         from tools.schema_loader import SchemaLoadError
 
-        raise SchemaLoadError(f"verbs.{VERB}.options.{choice} 未声明(transitions supersede.decision_choice 引用)")
+        raise SchemaLoadError(f"verbs.{VERB}.options.{choice} 未声明(队列写命令记 Owner 裁决引用)")
     root = Path(governance_root).resolve()
     project = root.name
-    subject = f"{task_id} [{from_state}] → {by}"
-    iid = item_id(project, choice, task_id, by, decl)
+    iid = item_id(project, choice, task_id, anchor, decl)
     item = {"item_id": iid, "project": project, "governance_root": str(root), "category": choice,
             "category_label": str(option["label"]), "subject": subject, "task_id": task_id, "policy_id": None,
-            "ask": owner_words, "recommend": None, "impact": str(option["advisor_next"]), "anchor": by, "source": relayed_by,
+            "ask": owner_words, "recommend": None, "impact": str(option["advisor_next"]), "anchor": anchor, "source": relayed_by,
             "options": [{"key": choice, "label": str(option["label"])}], "decision_id": decision_id_for(iid, decl)}
-    payload = build_decision_payload(item, choice, None, actor, decided_at=decided_at, relayed_by=relayed_by,
+    payload = build_decision_payload(item, choice, note, actor, decided_at=decided_at, relayed_by=relayed_by,
                                      owner_words=owner_words, decl=decl)
     if owner_ref:
         payload["refs"] = list(payload["refs"]) + [str(owner_ref)]
         payload["owner_approval_evidence"]["refs"] = list(payload["owner_approval_evidence"]["refs"]) + [str(owner_ref)]
     return payload
+
+
+def supersede_decision_payload(governance_root: Path, *, task_id: str, by: str, relayed_by: str, owner_words: str,
+                               owner_ref: str | None, from_state: str, decided_at: str, actor: str = "owner") -> dict[str, Any]:
+    """AIPOS-F184 件③: 撤换的 Owner 裁决(构造 = queue_ruling_payload; 类别 = transitions supersede.decision_choice, 主体 = 原卡,
+    锚点 = 新卡)。"""
+    from tools.aipos_cli.queue_mutation import supersede_declaration
+
+    return queue_ruling_payload(governance_root, choice=str(supersede_declaration()["decision_choice"]), task_id=task_id, anchor=by,
+                                subject=f"{task_id} [{from_state}] → {by}", relayed_by=relayed_by, owner_words=owner_words,
+                                owner_ref=owner_ref, decided_at=decided_at, actor=actor)
 
 
 def _effect(item: dict[str, Any], choice: str, decl: dict[str, Any]) -> str | None:

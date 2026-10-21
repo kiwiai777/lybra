@@ -294,6 +294,51 @@ def supersede_carry_texts() -> dict[str, str]:
     return texts
 
 
+CORRECT_DECL_KEYS = ("from_states", "actor_role_class", "decision_choice", "dispute_event_type", "disputed_record_kinds", "followup")
+CORRECT_FOLLOWUP_KEYS = ("task_id_template", "inherit_fields", "rebind_fields", "ref_field")
+CORRECT_TEXT_KEYS = ("header", "chain", "decision", "reason_part", "dispute", "followup", "criterion", "resume", "publish_blocked",
+                     "record_kept_preview", "record_kept_written", "publish_hint", "will", "preview_line", "done_line", "blocked_line",
+                     "partial_line", "not_closed", "not_found", "already", "role_refused", "followup_blocked")
+CORRECT_TEMPLATE_KEYS = ("title_template", "body_template", "criteria_part", "evidence_none", "artifacts_missing", "none")
+
+
+def correct_declaration() -> dict[str, Any]:
+    """AIPOS-F207 件②: Owner 纠正已结案卡声明唯一读取口 transitions.schema queue_mutations.correct(+ verbs.lybra_queue_correct.followup
+    起草模板并入 followup)。缺键 / from_states 含非队列目录 / 选项未在收件箱声明 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    spec = (load_schema("transitions").get("queue_mutations") or {}).get("correct")
+    if not isinstance(spec, dict) or any(not spec.get(k) for k in CORRECT_DECL_KEYS):
+        raise SchemaLoadError(f"transitions.schema.json queue_mutations.correct 未声明齐 {list(CORRECT_DECL_KEYS)}")
+    followup = spec["followup"]
+    if not isinstance(followup, dict) or any(not followup.get(k) for k in CORRECT_FOLLOWUP_KEYS) \
+            or "{round}" not in str(followup["task_id_template"]):
+        raise SchemaLoadError(f"transitions.schema.json queue_mutations.correct.followup 未声明齐 {list(CORRECT_FOLLOWUP_KEYS)}"
+                              "(task_id_template 须含 {round})")
+    bad = [x for x in spec["from_states"] if x not in QUEUE_STATES]
+    if bad:
+        raise SchemaLoadError(f"transitions.schema.json queue_mutations.correct.from_states 含非队列目录 {bad}")
+    verb = (load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get("lybra_queue_correct") or {}
+    templates = verb.get("followup")
+    if not isinstance(templates, dict) or any(not isinstance(templates.get(k), str) or not templates[k] for k in CORRECT_TEMPLATE_KEYS):
+        raise SchemaLoadError(f"verbs.schema.json verbs.lybra_queue_correct.followup 未声明齐 {list(CORRECT_TEMPLATE_KEYS)}")
+    from tools.aipos_cli.owner_inbox import inbox_declaration
+
+    if spec["decision_choice"] not in inbox_declaration()["options"]:
+        raise SchemaLoadError(f"verbs.lybra_owner_inbox.options.{spec['decision_choice']} 未声明(transitions queue_mutations.correct.decision_choice 引用)")
+    return {**spec, "from_states": tuple(str(x) for x in spec["from_states"]), "followup": {**followup, **templates}}
+
+
+def correct_texts() -> dict[str, str]:
+    """verbs.schema lybra_queue_correct.texts(唯一读取口; 缺 = SchemaLoadError)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    texts = (((load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get("lybra_queue_correct") or {}).get("texts"))
+    if not isinstance(texts, dict) or any(not isinstance(texts.get(k), str) for k in CORRECT_TEXT_KEYS):
+        raise SchemaLoadError(f"verbs.schema.json verbs.lybra_queue_correct.texts 未声明齐 {list(CORRECT_TEXT_KEYS)}")
+    return texts
+
+
 # AIPOS-348: reopen 允许源目录(= 声明 reopen.from_states)
 REOPEN_SOURCE_STATES = ALLOWED_TRANSITIONS["reopen"][0]
 # AIPOS-F87 件①: 卡字段序唯一定义在 record_writer.CARD_FRONTMATTER_ORDER(本名保留为别名, 供既有调用方)。
