@@ -117,6 +117,9 @@ PLACEHOLDER_VALUES = {
     "<Return相对路径>": "task_cards/PROJ-1/RETURN.md",
     # AIPOS-F205: 已认领环境卡补候选绑定(queue amend --restricted)占位
     "<来源卡>": "PROJ-0",
+    "<已结案卡>": "PROJ-1",  # AIPOS-F207: queue correct
+    "<Owner原话>": "Owner 原话(夹具)",
+    "<原结案错在哪>": "原结案错在哪(夹具)",
 }
 PLACEHOLDER_RE = re.compile(r"<[^<>\s'\"]+>")
 #: 已退役的子命令(示例不得再教)

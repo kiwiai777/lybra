@@ -400,6 +400,6 @@ def test_item3_declarations_single_source() -> None:
     verbs = load_schema("verbs", code_repo_schema_root())["verbs"]
     assert verbs["lybra_queue_supersede"]["cli_command"] == "lybra queue supersede"
     landing = verbs["lybra_governance_commit"]["post_write_landing"]["commands"]["queue_writers"]
-    assert landing["subcommands"] == ["block", "reopen", "withdraw", "supersede"]
+    assert landing["subcommands"][:4] == ["block", "reopen", "withdraw", "supersede"]  # AIPOS-F207 追加 correct(清单只追加)
     assert verbs["lybra_queue_supersede"]["exit_codes"]["landing_failed"]["code"] == \
         verbs["lybra_governance_commit"]["post_write_landing"]["landing_failed_exit_code"]

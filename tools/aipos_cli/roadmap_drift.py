@@ -32,7 +32,7 @@ SIGNAL_KINDS = ("unlinked_ratio", "stalled", "uncovered", "rework", "overdue", "
 #: AIPOS-F175: verification states (keys of verbs.schema lybra_roadmap.status.verification.states; checked where declared)
 VERIFICATION_STATES = ("unverified", "auto_passed", "owner_pending", "owner_confirmed", "mismatch")
 _BASIS_KEYS = ("passed", "evidence_part", "artifact_part", "owner_pending", "owner_record", "refix_pending", "fix_part", "fix_none",
-               "fix_draft", "fix_card", "fix_pending")
+               "fix_draft", "fix_card", "fix_pending", "corrected", "followup_part")
 _STATUS_KEYS = ("progress_bar_width", "satisfied_queue_states", "excluded_queue_states", "verification", "unmet_reasons",
                 "status_mismatch", "severity_labels", "signals", "next_steps", "texts")
 
@@ -334,12 +334,20 @@ def _criterion_verification(root: Path, crit: dict[str, Any], crit_cards: list[d
     qualified: list[dict[str, Any]] = []
     passed: list[str] = []
     why: list[str] = []
+    corrections: list[tuple[dict[str, Any], str]] = []  # AIPOS-F207 件②: (Owner 纠正争议标记, 依据文本)
     if not crit_cards:
         why.append(str(reasons["no_card"]))
     elif not closed:
         why.append(_fmt(reasons["not_closed"], "unmet_reasons.not_closed", cards=_ids(crit_cards)))
     for card in closed:
         tid = str(card["task_id"])
+        disputes = _card_disputes(root, tid, errors)
+        if disputes:  # AIPOS-F207 件②: Owner 纠正过的结案不再算验证通过(原记录不改; 争议标记 = 新输入)
+            text = _fmt(basis_t["corrected"], "verification.basis.corrected", task_id=tid, decided_at=disputes[-1].get("marked_at") or "?",
+                        relayed_by=disputes[-1].get("relayed_by") or "?", owner_words=disputes[-1].get("owner_words") or "",
+                        decision_id=disputes[-1].get("decision_id") or "?")
+            corrections.append((disputes[-1], text))  # 依据只进 detail 一次(下方按状态拼承接卡), 不另进 why
+            continue
         ev = evidence[tid]
         ok, text = _verify_card(root, card, _card_truth(root, card, errors, cache), verify, decl, ev)
         if not ok:
@@ -356,9 +364,19 @@ def _criterion_verification(root: Path, crit: dict[str, Any], crit_cards: list[d
     out["qualified_cards"] = [str(c["task_id"]) for c in qualified]
     state = "unverified"
     detail: list[str] = list(passed)
-    if qualified and verify != "owner_check":
+    if not qualified and corrections:
+        # AIPOS-F207 件②: 唯一的结案被 Owner 纠正 = 不符·待承接(承接卡 = 争议标记 followup_task_id 或卡面 owner_check_ref = 决策 id 的卡)
+        state = "mismatch"
+        latest_fix, text = corrections[-1]
+        out["fix_cards"] = _fix_cards(root, {"fix_task_id": latest_fix.get("followup_task_id"), "record_id": latest_fix.get("decision_id")},
+                                      all_cards, basis_t)
+        fix = ", ".join(f["text"] for f in out["fix_cards"])
+        detail.append(text + (_fmt(basis_t["followup_part"], "verification.basis.followup_part", fix=fix) if fix else ""))
+    elif qualified and verify != "owner_check":
         state = "auto_passed"
+        detail += [text for _fix, text in corrections]
     elif qualified:
+        detail += [text for _fix, text in corrections]
         results = verify_declaration()["results"]
         records: list[dict[str, Any]] = []
         unchecked: list[dict[str, Any]] = []
@@ -402,8 +420,23 @@ def _criterion_verification(root: Path, crit: dict[str, Any], crit_cards: list[d
     out["met_cards"] = out["qualified_cards"] if out["satisfied"] else []
     out["basis"] = "; ".join(detail) or None
     if not out["satisfied"]:
-        out["reason"] = "; ".join(why + ([] if state == "unverified" else detail[len(passed):])) or None
+        extra = [] if state == "unverified" else [d for d in detail[len(passed):] if d not in why]
+        out["reason"] = "; ".join(why + extra) or None
     return out
+
+
+def _card_disputes(root: Path, task_id: str, errors: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """AIPOS-F207 件②: 卡的 Owner 纠正争议标记(task_complexity.closure_disputes 唯一读取)。读不出 = 点名进 errors 且按「有争议」处理
+    (返回一条占位, 不当作已验证, 不猜)。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+    from tools.aipos_cli.task_complexity import closure_disputes
+
+    try:
+        return closure_disputes(root, task_id)
+    except (OSError, ValueError, FrontmatterReadError) as exc:
+        problem = f"{type(exc).__name__}: {exc}"
+        errors.append({"source": f"卡 {task_id} 的 Owner 纠正争议标记", "error": problem})
+        return [{"decision_id": None, "followup_task_id": None, "owner_words": problem, "relayed_by": None, "marked_at": None}]
 
 
 

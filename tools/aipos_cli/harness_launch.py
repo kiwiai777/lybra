@@ -31,18 +31,35 @@ class LoopInterrupted(Exception):
 # 一行式进度: 凭据字样所在行整行隐去; 长不透明串(≥32 位且同含大写/小写/数字, 如 urlsafe token)打码
 _CREDENTIAL_WORD_RE = re.compile(r"(?i)secret|token|password|passwd|private[_-]?key|credential|api[_-]?key|bearer|authorization|LYBRAENROLL")
 _OPAQUE_RE = re.compile(r"[A-Za-z0-9_\-+=]{32,}")
+# AIPOS-F207 件④(gap #214): 按 - _ =(键=值)分段且每段都是可读形 = 人读编号放行(如 Owner-20261021-F205-ENV3B-recovery):
+# 常见词(字母段 ≤12, 全小写 / 全大写 / 首字母大写, 含元音)/ 数字(日期、序号, ≤14 位, 可带 ≤2 字母尾)/ 卡号形(字母 ≤8 + 可选 - + 数字 ≤6 +
+# 同大小写字母尾 ≤3)。至少一个分隔符、不许空段(base64 尾 = 填充不放行); 含 + 或无分隔的长串(高熵 token)不放行, 仍按大小写 + 数字判打码。
+_READABLE_WORD = r"(?=[A-Za-z]*[AEIOUYaeiouy])(?:[a-z]{1,12}|[A-Z]{1,12}|[A-Z][a-z]{1,11})"
+_READABLE_NUMBER = r"\d{1,14}(?:[a-z]{1,2}|[A-Z]{1,2})?"
+_READABLE_CARD = r"(?:[A-Z]{1,8}-?\d{1,6}[A-Z]{0,3}|[a-z]{1,8}-?\d{1,6}[a-z]{0,3})"
+_READABLE_SEGMENT = f"(?:{_READABLE_CARD}|{_READABLE_NUMBER}|{_READABLE_WORD})"
+_READABLE_RE = re.compile(rf"{_READABLE_SEGMENT}(?:[-_=]{_READABLE_SEGMENT})+")
+#: 人读引用字段(--owner-ref 等)被凭据判据拒时的出口提示(validation_root / workspace_config / distribution_sync 同读)
+READABLE_REF_HINT = "人读字段请改用带空格的人话(如「Owner 10-21 批准 ENV3B 恢复」)或决策编号(如 owner-inbox-… / 收件箱事项 ID)"
 _PI_QUIET_EVENTS = frozenset({"session", "agent_start", "turn_start", "turn_end", "message_start", "message_update",
                               "tool_execution_update", "queue_update", "compaction_start", "compaction_end"})
 
 
+def readable_identifier(s: str) -> bool:
+    """AIPOS-F207 件④: 长串是否为可读的连字符编号(分段判定见 _READABLE_RE; redact_progress 唯一使用)。"""
+    return _READABLE_RE.fullmatch(s) is not None
+
+
 def redact_progress(text: str) -> str:
+    """凭据判据唯一实现(进度打码 / 人读字段校验同读): 凭据字样所在行整行隐去; 长不透明串(≥32 位且同含大写 / 小写 / 数字)打码,
+    可读的连字符编号(readable_identifier)放行(AIPOS-F207 件④)。"""
     if _CREDENTIAL_WORD_RE.search(text):
         return "[含凭据字样, 整行已隐去]"
 
     def mask(m: re.Match[str]) -> str:
         s = m.group(0)
         opaque = any(c.isupper() for c in s) and any(c.islower() for c in s) and any(c.isdigit() for c in s)
-        return "[已打码]" if opaque else s
+        return "[已打码]" if opaque and not readable_identifier(s) else s
 
     return _OPAQUE_RE.sub(mask, text)
 

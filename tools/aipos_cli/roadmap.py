@@ -858,11 +858,12 @@ def _verify_reject(code: str, detail: str, decl: dict[str, Any]) -> RoadmapError
     return RoadmapError(code, f"{detail}({hint})" if hint else detail)
 
 
-def _fix_task_id(governance_root: Path, source_task_id: str, decl: dict[str, Any]) -> str:
-    """修复卡卡号: 模板序号取首个未占用(队列 + 草稿, draft_validator.find_task_id_collisions 唯一判定)。"""
+def _fix_task_id(governance_root: Path, source_task_id: str, decl: dict[str, Any], template: str | None = None) -> str:
+    """修复卡 / 承接卡卡号: 模板序号取首个未占用(队列 + 草稿, draft_validator.find_task_id_collisions 唯一判定)。
+    template 缺省 = verify.fix_card.task_id_template; AIPOS-F207 queue correct 传 queue_mutations.correct.followup.task_id_template。"""
     from tools.aipos_cli.draft_validator import find_task_id_collisions
 
-    template = str(decl["fix_card"]["task_id_template"])
+    template = str(template or decl["fix_card"]["task_id_template"])
     for round_no in range(1, 1000):
         candidate = template.format(task_id=source_task_id, round=round_no)
         if not find_task_id_collisions(governance_root, candidate):
@@ -870,41 +871,70 @@ def _fix_task_id(governance_root: Path, source_task_id: str, decl: dict[str, Any
     raise ValueError(f"修复卡卡号 {template} 序号 1..999 都已占用")
 
 
-def _fix_draft_payload(governance_root: Path, source_meta: dict[str, Any], *, fix_task_id: str, milestone: str, criterion: str,
-                       statement: str, record_id: str, record_rel: str, relayed_by: str, owner_words: str, note: str | None,
-                       decl: dict[str, Any]) -> tuple[dict[str, Any], str]:
-    """修复卡草稿(唯一起草口)。承继 fix_card.inherit_fields, 外加承继来的 task_class 声明的必填字段(enums.schema task_class
-    required_fields, 经 task_complexity.task_class_declarations 读; 如 complex 的 planner_agent / reviewer)。AIPOS-F180C: 承继的 artifacts
-    只留挂在本标准(修复卡 criteria)上的项(非映射项原样保留交形校验 artifact_problems 判, 不放松), 过滤后为空 = 不带 artifacts、
-    正文提示补声明; 正文附原卡本标准产物文件。"""
+def _rebind_task_segments(value: Any, source_task_id: str, new_task_id: str) -> Any:
+    """AIPOS-F207: 路径值(或列表元素)按 / 分段, 等于原卡号的段换成新卡号(只写治理根卡的专属落点); 其余原样。"""
+    if isinstance(value, list):
+        return [_rebind_task_segments(v, source_task_id, new_task_id) for v in value]
+    if isinstance(value, str) and source_task_id:
+        return "/".join(new_task_id if part == source_task_id else part for part in value.split("/"))
+    return value
+
+
+def followup_draft_payload(governance_root: Path, source_meta: dict[str, Any], *, template: dict[str, Any], task_id: str,
+                           milestone: str | None, criteria: list[str], ref_field: str, ref_value: str, created_by: str,
+                           title: str | None = None, fill: dict[str, Any] | None = None,
+                           rebind_fields: list[str] | None = None) -> tuple[dict[str, Any], str]:
+    """承接卡草稿唯一起草口(AIPOS-F175 修复卡 / AIPOS-F207 Owner 纠正承接卡共用)。承继 template.inherit_fields, 外加承继来的
+    task_class 声明的必填字段(enums.schema task_class required_fields, 经 task_complexity.task_class_declarations 读; 如 complex 的
+    planner_agent / reviewer)。AIPOS-F180C: 承继的 artifacts 只留挂在 criteria 上的项(非映射项原样保留交形校验 artifact_problems 判,
+    不放松), 过滤后为空 = 不带 artifacts、正文提示补声明(template.artifacts_missing); 正文附原卡这些标准的产物文件。
+    rebind_fields(AIPOS-F207)= 键或「键.子键」, 值中等于原卡号的路径段换成新卡号。milestone 缺 / criteria 空 = 不带挂接字段。
+    正文 = template.body_template, 占位 = fill + {task_id, criterion, source_task_id, artifact_dir, evidence, artifacts_note}。"""
     from tools.aipos_cli.task_complexity import effective_task_class, task_class_declarations
 
-    fix = decl["fix_card"]
     field = artifacts_declaration()["field"]
-    inherit = list(fix["inherit_fields"])
+    source_id = str(source_meta.get("task_id") or "")
+    inherit = list(template["inherit_fields"])
     if "task_class" in inherit and not _missing(source_meta.get("task_class")):
         class_decl = task_class_declarations().get(effective_task_class(source_meta)) or {}
         inherit += [k for k in class_decl.get("required_fields") or [] if k not in inherit]
     meta: dict[str, Any] = {k: copy.deepcopy(source_meta[k]) for k in inherit if not _missing(source_meta.get(k))}
     if isinstance(meta.get(field), list):
-        kept = [e for e in meta[field] if not isinstance(e, dict) or e.get("criterion") == criterion]
+        kept = [e for e in meta[field] if not isinstance(e, dict) or e.get("criterion") in criteria]
         if kept:
             meta[field] = kept
         else:
             meta.pop(field)
-    meta.update({"task_id": fix_task_id, "title": fix["title_template"].format(criterion=criterion, statement=statement),
-                 "status": "pending", "created_by": relayed_by, "milestone": milestone, "criteria": [criterion],
-                 "owner_check_ref": record_id})
-    source_view = card_artifacts(governance_root, source_meta, criterion=criterion)
-    files = [item["rel"] for entry in source_view["entries"] for item in entry["files"]]
-    body = fix["body_template"].format(task_id=fix_task_id, criterion=criterion, statement=statement, record=record_rel,
-                                       relayed_by=relayed_by, owner_words=owner_words, note=note or "-",
-                                       source_task_id=source_meta.get("task_id"),
-                                       artifact_dir=_rel(card_artifact_dir(governance_root, str(source_meta.get("task_id") or "")),
-                                                         governance_root),
-                                       evidence=", ".join(files) or fix["evidence_none"],
-                                       artifacts_note="" if field in meta else fix["artifacts_missing"].format(criterion=criterion))
+    for key in rebind_fields or []:
+        head, _, sub = str(key).partition(".")
+        if sub and isinstance(meta.get(head), dict) and sub in meta[head]:
+            meta[head][sub] = _rebind_task_segments(meta[head][sub], source_id, task_id)
+        elif not sub and head in meta:
+            meta[head] = _rebind_task_segments(meta[head], source_id, task_id)
+    meta.update({"task_id": task_id, "title": title or "", "status": "pending", "created_by": created_by, ref_field: ref_value})
+    if milestone and criteria:
+        meta.update({"milestone": milestone, "criteria": list(criteria)})
+    files = [item["rel"] for criterion in criteria
+             for entry in card_artifacts(governance_root, source_meta, criterion=criterion)["entries"] for item in entry["files"]]
+    shown = ", ".join(criteria)
+    body = template["body_template"].format(**{
+        **(fill or {}), "task_id": task_id, "criterion": shown, "source_task_id": source_id,
+        "artifact_dir": _rel(card_artifact_dir(governance_root, source_id), governance_root),
+        "evidence": ", ".join(files) or template["evidence_none"],
+        "artifacts_note": "" if field in meta or not criteria else template["artifacts_missing"].format(criterion=shown)})
     return meta, body
+
+
+def _fix_draft_payload(governance_root: Path, source_meta: dict[str, Any], *, fix_task_id: str, milestone: str, criterion: str,
+                       statement: str, record_id: str, record_rel: str, relayed_by: str, owner_words: str, note: str | None,
+                       decl: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """修复卡草稿(AIPOS-F175; 起草实现 = followup_draft_payload, 模板 verify.fix_card, owner_check_ref = 本次抽查记录 id)。"""
+    fix = decl["fix_card"]
+    return followup_draft_payload(
+        governance_root, source_meta, template=fix, task_id=fix_task_id, milestone=milestone, criteria=[criterion],
+        ref_field="owner_check_ref", ref_value=record_id, created_by=relayed_by,
+        title=fix["title_template"].format(criterion=criterion, statement=statement),
+        fill={"statement": statement, "record": record_rel, "relayed_by": relayed_by, "owner_words": owner_words, "note": note or "-"})
 
 
 def apply_owner_verification(governance_root: str | Path, *, criterion: str, result: str, relayed_by: str | None,

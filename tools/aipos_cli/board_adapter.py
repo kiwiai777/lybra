@@ -7032,8 +7032,12 @@ def mark_concluded_task(
     conclusion_note: str | None = None,
     dry_run: bool = True,
     repo_root: str | Path | None = None,
+    outcome: str | None = None,
 ) -> dict[str, Any]:
     """AIPOS-354 S3: 报告式审结 — 显式标记审结.
+
+    AIPOS-F207 件①: outcome = 顾问复核结论 pass | block(值域 card.schema dependency_gate.conclusion.outcomes; 写卡面 outcome_field);
+    缺省 = default_outcome 并在 warnings 提示(不按 conclusion_note 判)。依赖判定与门生 closure 等价(task_complexity.closure_state)。
 
     For bypass scenarios (report-style audits, manual conclusions) where no
     formal verdict was landed via gate. Leaves a machine-readable closure marker
@@ -7058,6 +7062,17 @@ def mark_concluded_task(
             raise ValueError("task_id is required")
         report_ref = str(report_path or "").strip()
         note = str(conclusion_note or "").strip()
+        # AIPOS-F207 件①: 结论值域与卡面键读 card.schema dependency_gate.conclusion(task_complexity 唯一读取口)
+        from tools.aipos_cli.task_complexity import dependency_gate_declaration
+
+        conclusion_decl = dependency_gate_declaration()["conclusion"]
+        outcome_text = str(outcome or "").strip().lower()
+        outcome_warnings: list[str] = []
+        if outcome_text and outcome_text not in conclusion_decl["outcomes"]:
+            raise ValueError(f"--outcome 只认 {list(conclusion_decl['outcomes'])}(得 {outcome!r})")
+        if not outcome_text:
+            outcome_text = str(conclusion_decl["default_outcome"])
+            outcome_warnings.append(str(conclusion_decl["default_note"]).format(outcome=outcome_text))
         if not report_ref and not note:
             return blocked_response(
                 operation=operation,
@@ -7153,7 +7168,9 @@ def mark_concluded_task(
                     "from_queue": queue_state,
                     "closure_ref": closure_ref,
                     "target_path": str((queue_root_for(resolved_root) / "completed" / card_file.name).relative_to(resolved_root)),
+                    "outcome": outcome_text,
                 },
+                warnings=outcome_warnings,
                 safety_notice="AIPOS-354 mark_concluded dry-run. No files written.",
             )
         # Confirm: move card to completed/
@@ -7170,7 +7187,8 @@ def mark_concluded_task(
         fm["closed_at"] = fm["completed_at"]  # 复用引擎生成的时间戳
         fm["conclusion_report_ref"] = report_ref or ""
         fm["conclusion_note"] = note or ""
-        fm["auto_closed_by"] = "AIPOS-354_mark_concluded"
+        fm[str(conclusion_decl["marker_field"])] = str(conclusion_decl["marker_value"])
+        fm[str(conclusion_decl["outcome_field"])] = outcome_text  # AIPOS-F207 件①: 依赖判定读此(closure_state)
         if continuation_id:
             fm["continuation_task_id"] = continuation_id  # AIPOS-F78 前置零⑨: 承接世系机器可读(F53 lineage 亦读 conclusion_note)
         rendered = render_task_markdown(fm, body)
@@ -7190,7 +7208,9 @@ def mark_concluded_task(
                 "closure_ref": closure_ref,
                 "target_path": str(target_path.relative_to(resolved_root)),
                 "moved": True,
+                "outcome": outcome_text,
             },
+            warnings=outcome_warnings,
             safety_notice="AIPOS-354 mark_concluded: card moved to completed/ with machine-readable closure marker.",
         )
     except Exception as exc:
@@ -8331,6 +8351,271 @@ def supersede_task(
     if report["worktree_cleanup"].get("record"):
         report["written"].append(str(report["worktree_cleanup"]["record"]))
     return report
+
+
+def _strip_machine_sections(body: str) -> str:
+    """AIPOS-F207: 原卡正文去掉机器区节(## 工作纪律 / 门契约节由发布按新卡重新派生)并把标题降两级, 作承接卡「原卡正文」节。"""
+    import re
+
+    from tools.aipos_cli.machine_zone import machine_zone_section_titles
+
+    text = str(body or "")
+    for title in machine_zone_section_titles():
+        text = re.sub(rf"(?ms)^## 【?{re.escape(title)}.*?(?=^## |\Z)", "", text)
+    lines = [("##" + line) if line.startswith("#") else line for line in text.strip().splitlines()]
+    return "\n".join(lines).strip()
+
+
+def correct_closed_task(
+    task_id: str,
+    *,
+    relayed_by: str | None,
+    owner_words: str | None,
+    reason: str | None = None,
+    followup_title: str | None = None,
+    owner_ref: str | None = None,
+    actor: str = "owner",
+    dry_run: bool = True,
+    repo_root: str | Path | None = None,
+    connection_json: str | None = None,
+) -> dict[str, Any]:
+    """AIPOS-F207 件②(gap #216): Owner 纠正已结案卡(`lybra queue correct` 唯一实现; 声明 transitions.schema queue_mutations.correct)。
+
+    预演(零写入): 前置(卡在 from_states / 转达人角色类 custom_roles.authorize_instance_class / 未纠正过 closure_disputes)→ 原结案链
+    (disputed_record_kinds 的门生记录 + sha256, 卡面报告引用)→ 决策记录预演(owner_inbox.queue_ruling_payload, 与 owner decide /
+    supersede 同一构造与写路径 record_owner_decision)→ 承接卡起草预演(roadmap.followup_draft_payload 唯一起草口 + draft_writer.create_draft
+    dry_run)+ 签发实例核验(draft_writer.resolve_publish_signer)→ 路线图标准状态(roadmap_drift.roadmap_status)与承接卡续跑命令
+    (owner_inbox._resume_for, loop status 同一模板)。
+    确认: execute_dry_run 落决策记录 → 写争议标记事件记录(record_writer.write_records_atomic; 原 closure / 裁决 / 交回 / 卡面不改)→
+    create_draft → publish_draft(签发 = 转达人)。发布被拒 = 已写的决策与标记照列 written(调用方照落账), ok False, 给手工发布命令。
+    relayed_by / owner_words 缺或多行 = owner_inbox.InboxUsageError(用法错, 与 owner decide 同一校验)。不落账(written 由 CLI 经
+    queue_writers 落账)。返回 {ok, verdict, stage, task_id, title, from_state, closed_kind, chain, decision_id, decision, dispute,
+    followup, criteria, resume, blocking_reasons, warnings, written, line, publish_error}。"""
+    from tools.aipos_cli.controlled_execute import OWNER_CONFIRMATION_TOKEN
+    from tools.aipos_cli.custom_roles import authorize_instance_class
+    from tools.aipos_cli.draft_writer import resolve_publish_signer
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.owner_inbox import _resume_for, queue_ruling_payload, relay_fields
+    from tools.aipos_cli.queue_mutation import correct_declaration, correct_texts
+    from tools.aipos_cli.record_writer import gate_record_files, render_markdown, write_records_atomic
+    from tools.aipos_cli.roadmap import _fix_task_id, followup_draft_payload
+    from tools.aipos_cli.task_complexity import closure_disputes, closure_state, dispute_event_type
+    from tools.aipos_cli.task_loader import find_task_card
+
+    relayed, words = relay_fields(relayed_by, owner_words)
+    decl = correct_declaration()
+    texts = correct_texts()
+    fu = decl["followup"]
+    root = _resolve_repo_root(repo_root)
+    reason_text = " ".join(str(reason or "").split())
+    report: dict[str, Any] = {"ok": False, "verdict": Verdict.BLOCK, "stage": "preview" if dry_run else "confirm", "task_id": task_id,
+                              "title": None, "from_state": None, "relayed_by": relayed, "owner_words": words, "reason": reason_text or None,
+                              "owner_ref": owner_ref, "closed_kind": None, "chain": None, "decision_id": None, "decision": None,
+                              "dispute": None, "followup": None, "criteria": [], "resume": None, "blocking_reasons": [],
+                              "warnings": [], "written": [], "line": "", "publish_error": None}
+
+    def _blocked(reasons: list[str]) -> dict[str, Any]:
+        report["blocking_reasons"].extend(reasons)
+        report["line"] = texts["blocked_line"].format(reasons="; ".join(report["blocking_reasons"]))
+        return report
+
+    path, state = find_task_card(root, task_id)
+    if path is None:
+        return _blocked([texts["not_found"].format(task_id=task_id)])
+    report["from_state"] = state
+    report["governance_root"] = str(root)
+    if state not in decl["from_states"]:
+        return _blocked([texts["not_closed"].format(task_id=task_id, state=state, states="/".join(decl["from_states"]))])
+    fm, body = require_frontmatter(Path(path))
+    tid = str(fm.get("task_id") or task_id)
+    report["task_id"], report["title"] = tid, str(fm.get("title") or "")
+    role_gate = authorize_instance_class(relayed, str(decl["actor_role_class"]), root)
+    problems: list[str] = []
+    if not role_gate["ok"]:
+        problems.append(texts["role_refused"].format(required_class=decl["actor_role_class"], reason=role_gate["reason"]))
+    existing = closure_disputes(root, tid)
+    if existing:
+        problems.append(texts["already"].format(task_id=tid, decision_id=existing[-1].get("decision_id") or "?",
+                                                followup=existing[-1].get("followup_task_id") or "?"))
+    if problems:
+        return _blocked(problems)
+
+    # 原结案链(只读; 指纹进争议标记)
+    def _rel(p: Path) -> str:
+        try:
+            return str(Path(p).resolve().relative_to(Path(root).resolve()))
+        except ValueError:
+            return str(p)
+
+    report["closed_kind"] = closure_state(root, tid)["kind"] or "completed"
+    disputed: list[dict[str, Any]] = []
+    for kind in decl["disputed_record_kinds"]:
+        for f in gate_record_files(record_dir(root, str(kind), tid), str(kind)):
+            disputed.append({"kind": str(kind), "path": _rel(f), "sha256": hashlib.sha256(Path(f).read_bytes()).hexdigest()})
+    refs = [fm.get("completion_report_ref"), fm.get("conclusion_report_ref"), *(fm.get("artifact_refs") or [])]
+    reports = list(dict.fromkeys(str(r) for r in refs if isinstance(r, str) and r.strip()))
+    by_kind = {k: [d["path"] for d in disputed if d["kind"] == k] for k in decl["disputed_record_kinds"]}
+    none = str(fu["none"])
+    report["chain"] = {"records": disputed, "reports": reports}
+    chain_fill = {"closures": ", ".join(by_kind.get("closures") or []) or (str(fm.get("auto_closed_by") or "") or none),
+                  "verdicts": ", ".join(by_kind.get("audit_verdicts") or []) or none,
+                  "returns": ", ".join(by_kind.get("returns") or []) or none, "reports": ", ".join(reports) or none}
+
+    # 承接卡卡号 / 标题 / 挂接
+    followup_id = _fix_task_id(root, tid, {}, template=str(fu["task_id_template"]))
+    title = " ".join(str(followup_title or "").split()) or str(fu["title_template"]).format(source_task_id=tid, source_title=report["title"])
+    criteria = [str(c) for c in (fm.get("criteria") or []) if str(c).strip()] if isinstance(fm.get("criteria"), list) else []
+    milestone = str(fm.get("milestone") or "").strip() or None
+
+    # 决策记录(预演)
+    decided_at = iso_z()
+    payload = queue_ruling_payload(root, choice=str(decl["decision_choice"]), task_id=tid, anchor=followup_id,
+                                   subject=f"{tid} [{state}] → {followup_id}", relayed_by=relayed, owner_words=words,
+                                   owner_ref=str(owner_ref or "").strip() or None, decided_at=decided_at, note=reason_text or None,
+                                   actor=actor)
+    decision_id = str(payload["decision_id"])
+    report["decision_id"] = decision_id
+    dry = record_owner_decision(payload, dry_run=True, repo_root=root, actor="owner")
+    report["decision"] = {k: dry.get(k) for k in ("ok", "verdict", "blocking_reasons", "warnings")}
+    report["decision"]["target_path"] = (dry.get("data") or {}).get("target_path")
+    if dry.get("verdict") == Verdict.BLOCK or not dry.get("ok") or not dry.get("dry_run_token"):
+        problems.extend(f"决策记录预演被拒: {r}" for r in (dry.get("blocking_reasons") or [])
+                        or [json.dumps(dry.get("errors") or dry.get("message"), ensure_ascii=False)[:400]])
+
+    # 争议标记(渲染; 确认时写)
+    event_type = dispute_event_type()  # 写读同一读取口(task_complexity.closure_disputes 按此前缀读)
+    record_id = f"{event_type}_{tid}_{file_slug('compact', decided_at)}"
+    event_meta = {"record_type": RecordType.TASK_PROGRESS_EVENT, "event_type": event_type, "task_id": tid, "actor": relayed,
+                  "timestamp": decided_at, "decision_id": decision_id, "followup_task_id": followup_id, "relayed_by": relayed,
+                  "owner_words": words, "reason": reason_text or None, "closed_kind": report["closed_kind"],
+                  "disputed_records": [{"path": d["path"], "sha256": d["sha256"]} for d in disputed], "reports": reports}
+    event_body = (f"# Closure Disputed: {tid}\n\nOwner 纠正已结案卡 {tid} 的结案(决策 {decision_id}, 经 {relayed} 转达; Owner 原话「{words}」)。"
+                  f"原结案 / 裁决 / 交回记录不改(上列 sha256), 承接卡 {followup_id}。判据 transitions.schema queue_mutations.correct; "
+                  "实现 tools/aipos_cli/board_adapter.correct_closed_task。\n")
+    event_markdown = render_markdown(event_meta, event_body, list(event_meta))
+    report["dispute"] = {"record_id": record_id, "path": None, "event_type": event_type}
+
+    # 承接卡草稿(预演)
+    criteria_part = str(fu["criteria_part"]).format(milestone=milestone, criteria=", ".join(criteria)) if milestone and criteria else ""
+    fill = {"decision_id": decision_id, "relayed_by": relayed, "owner_words": words, "reason": reason_text or none,
+            "source_title": report["title"], "dispute": record_id, "criteria_part": criteria_part,
+            "source_body": _strip_machine_sections(body) or none, **chain_fill}
+    meta, fbody = followup_draft_payload(root, {**fm, "task_id": tid}, template=fu, task_id=followup_id, milestone=milestone,
+                                         criteria=criteria, ref_field=str(fu["ref_field"]), ref_value=decision_id, created_by=relayed,
+                                         title=title, fill=fill, rebind_fields=list(fu["rebind_fields"]))
+    draft = backend_create_draft(root, meta, fbody, dry_run=True)
+    report["followup"] = {"task_id": followup_id, "title": title, "path": draft.get("target_path"), "task_mode": meta.get("task_mode"),
+                          "harness": meta.get("harness"), "lane": meta.get("lane"), "milestone": meta.get("milestone"),
+                          "criteria": meta.get("criteria") or [], "draft_warnings": draft.get("warnings") or [], "published": False,
+                          "pending_path": None}
+    if draft.get("verdict") == Verdict.BLOCK:
+        problems.append(texts["followup_blocked"].format(followup=followup_id, reason="; ".join(draft.get("blocking_reasons") or [])))
+    signer = resolve_publish_signer(root, relayed, connection_json)
+    report["followup"]["signer"] = signer
+    if signer["refusal"]:
+        problems.append(texts["followup_blocked"].format(followup=followup_id, reason=signer["refusal"]))
+
+    # 路线图标准(推导唯一 roadmap_drift.roadmap_status)与续跑命令
+    report["criteria"] = _correct_criteria_rows(root, criteria, None)
+    report["resume"] = _resume_for(root, followup_id, relayed)
+    if problems:
+        return _blocked(problems)
+    fill_line = {"task_id": tid, "followup": followup_id, "decision_id": decision_id}
+    if dry_run:
+        report.update({"ok": True, "verdict": draft.get("verdict") or Verdict.PASS, "line": texts["preview_line"].format(**fill_line)})
+        return report
+
+    done = execute_dry_run(str(dry["dry_run_token"]), "owner", owner_confirmation_token=OWNER_CONFIRMATION_TOKEN, repo_root=root)
+    report["decision"] = {k: done.get(k) for k in ("ok", "verdict", "blocking_reasons", "warnings", "errors")}
+    written = [str(w.get("path")) for w in (done.get("performed_writes") or []) if isinstance(w, dict) and w.get("path")]
+    if not done.get("ok") or not written:
+        return _blocked(["决策记录写入失败(零写入): "
+                         + json.dumps(done.get("errors") or done.get("blocking_reasons"), ensure_ascii=False)[:400]])
+    report["written"] = list(written)
+    event_written = write_records_atomic(root, [("event", record_id, event_markdown, tid)])
+    report["dispute"]["path"] = str(event_written["paths"][0])
+    report["written"].append(str(root / report["dispute"]["path"]))
+
+    def _partial(why: str) -> dict[str, Any]:
+        report["publish_error"] = why
+        report["blocking_reasons"].append(why)
+        report["line"] = texts["partial_line"].format(reasons=why, **fill_line)
+        return report
+
+    created = backend_create_draft(root, meta, fbody, dry_run=False)
+    if created.get("verdict") == Verdict.BLOCK or not created.get("wrote"):
+        return _partial(texts["followup_blocked"].format(followup=followup_id, reason="; ".join(created.get("blocking_reasons") or [])))
+    draft_rel = str(created["target_path"])
+    report["followup"]["path"] = draft_rel
+    report["written"].append(str(root / draft_rel))
+    published = backend_publish_draft(root, draft_rel, dry_run=False, actor=signer["actor"])
+    if published.get("verdict") == Verdict.BLOCK or not published.get("wrote"):
+        return _partial("; ".join(published.get("blocking_reasons") or ["发布未写出"]))
+    report["followup"]["published"] = True
+    report["followup"]["pending_path"] = str(published["target_path"])
+    report["written"].append(str(root / str(published["target_path"])))
+    report["written"] += [str(root / str(w["path"])) for w in (published.get("record_writes") or []) if w.get("path")]
+    report["criteria"] = _correct_criteria_rows(root, criteria, report["criteria"])
+    report.update({"ok": True, "verdict": Verdict.PASS, "line": texts["done_line"].format(**fill_line)})
+    return report
+
+
+def render_correct_text(report: dict[str, Any]) -> list[str]:
+    """AIPOS-F207: `lybra queue correct` 人读输出(文案读 verbs.lybra_queue_correct.texts; 首行 = 结论行)。"""
+    from tools.aipos_cli.queue_mutation import correct_texts
+
+    texts = correct_texts()
+    lines = [str(report.get("line") or "")]
+    if report.get("chain") is None:  # 前置即被拒: 只有结论行
+        return lines
+    written = report.get("stage") == "confirm" and bool(report.get("written"))
+    will = "" if written else texts["will"]
+    fu = report.get("followup") or {}
+    lines.append(texts["header"].format(project=Path(str(report.get("governance_root") or ".")).name, task_id=report["task_id"],
+                                        title=report.get("title") or "", closed_kind=report.get("closed_kind") or "-"))
+    chain = report["chain"]
+    by_kind: dict[str, list[str]] = {}
+    for rec in chain.get("records") or []:
+        by_kind.setdefault(rec["kind"], []).append(f"{rec['path']}(sha256 {rec['sha256'][:12]})")
+    lines.append(texts["chain"].format(closures=", ".join(by_kind.get("closures") or []) or "-",
+                                       verdicts=", ".join(by_kind.get("audit_verdicts") or []) or "-",
+                                       returns=", ".join(by_kind.get("returns") or []) or "-", reports=", ".join(chain.get("reports") or []) or "-"))
+    reason_part = texts["reason_part"].format(reason=report["reason"]) if report.get("reason") else ""
+    lines.append(texts["decision"].format(will=will, decision_id=report.get("decision_id"), relayed_by=report.get("relayed_by"),
+                                          owner_words=report.get("owner_words"), reason_part=reason_part))
+    dispute = report.get("dispute") or {}
+    lines.append(texts["dispute"].format(will=will, path=dispute.get("path") or dispute.get("record_id"),
+                                         count=len(chain.get("records") or [])))
+    crit = f"; 挂 {fu.get('milestone')} / {', '.join(fu.get('criteria') or [])}" if fu.get("milestone") else ""
+    lines.append(texts["followup"].format(will="" if fu.get("published") else texts["will"], followup_task_id=fu.get("task_id"),
+                                          path=fu.get("pending_path") or fu.get("path"), task_mode=fu.get("task_mode"),
+                                          harness=fu.get("harness"), criteria_part=crit))
+    for row in report.get("criteria") or []:
+        lines.append(texts["criterion"].format(criterion=row["criterion"], before=row.get("before") or "-",
+                                               after=row.get("after") or "(纠正后: 不符·待承接)"))
+    if report.get("publish_error"):
+        hint = texts["publish_hint"].format(governance_root=report.get("governance_root") or ".", path=fu.get("path") or "<草稿路径>",
+                                            actor=report.get("relayed_by"))
+        lines.append(texts["publish_blocked"].format(record_state=texts["record_kept_written"], reason=report["publish_error"], hint=hint))
+    if report.get("resume"):
+        lines.append(texts["resume"].format(resume=report["resume"]))
+    for warning in report.get("warnings") or []:
+        lines.append(f"  ! {warning}")
+    return lines
+
+
+def _correct_criteria_rows(root: Path, criteria: list[str], before: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """AIPOS-F207: 原卡挂的路线图标准此刻状态(推导唯一 roadmap_drift.roadmap_status; 无路线图 / 未挂 = 空)。before 给出 = 填 after。"""
+    if not criteria:
+        return []
+    from tools.aipos_cli.roadmap_drift import roadmap_status
+
+    view = roadmap_status(root, project=Path(root).resolve().name)
+    rows = {r["id"]: r for m in view.get("milestones") or [] for r in m.get("criteria") or []}
+    if before is None:
+        return [{"criterion": c, "before": (rows.get(c) or {}).get("state_label"), "after": None} for c in criteria if c in rows]
+    return [{**b, "after": (rows.get(b["criterion"]) or {}).get("state_label"),
+             "basis": (rows.get(b["criterion"]) or {}).get("basis")} for b in before]
 
 
 def restricted_amend_actor_class() -> str:
