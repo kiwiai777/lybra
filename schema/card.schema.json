@@ -726,13 +726,13 @@
       "type": "string",
       "required": false,
       "written_by": "顾问(起草卡稿)",
-      "description": "AIPOS-F196 件①: subject=candidate 模式(task_mode=validation)的来源卡号——被验证的固定候选来自哪张卡(该卡须已在队列)。该模式必填, 其他模式不读; 形与语义唯一声明 enums.schema task_mode.candidate_subject, 唯一读取口 next_resolver.card_candidate_subject"
+      "description": "AIPOS-F196 件①: subject=candidate 模式(task_mode=validation)的来源卡号——被验证的固定候选来自哪张卡(该卡须已在队列)。该模式必填; 形与语义唯一声明 enums.schema task_mode.candidate_subject, 唯一读取口 next_resolver.card_candidate_subject。AIPOS-F205: 环境卡(enums.schema task_mode.candidate_binding.task_modes: config / docs / governance)可选与 validation_candidate 成对声明 = 绑定固定候选(缺省 = 行为不变), 候选所在仓按本来源卡 lane.repo 解析(不按本卡 lane.repo), 唯一读取口 next_resolver.card_environment_binding; 其他模式写了 = 拒(VALIDATION_BINDING_MODE)"
     },
     "validation_candidate": {
       "type": "string",
       "required": false,
       "written_by": "顾问(起草卡稿)",
-      "description": "AIPOS-F196 件①: subject=candidate 模式的固定候选——卡 lane.repo 解析仓中已有提交的完整 40 位 sha(起草 / 发卡即核, fail-closed)。交回 / 审计报告 commit_sha 与裁决 artifact_subject 一律 = 本值; 验证根 run-start --candidate 须等于本值。唯一读取口 next_resolver.card_candidate_subject"
+      "description": "AIPOS-F196 件①: subject=candidate 模式的固定候选——卡 lane.repo 解析仓中已有提交的完整 40 位 sha(起草 / 发卡即核, fail-closed)。交回 / 审计报告 commit_sha 与裁决 artifact_subject 一律 = 本值; 验证根 run-start --candidate 须等于本值。唯一读取口 next_resolver.card_candidate_subject。AIPOS-F205: 环境卡可选绑定时 = 来源卡产品仓(其 lane.repo)中已有提交的完整 40 位 sha, 验证根 run-start --candidate 须等于本值、源码从来源卡仓送达; 不改交付主体(只写治理根卡仍 outputs + 顾问复核)"
     },
     "finalize_task_id": {
       "type": "string",
@@ -1200,13 +1200,15 @@
     }
   },
   "restricted_amend": {
-    "description": "AIPOS-F78 前置零⑤(复用 F75 restricted amend): advisor 对 claimed 卡可受限修改的字段清单, 唯一声明。queue_rework 用其子集 {rework_rounds}; `lybra queue amend --restricted` 读全集。AIPOS-F179 件②: 追加 resources(在办卡补独占资源声明, 不改工作内容; 形校验同出卡 loop_run_record.card_resources)。",
+    "description": "AIPOS-F78 前置零⑤(复用 F75 restricted amend): advisor 对 claimed 卡可受限修改的字段清单, 唯一声明。queue_rework 用其子集 {rework_rounds}; `lybra queue amend --restricted` 读全集。AIPOS-F179 件②: 追加 resources(在办卡补独占资源声明, 不改工作内容; 形校验同出卡 loop_run_record.card_resources)。AIPOS-F205 件③: 追加 validation_source_task / validation_candidate——候选绑定属执行前置(验证根 run-start 候选核对与源码送达的依据), 不改验收与交付契约; 已认领的环境卡(config 等, 如 chris 岚图 LANTU-ENV3)补绑定的正式出口; 值校验与起草 / 发卡同一判据 draft_writer.candidate_subject_refusals(board_adapter.amend_task 同调)。",
     "actor_role_class": "advisor",
     "claimed_card_fields": [
       "rework_rounds",
       "output_target",
       "lane",
-      "resources"
+      "resources",
+      "validation_source_task",
+      "validation_candidate"
     ]
   },
   "roadmap_link": {

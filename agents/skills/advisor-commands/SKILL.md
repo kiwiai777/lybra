@@ -171,7 +171,7 @@ lybra queue amend --task-id <卡ID> --amendments '{"needs_owner": false}' \
 lybra queue amend --restricted --task-id <卡ID> --actor <你的顾问实例> \
   --amendments '{"lane": {"repo": "<代码仓>", "paths": ["src/", "tests/"], "roles": ["executor"]}}' \
   --amendment-reason "补车道: 漏列 tests/"
-# 允许字段唯一声明 card.schema restricted_amend.claimed_card_fields = rework_rounds / output_target / lane
+# 允许字段唯一声明 card.schema restricted_amend.claimed_card_fields = rework_rounds / output_target / lane / resources / validation_source_task / validation_candidate
 ```
 经门 MCP 改卡(`lybra_queue_amend_dry_run` → `lybra_queue_amend_confirm`)时, 确认只认预演返回的 `dry_run_token`(与返工同一确认令牌口径, AIPOS-F157), 门按预演过的那次修改重放核验后写入。
 **老卡回挂路线图(AIPOS-F171)**: 只改 `milestone` / `criteria` 的 amend 在 pending / claimed / blocked / completed 任一状态都允许(不必 `--restricted`), 引用同出卡校验:
@@ -495,6 +495,17 @@ lybra project validation-root init-command <项目名> --home-root <home根> --i
    产品升级不打断进行中 run; 新 run 才用新版。项目脚本(如归档核对脚本)要核 helper 摘要, 一律运行时取
    `lybra project validation-root helper --id <声明id> --run-id <run> --sha256`, 卡面 / 脚本禁写死摘要; helper 有变化的版本上线时
    `lybra updates` 会列「helper 摘要变化 旧→新」, 进行中 run 不必处理, 需用新子命令 = 收口后重新 run-start。
+6. **环境卡绑定固定候选(AIPOS-F205)**: 依赖准备 / 缓存快照等环境卡(`task_mode` config / docs / governance, 常为 `lane.repo: governance_root`
+   只写治理根)要在专用验证根里为某个固定候选干活时, 卡面成对写 `validation_source_task: <来源卡>` + `validation_candidate: <来源卡产品仓的完整 40 位 sha>`
+   (缺省不写 = 行为不变)。候选所在仓按**来源卡** `lane.repo` 解析(不按本卡 lane.repo), run-start 候选须 = 卡面候选, 源码从来源卡仓送达;
+   依赖缓存 / 临时 HOME / settings 只写本卡验证根本 run 目录(~/.m2 等全局缓存仍拒); 交付契约不变(只写治理根卡仍 Return `outputs` + 你复核结案)。
+   起草 / 发卡 / amend 同一判据(`VALIDATION_SUBJECT_MISSING` / `VALIDATION_CANDIDATE_INVALID` / `VALIDATION_SOURCE_UNKNOWN`, 非上列模式写了 = `VALIDATION_BINDING_MODE`)。
+   **已认领卡补绑定**(候选绑定属执行前置, 不改验收)= 受限 amend(允许字段 card.schema restricted_amend 已含这两字段), 再 run-start(预演后加 `--confirm`):
+```bash
+lybra queue amend --restricted --task-id <卡ID> --actor <你的顾问实例> --amendment-reason "环境卡绑定来源卡固定候选" --amendments '{"validation_source_task": "<来源卡>", "validation_candidate": "<卡面候选>"}' --dry-run
+lybra project validation-root run-start <项目名> --home-root <home根> --id <声明id> --candidate <卡面候选> --dry-run
+```
+   之后执行体开工提示的验证根节会列「本卡绑定固定候选」行 + 目录链 / 源码送达 / 核对命令; 本卡尚无声明时该节只给你 declare / run-start 出口, 执行体停线。
 
 #### 文档 / 配置卡只写治理根交 pi(AIPOS-F197: 不建卡工作树, 交回 = 产出清单)
 **何时用**: 文档 / 治理 / 配置类卡的产物只落治理根(不写任何产品仓)。任何项目同一组命令, 在治理根所在机运行。
