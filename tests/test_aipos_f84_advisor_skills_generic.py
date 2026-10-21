@@ -115,6 +115,8 @@ PLACEHOLDER_VALUES = {
     "<卡面候选>": "0123456789abcdef0123456789abcdef01234567",
     # AIPOS-F197: 只写治理根的卡顾问复核结案(mark-concluded --report-path)占位
     "<Return相对路径>": "task_cards/PROJ-1/RETURN.md",
+    # AIPOS-F205: 已认领环境卡补候选绑定(queue amend --restricted)占位
+    "<来源卡>": "PROJ-0",
 }
 PLACEHOLDER_RE = re.compile(r"<[^<>\s'\"]+>")
 #: 已退役的子命令(示例不得再教)

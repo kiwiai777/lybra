@@ -500,10 +500,10 @@ lybra project validation-root init-command <项目名> --home-root <home根> --i
    (缺省不写 = 行为不变)。候选所在仓按**来源卡** `lane.repo` 解析(不按本卡 lane.repo), run-start 候选须 = 卡面候选, 源码从来源卡仓送达;
    依赖缓存 / 临时 HOME / settings 只写本卡验证根本 run 目录(~/.m2 等全局缓存仍拒); 交付契约不变(只写治理根卡仍 Return `outputs` + 你复核结案)。
    起草 / 发卡 / amend 同一判据(`VALIDATION_SUBJECT_MISSING` / `VALIDATION_CANDIDATE_INVALID` / `VALIDATION_SOURCE_UNKNOWN`, 非上列模式写了 = `VALIDATION_BINDING_MODE`)。
-   **已认领卡补绑定**(如 chris 岚图 LANTU-ENV3)= 受限 amend(允许字段 card.schema restricted_amend 已含这两字段), 再 run-start(预演后加 `--confirm`):
+   **已认领卡补绑定**(候选绑定属执行前置, 不改验收)= 受限 amend(允许字段 card.schema restricted_amend 已含这两字段), 再 run-start(预演后加 `--confirm`):
 ```bash
-lybra queue amend --restricted --task-id <卡ID> --actor <你的顾问实例> --amendment-reason "<为何绑定>" --amendments '{"validation_source_task": "<来源卡>", "validation_candidate": "<候选 sha>"}' --dry-run
-lybra project validation-root run-start <项目名> --home-root <home根> --id <本卡声明id> --candidate <卡面候选> --dry-run
+lybra queue amend --restricted --task-id <卡ID> --actor <你的顾问实例> --amendment-reason "环境卡绑定来源卡固定候选" --amendments '{"validation_source_task": "<来源卡>", "validation_candidate": "<卡面候选>"}' --dry-run
+lybra project validation-root run-start <项目名> --home-root <home根> --id <声明id> --candidate <卡面候选> --dry-run
 ```
    之后执行体开工提示的验证根节会列「本卡绑定固定候选」行 + 目录链 / 源码送达 / 核对命令; 本卡尚无声明时该节只给你 declare / run-start 出口, 执行体停线。
 
