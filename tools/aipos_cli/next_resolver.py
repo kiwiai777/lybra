@@ -2890,7 +2890,7 @@ def _audit_round_guard(workspace_root: Path, audit_task_id: str, fm: dict[str, A
 # ---------------------------------------------------------------------------
 
 _AUDIT_BLOCKED_KEYS = ("verdicts", "action_type", "end_reason", "repeated_end_reason", "owner_needed_after", "reason_excerpt_chars",
-                       "dispatch_reason")
+                       "dispatch_reason", "owner_reaudit")
 
 
 def audit_blocked_declaration() -> dict[str, Any]:
@@ -2902,7 +2902,39 @@ def audit_blocked_declaration() -> dict[str, Any]:
         raise SchemaLoadError(f"transitions.schema.json nodes.N4.audit_blocked 未声明齐 {list(_AUDIT_BLOCKED_KEYS)}")
     if not isinstance(decl["owner_needed_after"], int) or isinstance(decl["owner_needed_after"], bool) or decl["owner_needed_after"] < 1:
         raise SchemaLoadError("transitions.schema.json nodes.N4.audit_blocked.owner_needed_after 须为 ≥1 整数")
+    reaudit = decl["owner_reaudit"]
+    if (not isinstance(reaudit, dict) or not isinstance(reaudit.get("choices"), list) or not reaudit["choices"]
+            or not all(isinstance(c, str) and c.strip() for c in reaudit["choices"])
+            or not isinstance(reaudit.get("dispatch_reason"), str) or not reaudit["dispatch_reason"].strip()):
+        raise SchemaLoadError("transitions.schema.json nodes.N4.audit_blocked.owner_reaudit 须有非空 choices(选项键)与 dispatch_reason")
     return decl
+
+
+def owner_reaudit_ruling(workspace_root: Path, task_id: str) -> dict[str, Any] | None:
+    """AIPOS-F202: the card's latest Owner inbox ruling whose choice is in nodes.N4.audit_blocked.owner_reaudit.choices
+    (owner_inbox.rulings_for_task, the inbox's own reader; ordered by decided_at) or None. A record that cannot be read
+    = FrontmatterReadError upward (fail-closed); a picked ruling without a readable decided_at = FrontmatterReadError naming it."""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+    from tools.aipos_cli.owner_inbox import _parse_utc, rulings_for_task
+
+    choices = {str(c) for c in audit_blocked_declaration()["owner_reaudit"]["choices"]}
+    picked = [r for r in rulings_for_task(Path(workspace_root), task_id) if str(r.get("allowed_next_action") or "") in choices]
+    if not picked:
+        return None
+    ruling = picked[-1]
+    decided = _parse_utc(ruling.get("decided_at"))
+    if decided is None:
+        raise FrontmatterReadError(ruling.get("_path") or ruling.get("decision_id"), "收件箱裁决 decided_at 读不出(连续 BLOCK 计数的界, AIPOS-F202)")
+    return {"decision_id": str(ruling.get("decision_id") or ""), "choice": str(ruling.get("allowed_next_action") or ""),
+            "decided_at": str(ruling.get("decided_at") or ""), "decided": decided, "record": ruling.get("_path"),
+            "owner_words": ruling.get("owner_words"), "relayed_by": ruling.get("relayed_by")}
+
+
+def _verdict_moment(path: Path, fm: dict[str, Any]) -> datetime:
+    """AIPOS-F202: a verdict record's moment for the owner-reaudit boundary = frontmatter verdict_at, else the record mtime (UTC)."""
+    from tools.aipos_cli.owner_inbox import _parse_utc
+
+    return _parse_utc(fm.get("verdict_at")) or datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
 
 
 def audit_block_state(workspace_root: Path, task_id: str) -> dict[str, Any] | None:
@@ -2926,11 +2958,16 @@ def audit_block_state(workspace_root: Path, task_id: str) -> dict[str, Any] | No
             regular.append((path, fm))
     if not regular or str(regular[0][1].get("verdict") or "").strip().upper() not in blocked:
         return None
-    consecutive = 0
-    for _path, fm in regular:
+    # AIPOS-F202: the card's latest Owner "re-audit" ruling bounds the count - only BLOCK verdicts after it are counted
+    # (history is not rewritten; with no such ruling the count is unchanged)
+    ruling = owner_reaudit_ruling(Path(workspace_root), task_id)
+    consecutive = total = 0
+    for path, fm in regular:
         if str(fm.get("verdict") or "").strip().upper() not in blocked:
             break
-        consecutive += 1
+        total += 1
+        if ruling is None or _verdict_moment(path, fm) > ruling["decided"]:
+            consecutive += 1
     latest_path, latest = regular[0]
     try:
         meta, body = require_frontmatter(latest_path)
@@ -2951,11 +2988,13 @@ def audit_block_state(workspace_root: Path, task_id: str) -> dict[str, Any] | No
         "verdict_id": str(latest.get("verdict_id") or latest_path.stem),
         "audit_task_id": blocked_audit,
         "consecutive": consecutive,
+        "consecutive_total": total,
         "repeated": consecutive >= int(decl["owner_needed_after"]),
         "owner_needed_after": int(decl["owner_needed_after"]),
         "reason": reason,
         "redispatched_to": redispatched,
         "next_round": None if redispatched else derive_audit_task_id(task_id, repo_root=Path(workspace_root)),
+        "owner_reaudit": None if ruling is None else {k: ruling[k] for k in ("decision_id", "choice", "decided_at", "record")},
     }
 
 
@@ -2967,7 +3006,6 @@ def reaudit_command(workspace_root: Path, task_id: str, card_frontmatter: dict[s
 
     if state.get("redispatched_to"):
         return f"已派下一轮审计 {state['redispatched_to']}(无需再派)"
-    decl = audit_blocked_declaration()
     fm = card_frontmatter
     if fm is None:
         path, _q = _find_task_in_queue(Path(workspace_root), task_id)
@@ -2976,12 +3014,24 @@ def reaudit_command(workspace_root: Path, task_id: str, card_frontmatter: dict[s
         auditor = resolve_audit_instance(fm, workspace_root)
     except ValueError as exc:
         auditor = f"<审计实例: {exc}>"
-    reason = str(decl["dispatch_reason"]).replace("{blocked_audit_task_id}", str(state.get("audit_task_id") or "?")).replace(
-        "{verdict_id}", str(state.get("verdict_id") or "?"))
+    reason = _reaudit_dispatch_reason(state)
     return _build_audit_dispatch_command(
         task_id=task_id, actor=actor or "<驱动方实例>", agent_instance=actor or "<驱动方实例>",
         owner_policy_ref=policy_ref or "<信封 policy_id>", connection_json=None, audit_task_id=str(state.get("next_round") or ""),
         audit_agent_instance=auditor, workspace_root=Path(workspace_root), dispatch_reason=reason)
+
+
+def _reaudit_dispatch_reason(state: dict[str, Any]) -> str:
+    """Dispatch reason of the next audit round: nodes.N4.audit_blocked.dispatch_reason; after an Owner re-audit ruling with no
+    BLOCK since it (AIPOS-F202) = owner_reaudit.dispatch_reason (names the decision record)."""
+    decl = audit_blocked_declaration()
+    pending = state.get("owner_reaudit") if not state.get("consecutive") else None
+    template = str(decl["owner_reaudit"]["dispatch_reason"] if pending else decl["dispatch_reason"])
+    values = {"blocked_audit_task_id": str(state.get("audit_task_id") or "?"), "verdict_id": str(state.get("verdict_id") or "?"),
+              "decision_id": str((pending or {}).get("decision_id") or "?")}
+    for key, value in values.items():
+        template = template.replace("{" + key + "}", value)
+    return template
 
 
 def audit_blocked_fix_values(workspace_root: Path, task_id: str, *, actor: str, policy_ref: str) -> dict[str, str]:
@@ -3001,6 +3051,8 @@ def _derive_audit_blocked(workspace_root: Path, task_id: str, fm: dict[str, Any]
     decl = audit_blocked_declaration()
     actor = _driver_actor(workspace_root, connection_json=conn_arg)
     policy_ref = _driver_envelope_ref(workspace_root, task_id, fm, conn_arg) or ""
+    if state.get("owner_reaudit") and not state["consecutive"] and not state.get("redispatched_to"):
+        return _derive_owner_reaudit(workspace_root, task_id, fm, state, actor=actor, policy_ref=policy_ref, conn_arg=conn_arg)
     command = reaudit_command(workspace_root, task_id, fm, state, actor=actor, policy_ref=policy_ref)
     repeated = bool(state["repeated"])
     head = (f"审计未能完成(裁决 {state['verdict']} {state['verdict_id']}, 审计卡 {state['audit_task_id']}"
@@ -3028,6 +3080,48 @@ def _derive_audit_blocked(workspace_root: Path, task_id: str, fm: dict[str, Any]
                    "end_reason": str(decl["repeated_end_reason"] if repeated else decl["end_reason"]),
                    "verdict_id": state["verdict_id"], "audit_task_id": state["audit_task_id"], "consecutive": state["consecutive"],
                    "reaudit_command": "" if repeated else command},
+    }
+
+
+def _derive_owner_reaudit(workspace_root: Path, task_id: str, fm: dict[str, Any], state: dict[str, Any], *, actor: str,
+                          policy_ref: str, conn_arg: str | None) -> dict[str, Any]:
+    """AIPOS-F202: the Owner ruled "re-audit" after the latest BLOCK (no BLOCK since the ruling) -> derivable: dispatch the next
+    audit round with the existing verb (same command shape as the N2->N3 dispatch the loop executes; round = derive_audit_task_id;
+    dispatcher / envelope = the driver). The loop then waits for / launches the new round as usual (AIPOS-F112 in-flight round)."""
+    from tools.aipos_cli.audit_derivation import resolve_audit_instance
+
+    ruling = state["owner_reaudit"]
+    head = (f"Owner 裁决 {ruling['decision_id']}(选 {ruling['choice']} @ {ruling['decided_at']})= 重新派审: 连续 BLOCK 自该裁决起重新计数"
+            f"(此前 {state['consecutive_total']} 次, 历史裁决与审计卡不改)")
+    missing: list[str] = []
+    auditor = ""
+    if not actor:
+        missing.append(DRIVER_ACTOR_MISSING)
+    try:
+        auditor = resolve_audit_instance(fm, workspace_root)
+    except ValueError as exc:
+        missing.append(f"卡 {task_id} 审计实例声明(audit_by)或项目声明(project): {exc}")
+    if missing:
+        return {"task_id": task_id, "derivable": False, "current_node": "audit_verdict", "current_state": "claimed", "triggered_by": "advisor",
+                "command": "", "verb": "lybra_audit_dispatch_dry_run", "missing_records": missing,
+                "suggested_action": f"{head}; 派审缺项: {'; '.join(missing)}", "notes": "N4: Owner 重新派审裁决在, 派审依据缺(AIPOS-F202)",
+                "audit_blocked": state, "action": {"type": "record_missing", "card": task_id, "record": "owner_reaudit_dispatch"}}
+    cmd = _build_audit_dispatch_command(
+        task_id=task_id, actor=actor, agent_instance=actor, owner_policy_ref=policy_ref or None, connection_json=conn_arg,
+        audit_task_id=str(state["next_round"]), audit_agent_instance=auditor, dispatch_reason=_reaudit_dispatch_reason(state))
+    return {
+        "task_id": task_id,
+        "derivable": True,
+        "current_node": "audit_verdict",
+        "current_state": "claimed",
+        "triggered_by": "advisor",
+        "command": cmd,
+        "verb": "lybra_audit_dispatch_dry_run",
+        "missing_records": [],
+        "suggested_action": f"{head}; 派下一轮审计 {state['next_round']}(执行产物不变)",
+        "notes": (f"N4: 最新裁决 {state['verdict']} {state['verdict_id']}(审计卡 {state['audit_task_id']})在 Owner 重新派审裁决之前, "
+                  f"界后 BLOCK 0/{state['owner_needed_after']}(AIPOS-F202, 声明 transitions nodes.N4.audit_blocked.owner_reaudit)"),
+        "audit_blocked": state,
     }
 
 
