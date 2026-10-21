@@ -971,9 +971,10 @@ def envelope_renew_declaration() -> dict[str, Any]:
             or not isinstance(warn, dict) or any(not isinstance(warn.get(k), (int, float)) or isinstance(warn.get(k), bool)
                                                  for k in ("remaining_ratio", "remaining_count", "expiry_hours"))
             or not isinstance(msgs, dict) or any(not isinstance(msgs.get(k), str) for k in ("exhausted", "expired", "renew", "warn"))
-            or not isinstance(decl["renew_days"], int) or decl["renew_days"] < 1):
-        raise SchemaLoadError("verbs.schema.json verbs.lybra_loop.envelope.renew 形不合(end_reasons{exhausted,expired} / warn 三阈值 / "
-                              "messages{exhausted,expired,renew,warn} / renew_days≥1)")
+            or not isinstance(decl["renew_days"], int) or decl["renew_days"] < 1
+            or not isinstance(warn.get("unused_exempt", False), bool)):
+        raise SchemaLoadError("verbs.schema.json verbs.lybra_loop.envelope.renew 形不合(end_reasons{exhausted,expired} / warn 三阈值"
+                              "(+ 可选布尔 unused_exempt) / messages{exhausted,expired,renew,warn} / renew_days≥1)")
     return decl
 
 
@@ -1146,7 +1147,8 @@ def envelope_card_need(governance_root: Path | str, usage: dict[str, Any], *, ta
 
 def envelope_warning(usage: dict[str, Any]) -> str | None:
     """预警判定(唯一实现, loop status / brief 同用): 有效信封(state=active)剩余 ≤ remaining_ratio × 上限、或剩余 ≤ remaining_count 次、或
-    距到期 ≤ expiry_hours 小时 = 一行原因; 用尽 / 过期 = 一行原因; 其余(缺 / 未生效 / 撤销)= None(不归预警管)。"""
+    距到期 ≤ expiry_hours 小时 = 一行原因; 用尽 / 过期 = 一行原因; 其余(缺 / 未生效 / 撤销)= None(不归预警管)。
+    AIPOS-F201 件④(gap #196 / #206): 声明 warn.unused_exempt = true 时, 未用过(used = 0)的有效信封不报剩余不足(到期临近照报)。"""
     decl = envelope_renew_declaration()
     warn = decl["warn"]
     state = usage.get("state")
@@ -1158,7 +1160,8 @@ def envelope_warning(usage: dict[str, Any]) -> str | None:
         return None
     reasons: list[str] = []
     remaining, max_tasks = int(usage.get("remaining") or 0), int(usage.get("max_tasks") or 0)
-    if remaining <= int(warn["remaining_count"]) or remaining <= float(warn["remaining_ratio"]) * max_tasks:
+    unused = bool(warn.get("unused_exempt", False)) and int(usage.get("used") or 0) == 0
+    if not unused and (remaining <= int(warn["remaining_count"]) or remaining <= float(warn["remaining_ratio"]) * max_tasks):
         reasons.append(f"剩余 {remaining}/{max_tasks} 张业务卡(阈值: ≤{warn['remaining_count']} 张或 ≤{float(warn['remaining_ratio']):.0%})")
     seconds = usage.get("seconds_to_expiry")
     if isinstance(seconds, int) and seconds <= float(warn["expiry_hours"]) * 3600:

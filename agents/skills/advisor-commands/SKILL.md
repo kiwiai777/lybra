@@ -300,7 +300,7 @@ lybra loop status --workspace-root <治理根> --json                          #
 - 结束原因 `wait_timeout` 且本卡执行方式 = 顾问派子 agent(project.json `execution`, 或等待目标是子 agent 执行者接入; AIPOS-F156 / F157): 不找 Owner、不敲 `/go`——子 agent 仍在做就等它写完交回后末行命令重跑(可加大 `--max-wait`), 已终止或未派就按 `lybra kickoff --task-id <卡ID>` 的开工稿补派; pi 工位 / 手工工位的 `wait_timeout` 仍是 `owner_needed`。
 同卡同一例行原因连续到声明次数仍被拒 = 产品自动升 `owner_needed`, 不必自己计数。
 **信封用尽 / 过期**(AIPOS-F166): 结束原因 `envelope_exhausted` / `envelope_expired` = `owner_needed(envelope_renew)`, detail 给当前用量 / 上限 / 到期, hint = 续签命令(`lybra envelope mint --confirm`, policy_id = 该驱动方同前缀已有最大序号 +1, 范围照抄用尽的信封)——原样转给 Owner 亲自敲, 签好用原命令续跑。剩余 ≤10% 或 ≤3 次、或 ≤24h 到期时 `loop status` / `brief` 先出一行「信封预警」(阈值声明 verbs.schema `lybra_loop.envelope.renew.warn`), 趁早请 Owner 续签。
-**请求授权**(AIPOS-F180): `owner_needed(no_envelope)` / `owner_needed(envelope_renew)` 时收件箱已按卡自动生成授权建议(驱动方 = 你、模式 = 卡面 task_mode、仓 = 卡面 lane.repo、额度 = 业务卡张数(AIPOS-F192: 本卡所需 1 张, 每张含其审计、返工、合入、结案, 不照抄上一信封; 项目 project.json grant_request.max_tasks 显式声明优先)、到期 = 项目缺省天数、理由 = 卡标题), Owner 在看板「待授权请求」一键「按建议签发」。建议不对就用 loop note 写清要什么: `lybra loop note --task-id <卡> --grant-mode <模式> --grant-repos <仓,…> --grant-max-tasks <N> --grant-expires <YYYY-MM-DD> --grant-reason <一句话理由> --workspace-root <治理根>` 预演后加 `--confirm`(字段可只给一部分; 给了 --grant-* 可不写 --ask)。不要再把 `lybra envelope mint` 长命令贴给 Owner; 签好后收件箱该项自动消失, 用原命令续跑 loop。Owner 不批准 = `lybra owner decide --item <OI-…> --choice deny_grant …` 记下, 按 Owner 原话调整请求或改卡。
+**请求授权**(AIPOS-F180): `owner_needed(no_envelope)` / `owner_needed(envelope_renew)` 时收件箱已按卡自动生成授权建议(驱动方 = 你、模式 = 卡面 task_mode、仓 = 卡面 lane.repo、额度 = 业务卡张数(AIPOS-F192: 本卡所需 1 张, 每张含其审计、返工、合入、结案, 不照抄上一信封; 项目 project.json grant_request.max_tasks 显式声明优先)、到期 = 项目缺省天数、理由 = 卡标题), Owner 在看板「待授权请求」一键「按建议签发」。建议不对就用 loop note 写清要什么: `lybra loop note --task-id <卡> --grant-mode <模式> --grant-repos <仓,…> --grant-max-tasks <N> --grant-expires <YYYY-MM-DD> --grant-reason <一句话理由> --workspace-root <治理根>` 预演后加 `--confirm`(字段可只给一部分; 给了 --grant-* 可不写 --ask)。不要再把 `lybra envelope mint` 长命令贴给 Owner; 签好后收件箱该项自动消失(转入「已定待转达」, 你续跑后消失), 用原命令续跑 loop。派 pi 工位的卡(validation / config / docs 等按 project.json execution 路由到 pi)建议自带「允许 loop 拉起 pi 工位」(AIPOS-F201), 不必再手加 --launch-harness pi。Owner 不批准 = `lybra owner decide --item <OI-…> --choice deny_grant …` 记下, 按 Owner 原话调整请求或改卡。
 **合并后回归未完成**(AIPOS-F166): 异步回归进程没跑完就没了(机器重启 / 被杀), `loop status` / `brief` / `next` 出一行「合并后回归未完成 … 补跑: `lybra regression run --sha <提交> --workspace-root <治理根>`」: 先原样跑一次(预演, 只读), 再加 `--confirm --actor <驱动方实例>` 补跑(前台; `--background` 后台), 结论落同格式回归事件记录, `lybra regression baseline --sha` 即可复用。仍在跑 / 已有完整结论 = 产品拒。
 **等待中的开工提示**(`continue_wait(manual_kickoff)`): 子 agent 模式 = 「顾问派本卡子 agent 执行并写交回, 开工稿 = `lybra kickoff --task-id <卡ID>` 的输出」(AIPOS-F187: 一份自足开工稿, 原样交给子 agent, 可在其后追加本卡特别说明; 不再手写), 照做, 不转述给 Owner; 只有 pi / 手工工位才是「请在 <工位> 敲 /go」。
 **取下一张归属**(`card_done_take_next`, AIPOS-F156): 末行命令只给归属本驱动方实例的下一张(门侧发布记录签发实例 = `draft publish --actor`); 共用仓里其他顾问实例的卡不取。
@@ -346,6 +346,13 @@ lybra owner inbox --home-root <home根> --stale-before 2026-10-01
 lybra owner decide --item <事项ID> --choice <选项键> --relayed-by <你的顾问实例> --owner-words "<Owner原话摘要>" --home-root <home根>
 lybra owner decide --items <事项ID>,<事项ID> --choice freeze_legacy --relayed-by <你的顾问实例> --owner-words "<Owner原话摘要>" --home-root <home根> --confirm
 ```
+   **放行继续**(AIPOS-F201): 卡面带 `needs_owner: true` 的未认领(pending)卡, 收件箱选项 `release`=「放行继续」; Owner 同意后
+   `lybra owner decide --item <OI-…> --choice release --relayed-by <你的顾问实例> --owner-words "<Owner原话>" --home-root <home根>` 预演再 `--confirm`
+   = 写决策记录 + 经 queue amend 把 needs_owner 置 false(修订理由带决策记录 ID 与 Owner 原话)+ 自动落账, 之后按输出的续跑命令 `lybra loop --task-id <卡> …`。
+   不要再用 `queue amend` 手改 needs_owner(那样没有 Owner 决策记录)。卡已认领 / 已阻塞时选 release 被拒并给原因。
+   **看板转达话术**(AIPOS-F201): Owner 在看板收件箱每个待决项的每个选项下都能复制一段「告诉 <驱动顾问>」的话术(点名你、带上面这条预演命令与下一步);
+   Owner 签发 / 定夺后, 收件箱顶部「已定待转达」(CLI `lybra owner inbox` 末段同文)按顾问合并列出你还没接着做的事(信封 id / 决策 id + 下一条命令),
+   你接着做(续跑 loop / 认领)后自动消失。驱动顾问 = 本卡最近 loop 运行的 driver, 无运行 = 卡面 planner_agent / created_by。
    blocked 卡的裁决可选 `withdraw`(经既有撤卡口, 记录带裁决引用)或 `freeze_legacy`(经既有存量冻结口, 清单条目带裁决引用)。之后对应卡
    `lybra loop status` 给 `advisor_fix(owner_ruled)`, detail 显示裁决、转达人与 Owner 原话, 按 hint 续跑; `lybra next --task-id` 附同一裁决行(自定义选项显示标签)。
 4. **项目暂停 / 恢复**(Owner 说「某项目先停」; 暂停项目的事项不再刷屏收件箱, 其余行为不变; 先预演, 再确认, 自动落账; 恢复 = `--status active`):

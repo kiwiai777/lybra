@@ -468,7 +468,9 @@ def test_item3_sign_as_suggested_end_to_end_and_item_disappears(board):
     assert hw1["item_id"] not in page_after and "待授权请求(1)" in page_after
     rc, text = _inbox(board)
     _show(f"[件③·签发后 CLI 收件箱原文]\n{text}")
-    assert "LANE-HW1" not in text
+    # AIPOS-F201 件③: the request item is gone; the card now only appears in the "decided, to relay" paragraph for its driver
+    items_part, _, relay_part = text.partition("已定待转达")
+    assert "LANE-HW1" not in items_part and f"告诉 {DRIVER}:" in relay_part and "Owner 已签发信封 pol_f180_lane_loop_4" in relay_part
     _snapshot("06-inbox-after-signing.html", page_after)
     _flow_snapshots(board, page, pre, done, hw1)
 
@@ -696,7 +698,10 @@ def test_item3_real_client_script_plain_confirm_success_and_failure(board, tmp_p
     assert [a["text"] for a in conf["actions"]] == ["确认签发", "取消"]
     ok = out["after_confirm"]
     assert ok["state"] == "signed" and ok["heading"] == "已签发 pol_f180_lane_loop_4"
-    assert ok["lines"] == [f"{DRIVER} 下次跑 loop 会自动继续 LANE-HW1。"]
+    # AIPOS-F201 item 3: the success panel names the advisor to tell and carries the paragraph to copy (policy id = the one signed)
+    assert ok["lines"][0] == f"{DRIVER} 还不知道你已签发: 把下面这段复制给它, 它会接着推进 LANE-HW1。" and len(ok["lines"]) == 2
+    assert ok["lines"][1].startswith(f"告诉 {DRIVER}:\n") and "Owner 已签发信封 pol_f180_lane_loop_4" in ok["lines"][1]
+    assert "--envelope pol_f180_lane_loop_4`" in ok["lines"][1] and "{policy_id}" not in ok["lines"][1]
     assert [(a["text"], a["href"]) for a in ok["actions"]] == [("返回收件箱", "/owner/inbox"), ("返回信封页", "/owner/envelopes"),
                                                              ("回总览", "/owner/overview")]
     assert ok["tech_open"] is False and "pol_f180_lane_loop_4 ->" in ok["tech"]

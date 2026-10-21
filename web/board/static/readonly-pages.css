@@ -344,6 +344,15 @@ body.rp-page { margin: 0; background: var(--surface-page); color: var(--ink); fo
 .rp-page .ib-rank-2 { border-left: var(--accent-bar) solid var(--state-warn); }
 .rp-page .ib-ask { font-weight: 600; }
 .rp-page .owner-inbox-paused { margin: 6px 0 0; }
+/* AIPOS-F201: "decided, to relay" paragraphs and per-option messages for the advisor (copyable plain text) */
+.rp-page .ib-relays { background: var(--surface-card); border: var(--border-hairline); border-left: var(--accent-bar) solid var(--green);
+  padding: 10px 20px; margin: 10px 0 16px; }
+.rp-page .ib-relay { margin: 8px 0; }
+.rp-page .ib-relay .rp-tell { margin: 4px 0; }
+.rp-page .ib-choices { margin: 6px 0 2px; }
+.rp-page .ib-choices-head { margin: 4px 0 2px; }
+.rp-page .ib-choice > summary.rp-cmd-label { text-transform: none; letter-spacing: normal; }
+.rp-page .gr-relay { margin: 6px 0 0; }
 /* upgrade page */
 .rp-page .upgrade-lines, .rp-page .upgrade-preview pre { white-space: pre-wrap; font-family: var(--font-mono); font-size: 12.5px; background: var(--code-bg);
   color: var(--code-fg); padding: .7em .9em; overflow-wrap: anywhere; }
