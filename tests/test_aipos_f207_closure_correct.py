@@ -266,6 +266,7 @@ def test_item2_queue_correct_preview_confirm_followup(rig):
     assert crit["state"] == "mismatch" and not crit["satisfied"]
     assert crit["fix_cards"] == [{"task_id": "LX-27C1", "queue_state": "pending", "draft": False, "text": "LX-27C1(pending)"}]
     assert "Owner 纠正卡 LX-27 的结案(不符·待承接" in crit["reason"] and "承接卡 LX-27C1(pending)" in crit["reason"]
+    assert crit["reason"].count("Owner 纠正卡 LX-27 的结案") == 1
     # 依赖该卡的卡不再认原结案
     dep = unmet_dependencies({"task_id": "LX-28", "depends_on": ["LX-27"]}, gov)
     _show(f"[②] 依赖 LX-27 拒因: {dep}")

@@ -8399,7 +8399,7 @@ def correct_closed_task(
     from tools.aipos_cli.queue_mutation import correct_declaration, correct_texts
     from tools.aipos_cli.record_writer import gate_record_files, render_markdown, write_records_atomic
     from tools.aipos_cli.roadmap import _fix_task_id, followup_draft_payload
-    from tools.aipos_cli.task_complexity import closure_disputes, closure_state
+    from tools.aipos_cli.task_complexity import closure_disputes, closure_state, dispute_event_type
     from tools.aipos_cli.task_loader import find_task_card
 
     relayed, words = relay_fields(relayed_by, owner_words)
@@ -8483,7 +8483,7 @@ def correct_closed_task(
                         or [json.dumps(dry.get("errors") or dry.get("message"), ensure_ascii=False)[:400]])
 
     # 争议标记(渲染; 确认时写)
-    event_type = str(decl["dispute_event_type"])
+    event_type = dispute_event_type()  # 写读同一读取口(task_complexity.closure_disputes 按此前缀读)
     record_id = f"{event_type}_{tid}_{file_slug('compact', decided_at)}"
     event_meta = {"record_type": RecordType.TASK_PROGRESS_EVENT, "event_type": event_type, "task_id": tid, "actor": relayed,
                   "timestamp": decided_at, "decision_id": decision_id, "followup_task_id": followup_id, "relayed_by": relayed,

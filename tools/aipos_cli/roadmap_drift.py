@@ -346,8 +346,7 @@ def _criterion_verification(root: Path, crit: dict[str, Any], crit_cards: list[d
             text = _fmt(basis_t["corrected"], "verification.basis.corrected", task_id=tid, decided_at=disputes[-1].get("marked_at") or "?",
                         relayed_by=disputes[-1].get("relayed_by") or "?", owner_words=disputes[-1].get("owner_words") or "",
                         decision_id=disputes[-1].get("decision_id") or "?")
-            corrections.append((disputes[-1], text))
-            why.append(text)
+            corrections.append((disputes[-1], text))  # 依据只进 detail 一次(下方按状态拼承接卡), 不另进 why
             continue
         ev = evidence[tid]
         ok, text = _verify_card(root, card, _card_truth(root, card, errors, cache), verify, decl, ev)
@@ -375,7 +374,9 @@ def _criterion_verification(root: Path, crit: dict[str, Any], crit_cards: list[d
         detail.append(text + (_fmt(basis_t["followup_part"], "verification.basis.followup_part", fix=fix) if fix else ""))
     elif qualified and verify != "owner_check":
         state = "auto_passed"
+        detail += [text for _fix, text in corrections]
     elif qualified:
+        detail += [text for _fix, text in corrections]
         results = verify_declaration()["results"]
         records: list[dict[str, Any]] = []
         unchecked: list[dict[str, Any]] = []
