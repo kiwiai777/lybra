@@ -441,12 +441,14 @@ def test_item5_6_kickoff_and_charter_render(rig):
     _show(f"---- 件⑤ 执行者章程写权限节(chris 形 Codex 子 agent)exit {rc} ----\n{section}")
     assert rc == 0, err
     assert "| validation_root | **mutate** |" in section and "## 跨机临时验证根" in section
-    assert f"codex exec --sandbox workspace-write --add-dir {run_dir}" in section and f"{base}/{AUDIT_CARD}" not in section
+    # AIPOS-F206 件①: 章程验证根节只留通用规则(指向开工提示), 本卡声明 / run / 命令只在开工稿(上文 brief 已核)
+    assert "本卡的验证根声明、可写目录、run" in section and f"kickoff --task-id <本卡ID>" in section
+    assert run_dir not in section and str(base) not in section and "vr-hbx-60" not in section
     rc, charter, err = _cli("charter", "--role", "auditor", "--instance", AUD, "--workspace-root", gov)
     section = charter[charter.index("## 🔴 写权限边界"):] if rc == 0 else ""
     _show(f"---- 件⑤ 审计者章程写权限节 exit {rc} ----\n{section or err}")
-    assert rc == 0 and f"- 声明 vr-hbx-60r-auditor-1: 主机 {HOST}" in section and f"{base}/{AUDIT_CARD}/<run-id>/" in section
-    assert "vr-hbx-60-executor-1" not in section
+    assert rc == 0 and "## 跨机临时验证根" in section and "本卡的验证根声明、可写目录、run" in section
+    assert "vr-hbx-60r-auditor-1" not in section and "vr-hbx-60-executor-1" not in section and str(base) not in section
 
 
 # ===========================================================================

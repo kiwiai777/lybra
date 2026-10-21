@@ -11,7 +11,8 @@
   - 判定细则 / base 禁区 / 工具重定向 / harness 沙箱渲染 = roles.schema write_boundary.validation_root(唯一声明);
     判定入口 = write_boundary.check_access(经本模块 judge_access, 面 validation_root)。
   - 主机身份(指纹)与 realpath 判定 = validation_root_helper(纯标准库单文件, 目标主机同一份); 本模块只 import, 不另写。
-  - 开工稿 / 章程同源: render_section_lines(措辞读 verbs.schema lybra_kickoff.validation_root_texts)。
+  - 开工稿 = render_section_lines(本卡声明 / run / 命令明细); 章程 = render_charter_section_lines(与声明条数无关的通用段, AIPOS-F206);
+    措辞同读 verbs.schema lybra_kickoff.validation_root_texts。
   - AIPOS-F194 iOS 本 run 专用模拟器(Owner 10-20 定, 取代已撤下的 simctl --set 独立设备集): 声明 roles.schema
     write_boundary.validation_root.ios_simulator; UDID 绑定在 project.json 本 run 记录(runs[].simulator, 与 run-id 同一处, 不另立登记文件;
     写入口 apply_validation_root_change sim-bind / run-finish --sim-evidence); 主机侧建 / 核 / 删与证据核对 = helper sim-* 与
@@ -1482,8 +1483,9 @@ def _gov_cmd(governance_root: Path) -> str:
 
 def render_section_lines(governance_root: str | Path, *, instance: str, task_id: str | None = None, harness: str | None = None,
                          include_inactive: bool = False) -> list[str]:
-    """本实例(可限本卡)的验证根节(开工稿与章程同源; 措辞 verbs.schema lybra_kickoff.validation_root_texts)。无声明 = []。
-    include_inactive = 已撤销 / 到期的也列(开工稿: 如实告知一律拒); 章程只列有效声明。"""
+    """本实例(可限本卡)的验证根节明细(措辞 verbs.schema lybra_kickoff.validation_root_texts)。无声明 = []。
+    AIPOS-F206: 只供开工提示按本卡渲染(my-tasks next_card.kickoff / lybra kickoff, 给 task_id); 章程不再调本函数(逐声明明细使章程随声明
+    线性增长), 章程通用段 = render_charter_section_lines。include_inactive = 已撤销 / 到期的也列(开工稿: 如实告知一律拒)。"""
     gov = Path(governance_root).expanduser().resolve()
     now = _now()
     entries = [e for e in project_validation_roots(gov) if e["instance"] == instance and (task_id is None or e["task_id"] == task_id)]
@@ -1598,6 +1600,53 @@ def _sim_values(governance_root: Path, entry: dict[str, Any], run: dict[str, Any
         actions.append(_fill(str(sim_decl["xcodebuild_template"]), {**values, **sim_values, "action": action}))
     sim_values["xcodebuild_actions"] = "; ".join(f"`{a}`" for a in actions)
     return sim_values
+
+
+CHARTER_TEXT_KEYS = ("charter_scope", "charter_rules")
+
+
+def charter_section_texts() -> dict[str, Any]:
+    """AIPOS-F206: 章程通用段措辞 = verbs.schema lybra_kickoff.validation_root_texts 的 charter_scope(串)/ charter_rules(串列表)。
+    缺 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.aipos_cli.subagent_kickoff import kickoff_contract
+    from tools.schema_loader import SchemaLoadError
+
+    texts = kickoff_contract().get("validation_root_texts")
+    scope = texts.get("charter_scope") if isinstance(texts, dict) else None
+    rules = texts.get("charter_rules") if isinstance(texts, dict) else None
+    if not isinstance(scope, str) or not scope or not isinstance(rules, list) or not rules \
+            or any(not isinstance(r, str) or not r for r in rules):
+        raise SchemaLoadError(f"verbs.schema.json verbs.lybra_kickoff.validation_root_texts({' / '.join(CHARTER_TEXT_KEYS)})未声明齐")
+    return {"charter_scope": scope, "charter_rules": list(rules)}
+
+
+def render_charter_section_lines(governance_root: str | Path, *, instance: str, role_class: str) -> list[str]:
+    """AIPOS-F206 件①: 章程「跨机临时验证根」节 = 与声明条数无关的通用段(有界长度)。
+
+    本卡的声明 / run / 目录 / 命令只经开工提示(render_section_lines, my-tasks next_card.kickoff 与 lybra kickoff)按本卡渲染;
+    章程只给通用规则 + 指向开工提示。出现条件 = 角色类可声明验证根(roles.schema write_boundary.validation_root.card_kind_by_class)
+    且本项目 project.json validation_roots 有任一声明(无声明 = [], 章程与 F190 前逐字节相同); 内容不随声明条数 / run / 状态变化
+    (章程指纹只在首条声明出现时变一次, 之后声明 / run 变不再触发重渲染)。值只取本实例与声明模板(path_template), 不列任何声明条目。"""
+    gov = Path(governance_root).expanduser().resolve()
+    decl = declaration()
+    kinds = decl.get("card_kind_by_class") or {}
+    if role_class not in kinds or role_class == "description":
+        return []
+    if not project_validation_roots(gov):
+        return []
+    texts, charter_texts = section_texts(), charter_section_texts()
+    gcmd = _gov_cmd(gov)
+    values = {
+        "path_template": _fill(str(decl["path_template"]), {"base": "<声明 base>", "task_id": "<本卡ID>", "run_id": "<活动 run-id>"}),
+        "kickoff_command": f"{gcmd} kickoff --task-id <本卡ID>",
+        "check_command": (f"{gcmd} roles write-boundary --instance {instance} --task-id <本卡ID> --host <主机> "
+                          "--run-id <run-id> --check <目标路径> --level mutate"),
+    }
+    lines = [texts["title"], _fill(texts["relation"], {"relation": decl["relation_to_hard_rules"]}),
+             _fill(charter_texts["charter_scope"], values)]
+    lines.extend(_fill(rule, values) for rule in charter_texts["charter_rules"])
+    lines.extend(_fill(texts["block"], {"text": text}).strip() for text in decl["block_conditions"])
+    return lines
 
 
 def render_list_lines(entries: list[dict[str, Any]]) -> list[str]:

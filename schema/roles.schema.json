@@ -606,6 +606,13 @@
       }
     }
   },
+  "charter_size_guard": {
+    "description": "AIPOS-F206(chris 岚图 LANTU-VALID1R 实撞: hbj-auditor 工位章程 234180 字节, 其中「跨机临时验证根」节 169394 字节逐声明 / 逐 run 列全项目命令, 审计 pi 开工首轮 input 84221 tokens 后 stopReason=length 连败): 角色章程渲染物体积上限(唯一声明)。章程验证根节只渲染与声明条数无关的通用规则(validation_root.render_charter_section_lines), 本卡的声明 / run / 命令只进该卡开工提示(my-tasks next_card.kickoff 与 lybra kickoff, validation_root.render_section_lines); 渲染物(utf-8 字节)> max_bytes = charter_render.render_charter 拒渲染(CharterOversize, fail-closed, 拒因含各节字节数与出口; sync / lybra charter / enroll 种子同一渲染器同拒); 工位上已有章程 > max_bytes = sync 判据 _charter_render_reason 判需重渲染(oversize), loop 拉起前核章程新鲜度(AIPOS-F164)即先 sync, 渲染仍超限 = sync 失败 = 不拉起(charter_sync_failed, 不拉起必爆上下文的会话)。validation_root_section_max_bytes = 章程验证根通用节上限(守卫测试按声明判)。缺 / 形不合 = SchemaLoadError。",
+    "max_bytes": 40960,
+    "validation_root_section_max_bytes": 6144,
+    "refusal_code": "CHARTER_OVERSIZE",
+    "oversize_reason": "oversize(工位章程 {size} 字节 > 上限 {max_bytes} 字节, roles.schema charter_size_guard; 须重渲染)"
+  },
   "drill_assertion": "Acceptance #1 (new-role drill): add a probe role entry here (with naming prefix + scopes; tools via distribution.schema applies_to_roles) → enroll/distribute/naming all work with ZERO code change → proving 'new role = add one data row'. Drill must be reverted before commit.",
   "driver": {
     "description": "AIPOS-F78 前置零①: 账务动词的驱动方声明——账务动词(claim/return/dispatch/verdict/close/mark_concluded)一律由驱动方 token 提交, actor/agent_instance=卡实例(执行体/审计体零门, 其 token 无账务 scope)。CLI 薄壳(queue claim/return --confirm, audit-verdict --confirm, artifact ingest)从 connection.json 选 role_class==driver.role_class 的 token; 门侧 PreAuthorized 信封识别驱动方身份(token 绑定实例或 role)而非卡实例。唯一声明, 代码只读。",

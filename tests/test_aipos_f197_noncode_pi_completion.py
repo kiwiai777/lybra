@@ -404,7 +404,7 @@ def test_item4_source_delivery_local_and_ssh_forms(vrig):
     assert f"project validation-root helper | ssh {ALIAS} 'python3 - src-verify " in ssh["verify"]
     js = json.loads(_vr(gov, "init-command", "--id", decl, "--json")[1])
     assert js["source_delivery"]["deliver"] == ssh["deliver"] and js["source_delivery"]["verify"] == ssh["verify"]
-    # 章程(本实例有效声明)同源
+    # 本实例全部有效声明(task_id 缺省)同一铸造口(AIPOS-F206 起章程不再列明细, 只开工稿按本卡渲染)
     charter = vr.render_section_lines(gov, instance=EXEC)
     assert ssh["deliver"] in _src_line(charter)
 
