@@ -346,6 +346,11 @@
       },
       "run_id_template": "run-{n}",
       "helper_module": "tools/aipos_cli/validation_root_helper.py",
+      "helper_pinning": {
+        "description": "AIPOS-F203(chris 理想 HBLX-20CV 实撞, gap #208: 项目脚本写死 helper 摘要, 产品升级 helper 即被打断; run 进行中升级部署使同一 run 前后两段 helper 不同): 验证 helper 按 run 固定版本。run-start --confirm 把当时部署的 helper 原文存入快照库(project.json paths.validation_helper_root, 内容寻址 = snapshot_filename, 非代码扩展名, AIPOS-F195), run 记录 runs[].helper_sha256 记其摘要; 此后该 run 的全部 helper 取用(init-run / src-verify / sim-* / sys-snapshot / check / evidence-manifest / evidence-fetch 送入目标主机的 helper, 开工稿与章程的取用命令与 sha256)一律 = 这份快照, 与部署升级无关; run-finish 后快照保留供审计复核。查询口 `lybra project validation-root helper --id <声明> --run-id <run> [--sha256]`(项目脚本运行时取值, 禁写死摘要)。快照读出摘要 ≠ 记录 / 缺失 = VR_HELPER_SNAPSHOT_INVALID(fail-closed, 不下发)。旧 run(缺 helper_sha256)= 按当前部署版并标注 legacy_note。读写唯一实现 validation_root.pin_helper_snapshot / run_helper。",
+        "snapshot_filename": "{sha256}.py.txt",
+        "legacy_note": "旧 run 无固定 helper 快照(run-start 早于 AIPOS-F203 按 run 固定): 按当前部署版 {sha256} 下发, 产品升级会改变本 run 的 helper; 需固定 = 收口后重新 run-start"
+      },
       "default_ttl_hours": 72,
       "max_ttl_hours": 336,
       "forbidden_bases": {

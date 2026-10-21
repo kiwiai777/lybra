@@ -9,6 +9,9 @@
 件③ 送达(只读部分): 库定位 store_dir_for_running_code(部署快照 / --dev-tree 才读, 卡工作树测试不读真实库)、已读集合 acked_update_ids
       (治理根 records advisor_update_acks/<实例>/, 只追加)、未读判定 unread_updates、提示渲染 banner_lines。写已读标记与 CLI 薄壳在
       advisor_updates_cli(本模块只依赖标准库 + 合并后预载闭包内的模块: finalize 合并后本进程调用 compile_on_deploy)。
+AIPOS-F203 件③: 部署的版本改了验证 helper(roles.schema validation_root.helper_module)= 汇总自动附一条兼容说明(helper_change_entry:
+      摘要 旧→新、子命令新增 / 移除 / 参数变化、进行中 run 不受影响; 声明 verbs.schema lybra_updates.compile.helper_change)。只用标准库 + git,
+      不导入验证根模块(合并后预载闭包不扩)。
 """
 from __future__ import annotations
 
@@ -262,6 +265,151 @@ def _card_notice(governance_root: Path, task_id: str) -> dict[str, Any] | None:
         raise AdvisorNoticeError(f"卡 {task_id} 的 advisor_notice: {exc}") from exc
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F203 件③: 验证 helper 版本变化的兼容说明
+# ---------------------------------------------------------------------------
+
+def helper_change_declaration() -> dict[str, Any]:
+    """verbs.schema lybra_updates.compile.helper_change(audience / summary / actions / none / absent)。缺键 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = updates_declaration()["compile"].get("helper_change")
+    ok = (isinstance(decl, dict) and isinstance(decl.get("audience"), list) and decl["audience"]
+          and all(isinstance(decl.get(k), str) and decl[k] for k in ("summary", "none", "absent"))
+          and isinstance(decl.get("actions"), list) and all(isinstance(a, str) and a for a in decl["actions"]))
+    if not ok:
+        raise SchemaLoadError(f"verbs.schema.json verbs.{VERB}.compile.helper_change(audience / summary / actions / none / absent)未声明齐")
+    return decl
+
+
+def _helper_module_rel() -> str:
+    """验证 helper 在产品仓内的相对路径 = roles.schema write_boundary.validation_root.helper_module(唯一声明)。缺 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    rel = (((load_schema("roles").get("write_boundary") or {}).get("validation_root") or {}).get("helper_module"))
+    if not isinstance(rel, str) or not rel.strip() or rel.startswith("/"):
+        raise SchemaLoadError("roles.schema.json write_boundary.validation_root.helper_module(产品仓相对路径)未声明")
+    return rel.strip()
+
+
+def _git_blob(repo: Path, rev: str, rel: str) -> bytes | None:
+    """<rev>:<rel> 的原文; rev 不存在(如根提交无父)或该版本无此文件 = None; git 不可用 / 读失败 = AdvisorUpdatesError(fail-closed)。"""
+    def git(*args: str) -> subprocess.CompletedProcess:
+        try:
+            return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise AdvisorUpdatesError(f"helper 兼容说明: git {' '.join(args)} 跑不了({type(exc).__name__}: {exc})") from exc
+
+    if git("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}").returncode != 0:
+        return None
+    if git("cat-file", "-e", f"{rev}:{rel}").returncode != 0:
+        return None
+    shown = git("show", f"{rev}:{rel}")
+    if shown.returncode != 0:
+        raise AdvisorUpdatesError(f"helper 兼容说明: git show {rev}:{rel} 失败({shown.stderr.decode('utf-8', 'replace').strip()})")
+    return shown.stdout
+
+
+def helper_subcommands(source: str) -> dict[str, tuple[str, ...]]:
+    """静态解析 helper 的 argparse 声明(不执行): {子命令: 排序后的参数名}。`X = sub.add_parser("名")` / 循环 `for v, _ in (("名", …), …)` 里的
+    add_parser(v) 均认; 参数 = 该子解析器变量上 add_argument 的首个字面量(循环内共用变量 = 归入循环全部子命令)。解析不出 = AdvisorUpdatesError。"""
+    import ast
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        raise AdvisorUpdatesError(f"helper 兼容说明: helper 原文解析不出({exc})") from exc
+    loop_values: dict[str, list[str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.For) or not isinstance(node.iter, (ast.Tuple, ast.List)):
+            continue
+        target = node.target.elts[0] if isinstance(node.target, ast.Tuple) and node.target.elts else node.target
+        if not isinstance(target, ast.Name):
+            continue
+        values = []
+        for elt in node.iter.elts:
+            head = elt.elts[0] if isinstance(elt, ast.Tuple) and elt.elts else elt
+            if isinstance(head, ast.Constant) and isinstance(head.value, str):
+                values.append(head.value)
+        if values:
+            loop_values.setdefault(target.id, []).extend(values)
+
+    def parser_names(call: ast.AST) -> list[str]:
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute) and call.func.attr == "add_parser" and call.args):
+            return []
+        arg = call.args[0]
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            return [arg.value]
+        return list(loop_values.get(arg.id, [])) if isinstance(arg, ast.Name) else []
+
+    out: dict[str, set[str]] = {}
+    var_map: dict[str, list[str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            names = parser_names(node.value)
+            if names:
+                var_map.setdefault(node.targets[0].id, []).extend(names)
+                for name in names:
+                    out.setdefault(name, set())
+        elif isinstance(node, ast.Expr):
+            for name in parser_names(node.value):
+                out.setdefault(name, set())
+    parents: dict[int, ast.AST] = {id(child): node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+    def narrowed(call: ast.AST, names: list[str]) -> list[str]:
+        """循环内 `if <循环变量> == "名":` 分支里的 add_argument 只归该子命令(else 分支归其余)。"""
+        keep, child = list(names), call
+        node = parents.get(id(call))
+        while node is not None:
+            test = node.test if isinstance(node, ast.If) else None
+            if (isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq)
+                    and isinstance(test.left, ast.Name) and test.left.id in loop_values
+                    and isinstance(test.comparators[0], ast.Constant) and isinstance(test.comparators[0].value, str)):
+                value = test.comparators[0].value
+                keep = [n for n in keep if (n == value) == any(child is b for b in node.body)]
+            child, node = node, parents.get(id(node))
+        return keep
+
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "add_argument"
+                and isinstance(node.func.value, ast.Name) and node.func.value.id in var_map and node.args
+                and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+            for name in narrowed(node, var_map[node.func.value.id]):
+                out[name].add(node.args[0].value)
+    return {name: tuple(sorted(opts)) for name, opts in sorted(out.items())}
+
+
+def helper_change_entry(product_repo: str | Path, commit: str, task_id: str) -> dict[str, Any] | None:
+    """AIPOS-F203 件③: 部署提交 commit 与其第一父提交(部署前的主线)的验证 helper 对比; 有变化 = 兼容说明条目(形同 advisor_notice,
+    source=helper_change), 无变化 / 两版都无 helper(非 Lybra 产品仓)= None。git / 解析失败 = AdvisorUpdatesError(汇总失败, 出口同 compile)。"""
+    import hashlib
+
+    decl = helper_change_declaration()
+    rel = _helper_module_rel()
+    repo = Path(product_repo)
+    new = _git_blob(repo, commit, rel)
+    old = _git_blob(repo, f"{commit}^1", rel)
+    if new == old:
+        return None
+
+    def digest(raw: bytes | None) -> str:
+        return hashlib.sha256(raw).hexdigest()[:12] if raw is not None else str(decl["absent"])
+
+    def subs(raw: bytes | None) -> dict[str, tuple[str, ...]]:
+        return helper_subcommands(raw.decode("utf-8", "replace")) if raw is not None else {}
+
+    before, after = subs(old), subs(new)
+    def listed(names: list[str]) -> str:
+        return ", ".join(names) or str(decl["none"])
+
+    summary = str(decl["summary"]).format(
+        old12=digest(old), new12=digest(new), added=listed(sorted(set(after) - set(before))),
+        removed=listed(sorted(set(before) - set(after))),
+        changed=listed(sorted(n for n in set(before) & set(after) if before[n] != after[n])))
+    return {"task_id": task_id, "audience": [str(a) for a in decl["audience"]], "summary": summary,
+            "actions": [str(a) for a in decl["actions"]], "source": "helper_change"}
+
+
 def compile_on_deploy(workspace_root: str | Path, governance_root: str | Path, task_id: str, *,
                       merge_commit: str | None = None) -> dict[str, Any]:
     """部署成功后汇总更新说明(唯一实现; 唯一调用口 finalize._ensure_finalization_record, deploy_status=deployed)。
@@ -282,6 +430,13 @@ def compile_on_deploy(workspace_root: str | Path, governance_root: str | Path, t
     own = _card_notice(gov, task_id)
     if own is not None and own["task_id"] not in emitted:
         fresh.append(own)
+    current = store.parent / CURRENT_LINKNAME  # 被部署产品仓的部署链接(与库同一部署目录)
+    commit = read_version_commit(current / VERSION_FILENAME) or str(merge_commit or "").strip()
+    # AIPOS-F203 件③: 部署版本改了验证 helper = 附兼容说明(同卡已汇总过 = 不重复; 生效版本不可知 = 不判, 有其他新条目时照旧拒)
+    if commit and task_id not in emitted:
+        helper_entry = helper_change_entry(product, commit, task_id)
+        if helper_entry is not None:
+            fresh.append(helper_entry)
     for row in _backfill_entries(product):
         if row["task_id"] not in emitted and row["task_id"] not in {f["task_id"] for f in fresh}:
             fresh.append(row)
@@ -289,8 +444,6 @@ def compile_on_deploy(workspace_root: str | Path, governance_root: str | Path, t
         why = "本卡卡面无 advisor_notice" if own is None else f"本卡 {task_id} 的须知已汇总过"
         return {"written": None, "update_id": None, "entries": [],
                 "line": f"更新说明: 无新条目({why}; 回填清单无未汇总条目), 未生成"}
-    current = store.parent / CURRENT_LINKNAME  # 被部署产品仓的部署链接(与库同一部署目录)
-    commit = read_version_commit(current / VERSION_FILENAME) or str(merge_commit or "").strip()
     if not commit:
         raise AdvisorUpdatesError(f"{current / VERSION_FILENAME} 无 git_commit 且未给合并提交, 生效版本不可知")
     release = Path(os.path.realpath(current)).name if current.exists() else commit[:12]

@@ -19,6 +19,9 @@
     helper.verify_sim_evidence(治理根侧 run-finish 同一函数); 设备目录写判定 = judge_access(同面 validation_root, scope ios_simulator)。
   - AIPOS-F191 目录链初始化: 目标主机上的空目录链(<base>/<卡ID>/<run-id>)只经 helper init-run 建; 命令唯一铸造口 init_run_command
     (封印 = helper.init_seal 同一实现), 出口三处同源: run-start --confirm 输出 / 开工稿与章程验证根节 / `validation-root init-command`。
+  - AIPOS-F203 helper 按 run 固定: run-start --confirm 把当时部署的 helper 原文存入快照库(paths.validation_helper_root, 内容寻址,
+    唯一写入口 pin_helper_snapshot)并在 run 记录 runs[].helper_sha256 记摘要; 本 run 一切 helper 取用(管道 / 存盘 / 证据取回 / 开工稿与
+    章程的取用命令与 sha256)只经唯一读取口 run_helper 与唯一取用命令铸造口 helper_fetch_command(`… helper --id <声明> --run-id <run>`)。
 fail-closed: 声明缺 = SchemaLoadError; 段形不合 = ValidationRootError(VR_DECLARATION_INVALID); 违规 = 拒, 不吞。
 """
 from __future__ import annotations
@@ -38,15 +41,16 @@ SURFACE = "validation_root"
 CARD_KINDS = ("execution_card", "audit_card")
 _HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 ENTRY_KEYS = ("id", "host", "host_fingerprint", "base", "task_id", "instance", "role_class", "owner_ref", "declared_by", "declared_at",
               "expires_at", "revoked_at", "revoked_by", "revoke_reason", "runs")
 RUN_KEYS = ("run_id", "candidate", "started_at", "started_by", "finished_at", "finished_by")
-RUN_OPTIONAL_KEYS = ("simulator",)  # AIPOS-F194: 缺键 = 本 run 未绑定专用模拟器(行为不变)
+RUN_OPTIONAL_KEYS = ("simulator", "helper_sha256")  # AIPOS-F194: 缺键 = 未绑定专用模拟器; AIPOS-F203: 缺键 = 旧 run(helper 按当前版)
 SIM_KEYS = ("udid", "name", "bound_at", "bound_by", "verified_at", "verified_by", "evidence_sha256")
 TEXT_KEYS = ("title", "relation", "declaration", "directory", "run_active", "run_none", "run_finish", "check_dev", "helper",
              "sandbox", "redirect_title", "redirect", "side_effect", "block", "init_run", "sim_title", "sim_step", "ssh_mode", "helper_ssh", "init_run_ssh",
-             "src_deliver", "src_deliver_ssh", "src_pending", "evidence_fetch")
+             "src_deliver", "src_deliver_ssh", "src_pending", "evidence_fetch", "helper_pin")
 ACTIONS = ("declare", "revoke", "run-start", "run-finish", "sim-bind", "set-host")
 # AIPOS-F196 件③: 目标主机 ssh 访问声明(project.json validation_roots.hosts.<主机标签>; 声明 config.schema validation_roots.schema.hosts)
 HOST_ENTRY_KEYS = ("ssh_alias", "owner_ref", "declared_by", "declared_at")
@@ -122,7 +126,8 @@ def reject_codes() -> dict[str, str]:
     codes = decl.get("reject_codes") if isinstance(decl, dict) else None
     needed = ("VR_DECLARATION_INVALID", "VR_BASE_FORBIDDEN", "VR_INSTANCE_NOT_ENROLLED", "VR_ROLE_NOT_ALLOWED", "VR_TASK_NOT_OWNED",
               "VR_HOST_FINGERPRINT_REQUIRED", "VR_HOST_FINGERPRINT_MISMATCH", "VR_NOT_FOUND", "VR_STATE_CONFLICT", "VR_CANDIDATE_INVALID",
-              "VR_SIM_INVALID", "VR_SIM_EVIDENCE_REJECTED", "VR_HOST_ALIAS_INVALID", "VR_EVIDENCE_REJECTED")
+              "VR_SIM_INVALID", "VR_SIM_EVIDENCE_REJECTED", "VR_HOST_ALIAS_INVALID", "VR_EVIDENCE_REJECTED",
+              "VR_HELPER_SNAPSHOT_INVALID")
     if not isinstance(codes, dict) or any(not codes.get(k) for k in needed):
         raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.validation_roots.reject_codes 未声明齐")
     return codes
@@ -234,6 +239,8 @@ def project_validation_roots(governance_root: str | Path, *, project: dict[str, 
                 raise _err("VR_DECLARATION_INVALID", f"{rat}.run_id={run['run_id']!r} 不合法")
             if not isinstance(run["candidate"], str) or not _SHA_RE.match(run["candidate"]):
                 raise _err("VR_DECLARATION_INVALID", f"{rat}.candidate 须为 40 位 sha")
+            if "helper_sha256" in run and not (isinstance(run["helper_sha256"], str) and _SHA256_RE.match(run["helper_sha256"])):
+                raise _err("VR_DECLARATION_INVALID", f"{rat}.helper_sha256 须为 64 位小写 hex(本 run 固定 helper 摘要; 旧 run 缺键)")
             _parse_iso(run["started_at"], f"{rat}.started_at")
             if run["finished_at"] is not None:
                 _parse_iso(run["finished_at"], f"{rat}.finished_at")
@@ -294,9 +301,17 @@ def ssh_command(alias: str, remote: str) -> str:
     return f"ssh {shlex.quote(alias)} {shlex.quote(remote)}"
 
 
-def helper_pipe_command(governance_root: str | Path, alias: str, remote_args: str) -> str:
-    """helper 经管道送目标主机执行(唯一拼接口): `<lybra> project validation-root helper | ssh <别名> 'python3 - <子命令与参数>'`。"""
-    return f"{_gov_cmd(Path(governance_root).expanduser().resolve())} project validation-root helper | {ssh_command(alias, 'python3 - ' + remote_args)}"
+def helper_pipe_command(governance_root: str | Path, alias: str, remote_args: str, entry: dict[str, Any] | None = None,
+                        run: dict[str, Any] | None = None) -> str:
+    """helper 经管道送目标主机执行(唯一拼接口): `<本 run 固定 helper 取用> | ssh <别名> 'python3 - <子命令与参数>'`。
+    AIPOS-F203: 取用命令 = helper_fetch_command(有 run = `… helper --id <声明> --run-id <run>`, 下发本 run 固定快照)。"""
+    return f"{helper_fetch_command(governance_root, entry, run)} | {ssh_command(alias, 'python3 - ' + remote_args)}"
+
+
+def helper_local_command(governance_root: str | Path, remote_args: str, entry: dict[str, Any] | None = None,
+                         run: dict[str, Any] | None = None) -> str:
+    """AIPOS-F203: 本机形 helper 管道(唯一拼接口): `<本 run 固定 helper 取用> | python3 - <子命令与参数>`(init-run / src-verify / evidence-manifest 同源)。"""
+    return f"{helper_fetch_command(governance_root, entry, run)} | python3 - {remote_args}"
 
 
 def declaration_status(entry: dict[str, Any], now: datetime | None = None) -> str:
@@ -540,10 +555,10 @@ def source_delivery(governance_root: str | Path, entry: dict[str, Any], run: dic
     alias = ssh_alias_for(gov, entry)
     if alias:
         deliver = f"{archive} | {ssh_command(alias, f'tar -x -C {shlex.quote(run_dir)}')}"
-        verify = helper_pipe_command(gov, alias, f"src-verify {args}")
+        verify = helper_pipe_command(gov, alias, f"src-verify {args}", entry, run)
     else:
         deliver = f"{archive} | tar -x -C {shlex.quote(run_dir)}"
-        verify = f"{_gov_cmd(gov)} project validation-root helper | python3 - src-verify {args}"
+        verify = helper_local_command(gov, f"src-verify {args}", entry, run)
     return {"src_dir": f"{run_dir}/{helper.SRC_DIR_NAME}", "deliver": deliver, "verify": verify, "candidate": src["candidate"],
             "tree": src["tree"], "repo": src["repo"], "ssh_alias": alias}
 
@@ -631,7 +646,7 @@ def apply_validation_root_change(governance_root: str | Path, action: str, *, dr
             if not dry_run:
                 raise _err("VR_HOST_FINGERPRINT_REQUIRED", f"远端主机 {host} 确认须给 --host-fingerprint(在 {host} 上运行 "
                                                            "`python3 validation_root_helper.py fingerprint` 取得; helper 由 "
-                                                           "`lybra project validation-root helper` 打印)")
+                                                           f"`{helper_fetch_command(gov)}` 打印)")
             fingerprint = None
             notes.append(f"确认前须补 --host-fingerprint: 在目标主机 {host} 运行 helper fingerprint 取得(预演不阻断, --confirm 缺 = "
                          "VR_HOST_FINGERPRINT_REQUIRED)")
@@ -705,11 +720,18 @@ def apply_validation_root_change(governance_root: str | Path, action: str, *, dr
             used = sum(len(e["runs"]) for e in entries if e["host"] == entry["host"] and e["base"] == entry["base"]
                        and e["task_id"] == entry["task_id"])
             run_id = str(declaration()["run_id_template"]).replace("{n}", str(used + 1))
+            # AIPOS-F203 件①: 固定本 run 的 helper(当时部署版存入快照库, 内容寻址; 预演不写, 确认先存快照再写 run 记录)
+            pinned = pin_helper_snapshot(gov, dry_run=dry_run)
             run = {"run_id": run_id, "candidate": candidate, "started_at": _iso(now), "started_by": actor, "finished_at": None,
-                   "finished_by": None}
+                   "finished_by": None, "helper_sha256": pinned["sha256"]}
             entry["runs"] = list(entry["runs"]) + [run]
-            result = {"entry": entry, "run": run}
+            result = {"entry": entry, "run": run, "helper_snapshot": pinned,
+                      "written_paths": [pinned["path"]] if pinned["written"] else []}
             notes.append(f"本次可写目录: {run_directory(entry, run_id)}(run-id 由产品铸; 只此目录可写)")
+            state = "新存" if pinned["written"] else ("确认时新存" if pinned["would_write"] else "已在, 复用")
+            notes.append(f"本 run 固定验证 helper sha256 = {pinned['sha256']}(快照 {pinned['path']}, {state}; AIPOS-F203): 本 run 的 init-run / "
+                         f"src-verify / sim-* / evidence-* 一律下发此快照, 产品升级不影响; 项目脚本运行时取 "
+                         f"`{helper_fetch_command(gov, entry, run)} --sha256`, 禁写死")
             # AIPOS-F191 件②: 下一步 = 在目标主机建目录链(唯一铸造口 init_run_command; 封印不含时刻, 预演所示 = 确认后所铸)
             where = (f"在治理根所在机运行(经 ssh {ssh_alias_for(gov, entry)} 到目标主机 {entry['host']})" if ssh_alias_for(gov, entry)
                      else f"在目标主机 {entry['host']} 运行")
@@ -999,8 +1021,8 @@ def init_run_command(governance_root: str | Path, entry: dict[str, Any], run: di
                                                     entry["host_fingerprint"], "--expires-at", entry["expires_at"], "--seal", seal))
     alias = ssh_alias_for(governance_root, entry)
     if alias:
-        return helper_pipe_command(governance_root, alias, f"init-run {args}")
-    return f"{_gov_cmd(Path(governance_root).expanduser().resolve())} project validation-root helper | python3 - init-run {args}"
+        return helper_pipe_command(governance_root, alias, f"init-run {args}", entry, run)
+    return helper_local_command(governance_root, f"init-run {args}", entry, run)
 
 
 def init_command(governance_root: str | Path, decl_id: str, *, instance: str | None = None) -> dict[str, Any]:
@@ -1213,8 +1235,8 @@ def evidence_manifest_command(governance_root: str | Path, entry: dict[str, Any]
     args = " ".join(shlex.quote(a) for a in argv)
     alias = ssh_alias_for(gov, entry)
     if alias:
-        return helper_pipe_command(gov, alias, f"evidence-manifest {args}")
-    return f"{_gov_cmd(gov)} project validation-root helper | python3 - evidence-manifest {args}"
+        return helper_pipe_command(gov, alias, f"evidence-manifest {args}", entry, run)
+    return helper_local_command(gov, f"evidence-manifest {args}", entry, run)
 
 
 def evidence_fetch_command(governance_root: str | Path, entry: dict[str, Any], run_id: str) -> str:
@@ -1377,9 +1399,10 @@ def evidence_fetch(governance_root: str | Path, decl_id: str, run_id: str | None
     run_dir = run_directory(entry, run["run_id"])
     from tools.aipos_cli.enroll_deliver import ssh_argv  # 本机 ssh 调用唯一拼接口(`ssh -- <别名> <逐参转义命令>`, 拒 '-' 起首别名)
 
+    pinned = run_helper(gov, entry, run)["source"]  # AIPOS-F203: 送入本 run 固定的 helper(非当前部署版); 快照不可用 = 拒(不送)
     try:
         argv = ssh_argv(alias, ["python3", "-", "evidence-bundle", "--run-dir", run_dir, "--expect-fingerprint", entry["host_fingerprint"]])
-        proc = subprocess.run(argv, input=helper_source().encode("utf-8"), capture_output=True, timeout=int(decl["fetch_timeout_seconds"]))
+        proc = subprocess.run(argv, input=pinned.encode("utf-8"), capture_output=True, timeout=int(decl["fetch_timeout_seconds"]))
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         raise _err("VR_EVIDENCE_REJECTED", f"经 ssh {alias} 取回失败({type(exc).__name__}: {exc})") from exc
     err_text = proc.stderr.decode("utf-8", "replace").strip()
@@ -1473,6 +1496,118 @@ def helper_sha256() -> str:
     return hashlib.sha256(helper_source().encode("utf-8")).hexdigest()
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F203: helper 按 run 固定(快照库 = project.json paths.validation_helper_root; 声明 roles.schema validation_root.helper_pinning)
+# ---------------------------------------------------------------------------
+
+def helper_pinning_declaration() -> dict[str, Any]:
+    """roles.schema write_boundary.validation_root.helper_pinning(snapshot_filename / legacy_note)。缺键或快照名是代码扩展名 = SchemaLoadError。"""
+    from tools.aipos_cli.governance_guardrails import is_code_file, load_guardrail_declarations
+    from tools.schema_loader import SchemaLoadError
+
+    decl = declaration().get("helper_pinning")
+    if (not isinstance(decl, dict) or any(not isinstance(decl.get(k), str) or not decl[k] for k in ("snapshot_filename", "legacy_note"))
+            or "{sha256}" not in decl["snapshot_filename"] or "/" in decl["snapshot_filename"]):
+        raise SchemaLoadError("roles.schema.json write_boundary.validation_root.helper_pinning(snapshot_filename 含 {sha256} 的单段名 / "
+                              "legacy_note)未声明齐")
+    if is_code_file(decl["snapshot_filename"], load_guardrail_declarations()):
+        raise SchemaLoadError(f"roles.schema.json validation_root.helper_pinning.snapshot_filename={decl['snapshot_filename']!r} 是代码扩展名"
+                              "(治理仓零代码文件, AIPOS-F195)")
+    return decl
+
+
+def helper_snapshot_path(governance_root: str | Path, sha256: str) -> Path:
+    """快照文件 = <paths.validation_helper_root>/<snapshot_filename>(内容寻址; 唯一读取口 workspace_config.project_paths)。"""
+    from tools.aipos_cli.workspace_config import project_paths
+
+    if not _SHA256_RE.match(str(sha256 or "")):
+        raise _err("VR_HELPER_SNAPSHOT_INVALID", f"helper 摘要 {sha256!r} 不是 64 位小写 hex")
+    root = Path(project_paths(Path(governance_root).expanduser().resolve())["validation_helper_root"])
+    return root / helper_pinning_declaration()["snapshot_filename"].replace("{sha256}", sha256)
+
+
+def _snapshot_problem(path: Path, sha256: str) -> tuple[str | None, str | None]:
+    """读快照并核摘要: (原文, None) 或 (None, 问题原文)。符号链接 / 缺失 / 读不出 / 摘要不符 = 问题。"""
+    if path.is_symlink():
+        return None, f"快照 {path} 是符号链接(快照只认普通文件)"
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return None, f"快照 {path} 缺失"
+    except OSError as exc:
+        return None, f"快照 {path} 读不出({exc})"
+    got = hashlib.sha256(raw).hexdigest()
+    if got != sha256:
+        return None, f"快照 {path} 内容摘要 {got} ≠ {sha256}(被改)"
+    try:
+        return raw.decode("utf-8"), None
+    except UnicodeDecodeError as exc:
+        return None, f"快照 {path} 不是 UTF-8 文本({exc})"
+
+
+def pin_helper_snapshot(governance_root: str | Path, *, dry_run: bool) -> dict[str, Any]:
+    """AIPOS-F203 件①: run-start 固定口(唯一写入口)——当前部署的 helper 原文存入快照库(内容寻址, 同摘要已在且一致 = 复用, 不一致 = 拒)。
+    预演零写入。返回 {sha256, path, written, would_write}。快照写入早于 run 记录写入(写 run 记录失败 = 留一份无人引用的快照, 无害)。"""
+    source = helper_source()
+    raw = source.encode("utf-8")
+    sha = hashlib.sha256(raw).hexdigest()
+    path = helper_snapshot_path(governance_root, sha)
+    if path.exists() or path.is_symlink():
+        _text, problem = _snapshot_problem(path, sha)
+        if problem:
+            raise _err("VR_HELPER_SNAPSHOT_INVALID", f"{problem}; 快照库同名文件不可复用(禁手改快照库), 停线报告")
+        return {"sha256": sha, "path": str(path), "written": False, "would_write": False}
+    if dry_run:
+        return {"sha256": sha, "path": str(path), "written": False, "would_write": True}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    tmp.write_bytes(raw)
+    os.replace(tmp, path)
+    _text, problem = _snapshot_problem(path, sha)
+    if problem:
+        raise _err("VR_HELPER_SNAPSHOT_INVALID", f"写后复核不过: {problem}")
+    return {"sha256": sha, "path": str(path), "written": True, "would_write": True}
+
+
+def run_helper(governance_root: str | Path, entry: dict[str, Any] | None, run: dict[str, Any] | None) -> dict[str, Any]:
+    """AIPOS-F203: 本 run 的 helper(唯一读取口; 管道下发 / 证据取回送入 / 开工稿与章程的 sha256 同读)。
+    run 记录了 helper_sha256 = 快照原文(摘要不符 / 缺失 = VR_HELPER_SNAPSHOT_INVALID, fail-closed 不下发);
+    旧 run(缺键)= 当前部署版 + legacy 标注; 无 run = 当前部署版。返回 {source, sha256, pinned, state(pinned|legacy|no_run), path, note}。"""
+    if run is None or not run.get("helper_sha256"):
+        sha = helper_sha256()
+        legacy = run is not None
+        return {"source": helper_source(), "sha256": sha, "pinned": False, "state": "legacy" if legacy else "no_run", "path": None,
+                "note": helper_pinning_declaration()["legacy_note"].replace("{sha256}", sha) if legacy else None}
+    sha = str(run["helper_sha256"])
+    path = helper_snapshot_path(governance_root, sha)
+    text, problem = _snapshot_problem(path, sha)
+    if problem:
+        where = f"声明 {(entry or {}).get('id')} run {run.get('run_id')}"
+        raise _err("VR_HELPER_SNAPSHOT_INVALID", f"{where} 固定的 helper {sha}: {problem}; 不下发(出口: 由顾问收口该 run 后重新 run-start)")
+    return {"source": text, "sha256": sha, "pinned": True, "state": "pinned", "path": str(path), "note": None}
+
+
+def run_helper_lookup(governance_root: str | Path, decl_id: str, run_id: str) -> dict[str, Any]:
+    """`validation-root helper --id <声明> --run-id <run>` 唯一实现(只读; 已收口 run 也可取, 供审计复核)。
+    返回 run_helper 结果 + {entry, run}; 声明 / run 不存在 = VR_NOT_FOUND。"""
+    gov = Path(governance_root).expanduser().resolve()
+    entry = _find(project_validation_roots(gov), str(decl_id or "").strip())
+    rid = str(run_id or "").strip()
+    run = next((r for r in entry["runs"] if r["run_id"] == rid), None)
+    if run is None:
+        raise _err("VR_NOT_FOUND", f"声明 {entry['id']} 无 run {rid!r}")
+    return {**run_helper(gov, entry, run), "entry": entry, "run": run}
+
+
+def helper_fetch_command(governance_root: str | Path, entry: dict[str, Any] | None = None, run: dict[str, Any] | None = None) -> str:
+    """AIPOS-F203: helper 取用命令唯一铸造口。有 run = `… project validation-root helper --id <声明> --run-id <run>`(下发本 run 固定快照,
+    与部署升级无关; 旧 run 按当前版并在 stderr 标注); 无 run = 当前部署版(`… helper`)。"""
+    base = f"{_gov_cmd(Path(governance_root).expanduser().resolve())} project validation-root helper"
+    if entry is None or run is None:
+        return base
+    return f"{base} --id {shlex.quote(str(entry['id']))} --run-id {shlex.quote(str(run['run_id']))}"
+
+
 def _fill(template: str, values: dict[str, Any]) -> str:
     return re.sub(r"\{([a-z0-9_]+)\}", lambda m: str(values.get(m.group(1), m.group(0))), template)
 
@@ -1508,15 +1643,15 @@ def render_section_lines(governance_root: str | Path, *, instance: str, task_id:
                   "run_finish": f"{gcmd} project validation-root run-finish --id {entry['id']} --run-id {run['run_id'] if run else '<run-id>'} --confirm --actor <顾问实例>",
                   "check_command": (f"{gcmd} roles write-boundary --instance {entry['instance']} --task-id {entry['task_id']} --host {entry['host']} "
                                     f"--run-id {run['run_id'] if run else '<run-id>'} --check <目标路径> --level mutate"),
-                  "helper_fetch": f"{gcmd} project validation-root helper", "helper_sha256": helper_sha256(),
                   "helper_path": f"{run_dir}/.lybra-vr/validation_root_helper.py",
                   "init_run": init_run_command(gov, entry, run) if run and status == "active" else ""}
+        values.update(_helper_pin_values(gov, entry, run))  # AIPOS-F203: 本 run 固定 helper 的取用命令 / sha256 / 状态(唯一读取口 run_helper)
         # AIPOS-F196 件③: 执行实例在治理根所在机、经 ssh 操作目标主机(ssh_alias_for 唯一判定)→ 目标主机命令一律 ssh 形, helper 经管道送入
         alias = ssh_alias_for(gov, entry) if status in ("active", "unbound") else None
         values.update({"ssh_alias": alias or "", "gate_host": local_host_label(),
-                       "helper_pipe": f"{gcmd} project validation-root helper | ssh {shlex.quote(alias)}" if alias else "",
+                       "helper_pipe": f"{values['helper_fetch']} | ssh {shlex.quote(alias)}" if alias else "",
                        "check_ssh": helper_pipe_command(gov, alias, f"check --run-dir {shlex.quote(run_dir)} --path <目标> "
-                                                                    f"--expect-fingerprint {values['fingerprint']}") if alias else ""})
+                                                                    f"--expect-fingerprint {values['fingerprint']}", entry, run) if alias else ""})
         values.update(_sim_values(gov, entry, run, values, alias=alias))
         # AIPOS-F197 件④: 候选源码送达 + 目标主机核树指纹(唯一铸造口 source_delivery; 无活动 run = 占位说明)
         values.update({"src_dir": f"{run_dir}/{helper.SRC_DIR_NAME}", "src_deliver": "", "src_verify": "", "src_tree": "<候选 tree>"})
@@ -1545,6 +1680,7 @@ def render_section_lines(governance_root: str | Path, *, instance: str, task_id:
                     "evidence_fetch": evidence_fetch_command(gov, entry, run["run_id"]),
                     "evidence_copy": str(run_evidence_copy_dir(gov, entry, run["run_id"])),
                     "evidence_dirs": " / ".join(f"{run_dir}/{d}" for d in run_evidence_declaration()["include_dirs"])}))
+        lines.append(_fill(texts["helper_pin"], values))  # AIPOS-F203 件②: helper 按 run 固定 + 项目脚本运行时取摘要(禁写死)
         lines.append(_fill(texts["check_dev"], values))
         if not is_local_host(entry["host"]):
             lines.append(_fill(texts["helper_ssh"] if alias else texts["helper"], values))
@@ -1569,6 +1705,25 @@ def render_section_lines(governance_root: str | Path, *, instance: str, task_id:
     return lines
 
 
+def _helper_pin_values(governance_root: Path, entry: dict[str, Any], run: dict[str, Any] | None) -> dict[str, str]:
+    """AIPOS-F203 件②: 开工稿 / 章程的 helper 取用命令、sha256 与固定状态(取值唯一读取口 run_helper; 快照不可用 = 状态写拒因, 停线)。"""
+    fetch = helper_fetch_command(governance_root, entry, run)
+    query = (f"{fetch} --sha256" if run else
+             f"{helper_fetch_command(governance_root)} --id {shlex.quote(str(entry['id']))} --run-id <run-id> --sha256")
+    try:
+        got = run_helper(governance_root, entry, run)
+    except ValidationRootError as exc:
+        return {"helper_fetch": fetch, "helper_sha_query": query, "helper_sha256": f"(本 run 固定 helper 快照不可用: {exc}; 停线报告)",
+                "helper_pin_state": f"本 run 固定 helper 快照不可用({exc}); 不得改用当前版或手拷 helper, 停线报告"}
+    if got["state"] == "pinned":
+        state = f"本 run `{run['run_id']}` 固定 helper sha256 = {got['sha256']}(run-start 时部署版)"
+    elif got["state"] == "legacy":
+        state = str(got["note"])
+    else:
+        state = f"起 run(run-start --confirm)时固定当时部署版(现部署版 sha256 = {got['sha256']}), 本 run 内不变"
+    return {"helper_fetch": fetch, "helper_sha_query": query, "helper_sha256": got["sha256"], "helper_pin_state": state}
+
+
 def _sim_values(governance_root: Path, entry: dict[str, Any], run: dict[str, Any] | None, values: dict[str, Any], *,
                 alias: str | None = None) -> dict[str, Any]:
     """AIPOS-F194: 开工稿 / 章程「本 run 专用模拟器」步骤的渲染值(命令全由声明 + 本 run 记录铸; 未绑定 = UDID 占位)。
@@ -1581,7 +1736,7 @@ def _sim_values(governance_root: Path, entry: dict[str, Any], run: dict[str, Any
     patterns = " ".join(f"--pattern {shlex.quote(p)}" for p in sim_decl["xcode_temp_side_effects"]["patterns"])
 
     def helper_cmd(sub: str) -> str:
-        return helper_pipe_command(governance_root, alias, sub) if alias else f"python3 {values['helper_path']} {sub}"
+        return helper_pipe_command(governance_root, alias, sub, entry, run) if alias else f"python3 {values['helper_path']} {sub}"
 
     gcmd = _gov_cmd(governance_root)
     evidence = f"{values['run_dir']}/{sim_decl['evidence_file']}"
@@ -1664,6 +1819,9 @@ def render_list_lines(entries: list[dict[str, Any]]) -> list[str]:
             state = f"finished {r['finished_at']} by {r['finished_by']}" if r["finished_at"] else "ACTIVE"
             out.append(f"    run {r['run_id']}  candidate={r['candidate']}  started {r['started_at']} by {r['started_by']}  {state}"
                        + ("" if r["finished_at"] else f"  → {run_directory(e, r['run_id'])}"))
+            # AIPOS-F203: 本 run 固定的 helper(旧 run 无快照 = 按当前部署版)
+            out.append(f"      helper sha256={r['helper_sha256']}(本 run 固定)" if r.get("helper_sha256")
+                       else "      helper 未固定(旧 run, run-start 早于 AIPOS-F203: 取用按当前部署版)")
             sim = r.get("simulator")
             if sim:
                 out.append(f"      专用模拟器 {sim['name']} udid={sim['udid']} 绑定 {sim['bound_at']} by {sim['bound_by']}"

@@ -491,6 +491,10 @@ lybra loop --task-id <卡ID> --workspace-root <治理根>
 lybra project validation-root init-command <项目名> --home-root <home根> --id <声明id> --json
 ```
    (`source_delivery` 字段)。验证卡起草要点: 正文写清「先送达候选源码并核对 SRC_OK, 再构建 / 起模拟器」, 截图与 src-verify 证据同列报告。
+   **helper 按 run 固定(AIPOS-F203)**: `run-start --confirm` 时把当时部署的 helper 固定给本 run(输出「本 run 固定验证 helper sha256 = …」),
+   产品升级不打断进行中 run; 新 run 才用新版。项目脚本(如归档核对脚本)要核 helper 摘要, 一律运行时取
+   `lybra project validation-root helper --id <声明id> --run-id <run> --sha256`, 卡面 / 脚本禁写死摘要; helper 有变化的版本上线时
+   `lybra updates` 会列「helper 摘要变化 旧→新」, 进行中 run 不必处理, 需用新子命令 = 收口后重新 run-start。
 
 #### 文档 / 配置卡只写治理根交 pi(AIPOS-F197: 不建卡工作树, 交回 = 产出清单)
 **何时用**: 文档 / 治理 / 配置类卡的产物只落治理根(不写任何产品仓)。任何项目同一组命令, 在治理根所在机运行。

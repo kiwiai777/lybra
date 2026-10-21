@@ -372,7 +372,8 @@ def test_item4_remote_steps_rendered_same_source(remote):
     entry = _entry(gov, decl)
     manifest_cmd = vr.evidence_manifest_command(gov, entry, vr.active_run(entry))
     fetch_cmd = vr.evidence_fetch_command(gov, entry, run_dir.name)
-    assert manifest_cmd.startswith(f"lybra --workspace-root {gov} project validation-root helper | ssh {ALIAS} 'python3 - evidence-manifest ")
+    pinned_fetch = f"lybra --workspace-root {gov} project validation-root helper --id {decl} --run-id {run_dir.name}"  # AIPOS-F203: 本 run 固定 helper
+    assert manifest_cmd.startswith(f"{pinned_fetch} | ssh {ALIAS} 'python3 - evidence-manifest ")
     f78._card(gov, VALR, "claimed", assigned=AUDITOR, task_mode="audit",
               extra={"reviewed_task_id": VAL, "claimed_by": AUDITOR, "agent_instance": AUDITOR, "harness": "pi", "audit": "", "audit_by": "",
                      "claim_id": f"claim_{VALR}_x", "claimed_at": "2026-10-21T00:00:00Z"})
@@ -394,7 +395,7 @@ def test_item4_remote_steps_rendered_same_source(remote):
         mp.setattr(vr, "ssh_alias_for", lambda *_a, **_k: None)
         local_form = vr.evidence_manifest_command(gov, entry, vr.active_run(entry))
     _show(f"[件④ 审计在目标主机本机形] 清单命令: {local_form[:160]}… 取回: {fetch_cmd}")
-    assert local_form.startswith(f"lybra --workspace-root {gov} project validation-root helper | python3 - evidence-manifest --run-dir {run_dir} ")
+    assert local_form.startswith(f"{pinned_fetch} | python3 - evidence-manifest --run-dir {run_dir} ")
     # 本机 run: 无远端两步(行为不变)
     local = _declare_remote(gov, remote.base / "local", VAL2R, AUDITOR, host=vr.local_host_label())
     _run_start(gov, local, remote.candidate)

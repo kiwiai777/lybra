@@ -27,12 +27,12 @@ from test_aipos_f190_validation_root import (  # noqa: E402,F401  — 靶场唯�
 )
 
 EXEC_DECL, AUD_DECL = "vr-hbx-60-executor-1", "vr-hbx-60r-auditor-1"
-FETCH_TAIL = " project validation-root helper | python3 - init-run "
+FETCH_TAIL = " | python3 - init-run "  # AIPOS-F203: 前半段 = 本 run 固定 helper 取用(`… helper --id <声明> --run-id <run>`)
 
 
 def _init_args(command: str) -> list[str]:
-    """产品铸的命令 = `<治理根所在机取 helper> | python3 - init-run <参数>`; 取参数部分。"""
-    assert FETCH_TAIL in command, command
+    """产品铸的命令 = `<治理根所在机取本 run 固定 helper> | python3 - init-run <参数>`; 取参数部分。"""
+    assert FETCH_TAIL in command and " project validation-root helper --id " in command.split(FETCH_TAIL, 1)[0], command
     return shlex.split(command.split(FETCH_TAIL, 1)[1])
 
 

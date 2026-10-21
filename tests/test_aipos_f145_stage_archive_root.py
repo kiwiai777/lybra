@@ -174,8 +174,9 @@ def test_declaration_single_source():
     stage_level = _stage_level()
     assert spec["type"] == "string" and "default" not in spec and spec.get("optional") is not True
     assert spec["default_from"] == f"governance_structure.paths.{stage_level['path_key']}"
-    # 只追加(AIPOS-F171 在其后追加 roadmap_file; AIPOS-F187 再追加 scratch_root)
-    assert STAGE_ARCHIVE_PATH_KEY in PROJECT_PATH_KEYS and PROJECT_PATH_KEYS[-3:] == (STAGE_ARCHIVE_PATH_KEY, "roadmap_file", "scratch_root")
+    # 只追加(AIPOS-F171 在其后追加 roadmap_file; AIPOS-F187 再追加 scratch_root; AIPOS-F203 再追加 validation_helper_root)
+    assert STAGE_ARCHIVE_PATH_KEY in PROJECT_PATH_KEYS and PROJECT_PATH_KEYS[-4:] == (STAGE_ARCHIVE_PATH_KEY, "roadmap_file", "scratch_root",
+                                                                                      "validation_helper_root")
     assert "{key}" in stage_level["next_step"] and "lybra project set-paths" in stage_level["next_step"]
 
 
