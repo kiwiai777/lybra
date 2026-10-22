@@ -12,7 +12,7 @@ from typing import Any
 
 from tools.aipos_cli.adapter_response import blocked_response, derive_verdict, error_entry, make_response
 from tools.aipos_cli.agent_profiles import actor_matches_task_actor, load_agent_profiles, registry_available, resolve_instance_id
-from tools.aipos_cli.audit_derivation import derive_audit_task_on_return, is_audit_task_mode
+from tools.aipos_cli.audit_derivation import derive_audit_task_on_return
 from tools.aipos_cli.artifact_ingest import (
     _as_ref_list,
     approved_scratch_root,
@@ -6804,6 +6804,8 @@ def converge_r_cards(
 
     Returns: {converged: [...], skipped: [...], errors: [...]}
     """
+    from tools.aipos_cli.next_resolver import task_mode_is_audit  # AIPOS-F216 件④: 审计卡识别卡面层单源
+
     resolved_root = _resolve_repo_root(repo_root)
     converged: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -6820,9 +6822,9 @@ def converge_r_cards(
                 if not isinstance(fm, dict):
                     continue
                 task_id = str(fm.get("task_id") or "")
-                # Only process audit-derived cards (审计模式 = audit_derivation.is_audit_task_mode, AIPOS-F216 件④; or created_by=gate_derivation)
+                # Only process audit-derived cards (审计模式 = next_resolver.task_mode_is_audit, AIPOS-F216 件④; or created_by=gate_derivation)
                 created_by = str(fm.get("created_by") or "")
-                if not is_audit_task_mode(fm.get("task_mode")) and created_by != "gate_derivation":
+                if not task_mode_is_audit(fm.get("task_mode")) and created_by != "gate_derivation":
                     continue
                 # Resolve the reviewed (parent) task ID
                 reviewed_task_id = str(fm.get("reviewed_task_id") or "")

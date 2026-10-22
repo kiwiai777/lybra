@@ -304,10 +304,8 @@ def audit_report_artifact_path(workspace_root: Path, audit_task_id: str) -> Path
 def forensic_subject(card_frontmatter: dict[str, Any] | None) -> str | None:
     """AIPOS-F89 件③a: 审计卡(task_mode=audit)的被审卡 ID(卡面 reviewed_task_id → derived_from); 非审计卡 = None;
     审计卡缺两字段 = ""(建取证树时 fail-closed)。"""
-    from tools.aipos_cli.audit_derivation import is_audit_task_mode  # AIPOS-F216 件④: 审计卡识别卡面层单源
-
     fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
-    if not is_audit_task_mode(fm.get("task_mode")):
+    if not task_mode_is_audit(fm.get("task_mode")):
         return None
     return str(fm.get("reviewed_task_id") or fm.get("derived_from") or "").strip()
 
@@ -398,6 +396,25 @@ def task_mode_requires_tests(task_mode: str) -> bool:
     flag = entry.get("requires_tests", False)
     if not isinstance(flag, bool):
         raise SchemaLoadError(f"enums.schema.json task_mode={task_mode!r} requires_tests 须为布尔(AIPOS-F211)")
+    return flag
+
+
+def task_mode_is_audit(task_mode: Any) -> bool:
+    """AIPOS-F216 件④: 卡面 task_mode 是否审计模式 = 审计卡识别的卡面层唯一判定(唯一读取口: enums.schema task_mode.audit_card 声明, 每值带
+    audit_card 布尔; 缺键 = false; 缺值 = missing_default 非审计; 未知 = 非审计)。取代原 7 模块 11 处 task_mode == "audit" 字面(F211 基线);
+    卡级识别 audit_derivation.is_audit_card 的卡面层同读本函数。与 task_mode_* 族同经 _task_mode_entry 取条目(放本模块而非 audit_derivation:
+    低层模块 autonomy_policy 与 finalize 合并后预载闭包只可依赖本模块, 不得牵入 audit_derivation 的整条 CLI 导入链)。声明缺 / 形变 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = ((load_schema("enums", REPO_ROOT).get("enums") or {}).get("task_mode") or {})
+    if not isinstance(decl.get("audit_card"), dict):
+        raise SchemaLoadError("enums.schema.json enums.task_mode.audit_card 未声明(AIPOS-F216)")
+    entry = _task_mode_entry(str(task_mode or ""))
+    if entry is None:
+        return False
+    flag = entry.get("audit_card", False)
+    if not isinstance(flag, bool):
+        raise SchemaLoadError(f"enums.schema.json task_mode={task_mode!r} audit_card 须为布尔(AIPOS-F216)")
     return flag
 
 
@@ -499,11 +516,9 @@ def candidate_binding_declaration() -> dict[str, Any]:
             or not codes.get("VALIDATION_BINDING_MODE") or decl.get("fields_from") != "candidate_subject.fields"):
         raise SchemaLoadError("enums.schema.json enums.task_mode.candidate_binding(task_modes / reject_codes.VALIDATION_BINDING_MODE / "
                               "fields_from=candidate_subject.fields)未声明齐(AIPOS-F205)")
-    from tools.aipos_cli.audit_derivation import is_audit_task_mode  # AIPOS-F216 件④: 审计模式只经单源判定
-
     for mode in modes:
         entry = _task_mode_entry(mode)
-        if entry is None or entry.get("writes_product_repo") is not False or task_mode_subject_is_candidate(mode) or is_audit_task_mode(mode):
+        if entry is None or entry.get("writes_product_repo") is not False or task_mode_subject_is_candidate(mode) or task_mode_is_audit(mode):
             raise SchemaLoadError(f"enums.schema.json task_mode.candidate_binding.task_modes 含 {mode!r}: 须为已声明、writes_product_repo=false、"
                                   "非固定候选、非 audit 的模式(AIPOS-F205)")
     return {**decl, "fields": candidate_subject_declaration()["fields"]}
@@ -691,9 +706,7 @@ def card_governance_outputs(workspace_root: Path, card_frontmatter: dict[str, An
     mode = str(fm.get("task_mode") or "").strip()
     # AIPOS-F211 件②: 缺 task_mode = missing_default 条目(唯一兜底 _task_mode_entry); 存量缺 task_mode 卡不算治理根产出清单(声明 governance_outputs_subject)
     entry = _task_mode_entry(mode)
-    from tools.aipos_cli.audit_derivation import is_audit_task_mode  # AIPOS-F216 件④: 审计模式只经单源判定
-
-    if (entry is None or entry.get("missing") or is_audit_task_mode(mode) or task_mode_writes_product_repo(mode)
+    if (entry is None or entry.get("missing") or task_mode_is_audit(mode) or task_mode_writes_product_repo(mode)
             or task_mode_subject_is_candidate(mode)):
         return False
     lane = fm.get("lane") if isinstance(fm.get("lane"), dict) else {}
@@ -829,9 +842,7 @@ def card_report_path(workspace_root: Path, task_id: str, card_frontmatter: dict[
     if fm is None:
         task_path, _ = _find_task_in_queue(workspace_root, task_id)
         fm = _read_frontmatter(task_path) if task_path else {}
-    from tools.aipos_cli.audit_derivation import is_audit_task_mode  # AIPOS-F216 件④
-
-    if is_audit_task_mode(fm.get("task_mode")):
+    if task_mode_is_audit(fm.get("task_mode")):
         return audit_report_artifact_path(workspace_root, task_id)
     return _return_artifact_path(workspace_root, task_id)
 

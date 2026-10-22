@@ -1300,10 +1300,11 @@ def regen_machine_zone_for_pending(
                 # (manual_gate_mode 项目保留现行为); 派生审计卡另收口门动词配方节与报告落位句(audit_derivation 单源)。
                 import re
                 if not card_carries_gate_contract_section(metadata, governance_root):
-                    from tools.aipos_cli.audit_derivation import is_audit_task_mode, zero_gate_audit_body
+                    from tools.aipos_cli.audit_derivation import zero_gate_audit_body
+                    from tools.aipos_cli.next_resolver import task_mode_is_audit  # AIPOS-F216 件④
 
                     body_without_gate = re.sub(r"## 【认领与交回】.*?(?=\n## |\Z)", "", body, flags=re.DOTALL)
-                    if is_audit_task_mode(metadata.get("task_mode")):  # AIPOS-F216 件④
+                    if task_mode_is_audit(metadata.get("task_mode")):  # AIPOS-F216 件④
                         body_without_gate = zero_gate_audit_body(
                             body_without_gate, governance_root, card_task_id,
                             str(metadata.get("reviewed_task_id") or metadata.get("derived_from") or "").strip() or None)

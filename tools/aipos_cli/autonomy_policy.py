@@ -623,9 +623,9 @@ def envelope_subject(repo_root: Path, *, task_id: str, task_mode: str, project: 
     AIPOS-F134 件③: with_lane=True 时第四项 = 判定对象卡的 lane 指称(card_lane_refs; 审计卡 = 被审卡的 lane, 同一主体规则),
     否则 None(只在有信封带 task_selector_lane_repo 时才解析, 无 lane 信封零额外读取 = 行为不变)。
     返回 (task_id, task_mode, project, lane_refs | None)。"""
-    from tools.aipos_cli.audit_derivation import is_audit_task_mode  # AIPOS-F216 件④: 审计卡识别卡面层单源
+    from tools.aipos_cli.next_resolver import task_mode_is_audit  # AIPOS-F216 件④: 审计卡识别卡面层单源(低层模块只依赖 next_resolver)
 
-    if is_audit_task_mode(task_mode) and str(reviewed_task_id or "").strip():
+    if task_mode_is_audit(task_mode) and str(reviewed_task_id or "").strip():
         from tools.aipos_cli.task_loader import find_task_card
 
         reviewed_path, _queue = find_task_card(Path(repo_root), str(reviewed_task_id).strip())

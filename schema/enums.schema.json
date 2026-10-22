@@ -287,8 +287,8 @@
         "single_implementation": "tools/aipos_cli/next_resolver.task_mode_requires_tests"
       },
       "audit_card": {
-        "description": "AIPOS-F216 件④(F211 审计遗留 / F208 卡组 G): 卡面 task_mode 是否审计模式(审计卡识别的卡面层)的唯一声明, 取代原散在 7 个模块 11 处的 task_mode == \"audit\" 字面。每值带 audit_card(布尔); 缺 = false; 缺 task_mode = missing_default(非审计)。卡级审计卡识别(另认首轮号形 <ID>R 与卡面不在时的审计轮号形)仍为 audit_derivation.is_audit_card, 其卡面层即本判定。",
-        "single_implementation": "tools/aipos_cli/audit_derivation.is_audit_task_mode"
+        "description": "AIPOS-F216 件④(F211 审计遗留 / F208 卡组 G): 卡面 task_mode 是否审计模式(审计卡识别的卡面层)的唯一声明, 取代原散在 7 个模块 11 处的 task_mode == \"audit\" 字面。每值带 audit_card(布尔); 缺 = false; 缺 task_mode = missing_default(非审计)。卡级审计卡识别(另认首轮号形 <ID>R 与卡面不在时的审计轮号形)仍为 audit_derivation.is_audit_card, 其卡面层即本判定(放 next_resolver 的 task_mode 读取口族: 低层模块 autonomy_policy 与 finalize 合并后预载闭包不得牵入 audit_derivation 的整条 CLI 导入链)。",
+        "single_implementation": "tools/aipos_cli/next_resolver.task_mode_is_audit"
       },
       "candidate_subject": {
         "description": "AIPOS-F196 件①(Owner 10-20 定: 非代码工作交 pi, 验证卡保留独立审计): 值带 subject=candidate 的模式(validation)= 对来源卡的固定候选 sha 做环境构建 / 模拟器构建运行 / 截图与运行证据, 交付主体是那个候选提交本身, 不是卡分支。一处声明的全部后果: ①不写产品仓源码——lane.repo = 候选所在仓(只读取证), 不建卡工作树 / 卡分支(next_resolver.card_writes_product_repo); 产物只落验证根(project.json validation_roots, 本卡本活动 run 目录)与治理根报告落点; ②卡面必填来源卡与候选(fields), 起草 / 发卡即核(候选须为 lane.repo 解析仓中已有提交的完整 40 位 sha; 来源卡须在队列), 验证根 run-start 的候选须等于卡面候选; ③交回 / 审计报告 frontmatter 三键由产品给值(commit_sha = 候选, tree_hash = 候选 tree, branch = 来源卡卡分支名), 入口核候选而非卡分支 tip; ④独立审计(independent_audit=true), 裁决 artifact_subject = 候选(门侧同核); ⑤N5 无合入: finalize 不合并 / 不推送 / 不部署, 写 finalization 记录(commit = merge_commit = 候选, deploy_status / push_status = not_applicable 并写明「验证卡无合入」)后照常 N6 结案; ⑥开工面: 不建树的验证卡与其审计卡照常入选工位 next_card, 开工提示按 kickoff.template_no_worktree 渲染(含本卡验证根节, 经 ssh 操作目标主机时含 ssh 命令)。",

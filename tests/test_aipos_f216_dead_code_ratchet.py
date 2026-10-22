@@ -7,7 +7,8 @@
 - 件② 无人读声明: verbs lybra_project_validation_root 接上真实读者(CLI 退出码读其 exit_codes); 门从未登记的 4 个 MCP 面
   (lybra_project_new_* / lybra_project_set_repo_*)删声明与门侧实现, CLI 恒走本机唯一实现; enums task_mode.routing_rules 与
   schema_loader.get_task_mode_routing 删除。
-- 件④ 审计卡识别卡面层单源 audit_derivation.is_audit_task_mode(声明 enums.schema task_mode.audit_card)。
+- 件④ 审计卡识别卡面层单源 next_resolver.task_mode_is_audit(声明 enums.schema task_mode.audit_card; audit_derivation.is_audit_card 卡面层同读),
+  且不把 audit_derivation 牵进 finalize 合并后预载闭包(低层 autonomy_policy 只依赖 next_resolver)。
 - 件⑤ web 尾巴: 旧 CJK 守卫节点删除、run-all exclude 行删除。
 只读扫描 + 临时目录夹具; 不起门、不读凭据、不碰真实治理根。
 """
@@ -217,15 +218,16 @@ def test_item2_routing_rules_and_reader_removed():
 # 件④ 审计卡识别卡面层单源
 # ===========================================================================
 
-def test_item4_is_audit_task_mode_reads_declaration(monkeypatch):
+def test_item4_task_mode_is_audit_reads_declaration(monkeypatch):
     from tools.aipos_cli import audit_derivation as ad
+    from tools.aipos_cli import next_resolver as nr
     from tools.schema_loader import SchemaLoadError
 
     enums = json.loads((REPO_ROOT / "schema" / "enums.schema.json").read_text(encoding="utf-8"))["enums"]["task_mode"]
     flagged = sorted(v["value"] for v in enums["values"] if v.get("audit_card") is True)
-    got = {m: ad.is_audit_task_mode(m) for m in ("audit", " AUDIT ", "code", "validation", "", None, "bogus")}
+    got = {m: nr.task_mode_is_audit(m) for m in ("audit", " AUDIT ", "code", "validation", "", None, "bogus")}
     _show(f"[件④·声明 audit_card] {flagged} 判定 {got}")
-    assert flagged == ["audit"] and enums["audit_card"]["single_implementation"] == "tools/aipos_cli/audit_derivation.is_audit_task_mode"
+    assert flagged == ["audit"] and enums["audit_card"]["single_implementation"] == "tools/aipos_cli/next_resolver.task_mode_is_audit"
     assert got == {"audit": True, " AUDIT ": True, "code": False, "validation": False, "": False, None: False, "bogus": False}
     assert ad.is_audit_card("X-9", {"task_mode": "audit"}) and not ad.is_audit_card("X-9", {"task_mode": "code"})
     # 声明缺 = fail-closed
@@ -242,7 +244,19 @@ def test_item4_is_audit_task_mode_reads_declaration(monkeypatch):
 
     monkeypatch.setattr(sl, "load_schema", _no_decl)
     with pytest.raises(SchemaLoadError):
-        ad.is_audit_task_mode("audit")
+        nr.task_mode_is_audit("audit")
+
+
+def test_item4_single_predicate_keeps_finalize_preload_closure_lean():
+    """反例(本卡实撞): 低层 autonomy_policy 若导入 audit_derivation, finalize 合并后预载闭包会沿 audit_derivation → … → aipos_cli 牵入
+    tools.lybra_tui(textual 未装 = finalize BLOCK)。判定放 next_resolver(闭包 NO_DESCEND)后闭包不含 audit_derivation / lybra_tui。"""
+    from tools.aipos_cli.finalize import _post_merge_import_closure
+
+    closure = _post_merge_import_closure()
+    _show(f"[件④·finalize 预载闭包] {len(closure)} 个模块")
+    assert "tools.aipos_cli.audit_derivation" not in closure and not [m for m in closure if m.startswith("tools.lybra_tui")]
+    src = (REPO_ROOT / "tools" / "aipos_cli" / "autonomy_policy.py").read_text(encoding="utf-8")
+    assert "audit_derivation" not in src and "task_mode_is_audit(" in src
 
 
 def test_item4_f211_baseline_cleared():

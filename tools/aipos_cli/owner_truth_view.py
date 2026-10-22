@@ -148,9 +148,9 @@ def _member_kind(task_id: str | None, metadata: dict[str, Any], root: str) -> st
     tid = str(task_id or "").strip()
     if not tid:
         return "main"
-    from tools.aipos_cli.audit_derivation import is_audit_task_mode  # AIPOS-F216 件④: 审计卡识别卡面层单源
+    from tools.aipos_cli.next_resolver import task_mode_is_audit  # AIPOS-F216 件④: 审计卡识别卡面层单源
 
-    if is_audit_task_mode(metadata.get("task_mode")) or tid.endswith("R"):
+    if task_mode_is_audit(metadata.get("task_mode")) or tid.endswith("R"):
         return "audit"
     if tid.endswith("FZ"):
         return "finalize"
