@@ -516,7 +516,7 @@ def test_item4_charters_render_run_long_block_and_return_accuracy_clauses(rig):
     aud = rendered["auditor"]
     block = aud[aud.index("- **长验证命令一律 run-long(AIPOS-F179)**"):aud.index("- 裁决:**PASS**")]
     _show("---- item4 rendered auditor charter (new clauses) ----\n" + block)
-    for needle in (start, wait, "不得因工具时限放弃、不得以子集", "pi 的 bash 工具没有内置时限, timeout 由你自己传", '{"run_long": "<运行目录>"}',
+    for needle in (start, wait, "不得因工具时限放弃、不得以子集", "单次工具时限与全量时限句以开工稿为准", '{"run_long": "<运行目录>"}',
                    "= BLOCK 并写清原因", "不计连败", "**不得写成「执行体声称通过」**", "NOT_RUN"):
         assert needle in block, needle
     exe = rendered["executor"]

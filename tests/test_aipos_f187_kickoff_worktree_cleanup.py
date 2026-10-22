@@ -180,7 +180,9 @@ def test_item1_2_3_lybra_shape_kickoff_hint_and_close_cleanup(rig, tmp_path):
         "最后给顾问一段简短总结: tip sha、改动要点、测试计数、已知局限。",
     ):
         assert needle in brief, f"开工稿缺 {needle!r}"
-    assert "fixture-not-a-secret" not in brief and "token" not in brief.lower().replace("token 永不回显", "")
+    # AIPOS-F212 件②: 门交互硬规矩条文(与章程同读 gate_hard_rules)含「token」字样, 规则文字不是凭据, 去掉条文行后查
+    rule_free = "\n".join(ln for ln in brief.splitlines() if not re.match(r"  \d+\. \*\*", ln)).lower()
+    assert "fixture-not-a-secret" not in brief and "token" not in rule_free.replace("token 永不回显", "")
     assert "{" not in re.sub(r"\^\{tree\}", "", brief)  # 无未渲染占位
     assert "会话所在机" not in brief  # 本机会话 = 无 remote_note
     assert seen["executor_json"][0] == 0 and data["role"] == "executor" and data["instance"] == EXEC
@@ -307,7 +309,9 @@ def test_item1_chris_shape_multi_repo_codex_remote_kickoff(tmp_path, monkeypatch
         "- 全量命令: 本项目未声明全量测试清单(project.json test_contract.runall_path)",
         "- 棘轮: 本项目未声明棘轮(project.json test_contract.ratchet)",
         "- 交回前跑 `pgrep -af \"pytest|run-all|until grep\"`",
-        "门交互硬规矩以章程为准(",
+        # AIPOS-F212 件②: 未声明 hard_rules_source = 与章程同一 fallback 条文(同序同数), 单源行 = UNDECLARED_REF
+        "门交互硬规矩(单源 本章程(项目未声明 project.json paths.hard_rules_source, 以本章程条文为准)):",
+        "  1. **你不接触门**",
     ):
         assert needle in brief, f"chris 开工稿缺 {needle!r}"
     default_scratch = Path(__import__("tempfile").gettempdir()) / "lybra-scratch" / CHRIS / CHRIS_CARD.lower()

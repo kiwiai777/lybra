@@ -9,11 +9,12 @@
   - 可开工判据: next_resolver.kickoff_refusal(与工位 /go 同一判据)
   - 实例身份 / 章程可取 / 门地址 / 工位根: charter_render.instance_charter(与 `lybra charter` 同一判定); 章程命令 = charter_pull_command
   - 写权限边界与全角色硬规矩: roles.schema write_boundary(write_boundary.build_write_boundary)
-  - 跨机临时验证根(AIPOS-F190 件④): 本卡本实例的 project.json validation_roots 声明(validation_root.render_section_lines; AIPOS-F206: 明细只在开工稿, 章程只留通用段;
-    无声明 = 该节省略)
-  - 门交互硬规矩: 项目 paths.hard_rules_source § 0.5(hard_rules_extractor)
+  - 跨机临时验证根(AIPOS-F190 件④): 本卡本实例的 project.json validation_roots 声明; AIPOS-F212 件①: 节与拒因只取开工面
+    card_workstation_view(validation_root_lines / validation_root_refusal, 与工位 /go 同读同码, 本模块不重算; 无声明 = 该节省略)
+  - 门交互硬规矩: hard_rules_extractor.gate_hard_rules(AIPOS-F212 件②: 与章程硬规矩节同读同序同数; 项目 paths.hard_rules_source § 0.5,
+    未声明 = roles.schema gate_hard_rules.fallback 按角色类)
   - 全量命令与时限: charter_render.runall_context(project.json test_contract); 长命令: run_long.charter_commands
-  - 时限措辞(AIPOS-F189 件②): 卡面 harness(loop_driver.card_harness)的单次工具时限 enums.schema harness.<值>.tool_timeout_seconds
+  - 时限措辞(AIPOS-F189 件②): 卡 harness(开工面 card_workstation_view.harness = loop_driver.card_harness)的单次工具时限 enums.schema harness.<值>.tool_timeout_seconds
     (harness_tool_timeout 唯一读取口): 全量时限在其内 = 同步跑写设足秒数; 超限 = 一律 run-long; 未声明 = 不写秒数只教 run-long
   - 草稿目录: project.json paths.scratch_root(未声明 = 系统临时目录; 落治理根内 = 拒)
   - main 侧基线(AIPOS-F188 件②): 命令 = post_merge_regression.audit_baseline_command, 现状 = post_merge_regression.audit_baseline
@@ -32,13 +33,15 @@ from typing import Any
 KICKOFF_VERB = "lybra_kickoff"
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
 TEXT_KEYS = ("ratchet_default", "runall_absent", "runall_absent_timeout", "lane_paths_absent", "repo_line_multi", "repo_line_single",
-             "commands_rules_title", "commands_rules_absent", "scratch_source_declared", "scratch_source_default", "host_hint_alias",
+             "commands_rules_title", "scratch_source_declared", "scratch_source_default", "host_hint_alias",
              "host_hint_undeclared", "baseline_state_recorded", "baseline_state_pending", "baseline_state_self_run_required",
              "baseline_state_unavailable", "runall_timing_sync", "runall_timing_run_long", "runall_timing_undeclared",
-             "tool_timeout_source")
+             "tool_timeout_source", "runall_timing_charter", "run_long_threshold_charter", "run_long_threshold_declared",
+             "run_long_threshold_undeclared")
 ITEM_KEYS = ("boundary_line", "hard_rule_line", "commands_rule_line")
 REFUSAL_KEYS = ("KICKOFF_ROLE_MISMATCH", "KICKOFF_INSTANCE_MISSING", "KICKOFF_NOT_STARTABLE", "KICKOFF_CHARTER_REFUSED",
-                "KICKOFF_WORKTREE_UNRESOLVED", "KICKOFF_REPORT_UNRESOLVED", "KICKOFF_SCRATCH_IN_GOVERNANCE")
+                "KICKOFF_WORKTREE_UNRESOLVED", "KICKOFF_REPORT_UNRESOLVED", "KICKOFF_SCRATCH_IN_GOVERNANCE",
+                "KICKOFF_VALIDATION_ROOT_UNRESOLVED", "KICKOFF_HARNESS_UNRESOLVED")
 
 
 class KickoffRefused(ValueError):
@@ -94,9 +97,13 @@ def harness_tool_timeout(harness: str) -> int | None:
     return value
 
 
-def runall_timing(texts: dict[str, Any], harness: str, timeout_seconds: int, runall_timeout: str) -> tuple[str, str]:
-    """AIPOS-F189 件②: 开工稿全量时限句(措辞读 texts.runall_timing_<态>)。返回 (态, 句子); 态 ∈ sync / run_long / undeclared。
-    态判据唯一在此: 卡面 harness 声明了单次工具时限且全量时限(post_merge_regression.timeout_seconds)不超过它 = sync; 超过 = run_long; 未声明 = undeclared。"""
+def runall_timing(texts: dict[str, Any], harness: str | None, timeout_seconds: int, runall_timeout: str) -> tuple[str, str]:
+    """AIPOS-F189 件②: 开工稿全量时限句(措辞读 texts.runall_timing_<态>)。返回 (态, 句子); 态 ∈ sync / run_long / undeclared / charter。
+    态判据唯一在此: 卡面 harness 声明了单次工具时限且全量时限(post_merge_regression.timeout_seconds)不超过它 = sync; 超过 = run_long; 未声明 = undeclared。
+    AIPOS-F212 件③: 时限句只由本函数产出——章程不按卡(harness=None)= charter 态, 句子只指向开工稿时限句并给全量时限声明
+    (审计母本占位 {{runall_timing_charter}}, 母本不写死「显式传 timeout = 全量时限」之类句子)。"""
+    if harness is None:
+        return "charter", str(texts["runall_timing_charter"]).format(runall_timeout=runall_timeout)
     tool_timeout = harness_tool_timeout(harness)
     source = str(texts["tool_timeout_source"]).format(harness=harness)
     if tool_timeout is None:
@@ -106,6 +113,23 @@ def runall_timing(texts: dict[str, Any], harness: str, timeout_seconds: int, run
     sentence = str(texts[f"runall_timing_{state}"]).format(harness=harness, tool_timeout=tool_timeout, tool_timeout_source=source,
                                                           runall_timeout=runall_timeout)
     return state, sentence
+
+
+def run_long_threshold(texts: dict[str, Any], harness: str | None) -> str:
+    """AIPOS-F212 件④: run-long 门槛短语(与声明的单次工具时限同口径, 不再写「预计超过 5 分钟」)唯一产出; 措辞读
+    texts.run_long_threshold_<charter|declared|undeclared>。harness=None = 章程态(秒数以开工稿时限句为准); 卡 harness 声明了
+    tool_timeout_seconds = 写该秒数; 未声明 = 不写秒数(长命令一律 run-long)。章程占位 {{run_long_threshold}} 与开工稿 verify_long 同读。"""
+    if harness is None:
+        return str(texts["run_long_threshold_charter"])
+    tool_timeout = harness_tool_timeout(harness)
+    key = "run_long_threshold_undeclared" if tool_timeout is None else "run_long_threshold_declared"
+    return str(texts[key]).format(harness=harness, tool_timeout=tool_timeout)
+
+
+def charter_timing_values(runall_timeout: str) -> dict[str, str]:
+    """AIPOS-F212 件③④: 章程渲染上下文的时限两键(charter_render.charter_render_context 唯一调用; 章程不按卡 = charter 态)。"""
+    texts = kickoff_contract()["texts"]
+    return {"runall_timing_charter": runall_timing(texts, None, 0, runall_timeout)[1], "run_long_threshold": run_long_threshold(texts, None)}
 
 
 def _refuse(contract: dict[str, Any], refusal_code: str, **values: Any) -> KickoffRefused:
@@ -199,23 +223,27 @@ def baseline_state(governance_root: Path, code_repo: Path, contract: dict[str, A
     from tools.schema_loader import SchemaLoadError
 
     texts = contract["texts"]
+    labels = pmr.baseline_state_labels()  # AIPOS-F212 件④: 三态标签唯一声明(措辞模板只引 {label})
     command = pmr.audit_baseline_command(governance_root, code_repo)
     try:
         sha, _source = pmr.resolve_audit_sha(governance_root, None, code_repo)
         result = pmr.audit_baseline(governance_root, sha)
     except (ValueError, OSError, SchemaLoadError) as exc:
         return {"baseline_command": command, "baseline_sha": "(不可解析)", "status": "unavailable",
-                "baseline_state": str(texts["baseline_state_unavailable"]).format(error=exc, base=base)}
+                "baseline_state": str(texts["baseline_state_unavailable"]).format(
+                    error=exc, base=base, label_self_run_required=labels[pmr.AUDIT_BASELINE_SELF_RUN])}
     status = str(result["status"])
     if status == pmr.AUDIT_BASELINE_RECORDED:
-        line = str(texts["baseline_state_recorded"]).format(ref=result.get("ref"), failure_count=len(result.get("failures") or []), base=base)
+        line = str(texts["baseline_state_recorded"]).format(ref=result.get("ref"), failure_count=len(result.get("failures") or []), base=base,
+                                                            label=labels[status])
     elif status == pmr.AUDIT_BASELINE_PENDING:
         pending = result.get("pending") or {}
         line = str(texts["baseline_state_pending"]).format(
             task_id=pending.get("task_id"), started_at=pending.get("started_at") or "(未记)", deadline=pending.get("deadline") or "(不可推算)",
-            timeout_seconds=pending.get("timeout_seconds") or "(未记)", base=base)
+            timeout_seconds=pending.get("timeout_seconds") or "(未记)", base=base, label=labels[status])
     else:
-        line = str(texts["baseline_state_self_run_required"]).format(reason="; ".join(result.get("reasons") or []), base=base)
+        line = str(texts["baseline_state_self_run_required"]).format(reason="; ".join(result.get("reasons") or []), base=base,
+                                                                     label=labels[pmr.AUDIT_BASELINE_SELF_RUN])
     return {"baseline_command": command, "baseline_sha": sha, "baseline_state": line, "status": status}
 
 
@@ -236,14 +264,14 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
     from tools.aipos_cli.audit_derivation import audit_card_reviewed_id, is_audit_card
     from tools.aipos_cli.charter_render import CharterRefused, charter_pull_command, instance_charter, runall_context
     from tools.aipos_cli.frontmatter import require_frontmatter
-    from tools.aipos_cli.hard_rules_extractor import extract_hard_rules_from_handbook, hard_rules_source_ref
+    from tools.aipos_cli.hard_rules_extractor import gate_hard_rules
     from tools.aipos_cli.next_resolver import (
         card_base_branch, card_branch_name, card_workstation_view, kickoff_refusal, render_report_field_lines,
     )
     from tools.aipos_cli.run_long import charter_commands
     from tools.aipos_cli.task_loader import find_task_card
     from tools.aipos_cli.workspace_config import read_project_json
-    from tools.aipos_cli.write_boundary import build_write_boundary
+    from tools.aipos_cli.write_boundary import build_write_boundary, role_rows
 
     contract = kickoff_contract()
     texts, items = contract["texts"], contract["item_templates"]
@@ -267,12 +295,20 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
     refusal = kickoff_refusal(gov, task_id, instance, queue_state=state, card_frontmatter=fm)
     if refusal:
         raise _refuse(contract, "KICKOFF_NOT_STARTABLE", task_id=task_id, code=refusal["code"], reason=refusal["reason"])
+    view = card_workstation_view(gov, task_id, fm)
+    # AIPOS-F212 件①: 验证根节 / 卡 harness 不可得 = 与 /go 同码拒(开工稿给出口, 不抛异常; /go 同判不入选)。先于章程判:
+    # 验证根声明形坏时章程通用段同样读不出, 拒因以开工面为准(两面同码同原文)
+    vr_refusal = view.get("validation_root_refusal") or {}
+    if vr_refusal:
+        raise _refuse(contract, "KICKOFF_VALIDATION_ROOT_UNRESOLVED", task_id=task_id, code=vr_refusal.get("code"), reason=vr_refusal.get("reason"))
+    harness_refusal = view.get("harness_refusal") or {}
+    if harness_refusal:  # 时限句按卡 harness 产出, harness 不可推导 = 拒(原文含出口), 不猜
+        raise _refuse(contract, "KICKOFF_HARNESS_UNRESOLVED", task_id=task_id, code=harness_refusal.get("code"), reason=harness_refusal.get("reason"))
     try:
         charter = instance_charter(gov, role_class=card_role, instance=instance)
     except CharterRefused as exc:
         raise _refuse(contract, "KICKOFF_CHARTER_REFUSED", instance=instance, reason=str(exc)) from exc
 
-    view = card_workstation_view(gov, task_id, fm)
     report_refusal = view.get("report_refusal") or {}
     if not view.get("report_path") or report_refusal:
         raise _refuse(contract, "KICKOFF_REPORT_UNRESOLVED", task_id=task_id, code=report_refusal.get("code") or "REPORT_LOCATION_UNDECLARED",
@@ -320,13 +356,11 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
         host_hint = texts["host_hint_undeclared"].format(hint=pull["host_hint"].lstrip("; "))
 
     boundary = build_write_boundary(gov, role=str(charter["role"]), harness_root=charter["harness_root"])
-    rows = [{**row, "path": str(row["path"]).replace("<task_id>", task_id)} for row in boundary["rows"] if row["role"] == str(charter["role"])]
-    handbook = extract_hard_rules_from_handbook(gov)
-    if handbook.get("ok") and handbook.get("rules_list"):
-        commands_rules = "\n".join([texts["commands_rules_title"].format(source=hard_rules_source_ref(gov))]
-                                   + [items["commands_rule_line"].format(rule=rule) for rule in handbook["rules_list"]])
-    else:
-        commands_rules = texts["commands_rules_absent"].format(source=hard_rules_source_ref(gov))
+    rows = role_rows(boundary, str(charter["role"]), task_id=task_id)  # AIPOS-F212 件④: 选行 / 落卡与章程表同一实现
+    # AIPOS-F212 件②: 门交互硬规矩 = gate_hard_rules(与章程硬规矩节同读同序同数; 未声明来源 = 同一 fallback, 声明了读不出 = 同拒)
+    gate_rules = gate_hard_rules(gov, role_class=card_role)
+    commands_rules = "\n".join([texts["commands_rules_title"].format(source=gate_rules["source_ref"])]
+                               + [items["commands_rule_line"].format(rule=rule) for rule in gate_rules["rules"]])
 
     scratch, scratch_source = scratch_dir(gov, project, task_id, contract)
     runall = runall_context(gov, code_repo, log_dir=str(scratch))
@@ -335,14 +369,9 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
     report_path = Path(str(view["report_path"]))
     others = _other_project_roots(gov)
     # AIPOS-F189 件②: 全量时限句按本卡 harness 的单次工具时限(审计卡 = 审计卡的 harness; 同 loop 拉起判据 card_harness)
-    # AIPOS-F211 件③: 卡面无 harness = 由本卡执行方式推出(子 agent = 其接入登记的顾问会话 harness), 不再一律按 task_mode 表 pi
-    from tools.aipos_cli.loop_driver import card_harness
-
-    harness = card_harness(fm, gov, task_id=task_id)
-    # AIPOS-F190 件④: 本卡本实例的跨机验证根(含已撤销 / 到期 = 如实告知一律拒); 沙箱可写根按卡面 harness 渲染
-    from tools.aipos_cli.validation_root import render_section_lines
-
-    validation_lines = render_section_lines(gov, instance=instance, task_id=task_id, harness=harness, include_inactive=True)
+    # AIPOS-F212 件①: harness 与验证根节一律取开工面 card_workstation_view(与工位 /go 同读, 拒因同码), 不在此重算
+    harness = view.get("harness")
+    validation_lines = list(view.get("validation_root_lines") or [])
     evidence_lines = _candidate_evidence_lines(gov, task_id=task_id, fm=fm, instance=instance, reviewed=reviewed,
                                                reviewed_card=reviewed_card) if card_role == "auditor" else []
     if runall["runall"]:
@@ -350,6 +379,9 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
                                              runall["runall_timeout_seconds"])
     else:
         timing_state, timing = "absent", str(texts["runall_absent_timeout"])
+    from tools.aipos_cli.post_merge_regression import baseline_state_labels
+
+    baseline_labels = baseline_state_labels()
     values: dict[str, Any] = {
         "project": project, "task_id": task_id, "title": str(fm.get("title") or task_id), "instance": instance,
         "role_label": labels[card_role], "reviewed_task_id": reviewed or None,
@@ -360,6 +392,7 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
         "branch": branch, "base": base, "base_sha": base_sha, "tip": tip,
         "baseline_command": baseline["baseline_command"], "baseline_sha": baseline["baseline_sha"],
         "baseline_state": baseline["baseline_state"],
+        **{f"label_{state}": label for state, label in baseline_labels.items()},
         "code_repo": str(code_repo) if code_repo else None, "repo_line": repo_line,
         "lane_paths": ", ".join(f"`{p}`" for p in lane_paths) if lane_paths else str(texts["lane_paths_absent"]),
         "carried_line": view.get("carried_line"),
@@ -375,7 +408,7 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
         "commands_rule_lines": commands_rules,
         "scratch_dir": str(scratch), "scratch_source": scratch_source,
         "runall_command": runall["runall_command"] if runall["runall"] else str(texts["runall_absent"]),
-        "runall_timing": timing, "harness": harness,
+        "runall_timing": timing, "harness": harness, "run_long_threshold": run_long_threshold(texts, harness),
         "run_long_start": long_cmds["run_long_start"], "run_long_wait": long_cmds["run_long_wait"],
         "ratchet": test_contract.get("ratchet") or str(texts["ratchet_default"]),
         "residual_pattern": test_contract.get("residual_processes"),

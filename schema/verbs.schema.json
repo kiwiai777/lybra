@@ -2288,7 +2288,7 @@
       }
     },
     "lybra_kickoff": {
-      "description": "AIPOS-F187 件①(10-18 顾问实况: 子 agent 执行模式下 loop 的 manual_kickoff 只给「开工材料 my-tasks + 章程 charter」两条命令, 顾问每张卡手写约 60 行开工稿, F184/F185/F186 三份几乎逐字相同; chris 三位 Codex 顾问各写各的): `lybra kickoff --task-id <卡> [--role executor|auditor] [--json] [--workspace-root <治理根>]` —— 输出一份可直接交给子 agent 的自足开工稿(顾问可在其后追加本卡特别说明)。只读: 不写任何文件、不连门、不起进程。开工稿是渲染, 不是第二份规则文本: 骨架与句子只在本条 texts / layout, 值全部取自既有单源——卡面(task_id / title / lane / 认领实例 claimed_by / carried_from)、project.json(repos、paths.return_root / verdict_root / scratch_root、test_contract.runall_path / ratchet / residual_processes)、章程(实例身份与章程可取 = charter_render.instance_charter 同一判定; 写权限边界与全角色硬规矩 = roles.schema write_boundary 经 write_boundary.build_write_boundary; 门交互硬规矩 = 项目 paths.hard_rules_source § 0.5 经 hard_rules_extractor.extract_hard_rules_from_handbook; 全量命令与时限 = charter_render.runall_context; 时限措辞 = 卡面 harness(loop_driver.card_harness)的单次工具时限 enums.schema harness.<值>.tool_timeout_seconds(AIPOS-F189 件②: 全量时限在其内 = 同步跑写设足秒数, 超限 = 一律 run-long, 未声明 = 不写秒数只教 run-long; 唯一读取口 subagent_kickoff.harness_tool_timeout, 措辞读 texts.runall_timing_<sync|run_long|undeclared>); 长命令 = run_long.charter_commands)、开工面(工作树 / 报告落点 / 报告必填字段 / 承继来源 = next_resolver.card_workstation_view, 报告必填行式 = lybra_my_tasks.kickoff.report_field_line)。可开工判据 = next_resolver.kickoff_refusal(与工位 /go 同一判据: 卡不在队列 / 未认领 / 已结案 / 当前不该本角色动 / 产物已交 = 拒, 拒因原文)。角色 = 审计卡(audit_derivation.is_audit_card)→ auditor, 否则 executor; --role 与卡不符 = 拒。实例 = 卡面 claimed_by(缺 = assigned_to)。实例会话所在机(子 agent 接入 land 事件 host)≠ 本机 = 章程命令给 ssh 拉取式(charter_render.charter_pull_command, 主机未声明 = 占位 + 声明出口)并加 remote_note。草稿目录 = paths.scratch_root/<卡ID 小写>(未声明 = 系统临时目录下 config.schema paths.scratch_root.default_system_temp), 落在治理根内 = 拒(KICKOFF_SCRATCH_IN_GOVERNANCE)。唯一实现 tools/aipos_cli/subagent_kickoff.render_kickoff_brief; loop 子 agent 模式等待提示(lybra_loop.launch.manual_hint.subagent)与 loop status 下一动作(lybra_loop_status.next_action.by_execution_mode.modes.subagent.kickoff_detail)指向本命令。",
+      "description": "AIPOS-F187 件①(10-18 顾问实况: 子 agent 执行模式下 loop 的 manual_kickoff 只给「开工材料 my-tasks + 章程 charter」两条命令, 顾问每张卡手写约 60 行开工稿, F184/F185/F186 三份几乎逐字相同; chris 三位 Codex 顾问各写各的): `lybra kickoff --task-id <卡> [--role executor|auditor] [--json] [--workspace-root <治理根>]` —— 输出一份可直接交给子 agent 的自足开工稿(顾问可在其后追加本卡特别说明)。只读: 不写任何文件、不连门、不起进程。开工稿是渲染, 不是第二份规则文本: 骨架与句子只在本条 texts / layout, 值全部取自既有单源——卡面(task_id / title / lane / 认领实例 claimed_by / carried_from)、project.json(repos、paths.return_root / verdict_root / scratch_root、test_contract.runall_path / ratchet / residual_processes)、章程(实例身份与章程可取 = charter_render.instance_charter 同一判定; 写权限边界与全角色硬规矩 = roles.schema write_boundary 经 write_boundary.build_write_boundary; 门交互硬规矩 = hard_rules_extractor.gate_hard_rules(AIPOS-F212 件②: 与章程硬规矩节同读同序同数; 项目 paths.hard_rules_source § 0.5, 未声明 = roles.schema gate_hard_rules.fallback); 全量命令与时限 = charter_render.runall_context; 时限措辞 = 卡面 harness(loop_driver.card_harness)的单次工具时限 enums.schema harness.<值>.tool_timeout_seconds(AIPOS-F189 件②: 全量时限在其内 = 同步跑写设足秒数, 超限 = 一律 run-long, 未声明 = 不写秒数只教 run-long; 唯一读取口 subagent_kickoff.harness_tool_timeout, 措辞读 texts.runall_timing_<sync|run_long|undeclared>); 长命令 = run_long.charter_commands)、开工面(工作树 / 报告落点 / 报告必填字段 / 承继来源 / 卡 harness / 验证根节与拒因 = next_resolver.card_workstation_view, AIPOS-F212 件①: 与工位 /go 同读同码, 渲染失败 = KICKOFF_VALIDATION_ROOT_UNRESOLVED 拒并给出口, 不重算; 报告必填行式 = lybra_my_tasks.kickoff.report_field_line)。可开工判据 = next_resolver.kickoff_refusal(与工位 /go 同一判据: 卡不在队列 / 未认领 / 已结案 / 当前不该本角色动 / 产物已交 = 拒, 拒因原文)。角色 = 审计卡(audit_derivation.is_audit_card)→ auditor, 否则 executor; --role 与卡不符 = 拒。实例 = 卡面 claimed_by(缺 = assigned_to)。实例会话所在机(子 agent 接入 land 事件 host)≠ 本机 = 章程命令给 ssh 拉取式(charter_render.charter_pull_command, 主机未声明 = 占位 + 声明出口)并加 remote_note。草稿目录 = paths.scratch_root/<卡ID 小写>(未声明 = 系统临时目录下 config.schema paths.scratch_root.default_system_temp), 落在治理根内 = 拒(KICKOFF_SCRATCH_IN_GOVERNANCE)。唯一实现 tools/aipos_cli/subagent_kickoff.render_kickoff_brief; loop 子 agent 模式等待提示(lybra_loop.launch.manual_hint.subagent)与 loop status 下一动作(lybra_loop_status.next_action.by_execution_mode.modes.subagent.kickoff_detail)指向本命令。",
       "phase": "render",
       "surface": ["cli"],
       "cli_command": "lybra kickoff",
@@ -2306,7 +2306,7 @@
       },
       "exit_codes": {
         "ok": {"code": 0, "meaning": "开工稿已输出"},
-        "refused": {"code": 1, "meaning": "拒(stderr 拒因原文与出口): 卡不可开工(kickoff_refusal 同一判据)/ --role 与卡不符 / 认领实例缺 / 章程不可取(instance_charter 拒因)/ 工作树未建或不可推导 / 报告落点或必填字段不可推导 / 草稿目录落在治理根内"},
+        "refused": {"code": 1, "meaning": "拒(stderr 拒因原文与出口): 卡不可开工(kickoff_refusal 同一判据)/ --role 与卡不符 / 认领实例缺 / 章程不可取(instance_charter 拒因)/ 工作树未建或不可推导 / 报告落点或必填字段不可推导 / 草稿目录落在治理根内 / 验证根节不可渲染(与 /go 同码 VALIDATION_ROOT_UNRESOLVED) / 卡 harness 不可推导"},
         "usage": {"code": 2, "meaning": "参数错(argparse)"},
         "unreadable": {"code": 3, "meaning": "治理根 / project.json / 声明读取失败(fail-closed)"}
       },
@@ -2345,11 +2345,11 @@
         "scratch_title": "## 草稿与日志",
         "scratch": "草稿 / 日志写到 `{scratch_dir}`(自建; 来源 {scratch_source}); 不写治理根, 不写本卡工作树与报告落点以外的他处。",
         "verify_title": "## 验证",
-        "verify_baseline": "- 两边基线: 本分支最终 tip 必须独立跑一次全量, 附计数 grep(✓ / ✗ 行数); {base} 侧先查合并后回归记录基线 `{baseline_command}`(三态, 只读): 已记录 = 直接引用该记录(报告写记录路径与失败集合), 不自跑; 回归在跑 = 先做卡, 交回前再查一次(或加 `--wait <秒>` 有界等待, 到点仍在跑 = 须自跑); 须自跑 = 在草稿目录建 {base} 基线副本(git worktree add --detach, 不碰主检出)串行自跑一次。卡分支须基于所查 sha: 交回前若 {base} 已前进, 先在卡工作树 git merge {base} 解冲突, 再按新 sha 查; 其他子 agent 可能同时跑全量, 计数异常先串行重跑。",
-        "verify_baseline_auditor": "- 独立全量基线: 被审分支 tip(取证工作树)必须独立跑一次全量, 附计数 grep(✓ / ✗ 行数), 与执行体报告的计数对照, 不以执行体的日志代替; {base} 侧先查合并后回归记录基线 `{baseline_command}`(三态, 只读; 以审计章程「独立全量基线」节为准): 已记录 = 以记录失败集合作 {base} 侧基线, 不自跑; 回归在跑 = 先跑被审 tip 一侧, 出裁决前再查(或加 `--wait <秒>`); 须自跑 = 建 {base} 基线副本串行自跑一次。",
+        "verify_baseline": "- 两边基线: 本分支最终 tip 必须独立跑一次全量, 附计数 grep(✓ / ✗ 行数); {base} 侧先查合并后回归记录基线 `{baseline_command}`(三态, 只读): {label_recorded} = 直接引用该记录(报告写记录路径与失败集合), 不自跑; {label_pending} = 先做卡, 交回前再查一次(或加 `--wait <秒>` 有界等待, 到点仍在跑 = {label_self_run_required}); {label_self_run_required} = 在草稿目录建 {base} 基线副本(git worktree add --detach, 不碰主检出)串行自跑一次。卡分支须基于所查 sha: 交回前若 {base} 已前进, 先在卡工作树 git merge {base} 解冲突, 再按新 sha 查; 其他子 agent 可能同时跑全量, 计数异常先串行重跑。",
+        "verify_baseline_auditor": "- 独立全量基线: 被审分支 tip(取证工作树)必须独立跑一次全量, 附计数 grep(✓ / ✗ 行数), 与执行体报告的计数对照, 不以执行体的日志代替; {base} 侧先查合并后回归记录基线 `{baseline_command}`(三态, 只读; 以审计章程「独立全量基线」节为准): {label_recorded} = 以记录失败集合作 {base} 侧基线, 不自跑; {label_pending} = 先跑被审 tip 一侧, 出裁决前再查(或加 `--wait <秒>`); {label_self_run_required} = 建 {base} 基线副本串行自跑一次。",
         "verify_baseline_now": "  {base} 侧基线现状(开工稿生成时查, sha {baseline_sha}): {baseline_state}",
         "verify_runall": "- 全量命令: {runall_command}; {runall_timing}",
-        "verify_long": "- 预计超过 5 分钟的命令用 run-long 跑并分段等完(不得因工具时限放弃、不得以子集代替): 起 {run_long_start}, 等 {run_long_wait}(退出码 3 = 仍在跑, 再等)。",
+        "verify_long": "- {run_long_threshold}的命令用 run-long 跑并分段等完(不得因工具时限放弃、不得以子集代替): 起 {run_long_start}, 等 {run_long_wait}(退出码 3 = 仍在跑, 再等)。",
         "verify_ratchet": "- 棘轮: {ratchet}",
         "verify_evidence": "- 证据断言必须复跑一致; 没跑或没跑完的项如实写 NOT_RUN 与原因, 绝不写成通过。",
         "verify_no_poll": "- 等待只准同步执行或 run-long wait, 禁 until / sleep 轮询。",
@@ -2369,19 +2369,22 @@
         "runall_timing_run_long": "全量时限 {runall_timeout}超过本卡 harness {harness} 的单次工具时限 {tool_timeout} 秒(来源 {tool_timeout_source})——全量一律按下条 run-long 起跑并分段等完, 不同步跑; 时限内的命令才同步跑",
         "runall_timing_undeclared": "本卡 harness {harness} 未声明单次工具时限({tool_timeout_source} 无值)——全量一律按下条 run-long 起跑并分段等完, 不按秒数同步跑",
         "tool_timeout_source": "enums.schema harness.{harness}.tool_timeout_seconds",
+        "runall_timing_charter": "全量时限句以开工稿「验证」节为准(AIPOS-F212: 产品按本卡 harness 的单次工具时限产出——全量时限 {runall_timeout}在其内 = 同步跑, bash 工具调用显式传 timeout 不小于该时限、禁省略; 超出或 harness 未声明单次工具时限 = 一律 run-long 分段等完)",
+        "run_long_threshold_charter": "预计超过本会话单次工具时限(秒数以开工稿时限句为准; harness 未声明单次工具时限 = 全量 / UI 套件 / 长构建一律算长命令)",
+        "run_long_threshold_declared": "预计超过本卡 harness {harness} 单次工具时限 {tool_timeout} 秒",
+        "run_long_threshold_undeclared": "本卡 harness {harness} 未声明单次工具时限, 全量 / UI 套件 / 长构建等耗时长",
         "lane_paths_absent": "(卡面未声明 lane.paths, 以卡面 output_target 为准)",
         "repo_line_multi": "{repo_name} = `{code_repo}`(project.json repos.items, 卡 lane.repo)",
         "repo_line_single": "`{code_repo}`",
         "commands_rules_title": "门交互硬规矩(单源 {source}):",
-        "commands_rules_absent": "门交互硬规矩以章程为准({source})。",
         "scratch_source_declared": "project.json paths.scratch_root",
         "scratch_source_default": "未声明 paths.scratch_root, 取系统临时目录",
         "host_hint_alias": "(ssh 别名 {alias})",
         "host_hint_undeclared": "; 治理根主机未声明: {hint}",
-        "baseline_state_recorded": "已记录, 可复用(记录 {ref}; 失败集合 {failure_count} 条)——{base} 侧直接引用该记录, 不自跑",
-        "baseline_state_pending": "合并后回归在跑(卡 {task_id} 起于 {started_at}, 时限 {timeout_seconds}s, 预计最迟 {deadline} 完成)——先做卡, 交回前再查(或加 --wait <秒>)",
-        "baseline_state_self_run_required": "须自跑({reason})——在草稿目录建 {base} 基线副本串行自跑一次",
-        "baseline_state_unavailable": "查询失败({error})——按须自跑处理, 报告写明查询失败原文"
+        "baseline_state_recorded": "{label}(记录 {ref}; 失败集合 {failure_count} 条)——{base} 侧直接引用该记录, 不自跑",
+        "baseline_state_pending": "{label}(卡 {task_id} 起于 {started_at}, 时限 {timeout_seconds}s, 预计最迟 {deadline} 完成)——先做卡, 交回前再查(或加 --wait <秒>)",
+        "baseline_state_self_run_required": "{label}({reason})——在草稿目录建 {base} 基线副本串行自跑一次",
+        "baseline_state_unavailable": "查询失败({error})——按{label_self_run_required}处理, 报告写明查询失败原文"
       },
       "validation_root_texts": {
         "description": "AIPOS-F190 件④: 开工稿与章程「跨机临时验证根」节的措辞(同源)。AIPOS-F206: 开工稿 = 本卡声明 / run / 命令全集(validation_root.render_section_lines 唯一渲染, my-tasks next_card.kickoff 与 lybra kickoff 同读); 章程 = 只渲染与声明条数无关的通用段(validation_root.render_charter_section_lines: title + relation + charter_scope + charter_rules + 声明 block_conditions; 不列任何声明 / run / 命令明细, 长度上限 roles.schema charter_size_guard.validation_root_section_max_bytes)。占位 {键} 取声明条目与渲染值。",
@@ -2437,7 +2440,9 @@
         "KICKOFF_CHARTER_REFUSED": "实例 {instance} 的章程不可取: {reason}",
         "KICKOFF_WORKTREE_UNRESOLVED": "卡 {task_id} 工作树不可用({code}): {reason}",
         "KICKOFF_REPORT_UNRESOLVED": "卡 {task_id} 报告落点 / 必填字段不可推导({code}): {reason}",
-        "KICKOFF_SCRATCH_IN_GOVERNANCE": "草稿目录 {scratch_dir} 落在治理根 {governance_root} 内(草稿永不落治理根); 出口: lybra project set-paths {project} --key scratch_root --value <治理根外的绝对路径> --confirm"
+        "KICKOFF_SCRATCH_IN_GOVERNANCE": "草稿目录 {scratch_dir} 落在治理根 {governance_root} 内(草稿永不落治理根); 出口: lybra project set-paths {project} --key scratch_root --value <治理根外的绝对路径> --confirm",
+        "KICKOFF_VALIDATION_ROOT_UNRESOLVED": "卡 {task_id} 验证根节不可渲染({code}): {reason}; 与工位 /go 同一拒因(该卡不入选开工, AIPOS-F212 件①: 两面同读 next_resolver.card_workstation_view); 出口: 按拒因修本卡验证根声明(lybra project validation-root list 查看)或给卡补 harness(lybra queue amend), 修后重出开工稿",
+        "KICKOFF_HARNESS_UNRESOLVED": "卡 {task_id} 的 harness 不可推导({code}): {reason}; 开工稿时限句按卡 harness 产出(AIPOS-F212 件③), 不猜"
       }
     },
     "lybra_loop": {
@@ -2854,10 +2859,21 @@
       ],
       "cli_command": "lybra regression baseline",
       "single_implementation": "tools/aipos_cli/post_merge_regression.audit_baseline(三态判定: 记录基线 lookup_recorded_baseline + 在跑判定 regression_states, 不另扫记录)/ loop_run_record.wait_regression_baseline(--wait 有界等待, 经 run_fs_watch; 放在 loop 有界等待所在模块, 不进 finalize 合并后预载闭包)/ render_audit_baseline(人读唯一出口); 命令式样唯一渲染 audit_baseline_command(章程占位 regression_baseline_command / 审计卡取证锚点 / lybra kickoff 开工稿同读)",
+      "state_labels": {
+        "description": "AIPOS-F212 件④(F208 P2-7: 三态标签原文散在两份角色母本 / verbs 三处 / post_merge_regression / audit_derivation / 技能约 8 处): 三态结论标签唯一声明。读取口 post_merge_regression.baseline_state_labels; 人读输出(render_audit_baseline)、开工稿(lybra_kickoff.texts 占位 {label_<态>})、章程三态条(charter_state_rules 经 baseline_state_rules 渲染为章程占位 {{regression_baseline_states}})、审计卡取证锚点同读; 角色母本禁写标签原文(棘轮 R10)。",
+        "recorded": "已记录, 可复用",
+        "pending": "合并后回归在跑",
+        "self_run_required": "须自跑"
+      },
+      "charter_state_rules": {
+        "description": "AIPOS-F212 件④: 章程「按输出三态处理」条(按角色类; 占位 {recorded}/{pending}/{self_run_required} = state_labels)。唯一渲染 post_merge_regression.baseline_state_rules, 经 charter_render 键 regression_baseline_states 入母本占位; 角色类无条目 = 不入键。",
+        "executor": "  - 「{recorded}」= 直接引用该记录作 main 侧基线, RETURN.md 写记录路径与失败集合(命令输出原文), main 侧不自跑;\n  - 「{pending}」= 先做卡, 交回前再查一次(或加 `--wait <秒>` 有界等待, 秒数取本会话工具单次时限以内), 到点仍在跑 = 按「{self_run_required}」处理;\n  - 「{self_run_required}」= 在草稿目录用 `git worktree add --detach <草稿目录下子目录> <该 sha>` 建 main 基线副本(不碰主检出)串行自跑一次, 跑完 `git worktree remove`。",
+        "auditor": "       **不手翻记录文件**:输出「{recorded}」= 以其失败集合作 main 侧基线, **main 侧不再自跑**, 报告附该命令输出原文;\n       输出「{pending}」(AIPOS-F188: 该 sha 的回归进程仍在, 输出给开始时刻与预计最迟完成)= 先跑被审 tip 一侧, 出裁决前再查一次\n       (或加 `--wait <秒>` 有界等待, 秒数取本会话工具单次时限以内); 到点仍在跑即按「{self_run_required}」处理;\n       输出「{self_run_required}」(无该 sha 的记录, 或记录为超时/未完成/读不出)= 按第 2 条建 main 基线副本自跑一次。"
+      },
       "states": {
-        "recorded": "已记录, 可复用: 有 merge_commit = 该 sha 且合并后集合完整(merged_complete)的记录——main 侧以记录的失败集合为基线, 不再自跑; 报告引用记录路径与失败集合",
-        "pending": "合并后回归在跑: 该 sha 的回归进行中记录(事件记录 status=running 或 finalization 记录 async_started)其进程仍在(regression_states state=running)——先做本卡 / 被审 tip 一侧, 交回前再查一次, 或 --wait <秒> 有界等待; 到点仍未完成 = self_run_required",
-        "self_run_required": "须自跑: 无该 sha 的记录 / 记录为超时·出错·未完成(进程已不在)·集合不完整 / 进行中记录写于他机判不出 / 记录读不出 / --wait 到点仍在跑——main 侧建基线副本自跑一次"
+        "recorded": "有 merge_commit = 该 sha 且合并后集合完整(merged_complete)的记录——main 侧以记录的失败集合为基线, 不再自跑; 报告引用记录路径与失败集合",
+        "pending": "该 sha 的回归进行中记录(事件记录 status=running 或 finalization 记录 async_started)其进程仍在(regression_states state=running)——先做本卡 / 被审 tip 一侧, 交回前再查一次, 或 --wait <秒> 有界等待; 到点仍未完成 = self_run_required",
+        "self_run_required": "无该 sha 的记录 / 记录为超时·出错·未完成(进程已不在)·集合不完整 / 进行中记录写于他机判不出 / 记录读不出 / --wait 到点仍在跑——main 侧建基线副本自跑一次"
       },
       "json_fields": {
         "common": [
@@ -3251,7 +3267,7 @@
               "fix": [
                 "不找 Owner: 本卡执行方式 = 顾问派子 agent(project.json execution, 或等待目标实例为子 agent 执行者接入), loop 等交回超时是例行等待, 不是工位没人开工",
                 "执行体可能仍在做 → 用原命令重跑 loop 续等(本修法末行命令; 已落的步不重复, 推导核按已落记录续做; 交回一落盘 loop 即醒来接着派审)",
-                "子 agent 已终止或未派 → 按开工材料派本卡子 agent(`lybra my-tasks --actor <本卡 assigned_to> --task-id {task_id}` 给工作树 / 报告落点 / 卡路径), 子 agent 写完交回即止",
+                "子 agent 已终止或未派 → 按开工稿派本卡子 agent(开工稿 = `lybra kickoff --task-id {task_id} --workspace-root {governance_root}` 的输出, 原样交给子 agent, 可在其后追加本卡特别说明; AIPOS-F212 件③), 子 agent 写完交回即止",
                 "子 agent 执行方式下等交回缺省已放宽(verbs.schema lybra_loop.wait_limits.by_execution_mode.subagent.default, 项目可用 lybra project set-execution --subagent-max-wait 覆盖); 仍常超时 = 重跑时加大 --max-wait(秒)"
               ]
             },

@@ -324,4 +324,5 @@ def test_item2_undeclared_placeholder_rejected(tmp_path, monkeypatch):
     ctx = charter_render_context(gov, identity=_identity(harness, "executor", "exec.lybra.hostl", "lybra"))
     with pytest.raises(ValueError, match="未声明占位"):
         render_charter("产品仓 {{product_repo_path}}\n", ctx)
-    assert "token" not in json.dumps(ctx).lower()  # token 永不入上下文
+    # token 永不入上下文(AIPOS-F212: 硬规矩节条文本身含「token」字样——规则文字不是凭据, 只排除该节后查)
+    assert "token" not in json.dumps({k: v for k, v in ctx.items() if k != "hard_rules_section"}).lower()

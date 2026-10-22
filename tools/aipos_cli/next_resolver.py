@@ -992,17 +992,27 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
                 }
     # AIPOS-F196 件③: 本卡验证根节(validation_root.render_section_lines; AIPOS-F206: 明细只在开工提示, 章程只留通用段; 实例 = 认领实例, 缺 = assigned_to)。
     # 声明读不出 = 开工面拒因(VALIDATION_ROOT_UNRESOLVED, select_next_card 不入选; fail-closed, 不出缺节的开工提示)
+    # AIPOS-F212 件①: 本节只此一处算(工位 /go 与 lybra kickoff 同读本视图的 validation_root_lines / validation_root_refusal, 拒因同码);
+    # 沙箱列举按卡 harness 唯一推导 loop_driver.card_harness(卡面值, 缺省由本卡执行方式推出), 不再读卡面原值
     view["validation_root_lines"] = []
+    view.update(_card_harness_view(workspace_root, task_id, fm))
     instance = str(fm.get("claimed_by") or fm.get("assigned_to") or "").strip()
     if instance:
         from tools.aipos_cli.validation_root import ValidationRootError, render_section_lines
 
         try:
-            view["validation_root_lines"] = render_section_lines(workspace_root, instance=instance, task_id=task_id,
-                                                                 harness=str(fm.get("harness") or "").strip() or None,
-                                                                 include_inactive=True)
+            lines = render_section_lines(workspace_root, instance=instance, task_id=task_id, harness=view["harness"],
+                                         include_inactive=True)
         except (ValidationRootError, SchemaLoadError, OSError, ValueError) as exc:
             view["validation_root_refusal"] = {"code": "VALIDATION_ROOT_UNRESOLVED", "reason": f"本卡验证根节不可渲染: {exc}"}
+        else:
+            if lines and view["harness"] is None:
+                # 本卡有验证根节而 harness 不可推导 = 沙箱可写根无从按卡渲染(不退回列全部沙箱), 同码拒
+                view["validation_root_refusal"] = {
+                    "code": "VALIDATION_ROOT_UNRESOLVED",
+                    "reason": f"本卡验证根节不可渲染: 沙箱按卡 harness 渲染, harness 不可推导({view['harness_refusal']['reason']})"}
+            else:
+                view["validation_root_lines"] = lines
     try:
         view["report_path"] = str(card_report_path(workspace_root, task_id, fm))
     except (SchemaLoadError, OSError, ValueError) as exc:
@@ -1018,6 +1028,19 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
         view["report_path"] = None
         view["report_refusal"] = {"code": "REPORT_CONTRACT_UNRESOLVED", "reason": f"报告必填字段不可推导: {exc}"}
     return view
+
+
+def _card_harness_view(workspace_root: Path, task_id: str, fm: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F212 件①: 开工面的卡 harness(唯一推导 loop_driver.card_harness; /go 验证根沙箱列举与 lybra kickoff 时限句同读)。
+    返回 {harness, harness_refusal}: 推导失败(子 agent 执行者无接入登记 / 执行方式声明形坏 / 缺省表缺条目)= harness None +
+    harness_refusal {code HARNESS_UNRESOLVED, reason 原文(含出口)}; 不猜、不退回列全部沙箱。"""
+    from tools.aipos_cli.loop_driver import card_harness
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        return {"harness": card_harness(fm, workspace_root, task_id=task_id), "harness_refusal": None}
+    except (SchemaLoadError, OSError, ValueError) as exc:
+        return {"harness": None, "harness_refusal": {"code": "HARNESS_UNRESOLVED", "reason": str(exc)}}
 
 
 def card_report_contract(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None,

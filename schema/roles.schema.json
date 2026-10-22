@@ -619,6 +619,19 @@
       }
     }
   },
+  "gate_hard_rules": {
+    "description": "AIPOS-F212 件②(F208 P1-4 / E52: 三份角色母本各写一份静态门交互硬规矩, 开工稿另从 COMMANDS.md § 0.5 抽取, 同一子 agent 收到 6 条与 5 条两份互不一致的硬规矩): 门交互硬规矩节的唯一声明。产出唯一实现 hard_rules_extractor.gate_hard_rules(章程占位 {{hard_rules_section}} 经 render_hard_rules_for_charter, 与 lybra kickoff 门交互硬规矩行同读同序同数): 项目声明了 project.json paths.hard_rules_source = 取该手册「## 0.5. 硬规矩」节编号条目与实撞背景(声明了却读不出 / 无条目 = HardRulesSourceError, fail-closed, 章程与开工稿同拒); 未声明 = fallback.rules_by_role_class[角色类](占位 {return_root} / {verdict_root} / {task_cards_root} 读 project.json paths)+ fallback.background, 「单一真相源」行 = hard_rules_extractor.UNDECLARED_REF(行为同 F212 前母本自带条文)。角色母本禁写条文原文(棘轮 R10: tests/test_aipos_f212_render_single_source.py)。",
+    "section_title": "## 🟡 硬规矩(门交互与职责边界 — AIPOS-F41 下发)",
+    "source_line": "> **单一真相源**: {source}。修改该来源 → 章程与派审注入同步跟随。",
+    "fallback": {
+      "background": "**实撞背景**:审计体 curl /mcp 自挂 292s;执行体手搓 JSON-RPC 走错通道;审计体挖凭据副本致\n401 且 token 明文上屏。三笔规矩写在手册里但从未下发 → 冷启动模型无从得知,每次换会话重踩。",
+      "rules_by_role_class": {
+        "executor": ["1. **你不接触门** — 不调用任何 `lybra_*` 动词、不读 `connection.json`/token。", "2. **凭据只按名引用** — 绝不读取/回显/硬编码任何密钥。", "3. **`records/`与`queue/`=门领地** — 裁决/记录由门落盘;报告只落 `{return_root}/<卡ID>/`(治理工作区)。", "4. **遇 Lybra 侧报错=停线报告** — 禁自行诊断/修复门与部署;命令输出已自携拒因与下一步。", "5. **职责终点=写完报告** — `RETURN.md` 写完即停;认领/交回/裁决/finalize 由产品做(产品执行 `lybra next --run` 等命令)。"],
+        "auditor": ["1. **你不接触门** — 不调用任何 `lybra_*` 动词、不读 `connection.json`/token。", "2. **凭据只按名引用** — 绝不读取/回显/硬编码任何密钥。", "3. **`records/`与`queue/`=门领地** — 裁决/记录由门落盘;报告只落 `{verdict_root}/<审计卡ID>/`(治理工作区)。", "4. **遇 Lybra 侧报错=停线报告** — 禁自行诊断/修复门与部署;命令输出已自携拒因与下一步。", "5. **职责终点=写完报告** — 审计报告(含 verdict 字段)写完即停;认领/裁决/finalize 由产品做(产品执行 `lybra next --run` 等命令)。"],
+        "advisor": ["1. **永不 `curl /mcp`**(SSE 长连接,永不返回) — 门交互一律经产品命令(`lybra loop` / `lybra envelope mint` 等)。", "2. **禁裸拼 JSON-RPC 报文** — 两阶段(`dry_run` → `confirm`)由产品命令内部完成,顾问不手调门工具。", "3. **凭据只从本工位 `.lybra/connection.json` 读** — 禁 `.bak`/副本/其它路径;**token 永不回显上屏**。", "4. **`records/`与`queue/`=门领地** — 裁决/记录由门落盘;报告只落 `{task_cards_root}/<卡ID>/`(治理工作区)。", "5. **遇 Lybra 侧报错=停线报告** — 禁自行诊断/修复门与部署;命令输出已自携拒因与下一步。", "6. **交回/裁决职责终点=写完报告** — `RETURN.md`/审计报告写完即停;入账由 `lybra loop` 经产物入口完成(失灵时用产品兜底命令)。"]
+      }
+    }
+  },
   "charter_size_guard": {
     "description": "AIPOS-F206(chris 岚图 LANTU-VALID1R 实撞: hbj-auditor 工位章程 234180 字节, 其中「跨机临时验证根」节 169394 字节逐声明 / 逐 run 列全项目命令, 审计 pi 开工首轮 input 84221 tokens 后 stopReason=length 连败): 角色章程渲染物体积上限(唯一声明)。章程验证根节只渲染与声明条数无关的通用规则(validation_root.render_charter_section_lines), 本卡的声明 / run / 命令只进该卡开工提示(my-tasks next_card.kickoff 与 lybra kickoff, validation_root.render_section_lines); 渲染物(utf-8 字节)> max_bytes = charter_render.render_charter 拒渲染(CharterOversize, fail-closed, 拒因含各节字节数与出口; sync / lybra charter / enroll 种子同一渲染器同拒); 工位上已有章程 > max_bytes = sync 判据 _charter_render_reason 判需重渲染(oversize), loop 拉起前核章程新鲜度(AIPOS-F164)即先 sync, 渲染仍超限 = sync 失败 = 不拉起(charter_sync_failed, 不拉起必爆上下文的会话)。validation_root_section_max_bytes = 章程验证根通用节上限(守卫测试按声明判)。缺 / 形不合 = SchemaLoadError。",
     "max_bytes": 40960,

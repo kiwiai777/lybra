@@ -224,6 +224,33 @@ def baseline_declaration() -> dict[str, Any]:
     return decl
 
 
+def baseline_state_labels() -> dict[str, str]:
+    """AIPOS-F212 件④: 三态结论标签 verbs.schema lybra_regression_baseline.state_labels 唯一读取口(人读输出 / 开工稿 / 章程三态条 /
+    审计卡取证锚点同读)。缺 / 非串 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    labels = baseline_declaration().get("state_labels")
+    if not isinstance(labels, dict) or any(not isinstance(labels.get(k), str) or not labels[k] for k in BASELINE_STATES):
+        raise SchemaLoadError(f"verbs.schema.json verbs.{BASELINE_VERB}.state_labels({list(BASELINE_STATES)} 非空串)未声明齐")
+    return {k: str(labels[k]) for k in BASELINE_STATES}
+
+
+def baseline_state_rules(role_class: str) -> str | None:
+    """AIPOS-F212 件④: 章程「按输出三态处理」条(verbs.schema lybra_regression_baseline.charter_state_rules.<角色类>, 标签 = state_labels)。
+    章程渲染键 regression_baseline_states 的唯一产出; 角色类无条目 = None(不入键)。形不合 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError
+
+    rules = baseline_declaration().get("charter_state_rules")
+    if not isinstance(rules, dict):
+        raise SchemaLoadError(f"verbs.schema.json verbs.{BASELINE_VERB}.charter_state_rules 未声明")
+    template = rules.get(role_class)
+    if template is None:
+        return None
+    if not isinstance(template, str) or not template:
+        raise SchemaLoadError(f"verbs.schema.json verbs.{BASELINE_VERB}.charter_state_rules.{role_class} 须为非空串")
+    return template.format(**baseline_state_labels())
+
+
 def _parse_iso(text: Any) -> Any:
     from datetime import datetime, timezone
 
@@ -328,10 +355,11 @@ def audit_baseline_command(governance_root: str | Path, repo_root: str | Path | 
 def render_audit_baseline(result: dict[str, Any]) -> str:
     """audit_baseline 结果的人读输出(CLI 唯一出口)。"""
     commit = str(result.get("commit") or "")
+    labels = baseline_state_labels()  # AIPOS-F212 件④: 三态标签唯一声明
     lines = [f"合并后回归记录基线: sha {commit}(来源 {result.get('sha_source') or '--sha'}; 治理根 {result.get('governance_root')})"]
     if result.get("status") == AUDIT_BASELINE_RECORDED:
         failures = list(result.get("failures") or [])
-        lines.append(f"结论: 已记录, 可复用(记录 {result.get('ref')}; execution={result.get('execution')}, "
+        lines.append(f"结论: {labels[AUDIT_BASELINE_RECORDED]}(记录 {result.get('ref')}; execution={result.get('execution')}, "
                      f"合并后一跑 {result.get('merged_seconds')}s, 清单 {result.get('runall_path')})")
         lines.append(f"失败集合 {len(failures)} 条(口径 runall_discovery.failure_set: `✗` 行的文件/原文 + 失败文件段内 FAILED/ERROR 节点):")
         lines.append(f"  ✗ 行条目 {len(result.get('failure_lines') or [])} 条:")
@@ -341,16 +369,16 @@ def render_audit_baseline(result: dict[str, Any]) -> str:
         lines.append("下一步: main 侧以本失败集合为基线, 不再自跑; 被审分支一侧仍须自跑一次全量, 按同一口径取失败集合逐条比对。")
     elif result.get("status") == AUDIT_BASELINE_PENDING:
         pending = result.get("pending") or {}
-        lines.append("结论: 合并后回归在跑(该 sha 的记录基线尚未落定, 可等)")
+        lines.append(f"结论: {labels[AUDIT_BASELINE_PENDING]}(该 sha 的记录基线尚未落定, 可等)")
         lines.append(f"  进行中: 卡 {pending.get('task_id')} 记录 {pending.get('record')}(pid {pending.get('pid')} @ {pending.get('host') or '本机'}, "
                      f"日志 {pending.get('log')})")
         lines.append(f"  开始 {pending.get('started_at') or '(记录未写开始时刻)'}, 时限 {pending.get('timeout_seconds') or '(未记)'}s, "
                      f"预计最迟 {pending.get('deadline') or '(不可推算)'} 完成"
                      + (f"(已运行 {pending['elapsed_seconds']}s)" if isinstance(pending.get("elapsed_seconds"), int) else ""))
         lines.append(f"下一步: 先做本卡 / 被审分支一侧(该侧仍须自跑一次全量); 交回前再查一次本命令, 或 `{result.get('wait_command')}` "
-                     "有界等待——到点仍未完成 = 须自跑 main 侧。")
+                     f"有界等待——到点仍未完成 = {labels[AUDIT_BASELINE_SELF_RUN]} main 侧。")
     else:
-        lines.append("结论: 须自跑 main 侧(无可复用的记录基线)")
+        lines.append(f"结论: {labels[AUDIT_BASELINE_SELF_RUN]} main 侧(无可复用的记录基线)")
         lines += [f"  原因: {reason}" for reason in result.get("reasons") or []]
         lines.append("下一步: main 侧按审计章程建 main 基线副本自跑一次; 被审分支一侧同样自跑一次。")
     waited = result.get("waited")

@@ -126,33 +126,29 @@ def test_diagnostic_checklist_extraction():
 
 
 def test_charters_contain_hard_rules():
-    """测试章程文件包含硬规矩节。"""
+    """测试章程含硬规矩节。AIPOS-F212 件②: 母本只留占位 {{hard_rules_section}}, 节由 render_hard_rules_for_charter 渲染
+    (声明了手册 = 手册 § 0.5 条文; 未声明 = roles.schema gate_hard_rules.fallback 按角色类)。"""
+    from tools.aipos_cli.hard_rules_extractor import UNDECLARED_REF, render_hard_rules_for_charter
+
     print("\n" + "=" * 80)
     print("测试3: 章程包含硬规矩节")
     print("=" * 80)
-    
-    product_repo = _PRODUCT_REPO
+
     roles = ["executor", "auditor", "advisor"]
-    
     for role in roles:
-        charter = product_repo / "agents" / "roles" / role / "AGENTS.md"
+        charter = _PRODUCT_REPO / "agents" / "roles" / role / "AGENTS.md"
         assert charter.is_file(), f"章程文件不存在: {charter}"
-        
-        content = charter.read_text(encoding="utf-8")
-        
-        # 检查是否包含硬规矩节标题
-        has_hard_rules = "## 🟡 硬规矩" in content
-        has_source_note = "单一真相源" in content
-        has_six_rules = content.count("1. **永不") > 0 or content.count("1. **") > 0
-        
-        print(f"\n{role}:")
-        print(f"  包含硬规矩节: {has_hard_rules}")
-        print(f"  包含单一真相源注释: {has_source_note}")
-        print(f"  包含规矩条目: {has_six_rules}")
-        
-        assert has_hard_rules, f"{role}章程缺少硬规矩节"
-        assert has_source_note, f"{role}章程缺少单一真相源注释"
-    
+        assert charter.read_text(encoding="utf-8").count("{{hard_rules_section}}") == 1, f"{role}章程母本缺硬规矩节占位"
+        for declared in (True, False):
+            section = render_hard_rules_for_charter(_project(declared=declared), role_class=role)
+            print(f"\n{role}(declared={declared}):\n{section}")
+            assert section.startswith("## 🟡 硬规矩"), f"{role}章程缺少硬规矩节"
+            assert "单一真相源" in section, f"{role}章程缺少单一真相源注释"
+            if declared:
+                assert "docs/handbook.md § 0.5" in section and "6. **拒后禁换方式重试**" in section
+            else:
+                assert UNDECLARED_REF in section and "1. **" in section
+
     print("\n✓ 章程硬规矩节测试通过")
     return True
 

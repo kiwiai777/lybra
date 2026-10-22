@@ -316,15 +316,32 @@ def charter_render_context(
     ctx["runall_path"] = runall_view["runall_path"]
     ctx["runall_command"] = runall_view["runall_command"]
     ctx["runall_timeout_seconds"] = runall_view["runall_timeout_seconds"]
+    # AIPOS-F212 件③④: 全量时限句 / run-long 门槛只由 subagent_kickoff.runall_timing / run_long_threshold 产出(章程不按卡 = charter 态,
+    # 指向开工稿时限句); 母本占位 {{runall_timing_charter}} / {{run_long_threshold}}, 不写死秒数与「显式传 timeout = 全量时限」
+    from tools.aipos_cli.subagent_kickoff import charter_timing_values
+
+    ctx.update(charter_timing_values(runall_view["runall_timeout_seconds"]))
     # AIPOS-F149 件③(gap #89): main 侧基线复用——审计体按 sha 查已记录的合并后回归失败集合的只读命令(唯一渲染
     # post_merge_regression.audit_baseline_command; 治理根与产品仓读声明, 与审计卡取证锚点同一函数)。
     from tools.aipos_cli.post_merge_regression import audit_baseline_command
 
     ctx["regression_baseline_command"] = f"`{audit_baseline_command(gov)}`"
+    # AIPOS-F212 件④: 「按输出三态处理」条 = post_merge_regression.baseline_state_rules(标签唯一声明 state_labels; 母本只留占位)
+    from tools.aipos_cli.post_merge_regression import baseline_state_rules
+
+    state_rules = baseline_state_rules(role_class)
+    if state_rules is not None:
+        ctx["regression_baseline_states"] = state_rules
     # AIPOS-F179 item 1: long verification commands via `lybra run-long` (single rendering run_long.charter_commands)
     from tools.aipos_cli.run_long import charter_commands
 
     ctx.update(charter_commands(gov))
+    # AIPOS-F212 件②: 门交互硬规矩节 = hard_rules_extractor.render_hard_rules_for_charter(与 lybra kickoff 同读 gate_hard_rules, 同序同数);
+    # 母本只留占位 {{hard_rules_section}}。项目未声明来源且本角色类无 fallback 声明 = 不入键(母本若用该占位 = 未声明占位拒, fail-closed)
+    from tools.aipos_cli.hard_rules_extractor import _hard_rules_handbook_path, gate_hard_rules_declaration, render_hard_rules_for_charter
+
+    if _hard_rules_handbook_path(gov) is not None or role_class in gate_hard_rules_declaration()["fallback"]["rules_by_role_class"]:
+        ctx["hard_rules_section"] = render_hard_rules_for_charter(gov, role_class=role_class)
     # AIPOS-F190 件④ → AIPOS-F206 件①: 章程验证根节只渲染与声明条数无关的通用段(validation_root.render_charter_section_lines;
     # 本卡声明 / run / 命令只进开工提示 render_section_lines)。项目无声明 = 不入键(指纹不变, 章程不变); 有声明 = 通用段, 声明 / run 变不再改章程。
     from tools.aipos_cli.validation_root import render_charter_section_lines
