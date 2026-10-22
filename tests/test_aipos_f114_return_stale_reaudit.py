@@ -92,7 +92,7 @@ def _phase1_returned_and_round_claimed(lrig) -> str:
     res, text = _loop(lrig, max_steps=4)
     _show(f"---- 阶段1 lybra loop {TASK}(max_steps=4)输出原文 ----\n{text}")
     assert _records(lrig.gov, "returns", TASK) and _records(lrig.gov, "claims", R1), text
-    tip = nr._extract_artifact_subject_from_branch(lrig.code_repo, TASK, "code")["commit_sha"]
+    tip = nr._extract_artifact_subject_from_branch(lrig.code_repo, TASK)["commit_sha"]
     _code, forensic = nr.card_worktree_location(lrig.gov, R1)
     assert _git(forensic, "rev-parse", "HEAD") == tip  # 取证树 = 交回 tip
     return tip

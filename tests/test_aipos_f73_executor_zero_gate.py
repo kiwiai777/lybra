@@ -209,20 +209,15 @@ def test_f73_item2_verdict_command_includes_artifact_subject(test_workspace: Pat
     subprocess.run(["git", "checkout", "main"], cwd=test_workspace, capture_output=True)
     
     # 提取 artifact_subject
-    artifact_subject = _extract_artifact_subject_from_branch(
-        test_workspace, reviewed_task_id, task_mode="code"
-    )
+    artifact_subject = _extract_artifact_subject_from_branch(test_workspace, reviewed_task_id)
     
     assert artifact_subject is not None, "应该能提取 artifact_subject"
     assert artifact_subject["repository"] == "workspace", "repository 应该是工作区名"
     assert len(artifact_subject["commit_sha"]) == 40, "commit_sha 应该是 40 字符"
     assert len(artifact_subject["tree_hash"]) == 40, "tree_hash 应该是 40 字符"
     
-    # 非 code 卡不提取
-    artifact_subject_non_code = _extract_artifact_subject_from_branch(
-        test_workspace, reviewed_task_id, task_mode="doc"
-    )
-    assert artifact_subject_non_code is None, "非 code 卡不应提取 artifact_subject"
+    # AIPOS-F211 件①: 是否有卡分支由调用方问唯一判据 card_writes_product_repo, 本函数只读 tip——无分支 = None
+    assert _extract_artifact_subject_from_branch(test_workspace, "TEST-NO-BRANCH") is None, "无卡分支不应提取 artifact_subject"
 
 
 def test_f73_item1_card_gate_verb_validation_red_green():

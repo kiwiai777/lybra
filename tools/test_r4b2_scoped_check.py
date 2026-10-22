@@ -22,14 +22,15 @@ scope1 = resolve_check_scope_from_task(metadata1)
 print(f"Code task with output_target='tools/': {scope1}")
 assert scope1 == ["tools/"], f"Expected ['tools/'], got {scope1}"
 
-# Non-code docs task
+# AIPOS-F211 件①: 查不查由调用方问唯一判据 next_resolver.card_writes_product_repo; 本函数只解析 scope(不再按 task_mode 返回 [])
 metadata2 = {
     "task_mode": "docs",
+    "output_target": "docs/",
     "artifact_scope": "documentation update"
 }
 scope2 = resolve_check_scope_from_task(metadata2)
-print(f"Docs task (non-code): {scope2}")
-assert scope2 == [], f"Expected [], got {scope2}"
+print(f"Docs task (scope only, gating by caller): {scope2}")
+assert scope2 == ["docs/"], f"Expected ['docs/'], got {scope2}"
 
 # Code task without output_target, artifact_scope with path hint
 metadata3 = {

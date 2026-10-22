@@ -9,7 +9,7 @@ Tests:
 5. FND-5F1 split-repo: product-repo dirty, governance-repo clean -> BLOCKED
 6. Integration: return_task blocks code task with uncommitted product-repo changes
 7. Integration: return_task NOT blocked when product-repo is clean (even if governance dirty)
-8. Coverage: artifact_policy=formal_write also triggers check
+8. Coverage(AIPOS-F211 改): artifact_policy=formal_write 不再单独触发, 只问 card_writes_product_repo
 """
 import json
 import subprocess
@@ -472,48 +472,42 @@ def test_return_task_passes_on_committed_code():
         print("✓ return_task passes on committed product-repo code")
 
 
-def test_artifact_policy_formal_write_triggers_check():
-    """FND-5 Coverage: artifact_policy=formal_write also triggers the product-repo check.
-    
-    F-R4B2-4: Updated for scoped check - uncommitted file must be within task's output_target.
-    """
+def _formal_write_rig(tmp: Path, task_id: str, *, task_mode: str) -> Path:
+    """产品仓 scope 内有未提交文件 + 治理根一张 formal_write 卡(task_mode 由参数定; 缺 lane.repo)。返回治理根。"""
+    product_repo = tmp / "product"
+    product_repo.mkdir()
+    _init_git_repo(product_repo)
+    scope_dir = product_repo / "tools" / "aipos_cli"
+    scope_dir.mkdir(parents=True)
+    (scope_dir / "formal_artifact.txt").write_text("Uncommitted\n", encoding="utf-8")
+    governance_root = tmp / "governance"
+    governance_root.mkdir()
+    _write_project_json(governance_root, product_repo)
+    _create_governance_workspace(governance_root, task_id, task_mode=task_mode, artifact_policy="formal_write")
+    return governance_root
+
+
+def _return_blocking(governance_root: Path, task_id: str) -> list:
+    result = return_task(task_id=task_id, actor="test.executor", agent_instance="test.executor", owner_policy_ref="test_policy",
+                         result_summary="Task completed", dry_run=True, repo_root=governance_root)
+    return result.get("blocking_reasons", [])
+
+
+def test_artifact_policy_formal_write_no_longer_second_criterion():
+    """AIPOS-F211 件①: 未提交代码检查只问唯一判据 next_resolver.card_writes_product_repo——artifact_policy=formal_write
+    不再是第二判据(起草缺省人人 formal_write)。不写仓的卡(此处 task_mode=docs 且缺 lane.repo = 不建树无卡分支)不查;
+    写仓的卡(code)照查(F-R4B2-4 scoped: 未提交文件在 output_target 内)。"""
     with tempfile.TemporaryDirectory() as tmpdir:
-        tmp = Path(tmpdir)
-
-        # Product repo: dirty IN SCOPE
-        product_repo = tmp / "product"
-        product_repo.mkdir()
-        _init_git_repo(product_repo)
-        
-        # F-R4B2-4: Put uncommitted file within output_target scope
-        scope_dir = product_repo / "tools" / "aipos_cli"
-        scope_dir.mkdir(parents=True)
-        (scope_dir / "formal_artifact.txt").write_text("Uncommitted\n", encoding="utf-8")
-
-        # Governance workspace with artifact_policy=formal_write (not task_mode=code)
-        governance_root = tmp / "governance"
-        governance_root.mkdir()
-        _write_project_json(governance_root, product_repo)
-        _create_governance_workspace(
-            governance_root, "TEST-FW-001",
-            task_mode="implementation",
-            artifact_policy="formal_write",
-        )
-
-        result = return_task(
-            task_id="TEST-FW-001",
-            actor="test.executor",
-            agent_instance="test.executor",
-            owner_policy_ref="test_policy",
-            result_summary="Task completed",
-            dry_run=True,
-            repo_root=governance_root,
-        )
-
-        blocking_reasons = result.get("blocking_reasons", [])
-        assert any("CODE_NOT_COMMITTED" in str(r) for r in blocking_reasons), \
-            f"artifact_policy=formal_write should trigger check, got {blocking_reasons}"
-        print("✓ artifact_policy=formal_write triggers product-repo check (scoped)")
+        gov = _formal_write_rig(Path(tmpdir), "TEST-FW-001", task_mode="docs")
+        blocking_reasons = _return_blocking(gov, "TEST-FW-001")
+        print(f"[F211] docs + formal_write(不写仓)交回 blocking 原文: {blocking_reasons}")
+        assert not any("CODE_NOT_COMMITTED" in str(r) for r in blocking_reasons), blocking_reasons
+    with tempfile.TemporaryDirectory() as tmpdir:
+        gov = _formal_write_rig(Path(tmpdir), "TEST-FW-002", task_mode="code")
+        blocking_reasons = _return_blocking(gov, "TEST-FW-002")
+        print(f"[F211] code + formal_write(写仓)交回 blocking 原文: {blocking_reasons}")
+        assert any("CODE_NOT_COMMITTED" in str(r) for r in blocking_reasons), blocking_reasons
+        print("✓ 未提交代码检查 = card_writes_product_repo(formal_write 不再单独触发)")
 
 
 if __name__ == "__main__":
