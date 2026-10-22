@@ -38,7 +38,7 @@ TEXT_KEYS = ("ratchet_default", "runall_absent", "runall_absent_timeout", "lane_
              "baseline_state_unavailable", "runall_timing_sync", "runall_timing_run_long", "runall_timing_undeclared",
              "tool_timeout_source", "runall_timing_charter", "run_long_threshold_charter", "run_long_threshold_declared",
              "run_long_threshold_undeclared")
-ITEM_KEYS = ("boundary_line", "hard_rule_line", "commands_rule_line")
+ITEM_KEYS = ("boundary_line", "hard_rule_line", "commands_rule_line", "no_write_line")
 REFUSAL_KEYS = ("KICKOFF_ROLE_MISMATCH", "KICKOFF_INSTANCE_MISSING", "KICKOFF_NOT_STARTABLE", "KICKOFF_CHARTER_REFUSED",
                 "KICKOFF_WORKTREE_UNRESOLVED", "KICKOFF_REPORT_UNRESOLVED", "KICKOFF_SCRATCH_IN_GOVERNANCE",
                 "KICKOFF_VALIDATION_ROOT_UNRESOLVED", "KICKOFF_HARNESS_UNRESOLVED")
@@ -280,12 +280,13 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
     from tools.aipos_cli.frontmatter import require_frontmatter
     from tools.aipos_cli.hard_rules_extractor import gate_hard_rules
     from tools.aipos_cli.next_resolver import (
-        card_base_branch, card_branch_name, card_workstation_view, kickoff_refusal, render_report_field_lines,
+        card_base_branch, card_branch_name, card_workstation_view, kickoff_refusal, render_report_field_lines, report_refusal_clause,
     )
     from tools.aipos_cli.run_long import charter_commands
     from tools.aipos_cli.task_loader import find_task_card
     from tools.aipos_cli.workspace_config import read_project_json
-    from tools.aipos_cli.write_boundary import build_write_boundary, role_rows
+    from tools.aipos_cli.validation_common import report_write_last_rule
+    from tools.aipos_cli.write_boundary import build_write_boundary, no_write_lines, role_rows
 
     contract = kickoff_contract()
     texts, items = contract["texts"], contract["item_templates"]
@@ -371,6 +372,9 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
 
     boundary = build_write_boundary(gov, role=str(charter["role"]), harness_root=charter["harness_root"])
     rows = role_rows(boundary, str(charter["role"]), task_id=task_id)  # AIPOS-F212 件④: 选行 / 落卡与章程表同一实现
+    # AIPOS-F215 件③: 禁写行(治理根 / 产品仓只读 / 工位)= 同一选行派生(roles.schema write_boundary.no_write); 子 agent 无工位 = 不出工位行
+    no_write = no_write_lines(boundary, str(charter["role"]), task_id=task_id,
+                              omit_surfaces=() if charter.get("workstation") else ("harness_root",))
     # AIPOS-F212 件②: 门交互硬规矩 = gate_hard_rules(与章程硬规矩节同读同序同数; 未声明来源 = 同一 fallback, 声明了读不出 = 同拒)
     gate_rules = gate_hard_rules(gov, role_class=card_role)
     commands_rules = "\n".join([texts["commands_rules_title"].format(source=gate_rules["source_ref"])]
@@ -412,6 +416,7 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
         "carried_line": view.get("carried_line"),
         "session_host": session_host if remote else None, "gate_host": gate_host, "host_hint": host_hint,
         "boundary_lines": _item_lines(items["boundary_line"], rows),
+        "no_write_boundary_lines": _item_lines(items["no_write_line"], [{"text": line} for line in no_write]),
         "validation_root_lines": "\n".join(validation_lines) if validation_lines else None,
         "runtime_evidence_lines": "\n".join(evidence_lines) if evidence_lines else None,  # AIPOS-F199 件②: 验证卡审计证据步骤
         "governance_root": str(gov), "report_dir": str(report_path.parent),
@@ -427,6 +432,8 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
         "ratchet": test_contract.get("ratchet") or str(texts["ratchet_default"]),
         "residual_pattern": test_contract.get("residual_processes"),
         "report_path": str(report_path),
+        "refusal_clause": report_refusal_clause(),  # AIPOS-F215 件③: 拒收条款唯一声明(与 /go 开工提示、章程同读)
+        "report_write_last_rule": report_write_last_rule(str(report_path)),  # AIPOS-F215 件②: 报告最后落盘(与章程同一渲染)
         # AIPOS-F195 件①: 报告落点不得放代码文件(与章程同一渲染; 声明缺 = 该行省略)
         "report_code_rule": _report_code_rule(report_path.parent),
         "report_field_lines": "\n".join(f"  {line}" for line in render_report_field_lines(view.get("report_required_frontmatter"))),

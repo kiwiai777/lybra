@@ -398,6 +398,33 @@ def role_rows(boundary: dict[str, Any], role: str, *, task_id: str | None = None
     return rows
 
 
+def no_write_lines(boundary: dict[str, Any], role: str, *, task_id: str, omit_surfaces: tuple[str, ...] = ()) -> list[str]:
+    """AIPOS-F215 件③: 开工稿「禁写」行由写权限边界派生(声明 roles.schema write_boundary.no_write; 选行 = role_rows, 与边界表同读)。
+    该角色级别为 read 且 no_write.surfaces 有条目的面各出一行(按 role_rows 序); {path} = 该面行路径, {slots} = 该角色 mutate 的
+    slot_surfaces 行路径。面行路径未解析 / 在 omit_surfaces(调用方声明本卡不适用, 如子 agent 无工位)= 不出该行。
+    声明缺 / 形不合 / 模板要 {slots} 而本角色无报告落点面 = SchemaLoadError(fail-closed)。"""
+    decl = load_write_boundary_declaration().get("no_write")
+    templates = decl.get("surfaces") if isinstance(decl, dict) else None
+    slot_surfaces = decl.get("slot_surfaces") if isinstance(decl, dict) else None
+    if (not isinstance(templates, dict) or not templates or any(not isinstance(t, str) or not t for t in templates.values())
+            or not isinstance(slot_surfaces, list) or not slot_surfaces):
+        raise SchemaLoadError("roles.schema.json write_boundary.no_write(surfaces 非空串表 / slot_surfaces 非空列表)未声明")
+    rows = role_rows(boundary, role, task_id=task_id)
+    slots = "、".join(f"`{r['path']}`" for r in rows if r["surface"] in slot_surfaces and r["level"] == "mutate")
+    lines: list[str] = []
+    for row in rows:
+        template = templates.get(row["surface"])
+        if template is None or row["level"] != "read" or row["surface"] in omit_surfaces or str(row["path"]).startswith("<unresolved"):
+            continue
+        if "{slots}" in template and not slots:
+            raise SchemaLoadError(f"roles.schema.json write_boundary.no_write.surfaces.{row['surface']} 要 {{slots}}, 角色 {role} 无 mutate 的 "
+                                  f"{slot_surfaces} 面")
+        line = template.replace("{path}", str(row["path"])).replace("{slots}", slots)
+        if line not in lines:  # 多仓项目 product_repo 每仓一行, 模板无 {path} 时只出一次
+            lines.append(line)
+    return lines
+
+
 def render_write_boundary_markdown(boundary: dict[str, Any], *, role: str) -> str:
     """章程渲染物用: 该角色行 + hard_rules。同一份声明, 所有角色章程同源。"""
     rows = role_rows(boundary, role)

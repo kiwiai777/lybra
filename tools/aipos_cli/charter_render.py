@@ -309,6 +309,11 @@ def charter_render_context(
     guard_decls = load_guardrail_declarations()
     for kind, slot in (("return", f"`{paths['return_root']}/<卡ID>/`"), ("verdict", f"`{paths['verdict_root']}/<审计卡ID>/`")):
         ctx[f"{kind}_slot_code_rule"] = slot_code_rule_text(slot, guard_decls) or "(本产品未声明报告落点代码文件规则)"
+    # AIPOS-F215 件②: 报告最后落盘(先写临时名再改名; 正文占位入门即拒)= validation_common.report_write_last_rule(与开工稿同一渲染)
+    from tools.aipos_cli.validation_common import report_write_last_rule
+
+    ctx["return_write_last_rule"] = report_write_last_rule(f"{paths['return_root']}/<卡ID>/RETURN.md")
+    ctx["verdict_write_last_rule"] = report_write_last_rule(f"{paths['verdict_root']}/<审计卡ID>/RETURN.md")
     # AIPOS-F99 件②: 审计「独立全量基线」的测试清单位置 = 项目声明 test_contract.runall_path(唯一读取口
     # workspace_config.project_test_contract, 卡仓取缺省产品仓; 形坏 = ValueError 原样抛, fail-closed); 未声明 = 明确文字, 不留空占位。
     # AIPOS-F99 / F137: 全量清单位置 / 命令式样 / 时限三键(渲染唯一 runall_context, AIPOS-F187 开工稿同读); 键表只取三标量(指纹不变)

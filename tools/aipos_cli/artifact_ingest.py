@@ -438,6 +438,7 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
     )
     from tools.aipos_cli.audit_derivation import audit_card_reviewed_id, is_audit_card
     from tools.aipos_cli.task_loader import AmbiguousTaskCard
+    from tools.aipos_cli.validation_common import report_placeholder_refusal
 
     workspace_root = Path(workspace_root)
     is_audit = is_audit_card(task_id)
@@ -566,6 +567,11 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         if not extract_return_summary_text(content, summary_source):
             out["category"], out["reasons"] = "INGEST_SUMMARY_MISSING", [return_summary_missing_text(path, summary_source)]
             return out
+        # AIPOS-F215 件①(gap #219): 正文仍有占位 = 拒(判定唯一实现 validation_common.report_body_placeholders, 审计报告同判)
+        unfilled = report_placeholder_refusal(content, path, "return")
+        if unfilled is not None:
+            out["category"], out["reasons"], out["placeholders"] = unfilled["category"], unfilled["reasons"], unfilled["placeholders"]
+            return out
         if governance:
             # AIPOS-F197 件②: 产出清单逐个核对并计算 sha256(唯一实现 governance_outputs_manifest; 门交回记录随后绑定同一清单)
             from tools.aipos_cli.next_resolver import GovernanceOutputsError, governance_outputs_manifest
@@ -658,6 +664,16 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         where = "verdict.governance_root.required_frontmatter" if governance else "verdict.required_frontmatter"
         out["category"] = "INGEST_FRONTMATTER_MISSING"
         out["reasons"] = [f"{path}: frontmatter 缺 {', '.join(missing)}(声明: transitions.schema artifact_ingest.{where})"]
+        return out
+    # AIPOS-F215 件①(gap #219): 审计报告正文仍有占位 = 拒(与交回报告同一判定 report_placeholder_refusal)
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        out["category"], out["reasons"] = "INGEST_VERDICT_UNREADABLE", [f"{path}: {exc}"]
+        return out
+    unfilled = report_placeholder_refusal(content, path, "verdict")
+    if unfilled is not None:
+        out["category"], out["reasons"], out["placeholders"] = unfilled["category"], unfilled["reasons"], unfilled["placeholders"]
         return out
     reviewed = str(fm.get("reviewed_task_id") or "").strip() or audit_card_reviewed_id(task_id, card_fm)
     if governance:

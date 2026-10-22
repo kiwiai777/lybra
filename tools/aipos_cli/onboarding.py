@@ -349,6 +349,8 @@ def generate_onboarding_guide(
     repo_items = list(repos or ([f"{project_name}={code_repo}"] if code_repo else [REPO_PLACEHOLDER]))
     repo_default = default_repo or (repo_items[0].split("=", 1)[0] if len(repo_items) > 1 and "=" in repo_items[0] and not repo_items[0].startswith("<") else None)
 
+    from tools.aipos_cli.workspace_config import lybra_command_prefix  # AIPOS-F215 件③: 治理根命令前缀唯一渲染
+
     steps: list[dict[str, Any]] = []
     gq, hq = _shell_quote(gov_s), _shell_path(str(home))
 
@@ -707,8 +709,8 @@ def generate_onboarding_guide(
         ("# 发卡: 卡稿 JSON 写 project / lane.repo(Step 2 仓名) / audit 等(执行者 / harness / 审计者按执行方式声明缺省); 校验后发布到 pending"
          if subagent_exec else
          "# 发卡: 卡稿 JSON 写 project / assigned_to(执行实例) / lane.repo(Step 2 仓名) / audit 等; 校验后发布到 pending"),
-        _cmd("lybra", "--workspace-root", gq, "draft", "create", "--from-json", DRAFT_JSON_PLACEHOLDER),
-        _cmd("lybra", "--workspace-root", gq, "draft", "publish", "--path", DRAFT_PATH_PLACEHOLDER),
+        _cmd(lybra_command_prefix(gov_s), "draft", "create", "--from-json", DRAFT_JSON_PLACEHOLDER),
+        _cmd(lybra_command_prefix(gov_s), "draft", "publish", "--path", DRAFT_PATH_PLACEHOLDER),
         "# 推进: 驱动方信封一段式认领(建工作树)→ 等工位交回 → 派审 → 等审计报告 → 裁决 → finalize → 结案",
         _cmd("lybra", "loop", "--task-id", TASK_ID_PLACEHOLDER, "--workspace-root", gq, "--envelope", policies["driver"]),
     ]
@@ -775,6 +777,8 @@ def legacy_onboarding_steps(project_name: str, governance_root: str, *, home_roo
     workspace_config.declared_meta_keys(config.schema project_json 未声明 = 只给一行说明, 不给会被拒的命令)。"""
     from tools.aipos_cli.workspace_config import STAGE_ARCHIVE_PATH_KEY, declared_meta_keys, project_meta_declaration
 
+    from tools.aipos_cli.workspace_config import lybra_command_prefix  # AIPOS-F215 件③: 治理根命令前缀唯一渲染
+
     gq = _shell_quote(governance_root)
     pq = _shell_quote(project_name)
     hq = _shell_path(home_root)
@@ -829,9 +833,9 @@ def legacy_onboarding_steps(project_name: str, governance_root: str, *, home_roo
             "actor": "advisor",
             "command": "\n".join([
                 "# 每张在途卡: 先预览(零写入, 含信封判定与全部拒因), 无拒因后改 --confirm; 收编后与新卡同样只用 lybra loop 推进",
-                _cmd("lybra", "--workspace-root", gq, "queue", "adopt", "--task-id", TASK_ID_PLACEHOLDER, "--branch",
+                _cmd(lybra_command_prefix(governance_root), "queue", "adopt", "--task-id", TASK_ID_PLACEHOLDER, "--branch",
                      LEGACY_BRANCH_PLACEHOLDER, "--actor", actor, "--owner-policy-ref", driver_policy, "--dry-run"),
-                _cmd("lybra", "--workspace-root", gq, "queue", "adopt", "--task-id", TASK_ID_PLACEHOLDER, "--branch",
+                _cmd(lybra_command_prefix(governance_root), "queue", "adopt", "--task-id", TASK_ID_PLACEHOLDER, "--branch",
                      LEGACY_BRANCH_PLACEHOLDER, "--actor", actor, "--owner-policy-ref", driver_policy, "--confirm"),
                 _cmd("lybra", "loop", "--task-id", TASK_ID_PLACEHOLDER, "--workspace-root", gq, "--envelope", driver_policy),
             ]),

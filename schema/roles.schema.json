@@ -320,6 +320,15 @@
       }
     },
     "matrix_note": "queue/records 对所有非 owner 角色只读: 账务动词经门铸记录(driver.role_class 的 token), 直接写 = 越界。advisor 的 governance_docs/task_cards 写是治理面(ROLES ⑩ 治理仓 push), 不含产品仓。executor 的 product_repo mutate 受本卡工作树 + lane.paths 双限(与 N3 交回判据②「改动面在界内」同一口径)。AIPOS-F190: executor / auditor 的 validation_root mutate 只对本实例本卡的声明、本卡本 run 目录(执行与审计各自卡目录 = 隔离); advisor 只读。",
+    "no_write": {
+      "description": "AIPOS-F215 件③(AIPOS-F212 RETURN 已知局限②: 开工稿静态 no_write_governance / no_write_product_auditor / no_write_harness 行独立于边界行措辞): 开工稿「禁写与禁止动作」节由写权限边界派生的行。选行 = write_boundary.role_rows(与章程边界表、开工稿边界行同一实现): 该角色级别为 read 且 surfaces 有条目的面各出一行(按 role_rows 序); 占位 {path} = 该面行路径(本卡已落), {slots} = 该角色 mutate 的本卡报告落点面(slot_surfaces)行路径(反引号包住, 多个以「、」连接)。唯一渲染 write_boundary.no_write_lines(lybra kickoff 经 verbs lybra_kickoff.item_templates.no_write_line 成行); 面行路径未解析(无声明根)或开工稿声明该面不适用(子 agent 无工位)= 不出该行; 同文行只出一次(多仓项目 product_repo 每仓一行而模板无 {path})。",
+      "slot_surfaces": ["return_slot", "verdict_slot"],
+      "surfaces": {
+        "governance_root": "禁写治理根 `{path}`(唯一例外: 本卡报告落点 {slots} 及其下 artifacts/、run_long/); 禁对治理仓 git add / commit / push。",
+        "product_repo": "产品仓只读(审计不提交、不改文件, 取证工作树亦然)。",
+        "harness_root": "禁写工位 `{path}`(章程 / 扩展由分发器写, 自改护栏 = 自我提权)。"
+      }
+    },
     "hard_rules": [
       {
         "id": "no_retry_after_deny",
