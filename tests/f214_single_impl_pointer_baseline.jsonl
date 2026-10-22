@@ -1,0 +1,8 @@
+{"file": "card.schema.json", "pointer": "task_complexity.dependencies_satisfied", "problem": "no-caller", "reason": "存量(F208 P3-5): 依赖判据实际调用口是 task_complexity.unmet_dependencies, 本函数产品零调用; 归 F208 卡组 G(死代码 / 过期指针清扫)改描述或删函数"}
+{"file": "config.schema.json", "pointer": "workspace_config.fill_project_json_defaults", "problem": "no-caller", "reason": "存量: config.schema project_json 描述称唯一实现, 产品零调用(project_upgrade 只在模块文档提及); 归 F208 卡组 G 核实改指针或删"}
+{"file": "transitions.schema.json", "pointer": "next_resolver.verdict_report_ready", "problem": "no-caller", "reason": "存量(F208 P3-5): 报告完成判据实际调用 missing_verdict_frontmatter, 本函数产品零调用; 归 F208 卡组 G"}
+{"file": "transitions.schema.json", "pointer": "post_merge_regression.regression_state", "problem": "no-def", "reason": "存量: 函数名已是 regression_states(复数), 指针拼写过期; 归 F208 卡组 G 改描述"}
+{"file": "verbs.schema.json", "pointer": "loop_driver._audit_report_fix", "problem": "no-def", "reason": "存量(F204 改名): 实现已是 loop_driver._report_fix(执行 / 审计共用), 指针过期; 归 F208 卡组 G 改描述"}
+{"file": "verbs.schema.json", "pointer": "next_resolver.scan_project", "problem": "no-caller", "reason": "存量(F208 P3-5): 「下一张」实际出口 scan_project_view, 本函数产品零调用; 归 F208 卡组 G"}
+{"file": "verbs.schema.json", "pointer": "task_complexity.dependencies_satisfied", "problem": "no-caller", "reason": "存量(F208 P3-5): 依赖判据实际调用口是 task_complexity.unmet_dependencies, 本函数产品零调用; 归 F208 卡组 G(死代码 / 过期指针清扫)改描述或删函数"}
+{"file": "verbs.schema.json", "pointer": "tools/aipos_cli/post_merge_regression.regression_state", "problem": "no-def", "reason": "存量: 函数名已是 regression_states(复数), 指针拼写过期; 归 F208 卡组 G 改描述"}

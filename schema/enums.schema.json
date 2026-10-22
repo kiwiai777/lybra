@@ -312,7 +312,8 @@
       "governance_outputs_subject": {
         "description": "AIPOS-F197(gap #178/#201/#202, Owner 10-20: 非代码工作含文档一律拉 pi): 显式声明只写治理根的执行卡 = task_mode 为已声明的不写仓模式(docs / governance / config 等; writes_product_repo=false, 非固定候选, 非 audit)且卡面 lane.repo 非空、经唯一解析落到治理根自身(起草写保留值 card.schema intent_face.lane.governance_root_ref = governance_root; 无仓声明项目派生的治理根路径同此)= 不建卡工作树(唯一判据 card_needs_worktree = false), 交付主体 = 本卡写到治理根(报告落点)的产出文件清单。缺 lane.repo / 缺 task_mode 的存量不建树卡不算(行为同 F178); 缺 lane.repo 时发卡缺省派生到产品仓 = 写仓卡(行为不变)。一处声明的全部后果: ①开工面: 照常入选工位 next_card, 开工提示按 verbs.schema lybra_my_tasks.kickoff.template_governance_root 渲染(产物落点说明, 不提分支 / 工作树); 其审计卡(audit: required 时)不建取证树, 按 template_no_worktree; ②交回契约 = transitions.schema artifact_ingest.return.governance_root(Return frontmatter outputs 产出清单, 无分支三键; 产品计算并核对各文件 sha256, 交回记录绑定清单指纹); ③顾问复核(independent_audit=false 缺省)= loop 停在快车道并给出 `lybra mark-concluded --report-path <Return>` 结案命令, 结案前核此刻清单指纹 = 交回绑定; 声明独立审计 = 审计报告契约 artifact_ingest.verdict.governance_root(verdict + outputs_digest), 裁决 artifact_subject = 产出清单主体; ④N5 无合入: finalize 不碰产品仓 git, 核裁决绑定指纹 = 此刻指纹后写 finalization 记录(merge_commit = `outputs:<清单指纹>`, deploy_status / push_status = not_applicable 并写明原因), 照常 N6 结案。",
         "single_implementation": "tools/aipos_cli/next_resolver.card_governance_outputs",
-        "subject_kind": "governance_outputs"
+        "subject_kind": "governance_outputs",
+        "subject_kind_reader": "AIPOS-F214 件⑤(F208 P2-4): 交付主体 / 交回绑定 artifact_subject 的 kind 值只经 next_resolver.governance_outputs_kind 读本键(须 ∈ delivery_subject.kinds; 代码不写字面量); 三态值域经 next_resolver.delivery_subject_kinds 读 delivery_subject.kinds"
       },
       "delivery_subject": {
         "description": "AIPOS-F210(F208 P0-2, gap #218): 卡的交付主体三态唯一判定——branch(卡分支: 写产品仓的卡及其审计卡; 缺 task_mode 的存量不建树卡同此态——AIPOS-F211 定缺省 = missing_default 不写仓, 此类卡不建树、不入选开工(F178 / F197), 本态只作契约形)/ candidate(固定候选: candidate_subject 模式卡及其审计卡)/ governance_outputs(治理根产出清单: governance_outputs_subject 卡及其审计卡)。判定顺序 = 报告契约分形顺序(先固定候选, 再治理根产出清单, 其余卡分支)。凡点名「分支 / 候选 / 产出清单」的文字只经报告契约(next_resolver.card_report_contract)与开工面(next_resolver.card_workstation_view 的 delivery_subject / branch / worktree_refusal / outputs_note)产出: 卡正文工作纪律段(machine_zone)、审计取证锚点(audit_derivation.render_forensic_anchor: 卡分支 = git diff 基线...被审分支; 固定候选 = 只读该提交 + src-verify; 治理根产出清单 = 核交回绑定的 outputs_digest; 审计卡正文、governance_refs 自动派生与手动派审同读 forensic_anchor_ref)、审计报告必填句(audit_derivation.report_frontmatter_clause)、交回 / 裁决骨架(board_adapter 认领模板 → record_writer)。已发布存量卡正文不改写(append-only); 新卡、派生审计卡与重生成(draft regen)生效。棘轮 tests/test_aipos_f210_delivery_subject_single_source.py(基线 tests/f210_branch_wording_baseline.jsonl, 只减不增)。",
@@ -751,6 +752,19 @@
         {
           "value": "android-emulator",
           "description": "Android 模拟器(emulator / adb 设备): 同一项目同时只给一张卡的执行体或审计体用"
+        }
+      ]
+    },
+    "kickoff_role": {
+      "description": "AIPOS-F214 件④(F208 P2-3 / P2-6: kickoff 角色值域原在 verbs lybra_kickoff.parameters.properties.role 内联 enum, CLI `lybra kickoff --role` 的 argparse choices 又写死一份): 开工稿角色值域唯一声明。读取口 subagent_kickoff.kickoff_roles(verbs 参数 role 以 $enum 引用本枚举; 开工稿 layout / role_labels 须覆盖每一值; argparse choices 由其渲染)。",
+      "values": [
+        {
+          "value": "executor",
+          "description": "执行卡的开工稿(子 agent 执行体)"
+        },
+        {
+          "value": "auditor",
+          "description": "审计卡的开工稿(审计体)"
         }
       ]
     }

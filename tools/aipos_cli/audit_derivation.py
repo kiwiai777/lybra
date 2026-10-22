@@ -92,6 +92,8 @@ def render_forensic_anchor(subject: dict[str, Any], *, form: str = "line") -> st
     卡分支 = `git diff <基线>...<被审分支>`(禁 checkout 卡分支); 固定候选 = 只读该提交 + 源码送达核 src-verify(无卡分支可 diff);
     治理根产出清单 = 核交回绑定的 outputs_digest(无卡分支、不涉产品仓)。审计卡正文取证锚点段(form=line)、审计卡 governance_refs
     锚点(form=ref, 自动派生与手动派审同读 forensic_anchor_ref)两种排版, 措辞一处; 禁在别处拼「基线...卡分支」。"""
+    from tools.aipos_cli.next_resolver import governance_outputs_kind  # AIPOS-F214 件⑤: kind 值读声明
+
     if form not in ("line", "ref"):
         raise ValueError(f"render_forensic_anchor: form={form!r} 不在 ('line', 'ref')")
     kind = subject.get("kind")
@@ -105,7 +107,7 @@ def render_forensic_anchor(subject: dict[str, Any], *, form: str = "line") -> st
             return (f"- **交付主体 = 固定候选(只读)**: 来源卡 `{source}` 的固定候选 `{sha}`(被审卡不建卡分支, 禁 diff / checkout 卡分支); "
                     f"只读取证该提交(`git show {sha}`), 源码送达以验证根 src-verify 末行 SRC_OK(送达树 = 候选 tree)为准")
         return f"交付主体=固定候选 {sha}(来源卡 {source}; 只读取证 git show {sha}, 源码送达核 src-verify SRC_OK; 无卡分支)"
-    if kind == "governance_outputs":
+    if kind == governance_outputs_kind():
         digest = subject.get("outputs_digest") or "(交回未绑定: 以开工稿 / 报告必填句给值为准)"
         if form == "line":
             return (f"- **交付主体 = 治理根产出清单**: 被审卡只写治理根(无卡分支、不改产品仓, 禁 diff 卡分支); 审计对象 = 交回绑定的产出清单 "
@@ -122,8 +124,10 @@ def forensic_anchor_ref(repo_root: Path | None, source_task_id: str, source_meta
     """AIPOS-A1 大项C + AIPOS-F210 件②: 审计卡 governance_refs 的取证锚点一行(自动派生 build_derived_audit_task 与手动派审
     board_adapter._build_audit_dispatch_preview 同读; 原两份字面合一)。产品仓 = 被审卡声明的仓(只写治理根 = 不涉及);
     报告落点 = render_audit_report_location(审计卡 ID 目录)。"""
+    from tools.aipos_cli.next_resolver import governance_outputs_kind  # AIPOS-F214 件⑤: kind 值读声明
+
     subject = forensic_delivery_subject(repo_root, source_task_id, source_metadata)
-    code_repo = ("不涉及(被审卡只写治理根)" if subject.get("kind") == "governance_outputs"
+    code_repo = ("不涉及(被审卡只写治理根)" if subject.get("kind") == governance_outputs_kind()
                  else _resolve_code_repo(repo_root, source_metadata))
     report_location = render_audit_report_location(repo_root, audit_task_id)
     return (f"\u2605取证锚点(AIPOS-A1 大项C): 产品仓={code_repo} | {render_forensic_anchor(subject, form='ref')} | "
@@ -148,8 +152,10 @@ def build_forensic_anchor_section(
     AIPOS-F66B 件③: 报告落点 = 审计卡 ID 目录(render_audit_report_location 唯一渲染); audit_task_id 缺省
     = 本模块 derive_audit_task_id 首号(与 build_derived_audit_task 同一派生), 手动派审传显式审计卡 ID。
     """
+    from tools.aipos_cli.next_resolver import governance_outputs_kind  # AIPOS-F214 件⑤: kind 值读声明
+
     subject = forensic_delivery_subject(repo_root, source_task_id, source_metadata)  # AIPOS-F210 件②: 交付主体三态
-    code_repo = ("不涉及(被审卡只写治理根)" if subject.get("kind") == "governance_outputs"
+    code_repo = ("不涉及(被审卡只写治理根)" if subject.get("kind") == governance_outputs_kind()
                  else _resolve_code_repo(repo_root, source_metadata))
     report_location = render_audit_report_location(
         repo_root, audit_task_id or derive_audit_task_id(source_task_id, repo_root=None)

@@ -821,6 +821,23 @@ _FIX_CARD_TEXT_KEYS = ("task_id_template", "title_template", "body_template", "p
 #: verbs.lybra_roadmap.verify.texts keys (AIPOS-F180C appended fix_blocked / record_kept_* / fix_error)
 _VERIFY_TEXT_KEYS = ("header", "outcome", "record", "state", "fix", "will", "fix_blocked", "record_kept_preview", "record_kept_written",
                      "fix_error")
+#: AIPOS-F214 件①: 承接卡 / 修复卡承继字段单基表的引用式(两处起草模板 inherit_fields_ref 须恰为此值)
+FOLLOWUP_INHERIT_REF = "transitions.queue_mutations.followup_inherit_fields"
+
+
+def followup_inherit_fields(template: dict[str, Any], where: str) -> list[str]:
+    """AIPOS-F214 件①(F208 P1-7): 承继字段单基表唯一读取口——transitions.schema queue_mutations.followup_inherit_fields。
+    template = 起草模板(verbs lybra_roadmap.verify.fix_card / transitions queue_mutations.correct.followup), 须以 inherit_fields_ref
+    引用基表且不得另列 inherit_fields(防两份表再漂移); 基表须为非空、无重复的字段名列表。不合 = SchemaLoadError(点名 where)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    if not isinstance(template, dict) or "inherit_fields" in template or template.get("inherit_fields_ref") != FOLLOWUP_INHERIT_REF:
+        raise SchemaLoadError(f"{where} 承继字段须只写 inherit_fields_ref = {FOLLOWUP_INHERIT_REF!r}(单基表), 不得另列 inherit_fields")
+    base = (load_schema("transitions").get("queue_mutations") or {}).get("followup_inherit_fields")
+    if (not isinstance(base, list) or not base or not all(isinstance(k, str) and k.strip() for k in base)
+            or len(set(base)) != len(base)):
+        raise SchemaLoadError(f"transitions.schema.json queue_mutations.followup_inherit_fields 须为非空无重复字段名列表(得 {base!r})")
+    return [str(k) for k in base]
 
 
 def verify_declaration() -> dict[str, Any]:
@@ -844,13 +861,14 @@ def verify_declaration() -> dict[str, Any]:
         raise SchemaLoadError("verbs.lybra_roadmap.verify.verifiable_states 须属 status.verification.states")
     fix = decl["fix_card"]
     if (not isinstance(fix, dict) or not all(isinstance(fix.get(k), str) and fix[k] for k in _FIX_CARD_TEXT_KEYS)
-            or "{round}" not in fix["task_id_template"] or not isinstance(fix.get("inherit_fields"), list)):
-        raise SchemaLoadError(f"verbs.lybra_roadmap.verify.fix_card(task_id_template 含 {{round}} / {' / '.join(_FIX_CARD_TEXT_KEYS[1:])} / "
-                              "inherit_fields)未声明齐")
+            or "{round}" not in fix["task_id_template"]):
+        raise SchemaLoadError(f"verbs.lybra_roadmap.verify.fix_card(task_id_template 含 {{round}} / {' / '.join(_FIX_CARD_TEXT_KEYS[1:])})"
+                              "未声明齐")
+    inherit = followup_inherit_fields(fix, "verbs.lybra_roadmap.verify.fix_card")  # AIPOS-F214 件①: 单基表投影
     texts = decl["texts"]
     if not isinstance(texts, dict) or not all(isinstance(texts.get(k), str) and texts[k] for k in _VERIFY_TEXT_KEYS):
         raise SchemaLoadError(f"verbs.lybra_roadmap.verify.texts 未声明齐 {list(_VERIFY_TEXT_KEYS)}")
-    return decl
+    return {**decl, "fix_card": {**fix, "inherit_fields": inherit}}
 
 
 def _verify_reject(code: str, detail: str, decl: dict[str, Any]) -> RoadmapError:
@@ -884,7 +902,8 @@ def followup_draft_payload(governance_root: Path, source_meta: dict[str, Any], *
                            milestone: str | None, criteria: list[str], ref_field: str, ref_value: str, created_by: str,
                            title: str | None = None, fill: dict[str, Any] | None = None,
                            rebind_fields: list[str] | None = None) -> tuple[dict[str, Any], str]:
-    """承接卡草稿唯一起草口(AIPOS-F175 修复卡 / AIPOS-F207 Owner 纠正承接卡共用)。承继 template.inherit_fields, 外加承继来的
+    """承接卡草稿唯一起草口(AIPOS-F175 修复卡 / AIPOS-F207 Owner 纠正承接卡共用)。承继 template.inherit_fields(AIPOS-F214 件①: 两处
+    读取口投影自同一单基表 followup_inherit_fields), 外加承继来的
     task_class 声明的必填字段(enums.schema task_class required_fields, 经 task_complexity.task_class_declarations 读; 如 complex 的
     planner_agent / reviewer)。AIPOS-F180C: 承继的 artifacts 只留挂在 criteria 上的项(非映射项原样保留交形校验 artifact_problems 判,
     不放松), 过滤后为空 = 不带 artifacts、正文提示补声明(template.artifacts_missing); 正文附原卡这些标准的产物文件。

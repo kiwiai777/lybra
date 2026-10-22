@@ -153,6 +153,8 @@ def _delivery_subject_lines(view: dict[str, Any]) -> list[str]:
     delivery_subject / branch / worktree_refusal.reason / outputs_note), 不另判、不另拼分支名。三态:
     卡分支 = 分支名 + 从当前基线拉取(照旧); 固定候选 = 不建卡分支 + 交付主体 = 来源卡固定候选 sha(只读取证);
     治理根产出清单 = 不建卡分支 + 产出写治理根报告落点、outputs 清单。判定失败 = 如实写拒因(发卡前须修正)。"""
+    from tools.aipos_cli.next_resolver import governance_outputs_kind  # AIPOS-F214 件⑤: kind 值读声明
+
     subject = view.get("delivery_subject")
     reason = str((view.get("worktree_refusal") or {}).get("reason") or "")  # 开工面拒因原文(与 /go、lybra kickoff 同句)
     if not isinstance(subject, dict):
@@ -164,7 +166,7 @@ def _delivery_subject_lines(view: dict[str, Any]) -> list[str]:
                 else f"(固定候选不合: {subject.get('problem')})")
         return [f"- **分支**: {reason or '不建(交付主体 = 来源卡的固定候选; 判据 enums.schema task_mode.candidate_subject)'}",
                 f"- **工作起点**: 交付主体 = {what}(只读取证, 不建卡分支; 验证根 run-start 的候选须等于卡面候选)"]
-    if kind == "governance_outputs":
+    if kind == governance_outputs_kind():
         if subject.get("audit"):
             digest = subject.get("outputs_digest")
             what = (f"被审卡交回绑定的治理根产出清单 outputs_digest `{digest}`" if digest

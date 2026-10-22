@@ -53,6 +53,23 @@ class KickoffRefused(ValueError):
         self.message = message
 
 
+def _contract_roles(contract: dict[str, Any]) -> tuple[str, ...]:
+    """角色集 = 声明参数 role 的值域(AIPOS-F214 件④: $enum kickoff_role 引用 enums.schema, 经 schema_loader.resolve_field_enum 唯一解析;
+    不在代码里另列角色元组)。缺 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, resolve_field_enum
+
+    param = (((contract.get("parameters") or {}).get("properties") or {}).get("role")) or {}
+    roles = tuple(resolve_field_enum(param, code_repo_schema_root()) or ()) if isinstance(param, dict) else ()
+    if not roles:
+        raise SchemaLoadError(f"verbs.schema.json verbs.{KICKOFF_VERB}.parameters.properties.role 值域未声明($enum kickoff_role)")
+    return roles
+
+
+def kickoff_roles() -> tuple[str, ...]:
+    """AIPOS-F214 件④: 开工稿角色值域唯一读取口(CLI `lybra kickoff --role` choices 与开工稿判角色同读; 声明 enums.schema kickoff_role)。"""
+    return _contract_roles(kickoff_contract())
+
+
 def kickoff_contract() -> dict[str, Any]:
     """verbs.schema lybra_kickoff 唯一读取口(layout / texts / item_templates / refusals / role_labels)。缺键 = SchemaLoadError。"""
     from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
@@ -60,10 +77,7 @@ def kickoff_contract() -> dict[str, Any]:
     contract = (load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get(KICKOFF_VERB)
     if not isinstance(contract, dict):
         raise SchemaLoadError(f"verbs.schema.json verbs.{KICKOFF_VERB} 未声明")
-    # 角色集 = 声明参数 role 的值域(唯一声明; 不在代码里另列角色元组)
-    roles = tuple(((((contract.get("parameters") or {}).get("properties") or {}).get("role") or {}).get("enum")) or ())
-    if not roles:
-        raise SchemaLoadError(f"verbs.schema.json verbs.{KICKOFF_VERB}.parameters.properties.role.enum 未声明")
+    roles = _contract_roles(contract)
     layout, texts = contract.get("layout") or {}, contract.get("texts") or {}
     items, refusals, labels = contract.get("item_templates") or {}, contract.get("refusals") or {}, contract.get("role_labels") or {}
     problems = [f"layout.{r}" for r in roles if not isinstance(layout.get(r), list) or not layout[r]]

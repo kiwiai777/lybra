@@ -1867,14 +1867,16 @@ def render_sync_text(run: dict[str, Any]) -> str:
 
 
 def _adopt_owner_ref(args: Any) -> str | None:
-    """--adopt-hand-charter 须与 --owner-ref 同给(缺 = ValueError); 未给采纳旗标 = None。"""
+    """采纳旗标须与 Owner 引用旗标同给(缺 = ValueError); 未给采纳旗标 = None。旗标名读 hand_maintained_guard(AIPOS-F214 件④)。"""
+    guard = hand_maintained_guard_declaration()
+    adopt, owner = guard["adopt_flag"], guard["owner_ref_flag"]
     if not getattr(args, "adopt_hand_charter", False):
         if getattr(args, "owner_ref", None):
-            raise ValueError("--owner-ref 只与 --adopt-hand-charter 同用(手写章程正式采纳, AIPOS-F196)")
+            raise ValueError(f"{owner} 只与 {adopt} 同用(手写章程正式采纳, AIPOS-F196)")
         return None
     ref = str(getattr(args, "owner_ref", None) or "").strip()
     if not ref:
-        raise ValueError("--adopt-hand-charter 须同给 --owner-ref <Owner 裁决引用>(AIPOS-F196: 手工维护标记只经 Owner 裁决正式解除)")
+        raise ValueError(f"{adopt} 须同给 {owner} <Owner 裁决引用>(AIPOS-F196: 手工维护标记只经 Owner 裁决正式解除)")
     return ref
 
 

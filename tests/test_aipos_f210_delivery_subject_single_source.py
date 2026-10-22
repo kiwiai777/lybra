@@ -253,7 +253,7 @@ def test_declaration_single_implementation_and_renderers_exist():
     from tools.aipos_cli import audit_derivation, machine_zone, next_resolver
 
     decl = json.loads((REPO_ROOT / "schema" / "enums.schema.json").read_text(encoding="utf-8"))["enums"]["task_mode"]["delivery_subject"]
-    assert decl["kinds"] == list(next_resolver.DELIVERY_SUBJECT_KINDS)
+    assert decl["kinds"] == list(next_resolver.delivery_subject_kinds())  # AIPOS-F214 件⑤: 常量退役, 读取口投影
     modules = {"next_resolver": next_resolver, "machine_zone": machine_zone, "audit_derivation": audit_derivation}
     for ref in [decl["single_implementation"], *decl["renderers"]]:
         mod, func = ref.rsplit("/", 1)[-1].split(".", 1)

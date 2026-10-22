@@ -290,7 +290,7 @@ def test_single_source_and_declarations():
     assert "except Exception" not in src
     decl = vr.helper_pinning_declaration()
     assert not is_code_file(decl["snapshot_filename"].replace("{sha256}", "0" * 64), load_guardrail_declarations())
-    assert "helper_sha256" in vr.RUN_OPTIONAL_KEYS and "VR_HELPER_SNAPSHOT_INVALID" in vr.reject_codes()
+    assert "helper_sha256" in vr.entry_key_table()["run_optional"] and "VR_HELPER_SNAPSHOT_INVALID" in vr.reject_codes()
     assert PROJECT_PATH_KEYS[-1] == "validation_helper_root" and "helper_pin" in vr.TEXT_KEYS
 
 

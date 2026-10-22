@@ -2257,11 +2257,16 @@ def build_parser() -> argparse.ArgumentParser:
     sync_parser.add_argument("--gate-url", default=None, help="Gate MCP URL (auto from .lybra if omitted)")
     sync_parser.add_argument("--token", default=None, help="Bearer token (auto from .lybra connection.json if omitted)")
     sync_parser.add_argument("--json", action="store_true", help="Output JSON")
-    sync_parser.add_argument("--adopt-hand-charter", action="store_true",
+    # AIPOS-F214 件④: 手工章程收编旗标名读 distribution.schema charter_render_semantics.hand_maintained_guard(adopt_flag / owner_ref_flag; 不写死)
+    from tools.aipos_cli.distribution_sync import hand_maintained_guard_declaration
+
+    hand_guard = hand_maintained_guard_declaration()
+    sync_parser.add_argument(hand_guard["adopt_flag"], dest="adopt_hand_charter", action="store_true",
                              help="AIPOS-F196: formally take over a hand-maintained workstation charter (one carrying a hand-maintained marker such as "
                                   "「禁止 Lybra 分发器覆盖」): back the original up (never deleted), log the adoption, then render the product charter; "
-                                  "single workstation only, requires --owner-ref; add --dry-run to preview the backup path")
-    sync_parser.add_argument("--owner-ref", default=None, help="AIPOS-F196: Owner decision reference authorizing --adopt-hand-charter (single line, no credentials)")
+                                  f"single workstation only, requires {hand_guard['owner_ref_flag']}; add --dry-run to preview the backup path")
+    sync_parser.add_argument(hand_guard["owner_ref_flag"], dest="owner_ref", default=None,
+                             help=f"AIPOS-F196: Owner decision reference authorizing {hand_guard['adopt_flag']} (single line, no credentials)")
 
     queue_claim_parser = queue_subparsers.add_parser("claim", help="Move a task from pending to claimed")
     _queue_mutation_arguments(queue_claim_parser)
@@ -3334,7 +3339,9 @@ def build_parser() -> argparse.ArgumentParser:
              "requirements, residual-process check, stop after the report); read-only; hand it to the sub-agent as is, append card-specific notes after it",
     )
     kickoff_parser.add_argument("--task-id", required=True, help="Card id (executor card or audit card)")
-    kickoff_parser.add_argument("--role", choices=["executor", "auditor"], default=None,
+    from tools.aipos_cli.subagent_kickoff import kickoff_roles  # AIPOS-F214 件④: 值域读 enums.schema kickoff_role(不写死)
+
+    kickoff_parser.add_argument("--role", choices=list(kickoff_roles()), default=None,
                                 help="Brief for this role; default = by the card (audit card = auditor); a mismatch is refused")
     kickoff_parser.add_argument("--json", action="store_true", help="JSON output (text plus the projected values)")
 
@@ -3405,7 +3412,10 @@ def build_parser() -> argparse.ArgumentParser:
                                             "criterion (two-phase; writes an owner_verifications record; mismatch also drafts a fix card "
                                             "linked to the same criterion)")
     roadmap_verify.add_argument("--criterion", required=True, help="Criterion id (verify = owner_check)")
-    roadmap_verify.add_argument("--result", required=True, choices=["confirm", "mismatch"], help="Owner's result: confirm | mismatch")
+    from tools.aipos_cli.roadmap import verify_declaration  # AIPOS-F214 件④: --result 值域读 verbs lybra_roadmap.verify.results(不写死)
+
+    verify_results = list(verify_declaration()["results"])
+    roadmap_verify.add_argument("--result", required=True, choices=verify_results, help=f"Owner's result: {' | '.join(verify_results)}")
     roadmap_verify.add_argument("--relayed-by", dest="relayed_by", default=None,
                                 help="Advisor instance relaying the Owner's result (owner if the Owner runs it); required")
     roadmap_verify.add_argument("--owner-words", dest="owner_words", default=None, help="The Owner's own words (one line); required")

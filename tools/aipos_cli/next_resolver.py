@@ -743,7 +743,7 @@ def governance_outputs_manifest(workspace_root: Path, task_id: str, card_frontma
     ordered = [files[k] for k in sorted(files)]
     lines = [f"{f['sha256']}  {f['path']}" for f in ordered]
     digest = hashlib.sha256("".join(line + "\n" for line in lines).encode("utf-8")).hexdigest()
-    return {"kind": "governance_outputs", "repository": gov.name, "outputs_digest": digest, "files": ordered, "outputs": lines}
+    return {"kind": governance_outputs_kind(), "repository": gov.name, "outputs_digest": digest, "files": ordered, "outputs": lines}
 
 
 def governance_outputs_return_binding(workspace_root: Path, task_id: str) -> dict[str, Any] | None:
@@ -751,7 +751,7 @@ def governance_outputs_return_binding(workspace_root: Path, task_id: str) -> dic
     records = _read_task_records(workspace_root, task_id)
     latest = records.get("latest_return") or {}
     subject = latest.get("artifact_subject") if isinstance(latest.get("artifact_subject"), dict) else None
-    if not subject or str(subject.get("kind") or "") != "governance_outputs" or not str(subject.get("outputs_digest") or "").strip():
+    if not subject or str(subject.get("kind") or "") != governance_outputs_kind() or not str(subject.get("outputs_digest") or "").strip():
         return None
     return dict(subject)
 
@@ -821,7 +821,28 @@ def card_report_path(workspace_root: Path, task_id: str, card_frontmatter: dict[
     return _return_artifact_path(workspace_root, task_id)
 
 
-DELIVERY_SUBJECT_KINDS = ("branch", "candidate", "governance_outputs")
+def delivery_subject_kinds() -> tuple[str, ...]:
+    """AIPOS-F214 件⑤: 交付主体三态值域唯一读取口 enums.schema task_mode.delivery_subject.kinds(原手写常量 DELIVERY_SUBJECT_KINDS 退役)。
+    缺 / 形不合 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    kinds = ((((load_schema("enums", REPO_ROOT).get("enums") or {}).get("task_mode") or {}).get("delivery_subject") or {}).get("kinds"))
+    if not isinstance(kinds, list) or not kinds or not all(isinstance(k, str) and k for k in kinds) or len(set(kinds)) != len(kinds):
+        raise SchemaLoadError("enums.schema.json task_mode.delivery_subject.kinds 须为非空无重复串列表(AIPOS-F210)")
+    return tuple(kinds)
+
+
+def governance_outputs_kind() -> str:
+    """AIPOS-F214 件⑤(F208 P2-4): 治理根产出清单交付主体的 kind 值唯一读取口 enums.schema task_mode.governance_outputs_subject.subject_kind
+    (交回绑定 artifact_subject.kind / 交付主体 kind 同用; 原各处字面量 "governance_outputs" 退役); 须 ∈ delivery_subject_kinds。
+    缺 / 不在三态 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    kind = ((((load_schema("enums", REPO_ROOT).get("enums") or {}).get("task_mode") or {}).get("governance_outputs_subject") or {})
+            .get("subject_kind"))
+    if not isinstance(kind, str) or kind not in delivery_subject_kinds():
+        raise SchemaLoadError(f"enums.schema.json task_mode.governance_outputs_subject.subject_kind 须 ∈ delivery_subject.kinds(得 {kind!r})")
+    return kind
 
 
 def branch_delivery_subject(task_id: str | None, *, audit: bool = False, branch_pattern: str | None = None) -> dict[str, Any]:
@@ -865,7 +886,7 @@ def card_delivery_subject(workspace_root: Path | None, task_id: str, card_frontm
                 "candidate": (candidate or {}).get("candidate"), "problem": problem}
     if workspace_root is not None and card_governance_outputs(workspace_root, {**fm, "task_id": str(task_id or "")}):
         bound = governance_outputs_return_binding(workspace_root, subject_id) if subject_id else None
-        return {"kind": "governance_outputs", "task_id": subject_id or None, "audit": audit,
+        return {"kind": governance_outputs_kind(), "task_id": subject_id or None, "audit": audit,
                 "outputs_digest": str((bound or {}).get("outputs_digest") or "") or None}
     return branch_delivery_subject(subject_id, audit=audit, branch_pattern=branch_pattern)
 
@@ -938,7 +959,7 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
             view["worktree_refusal"] = {"code": "VALIDATION_SUBJECT_UNRESOLVED", "reason": f"不建树卡的交付主体判定失败: {subject_problem}"}
         else:
             candidate_card = subject["kind"] == "candidate"
-            governance_card = subject["kind"] == "governance_outputs"
+            governance_card = subject["kind"] == governance_outputs_kind()
     view["kickoff_without_worktree"] = view["worktree_refusal"] is None and (candidate_card or governance_card)
     if view["worktree_refusal"] is None and not needs_worktree:
         try:
@@ -1067,7 +1088,7 @@ def card_report_contract(workspace_root: Path, task_id: str, card_frontmatter: d
             raise CandidateSubjectError("VALIDATION_SUBJECT_MISSING", f"卡 {subject['task_id']} 交付主体判为固定候选却取不出候选值")
         return report_frontmatter_contract(kind, branch_task_id=candidate["source"], subject=candidate, branch_pattern=branch_pattern,
                                            candidate=True)
-    if subject["kind"] == "governance_outputs":
+    if subject["kind"] == governance_outputs_kind():
         if reviewed is None:
             return report_frontmatter_contract("return", governance=True, report_dir=_report_dir_hint(workspace_root, task_id))
         return report_frontmatter_contract("verdict", branch_task_id=reviewed or None, governance=True,

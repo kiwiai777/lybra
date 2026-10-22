@@ -1,0 +1,12 @@
+{"mcp_only": ["autonomy_mode", "source_task_path", "task_id", "task_path", "workspace_root"], "reason": "存量: 门手写 inputSchema 与 verbs parameters 属性集不一致(F208 §8 R6 盘点); 归后续卡改为由 verbs 参数投影或逐项对齐", "verb": "lybra_audit_dispatch_dry_run", "verbs_only": ["source_path"]}
+{"mcp_only": ["class"], "reason": "存量: 门手写 inputSchema 与 verbs parameters 属性集不一致(F208 §8 R6 盘点); 归后续卡改为由 verbs 参数投影或逐项对齐", "verb": "lybra_roles_register", "verbs_only": ["actor", "agent_instance", "workspace_root"]}
+{"mcp_only": ["owner_confirmation_token", "workspace_root"], "reason": "存量: 门手写 inputSchema 与 verbs parameters 属性集不一致(F208 §8 R6 盘点); 归后续卡改为由 verbs 参数投影或逐项对齐", "verb": "lybra_queue_return_dry_run", "verbs_only": []}
+{"mcp_only": ["task_path", "workspace_root"], "reason": "存量: 门手写 inputSchema 与 verbs parameters 属性集不一致(F208 §8 R6 盘点); 归后续卡改为由 verbs 参数投影或逐项对齐", "verb": "lybra_audit_verdict_dry_run", "verbs_only": ["artifact_subject"]}
+{"mcp_only": ["workspace_root"], "reason": "存量: 门手写 inputSchema 与 verbs parameters 属性集不一致(F208 §8 R6 盘点); 归后续卡改为由 verbs 参数投影或逐项对齐", "verb": "lybra_audit_verdict_confirm", "verbs_only": ["autonomy_mode"]}
+{"mcp_only": ["workspace_root"], "reason": "存量: 门手写 inputSchema 与 verbs parameters 属性集不一致(F208 §8 R6 盘点); 归后续卡改为由 verbs 参数投影或逐项对齐", "verb": "lybra_queue_claim_confirm", "verbs_only": []}
+{"mcp_only": ["workspace_root"], "reason": "存量: 门手写 inputSchema 与 verbs parameters 属性集不一致(F208 §8 R6 盘点); 归后续卡改为由 verbs 参数投影或逐项对齐", "verb": "lybra_queue_claim_dry_run", "verbs_only": []}
+{"mcp_only": ["workspace_root"], "reason": "存量: 门手写 inputSchema 与 verbs parameters 属性集不一致(F208 §8 R6 盘点); 归后续卡改为由 verbs 参数投影或逐项对齐", "verb": "lybra_queue_close_confirm", "verbs_only": ["autonomy_mode", "owner_policy_ref"]}
+{"mcp_only": ["workspace_root"], "reason": "存量: 门手写 inputSchema 与 verbs parameters 属性集不一致(F208 §8 R6 盘点); 归后续卡改为由 verbs 参数投影或逐项对齐", "verb": "lybra_queue_close_dry_run", "verbs_only": ["autonomy_mode", "owner_policy_ref"]}
+{"mcp_only": ["workspace_root"], "reason": "存量: 门手写 inputSchema 与 verbs parameters 属性集不一致(F208 §8 R6 盘点); 归后续卡改为由 verbs 参数投影或逐项对齐", "verb": "lybra_queue_return_confirm", "verbs_only": []}
+{"mcp_only": ["workspace_root"], "reason": "存量: 门手写 inputSchema 与 verbs parameters 属性集不一致(F208 §8 R6 盘点); 归后续卡改为由 verbs 参数投影或逐项对齐", "verb": "lybra_task_progress", "verbs_only": []}
+{"mcp_only": [], "reason": "存量: 门手写 inputSchema 与 verbs parameters 属性集不一致(F208 §8 R6 盘点); 归后续卡改为由 verbs 参数投影或逐项对齐", "verb": "lybra_enroll_code_dry_run", "verbs_only": ["governance_root"]}

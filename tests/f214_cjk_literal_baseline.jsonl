@@ -1,0 +1,1 @@
+{"file": "app.py", "fp": "78a20c488987", "reason": "存量: board_readonly 声明缺失时的 fail-closed 错误文本(SchemaLoadError 消息, 非常规界面文字); 归后续 web 车道卡走 i18n 或加 i18n-exempt 标记", "text": "\"verbs.schema.json board_readonly(status / error / message / message_en / next_s"}
