@@ -70,6 +70,28 @@ def test_no_residual_enum_literals():
     assert not stale, f"基线条目已不存在(已收进 enums.schema)→ 从 {INLINE_ENUM_BASELINE.name} 删除这些行(只减不增): {stale}"
 
 
+def test_inline_enum_ratchet_red_on_new_literal(tmp_path):
+    """R7 故意改一侧即红: schema 副本(临时根, 不碰仓内 schema/)里新增一个内联 enum → 棘轮报新增; 收掉一条基线内联 enum → 报基线待删。"""
+    import shutil
+
+    from tools.schema_loader import residual_enum_literals
+
+    shutil.copytree(SCHEMA_DIR, tmp_path / "schema")
+    verbs_path = tmp_path / "schema" / "verbs.schema.json"
+    data = json.loads(verbs_path.read_text(encoding="utf-8"))
+    data["verbs"]["lybra_kickoff"]["parameters"]["properties"]["probe_mode"] = {"type": "string", "enum": ["a", "b"]}
+    data["verbs"]["lybra_artifact_ingest"]["parameters"]["properties"]["kind"] = {"$enum": "probe_moved_to_enums"}
+    verbs_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    clear_cache()
+    try:
+        new, stale = inline_enum_ratchet(residual_enum_literals(tmp_path), _inline_enum_baseline())
+    finally:
+        clear_cache()
+    print(f"[R7 反例] 新增 {new}; 基线待删 {stale}")
+    assert new == [("verbs.schema.json", "verbs.lybra_kickoff.parameters.properties.probe_mode.enum", '["a", "b"]')]
+    assert stale == [("verbs.schema.json", "verbs.lybra_artifact_ingest.parameters.properties.kind.enum", '["return", "verdict", "finalization"]')]
+
+
 def test_all_enum_refs_resolve():
     """All $enum references in schema package resolve to enums.schema.json (legacy inline literals tolerated = R7 baseline)."""
     print("Test 2: All $enum references resolve")
