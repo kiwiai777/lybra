@@ -2690,9 +2690,11 @@ def _check_return_self_checks(
     五条判据:
     ① 夹具入常驻: 本卡新增 test 文件必须在项目声明的测试清单中(AIPOS-F93: test_contract.runall_path)
     ② 改动面在界内: git diff 文件必须落在 output_target 范围内
-    ③ 有测试: code 类卡必须有新增/修改的 test 文件
+    ③ 有测试: 模式声明 requires_tests 的卡(enums.schema task_mode.requires_tests, 唯一读取口 next_resolver.task_mode_requires_tests;
+       AIPOS-F211 取代原 task_mode == "code" 字面)必须有新增/修改的 test 文件
     ④ RETURN 非骨架: 不得含占位符，result_summary 非空
-    ⑤ 分支合规 (AIPOS-F74): card/{task_id} 分支存在、含本卡提交、基座合法
+    ⑤ 分支合规 (AIPOS-F74): card/{task_id} 分支存在、含本卡提交、基座合法——AIPOS-F211: 适用 = 本卡有自己的卡分支(非审计卡且
+       写产品仓, 唯一判据 next_resolver.card_writes_product_repo; 与门后 finalize / 裁决绑 tip 同口径, 写仓的 docs 等卡同查)
     
     注: 判据⑤靠场未污染和⑥基线零新增失败已移至 F49B(快照机制)
     
@@ -2708,7 +2710,11 @@ def _check_return_self_checks(
     if not self_check_enabled:
         return blocking_reasons
     
+    from tools.aipos_cli.next_resolver import card_writes_product_repo, forensic_subject, task_mode_requires_tests
+
     task_mode = str(task_metadata.get("task_mode") or "").strip()
+    # AIPOS-F211 件①: 本卡自己的卡分支 = 非审计卡且写产品仓(唯一判据 card_writes_product_repo; 审计卡无自己的分支, 自动豁免)
+    own_branch = forensic_subject(task_metadata) is None and card_writes_product_repo(repo_root, {**task_metadata, "task_id": task_id})
     output_target = str(task_metadata.get("output_target") or "").strip()
     # AIPOS-F78 前置零⑤: 改动面判据读车道目录 lane.paths(声明), output_target 仅作派生来源
     lane = task_metadata.get("lane") if isinstance(task_metadata.get("lane"), dict) else {}
@@ -2731,8 +2737,8 @@ def _check_return_self_checks(
         card_frontmatter=task_metadata,
     ))
     
-    # ③ 有测试
-    if task_mode == "code":
+    # ③ 有测试(AIPOS-F211: 模式声明 requires_tests, 原 task_mode == "code" 字面退役)
+    if own_branch and task_mode_requires_tests(task_mode):
         blocking_reasons.extend(_check_has_tests(
             task_id=task_id,
             repo_root=repo_root,
@@ -2749,8 +2755,8 @@ def _check_return_self_checks(
         repo_root=repo_root,
     ))
     
-    # ⑤ 分支合规 (AIPOS-F74): 仅对 task_mode=code 的执行卡检查
-    if task_mode == "code":
+    # ⑤ 分支合规 (AIPOS-F74): 本卡有自己的卡分支才查(AIPOS-F211: card_writes_product_repo, 原 task_mode == "code" 字面退役)
+    if own_branch:
         blocking_reasons.extend(_check_branch_compliance(
             task_id=task_id,
             task_metadata=task_metadata,
@@ -3403,10 +3409,8 @@ def _build_return_preview(
             f"Missing items will be recorded as partial delivery."
         )
     
-    # AIPOS-FND-5: code 卡交回门检测未提交代码
+    # AIPOS-FND-5: 写产品仓的卡交回门检测未提交代码
     # AIPOS-R4B-2 N3: 交回门按卡 scope — 只检查本卡声明的路径，不全仓扫描
-    task_mode = str(source_metadata.get("task_mode") or "").strip()
-    artifact_policy = str(source_metadata.get("artifact_policy") or "").strip()
     # AIPOS-F197 件②: 只写治理根的卡(next_resolver.card_governance_outputs)不写产品仓、无卡分支, 产出在治理根由 N6 落账提交——
     # 无「代码未提交」可查(交回绑定产出清单指纹代之, return_binding_subject)
     from tools.aipos_cli.next_resolver import card_governance_outputs
@@ -3420,7 +3424,13 @@ def _build_return_preview(
             governance_outputs_manifest(repo_root, str(task.get("task_id") or ""), source_metadata)
         except GovernanceOutputsError as exc:
             blocking_reasons.append(f"{exc.code}: AIPOS-F197 只写治理根的卡交回须带合规产出清单(Return frontmatter outputs): {exc.reason}")
-    if (task_mode == "code" or artifact_policy == "formal_write") and not governance_outputs:
+    # AIPOS-F211 件①: 查不查 = 本卡写产品仓(唯一判据 next_resolver.card_writes_product_repo, 与建树 / 分支合规 / finalize 同口径);
+    # 原 task_mode == "code" 或 artifact_policy == "formal_write" 第二判据退役(起草缺省人人 formal_write, 不写仓的验证卡 / 缺 task_mode 卡也被查)
+    from tools.aipos_cli.next_resolver import card_writes_product_repo, forensic_subject
+
+    writes_repo = forensic_subject(source_metadata) is None and card_writes_product_repo(
+        repo_root, {**source_metadata, "task_id": str(task.get("task_id") or "")})
+    if writes_repo:  # 只写治理根卡(governance_outputs)恒不写仓
         current_task_id = str(task.get("task_id") or "")
         try:
             product_repo_root = _resolve_product_code_repo(repo_root, source_metadata)  # AIPOS-F78C: 卡声明的仓
@@ -7018,7 +7028,7 @@ def _pass_verdict_tip_changed(repo_root: Path, task_id: str, verdict_record: dic
         product_repo_root = _card_product_repo(repo_root, card_frontmatter)
     except ProductRepoNotConfigured:
         return None
-    current = _extract_artifact_subject_from_branch(Path(product_repo_root), task_id, "code")
+    current = _extract_artifact_subject_from_branch(Path(product_repo_root), task_id)
     tip = str((current or {}).get("commit_sha") or "")
     if not tip or tip == audited_sha:
         return None

@@ -85,7 +85,10 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
     intent = derive_intent_declarations(fm, governance_root)
     if intent["blocking_reasons"]:
         raise ValueError("; ".join(intent["blocking_reasons"]))
-    chosen = str(harness or intent["harness"]).strip()
+    # AIPOS-F211 件③: 缺省 harness 只经 loop_driver.card_harness(卡面值, 缺 = 本卡执行方式推出), 不再按 task_mode 表另推一份
+    from tools.aipos_cli.loop_driver import card_harness
+
+    chosen = str(harness or card_harness(fm, governance_root, task_id=task_id)).strip()
     allowed = list(intent_face_declaration().get("harness", {}).get("allowed") or [])
     if allowed and chosen not in allowed:
         raise ValueError(f"harness={chosen!r} 不在 card.schema intent_face.harness.allowed {allowed}")

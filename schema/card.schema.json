@@ -1119,8 +1119,10 @@
         "governance": "pi",
         "config": "pi",
         "audit": "pi",
-        "validation": "pi"
+        "validation": "pi",
+        "(missing)": "pi"
       },
+      "default_rule": "AIPOS-F211 件③(F208 P1-5): 卡的 harness 唯一推导 loop_driver.card_harness —— 卡面值; 缺 = 本卡执行方式(workspace_config.card_execution_mode, 审计卡经 audit_derivation.is_audit_card 恒 pi)推出: pi = pi, 子 agent = 该执行者实例子 agent 模式接入登记记下的顾问会话 harness(enrollment.instance_enrollment; 登记无 = 拒, 不猜); 项目未声明 execution = default_by_task_mode[task_mode](缺 task_mode 键 = enums.schema task_mode.missing_default.key, 唯一兜底 next_resolver._task_mode_entry)。loop 拉起、lybra kickoff 时限句、交回 / 审计报告模型字段定位器、Owner 收件箱拉起授权建议同读。",
       "renderers": {
         "pi": "开工提示三行(工作树/报告落点/卡路径), /go 复用",
         "codex": "Prompt.md + Plan.md 写入工作树根(OpenAI 长任务形制)",

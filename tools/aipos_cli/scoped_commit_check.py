@@ -178,27 +178,21 @@ def _check_scoped_paths(
 
 def resolve_check_scope_from_task(task_metadata: dict[str, Any]) -> list[str] | None:
     """从任务卡 metadata 解析出要检查的 scope 路径列表。
-    
+
+    AIPOS-F211 件①: 查不查由调用方先问唯一判据 next_resolver.card_writes_product_repo(交回门 board_adapter._build_return_preview);
+    原本处「非 code 卡(task_mode != "code" 且 artifact_policy != "formal_write")→ 空列表」第二判据退役。
+
     逻辑:
-    1. 非 code 卡（task_mode != "code" 且 artifact_policy != "formal_write"）
-       → 返回空列表（不检查 code_repo）
-    2. output_target 存在 → 只检查 output_target 路径
-    3. artifact_scope 存在且可解析为路径 → 检查 artifact_scope 路径
-    4. 否则 → None（全仓检查，向后兼容）
-    
+    1. output_target 存在 → 只检查 output_target 路径
+    2. artifact_scope 存在且可解析为路径 → 检查 artifact_scope 路径
+    3. 否则 → None（全仓检查，向后兼容）
+
     Args:
         task_metadata: 任务卡 frontmatter metadata
-    
+
     Returns:
         路径列表 or None (None = 全仓检查)
     """
-    task_mode = str(task_metadata.get("task_mode") or "").strip()
-    artifact_policy = str(task_metadata.get("artifact_policy") or "").strip()
-    
-    # 非 code 卡：不检查 code_repo（返回空列表 = pass）
-    if task_mode != "code" and artifact_policy != "formal_write":
-        return []
-    
     # output_target 优先（明确的输出路径）
     output_target = str(task_metadata.get("output_target") or "").strip()
     if output_target:

@@ -1372,12 +1372,12 @@ def _integrate_card_branch(
 
     # ① 找分支
     if not _git_branch_exists(workspace_root, branch_name):
-        # AIPOS-F61: 代码任务分支不存在 = 硬 BLOCK(禁假报成功 + 写错误 finalization 记录)
-        # 非代码任务(无 output_target 或 task_mode != code)仍允许跳过
-        # AIPOS-F197: 卡面写明 task_mode 且调用方已按唯一判据 card_needs_worktree 判为不建树(只写治理根的 docs 等卡)= output_target
-        # 不再误判代码任务; task_mode 缺(存量卡)或未传 needs_worktree(旧调用面)= 照 F61 按 output_target 判
-        output_counts = bool(output_target and str(output_target).strip()) and (needs_worktree is None or not task_mode)
-        is_code_task = bool(needs_worktree) or task_mode == "code" or output_counts
+        # AIPOS-F61: 写产品仓的卡分支不存在 = 硬 BLOCK(禁假报成功 + 写错误 finalization 记录); 不写仓的卡跳过
+        # AIPOS-F178 / F211 件①: 是否写仓只问调用方按唯一判据 card_needs_worktree 算好传入的 needs_worktree(缺 task_mode 的存量卡 =
+        # schema missing_default 不写仓, 唯一兜底 next_resolver._task_mode_entry); 原 task_mode == "code" 字面与「task_mode 缺按 output_target
+        # 判」第二判据退役。未传 needs_worktree(旧调用面)= 照 F61 按 output_target 判
+        output_counts = bool(output_target and str(output_target).strip()) and needs_worktree is None
+        is_code_task = bool(needs_worktree) or output_counts
         if is_code_task:
             similar = _find_similar_branches(workspace_root, task_id)
             similar_text = ", ".join(similar[:5]) if similar else "(无相近分支)"

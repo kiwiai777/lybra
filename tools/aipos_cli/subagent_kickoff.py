@@ -334,10 +334,11 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
     long_cmds = charter_commands(gov, task_id=task_id, cwd=str(worktree) if worktree is not None else None)
     report_path = Path(str(view["report_path"]))
     others = _other_project_roots(gov)
-    # AIPOS-F189 件②: 全量时限句按卡面 harness 的单次工具时限(审计卡 = 审计卡卡面 harness; 同 loop 拉起判据 card_harness)
+    # AIPOS-F189 件②: 全量时限句按本卡 harness 的单次工具时限(审计卡 = 审计卡的 harness; 同 loop 拉起判据 card_harness)
+    # AIPOS-F211 件③: 卡面无 harness = 由本卡执行方式推出(子 agent = 其接入登记的顾问会话 harness), 不再一律按 task_mode 表 pi
     from tools.aipos_cli.loop_driver import card_harness
 
-    harness = card_harness(fm)
+    harness = card_harness(fm, gov, task_id=task_id)
     # AIPOS-F190 件④: 本卡本实例的跨机验证根(含已撤销 / 到期 = 如实告知一律拒); 沙箱可写根按卡面 harness 渲染
     from tools.aipos_cli.validation_root import render_section_lines
 

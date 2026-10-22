@@ -337,11 +337,15 @@ def parse_output_target_paths(output_target: str) -> list[str]:
 
 
 def default_harness_for_task_mode(task_mode: str, repo_root: Path | None = None) -> str:
-    """harness 缺省: card.schema intent_face.harness.default_by_task_mode[task_mode](缺条目 = SchemaLoadError)。"""
+    """harness 缺省: card.schema intent_face.harness.default_by_task_mode[task_mode](缺条目 = SchemaLoadError)。
+    AIPOS-F211 件②: 缺 task_mode = 表键 enums.schema task_mode.missing_default.key(缺值兜底唯一 next_resolver._task_mode_entry)。"""
+    from tools.aipos_cli.next_resolver import _task_mode_entry
     from tools.schema_loader import SchemaLoadError
 
+    entry = _task_mode_entry(task_mode)
+    key = str(entry["value"]) if entry is not None and entry.get("missing") else str(task_mode or "").strip()
     table = intent_face_declaration(repo_root).get("harness", {}).get("default_by_task_mode") or {}
-    value = str(table.get(str(task_mode or "").strip()) or "").strip()
+    value = str(table.get(key) or "").strip()
     if not value:
         raise SchemaLoadError(
             f"card.schema.json intent_face.harness.default_by_task_mode 未声明 task_mode={task_mode!r} 的缺省 harness"
