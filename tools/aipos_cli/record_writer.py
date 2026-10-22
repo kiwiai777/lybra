@@ -1645,9 +1645,16 @@ def write_records_atomic(
 
 
 def _skeleton_frontmatter(contract: list[dict[str, Any]]) -> str:
-    """AIPOS-F93 件①: 认领模板 frontmatter = 报告必填契约逐项占位(`(待填写: <说明>)`, 占位判据 next_resolver._is_placeholder_value)。"""
+    """AIPOS-F93 件①: 认领模板 frontmatter = 报告必填契约逐项占位(`(待填写: <说明>)`, 占位判据 next_resolver._is_placeholder_value)。
+    AIPOS-F210 件③: 契约已给实值的键(固定候选三键 / 治理根审计 outputs_digest, 产品给值)占位内带「照抄 <值>」——仍是占位
+    (完成判据不变), 但不再让人去别处找值。"""
     keys = [str(e["key"]) for e in contract]
-    return render_frontmatter_block({str(e["key"]): f"(待填写: {e['hint']})" for e in contract}, keys) + "\n"
+
+    def _placeholder(entry: dict[str, Any]) -> str:
+        value = str(entry.get("value") or "").strip()
+        return f"(待填写: 照抄 {value}; {entry['hint']})" if value else f"(待填写: {entry['hint']})"
+
+    return render_frontmatter_block({str(e["key"]): _placeholder(e) for e in contract}, keys) + "\n"
 
 
 def build_return_skeleton_markdown(task_id: str, contract: list[dict[str, Any]] | None = None) -> str:

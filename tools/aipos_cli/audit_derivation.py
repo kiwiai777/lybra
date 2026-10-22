@@ -74,6 +74,62 @@ def render_audit_report_location(governance_root: Path | None, audit_task_id: st
     return f"<governance_root>/{default_root}/{audit_task_id}/{first}"
 
 
+def forensic_delivery_subject(repo_root: Path | None, source_task_id: str,
+                              source_metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F210 件②: 被审卡的交付主体(next_resolver.card_delivery_subject 唯一判定; 被审卡卡面 source_metadata 缺 = 读队列)。
+    治理根缺 = 只按卡面判固定候选, 其余按卡分支(card_delivery_subject 同口径, 不猜)。"""
+    from tools.aipos_cli.next_resolver import _find_task_in_queue, _read_frontmatter, card_delivery_subject
+
+    fm = source_metadata
+    if fm is None and repo_root is not None:
+        path, _q = _find_task_in_queue(Path(repo_root), source_task_id)
+        fm = _read_frontmatter(path) if path else {}
+    return card_delivery_subject(repo_root, source_task_id, {**(fm or {}), "task_id": source_task_id})
+
+
+def render_forensic_anchor(subject: dict[str, Any], *, form: str = "line") -> str:
+    """AIPOS-F210 件②(F208 P0-2): 审计取证锚点的唯一渲染——按被审卡交付主体三态(forensic_delivery_subject)给取证动作:
+    卡分支 = `git diff <基线>...<被审分支>`(禁 checkout 卡分支); 固定候选 = 只读该提交 + 源码送达核 src-verify(无卡分支可 diff);
+    治理根产出清单 = 核交回绑定的 outputs_digest(无卡分支、不涉产品仓)。审计卡正文取证锚点段(form=line)、审计卡 governance_refs
+    锚点(form=ref, 自动派生与手动派审同读 forensic_anchor_ref)两种排版, 措辞一处; 禁在别处拼「基线...卡分支」。"""
+    if form not in ("line", "ref"):
+        raise ValueError(f"render_forensic_anchor: form={form!r} 不在 ('line', 'ref')")
+    kind = subject.get("kind")
+    if kind == "candidate":
+        sha, source = subject.get("candidate"), subject.get("source")
+        if not sha:
+            problem = subject.get("problem") or "来源卡 / 候选未声明"
+            return (f"- **交付主体 = 固定候选(卡面不合)**: {problem}; 被审卡不建卡分支, 无分支可 diff; 裁决入口将按固定候选判据拒收, "
+                    "先请顾问修正卡面" if form == "line" else f"交付主体=固定候选(卡面不合: {problem}; 无卡分支, 先请顾问修正卡面)")
+        if form == "line":
+            return (f"- **交付主体 = 固定候选(只读)**: 来源卡 `{source}` 的固定候选 `{sha}`(被审卡不建卡分支, 禁 diff / checkout 卡分支); "
+                    f"只读取证该提交(`git show {sha}`), 源码送达以验证根 src-verify 末行 SRC_OK(送达树 = 候选 tree)为准")
+        return f"交付主体=固定候选 {sha}(来源卡 {source}; 只读取证 git show {sha}, 源码送达核 src-verify SRC_OK; 无卡分支)"
+    if kind == "governance_outputs":
+        digest = subject.get("outputs_digest") or "(交回未绑定: 以开工稿 / 报告必填句给值为准)"
+        if form == "line":
+            return (f"- **交付主体 = 治理根产出清单**: 被审卡只写治理根(无卡分支、不改产品仓, 禁 diff 卡分支); 审计对象 = 交回绑定的产出清单 "
+                    f"outputs_digest `{digest}`; 逐项读 Return frontmatter outputs 所列文件核对内容与 sha256(产品入口按同一清单重算核对)")
+        return f"交付主体=治理根产出清单(outputs_digest={digest}; 逐项核 Return outputs 文件 sha256; 无卡分支)"
+    base, branch = subject["base"], subject["branch"]
+    if form == "line":
+        return f"- **禁 checkout 卡分支**: 用 `git diff {base}...{branch}` 取证(不切换工作区)"
+    return f"禁checkout卡分支(git diff {base}...{branch})"
+
+
+def forensic_anchor_ref(repo_root: Path | None, source_task_id: str, source_metadata: dict[str, Any] | None,
+                        audit_task_id: str) -> str:
+    """AIPOS-A1 大项C + AIPOS-F210 件②: 审计卡 governance_refs 的取证锚点一行(自动派生 build_derived_audit_task 与手动派审
+    board_adapter._build_audit_dispatch_preview 同读; 原两份字面合一)。产品仓 = 被审卡声明的仓(只写治理根 = 不涉及);
+    报告落点 = render_audit_report_location(审计卡 ID 目录)。"""
+    subject = forensic_delivery_subject(repo_root, source_task_id, source_metadata)
+    code_repo = ("不涉及(被审卡只写治理根)" if subject.get("kind") == "governance_outputs"
+                 else _resolve_code_repo(repo_root, source_metadata))
+    report_location = render_audit_report_location(repo_root, audit_task_id)
+    return (f"\u2605取证锚点(AIPOS-A1 大项C): 产品仓={code_repo} | {render_forensic_anchor(subject, form='ref')} | "
+            f"报告落点={report_location} | 不存在结论必附pwd+命令+输出")
+
+
 def build_forensic_anchor_section(
     source_task_id: str,
     repo_root: Path | None = None,
@@ -92,9 +148,9 @@ def build_forensic_anchor_section(
     AIPOS-F66B 件③: 报告落点 = 审计卡 ID 目录(render_audit_report_location 唯一渲染); audit_task_id 缺省
     = 本模块 derive_audit_task_id 首号(与 build_derived_audit_task 同一派生), 手动派审传显式审计卡 ID。
     """
-    from tools.aipos_cli.next_resolver import card_base_branch, card_branch_name  # AIPOS-F108 件②: 分支 / 基线读声明
-
-    code_repo = _resolve_code_repo(repo_root, source_metadata)
+    subject = forensic_delivery_subject(repo_root, source_task_id, source_metadata)  # AIPOS-F210 件②: 交付主体三态
+    code_repo = ("不涉及(被审卡只写治理根)" if subject.get("kind") == "governance_outputs"
+                 else _resolve_code_repo(repo_root, source_metadata))
     report_location = render_audit_report_location(
         repo_root, audit_task_id or derive_audit_task_id(source_task_id, repo_root=None)
     )
@@ -111,13 +167,13 @@ def build_forensic_anchor_section(
     # AIPOS-F186 件③: 撤换承继卡——差异基线仍为 base_branch, 承继自原卡的提交在 base...卡分支 内一并审(卡面 carried_from 唯一读取口)
     from tools.aipos_cli.next_resolver import card_carried_from
 
-    carried = card_carried_from(source_metadata)
+    carried = card_carried_from(source_metadata) if subject.get("kind") == "branch" else None
     carried_line = (f"- **撤换承继**: 本卡分支承继自 `{carried['task_id']}` 分支 `{carried['branch']}`@`{carried['tip']}`; "
-                    f"差异基线仍为 `{card_base_branch()}`(上一行三点 diff 含承继提交, 一并审)\n") if carried else ""
+                    f"差异基线仍为 `{subject['base']}`(上一行三点 diff 含承继提交, 一并审)\n") if carried else ""
     return (
         "\n## 取证锚点(AIPOS-A1 大项C: 默认注入, 路径来自注册表)\n\n"
         f"- **产品仓绝对路径**: `{code_repo}` (被审卡 lane.repo → project.json repos/code_repo, 禁写死)\n"
-        f"- **禁 checkout 卡分支**: 用 `git diff {card_base_branch()}...{card_branch_name(source_task_id)}` 取证(不切换工作区)\n"
+        f"{render_forensic_anchor(subject, form='line')}\n"
         f"{carried_line}"
         f"- **报告落点绝对路径**: `{report_location}` (治理根 verdict_root/<审计卡ID>/, 声明渲染; 禁落被审卡目录、禁落产品仓)\n"
         f"{baseline_line}"
@@ -223,32 +279,32 @@ def build_gate_territory_discipline_section(
 
 
 def zero_gate_report_sentence(report_location: str, reviewed_task_id: str | None = None,
-                              governance_root: Path | None = None) -> str:
+                              governance_root: Path | None = None, audit_task_id: str | None = None) -> str:
     """AIPOS-F80 件①: 零门审计卡的落点句(唯一措辞)。落点值只接 render_audit_report_location 的输出。
     AIPOS-F93 件①: 句内带报告必填 frontmatter(声明 artifact_ingest.verdict 单源渲染 report_frontmatter_clause), F92R 缺 commit_sha 被拒的病根。"""
-    return (f"报告写到 `{report_location}`; {report_frontmatter_clause(reviewed_task_id, governance_root)}; "
+    return (f"报告写到 `{report_location}`; {report_frontmatter_clause(reviewed_task_id, governance_root, audit_task_id)}; "
             "写完即止, 认领与裁决提交由驱动方完成。")
 
 
-def report_frontmatter_clause(reviewed_task_id: str | None, governance_root: Path | None = None) -> str:
-    """AIPOS-F93 件①: 审计卡正文的报告必填字段句(next_resolver.render_report_frontmatter_clause 单源; 分支 = 被审卡分支)。
-    AIPOS-F197 件②: 给了治理根且被审卡只写治理根(card_report_is_governance)= verdict.governance_root 分形(verdict + 交回绑定的 outputs_digest)。"""
-    from tools.aipos_cli.next_resolver import (card_report_is_governance, governance_outputs_return_binding, render_report_frontmatter_clause,
+def report_frontmatter_clause(reviewed_task_id: str | None, governance_root: Path | None = None,
+                              audit_task_id: str | None = None) -> str:
+    """AIPOS-F93 件①: 审计卡正文的报告必填字段句(next_resolver.render_report_frontmatter_clause 单源)。
+    AIPOS-F210 件③: 契约 = next_resolver.card_report_contract(审计卡跟随被审卡的交付主体三态: 卡分支 / 固定候选 / 治理根产出清单),
+    不另判。被审卡固定候选不合 = 如实写不可推导(裁决入口同判据 fail-closed)。治理根缺(调用方未给)= 交付主体不可判定, 按卡分支契约
+    渲染(存量口径; 生产派生与派审均给治理根)。"""
+    from tools.aipos_cli.next_resolver import (CandidateSubjectError, card_report_contract, render_report_frontmatter_clause,
                                                report_frontmatter_contract)
-    from tools.schema_loader import SchemaLoadError
 
     reviewed = str(reviewed_task_id or "").strip() or None
-    governance = False
-    if governance_root is not None and reviewed:
-        try:
-            governance = card_report_is_governance(Path(governance_root), reviewed)
-        except (OSError, ValueError, SchemaLoadError):  # 被审卡读不出: 落点句按建树卡契约(入门时按卡面再判, fail-closed 在入口)
-            governance = False
-    if governance:
-        bound = governance_outputs_return_binding(Path(governance_root), reviewed) or {}
-        return render_report_frontmatter_clause(report_frontmatter_contract(
-            "verdict", branch_task_id=reviewed, governance=True, subject={"outputs_digest": str(bound.get("outputs_digest") or "")}))
-    return render_report_frontmatter_clause(report_frontmatter_contract("verdict", branch_task_id=reviewed))
+    if governance_root is None:
+        return render_report_frontmatter_clause(report_frontmatter_contract("verdict", branch_task_id=reviewed))
+    audit_id = str(audit_task_id or "").strip() or derive_audit_task_id(reviewed or "", repo_root=None)
+    audit_fm = {"task_id": audit_id, "task_mode": "audit", "reviewed_task_id": reviewed or ""}
+    try:
+        contract = card_report_contract(Path(governance_root), audit_id, audit_fm)
+    except CandidateSubjectError as exc:
+        return f"报告 frontmatter 必填: 不可推导(被审卡固定候选不合: {exc}); 裁决入口将同判据拒收, 先请顾问修正被审卡卡面"
+    return render_report_frontmatter_clause(contract)
 
 
 def build_zero_gate_delivery_section(
@@ -267,7 +323,7 @@ def build_zero_gate_delivery_section(
     )
     return (
         "\n## 交付纪律(AIPOS-F80 件①: 审计体零门)\n\n"
-        f"- {zero_gate_report_sentence(report_location, source_task_id, repo_root)}\n"
+        f"- {zero_gate_report_sentence(report_location, source_task_id, repo_root, audit_task_id)}\n"
         "- 你不连门、不读凭据、不调任何门动词; 队列与记录区是门领地, 只读不写(裁决由驱动方经门落盘)。\n"
     )
 
@@ -289,7 +345,7 @@ def zero_gate_audit_body(body: str, governance_root: Path | None, audit_task_id:
     out = re.sub(_GATE_TERRITORY_SECTION_RE, "", body, flags=re.DOTALL)
     out = re.sub(
         _REPORT_LOCATION_LINE_RE,
-        lambda _m: f"- **报告落位**:{zero_gate_report_sentence(report_location, reviewed_task_id, governance_root)}",
+        lambda _m: f"- **报告落位**:{zero_gate_report_sentence(report_location, reviewed_task_id, governance_root, audit_task_id)}",
         out,
         flags=re.MULTILINE,
     )
@@ -663,13 +719,9 @@ def build_derived_audit_task(
     
     # AIPOS-A1 大项C + F78C: 注入取证锚点到 governance_refs(产品仓 = 被审卡声明的仓)
     # AIPOS-F66B 件③: 报告落点 = 审计卡 ID 目录, 与正文两段同一渲染函数(禁写死被审卡目录)
-    code_repo = _resolve_code_repo(repo_root, source_metadata)
+    # AIPOS-F210 件②: 锚点一行 = forensic_anchor_ref(与手动派审同一函数, 交付主体三态)
     report_location = render_audit_report_location(repo_root, audit_task_id)
-    from tools.aipos_cli.next_resolver import card_base_branch, card_branch_name  # AIPOS-F108 件②: 分支 / 基线读声明
-
-    forensic_anchors = [
-        f"\u2605取证锚点(AIPOS-A1 大项C): 产品仓={code_repo} | 禁checkout卡分支(git diff {card_base_branch()}...{card_branch_name(source_task_id)}) | 报告落点={report_location} | 不存在结论必附pwd+命令+输出",
-    ]
+    forensic_anchors = [forensic_anchor_ref(repo_root, source_task_id, source_metadata, audit_task_id)]
     if reaudit and reaudit.get("kind") == "return_stale":
         stale = reaudit.get("stale") or {}
         superseded = str(reaudit.get("superseded_audit_task_id") or "")
@@ -695,9 +747,9 @@ def build_derived_audit_task(
     gate_mode = card_carries_gate_contract_section(audit_metadata, repo_root)
     if gate_mode:
         report_line = (f"- **报告落位**:`{report_location}`(审计报告归审计卡 ID 目录; 裁决记录由门落 records/, 不是你的落点);"
-                       f" {report_frontmatter_clause(source_task_id, repo_root)}。")
+                       f" {report_frontmatter_clause(source_task_id, repo_root, audit_task_id)}。")
     else:
-        report_line = f"- **报告落位**:{zero_gate_report_sentence(report_location, source_task_id, repo_root)}"
+        report_line = f"- **报告落位**:{zero_gate_report_sentence(report_location, source_task_id, repo_root, audit_task_id)}"
 
     # Build body (mechanical signpost) — AIPOS-338 S2: fixed audit instructions
     artifact_list = "\n".join(f"- `{ref}`" for ref in artifact_refs) if artifact_refs else "- (see return record)"

@@ -2105,11 +2105,11 @@ def _create_return_skeleton(repo_root: Path, task_id: str,
         if skeleton_path.exists():
             return None  # Only create if doesn't exist (idempotent)
         reviewed = forensic_subject(fm)
-        # AIPOS-F197 件②: 只写治理根的卡(及其审计卡)= 契约分形(产出清单 / outputs_digest); 其余卡模板不变
-        from tools.aipos_cli.next_resolver import card_governance_outputs, card_report_contract
+        # AIPOS-F197 件② + AIPOS-F210 件③: 模板契约一律 = card_report_contract(交付主体三态: 卡分支 / 固定候选 / 治理根产出清单;
+        # 原只对治理根卡取契约, 固定候选卡回落卡分支契约 = HBLX-24BV 骨架叫填 card/<验证卡> tip 的混淆源)
+        from tools.aipos_cli.next_resolver import card_report_contract
 
-        governance = card_governance_outputs(Path(repo_root), {**fm, "task_id": str(fm.get("task_id") or task_id)})
-        contract = card_report_contract(Path(repo_root), task_id, {**fm, "task_id": task_id}) if governance else None
+        contract = card_report_contract(Path(repo_root), task_id, {**fm, "task_id": task_id})
         if reviewed is not None:
             content, record_type = build_verdict_skeleton_markdown(task_id, reviewed or None, contract), "verdict_skeleton"
         else:
@@ -4184,14 +4184,10 @@ def _build_audit_dispatch_preview(
         if supplementary_runtime_evidence:
             audit_metadata["audit_runtime_evidence"] = supplementary_runtime_evidence
     # AIPOS-A1 大项C: 手动派审也注入取证锚点到 governance_refs
-    from tools.aipos_cli.audit_derivation import _resolve_code_repo, render_audit_report_location
-    _code_repo = _resolve_code_repo(repo_root, source_metadata)  # AIPOS-F78C: 被审卡声明的仓
-    _src_tid = str(source_task.get("task_id") or "")
-    # AIPOS-F66B 件③: 报告落点 = 审计卡 ID 目录, 与自动派生同一渲染函数(禁写死被审卡目录)
-    _report_location = render_audit_report_location(repo_root, task_id_text)
-    from tools.aipos_cli.next_resolver import card_base_branch, card_branch_name  # AIPOS-F108 件②: 分支 / 基线读声明
-
-    _forensic_ref = f"\u2605取证锚点(AIPOS-A1 大项C): 产品仓={_code_repo} | 禁checkout卡分支(git diff {card_base_branch()}...{card_branch_name(_src_tid)}) | 报告落点={_report_location} | 不存在结论必附pwd+命令+输出"
+    # AIPOS-F78C 产品仓 = 被审卡声明的仓; AIPOS-F66B 件③ 报告落点 = 审计卡 ID 目录; AIPOS-F210 件②: 锚点一行与自动派生同一函数
+    # forensic_anchor_ref(按被审卡交付主体三态: 卡分支 diff / 固定候选只读 / 治理根产出清单), 禁本处另拼
+    from tools.aipos_cli.audit_derivation import forensic_anchor_ref
+    _forensic_ref = forensic_anchor_ref(repo_root, str(source_task.get("task_id") or ""), source_metadata, task_id_text)
     _existing_refs = list(audit_metadata.get("governance_refs") or [])
     audit_metadata["governance_refs"] = _existing_refs + [_forensic_ref]
     audit_body = "\n".join(

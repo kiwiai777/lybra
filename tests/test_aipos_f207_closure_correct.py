@@ -260,7 +260,9 @@ def test_item2_queue_correct_preview_confirm_followup(rig):
     assert face["owner_check_ref"] == dfm["decision_id"] and face["artifacts"] == [{"criterion": "C-SRC", "path_glob": "review.md",
                                                                                        "kind": "report"}]
     assert f"Owner 原话: 「{WORDS}」" in pbody and "原卡正文(承接范围)" in pbody and "通过 GitLab 核查平台侧资料领取链路" in pbody
-    assert "card/X(旧卡机器区" not in pbody and pbody.count("## 工作纪律") == 1 and "card/LX-27C1" in pbody
+    # AIPOS-F210 件①: 承接卡只写治理根(docs + lane.repo governance_root)= 机器区按本卡交付主体重新派生(治理根产出清单, 不写建卡分支)
+    assert "card/X(旧卡机器区" not in pbody and pbody.count("## 工作纪律") == 1 and "task_cards/LX-27C1/RETURN.md" in pbody
+    assert "card/LX-27C1" not in pbody and "outputs" in pbody.split("## 工作纪律")[1]
     # 标准状态退回「不符·待承接」(承接卡在队列)
     crit = _criterion(gov, "C-SRC")
     _show(f"[②] 纠正后标准 C-SRC: {crit['state_label']} — {crit['reason']}")

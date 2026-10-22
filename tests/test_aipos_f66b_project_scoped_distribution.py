@@ -196,7 +196,9 @@ def test_item3_source_has_no_hardcoded_report_location_templates():
     assert "{task_cards_path}" not in src
     assert src.count("render_audit_report_location(") >= 4  # 定义 + 三处调用
     ba = (REPO_ROOT / "tools/aipos_cli/board_adapter.py").read_text(encoding="utf-8")
-    assert "_resolve_governance_task_cards_path" not in ba and "render_audit_report_location(repo_root, task_id_text)" in ba
+    # AIPOS-F210 件②: 手动派审锚点一行改经 audit_derivation.forensic_anchor_ref(内部 render_audit_report_location(repo_root, 审计卡 ID))
+    assert "_resolve_governance_task_cards_path" not in ba and "forensic_anchor_ref(repo_root, str(source_task.get(\"task_id\") or \"\"), source_metadata, task_id_text)" in ba
+    assert "report_location = render_audit_report_location(repo_root, audit_task_id)" in src.split("def forensic_anchor_ref(")[1].split("\ndef ")[0]
     assert not re.search(r"except Exception:\s*\n\s*pass", (REPO_ROOT / "tools/aipos_cli/card_render.py").read_text(encoding="utf-8"))
 
 

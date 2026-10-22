@@ -780,7 +780,57 @@ def card_report_path(workspace_root: Path, task_id: str, card_frontmatter: dict[
     return _return_artifact_path(workspace_root, task_id)
 
 
-def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None) -> dict[str, Any]:
+DELIVERY_SUBJECT_KINDS = ("branch", "candidate", "governance_outputs")
+
+
+def branch_delivery_subject(task_id: str | None, *, audit: bool = False, branch_pattern: str | None = None) -> dict[str, Any]:
+    """AIPOS-F210: 卡分支态交付主体 {kind: branch, task_id, audit, branch, base}——分支名 / 基线只经 card_branch_name / card_base_branch
+    (声明 transitions.schema N5.branch_integration); branch_pattern = 调用方已读的分支式样(machine_zone 按 product_root 读)。
+    task_id 缺 = 分支声明套占位卡号(与 report_frontmatter_contract 同口径)。"""
+    subject_id = str(task_id or "").strip()
+    placeholder = subject_id or ("<被审卡ID>" if audit else "<卡ID>")
+    branch = card_branch_name(placeholder, {"branch_pattern": branch_pattern} if branch_pattern else None)
+    return {"kind": "branch", "task_id": subject_id or None, "audit": audit, "branch": branch, "base": card_base_branch()}
+
+
+def card_delivery_subject(workspace_root: Path | None, task_id: str, card_frontmatter: dict[str, Any] | None, *,
+                          branch_pattern: str | None = None) -> dict[str, Any]:
+    """AIPOS-F210(F208 P0-2, gap #218): 卡的交付主体三态唯一判定——卡正文工作纪律(machine_zone)、审计取证锚点
+    (audit_derivation.render_forensic_anchor)、报告必填句与交回 / 裁决骨架(card_report_contract)、开工面(card_workstation_view)同读;
+    声明 enums.schema task_mode.delivery_subject。判定顺序 = 报告契约分形顺序(先固定候选, 再治理根产出清单, 其余卡分支):
+
+    - candidate: 主体卡(执行卡本卡 / 审计卡的被审卡)task_mode 的交付主体为固定候选(task_mode_subject_is_candidate)——
+      {source, candidate}(card_candidate_subject 形校验; 卡面不合 = problem 原文, source / candidate 为 None, 不当卡分支放行);
+    - governance_outputs: card_governance_outputs(显式声明只写治理根; 审计卡跟随被审卡)——附主体卡最新交回绑定的 outputs_digest
+      (governance_outputs_return_binding; 未交回 / 无绑定 = None; 审计卡报告契约与取证锚点据此给值);
+    - branch: 其余(branch_delivery_subject: 分支名 + 基线)。缺 task_mode 的存量不建树卡仍落此态(与报告契约同口径; 缺省值归 F208 卡组 C)。
+
+    审计卡的被审卡按 reviewed_task_id 从队列读; workspace_root 缺(调用方未给治理根)= 只按执行卡卡面判固定候选, 其余按卡分支
+    (治理根产出清单须经治理根解析 lane.repo, 不猜)。声明缺 = SchemaLoadError 上抛(fail-closed)。"""
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    reviewed = forensic_subject(fm)
+    audit = reviewed is not None
+    subject_id = str(task_id or "").strip() if reviewed is None else reviewed
+    subject_fm: dict[str, Any] | None = fm if reviewed is None else None
+    if reviewed and workspace_root is not None:
+        reviewed_path, _q = _find_task_in_queue(workspace_root, reviewed)
+        subject_fm = _read_frontmatter(reviewed_path) if reviewed_path else {}
+    if subject_fm is not None and task_mode_subject_is_candidate(str(subject_fm.get("task_mode") or "")):
+        try:
+            candidate, problem = card_candidate_subject(subject_fm), None
+        except CandidateSubjectError as exc:
+            candidate, problem = None, str(exc)
+        return {"kind": "candidate", "task_id": subject_id or None, "audit": audit, "source": (candidate or {}).get("source"),
+                "candidate": (candidate or {}).get("candidate"), "problem": problem}
+    if workspace_root is not None and card_governance_outputs(workspace_root, {**fm, "task_id": str(task_id or "")}):
+        bound = governance_outputs_return_binding(workspace_root, subject_id) if subject_id else None
+        return {"kind": "governance_outputs", "task_id": subject_id or None, "audit": audit,
+                "outputs_digest": str((bound or {}).get("outputs_digest") or "") or None}
+    return branch_delivery_subject(subject_id, audit=audit, branch_pattern=branch_pattern)
+
+
+def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None, *,
+                          branch_pattern: str | None = None) -> dict[str, Any]:
     """`lybra my-tasks --json` 每张 claimed 卡的开工面字段(工位 /go 只读这些字段, 不自行推导)。
 
     - worktree_required: 是否建卡工作树(AIPOS-F178 唯一判据 card_needs_worktree); False = 只写治理根, worktree_path 恒 None,
@@ -794,6 +844,9 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
       report_refusal REPORT_CONTRACT_UNRESOLVED 且 report_path 置空
     - carried_from / carried_line: AIPOS-F186 撤换承继来源(card_carried_from; 不承继 = None)与开工提示一句(含先合入当前 base_branch
       的 base_sync 命令, carried_kickoff_line); 卡面形不合 = carried_line 为拒因原文
+    - delivery_subject / branch: AIPOS-F210 交付主体三态(card_delivery_subject 唯一判定: branch / candidate / governance_outputs)与
+      卡分支名(仅卡分支态, 其余 None); 判定失败 = delivery_subject None + delivery_subject_refusal DELIVERY_SUBJECT_UNRESOLVED。
+      卡正文工作纪律(machine_zone)按本视图渲染; branch_pattern = 调用方已读的分支式样(缺省 = 声明)
     """
     from tools.aipos_cli.workspace_config import CardRepoUnresolved
     from tools.schema_loader import SchemaLoadError
@@ -826,13 +879,25 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
     view["worktree_required"] = needs_worktree
     # AIPOS-F197 件①: 不建树卡中固定候选卡(F196)与显式声明只写治理根的卡(card_governance_outputs)及其审计卡照常开工; 措辞分流:
     # 固定候选卡 / 只写治理根的执行卡(outputs_note → template_governance_root)/ 只写治理根卡的审计卡 / 其余存量不建树卡(不入选, F178)
+    # AIPOS-F210: 交付主体三态唯一判定 card_delivery_subject(卡正文 / 审计锚点 / 报告契约同读); 分支名只在卡分支态给出
+    view["delivery_subject"] = None
+    view["branch"] = None
+    subject_problem = ""
+    try:
+        subject = card_delivery_subject(workspace_root, task_id, {**fm, "task_id": task_id}, branch_pattern=branch_pattern)
+    except (SchemaLoadError, OSError, ValueError) as exc:
+        subject, subject_problem = None, str(exc)
+        view["delivery_subject_refusal"] = {"code": "DELIVERY_SUBJECT_UNRESOLVED", "reason": f"交付主体判定失败: {exc}"}
+    else:
+        view["delivery_subject"] = subject
+        view["branch"] = subject.get("branch") if subject["kind"] == "branch" else None
     candidate_card = governance_card = False
     if view["worktree_refusal"] is None and not needs_worktree:
-        try:
-            candidate_card = card_follows_candidate_subject(workspace_root, fm)
-            governance_card = not candidate_card and card_governance_outputs(workspace_root, {**fm, "task_id": task_id})
-        except (SchemaLoadError, OSError, ValueError) as exc:
-            view["worktree_refusal"] = {"code": "VALIDATION_SUBJECT_UNRESOLVED", "reason": f"不建树卡的交付主体判定失败: {exc}"}
+        if subject is None:
+            view["worktree_refusal"] = {"code": "VALIDATION_SUBJECT_UNRESOLVED", "reason": f"不建树卡的交付主体判定失败: {subject_problem}"}
+        else:
+            candidate_card = subject["kind"] == "candidate"
+            governance_card = subject["kind"] == "governance_outputs"
     view["kickoff_without_worktree"] = view["worktree_refusal"] is None and (candidate_card or governance_card)
     if view["worktree_refusal"] is None and not needs_worktree:
         try:
@@ -906,7 +971,8 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
     # 不可推导 = 报告契约拒因(report_path 置空, select_next_card 按报告不可推导排除), 不出无清单的开工提示。
     try:
         view["report_required_frontmatter"] = card_report_contract(
-            workspace_root, task_id, fm, worktree=Path(view["worktree_path"]) if view["worktree_exists"] else None)
+            workspace_root, task_id, fm, worktree=Path(view["worktree_path"]) if view["worktree_exists"] else None,
+            branch_pattern=branch_pattern)
     except (SchemaLoadError, OSError, ValueError) as exc:
         view["report_path"] = None
         view["report_refusal"] = {"code": "REPORT_CONTRACT_UNRESOLVED", "reason": f"报告必填字段不可推导: {exc}"}
@@ -915,32 +981,37 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
 
 def card_report_contract(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None,
                          *, worktree: Path | None = None, branch_pattern: str | None = None) -> list[dict[str, Any]]:
-    """AIPOS-F93 件①: 一张卡的报告必填 frontmatter 契约(my-tasks 开工面 / 认领模板同读)。
+    """AIPOS-F93 件①: 一张卡的报告必填 frontmatter 契约(my-tasks 开工面 / 认领模板 / 卡正文 / 审计卡必填句 / 交回与裁决骨架同读)。
 
-    执行卡 = return 契约(分支 = 本卡分支); 审计卡 = verdict 契约(分支 = 被审卡分支), 取证工作树已建时附被审 tip/tree 实值
-    (= 取证工作树 HEAD, 认领时由门建于被审分支 tip)。取证工作树在盘但读不出 HEAD = ValueError(fail-closed, 不给空值)。"""
+    AIPOS-F210 件③: 分形只按交付主体三态(card_delivery_subject 唯一判定)——
+    固定候选(validation 卡及其审计卡)= 三键实值 = 候选(candidate_subject_values 唯一实值), 不读卡分支 / 取证树;
+    治理根产出清单(只写治理根的执行卡 = outputs 清单, 无分支三键; 其审计卡 = verdict + 交回绑定的 outputs_digest, 产品给值);
+    卡分支 = 执行卡 return 契约(分支 = 本卡分支) / 审计卡 verdict 契约(分支 = 被审卡分支), 取证工作树已建时附被审 tip/tree 实值
+    (= 取证工作树 HEAD, 认领时由门建于被审分支 tip)。取证工作树在盘但读不出 HEAD = ValueError(fail-closed, 不给空值);
+    候选不合 = CandidateSubjectError(fail-closed)。"""
     fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
     reviewed = forensic_subject(fm)
-    # AIPOS-F196 件①: 交付主体为固定候选的卡(validation)及其审计卡: 三键实值 = 候选(candidate_subject_values 唯一实值), 不读卡分支 / 取证树
-    subject_id, subject_fm = (task_id, fm) if reviewed is None else (reviewed, None)
-    if reviewed:
-        reviewed_path, _q = _find_task_in_queue(workspace_root, reviewed)
-        subject_fm = _read_frontmatter(reviewed_path) if reviewed_path else {}
-    candidate = candidate_subject_values(workspace_root, subject_id, subject_fm) if subject_fm is not None else None
-    if candidate is not None:
-        return report_frontmatter_contract("return" if reviewed is None else "verdict", branch_task_id=candidate["source"],
-                                           subject=candidate, branch_pattern=branch_pattern, candidate=True)
-    # AIPOS-F197 件②: 只写治理根的执行卡(交回 = 产出清单, 无分支三键)/ 其审计卡(verdict + 交回绑定的 outputs_digest, 产品给值)
-    if card_governance_outputs(workspace_root, {**fm, "task_id": task_id}):
+    kind = "return" if reviewed is None else "verdict"
+    subject = card_delivery_subject(workspace_root, task_id, fm, branch_pattern=branch_pattern)
+    if subject["kind"] == "candidate":
+        subject_fm = fm
+        if reviewed:
+            reviewed_path, _q = _find_task_in_queue(workspace_root, reviewed)
+            subject_fm = _read_frontmatter(reviewed_path) if reviewed_path else {}
+        candidate = candidate_subject_values(workspace_root, str(subject["task_id"] or ""), subject_fm)
+        if candidate is None:  # 判定与取值同读 task_mode_subject_is_candidate, 不会走到; 防御: 不当卡分支放行
+            raise CandidateSubjectError("VALIDATION_SUBJECT_MISSING", f"卡 {subject['task_id']} 交付主体判为固定候选却取不出候选值")
+        return report_frontmatter_contract(kind, branch_task_id=candidate["source"], subject=candidate, branch_pattern=branch_pattern,
+                                           candidate=True)
+    if subject["kind"] == "governance_outputs":
         if reviewed is None:
             return report_frontmatter_contract("return", governance=True, report_dir=_report_dir_hint(workspace_root, task_id))
-        bound = governance_outputs_return_binding(workspace_root, reviewed) if reviewed else None
         return report_frontmatter_contract("verdict", branch_task_id=reviewed or None, governance=True,
-                                           subject={"outputs_digest": str((bound or {}).get("outputs_digest") or "")})
+                                           subject={"outputs_digest": str(subject.get("outputs_digest") or "")})
     if reviewed is None:
         return report_frontmatter_contract("return", branch_task_id=task_id, branch_pattern=branch_pattern)
-    subject = forensic_worktree_subject(worktree) if worktree is not None else None
-    return report_frontmatter_contract("verdict", branch_task_id=reviewed or None, subject=subject, branch_pattern=branch_pattern)
+    values = forensic_worktree_subject(worktree) if worktree is not None else None
+    return report_frontmatter_contract("verdict", branch_task_id=reviewed or None, subject=values, branch_pattern=branch_pattern)
 
 
 def _report_dir_hint(workspace_root: Path, task_id: str) -> str:
