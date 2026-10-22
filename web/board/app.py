@@ -2055,7 +2055,7 @@ def board_readonly_declaration() -> dict[str, Any]:
     if (not isinstance(decl, dict) or not isinstance(decl.get("status"), int)
             or not all(isinstance(decl.get(k), str) and decl[k] for k in ("error", "message", "message_en", "next_step"))
             or not isinstance(decl.get("allowed_post_paths"), list)):
-        raise SchemaLoadError("verbs.schema.json board_readonly(status / error / message / message_en / next_step / allowed_post_paths)未声明齐")
+        raise SchemaLoadError("verbs.schema.json board_readonly(status / error / message / message_en / next_step / allowed_post_paths)未声明齐")  # i18n-exempt: 声明缺失 fail-closed 错误(SchemaLoadError 消息, 非界面文字)
     return decl
 
 

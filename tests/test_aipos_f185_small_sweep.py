@@ -354,13 +354,13 @@ def test_item5_publish_no_project_map_warning(tmp_path):
 
 
 def test_item5_project_map_module_callers_listed():
-    """project_map.py 留存: 仍有调用方(都是测试); 产品代码不得再新增调用方。"""
+    """AIPOS-F216 件①(F208 P3-3): project_map.py 已删(产品零调用方; 测试依赖随删迁走, AIPOS-276 旧测试一并删); 不得复活调用方。"""
     out = subprocess.run(["git", "grep", "-l", "-E", r"tools\.aipos_cli\.project_map|from tools\.aipos_cli import project_map", "--", "."],
                          cwd=REPO_ROOT, capture_output=True, text=True, check=False)
     assert out.returncode in (0, 1), out.stderr
     callers = sorted(set(out.stdout.split()) - {"tests/test_aipos_f185_small_sweep.py"})
     _show(f"[件⑤·project_map 调用方] {callers}")
-    assert callers == ["task_cards/AIPOS-276/test_aipos276.py", "tools/aipos_cli/tests/test_direction_log_migration.py"]
+    assert callers == [] and not (REPO_ROOT / "tools" / "aipos_cli" / "project_map.py").exists()
 
 
 # ===========================================================================

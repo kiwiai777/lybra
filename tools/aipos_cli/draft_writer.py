@@ -1301,9 +1301,10 @@ def regen_machine_zone_for_pending(
                 import re
                 if not card_carries_gate_contract_section(metadata, governance_root):
                     from tools.aipos_cli.audit_derivation import zero_gate_audit_body
+                    from tools.aipos_cli.next_resolver import task_mode_is_audit  # AIPOS-F216 件④
 
                     body_without_gate = re.sub(r"## 【认领与交回】.*?(?=\n## |\Z)", "", body, flags=re.DOTALL)
-                    if str(metadata.get("task_mode") or "").strip().lower() == "audit":
+                    if task_mode_is_audit(metadata.get("task_mode")):  # AIPOS-F216 件④
                         body_without_gate = zero_gate_audit_body(
                             body_without_gate, governance_root, card_task_id,
                             str(metadata.get("reviewed_task_id") or metadata.get("derived_from") or "").strip() or None)

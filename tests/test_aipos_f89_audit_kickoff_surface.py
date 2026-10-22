@@ -220,7 +220,7 @@ def test_item3_c_claim_template_same_place_not_counted_filled_report_recognized(
     _show(f"[③c·空模板] {template}\n" + template.read_text(encoding="utf-8")[:240])
     assert template == nr.card_report_path(gov, AUDIT) == nr.audit_report_artifact_path(gov, AUDIT)  # 与真实报告同名同位
     fm = nr._read_frontmatter(template)
-    assert set(nr.required_verdict_frontmatter()) <= set(fm) and not nr.verdict_report_ready(fm)
+    assert set(nr.required_verdict_frontmatter()) <= set(fm) and nr.missing_verdict_frontmatter(fm)
     # 空模板: 推导核等待(不是产物), ingest 拒「未找到已完成报告」, 开工核验不判「产物已交」
     assert nr._check_verdict_artifact(gov, AUDIT) is None
     d = nr.derive_next_step(AUDIT, gov)

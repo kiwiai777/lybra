@@ -305,7 +305,7 @@ def forensic_subject(card_frontmatter: dict[str, Any] | None) -> str | None:
     """AIPOS-F89 件③a: 审计卡(task_mode=audit)的被审卡 ID(卡面 reviewed_task_id → derived_from); 非审计卡 = None;
     审计卡缺两字段 = ""(建取证树时 fail-closed)。"""
     fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
-    if str(fm.get("task_mode") or "").strip().lower() != "audit":
+    if not task_mode_is_audit(fm.get("task_mode")):
         return None
     return str(fm.get("reviewed_task_id") or fm.get("derived_from") or "").strip()
 
@@ -396,6 +396,25 @@ def task_mode_requires_tests(task_mode: str) -> bool:
     flag = entry.get("requires_tests", False)
     if not isinstance(flag, bool):
         raise SchemaLoadError(f"enums.schema.json task_mode={task_mode!r} requires_tests 须为布尔(AIPOS-F211)")
+    return flag
+
+
+def task_mode_is_audit(task_mode: Any) -> bool:
+    """AIPOS-F216 件④: 卡面 task_mode 是否审计模式 = 审计卡识别的卡面层唯一判定(唯一读取口: enums.schema task_mode.audit_card 声明, 每值带
+    audit_card 布尔; 缺键 = false; 缺值 = missing_default 非审计; 未知 = 非审计)。取代原 7 模块 11 处 task_mode == "audit" 字面(F211 基线);
+    卡级识别 audit_derivation.is_audit_card 的卡面层同读本函数。与 task_mode_* 族同经 _task_mode_entry 取条目(放本模块而非 audit_derivation:
+    低层模块 autonomy_policy 与 finalize 合并后预载闭包只可依赖本模块, 不得牵入 audit_derivation 的整条 CLI 导入链)。声明缺 / 形变 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = ((load_schema("enums", REPO_ROOT).get("enums") or {}).get("task_mode") or {})
+    if not isinstance(decl.get("audit_card"), dict):
+        raise SchemaLoadError("enums.schema.json enums.task_mode.audit_card 未声明(AIPOS-F216)")
+    entry = _task_mode_entry(str(task_mode or ""))
+    if entry is None:
+        return False
+    flag = entry.get("audit_card", False)
+    if not isinstance(flag, bool):
+        raise SchemaLoadError(f"enums.schema.json task_mode={task_mode!r} audit_card 须为布尔(AIPOS-F216)")
     return flag
 
 
@@ -499,7 +518,7 @@ def candidate_binding_declaration() -> dict[str, Any]:
                               "fields_from=candidate_subject.fields)未声明齐(AIPOS-F205)")
     for mode in modes:
         entry = _task_mode_entry(mode)
-        if entry is None or entry.get("writes_product_repo") is not False or task_mode_subject_is_candidate(mode) or mode.lower() == "audit":
+        if entry is None or entry.get("writes_product_repo") is not False or task_mode_subject_is_candidate(mode) or task_mode_is_audit(mode):
             raise SchemaLoadError(f"enums.schema.json task_mode.candidate_binding.task_modes 含 {mode!r}: 须为已声明、writes_product_repo=false、"
                                   "非固定候选、非 audit 的模式(AIPOS-F205)")
     return {**decl, "fields": candidate_subject_declaration()["fields"]}
@@ -687,7 +706,7 @@ def card_governance_outputs(workspace_root: Path, card_frontmatter: dict[str, An
     mode = str(fm.get("task_mode") or "").strip()
     # AIPOS-F211 件②: 缺 task_mode = missing_default 条目(唯一兜底 _task_mode_entry); 存量缺 task_mode 卡不算治理根产出清单(声明 governance_outputs_subject)
     entry = _task_mode_entry(mode)
-    if (entry is None or entry.get("missing") or mode.lower() == "audit" or task_mode_writes_product_repo(mode)
+    if (entry is None or entry.get("missing") or task_mode_is_audit(mode) or task_mode_writes_product_repo(mode)
             or task_mode_subject_is_candidate(mode)):
         return False
     lane = fm.get("lane") if isinstance(fm.get("lane"), dict) else {}
@@ -823,7 +842,7 @@ def card_report_path(workspace_root: Path, task_id: str, card_frontmatter: dict[
     if fm is None:
         task_path, _ = _find_task_in_queue(workspace_root, task_id)
         fm = _read_frontmatter(task_path) if task_path else {}
-    if str(fm.get("task_mode") or "").strip().lower() == "audit":
+    if task_mode_is_audit(fm.get("task_mode")):
         return audit_report_artifact_path(workspace_root, task_id)
     return _return_artifact_path(workspace_root, task_id)
 
@@ -2118,7 +2137,7 @@ def return_summary_missing_text(path: Path, source: dict[str, Any]) -> str:
 def _check_verdict_artifact(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None = None) -> Path | None:
     """审计体产物就绪判据(唯一): 落点根读项目声明(verdict_root), 文件候选读 transitions artifact_ingest.verdict
     (RETURN.md 优先, 回退 audit_report.md), 取首个「已交」的文件(AIPOS-F89 件③c: verdict_report_submitted = 声明必填键
-    至少一个已填实值; 认领时生成的同名同位空模板全为占位 = 未交); 完成与否另由 verdict_report_ready 判(推导核对已交未完成
+    至少一个已填实值; 认领时生成的同名同位空模板全为占位 = 未交); 完成与否另由 missing_verdict_frontmatter 判(推导核对已交未完成
     判 artifact_invalid)。兼容旧命名 VERDICT-<ID>R.md。返回路径或 None。
     AIPOS-F112: 是否审计卡 = audit_derivation.is_audit_card 唯一判据(认得复审轮 R2/R3…; 原 endswith("R") 认不出)。"""
     from tools.aipos_cli.audit_derivation import is_audit_card
@@ -2602,12 +2621,6 @@ def verdict_report_submitted(frontmatter: dict[str, Any], *, governance: bool = 
     """AIPOS-F89 件③c: 审计报告「已动笔」= 至少一个声明必填键已填实值(认领时的空模板全为占位 = 未交, 继续等待)。
     已交但未填全 → 推导核判 artifact_invalid(loop 硬停点名缺项), 不当完成也不空等。"""
     return any(not _is_placeholder_value(frontmatter.get(k)) for k in required_verdict_frontmatter(governance=governance))
-
-
-def verdict_report_ready(frontmatter: dict[str, Any], *, governance: bool = False) -> bool:
-    """AIPOS-F89 件③c: 审计报告「写完」的唯一判据(推导核 / loop 等待 / artifact ingest / 开工核验同读):
-    声明的必填 frontmatter(verdict / commit_sha; AIPOS-F197 被审卡只写治理根 = verdict / outputs_digest)全部已填且非占位。文件存在 ≠ 完成。"""
-    return not missing_verdict_frontmatter(frontmatter, governance=governance)
 
 
 def required_return_frontmatter(*, governance: bool = False) -> list[str]:
@@ -4474,13 +4487,6 @@ NEXT_CARD_STATES = ("pending",)
 _SCAN_STATE_ORDER = {"legacy_baseline_invalid": -1, "pending": 0, "claimed": 1, "blocked": 2, "completed": 3}
 
 
-def scan_project(workspace_root: Path, *, lane: str | list[str] | None = None, include_frozen: bool = False,
-                 next_states_only: bool = False, viewer: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """项目级扫描的行(= scan_project_view(...)["rows"]; 结案取下一张 / 测试等只要行的调用方用)。"""
-    return scan_project_view(workspace_root, lane=lane, include_frozen=include_frozen, next_states_only=next_states_only,
-                             viewer=viewer)["rows"]
-
-
 def scan_project_view(workspace_root: Path, *, lane: str | list[str] | None = None, include_frozen: bool = False,
                       next_states_only: bool = False, viewer: dict[str, Any] | None = None) -> dict[str, Any]:
     """项目级扫描:返回所有活跃任务的最小待办清单 + 可见卡汇总。
@@ -4490,7 +4496,7 @@ def scan_project_view(workspace_root: Path, *, lane: str | list[str] | None = No
     --lane 只列所选, 未解析 lane 的卡单独成组), 在推导之前过滤(不为不列的卡做推导); include_frozen = 冻结卡照列(推导核给
     legacy_frozen 硬停, 行标 frozen)。返回 visible_cards 结果, rows 换成推导后的行(含首行硬停项)。
     排序: 硬停项(存量冻结清单读不出)首行; 然后「下一张可推进卡」(pending 且可推导 = 依赖满足, 判据 task_complexity.
-    dependencies_satisfied; 优先级最高者, 同级按 task_id); 其余按 pending > claimed > blocked、可推导优先、优先级高者先、task_id。
+    unmet_dependencies 为空; 优先级最高者, 同级按 task_id); 其余按 pending > claimed > blocked、可推导优先、优先级高者先、task_id。
     AIPOS-F142 件①: next_states_only=True(结案取下一张, 只要 pick_next_card)只遍历 NEXT_CARD_STATES —— 下一张只可能出自这些状态,
     所得 next_card 与全扫相同, 不为不可能当选的 claimed/blocked 卡做推导。
     AIPOS-F156 件②: viewer(machine_zone.owner_viewer 结果)给出 = 经 visible_cards 同一归属判定: 非总顾问视角下归属其他实例的卡
@@ -4576,7 +4582,7 @@ def _scan_project_view(workspace_root: Path, *, lane: str | list[str] | None, in
 
 
 def pick_next_card(results: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """scan_project 结果中的「下一张可推进卡」(next_card 标记行; 无 = None)。"""
+    """scan_project_view(...)["rows"] 中的「下一张可推进卡」(next_card 标记行; 无 = None)。"""
     return next((r for r in results if r.get("next_card")), None)
 
 

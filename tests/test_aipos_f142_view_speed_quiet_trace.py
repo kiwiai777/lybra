@@ -233,12 +233,12 @@ def test_item3_scope_memo_only_inside_read_scope(tmp_path, monkeypatch):
 
 def test_item3_next_states_only_same_next_card_as_full_scan(big):
     """结案取下一张只扫 NEXT_CARD_STATES: 与全扫的 pick_next_card 结果相同(各 lane)。"""
-    from tools.aipos_cli.next_resolver import NEXT_CARD_STATES, pick_next_card, scan_project
+    from tools.aipos_cli.next_resolver import NEXT_CARD_STATES, pick_next_card, scan_project_view
 
     assert NEXT_CARD_STATES == ("pending",)
     for lane in [None, *big["lanes"]]:
-        full = pick_next_card(scan_project(big["root"], lane=lane))
-        narrow = pick_next_card(scan_project(big["root"], lane=lane, next_states_only=True))
+        full = pick_next_card(scan_project_view(big["root"], lane=lane)["rows"])
+        narrow = pick_next_card(scan_project_view(big["root"], lane=lane, next_states_only=True)["rows"])
         assert (full or {}).get("task_id") == (narrow or {}).get("task_id"), lane
         assert full is not None and full["current_state"] in NEXT_CARD_STATES
 
@@ -319,8 +319,13 @@ def test_item2_single_switch_semantics_and_gate_keeps_trace():
               now=datetime(2026, 10, 10, tzinfo=timezone.utc), released_count=0)
     with _trace_sink() as loud:
         on = ap.match_claim_envelope(**kw)
-    with ap.envelope_trace_output(False), _trace_sink() as quiet:
-        off = ap.match_claim_envelope(**kw)
+    previous = ap._TRACE_SWITCH["enabled"]  # AIPOS-F216: 原 ap.envelope_trace_output 只剩测试调用已删, 夹具直设唯一开关并恢复
+    ap._TRACE_SWITCH["enabled"] = False
+    try:
+        with _trace_sink() as quiet:
+            off = ap.match_claim_envelope(**kw)
+    finally:
+        ap._TRACE_SWITCH["enabled"] = previous
     assert on == off and on[0] is False and "not covered" in on[1] and on[2] == ap.ENVELOPE_ERROR_AGENT_NOT_COVERED  # 拒因不丢
     assert TRACE in loud.getvalue() and quiet.getvalue() == ""
 
@@ -334,7 +339,7 @@ def test_item2_switch_declared_once_and_flags_mounted_from_declaration():
     decl = _trace_decl()
     sources = {p.name: p.read_text(encoding="utf-8") for p in (REPO_ROOT / "tools" / "aipos_cli").glob("*.py")}
     assert not [n for n, s in sources.items() if "_ENVELOPE_LOGGER.disabled" in s or 'logging.getLogger("lybra.envelope").disabled' in s]
-    assert not [n for n, s in sources.items() if n != "autonomy_policy.py" and "envelope_trace_output(" in s]
+    assert not [n for n, s in sources.items() if "envelope_trace_output(" in s]  # AIPOS-F216: 测试专用开关包装已删(R9 零调用)
     assert "decide_cli_envelope_trace(" in sources["aipos_cli.py"] and "@cli_envelope_trace_entry" in sources["aipos_cli.py"]
     assert '"--verbose"' not in sources["aipos_cli.py"] and '"--verbose"' not in sources["loop_run_record.py"]
     assert sources["autonomy_policy.py"].count("def trace_envelope(") == 1

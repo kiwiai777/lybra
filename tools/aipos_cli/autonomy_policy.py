@@ -13,7 +13,6 @@ and the owner_decision writer can share it without an import cycle.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import re
@@ -21,7 +20,7 @@ import sys
 from datetime import datetime, timezone
 from tools.aipos_cli.clock import utc_now
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable
 
 from tools.aipos_cli.frontmatter import parse_markdown_frontmatter, read_markdown_frontmatter
 from tools.aipos_cli.record_writer import record_root, render_markdown
@@ -111,19 +110,6 @@ def envelope_trace_enabled() -> bool:
         return decided
     decl = envelope_trace_declaration()
     return _debug_env_on(decl) or bool(decl["non_cli_default_enabled"])
-
-
-@contextlib.contextmanager
-def envelope_trace_output(enabled: bool | None) -> Iterator[None]:
-    """区段内设定开关(None = 不改, 沿用当前), 退出恢复原状。只开关输出, 不改 trace_envelope 的调用与信封判定逻辑。
-    AIPOS-F138 件③ 原为 loop status 专用(改 logger.disabled); AIPOS-F142 件② 起改由唯一开关承载, logger 本身不动。"""
-    previous = _TRACE_SWITCH["enabled"]
-    if enabled is not None:
-        _TRACE_SWITCH["enabled"] = bool(enabled)
-    try:
-        yield
-    finally:
-        _TRACE_SWITCH["enabled"] = previous
 
 
 def decide_cli_envelope_trace(verbose: bool) -> None:
@@ -637,7 +623,9 @@ def envelope_subject(repo_root: Path, *, task_id: str, task_mode: str, project: 
     AIPOS-F134 件③: with_lane=True 时第四项 = 判定对象卡的 lane 指称(card_lane_refs; 审计卡 = 被审卡的 lane, 同一主体规则),
     否则 None(只在有信封带 task_selector_lane_repo 时才解析, 无 lane 信封零额外读取 = 行为不变)。
     返回 (task_id, task_mode, project, lane_refs | None)。"""
-    if str(task_mode or "").strip() == "audit" and str(reviewed_task_id or "").strip():
+    from tools.aipos_cli.next_resolver import task_mode_is_audit  # AIPOS-F216 件④: 审计卡识别卡面层单源(低层模块只依赖 next_resolver)
+
+    if task_mode_is_audit(task_mode) and str(reviewed_task_id or "").strip():
         from tools.aipos_cli.task_loader import find_task_card
 
         reviewed_path, _queue = find_task_card(Path(repo_root), str(reviewed_task_id).strip())

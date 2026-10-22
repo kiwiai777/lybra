@@ -61,7 +61,7 @@
         "unchanged": "无改动",
         "preview": "预览(未写; 加 --confirm 写入)"
       },
-      "output_scope": "只涉 project.json(路径 + diff + 校验结果); 禁打印凭据或 connection.json 内容。set-repo 门路径(connection.json 声明 mcp.rpc_url)的预演亦在本机经同一实现算 diff, 不取凭据、不调门动词; --confirm 才经门动词 lybra_project_set_repo_dry_run → _confirm 写入。",
+      "output_scope": "只涉 project.json(路径 + diff + 校验结果); 禁打印凭据或 connection.json 内容。set-repo 预演与 --confirm 均在本机经同一实现(workspace_config.update_project_repo)算 diff / 写入, 不取凭据、不连门(AIPOS-F216: 原门动词路径删除)。",
       "target_line": "目标项目 {project}(来源: {source}) · project.json {project_json}",
       "target_resolution": {
         "description": "AIPOS-F127 件①(chris 第 2 步预演发现: set-paths 不写项目名时落到 home 级活动项目 lybra): project 族写命令(commands 全部 + freeze-legacy + dispatch-mode set)目标项目解析的唯一实现 = workspace_config.resolve_project_write_target。序: 显式项目名 > --workspace-root(dispatch-mode 为 --project-root)/当前目录向上首个已建治理根(project.json + 声明的队列根)声明的 project.json#project > 拒。禁回落 home 级活动项目(LYBRA_ACTIVE_PROJECT / ~/.lybra/config.json active_project / 单项目回落)。显式项目名与所在治理根声明不一致(或 home 根下同名项目不是所在治理根)= 拒并列出两者。预演/写入输出首行 = target_line(四个两阶段命令与 set-meta 同一包装 aipos_cli._project_json_two_phase_emit)。AIPOS-F144 件①: 「所在治理根」的定位(--workspace-root / 环境变量 / 当前目录 / 工位声明)委托读写共用唯一实现 workspace_config.resolve_governance_root, 其来源文案读 governance_root_resolution.sources; 本段 sources 只剩显式项目名两种。",
@@ -339,7 +339,7 @@
       "unresolved_list_limit": 20
     },
     "repo_set": "AIPOS-F139(Owner 10-09 方案 A): --lane 与信封 task_selector_lane_repo 都是仓集合, 写法 = 参数可重复(`--lane a --lane b` / `lybra envelope mint --lane-repo a --lane-repo b`), 不按逗号拆分(仓指称可为绝对路径, 逗号无转义歧义; 与既有 --policy-id / --launch-harness 可重复同一惯例)。集合的序列化与解析唯一实现 = workspace_config.repo_name_set(去空去重保序; 单个字符串 = 单元素集合, 存量单值信封据此读、文件不改写); 过滤仍只在 filter_rows_by_lane(行 lane ∈ 集合; AIPOS-F141: 未解析 lane 不混入, 单独计数), 信封判定仍只在 autonomy_policy.match_claim_envelope。JSON 输出 lane_filter = 规范 lane 键列表; 分组输出不变。同仓合入由 F135 自动排队。",
-    "next_card": "lybra next 项目扫描首位给「下一张可推进卡」= pending 且可推导(依赖满足, 判据唯一实现 task_complexity.dependencies_satisfied)的卡中优先级最高者(enums.schema priority 值序, 后者高; 同级按 task_id); 无则写明原因。结案后取下一张的唯一出口",
+    "next_card": "lybra next 项目扫描首位给「下一张可推进卡」= pending 且可推导(依赖满足, 判据唯一实现 task_complexity.unmet_dependencies 返回空)的卡中优先级最高者(enums.schema priority 值序, 后者高; 同级按 task_id); 无则写明原因。结案后取下一张的唯一出口",
     "owner_view": {
       "description": "AIPOS-F156 件②③(gap #140/#141): 卡归属与归属视角唯一声明。卡归属 = 门侧发布记录(records publishes)的签发实例 actor(唯一判定 machine_zone.card_owner, 不另立卡面字段口径): 取该卡最近一份 actor 不在 unattributed_actors 内的发布记录 = owner_source publish_record; 审计卡归属 = 被审卡归属; 存量卡(发布记录无归因)回退读卡面 self_report_keys 按序首个合实例名模板者(custom_roles.instance_name_canonical_refusal 判)= owner_source self_reported, 输出标 self_report_marker; 都无 = 归属不明(不分组、不隐藏)。归属视角(唯一判定 machine_zone.owner_viewer): 给 --actor = 该实例; 否则给 --lane 且有效信封(有效性唯一判据 autonomy_policy.select_envelope)中 lane 集合覆盖所给 lane、agent_or_role 为实例名者恰一个实例 = 该实例(多个 / 无 = 不按归属分, 行为不变); loop 结案取下一张 = 运行记录驱动方 + 本次运行信封。总顾问 = 视角实例的有效信封中有不限 lane 者(loop = 本次运行信封不限 lane): 看全量(只标归属不分组)。非总顾问: 四视图(next 项目扫描 / brief / needs-owner / loop status 结案取下一张)只推荐 / 计入归属本实例或归属不明的卡, 归属其他实例的卡单列 other_summary(不取、不推导)——四视图经唯一可见卡入口 machine_zone.visible_cards 同一判定。loop 启动: 驱动方非总顾问且卡归属来自发布记录且 ≠ 驱动方 = 拒(结束原因 card_owner_mismatch → owner_needed, 例行清单之外); 自报归属不作拒据(卡面字段是起草输入自报), 只作视图分组。",
       "cli_flag": "--actor",
@@ -1730,27 +1730,14 @@
         "additionalProperties": false
       }
     },
-    "lybra_project_new_dry_run": {
-      "description": "AIPOS-F24: scaffold a fresh project under the governance home (preview). Creates queue structure, project.json, decision_log stub, and connection.json skeleton with mcp.rpc_url from gate config. Owner-gated via owner_authorization_ref. CLI薄壳模式: lybra project new 是本动词的薄壳,唯一实现在门内(调用 workspace_config.scaffold_project)。",
-      "phase": "dry_run",
-      "base_verb": "lybra_project_new",
-      "confirm_verb": "lybra_project_new_confirm",
-      "confirm_via": "dry_run_token",
+    "lybra_project_new": {
+      "description": "AIPOS-F24 → AIPOS-F216 件②: `lybra project new <名> [--code-repo] [--home-root] [--actor]` 在 home 根下建项目治理根(队列骨架、project.json、decision_log 桩、首份阶段快照; AIPOS-226 裁定 2=a 本地 Owner 脚手架, 不铸凭据、不过门, 门按 home 根扫描发现新项目)。原 AIPOS-F24 门动词 lybra_project_new_dry_run / _confirm(声明 surface 含 mcp)自 F24 起从未登记进门 TOOL_HANDLERS(CLI 门路径恒失败), F216 定去留 = 删 mcp 面与门侧实现: 建项目是 home 根上的 Owner 本机动作, 门 token 按项目绑定, 不承接跨项目新建。",
+      "phase": "owner",
       "surface": [
-        "cli",
-        "mcp"
+        "cli"
       ],
       "cli_command": "lybra project new",
-      "stage_contract": {
-        "two_stage": true,
-        "dry_run_emits_token": true,
-        "self_confirm_allowed": [
-          "planner_with_owner_confirmed_literal"
-        ],
-        "self_confirm_mechanism": "AIPOS-F24: planner/advisor self-confirm with OWNER_CONFIRMED literal",
-        "owner_confirmation_required_in_response": false,
-        "client_hint_template": "项目顾问自行confirm。使用 lybra_project_new_confirm 带上 dry_run_token 与 owner_confirmation_token='OWNER_CONFIRMED'。"
-      },
+      "single_implementation": "tools/aipos_cli/workspace_config.scaffold_project",
       "parameters": {
         "type": "object",
         "properties": {
@@ -1764,93 +1751,27 @@
           },
           "home_root": {
             "type": "string",
-            "description": "Governance home root; defaults to gate's serving home"
-          },
-          "collaboration_profile": {
-            "type": "object",
-            "description": "Optional collaboration profile settings"
-          },
-          "owner_authorization_ref": {
-            "type": "string",
-            "description": "Owner authorization reference (owner-gated)"
+            "description": "Governance home root; defaults to resolver (env/config/default)"
           },
           "actor": {
             "type": "string",
             "description": "Provenance actor (registered_by)"
-          },
-          "agent_instance": {
-            "type": "string"
           }
         },
         "required": [
-          "name",
-          "owner_authorization_ref"
+          "name"
         ],
         "additionalProperties": false
       }
     },
-    "lybra_project_new_confirm": {
-      "description": "AIPOS-F24: confirm project scaffold creation",
-      "phase": "confirm",
-      "base_verb": "lybra_project_new",
-      "dry_run_verb": "lybra_project_new_dry_run",
-      "confirm_via": "dry_run_token",
+    "lybra_project_set_repo": {
+      "description": "AIPOS-F24 → AIPOS-F125 / AIPOS-F216 件②: `lybra project set-repo <名> --code-repo <绝对路径> [--home-root] [--actor] [--dry-run|--confirm]` 改已建项目的 code_repo 映射; 缺省预演(本机经唯一实现算 project.json diff + 校验, 零写入), --confirm 才写并经 project_json_writers 落账(两阶段同一包装 aipos_cli._project_json_two_phase_emit)。原 AIPOS-F24 门动词 lybra_project_set_repo_dry_run / _confirm(声明 surface 含 mcp)自 F24 起从未登记进门 TOOL_HANDLERS(CLI 门路径恒失败), F216 定去留 = 删 mcp 面与门侧实现: 改项目产品仓是 Owner 本机动作, 门 token 按项目绑定, 不承接改他项目的产品仓。",
+      "phase": "two_phase",
       "surface": [
-        "mcp"
-      ],
-      "stage_contract": {
-        "two_stage": true,
-        "dry_run_emits_token": false,
-        "self_confirm_allowed": [
-          "planner_with_owner_confirmed_literal"
-        ],
-        "owner_confirmation_required_in_response": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "dry_run_token": {
-            "type": "string",
-            "description": "Token from lybra_project_new_dry_run"
-          },
-          "owner_confirmation_token": {
-            "type": "string",
-            "description": "OWNER_CONFIRMED literal"
-          },
-          "actor": {
-            "type": "string"
-          },
-          "agent_instance": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "dry_run_token",
-          "owner_confirmation_token"
-        ],
-        "additionalProperties": false
-      }
-    },
-    "lybra_project_set_repo_dry_run": {
-      "description": "AIPOS-F24: set/update a project's code_repo mapping (preview). Owner-gated. CLI薄壳: lybra project set-repo 是本动词的薄壳。",
-      "phase": "dry_run",
-      "base_verb": "lybra_project_set_repo",
-      "confirm_verb": "lybra_project_set_repo_confirm",
-      "confirm_via": "dry_run_token",
-      "surface": [
-        "cli",
-        "mcp"
+        "cli"
       ],
       "cli_command": "lybra project set-repo",
-      "stage_contract": {
-        "two_stage": true,
-        "dry_run_emits_token": true,
-        "self_confirm_allowed": [
-          "planner_with_owner_confirmed_literal"
-        ],
-        "owner_confirmation_required_in_response": false,
-        "client_hint_template": "项目顾问自行confirm。"
-      },
+      "single_implementation": "tools/aipos_cli/workspace_config.update_project_repo",
       "parameters": {
         "type": "object",
         "properties": {
@@ -1866,60 +1787,14 @@
             "type": "string",
             "description": "Governance home root"
           },
-          "owner_authorization_ref": {
-            "type": "string"
-          },
           "actor": {
-            "type": "string"
-          },
-          "agent_instance": {
-            "type": "string"
+            "type": "string",
+            "description": "Provenance actor (registered_by)"
           }
         },
         "required": [
           "name",
-          "code_repo",
-          "owner_authorization_ref"
-        ],
-        "additionalProperties": false
-      }
-    },
-    "lybra_project_set_repo_confirm": {
-      "description": "AIPOS-F24: confirm code_repo update",
-      "phase": "confirm",
-      "base_verb": "lybra_project_set_repo",
-      "dry_run_verb": "lybra_project_set_repo_dry_run",
-      "confirm_via": "dry_run_token",
-      "surface": [
-        "mcp"
-      ],
-      "stage_contract": {
-        "two_stage": true,
-        "dry_run_emits_token": false,
-        "self_confirm_allowed": [
-          "planner_with_owner_confirmed_literal"
-        ],
-        "owner_confirmation_required_in_response": false
-      },
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "dry_run_token": {
-            "type": "string"
-          },
-          "owner_confirmation_token": {
-            "type": "string"
-          },
-          "actor": {
-            "type": "string"
-          },
-          "agent_instance": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "dry_run_token",
-          "owner_confirmation_token"
+          "code_repo"
         ],
         "additionalProperties": false
       }
@@ -2719,7 +2594,7 @@
           "prompt_note": "续接指令唯一声明; 占位 {artifact} = 本次等待的产物落点(等待产物候选首项, 治理根下绝对路径)"
         },
         "report_fix": {
-          "description": "AIPOS-F180B 件②(10-17 AIPOS-F180R 实撞: 审计 PASS 类报告 commit_sha 被抄成 37 位(少中间 3 位), 裁决入门正确拒 INGEST_TIP_MISMATCH, loop 以 gate_rejected 升 Owner; 顾问不能代改审计报告, 只能整轮重审): 裁决入门(verdict 步)被拒且产物入口形式诊断 correctable(transitions artifact_ingest.tip_mismatch_diagnosis; loop 经同一校验 artifact_ingest.validate_task_artifact 取 tip_diagnosis, 不另判)= 以该审计卡最近一次拉起的固定会话(运行记录 launches[].session_id: 本运行优先, 其次本卡更早的运行)同会话续接一次: 拉起判定复用 loop_driver.plan_launch(resume_session = 该会话 id, 只跳过开工提示与「本运行已拉起」两项, 其余授权 / 工位 / 身份 / 模型 / 会话声明照常核), 指令 = prompt, 拉起与等待复用唯一拉起口 _launch_once(F171B 同会话续接); 等到报告内容改写后重推导、重新入门。每张审计卡每次运行至多 max_per_run 次。每次判定进运行记录 report_fixes {card, role, outcome, kinds, session_id, detail, at}(role = auditor / executor, 执行体交回报告头见 executor; outcome ∈ resumed / not_correctable / not_resumable / exhausted / not_rewritten)+ 日志一行 `[轮] report_fix: …`。诊断不可更正(other_commit = 真审错了产物)= 不续接, 按原规则 gate_rejected(拒因附重审出口)。会话不可续接(无该审计卡会话记录 / 拉起判定拒 / 工位已变)、本运行续接已用尽、续接后报告未改写或等待超时 = 以 end_reason 结束(exit_codes.gate_rejected; loop status by_end_reason = advisor_fix, 修法 next_action.routine_rejections.end_reasons.<end_reason>), 不升 Owner。唯一实现 loop_driver._audit_report_fix。",
+          "description": "AIPOS-F180B 件②(10-17 AIPOS-F180R 实撞: 审计 PASS 类报告 commit_sha 被抄成 37 位(少中间 3 位), 裁决入门正确拒 INGEST_TIP_MISMATCH, loop 以 gate_rejected 升 Owner; 顾问不能代改审计报告, 只能整轮重审): 裁决入门(verdict 步)被拒且产物入口形式诊断 correctable(transitions artifact_ingest.tip_mismatch_diagnosis; loop 经同一校验 artifact_ingest.validate_task_artifact 取 tip_diagnosis, 不另判)= 以该审计卡最近一次拉起的固定会话(运行记录 launches[].session_id: 本运行优先, 其次本卡更早的运行)同会话续接一次: 拉起判定复用 loop_driver.plan_launch(resume_session = 该会话 id, 只跳过开工提示与「本运行已拉起」两项, 其余授权 / 工位 / 身份 / 模型 / 会话声明照常核), 指令 = prompt, 拉起与等待复用唯一拉起口 _launch_once(F171B 同会话续接); 等到报告内容改写后重推导、重新入门。每张审计卡每次运行至多 max_per_run 次。每次判定进运行记录 report_fixes {card, role, outcome, kinds, session_id, detail, at}(role = auditor / executor, 执行体交回报告头见 executor; outcome ∈ resumed / not_correctable / not_resumable / exhausted / not_rewritten)+ 日志一行 `[轮] report_fix: …`。诊断不可更正(other_commit = 真审错了产物)= 不续接, 按原规则 gate_rejected(拒因附重审出口)。会话不可续接(无该审计卡会话记录 / 拉起判定拒 / 工位已变)、本运行续接已用尽、续接后报告未改写或等待超时 = 以 end_reason 结束(exit_codes.gate_rejected; loop status by_end_reason = advisor_fix, 修法 next_action.routine_rejections.end_reasons.<end_reason>), 不升 Owner。唯一实现 loop_driver._report_fix(执行 / 审计共用, AIPOS-F204 改名)。",
           "max_per_run": 1,
           "end_reason": "audit_report_form_error",
           "prompt": "你的审计报告 {artifact} 的 frontmatter commit_sha 与被审分支 {branch} 的 tip 不符: 报告写的是 {commit_sha}, 分支 tip 是 {tip}(形式诊断: {diagnosis})。只把报告头 commit_sha 更正为 `git rev-parse {branch}` 的输出原样粘贴(禁手抄), 不改裁决与正文结论; 若你审的确实不是这个提交, 把裁决改写为 BLOCK 并说明原因。改完即停。",
@@ -2970,7 +2845,7 @@
         "cli"
       ],
       "cli_command": "lybra regression run",
-      "single_implementation": "tools/aipos_cli/post_merge_regression.regression_state(状态判定唯一实现; loop status / brief / next 同读)/ rerun(补跑; 执行 execute_check, 记录 write_event_record, 后台 _spawn_async)",
+      "single_implementation": "tools/aipos_cli/post_merge_regression.regression_states(状态判定唯一实现; loop status / brief / next 同读)/ rerun(补跑; 执行 execute_check, 记录 write_event_record, 后台 _spawn_async)",
       "states": {
         "running": "进行中: 事件记录 status=running 且其进程在(本机 pid + 进程启动时刻指纹, loop_run_record.process_alive)",
         "incomplete": "合并后回归未完成: 有回归进行中/已拉起的记录(事件记录 status=running 或 finalization 记录 status=async_started)而无结论, 且进程已不在(机器重启 / 被杀)——loop status / brief / next 报此状态并给补跑命令",
@@ -3375,7 +3250,7 @@
         "consecutive_failures_owner_needed": 2,
         "take_next_hint": "lybra loop --task-id {next_task_id} --workspace-root {governance_root}",
         "take_next_none_hint": "lybra next --workspace-root {governance_root}{lane_arg}",
-        "take_next_note": "AIPOS-F136 × F133: card_done_take_next 接 F133「下一张」唯一出口(next_resolver.scan_project + pick_next_card, 判据 lane_view.next_card), 范围 = 本卡 lane(lane 不可解析 = 全项目); 有下一张 = take_next_hint(直接推进它), 无 = take_next_none_hint(按 lane 扫描看为何无可推进卡)",
+        "take_next_note": "AIPOS-F136 × F133: card_done_take_next 接 F133「下一张」唯一出口(next_resolver.scan_project_view + pick_next_card, 判据 lane_view.next_card), 范围 = 本卡 lane(lane 不可解析 = 全项目); 有下一张 = take_next_hint(直接推进它), 无 = take_next_none_hint(按 lane 扫描看为何无可推进卡)",
         "wait_hint": "lybra loop status --task-id {task_id} --workspace-root {governance_root} --wait <秒>",
         "investigate_hint": "lybra next --task-id {task_id} --workspace-root {governance_root}"
       },

@@ -22,6 +22,7 @@ from tools.aipos_cli.naming_profile import default_instance_name  # AIPOS-R4B-1:
 from tools.schema_constants import RecordType
 from tools.schema_loader import get_required_card_fields  # AIPOS-F17 大项A: schema 单源必填集
 from tools.aipos_cli.record_writer import card_field_defaults, record_dir  # AIPOS-F108 件①: 卡字段缺省值读 card.schema 声明; AIPOS-F109 件①: 记录落点读声明
+from tools.aipos_cli.next_resolver import task_mode_is_audit  # AIPOS-F216 件④: 审计卡识别卡面层单源
 
 
 
@@ -461,7 +462,7 @@ def should_derive_audit(source_metadata: dict[str, Any], *, branch_id: str | Non
         return False
     
     # AIPOS-256 F-253-3: Prevent infinite audit chain (audit tasks do not derive audits)
-    if str(source_metadata.get("task_mode", "")).strip().lower() == "audit":
+    if task_mode_is_audit(source_metadata.get("task_mode")):  # AIPOS-F216 件④: 审计卡识别卡面层单源
         return False
     
     # AIPOS-F72: 链有效性判据(与 manual dispatch 同源)
@@ -542,11 +543,11 @@ def reviewed_task_id_of(audit_task_id: str) -> str | None:
 
 def is_audit_card(task_id: str, card_frontmatter: dict[str, Any] | None = None) -> bool:
     """AIPOS-F112: 审计卡判据唯一实现(推导核 / 产物入口 / loop 回读 / 开工核验同读)。
-    卡面在: task_mode=audit 或首轮号形(<ID>R, 存量手发审计卡); 卡面不在: 审计轮号形(R/R2/R3…, 声明序列)。
+    卡面在: 审计模式(next_resolver.task_mode_is_audit, AIPOS-F216)或首轮号形(<ID>R, 存量手发审计卡); 卡面不在: 审计轮号形(R/R2/R3…, 声明序列)。
     原各处 `task_id.upper().endswith("R")` 认不出复审轮 R2(gap #69 的一环)。"""
     tid = str(task_id or "").strip()
     if isinstance(card_frontmatter, dict) and card_frontmatter:
-        if str(card_frontmatter.get("task_mode") or "").strip().lower() == "audit":
+        if task_mode_is_audit(card_frontmatter.get("task_mode")):
             return True
         first = audit_round_suffixes()[0]
         return bool(first) and tid.upper().endswith(first.upper())
@@ -888,7 +889,7 @@ def _reaudit_round(repo_root: Path, source_task_id: str, source_metadata: dict[s
     其所审交回绑定的 tip ≠ 卡分支 tip——门已落的新交回不是该轮所审的那份)。"""
     if str(source_metadata.get("audit", "")).strip().lower() == "none":
         return None
-    if str(source_metadata.get("task_mode", "")).strip().lower() == "audit" or branch_id == "noncode_bench_audit":
+    if task_mode_is_audit(source_metadata.get("task_mode")) or branch_id == "noncode_bench_audit":  # AIPOS-F216 件④
         return None
     from tools.aipos_cli.next_resolver import return_staleness, verdict_staleness
     from tools.aipos_cli.task_loader import task_card_lookup_scope
@@ -1490,7 +1491,7 @@ def supplementary_audit_overview(repo_root: Path, unreadable: list[str] | None =
                 if str(exc) not in unreadable:
                     unreadable.append(str(exc))
                 continue
-            if str(fm.get("task_mode") or "").strip().lower() == "audit" and str(fm.get("supplementary_of") or "").strip():
+            if task_mode_is_audit(fm.get("task_mode")) and str(fm.get("supplementary_of") or "").strip():  # AIPOS-F216 件④
                 sources.add(str(fm["supplementary_of"]).strip())
         for source in sorted(sources):
             try:

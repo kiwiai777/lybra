@@ -556,7 +556,7 @@ def import_project_structure(
 ) -> dict[str, Any]:
     """从结构文件导入既有项目 = `lybra project new` 同一实现建项目 + 迁移清单(AIPOS-F117 件①, Owner 10-04 裁定 gap #53)。
 
-    建项目只有一个实现: workspace_config.scaffold_project(`lybra project new` 本地脚手架与门动词 lybra_project_new 同调)。
+    建项目只有一个实现: workspace_config.scaffold_project(`lybra project new` 本地脚手架; AIPOS-F216 删从未登记的门动词 lybra_project_new)。
     本函数只做导入特有的两件事: ① 读结构文件(schema 校验 + 零凭据红线)取项目名与代码仓; ② 建成后在项目根写迁移清单
     (结构文件 doc_manifest 中待人工迁移的文档, 只列不搬, 源文件永不删除)。原自写 project.json / .lybra/config.json /
     队列骨架 / 治理桩 / README 的第二实现已删。

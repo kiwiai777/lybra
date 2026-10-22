@@ -250,8 +250,8 @@ def test_item4_retired_aipos276_tests_and_known_failure_lines():
     runall = (REPO_ROOT / "tests" / "run-all.sh").read_text(encoding="utf-8")
     assert "task_cards/AIPOS-276/" not in runall
     assert not (REPO_ROOT / "task_cards" / "AIPOS-276" / "test_fix1.py").exists()
-    t276 = (REPO_ROOT / "task_cards" / "AIPOS-276" / "test_aipos276.py").read_text(encoding="utf-8")
-    assert "def test_s2_stale_map_publish_warn" not in t276 and "test_s2_stale_map_publish_warn()" not in t276
+    # AIPOS-F216 件①(F208 P3-3): AIPOS-276 旧测试整文件随 project_map.py 删除(原只断言其中退役用例已删)
+    assert not (REPO_ROOT / "task_cards" / "AIPOS-276" / "test_aipos276.py").exists()
     directives = runall_directives(runall)
     _show(f"[件④·run-all 声明解析] discover={directives['discover']} exclude={len(directives['exclude'])} "
           f"known_failures={len(directives['known_failures'])}")

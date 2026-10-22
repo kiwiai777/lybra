@@ -102,16 +102,21 @@ def sync_fixture_workstations(mp: pytest.MonkeyPatch, gov: Path, *workstations: 
     from tools.aipos_cli import confirm_client
     from tools.aipos_cli import distribution_sync as ds
 
-    from tools.aipos_cli.autonomy_policy import envelope_trace_output
+    from tools.aipos_cli import autonomy_policy
 
     RepoGate.roles = {ws_token(role): (role, None) for role in ("executor", "auditor")}
     mp.setattr(confirm_client, "GateClient", RepoGate)
     for ws in workstations:
         # 预备步的 stderr(注册表告警 / 信封轨迹)不进用例输出: 子进程用例(F95 ③ / F107)只读 stdout 到首行进度, stderr 管道写满会互等
         noise = io.StringIO()
-        with contextlib.redirect_stderr(noise), envelope_trace_output(False):
-            res = ds.sync(harness_root=ws, governance_root=gov)
-            fresh = ds.charter_freshness(ws, gov)
+        previous = autonomy_policy._TRACE_SWITCH["enabled"]  # AIPOS-F216: 原 envelope_trace_output 只剩测试调用已删, 直设唯一开关并恢复
+        autonomy_policy._TRACE_SWITCH["enabled"] = False
+        try:
+            with contextlib.redirect_stderr(noise):
+                res = ds.sync(harness_root=ws, governance_root=gov)
+                fresh = ds.charter_freshness(ws, gov)
+        finally:
+            autonomy_policy._TRACE_SWITCH["enabled"] = previous
         assert res["status"] == "synced" and fresh["fresh"], (res, fresh, noise.getvalue()[-2000:])
 
 

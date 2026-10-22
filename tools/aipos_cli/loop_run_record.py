@@ -1631,7 +1631,7 @@ def _routine_fill(view: dict[str, Any], routine: dict[str, Any], governance_root
 
 
 def _take_next(view: dict[str, Any], rules: dict[str, Any], governance_root: Path, message: str) -> dict[str, Any]:
-    """AIPOS-F136 × F133: 结案后取下一张 —— 接 F133「下一张」唯一出口(next_resolver.scan_project + pick_next_card, 判据
+    """AIPOS-F136 × F133: 结案后取下一张 —— 接 F133「下一张」唯一出口(next_resolver.scan_project_view + pick_next_card, 判据
     verbs.schema lane_view.next_card), 范围 = 本卡 lane(machine_zone.lane_of_card 已解析时; 解析不了 = 全项目, 照 F133
     「不可证明不属本 lane 不隐藏」)。有下一张 = hint 为其 loop 命令(take_next_hint); 无 = hint 为 lane 扫描(take_next_none_hint)。
     AIPOS-F156 件②(gap #140): 归属视角 = 本次运行驱动方 + 本次运行信封(machine_zone.owner_viewer 唯一判定; 信封不限 lane = 总顾问
@@ -1643,7 +1643,7 @@ def _take_next(view: dict[str, Any], rules: dict[str, Any], governance_root: Pat
     fill = {"task_id": str(view.get("task_id") or ""), "governance_root": str(governance_root),
             "lane_arg": f" --lane {lane}" if lane else ""}
     viewer = _run_owner_viewer(Path(governance_root), view)
-    # AIPOS-F142 件①: 只要「下一张」= 只扫可当选状态(next_states_only, 同一 scan_project 出口), 不为 claimed/blocked 卡做推导
+    # AIPOS-F142 件①: 只要「下一张」= 只扫可当选状态(next_states_only, 同一 scan_project_view 出口), 不为 claimed/blocked 卡做推导
     scan = scan_project_view(Path(governance_root), lane=lane, next_states_only=True, viewer=viewer)
     nxt = pick_next_card(scan["rows"])
     done = message or "已结案并落账"

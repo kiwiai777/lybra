@@ -5,7 +5,7 @@
      verbs.schema two_phase_protocol.project_json_writers 一处; 预演/diff 本体 = workspace_config.update_project_json(dry_run,
      写前以读取口预检将写入的内容), CLI 旗标注册与输出渲染 = aipos_cli._project_json_two_phase_* 唯一包装。
 件② 调用方(向导 Step 2、既有夹具)补 --confirm; set-repo 改经唯一写路径(原整文件重写会丢 repos / paths / workstations 段)。
-件③ 预演输出只涉 project.json, 不印凭据 / connection.json 内容; set-repo 门路径的预演不取凭据、不调门动词。
+件③ 预演输出只涉 project.json, 不印凭据 / connection.json 内容; set-repo 预演与写入都不取凭据、不连门(AIPOS-F216)。
 """
 from __future__ import annotations
 
@@ -200,9 +200,8 @@ def test_item1_single_declaration_and_shared_implementation():
         calls = {c.func.id for c in ast.walk(fn) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
         assert "update_project_json" in calls and "write_text" not in ast.unparse(fn), name
         assert "dry_run" in [a.arg for a in fn.args.kwonlyargs], name
-    legacy = next(n for n in wc_tree.body if isinstance(n, ast.FunctionDef) and n.name == "set_project_repo")
-    assert {c.func.id for c in ast.walk(legacy) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)} == {"update_project_repo"}, \
-        "set_project_repo(门动词调用口)只是唯一实现的薄包装"
+    # AIPOS-F216 件②: 原门动词调用口 set_project_repo(薄包装)随从未登记的门动词 lybra_project_set_repo_* 删除
+    assert not [n for n in wc_tree.body if isinstance(n, ast.FunctionDef) and n.name == "set_project_repo"]
 
 
 # ===========================================================================
@@ -236,12 +235,12 @@ def test_item2_invalid_values_rejected_at_preview_with_zero_write(proj):
 
 def test_item2_set_repo_keeps_other_project_json_keys(proj):
     """原 set_project_repo 经 write_project_json 整文件重写, 会丢 paths / workstations 等段; 现经唯一写路径只改 code_repo 系键。"""
-    from tools.aipos_cli.workspace_config import set_project_paths, set_project_repo, set_project_workstation
+    from tools.aipos_cli.workspace_config import set_project_paths, set_project_workstation, update_project_repo
 
     set_project_paths(proj["root"], [("finalize_mode", "external")], dry_run=False)
     set_project_workstation(proj["root"], "exec.probe.mac", gate_ssh_alias="gate-dev", material_access="经 ssh 读写", dry_run=False)
     original_registered_at = json.loads(proj["pj"].read_text(encoding="utf-8"))["registered_at"]
-    root = set_project_repo(proj["home"], "probe", str(proj["tmp"] / "repo-x"), registered_by="gate.actor")  # 门动词调用口(写)
+    root = update_project_repo(proj["home"], "probe", str(proj["tmp"] / "repo-x"), registered_by="gate.actor")["project_root"]  # 唯一实现(写)
     data = json.loads(proj["pj"].read_text(encoding="utf-8"))
     _show(f"[件②·set-repo 写后 project.json] {json.dumps(data, ensure_ascii=False, sort_keys=True)}")
     assert root == proj["root"] and data["code_repo"] == str(proj["tmp"] / "repo-x") and data["registered_by"] == "gate.actor"
@@ -274,7 +273,7 @@ def test_item2_onboarding_step2_previews_then_confirms(tmp_path, monkeypatch):
 
 
 # ===========================================================================
-# 件③ 预演不印凭据 / connection.json; set-repo 门路径预演不取凭据、不调门动词; --confirm 才经门动词
+# 件③ 预演不印凭据 / connection.json; set-repo 预演与 --confirm 都不取凭据、不连门(AIPOS-F216 删从未登记的门动词路径)
 # ===========================================================================
 
 def _connection_json(userhome: Path) -> Path:
@@ -286,27 +285,23 @@ def _connection_json(userhome: Path) -> Path:
 
 
 def test_item3_preview_never_prints_credentials_and_gate_path_preview_calls_no_gate(proj, monkeypatch):
+    """AIPOS-F216 件②: set-repo 原「connection.json 在场 --confirm 经门动词」路径删除(该门动词自 F24 起从未登记进门): connection.json
+    在场时预演与 --confirm 都在本机经唯一实现 update_project_repo, 不取凭据、不连门、不印凭据。"""
     from tools.aipos_cli import confirm_client
-    from tools.aipos_cli.workspace_config import set_project_repo
 
     _connection_json(proj["userhome"])
     gate_calls: list[str] = []
     token_reads: list[str] = []
 
     class _FakeGate:
-        """门进程替身: dry_run 只回 token, confirm 经与门同一的 set_project_repo 写入。"""
+        """门进程替身: 任何调用 = 记账(本用例断言零调用)。"""
 
         def __init__(self, base_url, token, timeout=None):
-            self.token = token
+            gate_calls.append("connect")
 
         def call_tool(self, name, arguments, *, timeout=None):
             gate_calls.append(name)
-            if name.endswith("_dry_run"):
-                self.pending = arguments
-                return {"ok": True, "dry_run_token": "setrepodr_fake"}
-            a = self.pending
-            root = set_project_repo(a["home_root"], a["name"], a["code_repo"], registered_by=a["actor"])
-            return {"ok": True, "project_root": str(root)}
+            return {"ok": False}
 
     def _load_token(conn):
         token_reads.append(str(conn))
@@ -315,16 +310,15 @@ def test_item3_preview_never_prints_credentials_and_gate_path_preview_calls_no_g
     monkeypatch.setattr(confirm_client, "GateClient", _FakeGate)
     monkeypatch.setattr(confirm_client, "load_gate_client_token", _load_token)
     pj = proj["pj"]
-    base = ("project", "set-repo", "probe", "--home-root", str(proj["home"]), "--code-repo", str(proj["tmp"] / "repo-gate"),
-            "--owner-authorization-ref", "owner-ok-1")
+    base = ("project", "set-repo", "probe", "--home-root", str(proj["home"]), "--code-repo", str(proj["tmp"] / "repo-gate"))
     before = _md5(pj)
     rc, out, err = _cli(*base)
-    _show(f"[件③·set-repo 门路径预演] rc={rc} md5 前={before} 后={_md5(pj)} 门调用={gate_calls} 取凭据={len(token_reads)}\n{out}{err}")
+    _show(f"[件③·set-repo 预演(connection.json 在场)] rc={rc} md5 前={before} 后={_md5(pj)} 门调用={gate_calls} 取凭据={len(token_reads)}\n{out}{err}")
     assert rc == 0 and PREVIEW in out and _md5(pj) == before and gate_calls == [] and token_reads == []
     assert SECRET not in out + err and "connection.json" not in out + err
     rc, out, err = _cli(*base, "--confirm")
-    _show(f"[件③·set-repo 门路径 --confirm] rc={rc} 门调用={gate_calls}\n{out}{err}")
-    assert rc == 0 and "已写入 (via gate verb)" in out and gate_calls == ["lybra_project_set_repo_dry_run", "lybra_project_set_repo_confirm"]
+    _show(f"[件③·set-repo --confirm(connection.json 在场)] rc={rc} 门调用={gate_calls} 取凭据={len(token_reads)}\n{out}{err}")
+    assert rc == 0 and "已写入" in out and "via gate verb" not in out and gate_calls == [] and token_reads == []
     assert SECRET not in out + err and json.loads(pj.read_text(encoding="utf-8"))["code_repo"] == str(proj["tmp"] / "repo-gate")
     # 其余三命令(connection.json 在场)预演: 输出只涉 project.json
     for command in ("set-paths", "set-repos", "set-workstation"):

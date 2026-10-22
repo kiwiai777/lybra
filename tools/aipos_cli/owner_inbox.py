@@ -1697,11 +1697,6 @@ def find_items(item_ids: list[str], *, home_root: str | Path | None = None) -> t
     return [by_id[i] for i in item_ids], inbox
 
 
-def find_item(inbox_item_id: str, *, home_root: str | Path | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
-    items, inbox = find_items([inbox_item_id], home_root=home_root)
-    return items[0], inbox
-
-
 def split_item_ids(item: str | None, items: str | list[str] | None) -> list[str]:
     """--item 与 --items 二选一 → 去重保序的事项 ID 列表; 不合 = InboxUsageError。"""
     raw = items if isinstance(items, list) else [p for p in str(items or "").split(",")]

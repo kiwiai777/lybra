@@ -452,13 +452,6 @@ def _read_task_markdown(path: Path) -> tuple[dict[str, Any], str, list[str]]:
     return _normalize_value(metadata), body, warnings
 
 
-def _append_unique_list(existing: Any, item: str) -> list[str]:
-    values = [str(value) for value in existing] if isinstance(existing, list) else ([] if existing in (None, "") else [str(existing)])
-    if item not in values:
-        values.append(item)
-    return values
-
-
 def _select_task(repo_root: Path, *, task_id: str | None = None, task_path: str | None = None) -> dict[str, Any]:
     if bool(task_id) == bool(task_path):
         raise ValueError("Exactly one of --task-id or --path must be provided")
