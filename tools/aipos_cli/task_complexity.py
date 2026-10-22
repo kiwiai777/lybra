@@ -292,11 +292,6 @@ def _dependency_refusal(template: str, metadata: dict[str, Any], depends_on: lis
                                 **values)
 
 
-def dependencies_satisfied(metadata: dict[str, Any], governance_root: "Path | None") -> bool:
-    """AIPOS-F133 件③: 全部依赖满足才真(唯一判据 unmet_dependencies; 无 depends_on = 真)。"""
-    return not unmet_dependencies(metadata, governance_root)
-
-
 def _class_label(task_class: str) -> str:
     return f"{task_class.capitalize()}-class"
 
@@ -434,7 +429,7 @@ def validate_task_complexity(
             if not _text(orchestration.get("continuity_planner_agent_instance")):
                 blocking_reasons.append(f"{label} active orchestration missing continuity_planner_agent_instance")
 
-    # AIPOS-F133 件③: 依赖判据单源 = unmet_dependencies / dependencies_satisfied(全部依赖满足才放行, 只读门生记录)。
+    # AIPOS-F133 件③: 依赖判据单源 = unmet_dependencies(返回空 = 全部依赖满足才放行, 只读门生记录; AIPOS-F216 删零调用包装 dependencies_satisfied)。
     # dependency_gate=true 的 task_class(发布 draft_writer / validator 用)另要求显式声明 dependency_condition(值域读 card.schema
     # dependency_gate.conditions); 原「frontmatter 自报字段判 + audit_pass 任一依赖 PASS 即放行 + 无记录退回自报」退役。
     depends_on = _as_list(metadata.get("depends_on"))

@@ -192,7 +192,7 @@ def test_item1_declarations_single_source():
     enums = json.loads((REPO_ROOT / "schema" / "enums.schema.json").read_text(encoding="utf-8"))["enums"]["task_mode"]
     entry = next(v for v in enums["values"] if v["value"] == "validation")
     _show(f"[件①·声明] validation = {json.dumps(entry, ensure_ascii=False)}")
-    _show(f"[件①·声明] routing_rules.validation = {enums['routing_rules']['validation']}")
+    assert "routing_rules" not in enums  # AIPOS-F216 件②(F208 P3-4): 无人读的 routing_rules 删除, 模式后果只读 values[] 布尔声明
     assert entry["writes_product_repo"] is False and entry["independent_audit"] is True and entry["subject"] == "candidate"
     assert {v["value"]: v["independent_audit"] for v in enums["values"]} == {
         "code": True, "docs": False, "governance": False, "config": False, "audit": False, "validation": True}

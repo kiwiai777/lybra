@@ -125,11 +125,11 @@ def test_derive_next_step_hard_stops_on_unreadable_record(gov: Path):
 
 
 def test_scan_project_lists_unreadable_card_as_hard_stop(gov: Path):
-    from tools.aipos_cli.next_resolver import scan_project
+    from tools.aipos_cli.next_resolver import scan_project_view
 
     _put_card(gov, "claimed", bad=True)
-    rows = scan_project(gov)
-    _show("next_resolver.scan_project", [(r["task_id"], (r.get("action") or {}).get("type"), r["current_state"]) for r in rows])
+    rows = scan_project_view(gov)["rows"]
+    _show("next_resolver.scan_project_view", [(r["task_id"], (r.get("action") or {}).get("type"), r["current_state"]) for r in rows])
     assert [(r["task_id"], r["action"]["type"], r["current_state"]) for r in rows] == [(TASK, "frontmatter_unreadable", "claimed")]
 
 

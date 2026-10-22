@@ -444,7 +444,7 @@ class TestPerformance:
 
     def test_scan_performance(self, cold_start_workspace: Path):
         """项目级扫描应在 10s 内完成。"""
-        from tools.aipos_cli.next_resolver import scan_project
+        from tools.aipos_cli.next_resolver import scan_project_view
 
         ws = cold_start_workspace
         queue_dir = ws / "5_tasks" / "queue"
@@ -454,7 +454,7 @@ class TestPerformance:
             _create_task_card(queue_dir, f"PERF-{i:03d}", "pending")
 
         start = time.time()
-        results = scan_project(ws)
+        results = scan_project_view(ws)["rows"]
         elapsed = time.time() - start
 
         assert elapsed < 10.0, f"Scan took {elapsed:.2f}s, expected < 10s"
@@ -556,7 +556,7 @@ class TestProjectScan:
 
     def test_scan_output_format(self, cold_start_workspace: Path):
         """扫描输出应包含所有活跃任务。"""
-        from tools.aipos_cli.next_resolver import scan_project, format_scan_output
+        from tools.aipos_cli.next_resolver import scan_project_view, format_scan_output
 
         ws = cold_start_workspace
         queue_dir = ws / "5_tasks" / "queue"
@@ -565,7 +565,7 @@ class TestProjectScan:
         _create_task_card(queue_dir, "SCAN-002", "claimed")
         _create_task_card(queue_dir, "SCAN-003", "blocked")
 
-        results = scan_project(ws)
+        results = scan_project_view(ws)["rows"]
         output = format_scan_output(results)
 
         assert "SCAN-001" in output
@@ -575,14 +575,14 @@ class TestProjectScan:
 
     def test_scan_json_output(self, cold_start_workspace: Path):
         """扫描 JSON 输出应可解析。"""
-        from tools.aipos_cli.next_resolver import scan_project, format_scan_output
+        from tools.aipos_cli.next_resolver import scan_project_view, format_scan_output
 
         ws = cold_start_workspace
         queue_dir = ws / "5_tasks" / "queue"
 
         _create_task_card(queue_dir, "SCAN-004", "pending")
 
-        results = scan_project(ws)
+        results = scan_project_view(ws)["rows"]
         output = format_scan_output(results, json_mode=True)
         parsed = json.loads(output)
 

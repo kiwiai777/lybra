@@ -79,8 +79,28 @@ def _top_level_names(path: Path) -> set[str]:
     return names
 
 
+#: AIPOS-F216: 动态分派指针 = 整个字符串恰为 `tools.<包>.<模块>.<函数>` 点路径(如 verbs.schema lybra_project_upgrade.upgrade_steps[].preview /
+#: execute, 由 project_upgrade.resolve_function 经 importlib 解析调用)——产品代码字符串常量或 schema 字符串值整值命中即算一次引用;
+#: 描述散文里夹带的点路径不算(须整值)。
+DISPATCH_POINTER = re.compile(r"tools\.(?:aipos_cli|mcp_server)\.[a-z_][a-z0-9_]*\.(" + _IDENT + r")")
+
+
+def _schema_dispatch_names(obj: Any) -> Iterator[str]:
+    if isinstance(obj, dict):
+        for value in obj.values():
+            yield from _schema_dispatch_names(value)
+    elif isinstance(obj, list):
+        for value in obj:
+            yield from _schema_dispatch_names(value)
+    elif isinstance(obj, str):
+        match = DISPATCH_POINTER.fullmatch(obj.strip())
+        if match:
+            yield match.group(1)
+
+
 def product_references(root: Path = REPO_ROOT) -> Counter:
-    """产品代码里每个名字被引用的次数(AST: Name / Attribute.attr / from-import 别名; 定义本身不算)。"""
+    """产品代码里每个名字被引用的次数(AST: Name / Attribute.attr / from-import 别名; 定义本身不算)。
+    AIPOS-F216: 另计动态分派指针(DISPATCH_POINTER 整值命中: 产品代码字符串常量 + schema/*.schema.json 字符串值)。"""
     refs: Counter = Counter()
     files = [p for p in list(root.glob("tools/**/*.py")) + list(root.glob("web/**/*.py")) if _is_product(p)]
     for path in files:
@@ -91,6 +111,12 @@ def product_references(root: Path = REPO_ROOT) -> Counter:
                 refs[node.attr] += 1
             elif isinstance(node, ast.ImportFrom):
                 refs.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                match = DISPATCH_POINTER.fullmatch(node.value.strip())
+                if match:
+                    refs[match.group(1)] += 1
+    for schema_path in sorted((root / "schema").glob("*.schema.json")):
+        refs.update(_schema_dispatch_names(json.loads(schema_path.read_text(encoding="utf-8"))))
     return refs
 
 
@@ -175,8 +201,8 @@ def test_r8_single_implementation_pointers_only_shrink():
     assert not stale, f"基线条目已修 → 从 {R8_BASELINE.name} 删除这些行(只减不增): {stale}"
 
 
-def test_r8_red_on_tampered_pointer():
-    """故意改一侧即红: 声明里写一个不存在的函数 / 一个零调用方的函数, 都被抓出。"""
+def test_r8_red_on_tampered_pointer(tmp_path):
+    """故意改一侧即红: 声明里写一个不存在的函数 / 一个零调用方的函数, 都被抓出; 动态分派指针整值命中算引用(AIPOS-F216)。"""
     schemas = json.loads(json.dumps(_load_schemas()))
     schemas["verbs.schema.json"]["verbs"]["lybra_kickoff"]["single_implementation"] = "tools/aipos_cli/subagent_kickoff.render_kickoff_nope"
     schemas["card.schema.json"]["fields"]["conclusion_outcome"]["description"] += " 唯一判定 roadmap._fix_card_never_called_probe"
@@ -184,11 +210,17 @@ def test_r8_red_on_tampered_pointer():
     _show(f"[R8 反例] {sorted(found & {('tools/aipos_cli/subagent_kickoff.render_kickoff_nope', 'no-def'), ('roadmap._fix_card_never_called_probe', 'no-def')})}")
     assert ("tools/aipos_cli/subagent_kickoff.render_kickoff_nope", "no-def") in found
     assert ("roadmap._fix_card_never_called_probe", "no-def") in found
-    # 零调用方: 把指针指向真实存在却无产品引用的函数(R8 基线里已登记的那类)
-    entry = next(e for e in read_entries(R8_BASELINE) if e["problem"] == "no-caller")
-    mod, _, name = entry["pointer"].rpartition(".")
-    schemas["roles.schema.json"]["description"] = f"唯一实现 {mod}.{name}"
-    assert any(p["file"] == "roles.schema.json" and p["problem"] == "no-caller" for p in pointer_problems(schemas))
+    # 零调用方(AIPOS-F216: R8 基线已清零, 改用临时产品树): 指针指向存在却无产品引用的函数 = no-caller; 同名函数被 schema 以整值点路径
+    # 声明为动态分派目标(如 upgrade_steps[].execute)= 有引用; 描述散文里夹带的点路径不算引用
+    (tmp_path / "tools" / "aipos_cli").mkdir(parents=True)
+    (tmp_path / "schema").mkdir()
+    (tmp_path / "tools" / "aipos_cli" / "probe_mod.py").write_text("def lonely():\n    return 1\n", encoding="utf-8")
+    probe = {"probe.schema.json": {"description": "唯一实现 tools/aipos_cli/probe_mod.lonely"}}
+    assert [p["problem"] for p in pointer_problems(probe, tmp_path)] == ["no-caller"]
+    (tmp_path / "schema" / "x.schema.json").write_text(json.dumps({"d": "散文 tools.aipos_cli.probe_mod.lonely 不算"}), encoding="utf-8")
+    assert [p["problem"] for p in pointer_problems(probe, tmp_path)] == ["no-caller"]
+    (tmp_path / "schema" / "y.schema.json").write_text(json.dumps({"execute": "tools.aipos_cli.probe_mod.lonely"}), encoding="utf-8")
+    assert pointer_problems(probe, tmp_path) == []
 
 
 # ===========================================================================

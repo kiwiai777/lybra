@@ -1719,23 +1719,28 @@ def _project_json_two_phase_emit(command: str, target: dict[str, Any], outcome: 
 
 def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
     """AIPOS-F190: `lybra project validation-root` 薄壳。写动作两阶段 = 同一包装(_project_json_two_phase_emit, 写后落账);
-    逻辑全在 validation_root(唯一实现)。拒 = exit 1(拒因码 + 问题, project.json 未改动)。"""
+    逻辑全在 validation_root(唯一实现)。拒 = refused(拒因码 + 问题, project.json 未改动)。
+    AIPOS-F216 件②(F208 P3-4): 退出码读动词契约 verbs.schema lybra_project_validation_root.exit_codes(ok / refused / usage; 写后落账失败
+    由 _project_json_two_phase_emit 按 post_write_landing 声明返回 landing_failed), 禁写死。"""
     from tools.aipos_cli import validation_root as vr
+    from tools.aipos_cli.verb_contract import declared_exit_codes
     from tools.schema_loader import SchemaLoadError
+
+    codes = declared_exit_codes("lybra_project_validation_root")
 
     if args.vr_command == "helper":
         if bool(args.decl_id) != bool(args.run_id):
             print("Error: --id 与 --run-id 须同给(按 run 取本 run 固定的 helper); 都不给 = 当前部署版", file=sys.stderr)
-            return 2
+            return codes["usage"]
         if not args.decl_id:
             if args.sha256:
                 print(vr.helper_sha256())
             else:
                 sys.stdout.write(vr.helper_source())
-            return 0
+            return codes["ok"]
     target = _project_write_target(args, home, args.name)
     if target is None:
-        return 1
+        return codes["refused"]
     root = Path(target["project_root"])
     if args.vr_command == "helper":  # AIPOS-F203 件②: 按 run 查询口(唯一实现 validation_root.run_helper_lookup); 项目脚本运行时取摘要, 禁写死
         try:
@@ -1744,24 +1749,24 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
             print(f"Error: {exc.code}(不下发 helper)", file=sys.stderr)
             for problem in exc.problems:
                 print(f"  - {problem}", file=sys.stderr)
-            return 1
+            return codes["refused"]
         except (SchemaLoadError, OSError) as exc:
             print(f"Error: {exc}(不下发 helper)", file=sys.stderr)
-            return 1
+            return codes["refused"]
         if got["note"]:
             print(f"注意: {got['note']}", file=sys.stderr)  # 旧 run 标注走 stderr, stdout 只有 helper 原文 / 摘要(管道与脚本取值不受影响)
         if args.sha256:
             print(got["sha256"])
         else:
             sys.stdout.write(got["source"])
-        return 0
+        return codes["ok"]
     if args.vr_command == "list":
         try:
             entries = vr.project_validation_roots(root)
             hosts = vr.project_validation_hosts(root)  # AIPOS-F196 件③
         except (vr.ValidationRootError, SchemaLoadError, OSError, ValueError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
-            return 1
+            return codes["refused"]
         entries = [e for e in entries if (not args.task_id or e["task_id"] == args.task_id) and (not args.host or e["host"] == args.host)]
         if args.json:
             print(render_json({"project": target["project"], "declarations": entries, "hosts": hosts, "helper_sha256": vr.helper_sha256()}))
@@ -1771,7 +1776,7 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
                 print(f"  {line}")
             for label, h in sorted(hosts.items()):
                 print(f"  目标主机 {label}: ssh 别名 {h['ssh_alias']}(owner_ref={h['owner_ref']}, by {h['declared_by']} @ {h['declared_at']})")
-        return 0
+        return codes["ok"]
     if args.vr_command == "init-command":  # AIPOS-F191: 只读重取目标主机目录链初始化命令(唯一铸造口 validation_root.init_command)
         try:
             got = vr.init_command(root, args.decl_id, instance=args.instance)
@@ -1779,10 +1784,10 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
             print(f"Error: {exc.code}(不铸初始化命令)", file=sys.stderr)
             for problem in exc.problems:
                 print(f"  - {problem}", file=sys.stderr)
-            return 1
+            return codes["refused"]
         except (SchemaLoadError, OSError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
-            return 1
+            return codes["refused"]
         delivery = got.get("source_delivery") or {}
         if args.json:
             print(render_json({"project": target["project"], "declaration_id": got["entry"]["id"], "host": got["entry"]["host"],
@@ -1793,7 +1798,7 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
                      else f"在目标主机 {got['entry']['host']} 运行")
             print(f"声明 {got['entry']['id']} 活动 run {got['run']['run_id']}: {where}(只建空目录链 {got['run_dir']}):")
             print(got["command"])  # 末行 = 目录链初始化命令(行为不变); AIPOS-F197 候选源码送达命令见 --json source_delivery / 开工稿 / run-start 输出
-        return 0
+        return codes["ok"]
     if args.vr_command == "evidence-fetch":  # AIPOS-F200 件②: 远端审计 run 证据取回(唯一实现 validation_root.evidence_fetch; 不写 project.json)
         try:
             got = vr.evidence_fetch(root, args.decl_id, args.run_id)
@@ -1801,10 +1806,10 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
             print(f"Error: {exc.code}(副本未落 / 未改动)", file=sys.stderr)
             for problem in exc.problems:
                 print(f"  - {problem}", file=sys.stderr)
-            return 1
+            return codes["refused"]
         except (SchemaLoadError, OSError) as exc:
             print(f"Error: {exc}(副本未落 / 未改动)", file=sys.stderr)
-            return 1
+            return codes["refused"]
         if args.json:
             print(render_json({"project": target["project"], "declaration_id": got["entry"]["id"], "host": got["entry"]["host"],
                                "run_id": got["run"]["run_id"], "copy_dir": got["copy_dir"], "manifest_sha256": got["manifest_sha256"],
@@ -1818,7 +1823,7 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
             for note in got["notes"]:
                 print(f"  {note}")
             print(f"FETCH_OK copy_dir={got['copy_dir']}")
-        return 0
+        return codes["ok"]
     action = args.vr_command
     try:
         outcome = vr.apply_validation_root_change(
@@ -1832,10 +1837,10 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
         print(f"Error: {exc.code}(project.json 未改动)", file=sys.stderr)
         for problem in exc.problems:
             print(f"  - {problem}", file=sys.stderr)
-        return 1
+        return codes["refused"]
     except (SchemaLoadError, OSError) as exc:
         print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
-        return 1
+        return codes["refused"]
     json_out = getattr(args, "json", False)
     payload = {k: outcome[k] for k in ("dry_run", "changed", "written", "diff", "project_json")}
     if action == "set-host":  # AIPOS-F196 件③: 目标主机 ssh 访问声明(project.json validation_roots.hosts)
@@ -2834,13 +2839,11 @@ def build_parser() -> argparse.ArgumentParser:
     project_new_parser.add_argument("--code-repo", help="Optional absolute path to the project's code repo")
     project_new_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_new_parser.add_argument("--actor", default=default_actor, help="Provenance actor (registered_by); defaults to $USER or owner")
-    project_new_parser.add_argument("--owner-authorization-ref", help="Owner authorization ref — required only on the gate path (when ~/.lybra/connection.json exists); the local scaffold (AIPOS-226 ruling 2=a) needs none")
     project_setrepo_parser = project_subparsers.add_parser("set-repo", help="Set/update an established project's code_repo mapping; --dry-run (default) shows the project.json diff, --confirm writes")
     project_setrepo_parser.add_argument("name", help="Established project name")
     project_setrepo_parser.add_argument("--code-repo", required=True, help="Absolute path to the project's code repo")
     project_setrepo_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_setrepo_parser.add_argument("--actor", default=default_actor, help="Provenance actor (registered_by); defaults to $USER or owner")
-    project_setrepo_parser.add_argument("--owner-authorization-ref", help="Owner authorization ref — required only on the gate path (when ~/.lybra/connection.json exists)")
     _project_json_two_phase_flags(project_setrepo_parser, "set-repo")  # AIPOS-F125: 缺省预演 / --confirm 才写
     # AIPOS-F92 件②: 多仓声明(project.json repos {default, items} + code_repo 别名), 经 config.schema project_json.repos 声明校验
     project_setrepos_parser = project_subparsers.add_parser("set-repos", help="AIPOS-F92: declare the project's product repos (project.json repos {default, items} + code_repo alias), validated against config.schema project_json.repos; --dry-run (default) shows the diff, --confirm writes")
@@ -4819,105 +4822,25 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 home, home_source = resolve_home_root_with_source(explicit_root=args.home_root)
             if args.project_command == "new":
-                # AIPOS-F24 大项A: 薄壳模式 - 调用门动词 lybra_project_new
-                # 保留交互式询问(CLI 侧体验),但实际创建走门动词
-                from tools.aipos_cli.confirm_client import (
-                    GateAddressError,
-                    GateClient,
-                    GateError,
-                    declared_rpc_url,
-                    load_gate_client_token,
-                    resolve_gate_base_url,
-                )
-
+                # AIPOS-226 裁定 2=a: 本地 Owner 脚手架(不铸凭据、不过门), 门按 home 根扫描发现新项目; 唯一实现 workspace_config.scaffold_project。
+                # AIPOS-F216 件②: 原 AIPOS-F24「~/.lybra/connection.json 在场 = 经门动词 lybra_project_new」分支删除——该门动词自 F24 起
+                # 从未登记进门 TOOL_HANDLERS(门路径恒失败), 门 token 按项目绑定不承接建项目; 建项目恒为本机脚手架。
                 # AIPOS-F92 件②: home 根只经 AIPOS-226 优先级梯解析, 打印结果与来源(门只扫描 home 根, 不登记 home 根外的治理根)
                 print(f"home 根: {home}(来源: {home_source}); 项目建在 {home / args.name}")
                 # AIPOS-F92: 非交互(stdin 非终端, 如 agent 会话)不弹询问, 用缺省协作配置(可后改)
                 collaboration_profile = _ask_project_type_interactive() if sys.stdin.isatty() else None
-
-                # 连接信息 (从 home 推导连接配置)
-                # 对于 project new,我们需要有一个已存在的门服务
-                # 暂时使用环境变量或默认连接
-                conn_path = workspace_connection_path(Path.home())
-                if not conn_path.exists():
-                    # AIPOS-226 裁定 2=a: 本地 Owner 脚手架(不铸凭据、不过门), 门按 home 根扫描发现新项目
-                    root = scaffold_project(
-                        home, args.name, code_repo=args.code_repo, registered_by=args.actor,
-                        collaboration_profile=collaboration_profile
-                    )
-                    print(f"Created project root: {root} (local scaffold)")
-                    print(f"project.json: {project_json_path(root)}")
-                    for snap in sorted(stage_archive_root(root).glob("*.md")):  # AIPOS-F145: 阶段档案落点唯一读取口
-                        if snap.name.lower() != "readme.md":
-                            print(f"stage snapshot: {snap}")
-                    if collaboration_profile:
-                        print(f"collaboration_profile: {collaboration_profile}")
-                    print(f"next: 门以 home 根 {home} 发现本项目(双标记 5_tasks/queue + project.json); 接入步骤见 lybra onboarding guide {args.name}")
-                    return 0
-
-                # 门路径(~/.lybra/connection.json 存在): owner-gated
-                owner_auth_ref = getattr(args, "owner_authorization_ref", None)
-                if not owner_auth_ref:
-                    print("Error: --owner-authorization-ref is required on the gate path (owner-gated)", file=sys.stderr)
-                    print("Hint: project creation via the gate requires owner authorization.", file=sys.stderr)
-                    return 1
-                
-                # AIPOS-F106 件①: 凭据文件坏 = 拒(fail-closed); 未声明 mcp.rpc_url = 降级本地; 门基址/凭据角色序走唯一推导口
-                try:
-                    declared = declared_rpc_url(conn_path)
-                except GateAddressError as exc:
-                    print(f"Error: {exc}", file=sys.stderr)
-                    return 1
-                if declared is None:
-                    # 降级:本地调用
-                    root = scaffold_project(
-                        home, args.name, code_repo=args.code_repo, registered_by=args.actor,
-                        collaboration_profile=collaboration_profile
-                    )
-                    print(f"Created project root: {root} (local fallback)")
-                    return 0
-                
-                try:
-                    base_url = resolve_gate_base_url(connection_json=conn_path, require_declared=True)
-                    _token_role, token = load_gate_client_token(conn_path)
-                except ValueError as exc:
-                    print(f"Error: {exc}", file=sys.stderr)
-                    return 1
-                
-                try:
-                    client = GateClient(base_url, token, timeout=30.0)
-                    dry = client.call_tool("lybra_project_new_dry_run", {
-                        "name": args.name,
-                        "code_repo": args.code_repo,
-                        "home_root": str(home),
-                        "collaboration_profile": collaboration_profile,
-                        "owner_authorization_ref": owner_auth_ref,
-                        "actor": args.actor,
-                    })
-                    if not dry.get("ok"):
-                        print(f"Error: gate rejected: {json.dumps(dry, ensure_ascii=False)[:800]}", file=sys.stderr)
-                        return 1
-                    
-                    confirm = client.call_tool("lybra_project_new_confirm", {
-                        "dry_run_token": dry.get("dry_run_token"),
-                        "owner_confirmation_token": "OWNER_CONFIRMED",
-                        "actor": args.actor,
-                    })
-                    if not confirm.get("ok"):
-                        print(f"Error: gate rejected confirm: {json.dumps(confirm, ensure_ascii=False)[:800]}", file=sys.stderr)
-                        return 1
-                    
-                    root = Path(confirm.get("project_root"))
-                    print(f"Created project root: {root} (via gate verb)")
-                    print(f"project.json: {project_json_path(root)}")
-                    if collaboration_profile:
-                        print(f"collaboration_profile: {collaboration_profile}")
-                    if confirm.get("connection_json_written"):
-                        print(f".lybra/connection.json: written with mcp.rpc_url")
-                    print(f"next: {'; '.join(confirm.get('next_steps', []))}")
-                except GateError as exc:
-                    print(f"Error: gate call failed: {exc}", file=sys.stderr)
-                    return 1
+                root = scaffold_project(
+                    home, args.name, code_repo=args.code_repo, registered_by=args.actor,
+                    collaboration_profile=collaboration_profile
+                )
+                print(f"Created project root: {root} (local scaffold)")
+                print(f"project.json: {project_json_path(root)}")
+                for snap in sorted(stage_archive_root(root).glob("*.md")):  # AIPOS-F145: 阶段档案落点唯一读取口
+                    if snap.name.lower() != "readme.md":
+                        print(f"stage snapshot: {snap}")
+                if collaboration_profile:
+                    print(f"collaboration_profile: {collaboration_profile}")
+                print(f"next: 门以 home 根 {home} 发现本项目(双标记 5_tasks/queue + project.json); 接入步骤见 lybra onboarding guide {args.name}")
                 return 0
             if args.project_command == "freeze-legacy":
                 return _project_freeze_legacy(args)
@@ -5148,94 +5071,23 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"check-workstation {args.instance}: {'OK' if report['ok'] else 'FAILED'}")
                 return 0 if report["ok"] else 1
             if args.project_command == "set-repo":
-                # AIPOS-F24 大项A: 薄壳模式
-                from tools.aipos_cli.confirm_client import (
-                    GateAddressError,
-                    GateClient,
-                    GateError,
-                    declared_rpc_url,
-                    load_gate_client_token,
-                    resolve_gate_base_url,
-                )
+                # AIPOS-F216 件②: 本机经唯一实现 workspace_config.update_project_repo 预演 / 写入(原 AIPOS-F24「~/.lybra/connection.json
+                # 在场 = 经门动词 lybra_project_set_repo_dry_run → _confirm」分支删除: 该门动词自 F24 起从未登记进门 TOOL_HANDLERS,
+                # 门路径恒失败; 门 token 按项目绑定, 不承接改他项目产品仓)。
                 from tools.aipos_cli.workspace_config import CardRepoUnresolved, update_project_repo
 
-                owner_auth_ref = getattr(args, "owner_authorization_ref", None)
-                conn_path = workspace_connection_path(Path.home())
-                if conn_path.exists() and not owner_auth_ref:
-                    print("Error: --owner-authorization-ref is required on the gate path (owner-gated)", file=sys.stderr)
-                    return 1
                 target = _project_write_target(args, home, args.name)  # AIPOS-F127 件①: 与所在治理根冲突 = 拒(预演前)
                 if target is None:
                     return 1
-                # AIPOS-F125: 缺省预演 = 本机经唯一实现算 project.json diff + 校验(零写入; 门路径亦不取凭据、不调门动词);
-                # --confirm 才写(本地降级直写 / 门路径经 dry_run → confirm 门动词)。
+                # AIPOS-F125: 缺省预演 = 本机经唯一实现算 project.json diff + 校验(零写入; 不取凭据、不连门); --confirm 才写。
                 try:
-                    preview = update_project_repo(home, args.name, args.code_repo, registered_by=args.actor, dry_run=True)
+                    outcome = update_project_repo(home, args.name, args.code_repo, registered_by=args.actor, dry_run=not args.confirm)
                 except (CardRepoUnresolved, FileNotFoundError) as exc:
                     print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
                     return 1
-                details = [f"code_repo = {preview['code_repo']}"]
-
-                def _emit_set_repo(outcome: dict[str, Any], via: str = "") -> int:
-                    return _project_json_two_phase_emit(
-                        "set-repo", target, {k: outcome[k] for k in ("project_json", "dry_run", "changed", "written", "diff")},
-                        actor=args.actor, json_out=False, details=details, via=via)
-
-                def _local_write() -> int:
-                    try:
-                        written = update_project_repo(home, args.name, args.code_repo, registered_by=args.actor)
-                    except (CardRepoUnresolved, FileNotFoundError) as exc:
-                        print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
-                        return 1
-                    return _emit_set_repo(written, " (local fallback)")
-
-                if not args.confirm:
-                    return _emit_set_repo(preview)
-                if not conn_path.exists():
-                    return _local_write()  # 降级
-
-                # AIPOS-F106 件①: 凭据文件坏 = 拒(fail-closed); 未声明 mcp.rpc_url = 降级本地; 门基址/凭据角色序走唯一推导口
-                try:
-                    declared = declared_rpc_url(conn_path)
-                except GateAddressError as exc:
-                    print(f"Error: {exc}", file=sys.stderr)
-                    return 1
-                if declared is None:
-                    return _local_write()  # 降级
-
-                try:
-                    base_url = resolve_gate_base_url(connection_json=conn_path, require_declared=True)
-                    _token_role, token = load_gate_client_token(conn_path)
-                except ValueError as exc:
-                    print(f"Error: {exc}", file=sys.stderr)
-                    return 1
-
-                try:
-                    client = GateClient(base_url, token, timeout=30.0)
-                    dry = client.call_tool("lybra_project_set_repo_dry_run", {
-                        "name": args.name,
-                        "code_repo": args.code_repo,
-                        "home_root": str(home),
-                        "owner_authorization_ref": owner_auth_ref,
-                        "actor": args.actor,
-                    })
-                    if not dry.get("ok"):
-                        print(f"Error: {json.dumps(dry, ensure_ascii=False)[:800]}", file=sys.stderr)
-                        return 1
-
-                    confirm = client.call_tool("lybra_project_set_repo_confirm", {
-                        "dry_run_token": dry.get("dry_run_token"),
-                        "owner_confirmation_token": "OWNER_CONFIRMED",
-                        "actor": args.actor,
-                    })
-                    if not confirm.get("ok"):
-                        print(f"Error: {json.dumps(confirm, ensure_ascii=False)[:800]}", file=sys.stderr)
-                        return 1
-                except GateError as exc:
-                    print(f"Error: {exc}", file=sys.stderr)
-                    return 1
-                # 门侧经同一实现写入; 本机所示 diff = 写前预演(门与本机同读 home 根下该 project.json)
-                return _emit_set_repo({**preview, "dry_run": False, "written": preview["changed"]}, " (via gate verb)")
+                return _project_json_two_phase_emit(
+                    "set-repo", target, {k: outcome[k] for k in ("project_json", "dry_run", "changed", "written", "diff")},
+                    actor=args.actor, json_out=False, details=[f"code_repo = {outcome['code_repo']}"])
             if args.project_command == "list":
                 # AIPOS-335 S4: 存量项目盘点
                 candidates = _project_candidates(home)

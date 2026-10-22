@@ -9,6 +9,10 @@ Allowed locations:
 
 Red line: Bare CJK literals in product UI code => test failure.
 This ensures漏译不可能 (impossible to miss translation) going forward.
+
+AIPOS-F216 件⑤: 原全目录节点 test_no_bare_cjk_in_sources(注释里的中文也算命中, 自 F109 起 known-failure / F214 起 run-all exclude)删除,
+由 R11 棘轮 tests/test_aipos_f214_guard_ratchets.py::test_r11_cjk_string_literals_only_shrink 取代(只扫字符串字面量, 现存命中入基线
+tests/f214_cjk_literal_baseline.jsonl 只减不增)。scan_file_for_cjk 仍为若干卡对新增渲染模块的逐行零命中判定口(行内注释也算)。
 """
 
 import re
@@ -161,50 +165,6 @@ def scan_file_for_cjk(file_path: Path) -> list[tuple[int, str]]:
         print(f"Warning: Could not scan {file_path}: {e}")
     
     return violations
-
-
-def test_no_bare_cjk_in_sources():
-    """
-    AIPOS-288 S3: Source-level CJK guard.
-    
-    Scans web/board/ JS/HTML/py for bare CJK literals.
-    Exemptions:
-      - i18n.js (dictionary)
-      - Lines with // i18n-exempt: marker
-      - Data fields (JSON values, test fixtures)
-    
-    Failure = new UI text not routed through i18n channel.
-    """
-    all_violations = {}
-    
-    for pattern in SCAN_PATTERNS:
-        for file_path in WEB_BOARD_ROOT.glob(pattern):
-            # Skip test files themselves
-            if file_path.name.startswith("test_"):
-                continue
-            
-            violations = scan_file_for_cjk(file_path)
-            if violations:
-                rel_path = file_path.relative_to(WEB_BOARD_ROOT)
-                all_violations[str(rel_path)] = violations
-    
-    # Report violations
-    if all_violations:
-        report = ["AIPOS-288 CJK source guard failed. Bare CJK literals found:\n"]
-        for file_path, violations in sorted(all_violations.items()):
-            report.append(f"\n{file_path}:")
-            for line_num, line_content in violations:
-                # Truncate long lines
-                display = line_content[:100] + "..." if len(line_content) > 100 else line_content
-                report.append(f"  Line {line_num}: {display}")
-        
-        report.append("\n\nTo fix:")
-        report.append("  1. Move text to i18n.js translations object")
-        report.append("  2. Use i18n.t('key') in JS or data-i18n='key' in HTML")
-        report.append("  3. Use _generate_text('template', locale, ...) in Python")
-        report.append("  4. Add // i18n-exempt: <reason> for legitimate data/config")
-        
-        raise AssertionError("\n".join(report))
 
 
 def test_i18n_dictionary_completeness():

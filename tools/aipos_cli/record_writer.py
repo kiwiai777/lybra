@@ -1710,7 +1710,7 @@ def build_verdict_skeleton_markdown(audit_task_id: str, reviewed_task_id: str | 
     """AIPOS-F89 件③c: 审计卡认领时的报告空模板(与真实报告同名同位: next_resolver.card_report_path)。
 
     frontmatter 键 = transitions artifact_ingest.verdict.required_frontmatter(verdict / commit_sha), 值为 `(待填写` 占位;
-    报告完成判据(artifact_ingest.verdict.readiness = next_resolver.verdict_report_ready)只在这些键全部填实值后成立,
+    报告完成判据(artifact_ingest.verdict.readiness = next_resolver.missing_verdict_frontmatter 返回空)只在这些键全部填实值后成立,
     故空模板「文件存在」不被 loop 等待 / artifact ingest / 开工核验当作完成。声明缺 = SchemaLoadError(fail-closed, 不出无键模板)。
     """
     from tools.aipos_cli.next_resolver import report_frontmatter_contract

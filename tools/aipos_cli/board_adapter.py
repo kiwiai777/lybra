@@ -12,7 +12,7 @@ from typing import Any
 
 from tools.aipos_cli.adapter_response import blocked_response, derive_verdict, error_entry, make_response
 from tools.aipos_cli.agent_profiles import actor_matches_task_actor, load_agent_profiles, registry_available, resolve_instance_id
-from tools.aipos_cli.audit_derivation import derive_audit_task_on_return
+from tools.aipos_cli.audit_derivation import derive_audit_task_on_return, is_audit_task_mode
 from tools.aipos_cli.artifact_ingest import (
     _as_ref_list,
     approved_scratch_root,
@@ -1695,34 +1695,6 @@ def bench_audit_submit(
         )
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))
-
-
-def validate_draft(path: str | Path, repo_root: str | Path | None = None, actor: str | None = None) -> dict[str, Any]:
-    operation = "draft_validate"
-    try:
-        normalized_path = _normalize_path(path)
-        resolved_root = _resolve_repo_root(repo_root)
-        result = validate_draft_file(resolved_root, normalized_path)
-        verdict = derive_verdict(
-            blocking_reasons=list(result.get("blocking_reasons", [])),
-            warnings=list(result.get("warnings", [])),
-        )
-        return make_response(
-            ok=True,
-            verdict=verdict,
-            operation=operation,
-            dry_run=False,
-            actor=_actor_payload(actor),
-            data=result,
-            summary={"task_id": result.get("task_id"), "verdict": verdict},
-            warnings=list(result.get("warnings", [])),
-            blocking_reasons=list(result.get("blocking_reasons", [])),
-            needs_owner_reasons=[],
-            safety_notice=READ_SAFETY_NOTICE,
-            errors=[],
-        )
-    except Exception as exc:
-        return _normalize_exception(operation, exc, dry_run=False, actor=_actor_payload(actor))
 
 
 def publish_draft(
@@ -6817,81 +6789,6 @@ def load_task_snapshot(
     }
 
 
-def block_task(
-    task_id: str | None = None,
-    path: str | Path | None = None,
-    actor: str | None = None,
-    reason: str | None = None,
-    dry_run: bool = True,
-    with_records: bool = False,
-    repo_root: str | Path | None = None,
-) -> dict[str, Any]:
-    try:
-        return _queue_mutation_preview(
-            operation="queue_block",
-            action="block",
-            task_id=task_id,
-            path=path,
-            actor=actor,
-            dry_run=dry_run,
-            with_records=with_records,
-            repo_root=repo_root,
-            reason=reason,
-        )
-    except Exception as exc:
-        return _normalize_exception("queue_block", exc, dry_run=dry_run, actor=_actor_payload(actor))
-
-
-def complete_task(
-    task_id: str | None = None,
-    path: str | Path | None = None,
-    actor: str | None = None,
-    dry_run: bool = True,
-    with_records: bool = False,
-    repo_root: str | Path | None = None,
-    report_link: str | None = None,
-) -> dict[str, Any]:
-    try:
-        return _queue_mutation_preview(
-            operation="queue_complete",
-            action="complete",
-            task_id=task_id,
-            path=path,
-            actor=actor,
-            dry_run=dry_run,
-            with_records=with_records,
-            repo_root=repo_root,
-            report_link=report_link or "adapter://report-link-required",
-        )
-    except Exception as exc:
-        return _normalize_exception("queue_complete", exc, dry_run=dry_run, actor=_actor_payload(actor))
-
-
-def reopen_task(
-    task_id: str | None = None,
-    path: str | Path | None = None,
-    actor: str | None = None,
-    dry_run: bool = True,
-    with_records: bool = False,
-    repo_root: str | Path | None = None,
-    reason: str | None = None,
-) -> dict[str, Any]:
-    try:
-        return _queue_mutation_preview(
-            operation="queue_reopen",
-            action="reopen",
-            task_id=task_id,
-            path=path,
-            actor=actor,
-            dry_run=dry_run,
-            with_records=with_records,
-            repo_root=repo_root,
-            reason=reason or "adapter preview reopen",
-        )
-    except Exception as exc:
-        return _normalize_exception("queue_reopen", exc, dry_run=dry_run, actor=_actor_payload(actor))
-
-
 def converge_r_cards(
     *,
     repo_root: str | Path | None = None,
@@ -6923,10 +6820,9 @@ def converge_r_cards(
                 if not isinstance(fm, dict):
                     continue
                 task_id = str(fm.get("task_id") or "")
-                # Only process audit-derived cards (task_mode=audit or created_by=gate_derivation)
-                task_mode = str(fm.get("task_mode") or "")
+                # Only process audit-derived cards (审计模式 = audit_derivation.is_audit_task_mode, AIPOS-F216 件④; or created_by=gate_derivation)
                 created_by = str(fm.get("created_by") or "")
-                if task_mode != "audit" and created_by != "gate_derivation":
+                if not is_audit_task_mode(fm.get("task_mode")) and created_by != "gate_derivation":
                     continue
                 # Resolve the reviewed (parent) task ID
                 reviewed_task_id = str(fm.get("reviewed_task_id") or "")

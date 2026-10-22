@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
-from tools.aipos_cli.clock import iso_z, utc_now
+from tools.aipos_cli.clock import iso_z
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -1548,36 +1548,6 @@ def write_project_json(
     return path
 
 
-def _write_connection_skeleton(workspace_root: Path, rpc_url: str) -> None:
-    """AIPOS-F24 大项D: Write connection.json skeleton with mcp.rpc_url.
-    
-    Minimal skeleton for project initialization (before lybra serve). Contains:
-    - config_version, mode, workspace_root
-    - mcp.rpc_url (from gate's own config)
-    - empty tokens list (populated by lybra serve or enroll)
-    
-    This allows project advisors to use gate verbs immediately after project creation.
-    """
-    local_dir = workspace_root / ".lybra"
-    local_dir.mkdir(parents=True, exist_ok=True)
-    
-    connection_file = local_dir / "connection.json"
-    skeleton = {
-        "config_version": 1,
-        "mode": "service_v0",
-        "workspace_root": str(workspace_root),
-        "local_only": True,
-        "created_at": utc_now().isoformat(),
-        "mcp": {
-            "rpc_url": rpc_url
-        },
-        "tokens": [],
-        "secrets_notice": "Raw role tokens are local secrets. Anyone who can read this file can use the listed local role scopes."
-    }
-    
-    connection_file.write_text(json.dumps(skeleton, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
 def scaffold_project(
     home_root: str | Path,
     name: str,
@@ -1585,7 +1555,6 @@ def scaffold_project(
     code_repo: str | Path | None = None,
     registered_by: str = "owner",
     collaboration_profile: dict[str, Any] | None = None,
-    gate_rpc_url: str | None = None,
 ) -> Path:
     """Owner scaffold of a fresh per-project truth root under the home.
 
@@ -1597,9 +1566,9 @@ def scaffold_project(
     
     AIPOS-335: collaboration_profile is optional. When provided, it will be written to
     project.json; when None, project.json will not have this field (for backward compatibility).
-    
-    AIPOS-F24 (大项D): gate_rpc_url is optional. When provided (from gate verb), writes a
-    connection.json skeleton with mcp.rpc_url. CLI callers omit this (backward compat).
+
+    AIPOS-F216 件②: 原 AIPOS-F24 大项D gate_rpc_url(门动词 lybra_project_new 写 connection.json 骨架)随该门动词删除——门动词自 F24
+    起从未登记, 本参数无调用方; 工位接入凭据走 lybra roles enroll / onboarding 既有出口。
     """
     clean = str(name).strip()
     if not clean:
@@ -1639,10 +1608,6 @@ def scaffold_project(
     # AIPOS-F92 件③: 首份阶段快照「项目创建」经既有单源 governance add stage(config.schema file_declarations.stage_archive_snapshot)
     # 写入 —— 阶段门判据不变(有快照才可转换), 新项目建成即满足(否则首次 finalize 必 BLOCK「no stage snapshot」, F89 N2)。
     write_project_created_snapshot(root, clean, registered_by=registered_by)
-
-    # AIPOS-F24 大项D: connection.json 骨架(含 mcp.rpc_url)
-    if gate_rpc_url:
-        _write_connection_skeleton(root, gate_rpc_url)
 
     return root
 
@@ -1922,18 +1887,6 @@ def update_project_repo(
 
     outcome = update_project_json(root, _mutate, verify=project_repos, dry_run=dry_run)
     return {"project_root": root, "code_repo": repo_value, **outcome}
-
-
-def set_project_repo(
-    home_root: str | Path,
-    name: str,
-    code_repo: str | Path,
-    *,
-    registered_by: str = "owner",
-) -> Path:
-    """Update an established project's code_repo mapping, preserving registered_at (写入; 门动词
-    lybra_project_set_repo_confirm 的调用口)。实现 = update_project_repo(唯一实现), 本函数只保留返回治理根的旧签名。"""
-    return update_project_repo(home_root, name, code_repo, registered_by=registered_by)["project_root"]
 
 
 # ---------------------------------------------------------------------------

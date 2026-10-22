@@ -1198,7 +1198,7 @@
     }
   },
   "dependency_gate": {
-    "description": "AIPOS-F133 件③: 依赖满足判据唯一声明——卡 depends_on 的每一项都满足 dependency_condition 才算依赖满足(全部, 非任一); 判据只读被依赖卡的门生记录(record_writer.gate_record_files / 裁决另经 audit_helpers.is_gate_born_verdict_metadata), 不读卡面自报字段(dependency_executor_status / dependency_audit_readiness / dependency_audit_status 降为展示用运行时字段)。唯一实现 task_complexity.dependencies_satisfied(unmet_dependencies 给拒因); 认领(queue_mutation claim 全部 task_class; validator 对 dependency_gate=true 的 task_class 另要求声明条件)、推导核 pending→claim 与 lybra next「下一张」共用。卡缺 dependency_condition = default_condition。",
+    "description": "AIPOS-F133 件③: 依赖满足判据唯一声明——卡 depends_on 的每一项都满足 dependency_condition 才算依赖满足(全部, 非任一); 判据只读被依赖卡的门生记录(record_writer.gate_record_files / 裁决另经 audit_helpers.is_gate_born_verdict_metadata), 不读卡面自报字段(dependency_executor_status / dependency_audit_readiness / dependency_audit_status 降为展示用运行时字段)。唯一实现 task_complexity.unmet_dependencies(返回空 = 依赖满足, 非空 = 拒因; AIPOS-F216 删零调用包装 dependencies_satisfied); 认领(queue_mutation claim 全部 task_class; validator 对 dependency_gate=true 的 task_class 另要求声明条件)、推导核 pending→claim 与 lybra next「下一张」共用。卡缺 dependency_condition = default_condition。",
     "default_condition": "closure",
     "conditions": {
       "closure": {"record_kind": "closures", "accepts_conclusion": true, "description": "被依赖卡已结案(门生 N6 结案记录在; AIPOS-F207: 或顾问复核结案且结论 pass, 见 conclusion)"},

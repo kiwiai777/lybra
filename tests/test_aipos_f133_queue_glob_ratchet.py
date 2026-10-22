@@ -208,7 +208,7 @@ def test_lane_views_use_single_traversal_and_lane_key():
     for src in (nr, br, lr, cli):
         assert "visible_cards(" in src
     tc = (REPO_ROOT / "tools/aipos_cli/task_complexity.py").read_text(encoding="utf-8")
-    assert tc.count("def unmet_dependencies(") == 1 and tc.count("def dependencies_satisfied(") == 1
+    assert tc.count("def unmet_dependencies(") == 1 and tc.count("def dependencies_satisfied(") == 0  # AIPOS-F216: 零调用包装已删
     assert "dependency_audit_status" not in tc and "dependency_executor_status" not in tc  # 卡面自报字段不再被判据读
     for rel in ("tools/aipos_cli/next_resolver.py", "tools/aipos_cli/queue_mutation.py"):
         assert "unmet_dependencies(" in (REPO_ROOT / rel).read_text(encoding="utf-8"), rel

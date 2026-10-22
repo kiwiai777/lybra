@@ -53,8 +53,8 @@ LYBRA_DEPLOY = REPO_ROOT / "tools" / "lybra-deploy"
 PRE_COMMIT_HOOK = REPO_ROOT / "tools" / "hooks" / "governance-pre-commit"
 LANE_PREFIXES = (
     "tools/aipos_cli/", "tools/worktree_manager.py", "tools/mcp_server/", "tools/schema_loader.py",
-    "tools/lybra-deploy", "tools/hooks/governance-pre-commit", "tools/inject_governance_status_headers.py",
-    "agents/harness/pi/",  # AIPOS-F91: tools/turn_advancer/ 与 tools/connector/ 随退役删除
+    "tools/lybra-deploy", "tools/hooks/governance-pre-commit",
+    "agents/harness/pi/",  # AIPOS-F91: tools/turn_advancer/ 与 tools/connector/ 随退役删除; AIPOS-F216: 一次性脚本 inject_governance_status_headers.py 删除
 )
 # 写死根路径(产品仓 / 治理根 / home 根 / lybra 目录布局)式样: 复查报告 H3/H4 grep 的路径形(项目名字面另族)
 ROOT_LITERAL_RE = re.compile(

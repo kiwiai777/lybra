@@ -101,7 +101,9 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
     needs_worktree = card_needs_worktree(governance_root, {**fm, "task_id": task_id})
     # AIPOS-F66B 件③ + F86 件①: 报告落点 = card_report_path(审计卡 verdict_root/<审计卡ID>/<候选>, 执行卡 return_root/<ID>/<候选>;
     # 与派生卡文案 / my-tasks 同一读取口, 禁写死)。
-    is_audit = str(fm.get("task_mode") or "").strip().lower() == "audit"
+    from tools.aipos_cli.audit_derivation import is_audit_task_mode  # AIPOS-F216 件④: 审计卡识别卡面层单源
+
+    is_audit = is_audit_task_mode(fm.get("task_mode"))
     return_path = card_report_path(governance_root, task_id, fm)
     # AIPOS-F93 件①: 报告必填字段 = 声明单源 card_report_contract(与 my-tasks 开工面 / 落点句 / 认领模板 / 章程同源);
     # 审计卡取证工作树已建时带被审 tip/tree 实值。

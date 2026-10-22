@@ -14,7 +14,7 @@ from tools.aipos_cli.workspace_config import (
     read_project_json,
     resolve_workspace_root,
     scaffold_project,
-    set_project_repo,
+    update_project_repo,
 )
 
 
@@ -77,12 +77,12 @@ class ProjectScaffoldTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             scaffold_project(self.home, "   ")
 
-    # --- set_project_repo --------------------------------------------------------
+    # --- update_project_repo(AIPOS-F216: 原门动词调用口 set_project_repo 随门动词删除, 直测唯一实现) ----------
 
     def test_set_repo_updates_code_repo_preserves_registered_at(self) -> None:
         root = scaffold_project(self.home, "demo")
         original = read_project_json(root)["registered_at"]
-        set_project_repo(self.home, "demo", "~/code/elsewhere", registered_by="bob")
+        update_project_repo(self.home, "demo", "~/code/elsewhere", registered_by="bob")
         updated = read_project_json(root)
         self.assertEqual(updated["code_repo"], str(Path("~/code/elsewhere").expanduser()))
         self.assertEqual(updated["registered_at"], original)  # provenance preserved
@@ -90,7 +90,7 @@ class ProjectScaffoldTests(unittest.TestCase):
 
     def test_set_repo_on_missing_project_fails_closed(self) -> None:
         with self.assertRaises(FileNotFoundError) as cm:
-            set_project_repo(self.home, "ghost", "~/code/ghost")
+            update_project_repo(self.home, "ghost", "~/code/ghost")
         self.assertIn("PROJECT_NOT_ESTABLISHED", str(cm.exception))
 
     # --- home-aware resolve_workspace_root ---------------------------------------

@@ -25,10 +25,6 @@ CLEANUP_TEXT_KEYS = (
 KEPT_ACTIONS = ("dirty", "in_flight", "carried", "unreadable", "failed")
 
 
-class WorktreeCleanupError(ValueError):
-    """清理声明缺 / 形坏(fail-closed)。"""
-
-
 #: AIPOS-F214 件③: 投影键(声明段不得另列; 值由 cleanup_declaration 从单源投影)
 PROJECTED_STATE_KEYS = ("terminal_states", "carry_protect_states")
 

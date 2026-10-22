@@ -236,12 +236,12 @@ def test_item3_lint_before_after_error_to_zero_with_frozen_summary(tmp_path, mon
 
 def test_item3_next_scan_skips_frozen_and_single_derive_stops(tmp_path, monkeypatch, capsys):
     gov = _make_gov(tmp_path, monkeypatch)
-    from tools.aipos_cli.next_resolver import derive_next_step, scan_project
+    from tools.aipos_cli.next_resolver import derive_next_step, scan_project_view
 
-    before = {r["task_id"] for r in scan_project(gov)}
+    before = {r["task_id"] for r in scan_project_view(gov)["rows"]}
     assert {"DEMO-1", "DEMO-3", "DEMO-5", "DEMO-4", "DEMO-9"} <= before
     _freeze(gov, capsys, "--confirm")
-    after = {r["task_id"] for r in scan_project(gov)}
+    after = {r["task_id"] for r in scan_project_view(gov)["rows"]}
     assert after == {"DEMO-4", "DEMO-9"}, after
     rc, out, _err = _cli(["next", "--workspace-root", str(gov)], capsys)
     # AIPOS-F141: 汇总行经四视图唯一可见卡入口 = 本视图(活跃队列 pending/claimed/blocked)内未列的冻结卡数(DEMO-1/3/5)
@@ -297,12 +297,12 @@ def test_item3_unfreeze_appends_entry_and_restores(tmp_path, monkeypatch, capsys
     files = sorted(manifest.glob("*.md"))
     assert len(files) == 2 and all((manifest / n).read_bytes() == b for n, b in first.items())  # 只追加, 既有条目不改
     from tools.aipos_cli.legacy_baseline import frozen_tasks
-    from tools.aipos_cli.next_resolver import derive_next_step, scan_project
+    from tools.aipos_cli.next_resolver import derive_next_step, scan_project_view
 
     assert "DEMO-1" not in frozen_tasks(gov) and len(frozen_tasks(gov)) == 4
     rc, lint = _lint(gov, capsys)
     assert [i["task_id"] for i in lint["issues"] if i["severity"] == "ERROR"] == ["DEMO-1"] and lint["frozen"] == 4
-    assert "DEMO-1" in {r["task_id"] for r in scan_project(gov)}
+    assert "DEMO-1" in {r["task_id"] for r in scan_project_view(gov)["rows"]}
     assert derive_next_step("DEMO-1", gov)["current_state"] != "legacy_frozen"
     rc, out, _err = _cli(["project", "freeze-legacy", "--workspace-root", str(gov), "--unfreeze", "DEMO-1",
                           "--reason", "again", "--actor", "advisor.sample", "--confirm"], capsys)
@@ -314,12 +314,12 @@ def test_item3_broken_manifest_is_fail_closed_everywhere(tmp_path, monkeypatch, 
     _freeze(gov, capsys, "--confirm")
     (gov / "5_tasks/records/legacy_baseline/legacy_freeze_broken.md").write_text("no frontmatter\n", encoding="utf-8")
     from tools.aipos_cli.board_adapter import return_task
-    from tools.aipos_cli.next_resolver import scan_project
+    from tools.aipos_cli.next_resolver import scan_project_view
 
     rc, lint = _lint(gov, capsys)
     assert rc == 1 and any(i.get("code") == "LEGACY_BASELINE_INVALID" for i in lint["issues"])
     assert len([i for i in lint["issues"] if i["severity"] == "ERROR"]) == 5  # 冻结不生效, 4 张人肉期断层不被隐藏
-    rows = scan_project(gov)
+    rows = scan_project_view(gov)["rows"]
     assert rows[0]["current_state"] == "legacy_baseline_invalid" and "DEMO-1" in {r["task_id"] for r in rows}
     resp = return_task(task_id="DEMO-4", actor="exec.sample", agent_instance="exec.sample", owner_policy_ref="pol",
                        result_summary="x", dry_run=True, repo_root=gov)

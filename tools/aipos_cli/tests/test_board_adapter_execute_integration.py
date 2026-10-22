@@ -7,13 +7,10 @@ import unittest
 from pathlib import Path
 
 from tools.aipos_cli.board_adapter import (
-    block_task,
     claim_task,
-    complete_task,
     create_draft,
     execute_dry_run,
     publish_draft,
-    reopen_task,
     return_task,
 )
 from tools.aipos_cli.controlled_execute import get_dry_run
@@ -232,16 +229,6 @@ class BoardAdapterExecuteIntegrationTests(unittest.TestCase):
         stale = execute_dry_run(dry["dry_run_id"], "dev.codex.local", repo_root=self.repo_root)
         self.assertFalse(stale["ok"])
         self.assertTrue(stale.get("errors") or stale.get("blocking_reasons"))
-
-    def test_unsupported_execute_paths_remain_blocked(self) -> None:
-        self.copy_fixture("queue/claimed_task.md", "5_tasks/queue/claimed/claimed_task.md")
-        b = block_task(task_id="AIPOS-39-QUEUE-CLAIMED", actor="dev.codex.local", reason="hold", dry_run=False, repo_root=self.repo_root)
-        c = complete_task(task_id="AIPOS-39-QUEUE-CLAIMED", actor="dev.codex.local", report_link="https://example.com", dry_run=False, repo_root=self.repo_root)
-        r = reopen_task(task_id="AIPOS-39-QUEUE-CLAIMED", actor="dev.codex.local", reason="retry", dry_run=False, repo_root=self.repo_root)
-
-        self.assertEqual(b["errors"][0]["category"], "DRY_RUN_REQUIRED")
-        self.assertEqual(c["errors"][0]["category"], "DRY_RUN_REQUIRED")
-        self.assertEqual(r["errors"][0]["category"], "DRY_RUN_REQUIRED")
 
     def test_response_contract_has_revalidation_hashes_when_stale(self) -> None:
         payload = self.read_json_fixture("task_cards/valid_draft_create_payload.json")

@@ -6,8 +6,8 @@
 件① lane 键唯一派生 machine_zone.card_lane_key(解析走 workspace_config.resolve_card_repo → repos.items 仓名; 单仓 = 仓路径)
 件② 四命令(lybra next 项目扫描 / brief / loop status / needs-owner)同一 --lane 参数(verbs.schema lane_view)与同一过滤函数
     machine_zone.filter_rows_by_lane; 不带 --lane 时 brief 与 needs-owner 按 lane 分组(group_rows_by_lane)
-件③ 依赖满足单源 task_complexity.dependencies_satisfied(全部依赖满足才真, 只读门生记录): 门 claim(queue_mutation)、
-    validator(dependency_gate 级别)、推导核 pending→claim、scan_project「下一张可推进卡」共用
+件③ 依赖满足单源 task_complexity.unmet_dependencies(返回空 = 全部依赖满足, 只读门生记录; AIPOS-F216 删零调用包装 dependencies_satisfied): 门 claim(queue_mutation)、
+    validator(dependency_gate 级别)、推导核 pending→claim、scan_project_view「下一张可推进卡」共用
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from test_aipos_f73d_loop_driver import _fm, _write  # noqa: E402  — 靶场/�
 from test_aipos_f78_engine_agnostic import DRIVER, EXEC, _card  # noqa: E402
 from test_aipos_f78c_card_repo import _gov_skeleton, _product_repo  # noqa: E402
 from tools.aipos_cli import machine_zone as mz  # noqa: E402
-from tools.aipos_cli.task_complexity import dependencies_satisfied, unmet_dependencies  # noqa: E402
+from tools.aipos_cli.task_complexity import unmet_dependencies  # noqa: E402
 
 PROJECT = "hbjfx"  # 人肉期样本项目(非 lybra; 禁写死项目 ID 的反证)
 
@@ -227,7 +227,7 @@ def test_item2_lane_flag_declared_once_in_verbs_schema():
 
 def test_item3_dependency_blocks_claim_and_next_until_closure(dual):
     from tools.aipos_cli.agent_profiles import load_agent_profiles
-    from tools.aipos_cli.next_resolver import derive_next_step, pick_next_card, scan_project
+    from tools.aipos_cli.next_resolver import derive_next_step, pick_next_card, scan_project_view
     from tools.aipos_cli.queue_mutation import mutate_queue_task
 
     gov, _ = dual
@@ -237,7 +237,7 @@ def test_item3_dependency_blocks_claim_and_next_until_closure(dual):
            claim_id="claim_HBJ-B9_20261008_000000_x", claimed_by=EXEC, claimed_at="2026-10-08T00:00:00Z",
            active_session_id="session_HBJ-B9_20261008_000000_x")
     fm_a = {"task_id": "HBJ-A9", "depends_on": ["HBJ-B9"]}
-    assert unmet_dependencies(fm_a, gov) and not dependencies_satisfied(fm_a, gov)
+    assert unmet_dependencies(fm_a, gov)
 
     step = derive_next_step("HBJ-A9", gov)
     _show("件③ B 未结案 next --task-id A: " + json.dumps({k: step.get(k) for k in ("derivable", "current_state", "missing_records",
@@ -250,7 +250,7 @@ def test_item3_dependency_blocks_claim_and_next_until_closure(dual):
     assert claim.get("wrote") is not True and claim["error_code"] == "DEPENDENCY_UNMET"
     assert any(r.startswith("DEPENDENCY_UNMET: 依赖 HBJ-B9 未满足 closure") for r in claim["blocking_reasons"])
     assert (gov / "5_tasks" / "queue" / "pending" / "hbj-a9.md").is_file()
-    rows = scan_project(gov, lane="api")
+    rows = scan_project_view(gov, lane="api")["rows"]
     nxt = pick_next_card(rows)
     _show(f"件③ B 未结案 下一张(lane api): {nxt and nxt['task_id']}")
     assert nxt is not None and nxt["task_id"] == "HBJ-A1"  # A 依赖未满足不入选, 取 lane 内可推导最高优先级
@@ -260,8 +260,8 @@ def test_item3_dependency_blocks_claim_and_next_until_closure(dual):
 
     # B 结案(门生结案记录落盘)→ A 依赖满足: 可认领 + 成为下一张(critical 高于 A1 high)
     _closure(gov, "HBJ-B9")
-    assert dependencies_satisfied(fm_a, gov)
-    rows = scan_project(gov, lane="api")
+    assert not unmet_dependencies(fm_a, gov)
+    rows = scan_project_view(gov, lane="api")["rows"]
     assert rows[0]["task_id"] == "HBJ-A9" and rows[0]["next_card"] is True
     rc, out, _ = _cli(["next", "--workspace-root", str(gov), "--lane", "api"])
     _show("件③ B 结案后 lybra next --lane api(首行):\n" + "\n".join(out.splitlines()[:5]))
@@ -287,7 +287,7 @@ def test_item3_all_vs_any_semantics_and_records_only(dual):
     _verdict(gov, "HBJ-P2", "PASS", gate_born=False)  # 手写裁决不算门生
     assert validate_task_complexity(fm, enforce_dependency_gate=True, governance_root=gov)["blocking_reasons"] == one_pass
     _verdict(gov, "HBJ-P2", "FAIL")
-    assert not dependencies_satisfied(fm, gov)
+    assert unmet_dependencies(fm, gov)
     _verdict(gov, "HBJ-P2", "PASS")
     assert validate_task_complexity(fm, enforce_dependency_gate=True, governance_root=gov)["blocking_reasons"] == []
     # 无治理根 = 读不到记录 = 拒(fail-closed), 不退回卡面自报
@@ -298,7 +298,7 @@ def test_item3_all_vs_any_semantics_and_records_only(dual):
     bad = unmet_dependencies({"depends_on": ["HBJ-P1"], "dependency_condition": "owner_approved"}, gov)
     assert bad[0].startswith("DEPENDENCY_CONDITION_INVALID")
     # 无依赖 = 满足
-    assert dependencies_satisfied({"task_id": "Z"}, gov) and dependencies_satisfied({"task_id": "Z"}, None)
+    assert not unmet_dependencies({"task_id": "Z"}, gov) and not unmet_dependencies({"task_id": "Z"}, None)
 
 
 def test_item3_withdraw_not_gated_by_dependencies(dual):

@@ -461,7 +461,7 @@ def should_derive_audit(source_metadata: dict[str, Any], *, branch_id: str | Non
         return False
     
     # AIPOS-256 F-253-3: Prevent infinite audit chain (audit tasks do not derive audits)
-    if str(source_metadata.get("task_mode", "")).strip().lower() == "audit":
+    if is_audit_task_mode(source_metadata.get("task_mode")):  # AIPOS-F216 件④: 审计卡识别卡面层单源
         return False
     
     # AIPOS-F72: 链有效性判据(与 manual dispatch 同源)
@@ -540,13 +540,32 @@ def reviewed_task_id_of(audit_task_id: str) -> str | None:
     return None
 
 
+def is_audit_task_mode(task_mode: Any) -> bool:
+    """AIPOS-F216 件④: 卡面 task_mode 是否审计模式 = 审计卡识别的卡面层唯一判定(声明 enums.schema task_mode.audit_card, 每值带
+    audit_card 布尔; 条目经 next_resolver._task_mode_entry 唯一取: 缺值 = missing_default 非审计, 未知 = 非审计)。取代原 7 模块 11 处
+    task_mode == "audit" 字面(F211 基线); is_audit_card 的卡面层同读本函数。声明缺 / 形变 = SchemaLoadError(fail-closed)。"""
+    from tools.aipos_cli.next_resolver import REPO_ROOT, _task_mode_entry
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = ((load_schema("enums", REPO_ROOT).get("enums") or {}).get("task_mode") or {})
+    if not isinstance(decl.get("audit_card"), dict):
+        raise SchemaLoadError("enums.schema.json enums.task_mode.audit_card 未声明(AIPOS-F216)")
+    entry = _task_mode_entry(str(task_mode or ""))
+    if entry is None:
+        return False
+    flag = entry.get("audit_card", False)
+    if not isinstance(flag, bool):
+        raise SchemaLoadError(f"enums.schema.json task_mode={task_mode!r} audit_card 须为布尔(AIPOS-F216)")
+    return flag
+
+
 def is_audit_card(task_id: str, card_frontmatter: dict[str, Any] | None = None) -> bool:
     """AIPOS-F112: 审计卡判据唯一实现(推导核 / 产物入口 / loop 回读 / 开工核验同读)。
-    卡面在: task_mode=audit 或首轮号形(<ID>R, 存量手发审计卡); 卡面不在: 审计轮号形(R/R2/R3…, 声明序列)。
+    卡面在: 审计模式(is_audit_task_mode, AIPOS-F216)或首轮号形(<ID>R, 存量手发审计卡); 卡面不在: 审计轮号形(R/R2/R3…, 声明序列)。
     原各处 `task_id.upper().endswith("R")` 认不出复审轮 R2(gap #69 的一环)。"""
     tid = str(task_id or "").strip()
     if isinstance(card_frontmatter, dict) and card_frontmatter:
-        if str(card_frontmatter.get("task_mode") or "").strip().lower() == "audit":
+        if is_audit_task_mode(card_frontmatter.get("task_mode")):
             return True
         first = audit_round_suffixes()[0]
         return bool(first) and tid.upper().endswith(first.upper())
@@ -888,7 +907,7 @@ def _reaudit_round(repo_root: Path, source_task_id: str, source_metadata: dict[s
     其所审交回绑定的 tip ≠ 卡分支 tip——门已落的新交回不是该轮所审的那份)。"""
     if str(source_metadata.get("audit", "")).strip().lower() == "none":
         return None
-    if str(source_metadata.get("task_mode", "")).strip().lower() == "audit" or branch_id == "noncode_bench_audit":
+    if is_audit_task_mode(source_metadata.get("task_mode")) or branch_id == "noncode_bench_audit":  # AIPOS-F216 件④
         return None
     from tools.aipos_cli.next_resolver import return_staleness, verdict_staleness
     from tools.aipos_cli.task_loader import task_card_lookup_scope
@@ -1490,7 +1509,7 @@ def supplementary_audit_overview(repo_root: Path, unreadable: list[str] | None =
                 if str(exc) not in unreadable:
                     unreadable.append(str(exc))
                 continue
-            if str(fm.get("task_mode") or "").strip().lower() == "audit" and str(fm.get("supplementary_of") or "").strip():
+            if is_audit_task_mode(fm.get("task_mode")) and str(fm.get("supplementary_of") or "").strip():  # AIPOS-F216 件④
                 sources.add(str(fm["supplementary_of"]).strip())
         for source in sorted(sources):
             try:

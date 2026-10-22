@@ -132,12 +132,12 @@ def test_item1_completed_card_done_take_next(lrig):
     assert "顾问下一动作: card_done_take_next(completed)" in text and "下一张可推进卡: 无" in text
     lane = lrr.loop_status(lrig.gov, TASK)["runs"][0]["lane"]
     assert lane and f"下一条: lybra next --workspace-root {lrig.gov} --lane {lane}" in text
-    # 同 lane 再发一张 pending 卡: 接 F133「下一张」唯一出口(next_resolver.scan_project + pick_next_card), hint = 直接推进它
+    # 同 lane 再发一张 pending 卡: 接 F133「下一张」唯一出口(next_resolver.scan_project_view + pick_next_card), hint = 直接推进它
     nxt = TASK.replace("-1", "-2")
     f90._card(lrig.gov, nxt, "pending", harness="pi")
-    from tools.aipos_cli.next_resolver import pick_next_card, scan_project
+    from tools.aipos_cli.next_resolver import pick_next_card, scan_project_view
 
-    expected = pick_next_card(scan_project(lrig.gov, lane=lane))
+    expected = pick_next_card(scan_project_view(lrig.gov, lane=lane)["rows"])
     rc, js, _ = _cli(["loop", "status", "--task-id", TASK, "--workspace-root", str(lrig.gov), "--wait", "30", "--json"])
     report = json.loads(js)
     _show(f"[① 已结案 + 同 lane pending 卡] next_action={report['next_action']} / lybra next 首位={expected and expected.get('task_id')}")

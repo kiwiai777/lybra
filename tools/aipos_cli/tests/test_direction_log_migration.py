@@ -10,7 +10,6 @@ from tools.aipos_cli.migrate_direction_log import (
     parse_monthly_file,
     slugify,
 )
-from tools.aipos_cli.project_map import _read_direction_log_recent
 
 
 SAMPLE_MONTHLY_FILE = """# Lybra 方向层决策批量入册(2026-07-08 ~ 2026-07-11)
@@ -218,122 +217,6 @@ class MigrationToolTests(unittest.TestCase):
             index_content = index.read_text(encoding="utf-8")
             self.assertIn("[2026-07-09](./09-02-homerail", index_content)
             self.assertIn("Homerail 两轮分析与借鉴清单", index_content)
-
-
-class DirectionLogParsingTests(unittest.TestCase):
-    """Test project_map.py reads both old and new structures."""
-    
-    def test_read_old_structure(self) -> None:
-        """Parser reads old monthly aggregate files."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            gov = Path(tmpdir) / "governance"
-            dl_dir = gov / "direction_log"
-            dl_dir.mkdir(parents=True)
-            
-            # Old structure: single file with multiple entries
-            (dl_dir / "2026-07-direction-decisions.md").write_text(
-                "# DL\n\n"
-                "## 2026-07-10 — Third\n\nBody 3\n\n"
-                "## 2026-07-09 — Second\n\nBody 2\n\n"
-                "## 2026-07-07 — First\n\nBody 1\n",
-                encoding="utf-8"
-            )
-            
-            entries = _read_direction_log_recent(gov, limit=3)
-            
-            self.assertEqual(len(entries), 3)
-            self.assertEqual(entries[0]["date"], "2026-07-10")
-            self.assertEqual(entries[0]["title"], "Third")
-            self.assertEqual(entries[1]["date"], "2026-07-09")
-            self.assertEqual(entries[2]["date"], "2026-07-07")
-    
-    def test_read_new_structure(self) -> None:
-        """Parser reads new directory structure."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            gov = Path(tmpdir) / "governance"
-            dl_dir = gov / "direction_log"
-            month_dir = dl_dir / "2026-07"
-            month_dir.mkdir(parents=True)
-            
-            # New structure: individual files
-            (month_dir / "07-01-first.md").write_text(
-                "## 2026-07-07 — First\n\nBody 1\n",
-                encoding="utf-8"
-            )
-            (month_dir / "09-01-second.md").write_text(
-                "## 2026-07-09 — Second\n\nBody 2\n",
-                encoding="utf-8"
-            )
-            (month_dir / "10-01-third.md").write_text(
-                "## 2026-07-10 — Third\n\nBody 3\n",
-                encoding="utf-8"
-            )
-            (month_dir / "INDEX.md").write_text(
-                "# Index\n\n- [2026-07-07](./07-01-first.md)\n",
-                encoding="utf-8"
-            )
-            
-            entries = _read_direction_log_recent(gov, limit=3)
-            
-            self.assertEqual(len(entries), 3)
-            self.assertEqual(entries[0]["date"], "2026-07-10")
-            self.assertEqual(entries[0]["title"], "Third")
-            self.assertEqual(entries[1]["date"], "2026-07-09")
-            self.assertEqual(entries[2]["date"], "2026-07-07")
-    
-    def test_read_new_structure_with_suffix(self) -> None:
-        """Parser handles date suffixes in new structure."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            gov = Path(tmpdir) / "governance"
-            dl_dir = gov / "direction_log"
-            month_dir = dl_dir / "2026-07"
-            month_dir.mkdir(parents=True)
-            
-            (month_dir / "09-01-first.md").write_text(
-                "## 2026-07-09 — First\n\nBody 1\n",
-                encoding="utf-8"
-            )
-            (month_dir / "09-02-second.md").write_text(
-                "## 2026-07-09(a) — Second with suffix\n\nBody 2\n",
-                encoding="utf-8"
-            )
-            
-            entries = _read_direction_log_recent(gov, limit=5)
-            
-            self.assertEqual(len(entries), 2)
-            # Both have same date but different titles
-            dates = [e["date"] for e in entries]
-            self.assertEqual(dates.count("2026-07-09"), 2)
-            titles = [e["title"] for e in entries]
-            self.assertIn("First", titles)
-            self.assertIn("Second with suffix", titles)
-    
-    def test_read_multiple_months(self) -> None:
-        """Parser aggregates across multiple month directories."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            gov = Path(tmpdir) / "governance"
-            dl_dir = gov / "direction_log"
-            
-            june = dl_dir / "2026-06"
-            june.mkdir(parents=True)
-            (june / "25-01-june-entry.md").write_text(
-                "## 2026-06-25 — June entry\n\nOld\n",
-                encoding="utf-8"
-            )
-            
-            july = dl_dir / "2026-07"
-            july.mkdir(parents=True)
-            (july / "10-01-july-entry.md").write_text(
-                "## 2026-07-10 — July entry\n\nNew\n",
-                encoding="utf-8"
-            )
-            
-            entries = _read_direction_log_recent(gov, limit=5)
-            
-            self.assertEqual(len(entries), 2)
-            # Sorted by date descending
-            self.assertEqual(entries[0]["date"], "2026-07-10")
-            self.assertEqual(entries[1]["date"], "2026-06-25")
 
 
 if __name__ == "__main__":

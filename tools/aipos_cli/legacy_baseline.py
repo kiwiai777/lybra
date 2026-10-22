@@ -8,7 +8,7 @@ next 项目扫描把它们当待推进。本模块给产品一个只追加的冻
   清单  manifest_dir 下每批一条带 record_type 的记录文件(render_markdown 单源渲染, 排他创建 = 只追加)。
         record_type 值单源 = enums.schema record_type 枚举值 legacy_baseline(AIPOS-F124 件③, 读取口 record_type())。
         解冻 = 追加 action=unfreeze 条目, 不删不改既有条目。
-  判定  frozen_tasks(唯一「是否冻结」实现)——state lint 全项目扫描 / next scan_project / 门写动作(claim/return/dispatch/
+  判定  frozen_tasks(唯一「是否冻结」实现)——state lint 全项目扫描 / next scan_project_view / 门写动作(claim/return/dispatch/
         verdict/finalize)/ lybra loop --task-id 共用; 门与 loop 的拒因经 frozen_rejection(LEGACY_FROZEN + 解冻命令)。
   命令  `lybra project freeze-legacy`(legacy_freeze.plan_freeze_legacy → 干跑 / write_freeze_entry → 落条目); 不移动、不改写任何卡文件与记录。
 

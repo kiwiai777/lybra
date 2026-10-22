@@ -328,25 +328,6 @@ def get_branch_integration(repo_root: Path | None = None) -> dict[str, Any]:
     return branch_integration
 
 
-def get_task_mode_routing(task_mode: str, repo_root: Path | None = None) -> dict[str, Any] | None:
-    """Get workflow routing for a task_mode.
-    
-    Args:
-        task_mode: Task mode (e.g., "code", "docs")
-        repo_root: Repository root path (auto-detected if not provided)
-        
-    Returns:
-        Routing definition dict or None if mode not found
-        
-    Example:
-        >>> code_route = get_task_mode_routing("code")
-        >>> print(code_route["flow"])  # "N0 → N1 → N2 → N3 → N4 → N5 → N6"
-    """
-    transitions_schema = load_schema("transitions", repo_root)
-    routes = transitions_schema.get("task_mode_routing", {}).get("routes", {})
-    return routes.get(task_mode)
-
-
 # ---------------------------------------------------------------------------
 # Role registry accessors (AIPOS-R4B-1 / DESIGN v2 §5-6)
 # Single source for role category definitions: scopes / tool package / naming.
@@ -771,7 +752,6 @@ __all__ = [
     "get_forbidden_draft_fields",
     "get_verb_contract",
     "get_transition_node",
-    "get_task_mode_routing",
     "get_branch_integration",
     "get_role_spec",
     "get_role_scopes",
