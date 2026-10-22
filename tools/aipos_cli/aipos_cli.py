@@ -3765,7 +3765,6 @@ def _workspace_roots_command(args: argparse.Namespace) -> int:
     return 1 if errors else 0
 
 
-@cli_envelope_trace_entry  # AIPOS-F142 件②: 本次 CLI 调用结束即恢复 [ENVELOPE_TRACE] 开关原状(in-process 嵌套调用不泄漏)
 def _queue_return_repair(args: argparse.Namespace, repo_root: Path) -> int:
     """`lybra queue return-repair`(AIPOS-370F2): 诊断并修复卡住的交回(无会话记录 = block → reopen → 带会话记录重认领)。
     AIPOS-F213 件①(F208 P1-6 E35): 修复序列的三步写入(卡迁移 + 重认领会话记录)写完经队列写落账唯一薄壳一次落账
@@ -3887,6 +3886,7 @@ def _queue_return_repair(args: argparse.Namespace, repo_root: Path) -> int:
     return 0 if landing is None or landing["landed"] else int(landing["exit_code"])
 
 
+@cli_envelope_trace_entry  # AIPOS-F142 件②: 本次 CLI 调用结束即恢复 [ENVELOPE_TRACE] 开关原状(in-process 嵌套调用不泄漏)
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -7534,7 +7534,7 @@ def main(argv: list[str] | None = None) -> int:
         if not audit_task_id:
             from tools.aipos_cli.audit_derivation import find_open_audit_task
 
-            audit_task_id = find_open_audit_task(args.reviewed_task_id, workspace_root)
+            audit_task_id = find_open_audit_task(args.reviewed_task_id, workspace_root or repo_root)
         dry_run_args = build_audit_verdict_dry_run_args(
             reviewed_task_id=args.reviewed_task_id,
             verdict=args.verdict,
