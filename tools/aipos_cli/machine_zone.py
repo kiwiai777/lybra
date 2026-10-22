@@ -112,39 +112,26 @@ def derive_machine_zone_纪律段(
         if not branch_pattern:
             raise ValueError(
                 "transitions.schema.json N5.branch_integration.branch_pattern 声明缺失。"
-                "可执行出口: 在 schema 中声明 branch_pattern (如 'card/{task_id}')"
+                "可执行出口: 在 schema 中声明 branch_pattern(式样须含 {task_id} 占位)"
             )
-        # Substitute {task_id} placeholder
-        branch_name = branch_pattern.replace("{task_id}", task_id)
-        
         lines.append("## 工作纪律")
         lines.append("")
         from tools.aipos_cli.next_resolver import (
-            CandidateSubjectError, card_candidate_subject, card_report_contract, card_report_path, render_report_frontmatter_clause,
+            CandidateSubjectError, card_report_contract, card_report_path, card_workstation_view, render_report_frontmatter_clause,
         )
 
         card_fm = {**metadata, "task_id": task_id}
-        # AIPOS-F196 件①: 固定候选卡(validation)不建卡分支 / 工作树, 不写产品仓源码(enums.schema task_mode.candidate_subject)
-        try:
-            candidate = card_candidate_subject(card_fm)
-            candidate_problem = ""
-        except CandidateSubjectError as exc:
-            candidate, candidate_problem = None, str(exc)
-        if candidate is not None or candidate_problem:
-            subject = (f"来源卡 {candidate['source']} 的固定候选 `{candidate['candidate']}`" if candidate
-                       else f"(固定候选不合: {candidate_problem})")
-            lines.append(f"- **分支**: 不建(交付主体 = {subject}; 不写产品仓源码, 产物只落验证根与报告落点; 判据 enums.schema task_mode.candidate_subject)")
-            lines.append("- **工作起点**: 固定候选(只读取证; 验证根 run-start 的候选须等于卡面候选)")
-        else:
-            lines.append(f"- **分支**: `{branch_name}` (读自 transitions.schema.json N5.branch_integration.branch_pattern)")
-            lines.append("- **工作起点**: 从当前 main 拉取")
-        
+        # AIPOS-F210 件①(F208 P0-2): 分支 / 候选 / 产出清单措辞只读开工面 card_workstation_view(交付主体三态唯一判定
+        # card_delivery_subject + 报告契约 card_report_contract; 与 /go、lybra kickoff、card render 同源), 本函数不自判
+        view = card_workstation_view(governance_root, task_id, card_fm, branch_pattern=branch_pattern)
+        lines.extend(_delivery_subject_lines(view))
+
         # AIPOS-F89 件① H9: 报告落点唯一读取口 next_resolver.card_report_path(执行卡 = project.json paths.return_root,
-        # 审计卡 = paths.verdict_root; 文件候选读 transitions artifact_ingest)。原读 config.schema
-        # governance_structure.paths.task_cards(第二份声明)已删。声明读取失败 = 向上抛(fail-closed)。
+        # 审计卡 = paths.verdict_root; 文件候选读 transitions artifact_ingest)。声明读取失败 = 向上抛(fail-closed)。
         report_path = card_report_path(governance_root, task_id, card_fm)
         lines.append(f"- **报告落点**: `{report_path}` (读自项目 project.json paths 声明)")
-        # AIPOS-F93 件①: 报告必填字段(声明 transitions artifact_ingest 单源渲染, 与派生审计卡 / my-tasks / 认领模板 / 章程同源)
+        # AIPOS-F93 件①: 报告必填字段(声明 transitions artifact_ingest 单源渲染, 与派生审计卡 / my-tasks / 认领模板 / 章程同源);
+        # AIPOS-F210 件③: 契约分形 = card_report_contract 按交付主体三态(声明缺 = SchemaLoadError 上抛, 起草出告警)
         try:
             contract = card_report_contract(governance_root, task_id, card_fm, branch_pattern=branch_pattern)
             lines.append(f"- **报告必填**: {render_report_frontmatter_clause(contract)}")
@@ -159,6 +146,35 @@ def derive_machine_zone_纪律段(
         raise
     
     return "\n".join(lines)
+
+
+def _delivery_subject_lines(view: dict[str, Any]) -> list[str]:
+    """AIPOS-F210 件①: 卡正文工作纪律段的「分支 / 工作起点(交付主体)」两行——只排版开工面字段(card_workstation_view:
+    delivery_subject / branch / worktree_refusal.reason / outputs_note), 不另判、不另拼分支名。三态:
+    卡分支 = 分支名 + 从当前基线拉取(照旧); 固定候选 = 不建卡分支 + 交付主体 = 来源卡固定候选 sha(只读取证);
+    治理根产出清单 = 不建卡分支 + 产出写治理根报告落点、outputs 清单。判定失败 = 如实写拒因(发卡前须修正)。"""
+    subject = view.get("delivery_subject")
+    reason = str((view.get("worktree_refusal") or {}).get("reason") or "")  # 开工面拒因原文(与 /go、lybra kickoff 同句)
+    if not isinstance(subject, dict):
+        refusal = view.get("delivery_subject_refusal") or {}
+        return [f"- **分支**: 交付主体不可判定({refusal.get('code')}: {refusal.get('reason')}; 发卡前须修正)"]
+    kind = subject.get("kind")
+    if kind == "candidate":
+        what = (f"来源卡 {subject['source']} 的固定候选 `{subject['candidate']}`" if subject.get("candidate")
+                else f"(固定候选不合: {subject.get('problem')})")
+        return [f"- **分支**: {reason or '不建(交付主体 = 来源卡的固定候选; 判据 enums.schema task_mode.candidate_subject)'}",
+                f"- **工作起点**: 交付主体 = {what}(只读取证, 不建卡分支; 验证根 run-start 的候选须等于卡面候选)"]
+    if kind == "governance_outputs":
+        if subject.get("audit"):
+            digest = subject.get("outputs_digest")
+            what = (f"被审卡交回绑定的治理根产出清单 outputs_digest `{digest}`" if digest
+                    else "被审卡交回时产品绑定的治理根产出清单(outputs_digest 以开工提示 / 报告必填句给值为准)")
+        else:
+            what = str(view.get("outputs_note") or "治理根产出清单(报告 frontmatter outputs 逐项列出产出文件)")
+        return [f"- **分支**: {reason or '不建(只写治理根; 判据 enums.schema task_mode.governance_outputs_subject)'}",
+                f"- **工作起点**: 交付主体 = {what}"]
+    return [f"- **分支**: `{subject['branch']}` (读自 transitions.schema.json N5.branch_integration.branch_pattern)",
+            f"- **工作起点**: 从当前 {subject['base']} 拉取"]
 
 
 def validate_machine_zone_unchanged(
