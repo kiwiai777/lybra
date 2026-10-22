@@ -1,6 +1,6 @@
 """AIPOS-F187 件③④ — 卡工作树与审计工作树清理。
 
-一句话: 卡结案(closure 落盘后)/ 撤回 / 撤换后, 该卡工作树与其审计轮工作树干净的自动 `git worktree remove`(分支保留),
+一句话: 卡结案(closure 落盘后 / AIPOS-F209 顾问复核结案 mark-concluded 后)/ 撤回 / 撤换后, 该卡工作树与其审计轮工作树干净的自动 `git worktree remove`(分支保留),
 脏的不碰只报告; 存量由 `lybra project cleanup-worktrees` 按同一判据批量处理(跨 project.json repos.items 全部仓)。
 
 判据唯一声明 = transitions.schema queue_mutations.worktree_cleanup(终态 / 承继保护状态 / 事件类型 / 判定动作集);
@@ -35,15 +35,17 @@ def cleanup_declaration() -> dict[str, Any]:
     from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
 
     decl = ((load_schema("transitions", code_repo_schema_root()).get("queue_mutations") or {}).get("worktree_cleanup"))
-    need = ("terminal_states", "carry_protect_states", "event_type", "actions", "triggers")
+    need = ("terminal_states", "carry_protect_states", "event_type", "actions", "triggers", "closing_triggers")
     if not isinstance(decl, dict) or any(not decl.get(k) for k in need):
         raise SchemaLoadError(f"transitions.schema.json queue_mutations.worktree_cleanup 未声明齐 {list(need)}")
+    if not isinstance(decl["triggers"], dict) or not set(decl["closing_triggers"]) <= set(decl["triggers"]):
+        raise SchemaLoadError("transitions.schema.json queue_mutations.worktree_cleanup.closing_triggers 须为 triggers 键的子集")
     for key in ("terminal_states", "carry_protect_states"):
         bad = [s for s in decl[key] if s not in QUEUE_STATES]
         if bad:
             raise SchemaLoadError(f"transitions.schema.json queue_mutations.worktree_cleanup.{key} 含非队列目录 {bad}")
     return {**decl, "terminal_states": tuple(decl["terminal_states"]), "carry_protect_states": tuple(decl["carry_protect_states"]),
-            "actions": tuple(decl["actions"])}
+            "actions": tuple(decl["actions"]), "closing_triggers": tuple(decl["closing_triggers"])}
 
 
 def cleanup_texts() -> dict[str, str]:
@@ -287,7 +289,9 @@ def _write_cleanup_record(governance_root: Path, view: dict[str, Any], *, trigge
 
 
 def cleanup_after(governance_root: Path, task_id: str, *, trigger: str, actor: str) -> dict[str, Any]:
-    """结案 / 撤回 / 撤换之后的自动清理(声明 worktree_cleanup.triggers; close_task / withdraw_task / supersede_task 调用)。
+    """结案 / 撤回 / 撤换之后的自动清理(声明 worktree_cleanup.triggers; close_task / mark_concluded_task(AIPOS-F209 conclude)/
+    withdraw_task / supersede_task 调用)。trigger 不在声明 triggers = 不清理, 原因进 error(fail-closed)。closing_triggers(结案类)
+    一并清卡面 carried_from 所指原卡的树。
     绝不抛: 声明 / git / 记录写入失败只进返回的 line 与 error(调用方照常完成本动作)。有任一树在盘才写清理记录。
     返回 {ok, task_id, trigger, line, removed: [路径], kept: [{worktree, action, reason}], record, error}。"""
     from tools.aipos_cli.frontmatter import FrontmatterReadError
@@ -301,7 +305,10 @@ def cleanup_after(governance_root: Path, task_id: str, *, trigger: str, actor: s
         out.update(error=str(exc), line=f"工作树清理({trigger} {task_id})未完成: {exc}")
         return out
     try:
-        view = card_worktree_view(Path(governance_root), task_id, confirm=True, include_carried_source=(trigger == "close"))
+        decl = cleanup_declaration()
+        if trigger not in decl["triggers"]:
+            raise ValueError(f"trigger {trigger!r} 不在 transitions.schema queue_mutations.worktree_cleanup.triggers {sorted(decl['triggers'])}")
+        view = card_worktree_view(Path(governance_root), task_id, confirm=True, include_carried_source=trigger in decl["closing_triggers"])
         line = _summary_line(view, trigger, texts)
         out.update(line=line, removed=[i["worktree"] for i in view["removed"]],
                    kept=[{"worktree": i["worktree"], "action": i["action"], "reason": _kept_reason(i, texts)} for i in view["kept"]])

@@ -73,6 +73,7 @@ from tools.aipos_cli.next_resolver import (
     repo_turn_watch,
 )
 from tools.aipos_cli.frontmatter import FrontmatterReadError
+from tools.aipos_cli.task_complexity import closure_state  # AIPOS-F209: 结案口径唯一判定(loop 结案出口)
 
 LOOP_VERB = "lybra_loop"
 DRIVER_ROLE = "advisor"
@@ -388,20 +389,6 @@ def _watch_args(governance_root: Path, patterns: list[str], *, max_wait: float, 
         worktree_path=None,
         unhealthy_cycles=2,
     )
-
-
-def _has_closure(governance_root: Path, task_id: str) -> bool:
-    return bool(_closure_kind(governance_root, task_id))
-
-
-def _closure_kind(governance_root: Path, task_id: str) -> str | None:
-    """loop 结案出口: 门生 closure 记录在 = "closure"; AIPOS-F207 件①: 顾问复核结案(mark-concluded)= "conclusion"(结案口径唯一判定
-    task_complexity.closure_state, 依赖判据同读; 补跑已复核结案卡的 loop 不再停在「任务已完成, 无下一步」的人工介入)。否则 None。"""
-    if _read_task_records(governance_root, task_id).get("latest_closure"):
-        return "closure"
-    from tools.aipos_cli.task_complexity import closure_state
-
-    return closure_state(governance_root, task_id)["kind"]
 
 
 def _supplementary_in_flight(governance_root: Path, task_id: str) -> bool:
@@ -1522,7 +1509,9 @@ def _drive(
             return _deploy_changed_end(index, change, result, contract=contract, say=say, recorder=recorder)
         # 出口 0: closure 记录存在且治理已落账(AIPOS-F94 件①: 本卡落账范围已提交且已推送); 未落账 → 推导核派生 N6 落账步
         # AIPOS-F162 件②: 已结案卡有在途补充审计 = 未完(推导核派 await_artifact 等补审卡), 结案出口不成立
-        closed_kind = _closure_kind(governance_root, task_id)
+        # AIPOS-F209: 结案口径唯一判定 task_complexity.closure_state(kind: closure = 门生 closure 记录; conclusion = 顾问复核结案
+        # mark-concluded, F207); 原 _has_closure / _closure_kind 私判删除
+        closed_kind = closure_state(governance_root, task_id)["kind"]
         if closed_kind and not _supplementary_in_flight(governance_root, task_id):
             landing = _landing(governance_root, task_id)
             if landing is not None and landing.get("landed"):

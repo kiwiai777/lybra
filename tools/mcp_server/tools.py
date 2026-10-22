@@ -50,6 +50,7 @@ from tools.aipos_cli.records import find_records_for_task, load_records
 from tools.aipos_cli.task_loader import find_repo_root
 from tools.aipos_cli.workspace_config import _project_candidates, has_workspace_queue, resolve_home_root
 from tools.schema_loader import get_enum_values, get_role_scopes, load_schema
+from tools.aipos_cli.task_complexity import conclusion_outcomes  # AIPOS-F209: mark-concluded outcome 值域唯一读取口
 from tools.schema_constants import RecordType, Verdict
 
 
@@ -3774,6 +3775,7 @@ def lybra_mark_concluded(arguments: dict[str, Any] | None = None) -> dict[str, A
     without producing a断层 card.
 
     Requires: task_id, and at least one of report_path or conclusion_note.
+    AIPOS-F209 件②: outcome(pass | block, 值域 card.schema dependency_gate.conclusion.outcomes)与 CLI 同收; 结案后清理工作树(trigger=conclude)。
     AIPOS-F101 件②: scope 读 verbs.schema 声明(required_scope=queue_close; 原只在可见性上索 queue_close, 调用时不验)。
     """
     if not _verb_scope_allowed("lybra_mark_concluded"):
@@ -3785,6 +3787,8 @@ def lybra_mark_concluded(arguments: dict[str, Any] | None = None) -> dict[str, A
             "ok": False, "verdict": Verdict.BLOCK, "operation": "mark_concluded",
             "blocking_reasons": ["TASK_ID_REQUIRED: task_id is required"],
         }, is_error=True)
+    # AIPOS-F209 件②: outcome 与 CLI `lybra mark-concluded --outcome` 同收、同一写路径(board_adapter.mark_concluded_task 内按
+    # card.schema dependency_gate.conclusion.outcomes 校验, 值不在声明 = 拒); 缺省 = default_outcome 并提示(与 CLI 同)
     response = mark_concluded_task(
         task_id=task_id,
         report_path=str(args.get("report_path") or "").strip() or None,
@@ -3792,6 +3796,7 @@ def lybra_mark_concluded(arguments: dict[str, Any] | None = None) -> dict[str, A
         conclusion_note=str(args.get("conclusion_note") or "").strip() or None,
         dry_run=bool(args.get("dry_run", True)),
         repo_root=_repo_root(),
+        outcome=str(args.get("outcome") or "").strip() or None,
     )
     response["surface"] = "mcp"
     return _tool_result(response, is_error=not bool(response.get("ok", False)))
@@ -6300,7 +6305,8 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
             "AIPOS-354 S3: explicit mark-concluded for report-style audits (bypass path). "
             "For scenarios where no formal verdict was landed via gate. "
             "Leaves a machine-readable closure marker so the card moves to completed/ "
-            "without producing a断层 card. Requires task_id and at least one of report_path or conclusion_note."
+            "without producing a断层 card. Requires task_id and at least one of report_path or conclusion_note. "
+            "AIPOS-F209: accepts outcome (pass|block) like the CLI; cleans the card worktrees after concluding (trigger conclude)."
         ),
         "inputSchema": {
             "type": "object",
@@ -6309,6 +6315,10 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "actor": {"type": "string", "description": "Who is marking this concluded."},
                 "report_path": {"type": "string", "description": "Path to the audit report (evidence)."},
                 "conclusion_note": {"type": "string", "description": "Free-text conclusion note."},
+                # AIPOS-F209 件②: 值域读 card.schema dependency_gate.conclusion.outcomes(唯一声明; CLI argparse choices 同读)
+                "outcome": {"type": "string", "enum": list(conclusion_outcomes()),
+                            "description": "Review conclusion pass | block (block = does not satisfy other cards' closure dependency); "
+                                           "default pass with a hint. Same write path as CLI `lybra mark-concluded --outcome`."},
                 "dry_run": {"type": "boolean", "description": "Preview only (default: true)."},
             },
             "required": ["task_id"],

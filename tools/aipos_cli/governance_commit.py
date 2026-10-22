@@ -712,14 +712,16 @@ def reland_after_write(governance_root: Path, task_id: str, actor: str, *, what:
     """AIPOS-F147 件①: 卡结案(N6)之后才落盘的门记录(合并后回归 async 事件记录 / loop 结束时的运行记录终态)写完后补一次落账——
     复用 N6 同一提交口 governance_commit(task 范围精确提交 + 推送; 范围已落账 = no-op), 不另写提交路径。
 
-    卡尚未结案(无 closure 记录)= 不提交: 该记录在本卡落账范围内(events/<卡ID>/ 与已结束的 loop 运行记录入判据), 由本卡 N6 带上。
+    卡尚未结案 = 不提交: 该记录在本卡落账范围内(events/<卡ID>/ 与已结束的 loop 运行记录入判据), 由本卡 N6 带上。
+    AIPOS-F209: 「已结案」= 结案口径唯一判定 task_complexity.closure_state 的 kind 非空(门生 closure 记录 / 顾问复核结案 mark-concluded);
+    原只认 closure 记录 → 顾问复核结案卡的 loop 运行记录终态永不补落账(chris LANTU-ENV3/ENV3B 实撞)。
     补落账失败(并发提交撞锁 / 推送被拒等)不吞: 结果行如实带拒因; 记录仍在本卡判据范围内 → state lint GOVERNANCE_UNCOMMITTED
     点名并给 `governance-commit --task-id` 出口, loop 再推该卡时推导核派生 N6 落账步——不丢。
     返回 {relanded, verdict, committed, pushed, line}(line 以 RELAND_MARKER 起头, 调用方原样输出)。"""
-    from tools.aipos_cli.next_resolver import _read_task_records
+    from tools.aipos_cli.task_complexity import closure_state
 
     root = Path(governance_root)
-    if not _read_task_records(root, task_id).get("latest_closure"):
+    if not closure_state(root, task_id)["kind"]:
         return {"relanded": False, "verdict": None, "committed": False, "pushed": False,
                 "line": f"{RELAND_MARKER} {task_id} 未结案, {what}由本卡 N6 落账带上(在本卡落账范围内)"}
     result = governance_commit(root, task_id, actor, push=push, message=reland_commit_message(task_id, actor, what))

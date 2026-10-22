@@ -1008,7 +1008,7 @@ def kickoff_refusal(workspace_root: Path, task_id: str, actor: str, *, queue_sta
                     card_frontmatter: dict[str, Any] | None = None) -> dict[str, str] | None:
     """AIPOS-F90 件③: 开工核验唯一判据(/go 选卡与「以卡号/路径冷启动」同读)——本实例在办、未结案、产物未交才可开工。
 
-    事实只读: 队列位置 + 记录(claim 记录实例 / closure) + 推导核结论(triggered_by / derivable), 禁另判。
+    事实只读: 结案口径唯一判定 task_complexity.closure_state(AIPOS-F209) + 记录(claim 记录实例) + 推导核结论(triggered_by / derivable), 禁另判。
     返回 None(可开工) 或 {code, reason}(code ∈ KICKOFF_REFUSAL_CODES; 文案零门动词, 工位原样转述)。
     2026-10-02 事故: 审计会话被贴错卡号, 对已结案卡重审并覆盖原报告 → 已结案/产物已交一律拒。"""
     task_id = str(task_id or "").strip()
@@ -1020,13 +1020,17 @@ def kickoff_refusal(workspace_root: Path, task_id: str, actor: str, *, queue_sta
     if not queue_state:
         return refuse("NOT_FOUND", f"{task_id} 不在任何队列目录")
     from tools.aipos_cli.frontmatter import FrontmatterReadError
+    from tools.aipos_cli.task_complexity import closure_state
 
     try:
         records = _read_task_records(workspace_root, task_id)
-    except FrontmatterReadError as exc:
+        # AIPOS-F209: 是否结案读结案口径唯一判定 closure_state(门生 closure / 顾问复核结案 / 卡在 completed/), 不另判
+        closure = closure_state(workspace_root, task_id)
+    except (FrontmatterReadError, ValueError) as exc:  # 卡面 / 记录读不出, 或结论值不在声明(fail-closed, 不当作可开工)
         return refuse("FRONTMATTER_UNREADABLE", str(exc))
-    if queue_state == "completed" or records.get("latest_closure"):
-        return refuse("CONCLUDED", f"{task_id} queue_state={queue_state}")
+    if closure["concluded"]:
+        return refuse("CONCLUDED", f"{task_id} queue_state={queue_state}"
+                      + (f"(结案口径 {closure['kind']}{'; 结论 ' + closure['outcome'] if closure['outcome'] else ''})" if closure["kind"] else ""))
     if queue_state != "claimed":
         return refuse("NOT_CLAIMED", f"{task_id} queue_state={queue_state}")
     claimer = _claimer_instance(records) or str(fm.get("claimed_by") or "").strip()

@@ -749,9 +749,8 @@
     "conclusion_outcome": {
       "type": "string",
       "required": false,
-      "enum": ["pass", "block"],
-      "written_by": "board_adapter.mark_concluded_task(--outcome, 缺省 dependency_gate.conclusion.default_outcome)",
-      "description": "AIPOS-F207 件①: 顾问复核结案(mark-concluded)的结论 pass | block——依赖判定(task_complexity.closure_state)与门生 closure 等价: pass = 满足 closure 依赖, block = 不满足(拒因提示改依赖); F207 前存量卡无本键 = 按 dependency_gate.conclusion.legacy_block_pattern 读 conclusion_note"
+      "written_by": "board_adapter.mark_concluded_task(CLI --outcome / MCP outcome, 缺省 dependency_gate.conclusion.default_outcome)",
+      "description": "AIPOS-F207 件① / AIPOS-F209: 值域只在 dependency_gate.conclusion.outcomes 一处声明(本字段不另列值; 读卡经 task_complexity.conclusion_view 校验, 值不在声明 = 读不出 fail-closed)。顾问复核结案(mark-concluded)的结论 pass | block——依赖判定(task_complexity.closure_state)与门生 closure 等价: pass = 满足 closure 依赖, block = 不满足(拒因提示改依赖); F207 前存量卡无本键 = 按 dependency_gate.conclusion.legacy_block_pattern 读 conclusion_note"
     },
     "draft_validation_summary": {
       "type": "string",
@@ -1206,7 +1205,7 @@
       "audit_pass": {"record_kind": "audit_verdicts", "requires_pass_verdict": true, "description": "被依赖卡有门生 PASS 裁决记录(PASS 值域 = task_complexity.AUDIT_PASS_VALUES)"}
     },
     "conclusion": {
-      "description": "AIPOS-F207 件①(gap #215, chris 岚图 LANTU-ENV3 实撞): 顾问复核结案(lybra mark-concluded)与门生 closure 在依赖判定上等价——唯一判定 task_complexity.closure_state(依赖判据 unmet_dependencies 与 loop 结案出口 loop_driver._has_closure 同读)。被依赖卡在 queue_state 且卡面 marker_field = marker_value(mark-concluded 写入)= 顾问复核结案; 结论 = 卡面 outcome_field(mark-concluded --outcome 写入, 值域 outcomes); 缺(F207 前存量)= conclusion_note 匹配 legacy_block_pattern 判 block, 否则 default_outcome。outcomes.<值>.satisfies = 是否满足 accepts_conclusion 的条件; 不满足 = 拒因 block_refusal(提示改依赖为承接卡或移除: queue amend)。",
+      "description": "AIPOS-F207 件①(gap #215, chris 岚图 LANTU-ENV3 实撞): 顾问复核结案(lybra mark-concluded)与门生 closure 在依赖判定上等价——唯一判定 task_complexity.closure_state(AIPOS-F209: 「是否结案 / 结案种类 / 结论」唯一判定——依赖判据 unmet_dependencies、loop 结案出口与收尾补落账 governance_commit.reland_after_write、state lint、开工核验 next_resolver.kickoff_refusal、补充审计派审、路线图核对 roadmap_drift 同读, 各读者禁另判; 棘轮 tests/test_aipos_f209_closure_single_source.py)。被依赖卡在 queue_state 且卡面 marker_field = marker_value(mark-concluded 写入)= 顾问复核结案; 结论 = 卡面 outcome_field(mark-concluded --outcome 写入, 值域 outcomes); 缺(F207 前存量)= conclusion_note 匹配 legacy_block_pattern 判 block, 否则 default_outcome。outcomes.<值>.satisfies = 是否满足 accepts_conclusion 的条件; 不满足 = 拒因 block_refusal(提示改依赖为承接卡或移除: queue amend)。",
       "queue_state": "completed",
       "marker_field": "auto_closed_by",
       "marker_value": "AIPOS-354_mark_concluded",

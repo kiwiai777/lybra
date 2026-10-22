@@ -32,7 +32,9 @@ SIGNAL_KINDS = ("unlinked_ratio", "stalled", "uncovered", "rework", "overdue", "
 #: AIPOS-F175: verification states (keys of verbs.schema lybra_roadmap.status.verification.states; checked where declared)
 VERIFICATION_STATES = ("unverified", "auto_passed", "owner_pending", "owner_confirmed", "mismatch")
 _BASIS_KEYS = ("passed", "evidence_part", "artifact_part", "owner_pending", "owner_record", "refix_pending", "fix_part", "fix_none",
-               "fix_draft", "fix_card", "fix_pending", "corrected", "followup_part")
+               "fix_draft", "fix_card", "fix_pending", "corrected", "followup_part", "conclusion_passed")
+#: AIPOS-F209: 顾问复核结案卡(结案口径 task_complexity.closure_state kind = conclusion)核对用的未满足原因键(verbs lybra_roadmap.status.unmet_reasons)
+_CONCLUSION_REASON_KEYS = ("conclusion_block", "conclusion_needs_audit", "closure_unreadable")
 _STATUS_KEYS = ("progress_bar_width", "satisfied_queue_states", "excluded_queue_states", "verification", "unmet_reasons",
                 "status_mismatch", "severity_labels", "signals", "next_steps", "texts")
 
@@ -63,10 +65,20 @@ def status_declaration() -> dict[str, Any]:
             or not isinstance(ver.get("satisfied_state"), dict) or set(ver["satisfied_state"]) != set(verify_enum)
             or not set(ver["satisfied_state"].values()) <= set(VERIFICATION_STATES)
             or not set(ver.get("needs_artifacts") or []) <= set(verify_enum)
-            or any(not isinstance((ver.get("basis") or {}).get(k), str) for k in _BASIS_KEYS)):
+            or any(not isinstance((ver.get("basis") or {}).get(k), str) for k in _BASIS_KEYS)
+            or not isinstance(ver.get("independent_audit"), list) or not set(ver["independent_audit"]) <= set(verify_enum)):
         raise SchemaLoadError(f"verbs.lybra_roadmap.status.verification 须有 states(恰为 {list(VERIFICATION_STATES)})/ satisfied_state"
-                              f"(键 = verify 值域 {verify_enum})/ needs_artifacts / basis{list(_BASIS_KEYS)}")
+                              f"(键 = verify 值域 {verify_enum})/ needs_artifacts / independent_audit(⊆ verify 值域)/ basis{list(_BASIS_KEYS)}")
+    if any(not isinstance((decl.get("unmet_reasons") or {}).get(k), str) for k in _CONCLUSION_REASON_KEYS):
+        raise SchemaLoadError(f"verbs.lybra_roadmap.status.unmet_reasons 须有 {list(_CONCLUSION_REASON_KEYS)}(AIPOS-F209)")
     return decl
+
+
+def _pass_verdicts() -> Any:
+    """PASS 类裁决值域(next_resolver._PASS_VERDICTS 唯一声明的只读投影)。"""
+    from tools.aipos_cli.next_resolver import _PASS_VERDICTS
+
+    return _PASS_VERDICTS
 
 
 def _fmt(template: Any, where: str, **values: Any) -> str:
@@ -212,10 +224,34 @@ def card_evidence(root: Path, card: dict[str, Any], truth: dict[str, Any], crite
     return out
 
 
+def card_closure(root: Path, card: dict[str, Any], errors: list[dict[str, str]], cache: dict[str, Any]) -> dict[str, Any] | None:
+    """AIPOS-F209: 挂接卡的结案口径——唯一判定 task_complexity.closure_state(是否结案 / 结案种类 / 结论), 本模块不另判。
+    卡文件已由 card_links 查到 = 作 located 传入(免重查)。读不出 = 点名进 errors, 返回 None(不当作已结案, 不猜)。"""
+    task_id = str(card.get("task_id") or "")
+    key = f"__closure__:{task_id}"
+    if key in cache:
+        return cache[key]
+    from tools.aipos_cli.task_complexity import closure_state
+
+    rel = card.get("path")
+    located = (root / str(rel), card.get("queue_state")) if rel else None
+    try:
+        state: dict[str, Any] | None = closure_state(root, task_id, located=located)
+    except (OSError, ValueError) as exc:  # FrontmatterReadError / AmbiguousTaskCard ⊂ ValueError
+        state = None
+        errors.append({"source": f"卡 {task_id} 的结案口径(task_complexity.closure_state)", "error": f"{type(exc).__name__}: {exc}"})
+    cache[key] = state
+    return state
+
+
 def _verify_card(root: Path, card: dict[str, Any], truth: dict[str, Any], verify: str, decl: dict[str, Any],
-                 evidence: dict[str, Any] | None = None) -> tuple[bool, str]:
+                 evidence: dict[str, Any] | None = None, closure: dict[str, Any] | None = None) -> tuple[bool, str]:
     """已结案挂接卡是否达到自动验证要求 → (通过, 未通过原因)。
     全部方式: 最新常规审计裁决属 PASS 类、补审未判 FAIL、卡声明了运行证据时裁决报告有运行证据节;
+    AIPOS-F209: 无 PASS 类裁决而结案口径(closure = task_complexity.closure_state)为顾问复核结案(kind = conclusion)= 按结论与标准
+    verify 方式判——结论不满足(block)= conclusion_block; verify ∈ verification.independent_audit(须独立审计)= conclusion_needs_audit
+    (明确提示补充审计, 不静默; 补充审计裁决属 PASS 类 = 已独立审计); 否则(结论 pass 且非独立审计标准, 或已补审 PASS)代替常规审计 PASS,
+    常规裁决报告的运行证据节不适用, 产物 / 补审 FAIL 照判;
     AIPOS-F175: verification.needs_artifacts 所列方式(artifact / owner_check)另需卡面 artifacts 声明了该标准的产物且每个 path_glob 在卡产物
     落点至少匹配一个文件(缺什么写进原因)。owner_check 的 Owner 结论不在此判(见 _criterion_verification)。
     证据读取唯一口 card_evidence(evidence 已算好时直接传入, 不重读)。"""
@@ -228,8 +264,20 @@ def _verify_card(root: Path, card: dict[str, Any], truth: dict[str, Any], verify
         return False, _fmt(reasons["unreadable"], "unmet_reasons.unreadable", task_id=task_id, problem=truth["unreadable"])
     ev = evidence if evidence is not None else card_evidence(root, card, truth)
     value = ev["verdict"] or ""
+    by_conclusion = False
     if value not in _PASS_VERDICTS:
-        return False, _fmt(reasons["no_pass"], "unmet_reasons.no_pass", task_id=task_id, verdict=value or "无裁决记录")
+        view = (closure or {}).get("conclusion") if (closure or {}).get("kind") == "conclusion" else None
+        if view is None:
+            return False, _fmt(reasons["no_pass"], "unmet_reasons.no_pass", task_id=task_id, verdict=value or "无裁决记录")
+        if not view["satisfies"]:
+            return False, _fmt(reasons["conclusion_block"], "unmet_reasons.conclusion_block", task_id=task_id, outcome=view["outcome"],
+                               source=view["source"])
+        supp_pass = (ev["supplementary_verdict"] or "") in _PASS_VERDICTS  # 补充审计 PASS = 已有独立审计(F162 出口)
+        if verify in decl["verification"]["independent_audit"] and not supp_pass:
+            return False, _fmt(reasons["conclusion_needs_audit"], "unmet_reasons.conclusion_needs_audit", task_id=task_id,
+                               outcome=view["outcome"], verify=verify, criterion=str(ev.get("criterion") or "?"),
+                               governance_root=str(root))
+        by_conclusion = True
     supp_value = ev["supplementary_verdict"] or ""
     if supp_value and supp_value in {str(v).upper() for v in supplementary_audit_declaration()["fail_verdicts"]}:
         return False, _fmt(reasons["supplementary_fail"], "unmet_reasons.supplementary_fail", task_id=task_id, verdict=supp_value,
@@ -237,7 +285,7 @@ def _verify_card(root: Path, card: dict[str, Any], truth: dict[str, Any], verify
     if ev["declaration_problem"]:
         return False, _fmt(reasons["evidence_declaration"], "unmet_reasons.evidence_declaration", task_id=task_id,
                            problem=ev["declaration_problem"])
-    if ev["evidence_required"] and ev["evidence_problem"]:
+    if ev["evidence_required"] and ev["evidence_problem"] and not by_conclusion:
         return False, _fmt(reasons["no_evidence"], "unmet_reasons.no_evidence", task_id=task_id, problem=ev["evidence_problem"])
     if verify in decl["verification"]["needs_artifacts"]:
         art = ev.get("artifacts") or {}
@@ -335,6 +383,9 @@ def _criterion_verification(root: Path, crit: dict[str, Any], crit_cards: list[d
     passed: list[str] = []
     why: list[str] = []
     corrections: list[tuple[dict[str, Any], str]] = []  # AIPOS-F207 件②: (Owner 纠正争议标记, 依据文本)
+    for card in crit_cards:  # AIPOS-F209: 结案口径读不出的挂接卡点名(不当作已结案, 不猜)
+        if card_closure(root, card, errors, cache) is None:
+            why.append(_fmt(reasons["closure_unreadable"], "unmet_reasons.closure_unreadable", task_id=str(card.get("task_id") or "")))
     if not crit_cards:
         why.append(str(reasons["no_card"]))
     elif not closed:
@@ -349,18 +400,24 @@ def _criterion_verification(root: Path, crit: dict[str, Any], crit_cards: list[d
             corrections.append((disputes[-1], text))  # 依据只进 detail 一次(下方按状态拼承接卡), 不另进 why
             continue
         ev = evidence[tid]
-        ok, text = _verify_card(root, card, _card_truth(root, card, errors, cache), verify, decl, ev)
+        closure = card_closure(root, card, errors, cache)
+        ok, text = _verify_card(root, card, _card_truth(root, card, errors, cache), verify, decl, ev, closure)
         if not ok:
             why.append(text)
             continue
         qualified.append(card)
         files = [f["rel"] for e in ((ev.get("artifacts") or {}).get("entries") or []) for f in e["files"]]
+        artifact_part = (_fmt(basis_t["artifact_part"], "verification.basis.artifact_part", files=", ".join(files)) if files else "")
+        if (ev.get("verdict") or "") not in _pass_verdicts():  # AIPOS-F209: 经顾问复核结案(结论 pass)满足
+            view = (closure or {}).get("conclusion") or {}
+            passed.append(_fmt(basis_t["conclusion_passed"], "verification.basis.conclusion_passed", task_id=tid,
+                               outcome=view.get("outcome") or "?", note=str(view.get("note") or "")[:120], artifact_part=artifact_part))
+            continue
         passed.append(_fmt(basis_t["passed"], "verification.basis.passed", task_id=tid, verdict=ev.get("verdict") or "?",
                            verdict_id=ev.get("verdict_id") or "?",
                            evidence_part=_fmt(basis_t["evidence_part"], "verification.basis.evidence_part", report_ref=ev["report_ref"])
                            if ev.get("report_ref") else "",
-                           artifact_part=_fmt(basis_t["artifact_part"], "verification.basis.artifact_part", files=", ".join(files))
-                           if files else ""))
+                           artifact_part=artifact_part))
     out["qualified_cards"] = [str(c["task_id"]) for c in qualified]
     state = "unverified"
     detail: list[str] = list(passed)
@@ -495,7 +552,6 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
     errors: list[dict[str, str]] = out["errors"]
     cache: dict[str, Any] = {}
     excluded = set(decl["excluded_queue_states"])
-    satisfied_states = set(decl["satisfied_queue_states"])
     with task_card_lookup_scope(root):
         links = card_links(root, roadmap)
         live = [c for c in links["cards"] if c.get("queue_state") not in excluded]
@@ -535,7 +591,8 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
             for crit in ms.get("criteria") or []:
                 cid = str(crit["id"])
                 crit_cards = [c for c in ms_cards if cid in (c.get("criteria") or [])]
-                closed = [c for c in crit_cards if c.get("queue_state") in satisfied_states]
+                # AIPOS-F209: 「已结案」= 结案口径唯一判定 task_complexity.closure_state.concluded(card_closure; 读不出 = 不算, 点名进 errors)
+                closed = [c for c in crit_cards if (card_closure(root, c, errors, cache) or {}).get("concluded")]
                 # AIPOS-F174: 每张挂接卡的审计证据(裁决 / 补审 / 运行证据摘录)随行带出, 看板逐条标准展示只读此字段;
                 # AIPOS-F175: 另带该卡卡面声明的本标准产物(evidence[].artifacts)
                 evidence = {str(c["task_id"]): card_evidence(root, c, _card_truth(root, c, errors, cache), cid) for c in crit_cards}

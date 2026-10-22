@@ -3958,11 +3958,19 @@ def _build_audit_dispatch_preview(
         from tools.aipos_cli.custom_roles import authorize_instance_class
 
         sup_decl = supplementary_audit_declaration()
-        concluded = source_task.get("queue_state") == "completed" or bool(records.get("task_closures", {}).get(source_task_id_for_verdict))
-        if not concluded:
+        # AIPOS-F209: 是否结案读结案口径唯一判定 task_complexity.closure_state(门生 closure / 顾问复核结案 / 卡在 completed/), 不另判
+        from tools.aipos_cli.task_complexity import closure_state
+
+        try:
+            source_closure = closure_state(repo_root, source_task_id_for_verdict)
+        except (OSError, ValueError) as exc:  # 卡面 / 记录读不出(FrontmatterReadError ⊂ ValueError)= 拒, 不当作已结案
+            source_closure = None
+            blocking_reasons.append(f"SUPPLEMENTARY_SOURCE_NOT_CONCLUDED: {source_task_id_for_verdict} 结案口径读不出(fail-closed): "
+                                    f"{type(exc).__name__}: {exc}")
+        if source_closure is not None and not source_closure["concluded"]:
             blocking_reasons.append(
-                f"SUPPLEMENTARY_SOURCE_NOT_CONCLUDED: {source_task_id_for_verdict} 未结案(queue={source_task.get('queue_state')}, 无 closure 记录); "
-                "补充审计只对已结案卡。出口: 在途卡走常规 audit dispatch / 复审轮")
+                f"SUPPLEMENTARY_SOURCE_NOT_CONCLUDED: {source_task_id_for_verdict} 未结案(queue={source_task.get('queue_state')}, 无 closure 记录, "
+                "非顾问复核结案); 补充审计只对已结案卡。出口: 在途卡走常规 audit dispatch / 复审轮")
         in_flight = supplementary_in_flight(repo_root, source_task_id_for_verdict)
         if in_flight:
             blocking_reasons.append(
@@ -7038,6 +7046,8 @@ def mark_concluded_task(
 
     AIPOS-F207 件①: outcome = 顾问复核结论 pass | block(值域 card.schema dependency_gate.conclusion.outcomes; 写卡面 outcome_field);
     缺省 = default_outcome 并在 warnings 提示(不按 conclusion_note 判)。依赖判定与门生 closure 等价(task_complexity.closure_state)。
+    AIPOS-F209 件②: CLI `lybra mark-concluded` 与 MCP lybra_mark_concluded 同调本函数(唯一写路径, 两入口都收 outcome);
+    结案后触发工作树清理(worktree_cleanup.cleanup_after, trigger=conclude), 结果在 data.worktree_cleanup。
 
     For bypass scenarios (report-style audits, manual conclusions) where no
     formal verdict was landed via gate. Leaves a machine-readable closure marker
@@ -7196,6 +7206,12 @@ def mark_concluded_task(
         target_path.parent.mkdir(parents=True, exist_ok=True)
         target_path.write_text(rendered, encoding="utf-8")
         card_file.unlink()
+        # AIPOS-F209 件②: 顾问复核结案同为结案 → 清理本卡工作树与审计工作树(声明 transitions worktree_cleanup.triggers.conclude;
+        # 唯一实现 worktree_cleanup.cleanup_after, 与 close / withdraw / supersede 同一判据: 干净删、分支保留、脏不碰只报告)。
+        # 失败只进应答与清理记录, 绝不影响结案(cleanup_after 不抛)。
+        from tools.aipos_cli.worktree_cleanup import cleanup_after
+
+        worktree_cleanup = cleanup_after(resolved_root, tid, trigger="conclude", actor=actor_text)
         return make_response(
             ok=True,
             verdict=Verdict.PASS,
@@ -7209,6 +7225,7 @@ def mark_concluded_task(
                 "target_path": str(target_path.relative_to(resolved_root)),
                 "moved": True,
                 "outcome": outcome_text,
+                "worktree_cleanup": worktree_cleanup,
             },
             warnings=outcome_warnings,
             safety_notice="AIPOS-354 mark_concluded: card moved to completed/ with machine-readable closure marker.",
