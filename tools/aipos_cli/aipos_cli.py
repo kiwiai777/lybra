@@ -3544,13 +3544,10 @@ def build_parser() -> argparse.ArgumentParser:
     regression_parser = subparsers.add_parser(
         "regression", help="AIPOS-F149: 合并后回归记录查询(只读; finalize 合入后已落的回归记录, 实现 post_merge_regression)")
     regression_subparsers = regression_parser.add_subparsers(dest="regression_command")
-    regression_baseline_parser = regression_subparsers.add_parser(
-        "baseline",
-        help="AIPOS-F149 / F188: 按 sha 取已记录的合并后回归失败集合(执行体与审计体 main 侧基线复用)。结论 recorded = main 侧不必自跑; "
-        "pending = 该 sha 合并后回归在跑(先做卡, 交回前再查或 --wait 有界等待); "
-        "self_run_required = 无该 sha 的记录或记录为超时/未完成/读不出, main 侧须自跑。本卡 / 被审分支一侧无论如何须自跑。"
-        "治理根用全局 `lybra --workspace-root <治理根> regression baseline`(缺省同其他命令的解析梯)",
-    )
+    # AIPOS-F215 件③: help 三态标签读 verbs.schema state_labels(唯一渲染 post_merge_regression.baseline_cli_help)
+    from tools.aipos_cli.post_merge_regression import baseline_cli_help
+
+    regression_baseline_parser = regression_subparsers.add_parser("baseline", help=baseline_cli_help())
     regression_baseline_parser.add_argument("--sha", help="要查的提交(完整 40 位原样用; 短 sha/引用在产品仓解析); 缺省 = 产品仓基线分支当前 HEAD")
     regression_baseline_parser.add_argument("--repo-root", help="解析 sha 用的产品仓; 缺省 = project.json repos.default / code_repo")
     # AIPOS-F188 件①: 三态之 pending(该 sha 合并后回归在跑)可有界等待; 到点仍在跑 = self_run_required(声明 verbs.schema lybra_regression_baseline.wait)

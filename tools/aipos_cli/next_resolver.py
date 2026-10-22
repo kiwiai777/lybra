@@ -85,7 +85,14 @@ def _resolve_governance_path_with_relative(key: str, governance_root: Path) -> P
 # AIPOS-F73D: 声明读取口(transitions 节点 / 产品仓根 / worktree 落点 / 驱动方身份)——全部读声明, 禁写死
 # ---------------------------------------------------------------------------
 
-_RETURN_PLACEHOLDER_PREFIX = "(待填写"  # record_writer.build_return_skeleton_markdown 骨架占位符前缀(N2.artifact.readiness)
+
+def _skeleton_prefix() -> str:
+    """认领骨架占位前缀(record_writer.build_<return|verdict>_skeleton_markdown; N2.artifact.readiness)。AIPOS-F215 件①: 原模块常量
+    收进 transitions.schema artifact_ingest.report_placeholder.skeleton_prefix, 与报告正文占位判据同一声明(唯一读取口
+    validation_common.report_skeleton_prefix)。"""
+    from tools.aipos_cli.validation_common import report_skeleton_prefix
+
+    return report_skeleton_prefix()
 
 
 def _transition_node(node_id: str) -> dict[str, Any]:
@@ -1267,6 +1274,7 @@ def render_kickoff(next_card: dict[str, Any], *, remote: dict[str, Any] | None =
         "report_path": next_card.get("report_path"),
         "card_path": next_card.get("card_path"),
         "report_field_lines": "\n".join(field_lines),
+        "refusal_clause": report_refusal_clause(),  # AIPOS-F215 件③: 拒收条款唯一声明
         "remote_material": "",
         # AIPOS-F196 件③: 本卡验证根节(章程同源); 无声明 = 空串(与 F196 前逐字节相同)
         "validation_root": ("\n\n" + "\n".join(vr_lines)) if vr_lines else "",
@@ -1511,8 +1519,7 @@ def missing_finalization_frontmatter(frontmatter: dict[str, Any]) -> list[str]:
     """外部 FINALIZE Return 缺失的必填 frontmatter(声明: artifact_ingest.finalization.required_frontmatter)。"""
     missing = []
     for key in [str(k) for k in _finalization_ingest_declaration()["required_frontmatter"]]:
-        value = str(frontmatter.get(key) or "").strip()
-        if not value or value.startswith(_RETURN_PLACEHOLDER_PREFIX) or value.startswith("<"):
+        if _is_placeholder_value(frontmatter.get(key)):  # AIPOS-F215: 与报告必填值同一占位判据(原此处复制一份)
             missing.append(key)
     return missing
 
@@ -2098,7 +2105,7 @@ def return_summary_missing_text(path: Path, source: dict[str, Any]) -> str:
     if keys:
         parts.append(f"frontmatter 键 {keys} 均缺或为占位")
     if markers:
-        parts.append(f"正文无含 {markers} 任一标记的摘要节(或其内容仍为 `{_RETURN_PLACEHOLDER_PREFIX}` 骨架占位)")
+        parts.append(f"正文无含 {markers} 任一标记的摘要节(或其内容仍为 `{_skeleton_prefix()}` 骨架占位)")
     how = []
     if keys:
         how.append(f"frontmatter 写 {keys[0]}: <一句话结论>")
@@ -2200,7 +2207,7 @@ def extract_return_summary_text(content: str, source: dict[str, Any] | None = No
                 summary = line.strip().lstrip("*").rstrip("*").strip()
                 # 去掉句号
                 summary = summary.rstrip("。")
-                if summary.startswith(_RETURN_PLACEHOLDER_PREFIX):
+                if summary.startswith(_skeleton_prefix()):
                     return None  # 骨架占位, 未交回
                 return summary
     return None
@@ -2555,7 +2562,7 @@ def _build_copyable_command(
 def _is_placeholder_value(value: Any) -> bool:
     """报告 frontmatter 值是否未填: 空 / 骨架占位(`(待填写` 前缀, record_writer 骨架)/ 尖括号占位(`<…>`)。"""
     text = str(value or "").strip()
-    return not text or text.startswith(_RETURN_PLACEHOLDER_PREFIX) or text.startswith("<")
+    return not text or text.startswith(_skeleton_prefix()) or text.startswith("<")
 
 
 def _report_declaration(kind: str, governance: bool = False) -> dict[str, Any]:
@@ -2689,7 +2696,18 @@ def render_report_frontmatter_clause(entries: list[dict[str, Any]]) -> str:
     for entry in entries:
         value = entry.get("value")
         parts.append(f"`{entry['key']}`({f'= {value}; ' if value else ''}{entry['hint']})")
-    return "报告 frontmatter 必填: " + "; ".join(parts) + "。缺任一项或仍为占位, 产品拒收该报告"
+    return "报告 frontmatter 必填: " + "; ".join(parts) + "。" + report_refusal_clause()
+
+
+def report_refusal_clause() -> str:
+    """AIPOS-F215 件③: 报告必填拒收条款(transitions.schema artifact_ingest.report_refusal_clause)唯一读取口——章程报告必填句、
+    my-tasks 开工提示模板占位 {refusal_clause}、lybra kickoff 交回节同读。缺 / 空 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    clause = _artifact_ingest_declaration().get("report_refusal_clause")
+    if not isinstance(clause, str) or not clause.strip():
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.report_refusal_clause 未声明")
+    return clause
 
 
 def ingest_command(task_id: str, kind: str, workspace_root: Path, connection_json: str | None) -> str:
@@ -2771,7 +2789,9 @@ def _build_audit_dispatch_command(
 ) -> str:
     """构建审计派发命令。AIPOS-F179 件③: workspace_root / dispatch_reason 给出 = 可照抄的完整命令(全局 --workspace-root + --dispatch-reason,
     重审命令 reaudit_command 同一构建); 缺省 = 原形(loop 执行时治理根经环境下传)。"""
-    parts = ["lybra audit dispatch"] if workspace_root is None else [f"lybra --workspace-root {_shlex_quote(str(workspace_root))} audit dispatch"]
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    parts = ["lybra audit dispatch"] if workspace_root is None else [f"{lybra_command_prefix(workspace_root)} audit dispatch"]
     parts.append(f"--source-task-id {task_id}")
     parts.append(f"--actor {actor}")
     parts.append(f"--agent-instance {agent_instance}")
@@ -3372,7 +3392,9 @@ def candidate_fail_fix_values(workspace_root: Path, task_id: str) -> dict[str, s
     reason = (f"裁决 {state['verdict']} {state['verdict_id']}(审计卡 {state['audit_task_id'] or '?'}): "
               f"{state['reason'] or '(裁决记录无 Findings summary, 见审计报告)'}")
     source = f"来源卡 {state['source'] or '(卡面缺 validation_source_task)'}(本卡 FAIL 的固定候选 {state['candidate'] or '?'})"
-    supersede = (f"lybra --workspace-root {workspace_root} queue supersede --task-id {task_id} --by <新验证卡号> "
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    supersede = (f"{lybra_command_prefix(workspace_root)} queue supersede --task-id {task_id} --by <新验证卡号> "
                  f"--actor <你的顾问实例> --owner-words \"<Owner 原话摘要>\" --dry-run")
     return {"fail_reason": reason, "source_task": source, "supersede_command": supersede}
 
@@ -4124,7 +4146,9 @@ def _derive_next_step(
                         report_ref = str(_return_artifact_path(workspace_root, task_id).resolve().relative_to(Path(workspace_root).resolve()))
                     except ValueError:
                         report_ref = str(_return_artifact_path(workspace_root, task_id))
-                    close_cmd = (f"lybra --workspace-root {workspace_root} mark-concluded --task-id {task_id} --actor <你的顾问实例> "
+                    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+                    close_cmd = (f"{lybra_command_prefix(workspace_root)} mark-concluded --task-id {task_id} --actor <你的顾问实例> "
                                  f"--report-path {report_ref} --conclusion-note \"顾问复核: <结论>\"")
                     return {
                         "task_id": task_id,

@@ -10,7 +10,7 @@ from tools.aipos_cli.validation_common import (
     check_required_field,
     check_file_ref_exists,
     check_evidence_refs_non_empty,
-    PLACEHOLDER_PATTERNS,
+    report_placeholder_declaration,
 )
 
 
@@ -18,7 +18,9 @@ class TestPlaceholderDetection:
     """占位符检测测试：作用于所有文本字段"""
     
     def test_placeholder_patterns_complete(self):
-        """验证占位符字典包含所有已知占位符"""
+        """验证占位符字典包含所有已知占位符(AIPOS-F215: 原代码常量 PLACEHOLDER_PATTERNS 收进 transitions.schema
+        artifact_ingest.report_placeholder.slot_markers, 唯一读取口 report_placeholder_declaration)"""
+        PLACEHOLDER_PATTERNS = report_placeholder_declaration()["slot_markers"]
         expected = ["(待填写)", "(PASS / FAIL", "(无验收清单)", "TODO", "FIXME"]
         for pattern in expected:
             assert pattern in PLACEHOLDER_PATTERNS, f"Missing placeholder: {pattern}"

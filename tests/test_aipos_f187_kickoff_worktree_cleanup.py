@@ -499,6 +499,13 @@ def test_declarations_single_source_and_no_second_rule_text():
     src = (REPO_ROOT / "tools" / "aipos_cli" / "subagent_kickoff.py").read_text(encoding="utf-8")
     for phrase in ("两边基线", "写完即止", "禁写治理根", "pgrep -af", "最终 tip", "禁启动 pi"):
         assert phrase not in src, phrase
+        if phrase == "禁写治理根":
+            # AIPOS-F215 件③: 禁写行改由写权限边界派生(声明 roles.schema write_boundary.no_write, 唯一渲染 write_boundary.no_write_lines),
+            # 开工稿声明与两处代码都不再有该句
+            no_write = load_schema("roles")["write_boundary"]["no_write"]["surfaces"]
+            assert phrase in no_write["governance_root"] and not any(phrase in t for t in contract["texts"].values()), phrase
+            assert phrase not in (REPO_ROOT / "tools" / "aipos_cli" / "write_boundary.py").read_text(encoding="utf-8")
+            continue
         assert any(phrase in t for t in contract["texts"].values()), phrase
     clean_src = (REPO_ROOT / "tools" / "aipos_cli" / "worktree_cleanup.py").read_text(encoding="utf-8")
     for phrase in ("脏(不碰)", "承继引用(留)", "不认识(留)", "尚未清理"):

@@ -214,20 +214,23 @@ def charter_commands(governance_root: Path, *, task_id: str | None = None, cwd: 
     Governance root is the declared one; card id / name / work tree / command stay as angle-bracket placeholders.
     AIPOS-F187 item 1: the kickoff brief passes the card id and work tree (same rendering, filled in)."""
     seg = int(declaration()["wait"]["default_segment_seconds"])
-    root = shlex.quote(str(governance_root))
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    prefix = lybra_command_prefix(governance_root)  # AIPOS-F215 件③: 前缀唯一渲染
     card = shlex.quote(task_id) if task_id else "<本卡卡号>"
     tree = shlex.quote(cwd) if cwd else "<本卡工作树>"
     return {
-        "run_long_start": f"`lybra --workspace-root {root} run-long start --task-id {card} --name <运行名> --cwd {tree} -- '<验证命令>'`",
-        "run_long_wait": f"`lybra --workspace-root {root} run-long wait --task-id {card} --name <运行名> --timeout {seg}`",
+        "run_long_start": f"`{prefix} run-long start --task-id {card} --name <运行名> --cwd {tree} -- '<验证命令>'`",
+        "run_long_wait": f"`{prefix} run-long wait --task-id {card} --name <运行名> --timeout {seg}`",
     }
 
 
 def wait_command(governance_root: Path, task_id: str, name: str) -> str:
     seg = int(declaration()["wait"]["default_segment_seconds"])
-    parts = ["lybra", "--workspace-root", str(governance_root), "run-long", "wait", "--task-id", task_id, "--name", name,
-             "--timeout", str(seg)]
-    return " ".join(shlex.quote(p) for p in parts)
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    parts = ["run-long", "wait", "--task-id", task_id, "--name", name, "--timeout", str(seg)]
+    return " ".join([lybra_command_prefix(governance_root), *(shlex.quote(p) for p in parts)])
 
 
 # ---------------------------------------------------------------------------

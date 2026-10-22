@@ -2765,6 +2765,15 @@ def resolve_governance_root(
                              f"{codes['GOVERNANCE_ROOT_UNRESOLVED']}")
 
 
+def lybra_command_prefix(governance_root: str | Path) -> str:
+    """AIPOS-F215 件③(F208 P2-7: `lybra --workspace-root X` 前缀原在 validation_root / next_resolver / run_long / post_merge_regression
+    各处手拼, 引号口径不一): 指定治理根的命令前缀唯一渲染(全局 `--workspace-root`, 与子命令级同义见 merge_workspace_root_flags);
+    路径经 shlex 引号(普通路径原样)。调用方在其后接子命令与参数。"""
+    import shlex
+
+    return f"lybra --workspace-root {shlex.quote(str(governance_root))}"
+
+
 def merge_workspace_root_flags(global_value: str | Path | None, sub_value: str | Path | None) -> str | Path | None:
     """AIPOS-F144 件②: 全局 `lybra --workspace-root X <命令>` 与子命令级 `<命令> --workspace-root X` 同义: 只给一处 = 用它;
     两处都给且解析为同一路径 = 用它; 指向不同治理根 = ProjectTargetError(GOVERNANCE_ROOT_CONFLICT, 两者列出)。"""

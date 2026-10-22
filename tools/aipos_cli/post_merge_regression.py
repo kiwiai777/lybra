@@ -235,6 +235,17 @@ def baseline_state_labels() -> dict[str, str]:
     return {k: str(labels[k]) for k in BASELINE_STATES}
 
 
+def baseline_cli_help() -> str:
+    """AIPOS-F215 件③: argparse `regression baseline` 的 help(verbs.schema lybra_regression_baseline.cli_help, 标签 = state_labels)。
+    缺 / 非串 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    template = baseline_declaration().get("cli_help")
+    if not isinstance(template, str) or not template:
+        raise SchemaLoadError(f"verbs.schema.json verbs.{BASELINE_VERB}.cli_help 未声明")
+    return template.format(**baseline_state_labels())
+
+
 def baseline_state_rules(role_class: str) -> str | None:
     """AIPOS-F212 件④: 章程「按输出三态处理」条(verbs.schema lybra_regression_baseline.charter_state_rules.<角色类>, 标签 = state_labels)。
     章程渲染键 regression_baseline_states 的唯一产出; 角色类无条目 = None(不入键)。形不合 = SchemaLoadError。"""
@@ -346,10 +357,12 @@ def audit_baseline_command(governance_root: str | Path, repo_root: str | Path | 
     治理根 / 产品仓按声明给出(调用方经 project.json 解析), 不写死主机与路径。"""
     import shlex
 
-    parts = ["lybra", "--workspace-root", str(governance_root), "regression", "baseline"]
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    parts = ["regression", "baseline"]
     if repo_root:
         parts += ["--repo-root", str(repo_root)]
-    return " ".join(shlex.quote(part) for part in parts)
+    return " ".join([lybra_command_prefix(governance_root), *(shlex.quote(part) for part in parts)])  # AIPOS-F215 件③: 前缀唯一渲染
 
 
 def render_audit_baseline(result: dict[str, Any]) -> str:

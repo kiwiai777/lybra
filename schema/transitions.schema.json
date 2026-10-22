@@ -1121,6 +1121,24 @@
     "description": "AIPOS-F78 件③④: 产物入口唯一声明——执行引擎(pi/codex/claude-code)交回的是「分支 + Return 文件」, 产品 `lybra artifact ingest --task-id <ID>`(由 loop/next --run 触发, 非人用)按此声明找文件、校验必填 frontmatter 与分支 tip, 再走既有 queue return / audit-verdict 薄壳铸记录(禁第二 return/verdict 路径)。落点根读项目 project.json paths(config.schema configuration_sources.project_json.schema.paths), 本节只声明文件候选与必填字段。",
     "single_implementation": "tools/aipos_cli/artifact_ingest.ingest_task_artifact (CLI: lybra artifact ingest; next_resolver.execute_derived_action 的 return/verdict 步经此入口)",
     "report_contract": "AIPOS-F93 件①(F92R 实撞: 产品要求的报告必填字段从未告知写报告的 agent, 审计报告缺 commit_sha 被 ingest 拒): <return|verdict>.required_frontmatter 是报告必填字段的唯一声明, field_hints 是逐键说明(占位 {branch} = 该报告对应的卡分支: 执行卡 = 本卡分支, 审计卡 = 被审卡分支; {allowed_verdict_values} = N4.record.allowed_verdict_values)。唯一渲染 next_resolver.report_frontmatter_contract / render_report_frontmatter_clause, 渲染进: (a) 派生审计卡报告落点句 audit_derivation.zero_gate_report_sentence, (b) 执行卡报告落点句 machine_zone.derive_machine_zone_纪律段, (c) my-tasks next_card.report_required_frontmatter(工位 go.ts 开工提示只读原样列出; 审计卡由产品给出被审 tip/tree 值 = 取证工作树 HEAD), (d) 认领时生成的报告模板 record_writer.build_<return|verdict>_skeleton_markdown, (e) 章程报告节 charter_render.charter_render_context; 禁第二份清单/第二份文案",
+    "report_refusal_clause": "缺任一项或仍为占位, 报告被拒收",
+    "report_refusal_clause_note": "AIPOS-F215 件③(F208 P2-7: 「缺任一项或仍为占位, 拒收」原文在 my-tasks 开工提示三模板 / lybra kickoff 交回节 / 章程报告必填句 / write-return 技能 5+ 处复制): 报告必填字段拒收条款的唯一声明。读取口 next_resolver.report_refusal_clause; 渲染进 verbs lybra_my_tasks.kickoff 模板占位 {refusal_clause}、verbs lybra_kickoff.texts.return_report 占位 {refusal_clause}、章程报告必填句 render_report_frontmatter_clause; 技能只引用开工提示, 不另写原文。",
+    "report_placeholder": {
+      "description": "AIPOS-F215 件①(gap #219, AIPOS-F213R 审计 F-1: 执行体在第二次全量未完时先写 RETURN.md, 正文含 RUNALL_TIP2_PLACEHOLDER / RESIDUAL_PLACEHOLDER 占位与预写计数; loop 以文件出现即续推, 产物入口只核 frontmatter, 门交回未拒正文占位): 交回 / 审计报告正文占位的唯一判据声明——与认领骨架的「待填写」占位(record_writer.build_<return|verdict>_skeleton_markdown; frontmatter 值判据 next_resolver._is_placeholder_value 同读 skeleton_prefix)同一判据族, 不另立正则表。判定唯一实现 validation_common.report_body_placeholders: 产物入口 artifact_ingest(交回 return 与审计裁决 verdict 同判, 拒因码 rejection_category, 拒因逐条指出行号与该行原文)与门交回自检 board_adapter._check_return_not_skeleton(经 validation_common.check_placeholder_in_text)同读。loop 等待判据不改(仍以报告文件出现为交回信号), 本判据在入门兜底; 写报告一方按 write_last_rule 最后落盘。",
+      "skeleton_prefix": "(待填写",
+      "token_suffixes": ["_PLACEHOLDER"],
+      "slot_markers": ["(待填写)", "(PASS / FAIL", "(无验收清单)", "TODO", "FIXME", "TBD", "PLACEHOLDER"],
+      "slot_separators": [":", "：", "="],
+      "slot_strip": ".,;:!?。，；：！？",
+      "rule": "逐行判(行号 = 报告文件行号, 含 frontmatter): ① 填空位 = 整行内容(去列表 / 引用 / 强调标记)、首个标签分隔符(slot_separators)之后的值、表格行的各单元格; 某填空位以 skeleton_prefix 起首, 或(表格单元格除外: 表头 / 清单列可正当写 TBD 等字样)去首尾标点(slot_strip)后等于 slot_markers 之一 = 占位(句中引用占位字样不算, AIPOS-F65C 件④); ② 去掉反引号 `…` 与双引号 \"…\" 包住的引用后, 行内出现以 token_suffixes 结尾的大写填空词(如 RUNALL_TIP2_PLACEHOLDER)= 占位; ③ 围栏代码块(``` 起止)内只认整行即占位(以 skeleton_prefix 起首, 或整行为 token_suffixes 填空词), 代码行内出现不算。",
+      "rejection_category": "INGEST_REPORT_UNFILLED",
+      "rejection": "{category}: {path} 正文仍有占位 {count} 处: {lines}。出口: {writer}在全部证据完成后把这些行填实(先写临时名再改名落盘), 产品重新入门",
+      "line_item": "第 {line} 行「{text}」",
+      "writers": {"return": "写该交回报告的执行体", "verdict": "写该审计报告的审计体"},
+      "temp_suffix": ".tmp",
+      "write_last_rule": "全部证据(全量 / 两边基线 / 残留进程原文等)都完成后, 最后才写报告: 先写临时名 `{temp}`(不以 .md 结尾, 产品不认作报告), 写完再改名为 `{report}`(产品以报告文件出现为交回信号, loop 一见即续推); 报告正文仍有占位(认领骨架的待填写行、*_PLACEHOLDER 式填空词、整行 TODO / TBD 等)= 入门即拒并指出行号。",
+      "write_last_rule_note": "唯一渲染 validation_common.report_write_last_rule(report=报告路径); 开工稿 verbs lybra_kickoff.texts.return_write_last 与执行 / 审计章程占位 {{return_write_last_rule}} / {{verdict_write_last_rule}} 同读。"
+    },
     "return": {
       "root_key": "return_root",
       "location_pattern": "<return_root>/<task_id>/<candidate>",
@@ -1142,7 +1160,8 @@
         "git rev-parse <commit_sha>^{tree} == tree_hash, 否则拒(INGEST_TREE_MISMATCH)",
         "「一句话结论」非占位, 否则拒(INGEST_SUMMARY_MISSING)",
         "AIPOS-F148 件②: 上一条的「一句话结论」= summary_source 声明的摘要来源(缺省即「一句话结论」节); 项目声明 frontmatter_keys 时其非占位值同样算摘要; 拒因原文列出所查的全部来源(INGEST_SUMMARY_MISSING)",
-        "INGEST_CODE_FILE_IN_SLOT: AIPOS-F195 件①: 报告落点 <return_root>/<task_id>/(含 artifacts/、run_long/ 等子目录)出现代码文件(判据只读 config.schema code_files_blacklist, 唯一实现 governance_guardrails.is_code_file)= 拒(码读 config.schema governance_worktree.path_constraints.artifact_slot_code_files.ingest_category), 拒因列文件 / sha256 与修法(脚本移出落点放卡工作树或草稿目录; 证据改存 <名>.<扩展>.txt 并在报告写明来源与 sha256); 外部 FINALIZE 交回同此。唯一实现 artifact_ingest.slot_code_refusal"
+        "INGEST_CODE_FILE_IN_SLOT: AIPOS-F195 件①: 报告落点 <return_root>/<task_id>/(含 artifacts/、run_long/ 等子目录)出现代码文件(判据只读 config.schema code_files_blacklist, 唯一实现 governance_guardrails.is_code_file)= 拒(码读 config.schema governance_worktree.path_constraints.artifact_slot_code_files.ingest_category), 拒因列文件 / sha256 与修法(脚本移出落点放卡工作树或草稿目录; 证据改存 <名>.<扩展>.txt 并在报告写明来源与 sha256); 外部 FINALIZE 交回同此。唯一实现 artifact_ingest.slot_code_refusal",
+        "AIPOS-F215 件①(gap #219): 摘要检查之后, 正文仍有占位(判据 artifact_ingest.report_placeholder, 唯一实现 validation_common.report_body_placeholders)= 拒(INGEST_REPORT_UNFILLED), 拒因逐条列行号与该行原文; 只写治理根卡同此"
       ],
       "summary_source": {
         "description": "AIPOS-F148 件②(gap #112): 交回「就绪」判据的摘要来源声明——不再写死 lybra 模板节名。推导核就绪判据 next_resolver._check_return_artifact、推导核交回步 result_summary、artifact ingest 摘要检查同用唯一解析 next_resolver.extract_return_summary_text(content, source); source = 项目声明(project.json return_summary_source, config.schema project_json.schema.return_summary_source, 唯一读取口 workspace_config.return_summary_source)逐键覆盖本节缺省。",
@@ -1206,7 +1225,8 @@
         "verdict ∈ N4.record.allowed_verdict_values",
         "commit_sha == 被审卡分支 tip(git rev-parse <被审卡分支>; 分支名唯一声明 nodes.N5.branch_integration.branch_pattern, 读取口 next_resolver.card_branch_name), 否则拒(INGEST_TIP_MISMATCH): 审的必须是当前产物",
         "AIPOS-F196: 被审卡交付主体为固定候选(validation)= commit_sha 须等于卡面候选(INGEST_CANDIDATE_MISMATCH), 不核被审卡分支; 裁决 artifact_subject = 候选(门侧 board_adapter 裁决预演同核)",
-        "AIPOS-F195 件①: 审计报告落点 <verdict_root>/<audit_task_id>/(含子目录)出现代码文件 = 拒(INGEST_CODE_FILE_IN_SLOT), 与 return 同一实现 artifact_ingest.slot_code_refusal"
+        "AIPOS-F195 件①: 审计报告落点 <verdict_root>/<audit_task_id>/(含子目录)出现代码文件 = 拒(INGEST_CODE_FILE_IN_SLOT), 与 return 同一实现 artifact_ingest.slot_code_refusal",
+        "AIPOS-F215 件①(gap #219): 必填 frontmatter 已填之后, 正文仍有占位 = 拒(INGEST_REPORT_UNFILLED), 与 return 同一判定 validation_common.report_placeholder_refusal"
       ],
       "submits_via": "lybra audit-verdict --confirm(驱动方 token, artifact_subject 从被审分支 tip 取 commit_sha/tree_hash, agent_runtime=产品按会话记录定位器填写的运行时模型 AIPOS-F90 件②)",
       "derived_command": "AIPOS-F90 件②: 推导核对 return/verdict 步给驱动方的命令 = `lybra artifact ingest --task-id <ID> --kind <return|verdict> --workspace-root <治理根>`; 入口内部执行推导核同时给出的 shell_command(唯一构建), 驱动方不再手提 audit-verdict / queue return",

@@ -1676,7 +1676,9 @@ def _fill(template: str, values: dict[str, Any]) -> str:
 
 
 def _gov_cmd(governance_root: Path) -> str:
-    return f"lybra --workspace-root {shlex.quote(str(governance_root))}"
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    return lybra_command_prefix(governance_root)  # AIPOS-F215 件③: 前缀唯一渲染
 
 
 def render_section_lines(governance_root: str | Path, *, instance: str, task_id: str | None = None, harness: str | None = None,
