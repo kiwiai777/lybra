@@ -315,7 +315,10 @@ def test_item1_inbox_auto_suggestion_cli_line(rig, frozen_clock):
     assert u["max_tasks"] == 1 and u["sources"]["max_tasks"] == "card_need" and u["policy_id"] == "pol_f180_side_2"  # AIPOS-F192: 原 2
     line = next(ln for ln in text.splitlines() if "授权请求:" in ln and "LANE-HW1" in ln)
     _show(f"[件①·CLI 人话行原文] {line.strip()}")
-    assert line.strip() == (f"授权请求: {DRIVER} 请求为 LANE-HW1({HW1_TITLE})开一个只写文档的授权, 仅 contracts-x, 1 张业务卡(每张含其审计与返工), "
+    # AIPOS-F211 件③(F208 P1-5): 项目未声明 execution 时卡面无 harness = loop 按 card_harness 缺省(default_by_task_mode)拉 pi, 收件箱同读
+    # (原收件箱按「卡面 harness 是否 pi」= 不含 pi, 与 loop 两口径); 本卡 audit: required 的审计阶段亦拉 pi
+    assert g["launch_harnesses"] == ["pi"] and g["sources"]["launch_harnesses"] == "card_execution"
+    assert line.strip() == (f"授权请求: {DRIVER} 请求为 LANE-HW1({HW1_TITLE})开一个只写文档的授权, 仅 contracts-x, 允许 loop 拉起 pi 工位, 1 张业务卡(每张含其审计与返工), "
                             f"到 {g['expires_at'][:10]}。理由: {HW1_TITLE}")
     decide = next(ln for ln in text.split("LANE-HW1", 1)[1].splitlines() if ln.strip().startswith("裁决:"))
     _show(f"[件①·裁决行原文] {decide.strip()}")
@@ -353,7 +356,7 @@ def test_item1_loop_note_grant_overrides_and_validation(rig):
     assert g["sources"]["task_mode"] == "card" and g["lane_repos"] == ["contracts-x"]
     line = next(ln for ln in text.splitlines() if "授权请求:" in ln and "LANE-HW1" in ln)
     _show(f"[件①·覆盖后 CLI 人话行原文] {line.strip()}")
-    assert line.strip().endswith(f"仅 contracts-x, 6 张业务卡(每张含其审计与返工), 到 {until}。理由: 只补 contracts-x 文档准备, 不改代码")
+    assert line.strip().endswith(f"仅 contracts-x, 允许 loop 拉起 pi 工位, 6 张业务卡(每张含其审计与返工), 到 {until}。理由: 只补 contracts-x 文档准备, 不改代码")
     msg = _git(rig["home"], "log", "-1", "--format=%s")
     assert _git(rig["home"], "status", "--porcelain", "-uall") == "", f"loop note 写后已落账: {msg}"
 
@@ -392,7 +395,7 @@ def test_item2_inbox_and_envelope_pages_show_request_cards(board, frozen_clock):
     _show(f"---- 件②·收件箱页请求卡 HTML 原文 ----\n{card}")
     sentence = _plain(re.search(r'<p class="gr-sentence">.*?</p>', card).group(0))
     _show(f"[件②·请求卡人话原文] {sentence}")
-    assert sentence == (f"{DRIVER} 请求:为 LANE-HW1({HW1_TITLE})开一个只写文档的授权,仅 contracts-x,1 张业务卡(每张含其审计与返工),到 "
+    assert sentence == (f"{DRIVER} 请求:为 LANE-HW1({HW1_TITLE})开一个只写文档的授权,仅 contracts-x,允许 loop 拉起 pi 工位,1 张业务卡(每张含其审计与返工),到 "
                         f"{hw1['grant']['expires_at'][:10]}。理由:{HW1_TITLE}")
     buttons = re.findall(r'<button type="button"[^>]*data-gr-action="(\w+)">(.*?)</button>', card)
     _show(f"[件②·按钮] {buttons}")
@@ -409,7 +412,7 @@ def test_item2_inbox_and_envelope_pages_show_request_cards(board, frozen_clock):
     assert "<details class=\"gr-tech\">" in tech and " open" not in tech and "policy_id=pol_f180_lane_loop_4" in tech
     req = _card_request(card)
     assert req["payload"] == {"workspace": P, "mode": "new", "agent_or_role": DRIVER, "task_mode": "docs", "lane_repo": ["contracts-x"],
-                              "launch_harness": [], "max_tasks": 1, "expires_at": hw1["grant"]["expires_at"],
+                              "launch_harness": ["pi"], "max_tasks": 1, "expires_at": hw1["grant"]["expires_at"],
                               "policy_id": "pol_f180_lane_loop_4", "request_item": hw1["item_id"]}
     # F174 skeleton: top nav on the page; owner sign client loaded; no read-only note on this page
     nav = re.search(r'<header class="rp-nav">.*?</header>', page).group(0)

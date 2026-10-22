@@ -109,10 +109,12 @@ class TestAuditDerivation(unittest.TestCase):
         self.assertIn("task_cards/AIPOS-123/file.py", body)
 
     def test_derive_audit_task_on_return_success(self) -> None:
+        # AIPOS-F211 件②: 缺 task_mode = schema missing_default(不独立审计, 不派生 R 卡), 本用例测派生机制故显式给 code
         source_metadata = {
             "task_id": "AIPOS-123",
             "title": "Test Task",
             "project": "lybra",
+            "task_mode": "code",
         }
         result = derive_audit_task_on_return(
             repo_root=self.repo_root,
@@ -161,7 +163,7 @@ class TestAuditDerivation(unittest.TestCase):
 
     def test_derive_audit_task_on_return_idempotency_existing_task(self) -> None:
         # First derivation
-        source_metadata = {"task_id": "AIPOS-123", "title": "Test Task", "project": "lybra"}
+        source_metadata = {"task_id": "AIPOS-123", "title": "Test Task", "project": "lybra", "task_mode": "code"}  # AIPOS-F211: 显式 code
         result1 = derive_audit_task_on_return(
             repo_root=self.repo_root,
             source_task_id="AIPOS-123",
@@ -212,6 +214,7 @@ class TestAuditDerivation(unittest.TestCase):
             "task_id": "AIPOS-123",
             "title": "Test Task",
             "project": "lybra",
+            "task_mode": "code",  # AIPOS-F211: 缺 task_mode 不独立审计(schema missing_default), 本用例测「已派审」故显式 code
             "related_audit_task_ref": "AIPOS-123R",
         }
         result = derive_audit_task_on_return(

@@ -3321,7 +3321,7 @@ def candidate_fail_fix_values(workspace_root: Path, task_id: str) -> dict[str, s
         return {"fail_reason": note, "source_task": note, "supersede_command": note}
     reason = (f"裁决 {state['verdict']} {state['verdict_id']}(审计卡 {state['audit_task_id'] or '?'}): "
               f"{state['reason'] or '(裁决记录无 Findings summary, 见审计报告)'}")
-    source = f"来源卡 {state['source'] or '(卡面缺 validation_source_task)'} 的固定候选 {state['candidate'] or '?'}"
+    source = f"来源卡 {state['source'] or '(卡面缺 validation_source_task)'}(本卡 FAIL 的固定候选 {state['candidate'] or '?'})"
     supersede = (f"lybra --workspace-root {workspace_root} queue supersede --task-id {task_id} --by <新验证卡号> "
                  f"--actor <你的顾问实例> --owner-words \"<Owner 原话摘要>\" --dry-run")
     return {"fail_reason": reason, "source_task": source, "supersede_command": supersede}

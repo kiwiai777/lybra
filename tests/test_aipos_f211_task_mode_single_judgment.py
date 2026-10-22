@@ -268,6 +268,29 @@ def test_accept3_candidate_fail_routes_advisor_fix_not_owner(rig):
     assert d["action"]["type"] == "candidate_fail" and d["action"]["end_reason"] == "candidate_fail" and d["triggered_by"] == "advisor"
     assert "返工或修复" not in d["suggested_action"] and "queue supersede" in d["suggested_action"] and sha in d["suggested_action"]
 
+    # loop 本身: 推导核 candidate_fail = 以 candidate_fail 结束(exit not_derivable), 不拉起、不碰门
+    import io
+
+    from tools.aipos_cli.autonomy_policy import build_autonomy_policy_markdown
+    from tools.aipos_cli.loop_driver import exit_code_for, run_loop
+
+    f78._write(gov / "5_tasks" / "policies" / "pol_f211_val.md", build_autonomy_policy_markdown(
+        policy_id="pol_f211_val", agent_or_role="advisor", active_from="2026-01-01T00:00:00Z", expires_at="2999-01-01T00:00:00Z",
+        max_tasks=20, owner_approval_ref="fixture-envelope-f211", task_selector_task_mode="validation", launch_harnesses=["pi"]))
+    out = io.StringIO()
+    res = run_loop(VAL, gov, actor=f78.DRIVER, policy_id="pol_f211_val", out=out, interval=0.05, max_wait=2, max_steps=3, no_launch=True)
+    _show(f"[验收③ lybra loop 输出原文] exit {res.exit_code} reason {res.reason}\n{out.getvalue()}")
+    assert res.reason == "candidate_fail" and res.exit_code == exit_code_for(load_loop_contract(), "not_derivable"), out.getvalue()
+    assert "固定候选审计 FAIL" in out.getvalue()
+    from test_aipos_f131_loop_run_status import _cli as _status_cli
+
+    rc, status_text, err = _status_cli(["loop", "status", "--task-id", VAL, "--workspace-root", str(gov)])
+    _rcj, status_json, _e = _status_cli(["loop", "status", "--task-id", VAL, "--workspace-root", str(gov), "--json"])
+    _show(f"[验收③ lybra loop status 原文] exit {rc}\n{status_text}{err}")
+    real = json.loads(status_json)["next_action"]
+    assert real["action"] == "advisor_fix" and real["reason"] == "candidate_fail", real
+    assert f"queue supersede --task-id {VAL} --by <新验证卡号>" in status_text
+
     contract = load_loop_contract()
     run_decl = lrr.run_record_declaration(contract)
     rules = lrr.next_action_declaration(run_decl)
@@ -280,7 +303,7 @@ def test_accept3_candidate_fail_routes_advisor_fix_not_owner(rig):
           + "\n" + str(na.get("hint")))
     assert na["action"] == "advisor_fix" and na["reason"] == "candidate_fail", na
     hint = str(na["hint"])
-    assert summary[:30] in hint and f"来源卡 {SRC} 的固定候选 {sha}" in hint
+    assert summary[:30] in hint and f"来源卡 {SRC}(本卡 FAIL 的固定候选 {sha})" in hint
     assert f"queue supersede --task-id {VAL} --by <新验证卡号>" in hint and "--dry-run" in hint
     # 旧形(未登记本出口时)对照: not_derivable 接在 investigate 后 = 连败升 Owner
     old = lrr.next_action({**view, "end_reason": "not_derivable"}, rules, governance_root=gov, earlier_end_reasons=["not_derivable"])
