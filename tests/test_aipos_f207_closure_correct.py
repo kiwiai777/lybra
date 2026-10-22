@@ -193,9 +193,10 @@ def test_item1_mark_concluded_outcome_pass_and_block_dependency(rig):
     assert "--amendments '{\"depends_on\": []}'" in legacy[0]
 
     # loop 结案出口与依赖判据同读: 顾问复核结案 = 已结案(补跑 loop 不再停在「任务已完成, 无下一步」)
-    from tools.aipos_cli.loop_driver import _closure_kind
-
-    assert _closure_kind(gov, "ENV-B") == "conclusion" and _closure_kind(gov, "NOPE-1") is None
+    # AIPOS-F209: loop 私判 _has_closure / _closure_kind 已删, loop 结案出口直接读 closure_state(kind)
+    assert closure_state(gov, "ENV-B")["kind"] == "conclusion" and closure_state(gov, "NOPE-1")["kind"] is None
+    loop_src = (REPO_ROOT / "tools" / "aipos_cli" / "loop_driver.py").read_text(encoding="utf-8")
+    assert "closed_kind = closure_state(governance_root, task_id)[\"kind\"]" in loop_src and "def _closure_kind(" not in loop_src
 
 
 # ===========================================================================
@@ -420,7 +421,14 @@ def test_declarations_single_source():
     assert "correct" in verbs["lybra_governance_commit"]["post_write_landing"]["commands"]["queue_writers"]["subcommands"]
     assert verbs["lybra_queue_correct"]["exit_codes"]["landing_failed"]["code"] == \
         verbs["lybra_governance_commit"]["post_write_landing"]["landing_failed_exit_code"]
-    assert verbs["lybra_mark_concluded"]["parameters"]["properties"]["outcome"]["enum"] == list(conclusion_outcomes())
+    # AIPOS-F209 件②: 值域只在 card.schema dependency_gate.conclusion.outcomes 一处声明——verbs 参数与卡面字段不另列 enum,
+    # MCP inputSchema 与 CLI choices 由 conclusion_outcomes 渲染
+    assert "enum" not in verbs["lybra_mark_concluded"]["parameters"]["properties"]["outcome"]
+    assert "enum" not in card_fields[gate["conclusion"]["outcome_field"]]
+    from tools.mcp_server.tools import READ_TOOL_DESCRIPTORS, WRITE_TOOL_DESCRIPTORS
+
+    mcp = [d for d in READ_TOOL_DESCRIPTORS + WRITE_TOOL_DESCRIPTORS if d["name"] == "lybra_mark_concluded"]
+    assert len(mcp) == 1 and mcp[0]["inputSchema"]["properties"]["outcome"]["enum"] == list(conclusion_outcomes())
     review = verbs["lybra_loop_status"]["next_action"]["advisor_review_close"]
     assert review["verbs"] == ["lybra_mark_concluded"] and review["end_reasons"] == ["manual_required"]
     # 唯一实现: 修复卡与承接卡同一起草函数; 撤换与纠正同一决策构造

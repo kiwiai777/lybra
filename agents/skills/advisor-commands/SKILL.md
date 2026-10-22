@@ -539,6 +539,10 @@ lybra mark-concluded --task-id <卡ID> --actor <你的顾问实例> --report-pat
    `--outcome block`(AIPOS-F207): 依赖本卡的卡不会被当作满足(与门生结案同一判定), 认领拒因提示改依赖为承接卡或移除(`queue amend`);
    不写 `--outcome` = 按 pass 记并提示。loop 停在这一步时 `lybra loop status` 给 advisor_fix(顾问复核结案), 不进 Owner 收件箱。交回后产出被改 = 拒 `INGEST_OUTPUTS_CHANGED`(让执行体按改后产出
    重写 Return, loop 重交回)。之后 N6 落账照常由 loop / `lybra next` 给出。
+   顾问复核结案与门生结案同一口径(AIPOS-F209, 唯一判定 `task_complexity.closure_state`): state lint 不报断层(BLOCK 结论只给信息级提示)、
+   loop 收尾补落账、开工核验、补充审计派审、路线图核对都认它; 门上 MCP `lybra_mark_concluded` 同收 `outcome`(与 CLI 同一写路径);
+   结案后自动清理本卡工作树(干净删、分支保留, 结果在应答 `data.worktree_cleanup`)。此前顾问复核结案后 loop 运行记录未落账的卡:
+   原 `lybra loop --task-id <卡ID>` 重跑一次即自动补落账。
 5. **声明独立审计**: 审计 pi 开工提示「工作树: 不建(被审卡只写治理根…)」, 报告必填 `verdict` + `outputs_digest`(产品给值, 照抄); 入口与门侧裁决
    都核「此刻清单指纹 = 交回绑定」; finalize 无合入(finalization `merge_commit = outputs:<指纹>`, 不推送不部署)后结案。
 
