@@ -145,15 +145,22 @@ def supersede_declaration() -> dict[str, Any]:
             or not all(isinstance(v, str) and v.strip() for v in fields.values()):
         raise SchemaLoadError("transitions.schema.json queue_mutations.transitions.supersede.card_fields 须为 角色 → 卡面键名, "
                               f"角色恰为 {list(SUPERSEDE_CARD_FIELD_ROLES)}(AIPOS-F213 件⑤)")
-    from tools.schema_loader import code_repo_schema_root
-
-    undeclared = sorted(set(fields.values()) - set(load_schema("card", code_repo_schema_root()).get("fields") or {}))
-    if undeclared:
-        raise SchemaLoadError(f"transitions.schema.json queue_mutations.transitions.supersede.card_fields 引用 card.schema 未声明字段 {undeclared}")
-    require_inbox_choices([spec["decision_choice"]], "transitions queue_mutations.transitions.supersede.decision_choice")
     from_states, to_state = ALLOWED_TRANSITIONS["supersede"]
     return {**spec, "from_states": from_states, "to_state": to_state, "successor_states": tuple(successor),
             "card_fields": {str(k): str(v) for k, v in fields.items()}}
+
+
+def supersede_cross_check(decl: dict[str, Any] | None = None) -> None:
+    """AIPOS-F213 件③⑤: 撤换声明的跨文件引用校验(撤换前置 supersede_problems 每次预演 / 确认先过; 全 schema 选项引用对表另有测试):
+    card_fields 的卡面键名须为 card.schema fields 已声明字段; decision_choice 须为收件箱选项(校验唯一实现 require_inbox_choices)。
+    不符 = SchemaLoadError(fail-closed)。supersede_declaration 本身只读 transitions(结案等只读承继声明的路径不连带依赖 card / verbs)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    d = decl or supersede_declaration()
+    undeclared = sorted(set(d["card_fields"].values()) - set(load_schema("card", code_repo_schema_root()).get("fields") or {}))
+    if undeclared:
+        raise SchemaLoadError(f"transitions.schema.json queue_mutations.transitions.supersede.card_fields 引用 card.schema 未声明字段 {undeclared}")
+    require_inbox_choices([d["decision_choice"]], "transitions queue_mutations.transitions.supersede.decision_choice")
 
 
 def supersede_problems(repo_root: Path, task_id: str, actor: str, supersede: dict[str, Any] | None) -> list[str]:
@@ -163,6 +170,7 @@ def supersede_problems(repo_root: Path, task_id: str, actor: str, supersede: dic
     from tools.aipos_cli.task_loader import find_task_card
 
     decl = supersede_declaration()
+    supersede_cross_check(decl)
     texts = supersede_texts()
     spec = dict(supersede or {})
     problems: list[str] = []

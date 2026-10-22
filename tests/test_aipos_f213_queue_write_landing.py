@@ -538,7 +538,9 @@ def test_item3_all_schema_choice_refs_checked_against_inbox() -> None:
     assert {r[0] for r in refs} == {"transitions.schema.json:nodes.N4.audit_blocked.owner_reaudit.choices",
                                     "transitions.schema.json:queue_mutations.transitions.supersede.decision_choice",
                                     "transitions.schema.json:queue_mutations.correct.decision_choice"}
-    audit_blocked_declaration(), correct_declaration(), supersede_declaration()  # 加载口都过同一校验
+    from tools.aipos_cli.queue_mutation import supersede_cross_check
+
+    audit_blocked_declaration(), correct_declaration(), supersede_cross_check(supersede_declaration())  # 加载 / 前置口都过同一校验
     src = (REPO_ROOT / "tools/aipos_cli/queue_mutation.py").read_text(encoding="utf-8")
     assert src.count('not in inbox_declaration()["options"]') == 0 and src.count("def require_inbox_choices(") == 1  # 无第二份内联校验
 
@@ -655,6 +657,6 @@ def test_item5_supersede_card_keys_read_from_declaration(monkeypatch: pytest.Mon
         monkeypatch.setattr("tools.schema_loader.load_schema",
                             lambda name, *a, _t=tampered, _real=load_schema, **kw: _t if name == "transitions" else _real(name, *a, **kw))
         with pytest.raises(SchemaLoadError) as exc:
-            queue_mutation.supersede_declaration()
+            queue_mutation.supersede_cross_check(queue_mutation.supersede_declaration())
         _show(f"[件⑤·声明不合即红] {exc.value}")
         monkeypatch.undo()
