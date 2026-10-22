@@ -33,6 +33,8 @@ from tools.schema_constants import RecordType
 RECORD_EMPTY = "RECORD_EMPTY"
 FRONTMATTER_INVALID = "FRONTMATTER_INVALID"
 GOVERNANCE_UNCOMMITTED = "GOVERNANCE_UNCOMMITTED"
+#: AIPOS-F209: 顾问复核结案且结论 BLOCK 的信息级提示码(进 result["notes"], 不进 issues: 不计断层、不影响退出码)
+CONCLUDED_BLOCK = "CONCLUDED_BLOCK"
 
 
 def check_severity(code: str) -> str:
@@ -232,6 +234,7 @@ def _apply_legacy_baseline(governance_root: Path, task_id_filter: str | None, re
         return
     kept = [i for i in result["issues"] if str(i.get("task_id") or "").upper() not in frozen]
     result["issues"] = kept
+    result["notes"] = [n for n in result.get("notes") or [] if str(n.get("task_id") or "").upper() not in frozen]
     result["frozen"] = len(frozen)
     result["frozen_task_ids"] = sorted(frozen)
 
@@ -244,7 +247,10 @@ def _run_state_lint(governance_root: Path, task_id_filter: str | None) -> dict[s
     else:
         task_ids = _list_all_task_ids(governance_root)
     
+    from tools.aipos_cli.task_complexity import closure_state
+
     invalid_frontmatter: list[dict[str, Any]] = []
+    notes: list[dict[str, Any]] = []  # AIPOS-F209: 信息级提示(不计断层, 不影响退出码)
     concluded: dict[str, Path | None] = {}  # AIPOS-F94 件③: 已结案卡 → 卡文件(落账判据批量读一次 git)
     for task_id in sorted(task_ids):
         queue_state, card_path = _get_queue_state(governance_root, task_id)
@@ -267,14 +273,30 @@ def _run_state_lint(governance_root: Path, task_id_filter: str | None) -> dict[s
                 "record_state": None,
             })
             continue
-        if queue_state == "completed" or record_state == "completed":
+        # AIPOS-F209: 是否结案 / 结案种类 / 结论读结案口径唯一判定 task_complexity.closure_state(门生 closure 记录 / 顾问复核结案
+        # mark-concluded / 卡在 completed/), 本模块不另判; 读不出 = ERROR 点名(不当作已结案, 也不跳过)
+        try:
+            closure = closure_state(governance_root, task_id, located=(card_path, queue_state))
+        except (OSError, ValueError) as exc:  # FrontmatterReadError / AmbiguousTaskCard ⊂ ValueError; 结论值不在声明 = ValueError
+            issues.append({
+                "task_id": task_id,
+                "severity": "ERROR",
+                "message": f"结案口径读不出(task_complexity.closure_state): {type(exc).__name__}: {exc}; 出口: 修正卡面 / 记录后重跑 state lint",
+                "queue_state": queue_state,
+                "fm_state": fm_state,
+                "record_state": record_state,
+            })
+            continue
+        if closure["concluded"]:
             concluded[task_id] = card_path
-        
-        # 检查: completed 卡必须有 closure 记录
+
+        # 检查: completed 卡须有结案形式(门生 closure 记录 / 顾问复核结案)
         # AIPOS-F92: 审计卡的终态记录是被审卡名下 audit_task_id=本卡的门生裁决(裁决入门即把审计卡移入 completed/,
         # transitions N4; 审计卡无 closure)。原判据对每张已裁决审计卡报 ERROR(lybra 自身 F89R/F90R/F91R 同), 接入验收
         # 判据「state lint 零 ERROR」因而永不成立 —— 改按审计卡自身生命周期判。
-        if queue_state == "completed" and record_state != "completed" and not _audit_card_verdict_landed(governance_root, task_id, card_path):
+        # AIPOS-F209: 顾问复核结案(kind = conclusion, F207 起与门生 closure 等价)不报断层; 结论 BLOCK 只给信息级提示(notes, 不计断层)
+        # (concluded 而 kind 空 = 卡在 completed/ 却无任何结案形式, closure_state 文档口径)
+        if closure["concluded"] and closure["kind"] is None and not _audit_card_verdict_landed(governance_root, task_id, card_path):
             issues.append({
                 "task_id": task_id,
                 "severity": "ERROR",
@@ -282,6 +304,27 @@ def _run_state_lint(governance_root: Path, task_id_filter: str | None) -> dict[s
                 "queue_state": queue_state,
                 "fm_state": fm_state,
                 "record_state": record_state,
+            })
+        # 三方一致(非结案判定): 有门生 closure 记录、卡在 completed/, 但最新门记录是其后的认领 / 交回(结案后又被认领等)。
+        # F209 前此形被上一条误报为「无 closure 记录」(lybra AIPOS-F60 实例); 改为如实点名, 级别不变(ERROR)
+        if queue_state == "completed" and closure["kind"] == "closure" and record_state in ("claimed", "returned"):
+            issues.append({
+                "task_id": task_id,
+                "severity": "ERROR",
+                "message": (f"卡在 {queue_state}/ 且有 closure 记录, 但其后又有 {record_state} 记录(记录推导态 {record_state} 与队列位置不一致, 断层); "
+                            f"出口: 查该卡结案后的认领 / 交回来源后 lybra state repair --task-id {task_id} --workspace-root {governance_root} --dry-run"),
+                "queue_state": queue_state,
+                "fm_state": fm_state,
+                "record_state": record_state,
+            })
+        if closure["kind"] == "conclusion" and not closure["conclusion"]["satisfies"]:
+            view = closure["conclusion"]
+            notes.append({
+                "task_id": task_id,
+                "severity": "INFO",
+                "code": CONCLUDED_BLOCK,
+                "message": (f"{CONCLUDED_BLOCK}: 顾问复核结案, 结论 {view['outcome']}(来源 {view['source']}); 不满足他卡 closure 依赖"
+                            f"(依赖它的卡会被拒并提示改依赖承接卡)。信息级, 不计断层"),
             })
         
         # 检查: claimed 卡必须有 claim 记录
@@ -357,6 +400,7 @@ def _run_state_lint(governance_root: Path, task_id_filter: str | None) -> dict[s
     return {
         "scanned": len(task_ids),
         "issues": issues,
+        "notes": notes,
     }
 
 

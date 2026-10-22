@@ -1506,8 +1506,7 @@
           },
           "outcome": {
             "type": "string",
-            "enum": ["pass", "block"],
-            "description": "AIPOS-F207 件①: 顾问复核结论 pass | block(值域 = card.schema dependency_gate.conclusion.outcomes; 写卡面 conclusion_outcome)。block = 本卡不满足他卡 closure 依赖(与门生 closure 等价判定, task_complexity.closure_state)。缺省 = default_outcome(pass)并提示, 不按 conclusion_note 判。CLI `lybra mark-concluded --outcome`; MCP 面未接(缺省 pass)"
+            "description": "AIPOS-F207 件① / AIPOS-F209 件②: 顾问复核结论 pass | block。值域只在 card.schema dependency_gate.conclusion.outcomes 一处声明(唯一读取口 task_complexity.conclusion_outcomes; CLI `lybra mark-concluded --outcome` 的 choices 与 MCP lybra_mark_concluded inputSchema 的 enum 都由它渲染, 本处不另列值); 写卡面 conclusion_outcome。block = 本卡不满足他卡 closure 依赖(结案口径唯一判定 task_complexity.closure_state)。缺省 = default_outcome(pass)并提示, 不按 conclusion_note 判。CLI 与 MCP 同收、同一写路径 board_adapter.mark_concluded_task; 结案后清理工作树(transitions worktree_cleanup.triggers.conclude)"
           },
           "dry_run": {
             "type": "boolean",
@@ -3806,6 +3805,8 @@
           "states": {"unverified": "未验证", "auto_passed": "自动验证通过", "owner_pending": "待 Owner 抽查", "owner_confirmed": "Owner 已确认", "mismatch": "不符"},
           "satisfied_state": {"auto": "auto_passed", "artifact": "auto_passed", "owner_check": "owner_confirmed"},
           "needs_artifacts": ["artifact", "owner_check"],
+          "independent_audit": ["auto"],
+          "independent_audit_description": "AIPOS-F209 件①: 须独立审计 PASS 的 verify 方式。挂接卡的结案口径(唯一判定 task_complexity.closure_state)为顾问复核结案(kind = conclusion, mark-concluded)且无常规 PASS 类裁决时: 结论 block = 未验证(unmet_reasons.conclusion_block); 结论 pass 且标准 verify 在本表 = 未验证并明确提示补充审计(unmet_reasons.conclusion_needs_audit; 补充审计裁决属 PASS 类 = 已独立审计); 结论 pass 且 verify 不在本表 = 结论代替审计 PASS(basis.conclusion_passed; 常规裁决报告的运行证据节不适用; artifact / owner_check 的产物与 Owner 抽查照判)。auto = 「审计 PASS 且有运行证据」, 只能由独立审计满足; artifact / owner_check 以产物(与 Owner 抽查)为核对依据。缺键 = SchemaLoadError(roadmap_drift.status_declaration 校验 ⊆ verify 值域)",
           "basis": {
             "passed": "卡 {task_id} 已结案, 审计 {verdict}({verdict_id}){evidence_part}{artifact_part}",
             "evidence_part": "; 运行证据见 {report_ref}",
@@ -3819,13 +3820,17 @@
             "fix_card": "{task_id}({queue_state})",
             "fix_pending": "{task_id}(待出: 自动起草被拒, 顾问按 roadmap verify 输出的指引手工出卡)",
             "corrected": "Owner 纠正卡 {task_id} 的结案(不符·待承接; {decided_at}, 经 {relayed_by} 转达; 原话「{owner_words}」; 决策 {decision_id}; 原结案 / 裁决不改, 已标争议)",
-            "followup_part": " · 承接卡 {fix}"
+            "followup_part": " · 承接卡 {fix}",
+            "conclusion_passed": "卡 {task_id} 顾问复核结案(结论 {outcome}; 说明「{note}」){artifact_part}"
           }
         },
         "unmet_reasons": {
           "no_card": "无挂接卡",
           "not_closed": "挂接卡 {cards} 未结案",
           "no_pass": "卡 {task_id} 已结案但无审计 PASS 类裁决(最新: {verdict})",
+          "conclusion_block": "卡 {task_id} 为顾问复核结案, 结论 {outcome}(来源 {source}), 不算验证通过; 出口: 承接卡挂接该标准",
+          "conclusion_needs_audit": "卡 {task_id} 为顾问复核结案(结论 {outcome}, 无独立审计 PASS 裁决), 标准 {criterion} 的核对方式 {verify} 须独立审计 PASS; 出口: 补充审计 `lybra --workspace-root {governance_root} audit dispatch --supplementary --task-id {task_id} --actor <你的顾问实例> --reason <摘要>`(补审 PASS 后计入), 或改挂经审计的卡",
+          "closure_unreadable": "卡 {task_id} 的结案口径读不出(见 errors), 不猜",
           "supplementary_fail": "卡 {task_id} 补审裁决 {verdict}({verdict_id}), 争议未收口",
           "no_evidence": "卡 {task_id} 声明了运行证据, 但审计报告无运行证据节({problem})",
           "evidence_declaration": "卡 {task_id} 运行证据声明不合({problem})",

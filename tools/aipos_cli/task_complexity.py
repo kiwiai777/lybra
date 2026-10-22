@@ -163,11 +163,22 @@ def closure_disputes(governance_root: "Path", task_id: str) -> list[dict[str, An
     return out
 
 
-def closure_state(governance_root: "Path", task_id: str) -> dict[str, Any]:
-    """AIPOS-F207 件①: 卡的结案口径唯一判定(依赖判据 unmet_dependencies 与 loop 结案出口 loop_driver._has_closure 同读)。
-    门生 closure 记录在 = kind closure; 否则卡在 conclusion.queue_state 且为顾问复核结案 = kind conclusion(+ conclusion_view);
-    否则 kind None。另带 disputes = Owner 纠正争议标记(task_complexity.closure_disputes 唯一读取; 原记录不改)。
-    返回 {task_id, kind, closure_files, conclusion, disputes}。卡面 / 记录读不出 = 原异常上抛(调用方点名, 不当作已结案)。"""
+def closure_state(governance_root: "Path", task_id: str, *, located: "tuple[Path | None, str | None] | None" = None) -> dict[str, Any]:
+    """AIPOS-F207 件① / AIPOS-F209: 卡「是否结案 / 结案种类 / 结论」的唯一判定(结案口径单源)。读者: 依赖判据 unmet_dependencies、
+    loop 结案出口与收尾补落账(loop_driver / governance_commit.reland_after_write)、state lint 断层判定、开工核验
+    next_resolver.kickoff_refusal、补充审计派审 board_adapter.audit_dispatch、路线图核对 roadmap_drift——各读者禁另判
+    (棘轮 tests/test_aipos_f209_closure_single_source.py)。
+    - kind(结案种类): 门生 closure 记录在 = "closure"; 否则卡在 conclusion.queue_state 且为顾问复核结案(mark-concluded 卡面
+      marker)= "conclusion"; 否则 None。
+    - outcome(结论): kind = conclusion → conclusion_view 的结论(值域 card.schema dependency_gate.conclusion.outcomes); 门生 closure 的
+      结论在其裁决记录(不在此判)= None。
+    - concluded(是否结案): kind 非空, 或卡在 conclusion.queue_state(completed/)——后者无任何结案形式时(审计卡以裁决为终态 / 断层存量)
+      kind 仍为 None, 断层由 state lint 判。
+    - queue_state: 卡所在队列目录(task_loader.find_task_card 唯一查找; 查不到 = None)。located = 调用方已查到的 (卡路径, 队列状态),
+      免重查(判据不变)。
+    另带 closure_files / conclusion(conclusion_view)/ disputes(Owner 纠正争议标记, task_complexity.closure_disputes 唯一读取; 原记录不改)。
+    返回 {task_id, kind, outcome, concluded, queue_state, closure_files, conclusion, disputes}。
+    卡面 / 记录读不出 = 原异常上抛(调用方点名, 不当作已结案)。"""
     from pathlib import Path as _Path
 
     from tools.aipos_cli.frontmatter import require_frontmatter
@@ -177,18 +188,17 @@ def closure_state(governance_root: "Path", task_id: str) -> dict[str, Any]:
     root = _Path(governance_root)
     decl = dependency_gate_declaration()["conclusion"]
     files = gate_record_files(record_dir(root, "closures", task_id), "closures")
-    out: dict[str, Any] = {"task_id": task_id, "kind": None, "closure_files": [str(p) for p in files], "conclusion": None,
-                           "disputes": closure_disputes(root, task_id)}
+    path, queue_state = located if located is not None else find_task_card(root, task_id)
+    out: dict[str, Any] = {"task_id": task_id, "kind": None, "outcome": None, "concluded": False, "queue_state": queue_state,
+                           "closure_files": [str(p) for p in files], "conclusion": None, "disputes": closure_disputes(root, task_id)}
     if files:
         out["kind"] = "closure"
-        return out
-    path, _state = find_task_card(root, task_id, states=(str(decl["queue_state"]),))
-    if path is None:
-        return out
-    meta, _body = require_frontmatter(path)
-    view = conclusion_view({**meta, "task_id": task_id})
-    if view is not None:
-        out["kind"], out["conclusion"] = "conclusion", view
+    elif path is not None and queue_state == str(decl["queue_state"]):
+        meta, _body = require_frontmatter(path)
+        view = conclusion_view({**meta, "task_id": task_id})
+        if view is not None:
+            out["kind"], out["conclusion"], out["outcome"] = "conclusion", view, view["outcome"]
+    out["concluded"] = out["kind"] is not None or queue_state == str(decl["queue_state"])
     return out
 
 

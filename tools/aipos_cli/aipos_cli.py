@@ -7118,6 +7118,9 @@ def main(argv: list[str] | None = None) -> int:
                     for issue in issues:
                         frozen_tag = " (frozen)" if issue.get("frozen") else ""
                         print(f"  - [{issue['severity']}] {issue['task_id']}{frozen_tag}: {issue['message']}")
+                # AIPOS-F209: 信息级提示(顾问复核结案结论 BLOCK 等)另列, 不计断层、不影响退出码
+                for note in result.get("notes") or []:
+                    print(f"  · [{note['severity']}] {note['task_id']}: {note['message']}")
                 # AIPOS-F122 件③: 存量冻结汇总一行(全项目扫描不报冻结卡; 单卡 lint 照实报并标注)
                 if result.get("frozen"):
                     if getattr(args, "task_id", None):
