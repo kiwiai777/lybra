@@ -329,7 +329,7 @@ lybra kickoff --task-id <卡ID> --workspace-root <治理根> --json     # 机读
 ```
 输出 = 一份自足开工稿: 身份实例、章程命令(会话在他机 = ssh 拉取式)、卡面路径、工作树 / 分支 / 基于哪个 main sha、承继来源、报告落点与 frontmatter 必填字段、
 车道与写权限边界、禁写清单(治理根除报告落点、其他项目根、工位、门写动作、pi)、硬规矩、草稿目录(project.json `paths.scratch_root`, 缺省系统临时目录, 不落治理根)、
-验证要求(本分支最终 tip 必跑全量; main 侧先查 `lybra regression baseline` 三态——已记录直接引用 / 回归在跑交回前再查 / 须自跑才自跑, 并附开工稿生成时的现状一行(AIPOS-F188); 棘轮 / 证据复跑一致 / 长命令 run-long)、交回前残留进程检查、写完即止、末尾简短总结。**原样交给子 agent, 本卡特别说明追加在其后; 不再手写开工稿。**
+验证要求(本分支最终 tip 必跑全量; main 侧先查 `lybra regression baseline`, 按其输出三态处理(标签与处理以开工稿为准, AIPOS-F212), 并附开工稿生成时的现状一行(AIPOS-F188); 棘轮 / 证据复跑一致 / 长命令 run-long)、交回前残留进程检查、写完即止、末尾简短总结。**原样交给子 agent, 本卡特别说明追加在其后; 不再手写开工稿。**
 拒(stderr 原文): 卡未认领 / 已结案 / 当前不该本角色动 / 产物已交(与工位 `/go` 同一判据)、实例章程不可取、工作树未建、草稿目录落在治理根内(给 set-paths 出口)。
 项目可声明: `lybra project set-paths <项目> --key scratch_root --value <治理根外绝对路径> --confirm`; project.json `test_contract.ratchet`(棘轮一句话)/ `test_contract.residual_processes`(交回前 pgrep 式样)。
 

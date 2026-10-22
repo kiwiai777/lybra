@@ -229,13 +229,14 @@ HARD_RULES_LINE_SUFFIX = "。修改该来源 → 章程与派审注入同步跟�
 def test_item2_charters_point_at_declared_commands_manual():
     """三份母本 grep ADVISOR-COMMANDS 零命中; 「单一真相源」行 = 占位 {{hard_rules_source}}(AIPOS-F89 件② M17: 硬规矩来源读项目
     声明 project.json paths.hard_rules_source, 不再写死治理文档名) = 硬规矩提取器(hard_rules_extractor)生成的同一行形。"""
-    line = "> **单一真相源**: {{hard_rules_source}}" + HARD_RULES_LINE_SUFFIX
-    extractor_src = (REPO_ROOT / "tools" / "aipos_cli" / "hard_rules_extractor.py").read_text(encoding="utf-8")
-    assert 'f"> **单一真相源**: {hard_rules_source_ref(gov_root)}' + HARD_RULES_LINE_SUFFIX + '"' in extractor_src
+    # AIPOS-F212 件②: 硬规矩节(标题 + 「单一真相源」行 + 条文)整节由 render_hard_rules_for_charter 渲染, 母本只留占位 {{hard_rules_section}};
+    # 行式唯一声明 roles.schema gate_hard_rules.source_line(提取器读声明, 不再在源码写行式)
+    roles_decl = json.loads((REPO_ROOT / "schema" / "roles.schema.json").read_text(encoding="utf-8"))
+    assert roles_decl["gate_hard_rules"]["source_line"] == "> **单一真相源**: {source}" + HARD_RULES_LINE_SUFFIX
     for role in ROLES:
         text = (REPO_ROOT / "agents" / "roles" / role / "AGENTS.md").read_text(encoding="utf-8")
         assert "ADVISOR-COMMANDS" not in text and "COMMANDS.md" not in text, role
-        assert text.count(line) == 1, role
+        assert text.count("{{hard_rules_section}}") == 1 and "单一真相源**:" not in text, role
     advisor = (REPO_ROOT / "agents" / "roles" / "advisor" / "AGENTS.md").read_text(encoding="utf-8")
     assert "项目命令手册(如有, 治理文档名由项目自定)中残留的手搓片段标注为**已退役**" in advisor
 
@@ -252,6 +253,10 @@ def test_item2_rendered_charters_have_no_residue(tmp_path, monkeypatch):
         if declared:
             decl["paths"]["hard_rules_source"] = "governance/COMMANDS.md"
             (gov / "project.json").write_text(json.dumps(decl), encoding="utf-8")
+            # AIPOS-F212 件②: 声明了来源 = 章程硬规矩节取该手册 § 0.5(读不出 = 拒, fail-closed), 靶场补一份手册
+            (gov / "governance").mkdir(parents=True, exist_ok=True)
+            (gov / "governance" / "COMMANDS.md").write_text(
+                "# 手册\n\n## 0.5. 硬规矩\n\n1. **靶场规矩一** — 说明。\n2. **靶场规矩二** — 说明。\n\n## 1. 其他\n", encoding="utf-8")
         for role in ROLES:
             harness = tmp_path / "pi" / f"lybra-{role}-{int(declared)}"
             harness.mkdir(parents=True)

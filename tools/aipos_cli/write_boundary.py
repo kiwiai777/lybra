@@ -388,9 +388,19 @@ def check_access(
 # 章程渲染节
 # ---------------------------------------------------------------------------
 
+def role_rows(boundary: dict[str, Any], role: str, *, task_id: str | None = None) -> list[dict[str, Any]]:
+    """AIPOS-F212 件④: 某角色的写权限边界行(章程表 render_write_boundary_markdown 与 lybra kickoff 边界行同读, 选行只此一处);
+    task_id 给 = 路径占位 <task_id> 落为本卡(开工稿按卡), 缺 = 原样(章程不按卡)。"""
+    rows = [dict(r) for r in boundary["rows"] if r["role"] == role]
+    if task_id:
+        for row in rows:
+            row["path"] = str(row["path"]).replace("<task_id>", task_id)
+    return rows
+
+
 def render_write_boundary_markdown(boundary: dict[str, Any], *, role: str) -> str:
     """章程渲染物用: 该角色行 + hard_rules。同一份声明, 所有角色章程同源。"""
-    rows = [r for r in boundary["rows"] if r["role"] == role]
+    rows = role_rows(boundary, role)
     lines = [
         "## 🔴 写权限边界(声明渲染, AIPOS-F66B 件②; 单源 roles.schema write_boundary)",
         "",

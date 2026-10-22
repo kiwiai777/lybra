@@ -246,7 +246,7 @@ def test_item2_kickoff_verify_three_states_executor_and_auditor(rig, tmp_path):
     head = seen["head"]
     cmd = f"`lybra --workspace-root {gov} regression baseline --repo-root {product}`"
     rule = (f"- 两边基线: 本分支最终 tip 必须独立跑一次全量, 附计数 grep(✓ / ✗ 行数); main 侧先查合并后回归记录基线 {cmd}(三态, 只读): "
-            "已记录 = 直接引用该记录(报告写记录路径与失败集合), 不自跑; 回归在跑 = 先做卡, 交回前再查一次")
+            "已记录, 可复用 = 直接引用该记录(报告写记录路径与失败集合), 不自跑; 合并后回归在跑 = 先做卡, 交回前再查一次")  # AIPOS-F212: 标签 = state_labels
     expect = {
         "self_run": f"  main 侧基线现状(开工稿生成时查, sha {head}): 须自跑(无 merge_commit = {head} 的合并后回归记录",
         "pending": (f"  main 侧基线现状(开工稿生成时查, sha {head}): 合并后回归在跑(卡 BASE-1 起于 2026-10-18T08:28:36Z, 时限 1500s, "

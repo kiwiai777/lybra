@@ -137,7 +137,9 @@ def test_item2_hard_rules_source_undeclared_skips_with_warning_declared_reads_it
     assert result["ok"] is False and result["skipped"] is True and result["error"].startswith("HARD_RULES_SOURCE_UNDECLARED")
     assert "HARD_RULES_SOURCE_UNDECLARED" in err
     assert hard_rules_source_ref(root) == UNDECLARED_REF
-    assert "HARD_RULES_SOURCE_UNDECLARED" in render_hard_rules_for_charter()
+    # AIPOS-F212 件②: 未声明 = 「单一真相源」行 UNDECLARED_REF + roles.schema gate_hard_rules.fallback 条文(与 lybra kickoff 同读)
+    undeclared_section = render_hard_rules_for_charter()
+    assert f"> **单一真相源**: {UNDECLARED_REF}" in undeclared_section and "1. **" in undeclared_section
 
     _write(root / "manuals" / "rules.md", "# m\n\n## 0.5. 硬规矩\n\n1. **规矩一** — 说明。\n2. **规矩二** — 说明。\n\n## 1. 其他\n")
     decl = json.loads((root / "project.json").read_text(encoding="utf-8"))

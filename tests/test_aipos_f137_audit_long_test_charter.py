@@ -44,9 +44,12 @@ def _schema_default_timeout() -> int:
 def test_master_long_test_rule_content():
     """母本条文: 只跑一次 / 命令与超时只经占位 / 计数读日志 / 禁为别的计数重跑 / 禁裸 & 后台; 不写死清单名与秒数。"""
     item = _long_test_item(AUDITOR_MASTER.read_text(encoding="utf-8"))
-    for needle in ("每侧只跑一次", "{{runall_command}}", "显式传 timeout**, 值 = {{runall_timeout_seconds}}", "禁省略 timeout",
+    # AIPOS-F212 件③: 全量时限句只由 subagent_kickoff.runall_timing 产出(母本占位 {{runall_timing_charter}}), 母本删写死的
+    # 「显式传 timeout = 全量时限, 禁取更短值」(与 claude-code 600s 工具时限互斥)
+    for needle in ("每侧只跑一次", "{{runall_command}}", "**全量时限**: {{runall_timing_charter}}",
                    "计数一律 grep 该日志", "禁为取另一种计数再跑全量", "禁裸 `&` 后台跑后结束会话", "串行重跑"):
         assert needle in item, needle
+    assert "禁取更短值" not in item and "显式传 timeout**" not in item
     assert "run-all" not in item and not re.search(r"\b1500\b", item)
 
 
@@ -61,7 +64,8 @@ def test_render_lybra_shape_contains_command_and_declared_timeout(tmp_path, monk
     item = _long_test_item(rendered)
     print("\n----- F137 渲染样例: lybra 形·长测试写法 -----\n" + item)
     assert "`bash tests/run-all.sh 2>&1 | tee <本工位临时目录>/runall-<tip|main>.log`" in item
-    assert "显式传 timeout**, 值 = `1500` 秒" in item and "post_merge_regression 的 timeout_seconds" in item
+    assert "全量时限句以开工稿「验证」节为准" in item and "全量时限 `1500` 秒" in item and "post_merge_regression 的 timeout_seconds" in item
+    assert "禁省略" in item and "一律 run-long" in item
     assert "project.json test_contract" in item  # 来源指项目声明, 不是产品写死
 
 

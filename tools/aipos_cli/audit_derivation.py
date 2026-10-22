@@ -159,11 +159,13 @@ def build_forensic_anchor_section(
     # 以章程「独立全量基线」为准, 此处只给本卡实值(治理根 + 被审卡产品仓)。治理根不可得(手动派审未给)= 不出此行, 不猜。
     baseline_line = ""
     if repo_root is not None:
-        from tools.aipos_cli.post_merge_regression import audit_baseline_command
+        from tools.aipos_cli.post_merge_regression import audit_baseline_command, baseline_state_labels
 
         repo_arg = code_repo if not code_repo.startswith("<unresolved") else None
+        labels = baseline_state_labels()  # AIPOS-F212 件④: 三态标签唯一声明
         baseline_line = (f"- **main 侧基线先查记录**: `{audit_baseline_command(repo_root, repo_arg)}`"
-                         " (只读; 已记录 = main 侧不再自跑, 须自跑 = 自跑 main 侧; 被审分支一侧必须自跑; 细则以审计章程「独立全量基线」为准)\n")
+                         f" (只读; {labels['recorded']} = main 侧不再自跑, {labels['self_run_required']} = 自跑 main 侧; 被审分支一侧必须自跑;"
+                         " 细则以审计章程「独立全量基线」为准)\n")
     # AIPOS-F186 件③: 撤换承继卡——差异基线仍为 base_branch, 承继自原卡的提交在 base...卡分支 内一并审(卡面 carried_from 唯一读取口)
     from tools.aipos_cli.next_resolver import card_carried_from
 
