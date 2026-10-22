@@ -305,6 +305,18 @@ def _run_state_lint(governance_root: Path, task_id_filter: str | None) -> dict[s
                 "fm_state": fm_state,
                 "record_state": record_state,
             })
+        # 三方一致(非结案判定): 有门生 closure 记录、卡在 completed/, 但最新门记录是其后的认领 / 交回(结案后又被认领等)。
+        # F209 前此形被上一条误报为「无 closure 记录」(lybra AIPOS-F60 实例); 改为如实点名, 级别不变(ERROR)
+        if queue_state == "completed" and closure["kind"] == "closure" and record_state in ("claimed", "returned"):
+            issues.append({
+                "task_id": task_id,
+                "severity": "ERROR",
+                "message": (f"卡在 {queue_state}/ 且有 closure 记录, 但其后又有 {record_state} 记录(记录推导态 {record_state} 与队列位置不一致, 断层); "
+                            f"出口: 查该卡结案后的认领 / 交回来源后 lybra state repair --task-id {task_id} --workspace-root {governance_root} --dry-run"),
+                "queue_state": queue_state,
+                "fm_state": fm_state,
+                "record_state": record_state,
+            })
         if closure["kind"] == "conclusion" and not closure["conclusion"]["satisfies"]:
             view = closure["conclusion"]
             notes.append({

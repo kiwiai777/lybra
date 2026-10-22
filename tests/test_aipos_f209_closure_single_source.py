@@ -179,6 +179,24 @@ def test_item1_2_lint_reland_kickoff_supplementary_and_mcp_cli_outcome_agree(rig
     assert any(r.startswith("SUPPLEMENTARY_SOURCE_NOT_CONCLUDED") for r in open_card["blocking_reasons"])
 
 
+def test_item1_lint_closure_then_later_claim_named_correctly(rig):
+    """三方一致: 有 closure 记录、卡在 completed/, 但其后又有认领记录(lybra AIPOS-F60 形)——F209 前被误报「无 closure 记录」, 现如实点名,
+    级别不变(ERROR); 结案口径照认 closure。"""
+    from tools.aipos_cli.task_complexity import closure_state
+
+    gov = rig["gov"]
+    f207._card(gov, "completed", "RC-1")
+    f207._record(gov, "closures", "RC-1", {"record_type": "closure", "closure_id": "close_RC-1_probe", "task_id": "RC-1",
+                                           "closed_at": "2026-08-31T12:48:38Z"})
+    f207._record(gov, "claims", "RC-1", {"record_type": "claim_record", "claim_id": "claim_RC-1_probe", "task_id": "RC-1",
+                                         "agent_instance": f207.EXEC, "claimed_at": "2026-08-31T12:52:18Z"})
+    rc, text, res = _lint(gov, "RC-1")
+    _show(f"[件① 三方一致 RC-1] rc={rc}\n" + text.rstrip())
+    assert closure_state(gov, "RC-1")["kind"] == "closure"
+    errors = [i["message"] for i in res["issues"] if i["severity"] == "ERROR"]
+    assert len(errors) == 1 and "有 closure 记录, 但其后又有 claimed 记录" in errors[0] and "无 closure 记录" not in errors[0]
+
+
 # ===========================================================================
 # 件①: 路线图核对按结论与标准 verify 方式判
 # ===========================================================================
