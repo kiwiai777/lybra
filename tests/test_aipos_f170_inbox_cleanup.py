@@ -381,8 +381,9 @@ def test_declarations_and_single_implementations():
     assert set(decide["parameters"]["required"]) == {"choice", "relayed_by", "owner_words"}
     src = Path(owner_inbox.__file__).read_text(encoding="utf-8")
     # 只经既有出口: 决策记录门侧实现 / 撤卡 / 冻结 / 同一落账口; 不自写文件 / 不自起 git
+    # AIPOS-F213 件①: 同一落账口 = 写后落账唯一薄壳 board_adapter.land_after_write(→ land_written_paths)
     for call in ("record_owner_decision(", "execute_dry_run(", "withdraw_task(", "plan_freeze_legacy(", "write_freeze_entry(",
-                 "land_written_paths(", "project_status("):
+                 "land_after_write(", "project_status("):
         assert call in src, call
     assert "write_text(" not in src and "subprocess" not in src and "\"git\"" not in src
     for literal in ("/home/", "2_projects", "chris", "kiwiai"):

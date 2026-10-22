@@ -442,7 +442,7 @@ def test_declarations_and_single_implementations():
     assert declared_exit_codes("lybra_owner_decide")["not_found"] == 4
     src = Path(owner_inbox.__file__).read_text(encoding="utf-8")
     # 裁决只经既有 owner_decision_record 门侧实现 + 既有队列出口 + 同一落账口; 不自写记录 / 不自起 git
-    assert "record_owner_decision(" in src and "execute_dry_run(" in src and "land_written_paths(" in src
+    assert "record_owner_decision(" in src and "execute_dry_run(" in src and "land_after_write(" in src  # AIPOS-F213: 写后落账唯一薄壳
     assert "write_text(" not in src and "subprocess" not in src and "\"git\"" not in src
     for literal in ("/home/", "2_projects", "chris", "kiwiai"):
         assert literal not in src.split('"""', 2)[2], f"产品代码写死 {literal!r}"

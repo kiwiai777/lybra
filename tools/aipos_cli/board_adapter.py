@@ -6410,7 +6410,10 @@ def execute_dry_run(
                 repo_root=resolved_root,
             )
             verdict = str(result.get("verdict") or Verdict.BLOCK)
-            return make_response(
+            # AIPOS-F213 件①: 确认分支写后即经同一薄壳落账(queue_writers withdraw; 原门侧确认不落账)
+            landing = land_after_write(resolved_root, queue_write_paths(result), actor=actor_text, subcommand="withdraw",
+                                       task_id=str((result.get("data") or {}).get("task_id") or source_data.get("task_id") or ""))
+            return attach_landing(make_response(
                 ok=bool(result.get("ok", False)),
                 verdict=verdict,
                 operation=op,
@@ -6426,7 +6429,7 @@ def execute_dry_run(
                 blocking_reasons=list(result.get("blocking_reasons", [])),
                 safety_notice=CONTROLLED_EXECUTE_NOTICE,
                 errors=list(result.get("errors", [])),
-            )
+            ), landing)
 
         if op == "queue_amend":
             # AIPOS-315: G2 两阶段动词 - amend confirm 执行
@@ -6434,7 +6437,10 @@ def execute_dry_run(
             result = amend_task(**amend_replay_kwargs(source_data.get("original_payload") or {}), actor=actor_text, dry_run=False,
                                 repo_root=resolved_root)
             verdict = str(result.get("verdict") or Verdict.BLOCK)
-            return make_response(
+            # AIPOS-F213 件①: 确认分支写后即经同一薄壳落账(queue_writers amend: 卡面 + 修订记录; 原门侧确认不落账)
+            landing = land_after_write(resolved_root, queue_write_paths(result), actor=actor_text, subcommand="amend",
+                                       task_id=str((result.get("data") or {}).get("task_id") or ""))
+            return attach_landing(make_response(
                 ok=bool(result.get("ok", False)),
                 verdict=verdict,
                 operation=op,
@@ -6450,7 +6456,7 @@ def execute_dry_run(
                 blocking_reasons=list(result.get("blocking_reasons", [])),
                 safety_notice=CONTROLLED_EXECUTE_NOTICE,
                 errors=list(result.get("errors", [])),
-            )
+            ), landing)
 
         if op == "queue_rework":
             # AIPOS-F154: 返工节 confirm 执行 = 同一 queue_rework_task(dry_run=False), 写卡面 rework_rounds + 修订记录(F75 语义)
@@ -8073,6 +8079,71 @@ def close_task(
         return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F213 件①: 队列写动作写后落账唯一薄壳(CLI / MCP / owner decide 共用; 原 aipos_cli._land_queue_write、
+# owner_inbox._land、aipos_cli._queue_write_paths / owner_inbox._release_writes 各一份, 收为本节两个函数)。
+# 提交本体 = governance_commit.land_written_paths(F158 写后落账唯一实现), 本节只做「本次写出文件清单 → 治理根相对路径」与
+# 「落账声明不可读 = 不落账、出声」两件事。登记: verbs.lybra_governance_commit.post_write_landing(queue_writers / owner_decide /
+# queue_write_sites; 棘轮 R5 tests/test_aipos_f213_queue_write_landing.py 对表)。
+# ---------------------------------------------------------------------------
+
+def queue_write_paths(result: dict[str, Any] | None) -> list[str]:
+    """队列写出口本次写出的文件(治理根相对或绝对, 原样): 预演 / 被拒 / 未写入 = []。两种结果形同读——
+    queue_mutation.mutate_queue_task 结果(moved / wrote, source_path / target_path, record_writes / record_updates 中已写者)与
+    board_adapter 应答(data 内同名键 + 修订的 task_path / amendment_record_path + 清理记录 worktree_cleanup_record)。"""
+    if not isinstance(result, dict) or result.get("dry_run") is True or result.get("ok") is False \
+            or result.get("verdict") == Verdict.BLOCK:
+        return []
+    data = result.get("data") if isinstance(result.get("data"), dict) else result
+    paths: list[str] = []
+    if data.get("moved") or data.get("wrote"):
+        paths += [str(data[k]) for k in ("source_path", "target_path") if data.get(k)]
+    if data.get("amendment_record_path"):  # amend_task 确认: 卡面 + 修订记录
+        paths += [str(data[k]) for k in ("task_path", "amendment_record_path") if data.get(k)]
+    if data.get("worktree_cleanup_record"):  # AIPOS-F187: 清理记录随同落账
+        paths.append(str(data["worktree_cleanup_record"]))
+    for item in list(result.get("record_writes") or []) + list(result.get("record_updates") or []):
+        if isinstance(item, dict) and item.get("path") and (item.get("wrote") or item.get("updated")):
+            paths.append(str(item["path"]))
+    return list(dict.fromkeys(paths))
+
+
+def land_after_write(governance_root: str | Path, written: list[str | Path], *, actor: str, command: str = "queue_writers",
+                     **fields: Any) -> dict[str, Any] | None:
+    """AIPOS-F213 件①: 写后落账唯一薄壳——written(本次写出的文件, 绝对或治理根相对)换算为治理根相对路径, 经
+    governance_commit.land_written_paths(command = post_write_landing.commands 的键, fields 填其提交信息模板)精确提交并推送。
+    无写出 = None(不落)。落账声明不可读 = 不落账(fail-closed), 写入已生效: 返回 landed False + 拒因(调用方出声, 不回滚已写入)。
+    返回 land_written_paths 的结果(含供文本输出的 line)。"""
+    from tools.aipos_cli.governance_commit import land_written_paths
+    from tools.schema_loader import SchemaLoadError
+
+    if not written:
+        return None
+    root = Path(governance_root).resolve()
+    rels = sorted({(Path(p).resolve().relative_to(root) if Path(p).is_absolute() else Path(p)).as_posix() for p in written})
+    try:
+        return land_written_paths(root, rels, str(actor), command=command, **fields)
+    except SchemaLoadError as exc:
+        return {"landed": False, "exit_code": 1, "reason": str(exc), "paths": rels,
+                "line": f"⚠ 落账未完成(写入已生效, 勿重复执行写命令): {exc}"}
+
+
+def landing_view(landing: dict[str, Any] | None) -> dict[str, Any] | None:
+    """落账结果的 JSON / 应答视图(去掉供文本输出的 line)。"""
+    return None if landing is None else {k: v for k, v in landing.items() if k != "line"}
+
+
+def attach_landing(response: dict[str, Any], landing: dict[str, Any] | None) -> dict[str, Any]:
+    """门侧(MCP / execute_dry_run 确认分支)应答带上落账结果: landing = 视图; 落账未完成 = 落账行进 warnings(不静默; 写入已生效,
+    应答 ok 不变——与 CLI 同一处置: 出拒因 + 补账命令, 勿重复执行写命令)。"""
+    if landing is None:
+        return response
+    response["landing"] = landing_view(landing)
+    if not landing.get("landed"):
+        response["warnings"] = list(response.get("warnings") or []) + [str(landing.get("line") or landing.get("reason"))]
+    return response
+
+
 def withdraw_task(
     task_id: str | None = None,
     path: str | Path | None = None,
@@ -8259,6 +8330,7 @@ def supersede_task(
     dry_run: bool = True,
     repo_root: str | Path | None = None,
     carry_branch: bool = False,
+    decision_id: str | None = None,
 ) -> dict[str, Any]:
     """AIPOS-F184 件③(gap #186): 顾问凭 Owner 裁决撤换在途卡(lybra queue supersede 唯一实现)。
 
@@ -8269,15 +8341,26 @@ def supersede_task(
     AIPOS-F186 carry_branch=True(`--carry-branch`): 承继判定唯一实现 queue_mutation.supersede_carry_plan(预演列原卡分支 / tip /
     工作树 / 未提交改动计数; 拒因并入 blocking_reasons, 零写入)+ 新卡卡面预演 amend_task(dry_run); 确认 = 决策记录落盘后先经
     amend_task 写新卡 carried_from(修订记录随 written 落账; 已记同一承继 = 幂等不重写)再搬原卡。carry_branch=False = F184 行为不变。
+    AIPOS-F213 件②: decision_id = 引用收件箱已有 Owner 裁决(核验唯一实现 owner_inbox.referenced_ruling; 不符 = 拒, 零写入): 不另记
+    决策记录(预演 / 确认都不经 record_owner_decision), 卡面 superseded_decision_id = 该裁决, owner_words 缺省取该裁决的 Owner 原话;
+    written 只含搬卡 / 承继写出。不带 = 行为不变。
     返回 {ok, verdict, stage, task_id, by, from_state, decision_id, card, decision, carry, blocking_reasons, warnings, written, line,
     carry_line}。"""
     from tools.aipos_cli.controlled_execute import OWNER_CONFIRMATION_TOKEN
-    from tools.aipos_cli.owner_inbox import supersede_decision_payload
-    from tools.aipos_cli.queue_mutation import supersede_texts
+    from tools.aipos_cli.owner_inbox import referenced_ruling, supersede_decision_payload
+    from tools.aipos_cli.queue_mutation import supersede_declaration, supersede_texts
 
     texts = supersede_texts()
     root = _resolve_repo_root(repo_root)
     actor_text = str(actor or "").strip()
+    ref_id = str(decision_id or "").strip() or None
+    ref_ruling: dict[str, Any] | None = None
+    ref_problems: list[str] = []
+    if ref_id:
+        ref_ruling, ref_problems = referenced_ruling(root, ref_id, choice=str(supersede_declaration()["decision_choice"]), task_id=task_id,
+                                                     action="queue supersede")
+        if ref_ruling and not str(owner_words or "").strip():
+            owner_words = ref_ruling.get("owner_words") or owner_words
     words = str(owner_words or "").strip()  # 内含换行 = supersede_problems 拒(单行)
     report: dict[str, Any] = {"ok": False, "verdict": Verdict.BLOCK, "stage": "preview" if dry_run else "confirm", "task_id": task_id,
                               "by": str(by or "").strip(), "actor": actor_text, "owner_words": words, "owner_ref": owner_ref,
@@ -8318,31 +8401,42 @@ def supersede_task(
                 report["blocking_reasons"].append(carry_texts["amend_refused"].format(
                     by=report["by"], reason=json.dumps(amend_dry.get("errors") or amend_dry.get("blocking_reasons") or amend_dry.get("message"),
                                                        ensure_ascii=False)[:400]))
-    payload = supersede_decision_payload(root, task_id=report["task_id"], by=report["by"], relayed_by=actor_text, owner_words=words,
-                                         owner_ref=supersede["owner_ref"], from_state=report["from_state"], decided_at=iso_z())
-    report["decision_id"] = payload["decision_id"]
-    dry = record_owner_decision(payload, dry_run=True, repo_root=root, actor="owner")
-    report["decision"] = {k: dry.get(k) for k in ("ok", "verdict", "blocking_reasons", "warnings", "planned_writes")}
-    report["decision"]["target_path"] = (dry.get("data") or {}).get("target_path")
-    if dry.get("verdict") == Verdict.BLOCK or not dry.get("ok") or not dry.get("dry_run_token"):
-        report["blocking_reasons"].extend(f"决策记录预演被拒: {r}" for r in (dry.get("blocking_reasons") or [])
-                                          or [json.dumps(dry.get("errors") or dry.get("message"), ensure_ascii=False)[:400]])
+    dry: dict[str, Any] = {}
+    if ref_id:
+        # AIPOS-F213 件②: 引用收件箱已有裁决——核验不符即拒(零写入), 不另记决策记录
+        report["blocking_reasons"].extend(ref_problems)
+        report["decision_id"] = ref_id
+        report["decision"] = {"ok": not ref_problems, "referenced": True, "record": (ref_ruling or {}).get("_path"),
+                              "decided_at": (ref_ruling or {}).get("decided_at"), "relayed_by": (ref_ruling or {}).get("relayed_by"),
+                              "owner_words": (ref_ruling or {}).get("owner_words"), "blocking_reasons": list(ref_problems)}
+    else:
+        payload = supersede_decision_payload(root, task_id=report["task_id"], by=report["by"], relayed_by=actor_text, owner_words=words,
+                                             owner_ref=supersede["owner_ref"], from_state=report["from_state"], decided_at=iso_z())
+        report["decision_id"] = payload["decision_id"]
+        dry = record_owner_decision(payload, dry_run=True, repo_root=root, actor="owner")
+        report["decision"] = {k: dry.get(k) for k in ("ok", "verdict", "blocking_reasons", "warnings", "planned_writes")}
+        report["decision"]["target_path"] = (dry.get("data") or {}).get("target_path")
+        if dry.get("verdict") == Verdict.BLOCK or not dry.get("ok") or not dry.get("dry_run_token"):
+            report["blocking_reasons"].extend(f"决策记录预演被拒: {r}" for r in (dry.get("blocking_reasons") or [])
+                                              or [json.dumps(dry.get("errors") or dry.get("message"), ensure_ascii=False)[:400]])
     fill = {"task_id": report["task_id"], "from_state": report["from_state"], "by": report["by"], "decision_id": report["decision_id"]}
     if report["blocking_reasons"]:
         report["line"] = texts["blocked_line"].format(reasons="; ".join(report["blocking_reasons"]))
         return report
     if dry_run:
-        report.update({"ok": True, "verdict": card_preview.get("verdict") or Verdict.PASS, "line": texts["preview_line"].format(**fill)})
+        report.update({"ok": True, "verdict": card_preview.get("verdict") or Verdict.PASS,
+                       "line": texts["preview_line_ref" if ref_id else "preview_line"].format(**fill)})
         return report
-    done = execute_dry_run(str(dry["dry_run_token"]), "owner", owner_confirmation_token=OWNER_CONFIRMATION_TOKEN, repo_root=root)
-    report["decision"] = {k: done.get(k) for k in ("ok", "verdict", "blocking_reasons", "warnings", "performed_writes", "errors")}
-    written = [str(w.get("path")) for w in (done.get("performed_writes") or []) if isinstance(w, dict) and w.get("path")]
-    report["written"] = list(written)
-    if not done.get("ok") or not written:
-        report["blocking_reasons"].append("决策记录写入失败(零搬卡): "
-                                          + json.dumps(done.get("errors") or done.get("blocking_reasons"), ensure_ascii=False)[:400])
-        report["line"] = texts["blocked_line"].format(reasons="; ".join(report["blocking_reasons"]))
-        return report
+    if not ref_id:
+        done = execute_dry_run(str(dry["dry_run_token"]), "owner", owner_confirmation_token=OWNER_CONFIRMATION_TOKEN, repo_root=root)
+        report["decision"] = {k: done.get(k) for k in ("ok", "verdict", "blocking_reasons", "warnings", "performed_writes", "errors")}
+        written = [str(w.get("path")) for w in (done.get("performed_writes") or []) if isinstance(w, dict) and w.get("path")]
+        report["written"] = list(written)
+        if not done.get("ok") or not written:
+            report["blocking_reasons"].append("决策记录写入失败(零搬卡): "
+                                              + json.dumps(done.get("errors") or done.get("blocking_reasons"), ensure_ascii=False)[:400])
+            report["line"] = texts["blocked_line"].format(reasons="; ".join(report["blocking_reasons"]))
+            return report
     if carry_amend is not None:
         # AIPOS-F186 件①: 先记新卡承继(carried_from)再搬原卡——承继记录写不成则原卡不搬(决策记录已落照落账)
         amended = amend_task(**carry_amend, dry_run=False)
@@ -8363,7 +8457,7 @@ def supersede_task(
         report["line"] = texts["blocked_line"].format(reasons="; ".join(report["blocking_reasons"]))
         return report
     report["written"] += [str(moved["source_path"]), str(moved["target_path"])]
-    report.update({"ok": True, "verdict": Verdict.PASS, "line": texts["done_line"].format(**fill)})
+    report.update({"ok": True, "verdict": Verdict.PASS, "line": texts["done_line_ref" if ref_id else "done_line"].format(**fill)})
     if carry_plan is not None and report["carry"]:
         report["carry_line"] = carry_texts["done_line"].format(
             by=report["by"], amendment_id=report["carry"].get("amendment_id") or carry_texts["idempotent_note"], **carry_plan["carried_from"])
@@ -8401,6 +8495,7 @@ def correct_closed_task(
     dry_run: bool = True,
     repo_root: str | Path | None = None,
     connection_json: str | None = None,
+    decision_id: str | None = None,
 ) -> dict[str, Any]:
     """AIPOS-F207 件②(gap #216): Owner 纠正已结案卡(`lybra queue correct` 唯一实现; 声明 transitions.schema queue_mutations.correct)。
 
@@ -8413,23 +8508,36 @@ def correct_closed_task(
     create_draft → publish_draft(签发 = 转达人)。发布被拒 = 已写的决策与标记照列 written(调用方照落账), ok False, 给手工发布命令。
     relayed_by / owner_words 缺或多行 = owner_inbox.InboxUsageError(用法错, 与 owner decide 同一校验)。不落账(written 由 CLI 经
     queue_writers 落账)。返回 {ok, verdict, stage, task_id, title, from_state, closed_kind, chain, decision_id, decision, dispute,
-    followup, criteria, resume, blocking_reasons, warnings, written, line, publish_error}。"""
+    followup, criteria, resume, blocking_reasons, warnings, written, line, publish_error}。
+    AIPOS-F213 件②: decision_id = 引用收件箱已有 Owner 纠正裁决(核验唯一实现 owner_inbox.referenced_ruling; 不符 = 拒, 零写入): 不另记
+    决策记录, 争议标记 / 承接卡引用该裁决; owner_words 缺省取该裁决的 Owner 原话(relayed_by 仍须给: 承接卡签发实例)。不带 = 行为不变。"""
     from tools.aipos_cli.controlled_execute import OWNER_CONFIRMATION_TOKEN
     from tools.aipos_cli.custom_roles import authorize_instance_class
     from tools.aipos_cli.draft_writer import resolve_publish_signer
     from tools.aipos_cli.frontmatter import require_frontmatter
-    from tools.aipos_cli.owner_inbox import _resume_for, queue_ruling_payload, relay_fields
+    from tools.aipos_cli.owner_inbox import _resume_for, queue_ruling_payload, referenced_ruling, relay_fields
     from tools.aipos_cli.queue_mutation import correct_declaration, correct_texts
     from tools.aipos_cli.record_writer import gate_record_files, render_markdown, write_records_atomic
     from tools.aipos_cli.roadmap import _fix_task_id, followup_draft_payload
     from tools.aipos_cli.task_complexity import closure_disputes, closure_state, dispute_event_type
     from tools.aipos_cli.task_loader import find_task_card
 
-    relayed, words = relay_fields(relayed_by, owner_words)
     decl = correct_declaration()
     texts = correct_texts()
     fu = decl["followup"]
     root = _resolve_repo_root(repo_root)
+    ref_id = str(decision_id or "").strip() or None
+    ref_ruling: dict[str, Any] | None = None
+    ref_problems: list[str] = []
+    if ref_id:  # AIPOS-F213 件②: 引用收件箱已有裁决(核验不符 = 拒, 零写入); Owner 原话缺省取自该裁决
+        ref_ruling, ref_problems = referenced_ruling(root, ref_id, choice=str(decl["decision_choice"]), task_id=task_id,
+                                                     action="queue correct")
+        if ref_ruling and not str(owner_words or "").strip():
+            owner_words = ref_ruling.get("owner_words") or owner_words
+    if ref_problems:
+        relayed, words = str(relayed_by or "").strip(), str(owner_words or "").strip()
+    else:
+        relayed, words = relay_fields(relayed_by, owner_words)
     reason_text = " ".join(str(reason or "").split())
     report: dict[str, Any] = {"ok": False, "verdict": Verdict.BLOCK, "stage": "preview" if dry_run else "confirm", "task_id": task_id,
                               "title": None, "from_state": None, "relayed_by": relayed, "owner_words": words, "reason": reason_text or None,
@@ -8442,6 +8550,8 @@ def correct_closed_task(
         report["line"] = texts["blocked_line"].format(reasons="; ".join(report["blocking_reasons"]))
         return report
 
+    if ref_problems:
+        return _blocked(ref_problems)
     path, state = find_task_card(root, task_id)
     if path is None:
         return _blocked([texts["not_found"].format(task_id=task_id)])
@@ -8490,20 +8600,27 @@ def correct_closed_task(
     criteria = [str(c) for c in (fm.get("criteria") or []) if str(c).strip()] if isinstance(fm.get("criteria"), list) else []
     milestone = str(fm.get("milestone") or "").strip() or None
 
-    # 决策记录(预演)
+    # 决策记录(预演; AIPOS-F213 件②: 引用收件箱已有裁决 = 不另记)
     decided_at = iso_z()
-    payload = queue_ruling_payload(root, choice=str(decl["decision_choice"]), task_id=tid, anchor=followup_id,
-                                   subject=f"{tid} [{state}] → {followup_id}", relayed_by=relayed, owner_words=words,
-                                   owner_ref=str(owner_ref or "").strip() or None, decided_at=decided_at, note=reason_text or None,
-                                   actor=actor)
-    decision_id = str(payload["decision_id"])
+    dry: dict[str, Any] = {}
+    if ref_id:
+        decision_id = ref_id
+        report["decision"] = {"ok": True, "referenced": True, "record": (ref_ruling or {}).get("_path"),
+                              "decided_at": (ref_ruling or {}).get("decided_at"), "relayed_by": (ref_ruling or {}).get("relayed_by"),
+                              "owner_words": (ref_ruling or {}).get("owner_words")}
+    else:
+        payload = queue_ruling_payload(root, choice=str(decl["decision_choice"]), task_id=tid, anchor=followup_id,
+                                       subject=f"{tid} [{state}] → {followup_id}", relayed_by=relayed, owner_words=words,
+                                       owner_ref=str(owner_ref or "").strip() or None, decided_at=decided_at, note=reason_text or None,
+                                       actor=actor)
+        decision_id = str(payload["decision_id"])
+        dry = record_owner_decision(payload, dry_run=True, repo_root=root, actor="owner")
+        report["decision"] = {k: dry.get(k) for k in ("ok", "verdict", "blocking_reasons", "warnings")}
+        report["decision"]["target_path"] = (dry.get("data") or {}).get("target_path")
+        if dry.get("verdict") == Verdict.BLOCK or not dry.get("ok") or not dry.get("dry_run_token"):
+            problems.extend(f"决策记录预演被拒: {r}" for r in (dry.get("blocking_reasons") or [])
+                            or [json.dumps(dry.get("errors") or dry.get("message"), ensure_ascii=False)[:400]])
     report["decision_id"] = decision_id
-    dry = record_owner_decision(payload, dry_run=True, repo_root=root, actor="owner")
-    report["decision"] = {k: dry.get(k) for k in ("ok", "verdict", "blocking_reasons", "warnings")}
-    report["decision"]["target_path"] = (dry.get("data") or {}).get("target_path")
-    if dry.get("verdict") == Verdict.BLOCK or not dry.get("ok") or not dry.get("dry_run_token"):
-        problems.extend(f"决策记录预演被拒: {r}" for r in (dry.get("blocking_reasons") or [])
-                        or [json.dumps(dry.get("errors") or dry.get("message"), ensure_ascii=False)[:400]])
 
     # 争议标记(渲染; 确认时写)
     event_type = dispute_event_type()  # 写读同一读取口(task_complexity.closure_disputes 按此前缀读)
@@ -8548,13 +8665,14 @@ def correct_closed_task(
         report.update({"ok": True, "verdict": draft.get("verdict") or Verdict.PASS, "line": texts["preview_line"].format(**fill_line)})
         return report
 
-    done = execute_dry_run(str(dry["dry_run_token"]), "owner", owner_confirmation_token=OWNER_CONFIRMATION_TOKEN, repo_root=root)
-    report["decision"] = {k: done.get(k) for k in ("ok", "verdict", "blocking_reasons", "warnings", "errors")}
-    written = [str(w.get("path")) for w in (done.get("performed_writes") or []) if isinstance(w, dict) and w.get("path")]
-    if not done.get("ok") or not written:
-        return _blocked(["决策记录写入失败(零写入): "
-                         + json.dumps(done.get("errors") or done.get("blocking_reasons"), ensure_ascii=False)[:400]])
-    report["written"] = list(written)
+    if not ref_id:
+        done = execute_dry_run(str(dry["dry_run_token"]), "owner", owner_confirmation_token=OWNER_CONFIRMATION_TOKEN, repo_root=root)
+        report["decision"] = {k: done.get(k) for k in ("ok", "verdict", "blocking_reasons", "warnings", "errors")}
+        written = [str(w.get("path")) for w in (done.get("performed_writes") or []) if isinstance(w, dict) and w.get("path")]
+        if not done.get("ok") or not written:
+            return _blocked(["决策记录写入失败(零写入): "
+                             + json.dumps(done.get("errors") or done.get("blocking_reasons"), ensure_ascii=False)[:400]])
+        report["written"] = list(written)
     event_written = write_records_atomic(root, [("event", record_id, event_markdown, tid)])
     report["dispute"]["path"] = str(event_written["paths"][0])
     report["written"].append(str(root / report["dispute"]["path"]))
@@ -8604,8 +8722,14 @@ def render_correct_text(report: dict[str, Any]) -> list[str]:
                                        verdicts=", ".join(by_kind.get("audit_verdicts") or []) or "-",
                                        returns=", ".join(by_kind.get("returns") or []) or "-", reports=", ".join(chain.get("reports") or []) or "-"))
     reason_part = texts["reason_part"].format(reason=report["reason"]) if report.get("reason") else ""
-    lines.append(texts["decision"].format(will=will, decision_id=report.get("decision_id"), relayed_by=report.get("relayed_by"),
-                                          owner_words=report.get("owner_words"), reason_part=reason_part))
+    decision = report.get("decision") or {}
+    if decision.get("referenced"):  # AIPOS-F213 件②: 引用收件箱已有裁决(不另记)
+        lines.append(texts["decision_ref"].format(decision_id=report.get("decision_id"), decided_at=decision.get("decided_at") or "?",
+                                                  relayed_by=decision.get("relayed_by") or report.get("relayed_by"),
+                                                  owner_words=report.get("owner_words"), reason_part=reason_part))
+    else:
+        lines.append(texts["decision"].format(will=will, decision_id=report.get("decision_id"), relayed_by=report.get("relayed_by"),
+                                              owner_words=report.get("owner_words"), reason_part=reason_part))
     dispute = report.get("dispute") or {}
     lines.append(texts["dispute"].format(will=will, path=dispute.get("path") or dispute.get("record_id"),
                                          count=len(chain.get("records") or [])))

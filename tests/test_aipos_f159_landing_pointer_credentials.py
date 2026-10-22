@@ -220,6 +220,11 @@ def test_item1_every_project_json_writer_has_one_landing_point():
     assert emits and all(any(k.arg == "actor" for k in n.keywords) for n in emits)
     shell = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_land_project_writes")
     called = {c.func.id for c in ast.walk(shell) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+    # AIPOS-F213 件①: 薄壳委托写后落账唯一薄壳 board_adapter.land_after_write, 后者只调 F158 land_written_paths
+    assert "land_after_write" in called and "governance_commit" not in called
+    ba = ast.parse((REPO_ROOT / "tools/aipos_cli/board_adapter.py").read_text(encoding="utf-8"))
+    land = next(n for n in ba.body if isinstance(n, ast.FunctionDef) and n.name == "land_after_write")
+    called = {c.func.id for c in ast.walk(land) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
     assert "land_written_paths" in called and "governance_commit" not in called
     verbs = load_schema("verbs", REPO_ROOT)
     writers = verbs["two_phase_protocol"]["project_json_writers"]["commands"]

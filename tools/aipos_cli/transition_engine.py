@@ -171,17 +171,19 @@ def apply_transition_metadata(
     elif transition_name == "supersede":
         # AIPOS-F184 件③: 撤换 = withdraw 的带 superseded_by 变体(终态 withdrawn; 声明 transitions.schema
         # queue_mutations.transitions.supersede, 卡面键 = 其 card_fields)
+        # AIPOS-F213 件⑤(F208 P2-1): 卡面键名读声明 card_fields(角色 → 键名; 唯一读取口 queue_mutation.supersede_declaration), 删写死
+        from tools.aipos_cli.queue_mutation import supersede_declaration
+
+        keys = supersede_declaration()["card_fields"]
         updated = apply_transition_metadata(metadata=metadata, transition_name="withdraw", actor=actor, timestamp=timestamp,
                                             schema=schema, repo_root=repo_root, reason=extra_fields.get("reason"))
         if not extra_fields.get("reason"):
             updated.pop("withdrawal_reason", None)
-        updated["superseded_by"] = str(extra_fields["superseded_by"])
-        updated["superseded_at"] = timestamp
-        updated["superseded_owner_words"] = str(extra_fields["owner_words"])
-        if extra_fields.get("owner_ref"):
-            updated["superseded_owner_ref"] = str(extra_fields["owner_ref"])
-        if extra_fields.get("decision_id"):
-            updated["superseded_decision_id"] = str(extra_fields["decision_id"])
+        values = {"by": extra_fields["superseded_by"], "at": timestamp, "owner_words": extra_fields["owner_words"],
+                  "owner_ref": extra_fields.get("owner_ref"), "decision_id": extra_fields.get("decision_id")}
+        for role, value in values.items():
+            if value not in (None, ""):  # 选填角色(owner_ref / decision_id)无值 = 不写该键(既有语义)
+                updated[keys[role]] = str(value)
         # 撤换后不再待 Owner(收件箱该卡事项随卡进 withdrawn 消失; 卡面同步清门控标志)
         updated["needs_owner"] = False
 

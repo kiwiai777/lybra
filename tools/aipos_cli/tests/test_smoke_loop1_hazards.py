@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from tools.aipos_cli.audit_helpers import derive_audit_task_id
+from tools.aipos_cli.audit_derivation import find_open_audit_task
 from tools.aipos_cli.task_progress_writer import write_task_progress_event
 
 
@@ -78,22 +78,23 @@ class TestAuditTaskIdDerivation(unittest.TestCase):
 
     def test_derives_via_derived_from_field(self):
         self._add_r_card("AIPOS-344", "AIPOS-344R")
-        self.assertEqual(derive_audit_task_id("AIPOS-344", self.root), "AIPOS-344R")
+        self.assertEqual(find_open_audit_task("AIPOS-344", self.root), "AIPOS-344R")
 
-    def test_derives_via_naming_convention(self):
-        # R card named {reviewed}R1 without derived_from
+    def test_non_declared_round_name_is_not_guessed(self):
+        # AIPOS-F213 件④: 轮号只认声明序列(audit_derivation.audit_round_ids: R → R2 → …); 旧命名约定 {reviewed}R1 不再猜
         card = self.root / "5_tasks" / "queue" / "claimed" / "aipos-777r1.md"
         card.write_text(f"---\ntask_id: AIPOS-777R1\n---\n# audit\n", encoding="utf-8")
-        self.assertEqual(derive_audit_task_id("AIPOS-777", self.root), "AIPOS-777R1")
+        self.assertIsNone(find_open_audit_task("AIPOS-777", self.root))
 
     def test_returns_none_when_no_r_card(self):
-        self.assertIsNone(derive_audit_task_id("AIPOS-99999", self.root))
+        self.assertIsNone(find_open_audit_task("AIPOS-99999", self.root))
 
-    def test_returns_none_on_ambiguous(self):
+    def test_multi_round_hits_latest_open_round(self):
+        # AIPOS-F213 件④(F208 P1-9): R 与 R2 并存(F202 重新派审) = 命中最新在途一轮 R2(原同名函数命中多张即 None)
         self._add_r_card("AIPOS-500", "AIPOS-500R")
         card = self.root / "5_tasks" / "queue" / "claimed" / "aipos-500r2.md"
         card.write_text("---\ntask_id: AIPOS-500R2\nderived_from: AIPOS-500\n---\n# audit\n", encoding="utf-8")
-        self.assertIsNone(derive_audit_task_id("AIPOS-500", self.root))
+        self.assertEqual(find_open_audit_task("AIPOS-500", self.root), "AIPOS-500R2")
 
 
 class TestTaskProgressSessionLanding(unittest.TestCase):

@@ -17,6 +17,7 @@ from tools.aipos_cli.board_adapter import (
     audit_verdict_task,
     bench_audit_submit,
     adopt_task,
+    attach_landing,
     claim_task,
     close_task,
     converge_r_cards,
@@ -26,9 +27,11 @@ from tools.aipos_cli.board_adapter import (
     get_preview,
     get_queue,
     get_validate,
+    land_after_write,
     load_task_snapshot,
     mark_concluded_task,
     publish_draft,
+    queue_write_paths,
     record_owner_decision,
     return_task,
     submit_external_intake,
@@ -3880,15 +3883,19 @@ def lybra_queue_withdraw_confirm(arguments: dict[str, Any] | None = None) -> dic
             "actor is required.",
             "Pass the actor performing the withdrawal.",
         )
+    workspace = _resolve_queue_workspace(args)
     response = withdraw_task(
         task_id=task_id,
         actor=actor,
         reason=reason,
         dry_run=False,
-        repo_root=_resolve_queue_workspace(args),
+        repo_root=workspace,
     )
     if response.get("verdict") == Verdict.BLOCK:
         return _tool_result(response, is_error=True)
+    # AIPOS-F213 件①: 撤回写入后即经队列写落账唯一薄壳落账(与 CLI queue withdraw 同一 queue_writers; 原门侧不落账)
+    attach_landing(response, land_after_write(workspace, queue_write_paths(response), actor=actor, subcommand="withdraw",
+                                              task_id=str((response.get("data") or {}).get("task_id") or task_id)))
     response["surface"] = "mcp"
     response["operation"] = "queue_withdraw"
     response["dry_run"] = False

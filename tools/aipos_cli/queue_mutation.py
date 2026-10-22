@@ -124,6 +124,8 @@ def withdraw_owner_ruling_problem(repo_root: Path, task_id: str, owner_ruling_re
 
 
 SUPERSEDE_DECL_KEYS = ("actor_role_class", "successor_states", "decision_choice", "card_fields")
+#: AIPOS-F213 件⑤: supersede.card_fields 的角色(角色 → 卡面键名; transition_engine supersede 分支按角色取键名写卡面)
+SUPERSEDE_CARD_FIELD_ROLES = ("by", "at", "owner_words", "owner_ref", "decision_id")
 
 
 def supersede_declaration() -> dict[str, Any]:
@@ -138,8 +140,27 @@ def supersede_declaration() -> dict[str, Any]:
     bad = [x for x in successor if x not in QUEUE_STATES]
     if bad:
         raise SchemaLoadError(f"transitions.schema.json queue_mutations.transitions.supersede.successor_states 含非队列目录 {bad}")
+    fields = spec["card_fields"]
+    if not isinstance(fields, dict) or set(fields) != set(SUPERSEDE_CARD_FIELD_ROLES) \
+            or not all(isinstance(v, str) and v.strip() for v in fields.values()):
+        raise SchemaLoadError("transitions.schema.json queue_mutations.transitions.supersede.card_fields 须为 角色 → 卡面键名, "
+                              f"角色恰为 {list(SUPERSEDE_CARD_FIELD_ROLES)}(AIPOS-F213 件⑤)")
     from_states, to_state = ALLOWED_TRANSITIONS["supersede"]
-    return {**spec, "from_states": from_states, "to_state": to_state, "successor_states": tuple(successor)}
+    return {**spec, "from_states": from_states, "to_state": to_state, "successor_states": tuple(successor),
+            "card_fields": {str(k): str(v) for k, v in fields.items()}}
+
+
+def supersede_cross_check(decl: dict[str, Any] | None = None) -> None:
+    """AIPOS-F213 件③⑤: 撤换声明的跨文件引用校验(撤换前置 supersede_problems 每次预演 / 确认先过; 全 schema 选项引用对表另有测试):
+    card_fields 的卡面键名须为 card.schema fields 已声明字段; decision_choice 须为收件箱选项(校验唯一实现 require_inbox_choices)。
+    不符 = SchemaLoadError(fail-closed)。supersede_declaration 本身只读 transitions(结案等只读承继声明的路径不连带依赖 card / verbs)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    d = decl or supersede_declaration()
+    undeclared = sorted(set(d["card_fields"].values()) - set(load_schema("card", code_repo_schema_root()).get("fields") or {}))
+    if undeclared:
+        raise SchemaLoadError(f"transitions.schema.json queue_mutations.transitions.supersede.card_fields 引用 card.schema 未声明字段 {undeclared}")
+    require_inbox_choices([d["decision_choice"]], "transitions queue_mutations.transitions.supersede.decision_choice")
 
 
 def supersede_problems(repo_root: Path, task_id: str, actor: str, supersede: dict[str, Any] | None) -> list[str]:
@@ -149,6 +170,7 @@ def supersede_problems(repo_root: Path, task_id: str, actor: str, supersede: dic
     from tools.aipos_cli.task_loader import find_task_card
 
     decl = supersede_declaration()
+    supersede_cross_check(decl)
     texts = supersede_texts()
     spec = dict(supersede or {})
     problems: list[str] = []
@@ -180,7 +202,8 @@ def supersede_texts() -> dict[str, str]:
 
     texts = (((load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get("lybra_queue_supersede") or {}).get("texts"))
     need = ("missing_words", "invalid_words", "role_refused", "successor_missing", "successor_state", "successor_self",
-            "worktree_note", "reason_template", "preview_line", "done_line", "blocked_line")
+            "worktree_note", "reason_template", "preview_line", "done_line", "blocked_line",
+            "preview_line_ref", "done_line_ref")  # AIPOS-F213 件②: --decision-id 引用已有裁决的预演 / 完成行
     if not isinstance(texts, dict) or any(not isinstance(texts.get(k), str) for k in need):
         raise SchemaLoadError(f"verbs.schema.json verbs.lybra_queue_supersede.texts 未声明齐 {list(need)}")
     return texts
@@ -296,7 +319,7 @@ def supersede_carry_texts() -> dict[str, str]:
 
 CORRECT_DECL_KEYS = ("from_states", "actor_role_class", "decision_choice", "dispute_event_type", "disputed_record_kinds", "followup")
 CORRECT_FOLLOWUP_KEYS = ("task_id_template", "inherit_fields", "rebind_fields", "ref_field")
-CORRECT_TEXT_KEYS = ("header", "chain", "decision", "reason_part", "dispute", "followup", "criterion", "resume", "publish_blocked",
+CORRECT_TEXT_KEYS = ("header", "chain", "decision", "decision_ref", "reason_part", "dispute", "followup", "criterion", "resume", "publish_blocked",
                      "record_kept_preview", "record_kept_written", "publish_hint", "will", "preview_line", "done_line", "blocked_line",
                      "partial_line", "not_closed", "not_found", "already", "role_refused", "followup_blocked")
 CORRECT_TEMPLATE_KEYS = ("title_template", "body_template", "criteria_part", "evidence_none", "artifacts_missing", "none")
@@ -322,11 +345,32 @@ def correct_declaration() -> dict[str, Any]:
     templates = verb.get("followup")
     if not isinstance(templates, dict) or any(not isinstance(templates.get(k), str) or not templates[k] for k in CORRECT_TEMPLATE_KEYS):
         raise SchemaLoadError(f"verbs.schema.json verbs.lybra_queue_correct.followup 未声明齐 {list(CORRECT_TEMPLATE_KEYS)}")
-    from tools.aipos_cli.owner_inbox import inbox_declaration
-
-    if spec["decision_choice"] not in inbox_declaration()["options"]:
-        raise SchemaLoadError(f"verbs.lybra_owner_inbox.options.{spec['decision_choice']} 未声明(transitions queue_mutations.correct.decision_choice 引用)")
+    require_inbox_choices([spec["decision_choice"]], "transitions queue_mutations.correct.decision_choice")
     return {**spec, "from_states": tuple(str(x) for x in spec["from_states"]), "followup": {**followup, **templates}}
+
+
+def require_inbox_choices(choices: Any, where: str, *, pinned: tuple[str, str] | None = None) -> list[str]:
+    """AIPOS-F213 件③(F208 P1-8 选项): 跨文件选项引用的唯一校验(原 correct.decision_choice 内联校验上提, 禁第二实现)——choices
+    (非空字符串列表)每项须为收件箱声明 verbs.lybra_owner_inbox.options 的键; pinned = (类别, 事由) 时另须 ∈ 该类别
+    pinned_options_by_reason[事由](收件箱对该事由恒给的选项: 改名 / 删掉即红, 不再静默失效)。不符 = SchemaLoadError(点名 where)。
+    返回规范化的选项列表。调用方: correct / supersede 的 decision_choice、transitions nodes.N4.audit_blocked.owner_reaudit.choices。"""
+    from tools.aipos_cli.owner_inbox import inbox_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    if not isinstance(choices, list) or not choices or not all(isinstance(c, str) and c.strip() for c in choices):
+        raise SchemaLoadError(f"{where} 须为非空选项键列表, 得到 {choices!r}")
+    decl = inbox_declaration()
+    missing = [c for c in choices if c not in decl["options"]]
+    if missing:
+        raise SchemaLoadError(f"verbs.lybra_owner_inbox.options 未声明 {missing}({where} 引用)")
+    if pinned is not None:
+        category, reason = pinned
+        offered = list(((decl["categories"].get(category) or {}).get("pinned_options_by_reason") or {}).get(reason) or [])
+        off = [c for c in choices if c not in offered]
+        if off:
+            raise SchemaLoadError(f"{where} 的选项 {off} 不在收件箱 verbs.lybra_owner_inbox.categories.{category}"
+                                  f".pinned_options_by_reason.{reason} = {offered}(收件箱不给这个选项, 该裁决永远等不到)")
+    return [str(c) for c in choices]
 
 
 def correct_texts() -> dict[str, str]:
