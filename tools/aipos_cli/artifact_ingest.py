@@ -1397,14 +1397,19 @@ def _same_model(self_reported: str, located: str) -> bool:
 
 def runtime_model_bundle(workspace_root: Path, *, writer_task_id: str, writer_fm: dict[str, Any], artifact_path: Path,
                          self_reported: str) -> dict[str, Any]:
-    """AIPOS-F90 件②: 产品填写的模型字段(agent_runtime 形)。harness = 写报告那张卡的卡面 harness, 缺省 default_by_task_mode;
+    """AIPOS-F90 件②: 产品填写的模型字段(agent_runtime 形)。harness = 写报告那张卡的 harness(AIPOS-F211 件③: 唯一推导
+    loop_driver.card_harness——卡面值, 缺 = 本卡执行方式推出, 与 loop 拉起同读; 原卡面缺按 task_mode 补 "code" 查表退役);
+    执行者实例无子 agent 接入登记(CardHarnessUnresolved)= harness 不可知 → 模型 missing_value;
     定位器缺/会话记录里找不到写该报告的条目 = missing_value(「未声明会话记录」), 绝不采信自报; 自报只作对照, 不一致标 model_mismatch。"""
-    from tools.aipos_cli.machine_zone import default_harness_for_task_mode
+    from tools.aipos_cli.loop_driver import CardHarnessUnresolved, card_harness
     from tools.aipos_cli.next_resolver import _read_task_records
 
     decl = _session_locators()
     missing = str(decl["missing_value"]).strip()
-    harness = str(writer_fm.get("harness") or "").strip() or default_harness_for_task_mode(str(writer_fm.get("task_mode") or "code"))
+    try:
+        harness = card_harness(writer_fm, Path(workspace_root), task_id=writer_task_id)
+    except CardHarnessUnresolved:
+        harness = ""
     claimed_at = _epoch((_read_task_records(Path(workspace_root), writer_task_id).get("latest_claim") or {}).get("claimed_at"))
     locator = decl.get(harness)
     models: list[str] = []

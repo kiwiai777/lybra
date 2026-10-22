@@ -358,7 +358,8 @@ def test_item2_routing_reads_card_execution_mode(rig):
            for mode in ("validation", "config", "docs", "code")}
     pinned = suggest_grant(rig["gov"], P, task_id="X-1", card_fm={**base, "task_mode": "code", "harness": "pi"}, driver=ADV_LX)
     _show(f"[件②·按卡类型的拉起建议] {got} / code+harness=pi → {pinned['launch_harnesses']}({pinned['sources']['launch_harnesses']})")
-    assert got == {"validation": ["pi"], "config": ["pi"], "docs": ["pi"], "code": []}
+    # AIPOS-F211 件③(F208 P1-5): 代码卡执行阶段 = 子 agent, 但其审计阶段(独立审计, 审计卡恒 pi)要 loop 拉 pi → 建议含 pi(原 [] 致审计停手工)
+    assert got == {"validation": ["pi"], "config": ["pi"], "docs": ["pi"], "code": ["pi"]}
     assert pinned["launch_harnesses"] == ["pi"] and pinned["sources"]["launch_harnesses"] == "card_execution"
 
 

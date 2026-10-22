@@ -1205,6 +1205,14 @@ def derive_repair_card_on_fail(
             f"metadata 获取 project 字段。修复卡派生需要明确项目名,禁默认回落。"
         )
     project = str(project)
+    # AIPOS-F211 件②: 修复卡 task_mode 必填(card.schema), 承继被审卡; 被审卡缺 task_mode(人肉期存量)= 拒(原补 "code" 第二缺省退役),
+    # 出口 = 顾问 lybra queue amend 给被审卡补 task_mode 后重派
+    source_mode = str(source_metadata.get("task_mode") or "").strip()
+    if not source_mode:
+        raise ValueError(
+            f"TASK_MODE_REQUIRED: derive_repair_card 被审卡 {reviewed_task_id} 缺 task_mode, 修复卡 task_mode 无从承继(禁补缺省); "
+            f"出口: lybra queue amend --task-id {reviewed_task_id} 补 task_mode 后重派"
+        )
 
     # AIPOS-F17 大项A: 构建修复卡 — 必填字段从 schema 单源派生, 值承继原卡, 禁手写第二份清单。
     # AIPOS-F102 件①: 修复卡执行体承继被审卡声明, 都缺按项目推导(resolve_repair_executor_instance), 禁 lybra 身份字面
@@ -1217,7 +1225,8 @@ def derive_repair_card_on_fail(
         "assigned_to": str(source_metadata.get("assigned_to") or "").strip() or repair_executor,
         "agent_instance": str(source_metadata.get("agent_instance") or "").strip() or repair_executor,
         "context_bundle": source_metadata.get("context_bundle", "default"),
-        "task_mode": source_metadata.get("task_mode", "code"),
+        # AIPOS-F211 件②: 修复卡承继被审卡 task_mode 原值; 被审卡缺 task_mode 在上方已拒(禁补 "code")
+        "task_mode": source_mode,
         "task_class": source_metadata.get("task_class") or card_field_defaults()["task_class"],
         "priority": source_metadata.get("priority", "high"),
         "status": "pending",

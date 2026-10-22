@@ -320,11 +320,13 @@ def _generate_next_action(current_state: str, task_mode: str, operation: str) ->
                 "auth_note": "close 操作需要 queue_close scope",
             }
     
-    # N4 audit verdict PASS -> N5 finalize (code only)
-    if operation == RecordType.AUDIT_VERDICT and task_mode == "code":
+    # N4 audit verdict -> N5 finalize: 有裁决即走过独立审计, 凡独立审计的卡都经 N5(AIPOS-F211 件①: 原 task_mode == "code" 字面退役——
+    # 固定候选验证卡 / 治理根产出清单卡同走 N5 却拿不到提示; 合不合并由 finalize 按唯一判据 next_resolver.card_needs_worktree 判)
+    if operation == RecordType.AUDIT_VERDICT:
         return {
             "verb": "lybra_finalize",
-            "params_hint": "commit 到产品仓，push，deploy（如适用）",
+            "params_hint": ("写产品仓的卡: 合并卡分支到产品仓，push，deploy（如适用）; 固定候选 / 治理根产出清单卡: 不合并, "
+                            "只写 finalization 记录（N5 无合入）"),
             "auth_note": "finalize 需要 audit verdict PASS 前置（FND-14 gate 强制）",
         }
     

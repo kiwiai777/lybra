@@ -272,7 +272,19 @@
       },
       "independent_audit": {
         "description": "AIPOS-F196 件①: 该模式卡交回后是否走独立审计(N3 派审 → N4 独立审计工位裁决)的唯一声明。每值带 independent_audit(布尔): true = 交回即派审; false = 顾问复核(卡面 audit: required 仍可显式打开独立审计)。读取方: 推导核派审 / 非代码快车道分流(next_resolver.derive_next_step)、门 next_action 提示(mcp_server.tools._generate_next_action)、发卡核审计者缺省(draft_writer.publish_identity_refusals)全部只问读取口, 禁写死 task_mode == code。缺值 / 未知 task_mode = false(行为同 F196 前: 只有 code 走独立审计)。",
-        "single_implementation": "tools/aipos_cli/next_resolver.task_mode_independent_audit"
+        "single_implementation": "tools/aipos_cli/next_resolver.task_mode_independent_audit",
+        "card_rule": "AIPOS-F211 件④: 卡级是否走独立审计 = 本模式 independent_audit 或卡面 audit: required(唯一判定 next_resolver.card_independent_audit; 推导核派审 / 快车道分流、Owner 收件箱授权建议审计阶段、flow_description 链路收窄同读)"
+      },
+      "missing_default": {
+        "description": "AIPOS-F211 件②(F208 P1-2; Owner 10-22 裁定「都按你的建议」: 缺 task_mode 的缺省以 schema 为准): 卡面缺 task_mode(人肉期接入的存量卡; 新卡起草 / 发卡时 task_mode 必填)= 本条目——不写产品仓(writes_product_repo=false: 不建卡工作树 / 无卡分支 / 交回不查分支合规与未提交代码 / finalize 无卡分支不 BLOCK)、不独立审计(independent_audit=false: 交回后顾问复核, 卡面 audit: required 仍可显式打开)、交回不要求测试文件(requires_tests=false); harness 缺省 = card.schema intent_face.harness.default_by_task_mode[key](项目未声明 execution 时才用到, 见 loop_driver.card_harness)。缺值兜底只在一处: next_resolver._task_mode_entry(缺值返回本条目, 未知非空值 = None 按各读取口缺省 false 读); 调用方禁再补 or \"code\" / get(\"task_mode\", \"code\") / 字面比较 task_mode == \"code\"(棘轮 tests/test_aipos_f211_task_mode_single_judgment.py, 基线 tests/f211_task_mode_literal_baseline.jsonl, 只减不增)。key = 该条目在按 task_mode 键的声明表中的键名(非 task_mode 值域成员, 卡面写它 = 值域拒)。",
+        "key": "(missing)",
+        "writes_product_repo": false,
+        "independent_audit": false,
+        "requires_tests": false
+      },
+      "requires_tests": {
+        "description": "AIPOS-F211 件①: 交回自检「有测试」判据(board_adapter._check_return_self_checks ③, 仍只在项目声明 test_contract.require_tests=true 时生效)对哪些模式适用的唯一声明, 取代原 task_mode == \"code\" 字面。每值带 requires_tests(布尔); 缺 = false。",
+        "single_implementation": "tools/aipos_cli/next_resolver.task_mode_requires_tests"
       },
       "candidate_subject": {
         "description": "AIPOS-F196 件①(Owner 10-20 定: 非代码工作交 pi, 验证卡保留独立审计): 值带 subject=candidate 的模式(validation)= 对来源卡的固定候选 sha 做环境构建 / 模拟器构建运行 / 截图与运行证据, 交付主体是那个候选提交本身, 不是卡分支。一处声明的全部后果: ①不写产品仓源码——lane.repo = 候选所在仓(只读取证), 不建卡工作树 / 卡分支(next_resolver.card_writes_product_repo); 产物只落验证根(project.json validation_roots, 本卡本活动 run 目录)与治理根报告落点; ②卡面必填来源卡与候选(fields), 起草 / 发卡即核(候选须为 lane.repo 解析仓中已有提交的完整 40 位 sha; 来源卡须在队列), 验证根 run-start 的候选须等于卡面候选; ③交回 / 审计报告 frontmatter 三键由产品给值(commit_sha = 候选, tree_hash = 候选 tree, branch = 来源卡卡分支名), 入口核候选而非卡分支 tip; ④独立审计(independent_audit=true), 裁决 artifact_subject = 候选(门侧同核); ⑤N5 无合入: finalize 不合并 / 不推送 / 不部署, 写 finalization 记录(commit = merge_commit = 候选, deploy_status / push_status = not_applicable 并写明「验证卡无合入」)后照常 N6 结案; ⑥开工面: 不建树的验证卡与其审计卡照常入选工位 next_card, 开工提示按 kickoff.template_no_worktree 渲染(含本卡验证根节, 经 ssh 操作目标主机时含 ssh 命令)。",
@@ -303,7 +315,7 @@
         "subject_kind": "governance_outputs"
       },
       "delivery_subject": {
-        "description": "AIPOS-F210(F208 P0-2, gap #218): 卡的交付主体三态唯一判定——branch(卡分支: 写产品仓的卡及其审计卡; 缺 task_mode 的存量不建树卡同此态, 缺省值归 F208 卡组 C)/ candidate(固定候选: candidate_subject 模式卡及其审计卡)/ governance_outputs(治理根产出清单: governance_outputs_subject 卡及其审计卡)。判定顺序 = 报告契约分形顺序(先固定候选, 再治理根产出清单, 其余卡分支)。凡点名「分支 / 候选 / 产出清单」的文字只经报告契约(next_resolver.card_report_contract)与开工面(next_resolver.card_workstation_view 的 delivery_subject / branch / worktree_refusal / outputs_note)产出: 卡正文工作纪律段(machine_zone)、审计取证锚点(audit_derivation.render_forensic_anchor: 卡分支 = git diff 基线...被审分支; 固定候选 = 只读该提交 + src-verify; 治理根产出清单 = 核交回绑定的 outputs_digest; 审计卡正文、governance_refs 自动派生与手动派审同读 forensic_anchor_ref)、审计报告必填句(audit_derivation.report_frontmatter_clause)、交回 / 裁决骨架(board_adapter 认领模板 → record_writer)。已发布存量卡正文不改写(append-only); 新卡、派生审计卡与重生成(draft regen)生效。棘轮 tests/test_aipos_f210_delivery_subject_single_source.py(基线 tests/f210_branch_wording_baseline.jsonl, 只减不增)。",
+        "description": "AIPOS-F210(F208 P0-2, gap #218): 卡的交付主体三态唯一判定——branch(卡分支: 写产品仓的卡及其审计卡; 缺 task_mode 的存量不建树卡同此态——AIPOS-F211 定缺省 = missing_default 不写仓, 此类卡不建树、不入选开工(F178 / F197), 本态只作契约形)/ candidate(固定候选: candidate_subject 模式卡及其审计卡)/ governance_outputs(治理根产出清单: governance_outputs_subject 卡及其审计卡)。判定顺序 = 报告契约分形顺序(先固定候选, 再治理根产出清单, 其余卡分支)。凡点名「分支 / 候选 / 产出清单」的文字只经报告契约(next_resolver.card_report_contract)与开工面(next_resolver.card_workstation_view 的 delivery_subject / branch / worktree_refusal / outputs_note)产出: 卡正文工作纪律段(machine_zone)、审计取证锚点(audit_derivation.render_forensic_anchor: 卡分支 = git diff 基线...被审分支; 固定候选 = 只读该提交 + src-verify; 治理根产出清单 = 核交回绑定的 outputs_digest; 审计卡正文、governance_refs 自动派生与手动派审同读 forensic_anchor_ref)、审计报告必填句(audit_derivation.report_frontmatter_clause)、交回 / 裁决骨架(board_adapter 认领模板 → record_writer)。已发布存量卡正文不改写(append-only); 新卡、派生审计卡与重生成(draft regen)生效。棘轮 tests/test_aipos_f210_delivery_subject_single_source.py(基线 tests/f210_branch_wording_baseline.jsonl, 只减不增)。",
         "kinds": ["branch", "candidate", "governance_outputs"],
         "single_implementation": "tools/aipos_cli/next_resolver.card_delivery_subject",
         "renderers": ["tools/aipos_cli/next_resolver.card_report_contract", "tools/aipos_cli/next_resolver.card_workstation_view", "tools/aipos_cli/machine_zone.derive_machine_zone_纪律段", "tools/aipos_cli/audit_derivation.render_forensic_anchor", "tools/aipos_cli/audit_derivation.report_frontmatter_clause"]
@@ -320,7 +332,8 @@
           "value": "code",
           "description": "Code implementation task - full workflow with independent audit",
           "writes_product_repo": true,
-          "independent_audit": true
+          "independent_audit": true,
+          "requires_tests": true
         },
         {
           "value": "docs",

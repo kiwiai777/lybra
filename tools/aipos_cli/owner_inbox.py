@@ -275,8 +275,9 @@ def suggest_grant(root: Path, project: str, *, task_id: str, card_fm: dict[str, 
     """件① 授权建议唯一推导(声明 verbs.schema lybra_owner_inbox.grant_request): 驱动方 = 运行记录 driver; task_mode = 卡面; 仓 = 卡面 lane.repo
     (未写 = project.json repos 中指向卡所在仓的仓名); 额度(AIPOS-F192: 业务卡张数, 不再照抄上一信封)= project.json grant_request.max_tasks
     显式声明者, 否则本卡所需(autonomy_policy.envelope_card_need, 与 loop 续签同一推导); 到期 = 现在 + 项目缺省天数; 理由 = 卡标题;
-    拉起授权 = 本卡执行方式派 pi 工位(AIPOS-F201 件②: workspace_config.card_execution_mode 唯一判定, 与 loop 拉起 / 工位设置同读; 项目未声明
-    execution 时卡面 harness = pi 同判)= [pi], 否则同驱动方上一信封; policy_id = F166 next_policy_id。顾问 owner_ask.grant 逐字段覆盖。
+    拉起授权 = 本卡执行阶段或审计阶段要拉 pi(AIPOS-F201 件②; AIPOS-F211 件③: 两阶段 harness 都经 loop_driver.card_harness 唯一推导——
+    缺省由 workspace_config.card_execution_mode 推出, 审计卡恒 pi; 卡走独立审计(next_resolver.card_independent_audit)才计审计阶段)= [pi],
+    否则同驱动方上一信封; policy_id = F166 next_policy_id。顾问 owner_ask.grant 逐字段覆盖。
     返回 {..., sources: {字段: 来源键}}。"""
     from datetime import timedelta
 
@@ -299,7 +300,7 @@ def suggest_grant(root: Path, project: str, *, task_id: str, card_fm: dict[str, 
     # AIPOS-F192: 额度 = 业务卡张数——项目显式声明优先, 否则本卡所需(本卡对上一信封的放行状态; 无上一信封 = 新卡 1 张)
     explicit = (defaults.get("_source") or {}).get("max_tasks") == "project.json"
     need = envelope_card_need(root, envelope_usage(root, previous["policy_id"], now=now) if previous else {}, task_id=task_id)
-    routed_pi = _card_routes_to_pi(root, card_fm)
+    routed_pi = _card_routes_to_pi(root, card_fm, task_id=task_id)
     grant: dict[str, Any] = {
         "agent_or_role": driver, "task_mode": str(card_fm.get("task_mode") or "").strip(), "lane_repos": repos,
         "launch_harnesses": [routed_pi] if routed_pi else list((previous or {}).get("launch_harnesses") or []),
@@ -320,16 +321,27 @@ def suggest_grant(root: Path, project: str, *, task_id: str, card_fm: dict[str, 
     return grant
 
 
-def _card_routes_to_pi(root: Path, card_fm: dict[str, Any]) -> str | None:
-    """AIPOS-F201 件②: 本卡执行方式 = pi 工位 → 拉起授权 harness 名(EXECUTION_MODE_PI), 否则 None。判定唯一 workspace_config.card_execution_mode
-    (项目 execution 段: harness=pi / assigned_to=pi_executor / task_mode ∈ pi_allowed_task_modes); 项目未声明 execution = 卡面 harness 是否为 pi
-    (execution_wants_pi 首谓词同口径)。execution 段形不合 = ExecutionDeclarationError(ValueError)向上, 授权建议点名推不出(不猜)。"""
-    from tools.aipos_cli.workspace_config import EXECUTION_MODE_PI, card_execution_mode, project_execution
+def _card_routes_to_pi(root: Path, card_fm: dict[str, Any], *, task_id: str = "") -> str | None:
+    """AIPOS-F201 件②: 本卡推进要 loop 拉起 pi 工位 → 拉起授权 harness 名(EXECUTION_MODE_PI), 否则 None。
+    AIPOS-F211 件③(F208 P1-5): 两阶段都问 loop 拉起同一推导 loop_driver.card_harness(卡面值, 缺 = workspace_config.card_execution_mode 推出;
+    项目未声明 execution = card.schema default_by_task_mode)——①执行阶段 = 本卡 harness(审计卡本身恒 pi); ②审计阶段 = 本卡走独立审计
+    (next_resolver.card_independent_audit)时其审计卡的 harness(audit_card=True, 审计恒为独立 pi 审计工位)。原只问执行阶段且不传 audit_card,
+    子 agent 执行的代码卡授权建议不含 pi, 审计阶段因信封未授权 pi 停手工(F208 E18)。execution 段形不合 = ExecutionDeclarationError(ValueError)向上,
+    授权建议点名推不出(不猜)。"""
+    from tools.aipos_cli.audit_derivation import is_audit_card
+    from tools.aipos_cli.loop_driver import CardHarnessUnresolved, card_harness
+    from tools.aipos_cli.next_resolver import card_independent_audit
+    from tools.aipos_cli.workspace_config import EXECUTION_MODE_PI
 
-    mode = card_execution_mode(project_execution(root), card_fm)
-    if mode is None:
-        mode = EXECUTION_MODE_PI if str(card_fm.get("harness") or "").strip() == EXECUTION_MODE_PI else None
-    return EXECUTION_MODE_PI if mode == EXECUTION_MODE_PI else None
+    tid = task_id or str(card_fm.get("task_id") or "")
+    try:
+        stages = [card_harness(card_fm, root, task_id=tid)]
+    except CardHarnessUnresolved:
+        # 只在执行方式 = 子 agent 时抛(该执行者无接入登记的会话 harness): 执行阶段确定不拉 pi, 具体 harness 与授权建议无关
+        stages = []
+    if not is_audit_card(tid, card_fm) and card_independent_audit(card_fm):
+        stages.append(card_harness({"task_mode": "audit", "reviewed_task_id": tid}, root, task_id=tid, audit_card=True))
+    return EXECUTION_MODE_PI if EXECUTION_MODE_PI in stages else None
 
 
 def grant_line(item: dict[str, Any], decl: dict[str, Any] | None = None) -> str:

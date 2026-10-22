@@ -312,6 +312,14 @@
         "audit_dispatched"
       ],
       "to_state": "verdict_issued",
+      "candidate_fail": {
+        "description": "AIPOS-F211 件④(gap #217, 10-22 chris OTA HBJOTA-61V 实撞: 固定候选验证卡审计 FAIL 属实(候选里的脚本缺陷), 推导核只给「处理裁决 FAIL(返工或修复)」不可推导 → loop not_derivable 计入连败升 Owner; 而候选是固定 sha, 返工本卡无意义, 正路 = 来源卡修复出新候选 → 另出验证卡承接 → queue supersede 本卡): 交付主体为固定候选的卡(enums.schema task_mode.candidate_subject; next_resolver.task_mode_subject_is_candidate)最新常规裁决值 ∈ verdicts 且未针对该裁决登记返工轮(返工轮仍优先, AIPOS-F155)= 不可推导, action.type = action_type(triggered_by=advisor); loop 以 end_reason 结束(verbs.schema lybra_loop_status.next_action.by_end_reason 判 advisor_fix, 不计连败, 不进 Owner 收件箱), 修法(routine_rejections.end_reasons.<end_reason>)= 来源卡修复出新候选 → 另出验证卡 → `lybra queue supersede` 本卡(既有撤换出口, 原卡 → withdrawn, 记 superseded_by)。原因摘录同 audit_blocked(该裁决记录 Findings summary, 截 audit_blocked.reason_excerpt_chars 字)。判定唯一实现 next_resolver.candidate_fail_state。",
+        "verdicts": [
+          "FAIL"
+        ],
+        "action_type": "candidate_fail",
+        "end_reason": "candidate_fail"
+      },
       "audit_blocked": {
         "description": "AIPOS-F179 件③(10-16 chris HBLX-8 实撞: 审计在自己工作树独立验证了模块测试/构建/新增 UI 测试, 但 UI 全量超过审计体 bash 单次时限、又遇模拟器资源冲突, 按章程给 BLOCK; 推导核对 BLOCK 无路径(「处理裁决 BLOCK」不可推导)→ 与旧运行连成连败 → owner_needed): 审计裁决 BLOCK = 审计未能完成(环境 / 资源 / 时长), 不是执行产物不合格。判定挂推导核 N4 非 PASS 分支(next_resolver, 与 AIPOS-F155 FAIL 返工同处; 已针对该裁决登记返工轮者仍走返工): 本卡最新常规裁决值 ∈ verdicts = 不可推导, action.type = action_type(triggered_by=advisor): 按 BLOCK 原因修环境 / 资源后重新派审计 R(n+1)(卡号演进 audit_derivation.derive_audit_task_id), 不改执行产物; loop 以 end_reason 结束(verbs.schema lybra_loop_status.next_action.by_end_reason 判 advisor_fix, 附原因摘录与重审命令, 不计连败)。本卡最新连续 BLOCK 裁决数(按裁决记录时间, 与 latest_verdict 同一排序; 补审裁决不计)≥ owner_needed_after = 以 repeated_end_reason 结束(owner_needed)。重审命令唯一渲染 next_resolver.reaudit_command(既有派审动词 lybra audit dispatch, 派审人 / 信封 = 驱动方, 审计实例 = audit_derivation.resolve_audit_instance); 下一轮已派出 = 推导核照常等最新一轮(AIPOS-F112), 不再给重审命令。原因摘录 = 该裁决记录的 Findings summary(owner_truth_view._extract_summary_field, 真相视图读裁决摘要同一函数), 截 reason_excerpt_chars 字。判定唯一实现 next_resolver.audit_block_state。",
         "verdicts": ["BLOCK"],

@@ -2665,7 +2665,7 @@
         "task_selector_lane_repo": "AIPOS-F134 件③: 信封字段 task_selector_lane_repo(缺省 \"\"/键缺 = 不限 lane, 存量信封行为不变)——值 = 本项目 project.json repos.items 的仓名(无清单时 = code_repo 路径), `lybra envelope mint --lane-repo <仓名>` 经 --confirm 由 Owner 签, 门 owner_decision_writer._normalize_autonomy_policy 按 workspace_config.resolve_card_repo 校验可解析(不可解析 = BLOCK)。判定对象 = subject_rule 所指卡的 lane.repo 经 resolve_card_repo 解析出的仓(autonomy_policy.card_lane_refs: 路径 / 卡面原值 / 指向同一路径的仓名), 判定只在 match_claim_envelope 谓词 lane_repo 与原因链(不匹配 = transitions envelope_guards.selector_lane_repo_mismatch)。用途: 同一项目多顾问实例各管一个 lane(如 OTA 顾问只推 OTA 仓的卡)。AIPOS-F139: 值为仓集合——`--lane-repo` 可重复(一个子项目跨多个仓; 共用仓可同时列入多个顾问的信封), 新铸信封 frontmatter 落列表, 存量单值信封按单元素集合读(文件逐字节不变); 集合内每个名都须可解析, 任一不可解析 = BLOCK(逐个点名); 卡 lane 指称命中集合任一即匹配, 不匹配原因链列出整个集合。集合序列化/解析唯一 workspace_config.repo_name_set(见 lane_view.repo_set)。"
       },
       "launch": {
-        "description": "AIPOS-F95 件③: loop 内拉起薄函数(tools/aipos_cli/loop_driver.py, 无守护/调度/心跳/常驻): 在 N1 执行体等待与 N3 审计体等待进入 watch 之前, 条件全满足才拉起一次——①信封 launch_harnesses 覆盖该卡 harness(卡面值, 缺省 card.schema default_by_task_mode); ②该 harness 有 launch 模板(enums.schema harness.launch 非 null)且其可执行在驱动方 PATH; ③按本项目 enrollment_log 中该实例最新 land 事件定位工位位置 {host, dir}, transport(enums.schema workstation_transport)已支持(local; AIPOS-F110 起 remote 经 ssh, 见本段 remote); ④charter_render.workstation_identity(dir) 的实例 = 卡 assigned_to(审计卡 = 其认领实例)(remote 工位: 门机读不到远端目录, 身份 = land 事件实例, 另须 project.json workstations.<实例> 材料声明 + ssh 探测可达); ⑤未给 --no-launch; ⑥kickoff = 该工位 `my-tasks --workstation <dir> --task-id <等待目标卡> --json` 的 next_card.kickoff(AIPOS-F111 件①: 按卡号取, 只核验等待目标卡这一张——判据 next_resolver.kickoff_refusal, 与工位 `/go <卡号>` 同一判据; 不要求该卡是工位 NEXT_CARD_RULE 选卡结果, 同一工位同时在办多张卡可各自拉起; 唯一实现 loop_driver.workstation_kickoff)(remote: `my-tasks --actor <实例> --task-id <卡> --remote-workstation`, 同一 render_kickoff 附门机材料段)。任一不满足 → 退回手工模式(等待提示含工位目录与 /go; remote 工位提示 <host>:<dir>)。AIPOS-F164 件②(gap #149): 条件全满足后、起进程前(唯一拉起口 loop_driver._launched_wait 起点)核该工位章程新鲜度(distribution_sync.charter_freshness = `lybra sync --dry-run` 同一实现, F66B 三指纹): 最新 = 直接拉起; 不新鲜且 project.json charter_auto_sync(缺省 true)= 先 sync 本工位(`lybra sync` 同一实现)复核后拉起; sync 失败 = 不拉起(结束原因 charter_sync_failed); 自动 sync 关闭 = 不拉起(charter_not_fresh); 两者 lybra loop status 下一动作 advisor_fix(给 sync 修法)。local 工位才核, remote 工位门机不跨机读写工位文件(运行记录 charter_checks 记 not_applicable)。",
+        "description": "AIPOS-F95 件③: loop 内拉起薄函数(tools/aipos_cli/loop_driver.py, 无守护/调度/心跳/常驻): 在 N1 执行体等待与 N3 审计体等待进入 watch 之前, 条件全满足才拉起一次——①信封 launch_harnesses 覆盖该卡 harness(唯一推导 loop_driver.card_harness: 卡面值, 缺省由本卡执行方式推出, 声明 card.schema intent_face.harness.default_rule, AIPOS-F211); ②该 harness 有 launch 模板(enums.schema harness.launch 非 null)且其可执行在驱动方 PATH; ③按本项目 enrollment_log 中该实例最新 land 事件定位工位位置 {host, dir}, transport(enums.schema workstation_transport)已支持(local; AIPOS-F110 起 remote 经 ssh, 见本段 remote); ④charter_render.workstation_identity(dir) 的实例 = 卡 assigned_to(审计卡 = 其认领实例)(remote 工位: 门机读不到远端目录, 身份 = land 事件实例, 另须 project.json workstations.<实例> 材料声明 + ssh 探测可达); ⑤未给 --no-launch; ⑥kickoff = 该工位 `my-tasks --workstation <dir> --task-id <等待目标卡> --json` 的 next_card.kickoff(AIPOS-F111 件①: 按卡号取, 只核验等待目标卡这一张——判据 next_resolver.kickoff_refusal, 与工位 `/go <卡号>` 同一判据; 不要求该卡是工位 NEXT_CARD_RULE 选卡结果, 同一工位同时在办多张卡可各自拉起; 唯一实现 loop_driver.workstation_kickoff)(remote: `my-tasks --actor <实例> --task-id <卡> --remote-workstation`, 同一 render_kickoff 附门机材料段)。任一不满足 → 退回手工模式(等待提示含工位目录与 /go; remote 工位提示 <host>:<dir>)。AIPOS-F164 件②(gap #149): 条件全满足后、起进程前(唯一拉起口 loop_driver._launched_wait 起点)核该工位章程新鲜度(distribution_sync.charter_freshness = `lybra sync --dry-run` 同一实现, F66B 三指纹): 最新 = 直接拉起; 不新鲜且 project.json charter_auto_sync(缺省 true)= 先 sync 本工位(`lybra sync` 同一实现)复核后拉起; sync 失败 = 不拉起(结束原因 charter_sync_failed); 自动 sync 关闭 = 不拉起(charter_not_fresh); 两者 lybra loop status 下一动作 advisor_fix(给 sync 修法)。local 工位才核, remote 工位门机不跨机读写工位文件(运行记录 charter_checks 记 not_applicable)。",
         "grace_seconds": 30,
         "grace_note": "产物就绪后给进程的宽限期(秒): 期内自行退出即收尾, 超期终止整个进程组",
         "terminate_wait_seconds": 5,
@@ -2810,6 +2810,7 @@
           "worktree_repair_failed": "AIPOS-F178 件③: 等待目标卡已认领、须建卡工作树(next_resolver.card_needs_worktree)而不在落点, 等待前自动补建(next_resolver.repair_missing_worktree, `lybra queue repair --confirm` 同一实现)失败, 未进入等待(exit_codes.not_derivable; 原因原文在结束原文与运行记录 worktree_repairs 末条 detail; 修法 = 结束原文的 lybra queue repair 命令)",
           "resource_busy": "AIPOS-F179 件②: 本卡声明的独占资源(card.schema resources)在 --max-wait 内一直被同项目另一 loop 占用, 未进入执行/审计等待(exit_codes.wait_timeout; 占用者原文在结束原文; 见 resource_lock)",
           "audit_blocked": "AIPOS-F179 件③: 审计裁决 BLOCK(审计未能完成: 环境 / 资源 / 时长), 推导核给出「修环境后重新派审计」(transitions nodes.N4.audit_blocked; exit_codes.not_derivable; 不计连败)",
+          "candidate_fail": "AIPOS-F211 件④(gap #217): 固定候选验证卡审计 FAIL, 推导核给出「来源卡修复出新候选 → 另出验证卡 → queue supersede 本卡」(transitions nodes.N4.candidate_fail; exit_codes.not_derivable; 不计连败, 不进 Owner 收件箱)",
           "audit_blocked_repeated": "AIPOS-F179 件③: 本卡最新连续 BLOCK 裁决数 ≥ transitions nodes.N4.audit_blocked.owner_needed_after(修环境重审后仍 BLOCK), 升 Owner(exit_codes.not_derivable); AIPOS-F202: 计数以本卡最近一条「重新派审」收件箱裁决为界(transitions nodes.N4.audit_blocked.owner_reaudit)",
           "audit_report_form_error": "AIPOS-F180B 件②: 裁决入门被拒 INGEST_TIP_MISMATCH 且形式诊断 correctable(报告头 commit_sha 形式错误 / 疑似抄错), 但审计会话不可续接 / 本运行续接已用尽 / 续接后报告未改写(见 launch.report_fix; exit_codes.gate_rejected; 判定原文在结束原文与运行记录 report_fixes 末条 detail)",
           "return_report_form_error": "AIPOS-F204 件②: 执行体交回报告头可纠正错误(缺键 / 值不符产品给值 / 形式错 / 误用另一契约; transitions artifact_ingest.return.header_fix), 但执行会话不可续接 / 本运行续接已用尽 / 续接后报告未改写(见 launch.report_fix.executor; exit_codes.not_derivable; 判定原文在结束原文与运行记录 report_fixes 末条 detail)"
@@ -3137,6 +3138,7 @@
           "worktree_repair_failed": "advisor_fix",
           "resource_busy": "advisor_fix",
           "audit_blocked": "advisor_fix",
+          "candidate_fail": "advisor_fix",
           "audit_blocked_repeated": "owner_needed",
           "audit_report_form_error": "advisor_fix",
           "return_report_form_error": "advisor_fix"
@@ -3183,6 +3185,9 @@
             "envelope_arg": "续跑命令的信封参数(运行记录 envelope; 无 = 空)",
             "reaudit_command": "AIPOS-F179 件③: 重新派审计的命令(唯一渲染 next_resolver.reaudit_command: 既有 lybra audit dispatch 派下一轮审计卡, 派审人 / 信封 = 运行记录 driver / envelope); 下一轮已派出 = 一句「已派 <审计卡>, 无需再派」; 只用于 end_reasons.audit_blocked",
             "block_reason": "AIPOS-F179 件③: BLOCK 原因摘录(该裁决记录 Findings summary, 截 transitions nodes.N4.audit_blocked.reason_excerpt_chars 字); 只用于 end_reasons.audit_blocked",
+            "fail_reason": "AIPOS-F211 件④: 固定候选验证卡 FAIL 裁决的原因摘录(裁决号 + 审计卡 + 该裁决记录 Findings summary, 截 transitions nodes.N4.audit_blocked.reason_excerpt_chars 字; 唯一实现 next_resolver.candidate_fail_fix_values); 只用于 end_reasons.candidate_fail",
+            "source_task": "AIPOS-F211 件④: 本卡来源卡(卡面 validation_source_task, next_resolver.card_candidate_subject)与其固定候选 sha; 只用于 end_reasons.candidate_fail",
+            "supersede_command": "AIPOS-F211 件④: 撤换本卡命令(既有动词 `lybra queue supersede` 预演形, --by 留新验证卡号占位, --actor 留顾问实例占位, --owner-words 留 Owner 原话占位; 唯一渲染 next_resolver.candidate_fail_fix_values); 本卡此刻已不是候选 FAIL = 一句说明; 只用于 end_reasons.candidate_fail",
             "header_fix_prompt": "AIPOS-F204 件③: 修交回报告头指令原文(verbs.schema lybra_loop.launch.report_fix.executor.prompt, 按本卡此刻的交回以 artifact_ingest.return_header_problem 填实值; 此刻已无可更正问题 = 一句说明); 只用于 end_reasons.return_report_form_error"
           },
           "resume_hint": "lybra loop --task-id {task_id} --workspace-root {governance_root}{actor_arg}{envelope_arg}",
@@ -3287,6 +3292,16 @@
               "fix": [
                 "不改卡、不问 Owner、不手动抢资源: 占用者见 detail(卡 / run / pid); 用 lybra loop status --task-id <占用者卡> --workspace-root {governance_root} 看它推进到哪",
                 "占用者 loop 结束(或进程已死)即自动释放; 用原命令续跑本卡 loop(本修法末行命令), 建议加大 --max-wait 让 loop 自己排队等(排队期间运行记录与 loop status 显示占用者)"
+              ]
+            },
+            "candidate_fail": {
+              "why_routine": "AIPOS-F211 件④(gap #217, 10-22 chris OTA HBJOTA-61V 实撞): 固定候选验证卡审计 FAIL = 候选本身有缺陷(审计属实), 候选是固定 sha, 返工本卡无意义; 修法固定 = 来源卡修复出新候选 → 另出验证卡承接新候选 → queue supersede 本卡, 不计连败、不进 Owner 收件箱(撤换时按 queue supersede 契约转述 Owner 原话)",
+              "fix": [
+                "不返工本卡、不发修复卡: 本卡交付主体是固定候选, FAIL 属候选本身 —— {fail_reason}",
+                "来源卡修复出新候选: {source_task} —— 派来源卡执行体按 FAIL 原因在来源卡卡分支修复并提交, 新候选 = 修复后提交的完整 40 位 sha",
+                "另出验证卡承接新候选(卡面同本卡, validation_candidate 换成新候选 sha)并发布",
+                "撤换本卡: {supersede_command}(先预演, 核对后去掉 --dry-run 加 --confirm)",
+                "然后对新验证卡跑 lybra loop(本卡撤换后不再推进; 下行续跑命令只用于撤换前复核本卡状态)"
               ]
             },
             "audit_blocked": {

@@ -314,11 +314,14 @@ def resolve_gate_chain(
     # but NOT WIDEN it (project says code_enabled=False, task_mode=code still uses non-code chain).
     # S8: the answer must be a function of collaboration_profile — the project decides
     # what flows it supports, tasks can only opt into lighter flows.
-    task_mode = str(task_fields.get("task_mode", "")).strip()
-    if task_mode in ("content", "research", "config"):
+    # AIPOS-F211 件①(F208 P1-1): 收窄 = 本卡不走独立审计(卡级唯一判定 next_resolver.card_independent_audit: 模式声明
+    # enums.schema task_mode.independent_audit 或卡面 audit: required; 缺 task_mode = missing_default 不独立审计)。原自有集合
+    # ("content", "research", "config") 与 task_mode == "deploy"(均非 task_mode 声明值, 漏 docs / governance)退役;
+    # 部署门只由项目 deploy_gate_enabled 与卡面 deploy=true 打开。
+    from tools.aipos_cli.next_resolver import card_independent_audit
+
+    if not card_independent_audit(task_fields):
         code_enabled = False
-    elif task_mode == "deploy":
-        deploy_gate_enabled = True
     # NOTE: task_mode="code" does NOT override code_enabled=False from profile.
     # If the project doesn't support code flow, a code task still uses the non-code chain.
     # This ensures S8: changing profile.code_enabled actually changes the answer.

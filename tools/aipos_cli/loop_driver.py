@@ -55,6 +55,7 @@ from tools.aipos_cli.verb_contract import declared_exit_code  # AIPOS-F101 件�
 from tools.aipos_cli.loop_run_record import LoopRunRecorder, LoopRunRecordError, model_label  # AIPOS-F169 model_label; AIPOS-F131: 运行记录 + 日志(唯一实现)
 from tools.aipos_cli.next_resolver import (
     audit_blocked_declaration,
+    candidate_fail_declaration,
     DRIVER_ACTOR_MISSING,
     REPO_ROOT,
     _action_type_for_command,
@@ -300,7 +301,8 @@ def mint_hint(*, task_id: str, task_fm: dict[str, Any], driver_actor: str, now: 
 
     now = now or utc_now()
     project = str(task_fm.get("project") or "project").strip() or "project"
-    task_mode = str(task_fm.get("task_mode") or "code").strip() or "code"
+    # AIPOS-F211 件②: 缺 task_mode 不补 "code"(缺省 = schema missing_default); 信封不限 task_mode(空 = 不写 --task-mode, 选择器同判缺值卡)
+    task_mode = str(task_fm.get("task_mode") or "").strip()
     expires = (now + timedelta(days=int(envelope_renew_declaration()["renew_days"]))).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     # AIPOS-F166 件②: policy_id 不再写死 _1(10-12 实撞: 建议已用过的 <项目>_loop_1)——按该驱动方同前缀信封已有最大序号 +1
     policy_id = (next_policy_id(governance_root, identities={driver_actor, DRIVER_ROLE}, project=project)
@@ -505,11 +507,48 @@ class LaunchPlan:
                 "model": dict(self.model) or None, "session_id": self.session_id or None, "resume_max": self.resume_max}
 
 
-def card_harness(task_fm: dict[str, Any]) -> str:
-    """卡的 harness: 卡面值, 缺省 card.schema intent_face.harness.default_by_task_mode(与 artifact_ingest 同一规则)。"""
+class CardHarnessUnresolved(ValueError):
+    """AIPOS-F211 件③: 卡面无 harness 且本卡执行方式 = 子 agent, 而执行者实例无子 agent 模式接入登记(harness 不可得, 不猜)。"""
+
+
+def card_harness(task_fm: dict[str, Any], governance_root: Path | None = None, *, task_id: str = "",
+                 audit_card: bool | None = None) -> str:
+    """卡的 harness 唯一推导(声明 card.schema intent_face.harness.default_rule; loop 拉起 / lybra kickoff 时限句 / 报告模型字段定位器 /
+    Owner 收件箱拉起授权建议同读)。卡面值优先; 缺 = AIPOS-F211 件③(F208 P1-5)由本卡执行方式推出(唯一判定
+    workspace_config.card_execution_mode; audit_card 缺省经 audit_derivation.is_audit_card 判, 审计卡恒 pi):
+      - pi = "pi";
+      - 子 agent = 该执行者实例(卡面 assigned_to, 缺 = 声明 subagent_executor)子 agent 模式接入登记记下的顾问会话 harness
+        (enrollment.instance_enrollment, 与起草缺省 draft_writer.apply_execution_defaults 同一来源); 登记无 = CardHarnessUnresolved;
+      - 项目未声明 execution(或未给 governance_root)= card.schema intent_face.harness.default_by_task_mode[task_mode]
+        (缺 task_mode = enums.schema task_mode.missing_default.key, 唯一兜底 next_resolver._task_mode_entry)。
+    执行方式声明形不合 = ExecutionDeclarationError(ValueError)上抛; 缺省表缺条目 = SchemaLoadError。"""
     from tools.aipos_cli.machine_zone import default_harness_for_task_mode
 
-    return str(task_fm.get("harness") or "").strip() or default_harness_for_task_mode(str(task_fm.get("task_mode") or "code"))
+    face = str(task_fm.get("harness") or "").strip()
+    if face:
+        return face
+    if governance_root is not None:
+        from tools.aipos_cli.audit_derivation import is_audit_card
+        from tools.aipos_cli.workspace_config import EXECUTION_MODE_PI, card_execution_mode, project_execution
+
+        execution = project_execution(Path(governance_root))
+        if audit_card is None:
+            audit_card = is_audit_card(task_id or str(task_fm.get("task_id") or ""), task_fm)
+        mode = card_execution_mode(execution, task_fm, audit_card=bool(audit_card))
+        if mode == EXECUTION_MODE_PI:
+            return EXECUTION_MODE_PI
+        if mode is not None:
+            from tools.aipos_cli.enrollment import instance_enrollment
+
+            instance = str(task_fm.get("assigned_to") or "").strip() or str((execution or {}).get("subagent_executor") or "").strip()
+            harness = str(instance_enrollment(Path(governance_root), instance).get("harness") or "").strip() if instance else ""
+            if not harness:
+                raise CardHarnessUnresolved(
+                    f"卡面无 harness, 本卡执行方式 = {mode}(project.json execution), 执行者实例 {instance or '(无)'} 无子 agent 模式接入登记"
+                    "(land 事件无 harness=), harness 不可推导。出口: lybra queue amend 给卡补 harness(claude-code|codex), 或按 "
+                    "lybra onboarding guide --executor-mode subagent 重接入该实例")
+            return harness
+    return default_harness_for_task_mode(str(task_fm.get("task_mode") or ""))
 
 
 def _wait_instance(governance_root: Path, card: str, task_fm: dict[str, Any]) -> str:
@@ -636,8 +675,9 @@ def plan_launch(governance_root: Path, card: str, *, policy: dict[str, Any] | No
         plan.refusal = plan.manual_hint = str(exc)
         return plan
     try:
-        plan.harness = card_harness(fm)
-    except SchemaLoadError as exc:
+        # AIPOS-F211 件③: 缺省由本卡执行方式推出(card_harness 唯一推导, 与收件箱授权建议 / kickoff 同读)
+        plan.harness = card_harness(fm, governance_root, task_id=card)
+    except (SchemaLoadError, ValueError, OSError) as exc:
         plan.refusal = f"卡 harness 不可推导: {exc}"
     plan.instance = _wait_instance(governance_root, card, fm)
     subagent = False
@@ -1624,6 +1664,11 @@ def _drive(
                     # AIPOS-F179 item 3: audit BLOCK = fix environment then re-audit (advisor_fix, not a consecutive failure);
                     # repeated BLOCK = owner_needed. End reason comes from the derivation (transitions nodes.N4.audit_blocked).
                     msg = f"审计裁决 BLOCK @ {node}/{state}: {derivation.get('suggested_action', '')}"
+                    result.reason = str(action.get("end_reason") or "")
+                elif action.get("type") == candidate_fail_declaration()["action_type"]:
+                    # AIPOS-F211 item 4 (gap #217): fixed-candidate validation card FAIL = new candidate on a new validation card +
+                    # queue supersede this card (advisor_fix, not a consecutive failure, no Owner inbox; transitions nodes.N4.candidate_fail)
+                    msg = f"固定候选审计 FAIL @ {node}/{state}: {derivation.get('suggested_action', '')}"
                     result.reason = str(action.get("end_reason") or "")
                 steps.append(LoopStep(index, "execute", node, state, task_id, ok=False, message=msg))
                 say(f"[{index}] exit 4 — {msg}")

@@ -305,25 +305,38 @@ def forensic_subject(card_frontmatter: dict[str, Any] | None) -> str | None:
 
 def task_mode_writes_product_repo(task_mode: str) -> bool:
     """AIPOS-F178 件①: 该 task_mode 缺省是否写产品仓(唯一读取口: enums.schema task_mode.values[].writes_product_repo)。
-    缺值 / 未知 task_mode = False(行为同 F178 前: 只有代码卡缺省建树)。声明缺 / 形变 = SchemaLoadError(fail-closed)。"""
+    AIPOS-F211 件②: 条目经 _task_mode_entry 唯一取(缺值 = missing_default 条目 false; 未知 = None → False)。声明缺 / 形变 = SchemaLoadError。"""
     from tools.schema_loader import SchemaLoadError, load_schema
 
     decl = ((load_schema("enums", REPO_ROOT).get("enums") or {}).get("task_mode") or {})
-    values = decl.get("values")
-    if not isinstance(values, list) or not isinstance(decl.get("product_repo_write"), dict):
-        raise SchemaLoadError("enums.schema.json enums.task_mode(values / product_repo_write)未声明(AIPOS-F178)")
-    mode = str(task_mode or "").strip().lower()
-    for item in values:
-        if isinstance(item, dict) and str(item.get("value") or "").strip().lower() == mode:
-            flag = item.get("writes_product_repo")
-            if not isinstance(flag, bool):
-                raise SchemaLoadError(f"enums.schema.json task_mode={mode!r} 缺 writes_product_repo(布尔, AIPOS-F178)")
-            return flag
-    return False
+    if not isinstance(decl.get("product_repo_write"), dict):
+        raise SchemaLoadError("enums.schema.json enums.task_mode.product_repo_write 未声明(AIPOS-F178)")
+    entry = _task_mode_entry(task_mode)
+    if entry is None:
+        return False
+    flag = entry.get("writes_product_repo")
+    if not isinstance(flag, bool):
+        raise SchemaLoadError(f"enums.schema.json task_mode={task_mode!r} 缺 writes_product_repo(布尔, AIPOS-F178)")
+    return flag
+
+
+def task_mode_missing_default() -> dict[str, Any]:
+    """AIPOS-F211 件②: enums.schema task_mode.missing_default(缺 task_mode 卡的缺省条目; key 与三个布尔必声明)。缺 / 形变 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (((load_schema("enums", REPO_ROOT).get("enums") or {}).get("task_mode") or {}).get("missing_default"))
+    if (not isinstance(decl, dict) or not isinstance(decl.get("key"), str) or not decl["key"].strip()
+            or not all(isinstance(decl.get(k), bool) for k in ("writes_product_repo", "independent_audit", "requires_tests"))):
+        raise SchemaLoadError("enums.schema.json enums.task_mode.missing_default(key / writes_product_repo / independent_audit / "
+                              "requires_tests)未声明齐(AIPOS-F211)")
+    return decl
 
 
 def _task_mode_entry(task_mode: str) -> dict[str, Any] | None:
-    """enums.schema task_mode.values 中该值的条目(未知 / 缺 = None)。声明缺 = SchemaLoadError(fail-closed)。"""
+    """enums.schema task_mode.values 中该值的条目; 未知(非空且不在值域)= None。声明缺 = SchemaLoadError(fail-closed)。
+    AIPOS-F211 件②(Owner 10-22 裁定: 缺 task_mode 的缺省以 schema 为准): 缺值(空 / 缺)= missing_default 条目
+    {value: <missing_default.key>, writes_product_repo: false, independent_audit: false, requires_tests: false, missing: True}——
+    缺值兜底只此一处, 调用方禁再补 or "code"(棘轮 tests/test_aipos_f211_task_mode_single_judgment.py)。"""
     from tools.schema_loader import SchemaLoadError, load_schema
 
     decl = ((load_schema("enums", REPO_ROOT).get("enums") or {}).get("task_mode") or {})
@@ -331,12 +344,16 @@ def _task_mode_entry(task_mode: str) -> dict[str, Any] | None:
     if not isinstance(values, list):
         raise SchemaLoadError("enums.schema.json enums.task_mode.values 未声明")
     mode = str(task_mode or "").strip().lower()
+    if not mode:
+        default = task_mode_missing_default()
+        return {"value": default["key"], "missing": True,
+                **{k: default[k] for k in ("writes_product_repo", "independent_audit", "requires_tests")}}
     return next((item for item in values if isinstance(item, dict) and str(item.get("value") or "").strip().lower() == mode), None)
 
 
 def task_mode_independent_audit(task_mode: str) -> bool:
     """AIPOS-F196 件①: 该 task_mode 交回后是否走独立审计(唯一读取口: enums.schema task_mode.values[].independent_audit)。
-    缺值 / 未知 task_mode = False(行为同 F196 前: 只有 code 走独立审计——code 条目声明 true)。声明形变 = SchemaLoadError。"""
+    缺值 = missing_default(false, AIPOS-F211); 未知 task_mode = False(行为同 F196 前: 只有 code 走独立审计——code 条目声明 true)。声明形变 = SchemaLoadError。"""
     from tools.schema_loader import SchemaLoadError, load_schema
 
     decl = ((load_schema("enums", REPO_ROOT).get("enums") or {}).get("task_mode") or {})
@@ -348,6 +365,30 @@ def task_mode_independent_audit(task_mode: str) -> bool:
     flag = entry.get("independent_audit", False)
     if not isinstance(flag, bool):
         raise SchemaLoadError(f"enums.schema.json task_mode={task_mode!r} independent_audit 须为布尔(AIPOS-F196)")
+    return flag
+
+
+def card_independent_audit(card_frontmatter: dict[str, Any] | None) -> bool:
+    """AIPOS-F211 件④: 卡级是否走独立审计(唯一判定, 声明 enums.schema task_mode.independent_audit.card_rule)= 模式声明
+    (task_mode_independent_audit)或卡面 audit: required。推导核派审 / 快车道分流、Owner 收件箱授权建议审计阶段、flow_description 同读。"""
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    return task_mode_independent_audit(str(fm.get("task_mode") or "")) or str(fm.get("audit") or "").strip() == "required"
+
+
+def task_mode_requires_tests(task_mode: str) -> bool:
+    """AIPOS-F211 件①: 交回自检「有测试」判据是否适用该模式(唯一读取口: enums.schema task_mode.values[].requires_tests; 缺键 = false;
+    缺值 = missing_default.requires_tests; 未知 = False)。取代 board_adapter 原 task_mode == "code" 字面。声明缺 / 形变 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = ((load_schema("enums", REPO_ROOT).get("enums") or {}).get("task_mode") or {})
+    if not isinstance(decl.get("requires_tests"), dict):
+        raise SchemaLoadError("enums.schema.json enums.task_mode.requires_tests 未声明(AIPOS-F211)")
+    entry = _task_mode_entry(task_mode)
+    if entry is None:
+        return False
+    flag = entry.get("requires_tests", False)
+    if not isinstance(flag, bool):
+        raise SchemaLoadError(f"enums.schema.json task_mode={task_mode!r} requires_tests 须为布尔(AIPOS-F211)")
     return flag
 
 
@@ -576,9 +617,8 @@ def card_needs_worktree(workspace_root: Path, card_frontmatter: dict[str, Any] |
     if task_path is None:
         return True
     reviewed_fm = _read_frontmatter(task_path)
-    # reviewed card without task_mode keeps the pre-F178 reading (treated as code)
-    return card_writes_product_repo(workspace_root, {**reviewed_fm, "task_id": str(reviewed_fm.get("task_id") or reviewed),
-                                                     "task_mode": str(reviewed_fm.get("task_mode") or "code")})
+    # AIPOS-F211 件②: reviewed card without task_mode = schema missing_default (no product repo write), single fallback _task_mode_entry
+    return card_writes_product_repo(workspace_root, {**reviewed_fm, "task_id": str(reviewed_fm.get("task_id") or reviewed)})
 
 
 def card_follows_candidate_subject(workspace_root: Path, card_frontmatter: dict[str, Any] | None) -> bool:
@@ -636,11 +676,12 @@ def card_governance_outputs(workspace_root: Path, card_frontmatter: dict[str, An
         if task_path is None:
             return False
         reviewed_fm = _read_frontmatter(task_path)
-        fm = {**reviewed_fm, "task_id": str(reviewed_fm.get("task_id") or reviewed),
-              "task_mode": str(reviewed_fm.get("task_mode") or "code")}
+        fm = {**reviewed_fm, "task_id": str(reviewed_fm.get("task_id") or reviewed)}
     mode = str(fm.get("task_mode") or "").strip()
-    entry = _task_mode_entry(mode) if mode else None
-    if (entry is None or mode.lower() == "audit" or task_mode_writes_product_repo(mode) or task_mode_subject_is_candidate(mode)):
+    # AIPOS-F211 件②: 缺 task_mode = missing_default 条目(唯一兜底 _task_mode_entry); 存量缺 task_mode 卡不算治理根产出清单(声明 governance_outputs_subject)
+    entry = _task_mode_entry(mode)
+    if (entry is None or entry.get("missing") or mode.lower() == "audit" or task_mode_writes_product_repo(mode)
+            or task_mode_subject_is_candidate(mode)):
         return False
     lane = fm.get("lane") if isinstance(fm.get("lane"), dict) else {}
     if not str(lane.get("repo") or "").strip():
@@ -2140,21 +2181,19 @@ def _find_connection_json(workspace_root: Path) -> str | None:
 def _extract_artifact_subject_from_branch(
     workspace_root: Path,
     reviewed_task_id: str,
-    task_mode: str = "code",
 ) -> dict[str, str] | None:
     """AIPOS-F73前置①: 从卡分支 tip 提取 artifact_subject (repository/commit_sha/tree_hash)。
-    
+
+    AIPOS-F211 件①: 原 task_mode 参数(task_mode != "code" = None, 第二判据)删除——是否有卡分支由调用方先问唯一判据
+    card_writes_product_repo, 本函数只读 tip。
+
     Args:
         workspace_root: 产品仓根目录
         reviewed_task_id: 被审任务 ID
-        task_mode: 任务模式（code 卡需要 artifact_subject）
-    
+
     Returns:
-        artifact_subject dict 或 None（非 code 卡或提取失败）
+        artifact_subject dict 或 None（无分支 / 提取失败）
     """
-    if task_mode != "code":
-        return None
-    
     import subprocess
     
     # 推导分支名(AIPOS-F112: 读声明 N5.branch_integration.branch_pattern 唯一口 card_branch_name, 原写死 card/<ID>)
@@ -2213,8 +2252,8 @@ def _card_branch_tip(workspace_root: Path, task_id: str,
     None = 非代码卡 / 产品仓不可解析(交给既有派生点出声)/ 无卡分支。"""
     fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
     # AIPOS-F178: card branch exists iff the card writes a product repo (single criterion card_writes_product_repo;
-    # card without task_mode keeps the pre-F178 reading = code)
-    if not card_writes_product_repo(workspace_root, {**fm, "task_id": task_id, "task_mode": str(fm.get("task_mode") or "code")}):
+    # AIPOS-F211: card without task_mode = schema missing_default via _task_mode_entry, no second fallback here)
+    if not card_writes_product_repo(workspace_root, {**fm, "task_id": task_id}):
         return None
     from tools.aipos_cli.workspace_config import CardRepoUnresolved
 
@@ -2222,7 +2261,7 @@ def _card_branch_tip(workspace_root: Path, task_id: str,
         code_repo = _card_repo_root(workspace_root, task_id, fm, allow_governance_root=False)
     except CardRepoUnresolved:
         return None  # 产品仓不可解析: 交给既有 finalize 派生点出声(不可推导点名), 本判据不另判
-    subject = _extract_artifact_subject_from_branch(code_repo, task_id, "code")
+    subject = _extract_artifact_subject_from_branch(code_repo, task_id)
     if not subject:
         return None
     return code_repo, subject, card_branch_name(task_id)
@@ -3120,18 +3159,10 @@ def _verdict_moment(path: Path, fm: dict[str, Any]) -> datetime:
     return _parse_utc(fm.get("verdict_at")) or datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
 
 
-def audit_block_state(workspace_root: Path, task_id: str) -> dict[str, Any] | None:
-    """Latest regular (non-supplementary) verdict of the card is a declared BLOCK value -> state; else None.
-    Order = record mtime, same as _read_task_records latest_verdict. consecutive = trailing BLOCK verdicts.
-    reason = the verdict record's findings summary (owner_truth_view._extract_summary_field, the truth view's verdict reader).
-    next_round = next audit round id (audit_derivation.derive_audit_task_id); redispatched_to = a later round already exists."""
-    from tools.aipos_cli.audit_derivation import audit_round_ids, derive_audit_task_id
-    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
-    from tools.aipos_cli.owner_truth_view import _extract_summary_field
+def _regular_verdicts(workspace_root: Path, task_id: str) -> list[tuple[Path, dict[str, Any]]]:
+    """本卡常规(非补审)裁决记录, 新 → 旧(记录 mtime, 与 _read_task_records latest_verdict 同一排序)。audit_block_state / candidate_fail_state 共用。"""
     from tools.aipos_cli.record_writer import record_file_prefix, record_files_with_prefix
 
-    decl = audit_blocked_declaration()
-    blocked = {str(v).upper() for v in decl["verdicts"]}
     directory = record_dir(Path(workspace_root), "audit_verdicts", task_id)
     files = sorted(record_files_with_prefix(directory, record_file_prefix("audit_verdicts")), key=lambda p: p.stat().st_mtime, reverse=True)
     regular: list[tuple[Path, dict[str, Any]]] = []
@@ -3139,6 +3170,34 @@ def audit_block_state(workspace_root: Path, task_id: str) -> dict[str, Any] | No
         fm = _read_frontmatter(path) or {}
         if not str(fm.get("supplementary_of") or "").strip():
             regular.append((path, fm))
+    return regular
+
+
+def _verdict_reason_excerpt(path: Path, fm: dict[str, Any]) -> str:
+    """裁决记录原因摘录(Findings summary / 审计结论, owner_truth_view._extract_summary_field 真相视图同一函数), 截
+    transitions nodes.N4.audit_blocked.reason_excerpt_chars 字。audit_block_state / candidate_fail_state 共用。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.owner_truth_view import _extract_summary_field
+
+    try:
+        _meta, body = require_frontmatter(path)
+    except FrontmatterReadError:
+        body = ""
+    reason = " ".join((_extract_summary_field(body, ("Findings summary", "审计结论")) or "").split())
+    limit = int(audit_blocked_declaration()["reason_excerpt_chars"])
+    return reason[:limit] + "…" if len(reason) > limit else reason
+
+
+def audit_block_state(workspace_root: Path, task_id: str) -> dict[str, Any] | None:
+    """Latest regular (non-supplementary) verdict of the card is a declared BLOCK value -> state; else None.
+    Order = record mtime, same as _read_task_records latest_verdict. consecutive = trailing BLOCK verdicts.
+    reason = the verdict record's findings summary (owner_truth_view._extract_summary_field, the truth view's verdict reader).
+    next_round = next audit round id (audit_derivation.derive_audit_task_id); redispatched_to = a later round already exists."""
+    from tools.aipos_cli.audit_derivation import audit_round_ids, derive_audit_task_id
+
+    decl = audit_blocked_declaration()
+    blocked = {str(v).upper() for v in decl["verdicts"]}
+    regular = _regular_verdicts(workspace_root, task_id)
     if not regular or str(regular[0][1].get("verdict") or "").strip().upper() not in blocked:
         return None
     # AIPOS-F202: the card's latest Owner "re-audit" ruling bounds the count - only BLOCK verdicts after it are counted
@@ -3152,15 +3211,7 @@ def audit_block_state(workspace_root: Path, task_id: str) -> dict[str, Any] | No
         if ruling is None or _verdict_moment(path, fm) > ruling["decided"]:
             consecutive += 1
     latest_path, latest = regular[0]
-    try:
-        meta, body = require_frontmatter(latest_path)
-    except FrontmatterReadError:
-        meta, body = latest, ""
-    reason = _extract_summary_field(body, ("Findings summary", "审计结论")) or ""
-    limit = int(decl["reason_excerpt_chars"])
-    reason = " ".join(reason.split())
-    if len(reason) > limit:
-        reason = reason[:limit] + "…"
+    reason = _verdict_reason_excerpt(latest_path, latest)
     blocked_audit = str(latest.get("audit_task_id") or "")
     rounds = audit_round_ids(task_id, Path(workspace_root))
     redispatched = None
@@ -3225,6 +3276,79 @@ def audit_blocked_fix_values(workspace_root: Path, task_id: str, *, actor: str, 
         return {"block_reason": "(本卡最新裁决已不是 BLOCK)", "reaudit_command": f"无需重审; 先看 lybra next --task-id {task_id} --workspace-root {workspace_root}"}
     return {"block_reason": state["reason"] or "(裁决记录无 Findings summary, 见审计报告)",
             "reaudit_command": reaudit_command(Path(workspace_root), task_id, None, state, actor=actor, policy_ref=policy_ref)}
+
+
+def candidate_fail_declaration() -> dict[str, Any]:
+    """AIPOS-F211 件④: transitions nodes.N4.candidate_fail(唯一读取口)。缺键 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = _transition_node("N4").get("candidate_fail")
+    if (not isinstance(decl, dict) or not isinstance(decl.get("verdicts"), list) or not decl["verdicts"]
+            or not all(isinstance(decl.get(k), str) and decl[k].strip() for k in ("action_type", "end_reason"))):
+        raise SchemaLoadError("transitions.schema.json nodes.N4.candidate_fail(verdicts / action_type / end_reason)未声明齐(AIPOS-F211)")
+    return decl
+
+
+def candidate_fail_state(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None) -> dict[str, Any] | None:
+    """AIPOS-F211 件④(gap #217): 交付主体为固定候选的卡(task_mode_subject_is_candidate)最新常规裁决值 ∈ nodes.N4.candidate_fail.verdicts
+    = {verdict, verdict_id, audit_task_id, reason, source, candidate}; 否则 None。来源卡 / 候选读 card_candidate_subject(卡面不合 = 只给空串, 不拒)。"""
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    if not task_mode_subject_is_candidate(str(fm.get("task_mode") or "")):
+        return None
+    decl = candidate_fail_declaration()
+    failing = {str(v).upper() for v in decl["verdicts"]}
+    regular = _regular_verdicts(workspace_root, task_id)
+    if not regular or str(regular[0][1].get("verdict") or "").strip().upper() not in failing:
+        return None
+    path, latest = regular[0]
+    try:
+        subject = card_candidate_subject(fm) or {}
+    except CandidateSubjectError:
+        subject = {}
+    return {"verdict": str(latest.get("verdict") or ""), "verdict_id": str(latest.get("verdict_id") or path.stem),
+            "audit_task_id": str(latest.get("audit_task_id") or ""), "reason": _verdict_reason_excerpt(path, latest),
+            "source": str(subject.get("source") or ""), "candidate": str(subject.get("candidate") or "")}
+
+
+def candidate_fail_fix_values(workspace_root: Path, task_id: str) -> dict[str, str]:
+    """AIPOS-F211 件④: loop status 例行修法 end_reasons.candidate_fail 的占位实值 {fail_reason, source_task, supersede_command}
+    (verbs.schema lybra_loop_status.next_action.routine_rejections.placeholders)。撤换命令 = 既有动词 `lybra queue supersede` 预演形。"""
+    path, _q = _find_task_in_queue(Path(workspace_root), task_id)
+    fm = _read_frontmatter(path) if path else {}
+    state = candidate_fail_state(Path(workspace_root), task_id, fm)
+    if state is None:
+        note = f"(本卡此刻最新裁决已不是固定候选 FAIL, 无需撤换; 先看 lybra next --task-id {task_id} --workspace-root {workspace_root})"
+        return {"fail_reason": note, "source_task": note, "supersede_command": note}
+    reason = (f"裁决 {state['verdict']} {state['verdict_id']}(审计卡 {state['audit_task_id'] or '?'}): "
+              f"{state['reason'] or '(裁决记录无 Findings summary, 见审计报告)'}")
+    source = f"来源卡 {state['source'] or '(卡面缺 validation_source_task)'}(本卡 FAIL 的固定候选 {state['candidate'] or '?'})"
+    supersede = (f"lybra --workspace-root {workspace_root} queue supersede --task-id {task_id} --by <新验证卡号> "
+                 f"--actor <你的顾问实例> --owner-words \"<Owner 原话摘要>\" --dry-run")
+    return {"fail_reason": reason, "source_task": source, "supersede_command": supersede}
+
+
+def _derive_candidate_fail(task_id: str, state: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F211 件④: N4 固定候选 FAIL → 不可推导, action candidate_fail(advisor_fix: 来源卡修复出新候选 → 另出验证卡 → queue supersede
+    本卡); 不计连败, 不进 Owner 收件箱(loop 以 end_reason 结束, 修法读 verbs.schema routine_rejections.end_reasons.candidate_fail)。"""
+    decl = candidate_fail_declaration()
+    return {
+        "task_id": task_id,
+        "derivable": False,
+        "current_node": "audit_verdict",
+        "current_state": "claimed",
+        "triggered_by": "advisor",
+        "command": "",
+        "verb": "",
+        "missing_records": [],
+        "suggested_action": (f"固定候选 {state['candidate'] or '?'} 审计 {state['verdict']}(裁决 {state['verdict_id']}): 候选本身不合格, 本卡不返工 —— "
+                             f"来源卡 {state['source'] or '?'} 修复出新候选 → 另出验证卡承接新候选 → lybra queue supersede 本卡(--by 新验证卡); "
+                             f"原因: {state['reason'] or '(见审计报告)'}"),
+        "notes": (f"N4: 固定候选验证卡裁决 {state['verdict']} = 候选不合格, 出口 = 新候选另出验证卡 + 撤换本卡, 不计连败、不升 Owner"
+                  "(AIPOS-F211 件④, 声明 transitions nodes.N4.candidate_fail)"),
+        "candidate_fail": state,
+        "action": {"type": str(decl["action_type"]), "card": task_id, "end_reason": str(decl["end_reason"]),
+                   "verdict_id": state["verdict_id"], "audit_task_id": state["audit_task_id"]},
+    }
 
 
 def _derive_audit_blocked(workspace_root: Path, task_id: str, fm: dict[str, Any], state: dict[str, Any], *,
@@ -3392,9 +3516,10 @@ def _derive_next_step(
     verdict_artifact = _check_verdict_artifact(workspace_root, task_id, fm)
     from tools.aipos_cli.audit_derivation import audit_card_reviewed_id, is_audit_card as _is_audit_card
 
-    task_mode = fm.get("task_mode", "code")
+    # AIPOS-F211 件②: 缺 task_mode 不再补 "code"(缺省 = schema missing_default, 唯一兜底 _task_mode_entry); 文案里如实显示「(缺)」
+    task_mode = str(fm.get("task_mode") or "").strip()
     assigned_to = fm.get("assigned_to") or fm.get("agent_instance") or ""
-    audit_required = fm.get("audit") == "required"
+    independent_audit = card_independent_audit(fm)  # AIPOS-F211 件④: 卡级独立审计唯一判定(模式声明或卡面 audit: required)
     owner_verify = fm.get("owner_verify") == "required"
     is_audit_card = _is_audit_card(task_id, fm)  # AIPOS-F112: 认得复审轮 R2/R3…(原 endswith("R"))
 
@@ -3467,10 +3592,9 @@ def _derive_next_step(
         # AIPOS-F73前置①: 从被审卡分支提取 artifact_subject (code 卡必填)
         reviewed_task_path, _ = _find_task_in_queue(workspace_root, reviewed_task_id)
         reviewed_fm = _read_frontmatter(reviewed_task_path) if reviewed_task_path else {}
-        reviewed_task_mode = reviewed_fm.get("task_mode", "code")
-        # AIPOS-F178: 被审卡有卡分支 = 写产品仓(唯一判据 card_writes_product_repo; 写仓的 docs 等卡与代码卡同路径绑 tip)
-        reviewed_has_branch = card_writes_product_repo(
-            workspace_root, {**reviewed_fm, "task_id": reviewed_task_id, "task_mode": str(reviewed_task_mode or "code")})
+        # AIPOS-F178: 被审卡有卡分支 = 写产品仓(唯一判据 card_writes_product_repo; 写仓的 docs 等卡与代码卡同路径绑 tip;
+        # AIPOS-F211: 缺 task_mode 按 schema missing_default, 唯一兜底 _task_mode_entry)
+        reviewed_has_branch = card_writes_product_repo(workspace_root, {**reviewed_fm, "task_id": reviewed_task_id})
         # AIPOS-F73D + F78C: 卡分支活在被审卡声明的产品仓(resolve_card_repo: lane.repo → repos 清单 → code_repo → 治理根)
         from tools.aipos_cli.workspace_config import CardRepoUnresolved
 
@@ -3490,8 +3614,7 @@ def _derive_next_step(
                 "notes": f"N4: 被审卡产品仓解析失败({exc.code}), 裁决 artifact_subject 无据(AIPOS-F78C)",
                 "action": {"type": "artifact_invalid", "card": reviewed_task_id, "path": ""},
             }
-        artifact_subject = _extract_artifact_subject_from_branch(reviewed_repo, reviewed_task_id,
-                                                                 "code" if reviewed_has_branch else reviewed_task_mode)
+        artifact_subject = _extract_artifact_subject_from_branch(reviewed_repo, reviewed_task_id) if reviewed_has_branch else None
         # AIPOS-F196 件①: 交付主体为固定候选的被审卡(validation)= 裁决绑候选(candidate_subject_values 唯一实值, 门侧同核)
         try:
             candidate_values = candidate_subject_values(workspace_root, reviewed_task_id, reviewed_fm)
@@ -3843,6 +3966,10 @@ def _derive_next_step(
                     block = audit_block_state(workspace_root, task_id)
                     if block is not None:
                         return _derive_audit_blocked(workspace_root, task_id, fm, block, conn_arg=conn_arg)
+                    # AIPOS-F211 件④(gap #217): 固定候选验证卡 FAIL = 候选不合格 → 新候选另出验证卡 + 撤换本卡(不返工, 不计连败, 不升 Owner)
+                    candidate_fail = candidate_fail_state(workspace_root, task_id, fm)
+                    if candidate_fail is not None:
+                        return _derive_candidate_fail(task_id, candidate_fail)
                     # FAIL 等非 PASS 裁决(未登记返工轮)
                     return {
                         "task_id": task_id,
@@ -3876,7 +4003,7 @@ def _derive_next_step(
             
             # N2→N3: 已 return + 未派审 → 派审。AIPOS-F73D: 审计卡由派审动作生成(transitions N3.automation.creates_audit_card),
             # 执行体零门(F73C)后不再"自产审计卡"; 审计卡已存在时派审幂等(AIPOS-C1 大项C②)。
-            if not latest_audit_dispatch and (task_mode_independent_audit(str(task_mode or "")) or audit_required):  # AIPOS-F196: 读声明
+            if not latest_audit_dispatch and independent_audit:  # AIPOS-F196 / F211: 读声明(card_independent_audit)
                 audit_id = f"{task_id}R"
                 # AIPOS-F103 件④: 信封 = 覆盖驱动方与本卡的有效信封(唯一挑选 autonomy_policy.select_envelope, 经 _driver_envelope_ref)
                 policy_ref = _driver_envelope_ref(workspace_root, task_id, fm, conn_arg)
@@ -3939,7 +4066,7 @@ def _derive_next_step(
                     "notes": "N2→N3: 已 return, 需派审" + ("(审计卡已存在, 派审幂等)" if has_audit_card else "(派审生成审计卡)"),
                 }
             # 非代码卡,不需要独立审计(AIPOS-F196: 是否独立审计读声明 enums.schema task_mode.independent_audit)
-            if not task_mode_independent_audit(str(task_mode or "")) and not audit_required:
+            if not independent_audit:
                 if card_governance_outputs(workspace_root, {**fm, "task_id": task_id}):
                     # AIPOS-F197 件②: 只写治理根的卡 = 顾问复核交回绑定的产出清单后结案(mark-concluded 结案前核此刻指纹 = 交回绑定)
                     bound = governance_outputs_return_binding(workspace_root, task_id) or {}
@@ -3955,7 +4082,7 @@ def _derive_next_step(
                         "current_node": "return",
                         "current_state": "claimed",
                         "triggered_by": "advisor",
-                        "command": (f"# 非代码卡(task_mode={task_mode}, 只写治理根):顾问复核交回的产出清单"
+                        "command": (f"# 非代码卡(task_mode={task_mode or '(缺)'}, 只写治理根):顾问复核交回的产出清单"
                                     f"(指纹 {bound.get('outputs_digest') or '(交回记录无绑定)'})后结案: {close_cmd}"),
                         "verb": "lybra_mark_concluded",
                         "advisor_command": close_cmd,  # AIPOS-F207 件③: loop status advisor_review_close 的 hint 读此(不解析注释行)
@@ -3969,7 +4096,7 @@ def _derive_next_step(
                     "current_node": "return",
                     "current_state": "claimed",
                     "triggered_by": "advisor",
-                    "command": f"# 非代码卡(task_mode={task_mode}):顾问审核后直接提交裁决",
+                    "command": f"# 非代码卡(task_mode={task_mode or '(缺)'}):顾问审核后直接提交裁决",
                     "verb": "lybra_audit_verdict_dry_run",
                     "missing_records": [],
                     "suggested_action": "顾问审核并提交裁决",
@@ -5164,13 +5291,18 @@ def _execute_claim_with_role_token(
         return run
 
     task_path, _queue = _find_task_in_queue(workspace_root, task_id)
-    fm = _read_frontmatter(task_path) if task_path else {}
+    if not task_path:
+        # AIPOS-F211 件②: 门报认领成功却在队列找不到卡 = 停线点名(原按 {"task_mode": "code"} 猜卡面, 第二份缺省)
+        return {"ok": False, "action_type": "claim",
+                "message": f"门报认领成功但队列中找不到卡 {task_id}, 无法核验卡工作树; 出口: lybra next --task-id {task_id} 重推导",
+                "command": command, "exit_code": 1, "output": str(run.get("output") or ""), "worktree_path": ""}
+    fm = _read_frontmatter(task_path)
     assigned_to = str(fm.get("assigned_to") or fm.get("agent_instance") or "")
     worktree_path = ""
     # AIPOS-F89 件③a: 认领须建树的判据与门侧同一函数 card_needs_worktree(代码卡 + 代码卡的审计卡)
     repair_note = ""
     repair: dict[str, Any] = {}
-    if card_needs_worktree(workspace_root, fm if fm else {"task_mode": "code"}):
+    if card_needs_worktree(workspace_root, fm):
         view = card_workstation_view(workspace_root, task_id, fm)
         if not view.get("worktree_exists"):
             # AIPOS-F178 件③: 认领后核验缺树 = 自动走缺树修复唯一实现(queue repair 同一函数, 写修复记录); 修不了才停并给命令
