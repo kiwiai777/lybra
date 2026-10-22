@@ -3129,6 +3129,12 @@ def audit_blocked_declaration() -> dict[str, Any]:
             or not all(isinstance(c, str) and c.strip() for c in reaudit["choices"])
             or not isinstance(reaudit.get("dispatch_reason"), str) or not reaudit["dispatch_reason"].strip()):
         raise SchemaLoadError("transitions.schema.json nodes.N4.audit_blocked.owner_reaudit 须有非空 choices(选项键)与 dispatch_reason")
+    # AIPOS-F213 件③(F208 P1-8 选项): choices 须为收件箱对连续 BLOCK 事由恒给的选项(pinned_options_by_reason[repeated_end_reason]);
+    # 一侧改名 = 声明加载即红(原只校验非空, 收件箱改名后 Owner 裁决不再命中、重新派审静默失效)。校验唯一实现 queue_mutation.require_inbox_choices
+    from tools.aipos_cli.queue_mutation import require_inbox_choices
+
+    require_inbox_choices(reaudit["choices"], "transitions nodes.N4.audit_blocked.owner_reaudit.choices",
+                          pinned=("loop_owner_needed", str(decl["repeated_end_reason"])))
     return decl
 
 

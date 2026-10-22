@@ -396,7 +396,7 @@ def test_item3_declarations_single_source() -> None:
     assert queue_mutation.ALLOWED_TRANSITIONS["supersede"] == (("pending", "claimed", "blocked"), "withdrawn")
     assert decl["decision_choice"] in inbox_declaration()["options"]
     card_fields = set(load_schema("card", code_repo_schema_root())["fields"])
-    assert set(decl["card_fields"]) <= card_fields
+    assert set(decl["card_fields"].values()) <= card_fields  # AIPOS-F213 件⑤: 角色 → 卡面键名
     verbs = load_schema("verbs", code_repo_schema_root())["verbs"]
     assert verbs["lybra_queue_supersede"]["cli_command"] == "lybra queue supersede"
     landing = verbs["lybra_governance_commit"]["post_write_landing"]["commands"]["queue_writers"]

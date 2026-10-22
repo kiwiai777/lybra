@@ -1640,44 +1640,34 @@ def _land_project_writes(project_root: str | Path, written: list[str | Path], *,
     governance_commit.land_written_paths(N6 同一提交口, 声明 verbs.lybra_governance_commit.post_write_landing.commands.project_writers),
     不另写 git 逻辑。written = 本次写出的文件(绝对或治理根相对), 换算为治理根相对路径作 --paths 白名单。
     落账声明不可读 = 不落账(fail-closed), 写入已生效: 拒因出声, exit 1(与 envelope mint 同一处置)。返回 land_written_paths 的结果(含 line)。
-    AIPOS-F184 件②: command = post_write_landing.commands 的键(缺省 project_writers; 队列写命令 = queue_writers, fields 带 task_id)。"""
-    from tools.aipos_cli.governance_commit import land_written_paths
-    from tools.schema_loader import SchemaLoadError
+    AIPOS-F213 件①: 路径换算 / 声明不可读处置收为写后落账唯一薄壳 board_adapter.land_after_write(队列写 / owner decide 同用), 本函数只填
+    project 族的提交信息字段。"""
+    from tools.aipos_cli.board_adapter import land_after_write
 
-    root = Path(project_root).resolve()
-    rels = sorted({(Path(p).resolve().relative_to(root) if Path(p).is_absolute() else Path(p)).as_posix() for p in written})
-    try:
-        return land_written_paths(root, rels, actor, command=command, subcommand=subcommand, project=project, **fields)
-    except SchemaLoadError as exc:
-        return {"landed": False, "exit_code": 1, "reason": str(exc), "paths": rels,
-                "line": f"⚠ 落账未完成(写入已生效, 勿重复执行写命令): {exc}"}
+    return land_after_write(project_root, list(written), actor=actor, command=command, subcommand=subcommand, project=project,
+                            **fields)
 
 
 def _landing_view(landing: dict[str, Any] | None) -> dict[str, Any] | None:
-    """落账结果的 JSON 视图(去掉供文本输出的 line)。"""
-    return None if landing is None else {k: v for k, v in landing.items() if k != "line"}
+    """落账结果的 JSON 视图(去掉供文本输出的 line; 唯一实现 board_adapter.landing_view)。"""
+    from tools.aipos_cli.board_adapter import landing_view
+
+    return landing_view(landing)
 
 
-def _queue_write_paths(result: dict[str, Any]) -> list[str]:
-    """AIPOS-F184 件②: 队列写命令本次写出的文件(治理根相对): 卡文件迁移前后路径 + 新增 / 更新的记录(record_writes / record_updates
-    中 wrote / updated 者)。只认已写入(moved / wrote)的结果; 未写入 = []。"""
-    data = result.get("data") if isinstance(result.get("data"), dict) else result
-    if not (data.get("moved") or data.get("wrote")):
-        return []
-    paths = [str(data[k]) for k in ("source_path", "target_path", "worktree_cleanup_record") if data.get(k)]  # AIPOS-F187: 清理记录随同落账
-    for item in list(result.get("record_writes") or []) + list(result.get("record_updates") or []):
-        if isinstance(item, dict) and item.get("path") and (item.get("wrote") or item.get("updated")):
-            paths.append(str(item["path"]))
-    return paths
+def _land_queue_entry(repo_root: Path, result: dict[str, Any], *, actor: str, subcommand: str, task_id: str,
+                      written: list[str] | None = None) -> dict[str, Any] | None:
+    """AIPOS-F213 件①: CLI 队列写命令(block / reopen / withdraw / amend / supersede / correct / return-repair)写入成功后的落账——
+    同一薄壳 board_adapter.land_after_write(command = queue_writers, 与 MCP 确认分支 / owner decide 同一实现); 写出清单缺省 =
+    board_adapter.queue_write_paths(result)(两阶段撤换 / 纠正给自报的 written)。无写出 = None(不落)。落账失败不回滚队列状态。
+    结果的 JSON 视图同时挂到 result["landing"]。"""
+    from tools.aipos_cli.board_adapter import land_after_write, landing_view, queue_write_paths
 
-
-def _land_queue_write(repo_root: Path, written: list[str], *, actor: str, subcommand: str, task_id: str) -> dict[str, Any] | None:
-    """AIPOS-F184 件②: queue block / reopen / withdraw / supersede 写入成功后的落账(同一薄壳 _land_project_writes → land_written_paths,
-    声明 verbs.lybra_governance_commit.post_write_landing.commands.queue_writers)。无写出 = None(不落)。落账失败不回滚队列状态。"""
-    if not written:
-        return None
-    return _land_project_writes(repo_root, written, actor=actor, subcommand=subcommand, project=Path(repo_root).resolve().name,
-                                command="queue_writers", task_id=task_id)
+    paths = list(written) if written is not None else queue_write_paths(result)
+    landing = land_after_write(repo_root, paths, actor=actor, command="queue_writers", subcommand=subcommand, task_id=task_id)
+    if landing is not None:
+        result["landing"] = landing_view(landing)
+    return landing
 
 
 def _emit_landing(landing: dict[str, Any] | None) -> int:
@@ -2328,8 +2318,14 @@ def build_parser() -> argparse.ArgumentParser:
     queue_supersede_parser.add_argument("--task-id", required=True, help="Card being superseded (pending / claimed / blocked)")
     queue_supersede_parser.add_argument("--by", required=True, help="New card task_id that takes over (must already be in the queue, not withdrawn)")
     queue_supersede_parser.add_argument("--actor", required=True, help="Advisor instance performing the supersede (recorded as the relayer)")
-    queue_supersede_parser.add_argument("--owner-words", required=True, help="Owner's words, one line (card face + decision record rationale)")
+    queue_supersede_parser.add_argument("--owner-words", default=None, help="Owner's words, one line (card face + decision record rationale); "
+                                        "with --decision-id defaults to the referenced ruling's Owner words")
     queue_supersede_parser.add_argument("--owner-ref", default=None, help="Optional: where the Owner ruled (inbox item id / decision record id / session ref)")
+    # AIPOS-F213 件②: 引用收件箱已有裁决(核验唯一实现 owner_inbox.referenced_ruling; 不另记决策)
+    queue_supersede_parser.add_argument("--decision-id", default=None,
+                                        help="AIPOS-F213: reference an Owner ruling already recorded in the inbox (owner decision record id; the "
+                                             "inbox relay gives it): no second decision record; refused if the ruling's choice is not supersede, it is "
+                                             "for another card, or another action already used it")
     # AIPOS-F186: 撤换承继(声明 transitions supersede.carry_branch; 判定唯一实现 queue_mutation.supersede_carry_plan)
     queue_supersede_parser.add_argument("--carry-branch", action="store_true", default=False,
                                         help="AIPOS-F186: the new card carries the old card's branch and committed work (new card must be pending "
@@ -2348,6 +2344,11 @@ def build_parser() -> argparse.ArgumentParser:
     queue_correct_parser.add_argument("--reason", default=None, help="Optional: why the closure was wrong")
     queue_correct_parser.add_argument("--followup-title", default=None, help="Optional: follow-up card title")
     queue_correct_parser.add_argument("--owner-ref", default=None, help="Optional: where the Owner ruled (session ref / inbox item id)")
+    # AIPOS-F213 件②: 引用收件箱已有纠正裁决(核验唯一实现 owner_inbox.referenced_ruling; 不另记决策)
+    queue_correct_parser.add_argument("--decision-id", default=None,
+                                      help="AIPOS-F213: reference an Owner correction ruling already recorded in the inbox (owner decision record id): "
+                                           "no second decision record; --owner-words defaults to the ruling's words; refused if the choice / card do "
+                                           "not match or the ruling was already used")
     queue_correct_parser.add_argument("--connection-json", default=None, help="Credential file for the publish signer check (default: governance root .lybra/connection.json)")
     queue_correct_mode = queue_correct_parser.add_mutually_exclusive_group()
     queue_correct_mode.add_argument("--dry-run", action="store_true", help="Preview, zero writes (default)")
@@ -3765,6 +3766,127 @@ def _workspace_roots_command(args: argparse.Namespace) -> int:
 
 
 @cli_envelope_trace_entry  # AIPOS-F142 件②: 本次 CLI 调用结束即恢复 [ENVELOPE_TRACE] 开关原状(in-process 嵌套调用不泄漏)
+def _queue_return_repair(args: argparse.Namespace, repo_root: Path) -> int:
+    """`lybra queue return-repair`(AIPOS-370F2): 诊断并修复卡住的交回(无会话记录 = block → reopen → 带会话记录重认领)。
+    AIPOS-F213 件①(F208 P1-6 E35): 修复序列的三步写入(卡迁移 + 重认领会话记录)写完经队列写落账唯一薄壳一次落账
+    (queue_writers return-repair; 原 3 处 mutate_queue_task 直调绕过落账); 某步被拒 = 已写的前几步照落账再出拒因。"""
+    # AIPOS-370F2: return-repair — diagnose and repair stuck return
+    from tools.aipos_cli.task_loader import find_task_by_id
+    
+    try:
+        task, all_matches = find_task_by_id(args.task_id, repo_root)
+        if not task:
+            print(f"Error: Task {args.task_id} not found", file=sys.stderr)
+            return 1
+        if len(all_matches) > 1:
+            print(f"Error: Multiple tasks match {args.task_id}", file=sys.stderr)
+            return 1
+        
+        records = load_records(repo_root)
+        task_claims = [c for c in records.get("claims", []) if c.get("task_id") == args.task_id]
+        task_returns = [r for r in records.get("returns", []) if r.get("task_id") == args.task_id]
+        task_sessions = records.get("task_sessions", {}).get(args.task_id, [])
+        
+        diagnosis = {
+            "operation": "return_repair",
+            "task_id": args.task_id,
+            "current_state": task.get("queue_state"),
+            "claim_count": len(task_claims),
+            "return_count": len(task_returns),
+            "session_count": len(task_sessions),
+            "diagnosis": [],
+            "recommended_action": None,
+            "repair_actions": [],
+        }
+        
+        # Diagnose stuck patterns
+        if task.get("queue_state") == "claimed" and not task_returns:
+            diagnosis["diagnosis"].append("Task is claimed but no return records found (stuck return)")
+            metadata = task.get("metadata", {})
+            session_id = metadata.get("active_session_id") or metadata.get("last_session_id")
+            
+            # Check if session record exists
+            session_exists = False
+            if session_id:
+                session_path = expected_session_record_path(repo_root, args.task_id, session_id)
+                session_exists = session_path.exists()
+                diagnosis["session_id"] = session_id
+                diagnosis["session_record_exists"] = session_exists
+            
+            if not args.dry_run:
+                # AIPOS-370F2: Real repair — file-CLI claim doesn't build session records,
+                # causing gate-verb return to fail. Two strategies:
+                # 1. If no session_id or session doesn't exist: block→reopen→reclaim with --with-records
+                # 2. If session exists but return blocked: manual gate-verb return needed (out of scope)
+                
+                if not session_id or not session_exists:
+                    diagnosis["repair_actions"].append("No session record; executing: block → reopen → reclaim with session record")
+                    profiles = load_agent_profiles(repo_root)
+                    from tools.aipos_cli.board_adapter import queue_write_paths
+
+                    # AIPOS-F213 件①: 三步同一搬卡出口(block → reopen → 带会话记录重认领), 写出文件累计后经队列写落账唯一薄壳落账
+                    steps = (("block", {"reason": "AIPOS-370F2 return-repair: missing session record", "with_records": False},
+                              "Blocked", "Block"),
+                             ("reopen", {"reason": "AIPOS-370F2 return-repair: prepare for reclaim with session record",
+                                         "with_records": False}, "Reopened", "Reopen"),
+                             ("claim", {"with_records": True}, "Reclaimed with session record", "Reclaim"))
+                    written: list[str] = []
+                    reclaim_result: dict[str, Any] = {}
+                    for action, step_kwargs, done_label, fail_label in steps:
+                        step_result = mutate_queue_task(repo_root, action, task_id=args.task_id, actor=args.actor, dry_run=False,
+                                                        profiles=profiles, **step_kwargs)
+                        if step_result.get("verdict") == Verdict.BLOCK:
+                            diagnosis["verdict"] = Verdict.BLOCK
+                            diagnosis["repair_error"] = f"{fail_label} failed: {step_result.get('blocking_reasons')}"
+                            landing = _land_queue_entry(repo_root, diagnosis, actor=args.actor, subcommand="return-repair",
+                                                        task_id=args.task_id, written=written)  # 已写的前几步照落账
+                            print(render_json(diagnosis), file=sys.stderr)
+                            if landing is not None and not args.json:
+                                _emit_landing(landing)
+                            return 1
+                        written += queue_write_paths(step_result)
+                        diagnosis["repair_actions"].append(f"{done_label}: {args.task_id}")
+                        reclaim_result = step_result
+                    diagnosis["landing_paths"] = list(written)
+                    diagnosis["new_session_id"] = reclaim_result.get("proposed_session_id")
+                    diagnosis["verdict"] = "REPAIRED"
+                    diagnosis["recommended_action"] = "Task reclaimed with session record; now ready for gate-verb return"
+                else:
+                    diagnosis["verdict"] = "OK"
+                    diagnosis["recommended_action"] = "Session record exists; use lybra_queue_return gate tool to complete return"
+            else:
+                # Dry-run: just diagnose
+                if not session_id or not session_exists:
+                    diagnosis["recommended_action"] = "Would execute: block → reopen → reclaim with --with-records"
+                else:
+                    diagnosis["recommended_action"] = "Session record exists; use lybra_queue_return gate tool"
+                diagnosis["verdict"] = "OK"
+        elif task.get("queue_state") == "claimed" and task_returns:
+            diagnosis["diagnosis"].append(f"Task has {len(task_returns)} return record(s) but still in claimed state")
+            diagnosis["recommended_action"] = "State inconsistency detected; requires manual queue state correction"
+            diagnosis["verdict"] = Verdict.BLOCK
+        else:
+            diagnosis["diagnosis"].append(f"Task is in {task.get('queue_state')} state")
+            diagnosis["recommended_action"] = "No stuck return detected"
+            diagnosis["verdict"] = "OK"
+        
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    landing = None
+    if diagnosis.get("verdict") == "REPAIRED":
+        landing = _land_queue_entry(repo_root, diagnosis, actor=args.actor, subcommand="return-repair", task_id=args.task_id,
+                                    written=list(diagnosis.pop("landing_paths", [])))
+    diagnosis.pop("landing_paths", None)
+    print(render_json(diagnosis))
+    if diagnosis.get("verdict") == Verdict.BLOCK:
+        return 1
+    if landing is not None and not args.json:
+        return _emit_landing(landing)
+    return 0 if landing is None or landing["landed"] else int(landing["exit_code"])
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -6332,12 +6454,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
         # AIPOS-F184 件②(gap #165): block / reopen 写入成功后即按路径清单落账(queue_writers; claim 由门 / N6 落账, 不在此)
+        # AIPOS-F213 件①: 经写后落账唯一薄壳(登记 post_write_landing.queue_write_sites)
         landing = None
         if args.queue_command in {"block", "reopen"} and not args.dry_run and result.get("verdict") != Verdict.BLOCK:
-            landing = _land_queue_write(repo_root, _queue_write_paths(result), actor=args.actor, subcommand=args.queue_command,
+            landing = _land_queue_entry(repo_root, result, actor=args.actor, subcommand=args.queue_command,
                                         task_id=str(result.get("task_id") or getattr(args, "task_id", None) or ""))
-            if landing is not None:
-                result["landing"] = _landing_view(landing)
         if args.json:
             print(render_json(result))
         else:
@@ -6375,11 +6496,17 @@ def main(argv: list[str] | None = None) -> int:
         except (FileNotFoundError, OSError, ValueError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
-        if args.json:
-            print(render_json(result))
-        else:
-            print(render_json(result))
-        return 1 if result.get("verdict") == Verdict.BLOCK else 0
+        # AIPOS-F213 件①(F208 P1-6): 修订写入成功后即落账(卡面 + 修订记录; 原 CLI amend 不落账)——同一薄壳 queue_writers
+        landing = None
+        if not args.dry_run and result.get("ok") and result.get("verdict") != Verdict.BLOCK:
+            landing = _land_queue_entry(repo_root, result, actor=args.actor, subcommand="amend",
+                                        task_id=str((result.get("data") or {}).get("task_id") or args.task_id))
+        print(render_json(result))
+        if result.get("verdict") == Verdict.BLOCK:
+            return 1
+        if landing is not None and not args.json:
+            return _emit_landing(landing)
+        return 0 if landing is None or landing["landed"] else int(landing["exit_code"])
 
     if args.command == "queue" and getattr(args, "queue_command", None) == "withdraw":
         from tools.aipos_cli.board_adapter import withdraw_task
@@ -6397,10 +6524,8 @@ def main(argv: list[str] | None = None) -> int:
         # AIPOS-F184 件②(gap #165): 撤回写入成功后即按路径清单落账(源路径删除 + withdrawn 新卡面)
         landing = None
         if not args.dry_run and result.get("ok") and result.get("verdict") != Verdict.BLOCK:
-            landing = _land_queue_write(repo_root, _queue_write_paths(result), actor=args.actor, subcommand="withdraw",
+            landing = _land_queue_entry(repo_root, result, actor=args.actor, subcommand="withdraw",
                                         task_id=str((result.get("data") or {}).get("task_id") or args.task_id))
-            if landing is not None:
-                result["landing"] = _landing_view(landing)
         print(render_json(result))
         if result.get("verdict") == Verdict.BLOCK:
             return 1
@@ -6412,17 +6537,19 @@ def main(argv: list[str] | None = None) -> int:
         # AIPOS-F184 件③: 顾问凭 Owner 裁决撤换在途卡(唯一实现 board_adapter.supersede_task; 写出文件经 queue_writers 落账)
         from tools.aipos_cli.board_adapter import supersede_task
 
+        # AIPOS-F213 件②: --owner-words 在带 --decision-id 时可省(取自该裁决); 两者都无 = 撤换前置拒(missing_words, 既有拒法)
         try:
             result = supersede_task(args.task_id, by=args.by, actor=args.actor, owner_words=args.owner_words,
                                     owner_ref=args.owner_ref, dry_run=not args.confirm, repo_root=repo_root,
-                                    carry_branch=bool(getattr(args, "carry_branch", False)))
+                                    carry_branch=bool(getattr(args, "carry_branch", False)),
+                                    decision_id=getattr(args, "decision_id", None))
         except (FileNotFoundError, OSError, ValueError, LookupError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
         landing = None
         if args.confirm and result.get("written"):
-            landing = _land_queue_write(repo_root, result["written"], actor=args.actor, subcommand="supersede", task_id=result["task_id"])
-            result["landing"] = _landing_view(landing)
+            landing = _land_queue_entry(repo_root, result, actor=args.actor, subcommand="supersede", task_id=result["task_id"],
+                                        written=result["written"])
         if args.json:
             print(render_json(result))
         else:
@@ -6451,7 +6578,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             result = correct_closed_task(args.task_id, relayed_by=args.relayed_by, owner_words=args.owner_words, reason=args.reason,
                                          followup_title=args.followup_title, owner_ref=args.owner_ref, dry_run=not args.confirm,
-                                         repo_root=repo_root, connection_json=_queue_gate_connection_json(args, repo_root))
+                                         repo_root=repo_root, connection_json=_queue_gate_connection_json(args, repo_root),
+                                         decision_id=getattr(args, "decision_id", None))
         except InboxUsageError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 2
@@ -6460,9 +6588,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         landing = None
         if args.confirm and result.get("written"):
-            landing = _land_queue_write(repo_root, result["written"], actor=str(result.get("relayed_by") or args.relayed_by),
-                                        subcommand="correct", task_id=result["task_id"])
-            result["landing"] = _landing_view(landing)
+            landing = _land_queue_entry(repo_root, result, actor=str(result.get("relayed_by") or args.relayed_by),
+                                        subcommand="correct", task_id=result["task_id"], written=result["written"])
         if args.json:
             print(render_json(result))
         else:
@@ -6477,139 +6604,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if landing is None or landing["landed"] else int(landing["exit_code"])
 
     if args.command == "queue" and getattr(args, "queue_command", None) == "return-repair":
-        # AIPOS-370F2: return-repair — diagnose and repair stuck return
-        from tools.aipos_cli.task_loader import find_task_by_id
-        
-        try:
-            task, all_matches = find_task_by_id(args.task_id, repo_root)
-            if not task:
-                print(f"Error: Task {args.task_id} not found", file=sys.stderr)
-                return 1
-            if len(all_matches) > 1:
-                print(f"Error: Multiple tasks match {args.task_id}", file=sys.stderr)
-                return 1
-            
-            records = load_records(repo_root)
-            task_claims = [c for c in records.get("claims", []) if c.get("task_id") == args.task_id]
-            task_returns = [r for r in records.get("returns", []) if r.get("task_id") == args.task_id]
-            task_sessions = records.get("task_sessions", {}).get(args.task_id, [])
-            
-            diagnosis = {
-                "operation": "return_repair",
-                "task_id": args.task_id,
-                "current_state": task.get("queue_state"),
-                "claim_count": len(task_claims),
-                "return_count": len(task_returns),
-                "session_count": len(task_sessions),
-                "diagnosis": [],
-                "recommended_action": None,
-                "repair_actions": [],
-            }
-            
-            # Diagnose stuck patterns
-            if task.get("queue_state") == "claimed" and not task_returns:
-                diagnosis["diagnosis"].append("Task is claimed but no return records found (stuck return)")
-                metadata = task.get("metadata", {})
-                session_id = metadata.get("active_session_id") or metadata.get("last_session_id")
-                
-                # Check if session record exists
-                session_exists = False
-                if session_id:
-                    session_path = expected_session_record_path(repo_root, args.task_id, session_id)
-                    session_exists = session_path.exists()
-                    diagnosis["session_id"] = session_id
-                    diagnosis["session_record_exists"] = session_exists
-                
-                if not args.dry_run:
-                    # AIPOS-370F2: Real repair — file-CLI claim doesn't build session records,
-                    # causing gate-verb return to fail. Two strategies:
-                    # 1. If no session_id or session doesn't exist: block→reopen→reclaim with --with-records
-                    # 2. If session exists but return blocked: manual gate-verb return needed (out of scope)
-                    
-                    if not session_id or not session_exists:
-                        diagnosis["repair_actions"].append("No session record; executing: block → reopen → reclaim with session record")
-                        profiles = load_agent_profiles(repo_root)
-                        
-                        # Step 1: block
-                        block_result = mutate_queue_task(
-                            repo_root, "block",
-                            task_id=args.task_id,
-                            actor=args.actor,
-                            reason="AIPOS-370F2 return-repair: missing session record",
-                            dry_run=False,
-                            profiles=profiles,
-                            with_records=False,
-                        )
-                        if block_result.get("verdict") == Verdict.BLOCK:
-                            diagnosis["verdict"] = Verdict.BLOCK
-                            diagnosis["repair_error"] = f"Block failed: {block_result.get('blocking_reasons')}"
-                            print(render_json(diagnosis), file=sys.stderr)
-                            return 1
-                        diagnosis["repair_actions"].append(f"Blocked: {args.task_id}")
-                        
-                        # Step 2: reopen
-                        reopen_result = mutate_queue_task(
-                            repo_root, "reopen",
-                            task_id=args.task_id,
-                            actor=args.actor,
-                            reason="AIPOS-370F2 return-repair: prepare for reclaim with session record",
-                            dry_run=False,
-                            profiles=profiles,
-                            with_records=False,
-                        )
-                        if reopen_result.get("verdict") == Verdict.BLOCK:
-                            diagnosis["verdict"] = Verdict.BLOCK
-                            diagnosis["repair_error"] = f"Reopen failed: {reopen_result.get('blocking_reasons')}"
-                            print(render_json(diagnosis), file=sys.stderr)
-                            return 1
-                        diagnosis["repair_actions"].append(f"Reopened: {args.task_id}")
-                        
-                        # Step 3: reclaim with --with-records to create session record
-                        reclaim_result = mutate_queue_task(
-                            repo_root, "claim",
-                            task_id=args.task_id,
-                            actor=args.actor,
-                            dry_run=False,
-                            profiles=profiles,
-                            with_records=True,
-                        )
-                        if reclaim_result.get("verdict") == Verdict.BLOCK:
-                            diagnosis["verdict"] = Verdict.BLOCK
-                            diagnosis["repair_error"] = f"Reclaim failed: {reclaim_result.get('blocking_reasons')}"
-                            print(render_json(diagnosis), file=sys.stderr)
-                            return 1
-                        diagnosis["repair_actions"].append(f"Reclaimed with session record: {args.task_id}")
-                        diagnosis["new_session_id"] = reclaim_result.get("proposed_session_id")
-                        diagnosis["verdict"] = "REPAIRED"
-                        diagnosis["recommended_action"] = "Task reclaimed with session record; now ready for gate-verb return"
-                    else:
-                        diagnosis["verdict"] = "OK"
-                        diagnosis["recommended_action"] = "Session record exists; use lybra_queue_return gate tool to complete return"
-                else:
-                    # Dry-run: just diagnose
-                    if not session_id or not session_exists:
-                        diagnosis["recommended_action"] = "Would execute: block → reopen → reclaim with --with-records"
-                    else:
-                        diagnosis["recommended_action"] = "Session record exists; use lybra_queue_return gate tool"
-                    diagnosis["verdict"] = "OK"
-            elif task.get("queue_state") == "claimed" and task_returns:
-                diagnosis["diagnosis"].append(f"Task has {len(task_returns)} return record(s) but still in claimed state")
-                diagnosis["recommended_action"] = "State inconsistency detected; requires manual queue state correction"
-                diagnosis["verdict"] = Verdict.BLOCK
-            else:
-                diagnosis["diagnosis"].append(f"Task is in {task.get('queue_state')} state")
-                diagnosis["recommended_action"] = "No stuck return detected"
-                diagnosis["verdict"] = "OK"
-            
-        except (FileNotFoundError, OSError, ValueError) as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            return 1
-        
-        if args.json:
-            print(render_json(diagnosis))
-        else:
-            print(render_json(diagnosis))
-        return 1 if diagnosis.get("verdict") == Verdict.BLOCK else 0
+        return _queue_return_repair(args, repo_root)
 
     if args.command == "queue" and getattr(args, "queue_command", None) == "repair":
         # AIPOS-F65C 件①: repair bad frontmatter
@@ -7533,11 +7528,18 @@ def main(argv: list[str] | None = None) -> int:
                 "tree_hash": getattr(args, 'artifact_subject_tree_hash', ''),
             }
         
+        # AIPOS-F213 件④(F208 P1-9): 不给 --audit-task-id = 审计卡查找唯一实现自发现最新一轮在途审计卡(F202 重新派审后 R / R2 并存
+        # 命中 R2; 原 audit_helpers 同名函数命中多张即 None, 自发现必失败)
+        audit_task_id = getattr(args, 'audit_task_id', None)
+        if not audit_task_id:
+            from tools.aipos_cli.audit_derivation import find_open_audit_task
+
+            audit_task_id = find_open_audit_task(args.reviewed_task_id, workspace_root)
         dry_run_args = build_audit_verdict_dry_run_args(
             reviewed_task_id=args.reviewed_task_id,
             verdict=args.verdict,
             context=context,
-            audit_task_id=getattr(args, 'audit_task_id', None),
+            audit_task_id=audit_task_id,
             findings_summary=getattr(args, 'findings_summary', None),
             evidence_refs=evidence_refs if evidence_refs else None,
             audit_claim_id=getattr(args, 'audit_claim_id', None),

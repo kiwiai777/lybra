@@ -804,6 +804,9 @@ def collect_project_inbox(governance_root: Path, *, project: str | None = None, 
         if categories is None or "needs_owner_card" in categories:
             relays += _released_relays(root, name, decl, errors)  # AIPOS-F201 item 3 (b)
             relays += _correction_relays(root, name, decl, errors)  # AIPOS-F207 件②: 纠正已记、承接卡未开跑
+            # AIPOS-F213 件②: 选撤换 / 纠正的收件箱裁决尚未执行 = 转达带 --decision-id 的命令(与上面已有转达同一裁决不重复)
+            seen = {str(r.get("decision_id")) for r in relays if r.get("decision_id")}
+            relays += [r for r in _queue_ruling_relays(root, name, decl, errors) if str(r.get("decision_id")) not in seen]
     return {"project": name, "governance_root": str(root), "items": items, "decided_hidden": len(decided), "errors": errors,
             "relays": relays}
 
@@ -951,11 +954,14 @@ def _resume_for(root: Path, task_id: str | None, advisor: str | None, envelope: 
     return _fmt(status_contract()["next_action"]["routine_rejections"]["resume_hint"], "resume_hint", **_resume_fill(view, Path(root)))
 
 
-def option_next(decl: dict[str, Any], choice: str, label: str, *, resume: str, task_id: str | None, governance_root: Path) -> str:
-    """选项的顾问下一步(options.<键>.advisor_next; 自定义选项 = custom_option.advisor_next)。裁决行 ruling_view 与话术同用。"""
+def option_next(decl: dict[str, Any], choice: str, label: str, *, resume: str, task_id: str | None, governance_root: Path,
+                decision_id: str | None = None) -> str:
+    """选项的顾问下一步(options.<键>.advisor_next; 自定义选项 = custom_option.advisor_next)。裁决行 ruling_view 与话术同用。
+    AIPOS-F213 件②: decision_id = 该裁决的决策记录 id(撤换 / 纠正选项的命令带 --decision-id 引用它, 不另记裁决)。"""
     spec = decl["options"].get(choice)
     template = (spec or {}).get("advisor_next") or decl["custom_option"]["advisor_next"]
-    return _fmt(template, "options.advisor_next", resume=resume, task_id=task_id or "", governance_root=str(governance_root), label=label)
+    return _fmt(template, "options.advisor_next", resume=resume, task_id=task_id or "", governance_root=str(governance_root), label=label,
+                decision_id=decision_id or "<decision_id>")
 
 
 def _within_window(text: Any, decl: dict[str, Any]) -> bool:
@@ -980,7 +986,8 @@ def _decision_relay(root: Path, item: dict[str, Any], ruling: dict[str, Any], de
             "task_id": item.get("task_id"), "subject": item["subject"], "item_id": item["item_id"],
             "decision_id": ruling.get("decision_id") or item["decision_id"], "choice": choice, "label": label,
             "owner_words": ruling.get("owner_words"), "done_at": ruling.get("decided_at"),
-            "advisor_next": option_next(decl, choice, label, resume=resume, task_id=item.get("task_id"), governance_root=root)}
+            "advisor_next": option_next(decl, choice, label, resume=resume, task_id=item.get("task_id"), governance_root=root,
+                                        decision_id=ruling.get("decision_id") or item["decision_id"])}
 
 
 def _ruled_loop_relay(root: Path, project: str, *, task_id: str, view: dict[str, Any], na: dict[str, Any],
@@ -1055,7 +1062,8 @@ def _released_relays(root: Path, project: str, decl: dict[str, Any], errors: lis
                     "subject": _fmt(cat["subject"], "categories.needs_owner_card.subject", task_id=task_id, queue_state=state),
                     "item_id": None, "decision_id": ruling.get("decision_id"), "choice": choice, "label": label,
                     "owner_words": ruling.get("owner_words"), "done_at": ruling.get("decided_at"),
-                    "advisor_next": option_next(decl, choice, label, resume=resume, task_id=task_id, governance_root=root)})
+                    "advisor_next": option_next(decl, choice, label, resume=resume, task_id=task_id, governance_root=root,
+                                                decision_id=ruling.get("decision_id"))})
     return out
 
 
@@ -1098,7 +1106,115 @@ def _correction_relays(root: Path, project: str, decl: dict[str, Any], errors: l
                     "subject": f"{task_id} → {followup}", "item_id": None, "decision_id": ruling.get("decision_id"), "choice": choice,
                     "label": label, "owner_words": ruling.get("owner_words"), "done_at": ruling.get("decided_at"),
                     "advisor_next": option_next(decl, choice, label, resume=_resume_for(root, followup, advisor), task_id=task_id,
-                                                governance_root=root)})
+                                                governance_root=root, decision_id=ruling.get("decision_id"))})
+    return out
+
+
+def _queue_ruling_actions() -> dict[str, dict[str, Any]]:
+    """AIPOS-F213 件②: 可引用收件箱裁决的队列写动作 → {选项: {action, from_states}}(声明 transitions queue_mutations.transitions.supersede /
+    queue_mutations.correct 的 decision_choice 与源状态; 唯一读取口 queue_mutation.supersede_declaration / correct_declaration)。"""
+    from tools.aipos_cli.queue_mutation import correct_declaration, supersede_declaration
+
+    sup, cor = supersede_declaration(), correct_declaration()
+    return {str(sup["decision_choice"]): {"action": "queue supersede", "from_states": tuple(sup["from_states"])},
+            str(cor["decision_choice"]): {"action": "queue correct", "from_states": tuple(cor["from_states"])}}
+
+
+def ruling_consumers(governance_root: Path, decision_id: str, task_id: str | None = None) -> list[str]:
+    """AIPOS-F213 件②: 已用过该裁决的动作(人读点名)。判据 = 任一队列卡卡面 supersede.card_fields.decision_id(撤换)或
+    correct.followup.ref_field(纠正承接卡)记了该裁决, 或所裁卡已有引用该裁决的争议标记(task_complexity.closure_disputes)。
+    读不出 = 向上(fail-closed, 不猜成未用过)。"""
+    from tools.aipos_cli.queue_mutation import correct_declaration, supersede_declaration
+    from tools.aipos_cli.task_complexity import closure_disputes
+    from tools.aipos_cli.task_loader import load_all_tasks
+
+    wanted = str(decision_id or "").strip()
+    fields = {str(supersede_declaration()["card_fields"]["decision_id"]): "queue supersede",
+              str(correct_declaration()["followup"]["ref_field"]): "queue correct"}
+    out: list[str] = []
+    for task in load_all_tasks(Path(governance_root)):
+        meta = task.get("metadata") or {}
+        for field, action in fields.items():
+            if str(meta.get(field) or "").strip() == wanted:
+                out.append(f"{action}: {meta.get('task_id')}[{task.get('queue_state')}] {field}")
+    if task_id:
+        out += [f"queue correct: {task_id} {Path(str(d.get('path') or '')).name}".rstrip()
+                for d in closure_disputes(Path(governance_root), str(task_id)) if str(d.get("decision_id") or "") == wanted]
+    return out
+
+
+def referenced_ruling(governance_root: Path, decision_id: str, *, choice: str, task_id: str, action: str,
+                      decl: dict[str, Any] | None = None) -> tuple[dict[str, Any] | None, list[str]]:
+    """AIPOS-F213 件②(F208 P1-6): `queue supersede` / `queue correct` 带 --decision-id 引用收件箱已有裁决(不另记决策)时的唯一核验。
+    返回 (裁决 _ruling_record | None, 拒因列表; 空 = 可引用)。判据见声明 verbs.lybra_owner_inbox.decision_reference(文案同处)。
+    记录在但读不出 = FrontmatterReadError 向上(fail-closed)。"""
+    from tools.aipos_cli.frontmatter import require_frontmatter
+
+    d = decl or inbox_declaration()
+    texts = (d.get("decision_reference") or {}).get("texts") or {}
+    need = ("not_found", "not_inbox", "choice_mismatch", "task_mismatch", "consumed")
+    if any(not isinstance(texts.get(k), str) for k in need):
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError(f"verbs.{VERB}.decision_reference.texts 未声明齐 {list(need)}")
+    did = str(decision_id or "").strip()
+    path = _decision_path(Path(governance_root), did)
+    if not did or not path.is_file():
+        return None, [_fmt(texts["not_found"], "decision_reference.texts.not_found", decision_id=did or "<empty>", path=path)]
+    ruling = _ruling_record(path, *require_frontmatter(path))
+    problems: list[str] = []
+    want_type = str(d["decision"]["decision_type"])
+    if str(ruling.get("decision_type") or "") != want_type:
+        problems.append(_fmt(texts["not_inbox"], "decision_reference.texts.not_inbox", decision_id=did,
+                             got=ruling.get("decision_type"), want=want_type))
+    got_choice = str(ruling.get("allowed_next_action") or "")
+    if got_choice != str(choice):
+        problems.append(_fmt(texts["choice_mismatch"], "decision_reference.texts.choice_mismatch", decision_id=did, got=got_choice or "-",
+                             action=action, want=choice))
+    got_task = str(ruling.get("task_id") or "")
+    if got_task.upper() != str(task_id or "").upper():
+        problems.append(_fmt(texts["task_mismatch"], "decision_reference.texts.task_mismatch", decision_id=did, got=got_task or "-",
+                             task_id=task_id))
+    used = ruling_consumers(Path(governance_root), did, got_task or task_id)
+    if used:
+        problems.append(_fmt(texts["consumed"], "decision_reference.texts.consumed", decision_id=did, by="; ".join(used)))
+    return ruling, problems
+
+
+def _queue_ruling_relays(root: Path, project: str, decl: dict[str, Any], errors: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """AIPOS-F213 件②(已定待转达): 选撤换 / 纠正(_queue_ruling_actions 的选项)的收件箱裁决(窗口内)尚未执行——未被任何动作用过
+    (ruling_consumers 为空)且所裁卡仍在该动作的源状态 = 顾问未接着做 → 转达; 下一步 = 该选项 advisor_next(带 --decision-id 的命令)。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.task_loader import find_task_card
+
+    actions = _queue_ruling_actions()
+    out: list[dict[str, Any]] = []
+    try:
+        rulings = [r for r in _all_rulings(root, decl) if str(r.get("allowed_next_action") or "") in actions]
+    except (OSError, ValueError, FrontmatterReadError) as exc:
+        errors.append({"project": project, "source": "撤换 / 纠正转达: 裁决记录", "error": f"{type(exc).__name__}: {exc}"})
+        return out
+    for ruling in rulings:
+        choice = str(ruling.get("allowed_next_action") or "")
+        task_id = str(ruling.get("task_id") or "")
+        if not task_id or not _within_window(ruling.get("decided_at"), decl):
+            continue
+        try:
+            path, state = find_task_card(root, task_id)
+            if path is None or state not in actions[choice]["from_states"]:
+                continue  # 已执行(撤换后进 withdrawn)/ 卡不在 = 不转达
+            if ruling_consumers(root, str(ruling.get("decision_id") or ""), task_id):
+                continue
+            advisor = card_driver(root, task_id, require_frontmatter(Path(path))[0], decl)
+        except (OSError, ValueError, LookupError, RuntimeError, FrontmatterReadError) as exc:
+            errors.append({"project": project, "source": f"撤换 / 纠正转达 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        label = str(decl["options"][choice]["label"])
+        out.append({"kind": "decision", "advisor": advisor, "project": project, "governance_root": str(root), "task_id": task_id,
+                    "subject": f"{task_id} [{state}]", "item_id": None, "decision_id": ruling.get("decision_id"), "choice": choice,
+                    "label": label, "owner_words": ruling.get("owner_words"), "done_at": ruling.get("decided_at"),
+                    "advisor_next": option_next(decl, choice, label, resume=_resume_for(root, task_id, advisor), task_id=task_id,
+                                                governance_root=root, decision_id=ruling.get("decision_id"))})
     return out
 
 
@@ -1165,7 +1281,7 @@ def choice_script(item: dict[str, Any], choice: str, lang: str | None = None) ->
     root = Path(item["governance_root"])
     resume = _resume_for(root, item.get("task_id"), item.get("relay_to"),
                          (item.get("facts") or {}).get("envelope") if item["category"] == "loop_owner_needed" else None)
-    nxt = option_next(decl, choice, label, resume=resume, task_id=item.get("task_id"), governance_root=root)
+    nxt = option_next(decl, choice, label, resume=resume, task_id=item.get("task_id"), governance_root=root, decision_id=item.get("decision_id"))
     return [_fmt(t["tell"], "relay.texts.tell", advisor=advisor),
             _fmt(t["choice_body"], "relay.texts.choice_body", project=item["project"], subject=item["subject"], label=label,
                  preview=preview, advisor_next=nxt),
@@ -1559,12 +1675,11 @@ def _freeze_group(root: Path, entries: list[dict[str, Any]], actor: str, *, dry_
 
 
 def _release_writes(resp: dict[str, Any] | None) -> list[str]:
-    """逐卡解除动作写出的文件(冻结组的清单条目由 decide 按治理根另计)。"""
-    if not resp or not resp.get("ok"):
-        return []
-    data = resp.get("data") or {}
-    paths = [data.get(k) for k in ("task_path", "amendment_record_path", "source_path", "target_path", "worktree_cleanup_record")]
-    return [str(p) for p in paths if p]
+    """逐卡解除动作写出的文件(冻结组的清单条目由 decide 按治理根另计)。AIPOS-F213 件①: 写出清单唯一实现 board_adapter.queue_write_paths
+    (CLI / MCP 队列写同读)。"""
+    from tools.aipos_cli.board_adapter import queue_write_paths
+
+    return queue_write_paths(resp) if resp and resp.get("ok") else []
 
 
 def _release_blocked(resp: dict[str, Any] | None) -> bool:
@@ -1604,7 +1719,7 @@ def decide(item_ids: str | list[str], choice: str, *, note: str | None = None, h
     (board_adapter.execute_dry_run, 含 decision_log 自动指针)→ 解除动作(既有出口; 冻结同根一条清单条目)→ 每个治理根经
     land_written_paths 落账一次。返回 {ok, stage, choice, entries[{item, decision, release, effect}], written, landings, rc_outcome, ...};
     单项时另带 item / decision / release / effect / landing(F168 形)。rc_outcome = 声明出口名。"""
-    from tools.aipos_cli.board_adapter import execute_dry_run, record_owner_decision
+    from tools.aipos_cli.board_adapter import execute_dry_run, land_after_write, record_owner_decision
     from tools.aipos_cli.clock import iso_z
     from tools.aipos_cli.controlled_execute import OWNER_CONFIRMATION_TOKEN
 
@@ -1695,8 +1810,10 @@ def decide(item_ids: str | list[str], choice: str, *, note: str | None = None, h
             by_root.setdefault(root_text, []).extend(extra)
     for root_text, written in by_root.items():
         ids_here = [e["item"]["item_id"] for e in report["entries"] if e["item"]["governance_root"] == root_text]
-        landing = _land(Path(root_text), written, actor, item_id=",".join(ids_here), choice=choice)
-        report["landings"].append({"governance_root": root_text, **landing})
+        # AIPOS-F213 件①: 写后落账唯一薄壳(与 CLI / MCP 队列写同一实现; 提交信息 = owner_decide)
+        landing = land_after_write(Path(root_text), written, actor=actor, command="owner_decide", item_id=",".join(ids_here),
+                                   choice=choice)
+        report["landings"].append({"governance_root": root_text, **(landing or {})})
         report["written"] += written
     _mirror_single(report)
     landed = all(lg.get("landed") for lg in report["landings"])
@@ -1713,20 +1830,6 @@ def _mirror_single(report: dict[str, Any]) -> None:
     report.update({"item": entry["item"], "decision": entry["decision"], "effect": entry["effect"],
                    "release": entry["release"] if entry["effect"] != "freeze_legacy" else (report["freeze"][0] if report["freeze"] else None),
                    "landing": report["landings"][0] if report["landings"] else None})
-
-
-def _land(root: Path, written: list[str], actor: str, **fields: Any) -> dict[str, Any]:
-    """写出文件经 F158 写后落账唯一实现落账(绝对路径换算为治理根相对); 落账声明不可读 = 不落账(fail-closed), 写入已生效: 拒因出声。"""
-    from tools.aipos_cli.governance_commit import land_written_paths
-    from tools.schema_loader import SchemaLoadError
-
-    base = Path(root).resolve()
-    rels = sorted({(Path(p).resolve().relative_to(base) if Path(p).is_absolute() else Path(p)).as_posix() for p in written})
-    try:
-        return land_written_paths(root, rels, actor, command="owner_decide", **fields)
-    except SchemaLoadError as exc:
-        return {"landed": False, "exit_code": 1, "reason": str(exc), "paths": rels,
-                "line": f"⚠ 落账未完成(写入已生效, 勿重复执行写命令): {exc}"}
 
 
 # ---------------------------------------------------------------------------
@@ -1757,7 +1860,8 @@ def ruling_view(ruling: dict[str, Any], decl: dict[str, Any], *, resume: str, ta
                   if words else "")
     line = _fmt(decl["texts"]["ruling_line"], "texts.ruling_line", choice=choice, label=label, note_part=note_part,
                 relay_part=relay_part, decided_at=str(ruling.get("decided_at") or "?"))
-    advisor_next = option_next(decl, choice, label, resume=resume, task_id=task_id, governance_root=Path(governance_root))
+    advisor_next = option_next(decl, choice, label, resume=resume, task_id=task_id, governance_root=Path(governance_root),
+                               decision_id=ruling.get("decision_id"))
     return {"choice": choice, "label": label, "note": note or None, "relayed_by": ruling.get("relayed_by"), "owner_words": words or None,
             "decided_at": ruling.get("decided_at"),
             "decision_id": ruling.get("decision_id"), "record": ruling.get("_path"), "line": line, "advisor_next": advisor_next}

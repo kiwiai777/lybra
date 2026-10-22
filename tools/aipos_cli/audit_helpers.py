@@ -16,40 +16,6 @@ from typing import Any
 from tools.loop_context import ConnectionResolver, LoopContext
 
 
-def derive_audit_task_id(reviewed_task_id: str, repo_root: Path | None = None) -> str | None:
-    """AIPOS-SMOKE-LOOP-1 FIX (坑①): 由被审任务 ID 派生审计 R 卡 task_id。
-
-    CLI `--audit-task-id` 标可选但 gate 动词必填 (LEDGER 08-12 行11)。
-    约定:审计 R 卡 task_id 形如 ``{reviewed}R`` / ``{reviewed}R1`` 等,且
-    frontmatter ``derived_from == reviewed_task_id`` (gate 派生时盖章)。
-    本函数查治理队列找唯一匹配的 R 卡;拿不准(0 或 >1 命中)返回 None,让 CLI 响亮报错。
-    """
-    from tools.aipos_cli.task_loader import load_all_tasks
-
-    if not reviewed_task_id:
-        return None
-    candidates = {f"{reviewed_task_id}R", f"{reviewed_task_id}R1"}
-    # primary: R 卡的 derived_from 指回被审任务 (gate 派生时盖章,最可靠)
-    matches: list[str] = []
-    try:
-        for task in load_all_tasks(repo_root):
-            meta = task.get("metadata", {}) if isinstance(task, dict) else {}
-            tid = str(meta.get("task_id") or "")
-            if not tid:
-                continue
-            if str(meta.get("derived_from") or "") == reviewed_task_id:
-                matches.append(tid)
-                continue
-            # fallback: 命名约定 {reviewed}R / {reviewed}R1 且 task_id 以被审 ID 为前缀
-            if tid in candidates or (tid.startswith(reviewed_task_id) and tid[len(reviewed_task_id):].rstrip("0123456789") == "R"):
-                matches.append(tid)
-    except Exception:
-        return None
-    # 去重;唯一命中才信,否则让 CLI 显式问
-    uniq = sorted(set(matches))
-    return uniq[0] if len(uniq) == 1 else None
-
-
 def resolve_audit_credential(
     *,
     connection_json_path: str | Path,
@@ -248,10 +214,9 @@ def build_audit_verdict_dry_run_args(
         "verdict": verdict,
     }
 
-    # AIPOS-SMOKE-LOOP-1 FIX (坑①): audit_task_id gate 必填但 CLI 标可选 ——
-    # 缺省时由 reviewed_task_id 自动派生 (查队列 R 卡),拿不准则不填让 CLI 响亮报错。
-    if not audit_task_id:
-        audit_task_id = derive_audit_task_id(reviewed_task_id, repo_root)
+    # AIPOS-SMOKE-LOOP-1 FIX (坑①): audit_task_id gate 必填但 CLI 标可选 —— 缺省由调用方(CLI audit-verdict)经审计卡查找唯一实现
+    # audit_derivation.find_open_audit_task 自发现后传入(AIPOS-F213 件④: 原本模块同名 derive_audit_task_id 第二份查找删除);
+    # 拿不准则不填让门响亮报错。repo_root 保留为兼容入参(不再使用)。
     # audit_task_id 是 gate 动词必填 (verbs.schema lybra_audit_verdict.task_id: required),
     # 这里始终带上 (派生成功 / 调用者显式给);派生为 None 时 gate 会 BLOCK 并给出明确提示。
     args["audit_task_id"] = audit_task_id or ""

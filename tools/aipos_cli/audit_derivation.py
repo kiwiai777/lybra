@@ -565,6 +565,30 @@ def audit_round_ids(source_task_id: str, repo_root: Path) -> list[str]:
     return out
 
 
+def find_open_audit_task(reviewed_task_id: str, repo_root: Path | None = None) -> str | None:
+    """AIPOS-F213 件④(F208 P1-9): 被审卡当前在途审计卡的卡号(查找语义; 审计卡查找唯一实现, `lybra audit-verdict` 不给
+    --audit-task-id 时自发现用; 原 audit_helpers 同名 derive_audit_task_id 第二份查找删除)。
+
+    轮号读审计轮唯一实现 audit_round_ids(声明序列 R → R2 → …, 与派审派生 derive_audit_task_id 同读一份后缀表): 最新一轮 = 当前一轮
+    (current_audit_task_id 同一口径; 更早的轮已被取代), 其卡不在终态(enums queue_state.terminal 投影 task_loader.QUEUE_TERMINAL_STATES)
+    = 在途, 返回它。F202 重新派审后同卡 R / R2… 多轮并存 = 命中最新一轮(原同名函数命中多张即 None, 自发现必失败)。一轮都没有 /
+    最新一轮已结 = None(调用方响亮报错, 让审计体显式给 --audit-task-id)。读卡错误不再被宽捕获吞成「拿不准」: 只把「卡号对应的卡
+    不唯一」(task_loader.AmbiguousTaskCard)当拿不准返回 None, 其余读错向上抛(fail-closed)。"""
+    from tools.aipos_cli.task_loader import QUEUE_TERMINAL_STATES, AmbiguousTaskCard, find_repo_root, find_task_card
+
+    if not reviewed_task_id:
+        return None
+    root = find_repo_root(Path(repo_root) if repo_root is not None else None)
+    rounds = audit_round_ids(reviewed_task_id, root)
+    if not rounds:
+        return None
+    try:
+        _path, state = find_task_card(root, rounds[-1])
+    except AmbiguousTaskCard:
+        return None
+    return rounds[-1] if state and state not in QUEUE_TERMINAL_STATES else None
+
+
 def current_audit_task_id(source_task_id: str, repo_root: Path) -> str:
     """AIPOS-F112: 当前一轮审计卡号 = 已有轮次中最新一张; 一张都没有 = 首轮号(派审将生成它)。
     推导核等待/派审、loop 拉起、落账范围均认这一张(gap #69: 原写死 <ID>R, 复审 R2 永远等不到)。"""

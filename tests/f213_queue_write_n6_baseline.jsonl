@@ -1,0 +1,9 @@
+{"reason": "PreAuthorized 一段式结案: closure 记录随该卡 N6 收账", "site": "tools/mcp_server/tools.py::lybra_queue_close_dry_run->close_task"}
+{"reason": "存量 pending 卡机器区批量重生成, 随各卡 N6 收账(存量登记; 改即时落账时删行)", "site": "tools/aipos_cli/draft_writer.py::regen_machine_zone_for_pending->amend_task"}
+{"reason": "文件 CLI 认领(queue claim)由门 / 该卡 N6 收账; block / reopen 已即时落账", "site": "tools/aipos_cli/aipos_cli.py::main->mutate_queue_task"}
+{"reason": "结案(queue complete / 本地 queue close): closure 记录与卡迁移由该卡 N6 收账(结案后 N6 落账是既有设计, F208 §2 对照表)", "site": "tools/aipos_cli/aipos_cli.py::main->close_task"}
+{"reason": "返工节写在途卡卡面 + 修订记录, 随该卡 N6 收账(F208 §2 未列, 存量登记; 改即时落账时删行)", "site": "tools/aipos_cli/board_adapter.py::queue_rework_task->amend_task"}
+{"reason": "门结案确认: 由该卡 N6 收账(close 应答 next_step = N6 落账命令)", "site": "tools/mcp_server/tools.py::lybra_queue_close_confirm->close_task"}
+{"reason": "门认领确认(claim): 认领 / 会话记录随该卡 N6 收账(既有语义)", "site": "tools/aipos_cli/board_adapter.py::execute_dry_run->mutate_queue_task"}
+{"reason": "门顾问复核结案: 由该卡 N6 收账", "site": "tools/mcp_server/tools.py::lybra_mark_concluded->mark_concluded_task"}
+{"reason": "顾问复核结案(mark-concluded): 由该卡 N6 收账(F208 §2 对照表)", "site": "tools/aipos_cli/aipos_cli.py::main->mark_concluded_task"}
