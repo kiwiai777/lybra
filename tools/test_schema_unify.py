@@ -29,49 +29,56 @@ from tools.schema_loader import (
 SCHEMA_DIR = Path(__file__).parent.parent / "schema"
 
 
+#: AIPOS-F214 件⑥(R7): 内联 enum 存量基线(一行一条带理由; 只减不增)。原「零内联 enum」断言自 F109 起 known-failure = 无守卫,
+#: 改为棘轮: 新增内联 enum = 红, 基线条目已消失(已收进 enums.schema)= 红(删行)。扫描唯一实现 schema_loader.residual_enum_literals。
+INLINE_ENUM_BASELINE = Path(__file__).resolve().parent.parent / "tests" / "f214_inline_enum_baseline.jsonl"
+
+
+def _inline_enum_baseline() -> list[dict]:
+    sys.path.insert(0, str(INLINE_ENUM_BASELINE.parent))
+    from ratchet_baseline import read_entries
+
+    return read_entries(INLINE_ENUM_BASELINE)
+
+
+def _literal_key(entry: dict) -> tuple[str, str, str]:
+    return (str(entry["file"]), str(entry["path"]), json.dumps(entry["values"], ensure_ascii=False))
+
+
+def inline_enum_ratchet(literals: list[dict], baseline: list[dict]) -> tuple[list[tuple], list[tuple]]:
+    """(新增, 已消失) = 现存内联 enum 与基线之差(Counter 语义, 同 F87/F212 棘轮)。"""
+    from collections import Counter
+
+    current, allowed = Counter(_literal_key(x) for x in literals), Counter(_literal_key(e) for e in baseline)
+    return sorted((current - allowed).elements()), sorted((allowed - current).elements())
+
+
 def test_no_residual_enum_literals():
-    """Audit #1: No 'enum' array literals outside enums.schema.json."""
-    print("Test 1: No residual enum literals outside enums.schema.json")
+    """Audit #1 → AIPOS-F214 R7 ratchet: no NEW inline 'enum' literal outside enums.schema.json (legacy ones are baselined)."""
+    from tools.schema_loader import residual_enum_literals
+
     clear_cache()
-
-    for schema_file in SCHEMA_DIR.glob("*.schema.json"):
-        if schema_file.name == "enums.schema.json":
-            continue
-        data = json.loads(schema_file.read_text())
-        # Walk the entire structure looking for "enum" keys with list values
-        def find_enum_literals(obj, path=""):
-            findings = []
-            if isinstance(obj, dict):
-                for k, v in obj.items():
-                    p = f"{path}.{k}" if path else k
-                    if k == "enum" and isinstance(v, list):
-                        findings.append(p)
-                    else:
-                        findings.extend(find_enum_literals(v, p))
-            elif isinstance(obj, list):
-                for i, item in enumerate(obj):
-                    findings.extend(find_enum_literals(item, f"{path}[{i}]"))
-            return findings
-
-        found = find_enum_literals(data)
-        assert not found, f"Residual enum literals in {schema_file.name}: {found}"
-        print(f"  ✓ {schema_file.name}: clean")
-
-    print("  ✓ PASS\n")
+    baseline = _inline_enum_baseline()
+    for entry in baseline:
+        assert set(entry) == {"file", "path", "values", "reason"} and str(entry["reason"]).strip(), entry
+    literals = residual_enum_literals()
+    new, stale = inline_enum_ratchet(literals, baseline)
+    print(f"[R7 内联 enum 棘轮] 现存 {len(literals)} 处, 基线 {len(baseline)} 条")
+    for lit in literals:
+        print(f"  {lit['file']}:{lit['path']} = {lit['values']}")
+    assert not new, f"新增内联 enum(须用 {{\"$enum\": <名>}} 引 enums.schema.json, 禁新增内联值域): {new}"
+    assert not stale, f"基线条目已不存在(已收进 enums.schema)→ 从 {INLINE_ENUM_BASELINE.name} 删除这些行(只减不增): {stale}"
 
 
 def test_all_enum_refs_resolve():
-    """All $enum references in schema package resolve to enums.schema.json."""
+    """All $enum references in schema package resolve to enums.schema.json (legacy inline literals tolerated = R7 baseline)."""
     print("Test 2: All $enum references resolve")
     clear_cache()
+    tolerated = [f"{e['file']}:{e['path']}" for e in _inline_enum_baseline()]
 
     # This should not raise
-    cross_validate_schemas()
+    cross_validate_schemas(tolerated_literals=tolerated)
     print("  ✓ cross_validate_schemas() passed")
-
-    # Also test validate_all_enum_refs convenience wrapper
-    assert validate_all_enum_refs() is True
-    print("  ✓ validate_all_enum_refs() returned True")
     print("  ✓ PASS\n")
 
 
@@ -207,10 +214,10 @@ def test_resolve_field_enum():
     print("Test 7: resolve_field_enum")
     clear_cache()
 
-    # $enum reference
+    # $enum reference (AIPOS-F214: 期望值读 enums.schema 本身, 不在测试里另抄一份值域——原写死 4 值随 F196 / F197 追加而失效)
     field_schema = {"$enum": "task_mode"}
     vals = resolve_field_enum(field_schema)
-    assert vals == ["code", "docs", "governance", "config"]
+    assert vals == get_enum_values("task_mode") and {"code", "docs", "governance", "config"} <= set(vals)
     print("  ✓ $enum reference resolved")
 
     # Legacy inline enum (backward compat)

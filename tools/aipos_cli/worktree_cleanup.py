@@ -29,22 +29,30 @@ class WorktreeCleanupError(ValueError):
     """清理声明缺 / 形坏(fail-closed)。"""
 
 
+#: AIPOS-F214 件③: 投影键(声明段不得另列; 值由 cleanup_declaration 从单源投影)
+PROJECTED_STATE_KEYS = ("terminal_states", "carry_protect_states")
+
+
 def cleanup_declaration() -> dict[str, Any]:
-    """transitions.schema queue_mutations.worktree_cleanup 唯一读取口。缺键 / 状态不在队列目录 = SchemaLoadError。"""
-    from tools.aipos_cli.task_loader import QUEUE_STATES
+    """transitions.schema queue_mutations.worktree_cleanup 唯一读取口。缺键 = SchemaLoadError。
+    AIPOS-F214 件③(F208 P2-2): 状态集合不另列, 投影——terminal_states = enums queue_state 终态(task_loader.QUEUE_TERMINAL_STATES),
+    carry_protect_states = 撤换承继 successor_states(queue_mutation.supersede_carry_declaration); 声明段另写这两个键 = SchemaLoadError。"""
+    from tools.aipos_cli.queue_mutation import supersede_carry_declaration
+    from tools.aipos_cli.task_loader import QUEUE_TERMINAL_STATES
     from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
 
     decl = ((load_schema("transitions", code_repo_schema_root()).get("queue_mutations") or {}).get("worktree_cleanup"))
-    need = ("terminal_states", "carry_protect_states", "event_type", "actions", "triggers", "closing_triggers")
+    need = ("event_type", "actions", "triggers", "closing_triggers")
     if not isinstance(decl, dict) or any(not decl.get(k) for k in need):
         raise SchemaLoadError(f"transitions.schema.json queue_mutations.worktree_cleanup 未声明齐 {list(need)}")
+    copies = [k for k in PROJECTED_STATE_KEYS if k in decl]
+    if copies:
+        raise SchemaLoadError(f"transitions.schema.json queue_mutations.worktree_cleanup 不得另列 {copies}(投影自 enums queue_state 终态 / "
+                              "queue_mutations.transitions.supersede.carry_branch.successor_states, AIPOS-F214 件③)")
     if not isinstance(decl["triggers"], dict) or not set(decl["closing_triggers"]) <= set(decl["triggers"]):
         raise SchemaLoadError("transitions.schema.json queue_mutations.worktree_cleanup.closing_triggers 须为 triggers 键的子集")
-    for key in ("terminal_states", "carry_protect_states"):
-        bad = [s for s in decl[key] if s not in QUEUE_STATES]
-        if bad:
-            raise SchemaLoadError(f"transitions.schema.json queue_mutations.worktree_cleanup.{key} 含非队列目录 {bad}")
-    return {**decl, "terminal_states": tuple(decl["terminal_states"]), "carry_protect_states": tuple(decl["carry_protect_states"]),
+    return {**decl, "terminal_states": tuple(QUEUE_TERMINAL_STATES),
+            "carry_protect_states": tuple(supersede_carry_declaration()["successor_states"]),
             "actions": tuple(decl["actions"]), "closing_triggers": tuple(decl["closing_triggers"])}
 
 

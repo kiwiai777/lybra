@@ -318,7 +318,7 @@ def supersede_carry_texts() -> dict[str, str]:
 
 
 CORRECT_DECL_KEYS = ("from_states", "actor_role_class", "decision_choice", "dispute_event_type", "disputed_record_kinds", "followup")
-CORRECT_FOLLOWUP_KEYS = ("task_id_template", "inherit_fields", "rebind_fields", "ref_field")
+CORRECT_FOLLOWUP_KEYS = ("task_id_template", "inherit_fields_ref", "rebind_fields", "ref_field")
 CORRECT_TEXT_KEYS = ("header", "chain", "decision", "decision_ref", "reason_part", "dispute", "followup", "criterion", "resume", "publish_blocked",
                      "record_kept_preview", "record_kept_written", "publish_hint", "will", "preview_line", "done_line", "blocked_line",
                      "partial_line", "not_closed", "not_found", "already", "role_refused", "followup_blocked")
@@ -346,7 +346,11 @@ def correct_declaration() -> dict[str, Any]:
     if not isinstance(templates, dict) or any(not isinstance(templates.get(k), str) or not templates[k] for k in CORRECT_TEMPLATE_KEYS):
         raise SchemaLoadError(f"verbs.schema.json verbs.lybra_queue_correct.followup 未声明齐 {list(CORRECT_TEMPLATE_KEYS)}")
     require_inbox_choices([spec["decision_choice"]], "transitions queue_mutations.correct.decision_choice")
-    return {**spec, "from_states": tuple(str(x) for x in spec["from_states"]), "followup": {**followup, **templates}}
+    from tools.aipos_cli.roadmap import followup_inherit_fields  # AIPOS-F214 件①: 承继字段单基表(与路线图修复卡同一张)
+
+    inherit = followup_inherit_fields(followup, "transitions.schema.json queue_mutations.correct.followup")
+    return {**spec, "from_states": tuple(str(x) for x in spec["from_states"]),
+            "followup": {**followup, **templates, "inherit_fields": inherit}}
 
 
 def require_inbox_choices(choices: Any, where: str, *, pinned: tuple[str, str] | None = None) -> list[str]:

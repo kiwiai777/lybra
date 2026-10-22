@@ -437,6 +437,8 @@
       "run_evidence": {
         "description": "AIPOS-F200(gap #205: 审计 run 在 Mac 等远端主机时门读不到 run 内证据, chris 理想 iOS UI 将撞): 远端 run 证据取回声明(唯一)。run 收尾(仍活动时)在目标主机以产品铸的 helper evidence-manifest 列本 run 证据目录(include_dirs)下文件(相对路径 / 大小 / sha256)+ 主机指纹 + 封签写 <run>/.lybra-vr/evidence-manifest.json; 治理根所在机 `lybra project validation-root evidence-fetch --id <审计声明> --run-id <run>` 经 project.json validation_roots.hosts 声明的 ssh 别名只读拉取(helper evidence-bundle: 清单 + 清单内文件, 不跟软链 / 越界 / 超限即拒)到审计报告落点副本 <verdict_root>/<审计卡>/<copy_subdir>/<run_id>/, 逐个核 sha256; 裁决入口对远端 run 读副本, 判据与本机 run 同一函数(归属 / 已开启或收口 / 候选 / src-verify SRC_OK / 日志指纹 / 命令逐字), 只换读取源。只认审计实例的声明(执行 run 证据随交回, 不经此命令)。代码文件扩展名(config.schema code_files_blacklist)不取回(清单记 skipped; 报告落点零代码文件, AIPOS-F195)。上限缺省即本段, 改上限 = 改本声明(产品卡)。",
         "include_dirs": [".lybra-vr", "logs", "evidence"],
+        "helper_files": {"evidence_dir": ".lybra-vr", "init_run": ".lybra-vr/init-run.jsonl", "src_verify": ".lybra-vr/src-verify.jsonl", "evidence_manifest": ".lybra-vr/evidence-manifest.json"},
+        "helper_files_description": "AIPOS-F214 件⑤(F208 P2-5): 目标主机 helper(tools/aipos_cli/validation_root_helper.py, 只用标准库、在目标主机脱离产品运行、不读 schema)的 run 内证据文件常量的声明侧——evidence_dir = run 内证据目录(须 ∈ include_dirs, 其余三项须在其下); init_run / src_verify / evidence_manifest 分别 = helper.INIT_EVIDENCE / SRC_EVIDENCE / EVIDENCE_MANIFEST。有意两份(helper 不读 schema), 读取口 validation_root.run_evidence_declaration 逐项核对 helper 常量 = 本表(不符 = SchemaLoadError), 测试 tests/test_aipos_f214_schema_cross_file.py 钉住; ios_simulator.evidence_file / side_evidence_file 两项由 F194 夹具钉。",
         "copy_subdir": "run_evidence",
         "copy_layout": {"manifest": "manifest.json", "fetch_record": "fetch.json", "files": "files"},
         "max_file_bytes": 33554432,

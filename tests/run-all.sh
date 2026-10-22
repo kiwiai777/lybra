@@ -53,6 +53,7 @@ exit "$overall"
 # ---- 声明行(只减不增; 一行一条, 按目标排序, 便于并行卡各删不同行时 git 行级合并) ----
 # lybra-runall: discover
 # lybra-runall: exclude tests/playwright/board.visual.spec.js 需 Playwright 浏览器(npm run test:visual), 非常驻夹具环境
+# lybra-runall: exclude web/board/tests/test_aipos288_cjk_source_guard.py::test_no_bare_cjk_in_sources AIPOS-F214 件⑥: 由 R11 棘轮 tests/test_aipos_f214_guard_ratchets.py::test_r11_cjk_string_literals_only_shrink 取代(只扫字符串字面量、排除注释、现存命中入基线 tests/f214_cjk_literal_baseline.jsonl); 原节点自 F109 起 known-failure(注释中文也算命中)= 无守卫; 原文件在 web/ 车道外未改, 删除 / 改写归 web 车道卡(RETURN 车道外改动节)
 # ---- 已知存量失败(gap #59; AIPOS-F109 盘点: main bf7623c 隔离 HOME 下同败; 只许删——转绿即红, 删行) ----
 # lybra-runall: known-failure tests/i18n-bilingual-stability.test.js
 # lybra-runall: known-failure tests/test_aipos_316_guards.py::test_internal_modules_reject_direct_invocation
@@ -353,12 +354,7 @@ exit "$overall"
 # lybra-runall: known-failure tools/mcp_server/tests/test_token_project_enforcement.py::ProjectEnforcementTests::test_all_tool_handlers_are_project_gated_no_exemptions
 # lybra-runall: known-failure tools/mcp_server/tests/test_token_projects_gate_inert.py::TokenProjectsGateInertTests::test_flip_case_projects_mismatch_still_allows
 # lybra-runall: known-failure tools/mcp_server/tests/test_token_projects_gate_inert.py::TokenProjectsGateInertTests::test_scope_decision_identical_with_and_without_projects
-# lybra-runall: known-failure tools/test_aipos_c1_surface_consistency.py
 # lybra-runall: known-failure tools/test_schema_loader.py::test_load_schemas
-# lybra-runall: known-failure tools/test_schema_unify.py::test_all_enum_refs_resolve
-# lybra-runall: known-failure tools/test_schema_unify.py::test_no_residual_enum_literals
-# lybra-runall: known-failure tools/test_schema_unify.py::test_resolve_field_enum
-# lybra-runall: known-failure web/board/tests/test_aipos288_cjk_source_guard.py::test_no_bare_cjk_in_sources
 # lybra-runall: known-failure web/board/tests/test_board_adapter_contract.py::BoardAdapterContractTests::test_aipos261f2_three_state_pills_and_dossier_closed_signal
 # lybra-runall: known-failure web/board/tests/test_four_area_i18n.py::FourAreaI18nTests::test_four_area_static_headings_have_i18n_ids_and_zh_default
 # lybra-runall: known-failure web/board/tests/test_four_area_i18n.py::FourAreaI18nTests::test_record_content_is_not_translated

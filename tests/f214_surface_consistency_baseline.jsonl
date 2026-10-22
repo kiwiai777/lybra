@@ -1,0 +1,4 @@
+{"check": "mcp_handler", "detail": "门 TOOL_HANDLERS 未注册", "reason": "存量: verbs 声明 surface 含 mcp, 门 TOOL_HANDLERS 未注册(tools.py 有同名函数, 未登记进注册表); 归后续卡定夺改声明 surface 或补注册", "verb": "lybra_project_new_confirm"}
+{"check": "mcp_handler", "detail": "门 TOOL_HANDLERS 未注册", "reason": "存量: verbs 声明 surface 含 mcp, 门 TOOL_HANDLERS 未注册(tools.py 有同名函数, 未登记进注册表); 归后续卡定夺改声明 surface 或补注册", "verb": "lybra_project_new_dry_run"}
+{"check": "mcp_handler", "detail": "门 TOOL_HANDLERS 未注册", "reason": "存量: verbs 声明 surface 含 mcp, 门 TOOL_HANDLERS 未注册(tools.py 有同名函数, 未登记进注册表); 归后续卡定夺改声明 surface 或补注册", "verb": "lybra_project_set_repo_confirm"}
+{"check": "mcp_handler", "detail": "门 TOOL_HANDLERS 未注册", "reason": "存量: verbs 声明 surface 含 mcp, 门 TOOL_HANDLERS 未注册(tools.py 有同名函数, 未登记进注册表); 归后续卡定夺改声明 surface 或补注册", "verb": "lybra_project_set_repo_dry_run"}

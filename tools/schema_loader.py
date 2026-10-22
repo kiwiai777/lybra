@@ -594,22 +594,6 @@ def get_schema_version(schema_type: SchemaType, repo_root: Path | None = None) -
 # Cross-validation (AIPOS-SCHEMA-UNIFY-1: single-source enforcement)
 # ---------------------------------------------------------------------------
 
-def _walk_for_enum_literals(obj: Any, path: str) -> list[str]:
-    """Recursively walk a JSON structure and find residual 'enum' array literals."""
-    findings = []
-    if isinstance(obj, dict):
-        for key, val in obj.items():
-            current_path = f"{path}.{key}" if path else key
-            if key == "enum" and isinstance(val, list):
-                findings.append(f"{current_path}: {val}")
-            else:
-                findings.extend(_walk_for_enum_literals(val, current_path))
-    elif isinstance(obj, list):
-        for i, item in enumerate(obj):
-            findings.extend(_walk_for_enum_literals(item, f"{path}[{i}]"))
-    return findings
-
-
 def _walk_for_enum_refs(obj: Any, path: str) -> list[tuple[str, str]]:
     """Recursively walk a JSON structure and find all '$enum' references."""
     findings = []
@@ -626,12 +610,49 @@ def _walk_for_enum_refs(obj: Any, path: str) -> list[tuple[str, str]]:
     return findings
 
 
-def cross_validate_schemas(repo_root: Path | None = None) -> list[str]:
+#: Schemas that must reference enums.schema.json via '$enum' (not enums.schema.json itself)
+ENUM_REF_SCHEMAS: tuple[SchemaType, ...] = ("card", "verbs", "config", "transitions", "roles", "distribution")
+
+
+def residual_enum_literals(repo_root: Path | None = None) -> list[dict[str, Any]]:
+    """AIPOS-F214 件⑥(R7): inline 'enum' array literals outside enums.schema.json — the single scanner (cross_validate_schemas
+    and the R7 ratchet tests/f214_inline_enum_baseline.jsonl both read this). Returns [{file, path, values}] in schema order.
+    A schema file that does not exist is skipped (same as cross_validate_schemas)."""
+    out: list[dict[str, Any]] = []
+    for schema_type in ENUM_REF_SCHEMAS:
+        try:
+            schema_data = load_schema(schema_type, repo_root)
+        except SchemaLoadError:
+            continue  # Schema file might not exist yet
+        file_name = f"{schema_type}.schema.json"
+        out.extend(_enum_literal_entries(schema_data, "", file_name))
+    return out
+
+
+def _enum_literal_entries(obj: Any, path: str, file_name: str) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    if isinstance(obj, dict):
+        for key, val in obj.items():
+            current_path = f"{path}.{key}" if path else key
+            if key == "enum" and isinstance(val, list):
+                found.append({"file": file_name, "path": current_path, "values": list(val)})
+            else:
+                found.extend(_enum_literal_entries(val, current_path, file_name))
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            found.extend(_enum_literal_entries(item, f"{path}[{i}]", file_name))
+    return found
+
+
+def cross_validate_schemas(repo_root: Path | None = None, *, tolerated_literals: Any = ()) -> list[str]:
     """Cross-validate schema package for single-source compliance.
 
     Checks:
     1. All '$enum' references resolve to existing enums in enums.schema.json
-    2. No residual 'enum' array literals exist outside enums.schema.json
+    2. No residual 'enum' array literals exist outside enums.schema.json (scanner residual_enum_literals)
+
+    tolerated_literals (AIPOS-F214 件⑥ R7): "<file>:<path>" keys of recorded legacy literals (the ratchet baseline) that do not
+    count as errors; every other literal still does (a new inline enum = error).
 
     Returns:
         List of error messages (empty = all good)
@@ -640,29 +661,28 @@ def cross_validate_schemas(repo_root: Path | None = None) -> list[str]:
         SchemaLoadError: If any validation error is found (with all errors listed)
     """
     errors: list[str] = []
+    tolerated = {str(t) for t in tolerated_literals}
 
     # Get known enum names
     enums_schema = load_schema("enums", repo_root)
     known_enums = set(enums_schema.get("enums", {}).keys())
 
-    # Check schemas that should use $enum references (not enums.schema.json itself)
-    schemas_to_check: list[SchemaType] = ["card", "verbs", "config", "transitions", "roles"]
+    # Check 1: No residual 'enum' array literals (beyond the tolerated legacy ones)
+    for lit in residual_enum_literals(repo_root):
+        if f"{lit['file']}:{lit['path']}" in tolerated:
+            continue
+        errors.append(
+            f"RESIDUAL ENUM LITERAL in {lit['file']}.{lit['path']}: {lit['values']} — "
+            f"must use {{\"$enum\": \"<enum_name>\"}} referencing enums.schema.json"
+        )
 
-    for schema_type in schemas_to_check:
+    for schema_type in ENUM_REF_SCHEMAS:
         try:
             schema_data = load_schema(schema_type, repo_root)
         except SchemaLoadError:
             continue  # Schema file might not exist yet
 
         schema_path = f"{schema_type}.schema.json"
-
-        # Check 1: No residual 'enum' array literals
-        residual = _walk_for_enum_literals(schema_data, schema_path)
-        for r in residual:
-            errors.append(
-                f"RESIDUAL ENUM LITERAL in {r} — "
-                f"must use {{\"$enum\": \"<enum_name>\"}} referencing enums.schema.json"
-            )
 
         # Check 2: All '$enum' references resolve
         refs = _walk_for_enum_refs(schema_data, schema_path)
@@ -769,6 +789,7 @@ __all__ = [
     "get_schema_version",
     "clear_cache",
     "cross_validate_schemas",
+    "residual_enum_literals",
     "validate_all_enum_refs",
     "get_machine_zone_fields",
     "get_advisor_zone_fields",

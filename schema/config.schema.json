@@ -497,6 +497,27 @@
                 "revoked_by": "撤销者",
                 "revoke_reason": "撤销原因",
                 "runs": "run 列表(只追加): {run_id, candidate(固定候选 40 位 sha), started_at, started_by, finished_at, finished_by[, simulator]}; AIPOS-F194 可选键 simulator(缺省 = 缺键 = 本 run 未绑定专用模拟器, 行为不变)= {udid, name(lybra-<卡>-<run>), bound_at, bound_by, verified_at, verified_by, evidence_sha256}: `validation-root sim-bind` 写入(UDID 与 run-id 同一处), `run-finish --sim-evidence` 核对删除后补 verified_* 与证据 sha256(声明 roles.schema write_boundary.validation_root.ios_simulator); AIPOS-F203 可选键 helper_sha256(缺键 = 旧 run, run-start 早于按 run 固定 helper: 取用按当前部署版并标注)= 本 run 固定的验证 helper 摘要(64 位 hex), run-start --confirm 写入, 快照原文在 paths.validation_helper_root/<摘要>.py.txt"
+              },
+              "keys_description": "AIPOS-F214 件⑤(F208 P2-4: 原 entry_schema 只是文字, 代码 validation_root.ENTRY_KEYS / RUN_KEYS / HOST_ENTRY_KEYS 手写常量强制、无对表): 条目键表结构化——entry_schema / run_entry_schema / simulator_entry_schema 的键 = 键名(值 = 人读说明), run_optional_keys = run 条目可选键; 代码键集只经读取口 validation_root.entry_key_table 投影(不另列常量)。清单只追加。",
+              "run_entry_schema": {
+                "run_id": "run id(产品铸: roles.schema validation_root.run_id_template)",
+                "candidate": "固定候选 40 位 sha(卡仓已有提交)",
+                "started_at": "开启时刻 ISO Z",
+                "started_by": "开启者(--actor)",
+                "finished_at": "收口时刻 ISO Z(null = 活动 run)",
+                "finished_by": "收口者",
+                "simulator": "AIPOS-F194 可选: 本 run 专用模拟器绑定(键见 simulator_entry_schema)",
+                "helper_sha256": "AIPOS-F203 可选: 本 run 固定的验证 helper 摘要(64 位 hex)"
+              },
+              "run_optional_keys": ["simulator", "helper_sha256"],
+              "simulator_entry_schema": {
+                "udid": "专用模拟器 UDID(helper sim-create 打印)",
+                "name": "模拟器名 lybra-<卡>-<run>(roles.schema ios_simulator.name_template)",
+                "bound_at": "绑定时刻 ISO Z",
+                "bound_by": "绑定者",
+                "verified_at": "收口核对删除时刻(未核 = null)",
+                "verified_by": "核对者",
+                "evidence_sha256": "模拟器证据文件 sha256"
               }
             },
             "hosts": {

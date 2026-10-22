@@ -43,17 +43,11 @@ _HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$")
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-ENTRY_KEYS = ("id", "host", "host_fingerprint", "base", "task_id", "instance", "role_class", "owner_ref", "declared_by", "declared_at",
-              "expires_at", "revoked_at", "revoked_by", "revoke_reason", "runs")
-RUN_KEYS = ("run_id", "candidate", "started_at", "started_by", "finished_at", "finished_by")
-RUN_OPTIONAL_KEYS = ("simulator", "helper_sha256")  # AIPOS-F194: 缺键 = 未绑定专用模拟器; AIPOS-F203: 缺键 = 旧 run(helper 按当前版)
-SIM_KEYS = ("udid", "name", "bound_at", "bound_by", "verified_at", "verified_by", "evidence_sha256")
 TEXT_KEYS = ("title", "relation", "declaration", "directory", "run_active", "run_none", "run_finish", "check_dev", "helper",
              "sandbox", "redirect_title", "redirect", "side_effect", "block", "init_run", "sim_title", "sim_step", "ssh_mode", "helper_ssh", "init_run_ssh",
              "src_deliver", "src_deliver_ssh", "src_pending", "evidence_fetch", "helper_pin", "binding", "binding_invalid", "binding_undeclared")
-ACTIONS = ("declare", "revoke", "run-start", "run-finish", "sim-bind", "set-host")
-# AIPOS-F196 件③: 目标主机 ssh 访问声明(project.json validation_roots.hosts.<主机标签>; 声明 config.schema validation_roots.schema.hosts)
-HOST_ENTRY_KEYS = ("ssh_alias", "owner_ref", "declared_by", "declared_at")
+#: AIPOS-F214 件④: 写动作 = verbs two_phase_protocol.project_json_writers.commands 中以此前缀起头的项(write_actions 投影, 不另列动作表)
+WRITE_COMMAND_PREFIX = "validation-root "
 _SSH_ALIAS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$")
 
 
@@ -69,6 +63,48 @@ class ValidationRootError(ValueError):
 # ---------------------------------------------------------------------------
 # 声明读取(单源)
 # ---------------------------------------------------------------------------
+
+def entry_key_table() -> dict[str, tuple[str, ...]]:
+    """AIPOS-F214 件⑤(F208 P2-4): project.json validation_roots 条目键表唯一读取口——config.schema project_json.validation_roots.schema
+    declarations.entry_schema / run_entry_schema / run_optional_keys / simulator_entry_schema 与 hosts.entry_schema 投影(原手写常量
+    ENTRY_KEYS / RUN_KEYS / RUN_OPTIONAL_KEYS / SIM_KEYS / HOST_ENTRY_KEYS 退役)。返回 {entry, run, run_optional, simulator, host};
+    run = run_entry_schema 键去掉可选键。缺 / 形不合(非对象 / 空 / 可选键不在 run_entry_schema)= SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    where = "config.schema.json configuration_sources.project_json.schema.validation_roots.schema"
+    spec = (((((load_schema("config", code_repo_schema_root()).get("configuration_sources") or {}).get("project_json") or {})
+              .get("schema") or {}).get("validation_roots") or {}).get("schema")) or {}
+    decl, hosts = spec.get("declarations") or {}, spec.get("hosts") or {}
+    tables = {"entry": decl.get("entry_schema"), "run_all": decl.get("run_entry_schema"), "simulator": decl.get("simulator_entry_schema"),
+              "host": hosts.get("entry_schema")}
+    bad = [k for k, v in tables.items() if not isinstance(v, dict) or not v]
+    optional = decl.get("run_optional_keys")
+    if bad or not isinstance(optional, list) or not set(optional) <= set(tables["run_all"] or {}):
+        raise SchemaLoadError(f"{where} 条目键表未声明齐({bad or 'run_optional_keys 须为 run_entry_schema 键的子集'}, AIPOS-F214 件⑤)")
+    run_optional = tuple(str(k) for k in optional)
+    return {"entry": tuple(tables["entry"]), "run": tuple(k for k in tables["run_all"] if k not in run_optional),
+            "run_optional": run_optional, "simulator": tuple(tables["simulator"]), "host": tuple(tables["host"])}
+
+
+def write_actions() -> tuple[str, ...]:
+    """AIPOS-F214 件④(F208 P2-3): `lybra project validation-root` 写动作表唯一读取口——verbs.schema two_phase_protocol.project_json_writers
+    .commands 中 WRITE_COMMAND_PREFIX 起头的项; 每项须同在 lybra_governance_commit.post_write_landing.commands.project_writers.subcommands
+    (两阶段与写后落账同一份动作表)。缺 / 不一致 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    verbs = load_schema("verbs", code_repo_schema_root())
+    commands = ((verbs.get("two_phase_protocol") or {}).get("project_json_writers") or {}).get("commands")
+    landing = ((((((verbs.get("verbs") or {}).get("lybra_governance_commit") or {}).get("post_write_landing") or {}).get("commands") or {})
+                .get("project_writers") or {}).get("subcommands"))
+    if not isinstance(commands, list) or not isinstance(landing, list):
+        raise SchemaLoadError("verbs.schema.json two_phase_protocol.project_json_writers.commands / "
+                              "lybra_governance_commit.post_write_landing.commands.project_writers.subcommands 未声明")
+    actions = tuple(c[len(WRITE_COMMAND_PREFIX):] for c in commands if isinstance(c, str) and c.startswith(WRITE_COMMAND_PREFIX))
+    unlanded = [f"{WRITE_COMMAND_PREFIX}{a}" for a in actions if f"{WRITE_COMMAND_PREFIX}{a}" not in landing]
+    if not actions or unlanded:
+        raise SchemaLoadError(f"verbs.schema.json validation-root 写动作表不合: 两阶段声明 {list(actions)}, 未登记写后落账 {unlanded}")
+    return actions
+
 
 def declaration() -> dict[str, Any]:
     """roles.schema write_boundary.validation_root(判定细则 / 禁区 / 重定向 / 沙箱)。缺键 = SchemaLoadError。"""
@@ -198,13 +234,14 @@ def project_validation_roots(governance_root: str | Path, *, project: dict[str, 
             or not isinstance(raw["declarations"], list)):
         raise _err("VR_DECLARATION_INVALID", f"{where} 须为 {{declarations: [...][, hosts: {{...}}]}}")
     project_validation_hosts(governance_root, project=data)  # AIPOS-F196 件③: hosts 段同一形校验(写前预检 / 写后复核同走)
+    keys_table = entry_key_table()  # AIPOS-F214 件⑤: 键集投影自 config.schema
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
     for index, entry in enumerate(raw["declarations"]):
         at = f"{where}.declarations[{index}]"
-        if not isinstance(entry, dict) or set(entry) != set(ENTRY_KEYS):
+        if not isinstance(entry, dict) or set(entry) != set(keys_table["entry"]):
             keys = sorted(entry) if isinstance(entry, dict) else type(entry).__name__
-            raise _err("VR_DECLARATION_INVALID", f"{at} 键须恰为 {list(ENTRY_KEYS)}, 实为 {keys}")
+            raise _err("VR_DECLARATION_INVALID", f"{at} 键须恰为 {list(keys_table['entry'])}, 实为 {keys}")
         for key in ("id", "host", "base", "task_id", "instance", "role_class", "owner_ref", "declared_by"):
             if not isinstance(entry[key], str) or not entry[key].strip() or "\n" in entry[key]:
                 raise _err("VR_DECLARATION_INVALID", f"{at}.{key} 须为非空单行串")
@@ -226,12 +263,13 @@ def project_validation_roots(governance_root: str | Path, *, project: dict[str, 
             raise _err("VR_DECLARATION_INVALID", f"{at}.runs 须为列表")
         for rindex, run in enumerate(entry["runs"]):
             rat = f"{at}.runs[{rindex}]"
-            if not isinstance(run, dict) or not set(RUN_KEYS) <= set(run) or set(run) - set(RUN_KEYS) - set(RUN_OPTIONAL_KEYS):
-                raise _err("VR_DECLARATION_INVALID", f"{rat} 键须为 {list(RUN_KEYS)}(可选 {list(RUN_OPTIONAL_KEYS)})")
+            if (not isinstance(run, dict) or not set(keys_table["run"]) <= set(run)
+                    or set(run) - set(keys_table["run"]) - set(keys_table["run_optional"])):
+                raise _err("VR_DECLARATION_INVALID", f"{rat} 键须为 {list(keys_table['run'])}(可选 {list(keys_table['run_optional'])})")
             sim = run.get("simulator")
             if sim is not None:
-                if not isinstance(sim, dict) or set(sim) != set(SIM_KEYS) or not helper.is_udid(sim.get("udid")):
-                    raise _err("VR_DECLARATION_INVALID", f"{rat}.simulator 键须恰为 {list(SIM_KEYS)} 且 udid 为 UDID")
+                if not isinstance(sim, dict) or set(sim) != set(keys_table["simulator"]) or not helper.is_udid(sim.get("udid")):
+                    raise _err("VR_DECLARATION_INVALID", f"{rat}.simulator 键须恰为 {list(keys_table['simulator'])} 且 udid 为 UDID")
                 _parse_iso(sim["bound_at"], f"{rat}.simulator.bound_at")
                 if sim["verified_at"] is not None:
                     _parse_iso(sim["verified_at"], f"{rat}.simulator.verified_at")
@@ -259,15 +297,16 @@ def project_validation_hosts(governance_root: str | Path, *, project: dict[str, 
     if hosts is None:
         return {}
     where = "project.json validation_roots.hosts"
+    host_keys = entry_key_table()["host"]  # AIPOS-F214 件⑤: 键集投影自 config.schema hosts.entry_schema
     if not isinstance(hosts, dict):
-        raise _err("VR_DECLARATION_INVALID", f"{where} 须为 {{<主机标签>: {{{', '.join(HOST_ENTRY_KEYS)}}}}}")
+        raise _err("VR_DECLARATION_INVALID", f"{where} 须为 {{<主机标签>: {{{', '.join(host_keys)}}}}}")
     out: dict[str, dict[str, Any]] = {}
     for label, entry in hosts.items():
         at = f"{where}.{label}"
         if not isinstance(label, str) or not _HOST_RE.match(label):
             raise _err("VR_DECLARATION_INVALID", f"{at}: 主机标签须为 [A-Za-z0-9._-]")
-        if not isinstance(entry, dict) or set(entry) != set(HOST_ENTRY_KEYS):
-            raise _err("VR_DECLARATION_INVALID", f"{at} 键须恰为 {list(HOST_ENTRY_KEYS)}")
+        if not isinstance(entry, dict) or set(entry) != set(host_keys):
+            raise _err("VR_DECLARATION_INVALID", f"{at} 键须恰为 {list(host_keys)}")
         if not isinstance(entry["ssh_alias"], str) or not _SSH_ALIAS_RE.match(entry["ssh_alias"]):
             raise _err("VR_DECLARATION_INVALID", f"{at}.ssh_alias={entry['ssh_alias']!r} 须为 ssh 别名([A-Za-z0-9._@-], 不以 - 起首, 无空白)")
         for key in ("owner_ref", "declared_by"):
@@ -614,8 +653,9 @@ def apply_validation_root_change(governance_root: str | Path, action: str, *, dr
     from tools.aipos_cli.workspace_config import update_project_json
 
     gov = Path(governance_root).expanduser().resolve()
-    if action not in ACTIONS:
-        raise _err("VR_DECLARATION_INVALID", f"未知动作 {action!r}(只认 {list(ACTIONS)})")
+    actions = write_actions()
+    if action not in actions:
+        raise _err("VR_DECLARATION_INVALID", f"未知动作 {action!r}(只认 {list(actions)})")
     actor = _single_line(actor, "--actor")
     now = _now()
     entries = project_validation_roots(gov)
@@ -1215,6 +1255,13 @@ def run_evidence_declaration() -> dict[str, Any]:
                    for k in ("max_file_bytes", "max_total_bytes", "max_files", "fetch_timeout_seconds"))):
         raise SchemaLoadError("roles.schema.json write_boundary.validation_root.run_evidence 形不合(include_dirs 规范相对路径非空列表 / "
                               "copy_layout 恰 manifest·fetch_record·files 单段名 / copy_subdir 单段名 / 上限与时限正整数)")
+    # AIPOS-F214 件⑤: helper(只用标准库, 不读 schema)run 内证据文件常量与声明逐项对表(有意两份, 不符 = fail-closed)
+    files = decl.get("helper_files")
+    expect = {"init_run": helper.INIT_EVIDENCE, "src_verify": helper.SRC_EVIDENCE, "evidence_manifest": helper.EVIDENCE_MANIFEST}
+    if (not isinstance(files, dict) or set(files) != {"evidence_dir", *expect} or files["evidence_dir"] not in decl["include_dirs"]
+            or any(files[k] != v or not str(v).startswith(f"{files['evidence_dir']}/") for k, v in expect.items())):
+        raise SchemaLoadError("roles.schema.json write_boundary.validation_root.run_evidence.helper_files 须恰为 {evidence_dir(∈ include_dirs), "
+                              f"init_run, src_verify, evidence_manifest}} 且 = helper 常量 {expect}(证据文件在 evidence_dir 下; AIPOS-F214 件⑤)")
     return decl
 
 
