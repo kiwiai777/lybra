@@ -344,10 +344,10 @@
         }
       },
       "non_branch_rework": {
-        "description": "AIPOS-F218 件①(10-23 chris HBJOTA-61V2 / LANTU-VALID2 实撞: 验证卡执行体因开工时无活动 run 交回 BLOCK, 审计 BLOCK; 顾问追加范围 10-23 依据 chris HBLX-31: task_mode=docs + lane.repo=governance_root 的卡审计 FAIL 登记返工后同样被要求卡分支新提交): 登记返工轮后推导核原硬要求「卡分支新提交 + Return 改新 tip」, 而交付主体不是卡分支的卡(固定候选 / 治理根产出清单)无卡分支 → 永停 await_rework。判据按交付主体三态(next_resolver.card_delivery_subject, F210 唯一判定)分支: branch = 行为不变(AIPOS-F155); 非 branch(by_subject 所列: candidate / governance_outputs)且最新常规裁决非 PASS、已针对它登记返工轮(rework_round_for_verdict)时, 「已返工」= 晚于该裁决(verdict_at; 读不出 = 裁决记录 mtime)的新交回产物: 门交回记录(return_id ≠ 裁决 reviewed_return_record_ref 且 returned_at 晚于裁决)或交回报告文件晚于裁决改写且指纹不同于被裁决那份(被裁决那份交回记录绑定的 artifact_subject.<return_fingerprint_key>; 治理根产出清单另比 outputs_digest; 存量记录无报告指纹 = 报告修改时刻按秒严格晚于裁决)。成立 = verdict_staleness 判过期(唯一判据, 推导核与门侧交回自动派审 audit_derivation._reaudit_round 同读), 走 nodes.N4.verdict_stale 同一重交回出口(_derive_stale_re_return → _return_submission_step → 门侧按卡号演进派下一轮审计 R(n+1))。交回报告不合本主体契约 = 产物入口同一校验(validate_task_artifact)→ artifact_invalid 原文点名: candidate = commit_sha / tree_hash / branch 须等于卡面固定候选给值(INGEST_CANDIDATE_MISMATCH); governance_outputs = 产出清单(outputs)合规, 不校验 commit_sha 与卡分支。门交回记录绑定(next_resolver.return_binding_subject)附交回报告指纹: candidate = 候选三键 + 报告指纹(kind = candidate); governance_outputs = 产出清单 + 报告指纹。判定唯一实现 next_resolver.non_branch_re_return; 措辞 = texts(公共)+ by_subject.<kind>(按主体), 占位: {round} 返工轮次, {candidate} {tree_hash} {branch} 固定候选值(仅 candidate), {points} 返工要点, {criteria} 验收(无 = 空), {verdict_id} {verdict} {audit_task_id} 被取代裁决, {reviewed} 其所审交回记录, {evidence} 新交回证据。",
+        "description": "AIPOS-F218 件①(10-23 chris HBJOTA-61V2 / LANTU-VALID2 实撞: 验证卡执行体因开工时无活动 run 交回 BLOCK, 审计 BLOCK; 顾问追加范围 10-23 依据 chris HBLX-31: task_mode=docs + lane.repo=governance_root 的卡审计 FAIL 登记返工后同样被要求卡分支新提交): 登记返工轮后推导核原硬要求「卡分支新提交 + Return 改新 tip」, 而交付主体不是卡分支的卡(固定候选 / 治理根产出清单)无卡分支 → 永停 await_rework。判据按交付主体三态(next_resolver.card_delivery_subject, F210 唯一判定)分支: branch = 行为不变(AIPOS-F155); 非 branch(by_subject 所列: candidate / governance_outputs)且最新常规裁决非 PASS、已针对它登记返工轮(rework_round_for_verdict)时, 「已返工」= 晚于时间界(AIPOS-F219: nodes.N4.rework_return_bound = max(裁决时刻, 该裁决最新返工轮 created_at); 原 F218 只比裁决时刻 verdict_at)的新交回产物: 门交回记录(return_id ≠ 裁决 reviewed_return_record_ref 且 returned_at 晚于裁决)或交回报告文件晚于裁决改写且指纹不同于被裁决那份(被裁决那份交回记录绑定的 artifact_subject.<return_fingerprint_key>; 治理根产出清单另比 outputs_digest; 存量记录无报告指纹 = 报告修改时刻按秒严格晚于裁决)。成立 = verdict_staleness 判过期(唯一判据, 推导核与门侧交回自动派审 audit_derivation._reaudit_round 同读), 走 nodes.N4.verdict_stale 同一重交回出口(_derive_stale_re_return → _return_submission_step → 门侧按卡号演进派下一轮审计 R(n+1))。交回报告不合本主体契约 = 产物入口同一校验(validate_task_artifact)→ artifact_invalid 原文点名: candidate = commit_sha / tree_hash / branch 须等于卡面固定候选给值(INGEST_CANDIDATE_MISMATCH); governance_outputs = 产出清单(outputs)合规, 不校验 commit_sha 与卡分支。门交回记录绑定(next_resolver.return_binding_subject)附交回报告指纹: candidate = 候选三键 + 报告指纹(kind = candidate); governance_outputs = 产出清单 + 报告指纹。判定唯一实现 next_resolver.non_branch_re_return; 措辞 = texts(公共)+ by_subject.<kind>(按主体), 占位: {round} 返工轮次, {candidate} {tree_hash} {branch} 固定候选值(仅 candidate), {points} 返工要点, {criteria} 验收(无 = 空), {verdict_id} {verdict} {audit_task_id} 被取代裁决, {reviewed} 其所审交回记录, {evidence} 新交回证据; AIPOS-F219 件②(F218R F-1): by_subject.<kind>.reaudit_ref / reaudit_note = 门侧派下一轮审计卡(audit_derivation.build_derived_audit_task)的复审说理(governance_refs 一行 / 正文一节), 另占位 {superseded} 被取代的上一轮审计卡; 卡分支主体说理不变(nodes.N4.verdict_stale)。",
         "return_fingerprint_key": "return_sha256",
         "texts": {
-          "await_progress": "等执行体重写交回(晚于裁决的新交回; 交付主体非卡分支, 不要求新提交)",
+          "await_progress": "等执行体重写交回(晚于裁决且晚于该轮返工登记的新交回; 交付主体非卡分支, 不要求新提交)",
           "criteria": "; 验收: {criteria}",
           "evidence_record": "门交回记录 {return_id} 落于 {at}",
           "evidence_file": "交回报告 {path} 改于 {at}",
@@ -363,7 +363,9 @@
             "stale_head": "裁决 {verdict_id}({verdict}, 审计卡 {audit_task_id})审的是交回 {reviewed}; 执行体已按第 {round} 轮返工在同一固定候选 {candidate} 上重新执行并重写交回({evidence})",
             "invalid_fix": "执行体把交回报告 frontmatter 改回卡面固定候选给值(commit_sha={candidate}, tree_hash={tree_hash}, branch={branch}; 固定候选卡不建卡分支、候选不变), 产品随后重交回并派复审",
             "not_updated_note": "交回报告不合固定候选契约, 不得派审(AIPOS-F218 件①)",
-            "re_return_suggested": "重交回(交回报告仍是卡面固定候选, 执行体已在同一候选上重新执行): 门落新 return 记录并按卡号演进声明派下一轮审计"
+            "re_return_suggested": "重交回(交回报告仍是卡面固定候选, 执行体已在同一候选上重新执行): 门落新 return 记录并按卡号演进声明派下一轮审计",
+            "reaudit_ref": "★复审说理(AIPOS-F219 返工重交回, 交付主体 = 固定候选): 上一轮 {superseded} 的裁决 {verdict_id}({verdict})审的是交回 {reviewed}; 执行体已按第 {round} 轮返工在同一固定候选 {candidate} 上重新执行并重写交回({evidence}); 本轮准绳不变(原卡全文), 审的是同一固定候选上重新执行的交回; 上一轮已结案, 其裁决留作历史事实",
+            "reaudit_note": "\n## 复审说理(AIPOS-F219 返工重交回, 固定候选)\n本卡取代上一轮审计卡 `{superseded}`: 其裁决 `{verdict_id}`({verdict})审的是交回 `{reviewed}`; 执行体已按第 {round} 轮返工在同一固定候选 `{candidate}` 上重新执行并重写交回({evidence})。固定候选卡不建卡分支、候选不变, 按原卡全文对本次重新执行的交回整卡重审。\n"
           },
           "governance_outputs": {
             "await_missing": "第 {round} 轮返工交回(执行体按返工节修正报告落点内的产出并重写交回报告; 只写治理根的卡无卡分支, 不要求新提交)",
@@ -371,8 +373,18 @@
             "stale_head": "裁决 {verdict_id}({verdict}, 审计卡 {audit_task_id})审的是交回 {reviewed}; 执行体已按第 {round} 轮返工修正产出并重写交回({evidence})",
             "invalid_fix": "执行体按拒因修正产出或交回报告 frontmatter outputs(只写治理根的卡: 产出清单契约, 无分支三键), 产品随后重交回并派复审",
             "not_updated_note": "交回报告 / 产出清单不合只写治理根契约, 不得派审(AIPOS-F218 件①)",
-            "re_return_suggested": "重交回(只写治理根的卡, 已按返工重写交回): 门落新 return 记录(绑定新产出清单指纹)并按卡号演进声明派下一轮审计"
+            "re_return_suggested": "重交回(只写治理根的卡, 已按返工重写交回): 门落新 return 记录(绑定新产出清单指纹)并按卡号演进声明派下一轮审计",
+            "reaudit_ref": "★复审说理(AIPOS-F219 返工重交回, 交付主体 = 治理根产出清单): 上一轮 {superseded} 的裁决 {verdict_id}({verdict})审的是交回 {reviewed}; 执行体已按第 {round} 轮返工修正产出并重写交回({evidence}); 本轮准绳不变(原卡全文), 审的是报告落点内新的产出清单与交回报告; 上一轮已结案, 其裁决留作历史事实",
+            "reaudit_note": "\n## 复审说理(AIPOS-F219 返工重交回, 治理根产出)\n本卡取代上一轮审计卡 `{superseded}`: 其裁决 `{verdict_id}`({verdict})审的是交回 `{reviewed}`; 执行体已按第 {round} 轮返工修正产出并重写交回({evidence})。只写治理根的卡无卡分支, 按原卡全文对新的产出清单与交回报告整卡重审。\n"
           }
+        }
+      },
+      "rework_return_bound": {
+        "description": "AIPOS-F219(10-23 chris HBLX-31 实撞, F218 引入: 同一裁决先后登记第 1、2 轮返工, 第 1 轮期间重写的交回报告在第 2 轮登记后被误判为「已按第 2 轮返工重写交回」): 「已按第 n 轮返工重交回」的时间界 = max(裁决时刻(verdict_at; 读不出 = 裁决记录 mtime), 该裁决最新返工轮(rework_round_for_verdict 返回的那一轮)created_at)。门交回记录 returned_at(严格晚于界)、交回报告修改时刻(按秒不早于界, 另须指纹不同于被裁决那份; 存量记录无指纹 = 按秒严格晚于界)(next_resolver.non_branch_re_return 两路)、卡分支 tip 提交时刻(committer time, 按秒不早于界; verdict_staleness 卡分支分支)都与这一个界比, 早于该轮登记的交回 / 报告改写 / 分支提交不算本轮返工。该轮 created_at 缺 / 读不出 = 界回落裁决时刻, 等待提示点名(texts.fallback)。唯一实现 next_resolver.rework_return_bound; 等待提示(await_rework)附 texts.registered(占位 {round} 轮次, {round_at} 该轮登记时刻)或 texts.fallback(占位 {round}, {raw} created_at 原值, {verdict_at} 裁决时刻); 交付主体非卡分支时另附 texts.earlier_ignored(占位 {evidence} 晚于裁决但早于界的交回证据, 措辞同 non_branch_rework.texts.evidence_*; {round})。",
+        "texts": {
+          "registered": "第 {round} 轮于 {round_at} 登记, 等其后的新交回(早于该轮登记的门交回记录 / 报告改写 / 卡分支提交不算本轮)",
+          "fallback": "第 {round} 轮登记时刻读不出(created_at={raw}), 时间界回落裁决时刻 {verdict_at}, 等其后的新交回",
+          "earlier_ignored": "{evidence}, 早于第 {round} 轮登记, 不算本轮交回"
         }
       },
       "non_pass_recovery": {
