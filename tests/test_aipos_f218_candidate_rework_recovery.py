@@ -372,6 +372,7 @@ def test_declarations_single_source_and_single_judgement():
     assert rec["return_values"] == ["BLOCK"] and "{rework_command}" in rec["texts"]["paths"]
     src = (REPO_ROOT / "tools" / "aipos_cli" / "next_resolver.py").read_text(encoding="utf-8")
     assert src.count("non_pass_recovery(workspace_root, task_id, fm,") == 2, "推导核 BLOCK / FAIL 两处调用同一实现"
+    assert src.count("_non_pass_fail_recovery(workspace_root, task_id, fm, conn_arg=conn_arg)") == 1
     assert src.count("non_pass_recovery(Path(workspace_root), task_id, fm, state,") == 1, "loop status 占位同一实现"
     assert src.count("_non_branch_verdict_staleness(workspace_root, task_id, card_frontmatter, non_branch)") == 1
     assert src.count("non_branch_rework_subject(workspace_root, task_id, ") == 2, "过期判据与等待提示同一主体判定"

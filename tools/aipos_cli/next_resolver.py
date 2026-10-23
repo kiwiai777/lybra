@@ -3625,6 +3625,16 @@ def non_pass_recovery(workspace_root: Path, task_id: str, card_frontmatter: dict
             "choice": choice, "paths": texts["paths"].format(rework_command=rework, reaudit_command=reaudit)}
 
 
+def _non_pass_fail_recovery(workspace_root: Path, task_id: str, fm: dict[str, Any], *, conn_arg: str | None) -> dict[str, Any] | None:
+    """AIPOS-F218 件②: 推导核 N4 FAIL(未登记返工轮)分支的两条可选路(non_pass_recovery; 返工命令 / 重审命令的 --actor 与信封 = 驱动方,
+    同 _derive_audit_blocked)。非 FAIL 类 = None。"""
+    state = non_pass_fail_state(workspace_root, task_id)
+    if state is None:
+        return None
+    return non_pass_recovery(workspace_root, task_id, fm, state, actor=_driver_actor(workspace_root, connection_json=conn_arg),
+                             policy_ref=_driver_envelope_ref(workspace_root, task_id, fm, conn_arg) or "")
+
+
 def non_pass_fail_state(workspace_root: Path, task_id: str) -> dict[str, Any] | None:
     """AIPOS-F218 件②: 本卡最新常规裁决非 PASS 族且非 BLOCK(audit_block_state 管)时的仅重审依据 {verdict, verdict_id, audit_task_id, reason,
     redispatched_to, next_round, dispatch_reason_template}(派审理由 = nodes.N4.non_pass_recovery.fail_dispatch_reason); 否则 None。"""
@@ -4358,12 +4368,7 @@ def _derive_next_step(
                     if candidate_fail is not None:
                         return _derive_candidate_fail(task_id, candidate_fail)
                     # FAIL 等非 PASS 裁决(未登记返工轮); AIPOS-F218 件②: 附两条可选路(non_pass_recovery, 与 BLOCK 同一实现)
-                    fail_state = non_pass_fail_state(workspace_root, task_id)
-                    recovery = None
-                    if fail_state is not None:
-                        recovery = non_pass_recovery(workspace_root, task_id, fm, fail_state,
-                                                     actor=_driver_actor(workspace_root, connection_json=conn_arg),
-                                                     policy_ref=_driver_envelope_ref(workspace_root, task_id, fm, conn_arg) or "")
+                    recovery = _non_pass_fail_recovery(workspace_root, task_id, fm, conn_arg=conn_arg)
                     return {
                         "task_id": task_id,
                         "derivable": False,
