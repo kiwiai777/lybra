@@ -95,6 +95,34 @@
       "automation": {
         "queue_placement": "moves card to <queue_root>/pending/ (queue_root = project.json paths.queue_root, 唯一读取口 task_loader.queue_root_for)",
         "frontmatter_update": "status: pending"
+      },
+      "draft_revision": {
+        "description": "AIPOS-F220 件①②: 未发布草稿的正式修订入口 `lybra draft create --from-json <修正后输入> --replace [--dry-run]`(同一动词加参数, 不另立 draft revise: 修订 = 从修正后的完整输入重新起草, 与 create 同一写入与校验路径 draft_writer.create_draft, 只多「旧稿留档 + 允许覆盖本卡未发布草稿」两步)。准入(唯一判定 draft_writer.draft_revision_state): 草稿落点 <drafts>/<卡 ID slug>.md 存在且其 task_id 与输入一致、该卡无发布记录(records.load_records publishes 组, 含存量目录)、不在任何队列目录、同 ID 无其他草稿; 否则拒并给出口(已发布 / 已入队 = queue amend)。写入: 先把旧稿字节原样写入留档 <config.schema governance_structure.paths.draft_history>/<卡 ID slug>/<时间戳>.md(只追加, 已存在 = 拒), 再写新稿; 新稿保留旧稿 draft_created_at / draft_created_by, draft_updated_at = 本次。--dry-run = 零写入, 给新旧差异摘要(frontmatter 逐键 + 正文行数)。无同 ID 草稿时 --replace = 拒(DRAFT_REVISION_NO_DRAFT; 修订须有被修订的对象, 防卡号笔误静默新建)。不带 --replace 撞号时拒因追加本入口提示(duplicate_hint / amend_hint)。落账: 与草稿同规则——起草 / 修订都不即时落账(不另写落账); 新稿随该卡 N6 收账(governance_commit.card_own_paths 草稿位), 留档目录未在 N6 候选内(该函数不在 AIPOS-F220 车道, 留档暂只在盘上, 待后续卡纳入)。",
+        "cli_flag": "--replace",
+        "history_path_key": "draft_history",
+        "history_filename": "{timestamp}.md",
+        "timestamp_style": "millis",
+        "diff_value_max_chars": 80,
+        "texts": {
+          "duplicate_hint": "DRAFT_REVISION_AVAILABLE: 同 ID 草稿 {path} 尚未发布; 从修正后的输入重写(旧稿自动留档到 {history_dir}/): lybra --workspace-root {governance_root} draft create --from-json <修正后输入> --replace --actor <你的顾问实例> --dry-run, 核对差异后去掉 --dry-run",
+          "amend_hint": "DRAFT_REVISION_PUBLISHED: 卡 {task_id} 已发布或已入队({where}), 不能按草稿修订; 改卡面: lybra --workspace-root {governance_root} queue amend --task-id {task_id} --actor <你的顾问实例> --amendments '<JSON>' --amendment-reason <理由> --dry-run",
+          "no_draft": "DRAFT_REVISION_NO_DRAFT: --replace 只修订已存在的未发布草稿, 草稿落点 {path} 不存在; 新建草稿去掉 --replace",
+          "mismatch": "DRAFT_REVISION_MISMATCH: 草稿落点 {path} 的 task_id={existing} 与输入 task_id={task_id} 不一致(卡号 slug 相同), 不覆盖; 换卡号或先核对该草稿",
+          "unreadable": "DRAFT_REVISION_UNREADABLE: 草稿 {path} 读不出({reason}), 不覆盖; 先核对该文件",
+          "ambiguous": "DRAFT_REVISION_AMBIGUOUS: 同 ID 另有草稿 {paths}(不是本卡草稿落点 {path}), 不能确定修订哪一份; 先处理多余草稿",
+          "history_exists": "DRAFT_REVISION_HISTORY_EXISTS: 留档文件 {path} 已存在(留档只追加不覆盖); 稍后重试",
+          "where_queue": "队列 {paths}",
+          "where_publish": "发布记录 {paths}",
+          "diff_header": "修订差异(旧稿 {path} → 新稿):",
+          "diff_changed": "  ~ {field}: {old} → {new}",
+          "diff_added": "  + {field}: {new}",
+          "diff_removed": "  - {field}: {old}",
+          "diff_body": "  正文: {old_lines} 行 → {new_lines} 行(+{added} / -{removed})",
+          "diff_none": "  (与旧稿无差异)",
+          "history_line": "旧稿留档{will}: {path}(sha256 {sha256})",
+          "will": "(将写)",
+          "done_line": "已修订草稿 {path}(旧稿已留档, 新稿未发布; 下一步 draft publish --dry-run)"
+        }
       }
     },
     "N1": {

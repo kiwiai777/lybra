@@ -995,6 +995,11 @@
         "path": "drafts/",
         "description": "Draft tasks directory"
       },
+      "draft_history": {
+        "relative_to": "tasks_root",
+        "path": "draft_history/",
+        "description": "AIPOS-F220 件①: 未发布草稿修订(lybra draft create --replace)的旧稿留档根——<本目录>/<卡 ID slug>/<时间戳>.md, 旧稿字节原样, 只追加不改不删。放在草稿目录之外: 草稿扫描(撞号判定 / draft list / 权威扫描)不把留档当草稿。命名与文案声明 transitions.schema nodes.N0.draft_revision, 唯一实现 draft_writer.draft_history_dir"
+      },
       "records": {
         "relative_to": "tasks_root",
         "path": "records/",

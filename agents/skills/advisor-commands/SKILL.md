@@ -60,6 +60,13 @@ role: advisor
 lybra draft create --from-template basic --task-id <卡ID> --title "..." --project <项目名> --actor <你的顾问实例>
 # 生成 5_tasks/drafts/<卡ID小写>.md(--from-json <草稿JSON> 为另一入口, 二选一); --actor 填卡稿 created_by
 ```
+**草稿写错了(还没发布)怎么办(AIPOS-F220)**:改好卡稿 JSON, 用同一命令加 `--replace` 重写这份草稿——不手改草稿文件、不换卡号:
+```bash
+lybra draft create --from-json <修正后卡稿JSON> --replace --actor <你的顾问实例> --dry-run   # 预演: 新旧差异摘要, 零写入
+lybra draft create --from-json <修正后卡稿JSON> --replace --actor <你的顾问实例>             # 旧稿原样留档到 5_tasks/draft_history/<卡ID小写>/<时间戳>.md, 再写新稿
+```
+只修订本卡**未发布**草稿; 已发布 / 已入队 = 拒并给 `lybra queue amend` 命令(改卡面走它); 没有同 ID 草稿 = 拒(新建去掉 `--replace`)。
+不带 `--replace` 撞号时拒因里会直接给出这条命令。
 
 #### `lybra draft publish`
 **何时用**:发布草稿到 pending 队列(N0)。

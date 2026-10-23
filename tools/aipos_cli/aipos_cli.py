@@ -58,6 +58,7 @@ from tools.aipos_cli.draft_writer import (
     load_body_file,
     load_create_payload_from_json,
     publish_draft,
+    render_revision_lines,
     resolve_publish_signer,
 )
 from tools.aipos_cli.external_intake_writer import build_external_intake_draft, load_intake_payload_from_json
@@ -2227,6 +2228,7 @@ def build_parser() -> argparse.ArgumentParser:
     draft_create_parser.add_argument("--artifact-policy", help="artifact_policy value")
     draft_create_parser.add_argument("--body-file", help="Optional body markdown file")
     draft_create_parser.add_argument("--actor", default=None, help="AIPOS-F156: signing advisor instance (fills created_by; verified via the F154 per-instance credential pick). Default = the governance root's only advisor instance; required when several are enrolled")
+    draft_create_parser.add_argument("--replace", action="store_true", help="AIPOS-F220: revise this card's existing UNPUBLISHED draft from the corrected input (old draft archived byte-for-byte first; same write/validation path as create). Published / queued cards are refused with the queue amend exit; no existing draft = refused (declared transitions.schema nodes.N0.draft_revision)")
     draft_create_parser.add_argument("--dry-run", action="store_true", help="Render and validate without writing")
     draft_create_parser.add_argument("--json", action="store_true", help="Output JSON")
 
@@ -4027,7 +4029,7 @@ def main(argv: list[str] | None = None) -> int:
                 if refusal:
                     print(f"Error: {refusal}", file=sys.stderr)
                     return 1
-                result = create_draft(repo_root, metadata, body, dry_run=args.dry_run)
+                result = create_draft(repo_root, metadata, body, dry_run=args.dry_run, replace=args.replace)
                 result["signer"] = signer
             except (OSError, ValueError, json.JSONDecodeError) as exc:
                 print(f"Error: {exc}", file=sys.stderr)
@@ -4037,6 +4039,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(render_json(result))
             else:
                 print(render_draft_result_text(result))
+                for line in render_revision_lines(result):  # AIPOS-F220: 修订差异摘要 / 留档行(无修订 = 无输出)
+                    print(line)
                 print(_signer_line(result["signer"]))
             return 1 if result.get("verdict") == Verdict.BLOCK else 0
 
@@ -6373,6 +6377,18 @@ def main(argv: list[str] | None = None) -> int:
         if not args.dry_run and result.get("ok") and result.get("verdict") != Verdict.BLOCK:
             landing = _land_queue_entry(repo_root, result, actor=args.actor, subcommand="amend",
                                         task_id=str((result.get("data") or {}).get("task_id") or args.task_id))
+        if any((err or {}).get("category") == "NOT_FOUND" for err in result.get("errors") or []):
+            # AIPOS-F220 件①: 不在队列而本卡有未发布草稿 = 点名草稿修订入口(draft create --replace; 判定唯一 draft_revision_state)
+            from tools.aipos_cli.draft_writer import draft_revision_state, duplicate_revision_hint
+
+            try:
+                hint = duplicate_revision_hint(repo_root, str(args.task_id)) \
+                    if draft_revision_state(repo_root, str(args.task_id))["state"] == "draft" else None
+            except ValueError as exc:  # 卡号转不成草稿文件名: 不给提示, 拒因原文照出
+                hint = None
+                result.setdefault("warnings", []).append(str(exc))
+            if hint and hint not in result.setdefault("blocking_reasons", []):
+                result["blocking_reasons"].append(hint)
         print(render_json(result))
         if result.get("verdict") == Verdict.BLOCK:
             return 1

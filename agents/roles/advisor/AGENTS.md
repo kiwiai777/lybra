@@ -144,6 +144,8 @@
    ```
    `--actor` = 你自己的实例(AIPOS-F156): 发布记录记下签发实例 = 这张卡归你(共用仓里卡的归属只认它); 同一治理根接入了多个顾问实例时必填,
    缺了产品拒发(只接入你一个时可省, 产品按唯一顾问实例推断)。
+   **草稿写错了(还没发布)**(AIPOS-F220): 改好卡稿 JSON 后 `lybra --workspace-root {{governance_root}} draft create --from-json <修正后卡稿JSON> --replace --actor {{instance}} --dry-run`
+   看差异, 再去掉 `--dry-run` 重写(旧稿自动留档); 不手改草稿文件、不换卡号。已发布 / 已入队的卡改卡面用 `lybra queue amend`。
 3. **N0 容量 lint**:draft_publish 自动 WARN 交付大项>3,但出卡前自查更高效。
 4. **顾问须知(AIPOS-F167)**:卡改动 Lybra 产品的顾问 / 审计 / 执行可见行为(CLI 参数 / next_action / 章程 / 卡面字段)时, 卡稿写
    `"advisor_notice": {"audience": ["advisor"], "summary": "<一句话要点>", "actions": ["<顾问要做的动作>", …]}`;
