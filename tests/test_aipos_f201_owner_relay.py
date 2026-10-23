@@ -324,9 +324,9 @@ def test_item2_validation_grant_suggests_repo_pi_one_card_and_board_signs(board)
     assert ",仅 android-x,允许 loop 拉起 pi 工位,1 张业务卡" in sentence
     req = _card_request(card)
     assert req["payload"]["launch_harness"] == ["pi"] and req["payload"]["lane_repo"] == ["android-x"] and req["payload"]["max_tasks"] == 1
-    # 签发成功面板的转达段(policy id 由页脚本按实际签发 id 填)
-    assert req["relay"].startswith(f"告诉 {ADV_LX}:\n") and "Owner 已签发信封 {policy_id}" in req["relay"] and "允许 loop 拉起 pi 工位" in req["relay"]
-    assert req["relay_note"] == f"{ADV_LX} 还不知道你已签发: 把下面这段复制给它, 它会接着推进 LX-20CV。"
+    # AIPOS-F217: the request card no longer carries a relay paragraph; after signing the page reloads and the server's
+    # "decided, to relay" section gives it (asserted below on the page the script lands on)
+    assert "relay" not in req and "relay_note" not in req
     status, pre = _mint(board, {**req["payload"], "stage": "preview"})
     assert status == 200 and pre["ok"], pre
     status, done = _mint(board, {**req["payload"], "stage": "confirm", "preview_token": pre["preview_token"]})
@@ -346,8 +346,15 @@ def test_item2_validation_grant_suggests_repo_pi_one_card_and_board_signs(board)
     assert (f"1. {P} 卡 LX-20CV: Owner 已签发信封 pol_f201_lx_loop_4(覆盖 {ADV_LX}; 允许 loop 拉起 pi 工位)。下一步: "
             f"`lybra loop --task-id LX-20CV --workspace-root {gov} --actor {ADV_LX} --envelope pol_f201_lx_loop_4`") in cli[ADV_LX]
     status, page = _request(board, "/owner/inbox")
-    assert _board_relays(page)[ADV_LX] == cli[ADV_LX] and req["relay"].replace("{policy_id}", "pol_f201_lx_loop_4") == cli[ADV_LX]
+    assert _board_relays(page)[ADV_LX] == cli[ADV_LX]
     _snapshot("03-inbox-after-signing-relay.html", page)
+    # AIPOS-F217: the envelope page the sign script lands on after a request (to sign tab + signed banner) keeps the same paragraph
+    status, env_page = _request(board, "/owner/envelopes")
+    target = json.loads(html.unescape(re.search(r'data-gr-texts="([^"]*)"', env_page).group(1)))["after_sign"]["request"]
+    assert target == "/owner/envelopes?tab=pending&signed={policy_id}#{policy_id}"
+    status, env_page = _request(board, target.replace("{policy_id}", "pol_f201_lx_loop_4"))
+    _show(f"---- AIPOS-F217·签后落地页(待签)「已定待转达」原文 ----\n{_board_relays(env_page).get(ADV_LX)}")
+    assert status == 200 and _board_relays(env_page)[ADV_LX] == cli[ADV_LX] and 'data-signed="pol_f201_lx_loop_4"' in env_page
 
 
 def test_item2_routing_reads_card_execution_mode(rig):

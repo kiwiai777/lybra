@@ -491,14 +491,11 @@ def _flow_snapshots(board, page: str, pre: dict, done: dict, item: dict) -> None
     actions = (f'<button type="button" class="gr-primary">{html.escape(t["gr_confirm_btn"])}</button>'
                f'<button type="button">{html.escape(t["gr_cancel_btn"])}</button>')
     _snapshot("03-confirm-plain-summary.html", page, _panel_html("confirm", t["gr_confirm_heading"], lines, tech, actions, t["gr_tech"]))
-    links = conf["links"]
-    ok_actions = "".join(f'<a class="gr-back" href="{html.escape(links[k])}">{html.escape(t[key])}</a>'
-                         for k, key in (("inbox", "gr_back_inbox"), ("envelopes", "gr_back_envelopes"), ("overview", "gr_back_overview")))
     ok_tech = [f"{s['policy_id']} -> {', '.join(s['written'])}" for s in done["signed"]] + [done.get("landing_line") or "",
                f"actor={done['actor']} / {done['capture_surface']} / {done['captured_by']}"]
     _snapshot("04-signed-success-card.html", page, _panel_html(
         "signed", _fill(t["gr_ok_heading"], policy_id=done["signed"][0]["policy_id"]),
-        [_fill(t["gr_ok_continue"], agent=p["agent_or_role"], task_id=item["task_id"])], ok_tech, ok_actions, t["gr_tech"]))
+        [conf["refreshing"]], ok_tech, "", t["gr_tech"]))
 
 
 def test_item3_edit_then_sign_three_fields_and_failure_plain_reason(board):
@@ -630,10 +627,19 @@ panel.querySelector = (s) => ({ 'h2': h2, '.gr-panel-body': bodyDiv, '.gr-panel-
 const body = el('body');
 Object.assign(body.attrs, { 'data-owner': 'true', 'data-write-path': input.write_path, 'data-gr-texts': input.conf });
 const card = el('article');
-card.attrs['data-request'] = input.request;
+if (input.request) { card.attrs['data-request'] = input.request; }
+// AIPOS-F217: envelope page renew / new forms (input.form = {mode, workspace, template, inputs: {name: value}})
+const form = el('form');
+if (input.form) {
+  Object.assign(form.attrs, { 'data-mode': input.form.mode, 'data-workspace': input.form.workspace });
+  if (input.form.template) { form.attrs['data-template'] = input.form.template; }
+  const inputs = Object.keys(input.form.inputs).map((name) => ({ name, value: input.form.inputs[name] }));
+  form.querySelectorAll = (s) => (s === 'input[name]' ? inputs : []);
+}
 const doc = { body, createElement: el,
   querySelector: (s) => (s === '.gr-panel' ? panel : null),
-  querySelectorAll: (s) => (s === '.gr-card[data-request]' ? [card] : []) };
+  querySelectorAll: (s) => (s === '.gr-card[data-request]' ? (input.request ? [card] : [])
+    : s === 'form.envelope-form' ? (input.form ? [form] : []) : []) };
 const calls = [];
 let i = 0;
 function fakeFetch(url, opts) {
@@ -641,7 +647,9 @@ function fakeFetch(url, opts) {
   const r = input.responses[i++];
   return Promise.resolve({ status: r.status, json: () => Promise.resolve(r.data) });
 }
-const ctx = { document: doc, window: { location: { reload() {} } }, fetch: fakeFetch, JSON, Object, Array, String, parseInt, Promise };
+const nav = { assigned: null, reloaded: false };
+const ctx = { document: doc, window: { location: { reload() { nav.reloaded = true; }, assign(u) { nav.assigned = String(u); } } },
+  fetch: fakeFetch, JSON, Object, Array, String, parseInt, Promise };
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(input.script, 'utf8'), ctx);
 function snap() {
@@ -651,7 +659,7 @@ function snap() {
 }
 const out = {};
 (async () => {
-  card.listeners.click({ target: { getAttribute: () => 'sign' } });
+  if (input.form) { form.listeners.submit({ preventDefault() {} }); } else { card.listeners.click({ target: { getAttribute: () => 'sign' } }); }
   await new Promise((r) => setTimeout(r, 20));
   out.after_preview = snap();
   const confirmBtn = actions.children[0];
@@ -661,18 +669,22 @@ const out = {};
     out.after_confirm = snap();
   }
   out.card_hidden = card.hidden;
+  out.navigated = nav;
   out.calls = calls.map((c) => ({ url: c.url, stage: c.body.stage, has_token: !!c.body.preview_token, request_item: c.body.request_item }));
   process.stdout.write(JSON.stringify(out));
 })();
 """
 
 
-def _run_client(tmp_path: Path, page: str, card: str, responses: list[dict]) -> dict:
+def _run_client(tmp_path: Path, page: str, card: str | None, responses: list[dict], form: dict | None = None) -> dict:
+    """Run the real static/envelopes.js under node with this page's data-gr-texts: sign a request card, or (AIPOS-F217) submit an
+    envelope-page form (form = {mode, workspace, template, inputs}). out.navigated = where the script sent the page after success."""
     harness = tmp_path / "harness.js"
     harness.write_text(_NODE_HARNESS, encoding="utf-8")
     spec = {"script": str(REPO_ROOT / "web" / "board" / "static" / "envelopes.js"),
             "write_path": "/api/owner/envelopes/mint", "conf": html.unescape(re.search(r'data-gr-texts="([^"]*)"', page).group(1)),
-            "request": html.unescape(re.search(r'data-request="([^"]*)"', card).group(1)), "responses": responses}
+            "request": html.unescape(re.search(r'data-request="([^"]*)"', card).group(1)) if card else None, "responses": responses,
+            "form": form}
     (tmp_path / "input.json").write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
     proc = subprocess.run(["node", str(harness), str(tmp_path / "input.json")], capture_output=True, text=True, timeout=60)
     assert proc.returncode == 0, proc.stderr
@@ -701,16 +713,27 @@ def test_item3_real_client_script_plain_confirm_success_and_failure(board, tmp_p
     assert [a["text"] for a in conf["actions"]] == ["确认签发", "取消"]
     ok = out["after_confirm"]
     assert ok["state"] == "signed" and ok["heading"] == "已签发 pol_f180_lane_loop_4"
-    # AIPOS-F201 item 3: the success panel names the advisor to tell and carries the paragraph to copy (policy id = the one signed)
-    assert ok["lines"][0] == f"{DRIVER} 还不知道你已签发: 把下面这段复制给它, 它会接着推进 LANE-HW1。" and len(ok["lines"]) == 2
-    assert ok["lines"][1].startswith(f"告诉 {DRIVER}:\n") and "Owner 已签发信封 pol_f180_lane_loop_4" in ok["lines"][1]
-    assert "--envelope pol_f180_lane_loop_4`" in ok["lines"][1] and "{policy_id}" not in ok["lines"][1]
-    assert [(a["text"], a["href"]) for a in ok["actions"]] == [("返回收件箱", "/owner/inbox"), ("返回信封页", "/owner/envelopes"),
-                                                             ("回总览", "/owner/overview")]
+    # AIPOS-F217: success = the whole inbox page reloads from the server (the paragraph to copy is its "decided, to relay" section,
+    # AIPOS-F201 item 3); the panel only says it is refreshing
+    assert ok["lines"] == ["已签发, 正在刷新页面…"] and ok["actions"] == []
+    assert out["navigated"] == {"assigned": "/owner/inbox", "reloaded": False}
     assert ok["tech_open"] is False and "pol_f180_lane_loop_4 ->" in ok["tech"]
-    assert out["card_hidden"] is True, "签好的请求卡在页面上随即收起(刷新后收件箱也不再列)"
     assert [(c["stage"], c["has_token"], c["request_item"]) for c in out["calls"]] == [("preview", False, hw1["item_id"]),
                                                                                        ("confirm", True, hw1["item_id"])]
+    # AIPOS-F217: the same request signed from the envelope page lands on its "to sign" tab with the signed banner; the server's
+    # "decided, to relay" section there carries the paragraph for the driving advisor; the request card is gone
+    status, env_page = _request(board, "/owner/envelopes")
+    (tmp_path / "env").mkdir()
+    out = _run_client(tmp_path / "env", env_page, card, [{"status": 200, "data": pre}, {"status": 200, "data": done}])
+    target = out["navigated"]["assigned"]
+    assert target == "/owner/envelopes?tab=pending&signed=pol_f180_lane_loop_4#pol_f180_lane_loop_4"
+    status, landed = _request(board, target)
+    relay = html.unescape(re.search(r'<article class="ib-relay" data-advisor="[^"]*"[^>]*>.*?<pre[^>]*>(.*?)</pre>', landed, re.S).group(1))
+    _show(f"[AIPOS-F217·信封页按建议签发 → 跳转 {target}]\n横幅: {_plain(re.search(r'<p class=.env-banner.*?</p>', landed).group(0))}\n"
+          f"已定待转达:\n{relay}")
+    assert status == 200 and re.search(r'<a class="env-tab" data-tab="pending" data-count="\d+" href="[^"]*" aria-current="page">', landed)
+    assert '<p class="env-banner" data-signed="pol_f180_lane_loop_4">' in landed and hw1["item_id"] not in landed
+    assert relay.startswith(f"告诉 {DRIVER}:\n") and "Owner 已签发信封 pol_f180_lane_loop_4" in relay
     (tmp_path / "bad").mkdir()
     bad = {"ok": False, "verdict": "BLOCK", "error": "PREVIEW_TOKEN_EXPIRED", "message": "预演令牌已过期(300 秒); 请重新预演"}
     out = _run_client(tmp_path / "bad", page, card, [{"status": 403, "data": bad}])
