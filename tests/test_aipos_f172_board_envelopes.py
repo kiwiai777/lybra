@@ -227,36 +227,48 @@ def test_single_derivation_superseded_and_states(rig):
 # ===========================================================================
 
 def test_item1_envelope_page_rows_status_tone_and_folding(board):
-    status, page = _request(board, "/owner/envelopes")
+    """AIPOS-F217: the page is split into server-rendered tabs (to sign / in use / history); every row lives on exactly one of in use /
+    history, rows that need the Owner are listed again on "to sign" (renew form folded behind one toggle)."""
+    status, current = _request(board, "/owner/envelopes?tab=current")
     assert status == 200
-    p1 = page[page.index(f'data-project="{P1}"'):page.index(f'data-project="{P2}"')]
+    p1 = current[current.index(f'data-project="{P1}"'):current.index(f'data-project="{P2}"')]
     current_part = re.search(r'<table class="envelope-current">.*?</table>', p1, re.S).group(0)
-    folded_part = p1.split('<details class="envelope-history">', 1)[1]
-    shown = {pid: _row(p1, pid) for pid in ("pol_one_loop_9", "pol_one_side_1", "pol_one_audit_1", "pol_one_loop_3", "pol_one_loop_2")}
-    _show("[件①·信封页 HTML 原文(测试客户端) 项目 " + P1 + "]\n" + "\n".join(shown.values()))
-    summary = re.search(r"<summary>(.*?)</summary>", folded_part).group(1)
-    _show(f"[件①·折叠摘要] {summary}")
+    shown = {pid: _row(p1, pid) for pid in ("pol_one_loop_9", "pol_one_side_1", "pol_one_audit_1")}
+    _show("[件①·在用页 HTML 原文(测试客户端) 项目 " + P1 + "]\n" + "\n".join(shown.values()))
     assert 'data-tone="ok"' in shown["pol_one_loop_9"] and "pol_one_loop_9" in current_part
     assert 'data-tone="alert"' in shown["pol_one_audit_1"] and "剩余 2/3 张业务卡" in shown["pol_one_audit_1"]  # AIPOS-F192: 单位 = 业务卡
-    assert 'data-status="superseded"' in shown["pol_one_loop_3"] and 'data-tone="muted"' in shown["pol_one_loop_3"]
-    assert "被 pol_one_loop_9 接替" in shown["pol_one_loop_3"] and "pol_one_loop_3" in folded_part and "pol_one_loop_3" not in current_part
-    assert 'data-status="expired"' in shown["pol_one_loop_2"] and "pol_one_loop_2" in folded_part
-    assert summary.startswith("已接替 / 已过期 / 已停用 2 张")
     assert "task_mode=audit" in shown["pol_one_audit_1"] and "拉起=只手工 /go" in shown["pol_one_audit_1"]
-    p2 = page[page.index(f'data-project="{P2}"'):]
-    _show("[件①·项目 " + P2 + " 用尽行] " + _row(p2, "pol_two_loop_1"))
-    assert 'data-status="exhausted"' in _row(p2, "pol_two_loop_1") and 'data-tone="alert"' in _row(p2, "pol_two_loop_1")
-    # Owner 会话: 当前在用行有续签表单(预填 policy_id +1), 每项目有新签表单
-    assert 'data-mode="renew"' in shown["pol_one_loop_9"] and "续签 → pol_one_loop_10" in shown["pol_one_loop_9"]
-    assert f'data-mode="new" data-workspace="{P1}"' in page and '<script src="/envelopes.js"></script>' in page
-    assert FIXTURE_TOKEN not in page
+    assert 'id="pol_one_loop_3"' not in current and 'id="pol_one_loop_2"' not in current, "被接替 / 过期的信封不在「在用」"
+    status, history = _request(board, "/owner/envelopes?tab=history")
+    h1 = history[history.index(f'data-project="{P1}"'):history.index(f'data-project="{P2}"')]
+    folded = {pid: _row(h1, pid) for pid in ("pol_one_loop_3", "pol_one_loop_2")}
+    _show("[件①·历史页 HTML 原文 项目 " + P1 + "]\n" + "\n".join(folded.values()))
+    assert 'data-status="superseded"' in folded["pol_one_loop_3"] and 'data-tone="muted"' in folded["pol_one_loop_3"]
+    assert "被 pol_one_loop_9 接替" in folded["pol_one_loop_3"] and 'data-status="expired"' in folded["pol_one_loop_2"]
+    assert 'id="pol_one_loop_9"' not in history and "<form" not in history, "历史页不出在用行, 不出表单"
+    h2 = history[history.index(f'data-project="{P2}"'):]
+    _show("[件①·项目 " + P2 + " 用尽行(历史页)] " + _row(h2, "pol_two_loop_1"))
+    assert 'data-status="exhausted"' in _row(h2, "pol_two_loop_1") and 'data-tone="alert"' in _row(h2, "pol_two_loop_1")
+    assert 'id="pol_two_loop_1"' not in current, "额度用尽 = 不在「在用」"
+    # Owner 会话: 在用行的续签表单折叠在「续签」后(预填 policy_id +1), 每项目有新签表单
+    renew = re.search(r'<details class="envelope-renew"><summary>(.*?)</summary><form class="envelope-form" data-mode="renew"', shown["pol_one_loop_9"])
+    assert renew and renew.group(1) == "续签" and "续签 → pol_one_loop_10" in shown["pol_one_loop_9"]
+    assert f'data-mode="new" data-workspace="{P1}"' in current and '<script src="/envelopes.js"></script>' in current
+    # 待签(缺省标签: 有待签内容): 将尽的 audit_1 与用尽无接替的 two_loop_1, 各带折叠续签表单
+    status, pending = _request(board, "/owner/envelopes")
+    rows = re.findall(r'<tr id="([^"]+)"', pending)
+    _show(f"[件①·待签页(缺省标签)行] {rows}")
+    assert sorted(rows) == ["pol_one_audit_1", "pol_two_loop_1"] and 'class="env-tab" data-tab="pending" data-count="2"' in pending
+    assert all('<details class="envelope-renew">' in _row(pending, pid) for pid in rows)
+    assert FIXTURE_TOKEN not in current + history + pending
 
 
 def test_item1_non_owner_sees_readonly_page_without_forms(board):
-    status, page = _request(board, "/owner/envelopes", who="advisor")
-    _show(f"[件①·非 Owner 会话页] status={status} 含表单={'<form' in page} 只读提示="
-          f"{re.search(r'<p class=.envelope-readonly.>(.*?)</p>', page).group(1)}")
-    assert status == 200 and "<form" not in page and "envelopes.js" not in page and 'data-owner="false"' in page
+    for tab in ("pending", "current", "history"):
+        status, page = _request(board, f"/owner/envelopes?tab={tab}", who="advisor")
+        _show(f"[件①·非 Owner 会话页 tab={tab}] status={status} 含表单={'<form' in page} 按钮={'<button' in page} 只读提示="
+              f"{re.search(r'<p class=.envelope-readonly.>(.*?)</p>', page).group(1)}")
+        assert status == 200 and "<form" not in page and "<button" not in page and "envelopes.js" not in page and 'data-owner="false"' in page
     status, _ = _request(board, "/owner/envelopes", who=None)
     assert status == 200  # urllib 跟随 302 到登录页
     status, api = _request(board, "/api/owner/envelopes", who="advisor")

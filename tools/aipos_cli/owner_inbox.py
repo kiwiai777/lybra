@@ -858,8 +858,7 @@ def grant_requests(inbox: dict[str, Any]) -> list[dict[str, Any]]:
 _RELAY_KEYS = ("window_days", "skip_choices", "driver_fields", "commands", "texts")
 _RELAY_COMMANDS = ("decide", "resume_no_task")
 _RELAY_TEXTS = ("section_heading", "section_note", "cli_heading", "tell", "lead", "entry_decision", "words_part", "entry_envelope",
-                "launch_part", "notes", "choice_heading", "choice_summary", "choice_body", "choice_owner_words", "signed_note",
-                "unknown_advisor")
+                "launch_part", "notes", "choice_heading", "choice_summary", "choice_body", "choice_owner_words", "unknown_advisor")
 #: 卡面「要 Owner 定」标志(与 needs_owner 类事项 flags 同一组; 仍为真 = 事项仍在, 不算已放行)
 _OWNER_FLAGS = ("needs_owner", "owner_review_required", "approval_required")
 
@@ -1292,16 +1291,6 @@ def choice_scripts_offered(item: dict[str, Any], decl: dict[str, Any] | None = N
     """看板给该事项逐选项话术: 授权请求(有请求卡)与经别处记录的类别(decide_redirect, 如验收抽查)除外。"""
     d = decl or inbox_declaration()
     return not item.get("grant") and not d["categories"][item["category"]].get("decide_redirect")
-
-
-def signed_relay(item: dict[str, Any], lang: str | None = None, *, policy_placeholder: str = "{policy_id}") -> list[str]:
-    """授权请求按建议签发成功后的转达段(看板签发面板用; policy_id 留占位, 页脚本以写路由实际签发的 id 填)。与「已定待转达」同一段落形。"""
-    g = item["grant"]
-    root = Path(item["governance_root"])
-    entry = {"kind": "envelope", "advisor": g["agent_or_role"], "project": item["project"], "task_id": item["task_id"],
-             "policy_id": policy_placeholder, "launch_harnesses": list(g.get("launch_harnesses") or []),
-             "resume": _resume_for(root, item["task_id"], g["agent_or_role"], policy_placeholder)}
-    return relay_lines({"advisor": g["agent_or_role"], "entries": [entry]}, lang)
 
 
 def _collect_inbox(home_root: str | Path | None, *, project: str | None, include_paused: bool,

@@ -665,8 +665,8 @@ def render_onboarding(data: dict[str, Any], lang: str) -> str:
 #: i18n templates the page script needs (filled client-side; texts never live in the script itself)
 _GR_JS_KEYS = ("gr_confirm_heading", "gr_confirm_who", "gr_confirm_what", "gr_confirm_repos", "gr_confirm_count", "gr_confirm_until",
                "gr_confirm_card", "gr_confirm_project", "gr_confirm_btn", "gr_cancel_btn", "gr_working", "gr_tech", "gr_ok_heading",
-               "gr_ok_continue", "gr_ok_generic", "gr_back_inbox", "gr_back_envelopes", "gr_back_overview", "gr_fail_heading",
-               "gr_fail_next", "gr_retry_btn", "gr_repos_any", "gr_title_part", "gr_err_other", "gr_next_other", "gr_edit_invalid")
+               "gr_fail_heading", "gr_fail_next", "gr_retry_btn", "gr_repos_any", "gr_title_part", "gr_err_other", "gr_next_other",
+               "gr_edit_invalid")
 
 
 def _task_modes() -> list[str]:
@@ -679,32 +679,29 @@ def _mode_label(ctx: _Ctx, mode: str) -> str:
     return ctx.t("gr_mode_" + mode) if mode in _task_modes() else ctx.t("gr_mode_any")
 
 
-def _owner_links(ctx: _Ctx) -> dict[str, str]:
-    decl = ctx.decl
-    return {"inbox": ctx.href(str(decl["nav_links"]["inbox"])), "envelopes": ctx.href(_envelope_page()),
-            "overview": ctx.href(str(decl["pages"]["overview"]))}
-
-
-def _script_texts(ctx: _Ctx) -> str:
-    """JSON handed to static/envelopes.js (templates, task-mode labels, per-error plain reason + next step, return links)."""
+def _script_texts(ctx: _Ctx, after_sign: dict[str, str]) -> str:
+    """JSON handed to static/envelopes.js (templates, task-mode labels, per-error plain reason + next step). AIPOS-F217: after_sign =
+    where the page goes once a signing is confirmed ({request, renew, new} -> server-rendered URL with a {policy_id} placeholder),
+    refreshing = the line shown while it goes there."""
     import json
 
-    from tools.aipos_cli.envelope_board import board_envelopes_declaration
+    from tools.aipos_cli.envelope_board import board_envelopes_declaration, tab_texts
     from tools.aipos_cli.owner_inbox import grant_declaration
 
     codes = list(board_envelopes_declaration()["errors"])
     data = {"t": {key: ctx.raw(key) for key in _GR_JS_KEYS},
             "modes": {mode: ctx.t("gr_mode_" + mode) for mode in _task_modes()}, "mode_any": ctx.t("gr_mode_any"),
             "errors": {code: [ctx.raw("gr_err_" + code), ctx.raw("gr_next_" + code)] for code in codes},
-            "links": _owner_links(ctx), "date_only_time": str(grant_declaration()["date_only_time"])}
+            "after_sign": after_sign, "refreshing": tab_texts(ctx.lang)["refreshing"],
+            "date_only_time": str(grant_declaration()["date_only_time"])}
     return json.dumps(data, ensure_ascii=False)
 
 
-def _owner_attrs(ctx: _Ctx, owner: bool) -> str:
+def _owner_attrs(ctx: _Ctx, owner: bool, after_sign: dict[str, str] | None = None) -> str:
     from tools.aipos_cli.envelope_board import board_envelopes_declaration
 
     attrs = f" data-owner=\"{str(bool(owner)).lower()}\" data-write-path=\"{_ESC(str(board_envelopes_declaration()['write_path']))}\""
-    return attrs + (f" data-gr-texts=\"{_ESC(_script_texts(ctx))}\"" if owner else "")
+    return attrs + (f" data-gr-texts=\"{_ESC(_script_texts(ctx, after_sign or {}))}\"" if owner else "")
 
 
 def _owner_script() -> str:
@@ -741,14 +738,11 @@ def request_payload(item: dict[str, Any]) -> dict[str, Any]:
 def _grant_card(ctx: _Ctx, item: dict[str, Any], owner: bool) -> str:
     import json
 
-    from tools.aipos_cli.owner_inbox import relay_texts, signed_relay
-
     g = item["grant"]
-    # AIPOS-F201 item 3: after signing, the panel shows the paragraph to copy to the driving advisor ({policy_id} = filled by the
-    # page script with the id the write path actually signed)
+    # AIPOS-F217: after signing the page reloads from the server; the paragraph to copy to the driving advisor is the server's
+    # "decided, to relay" section (owner_inbox.relay_lines), no longer carried here
     data = {"payload": request_payload(item), "task_id": g["task_id"], "title": g.get("title") or "", "project": item["project"],
-            "mode_label": _mode_label(ctx, g["task_mode"]), "relay": "\n".join(signed_relay(item, ctx.lang)),
-            "relay_note": relay_texts(ctx.lang)["signed_note"].format(advisor=g["agent_or_role"], task_id=g["task_id"])}
+            "mode_label": _mode_label(ctx, g["task_mode"])}
     tech_lines = [f"item={item['item_id']} project={item['project']} policy_id={g['policy_id']}"]
     tech_lines += [f"{key}={g.get(key)!r} ({g['sources'].get(key, '-')})" for key in
                    ("agent_or_role", "task_mode", "lane_repos", "launch_harnesses", "max_tasks", "expires_at", "reason")]
@@ -787,7 +781,7 @@ def _grant_section(ctx: _Ctx, requests: list[dict[str, Any]], owner: bool, error
         out.append(f"<p class=\"rp-readonly-note\">{_ESC(ctx.t('gr_readonly'))}</p>")
     out.extend(_grant_card(ctx, item, owner) for item in requests)
     if errors:
-        out.append(f"<p class=\"rp-err\"><a href=\"{_ESC(_owner_links(ctx)['inbox'])}\">{_ESC(ctx.t('gr_errors_note', count=errors))}</a></p>")
+        out.append(f"<p class=\"rp-err\"><a href=\"{_ESC(ctx.href(str(ctx.decl['nav_links']['inbox'])))}\">{_ESC(ctx.t('gr_errors_note', count=errors))}</a></p>")
     out.append("</section>")
     return out
 
@@ -909,19 +903,65 @@ def render_owner_inbox(home_root: str | Path | None, params: dict[str, list[str]
         body = (([_panel(ctx)] if signing else []) + _relay_section(ctx, inbox) + _grant_section(ctx, requests, owner)
                 + _inbox_body(ctx, inbox, show_all))
         title = ctx.t("ib_title" if inbox["items"] else "ib_empty", count=inbox["count"], projects=len(inbox["projects"]))
+        # AIPOS-F217: after signing, reload this page (same switch / language); its "decided, to relay" section carries the paragraph
+        here = str(decl["nav_links"]["inbox"]) + (f"?{urlencode({decl['query']['show']: decl['show_all_value']})}" if show_all else "")
+        after_sign = {kind: ctx.href(here) for kind in _after_sign_kinds()}
         return _page(ctx, "inbox", title, body, note_key=None, h1_attrs=f" data-owner-inbox-count=\"{inbox['count']}\"",
-                     body_attrs=_owner_attrs(ctx, signing), scripts=[_owner_script()] if signing else [],
+                     body_attrs=_owner_attrs(ctx, signing, after_sign), scripts=[_owner_script()] if signing else [],
                      current_url=str(decl["nav_links"]["inbox"]))
     except (OSError, ValueError, LookupError, RuntimeError, SchemaLoadError) as exc:  # unreadable = error page naming the cause
         return render_error(lang, f"{type(exc).__name__}: {exc}"[:800])
 
 
+def _after_sign_kinds() -> list[str]:
+    from tools.aipos_cli.envelope_board import board_envelopes_declaration
+
+    return list(board_envelopes_declaration()["tabs"]["after_sign"])
+
+
+def _envelope_tab_url(ctx: _Ctx, tab: str, show_all: bool, *, lang: bool = True) -> str:
+    """This page on one tab, keeping the test-project switch (and the language unless lang=False: _toggle adds it itself)."""
+    from tools.aipos_cli.envelope_board import board_envelopes_declaration
+
+    query = {str(board_envelopes_declaration()["tabs"]["param"]): tab}
+    if show_all:
+        query[ctx.decl["query"]["show"]] = ctx.decl["show_all_value"]
+    url = f"{_envelope_page()}?{urlencode(query)}"
+    return ctx.href(url) if lang else url
+
+
+def _envelope_tabs_nav(ctx: _Ctx, tab: str, counts: dict[str, int], show_all: bool) -> str:
+    """AIPOS-F217: the three tabs (server-rendered links with counts) + the refresh link (GET this tab again; no script needed)."""
+    from tools.aipos_cli.envelope_board import board_envelopes_declaration, tab_texts
+
+    tt = tab_texts(ctx.lang)
+    links = "".join(
+        f"<a class=\"env-tab\" data-tab=\"{_ESC(name)}\" data-count=\"{counts[name]}\" href=\"{_ESC(_envelope_tab_url(ctx, name, show_all))}\""
+        f"{_CURRENT if name == tab else ''}>{_ESC(tt['tab_' + name].format(count=counts[name]))}</a>"
+        for name in board_envelopes_declaration()["tabs"]["order"])
+    refresh = f"<a class=\"env-refresh\" href=\"{_ESC(_envelope_tab_url(ctx, tab, show_all))}\">{_ESC(tt['refresh'])}</a>"
+    return f"<nav class=\"env-tabs\" data-tab=\"{_ESC(tab)}\">{links}{refresh}</nav>"
+
+
+def _signed_banner(ctx: _Ctx, signed: str, tab: str, show_all: bool) -> str:
+    """AIPOS-F217: "signed <policy_id>" after the page script reloaded the page; links to the row when it lives on another tab."""
+    from tools.aipos_cli.envelope_board import tab_texts
+
+    tt = tab_texts(ctx.lang)
+    view = (f" <a href=\"{_ESC(_envelope_tab_url(ctx, 'current', show_all) + '#' + signed)}\">{_ESC(tt['signed_view'])}</a>"
+            if tab != "current" else "")
+    return f"<p class=\"env-banner\" data-signed=\"{_ESC(signed)}\">{_ESC(tt['signed_banner'].format(policy_id=signed))}{view}</p>"
+
+
 def render_envelopes(home_root: str | Path | None, params: dict[str, list[str]], *, owner: bool) -> str:
-    """GET envelope page: F172 body (envelope_board.envelopes_page_parts) on the F174 skeleton, authorization requests on top
-    (owner_inbox loop category only); non-Owner sessions get no forms, no buttons and no script. AIPOS-F181: projects whose status is
-    board_hidden (test) are left out unless the page switch is on."""
+    """GET envelope page: F172 body (envelope_board.envelopes_page_parts) on the F174 skeleton; non-Owner sessions get no forms, no
+    buttons and no script. AIPOS-F181: projects whose status is board_hidden (test) are left out unless the page switch is on.
+    AIPOS-F217: three server-rendered tabs (query tabs.param; counts from envelope_board.envelope_tabs = envelope_placement): to sign =
+    "decided, to relay" (owner_inbox.relay_lines) + authorization requests (owner_inbox loop category) + envelopes to renew; in use;
+    history. A refresh link per tab; after a signing the page script lands here with tabs.signed_param (banner + highlighted row)."""
     from tools.aipos_cli import board_pages
-    from tools.aipos_cli.envelope_board import collect_envelopes, envelopes_page_parts
+    from tools.aipos_cli.envelope_board import (board_envelopes_declaration, collect_envelopes, envelope_tabs, envelopes_page_parts,
+                                                resolve_tab, signed_policy, tab_texts)
     from tools.aipos_cli.owner_inbox import collect_inbox, grant_requests
     from tools.aipos_cli.workspace_config import project_status_visibility
     from tools.schema_loader import SchemaLoadError
@@ -937,12 +977,32 @@ def render_envelopes(home_root: str | Path | None, params: dict[str, list[str]],
         hidden = [p["project"] for p in view["projects"] if p.get("status") in board_hidden]
         if not show_all:
             view = {**view, "projects": [p for p in view["projects"] if p["project"] not in hidden]}
-        parts = envelopes_page_parts(view, owner=owner)
+        split = envelope_tabs(view)
         inbox = collect_inbox(home_root, categories=("loop_owner_needed",), include_paused=show_all)
-        body = ([_panel(ctx)] if owner else []) + [_toggle(ctx, [] if show_all else hidden, show_all, _envelope_page())]
-        body += _grant_section(ctx, grant_requests(inbox), owner, len(inbox["errors"])) + parts["sections"]
-        return _page(ctx, "envelopes", parts["title"], body, note_key=None, h1_attrs=parts["h1_attrs"], body_attrs=_owner_attrs(ctx, owner),
-                     scripts=[_owner_script()] if owner else [], current_url=_envelope_page())
+        requests = grant_requests(inbox)
+        relays = inbox.get("relays") or []
+        counts = {**split["counts"], "pending": len(requests) + split["counts"]["pending"]}
+        tab = resolve_tab(params, pending_count=counts["pending"], relays=len(relays))
+        signed = signed_policy(params)
+        if signed and not any(r["policy_id"] == signed for p in view["projects"] for r in p.get("envelopes") or []):
+            signed = None  # not an envelope on this page = no banner (never claim a signing the truth does not show)
+        parts = envelopes_page_parts(view, owner=owner, tab=tab, lang=lang, signed=signed, split=split)
+        body = ([_panel(ctx)] if owner else []) + [_toggle(ctx, [] if show_all else hidden, show_all,
+                                                           _envelope_tab_url(ctx, tab, False, lang=False))]
+        body.append(_envelope_tabs_nav(ctx, tab, counts, show_all))
+        if signed:
+            body.append(_signed_banner(ctx, signed, tab, show_all))
+        if tab == "pending":
+            body += _relay_section(ctx, inbox) + _grant_section(ctx, requests, owner, len(inbox["errors"]))
+            if not counts["pending"] and not relays and not inbox["errors"]:
+                body.append(f"<p class=\"envelope-none envelope-tab-empty\">{_ESC(tab_texts(lang)['pending_none'])}</p>")
+        body += parts["sections"]
+        tabs = board_envelopes_declaration()["tabs"]
+        after_sign = {kind: _envelope_tab_url(ctx, target, show_all) + f"&{tabs['signed_param']}={{policy_id}}#{{policy_id}}"
+                      for kind, target in tabs["after_sign"].items()}
+        return _page(ctx, "envelopes", parts["title"], body, note_key=None, h1_attrs=parts["h1_attrs"],
+                     body_attrs=_owner_attrs(ctx, owner, after_sign), scripts=[_owner_script()] if owner else [],
+                     current_url=_envelope_page())
     except (OSError, ValueError, LookupError, RuntimeError, SchemaLoadError) as exc:  # unreadable = error page naming the cause
         return render_error(lang, f"{type(exc).__name__}: {exc}"[:800])
 

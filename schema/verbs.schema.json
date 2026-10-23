@@ -433,7 +433,7 @@
     ]
   },
   "board_owner_envelopes": {
-    "description": "AIPOS-F172(Owner 10-16 定: 看板只读的例外①——信封授权, 只有 Owner 能做): 看板「信封」页 + Owner 在看板续签 / 新签信封。只读部分 = 按项目列信封(状态唯一推导 autonomy_policy.envelope_overview, 与 Owner 收件箱 / loop status 预警 / brief 同读; 项目 = home 根注册项目唯一枚举 owner_inbox.home_projects)。写例外 = write_path 一条路由(stage=preview|confirm): 只有 Owner 角色会话可调用(其它会话 owner_only), 必带 workspace = home 根推导出的项目名, 预演调 envelope mint 唯一实现 envelope_mint.mint_preview(--dry-run 同一本地 writer)并发本会话预演令牌(绑定会话 + 参数摘要, preview_ttl_seconds 过期, 单次即焚), 确认须携同一令牌与同一参数, 调 envelope_mint.mint_via_gate(--confirm 同一门路径, 含 F158 自动落账); 签发凭据 = 看板登录凭据库(服务进程工作区 .lybra/connection.json)中的 owner 凭据, 只在服务端经 load_role_token 读取, 应答只出指纹; 记录 actor = 登录会话的 Owner 角色, 来源 = 看板(capture_surface), 会话指纹 / 登录方式 / 来源 IP 写进 captured_by 与 decision_rationale。每次预演 / 确认(含被拒)写看板审计日志(服务进程工作区 .lybra/<audit_log_file>, 写不进 = 确认拒签, fail-closed)。除 write_path 外看板其余写路由仍按 board_readonly 应答。唯一实现: tools/aipos_cli/envelope_board.py(视图 / 渲染 / 请求处理)+ web/board/app.py(路由)。AIPOS-F180 件②③(gap #175 / #170): 信封页与收件箱页顶部「待授权请求」(数据 = lybra_owner_inbox.grant_request 同一建议)每张一句人话 + 「按建议签发」「修改后签发」(只露额度 / 到期 / 仓)「不批准(告诉顾问)」(不写, 给话术与 owner decide 命令); 签发仍走本 write_path(mode=new + 可选 request_item = 收件箱事项 ID, 决策摘要附 texts.request_part), 安全框架不变; 前端 static/envelopes.js 一个客户端: 确认只显示人话摘要(给谁 / 能做什么 / 哪些仓 / 几次 / 到哪天 / 影响哪张卡), 成功 = 成功卡片 + 返回收件箱 / 信封页 / 总览, 失败 = 人话原因 + 下一步, 原始预演与记录路径折叠在「查看技术详情」; 两页用 F174 页面骨架(顶部导航在签发各步保持), 页面文案走看板 i18n 单通道 web/board/app.py _I18N_TEMPLATES(gr_* 键, zh / en 同键)。",
+    "description": "AIPOS-F172(Owner 10-16 定: 看板只读的例外①——信封授权, 只有 Owner 能做): 看板「信封」页 + Owner 在看板续签 / 新签信封。只读部分 = 按项目列信封(状态唯一推导 autonomy_policy.envelope_overview, 与 Owner 收件箱 / loop status 预警 / brief 同读; 项目 = home 根注册项目唯一枚举 owner_inbox.home_projects)。写例外 = write_path 一条路由(stage=preview|confirm): 只有 Owner 角色会话可调用(其它会话 owner_only), 必带 workspace = home 根推导出的项目名, 预演调 envelope mint 唯一实现 envelope_mint.mint_preview(--dry-run 同一本地 writer)并发本会话预演令牌(绑定会话 + 参数摘要, preview_ttl_seconds 过期, 单次即焚), 确认须携同一令牌与同一参数, 调 envelope_mint.mint_via_gate(--confirm 同一门路径, 含 F158 自动落账); 签发凭据 = 看板登录凭据库(服务进程工作区 .lybra/connection.json)中的 owner 凭据, 只在服务端经 load_role_token 读取, 应答只出指纹; 记录 actor = 登录会话的 Owner 角色, 来源 = 看板(capture_surface), 会话指纹 / 登录方式 / 来源 IP 写进 captured_by 与 decision_rationale。每次预演 / 确认(含被拒)写看板审计日志(服务进程工作区 .lybra/<audit_log_file>, 写不进 = 确认拒签, fail-closed)。除 write_path 外看板其余写路由仍按 board_readonly 应答。唯一实现: tools/aipos_cli/envelope_board.py(视图 / 渲染 / 请求处理)+ web/board/app.py(路由)。AIPOS-F180 件②③(gap #175 / #170): 信封页与收件箱页顶部「待授权请求」(数据 = lybra_owner_inbox.grant_request 同一建议)每张一句人话 + 「按建议签发」「修改后签发」(只露额度 / 到期 / 仓)「不批准(告诉顾问)」(不写, 给话术与 owner decide 命令); 签发仍走本 write_path(mode=new + 可选 request_item = 收件箱事项 ID, 决策摘要附 texts.request_part), 安全框架不变; 前端 static/envelopes.js 一个客户端: 确认只显示人话摘要(给谁 / 能做什么 / 哪些仓 / 几次 / 到哪天 / 影响哪张卡), 成功 = 整页按服务端真相刷新(AIPOS-F217, 见 tabs.after_sign), 失败 = 人话原因 + 下一步, 原始预演与记录路径折叠在「查看技术详情」; 两页用 F174 页面骨架(顶部导航在签发各步保持), 页面文案走看板 i18n 单通道 web/board/app.py _I18N_TEMPLATES(gr_* 键, zh / en 同键)。",
     "page_path": "/owner/envelopes",
     "api_path": "/api/owner/envelopes",
     "write_path": "/api/owner/envelopes/mint",
@@ -475,8 +475,6 @@
       "title": "信封 — {projects} 个项目",
       "project_heading": "{project}",
       "project_paused": "(已暂停)",
-      "current_heading": "当前在用(每个驱动方)",
-      "history_heading": "已接替 / 已过期 / 已停用 {count} 张(折叠)",
       "none": "该项目没有信封",
       "driver_none": "{agent_or_role}: 无在用信封(最新 {latest})",
       "columns": [
@@ -521,6 +519,51 @@
       "renew_part": "(续签自 {template_policy_id})",
       "request_part": "(应授权请求 {request_item})",
       "page_error": "信封页读不出(不猜): {error}"
+    },
+    "tabs": {
+      "description": "AIPOS-F217(Owner 10-23「信封页太乱」): 信封页分三个标签页, 服务端按查询参数 param 渲染(不靠前端隐藏; 非 Owner 会话同样有标签与刷新, 但无表单与按钮)。每个信封有且只有一个归属页: 在用 = 未被接替且仍可放行业务卡(展示状态 ∈ in_use_statuses, autonomy_policy 现有展示状态), 其余(被接替 / 过期 / 停用 / 额度用尽 / 读不出)= 历史, 按项目分组新的在前。待签 = 动作清单(可引用在用 / 历史行): 授权请求(owner_inbox.grant_requests)+ 需要 Owner 续签的信封(展示状态 ∈ renew_statuses, 或额度用尽而未被接替且同驱动方没有在用信封)+ 页首「已定待转达」段(owner_inbox.relay_lines 同文)。归属页 / 是否待签只一个判定 envelope_board.envelope_placement, 页面、计数、横幅、测试都调它。缺省标签 = 待签有内容(待签事项或待转达段)时待签, 否则在用。签发成功后页脚本整页跳到 after_sign 指定标签(授权请求 → 待签, 续签 / 新签 → 在用), 带 signed_param = 实际签发的 policy_id(服务端在页首显示横幅并高亮该行); 收件箱页共用同一客户端, 签后整页刷新收件箱页。刷新按钮 = 普通链接重新 GET 本页当前标签(保留测试项目开关与语言参数)。文案中英两份, 语言集合恰为看板 locale.supported。",
+      "param": "tab",
+      "signed_param": "signed",
+      "order": ["pending", "current", "history"],
+      "in_use_statuses": ["active", "warn", "not_yet_active"],
+      "renew_statuses": ["warn"],
+      "after_sign": {
+        "request": "pending",
+        "renew": "current",
+        "new": "current"
+      },
+      "texts": {
+        "zh": {
+          "tab_pending": "待签({count})",
+          "tab_current": "在用({count})",
+          "tab_history": "历史({count})",
+          "refresh": "刷新",
+          "signed_banner": "已签发 {policy_id}, 页面已按最新真相刷新。",
+          "signed_view": "在「在用」中查看",
+          "refreshing": "已签发, 正在刷新页面…",
+          "renew_heading": "需要你续签的信封({count})",
+          "renew_toggle": "续签",
+          "pending_none": "没有待签的事项。",
+          "current_none": "没有在用信封。",
+          "history_none": "没有历史信封。",
+          "drivers_none": "{count} 个驱动方无在用信封(展开看名单)"
+        },
+        "en": {
+          "tab_pending": "To sign ({count})",
+          "tab_current": "In use ({count})",
+          "tab_history": "History ({count})",
+          "refresh": "Refresh",
+          "signed_banner": "Signed {policy_id}; the page now shows the latest truth.",
+          "signed_view": "See it under In use",
+          "refreshing": "Signed; refreshing the page…",
+          "renew_heading": "Envelopes you need to renew ({count})",
+          "renew_toggle": "Renew",
+          "pending_none": "Nothing to sign.",
+          "current_none": "No envelope in use.",
+          "history_none": "No past envelopes.",
+          "drivers_none": "{count} driver(s) without an envelope in use (expand for the list)"
+        }
+      }
     },
     "errors": {
       "OWNER_ONLY": {
@@ -3511,7 +3554,6 @@
             "choice_summary": "选「{label}」→ 给 {advisor} 的话术",
             "choice_body": "Owner 在看板对 {project} {subject} 选了「{label}」。请先预演记录这个决定: `{preview}`; 核对预演无误后同一命令末尾加 --confirm 落记录(自动落账)。记录后: {advisor_next}",
             "choice_owner_words": "看板选「{label}」",
-            "signed_note": "{advisor} 还不知道你已签发: 把下面这段复制给它, 它会接着推进 {task_id}。",
             "unknown_advisor": "<该卡驱动顾问>"
           },
           "en": {
@@ -3529,7 +3571,6 @@
             "choice_summary": "Pick \"{label}\" → message for {advisor}",
             "choice_body": "On the board the Owner chose \"{label}\" for {project} {subject}. Preview recording this decision first: `{preview}`; once the preview checks out, run the same command with --confirm appended (it lands automatically). Then: {advisor_next}",
             "choice_owner_words": "picked on the board: {label}",
-            "signed_note": "{advisor} does not know you signed yet: copy the paragraph below to it and it will continue {task_id}.",
             "unknown_advisor": "<the card's driving advisor>"
           }
         }

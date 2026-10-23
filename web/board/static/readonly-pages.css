@@ -282,7 +282,6 @@ body.rp-page { margin: 0; background: var(--surface-page); color: var(--ink); fo
 .rp-page .gr-panel[data-state="failed"] { border-left: var(--bar-alert) solid var(--state-alert); background: var(--state-alert-bg); }
 .rp-page .gr-panel-body p { margin: 4px 0; font-size: var(--text-body); }
 .rp-page .gr-panel-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; }
-.rp-page .gr-back { font-weight: 600; }
 /* envelope page tables */
 .rp-page .envelope-current, .rp-page .envelope-folded { border-collapse: collapse; width: 100%; background: var(--white); font-size: 13px;
   border-top: 2px solid var(--green); }
@@ -295,6 +294,17 @@ body.rp-page { margin: 0; background: var(--surface-page); color: var(--ink); fo
 .rp-page .envelope-tone-ok td { color: inherit; }
 .rp-page .envelope-form label { display: inline-block; margin-right: .5em; }
 .rp-page .envelope-project { margin: 16px 0; }
+/* AIPOS-F217: envelope page tabs (server-rendered links with counts) + refresh link + signed banner + folded renew form */
+.rp-page .env-tabs { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0 14px; border-bottom: 2px solid var(--green); }
+.rp-page .env-tabs a { padding: 6px 14px; text-decoration: none; border: var(--border-hairline); border-bottom: none; background: var(--white); }
+.rp-page .env-tabs a.env-tab[aria-current="page"] { color: var(--white); background: var(--green); border-color: var(--green); font-weight: 700; }
+.rp-page .env-tabs a.env-refresh { margin-left: auto; border: 1px solid var(--green); }
+.rp-page .env-tabs a:hover { background: var(--mint); }
+.rp-page .env-tabs a.env-tab[aria-current="page"]:hover { background: var(--green-dark); }
+.rp-page .env-banner { background: var(--mint); border-left: var(--accent-bar) solid var(--state-ok); padding: 8px 14px; margin: 8px 0 12px; font-weight: 600; }
+.rp-page .envelope-row-signed td { background: var(--mint); }
+.rp-page .envelope-renew summary, .rp-page .envelope-drivers-none summary { cursor: pointer; color: var(--green); font-weight: 600; }
+.rp-page .envelope-drivers-none { margin: 6px 0; font-size: var(--text-small); color: var(--muted); }
 .rp-page .owner-inbox-item { background: var(--surface-card); border: var(--border-hairline); border-left: var(--accent-bar) solid var(--green);
   padding: 8px 16px; margin: 10px 0; }
 .rp-page .owner-inbox-item h2 { font-size: var(--text-ui); }
@@ -352,7 +362,6 @@ body.rp-page { margin: 0; background: var(--surface-page); color: var(--ink); fo
 .rp-page .ib-choices { margin: 6px 0 2px; }
 .rp-page .ib-choices-head { margin: 4px 0 2px; }
 .rp-page .ib-choice > summary.rp-cmd-label { text-transform: none; letter-spacing: normal; }
-.rp-page .gr-relay { margin: 6px 0 0; }
 /* upgrade page */
 .rp-page .upgrade-lines, .rp-page .upgrade-preview pre { white-space: pre-wrap; font-family: var(--font-mono); font-size: 12.5px; background: var(--code-bg);
   color: var(--code-fg); padding: .7em .9em; overflow-wrap: anywhere; }
