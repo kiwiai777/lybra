@@ -94,7 +94,8 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 # ===========================================================================
 
 def test_item1_old_ladder_reproduces_bug_new_resolver_reads_beta(rig, monkeypatch):
-    """对照: 原读类缺省(AIPOS-226 梯, task_loader.find_repo_root)在 beta 根下解析成活动项目 alpha; 新唯一实现 = beta(所在治理根)。"""
+    """对照: 原读类缺省(AIPOS-226 梯, task_loader.find_repo_root)在 beta 根下解析成活动项目 alpha; 新唯一实现 = beta(所在治理根)。
+    AIPOS-F221 件①: 老解析口无显式根分支已委托 resolve_governance_root(禁第二份梯子), 服务进程 / finalize / 审计自发现等老读点同为 beta。"""
     from tools.aipos_cli.task_loader import find_repo_root
     from tools.aipos_cli.workspace_config import resolve_governance_root
 
@@ -103,7 +104,7 @@ def test_item1_old_ladder_reproduces_bug_new_resolver_reads_beta(rig, monkeypatc
     hit = resolve_governance_root()
     _show(f"[件①·对照] cwd=beta/governance 原梯 find_repo_root() = {old}; 新 resolve_governance_root() = "
           f"{hit['project']} {hit['kind']} {hit['project_root']}")
-    assert old == rig["alpha"].resolve()  # 病理复现(服务进程仍用该梯, 本卡不动, 见读点清单)
+    assert old == rig["beta"].resolve()  # AIPOS-F221 件①: 原病理(= alpha)已随老解析口委托唯一实现修正
     assert hit["project"] == "beta" and hit["kind"] == "cwd_root" and hit["project_root"] == rig["beta"].resolve()
 
 
@@ -245,7 +246,7 @@ LADDER_CALLS_ALLOWED = {
     ("task_loader.py", "find_repo_root"): 3,            # load_* 以已解析根为 start(直用)
     ("task_loader.py", "find_repo_context"): 1,
     ("task_loader.py", "resolve_workspace_context"): 2,
-    ("workspace_config.py", "resolve_workspace_context"): 2,   # resolve_workspace_root 薄壳 + resolve_governance_root 全局视图级
+    ("workspace_config.py", "resolve_workspace_context"): 1,   # resolve_workspace_root 薄壳(AIPOS-F221: 全局视图级改调 _home_model_context)
     ("workspace_config.py", "resolve_active_project"): 3,      # AIPOS-226 梯内部(home 模型)
 }
 

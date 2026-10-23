@@ -544,7 +544,14 @@ lybra mark-concluded --task-id <卡ID> --actor <你的顾问实例> --report-pat
 ```
    (`--report-path` 用 loop 结束原文给出的 Return 相对路径; 去掉 `--dry-run` 即结案)。**执行体如实 BLOCK、你按 BLOCK 结案**时加
    `--outcome block`(AIPOS-F207): 依赖本卡的卡不会被当作满足(与门生结案同一判定), 认领拒因提示改依赖为承接卡或移除(`queue amend`);
-   不写 `--outcome` = 按 pass 记并提示。loop 停在这一步时 `lybra loop status` 给 advisor_fix(顾问复核结案), 不进 Owner 收件箱。交回后产出被改 = 拒 `INGEST_OUTPUTS_CHANGED`(让执行体按改后产出
+   不写 `--outcome` = 按 pass 记并提示。**复核不通过要打回原卡返工**(AIPOS-F221; 不是 BLOCK 结案, 卡留 claimed): 同一命令改
+   `--outcome rework` 并给返工要点(验收可选):
+```bash
+lybra mark-concluded --task-id <卡ID> --actor <你的顾问实例> --report-path <Return相对路径> --outcome rework --focus-items '["<返工要点>"]' --acceptance-criteria '["<验收标准>"]' --dry-run
+```
+   产品落一条顾问复核记录(`records/events/<卡ID>/advisor_review_*.md`)+ 返工轮(与 `queue rework` 同一写函数, 轮次上限同, 超限拒 = 升仲裁);
+   loop 拉起执行体按返工节重写交回 → 重交回 → 回到你复核(早于该轮登记的旧改写不算); 同一交回不重复打回。**别对快车道卡跑
+   `audit-verdict`**: 产品在取凭据前就拒(`FAST_LANE_REVIEW_ONLY`, 拒因给出这两条出口), 与凭据无关。loop 停在这一步时 `lybra loop status` 给 advisor_fix(顾问复核结案), 不进 Owner 收件箱。交回后产出被改 = 拒 `INGEST_OUTPUTS_CHANGED`(让执行体按改后产出
    重写 Return, loop 重交回)。之后 N6 落账照常由 loop / `lybra next` 给出。
    顾问复核结案与门生结案同一口径(AIPOS-F209, 唯一判定 `task_complexity.closure_state`): state lint 不报断层(BLOCK 结论只给信息级提示)、
    loop 收尾补落账、开工核验、补充审计派审、路线图核对都认它; 门上 MCP `lybra_mark_concluded` 同收 `outcome`(与 CLI 同一写路径);

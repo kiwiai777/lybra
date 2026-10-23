@@ -127,7 +127,10 @@ def test_item1_2_lint_reland_kickoff_supplementary_and_mcp_cli_outcome_agree(rig
     _show(f"[件② 值不在声明] CLI rc={bad_cli[0]} {bad_cli[2].strip().splitlines()[-1]}\n                 MCP ok={bad_mcp['ok']} "
           f"{bad_mcp.get('errors') or bad_mcp.get('blocking_reasons') or bad_mcp.get('message')}")
     assert bad_cli[0] == 2 and "invalid choice: 'maybe'" in bad_cli[2]
-    assert bad_mcp["ok"] is False and "只认 ['pass', 'block']" in json.dumps(bad_mcp, ensure_ascii=False)
+    # AIPOS-F221 件②: 拒因列 CLI choices / MCP enum 同一渲染(结论值域 + 复核打回返工 rework)
+    from tools.aipos_cli.board_adapter import mark_concluded_outcome_choices
+
+    assert bad_mcp["ok"] is False and f"只认 {list(mark_concluded_outcome_choices())}" in json.dumps(bad_mcp, ensure_ascii=False)
 
     rc, out, err = f207._cli("--workspace-root", str(gov), "mark-concluded", "--task-id", "CFG-P", "--actor", f207.ADVISOR,
                              "--conclusion-note", "顾问复核: 产出清单逐项核对通过", "--outcome", "pass")

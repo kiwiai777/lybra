@@ -1528,6 +1528,38 @@
           "redirect_hint": "Task {task_id} has a formal verdict ({verdict}). Use 'lybra queue close' instead of mark-concluded."
         }
       ],
+      "review_rework": {
+        "description": "AIPOS-F221 件②(10-23 chris 岚图 LANTU-DEMO1 实撞: task_mode=config 的非代码快车道卡交回后 `lybra next` 只给 mark-concluded --outcome pass|block, 顾问复核发现产物缺陷要打回原卡返工无门路径, 转用审计动词 audit-verdict 又报自发现失败): 非代码快车道卡(AIPOS-F197: 交付主体 = 治理根产出清单且不声明独立审计; 唯一判定 next_resolver.fast_lane_review)顾问复核不通过的正式出口 = `lybra mark-concluded --outcome {outcome} --focus-items <JSON 数组> [--acceptance-criteria <JSON 数组>]`(CLI 与 MCP lybra_mark_concluded 同收, 同一写路径 board_adapter.mark_concluded_task; 本 outcome 不是结案结论, 不进 card.schema dependency_gate.conclusion.outcomes, CLI choices / MCP enum = 结论值域 + 本 outcome, 唯一渲染 board_adapter.mark_concluded_outcome_choices)。一次调用: ①前置全过才写——卡在 claimed、属快车道、已有门交回记录、交回后产出未改(governance_outputs_recheck, 与 pass 结案同核)、该交回未被复核打回过(同一交回重复打回 = 拒)、复核者角色类与返工轮次上限(返工节唯一构建 queue_mutation.build_rework_round + custom_roles.authorize_instance_class, 与 `lybra queue rework` 预演同判); ②落一条顾问复核记录(事件记录 records/events/<卡>/<event_type>_*.md, 既有写口 record_writer.write_records_atomic; 字段 record_fields); ③追加返工轮走门 queue rework 同一写函数 board_adapter.queue_rework_task(verdict_ref = 本复核记录 review_id; 受限 amend 只改 rework_rounds; 轮次上限 transitions nodes.queue_rework.guards.rework_limit), 卡留 claimed 不结案; ④推导核沿用 F218/F219 返工判据(transitions nodes.N4.fast_lane_rework; 时间界 rework_return_bound / 新交回判定 non_branch_re_return 同一实现, 复核记录即锚); ⑤同链返工不出新卡——信封额度单位 = 业务卡(lybra_loop.envelope.quota), 本卡已放行则后续步骤不受额度拦截, 不额外扣。--dry-run 零写入(预演复核记录与返工节)。顾问对快车道卡跑审计动词 audit-verdict = 拒(audit_verdict_refusal, CLI 在取凭据前判、门侧裁决预演同判; 唯一实现 next_resolver.fast_lane_audit_refusal)。落账: 复核记录与返工节随该卡 N6 收账(同 queue rework)。",
+        "outcome": "rework",
+        "event_type": "advisor_review",
+        "record_fields": [
+          "record_type",
+          "event_type",
+          "task_id",
+          "review_id",
+          "actor",
+          "reviewer_instance",
+          "timestamp",
+          "outcome",
+          "reviewed_return_record_ref",
+          "artifact_subject",
+          "report_path",
+          "conclusion_note",
+          "focus_items",
+          "acceptance_criteria",
+          "rework_round"
+        ],
+        "command": "{prefix} mark-concluded --task-id {task_id} --actor <你的顾问实例> --report-path {report} --outcome rework --focus-items '[\"<返工要点>\"]' --acceptance-criteria '[\"<验收标准>\"]'",
+        "reject_codes": {
+          "REVIEW_REWORK_NOT_CLAIMED": "卡 {task_id} 在 {state}, 不在 claimed: 复核打回只对在途卡(已结案卡要推翻 = lybra queue correct)",
+          "REVIEW_REWORK_NOT_FAST_LANE": "卡 {task_id} 不是非代码快车道(只写治理根且不声明独立审计), 复核打回不适用; 有审计裁决的卡返工 = lybra queue rework --verdict-ref <裁决>",
+          "REVIEW_REWORK_NO_RETURN": "卡 {task_id} 尚无门交回记录, 无可复核的交回; 等执行体交回(loop 自动重交)后再复核",
+          "REVIEW_REWORK_FOCUS_REQUIRED": "--focus-items 须为非空 JSON 字符串数组(返工要点, 执行体按它返工), 得 {value}",
+          "REVIEW_REWORK_ALREADY_PENDING": "交回 {return_id} 已于 {reviewed_at} 被复核打回(复核记录 {review_id}, 第 {round} 轮返工), 等执行体按返工节重交回后再复核; 同一交回不重复打回",
+          "REVIEW_REWORK_ROUND_REFUSED": "返工轮登记被拒(与 lybra queue rework 同一判据): {reasons}"
+        },
+        "audit_verdict_refusal": "FAST_LANE_REVIEW_ONLY: 卡 {task_id} 是非代码快车道(只写治理根、不声明独立审计; AIPOS-F197), 交回后由顾问复核, 不走审计裁决——audit-verdict 拒(与凭据无关)。复核通过结案: {pass_command}; 复核不通过打回原卡返工: {rework_command}(两者都先加 --dry-run 预演)"
+      },
       "parameters": {
         "type": "object",
         "properties": {
@@ -1549,7 +1581,17 @@
           },
           "outcome": {
             "type": "string",
-            "description": "AIPOS-F207 件① / AIPOS-F209 件②: 顾问复核结论 pass | block。值域只在 card.schema dependency_gate.conclusion.outcomes 一处声明(唯一读取口 task_complexity.conclusion_outcomes; CLI `lybra mark-concluded --outcome` 的 choices 与 MCP lybra_mark_concluded inputSchema 的 enum 都由它渲染, 本处不另列值); 写卡面 conclusion_outcome。block = 本卡不满足他卡 closure 依赖(结案口径唯一判定 task_complexity.closure_state)。缺省 = default_outcome(pass)并提示, 不按 conclusion_note 判。CLI 与 MCP 同收、同一写路径 board_adapter.mark_concluded_task; 结案后清理工作树(transitions worktree_cleanup.triggers.conclude)"
+            "description": "AIPOS-F207 件① / AIPOS-F209 件②: 顾问复核结论 pass | block(AIPOS-F221 件②: 另收 review_rework.outcome = 复核不通过打回返工, 不结案, 见本动词 review_rework)。结论值域只在 card.schema dependency_gate.conclusion.outcomes 一处声明(唯一读取口 task_complexity.conclusion_outcomes; CLI `lybra mark-concluded --outcome` 的 choices 与 MCP lybra_mark_concluded inputSchema 的 enum 都由它渲染, 本处不另列值); 写卡面 conclusion_outcome。block = 本卡不满足他卡 closure 依赖(结案口径唯一判定 task_complexity.closure_state)。缺省 = default_outcome(pass)并提示, 不按 conclusion_note 判。CLI 与 MCP 同收、同一写路径 board_adapter.mark_concluded_task; 结案后清理工作树(transitions worktree_cleanup.triggers.conclude)"
+          },
+          "focus_items": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "AIPOS-F221 件②: 仅 outcome = review_rework.outcome(复核不通过打回返工)时用且必填——返工要点(写入返工节 focus_items 与顾问复核记录); CLI `--focus-items <JSON 数组>`"
+          },
+          "acceptance_criteria": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "AIPOS-F221 件②: 仅 outcome = review_rework.outcome 时用(可选)——返工验收标准(逐条一行写入返工节 acceptance_criteria); CLI `--acceptance-criteria <JSON 数组>`"
           },
           "dry_run": {
             "type": "boolean",
@@ -2240,7 +2282,7 @@
         "header_auditor": "你是 {project} 项目的{role_label}(实例 {instance}), 负责审计卡 {task_id}(被审卡 {reviewed_task_id}): {title}。用中文写报告。",
         "start_title": "## 开工",
         "start_charter": "1. 读章程: `{charter_command}`",
-        "start_card": "2. 读卡面全文: `{card_path}`。卡面 governance_refs 与正文里的依据 / 验收 / 硬约束 / 纪律全部是要求, 逐条遵守; 卡面有未销账的返工节 = 以返工节为最新指令。",
+        "start_card": "2. 读卡面全文: `{card_path}`。卡面 governance_refs 与正文里的依据 / 验收 / 硬约束 / 纪律全部是要求, 逐条遵守; 卡面有未销账的返工节(审计裁决后登记, 或非代码快车道顾问复核打回登记 mark-concluded --outcome rework, AIPOS-F221)= 以返工节为最新指令。",
         "start_card_auditor": "2. 读审计卡全文: `{card_path}`(含被审卡验收标准、取证锚点与裁决报告要求), 逐条裁定; 被审卡卡面: `{reviewed_card_path}`。",
         "start_worktree": "3. 工作树(认领时已建): `{worktree_path}`, 分支 {branch}(基于 {base} {base_sha}; 当前 tip {tip})。代码改动只在这个工作树、只在 {branch} 分支提交(精确 pathspec, 禁 add -A / stash / pull --rebase); 不改主检出 `{code_repo}`, 不改其他卡分支。",
         "start_no_worktree": "3. 本卡不建卡工作树 / 卡分支: {no_worktree_reason}",
@@ -3107,7 +3149,7 @@
           "audit_blocked_repeated": "审计连续 BLOCK(AIPOS-F179 件③): 本卡已按 BLOCK 原因修环境重新派审计, 新一轮仍 BLOCK(连续次数达 transitions nodes.N4.audit_blocked.owner_needed_after), 环境 / 资源 / 时长问题顾问修不动或卡面验收不可在审计环境完成; 请 Owner 定修环境方案 / 改卡面验收 / 换审计环境 / 仲裁; 环境 / 产品修好后 Owner 在收件箱选「重新派审」(reaudit, AIPOS-F202), 顾问 owner decide 记录后原命令重跑 loop = 以该裁决为界重新计数并派下一轮审计",
           "envelope_renew": "信封续签(AIPOS-F166 件②): 结束原因 envelope_exhausted / envelope_expired 的下一动作事由——detail = 当前用量 / 上限 / 到期, hint = 续签命令(policy_id 按该驱动方已有最大序号 +1)"
         },
-        "advisor_review_close": {"description": "AIPOS-F207 件③(gap #213): 以 end_reasons 所列结束原因结束的运行, 若推导核此刻对本卡的建议动作动词 ∈ verbs(顾问复核结案, 只写治理根卡交回后由顾问复核产出清单再 mark-concluded)= 顾问自己的活, 不进 Owner 收件箱: 下一动作 advisor_fix(reason = advisor_review_close), detail = 推导核建议原文, hint = 推导核给出的结案命令加 --dry-run 预演(核对后去掉 --dry-run, BLOCK 结案加 --outcome block)。唯一判定 loop_run_record.next_action → _advisor_review_close(读 next_resolver.derive_next_step 同一推导, 不另判); 推导核此刻不再给该动词(已结案 / 已改)= 照 by_end_reason 原判。", "end_reasons": ["manual_required"], "verbs": ["lybra_mark_concluded"], "detail": "顾问复核结案(不问 Owner): {suggested_action}", "hint": "先预演: {command} --dry-run; 核对产出清单无误后去掉 --dry-run 结案(BLOCK 结案加 --outcome block), 之后 `lybra loop status --task-id {task_id}` 复核"},
+        "advisor_review_close": {"description": "AIPOS-F207 件③(gap #213): 以 end_reasons 所列结束原因结束的运行, 若推导核此刻对本卡的建议动作动词 ∈ verbs(顾问复核结案, 只写治理根卡交回后由顾问复核产出清单再 mark-concluded)= 顾问自己的活, 不进 Owner 收件箱: 下一动作 advisor_fix(reason = advisor_review_close), detail = 推导核建议原文, hint = 推导核给出的结案命令加 --dry-run 预演(核对后去掉 --dry-run, BLOCK 结案加 --outcome block)。唯一判定 loop_run_record.next_action → _advisor_review_close(读 next_resolver.derive_next_step 同一推导, 不另判); 推导核此刻不再给该动词(已结案 / 已改)= 照 by_end_reason 原判。", "end_reasons": ["manual_required"], "verbs": ["lybra_mark_concluded"], "detail": "顾问复核结案(不问 Owner): {suggested_action}", "hint": "先预演: {command} --dry-run; 核对产出清单无误后去掉 --dry-run 结案(BLOCK 结案加 --outcome block; 复核不通过要打回原卡返工 = 同一命令改 --outcome rework --focus-items '[\"<返工要点>\"]' [--acceptance-criteria '[\"<验收标准>\"]'], 卡留 claimed、loop 拉起执行体返工, AIPOS-F221), 之后 `lybra loop status --task-id {task_id}` 复核"},
         "routine_rejections": {
           "description": "AIPOS-F150 件②(gap #128): 例行门拒清单与各码固定修法(唯一声明, 只追加; 判定唯一实现 loop_run_record.next_action)。by_end_reason 判为 owner_needed 的运行, 其 end_codes(lybra_loop.run_record.end_codes, 门拒原文里的既有错误码)非空且全部在 codes 内 = advisor_fix: hint = 各码 fix 逐条按序渲染(占位见 placeholders) + resume_hint; 任一码不在 codes / end_codes 为空 / 旧记录无 end_codes = owner_needed 照旧。防死循环: 本卡最近连续各次运行(含本次, 旧→新取尾段)的 end_codes 都含同一例行码且次数 ≥ repeat_owner_needed = owner_needed(routine_fix_exhausted)。码只取门侧既有错误码, 不另造; 未入清单的门拒码(RETURN_STALE / INGEST_TIP_MISMATCH / TEST_NOT_IN_RUNALL 等)的评估与理由见 AIPOS-F150 交回报告。AIPOS-F152 件①: end_reasons = 结束原因本身即例行的清单(只追加; 键须为 lybra_loop.run_record.end_reasons 已声明者, 且 by_end_reason 判为 advisor_fix 的结束原因必须在此有 fix)——by_end_reason 判为 advisor_fix 的运行 = 该结束原因 fix 逐条渲染 + resume_hint(占位只许 task_id / governance_root / actor_arg / envelope_arg, 值与 codes 修法同一实现); 本卡最近连续各次运行(含本次)以同一结束原因结束且次数 ≥ repeat_owner_needed = owner_needed(routine_fix_exhausted)。首项 deploy_changed(部署已更新, 用原命令重跑从断点续做)。",
           "repeat_owner_needed": 3,

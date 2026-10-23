@@ -106,13 +106,22 @@ def workspace_root_from_config(config_path: Path) -> Path:
     return _validate_workspace_root(root, source=f"Lybra config {config_path}")
 
 
-def find_workspace_config(start: Path | None = None) -> Path | None:
+def find_workspace_config(start: Path | None = None, *, env: dict[str, str] | None = None) -> Path | None:
+    """自 start(缺省 cwd)向上首个工作区内 `.lybra/config.json`。
+
+    AIPOS-F221 件①: 全局运行时配置(global_config_path(env), 即 ~/.lybra/config.json, 带 home_root / active_project)不是工作区内
+    配置——向上查找路过它一律跳过(原样命中即被当作「工作区内 v2 配置」走 home 模型取活动项目, chris 根下解析成 lybra 的病根之一)。
+    全局配置只经 load_global_config 读(home 模型最末一级)。"""
     current = (start or Path.cwd()).expanduser().resolve()
     if current.is_file():
         current = current.parent
+    global_path = global_config_path(env)
+    global_resolved = global_path.expanduser().resolve() if global_path is not None else None
     for candidate in [current, *current.parents]:
         config_path = candidate / CONFIG_RELATIVE_PATH
         if config_path.is_file():
+            if global_resolved is not None and config_path.resolve() == global_resolved:
+                continue  # 全局运行时配置, 不是工作区内配置(AIPOS-F221 件①)
             return config_path
     return None
 
@@ -138,19 +147,18 @@ def resolve_workspace_context(
     explicit_root: str | Path | None = None,
     env: dict[str, str] | None = None,
 ) -> tuple[Path, Path | None]:
-    """Resolve ``(project_root, home_root)`` via the single AIPOS-226 precedence ladder.
+    """Resolve ``(project_root, home_root)``.
 
-    ``home_root`` is the survivable truth home **when the home model resolves the workspace**
-    (``LYBRA_HOME_ROOT`` env / a v2 in-workspace config carrying ``home_root`` / the global
-    ``~/.lybra/config.json`` ``home_root``), else ``None`` for the legacy / explicit / marker
-    paths.
+    ``home_root`` is the survivable truth home **when the home model resolves the workspace**, else ``None`` for the
+    explicit / env / located-governance-root / workstation paths (R-1: ``None`` home_root unambiguously means the home model
+    was NOT the resolution path).
 
-    AIPOS-227: this is the ONE place the precedence ladder lives, so the 196a ingestion
-    home-guard and ``resolve_workspace_root`` can never drift. ``home_root`` is ``None`` IFF the
-    home model is NOT the resolution path — so a ``None`` home_root unambiguously means
-    legacy-v1 / explicit / direct, never "home model with an unresolved home" (R-1). On a home
-    path the project is resolved eagerly and a misresolution raises loudly
-    (``PROJECT_AMBIGUOUS`` / ``PROJECT_NOT_ESTABLISHED``) before any caller proceeds.
+    AIPOS-F221 件①: 无显式根时委托 F144 治理根解析唯一实现 resolve_governance_root(禁第二份梯子)——序: 环境变量
+    LYBRA_WORKSPACE_ROOT(旧名废弃兼容)/ LYBRA_HOME_ROOT(进程级显式 home 模型声明, 原梯第 3 级不变)> 当前目录(start)向上首个治理根(声明的队列根; 存量无 project.json 的队列根同认)>
+    工位 .lybra/connection.json 声明的治理根 > 都不在才走 AIPOS-226 home 模型(_home_model_context: LYBRA_HOME_ROOT / 工作区内
+    v2·v1 配置 / 全局 ~/.lybra/config.json home_root)。原 AIPOS-226 梯自 cwd 向上先撞到全局 ~/.lybra/config.json 即进 home 模型、
+    盖过所在治理根(chris 根下 audit-verdict 去活动项目 lybra 找凭据), 已随委托修正; 解析不出 = FileNotFoundError(拒因原文)。
+    explicit_root / 环境变量两级保留原校验与原文案(FileNotFoundError「... does not contain 5_tasks/queue」)。
     """
     source_env = env if env is not None else os.environ
     if explicit_root:
@@ -159,70 +167,47 @@ def resolve_workspace_context(
     raw_env_root, env_name = workspace_root_from_env(source_env)
     if raw_env_root:
         return _validate_workspace_root(Path(raw_env_root), source=str(env_name)), None
+    if str(source_env.get(HOME_ROOT_ENV) or "").strip():
+        # 进程级显式声明 LYBRA_HOME_ROOT(门 home-root 单门模式等, service_mode)与 LYBRA_WORKSPACE_ROOT 同属「环境变量」档, 照旧先于
+        # 所在治理根走 home 模型(原梯第 3 级, 行为不变); 本卡修的是向上查找撞到的全局 ~/.lybra/config.json(环境里的默认配置, 非显式声明)
+        return _home_model_context(start, source_env)
 
-    # ---------------------------------------------------------------------------------
-    # AIPOS-226 resolution precedence (AIPOS-223 §1.4, highest first). The two-root home
-    # model is folded in WITHOUT displacing the documented back-compat order — a LOCAL
-    # workspace signal (an in-workspace .lybra/config.json, then a bare 5_tasks/queue
-    # subtree at/above the start) wins over the GLOBAL ~/.lybra/config.json home model.
-    #
-    #   1. --workspace-root / explicit_root           (handled above)
-    #   2. LYBRA_WORKSPACE_ROOT env (旧名 AIPOS_WORKSPACE_ROOT 废弃兼容)  (handled above)
-    #   3. LYBRA_HOME_ROOT env                         -> home model
-    #   4. in-workspace .lybra/config.json (upward):   v2 (home_root) -> home model
-    #                                                  v1 (workspace_root) -> that root
-    #   5. upward 5_tasks/queue marker (bare subtree)  -> that root (legacy back-compat)
-    #   6. global ~/.lybra/config.json .home_root      -> home model
-    #   7. fail closed
-    #
-    # FIX D — SCHEMA DISTINCTION: the global runtime config (~/.lybra/config.json, carries a
-    # `home_root`) is a DIFFERENT schema from a legacy v1 in-workspace config
-    # (<ws>/.lybra/config.json, carries `workspace_root`, NO `home_root`). The upward search
-    # (find_workspace_config) can land on either. A found config carrying `home_root` routes to
-    # the home model and is NEVER misread as a v1 workspace_root config; only a genuine v1
-    # config (no home_root) drives workspace_root_from_config.
-    global_config = load_global_config(source_env)
-    config_path = find_workspace_config(start)
-    found_config: dict[str, Any] = {}
+    try:
+        hit = resolve_governance_root(None, start=start, env=source_env, established=False, declared_sources=True,
+                                      allow_active_project=True)
+    except ProjectTargetError as exc:
+        raise FileNotFoundError(str(exc)) from exc
+    return hit["project_root"], hit.get("home_root")
+
+
+def _home_model_context(start: Path | None, env: dict[str, str]) -> tuple[Path, Path | None]:
+    """AIPOS-226 home 模型(全局视图; 只由 resolve_governance_root 第 5 级「不在任何治理根内」时调用, AIPOS-F221 件①由原
+    resolve_workspace_context 梯拆出, 非第二份梯子)。序(高 → 低):
+      1. LYBRA_HOME_ROOT env                         -> home model
+      2. 工作区内 .lybra/config.json(向上, find_workspace_config; 全局 ~/.lybra/config.json 不算, AIPOS-F221)
+           v2(带 home_root)-> 该 home 的活动项目; v1(workspace_root)-> 该根(home_root=None)
+      3. 全局 ~/.lybra/config.json .home_root        -> home model
+      4. fail closed(FileNotFoundError)
+    FIX D — SCHEMA DISTINCTION: 带 home_root 的配置一律走 home 模型, 绝不当 v1 workspace_root 配置读。home 模型解析错
+    (PROJECT_NOT_ESTABLISHED / PROJECT_AMBIGUOUS)原样上抛, 不静默回落。"""
+    global_config = load_global_config(env)
+    if str(env.get(HOME_ROOT_ENV) or "").strip():
+        home = resolve_home_root(env=env)
+        project = resolve_active_project(home, env=env, global_config=global_config)
+        return resolve_project_root(home, project), home
+    config_path = find_workspace_config(start, env=env)
     if config_path is not None:
         found_config = load_workspace_config(config_path)
-    found_home_root = home_root_from_config(found_config)
-
-    # 3. LYBRA_HOME_ROOT env -> home model (the brand-aligned home env, highest home signal).
-    if str(source_env.get(HOME_ROOT_ENV) or "").strip():
-        home = resolve_home_root(env=source_env)
-        project = resolve_active_project(home, env=source_env, global_config=global_config)
-        return resolve_project_root(home, project), home
-
-    # 4. In-workspace config (upward search). A v2 config (home_root) routes to the home model
-    #    using ITS home_root + active_project; a v1 config (no home_root) drives the legacy
-    #    workspace_root_from_config. Either way a LOCAL config beats the global home model.
-    if config_path is not None:
+        found_home_root = home_root_from_config(found_config)
         if found_home_root is not None:
-            home = resolve_home_root(explicit_root=found_home_root, env=source_env)
-            project = resolve_active_project(home, env=source_env, config=found_config)
+            home = resolve_home_root(explicit_root=found_home_root, env=env)
+            project = resolve_active_project(home, env=env, config=found_config)
             return resolve_project_root(home, project), home
         return workspace_root_from_config(config_path), None
-
-    # 5. Upward 5_tasks/queue marker (legacy bare project subtree). A local workspace at/above
-    #    the start wins over the global home model so v1 inputs / evidence workspaces / bare-cwd
-    #    callers stay byte-identical and are never hijacked by the global runtime config.
-    current = (start or Path.cwd()).expanduser().resolve()
-    if current.is_file():
-        current = current.parent
-    for candidate in [current, *current.parents]:
-        if has_workspace_queue(candidate):
-            return candidate, None
-
-    # 6. Global ~/.lybra/config.json .home_root -> home model. This is the production path when
-    #    the caller's cwd is the code repo (no local workspace signal): the global runtime config
-    #    names the truth home + active project. Fails LOUDLY (PROJECT_NOT_ESTABLISHED /
-    #    PROJECT_AMBIGUOUS) on misresolution — never a silent default.
     if global_config_home_root(global_config) is not None:
-        home = resolve_home_root(env=source_env)
-        project = resolve_active_project(home, env=source_env, global_config=global_config)
+        home = resolve_home_root(env=env)
+        project = resolve_active_project(home, env=env, global_config=global_config)
         return resolve_project_root(home, project), home
-
     raise FileNotFoundError("Could not locate Lybra workspace root containing .lybra/config.json or 5_tasks/queue")
 
 
@@ -2656,15 +2641,17 @@ def resolve_governance_root(
     declared_sources: bool = True,
     allow_active_project: bool = False,
 ) -> dict[str, Any]:
-    """AIPOS-F144 件①: 治理根解析唯一实现(读写共用)。返回 {project, project_root, source, label, kind}(label = 声明的来源文案;
-    source = label + 根路径; project = project.json#project, 未声明 = None, 写命令自行拒)。
+    """AIPOS-F144 件①: 治理根解析唯一实现(读写共用)。返回 {project, project_root, source, label, kind, home_root}(label = 声明的
+    来源文案; source = label + 根路径; project = project.json#project, 未声明 = None, 写命令自行拒; home_root = 仅第 5 级 home 模型
+    命中时为 home 根, 其余 None —— AIPOS-F221 件①: 老解析口 resolve_workspace_context 委托本函数, 由此取 home_root)。
 
     序(高 → 低, 命中即停; 每级都以结构判据 has_workspace_queue 验证, 不看路径名):
       1. workspace_root: 显式 --workspace-root(全局或子命令级, CLI 薄壳已合并)                    kind=workspace_root
       2. [declared_sources] 环境变量 LYBRA_WORKSPACE_ROOT(唯一读取口 workspace_root_from_env)   kind=env
       3. 自 start(缺省 cwd)向上首个治理根(enclosing_governance_root)                            kind=cwd_root
       4. [declared_sources] 自 start 向上首个工位 .lybra/connection.json 声明的治理根             kind=workstation
-      5. 仅 allow_active_project(命令声明为全局视图)且以上都无: AIPOS-226 home 模型               kind=active_project
+      5. 仅 allow_active_project(命令声明为全局视图 / 老解析口 resolve_workspace_context)且以上都无: AIPOS-226 home 模型
+         (_home_model_context; 向上查找不认全局 ~/.lybra/config.json 为工作区内配置, AIPOS-F221)         kind=active_project
       6. 拒: ProjectTargetError(GOVERNANCE_ROOT_UNRESOLVED, 出口 = cd 到治理根或加 --workspace-root)
     当前目录在某治理根内时第 3 级先于 home 模型 —— 绝不回落活动项目(原 AIPOS-226 梯自 cwd 向上先撞 ~/.lybra/config.json
     即进 home 模型, 是 F144 病理)。established: 治理根是否须带 project.json(写命令 True = 已建治理根; 读命令 False 兼容
@@ -2679,7 +2666,7 @@ def resolve_governance_root(
             project: str | None = declared_project_id(root)
         except ValueError:
             project = None
-        return {"project": project, "project_root": root, "source": f"{label} {root}", "label": label, "kind": kind}
+        return {"project": project, "project_root": root, "source": f"{label} {root}", "label": label, "kind": kind, "home_root": None}
 
     def _checked(raw: str | Path, kind: str, label: str) -> dict[str, Any]:
         root = Path(raw).expanduser().resolve()
@@ -2706,12 +2693,13 @@ def resolve_governance_root(
     here = Path(start if start is not None else Path.cwd()).expanduser().resolve()
     if allow_active_project:
         try:
-            root, _home = resolve_workspace_context(start_path, env=source_env)
+            # AIPOS-F221 件①: home 模型拆为 _home_model_context(原 resolve_workspace_context 梯尾段; 后者现委托本函数, 防递归)
+            root, home_root = _home_model_context(start_path, source_env)
         except (FileNotFoundError, ValueError) as exc:
             raise ProjectTargetError("GOVERNANCE_ROOT_UNRESOLVED",
                                      f"当前目录 {here} 不在任何已建治理根内, 全局视图也解析不出({exc})。"
                                      f"{codes['GOVERNANCE_ROOT_UNRESOLVED']}") from exc
-        return _hit(root, "active_project", sources["active_project"])
+        return {**_hit(root, "active_project", sources["active_project"]), "home_root": home_root}
     tried = "显式 --workspace-root / 环境变量 / 工位声明" if declared_sources else "显式 --workspace-root"
     raise ProjectTargetError("GOVERNANCE_ROOT_UNRESOLVED",
                              f"当前目录 {here} 不在任何已建治理根内(向上无 project.json + 队列根), 也无{tried}。"
