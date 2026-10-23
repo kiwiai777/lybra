@@ -68,7 +68,50 @@ def board_envelopes_declaration() -> dict[str, Any]:
             raise SchemaLoadError(f"verbs.schema.json {DECL_KEY}.errors.{code} 须有 int status 与非空 message")
     if set(decl["decision_summary"]) != set(_MODES):
         raise SchemaLoadError(f"verbs.schema.json {DECL_KEY}.decision_summary 键须恰为 {list(_MODES)}")
+    _check_tabs(decl.get("tabs"), statuses)
     return decl
+
+
+_TAB_KEYS = ("param", "signed_param", "order", "in_use_statuses", "renew_statuses", "after_sign", "texts")
+_TABS = ("pending", "current", "history")
+_TAB_TEXTS = ("tab_pending", "tab_current", "tab_history", "refresh", "signed_banner", "signed_view", "refreshing", "renew_heading",
+              "renew_toggle", "pending_none", "current_none", "history_none", "drivers_none")
+
+
+def _check_tabs(tabs: Any, statuses: set[str]) -> None:
+    """AIPOS-F217: board_owner_envelopes.tabs(fail-closed): 键齐; order 恰为三个标签; 状态集 ⊆ 展示状态且 renew ⊆ in_use; after_sign 键恰为
+    request + 签发模式、值 ∈ 标签; 文案语言恰为看板 locale.supported 且每种语言 _TAB_TEXTS 齐(F201 relay 话术声明同一形)。"""
+    from tools.aipos_cli.board_pages import pages_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    where = f"verbs.schema.json {DECL_KEY}.tabs"
+    if not isinstance(tabs, dict) or any(k not in tabs for k in _TAB_KEYS):
+        raise SchemaLoadError(f"{where} 未声明齐 {list(_TAB_KEYS)}")
+    if not isinstance(tabs["order"], list) or sorted(tabs["order"]) != sorted(_TABS):
+        raise SchemaLoadError(f"{where}.order 须恰为 {list(_TABS)}")
+    in_use, renew = set(tabs["in_use_statuses"]), set(tabs["renew_statuses"])
+    if not in_use or not in_use <= statuses or not renew <= in_use:
+        raise SchemaLoadError(f"{where}.in_use_statuses 须为展示状态非空子集, renew_statuses ⊆ in_use_statuses")
+    after = tabs["after_sign"]
+    if not isinstance(after, dict) or set(after) != {"request", *_MODES} or any(v not in _TABS for v in after.values()):
+        raise SchemaLoadError(f"{where}.after_sign 键须恰为 {['request', *_MODES]}, 值 ∈ {list(_TABS)}")
+    for key in ("param", "signed_param"):
+        if not isinstance(tabs[key], str) or not tabs[key]:
+            raise SchemaLoadError(f"{where}.{key} 须为非空字符串")
+    texts = tabs["texts"]
+    langs = set(pages_declaration()["locale"]["supported"])
+    if not isinstance(texts, dict) or set(texts) != langs or any(
+            not isinstance(texts[lang], dict) or any(not str(texts[lang].get(k) or "").strip() for k in _TAB_TEXTS) for lang in langs):
+        raise SchemaLoadError(f"{where}.texts 语言须恰为 {sorted(langs)}, 每种语言须有 {list(_TAB_TEXTS)}")
+
+
+def tab_texts(lang: str | None = None) -> dict[str, str]:
+    """AIPOS-F217: 一种语言的标签页文案(未知 / 缺省 = 看板缺省语言)。"""
+    from tools.aipos_cli.board_pages import pages_declaration
+
+    table = board_envelopes_declaration()["tabs"]["texts"]
+    default = str(pages_declaration()["locale"]["default"])
+    return table[lang] if lang in table else table[default]
 
 
 def _fmt(template: Any, where: str, **values: Any) -> str:
@@ -139,7 +182,10 @@ def _scope_text(row: dict[str, Any], texts: dict[str, Any]) -> str:
                 launch_harnesses=", ".join(row.get("launch_harnesses") or []) or texts["scope_manual"])
 
 
-def _row_html(row: dict[str, Any], decl: dict[str, Any], *, project: str, owner: bool) -> str:
+def _row_html(row: dict[str, Any], decl: dict[str, Any], *, project: str, owner: bool, tt: dict[str, str] | None = None,
+              signed: str | None = None) -> str:
+    """One envelope row. AIPOS-F217: the renew form is folded behind one "renew" toggle (tt = tab texts of the page language); the row
+    just signed (signed = policy_id from the page query) is highlighted."""
     esc = html.escape
     texts = decl["texts"]
     status = str(row["status"])
@@ -151,20 +197,23 @@ def _row_html(row: dict[str, Any], decl: dict[str, Any], *, project: str, owner:
         label += f" · {row['why']}"
     cells = [esc(str(row["policy_id"])), esc(str(row.get("agent_or_role") or "")), esc(_scope_text(row, texts)),
              esc(f"{row.get('used')}/{row.get('max_tasks')}"), esc(str(row.get("expires_at") or "")), esc(label)]
-    out = [f"<tr id=\"{esc(str(row['policy_id']))}\" class=\"envelope-row envelope-tone-{tone}\" data-policy-id=\"{esc(str(row['policy_id']))}\""
-           f" data-status=\"{esc(status)}\" data-tone=\"{tone}\" data-current=\"{str(bool(row.get('current'))).lower()}\">"]
+    hit = bool(signed) and str(row["policy_id"]) == signed
+    out = [f"<tr id=\"{esc(str(row['policy_id']))}\" class=\"envelope-row envelope-tone-{tone}{' envelope-row-signed' if hit else ''}\""
+           f" data-policy-id=\"{esc(str(row['policy_id']))}\" data-status=\"{esc(status)}\" data-tone=\"{tone}\""
+           f" data-current=\"{str(bool(row.get('current'))).lower()}\"{' data-signed=\"true\"' if hit else ''}>"]
     out.extend(f"<td>{c}</td>" for c in cells)
-    if owner and row.get("current") and row.get("next_policy_id"):
+    if owner and tt and row.get("current") and row.get("next_policy_id"):
         default_exp = _default_expiry(decl)
         note = (f"<p class=\"envelope-note\">{esc(_fmt(texts['renew_note'], 'texts.renew_note', note=row['renew_note']))}</p>"
                 if row.get("renew_note") else "")
         out.append(
-            "<td><form class=\"envelope-form\" data-mode=\"renew\""
+            f"<td><details class=\"envelope-renew\"><summary>{esc(tt['renew_toggle'])}</summary>"
+            "<form class=\"envelope-form\" data-mode=\"renew\""
             f" data-workspace=\"{esc(project)}\" data-template=\"{esc(str(row['policy_id']))}\">"
             f"<label>{esc(texts['field_max_tasks'])} <input name=\"max_tasks\" type=\"number\" min=\"1\" value=\"{esc(str(row.get('max_tasks') or 1))}\"></label>"
             f"<label>{esc(texts['field_expires_at'])} <input name=\"expires_at\" value=\"{esc(default_exp)}\"></label>"
             f"<button type=\"submit\">{esc(_fmt(texts['renew_button'], 'texts.renew_button', policy_id=row['next_policy_id']))}</button>"
-            f"{note}</form></td>")
+            f"{note}</form></details></td>")
     else:
         out.append("<td></td>")
     out.append("</tr>")
@@ -181,51 +230,142 @@ def _default_expiry(decl: dict[str, Any]) -> str:
     return iso_z(utc_now() + timedelta(days=int(envelope_renew_declaration()["renew_days"])))
 
 
-def _table(rows: list[dict[str, Any]], decl: dict[str, Any], *, project: str, owner: bool, css: str) -> str:
+def _table(rows: list[dict[str, Any]], decl: dict[str, Any], *, project: str, owner: bool, css: str, tt: dict[str, str] | None = None,
+           signed: str | None = None) -> str:
     head = "".join(f"<th>{html.escape(str(c))}</th>" for c in decl["texts"]["columns"]) + "<th></th>"
-    body = "".join(_row_html(r, decl, project=project, owner=owner) for r in rows)
+    body = "".join(_row_html(r, decl, project=project, owner=owner, tt=tt, signed=signed) for r in rows)
     return f"<table class=\"{css}\"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
 
 
-def envelopes_page_parts(view: dict[str, Any], *, owner: bool) -> dict[str, Any]:
+# ---------------------------------------------------------------------------
+# AIPOS-F217: tabs (to sign / in use / history) — one placement judgment
+# ---------------------------------------------------------------------------
+
+#: the display status (autonomy_policy.ENVELOPE_DISPLAY_STATUSES) of a used-up envelope
+_EXHAUSTED = "exhausted"
+
+
+def envelope_placement(row: dict[str, Any], rows: list[dict[str, Any]], decl: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F217 唯一判定: 一个信封的归属页 tab ∈ {current, history} 与是否待签 pending(页面 / 标签计数 / 横幅 / 测试同调)。
+    rows = 同一项目 envelope_overview 的全部行(展示字段即可: policy_id / agent_or_role / status / current / superseded_by)。
+    在用(current)= envelope_overview 判当前(未被接替)且展示状态 ∈ tabs.in_use_statuses(生效 / 将尽 / 将到期 / 已签待生效); 其余 = 历史。
+    待签 = 在用且展示状态 ∈ tabs.renew_statuses(将尽 / 将到期), 或 额度用尽而未被接替、且同驱动方(agent_or_role)没有在用信封(无可用接替者)。"""
+    tabs = (decl or board_envelopes_declaration())["tabs"]
+    in_use_statuses = set(tabs["in_use_statuses"])
+
+    def in_use(r: dict[str, Any]) -> bool:
+        return bool(r.get("current")) and not r.get("superseded_by") and str(r.get("status")) in in_use_statuses
+
+    status = str(row.get("status"))
+    if in_use(row):
+        return {"tab": "current", "pending": status in set(tabs["renew_statuses"])}
+    exhausted_alone = (status == _EXHAUSTED and not row.get("superseded_by")
+                       and not any(in_use(r) for r in rows if r.get("agent_or_role") == row.get("agent_or_role")))
+    return {"tab": "history", "pending": exhausted_alone}
+
+
+def envelope_tabs(view: dict[str, Any], decl: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Every project's envelopes split by envelope_placement: {projects: {name: {pending, current, history}}, counts: {pending, current,
+    history}} (pending = envelopes only; the page adds the authorization requests). Each row is in exactly one of current / history."""
+    d = decl or board_envelopes_declaration()
+    split: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    counts = {tab: 0 for tab in _TABS}
+    for proj in view["projects"]:
+        rows = proj.get("envelopes") or []
+        parts: dict[str, list[dict[str, Any]]] = {tab: [] for tab in _TABS}
+        for row in rows:
+            place = envelope_placement(row, rows, d)
+            parts[place["tab"]].append(row)
+            if place["pending"]:
+                parts["pending"].append(row)
+        for tab in _TABS:
+            counts[tab] += len(parts[tab])
+        split[str(proj["project"])] = parts
+    return {"projects": split, "counts": counts}
+
+
+def resolve_tab(params: dict[str, list[str]] | None, *, pending_count: int, relays: int) -> str:
+    """The tab to render: the query parameter when it names a declared tab, else the default (to sign when it has content, else in use)."""
+    tabs = board_envelopes_declaration()["tabs"]
+    asked = ((params or {}).get(str(tabs["param"])) or [""])[0]
+    if asked in tabs["order"]:
+        return asked
+    return "pending" if pending_count or relays else "current"
+
+
+def signed_policy(params: dict[str, list[str]] | None) -> str | None:
+    """The just-signed policy id from the page query (banner + highlight); not a policy id shape = ignored."""
+    from tools.aipos_cli.autonomy_policy import POLICY_ID_PATTERN
+
+    value = ((params or {}).get(str(board_envelopes_declaration()["tabs"]["signed_param"])) or [""])[0].strip()
+    return value if value and POLICY_ID_PATTERN.fullmatch(value) else None
+
+
+def envelopes_page_parts(view: dict[str, Any], *, owner: bool, tab: str = "current", lang: str | None = None,
+                         signed: str | None = None, split: dict[str, Any] | None = None) -> dict[str, Any]:
     """看板「信封」页正文(服务端渲染; 全部值经 html.escape)。owner=False(非 Owner 会话)= 只读, 不出任何表单 / 脚本。
     AIPOS-F180: 页面骨架(顶部导航 / 样式 / 「待授权请求」段)由看板 F174 骨架 web/board/readonly_pages.render_envelopes 套上;
-    本函数只出 {title, h1_attrs, sections}(Owner 写例外的 body 属性与脚本由骨架按会话角色统一给)。"""
+    本函数只出 {title, h1_attrs, sections}(Owner 写例外的 body 属性与脚本由骨架按会话角色统一给)。
+    AIPOS-F217: 只出 tab 这一页的信封段(envelope_tabs 同一切分): pending = 需要续签的信封; current = 在用表(续签折叠)+ 无在用信封的驱动方
+    汇总一行折叠 + 新签表单; history = 历史表(新的在前)。项目读不出 = 各页都点名。"""
     esc = html.escape
     decl = board_envelopes_declaration()
     texts = decl["texts"]
+    tt = tab_texts(lang)
+    split = split or envelope_tabs(view, decl)
     title = _fmt(texts["title"], "texts.title", projects=len(view["projects"]), home_root=view["home_root"])
     parts: list[str] = []
     if not owner:
         parts.append(f"<p class=\"envelope-readonly\">{esc(texts['readonly_hint'])}</p>")
+    if tab == "pending" and split["counts"]["pending"]:
+        parts.append(f"<h2 class=\"envelope-renew-heading\">{esc(_fmt(tt['renew_heading'], 'tabs.texts.renew_heading', count=split['counts']['pending']))}</h2>")
+    shown = 0
     for proj in view["projects"]:
         name = str(proj["project"])
+        rows = split["projects"].get(name, {}).get(tab, [])
+        if not proj.get("error") and tab != "current" and not rows:
+            continue  # to sign / history: only projects with rows there (in use lists every project: its new-sign form lives there)
+        shown += 1
         heading = _fmt(texts["project_heading"], "texts.project_heading", project=name) + (texts["project_paused"] if proj.get("paused") else "")
-        parts.append(f"<section class=\"envelope-project\" id=\"project-{esc(name)}\" data-project=\"{esc(name)}\"><h2>{esc(heading)}</h2>")
+        parts.append(f"<section class=\"envelope-project\" id=\"project-{esc(name)}\" data-project=\"{esc(name)}\" data-tab=\"{esc(tab)}\""
+                     f" data-rows=\"{len(rows)}\"><h2>{esc(heading)}</h2>")
         if proj.get("error"):
             parts.append(f"<p class=\"envelope-error\">{esc(_fmt(texts['page_error'], 'texts.page_error', error=proj['error']))}</p></section>")
             continue
-        rows = proj["envelopes"]
-        if not rows:
-            parts.append(f"<p class=\"envelope-none\">{esc(texts['none'])}</p>")
-        current = [r for r in rows if r.get("current")]
-        history = [r for r in rows if not r.get("current")]
-        if rows:
-            parts.append(f"<h3>{esc(texts['current_heading'])}</h3>")
-            parts.append(_table(current, decl, project=name, owner=owner, css="envelope-current"))
-            by_id = {r["policy_id"]: r for r in rows}
-            for drv in proj.get("drivers") or []:
-                # 无在用信封的驱动方点名一行(其最新信封已被别的信封接替 = 已有着落, 不点名)
-                if not drv["current"] and not (by_id.get(drv["latest"]) or {}).get("superseded_by"):
-                    parts.append(f"<p class=\"envelope-driver-none\">{esc(_fmt(texts['driver_none'], 'texts.driver_none', **drv))}</p>")
-        if history:
-            summary = _fmt(texts["history_heading"], "texts.history_heading", count=len(history))
-            parts.append(f"<details class=\"envelope-history\"><summary>{esc(summary)}</summary>"
-                         + _table(history, decl, project=name, owner=False, css="envelope-folded") + "</details>")
-        if owner:
-            parts.append(_new_form_html(name, decl))
+        if tab == "pending":
+            parts.append(_table(rows, decl, project=name, owner=owner, css="envelope-current envelope-pending", tt=tt, signed=signed))
+        elif tab == "history":
+            parts.append(_table(rows, decl, project=name, owner=False, css="envelope-folded envelope-history", signed=signed))
+        else:
+            all_rows = proj["envelopes"]
+            if not all_rows:
+                parts.append(f"<p class=\"envelope-none\">{esc(texts['none'])}</p>")
+            elif not rows:
+                parts.append(f"<p class=\"envelope-none\">{esc(tt['current_none'])}</p>")
+            else:
+                parts.append(_table(rows, decl, project=name, owner=owner, css="envelope-current", tt=tt, signed=signed))
+            parts.append(_drivers_none_html(proj, rows, decl, tt))
+            if owner:
+                parts.append(_new_form_html(name, decl))
         parts.append("</section>")
+    if not shown and tab == "history":  # (to sign: the page says "nothing to sign" when requests / relays are empty too)
+        parts.append(f"<p class=\"envelope-none envelope-tab-empty\">{esc(tt['history_none'])}</p>")
     return {"title": title, "h1_attrs": f" data-envelope-projects=\"{len(view['projects'])}\"", "sections": parts}
+
+
+def _drivers_none_html(proj: dict[str, Any], in_use: list[dict[str, Any]], decl: dict[str, Any], tt: dict[str, str]) -> str:
+    """Drivers with no envelope in use, one folded line (names inside). A driver whose latest envelope was superseded by another
+    envelope already has its successor (not named)."""
+    esc = html.escape
+    by_id = {r["policy_id"]: r for r in proj["envelopes"]}
+    using = {r.get("agent_or_role") for r in in_use}
+    names = [drv for drv in proj.get("drivers") or []
+             if drv["agent_or_role"] not in using and not (by_id.get(drv["latest"]) or {}).get("superseded_by")]
+    if not names:
+        return ""
+    items = "".join(f"<li>{esc(_fmt(decl['texts']['driver_none'], 'texts.driver_none', **drv))}</li>" for drv in names)
+    return (f"<details class=\"envelope-drivers-none\" data-drivers=\"{len(names)}\"><summary>"
+            f"{esc(_fmt(tt['drivers_none'], 'tabs.texts.drivers_none', count=len(names)))}</summary><ul>{items}</ul></details>")
 
 
 def _new_form_html(project: str, decl: dict[str, Any]) -> str:

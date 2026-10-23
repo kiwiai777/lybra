@@ -1,8 +1,10 @@
 // AIPOS-F172 / AIPOS-F180: the one Owner signing client for the inbox and envelope pages (server-rendered, F174 skeleton).
 // Flows: authorization request cards ("sign as suggested" / "edit, then sign" / "decline = tell the advisor") and the envelope
 // page renew / new forms -> POST the single F172 write path (stage=preview, then stage=confirm with the session-bound token).
-// Confirm shows a plain-language summary only; success shows a result card with return links; failure shows a plain reason and
-// the next step. Raw preview / record paths stay folded under "technical details".
+// Confirm shows a plain-language summary only; failure shows a plain reason and the next step. Raw preview / record paths stay
+// folded under "technical details". AIPOS-F217: success = the whole page reloads from the server (conf.after_sign: request -> the
+// "to sign" tab, renew / new -> the "in use" tab, with the signed policy id for the banner; the inbox page reloads itself); the
+// paragraph to copy to the advisor is the server's "decided, to relay" section, so nothing is assembled here.
 // All texts come from the page (body data-gr-texts JSON, board i18n channel); the server decides everything (Owner-only,
 // workspace check, preview token, audit log). No credentials ever reach this page.
 (function () {
@@ -40,7 +42,7 @@
     }, function (err) { return { status: 0, data: { message: String(err) } }; });
   }
 
-  function show(state, title, lines, techLines, relay) {
+  function show(state, title, lines, techLines) {
     panel.setAttribute('data-state', state);
     heading.textContent = title;
     content.textContent = '';
@@ -49,13 +51,6 @@
       p.textContent = line;
       content.appendChild(p);
     });
-    if (relay) {
-      // AIPOS-F201: the paragraph to copy to the driving advisor (server-rendered, declared texts; selectable plain text)
-      var pre = document.createElement('pre');
-      pre.className = 'upgrade-lines gr-relay';
-      pre.textContent = relay;
-      content.appendChild(pre);
-    }
     techPre.textContent = (techLines || []).join('\n');
     tech.hidden = !(techLines && techLines.length);
     tech.open = false;
@@ -72,14 +67,6 @@
     b.addEventListener('click', onClick);
     actions.appendChild(b);
     return b;
-  }
-
-  function link(label, href) {
-    var a = document.createElement('a');
-    a.className = 'gr-back';
-    a.href = href;
-    a.textContent = label;
-    actions.appendChild(a);
   }
 
   function repoText(list) { return (list && list.length) ? list.join(', ') : t('gr_repos_any'); }
@@ -108,29 +95,23 @@
     button(t('gr_cancel_btn'), function () { panel.hidden = true; });
   }
 
-  function success(d, request) {
+  function success(d, kind) {
     var params = d.params || {};
     var policy = ((d.signed || [])[0] || {}).policy_id || params.policy_id;
-    var relay = (request && request.relay) ? fill(request.relay, { policy_id: policy }) : '';
-    var lines = [request ? (relay && request.relay_note ? request.relay_note
-      : t('gr_ok_continue', { agent: params.agent_or_role, task_id: request.task_id }))
-      : t('gr_ok_generic', { agent: params.agent_or_role })];
     var techLines = (d.signed || []).map(function (s) { return s.policy_id + ' -> ' + (s.written || []).join(', '); });
     if (d.landing_line) { techLines.push(d.landing_line); }
     techLines.push('actor=' + d.actor + ' / ' + d.capture_surface + ' / ' + d.captured_by);
-    show('signed', t('gr_ok_heading', { policy_id: policy }), lines, techLines, relay);
-    if (request && request.card) { request.card.hidden = true; }
-    var links = conf.links || {};
-    link(t('gr_back_inbox'), links.inbox);
-    link(t('gr_back_envelopes'), links.envelopes);
-    link(t('gr_back_overview'), links.overview);
+    show('signed', t('gr_ok_heading', { policy_id: policy }), [conf.refreshing || ''], techLines);
+    // AIPOS-F217: reload the server-rendered page (the server's truth decides what is shown; no client-side state)
+    var target = (conf.after_sign || {})[kind];
+    if (target) { window.location.assign(fill(target, { policy_id: encodeURIComponent(policy) })); } else { window.location.reload(); }
   }
 
   function confirmStep(payload, preview, request) {
     show('working', t('gr_working'), [], []);
     post(Object.assign({}, payload, { stage: 'confirm', preview_token: preview.preview_token })).then(function (res) {
       if (res.status !== 200 || !res.data.ok) { failure(res); return; }
-      success(res.data, request);
+      success(res.data, request ? 'request' : payload.mode);
     });
   }
 
@@ -156,7 +137,6 @@
   Array.prototype.forEach.call(document.querySelectorAll('.gr-card[data-request]'), function (card) {
     var request;
     try { request = JSON.parse(card.getAttribute('data-request')); } catch (e) { return; }
-    request.card = card;
     var editForm = card.querySelector('form.gr-edit');
     var deny = card.querySelector('.gr-deny');
     card.addEventListener('click', function (event) {
