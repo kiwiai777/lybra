@@ -5545,6 +5545,22 @@ def audit_verdict_task(
         # AIPOS-F132 件①: 角色类经唯一解析 custom_roles.authorize_instance_class(实例 → 角色 → 角色类, 自定义角色读门注册表),
         # 不再按实例名前缀字面量集合判(chris hbj-auditor.* = 注册角色 class auditor 曾被拒); 解析不到 = 拒(fail-closed)。
         resolved_root = _resolve_repo_root(repo_root)
+        # AIPOS-F221 件②⑤: 非代码快车道卡(只写治理根、不声明独立审计)交回后由顾问复核, 审计裁决先于角色判定拒——拒因点名复核结案 /
+        # 复核打回两条正式出口(唯一判定 next_resolver.fast_lane_audit_refusal, CLI audit-verdict 取凭据前同判)
+        from tools.aipos_cli.next_resolver import fast_lane_audit_refusal
+
+        fast_lane_refusal = fast_lane_audit_refusal(resolved_root, reviewed_id)
+        if fast_lane_refusal:
+            return {
+                "verdict": Verdict.BLOCK,
+                "task_id": reviewed_id,
+                "actor": actor_text,
+                "dry_run": dry_run,
+                "blocking_reasons": [fast_lane_refusal],
+                "warnings": [],
+                "data": {"reviewed_task_id": reviewed_id, "redirect_verb": "lybra_mark_concluded"},
+                "message": "Audit verdict blocked: fast-lane card is concluded by advisor review (AIPOS-F221)",
+            }
         from tools.aipos_cli.custom_roles import authorize_instance_class
 
         role_gate = authorize_instance_class(instance_text, _AUDIT_VERDICT_SUBMITTER_CLASS, resolved_root)
@@ -6951,8 +6967,14 @@ def mark_concluded_task(
     dry_run: bool = True,
     repo_root: str | Path | None = None,
     outcome: str | None = None,
+    focus_items: Any = None,
+    acceptance_criteria: Any = None,
 ) -> dict[str, Any]:
     """AIPOS-354 S3: 报告式审结 — 显式标记审结.
+
+    AIPOS-F221 件②: outcome = review_rework.outcome(verbs.schema lybra_mark_concluded.review_rework)= 非代码快车道卡顾问复核不通过、
+    打回原卡返工(不结案): 落顾问复核记录 + 经门 queue rework 同一写函数 queue_rework_task 追加返工轮(focus_items 必填,
+    acceptance_criteria 可选; 只此 outcome 收这两项), 卡留 claimed。实现 _mark_concluded_review_rework。
 
     AIPOS-F207 件①: outcome = 顾问复核结论 pass | block(值域 card.schema dependency_gate.conclusion.outcomes; 写卡面 outcome_field);
     缺省 = default_outcome 并在 warnings 提示(不按 conclusion_note 判)。依赖判定与门生 closure 等价(task_complexity.closure_state)。
@@ -6988,8 +7010,15 @@ def mark_concluded_task(
         conclusion_decl = dependency_gate_declaration()["conclusion"]
         outcome_text = str(outcome or "").strip().lower()
         outcome_warnings: list[str] = []
-        if outcome_text and outcome_text not in conclusion_decl["outcomes"]:
-            raise ValueError(f"--outcome 只认 {list(conclusion_decl['outcomes'])}(得 {outcome!r})")
+        # AIPOS-F221 件②: 复核不通过打回返工 = review_rework.outcome(不是结案结论, 不进 conclusion.outcomes)
+        from tools.aipos_cli.next_resolver import review_rework_declaration
+
+        review_rework = outcome_text == str(review_rework_declaration()["outcome"])
+        if outcome_text and not review_rework and outcome_text not in conclusion_decl["outcomes"]:
+            raise ValueError(f"--outcome 只认 {list(mark_concluded_outcome_choices())}(得 {outcome!r})")
+        if not review_rework and (focus_items is not None or acceptance_criteria is not None):
+            raise ValueError(f"--focus-items / --acceptance-criteria 只用于 --outcome {review_rework_declaration()['outcome']}"
+                             "(复核不通过打回返工, AIPOS-F221)")
         if not outcome_text:
             outcome_text = str(conclusion_decl["default_outcome"])
             outcome_warnings.append(str(conclusion_decl["default_note"]).format(outcome=outcome_text))
@@ -7075,6 +7104,11 @@ def mark_concluded_task(
                     actor=_actor_payload(actor_text),
                     data={"task_id": tid, "outputs_check": {k: outputs_check.get(k) for k in ("code", "reason", "bound")}},
                 )
+        if review_rework:
+            return _mark_concluded_review_rework(
+                resolved_root=resolved_root, tid=tid, queue_state=str(queue_state or ""), fm=fm, actor_text=actor_text,
+                report_ref=report_ref, note=note, focus_items=focus_items, acceptance_criteria=acceptance_criteria,
+                outputs_check=outputs_check, dry_run=dry_run)
         closure_ref = report_ref or f"note:{note[:80]}"
         if dry_run:
             return make_response(
@@ -7142,6 +7176,130 @@ def mark_concluded_task(
         )
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(str(actor or "")))
+
+
+def mark_concluded_outcome_choices() -> tuple[str, ...]:
+    """AIPOS-F221 件②: `lybra mark-concluded --outcome` 的 choices 与 MCP lybra_mark_concluded inputSchema enum 的唯一渲染 = 结案结论值域
+    (card.schema dependency_gate.conclusion.outcomes, task_complexity.conclusion_outcomes)+ 复核打回返工(verbs.schema
+    lybra_mark_concluded.review_rework.outcome; 不结案, 不进结论值域)。"""
+    from tools.aipos_cli.next_resolver import review_rework_declaration
+    from tools.aipos_cli.task_complexity import conclusion_outcomes
+
+    return (*conclusion_outcomes(), str(review_rework_declaration()["outcome"]))
+
+
+def _json_string_list(value: Any) -> list[str] | None:
+    """AIPOS-F221 件②: --focus-items / --acceptance-criteria 的值(JSON 数组文本或列表)→ 字符串列表; 不是字符串数组 / 有空项 = None。"""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(value, list) or not all(isinstance(x, str) and x.strip() for x in value):
+        return None
+    return [x.strip() for x in value]
+
+
+def _mark_concluded_review_rework(*, resolved_root: Path, tid: str, queue_state: str, fm: dict[str, Any], actor_text: str,
+                                  report_ref: str, note: str, focus_items: Any, acceptance_criteria: Any,
+                                  outputs_check: dict[str, Any] | None, dry_run: bool) -> dict[str, Any]:
+    """AIPOS-F221 件②: 非代码快车道卡顾问复核不通过 → 落顾问复核记录 + 追加返工轮(声明 verbs.schema lybra_mark_concluded.review_rework)。
+    前置全过才写(调用方 mark_concluded_task 已核: 卡存在、无门生裁决、交回后产出未改 governance_outputs_recheck): 卡在 claimed、属快车道
+    (next_resolver.fast_lane_review)、有门交回记录、该交回未被打回过(fast_lane_rework_state: 已打回且门未落新交回 = 拒)、返工要点非空、
+    复核者角色类与轮次上限(custom_roles.authorize_instance_class + queue_mutation.build_rework_round, 与 queue rework 预演同判)。
+    写: 复核记录(record_writer.write_records_atomic, 事件记录) → 返工轮(门 queue rework 同一写函数 queue_rework_task, verdict_ref = review_id)。
+    dry_run = 零写入(复核记录与返工节预演)。返工轮写失败 = 拒并给补登记命令(复核记录已落, 不回滚: 记录只追加)。"""
+    from tools.aipos_cli.custom_roles import authorize_instance_class
+    from tools.aipos_cli.next_resolver import (_read_task_records, fast_lane_review, fast_lane_rework_state,
+                                               governance_outputs_return_binding, review_rework_declaration)
+    from tools.aipos_cli.queue_mutation import build_rework_round
+    from tools.aipos_cli.record_writer import render_markdown, write_records_atomic
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    operation = "mark_concluded"
+    decl = review_rework_declaration()
+    codes = decl["reject_codes"]
+
+    def _refuse(code: str, **values: Any) -> dict[str, Any]:
+        return blocked_response(operation=operation, dry_run=dry_run, category="VALIDATION_ERROR",
+                                message=f"AIPOS-F221: {code}: " + str(codes[code]).format(task_id=tid, **values),
+                                actor=_actor_payload(actor_text), data={"task_id": tid, "code": code, "outcome": decl["outcome"]})
+
+    if queue_state != "claimed":
+        return _refuse("REVIEW_REWORK_NOT_CLAIMED", state=queue_state or "?")
+    if not fast_lane_review(resolved_root, tid, fm):
+        return _refuse("REVIEW_REWORK_NOT_FAST_LANE")
+    latest_return = _read_task_records(resolved_root, tid).get("latest_return") or {}
+    return_id = str(latest_return.get("return_id") or "").strip()
+    if not return_id:
+        return _refuse("REVIEW_REWORK_NO_RETURN")
+    pending = fast_lane_rework_state(resolved_root, tid, fm)
+    if pending is not None and not pending["re_returned"]:
+        anchor = pending["anchor"]
+        return _refuse("REVIEW_REWORK_ALREADY_PENDING", return_id=anchor.get("reviewed_return_record_ref") or "?",
+                       reviewed_at=anchor.get("verdict_at") or "?", review_id=anchor.get("verdict_id") or "?",
+                       round=pending["rework"].get("round") or "?")
+    items = _json_string_list(focus_items)
+    if not items:
+        return _refuse("REVIEW_REWORK_FOCUS_REQUIRED", value=repr(focus_items))
+    criteria: list[str] = []
+    if acceptance_criteria is not None:
+        parsed = _json_string_list(acceptance_criteria)
+        if parsed is None:
+            raise ValueError(f"--acceptance-criteria 须为 JSON 字符串数组(得 {acceptance_criteria!r})")
+        criteria = parsed
+    event_type = str(decl["event_type"])
+    reviewed_at = iso_z()
+    review_id = f"{event_type}_{tid}_{file_slug('compact', reviewed_at)}"
+    role_gate = authorize_instance_class(actor_text, restricted_amend_actor_class(), resolved_root)
+    planned = build_rework_round(repo_root=resolved_root, task_id=tid, verdict_ref=review_id, focus_items=items,
+                                 acceptance_criteria="\n".join(criteria), actor=actor_text)
+    reasons = [str(r) for r in (planned.get("blocking_reasons") or [])]
+    if not role_gate["ok"]:
+        reasons.insert(0, f"ROLE_VIOLATION: 复核打回(queue rework 同一判据)只能由角色类 {role_gate['required_class']} 的实例执行; "
+                          f"实例 '{actor_text}' 未授权: {role_gate['reason']}")
+    if reasons or planned.get("verdict") == Verdict.BLOCK:
+        return _refuse("REVIEW_REWORK_ROUND_REFUSED", reasons="; ".join(reasons) or "(返工节构建被拒)")
+    round_data = planned.get("data") or {}
+    binding = dict((outputs_check or {}).get("bound") or governance_outputs_return_binding(resolved_root, tid) or {})
+    values = {"record_type": RecordType.TASK_PROGRESS_EVENT, "event_type": event_type, "task_id": tid, "review_id": review_id,
+              "actor": actor_text, "reviewer_instance": actor_text, "timestamp": reviewed_at, "outcome": str(decl["outcome"]),
+              "reviewed_return_record_ref": return_id, "artifact_subject": binding, "report_path": report_ref or None,
+              "conclusion_note": note or None, "focus_items": items, "acceptance_criteria": criteria,
+              "rework_round": round_data.get("round_added")}
+    meta = {key: values[key] for key in decl["record_fields"]}  # 字段只读声明(声明多出未知字段 = KeyError, fail-closed)
+    body = (f"# Advisor Review (rework): {tid}\n\n顾问 {actor_text} 复核交回 {return_id}(产出清单指纹 "
+            f"{binding.get('outputs_digest') or '(交回记录无绑定)'})不通过, 打回原卡第 {round_data.get('round_added')} 轮返工。\n\n"
+            + "".join(f"- 返工要点: {x}\n" for x in items) + "".join(f"- 验收: {x}\n" for x in criteria)
+            + "\n卡留 claimed 不结案; 执行体按返工节重交回后回到顾问复核。判据 verbs.schema lybra_mark_concluded.review_rework; "
+              "实现 tools/aipos_cli/board_adapter._mark_concluded_review_rework。\n")
+    markdown = render_markdown(meta, body, list(meta))
+    record_path = record_dir(resolved_root, "events", tid) / f"{review_id}.md"
+    data = {"task_id": tid, "from_queue": queue_state, "outcome": str(decl["outcome"]), "moved": False,
+            "review_record": {"review_id": review_id, "path": str(record_path.relative_to(resolved_root)),
+                              "reviewed_return_record_ref": return_id, "frontmatter": meta},
+            "rework_round": round_data.get("new_round"), "round_added": round_data.get("round_added"),
+            "max_rounds": round_data.get("max_rounds")}
+    if dry_run:
+        return make_response(ok=True, verdict=Verdict.PASS, operation=operation, dry_run=True, actor=_actor_payload(actor_text), data=data,
+                             safety_notice="AIPOS-F221 mark_concluded --outcome rework dry-run: 顾问复核记录与返工节预演, 零写入; 卡留 claimed。")
+    written = write_records_atomic(resolved_root, [("event", review_id, markdown, tid)])
+    rework = queue_rework_task(task_id=tid, verdict_ref=review_id, focus_items=items, acceptance_criteria="\n".join(criteria),
+                               actor=actor_text, agent_instance=actor_text, dry_run=False, repo_root=resolved_root)
+    if rework.get("verdict") == Verdict.BLOCK or not rework.get("ok", False):
+        why = "; ".join(str(r) for r in (rework.get("blocking_reasons") or [])) or str(rework.get("message") or rework.get("errors") or "")
+        criteria_json = json.dumps(criteria, ensure_ascii=False)
+        return blocked_response(
+            operation=operation, dry_run=False, category="VALIDATION_ERROR",
+            message=(f"AIPOS-F221: 顾问复核记录已落 {written.get('paths')}, 但返工轮登记被拒: {why}。补登记: "
+                     f"{lybra_command_prefix(resolved_root)} queue rework --task-id {tid} --actor {actor_text} --verdict-ref {review_id} "
+                     f"--focus-items '{json.dumps(items, ensure_ascii=False)}' --acceptance-criteria '{criteria_json}'"),
+            actor=_actor_payload(actor_text), data={**data, "written": written.get("paths")})
+    data["written"] = list(written.get("paths") or [])
+    data["rework_round"] = (rework.get("data") or {}).get("rework_round") or data["rework_round"]
+    return make_response(ok=True, verdict=Verdict.PASS, operation=operation, dry_run=False, actor=_actor_payload(actor_text), data=data,
+                         safety_notice=("AIPOS-F221 mark_concluded --outcome rework: 顾问复核记录已落、返工轮已登记(门 queue rework 同一写函数), "
+                                        "卡留 claimed; 复核记录与返工节随该卡 N6 收账。"))
 
 
 def _continuation_from_note(note: str, governance_root: Path) -> str | None:

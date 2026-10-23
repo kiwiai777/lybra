@@ -269,7 +269,9 @@ def test_bound_single_source_fallback_and_declaration():
     src = (REPO_ROOT / "tools" / "aipos_cli" / "next_resolver.py").read_text(encoding="utf-8")
     import re
 
-    assert len(re.findall(r"(?<![.\w])rework_return_bound\(", src)) == 4, "定义 1 + non_branch_re_return / 卡分支 verdict_staleness / 等待提示 3 处调用"
+    # AIPOS-F221 件②: 第 4 处调用 = 快车道复核打回返工态(next_resolver.fast_lane_rework_state, 同一时间界, 锚 = 顾问复核记录)
+    assert len(re.findall(r"(?<![.\w])rework_return_bound\(", src)) == 5, \
+        "定义 1 + non_branch_re_return / 卡分支 verdict_staleness / 等待提示 / 快车道返工态 4 处调用"
     body = src[src.index("def non_branch_re_return("):src.index("def _non_branch_verdict_staleness(")]
     assert "_verdict_moment(" not in body and "rework_return_bound(Path(verdict_path), verdict_fm, rework)" in body, "两路同一时间界"
     assert src.count("non_branch_stale_texts(stale)") == 1, "推导核说理只一处构建(审计卡派生另由 audit_derivation 调同一函数)"

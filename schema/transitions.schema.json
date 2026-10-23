@@ -415,6 +415,24 @@
           "earlier_ignored": "{evidence}, 早于第 {round} 轮登记, 不算本轮交回"
         }
       },
+      "fast_lane_rework": {
+        "description": "AIPOS-F221 件②(10-23 chris LANTU-DEMO1 实撞): 非代码快车道卡(AIPOS-F197: 只写治理根且不声明独立审计, 唯一判定 next_resolver.fast_lane_review)顾问复核不通过、经 `lybra mark-concluded --outcome rework`(verbs.schema lybra_mark_concluded.review_rework)落顾问复核记录并登记返工轮后的推导。沿用 F218/F219 返工判据, 不另起第二套: 锚 = 最新一条顾问复核记录(next_resolver.advisor_review_anchor; 以裁决形视图 {verdict_id = review_id, verdict_at = 复核时刻, reviewed_return_record_ref = 所审交回} 交给同一组函数), 针对它的返工轮 = rework_round_for_verdict, 时间界 = rework_return_bound(max(复核时刻, 该轮 created_at)), 「已按返工重交回」= non_branch_re_return(门交回记录晚于界且 ≠ 所审交回, 或交回报告晚于界改写且指纹不同于所审那份 / 产出清单指纹变化)。分三态: a) 无新交回 = 等返工(action await_rework, loop 拉起执行体返工, 与 non_branch rework 同一等待路径; 等待提示点名时间界, 早于该轮登记的旧改写点名不算 = texts.earlier_ignored); b) 交回报告已按返工重写(未落门交回记录)= 重交回(_derive_stale_re_return → _return_submission_step, 产物入口同一校验; 不合 = artifact_invalid); c) 门已落晚于界的新交回 = 回到顾问复核(推导核给 mark-concluded 结案命令与本出口命令, 附 texts.back_to_review)。快车道不派审计、不出新卡: 同链返工不额外扣信封额度(额度单位 = 业务卡)。轮次上限 = nodes.queue_rework.guards.rework_limit(同 queue rework, 第 max+1 轮打回 = 拒)。措辞占位: {round} 轮次, {review_id} 复核记录, {reviewed} 所审交回, {points} 返工要点, {criteria} 验收(无 = 空), {evidence} 新交回证据(措辞同 non_branch_rework.texts.evidence_*)。",
+        "state": "fast_lane_rework",
+        "texts": {
+          "await_missing": "第 {round} 轮返工交回(顾问复核 {review_id} 打回; 执行体按返工节修正报告落点内的产出并重写交回报告; 只写治理根, 不要求新提交)",
+          "await_suggested": "执行体按第 {round} 轮返工节(顾问复核 {review_id} 打回交回 {reviewed})修正产出并重写交回报告(返工要点: {points}{criteria}): 报告 frontmatter outputs 列本轮产出清单(无分支三键), 正文写返工证据; loop 见新交回即重交, 之后回到顾问复核(快车道不派审计)",
+          "await_progress": "等执行体重写交回(晚于顾问复核打回且晚于该轮返工登记的新交回; 快车道, 不派审计)",
+          "stale_head": "顾问复核 {review_id} 打回的是交回 {reviewed}; 执行体已按第 {round} 轮返工修正产出并重写交回({evidence})",
+          "re_return_note": "非代码快车道, 已按复核返工重写交回 → 重交回, 之后回到顾问复核(不派审计; AIPOS-F221 件②, 声明 transitions nodes.N4.fast_lane_rework)",
+          "re_return_suggested": "重交回(只写治理根的快车道卡, 已按复核返工重写交回): 门落新 return 记录(绑定新产出清单指纹), 之后回到顾问复核",
+          "invalid_fix": "执行体按拒因修正产出或交回报告 frontmatter outputs(只写治理根: 产出清单契约, 无分支三键), 产品随后重交回",
+          "not_updated_note": "交回报告 / 产出清单不合只写治理根契约, 不得重交回(AIPOS-F221 件②)",
+          "reviewed_what": "被打回的顾问复核审的是",
+          "without_round_note": "门已落新交回, 回到顾问复核(AIPOS-F221 件②)",
+          "without_round_suggested": "重推导: 快车道重交回后回到顾问复核(不派审计, 不重复交回)",
+          "back_to_review": "第 {round} 轮返工已重交回({evidence}; 顾问复核 {review_id} 打回的是交回 {reviewed}), 回到顾问复核"
+        }
+      },
       "non_pass_recovery": {
         "description": "AIPOS-F218 件②: N4 非 PASS(audit_blocked.verdicts 与 FAIL)且未针对该裁决登记返工轮时, 推导核(lybra next)与 loop status 例行修法(verbs.schema routine_rejections.end_reasons.audit_blocked 占位 recovery_choice / rework_command)同给顾问两条可选路: a) 登记返工轮(既有 queue rework, 附 focus_items / acceptance_criteria; 缺省预演)后由执行体重新执行同一卡; b) 仅重审(既有 R(n+1) 派审, next_resolver.reaudit_command)。执行产物本身是 BLOCK 报告(交回报告 frontmatter 键 return_keys 之一的值 ∈ return_values, 或交回摘要去掉强调符后以 summary_prefixes 之一开头, 或裁决原因摘录含 audit_reason_markers 之一)= 推荐 a 并说明 b 会因产物不变再 BLOCK; 否则 BLOCK 推荐 b、FAIL 推荐 a。固定候选卡 FAIL 仍先走 candidate_fail(候选不合格, 来源卡出新候选)。判定唯一实现 next_resolver.non_pass_recovery。rework_command 占位 {prefix}(workspace_config.lybra_command_prefix)/ {task_id} / {actor}(驱动方; 缺 = texts.actor_placeholder)/ {verdict_id}; FAIL 仅重审的派审理由 = fail_dispatch_reason。",
         "return_keys": ["verdict", "status"],

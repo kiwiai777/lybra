@@ -416,8 +416,9 @@ def test_item3_roles_issuer_credential_follows_governance_root(roots, monkeypatc
     alpha, beta = roots["alpha"], roots["beta"]
     monkeypatch.chdir(beta / "5_tasks")
     old = resolve_workspace_root()
-    _show(f"[件③ 对照] cwd=beta 原 roles 取法(AIPOS-226 梯 resolve_workspace_root)= {old}(活动项目 alpha; gap #203 病理)")
-    assert old == alpha
+    _show(f"[件③ 对照] cwd=beta 原 roles 取法(AIPOS-226 梯 resolve_workspace_root)= {old}(F221 前 = 活动项目 alpha, gap #203 病理; "
+          "AIPOS-F221 件①: 老解析口已委托 F144 唯一解析梯 = beta)")
+    assert old == beta
 
     deliver = ["roles", "enroll-deliver", "--role", "advisor", "--instance", "advisor.beta.h2", "--governance-root", str(beta),
                "--workspace", str(beta), "--owner-authorization-ref", "f199-test"]

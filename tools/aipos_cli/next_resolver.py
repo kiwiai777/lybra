@@ -2632,6 +2632,134 @@ def _non_branch_verdict_staleness(workspace_root: Path, task_id: str, card_front
     }
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F221 件②: 非代码快车道(F197)顾问复核不通过 → 返工轮 → 再交回 → 再复核。出口 = mark-concluded --outcome rework
+# (verbs.schema lybra_mark_concluded.review_rework, 写路径 board_adapter.mark_concluded_task); 推导沿用 F218/F219 返工判据
+# (rework_round_for_verdict / rework_return_bound / non_branch_re_return), 锚 = 顾问复核记录(裁决形视图), 不另起第二套。
+# ---------------------------------------------------------------------------
+
+_REVIEW_REWORK_KEYS = ("outcome", "event_type", "record_fields", "command", "reject_codes", "audit_verdict_refusal")
+_REVIEW_REWORK_CODES = ("REVIEW_REWORK_NOT_CLAIMED", "REVIEW_REWORK_NOT_FAST_LANE", "REVIEW_REWORK_NO_RETURN", "REVIEW_REWORK_FOCUS_REQUIRED",
+                        "REVIEW_REWORK_ALREADY_PENDING", "REVIEW_REWORK_ROUND_REFUSED")
+_FAST_LANE_REWORK_TEXTS = ("await_missing", "await_suggested", "await_progress", "stale_head", "re_return_note", "re_return_suggested",
+                           "invalid_fix", "not_updated_note", "reviewed_what", "without_round_note", "without_round_suggested", "back_to_review")
+
+
+def review_rework_declaration() -> dict[str, Any]:
+    """AIPOS-F221 件②: verbs.schema lybra_mark_concluded.review_rework(唯一读取口)。缺键 / 拒因缺 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = ((load_schema("verbs").get("verbs") or {}).get("lybra_mark_concluded") or {}).get("review_rework")
+    codes = decl.get("reject_codes") if isinstance(decl, dict) else None
+    if (not isinstance(decl, dict) or not all(decl.get(k) for k in _REVIEW_REWORK_KEYS) or not isinstance(decl.get("record_fields"), list)
+            or not isinstance(codes, dict) or not all(isinstance(codes.get(k), str) and codes[k].strip() for k in _REVIEW_REWORK_CODES)):
+        raise SchemaLoadError(f"verbs.schema.json verbs.lybra_mark_concluded.review_rework({list(_REVIEW_REWORK_KEYS)} / reject_codes "
+                              f"{list(_REVIEW_REWORK_CODES)})未声明齐(AIPOS-F221)")
+    return decl
+
+
+def fast_lane_rework_declaration() -> dict[str, Any]:
+    """AIPOS-F221 件②: transitions nodes.N4.fast_lane_rework(唯一读取口)。state / 措辞缺 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = _transition_node("N4").get("fast_lane_rework")
+    texts = decl.get("texts") if isinstance(decl, dict) else None
+    if (not isinstance(decl, dict) or not str(decl.get("state") or "").strip() or not isinstance(texts, dict)
+            or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in _FAST_LANE_REWORK_TEXTS)):
+        raise SchemaLoadError(f"transitions.schema.json nodes.N4.fast_lane_rework(state / texts.{list(_FAST_LANE_REWORK_TEXTS)})未声明齐(AIPOS-F221)")
+    return decl
+
+
+def fast_lane_review(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None) -> bool:
+    """AIPOS-F221 件②: 非代码快车道唯一判定(AIPOS-F197)= 交付主体为治理根产出清单(card_governance_outputs)且不声明独立审计
+    (card_independent_audit)——交回后由顾问复核(mark-concluded 结案 / --outcome rework 打回返工), 不走审计裁决。
+    推导核快车道分支、mark-concluded 复核打回前置、audit-verdict 拒(fast_lane_audit_refusal)同读。"""
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    return card_governance_outputs(workspace_root, {**fm, "task_id": task_id}) and not card_independent_audit(fm)
+
+
+def advisor_reviews(workspace_root: Path, task_id: str) -> list[tuple[Path, dict[str, Any]]]:
+    """AIPOS-F221 件②: 本卡顾问复核记录(records/events/<卡>/<review_rework.event_type>_*.md; 写入 board_adapter.mark_concluded_task
+    --outcome rework), 旧 → 新(timestamp, 同刻按文件名)。读不出 = FrontmatterReadError 上抛(AIPOS-F100, 推导核硬停)。"""
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.record_writer import record_files_with_prefix
+
+    event_type = str(review_rework_declaration()["event_type"])
+    out: list[tuple[Path, dict[str, Any]]] = []
+    for path in record_files_with_prefix(record_dir(Path(workspace_root), "events", task_id), event_type):
+        fm, _body = require_frontmatter(path)
+        if str(fm.get("event_type") or "") == event_type:
+            out.append((path, fm))
+    out.sort(key=lambda item: (str(item[1].get("timestamp") or ""), item[0].name))
+    return out
+
+
+def advisor_review_anchor(workspace_root: Path, task_id: str) -> tuple[Path, dict[str, Any]] | None:
+    """AIPOS-F221 件②: 返工判据的锚 = 最新一条顾问复核记录的裁决形视图 {verdict_id = review_id, verdict_at = 复核时刻, verdict = outcome,
+    reviewed_return_record_ref = 所审交回, audit_task_id = ""}——交给 F218/F219 同一组函数(rework_round_for_verdict / rework_return_bound /
+    non_branch_re_return)。无复核记录 = None。"""
+    reviews = advisor_reviews(workspace_root, task_id)
+    if not reviews:
+        return None
+    path, fm = reviews[-1]
+    view = {**fm, "verdict_id": str(fm.get("review_id") or path.stem), "verdict_at": str(fm.get("timestamp") or ""),
+            "verdict": str(fm.get("outcome") or ""), "reviewed_return_record_ref": str(fm.get("reviewed_return_record_ref") or ""),
+            "audit_task_id": ""}
+    return path, view
+
+
+def fast_lane_rework_state(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None) -> dict[str, Any] | None:
+    """AIPOS-F221 件②: 快车道卡复核打回后的返工态(推导核与 mark-concluded 重复打回判定同读)。最新顾问复核记录在且已针对它登记未销账
+    返工轮(rework_round_for_verdict)= {anchor_path, anchor, rework, bound, evidence, re_returned}; evidence = non_branch_re_return(晚于时间界
+    的新交回: source=record 门已落新交回 / source=file 交回报告已重写 / None 未返工); re_returned = 已按本轮返工重交回 → 回到顾问复核
+    (门交回证据, 或报告证据成立且门最新交回已不是被打回的那份——同秒落盘时门记录一路按严格晚于界不认, 报告一路已认, 两路合判, 不卡在重交回)。
+    否则 None(未被打回 / 返工轮未登记)。"""
+    anchor = advisor_review_anchor(workspace_root, task_id)
+    if anchor is None:
+        return None
+    path, view = anchor
+    rework = rework_round_for_verdict(card_frontmatter, view)
+    if rework is None:
+        return None
+    evidence = non_branch_re_return(workspace_root, task_id, card_frontmatter, path, view, rework)
+    latest_id = str((_read_task_records(Path(workspace_root), task_id).get("latest_return") or {}).get("return_id") or "").strip()
+    reviewed = str(view.get("reviewed_return_record_ref") or "").strip()
+    re_returned = evidence is not None and (evidence.get("source") == "record" or bool(latest_id and latest_id != reviewed))
+    return {"anchor_path": path, "anchor": view, "rework": rework, "bound": rework_return_bound(path, view, rework),
+            "evidence": evidence, "re_returned": re_returned}
+
+
+def review_rework_command(workspace_root: Path, task_id: str, report_ref: str) -> str:
+    """AIPOS-F221 件②: 复核不通过打回返工命令(review_rework.command; 推导核快车道提示 / audit-verdict 拒因同读)。"""
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    return str(review_rework_declaration()["command"]).format(prefix=lybra_command_prefix(workspace_root), task_id=task_id, report=report_ref)
+
+
+def fast_lane_audit_refusal(workspace_root: Path, task_id: str) -> str | None:
+    """AIPOS-F221 件②⑤: 对在途(claimed)快车道卡提交审计裁决 = 拒因原文(review_rework.audit_verdict_refusal, 点名复核结案与复核打回两条正式出口);
+    非快车道 / 已派审(派审记录在, 如补充审计)/ 卡不在 claimed / 找不到卡 = None(照常走审计裁决)。CLI audit-verdict 在取凭据前判,
+    门侧裁决(board_adapter.audit_verdict_task)同判。"""
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    task_path, queue_dir = _find_task_in_queue(Path(workspace_root), task_id)
+    if task_path is None or queue_dir != "claimed":
+        return None
+    fm = _read_frontmatter(task_path)
+    if not fast_lane_review(workspace_root, task_id, fm):
+        return None
+    if _read_task_records(Path(workspace_root), task_id).get("latest_audit_dispatch"):
+        return None
+    try:
+        report_ref = str(_return_artifact_path(workspace_root, task_id).resolve().relative_to(Path(workspace_root).resolve()))
+    except ValueError:
+        report_ref = str(_return_artifact_path(workspace_root, task_id))
+    pass_command = (f"{lybra_command_prefix(workspace_root)} mark-concluded --task-id {task_id} --actor <你的顾问实例> "
+                    f"--report-path {report_ref} --conclusion-note \"顾问复核: <结论>\"")
+    return str(review_rework_declaration()["audit_verdict_refusal"]).format(
+        task_id=task_id, pass_command=pass_command, rework_command=review_rework_command(workspace_root, task_id, report_ref))
+
+
 def return_binding_subject(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None) -> dict[str, str] | None:
     """AIPOS-F114 件①: 门 queue_return 落交回记录时绑定的被交回产物主体 = 卡分支此刻 tip {repository, commit_sha, tree_hash, branch}
     (AIPOS-F197: 只写治理根的卡 = 产出清单主体 {kind=governance_outputs, repository, outputs_digest, outputs})
@@ -3374,6 +3502,60 @@ def _derive_rework_wait(workspace_root: Path, task_id: str, fm: dict[str, Any], 
         "suggested_action": suggested,
         "notes": (f"N4: 裁决 {verdict.get('verdict')}({verdict.get('verdict_id') or '?'}), 已登记第 {round_num} 轮返工"
                   f"(依据 {rework.get('verdict_ref') or '?'}); {progress}(AIPOS-F155 件②, F75 返工节)"),
+        "rework_round": rework,
+        "action": {"type": "await_rework", "card": task_id, "round": round_num},
+    }
+
+
+def _derive_fast_lane_rework(workspace_root: Path, task_id: str, fm: dict[str, Any], records: dict[str, Any],
+                             state: dict[str, Any], *, claimer: str, conn_arg: str | None) -> dict[str, Any]:
+    """AIPOS-F221 件②: 快车道卡顾问复核打回、已登记返工轮(fast_lane_rework_state)且门尚未落晚于时间界的新交回时的推导(声明 transitions
+    nodes.N4.fast_lane_rework)。交回报告已按返工重写(non_branch_re_return source=file)= 重交回(_derive_stale_re_return 同一构建:
+    产物入口同一校验, 不合 = artifact_invalid); 否则 = 等返工(action await_rework, loop 拉起执行体返工, 与 _derive_rework_wait 非卡分支
+    同一等待路径; 等待提示点名时间界 rework_bound_note, 晚于复核但早于该轮登记的旧改写点名不算)。"""
+    decl = fast_lane_rework_declaration()
+    texts = decl["texts"]
+    state_name = str(decl["state"])
+    anchor, rework, evidence = state["anchor"], state["rework"], state["evidence"]
+    round_num = rework.get("round") or "?"
+    focus = [str(x) for x in (rework.get("focus_items") or [])]
+    criteria = "; ".join(ln.strip() for ln in str(rework.get("acceptance_criteria") or "").splitlines() if ln.strip())
+    nb_texts = non_branch_rework_declaration()["texts"]
+    values = {"round": round_num, "review_id": anchor["verdict_id"], "reviewed": anchor["reviewed_return_record_ref"] or "?",
+              "points": "; ".join(focus) if focus else "(返工节无具体项)",
+              "criteria": nb_texts["criteria"].format(criteria=criteria) if criteria else ""}
+    if evidence is not None:
+        head = texts["stale_head"].format(**values, evidence=non_branch_evidence_text(nb_texts, evidence))
+        stale = {"subject": governance_outputs_kind(), "rework_round": rework, "re_execution": evidence, "verdict_id": anchor["verdict_id"],
+                 "verdict": anchor.get("verdict"), "verdict_at": anchor.get("verdict_at"), "audit_task_id": "",
+                 "reviewed_return_record_ref": anchor["reviewed_return_record_ref"], "branch": "", "tip": "", "tree_hash": "", "reason": ""}
+        return _derive_stale_re_return(
+            workspace_root, task_id, fm, records, stale, claimer=claimer, conn_arg=conn_arg, state=state_name, stale_key=state_name,
+            head=head, reviewed_ref=str(anchor["reviewed_return_record_ref"] or ""), since=str(anchor.get("verdict_at") or ""),
+            reviewed_what=texts["reviewed_what"], without_round_suggested=texts["without_round_suggested"],
+            without_round_note=texts["without_round_note"], not_updated_note=texts["not_updated_note"],
+            re_return_notes=f"{state_name}: {head}; {texts['re_return_note']}", invalid_fix=texts["invalid_fix"],
+            re_return_suggested=texts["re_return_suggested"])
+    bound_note = rework_bound_note(state["bound"])
+    missing = f"{texts['await_missing'].format(**values)}; {bound_note}"
+    suggested = f"{texts['await_suggested'].format(**values)}; {bound_note}"
+    progress = f"{texts['await_progress']}; {bound_note}"
+    earlier = non_branch_re_return(workspace_root, task_id, fm, state["anchor_path"], anchor)  # 仅以复核时刻为界(同 F219 earlier_ignored)
+    if earlier is not None:
+        progress = f"{progress}; " + rework_return_bound_declaration()["texts"]["earlier_ignored"].format(
+            evidence=non_branch_evidence_text(nb_texts, earlier), round=round_num)
+    return {
+        "task_id": task_id,
+        "derivable": False,
+        "current_node": state_name,
+        "current_state": "claimed",
+        "triggered_by": "executor",
+        "command": "",
+        "verb": "lybra_queue_return_dry_run",
+        "missing_records": [missing],
+        "suggested_action": suggested,
+        "notes": (f"N2: 非代码快车道, 顾问复核 {anchor['verdict_id']} 打回交回 {values['reviewed']}, 已登记第 {round_num} 轮返工"
+                  f"(依据 {rework.get('verdict_ref') or '?'}); {progress}(AIPOS-F221 件②, 声明 transitions nodes.N4.fast_lane_rework)"),
         "rework_round": rework,
         "action": {"type": "await_rework", "card": task_id, "round": round_num},
     }
@@ -4558,6 +4740,20 @@ def _derive_next_step(
             # 非代码卡,不需要独立审计(AIPOS-F196: 是否独立审计读声明 enums.schema task_mode.independent_audit)
             if not independent_audit:
                 if card_governance_outputs(workspace_root, {**fm, "task_id": task_id}):
+                    # AIPOS-F221 件②: 顾问复核打回后(复核记录 + 返工轮)沿用 F218/F219 返工判据——未重交回 = 等返工 / 报告已重写 = 重交回;
+                    # 门已落晚于时间界的新交回 = 回到顾问复核(下方结案命令, 附 back_to_review)
+                    rework_state = fast_lane_rework_state(workspace_root, task_id, fm)
+                    back_note = ""
+                    if rework_state is not None:
+                        evidence = rework_state["evidence"]
+                        if not rework_state["re_returned"]:
+                            return _derive_fast_lane_rework(workspace_root, task_id, fm, records, rework_state, claimer=claimer,
+                                                            conn_arg=conn_arg)
+                        texts = fast_lane_rework_declaration()["texts"]
+                        back_note = texts["back_to_review"].format(
+                            round=rework_state["rework"].get("round") or "?", review_id=rework_state["anchor"]["verdict_id"],
+                            reviewed=rework_state["anchor"]["reviewed_return_record_ref"] or "?",
+                            evidence=non_branch_evidence_text(non_branch_rework_declaration()["texts"], evidence))
                     # AIPOS-F197 件②: 只写治理根的卡 = 顾问复核交回绑定的产出清单后结案(mark-concluded 结案前核此刻指纹 = 交回绑定)
                     bound = governance_outputs_return_binding(workspace_root, task_id) or {}
                     try:
@@ -4568,6 +4764,7 @@ def _derive_next_step(
 
                     close_cmd = (f"{lybra_command_prefix(workspace_root)} mark-concluded --task-id {task_id} --actor <你的顾问实例> "
                                  f"--report-path {report_ref} --conclusion-note \"顾问复核: <结论>\"")
+                    rework_cmd = review_rework_command(workspace_root, task_id, report_ref)  # AIPOS-F221 件②: 复核不通过的正式出口
                     return {
                         "task_id": task_id,
                         "derivable": True,
@@ -4575,12 +4772,17 @@ def _derive_next_step(
                         "current_state": "claimed",
                         "triggered_by": "advisor",
                         "command": (f"# 非代码卡(task_mode={task_mode or '(缺)'}, 只写治理根):顾问复核交回的产出清单"
-                                    f"(指纹 {bound.get('outputs_digest') or '(交回记录无绑定)'})后结案: {close_cmd}"),
+                                    f"(指纹 {bound.get('outputs_digest') or '(交回记录无绑定)'})后结案: {close_cmd}"
+                                    f"; 复核不通过打回原卡返工: {rework_cmd}"),
                         "verb": "lybra_mark_concluded",
                         "advisor_command": close_cmd,  # AIPOS-F207 件③: loop status advisor_review_close 的 hint 读此(不解析注释行)
+                        "rework_command": rework_cmd,
                         "missing_records": [],
-                        "suggested_action": f"顾问复核产出清单 {bound.get('outputs') or []} 后结案(先加 --dry-run 预演)",
-                        "notes": "非代码卡快车道(只写治理根, AIPOS-F197):顾问复核后 mark-concluded 结案",
+                        "suggested_action": (f"顾问复核产出清单 {bound.get('outputs') or []} 后结案(先加 --dry-run 预演); "
+                                             f"复核不通过打回原卡返工(AIPOS-F221): {rework_cmd} --dry-run"
+                                             + (f"; {back_note}" if back_note else "")),
+                        "notes": ("非代码卡快车道(只写治理根, AIPOS-F197):顾问复核后 mark-concluded 结案(不通过 = --outcome rework 打回返工)"
+                                  + (f"; {back_note}" if back_note else "")),
                     }
                 return {
                     "task_id": task_id,

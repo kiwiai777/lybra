@@ -430,7 +430,10 @@ def test_declarations_single_source():
     from tools.mcp_server.tools import READ_TOOL_DESCRIPTORS, WRITE_TOOL_DESCRIPTORS
 
     mcp = [d for d in READ_TOOL_DESCRIPTORS + WRITE_TOOL_DESCRIPTORS if d["name"] == "lybra_mark_concluded"]
-    assert len(mcp) == 1 and mcp[0]["inputSchema"]["properties"]["outcome"]["enum"] == list(conclusion_outcomes())
+    # AIPOS-F221 件②: enum = 结论值域 + 复核打回返工(review_rework.outcome, 不结案, 不进结论值域; 唯一渲染 mark_concluded_outcome_choices)
+    review_rework_outcome = verbs["lybra_mark_concluded"]["review_rework"]["outcome"]
+    assert len(mcp) == 1 and mcp[0]["inputSchema"]["properties"]["outcome"]["enum"] == [*conclusion_outcomes(), review_rework_outcome]
+    assert review_rework_outcome not in conclusion_outcomes()
     review = verbs["lybra_loop_status"]["next_action"]["advisor_review_close"]
     assert review["verbs"] == ["lybra_mark_concluded"] and review["end_reasons"] == ["manual_required"]
     # 唯一实现: 修复卡与承接卡同一起草函数; 撤换与纠正同一决策构造

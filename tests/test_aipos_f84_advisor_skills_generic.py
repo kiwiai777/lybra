@@ -120,6 +120,9 @@ PLACEHOLDER_VALUES = {
     "<已结案卡>": "PROJ-1",  # AIPOS-F207: queue correct
     "<Owner原话>": "Owner 原话(夹具)",
     "<原结案错在哪>": "原结案错在哪(夹具)",
+    # AIPOS-F221 件②: 快车道复核不通过打回返工(mark-concluded --outcome rework)占位
+    "<返工要点>": "返工要点(夹具)",
+    "<验收标准>": "验收标准(夹具)",
 }
 PLACEHOLDER_RE = re.compile(r"<[^<>\s'\"]+>")
 #: 已退役的子命令(示例不得再教)

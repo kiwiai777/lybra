@@ -3518,11 +3518,17 @@ def build_parser() -> argparse.ArgumentParser:
     mark_concluded_parser.add_argument("--report-path", help="Report path (optional)")
     mark_concluded_parser.add_argument("--conclusion-note", help="Conclusion note (optional)")
     # AIPOS-F207 件①: 顾问复核结论(值域 card.schema dependency_gate.conclusion.outcomes); block = 不满足他卡 closure 依赖
-    from tools.aipos_cli.task_complexity import conclusion_outcomes
+    # AIPOS-F221 件②: choices = 结论值域 + 复核打回返工(verbs.schema lybra_mark_concluded.review_rework.outcome; 唯一渲染 mark_concluded_outcome_choices)
+    from tools.aipos_cli.board_adapter import mark_concluded_outcome_choices
 
-    mark_concluded_parser.add_argument("--outcome", choices=list(conclusion_outcomes()), default=None,
+    mark_concluded_parser.add_argument("--outcome", choices=list(mark_concluded_outcome_choices()), default=None,
                                        help="AIPOS-F207: review conclusion pass|block (block = does not satisfy other cards' closure "
-                                            "dependency, same as gate closure judgement); default pass with a hint")
+                                            "dependency, same as gate closure judgement); default pass with a hint. AIPOS-F221: rework = "
+                                            "review failed on a non-code fast-lane card -> advisor review record + rework round, card stays claimed")
+    mark_concluded_parser.add_argument("--focus-items", default=None,
+                                       help="AIPOS-F221: only with --outcome rework (required): JSON array of rework points")
+    mark_concluded_parser.add_argument("--acceptance-criteria", default=None,
+                                       help="AIPOS-F221: only with --outcome rework (optional): JSON array of acceptance criteria")
     mark_concluded_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     mark_concluded_parser.add_argument("--json", action="store_true", help="Output JSON")
 
@@ -7201,6 +7207,22 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
 
+    if args.command == "audit-verdict":
+        # AIPOS-F221 件②⑤: 非代码快车道卡(只写治理根、不声明独立审计)交回后由顾问复核, 不走审计裁决——在取凭据前判, 拒因点名
+        # 复核结案 / 复核打回两条正式出口(唯一判定 next_resolver.fast_lane_audit_refusal, 门侧裁决同判), 不再表现为凭据错
+        from tools.aipos_cli.frontmatter import FrontmatterReadError
+        from tools.aipos_cli.next_resolver import fast_lane_audit_refusal
+        from tools.aipos_cli.task_loader import AmbiguousTaskCard
+
+        try:
+            refusal = fast_lane_audit_refusal(Path(repo_root), str(args.reviewed_task_id))
+        except (FrontmatterReadError, AmbiguousTaskCard) as exc:
+            print(f"Error: 被审卡 {args.reviewed_task_id} 读不出: {exc}", file=sys.stderr)
+            return 1
+        if refusal:
+            print(f"Error: {refusal}", file=sys.stderr)
+            return 1
+
     # AIPOS-F22 大项B: audit-verdict --confirm（薄壳工厂模式）
     if args.command == "audit-verdict" and getattr(args, "confirm", False):
         from tools.aipos_cli.two_phase_shell_factory import execute_two_phase_verb
@@ -7317,22 +7339,16 @@ def main(argv: list[str] | None = None) -> int:
             getattr(args, 'owner_policy_ref', None),
         ])
         # AIPOS-SMOKE-LOOP-1 坑①: workspace_root 两分支都要可用 (派生 audit R 卡 task_id)
-        workspace_root: Path | None = None
-        if hasattr(args, 'workspace_root') and args.workspace_root:
-            workspace_root = Path(args.workspace_root).expanduser().resolve()
-        elif hasattr(args, 'global_workspace_root') and args.global_workspace_root:
-            workspace_root = Path(args.global_workspace_root).expanduser().resolve()
+        # AIPOS-F221 件①: 治理根 = 本命令已经 F144 唯一薄壳解析出的 repo_root(全局 --workspace-root > 环境变量 > 所在治理根 > 工位声明);
+        # 原自发现分支把它重置为 None 再交 resolve_audit_context 走老解析梯, 在 chris 根下撞全局 ~/.lybra/config.json 解析成活动项目
+        # (去 lybra 根找凭据)。两分支同用这一个根, 不再各自解析。
+        workspace_root: Path = Path(repo_root).expanduser().resolve()
+        root_hit = getattr(args, "_governance_root_hit", None) or {}
+        root_line = f"治理根 {workspace_root}(来源: {root_hit.get('label') or '--workspace-root / 治理根解析'})"
         
         if auto_discover:
             # 自发现模式
             try:
-                # Resolve workspace root
-                workspace_root = None
-                if hasattr(args, 'workspace_root') and args.workspace_root:
-                    workspace_root = Path(args.workspace_root).expanduser().resolve()
-                elif hasattr(args, 'global_workspace_root') and args.global_workspace_root:
-                    workspace_root = Path(args.global_workspace_root).expanduser().resolve()
-                
                 # AIPOS-F157 件①(gap #132): 给了 --agent-instance / --actor = 按该实例取凭据(唯一口 F154 load_role_token, 无即拒);
                 # 都未给 = 按角色取, 同角色多实例即拒(禁取首个)。显式给出的身份参数优先于自发现结果(只补缺的)。
                 signer_instance = (str(getattr(args, 'agent_instance', None) or getattr(args, 'actor', None) or "").strip() or None)
@@ -7352,7 +7368,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[自发现] actor: {context['actor']}", file=sys.stderr)
                 
             except Exception as exc:
-                print(f"Error: Auto-discovery failed: {exc}", file=sys.stderr)
+                # AIPOS-F221 件①: 拒因点名所用治理根与 connection.json 路径(凭据 / 角色缺失时能一眼看出找错了项目)
+                print(f"Error: Auto-discovery failed({root_line}; connection.json {workspace_connection_path(workspace_root)}): {exc}",
+                      file=sys.stderr)
                 print("Hint: Ensure .lybra/connection.json exists or provide explicit parameters.", file=sys.stderr)
                 return 1
         else:
@@ -7375,7 +7393,7 @@ def main(argv: list[str] | None = None) -> int:
                     agent_instance=args.agent_instance,
                 )
             except (ValueError, OSError, json.JSONDecodeError) as exc:
-                print(f"Error reading token: {exc}", file=sys.stderr)
+                print(f"Error reading token({root_line}; connection.json {connection_json_path}): {exc}", file=sys.stderr)  # AIPOS-F221 件①
                 return 1
             
             # AIPOS-F73前置②: gate_url 默认值解析 (修复 args.gate_url=None 时 AttributeError)
@@ -7773,6 +7791,8 @@ def main(argv: list[str] | None = None) -> int:
                 conclusion_note=args.conclusion_note,
                 dry_run=args.dry_run,
                 outcome=args.outcome,
+                focus_items=args.focus_items,  # AIPOS-F221 件②: 仅 --outcome rework
+                acceptance_criteria=args.acceptance_criteria,
             )
         except (FileNotFoundError, OSError, ValueError) as exc:
             error_msg = f"Error: {exc}"

@@ -130,7 +130,11 @@ def test_item2_conclusion_outcomes_single_declaration():
     cli = _action(cli_subparser(_parser(), ["mark-concluded"]), "--outcome").choices
     _show(f"[件②] 声明 outcomes={declared}; CLI choices={cli}; MCP enum={mcp['enum']}; card 字段 / verbs 参数另列值: "
           f"{[k for k in ('enum', '$enum') if k in field or k in param] or '无'}")
-    assert declared == outcomes == list(cli) == list(mcp["enum"])
+    # AIPOS-F221 件②: CLI choices / MCP enum = 结案值域 + 复核打回返工(verbs.schema lybra_mark_concluded.review_rework.outcome, 不结案,
+    # 不进结案值域; 唯一渲染 board_adapter.mark_concluded_outcome_choices)
+    rework = _schema("verbs")["verbs"]["lybra_mark_concluded"]["review_rework"]["outcome"]
+    assert declared == outcomes and rework not in declared
+    assert list(cli) == list(mcp["enum"]) == [*declared, rework]
     assert not {"enum", "$enum"} & (set(field) | set(param)), "card 字段 / verbs 参数不得另列结案值域"
 
 

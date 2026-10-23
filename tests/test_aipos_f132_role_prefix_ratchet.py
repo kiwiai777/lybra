@@ -140,7 +140,8 @@ def test_gate_authorization_sites_use_single_resolver():
     ba = (REPO_ROOT / "tools/aipos_cli/board_adapter.py").read_text(encoding="utf-8")
     # AIPOS-F162 件②: 第三处 = 补充审计发起者须为顾问角色类(同一 authorize_instance_class)
     # AIPOS-F207 件②: 第四处 = queue correct 转达人须为顾问角色类(同一 authorize_instance_class)
-    assert ba.count("role_gate = authorize_instance_class(") == 4
+    # AIPOS-F221 件②: 第五处 = 快车道复核打回(mark-concluded --outcome rework)前置, 与 queue rework 同一判据(restricted_amend_actor_class)
+    assert ba.count("role_gate = authorize_instance_class(") == 5
     cr = (REPO_ROOT / "tools/aipos_cli/custom_roles.py").read_text(encoding="utf-8")
     assert cr.count("def resolve_instance_role_class(") == 1 and cr.count("def authorize_instance_class(") == 1
     dw = (REPO_ROOT / "tools/aipos_cli/draft_writer.py").read_text(encoding="utf-8")

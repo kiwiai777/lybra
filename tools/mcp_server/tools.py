@@ -29,6 +29,7 @@ from tools.aipos_cli.board_adapter import (
     get_validate,
     land_after_write,
     load_task_snapshot,
+    mark_concluded_outcome_choices,
     mark_concluded_task,
     publish_draft,
     queue_write_paths,
@@ -53,7 +54,6 @@ from tools.aipos_cli.records import find_records_for_task, load_records
 from tools.aipos_cli.task_loader import find_repo_root
 from tools.aipos_cli.workspace_config import _project_candidates, has_workspace_queue, resolve_home_root
 from tools.schema_loader import get_enum_values, get_role_scopes, load_schema
-from tools.aipos_cli.task_complexity import conclusion_outcomes  # AIPOS-F209: mark-concluded outcome 值域唯一读取口
 from tools.schema_constants import RecordType, Verdict
 
 
@@ -3792,6 +3792,9 @@ def lybra_mark_concluded(arguments: dict[str, Any] | None = None) -> dict[str, A
         dry_run=bool(args.get("dry_run", True)),
         repo_root=_repo_root(),
         outcome=str(args.get("outcome") or "").strip() or None,
+        # AIPOS-F221 件②: 复核打回返工(outcome = review_rework.outcome)的返工要点 / 验收, 与 CLI 同收同一写路径
+        focus_items=args.get("focus_items"),
+        acceptance_criteria=args.get("acceptance_criteria"),
     )
     response["surface"] = "mcp"
     return _tool_result(response, is_error=not bool(response.get("ok", False)))
@@ -6082,9 +6085,15 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "report_path": {"type": "string", "description": "Path to the audit report (evidence)."},
                 "conclusion_note": {"type": "string", "description": "Free-text conclusion note."},
                 # AIPOS-F209 件②: 值域读 card.schema dependency_gate.conclusion.outcomes(唯一声明; CLI argparse choices 同读)
-                "outcome": {"type": "string", "enum": list(conclusion_outcomes()),
+                # AIPOS-F221 件②: enum = 结论值域 + 复核打回返工(唯一渲染 board_adapter.mark_concluded_outcome_choices, CLI choices 同读)
+                "outcome": {"type": "string", "enum": list(mark_concluded_outcome_choices()),
                             "description": "Review conclusion pass | block (block = does not satisfy other cards' closure dependency); "
-                                           "default pass with a hint. Same write path as CLI `lybra mark-concluded --outcome`."},
+                                           "default pass with a hint. AIPOS-F221: rework = fast-lane review failed -> advisor review record + "
+                                           "rework round (card stays claimed). Same write path as CLI `lybra mark-concluded --outcome`."},
+                "focus_items": {"type": "array", "items": {"type": "string"},
+                                "description": "AIPOS-F221: only with outcome rework (required) - rework points."},
+                "acceptance_criteria": {"type": "array", "items": {"type": "string"},
+                                        "description": "AIPOS-F221: only with outcome rework (optional) - acceptance criteria."},
                 "dry_run": {"type": "boolean", "description": "Preview only (default: true)."},
             },
             "required": ["task_id"],
