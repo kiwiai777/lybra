@@ -2389,7 +2389,12 @@ def verdict_staleness(workspace_root: Path, task_id: str, card_frontmatter: dict
       - 最新门生裁决: deployment_authorization.find_gate_pass_verdict_for_task(required_commit_sha=tip)(finalize 同一判定)。
     过期 = 最新门生裁决属 PASS 族(N5.guards.has_pass_verdict 声明)且带 artifact_subject, 但其 commit_sha ≠ 卡分支 tip。
     不过期(None): 非代码卡 / 产品仓不可解析 / 无卡分支 / 卡分支已并入 main(finalize 不再要求精确覆盖)/ legacy 裁决 / 非 PASS 族 / 已覆盖。
-    返回 {verdict_id, verdict, verdict_at, verdict_commit_sha, audit_task_id, branch, tip, tree_hash, reason}。"""
+    返回 {verdict_id, verdict, verdict_at, verdict_commit_sha, audit_task_id, branch, tip, tree_hash, reason}。
+    AIPOS-F218 件①: 交付主体非卡分支的卡(non_branch_rework_subject: 固定候选 / 治理根产出清单, F210 唯一判定)无卡分支, 改按
+    _non_branch_verdict_staleness 判(非 PASS 裁决 + 已登记返工轮 + 晚于裁决的新交回 = 过期, 声明 transitions nodes.N4.non_branch_rework)。"""
+    non_branch = non_branch_rework_subject(workspace_root, task_id, card_frontmatter)
+    if non_branch is not None:
+        return _non_branch_verdict_staleness(workspace_root, task_id, card_frontmatter, non_branch)
     live = _live_card_branch(workspace_root, task_id, card_frontmatter)
     if live is None:
         return None
@@ -2426,6 +2431,141 @@ def verdict_staleness(workspace_root: Path, task_id: str, card_frontmatter: dict
     }
 
 
+_NON_BRANCH_COMMON_TEXTS = ("await_progress", "criteria", "evidence_record", "evidence_file", "re_return_note", "without_round_note",
+                            "without_round_suggested", "reviewed_what")
+_NON_BRANCH_SUBJECT_TEXTS = ("await_missing", "await_suggested", "stale_head", "invalid_fix", "not_updated_note", "re_return_suggested")
+
+
+def non_branch_rework_declaration() -> dict[str, Any]:
+    """AIPOS-F218 件①: transitions nodes.N4.non_branch_rework(唯一读取口)。by_subject 键须 ∈ 交付主体三态且不含 branch;
+    缺键 / 措辞缺 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = _transition_node("N4").get("non_branch_rework")
+    texts = decl.get("texts") if isinstance(decl, dict) else None
+    by_subject = decl.get("by_subject") if isinstance(decl, dict) else None
+    kinds = set(delivery_subject_kinds())
+    if (not isinstance(decl, dict) or not str(decl.get("return_fingerprint_key") or "").strip() or not isinstance(texts, dict)
+            or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in _NON_BRANCH_COMMON_TEXTS)
+            or not isinstance(by_subject, dict) or not by_subject or "branch" in by_subject or not set(by_subject) <= kinds
+            or not all(isinstance(v, dict) and all(isinstance(v.get(k), str) and v[k].strip() for k in _NON_BRANCH_SUBJECT_TEXTS)
+                       for v in by_subject.values())):
+        raise SchemaLoadError("transitions.schema.json nodes.N4.non_branch_rework(return_fingerprint_key / texts."
+                              f"{list(_NON_BRANCH_COMMON_TEXTS)} / by_subject.<交付主体非 branch>.{list(_NON_BRANCH_SUBJECT_TEXTS)})未声明齐(AIPOS-F218)")
+    return decl
+
+
+def non_branch_rework_subject(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None) -> dict[str, Any] | None:
+    """AIPOS-F218 件①: 本卡交付主体(card_delivery_subject, F210 唯一判定)在 non_branch_rework.by_subject 内 = 该主体视图
+    (含 kind, candidate 另带 candidate); 卡分支态 / 未声明主体 = None(返工判据走卡分支原逻辑, 行为不变)。"""
+    subject = card_delivery_subject(workspace_root, task_id, card_frontmatter)
+    return subject if str(subject.get("kind") or "") in non_branch_rework_declaration()["by_subject"] else None
+
+
+def _file_sha256(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _return_record_binding(workspace_root: Path, task_id: str, return_id: str) -> dict[str, Any]:
+    """门交回记录的 artifact_subject 原样(任一交付主体; 记录不在 / 无绑定 = {})。读不出 = FrontmatterReadError 上抛(AIPOS-F100)。"""
+    path = record_dir(workspace_root, "returns", task_id) / f"{str(return_id or '').strip()}.md"
+    if not str(return_id or "").strip() or not path.is_file():
+        return {}
+    subject = _read_frontmatter(path).get("artifact_subject")
+    return dict(subject) if isinstance(subject, dict) else {}
+
+
+def non_branch_re_return(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None, verdict_path: Path,
+                         verdict_fm: dict[str, Any]) -> dict[str, str] | None:
+    """AIPOS-F218 件①: 交付主体非卡分支的卡(固定候选 / 治理根产出清单)「已按返工重写交回」判据唯一实现(声明 transitions
+    nodes.N4.non_branch_rework)——晚于该裁决(verdict_at; 读不出 = 裁决记录 mtime, _verdict_moment 同口径)的新交回产物:
+      - record: 门交回记录 return_id ≠ 裁决 reviewed_return_record_ref 且 returned_at 晚于裁决(门已落新交回);
+      - file: 交回报告文件(find_return_artifact)晚于裁决改写且指纹不同于被裁决那份——被裁决那份交回记录绑定了报告指纹 = 报告指纹不同
+        (治理根产出清单另: 此刻清单 outputs_digest 不同于绑定也算)且修改时刻(按秒)不早于裁决; 存量记录无报告指纹 = 清单指纹不同或报告修改时刻
+        (按秒)严格晚于裁决(同一秒不算, 防把被裁决那份误当新交回)。不校验 commit_sha / 卡分支(契约由产物入口按主体校验)。
+    返回 {source, at, ref, sha256?}; 无 = None。"""
+    from tools.aipos_cli.owner_inbox import _parse_utc
+
+    moment = _verdict_moment(Path(verdict_path), verdict_fm)
+    reviewed = str(verdict_fm.get("reviewed_return_record_ref") or "").strip()
+    latest = _read_task_records(workspace_root, task_id).get("latest_return") or {}
+    latest_id = str(latest.get("return_id") or "").strip()
+    returned = _parse_utc(latest.get("returned_at"))
+    if latest_id and latest_id != reviewed and returned is not None and returned > moment:
+        return {"source": "record", "ref": latest_id, "at": returned.strftime("%Y-%m-%dT%H:%M:%SZ")}
+    path = find_return_artifact(workspace_root, task_id)
+    if path is None:
+        return None
+    modified = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).replace(microsecond=0)
+    moment = moment.replace(microsecond=0)
+    if modified < moment:
+        return None  # 裁决前的报告 = 未在裁决后重写
+    bound = _return_record_binding(workspace_root, task_id, reviewed)
+    bound_report = str(bound.get(str(non_branch_rework_declaration()["return_fingerprint_key"])) or "")
+    digest = _file_sha256(path)
+    outputs_changed = False
+    if str(bound.get("outputs_digest") or "") and card_governance_outputs(workspace_root, {**(card_frontmatter or {}), "task_id": task_id}):
+        try:
+            current = governance_outputs_manifest(workspace_root, task_id, card_frontmatter or {})["outputs_digest"]
+        except GovernanceOutputsError:
+            current = ""  # 此刻清单不合: 不以清单判(重交回时产物入口同一实现给拒因原文)
+        outputs_changed = bool(current) and current != str(bound["outputs_digest"])
+    if bound_report:
+        changed = digest != bound_report or outputs_changed
+    else:
+        changed = outputs_changed or modified > moment
+    if not changed:
+        return None  # 被裁决那份原样(只动了修改时刻 / 同一秒)= 未重写交回
+    return {"source": "file", "ref": str(path), "at": modified.strftime("%Y-%m-%dT%H:%M:%SZ"), "sha256": digest}
+
+
+def _non_branch_verdict_staleness(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None,
+                                  subject: dict[str, Any]) -> dict[str, Any] | None:
+    """AIPOS-F218 件①: verdict_staleness 的非卡分支主体分支(non_branch_rework_subject)——最新常规裁决(_regular_verdicts, 与 latest_verdict
+    同一排序)非 PASS 族、已针对它登记返工轮(rework_round_for_verdict)且已重写交回(non_branch_re_return)= 过期(该裁决审的产物已被返工取代)。
+    返回形同卡分支分支, 另带 subject(kind)与 re_execution; candidate = tip 取卡面固定候选(候选读不出 = 卡面原值、tree 空, 随后产物入口
+    同一校验给 INGEST_CANDIDATE_INVALID 原文); governance_outputs = 无 tip / 分支(空串)。"""
+    regular = _regular_verdicts(workspace_root, task_id)
+    if not regular:
+        return None
+    verdict_path, verdict_fm = regular[0]
+    allowed = [str(v) for v in (_transition_node("N5").get("guards", {}).get("has_pass_verdict", {}).get("allowed_verdict_values") or [])]
+    if str(verdict_fm.get("verdict") or "") in allowed:
+        return None
+    verdict_id = str(verdict_fm.get("verdict_id") or verdict_path.stem)
+    verdict_at = str(verdict_fm.get("verdict_at") or "")
+    rework = rework_round_for_verdict(card_frontmatter, {**verdict_fm, "verdict_id": verdict_id, "verdict_at": verdict_at})
+    if rework is None:
+        return None
+    evidence = non_branch_re_return(workspace_root, task_id, card_frontmatter, verdict_path, verdict_fm)
+    if evidence is None:
+        return None
+    values: dict[str, Any] = {}
+    if subject.get("kind") == "candidate":
+        try:
+            values = candidate_subject_values(workspace_root, task_id, card_frontmatter) or {}
+        except CandidateSubjectError:
+            values = {"commit_sha": str(subject.get("candidate") or ""), "tree_hash": "", "branch": ""}
+    covered = verdict_fm.get("artifact_subject") if isinstance(verdict_fm.get("artifact_subject"), dict) else {}
+    return {
+        "subject": str(subject.get("kind") or ""),
+        "rework_round": rework,
+        "re_execution": evidence,
+        "verdict_id": verdict_id,
+        "verdict": str(verdict_fm.get("verdict") or ""),
+        "verdict_at": verdict_at,
+        "verdict_commit_sha": str(covered.get("commit_sha") or values.get("commit_sha") or ""),
+        "audit_task_id": str(verdict_fm.get("audit_task_id") or ""),
+        "reviewed_return_record_ref": str(verdict_fm.get("reviewed_return_record_ref") or ""),
+        "branch": str(values.get("branch") or ""),
+        "tip": str(values.get("commit_sha") or ""),
+        "tree_hash": str(values.get("tree_hash") or ""),
+        "reason": "",
+    }
+
+
 def return_binding_subject(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None) -> dict[str, str] | None:
     """AIPOS-F114 件①: 门 queue_return 落交回记录时绑定的被交回产物主体 = 卡分支此刻 tip {repository, commit_sha, tree_hash, branch}
     (AIPOS-F197: 只写治理根的卡 = 产出清单主体 {kind=governance_outputs, repository, outputs_digest, outputs})
@@ -2439,7 +2579,25 @@ def return_binding_subject(workspace_root: Path, task_id: str, card_frontmatter:
             manifest = governance_outputs_manifest(workspace_root, task_id, fm)
         except GovernanceOutputsError:
             return None
-        return {k: manifest[k] for k in ("kind", "repository", "outputs_digest", "outputs")}
+        bound = {k: manifest[k] for k in ("kind", "repository", "outputs_digest", "outputs")}
+        report = find_return_artifact(workspace_root, task_id)
+        if report is not None:  # AIPOS-F218 件①: 附交回报告指纹(返工重交回判据 non_branch_re_return 读它)
+            bound[str(non_branch_rework_declaration()["return_fingerprint_key"])] = _file_sha256(report)
+        return bound
+    if card_delivery_subject(workspace_root, task_id, fm).get("kind") == "candidate":
+        # AIPOS-F218 件①: 固定候选卡 = 候选三键(candidate_subject_values 唯一实值)+ 交回报告指纹(返工重交回判据 non_branch_re_return 读它);
+        # 候选读不出 = 不带绑定(门 queue_return 前产物入口已以同一实值核报告三键, 不合即拒)
+        try:
+            values = candidate_subject_values(workspace_root, task_id, fm)
+        except CandidateSubjectError:
+            return None
+        if not values:
+            return None
+        report = find_return_artifact(workspace_root, task_id)
+        bound = {"kind": "candidate", **{k: values[k] for k in ("repository", "commit_sha", "tree_hash", "branch")}}
+        if report is not None:
+            bound[str(non_branch_rework_declaration()["return_fingerprint_key"])] = _file_sha256(report)
+        return bound
     tip = _card_branch_tip(workspace_root, task_id, card_frontmatter)
     return {**tip[1], "branch": tip[2]} if tip else None
 
@@ -3022,6 +3180,24 @@ def _derive_verdict_stale(workspace_root: Path, task_id: str, fm: dict[str, Any]
     此处 artifact_invalid 点名原文(loop exit 4), 不派旧 Return 去审; 已重交回但门未派下一轮 = 不可推导(不重复交回)。
     构建唯一实现 _derive_stale_re_return(AIPOS-F114 return_stale 同用)。"""
     state = str(verdict_stale_declaration()["state"])
+    decl = non_branch_rework_declaration()
+    if str(stale.get("subject") or "") in decl["by_subject"]:
+        # AIPOS-F218 件①: 交付主体非卡分支的卡 = 已按返工重写交回(non_branch_re_return); 说理 / 补法措辞读 transitions nodes.N4.non_branch_rework
+        texts = {**decl["texts"], **decl["by_subject"][str(stale["subject"])]}
+        evidence = stale.get("re_execution") or {}
+        values = {"verdict_id": stale.get("verdict_id"), "verdict": stale.get("verdict"), "audit_task_id": stale.get("audit_task_id") or "?",
+                  "reviewed": stale.get("reviewed_return_record_ref") or "?", "round": (stale.get("rework_round") or {}).get("round") or "?",
+                  "candidate": stale.get("tip") or "?", "tree_hash": stale.get("tree_hash") or "?", "branch": stale.get("branch") or "?",
+                  "evidence": texts["evidence_record" if evidence.get("source") == "record" else "evidence_file"].format(
+                      return_id=evidence.get("ref"), path=evidence.get("ref"), at=evidence.get("at"))}
+        head = texts["stale_head"].format(**values)
+        return _derive_stale_re_return(
+            workspace_root, task_id, fm, records, stale, claimer=claimer, conn_arg=conn_arg, state=state, stale_key="verdict_stale",
+            head=head, reviewed_ref=str(stale.get("reviewed_return_record_ref") or ""), since=str(stale.get("verdict_at") or ""),
+            reviewed_what=texts["reviewed_what"], without_round_suggested=texts["without_round_suggested"],
+            without_round_note=texts["without_round_note"], not_updated_note=texts["not_updated_note"],
+            re_return_notes=f"{state}: {head}; {texts['re_return_note']}", invalid_fix=texts["invalid_fix"].format(**values),
+            re_return_suggested=texts["re_return_suggested"])
     covered = str(stale.get("verdict_commit_sha") or "")
     tip = str(stale.get("tip") or "")
     head = (f"裁决 {stale.get('verdict_id')}({stale.get('verdict')}, 审计卡 {stale.get('audit_task_id') or '?'})覆盖 {covered[:12]}, "
@@ -3062,20 +3238,40 @@ def _derive_rework_wait(workspace_root: Path, task_id: str, fm: dict[str, Any], 
     执行体已按返工节修复(卡分支前进, verdict_staleness 判该裁决已被返工取代)且 Return frontmatter commit_sha 已是新 tip = 重交回,
     走 F112 verdict_stale 同一出口(_derive_verdict_stale → 重交回 → 门侧按卡号演进派下一轮审计 R(n+1)); Return 已写新 tip 但不合规 =
     该出口的 artifact_invalid(原文点名)。否则 = 等返工交回: 不可推导但 action await_rework(loop 按执行体产物等待, 与 N1 执行体在干活
-    同一等待; 不以 not_derivable 结束, 故不入连败), 等待提示附返工节要点。"""
+    同一等待; 不以 not_derivable 结束, 故不入连败), 等待提示附返工节要点。
+    AIPOS-F218 件①: 交付主体非卡分支的卡(non_branch_rework_subject: 固定候选 / 治理根产出清单, F210 唯一判定)无卡分支——verdict_staleness
+    判已按返工重写交回(晚于裁决的新交回)即走同一重交回出口(报告不合本主体契约 = artifact_invalid); 等待提示按主体措辞, 不提卡分支新提交
+    (transitions nodes.N4.non_branch_rework.by_subject)。"""
     round_num = rework.get("round") or "?"
     focus = [str(x) for x in (rework.get("focus_items") or [])]
     criteria = "; ".join(ln.strip() for ln in str(rework.get("acceptance_criteria") or "").splitlines() if ln.strip())  # 一行(等待提示单行)
     stale = verdict_staleness(workspace_root, task_id, fm)
-    return_path = find_return_artifact(workspace_root, task_id)
-    if stale is not None and stale.get("rework_round") is not None and return_path is not None:
-        ret_fm = _read_frontmatter(return_path, allow_missing_block=True)
-        if str(ret_fm.get("commit_sha") or "").strip().lower() == str(stale.get("tip") or "").lower():
-            return _derive_verdict_stale(workspace_root, task_id, fm, records, stale, claimer=claimer, conn_arg=conn_arg)
-    branch = card_branch_name(task_id)
-    progress = (f"卡分支 {branch} 已有返工提交(tip {str(stale.get('tip'))[:12]}), 等 Return frontmatter commit_sha / tree_hash 更新为该 tip"
-                if stale is not None else f"等卡分支 {branch} 出现返工提交并更新 Return")
     points = "; ".join(focus) if focus else "(返工节无具体项)"
+    subject = non_branch_rework_subject(workspace_root, task_id, fm)
+    if subject is not None:
+        if stale is not None and stale.get("rework_round") is not None:
+            return _derive_verdict_stale(workspace_root, task_id, fm, records, stale, claimer=claimer, conn_arg=conn_arg)
+        decl = non_branch_rework_declaration()
+        texts = {**decl["texts"], **decl["by_subject"][str(subject["kind"])]}
+        values = {"round": round_num, "candidate": str(subject.get("candidate") or "?"), "points": points,
+                  "criteria": texts["criteria"].format(criteria=criteria) if criteria else ""}
+        missing = texts["await_missing"].format(**values)
+        suggested = texts["await_suggested"].format(**values)
+        progress = texts["await_progress"].format(**values)
+    else:
+        return_path = find_return_artifact(workspace_root, task_id)
+        if stale is not None and stale.get("rework_round") is not None and return_path is not None:
+            ret_fm = _read_frontmatter(return_path, allow_missing_block=True)
+            if str(ret_fm.get("commit_sha") or "").strip().lower() == str(stale.get("tip") or "").lower():
+                return _derive_verdict_stale(workspace_root, task_id, fm, records, stale, claimer=claimer, conn_arg=conn_arg)
+        branch = card_branch_name(task_id)
+        progress = (f"卡分支 {branch} 已有返工提交(tip {str(stale.get('tip'))[:12]}), 等 Return frontmatter commit_sha / tree_hash 更新为该 tip"
+                    if stale is not None else f"等卡分支 {branch} 出现返工提交并更新 Return")
+        missing = f"第 {round_num} 轮返工交回(卡分支 {branch} 新提交 + Return commit_sha/tree_hash 更新为新 tip)"
+        suggested = (f"执行体按第 {round_num} 轮返工节修复后重新交回(返工要点: {points}"
+                     + (f"; 验收: {criteria}" if criteria else "")
+                     + f"): 在卡工作树提交修复 → 重跑定向测试 → 把 Return frontmatter commit_sha / tree_hash 改为卡分支新 tip、"
+                       "正文补返工证据; loop 见新交回即重交并派下一轮审计")
     return {
         "task_id": task_id,
         "derivable": False,
@@ -3084,11 +3280,8 @@ def _derive_rework_wait(workspace_root: Path, task_id: str, fm: dict[str, Any], 
         "triggered_by": "executor",
         "command": "",
         "verb": "lybra_queue_return_dry_run",
-        "missing_records": [f"第 {round_num} 轮返工交回(卡分支 {branch} 新提交 + Return commit_sha/tree_hash 更新为新 tip)"],
-        "suggested_action": (f"执行体按第 {round_num} 轮返工节修复后重新交回(返工要点: {points}"
-                             + (f"; 验收: {criteria}" if criteria else "")
-                             + f"): 在卡工作树提交修复 → 重跑定向测试 → 把 Return frontmatter commit_sha / tree_hash 改为卡分支新 tip、"
-                               "正文补返工证据; loop 见新交回即重交并派下一轮审计"),
+        "missing_records": [missing],
+        "suggested_action": suggested,
         "notes": (f"N4: 裁决 {verdict.get('verdict')}({verdict.get('verdict_id') or '?'}), 已登记第 {round_num} 轮返工"
                   f"(依据 {rework.get('verdict_ref') or '?'}); {progress}(AIPOS-F155 件②, F75 返工节)"),
         "rework_round": rework,
@@ -3099,7 +3292,8 @@ def _derive_rework_wait(workspace_root: Path, task_id: str, fm: dict[str, Any], 
 def _derive_stale_re_return(workspace_root: Path, task_id: str, fm: dict[str, Any], records: dict[str, Any],
                             stale: dict[str, Any], *, claimer: str, conn_arg: str | None, state: str, stale_key: str, head: str,
                             reviewed_ref: str, since: str | None, reviewed_what: str, without_round_suggested: str,
-                            without_round_note: str, not_updated_note: str, re_return_notes: str) -> dict[str, Any]:
+                            without_round_note: str, not_updated_note: str, re_return_notes: str,
+                            invalid_fix: str | None = None, re_return_suggested: str | None = None) -> dict[str, Any]:
     """F112 verdict_stale / F114 return_stale 的重交回出口唯一构建(禁第二份): 已重交回未派下一轮 → 不可推导;
     Return 不合规 → artifact_invalid(产物入口同一校验 validate_task_artifact 原文); 否则 _return_submission_step 重交回。
     已重交回 = 最新 return 记录 ≠ 过期一轮所审的那份(reviewed_ref); 存量缺 reviewed_ref 时退回比时间(since; None = 无时间可比, 不算)。"""
@@ -3124,8 +3318,8 @@ def _derive_stale_re_return(workspace_root: Path, task_id: str, fm: dict[str, An
     if not check.get("ok"):
         return {**base, "derivable": False, "triggered_by": "executor", "command": "",
                 "missing_records": [f"{check.get('category')}: {r}" for r in check.get("reasons") or []],
-                "suggested_action": (f"执行体把 Return frontmatter 更新为卡分支当前 tip(commit_sha={tip}, tree_hash={stale.get('tree_hash')}), "
-                                     "产品随后重交回并派复审"),
+                "suggested_action": invalid_fix or (f"执行体把 Return frontmatter 更新为卡分支当前 tip(commit_sha={tip}, tree_hash={stale.get('tree_hash')}), "
+                                                    "产品随后重交回并派复审"),
                 "notes": f"{state}: {head}; {not_updated_note}",
                 "action": {"type": "artifact_invalid", "card": task_id, "path": str(check.get("path") or "")}}
     if not claimer:
@@ -3136,7 +3330,7 @@ def _derive_stale_re_return(workspace_root: Path, task_id: str, fm: dict[str, An
     step = _return_submission_step(
         workspace_root, task_id, fm, claimer=claimer, conn_arg=conn_arg, result_summary=summary, return_path=return_path,
         node=state,
-        suggested_action="重交回(Return 已是卡分支当前 tip): 门落新 return 记录并按卡号演进声明派下一轮审计",
+        suggested_action=re_return_suggested or "重交回(Return 已是卡分支当前 tip): 门落新 return 记录并按卡号演进声明派下一轮审计",
         notes=re_return_notes,
     )
     step[stale_key] = stale
@@ -3296,10 +3490,7 @@ def audit_block_state(workspace_root: Path, task_id: str) -> dict[str, Any] | No
     latest_path, latest = regular[0]
     reason = _verdict_reason_excerpt(latest_path, latest)
     blocked_audit = str(latest.get("audit_task_id") or "")
-    rounds = audit_round_ids(task_id, Path(workspace_root))
-    redispatched = None
-    if blocked_audit in rounds and rounds.index(blocked_audit) < len(rounds) - 1:
-        redispatched = rounds[-1]
+    redispatched, next_round = _next_audit_round(workspace_root, task_id, blocked_audit)
     return {
         "verdict": str(latest.get("verdict") or ""),
         "verdict_id": str(latest.get("verdict_id") or latest_path.stem),
@@ -3310,9 +3501,20 @@ def audit_block_state(workspace_root: Path, task_id: str) -> dict[str, Any] | No
         "owner_needed_after": int(decl["owner_needed_after"]),
         "reason": reason,
         "redispatched_to": redispatched,
-        "next_round": None if redispatched else derive_audit_task_id(task_id, repo_root=Path(workspace_root)),
+        "next_round": next_round,
         "owner_reaudit": None if ruling is None else {k: ruling[k] for k in ("decision_id", "choice", "decided_at", "record")},
     }
+
+
+def _next_audit_round(workspace_root: Path, task_id: str, judged_audit: str) -> tuple[str | None, str | None]:
+    """(redispatched_to, next_round): 被裁审计轮之后已有更晚一轮 = (最新一轮, None); 否则 (None, 下一轮号 derive_audit_task_id)。
+    audit_block_state 与 AIPOS-F218 FAIL 仅重审(non_pass_recovery)同一实现。"""
+    from tools.aipos_cli.audit_derivation import audit_round_ids, derive_audit_task_id
+
+    rounds = audit_round_ids(task_id, Path(workspace_root))
+    if judged_audit in rounds and rounds.index(judged_audit) < len(rounds) - 1:
+        return rounds[-1], None
+    return None, derive_audit_task_id(task_id, repo_root=Path(workspace_root))
 
 
 def reaudit_command(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None, state: dict[str, Any], *,
@@ -3344,6 +3546,8 @@ def _reaudit_dispatch_reason(state: dict[str, Any]) -> str:
     decl = audit_blocked_declaration()
     pending = state.get("owner_reaudit") if not state.get("consecutive") else None
     template = str(decl["owner_reaudit"]["dispatch_reason"] if pending else decl["dispatch_reason"])
+    if state.get("dispatch_reason_template"):  # AIPOS-F218 件②: FAIL 仅重审 = nodes.N4.non_pass_recovery.fail_dispatch_reason
+        template = str(state["dispatch_reason_template"])
     values = {"blocked_audit_task_id": str(state.get("audit_task_id") or "?"), "verdict_id": str(state.get("verdict_id") or "?"),
               "decision_id": str((pending or {}).get("decision_id") or "?")}
     for key, value in values.items():
@@ -3351,14 +3555,118 @@ def _reaudit_dispatch_reason(state: dict[str, Any]) -> str:
     return template
 
 
+_NON_PASS_RECOVERY_TEXTS = ("paths", "recommend_rework", "recommend_reaudit", "recommend_fail", "why_return_key", "why_summary",
+                            "why_audit_reason", "actor_placeholder")
+
+
+def non_pass_recovery_declaration() -> dict[str, Any]:
+    """AIPOS-F218 件②: transitions nodes.N4.non_pass_recovery(唯一读取口)。缺键 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = _transition_node("N4").get("non_pass_recovery")
+    texts = decl.get("texts") if isinstance(decl, dict) else None
+    lists = ("return_keys", "return_values", "summary_prefixes", "audit_reason_markers")
+    if (not isinstance(decl, dict) or not isinstance(texts, dict)
+            or not all(isinstance(decl.get(k), list) and decl[k] and all(isinstance(x, str) and x for x in decl[k]) for k in lists)
+            or not all(isinstance(decl.get(k), str) and decl[k].strip() for k in ("rework_command", "fail_dispatch_reason"))
+            or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in _NON_PASS_RECOVERY_TEXTS)):
+        raise SchemaLoadError(f"transitions.schema.json nodes.N4.non_pass_recovery({list(lists)} / rework_command / fail_dispatch_reason / "
+                              f"texts.{list(_NON_PASS_RECOVERY_TEXTS)})未声明齐(AIPOS-F218)")
+    return decl
+
+
+def _executor_blocked_reason(workspace_root: Path, task_id: str, audit_reason: str, decl: dict[str, Any]) -> str:
+    """AIPOS-F218 件②: 执行产物本身是 BLOCK 报告的依据句(空 = 不是): 交回报告 frontmatter 键 ∈ return_keys 的值 ∈ return_values →
+    交回摘要(_extract_return_summary, 去掉强调符)以 summary_prefixes 开头 → 裁决原因摘录含 audit_reason_markers, 按序取第一条。
+    报告 frontmatter 读不出 = FrontmatterReadError 上抛(AIPOS-F100, 不取缺省)。"""
+    texts = decl["texts"]
+    path = find_return_artifact(workspace_root, task_id)
+    if path is not None:
+        ret_fm = _read_frontmatter(path, allow_missing_block=True)
+        wanted = {str(v).strip().upper() for v in decl["return_values"]}
+        for key in decl["return_keys"]:
+            value = str(ret_fm.get(key) or "").strip()
+            if value.upper() in wanted:
+                return texts["why_return_key"].format(key=key, value=value)
+        summary = (_extract_return_summary(workspace_root, task_id) or "").strip().lstrip("*_` #>").strip().upper()
+        for prefix in decl["summary_prefixes"]:
+            if summary.startswith(str(prefix).upper()):
+                return texts["why_summary"].format(prefix=prefix)
+    for marker in decl["audit_reason_markers"]:
+        if marker in (audit_reason or ""):
+            return texts["why_audit_reason"].format(marker=marker)
+    return ""
+
+
+def non_pass_recovery(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None, state: dict[str, Any], *,
+                      actor: str, policy_ref: str) -> dict[str, Any]:
+    """AIPOS-F218 件②: N4 非 PASS(BLOCK = audit_block_state; FAIL = 本卡最新常规裁决)未登记返工轮时给顾问的两条可选路——判定与渲染唯一实现
+    (推导核 _derive_audit_blocked / FAIL 分支与 loop status 例行修法占位 audit_blocked_fix_values 同读; 声明 transitions nodes.N4.non_pass_recovery):
+    a) 登记返工轮(既有 queue rework 缺省预演形)后重新执行同一卡; b) 仅重审(reaudit_command)。
+    返回 {recommended(rework|reaudit), executor_blocked, why, rework_command, reaudit_command, choice, paths}。"""
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    decl = non_pass_recovery_declaration()
+    texts = decl["texts"]
+    blocked = {str(v).upper() for v in audit_blocked_declaration()["verdicts"]}
+    verdict = str(state.get("verdict") or "")
+    why = _executor_blocked_reason(Path(workspace_root), task_id, str(state.get("reason") or ""), decl)
+    rework = decl["rework_command"].format(prefix=lybra_command_prefix(workspace_root), task_id=task_id,
+                                           actor=actor or texts["actor_placeholder"], verdict_id=state.get("verdict_id") or "?")
+    reaudit = reaudit_command(Path(workspace_root), task_id, card_frontmatter, state, actor=actor, policy_ref=policy_ref)
+    if why:
+        recommended, choice = "rework", texts["recommend_rework"].format(
+            why=why, owner_needed_after=audit_blocked_declaration()["owner_needed_after"])
+    elif verdict.upper() in blocked:
+        recommended, choice = "reaudit", texts["recommend_reaudit"]
+    else:
+        recommended, choice = "rework", texts["recommend_fail"].format(verdict=verdict)
+    return {"recommended": recommended, "executor_blocked": bool(why), "why": why, "rework_command": rework, "reaudit_command": reaudit,
+            "choice": choice, "paths": texts["paths"].format(rework_command=rework, reaudit_command=reaudit)}
+
+
+def _non_pass_fail_recovery(workspace_root: Path, task_id: str, fm: dict[str, Any], *, conn_arg: str | None) -> dict[str, Any] | None:
+    """AIPOS-F218 件②: 推导核 N4 FAIL(未登记返工轮)分支的两条可选路(non_pass_recovery; 返工命令 / 重审命令的 --actor 与信封 = 驱动方,
+    同 _derive_audit_blocked)。非 FAIL 类 = None。"""
+    state = non_pass_fail_state(workspace_root, task_id)
+    if state is None:
+        return None
+    return non_pass_recovery(workspace_root, task_id, fm, state, actor=_driver_actor(workspace_root, connection_json=conn_arg),
+                             policy_ref=_driver_envelope_ref(workspace_root, task_id, fm, conn_arg) or "")
+
+
+def non_pass_fail_state(workspace_root: Path, task_id: str) -> dict[str, Any] | None:
+    """AIPOS-F218 件②: 本卡最新常规裁决非 PASS 族且非 BLOCK(audit_block_state 管)时的仅重审依据 {verdict, verdict_id, audit_task_id, reason,
+    redispatched_to, next_round, dispatch_reason_template}(派审理由 = nodes.N4.non_pass_recovery.fail_dispatch_reason); 否则 None。"""
+    regular = _regular_verdicts(workspace_root, task_id)
+    if not regular:
+        return None
+    path, latest = regular[0]
+    value = str(latest.get("verdict") or "").strip()
+    blocked = {str(v).upper() for v in audit_blocked_declaration()["verdicts"]}
+    if not value or value in _PASS_VERDICTS or value.upper() in blocked:
+        return None
+    audit_id = str(latest.get("audit_task_id") or "")
+    redispatched, next_round = _next_audit_round(workspace_root, task_id, audit_id)
+    return {"verdict": value, "verdict_id": str(latest.get("verdict_id") or path.stem), "audit_task_id": audit_id,
+            "reason": _verdict_reason_excerpt(path, latest), "redispatched_to": redispatched, "next_round": next_round,
+            "dispatch_reason_template": non_pass_recovery_declaration()["fail_dispatch_reason"]}
+
+
 def audit_blocked_fix_values(workspace_root: Path, task_id: str, *, actor: str, policy_ref: str) -> dict[str, str]:
-    """Placeholder values {block_reason, reaudit_command} for loop status routine fix of end reason audit_blocked
-    (verbs.schema lybra_loop_status.next_action.routine_rejections.placeholders)."""
+    """Placeholder values {block_reason, reaudit_command, recovery_choice, rework_command} for loop status routine fix of end reason
+    audit_blocked (verbs.schema lybra_loop_status.next_action.routine_rejections.placeholders). AIPOS-F218 item 2: the two recovery
+    paths come from next_resolver.non_pass_recovery (same judgement as `lybra next`)."""
     state = audit_block_state(Path(workspace_root), task_id)
     if state is None:
-        return {"block_reason": "(本卡最新裁决已不是 BLOCK)", "reaudit_command": f"无需重审; 先看 lybra next --task-id {task_id} --workspace-root {workspace_root}"}
-    return {"block_reason": state["reason"] or "(裁决记录无 Findings summary, 见审计报告)",
-            "reaudit_command": reaudit_command(Path(workspace_root), task_id, None, state, actor=actor, policy_ref=policy_ref)}
+        gone = "(本卡最新裁决已不是 BLOCK)"
+        hint = f"无需重审; 先看 lybra next --task-id {task_id} --workspace-root {workspace_root}"
+        return {"block_reason": gone, "reaudit_command": hint, "recovery_choice": gone, "rework_command": hint}
+    path, _q = _find_task_in_queue(Path(workspace_root), task_id)
+    fm = _read_frontmatter(path) if path else {}
+    recovery = non_pass_recovery(Path(workspace_root), task_id, fm, state, actor=actor, policy_ref=policy_ref)
+    return {"block_reason": state["reason"] or "(裁决记录无 Findings summary, 见审计报告)", "reaudit_command": recovery["reaudit_command"],
+            "recovery_choice": recovery["choice"], "rework_command": recovery["rework_command"]}
 
 
 def candidate_fail_declaration() -> dict[str, Any]:
@@ -3445,16 +3753,18 @@ def _derive_audit_blocked(workspace_root: Path, task_id: str, fm: dict[str, Any]
     policy_ref = _driver_envelope_ref(workspace_root, task_id, fm, conn_arg) or ""
     if state.get("owner_reaudit") and not state["consecutive"] and not state.get("redispatched_to"):
         return _derive_owner_reaudit(workspace_root, task_id, fm, state, actor=actor, policy_ref=policy_ref, conn_arg=conn_arg)
-    command = reaudit_command(workspace_root, task_id, fm, state, actor=actor, policy_ref=policy_ref)
+    # AIPOS-F218 件②: 两条可选路(登记返工轮重新执行 / 仅重审)与推荐 = non_pass_recovery(loop status 例行修法同读)
+    recovery = non_pass_recovery(workspace_root, task_id, fm, state, actor=actor, policy_ref=policy_ref)
+    command = recovery["reaudit_command"]
     repeated = bool(state["repeated"])
     head = (f"审计未能完成(裁决 {state['verdict']} {state['verdict_id']}, 审计卡 {state['audit_task_id']}"
             f"{', 连续第 ' + str(state['consecutive']) + ' 次' if state['consecutive'] > 1 else ''})")
     if repeated:
         suggested = (f"{head}: 已按 BLOCK 原因修环境重审仍 BLOCK(连续 {state['consecutive']} 次 ≥ {state['owner_needed_after']}), 升 Owner 定修环境方案 / "
-                     f"改卡面验收 / 换审计环境 — 原因: {state['reason'] or '(见审计报告)'}")
+                     f"改卡面验收 / 换审计环境 — 原因: {state['reason'] or '(见审计报告)'}; {recovery['choice']}; "
+                     f"a) {recovery['rework_command']}")
     else:
-        suggested = (f"{head}: 按 BLOCK 原因修环境 / 资源后重新派审计 {state['next_round'] or state['redispatched_to']}, 不改执行产物 — "
-                     f"原因: {state['reason'] or '(见审计报告)'}; 重审命令: {command}")
+        suggested = f"{head}: 原因: {state['reason'] or '(见审计报告)'}; {recovery['choice']}; {recovery['paths']}"
     return {
         "task_id": task_id,
         "derivable": False,
@@ -3468,10 +3778,12 @@ def _derive_audit_blocked(workspace_root: Path, task_id: str, fm: dict[str, Any]
         "notes": (f"N4: 裁决 {state['verdict']} = 审计未能完成(环境 / 资源 / 时长), 不计连败; 连续 BLOCK {state['consecutive']}/"
                   f"{state['owner_needed_after']}(AIPOS-F179 件③, 声明 transitions nodes.N4.audit_blocked)"),
         "audit_blocked": state,
+        "recovery": recovery,
         "action": {"type": str(decl["action_type"]), "card": task_id,
                    "end_reason": str(decl["repeated_end_reason"] if repeated else decl["end_reason"]),
                    "verdict_id": state["verdict_id"], "audit_task_id": state["audit_task_id"], "consecutive": state["consecutive"],
-                   "reaudit_command": "" if repeated else command},
+                   "reaudit_command": "" if repeated else command, "rework_command": recovery["rework_command"],
+                   "recommended": recovery["recommended"]},
     }
 
 
@@ -4055,7 +4367,8 @@ def _derive_next_step(
                     candidate_fail = candidate_fail_state(workspace_root, task_id, fm)
                     if candidate_fail is not None:
                         return _derive_candidate_fail(task_id, candidate_fail)
-                    # FAIL 等非 PASS 裁决(未登记返工轮)
+                    # FAIL 等非 PASS 裁决(未登记返工轮); AIPOS-F218 件②: 附两条可选路(non_pass_recovery, 与 BLOCK 同一实现)
+                    recovery = _non_pass_fail_recovery(workspace_root, task_id, fm, conn_arg=conn_arg)
                     return {
                         "task_id": task_id,
                         "derivable": False,
@@ -4065,8 +4378,10 @@ def _derive_next_step(
                         "command": "",
                         "verb": "",
                         "missing_records": [],
-                        "suggested_action": f"处理裁决 {verdict_result} (返工或修复)",
+                        "suggested_action": (f"处理裁决 {verdict_result} (返工或修复)"
+                                             + (f"; {recovery['choice']}; {recovery['paths']}" if recovery else "")),
                         "notes": f"N4: 裁决 {verdict_result},需人工处理",
+                        **({"recovery": recovery} if recovery else {}),
                     }
             
             # N3→N4: 已派审但无 verdict → 等待审计体产物
