@@ -351,6 +351,13 @@ def validate_draft_metadata(
         collisions = find_task_id_collisions(repo_root, task_id, ignore_path=actual_path)
         if collisions:
             _add(blocking_reasons, f"Duplicate task_id already exists: {task_id}")
+            # AIPOS-F220 件①: 撞号拒因点名出口(本卡未发布草稿 = draft create --replace 修订; 已发布 / 已入队 = queue amend)。
+            # 延迟导入: draft_writer 在模块级导入本模块。
+            from tools.aipos_cli.draft_writer import duplicate_revision_hint
+
+            hint = duplicate_revision_hint(repo_root, task_id)
+            if hint:
+                _add(blocking_reasons, hint)
             for collision in collisions:
                 _add(warnings, f"task_id collision path: {collision}")
 

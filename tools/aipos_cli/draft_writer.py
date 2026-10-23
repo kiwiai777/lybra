@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
-from tools.aipos_cli.clock import iso_z
+from tools.aipos_cli.clock import file_slug, iso_z
 from pathlib import Path
 from typing import Any
 
@@ -13,8 +13,10 @@ from tools.aipos_cli.draft_validator import (
     DRAFTS_DIR,
     pending_queue_dir,
     draft_slug,
+    expected_draft_relative_path,
     expected_pending_relative_path,
     find_case_insensitive_path_collision,
+    find_task_id_collisions,
     read_draft_markdown,
     resolve_draft_path,
     resolve_pending_target_path,
@@ -543,13 +545,178 @@ def publish_identity_refusals(repo_root: Path, metadata: dict[str, Any], *,
     return refusals, view
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F220: 未发布草稿的正式修订入口(draft create --replace)。声明 transitions.schema nodes.N0.draft_revision;
+# 留档根 config.schema governance_structure.paths.draft_history。准入判定 / 留档落点 / 差异摘要 / 撞号提示各只此一处。
+# ---------------------------------------------------------------------------
+
+
+def draft_revision_declaration() -> dict[str, Any]:
+    """transitions.schema nodes.N0.draft_revision(声明缺 = SchemaLoadError, fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = ((load_schema("transitions").get("nodes") or {}).get("N0") or {}).get("draft_revision")
+    if not isinstance(decl, dict) or not isinstance(decl.get("texts"), dict):
+        raise SchemaLoadError("transitions.schema.json nodes.N0.draft_revision 未声明(AIPOS-F220 草稿修订入口)")
+    return decl
+
+
+def draft_history_dir(repo_root: Path, task_id: str) -> Path:
+    """本卡旧稿留档目录 = <governance_structure.paths[history_path_key]>/<卡 ID slug>/(唯一实现)。"""
+    from tools.aipos_cli.next_resolver import _resolve_governance_path_with_relative
+
+    key = str(draft_revision_declaration()["history_path_key"])
+    return _resolve_governance_path_with_relative(key, Path(repo_root)) / draft_slug(task_id)
+
+
+def _rel(repo_root: Path, path: Path) -> str:
+    try:
+        return Path(path).resolve().relative_to(Path(repo_root).resolve()).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def draft_revision_state(repo_root: Path, task_id: str) -> dict[str, Any]:
+    """同 ID 卡稿现在何处(修订准入唯一判定)→ {state, draft_path, queue_paths, publish_paths, other_drafts, existing_task_id, reason}。
+
+    state: none(无草稿, 未发布未入队)/ draft(本卡草稿落点在且可修订)/ published(有发布记录或在队列)/ ambiguous(同 ID 另有草稿)/
+    mismatch(落点文件 task_id 不同)/ unreadable(落点文件读不出)。撞号扫描与 create 同一实现 find_task_id_collisions。"""
+    from tools.aipos_cli.records import load_records
+    from tools.aipos_cli.task_loader import queue_root_for
+
+    root = Path(repo_root)
+    draft_rel = Path(expected_draft_relative_path(task_id)).as_posix()
+    draft_file = root / draft_rel
+    queue_prefix = _rel(root, queue_root_for(root)).rstrip("/") + "/"
+    collisions = find_task_id_collisions(root, task_id)
+    queue_paths = [p for p in collisions if p.startswith(queue_prefix)]
+    other_drafts = [p for p in collisions if not p.startswith(queue_prefix) and p != draft_rel]
+    wanted = task_id.lower()
+    publishes = load_records(root, groups=["publishes"]).get("task_publishes") or {}
+    publish_paths = sorted({str(r.get("path") or "") for key, rows in publishes.items() if str(key).lower() == wanted
+                            for r in rows} - {""})
+    expected_record = expected_publish_record_path(root, task_id, stable_publish_id(task_id))
+    if expected_record.exists():
+        publish_paths = sorted(set(publish_paths) | {_rel(root, expected_record)})
+    out: dict[str, Any] = {"task_id": task_id, "draft_path": draft_rel, "queue_paths": queue_paths, "publish_paths": publish_paths,
+                           "other_drafts": other_drafts, "existing_task_id": None, "reason": None}
+    if queue_paths or publish_paths:
+        return {**out, "state": "published"}
+    if other_drafts:
+        return {**out, "state": "ambiguous"}
+    if not draft_file.is_file():
+        return {**out, "state": "none"}
+    try:
+        existing, _body, errors = read_draft_markdown(draft_file)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return {**out, "state": "unreadable", "reason": str(exc)}
+    if errors:
+        return {**out, "state": "unreadable", "reason": "; ".join(errors)}
+    existing_id = existing.get("task_id")
+    out["existing_task_id"] = existing_id
+    if not isinstance(existing_id, str) or existing_id.lower() != wanted:
+        return {**out, "state": "mismatch"}
+    return {**out, "state": "draft", "existing_metadata": existing}
+
+
+def draft_revision_refusals(repo_root: Path, task_id: str, state: dict[str, Any]) -> list[str]:
+    """--replace 准入拒因(文案读声明 texts; 空 = 准)。已发布 / 已入队 = amend_hint(queue amend 出口原文)。"""
+    texts = draft_revision_declaration()["texts"]
+    kind = state["state"]
+    if kind == "draft":
+        return []
+    if kind == "published":
+        return [revision_amend_hint(repo_root, task_id, state)]
+    if kind == "none":
+        return [str(texts["no_draft"]).format(path=state["draft_path"])]
+    if kind == "ambiguous":
+        return [str(texts["ambiguous"]).format(paths=", ".join(state["other_drafts"]), path=state["draft_path"])]
+    if kind == "mismatch":
+        return [str(texts["mismatch"]).format(path=state["draft_path"], existing=state.get("existing_task_id"), task_id=task_id)]
+    return [str(texts["unreadable"]).format(path=state["draft_path"], reason=state.get("reason"))]
+
+
+def revision_amend_hint(repo_root: Path, task_id: str, state: dict[str, Any]) -> str:
+    texts = draft_revision_declaration()["texts"]
+    where = []
+    if state.get("queue_paths"):
+        where.append(str(texts["where_queue"]).format(paths=", ".join(state["queue_paths"])))
+    if state.get("publish_paths"):
+        where.append(str(texts["where_publish"]).format(paths=", ".join(state["publish_paths"])))
+    return str(texts["amend_hint"]).format(task_id=task_id, where="; ".join(where), governance_root=Path(repo_root))
+
+
+def duplicate_revision_hint(repo_root: Path, task_id: str) -> str | None:
+    """不带 --replace 撞号时追加的出口(draft_validator 撞号拒因同处调用): 本卡未发布草稿 = 点名修订入口; 已发布 / 已入队 = queue amend;
+    其他形(同 ID 另有草稿等)= None(拒因已列撞号路径)。"""
+    state = draft_revision_state(repo_root, task_id)
+    if state["state"] == "draft":
+        texts = draft_revision_declaration()["texts"]
+        return str(texts["duplicate_hint"]).format(path=state["draft_path"], governance_root=Path(repo_root),
+                                                   history_dir=_rel(repo_root, draft_history_dir(repo_root, task_id)))
+    if state["state"] == "published":
+        return revision_amend_hint(repo_root, task_id, state)
+    return None
+
+
+def _diff_value(value: Any, limit: int) -> str:
+    text = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    return text if len(text) <= limit else text[: max(limit - 1, 1)] + "…"
+
+
+def draft_revision_diff(old_markdown: str, new_markdown: str) -> list[str]:
+    """新旧稿差异摘要(frontmatter 逐键 + 正文行数), 文案读声明 texts。"""
+    import difflib
+
+    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+
+    decl = draft_revision_declaration()
+    texts, limit = decl["texts"], int(decl.get("diff_value_max_chars") or 80)
+    old_meta, old_body, _w1 = parse_markdown_frontmatter(old_markdown)
+    new_meta, new_body, _w2 = parse_markdown_frontmatter(new_markdown)
+    lines: list[str] = []
+    for key in list(dict.fromkeys([*old_meta.keys(), *new_meta.keys()])):
+        if key in old_meta and key not in new_meta:
+            lines.append(str(texts["diff_removed"]).format(field=key, old=_diff_value(old_meta[key], limit)))
+        elif key not in old_meta:
+            lines.append(str(texts["diff_added"]).format(field=key, new=_diff_value(new_meta[key], limit)))
+        elif old_meta[key] != new_meta[key]:
+            lines.append(str(texts["diff_changed"]).format(field=key, old=_diff_value(old_meta[key], limit),
+                                                           new=_diff_value(new_meta[key], limit)))
+    if old_body != new_body:
+        a, b = old_body.splitlines(), new_body.splitlines()
+        delta = list(difflib.ndiff(a, b))
+        lines.append(str(texts["diff_body"]).format(old_lines=len(a), new_lines=len(b),
+                                                    added=sum(1 for d in delta if d.startswith("+ ")),
+                                                    removed=sum(1 for d in delta if d.startswith("- "))))
+    return lines or [str(texts["diff_none"])]
+
+
+def render_revision_lines(result: dict[str, Any]) -> list[str]:
+    """CLI 文字输出的修订块(差异摘要 + 留档行 + 写后行; 无修订 = 空)。"""
+    revision = result.get("revision")
+    if not isinstance(revision, dict):
+        return []
+    texts = draft_revision_declaration()["texts"]
+    lines = [str(texts["diff_header"]).format(path=revision.get("draft_path")), *revision.get("diff", [])]
+    if revision.get("history_path"):
+        will = "" if result.get("wrote") else str(texts["will"])
+        lines.append(str(texts["history_line"]).format(will=will, path=revision["history_path"],
+                                                       sha256=str(revision.get("old_sha256") or "")[:12]))
+    if result.get("wrote"):
+        lines.append(str(texts["done_line"]).format(path=revision.get("draft_path")))
+    return lines
+
+
 def create_draft(
     repo_root: Path,
     metadata: dict[str, Any],
     body: str,
     *,
     dry_run: bool = False,
+    replace: bool = False,
 ) -> dict[str, Any]:
+    """起草(唯一写入与校验路径)。AIPOS-F220: replace=True = 修订本卡未发布草稿(准入 draft_revision_state; 先留档旧稿再写新稿)。"""
     # AIPOS-R8C: pre-populate placeholder fields from project card_policy
     if CARD_POLICY_AVAILABLE:
         placeholders = get_card_policy_placeholder_fields(
@@ -562,6 +729,25 @@ def create_draft(
     project_reasons = _fill_declared_project(metadata, repo_root)
     # AIPOS-F143 件②: 执行方式声明 → 缺省执行者 / harness / 审计者(未声明 = 不动; 先于 harness 派生, 派生只补仍缺的)
     project_reasons = [*project_reasons, *apply_execution_defaults(metadata, repo_root)]
+    # AIPOS-F220 件①: 修订准入(唯一判定 draft_revision_state); 准入时新稿承旧稿 draft_created_at / draft_created_by, draft_updated_at = 本次
+    revision_state: dict[str, Any] | None = None
+    revision_reasons: list[str] = []
+    if replace:
+        raw_task_id = metadata.get("task_id")
+        if isinstance(raw_task_id, str) and raw_task_id.strip():
+            try:
+                revision_state = draft_revision_state(repo_root, raw_task_id)
+            except ValueError as exc:
+                revision_reasons.append(str(exc))
+            else:
+                revision_reasons = draft_revision_refusals(repo_root, raw_task_id, revision_state)
+                if revision_state["state"] == "draft":
+                    previous = revision_state.get("existing_metadata") or {}
+                    for key in ("draft_created_at", "draft_created_by"):
+                        if metadata.get(key) in (None, "") and previous.get(key) not in (None, ""):
+                            metadata[key] = previous[key]
+                    metadata["draft_updated_at"] = iso_z()
+    revising = revision_state is not None and revision_state["state"] == "draft"
     normalized = _normalized_metadata(metadata, repo_root)
     
     # AIPOS-F78 件①: 意图面 harness/lane 缺则派生(create/publish/regen 三口一函数 derive_intent_declarations)
@@ -609,19 +795,35 @@ def create_draft(
             _intent_warnings.append(f"工作纪律节派生失败(存量兼容): {e}")
     
     rendered_markdown = render_markdown_task_card(normalized, task_body)
-    validation = validate_draft_metadata(repo_root, normalized)
+    # AIPOS-F220: 修订时本卡草稿落点不算撞号(与 publish 校验同一 actual_path 口径)
+    draft_file_for_revision = (Path(repo_root) / revision_state["draft_path"]) if revising and revision_state else None
+    validation = validate_draft_metadata(repo_root, normalized, actual_path=draft_file_for_revision)
     if project_reasons:
         # AIPOS-F108 件③: 项目未声明 = 拒(与 schema 必填校验同一 BLOCK 出口, 拒因带出口)
         validation["blocking_reasons"] = [*project_reasons, *validation["blocking_reasons"]]
         validation["verdict"] = Verdict.BLOCK
+    if revision_reasons:
+        validation["blocking_reasons"] = list(dict.fromkeys([*revision_reasons, *validation["blocking_reasons"]]))
+        validation["verdict"] = Verdict.BLOCK
     target_path = validation["target_path"]
     planned_writes = []
+    revision: dict[str, Any] | None = None
+    if revising and revision_state and target_path:
+        decl = draft_revision_declaration()
+        old_bytes = (Path(repo_root) / revision_state["draft_path"]).read_bytes()
+        history_name = str(decl["history_filename"]).format(timestamp=file_slug(str(decl["timestamp_style"])))
+        history_rel = _rel(repo_root, draft_history_dir(repo_root, str(normalized["task_id"])) / history_name)
+        revision = {"draft_path": revision_state["draft_path"], "history_path": history_rel,
+                    "old_sha256": hashlib.sha256(old_bytes).hexdigest(),
+                    "new_sha256": hashlib.sha256(rendered_markdown.encode("utf-8")).hexdigest(),
+                    "diff": draft_revision_diff(old_bytes.decode("utf-8"), rendered_markdown)}
+        planned_writes.append({"path": history_rel, "kind": "create", "type": "draft_history"})
 
     if target_path:
         planned_writes.append(
             {
                 "path": target_path,
-                "kind": "create",
+                "kind": "replace" if revising else "create",
                 "type": "draft_markdown",
             }
         )
@@ -637,6 +839,10 @@ def create_draft(
         "target_path": target_path,
         "planned_writes": planned_writes,
     }
+    if replace:
+        result["replace"] = True
+    if revision is not None:
+        result["revision"] = revision
 
     if dry_run:
         result["would_write"] = validation["verdict"] != Verdict.BLOCK and bool(target_path)
@@ -646,6 +852,9 @@ def create_draft(
     if validation["verdict"] == Verdict.BLOCK or not target_path:
         result["wrote"] = False
         return result
+
+    if replace:
+        return _write_draft_revision(Path(repo_root), str(normalized["task_id"]), target_path, rendered_markdown, result)
 
     drafts_root = repo_root / DRAFTS_DIR
     target_file = repo_root / target_path
@@ -657,6 +866,43 @@ def create_draft(
 
     drafts_root.mkdir(parents=True, exist_ok=True)
     target_file.write_text(rendered_markdown, encoding="utf-8")
+    result["wrote"] = True
+    return result
+
+
+def _write_draft_revision(repo_root: Path, task_id: str, target_path: str, rendered_markdown: str,
+                          result: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F220 写入: 写前再判准入(预演与写之间状态可能变) → 旧稿字节原样独占新建留档(已存在 = 拒) → 写新稿。"""
+    def refuse(reasons: list[str]) -> dict[str, Any]:
+        result["verdict"] = Verdict.BLOCK
+        result["wrote"] = False
+        result["blocking_reasons"] = list(dict.fromkeys([*result["blocking_reasons"], *reasons]))
+        return result
+
+    state = draft_revision_state(repo_root, task_id)
+    refusals = draft_revision_refusals(repo_root, task_id, state)
+    if refusals:
+        return refuse(refusals)
+    if Path(state["draft_path"]).as_posix() != Path(target_path).as_posix():
+        return refuse([str(draft_revision_declaration()["texts"]["mismatch"]).format(
+            path=target_path, existing=state.get("existing_task_id"), task_id=task_id)])
+    draft_file = repo_root / target_path
+    old_bytes = draft_file.read_bytes()
+    revision = dict(result.get("revision") or {})
+    if not revision.get("history_path"):  # 计划阶段未算出留档落点 = 不写(fail-closed)
+        return refuse([str(draft_revision_declaration()["texts"]["no_draft"]).format(path=target_path)])
+    history_file = repo_root / revision["history_path"]
+    try:
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(history_file, "xb") as handle:  # 只追加: 独占新建, 已存在 = FileExistsError
+            handle.write(old_bytes)
+    except FileExistsError:
+        return refuse([str(draft_revision_declaration()["texts"]["history_exists"]).format(path=revision["history_path"])])
+    draft_file.write_text(rendered_markdown, encoding="utf-8")
+    revision["old_sha256"] = hashlib.sha256(old_bytes).hexdigest()
+    revision["history_sha256"] = hashlib.sha256(history_file.read_bytes()).hexdigest()
+    revision["new_sha256"] = hashlib.sha256(draft_file.read_bytes()).hexdigest()
+    result["revision"] = revision
     result["wrote"] = True
     return result
 
