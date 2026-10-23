@@ -3871,9 +3871,22 @@ def _queue_return_repair(args: argparse.Namespace, repo_root: Path) -> int:
                     diagnosis["recommended_action"] = "Session record exists; use lybra_queue_return gate tool"
                 diagnosis["verdict"] = "OK"
         elif task.get("queue_state") == "claimed" and task_returns:
-            diagnosis["diagnosis"].append(f"Task has {len(task_returns)} return record(s) but still in claimed state")
-            diagnosis["recommended_action"] = "State inconsistency detected; requires manual queue state correction"
-            diagnosis["verdict"] = Verdict.BLOCK
+            # AIPOS-F218 件③: claimed + 已有交回 = 现行模型正常形态(交回后保持 claimed 直到 finalize / 结案), 本工具不适用 → 看推导核;
+            # 措辞读声明 transitions nodes.N2.return_repair.claimed_with_return(不再建议手工改队列)
+            from tools.aipos_cli.next_resolver import _transition_node
+            from tools.aipos_cli.workspace_config import lybra_command_prefix
+            from tools.schema_loader import SchemaLoadError
+
+            normal = (_transition_node("N2").get("return_repair") or {}).get("claimed_with_return")
+            if not isinstance(normal, dict) or not all(isinstance(normal.get(k), str) and normal[k].strip()
+                                                       for k in ("verdict", "diagnosis", "recommended_action")):
+                raise SchemaLoadError("transitions.schema.json nodes.N2.return_repair.claimed_with_return(verdict / diagnosis / "
+                                      "recommended_action)未声明齐(AIPOS-F218)")
+            next_command = f"{lybra_command_prefix(repo_root)} next --task-id {args.task_id}"
+            diagnosis["diagnosis"].append(normal["diagnosis"].format(count=len(task_returns)))
+            diagnosis["recommended_action"] = normal["recommended_action"].format(next_command=next_command)
+            diagnosis["next_command"] = next_command
+            diagnosis["verdict"] = normal["verdict"]
         else:
             diagnosis["diagnosis"].append(f"Task is in {task.get('queue_state')} state")
             diagnosis["recommended_action"] = "No stuck return detected"

@@ -2270,7 +2270,7 @@
           "- 可写范围: 只 = `{path_template}` 中本卡、本实例、当前活动 run 的目录; base 层与卡层、他卡 / 他 run / 已结束 run / 撤销或到期后一律拒; 目录链只经产品 helper init-run 在目标主机建空目录, 角色不得自行 mkdir base / 卡层",
           "- run 绑定: run 由顾问 / 驱动方 `project validation-root run-start` 铸、`run-finish` 收口, 执行体 / 审计体不自铸、不收口; 无活动 run = 不写; 执行与审计各用自己的声明与 run, 审计不复用执行 run 与其模拟器",
           "- 写前判定: 治理根侧 `{check_command}`(退出码 0 允许 / 3 拒); 目标主机在他机 = 再以目标主机 helper check 复核 realpath(只认退出码 0 且输出 ALLOW); 拒 = 声明缺口, 停线报告, 禁换路径 / 符号链接 / 工具绕过",
-          "- 验证 helper 按 run 固定(AIPOS-F203): run-start 时固定当时部署版, 本 run 的 init-run / src-verify / sim-* / sys-snapshot / check / evidence-* 等 helper 命令一律取本 run 固定版(`{helper_fetch} --id <声明> --run-id <run-id>`; 具体命令与 sha256 以开工提示为准), 产品升级部署不影响进行中 run; 禁自写 / 改写 helper; 项目脚本如需核 helper 摘要, 运行时取 `{helper_fetch} --id <声明> --run-id <run-id> --sha256` 的输出, 禁在脚本 / 卡面写死摘要或路径(写死 = 每次产品升级即被打断)",
+          "- 验证 helper 按 run 固定(AIPOS-F203): run-start 时固定当时部署版, 本 run 的 init-run / src-verify / sim-* / sys-snapshot / check / evidence-* 等 helper 命令一律取本 run 固定版(`{helper_fetch} --id <声明> --run-id <run-id>`; 具体命令与 sha256 以开工提示为准), 产品升级部署不影响进行中 run; 禁自写 / 改写 helper; 项目脚本如需核 helper 摘要, 运行时取 `{helper_fetch} --id <声明> --run-id <run-id> --sha256` 的输出, 禁在脚本 / 卡面写死摘要或路径(写死 = 每次产品升级即被打断); run 内输入文件(如项目脚本读的 context.json)由持 run 方在自己的 run 内生成, 值取只读命令输出(`project validation-root list --json` / `{helper_fetch} --id <声明> --run-id <run-id> --sha256`), 不由顾问代生成(AIPOS-F218 件④)",
           "- 候选源码: 只经产品铸的送达命令送固定候选 sha 的已提交树, 目标主机树指纹核对通过(SRC_OK)才用; 禁从工作区 / 其他提交拷源码, 正式代码只在治理根所在机卡工作树改",
           "- 证据: 日志 / 截图 / 测试结果写本 run 目录内; 审计 run 在他机 = 按开工提示生成证据清单并取回副本到审计报告落点, 副本禁手改",
           "- 工具写入重定向原则: 构建产物 / 依赖缓存 / 测试结果 / 临时目录一律重定向进本 run 目录(参数照开工提示逐项, 先在目标主机只读核验, 不过 = BLOCK, 不臆造替代参数); iOS 界面测试只用本 run 专用模拟器(helper sim-create 新建 / sim-delete 删除, 一 run 一台); Android / Gradle 等工具链同理只写本 run 目录; 系统服务自写(如 Xcode 系统临时目录)只记为系统副作用, 不删除、不冒充 run 产物",
@@ -2298,7 +2298,7 @@
         "src_pending": "(铸 run 后由产品给出: 重取本开工稿或 `project validation-root init-command --id <声明id>`)",
         "evidence_fetch": "  ③ 远端 run 证据取回(AIPOS-F200; 审计 run 在目标主机 {host} 时, 裁决入口读不到 run 内证据, 改读审计报告落点副本): 运行记录的日志写在本 run `{run_dir}/logs/` 下(截图等证据放 `{run_dir}/evidence/`); 卡面命令全部跑完、run 仍活动时生成证据清单 `{evidence_manifest}`(列证据目录 {evidence_dirs} 下文件 + sha256 + 主机指纹 + 封签; 只认末行 `EVIDENCE_OK` + 退出码 0); 再在治理根所在机取回 `{evidence_fetch}`(经声明 ssh 别名只读拉取清单内文件逐个核 sha256, 副本落 `{evidence_copy}`); 副本禁手改, 证据更新 = 重生成清单并重新取回",
         "helper_ssh": "  目标主机侧 realpath 判定(符号链接逃逸只能在目标主机判; 经 ssh): 每次写前在治理根所在机运行 `{check_ssh}`; 只认退出码 0 且输出 `ALLOW`, 其余(含无输出 / ssh 失败)= 拒",
-        "helper_pin": "  验证 helper 按 run 固定(AIPOS-F203): {helper_pin_state}; 本 run 的 init-run / src-verify / sim-* / sys-snapshot / check / evidence-* 等 helper 命令一律取本 run 固定版(`{helper_fetch}`), 产品升级部署不影响进行中 run; 项目脚本如需核 helper 摘要, 运行时取 `{helper_sha_query}` 的输出, 禁在脚本 / 卡面写死摘要(写死 = 每次产品升级即被打断)",
+        "helper_pin": "  验证 helper 按 run 固定(AIPOS-F203): {helper_pin_state}; 本 run 的 init-run / src-verify / sim-* / sys-snapshot / check / evidence-* 等 helper 命令一律取本 run 固定版(`{helper_fetch}`), 产品升级部署不影响进行中 run; 项目脚本如需核 helper 摘要, 运行时取 `{helper_sha_query}` 的输出, 禁在脚本 / 卡面写死摘要(写死 = 每次产品升级即被打断); run 内输入文件(如项目脚本读的 context.json)由持 run 方(本卡本实例)在本 run 内生成, 值取只读命令输出(`project validation-root list --json` 中本声明 / 活动 run 的字段、`{helper_sha_query}`), 不由顾问代生成、不复用他人 run 的输入(AIPOS-F218 件④)",
         "binding": "- 本卡绑定固定候选(AIPOS-F205; 卡面 validation_source_task / validation_candidate, 声明 enums.schema task_mode.candidate_binding): 候选 {candidate}(tree {tree}), 来源卡 {source}, 候选所在仓 = 来源卡产品仓 `{repo}`(按来源卡 lane.repo 解析, 不按本卡 lane.repo); run-start 的候选须 = 本候选, 候选源码只经产品铸的送达命令从该仓送进本 run 目录。环境制品(依赖缓存 / 临时 HOME / settings / 下载工具 / 临时脚本)只写本卡验证根本活动 run 目录, 禁写全局缓存(~/.m2 / ~/.gradle 等)、原有缓存、产品仓与治理根; 交付仍走本卡交回契约(报告与产出清单写报告落点, 只写治理根卡 = frontmatter outputs + 顾问复核), 依赖 / 缓存 / 源码等制品不入报告落点",
         "binding_invalid": "- 本卡候选绑定不合(AIPOS-F205): {reason}; 验证根不可用, 停线报告(出口: 顾问 `lybra queue amend` 修正来源卡 / 候选, 已认领卡加 --restricted)",
         "binding_undeclared": "- 本卡尚无验证根声明(AIPOS-F205): 环境制品无处可写 = 停线报告(BLOCK), 不以卡面文字代替授权、不自建目录、不写全局缓存或治理根凑数; 出口(顾问 / 驱动方): `{declare}` 声明本卡专用验证根, 再 `{run_start}` 铸 run, 之后重取本开工提示(含目录链初始化 / 候选源码送达 / 送达核对 / 写前判定命令)"
@@ -3079,6 +3079,8 @@
             "envelope_arg": "续跑命令的信封参数(运行记录 envelope; 无 = 空)",
             "reaudit_command": "AIPOS-F179 件③: 重新派审计的命令(唯一渲染 next_resolver.reaudit_command: 既有 lybra audit dispatch 派下一轮审计卡, 派审人 / 信封 = 运行记录 driver / envelope); 下一轮已派出 = 一句「已派 <审计卡>, 无需再派」; 只用于 end_reasons.audit_blocked",
             "block_reason": "AIPOS-F179 件③: BLOCK 原因摘录(该裁决记录 Findings summary, 截 transitions nodes.N4.audit_blocked.reason_excerpt_chars 字); 只用于 end_reasons.audit_blocked",
+            "recovery_choice": "AIPOS-F218 件②: 两条可选路的推荐句(transitions nodes.N4.non_pass_recovery.texts: 执行产物本身是 BLOCK 报告 = 推荐登记返工轮重新执行, 否则推荐仅重审; 唯一实现 next_resolver.non_pass_recovery, 与 lybra next 同源); 只用于 end_reasons.audit_blocked",
+            "rework_command": "AIPOS-F218 件②: 登记返工轮命令(既有动词 `lybra queue rework` 缺省预演形, --actor = 运行记录 driver, --verdict-ref = 该 BLOCK 裁决号, --focus-items / --acceptance-criteria 留占位; 唯一渲染 next_resolver.non_pass_recovery, 声明 transitions nodes.N4.non_pass_recovery.rework_command); 只用于 end_reasons.audit_blocked",
             "fail_reason": "AIPOS-F211 件④: 固定候选验证卡 FAIL 裁决的原因摘录(裁决号 + 审计卡 + 该裁决记录 Findings summary, 截 transitions nodes.N4.audit_blocked.reason_excerpt_chars 字; 唯一实现 next_resolver.candidate_fail_fix_values); 只用于 end_reasons.candidate_fail",
             "source_task": "AIPOS-F211 件④: 本卡来源卡(卡面 validation_source_task, next_resolver.card_candidate_subject)与其固定候选 sha; 只用于 end_reasons.candidate_fail",
             "supersede_command": "AIPOS-F211 件④: 撤换本卡命令(既有动词 `lybra queue supersede` 预演形, --by 留新验证卡号占位, --actor 留顾问实例占位, --owner-words 留 Owner 原话占位; 唯一渲染 next_resolver.candidate_fail_fix_values); 本卡此刻已不是候选 FAIL = 一句说明; 只用于 end_reasons.candidate_fail",
@@ -3209,8 +3211,10 @@
             "audit_blocked": {
               "why_routine": "AIPOS-F179 件③(10-16 chris HBLX-8 实撞): 审计裁决 BLOCK = 审计未能完成(环境 / 资源 / 时长, 如验证命令超过工具单次时限、模拟器被他卡占用), 不是执行产物不合格; 修法固定 = 按 BLOCK 原因修环境 / 资源后重新派审计下一轮(执行产物不变), 不计连败; 同卡连续 BLOCK 达 transitions nodes.N4.audit_blocked.owner_needed_after 次才升 Owner",
               "fix": [
-                "不改执行产物、不发返工卡: BLOCK 原因摘录 —— {block_reason}",
-                "按原因修环境 / 资源(长验证命令: 审计章程已要求用 lybra run-long 脱离运行 + 分段 wait; 模拟器类资源: 卡面加 resources 声明让 loop 串行; 环境缺件: 在审计工位所在机补齐), 修不了或要改卡面验收 = 升 owner_needed",
+                "BLOCK 原因摘录 —— {block_reason}",
+                "两条可选路(二选一, AIPOS-F218 件②; 判据唯一实现 next_resolver.non_pass_recovery, 与 lybra next 同源): {recovery_choice}",
+                "a) 登记返工轮后由执行体重新执行同一卡(执行产物本身是 BLOCK 报告 / 须执行体补做时): {rework_command}(缺省预演, 核对后加 --confirm 经门写入); 登记后用原命令续跑 loop: loop 等执行体重新执行并重写交回, 见新交回即重交并派下一轮审计(交付主体非卡分支的卡——固定候选在同一候选上重新执行、只写治理根的卡修正产出——重写交回即可, 不要求卡分支新提交)",
+                "b) 仅重审(执行产物不变): 按原因修环境 / 资源(长验证命令: 审计章程已要求用 lybra run-long 脱离运行 + 分段 wait; 模拟器类资源: 卡面加 resources 声明让 loop 串行; 环境缺件: 在审计工位所在机补齐), 修不了或要改卡面验收 = 升 owner_needed",
                 "修好后重新派审计下一轮: {reaudit_command}",
                 "然后用原命令续跑 loop(本修法末行命令): loop 等新一轮审计卡、拉起审计体"
               ]

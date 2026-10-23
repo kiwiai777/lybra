@@ -89,8 +89,10 @@
      (verbs.schema `lybra_loop_status.next_action.routine_rejections`, 如 `BRANCH_WRONG_BASE` = 共用仓他卡先合入、本卡分支落后;
      合入阶段的 `MERGE_CONFLICT` = 合入冲突、`REPO_MERGE_IN_PROGRESS` = 同仓另一张卡正在合入, AIPOS-F155;
      子 agent 模式下 loop 等交回超时 `wait_timeout` = 子 agent 多半仍在做, 等它交回后重跑 / 补派子 agent, AIPOS-F156;
-     审计裁决 BLOCK `audit_blocked` = 审计没能完成(环境 / 资源 / 时长), 按 hint 的原因摘录修环境后跑 hint 里的重审命令派下一轮审计,
-     不发返工卡、不改执行产物, 不计连败, 同卡连续 BLOCK 到声明次数产品自动升 `owner_needed`(环境 / 产品修好后 Owner 在收件箱选
+     审计裁决 BLOCK `audit_blocked` = 审计没能完成(环境 / 资源 / 时长), hint 给两条路并标推荐(AIPOS-F218): a) 执行产物本身是 BLOCK
+     报告(如开工时无活动 run)= 按 hint 的 `queue rework` 命令登记返工轮(预演 → `--confirm`), 补齐前置后原命令续跑 loop, 执行体重新执行
+     并重写交回(交付主体非卡分支的卡——固定候选验证卡 / 只写治理根的卡——重写交回即可, 不要求卡分支新提交), loop 自动重交并派下一轮审计; b) 执行产物完整 = 按原因摘录修环境
+     后跑 hint 里的重审命令派下一轮审计(不改执行产物); 不计连败, 同卡连续 BLOCK 到声明次数产品自动升 `owner_needed`(环境 / 产品修好后 Owner 在收件箱选
      「重新派审」`reaudit`, 你 `owner decide` 记下后原命令重跑 loop = 以该裁决为界重新计数并派下一轮审计, AIPOS-F202; 不改门记录、不重置次数); 独占资源排队超时 `resource_busy`, AIPOS-F179;
      审计报告头 commit_sha 抄错 `audit_report_form_error` = 形式错误不是审错产物, loop 已能以同一审计会话续接让审计体只改报告头,
      续接不了时按「下一条」让审计体改(你永不代改审计报告), AIPOS-F180B;

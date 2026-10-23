@@ -241,6 +241,14 @@
           "rule": "文件存在且非骨架: 「一句话结论」节首行非占位符(record_writer.build_return_skeleton_markdown 的 `(待填写` 前缀)",
           "not_ready_meaning": "骨架/占位 = 执行体尚未交回 → 推导核判 await_artifact, loop 继续经 agent watch 等待"
         }
+      },
+      "return_repair": {
+        "description": "AIPOS-F218 件③(10-23 chris HBJOTA-61V2 顾问只读诊断): `lybra queue return-repair` 只修「claimed 且无交回记录」(会话记录缺, AIPOS-370F2)。claimed 且已有交回记录 = 现行模型正常形态(交回后卡保持 claimed 直到 finalize / 结案, automation.queue_placement), 不判不一致、不建议手工改队列: 输出 verdict = claimed_with_return.verdict(不 BLOCK), 建议 = 本工具不适用, 看推导核(命令 = lybra next, 前缀唯一渲染 workspace_config.lybra_command_prefix)。占位 {count} = 交回记录数, {next_command} = 推导核命令。",
+        "claimed_with_return": {
+          "verdict": "OK",
+          "diagnosis": "claimed 且已有 {count} 份交回记录 = 现行模型正常形态(交回后保持 claimed 直到 finalize / 结案), 不是状态不一致",
+          "recommended_action": "本工具不适用(只修 claimed 且无交回记录的卡); 下一步看推导核: {next_command}"
+        }
       }
     },
     "N3": {
@@ -333,6 +341,57 @@
           "description": "AIPOS-F202(10-21 chris 理想 HBLX-21B 实撞: 审计 HBLX-21BR / HBLX-21BR2 连续 BLOCK 升 Owner, Owner 定「等产品修复」, 修复上线后续跑 loop 仍 1 秒即 audit_blocked_repeated, 无正式恢复入口): 连续 BLOCK 的正式恢复入口。Owner 在收件箱对本卡选 choices 所列选项(lybra_owner_inbox.options, 人话「环境 / 产品已修好, 重新派审」), 顾问 lybra owner decide 落既有 owner_decision_record(同一写路径, 自动落账)。连续 BLOCK 计数(audit_block_state 唯一实现)以本卡最近一条选 choices 的收件箱裁决(owner_inbox.rulings_for_task 同一读取口, 按 decided_at)为界, 只数裁决之后的 BLOCK(裁决时刻 = decided_at; 裁决记录时刻 = 裁决记录 verdict_at, 读不出退回记录 mtime)。最新常规裁决仍是界前 BLOCK(界后 0 次)且下一轮未派 = 推导核可推导: 派下一轮审计(既有派审动词 lybra audit dispatch, 卡号演进 audit_derivation.derive_audit_task_id, 派审人 / 信封 = 驱动方, 派审理由 = dispatch_reason), loop 执行后照常等待 / 拉起新一轮审计; 新一轮再 BLOCK = 界后计数从 1 起, 达 owner_needed_after 再升 Owner(repeated_end_reason)。历史裁决 / 审计卡 / 运行记录不改不删, 不重置历史。无此类裁决 = 行为不变。",
           "choices": ["reaudit"],
           "dispatch_reason": "owner_reaudit: Owner 裁决 {decision_id} 重新派审(上一轮 {blocked_audit_task_id} 裁决 {verdict_id} = BLOCK; 连续 BLOCK 自该裁决起重新计数; 执行产物不变)"
+        }
+      },
+      "non_branch_rework": {
+        "description": "AIPOS-F218 件①(10-23 chris HBJOTA-61V2 / LANTU-VALID2 实撞: 验证卡执行体因开工时无活动 run 交回 BLOCK, 审计 BLOCK; 顾问追加范围 10-23 依据 chris HBLX-31: task_mode=docs + lane.repo=governance_root 的卡审计 FAIL 登记返工后同样被要求卡分支新提交): 登记返工轮后推导核原硬要求「卡分支新提交 + Return 改新 tip」, 而交付主体不是卡分支的卡(固定候选 / 治理根产出清单)无卡分支 → 永停 await_rework。判据按交付主体三态(next_resolver.card_delivery_subject, F210 唯一判定)分支: branch = 行为不变(AIPOS-F155); 非 branch(by_subject 所列: candidate / governance_outputs)且最新常规裁决非 PASS、已针对它登记返工轮(rework_round_for_verdict)时, 「已返工」= 晚于该裁决(verdict_at; 读不出 = 裁决记录 mtime)的新交回产物: 门交回记录(return_id ≠ 裁决 reviewed_return_record_ref 且 returned_at 晚于裁决)或交回报告文件晚于裁决改写且指纹不同于被裁决那份(被裁决那份交回记录绑定的 artifact_subject.<return_fingerprint_key>; 治理根产出清单另比 outputs_digest; 存量记录无报告指纹 = 报告修改时刻按秒严格晚于裁决)。成立 = verdict_staleness 判过期(唯一判据, 推导核与门侧交回自动派审 audit_derivation._reaudit_round 同读), 走 nodes.N4.verdict_stale 同一重交回出口(_derive_stale_re_return → _return_submission_step → 门侧按卡号演进派下一轮审计 R(n+1))。交回报告不合本主体契约 = 产物入口同一校验(validate_task_artifact)→ artifact_invalid 原文点名: candidate = commit_sha / tree_hash / branch 须等于卡面固定候选给值(INGEST_CANDIDATE_MISMATCH); governance_outputs = 产出清单(outputs)合规, 不校验 commit_sha 与卡分支。门交回记录绑定(next_resolver.return_binding_subject)附交回报告指纹: candidate = 候选三键 + 报告指纹(kind = candidate); governance_outputs = 产出清单 + 报告指纹。判定唯一实现 next_resolver.non_branch_re_return; 措辞 = texts(公共)+ by_subject.<kind>(按主体), 占位: {round} 返工轮次, {candidate} {tree_hash} {branch} 固定候选值(仅 candidate), {points} 返工要点, {criteria} 验收(无 = 空), {verdict_id} {verdict} {audit_task_id} 被取代裁决, {reviewed} 其所审交回记录, {evidence} 新交回证据。",
+        "return_fingerprint_key": "return_sha256",
+        "texts": {
+          "await_progress": "等执行体重写交回(晚于裁决的新交回; 交付主体非卡分支, 不要求新提交)",
+          "criteria": "; 验收: {criteria}",
+          "evidence_record": "门交回记录 {return_id} 落于 {at}",
+          "evidence_file": "交回报告 {path} 改于 {at}",
+          "re_return_note": "交付主体非卡分支, 已按返工重写交回 → 重交回派下一轮审计(AIPOS-F218 件①, 声明 transitions nodes.N4.non_branch_rework)",
+          "without_round_note": "已重交回仍无复审轮(AIPOS-F218 件① fail-closed)",
+          "without_round_suggested": "核门侧自动派审(transitions nodes.N4.non_branch_rework; 门须为含 AIPOS-F218 的版本)后重推导; 不重复交回",
+          "reviewed_what": "被取代裁决审的是"
+        },
+        "by_subject": {
+          "candidate": {
+            "await_missing": "第 {round} 轮返工交回(执行体在同一固定候选 {candidate} 上重新执行并重写交回报告; 固定候选卡不建卡分支, 不要求新提交)",
+            "await_suggested": "执行体按第 {round} 轮返工节在同一固定候选 {candidate} 上重新执行并重写交回报告(返工要点: {points}{criteria}): 报告 frontmatter commit_sha / tree_hash / branch 仍照抄开工提示里产品给出的固定候选值, 正文写本轮重新执行的证据; loop 见新交回即重交并派下一轮审计",
+            "stale_head": "裁决 {verdict_id}({verdict}, 审计卡 {audit_task_id})审的是交回 {reviewed}; 执行体已按第 {round} 轮返工在同一固定候选 {candidate} 上重新执行并重写交回({evidence})",
+            "invalid_fix": "执行体把交回报告 frontmatter 改回卡面固定候选给值(commit_sha={candidate}, tree_hash={tree_hash}, branch={branch}; 固定候选卡不建卡分支、候选不变), 产品随后重交回并派复审",
+            "not_updated_note": "交回报告不合固定候选契约, 不得派审(AIPOS-F218 件①)",
+            "re_return_suggested": "重交回(交回报告仍是卡面固定候选, 执行体已在同一候选上重新执行): 门落新 return 记录并按卡号演进声明派下一轮审计"
+          },
+          "governance_outputs": {
+            "await_missing": "第 {round} 轮返工交回(执行体按返工节修正报告落点内的产出并重写交回报告; 只写治理根的卡无卡分支, 不要求新提交)",
+            "await_suggested": "执行体按第 {round} 轮返工节修正报告落点内的产出并重写交回报告(返工要点: {points}{criteria}): 报告 frontmatter outputs 列本轮产出清单(无分支三键), 正文写返工证据; loop 见新交回即重交并派下一轮审计",
+            "stale_head": "裁决 {verdict_id}({verdict}, 审计卡 {audit_task_id})审的是交回 {reviewed}; 执行体已按第 {round} 轮返工修正产出并重写交回({evidence})",
+            "invalid_fix": "执行体按拒因修正产出或交回报告 frontmatter outputs(只写治理根的卡: 产出清单契约, 无分支三键), 产品随后重交回并派复审",
+            "not_updated_note": "交回报告 / 产出清单不合只写治理根契约, 不得派审(AIPOS-F218 件①)",
+            "re_return_suggested": "重交回(只写治理根的卡, 已按返工重写交回): 门落新 return 记录(绑定新产出清单指纹)并按卡号演进声明派下一轮审计"
+          }
+        }
+      },
+      "non_pass_recovery": {
+        "description": "AIPOS-F218 件②: N4 非 PASS(audit_blocked.verdicts 与 FAIL)且未针对该裁决登记返工轮时, 推导核(lybra next)与 loop status 例行修法(verbs.schema routine_rejections.end_reasons.audit_blocked 占位 recovery_choice / rework_command)同给顾问两条可选路: a) 登记返工轮(既有 queue rework, 附 focus_items / acceptance_criteria; 缺省预演)后由执行体重新执行同一卡; b) 仅重审(既有 R(n+1) 派审, next_resolver.reaudit_command)。执行产物本身是 BLOCK 报告(交回报告 frontmatter 键 return_keys 之一的值 ∈ return_values, 或交回摘要去掉强调符后以 summary_prefixes 之一开头, 或裁决原因摘录含 audit_reason_markers 之一)= 推荐 a 并说明 b 会因产物不变再 BLOCK; 否则 BLOCK 推荐 b、FAIL 推荐 a。固定候选卡 FAIL 仍先走 candidate_fail(候选不合格, 来源卡出新候选)。判定唯一实现 next_resolver.non_pass_recovery。rework_command 占位 {prefix}(workspace_config.lybra_command_prefix)/ {task_id} / {actor}(驱动方; 缺 = texts.actor_placeholder)/ {verdict_id}; FAIL 仅重审的派审理由 = fail_dispatch_reason。",
+        "return_keys": ["verdict", "status"],
+        "return_values": ["BLOCK"],
+        "summary_prefixes": ["BLOCK"],
+        "audit_reason_markers": ["未执行", "未运行", "无法运行", "NOT_RUN"],
+        "rework_command": "{prefix} queue rework --task-id {task_id} --actor {actor} --verdict-ref {verdict_id} --focus-items '[\"<返工要点>\"]' --acceptance-criteria '[\"<验收标准>\"]'",
+        "fail_dispatch_reason": "non_pass_reaudit: 重审 {blocked_audit_task_id}(裁决 {verdict_id} = FAIL, 仅重审; 执行产物不变)",
+        "texts": {
+          "paths": "两条可选路: a) 登记返工轮后由执行体重新执行同一卡(缺省预演, 核对后加 --confirm 经门写入; 之后用原命令续跑 loop, 见新交回即重交并派下一轮审计): {rework_command}; b) 仅重审(执行产物不变), 重审命令: {reaudit_command}",
+          "recommend_rework": "推荐 a: 执行产物本身是 BLOCK 报告({why}), 仅重审审的仍是同一份产物, 会因产物不变再 BLOCK(连续 {owner_needed_after} 次升 Owner)",
+          "recommend_reaudit": "推荐 b: 执行产物完整、BLOCK 在审计侧环境 / 资源; 须执行体补做时选 a",
+          "recommend_fail": "推荐 a: 裁决 {verdict} = 执行产物不合格, 仅重审审的仍是同一份产物",
+          "why_return_key": "交回报告 {key}={value}",
+          "why_summary": "交回摘要以 {prefix} 开头",
+          "why_audit_reason": "裁决原因含「{marker}」",
+          "actor_placeholder": "<顾问实例>"
         }
       },
       "verdict_stale": {
