@@ -2391,7 +2391,9 @@ def verdict_staleness(workspace_root: Path, task_id: str, card_frontmatter: dict
     不过期(None): 非代码卡 / 产品仓不可解析 / 无卡分支 / 卡分支已并入 main(finalize 不再要求精确覆盖)/ legacy 裁决 / 非 PASS 族 / 已覆盖。
     返回 {verdict_id, verdict, verdict_at, verdict_commit_sha, audit_task_id, branch, tip, tree_hash, reason}。
     AIPOS-F218 件①: 交付主体非卡分支的卡(non_branch_rework_subject: 固定候选 / 治理根产出清单, F210 唯一判定)无卡分支, 改按
-    _non_branch_verdict_staleness 判(非 PASS 裁决 + 已登记返工轮 + 晚于裁决的新交回 = 过期, 声明 transitions nodes.N4.non_branch_rework)。"""
+    _non_branch_verdict_staleness 判(非 PASS 裁决 + 已登记返工轮 + 晚于裁决的新交回 = 过期, 声明 transitions nodes.N4.non_branch_rework)。
+    AIPOS-F219 件①: 「晚于裁决」一律 = 晚于 rework_return_bound 时间界(max(裁决时刻, 该裁决最新返工轮 created_at)); 卡分支返工另须 tip 提交时刻
+    不早于该界(同一裁决第 2 轮登记后, 第 1 轮期间的分支提交不算)。"""
     non_branch = non_branch_rework_subject(workspace_root, task_id, card_frontmatter)
     if non_branch is not None:
         return _non_branch_verdict_staleness(workspace_root, task_id, card_frontmatter, non_branch)
@@ -2416,6 +2418,13 @@ def verdict_staleness(workspace_root: Path, task_id: str, card_frontmatter: dict
                                                              "verdict_at": check.get("verdict_at")})
         if rework is None or str(covered.get("commit_sha") or "").strip().lower() == str(subject["commit_sha"]).lower():
             return None
+        # AIPOS-F219 件①: 分支前进须晚于「该裁决最新返工轮登记」(rework_return_bound 唯一时间界)——同一裁决第 2 轮登记后, 第 1 轮期间的
+        # 分支提交不算第 2 轮返工; tip 提交时刻读不出 = 不算(fail-closed, 等新提交)
+        bound = rework_return_bound(Path(verdict_file), {**verdict_fm, "verdict_at": verdict_fm.get("verdict_at") or check.get("verdict_at")},
+                                    rework)
+        committed = _commit_moment(_code_repo, str(subject["commit_sha"]))
+        if committed is None or committed < bound["at"].replace(microsecond=0):
+            return None
     return {
         "rework_round": rework,
         "verdict_id": str(check.get("verdict_id") or ""),
@@ -2431,9 +2440,64 @@ def verdict_staleness(workspace_root: Path, task_id: str, card_frontmatter: dict
     }
 
 
+_REWORK_BOUND_TEXTS = ("registered", "fallback", "earlier_ignored")
+
+
+def rework_return_bound_declaration() -> dict[str, Any]:
+    """AIPOS-F219 件①: transitions nodes.N4.rework_return_bound(唯一读取口); 措辞缺 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = _transition_node("N4").get("rework_return_bound")
+    texts = decl.get("texts") if isinstance(decl, dict) else None
+    if not isinstance(texts, dict) or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in _REWORK_BOUND_TEXTS):
+        raise SchemaLoadError(f"transitions.schema.json nodes.N4.rework_return_bound.texts.{list(_REWORK_BOUND_TEXTS)} 未声明齐(AIPOS-F219)")
+    return decl
+
+
+def rework_return_bound(verdict_path: Path, verdict_fm: dict[str, Any], rework: dict[str, Any] | None) -> dict[str, Any]:
+    """AIPOS-F219 件①: 返工重交回时间界唯一实现(声明 transitions nodes.N4.rework_return_bound)= max(裁决时刻, 该裁决最新返工轮 created_at)。
+    裁决时刻 = _verdict_moment(verdict_at; 读不出 = 裁决记录 mtime); rework = rework_round_for_verdict 返回的那一轮(None = 仅裁决时刻, F218 口径);
+    该轮 created_at 缺 / 读不出 = 回落裁决时刻(fallback=True, 等待提示点名)。non_branch_re_return(门交回记录 / 报告文件两路)、
+    verdict_staleness 卡分支分支(tip 提交时刻)、等待提示(_derive_rework_wait)同读, 禁第二份。
+    返回 {at, verdict_moment, round, round_at(datetime|None), raw(created_at 原值), fallback}。"""
+    from tools.aipos_cli.owner_inbox import _parse_utc
+
+    moment = _verdict_moment(Path(verdict_path), verdict_fm)
+    raw = str((rework or {}).get("created_at") or "").strip()
+    round_at = _parse_utc(raw)
+    return {"at": max(moment, round_at) if round_at is not None else moment, "verdict_moment": moment,
+            "round": (rework or {}).get("round"), "round_at": round_at, "raw": raw,
+            "fallback": rework is not None and round_at is None}
+
+
+def rework_bound_note(bound: dict[str, Any]) -> str:
+    """AIPOS-F219 件①: 等待提示里的时间界一句(texts.registered / texts.fallback)。"""
+    texts = rework_return_bound_declaration()["texts"]
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    if bound.get("fallback"):
+        return texts["fallback"].format(round=bound.get("round") or "?", raw=bound.get("raw") or "",
+                                        verdict_at=bound["verdict_moment"].strftime(fmt))
+    return texts["registered"].format(round=bound.get("round") or "?", round_at=bound["at"].strftime(fmt))
+
+
+def _commit_moment(code_repo: Path, sha: str) -> datetime | None:
+    """AIPOS-F219 件①: 提交的 committer 时刻(UTC, 秒); git 读不出 = None(调用方 fail-closed: 不算返工提交)并出声。"""
+    import subprocess
+    import sys
+
+    try:
+        out = subprocess.run(["git", "-C", str(code_repo), "show", "-s", "--format=%ct", sha], capture_output=True, text=True,
+                             check=True, timeout=30).stdout.strip()
+        return datetime.fromtimestamp(int(out), tz=timezone.utc)
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        print(f"Warning: 卡分支提交 {sha[:12]} 提交时刻读不出(不算返工提交, AIPOS-F219): {exc}", file=sys.stderr)
+        return None
+
+
 _NON_BRANCH_COMMON_TEXTS = ("await_progress", "criteria", "evidence_record", "evidence_file", "re_return_note", "without_round_note",
                             "without_round_suggested", "reviewed_what")
-_NON_BRANCH_SUBJECT_TEXTS = ("await_missing", "await_suggested", "stale_head", "invalid_fix", "not_updated_note", "re_return_suggested")
+_NON_BRANCH_SUBJECT_TEXTS = ("await_missing", "await_suggested", "stale_head", "invalid_fix", "not_updated_note", "re_return_suggested",
+                             "reaudit_ref", "reaudit_note")
 
 
 def non_branch_rework_declaration() -> dict[str, Any]:
@@ -2478,17 +2542,19 @@ def _return_record_binding(workspace_root: Path, task_id: str, return_id: str) -
 
 
 def non_branch_re_return(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None, verdict_path: Path,
-                         verdict_fm: dict[str, Any]) -> dict[str, str] | None:
+                         verdict_fm: dict[str, Any], rework: dict[str, Any] | None = None) -> dict[str, str] | None:
     """AIPOS-F218 件①: 交付主体非卡分支的卡(固定候选 / 治理根产出清单)「已按返工重写交回」判据唯一实现(声明 transitions
     nodes.N4.non_branch_rework)——晚于该裁决(verdict_at; 读不出 = 裁决记录 mtime, _verdict_moment 同口径)的新交回产物:
       - record: 门交回记录 return_id ≠ 裁决 reviewed_return_record_ref 且 returned_at 晚于裁决(门已落新交回);
       - file: 交回报告文件(find_return_artifact)晚于裁决改写且指纹不同于被裁决那份——被裁决那份交回记录绑定了报告指纹 = 报告指纹不同
         (治理根产出清单另: 此刻清单 outputs_digest 不同于绑定也算)且修改时刻(按秒)不早于裁决; 存量记录无报告指纹 = 清单指纹不同或报告修改时刻
         (按秒)严格晚于裁决(同一秒不算, 防把被裁决那份误当新交回)。不校验 commit_sha / 卡分支(契约由产物入口按主体校验)。
+    AIPOS-F219 件①: 上文「裁决」时刻一律 = rework_return_bound 时间界(max(裁决时刻, 该裁决最新返工轮 rework 的 created_at)); rework=None =
+    仅裁决时刻(F218 口径, 等待提示据此点名「晚于裁决但早于该轮登记」的旧改写)。
     返回 {source, at, ref, sha256?}; 无 = None。"""
     from tools.aipos_cli.owner_inbox import _parse_utc
 
-    moment = _verdict_moment(Path(verdict_path), verdict_fm)
+    moment = rework_return_bound(Path(verdict_path), verdict_fm, rework)["at"]
     reviewed = str(verdict_fm.get("reviewed_return_record_ref") or "").strip()
     latest = _read_task_records(workspace_root, task_id).get("latest_return") or {}
     latest_id = str(latest.get("return_id") or "").strip()
@@ -2539,7 +2605,7 @@ def _non_branch_verdict_staleness(workspace_root: Path, task_id: str, card_front
     rework = rework_round_for_verdict(card_frontmatter, {**verdict_fm, "verdict_id": verdict_id, "verdict_at": verdict_at})
     if rework is None:
         return None
-    evidence = non_branch_re_return(workspace_root, task_id, card_frontmatter, verdict_path, verdict_fm)
+    evidence = non_branch_re_return(workspace_root, task_id, card_frontmatter, verdict_path, verdict_fm, rework)
     if evidence is None:
         return None
     values: dict[str, Any] = {}
@@ -3180,16 +3246,9 @@ def _derive_verdict_stale(workspace_root: Path, task_id: str, fm: dict[str, Any]
     此处 artifact_invalid 点名原文(loop exit 4), 不派旧 Return 去审; 已重交回但门未派下一轮 = 不可推导(不重复交回)。
     构建唯一实现 _derive_stale_re_return(AIPOS-F114 return_stale 同用)。"""
     state = str(verdict_stale_declaration()["state"])
-    decl = non_branch_rework_declaration()
-    if str(stale.get("subject") or "") in decl["by_subject"]:
+    if str(stale.get("subject") or "") in non_branch_rework_declaration()["by_subject"]:
         # AIPOS-F218 件①: 交付主体非卡分支的卡 = 已按返工重写交回(non_branch_re_return); 说理 / 补法措辞读 transitions nodes.N4.non_branch_rework
-        texts = {**decl["texts"], **decl["by_subject"][str(stale["subject"])]}
-        evidence = stale.get("re_execution") or {}
-        values = {"verdict_id": stale.get("verdict_id"), "verdict": stale.get("verdict"), "audit_task_id": stale.get("audit_task_id") or "?",
-                  "reviewed": stale.get("reviewed_return_record_ref") or "?", "round": (stale.get("rework_round") or {}).get("round") or "?",
-                  "candidate": stale.get("tip") or "?", "tree_hash": stale.get("tree_hash") or "?", "branch": stale.get("branch") or "?",
-                  "evidence": texts["evidence_record" if evidence.get("source") == "record" else "evidence_file"].format(
-                      return_id=evidence.get("ref"), path=evidence.get("ref"), at=evidence.get("at"))}
+        texts, values = non_branch_stale_texts(stale)
         head = texts["stale_head"].format(**values)
         return _derive_stale_re_return(
             workspace_root, task_id, fm, records, stale, claimer=claimer, conn_arg=conn_arg, state=state, stale_key="verdict_stale",
@@ -3211,6 +3270,24 @@ def _derive_verdict_stale(workspace_root: Path, task_id: str, fm: dict[str, Any]
         not_updated_note="Return 未随卡分支更新, 不得用旧 Return 派审(AIPOS-F112 件③)",
         re_return_notes=f"{state}: {head}; 产物已变化须复审 → 重交回派下一轮(AIPOS-F112, 声明 transitions nodes.N4.verdict_stale)",
     )
+
+
+def non_branch_evidence_text(texts: dict[str, str], evidence: dict[str, Any]) -> str:
+    """非卡分支主体返工交回证据一句(non_branch_rework.texts.evidence_record / evidence_file; non_branch_re_return 结果)。"""
+    return texts["evidence_record" if evidence.get("source") == "record" else "evidence_file"].format(
+        return_id=evidence.get("ref"), path=evidence.get("ref"), at=evidence.get("at"))
+
+
+def non_branch_stale_texts(stale: dict[str, Any]) -> tuple[dict[str, str], dict[str, Any]]:
+    """AIPOS-F219 件②: 非卡分支主体裁决过期(_non_branch_verdict_staleness 结果, 带 subject)的措辞(non_branch_rework texts 公共 + by_subject.<kind>)
+    与占位值唯一构建——推导核 verdict_stale 说理(_derive_verdict_stale)与门侧派下一轮审计卡复审说理(audit_derivation.build_derived_audit_task)同读。"""
+    decl = non_branch_rework_declaration()
+    texts = {**decl["texts"], **decl["by_subject"][str(stale["subject"])]}
+    values = {"verdict_id": stale.get("verdict_id"), "verdict": stale.get("verdict"), "audit_task_id": stale.get("audit_task_id") or "?",
+              "reviewed": stale.get("reviewed_return_record_ref") or "?", "round": (stale.get("rework_round") or {}).get("round") or "?",
+              "candidate": stale.get("tip") or "?", "tree_hash": stale.get("tree_hash") or "?", "branch": stale.get("branch") or "?",
+              "evidence": non_branch_evidence_text(texts, stale.get("re_execution") or {})}
+    return texts, values
 
 
 def _derive_return_stale(workspace_root: Path, task_id: str, fm: dict[str, Any], records: dict[str, Any],
@@ -3240,7 +3317,7 @@ def _derive_rework_wait(workspace_root: Path, task_id: str, fm: dict[str, Any], 
     该出口的 artifact_invalid(原文点名)。否则 = 等返工交回: 不可推导但 action await_rework(loop 按执行体产物等待, 与 N1 执行体在干活
     同一等待; 不以 not_derivable 结束, 故不入连败), 等待提示附返工节要点。
     AIPOS-F218 件①: 交付主体非卡分支的卡(non_branch_rework_subject: 固定候选 / 治理根产出清单, F210 唯一判定)无卡分支——verdict_staleness
-    判已按返工重写交回(晚于裁决的新交回)即走同一重交回出口(报告不合本主体契约 = artifact_invalid); 等待提示按主体措辞, 不提卡分支新提交
+    判已按返工重写交回(晚于裁决与该轮登记的新交回, AIPOS-F219 rework_return_bound)即走同一重交回出口(报告不合本主体契约 = artifact_invalid); 等待提示按主体措辞, 不提卡分支新提交
     (transitions nodes.N4.non_branch_rework.by_subject)。"""
     round_num = rework.get("round") or "?"
     focus = [str(x) for x in (rework.get("focus_items") or [])]
@@ -3248,6 +3325,10 @@ def _derive_rework_wait(workspace_root: Path, task_id: str, fm: dict[str, Any], 
     stale = verdict_staleness(workspace_root, task_id, fm)
     points = "; ".join(focus) if focus else "(返工节无具体项)"
     subject = non_branch_rework_subject(workspace_root, task_id, fm)
+    # AIPOS-F219 件①: 等待提示点名时间界(第 n 轮于 <时刻> 登记, 等其后的新交回; rework_return_bound 唯一实现, 与判据同一界)
+    regular = _regular_verdicts(workspace_root, task_id)
+    bound_note = rework_bound_note(rework_return_bound(regular[0][0], regular[0][1], rework)) if regular else ""
+    earlier_note = ""
     if subject is not None:
         if stale is not None and stale.get("rework_round") is not None:
             return _derive_verdict_stale(workspace_root, task_id, fm, records, stale, claimer=claimer, conn_arg=conn_arg)
@@ -3258,6 +3339,11 @@ def _derive_rework_wait(workspace_root: Path, task_id: str, fm: dict[str, Any], 
         missing = texts["await_missing"].format(**values)
         suggested = texts["await_suggested"].format(**values)
         progress = texts["await_progress"].format(**values)
+        # 晚于裁决但早于该轮登记的旧改写(F218 口径会误当本轮交回)= 点名不算(同一判定 non_branch_re_return, 仅以裁决时刻为界)
+        earlier = non_branch_re_return(workspace_root, task_id, fm, regular[0][0], regular[0][1]) if regular else None
+        if earlier is not None:
+            earlier_note = rework_return_bound_declaration()["texts"]["earlier_ignored"].format(
+                evidence=non_branch_evidence_text(texts, earlier), round=round_num)
     else:
         return_path = find_return_artifact(workspace_root, task_id)
         if stale is not None and stale.get("rework_round") is not None and return_path is not None:
@@ -3272,6 +3358,10 @@ def _derive_rework_wait(workspace_root: Path, task_id: str, fm: dict[str, Any], 
                      + (f"; 验收: {criteria}" if criteria else "")
                      + f"): 在卡工作树提交修复 → 重跑定向测试 → 把 Return frontmatter commit_sha / tree_hash 改为卡分支新 tip、"
                        "正文补返工证据; loop 见新交回即重交并派下一轮审计")
+    if bound_note:
+        missing, suggested, progress = f"{missing}; {bound_note}", f"{suggested}; {bound_note}", f"{progress}; {bound_note}"
+    if earlier_note:
+        progress = f"{progress}; {earlier_note}"
     return {
         "task_id": task_id,
         "derivable": False,

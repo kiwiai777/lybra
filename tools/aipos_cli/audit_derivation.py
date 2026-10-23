@@ -756,7 +756,20 @@ def build_derived_audit_task(
     # AIPOS-F210 件②: 锚点一行 = forensic_anchor_ref(与手动派审同一函数, 交付主体三态)
     report_location = render_audit_report_location(repo_root, audit_task_id)
     forensic_anchors = [forensic_anchor_ref(repo_root, source_task_id, source_metadata, audit_task_id)]
-    if reaudit and reaudit.get("kind") == "return_stale":
+    # AIPOS-F219 件②(F218R F-1): 复审说理按交付主体措辞——非卡分支主体(固定候选 / 治理根产出, verdict_staleness 结果带 subject)读
+    # transitions nodes.N4.non_branch_rework.by_subject.<kind>.reaudit_ref / reaudit_note(占位值唯一构建 next_resolver.non_branch_stale_texts);
+    # 卡分支主体措辞不变
+    non_branch_reaudit: tuple[dict[str, str], dict[str, Any]] | None = None
+    if reaudit and reaudit.get("kind") != "return_stale":
+        from tools.aipos_cli.next_resolver import non_branch_rework_declaration, non_branch_stale_texts
+
+        stale = reaudit.get("stale") or {}
+        if str(stale.get("subject") or "") in non_branch_rework_declaration()["by_subject"]:
+            texts, values = non_branch_stale_texts(stale)
+            non_branch_reaudit = texts, {**values, "superseded": str(reaudit.get("superseded_audit_task_id") or "")}
+    if non_branch_reaudit is not None:
+        forensic_anchors.append(non_branch_reaudit[0]["reaudit_ref"].format(**non_branch_reaudit[1]))
+    elif reaudit and reaudit.get("kind") == "return_stale":
         stale = reaudit.get("stale") or {}
         superseded = str(reaudit.get("superseded_audit_task_id") or "")
         forensic_anchors.append(
@@ -789,7 +802,9 @@ def build_derived_audit_task(
     artifact_list = "\n".join(f"- `{ref}`" for ref in artifact_refs) if artifact_refs else "- (see return record)"
     
     reaudit_note = ""
-    if reaudit and reaudit.get("kind") == "return_stale":
+    if non_branch_reaudit is not None:
+        reaudit_note = non_branch_reaudit[0]["reaudit_note"].format(**non_branch_reaudit[1])
+    elif reaudit and reaudit.get("kind") == "return_stale":
         stale = reaudit.get("stale") or {}
         reaudit_note = (
             f"\n## 复审说理(AIPOS-F114 return_stale)\n"
