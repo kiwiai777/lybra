@@ -241,12 +241,14 @@ def test_audit_rule_rendered_in_audit_card_and_kickoff(vrig):
     line = next(ln for ln in card_text.splitlines() if "**FAIL 范围**" in ln)
     _show(f"[审计卡取证锚点 FAIL 范围行] {line}")
     assert rule in line
-    # 审计开工稿交回节: 布局声明 return_fail_scope 紧跟报告必填行, 值 = 同一渲染(被审卡非固定候选 = None, 该行省略)
+    # 审计开工稿交回节: 布局声明 return_fail_scope 在报告必填行之后(紧跟报告落点代码文件规则, F195 顺序不动), 值 = 同一渲染
+    # (被审卡非固定候选 = None, 该行省略)
     from tools.aipos_cli.subagent_kickoff import _fail_scope_rule
 
     kickoff = json.loads((REPO_ROOT / "schema" / "verbs.schema.json").read_text(encoding="utf-8"))["verbs"]["lybra_kickoff"]
     layout = kickoff["layout"]["auditor"]
-    assert layout[layout.index("report_field_lines") + 1] == "return_fail_scope" and kickoff["texts"]["return_fail_scope"] == "- {fail_scope_rule}"
+    assert layout.index("return_fail_scope") == layout.index("return_code_files") + 1 == layout.index("report_field_lines") + 2
+    assert kickoff["texts"]["return_fail_scope"] == "- {fail_scope_rule}"
     val_path, _q = nr._find_task_in_queue(rig.gov, VAL)
     src_path, _q = nr._find_task_in_queue(rig.gov, f218.SRC)
     _show(f"[审计开工稿交回节 fail_scope 行] - {_fail_scope_rule(val_path)}")
