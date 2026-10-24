@@ -33,7 +33,7 @@ reaudit_hint: 此前「等修复」类裁决(after_choices)之后运行记录部
 
 AIPOS-F225(Owner 介入分级): 三档声明唯一读取口 tier_declaration(verbs.schema lybra_owner_inbox.tiers, 加载守卫: loop 可判 owner_needed 的每个事由与
 收件箱每个类别都须归档, 缺 = SchemaLoadError); loop 下一动作按档归类 apply_owner_tier(loop status 每个运行同调); 收件箱 items 只列第一档类别, 第二档
-进 notices; 第二档自动放行记录写读口 write_auto_release / auto_releases(既有事件记录), 撤回 = auto_released 事项选 revoke_auto, 卡停住判定
+进 notices; 第二档自动放行记录写读口 write_auto_release / auto_release_records(既有事件记录), 撤回 = auto_released 事项选 revoke_auto, 卡停住判定
 auto_release_stop; 顾问升 Owner 的第一档事由校验 require_owner_reason(loop note / needs_owner 卡同读)。
 
 AIPOS-F175 件③: owner_check 类别 = 路线图推导(roadmap_drift.roadmap_status, 唯一实现)里验证状态 = 待 Owner 抽查的标准, 附产物 / 步骤 /
@@ -302,7 +302,7 @@ def auto_release_declaration(decl: dict[str, Any] | None = None) -> dict[str, An
     return tier_declaration(decl)["tier2"]["auto_release"]
 
 
-def auto_releases(governance_root: Path, task_id: str | None = None) -> list[dict[str, Any]]:
+def auto_release_records(governance_root: Path, task_id: str | None = None) -> list[dict[str, Any]]:
     """本卡(缺省 = 全项目)第二档自动放行记录(records/events/<卡>/<event_type>_*.md), 按 released_at 旧→新; 每条 = frontmatter + _path。
     读不出 = FrontmatterReadError 向上(fail-closed)。"""
     from tools.aipos_cli.frontmatter import require_frontmatter
@@ -324,7 +324,7 @@ def auto_releases(governance_root: Path, task_id: str | None = None) -> list[dic
 def planned_auto_release_id(governance_root: Path, task_id: str, kind: str) -> str:
     """下一条自动放行记录 ID(声明 id_template; seq = 本卡同 kind 已有记录数 + 1)。"""
     spec = auto_release_declaration()
-    seq = 1 + sum(1 for r in auto_releases(Path(governance_root), task_id) if str(r.get("kind") or "") == kind)
+    seq = 1 + sum(1 for r in auto_release_records(Path(governance_root), task_id) if str(r.get("kind") or "") == kind)
     return _fmt(spec["id_template"], "tiers.tier2.auto_release.id_template", task_id=task_id, kind=kind, seq=seq)
 
 
@@ -368,7 +368,7 @@ def revoked_auto_release_ids(governance_root: Path, task_id: str) -> set[str]:
     decl = inbox_declaration()
     revoke = str(auto_release_declaration(decl)["revoke_option"])
     out: set[str] = set()
-    for rec in auto_releases(Path(governance_root), task_id):
+    for rec in auto_release_records(Path(governance_root), task_id):
         rid = str(rec.get("auto_release_id") or "")
         ruling = auto_release_ruling(Path(governance_root), task_id, rid, decl) if rid else None
         if ruling is not None and str(ruling.get("allowed_next_action") or "") == revoke:
@@ -383,7 +383,7 @@ def auto_release_stop(governance_root: Path, task_id: str) -> dict[str, Any] | N
     spec = auto_release_declaration(decl)
     revoke = str(spec["revoke_option"])
     latest: dict[str, Any] | None = None
-    for rec in auto_releases(Path(governance_root), task_id):
+    for rec in auto_release_records(Path(governance_root), task_id):
         rid = str(rec.get("auto_release_id") or "")
         ruling = auto_release_ruling(Path(governance_root), task_id, rid, decl) if rid else None
         if ruling is not None and str(ruling.get("allowed_next_action") or "") == revoke:
@@ -404,7 +404,7 @@ def _auto_release_items(root: Path, project: str, decl: dict[str, Any], home_roo
 
     cat = decl["categories"]["auto_released"]
     out: list[dict[str, Any]] = []
-    for rec in auto_releases(root):
+    for rec in auto_release_records(root):
         task_id, rid = str(rec.get("task_id") or ""), str(rec.get("auto_release_id") or "")
         if not task_id or not rid:
             errors.append({"project": project, "source": f"自动放行记录 {rec.get('_path')}", "error": "缺 task_id / auto_release_id"})

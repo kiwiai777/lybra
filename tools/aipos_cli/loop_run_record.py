@@ -1015,14 +1015,14 @@ def loop_status(governance_root: Path, task_id: str | None = None, *, now: datet
         report = _loop_status(Path(governance_root), task_id, now=now, contract=contract, lane=lane, include_frozen=include_frozen)
         if task_id:  # AIPOS-F162 件②: 本卡补充审计链路(唯一实现 audit_derivation.supplementary_audit_chain; 同一作用域, 不另扫队列)
             from tools.aipos_cli.audit_derivation import supplementary_audit_chain
-            from tools.aipos_cli.owner_inbox import auto_releases, revoked_auto_release_ids
+            from tools.aipos_cli.owner_inbox import auto_release_records, revoked_auto_release_ids
 
             report["supplementary_audit"] = supplementary_audit_chain(Path(governance_root), task_id)
-            # AIPOS-F225 件②: 本卡第二档自动放行记录(读口唯一 owner_inbox.auto_releases; 已撤回标 revoked)
+            # AIPOS-F225 件②: 本卡第二档自动放行记录(读口唯一 owner_inbox.auto_release_records; 已撤回标 revoked)
             revoked = revoked_auto_release_ids(Path(governance_root), task_id)
-            report["auto_releases"] = [{k: r.get(k) for k in ("auto_release_id", "kind", "released_at", "basis", "round", "verdict_ref", "_path")}
+            report["auto_release_records"] = [{k: r.get(k) for k in ("auto_release_id", "kind", "released_at", "basis", "round", "verdict_ref", "_path")}
                                        | {"revoked": str(r.get("auto_release_id") or "") in revoked}
-                                       for r in auto_releases(Path(governance_root), task_id)]
+                                       for r in auto_release_records(Path(governance_root), task_id)]
         return report
 
 
@@ -1966,7 +1966,7 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
         out.append(f"(AIPOS-F152) {report['deploy_changed']['message']}")
     for row in report.get("post_merge_regression_unfinished") or []:  # AIPOS-F166 件③
         out.append(row["line"])
-    for rel in report.get("auto_releases") or []:  # AIPOS-F225 件②: 第二档自动放行(Owner 可在收件箱「已自动放行」撤回)
+    for rel in report.get("auto_release_records") or []:  # AIPOS-F225 件②: 第二档自动放行(Owner 可在收件箱「已自动放行」撤回)
         out.append(f"第二档自动放行 {rel['auto_release_id']}({rel['kind']} @ {rel['released_at']})" + ("[已被 Owner 撤回]" if rel["revoked"] else "")
                    + f": {rel['basis']}")
     if report.get("supplementary_audit"):  # AIPOS-F162 件②: 已结案卡补充审计链路(唯一渲染 audit_derivation.render_supplementary_chain)

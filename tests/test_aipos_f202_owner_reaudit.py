@@ -127,10 +127,21 @@ def _no_auto_reaudit(monkeypatch) -> None:
     monkeypatch.setattr(nr, "auto_reaudit_check", no_auto)
 
 
-def _escalate(rig) -> None:
-    """AIPOS-F225: 第二档未自动放行 = 归顾问; 顾问修不动且确属第一档(改验收 / 换审计环境 = rescope)才带事由升 Owner。"""
-    rc, out, err = _cli(["loop", "note", "--task-id", TASK, "--ask", "审计连续 BLOCK, 环境修不动: 请定修环境方案 / 改卡面验收",
-                         "--owner-reason", "rescope", "--workspace-root", str(rig.gov), "--actor", DRIVER, "--confirm"])
+def _escalate(rig, monkeypatch=None) -> None:
+    """AIPOS-F225: 第二档未自动放行 = 归顾问; 顾问修不动且确属第一档(改验收 / 换审计环境 = rescope)才带事由升 Owner。
+    monkeypatch 给出 = 补写时刻取 2 秒后(秒级时刻: 与上一条 Owner 裁决同秒补写会被 F222 判作「补写后已有裁决 = 已回应」而拒写)。"""
+    import contextlib
+    from datetime import timedelta
+
+    from tools.aipos_cli import loop_run_record as lrr
+    from tools.aipos_cli.clock import utc_now
+
+    later = utc_now() + timedelta(seconds=2)
+    with (monkeypatch.context() if monkeypatch is not None else contextlib.nullcontext()) as m:
+        if m is not None:
+            m.setattr(lrr, "utc_now", lambda: later)
+        rc, out, err = _cli(["loop", "note", "--task-id", TASK, "--ask", "审计连续 BLOCK, 环境修不动: 请定修环境方案 / 改卡面验收",
+                             "--owner-reason", "rescope", "--workspace-root", str(rig.gov), "--actor", DRIVER, "--confirm"])
     assert rc == 0, out + err
 
 
@@ -160,7 +171,7 @@ def test_reaudit_entry_end_to_end(rig, monkeypatch):
     assert res.reason == "audit_blocked_repeated" and res.exit_code == exit_code_for(load_loop_contract(), "not_derivable"), text
 
     # 件①: 新事项提示「可选重新派审」(上次裁决 wait_product, 部署提交已变; AIPOS-F225: 顾问再次带事由升 Owner)
-    _escalate(rig)
+    _escalate(rig, monkeypatch)
     item2 = _inbox_item(rig)
     assert item2["item_id"] != item["item_id"]
     text_inbox = _inbox_text(rig)

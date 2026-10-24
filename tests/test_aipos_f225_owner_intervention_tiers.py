@@ -62,7 +62,7 @@ def _publish_baseline(gov: Path, task_id: str, card_path: Path) -> str:
 
 
 def _auto_records(gov: Path, task_id: str) -> list[dict]:
-    return oi.auto_releases(gov, task_id)
+    return oi.auto_release_records(gov, task_id)
 
 
 # ===========================================================================

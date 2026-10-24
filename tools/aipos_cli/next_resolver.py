@@ -3685,10 +3685,10 @@ def owner_reaudit_ruling(workspace_root: Path, task_id: str) -> dict[str, Any] |
     """AIPOS-F202: the card's latest Owner inbox ruling whose choice is in nodes.N4.audit_blocked.owner_reaudit.choices
     (owner_inbox.rulings_for_task, the inbox's own reader; ordered by decided_at) or None. A record that cannot be read
     = FrontmatterReadError upward (fail-closed); a picked ruling without a readable decided_at = FrontmatterReadError naming it.
-    AIPOS-F225 item 2: a non-revoked tier-2 auto re-audit record (owner_inbox.auto_releases, kind = nodes.N4.audit_blocked.auto_reaudit.kind)
+    AIPOS-F225 item 2: a non-revoked tier-2 auto re-audit record (owner_inbox.auto_release_records, kind = nodes.N4.audit_blocked.auto_reaudit.kind)
     is a boundary of the same kind; the later of the two wins (auto = True, choice = auto_reaudit.choice)."""
     from tools.aipos_cli.frontmatter import FrontmatterReadError
-    from tools.aipos_cli.owner_inbox import _parse_utc, auto_releases, revoked_auto_release_ids, rulings_for_task
+    from tools.aipos_cli.owner_inbox import _parse_utc, auto_release_records, revoked_auto_release_ids, rulings_for_task
 
     choices = {str(c) for c in audit_blocked_declaration()["owner_reaudit"]["choices"]}
     picked = [r for r in rulings_for_task(Path(workspace_root), task_id) if str(r.get("allowed_next_action") or "") in choices]
@@ -3702,7 +3702,7 @@ def owner_reaudit_ruling(workspace_root: Path, task_id: str) -> dict[str, Any] |
                            "decided_at": str(ruling.get("decided_at") or ""), "decided": decided, "record": ruling.get("_path"),
                            "owner_words": ruling.get("owner_words"), "relayed_by": ruling.get("relayed_by"), "auto": False})
     auto_decl = auto_reaudit_declaration()
-    autos = [r for r in auto_releases(Path(workspace_root), task_id) if str(r.get("kind") or "") == str(auto_decl["kind"])]
+    autos = [r for r in auto_release_records(Path(workspace_root), task_id) if str(r.get("kind") or "") == str(auto_decl["kind"])]
     if autos:
         revoked = revoked_auto_release_ids(Path(workspace_root), task_id)
         live = [r for r in autos if str(r.get("auto_release_id") or "") not in revoked]
@@ -3770,7 +3770,7 @@ def auto_reaudit_check(workspace_root: Path, task_id: str, *, env: dict[str, Any
     同一 BLOCK 裁决已有自动放行记录: 已撤回 = revoked(卡停住另判), 未撤回 = 不再自动(already)。记录读不出 = 向上。"""
     from tools.aipos_cli.loop_driver import load_loop_contract
     from tools.aipos_cli.loop_run_record import _run_files, loop_runs_dir, read_run, run_record_declaration
-    from tools.aipos_cli.owner_inbox import _parse_utc, auto_releases, revoked_auto_release_ids, tier_declaration
+    from tools.aipos_cli.owner_inbox import _parse_utc, auto_release_records, revoked_auto_release_ids, tier_declaration
 
     decl = auto_reaudit_declaration()
     texts = decl["texts"]
@@ -3781,7 +3781,7 @@ def auto_reaudit_check(workspace_root: Path, task_id: str, *, env: dict[str, Any
         out["why"] = "not_repeated"
         return out
     out.update({"verdict_id": state["verdict_id"], "audit_task_id": state["audit_task_id"]})
-    prior = [r for r in auto_releases(Path(workspace_root), task_id)
+    prior = [r for r in auto_release_records(Path(workspace_root), task_id)
              if str(r.get("kind") or "") == str(decl["kind"]) and str(r.get("verdict_ref") or "") == str(state["verdict_id"])]
     if prior:
         rid = str(prior[-1].get("auto_release_id") or "")
