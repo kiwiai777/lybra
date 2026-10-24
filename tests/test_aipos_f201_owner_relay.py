@@ -231,7 +231,9 @@ def test_item1_release_option_choice_message_and_decide_lands(board):
     choices = re.findall(r'<details class="rp-cmd ib-choice" data-choice="(\w+)"><summary class="rp-cmd-label">(.*?)</summary>'
                          r'<pre class="upgrade-lines ib-choice-text">(.*?)</pre></details>', section, re.S)
     assert status == 200 and [c[0] for c in choices] == ["release", "withdraw", "freeze_legacy", "acknowledge"]
-    assert "<form" not in section and "<button" not in section
+    # AIPOS-F226: Owner session = one ruling button per option (write exception 3); the messages are folded as the fallback, no form
+    assert "<form" not in section and re.findall(r'data-ib-choice="(\w+)"', section) == [c[0] for c in choices]
+    assert '<details class="ib-fallback">' in section
     summary, script = html.unescape(choices[0][1]), html.unescape(choices[0][2])
     _show(f"[件①·看板「同意放行」话术原文] {summary}\n{script}")
     assert summary == f"选「放行继续(解除 needs_owner, 按现状推进)」→ 给 {ADV_OTA} 的话术"
