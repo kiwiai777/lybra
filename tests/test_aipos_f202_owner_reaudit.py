@@ -16,6 +16,7 @@ audit_blocked_repeated exit 4——连续 BLOCK 计数无视 Owner 裁决, 收�
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import shlex
@@ -127,10 +128,23 @@ def _no_auto_reaudit(monkeypatch) -> None:
     monkeypatch.setattr(nr, "auto_reaudit_check", no_auto)
 
 
+@contextlib.contextmanager
+def _verdicts_later(monkeypatch, seconds: int):
+    """门侧裁决写入时刻(board_adapter.iso_z)取 seconds 秒后: 连续 BLOCK 计数按秒级时刻比「裁决之后」, 进程内靶场一秒内可走完
+    「Owner 裁决 → 派审 → 新一轮 BLOCK」, 同秒会被判作界前(F202 计数口径); 夹具让新裁决确定落在后一秒。"""
+    from datetime import timedelta
+
+    from tools.aipos_cli import board_adapter
+    from tools.aipos_cli.clock import iso_z, utc_now
+
+    with monkeypatch.context() as m:
+        m.setattr(board_adapter, "iso_z", lambda moment=None: iso_z((moment or utc_now()) + timedelta(seconds=seconds)))
+        yield
+
+
 def _escalate(rig, monkeypatch=None) -> None:
     """AIPOS-F225: 第二档未自动放行 = 归顾问; 顾问修不动且确属第一档(改验收 / 换审计环境 = rescope)才带事由升 Owner。
     monkeypatch 给出 = 补写时刻取 2 秒后(秒级时刻: 与上一条 Owner 裁决同秒补写会被 F222 判作「补写后已有裁决 = 已回应」而拒写)。"""
-    import contextlib
     from datetime import timedelta
 
     from tools.aipos_cli import loop_run_record as lrr
@@ -216,7 +230,8 @@ def test_reaudit_entry_end_to_end(rig, monkeypatch):
     assert d["audit_blocked"]["consecutive"] == 0 and d["audit_blocked"]["consecutive_total"] == 2
 
     # 原命令重跑 loop → 派生 R3 并照常拉起审计; R3 再 BLOCK 1 次 = 不升(audit_blocked 例行修环境)
-    res, text = _loop(rig, _block_watch(rig, {f"{TASK}R3": "BLOCK"}), COMMIT_NEW)
+    with _verdicts_later(monkeypatch, 3):  # 秒级时刻: 新一轮裁决须晚于 reaudit 裁决(同秒 = 不计「界后」), 夹具钉死先后
+        res, text = _loop(rig, _block_watch(rig, {f"{TASK}R3": "BLOCK"}), COMMIT_NEW)
     _show(f"---- ② 续跑 loop(派 R3, R3 BLOCK 1 次): exit {res.exit_code} reason={res.reason} ----\n{_quiet(text)}")
     assert f"run dispatch @ audit_verdict/claimed ({TASK})" in text and f"--audit-task-id {TASK}R3" in text, text
     assert res.reason == "audit_blocked" and "连续第" not in text, text
@@ -230,7 +245,8 @@ def test_reaudit_entry_end_to_end(rig, monkeypatch):
     assert f"--audit-task-id {TASK}R4" in reaudit, reaudit
     rc, out, err = _cli(shlex.split(reaudit.split(": ", 1)[1])[1:])
     assert rc == 0, out + err
-    res, text = _loop(rig, _block_watch(rig, {f"{TASK}R4": "BLOCK"}), COMMIT_NEW)
+    with _verdicts_later(monkeypatch, 6):
+        res, text = _loop(rig, _block_watch(rig, {f"{TASK}R4": "BLOCK"}), COMMIT_NEW)
     _show(f"---- ② R4 再 BLOCK(界后连续 2 次): exit {res.exit_code} reason={res.reason} ----\n{_quiet(text)}")
     assert res.reason == "audit_blocked_repeated" and "连续第 2 次" in text, text
     assert nr.audit_block_state(rig.gov, TASK)["consecutive_total"] == 4

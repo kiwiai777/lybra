@@ -502,16 +502,21 @@ def test_item2_write_path_declared_and_single_route():
 def test_item3_inbox_skips_superseded_and_points_to_board(board):
     rc, text = _cli("owner", "inbox", "--home-root", str(board["home"]), "--json")
     data = json.loads(text)
-    env_items = [i for i in data["items"] if i["category"] == "envelope_warning"]
+    # AIPOS-F225: 信封将尽 = 第二档告知(notices, 不计待定数; 仍可裁决, 裁决行仍指向看板信封页)
+    assert not [i for i in data["items"] if i["category"] == "envelope_warning"]
+    env_items = [i for i in data["notices"] if i["category"] == "envelope_warning"]
     _show("[件③·收件箱信封项] " + json.dumps([(i["project"], i["policy_id"], i["ask"]) for i in env_items], ensure_ascii=False))
     assert rc == 0 and [i["policy_id"] for i in env_items] == ["pol_one_audit_1"], "被接替的 pol_one_loop_3 不再预警"
     rc, plain = _cli("owner", "inbox", "--home-root", str(board["home"]))
-    block = plain[plain.index("信封 pol_one_audit_1"):]
-    decide = next(ln for ln in block.splitlines() if ln.strip().startswith("裁决:"))
+    assert "信封 pol_one_audit_1" in plain.split("第二档 · 已自动放行 / 告知", 1)[1]
+    decide = env_items[0]["decide_line"]
     _show(f"[件③·收件箱裁决行原文] {decide.strip()}")
     assert f"/owner/envelopes?project={P1}#pol_one_audit_1" in decide and "lybra owner decide --item" in decide
     status, page = _request(board, "/owner/inbox")
-    assert status == 200 and f'href="/owner/envelopes?project={P1}#pol_one_audit_1"' in page
+    # AIPOS-F225: 第二档不进看板收件箱待决项(信封页照常展示预警; 收件箱看板「已自动放行 / 告知」栏归 AIPOS-F226)
+    assert status == 200 and f'href="/owner/envelopes?project={P1}#pol_one_audit_1"' not in page
+    status, envelopes = _request(board, f"/owner/envelopes?project={P1}")
+    assert status == 200 and "pol_one_audit_1" in envelopes
     # loop status 预警(F166)同读: 运行所用信封被接替 = 不预警; 当前在用且达阈值 = 照常预警
     from tools.aipos_cli.loop_run_record import envelope_warning_view
 
