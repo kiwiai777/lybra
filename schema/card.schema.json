@@ -245,10 +245,11 @@
     "audit_runtime_evidence": {
       "type": "object",
       "required": false,
-      "description": "AIPOS-F162 件①: 本卡审计须在审计自身分配工作树实际运行的声明(运行证据要求的唯一卡面声明字段; 缺省 = 不要求, 行为不变)。形 {required: true|false, commands: [命令串, …]}; commands 可用占位 {worktree}(审计分配工作树)/{commit_sha}/{tree_hash}(被审分支 tip)。AIPOS-F199: 交付主体为固定候选的卡(validation 等, enums.schema task_mode.candidate_subject)审计不建工作树, 占位改为 {run_dir}(审计实例自己的验证根 run 目录)/{src_dir}(本 run 送达的候选源码)/{candidate}/{candidate_tree}, 旧占位起草即拒并给迁移提示(transitions runtime_evidence.candidate_subject)。声明 required=true 时, 审计报告 PASS/PASS_WITH_NOTES 须带结构化「独立运行证据」节, 门侧裁决写入唯一口逐条核对(AIPOS-F163: ingest 与手敲 audit-verdict --confirm 等一切提交路径同核), 缺 = 拒收 RUNTIME_EVIDENCE_MISSING(判据与证据节格式唯一声明: transitions.schema artifact_ingest.verdict.runtime_evidence; 唯一实现 board_adapter.runtime_evidence_check)。补充审计卡可自带本字段(audit dispatch --supplementary --runtime-evidence-command), 优先于被审卡声明。出卡 draft create 原样透传。",
+      "description": "AIPOS-F162 件①: 本卡审计须在审计自身分配工作树实际运行的声明(运行证据要求的唯一卡面声明字段; 缺省 = 不要求, 行为不变)。形 {required: true|false, commands: [命令串, …]}; commands 可用占位 {worktree}(审计分配工作树)/{commit_sha}/{tree_hash}(被审分支 tip)。AIPOS-F199: 交付主体为固定候选的卡(validation 等, enums.schema task_mode.candidate_subject)审计不建工作树, 占位改为 {run_dir}(审计实例自己的验证根 run 目录)/{src_dir}(本 run 送达的候选源码)/{candidate}/{candidate_tree}, 旧占位起草即拒并给迁移提示(transitions runtime_evidence.candidate_subject)。声明 required=true 时, 审计报告 PASS/PASS_WITH_NOTES 须带结构化「独立运行证据」节, 门侧裁决写入唯一口逐条核对(AIPOS-F163: ingest 与手敲 audit-verdict --confirm 等一切提交路径同核), 缺 = 拒收 RUNTIME_EVIDENCE_MISSING(判据与证据节格式唯一声明: transitions.schema artifact_ingest.verdict.runtime_evidence; 唯一实现 board_adapter.runtime_evidence_check)。补充审计卡可自带本字段(audit dispatch --supplementary --runtime-evidence-command), 优先于被审卡声明。出卡 draft create 原样透传。AIPOS-F223: 可选 host = 运行证据命令的执行主机(主机标签, 同 project.json validation_roots 声明的 host; 多主机验证如 dev 编译核包 + Mac 跑界面时写明): 固定候选卡审计按该主机从本审计卡本实例的有效验证根声明里选 run(唯一实现 validation_root.select_evidence_declaration, 开工稿 / 派审步骤 / 裁决入口同读); 缺省 = 只有一个有效声明时照旧, 多个 = 禁任取(VR_EVIDENCE_HOST_AMBIGUOUS)。已认领卡补 / 改 host 经 `queue amend --restricted`(restricted_amend.claimed_card_subfields)。",
       "shape": {
         "required": "boolean (true = 审计 PASS 类裁决须附独立运行证据)",
-        "commands": "array of string (须逐条有运行记录的验证命令; 可空 = 只要求证据节存在且至少一条运行记录)"
+        "commands": "array of string (须逐条有运行记录的验证命令; 可空 = 只要求证据节存在且至少一条运行记录)",
+        "host": "string, 可选 (AIPOS-F223: 运行证据命令的执行主机标签; 缺省 = 不指定)"
       }
     },
     "advisor_notice": {
@@ -1236,7 +1237,11 @@
       "resources",
       "validation_source_task",
       "validation_candidate"
-    ]
+    ],
+    "claimed_card_subfields": {
+      "description": "AIPOS-F223 件②: claimed 卡受限 amend 可改的「字段 → 子键」清单(该字段只许改所列子键, 其余子键须与卡面原值相同; 不进 claimed_card_fields 全集)。audit_runtime_evidence.host = 在途验证卡补声明运行证据执行主机(不改命令与 required, 不改验收); 判据唯一实现 artifact_ingest.runtime_evidence_amend_problems(`lybra queue amend` 同调, 形校验同出卡 parse_runtime_evidence_declaration)。",
+      "audit_runtime_evidence": ["host"]
+    }
   },
   "roadmap_link": {
     "description": "AIPOS-F171 件②(Owner 10-16: 游离卡只警告不拒): 卡面挂接路线图的唯一声明。字段 = fields.milestone / fields.criteria; 判定唯一实现 roadmap.card_link_status(状态: no_roadmap 项目未声明路线图 / linked 已挂 / unlinked 游离 / invalid 引用不存在或不合; F172 偏差推导复用同一函数), 出卡与 amend 校验 roadmap.link_problems(draft_validator.validate_draft_metadata 与 board_adapter.amend_task 同调)。只改挂接字段的 amend(amendments 键 ⊆ fields)在 amend_states 内任一队列状态均允许(老卡回挂; 原 amend 只许 pending), 其余字段照旧。",

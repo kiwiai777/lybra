@@ -893,9 +893,15 @@ def parse_runtime_evidence_declaration(raw: Any, *, source: str = "card") -> dic
     key = str(runtime_evidence_declaration()["card_field"])
     if not isinstance(raw, dict):
         raise RuntimeEvidenceDeclarationError(f"{key} 须为对象 {{required: true|false, commands: [...]}}, 实为 {type(raw).__name__}")
-    unknown = sorted(set(raw) - {"required", "commands"})
+    unknown = sorted(set(raw) - {"required", "commands", "host"})
     if unknown:
-        raise RuntimeEvidenceDeclarationError(f"{key} 含未声明的键 {unknown}(只认 required / commands)")
+        raise RuntimeEvidenceDeclarationError(f"{key} 含未声明的键 {unknown}(只认 required / commands / host)")
+    host = raw.get("host")  # AIPOS-F223 件①: 可选执行主机(主机标签形 = 验证根声明 host 同一形校验 validation_root.is_host_label; 缺省 = 不指定)
+    from tools.aipos_cli.validation_root import is_host_label
+
+    if host is not None and (not isinstance(host, str) or not is_host_label(host.strip())):
+        raise RuntimeEvidenceDeclarationError(f"{key}.host 须为主机标签(字母数字开头, 只含字母数字 . _ -, 至多 63 字符; 同 project.json "
+                                              f"validation_roots 声明的 host), 实为 {host!r}")
     required = raw.get("required")
     if not isinstance(required, bool):
         raise RuntimeEvidenceDeclarationError(f"{key}.required 须为布尔 true/false, 实为 {required!r}")
@@ -906,7 +912,43 @@ def parse_runtime_evidence_declaration(raw: Any, *, source: str = "card") -> dic
         raise RuntimeEvidenceDeclarationError(f"{key}.commands 须为非空命令串列表, 实为 {commands!r}")
     if not required:
         return None
-    return {"commands": [c.strip() for c in commands], "source": source}
+    return {"commands": [c.strip() for c in commands], "source": source, "host": host.strip() if isinstance(host, str) else None,
+            "declaration": dict(raw)}
+
+
+def runtime_evidence_amend_problems(current: Any, new: Any, *, claimed: bool) -> list[str]:
+    """AIPOS-F223 件②: queue amend 改卡面 audit_runtime_evidence 的判据(唯一实现; `lybra queue amend` 调用)。新值形校验同出卡
+    (parse_runtime_evidence_declaration); claimed 卡(--restricted)只许改 card.schema restricted_amend.claimed_card_subfields 所列子键,
+    其余子键须与卡面原值相同(不改命令 / required = 不改验收)。返回拒因原文(空 = 通过)。"""
+    key = str(runtime_evidence_declaration()["card_field"])
+    try:
+        parse_runtime_evidence_declaration(new)
+    except RuntimeEvidenceDeclarationError as exc:
+        return [f"{key} 新值形不合: {exc}"]
+    if not claimed:
+        return []
+    allowed = set(restricted_amend_subfields().get(key) or [])
+    before = current if isinstance(current, dict) else {}
+    changed = sorted(k for k in set(before) | set(new) if before.get(k) != new.get(k))
+    illegal = [k for k in changed if k not in allowed]
+    if illegal:
+        return [f"已认领卡受限 amend 只许改 {key} 的子键 {sorted(allowed)}(card.schema restricted_amend.claimed_card_subfields), "
+                f"实改了 {illegal}; 命令 / required 属验收, 在途不改(须改 = 走返工轮或撤卡重发)"]
+    return []
+
+
+def restricted_amend_subfields() -> dict[str, list[str]]:
+    """card.schema restricted_amend.claimed_card_subfields(字段 → 可改子键)唯一读取口。缺 = {}(行为不变: 无字段可按子键受限 amend)。
+    形不合 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    raw = (load_schema("card").get("restricted_amend") or {}).get("claimed_card_subfields")
+    if raw is None:
+        return {}
+    out = {k: v for k, v in raw.items() if k != "description"} if isinstance(raw, dict) else None
+    if out is None or any(not isinstance(v, list) or not v or any(not isinstance(s, str) or not s for s in v) for v in out.values()):
+        raise SchemaLoadError("card.schema.json restricted_amend.claimed_card_subfields 须为 {字段: [子键, …]}")
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1002,6 +1044,13 @@ def check_runtime_evidence_declaration(raw: Any, *, governance_root: Path | str,
         except (OSError, ValueError, SchemaLoadError) as exc:
             basis = f"审计工位 {audit_instance} 位置读取失败({exc}), 按治理根所在机核"
     remote = bool(location.get("found")) and location.get("transport") == "remote"
+    declared_host = str(requirement.get("host") or "")
+    if declared_host:  # AIPOS-F223: 卡面声明了执行主机 = 按该主机判(非本机 = 不在本机核, 只给未核提示)
+        from tools.aipos_cli.validation_root import is_local_host
+
+        remote = not is_local_host(declared_host)
+        location = {**location, "host": declared_host}
+        basis = f"卡面 {decl['card_field']}.host={declared_host}"
     if not basis:
         basis = (f"审计工位 {audit_instance} 在本机" if location.get("found") else
                  f"审计工位{(' ' + str(audit_instance) + ' ') if audit_instance else ''}位置定位不到"
@@ -1110,11 +1159,19 @@ def render_candidate_evidence_steps(governance_root: Path | str, *, audit_task_i
     if subject is None:
         return []
     decl = runtime_evidence_candidate_declaration()
+    # AIPOS-F223 件①: run 选择按卡面执行主机(requirement.host; 唯一实现 validation_root.select_evidence_declaration, 裁决入口同读)
+    evidence_card = audit_task_id if (requirement or {}).get("source") == "audit_card" else reviewed_task_id
     values = candidate_evidence_values(governance_root, audit_task_id=audit_task_id, audit_instance=str(audit_instance or ""),
-                                       candidate=subject["commit_sha"], candidate_tree=subject["tree_hash"])
+                                       candidate=subject["commit_sha"], candidate_tree=subject["tree_hash"], requirement=requirement,
+                                       evidence_card=evidence_card)
+    if values.get("host_refusal"):  # 选不出 run = 拒因一行(不渲染任何 run 命令; 裁决入口同判据拒)
+        return [str(decl["steps_title"]), str(values["host_refusal"]),
+                *(f"   ⚠ {p}" for p in runtime_evidence_legacy_problems(requirement, reviewed_task_id, reviewed_fm))]
     values["heading"] = str(runtime_evidence_declaration()["section_heading"])
     known = {k: v for k, v in values.items() if not str(v).startswith("<")}
     lines = [str(decl["steps_title"])]
+    if values.get("host_note"):
+        lines.append(str(values["host_note"]))
     after = decl.get("commands_after_step")
     for index, step in enumerate(decl["steps"], 1):
         lines.append(str(step).format(**values))
