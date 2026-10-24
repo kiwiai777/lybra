@@ -2314,7 +2314,7 @@ def build_parser() -> argparse.ArgumentParser:
     queue_amend_parser.add_argument("--amendments", required=True, help="JSON dict of amendments")
     queue_amend_parser.add_argument("--amendment-reason", required=True, help="Reason for amendment")
     queue_amend_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
-    queue_amend_parser.add_argument("--restricted", action="store_true", help="AIPOS-F78 前置零⑤: advisor 对 claimed 卡受限 amend(允许字段读 card.schema restricted_amend.claimed_card_fields: rework_rounds/output_target/lane/resources/validation_source_task/validation_candidate; 复用 F75 restricted amend)")
+    queue_amend_parser.add_argument("--restricted", action="store_true", help="AIPOS-F78 前置零⑤: advisor 对 claimed 卡受限 amend(允许字段读 card.schema restricted_amend.claimed_card_fields: rework_rounds/output_target/lane/resources/validation_source_task/validation_candidate; 复用 F75 restricted amend; AIPOS-F223: 另可按子键改 restricted_amend.claimed_card_subfields 所列, 如 audit_runtime_evidence 只改 host)")
     queue_amend_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     queue_withdraw_parser = queue_subparsers.add_parser("withdraw", help="Withdraw a task from queue")
@@ -6365,6 +6365,26 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:  # SchemaLoadError 等: 声明缺失即出声停
                 print(f"Error: restricted amend 声明读取失败: {exc}", file=sys.stderr)
                 return 1
+        # AIPOS-F223 件②: 改卡面 audit_runtime_evidence = 判据 artifact_ingest.runtime_evidence_amend_problems(新值形校验同出卡; 已认领卡
+        # --restricted 只许改 card.schema restricted_amend.claimed_card_subfields 所列子键, 如在途验证卡补运行证据执行主机 host)
+        from tools.aipos_cli.artifact_ingest import restricted_amend_subfields, runtime_evidence_amend_problems, runtime_evidence_declaration
+
+        evidence_key = str(runtime_evidence_declaration()["card_field"])
+        if isinstance(amendments, dict) and evidence_key in amendments:
+            from tools.aipos_cli.adapter_response import blocked_response
+            from tools.aipos_cli.next_resolver import _find_task_in_queue, _read_frontmatter
+
+            card_path, _queue = _find_task_in_queue(Path(repo_root), str(args.task_id))
+            current = _read_frontmatter(card_path).get(evidence_key) if card_path else None
+            problems = runtime_evidence_amend_problems(current, amendments[evidence_key], claimed=restricted_fields is not None)
+            if problems:
+                print(render_json(blocked_response(
+                    operation="queue_amend", dry_run=bool(args.dry_run), category="VALIDATION_ERROR", message="; ".join(problems),
+                    data={"task_id": args.task_id, "field": evidence_key, "validation_errors": problems},
+                    safety_notice="AIPOS-F223: audit_runtime_evidence amend 判据 artifact_ingest.runtime_evidence_amend_problems")))
+                return 1
+            if restricted_fields is not None and evidence_key in restricted_amend_subfields():
+                restricted_fields = set(restricted_fields) | {evidence_key}
         try:
             result = amend_task(
                 task_id=args.task_id,
