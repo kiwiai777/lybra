@@ -84,7 +84,7 @@
      (AIPOS-F156: 你的信封限 lane 时, 共用仓里别的顾问出的卡列在「其他子项目(不取)」, 不要去跑; 看本子项目全貌用
      `lybra next --workspace-root {{governance_root}} --actor {{instance}}`)。
    - `investigate` → 按输出的「下一条」查(`lybra next --task-id <卡ID>` 给缺项与出口): 卡不全 = 你 amend / 撤回重出(H 条);
-     护栏问题 = 出产品修复卡; 修好后回到第 1 步续跑。查不出或修不了 = 升为 owner_needed。
+     护栏问题 = 出产品修复卡; 修好后回到第 1 步续跑。查不出或修不了且确属第一档事由(下条)= 带事由升 Owner。
    - `advisor_fix` → **例行门拒, 按 hint 自处理, 不问 Owner**(AIPOS-F150): 门拒原因码全部属产品声明的例行清单
      (verbs.schema `lybra_loop_status.next_action.routine_rejections`, 如 `BRANCH_WRONG_BASE` = 共用仓他卡先合入、本卡分支落后;
      合入阶段的 `MERGE_CONFLICT` = 合入冲突、`REPO_MERGE_IN_PROGRESS` = 同仓另一张卡正在合入, AIPOS-F155;
@@ -92,24 +92,35 @@
      审计裁决 BLOCK `audit_blocked` = 审计没能完成(环境 / 资源 / 时长), hint 给两条路并标推荐(AIPOS-F218): a) 执行产物本身是 BLOCK
      报告(如开工时无活动 run)= 按 hint 的 `queue rework` 命令登记返工轮(预演 → `--confirm`), 补齐前置后原命令续跑 loop, 执行体重新执行
      并重写交回(交付主体非卡分支的卡——固定候选验证卡 / 只写治理根的卡——重写交回即可, 不要求卡分支新提交), loop 自动重交并派下一轮审计; b) 执行产物完整 = 按原因摘录修环境
-     后跑 hint 里的重审命令派下一轮审计(不改执行产物); 不计连败, 同卡连续 BLOCK 到声明次数产品自动升 `owner_needed`(环境 / 产品修好后 Owner 在收件箱选
-     「重新派审」`reaudit`, 你 `owner decide` 记下后原命令重跑 loop = 以该裁决为界重新计数并派下一轮审计, AIPOS-F202; 不改门记录、不重置次数); 独占资源排队超时 `resource_busy`, AIPOS-F179;
+     后跑 hint 里的重审命令派下一轮审计(不改执行产物); 不计连败; 同卡连续 BLOCK 到声明次数 = 第二档(AIPOS-F225): 自上次 BLOCK 起部署或验证根
+     有变化 = 原命令重跑 loop 即**自动重新派审**(落自动放行记录, Owner 可撤回), 没变化 = 仍归你修环境 / 产品, 修好部署后重跑即自动重审, 不找 Owner
+     (Owner 收件箱的「重新派审」`reaudit` 保留为手动兜底, AIPOS-F202); 独占资源排队超时 `resource_busy`, AIPOS-F179;
      审计报告头 commit_sha 抄错 `audit_report_form_error` = 形式错误不是审错产物, loop 已能以同一审计会话续接让审计体只改报告头,
      续接不了时按「下一条」让审计体改(你永不代改审计报告), AIPOS-F180B;
      执行体交回报告头不合契约 `return_report_form_error`(缺键 / 值不符产品给值 / 误用 outputs 契约等)= 同理, loop 已能以同一执行会话
      续接让 pi 只改报告头, 续接不了(子 agent / 无会话记录)时把「下一条」里的修头指令原文派给本卡执行实例(你永不代改交回报告);
      F204 前停在 `artifact_invalid` 的卡, loop status 复核出报告头可纠正同样给这条, 原命令重跑 loop 即修头续跑, AIPOS-F204),
      修法固定, 输出「下一条」逐步给出。改卡分支 / 更新交回的步骤**派本卡执行体做**(你仍永不碰产品仓), 执行体交回后用「下一条」
-     末行命令续跑 loop, 回到第 2 步。同卡同一例行码连续被拒到声明次数, 产品自动升为 `owner_needed`, 不必你计数。
-   - `owner_needed` → **停**, 一次说清要 Owner 定什么(输出 detail 已写事由: 设计分叉 / 授权 / 连败 / 门拒原因)与可选项;
-     Owner 定了再回到第 1 步。**报 owner_needed 前先写进运行记录**(AIPOS-F170): `lybra loop note --task-id <卡ID> --ask <要 Owner 定什么>
-     --options <键=标签> … --recommend <建议选哪个 + 理由> --workspace-root {{governance_root}} --actor {{instance}}` 先预演, 再加 `--confirm`
-     ——Owner 在收件箱(`lybra owner inbox` / 看板 /owner/inbox)看到的就是你写的要定什么 / 选项 / 建议, 不再是泛化拒因。
+     末行命令续跑 loop, 回到第 2 步。同卡同一例行码连续被拒到声明次数仍归你(第三档 investigate, AIPOS-F225), 不必你计数。
+   - **Owner 介入分级(AIPOS-F225, 声明 verbs.schema `lybra_owner_inbox.tiers`)**: 只有**第一档**事由才找 Owner——方向 / 设计分叉
+     `direction_fork`、改验收 / 换候选 / 改范围 `rescope`、超出项目授权 `beyond_authority`、超预算 / 超期限 `over_budget`、撤卡 / 放弃
+     `withdraw`、返工超硬上限 `rework_cap_exceeded`、顾问与审计结论冲突 `advisor_audit_conflict`、验收抽查 `owner_check`。
+     **第二档**自动放行、留记录、Owner 可撤回: 范围不变的返工到上限后门自动追加到硬上限 4 轮(轮次记 `auto_extension_ref`), 审计连续 BLOCK
+     且环境 / 产品有变化自动重新派审, 补审 FAIL 自动派修复卡, 路线图偏差只在路线图页; **第三档**技术故障(门拒、落账拒、等待超时、证据重试用尽、
+     卡驱动方不符、动词未授权、连败、例行修法仍连败)= loop status 给 `advisor_fix` / `investigate`(detail 写明「第三档(归顾问)」与理由),
+     你自己处理, 不找 Owner。
+   - `owner_needed` → **停**(只剩第一档), 一次说清要 Owner 定什么(输出 detail 与「第一档事由」行)与可选项;
+     Owner 定了再回到第 1 步。**报 owner_needed 前先写进运行记录**(AIPOS-F170; 你自己升 Owner 必须带第一档事由, AIPOS-F225):
+     `lybra loop note --task-id <卡ID> --ask <要 Owner 定什么>
+     --owner-reason <第一档事由键> --options <键=标签> … --recommend <建议选哪个 + 理由> --workspace-root {{governance_root}} --actor {{instance}}` 先预演, 再加 `--confirm`
+     (缺 `--owner-reason` 或不在清单 = 拒写并指回你自处理; 选不出第一档事由 = 这事不该找 Owner);
+     卡面 `needs_owner: true` 同样须带 `owner_reason: <第一档事由键>`(发布预演拒缺)。
+     ——Owner 在收件箱(`lybra owner inbox` / 看板 /owner/inbox)看到的就是你写的要定什么 / 选项 / 建议 / 事由, 不再是泛化拒因。
      **Owner 口头裁决(对你说的)由你落记录**: `lybra owner decide --item <OI-…> --choice <选项键> --relayed-by {{instance}}
      --owner-words <Owner 原话摘要>`(`--home-root` 照抄收件箱裁决行; 先预演, 无误再加 `--confirm`, 自动落账)——记录写明是你转达、
      Owner 原话是什么; 之后 `lybra loop status` 给 `advisor_fix(owner_ruled)`, 按 hint 续跑。Owner 本人直接敲时 `--relayed-by owner`。
 
-**只在 `owner_needed` 时停。** 其余情况你自己往下走, 不问「要不要继续」。
+**只在 `owner_needed` 时停。**(AIPOS-F225: owner_needed 只剩第一档事由)其余情况你自己往下走, 不问「要不要继续」。
 
 **审计 FAIL 后**(AIPOS-F155): 你按审计报告登记返工节(`lybra queue rework` 预演 → 加 `--confirm` 写入, 用法见 advisor-commands 技能),
 然后回到第 1 步续跑 loop——loop 认出已登记的返工轮, 等执行体按返工节修复后重新交回(下一动作 `continue_wait`, 提示附返工要点),

@@ -2782,7 +2782,8 @@
           "candidate_fail": "AIPOS-F211 件④(gap #217): 固定候选验证卡审计 FAIL, 推导核给出「来源卡修复出新候选 → 另出验证卡 → queue supersede 本卡」(transitions nodes.N4.candidate_fail; exit_codes.not_derivable; 不计连败, 不进 Owner 收件箱)",
           "audit_blocked_repeated": "AIPOS-F179 件③: 本卡最新连续 BLOCK 裁决数 ≥ transitions nodes.N4.audit_blocked.owner_needed_after(修环境重审后仍 BLOCK), 升 Owner(exit_codes.not_derivable); AIPOS-F202: 计数以本卡最近一条「重新派审」收件箱裁决为界(transitions nodes.N4.audit_blocked.owner_reaudit)",
           "audit_report_form_error": "AIPOS-F180B 件②: 裁决入门被拒 INGEST_TIP_MISMATCH 且形式诊断 correctable(报告头 commit_sha 形式错误 / 疑似抄错), 但审计会话不可续接 / 本运行续接已用尽 / 续接后报告未改写(见 launch.report_fix; exit_codes.gate_rejected; 判定原文在结束原文与运行记录 report_fixes 末条 detail)",
-          "return_report_form_error": "AIPOS-F204 件②: 执行体交回报告头可纠正错误(缺键 / 值不符产品给值 / 形式错 / 误用另一契约; transitions artifact_ingest.return.header_fix), 但执行会话不可续接 / 本运行续接已用尽 / 续接后报告未改写(见 launch.report_fix.executor; exit_codes.not_derivable; 判定原文在结束原文与运行记录 report_fixes 末条 detail)"
+          "return_report_form_error": "AIPOS-F204 件②: 执行体交回报告头可纠正错误(缺键 / 值不符产品给值 / 形式错 / 误用另一契约; transitions artifact_ingest.return.header_fix), 但执行会话不可续接 / 本运行续接已用尽 / 续接后报告未改写(见 launch.report_fix.executor; exit_codes.not_derivable; 判定原文在结束原文与运行记录 report_fixes 末条 detail)",
+          "auto_release_revoked": "AIPOS-F225 件②: Owner 撤回了本卡的第二档自动放行(lybra_owner_inbox.tiers.auto_release: 返工自动追加 / 自动重新派审; 撤回 = 收件箱「已自动放行」事项选 revoke_auto, 既有 owner decide 写路径), 撤回之后本卡尚无 Owner 新裁决 = 卡停住, 推导核不派生推进步(唯一判定 owner_inbox.auto_release_stop, 推导核 next_resolver 首个硬停项之后同判; exit_codes.not_derivable)"
         },
         "resource_lock": "AIPOS-F179 件②: 卡声明了独占资源的运行另落 resource_lock {resources, card, state(waiting | held), requested_at, held_at, holder(排队时的占用者: run_id / task_id / pid / host / state)}; 无资源声明的运行不出现本键(存量记录形不变)。lybra loop status 运行行显示「独占资源」行; 判定见 lybra_loop.resource_lock。",
         "launch_session": "AIPOS-F171B 件②: 每次拉起 launches[] 另记 session_id(harness 模板声明 session 时 loop 固定的会话 id; 无声明 = null)、resume(0 = 首次拉起, k = 同会话第 k 次续接)、resume_max(本次运行的续接上限, project.json launch_resume_max); 日志每次续接一行 [resume]。lybra loop status 拉起行显示「会话 <id> 续接 k/N」。无此键的存量记录 = F171B 前(未固定会话)。",
@@ -3072,7 +3073,7 @@
         "note": "AIPOS-F136 件①: --wait 上限与轮询间隔(唯一声明)。等待经 tools/aipos_cli/agent_watch_fs.run_fs_watch(loop 的唯一等待原语, 禁 sleep 自旋): 观察根 = 项目声明的运行记录落点 project.json paths.loop_runs_root(唯一读取口 workspace_config.project_paths), expect = <卡ID>/looprun_*.md, 每轮由 judge_run + next_action 重判(进程死 / 停滞 / 结束无需文件变化也在下一轮被判出)。到时 = 返回当时状态(continue_wait)。顾问取本会话单次命令超时以内的秒数; 超上限 = 用法错(usage), 不截断。"
       },
       "next_action": {
-        "description": "AIPOS-F136 件①: 顾问下一动作(唯一判定 tools/aipos_cli/loop_run_record.next_action; 输出与 --json 每个运行附 next_action {action, reason, detail, hint}, --task-id 时顶层另附本卡的 next_action)。判据只读运行记录: 状态(judge_run)→ by_state; 已结束 → 结束原因 by_end_reason(结束原因原文 end_message 即门/推导核的拒因, 一并给出); 本卡最近连续 consecutive_failures_owner_needed 次运行都以 investigate 类原因结束 = 连败 → owner_needed。AIPOS-F150 件②: by_end_reason 判为 owner_needed 的运行, 若运行记录 end_codes(lybra_loop.run_record.end_codes)非空且全部在 routine_rejections.codes 内 = advisor_fix(修法读声明, 顾问自处理不问 Owner); 同卡同一例行码连续 routine_rejections.repeat_owner_needed 次 = owner_needed(routine_fix_exhausted)。",
+        "description": "AIPOS-F136 件①: 顾问下一动作(唯一判定 tools/aipos_cli/loop_run_record.next_action; 输出与 --json 每个运行附 next_action {action, reason, detail, hint}, --task-id 时顶层另附本卡的 next_action)。判据只读运行记录: 状态(judge_run)→ by_state; 已结束 → 结束原因 by_end_reason(结束原因原文 end_message 即门/推导核的拒因, 一并给出); 本卡最近连续 consecutive_failures_owner_needed 次运行都以 investigate 类原因结束 = 连败 → owner_needed。AIPOS-F150 件②: by_end_reason 判为 owner_needed 的运行, 若运行记录 end_codes(lybra_loop.run_record.end_codes)非空且全部在 routine_rejections.codes 内 = advisor_fix(修法读声明, 顾问自处理不问 Owner); 同卡同一例行码连续 routine_rejections.repeat_owner_needed 次 = owner_needed(routine_fix_exhausted)。AIPOS-F225(Owner 介入分级): 以上判出 owner_needed 的运行(含已裁决改写 apply_owner_ruling 之后仍为 owner_needed 者)再按 lybra_owner_inbox.tiers.loop_reasons 归档(唯一实现 owner_inbox.apply_owner_tier, loop status 每个运行同调): 第一档 = 仍 owner_needed 并带 owner_tier / owner_reason(第一档封闭事由); 第二档 = 按 kind 自动路径(auto_reaudit: 自上次 BLOCK 起部署提交或验证根声明有变化 = advisor_fix「原命令续跑 loop 即自动重新派审」, 无变化 = advisor_fix 归顾问修环境); 第三档 = 改判声明的 advisor_fix / investigate(逐个写理由 why), 顾问修不动且确属第一档 = `lybra loop note --ask … --owner-reason <第一档事由>` 升 Owner。by_end_reason / owner_reasons 保留原判与原事由文案(归档前的判据, 收件箱与续跑提示仍读)。",
         "actions": {
           "continue_wait": "loop 仍在推进(或在等工位产物): 再跑一次 `lybra loop status --task-id <卡ID> --wait <秒>`; reason=manual_kickoff 时 loop 在手工模式等执行体开工: execution_mode=subagent(AIPOS-F156: 本卡执行方式 = 顾问派子 agent, 判定读 project.json execution)= 顾问按 detail 派本卡子 agent 开工(不找 Owner、不敲 /go), 否则向 Owner 说一次 detail 里的开工提示(在哪个工位敲 /go); 然后继续等",
           "owner_needed": "须 Owner 决定/授权: 停下, 一次说清 detail 里要 Owner 定什么(设计分叉 / 授权 / 连败 / 门拒原因), Owner 定了再续跑 loop",
@@ -3123,7 +3124,8 @@
           "candidate_fail": "advisor_fix",
           "audit_blocked_repeated": "owner_needed",
           "audit_report_form_error": "advisor_fix",
-          "return_report_form_error": "advisor_fix"
+          "return_report_form_error": "advisor_fix",
+          "auto_release_revoked": "owner_needed"
         },
         "by_execution_mode": {
           "description": "AIPOS-F156 件①(gap #139): 按本卡执行方式分流的覆盖表(唯一声明, 与 by_end_reason 同节; 判定唯一实现 loop_run_record.next_action)。执行方式 = 运行最后一次等待的卡即本卡(执行体等待; 等审计 / 外部 FINALIZE / 同仓先合入卡的等待不适用)时, 经 workspace_config.card_execution_mode(只读 F143 执行方式声明唯一读取口 workspace_config.project_execution)判出; AIPOS-F157 件③(gap #125): 等待目标实例为无工位的子 agent 执行者(enrollment.instance_enrollment governance_root_mode, 与 lybra_loop.launch.manual_hint.subagent 同一判定 loop_driver.wait_instance_is_subagent)= subagent(未声明 execution 亦然, 等交回超时不再出工位 /go 口径); 未声明 execution 且非子 agent 执行者 / 判不出 = 不覆盖(行为不变)。modes 键 ⊆ config.schema project_json.execution.default_mode 值域。by_end_reason = 该执行方式下覆盖 by_end_reason 的结束原因映射(判为 advisor_fix 的须在 routine_rejections.end_reasons 有修法, 连续计数与其他例行结束原因同一实现); kickoff_detail = 手工等待(reason=manual_kickoff)时顾问下一动作 detail 的前缀(占位 {hint} = 运行记录里的开工提示)。pi 执行工位 / 手工工位(card_execution_mode = pi 或未声明)= 原口径(owner_needed / 向 Owner 说开工提示)。",
@@ -3150,7 +3152,8 @@
           "envelope_exhausted": "授权: 信封额度已用尽(AIPOS-F166), 请 Owner 按 hint 的续签命令签新信封, 签好用原命令续跑 loop",
           "envelope_expired": "授权: 信封已过期(AIPOS-F166), 请 Owner 按 hint 的续签命令签新信封, 签好用原命令续跑 loop",
           "audit_blocked_repeated": "审计连续 BLOCK(AIPOS-F179 件③): 本卡已按 BLOCK 原因修环境重新派审计, 新一轮仍 BLOCK(连续次数达 transitions nodes.N4.audit_blocked.owner_needed_after), 环境 / 资源 / 时长问题顾问修不动或卡面验收不可在审计环境完成; 请 Owner 定修环境方案 / 改卡面验收 / 换审计环境 / 仲裁; 环境 / 产品修好后 Owner 在收件箱选「重新派审」(reaudit, AIPOS-F202), 顾问 owner decide 记录后原命令重跑 loop = 以该裁决为界重新计数并派下一轮审计",
-          "envelope_renew": "信封续签(AIPOS-F166 件②): 结束原因 envelope_exhausted / envelope_expired 的下一动作事由——detail = 当前用量 / 上限 / 到期, hint = 续签命令(policy_id 按该驱动方已有最大序号 +1)"
+          "envelope_renew": "信封续签(AIPOS-F166 件②): 结束原因 envelope_exhausted / envelope_expired 的下一动作事由——detail = 当前用量 / 上限 / 到期, hint = 续签命令(policy_id 按该驱动方已有最大序号 +1)",
+          "auto_release_revoked": "Owner 已撤回本卡的自动放行(AIPOS-F225 件②): 本卡停住, 不再自动推进; 请 Owner 定恢复推进 / 改卡 / 另出卡 / 撤卡(收件箱选项), 裁决后原命令续跑 loop"
         },
         "advisor_review_close": {"description": "AIPOS-F207 件③(gap #213): 以 end_reasons 所列结束原因结束的运行, 若推导核此刻对本卡的建议动作动词 ∈ verbs(顾问复核结案, 只写治理根卡交回后由顾问复核产出清单再 mark-concluded)= 顾问自己的活, 不进 Owner 收件箱: 下一动作 advisor_fix(reason = advisor_review_close), detail = 推导核建议原文, hint = 推导核给出的结案命令加 --dry-run 预演(核对后去掉 --dry-run, BLOCK 结案加 --outcome block)。唯一判定 loop_run_record.next_action → _advisor_review_close(读 next_resolver.derive_next_step 同一推导, 不另判); 推导核此刻不再给该动词(已结案 / 已改)= 照 by_end_reason 原判。", "end_reasons": ["manual_required"], "verbs": ["lybra_mark_concluded"], "detail": "顾问复核结案(不问 Owner): {suggested_action}", "hint": "先预演: {command} --dry-run; 核对产出清单无误后去掉 --dry-run 结案(BLOCK 结案加 --outcome block; 复核不通过要打回原卡返工 = 同一命令改 --outcome rework --focus-items '[\"<返工要点>\"]' [--acceptance-criteria '[\"<验收标准>\"]'], 卡留 claimed、loop 拉起执行体返工, AIPOS-F221), 之后 `lybra loop status --task-id {task_id}` 复核"},
         "routine_rejections": {
@@ -3428,7 +3431,8 @@
           "impact": "卡 {task_id} 的 loop 已停({reason}), 不再自动推进",
           "default_options": ["continue", "rework", "pause"],
           "options_by_reason": {"envelope_renew": ["renew", "deny_grant", "pause"], "no_envelope": ["renew", "deny_grant", "pause"],
-                                "audit_blocked_repeated": ["reaudit", "wait_product", "rescope", "new_card", "pause"]},
+                                "audit_blocked_repeated": ["reaudit", "wait_product", "rescope", "new_card", "pause"],
+                                "auto_release_revoked": ["continue", "rescope", "new_card", "withdraw", "pause"]},
           "pinned_options_by_reason": {"audit_blocked_repeated": ["reaudit"]},
           "advisor_ask": {
             "reason": "advisor_ask",
@@ -3517,6 +3521,96 @@
           "verify_command": "lybra roadmap verify --workspace-root {governance_root} --criterion {criterion} --result confirm|mismatch --relayed-by <转达的顾问实例|owner> --owner-words <Owner 原话>",
           "decide_redirect": "事项 {item_id} 是验收抽查(owner_check), 不经 owner decide 裁决: 顾问用 `{verify_command}` 预演后 --confirm 记录 Owner 结论",
           "options": ["owner_confirm", "owner_mismatch"]
+        },
+        "auto_released": {
+          "rank": 3,
+          "label": "已自动放行(可撤回)",
+          "subject": "卡 {task_id} 自动放行 {auto_release_id}",
+          "ask": "{kind_label}: {basis}(@ {released_at}); 不需你定, 要撤回选「撤回自动放行」(撤回后本卡停住)",
+          "impact": "第二档自动放行已生效(记录 {record_path}); 撤回 = 本卡停住、不再自动推进, 待你另定",
+          "kind_labels": {"rework_extension": "返工自动追加一轮", "auto_reaudit": "自动重新派审"},
+          "options": ["revoke_auto", "acknowledge"],
+          "note": "AIPOS-F225 件②: 第二档自动放行记录(owner_inbox.auto_releases, 声明 tiers.tier2.auto_release)每条一个事项; 锚点 = 记录 ID; 本类归第二档(tiers.categories), 不进 items(不计待定数), 进 notices; Owner 仍可 owner decide: 选 revoke_auto = 撤回(决策记录既有写路径; 撤回之后本卡无 Owner 新裁决 = 卡停住, owner_inbox.auto_release_stop 唯一判定), 选 acknowledge = 知悉(事项消失)。卡已结案 / 撤回 = 不列。"
+        }
+      },
+      "tiers": {
+        "description": "AIPOS-F225(Owner 10-24 介入分级; 设计稿 governance/research/2026-10-24-owner-intervention-tiers-design.md §3 三档、§8 默认值): Owner 介入三档的唯一声明, 读取口 owner_inbox.tier_declaration(加载守卫 fail-closed): ① loop 顾问下一动作可判 owner_needed 的每个事由——lybra_loop_status.next_action.by_end_reason 判 owner_needed 的结束原因、owner_reasons 全部键、顾问 loop note 事由(categories.loop_owner_needed.advisor_ask.reason)——都须在 loop_reasons 归档; ② 收件箱每个类别(categories)都须在 categories 归档; 缺一个 / 多出未声明的键 / 档位或事由不合 = SchemaLoadError(加载即拒, 新增事由未归档 = 拒)。第一档 = 封闭事由清单 tier1.reasons(顾问升 Owner 只能选其一: lybra loop note --owner-reason / 卡面 needs_owner 的 owner_reason); 第二档 = 自动放行 + 每次落一条可见记录(tier2.auto_release)+ Owner 可撤回; 第三档 = 归顾问(tier3.actions 之一, 逐个写理由 why)。收件箱 items 只列第一档类别的事项(第一档事由 ∈ tier1.inbox_last 的排末尾), 第二档类别事项进 notices(不计待定数, CLI / JSON 可见, 仍可 owner decide)。信封类事由(no_envelope / envelope_*)只做档位归类(第一档「超出项目授权」), 覆盖判定归 AIPOS-F224。F201 release / F202 reaudit / F222 extend_rework 选项保留兼容, 改为第二档自动路径的手动兜底(不再是常规出口)。loop status --task-id 列本卡自动放行记录(auto_releases, 已撤回标出)。审计独立性、产物边界执法、记录与归因一律不变——本声明只动「谁来点头」。",
+        "tier1": {
+          "label": "必须你定",
+          "reasons": {
+            "direction_fork": {"label": "方向 / 设计分叉", "examples": "两种实现路线、架构取舍"},
+            "rescope": {"label": "改验收 / 换候选 / 改范围", "examples": "降验收、换固定候选、拆卡; 卡面验收在审计环境不可完成"},
+            "beyond_authority": {"label": "超出项目授权", "examples": "新车道、新任务类型、新主机; 生产 / 客户环境 / 真实硬件 / 凭据 / 对外发布或发送"},
+            "over_budget": {"label": "超预算 / 超期限", "examples": "项目授权的总额或到期日到了"},
+            "withdraw": {"label": "撤卡 / 放弃", "examples": "不做了; Owner 撤回了自动放行, 本卡停住待定"},
+            "rework_cap_exceeded": {"label": "返工超硬上限", "examples": "自动放行的返工轮数用完(卡本身有问题: 另出卡 / 改卡 / 撤卡)"},
+            "advisor_audit_conflict": {"label": "顾问与审计结论冲突", "examples": "顾问认为审计错判且双方各持证据"},
+            "owner_check": {"label": "验收抽查", "examples": "Owner 亲眼看产物(owner_check)"}
+          },
+          "inbox_last": ["owner_check"]
+        },
+        "tier2": {
+          "label": "告知即可(自动放行, 留记录, 可撤回)",
+          "kinds": {
+            "rework_extension": "返工到上限且卡面候选 / 验收 / 范围自发布起未变(门核对指纹)= 门自动追加一轮, 直至 transitions nodes.queue_rework.guards.rework_limit.auto_extension.hard_cap, 追加轮记 auto_extension_ref = 自动放行记录 ID",
+            "auto_reaudit": "审计连续 BLOCK 且自上次 BLOCK 起部署提交或审计验证根声明有变化 = loop 自动重新派审(F202 reaudit 同一实现: 自动放行记录作连续 BLOCK 计数的界, transitions nodes.N4.audit_blocked.auto_reaudit); 无变化 = 归顾问(advisor_fix)",
+            "supplementary_repair": "补审 FAIL 的修复卡由裁决入门自动派生(audit_derivation.derive_repair_card_on_fail); 收件箱残项 = 派生失败(技术故障, 归顾问按 lybra next 重派); 「接受不修」= 改验收 → 第一档(Owner 仍可对该事项裁决 accept)",
+            "roadmap_page": "路线图偏差是顾问的规划职责: 看板路线图页 / lybra roadmap status 展示, 不进收件箱",
+            "envelope_notice": "信封将尽是告知(项目常设授权替代信封由 AIPOS-F224 定), 不进收件箱; 看板信封页照常展示",
+            "auto_release_log": "已自动放行的记录本身(可撤回), 不计待定数"
+          },
+          "auto_release": {
+            "description": "自动放行记录 = 既有事件记录(record_writer.write_records_atomic kind event, 落 records/events/<卡>/; record_type = task_progress_event), 不另立存储。写口唯一 owner_inbox.write_auto_release(门 queue rework 自动追加轮 board_adapter.queue_rework_task / loop 自动重新派审 loop_driver 同调), 读口唯一 owner_inbox.auto_releases。字段 = record_fields; ID = id_template(seq = 本卡同 kind 已有记录数 + 1)。收件箱类别 auto_released 每条一个事项(锚点 = 记录 ID); Owner 选 revoke_option = 撤回(既有 owner decide 决策记录写路径); 撤回之后本卡无 Owner 新裁决 = 卡停住: 推导核不可推导(action.type = revoked_end_reason), loop 以 revoked_end_reason 结束(第一档事由 withdraw), 唯一判定 owner_inbox.auto_release_stop。撤回的自动放行不再作连续 BLOCK 计数的界; 已登记的自动追加轮不删(历史不改)。",
+            "event_type": "auto_release",
+            "id_template": "auto_release_{task_id}_{kind}_{seq}",
+            "record_fields": ["record_type", "event_type", "auto_release_id", "task_id", "kind", "tier", "released_at", "released_by", "basis", "round", "verdict_ref", "evidence"],
+            "revoke_option": "revoke_auto",
+            "revoked_end_reason": "auto_release_revoked",
+            "body": "# Auto Release ({kind}): {task_id}\n\n第二档自动放行(AIPOS-F225): {basis}\n\nOwner 可撤回: lybra owner inbox「已自动放行」事项选 revoke_auto(撤回后本卡停住, 待 Owner 另定)。\n"
+          }
+        },
+        "tier3": {"label": "归顾问", "actions": ["advisor_fix", "investigate"]},
+        "loop_reasons": {
+          "no_envelope": {"tier": 1, "owner_reason": "beyond_authority"},
+          "envelope_exhausted": {"tier": 1, "owner_reason": "beyond_authority"},
+          "envelope_expired": {"tier": 1, "owner_reason": "beyond_authority"},
+          "envelope_renew": {"tier": 1, "owner_reason": "beyond_authority"},
+          "auto_release_revoked": {"tier": 1, "owner_reason": "withdraw"},
+          "advisor_ask": {"tier": 1, "owner_reason_from": "owner_ask"},
+          "audit_blocked_repeated": {"tier": 2, "kind": "auto_reaudit", "action": "advisor_fix", "why": "审计连续 BLOCK 多为环境 / 产品问题: 修好(部署 / 验证根有变化)即自动重新派审, 未变化 = 顾问修环境或产品; 要改卡面验收 / 换审计环境才升第一档(rescope)"},
+          "gate_rejected": {"tier": 3, "action": "investigate", "why": "非例行门拒: 拒因原文自带下一步, 顾问按 lybra next 查拒因修卡 / 修产物; 确属越界 / 冲突才升第一档(beyond_authority / advisor_audit_conflict)"},
+          "landing_rejected": {"tier": 3, "action": "advisor_fix", "why": "N6 落账被拒(他人暂存 / 提交门护栏 / 推送未完成)是治理仓卫生, 治理仓落账是顾问职责: 按拒因清理后原命令续跑"},
+          "verb_not_authorized": {"tier": 3, "action": "advisor_fix", "why": "信封未授权该动词多为驱动方用错身份 / 信封: 顾问换对的驱动方或信封续跑; 确需扩授权才升第一档(beyond_authority, 覆盖判定归 AIPOS-F224)"},
+          "manual_required": {"tier": 3, "action": "investigate", "why": "推导核给不出可执行命令 = 记录 / 产物缺口, 顾问按 lybra next 给的缺项与出口补齐"},
+          "wait_timeout": {"tier": 3, "action": "advisor_fix", "why": "工位未交产物是执行侧技术问题: 顾问查工位 / 重派执行体 / 加大 --max-wait 后原命令续跑"},
+          "runtime_evidence_exhausted": {"tier": 3, "action": "investigate", "why": "审计体补做运行证据连败 = 审计执行侧问题: 顾问换审计体 / 修审计环境; 要改卡面运行证据声明 = 改验收才升第一档(rescope)"},
+          "card_owner_mismatch": {"tier": 3, "action": "advisor_fix", "why": "卡归属不符是顾问之间的分工: 由归属实例推进或交不限 lane 的总顾问, 不是 Owner 的决策"},
+          "consecutive_failures": {"tier": 3, "action": "investigate", "why": "连败是技术故障的聚合: 顾问按最近一次结束原因查修(lybra next); 要改卡 / 撤卡才升第一档"},
+          "routine_fix_exhausted": {"tier": 3, "action": "investigate", "why": "例行门拒修了仍连败 = 固定修法对本卡不灵(多 lane 交替抢合入等): 顾问排合入顺序 / 查卡; 要改卡才升第一档"}
+        },
+        "categories": {
+          "loop_owner_needed": {"tier": 1},
+          "needs_owner_card": {"tier": 1},
+          "rework_limit": {"tier": 1, "owner_reason": "rework_cap_exceeded"},
+          "owner_check": {"tier": 1, "owner_reason": "owner_check"},
+          "supplementary_fail": {"tier": 2, "kind": "supplementary_repair"},
+          "envelope_warning": {"tier": 2, "kind": "envelope_notice"},
+          "roadmap_drift": {"tier": 2, "kind": "roadmap_page"},
+          "auto_released": {"tier": 2, "kind": "auto_release_log"}
+        },
+        "needs_owner_reason_field": "owner_reason",
+        "grant_owner_reason": "beyond_authority",
+        "texts": {
+          "tier3_detail": "第三档(归顾问, AIPOS-F225): {why} — 原判: {detail}",
+          "escalate_hint": "顾问修不动且确属第一档事由才升 Owner: lybra loop note --task-id {task_id} --ask <要 Owner 定什么> --owner-reason <{reasons}> --workspace-root {governance_root}(先预演, 再加 --confirm)",
+          "auto_reaudit_changed": "第二档自动重新派审(AIPOS-F225): 自上次 BLOCK({verdict_id})起{changes}, 原命令续跑 loop 即自动重新派审(落自动放行记录, Owner 可撤回) — 原判: {detail}",
+          "auto_reaudit_unchanged": "第二档(AIPOS-F225): 自上次 BLOCK({verdict_id})起部署提交与验证根声明都未变化({why}), 归顾问修环境 / 产品; 修好部署后原命令续跑 loop 即自动重新派审, 不问 Owner — 原判: {detail}",
+          "change_deploy": "部署提交 {before} → {after}",
+          "change_validation_roots": "验证根声明已变({before} → {after})",
+          "owner_reason_part": "(第一档事由: {label} {key})",
+          "needs_owner_reason_missing": "(卡面 needs_owner 缺第一档事由 {field}, 须为 {reasons} 之一; AIPOS-F225: 顾问补事由或解除 needs_owner 后再找 Owner)",
+          "notices_header": "第二档 · 已自动放行 / 告知(不需你定; 要撤回或裁决仍可用其裁决命令): {count} 项",
+          "notice_item": "  · {item_id}  {project} / {subject}({category_label}): {ask}"
         }
       },
       "options": {
@@ -3542,6 +3636,7 @@
         "closed_card_correction": {"label": "纠正已结案卡(原结案不算数, 出承接卡重做)", "advisor_next": "Owner 已定纠正 {task_id} 的结案(裁决 {decision_id}): 尚未纠正 = 引用该裁决纠正(不另记裁决, AIPOS-F213): `lybra --workspace-root {governance_root} queue correct --task-id {task_id} --decision-id {decision_id} --relayed-by <你的顾问实例>` 预演无误后同一命令加 --confirm(原记录不改, 标争议, 发布承接卡); 已纠正(承接卡已发布)= 推进承接卡: `{resume}`"},
         "reaudit": {"label": "环境 / 产品已修好, 重新派审", "advisor_next": "按 Owner 裁决重新派审: 原命令重跑 loop——连续 BLOCK 以本裁决为界重新计数, 派下一轮审计并照常拉起审计(历史裁决与审计卡不改): `{resume}`"},
         "wait_product": {"label": "等产品 / 环境修复上线后再审", "advisor_next": "Owner 定等修复: 修复上线前不续跑本卡; 上线后原命令重跑 loop(`{resume}`), 仍停 = 收件箱该卡新事项提示可选「重新派审」, Owner 选定后按其续跑"},
+        "revoke_auto": {"label": "撤回自动放行(本卡停住, 待另定)", "advisor_next": "Owner 已撤回 {task_id} 的自动放行(裁决 {decision_id}): 本卡停住, 不续跑 loop(推导核以 auto_release_revoked 硬停); 等 Owner 在收件箱对本卡另定(恢复 / 改卡 / 另出卡 / 撤卡)后按其裁决续跑"},
         "extend_rework": {"label": "授权本卡追加一轮返工(每次裁决只放一轮)", "advisor_next": "Owner 已授权 {task_id} 追加一轮返工(裁决 {decision_id}, 每个裁决只放一轮): 按原返工出口再打回一轮, 该轮自动记 owner_extension_ref = 本裁决——非代码快车道卡 `lybra --workspace-root {governance_root} mark-concluded --task-id {task_id} --actor <你的顾问实例> --report-path <交回报告> --outcome rework --focus-items '[\"<返工要点>\"]'`; 审计裁决型卡 `lybra --workspace-root {governance_root} queue rework --task-id {task_id} --actor <你的顾问实例> --verdict-ref <最新裁决> --focus-items '[\"<返工要点>\"]'`(都先 --dry-run 预演), 登记后续跑: `{resume}`"}
       },
       "stale": {
@@ -3722,7 +3817,7 @@
       }
     },
     "lybra_loop_note": {
-      "description": "AIPOS-F168 件③: `lybra loop note --task-id <卡> --ask <要 Owner 定什么> [--options <键=标签> …] [--recommend <顾问建议>] [--workspace-root <治理根>] [--actor <顾问实例>] [--confirm] [--json]` —— 给本卡最近一次 loop 运行记录补写结构字段 owner_ask {ask, options[{key,label}], recommend, noted_by, noted_at}, 收件箱(lybra_owner_inbox)据此展示要定什么 / 选项 / 建议, 不再只见泛化拒因。只许已结束或 loop 进程已不在的运行(state ∈ allowed_states; 运行中的记录由 loop 进程原子重写, 补写会被覆盖 = 拒 run_active)。选项键须合 lybra_owner_inbox.custom_option.key_pattern。缺省 = 预演(零写入, 显示将写的 owner_ask); --confirm = 经 record_writer.render_markdown 原子替换写回(其余字段原样)并经 lybra_governance_commit.post_write_landing.commands.loop_note 同一提交口落账。AIPOS-F180 件①: 授权请求结构化建议 --grant-mode <task_mode> / --grant-repos <仓,…> / --grant-max-tasks <N> / --grant-expires <YYYY-MM-DD 或 ISO 时刻> / --grant-reason <理由>(任一即可, 各字段可选)写进 owner_ask.grant {task_mode, lane_repos, max_tasks, expires_at, reason}, 收件箱授权建议(lybra_owner_inbox.grant_request)逐字段以此覆盖推导值; 校验: task_mode ∈ enums.schema task_mode、仓集合经 workspace_config.repo_name_set、额度正整数、到期须在未来(只给日期 = 当日 lybra_owner_inbox.grant_request.date_only_time); 给了 --grant-* 时 --ask 可省(缺省 texts.grant_default_ask)。AIPOS-F222 件②: owner_ask 不得静默——预演与写入前按收件箱同一判定(owner_inbox.owner_ask_destination)算出该请求进哪个收件箱事项: 运行下一动作是等 Owner = 该运行的 loop 事项; 否则同卡有返工上限事项 = 并入它, 无 = 照列 loop 事项(事由 lybra_owner_inbox.categories.loop_owner_needed.advisor_ask.reason); 预演回显 texts.inbox_will, 写入后经 collect_project_inbox 核对回显 texts.inbox_listed(未见 = inbox_missing)。不会进收件箱(卡已结案 / 撤回 / 冻结、该事项已有 Owner 裁决、补写的运行不是 loop status 判定的最近一次)= 拒写(出口 not_listed, 拒因 texts.not_listed + not_listed_reasons + not_listed_hint)。",
+      "description": "AIPOS-F168 件③: `lybra loop note --task-id <卡> --ask <要 Owner 定什么> [--options <键=标签> …] [--recommend <顾问建议>] [--workspace-root <治理根>] [--actor <顾问实例>] [--confirm] [--json]` —— 给本卡最近一次 loop 运行记录补写结构字段 owner_ask {ask, options[{key,label}], recommend, noted_by, noted_at}, 收件箱(lybra_owner_inbox)据此展示要定什么 / 选项 / 建议, 不再只见泛化拒因。只许已结束或 loop 进程已不在的运行(state ∈ allowed_states; 运行中的记录由 loop 进程原子重写, 补写会被覆盖 = 拒 run_active)。选项键须合 lybra_owner_inbox.custom_option.key_pattern。缺省 = 预演(零写入, 显示将写的 owner_ask); --confirm = 经 record_writer.render_markdown 原子替换写回(其余字段原样)并经 lybra_governance_commit.post_write_landing.commands.loop_note 同一提交口落账。AIPOS-F180 件①: 授权请求结构化建议 --grant-mode <task_mode> / --grant-repos <仓,…> / --grant-max-tasks <N> / --grant-expires <YYYY-MM-DD 或 ISO 时刻> / --grant-reason <理由>(任一即可, 各字段可选)写进 owner_ask.grant {task_mode, lane_repos, max_tasks, expires_at, reason}, 收件箱授权建议(lybra_owner_inbox.grant_request)逐字段以此覆盖推导值; 校验: task_mode ∈ enums.schema task_mode、仓集合经 workspace_config.repo_name_set、额度正整数、到期须在未来(只给日期 = 当日 lybra_owner_inbox.grant_request.date_only_time); 给了 --grant-* 时 --ask 可省(缺省 texts.grant_default_ask)。AIPOS-F222 件②: owner_ask 不得静默——预演与写入前按收件箱同一判定(owner_inbox.owner_ask_destination)算出该请求进哪个收件箱事项: 运行下一动作是等 Owner = 该运行的 loop 事项; 否则同卡有返工上限事项 = 并入它, 无 = 照列 loop 事项(事由 lybra_owner_inbox.categories.loop_owner_needed.advisor_ask.reason); 预演回显 texts.inbox_will, 写入后经 collect_project_inbox 核对回显 texts.inbox_listed(未见 = inbox_missing)。不会进收件箱(卡已结案 / 撤回 / 冻结、该事项已有 Owner 裁决、补写的运行不是 loop status 判定的最近一次)= 拒写(出口 not_listed, 拒因 texts.not_listed + not_listed_reasons + not_listed_hint)。AIPOS-F225 件③: --owner-reason <第一档事由> 必带(键 ∈ lybra_owner_inbox.tiers.tier1.reasons, 写进 owner_ask.owner_reason; 只给 --grant-* = 缺省 tiers.grant_owner_reason), 缺或不在清单 = 拒写(出口 owner_reason_refused, 拒因 texts.owner_reason_refused 指回顾问自处理); 判定唯一实现 owner_inbox.require_owner_reason(卡面 needs_owner 的 owner_reason 同一校验)。",
       "phase": "driver",
       "surface": ["cli"],
       "cli_command": "lybra loop note",
@@ -3747,7 +3842,10 @@
           "ruled": "该事项 {item_id} 已有 Owner 裁决 {decision_id}(选 {choice})",
           "not_latest": "补写的运行 {run_id} 不是 loop status 判定的本卡最近一次运行 {latest_run_id}"
         },
-        "not_listed_hint": "已裁决 = 按裁决续跑 loop(lybra loop status --task-id {task_id} 看下一步), 新问题在新运行结束后再 note; 卡已结案 / 冻结 = 无需 Owner 定"
+        "not_listed_hint": "已裁决 = 按裁决续跑 loop(lybra loop status --task-id {task_id} 看下一步), 新问题在新运行结束后再 note; 卡已结案 / 冻结 = 无需 Owner 定",
+        "owner_reason_refused": "OWNER_REASON_REQUIRED: 升 Owner 须带第一档事由 --owner-reason <{reasons}>(AIPOS-F225, 声明 lybra_owner_inbox.tiers.tier1.reasons){got_part}; 不写入。技术故障(门拒 / 落账拒 / 等待超时 / 连败 / 证据重试用尽等)归顾问自处理: lybra loop status --task-id {task_id} 看下一动作与修法, 修不动且确属第一档再带事由升",
+        "owner_reason_got": ", 给的 {value!r} 不在清单",
+        "owner_reason": "    第一档事由: {label}({key})"
       },
       "parameters": {
         "type": "object",
@@ -3763,6 +3861,7 @@
           "grant_max_tasks": {"type": "integer", "description": "AIPOS-F180: 授权建议额度(正整数)"},
           "grant_expires": {"type": "string", "description": "AIPOS-F180: 授权建议到期(YYYY-MM-DD 或带时区 ISO 时刻, 须在未来)"},
           "grant_reason": {"type": "string", "description": "AIPOS-F180: 授权理由(一句话; 缺省 = 卡标题)"},
+          "owner_reason": {"type": "string", "description": "AIPOS-F225 件③: 升 Owner 的第一档事由(键 ∈ lybra_owner_inbox.tiers.tier1.reasons); --ask 必带, 缺或不在清单 = 拒写(exit owner_reason_refused); 只给 --grant-* 时缺省 tiers.grant_owner_reason"},
           "confirm": {"type": "boolean"},
           "json": {"type": "boolean"}
         },
@@ -3774,7 +3873,8 @@
         "run_active": {"code": 1, "meaning": "最近一次运行仍在跑(state 不在 allowed_states), 拒写"},
         "usage": {"code": 2, "meaning": "缺 --ask(且无 --grant-*)/ 选项格式不合 / --grant-* 值不合"},
         "no_run": {"code": 4, "meaning": "本卡无 loop 运行记录 / 记录读不出"},
-        "not_listed": {"code": 5, "meaning": "AIPOS-F222 件②: 本次 owner_ask 不会进 Owner 收件箱(卡已结案 / 冻结 / 该事项已裁决 / 补写的运行不是最近一次), 拒写并指路"}
+        "not_listed": {"code": 5, "meaning": "AIPOS-F222 件②: 本次 owner_ask 不会进 Owner 收件箱(卡已结案 / 冻结 / 该事项已裁决 / 补写的运行不是最近一次), 拒写并指路"},
+        "owner_reason_refused": {"code": 6, "meaning": "AIPOS-F225 件③: --ask 升 Owner 缺第一档事由 --owner-reason 或不在 lybra_owner_inbox.tiers.tier1.reasons, 拒写并指回顾问处理"}
       }
     },
     "lybra_charter": {

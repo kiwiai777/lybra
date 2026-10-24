@@ -432,6 +432,12 @@ class LoopRunRecorder:
         self._dirty = True
         self.flush(force=True)
 
+    def set_env(self, env: dict[str, Any]) -> None:
+        """AIPOS-F225 件②: 本次运行起跑时的环境指纹(env 段: validation_roots_digest; 部署提交另在 deploy 段), 自动重新派审的变化判据读它。"""
+        self.meta["env"] = dict(env)
+        self._dirty = True
+        self.flush(force=True)
+
     def deploy_changed(self, change: dict[str, Any]) -> None:
         """部署已更新: 写明新旧提交(from = 本运行快照, to = 现部署 current; 读不出时 to_detail 给缘由)。"""
         deploy = dict(self.meta.get("deploy") or {})
@@ -1009,8 +1015,14 @@ def loop_status(governance_root: Path, task_id: str | None = None, *, now: datet
         report = _loop_status(Path(governance_root), task_id, now=now, contract=contract, lane=lane, include_frozen=include_frozen)
         if task_id:  # AIPOS-F162 件②: 本卡补充审计链路(唯一实现 audit_derivation.supplementary_audit_chain; 同一作用域, 不另扫队列)
             from tools.aipos_cli.audit_derivation import supplementary_audit_chain
+            from tools.aipos_cli.owner_inbox import auto_releases, revoked_auto_release_ids
 
             report["supplementary_audit"] = supplementary_audit_chain(Path(governance_root), task_id)
+            # AIPOS-F225 件②: 本卡第二档自动放行记录(读口唯一 owner_inbox.auto_releases; 已撤回标 revoked)
+            revoked = revoked_auto_release_ids(Path(governance_root), task_id)
+            report["auto_releases"] = [{k: r.get(k) for k in ("auto_release_id", "kind", "released_at", "basis", "round", "verdict_ref", "_path")}
+                                       | {"revoked": str(r.get("auto_release_id") or "") in revoked}
+                                       for r in auto_releases(Path(governance_root), task_id)]
         return report
 
 
@@ -1053,6 +1065,10 @@ def _loop_status(governance_root: Path, task_id: str | None, *, now: datetime | 
         from tools.aipos_cli.owner_inbox import apply_owner_ruling
 
         view["next_action"] = apply_owner_ruling(Path(governance_root), view, view["next_action"])
+        # AIPOS-F225: 仍等 Owner 的按档归类(第一档留 owner_needed 带事由; 第二档自动路径; 第三档归顾问), 唯一实现 owner_inbox.apply_owner_tier
+        from tools.aipos_cli.owner_inbox import apply_owner_tier
+
+        view["next_action"] = apply_owner_tier(Path(governance_root), view, view["next_action"])
         if meta.get("lane_overlaps"):  # AIPOS-F188 件③: 起跑认领前判出的车道重叠(运行记录原样)
             view["lane_overlaps"] = list(meta["lane_overlaps"])
         warning = envelope_warning_view(Path(governance_root), view, now=now)  # AIPOS-F166 件②: 运行所用信封的用量预警
@@ -1151,6 +1167,10 @@ def next_action_declaration(run_decl: dict[str, Any], contract: dict[str, Any] |
         as_reason = str(report_fix_declaration(load_loop_contract(), "executor")["end_reason"])
         if decl["by_end_reason"].get(as_reason) != "advisor_fix":
             raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.by_end_reason.{as_reason} 须为 advisor_fix(return_header_probe 视同的结束原因)")
+    # AIPOS-F225 件①: Owner 介入分级映射守卫(每个可判 owner_needed 的事由须已归档, 唯一实现 owner_inbox._check_tiers, 经 inbox_declaration 加载)
+    from tools.aipos_cli.owner_inbox import inbox_declaration
+
+    inbox_declaration()
     return decl
 
 
@@ -1927,9 +1947,15 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
                                         note_declaration()["texts"], confirmed=True))
         if na:
             out.append(f"  顾问下一动作: {na['action']}({na['reason']}) — {na['detail']}")
+            if isinstance(na.get("owner_reason"), dict):  # AIPOS-F225: 第一档事由
+                from tools.aipos_cli.owner_inbox import tier_declaration
+
+                out.append("   " + str(tier_declaration()["texts"]["owner_reason_part"]).format(**na["owner_reason"]))
             first, *rest = str(na["hint"]).splitlines() or [""]
             out.append(f"    下一条: {first}")
             out.extend(f"      {line}" for line in rest)  # AIPOS-F150: advisor_fix 修法多步逐行
+            if na.get("escalate_hint"):  # AIPOS-F225: 第二 / 第三档归顾问, 确属第一档才带事由升 Owner
+                out.append(f"    {na['escalate_hint']}")
     if report.get("task_id") and report.get("runs_on_record", 0) > 1:
         out.append(f"(该卡共 {report['runs_on_record']} 次运行记录, 上为最近一次)")
     w = report.get("wait")
@@ -1940,6 +1966,9 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
         out.append(f"(AIPOS-F152) {report['deploy_changed']['message']}")
     for row in report.get("post_merge_regression_unfinished") or []:  # AIPOS-F166 件③
         out.append(row["line"])
+    for rel in report.get("auto_releases") or []:  # AIPOS-F225 件②: 第二档自动放行(Owner 可在收件箱「已自动放行」撤回)
+        out.append(f"第二档自动放行 {rel['auto_release_id']}({rel['kind']} @ {rel['released_at']})" + ("[已被 Owner 撤回]" if rel["revoked"] else "")
+                   + f": {rel['basis']}")
     if report.get("supplementary_audit"):  # AIPOS-F162 件②: 已结案卡补充审计链路(唯一渲染 audit_derivation.render_supplementary_chain)
         from tools.aipos_cli.audit_derivation import render_supplementary_chain
 
@@ -2052,6 +2081,11 @@ def render_owner_ask(ask: dict[str, Any]) -> list[str]:
         lines.append(str(texts["options"]).format(options=" / ".join(f"{o.get('key')}={o.get('label')}" for o in ask["options"])))
     if ask.get("recommend"):
         lines.append(str(texts["recommend"]).format(recommend=ask["recommend"]))
+    if ask.get("owner_reason"):  # AIPOS-F225 件③: 第一档事由
+        from tools.aipos_cli.owner_inbox import owner_reason_entry
+
+        entry = owner_reason_entry(ask["owner_reason"]) or {"key": ask["owner_reason"], "label": "?"}
+        lines.append(str(texts["owner_reason"]).format(**entry))
     if isinstance(ask.get("grant"), dict) and ask["grant"]:  # AIPOS-F180: structured authorization suggestion (advisor fields)
         fields = " · ".join(f"{k}={', '.join(v) if isinstance(v, list) else v}" for k, v in ask["grant"].items())
         lines.append(str(texts["grant"]).format(fields=fields))
@@ -2060,7 +2094,8 @@ def render_owner_ask(ask: dict[str, Any]) -> list[str]:
 
 def annotate_owner_ask(governance_root: Path, task_id: str, *, ask: str, options: list[str] | None = None,
                        recommend: str | None = None, actor: str | None = None, confirm: bool = False,
-                       now: datetime | None = None, grant: dict[str, Any] | None = None) -> dict[str, Any]:
+                       now: datetime | None = None, grant: dict[str, Any] | None = None,
+                       owner_reason: str | None = None) -> dict[str, Any]:
     """件③ 唯一实现: 本卡最近一次运行(与 loop status --task-id 同一取法)state ∈ allowed_states 才写; 预演零写入, 确认 = 读回整份记录
     → 只加 owner_ask → record_writer.render_markdown 原子替换(其余字段与正文原样)→ 经 land_written_paths(loop_note)落账。
     拒 = LoopNoteRejected(outcome)。返回 {stage, record_path, owner_ask, state, landing}。
@@ -2077,7 +2112,8 @@ def annotate_owner_ask(governance_root: Path, task_id: str, *, ask: str, options
     except ValueError as exc:
         raise LoopNoteRejected("usage", str(exc)) from exc
     decl = note_declaration()
-    if not str(ask or "").strip():
+    asked = bool(str(ask or "").strip())
+    if not asked:
         if not grant_fields:
             raise LoopNoteRejected("usage", "--ask 须为非空的一句话(要 Owner 定什么), 或给 --grant-* 授权建议")
         ask = str(decl["texts"]["grant_default_ask"])
@@ -2102,6 +2138,8 @@ def annotate_owner_ask(governance_root: Path, task_id: str, *, ask: str, options
     if grant_fields:
         owner_ask["grant"] = grant_fields
     destination = _note_destination(root, task_id, meta, owner_ask, decl)  # AIPOS-F222 件②: 不进收件箱 = 拒写(LoopNoteRejected not_listed)
+    # AIPOS-F225 件③: 升 Owner 必带第一档事由(用法 / 运行状态 / 去向都核过之后判; 缺或不在清单 = 拒写 owner_reason_refused)
+    owner_ask["owner_reason"] = _note_owner_reason(owner_reason, grant_only=not asked, task_id=task_id, decl=decl)
     report: dict[str, Any] = {"stage": "confirm" if confirm else "preview", "record_path": str(path), "run_id": meta.get("run_id"),
                               "state": state, "owner_ask": owner_ask, "landing": None, "inbox": destination}
     if not confirm:
@@ -2126,6 +2164,20 @@ def annotate_owner_ask(governance_root: Path, task_id: str, *, ask: str, options
         report["landing"] = {"landed": False, "exit_code": 1, "reason": str(exc), "line": f"⚠ 落账未完成(写入已生效, 勿重复执行写命令): {exc}"}
     report["inbox"] = _note_inbox_check(root, destination)
     return report
+
+
+def _note_owner_reason(value: Any, *, grant_only: bool, task_id: str, decl: dict[str, Any]) -> str:
+    """AIPOS-F225 件③: 升 Owner 的第一档事由(校验唯一实现 owner_inbox.require_owner_reason); 缺 / 不在清单 = LoopNoteRejected(owner_reason_refused,
+    拒因 texts.owner_reason_refused 指回顾问自处理)。只给 --grant-* = 缺省 tiers.grant_owner_reason。"""
+    from tools.aipos_cli.owner_inbox import OwnerReasonRefused, owner_reason_keys, require_owner_reason
+
+    try:
+        return require_owner_reason(value, grant=grant_only)
+    except OwnerReasonRefused as exc:
+        texts = decl["texts"]
+        got = str(texts["owner_reason_got"]).format(value=str(exc)) if str(exc) else ""
+        raise LoopNoteRejected("owner_reason_refused", str(texts["owner_reason_refused"]).format(
+            reasons=owner_reason_keys(), got_part=got, task_id=task_id)) from exc
 
 
 def _note_destination(root: Path, task_id: str, meta: dict[str, Any], owner_ask: dict[str, Any], decl: dict[str, Any]) -> dict[str, Any]:
@@ -2213,7 +2265,8 @@ def loop_note_cli(args: Any) -> int:
                  "reason": getattr(args, "grant_reason", None)}
         report = annotate_owner_ask(root, task_id, ask=getattr(args, "ask", None) or "", options=getattr(args, "note_options", None),
                                     recommend=getattr(args, "recommend", None), actor=getattr(args, "actor", None),
-                                    confirm=bool(getattr(args, "confirm", False)), grant=grant)
+                                    confirm=bool(getattr(args, "confirm", False)), grant=grant,
+                                    owner_reason=getattr(args, "owner_reason", None))
     except LoopNoteRejected as exc:
         print(f"lybra loop note: {exc}", file=sys.stderr)
         return declared_exit_code(NOTE_VERB, exc.outcome)

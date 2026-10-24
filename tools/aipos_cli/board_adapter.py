@@ -1712,6 +1712,9 @@ def publish_draft(
             return _blocked_execute(operation, actor=actor)
         resolved_root = _resolve_repo_root(repo_root)
         result = backend_publish_draft(resolved_root, normalized_path, dry_run=True, actor=actor)
+        refusal = _needs_owner_reason_refusal(result.get("rendered_markdown"))  # AIPOS-F225 件③: needs_owner 卡须带第一档事由
+        if refusal:
+            result = {**result, "blocking_reasons": [*list(result.get("blocking_reasons", [])), refusal]}
         verdict = derive_verdict(
             blocking_reasons=list(result.get("blocking_reasons", [])),
             warnings=list(result.get("warnings", [])),
@@ -1759,6 +1762,25 @@ def publish_draft(
         )
     except Exception as exc:
         return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))
+
+
+def _needs_owner_reason_refusal(rendered: Any) -> str | None:
+    """AIPOS-F225 件③: 待发布卡 needs_owner = true 而卡面第一档事由(tiers.needs_owner_reason_field)缺 / 不在清单 = 阻断理由原文(校验唯一实现
+    owner_inbox.require_owner_reason); 否则 None。渲染稿读不出 = None(既有发布校验已点名)。"""
+    if not isinstance(rendered, str) or not rendered.strip():
+        return None
+    from tools.aipos_cli.owner_inbox import OwnerReasonRefused, owner_reason_keys, require_owner_reason, tier_declaration
+
+    meta, _body, _warnings = parse_markdown_frontmatter(rendered)
+    if not isinstance(meta, dict) or meta.get("needs_owner") is not True:
+        return None
+    tiers = tier_declaration()
+    field = str(tiers["needs_owner_reason_field"])
+    try:
+        require_owner_reason(meta.get(field))
+    except OwnerReasonRefused:
+        return str(tiers["texts"]["needs_owner_reason_missing"]).format(field=field, reasons=owner_reason_keys())
+    return None
 
 
 def _queue_mutation_preview(
@@ -7323,6 +7345,8 @@ def _mark_concluded_review_rework(*, resolved_root: Path, tid: str, queue_state:
             actor=_actor_payload(actor_text), data={**data, "written": written.get("paths")})
     data["written"] = list(written.get("paths") or [])
     data["rework_round"] = (rework.get("data") or {}).get("rework_round") or data["rework_round"]
+    data["auto_release"] = (rework.get("data") or {}).get("auto_release")  # AIPOS-F225 件②: 第二档自动追加(记录 ID + 依据)
+    data["written"] += [str(w.get("path")) for w in (rework.get("performed_writes") or []) if isinstance(w, dict) and w.get("type") == "auto_release_record"]
     return make_response(ok=True, verdict=Verdict.PASS, operation=operation, dry_run=False, actor=_actor_payload(actor_text), data=data,
                          safety_notice=("AIPOS-F221 mark_concluded --outcome rework: 顾问复核记录已落、返工轮已登记(门 queue rework 同一写函数), "
                                         "卡留 claimed; 复核记录与返工节随该卡 N6 收账。"))
@@ -9396,7 +9420,22 @@ def queue_rework_task(
             result.setdefault("data", {})["total_rounds"] = round_result["data"]["total_rounds"]
             result.setdefault("data", {})["max_rounds"] = round_result["data"]["max_rounds"]
             result.setdefault("data", {})["rework_round"] = round_result["data"]["new_round"]
-        
+        auto_release = (round_result.get("data") or {}).get("auto_release")
+        if auto_release and result.get("ok") and result.get("verdict") != Verdict.BLOCK:
+            # AIPOS-F225 件②: 第二档自动追加轮 = 改卡写入成功后落一条自动放行记录(owner_inbox.write_auto_release 唯一写口; 轮次 auto_extension_ref = 其 ID)
+            result.setdefault("data", {})["auto_release"] = {"record_id": auto_release["record_id"], "basis": auto_release["basis"]}
+            if not dry_run:
+                from tools.aipos_cli.owner_inbox import write_auto_release
+
+                written = write_auto_release(
+                    resolved_root, task_id, str(auto_release["kind"]), released_by=actor_text, basis=str(auto_release["basis"]),
+                    record_id=str(auto_release["record_id"]), round_no=round_result["data"]["round_added"], verdict_ref=verdict_ref,
+                    evidence={"fingerprint": auto_release.get("fingerprint"), "publish_ref": auto_release.get("publish_ref")})
+                for path_text in written["paths"]:
+                    rel = Path(path_text).resolve()
+                    rel_text = rel.relative_to(resolved_root.resolve()).as_posix() if rel.is_relative_to(resolved_root.resolve()) else str(rel)
+                    result.setdefault("performed_writes", []).append({"path": rel_text, "kind": "create", "type": "auto_release_record"})
+
         if dry_run and result.get("ok") and result.get("verdict") != Verdict.BLOCK:
             # AIPOS-F154: 预览签发的确认令牌须是 queue_rework 自己的(门 lybra_queue_rework_confirm 只认 operation=queue_rework;
             # 原样透出内部 amend 的 queue_amend 令牌 = 确认必拒 INCOMPATIBLE_DRY_RUN, 返工节永远落不了)。令牌 plan 带原始参数,
