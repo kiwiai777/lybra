@@ -961,7 +961,8 @@
           },
           "acceptance_criteria": {"type": "string"},
           "cleared_at": {"type": "string", "format": "iso8601"},
-          "cleared_by": {"type": "string"}
+          "cleared_by": {"type": "string"},
+          "owner_extension_ref": {"type": "string", "description": "AIPOS-F222 件③: 超出返工上限、按 Owner「授权本卡追加一轮返工」裁决追加的轮次 = 该裁决的决策记录 ID(transitions queue_rework.guards.rework_limit.owner_extension.round_field; 引用即消费, 每个裁决只放一轮)。上限内的轮次无此键"}
         }
       },
       "required": false,

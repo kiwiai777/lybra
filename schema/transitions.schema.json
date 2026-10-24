@@ -1025,6 +1025,16 @@
           "error_message": "返工轮次已达上限,需升仲裁",
           "severity": "needs_human",
           "max_rounds": 2,
+          "owner_extension": {
+            "description": "AIPOS-F222 件③(10-24 chris 岚图 LANTU-DEMO1 实撞: 快车道卡打回 2 轮仍不过, Owner 只能另出新卡 / 改卡 / 撤卡, 不能「这张卡再改一轮」): 上限判据 = max_rounds + 本卡已消费的 Owner 追加裁决数; 本卡尚有未消费的 Owner 裁决(收件箱决策记录 decision_type = lybra_owner_inbox.decision.decision_type, task_id = 本卡, 选项 allowed_next_action = choice, 按裁决时刻旧→新)= 超出上限的这一轮放行, 轮次记 round_field = 该决策记录 ID(已被任一返工轮 round_field 引用的裁决 = 已消费, 不再计入; 每个裁决只放一轮)。门 queue rework 与 `mark-concluded --outcome rework`(同一 queue_mutation.build_rework_round)同判; 唯一实现 queue_mutation.rework_round_budget(收件箱返工上限事项同读)。无未消费裁决 = 拒(texts.refused, 拒因点名本出口)。Owner 裁决 = 收件箱返工上限事项(或顾问 loop note 请 Owner 定且本卡返工额度已尽的 loop 事项)选 choice, 既有 owner_decision_record 写路径(lybra owner decide)。占位: refused {max_rounds} 声明上限 / {rounds} 已有轮数 / {extension_part}(有已消费裁决 = extension_part, 否则空); extension_part {consumed} 已消费裁决数; granted {round} / {decision_id}。",
+            "choice": "extend_rework",
+            "round_field": "owner_extension_ref",
+            "texts": {
+              "refused": "返工轮次已达上限 ({max_rounds} 轮{extension_part})，需升仲裁。当前已有 {rounds} 轮。出口: Owner 在收件箱(lybra owner inbox 返工上限事项)裁决「授权本卡追加一轮返工」(extend_rework, 每个裁决只放一轮)后同一命令重跑即登记; 或另出新卡 / 改卡 / 撤卡",
+              "extension_part": "; 另含 Owner 授权追加 {consumed} 轮, 已用完",
+              "granted": "第 {round} 轮按 Owner 裁决 {decision_id} 追加(授权本卡追加一轮返工, 该裁决已用)"
+            }
+          },
           "next_step": {
             "audience": "advisor",
             "action": "返工轮次已达上限,建议升仲裁或重新评估任务",

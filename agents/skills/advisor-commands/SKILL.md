@@ -549,7 +549,9 @@ lybra mark-concluded --task-id <卡ID> --actor <你的顾问实例> --report-pat
 ```bash
 lybra mark-concluded --task-id <卡ID> --actor <你的顾问实例> --report-path <Return相对路径> --outcome rework --focus-items '["<返工要点>"]' --acceptance-criteria '["<验收标准>"]' --dry-run
 ```
-   产品落一条顾问复核记录(`records/events/<卡ID>/advisor_review_*.md`)+ 返工轮(与 `queue rework` 同一写函数, 轮次上限同, 超限拒 = 升仲裁);
+   产品落一条顾问复核记录(`records/events/<卡ID>/advisor_review_*.md`)+ 返工轮(与 `queue rework` 同一写函数, 轮次上限同, 超限拒 = 升仲裁:
+   去掉 `--dry-run` 的超限打回照落复核记录并自动进 Owner 收件箱「返工轮次达上限」, Owner 选「授权本卡追加一轮返工」(extend_rework)后同一命令
+   (或审计裁决型卡的 `queue rework`)重跑即登记该轮, 每个裁决只放一轮, AIPOS-F222; `lybra loop note` 回显请求进了哪个收件箱事项, 进不了 = 拒写);
    loop 拉起执行体按返工节重写交回 → 重交回 → 回到你复核(早于该轮登记的旧改写不算); 同一交回不重复打回。**别对快车道卡跑
    `audit-verdict`**: 产品在取凭据前就拒(`FAST_LANE_REVIEW_ONLY`, 拒因给出这两条出口), 与凭据无关。loop 停在这一步时 `lybra loop status` 给 advisor_fix(顾问复核结案), 不进 Owner 收件箱。交回后产出被改 = 拒 `INGEST_OUTPUTS_CHANGED`(让执行体按改后产出
    重写 Return, loop 重交回)。之后 N6 落账照常由 loop / `lybra next` 给出。

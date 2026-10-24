@@ -7210,8 +7210,8 @@ def _mark_concluded_review_rework(*, resolved_root: Path, tid: str, queue_state:
     写: 复核记录(record_writer.write_records_atomic, 事件记录) → 返工轮(门 queue rework 同一写函数 queue_rework_task, verdict_ref = review_id)。
     dry_run = 零写入(复核记录与返工节预演)。返工轮写失败 = 拒并给补登记命令(复核记录已落, 不回滚: 记录只追加)。"""
     from tools.aipos_cli.custom_roles import authorize_instance_class
-    from tools.aipos_cli.next_resolver import (_read_task_records, fast_lane_review, fast_lane_rework_state,
-                                               governance_outputs_return_binding, review_rework_declaration)
+    from tools.aipos_cli.next_resolver import (_read_task_records, advisor_review_anchor, fast_lane_review, fast_lane_rework_state,
+                                               governance_outputs_return_binding, review_rework_declaration, rework_round_for_verdict)
     from tools.aipos_cli.queue_mutation import build_rework_round
     from tools.aipos_cli.record_writer import render_markdown, write_records_atomic
     from tools.aipos_cli.workspace_config import lybra_command_prefix
@@ -7220,9 +7220,9 @@ def _mark_concluded_review_rework(*, resolved_root: Path, tid: str, queue_state:
     decl = review_rework_declaration()
     codes = decl["reject_codes"]
 
-    def _refuse(code: str, **values: Any) -> dict[str, Any]:
+    def _refuse(code: str, suffix: str = "", **values: Any) -> dict[str, Any]:
         return blocked_response(operation=operation, dry_run=dry_run, category="VALIDATION_ERROR",
-                                message=f"AIPOS-F221: {code}: " + str(codes[code]).format(task_id=tid, **values),
+                                message=f"AIPOS-F221: {code}: " + str(codes[code]).format(task_id=tid, **values) + suffix,
                                 actor=_actor_payload(actor_text), data={"task_id": tid, "code": code, "outcome": decl["outcome"]})
 
     if queue_state != "claimed":
@@ -7251,6 +7251,12 @@ def _mark_concluded_review_rework(*, resolved_root: Path, tid: str, queue_state:
     event_type = str(decl["event_type"])
     reviewed_at = iso_z()
     review_id = f"{event_type}_{tid}_{file_slug('compact', reviewed_at)}"
+    # AIPOS-F222 件①: 同一交回已有一条无返工轮的复核记录(上次在返工上限处被拒、已升 Owner 收件箱)= 复用它, 不重复记录
+    latest_review = advisor_review_anchor(resolved_root, tid)
+    reused: str | None = None
+    if (latest_review is not None and str(latest_review[1].get("reviewed_return_record_ref") or "") == return_id
+            and rework_round_for_verdict(fm, latest_review[1]) is None):
+        reused = review_id = str(latest_review[1]["verdict_id"])
     role_gate = authorize_instance_class(actor_text, restricted_amend_actor_class(), resolved_root)
     planned = build_rework_round(repo_root=resolved_root, task_id=tid, verdict_ref=review_id, focus_items=items,
                                  acceptance_criteria="\n".join(criteria), actor=actor_text)
@@ -7258,8 +7264,11 @@ def _mark_concluded_review_rework(*, resolved_root: Path, tid: str, queue_state:
     if not role_gate["ok"]:
         reasons.insert(0, f"ROLE_VIOLATION: 复核打回(queue rework 同一判据)只能由角色类 {role_gate['required_class']} 的实例执行; "
                           f"实例 '{actor_text}' 未授权: {role_gate['reason']}")
-    if reasons or planned.get("verdict") == Verdict.BLOCK:
+    limit_only = role_gate["ok"] and (planned.get("data") or {}).get("code") == "REWORK_LIMIT"
+    if (reasons or planned.get("verdict") == Verdict.BLOCK) and not limit_only:
         return _refuse("REVIEW_REWORK_ROUND_REFUSED", reasons="; ".join(reasons) or "(返工节构建被拒)")
+    if limit_only and dry_run:
+        return _refuse("REVIEW_REWORK_ROUND_REFUSED", suffix=f"; {decl['escalate_hint']}", reasons="; ".join(reasons))
     round_data = planned.get("data") or {}
     binding = dict((outputs_check or {}).get("bound") or governance_outputs_return_binding(resolved_root, tid) or {})
     values = {"record_type": RecordType.TASK_PROGRESS_EVENT, "event_type": event_type, "task_id": tid, "review_id": review_id,
@@ -7273,17 +7282,32 @@ def _mark_concluded_review_rework(*, resolved_root: Path, tid: str, queue_state:
             + "".join(f"- 返工要点: {x}\n" for x in items) + "".join(f"- 验收: {x}\n" for x in criteria)
             + "\n卡留 claimed 不结案; 执行体按返工节重交回后回到顾问复核。判据 verbs.schema lybra_mark_concluded.review_rework; "
               "实现 tools/aipos_cli/board_adapter._mark_concluded_review_rework。\n")
+    if limit_only:  # AIPOS-F222 件①: 仅因上限被拒(非预演)= 照落复核记录(无返工轮)并升 Owner 收件箱返工上限事项
+        body = (f"# Advisor Review (rework, limit reached): {tid}\n\n顾问 {actor_text} 复核交回 {return_id}(产出清单指纹 "
+                f"{binding.get('outputs_digest') or '(交回记录无绑定)'})不通过; 返工轮次已达上限, 未登记返工轮, 升 Owner 收件箱返工上限事项"
+                "(可裁授权本卡追加一轮返工 extend_rework)。\n\n" + "".join(f"- 返工要点: {x}\n" for x in items)
+                + "".join(f"- 验收: {x}\n" for x in criteria)
+                + "\n判据 verbs.schema lybra_mark_concluded.review_rework.escalation_note; 实现 tools/aipos_cli/board_adapter._mark_concluded_review_rework。\n")
     markdown = render_markdown(meta, body, list(meta))
     record_path = record_dir(resolved_root, "events", tid) / f"{review_id}.md"
     data = {"task_id": tid, "from_queue": queue_state, "outcome": str(decl["outcome"]), "moved": False,
             "review_record": {"review_id": review_id, "path": str(record_path.relative_to(resolved_root)),
-                              "reviewed_return_record_ref": return_id, "frontmatter": meta},
+                              "reviewed_return_record_ref": return_id, "frontmatter": meta, "reused": bool(reused)},
             "rework_round": round_data.get("new_round"), "round_added": round_data.get("round_added"),
-            "max_rounds": round_data.get("max_rounds")}
+            "max_rounds": round_data.get("max_rounds"), "owner_extension_ref": round_data.get("owner_extension_ref")}
+    if limit_only:
+        written_paths = [] if reused else list(write_records_atomic(resolved_root, [("event", review_id, markdown, tid)]).get("paths") or [])
+        from tools.aipos_cli.owner_inbox import rework_limit_core
+
+        item = rework_limit_core(resolved_root, tid, fm)
+        refused = _refuse("REVIEW_REWORK_ESCALATED", reasons="; ".join(reasons), review_id=review_id, return_id=return_id,
+                          item_id=(item or {}).get("item_id") or "?")
+        refused["data"] = {**(refused.get("data") or {}), **data, "written": written_paths, "inbox_item_id": (item or {}).get("item_id")}
+        return refused
     if dry_run:
         return make_response(ok=True, verdict=Verdict.PASS, operation=operation, dry_run=True, actor=_actor_payload(actor_text), data=data,
                              safety_notice="AIPOS-F221 mark_concluded --outcome rework dry-run: 顾问复核记录与返工节预演, 零写入; 卡留 claimed。")
-    written = write_records_atomic(resolved_root, [("event", review_id, markdown, tid)])
+    written = {"paths": []} if reused else write_records_atomic(resolved_root, [("event", review_id, markdown, tid)])
     rework = queue_rework_task(task_id=tid, verdict_ref=review_id, focus_items=items, acceptance_criteria="\n".join(criteria),
                                actor=actor_text, agent_instance=actor_text, dry_run=False, repo_root=resolved_root)
     if rework.get("verdict") == Verdict.BLOCK or not rework.get("ok", False):

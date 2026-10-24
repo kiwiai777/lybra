@@ -1921,6 +1921,10 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
         if v.get("owner_ask"):  # AIPOS-F168 件③: 顾问补写的 Owner 待决结构字段(收件箱同读)
             out.extend(render_owner_ask(v["owner_ask"]))
         na = v.get("next_action")
+        ask_mark = (na or {}).get("owner_ask_inbox") if (na or {}).get("reason") != "owner_ruled" else None
+        if isinstance(ask_mark, dict) and ask_mark.get("item_id"):  # AIPOS-F222 件②: 顾问补写的请求已进收件箱(待 Owner 裁决)
+            out.append(_note_inbox_line({**ask_mark, "listed": True, "category_label": _inbox_category_label(ask_mark.get("category"))},
+                                        note_declaration()["texts"], confirmed=True))
         if na:
             out.append(f"  顾问下一动作: {na['action']}({na['reason']}) — {na['detail']}")
             first, *rest = str(na["hint"]).splitlines() or [""]
@@ -2097,8 +2101,9 @@ def annotate_owner_ask(governance_root: Path, task_id: str, *, ask: str, options
                  "noted_by": str(actor or meta.get("driver") or "").strip() or None, "noted_at": iso_z(now or utc_now())}
     if grant_fields:
         owner_ask["grant"] = grant_fields
+    destination = _note_destination(root, task_id, meta, owner_ask, decl)  # AIPOS-F222 件②: 不进收件箱 = 拒写(LoopNoteRejected not_listed)
     report: dict[str, Any] = {"stage": "confirm" if confirm else "preview", "record_path": str(path), "run_id": meta.get("run_id"),
-                              "state": state, "owner_ask": owner_ask, "landing": None}
+                              "state": state, "owner_ask": owner_ask, "landing": None, "inbox": destination}
     if not confirm:
         return report
     try:
@@ -2119,7 +2124,73 @@ def annotate_owner_ask(governance_root: Path, task_id: str, *, ask: str, options
                                                command="loop_note", task_id=task_id)
     except SchemaLoadError as exc:
         report["landing"] = {"landed": False, "exit_code": 1, "reason": str(exc), "line": f"⚠ 落账未完成(写入已生效, 勿重复执行写命令): {exc}"}
+    report["inbox"] = _note_inbox_check(root, destination)
     return report
+
+
+def _note_destination(root: Path, task_id: str, meta: dict[str, Any], owner_ask: dict[str, Any], decl: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F222 件②: 本次 owner_ask 进哪个收件箱事项(收件箱同一判定 owner_inbox.owner_ask_destination; 运行视图与下一动作取 loop status
+    同一推导, 已裁决改写的下一动作还原为原判)。不会进收件箱 = LoopNoteRejected(not_listed, 原因 + 指路)。返回 {item_id, category,
+    category_label, merged}。"""
+    from tools.aipos_cli.owner_inbox import inbox_declaration, owner_ask_destination
+
+    texts = decl["texts"]
+    reasons = texts["not_listed_reasons"]
+    try:
+        runs = loop_status(root, task_id).get("runs") or []
+    except LoopRunRecordError as exc:
+        raise LoopNoteRejected("no_run", f"运行记录读不出(收件箱去向判不出, 不写): {exc}") from exc
+    view = runs[-1] if runs else {}
+
+    def _reject(key: str, **values: Any) -> LoopNoteRejected:
+        reason = str(reasons[key]).format(task_id=task_id, **values)
+        return LoopNoteRejected("not_listed", str(texts["not_listed"]).format(reason=reason, hint=str(texts["not_listed_hint"]).format(
+            task_id=task_id)))
+
+    if str(view.get("run_id") or "") != str(meta.get("run_id") or ""):
+        raise _reject("not_latest", run_id=meta.get("run_id") or "?", latest_run_id=view.get("run_id") or "?")
+    na = dict(view.get("next_action") or {})
+    if na.get("reason") == "owner_ruled" and isinstance(na.get("ruled_from"), dict):
+        na = {**na, "action": na["ruled_from"].get("action") or "owner_needed", "reason": na["ruled_from"].get("reason")}
+    dest = owner_ask_destination(root, task_id, {**view, "owner_ask": owner_ask}, na)
+    if dest is None:  # owner_ask 已校验非空, 不会到这里; 防御: 不猜
+        raise LoopNoteRejected("usage", "--ask 为空, 无可进收件箱的请求")
+    if dest["reason"] == "card_closed":
+        raise _reject("card_closed", state=dest.get("state") or "?")
+    if dest["reason"] == "frozen":
+        raise _reject("frozen")
+    if dest["reason"] == "ruled":
+        raise _reject("ruled", item_id=dest["item_id"], decision_id=dest.get("decision_id") or "?", choice=dest.get("choice") or "?")
+    label = str(inbox_declaration()["categories"][dest["category"]]["label"])
+    return {"item_id": dest["item_id"], "category": dest["category"], "category_label": label, "merged": bool(dest["merged"])}
+
+
+def _note_inbox_check(root: Path, destination: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F222 件②: 写入后经收件箱同一收集(owner_inbox.collect_project_inbox, 只算 loop / 返工上限两类)核对该事项已列出。"""
+    from tools.aipos_cli.owner_inbox import collect_project_inbox
+
+    inbox = collect_project_inbox(root, categories=("loop_owner_needed", "rework_limit"))
+    listed = any(item["item_id"] == destination["item_id"] for item in inbox["items"])
+    return {**destination, "listed": listed, "errors": [f"{e['source']}: {e['error']}" for e in inbox["errors"]],
+            "project": inbox["project"]}
+
+
+def _inbox_category_label(category: Any) -> str:
+    from tools.aipos_cli.owner_inbox import inbox_declaration
+
+    return str(((inbox_declaration()["categories"].get(str(category or "")) or {}).get("label")) or category or "?")
+
+
+def _note_inbox_line(inbox: dict[str, Any], texts: dict[str, Any], *, confirmed: bool) -> str:
+    """loop note 回显「进哪个收件箱事项」(texts.inbox_will / inbox_listed / inbox_missing)。"""
+    values = {"item_id": inbox.get("item_id") or "?", "category_label": inbox.get("category_label") or "?",
+              "merged_part": str(texts["merged_part"]) if inbox.get("merged") else ""}
+    if not confirmed:
+        return str(texts["inbox_will"]).format(**values)
+    if inbox.get("listed"):
+        return str(texts["inbox_listed"]).format(**values)
+    return str(texts["inbox_missing"]).format(item_id=values["item_id"], errors="; ".join(inbox.get("errors") or []) or "无",
+                                              project=inbox.get("project") or "?")
 
 
 def loop_note_cli(args: Any) -> int:
@@ -2158,6 +2229,7 @@ def loop_note_cli(args: Any) -> int:
         print(str(texts["preview" if report["stage"] == "preview" else "written"]).format(record_path=report["record_path"],
                                                                                           run_id=report["run_id"], state=report["state"]))
         print("\n".join(render_owner_ask(report["owner_ask"])))
+        print(_note_inbox_line(report.get("inbox") or {}, texts, confirmed=report["stage"] != "preview"))
         if landing:
             print(landing["line"], file=sys.stdout if landing.get("landed") else sys.stderr)
     if landing and not landing.get("landed"):

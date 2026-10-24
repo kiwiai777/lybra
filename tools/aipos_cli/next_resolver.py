@@ -2638,9 +2638,9 @@ def _non_branch_verdict_staleness(workspace_root: Path, task_id: str, card_front
 # (rework_round_for_verdict / rework_return_bound / non_branch_re_return), 锚 = 顾问复核记录(裁决形视图), 不另起第二套。
 # ---------------------------------------------------------------------------
 
-_REVIEW_REWORK_KEYS = ("outcome", "event_type", "record_fields", "command", "reject_codes", "audit_verdict_refusal")
+_REVIEW_REWORK_KEYS = ("outcome", "event_type", "record_fields", "command", "reject_codes", "audit_verdict_refusal", "escalate_hint")
 _REVIEW_REWORK_CODES = ("REVIEW_REWORK_NOT_CLAIMED", "REVIEW_REWORK_NOT_FAST_LANE", "REVIEW_REWORK_NO_RETURN", "REVIEW_REWORK_FOCUS_REQUIRED",
-                        "REVIEW_REWORK_ALREADY_PENDING", "REVIEW_REWORK_ROUND_REFUSED")
+                        "REVIEW_REWORK_ALREADY_PENDING", "REVIEW_REWORK_ROUND_REFUSED", "REVIEW_REWORK_ESCALATED")
 _FAST_LANE_REWORK_TEXTS = ("await_missing", "await_suggested", "await_progress", "stale_head", "re_return_note", "re_return_suggested",
                            "invalid_fix", "not_updated_note", "reviewed_what", "without_round_note", "without_round_suggested", "back_to_review")
 
