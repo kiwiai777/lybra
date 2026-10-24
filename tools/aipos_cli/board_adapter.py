@@ -7291,8 +7291,10 @@ def _mark_concluded_review_rework(*, resolved_root: Path, tid: str, queue_state:
     markdown = render_markdown(meta, body, list(meta))
     record_path = record_dir(resolved_root, "events", tid) / f"{review_id}.md"
     data = {"task_id": tid, "from_queue": queue_state, "outcome": str(decl["outcome"]), "moved": False,
-            "review_record": {"review_id": review_id, "path": str(record_path.relative_to(resolved_root)),
-                              "reviewed_return_record_ref": return_id, "frontmatter": meta, "reused": bool(reused)},
+            "review_record": {"review_id": review_id, "path": str((latest_review[0] if reused else record_path).relative_to(resolved_root)),
+                              "reviewed_return_record_ref": return_id, "reused": bool(reused),
+                              # 复用 = 既有记录原样(不改写); 新记录 = 将写 / 已写的字段
+                              "frontmatter": {k: latest_review[1].get(k) for k in decl["record_fields"]} if reused else meta},
             "rework_round": round_data.get("new_round"), "round_added": round_data.get("round_added"),
             "max_rounds": round_data.get("max_rounds"), "owner_extension_ref": round_data.get("owner_extension_ref")}
     if limit_only:
