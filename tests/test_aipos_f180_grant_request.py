@@ -406,7 +406,10 @@ def test_item2_inbox_and_envelope_pages_show_request_cards(board, frozen_clock):
     assert names == ["max_tasks", "expires_date", "lane_repo"]
     deny = _plain(re.search(r'<div class="gr-deny" hidden>.*?</details></div>', card).group(0))  # AIPOS-F181: advisor command folded
     _show(f"[件②·不批准(告诉顾问)原文] {deny}")
-    assert deny.startswith(f"告诉 {DRIVER}:这次不批准 LANE-HW1 的授权") and f"--item {hw1['item_id']}" in deny
+    # AIPOS-F226: "decline" is now a one-click ruling (deny_grant, write exception 3); the message + command are the folded fallback
+    assert f"告诉 {DRIVER}:这次不批准 LANE-HW1 的授权" in deny and f"--item {hw1['item_id']}" in deny
+    assert re.findall(r'<div class="gr-deny" hidden><div class="ib-decide" data-ib-item="([^"]+)".*?data-ib-choice="(\w+)"', card) == [
+        (hw1["item_id"], "deny_grant")]
     tech = re.search(r'<details class="gr-tech">.*?</details>', card, re.S).group(0)
     _show(f"[件②·技术详情默认折叠原文] {tech}")
     assert "<details class=\"gr-tech\">" in tech and " open" not in tech and "policy_id=pol_f180_lane_loop_4" in tech
@@ -755,7 +758,7 @@ def test_single_write_route_single_mint_path_and_cjk_guard():
 
     src = (REPO_ROOT / "web" / "board" / "app.py").read_text(encoding="utf-8")
     do_post = src[src.index("def do_POST(self)"):src.index("def do_PUT(self)")]
-    assert do_post.count("if path == ") == len(board_readonly_declaration()["allowed_post_paths"]) + 2, "不新增写路由"
+    assert do_post.count("if path == ") == len(board_readonly_declaration()["allowed_post_paths"]) + 3, "本卡不新增写路由(AIPOS-F226 起写例外③ 收件箱裁决)"
     pages = (REPO_ROOT / "web" / "board" / "readonly_pages.py").read_text(encoding="utf-8")
     script = (REPO_ROOT / "web" / "board" / "static" / "envelopes.js").read_text(encoding="utf-8")
     for name in ("mint_via_gate(", "record_owner_decision(", "load_role_token(", "fetch("):

@@ -3715,3 +3715,12 @@ body.rp-page { margin: 0; background: var(--surface-page); color: var(--ink); fo
   font-size: 13px;
   line-height: 1.6;
 }
+
+/* AIPOS-F226: inbox one-click ruling (option buttons + optional Owner sentence; design tokens only) */
+.rp-page .ib-decide { margin: 8px 0; }
+.rp-page .ib-decide-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 4px; }
+.rp-page .ib-decide-actions button { font: inherit; font-weight: 600; padding: 6px 16px; color: var(--green);
+  background: var(--white); border: 1px solid var(--green); cursor: pointer; }
+.rp-page .ib-decide-actions button:hover { background: var(--mint); }
+.rp-page .ib-words input { font: inherit; width: min(28rem, 100%); margin-left: 6px; }
+.rp-page .ib-fallback > summary { cursor: pointer; color: var(--muted); }

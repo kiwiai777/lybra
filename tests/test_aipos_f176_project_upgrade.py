@@ -492,7 +492,7 @@ def test_single_implementations_and_declarations():
     board_src = (REPO_ROOT / "web" / "board" / "app.py").read_text(encoding="utf-8")
     do_post = board_src[board_src.index("def do_POST(self)"):board_src.index("def do_PUT(self)")]
     # 鉴权通道 + 写例外①(信封)②(项目升级)
-    assert do_post.count("if path == ") == len(board_readonly_declaration()["allowed_post_paths"]) + 2
+    assert do_post.count("if path == ") == len(board_readonly_declaration()["allowed_post_paths"]) + 3  # AIPOS-F226: + 写例外③ 收件箱裁决
     assert 'if path == self._upgrade_paths["write_path"]' in do_post
     env_src = (REPO_ROOT / "tools" / "aipos_cli" / "envelope_board.py").read_text(encoding="utf-8")
     assert env_src.count("preview_store.take(") == 1 and "return handle_owner_write(" in env_src
