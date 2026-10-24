@@ -274,14 +274,7 @@ def find_envelope(
     """
     from tools.aipos_cli.autonomy_policy import driver_envelope_identities, select_envelope
 
-    task = {
-        "task_id": task_id,
-        "task_mode": str(task_fm.get("task_mode") or ""),
-        "project": str(task_fm.get("project") or ""),
-        "reviewed_task_id": str(task_fm.get("reviewed_task_id") or ""),
-        # AIPOS-F134 件③: 信封 task_selector_lane_repo 判定对象(卡 lane; 解析唯一 workspace_config.resolve_card_repo, 经 envelope_subject)
-        "lane": task_fm.get("lane") if isinstance(task_fm.get("lane"), dict) else {},
-    }
+    task = _envelope_task(task_id, task_fm)
     return select_envelope(
         governance_root,
         # AIPOS-F134 件①: 驱动方身份集合唯一构造(门侧 _match_driver_envelope / _match_claim_envelope 同用)
@@ -291,6 +284,45 @@ def find_envelope(
         now=now,
         notes=notes,  # AIPOS-F185 件③: 挑选说明(用了哪个信封 / 被它接替的旧信封)
     )
+
+
+def _envelope_task(task_id: str, task_fm: dict[str, Any]) -> dict[str, Any]:
+    """信封 / 项目授权的判定对象(find_envelope 与授权越界出口同一构造)。"""
+    return {
+        "task_id": task_id,
+        "task_mode": str(task_fm.get("task_mode") or ""),
+        "project": str(task_fm.get("project") or ""),
+        "reviewed_task_id": str(task_fm.get("reviewed_task_id") or ""),
+        # AIPOS-F134 件③: 信封 task_selector_lane_repo 判定对象(卡 lane; 解析唯一 workspace_config.resolve_card_repo, 经 envelope_subject)
+        "lane": task_fm.get("lane") if isinstance(task_fm.get("lane"), dict) else {},
+    }
+
+
+def authorization_ending(governance_root: Path, *, task_id: str, task_fm: dict[str, Any], driver_actor: str, driver_role: str | None,
+                         what: str, authorization_id: str | None = None, now: datetime | None = None) -> dict[str, Any] | None:
+    """AIPOS-F224 件②: 项目常设授权越界出口——本项目有授权(authorization_id 给出 = 只核该一份)而不覆盖本卡与驱动方 = {reason(声明
+    end_reason), message(越界维度 + 一次扩大授权命令), suggested_action(扩大命令), state(运行记录 envelope_state)}; 覆盖 / 项目无授权 = None。
+    判定同 select_envelope(autonomy_policy.authorization_refusal → judge_project_authorization), 文案唯一渲染 authorization_refusal_message。"""
+    from tools.aipos_cli.autonomy_policy import (
+        judge_authorizations,
+        authorization_refusal,
+        authorization_refusal_message,
+        driver_envelope_identities,
+        project_authorization_declaration,
+    )
+
+    identities = driver_envelope_identities(driver_actor, driver_role, DRIVER_ROLE)
+    task = _envelope_task(task_id, task_fm)
+    if authorization_id:
+        found, failures = judge_authorizations(governance_root, [authorization_id], triples=identities, task=task, now=now or utc_now())
+        refusal = failures[0] if found is None and failures else None
+    else:
+        refusal = authorization_refusal(governance_root, identities=identities, task=task, now=now)
+    if refusal is None or not refusal.get("dimension"):
+        return None
+    rendered = authorization_refusal_message(governance_root, refusal, what=what, now=now)
+    return {"reason": str(project_authorization_declaration()["end_reason"]), "message": rendered["message"],
+            "suggested_action": rendered["command"], "state": rendered["state"], "authorization_id": refusal.get("authorization_id")}
 
 
 def mint_hint(*, task_id: str, task_fm: dict[str, Any], driver_actor: str, now: datetime | None = None,
@@ -316,10 +348,21 @@ def _envelope_ending(governance_root: Path, envelope_id: str | None, *, task_id:
     """AIPOS-F166 件②(gap #152): 信封被拒时读门侧用量真相(autonomy_policy.envelope_usage, 与门 count_bound / 时间窗同一计数)判是否
     「额度用尽 / 已过期」。是 = {reason(envelope_exhausted|envelope_expired), message(用量/上限/到期 + 续签命令), suggested_action(续签命令),
     state(运行记录 envelope_state)}; 否(信封仍有效 / 缺 / 撤销等)= None, 调用方照旧出口。文案与结束原因名读声明 lybra_loop.envelope.renew。"""
-    from tools.aipos_cli.autonomy_policy import card_released_by_envelope, envelope_renew_declaration, envelope_usage, renew_plan
+    from tools.aipos_cli.autonomy_policy import (
+        card_released_by_envelope,
+        envelope_renew_declaration,
+        envelope_usage,
+        is_authorization,
+        load_policy,
+        renew_plan,
+    )
 
     if not envelope_id:
         return None
+    if is_authorization(load_policy(governance_root, envelope_id)):
+        # AIPOS-F224 件②: 授权被拒 = 越界出口(点名维度 + 扩大授权), 不给信封续签
+        return authorization_ending(governance_root, task_id=task_id, task_fm=task_fm, driver_actor=driver_actor, driver_role=driver_role,
+                                    what=what, authorization_id=envelope_id, now=now)
     usage = envelope_usage(governance_root, envelope_id, now=now)
     if usage.get("state") not in ("exhausted", "expired"):
         return None
@@ -1429,6 +1472,15 @@ def _run_enveloped(task_id: str, governance_root: Path, result: LoopResult, *, t
             return LoopResult(task_id, "no_envelope", exit_code_for(contract, "no_envelope"), ending["message"], envelope=str(policy_id),
                               suggested_action=ending["suggested_action"], reason=ending["reason"])
     if policy is None:
+        # AIPOS-F224 件②: 项目有常设授权而不覆盖本卡 = 授权越界出口(owner_needed, 点名维度 + 一次扩大授权), 不给新开信封的申领出口
+        ending = authorization_ending(governance_root, task_id=task_id, task_fm=task_fm, driver_actor=driver_actor, driver_role=driver_role,
+                                      what="loop 启动校验不过, 未推进任何步", now=now)
+        if ending is not None:
+            recorder.set_envelope(str(ending["authorization_id"]))
+            recorder.set_envelope_state(ending["state"])
+            say(f"lybra loop {task_id}: exit {exit_code_for(contract, 'no_envelope')} — {ending['message']}")
+            return LoopResult(task_id, "no_envelope", exit_code_for(contract, "no_envelope"), ending["message"],
+                              envelope=str(ending["authorization_id"]), suggested_action=ending["suggested_action"], reason=ending["reason"])
         hint = mint_hint(task_id=task_id, task_fm=task_fm, driver_actor=driver_actor, now=now, governance_root=governance_root)
         msg = "无有效 autonomy 信封, 拒绝裸跑。\n" + "\n".join(f"  - {r}" for r in reasons) + f"\n申领出口(Owner 亲自敲):\n  {hint}"
         say(f"lybra loop {task_id}: exit 5 — {msg}")
@@ -1439,6 +1491,11 @@ def _run_enveloped(task_id: str, governance_root: Path, result: LoopResult, *, t
     say(f"lybra loop {task_id}: envelope={envelope_id} driver={driver_actor} max_steps={max_steps} max_wait={max_wait:g}s{wait_note}")
     for line in choice:  # AIPOS-F185 件③: 写明用的是哪个信封(挑选说明 / 显式信封已被接替而改用)
         say(f"lybra loop {task_id}: 信封: {line}")
+    from tools.aipos_cli.autonomy_policy import authorization_notices, is_authorization, project_authorization_declaration
+
+    if is_authorization(policy):  # AIPOS-F224 件②: 授权告知(80% / 到期前 N 天; 第二档, 不阻塞)
+        for why in authorization_notices(governance_root, envelope_id, now=now):
+            say(f"lybra loop {task_id}: " + project_authorization_declaration()["messages"]["notice"].format(authorization_id=envelope_id, why=why))
 
     result.envelope = envelope_id
     from tools.aipos_cli.machine_zone import card_owner_refusal

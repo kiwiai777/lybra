@@ -172,8 +172,102 @@ def collect_envelopes(home_root: str | Path | None = None, *, now: datetime | No
             continue
         entry["envelopes"] = [{k: row.get(k) for k in _PUBLIC_ROW_KEYS} for row in overview["envelopes"]]
         entry["drivers"] = overview["drivers"]
+        try:  # AIPOS-F224 件③: 「项目授权」主视图 + 迁移草案(读不出 = 点名, 信封照列)
+            entry["authorizations"], entry["migration"] = _authorization_view(p["root"], now=now)
+        except (OSError, ValueError, LookupError) as exc:
+            entry["authorizations"], entry["migration"] = [], None
+            entry["authorization_error"] = f"{type(exc).__name__}: {exc}"
         projects.append(entry)
     return {"home_root": str(enumerated["home_root"]), "home_source": enumerated["home_source"], "projects": projects}
+
+
+_AUTH_PUBLIC_KEYS = ("authorization_id", "revision", "state", "status", "used", "max_tasks", "remaining", "expires_at", "lanes", "hosts",
+                     "launch_harnesses", "zones_open", "supersedes_policies", "notices", "revisions", "owner_approval_ref")
+
+
+def authorization_board_declaration() -> dict[str, Any]:
+    """verbs.schema board_owner_envelopes.authorization(AIPOS-F224 件③, fail-closed): actions / audit_action / texts 齐。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = board_envelopes_declaration().get("authorization")
+    keys = ("heading", "none", "usage_line", "lane_line", "hosts_line", "launch_manual", "zones_none", "notice_line", "migrated_line",
+            "revision_line", "revisions_toggle", "migrate_heading", "migrate_button", "extend_heading", "field_lane", "field_host",
+            "field_open_zone", "field_max_tasks", "field_expires_at", "extend_button", "revoke_heading", "field_reason", "revoke_button",
+            "summary_lines")
+    if (not isinstance(decl, dict) or set(decl.get("actions") or []) != {"migrate", "extend", "revoke"}
+            or not str(decl.get("audit_action") or "").strip() or not isinstance(decl.get("texts"), dict)
+            or any(k not in decl["texts"] for k in keys) or not isinstance(decl["texts"]["summary_lines"], list)):
+        raise SchemaLoadError(f"verbs.schema.json {DECL_KEY}.authorization 未声明齐(actions{{migrate, extend, revoke}} / audit_action / texts {list(keys)})")
+    return decl
+
+
+def _authorization_view(root: Path, *, now: datetime | None) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """一个项目的「项目授权」行(autonomy_policy.authorization_overview, 展示字段)+ 迁移草案摘要(在用而未迁入的信封; 无 = None)。"""
+    from tools.aipos_cli.autonomy_policy import authorization_overview
+
+    rows = [{k: row.get(k) for k in _AUTH_PUBLIC_KEYS} for row in authorization_overview(root, now=now)]
+    draft = authorization_draft_from_envelopes(root, now=now)
+    migration = None
+    if draft["block"] is not None:
+        migration = {"envelopes": [e["policy_id"] for e in draft["envelopes"]], "max_tasks": draft["block"].get("max_tasks"),
+                     "expires_at": draft["block"].get("expires_at"), "notes": draft["notes"]}
+    return rows, migration
+
+
+def _authorization_html(proj: dict[str, Any], *, owner: bool) -> str:
+    """「项目授权」主视图(每份授权: 修订 / 状态 / 用量 / 车道 / 主机 / 禁区 / 告知 / 修订史 / 迁入的旧信封)+ Owner 表单(迁移 / 扩大 / 撤销,
+    走本页同一写路由 mode = authorization)。全部值经 html.escape。"""
+    from tools.aipos_cli.autonomy_policy import project_authorization_declaration
+
+    esc = html.escape
+    t = authorization_board_declaration()["texts"]
+    name = str(proj["project"])
+    out = [f"<div class=\"authorization-view\" data-project=\"{esc(name)}\" data-authorizations=\"{len(proj.get('authorizations') or [])}\">"]
+    if proj.get("authorization_error"):
+        out.append(f"<p class=\"envelope-error\">{esc(proj['authorization_error'])}</p>")
+    rows = proj.get("authorizations") or []
+    if not rows:
+        out.append(f"<p class=\"envelope-none authorization-none\">{esc(t['none'])}</p>")
+    for row in rows:
+        out.append(f"<section class=\"authorization\" id=\"{esc(str(row['authorization_id']))}\" data-state=\"{esc(str(row.get('state')))}\">"
+                   f"<h3>{esc(_fmt(t['heading'], 'authorization.texts.heading', **row))}</h3>")
+        if row.get("state") == "missing":
+            out.append("</section>")
+            continue
+        lines = [_fmt(t["usage_line"], "authorization.texts.usage_line", **row)]
+        lines += [_fmt(t["lane_line"], "authorization.texts.lane_line", repo=l["repo"], task_modes=", ".join(l["task_modes"]),
+                       drivers=", ".join(l["drivers"])) for l in row.get("lanes") or []]
+        lines.append(_fmt(t["hosts_line"], "authorization.texts.hosts_line", hosts=", ".join(row.get("hosts") or []),
+                          launch=", ".join(row.get("launch_harnesses") or []) or t["launch_manual"],
+                          zones=", ".join(row.get("zones_open") or []) or t["zones_none"]))
+        lines += [_fmt(t["notice_line"], "authorization.texts.notice_line", why=why) for why in row.get("notices") or []]
+        if row.get("supersedes_policies"):
+            lines.append(_fmt(t["migrated_line"], "authorization.texts.migrated_line", policies=", ".join(row["supersedes_policies"])))
+        out.append("<ul>" + "".join(f"<li>{esc(line)}</li>" for line in lines) + "</ul>")
+        revs = "".join(f"<li>{esc(_fmt(t['revision_line'], 'authorization.texts.revision_line', **{k: rev.get(k) for k in ('revision', 'action', 'status', 'revised_at', 'owner_approval_ref')}))}</li>"
+                       for rev in row.get("revisions") or [])
+        out.append(f"<details class=\"authorization-revisions\"><summary>{esc(_fmt(t['revisions_toggle'], 'authorization.texts.revisions_toggle', count=len(row.get('revisions') or [])))}</summary><ul>{revs}</ul></details>")
+        if owner and row.get("status") == "active":
+            zones = ", ".join(project_authorization_declaration()["zones"])
+            fields = [("lane", t["field_lane"]), ("host", t["field_host"]),
+                      ("open_zone", _fmt(t["field_open_zone"], "authorization.texts.field_open_zone", zones=zones)),
+                      ("max_tasks", t["field_max_tasks"]), ("expires_at", t["field_expires_at"])]
+            inputs = "".join(f"<label>{esc(label)} <input name=\"{n}\" type=\"text\" value=\"\"></label>" for n, label in fields)
+            out.append(f"<details class=\"authorization-extend\"><summary>{esc(t['extend_heading'])}</summary>"
+                       f"<form class=\"envelope-form\" data-mode=\"authorization\" data-action=\"extend\" data-workspace=\"{esc(name)}\">{inputs}"
+                       f"<button type=\"submit\">{esc(t['extend_button'])}</button></form></details>")
+            out.append(f"<details class=\"authorization-revoke\"><summary>{esc(t['revoke_heading'])}</summary>"
+                       f"<form class=\"envelope-form\" data-mode=\"authorization\" data-action=\"revoke\" data-workspace=\"{esc(name)}\">"
+                       f"<label>{esc(t['field_reason'])} <input name=\"reason\" type=\"text\" value=\"\"></label>"
+                       f"<button type=\"submit\">{esc(t['revoke_button'])}</button></form></details>")
+        out.append("</section>")
+    mig = proj.get("migration")
+    if mig and owner:
+        out.append(f"<form class=\"envelope-form authorization-migrate\" data-mode=\"authorization\" data-action=\"migrate\" data-workspace=\"{esc(name)}\">"
+                   f"<p>{esc(_fmt(t['migrate_heading'], 'authorization.texts.migrate_heading', count=len(mig['envelopes']), max_tasks=mig['max_tasks'], expires_at=mig['expires_at']))}</p>"
+                   f"<button type=\"submit\">{esc(t['migrate_button'])}</button></form>")
+    out.append("</div>")
+    return "".join(out)
 
 
 def _scope_text(row: dict[str, Any], texts: dict[str, Any]) -> str:
@@ -337,6 +431,7 @@ def envelopes_page_parts(view: dict[str, Any], *, owner: bool, tab: str = "curre
         elif tab == "history":
             parts.append(_table(rows, decl, project=name, owner=False, css="envelope-folded envelope-history", signed=signed))
         else:
+            parts.append(_authorization_html(proj, owner=owner))  # AIPOS-F224 件③: 「项目授权」主视图在前, 信封表在后(迁入的旧信封落「历史」)
             all_rows = proj["envelopes"]
             if not all_rows:
                 parts.append(f"<p class=\"envelope-none\">{esc(texts['none'])}</p>")
@@ -643,8 +738,15 @@ def handle_mint_request(
     now: datetime | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """写例外①(信封签发): 安全判定全在 handle_owner_write(同一框架); 本函数只给签发的归一 / 预演 / 确认回调。
-    preview_store = 预演令牌表(issue(session_ref, digest) / take(token) → (status, entry), web/board/auth_otc.PreviewTokenStore)。"""
+    preview_store = 预演令牌表(issue(session_ref, digest) / take(token) → (status, entry), web/board/auth_otc.PreviewTokenStore)。
+    AIPOS-F224 件③: mode = authorization(项目授权迁移 / 扩大 / 撤销)同一路由、同一安全框架, 回调见 _authorization_callbacks。"""
     decl = board_envelopes_declaration()
+    if str(body.get("mode") or "").strip() == "authorization":
+        prepare_a, preview_a, confirm_a, pre_a = _authorization_callbacks(decl, connection_json)
+        return handle_owner_write(body, decl=decl, action=str(authorization_board_declaration()["audit_action"]), session=session,
+                                  home_root=home_root, preview_store=preview_store, audit_log_path=audit_log_path, prepare=prepare_a,
+                                  preview=preview_a, confirm=confirm_a, pre_confirm=pre_a, origin=origin, host=host,
+                                  content_type=content_type, now=now)
 
     def prepare(body: dict[str, Any], project: str, root: Path, now: datetime, session: dict[str, Any]) -> tuple[dict, dict, dict]:
         params = normalize_mint_params(body, project=project, governance_root=root, now=now)
@@ -671,6 +773,119 @@ def handle_mint_request(
     return handle_owner_write(body, decl=decl, action="envelope_mint", session=session, home_root=home_root, preview_store=preview_store,
                               audit_log_path=audit_log_path, prepare=prepare, preview=preview, confirm=confirm, pre_confirm=pre_confirm,
                               origin=origin, host=host, content_type=content_type, now=now)
+
+
+def normalize_authorization_params(body: dict[str, Any], *, project: str, governance_root: Path, now: datetime) -> dict[str, Any]:
+    """AIPOS-F224 件③: 看板「项目授权」表单 / 授权请求卡 → 参数(预演与确认同一归一, 摘要据此算; 不含随时刻变化的值)。
+    action ∈ 声明 actions; extend = 车道(仓:类型,…:驱动方,…, 分号分隔)/ 主机 / 禁区(逗号分隔)/ 总卡数 / 到期, 或授权请求带来的建议授权块 block;
+    revoke = 原因必填。"""
+    from tools.aipos_cli.autonomy_policy import authorization_ids
+
+    actions = authorization_board_declaration()["actions"]
+    action = str(body.get("action") or "").strip()
+    if action not in actions:
+        raise MintRequestError("PARAMS_INVALID", detail=f"action 须为 {list(actions)}")
+    params: dict[str, Any] = {"project": project, "governance_root": str(governance_root), "mode": "authorization", "action": action}
+    if action != "migrate" and not authorization_ids(governance_root):
+        raise MintRequestError("PARAMS_INVALID", detail=f"项目 {project} 还没有项目授权, 不能 {action}(先迁移或经 CLI lybra project grant sign)")
+    request = str(body.get("request_item") or "").strip()
+    if request and not _REQUEST_ITEM_RE.fullmatch(request):
+        raise MintRequestError("PARAMS_INVALID", detail=f"request_item 形不合: {request!r}")
+    params["request_item"] = request
+    if action == "revoke":
+        reason = " ".join(str(body.get("reason") or "").split())
+        if not reason:
+            raise MintRequestError("PARAMS_INVALID", detail="撤销须写原因")
+        params["reason"] = reason
+    elif action == "extend":
+        if isinstance(body.get("block"), dict):  # 授权请求「按建议签发」: 建议授权块原样(门侧 build_authorization_decision 校验)
+            params["block"] = body["block"]
+            return params
+        lanes = []
+        for spec in [x.strip() for x in str(body.get("lane") or "").split(";") if x.strip()]:
+            parts = spec.split(":")
+            if len(parts) != 3 or not parts[0].strip() or not _split_list(parts[1]) or not _split_list(parts[2]):
+                raise MintRequestError("PARAMS_INVALID", detail=f"车道须为 仓:类型,…:驱动方,…: {spec!r}")
+            lanes.append({"repo": parts[0].strip(), "task_modes": _split_list(parts[1]), "drivers": _split_list(parts[2])})
+        params.update({"lanes": lanes, "hosts": _split_list(body.get("host")), "zones_open": _split_list(body.get("open_zone")),
+                       "max_tasks": _parse_max_tasks(body["max_tasks"]) if str(body.get("max_tasks") or "").strip() else None,
+                       "expires_at": _parse_expiry(body["expires_at"], now) if str(body.get("expires_at") or "").strip() else None})
+        if not (lanes or params["hosts"] or params["zones_open"] or params["max_tasks"] or params["expires_at"]):
+            raise MintRequestError("PARAMS_INVALID", detail="扩大授权至少给一项(车道 / 主机 / 禁区 / 总卡数 / 到期)")
+    return params
+
+
+def _authorization_payload(params: dict[str, Any], decl: dict[str, Any], session: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """参数 → owner_decision_record payload(project_authorization 块唯一构造 autonomy_policy.authorization_block / 迁移草案
+    authorization_draft_from_envelopes; 来源字段 = 看板会话)。"""
+    from tools.aipos_cli.autonomy_policy import authorization_block
+
+    root = Path(params["governance_root"])
+    if params["action"] == "migrate":
+        draft = authorization_draft_from_envelopes(root, now=now)
+        if draft["block"] is None:
+            raise MintRequestError("PREVIEW_BLOCKED", detail="; ".join(draft["notes"]))
+        block = draft["block"]
+    elif params["action"] == "revoke":
+        block = authorization_block(root, action="revoke", now=now, notes=params["reason"])
+    elif isinstance(params.get("block"), dict):
+        block = params["block"]
+    else:
+        block = authorization_block(root, action="extend", now=now, lanes=params["lanes"], hosts=params["hosts"], zones_open=params["zones_open"],
+                                    max_tasks=params["max_tasks"], expires_at=params["expires_at"])
+    payload = {"decision_id": f"grant-{block.get('authorization_id')}-r{int(block.get('base_revision') or 0) + 1:04d}",
+               "project_authorization": block, "actor": str(session["role"]), "decided_by_ref": str(session["role"]),
+               **session_provenance(decl, session)}
+    if params.get("request_item"):
+        payload["decision_summary"] = (f"board {params['action']} project grant {block.get('authorization_id')} "
+                                       + _fmt(decl["texts"]["request_part"], "texts.request_part", request_item=params["request_item"]))[:320]
+    return payload
+
+
+def _authorization_callbacks(decl: dict[str, Any], connection_json: Path | None) -> tuple[Any, Any, Any, Any]:
+    """mode = authorization 的 prepare / preview / confirm / pre_confirm(安全判定全在 handle_owner_write)。"""
+    def prepare(body: dict[str, Any], project: str, root: Path, now: datetime, session: dict[str, Any]) -> tuple[dict, dict, dict]:
+        params = normalize_authorization_params(body, project=project, governance_root=root, now=now)
+        payload = _authorization_payload(params, decl, session, now)
+        audit = {"project": project, "mode": "authorization", "grant_action": params["action"],
+                 "policy_id": payload["project_authorization"].get("authorization_id"), "request_item": params.get("request_item") or None}
+        return params, audit, {"payload": payload}
+
+    def preview(params: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        from tools.aipos_cli.envelope_mint import mint_preview
+
+        payload = context["payload"]
+        try:
+            result = mint_preview([payload], governance_root=Path(params["governance_root"]), actor=str(payload["actor"]))[0]
+        except (FileNotFoundError, OSError, ValueError) as exc:
+            raise MintRequestError("PREVIEW_BLOCKED", detail=f"{type(exc).__name__}: {exc}") from exc
+        if str(result.get("verdict") or "") == "BLOCK" or not result.get("ok"):
+            raise MintRequestError("PREVIEW_BLOCKED", detail=json.dumps(result.get("blocking_reasons") or result.get("errors")
+                                                                        or result.get("message"), ensure_ascii=False)[:800])
+        record = (result.get("data") or {}).get("authorization_record") or {}
+        t = authorization_board_declaration()["texts"]
+        values = {"project": params["project"], "authorization_id": record.get("authorization_id"), "revision": record.get("revision"),
+                  "action": record.get("action"), "max_tasks": record.get("max_tasks"), "expires_at": record.get("expires_at"),
+                  "lanes": "; ".join(f"{l['repo']}({', '.join(l['task_modes'])} / {', '.join(l['drivers'])})" for l in record.get("lanes") or []),
+                  "hosts": ", ".join(record.get("hosts") or []), "launch": ", ".join(record.get("launch_harnesses") or []) or t["launch_manual"],
+                  "zones": ", ".join(record.get("zones_open") or []) or t["zones_none"],
+                  "supersedes": ", ".join(record.get("supersedes_policies") or []) or "-", "verdict": result.get("verdict")}
+        lines = [_fmt(line, "authorization.texts.summary_lines", **values) for line in t["summary_lines"]]
+        dry = {k: v for k, v in result.items() if k != "dry_run_token"}
+        dry["data"] = {k: v for k, v in (result.get("data") or {}).items() if k != "dry_run_token"}
+        return {"params": {**params, "policy_id": record.get("authorization_id")}, "summary_lines": lines, "preview_lines": lines, "dry_run": dry}
+
+    def pre_confirm(params: dict[str, Any], context: dict[str, Any]) -> None:
+        from tools.aipos_cli.autonomy_policy import render_authorization_command
+
+        if connection_json is None:
+            raise MintRequestError("CREDENTIAL_UNAVAILABLE", command=render_authorization_command(
+                params["governance_root"], "draft --from-envelopes" if params["action"] == "migrate" else params["action"], []))
+
+    def confirm(params: dict[str, Any], context: dict[str, Any]) -> tuple[dict, dict, MintRequestError | None]:
+        return _confirm(params, context["payload"], decl, connection_json)
+
+    return prepare, preview, confirm, pre_confirm
 
 
 def _preview(params: dict[str, Any], payload: dict[str, Any], decl: dict[str, Any]) -> dict[str, Any]:
@@ -704,6 +919,76 @@ def _confirm(params: dict[str, Any], payload: dict[str, Any], decl: dict[str, An
     return result, {"ok": True, "stage": "confirm", "params": params, "actor": payload["actor"], "captured_by": payload.get("captured_by"),
                     "capture_surface": payload.get("capture_surface"), "signed": report["signed"], "landing": landing_view,
                     "landing_line": report.get("landing_line"), "exit_code": report["exit_code"], "error": report.get("error")}, None
+
+
+def authorization_draft_from_envelopes(governance_root: Path | str, *, now: datetime | None = None,
+                                       max_tasks: int | None = None) -> dict[str, Any]:
+    """AIPOS-F224 件③ 迁移草案(唯一实现; 只读预演, 声明 verbs.schema lybra_loop.envelope.project_authorization.migration; 放在看板 / CLI 层模块,
+    不进 autonomy_policy, 免 finalize 合并后导入闭包经 validation_root 膨胀): 项目当前在用信封(envelope_overview current, 未被接替且未迁入)
+    合并成一份 grant 授权块——车道 = lane 仓并集(不限 lane = project.json repos 全部仓 / 无清单 = 缺省仓)× 任务类型(不限 = enums task_mode 全部)
+    × 驱动方(agent_or_role); 拉起并集; 期限最晚; 总卡数 = 剩余额度和(max_tasks 给出 = 用给出的); 主机 = 队列在途卡执行 / 审计实例 host 段 ∪
+    validation_roots.hosts ∪ 本机; 禁区全禁; supersedes_policies = 这些信封。返回 {block, envelopes, notes, remaining_sum}; 无在用信封 = block None。"""
+    from tools.aipos_cli.autonomy_policy import (
+        authorization_block,
+        authorization_superseded_policies,
+        card_host,
+        envelope_overview,
+    )
+    from tools.aipos_cli.clock import utc_now
+    from tools.aipos_cli.frontmatter import read_markdown_frontmatter
+    from tools.aipos_cli.validation_root import local_host_label, project_validation_hosts
+    from tools.aipos_cli.workspace_config import project_repos
+    from tools.schema_loader import get_enum_values
+
+    root = Path(governance_root)
+    now = now or utc_now()
+    migrated = authorization_superseded_policies(root)
+    rows = [r for r in envelope_overview(root, now=now)["envelopes"] if r["current"] and r["policy_id"] not in migrated]
+    notes: list[str] = []
+    if not rows:
+        return {"block": None, "envelopes": [], "notes": ["没有在用信封可迁移"], "remaining_sum": 0}
+    repos_decl = project_repos(root)
+    all_repos = list((repos_decl.get("items") or {})) or ([str(repos_decl["code_repo"])] if repos_decl.get("code_repo") else [])
+    all_modes = list(get_enum_values("task_mode"))
+    lanes: list[dict[str, Any]] = []
+    for row in rows:
+        repos = list(row.get("lane_repos") or []) or all_repos
+        modes = [row["task_mode"]] if row.get("task_mode") else all_modes
+        if not repos:
+            notes.append(f"{row['policy_id']}: 推不出车道仓(project.json 无 repos / code_repo), 未并入车道")
+        lanes += [{"repo": r, "task_modes": modes, "drivers": [row["agent_or_role"]]} for r in repos if row.get("agent_or_role")]
+        extra = [f"{k}={row[k]!r}" for k in ("project_selector", "task_ids") if row.get(k)]
+        if extra:
+            notes.append(f"{row['policy_id']} 另有不可表达的选择器 {', '.join(extra)}(授权按车道 × 任务类型覆盖, 范围以草案为准)")
+    remaining = sum(int(r.get("remaining") or 0) for r in rows)
+    hosts = [local_host_label()]
+    try:
+        hosts += list(project_validation_hosts(root))
+    except ValueError as exc:  # 验证根主机段形不合 = 不并入(原文进 notes, 不猜)
+        notes.append(f"validation_roots.hosts 读不出, 未并入主机: {exc}")
+    from tools.aipos_cli.task_loader import QUEUE_STATES, QUEUE_TERMINAL_STATES, iter_queue_task_paths
+
+    for path in iter_queue_task_paths(root, states=tuple(s for s in QUEUE_STATES if s not in QUEUE_TERMINAL_STATES)):
+        try:
+            card, _body, _warn, _fence = read_markdown_frontmatter(path)
+        except OSError as exc:  # 读不出的卡不并入主机(原文进 notes)
+            notes.append(f"卡 {path.name} 读不出, 未并入主机: {exc}")
+            continue
+        host = card_host(card)
+        if host:
+            hosts.append(host)
+    expiry = max((str(r["expires_at"]) for r in rows if r.get("expires_at")), default="")
+    total = int(max_tasks) if max_tasks is not None else remaining
+    if total <= 0:
+        notes.append("在用信封剩余额度和为 0: 须 Owner 显式给 --max-tasks(总卡数硬上限必填)")
+    block = authorization_block(root, action="grant", now=now, lanes=lanes, hosts=list(dict.fromkeys(hosts)),
+                                launch_harnesses=sorted({h for r in rows for h in r.get("launch_harnesses") or []}), zones_open=[],
+                                max_tasks=total if total > 0 else None, expires_at=expiry or None,
+                                supersedes_policies=[r["policy_id"] for r in rows],
+                                notes=f"migrated from envelopes {', '.join(r['policy_id'] for r in rows)}")
+    return {"block": block, "envelopes": [{k: r.get(k) for k in ("policy_id", "agent_or_role", "task_mode", "lane_repos", "used", "max_tasks",
+                                                               "remaining", "expires_at", "launch_harnesses")} for r in rows],
+            "notes": notes, "remaining_sum": remaining}
 
 
 # AIPOS-316: Guard against direct invocation

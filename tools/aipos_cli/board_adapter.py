@@ -1464,6 +1464,16 @@ def submit_external_intake(
         return _normalize_exception(operation, exc, dry_run=dry_run, actor=_actor_payload(actor))
 
 
+def _build_owner_decision(resolved_root: Path, payload: dict[str, Any], *, actor: str | None, dry_run: bool) -> dict[str, Any]:
+    """owner_decision_record 构造分派(预演与门确认重放同调): payload 带 project_authorization 块(AIPOS-F224 项目常设授权签发 / 扩大 / 撤销)=
+    autonomy_policy.build_authorization_decision(决策记录仍由既有 writer 渲染, 另加授权修订一份写); 其余 = 既有 writer 原样(行为不变)。"""
+    if payload.get("project_authorization") not in (None, ""):
+        from tools.aipos_cli.autonomy_policy import build_authorization_decision
+
+        return build_authorization_decision(resolved_root, payload, actor=actor, dry_run=dry_run, backend=backend_build_owner_decision_record)
+    return backend_build_owner_decision_record(resolved_root, payload, actor=actor, dry_run=dry_run)
+
+
 def record_owner_decision(
     payload: Mapping[str, Any],
     dry_run: bool = True,
@@ -1477,12 +1487,7 @@ def record_owner_decision(
         if not dry_run:
             return _blocked_execute(operation, actor=actor)
         resolved_root = _resolve_repo_root(repo_root)
-        result = backend_build_owner_decision_record(
-            resolved_root,
-            dict(payload),
-            actor=actor,
-            dry_run=True,
-        )
+        result = _build_owner_decision(resolved_root, dict(payload), actor=actor, dry_run=True)
         verdict = derive_verdict(
             blocking_reasons=list(result.get("blocking_reasons", [])),
             warnings=list(result.get("warnings", [])),
@@ -1498,6 +1503,12 @@ def record_owner_decision(
             "autonomy_policy_grant": bool(result.get("autonomy_policy_grant")),
             "autonomy_policy_id": result.get("autonomy_policy_id"),
             "autonomy_policy_path": result.get("autonomy_policy_path"),
+            # AIPOS-F224: 项目授权修订(签发 / 扩大 / 撤销)随决策记录一并落盘
+            **({"project_authorization_id": result.get("project_authorization_id"),
+                "authorization_revision": result.get("authorization_revision"),
+                "authorization_path": result.get("authorization_path"),
+                "authorization_record": result.get("authorization_record"),
+                "authorization_markdown": result.get("authorization_markdown")} if result.get("project_authorization_id") else {}),
         }
         response = make_response(
             ok=True,
@@ -6213,12 +6224,7 @@ def execute_dry_run(
 
         if op == RecordType.OWNER_DECISION_RECORD:
             payload = source_data.get("original_payload") or {}
-            result = backend_build_owner_decision_record(
-                resolved_root,
-                payload,
-                actor=actor_text,
-                dry_run=False,
-            )
+            result = _build_owner_decision(resolved_root, payload, actor=actor_text, dry_run=False)
             
             # AIPOS-R6M 大项A②: 决策粒度机器触发 - owner_decision_record落库时自动生成decision_log指针条目
             # AIPOS-F158: 指针写出即列入 performed_writes(落账范围以门应答为准, `lybra envelope mint --confirm` 据此一并提交);

@@ -1718,6 +1718,133 @@ def _project_json_two_phase_emit(command: str, target: dict[str, Any], outcome: 
     return rc
 
 
+def _project_authorization_cli(args: argparse.Namespace, home: Path | None) -> int:
+    """AIPOS-F224: `lybra project grant` 薄壳。块构造 / 校验 / 写全在 autonomy_policy(authorization_block / build_authorization_decision /
+    authorization_overview; 迁移草案 envelope_board.authorization_draft_from_envelopes); 预演 = board_adapter.record_owner_decision(dry_run, 零写入), 确认 =
+    envelope_mint.mint_via_gate(门 owner_decision_record 同一路径, 含落账)。退出码读 verbs.schema lybra_project_authorization.exit_codes。"""
+    from tools.aipos_cli import autonomy_policy as ap
+    from tools.aipos_cli.board_adapter import record_owner_decision
+    from tools.aipos_cli.verb_contract import declared_exit_codes
+
+    codes = declared_exit_codes("lybra_project_authorization")
+    target = _project_write_target(args, home, args.name)
+    if target is None:
+        return codes["refused"]
+    root = Path(target["project_root"])
+    json_out = bool(getattr(args, "json", False))
+    cmd = args.auth_command
+    if cmd == "show":
+        view = {"governance_root": str(root), "authorizations": ap.authorization_overview(root),
+                "migrated_envelopes": ap.authorization_superseded_policies(root)}
+        if json_out:
+            print(render_json(view))
+        else:
+            print(_authorization_text(view))
+        return codes["ok"]
+    notes: list[str] = []
+    if cmd == "draft":
+        from tools.aipos_cli.envelope_board import authorization_draft_from_envelopes
+
+        draft = authorization_draft_from_envelopes(root, max_tasks=args.max_tasks)
+        notes = list(draft["notes"])
+        if draft["block"] is None:
+            print(f"lybra project grant draft: {'; '.join(notes)}", file=sys.stderr)
+            return codes["refused"]
+        block = draft["block"]
+        notes.insert(0, "迁移的在用信封: " + "; ".join(
+            f"{e['policy_id']}({e['agent_or_role']}, task_mode={e['task_mode'] or '不限'}, lane={e['lane_repos'] or '不限'}, "
+            f"剩余 {e['remaining']}/{e['max_tasks']}, 到期 {e['expires_at']})" for e in draft["envelopes"]))
+    elif cmd == "revoke":
+        block = ap.authorization_block(root, action="revoke", notes=args.reason)
+    else:
+        modes, drivers = list(args.task_mode or []), list(args.driver or [])
+        inline = [t.split(":") for t in (args.grant_lane or []) if t.count(":") == 2]
+        plain = [t for t in (args.grant_lane or []) if t.count(":") != 2]
+        lanes = [{"repo": r, "task_modes": [m for m in ms.split(",") if m], "drivers": [d for d in ds.split(",") if d]} for r, ms, ds in inline]
+        if (plain and (not modes or not drivers)) or (not plain and (modes or drivers)) or any(not l["task_modes"] or not l["drivers"] for l in lanes):
+            print("Error: --grant-lane / --task-mode / --driver 须成组给出(每个 --grant-lane 得到给出的全部任务类型与驱动方; 或 --grant-lane 仓:类型,…:驱动方,…)",
+                  file=sys.stderr)
+            return codes["usage"]
+        lanes += [{"repo": r, "task_modes": modes, "drivers": drivers} for r in plain]
+        if cmd == "sign" and (not lanes or not args.host or args.max_tasks is None or not args.expires_at):
+            print("Error: sign 须给 --grant-lane/--task-mode/--driver、--host、--max-tasks 与 --expires-at(期限 + 总卡数双上限必填)", file=sys.stderr)
+            return codes["usage"]
+        block = ap.authorization_block(root, action="grant" if cmd == "sign" else "extend", lanes=lanes,
+                                       hosts=list(args.host or []), launch_harnesses=list(args.launch_harness or []),
+                                       zones_open=list(args.open_zone or []), max_tasks=args.max_tasks, expires_at=args.expires_at)
+    payload = {"decision_id": f"grant-{block['authorization_id']}-r{int(block['base_revision']) + 1:04d}",
+               "project_authorization": block, "actor": args.actor, "decided_by_ref": args.actor}
+    if args.decision_summary:
+        payload["decision_summary"] = args.decision_summary
+    if args.confirm:
+        from tools.aipos_cli.envelope_mint import mint_via_gate
+
+        report = mint_via_gate([payload], governance_root=root, actor=args.actor, connection_json=args.connection_json,
+                               token_role=args.token_role)
+        if report["early"]:
+            print(f"Error: {report['error']}", file=sys.stderr)
+            return codes["refused"]
+        if json_out:
+            print(render_json({k: v for k, v in report.items() if k not in ("early", "landing_line")}))
+        else:
+            print(f"project grant {cmd} --confirm via {report['gate_url']} (credential {args.token_role} "
+                  f"{report['credential_fingerprint']}) → {root}")
+            for item in report["signed"]:
+                print(f"  signed {item['policy_id']} ({item['agent_or_role']}): decision={item['decision_id']}")
+                for path in item["written"]:
+                    print(f"    wrote {path}")
+            if report["landing_line"] is not None:
+                print(report["landing_line"], file=sys.stdout if (report["landing"] or {}).get("landed") else sys.stderr)
+            if report["error"]:
+                print(f"Error: {report['error']}", file=sys.stderr)
+        if report["exit_code"] and report["signed"]:
+            return codes["landing_failed"]
+        return codes["ok"] if report["exit_code"] == 0 else codes["refused"]
+    preview = record_owner_decision(payload, dry_run=True, repo_root=root, actor=args.actor)
+    data = preview.get("data") or {}
+    reasons = list(preview.get("blocking_reasons") or [])
+    if json_out:
+        print(render_json({"stage": "preview", "verdict": preview.get("verdict"), "blocking_reasons": reasons, "notes": notes,
+                           "block": block, "authorization_record": data.get("authorization_record"),
+                           "planned_writes": preview.get("planned_writes")}))
+    else:
+        print(f"lybra project grant {cmd} 预演(零写入; 加 --confirm 经门签发并落账): verdict={preview.get('verdict')}")
+        for note in notes:
+            print(f"  {note}")
+        for item in preview.get("planned_writes") or []:
+            print(f"  将写 {item.get('path')}")
+        for reason in reasons:
+            print(f"  ✗ 拒因: {reason}", file=sys.stderr)
+        if data.get("authorization_markdown"):
+            print("---- 授权修订全文(预演) ----")
+            print(str(data["authorization_markdown"]).rstrip())
+    return codes["refused"] if reasons else codes["ok"]
+
+
+def _authorization_text(view: dict[str, Any]) -> str:
+    """`project grant show` 文本(数据 = autonomy_policy.authorization_overview, 看板「项目授权」同读)。"""
+    lines = [f"项目授权 — 治理根 {view['governance_root']}"]
+    if not view["authorizations"]:
+        lines.append("  (无项目授权: 覆盖判定只看旧信封, 行为不变)")
+    for row in view["authorizations"]:
+        if row.get("state") == "missing":
+            lines.append(f"  {row['authorization_id']}: 最新修订缺失或格式不合规")
+            continue
+        lines.append(f"  {row['authorization_id']} r{row['revision']} 状态={row['state']} 已放行 {row['used']}/{row['max_tasks']} 张业务卡, "
+                     f"到期 {row['expires_at']}")
+        for lane in row["lanes"]:
+            lines.append(f"    车道 {lane['repo']}: 任务类型 {', '.join(lane['task_modes'])}; 驱动方 {', '.join(lane['drivers'])}")
+        lines.append(f"    主机 {', '.join(row['hosts'])} · 拉起 {', '.join(row['launch_harnesses']) or '只手工 /go'} · "
+                     f"放开禁区 {', '.join(row['zones_open']) or '无(全禁)'}")
+        if row["supersedes_policies"]:
+            lines.append(f"    迁入的旧信封(superseded): {', '.join(row['supersedes_policies'])}")
+        for why in row["notices"]:
+            lines.append(f"    告知: {why}")
+        for rev in row["revisions"]:
+            lines.append(f"    修订 r{rev['revision']} {rev.get('action')} {rev.get('status')} @ {rev.get('revised_at')} 裁决 {rev.get('owner_approval_ref')}")
+    return "\n".join(lines)
+
+
 def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
     """AIPOS-F190: `lybra project validation-root` 薄壳。写动作两阶段 = 同一包装(_project_json_two_phase_emit, 写后落账);
     逻辑全在 validation_root(唯一实现)。拒 = refused(拒因码 + 问题, project.json 未改动)。
@@ -2987,7 +3114,7 @@ def build_parser() -> argparse.ArgumentParser:
     vr_declare.add_argument("--task-id", required=True, help="The instance's own card (executor card, or the audit card for an auditor)")
     vr_declare.add_argument("--instance", required=True, help="Executor or auditor instance enrolled in this project")
     vr_declare.add_argument("--expires-at", default=None, help="Expiry ISO time YYYY-MM-DDTHH:MM:SSZ (default: declared_at + roles.schema validation_root.default_ttl_hours)")
-    vr_declare.add_argument("--owner-ref", required=True, help="Owner authorization reference (single line, no credentials)")
+    vr_declare.add_argument("--owner-ref", default=None, help="Owner authorization reference (single line, no credentials). AIPOS-F224: optional when the project has a standing authorization whose hosts include --host (owner_ref then auto-references that authorization record); outside the authorization = refused VR_HOST_NOT_AUTHORIZED. Required when the project has no authorization")
     vr_declare.add_argument("--host-fingerprint", default=None, help="Target host fingerprint hfp1:... (run the helper's `fingerprint` on that host; required on --confirm for a remote host)")
     _project_json_two_phase_flags(vr_declare, "validation-root declare")
     vr_revoke = project_vr_sub.add_parser("revoke", help="Revoke a declaration (every later write is refused)")
@@ -3022,7 +3149,7 @@ def build_parser() -> argparse.ArgumentParser:
     _vr_common(vr_sethost)
     vr_sethost.add_argument("--host", required=True, help="Target host label used by the declarations (e.g. kiwiai-mac)")
     vr_sethost.add_argument("--ssh-alias", required=True, help="ssh alias on this machine (a Host entry of ~/.ssh/config), e.g. kiwiai-mac")
-    vr_sethost.add_argument("--owner-ref", required=True, help="Owner authorization reference (single line, no credentials)")
+    vr_sethost.add_argument("--owner-ref", default=None, help="Owner authorization reference (single line, no credentials). AIPOS-F224: optional when the project has a standing authorization whose hosts include --host (owner_ref then auto-references that authorization record); outside the authorization = refused VR_HOST_NOT_AUTHORIZED. Required when the project has no authorization")
     _project_json_two_phase_flags(vr_sethost, "validation-root set-host")
     vr_list = project_vr_sub.add_parser("list", help="List validation root declarations and runs (read-only)")
     _vr_common(vr_list)
@@ -3108,6 +3235,58 @@ def build_parser() -> argparse.ArgumentParser:
     project_import_parser.add_argument("--dry-run", action="store_true", help="Preview without creating (zero writes)")
     project_import_parser.add_argument("--actor", default=default_actor, help="Actor for provenance (registered_by)")
     project_import_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    # AIPOS-F224: 项目常设授权(声明 verbs.schema lybra_project_authorization; 唯一实现 autonomy_policy)
+    project_auth_parser = project_subparsers.add_parser(
+        "grant",
+        help="AIPOS-F224: project standing grant (项目常设授权; one Owner signature per project: lanes x task modes x drivers / hosts / harness "
+             "launch / expiry + total business cards / forbidden zones) replacing per-card envelopes: show (read-only), draft --from-envelopes "
+             "(migration preview), sign / extend / revoke (default local preview; --confirm signs through the gate owner_decision_record path)")
+    project_auth_sub = project_auth_parser.add_subparsers(dest="auth_command", required=True)
+
+    def _auth_common(sub: argparse.ArgumentParser, *, write: bool) -> None:
+        sub.add_argument("name", nargs="?", default=None, help="Established project name (default: project.json#project of --workspace-root)")
+        sub.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+        sub.add_argument("--workspace-root", help="Target governance root when the project name is omitted")
+        sub.add_argument("--json", action="store_true", help="Output JSON")
+        if not write:
+            return
+        sub.add_argument("--actor", default="owner", help="Actor recorded on the Owner decision (default: owner)")
+        sub.add_argument("--decision-summary", default=None, help="Decision summary (default: derived from the authorization)")
+        sub.add_argument("--confirm", action="store_true", help="Sign through the gate (lybra_owner_decision_record_dry_run -> _confirm, Owner-only "
+                                                                "owner_confirm); without it = local preview, zero writes")
+        sub.add_argument("--connection-json", help="connection.json holding the Owner credential (token never printed, fingerprint only)")
+        sub.add_argument("--token-role", default="owner", help="Credential role used for --confirm (default owner)")
+
+    def _auth_scope(sub: argparse.ArgumentParser) -> None:
+        sub.add_argument("--grant-lane", dest="grant_lane", action="append", default=None, help="Lane repo (name in project.json repos.items, or the code repo path); "
+                                                                       "repeatable; each gets every --task-mode and --driver given. Inline form "
+                                                                       "REPO:MODE[,MODE…]:DRIVER[,DRIVER…] sets that lane's own modes and drivers "
+                                                                       "(one signature for several lanes with different drivers)")
+        sub.add_argument("--task-mode", action="append", default=None, help="Task mode for the given lanes (enums task_mode; repeatable)")
+        sub.add_argument("--driver", action="append", default=None, help="Driver (advisor instance / role name / role class) for the given lanes; repeatable")
+        sub.add_argument("--host", action="append", default=None, help="Allowed host label (instance host segment / validation-root host); repeatable")
+        sub.add_argument("--launch-harness", action="append", default=None, help="Harness the loop may launch (enums harness.launch); repeatable")
+        sub.add_argument("--open-zone", action="append", default=None, help="Open a forbidden zone (default all closed; declared zones); repeatable")
+        sub.add_argument("--max-tasks", type=int, default=None, help="Total business cards for the whole project (hard bound)")
+        sub.add_argument("--expires-at", default=None, help="Expiry ISO8601 (hard bound)")
+
+    auth_show = project_auth_sub.add_parser("show", help="Show authorizations (latest revision, usage, notices, revisions, migrated envelopes)")
+    _auth_common(auth_show, write=False)
+    auth_draft = project_auth_sub.add_parser("draft", help="Merge the in-use envelopes into one authorization draft (preview; --confirm signs it)")
+    _auth_common(auth_draft, write=True)
+    auth_draft.add_argument("--from-envelopes", action="store_true", required=True, help="Draft from the project's in-use envelopes")
+    auth_draft.add_argument("--max-tasks", type=int, default=None, help="Override the total (default = sum of the envelopes' remaining quota)")
+    auth_sign = project_auth_sub.add_parser("sign", help="Sign a project authorization (the scope given is the whole scope)")
+    _auth_common(auth_sign, write=True)
+    _auth_scope(auth_sign)
+    auth_extend = project_auth_sub.add_parser("extend", help="Extend the current authorization (lanes / modes / drivers / hosts / harnesses / "
+                                                             "zones are merged in; --max-tasks / --expires-at replace)")
+    _auth_common(auth_extend, write=True)
+    _auth_scope(auth_extend)
+    auth_revoke = project_auth_sub.add_parser("revoke", help="Revoke the current authorization (a new revision with status revoked)")
+    _auth_common(auth_revoke, write=True)
+    auth_revoke.add_argument("--reason", required=True, help="Why (single line)")
 
     # AIPOS-370: envelope mint command (owner-gated)
     envelope_parser = subparsers.add_parser("envelope", help="Owner autonomy envelope operations")
@@ -4925,6 +5104,8 @@ def main(argv: list[str] | None = None) -> int:
                     details=[f"paths.{change['key']}: {change['before']!r} → {change['after']!r}" for change in outcome["changes"]])
             if args.project_command == "validation-root":
                 return _validation_root_cli(args, home)
+            if args.project_command == "grant":  # AIPOS-F224(子命令名避开凭据判据词 authorization: loop 日志 / 状态按 harness_launch.redact_progress 整行隐去含该词的行)
+                return _project_authorization_cli(args, home)
             if args.project_command == "upgrade":
                 return _project_upgrade_cli(args, home)
             if args.project_command == "workstation-plan":

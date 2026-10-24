@@ -1663,6 +1663,26 @@
           "action": "当前卡所在仓不在该信封覆盖的 lane 内。请用覆盖该 lane 的顾问实例与信封推进(lybra loop --actor <该 lane 的顾问实例>), 或请 Owner 为该 lane 签信封(lybra envelope mint --lane-repo <仓名>)",
           "command": null
         }
+      },
+      "host_not_authorized": {
+        "error_code": "ENVELOPE_HOST_NOT_AUTHORIZED",
+        "error_message": "任务卡执行主机(assigned_to 实例名 host 段)不在项目常设授权的允许主机内(AIPOS-F224)",
+        "severity": "needs_human",
+        "next_step": {
+          "audience": "advisor",
+          "action": "本卡主机超出项目授权。请 Owner 一次扩大授权加入该主机(lybra owner inbox 选「扩大项目授权」, 或 lybra project grant extend --host <主机> --confirm), 扩大后续跑 loop",
+          "command": null
+        }
+      },
+      "zone_forbidden": {
+        "error_code": "ENVELOPE_ZONE_FORBIDDEN",
+        "error_message": "任务卡声明触及的禁区(card authorization_zones)未在项目常设授权中放开(AIPOS-F224; 禁区缺省全禁)",
+        "severity": "needs_human",
+        "next_step": {
+          "audience": "advisor",
+          "action": "本卡触及未放开的禁区(生产 / 客户环境 / 真实硬件 / 凭据 / 对外发送)。请 Owner 定是否放开(lybra owner inbox 选「扩大项目授权」, 或 lybra project grant extend --open-zone <禁区> --confirm)",
+          "command": null
+        }
       }
     }
   }

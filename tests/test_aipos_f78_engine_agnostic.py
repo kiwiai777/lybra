@@ -187,9 +187,10 @@ def test_f78_item4_declarations_exist_in_schema_single_source():
     # AIPOS-F171 件①: 另含路线图声明文件 roadmap_file(缺省 governance/roadmap.yaml)
     # AIPOS-F187 件①: 另含子 agent 草稿目录根 scratch_root(可选; 未声明 = 系统临时目录, 不得落治理根)
     # AIPOS-F203 件①: 另含验证 helper 按 run 固定的快照库 validation_helper_root(缺省 5_tasks/validation_root_helpers)
+    # AIPOS-F224: 另含项目常设授权目录 authorizations_root(缺省 5_tasks/authorizations)
     assert set(paths) == {"return_root", "verdict_root", "queue_root", "task_cards_root", "manual_gate_mode", "finalize_mode",
                           "foundation_backlog", "hard_rules_source", "policies_root", "loop_runs_root", "stage_archive_root",
-                          "roadmap_file", "scratch_root", "validation_helper_root"}
+                          "roadmap_file", "scratch_root", "validation_helper_root", "authorizations_root"}
     assert paths["finalize_mode"]["default"] == "internal" and paths["finalize_mode"]["enum"] == ["internal", "external"]
     assert paths["return_root"]["default"] == "task_cards"  # lybra 默认 = 现行路径, 0 迁移
     card = json.loads((REPO_ROOT / "schema" / "card.schema.json").read_text(encoding="utf-8"))

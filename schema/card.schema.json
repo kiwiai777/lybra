@@ -728,6 +728,13 @@
       "written_by": "顾问(起草卡稿)",
       "description": "AIPOS-F196 件①: subject=candidate 模式(task_mode=validation)的来源卡号——被验证的固定候选来自哪张卡(该卡须已在队列)。该模式必填; 形与语义唯一声明 enums.schema task_mode.candidate_subject, 唯一读取口 next_resolver.card_candidate_subject。AIPOS-F205: 环境卡(enums.schema task_mode.candidate_binding.task_modes: config / docs / governance)可选与 validation_candidate 成对声明 = 绑定固定候选(缺省 = 行为不变), 候选所在仓按本来源卡 lane.repo 解析(不按本卡 lane.repo), 唯一读取口 next_resolver.card_environment_binding; 其他模式写了 = 拒(VALIDATION_BINDING_MODE)"
     },
+    "authorization_zones": {
+      "type": "array",
+      "required": false,
+      "default": [],
+      "written_by": "顾问(起草卡稿)",
+      "description": "AIPOS-F224: 本卡触及的禁区(值 = verbs.schema lybra_loop.envelope.project_authorization.zones 的键: 生产 / 客户环境 / 真实硬件 / 凭据 / 对外发送); 缺省 [] = 不触及。项目常设授权覆盖判定(autonomy_policy.judge_project_authorization)要求所列禁区都在授权 zones_open 内, 否则越界(zone)。旧信封不读本字段(行为不变)。"
+    },
     "validation_candidate": {
       "type": "string",
       "required": false,

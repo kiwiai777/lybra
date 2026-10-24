@@ -647,6 +647,34 @@ def _candidate_problem(governance_root: Path, entry: dict[str, Any], candidate: 
     return None
 
 
+def authorized_owner_ref(governance_root: Path, host: str, given: Any, notes: list[str], *, now: datetime) -> str:
+    """AIPOS-F224 件③: 验证根声明的 Owner 引用(declare / set-host 同用, 唯一判定)。项目有常设授权(autonomy_policy.authorization_ids)=
+    目标主机须在某份生效授权(状态有效且在时间窗内)的允许主机内: 是 = owner_ref 缺省自动引用该授权记录(<授权 ID>@r<修订>; 显式 --owner-ref 照记),
+    否 = VR_HOST_NOT_AUTHORIZED(--owner-ref 也不放行, 出口 = 一次扩大授权加入该主机)。项目无授权 = 照旧须 --owner-ref(行为不变)。"""
+    from tools.aipos_cli.autonomy_policy import authorization_ids, envelope_usage, load_authorization, render_authorization_command
+
+    explicit = str(given or "").strip()
+    ids = authorization_ids(governance_root)
+    if not ids:
+        return _single_line(given, "--owner-ref")
+    covering: list[dict[str, Any]] = []
+    for aid in ids:
+        auth = load_authorization(governance_root, aid)
+        if auth is not None and envelope_usage(governance_root, aid, now=now).get("state") in ("active", "exhausted") and host in auth["hosts"]:
+            covering.append(auth)
+    if not covering:
+        command = render_authorization_command(governance_root, "extend", [f"--host {host}"])
+        raise _err("VR_HOST_NOT_AUTHORIZED", f"主机 {host} 不在项目授权 {ids} 的允许主机内(生效修订); --owner-ref 不能代替授权",
+                   f"出口: 请 Owner 一次扩大授权加入该主机: {command}")
+    auth = covering[0]
+    ref = f"{auth['authorization_id']}@r{auth['revision']}"
+    if explicit:
+        notes.append(f"主机 {host} 在项目授权 {ref} 允许主机内; 记显式 --owner-ref {explicit}")
+        return _single_line(given, "--owner-ref")
+    notes.append(f"owner_ref 自动引用项目授权 {ref}(主机 {host} 在授权允许主机内, 免逐次 Owner 引用)")
+    return ref
+
+
 def apply_validation_root_change(governance_root: str | Path, action: str, *, dry_run: bool, actor: str, **kw: Any) -> dict[str, Any]:
     """declare / revoke / run-start / run-finish 的唯一写入口(update_project_json: 预演 diff / 写前预检 / 写后复核)。
     返回 update_project_json 结果 + {action, entry(写后条目), run, notes}。不合 = ValidationRootError(零写入)。"""
@@ -679,7 +707,7 @@ def apply_validation_root_change(governance_root: str | Path, action: str, *, dr
         owned = task_ownership_problems(gov, instance=instance, role_class=role_class, task_id=task_id)
         if owned:
             raise _err("VR_TASK_NOT_OWNED", *owned)
-        owner_ref = _single_line(kw.get("owner_ref"), "--owner-ref")
+        owner_ref = authorized_owner_ref(gov, host, kw.get("owner_ref"), notes, now=now)  # AIPOS-F224 件③: 授权内免逐次 owner-ref
         decl = declaration()
         if kw.get("expires_at"):
             expires = _parse_iso(str(kw["expires_at"]), "--expires-at")
@@ -733,7 +761,7 @@ def apply_validation_root_change(governance_root: str | Path, action: str, *, dr
             raise _err("VR_HOST_ALIAS_INVALID", f"--host {host} 是本机(治理根所在机), 无需 ssh 声明")
         if not _SSH_ALIAS_RE.match(alias):
             raise _err("VR_HOST_ALIAS_INVALID", f"--ssh-alias {alias!r} 须为 ssh 别名([A-Za-z0-9._@-], 不以 - 起首, 无空白; 即本机 ~/.ssh/config 的 Host 名)")
-        owner_ref = _single_line(kw.get("owner_ref"), "--owner-ref")
+        owner_ref = authorized_owner_ref(gov, host, kw.get("owner_ref"), notes, now=now)  # AIPOS-F224 件③: 授权内免逐次 owner-ref
         host_entry = {"ssh_alias": alias, "owner_ref": owner_ref, "declared_by": actor, "declared_at": _iso(now)}
         previous = project_validation_hosts(gov).get(host)
         if previous:

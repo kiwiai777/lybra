@@ -207,7 +207,7 @@ def _base_item(decl: dict[str, Any], *, project: str, governance_root: Path, cat
 # AIPOS-F180 件①: 授权请求结构化建议(唯一推导 suggest_grant; CLI 人话行 / 看板「待授权请求」卡 / 按建议签发同读)
 # ---------------------------------------------------------------------------
 
-_GRANT_KEYS = ("reasons", "date_only_time", "mode_labels", "mode_any", "repos_any", "sources", "texts")
+_GRANT_KEYS = ("reasons", "date_only_time", "mode_labels", "mode_any", "repos_any", "sources", "texts", "authorization")
 _GRANT_TEXTS = ("line", "title_part", "repos_part", "launch_part", "decide_board", "unavailable")
 #: owner_ask.grant 字段(顾问 loop note --grant-* 写入; 逐字段覆盖推导值)
 GRANT_FIELDS = ("task_mode", "lane_repos", "max_tasks", "expires_at", "reason")
@@ -291,12 +291,21 @@ def suggest_grant(root: Path, project: str, *, task_id: str, card_fm: dict[str, 
     返回 {..., sources: {字段: 来源键}}。"""
     from datetime import timedelta
 
-    from tools.aipos_cli.autonomy_policy import card_lane_refs, envelope_card_need, envelope_overview, envelope_usage, next_policy_id
+    from tools.aipos_cli.autonomy_policy import (
+        authorization_ids,
+        card_lane_refs,
+        envelope_card_need,
+        envelope_overview,
+        envelope_usage,
+        next_policy_id,
+    )
     from tools.aipos_cli.clock import iso_z, utc_now
     from tools.aipos_cli.workspace_config import project_grant_defaults, project_repos
 
-    defaults = project_grant_defaults(root)
     now = now or utc_now()
+    if authorization_ids(root):  # AIPOS-F224 件②: 项目有常设授权 = 建议「扩大项目授权」, 不再新开信封
+        return suggest_authorization_extension(root, project, task_id=task_id, card_fm=card_fm, driver=driver, now=now)
+    defaults = project_grant_defaults(root)
     previous = next((r for r in envelope_overview(root)["envelopes"] if r["agent_or_role"] == driver and r.get("max_tasks")), None)
     sources: dict[str, str] = {}
     lane = card_fm.get("lane") if isinstance(card_fm.get("lane"), dict) else {}
@@ -331,6 +340,42 @@ def suggest_grant(root: Path, project: str, *, task_id: str, card_fm: dict[str, 
     return grant
 
 
+def suggest_authorization_extension(root: Path, project: str, *, task_id: str, card_fm: dict[str, Any], driver: str,
+                                    now: datetime | None = None) -> dict[str, Any]:
+    """AIPOS-F224 件②: 项目有常设授权时的授权建议 = 一次扩大授权(越界判定 autonomy_policy.authorization_refusal, 增量唯一推导
+    autonomy_policy.authorization_extension; 声明 grant_request.authorization)。返回 grant {kind: authorization, authorization(扩大后的授权块),
+    authorization_id, revision, dimension, dimension_label, change, command, …}; 另带信封形兼容键(看板 / CLI 既有读取口不另分叉)。
+    授权覆盖本卡 = ValueError(无需扩大); 越界不能以扩大解除(撤销 / 未生效)= ValueError(原因点名, 事项照列)。"""
+    from tools.aipos_cli.autonomy_policy import (
+        authorization_refusal,
+        authorization_refusal_message,
+        driver_envelope_identities,
+    )
+    from tools.aipos_cli.loop_driver import DRIVER_ROLE, _envelope_task
+
+    refusal = authorization_refusal(root, identities=driver_envelope_identities(driver, None, DRIVER_ROLE),
+                                    task=_envelope_task(task_id, card_fm), now=now)
+    if refusal is None or not refusal.get("dimension"):
+        raise ValueError(f"项目授权已覆盖 {task_id}(驱动方 {driver}), 无需扩大")
+    rendered = authorization_refusal_message(root, refusal, what=f"授权请求 {task_id}", now=now)
+    ext = rendered["extension"]
+    if ext is None:
+        raise ValueError(f"项目授权 {refusal.get('authorization_id')} 越界({refusal.get('label')})不能以扩大授权解除: {rendered['command']}")
+    block = ext["block"]
+    lane = card_fm.get("lane") if isinstance(card_fm.get("lane"), dict) else {}
+    return {
+        "kind": "authorization", "authorization": block, "authorization_id": block["authorization_id"], "revision": ext["revision"],
+        "dimension": refusal["dimension"], "dimension_label": refusal.get("label"), "change": ext["change"], "command": rendered["command"],
+        "task_id": task_id, "title": str(card_fm.get("title") or "").strip() or None, "project": project,
+        # 信封形兼容键(看板待授权卡 / CLI 人话行既有读取口)
+        "agent_or_role": driver, "task_mode": str(card_fm.get("task_mode") or "").strip(),
+        "lane_repos": [str(lane.get("repo"))] if lane.get("repo") else [], "launch_harnesses": list(block.get("launch_harnesses") or []),
+        "max_tasks": block.get("max_tasks"), "expires_at": block.get("expires_at"), "reason": ext["change"],
+        "policy_id": block["authorization_id"], "previous_policy_id": None,
+        "sources": {"authorization": "authorization_extension"}, "quota_basis": ext["change"],
+    }
+
+
 def _card_routes_to_pi(root: Path, card_fm: dict[str, Any], *, task_id: str = "") -> str | None:
     """AIPOS-F201 件②: 本卡推进要 loop 拉起 pi 工位 → 拉起授权 harness 名(EXECUTION_MODE_PI), 否则 None。
     AIPOS-F211 件③(F208 P1-5): 两阶段都问 loop 拉起同一推导 loop_driver.card_harness(卡面值, 缺 = workspace_config.card_execution_mode 推出;
@@ -359,6 +404,11 @@ def grant_line(item: dict[str, Any], decl: dict[str, Any] | None = None) -> str:
     g = grant_declaration(decl)
     t = g["texts"]
     grant = item["grant"]
+    if grant.get("kind") == "authorization":  # AIPOS-F224 件②: 扩大项目授权的一行人话(声明 grant_request.authorization.line)
+        return _fmt(g["authorization"]["line"], "grant_request.authorization.line", advisor=grant["agent_or_role"], task_id=grant["task_id"],
+                    title_part=_fmt(t["title_part"], "grant_request.texts.title_part", title=grant["title"]) if grant.get("title") else "",
+                    dimension_label=grant.get("dimension_label") or grant.get("dimension"), authorization_id=grant["authorization_id"],
+                    change=grant["change"], revision=grant["revision"])
     repos = ", ".join(grant["lane_repos"])
     return _fmt(t["line"], "grant_request.texts.line", advisor=grant["agent_or_role"], task_id=grant["task_id"],
                 title_part=_fmt(t["title_part"], "grant_request.texts.title_part", title=grant["title"]) if grant.get("title") else "",
@@ -846,6 +896,46 @@ def _envelope_items(root: Path, project: str, decl: dict[str, Any], home_root: P
                    "renew_command": row["renew_command"], "next_policy_id": row["next_policy_id"]})
         if cat.get("decide_board"):
             item["board_url"] = board_envelope_url(project, pid)
+            item["decide_line"] = _fmt(cat["decide_board"], "categories.envelope_warning.decide_board", board_url=item["board_url"],
+                                       command=item["decide_command"])
+        out.append(item)
+    out.extend(_authorization_notice_items(root, project, decl, home_root))
+    return out
+
+
+def _authorization_notice_items(root: Path, project: str, decl: dict[str, Any], home_root: Path | None) -> list[dict[str, Any]]:
+    """AIPOS-F224 件②: 项目授权告知(第二档, 不阻塞; 判定唯一 autonomy_policy.authorization_notices: 用到 80% / 到期前 N 天)同列 envelope_warning
+    类(同一「将尽 / 将到期」文案; 建议 = 扩大授权命令, 增量 = 总卡数 / 到期)。"""
+    import math
+    from datetime import timedelta
+
+    from tools.aipos_cli.autonomy_policy import authorization_overview, project_authorization_declaration, render_authorization_command
+    from tools.aipos_cli.clock import iso_z, utc_now
+    from tools.aipos_cli.envelope_board import board_envelope_url
+
+    cat = decl["categories"]["envelope_warning"]
+    adecl = project_authorization_declaration()
+    out: list[dict[str, Any]] = []
+    for row in authorization_overview(root):
+        if not row.get("notices"):
+            continue
+        aid = str(row["authorization_id"])
+        step = max(1, math.ceil(float(adecl["extend"]["quota_step_ratio"]) * int(row["max_tasks"] or 0)))
+        later = iso_z((utc_now() + timedelta(days=int(adecl["extend"]["expiry_days"]))).replace(microsecond=0))
+        command = render_authorization_command(root, "extend", [f"--max-tasks {int(row['max_tasks'] or 0) + step}", f"--expires-at {later}"])
+        why = "; ".join(row["notices"])
+        drivers = sorted({d for lane in row["lanes"] for d in lane["drivers"]})
+        item = _base_item(
+            decl, project=project, governance_root=root, category="envelope_warning", rank=int(cat["rank"]),
+            subject=_fmt(cat["subject"], "categories.envelope_warning.subject", policy_id=aid), anchor=f"{aid}|r{row['revision']}|{why}",
+            source=", ".join(drivers), ask=_fmt(cat["ask"], "categories.envelope_warning.ask", why=why),
+            recommend=_fmt(cat["recommend"], "categories.envelope_warning.recommend", renew_command=command),
+            impact=_fmt(cat["impact"], "categories.envelope_warning.impact", agent_or_role=", ".join(drivers) or "?"),
+            options=_option_list(list(cat["options"]), decl), since=None, policy_id=aid, home_root=home_root,
+            facts={"used": row["used"], "max_tasks": row["max_tasks"], "expires_at": row["expires_at"], "renew_command": command,
+                   "authorization_revision": row["revision"], "notices": row["notices"]})
+        if cat.get("decide_board"):
+            item["board_url"] = board_envelope_url(project, aid)
             item["decide_line"] = _fmt(cat["decide_board"], "categories.envelope_warning.decide_board", board_url=item["board_url"],
                                        command=item["decide_command"])
         out.append(item)
@@ -1663,10 +1753,10 @@ def render_stale_text(view: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 def _client_tag(project: str) -> str:
-    import re
+    """项目名 → 决策记录 client_tag(唯一实现 autonomy_policy.client_tag; AIPOS-F224 起项目授权决策同用, 实现下沉到低层模块免 finalize 预载闭包膨胀)。"""
+    from tools.aipos_cli.autonomy_policy import client_tag
 
-    tag = re.sub(r"[^a-z0-9_]", "_", project.lower())
-    return tag if re.fullmatch(r"[a-z][a-z0-9_]{1,63}", tag) else f"p_{tag}"[:64]
+    return client_tag(project)
 
 
 def _canonical_item(item: dict[str, Any]) -> str:
@@ -1713,7 +1803,13 @@ def build_decision_payload(item: dict[str, Any], choice: str, note: str | None, 
     tag = _client_tag(project)
     external_ref = f"{d['external_ref_prefix']}{item['item_id']}"
     decided = _dt.fromisoformat(decided_at.replace("Z", "+00:00"))
+    extra: dict[str, Any] = {}
+    grant = item.get("grant") if isinstance(item.get("grant"), dict) else {}
+    if grant.get("kind") == "authorization" and choice == str(grant_declaration(decl)["authorization"]["choice"]):
+        # AIPOS-F224 件②: 「扩大项目授权」= 一次裁决同时落授权新修订(board_adapter.record_owner_decision → autonomy_policy.build_authorization_decision)
+        extra["project_authorization"] = grant["authorization"]
     return {
+        **extra,
         "decision_id": item["decision_id"],
         "decision_type": d["decision_type"],
         "decision_status": d["decision_status"],

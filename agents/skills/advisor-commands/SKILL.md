@@ -323,6 +323,7 @@ lybra loop status --workspace-root <治理根> --json                          #
 同卡同一例行原因连续到声明次数仍被拒 = 产品自动升 `owner_needed`, 不必自己计数。
 **信封用尽 / 过期**(AIPOS-F166): 结束原因 `envelope_exhausted` / `envelope_expired` = `owner_needed(envelope_renew)`, detail 给当前用量 / 上限 / 到期, hint = 续签命令(`lybra envelope mint --confirm`, policy_id = 该驱动方同前缀已有最大序号 +1, 范围照抄用尽的信封)——原样转给 Owner 亲自敲, 签好用原命令续跑。剩余 ≤10% 或 ≤3 次、或 ≤24h 到期时 `loop status` / `brief` 先出一行「信封预警」(阈值声明 verbs.schema `lybra_loop.envelope.renew.warn`), 趁早请 Owner 续签。
 **请求授权**(AIPOS-F180): `owner_needed(no_envelope)` / `owner_needed(envelope_renew)` 时收件箱已按卡自动生成授权建议(驱动方 = 你、模式 = 卡面 task_mode、仓 = 卡面 lane.repo、额度 = 业务卡张数(AIPOS-F192: 本卡所需 1 张, 每张含其审计、返工、合入、结案, 不照抄上一信封; 项目 project.json grant_request.max_tasks 显式声明优先)、到期 = 项目缺省天数、理由 = 卡标题), Owner 在看板「待授权请求」一键「按建议签发」。建议不对就用 loop note 写清要什么: `lybra loop note --task-id <卡> --grant-mode <模式> --grant-repos <仓,…> --grant-max-tasks <N> --grant-expires <YYYY-MM-DD> --grant-reason <一句话理由> --workspace-root <治理根>` 预演后加 `--confirm`(字段可只给一部分; 给了 --grant-* 可不写 --ask)。不要再把 `lybra envelope mint` 长命令贴给 Owner; 签好后收件箱该项自动消失(转入「已定待转达」, 你续跑后消失), 用原命令续跑 loop。派 pi 工位的卡(validation / config / docs 等按 project.json execution 路由到 pi)建议自带「允许 loop 拉起 pi 工位」(AIPOS-F201), 不必再手加 --launch-harness pi。Owner 不批准 = `lybra owner decide --item <OI-…> --choice deny_grant …` 记下, 按 Owner 原话调整请求或改卡。
+**授权越界**(AIPOS-F224): 项目有常设授权时不再给新开信封的出口——结束原因 `authorization_out_of_bound` = `owner_needed`, 原文点名越界维度(新车道 / 新任务类型 / 驱动方 / 授权外主机 / 禁区 / 总额用尽 / 到期)与一次扩大授权命令(`lybra project grant extend …`); 收件箱同一事项选「扩大项目授权」即生效, 用原命令续跑。
 **合并后回归未完成**(AIPOS-F166): 异步回归进程没跑完就没了(机器重启 / 被杀), `loop status` / `brief` / `next` 出一行「合并后回归未完成 … 补跑: `lybra regression run --sha <提交> --workspace-root <治理根>`」: 先原样跑一次(预演, 只读), 再加 `--confirm --actor <驱动方实例>` 补跑(前台; `--background` 后台), 结论落同格式回归事件记录, `lybra regression baseline --sha` 即可复用。仍在跑 / 已有完整结论 = 产品拒。
 **等待中的开工提示**(`continue_wait(manual_kickoff)`): 子 agent 模式 = 「顾问派本卡子 agent 执行并写交回, 开工稿 = `lybra kickoff --task-id <卡ID>` 的输出」(AIPOS-F187: 一份自足开工稿, 原样交给子 agent, 可在其后追加本卡特别说明; 不再手写), 照做, 不转述给 Owner; 只有 pi / 手工工位才是「请在 <工位> 敲 /go」。
 **取下一张归属**(`card_done_take_next`, AIPOS-F156): 末行命令只给归属本驱动方实例的下一张(门侧发布记录签发实例 = `draft publish --actor`); 共用仓里其他顾问实例的卡不取。
@@ -631,6 +632,21 @@ lybra audit-verdict --reviewed-task-id <卡ID> --verdict PASS \
 ---
 
 ### 🔐 信封与仲裁(Owner 决策)
+
+#### `lybra project grant`(AIPOS-F224: 项目常设授权, 优先于信封)
+**何时用**:每个项目 Owner 签一次授权(车道 × 任务类型 × 驱动方 / 允许主机 / 拉起 / 到期 + 总卡数 / 禁区, 禁区缺省全禁), 范围内 `lybra loop` 自动覆盖, 不再逐卡逐周签信封。
+覆盖判定优先级: 项目授权先判; 未覆盖才兼容未迁移的旧信封; 已迁入授权的旧信封 = superseded(不挑中、不消耗, 文件不改不删)。总卡数按业务卡计(审计 / 返工派生不另扣, 同信封)。
+**越界**(车道 / 任务类型 / 驱动方 / 主机 / 禁区 / 总额 / 到期)= loop 结束原因 `authorization_out_of_bound` → `owner_needed`, 结束原文点名越界维度 + 一次扩大授权命令;
+收件箱事项选项 = 「扩大项目授权」(一次裁决同时落授权新修订)/ 不批准 / 暂停。用到 80% 或到期前 3 天 = 告知(不阻塞)。验证根声明主机在授权内 = 免 `--owner-ref`。
+**Owner 亲自敲**(`--confirm` 经门 owner_decision_record, Owner 凭据); 不带 `--confirm` = 本地预演(零写入, 授权修订全文可见):
+```bash
+lybra project grant show --workspace-root <项目根>
+lybra project grant draft --from-envelopes --workspace-root <项目根>
+lybra project grant sign --workspace-root <项目根> --grant-lane <仓名>:code,validation:<你的顾问实例> --host <主机> --max-tasks 60 --expires-at <到期时间>
+lybra project grant extend --workspace-root <项目根> --host <主机> --max-tasks 80
+lybra project grant revoke --workspace-root <项目根> --reason "Owner 收回授权"
+```
+写动作加 `--confirm --connection-json <Owner 的 connection.json>` 由 Owner 签发; 看板信封页「项目授权」主视图同样可迁移 / 扩大 / 撤销(F172 同一写路由)。
 
 #### `lybra envelope mint`
 **何时用**:签发 PreAuthorized 信封(驱动方 `lybra loop` 一阶段推进所需; 工位 enroll 推导 owner_policy_ref 所需)。

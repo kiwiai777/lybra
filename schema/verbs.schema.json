@@ -520,6 +520,44 @@
       "request_part": "(应授权请求 {request_item})",
       "page_error": "信封页读不出(不猜): {error}"
     },
+    "authorization": {
+      "description": "AIPOS-F224 件③: 信封页「项目授权」主视图(数据 = autonomy_policy.authorization_overview, CLI lybra project grant show 同读)+ 历史信封(迁入授权的旧信封派生 superseded, 落「历史」标签)。Owner 写例外沿用本页 write_path 一条路由(mode = authorization, action ∈ actions): migrate = 把在用信封合并为授权(envelope_board.authorization_draft_from_envelopes)确认一次生效; extend = 扩大(车道 仓:类型,…:驱动方,… / 主机 / 禁区 / 总卡数 / 到期; 收件箱授权请求「按建议签发」直接带建议授权块); revoke = 撤销。预演 = 本地同一 writer(board_adapter.record_owner_decision dry_run), 确认 = envelope_mint.mint_via_gate(门 owner_decision_record 两阶段, 含落账)。安全框架 = handle_owner_write(同 F172)。",
+      "actions": ["migrate", "extend", "revoke"],
+      "audit_action": "authorization_sign",
+      "texts": {
+        "heading": "项目授权 {authorization_id}(修订 r{revision} · {state})",
+        "none": "该项目还没有项目授权(覆盖判定只看旧信封)",
+        "usage_line": "已放行 {used}/{max_tasks} 张业务卡(每张含其审计与返工), 到期 {expires_at}",
+        "lane_line": "车道 {repo}: 任务类型 {task_modes}; 驱动方 {drivers}",
+        "hosts_line": "允许主机 {hosts} · 拉起 {launch} · 放开禁区 {zones}",
+        "launch_manual": "只手工 /go",
+        "zones_none": "无(全禁)",
+        "notice_line": "告知: {why}",
+        "migrated_line": "已迁入的旧信封(历史, superseded): {policies}",
+        "revision_line": "r{revision} {action} {status} @ {revised_at} 裁决 {owner_approval_ref}",
+        "revisions_toggle": "修订史({count})",
+        "migrate_heading": "把 {count} 个在用信封合并为项目授权(草案: 总卡数 {max_tasks}, 到期 {expires_at})",
+        "migrate_button": "预演迁移草案",
+        "extend_heading": "扩大授权",
+        "field_lane": "新增车道或给车道加类型 / 驱动方(仓:类型,…:驱动方,…; 多条用分号)",
+        "field_host": "加主机(逗号分隔)",
+        "field_open_zone": "放开禁区(逗号分隔; 可选: {zones})",
+        "field_max_tasks": "总卡数(空 = 不改)",
+        "field_expires_at": "到期 ISO8601(空 = 不改)",
+        "extend_button": "预演扩大",
+        "revoke_heading": "撤销授权",
+        "field_reason": "原因",
+        "revoke_button": "预演撤销",
+        "summary_lines": [
+          "项目: {project} · 授权 {authorization_id} 修订 r{revision}({action})",
+          "车道: {lanes}",
+          "主机: {hosts} · 拉起: {launch} · 放开禁区: {zones}",
+          "硬上限: {max_tasks} 张业务卡(全项目合计; 每张含其审计与返工), 到期 {expires_at}",
+          "迁入并退役的旧信封: {supersedes}",
+          "预演裁决: {verdict}"
+        ]
+      }
+    },
     "tabs": {
       "description": "AIPOS-F217(Owner 10-23「信封页太乱」): 信封页分三个标签页, 服务端按查询参数 param 渲染(不靠前端隐藏; 非 Owner 会话同样有标签与刷新, 但无表单与按钮)。每个信封有且只有一个归属页: 在用 = 未被接替且仍可放行业务卡(展示状态 ∈ in_use_statuses, autonomy_policy 现有展示状态), 其余(被接替 / 过期 / 停用 / 额度用尽 / 读不出)= 历史, 按项目分组新的在前。待签 = 动作清单(可引用在用 / 历史行): 授权请求(owner_inbox.grant_requests)+ 需要 Owner 续签的信封(展示状态 ∈ renew_statuses, 或额度用尽而未被接替且同驱动方没有在用信封)+ 页首「已定待转达」段(owner_inbox.relay_lines 同文)。归属页 / 是否待签只一个判定 envelope_board.envelope_placement, 页面、计数、横幅、测试都调它。缺省标签 = 待签有内容(待签事项或待转达段)时待签, 否则在用。签发成功后页脚本整页跳到 after_sign 指定标签(授权请求 → 待签, 续签 / 新签 → 在用), 带 signed_param = 实际签发的 policy_id(服务端在页首显示横幅并高亮该行); 收件箱页共用同一客户端, 签后整页刷新收件箱页。刷新按钮 = 普通链接重新 GET 本页当前标签(保留测试项目开关与语言参数)。文案中英两份, 语言集合恰为看板 locale.supported。",
       "param": "tab",
@@ -2631,7 +2669,63 @@
             "state_labels": {"expired": "已过期", "inactive": "已撤销 / 停用", "invalid": "时间窗读不出", "missing": "缺失", "not_yet_active": "尚未生效"}
           }
         },
-        "task_selector_lane_repo": "AIPOS-F134 件③: 信封字段 task_selector_lane_repo(缺省 \"\"/键缺 = 不限 lane, 存量信封行为不变)——值 = 本项目 project.json repos.items 的仓名(无清单时 = code_repo 路径), `lybra envelope mint --lane-repo <仓名>` 经 --confirm 由 Owner 签, 门 owner_decision_writer._normalize_autonomy_policy 按 workspace_config.resolve_card_repo 校验可解析(不可解析 = BLOCK)。判定对象 = subject_rule 所指卡的 lane.repo 经 resolve_card_repo 解析出的仓(autonomy_policy.card_lane_refs: 路径 / 卡面原值 / 指向同一路径的仓名), 判定只在 match_claim_envelope 谓词 lane_repo 与原因链(不匹配 = transitions envelope_guards.selector_lane_repo_mismatch)。用途: 同一项目多顾问实例各管一个 lane(如 OTA 顾问只推 OTA 仓的卡)。AIPOS-F139: 值为仓集合——`--lane-repo` 可重复(一个子项目跨多个仓; 共用仓可同时列入多个顾问的信封), 新铸信封 frontmatter 落列表, 存量单值信封按单元素集合读(文件逐字节不变); 集合内每个名都须可解析, 任一不可解析 = BLOCK(逐个点名); 卡 lane 指称命中集合任一即匹配, 不匹配原因链列出整个集合。集合序列化/解析唯一 workspace_config.repo_name_set(见 lane_view.repo_set)。"
+        "task_selector_lane_repo": "AIPOS-F134 件③: 信封字段 task_selector_lane_repo(缺省 \"\"/键缺 = 不限 lane, 存量信封行为不变)——值 = 本项目 project.json repos.items 的仓名(无清单时 = code_repo 路径), `lybra envelope mint --lane-repo <仓名>` 经 --confirm 由 Owner 签, 门 owner_decision_writer._normalize_autonomy_policy 按 workspace_config.resolve_card_repo 校验可解析(不可解析 = BLOCK)。判定对象 = subject_rule 所指卡的 lane.repo 经 resolve_card_repo 解析出的仓(autonomy_policy.card_lane_refs: 路径 / 卡面原值 / 指向同一路径的仓名), 判定只在 match_claim_envelope 谓词 lane_repo 与原因链(不匹配 = transitions envelope_guards.selector_lane_repo_mismatch)。用途: 同一项目多顾问实例各管一个 lane(如 OTA 顾问只推 OTA 仓的卡)。AIPOS-F139: 值为仓集合——`--lane-repo` 可重复(一个子项目跨多个仓; 共用仓可同时列入多个顾问的信封), 新铸信封 frontmatter 落列表, 存量单值信封按单元素集合读(文件逐字节不变); 集合内每个名都须可解析, 任一不可解析 = BLOCK(逐个点名); 卡 lane 指称命中集合任一即匹配, 不匹配原因链列出整个集合。集合序列化/解析唯一 workspace_config.repo_name_set(见 lane_view.repo_set)。",
+        "project_authorization": {
+          "description": "AIPOS-F224(设计稿 governance/research/2026-10-24-owner-intervention-tiers-design.md §4 / §8, Owner 10-24 同意): 项目常设授权替代逐卡逐周信封——每个项目 Owner 签一次(车道 × 任务类型 × 驱动方 / 允许主机 / 允许拉起方式 / 硬上限 = 到期时刻 + 总卡数(二者必填)/ 禁区开关(缺省全禁)), 范围内 loop 自动覆盖; 越界(车道 / 任务类型 / 驱动方 / 主机 / 禁区 / 总额 / 到期 / 撤销)= loop 停 owner_needed(结束原因 end_reason), 事由点名越界维度, 收件箱事项选项 = 扩大授权(一次裁决改授权)/ 不批准。记录 = record_type 声明的记录类型, 落 project.json paths.authorizations_root/<authorization_id>/r<修订号>.md, 只追加修订(签发 / 扩大 / 撤销各落一份新修订, 最新修订生效, 旧修订不改不删)。写路径 = 既有 owner_decision_record(payload 带 project_authorization 块: 本地预演与门两阶段同一 board_adapter.record_owner_decision, 构造唯一实现 autonomy_policy.build_authorization_decision; 看板经 F172 同一写路由 board_owner_envelopes.write_path(mode = authorization), CLI = lybra project grant)。覆盖判定唯一实现 autonomy_policy.match_claim_envelope(授权记录经 load_policy 载入后在其内分派到 autonomy_policy.judge_project_authorization; 门 _match_claim_envelope / _match_driver_envelope 与 loop find_envelope → select_envelope 同读, 不另立第二套判定)。额度单位与信封同(根业务卡, 审计 / 复审 / 补审 / 返工派生 / FINALIZE 卡归根卡不另扣, 见 quota); 迁移来的旧信封已放行的根卡由授权承接(不扣授权额度、后续步骤不受额度拦截)。",
+          "record_type": "project_authorization",
+          "id_template": "auth_{project}",
+          "revision_file_template": "r{revision:04d}.md",
+          "priority": "覆盖判定优先级(唯一实现 autonomy_policy.select_envelope): ①项目授权(本项目 authorizations_root 下各授权的最新修订)先判, 覆盖本卡与驱动方即用之; ②未覆盖时才兼容旧信封——已被项目授权迁移(授权任一修订 supersedes_policies 列名)的旧信封一律视为 superseded(不挑中、不消耗), 只有未迁移的旧信封照原规则判; ③都不覆盖 = 无授权: 项目有授权则按授权越界出口(end_reason, 点名维度 + 扩大授权命令), 否则照旧无信封出口。显式 --envelope 指向已迁移旧信封 = 改用迁入的项目授权(autonomy_policy.envelope_successor)。只有旧信封、没有任何项目授权的项目 = 行为不变。",
+          "dimensions": {
+            "revoked": {"label": "授权已撤销", "error_code": "ENVELOPE_STATUS_NOT_ACTIVE"},
+            "not_yet_active": {"label": "授权尚未生效", "error_code": "ENVELOPE_NOT_YET_ACTIVE"},
+            "expiry": {"label": "到期", "error_code": "ENVELOPE_EXPIRED"},
+            "project": {"label": "项目不符", "error_code": "ENVELOPE_SELECTOR_PROJECT_MISMATCH"},
+            "lane": {"label": "新车道", "error_code": "ENVELOPE_SELECTOR_LANE_REPO_MISMATCH"},
+            "task_mode": {"label": "新任务类型", "error_code": "ENVELOPE_SELECTOR_TASK_MODE_MISMATCH"},
+            "driver": {"label": "驱动方不在本车道授权内", "error_code": "ENVELOPE_AGENT_NOT_COVERED"},
+            "host": {"label": "授权外主机", "error_code": "ENVELOPE_HOST_NOT_AUTHORIZED"},
+            "zone": {"label": "禁区", "error_code": "ENVELOPE_ZONE_FORBIDDEN"},
+            "quota": {"label": "总额用尽", "error_code": "ENVELOPE_QUOTA_EXHAUSTED"}
+          },
+          "dimension_order": ["revoked", "not_yet_active", "expiry", "project", "lane", "task_mode", "driver", "host", "zone", "quota"],
+          "zones": {
+            "production": "生产环境",
+            "customer_env": "客户环境",
+            "real_hardware": "真实硬件",
+            "credentials": "凭据",
+            "external_send": "对外发送"
+          },
+          "zones_note": "禁区开关缺省全禁(授权 zones_open 列出才放开); 卡面 card.schema authorization_zones 声明本卡触及的禁区(缺省 [] = 不触及), 触及任一未放开禁区 = 越界(zone)。",
+          "host_rule": "卡的主机 = 判定对象卡(subject_rule: 审计卡 = 被审卡)assigned_to(缺则 agent_instance)实例名按 roles.schema naming.template 解析出的 host 段(naming_profile.parse_instance_name); 解析不出 = 越界(host, fail-closed)。",
+          "notice": {
+            "used_ratio": 0.8,
+            "expiry_days": 3,
+            "note": "告知(第二档, 不阻塞): 已放行业务卡 ≥ used_ratio × 总卡数, 或距到期 ≤ expiry_days 天 = 看板信封页「项目授权」与 Owner 收件箱 envelope_warning 类各一行, loop 启动时打印一行; 唯一判定 autonomy_policy.authorization_notices。",
+            "messages": {
+              "quota": "已用 {used}/{max_tasks} 张业务卡(≥{ratio:.0%})",
+              "expiry": "{expires_at} 到期(剩 {days} 天, 阈值 ≤{expiry_days} 天)"
+            }
+          },
+          "extend": {
+            "quota_step_ratio": 0.5,
+            "expiry_days": 14,
+            "note": "越界时建议的扩大授权(唯一推导 autonomy_policy.authorization_extension): 车道 / 任务类型 / 驱动方 = 加入本卡所需项; 主机 = 加入本卡主机; 禁区 = 放开本卡触及的禁区; 总额 = 总卡数 + max(1, ceil(quota_step_ratio × 原总卡数)); 到期 = 现在 + expiry_days 天; 撤销 / 未生效 = 不给扩大建议(须 Owner 重新签发)。"
+          },
+          "end_reason": "authorization_out_of_bound",
+          "messages": {
+            "out_of_bound": "项目授权 {authorization_id}(修订 r{revision})越界 —— {dimension_label}: {reason}; {what}",
+            "extend": "请 Owner 一次扩大授权(扩大后用原命令续跑 loop): {command}",
+            "no_extend": "该越界不能以扩大授权解除({dimension_label}), 请 Owner 重新签发项目授权: {command}",
+            "migrated": "旧信封 {policy_id} 已迁入项目授权 {authorization_id}(superseded), 改用项目授权",
+            "notice": "项目授权 {authorization_id} 告知: {why}(不阻塞)"
+          },
+          "migration": {
+            "description": "`lybra project grant draft --from-envelopes`(唯一实现 envelope_board.authorization_draft_from_envelopes, 只读预演): 把项目当前在用信封(envelope_overview current)合并成一份授权草案——车道 = 各信封 lane 仓集合并集(信封不限 lane = project.json repos 全部仓, 无清单 = 缺省仓), 任务类型 = 各信封 task_mode(不限 = enums task_mode 全部值)按车道并集, 驱动方 = 各信封 agent_or_role 按车道并集, 拉起 = launch_harnesses 并集, 期限取最晚, 总卡数取剩余额度和(和为 0 = 拒, 须 Owner 显式给 --max-tasks), 主机 = 队列在途卡执行 / 审计实例 host 段 ∪ project.json validation_roots.hosts ∪ 本机, 禁区全禁, supersedes_policies = 这些信封。加 --confirm(或看板「项目授权」确认)经门签发, 生效后这些信封派生为 superseded(信封文件不改不删)。信封另有不可表达的选择器(task_selector_project / task_ids)写进 notes。"
+          },
+          "write_actions": ["grant", "extend", "revoke"],
+          "card_zones_field": "authorization_zones"
+        }
       },
       "launch": {
         "description": "AIPOS-F95 件③: loop 内拉起薄函数(tools/aipos_cli/loop_driver.py, 无守护/调度/心跳/常驻): 在 N1 执行体等待与 N3 审计体等待进入 watch 之前, 条件全满足才拉起一次——①信封 launch_harnesses 覆盖该卡 harness(唯一推导 loop_driver.card_harness: 卡面值, 缺省由本卡执行方式推出, 声明 card.schema intent_face.harness.default_rule, AIPOS-F211); ②该 harness 有 launch 模板(enums.schema harness.launch 非 null)且其可执行在驱动方 PATH; ③按本项目 enrollment_log 中该实例最新 land 事件定位工位位置 {host, dir}, transport(enums.schema workstation_transport)已支持(local; AIPOS-F110 起 remote 经 ssh, 见本段 remote); ④charter_render.workstation_identity(dir) 的实例 = 卡 assigned_to(审计卡 = 其认领实例)(remote 工位: 门机读不到远端目录, 身份 = land 事件实例, 另须 project.json workstations.<实例> 材料声明 + ssh 探测可达); ⑤未给 --no-launch; ⑥kickoff = 该工位 `my-tasks --workstation <dir> --task-id <等待目标卡> --json` 的 next_card.kickoff(AIPOS-F111 件①: 按卡号取, 只核验等待目标卡这一张——判据 next_resolver.kickoff_refusal, 与工位 `/go <卡号>` 同一判据; 不要求该卡是工位 NEXT_CARD_RULE 选卡结果, 同一工位同时在办多张卡可各自拉起; 唯一实现 loop_driver.workstation_kickoff)(remote: `my-tasks --actor <实例> --task-id <卡> --remote-workstation`, 同一 render_kickoff 附门机材料段)。任一不满足 → 退回手工模式(等待提示含工位目录与 /go; remote 工位提示 <host>:<dir>)。AIPOS-F164 件②(gap #149): 条件全满足后、起进程前(唯一拉起口 loop_driver._launched_wait 起点)核该工位章程新鲜度(distribution_sync.charter_freshness = `lybra sync --dry-run` 同一实现, F66B 三指纹): 最新 = 直接拉起; 不新鲜且 project.json charter_auto_sync(缺省 true)= 先 sync 本工位(`lybra sync` 同一实现)复核后拉起; sync 失败 = 不拉起(结束原因 charter_sync_failed); 自动 sync 关闭 = 不拉起(charter_not_fresh); 两者 lybra loop status 下一动作 advisor_fix(给 sync 修法)。local 工位才核, remote 工位门机不跨机读写工位文件(运行记录 charter_checks 记 not_applicable)。",
@@ -2775,6 +2869,7 @@
           "deploy_reexec": "AIPOS-F166 件①: 手工等待步中部署已更新, 本运行已 re-exec 到新部署快照续等(同一进程号; outcome continued, exit_code null; 新运行记录 continues_run = 本 run_id, 见 deploy_consistency.wait_reexec)",
           "envelope_exhausted": "AIPOS-F166 件②: 信封额度用尽(门侧用量真相 已用 ≥ max_tasks), 账务步被拒或启动校验不过(exit_codes.no_envelope; 续签命令见运行记录 envelope_state, envelope.renew)",
           "envelope_expired": "AIPOS-F166 件②: 信封已过期(现在 ≥ expires_at), 账务步被拒或启动校验不过(exit_codes.no_envelope; 续签命令见运行记录 envelope_state, envelope.renew)",
+          "authorization_out_of_bound": "AIPOS-F224 件②: 项目常设授权越界(车道 / 任务类型 / 驱动方 / 主机 / 禁区 / 总额 / 到期 / 撤销; 维度声明 envelope.project_authorization.dimensions), 启动校验不过或账务步被拒(exit_codes.no_envelope; 结束原文点名越界维度 + 一次扩大授权命令, 运行记录 envelope_state 落授权用量)",
           "already_running": "AIPOS-F171B 件①: 同卡已有存活 loop, 本次启动被拒、未推进任何步(exit_codes.already_running; 见 single_instance; 本记录不计入 loop status 最近一次运行与连败)",
           "worktree_repair_failed": "AIPOS-F178 件③: 等待目标卡已认领、须建卡工作树(next_resolver.card_needs_worktree)而不在落点, 等待前自动补建(next_resolver.repair_missing_worktree, `lybra queue repair --confirm` 同一实现)失败, 未进入等待(exit_codes.not_derivable; 原因原文在结束原文与运行记录 worktree_repairs 末条 detail; 修法 = 结束原文的 lybra queue repair 命令)",
           "resource_busy": "AIPOS-F179 件②: 本卡声明的独占资源(card.schema resources)在 --max-wait 内一直被同项目另一 loop 占用, 未进入执行/审计等待(exit_codes.wait_timeout; 占用者原文在结束原文; 见 resource_lock)",
@@ -3116,6 +3211,7 @@
           "deploy_reexec": "advisor_fix",
           "envelope_exhausted": "owner_needed",
           "envelope_expired": "owner_needed",
+          "authorization_out_of_bound": "owner_needed",
           "already_running": "continue_wait",
           "worktree_repair_failed": "advisor_fix",
           "resource_busy": "advisor_fix",
@@ -3149,6 +3245,7 @@
           "runtime_evidence_exhausted": "审计补做连败(AIPOS-F162): 审计报告 PASS 类裁决缺卡面要求的独立运行证据, loop 已让审计体按拒因补做到声明上限仍不合格(审计体跑不了声明命令 / 不按格式填 / 只核执行体原件); 请 Owner 定换审计体 / 改卡面运行证据声明 / 仲裁",
           "envelope_exhausted": "授权: 信封额度已用尽(AIPOS-F166), 请 Owner 按 hint 的续签命令签新信封, 签好用原命令续跑 loop",
           "envelope_expired": "授权: 信封已过期(AIPOS-F166), 请 Owner 按 hint 的续签命令签新信封, 签好用原命令续跑 loop",
+          "authorization_out_of_bound": "授权越界(AIPOS-F224): 本卡超出项目常设授权(detail 点名越界维度: 车道 / 任务类型 / 驱动方 / 主机 / 禁区 / 总额 / 到期), 请 Owner 一次扩大授权(收件箱选「扩大授权」或按 detail 里的扩大授权命令), 扩大后用原命令续跑 loop; 不批准 = 顾问调整本卡或转下一张",
           "audit_blocked_repeated": "审计连续 BLOCK(AIPOS-F179 件③): 本卡已按 BLOCK 原因修环境重新派审计, 新一轮仍 BLOCK(连续次数达 transitions nodes.N4.audit_blocked.owner_needed_after), 环境 / 资源 / 时长问题顾问修不动或卡面验收不可在审计环境完成; 请 Owner 定修环境方案 / 改卡面验收 / 换审计环境 / 仲裁; 环境 / 产品修好后 Owner 在收件箱选「重新派审」(reaudit, AIPOS-F202), 顾问 owner decide 记录后原命令重跑 loop = 以该裁决为界重新计数并派下一轮审计",
           "envelope_renew": "信封续签(AIPOS-F166 件②): 结束原因 envelope_exhausted / envelope_expired 的下一动作事由——detail = 当前用量 / 上限 / 到期, hint = 续签命令(policy_id 按该驱动方已有最大序号 +1)"
         },
@@ -3428,6 +3525,7 @@
           "impact": "卡 {task_id} 的 loop 已停({reason}), 不再自动推进",
           "default_options": ["continue", "rework", "pause"],
           "options_by_reason": {"envelope_renew": ["renew", "deny_grant", "pause"], "no_envelope": ["renew", "deny_grant", "pause"],
+                                "authorization_out_of_bound": ["extend_authorization", "deny_grant", "pause"],
                                 "audit_blocked_repeated": ["reaudit", "wait_product", "rescope", "new_card", "pause"]},
           "pinned_options_by_reason": {"audit_blocked_repeated": ["reaudit"]},
           "advisor_ask": {
@@ -3542,6 +3640,7 @@
         "closed_card_correction": {"label": "纠正已结案卡(原结案不算数, 出承接卡重做)", "advisor_next": "Owner 已定纠正 {task_id} 的结案(裁决 {decision_id}): 尚未纠正 = 引用该裁决纠正(不另记裁决, AIPOS-F213): `lybra --workspace-root {governance_root} queue correct --task-id {task_id} --decision-id {decision_id} --relayed-by <你的顾问实例>` 预演无误后同一命令加 --confirm(原记录不改, 标争议, 发布承接卡); 已纠正(承接卡已发布)= 推进承接卡: `{resume}`"},
         "reaudit": {"label": "环境 / 产品已修好, 重新派审", "advisor_next": "按 Owner 裁决重新派审: 原命令重跑 loop——连续 BLOCK 以本裁决为界重新计数, 派下一轮审计并照常拉起审计(历史裁决与审计卡不改): `{resume}`"},
         "wait_product": {"label": "等产品 / 环境修复上线后再审", "advisor_next": "Owner 定等修复: 修复上线前不续跑本卡; 上线后原命令重跑 loop(`{resume}`), 仍停 = 收件箱该卡新事项提示可选「重新派审」, Owner 选定后按其续跑"},
+        "extend_authorization": {"label": "扩大项目授权(一次裁决改授权, 本卡及同类卡此后自动推进)", "advisor_next": "Owner 已扩大项目授权(裁决 {decision_id} 同时落授权新修订): 用原命令续跑 {resume}"},
         "extend_rework": {"label": "授权本卡追加一轮返工(每次裁决只放一轮)", "advisor_next": "Owner 已授权 {task_id} 追加一轮返工(裁决 {decision_id}, 每个裁决只放一轮): 按原返工出口再打回一轮, 该轮自动记 owner_extension_ref = 本裁决——非代码快车道卡 `lybra --workspace-root {governance_root} mark-concluded --task-id {task_id} --actor <你的顾问实例> --report-path <交回报告> --outcome rework --focus-items '[\"<返工要点>\"]'`; 审计裁决型卡 `lybra --workspace-root {governance_root} queue rework --task-id {task_id} --actor <你的顾问实例> --verdict-ref <最新裁决> --focus-items '[\"<返工要点>\"]'`(都先 --dry-run 预演), 登记后续跑: `{resume}`"}
       },
       "stale": {
@@ -3572,7 +3671,8 @@
       },
       "grant_request": {
         "description": "AIPOS-F180 件①(gap #175: 顾问请求里写明了 docs 模式 / 仓 / 额度 / 到期, 产品没把它变成可一键执行的请求): loop_owner_needed 类且下一动作事由 ∈ reasons 的事项 = 授权请求, 事项另带 grant 结构化建议(唯一推导 owner_inbox.suggest_grant; CLI 一行人话、看板「待授权请求」卡与「按建议签发」同读这一份数据): 驱动方 agent_or_role = 运行记录 driver; task_mode = 卡面 task_mode; 仓 = 卡面 lane.repo(未写 = project.json repos 中指向卡所在仓的仓名, 再无 = 不限); 拉起授权 = 本卡执行方式派 pi 工位(AIPOS-F201 件②: workspace_config.card_execution_mode 唯一判定; 项目未声明 execution 时卡面 harness = pi 同判)= [pi], 否则同驱动方上一信封的 launch_harnesses(无 = 只手工 /go; 人话行 texts.launch_part 只在有拉起授权时出现); 额度(AIPOS-F192: 业务卡张数, 不再照抄上一信封)= project.json grant_request.max_tasks 显式声明者, 否则本卡所需(autonomy_policy.envelope_card_need, 一张新业务卡 = 1); 到期 = 现在 + project.json grant_request.days(缺省 7, 与 lybra_loop.envelope.renew.renew_days 同值); 理由 = 卡标题; policy_id = F166 唯一推导 autonomy_policy.next_policy_id(该驱动方同前缀已有最大序号 +1, 前缀取同驱动方上一信封, 无 = pol_<项目>_loop_)。顾问 `lybra loop note --grant-mode/--grant-repos/--grant-max-tasks/--grant-expires/--grant-reason` 写进运行记录 owner_ask.grant, 逐字段覆盖推导值(sources 标明每字段来源)。签发 = 看板复用 F172 写例外 board_owner_envelopes.write_path(mode=new, 参数 = 建议; 不新增写路由)。信封生效即自行解除: 驱动方对本卡已有覆盖信封(loop 同一判据 loop_driver.find_envelope → autonomy_policy.select_envelope)= 事项不再列出。只读: 推导不写任何文件。",
-        "reasons": ["no_envelope", "envelope_renew"],
+        "reasons": ["no_envelope", "envelope_renew", "authorization_out_of_bound"],
+        "authorization": {"description": "AIPOS-F224 件②: 项目有常设授权时, 授权请求建议改为「扩大项目授权」而非新开信封——grant.kind = authorization, grant.authorization = 扩大后的授权块(唯一推导 autonomy_policy.authorization_extension; 维度 / 增量见 lybra_loop.envelope.project_authorization.extend), 人话行 = line; Owner 收件箱选 choice(或看板按建议签发, F172 同一写路由 mode = authorization)= 一次裁决同时落决策记录与授权新修订(owner_inbox.build_decision_payload 带 project_authorization 块)。", "choice": "extend_authorization", "line": "  授权请求(扩大项目授权): {advisor} 推 {task_id}{title_part}越界 —— {dimension_label}; 建议把项目授权 {authorization_id} 扩为: {change}(修订 r{revision})"},
         "date_only_time": "T23:59:59Z",
         "mode_labels": {"code": "改代码", "docs": "只写文档", "governance": "写治理文档", "config": "改配置", "audit": "做审计", "validation": "做固定候选验证"},
         "mode_any": "不限模式",
@@ -4888,6 +4988,11 @@
         "description": "AIPOS-F158(gap #130): 非卡写命令写完即经本提交口落账——复用 governance_commit.governance_commit 的 --paths 精确提交(白名单 = 该命令本次写出的文件, 治理根相对, 禁整根; 护栏四检 / 清单核对 / 推送判据与 N6 落账同一实现, 推送策略同 N6: 提交即推送), 不另写 git 提交逻辑。唯一实现 governance_commit.land_written_paths(范围已落账 = PASS no-op, 幂等)。落账失败不回滚已写内容(写入已生效, 勿重复执行写命令): 输出拒因原文 + 补账命令(governance_commit_paths_command 渲染的 `lybra governance-commit --paths …`)并以 landing_failed_exit_code 退出。按项目治理根解析(治理根在仓内子目录 = 提交前缀照 git rev-parse --show-prefix), 任何项目同一组命令。",
         "landing_failed_exit_code": 3,
         "commands": {
+          "project_authorization": {
+            "cli": "lybra project grant sign|extend|revoke|draft --confirm",
+            "scope": "AIPOS-F224: 门 owner_decision_record 项目授权路径确认应答的 performed_writes(决策记录 + 授权新修订 + decision_log 自动指针); 看板「项目授权」确认同一落账",
+            "message_template": "chore(governance): 项目授权落账 {policy_ids}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra project grant --confirm"
+          },
           "envelope_mint": {
             "cli": "lybra envelope mint --confirm",
             "scope": "门 owner_decision_record envelope 路径确认应答的 performed_writes(决策记录 + 信封 + decision_log 自动指针; 指针由门 board_adapter._auto_generate_decision_log_pointer 写出即列入), 各张签发的并集; 中途门拒 = 已签各张照落账",
@@ -5005,6 +5110,19 @@
           "code": 3,
           "meaning": "写入已生效但落账未完成(post_write_landing.landing_failed_exit_code)"
         }
+      }
+    },
+    "lybra_project_authorization": {
+      "description": "AIPOS-F224: `lybra project grant show|draft|sign|extend|revoke` —— 项目常设授权(声明 lybra_loop.envelope.project_authorization)。show 只读(各授权最新修订 + 门侧同一用量 + 告知 + 修订史 + 已迁入的旧信封); draft --from-envelopes = 迁移草案(唯一实现 envelope_board.authorization_draft_from_envelopes); sign(--grant-lane --task-mode --driver 成组, --host, --launch-harness, --open-zone, --max-tasks, --expires-at 必给)/ extend(在最新修订上并入同形增量, --max-tasks / --expires-at 给出即替换)/ revoke --reason; 写动作缺省 = 本地预演(board_adapter.record_owner_decision dry_run, 零写入, 授权修订全文可见), --confirm = 经门 owner_decision_record 两阶段(Owner 凭据 --connection-json, Owner-only owner_confirm; envelope_mint.mint_via_gate 同一门路径)并落账(post_write_landing.commands.project_authorization)。块构造唯一 autonomy_policy.authorization_block。",
+      "phase": "two_phase",
+      "surface": ["cli"],
+      "cli_command": "lybra project grant",
+      "single_implementation": "tools/aipos_cli/autonomy_policy.authorization_block(构造) / build_authorization_decision(校验 + 写) / authorization_overview(读); tools/aipos_cli/envelope_board.authorization_draft_from_envelopes(迁移草案)",
+      "exit_codes": {
+        "ok": {"code": 0, "meaning": "预演完成(verdict 非 BLOCK)/ 已经门签发并落账 / 只读输出"},
+        "refused": {"code": 1, "meaning": "预演或门拒(拒因原文; 零写入), 或无在用信封可迁移"},
+        "usage": {"code": 2, "meaning": "参数错(车道三件不成组等)"},
+        "landing_failed": {"code": 3, "meaning": "写入已生效但落账未完成(post_write_landing.landing_failed_exit_code)"}
       }
     },
     "lybra_project_cleanup_worktrees": {
