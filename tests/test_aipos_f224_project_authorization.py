@@ -332,7 +332,7 @@ def _digest(gov: Path) -> dict[str, str]:
     return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted((gov / "5_tasks" / "policies").glob("*.md"))}
 
 
-def test_item4_migration_draft_preview_confirm_supersedes_and_loop_uses_authorization(owner):
+def test_item4_migration_draft_preview_confirm_supersedes_and_loop_uses_authorization(owner, monkeypatch):
     o = owner
     _envelope(o.gov, "pol_mig_ota_1", ADV_OTA, max_tasks=10, lane="ota", expires_at="2999-03-01T00:00:00Z", launch=["pi"])
     _envelope(o.gov, "pol_mig_lt_1", ADV_MAIN, max_tasks=5, lane="lantu", expires_at="2999-06-01T00:00:00Z")
@@ -375,13 +375,17 @@ def test_item4_migration_draft_preview_confirm_supersedes_and_loop_uses_authoriz
     _show(f"---- ④ 显式旧信封续跑原文 exit {res.exit_code} ----\n{text}")
     assert f"envelope={AUTH}" in text and "run claim @" in text and "--owner-policy-ref auth_lybra" in text
     assert "pol_mig_ota_1 已被同驱动方更新信封 auth_lybra 接替" in text
-    # 门: 直接拿旧信封认领 = 拒(superseded), 回落 Supervised 不放行
-    _card(o.gov, "PROBE-MIG-3", "ota")
+    # 门: 驱动方直接拿已迁移旧信封认领 = 拒(superseded, 拒因码同撤销), 回落 Supervised 不放行
+    from tools.aipos_cli.two_phase_shell_factory import DRIVER_INSTANCE_ENV
+
+    monkeypatch.setenv(DRIVER_INSTANCE_ENV, ADV_MAIN)  # 薄壳按实例取驱动方凭据(连接文件绑定两位驱动方, 禁取首个)
+    _card(o.gov, "PROBE-MIG-3", "lantu")
     rc, cli_out, cli_err = _cli(["queue", "claim", "--task-id", "PROBE-MIG-3", "--actor", f78.EXEC, "--confirm", "--connection-json", o.conn,
                                  "--agent-instance", f78.EXEC, "--autonomy-mode", "PreAuthorized", "--owner-policy-ref", "pol_mig_lt_1"])
     text = _quiet(cli_out + cli_err)
     _show(f"---- ④ 门侧直接用已迁移旧信封认领原文 exit {rc} ----\n{text}")
     assert rc != 0 and not (o.gov / "5_tasks" / "records" / "claims" / "PROBE-MIG-3").exists()
+    assert "ENVELOPE_STATUS_NOT_ACTIVE" in text and "禁取首个" not in text, text
 
 
 def test_item4_regression_envelope_only_project_unchanged(two):
