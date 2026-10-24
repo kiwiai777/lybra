@@ -949,6 +949,30 @@ Lybra 服务端位置（AIPOS-286）：
         "ib_hide": "隐藏已暂停 / 测试项目",
         "ib_errors": "有 {count} 处真相读不出(未计入上面, 不猜)",
         "ib_error": "{project}:{source}:{error}",
+        # AIPOS-F226: inbox one-click ruling (web/board/readonly_pages.py + static/inbox-decide.js), zh / en same keys
+        "ib_decide_heading": "直接裁决:点一个选项 → 看预览 → 确认, 记为你本人的裁决, 顾问下一次 loop 直接读到接着做",
+        "ib_decide_readonly": "直接裁决只对 Owner 登录会话开放;其他角色看到这里,请告诉顾问。",
+        "ib_words_label": "想对顾问说的一句话(可不填)",
+        "ib_fallback": "顾问没跟上时可复制的话术",
+        "ib_deny_decide": "不批准(直接记录, 顾问下次 loop 读到)",
+        "ib_ruled_banner": "已裁决「{label}」→ 将由 {advisor} 的下一次 loop 接续",
+        "ib_ruled_done": "已裁决「{label}」(决策记录 {decision_id})",
+        "ib_ruled_unknown": "该卡驱动顾问",
+        "ib_dc_confirm_heading": "确认这个裁决",
+        "ib_dc_item": "事项:{what}",
+        "ib_dc_choice": "你选的:{label}",
+        "ib_dc_words": "你的原话:{words}",
+        "ib_dc_after": "之后:{advisor} 下一次跑 loop / next 会直接读到并接着做, 不用你转达",
+        "ib_dc_confirm_btn": "确认裁决",
+        "ib_dc_cancel_btn": "取消",
+        "ib_dc_working": "处理中…",
+        "ib_dc_ok_heading": "已裁决, 正在刷新页面…",
+        "ib_dc_fail_heading": "没有裁决成功",
+        "ib_dc_fail_next": "下一步:刷新页面后重来;仍不行就把下面的话术复制给顾问。",
+        "ib_dc_login": "登录已过期或还没登录, 这次没有记录任何东西。",
+        "ib_dc_login_next": "下一步:重新登录后再点一次。",
+        "ib_dc_retry_btn": "刷新页面",
+        "ib_dc_tech": "查看技术详情",
         # AIPOS-F180: authorization requests on the inbox / envelope pages (web/board/readonly_pages.py + static/envelopes.js), zh / en same keys
         "gr_section_title": "待授权请求({count})",
         "gr_readonly": "签发只对 Owner 登录会话开放;其他角色看到这里,请告诉顾问。",
@@ -1311,6 +1335,30 @@ Important boundaries:
         "ib_hide": "Hide paused / test projects",
         "ib_errors": "{count} truths could not be read (not counted above, not guessed)",
         "ib_error": "{project}: {source}: {error}",
+        # AIPOS-F226: inbox one-click ruling (web/board/readonly_pages.py + static/inbox-decide.js), zh / en same keys
+        "ib_decide_heading": "Decide here: pick an option -> check the preview -> confirm; it is recorded as your own decision and the advisor's next loop picks it up",
+        "ib_decide_readonly": "Deciding here is open to an Owner login session only; other roles, please tell the advisor.",
+        "ib_words_label": "A sentence for the advisor (optional)",
+        "ib_fallback": "Message to copy if the advisor falls behind",
+        "ib_deny_decide": "Decline (recorded now, the advisor's next loop reads it)",
+        "ib_ruled_banner": "Decided \"{label}\" -> {advisor} picks it up on the next loop",
+        "ib_ruled_done": "Decided \"{label}\" (decision record {decision_id})",
+        "ib_ruled_unknown": "the card's driving advisor",
+        "ib_dc_confirm_heading": "Confirm this decision",
+        "ib_dc_item": "Item: {what}",
+        "ib_dc_choice": "Your choice: {label}",
+        "ib_dc_words": "Your words: {words}",
+        "ib_dc_after": "Then: {advisor}'s next loop / next reads it and continues, no relaying needed",
+        "ib_dc_confirm_btn": "Confirm",
+        "ib_dc_cancel_btn": "Cancel",
+        "ib_dc_working": "Working...",
+        "ib_dc_ok_heading": "Decided, reloading the page...",
+        "ib_dc_fail_heading": "The decision was not recorded",
+        "ib_dc_fail_next": "Next: reload the page and try again; if it still fails, copy the message below to the advisor.",
+        "ib_dc_login": "The login expired or you are not logged in; nothing was recorded.",
+        "ib_dc_login_next": "Next: log in again and click once more.",
+        "ib_dc_retry_btn": "Reload the page",
+        "ib_dc_tech": "Show technical details",
         # AIPOS-F180: authorization requests on the inbox / envelope pages (web/board/readonly_pages.py + static/envelopes.js), zh / en same keys
         "gr_section_title": "Authorization requests ({count})",
         "gr_readonly": "Only an Owner login session can sign; other roles, please tell the advisor.",
@@ -2496,7 +2544,7 @@ def make_handler(
     board_audit_log_path: Path | None = None,
     perf_log_path: Path | None = None,
 ) -> type[BaseHTTPRequestHandler]:
-    routes = _api_routes(repo_root, board_config_path, home_root=home_root)  # AIPOS-F171: 只读 GET 路由; 无 POST 业务路由
+    routes = _api_routes(repo_root, board_config_path, home_root=home_root)  # AIPOS-F171: 只读 GET 路由; POST 只有鉴权通道 + 三个 Owner 写例外
     sessions = session_store if session_store is not None else SessionStore()
     # AIPOS-272 FIX-2: 未显式注入时，按 repo_root 发现 connection.json（首选工作区自身）
     conn_paths = connection_paths if connection_paths is not None else _discover_connection_paths(repo_root=repo_root)
@@ -2532,6 +2580,10 @@ def make_handler(
     from tools.aipos_cli.project_upgrade import board_declaration as upgrade_board_declaration
 
     upgrade_decl = upgrade_board_declaration()
+    # AIPOS-F226 write exception 3 (inbox one-click ruling): single write route read from verbs.schema lybra_owner_inbox.board.decide
+    from tools.aipos_cli.owner_inbox import board_decide_declaration
+
+    inbox_decide_decl = board_decide_declaration()
     # AIPOS-F198: workstation page (read-only, GET only; path read from verbs.schema verbs.lybra_project_workstation_plan.board)
     from tools.aipos_cli.workstation_plan import declaration as workstation_plan_declaration
 
@@ -2554,6 +2606,7 @@ def make_handler(
         _artifact_route = artifact_route
         _perf_log = Path(perf_log_path) if perf_log_path is not None else None  # AIPOS-F177: optional, off by default
         _upgrade_paths = {k: str(upgrade_decl[k]) for k in ("page_path", "write_path")}
+        _inbox_decide_path = str(inbox_decide_decl["write_path"])
         _workstation_page = workstation_page
 
         def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
@@ -2891,6 +2944,25 @@ def make_handler(
                 content_type=self.headers.get("Content-Type"))
             self._send_json(HTTPStatus(status), payload)
 
+        # ---- AIPOS-F226 inbox one-click ruling: Owner write exception 3 (same F172 framework) ----
+        def _handle_inbox_decide(self) -> None:
+            """POST write exception 3 (single write route): every check lives in owner_inbox.handle_board_decide
+            -> envelope_board.handle_owner_write (Owner session / workspace / preview token / audit log); the ruling itself is
+            owner_inbox.decide (same implementation as `lybra owner decide`); actor and provenance come from the session."""
+            from tools.aipos_cli.envelope_board import session_ref
+            from tools.aipos_cli.owner_inbox import handle_board_decide
+
+            sid, info = self._current_session()
+            session = None
+            if info is not None and sid:
+                session = {"role": info.get("role"), "token_ref": info.get("token_ref") or "", "session_ref": session_ref(sid),
+                           "login_method": info.get("login_method") or "", "source_ip": self._source_ip()}
+            status, payload = handle_board_decide(
+                self._read_json_body(), session=session, home_root=home_root, preview_store=self._previews,
+                audit_log_path=self._board_audit, origin=self.headers.get("Origin"), host=self.headers.get("Host"),
+                content_type=self.headers.get("Content-Type"))
+            self._send_json(HTTPStatus(status), payload)
+
         def do_GET(self) -> None:  # noqa: N802
             if self._perf_log is None:
                 self._route_get()
@@ -3042,6 +3114,10 @@ def make_handler(
             # AIPOS-F176 write exception 2: Owner project upgrade (declared verbs.lybra_project_upgrade.board.write_path)
             if path == self._upgrade_paths["write_path"]:
                 self._handle_upgrade()
+                return
+            # AIPOS-F226 write exception 3: Owner inbox one-click ruling (declared verbs.lybra_owner_inbox.board.decide.write_path)
+            if path == self._inbox_decide_path:
+                self._handle_inbox_decide()
                 return
             self._method_not_allowed()
 

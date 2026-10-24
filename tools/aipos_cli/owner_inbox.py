@@ -1783,9 +1783,12 @@ def relay_fields(relayed_by: str | None, owner_words: str | None) -> tuple[str, 
 
 
 def build_decision_payload(item: dict[str, Any], choice: str, note: str | None, actor: str, *, decided_at: str,
-                           relayed_by: str, owner_words: str, decl: dict[str, Any] | None = None) -> dict[str, Any]:
+                           relayed_by: str, owner_words: str, decl: dict[str, Any] | None = None,
+                           capture: dict[str, Any] | None = None) -> dict[str, Any]:
     """事项 + 选项 → 既有 owner_decision_record 全量 payload(owner_decision_writer 非信封路径, AIPOS-110 形)。
-    AIPOS-F170 件③: captured_by(两处)= 转达人; decision_rationale = 声明 owner_words_prefix + Owner 原话。"""
+    AIPOS-F170 件③: captured_by(两处)= 转达人; decision_rationale = 声明 owner_words_prefix + Owner 原话。
+    AIPOS-F226: capture = 看板 Owner 会话来源({captured_by, capture_surface, capture_method, evidence_ref, token_ref}, 唯一构造
+    board_decide_capture)覆盖 captured_by(两处)/ capture_surface / capture_method / evidence_ref / capability_scope.token_ref; 缺省 = CLI 口径不变。"""
     from datetime import datetime as _dt
 
     from tools.aipos_cli.clock import iso_z
@@ -1803,13 +1806,7 @@ def build_decision_payload(item: dict[str, Any], choice: str, note: str | None, 
     tag = _client_tag(project)
     external_ref = f"{d['external_ref_prefix']}{item['item_id']}"
     decided = _dt.fromisoformat(decided_at.replace("Z", "+00:00"))
-    extra: dict[str, Any] = {}
-    grant = item.get("grant") if isinstance(item.get("grant"), dict) else {}
-    if grant.get("kind") == "authorization" and choice == str(grant_declaration(decl)["authorization"]["choice"]):
-        # AIPOS-F224 件②: 「扩大项目授权」= 一次裁决同时落授权新修订(board_adapter.record_owner_decision → autonomy_policy.build_authorization_decision)
-        extra["project_authorization"] = grant["authorization"]
-    return {
-        **extra,
+    payload = {
         "decision_id": item["decision_id"],
         "decision_type": d["decision_type"],
         "decision_status": d["decision_status"],
@@ -1832,9 +1829,20 @@ def build_decision_payload(item: dict[str, Any], choice: str, note: str | None, 
             "refs": [external_ref],
         },
         "refs": [external_ref],
-        "capability_scope": {"token_ref": d["token_ref"], "operations": ["owner_decision_record"], "projects": [project],
-                             "expires_at": iso_z(decided + timedelta(hours=int(d["capability_ttl_hours"])))},
+        "capability_scope": {"token_ref": str((capture or {}).get("token_ref") or d["token_ref"]), "operations": ["owner_decision_record"],
+                             "projects": [project], "expires_at": iso_z(decided + timedelta(hours=int(d["capability_ttl_hours"])))},
     }
+    if capture:
+        payload["captured_by"] = payload["owner_approval_evidence"]["captured_by"] = str(capture["captured_by"])
+        payload["capture_surface"] = str(capture["capture_surface"])
+        payload["owner_approval_evidence"]["capture_method"] = str(capture["capture_method"])
+        payload["owner_approval_evidence"]["evidence_ref"] = str(capture.get("evidence_ref") or "") or None
+    grant = item.get("grant") if isinstance(item.get("grant"), dict) else {}
+    if grant.get("kind") == "authorization" and choice == str(grant_declaration(decl)["authorization"]["choice"]):
+        # AIPOS-F224 件②: 「扩大项目授权」= 一次裁决同时落授权新修订(board_adapter.record_owner_decision → autonomy_policy.build_authorization_decision);
+        # CLI decide 与 F226 看板一键裁决同一构造, 都带授权块
+        payload["project_authorization"] = grant["authorization"]
+    return payload
 
 
 def queue_ruling_payload(governance_root: Path, *, choice: str, task_id: str, anchor: str, subject: str, relayed_by: str,
@@ -1966,12 +1974,13 @@ def split_item_ids(item: str | None, items: str | list[str] | None) -> list[str]
 
 def decide(item_ids: str | list[str], choice: str, *, note: str | None = None, home_root: str | Path | None = None,
            actor: str = "owner", relayed_by: str | None = None, owner_words: str | None = None,
-           confirm: bool = False) -> dict[str, Any]:
+           confirm: bool = False, capture: dict[str, Any] | None = None) -> dict[str, Any]:
     """件② 唯一实现(AIPOS-F170: 单项与批量同一路径)。先整批预演: 每项决策记录经门侧同一预演(board_adapter.record_owner_decision)+
     解除动作预演(逐卡既有出口 dry_run / 冻结按治理根成批 dry_run); 任一被拒 = 整批不写(blocked)。确认: 逐项门侧同一执行
     (board_adapter.execute_dry_run, 含 decision_log 自动指针)→ 解除动作(既有出口; 冻结同根一条清单条目)→ 每个治理根经
     land_written_paths 落账一次。返回 {ok, stage, choice, entries[{item, decision, release, effect}], written, landings, rc_outcome, ...};
-    单项时另带 item / decision / release / effect / landing(F168 形)。rc_outcome = 声明出口名。"""
+    单项时另带 item / decision / release / effect / landing(F168 形)。rc_outcome = 声明出口名。
+    AIPOS-F226: capture = 看板 Owner 会话来源(看板写例外③ handle_board_decide 传入, 见 build_decision_payload); 其余同一路径。"""
     from tools.aipos_cli.board_adapter import execute_dry_run, land_after_write, record_owner_decision
     from tools.aipos_cli.clock import iso_z
     from tools.aipos_cli.controlled_execute import OWNER_CONFIRMATION_TOKEN
@@ -2003,7 +2012,8 @@ def decide(item_ids: str | list[str], choice: str, *, note: str | None = None, h
     tokens: list[str] = []
     for item in items:
         root = Path(item["governance_root"])
-        payload = build_decision_payload(item, choice, note, actor, decided_at=decided_at, relayed_by=relayed, owner_words=words, decl=decl)
+        payload = build_decision_payload(item, choice, note, actor, decided_at=decided_at, relayed_by=relayed, owner_words=words, decl=decl,
+                                         capture=capture)
         dry = record_owner_decision(payload, dry_run=True, repo_root=root, actor=actor)
         decision = {k: dry.get(k) for k in ("ok", "verdict", "blocking_reasons", "warnings", "planned_writes")}
         decision["target_path"] = (dry.get("data") or {}).get("target_path")
@@ -2111,6 +2121,9 @@ def ruling_view(ruling: dict[str, Any], decl: dict[str, Any], *, resume: str, ta
     words = str(ruling.get("owner_words") or "")
     relay_part = (_fmt(decl["texts"]["relay_part"], "texts.relay_part", relayed_by=str(ruling.get("relayed_by") or "?"), owner_words=words)
                   if words else "")
+    board = board_decide_declaration(decl)
+    if words and str(ruling.get("capture_surface") or "") == str(board["capture_surface"]):  # AIPOS-F226: Owner 本人在看板裁决(无转达人)
+        relay_part = _fmt(board["texts"]["relay_part"], f"{VERB}.board.decide.texts.relay_part", owner_words=words)
     line = _fmt(decl["texts"]["ruling_line"], "texts.ruling_line", choice=choice, label=label, note_part=note_part,
                 relay_part=relay_part, decided_at=str(ruling.get("decided_at") or "?"))
     advisor_next = option_next(decl, choice, label, resume=resume, task_id=task_id, governance_root=Path(governance_root),
@@ -2190,6 +2203,25 @@ def owner_ask_labels(governance_root: Path, task_id: str) -> dict[str, str]:
     return labels
 
 
+def pending_ruling_lines(governance_root: Path, task_id: str, report: dict[str, Any]) -> list[str]:
+    """AIPOS-F226 件②: `lybra loop status --task-id` 补读裁决——本卡最近一条收件箱裁决晚于本卡最近一次 loop 运行(或本卡尚无运行)且
+    该运行下一动作还不是 advisor_fix(owner_ruled)(已由 apply_owner_ruling 读到的不重复)= 顾问尚未接续 → next_ruling_lines 同一行文
+    (裁决行 + 顾问下一条)。覆盖返工上限(extend_rework)/ needs_owner(release / withdraw …)等非 loop 停等事项的看板 / CLI 裁决。
+    读不出 = 向上(不吞)。"""
+    rulings = rulings_for_task(Path(governance_root), task_id)
+    if not rulings:
+        return []
+    runs = report.get("runs") or []
+    latest = runs[-1] if runs else {}
+    if str((latest.get("next_action") or {}).get("reason") or "") == "owner_ruled":
+        return []
+    started = _parse_utc(latest.get("started_at")) if latest else None
+    decided = _parse_utc(rulings[-1].get("decided_at"))
+    if started is not None and (decided is None or decided <= started):
+        return []
+    return next_ruling_lines(Path(governance_root), task_id)
+
+
 def next_ruling_lines(governance_root: Path, task_id: str) -> list[str]:
     """`lybra next --task-id` 附行: 该卡最近一条收件箱裁决(读不出 = 向上, 不吞)。"""
     rulings = rulings_for_task(Path(governance_root), task_id)
@@ -2199,6 +2231,255 @@ def next_ruling_lines(governance_root: Path, task_id: str) -> list[str]:
     rv = ruling_view(rulings[-1], decl, resume=f"lybra loop --task-id {task_id} --workspace-root {Path(governance_root)}",
                      task_id=task_id, governance_root=Path(governance_root), labels=owner_ask_labels(Path(governance_root), task_id))
     return [rv["line"], _fmt(decl["texts"]["next_hint"], "texts.next_hint", advisor_next=rv["advisor_next"])]
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F226: 看板写例外③ 收件箱一键裁决(声明 lybra_owner_inbox.board.decide; 安全框架 = F172 envelope_board.handle_owner_write)
+# ---------------------------------------------------------------------------
+
+_BOARD_DECIDE_KEYS = ("write_path", "script_path", "action", "capture_surface", "capture_method", "token_ref", "ruled_param",
+                      "owner_words_max_chars", "excluded_categories", "texts", "errors")
+#: handle_owner_write 框架拒因 + 本写例外拒因(声明 errors 须全有; 码与状态码 / 文案读声明)
+_BOARD_DECIDE_ERRORS = ("OWNER_ONLY", "ORIGIN_MISMATCH", "WORKSPACE_REQUIRED", "WORKSPACE_NOT_IN_HOME", "PARAMS_INVALID", "STAGE_INVALID",
+                        "ITEM_NOT_FOUND", "ALREADY_RULED", "CHOICE_INVALID", "PREVIEW_BLOCKED", "PREVIEW_TOKEN_REQUIRED", "PREVIEW_TOKEN_INVALID",
+                        "PREVIEW_TOKEN_EXPIRED", "PREVIEW_SESSION_MISMATCH", "PREVIEW_PARAMS_MISMATCH", "AUDIT_LOG_UNAVAILABLE",
+                        "DECIDE_FAILED")
+
+
+def board_decide_declaration(decl: dict[str, Any] | None = None) -> dict[str, Any]:
+    """verbs.schema lybra_owner_inbox.board.decide(fail-closed): 键齐; capture_surface ∈ owner_decision_writer.ALLOWED_CAPTURE_SURFACES;
+    owner_words_max_chars 正整数; excluded_categories ⊆ categories; texts.preview_lines 非空字符串列表; errors 恰含 _BOARD_DECIDE_ERRORS
+    且每码有 int status 与非空 message(F172 errors 同形)。"""
+    from tools.aipos_cli.owner_decision_writer import ALLOWED_CAPTURE_SURFACES
+    from tools.schema_loader import SchemaLoadError
+
+    d = decl or inbox_declaration()
+    spec = (d.get("board") or {}).get("decide")
+    where = f"verbs.{VERB}.board.decide"
+    if not isinstance(spec, dict) or any(k not in spec for k in _BOARD_DECIDE_KEYS):
+        raise SchemaLoadError(f"{where} 未声明齐 {list(_BOARD_DECIDE_KEYS)}")
+    if spec["capture_surface"] not in ALLOWED_CAPTURE_SURFACES:
+        raise SchemaLoadError(f"{where}.capture_surface 须 ∈ {sorted(ALLOWED_CAPTURE_SURFACES)}")
+    limit = spec["owner_words_max_chars"]
+    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+        raise SchemaLoadError(f"{where}.owner_words_max_chars 须为正整数")
+    if not isinstance(spec["excluded_categories"], list) or not set(spec["excluded_categories"]) <= set(d["categories"]):
+        raise SchemaLoadError(f"{where}.excluded_categories 须为 categories 内的类别列表")
+    texts = spec["texts"]
+    lines = texts.get("preview_lines") if isinstance(texts, dict) else None
+    if (not isinstance(lines, list) or not lines or not all(isinstance(x, str) and x for x in lines)
+            or not all(isinstance(texts.get(k), str) for k in ("release_none", "release_part", "relay_part"))):
+        raise SchemaLoadError(f"{where}.texts 须有非空 preview_lines 与 release_none / release_part / relay_part")
+    errors = spec["errors"]
+    if not isinstance(errors, dict) or set(errors) != set(_BOARD_DECIDE_ERRORS):
+        raise SchemaLoadError(f"{where}.errors 键须恰为 {list(_BOARD_DECIDE_ERRORS)}")
+    for code, err in errors.items():
+        if not isinstance(err, dict) or not isinstance(err.get("status"), int) or not str(err.get("message") or "").strip():
+            raise SchemaLoadError(f"{where}.errors.{code} 须有 int status 与非空 message")
+    return spec
+
+
+def board_decide_capture(session: dict[str, Any], spec: dict[str, Any] | None = None) -> dict[str, str]:
+    """看板 Owner 会话 → 决策记录来源字段(唯一构造): captured_by / evidence_ref = F172 同一模板(envelope_board.session_provenance:
+    captured_by_template / rationale_template; 会话指纹 / 登录方式 / 来源 IP / 凭据引用); capture_surface / capture_method / token_ref 读本写例外声明。"""
+    from tools.aipos_cli.envelope_board import board_envelopes_declaration, session_provenance
+
+    spec = spec or board_decide_declaration()
+    prov = session_provenance(board_envelopes_declaration(), session)
+    return {"captured_by": prov["captured_by"], "evidence_ref": prov["decision_rationale"], "capture_surface": str(spec["capture_surface"]),
+            "capture_method": str(spec["capture_method"]), "token_ref": str(spec["token_ref"])}
+
+
+def board_decide_page_url(item_id: str | None = None, decl: dict[str, Any] | None = None) -> str:
+    """裁决成功后整页刷新的落点: 收件箱页 + ruled_param=<事项ID>(横幅 ruled_banner 据真相判定)。"""
+    from urllib.parse import quote
+
+    d = decl or inbox_declaration()
+    page = str(d["board"]["page"])
+    return f"{page}?{board_decide_declaration(d)['ruled_param']}={quote(str(item_id))}" if item_id else page
+
+
+def _board_owner_words(body: dict[str, Any], label: str | None, spec: dict[str, Any]) -> str:
+    """Owner 可选填的一句原话(单行, ≤ owner_words_max_chars); 未填 = relay.texts.choice_owner_words(缺省语言, 「看板选「<标签>」」)。"""
+    from tools.aipos_cli.envelope_board import MintRequestError
+
+    raw = body.get("owner_words")
+    words = "" if raw is None else str(raw).strip()
+    if "\n" in words or "\r" in words:
+        raise MintRequestError("PARAMS_INVALID", detail="owner_words 须为单行")
+    if len(words) > int(spec["owner_words_max_chars"]):
+        raise MintRequestError("PARAMS_INVALID", detail=f"owner_words 超过 {spec['owner_words_max_chars']} 字")
+    if words:
+        return words
+    return _fmt(relay_texts()["choice_owner_words"], "relay.texts.choice_owner_words", label=label or str(body.get("choice") or ""))
+
+
+def _board_preview_lines(spec: dict[str, Any], item: dict[str, Any], params: dict[str, Any], report: dict[str, Any],
+                         capture: dict[str, str], decl: dict[str, Any]) -> list[str]:
+    texts = spec["texts"]
+    choice = params["choice"]
+    label = next((o["label"] for o in item["options"] if o["key"] == choice), choice)
+    effect = report.get("effect")
+    release = report.get("release")
+    if effect and isinstance(release, dict):
+        release_line = _fmt(texts["release_part"], f"{VERB}.board.decide.texts.release_part", effect=effect, ok=release.get("ok"),
+                            verdict=release.get("verdict"))
+    else:
+        release_line = str(texts["release_none"])
+    root = Path(item["governance_root"])
+    resume = _resume_for(root, item.get("task_id"), item.get("relay_to"),
+                         (item.get("facts") or {}).get("envelope") if item["category"] == "loop_owner_needed" else None)
+    advisor_next = option_next(decl, choice, label, resume=resume, task_id=item.get("task_id"), governance_root=root,
+                               decision_id=item.get("decision_id"))
+    decision = report.get("decision") or {}
+    values = {"item_id": item["item_id"], "project": item["project"], "subject": item["subject"], "category_label": item["category_label"],
+              "choice": choice, "label": label, "owner_words": params["owner_words"], "target_path": decision.get("target_path") or "?",
+              "verdict": decision.get("verdict") or "?", "captured_by": capture["captured_by"], "capture_surface": capture["capture_surface"],
+              "release_line": release_line, "advisor": item.get("relay_to") or relay_texts()["unknown_advisor"], "advisor_next": advisor_next}
+    return [_fmt(line, f"{VERB}.board.decide.texts.preview_lines", **values) for line in texts["preview_lines"]]
+
+
+def _board_report_view(report: dict[str, Any]) -> dict[str, Any]:
+    """decide 报告的应答视图(不含事项全量; 只出决策 / 解除 / 落账要点)。"""
+    landing = report.get("landing") or {}
+    return {"rc_outcome": report.get("rc_outcome"), "effect": report.get("effect"), "decision": report.get("decision"),
+            "release": {k: (report.get("release") or {}).get(k) for k in ("ok", "verdict", "blocking_reasons")} if report.get("release") else None,
+            "written": list(report.get("written") or []),
+            "landing": {k: landing.get(k) for k in ("landed", "verdict", "committed", "pushed", "commit", "exit_code", "line") if k in landing}
+            or None}
+
+
+def _board_blocked_detail(report: dict[str, Any]) -> str:
+    reasons: list[str] = []
+    for entry in report.get("entries") or []:
+        reasons += [str(r) for r in ((entry.get("decision") or {}).get("blocking_reasons") or [])]
+        reasons += [str(r) for r in ((entry.get("release") or {}).get("blocking_reasons") or [])]
+        reasons += [str(r) for r in ((entry.get("decision") or {}).get("errors") or [])]
+    for group in report.get("freeze") or []:
+        reasons += [str(r) for r in group.get("blocking_reasons") or []]
+    return json.dumps(reasons or [report.get("rc_outcome")], ensure_ascii=False)[:800]
+
+
+def handle_board_decide(
+    body: dict[str, Any],
+    *,
+    session: dict[str, Any] | None,
+    home_root: str | Path | None,
+    preview_store: Any,
+    audit_log_path: Path | None,
+    origin: str | None = None,
+    host: str | None = None,
+    content_type: str | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """看板写例外③(唯一写路由 board.decide.write_path): 安全判定全在 envelope_board.handle_owner_write(F172 同一框架: Owner 会话 /
+    Origin / JSON / workspace / 本会话一次性预演令牌 / 看板审计日志); 本函数只给三个回调, 裁决本身 = decide 同一实现(预演 / --confirm)。
+    请求体 {workspace, stage, item_id, choice, owner_words?, preview_token?}。actor = 会话 Owner 角色; relayed_by = Owner 本人
+    (lybra_owner_decide.relay.owner_self); 来源字段 = board_decide_capture(会话)。"""
+    from tools.aipos_cli.envelope_board import MintRequestError, handle_owner_write
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    decl = inbox_declaration()
+    spec = board_decide_declaration(decl)
+    relay = ((load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get(DECIDE_VERB) or {}).get("relay") or {}
+    if not isinstance(relay.get("owner_self"), str) or not relay["owner_self"].strip():
+        raise SchemaLoadError(f"verbs.schema.json verbs.{DECIDE_VERB}.relay.owner_self 未声明")
+    owner_self = str(relay["owner_self"]).strip()
+
+    def prepare(body: dict[str, Any], project: str, root: Path, now: Any, session: dict[str, Any]) -> tuple[dict, dict, dict]:
+        iid, choice = str(body.get("item_id") or "").strip(), str(body.get("choice") or "").strip()
+        if not iid or not choice:
+            raise MintRequestError("PARAMS_INVALID", detail="须带 item_id 与 choice")
+        try:
+            item = find_items([iid], home_root=home_root)[0][0]
+        except InboxItemNotFound as exc:
+            ruling = read_ruling(root, iid, decl)  # 已裁决(重复确认 / 他处已裁)= 点名决策记录; 否则 = 真相已变
+            if ruling:
+                raise MintRequestError("ALREADY_RULED", item_id=iid, decision_id=ruling.get("decision_id") or "?",
+                                       choice=ruling.get("allowed_next_action") or "?", decided_at=ruling.get("decided_at") or "?") from exc
+            raise MintRequestError("ITEM_NOT_FOUND", item_id=iid) from exc
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise MintRequestError("PREVIEW_BLOCKED", detail=f"{type(exc).__name__}: {exc}") from exc
+        if item["project"] != project:
+            raise MintRequestError("PARAMS_INVALID", detail=f"事项 {iid} 属项目 {item['project']}, 不是 workspace {project}")
+        if item["category"] in spec["excluded_categories"] or decl["categories"][item["category"]].get("decide_redirect"):
+            raise MintRequestError("CHOICE_INVALID", detail=f"事项 {iid}({item['category']})不在看板裁决: "
+                                                            + _fmt(decl["categories"][item["category"]].get("decide_redirect") or "{item_id}",
+                                                                   f"categories.{item['category']}.decide_redirect", item_id=iid,
+                                                                   verify_command=(item.get("facts") or {}).get("verify_command") or ""))
+        label = next((o["label"] for o in item["options"] if o["key"] == choice), None)
+        words = _board_owner_words(body, label, spec)
+        params = {"action": str(spec["action"]), "project": project, "governance_root": str(root), "item_id": iid, "choice": choice,
+                  "owner_words": words, "item_hash": hashlib.sha256(_canonical_item(item).encode("utf-8")).hexdigest()}
+        audit = {"project": project, "item_id": iid, "choice": choice, "category": item["category"], "task_id": item.get("task_id")}
+        return params, audit, {"item": item, "capture": board_decide_capture(session, spec), "actor": str(session["role"])}
+
+    def _run(params: dict[str, Any], context: dict[str, Any], *, confirm: bool) -> dict[str, Any]:
+        return decide(params["item_id"], params["choice"], home_root=home_root, actor=context["actor"], relayed_by=owner_self,
+                      owner_words=params["owner_words"], confirm=confirm, capture=context["capture"])
+
+    def preview(params: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        try:
+            report = _run(params, context, confirm=False)
+        except InboxItemNotFound as exc:
+            raise MintRequestError("ITEM_NOT_FOUND", item_id=params["item_id"]) from exc
+        except InboxUsageError as exc:  # 选项不属该事项 / 该队列状态不可用(InboxChoiceInvalid)= decide 同一拒因原文
+            raise MintRequestError("CHOICE_INVALID", detail=str(exc)) from exc
+        except (OSError, ValueError, LookupError, RuntimeError) as exc:
+            raise MintRequestError("PREVIEW_BLOCKED", detail=f"{type(exc).__name__}: {exc}") from exc
+        if report["rc_outcome"] == "blocked":
+            raise MintRequestError("PREVIEW_BLOCKED", detail=_board_blocked_detail(report))
+        item = context["item"]
+        return {"params": params, "preview_lines": _board_preview_lines(spec, item, params, report, context["capture"], decl),
+                "preview": _board_report_view(report), "advisor": item.get("relay_to")}
+
+    def confirm(params: dict[str, Any], context: dict[str, Any]) -> tuple[dict, dict, Any]:
+        item = context["item"]
+        try:
+            report = _run(params, context, confirm=True)
+        except InboxItemNotFound:
+            return {"outcome": "item_not_found"}, {}, MintRequestError("ITEM_NOT_FOUND", item_id=params["item_id"])
+        except InboxUsageError as exc:
+            return {"outcome": "choice_invalid", "error": str(exc)}, {}, MintRequestError("CHOICE_INVALID", detail=str(exc))
+        except (OSError, ValueError, LookupError, RuntimeError) as exc:
+            detail = f"{type(exc).__name__}: {exc}"
+            return {"outcome": "decide_failed", "error": detail}, {}, MintRequestError("DECIDE_FAILED", detail=detail)
+        view = _board_report_view(report)
+        fields = {"outcome": "ruled" if report["ok"] else "decide_failed", "decision_id": item["decision_id"],
+                  "rc_outcome": report["rc_outcome"], "written": view["written"], "landing": view["landing"],
+                  "captured_by": context["capture"]["captured_by"], "capture_surface": context["capture"]["capture_surface"]}
+        if report["rc_outcome"] == "blocked":
+            return fields, {}, MintRequestError("DECIDE_FAILED", detail=_board_blocked_detail(report))
+        return fields, {"ok": True, "stage": "confirm", "params": params, "item_id": item["item_id"], "decision_id": item["decision_id"],
+                        "choice": params["choice"], "advisor": item.get("relay_to"), "actor": context["actor"],
+                        "captured_by": context["capture"]["captured_by"], "capture_surface": context["capture"]["capture_surface"],
+                        "result": view, "landing_line": (view["landing"] or {}).get("line"),
+                        "redirect": board_decide_page_url(item["item_id"], decl)}, None
+
+    return handle_owner_write(body, decl=spec, action=str(spec["action"]), session=session, home_root=home_root,
+                              preview_store=preview_store, audit_log_path=audit_log_path, prepare=prepare, preview=preview,
+                              confirm=confirm, origin=origin, host=host, content_type=content_type)
+
+
+def ruled_banner(inbox: dict[str, Any], item_id: str | None, home_root: str | Path | None = None) -> dict[str, Any] | None:
+    """看板裁决后整页刷新的横幅(只按真相, 不信请求): 事项在「已裁决待接续」(relays 同一推导)= {pending: True, advisor = 该段顾问};
+    已有裁决记录但已接续 / 不需顾问动作 = {pending: False}; 无该事项的裁决记录 = None(不声称未发生的裁决)。"""
+    iid = str(item_id or "").strip()
+    if not iid:
+        return None
+    decl = inbox_declaration()
+    for group in inbox.get("relays") or []:
+        for entry in group.get("entries") or []:
+            if entry.get("item_id") == iid:
+                return {"item_id": iid, "decision_id": entry.get("decision_id"), "label": entry.get("label"), "pending": True,
+                        "advisor": group.get("advisor") or entry.get("advisor"), "project": entry.get("project"),
+                        "task_id": entry.get("task_id")}
+    for proj in home_projects(home_root)["projects"]:
+        ruling = read_ruling(Path(proj["root"]), iid, decl)
+        if ruling:
+            choice = str(ruling.get("allowed_next_action") or "")
+            return {"item_id": iid, "decision_id": ruling.get("decision_id"), "pending": False, "advisor": None, "project": proj["name"],
+                    "task_id": ruling.get("task_id"), "label": str((decl["options"].get(choice) or {}).get("label") or choice)}
+    return None
 
 
 # AIPOS-316: Guard against direct invocation

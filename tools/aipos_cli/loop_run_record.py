@@ -1984,10 +1984,21 @@ def loop_status_cli(args: Any) -> int:
     except (FileNotFoundError, LoopRunRecordError, SchemaLoadError, ValueError, OSError) as exc:
         print(f"lybra loop status: {type(exc).__name__}: {exc}", file=sys.stderr)
         return declared_exit_code(STATUS_VERB, "unreadable")
+    if task_id:  # AIPOS-F226 件②: 本卡晚于最近运行的收件箱裁决(看板 / CLI 同读; 返工上限 / needs_owner 等非 loop 停等事项)= 附裁决行与下一条
+        from tools.aipos_cli.frontmatter import FrontmatterReadError
+        from tools.aipos_cli.owner_inbox import pending_ruling_lines
+
+        try:
+            report["owner_ruling_pending"] = pending_ruling_lines(governance_root, task_id, report)
+        except (FrontmatterReadError, OSError, ValueError) as exc:
+            print(f"lybra loop status: 收件箱裁决读不出: {type(exc).__name__}: {exc}", file=sys.stderr)
+            return declared_exit_code(STATUS_VERB, "unreadable")
     if getattr(args, "json", False):
         print(json.dumps(report, indent=2, ensure_ascii=False))
     else:
         print(render_status(report, run_record_declaration(contract)["states"]))
+        for line in report.get("owner_ruling_pending") or []:
+            print(line)
         # AIPOS-F167 件③: 末尾「Lybra 未读更新」(四出口同一渲染; 无未读 = 不显示; 只影响显示, 不影响状态判定与退出码)
         from tools.aipos_cli.advisor_updates_cli import advisor_banner_lines
 

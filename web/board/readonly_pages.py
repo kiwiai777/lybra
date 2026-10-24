@@ -774,7 +774,10 @@ def _grant_card(ctx: _Ctx, item: dict[str, Any], owner: bool) -> str:
                      f"<label>{_ESC(ctx.t('gr_edit_repos'))} <input name=\"lane_repo\" type=\"text\" value=\"{_ESC(repos)}\"></label>"
                      f"<button type=\"submit\">{_ESC(ctx.t('gr_edit_submit'))}</button></form>")
         tell = ctx.t("gr_deny_tell", advisor=g["agent_or_role"], task_id=g["task_id"])
-        parts.append(f"<div class=\"gr-deny\" hidden><p class=\"rp-tell\">{_ESC(tell)}</p>{_command_block(ctx, [item['decide_command']])}</div>")
+        # AIPOS-F226: "decline" is recorded right here (write exception 3, choice deny_grant); the message + command stay as the fallback
+        deny = _decide_block(ctx, item, ["deny_grant"], label_key="ib_deny_decide")
+        parts.append(f"<div class=\"gr-deny\" hidden>{deny}<details class=\"ib-fallback\"><summary>{_ESC(ctx.t('ib_fallback'))}</summary>"
+                     f"<p class=\"rp-tell\">{_ESC(tell)}</p>{_command_block(ctx, [item['decide_command']])}</details></div>")
     parts.append(f"<details class=\"gr-tech\"><summary>{_ESC(ctx.t('gr_tech'))}</summary><pre>{_ESC(chr(10).join(tech_lines))}</pre></details>")
     parts.append("</article>")
     return "".join(parts)
@@ -799,7 +802,39 @@ def _words(text: Any) -> str:
     return str(text or "").partition("`")[0].strip().rstrip(":;,\uff1a\uff1b\uff0c")
 
 
-def _inbox_item_html(ctx: _Ctx, item: dict[str, Any], lines: list[str]) -> str:
+def _decidable(item: dict[str, Any]) -> bool:
+    """AIPOS-F226: the item can be ruled on the board (write exception 3): not an owner_check / decide_redirect category (declaration
+    board.decide.excluded_categories); authorization requests are signed on their request card (decline = deny_grant button there)."""
+    from tools.aipos_cli.owner_inbox import board_decide_declaration, inbox_declaration
+
+    decl = inbox_declaration()
+    return (item["category"] not in board_decide_declaration(decl)["excluded_categories"]
+            and not decl["categories"][item["category"]].get("decide_redirect"))
+
+
+def _decide_block(ctx: _Ctx, item: dict[str, Any], keys: list[str] | None = None, *, label_key: str | None = None) -> str:
+    """AIPOS-F226: one button per option (or only `keys`) + an optional one-line Owner sentence; static/inbox-decide.js posts the declared
+    write path (preview -> confirm). Data attributes only; every check is on the server."""
+    from tools.aipos_cli.owner_inbox import board_decide_declaration
+
+    spec = board_decide_declaration()
+    options = [o for o in item.get("options") or [] if keys is None or o["key"] in keys]
+    if not options or not _decidable(item):
+        return ""
+    what = ctx.t("ib_card_title", task_id=item["task_id"], title=item["title"]) if item.get("task_id") and item.get("title") else (
+        ctx.t("ib_card", task_id=item["task_id"]) if item.get("task_id") else str(item.get("subject") or ""))
+    buttons = "".join(
+        f"<button type=\"button\" class=\"ib-decide-btn{' gr-primary' if n == 0 else ''}\" data-ib-choice=\"{_ESC(o['key'])}\""
+        f" data-ib-label=\"{_ESC(o['label'])}\">{_ESC(ctx.t(label_key) if label_key else o['label'])}</button>"
+        for n, o in enumerate(options))
+    return (f"<div class=\"ib-decide\" data-ib-item=\"{_ESC(item['item_id'])}\" data-ib-workspace=\"{_ESC(item['project'])}\""
+            f" data-ib-what=\"{_ESC(item['project'] + ' / ' + what)}\" data-ib-advisor=\"{_ESC(item.get('relay_to') or ctx.t('ib_ruled_unknown'))}\">"
+            + ("" if label_key else f"<p class=\"rp-sub ib-decide-head\">{_ESC(ctx.t('ib_decide_heading'))}</p>")
+            + f"<label class=\"ib-words\">{_ESC(ctx.t('ib_words_label'))} <input type=\"text\" name=\"owner_words\""
+            f" maxlength=\"{int(spec['owner_words_max_chars'])}\"></label><div class=\"ib-decide-actions\">{buttons}</div></div>")
+
+
+def _inbox_item_html(ctx: _Ctx, item: dict[str, Any], lines: list[str], owner: bool = False) -> str:
     """AIPOS-F181 item 4: one inbox item in plain words (project / card / what you are asked); the engineering lines (item id,
     options, decide command with the home root) are folded into "show details". An item that already has a plain-language request
     card above only points to it."""
@@ -823,6 +858,8 @@ def _inbox_item_html(ctx: _Ctx, item: dict[str, Any], lines: list[str]) -> str:
             parts.append(f"<p class=\"rp-tell ib-hint\">{_ESC(item['reaudit_hint'])}</p>")
         if item.get("board_url"):
             parts.append(f"<p class=\"owner-inbox-board\"><a href=\"{_ESC(item['board_url'])}\">{_ESC(ctx.t('ib_board'))}</a></p>")
+        if owner:  # AIPOS-F226: Owner session decides here; the per-option messages below are folded as the fallback
+            parts.append(_decide_block(ctx, item))
         parts.append(_choice_messages(ctx, item))
     parts.append(f"<details class=\"ib-details\"><summary>{_ESC(ctx.t('ib_details'))}</summary>"
                  f"<pre>{_ESC(chr(10).join(line.strip() for line in lines))}</pre></details></section>")
@@ -844,8 +881,10 @@ def _choice_messages(ctx: _Ctx, item: dict[str, Any]) -> str:
         rows.append(f"<details class=\"rp-cmd ib-choice\" data-choice=\"{_ESC(option['key'])}\"><summary class=\"rp-cmd-label\">"
                     f"{_ESC(t['choice_summary'].format(label=option['label'], advisor=advisor))}</summary>"
                     f"<pre class=\"upgrade-lines ib-choice-text\">{_ESC(text)}</pre></details>")
-    return (f"<div class=\"ib-choices\" data-relay-to=\"{_ESC(item.get('relay_to') or '')}\">"
-            f"<p class=\"rp-sub ib-choices-head\">{_ESC(t['choice_heading'].format(advisor=advisor))}</p>{''.join(rows)}</div>")
+    # AIPOS-F226: folded by default ("message to copy if the advisor falls behind"); deciding happens with the buttons above
+    return (f"<details class=\"ib-fallback\"><summary>{_ESC(ctx.t('ib_fallback'))}</summary>"
+            f"<div class=\"ib-choices\" data-relay-to=\"{_ESC(item.get('relay_to') or '')}\">"
+            f"<p class=\"rp-sub ib-choices-head\">{_ESC(t['choice_heading'].format(advisor=advisor))}</p>{''.join(rows)}</div></details>")
 
 
 def _relay_section(ctx: _Ctx, inbox: dict[str, Any]) -> list[str]:
@@ -867,7 +906,49 @@ def _relay_section(ctx: _Ctx, inbox: dict[str, Any]) -> list[str]:
     return out
 
 
-def _inbox_body(ctx: _Ctx, inbox: dict[str, Any], show_all: bool) -> list[str]:
+def _ruled_banner_html(ctx: _Ctx, banner: dict[str, Any] | None) -> list[str]:
+    """AIPOS-F226: after a board ruling the page reloads with the declared ruled_param; the banner states only what the truth shows
+    (owner_inbox.ruled_banner): waiting in "decided, waiting for the advisor" = names the advisor whose next loop picks it up."""
+    if not banner:
+        return []
+    if banner["pending"]:
+        text = ctx.t("ib_ruled_banner", label=banner.get("label") or "?", advisor=banner.get("advisor") or ctx.t("ib_ruled_unknown"))
+    else:
+        text = ctx.t("ib_ruled_done", label=banner.get("label") or "?", decision_id=banner.get("decision_id") or "?")
+    return [f"<p class=\"env-banner ib-banner\" data-ruled=\"{_ESC(banner['item_id'])}\" data-pending=\"{str(bool(banner['pending'])).lower()}\">"
+            f"{_ESC(text)}</p>"]
+
+
+def _decide_panel(ctx: _Ctx) -> str:
+    """AIPOS-F226: the single ruling panel (confirm / working / failure), filled by static/inbox-decide.js; technical details folded."""
+    return ("<section class=\"gr-panel ib-panel\" hidden aria-live=\"polite\"><h2></h2><div class=\"gr-panel-body\"></div>"
+            f"<details class=\"gr-tech gr-panel-tech\" hidden><summary>{_ESC(ctx.t('ib_dc_tech'))}</summary><pre></pre></details>"
+            "<div class=\"gr-panel-actions\"></div></section>")
+
+
+_IB_JS_KEYS = ("ib_dc_confirm_heading", "ib_dc_item", "ib_dc_choice", "ib_dc_words", "ib_dc_after", "ib_dc_confirm_btn", "ib_dc_cancel_btn",
+               "ib_dc_working", "ib_dc_ok_heading", "ib_dc_fail_heading", "ib_dc_fail_next", "ib_dc_login", "ib_dc_login_next",
+               "ib_dc_retry_btn")
+
+
+def _decide_script() -> str:
+    from tools.aipos_cli.owner_inbox import board_decide_declaration
+
+    return str(board_decide_declaration()["script_path"])
+
+
+def _decide_attrs(ctx: _Ctx) -> str:
+    """AIPOS-F226: body attributes for static/inbox-decide.js (write path from the declaration, unformatted texts in the page language)."""
+    import json
+
+    from tools.aipos_cli.owner_inbox import board_decide_declaration
+
+    texts = json.dumps({key: ctx.raw(key) for key in _IB_JS_KEYS}, ensure_ascii=False)
+    return (f" data-ib-owner=\"true\" data-ib-write-path=\"{_ESC(str(board_decide_declaration()['write_path']))}\""
+            f" data-ib-texts=\"{_ESC(texts)}\"")
+
+
+def _inbox_body(ctx: _Ctx, inbox: dict[str, Any], show_all: bool, owner: bool = False) -> list[str]:
     from tools.aipos_cli.owner_inbox import inbox_declaration, item_lines
 
     texts = inbox_declaration()["texts"]
@@ -877,7 +958,9 @@ def _inbox_body(ctx: _Ctx, inbox: dict[str, Any], show_all: bool) -> list[str]:
     if hidden:
         out.append(f"<p class=\"owner-inbox-paused rp-sub\">{_ESC(ctx.t('ib_hidden', projects=', '.join(hidden)))}</p>")
     out.append(_toggle(ctx, hidden, show_all, base, show_key="ib_show", hide_key="ib_hide"))
-    out.extend(_inbox_item_html(ctx, item, item_lines(item, texts)) for item in inbox["items"])
+    if not owner and any(_decidable(item) for item in inbox["items"]):
+        out.append(f"<p class=\"rp-readonly-note\">{_ESC(ctx.t('ib_decide_readonly'))}</p>")
+    out.extend(_inbox_item_html(ctx, item, item_lines(item, texts), owner) for item in inbox["items"])
     if inbox["errors"]:
         rows = "".join(f"<li>{_ESC(ctx.t('ib_error', project=e['project'], source=e['source'], error=e['error']))}</li>" for e in inbox["errors"])
         out.append(f"<section class=\"owner-inbox-errors\"><h2>{_ESC(ctx.t('ib_errors', count=len(inbox['errors'])))}</h2>"
@@ -893,7 +976,7 @@ def render_owner_inbox(home_root: str | Path | None, params: dict[str, list[str]
 
     from tools.aipos_cli import board_pages
     from tools.aipos_cli.board_adapter import get_owner_inbox
-    from tools.aipos_cli.owner_inbox import grant_requests, render_inbox_error_html
+    from tools.aipos_cli.owner_inbox import board_decide_declaration, grant_requests, render_inbox_error_html, ruled_banner
     from tools.schema_loader import SchemaLoadError
 
     lang = "zh"
@@ -908,14 +991,19 @@ def render_owner_inbox(home_root: str | Path | None, params: dict[str, list[str]
         inbox = response["data"]
         requests = grant_requests(inbox)
         signing = owner and bool(requests)
-        body = (([_panel(ctx)] if signing else []) + _relay_section(ctx, inbox) + _grant_section(ctx, requests, owner)
-                + _inbox_body(ctx, inbox, show_all))
+        # AIPOS-F226: Owner session + something decidable = the ruling panel and its script (write exception 3)
+        deciding = owner and any(_decidable(item) for item in inbox["items"])
+        spec = board_decide_declaration()
+        banner = ruled_banner(inbox, (params.get(str(spec["ruled_param"])) or [""])[0], home_root)
+        body = (_ruled_banner_html(ctx, banner) + ([_panel(ctx)] if signing else []) + ([_decide_panel(ctx)] if deciding else [])
+                + _relay_section(ctx, inbox) + _grant_section(ctx, requests, owner) + _inbox_body(ctx, inbox, show_all, owner))
         title = ctx.t("ib_title" if inbox["items"] else "ib_empty", count=inbox["count"], projects=len(inbox["projects"]))
         # AIPOS-F217: after signing, reload this page (same switch / language); its "decided, to relay" section carries the paragraph
         here = str(decl["nav_links"]["inbox"]) + (f"?{urlencode({decl['query']['show']: decl['show_all_value']})}" if show_all else "")
         after_sign = {kind: ctx.href(here) for kind in _after_sign_kinds()}
+        scripts = ([_owner_script()] if signing else []) + ([_decide_script()] if deciding else [])
         return _page(ctx, "inbox", title, body, note_key=None, h1_attrs=f" data-owner-inbox-count=\"{inbox['count']}\"",
-                     body_attrs=_owner_attrs(ctx, signing, after_sign), scripts=[_owner_script()] if signing else [],
+                     body_attrs=_owner_attrs(ctx, signing, after_sign) + (_decide_attrs(ctx) if deciding else ""), scripts=scripts,
                      current_url=str(decl["nav_links"]["inbox"]))
     except (OSError, ValueError, LookupError, RuntimeError, SchemaLoadError) as exc:  # unreadable = error page naming the cause
         return render_error(lang, f"{type(exc).__name__}: {exc}"[:800])
@@ -1000,6 +1088,9 @@ def render_envelopes(home_root: str | Path | None, params: dict[str, list[str]],
         body.append(_envelope_tabs_nav(ctx, tab, counts, show_all))
         if signed:
             body.append(_signed_banner(ctx, signed, tab, show_all))
+        deciding = owner and tab == "pending" and bool(requests)  # AIPOS-F226: "decline" on a request card = one-click deny_grant
+        if deciding:
+            body.append(_decide_panel(ctx))
         if tab == "pending":
             body += _relay_section(ctx, inbox) + _grant_section(ctx, requests, owner, len(inbox["errors"]))
             if not counts["pending"] and not relays and not inbox["errors"]:
@@ -1009,8 +1100,8 @@ def render_envelopes(home_root: str | Path | None, params: dict[str, list[str]],
         after_sign = {kind: _envelope_tab_url(ctx, target, show_all) + f"&{tabs['signed_param']}={{policy_id}}#{{policy_id}}"
                       for kind, target in tabs["after_sign"].items()}
         return _page(ctx, "envelopes", parts["title"], body, note_key=None, h1_attrs=parts["h1_attrs"],
-                     body_attrs=_owner_attrs(ctx, owner, after_sign), scripts=[_owner_script()] if owner else [],
-                     current_url=_envelope_page())
+                     body_attrs=_owner_attrs(ctx, owner, after_sign) + (_decide_attrs(ctx) if deciding else ""),
+                     scripts=([_owner_script()] if owner else []) + ([_decide_script()] if deciding else []), current_url=_envelope_page())
     except (OSError, ValueError, LookupError, RuntimeError, SchemaLoadError) as exc:  # unreadable = error page naming the cause
         return render_error(lang, f"{type(exc).__name__}: {exc}"[:800])
 
