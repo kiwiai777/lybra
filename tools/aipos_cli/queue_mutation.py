@@ -1569,22 +1569,44 @@ def build_rework_round(
         }
     
     # 读取上限声明 (默认 2); AIPOS-F168: 抽为 rework_max_rounds(收件箱「返工轮次达上限」同读, 禁第二份)
-    max_rounds = rework_max_rounds(repo_root, warnings)
-    
-    next_round = len(rework_rounds) + 1
-    if next_round > max_rounds:
+    # AIPOS-F222 件③: 上限判据 = max_rounds + 已消费的 Owner 追加裁决数; 超出且有未消费裁决 = 放行一轮并记 round_field(唯一实现 rework_round_budget)
+    try:
+        budget = rework_round_budget(repo_root, task_id, rework_rounds, warnings)
+    except (OSError, ValueError, LookupError) as exc:  # 裁决记录读不出 = 拒(不猜成无裁决 / 有裁决)
         return {
             "verdict": Verdict.BLOCK,
             "task_id": task_id,
             "actor": actor,
             "dry_run": True,
-            "blocking_reasons": [
-                f"返工轮次已达上限 ({max_rounds} 轮)，需升仲裁。当前已有 {len(rework_rounds)} 轮。"
-            ],
+            "blocking_reasons": [f"返工上限判定读不出 Owner 追加裁决: {type(exc).__name__}: {exc}"],
             "warnings": warnings,
-            "data": {"current_rounds": len(rework_rounds), "max_rounds": max_rounds},
+            "data": {},
         }
-    
+    max_rounds = budget["max_rounds"]
+    extension = budget["extension"]
+
+    next_round = len(rework_rounds) + 1
+    extension_ref: str | None = None
+    if next_round > budget["limit"]:
+        if not budget["unconsumed"]:
+            texts = extension["texts"]
+            consumed = len(budget["consumed"])
+            part = str(texts["extension_part"]).format(consumed=consumed) if consumed else ""
+            return {
+                "verdict": Verdict.BLOCK,
+                "task_id": task_id,
+                "actor": actor,
+                "dry_run": True,
+                "blocking_reasons": [
+                    str(texts["refused"]).format(max_rounds=max_rounds, extension_part=part, rounds=len(rework_rounds))
+                ],
+                "warnings": warnings,
+                "data": {"current_rounds": len(rework_rounds), "max_rounds": max_rounds, "code": "REWORK_LIMIT",
+                         "limit": budget["limit"], "consumed_extensions": list(budget["consumed"]),
+                         "extension_choice": str(extension["choice"])},
+            }
+        extension_ref = str(budget["unconsumed"][0])
+
     # 4. 构建新返工轮次
     now_iso = iso_z()
     new_round = {
@@ -1596,6 +1618,9 @@ def build_rework_round(
     }
     if acceptance_criteria:
         new_round["acceptance_criteria"] = acceptance_criteria
+    if extension_ref:
+        new_round[str(extension["round_field"])] = extension_ref
+        warnings.append(str(extension["texts"]["granted"]).format(round=next_round, decision_id=extension_ref))
     
     # 5. 构造更新后的 rework_rounds
     updated_rework_rounds = rework_rounds + [new_round]
@@ -1614,6 +1639,7 @@ def build_rework_round(
             "max_rounds": max_rounds,
             "new_round": new_round,
             "updated_rework_rounds": updated_rework_rounds,
+            "owner_extension_ref": extension_ref,
         },
     }
 
@@ -1635,6 +1661,49 @@ def rework_max_rounds(repo_root: Path, warnings: list[str] | None = None) -> int
         if warnings is not None:
             warnings.append(f"Failed to read max_rounds from schema: {e}, using default 2")
     return int(max_rounds)
+
+
+_EXTENSION_TEXTS = ("refused", "extension_part", "granted")
+
+
+def rework_extension_declaration() -> dict[str, Any]:
+    """AIPOS-F222 件③: transitions.schema nodes.queue_rework.guards.rework_limit.owner_extension(产品仓声明, 唯一读取口)。
+    choice / round_field / texts 缺 = SchemaLoadError(fail-closed); choice 须为收件箱声明的选项(lybra_owner_inbox.options)。"""
+    from tools.aipos_cli.owner_inbox import inbox_declaration
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    nodes = load_schema("transitions", code_repo_schema_root()).get("nodes") or {}
+    decl = ((((nodes.get("queue_rework") or {}).get("guards") or {}).get("rework_limit") or {}).get("owner_extension"))
+    texts = decl.get("texts") if isinstance(decl, dict) else None
+    if (not isinstance(decl, dict) or not str(decl.get("choice") or "").strip() or not str(decl.get("round_field") or "").strip()
+            or not isinstance(texts, dict) or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in _EXTENSION_TEXTS)):
+        raise SchemaLoadError("transitions.schema.json nodes.queue_rework.guards.rework_limit.owner_extension(choice / round_field / "
+                              f"texts.{list(_EXTENSION_TEXTS)})未声明齐(AIPOS-F222)")
+    if str(decl["choice"]) not in (inbox_declaration().get("options") or {}):
+        raise SchemaLoadError(f"rework_limit.owner_extension.choice {decl['choice']!r} 不是 verbs.lybra_owner_inbox.options 声明的选项")
+    return decl
+
+
+def rework_round_budget(repo_root: Path, task_id: str, rework_rounds: list[Any] | None,
+                        warnings: list[str] | None = None) -> dict[str, Any]:
+    """AIPOS-F222 件③: 本卡返工额度(唯一实现; build_rework_round 上限判据与 Owner 收件箱返工上限事项同读)。
+    Owner 追加裁决 = 收件箱决策记录(owner_inbox.rulings_for_task: decision_type = 收件箱声明, task_id = 本卡)中 allowed_next_action =
+    owner_extension.choice 者, 旧→新; 已被本卡任一返工轮 round_field 引用 = 已消费。limit = max_rounds + 已消费数(len(rounds) ≥ limit 且
+    无未消费裁决 = 额度已尽)。返回 {max_rounds, limit, consumed[决策 ID], unconsumed[决策 ID], extension(声明)}。
+    裁决记录读不出 = 向上(fail-closed)。"""
+    from tools.aipos_cli.owner_inbox import rulings_for_task
+
+    extension = rework_extension_declaration()
+    max_rounds = rework_max_rounds(repo_root, warnings)
+    field = str(extension["round_field"])
+    rounds = [r for r in (rework_rounds or []) if isinstance(r, dict)]
+    referenced = {str(r.get(field) or "").strip() for r in rounds} - {""}
+    granted = [str(r.get("decision_id") or "").strip() for r in rulings_for_task(Path(repo_root), task_id)
+               if str(r.get("allowed_next_action") or "") == str(extension["choice"])]
+    granted = [d for d in granted if d]
+    consumed = [d for d in granted if d in referenced]
+    return {"max_rounds": max_rounds, "limit": max_rounds + len(consumed), "consumed": consumed,
+            "unconsumed": [d for d in granted if d not in referenced], "extension": extension}
 
 
 # AIPOS-316: Guard against direct invocation

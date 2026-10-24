@@ -100,6 +100,16 @@ def inbox_declaration() -> dict[str, Any]:
                 raise SchemaLoadError(f"verbs.{VERB}.categories.{name}.reaudit_hint 须有 reasons / after_choices(列表)、非空 text 与 ≥1 整数 commit_chars")
             referenced |= set(hint["after_choices"])
         referenced |= set(cat.get("choice_refused_by_queue_state") or {})  # AIPOS-F201: refusal texts are keyed by option
+    ask_spec = decl["categories"]["loop_owner_needed"].get("advisor_ask")  # AIPOS-F222 件②
+    if (not isinstance(ask_spec, dict) or not str(ask_spec.get("reason") or "").strip() or not str(ask_spec.get("impact") or "").strip()
+            or not isinstance(ask_spec.get("pinned_when_rework_exhausted"), list)):
+        raise SchemaLoadError(f"verbs.{VERB}.categories.loop_owner_needed.advisor_ask 须有非空 reason / impact 与列表 pinned_when_rework_exhausted")
+    referenced |= set(ask_spec["pinned_when_rework_exhausted"])
+    rl = decl["categories"]["rework_limit"]  # AIPOS-F222 件①: 锚按卡型措辞
+    review = rl.get("advisor_review")
+    if (not isinstance(review, dict) or any(not str(review.get(k) or "").strip() for k in ("ask", "impact"))
+            or not str(rl.get("extension_part") or "").strip()):
+        raise SchemaLoadError(f"verbs.{VERB}.categories.rework_limit 须有 advisor_review.ask / impact 与 extension_part")
     stale = decl["stale"]
     for cat_name, rule in (stale.get("suggest") or {}).items():
         if cat_name not in decl["categories"]:
@@ -421,17 +431,33 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
         na = view.get("next_action") or {}
         if na.get("action") == "advisor_fix" and na.get("reason") == "owner_ruled" and not view.get("frozen"):
             # AIPOS-F201 item 3 (a): ruled (loop status already reads the ruling) but this run is still the latest = not re-run yet
-            entry = _ruled_loop_relay(root, project, task_id=task_id, view=view, na=na, decl=decl) if relays is not None else None
+            # AIPOS-F222: an owner_ask merged into the rework-limit item is relayed by that item; one answered by a later ruling on
+            # another item is relayed there (no second paragraph for the same decision)
+            ask_mark = na.get("owner_ask_inbox") or {}
+            own = not ask_mark or (ask_mark.get("category") != "rework_limit" and ask_mark.get("resolved_by") != "later")
+            entry = (_ruled_loop_relay(root, project, task_id=task_id, view=view, na=na, decl=decl)
+                     if relays is not None and own else None)
             if entry is not None:
                 relays.append(entry)
             continue
-        if na.get("action") != "owner_needed" or view.get("frozen"):
+        # AIPOS-F222 件②: 顾问 loop note 补写的 owner_ask 落在下一动作非等 Owner 的运行上(loop status 经 owner_ask_destination 标 owner_ask_inbox)
+        # = 照列(事由 advisor_ask); 判归返工上限事项 = 已并入该事项(_merge_owner_ask), 不另列
+        marker = na.get("owner_ask_inbox") if na.get("action") != "owner_needed" else None
+        if isinstance(marker, dict) and marker.get("category") == "rework_limit":
             continue
-        reason = str(na.get("reason") or "")
+        advisor_ask = isinstance(marker, dict) and bool(marker.get("item_id"))
+        if (na.get("action") != "owner_needed" and not advisor_ask) or view.get("frozen"):
+            continue
+        ask_spec = cat["advisor_ask"]
+        reason = str(ask_spec["reason"]) if advisor_ask else str(na.get("reason") or "")
         ask_rec = view.get("owner_ask") if isinstance(view.get("owner_ask"), dict) else {}
+        if ask_rec and not advisor_ask and _owner_ask_answered(root, task_id, ask_rec, project, errors):
+            ask_rec = {}  # AIPOS-F222: 补写之后本卡已有 Owner 裁决 = 该请求已被回应, 不再拿旧请求文案当本事项
         driver = str(view.get("driver") or "")
         grant_request = reason in grant_declaration(decl)["reasons"]
         card_fm: dict[str, Any] = {}
+        if advisor_ask:  # AIPOS-F222: 卡面(返工额度 / 标题)
+            card_fm = _card_frontmatter(card_path, errors, project) or {}
         if grant_request:
             card_fm = _card_frontmatter(card_path, errors, project) or {}
             try:
@@ -452,6 +478,8 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
         # AIPOS-F202: options pinned for this reason (e.g. reaudit on audit_blocked_repeated) stay offered after the advisor's own
         options += _option_list([k for k in (cat.get("pinned_options_by_reason") or {}).get(reason) or []
                                  if k not in {o["key"] for o in options}], decl)
+        if advisor_ask and _rework_exhausted(root, task_id, card_fm, project, errors):  # AIPOS-F222: 返工额度已尽 = 可授权追加一轮
+            options += _option_list([k for k in ask_spec["pinned_when_rework_exhausted"] if k not in {o["key"] for o in options}], decl)
         recommend = ask_rec.get("recommend") or None
         if not recommend and reason in (cat.get("recommend_by_reason") or {}):
             recommend = _fmt(cat["recommend_by_reason"][reason], f"categories.loop_owner_needed.recommend_by_reason.{reason}",
@@ -462,11 +490,13 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
             decl, project=project, governance_root=root, category="loop_owner_needed", rank=int(cat["rank"]), subject=subject,
             anchor=str(view.get("run_id") or ""), source=driver,
             ask=str(ask_rec.get("ask") or na.get("detail") or reason), recommend=recommend,
-            impact=_fmt(cat["impact"], "categories.loop_owner_needed.impact", task_id=task_id, reason=reason),
+            impact=(_fmt(ask_spec["impact"], "categories.loop_owner_needed.advisor_ask.impact", task_id=task_id,
+                         end_reason=str(view.get("end_reason") or na.get("reason") or "?")) if advisor_ask
+                    else _fmt(cat["impact"], "categories.loop_owner_needed.impact", task_id=task_id, reason=reason)),
             options=options, since=view.get("ended_at") or view.get("started_at"), task_id=task_id, home_root=home_root, title=title,
             facts={"run_id": view.get("run_id"), "reason": reason, "driver": view.get("driver"), "envelope": view.get("envelope"),
                    "hint": na.get("hint"), "record_path": view.get("record_path"), "owner_ask_by": ask_rec.get("noted_by")})
-        item["relay_to"] = driver or None  # AIPOS-F201: the loop driver is the advisor to tell
+        item["relay_to"] = (str(ask_rec.get("noted_by") or "") if advisor_ask else "") or driver or None  # AIPOS-F201: the loop driver is the advisor to tell
         try:
             item["reaudit_hint"] = reaudit_hint(root, project, task_id=task_id, view=view, reason=reason, decl=decl)
         except (OSError, ValueError, LookupError, RuntimeError) as exc:  # hint unreadable = named in errors, item still listed
@@ -480,6 +510,33 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
                 item["grant_error"] = f"卡面 {task_id} 读不出"
         out.append(item)
     return out
+
+
+def _owner_ask_answered(root: Path, task_id: str, ask: dict[str, Any], project: str, errors: list[dict[str, str]]) -> bool:
+    """AIPOS-F222 件②: owner_ask 补写(noted_at)之后本卡已有任一 Owner 收件箱裁决 = 已被回应。读不出 = 点名进 errors, False(照旧用请求文案)。"""
+    noted = str(ask.get("noted_at") or "")
+    if not noted:
+        return False
+    try:
+        return any(str(r.get("decided_at") or "") >= noted for r in rulings_for_task(root, task_id))
+    except (OSError, ValueError) as exc:
+        errors.append({"project": project, "source": f"Owner 裁决记录 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
+        return False
+
+
+def _rework_exhausted(root: Path, task_id: str, card_fm: dict[str, Any], project: str, errors: list[dict[str, str]]) -> bool:
+    """AIPOS-F222 件②: 本卡返工额度已尽(轮数 ≥ queue_mutation.rework_round_budget limit 且无未消费 Owner 追加裁决)。读不出 = 点名进 errors, False。"""
+    from tools.aipos_cli.queue_mutation import rework_round_budget
+
+    rounds = card_fm.get("rework_rounds") if isinstance(card_fm, dict) else None
+    if not isinstance(rounds, list) or not rounds:
+        return False
+    try:
+        budget = rework_round_budget(root, task_id, rounds)
+    except (OSError, ValueError, LookupError) as exc:
+        errors.append({"project": project, "source": f"返工额度 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
+        return False
+    return len(rounds) >= budget["limit"] and not budget["unconsumed"]
 
 
 def reaudit_hint(root: Path, project: str, *, task_id: str, view: dict[str, Any], reason: str, decl: dict[str, Any]) -> str | None:
@@ -577,17 +634,14 @@ def _needs_owner_items(root: Path, project: str, decl: dict[str, Any], home_root
 
 def _rework_items(root: Path, project: str, decl: dict[str, Any], home_root: Path | None,
                   errors: list[dict[str, str]]) -> list[dict[str, Any]]:
-    """④ 在途卡返工轮次达上限(门 queue_rework 同一上限读取 rework_max_rounds)且最新常规裁决未过、无针对它的返工节。"""
+    """④ 在途卡返工轮次达上限(门 queue_rework 同一额度 queue_mutation.rework_round_budget)且锚未过、无针对它的返工节。
+    AIPOS-F222 件①: 锚按卡型(审计裁决 / 非代码快车道顾问复核, 唯一判定 rework_limit_core); 件②: 本卡最近一次运行顾问补写的 owner_ask
+    (下一动作非等 Owner)并入本事项(_merge_owner_ask), 不另列 loop 事项。"""
     from tools.aipos_cli.frontmatter import FrontmatterReadError
-    from tools.aipos_cli.next_resolver import _PASS_VERDICTS, _read_frontmatter, _read_task_records, rework_round_for_verdict
-    from tools.aipos_cli.queue_mutation import rework_max_rounds
+    from tools.aipos_cli.next_resolver import _read_frontmatter
     from tools.aipos_cli.task_loader import iter_queue_task_paths
 
-    cat = decl["categories"]["rework_limit"]
     warnings: list[str] = []
-    max_rounds = rework_max_rounds(root, warnings)
-    for text in warnings:
-        errors.append({"project": project, "source": "返工轮次上限声明", "error": text})
     out: list[dict[str, Any]] = []
     for path in iter_queue_task_paths(root, states=("claimed",)):
         try:
@@ -595,27 +649,146 @@ def _rework_items(root: Path, project: str, decl: dict[str, Any], home_root: Pat
         except FrontmatterReadError as exc:
             errors.append({"project": project, "source": f"卡面 {path.name}", "error": str(exc)})
             continue
-        rounds = fm.get("rework_rounds")
-        if not isinstance(rounds, list) or len(rounds) < max_rounds:
-            continue
         task_id = str(fm.get("task_id") or "")
         try:
-            verdict = _read_task_records(root, task_id).get("latest_verdict") or {}
+            item = rework_limit_core(root, task_id, fm, project=project, decl=decl, home_root=home_root, warnings=warnings)
         except (OSError, ValueError, FrontmatterReadError) as exc:
-            errors.append({"project": project, "source": f"裁决记录 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
+            errors.append({"project": project, "source": f"裁决 / 复核记录 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
             continue
-        value = str(verdict.get("verdict") or "").upper()
-        if not value or value in _PASS_VERDICTS or rework_round_for_verdict(fm, verdict) is not None:
+        if item is None:
             continue
-        subject = _fmt(cat["subject"], "categories.rework_limit.subject", task_id=task_id)
-        vid = str(verdict.get("verdict_id") or "")
-        out.append(_base_item(
-            decl, project=project, governance_root=root, category="rework_limit", rank=int(cat["rank"]), subject=subject,
-            anchor=f"{len(rounds)}|{vid}", source=str(fm.get("created_by") or fm.get("draft_created_by") or ""),
-            ask=_fmt(cat["ask"], "categories.rework_limit.ask", rounds=len(rounds), max_rounds=max_rounds, verdict=value, verdict_id=vid),
-            recommend=None, impact=str(cat["impact"]), options=_option_list(list(cat["options"]), decl),
-            since=str(verdict.get("verdict_at") or "") or None, task_id=task_id, home_root=home_root, title=fm.get("title"),
-            facts={"rounds": len(rounds), "max_rounds": max_rounds, "verdict_id": vid}))
+        _merge_owner_ask(root, item, decl, errors)
+        out.append(item)
+    for text in dict.fromkeys(warnings):
+        errors.append({"project": project, "source": "返工轮次上限声明", "error": text})
+    return out
+
+
+def rework_limit_core(root: Path, task_id: str, fm: dict[str, Any] | None, *, project: str | None = None,
+                      decl: dict[str, Any] | None = None, home_root: Path | None = None,
+                      warnings: list[str] | None = None) -> dict[str, Any] | None:
+    """AIPOS-F222 件①: 一张在途卡的「返工轮次达上限」事项(不含 owner_ask 并入; 收件箱 _rework_items、owner_ask_destination 同读, 禁第二份)。
+    达上限 = 返工轮数 ≥ queue_mutation.rework_round_budget 的 limit(max_rounds + 已消费 Owner 追加裁决数)。锚: 非代码快车道卡
+    (next_resolver.fast_lane_review)= 最新顾问复核记录(advisor_review_anchor); 其余 = 最新常规裁决(非 PASS 族)。锚已有针对它的返工轮
+    (rework_round_for_verdict)= 不算。不成立 = None。卡面不是 claimed 交给调用方筛(本函数只读真相)。记录读不出 = 向上。"""
+    from tools.aipos_cli.next_resolver import (_PASS_VERDICTS, _read_task_records, advisor_review_anchor, fast_lane_review,
+                                               rework_round_for_verdict)
+    from tools.aipos_cli.queue_mutation import rework_round_budget
+
+    decl = decl or inbox_declaration()
+    fm = fm if isinstance(fm, dict) else {}
+    rounds = fm.get("rework_rounds")
+    if not isinstance(rounds, list) or not task_id:
+        return None
+    root = Path(root)
+    budget = rework_round_budget(root, task_id, rounds, warnings)
+    if len(rounds) < budget["limit"]:
+        return None
+    cat = decl["categories"]["rework_limit"]
+    if fast_lane_review(root, task_id, fm):
+        anchor = advisor_review_anchor(root, task_id)
+        if anchor is None:
+            return None
+        kind, view = "advisor_review", anchor[1]
+        texts = cat["advisor_review"]
+    else:
+        kind, view = "audit_verdict", _read_task_records(root, task_id).get("latest_verdict") or {}
+        texts = cat
+        value = str(view.get("verdict") or "").upper()
+        if not value or value in _PASS_VERDICTS:
+            return None
+    if rework_round_for_verdict(fm, view) is not None:
+        return None
+    consumed = len(budget["consumed"])
+    vid = str(view.get("verdict_id") or "")
+    value = str(view.get("verdict") or "").upper()
+    ext_part = _fmt(cat["extension_part"], "categories.rework_limit.extension_part", consumed=consumed) if consumed else ""
+    subject = _fmt(cat["subject"], "categories.rework_limit.subject", task_id=task_id)
+    where = "categories.rework_limit" + (".advisor_review" if kind == "advisor_review" else "")
+    return _base_item(
+        decl, project=project or root.resolve().name, governance_root=root.resolve(), category="rework_limit", rank=int(cat["rank"]),
+        subject=subject, anchor=f"{len(rounds)}|{vid}", source=str(fm.get("created_by") or fm.get("draft_created_by") or ""),
+        ask=_fmt(texts["ask"], f"{where}.ask", rounds=len(rounds), max_rounds=budget["limit"], verdict=value, verdict_id=vid,
+                 extension_part=ext_part),
+        recommend=None, impact=str(texts["impact"]), options=_option_list(list(cat["options"]), decl),
+        since=str(view.get("verdict_at") or "") or None, task_id=task_id, home_root=home_root, title=fm.get("title"),
+        facts={"rounds": len(rounds), "max_rounds": budget["max_rounds"], "limit": budget["limit"], "verdict_id": vid,
+               "anchor_kind": kind, "consumed_extensions": list(budget["consumed"])})
+
+
+def _merge_owner_ask(root: Path, item: dict[str, Any], decl: dict[str, Any], errors: list[dict[str, str]]) -> None:
+    """AIPOS-F222 件②: 本卡最近一次运行顾问补写的 owner_ask 判归本事项(loop status 同一判定: 下一动作 owner_ask_inbox.item_id = 本事项)=
+    顾问建议 = owner_ask.recommend, 选项 = 声明选项后追加 owner_ask 自定义选项(去重), 记 facts.owner_ask_run / owner_ask_by。
+    运行记录读不出 = 点名进 errors, 事项照列(不并入, 不猜)。"""
+    from tools.aipos_cli.loop_run_record import LoopRunRecordError, loop_status
+
+    task_id = str(item.get("task_id") or "")
+    try:
+        runs = loop_status(root, task_id).get("runs") or []
+    except (OSError, ValueError, LookupError, RuntimeError, LoopRunRecordError) as exc:
+        errors.append({"project": item["project"], "source": f"返工上限事项并入顾问请求 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
+        return
+    if not runs:
+        return
+    view = runs[-1]
+    marker = (view.get("next_action") or {}).get("owner_ask_inbox") or {}
+    if marker.get("item_id") != item["item_id"]:
+        return
+    ask = view.get("owner_ask") if isinstance(view.get("owner_ask"), dict) else {}
+    keys = {o["key"] for o in item["options"]}
+    item["options"] = item["options"] + [{"key": str(o.get("key")), "label": str(o.get("label"))} for o in ask.get("options") or []
+                                         if isinstance(o, dict) and str(o.get("key")) not in keys]
+    if ask.get("recommend"):
+        item["recommend"] = str(ask["recommend"])
+    item["facts"].update({"owner_ask_run": view.get("run_id"), "owner_ask_by": ask.get("noted_by"), "owner_ask": ask.get("ask")})
+    if ask.get("noted_by"):
+        item["relay_to"] = str(ask["noted_by"])
+
+
+def owner_ask_destination(root: Path, task_id: str, view: dict[str, Any], na: dict[str, Any], *,
+                          decl: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """AIPOS-F222 件②: 一次运行上顾问补写的 owner_ask 进哪个收件箱事项(唯一判定: 收件箱 _loop_items / _merge_owner_ask、loop note 回显与拒写、
+    loop status 裁决回查同读)。na = 该运行未经裁决改写的下一动作(loop_run_record.next_action)。
+    返回 None = 运行无 owner_ask; 否则 {item_id, category, merged, reason(不列的原因键 | None), decision_id, choice, ...}:
+    下一动作 owner_needed = 该运行的 loop 事项(既有路径); 否则同卡有返工上限事项(rework_limit_core)= 并入它(merged), 无 = loop 事项
+    (事由 categories.loop_owner_needed.advisor_ask.reason)。不列: 卡已结案 / 撤回(card_closed)、冻结(frozen)、该事项已有 Owner 裁决或
+    owner_ask 补写之后本卡已有任一 Owner 收件箱裁决(ruled; 已被 Owner 回应)。记录读不出 = 向上(调用方点名)。"""
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.task_loader import find_task_card
+
+    ask = view.get("owner_ask") if isinstance(view.get("owner_ask"), dict) else {}
+    if not str(ask.get("ask") or "").strip():
+        return None
+    decl = decl or inbox_declaration()
+    root = Path(root)
+    out: dict[str, Any] = {"item_id": None, "category": "loop_owner_needed", "merged": False, "reason": None, "decision_id": None,
+                           "choice": None, "run_id": view.get("run_id"), "state": None}
+    path, state = find_task_card(root, task_id)
+    out["state"] = state
+    if path is None or state in ("completed", "withdrawn"):
+        out["reason"] = "card_closed"
+        return out
+    if view.get("frozen"):
+        out["reason"] = "frozen"
+        return out
+    loop_id = loop_item_id(root, task_id, str(view.get("run_id") or ""), decl)
+    out["item_id"] = loop_id
+    if na.get("action") != "owner_needed":
+        fm = require_frontmatter(Path(path))[0] if state == "claimed" else {}
+        core = rework_limit_core(root, task_id, fm, decl=decl) if fm else None
+        if core is not None:
+            out.update({"item_id": core["item_id"], "category": "rework_limit", "merged": True})
+    ruling = read_ruling(root, out["item_id"], decl)
+    if ruling is None and na.get("action") != "owner_needed":
+        noted = str(ask.get("noted_at") or "")
+        later = [r for r in rulings_for_task(root, task_id) if noted and str(r.get("decided_at") or "") >= noted]
+        ruling = later[-1] if later else None
+        out["resolved_by"] = "later" if ruling is not None else None
+    elif ruling is not None:
+        out["resolved_by"] = "item"
+    if ruling is not None:
+        out.update({"reason": "ruled", "decision_id": ruling.get("decision_id"), "choice": ruling.get("allowed_next_action"),
+                    "ruling": ruling})
     return out
 
 
@@ -1854,23 +2027,50 @@ def ruling_view(ruling: dict[str, Any], decl: dict[str, Any], *, resume: str, ta
 def apply_owner_ruling(governance_root: Path, view: dict[str, Any], na: dict[str, Any]) -> dict[str, Any]:
     """loop status 每个运行的下一动作: owner_needed 且该运行对应事项已有 Owner 裁决 = advisor_fix(owner_ruled), detail = 裁决原文,
     hint = 该选项 advisor_next(含续跑命令, 占位与例行门拒同一实现 loop_run_record._resume_fill)。其余原样返回。"""
-    if not isinstance(na, dict) or na.get("action") != "owner_needed":
+    if not isinstance(na, dict):
         return na
-    from tools.aipos_cli.loop_run_record import _resume_fill, status_contract
-
+    if na.get("action") != "owner_needed":
+        return _apply_owner_ask(Path(governance_root), view, na)
     decl = inbox_declaration()
     task_id = str(view.get("task_id") or "")
     iid = loop_item_id(Path(governance_root), task_id, str(view.get("run_id") or ""), decl)
     ruling = read_ruling(Path(governance_root), iid, decl)
     if ruling is None:
         return {**na, "inbox_item_id": iid}
+    return _ruled_action(Path(governance_root), view, na, iid, ruling, decl)
+
+
+def _apply_owner_ask(governance_root: Path, view: dict[str, Any], na: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F222 件②: 下一动作非等 Owner 的运行带顾问补写的 owner_ask(owner_ask_destination 唯一判定)= 已有 Owner 回应(该事项裁决 /
+    补写后本卡新裁决)→ advisor_fix(owner_ruled), 同 owner_needed 已裁决同一构造; 待裁决 = 原下一动作附 owner_ask_inbox {item_id, category,
+    merged}(收件箱据此列 / 并入, loop status 显示「已进收件箱」); 卡已结案 / 冻结 = 原样。"""
+    if not isinstance(view.get("owner_ask"), dict):
+        return na
+    task_id = str(view.get("task_id") or "")
+    dest = owner_ask_destination(governance_root, task_id, view, na)
+    if dest is None or dest["reason"] in ("card_closed", "frozen"):
+        return na
+    marker = {"item_id": dest["item_id"], "category": dest["category"], "merged": dest["merged"], "resolved_by": dest.get("resolved_by")}
+    if dest["reason"] == "ruled":
+        return {**_ruled_action(governance_root, view, na, str(dest["item_id"]), dest["ruling"], inbox_declaration()),
+                "owner_ask_inbox": marker}
+    return {**na, "owner_ask_inbox": marker}
+
+
+def _ruled_action(governance_root: Path, view: dict[str, Any], na: dict[str, Any], iid: str, ruling: dict[str, Any],
+                  decl: dict[str, Any]) -> dict[str, Any]:
+    """已裁决事项 → 顾问下一动作 advisor_fix(owner_ruled)(owner_needed 运行 / owner_ask 运行同一构造)。"""
+    from tools.aipos_cli.loop_run_record import _resume_fill, status_contract
+
+    task_id = str(view.get("task_id") or "")
     resume = _fmt(status_contract()["next_action"]["routine_rejections"]["resume_hint"], "resume_hint",
                   **_resume_fill(view, Path(governance_root)))
     ask = view.get("owner_ask") if isinstance(view.get("owner_ask"), dict) else {}
     labels = {str(o.get("key")): str(o.get("label")) for o in (ask.get("options") or []) if isinstance(o, dict)}
     rv = ruling_view(ruling, decl, resume=resume, task_id=task_id, governance_root=Path(governance_root), labels=labels)
     return {"action": "advisor_fix", "reason": "owner_ruled", "detail": f"{rv['line']}(原待决: {na.get('detail')})",
-            "hint": rv["advisor_next"], "owner_ruling": rv, "inbox_item_id": iid, "ruled_from": {"reason": na.get("reason")}}
+            "hint": rv["advisor_next"], "owner_ruling": rv, "inbox_item_id": iid,
+            "ruled_from": {"reason": na.get("reason"), "action": na.get("action")}}
 
 
 def rulings_for_task(governance_root: Path, task_id: str) -> list[dict[str, Any]]:
