@@ -358,6 +358,9 @@ body.rp-page { margin: 0; background: var(--surface-page); color: var(--ink); fo
 .rp-page .ib-relays { background: var(--surface-card); border: var(--border-hairline); border-left: var(--accent-bar) solid var(--green);
   padding: 10px 20px; margin: 10px 0 16px; }
 .rp-page .ib-relay { margin: 8px 0; }
+/* AIPOS-F228: "auto-released" column (tier 2, revocable) */
+.rp-page .ib-auto-released { background: var(--surface-card); border: var(--border-hairline); border-left: var(--accent-bar) solid var(--track-border);
+  padding: 10px 20px; margin: 16px 0; }
 .rp-page .ib-relay .rp-tell { margin: 4px 0; }
 .rp-page .ib-choices { margin: 6px 0 2px; }
 .rp-page .ib-choices-head { margin: 4px 0 2px; }

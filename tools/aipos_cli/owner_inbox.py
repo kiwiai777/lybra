@@ -397,6 +397,14 @@ def auto_release_stop(governance_root: Path, task_id: str) -> dict[str, Any] | N
     return None if later else latest
 
 
+def revocable_notices(inbox: dict[str, Any], decl: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """AIPOS-F228(设计稿 §5「已自动放行」栏): 收件箱数据(collect_inbox, CLI / 看板同读)中可撤回的第二档事项 = notices 里选项含
+    tiers.tier2.auto_release.revoke_option 的事项(现为 auto_released 类), 保持 notices 原序。看板该栏与撤回按钮只读本函数, 禁第二份判定;
+    路线图偏差 / 信封将尽 / 补审残项等其余告知仍各归其页(不进本栏)。"""
+    revoke = str(auto_release_declaration(decl)["revoke_option"])
+    return [n for n in inbox.get("notices") or [] if any(o.get("key") == revoke for o in n.get("options") or [])]
+
+
 def _auto_release_items(root: Path, project: str, decl: dict[str, Any], home_root: Path | None,
                         errors: list[dict[str, str]]) -> list[dict[str, Any]]:
     """⑧ AIPOS-F225: 第二档自动放行记录每条一个事项(锚点 = 记录 ID; 已裁决 = 不再出现)。卡已结案 / 撤回 = 不列。"""
