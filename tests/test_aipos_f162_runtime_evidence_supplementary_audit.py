@@ -162,7 +162,8 @@ def test_item1_declared_card_rejections_original_and_loop_relaunch_cap(rig):
     assert not f90._records(rig.gov, "audit_verdicts", TASK)
     rc, out, err = _cli(["loop", "status", "--task-id", TASK, "--workspace-root", str(rig.gov)])
     _show(f"[件①·loop status 原文]\n{out}{err}")
-    assert "owner_needed(runtime_evidence_exhausted)" in out + err
+    # AIPOS-F225: 审计补做连败 = 第三档(审计执行侧问题归顾问 investigate), 原判事由留在 detail
+    assert "investigate(runtime_evidence_exhausted) — 第三档(归顾问, AIPOS-F225)" in out + err and "审计补做连败" in out + err
 
 
 def test_item1_full_evidence_passes_and_loop_completes_after_one_rework(rig):

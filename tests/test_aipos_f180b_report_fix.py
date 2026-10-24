@@ -202,7 +202,7 @@ def test_item2_other_commit_not_resumed_original_rule(lrig, monkeypatch):
     assert [(f["outcome"], f["kinds"], f["session_id"]) for f in fixes] == [("not_correctable", ["other_commit"], None)]
     rc, out, _err = _cli(["loop", "status", "--task-id", TASK, "--workspace-root", str(lrig.gov)])
     _show("[item2] loop status (excerpt): " + " | ".join(ln.strip() for ln in out.splitlines() if "下一动作" in ln))
-    assert rc == 0 and "顾问下一动作: owner_needed(gate_rejected)" in out
+    assert rc == 0 and "顾问下一动作: investigate(gate_rejected) — 第三档(归顾问, AIPOS-F225)" in out  # AIPOS-F225: 原判 owner_needed 归顾问
 
 
 def test_item2_exhausted_then_next_run_resumes_recorded_session(lrig, monkeypatch):

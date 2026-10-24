@@ -76,14 +76,19 @@ def _claims(gov: Path, pid: str, n: int) -> None:
                f"---\nrecord_type: claim_record\nautonomy_mode: PreAuthorized\nowner_policy_ref: {pid}\n---\n")
 
 
-def _ended_run(gov: Path, task_id: str, driver: str, *, reason: str, message: str, envelope: str | None = None) -> str:
-    """loop 自身的记录器落一份已结束运行(真实运行记录形)。"""
+def _ended_run(gov: Path, task_id: str, driver: str, *, reason: str, message: str, envelope: str | None = None,
+               owner_reason: str | None = None) -> str:
+    """loop 自身的记录器落一份已结束运行(真实运行记录形)。AIPOS-F225: owner_reason 给出 = 该运行带顾问升 Owner 请求(loop note 同一结构)。"""
+    from tools.aipos_cli.clock import iso_z
     from tools.aipos_cli.loop_driver import load_loop_contract
     from tools.aipos_cli.loop_run_record import LoopRunRecorder
 
     rec = LoopRunRecorder(gov, task_id, driver=driver, contract=load_loop_contract(), warn=_show)
     if envelope:
         rec.set_envelope(envelope)
+    if owner_reason:
+        rec.meta["owner_ask"] = {"ask": message, "options": [], "recommend": None, "noted_by": driver, "noted_at": iso_z(),
+                                 "owner_reason": owner_reason}
     rec.end(outcome=reason, exit_code=5, reason=reason, message=message)
     return rec.run_id
 
@@ -131,7 +136,8 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _ended_run(gov, "LX-20CV", ADV_LX, reason="no_envelope", message="无有效 autonomy 信封, 拒绝裸跑。")
     # LX-21B: 同一驱动顾问另一张卡, loop 停在门拒等 Owner(裁决后与 LX-20CV 的签发合成一段转达)
     _card(gov, "LX-21B", "claimed", task_mode="code", assigned_to=f"exec.{P}.mac", created_by=ADV_LX)
-    _ended_run(gov, "LX-21B", ADV_LX, reason="gate_rejected", message="GATE_DESIGN_FORK: 方案 A / B 二选一", envelope="pol_f201_lx_loop_3")
+    _ended_run(gov, "LX-21B", ADV_LX, reason="gate_rejected", message="GATE_DESIGN_FORK: 方案 A / B 二选一", envelope="pol_f201_lx_loop_3",
+               owner_reason="direction_fork")  # AIPOS-F225: 门拒设计分叉 = 顾问带第一档事由升 Owner
     remote = init_governance_repo(hroot)
     conn = tmp_path / "owner-vault" / "connection.json"
     _write(conn, json.dumps({"mcp": {"rpc_url": "http://127.0.0.1:9/mcp"},
@@ -454,7 +460,7 @@ def test_item4_fresh_unused_envelope_no_remaining_warning(rig):
     assert shown["pol_f201_used_1"][:3] == ("warn", 1, 4) and shown["pol_f201_used_1"][3].startswith("剩余 3/4 张业务卡(阈值: ≤3 张或 ≤10%)")
     assert shown["pol_f201_soon_1"][0] == "warn" and "到期" in shown["pol_f201_soon_1"][3] and "剩余" not in shown["pol_f201_soon_1"][3]
     warns = [w["policy_id"] for w in envelope_warnings(gov)]
-    items = [i["policy_id"] for i in _inbox_json(rig)["items"] if i["category"] == "envelope_warning"]
+    items = [i["policy_id"] for i in _inbox_json(rig)["notices"] if i["category"] == "envelope_warning"]  # AIPOS-F225: 第二档告知
     _show(f"[件④·brief 预警] {warns} / [收件箱信封将尽] {items}")
     assert warns == ["pol_f201_soon_1", "pol_f201_used_1"] and sorted(items) == warns
 

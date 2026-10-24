@@ -166,8 +166,10 @@ def test_item1_non_routine_rejection_stays_owner_needed(rig):
     assert not set(meta["end_codes"]) & set(_routine()["codes"])
     rc, text = _status(rig.gov, "--wait", "5")
     _show(f"---- ① status --wait(非例行门拒 WORKTREE_CREATE_FAILED)原文 exit {rc} ----\n{text}")
-    assert rc == declared_exit_code(VERB, "owner_needed") == 5
-    assert "顾问下一动作: owner_needed(gate_rejected) — 门拒: 按拒因原文裁定" in text and "advisor_fix" not in text
+    # AIPOS-F225: 非例行门拒 = 原判 owner_needed(next_action 判据不变), loop status 再按档归类 = 第三档 investigate(归顾问), 原判事由留在 detail
+    assert rc == declared_exit_code(VERB, "investigate") == 6
+    assert "顾问下一动作: investigate(gate_rejected) — 第三档(归顾问, AIPOS-F225)" in text and "门拒: 按拒因原文裁定" in text
+    assert "advisor_fix" not in text
 
 
 def test_item1_mixed_empty_and_legacy_codes_owner_needed():
@@ -205,8 +207,9 @@ def test_item1_same_routine_code_repeated_escalates_to_owner_needed(rig):
     assert [f"第 {i}/{limit} 次" in na["detail"] for i, na in enumerate(seen[:-1], 1)] == [True] * (limit - 1)
     rc, text = _status(rig.gov, "--wait", "5")
     _show(f"---- ① status --wait(同码连败 {limit} 次)原文 exit {rc} ----\n{text}")
-    assert rc == declared_exit_code(VERB, "owner_needed")
-    assert f"顾问下一动作: owner_needed(routine_fix_exhausted) — 例行门拒修了仍连败" in text
+    # AIPOS-F225: 例行修法仍连败 = 原判 owner_needed(routine_fix_exhausted), 归档第三档 investigate(归顾问)
+    assert rc == declared_exit_code(VERB, "investigate")
+    assert f"顾问下一动作: investigate(routine_fix_exhausted) — 第三档(归顾问, AIPOS-F225)" in text and "例行门拒修了仍连败" in text
     assert f"本卡 BRANCH_WRONG_BASE 连续 {limit} 次" in text
     # 中间夹一次非门拒结束 = 连续性断开(只数尾段连续)
     rules = lrr.next_action_declaration(lrr.run_record_declaration(load_loop_contract()))
@@ -283,6 +286,7 @@ def test_item2_advisor_charter_renders_advisor_fix_rule(rig):
     _show("---- ② 渲染后章程「持续推进守则」advisor_fix 条原文 ----\n" + rule)
     assert "{{" not in rendered
     for needle in ("**例行门拒, 按 hint 自处理, 不问 Owner**", "lybra_loop_status.next_action.routine_rejections", "BRANCH_WRONG_BASE",
-                   "**派本卡执行体做**", "永不碰产品仓", "末行命令续跑 loop", "产品自动升为 `owner_needed`"):
+                   "**派本卡执行体做**", "永不碰产品仓", "末行命令续跑 loop",
+                   "仍归你(第三档 investigate, AIPOS-F225)"):  # AIPOS-F225: 例行修法仍连败 = 第三档归顾问(原「升 owner_needed」)
         assert needle in rule, needle
     assert "**只在 `owner_needed` 时停。**" in section

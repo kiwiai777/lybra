@@ -283,7 +283,9 @@ def test_item3_inbox_roadmap_drift_items_no_repeat(rig):
     from tools.aipos_cli.owner_inbox import collect_inbox, render_inbox_text
 
     first = collect_inbox(rig["home"])
-    drift = [i for i in first["items"] if i["category"] == "roadmap_drift"]
+    # AIPOS-F225: 路线图偏差 = 第二档(顾问的规划职责, 不进待定 items; notices 照列、仍可裁决)
+    assert not [i for i in first["items"] if i["category"] == "roadmap_drift"]
+    drift = [i for i in first["notices"] if i["category"] == "roadmap_drift"]
     text = render_inbox_text(first)
     _show(f"---- ③ lybra owner inbox(roadmap_drift)原文 ----\n{text}")
     assert sorted(i["subject"] for i in drift) == ["标准 C4 无卡覆盖", "里程碑 M1 逾期", "里程碑 W1 停滞"]
@@ -291,7 +293,7 @@ def test_item3_inbox_roadmap_drift_items_no_repeat(rig):
     assert stalled["source"] == OTHER_ADVISOR and "lybra roadmap set" in stalled["recommend"] and "路线图偏差" in text
     assert [o["key"] for o in stalled["options"]] == ["add_card", "replan", "acknowledge"]
     second = collect_inbox(rig["home"])
-    again = [i for i in second["items"] if i["category"] == "roadmap_drift"]
+    again = [i for i in second["notices"] if i["category"] == "roadmap_drift"]
     _show(f"[③·重算] 第一次 {sorted(i['item_id'] for i in drift)} / 第二次 {sorted(i['item_id'] for i in again)}")
     assert sorted(i["item_id"] for i in again) == sorted(i["item_id"] for i in drift) and len(again) == 3
 
@@ -300,14 +302,14 @@ def test_item3_inbox_roadmap_drift_items_no_repeat(rig):
                         "--confirm", *RELAY)
     _show(f"---- ③ owner decide acknowledge --confirm 原文 exit {rc} ----\n{out}{err}")
     assert rc == 0, out + err
-    third = [i for i in collect_inbox(rig["home"])["items"] if i["category"] == "roadmap_drift"]
+    third = [i for i in collect_inbox(rig["home"])["notices"] if i["category"] == "roadmap_drift"]
     _show(f"[③·已裁决不再出现] {sorted(i['subject'] for i in third)}")
     assert sorted(i["subject"] for i in third) == ["里程碑 M1 逾期", "里程碑 W1 停滞"]
     # 真相变了(改目标日)= 新事项; 改到未来 = 逾期自行解除
     rc, out, err = _cli("roadmap", "set", *rig["ws"], "--id", "M1", "--field", "target_date", "--value", _day(10), "--confirm",
                         "--actor", ADVISOR)
     assert rc == 0, out + err
-    fourth = [i for i in collect_inbox(rig["home"])["items"] if i["category"] == "roadmap_drift"]
+    fourth = [i for i in collect_inbox(rig["home"])["notices"] if i["category"] == "roadmap_drift"]
     _show(f"[③·改目标日后] {sorted(i['subject'] for i in fourth)}")
     assert sorted(i["subject"] for i in fourth) == ["里程碑 W1 停滞"]
 
