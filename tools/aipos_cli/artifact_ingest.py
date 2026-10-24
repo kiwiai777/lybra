@@ -675,7 +675,14 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
     if unfilled is not None:
         out["category"], out["reasons"], out["placeholders"] = unfilled["category"], unfilled["reasons"], unfilled["placeholders"]
         return out
-    reviewed = str(fm.get("reviewed_task_id") or "").strip() or audit_card_reviewed_id(task_id, card_fm)
+    # AIPOS-F227 件①: 报告 fail_scope 值不在声明内 = 拒(唯一判定 next_resolver.fail_scope_problem; 未写 = 放行, 推导核按 candidate 兼容)
+    from tools.aipos_cli.next_resolver import fail_scope_problem
+
+    scope_problem = fail_scope_problem(fm, path=path)
+    if scope_problem is not None:
+        out["category"], out["reasons"] = "INGEST_FAIL_SCOPE_INVALID", [scope_problem]
+        return out
+    reviewed =str(fm.get("reviewed_task_id") or "").strip() or audit_card_reviewed_id(task_id, card_fm)
     if governance:
         # AIPOS-F197 件②: 被审卡只写治理根 = 报告 outputs_digest 须 = 交回绑定指纹 = 此刻指纹(governance_outputs_recheck 唯一实现)
         from tools.aipos_cli.next_resolver import governance_outputs_recheck

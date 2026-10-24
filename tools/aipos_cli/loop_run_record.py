@@ -1554,16 +1554,17 @@ def _routine_end_reason_action(view: dict[str, Any], rules: dict[str, Any], gove
                 "detail": f"{rules['owner_reasons']['routine_fix_exhausted']}(本卡连续 {streak} 次以 {reason} 结束; 本次: {message})",
                 "hint": str(rules["investigate_hint"]).format(**fill)}
     values = _resume_fill(view, governance_root)
-    from tools.aipos_cli.next_resolver import (audit_blocked_declaration, audit_blocked_fix_values, candidate_fail_declaration,
+    from tools.aipos_cli.next_resolver import (audit_blocked_declaration, audit_blocked_fix_values, candidate_fail_end_reasons,
                                                candidate_fail_fix_values)
 
     if reason == str(audit_blocked_declaration()["end_reason"]):
         # AIPOS-F179 item 3: BLOCK reason excerpt + re-audit command (single rendering next_resolver.reaudit_command)
         values = {**values, **audit_blocked_fix_values(governance_root, task_id, actor=str(view.get("driver") or ""),
                                                        policy_ref=str(view.get("envelope") or ""))}
-    elif reason == str(candidate_fail_declaration()["end_reason"]):
-        # AIPOS-F211 item 4: FAIL reason excerpt + source card / candidate + supersede command (next_resolver.candidate_fail_fix_values)
-        values = {**values, **candidate_fail_fix_values(governance_root, task_id)}
+    elif reason in candidate_fail_end_reasons():
+        # AIPOS-F211 item 4: FAIL reason excerpt + source card / candidate + supersede command (next_resolver.candidate_fail_fix_values);
+        # AIPOS-F227: + fail scope note / same-candidate rework exit (rework command --actor = run record driver)
+        values = {**values, **candidate_fail_fix_values(governance_root, task_id, actor=str(view.get("driver") or ""))}
     if any("{header_fix_prompt}" in str(step) for step in routine["end_reasons"][reason]["fix"]):
         values = {**values, "header_fix_prompt": header_fix_prompt_value(governance_root, task_id)}  # AIPOS-F204 件③
     where = f"end_reasons.{reason}.fix"

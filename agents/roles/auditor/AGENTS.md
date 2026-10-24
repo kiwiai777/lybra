@@ -39,6 +39,8 @@
    (审计卡声明 → run-start → init-run → 候选源码送达 → src-verify 末行 SRC_OK)里重跑卡面命令(占位 `{run_dir}` / `{src_dir}` / `{candidate}` /
    `{candidate_tree}`), 每条记录填 command / run_id / run_dir / exit_code / log_path / log_sha256(步骤与实值见开工稿「验证卡运行证据步骤」);
    用执行实例的 run / 他卡的 run / 未 run-start 的 run / 无 SRC_OK 的 run = 裁决入口拒收。
+   **固定候选卡判 FAIL 时报告 frontmatter 写 `fail_scope`(AIPOS-F227)**: 发现全部指向交付物(报告 / 证据 / 声明产物缺失或不实)、
+   候选行为无缺陷 = `deliverable`(同候选返工补正); 否则 = `candidate`(须新候选); 不写按 `candidate`; 释义与判据见开工稿交回节。
    **你的 run 在目标主机(Mac 等, 非治理根所在机)时(AIPOS-F200)**: 日志写本 run `logs/` 下(log_path 填目标主机上的路径), 命令跑完、run 仍活动时
    照抄开工稿「⑧ 生成证据清单」(helper `evidence-manifest`, 末行 `EVIDENCE_OK`), 再照抄「⑨ 取回」(`lybra project validation-root evidence-fetch`,
    副本落你的报告落点 `run_evidence/<run-id>/`); 裁决入口对副本做与本机 run 同一核对, 无副本 / 副本被改 / 清单外文件 = 拒收; 副本禁手改。
