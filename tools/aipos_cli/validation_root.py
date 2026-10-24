@@ -163,7 +163,7 @@ def reject_codes() -> dict[str, str]:
     needed = ("VR_DECLARATION_INVALID", "VR_BASE_FORBIDDEN", "VR_INSTANCE_NOT_ENROLLED", "VR_ROLE_NOT_ALLOWED", "VR_TASK_NOT_OWNED",
               "VR_HOST_FINGERPRINT_REQUIRED", "VR_HOST_FINGERPRINT_MISMATCH", "VR_NOT_FOUND", "VR_STATE_CONFLICT", "VR_CANDIDATE_INVALID",
               "VR_SIM_INVALID", "VR_SIM_EVIDENCE_REJECTED", "VR_HOST_ALIAS_INVALID", "VR_EVIDENCE_REJECTED",
-              "VR_HELPER_SNAPSHOT_INVALID")
+              "VR_HELPER_SNAPSHOT_INVALID", "VR_EVIDENCE_HOST_AMBIGUOUS", "VR_EVIDENCE_HOST_MISMATCH")
     if not isinstance(codes, dict) or any(not codes.get(k) for k in needed):
         raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.validation_roots.reject_codes 未声明齐")
     return codes
@@ -210,6 +210,11 @@ def _parse_iso(value: Any, where: str) -> datetime:
 def local_host_label() -> str:
     """本机主机标签(唯一实现 = validation_root_helper.host_label)。"""
     return helper.host_label()
+
+
+def is_host_label(value: Any) -> bool:
+    """主机标签形(声明 host / set-host / 卡面 audit_runtime_evidence.host 同一形校验, AIPOS-F223)。"""
+    return isinstance(value, str) and bool(_HOST_RE.match(value))
 
 
 def is_local_host(host: str | None) -> bool:
@@ -1164,10 +1169,141 @@ def locate_run(governance_root: str | Path, run_dir: str, run_id: str, *,
     rid = str(run_id or "").strip()
     if not text or not rid:
         return None, None
-    for entry in entries if entries is not None else project_validation_roots(governance_root):
+    pool = entries if entries is not None else project_validation_roots(governance_root)
+    for entry in pool:
         if run_directory(entry, rid) == text:
+            # AIPOS-F223 件①: 审计声明的 run = 须为运行证据主机选定的那条声明(唯一选择 select_evidence_declaration; 选不出 / 选中他条 = 拒)
+            if is_audit_declaration(entry):
+                problem = audit_run_selection_problem(governance_root, entry, rid, entries=pool)
+                if problem:
+                    raise problem
             return entry, next((r for r in entry.get("runs") or [] if r.get("run_id") == rid), None)
     return None, None
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F223: 多主机验证的运行证据 run 选择(唯一实现; 开工稿 / 派审步骤经 candidate_evidence_values, 裁决入口经 locate_run 同读;
+# 声明 transitions runtime_evidence.candidate_subject.host_selection)
+# ---------------------------------------------------------------------------
+
+def host_selection_declaration() -> dict[str, Any]:
+    """transitions runtime_evidence.candidate_subject.host_selection 唯一读取口。缺键 = SchemaLoadError。"""
+    from tools.aipos_cli.artifact_ingest import runtime_evidence_candidate_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    decl = runtime_evidence_candidate_declaration().get("host_selection")
+    needed = ("field", "refusal_line", "outlet", "note")
+    if not isinstance(decl, dict) or any(not isinstance(decl.get(k), str) or not decl[k] for k in needed):
+        raise SchemaLoadError(f"transitions.schema.json artifact_ingest.verdict.runtime_evidence.candidate_subject.host_selection"
+                              f"({' / '.join(needed)})未声明齐")
+    return decl
+
+
+def same_host(left: str | None, right: str | None) -> bool:
+    """两个主机标签是否同一台(大小写不敏感; 都是本机 = 同一台, 本机判定唯一 is_local_host)。"""
+    a, b = str(left or "").strip().lower(), str(right or "").strip().lower()
+    return a == b or (is_local_host(a) and is_local_host(b))
+
+
+def select_evidence_declaration(entries: list[dict[str, Any]], *, audit_task_id: str, audit_instance: str, host: str | None,
+                                pool: str = "live", now: datetime | None = None) -> dict[str, Any]:
+    """本审计卡本实例的运行证据声明选择(唯一实现; 禁 live[-1] 之类隐式选择)。pool: live = 有效声明(active / unbound, 开工稿 / 派审);
+    verdict = 未撤销声明(裁决入口; 到期声明的 run 照旧可作证据)。返回 {entry, mine, candidates, problem}: entry = 选中声明或 None;
+    problem = ValidationRootError(VR_EVIDENCE_HOST_AMBIGUOUS)或 None。规则: host 给定 = 只取该主机的声明, 恰一 = 选中, 零 / 多 = 拒;
+    host 未给 = 恰一 = 选中(照旧), 零 = 无(调用方给 declare / run-start 出口), 多 = 拒并列出各声明 id / 主机。"""
+    now = now or _now()
+    mine = [e for e in entries if e["task_id"] == audit_task_id and e["instance"] == audit_instance and is_audit_declaration(e)]
+    statuses = ("active", "unbound") if pool == "live" else ("active", "unbound", "expired")
+    candidates = [e for e in mine if declaration_status(e, now) in statuses]
+    field = host_selection_declaration()["field"]
+    listing = ", ".join(f"{e['id']}(主机 {e['host']}, {declaration_status(e, now)})" for e in candidates) or "(无)"
+    out: dict[str, Any] = {"entry": None, "mine": mine, "candidates": candidates, "problem": None}
+    wanted = str(host or "").strip()
+    if wanted and candidates:  # 无任何候选声明 = 无选择(调用方给 declare / run-start 出口), 不当主机不符
+        hits = [e for e in candidates if same_host(e["host"], wanted)]
+        if len(hits) == 1:
+            out["entry"] = hits[0]
+        elif not hits:
+            out["problem"] = _err("VR_EVIDENCE_HOST_AMBIGUOUS",
+                                  f"卡面运行证据声明执行主机 {field}={wanted}, 本审计卡 {audit_task_id} 实例 {audit_instance} 无该主机的"
+                                  f"{'有效' if pool == 'live' else '未撤销'}验证根声明(现有: {listing}); 改 {field} 为现有声明的主机, "
+                                  f"或由顾问为该主机 declare 本审计卡声明")
+        else:
+            out["problem"] = _err("VR_EVIDENCE_HOST_AMBIGUOUS",
+                                  f"卡面运行证据执行主机 {field}={wanted} 对应本审计卡 {audit_task_id} 实例 {audit_instance} 的多个声明"
+                                  f"({', '.join(e['id'] for e in hits)}), 禁任取; 由顾问撤销多余声明(project validation-root revoke)")
+        return out
+    if len(candidates) == 1:
+        out["entry"] = candidates[0]
+    elif len(candidates) > 1:
+        out["problem"] = _err("VR_EVIDENCE_HOST_AMBIGUOUS",
+                              f"本审计卡 {audit_task_id} 实例 {audit_instance} 有 {len(candidates)} 个验证根声明: {listing}, "
+                              f"卡面 audit_runtime_evidence 未声明执行主机 {field}, 禁任取(多主机验证须写明运行证据命令在哪台主机跑)")
+    return out
+
+
+def evidence_host_outlet(governance_root: str | Path, *, card: str, declaration_value: dict[str, Any] | None,
+                         hosts: list[str]) -> str:
+    """补声明运行证据主机的出口原文(声明 host_selection.outlet): 卡在 claimed = queue amend --restricted(只改 host, card.schema
+    restricted_amend.claimed_card_subfields), 否则普通 queue amend; amendments = 卡面原声明 + host 占位。"""
+    import json
+
+    from tools.aipos_cli.artifact_ingest import runtime_evidence_declaration
+    from tools.aipos_cli.next_resolver import _find_task_in_queue
+
+    gov = Path(governance_root).expanduser().resolve()
+    decl = host_selection_declaration()
+    card_field = str(runtime_evidence_declaration()["card_field"])
+    _path, queue = _find_task_in_queue(gov, card) if card else (None, None)
+    value = {**(declaration_value if isinstance(declaration_value, dict) else {"required": True, "commands": []}), decl["field"]: "<主机>"}
+    amend = (f"{_gov_cmd(gov)} queue amend --task-id {shlex.quote(card or '<卡>')}{' --restricted' if queue == 'claimed' else ''} "
+             f"--actor <顾问实例> --amendments {shlex.quote(json.dumps({card_field: value}, ensure_ascii=False))} "
+             f"--amendment-reason {shlex.quote('多主机验证: 声明运行证据执行主机(AIPOS-F223)')} --dry-run")
+    return _fill(decl["outlet"], {"card": card or "<卡>", "card_field": card_field, "field": decl["field"],
+                                  "hosts": " / ".join(dict.fromkeys(hosts)) or "(无有效声明)", "amend": amend})
+
+
+def audit_evidence_requirement(governance_root: str | Path, audit_task_id: str) -> tuple[dict[str, Any] | None, str]:
+    """审计卡生效的运行证据要求(唯一解析 artifact_ingest.runtime_evidence_requirement: 审计卡自身声明优先, 缺省被审卡)+ 声明所在卡号。
+    审计卡未派生 = 按审计轮号推被审卡。形不合 = ValidationRootError(VR_EVIDENCE_HOST_AMBIGUOUS, fail-closed: 选不了主机)。"""
+    from tools.aipos_cli.artifact_ingest import RuntimeEvidenceDeclarationError, runtime_evidence_requirement
+    from tools.aipos_cli.audit_derivation import audit_card_reviewed_id
+
+    gov = Path(governance_root).expanduser().resolve()
+    audit_fm = _card_fm(gov, audit_task_id)
+    reviewed = audit_card_reviewed_id(audit_task_id, audit_fm)
+    reviewed_fm = _card_fm(gov, reviewed) if reviewed else None
+    try:
+        requirement = runtime_evidence_requirement(audit_fm, reviewed_fm)
+    except RuntimeEvidenceDeclarationError as exc:
+        raise _err("VR_EVIDENCE_HOST_AMBIGUOUS", f"卡面运行证据声明不合, 选不了执行主机: {exc}") from exc
+    if requirement is None:
+        return None, ""
+    return requirement, (audit_task_id if requirement.get("source") == "audit_card" else reviewed)
+
+
+def audit_run_selection_problem(governance_root: str | Path, entry: dict[str, Any], run_id: str, *,
+                                entries: list[dict[str, Any]] | None = None) -> ValidationRootError | None:
+    """裁决入口(locate_run)对审计声明 run 的主机选择核对: 选择 = select_evidence_declaration(pool=verdict, host = 生效声明的 host)。
+    选不出 = VR_EVIDENCE_HOST_AMBIGUOUS + 出口; 选中他条 = VR_EVIDENCE_HOST_MISMATCH 点名所选声明与其 run 目录。通过 = None。只读。"""
+    pool = entries if entries is not None else project_validation_roots(governance_root)
+    requirement, card = audit_evidence_requirement(governance_root, entry["task_id"])
+    host = (requirement or {}).get("host")
+    picked = select_evidence_declaration(pool, audit_task_id=entry["task_id"], audit_instance=entry["instance"], host=host, pool="verdict")
+    if picked["problem"] is not None:
+        outlet = evidence_host_outlet(governance_root, card=card, declaration_value=(requirement or {}).get("declaration"),
+                                      hosts=[e["host"] for e in picked["candidates"]])
+        return ValidationRootError(picked["problem"].code, [*picked["problem"].problems, outlet])
+    chosen = picked["entry"]
+    if chosen is None or chosen["id"] == entry["id"]:
+        return None
+    field = host_selection_declaration()["field"]
+    basis = f"卡 {card} 卡面 audit_runtime_evidence.{field}={host}" if host else "本审计卡本实例唯一未撤销声明"
+    run = active_run(chosen) or next(iter(reversed(chosen.get("runs") or [])), None)
+    where = run_directory(chosen, run["run_id"]) if run else f"<{chosen['id']} run-start 后的 run 目录>"
+    return _err("VR_EVIDENCE_HOST_MISMATCH",
+                f"运行记录 run {run_id} 属声明 {entry['id']}(主机 {entry['host']}), 不是运行证据所选声明 {chosen['id']}"
+                f"(主机 {chosen['host']}; 依据 {basis}); 卡面命令须在所选声明的 run 里重跑(run 目录 {where}), 记录 run_id / run_dir 写该 run")
 
 
 def src_verify_evidence_check(entry: dict[str, Any], run: dict[str, Any], *, candidate: str, tree: str,
@@ -1205,29 +1341,47 @@ def src_verify_evidence_check(entry: dict[str, Any], run: dict[str, Any], *, can
 
 
 def candidate_evidence_values(governance_root: str | Path, *, audit_task_id: str, audit_instance: str, candidate: str,
-                              candidate_tree: str) -> dict[str, str]:
+                              candidate_tree: str, requirement: dict[str, Any] | None = None, evidence_card: str = "") -> dict[str, str]:
     """AIPOS-F199 件②: 审计「验证卡运行证据步骤」渲染值(派审注入 / 开工稿同一函数; 命令全部出自本模块唯一铸造口 init_run_command /
-    source_delivery)。本审计卡本实例的声明: 无 = 给顾问 declare 命令; 有、无活动 run = run-start 命令; 有活动 run = 本 run 目录与三条命令。"""
+    source_delivery)。本审计卡本实例的声明: 无 = 给顾问 declare 命令; 有、无活动 run = run-start 命令; 有活动 run = 本 run 目录与三条命令。
+    AIPOS-F223 件①: 声明 = select_evidence_declaration(host = requirement.host; 裁决入口同一选择)选中的那条; 选不出(多声明未声明 host /
+    host 无对应)= values.host_refusal(拒因一行 + 补声明出口, 不渲染任何 run 命令); evidence_card = 生效声明所在卡(出口 amend 目标)。"""
     gov = Path(governance_root).expanduser().resolve()
     gcmd = _gov_cmd(gov)
     pending = "<run-start 后由产品给出>"
     values = {"audit_task_id": audit_task_id, "audit_instance": audit_instance or "<审计实例>", "candidate": candidate,
               "candidate_tree": candidate_tree, "run_id": "<run-id>", "run_dir": "<run_dir>", "src_dir": f"<run_dir>/{helper.SRC_DIR_NAME}",
-              "init_run": pending, "src_deliver": pending, "src_verify": pending, "remote": "", "host": ""}
+              "init_run": pending, "src_deliver": pending, "src_verify": pending, "remote": "", "host": "", "host_refusal": "", "host_note": ""}
     now = _now()
-    mine = [e for e in project_validation_roots(gov)
-            if e["task_id"] == audit_task_id and e["instance"] == audit_instance and card_kinds().get(e["role_class"]) == "audit_card"]
-    live = [e for e in mine if declaration_status(e, now) in ("active", "unbound")]
-    if not live:
+    host = str((requirement or {}).get("host") or "").strip()
+    picked = select_evidence_declaration(project_validation_roots(gov), audit_task_id=audit_task_id, audit_instance=audit_instance,
+                                         host=host or None, now=now)
+    mine = picked["mine"]
+    if picked["problem"] is not None:
+        sel = host_selection_declaration()
+        outlet = evidence_host_outlet(gov, card=evidence_card, declaration_value=(requirement or {}).get("declaration"),
+                                      hosts=[e["host"] for e in (picked["candidates"] or mine)])
+        values["host_refusal"] = _fill(sel["refusal_line"], {"problem": str(picked["problem"]), "outlet": outlet})
+        values["declare_state"] = str(picked["problem"])
+        values["run_state"] = "运行证据执行主机未定, 不起 run"
+        return values
+    entry = picked["entry"]
+    if entry is None:
         values["declare_state"] = (
             ("已有声明均失效(" + ", ".join(f"{e['id']}={declaration_status(e, now)}" for e in mine) + "); " if mine else "未声明; ")
-            + f"顾问先预演再 --confirm: `{gcmd} project validation-root declare --host <目标主机> --base <base> --task-id {audit_task_id} "
+            + f"顾问先预演再 --confirm: `{gcmd} project validation-root declare --host {host or '<目标主机>'} --base <base> --task-id {audit_task_id} "
             f"--instance {audit_instance or '<审计实例>'} --owner-ref <Owner 授权引用> --host-fingerprint <hfp1:…> --actor <顾问实例>`"
             "(本机主机可省 --host-fingerprint)")
         values["run_state"] = "声明后由顾问 run-start(候选须 = 卡面候选)"
         return values
-    entry = live[-1]
     values["declare_state"] = f"{entry['id']}(主机 {entry['host']}, 状态 {declaration_status(entry, now)}, 到期 {entry['expires_at']})"
+    others = [e for e in picked["candidates"] if e["id"] != entry["id"]]
+    if host or others:  # AIPOS-F223: 多主机验证说明一句(所选主机 + 依据 + 其余声明不作本卡证据)
+        sel = host_selection_declaration()
+        values["host_note"] = _fill(sel["note"], {
+            "host": entry["host"], "decl": entry["id"],
+            "basis": f"卡 {evidence_card or '<卡>'} 卡面 audit_runtime_evidence.{sel['field']}={host}" if host else "唯一有效声明",
+            "others": ", ".join(f"{e['id']} 主机 {e['host']}" for e in others) or "无"})
     # AIPOS-F200 件④: run 在远端主机 = 追加「生成证据清单 → 取回副本」两步(remote_steps; 命令出自唯一铸造口)
     remote = not is_local_host(entry["host"])
     values.update({"remote": "1" if remote else "", "host": entry["host"], "evidence_manifest": pending, "evidence_fetch": pending,

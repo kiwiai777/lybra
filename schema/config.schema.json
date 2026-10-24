@@ -553,7 +553,10 @@
             "VR_SIM_EVIDENCE_REJECTED": "AIPOS-F194: 专用模拟器证据核对不过(绑定了却无证据 / 未删除 / 多出他台 / 删错他台 / 他 run 证据 / 名或 UDID 不符); 收口或绑定被拒",
             "VR_HOST_ALIAS_INVALID": "AIPOS-F196: set-host 参数不合(主机标签非法 / 主机是本机 / ssh 别名非法)",
             "VR_EVIDENCE_REJECTED": "AIPOS-F200: 远端 run 证据取回不合(声明非审计实例 / 主机是本机 / 未声明 ssh 别名 / 主机侧清单缺失或封签不符 / 清单外或越界路径 / 软链 / 超限 / sha256 不符); 副本未落",
-            "VR_HOST_NOT_AUTHORIZED": "AIPOS-F224 件③: 项目有常设授权而目标主机不在授权允许主机内(--owner-ref 也不放行); 出口 = Owner 一次扩大授权加入该主机(lybra project grant extend --host <主机> --confirm)。项目无授权时照旧须 --owner-ref", "VR_HELPER_SNAPSHOT_INVALID": "AIPOS-F203: 本 run 固定的 helper 快照不可用(快照库同名文件内容与摘要不符 / run 记录了摘要但快照缺失或被改); 不下发、不铸命令, 出口: 由顾问收口该 run 后重新 run-start"
+            "VR_HOST_NOT_AUTHORIZED": "AIPOS-F224 件③: 项目有常设授权而目标主机不在授权允许主机内(--owner-ref 也不放行); 出口 = Owner 一次扩大授权加入该主机(lybra project grant extend --host <主机> --confirm)。项目无授权时照旧须 --owner-ref",
+            "VR_HELPER_SNAPSHOT_INVALID": "AIPOS-F203: 本 run 固定的 helper 快照不可用(快照库同名文件内容与摘要不符 / run 记录了摘要但快照缺失或被改); 不下发、不铸命令, 出口: 由顾问收口该 run 后重新 run-start",
+            "VR_EVIDENCE_HOST_AMBIGUOUS": "AIPOS-F223 件①: 审计运行证据选不出唯一的验证根 run(本审计卡本实例有多个有效声明而卡面 audit_runtime_evidence 未声明执行主机 host / 声明的 host 无对应有效声明或对应多个); 禁任取, 开工稿 / 派审步骤给拒因一行, 裁决入口同判据拒(唯一实现 validation_root.select_evidence_declaration)",
+            "VR_EVIDENCE_HOST_MISMATCH": "AIPOS-F223 件②: 审计报告运行记录的 run 属本审计卡本实例的未选中声明(卡面 audit_runtime_evidence.host 选定的是另一台主机的声明); 拒因点名所选声明与 run 目录"
           }
         },
         "launch_guard": {
