@@ -95,6 +95,11 @@
       "required": false,
       "description": "Reasons why owner approval is needed"
     },
+    "owner_reason": {
+      "type": "string",
+      "required": false,
+      "description": "AIPOS-F225 件③: needs_owner = true 时须带的第一档事由(键 ∈ verbs.schema lybra_owner_inbox.tiers.tier1.reasons; 校验唯一实现 owner_inbox.require_owner_reason, 发布预演 board_adapter.publish_draft 拒缺 / 不在清单)。存量 needs_owner 卡缺本键 = 收件箱照列并标「缺第一档事由」(不隐藏阻塞)"
+    },
     "output_target": {
       "type": "string",
       "required": true,
@@ -963,7 +968,8 @@
           "acceptance_criteria": {"type": "string"},
           "cleared_at": {"type": "string", "format": "iso8601"},
           "cleared_by": {"type": "string"},
-          "owner_extension_ref": {"type": "string", "description": "AIPOS-F222 件③: 超出返工上限、按 Owner「授权本卡追加一轮返工」裁决追加的轮次 = 该裁决的决策记录 ID(transitions queue_rework.guards.rework_limit.owner_extension.round_field; 引用即消费, 每个裁决只放一轮)。上限内的轮次无此键"}
+          "owner_extension_ref": {"type": "string", "description": "AIPOS-F222 件③: 超出返工上限、按 Owner「授权本卡追加一轮返工」裁决追加的轮次 = 该裁决的决策记录 ID(transitions queue_rework.guards.rework_limit.owner_extension.round_field; 引用即消费, 每个裁决只放一轮)。上限内的轮次无此键"},
+          "auto_extension_ref": {"type": "string", "description": "AIPOS-F225 件②: 超出返工上限、门按第二档自动追加的轮次(卡面候选 / 验收 / 范围自发布起未变且轮次 ≤ 硬上限, transitions queue_rework.guards.rework_limit.auto_extension)= 该次自动放行记录 ID(verbs.schema lybra_owner_inbox.tiers.tier2.auto_release; Owner 可撤回)。Owner 追加 / 上限内的轮次无此键"}
         }
       },
       "required": false,

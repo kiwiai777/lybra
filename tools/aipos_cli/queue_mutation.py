@@ -1587,8 +1587,11 @@ def build_rework_round(
 
     next_round = len(rework_rounds) + 1
     extension_ref: str | None = None
+    auto_release: dict[str, Any] | None = None
     if next_round > budget["limit"]:
-        if not budget["unconsumed"]:
+        auto = None if budget["unconsumed"] else auto_extension_check(repo_root, task_id, raw_metadata, body, next_round=next_round,
+                                                                      max_rounds=max_rounds, verdict_ref=verdict_ref)
+        if not budget["unconsumed"] and not (auto or {}).get("eligible"):
             texts = extension["texts"]
             consumed = len(budget["consumed"])
             part = str(texts["extension_part"]).format(consumed=consumed) if consumed else ""
@@ -1598,14 +1601,18 @@ def build_rework_round(
                 "actor": actor,
                 "dry_run": True,
                 "blocking_reasons": [
-                    str(texts["refused"]).format(max_rounds=max_rounds, extension_part=part, rounds=len(rework_rounds))
+                    str(texts["refused"]).format(max_rounds=max_rounds, extension_part=part, rounds=len(rework_rounds)),
+                    *([str(auto["why"])] if auto and auto.get("why") else []),
                 ],
                 "warnings": warnings,
                 "data": {"current_rounds": len(rework_rounds), "max_rounds": max_rounds, "code": "REWORK_LIMIT",
                          "limit": budget["limit"], "consumed_extensions": list(budget["consumed"]),
-                         "extension_choice": str(extension["choice"])},
+                         "extension_choice": str(extension["choice"]), "auto_extension": auto},
             }
-        extension_ref = str(budget["unconsumed"][0])
+        if budget["unconsumed"]:
+            extension_ref = str(budget["unconsumed"][0])
+        else:  # AIPOS-F225 件②: 第二档自动追加(卡面候选 / 验收 / 范围自发布起未变, 轮次 ≤ 硬上限)
+            auto_release = auto
 
     # 4. 构建新返工轮次
     now_iso = iso_z()
@@ -1621,6 +1628,9 @@ def build_rework_round(
     if extension_ref:
         new_round[str(extension["round_field"])] = extension_ref
         warnings.append(str(extension["texts"]["granted"]).format(round=next_round, decision_id=extension_ref))
+    if auto_release:
+        new_round[str(auto_release["round_field"])] = str(auto_release["record_id"])
+        warnings.append(str(auto_release["granted"]))
     
     # 5. 构造更新后的 rework_rounds
     updated_rework_rounds = rework_rounds + [new_round]
@@ -1640,6 +1650,7 @@ def build_rework_round(
             "new_round": new_round,
             "updated_rework_rounds": updated_rework_rounds,
             "owner_extension_ref": extension_ref,
+            "auto_release": auto_release,
         },
     }
 
@@ -1702,8 +1713,115 @@ def rework_round_budget(repo_root: Path, task_id: str, rework_rounds: list[Any] 
                if str(r.get("allowed_next_action") or "") == str(extension["choice"])]
     granted = [d for d in granted if d]
     consumed = [d for d in granted if d in referenced]
-    return {"max_rounds": max_rounds, "limit": max_rounds + len(consumed), "consumed": consumed,
-            "unconsumed": [d for d in granted if d not in referenced], "extension": extension}
+    # AIPOS-F225 件②: 已登记的第二档自动追加轮(round_field = auto_extension.round_field)同样计入额度(轮次已发生, 撤回不删历史)
+    auto_field = str(auto_extension_declaration()["round_field"])
+    auto_used = [str(r.get(auto_field)) for r in rounds if str(r.get(auto_field) or "").strip()]
+    return {"max_rounds": max_rounds, "limit": max_rounds + len(consumed) + len(auto_used), "consumed": consumed,
+            "unconsumed": [d for d in granted if d not in referenced], "extension": extension, "auto_extensions": auto_used}
+
+
+_AUTO_EXTENSION_KEYS = ("hard_cap", "round_field", "kind", "fingerprint_fields", "fingerprint_body", "texts")
+_AUTO_EXTENSION_TEXTS = ("granted", "basis", "refused_cap", "refused_changed", "refused_baseline")
+
+
+def auto_extension_declaration() -> dict[str, Any]:
+    """AIPOS-F225 件②: transitions.schema nodes.queue_rework.guards.rework_limit.auto_extension(产品仓声明, 唯一读取口)。
+    键 / 文案缺、hard_cap 非 ≥1 整数、kind 不在 verbs.schema lybra_owner_inbox.tiers.tier2.kinds = SchemaLoadError(fail-closed)。"""
+    from tools.aipos_cli.owner_inbox import tier_declaration
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    nodes = load_schema("transitions", code_repo_schema_root()).get("nodes") or {}
+    decl = ((((nodes.get("queue_rework") or {}).get("guards") or {}).get("rework_limit") or {}).get("auto_extension"))
+    texts = decl.get("texts") if isinstance(decl, dict) else None
+    if (not isinstance(decl, dict) or any(k not in decl for k in _AUTO_EXTENSION_KEYS) or not isinstance(texts, dict)
+            or any(not str(texts.get(k) or "").strip() for k in _AUTO_EXTENSION_TEXTS)
+            or not isinstance(decl["hard_cap"], int) or isinstance(decl["hard_cap"], bool) or decl["hard_cap"] < 1
+            or not isinstance(decl["fingerprint_fields"], list) or not decl["fingerprint_fields"]):
+        raise SchemaLoadError("transitions.schema.json nodes.queue_rework.guards.rework_limit.auto_extension 未声明齐 "
+                              f"{list(_AUTO_EXTENSION_KEYS)} / texts.{list(_AUTO_EXTENSION_TEXTS)}(AIPOS-F225)")
+    if str(decl["kind"]) not in tier_declaration()["tier2"]["kinds"]:
+        raise SchemaLoadError(f"rework_limit.auto_extension.kind {decl['kind']!r} 不在 verbs.schema lybra_owner_inbox.tiers.tier2.kinds")
+    return decl
+
+
+def card_scope_fingerprint(metadata: dict[str, Any], body: str, decl: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F225 件②: 卡面「候选 / 验收 / 范围」指纹(唯一实现; 自动追加门核对与发布基线同算): 声明 fingerprint_fields(点号 = 嵌套)+ 正文
+    (fingerprint_body; 首尾空白不计)规范 JSON 的 sha256。返回 {digest, values}。"""
+    import hashlib
+    import json
+
+    decl = decl or auto_extension_declaration()
+    values: dict[str, Any] = {}
+    for field in decl["fingerprint_fields"]:
+        node: Any = metadata
+        for part in str(field).split("."):
+            node = node.get(part) if isinstance(node, dict) else None
+        values[str(field)] = _normalize_value(node)
+    if decl["fingerprint_body"]:
+        values["__body__"] = str(body or "").strip()
+    digest = hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    return {"digest": digest, "values": values}
+
+
+def publish_scope_baseline(repo_root: Path, task_id: str, decl: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F225 件②: 本卡发布基线指纹 —— 门侧发布记录(records publishes, 最新一份)的 source_draft_ref 草稿, 且其 sha256 = 发布记录
+    source_sha256(发布后未改, 门可核)才据其算 card_scope_fingerprint。返回 {ok, digest, values, publish_ref, why}; 不可核 = ok False + why。"""
+    import hashlib
+
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.records import load_records
+
+    root = Path(repo_root)
+    records = sorted(dict(load_records(root, groups=["publishes"], task_id=task_id).get("task_publishes") or {}).get(task_id) or [],
+                     key=lambda r: str(r.get("published_at") or ""))
+    if not records:
+        return {"ok": False, "why": f"无门侧发布记录(records publishes/{task_id})"}
+    record = records[-1]
+    meta0 = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    ref = str(record.get("source_draft_ref") or meta0.get("source_draft_ref") or "").strip()
+    expected = str(meta0.get("source_sha256") or "").strip()
+    draft = root / ref if ref else None
+    if draft is None or not draft.is_file() or not expected:
+        return {"ok": False, "why": f"发布记录 {record.get('path') or record.get('publish_id')} 的草稿 {ref or '(未记)'} 不在或未记 source_sha256"}
+    actual = hashlib.sha256(draft.read_bytes()).hexdigest()
+    if actual != expected:
+        return {"ok": False, "why": f"草稿 {ref} 发布后已改(sha256 {actual[:12]} ≠ 发布记录 {expected[:12]})"}
+    try:
+        meta, body = require_frontmatter(draft)
+    except FrontmatterReadError as exc:
+        return {"ok": False, "why": f"草稿 {ref} 读不出: {exc}"}
+    fp = card_scope_fingerprint(meta, body, decl)
+    return {"ok": True, "digest": fp["digest"], "values": fp["values"], "publish_ref": str(record.get("publish_id") or ref), "why": ""}
+
+
+def auto_extension_check(repo_root: Path, task_id: str, metadata: dict[str, Any], body: str, *, next_round: int,
+                         max_rounds: int, verdict_ref: str = "") -> dict[str, Any]:
+    """AIPOS-F225 件② 唯一判定(门 queue rework / mark-concluded --outcome rework 同经 build_rework_round): 下一轮超出上限判据时能否第二档
+    自动追加——next_round ≤ hard_cap 且卡面指纹 = 发布基线指纹。返回 {eligible, why, record_id, round_field, granted, basis, fingerprint}。"""
+    from tools.aipos_cli.owner_inbox import planned_auto_release_id
+
+    decl = auto_extension_declaration()
+    texts = decl["texts"]
+    cap = int(decl["hard_cap"])
+    out: dict[str, Any] = {"eligible": False, "why": "", "hard_cap": cap, "round_field": str(decl["round_field"]), "kind": str(decl["kind"])}
+    if next_round > cap:
+        out["why"] = str(texts["refused_cap"]).format(hard_cap=cap)
+        return out
+    baseline = publish_scope_baseline(repo_root, task_id, decl)
+    if not baseline["ok"]:
+        out["why"] = str(texts["refused_baseline"]).format(why=baseline["why"])
+        return out
+    current = card_scope_fingerprint(metadata, body, decl)
+    if current["digest"] != baseline["digest"]:
+        changed = sorted(k for k in set(current["values"]) | set(baseline["values"]) if current["values"].get(k) != baseline["values"].get(k))
+        out["why"] = str(texts["refused_changed"]).format(current=current["digest"][:12], baseline=baseline["digest"][:12], fields=", ".join(changed))
+        return out
+    record_id = planned_auto_release_id(Path(repo_root), task_id, str(decl["kind"]))
+    out.update({"eligible": True, "record_id": record_id, "fingerprint": current["digest"], "publish_ref": baseline["publish_ref"],
+                "granted": str(texts["granted"]).format(round=next_round, hard_cap=cap, record_id=record_id),
+                "basis": str(texts["basis"]).format(round=next_round, max_rounds=max_rounds, hard_cap=cap, fingerprint=current["digest"][:12],
+                                                    publish_ref=baseline["publish_ref"], verdict_ref=verdict_ref or "?")})
+    return out
 
 
 # AIPOS-316: Guard against direct invocation

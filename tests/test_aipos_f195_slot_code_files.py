@@ -333,7 +333,9 @@ def test_item3_outside_slot_code_file_stays_owner_needed(rig: dict, monkeypatch:
     assert res.reason == "landing_rejected"
     na = loop_status(gov, TASK)["next_action"]
     _show(f"[件③·对照] 槽外代码文件: action={na['action']} reason={na['reason']}")
-    assert na["action"] == "owner_needed" and na["reason"] == "landing_rejected"
+    # AIPOS-F225: 非例行落账拒 = 原判 owner_needed(next_action 判据不变), 归档第三档 advisor_fix(治理仓落账是顾问职责)
+    assert na["tier_from"] == {"action": "owner_needed", "reason": "landing_rejected"}
+    assert na["action"] == "advisor_fix" and na["reason"] == "landing_rejected" and "第三档(归顾问" in na["detail"]
 
 
 def test_declarations_single_source():

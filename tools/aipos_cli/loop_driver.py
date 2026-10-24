@@ -1328,6 +1328,10 @@ def run_loop(
 
     guard = deploy_guard if deploy_guard is not None else DeployGuard.for_running_process()
     recorder.set_deploy(guard.describe())
+    # AIPOS-F225 件②: 起跑环境指纹(验证根声明; 部署提交在 deploy 段)= 自动重新派审变化判据的基线(next_resolver.auto_reaudit_check)
+    from tools.aipos_cli.next_resolver import current_env
+
+    recorder.set_env({"validation_roots_digest": current_env(governance_root, guard.describe())["validation_roots_digest"]})
     if guard.applicable:
         say(f"lybra loop {task_id}: 运行部署快照 {guard.running.release}(commit {guard.baseline}); 每步比对 "
             f"{guard.running.describe()['deploy_current']}, 部署一变即停下(deploy_changed)"
@@ -1361,6 +1365,32 @@ def run_loop(
         except (OSError, ValueError, subprocess.SubprocessError) as exc:
             say(f"补落账: {task_id} loop 运行记录终态 失败({type(exc).__name__}: {exc}); 出口: lybra loop --task-id {task_id}(推导核派生 N6 落账步)")
     return result
+
+
+def _revoked_end_reason() -> str:
+    """AIPOS-F225: 撤回自动放行后卡停住的结束原因(声明 verbs.schema lybra_owner_inbox.tiers.tier2.auto_release.revoked_end_reason)。"""
+    from tools.aipos_cli.owner_inbox import auto_release_declaration
+
+    return str(auto_release_declaration()["revoked_end_reason"])
+
+
+def _auto_reaudit(index: int, task_id: str, governance_root: Path, *, guard: Any, actor: str, say: Callable[[str], None]) -> bool:
+    """AIPOS-F225 件②: 审计连续 BLOCK 时第二档自动重新派审(判定唯一 next_resolver.auto_reaudit_check, 现值 = 本运行部署提交 + 验证根声明)。
+    成立 = 落一条自动放行记录(owner_inbox.write_auto_release; 该记录即连续 BLOCK 计数的界, next_resolver.owner_reaudit_ruling 同读)并返回 True
+    (调用方续推: 推导核随即派下一轮审计); 不成立 = 输出原因, False(按原结束原因停, loop status 判第二档未变化 = advisor_fix)。"""
+    from tools.aipos_cli.next_resolver import auto_reaudit_check, auto_reaudit_declaration, current_env
+    from tools.aipos_cli.owner_inbox import write_auto_release
+
+    check = auto_reaudit_check(governance_root, task_id, env=current_env(governance_root, guard.describe()))
+    if not check["eligible"]:
+        say(f"[{index}] auto_reaudit: 不自动重新派审 — {check['why']}")
+        return False
+    decl = auto_reaudit_declaration()
+    basis = str(decl["texts"]["basis"]).format(audit_task_id=check["audit_task_id"], verdict_id=check["verdict_id"], changes=check["changes"])
+    written = write_auto_release(governance_root, task_id, str(decl["kind"]), released_by=actor, basis=basis, verdict_ref=str(check["verdict_id"]),
+                                 evidence={"baseline": check["baseline"], "current": check["current"]})
+    say(f"[{index}] auto_reaudit: 第二档自动重新派审 {written['auto_release_id']}(记录 {written['path']}; Owner 可撤回) — {basis}")
+    return True
 
 
 def _single_instance_refusal(task_id: str, governance_root: Path, recorder: LoopRunRecorder, *, contract: dict[str, Any],
@@ -1664,6 +1694,16 @@ def _drive(
                     # AIPOS-F179 item 3: audit BLOCK = fix environment then re-audit (advisor_fix, not a consecutive failure);
                     # repeated BLOCK = owner_needed. End reason comes from the derivation (transitions nodes.N4.audit_blocked).
                     msg = f"审计裁决 BLOCK @ {node}/{state}: {derivation.get('suggested_action', '')}"
+                    result.reason = str(action.get("end_reason") or "")
+                    if result.reason == str(audit_blocked_declaration()["repeated_end_reason"]):
+                        # AIPOS-F225 item 2: tier 2 - deploy / validation roots changed since the latest BLOCK = auto re-audit
+                        # (record = boundary of the BLOCK count, same F202 path); unchanged = end as before (advisor_fix in loop status)
+                        released = _auto_reaudit(index, task_id, governance_root, guard=guard, actor=driver_actor, say=say)
+                        if released:
+                            continue
+                elif action.get("type") == _revoked_end_reason():
+                    # AIPOS-F225 item 2: the Owner revoked a tier-2 auto release and has not ruled since = the card stays stopped
+                    msg = f"Owner 撤回自动放行, 本卡停住: {derivation.get('suggested_action', '')}"
                     result.reason = str(action.get("end_reason") or "")
                 elif action.get("type") == candidate_fail_declaration()["action_type"]:
                     # AIPOS-F211 item 4 (gap #217): fixed-candidate validation card FAIL = new candidate on a new validation card +

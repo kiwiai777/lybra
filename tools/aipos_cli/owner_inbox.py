@@ -31,6 +31,11 @@ AIPOS-F202(审计连续 BLOCK 的正式恢复入口): loop 类事由 audit_block
 写了自定义选项也恒列); 选 reaudit = 既有 decide 同一写路径落决策记录, 推导核以该裁决为界重算连续 BLOCK(next_resolver.audit_block_state)。
 reaudit_hint: 此前「等修复」类裁决(after_choices)之后运行记录部署提交已变 = 事项附提示行(CLI 与看板同读 item.reaudit_hint)。
 
+AIPOS-F225(Owner 介入分级): 三档声明唯一读取口 tier_declaration(verbs.schema lybra_owner_inbox.tiers, 加载守卫: loop 可判 owner_needed 的每个事由与
+收件箱每个类别都须归档, 缺 = SchemaLoadError); loop 下一动作按档归类 apply_owner_tier(loop status 每个运行同调); 收件箱 items 只列第一档类别, 第二档
+进 notices; 第二档自动放行记录写读口 write_auto_release / auto_release_records(既有事件记录), 撤回 = auto_released 事项选 revoke_auto, 卡停住判定
+auto_release_stop; 顾问升 Owner 的第一档事由校验 require_owner_reason(loop note / needs_owner 卡同读)。
+
 AIPOS-F175 件③: owner_check 类别 = 路线图推导(roadmap_drift.roadmap_status, 唯一实现)里验证状态 = 待 Owner 抽查的标准, 附产物 / 步骤 /
 「告诉顾问」话术; 结论经顾问 `lybra roadmap verify`(roadmap.apply_owner_verification)记录, 不经 decide(对本类敲 decide = 用法错, 拒因指路)。
 """
@@ -47,7 +52,7 @@ VERB = "lybra_owner_inbox"
 DECIDE_VERB = "lybra_owner_decide"
 NOTE_VERB = "lybra_loop_note"
 CATEGORIES = ("loop_owner_needed", "needs_owner_card", "rework_limit", "supplementary_fail", "envelope_warning", "roadmap_drift",
-              "owner_check")
+              "owner_check", "auto_released")
 _DECL_KEYS = ("item_id", "decision", "texts", "rank_labels", "categories", "options", "custom_option", "exit_codes", "stale")
 _DECISION_KEYS = ("decision_id_prefix", "decision_type", "decision_status", "capture_surface", "source_tag", "capture_method",
                   "approval_intent", "redaction_status", "token_ref", "capability_ttl_hours", "external_ref_prefix",
@@ -121,7 +126,306 @@ def inbox_declaration() -> dict[str, Any]:
     missing = sorted(referenced - set(options))
     if missing:
         raise SchemaLoadError(f"verbs.{VERB}.categories / stale.suggest 引用了未声明的选项 {missing}")
+    _check_tiers(decl)  # AIPOS-F225 件①: 档位映射守卫(未归档的事由 / 类别 = 加载即拒)
     return decl
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F225 Owner 介入分级: 三档声明(唯一读取口)+ 加载守卫
+# ---------------------------------------------------------------------------
+
+TIER_LEVELS = (1, 2, 3)
+_TIER_KEYS = ("tier1", "tier2", "tier3", "loop_reasons", "categories", "needs_owner_reason_field", "grant_owner_reason", "texts")
+_TIER_TEXTS = ("tier3_detail", "escalate_hint", "auto_reaudit_changed", "auto_reaudit_unchanged", "change_deploy", "change_validation_roots",
+               "owner_reason_part", "needs_owner_reason_missing", "notices_header", "notice_item")
+_AUTO_RELEASE_KEYS = ("event_type", "id_template", "record_fields", "revoke_option", "revoked_end_reason", "body")
+
+
+def _owner_needed_reasons(next_decl: dict[str, Any], decl: dict[str, Any]) -> set[str]:
+    """loop 顾问下一动作可判 owner_needed 的全部事由: by_end_reason 判 owner_needed 的结束原因(含按执行方式覆盖成 owner_needed 者)+
+    owner_reasons 全部键 + 顾问 loop note 事由(categories.loop_owner_needed.advisor_ask.reason)。"""
+    reasons = {str(r) for r, a in (next_decl.get("by_end_reason") or {}).items() if a == "owner_needed"}
+    for rule in (((next_decl.get("by_execution_mode") or {}).get("modes")) or {}).values():
+        reasons |= {str(r) for r, a in ((rule or {}).get("by_end_reason") or {}).items() if a == "owner_needed"}
+    reasons |= {str(r) for r in (next_decl.get("owner_reasons") or {})}
+    reasons.add(str(decl["categories"]["loop_owner_needed"]["advisor_ask"]["reason"]))
+    return reasons
+
+
+def _check_tiers(decl: dict[str, Any]) -> None:
+    """lybra_owner_inbox.tiers 形校验(fail-closed, inbox_declaration 每次加载即调): 键齐; loop_reasons 恰覆盖 loop 可判 owner_needed 的全部事由
+    (_owner_needed_reasons; 缺 = 新增事由未归档, 多 = 声明残留), categories 恰覆盖 CATEGORIES; 每条档位 ∈ TIER_LEVELS: 第一档 owner_reason ∈
+    tier1.reasons(或 owner_reason_from = owner_ask), 第二档 kind ∈ tier2.kinds 且 action ∈ tier3.actions(未自动放行时的去向), 第三档 action ∈
+    tier3.actions 且 why 非空。"""
+    from tools.aipos_cli.loop_run_record import status_contract
+    from tools.schema_loader import SchemaLoadError
+
+    where = f"verbs.{VERB}.tiers"
+    tiers = decl.get("tiers")
+    if not isinstance(tiers, dict) or any(k not in tiers for k in _TIER_KEYS):
+        raise SchemaLoadError(f"{where} 未声明齐 {list(_TIER_KEYS)}(AIPOS-F225)")
+    reasons = (tiers["tier1"] or {}).get("reasons") if isinstance(tiers["tier1"], dict) else None
+    kinds = (tiers["tier2"] or {}).get("kinds") if isinstance(tiers["tier2"], dict) else None
+    actions = (tiers["tier3"] or {}).get("actions") if isinstance(tiers["tier3"], dict) else None
+    if (not isinstance(reasons, dict) or not reasons or any(not str((v or {}).get("label") or "").strip() for v in reasons.values())
+            or not isinstance(kinds, dict) or not kinds or not isinstance(actions, list) or not actions):
+        raise SchemaLoadError(f"{where}: tier1.reasons(键 → label)/ tier2.kinds / tier3.actions 须为非空")
+    if set(tiers["tier1"].get("inbox_last") or []) - set(reasons):
+        raise SchemaLoadError(f"{where}.tier1.inbox_last 须 ⊆ tier1.reasons")
+    auto = tiers["tier2"].get("auto_release")
+    if not isinstance(auto, dict) or any(k not in auto for k in _AUTO_RELEASE_KEYS) or str(auto["revoke_option"]) not in decl["options"]:
+        raise SchemaLoadError(f"{where}.tier2.auto_release 须声明齐 {list(_AUTO_RELEASE_KEYS)}, revoke_option 须为 options 声明的选项")
+    if any(not str(tiers["texts"].get(k) or "").strip() for k in _TIER_TEXTS):
+        raise SchemaLoadError(f"{where}.texts 须声明齐 {list(_TIER_TEXTS)}")
+    if str(tiers["grant_owner_reason"]) not in reasons:
+        raise SchemaLoadError(f"{where}.grant_owner_reason 须 ∈ tier1.reasons")
+    expected = _owner_needed_reasons(status_contract()["next_action"], decl)
+    expected.add(str(auto["revoked_end_reason"]))
+    table = tiers["loop_reasons"]
+    if not isinstance(table, dict) or set(table) != expected:
+        got = set(table) if isinstance(table, dict) else set()
+        raise SchemaLoadError(f"{where}.loop_reasons 须恰覆盖 loop 可判 owner_needed 的全部事由: 未归档 {sorted(expected - got)}; "
+                              f"多出 {sorted(got - expected)}(AIPOS-F225: 新增事由须先归档)")
+    cats = tiers["categories"]
+    if not isinstance(cats, dict) or set(cats) != set(CATEGORIES):
+        got = set(cats) if isinstance(cats, dict) else set()
+        raise SchemaLoadError(f"{where}.categories 须恰覆盖收件箱类别: 未归档 {sorted(set(CATEGORIES) - got)}; 多出 {sorted(got - set(CATEGORIES))}")
+    entries = [*(("loop_reasons", k, v, True) for k, v in table.items()), *(("categories", k, v, False) for k, v in cats.items())]
+    for group, key, spec, is_loop in entries:
+        name = f"{group}.{key}"
+        level = spec.get("tier") if isinstance(spec, dict) else None
+        bad = level not in TIER_LEVELS or isinstance(level, bool)
+        if not bad and level == 1:
+            reason = spec.get("owner_reason")
+            bad = not ((reason is None and (not is_loop or spec.get("owner_reason_from") == "owner_ask")) or str(reason) in reasons)
+        elif not bad and level == 2:
+            bad = str(spec.get("kind")) not in kinds or (is_loop and str(spec.get("action")) not in actions)
+        elif not bad:
+            bad = not is_loop or str(spec.get("action")) not in actions or not str(spec.get("why") or "").strip()
+        if bad:
+            raise SchemaLoadError(f"{where}.{name} 档位不合: 第一档须 owner_reason ∈ tier1.reasons, 第二档须 kind ∈ tier2.kinds(loop 事由另须 action), "
+                                  f"第三档(仅 loop 事由)须 action ∈ tier3.actions 且 why 非空; 得到 {spec!r}")
+
+
+def tier_declaration(decl: dict[str, Any] | None = None) -> dict[str, Any]:
+    """lybra_owner_inbox.tiers(经 inbox_declaration 加载守卫)。"""
+    return (decl or inbox_declaration())["tiers"]
+
+
+def category_tier(category: str, decl: dict[str, Any] | None = None) -> int:
+    """收件箱类别的档位(tiers.categories)。"""
+    return int(tier_declaration(decl)["categories"][category]["tier"])
+
+
+def owner_reason_entry(key: Any, decl: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """第一档事由键 → {key, label}; 不在清单 = None。"""
+    reasons = tier_declaration(decl)["tier1"]["reasons"]
+    text = str(key or "").strip()
+    return {"key": text, "label": str(reasons[text]["label"])} if text in reasons else None
+
+
+class OwnerReasonRefused(ValueError):
+    """升 Owner 缺第一档事由 / 事由不在清单(loop note 出口 owner_reason_refused; 发布预演 = 阻断理由)。"""
+
+
+def require_owner_reason(value: Any, *, grant: bool = False, decl: dict[str, Any] | None = None) -> str:
+    """AIPOS-F225 件③ 唯一校验(loop note --owner-reason / 卡面 needs_owner 的 owner_reason 同读): 键 ∈ tiers.tier1.reasons → 键;
+    缺 + grant(只给授权建议)= tiers.grant_owner_reason; 缺 / 不在清单 = OwnerReasonRefused(消息 = 合法键清单 + 给的值)。"""
+    tiers = tier_declaration(decl)
+    text = str(value or "").strip()
+    if not text and grant:
+        return str(tiers["grant_owner_reason"])
+    if text in tiers["tier1"]["reasons"]:
+        return text
+    raise OwnerReasonRefused(text)
+
+
+def owner_reason_keys(decl: dict[str, Any] | None = None) -> str:
+    return "|".join(tier_declaration(decl)["tier1"]["reasons"])
+
+
+def apply_owner_tier(governance_root: Path, view: dict[str, Any], na: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F225 件①③: loop status 每个运行的下一动作(已经 apply_owner_ruling)按档归类(唯一实现, 判据 tiers.loop_reasons)。
+    非 owner_needed = 原样。第一档 = 原样 + owner_tier 1 / owner_reason {key, label}(事由来自 owner_ask 的 = 运行记录 owner_ask.owner_reason)。
+    第二档 auto_reaudit = next_resolver.auto_reaudit_check(loop 自动重新派审同一判定): 有变化 / 无变化 = 声明 action(advisor_fix), detail 写明;
+    该 BLOCK 已有被撤回的自动放行 = 第一档(revoked_end_reason 的事由)。第三档 = 改判声明 action, detail = why + 原判, 附 escalate_hint。"""
+    if not isinstance(na, dict) or na.get("action") != "owner_needed":
+        return na
+    tiers = tier_declaration()
+    reason = str(na.get("reason") or "")
+    spec = tiers["loop_reasons"].get(reason)
+    task_id = str(view.get("task_id") or "")
+    fill = {"task_id": task_id, "governance_root": str(governance_root), "reasons": owner_reason_keys()}
+    if spec is None:  # 守卫已保证全覆盖; 到这里 = 运行时出现了未声明的事由, 不猜(原判照旧, 标未归档)
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError(f"verbs.{VERB}.tiers.loop_reasons 未归档事由 {reason!r}(AIPOS-F225: 新增事由须先归档)")
+    level = int(spec["tier"])
+    if level == 1:
+        key = spec.get("owner_reason")
+        if spec.get("owner_reason_from") == "owner_ask":
+            key = ((view.get("owner_ask") or {}) if isinstance(view.get("owner_ask"), dict) else {}).get("owner_reason")
+        entry = owner_reason_entry(key)
+        return {**na, "owner_tier": 1, "owner_reason": entry}
+    if level == 2:
+        from tools.aipos_cli.next_resolver import auto_reaudit_check
+
+        check = auto_reaudit_check(Path(governance_root), task_id)
+        if check.get("revoked"):
+            entry = owner_reason_entry(tiers["loop_reasons"][str(tiers["tier2"]["auto_release"]["revoked_end_reason"])]["owner_reason"])
+            return {**na, "owner_tier": 1, "owner_reason": entry, "auto_reaudit": check}
+        key = "auto_reaudit_changed" if check.get("eligible") else "auto_reaudit_unchanged"
+        detail = _fmt(tiers["texts"][key], f"tiers.texts.{key}", verdict_id=check.get("verdict_id") or "?", changes=check.get("changes") or "",
+                      why=check.get("why") or "", detail=str(na.get("detail") or ""))
+        hint = str(na.get("hint") or "")
+        if check.get("eligible"):
+            from tools.aipos_cli.loop_run_record import _resume_fill, status_contract
+
+            hint = _fmt(status_contract()["next_action"]["routine_rejections"]["resume_hint"], "resume_hint",
+                        **_resume_fill(view, Path(governance_root)))
+        out = {**na, "action": str(spec["action"]), "owner_tier": 2, "tier_from": {"action": "owner_needed", "reason": reason},
+               "detail": detail, "hint": hint, "auto_reaudit": check,
+               "escalate_hint": _fmt(tiers["texts"]["escalate_hint"], "tiers.texts.escalate_hint", **fill)}
+    else:
+        detail = _fmt(tiers["texts"]["tier3_detail"], "tiers.texts.tier3_detail", why=str(spec["why"]), detail=str(na.get("detail") or ""))
+        out = {**na, "action": str(spec["action"]), "owner_tier": 3, "tier_from": {"action": "owner_needed", "reason": reason},
+               "detail": detail, "escalate_hint": _fmt(tiers["texts"]["escalate_hint"], "tiers.texts.escalate_hint", **fill)}
+    # 归顾问的运行上顾问已写升级请求(owner_ask)= 与非等 Owner 运行同一判定(owner_ask_destination: 进收件箱 / 已裁决改写)
+    return _apply_owner_ask(Path(governance_root), view, out)
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F225 件②: 第二档自动放行记录(既有事件记录, 不另立存储)+ 撤回后卡停住
+# ---------------------------------------------------------------------------
+
+def auto_release_declaration(decl: dict[str, Any] | None = None) -> dict[str, Any]:
+    return tier_declaration(decl)["tier2"]["auto_release"]
+
+
+def auto_release_records(governance_root: Path, task_id: str | None = None) -> list[dict[str, Any]]:
+    """本卡(缺省 = 全项目)第二档自动放行记录(records/events/<卡>/<event_type>_*.md), 按 released_at 旧→新; 每条 = frontmatter + _path。
+    读不出 = FrontmatterReadError 向上(fail-closed)。"""
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.record_writer import record_dir
+
+    spec = auto_release_declaration()
+    root = Path(governance_root)
+    base = record_dir(root, "events")
+    dirs = [base / task_id] if task_id else (sorted(p for p in base.iterdir() if p.is_dir()) if base.is_dir() else [])
+    out: list[dict[str, Any]] = []
+    for directory in dirs:
+        for path in sorted(directory.glob(f"{spec['event_type']}_*.md")) if directory.is_dir() else []:
+            fm, _body = require_frontmatter(path)
+            if str(fm.get("event_type") or "") == str(spec["event_type"]):
+                out.append({**fm, "_path": str(path)})
+    return sorted(out, key=lambda r: (str(r.get("released_at") or ""), str(r.get("auto_release_id") or "")))
+
+
+def planned_auto_release_id(governance_root: Path, task_id: str, kind: str) -> str:
+    """下一条自动放行记录 ID(声明 id_template; seq = 本卡同 kind 已有记录数 + 1)。"""
+    spec = auto_release_declaration()
+    seq = 1 + sum(1 for r in auto_release_records(Path(governance_root), task_id) if str(r.get("kind") or "") == kind)
+    return _fmt(spec["id_template"], "tiers.tier2.auto_release.id_template", task_id=task_id, kind=kind, seq=seq)
+
+
+def write_auto_release(governance_root: Path, task_id: str, kind: str, *, released_by: str, basis: str, record_id: str | None = None,
+                       round_no: int | None = None, verdict_ref: str | None = None, evidence: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F225 件② 写口唯一实现: 一次第二档自动放行 = 一条事件记录(record_writer.write_records_atomic kind event; 字段读声明 record_fields)。
+    返回 {auto_release_id, path}。写不进 = 异常向上(调用方 fail-closed)。"""
+    from tools.aipos_cli.clock import iso_z
+    from tools.aipos_cli.record_writer import render_markdown, write_records_atomic
+    from tools.schema_constants import RecordType
+
+    spec = auto_release_declaration()
+    rid = record_id or planned_auto_release_id(Path(governance_root), task_id, kind)
+    values = {"record_type": RecordType.TASK_PROGRESS_EVENT, "event_type": str(spec["event_type"]), "auto_release_id": rid, "task_id": task_id,
+              "kind": kind, "tier": 2, "released_at": iso_z(), "released_by": released_by, "basis": basis, "round": round_no,
+              "verdict_ref": verdict_ref, "evidence": dict(evidence or {})}
+    meta = {key: values[key] for key in spec["record_fields"]}  # 字段只读声明(声明多出未知字段 = KeyError, fail-closed)
+    body = _fmt(spec["body"], "tiers.tier2.auto_release.body", kind=kind, task_id=task_id, basis=basis)
+    written = write_records_atomic(Path(governance_root), [("event", rid, render_markdown(meta, body, list(meta)), task_id)])
+    paths = list(written.get("paths") or [])
+    return {"auto_release_id": rid, "path": paths[0] if paths else None, "paths": paths}
+
+
+def _auto_release_subject(task_id: str, rid: str, decl: dict[str, Any]) -> str:
+    return _fmt(decl["categories"]["auto_released"]["subject"], "categories.auto_released.subject", task_id=task_id, auto_release_id=rid)
+
+
+def auto_release_item_id(governance_root: Path, task_id: str, rid: str, decl: dict[str, Any] | None = None) -> str:
+    """自动放行事项 ID(收件箱 _auto_release_items 同一构造: 项目 = 治理根目录名, 锚点 = 记录 ID)。"""
+    decl = decl or inbox_declaration()
+    return item_id(Path(governance_root).resolve().name, "auto_released", _auto_release_subject(task_id, rid, decl), rid, decl)
+
+
+def auto_release_ruling(governance_root: Path, task_id: str, rid: str, decl: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """该自动放行事项的 Owner 裁决(撤回 / 知悉)或 None。读不出 = 向上。"""
+    return read_ruling(Path(governance_root), auto_release_item_id(governance_root, task_id, rid, decl), decl)
+
+
+def revoked_auto_release_ids(governance_root: Path, task_id: str) -> set[str]:
+    """本卡已被 Owner 撤回(选 revoke_option)的自动放行记录 ID。"""
+    decl = inbox_declaration()
+    revoke = str(auto_release_declaration(decl)["revoke_option"])
+    out: set[str] = set()
+    for rec in auto_release_records(Path(governance_root), task_id):
+        rid = str(rec.get("auto_release_id") or "")
+        ruling = auto_release_ruling(Path(governance_root), task_id, rid, decl) if rid else None
+        if ruling is not None and str(ruling.get("allowed_next_action") or "") == revoke:
+            out.add(rid)
+    return out
+
+
+def auto_release_stop(governance_root: Path, task_id: str) -> dict[str, Any] | None:
+    """AIPOS-F225 件② 卡停住唯一判定(推导核 next_resolver 与 loop 同读): 本卡某条自动放行已被 Owner 撤回, 且撤回之后本卡没有 Owner 收件箱新裁决
+    (rulings_for_task, decided_at 不早于撤回: 秒级时刻同秒算之后; 撤回本身除外)= {auto_release_id, decision_id, decided_at, end_reason}; 否则 None。读不出 = 向上。"""
+    decl = inbox_declaration()
+    spec = auto_release_declaration(decl)
+    revoke = str(spec["revoke_option"])
+    latest: dict[str, Any] | None = None
+    for rec in auto_release_records(Path(governance_root), task_id):
+        rid = str(rec.get("auto_release_id") or "")
+        ruling = auto_release_ruling(Path(governance_root), task_id, rid, decl) if rid else None
+        if ruling is not None and str(ruling.get("allowed_next_action") or "") == revoke:
+            if latest is None or str(ruling.get("decided_at") or "") > str(latest["decided_at"]):
+                latest = {"auto_release_id": rid, "decision_id": str(ruling.get("decision_id") or ""), "decided_at": str(ruling.get("decided_at") or ""),
+                          "kind": rec.get("kind"), "end_reason": str(spec["revoked_end_reason"])}
+    if latest is None:
+        return None
+    later = [r for r in rulings_for_task(Path(governance_root), task_id)
+             if str(r.get("decision_id") or "") != latest["decision_id"] and str(r.get("decided_at") or "") >= latest["decided_at"]]
+    return None if later else latest
+
+
+def _auto_release_items(root: Path, project: str, decl: dict[str, Any], home_root: Path | None,
+                        errors: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """⑧ AIPOS-F225: 第二档自动放行记录每条一个事项(锚点 = 记录 ID; 已裁决 = 不再出现)。卡已结案 / 撤回 = 不列。"""
+    from tools.aipos_cli.task_loader import find_task_card
+
+    cat = decl["categories"]["auto_released"]
+    out: list[dict[str, Any]] = []
+    for rec in auto_release_records(root):
+        task_id, rid = str(rec.get("task_id") or ""), str(rec.get("auto_release_id") or "")
+        if not task_id or not rid:
+            errors.append({"project": project, "source": f"自动放行记录 {rec.get('_path')}", "error": "缺 task_id / auto_release_id"})
+            continue
+        _path, state = find_task_card(root, task_id)
+        if state in ("completed", "withdrawn"):
+            continue
+        kind = str(rec.get("kind") or "")
+        rel = Path(str(rec["_path"])).resolve()
+        fill = {"task_id": task_id, "auto_release_id": rid, "kind_label": str((cat.get("kind_labels") or {}).get(kind) or kind),
+                "basis": str(rec.get("basis") or ""), "released_at": str(rec.get("released_at") or "?"),
+                "record_path": rel.relative_to(root.resolve()).as_posix() if rel.is_relative_to(root.resolve()) else str(rel)}
+        out.append(_base_item(
+            decl, project=project, governance_root=root, category="auto_released", rank=int(cat["rank"]),
+            subject=_auto_release_subject(task_id, rid, decl), anchor=rid, source=str(rec.get("released_by") or ""),
+            ask=_fmt(cat["ask"], "categories.auto_released.ask", **fill), recommend=None,
+            impact=_fmt(cat["impact"], "categories.auto_released.impact", **fill), options=_option_list(list(cat["options"]), decl),
+            since=str(rec.get("released_at") or "") or None, task_id=task_id, home_root=home_root,
+            facts={"auto_release_id": rid, "kind": kind, "round": rec.get("round"), "verdict_ref": rec.get("verdict_ref"),
+                   "record_path": fill["record_path"]}))
+    return out
 
 
 def _fmt(template: Any, where: str, **values: Any) -> str:
@@ -471,18 +775,23 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
                     if entry is not None:
                         relays.append(entry)
                 continue
+        # AIPOS-F225: an advisor escalation of a tier-2 / tier-3 run keeps the run's own reason for the declared option / advice tables
+        basis = str(view.get("end_reason") or reason) if advisor_ask else reason
         if ask_rec.get("options"):
             options = [{"key": str(o.get("key")), "label": str(o.get("label"))} for o in ask_rec["options"] if isinstance(o, dict)]
         else:
-            options = _option_list(list((cat.get("options_by_reason") or {}).get(reason) or cat["default_options"]), decl)
-        # AIPOS-F202: options pinned for this reason (e.g. reaudit on audit_blocked_repeated) stay offered after the advisor's own
-        options += _option_list([k for k in (cat.get("pinned_options_by_reason") or {}).get(reason) or []
-                                 if k not in {o["key"] for o in options}], decl)
+            options = _option_list(list((cat.get("options_by_reason") or {}).get(reason) or (cat.get("options_by_reason") or {}).get(basis)
+                                        or cat["default_options"]), decl)
+        # AIPOS-F202: options pinned for this reason (e.g. reaudit on audit_blocked_repeated) stay offered after the advisor's own;
+        # AIPOS-F225: an advisor escalation (advisor_ask) on such a run keeps them too (manual fallback of the tier-2 auto path)
+        pinned_by = cat.get("pinned_options_by_reason") or {}
+        pinned = [*(pinned_by.get(reason) or []), *((pinned_by.get(basis) or []) if advisor_ask else [])]
+        options += _option_list([k for k in dict.fromkeys(pinned) if k not in {o["key"] for o in options}], decl)
         if advisor_ask and _rework_exhausted(root, task_id, card_fm, project, errors):  # AIPOS-F222: 返工额度已尽 = 可授权追加一轮
             options += _option_list([k for k in ask_spec["pinned_when_rework_exhausted"] if k not in {o["key"] for o in options}], decl)
         recommend = ask_rec.get("recommend") or None
-        if not recommend and reason in (cat.get("recommend_by_reason") or {}):
-            recommend = _fmt(cat["recommend_by_reason"][reason], f"categories.loop_owner_needed.recommend_by_reason.{reason}",
+        if not recommend and basis in (cat.get("recommend_by_reason") or {}):
+            recommend = _fmt(cat["recommend_by_reason"][basis], f"categories.loop_owner_needed.recommend_by_reason.{basis}",
                              hint=str(na.get("hint") or ""), task_id=task_id)
         subject = _fmt(cat["subject"], "categories.loop_owner_needed.subject", task_id=task_id)
         title = (str(card_fm.get("title") or "").strip() or None) if card_fm else _card_title(card_path, errors, project)
@@ -497,8 +806,11 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
             facts={"run_id": view.get("run_id"), "reason": reason, "driver": view.get("driver"), "envelope": view.get("envelope"),
                    "hint": na.get("hint"), "record_path": view.get("record_path"), "owner_ask_by": ask_rec.get("noted_by")})
         item["relay_to"] = (str(ask_rec.get("noted_by") or "") if advisor_ask else "") or driver or None  # AIPOS-F201: the loop driver is the advisor to tell
+        # AIPOS-F225: first-tier reason (loop status apply_owner_tier; advisor_ask = the note's owner_reason)
+        item["owner_reason"] = (owner_reason_entry((view.get("owner_ask") or {}).get("owner_reason"), decl)
+                                if advisor_ask and isinstance(view.get("owner_ask"), dict) else na.get("owner_reason"))
         try:
-            item["reaudit_hint"] = reaudit_hint(root, project, task_id=task_id, view=view, reason=reason, decl=decl)
+            item["reaudit_hint"] = reaudit_hint(root, project, task_id=task_id, view=view, reason=basis, decl=decl)
         except (OSError, ValueError, LookupError, RuntimeError) as exc:  # hint unreadable = named in errors, item still listed
             item["reaudit_hint"] = None
             errors.append({"project": project, "source": f"重新派审提示 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
@@ -620,6 +932,11 @@ def _needs_owner_items(root: Path, project: str, decl: dict[str, Any], home_root
         ask = _fmt(cat["ask"], "categories.needs_owner_card.ask",
                    reasons="; ".join(reasons + [r for r in [str(meta.get("block_reason") or meta.get("blocked_reason") or "")] if r])
                    or ", ".join(flags) or str(task.get("verdict") or ""))
+        # AIPOS-F225 件③: needs_owner 卡须带第一档事由(卡面 tiers.needs_owner_reason_field); 存量缺 = 照列并标缺(不隐藏阻塞)
+        reason_entry = owner_reason_entry(meta.get(str(tier_declaration(decl)["needs_owner_reason_field"])), decl)
+        if reason_entry is None:
+            ask = f"{ask} " + _fmt(tier_declaration(decl)["texts"]["needs_owner_reason_missing"], "tiers.texts.needs_owner_reason_missing",
+                                   field=str(tier_declaration(decl)["needs_owner_reason_field"]), reasons=owner_reason_keys(decl))
         out.append(_base_item(
             decl, project=project, governance_root=root, category="needs_owner_card", rank=int(cat["rank_by_queue_state"][state]),
             subject=subject, anchor=anchor,
@@ -629,6 +946,7 @@ def _needs_owner_items(root: Path, project: str, decl: dict[str, Any], home_root
             since=str(meta.get("blocked_at") or meta.get("claimed_at") or meta.get("created_at") or meta.get("draft_created_at") or "") or None,
             task_id=task_id, home_root=home_root, title=meta.get("title"),
             facts={"queue_state": state, "flags": flags, "path": task.get("path")}))
+        out[-1]["owner_reason"] = reason_entry
     return out
 
 
@@ -932,7 +1250,7 @@ def _owner_check_items(root: Path, project: str, decl: dict[str, Any], home_root
 
 _COLLECTORS = (("loop_owner_needed", _loop_items), ("needs_owner_card", _needs_owner_items), ("rework_limit", _rework_items),
                ("supplementary_fail", _supplementary_items), ("envelope_warning", _envelope_items), ("roadmap_drift", _roadmap_items),
-               ("owner_check", _owner_check_items))
+               ("owner_check", _owner_check_items), ("auto_released", _auto_release_items))
 
 
 def collect_project_inbox(governance_root: Path, *, project: str | None = None, home_root: Path | None = None,
@@ -948,6 +1266,7 @@ def collect_project_inbox(governance_root: Path, *, project: str | None = None, 
     name = project or root.name
     errors: list[dict[str, str]] = []
     items: list[dict[str, Any]] = []
+    notices: list[dict[str, Any]] = []  # AIPOS-F225: 第二档类别(tiers.categories)事项, 不计待定数
     decided: list[dict[str, Any]] = []
     relays: list[dict[str, Any]] = []
     with task_card_lookup_scope(root):
@@ -962,6 +1281,8 @@ def collect_project_inbox(governance_root: Path, *, project: str | None = None, 
                 errors.append({"project": name, "source": decl["categories"][category]["label"], "error": f"{type(exc).__name__}: {exc}"})
                 continue
             for item in found:
+                if "owner_reason" not in item:  # AIPOS-F225: 类别级第一档事由(tiers.categories.<类别>.owner_reason; 无 = None)
+                    item["owner_reason"] = owner_reason_entry(tier_declaration(decl)["categories"][category].get("owner_reason"), decl)
                 if "relay_to" not in item:  # AIPOS-F201 item 3: the advisor to tell (card driver / item source)
                     item["relay_to"] = _relay_target(root, item, errors, decl)
                 try:
@@ -969,7 +1290,9 @@ def collect_project_inbox(governance_root: Path, *, project: str | None = None, 
                 except FrontmatterReadError as exc:
                     errors.append({"project": name, "source": f"裁决记录 {item['decision_id']}", "error": str(exc)})
                     continue
-                (decided if ruling else items).append(item)
+                tier = category_tier(category, decl)
+                item["owner_tier"] = tier
+                (decided if ruling else items if tier == 1 else notices).append(item)
                 if ruling:  # AIPOS-F201 item 3 (a): ruled, but the truth still stands = the advisor has not continued
                     entry = _decision_relay(root, item, ruling, decl)
                     if entry is not None:
@@ -980,12 +1303,15 @@ def collect_project_inbox(governance_root: Path, *, project: str | None = None, 
             # AIPOS-F213 件②: 选撤换 / 纠正的收件箱裁决尚未执行 = 转达带 --decision-id 的命令(与上面已有转达同一裁决不重复)
             seen = {str(r.get("decision_id")) for r in relays if r.get("decision_id")}
             relays += [r for r in _queue_ruling_relays(root, name, decl, errors) if str(r.get("decision_id")) not in seen]
-    return {"project": name, "governance_root": str(root), "items": items, "decided_hidden": len(decided), "errors": errors,
-            "relays": relays}
+    return {"project": name, "governance_root": str(root), "items": items, "notices": notices, "decided_hidden": len(decided),
+            "errors": errors, "relays": relays}
 
 
 def _sort_key(item: dict[str, Any]) -> tuple[Any, ...]:
-    return (int(item["rank"]), str(item.get("since") or "9999"), item["project"], item["item_id"])
+    """AIPOS-F225: 第一档事由 ∈ tiers.tier1.inbox_last(验收抽查)的事项排末尾(可攒着批量看); 其余按 rank / 发生时刻。"""
+    last = set(tier_declaration()["tier1"].get("inbox_last") or [])
+    reason = str((item.get("owner_reason") or {}).get("key") or "")
+    return (reason in last, int(item["rank"]), str(item.get("since") or "9999"), item["project"], item["item_id"])
 
 
 def home_projects(home_root: str | Path | None = None) -> dict[str, Any]:
@@ -1478,6 +1804,7 @@ def _collect_inbox(home_root: str | Path | None, *, project: str | None, include
             raise ValueError(f"项目 {project!r} 不在 home 根 {home} 的已注册项目中(5_tasks/queue + project.json 同在): {names}")
         names = [project]
     items: list[dict[str, Any]] = []
+    notices: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     relays: list[dict[str, Any]] = []
     hidden = 0
@@ -1497,14 +1824,17 @@ def _collect_inbox(home_root: str | Path | None, *, project: str | None, include
                 continue
         part = collect_project_inbox(home / name, project=name, home_root=home, decl=decl, categories=categories)
         items += part["items"]
+        notices += part["notices"]
         errors += part["errors"]
         relays += part["relays"]
         hidden += part["decided_hidden"]
     items.sort(key=_sort_key)
+    notices.sort(key=_sort_key)
     groups = relay_groups(relays)
     for group in groups:  # AIPOS-F201: JSON / API carry the paragraph in the default language (the CLI text, byte for byte)
         group["lines"] = relay_lines(group)
     return {"home_root": str(home), "home_source": source, "projects": [n for n in names if n not in paused], "items": items,
+            "notices": notices, "notice_count": len(notices),
             "decided_hidden": hidden, "paused_hidden": paused, "errors": errors, "count": len(items), "relays": groups,
             "relay_count": len(groups)}
 
@@ -1516,6 +1846,8 @@ def _collect_inbox(home_root: str | Path | None, *, project: str | None, include
 def item_lines(item: dict[str, Any], texts: dict[str, Any]) -> list[str]:
     """One inbox item as the CLI lines (AIPOS-F181: the board folds the same lines into an item's "show details")."""
     lines = [_fmt(texts["item"], "texts.item", **item), _fmt(texts["ask"], "texts.ask", ask=item["ask"])]
+    if item.get("owner_reason"):  # AIPOS-F225: 第一档事由
+        lines[-1] += _fmt(tier_declaration()["texts"]["owner_reason_part"], "tiers.texts.owner_reason_part", **item["owner_reason"])
     if item.get("grant"):  # AIPOS-F180: authorization request, one plain-language line (same data as the board request card)
         lines.append(grant_line(item))
     elif item.get("grant_error"):
@@ -1553,6 +1885,12 @@ def render_inbox_text(inbox: dict[str, Any]) -> str:
     for item in inbox["items"]:
         out.append("")
         out.extend(item_lines(item, texts))
+    notices = inbox.get("notices") or []
+    if notices:  # AIPOS-F225: 第二档(已自动放行 / 告知)一行一项, 不计待定数
+        tt = tier_declaration()["texts"]
+        out.append("")
+        out.append(_fmt(tt["notices_header"], "tiers.texts.notices_header", count=len(notices)))
+        out.extend(_fmt(tt["notice_item"], "tiers.texts.notice_item", **n) for n in notices)
     groups = inbox.get("relays") or []
     if groups:  # AIPOS-F201 item 3: decided / signed, the advisor has not continued yet (same paragraphs as the board)
         rt = relay_texts()
@@ -1860,7 +2198,8 @@ def _release_blocked(resp: dict[str, Any] | None) -> bool:
 def find_items(item_ids: list[str], *, home_root: str | Path | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """收件箱只算一次, 逐 ID 取事项; 任一不在 = InboxItemNotFound(点名全部缺的)。暂停项目照列(裁决口不受缺省视图影响)。"""
     inbox = collect_inbox(home_root, include_paused=True)
-    by_id = {item["item_id"]: item for item in inbox["items"]}
+    # AIPOS-F225: 第二档事项(notices: 已自动放行 / 告知)不计待定数, 但仍可裁决(撤回 / 知悉 / 接受)
+    by_id = {item["item_id"]: item for item in [*inbox["items"], *(inbox.get("notices") or [])]}
     missing = [i for i in item_ids if i not in by_id]
     if missing:
         raise InboxItemNotFound(f"收件箱中无事项 {', '.join(missing)}(已裁决 / 已自行解除 / ID 错; 当前 {inbox['count']} 项, "

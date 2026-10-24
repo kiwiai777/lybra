@@ -389,8 +389,9 @@ def test_item1_overview_cards_and_links(board):
     _show(f"[①·总览卡片 {P1} HTML 原文] {card1}\n[①·总览卡片 {P2} HTML 原文] {card2}")
     # AIPOS-F181: in flight / to do / closed from machine_zone.card_stats
     assert 'data-inflight="1" data-todo="1" data-closed="2"' in card1 and "在途 1 张 · 待办 1 张 · 已结案 2 张" in card1
-    assert re.search(r'data-inbox-count="(\d+)"', card1).group(1) == "2"  # 逾期 + 无卡覆盖 两条严重偏差进收件箱
-    assert 'href="/owner/inbox"' in card1 and "待你决定 2 件" in card1
+    # AIPOS-F225: 路线图偏差(逾期 / 无卡覆盖)归第二档(路线图页展示), 不进 Owner 待决件数
+    assert re.search(r'data-inbox-count="(\d+)"', card1).group(1) == "0"
+    assert 'href="/owner/inbox"' in card1 and "待你决定 0 件" in card1
     assert 'data-envelope-state="ok"' in card1 and f'href="/owner/envelopes?project={P1}"' in card1 and "pol_alpha_loop_1" in card1
     assert "路线图:标准满足 1/4 · 里程碑 2 个 · 偏差" in _html.unescape(card1) and f'href="/owner/roadmap?project={P1}"' in card1
     assert 'data-met="1" data-total="4"' in card1

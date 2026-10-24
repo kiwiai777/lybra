@@ -352,9 +352,15 @@ lybra project cleanup-worktrees --workspace-root <治理根> --confirm   # 删�
 #### Owner 待决: `lybra loop note` / `lybra owner inbox` / `lybra owner decide`(AIPOS-F168 / F170)
 **何时用**: loop status 给 `owner_needed` 时(怎么停见顾问章程「持续推进守则」)。所有项目需 Owner 定的事集中在一个收件箱, Owner 在那里看、定;
 Owner 对你口头说了裁决, 由你落记录(写明你转达、Owner 原话)。任何项目同一组命令, 在治理根所在机运行。
-1. **报 owner_needed 前先写清要定什么**(写进本卡最近一次运行记录, 收件箱据此展示要定什么 / 选项 / 建议; 缺省预演, `--confirm` 写入并自动落账):
+**Owner 介入分级**(AIPOS-F225, 声明 verbs.schema `lybra_owner_inbox.tiers`): 收件箱只列**第一档**(方向 / 设计分叉、改验收 / 换候选 / 改范围、
+超出项目授权、超预算 / 超期限、撤卡 / 放弃、返工超硬上限、顾问与审计结论冲突、验收抽查——验收抽查排末尾);
+**第二档**(范围不变的返工自动追加到硬上限 4 轮、环境 / 产品有变化后自动重新派审、补审 FAIL 自动派修复卡、路线图偏差、信封将尽、已自动放行记录)
+在 `lybra owner inbox` 末段「第二档 · 已自动放行 / 告知」, 不计待定数, Owner 可对「已自动放行」事项选 `revoke_auto` 撤回(撤回后本卡停住, loop 以
+`auto_release_revoked` 结束, 待 Owner 另定); **第三档**技术故障 loop status 直接给 `advisor_fix` / `investigate`(detail「第三档(归顾问)」+ 理由), 你自处理。
+1. **报 owner_needed 前先写清要定什么**(写进本卡最近一次运行记录, 收件箱据此展示要定什么 / 选项 / 建议 / 第一档事由; 缺省预演, `--confirm` 写入并自动落账;
+   `--owner-reason` 必带, 键 ∈ `tiers.tier1.reasons`, 缺或不在清单 = 拒写(exit 6)并指回你自处理; 只给 `--grant-*` 授权建议时缺省 `beyond_authority`):
 ```bash
-lybra loop note --task-id <卡ID> --workspace-root <治理根> --actor <你的顾问实例> --ask "<要定什么>" --options <键=标签> --recommend "<建议>"
+lybra loop note --task-id <卡ID> --workspace-root <治理根> --actor <你的顾问实例> --ask "<要定什么>" --owner-reason <第一档事由键> --options <键=标签> --recommend "<建议>"
 ```
 2. **Owner 看收件箱**(只读; 看板 /owner/inbox 同一数据; project.json `status: paused` 的项目缺省不列, `--include-paused` 可看;
    `--stale-before <日期>` = 遗留视图: 按项目分组每项一行「卡 / 标题 / 卡住原因 / 建议: 撤回 | 冻结为历史 | 保留」, 并给同建议的批量裁决命令):
@@ -375,7 +381,8 @@ lybra owner decide --items <事项ID>,<事项ID> --choice freeze_legacy --relaye
    **看板转达话术**(AIPOS-F201): Owner 在看板收件箱每个待决项的每个选项下都能复制一段「告诉 <驱动顾问>」的话术(点名你、带上面这条预演命令与下一步);
    Owner 签发 / 定夺后, 收件箱顶部「已定待转达」(CLI `lybra owner inbox` 末段同文)按顾问合并列出你还没接着做的事(信封 id / 决策 id + 下一条命令),
    你接着做(续跑 loop / 认领)后自动消失。驱动顾问 = 本卡最近 loop 运行的 driver, 无运行 = 卡面 planner_agent / created_by。
-   **重新派审**(AIPOS-F202): 审计连续 BLOCK 升 Owner(`owner_needed(audit_blocked_repeated)`)的事项恒有选项 `reaudit`=「环境 / 产品已修好, 重新派审」
+   **重新派审**(AIPOS-F202; AIPOS-F225 起为手动兜底——常规出口是第二档自动重新派审: 自上次 BLOCK 起部署或验证根有变化, 原命令重跑 loop 即自动派审并留记录):
+   审计连续 BLOCK 的事项(Owner 撤回自动重审后 / 判不出变化而你确要 Owner 定时)恒有选项 `reaudit`=「环境 / 产品已修好, 重新派审」
    (另有 `wait_product`=等修复、`rescope` 改卡面验收等)。Owner 定后 `lybra owner decide --item <OI-…> --choice reaudit --relayed-by <你的顾问实例> --owner-words "<Owner原话>" --home-root <home根>`
    预演再 `--confirm`(可加 `--note <修了什么>`), 然后原命令重跑 loop: 连续 BLOCK 以该裁决为界重新计数, 产品派下一轮审计(R 序号续增)并照常拉起审计;
    新一轮再 BLOCK 1 次 = 例行修环境重审, 连续到声明次数再升 Owner。历史裁决 / 审计卡不改, 不要手改记录或「重置次数」。之前选过 `wait_product`、
@@ -549,7 +556,9 @@ lybra mark-concluded --task-id <卡ID> --actor <你的顾问实例> --report-pat
 ```bash
 lybra mark-concluded --task-id <卡ID> --actor <你的顾问实例> --report-path <Return相对路径> --outcome rework --focus-items '["<返工要点>"]' --acceptance-criteria '["<验收标准>"]' --dry-run
 ```
-   产品落一条顾问复核记录(`records/events/<卡ID>/advisor_review_*.md`)+ 返工轮(与 `queue rework` 同一写函数, 轮次上限同, 超限拒 = 升仲裁:
+   产品落一条顾问复核记录(`records/events/<卡ID>/advisor_review_*.md`)+ 返工轮(与 `queue rework` 同一写函数, 轮次上限同; AIPOS-F225: 到上限后
+   卡面候选 / 验收 / 范围自发布起未变 = 门自动追加到硬上限 4 轮, 轮次记 `auto_extension_ref` 并落自动放行记录 `records/events/<卡ID>/auto_release_*.md`,
+   Owner 可撤回; 改过验收 / 发布基线不可核 / 到硬上限 = 拒, 升仲裁:
    去掉 `--dry-run` 的超限打回照落复核记录并自动进 Owner 收件箱「返工轮次达上限」, Owner 选「授权本卡追加一轮返工」(extend_rework)后同一命令
    (或审计裁决型卡的 `queue rework`)重跑即登记该轮, 每个裁决只放一轮, AIPOS-F222; `lybra loop note` 回显请求进了哪个收件箱事项, 进不了 = 拒写);
    loop 拉起执行体按返工节重写交回 → 重交回 → 回到你复核(早于该轮登记的旧改写不算); 同一交回不重复打回。**别对快车道卡跑
