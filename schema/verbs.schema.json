@@ -417,7 +417,12 @@
     "run_record_field": "lane_overlaps: 本卡认领步执行前判出的重叠 [{other, other_state, repo, paths, line, at}](无重叠 = 不出现本键, 存量记录形不变)"
   },
   "board_readonly": {
-    "description": "AIPOS-F171 件③(Owner 10-16 裁定: web 看板现阶段只读展示、零写入, Owner 交互经顾问 agent; gap #155): 看板全部业务写接口下线——除 allowed_post_paths(鉴权 / 登录通道)外, 任何 POST / PUT / PATCH / DELETE 一律返回 status + 下方应答(不调用任何写实现), 前端不再提供写按钮(需 Owner 动作处给「告诉顾问: …」与对应顾问命令)。不修鉴权(鉴权路由照旧)。唯一实现 web/board/app.py dispatch_api_request(读本段; 原 POST 业务路由表 _api_post_routes 删除)。AIPOS-F172: 唯一写例外 = Owner 信封签发一条路由(声明 board_owner_envelopes.write_path, 只对 Owner 会话), 其余写请求照旧按本段应答。",
+    "description": "AIPOS-F171 件③(Owner 10-16 裁定: web 看板现阶段只读展示、零写入, Owner 交互经顾问 agent; gap #155): 看板全部业务写接口下线——除 allowed_post_paths(鉴权 / 登录通道)外, 任何 POST / PUT / PATCH / DELETE 一律返回 status + 下方应答(不调用任何写实现), 前端不再提供写按钮(需 Owner 动作处给「告诉顾问: …」与对应顾问命令)。不修鉴权(鉴权路由照旧)。唯一实现 web/board/app.py dispatch_api_request(读本段; 原 POST 业务路由表 _api_post_routes 删除)。AIPOS-F172: 唯一写例外 = Owner 信封签发一条路由(声明 board_owner_envelopes.write_path, 只对 Owner 会话), 其余写请求照旧按本段应答。AIPOS-F226: 写例外清单 = write_exceptions(只追加; 均只对 Owner 会话, 均经 F172 同一安全框架 envelope_board.handle_owner_write): ① 信封签发 ② 项目升级 ③ 收件箱裁决(Owner 10-24 设计稿 §5 修改 10-16「看板只读」裁定)。",
+    "write_exceptions": {
+      "envelope_mint": "board_owner_envelopes.write_path",
+      "project_upgrade": "verbs.lybra_project_upgrade.board.write_path",
+      "owner_inbox_decide": "verbs.lybra_owner_inbox.board.decide.write_path"
+    },
     "status": 405,
     "error": "BOARD_READ_ONLY",
     "message": "看板只读, 请经顾问",
@@ -3365,7 +3370,56 @@
       "surface": ["cli", "board"],
       "cli_command": "lybra owner inbox",
       "single_implementation": "tools/aipos_cli/owner_inbox.collect_inbox / render_inbox_text / inbox_sections_html(AIPOS-F180: 看板页正文段, 骨架 web/board/readonly_pages.render_owner_inbox)",
-      "board": {"page": "/owner/inbox", "api": "/api/owner/inbox"},
+      "board": {
+        "page": "/owner/inbox",
+        "api": "/api/owner/inbox",
+        "decide": {
+          "description": "AIPOS-F226(Owner 10-24「选完复制, 再加上你那一段? 这对我来说太繁琐, 而且大大拖慢产品进度」; 设计稿 governance/research/2026-10-24-owner-intervention-tiers-design.md §5): 看板写例外③ = 收件箱一键裁决。Owner 会话在「待你决定」页对每个事项每个选项一个按钮(可选填一句 Owner 原话): 点 → POST write_path stage=preview → 预演(owner_inbox.decide 同一实现的预演: 将写的决策记录与解除动作预演, 零写入)→ 确认 stage=confirm → owner_inbox.decide(--confirm 同一实现: 决策记录经门侧同一执行 board_adapter.execute_dry_run, 有 effect 的选项 release / withdraw / freeze_legacy 走同一解除口, 落账经同一 land_after_write)。安全判定全部经 F172 同一框架 envelope_board.handle_owner_write(Owner 角色会话 / Origin 与 Host 相符 / JSON 体 / workspace = home 根注册项目 / 本会话一次性预演令牌(F172 同一张令牌表与时效, 绑定会话指纹 + 参数摘要)/ 确认核令牌六类 / 每次预演与确认含被拒写看板审计日志, 确认前写不进 = 拒), 不另立第二套鉴权 / 令牌 / 日志。参数摘要 = {action, project, governance_root, item_id, choice, owner_words, item_hash(所裁事项规范 JSON 的 sha256, 与决策记录 evidence_hash 同一构造)}: 预演后事项真相变了 = 确认拒(ITEM_NOT_FOUND / PREVIEW_PARAMS_MISMATCH); 已有裁决(重复确认 / 他处已裁)= ALREADY_RULED(点名决策记录), 零写入。记录字段: decided_by_ref = 会话 Owner 角色; relayed_by = verbs.lybra_owner_decide.relay.owner_self(Owner 本人, 无转达人); captured_by / owner_approval_evidence.captured_by = F172 同一模板 board_owner_envelopes.captured_by_template(看板 Owner 会话 + 凭据引用 + 会话指纹); capture_surface / capture_method / capability_scope.token_ref = 本段同名键; owner_approval_evidence.evidence_ref = F172 同一模板 board_owner_envelopes.rationale_template(会话指纹 / 登录方式 / 来源 IP / 凭据引用); decision_rationale = decision.owner_words_prefix + Owner 原话(未填 = relay.texts.choice_owner_words, 即「看板选「<选项标签>」」)。不给按钮(excluded_categories / decide_redirect): 验收抽查 owner_check(经 lybra roadmap verify 记 owner_verifications, 不是收件箱裁决)。授权请求卡: 签发仍走 F172 写例外①(按建议签发), 「不批准」= 本写例外 choice=deny_grant 一键记录(同一 decide, 原给命令改为按钮 + 兜底命令)。成功 = 整页按服务端真相刷新到 page?<ruled_param>=<事项ID>, 横幅 = 「已裁决 → 将由 <顾问> 的下一次 loop 接续」(顾问 = 该事项转达对象 relay_to; 事项仍在「已裁决待接续」= relays 同一推导时取该段顾问)。原逐选项话术(relay.choice_script)默认折叠为「顾问没跟上时可复制」兜底。看板只读裁定(10-16)的写例外由「信封签发、项目升级」增加本「收件箱裁决」(board_readonly.write_exceptions)。",
+          "write_path": "/api/owner/inbox/decide",
+          "script_path": "/inbox-decide.js",
+          "action": "owner_inbox_decide",
+          "capture_surface": "board",
+          "capture_method": "lybra_board_inbox_decide_confirm",
+          "token_ref": "owner_inbox_board",
+          "ruled_param": "ruled",
+          "owner_words_max_chars": 200,
+          "excluded_categories": ["owner_check"],
+          "texts": {
+            "preview_lines": [
+              "将记录 Owner 本人裁决(看板 Owner 会话, 未写入; 确认后落 owner_decision_record 并自动落账):",
+              "  事项: {item_id} {project} / {subject}({category_label})",
+              "  选项: {choice}({label})",
+              "  Owner 原话: {owner_words}",
+              "  决策记录: {target_path}(预演 {verdict})",
+              "  记录人: {captured_by}(来源 {capture_surface})",
+              "  解除动作: {release_line}",
+              "  顾问下一步(将由 {advisor} 的下一次 loop 读到): {advisor_next}"
+            ],
+            "relay_part": "(Owner 本人在看板裁决; Owner 原话: 「{owner_words}」)",
+            "release_none": "无(本选项只记录裁决)",
+            "release_part": "{effect}(既有队列出口预演: ok={ok} verdict={verdict})"
+          },
+          "errors": {
+            "OWNER_ONLY": {"status": 403, "message": "只有 Owner 登录会话可以在看板裁决; 其他角色请告诉顾问"},
+            "ORIGIN_MISMATCH": {"status": 403, "message": "请求来源与看板地址不符(跨站请求拒绝)"},
+            "WORKSPACE_REQUIRED": {"status": 400, "message": "请求须带 workspace(home 根已注册项目名)"},
+            "WORKSPACE_NOT_IN_HOME": {"status": 400, "message": "workspace {workspace!r} 不是 home 根 {home_root} 的已注册项目: {projects}"},
+            "PARAMS_INVALID": {"status": 400, "message": "参数不合: {detail}"},
+            "STAGE_INVALID": {"status": 400, "message": "stage 须为 preview 或 confirm"},
+            "ITEM_NOT_FOUND": {"status": 409, "message": "收件箱中已无事项 {item_id}(已自行解除 / 真相已变); 刷新页面看最新事项"},
+            "ALREADY_RULED": {"status": 409, "message": "事项 {item_id} 已裁决(决策记录 {decision_id}: 选 {choice} @ {decided_at}); 重复确认不再写入, 刷新页面看接续状态"},
+            "CHOICE_INVALID": {"status": 400, "message": "选项不可用: {detail}"},
+            "PREVIEW_BLOCKED": {"status": 422, "message": "裁决预演被拒(未发预演令牌, 零写入): {detail}"},
+            "PREVIEW_TOKEN_REQUIRED": {"status": 403, "message": "确认须携带本会话的预演令牌(先预演)"},
+            "PREVIEW_TOKEN_INVALID": {"status": 403, "message": "预演令牌无效或已用过(单次即焚, 重复确认 = 拒); 请重新预演"},
+            "PREVIEW_TOKEN_EXPIRED": {"status": 403, "message": "预演令牌已过期({ttl} 秒); 请重新预演"},
+            "PREVIEW_SESSION_MISMATCH": {"status": 403, "message": "预演令牌不属于本会话; 请在本会话重新预演"},
+            "PREVIEW_PARAMS_MISMATCH": {"status": 403, "message": "确认参数与预演不一致(预演后改过选项 / 原话, 或事项真相已变); 请重新预演"},
+            "AUDIT_LOG_UNAVAILABLE": {"status": 503, "message": "看板审计日志写不进({detail}), 拒绝裁决(每次裁决须留痕)"},
+            "DECIDE_FAILED": {"status": 409, "message": "裁决未完成: {detail}"}
+          }
+        }
+      },
       "parameters": {
         "type": "object",
         "properties": {
@@ -3598,8 +3652,8 @@
         },
         "texts": {
           "zh": {
-            "section_heading": "已定待转达 · 告诉顾问继续({count} 段)",
-            "section_note": "下面是你已签发 / 已决定、但顾问还没接着做的事, 按顾问合并成段; 把整段复制给对应顾问即可。顾问接着做之后这里自动消失。",
+            "section_heading": "已裁决待接续 · 顾问下次 loop 自动接续({count} 段)",
+            "section_note": "下面是你已签发 / 已裁决、顾问还没接着做的事, 按顾问合并成段。顾问下一次跑 lybra loop / lybra next 会直接读到你的裁决接着做, 不用你转达; 顾问没跟上时再把整段复制给他。顾问接着做之后这里自动消失。",
             "cli_heading": "已定待转达 — {count} 段(复制给对应顾问; 顾问接着做后自动消失):",
             "tell": "告诉 {advisor}:",
             "lead": "Owner 已处理下面 {count} 件事, 请用产品命令接着做(写命令一律先预演, 核对无误再加 --confirm):",
@@ -3615,8 +3669,8 @@
             "unknown_advisor": "<该卡驱动顾问>"
           },
           "en": {
-            "section_heading": "Decided, to relay · tell the advisors to continue ({count})",
-            "section_note": "Things you have signed / decided that the advisor has not picked up yet, one paragraph per advisor; copy the whole paragraph to that advisor. Each one disappears once the advisor continues.",
+            "section_heading": "Decided, waiting for the advisor · picked up on the next loop ({count})",
+            "section_note": "Things you have signed / decided that the advisor has not picked up yet, one paragraph per advisor. The advisor's next lybra loop / lybra next reads your decision and continues, no relaying needed; only if the advisor falls behind, copy the whole paragraph to them. Each one disappears once the advisor continues.",
             "cli_heading": "Decided, to relay — {count} paragraph(s) (copy to each advisor; disappears once the advisor continues):",
             "tell": "Tell {advisor}:",
             "lead": "The Owner has handled the {count} thing(s) below; continue with product commands (every write command: preview first, add --confirm once it checks out):",

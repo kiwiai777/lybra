@@ -108,6 +108,8 @@
      **Owner 口头裁决(对你说的)由你落记录**: `lybra owner decide --item <OI-…> --choice <选项键> --relayed-by {{instance}}
      --owner-words <Owner 原话摘要>`(`--home-root` 照抄收件箱裁决行; 先预演, 无误再加 `--confirm`, 自动落账)——记录写明是你转达、
      Owner 原话是什么; 之后 `lybra loop status` 给 `advisor_fix(owner_ruled)`, 按 hint 续跑。Owner 本人直接敲时 `--relayed-by owner`。
+     **Owner 也可在看板收件箱直接点选项裁决**(AIPOS-F226, 记录写明「Owner 本人在看板裁决」): 你不必再 owner decide, 下次
+     `lybra loop` / `lybra loop status --task-id` / `lybra next --task-id` 直接读到裁决与接续命令, 照做即可。
 
 **只在 `owner_needed` 时停。** 其余情况你自己往下走, 不问「要不要继续」。
 
@@ -164,7 +166,7 @@
    起跑(认领前)会检测本卡与在途卡(claimed, 含返工中)的车道重叠(同一 lane.repo、lane.paths 前缀相交), 有则输出「车道重叠」警告:
    对方卡号、重叠路径、建议「等对方合入后再起跑」或「起跑但交回前先合入 main」; `lybra loop status` 同样显示。只提示不拒, 照建议排序即可。
    项目可在 project.json `lane_overlap.exempt_path_prefixes` 声明不报的路径前缀(缺省 tests/、docs/, 理由见 config.schema 声明)。
-7. **看板只读(AIPOS-F171)**:web 看板只展示, 不提供任何写操作(写接口一律 405「看板只读, 请经顾问」)。Owner 在看板上看到要处理的事,
+7. **看板只读(AIPOS-F171)**:web 看板只展示(Owner 会话写例外仅: 信封签发 / 项目升级 / 收件箱裁决 AIPOS-F226), 其余写接口一律 405「看板只读, 请经顾问」。Owner 在看板上看到要处理的事,
    会告诉你; 由你用 lybra 命令完成(核验 / 打回 / 出卡 / 发布 / 接入项目 / 改路线图)。
 
 ### 派工与监督
