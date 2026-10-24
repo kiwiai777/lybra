@@ -63,7 +63,7 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
               title=f"{tid} 人肉期遗留")
     _card(alpha, "ALPHA-P1", "pending", ALPHA, needs_owner=True, created_at="2026-08-15T00:00:00Z", title="ALPHA-P1 早期草案")
     _card(alpha, "ALPHA-L1", "claimed", ALPHA, title="ALPHA-L1 在推卡")
-    _owner_needed_run(alpha, "ALPHA-L1", DRIVER)  # 近期(今天)= 不算遗留
+    _owner_needed_run(alpha, "ALPHA-L1", DRIVER, owner_reason="direction_fork")  # 近期(今天)= 不算遗留; AIPOS-F225: 顾问带第一档事由升
     _card(gamma, "GAMMA-1", "blocked", GAMMA, needs_owner=True, blocked_by=f"advisor.{GAMMA}.h1", blocked_at="2026-08-20T00:00:00Z",
           block_reason="客户暂停", title="GAMMA-1 客户侧阻塞")
     remote = init_governance_repo(hroot)
@@ -252,7 +252,7 @@ def test_item3_decide_requires_relayed_by_and_owner_words(home):
 def test_item3_relay_recorded_and_shown_on_advisor_side(home):
     rc, text = _cli("loop", "note", "--task-id", "ALPHA-L1", "--workspace-root", str(home["alpha"]), "--actor", DRIVER,
                     "--ask", "接口改法二选一", "--options", "plan_a=方案A 改接口", "plan_b=方案B 加适配层",
-                    "--recommend", "建议 plan_b", "--confirm")
+                    "--recommend", "建议 plan_b", "--owner-reason", "direction_fork", "--confirm")
     assert rc == 0, text
     (iid,) = _ids(home, "ALPHA-L1")
     rc, text = _cli("owner", "decide", "--item", iid, "--choice", "plan_b", "--home-root", str(home["home"]),

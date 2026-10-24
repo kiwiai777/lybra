@@ -100,12 +100,13 @@ def test_item1_subagent_wait_timeout_is_routine_advisor_fix(rig):
     assert f"lybra loop --task-id {TASK} --workspace-root {gov} --actor {DRIVER} --envelope {POLICY}" in out
     report = json.loads(_cli("loop", "status", "--task-id", TASK, "--workspace-root", str(gov), "--json")[1])
     assert report["next_action"]["action"] == "advisor_fix" and report["next_action"]["execution_mode"] == "subagent"
-    # 同一例行结束原因连续 3 次 = 升 owner_needed(routine_fix_exhausted), 与其他例行结束原因同一计数实现
+    # 同一例行结束原因连续 3 次 = 原判 owner_needed(routine_fix_exhausted), 与其他例行结束原因同一计数实现;
+    # AIPOS-F225 归档第三档 = investigate(归顾问)
     for _ in range(2):
         _run_until_wait_timeout(gov, {})
     na = lrr.loop_status(gov, TASK)["next_action"]
     _show(f"[件①·第 3 次连续 wait_timeout] {na['action']}({na['reason']}): {na['detail']}")
-    assert na["action"] == "owner_needed" and na["reason"] == "routine_fix_exhausted"
+    assert na["action"] == "investigate" and na["reason"] == "routine_fix_exhausted" and na["tier_from"]["action"] == "owner_needed"
 
 
 def test_item1_pi_mode_wait_timeout_still_owner_needed(rig):
@@ -121,8 +122,9 @@ def test_item1_pi_mode_wait_timeout_still_owner_needed(rig):
     assert "顾问下一动作: continue_wait(manual_kickoff)" in out and "子 agent 模式" not in out and "敲 /go" in out
     rc, out, err = _cli("loop", "status", "--task-id", TASK, "--workspace-root", str(gov), "--wait", "5")
     _show(f"---- 件①·pi 模式等交回超时原文 exit {rc} ----\n{out}{err}")
-    assert rc == declared_exit_code("lybra_loop_status", "owner_needed") == 5
-    assert "顾问下一动作: owner_needed(wait_timeout)" in out and "请 Owner 在工位敲 /go" in out
+    # AIPOS-F225: pi 模式等交回超时原判 owner_needed(wait_timeout), 归档第三档 advisor_fix(工位未交产物是执行侧技术问题, 顾问查工位)
+    assert rc == declared_exit_code("lybra_loop_status", "advisor_fix") == 7
+    assert "顾问下一动作: advisor_fix(wait_timeout) — 第三档(归顾问, AIPOS-F225)" in out and "请 Owner 在工位敲 /go" in out
 
 
 def test_item1_undeclared_execution_unchanged(rig):
@@ -132,7 +134,8 @@ def test_item1_undeclared_execution_unchanged(rig):
     init_governance_repo(gov)
     _run_until_wait_timeout(gov, {})
     na = lrr.loop_status(gov, TASK)["next_action"]
-    assert na["action"] == "owner_needed" and na["reason"] == "wait_timeout" and "execution_mode" not in na
+    assert na["tier_from"] == {"action": "owner_needed", "reason": "wait_timeout"} and "execution_mode" not in na  # AIPOS-F225: 原判不变
+    assert na["action"] == "advisor_fix" and na["reason"] == "wait_timeout"
     view = {"task_id": TASK, "wait_card": f"{TASK}R"}
     _declare_subagent(gov)
     assert lrr.run_execution_mode(gov, view) == (None, "")  # 等的是审计卡: 不适用
@@ -295,7 +298,8 @@ def test_item2_loop_refuses_other_owners_card(three, tmp_path):
     assert not f134.TokenGate.calls  # 拒在任何门动词之前(未认领)
     rc, status, err = _cli("loop", "status", "--task-id", OTA_PUB, "--workspace-root", str(gov), "--wait", "5")
     _show(f"---- 件②·被拒运行的顾问下一动作原文 exit {rc} ----\n{status}{err}")
-    assert rc == declared_exit_code("lybra_loop_status", "owner_needed") and "顾问下一动作: owner_needed(card_owner_mismatch)" in status
+    # AIPOS-F225: 卡归属不符 = 第三档(顾问之间的分工), 原判 owner_needed 改判 advisor_fix
+    assert rc == declared_exit_code("lybra_loop_status", "advisor_fix") and "顾问下一动作: advisor_fix(card_owner_mismatch) — 第三档" in status
     # 自报归属不作拒据; 总顾问不受限; 归属本实例照常
     from tools.aipos_cli.autonomy_policy import load_policy
     from tools.aipos_cli.frontmatter import require_frontmatter

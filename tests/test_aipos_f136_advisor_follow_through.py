@@ -164,7 +164,7 @@ def test_item1_owner_needed_authorization_no_envelope(rig):
 
 def test_item1_manual_kickoff_continue_wait_then_owner_needed(rig):
     """手工模式: loop 在等工位时 = continue_wait(reason=manual_kickoff, 附开工提示, 顾问向 Owner 说一次后继续等);
-    等到 loop 自己的 max_wait 结束 = owner_needed(wait_timeout: 工位开工)。"""
+    等到 loop 自己的 max_wait 结束 = 原判 owner_needed(wait_timeout), AIPOS-F225 起第三档归顾问 advisor_fix。"""
     f90._card(rig.gov, TASK, "pending")
     init_governance_repo(rig.gov)
     seen: dict = {}
@@ -182,7 +182,8 @@ def test_item1_manual_kickoff_continue_wait_then_owner_needed(rig):
     assert res.outcome == "wait_timeout"
     rc, text = _status(rig.gov, "--wait", "5")
     _show(f"---- ① status --wait(手工模式等待超时结束)原文 exit {rc} ----\n{text}")
-    assert rc == _code("owner_needed") and "owner_needed(wait_timeout) — 工位开工" in text
+    # AIPOS-F225: 等待超时 = 第三档(技术问题归顾问): 原判 owner_needed(wait_timeout) 改判 advisor_fix, detail 带原判事由与理由
+    assert rc == _code("advisor_fix") and "advisor_fix(wait_timeout) — 第三档(归顾问, AIPOS-F225)" in text and "工位开工" in text
 
 
 def test_item1_consecutive_failures_escalate_to_owner_needed(rig):
@@ -202,7 +203,9 @@ def test_item1_consecutive_failures_escalate_to_owner_needed(rig):
                  watch=watch)
     rc, text = _status(rig.gov, "--wait", "5")
     _show(f"---- ① status --wait(连败)原文 exit {rc} ----\n{text}")
-    assert rc == _code("owner_needed") and "owner_needed(consecutive_failures) — 连败" in text and "连续 2 次" in text
+    # AIPOS-F225: 连败 = 第三档(技术故障聚合归顾问 investigate), detail 保留原判事由「连败 … 连续 2 次」
+    assert rc == _code("investigate") and "investigate(consecutive_failures) — 第三档(归顾问, AIPOS-F225)" in text
+    assert "连败" in text and "连续 2 次" in text
     assert len(_runs(rig.gov)) == 2
 
 

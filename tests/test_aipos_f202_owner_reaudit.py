@@ -16,6 +16,7 @@ audit_blocked_repeated exit 4——连续 BLOCK 计数无视 Owner 裁决, 收�
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import shlex
@@ -116,10 +117,55 @@ def _two_blocks(rig) -> str:
     return text
 
 
-def test_reaudit_entry_end_to_end(rig):
+def _no_auto_reaudit(monkeypatch) -> None:
+    """AIPOS-F225: 连续 BLOCK 的常规出口改为第二档自动重新派审(部署 / 验证根有变化即自动); 本文件验的是 Owner「重新派审」手动兜底,
+    故把自动判定钉为「判不出变化」(next_resolver.auto_reaudit_check 唯一判定, loop 与 loop status 同读)。"""
+    real = nr.auto_reaudit_check
+
+    def no_auto(*a, **k):
+        return {**real(*a, **k), "eligible": False, "why": "fixture: 自动重新派审判不出变化(手动兜底路径)"}
+
+    monkeypatch.setattr(nr, "auto_reaudit_check", no_auto)
+
+
+@contextlib.contextmanager
+def _verdicts_later(monkeypatch, seconds: int):
+    """门侧裁决写入时刻(board_adapter.iso_z)取 seconds 秒后: 连续 BLOCK 计数按秒级时刻比「裁决之后」, 进程内靶场一秒内可走完
+    「Owner 裁决 → 派审 → 新一轮 BLOCK」, 同秒会被判作界前(F202 计数口径); 夹具让新裁决确定落在后一秒。"""
+    from datetime import timedelta
+
+    from tools.aipos_cli import board_adapter
+    from tools.aipos_cli.clock import iso_z, utc_now
+
+    with monkeypatch.context() as m:
+        m.setattr(board_adapter, "iso_z", lambda moment=None: iso_z((moment or utc_now()) + timedelta(seconds=seconds)))
+        yield
+
+
+def _escalate(rig, monkeypatch=None) -> None:
+    """AIPOS-F225: 第二档未自动放行 = 归顾问; 顾问修不动且确属第一档(改验收 / 换审计环境 = rescope)才带事由升 Owner。
+    monkeypatch 给出 = 补写时刻取 2 秒后(秒级时刻: 与上一条 Owner 裁决同秒补写会被 F222 判作「补写后已有裁决 = 已回应」而拒写)。"""
+    from datetime import timedelta
+
+    from tools.aipos_cli import loop_run_record as lrr
+    from tools.aipos_cli.clock import utc_now
+
+    later = utc_now() + timedelta(seconds=2)
+    with (monkeypatch.context() if monkeypatch is not None else contextlib.nullcontext()) as m:
+        if m is not None:
+            m.setattr(lrr, "utc_now", lambda: later)
+        rc, out, err = _cli(["loop", "note", "--task-id", TASK, "--ask", "审计连续 BLOCK, 环境修不动: 请定修环境方案 / 改卡面验收",
+                             "--owner-reason", "rescope", "--workspace-root", str(rig.gov), "--actor", DRIVER, "--confirm"])
+    assert rc == 0, out + err
+
+
+def test_reaudit_entry_end_to_end(rig, monkeypatch):
+    _no_auto_reaudit(monkeypatch)
     _two_blocks(rig)
     status_text, status = _status(rig.gov, TASK)
-    assert status["next_action"]["action"] == "owner_needed" and status["next_action"]["reason"] == "audit_blocked_repeated"
+    # AIPOS-F225: 连续 BLOCK = 第二档, 判不出变化 = advisor_fix(归顾问); 顾问带第一档事由升 Owner 后才进收件箱
+    assert status["next_action"]["action"] == "advisor_fix" and status["next_action"]["reason"] == "audit_blocked_repeated"
+    _escalate(rig)
     before = _history(rig.gov)
     assert any("audit_verdicts" in k for k in before) and any(f"{TASK}R2" in k for k in before)
 
@@ -138,7 +184,8 @@ def test_reaudit_entry_end_to_end(rig):
     _show(f"---- ① wait_product 裁决后、修复上线后续跑 loop(对照修前行为): exit {res.exit_code} reason={res.reason} ----\n{_quiet(text)}")
     assert res.reason == "audit_blocked_repeated" and res.exit_code == exit_code_for(load_loop_contract(), "not_derivable"), text
 
-    # 件①: 新事项提示「可选重新派审」(上次裁决 wait_product, 部署提交已变)
+    # 件①: 新事项提示「可选重新派审」(上次裁决 wait_product, 部署提交已变; AIPOS-F225: 顾问再次带事由升 Owner)
+    _escalate(rig, monkeypatch)
     item2 = _inbox_item(rig)
     assert item2["item_id"] != item["item_id"]
     text_inbox = _inbox_text(rig)
@@ -183,7 +230,8 @@ def test_reaudit_entry_end_to_end(rig):
     assert d["audit_blocked"]["consecutive"] == 0 and d["audit_blocked"]["consecutive_total"] == 2
 
     # 原命令重跑 loop → 派生 R3 并照常拉起审计; R3 再 BLOCK 1 次 = 不升(audit_blocked 例行修环境)
-    res, text = _loop(rig, _block_watch(rig, {f"{TASK}R3": "BLOCK"}), COMMIT_NEW)
+    with _verdicts_later(monkeypatch, 3):  # 秒级时刻: 新一轮裁决须晚于 reaudit 裁决(同秒 = 不计「界后」), 夹具钉死先后
+        res, text = _loop(rig, _block_watch(rig, {f"{TASK}R3": "BLOCK"}), COMMIT_NEW)
     _show(f"---- ② 续跑 loop(派 R3, R3 BLOCK 1 次): exit {res.exit_code} reason={res.reason} ----\n{_quiet(text)}")
     assert f"run dispatch @ audit_verdict/claimed ({TASK})" in text and f"--audit-task-id {TASK}R3" in text, text
     assert res.reason == "audit_blocked" and "连续第" not in text, text
@@ -197,7 +245,8 @@ def test_reaudit_entry_end_to_end(rig):
     assert f"--audit-task-id {TASK}R4" in reaudit, reaudit
     rc, out, err = _cli(shlex.split(reaudit.split(": ", 1)[1])[1:])
     assert rc == 0, out + err
-    res, text = _loop(rig, _block_watch(rig, {f"{TASK}R4": "BLOCK"}), COMMIT_NEW)
+    with _verdicts_later(monkeypatch, 6):
+        res, text = _loop(rig, _block_watch(rig, {f"{TASK}R4": "BLOCK"}), COMMIT_NEW)
     _show(f"---- ② R4 再 BLOCK(界后连续 2 次): exit {res.exit_code} reason={res.reason} ----\n{_quiet(text)}")
     assert res.reason == "audit_blocked_repeated" and "连续第 2 次" in text, text
     assert nr.audit_block_state(rig.gov, TASK)["consecutive_total"] == 4
@@ -209,8 +258,10 @@ def test_reaudit_entry_end_to_end(rig):
     assert not changed
 
 
-def test_boundary_unreadable_and_declarations(rig):
+def test_boundary_unreadable_and_declarations(rig, monkeypatch):
+    _no_auto_reaudit(monkeypatch)
     _two_blocks(rig)
+    _escalate(rig)
     item = _inbox_item(rig)
     rc, out = _decide(rig, item["item_id"], "reaudit", confirm=True)
     assert rc == 0, out
@@ -242,11 +293,13 @@ def test_boundary_unreadable_and_declarations(rig):
         assert "except Exception" not in inspect.getsource(fn), fn.__name__
 
 
-def test_pinned_option_survives_advisor_options(rig):
+def test_pinned_option_survives_advisor_options(rig, monkeypatch):
     """顾问 loop note 写了自定义选项(HBLX-21B 形: product_fix)时 reaudit 仍列在其后; 选 reaudit 走同一出口。"""
+    _no_auto_reaudit(monkeypatch)
     _two_blocks(rig)
     rc, out, err = _cli(["loop", "note", "--task-id", TASK, "--ask", "请 Lybra 提供恢复入口", "--options", "product_fix=Lybra修复恢复入口后续跑独立审计",
-                         "--recommend", "保留候选与截图", "--workspace-root", str(rig.gov), "--actor", DRIVER, "--confirm"])
+                         "--recommend", "保留候选与截图", "--owner-reason", "rescope", "--workspace-root", str(rig.gov), "--actor", DRIVER,
+                         "--confirm"])
     assert rc == 0, out + err
     item = _inbox_item(rig)
     _show("---- ③ 顾问自定义选项 + 恒列 reaudit ----\n" + "\n".join(oi.item_lines(item, oi.inbox_declaration()["texts"])))

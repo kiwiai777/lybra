@@ -76,13 +76,19 @@ def _card(gov: Path, task_id: str, queue: str, project: str, **extra) -> Path:
 
 
 def _owner_needed_run(gov: Path, task_id: str, driver: str, *, reason: str = "gate_rejected",
-                      message: str = "GATE_DESIGN_FORK: 方案 A / B 二选一, 门拒") -> str:
-    """loop 自身的记录器(LoopRunRecorder)落一份已结束运行 = 真实运行记录形(不手拼 frontmatter)。"""
+                      message: str = "GATE_DESIGN_FORK: 方案 A / B 二选一, 门拒", owner_reason: str | None = None) -> str:
+    """loop 自身的记录器(LoopRunRecorder)落一份已结束运行 = 真实运行记录形(不手拼 frontmatter)。
+    AIPOS-F225: 技术事由(门拒 / 等待超时)归顾问, 顾问确属第一档才升 Owner —— owner_reason 给出 = 该运行带顾问升级请求 owner_ask
+    (lybra loop note 同一结构: ask / options / recommend / noted_by / noted_at / owner_reason)。"""
+    from tools.aipos_cli.clock import iso_z
     from tools.aipos_cli.loop_driver import load_loop_contract
     from tools.aipos_cli.loop_run_record import LoopRunRecorder
 
     rec = LoopRunRecorder(gov, task_id, driver=driver, contract=load_loop_contract(), warn=_show)
     rec.set_envelope("pol_fixture_1")
+    if owner_reason:
+        rec.meta["owner_ask"] = {"ask": message, "options": [], "recommend": None, "noted_by": driver, "noted_at": iso_z(),
+                                 "owner_reason": owner_reason}
     rec.end(outcome=reason, exit_code=2, reason=reason, message=message)
     return rec.run_id
 
@@ -114,14 +120,14 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     alpha, beta = hroot / ALPHA, hroot / BETA
     # alpha: 门拒 owner_needed 运行(A-1) + 无信封 owner_needed 运行(A-2, 卡已结案 = 已自行解除, 不列) + pending needs_owner 卡(A-3)
     _card(alpha, "ALPHA-1", "claimed", ALPHA)
-    _owner_needed_run(alpha, "ALPHA-1", DRIVER_A)
+    _owner_needed_run(alpha, "ALPHA-1", DRIVER_A, owner_reason="direction_fork")  # AIPOS-F225: 门拒设计分叉 = 顾问带第一档事由升
     _card(alpha, "ALPHA-2", "completed", ALPHA)
     _owner_needed_run(alpha, "ALPHA-2", DRIVER_A, reason="no_envelope", message="no envelope")
     _card(alpha, "ALPHA-3", "pending", ALPHA, needs_owner=True)
     _policy(alpha, "pol_alpha_far_1", who=DRIVER_A, max_tasks=50, hours_left=24 * 30)  # 远未到预警: 不列
     # beta-x: 连败 owner_needed 运行(B-1) + blocked needs_owner 卡(B-2) + 信封将尽(B 信封 2 小时后到期)
     _card(beta, "BETA-1", "claimed", BETA)
-    _owner_needed_run(beta, "BETA-1", DRIVER_B, reason="wait_timeout", message="工位未交产物")
+    _owner_needed_run(beta, "BETA-1", DRIVER_B, reason="wait_timeout", message="工位未交产物", owner_reason="beyond_authority")
     _card(beta, "BETA-2", "blocked", BETA, needs_owner=True, blocked_by=DRIVER_B, blocked_at="2026-10-01T00:00:00Z",
           block_reason="依赖方接口未定")
     _policy(beta, "pol_beta_soon_1", who=DRIVER_B, max_tasks=50, hours_left=2)
@@ -153,11 +159,12 @@ def test_item1_inbox_aggregates_two_projects_sorted_by_blocking(rig):
     assert data["projects"] == [ALPHA, BETA]
     got = {(p, c, s) for p, c, s, _r in rows}
     assert got == {(ALPHA, "loop_owner_needed", "ALPHA-1"), (ALPHA, "needs_owner_card", "ALPHA-3"),
-                   (BETA, "loop_owner_needed", "BETA-1"), (BETA, "needs_owner_card", "BETA-2"),
-                   (BETA, "envelope_warning", "pol_beta_soon_1")}, rows
+                   (BETA, "loop_owner_needed", "BETA-1"), (BETA, "needs_owner_card", "BETA-2")}, rows
+    # AIPOS-F225: 信封将尽 = 第二档告知(notices, 不计待定数)
+    assert [(n["project"], n["category"], n["policy_id"]) for n in data["notices"]] == [(BETA, "envelope_warning", "pol_beta_soon_1")]
     assert ("alpha", "loop_owner_needed", "ALPHA-2") not in got, "卡已结案 = 已自行解除, 不列"
     ranks = [r for *_x, r in rows]
-    assert ranks == sorted(ranks) and ranks[0] == 1 and ranks[-1] == 3, "按阻塞程度排序: 阻塞 → 待定 → 预警"
+    assert ranks == sorted(ranks) and ranks[0] == 1, "按阻塞程度排序: 阻塞 → 待定 → 预警"
     first = data["items"][0]
     for key in ("item_id", "project", "subject", "source", "category_label", "ask", "impact", "options", "decide_command"):
         assert first[key], key
@@ -168,7 +175,7 @@ def test_item1_inbox_aggregates_two_projects_sorted_by_blocking(rig):
     assert b2["rank"] == 1 and b2["source"] == DRIVER_B and "依赖方接口未定" in b2["ask"]
     # AIPOS-F170 件①: blocked 卡经 Owner 裁决可撤(既有 withdraw 口带裁决引用)/ 冻结为历史(既有 freeze-legacy 口); 仍不给 release
     assert [o["key"] for o in b2["options"]] == ["withdraw", "freeze_legacy", "new_card", "acknowledge"]
-    env = next(i for i in data["items"] if i["category"] == "envelope_warning")
+    env = next(i for i in data["notices"] if i["category"] == "envelope_warning")
     assert "lybra envelope mint" in env["recommend"] and env["source"] == DRIVER_B
     assert f"--home-root {rig['home']}" in a1["decide_command"]
     assert "lybra owner decide --item OI-" in text and "要定:" in text and "影响:" in text and "选项:" in text
@@ -201,7 +208,7 @@ def _note(rig, *extra: str) -> tuple[int, str]:
     return _cli("loop", "note", "--task-id", "ALPHA-1", "--workspace-root", str(rig["alpha"]),
                 "--ask", "门拒设计分叉: 采用方案 A(改接口)还是方案 B(加适配层)",
                 "--options", "plan_a=方案A 改接口", "plan_b=方案B 加适配层",
-                "--recommend", "建议 plan_b: 不动已部署后端", "--actor", DRIVER_A, *extra)
+                "--recommend", "建议 plan_b: 不动已部署后端", "--owner-reason", "direction_fork", "--actor", DRIVER_A, *extra)
 
 
 def test_item3_loop_note_preview_then_confirm_lands_and_inbox_shows_it(rig):
@@ -319,11 +326,11 @@ def test_item2_decide_release_pending_needs_owner_card_via_existing_exit(rig):
 
 
 def test_item2_decide_envelope_renew_prints_owner_command(rig):
-    item = next(i for i in _inbox_json(rig)["items"] if i["category"] == "envelope_warning")
+    item = next(i for i in _inbox_json(rig)["notices"] if i["category"] == "envelope_warning")  # AIPOS-F225: 第二档, 仍可裁决
     rc, text = _cli("owner", "decide", "--item", item["item_id"], "--choice", "renew", "--home-root", str(rig["home"]), "--confirm", *RELAY)
     _show(f"---- ② decide 信封 renew --confirm 原文 exit {rc} ----\n{text}")
     assert rc == 0 and "续签由 Owner 执行: 续签(Owner 执行): lybra envelope mint" in text
-    assert not any(i["category"] == "envelope_warning" for i in _inbox_json(rig)["items"])
+    assert not any(i["category"] == "envelope_warning" for i in [*_inbox_json(rig)["items"], *_inbox_json(rig)["notices"]])
 
 
 def test_item2_hyphen_project_record_and_blocked_card_acknowledge(rig):
@@ -364,7 +371,7 @@ def test_item1_rework_limit_and_supplementary_fail_items(rig):
     items = _inbox_json(rig)["items"]
     rework = next(i for i in items if i["category"] == "rework_limit")
     assert rework["task_id"] == "ALPHA-7" and "已返工 2/2 轮" in rework["ask"] and "FAIL" in rework["ask"] and rework["rank"] == 1
-    sup = next(i for i in items if i["category"] == "supplementary_fail")
+    sup = next(i for i in _inbox_json(rig)["notices"] if i["category"] == "supplementary_fail")  # AIPOS-F225: 第二档(派生残项归顾问)
     assert sup["task_id"] == "ALPHA-2" and "ALPHA-2-S1R" in sup["ask"] and [o["key"] for o in sup["options"]] == ["repair", "accept"]
 
 
@@ -401,7 +408,7 @@ def test_item3_board_owner_inbox_page_and_api_same_data(rig, monkeypatch: pytest
         assert status == 200 and ctype.startswith("text/html")
         cli = _inbox_json(rig)
         # AIPOS-F181: page title in plain words (no home root); the CLI lines are folded per item under "show details"
-        assert f'data-owner-inbox-count="{cli["count"]}"' in page and "待你决定 · 5 件" in page and str(rig["home"]) not in page.split("<details", 1)[0]
+        assert f'data-owner-inbox-count="{cli["count"]}"' in page and "待你决定 · 4 件" in page and str(rig["home"]) not in page.split("<details", 1)[0]
         for item in cli["items"]:
             assert f'data-item-id="{item["item_id"]}"' in page
         # AIPOS-F180: 页面套 F174 骨架(含语言切换内联脚本); 无授权请求 = 不载签发脚本、无表单(仍是只读展示)

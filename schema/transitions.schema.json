@@ -407,6 +407,20 @@
           "description": "AIPOS-F202(10-21 chris 理想 HBLX-21B 实撞: 审计 HBLX-21BR / HBLX-21BR2 连续 BLOCK 升 Owner, Owner 定「等产品修复」, 修复上线后续跑 loop 仍 1 秒即 audit_blocked_repeated, 无正式恢复入口): 连续 BLOCK 的正式恢复入口。Owner 在收件箱对本卡选 choices 所列选项(lybra_owner_inbox.options, 人话「环境 / 产品已修好, 重新派审」), 顾问 lybra owner decide 落既有 owner_decision_record(同一写路径, 自动落账)。连续 BLOCK 计数(audit_block_state 唯一实现)以本卡最近一条选 choices 的收件箱裁决(owner_inbox.rulings_for_task 同一读取口, 按 decided_at)为界, 只数裁决之后的 BLOCK(裁决时刻 = decided_at; 裁决记录时刻 = 裁决记录 verdict_at, 读不出退回记录 mtime)。最新常规裁决仍是界前 BLOCK(界后 0 次)且下一轮未派 = 推导核可推导: 派下一轮审计(既有派审动词 lybra audit dispatch, 卡号演进 audit_derivation.derive_audit_task_id, 派审人 / 信封 = 驱动方, 派审理由 = dispatch_reason), loop 执行后照常等待 / 拉起新一轮审计; 新一轮再 BLOCK = 界后计数从 1 起, 达 owner_needed_after 再升 Owner(repeated_end_reason)。历史裁决 / 审计卡 / 运行记录不改不删, 不重置历史。无此类裁决 = 行为不变。",
           "choices": ["reaudit"],
           "dispatch_reason": "owner_reaudit: Owner 裁决 {decision_id} 重新派审(上一轮 {blocked_audit_task_id} 裁决 {verdict_id} = BLOCK; 连续 BLOCK 自该裁决起重新计数; 执行产物不变)"
+        },
+        "auto_reaudit": {
+          "description": "AIPOS-F225 件②(Owner 介入分级第二档): 连续 BLOCK(repeated_end_reason)且自最新 BLOCK 裁决起「部署提交」或「审计验证根声明」有变化 = loop 自动重新派审, 不问 Owner。变化判据: 基线 = 本卡最新 BLOCK 裁决时刻(next_resolver._verdict_moment)之后最早结束的本卡 loop 运行记录的 env(deploy_commit = 运行记录 deploy.commit, validation_roots_digest = 运行记录 env 段, 起跑时由 loop 记下 project.json 验证根声明 validation_root.project_validation_roots 规范 JSON 的 sha256); 现值 = 本次 loop 运行(或 lybra loop status 进程)的同两项; 任一项两侧都有且不同 = 有变化; 两侧可比的一项都没有 = 判不出 = 不自动(fail-closed, 归顾问)。成立 = loop 落一条自动放行记录(owner_inbox.write_auto_release, kind = kind, verdict_ref = 该 BLOCK 裁决), 该记录作连续 BLOCK 计数的界(next_resolver.owner_reaudit_ruling 同读 Owner reaudit 裁决与未撤回的自动放行, 取较晚者; F202 同一实现), 推导核随即派下一轮审计(dispatch_reason)。同一 BLOCK 裁决已有自动放行记录 = 不再自动(撤回的 = 卡停住, 见 auto_release_revoked)。唯一实现 next_resolver.auto_reaudit_check(loop_driver 与 loop status 下一动作同读)。",
+          "kind": "auto_reaudit",
+          "choice": "auto_reaudit",
+          "dispatch_reason": "auto_reaudit: 第二档自动重新派审 {decision_id}(上一轮 {blocked_audit_task_id} 裁决 {verdict_id} = BLOCK, 自该 BLOCK 起部署 / 验证根已变; 连续 BLOCK 自该记录起重新计数; 执行产物不变; Owner 可撤回)",
+          "texts": {
+            "basis": "审计连续 BLOCK 后自动重新派审(上一轮 {audit_task_id} 裁决 {verdict_id} = BLOCK; 自该 BLOCK 起{changes})",
+            "no_baseline": "该 BLOCK 之后尚无已结束的本卡 loop 运行可作基线",
+            "not_comparable": "基线与现值无可比的部署提交 / 验证根声明",
+            "already": "该 BLOCK 裁决已有自动放行记录 {record_id}",
+            "unchanged": "部署提交 {deploy} / 验证根声明 {digest} 与基线运行 {run_id} 相同",
+            "head": "第二档自动放行 {decision_id}(@ {decided_at})= 自动重新派审: 连续 BLOCK 自该记录起重新计数(此前 {total} 次, 历史裁决与审计卡不改; Owner 可撤回)"
+          }
         }
       },
       "non_branch_rework": {
@@ -1071,6 +1085,21 @@
               "refused": "返工轮次已达上限 ({max_rounds} 轮{extension_part})，需升仲裁。当前已有 {rounds} 轮。出口: Owner 在收件箱(lybra owner inbox 返工上限事项)裁决「授权本卡追加一轮返工」(extend_rework, 每个裁决只放一轮)后同一命令重跑即登记; 或另出新卡 / 改卡 / 撤卡",
               "extension_part": "; 另含 Owner 授权追加 {consumed} 轮, 已用完",
               "granted": "第 {round} 轮按 Owner 裁决 {decision_id} 追加(授权本卡追加一轮返工, 该裁决已用)"
+            }
+          },
+          "auto_extension": {
+            "description": "AIPOS-F225 件②(Owner 介入分级第二档; 设计稿 §8 默认硬上限 4 轮): 下一轮超出上限判据(max_rounds + 已消费 Owner 追加裁决数 + 已登记的自动追加轮数)且本卡无未消费 Owner 追加裁决时, 门自核: 下一轮轮次 ≤ hard_cap 且卡面「候选 / 验收 / 范围」自发布起未变 = 自动追加这一轮(不问 Owner), 轮次记 round_field = 自动放行记录 ID(owner_inbox.write_auto_release, 声明 verbs.schema lybra_owner_inbox.tiers.tier2.auto_release, kind = kind; 记录由 board_adapter.queue_rework_task 在改卡写入成功后落盘)。指纹 = fingerprint_fields(卡面 frontmatter 键, 点号 = 嵌套)+ 正文(fingerprint_body; 首尾空白不计)规范 JSON 的 sha256; 发布基线 = 本卡门侧发布记录(records publishes)的 source_draft_ref 草稿, 且该草稿 sha256 = 发布记录 source_sha256(发布后未改, 门可核)才据其算; 发布记录 / 草稿缺或已改 = 基线不可核 = 不自动(fail-closed, 走 Owner 第一档)。lane.paths 不入指纹(门在认领 / 修树时回填, 非范围变更); 改范围走 queue amend 改 output_target / governance_refs 等即入指纹。超 hard_cap / 指纹变 / 基线不可核 = 拒(owner_extension.texts.refused + texts 对应原因), 收件箱返工上限事项(第一档 rework_cap_exceeded)。唯一实现 queue_mutation.rework_round_budget / auto_extension_check(门 queue rework 与 mark-concluded --outcome rework 同判)。",
+            "hard_cap": 4,
+            "round_field": "auto_extension_ref",
+            "kind": "rework_extension",
+            "fingerprint_fields": ["title", "task_mode", "validation_candidate", "validation_source_task", "output_target", "governance_refs", "lane.repo"],
+            "fingerprint_body": true,
+            "texts": {
+              "granted": "第 {round} 轮自动追加(第二档, AIPOS-F225: 卡面候选 / 验收 / 范围自发布起未变, 硬上限 {hard_cap} 轮; 自动放行记录 {record_id}, Owner 可撤回)",
+              "basis": "返工第 {round} 轮自动追加(上限 {max_rounds} 轮之后、硬上限 {hard_cap} 轮之内; 卡面指纹 {fingerprint} = 发布基线 {publish_ref}; 依据裁决 / 复核 {verdict_ref})",
+              "refused_cap": "自动追加已到硬上限({hard_cap} 轮, AIPOS-F225): 返工超硬上限 = 第一档, Owner 定另出卡 / 改卡 / 撤卡 / 授权追加",
+              "refused_changed": "卡面候选 / 验收 / 范围自发布起已变(指纹 {current} ≠ 发布基线 {baseline}, 变动键 {fields}), 不自动追加(AIPOS-F225): 改了验收的卡由 Owner 定",
+              "refused_baseline": "卡面发布基线不可核({why}), 不自动追加(AIPOS-F225, fail-closed)"
             }
           },
           "next_step": {

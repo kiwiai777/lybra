@@ -478,7 +478,8 @@ def test_item3_two_consecutive_blocks_escalate_owner_needed(rig):
     status_text, status = _status(rig.gov, TASK)
     _show("---- item3 lybra loop status after 2 consecutive BLOCK ----\n" + status_text)
     na = status["next_action"]
-    assert na["action"] == "owner_needed" and na["reason"] == "audit_blocked_repeated", na
+    # AIPOS-F225: 连续 BLOCK = 第二档(部署 / 验证根未变 = advisor_fix 归顾问修环境; 有变化 = 续跑 loop 自动重新派审), 原判事由留在 detail
+    assert na["action"] == "advisor_fix" and na["reason"] == "audit_blocked_repeated" and na["owner_tier"] == 2, na
     assert "审计连续 BLOCK" in na["detail"] and "连续 2 次" in text
 
 
