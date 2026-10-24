@@ -41,7 +41,9 @@ from tools.aipos_cli.board_adapter import (
 from tools.aipos_cli.autonomy_policy import (
     AUTONOMY_MODE_PREAUTHORIZED,
     AUTONOMY_MODE_SUPERVISED,
+    authorization_superseded_policies,
     driver_envelope_identities,
+    is_authorization,
     envelope_quota_state,
     envelope_subject,
     load_policy,
@@ -2214,6 +2216,10 @@ def _match_driver_envelope(
     policy = load_policy(repo_root, policy_ref)
     if policy is None:
         return None, _envelope_rejection("ENVELOPE_POLICY_NOT_FOUND", f"owner_policy_ref {policy_ref} does not resolve", verb=verb)
+    migrated_to = None if is_authorization(policy) else authorization_superseded_policies(repo_root).get(policy_ref)
+    if migrated_to:  # AIPOS-F224: 已迁入项目授权的旧信封 = superseded(不再放行, 改用该授权)
+        return None, _envelope_rejection("ENVELOPE_STATUS_NOT_ACTIVE",
+                                         f"envelope {policy_ref} migrated into project grant {migrated_to} (superseded)", verb=verb)
     snapshot = load_task_snapshot(repo_root, task_id=task_id, path=None)
     if snapshot is None:
         return None, _teaching_error("TASK_NOT_FOUND", f"task {task_id} not found in queue (frontmatter task_id lookup).",
@@ -2323,6 +2329,10 @@ def _match_claim_envelope(
     if policy is None:
         _emit("policy_load", None, None, policy_loaded=False)
         return None, None, None, None
+    migrated_to = None if is_authorization(policy) else authorization_superseded_policies(repo_root).get(str(owner_policy_ref or "").strip())
+    if migrated_to:  # AIPOS-F224: 已迁入项目授权的旧信封 = superseded(不再放行; 回落 Supervised, 拒因码同撤销)
+        _emit("policy_migrated", None, None, policy_loaded=True, migrated_to=migrated_to)
+        return None, None, "ENVELOPE_STATUS_NOT_ACTIVE", None
     snapshot = load_task_snapshot(repo_root, task_id=task_id, path=task_path)
     if snapshot is None:
         _emit("snapshot_load", None, None, policy_loaded=True, snapshot_loaded=False)
@@ -5590,6 +5600,9 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 # reachable through a schema-validating MCP client (which would otherwise strip an
                 # undeclared autonomy_policy and force the evidence fields — the O3 defect).
                 "autonomy_policy": {"type": "object"},
+                # AIPOS-F224: 项目常设授权块(签发 / 扩大 / 撤销; 构造与校验唯一 autonomy_policy.build_authorization_decision, 决策记录仍由
+                # 既有 writer 渲染, 另落授权修订; 确认同签信封要 Owner-only owner_confirm)
+                "project_authorization": {"type": "object"},
                 # AIPOS-F78B 件④b / AIPOS-F92 件①: 目标项目治理根(按凭据 projects 校验; CLI envelope mint --confirm 必传)
                 "workspace_root": {"type": "string"},
             },

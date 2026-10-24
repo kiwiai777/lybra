@@ -123,7 +123,9 @@
       var techLines = (preview.preview_lines || []).slice();
       techLines.push('');
       techLines.push(JSON.stringify(preview.dry_run, null, 2));
-      show('confirm', t('gr_confirm_heading'), summary(preview.params || {}, request), techLines);
+      // AIPOS-F224: project grant (mode authorization) previews carry their own server-rendered summary lines
+      var lines = (preview.summary_lines && preview.summary_lines.length) ? preview.summary_lines.slice() : summary(preview.params || {}, request);
+      show('confirm', t('gr_confirm_heading'), lines, techLines);
       button(t('gr_confirm_btn'), function () { confirmStep(payload, preview, request); }, true);
       button(t('gr_cancel_btn'), function () { panel.hidden = true; });
     });
@@ -168,6 +170,8 @@
       var payload = { mode: form.getAttribute('data-mode'), workspace: form.getAttribute('data-workspace') };
       var template = form.getAttribute('data-template');
       if (template) { payload.template_policy_id = template; }
+      var action = form.getAttribute('data-action');  // AIPOS-F224: project grant forms (migrate / extend / revoke)
+      if (action) { payload.action = action; }
       Array.prototype.forEach.call(form.querySelectorAll('input[name]'), function (input) { payload[input.name] = input.value; });
       start(payload, null);
     });
