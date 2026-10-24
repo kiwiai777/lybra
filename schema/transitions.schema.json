@@ -1440,6 +1440,7 @@
             "run 目录 .lybra-vr/src-verify.jsonl 末条 = SRC_OK(ok=true)且 tree = 候选 tree、run_dir / 候选 / 主机指纹与声明一致",
             "日志必须是文件: log_path 绝对路径存在且 sha256 = log_sha256(不接受只给 log_excerpt); 运行记录给 worktree(如 run-long 的 --cwd)时须在本 run 目录内",
             "run 在非本机(治理根所在机)主机 = 门读不到 run 内证据 = 拒(fail-closed), 卡面声明的命令须在治理根所在机的审计 run 运行",
+          "AIPOS-F223: 本审计卡本实例有多个验证根声明时, run 须属卡面 audit_runtime_evidence.host 选定主机的那条声明(host_selection); 未声明 host 而声明多于一个 = 拒(禁任取), 报告 run 属未选中声明 = 拒并点名所选声明",
             "AIPOS-F200(gap #205): run 在远端主机时改读审计报告落点副本 <verdict_root>/<审计卡>/run_evidence/<run_id>/(由 evidence-manifest → evidence-fetch 产出; 声明 roles.schema write_boundary.validation_root.run_evidence): 副本须经 validation_root.evidence_copy_check(清单形 / 封签 / run 目录 / 候选 / 主机指纹 = 声明, 取回记录与清单 sha256 互证, 无软链 / 清单外文件 / 代码文件, 清单内文件齐全且 sha256 一致)再走与本机 run 同一核对(src-verify 读副本 files/.lybra-vr/src-verify.jsonl; 日志 log_path 须在远端 run 目录内且在取回清单内, 读副本文件核 sha256); 无副本 / 副本不过 = 拒并给清单与取回命令"
           ],
           "remote_steps": [
@@ -1458,7 +1459,14 @@
             "⑥ 在本 run 按卡面声明命令运行(占位 {{run_dir}} = {run_dir}, {{src_dir}} = {src_dir}, {{candidate}} = {candidate}, {{candidate_tree}} = {candidate_tree}; 渲染后逐字一致; 长命令用 run-long, --cwd 在本 run 目录内):",
             "⑦ 「{heading}」节每条填 command / run_id / run_dir / exit_code / log_path / log_sha256(或 {{\"run_long\": \"<运行目录>\", \"run_id\": \"{run_id}\", \"run_dir\": \"{run_dir}\"}}, 命令 / 退出码 / 日志由产品从运行记录取)"
           ],
-          "commands_after_step": 6,
+          "host_selection": {
+          "description": "AIPOS-F223(chris HBLX-42VC2R 实撞: 同审计卡同审计实例有 dev + Mac 两个有效验证根声明, 原 candidate_evidence_values 取 live[-1] 选中 Mac, 把卡面 Linux 工具路径命令渲染到 Mac run 目录): 运行证据 run 的选择唯一实现 validation_root.select_evidence_declaration(开工稿 / 派审步骤经 candidate_evidence_values, 裁决入口经 locate_run → audit_run_selection_problem 同读)。卡面 audit_runtime_evidence.host(field)声明执行主机 = 只在本审计卡本实例该主机的声明里选; 未声明 host: 恰一个声明 = 照旧, 多个 = 禁任取(VR_EVIDENCE_HOST_AMBIGUOUS, 开工稿 / 派审步骤只给拒因一行 refusal_line, 裁决入口同判据拒); 报告 run 属未选中声明 = VR_EVIDENCE_HOST_MISMATCH 点名所选声明。候选池: 开工稿 = 有效声明(active / unbound); 裁决入口 = 未撤销声明(到期声明的 run 照旧可作证据, 与 F199 规则一致)。在途卡补 host = outlet(queue amend, 已认领卡 --restricted, 只改 host; card.schema restricted_amend.claimed_card_subfields)。",
+          "field": "host",
+          "refusal_line": "   ⚠ 运行证据执行主机未定, 本卡验证根步骤不渲染(裁决入口同判据拒收; 审计停线报告顾问): {problem}; {outlet}",
+          "outlet": "出口: 顾问为卡 {card} 的卡面 {card_field} 声明执行主机 {field}(可选主机: {hosts}; 只改 {field}, 命令与 required 不变)——`{amend}`(预演看清后去掉 --dry-run 确认); 补声明后开工稿 / 派审步骤即按该主机的声明渲染",
+          "note": "   ℹ 多主机验证(AIPOS-F223): 运行证据命令的执行主机 = {host}({basis}); 本步骤只按该主机的声明 {decl} 渲染; 本审计卡本实例其余声明({others})用于其它验证, 其 run 不作本卡运行证据"
+        },
+        "commands_after_step": 6,
           "command_line": "   - `{command}`",
           "pending": "(run-start 后由产品给出: lybra project validation-root init-command --id <声明>)"
         },
