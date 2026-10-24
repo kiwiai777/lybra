@@ -124,6 +124,8 @@ PLACEHOLDER_VALUES = {
     # AIPOS-F221 件②: 快车道复核不通过打回返工(mark-concluded --outcome rework)占位
     "<返工要点>": "返工要点(夹具)",
     "<验收标准>": "验收标准(夹具)",
+    # AIPOS-F225 件③: 顾问升 Owner 必带第一档事由(loop note --owner-reason)
+    "<第一档事由键>": "direction_fork",
 }
 PLACEHOLDER_RE = re.compile(r"<[^<>\s'\"]+>")
 #: 已退役的子命令(示例不得再教)

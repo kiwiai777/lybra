@@ -3475,6 +3475,10 @@ def build_parser() -> argparse.ArgumentParser:
     loop_note_parser.add_argument("--grant-max-tasks", default=None, metavar="N", help="AIPOS-F180: 授权建议额度(正整数)")
     loop_note_parser.add_argument("--grant-expires", default=None, metavar="DATE", help="AIPOS-F180: 授权建议到期(YYYY-MM-DD 或带时区 ISO 时刻)")
     loop_note_parser.add_argument("--grant-reason", default=None, help="AIPOS-F180: 授权理由(一句话; 缺省 = 卡标题)")
+    # AIPOS-F225 件③: 升 Owner 必带第一档事由(键读 verbs.schema lybra_owner_inbox.tiers.tier1.reasons; 缺 / 不在清单 = 拒写指回顾问)
+    loop_note_parser.add_argument("--owner-reason", default=None, metavar="TIER1_KEY",
+                                  help="AIPOS-F225: 第一档事由(键 = verbs.schema lybra_owner_inbox.tiers.tier1.reasons); --ask 必带, "
+                                       "缺 / 不在清单 = 拒写(技术故障归顾问自处理)")
     loop_note_parser.add_argument("--confirm", action="store_true", default=False, help="写入并落账; 缺省预演")
     loop_note_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output JSON")
 

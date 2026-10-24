@@ -3684,21 +3684,144 @@ def audit_blocked_declaration() -> dict[str, Any]:
 def owner_reaudit_ruling(workspace_root: Path, task_id: str) -> dict[str, Any] | None:
     """AIPOS-F202: the card's latest Owner inbox ruling whose choice is in nodes.N4.audit_blocked.owner_reaudit.choices
     (owner_inbox.rulings_for_task, the inbox's own reader; ordered by decided_at) or None. A record that cannot be read
-    = FrontmatterReadError upward (fail-closed); a picked ruling without a readable decided_at = FrontmatterReadError naming it."""
+    = FrontmatterReadError upward (fail-closed); a picked ruling without a readable decided_at = FrontmatterReadError naming it.
+    AIPOS-F225 item 2: a non-revoked tier-2 auto re-audit record (owner_inbox.auto_release_records, kind = nodes.N4.audit_blocked.auto_reaudit.kind)
+    is a boundary of the same kind; the later of the two wins (auto = True, choice = auto_reaudit.choice)."""
     from tools.aipos_cli.frontmatter import FrontmatterReadError
-    from tools.aipos_cli.owner_inbox import _parse_utc, rulings_for_task
+    from tools.aipos_cli.owner_inbox import _parse_utc, auto_release_records, revoked_auto_release_ids, rulings_for_task
 
     choices = {str(c) for c in audit_blocked_declaration()["owner_reaudit"]["choices"]}
     picked = [r for r in rulings_for_task(Path(workspace_root), task_id) if str(r.get("allowed_next_action") or "") in choices]
-    if not picked:
+    candidates: list[dict[str, Any]] = []
+    if picked:
+        ruling = picked[-1]
+        decided = _parse_utc(ruling.get("decided_at"))
+        if decided is None:
+            raise FrontmatterReadError(ruling.get("_path") or ruling.get("decision_id"), "收件箱裁决 decided_at 读不出(连续 BLOCK 计数的界, AIPOS-F202)")
+        candidates.append({"decision_id": str(ruling.get("decision_id") or ""), "choice": str(ruling.get("allowed_next_action") or ""),
+                           "decided_at": str(ruling.get("decided_at") or ""), "decided": decided, "record": ruling.get("_path"),
+                           "owner_words": ruling.get("owner_words"), "relayed_by": ruling.get("relayed_by"), "auto": False})
+    auto_decl = auto_reaudit_declaration()
+    autos = [r for r in auto_release_records(Path(workspace_root), task_id) if str(r.get("kind") or "") == str(auto_decl["kind"])]
+    if autos:
+        revoked = revoked_auto_release_ids(Path(workspace_root), task_id)
+        live = [r for r in autos if str(r.get("auto_release_id") or "") not in revoked]
+        if live:
+            rec = live[-1]
+            decided = _parse_utc(rec.get("released_at"))
+            if decided is None:
+                raise FrontmatterReadError(rec.get("_path"), "自动放行记录 released_at 读不出(连续 BLOCK 计数的界, AIPOS-F225)")
+            candidates.append({"decision_id": str(rec.get("auto_release_id") or ""), "choice": str(auto_decl["choice"]),
+                               "decided_at": str(rec.get("released_at") or ""), "decided": decided, "record": rec.get("_path"),
+                               "owner_words": None, "relayed_by": None, "auto": True})
+    if not candidates:
         return None
-    ruling = picked[-1]
-    decided = _parse_utc(ruling.get("decided_at"))
-    if decided is None:
-        raise FrontmatterReadError(ruling.get("_path") or ruling.get("decision_id"), "收件箱裁决 decided_at 读不出(连续 BLOCK 计数的界, AIPOS-F202)")
-    return {"decision_id": str(ruling.get("decision_id") or ""), "choice": str(ruling.get("allowed_next_action") or ""),
-            "decided_at": str(ruling.get("decided_at") or ""), "decided": decided, "record": ruling.get("_path"),
-            "owner_words": ruling.get("owner_words"), "relayed_by": ruling.get("relayed_by")}
+    return max(candidates, key=lambda c: c["decided"])
+
+
+_AUTO_REAUDIT_KEYS = ("kind", "choice", "dispatch_reason", "texts")
+
+
+def auto_reaudit_declaration() -> dict[str, Any]:
+    """transitions nodes.N4.audit_blocked.auto_reaudit(AIPOS-F225 件②, 唯一读取口)。缺键 / kind 不在 tiers.tier2.kinds = SchemaLoadError。"""
+    from tools.aipos_cli.owner_inbox import tier_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    decl = audit_blocked_declaration().get("auto_reaudit")
+    texts = decl.get("texts") if isinstance(decl, dict) else None
+    if (not isinstance(decl, dict) or any(k not in decl for k in _AUTO_REAUDIT_KEYS) or not isinstance(texts, dict)
+            or any(not str(texts.get(k) or "").strip() for k in ("basis", "no_baseline", "not_comparable", "already", "head", "unchanged"))):
+        raise SchemaLoadError(f"transitions.schema.json nodes.N4.audit_blocked.auto_reaudit 未声明齐 {list(_AUTO_REAUDIT_KEYS)}(AIPOS-F225)")
+    if str(decl["kind"]) not in tier_declaration()["tier2"]["kinds"]:
+        raise SchemaLoadError(f"nodes.N4.audit_blocked.auto_reaudit.kind {decl['kind']!r} 不在 verbs.schema lybra_owner_inbox.tiers.tier2.kinds")
+    return decl
+
+
+def validation_roots_digest(workspace_root: Path) -> str:
+    """AIPOS-F225 件②: 项目验证根声明(validation_root.project_validation_roots 唯一读取口)规范 JSON 的 sha256 前 16 位。读不出 = 向上。"""
+    import hashlib
+    import json
+
+    from tools.aipos_cli.validation_root import project_validation_roots
+
+    roots = project_validation_roots(Path(workspace_root))
+    return hashlib.sha256(json.dumps(roots, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+
+
+def current_env(workspace_root: Path, deploy: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F225 件②: 当前环境指纹 {deploy_commit, validation_roots_digest}(部署 = 本进程运行代码 deploy_runtime.DeployGuard 同一描述;
+    验证根 = validation_roots_digest)。读不出的一项 = None(比对时不可比, 不猜)。"""
+    if deploy is None:
+        from tools.aipos_cli.deploy_runtime import DeployGuard
+
+        deploy = DeployGuard.for_running_process().describe()
+    try:
+        digest: str | None = validation_roots_digest(Path(workspace_root))
+    except (OSError, ValueError) as exc:  # 验证根声明读不出 = 该项不可比(原因随结果给出)
+        digest = None
+        deploy = {**deploy, "validation_roots_error": f"{type(exc).__name__}: {exc}"}
+    return {"deploy_commit": str((deploy or {}).get("commit") or "") or None, "validation_roots_digest": digest}
+
+
+def auto_reaudit_check(workspace_root: Path, task_id: str, *, env: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F225 件② 唯一判定(loop_driver 自动重新派审与 loop status 下一动作同读): 本卡审计连续 BLOCK(audit_block_state repeated)时,
+    自最新 BLOCK 裁决起部署提交或验证根声明是否有变化。基线 = 该 BLOCK 裁决时刻之后最早结束的本卡 loop 运行记录(deploy.commit / env);
+    现值 = env(缺省 = current_env 本进程)。返回 {eligible, revoked, verdict_id, audit_task_id, changes, why, baseline, current, state}。
+    同一 BLOCK 裁决已有自动放行记录: 已撤回 = revoked(卡停住另判), 未撤回 = 不再自动(already)。记录读不出 = 向上。"""
+    from tools.aipos_cli.loop_driver import load_loop_contract
+    from tools.aipos_cli.loop_run_record import _run_files, loop_runs_dir, read_run, run_record_declaration
+    from tools.aipos_cli.owner_inbox import _parse_utc, auto_release_records, revoked_auto_release_ids, tier_declaration
+
+    decl = auto_reaudit_declaration()
+    texts = decl["texts"]
+    out: dict[str, Any] = {"eligible": False, "revoked": False, "verdict_id": None, "audit_task_id": None, "changes": "", "why": "",
+                           "baseline": None, "current": None}
+    state = audit_block_state(Path(workspace_root), task_id)
+    if state is None or not state.get("repeated"):
+        out["why"] = "not_repeated"
+        return out
+    out.update({"verdict_id": state["verdict_id"], "audit_task_id": state["audit_task_id"]})
+    prior = [r for r in auto_release_records(Path(workspace_root), task_id)
+             if str(r.get("kind") or "") == str(decl["kind"]) and str(r.get("verdict_ref") or "") == str(state["verdict_id"])]
+    if prior:
+        rid = str(prior[-1].get("auto_release_id") or "")
+        out["revoked"] = rid in revoked_auto_release_ids(Path(workspace_root), task_id)
+        out["why"] = str(texts["already"]).format(record_id=rid)
+        return out
+    regular = _regular_verdicts(Path(workspace_root), task_id)
+    moment = _verdict_moment(*regular[0]) if regular else None
+    rdecl = run_record_declaration(load_loop_contract())
+    runs = [read_run(p, rdecl) for p in _run_files(loop_runs_dir(Path(workspace_root), task_id))]
+    ended = [(_parse_utc(m.get("ended_at")), m) for m in runs if m.get("status") == "ended"]
+    after = [m for at, m in sorted((e for e in ended if e[0] is not None), key=lambda e: e[0]) if moment is not None and at >= moment]
+    if not after:
+        out["why"] = str(texts["no_baseline"])
+        return out
+    base_run = after[0]
+    baseline = {"deploy_commit": str((base_run.get("deploy") or {}).get("commit") or "") or None,
+                "validation_roots_digest": str((base_run.get("env") or {}).get("validation_roots_digest") or "") or None,
+                "run_id": base_run.get("run_id")}
+    cur = current_env(Path(workspace_root)) if env is None else env
+    out.update({"baseline": baseline, "current": cur})
+    tt = tier_declaration()["texts"]
+    changes: list[str] = []
+    comparable = False
+    for key, text_key in (("deploy_commit", "change_deploy"), ("validation_roots_digest", "change_validation_roots")):
+        before, after_v = baseline.get(key), cur.get(key)
+        if before and after_v:
+            comparable = True
+            if before != after_v:
+                changes.append(str(tt[text_key]).format(before=str(before)[:12], after=str(after_v)[:12]))
+    if not comparable:
+        out["why"] = str(texts["not_comparable"])
+        return out
+    out["eligible"] = bool(changes)
+    out["changes"] = "; ".join(changes)
+    out["why"] = out["changes"] or str(texts["unchanged"]).format(run_id=baseline.get("run_id") or "?",
+                                                                  deploy=str(cur.get("deploy_commit") or "-")[:12],
+                                                                  digest=str(cur.get("validation_roots_digest") or "-"))
+    out["state"] = state
+    return out
 
 
 def _verdict_moment(path: Path, fm: dict[str, Any]) -> datetime:
@@ -3774,7 +3897,7 @@ def audit_block_state(workspace_root: Path, task_id: str) -> dict[str, Any] | No
         "reason": reason,
         "redispatched_to": redispatched,
         "next_round": next_round,
-        "owner_reaudit": None if ruling is None else {k: ruling[k] for k in ("decision_id", "choice", "decided_at", "record")},
+        "owner_reaudit": None if ruling is None else {k: ruling[k] for k in ("decision_id", "choice", "decided_at", "record", "auto")},
     }
 
 
@@ -3818,6 +3941,8 @@ def _reaudit_dispatch_reason(state: dict[str, Any]) -> str:
     decl = audit_blocked_declaration()
     pending = state.get("owner_reaudit") if not state.get("consecutive") else None
     template = str(decl["owner_reaudit"]["dispatch_reason"] if pending else decl["dispatch_reason"])
+    if pending and pending.get("auto"):  # AIPOS-F225 item 2: tier-2 auto re-audit boundary
+        template = str(auto_reaudit_declaration()["dispatch_reason"])
     if state.get("dispatch_reason_template"):  # AIPOS-F218 件②: FAIL 仅重审 = nodes.N4.non_pass_recovery.fail_dispatch_reason
         template = str(state["dispatch_reason_template"])
     values = {"blocked_audit_task_id": str(state.get("audit_task_id") or "?"), "verdict_id": str(state.get("verdict_id") or "?"),
@@ -4032,8 +4157,9 @@ def _derive_audit_blocked(workspace_root: Path, task_id: str, fm: dict[str, Any]
     head = (f"审计未能完成(裁决 {state['verdict']} {state['verdict_id']}, 审计卡 {state['audit_task_id']}"
             f"{', 连续第 ' + str(state['consecutive']) + ' 次' if state['consecutive'] > 1 else ''})")
     if repeated:
-        suggested = (f"{head}: 已按 BLOCK 原因修环境重审仍 BLOCK(连续 {state['consecutive']} 次 ≥ {state['owner_needed_after']}), 升 Owner 定修环境方案 / "
-                     f"改卡面验收 / 换审计环境 — 原因: {state['reason'] or '(见审计报告)'}; {recovery['choice']}; "
+        suggested = (f"{head}: 已按 BLOCK 原因修环境重审仍 BLOCK(连续 {state['consecutive']} 次 ≥ {state['owner_needed_after']}); "
+                     "第二档(AIPOS-F225): 自该 BLOCK 起部署 / 验证根有变化 = 原命令续跑 loop 即自动重新派审, 无变化 = 顾问修环境 / 产品, "
+                     f"要改卡面验收 / 换审计环境才带第一档事由升 Owner — 原因: {state['reason'] or '(见审计报告)'}; {recovery['choice']}; "
                      f"a) {recovery['rework_command']}")
     else:
         suggested = f"{head}: 原因: {state['reason'] or '(见审计报告)'}; {recovery['choice']}; {recovery['paths']}"
@@ -4069,6 +4195,9 @@ def _derive_owner_reaudit(workspace_root: Path, task_id: str, fm: dict[str, Any]
     ruling = state["owner_reaudit"]
     head = (f"Owner 裁决 {ruling['decision_id']}(选 {ruling['choice']} @ {ruling['decided_at']})= 重新派审: 连续 BLOCK 自该裁决起重新计数"
             f"(此前 {state['consecutive_total']} 次, 历史裁决与审计卡不改)")
+    if ruling.get("auto"):  # AIPOS-F225 item 2: tier-2 auto re-audit record as the boundary
+        head = str(auto_reaudit_declaration()["texts"]["head"]).format(decision_id=ruling["decision_id"], decided_at=ruling["decided_at"],
+                                                                        total=state["consecutive_total"])
     missing: list[str] = []
     auditor = ""
     if not actor:
@@ -4145,6 +4274,9 @@ def _derive_next_step(
     frozen_stop = legacy_frozen_stop(workspace_root, task_id, None)
     if frozen_stop is not None:
         return frozen_stop
+    revoked_stop = auto_release_revoked_stop(workspace_root, task_id)  # AIPOS-F225 件②: Owner 撤回自动放行 = 卡停住
+    if revoked_stop is not None:
+        return revoked_stop
 
     # 1. 找任务卡(AIPOS-F78B 件①: frontmatter task_id 精确匹配; 多义 = 不可推导点名两份文件)
     from tools.aipos_cli.task_loader import AmbiguousTaskCard
@@ -5074,6 +5206,25 @@ def legacy_frozen_stop(workspace_root: Path, task_id: str, queue_dir: str | None
         "missing_records": [rejection["message"]], "suggested_action": rejection["unfreeze_command"],
         "notes": "AIPOS-F122: 存量冻结卡 = 历史, 推导核不派生推进步",
         "action": {"type": "legacy_frozen", "card": task_id, "unfreeze_command": rejection["unfreeze_command"]},
+    }
+
+
+def auto_release_revoked_stop(workspace_root: Path, task_id: str) -> dict[str, Any] | None:
+    """AIPOS-F225 件②: Owner 撤回了本卡的第二档自动放行、之后无新裁决(唯一判定 owner_inbox.auto_release_stop)→ 不可推导硬停项
+    (action.type / end_reason = tiers.tier2.auto_release.revoked_end_reason; loop 以该结束原因结束, 第一档); 否则 None。读不出 = 向上。"""
+    from tools.aipos_cli.owner_inbox import auto_release_stop, inbox_declaration
+
+    stop = auto_release_stop(Path(workspace_root), task_id)
+    if stop is None:
+        return None
+    reason = str(stop["end_reason"])
+    text = str((inbox_declaration()["options"].get("revoke_auto") or {}).get("advisor_next") or "").format(
+        task_id=task_id, decision_id=stop["decision_id"])
+    return {
+        "task_id": task_id, "derivable": False, "current_node": None, "current_state": reason, "triggered_by": "owner", "command": "",
+        "verb": "", "missing_records": [f"Owner 撤回自动放行 {stop['auto_release_id']}(裁决 {stop['decision_id']} @ {stop['decided_at']})"],
+        "suggested_action": text, "notes": "AIPOS-F225 件②: 撤回自动放行之后本卡无 Owner 新裁决 = 卡停住(声明 verbs.schema lybra_owner_inbox.tiers.tier2.auto_release)",
+        "auto_release_stop": stop, "action": {"type": reason, "card": task_id, "end_reason": reason},
     }
 
 

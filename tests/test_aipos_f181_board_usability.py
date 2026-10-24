@@ -403,10 +403,13 @@ def test_item4_inbox_plain_titles_details_folded_and_switch(board):
     details = _block(grant, r'<details class="ib-details"><summary>查看详情</summary>.*?</details>')
     assert "lybra owner decide --item" in details and str(board["home"]) in details and " open" not in details.split(">", 1)[0]
     assert f'<article class="gr-card" id="{item_id}"' in page  # the request card itself is on top
-    other = _block(page, r'<section class="owner-inbox-item[^"]*"[^>]*data-category="roadmap_drift"[^>]*data-grant="false">.*?</section>')
+    # AIPOS-F225: 路线图偏差归第二档(不进待定事项), 普通事项样本改取 show=all 下的 needs_owner 卡(第一档)
+    shown_all = _page(board, "/owner/inbox?show=all")
+    other = _block(shown_all, r'<section class="owner-inbox-item[^"]*"[^>]*data-category="needs_owner_card"[^>]*data-grant="false">.*?</section>')
     _show(f"[item4 plain item raw] {other}")
     seen = _visible(other)
-    assert seen.strip().startswith(f"{M} · ") and "要你做什么:" in seen and "lybra" not in seen and "OI-" not in seen
+    assert seen.strip().startswith((f"{T} · ", f"{Q} · ")) and "要你做什么:" in seen and "lybra" not in seen and "OI-" not in seen
+    assert 'data-category="roadmap_drift"' not in page
     switch = _block(page, r'<p class="rp-toggle".*?</p>')
     note = _block(page, r'<p class="owner-inbox-paused rp-sub">.*?</p>')
     _show(f"[item4 switch raw] {note} {switch}")

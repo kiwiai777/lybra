@@ -91,7 +91,7 @@ def _note(rig, *extra: str) -> tuple[int, str]:
     rc, out, err = _cli(["--workspace-root", str(rig.gov), "loop", "note", "--task-id", CARD,
                          "--ask", "返工已达上限仍不通过: 请 Owner 定是否授权本卡再改一轮(27 日演示要用)",
                          "--options", "arbitrate=Owner 仲裁", "hold=暂缓", "--recommend", "建议授权追加一轮: 只差超时清理一项",
-                         "--actor", DRIVER, *extra])
+                         "--owner-reason", "rework_cap_exceeded", "--actor", DRIVER, *extra])  # AIPOS-F225: 升 Owner 必带第一档事由
     return rc, out + err
 
 

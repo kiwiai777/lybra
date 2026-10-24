@@ -297,8 +297,10 @@ def test_item3_eighty_percent_notice_does_not_block(owner):
     from tools.aipos_cli.owner_inbox import collect_project_inbox
 
     inbox = collect_project_inbox(o.gov, home_root=o.gov.parent)
-    warn = [i for i in inbox["items"] if i["category"] == "envelope_warning"]
-    _show(f"[③ 收件箱告知项(envelope_warning 类, 不阻塞)] {json.dumps([{k: i.get(k) for k in ('subject', 'ask', 'recommend')} for i in warn], ensure_ascii=False)}")
+    # AIPOS-F225: envelope_warning 类归第二档(tiers.categories)= 进 notices(告知, 不计待定数), 不进 items
+    assert not [i for i in inbox["items"] if i["category"] == "envelope_warning"]
+    warn = [i for i in inbox.get("notices") or [] if i["category"] == "envelope_warning"]
+    _show(f"[③ 收件箱第二档告知(notices, envelope_warning 类, 不阻塞)] {json.dumps([{k: i.get(k) for k in ('subject', 'ask', 'recommend')} for i in warn], ensure_ascii=False)}")
     assert len(warn) == 1 and warn[0]["policy_id"] == AUTH and "已用 4/5 张业务卡(≥80%)" in warn[0]["ask"]
     assert "lybra project grant extend" in warn[0]["recommend"] and "--max-tasks 8" in warn[0]["recommend"]
     _card(o.gov, "PROBE-N-5", "ota")
