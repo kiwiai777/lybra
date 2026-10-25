@@ -103,11 +103,10 @@ def get_overview(repo_root: Path | None = None, *, home_root: str | Path | None 
     from tools.aipos_cli.task_loader import read_request_scope
 
     with read_request_scope():
-        return _get_overview(repo_root, home_root)
+        return _get_overview(_board_workspaces(repo_root, home_root))
 
 
-def _get_overview(repo_root: Path | None, home_root: str | Path | None) -> dict[str, Any]:
-    workspaces_config = _board_workspaces(repo_root, home_root)
+def _get_overview(workspaces_config: list[dict[str, Any]]) -> dict[str, Any]:
 
     results = []
     for ws_config in workspaces_config:
