@@ -3999,11 +3999,18 @@ def _build_audit_dispatch_preview(
                 f"SUPPLEMENTARY_ACTOR_NOT_ADVISOR: 补充审计只能由角色类 {sup_decl['actor_role_class']} 的实例发起: {role_gate['reason']}")
         if runtime_evidence_commands:
             # AIPOS-F165 件①: 声明校验唯一处(形 + 派发前可执行核查, 出卡 draft_validator 同调); 不过 = 预演即报, --confirm 拒
-            from tools.aipos_cli.artifact_ingest import RuntimeEvidenceDeclarationError, check_runtime_evidence_declaration
+            from tools.aipos_cli.artifact_ingest import (
+                RuntimeEvidenceDeclarationError, check_runtime_evidence_declaration, normalize_runtime_evidence_declaration,
+            )
 
             raw_evidence = {"required": True, "commands": list(runtime_evidence_commands)}
+            # AIPOS-F233 件②: 补审声明命令别名按被审卡交付主体改写为规范形(改写前后原文进 warnings); 未知占位由声明校验拒
+            normalized = normalize_runtime_evidence_declaration(raw_evidence, card_fm=source_metadata, task_id=str(source_task_id_for_verdict))
+            raw_evidence = normalized["value"]
+            warnings.extend(normalized["notes"])
             try:
-                checked = check_runtime_evidence_declaration(raw_evidence, governance_root=repo_root, audit_instance=audit_agent_instance)
+                checked = check_runtime_evidence_declaration(raw_evidence, governance_root=repo_root, audit_instance=audit_agent_instance,
+                                                             card_task_id=str(source_task_id_for_verdict))
                 blocking_reasons.extend(checked["problems"])
                 warnings.extend(checked["notes"])
                 supplementary_runtime_evidence = raw_evidence
@@ -4687,7 +4694,9 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
     审计分配工作树 = next_resolver.card_worktree_location(<审计卡>)(认领建树同一推导); 被审执行卡工作树同一函数(被审卡号)。
     AIPOS-F199 件①: 被审卡交付主体为固定候选(next_resolver.candidate_subject_values 非 None, enums.schema task_mode.candidate_subject)=
     不推导审计工作树, 每条记录绑定审计实例自己的验证根 run(_candidate_run_problem; 声明 runtime_evidence.candidate_subject), 声明命令按该条
-    run 的占位值渲染后逐字匹配; 旧占位 {worktree}/{commit_sha}/{tree_hash} = declaration_invalid_category + 迁移提示。其余卡行为不变。"""
+    run 的占位值渲染后逐字匹配。其余卡行为不变。AIPOS-F233 件①③: 渲染经占位统一词表(artifact_ingest.render_evidence_command: 别名按被审卡主体
+    改写为规范形再代值, 原 F199 旧占位拒收退役); 声明命令含未知占位(渲染不了)= declaration_invalid_category + 受限 amend 出口
+    (artifact_ingest.evidence_declaration_problem 唯一判据, 推导核同读; loop 立即判声明错归顾问, 不拉起审计体补做)。"""
     import hashlib
 
     from tools.aipos_cli.artifact_ingest import (
@@ -4715,13 +4724,18 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
                 "reasons": [f"卡面 {decl['card_field']} 声明不合({exc}); 出口: 顾问 lybra queue amend 修正卡面声明后重推导(fail-closed, 不当未声明放行)"]}
     if requirement is None:
         return None
+    from tools.aipos_cli.artifact_ingest import evidence_declaration_problem, render_evidence_command
+
+    declaration_problem = evidence_declaration_problem(workspace_root, audit_task_id, audit_fm, reviewed_fm=reviewed_fm,
+                                                       reviewed_task_id=reviewed)
+    if declaration_problem is not None:  # AIPOS-F233 件③: 声明命令渲染不了 = 声明错(审计体补做也匹配不上), 给受限 amend 出口
+        return {"category": declaration_problem["category"], "reasons": [*declaration_problem["reasons"], declaration_problem["outlet"]],
+                "declaration_problem": declaration_problem}
     category = str(decl["rejection_category"])
     heading = str(decl["section_heading"])
     # AIPOS-F199 件①: 按被审卡交付主体分形(enums.schema task_mode.candidate_subject, F196 唯一判据)——固定候选卡(validation 等)与其审计卡
     # 都不建树, 证据绑定审计实例自己的验证根 run(声明 runtime_evidence.candidate_subject); 其余卡照旧核审计分配工作树(行为不变)
-    from tools.aipos_cli.artifact_ingest import (
-        render_candidate_evidence_command, runtime_evidence_candidate_declaration, runtime_evidence_legacy_problems,
-    )
+    from tools.aipos_cli.artifact_ingest import render_candidate_evidence_command, runtime_evidence_candidate_declaration
     from tools.aipos_cli.next_resolver import CandidateSubjectError, candidate_subject_values
 
     try:
@@ -4731,9 +4745,6 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
                                                   "出口: 顾问 lybra queue amend 修正来源卡 / 候选(enums.schema task_mode.candidate_subject)"]}
     cand_decl = runtime_evidence_candidate_declaration() if subject is not None else {}
     if subject is not None:
-        legacy = runtime_evidence_legacy_problems(requirement, reviewed, reviewed_fm)
-        if legacy:  # 旧占位在候选卡上永远渲染不出审计 run 的命令: 给迁移提示(声明问题, 审计体补不了), 不静默当缺记录
-            return {"category": str(decl["declaration_invalid_category"]), "reasons": legacy}
         outlet = str(cand_decl["outlet"]).format(heading=heading) + runtime_evidence_guidance()
         code_repo = audit_wt = exec_wt = None
     else:
@@ -4760,10 +4771,8 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
     else:
         values = {}
 
-    def render(command: str) -> str:
-        for name in decl["placeholders"]:
-            command = command.replace("{" + str(name) + "}", values.get(str(name), ""))
-        return _collapse_ws(command)
+    def render(command: str) -> str:  # AIPOS-F233: 唯一渲染(别名按卡分支主体规范化后代值; 词表 placeholder_vocabulary)
+        return _collapse_ws(render_evidence_command(command, "branch", values))
 
     try:
         text = Path(report_path).read_text(encoding="utf-8")
@@ -4883,7 +4892,7 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
         if subject is not None:  # AIPOS-F199: 每条有效记录按其自身 run 的占位值渲染声明命令, 逐字一致即算该条已运行
             if any(_collapse_ws(render_candidate_evidence_command(declared, run_values)) == got for got, run_values in valid_runs):
                 continue
-            shown = _collapse_ws(render_candidate_evidence_command(declared, probes[0])) if probes else declared
+            shown = _collapse_ws(render_candidate_evidence_command(declared, probes[0] if probes else {}))  # AIPOS-F233: 无 run 也按规范形展示
             if shown in ran:  # 命令跑了, 但该条记录不合格(拒因已在上方逐条列出)
                 reasons.append(f"卡面声明的命令 {shown!r}(声明原文 {declared!r})只有不合格的运行记录(见上列该条拒因), 不算已运行")
                 continue

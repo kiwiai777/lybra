@@ -449,8 +449,10 @@ def _runtime_evidence_loop_declaration() -> dict[str, Any]:
     from tools.schema_loader import SchemaLoadError
 
     loop = runtime_evidence_declaration()["loop"]
-    if not loop.get("derivation_action") or not loop.get("exhausted_end_reason") or not isinstance(loop.get("relaunch_cap"), int):
-        raise SchemaLoadError("transitions.schema.json artifact_ingest.verdict.runtime_evidence.loop(derivation_action/relaunch_cap/exhausted_end_reason)未声明")
+    if (not loop.get("derivation_action") or not loop.get("exhausted_end_reason") or not isinstance(loop.get("relaunch_cap"), int)
+            or not loop.get("declaration_invalid_action") or not loop.get("declaration_invalid_end_reason")):
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.verdict.runtime_evidence.loop(derivation_action/relaunch_cap/exhausted_end_reason/"
+                              "declaration_invalid_action/declaration_invalid_end_reason)未声明")
     return loop
 
 
@@ -1955,7 +1957,9 @@ def _drive(
                 audit_card = str(action["card"])
                 audit_derivation = derive(audit_card, governance_root)
                 audit_action = audit_derivation.get("action") or {}
-                if audit_derivation.get("derivable") or audit_action.get("type") in HARD_STOP_ACTIONS:
+                if (audit_derivation.get("derivable") or audit_action.get("type") in HARD_STOP_ACTIONS
+                        or audit_action.get("type") == evidence_loop["declaration_invalid_action"]):
+                    # AIPOS-F233 件③: 运行证据声明本身有问题 = 不拉起审计体, 交下方以声明的结束原因结束(advisor_fix)
                     derivation, target_card, action = audit_derivation, audit_card, audit_action
                 else:
                     target_card = ready_card = audit_card
@@ -2032,6 +2036,11 @@ def _drive(
                     # AIPOS-F225 item 2: the Owner revoked a tier-2 auto release and has not ruled since = the card stays stopped
                     msg = f"Owner 撤回自动放行, 本卡停住: {derivation.get('suggested_action', '')}"
                     result.reason = str(action.get("end_reason") or "")
+                elif action.get("type") == evidence_loop["declaration_invalid_action"]:
+                    # AIPOS-F233 item 3: the card's runtime-evidence declaration itself is wrong (unrenderable placeholder / bad shape):
+                    # no auditor (re)launch can ever match it = end now as advisor_fix (restricted amend outlet in the suggestion)
+                    msg = f"运行证据声明错 @ {node}/{state}({target_card}): {derivation.get('suggested_action', '')}"
+                    result.reason = str(action.get("end_reason") or evidence_loop["declaration_invalid_end_reason"])
                 elif action.get("type") in candidate_fail_action_types():
                     # AIPOS-F211 item 4 (gap #217): fixed-candidate validation card FAIL = new candidate on a new validation card +
                     # queue supersede this card (advisor_fix, not a consecutive failure, no Owner inbox; transitions nodes.N4.candidate_fail);
@@ -2076,6 +2085,7 @@ def _drive(
                     return _report_fingerprint((d.get("action") or {}).get("path")) != _start
                 # AIPOS-F114: 等待中本轮作废(所审交回过期 / 被下一轮取代)也醒来——重推导被审卡派生重交回, 不空等到超时
                 return (bool(d.get("derivable")) or (d.get("action") or {}).get("type") in HARD_STOP_ACTIONS
+                        or (d.get("action") or {}).get("type") == evidence_loop["declaration_invalid_action"]  # AIPOS-F233 件③
                         or isinstance(d.get("return_stale"), dict) or isinstance(d.get("superseded_by"), dict))
 
             plan: LaunchPlan | None = None
