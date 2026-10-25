@@ -5,7 +5,7 @@ import json
 import subprocess
 from collections.abc import Mapping
 from datetime import datetime, timezone
-from tools.aipos_cli.clock import file_slug, iso_z, utc_now
+from tools.aipos_cli.clock import file_slug, iso_ms, iso_z, utc_now
 from tools.aipos_cli.record_writer import record_dir, record_root, records_root
 from pathlib import Path
 from typing import Any
@@ -4601,6 +4601,27 @@ def _collapse_ws(text: str) -> str:
     return " ".join(str(text).split())
 
 
+def _run_locate_refusal(workspace_root: Path, audit_task_id: str, exc: Exception) -> str:
+    """AIPOS-F232 件④: 裁决入口定位运行证据 run 被拒的拒因(前缀按拒因码分, 声明 transitions runtime_evidence.candidate_subject.host_selection
+    .verdict_refusals): 主机不符 / 主机未定 = 点名卡面声明主机; 其余 = 声明读不出。声明缺键 = SchemaLoadError(fail-closed)。"""
+    from tools.aipos_cli.validation_root import ValidationRootError, audit_evidence_requirement, host_selection_declaration
+
+    texts = host_selection_declaration().get("verdict_refusals")
+    needed = ("VR_EVIDENCE_HOST_MISMATCH", "VR_EVIDENCE_HOST_AMBIGUOUS", "unreadable", "host_undeclared")
+    if not isinstance(texts, dict) or any(not isinstance(texts.get(k), str) or not texts[k] for k in needed):
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.verdict.runtime_evidence.candidate_subject.host_selection.verdict_refusals"
+                              f"({' / '.join(needed)})未声明齐")
+    code = str(getattr(exc, "code", "") or "")
+    if code not in ("VR_EVIDENCE_HOST_MISMATCH", "VR_EVIDENCE_HOST_AMBIGUOUS"):
+        return str(texts["unreadable"]).format(error=exc)
+    try:
+        requirement, _card = audit_evidence_requirement(workspace_root, audit_task_id)
+        host = str((requirement or {}).get("host") or "").strip() or str(texts["host_undeclared"])
+    except ValidationRootError:  # 要求本身形不合 = 主机说不出(拒因原文已含原因)
+        host = str(texts["host_undeclared"])
+    return str(texts[code]).format(host=host, error=exc)
+
+
 def _candidate_run_problem(workspace_root: Path, audit_task_id: str, entry: dict[str, Any],
                            subject: dict[str, str]) -> tuple[dict[str, str], str | None]:
     """AIPOS-F199 件①: 固定候选卡一条运行记录(已过必填 / 执行 run 引用 / exit_code 核对)的验证根 run 判据(只供 runtime_evidence_check 调用,
@@ -4623,7 +4644,7 @@ def _candidate_run_problem(workspace_root: Path, audit_task_id: str, entry: dict
     try:
         decl_entry, run = locate_run(workspace_root, run_dir, run_id)
     except ValidationRootError as exc:
-        return {}, f"验证根声明读不出, 无从核对 run 归属(fail-closed): {exc}"
+        return {}, _run_locate_refusal(workspace_root, audit_task_id, exc)
     if decl_entry is None:
         return {}, (f"run_dir {run_dir}(run_id {run_id})不是任何验证根声明的 run 目录(project.json validation_roots; 按声明 path_template 反查不到); "
                     "须为本审计卡声明并 run-start 的 run")
@@ -7286,8 +7307,10 @@ def _mark_concluded_review_rework(*, resolved_root: Path, tid: str, queue_state:
             raise ValueError(f"--acceptance-criteria 须为 JSON 字符串数组(得 {acceptance_criteria!r})")
         criteria = parsed
     event_type = str(decl["event_type"])
-    reviewed_at = iso_z()
-    review_id = f"{event_type}_{tid}_{file_slug('compact', reviewed_at)}"
+    # AIPOS-F232 件⑤(F222R F-1): 复核时刻毫秒精度(clock.iso_ms), ID 尾 = 时刻压缩(毫秒段以 _ 连接)——同秒两次复核不撞名;
+    # 秒级存量记录(…_YYYYmmdd_HHMMSS)照旧可读, 读侧按解析后的时刻比较(next_resolver.advisor_reviews / rework_round_for_verdict)
+    reviewed_at = iso_ms()
+    review_id = f"{event_type}_{tid}_{file_slug('compact', reviewed_at).replace('.', '_')}"
     # AIPOS-F222 件①: 同一交回已有一条无返工轮的复核记录(上次在返工上限处被拒、已升 Owner 收件箱)= 复用它, 不重复记录
     latest_review = advisor_review_anchor(resolved_root, tid)
     reused: str | None = None

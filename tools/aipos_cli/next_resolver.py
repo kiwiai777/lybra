@@ -2412,9 +2412,18 @@ def rework_round_for_verdict(card_frontmatter: dict[str, Any] | None, verdict: d
         if audit_id and ref and re.search(rf"(?<![A-Za-z0-9_-]){re.escape(audit_id)}(?![A-Za-z0-9])", ref):
             return rnd
         created = str(rnd.get("created_at") or "").strip()
-        if verdict_at and created and created >= verdict_at:
+        if verdict_at and created and _moment_not_before(created, verdict_at):
             return rnd
     return None
+
+
+def _moment_not_before(left: str, right: str) -> bool:
+    """AIPOS-F232 件⑤: 两个 ISO 时刻 left ≥ right(解析比较: 毫秒级 `…49.200Z` 与秒级存量 `…49Z` 混比按时刻, 秒级视同 .000);
+    任一解析不了 = 回落原字符串比较(存量口径不变)。"""
+    from tools.aipos_cli.owner_inbox import _parse_utc
+
+    a, b = _parse_utc(left), _parse_utc(right)
+    return a >= b if a is not None and b is not None else left >= right
 
 
 def verdict_staleness(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -2726,7 +2735,11 @@ def advisor_reviews(workspace_root: Path, task_id: str) -> list[tuple[Path, dict
         fm, _body = require_frontmatter(path)
         if str(fm.get("event_type") or "") == event_type:
             out.append((path, fm))
-    out.sort(key=lambda item: (str(item[1].get("timestamp") or ""), item[0].name))
+    from tools.aipos_cli.owner_inbox import _parse_utc
+
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+    # AIPOS-F232 件⑤: 按解析后的时刻排序(毫秒级新记录与秒级存量混排不错序), 同刻按文件名
+    out.sort(key=lambda item: (_parse_utc(item[1].get("timestamp")) or floor, item[0].name))
     return out
 
 

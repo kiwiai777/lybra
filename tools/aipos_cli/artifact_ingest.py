@@ -411,9 +411,53 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
     try:
         return _with_header_repair_note(_validate_task_artifact(task_id, workspace_root))
     except FrontmatterReadError as exc:
-        return {"ok": False, "kind": "verdict" if is_audit_card(task_id) else "return",
-                "category": "INGEST_FRONTMATTER_UNREADABLE", "reasons": [f"{exc}。出口: 按拒因修正该文件 frontmatter 后重推导"],
-                "path": exc.path, "frontmatter": {}, "exit_code": INGEST_EXIT_REJECTED}
+        is_audit = is_audit_card(task_id)
+        out = {"ok": False, "kind": "verdict" if is_audit else "return",
+               "category": "INGEST_FRONTMATTER_UNREADABLE", "reasons": [f"{exc}。出口: 按拒因修正该文件 frontmatter 后重推导"],
+               "path": exc.path, "frontmatter": {}, "exit_code": INGEST_EXIT_REJECTED}
+        problem = report_unreadable_problem(workspace_root, task_id, exc, is_audit=is_audit)
+        if problem is not None:  # AIPOS-F232 件②: 读不出的是本卡报告 = 报告格式错(可纠正, loop 续接会话只修报告头)
+            out["header_problem"] = problem
+            out["reasons"] = [f"{exc}。出口(报告格式错, 例行修法): {problem['problem']}; {problem['fix']}"]
+        return out
+
+
+def report_unreadable_problem(workspace_root: Path, task_id: str, exc: Any, *, is_audit: bool) -> dict[str, Any] | None:
+    """AIPOS-F232 件②(声明 transitions artifact_ingest.return.header_fix.unreadable): 读不出的文件(exc = FrontmatterReadError)是本卡报告
+    (执行卡 = 交回落点 return_root/<卡> 下, 审计卡 = 裁决落点 verdict_root/<卡> 下的报告文件)= 报告格式错 {kinds, correctable: True, problem,
+    fix, line_no, line_text, reason, path}; 不是(卡面 / 记录 / 他卡)= None(照旧硬停)。该行原文读不出 = 只给原因(problem_no_line)。"""
+    from tools.aipos_cli.next_resolver import return_artifact_dir, verdict_artifact_dir
+
+    decl = header_fix_declaration().get("unreadable")
+    needed = ("kind", "line_chars", "problem", "problem_no_line", "fix")
+    if not isinstance(decl, dict) or any(k not in decl for k in needed) or not isinstance(decl["line_chars"], int):
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError(f"transitions.schema.json artifact_ingest.return.header_fix.unreadable({' / '.join(needed)})未声明齐(AIPOS-F232)")
+    raw = str(getattr(exc, "path", "") or "")
+    if not raw:
+        return None
+    path = Path(raw)
+    slot = (verdict_artifact_dir if is_audit else return_artifact_dir)(Path(workspace_root), task_id)
+    try:
+        if path.resolve().parent != Path(slot).resolve():
+            return None
+    except OSError:
+        return None
+    raw_reason = str(getattr(exc, "reason", "") or exc)
+    reason = " ".join(raw_reason.split())  # 一行(解析器原文多行带 ^ 指示行; 行号与该行原文另给)
+    line_no = getattr(exc, "line_no", None)
+    line_text = ""
+    if isinstance(line_no, int) and line_no > 0:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+            line_text = lines[line_no - 1].strip()[: int(decl["line_chars"])] if line_no <= len(lines) else ""
+        except (OSError, UnicodeDecodeError):
+            line_text = ""
+    problem = (str(decl["problem"]).format(line_no=line_no, line_text=line_text, reason=reason) if line_text
+               else str(decl["problem_no_line"]).format(reason=reason))
+    return {"kinds": [str(decl["kind"])], "correctable": True, "problem": problem, "fix": str(decl["fix"]), "line_no": line_no,
+            "line_text": line_text, "reason": raw_reason, "path": str(path), "role": "auditor" if is_audit else "executor"}
 
 
 def _with_header_repair_note(out: dict[str, Any]) -> dict[str, Any]:

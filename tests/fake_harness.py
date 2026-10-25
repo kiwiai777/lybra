@@ -15,6 +15,10 @@
     sha_typo   AIPOS-F180B: first run as sha_typo_once; on resume rewrites the header with another wrong value (tip[:38])
     sha_stay   AIPOS-F180B: first run as sha_typo_once; on resume leaves the report untouched and exits 0
     sha_other  AIPOS-F180B: report commit_sha = FAKE_AUDIT_OTHER_SHA (another real commit = audited the wrong product)
+    yaml_bad_once  AIPOS-F232 (audit card only): first run writes the report with the AIPOS-F225R header line
+                   shape `engine: glm-5.3 (provider: kiwiai)` unquoted (AIPOS-F233: non-free-text key) (PyYAML cannot parse it); on a same-session resume it quotes only
+                   that value (header fixed, body / verdict untouched)
+    yaml_bad   AIPOS-F232: first run as yaml_bad_once; on resume leaves the report untouched and exits 0
     validate   AIPOS-F196 (executor card only): fixed-candidate validation card (no worktree): run the kickoff's validation-root
                ssh commands (directory-chain init-run, then helper check of the screenshot path), write a fake screenshot into the
                run directory over `ssh <alias>`, copy it to the report slot artifacts/, write RETURN with the product-given values
@@ -249,6 +253,25 @@ def sha_mode(task_id: str, kickoff: str, mode: str) -> None:
     pi_session(report, "fake-audit-model")
 
 
+YAML_BAD_LINE = "engine: glm-5.3 (provider: kiwiai)"  # AIPOS-F232: the AIPOS-F225R header line shape (unquoted = PyYAML error); AIPOS-F233:
+# a key NOT in transitions artifact_ingest.report_header_yaml.free_text_keys (a declared free-text key such as `model` is now tolerated)
+
+
+def yaml_mode(task_id: str, kickoff: str, mode: str) -> None:
+    """AIPOS-F232: report header unreadable fixture modes (audit card only); resume = FAKE_PI_RESUMES >= 1 (set by fake pi)."""
+    report = Path(field(kickoff, "报告落点"))
+    if os.environ.get("FAKE_PI_RESUMES", "0") == "0":
+        do_work(task_id, kickoff)
+        text = report.read_text(encoding="utf-8")
+        report.write_text(text.replace("verdict: PASS\n", f"verdict: PASS\n{YAML_BAD_LINE}\n", 1), encoding="utf-8")
+        return
+    if mode == "yaml_bad":
+        return
+    text = report.read_text(encoding="utf-8")
+    report.write_text(text.replace(f"{YAML_BAD_LINE}\n", "engine: 'glm-5.3 (provider: kiwiai)'\n", 1), encoding="utf-8")
+    pi_session(report, "fake-audit-model")
+
+
 def main() -> int:
     if sys.argv[1:2] == ["--grandchild"]:
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -300,6 +323,10 @@ def main() -> int:
             if log:
                 Path(log, f"{task_id}.sim_pid").write_text(str(sim.pid), encoding="utf-8")
         time.sleep(600)
+        return 0
+    if mode in ("yaml_bad_once", "yaml_bad") and reviewed_of(task_id):
+        yaml_mode(task_id, kickoff, mode)
+        emit({"type": "agent_end", "messages": []})
         return 0
     if mode in ("provider_401", "provider_429", "length") or (mode == "provider_429_once" and os.environ.get("FAKE_PI_RESUMES", "0") == "0"):
         provider_session("provider_429" if mode == "provider_429_once" else mode)  # AIPOS-F231: 早退真实原因在会话记录里
