@@ -1962,6 +1962,161 @@ def withdraw_linked_audits(repo_root: Path, task_id: str, *, action: str, actor:
     return out
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F234 件①②: 撤回在途保护按真相判 + 孤儿审计卡(声明 transitions queue_mutations.in_transit_guard)
+# ---------------------------------------------------------------------------
+
+_IN_TRANSIT_TEXTS = ("refusal", "live_loop", "live_launch", "live_unprobeable", "live_remote_unverified", "stop_command",
+                     "not_in_transit", "ack_note", "orphan_note", "orphan_reason", "orphan_superseded", "orphan_command",
+                     "orphan_suggested", "scan_command", "scan_preview", "scan_none", "scan_done", "scan_failed")
+
+
+def in_transit_declaration() -> dict[str, Any]:
+    """AIPOS-F234: transitions.schema queue_mutations.in_transit_guard(唯一读取口)。orphan_business_states 须为队列终态目录;
+    缺键 = SchemaLoadError(fail-closed)。"""
+    from tools.aipos_cli.adapter_response import ERROR_CATEGORIES
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (load_schema("transitions").get("queue_mutations") or {}).get("in_transit_guard")
+    texts = decl.get("texts") if isinstance(decl, dict) else None
+    if (not isinstance(decl, dict) or decl.get("category") not in ERROR_CATEGORIES or not str(decl.get("error_code") or "").strip()
+            or not str(decl.get("ack_flag") or "").startswith("--")
+            or not isinstance(decl.get("orphan_business_states"), list) or not decl["orphan_business_states"]
+            or not set(decl["orphan_business_states"]) <= set(QUEUE_STATES)
+            or not isinstance(texts, dict) or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in _IN_TRANSIT_TEXTS)):
+        raise SchemaLoadError(f"transitions.schema.json queue_mutations.in_transit_guard(category ∈ adapter_response.ERROR_CATEGORIES / error_code / "
+                              f"ack_flag / orphan_business_states ⊆ 队列目录 / "
+                              f"texts.{list(_IN_TRANSIT_TEXTS)})未声明齐(AIPOS-F234)")
+    return decl
+
+
+def orphan_audit_state(repo_root: Path, task_id: str, metadata: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """AIPOS-F234 件②: 孤儿审计卡判定(唯一实现; 撤回在途保护 / lybra next / loop status / 存量扫描同读)。
+    审计卡(audit_derivation.is_audit_card)的被审业务卡(audit_card_reviewed_id)队列状态 ∈ 声明 orphan_business_states = 孤儿 →
+    {task_id, business, business_state, superseded_by, reason, command, note, suggested}; 否则 None。
+    业务卡不唯一 = AmbiguousTaskCard 上抛; 卡面读不出 = FrontmatterReadError 上抛(fail-closed)。只读。"""
+    from tools.aipos_cli.audit_derivation import audit_card_reviewed_id, is_audit_card
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.task_loader import find_task_card
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    tid = str(task_id or "").strip()
+    if not tid or not is_audit_card(tid, metadata or None):
+        return None
+    business = audit_card_reviewed_id(tid, metadata or None)
+    if not business:
+        return None
+    decl = in_transit_declaration()
+    texts = decl["texts"]
+    root = Path(repo_root)
+    path, state = find_task_card(root, business)
+    if path is None or state not in decl["orphan_business_states"]:
+        return None
+    bfm, _body = require_frontmatter(Path(path))
+    by = str(bfm.get(supersede_declaration()["card_fields"]["by"]) or "").strip()
+    superseded = texts["orphan_superseded"].format(by=by) if by else ""
+    fill = {"task_id": tid, "business": business, "business_state": state, "superseded": superseded}
+    reason = texts["orphan_reason"].format(**fill)
+    prefix = lybra_command_prefix(root)
+    command = texts["orphan_command"].format(prefix=prefix, task_id=tid, reason=reason)
+    scan = texts["scan_command"].format(prefix=prefix)
+    return {**fill, "superseded_by": by or None, "reason": reason, "command": command, "scan_command": scan,
+            "note": texts["orphan_note"].format(**fill),
+            "suggested": texts["orphan_suggested"].format(**fill, command=command, scan_command=scan)}
+
+
+def _in_transit_line(item: dict[str, Any], texts: dict[str, str]) -> str:
+    key = {"loop": "live_loop", "launch": "live_launch", "unprobeable": "live_unprobeable",
+           "remote_unverified": "live_remote_unverified"}[str(item["kind"])]
+    return texts[key].format(**{k: item.get(k) for k in ("run_id", "run_task", "host", "pid", "state", "card", "harness", "remote_pgid", "age")})
+
+
+def withdraw_in_transit_check(repo_root: Path, task_id: str, metadata: dict[str, Any] | None, *, ack: bool = False) -> dict[str, Any]:
+    """AIPOS-F234 件①: 撤回在途保护(唯一实现; board_adapter.withdraw_task 预演与确认同调, 同一判据)。
+    存活判定 = loop_run_record.card_in_transit(运行记录 + 进程启动时刻指纹, 不看会话时刻)。返回 {task_id, in_transit, orphan,
+    live: [...], lines: [存活项文案], blocking_reason(None = 放行), warnings, ack_note(None = 无), note}:
+      - 非在途 = 放行(note = texts.not_in_transit);
+      - 孤儿审计卡(orphan_audit_state)= 在途保护不适用: 放行, 存活项照列进 warnings(提醒);
+      - 在途且 ack = 放行, ack_note(texts.ack_note)由调用方并入卡面 withdrawal_reason;
+      - 在途且无 ack = blocking_reason = texts.refusal(存活项 + loop stop 出口 + ack_flag 出口)。
+    运行记录读不出 / 探活无权限 = LoopRunRecordError 上抛(调用方拒, fail-closed)。只读。"""
+    from tools.aipos_cli.audit_derivation import audit_card_reviewed_id, is_audit_card
+    from tools.aipos_cli.loop_run_record import card_in_transit
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    decl = in_transit_declaration()
+    texts = decl["texts"]
+    root = Path(repo_root)
+    tid = str(task_id or "").strip()
+    orphan = orphan_audit_state(root, tid, metadata)
+    related = [audit_card_reviewed_id(tid, metadata or None)] if is_audit_card(tid, metadata or None) else []
+    truth = card_in_transit(root, tid, related=[r for r in related if r])
+    lines = [_in_transit_line(item, texts) for item in truth["live"]]
+    out: dict[str, Any] = {"task_id": tid, "in_transit": truth["in_transit"], "orphan": orphan, "live": truth["live"], "lines": lines,
+                           "blocking_reason": None, "warnings": [], "ack_note": None, "category": decl["category"],
+                           "error_code": decl["error_code"],
+                           "ack_flag": decl["ack_flag"], "note": texts["not_in_transit"].format(task_id=tid, runs=truth["runs"])}
+    if orphan is not None:
+        out["note"] = orphan["note"]
+        out["warnings"] = [orphan["note"]] + lines
+        return out
+    if not truth["in_transit"]:
+        return out
+    live = "; ".join(lines)
+    if ack:
+        out["ack_note"] = texts["ack_note"].format(ack_flag=decl["ack_flag"], live=live)
+        out["warnings"] = [out["ack_note"]]
+        out["note"] = out["ack_note"]
+        return out
+    prefix = lybra_command_prefix(root)
+    stops = list(dict.fromkeys(texts["stop_command"].format(prefix=prefix, run_task=item["run_task"]) for item in truth["live"]))
+    out["blocking_reason"] = texts["refusal"].format(error_code=decl["error_code"], task_id=tid, live=live, stop_command="; ".join(stops),
+                                                     ack_flag=decl["ack_flag"])
+    out["stop_commands"] = stops
+    return out
+
+
+def orphan_audits_for(repo_root: Path, task_id: str) -> list[dict[str, Any]]:
+    """AIPOS-F234 件②: loop status 用——本卡自身是孤儿审计卡 = [它]; 本卡是业务卡 = 其在途审计卡(in_flight_audit_cards)中的孤儿。
+    卡找不到 = []。只读; 卡面读不出 / 卡不唯一 = 上抛(fail-closed)。"""
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.task_loader import find_task_card
+
+    root = Path(repo_root)
+    path, state = find_task_card(root, task_id)
+    if path is None:
+        return []
+    fm, _body = require_frontmatter(Path(path))
+    own = orphan_audit_state(root, task_id, fm) if state in linked_audit_declaration()["states"] else None
+    if own is not None:
+        return [{**own, "state": state}]
+    out: list[dict[str, Any]] = []
+    for card in in_flight_audit_cards(root, task_id):
+        afm, _abody = require_frontmatter(root / card["path"])
+        orphan = orphan_audit_state(root, card["audit_task_id"], afm)
+        if orphan is not None:
+            out.append({**orphan, "state": card["state"]})
+    return out
+
+
+def orphan_audit_cards(repo_root: Path) -> list[dict[str, Any]]:
+    """AIPOS-F234 件②: 存量孤儿审计卡(只读扫描; 存量批量撤回 board_adapter.withdraw_orphan_audits 的唯一来源)。
+    队列状态 ∈ linked_audit_withdrawal.states 的审计卡逐张经 orphan_audit_state 判定。返回 [{...orphan_audit_state, state, path}](按卡号)。"""
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.task_loader import iter_queue_task_paths
+
+    root = Path(repo_root)
+    states = tuple(linked_audit_declaration()["states"])
+    out: list[dict[str, Any]] = []
+    for path in iter_queue_task_paths(root, states=states):
+        fm, _body = require_frontmatter(path)
+        tid = str(fm.get("task_id") or "").strip()
+        orphan = orphan_audit_state(root, tid, fm) if tid else None
+        if orphan is not None:
+            out.append({**orphan, "state": path.parent.name, "path": str(path.relative_to(root))})
+    return sorted(out, key=lambda x: x["task_id"])
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 from tools.schema_constants import RecordType, Verdict

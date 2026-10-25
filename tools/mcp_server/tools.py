@@ -3815,7 +3815,7 @@ def lybra_queue_withdraw_dry_run(arguments: dict[str, Any] | None = None) -> dic
     
     Requires: queue_withdraw scope, task_id, reason.
     Supports: pending or claimed tasks.
-    S3 in-transit protection: blocks if active session detected within last hour.
+    AIPOS-F234: in-transit protection = board_adapter.withdraw_task (same judgement as confirm); ack_in_transit passes it.
     """
     if not _verb_scope_allowed("lybra_queue_withdraw_dry_run"):
         return _verb_scope_denied("lybra_queue_withdraw_dry_run", "queue withdraw tools")
@@ -3847,6 +3847,7 @@ def lybra_queue_withdraw_dry_run(arguments: dict[str, Any] | None = None) -> dic
         reason=reason,
         dry_run=True,
         repo_root=_resolve_queue_workspace(args),
+        ack_in_transit=args.get("ack_in_transit") is True,
     )
     if response.get("verdict") == Verdict.BLOCK:
         return _tool_result(response, is_error=True)
@@ -3893,6 +3894,7 @@ def lybra_queue_withdraw_confirm(arguments: dict[str, Any] | None = None) -> dic
         reason=reason,
         dry_run=False,
         repo_root=workspace,
+        ack_in_transit=args.get("ack_in_transit") is True,
     )
     if response.get("verdict") == Verdict.BLOCK:
         return _tool_result(response, is_error=True)
@@ -6118,7 +6120,10 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
         "description": (
             "AIPOS-315: dry-run preview for withdrawing a task from queue. "
             "Supports pending or claimed tasks. Moves to withdrawn/ state with reason. "
-            "S3 in-transit protection: blocks if active session detected within last hour. "
+            "AIPOS-F234 in-transit protection (same judgement as confirm): refused while the card has a live loop run or a "
+            "live launched executor / auditor process (run records + process start fingerprint, not session age); exits = "
+            "lybra loop stop first, or ack_in_transit=true to accept losing in-flight work (recorded in withdrawal_reason). "
+            "Orphan audit cards (business card withdrawn / superseded / completed) are exempt. "
             "Does NOT delete existing records (claims/returns/sessions preserved). "
             "Prerequisites: queue_withdraw scope, task_id, reason, actor."
         ),
@@ -6128,6 +6133,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "task_id": {"type": "string"},
                 "actor": {"type": "string"},
                 "reason": {"type": "string", "description": "Why this task is being withdrawn."},
+                "ack_in_transit": {"type": "boolean", "description": "AIPOS-F234: withdraw an in-transit card anyway, accepting loss of in-flight work (risk confirmation written into withdrawal_reason). Default false."},
                 "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["task_id", "actor", "reason"],
@@ -6138,7 +6144,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
         "name": "lybra_queue_withdraw_confirm",
         "description": (
             "AIPOS-315: confirm withdraw — execute the withdrawal (move card to withdrawn/). "
-            "Re-validates all inputs and in-transit checks before executing. "
+            "Re-validates all inputs and the in-transit check (same judgement as dry-run, AIPOS-F234) before executing. "
             "Does NOT require owner_confirm (advisor callable)."
         ),
         "inputSchema": {
@@ -6147,6 +6153,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 "task_id": {"type": "string"},
                 "actor": {"type": "string"},
                 "reason": {"type": "string"},
+                "ack_in_transit": {"type": "boolean", "description": "AIPOS-F234: withdraw an in-transit card anyway, accepting loss of in-flight work (risk confirmation written into withdrawal_reason). Default false."},
                 "workspace_root": {"type": "string", "description": "AIPOS-F42: Explicit workspace root. Resolution order: explicit workspace_root → token project scope → error. Never silently fall back to gate's own workspace."},
             },
             "required": ["task_id", "actor", "reason"],

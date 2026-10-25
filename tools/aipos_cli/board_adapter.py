@@ -6039,6 +6039,7 @@ def execute_dry_run(
                 reason=source_data.get("reason"),  # dry_run 时存入 data.reason
                 dry_run=True,
                 repo_root=resolved_root,
+                ack_in_transit=source_data.get("ack_in_transit") is True,  # AIPOS-F234: 预演所带在途确认原样重放
             )
         elif op == "queue_amend":
             # AIPOS-315: G2 两阶段动词 - amend revalidation
@@ -6480,6 +6481,7 @@ def execute_dry_run(
                 reason=source_data.get("reason"),
                 dry_run=False,
                 repo_root=resolved_root,
+                ack_in_transit=source_data.get("ack_in_transit") is True,  # AIPOS-F234: 与预演同一在途判定与确认
             )
             verdict = str(result.get("verdict") or Verdict.BLOCK)
             # AIPOS-F213 件①: 确认分支写后即经同一薄壳落账(queue_writers withdraw; 原门侧确认不落账)
@@ -8433,6 +8435,7 @@ def withdraw_task(
     owner_confirmation_required_override: bool | None = None,
     owner_confirmation_reasons_override: list[str] | None = None,
     owner_ruling_ref: str | None = None,
+    ack_in_transit: bool = False,
 ) -> dict[str, Any]:
     """AIPOS-315: withdraw a task from pending or claimed queue state.
     AIPOS-F170 件①: 声明须带 Owner 裁决引用的源目录(transitions.schema withdraw.owner_ruling_required_from, 即 blocked)另需
@@ -8441,7 +8444,9 @@ def withdraw_task(
     Moves task to withdrawn/ state with reason. Does NOT delete any existing
     records (claims/returns/sessions/audit) - those are preserved.
     
-    S3 in-transit protection: checks for active session and blocks if found.
+    AIPOS-F234 件①: in-transit protection = queue_mutation.withdraw_in_transit_check (live loop run / launched process, not session
+    age), same judgement for dry_run and confirm; ack_in_transit=True (CLI --ack-in-transit / MCP ack_in_transit) passes an in-transit
+    card and records the risk confirmation in withdrawal_reason; orphan audit cards (business card withdrawn / completed) are exempt.
     """
     operation = "queue_withdraw"
     try:
@@ -8455,55 +8460,36 @@ def withdraw_task(
         resolved_root = _resolve_repo_root(repo_root)
         selected_task_id, selected_path = _select_task_input(task_id, path)
         
-        # Load task to check session activity
         task = _select_task(resolved_root, task_id=selected_task_id, path=selected_path)
-        
-        # AIPOS-F41 B3: 在途卡可撤性修真 - claimed 但无活动会话的卡应允许撤回或改卡
-        # 判据与 F38 "在途=未交回"同源:
-        # - 已有 return 记录 = 不在途(可撤)
-        # - claimed 且无 return, 但无活动会话 = 可撤(如 F40 被代按认领后从未开工)
-        # - claimed 且无 return, 且有近期活跃会话 = 真在途(保护)
-        active_session_id = task.get("metadata", {}).get("active_session_id")
-        task_status = task.get("metadata", {}).get("status")
-        
-        if task_status == "claimed" and active_session_id and dry_run:
-            # 检查是否已有 return 记录(已交回 = 不在途)
-            from tools.aipos_cli.records import load_records
-            records = load_records(resolved_root)
-            returns = records.get("returns", [])
-            has_return = any(r.get("task_id") == selected_task_id for r in returns)
-            
-            if not has_return:
-                # 无 return 记录,检查会话是否活跃(近期有动静)
-                sessions = records.get("sessions", [])
-                from datetime import timedelta
-                now = utc_now()
-                
-                for session in sessions:
-                    if session.get("session_id") == active_session_id:
-                        session_timestamp = session.get("created_at") or session.get("timestamp", "")
-                        if session_timestamp:
-                            try:
-                                session_time = datetime.fromisoformat(session_timestamp.replace("Z", "+00:00"))
-                                # 保护窗口从 1 小时扩大到 24 小时(避免误伤跨天在途卡)
-                                if now - session_time < timedelta(hours=24):
-                                    return blocked_response(
-                                        operation=operation,
-                                        dry_run=dry_run,
-                                        category="ACTIVE_SESSION",
-                                        message=f"Task has active session {active_session_id} from less than 24 hours ago (created at {session_timestamp}). Cannot withdraw task that may be in-transit.",
-                                        actor=_actor_payload(actor_text),
-                                        data={
-                                            "task_id": task.get("task_id"),
-                                            "active_session_id": active_session_id,
-                                            "session_timestamp": session_timestamp,
-                                            "recommended_action": "Wait for session to complete/return, or explicitly confirm withdrawal acknowledging work loss risk."
-                                        },
-                                        safety_notice="AIPOS-F41 B3: in-transit protection (24h window). Claimed+no-return+recent-session = true in-transit."
-                                    )
-                            except (ValueError, TypeError):
-                                pass
-        
+
+        # AIPOS-F234 件①: 在途保护按真相判(取代 AIPOS-F41 B3「24h 内有会话」且只在预演判): 预演与正式撤回同一判定
+        # queue_mutation.withdraw_in_transit_check(本卡有存活 loop 运行 / 执行审计拉起进程 = 在途; 孤儿审计卡不适用; 显式 ack 放行并记风险确认)
+        from tools.aipos_cli.loop_run_record import LoopRunRecordError
+        from tools.aipos_cli.queue_mutation import withdraw_in_transit_check
+
+        task_meta = task.get("metadata") or {}
+        try:
+            transit = withdraw_in_transit_check(resolved_root, str(task.get("task_id") or selected_task_id or ""), task_meta,
+                                                ack=bool(ack_in_transit))
+        except LoopRunRecordError as exc:  # 运行记录读不出 / 探活无权限 = 判不出是否在途 = 拒(fail-closed)
+            return blocked_response(operation=operation, dry_run=dry_run, category="STATUS_MISMATCH",
+                                    message=f"IN_TRANSIT_UNVERIFIABLE: 判不出卡 {task.get('task_id')} 是否在途(运行记录 / 探活失败, 拒撤回): {exc}",
+                                    actor=_actor_payload(actor_text), data={"task_id": task.get("task_id")})
+        in_transit_view = {k: transit.get(k) for k in ("in_transit", "live", "lines", "note", "ack_note", "orphan")}
+        if transit["blocking_reason"]:
+            return blocked_response(
+                operation=operation,
+                dry_run=dry_run,
+                category=str(transit["category"]),
+                message=str(transit["blocking_reason"]),
+                actor=_actor_payload(actor_text),
+                data={"task_id": task.get("task_id"), "error_code": transit["error_code"], "in_transit": in_transit_view,
+                      "exits": {"stop_commands": transit.get("stop_commands") or [], "ack_flag": transit["ack_flag"]}},
+                safety_notice="AIPOS-F234: in-transit protection by live loop run / launched process truth (same judgement for preview and confirm).",
+            )
+        requested_reason = str(reason).strip()
+        reason = requested_reason + (str(transit["ack_note"]) if transit["ack_note"] else "")  # 卡面 withdrawal_reason 记风险确认
+
         # Call mutate_queue_task directly
         from tools.aipos_cli.queue_mutation import mutate_queue_task
         from tools.aipos_cli.agent_profiles import load_agent_profiles
@@ -8531,7 +8517,7 @@ def withdraw_task(
         withdrawn_id = str(result.get("task_id") or selected_task_id or "")
         link_applies = bool(withdrawn_id) and not is_audit_card(withdrawn_id, task.get("metadata") or None)
         linked = withdraw_linked_audits(resolved_root, withdrawn_id, action="withdraw", actor=actor_text, dry_run=True,
-                                        detail=str(reason).strip()) if link_applies and dry_run else []
+                                        detail=requested_reason) if link_applies and dry_run else []
         
         if dry_run:
             response = make_response(
@@ -8546,12 +8532,15 @@ def withdraw_task(
                     "target_path": result.get("target_path"),
                     "from_state": result.get("from_state"),
                     "to_state": result.get("to_state"),
-                    "reason": str(reason).strip(),
+                    "reason": requested_reason,  # 两阶段确认重放用原样理由(+ ack_in_transit), 卡面实写 withdrawal_reason
+                    "ack_in_transit": bool(ack_in_transit),
+                    "withdrawal_reason": reason,
                     "owner_ruling_ref": result.get("owner_ruling_ref"),
                     "linked_audits": linked,  # AIPOS-F230 件⑤: 在途审计卡将随本次撤回一并撤回
+                    "in_transit": in_transit_view,  # AIPOS-F234 件①: 在途判定(与确认同一判据)
                 },
                 summary={"task_id": result.get("task_id"), "to_state": "withdrawn"},
-                warnings=list(result.get("warnings", [])) + [item["line"] for item in linked],
+                warnings=list(result.get("warnings", [])) + list(transit["warnings"]) + [item["line"] for item in linked],
                 blocking_reasons=result.get("blocking_reasons", []),
                 safety_notice="AIPOS-315: withdraw will move task to withdrawn/ and preserve all existing records.",
             )
@@ -8583,7 +8572,7 @@ def withdraw_task(
 
         worktree_cleanup = cleanup_after(resolved_root, str(result.get("task_id") or selected_task_id), trigger="withdraw", actor=actor_text)
         linked = withdraw_linked_audits(resolved_root, withdrawn_id, action="withdraw", actor=actor_text, dry_run=False,
-                                        detail=str(reason).strip(), profiles=profiles) if link_applies else []
+                                        detail=requested_reason, profiles=profiles) if link_applies else []
         return make_response(
             ok=True,
             operation=operation,
@@ -8596,19 +8585,54 @@ def withdraw_task(
                 "target_path": result.get("target_path"),
                 "from_state": result.get("from_state"),
                 "to_state": result.get("to_state"),
-                "reason": str(reason).strip(),
+                "reason": requested_reason,
+                "ack_in_transit": bool(ack_in_transit),
+                "withdrawal_reason": reason,
                 "owner_ruling_ref": result.get("owner_ruling_ref"),
                 "moved": result.get("moved", False),
                 "wrote": result.get("wrote", False),
                 "worktree_cleanup": worktree_cleanup,
                 "worktree_cleanup_record": worktree_cleanup.get("record"),
+                "in_transit": in_transit_view,  # AIPOS-F234 件①: 在途判定(与预演同一判据)
             },
             summary={"task_id": result.get("task_id"), "withdrawn": True},
-            warnings=list(result.get("warnings", [])) + [item["line"] for item in linked],
+            warnings=list(result.get("warnings", [])) + list(transit["warnings"]) + [item["line"] for item in linked],
             safety_notice="AIPOS-315: task withdrawn, all existing records preserved.",
         )
     except Exception as exc:
         return _normalize_exception("queue_withdraw", exc, dry_run=dry_run, actor=_actor_payload(actor))
+
+
+def withdraw_orphan_audits(*, actor: str, confirm: bool = False, repo_root: str | Path | None = None) -> dict[str, Any]:
+    """AIPOS-F234 件②: 存量孤儿审计卡一次性扫描(lybra queue orphan-audits 唯一实现)。孤儿判定唯一来源 queue_mutation.orphan_audit_cards
+    (业务卡已撤回 / 撤换 / 结案而审计卡仍在 linked_audit_withdrawal.states)。缺省 = 只读预演逐张列出(texts.scan_preview);
+    confirm = 逐张经撤回唯一实现 withdraw_task(dry_run=False; 卡面 withdrawal_reason = texts.orphan_reason)撤回, 某张失败 = 该条
+    ok=False + 拒因 + 单张补撤命令(texts.scan_failed; 不抛, 不影响其余)。不落账: 写出文件 written(queue_write_paths 同一口径)由 CLI
+    经 queue_writers withdraw 落账。返回 {ok, confirm, items: [{task_id, state, business, ok, line, written?}], written, lines}。"""
+    from tools.aipos_cli.queue_mutation import in_transit_declaration, linked_audit_declaration, orphan_audit_cards
+
+    texts = in_transit_declaration()["texts"]
+    root = _resolve_repo_root(repo_root)
+    items: list[dict[str, Any]] = []
+    written: list[str] = []
+    for card in orphan_audit_cards(root):
+        fill = {k: card[k] for k in ("task_id", "state", "business", "business_state", "superseded")}
+        entry = {k: card[k] for k in ("task_id", "state", "business", "business_state", "superseded_by", "reason", "command")}
+        if not confirm:
+            items.append({**entry, "ok": True, "planned": True, "line": texts["scan_preview"].format(**fill)})
+            continue
+        response = withdraw_task(task_id=card["task_id"], actor=actor, reason=card["reason"], dry_run=False, repo_root=root)
+        if response.get("ok") and response.get("verdict") != Verdict.BLOCK:
+            paths = queue_write_paths(response)
+            written += paths
+            items.append({**entry, "ok": True, "line": texts["scan_done"].format(**fill), "written": paths})
+            continue
+        why = "; ".join(str(r) for r in response.get("blocking_reasons") or []) or "; ".join(
+            str(e.get("message") or "") for e in response.get("errors") or []) or "被拒"
+        items.append({**entry, "ok": False, "line": texts["scan_failed"].format(**fill, reason=why, command=card["command"])})
+    lines = [item["line"] for item in items] or [texts["scan_none"].format(states=", ".join(linked_audit_declaration()["states"]))]
+    return {"ok": all(item["ok"] for item in items), "confirm": bool(confirm), "items": items, "written": list(dict.fromkeys(written)),
+            "lines": lines}
 
 
 def supersede_task(
