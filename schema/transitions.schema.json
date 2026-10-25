@@ -1474,7 +1474,7 @@
         },
         "command_match": "卡声明的每条命令按占位渲染后, 与某条运行记录的 command 在空白折叠后逐字相等; 加参数(如 --preflight-only)即不算该条已运行。AIPOS-F233: 渲染先按 placeholder_vocabulary 把别名改写为被审卡交付主体的规范占位再代值(两种交付主体的同义占位互认)",
         "placeholder_vocabulary": {
-          "description": "AIPOS-F233 件①(10-25 chris 理想 HBLX-52 实撞: 分支卡 audit_runtime_evidence.commands 误用固定候选卡词表 {src_dir}/{candidate}, 分支卡审计只渲染 {worktree}/{commit_sha}/{tree_hash} → 审计体 59 项离线测试实跑通过, 证据仍逐字不匹配被拒收, loop 按 relaunch_cap 白拉起审计体两次 → runtime_evidence_exhausted → Owner 撤换重发): 审计 / 验证命令占位统一词表(唯一声明; 读取口 artifact_ingest.placeholder_vocabulary, 加载即校验: 每个占位名恰属一个语义, 各主体规范名 = 该主体已声明占位(branch = placeholders, candidate = candidate_subject.placeholders), 两主体已声明占位全部入表)。交付主体 subjects 判据 = 被审卡(声明所在卡)是否固定候选(next_resolver.card_candidate_subject, F196 唯一判据)。meanings 每项一个语义: names = 该语义的全部占位名(两主体同义占位互为别名), canonical.<主体> = 该主体的规范占位名。渲染唯一实现 artifact_ingest.render_evidence_command: 先按主体把别名改写为规范形(canonicalize_evidence_command)再代值; 裁决入口 runtime_evidence_check、开工稿 / 派审步骤、发卡规范化同读。不在任何 names 的 {名}(placeholder_pattern 匹配; ${VAR} 等 shell 写法不计)= 未知占位 = 渲染不了 = 声明本身问题(declaration_invalid_category; 裁决入口立即判声明错归顾问, 不拉起审计体补做, 见 loop.declaration_invalid_action)。发卡规范化(normalize_runtime_evidence_declaration): draft create / publish / queue amend / 补审派发(--runtime-evidence-command)对卡面声明命令扫占位: 别名 = 自动改写为本主体规范形, 输出(发布 = 发布记录 warnings)逐条写明改写前后原文(texts.rewrite); 未知 = 拒并列出可用占位(texts.unknown)。已发布在途卡(存量别名声明)按别名渲染即可入门, 不再因用错词表拒收(原 F199 legacy_placeholders 迁移提示退役)。",
+          "description": "AIPOS-F233 件①(10-25 chris 理想 HBLX-52 实撞: 分支卡 audit_runtime_evidence.commands 误用固定候选卡词表 {src_dir}/{candidate}, 分支卡审计只渲染 {worktree}/{commit_sha}/{tree_hash} → 审计体 59 项离线测试实跑通过, 证据仍逐字不匹配被拒收, loop 按 relaunch_cap 白拉起审计体两次 → runtime_evidence_exhausted → Owner 撤换重发): 审计 / 验证命令占位统一词表(唯一声明; 读取口 artifact_ingest.placeholder_vocabulary, 加载即校验: 每个占位名恰属一个语义, 各主体规范名 = 该主体已声明占位(branch = placeholders, candidate = candidate_subject.placeholders), 两主体已声明占位全部入表)。交付主体 subjects 判据 = 被审卡(声明所在卡)是否固定候选(next_resolver.card_candidate_subject, F196 唯一判据)。meanings 每项一个语义: names = 该语义的全部占位名(两主体同义占位互为别名), canonical.<主体> = 该主体的规范占位名。渲染唯一实现 artifact_ingest.render_evidence_command: 先按主体把别名改写为规范形(canonicalize_evidence_command)再代值; 裁决入口 runtime_evidence_check、开工稿 / 派审步骤、发卡规范化同读。只有出现在某语义 names 里的 {名} 才算占位; 其余 {xxx}(placeholder_pattern 形但不在词表; awk '{print}'、jq、json 片段等)与 ${VAR} 一律是字面文本: 渲染原样保留、裁决入口按字面与实跑逐字比对, 不拒、不判声明错, 只给提示(texts.literal, 附相近已知占位建议)。发卡规范化(normalize_runtime_evidence_declaration): draft create / publish / queue amend / 补审派发(--runtime-evidence-command)对卡面声明命令扫占位: 别名 = 自动改写为本主体规范形, 输出(发布 = 发布记录 warnings)逐条写明改写前后原文(texts.rewrite); 字面花括号 = 不拒, 输出与发布记录 warnings 提示一行(texts.literal, 列出相近已知占位)。已发布在途卡(存量别名声明)按别名渲染即可入门, 不再因用错词表拒收(原 F199 legacy_placeholders 迁移提示退役)。",
           "placeholder_pattern": "(?<![${])\\{([a-z_][a-z0-9_]*)\\}(?!\\})",
           "subjects": {
             "branch": "被审卡交付主体为卡分支(code / docs 等写产品仓的卡与其余非固定候选卡): 审计在审计分配工作树运行",
@@ -1486,11 +1486,11 @@
             {"id": "subject_commit", "label": "被审主体提交(卡分支 tip / 固定候选, 40 位 sha)", "names": ["commit_sha", "candidate"], "canonical": {"branch": "commit_sha", "candidate": "candidate"}},
             {"id": "subject_tree", "label": "被审主体提交的 tree", "names": ["tree_hash", "candidate_tree"], "canonical": {"branch": "tree_hash", "candidate": "candidate_tree"}}
           ],
-          "equivalence": "受限 amend 渲染等价判据(AIPOS-F233 件④, 唯一实现 artifact_ingest.evidence_commands_render_equivalent; queue amend --restricted 与返工自动放行范围判据 queue_mutation.auto_extension_check 同读): 条数相同; 逐条把占位换成同一记号后命令骨架逐字相同; 逐个占位位置: 改前已知占位 = 改后按本卡交付主体的规范名须相同(渲染为同一值: 别名规范化 / 同义改名), 改前未知占位(渲染不了)= 改后须为已知占位(修正占位名); 改后不得含未知占位。不等价 = 照旧(命令属验收, 在途不改)",
+          "equivalence": "受限 amend 渲染等价判据(AIPOS-F233 件④, 唯一实现 artifact_ingest.evidence_commands_render_equivalent; queue amend --restricted 与返工自动放行范围判据 queue_mutation.auto_extension_check 同读): 条数相同; 逐条把占位换成同一记号后命令骨架逐字相同; 逐个位置: 改前是已知占位 = 改后须为已知占位且按本卡交付主体的规范名相同(渲染为同一值: 别名规范化 / 同义改名); 改前是字面花括号 = 改后须逐字相同(字面文本的改动属改命令, 不算等价)。不等价 = 照旧(命令属验收, 在途不改)",
           "texts": {
             "rewrite": "AIPOS-F233 占位规范化(交付主体 {subject}): 卡 {task_id} {card_field} 命令 #{index} 别名 {pairs} 已改写为规范形: 改写前 `{before}` → 改写后 `{after}`",
-            "unknown": "卡 {task_id} {card_field} 命令 #{index} `{command}` 含未知占位 {unknown}(两种交付主体词表都没有, 渲染不了); 可用占位: 卡分支主体 {branch}; 固定候选主体 {candidate}; 同义互为别名: {aliases}",
-            "unknown_outlet_draft": "出口: 改为可用占位后重新起草 / 发卡",
+            "literal": "卡 {task_id} {card_field} 命令 #{index} 里的 {names} 不是占位(两种交付主体词表都没有), 按字面保留、按字面比对实跑命令(awk / jq / json 片段等的花括号属此类); 如本意是占位, 可用: 卡分支主体 {branch}; 固定候选主体 {candidate}; 同义互为别名: {aliases}{suggestion}",
+            "literal_suggestion": "; 相近的已知占位: {pairs}",
             "declaration_invalid": "卡面 {card_field} 声明本身有问题(来源卡 {card}), 审计体补做也匹配不上, 不再拉起审计体(AIPOS-F233 件③): {problems}",
             "amend_outlet": "出口(顾问自处理, 不需 Owner、不撤换): `{amend}`(只改占位名; 预演看清后去掉 --dry-run 确认; 已认领卡 --restricted 按渲染等价判据放行){suggestion}",
             "amend_suggestion": "; 建议改法: {pairs}"
@@ -1572,7 +1572,7 @@
           "exhausted_end_reason": "runtime_evidence_exhausted",
           "declaration_invalid_action": "evidence_declaration_invalid",
           "declaration_invalid_end_reason": "runtime_evidence_declaration_invalid",
-          "declaration_invalid_rule": "AIPOS-F233 件③: 卡面运行证据声明本身有问题(形不合 / 命令含未知占位, 判据唯一 artifact_ingest.evidence_declaration_problem; runtime_evidence_check 同判 declaration_invalid_category)= 审计体补做也匹配不上: 推导核对 claimed 审计卡(有无报告都核)给不可推导 action.type = declaration_invalid_action(triggered_by=advisor, 带受限 amend 命令原文), loop 不拉起 / 不再拉起审计体, 立即以 declaration_invalid_end_reason 结束(verbs.schema lybra_loop_status.next_action.by_end_reason = advisor_fix, 修法 routine_rejections.end_reasons.<该原因>); 顾问 queue amend(已认领卡 --restricted, 渲染等价判据 placeholder_vocabulary.equivalence)修正后原命令续跑"
+          "declaration_invalid_rule": "AIPOS-F233 件③: 卡面运行证据声明本身有问题(形不合, 或命令含本主体渲染不了的已知占位——词表加载守卫保证两主体都有规范名, 此条作 fail-closed 兜底; 字面花括号不算, 判据唯一 artifact_ingest.evidence_declaration_problem; runtime_evidence_check 同判 declaration_invalid_category)= 审计体补做也匹配不上: 推导核对 claimed 审计卡(有无报告都核)给不可推导 action.type = declaration_invalid_action(triggered_by=advisor, 带受限 amend 命令原文), loop 不拉起 / 不再拉起审计体, 立即以 declaration_invalid_end_reason 结束(verbs.schema lybra_loop_status.next_action.by_end_reason = advisor_fix, 修法 routine_rejections.end_reasons.<该原因>); 顾问 queue amend(已认领卡 --restricted, 渲染等价判据 placeholder_vocabulary.equivalence)修正后原命令续跑"
         }
       },
       "report_snapshot": {

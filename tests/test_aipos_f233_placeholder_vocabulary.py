@@ -6,8 +6,9 @@ runtime_evidence_exhausted 归第三档 advisor_fix + 报告头 YAML 自由文�
 
 验收逐条(原文经 _show 打到 stdout, RETURN 引用):
   ① 靶场复刻 HBLX-52 形态(分支卡声明 {src_dir}/{candidate}): 审计在审计分配工作树实跑后裁决入门(别名渲染匹配), loop 结案;
-  ② draft create / publish 别名自动改写原文(发布记录 warnings 写明改写前后)+ 未知占位拒发原文;
-  ③ 声明含渲染不了的占位 → loop 立即 advisor_fix 结束、审计体拉起 0 次原文;
+  ② draft create / publish 别名自动改写原文(发布记录 warnings 写明改写前后)+ 词表外花括号按字面不拒(提示相近占位)原文;
+  ②' awk '{print $1}' / jq '{a: .b}' / "${HOME}" 三种命令发卡、渲染、裁决入门都通过(字面花括号不是占位);
+  ③ 声明本身错(形不合)→ loop 立即 advisor_fix 结束、审计体拉起 0 次原文(字面花括号不算声明错);
   ④ 占位改名受限 amend 走通且返工自动放行不失原文; 非等价改动仍被拒原文;
   ⑤ runtime_evidence_exhausted 不进 Owner 收件箱原文;
   ⑥ `model: glm-5.3 (provider: kiwiai)` 报告头容错入门原文 + 非声明键同类错仍走修报告头; 开工提示报告必填行带引号规则。
@@ -157,10 +158,10 @@ def test_acceptance1_hblx52_shape_branch_card_candidate_vocab_admitted(rig):
 
 
 # ===========================================================================
-# 件② 验收②: draft create / publish 别名自动改写 + 未知占位拒发
+# 件② 验收②: draft create / publish 别名自动改写 + 词表外花括号字面保留(不拒)
 # ===========================================================================
 
-def test_acceptance2_draft_create_publish_rewrite_and_unknown_refused(rig, tmp_path):
+def test_acceptance2_draft_create_publish_rewrite_and_literal_braces_kept(rig, tmp_path):
     init_governance_repo(rig.gov)
     gov = rig.gov
     rc, out, err = _cli(["--workspace-root", str(gov), "draft", "create", "--from-json",
@@ -191,39 +192,85 @@ def test_acceptance2_draft_create_publish_rewrite_and_unknown_refused(rig, tmp_p
     assert queue == "pending" and published == ["cd {worktree} && make test COMMIT={commit_sha}"]
     assert "改写前 `cd {src_dir} && make test COMMIT={candidate}` → 改写后 `cd {worktree} && make test COMMIT={commit_sha}`" in line
 
-    # 未知占位(两表都无)= 起草 / 发卡拒并列出可用占位
+    # 打错字的占位(两表都无)= 字面文本: 起草 / 发卡不拒, 输出与发布记录 warnings 提示一行并建议相近的已知占位
     rc, out, err = _cli(["--workspace-root", str(gov), "draft", "create", "--from-json",
-                         str(f165._draft(tmp_path, "PROBE-F233-D3", ["python3 {workdir}/run.py --commit {commit}"])), "--actor", DRIVER])
-    hit = next((ln.strip() for ln in (out + err).splitlines() if "未知占位" in ln), "")
-    _show(f"---- 验收② 未知占位起草 rc={rc} ----\n{hit}")
-    assert rc != 0 and "RUNTIME_EVIDENCE_DECLARATION_INVALID" in hit and "{workdir} / {commit}" in hit
-    assert "可用占位: 卡分支主体 {worktree}, {commit_sha}, {tree_hash}" in hit and "{worktree} ≡ {src_dir}" in hit
-    assert nr._find_task_in_queue(gov, "PROBE-F233-D3")[1] is None
-    d4 = gov / "5_tasks" / "drafts" / "probe-f233-d4.md"
-    _write(d4, d2.read_text(encoding="utf-8").replace("PROBE-F233-D2", "PROBE-F233-D4").replace("cd {src_dir}", "cd {workdir}"))
-    rc, out, err = _cli(["--workspace-root", str(gov), "draft", "publish", "--path", "5_tasks/drafts/probe-f233-d4.md", "--actor", DRIVER])
-    hit = next((ln.strip() for ln in (out + err).splitlines() if "未知占位" in ln), "")
-    _show(f"---- 验收② 未知占位发卡(手放草稿)rc={rc} ----\n{hit}")
-    assert rc != 0 and "{workdir}" in hit and nr._find_task_in_queue(gov, "PROBE-F233-D4")[1] is None
+                         str(f165._draft(tmp_path, "PROBE-F233-D3", ["python3 {workdir}/run.py --commit {commit_sha}"])), "--actor", DRIVER])
+    hit = next((ln.strip() for ln in (out + err).splitlines() if "不是占位" in ln), "")
+    _show(f"---- 验收② 打错字 {{workdir}} 起草(不拒, 提示)rc={rc} ----\n{hit}")
+    assert rc == 0 and "{workdir} 不是占位" in hit and "按字面保留" in hit and "{workdir} → {worktree}" in hit
+    rc, out, err = _cli(["--workspace-root", str(gov), "draft", "publish", "--path", "5_tasks/drafts/probe-f233-d3.md", "--actor", DRIVER])
+    card, queue = nr._find_task_in_queue(gov, "PROBE-F233-D3")
+    rec = next((gov / "5_tasks" / "records" / "publishes" / "PROBE-F233-D3").glob("*.md")).read_text(encoding="utf-8")
+    line = next(ln.strip() for ln in rec.splitlines() if "不是占位" in ln)
+    _show(f"---- 验收② 打错字 {{workdir}} 发卡 rc={rc} queue={queue} ----\n[发布记录] {line}")
+    assert rc == 0 and queue == "pending" and nr._read_frontmatter(card)["audit_runtime_evidence"]["commands"] == [
+        "python3 {workdir}/run.py --commit {commit_sha}"]  # 字面原样
+
+
+# 字面花括号: awk / jq / shell ${VAR}(真实项目常见)= 不是占位
+LITERAL_CMDS = ["echo 'x y' | awk '{print $1}'", "echo '{\"b\": 1}' | jq -c '{a: .b}'", "echo 'p q' | awk '{print}'",
+                "test -n \"${HOME}\" && git -C {worktree} cat-file -e {commit_sha}"]
+
+
+def test_acceptance2_literal_braces_publish_render_and_verdict_admitted(rig, tmp_path):
+    from tools.aipos_cli.artifact_ingest import render_evidence_command
+
+    init_governance_repo(rig.gov)
+    gov = rig.gov
+    rc, out, err = _cli(["--workspace-root", str(gov), "draft", "create", "--from-json",
+                         str(f165._draft(tmp_path, TASK, list(LITERAL_CMDS))), "--actor", DRIVER])
+    _show(f"---- 验收②' awk / jq / ${{HOME}} 起草 rc={rc} ----\n" + "\n".join(ln for ln in (out + err).splitlines()
+                                                                         if "不是占位" in ln or "verdict" in ln.lower()))
+    assert rc == 0, out + err
+    rc, out, err = _cli(["--workspace-root", str(gov), "draft", "publish", "--path", f"5_tasks/drafts/{TASK.lower()}.md", "--actor", DRIVER])
+    assert rc == 0, out + err
+    card, queue = nr._find_task_in_queue(gov, TASK)
+    assert queue == "pending" and nr._read_frontmatter(card)["audit_runtime_evidence"]["commands"] == LITERAL_CMDS
+    vals = {"worktree": "/wt", "commit_sha": "c" * 40, "tree_hash": "t" * 40}
+    rendered = [render_evidence_command(c, "branch", vals) for c in LITERAL_CMDS]
+    _show("---- 验收②' 渲染(字面花括号原样, 已知占位代值)----\n" + "\n".join(f"  {a}\n  → {b}" for a, b in zip(LITERAL_CMDS, rendered)))
+    assert rendered[:3] == LITERAL_CMDS[:3] and rendered[3] == f'test -n "${{HOME}}" && git -C /wt cat-file -e {"c" * 40}'
+    entries: list[dict] = []
+
+    def audit_report(r):
+        _code, wt = nr.card_worktree_location(r.gov, AUDIT)
+        tip = _git(r.code_repo, "rev-parse", f"card/{TASK}")
+        entries[:] = []
+        for declared in LITERAL_CMDS:
+            command = render_evidence_command(declared, "branch", {"worktree": str(wt), "commit_sha": tip, "tree_hash": ""})
+            proc = r.real_run(["bash", "-c", command], capture_output=True, text=True, timeout=120, cwd=str(wt))
+            log = r.gov.parent / "audit-logs" / f"lit-{hashlib.sha1(command.encode()).hexdigest()[:8]}.log"
+            _write(log, f"$ {command}\n{proc.stdout}{proc.stderr}exit={proc.returncode}\n")
+            entries.append({"command": command, "worktree": str(wt), "exit_code": proc.returncode, "log_path": str(log), "log_sha256": _sha(log)})
+        return f162._report(r, AUDIT, "PASS", evidence=entries)
+
+    seen: list[str] = []
+    checks: dict[str, list] = {}
+    res, text = f162._loop(rig, TASK, f162._watch(rig, {AUDIT: [audit_report]}, seen, checks))
+    _show("---- 验收②' 审计实跑记录 ----\n" + json.dumps([{k: e[k] for k in ("command", "exit_code")} for e in entries], ensure_ascii=False, indent=1))
+    _show(f"---- 验收②' 裁决入口 ---- ok={checks[AUDIT][0]['ok']} category={checks[AUDIT][0]['category']}; loop outcome={res.outcome} seen={seen}")
+    assert all(e["exit_code"] == 0 for e in entries), entries
+    assert checks[AUDIT][0]["ok"] and checks[AUDIT][0]["category"] == "OK" and seen == ["executor", f"auditor:{AUDIT}"]
+    assert res.exit_code == 0 and res.outcome == "completed", text
 
 
 # ===========================================================================
-# 件③ 验收③: 声明含渲染不了的占位 → 立即 advisor_fix 结束, 审计体拉起 0 次
+# 件③ 验收③: 声明本身错(形不合)→ 立即 advisor_fix 结束, 审计体拉起 0 次(字面花括号不算声明错, 见验收②')
 # ===========================================================================
 
-BAD_CMDS = ["python3 -B {workdir}/tools/check.py --commit {commit_sha}"]
+BAD_DECL = {"required": True, "commands": "python3 -B {worktree}/tools/check.py --commit {commit_sha}"}  # commands 应为列表
 
 
-def test_acceptance3_unrenderable_declaration_ends_advisor_fix_zero_auditor_launch(rig):
-    f90._card(rig.gov, TASK, "pending", audit_runtime_evidence={"required": True, "commands": list(BAD_CMDS)})  # 存量卡(F233 前已发布)
+def test_acceptance3_declaration_invalid_ends_advisor_fix_zero_auditor_launch(rig):
+    f90._card(rig.gov, TASK, "pending", audit_runtime_evidence=BAD_DECL)  # 存量卡(F233 前已发布)
     init_governance_repo(rig.gov)
     seen: list[str] = []
     res, text = f162._loop(rig, TASK, f162._watch(rig, {AUDIT: []}, seen))
-    _show(f"---- 验收③ lybra loop 输出(声明含 {{workdir}})----\n{text}")
+    _show(f"---- 验收③ lybra loop 输出(声明 commands 不是列表)----\n{text}")
     _show(f"[验收③ 等待 / 拉起轨迹] seen={seen}")
     assert seen == ["executor"], seen  # 审计体拉起 0 次
     assert res.exit_code == 4 and res.reason == "runtime_evidence_declaration_invalid", (res.reason, text)
-    assert "queue amend --task-id PROBE-F90-1 --restricted" in text and "{workdir} → {worktree}" in text
+    assert "queue amend --task-id PROBE-F90-1 --restricted" in text and "commands 须为非空命令串列表" in text
     rc, out, err = _cli(["loop", "status", "--task-id", TASK, "--workspace-root", str(rig.gov)])
     _show(f"---- 验收③ lybra loop status ----\n{out}{err}")
     assert "advisor_fix(runtime_evidence_declaration_invalid)" in out and "不找 Owner、不撤换、不再拉起审计体" in out
@@ -237,7 +284,7 @@ def test_acceptance3_unrenderable_declaration_ends_advisor_fix_zero_auditor_laun
     assert derived["action"]["type"] == "evidence_declaration_invalid" and derived["triggered_by"] == "advisor"
     check = validate_task_artifact(AUDIT, rig.gov)
     _show(f"[验收③ 裁决入口] category={check['category']}\n  " + "\n  ".join(check["reasons"]))
-    assert check["category"] == "RUNTIME_EVIDENCE_DECLARATION_INVALID" and any("{workdir}" in r for r in check["reasons"])
+    assert check["category"] == "RUNTIME_EVIDENCE_DECLARATION_INVALID"
 
 
 # ===========================================================================
@@ -289,35 +336,39 @@ def test_acceptance4_placeholder_rename_restricted_amend_keeps_auto_release(rig)
     assert res.get("ok") and card["rework_rounds"][-1]["round"] == 3 and card["rework_rounds"][-1]["auto_extension_ref"]
 
 
-def test_acceptance4_unknown_placeholder_fix_equivalent_and_fingerprint(rig):
-    """把渲染不了的占位改成可用占位 = 渲染等价(受限 amend 放行); 返工自动放行范围判据同读等价判据(未知 → 已知不算范围变化)。"""
+def test_acceptance4_literal_brace_changes_not_equivalent_and_fingerprint(rig):
+    """字面花括号的改动不算渲染等价(属改命令): 受限 amend 拒; 已知占位的同义改名照旧等价, 返工自动放行范围判据同读等价判据。"""
     from tools.aipos_cli import queue_mutation
     from tools.aipos_cli.artifact_ingest import evidence_commands_render_equivalent
 
-    assert evidence_commands_render_equivalent(BAD_CMDS, ["python3 -B {worktree}/tools/check.py --commit {commit_sha}"], "branch")
-    assert not evidence_commands_render_equivalent(BAD_CMDS, ["python3 -B {worktree}/tools/check.py --commit {tree_hash}"], "branch")
-    assert not evidence_commands_render_equivalent(["a {worktree}"], ["a {workdir}"], "branch")  # 改后含未知 = 不等价
+    typo = ["python3 -B {workdir}/tools/check.py --commit {commit_sha}"]
+    fixed = ["python3 -B {worktree}/tools/check.py --commit {commit_sha}"]
+    assert not evidence_commands_render_equivalent(typo, fixed, "branch")  # 字面 {workdir} → {worktree} = 改命令
+    assert not evidence_commands_render_equivalent(["awk '{print}' x"], ["awk '{print $2}' x"], "branch")
+    assert evidence_commands_render_equivalent(["awk '{print}' {src_dir}/x"], ["awk '{print}' {worktree}/x"], "branch")
+    assert evidence_commands_render_equivalent(["a {run_dir} {candidate}"], ["a {worktree} {commit_sha}"], "branch")
     task = "PROBE-F233-B"
-    bad = {"required": True, "commands": list(BAD_CMDS)}
-    pending = f78._card(rig.gov, task, "pending", extra={"audit_runtime_evidence": bad})
+    alias = {"required": True, "commands": ["awk '{print}' {src_dir}/x --commit {candidate}"]}
+    pending = f78._card(rig.gov, task, "pending", extra={"audit_runtime_evidence": alias})
     f225._publish_baseline(rig.gov, task, pending)
     pending.unlink()
     rounds = [{"round": n, "verdict_ref": f"verdict_old_{n}", "created_at": f"2026-10-0{n}T00:00:00Z", "created_by": DRIVER,
                "focus_items": ["x"]} for n in (1, 2)]
     f78._card(rig.gov, task, "claimed", extra={"claimed_by": "exec.lybra.test", "claimed_at": "'2026-10-01T00:00:00Z'",
-                                               "rework_rounds": rounds, "audit_runtime_evidence": bad})
+                                               "rework_rounds": rounds, "audit_runtime_evidence": alias})
     init_governance_repo(rig.gov)
-    good = {"required": True, "commands": ["python3 -B {worktree}/tools/check.py --commit {commit_sha}"]}
+    rc, out, _ = _amend(rig.gov, task, {"required": True, "commands": ["awk '{print $2}' {worktree}/x --commit {commit_sha}"]}, "--dry-run")
+    _show(f"---- 验收④ 字面花括号改动(awk 程序)受限 amend rc={rc} ----\n{out[-700:]}")
+    assert rc == 1 and "实改了 ['commands']" in out
+    good = {"required": True, "commands": ["awk '{print}' {worktree}/x --commit {commit_sha}"]}
     rc, out, err = _amend(rig.gov, task, good)
-    _show(f"---- 验收④ 渲染不了的占位改成可用占位(受限 amend)rc={rc} ----\n{out}{err}")
+    _show(f"---- 验收④ 字面不动、只把别名改成规范形(受限 amend)rc={rc} ----\n{out[-500:]}{err}")
     assert rc == 0, out + err
     path, _q = nr._find_task_in_queue(rig.gov, task)
     meta, body = nr._read_frontmatter(path), path.read_text(encoding="utf-8").split("---", 2)[2]
     check = queue_mutation.auto_extension_check(rig.gov, task, meta, body, next_round=3, max_rounds=2, verdict_ref="v3")
     _show(f"[验收④ 返工自动放行范围判据] eligible={check['eligible']} basis={check.get('basis') or check.get('why')}")
     assert check["eligible"]
-    if "audit_runtime_evidence" in queue_mutation.auto_extension_declaration()["fingerprint_fields"]:  # AIPOS-F230 起运行证据声明入指纹
-        assert "只改占位名" in check["basis"]
 
 
 # ===========================================================================

@@ -6604,7 +6604,7 @@ def main(argv: list[str] | None = None) -> int:
             subject_fm = {**card_fm, **{k: v for k, v in amendments.items() if k != evidence_key}, "task_id": str(args.task_id)}
             normalized = normalize_runtime_evidence_declaration(amendments[evidence_key], card_fm=subject_fm, task_id=str(args.task_id))
             amendments[evidence_key] = normalized["value"]
-            evidence_notes = list(normalized["notes"])
+            evidence_notes = [*normalized["notes"], *normalized["literals"]]  # 改写前后原文 + 字面花括号提示(不拒)
             problems = runtime_evidence_amend_problems(current, amendments[evidence_key], claimed=restricted_fields is not None,
                                                        card_fm=subject_fm)
             if problems:
@@ -6628,7 +6628,7 @@ def main(argv: list[str] | None = None) -> int:
         except (FileNotFoundError, OSError, ValueError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
-        if evidence_notes:  # AIPOS-F233 件②: 占位规范化改写前后原文
+        if evidence_notes:  # AIPOS-F233 件②: 占位规范化改写前后原文 / 字面花括号提示
             result.setdefault("warnings", []).extend(evidence_notes)
         # AIPOS-F213 件①(F208 P1-6): 修订写入成功后即落账(卡面 + 修订记录; 原 CLI amend 不落账)——同一薄壳 queue_writers
         landing = None

@@ -2876,7 +2876,7 @@
           "not_derivable": "推导不可推导(exit_codes.not_derivable)",
           "artifact_invalid": "产物已落盘但不合规(exit_codes.not_derivable)",
           "runtime_evidence_exhausted": "AIPOS-F162 件①: 审计报告 PASS 类裁决缺独立运行证据(RUNTIME_EVIDENCE_MISSING), 本次运行已为补做拉起审计体达上限(transitions artifact_ingest.verdict.runtime_evidence.loop.relaunch_cap)仍不合格(exit_codes.not_derivable)",
-          "runtime_evidence_declaration_invalid": "AIPOS-F233 件③: 卡面运行证据声明本身有问题(形不合 / 命令含未知占位, 渲染不了), 审计体补做也匹配不上: 推导核给 transitions artifact_ingest.verdict.runtime_evidence.loop.declaration_invalid_action, loop 不拉起审计体即结束(exit_codes.not_derivable; 顾问受限 amend 修正声明后续跑)",
+          "runtime_evidence_declaration_invalid": "AIPOS-F233 件③: 卡面运行证据声明本身有问题(形不合 / 含本主体渲染不了的已知占位; 字面花括号不算), 审计体补做也匹配不上: 推导核给 transitions artifact_ingest.verdict.runtime_evidence.loop.declaration_invalid_action, loop 不拉起审计体即结束(exit_codes.not_derivable; 顾问受限 amend 修正声明后续跑)",
           "record_missing": "账务记录缺(exit_codes.not_derivable)",
           "frontmatter_unreadable": "卡或记录 frontmatter 读不出(exit_codes.not_derivable)",
           "manual_required": "需人工介入/无法识别动词(exit_codes.not_derivable)",
@@ -3446,7 +3446,7 @@
               ]
             },
             "runtime_evidence_declaration_invalid": {
-              "why_routine": "AIPOS-F233 件③(10-25 chris HBLX-52 实撞: 声明命令用错占位词表, 审计体实跑通过仍逐字不匹配, loop 白拉起审计体两次后升 Owner 撤换): 卡面运行证据声明本身有问题(命令含未知占位 / 形不合), 审计体再怎么补做也匹配不上; 修法固定 = 顾问受限 amend 修正声明(只改占位名, 渲染等价判据放行, 不需 Owner、不撤换、不失返工自动放行)后续跑, 不拉起审计体白烧",
+              "why_routine": "AIPOS-F233 件③(10-25 chris HBLX-52 实撞: 声明命令用错占位词表, 审计体实跑通过仍逐字不匹配, loop 白拉起审计体两次后升 Owner 撤换): 卡面运行证据声明本身有问题(形不合 / 含本主体渲染不了的已知占位; awk / jq 等字面花括号不算), 审计体再怎么补做也匹配不上; 修法固定 = 顾问受限 amend 修正声明(只改占位名, 渲染等价判据放行, 不需 Owner、不撤换、不失返工自动放行)后续跑, 不拉起审计体白烧",
               "fix": [
                 "不找 Owner、不撤换、不再拉起审计体: 声明问题与修正命令 —— {evidence_amend}",
                 "预演看清改写前后命令后去掉 --dry-run 确认(已认领卡经 --restricted: 只改占位名 / 别名规范化按渲染等价判据放行; 改命令其余部分 = 改验收, 仍按现行规则走返工轮或撤卡重发)",

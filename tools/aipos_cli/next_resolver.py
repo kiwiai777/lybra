@@ -4737,7 +4737,7 @@ def _derive_next_step(
         # AIPOS-F233 件③: 卡面运行证据声明本身有问题(渲染不了)= 不拉起审计体(审计体实跑也匹配不上), 归顾问受限 amend
         from tools.aipos_cli.artifact_ingest import evidence_declaration_problem
 
-        declaration_problem = evidence_declaration_problem(workspace_root, task_id, fm)  # 形不合 / 未知占位都归入问题(不上抛)
+        declaration_problem = evidence_declaration_problem(workspace_root, task_id, fm)  # 形不合等声明本身错归入问题(不上抛; 字面花括号不算)
         if declaration_problem is not None:
             return _evidence_declaration_invalid(task_id, {"category": declaration_problem["category"],
                                                            "reasons": [*declaration_problem["reasons"], declaration_problem["outlet"]]},

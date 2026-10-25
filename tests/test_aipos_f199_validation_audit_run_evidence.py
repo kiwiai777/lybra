@@ -267,7 +267,7 @@ def test_item1_validation_evidence_binds_audit_own_run(vrig):
 
 def test_item1_alias_placeholders_render_and_draft_rewrite(vrig):
     """AIPOS-F233 件①② 取代 F199 旧占位迁移提示: 固定候选卡声明用卡分支词表({worktree}/{commit_sha}/{tree_hash})= 同义别名, 裁决入口按
-    候选主体规范化后渲染即可入门(不再 DECLARATION_INVALID); 起草把别名自动改写为规范形并写明改写前后原文; 未知占位起草即拒并列出可用占位。"""
+    候选主体规范化后渲染即可入门(不再 DECLARATION_INVALID); 起草把别名自动改写为规范形并写明改写前后原文; 词表外花括号按字面不拒, 只提示建议。"""
     from tools.aipos_cli.draft_writer import create_draft
 
     gov, base = vrig.gov, vrig.base
@@ -295,12 +295,12 @@ def test_item1_alias_placeholders_render_and_draft_rewrite(vrig):
     assert notes and "改写前 `python3 {worktree}/Scripts/run.py" in notes[0] and "改写后 `python3 {src_dir}/Scripts/run.py --worktree {src_dir} " \
         "--commit {candidate} --tree {candidate_tree}`" in notes[0]
     assert "python3 {src_dir}/Scripts/run.py --worktree {src_dir} --commit {candidate} --tree {candidate_tree}" in res["rendered_markdown"]
-    bad = {**meta, "audit_runtime_evidence": {"required": True, "commands": ["python3 {srcdir}/Scripts/run.py --commit {candidate}"]}}
-    res = create_draft(gov, bad, "## Goal\n\n固定候选验证\n", dry_run=True)
-    hits = [r for r in res["blocking_reasons"] if "未知占位" in r]
-    _show(f"[件② 未知占位·起草拒] verdict={res['verdict']}\n  {hits}")
-    assert res["verdict"] == "BLOCK" and hits and hits[0].startswith("RUNTIME_EVIDENCE_DECLARATION_INVALID") and "{srcdir}" in hits[0]
-    assert "可用占位: 卡分支主体 {worktree}, {commit_sha}, {tree_hash}" in hits[0] and "{worktree} ≡ {src_dir}" in hits[0]
+    typo = {**meta, "audit_runtime_evidence": {"required": True, "commands": ["python3 {srcdir}/Scripts/run.py --commit {candidate}"]}}
+    res = create_draft(gov, typo, "## Goal\n\n固定候选验证\n", dry_run=True)
+    hits = [w for w in res["warnings"] if "不是占位" in w]
+    _show(f"[件② 词表外花括号·起草不拒(字面保留 + 建议)] verdict={res['verdict']}\n  {hits}")
+    assert res["verdict"] != "BLOCK" and hits and "{srcdir}" in hits[0] and "{srcdir} → {src_dir}" in hits[0]
+    assert "可用: 卡分支主体 {worktree}, {commit_sha}, {tree_hash}" in hits[0] and "{worktree} ≡ {src_dir}" in hits[0]
 
 
 def test_item1_code_card_runtime_evidence_unchanged(vrig):

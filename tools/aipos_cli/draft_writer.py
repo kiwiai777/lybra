@@ -772,7 +772,7 @@ def create_draft(
         _intent_warnings.append(f"harness/lane 派生失败(声明缺失): {e}")
     # AIPOS-F196 件①: 固定候选卡(validation)起草即核来源卡与候选(fail-closed; 与发卡同一判据 candidate_subject_refusals)
     project_reasons = [*project_reasons, *candidate_subject_refusals(repo_root, normalized)]
-    # AIPOS-F233 件②: 运行证据声明命令别名按本卡交付主体改写为规范形(改写前后原文进 warnings; 未知占位由 draft_validator 同一声明校验拒)
+    # AIPOS-F233 件②: 运行证据声明命令别名按本卡交付主体改写为规范形(改写前后原文进 warnings; 词表外花括号按字面保留, 提示由 draft_validator 同一声明校验给)
     _intent_warnings.extend(_normalize_evidence_placeholders(normalized))
     
     # AIPOS-F76 件①: Inject machine-generated 工作纪律 section into body

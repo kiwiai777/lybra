@@ -991,15 +991,12 @@ def runtime_evidence_amend_problems(current: Any, new: Any, *, claimed: bool, ca
     (parse_runtime_evidence_declaration); claimed 卡(--restricted)只许改 card.schema restricted_amend.claimed_card_subfields 所列子键,
     其余子键须与卡面原值相同(不改命令 / required = 不改验收)。AIPOS-F233 件④: restricted_amend.render_equivalent_subfields 所列子键
     (commands)改前改后按占位词表渲染等价(evidence_commands_render_equivalent; 交付主体 = card_fm)= 放行(只改占位名, 不改验收)。
-    新值含未知占位 = 拒(列出可用占位)。返回拒因原文(空 = 通过)。"""
+    词表外的 {xxx} 是字面文本, 不拒(提示由 normalize_runtime_evidence_declaration 给)。返回拒因原文(空 = 通过)。"""
     key = str(runtime_evidence_declaration()["card_field"])
     try:
         parse_runtime_evidence_declaration(new)
     except RuntimeEvidenceDeclarationError as exc:
         return [f"{key} 新值形不合: {exc}"]
-    unknown = evidence_unknown_problems((new or {}).get("commands") or [], task_id=str((card_fm or {}).get("task_id") or "<卡>"))
-    if unknown:
-        return unknown
     if not claimed:
         return []
     allowed = set(restricted_amend_subfields().get(key) or [])
@@ -1039,7 +1036,7 @@ def render_equivalent_subfields() -> dict[str, list[str]]:
 
 _VOCAB_SUBJECTS = ("branch", "candidate")
 _SUBJECT_LABELS = {"branch": "卡分支", "candidate": "固定候选"}
-_VOCAB_TEXTS = ("rewrite", "unknown", "unknown_outlet_draft", "declaration_invalid", "amend_outlet", "amend_suggestion")
+_VOCAB_TEXTS = ("rewrite", "literal", "literal_suggestion", "declaration_invalid", "amend_outlet", "amend_suggestion")
 
 
 def placeholder_vocabulary() -> dict[str, Any]:
@@ -1095,7 +1092,8 @@ def evidence_subject(card_fm: dict[str, Any] | None) -> str:
 
 
 def canonicalize_evidence_command(command: str, subject: str, vocab: dict[str, Any] | None = None) -> dict[str, Any]:
-    """一条声明命令按交付主体规范化: 别名改写为该主体规范名(语义不变)。返回 {command, pairs: [(原名, 规范名)], unknown: [未知占位名]}。"""
+    """一条声明命令按交付主体规范化: 别名改写为该主体规范名(语义不变); 词表外的 {xxx} 是字面文本, 原样保留。
+    返回 {command, pairs: [(原名, 规范名)], unknown: [词表外 {名} 的名(字面)]}。"""
     vocab = vocab or placeholder_vocabulary()
     pairs: list[tuple[str, str]] = []
     unknown: list[str] = []
@@ -1117,7 +1115,7 @@ def canonicalize_evidence_command(command: str, subject: str, vocab: dict[str, A
 
 def render_evidence_command(command: str, subject: str, values: dict[str, Any]) -> str:
     """AIPOS-F233 件①: 声明命令渲染唯一实现(裁决入口逐字匹配、开工稿 / 派审步骤同用): 先按交付主体把别名改写为规范形, 再以 values
-    (规范名 → 值)代值; values 缺某占位或值为空 = 原样保留(开工稿未起 run 时); 未知占位原样保留(渲染不了, 由声明校验点名)。"""
+    (规范名 → 值)代值; values 缺某占位或值为空 = 原样保留(开工稿未起 run 时); 词表外的 {xxx} 是字面文本, 原样保留(按字面与实跑比对)。"""
     vocab = placeholder_vocabulary()
     canonical = canonicalize_evidence_command(command, subject, vocab)["command"]
 
@@ -1129,7 +1127,7 @@ def render_evidence_command(command: str, subject: str, values: dict[str, Any]) 
 
 
 def _vocabulary_listing(vocab: dict[str, Any]) -> dict[str, str]:
-    """未知占位拒因里的可用占位清单(各主体规范名 + 同义别名组)。"""
+    """字面花括号提示里的可用占位清单(各主体规范名 + 同义别名组)。"""
     branch = ", ".join(dict.fromkeys("{" + str(m["canonical"]["branch"]) + "}" for m in vocab["meanings"]))
     candidate = ", ".join(dict.fromkeys("{" + str(m["canonical"]["candidate"]) + "}" for m in vocab["meanings"]))
     parts = []
@@ -1143,31 +1141,46 @@ def _vocabulary_listing(vocab: dict[str, Any]) -> dict[str, str]:
     return {"branch": branch, "candidate": candidate, "aliases": aliases or "(无)"}
 
 
-def evidence_unknown_problems(commands: list[Any], *, task_id: str, card_field: str | None = None) -> list[str]:
-    """声明命令中的未知占位(两主体词表都无 = 渲染不了)→ 每条一句拒因(texts.unknown, 列出可用占位); 无 = []。"""
+def evidence_literal_notes(commands: list[Any], *, task_id: str, card_fm: dict[str, Any] | None = None,
+                           card_field: str | None = None) -> list[str]:
+    """AIPOS-F233 件②: 声明命令中形如 {xxx} 但不在词表的花括号 = 字面文本(awk / jq / json 片段等), 不拒; 每条命令一句提示(texts.literal:
+    按字面保留与比对 + 可用占位清单 + difflib 相近的已知占位建议, 如 {workdir} → {worktree})。无 = []。"""
+    import difflib
+
     vocab = placeholder_vocabulary()
     field = card_field or str(runtime_evidence_declaration()["card_field"])
+    subject = evidence_subject(card_fm)
+    known = sorted(vocab["by_name"])
     out: list[str] = []
     for index, command in enumerate(commands or [], 1):
-        unknown = canonicalize_evidence_command(str(command), "branch", vocab)["unknown"]
-        if unknown:
-            out.append(str(vocab["texts"]["unknown"]).format(task_id=task_id, card_field=field, index=index, command=command,
-                                                             unknown=" / ".join("{" + n + "}" for n in unknown), **_vocabulary_listing(vocab)))
+        literal = canonicalize_evidence_command(str(command), subject, vocab)["unknown"]
+        if not literal:
+            continue
+        pairs = []
+        for name in literal:
+            close = difflib.get_close_matches(name, known, n=1, cutoff=0.6)
+            if close:
+                pairs.append("{" + name + "} → {" + str(vocab["by_name"][close[0]]["canonical"][subject]) + "}")
+        suggestion = str(vocab["texts"]["literal_suggestion"]).format(pairs=", ".join(pairs)) if pairs else ""
+        out.append(str(vocab["texts"]["literal"]).format(task_id=task_id, card_field=field, index=index,
+                                                         names=" / ".join("{" + n + "}" for n in literal), suggestion=suggestion,
+                                                         **_vocabulary_listing(vocab)))
     return out
 
 
 def normalize_runtime_evidence_declaration(raw: Any, *, card_fm: dict[str, Any] | None, task_id: str | None = None) -> dict[str, Any]:
     """AIPOS-F233 件②: 发卡规范化唯一实现(draft create / publish / queue amend / 补审派发同调): 声明命令里的别名按声明所在卡(被审卡)
-    交付主体改写为规范形。返回 {value(改写后的声明, 无改写 = 原值), notes(每条改写一句, 写明改写前后原文), problems(未知占位拒因)}。
+    交付主体改写为规范形。返回 {value(改写后的声明, 无改写 = 原值), notes(每条改写一句, 写明改写前后原文), literals(词表外字面花括号提示,
+    不拒; 起草 / 发卡由声明校验 check_runtime_evidence_declaration 同一函数出提示, 此处给 amend 等不经声明校验的调用方)}。
     形不合(非对象 / commands 非列表)= 原样返回(形校验由 parse_runtime_evidence_declaration 唯一判)。"""
-    out: dict[str, Any] = {"value": raw, "notes": [], "problems": []}
+    out: dict[str, Any] = {"value": raw, "notes": [], "literals": []}
     if not isinstance(raw, dict) or not isinstance(raw.get("commands"), list):
         return out
     vocab = placeholder_vocabulary()
     tid = str(task_id or (card_fm or {}).get("task_id") or "<卡>")
     field = str(runtime_evidence_declaration()["card_field"])
     subject = evidence_subject(card_fm)
-    out["problems"] = evidence_unknown_problems(raw["commands"], task_id=tid, card_field=field)
+    out["literals"] = evidence_literal_notes(raw["commands"], task_id=tid, card_fm=card_fm, card_field=field)
     commands: list[Any] = []
     for index, command in enumerate(raw["commands"], 1):
         if not isinstance(command, str):
@@ -1192,8 +1205,8 @@ def _placeholder_slots(command: str, vocab: dict[str, Any]) -> tuple[str, list[s
 
 def evidence_commands_render_equivalent(before: Any, after: Any, subject: str) -> bool:
     """AIPOS-F233 件④ 渲染等价判据唯一实现(声明 placeholder_vocabulary.equivalence; queue amend --restricted 与返工自动放行范围判据同读):
-    条数相同; 逐条骨架逐字相同; 逐个占位: 改前已知 = 改后按本主体规范名相同(渲染为同一值), 改前未知(渲染不了)= 改后已知;
-    改后不得含未知占位。"""
+    条数相同; 逐条骨架逐字相同; 逐个位置: 改前已知占位 = 改后已知且按本主体规范名相同(渲染为同一值); 改前字面花括号 = 改后逐字相同
+    (字面文本改动属改命令, 不算等价)。"""
     if not isinstance(before, list) or not isinstance(after, list) or len(before) != len(after):
         return False
     vocab = placeholder_vocabulary()
@@ -1207,8 +1220,12 @@ def evidence_commands_render_equivalent(before: Any, after: Any, subject: str) -
         for old_name, new_name in zip(old_names, new_names):
             new_meaning = vocab["by_name"].get(new_name)
             old_meaning = vocab["by_name"].get(old_name)
+            if old_meaning is None:  # 字面花括号: 须逐字不变
+                if new_name != old_name:
+                    return False
+                continue
             # 按本主体渲染等价 = 两侧规范名相同(如卡分支主体 {run_dir} 与 {worktree} 都渲染为审计分配工作树)
-            if new_meaning is None or (old_meaning is not None and old_meaning["canonical"][subject] != new_meaning["canonical"][subject]):
+            if new_meaning is None or old_meaning["canonical"][subject] != new_meaning["canonical"][subject]:
                 return False
     return True
 
@@ -1227,8 +1244,9 @@ def evidence_fingerprint_value(value: Any, card_fm: dict[str, Any] | None) -> An
 def evidence_declaration_problem(workspace_root: Path | str, audit_task_id: str, audit_fm: dict[str, Any] | None, *,
                                  reviewed_fm: dict[str, Any] | None = None, reviewed_task_id: str | None = None) -> dict[str, Any] | None:
     """AIPOS-F233 件③: 审计卡生效的运行证据声明本身是否有问题(唯一判据; 推导核 claimed 审计卡与裁决入口 runtime_evidence_check 同读):
-    形不合(RuntimeEvidenceDeclarationError)/ 命令含未知占位(渲染不了)= {category(declaration_invalid_category), reasons, card(声明所在卡),
-    queue, value(卡面原声明), amend(修正命令原文), outlet(出口一句)}; 未声明 / 无问题 = None。"""
+    形不合(RuntimeEvidenceDeclarationError)/ 含本主体渲染不了的已知占位(该主体在词表无已声明规范名; 加载守卫已保证不发生, 此为
+    fail-closed 兜底)= {category(declaration_invalid_category), reasons, card(声明所在卡), queue, value(卡面原声明), amend(修正命令原文),
+    outlet(出口一句)}; 未声明 / 无问题 = None。词表外的 {xxx} 是字面文本, 不算声明错(按字面渲染与比对)。"""
     from tools.aipos_cli.audit_derivation import audit_card_reviewed_id
     from tools.aipos_cli.next_resolver import _find_task_in_queue, _read_frontmatter
 
@@ -1251,45 +1269,30 @@ def evidence_declaration_problem(workspace_root: Path | str, audit_task_id: str,
     else:
         if requirement is None:
             return None
-        reasons = evidence_unknown_problems(requirement["commands"], task_id=card, card_field=key)
+        reasons = _unrenderable_known_placeholders(requirement["commands"], evidence_subject(reviewed_fm or {}), card)
     if not reasons:
         return None
     vocab = placeholder_vocabulary()
     _path, queue = _find_task_in_queue(root, card) if card else (None, None)
-    suggestion, value = _evidence_fix_suggestion(raw, card_fm, vocab)
-    amend = _evidence_amend_command(root, card, queue, value)
-    outlet = str(vocab["texts"]["amend_outlet"]).format(amend=amend, suggestion=(
-        str(vocab["texts"]["amend_suggestion"]).format(pairs=suggestion) if suggestion else ""))
+    amend = _evidence_amend_command(root, card, queue, raw)
+    outlet = str(vocab["texts"]["amend_outlet"]).format(amend=amend, suggestion="")
     return {"category": str(decl["declaration_invalid_category"]), "reasons": reasons, "card": card, "queue": queue, "value": raw,
             "amend": amend, "outlet": outlet,
             "line": str(vocab["texts"]["declaration_invalid"]).format(card_field=key, card=card, problems="; ".join(reasons)) + f"; {outlet}"}
 
 
-def _evidence_fix_suggestion(raw: Any, card_fm: dict[str, Any], vocab: dict[str, Any]) -> tuple[str, Any]:
-    """未知占位的建议改法(difflib 最接近的已知占位名, 按声明所在卡主体规范化; 有一个找不到 = 不给建议, 命令原样带进 amend 模板)。
-    返回 (建议一句, 建议后的声明值)。"""
-    import difflib
-
-    if not isinstance(raw, dict) or not isinstance(raw.get("commands"), list):
-        return "", raw
-    subject = evidence_subject(card_fm)
-    known = sorted(vocab["by_name"])
-    pairs: dict[str, str] = {}
-    for command in raw["commands"]:
-        for name in canonicalize_evidence_command(str(command), subject, vocab)["unknown"]:
-            close = difflib.get_close_matches(name, known, n=1, cutoff=0.6)
-            if not close:
-                return "", raw
-            pairs[name] = str(vocab["by_name"][close[0]]["canonical"][subject])
-    if not pairs:
-        return "", raw
-
-    def fix(match: re.Match[str]) -> str:
-        return "{" + pairs.get(match.group(1), match.group(1)) + "}"
-
-    commands = [canonicalize_evidence_command(vocab["pattern"].sub(fix, c), subject, vocab)["command"] if isinstance(c, str) else c
-                for c in raw["commands"]]
-    return ", ".join("{" + a + "} → {" + b + "}" for a, b in pairs.items()), {**raw, "commands": commands}
+def _unrenderable_known_placeholders(commands: list[Any], subject: str, card: str) -> list[str]:
+    """已知占位而本主体无已声明规范名(渲染不了)的命令 → 拒因(加载守卫保证不出现; fail-closed 兜底)。字面花括号不计。"""
+    vocab = placeholder_vocabulary()
+    declared = {"branch": {str(k) for k in runtime_evidence_declaration()["placeholders"]},
+                "candidate": {str(k) for k in runtime_evidence_candidate_declaration()["placeholders"]}}
+    out: list[str] = []
+    for index, command in enumerate(commands or [], 1):
+        bad = [n for n in (m.group(1) for m in vocab["pattern"].finditer(str(command)))
+               if n in vocab["by_name"] and str(vocab["by_name"][n]["canonical"].get(subject) or "") not in declared.get(subject, set())]
+        if bad:
+            out.append(f"卡 {card} 命令 #{index} `{command}` 的占位 {' / '.join('{' + n + '}' for n in bad)} 在交付主体 {subject} 渲染不了")
+    return out
 
 
 def _evidence_amend_command(root: Path, card: str, queue: str | None, value: Any) -> str:
@@ -1396,8 +1399,8 @@ def check_runtime_evidence_declaration(raw: Any, *, governance_root: Path | str,
     """运行证据声明校验唯一处(出卡 draft create/publish 与补审派发 audit dispatch --supplementary 同调): 形校验(同裁决入口
     parse_runtime_evidence_declaration)+ 派发前可执行核查。返回 {requirement, problems: [拒因原文], notes: [未核提示]}。
     形不合 = RuntimeEvidenceDeclarationError。problems 非空 = 调用方拒(预演报错, --confirm 拒)。
-    AIPOS-F233 件②(取代 F199 旧占位迁移提示): 命令含未知占位(两主体词表都无, 渲染不了)= declaration_invalid_category 拒因并列出可用占位
-    (evidence_unknown_problems 唯一判据; 裁决入口同判); 别名不拒(调用方先经 normalize_runtime_evidence_declaration 改写为规范形)。
+    AIPOS-F233 件②(取代 F199 旧占位迁移提示): 词表外的 {xxx} 是字面文本(awk / jq / json 片段等), 不拒, notes 给提示与相近已知占位
+    (evidence_literal_notes); 别名不拒(调用方先经 normalize_runtime_evidence_declaration 改写为规范形)。
     card_task_id / card_frontmatter = 声明所在卡(拒因点名用)。"""
     import socket
 
@@ -1406,10 +1409,8 @@ def check_runtime_evidence_declaration(raw: Any, *, governance_root: Path | str,
     if requirement is None:
         return out
     decl = runtime_evidence_declaration()
-    unknown = evidence_unknown_problems(requirement["commands"], task_id=str(card_task_id or (card_frontmatter or {}).get("task_id") or "<卡>"),
-                                        card_field=str(decl["card_field"]))
-    vocab_texts = placeholder_vocabulary()["texts"]
-    out["problems"].extend(f"{decl['declaration_invalid_category']}: {p}; {vocab_texts['unknown_outlet_draft']}" for p in unknown)
+    out["notes"].extend(evidence_literal_notes(requirement["commands"], task_id=str(card_task_id or (card_frontmatter or {}).get("task_id") or "<卡>"),
+                                               card_fm=card_frontmatter, card_field=str(decl["card_field"])))
     check = decl.get("executable_check")
     needed = ("category", "privilege_category", "privilege_commands", "fix_hint", "unverified_note")
     if not isinstance(check, dict) or any(not check.get(k) for k in needed):
@@ -1529,7 +1530,8 @@ def render_candidate_evidence_steps(governance_root: Path | str, *, audit_task_i
                                        evidence_card=evidence_card)
     if values.get("host_refusal"):  # 选不出 run = 拒因一行(不渲染任何 run 命令; 裁决入口同判据拒)
         return [str(decl["steps_title"]), str(values["host_refusal"]),
-                *(f"   ⚠ {p}" for p in evidence_unknown_problems((requirement or {}).get("commands") or [], task_id=reviewed_task_id))]
+                *(f"   ℹ {p}" for p in evidence_literal_notes((requirement or {}).get("commands") or [], task_id=reviewed_task_id,
+                                                            card_fm=reviewed_fm))]
     values["heading"] = str(runtime_evidence_declaration()["section_heading"])
     known = {k: v for k, v in values.items() if not str(v).startswith("<")}
     lines = [str(decl["steps_title"])]
@@ -1543,7 +1545,8 @@ def render_candidate_evidence_steps(governance_root: Path | str, *, audit_task_i
                          for c in (requirement or {}).get("commands") or [])
     if values.get("remote"):  # AIPOS-F200 件④: 审计 run 在远端主机 = 证据清单 + 取回副本两步(声明 candidate_subject.remote_steps)
         lines.extend(str(step).format(**values) for step in decl.get("remote_steps") or [])
-    lines.extend(f"   ⚠ {p}" for p in evidence_unknown_problems((requirement or {}).get("commands") or [], task_id=reviewed_task_id))
+    lines.extend(f"   ℹ {p}" for p in evidence_literal_notes((requirement or {}).get("commands") or [], task_id=reviewed_task_id,
+                                                        card_fm=reviewed_fm))
     return lines
 
 

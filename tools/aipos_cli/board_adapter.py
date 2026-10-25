@@ -4004,7 +4004,7 @@ def _build_audit_dispatch_preview(
             )
 
             raw_evidence = {"required": True, "commands": list(runtime_evidence_commands)}
-            # AIPOS-F233 件②: 补审声明命令别名按被审卡交付主体改写为规范形(改写前后原文进 warnings); 未知占位由声明校验拒
+            # AIPOS-F233 件②: 补审声明命令别名按被审卡交付主体改写为规范形(改写前后原文进 warnings); 词表外花括号按字面保留, 提示进 warnings
             normalized = normalize_runtime_evidence_declaration(raw_evidence, card_fm=source_metadata, task_id=str(source_task_id_for_verdict))
             raw_evidence = normalized["value"]
             warnings.extend(normalized["notes"])
@@ -4716,7 +4716,7 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
     AIPOS-F199 件①: 被审卡交付主体为固定候选(next_resolver.candidate_subject_values 非 None, enums.schema task_mode.candidate_subject)=
     不推导审计工作树, 每条记录绑定审计实例自己的验证根 run(_candidate_run_problem; 声明 runtime_evidence.candidate_subject), 声明命令按该条
     run 的占位值渲染后逐字匹配。其余卡行为不变。AIPOS-F233 件①③: 渲染经占位统一词表(artifact_ingest.render_evidence_command: 别名按被审卡主体
-    改写为规范形再代值, 原 F199 旧占位拒收退役); 声明命令含未知占位(渲染不了)= declaration_invalid_category + 受限 amend 出口
+    改写为规范形再代值, 原 F199 旧占位拒收退役); 声明本身错(形不合 / 本主体渲染不了的已知占位; 字面花括号不算, 按字面比对)= declaration_invalid_category + 受限 amend 出口
     (artifact_ingest.evidence_declaration_problem 唯一判据, 推导核同读; loop 立即判声明错归顾问, 不拉起审计体补做)。"""
     import hashlib
 
