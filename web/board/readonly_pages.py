@@ -719,6 +719,11 @@ def _panel(ctx: _Ctx) -> str:
 
 def grant_sentence(ctx: _Ctx, grant: dict[str, Any]) -> str:
     """One plain-language sentence for an authorization request (board side; CLI line = owner_inbox.grant_line, same data)."""
+    if grant.get("kind") == "authorization":  # AIPOS-F224: extend the project grant instead of a new envelope
+        return ctx.t("gr_auth_sentence", advisor=grant["agent_or_role"], task_id=grant["task_id"],
+                     title_part=ctx.t("gr_title_part", title=grant["title"]) if grant.get("title") else "",
+                     dimension=grant.get("dimension_label") or grant.get("dimension"), authorization_id=grant["authorization_id"],
+                     change=grant["change"], revision=grant["revision"])
     repos = ", ".join(grant["lane_repos"])
     return ctx.t("gr_sentence", advisor=grant["agent_or_role"], task_id=grant["task_id"],
                  title_part=ctx.t("gr_title_part", title=grant["title"]) if grant.get("title") else "",
@@ -730,6 +735,9 @@ def grant_sentence(ctx: _Ctx, grant: dict[str, Any]) -> str:
 def request_payload(item: dict[str, Any]) -> dict[str, Any]:
     """What "sign as suggested" posts to the F172 write path (mode=new; parameters = the suggestion; request_item = inbox item id)."""
     g = item["grant"]
+    if g.get("kind") == "authorization":  # AIPOS-F224: same F172 write path, mode authorization, the suggested grant block as is
+        return {"workspace": item["project"], "mode": "authorization", "action": "extend", "block": g["authorization"],
+                "request_item": item["item_id"]}
     return {"workspace": item["project"], "mode": "new", "agent_or_role": g["agent_or_role"], "task_mode": g["task_mode"],
             "lane_repo": list(g["lane_repos"]), "launch_harness": list(g["launch_harnesses"]), "max_tasks": g["max_tasks"],
             "expires_at": g["expires_at"], "policy_id": g["policy_id"], "request_item": item["item_id"]}
