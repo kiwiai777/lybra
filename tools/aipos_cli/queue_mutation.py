@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime, timezone
-from tools.aipos_cli.clock import iso_z
+from tools.aipos_cli.clock import iso_ms, iso_z
 from tools.aipos_cli.record_writer import record_dir
 from pathlib import Path
 from typing import Any
@@ -351,6 +351,34 @@ def correct_declaration() -> dict[str, Any]:
     inherit = followup_inherit_fields(followup, "transitions.schema.json queue_mutations.correct.followup")
     return {**spec, "from_states": tuple(str(x) for x in spec["from_states"]),
             "followup": {**followup, **templates, "inherit_fields": inherit}}
+
+
+PAUSE_DECL_KEYS = ("pause_choice", "resume_choice", "from_states", "actor_role_class", "end_reason", "texts", "exit_codes")
+PAUSE_TEXT_KEYS = ("paused_line", "resume_command", "preview_line", "done_line", "blocked_line", "not_found", "bad_state", "already_paused",
+                   "not_paused", "role_refused", "next_run_refused", "pause_action", "resume_action")
+
+
+def pause_declaration() -> dict[str, Any]:
+    """AIPOS-F231 件①: Owner 暂停 / 恢复卡声明唯一读取口 verbs.schema lybra_queue_pause。缺键 / from_states 含非队列目录 / 两个选项未在
+    收件箱声明 / end_reason 未在 loop 结束原因声明 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    verbs = load_schema("verbs", code_repo_schema_root()).get("verbs") or {}
+    spec = verbs.get("lybra_queue_pause")
+    where = "verbs.schema.json verbs.lybra_queue_pause"
+    if not isinstance(spec, dict) or any(not spec.get(k) for k in PAUSE_DECL_KEYS):
+        raise SchemaLoadError(f"{where} 未声明齐 {list(PAUSE_DECL_KEYS)}")
+    texts = spec["texts"]
+    if not isinstance(texts, dict) or any(not isinstance(texts.get(k), str) or not texts[k] for k in PAUSE_TEXT_KEYS):
+        raise SchemaLoadError(f"{where}.texts 未声明齐 {list(PAUSE_TEXT_KEYS)}")
+    bad = [x for x in spec["from_states"] if x not in QUEUE_STATES]
+    if bad:
+        raise SchemaLoadError(f"{where}.from_states 含非队列目录 {bad}")
+    require_inbox_choices([spec["pause_choice"], spec["resume_choice"]], f"{where}.pause_choice / resume_choice")
+    reasons = (((verbs.get("lybra_loop") or {}).get("run_record") or {}).get("end_reasons")) or {}
+    if spec["end_reason"] not in reasons:
+        raise SchemaLoadError(f"{where}.end_reason {spec['end_reason']!r} 须为 lybra_loop.run_record.end_reasons 已声明者")
+    return {**spec, "from_states": tuple(str(x) for x in spec["from_states"])}
 
 
 def require_inbox_choices(choices: Any, where: str, *, pinned: tuple[str, str] | None = None) -> list[str]:
@@ -1614,8 +1642,8 @@ def build_rework_round(
         else:  # AIPOS-F225 件②: 第二档自动追加(卡面候选 / 验收 / 范围自发布起未变, 轮次 ≤ 硬上限)
             auto_release = auto
 
-    # 4. 构建新返工轮次
-    now_iso = iso_z()
+    # 4. 构建新返工轮次(AIPOS-F232 件⑤: 登记时刻毫秒精度 clock.iso_ms——与同秒的下一次复核可区分; 读侧解析比较, 秒级存量照读)
+    now_iso = iso_ms()
     new_round = {
         "round": next_round,
         "verdict_ref": verdict_ref,

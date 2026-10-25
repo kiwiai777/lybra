@@ -71,9 +71,9 @@ def _past(monkeypatch, review_ago: int | None, round_ago: int | None):
     now = datetime.now(timezone.utc).replace(microsecond=0)
     with monkeypatch.context() as m:
         if review_ago is not None:
-            m.setattr(board_adapter, "iso_z", lambda: f221._iso(now - timedelta(seconds=review_ago)))
+            m.setattr(board_adapter, "iso_ms", lambda: f221._iso(now - timedelta(seconds=review_ago)))  # AIPOS-F232: 复核时刻改 iso_ms
         if round_ago is not None:
-            m.setattr(queue_mutation, "iso_z", lambda: f221._iso(now - timedelta(seconds=round_ago)))
+            m.setattr(queue_mutation, "iso_ms", lambda: f221._iso(now - timedelta(seconds=round_ago)))  # AIPOS-F232: 登记时刻改 iso_ms
         yield
 
 

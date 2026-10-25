@@ -105,6 +105,11 @@ def inbox_declaration() -> dict[str, Any]:
                 raise SchemaLoadError(f"verbs.{VERB}.categories.{name}.reaudit_hint 须有 reasons / after_choices(列表)、非空 text 与 ≥1 整数 commit_chars")
             referenced |= set(hint["after_choices"])
         referenced |= set(cat.get("choice_refused_by_queue_state") or {})  # AIPOS-F201: refusal texts are keyed by option
+    auth_texts = decl["categories"]["envelope_warning"].get("authorization")  # AIPOS-F232 件③: 项目授权告知文案
+    if (not isinstance(auth_texts, dict) or any(not str(auth_texts.get(k) or "").strip() for k in ("label", "subject", "ask", "recommend", "impact", "decide_board"))
+            or not isinstance(auth_texts.get("options"), list) or not auth_texts["options"]):
+        raise SchemaLoadError(f"verbs.{VERB}.categories.envelope_warning.authorization 须有非空 label / subject / ask / recommend / impact / decide_board 与选项列表")
+    referenced |= set(auth_texts["options"])
     ask_spec = decl["categories"]["loop_owner_needed"].get("advisor_ask")  # AIPOS-F222 件②
     if (not isinstance(ask_spec, dict) or not str(ask_spec.get("reason") or "").strip() or not str(ask_spec.get("impact") or "").strip()
             or not isinstance(ask_spec.get("pinned_when_rework_exhausted"), list)):
@@ -179,6 +184,11 @@ def _check_tiers(decl: dict[str, Any]) -> None:
         raise SchemaLoadError(f"{where}.texts 须声明齐 {list(_TIER_TEXTS)}")
     if str(tiers["grant_owner_reason"]) not in reasons:
         raise SchemaLoadError(f"{where}.grant_owner_reason 须 ∈ tier1.reasons")
+    legacy = decl["categories"]["loop_owner_needed"]["advisor_ask"].get("legacy")  # AIPOS-F232 件①: F225 前的旧顾问请求降档
+    if (not isinstance(legacy, dict) or legacy.get("tier") != 2 or str(legacy.get("kind")) not in kinds
+            or any(not str(legacy.get(k) or "").strip() for k in ("label", "ask", "retract_command"))):
+        raise SchemaLoadError(f"verbs.{VERB}.categories.loop_owner_needed.advisor_ask.legacy 须 tier = 2、kind ∈ tiers.tier2.kinds, "
+                              "且有非空 label / ask / retract_command(AIPOS-F232)")
     expected = _owner_needed_reasons(status_contract()["next_action"], decl)
     expected.add(str(auto["revoked_end_reason"]))
     table = tiers["loop_reasons"]
@@ -395,6 +405,78 @@ def auto_release_stop(governance_root: Path, task_id: str) -> dict[str, Any] | N
     later = [r for r in rulings_for_task(Path(governance_root), task_id)
              if str(r.get("decision_id") or "") != latest["decision_id"] and str(r.get("decided_at") or "") >= latest["decided_at"]]
     return None if later else latest
+
+
+def pause_rulings(governance_root: Path, task_id: str, spec: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """AIPOS-F231 件①: 本卡的暂停 / 恢复裁决(选项属声明 pause_choice / resume_choice), 旧→新(rulings_for_task 同序)。读不出 = 向上。"""
+    from tools.aipos_cli.queue_mutation import pause_declaration
+
+    spec = spec or pause_declaration()
+    keys = (str(spec["pause_choice"]), str(spec["resume_choice"]))
+    chain = [r for r in rulings_for_task(Path(governance_root), task_id) if str(r.get("allowed_next_action") or "") in keys]
+
+    def _order(ruling: dict[str, Any]) -> tuple[str, int]:
+        # 裁决时刻秒精度: 同秒的暂停 / 恢复(CLI 与收件箱各记一条)按记录文件写入先后定序(同机写入, 不按文件名哈希序)
+        try:
+            written = Path(str(ruling.get("_path") or "")).stat().st_mtime_ns
+        except OSError:
+            written = 0
+        return (str(ruling.get("decided_at") or ""), written)
+
+    return sorted(chain, key=_order)
+
+
+def card_pause_state(governance_root: Path, task_id: str) -> dict[str, Any] | None:
+    """AIPOS-F231 件① 卡暂停唯一判定(loop 拒起 / 步间停、lybra next、loop status、queue pause / resume 前置同读): 本卡收件箱裁决
+    (rulings_for_task, 旧→新)中最近一条选项属 {pause_choice, resume_choice}(声明 verbs.lybra_queue_pause)者为 pause_choice = 已暂停 →
+    {decision_id, decided_at, owner_words, relayed_by, record, line(声明 paused_line 渲染, 含恢复命令), resume_command}; 否则 None。
+    记录追加不覆盖(每次暂停 / 恢复各一份决策记录), 判定只看最近一条。读不出 = 向上(fail-closed, 不猜成未暂停)。"""
+    from tools.aipos_cli.queue_mutation import pause_declaration
+
+    spec = pause_declaration()
+    chain = pause_rulings(Path(governance_root), task_id, spec)
+    latest = chain[-1] if chain else None
+    if latest is None or str(latest.get("allowed_next_action") or "") != str(spec["pause_choice"]):
+        return None
+    texts = spec["texts"]
+    resume_cmd = _fmt(texts["resume_command"], "lybra_queue_pause.texts.resume_command", governance_root=str(governance_root), task_id=task_id)
+    state = {"task_id": task_id, "decision_id": str(latest.get("decision_id") or ""), "decided_at": str(latest.get("decided_at") or ""),
+             "owner_words": latest.get("owner_words") or "", "relayed_by": latest.get("relayed_by") or latest.get("captured_by") or "",
+             "record": str(latest.get("_path") or ""), "resume_command": resume_cmd, "end_reason": str(spec["end_reason"])}
+    state["line"] = _fmt(texts["paused_line"], "lybra_queue_pause.texts.paused_line", **state)
+    return state
+
+
+def apply_card_pause(governance_root: Path, view: dict[str, Any], na: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F231 件①: loop status 每个运行的下一动作(在 apply_owner_ruling 之后、apply_owner_tier 之前调)——
+    - 本卡已暂停(card_pause_state)且该运行事项不是刚被裁成「暂停」(那条走 owner_ruled 转达顾问: 暂停, 不续跑)= owner_needed(reason = 声明
+      end_reason paused, detail = 暂停行含恢复命令, hint = 恢复命令; 不给「重跑 loop」), 收件箱事项锚点 = 暂停裁决(inbox_anchor = pause:<裁决 ID>;
+      同一运行暂停前后是两件事), 该事项已有裁决 = apply_owner_ruling 同一构造;
+    - 本卡已恢复而运行以 paused 结束(最近一条暂停 / 恢复裁决 = 恢复)= advisor_fix(owner_ruled), 裁决行 + 恢复选项 advisor_next(原命令续跑 loop);
+    - 卡已结案 / 其余 = 原样。读不出 = 向上。"""
+    from tools.aipos_cli.queue_mutation import pause_declaration
+
+    if not isinstance(na, dict) or na.get("action") == "card_done_take_next":
+        return na
+    task_id = str(view.get("task_id") or "")
+    if not task_id:
+        return na
+    spec = pause_declaration()
+    pause = card_pause_state(Path(governance_root), task_id)
+    if pause is None:
+        chain = pause_rulings(Path(governance_root), task_id, spec)
+        if na.get("reason") == spec["end_reason"] and chain and str(chain[-1].get("allowed_next_action") or "") == str(spec["resume_choice"]):
+            prev = next((r for r in reversed(chain[:-1]) if str(r.get("allowed_next_action") or "") == str(spec["pause_choice"])), None)
+            iid = loop_item_id(Path(governance_root), task_id, f"pause:{(prev or chain[-1]).get('decision_id')}")
+            return _ruled_action(Path(governance_root), view, na, iid, chain[-1], inbox_declaration())
+        return na
+    ruled = na.get("owner_ruling") if na.get("reason") == "owner_ruled" else None
+    if isinstance(ruled, dict) and str(ruled.get("decision_id") or "") == pause["decision_id"]:
+        return na  # 正是该运行事项上刚裁的「暂停」: 转达顾问(暂停, 不续跑), 不再另列 Owner 事项
+    paused = {"action": "owner_needed", "reason": pause["end_reason"], "detail": pause["line"], "hint": pause["resume_command"],
+              "pause": {k: pause[k] for k in ("decision_id", "decided_at", "owner_words", "relayed_by", "record")},
+              "inbox_anchor": f"pause:{pause['decision_id']}", "paused_from": {"action": na.get("action"), "reason": na.get("reason")}}
+    return apply_owner_ruling(Path(governance_root), view, paused)
 
 
 def revocable_notices(inbox: dict[str, Any], decl: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -855,7 +937,7 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
         title = (str(card_fm.get("title") or "").strip() or None) if card_fm else _card_title(card_path, errors, project)
         item = _base_item(
             decl, project=project, governance_root=root, category="loop_owner_needed", rank=int(cat["rank"]), subject=subject,
-            anchor=str(view.get("run_id") or ""), source=driver,
+            anchor=str(na.get("inbox_anchor") or view.get("run_id") or ""), source=driver,  # AIPOS-F231: 已暂停 = 暂停裁决锚点
             ask=str(ask_rec.get("ask") or na.get("detail") or reason), recommend=recommend,
             impact=(_fmt(ask_spec["impact"], "categories.loop_owner_needed.advisor_ask.impact", task_id=task_id,
                          end_reason=str(view.get("end_reason") or na.get("reason") or "?")) if advisor_ask
@@ -864,6 +946,14 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
             facts={"run_id": view.get("run_id"), "reason": reason, "driver": view.get("driver"), "envelope": view.get("envelope"),
                    "hint": na.get("hint"), "record_path": view.get("record_path"), "owner_ask_by": ask_rec.get("noted_by")})
         item["relay_to"] = (str(ask_rec.get("noted_by") or "") if advisor_ask else "") or driver or None  # AIPOS-F201: the loop driver is the advisor to tell
+        if advisor_ask and marker.get("legacy"):  # AIPOS-F232 件①: F225 前的旧顾问请求(无第一档事由)= 第二档告知, 附撤回命令
+            legacy = ask_spec["legacy"]
+            retract = _fmt(legacy["retract_command"], "categories.loop_owner_needed.advisor_ask.legacy.retract_command", task_id=task_id,
+                           noted_by=str(ask_rec.get("noted_by") or driver or "<补写的顾问实例>"), governance_root=str(root))
+            item["ask"] = _fmt(legacy["ask"], "categories.loop_owner_needed.advisor_ask.legacy.ask", label=legacy["label"], ask=item["ask"],
+                               retract_command=retract)
+            item["owner_tier"] = int(legacy["tier"])
+            item["legacy_ask"] = {"label": str(legacy["label"]), "retract_command": retract, "kind": str(legacy["kind"])}
         # AIPOS-F225: first-tier reason (loop status apply_owner_tier; advisor_ask = the note's owner_reason)
         item["owner_reason"] = (owner_reason_entry((view.get("owner_ask") or {}).get("owner_reason"), decl)
                                 if advisor_ask and isinstance(view.get("owner_ask"), dict) else na.get("owner_reason"))
@@ -1138,7 +1228,9 @@ def owner_ask_destination(root: Path, task_id: str, view: dict[str, Any], na: di
     decl = decl or inbox_declaration()
     root = Path(root)
     out: dict[str, Any] = {"item_id": None, "category": "loop_owner_needed", "merged": False, "reason": None, "decision_id": None,
-                           "choice": None, "run_id": view.get("run_id"), "state": None}
+                           "choice": None, "run_id": view.get("run_id"), "state": None,
+                           # AIPOS-F232 件①: 顾问请求(运行非等 Owner)无第一档事由 = F225 前的旧请求, 降第二档告知(advisor_ask.legacy)
+                           "legacy": na.get("action") != "owner_needed" and not str(ask.get("owner_reason") or "").strip()}
     path, state = find_task_card(root, task_id)
     out["state"] = state
     if path is None or state in ("completed", "withdrawn"):
@@ -1152,8 +1244,8 @@ def owner_ask_destination(root: Path, task_id: str, view: dict[str, Any], na: di
     if na.get("action") != "owner_needed":
         fm = require_frontmatter(Path(path))[0] if state == "claimed" else {}
         core = rework_limit_core(root, task_id, fm, decl=decl) if fm else None
-        if core is not None:
-            out.update({"item_id": core["item_id"], "category": "rework_limit", "merged": True})
+        if core is not None:  # 并入返工上限事项(第一档 rework_cap_exceeded)= 不按旧请求降档
+            out.update({"item_id": core["item_id"], "category": "rework_limit", "merged": True, "legacy": False})
     ruling = read_ruling(root, out["item_id"], decl)
     if ruling is None and na.get("action") != "owner_needed":
         noted = str(ask.get("noted_at") or "")
@@ -1231,39 +1323,30 @@ def _envelope_items(root: Path, project: str, decl: dict[str, Any], home_root: P
 
 def _authorization_notice_items(root: Path, project: str, decl: dict[str, Any], home_root: Path | None) -> list[dict[str, Any]]:
     """AIPOS-F224 件②: 项目授权告知(第二档, 不阻塞; 判定唯一 autonomy_policy.authorization_notices: 用到 80% / 到期前 N 天)同列 envelope_warning
-    类(同一「将尽 / 将到期」文案; 建议 = 扩大授权命令, 增量 = 总卡数 / 到期)。"""
-    import math
-    from datetime import timedelta
-
-    from tools.aipos_cli.autonomy_policy import authorization_overview, project_authorization_declaration, render_authorization_command
-    from tools.aipos_cli.clock import iso_z, utc_now
+    类; AIPOS-F232 件③: 行与扩大命令唯一来源 autonomy_policy.authorization_warnings(loop status / brief 同读), 文案读本类 authorization 子声明
+    (项目授权措辞, 不写「信封」; 建议 = 扩大授权命令, 增量 = 总卡数 / 到期)。"""
+    from tools.aipos_cli.autonomy_policy import authorization_warnings
     from tools.aipos_cli.envelope_board import board_envelope_url
 
     cat = decl["categories"]["envelope_warning"]
-    adecl = project_authorization_declaration()
+    texts = cat["authorization"]
+    where = "categories.envelope_warning.authorization"
     out: list[dict[str, Any]] = []
-    for row in authorization_overview(root):
-        if not row.get("notices"):
-            continue
-        aid = str(row["authorization_id"])
-        step = max(1, math.ceil(float(adecl["extend"]["quota_step_ratio"]) * int(row["max_tasks"] or 0)))
-        later = iso_z((utc_now() + timedelta(days=int(adecl["extend"]["expiry_days"]))).replace(microsecond=0))
-        command = render_authorization_command(root, "extend", [f"--max-tasks {int(row['max_tasks'] or 0) + step}", f"--expires-at {later}"])
-        why = "; ".join(row["notices"])
-        drivers = sorted({d for lane in row["lanes"] for d in lane["drivers"]})
+    for row in authorization_warnings(root):
+        aid, why, command = str(row["authorization_id"]), str(row["why"]), str(row["command"])
+        drivers = ", ".join(row["drivers"])
         item = _base_item(
             decl, project=project, governance_root=root, category="envelope_warning", rank=int(cat["rank"]),
-            subject=_fmt(cat["subject"], "categories.envelope_warning.subject", policy_id=aid), anchor=f"{aid}|r{row['revision']}|{why}",
-            source=", ".join(drivers), ask=_fmt(cat["ask"], "categories.envelope_warning.ask", why=why),
-            recommend=_fmt(cat["recommend"], "categories.envelope_warning.recommend", renew_command=command),
-            impact=_fmt(cat["impact"], "categories.envelope_warning.impact", agent_or_role=", ".join(drivers) or "?"),
-            options=_option_list(list(cat["options"]), decl), since=None, policy_id=aid, home_root=home_root,
+            subject=_fmt(texts["subject"], f"{where}.subject", authorization_id=aid), anchor=f"{aid}|r{row['revision']}|{why}",
+            source=drivers, ask=_fmt(texts["ask"], f"{where}.ask", why=why),
+            recommend=_fmt(texts["recommend"], f"{where}.recommend", command=command),
+            impact=_fmt(texts["impact"], f"{where}.impact", drivers=drivers or "?"),
+            options=_option_list(list(texts["options"]), decl), since=None, policy_id=aid, home_root=home_root,
             facts={"used": row["used"], "max_tasks": row["max_tasks"], "expires_at": row["expires_at"], "renew_command": command,
                    "authorization_revision": row["revision"], "notices": row["notices"]})
-        if cat.get("decide_board"):
-            item["board_url"] = board_envelope_url(project, aid)
-            item["decide_line"] = _fmt(cat["decide_board"], "categories.envelope_warning.decide_board", board_url=item["board_url"],
-                                       command=item["decide_command"])
+        item["category_label"] = str(texts["label"])  # 项目授权措辞(类别仍为 envelope_warning: 档位 / 裁决同类)
+        item["board_url"] = board_envelope_url(project, aid)
+        item["decide_line"] = _fmt(texts["decide_board"], f"{where}.decide_board", board_url=item["board_url"], command=item["decide_command"])
         out.append(item)
     return out
 
@@ -1388,7 +1471,7 @@ def collect_project_inbox(governance_root: Path, *, project: str | None = None, 
                 except FrontmatterReadError as exc:
                     errors.append({"project": name, "source": f"裁决记录 {item['decision_id']}", "error": str(exc)})
                     continue
-                tier = category_tier(category, decl)
+                tier = int(item.get("owner_tier") or category_tier(category, decl))  # AIPOS-F232 件①: 事项级降档(旧顾问请求)优先
                 item["owner_tier"] = tier
                 (decided if ruling else items if tier == 1 else notices).append(item)
                 if ruling:  # AIPOS-F201 item 3 (a): ruled, but the truth still stands = the advisor has not continued
@@ -2447,7 +2530,8 @@ def _mirror_single(report: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 def loop_item_id(governance_root: Path, task_id: str, run_id: str, decl: dict[str, Any] | None = None) -> str:
-    """loop 类事项 ID(收件箱 _loop_items 同一构造: 项目 = 治理根目录名, 主体 = 声明 subject, 锚点 = run_id)。"""
+    """loop 类事项 ID(收件箱 _loop_items 同一构造: 项目 = 治理根目录名, 主体 = 声明 subject, 锚点 = run_id; AIPOS-F231: 已暂停卡 = 下一动作
+    inbox_anchor, 即 pause:<暂停裁决 ID>)。"""
     decl = decl or inbox_declaration()
     root = Path(governance_root).resolve()
     subject = _fmt(decl["categories"]["loop_owner_needed"]["subject"], "categories.loop_owner_needed.subject", task_id=task_id)
@@ -2489,7 +2573,8 @@ def apply_owner_ruling(governance_root: Path, view: dict[str, Any], na: dict[str
         return _apply_owner_ask(Path(governance_root), view, na)
     decl = inbox_declaration()
     task_id = str(view.get("task_id") or "")
-    iid = loop_item_id(Path(governance_root), task_id, str(view.get("run_id") or ""), decl)
+    # AIPOS-F231 件①: 已暂停卡的事项锚点 = 暂停裁决(apply_card_pause 给 inbox_anchor), 其余 = run_id
+    iid = loop_item_id(Path(governance_root), task_id, str(na.get("inbox_anchor") or view.get("run_id") or ""), decl)
     ruling = read_ruling(Path(governance_root), iid, decl)
     if ruling is None:
         return {**na, "inbox_item_id": iid}
@@ -2506,7 +2591,8 @@ def _apply_owner_ask(governance_root: Path, view: dict[str, Any], na: dict[str, 
     dest = owner_ask_destination(governance_root, task_id, view, na)
     if dest is None or dest["reason"] in ("card_closed", "frozen"):
         return na
-    marker = {"item_id": dest["item_id"], "category": dest["category"], "merged": dest["merged"], "resolved_by": dest.get("resolved_by")}
+    marker = {"item_id": dest["item_id"], "category": dest["category"], "merged": dest["merged"], "resolved_by": dest.get("resolved_by"),
+              "legacy": bool(dest.get("legacy"))}
     if dest["reason"] == "ruled":
         return {**_ruled_action(governance_root, view, na, str(dest["item_id"]), dest["ruling"], inbox_declaration()),
                 "owner_ask_inbox": marker}

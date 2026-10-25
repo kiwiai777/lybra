@@ -249,7 +249,7 @@ def test_item2_fast_lane_review_rework_round_re_return_back_to_review_then_pass(
     # 正式打回(复核记录落于 t0, 返工轮登记于 t0+120s 的「旧报告不算」演示: 复核时刻取过去, 轮登记取门当前时刻)
     t0 = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(seconds=120)
     with monkeypatch.context() as m:
-        m.setattr(board_adapter, "iso_z", lambda: _iso(t0))
+        m.setattr(board_adapter, "iso_ms", lambda: _iso(t0))  # AIPOS-F232: 复核时刻改 iso_ms(秒级文本 = 存量形, 照读)
         rc, payload, err = _rework(rig, FOCUS1, CRITERIA1)
     review_id = payload.get("data", {}).get("review_record", {}).get("review_id")
     events = _events(rig)
@@ -276,7 +276,8 @@ def test_item2_fast_lane_review_rework_round_re_return_back_to_review_then_pass(
     _show("---- ② 打回后 lybra next 原文(报告改于复核后、返工轮登记前)----\n" + _pick(wait, *NEXT_KEYS))
     assert wait["action"] == {"type": "await_rework", "card": CARD, "round": 1} and wait["current_node"] == "fast_lane_rework"
     said = wait["missing_records"][0] + wait["suggested_action"] + wait["notes"]
-    assert f"第 1 轮于 {rounds[0]['created_at']} 登记, 等其后的新交回" in said
+    # AIPOS-F232 件⑤: 登记时刻落盘为毫秒精度, 等待提示按秒显示(rework_bound_note 同一式样)
+    assert f"第 1 轮于 {str(rounds[0]['created_at'])[:19]}Z 登记, 等其后的新交回" in said
     assert f"改于 {_iso(t0 + timedelta(seconds=60))}, 早于第 1 轮登记, 不算本轮交回" in wait["notes"]
     assert "派下一轮审计" not in said and "新 tip" not in said
 
