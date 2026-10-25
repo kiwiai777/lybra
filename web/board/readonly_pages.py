@@ -906,6 +906,25 @@ def _relay_section(ctx: _Ctx, inbox: dict[str, Any]) -> list[str]:
     return out
 
 
+def _auto_released_section(ctx: _Ctx, inbox: dict[str, Any], owner: bool) -> list[str]:
+    """AIPOS-F228 (design note 2026-10-24 section 5): the "auto-released" column = tier-2 items that can be revoked
+    (owner_inbox.revocable_notices over the same collect_inbox data as the CLI). Owner sessions get one button per option (revoke /
+    acknowledge) through the same F226 write path; other sessions see the list read-only. Nothing auto-released = nothing rendered."""
+    from tools.aipos_cli.owner_inbox import inbox_declaration, item_lines, revocable_notices
+
+    notices = revocable_notices(inbox)
+    if not notices:
+        return []
+    texts = inbox_declaration()["texts"]
+    out = [f"<section class=\"ib-auto-released\" data-auto-released=\"{len(notices)}\">"
+           f"<h2>{_ESC(ctx.t('ib_auto_heading', count=len(notices)))}</h2><p class=\"rp-sub\">{_ESC(ctx.t('ib_auto_note'))}</p>"]
+    if not owner and any(_decidable(item) for item in notices):
+        out.append(f"<p class=\"rp-readonly-note\">{_ESC(ctx.t('ib_decide_readonly'))}</p>")
+    out.extend(_inbox_item_html(ctx, item, item_lines(item, texts), owner) for item in notices)
+    out.append("</section>")
+    return ["".join(out)]
+
+
 def _ruled_banner_html(ctx: _Ctx, banner: dict[str, Any] | None) -> list[str]:
     """AIPOS-F226: after a board ruling the page reloads with the declared ruled_param; the banner states only what the truth shows
     (owner_inbox.ruled_banner): waiting in "decided, waiting for the advisor" = names the advisor whose next loop picks it up."""
@@ -976,7 +995,8 @@ def render_owner_inbox(home_root: str | Path | None, params: dict[str, list[str]
 
     from tools.aipos_cli import board_pages
     from tools.aipos_cli.board_adapter import get_owner_inbox
-    from tools.aipos_cli.owner_inbox import board_decide_declaration, grant_requests, render_inbox_error_html, ruled_banner
+    from tools.aipos_cli.owner_inbox import (board_decide_declaration, grant_requests, render_inbox_error_html, revocable_notices,
+                                             ruled_banner)
     from tools.schema_loader import SchemaLoadError
 
     lang = "zh"
@@ -992,11 +1012,13 @@ def render_owner_inbox(home_root: str | Path | None, params: dict[str, list[str]
         requests = grant_requests(inbox)
         signing = owner and bool(requests)
         # AIPOS-F226: Owner session + something decidable = the ruling panel and its script (write exception 3)
-        deciding = owner and any(_decidable(item) for item in inbox["items"])
+        # AIPOS-F228: the "auto-released" column's revoke buttons use the same ruling panel / script / write path
+        deciding = owner and any(_decidable(item) for item in [*inbox["items"], *revocable_notices(inbox)])
         spec = board_decide_declaration()
         banner = ruled_banner(inbox, (params.get(str(spec["ruled_param"])) or [""])[0], home_root)
         body = (_ruled_banner_html(ctx, banner) + ([_panel(ctx)] if signing else []) + ([_decide_panel(ctx)] if deciding else [])
-                + _relay_section(ctx, inbox) + _grant_section(ctx, requests, owner) + _inbox_body(ctx, inbox, show_all, owner))
+                + _relay_section(ctx, inbox) + _grant_section(ctx, requests, owner) + _inbox_body(ctx, inbox, show_all, owner)
+                + _auto_released_section(ctx, inbox, owner))
         title = ctx.t("ib_title" if inbox["items"] else "ib_empty", count=inbox["count"], projects=len(inbox["projects"]))
         # AIPOS-F217: after signing, reload this page (same switch / language); its "decided, to relay" section carries the paragraph
         here = str(decl["nav_links"]["inbox"]) + (f"?{urlencode({decl['query']['show']: decl['show_all_value']})}" if show_all else "")

@@ -174,14 +174,19 @@ def _rule(board: Board, item: dict, choice: str, words: str | None = None) -> tu
 # ===========================================================================
 
 @pytest.fixture
-def three(rig, tmp_path):  # noqa: F811
+def three(rig, tmp_path, monkeypatch):  # noqa: F811
     rounds = [{"round": n, "verdict_ref": f"verdict_old_{n}", "created_at": f"2026-10-0{n}T00:00:00Z", "created_by": DRIVER,
                "focus_items": ["x"]} for n in (1, 2)]
     f78._card(rig.gov, RW, "claimed", extra={"claimed_by": "exec.lybra.test", "claimed_at": "'2026-10-01T00:00:00Z'",
                                             "rework_rounds": rounds})
     f78._card(rig.gov, NO, "pending", extra={"needs_owner": True})
     v3 = f222._verdict(rig.gov, RW, 3, "2026-10-09T00:00:00Z")
-    f202._two_blocks(rig)  # 起治理仓(含上面两张卡与裁决记录)+ 连续两次 BLOCK = owner_needed(audit_blocked_repeated)
+    # AIPOS-F228: F225 分级口径——连续 BLOCK(audit_blocked_repeated)= 第二档, 部署 / 验证根判不出变化 = 归顾问(advisor_fix), 不进收件箱;
+    # 顾问修不动且确属第一档(改验收 / 换审计环境 = rescope)才带事由升 Owner。本夹具验 Owner「重新派审」手动兜底, 故复用 F202 同一构件:
+    # 自动判定钉为「判不出变化」+ 顾问带第一档事由升级(禁第二份)。
+    f202._no_auto_reaudit(monkeypatch)
+    f202._two_blocks(rig)  # 起治理仓(含上面两张卡与裁决记录)+ 连续两次 BLOCK(第二档 → 归顾问)
+    f202._escalate(rig)  # 顾问 loop note --owner-reason rescope = 第一档 loop_owner_needed(reaudit 选项恒列)
     board = Board(rig.gov.parent, tmp_path)
     try:
         yield {"rig": rig, "home": rig.gov.parent, "gov": rig.gov, "board": board, "v3": v3}
@@ -332,7 +337,7 @@ def _light_rig(tmp_path: Path, monkeypatch) -> dict:
     assert rc == 0, out
     alpha = hroot / f168.ALPHA
     f168._card(alpha, "ALPHA-1", "claimed", f168.ALPHA)
-    f168._owner_needed_run(alpha, "ALPHA-1", f168.DRIVER_A)
+    f168._owner_needed_run(alpha, "ALPHA-1", f168.DRIVER_A, owner_reason="direction_fork")  # AIPOS-F228: F225 口径, 门拒设计分叉 = 顾问带第一档事由升
     for task in ("ALPHA-WB", "ALPHA-WC"):
         f168._card(alpha, task, "pending", f168.ALPHA, needs_owner=True)
     init_governance_repo(hroot)

@@ -958,6 +958,9 @@ Lybra 服务端位置（AIPOS-286）：
         "ib_ruled_banner": "已裁决「{label}」→ 将由 {advisor} 的下一次 loop 接续",
         "ib_ruled_done": "已裁决「{label}」(决策记录 {decision_id})",
         "ib_ruled_unknown": "该卡驱动顾问",
+        # AIPOS-F228: inbox "auto-released" column (tier 2, revocable; web/board/readonly_pages.py), zh / en same keys
+        "ib_auto_heading": "已自动放行 · {count} 项(不需你定, 可撤回)",
+        "ib_auto_note": "门已按规则自动放行并留了记录。要撤回就点「撤回自动放行」, 本卡会停住等你另定;点「知悉」= 收起这一条。",
         "ib_dc_confirm_heading": "确认这个裁决",
         "ib_dc_item": "事项:{what}",
         "ib_dc_choice": "你选的:{label}",
@@ -1344,6 +1347,9 @@ Important boundaries:
         "ib_ruled_banner": "Decided \"{label}\" -> {advisor} picks it up on the next loop",
         "ib_ruled_done": "Decided \"{label}\" (decision record {decision_id})",
         "ib_ruled_unknown": "the card's driving advisor",
+        # AIPOS-F228: inbox "auto-released" column (tier 2, revocable)
+        "ib_auto_heading": "Auto-released · {count} (no decision needed, can be revoked)",
+        "ib_auto_note": "The gate released these automatically under the rules and kept a record. To revoke one, press the revoke button: the card stops and waits for your decision; acknowledge = hide this one.",
         "ib_dc_confirm_heading": "Confirm this decision",
         "ib_dc_item": "Item: {what}",
         "ib_dc_choice": "Your choice: {label}",
