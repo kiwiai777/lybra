@@ -55,7 +55,7 @@ from tools.aipos_cli.verb_contract import declared_exit_code  # AIPOS-F101 件�
 from tools.aipos_cli.loop_run_record import LoopRunRecorder, LoopRunRecordError, model_label  # AIPOS-F169 model_label; AIPOS-F131: 运行记录 + 日志(唯一实现)
 from tools.aipos_cli.next_resolver import (
     audit_blocked_declaration,
-    candidate_fail_declaration,
+    candidate_fail_action_types,
     DRIVER_ACTOR_MISSING,
     REPO_ROOT,
     _action_type_for_command,
@@ -1762,9 +1762,10 @@ def _drive(
                     # AIPOS-F225 item 2: the Owner revoked a tier-2 auto release and has not ruled since = the card stays stopped
                     msg = f"Owner 撤回自动放行, 本卡停住: {derivation.get('suggested_action', '')}"
                     result.reason = str(action.get("end_reason") or "")
-                elif action.get("type") == candidate_fail_declaration()["action_type"]:
+                elif action.get("type") in candidate_fail_action_types():
                     # AIPOS-F211 item 4 (gap #217): fixed-candidate validation card FAIL = new candidate on a new validation card +
-                    # queue supersede this card (advisor_fix, not a consecutive failure, no Owner inbox; transitions nodes.N4.candidate_fail)
+                    # queue supersede this card (advisor_fix, not a consecutive failure, no Owner inbox; transitions nodes.N4.candidate_fail);
+                    # AIPOS-F227: audit declared fail_scope=deliverable = same-candidate rework exit (end reason from the derivation)
                     msg = f"固定候选审计 FAIL @ {node}/{state}: {derivation.get('suggested_action', '')}"
                     result.reason = str(action.get("end_reason") or "")
                 steps.append(LoopStep(index, "execute", node, state, task_id, ok=False, message=msg))

@@ -354,7 +354,45 @@
           "FAIL"
         ],
         "action_type": "candidate_fail",
-        "end_reason": "candidate_fail"
+        "end_reason": "candidate_fail",
+        "fail_scope": {
+          "description": "AIPOS-F227 件①②(10-24 chris HBLX-45V 实撞: 固定候选验证卡审计 FAIL 仅因卡面声明的 3 份 artifacts 未落盘, 58 项测试全过, 推导核仍判候选不合格只给「新候选 + 另出验证卡 + supersede」, 无同候选返工出口; F211 件④前提(HBJOTA-61V 候选脚本缺陷)只覆盖候选缺陷一类): 审计报告 frontmatter 键 report_key 声明 FAIL 范围, 值 ∈ values(键 = 值, 值 = 中文释义)。裁决入口(artifact_ingest, 判定 next_resolver.fail_scope_problem)对值不在 values 内的报告拒收(INGEST_FAIL_SCOPE_INVALID, 拒因点名声明值); 推导核读该裁决的门快照报告(裁决记录 report_snapshot_ref, 缺则 report_source_ref; 裁决记录自带 report_key 优先)——判定唯一实现 next_resolver.verdict_fail_scope。未声明 = 按 default 处理(兼容现行为: candidate_fail 出口), 但推导核与 loop status 例行修法同时给同候选补正出口(texts.deliverable_alt, 判据 texts.criterion)供顾问选用。deliverable = 不可推导, action.type = deliverable_action_type, loop 以 deliverable_end_reason 结束(verbs.schema lybra_loop_status.next_action.by_end_reason = advisor_fix, 不计连败、不进 Owner 收件箱; 修法 routine_rejections.end_reasons.<deliverable_end_reason>): 登记返工轮(既有 queue rework, 命令唯一渲染 next_resolver.rework_command_line, 声明 nodes.N4.non_pass_recovery.rework_command)→ loop 拉起执行体在同一固定候选上补交付物并重写交回 → 重交回(复用 nodes.N4.non_branch_rework / rework_return_bound 判据, 候选主体 commit_sha 须 = 卡面候选, 否则 INGEST_CANDIDATE_MISMATCH)→ 派下一轮审计; 返工轮次计入既有上限(queue_mutation.rework_round_budget)。candidate_fail 结束原因只在 candidate(含未声明)时出现。审计开工稿(lybra kickoff 审计卡)与审计卡取证锚点(audit_derivation.render_forensic_anchor)渲染 texts.audit_rule。占位: {scope} {meaning} {value} {allowed} {criterion} {candidate} {verdict} {verdict_id} {reason} {rework_command} {rework_path} {scope_note}。",
+          "report_key": "fail_scope",
+          "values": {
+            "candidate": "候选本身不合格(候选行为缺陷: 测试失败 / 功能不符 / 脚本缺陷等), 须来源卡修复出新候选另出验证卡",
+            "deliverable": "候选可用, 执行体交付物(报告 / 证据 / 声明产物)缺失或不实, 同候选返工补正"
+          },
+          "default": "candidate",
+          "deliverable_action_type": "candidate_deliverable_fail",
+          "deliverable_end_reason": "candidate_deliverable_fail",
+          "texts": {
+            "audit_rule": "被审卡交付主体为固定候选, 裁决 FAIL 时报告 frontmatter 写 fail_scope(AIPOS-F227): candidate = {candidate}; deliverable = {deliverable}。判据: {criterion} = deliverable, 否则 candidate; 不写 = 按 candidate 处理",
+            "criterion": "审计发现全部指向交付物(报告 / 证据 / 声明产物缺失或不实)、无任何候选行为缺陷",
+            "scope_declared": "审计声明 fail_scope={scope}({meaning})",
+            "scope_undeclared": "审计未声明 fail_scope, 按 candidate 处理(兼容)",
+            "scope_invalid": "审计报告 fail_scope={value} 不在声明值 {allowed} 内, 按 candidate 处理",
+            "invalid_refusal": "{path}: frontmatter fail_scope={value} 不在声明值 {allowed} 内(transitions nodes.N4.candidate_fail.fail_scope); 出口: 改为声明值之一或删去该键(不写 = 按 candidate 处理)",
+            "rework_path": "登记返工轮(同候选): {rework_command}(缺省预演, --focus-items 写交付物缺口、--acceptance-criteria 写补齐判据, 核对后加 --confirm 经门写入)→ 用原命令续跑 loop: 拉起执行体在同一固定候选 {candidate} 上补交付物并重写交回(commit_sha / tree_hash / branch 照抄卡面候选给值, 晚于本轮登记)→ 重交回并派下一轮审计; 返工轮次计入既有上限",
+            "deliverable_alt": "另一出口(审计发现明确只涉交付物时选用, 判据: {criterion}): 同候选补正 —— {rework_path}",
+            "candidate_declared_no_alt": "审计已声明 candidate, 不适用同候选补正",
+            "deliverable_suggested": "固定候选 {candidate} 审计 {verdict}(裁决 {verdict_id}), {scope_note}: 候选可用, 本卡同候选补正交付物, 不换候选、不另出验证卡、不 supersede —— {rework_path}; 原因: {reason}",
+            "deliverable_notes": "N4: 固定候选验证卡裁决 {verdict} 且 fail_scope=deliverable = 同候选返工补正(复用 nodes.N4.non_branch_rework 返工路径), 不计连败、不升 Owner(AIPOS-F227, 声明 transitions nodes.N4.candidate_fail.fail_scope)"
+          }
+        },
+        "report_reason": {
+          "description": "AIPOS-F227 件②: 裁决记录无 Findings summary(记录 findings_summary_present=false, 正文 not provided; 或摘要行缺)时, 原因摘录(next_resolver._verdict_reason_excerpt, audit_blocked / candidate_fail / FAIL 两条路共用)改读该裁决的审计报告(report_snapshot_ref 门快照, 缺则 report_source_ref, 相对治理根): 按 headings 顺序取第一个标题含该词的 `## ` 节(card_render._split_sections 同一切节), 节内含 verdict_line_markers 之一的行优先(去掉强调符), 否则整节; 截 nodes.N4.audit_blocked.reason_excerpt_chars 字。报告读不出 / 无匹配节 = 空(措辞照旧「见审计报告」)。",
+          "headings": [
+            "裁决依据",
+            "审计结论",
+            "一句话结论",
+            "结论"
+          ],
+          "verdict_line_markers": [
+            "裁决:",
+            "裁决：",
+            "Verdict:"
+          ]
+        }
       },
       "audit_blocked": {
         "description": "AIPOS-F179 件③(10-16 chris HBLX-8 实撞: 审计在自己工作树独立验证了模块测试/构建/新增 UI 测试, 但 UI 全量超过审计体 bash 单次时限、又遇模拟器资源冲突, 按章程给 BLOCK; 推导核对 BLOCK 无路径(「处理裁决 BLOCK」不可推导)→ 与旧运行连成连败 → owner_needed): 审计裁决 BLOCK = 审计未能完成(环境 / 资源 / 时长), 不是执行产物不合格。判定挂推导核 N4 非 PASS 分支(next_resolver, 与 AIPOS-F155 FAIL 返工同处; 已针对该裁决登记返工轮者仍走返工): 本卡最新常规裁决值 ∈ verdicts = 不可推导, action.type = action_type(triggered_by=advisor): 按 BLOCK 原因修环境 / 资源后重新派审计 R(n+1)(卡号演进 audit_derivation.derive_audit_task_id), 不改执行产物; loop 以 end_reason 结束(verbs.schema lybra_loop_status.next_action.by_end_reason 判 advisor_fix, 附原因摘录与重审命令, 不计连败)。本卡最新连续 BLOCK 裁决数(按裁决记录时间, 与 latest_verdict 同一排序; 补审裁决不计)≥ owner_needed_after = 以 repeated_end_reason 结束(owner_needed)。重审命令唯一渲染 next_resolver.reaudit_command(既有派审动词 lybra audit dispatch, 派审人 / 信封 = 驱动方, 审计实例 = audit_derivation.resolve_audit_instance); 下一轮已派出 = 推导核照常等最新一轮(AIPOS-F112), 不再给重审命令。原因摘录 = 该裁决记录的 Findings summary(owner_truth_view._extract_summary_field, 真相视图读裁决摘要同一函数), 截 reason_excerpt_chars 字。判定唯一实现 next_resolver.audit_block_state。",

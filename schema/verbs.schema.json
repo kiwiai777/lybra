@@ -2319,7 +2319,7 @@
       },
       "layout": {
         "executor": ["header", "", "start_title", "start_charter", "start_card", "start_worktree", "start_no_worktree", "start_repo", "carried", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "no_write_title", "no_write_boundary_lines", "no_write_other_projects", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_code_files", "return_write_last", "return_body", "return_stop", "", "summary"],
-        "auditor": ["header_auditor", "", "start_title", "start_charter", "start_card_auditor", "start_worktree_auditor", "start_repo", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "runtime_evidence_lines", "", "no_write_title", "no_write_boundary_lines", "no_write_other_projects", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline_auditor", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_code_files", "return_write_last", "return_body_auditor", "return_stop", "", "summary"],
+        "auditor": ["header_auditor", "", "start_title", "start_charter", "start_card_auditor", "start_worktree_auditor", "start_repo", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "runtime_evidence_lines", "", "no_write_title", "no_write_boundary_lines", "no_write_other_projects", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline_auditor", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_code_files", "return_fail_scope", "return_write_last", "return_body_auditor", "return_stop", "", "summary"],
         "note": "每个键 = texts 的一行模板; \"\" = 空行。模板占位值为 null(本卡不适用, 如无承继 / 本机会话 / 无工位)= 该行省略; 列表占位(*_lines)= 逐项按 item_templates 成行。占位缺 / 值非串 = 渲染失败(fail-closed, 不出半截开工稿)。"
       },
       "role_labels": {"executor": "执行体", "auditor": "审计体"},
@@ -2363,6 +2363,7 @@
         "return_report": "- 报告写到 `{report_path}`; frontmatter 必填({refusal_clause}; sha 一律 git rev-parse 输出原样粘贴):",
         "return_write_last": "- {report_write_last_rule}",
         "report_field_lines": "{report_field_lines}",
+        "return_fail_scope": "- {fail_scope_rule}",
         "return_code_files": "- {report_code_rule}",
         "return_body": "- 正文: 每件做了什么、验收原文证据、两边基线计数、残留进程原文、已知局限。",
         "return_body_auditor": "- 正文: 逐条验收裁定与原文证据、两边独立基线计数、残留进程原文、裁决与理由(以审计卡裁决节为准)。",
@@ -2879,7 +2880,8 @@
           "worktree_repair_failed": "AIPOS-F178 件③: 等待目标卡已认领、须建卡工作树(next_resolver.card_needs_worktree)而不在落点, 等待前自动补建(next_resolver.repair_missing_worktree, `lybra queue repair --confirm` 同一实现)失败, 未进入等待(exit_codes.not_derivable; 原因原文在结束原文与运行记录 worktree_repairs 末条 detail; 修法 = 结束原文的 lybra queue repair 命令)",
           "resource_busy": "AIPOS-F179 件②: 本卡声明的独占资源(card.schema resources)在 --max-wait 内一直被同项目另一 loop 占用, 未进入执行/审计等待(exit_codes.wait_timeout; 占用者原文在结束原文; 见 resource_lock)",
           "audit_blocked": "AIPOS-F179 件③: 审计裁决 BLOCK(审计未能完成: 环境 / 资源 / 时长), 推导核给出「修环境后重新派审计」(transitions nodes.N4.audit_blocked; exit_codes.not_derivable; 不计连败)",
-          "candidate_fail": "AIPOS-F211 件④(gap #217): 固定候选验证卡审计 FAIL, 推导核给出「来源卡修复出新候选 → 另出验证卡 → queue supersede 本卡」(transitions nodes.N4.candidate_fail; exit_codes.not_derivable; 不计连败, 不进 Owner 收件箱)",
+          "candidate_fail": "AIPOS-F211 件④(gap #217): 固定候选验证卡审计 FAIL, 推导核给出「来源卡修复出新候选 → 另出验证卡 → queue supersede 本卡」(transitions nodes.N4.candidate_fail; exit_codes.not_derivable; 不计连败, 不进 Owner 收件箱); AIPOS-F227: 只在审计声明 fail_scope=candidate 或未声明(兼容, 另附同候选补正出口)时出现",
+          "candidate_deliverable_fail": "AIPOS-F227 件②(10-24 chris HBLX-45V 实撞): 固定候选验证卡审计 FAIL 且审计报告声明 fail_scope=deliverable(候选可用、交付物缺失或不实), 推导核给出「登记返工轮(同候选)→ loop 拉起执行体补交付物重写交回 → 重交回派下一轮审计」(transitions nodes.N4.candidate_fail.fail_scope; exit_codes.not_derivable; 不计连败, 不进 Owner 收件箱)",
           "audit_blocked_repeated": "AIPOS-F179 件③: 本卡最新连续 BLOCK 裁决数 ≥ transitions nodes.N4.audit_blocked.owner_needed_after(修环境重审后仍 BLOCK), 升 Owner(exit_codes.not_derivable); AIPOS-F202: 计数以本卡最近一条「重新派审」收件箱裁决为界(transitions nodes.N4.audit_blocked.owner_reaudit)",
           "audit_report_form_error": "AIPOS-F180B 件②: 裁决入门被拒 INGEST_TIP_MISMATCH 且形式诊断 correctable(报告头 commit_sha 形式错误 / 疑似抄错), 但审计会话不可续接 / 本运行续接已用尽 / 续接后报告未改写(见 launch.report_fix; exit_codes.gate_rejected; 判定原文在结束原文与运行记录 report_fixes 末条 detail)",
           "return_report_form_error": "AIPOS-F204 件②: 执行体交回报告头可纠正错误(缺键 / 值不符产品给值 / 形式错 / 误用另一契约; transitions artifact_ingest.return.header_fix), 但执行会话不可续接 / 本运行续接已用尽 / 续接后报告未改写(见 launch.report_fix.executor; exit_codes.not_derivable; 判定原文在结束原文与运行记录 report_fixes 末条 detail)",
@@ -3223,6 +3225,7 @@
           "resource_busy": "advisor_fix",
           "audit_blocked": "advisor_fix",
           "candidate_fail": "advisor_fix",
+          "candidate_deliverable_fail": "advisor_fix",
           "audit_blocked_repeated": "owner_needed",
           "audit_report_form_error": "advisor_fix",
           "return_report_form_error": "advisor_fix",
@@ -3273,10 +3276,12 @@
             "reaudit_command": "AIPOS-F179 件③: 重新派审计的命令(唯一渲染 next_resolver.reaudit_command: 既有 lybra audit dispatch 派下一轮审计卡, 派审人 / 信封 = 运行记录 driver / envelope); 下一轮已派出 = 一句「已派 <审计卡>, 无需再派」; 只用于 end_reasons.audit_blocked",
             "block_reason": "AIPOS-F179 件③: BLOCK 原因摘录(该裁决记录 Findings summary, 截 transitions nodes.N4.audit_blocked.reason_excerpt_chars 字); 只用于 end_reasons.audit_blocked",
             "recovery_choice": "AIPOS-F218 件②: 两条可选路的推荐句(transitions nodes.N4.non_pass_recovery.texts: 执行产物本身是 BLOCK 报告 = 推荐登记返工轮重新执行, 否则推荐仅重审; 唯一实现 next_resolver.non_pass_recovery, 与 lybra next 同源); 只用于 end_reasons.audit_blocked",
-            "rework_command": "AIPOS-F218 件②: 登记返工轮命令(既有动词 `lybra queue rework` 缺省预演形, --actor = 运行记录 driver, --verdict-ref = 该 BLOCK 裁决号, --focus-items / --acceptance-criteria 留占位; 唯一渲染 next_resolver.non_pass_recovery, 声明 transitions nodes.N4.non_pass_recovery.rework_command); 只用于 end_reasons.audit_blocked",
+            "rework_command": "AIPOS-F218 件②: 登记返工轮命令(既有动词 `lybra queue rework` 缺省预演形, --actor = 运行记录 driver, --verdict-ref = 该 BLOCK 裁决号, --focus-items / --acceptance-criteria 留占位; 唯一渲染 next_resolver.rework_command_line(non_pass_recovery 同读), 声明 transitions nodes.N4.non_pass_recovery.rework_command); 用于 end_reasons.audit_blocked 与 AIPOS-F227 固定候选 FAIL 同候选补正(end_reasons.candidate_fail / candidate_deliverable_fail, --verdict-ref = 该 FAIL 裁决号)",
             "fail_reason": "AIPOS-F211 件④: 固定候选验证卡 FAIL 裁决的原因摘录(裁决号 + 审计卡 + 该裁决记录 Findings summary, 截 transitions nodes.N4.audit_blocked.reason_excerpt_chars 字; 唯一实现 next_resolver.candidate_fail_fix_values); 只用于 end_reasons.candidate_fail",
             "source_task": "AIPOS-F211 件④: 本卡来源卡(卡面 validation_source_task, next_resolver.card_candidate_subject)与其固定候选 sha; 只用于 end_reasons.candidate_fail",
             "supersede_command": "AIPOS-F211 件④: 撤换本卡命令(既有动词 `lybra queue supersede` 预演形, --by 留新验证卡号占位, --actor 留顾问实例占位, --owner-words 留 Owner 原话占位; 唯一渲染 next_resolver.candidate_fail_fix_values); 本卡此刻已不是候选 FAIL = 一句说明; 只用于 end_reasons.candidate_fail",
+            "fail_scope_note": "AIPOS-F227 件①: 该 FAIL 裁决的范围一句(transitions nodes.N4.candidate_fail.fail_scope.texts.scope_declared / scope_undeclared / scope_invalid; 判定唯一实现 next_resolver.verdict_fail_scope, 读该裁决门快照报告 frontmatter fail_scope); 用于 end_reasons.candidate_fail / candidate_deliverable_fail",
+            "deliverable_exit": "AIPOS-F227 件①②: 同候选补正出口一句(唯一渲染 next_resolver.candidate_deliverable_exit, 与 lybra next 同源): 未声明 fail_scope = 另一出口并列(带判据与返工命令); 已声明 candidate = 一句「不适用」; deliverable = 补正路径本身; 用于 end_reasons.candidate_fail / candidate_deliverable_fail",
             "header_fix_prompt": "AIPOS-F204 件③: 修交回报告头指令原文(verbs.schema lybra_loop.launch.report_fix.executor.prompt, 按本卡此刻的交回以 artifact_ingest.return_header_problem 填实值; 此刻已无可更正问题 = 一句说明); 只用于 end_reasons.return_report_form_error"
           },
           "resume_hint": "lybra loop --task-id {task_id} --workspace-root {governance_root}{actor_arg}{envelope_arg}",
@@ -3394,11 +3399,21 @@
             "candidate_fail": {
               "why_routine": "AIPOS-F211 件④(gap #217, 10-22 chris OTA HBJOTA-61V 实撞): 固定候选验证卡审计 FAIL = 候选本身有缺陷(审计属实), 候选是固定 sha, 返工本卡无意义; 修法固定 = 来源卡修复出新候选 → 另出验证卡承接新候选 → queue supersede 本卡, 不计连败、不进 Owner 收件箱(撤换时按 queue supersede 契约转述 Owner 原话)",
               "fix": [
+                "裁决范围(AIPOS-F227): {fail_scope_note}; {deliverable_exit}",
                 "不返工本卡、不发修复卡: 本卡交付主体是固定候选, FAIL 属候选本身 —— {fail_reason}",
                 "来源卡修复出新候选: {source_task} —— 派来源卡执行体按 FAIL 原因在来源卡卡分支修复并提交, 新候选 = 修复后提交的完整 40 位 sha",
                 "另出验证卡承接新候选(卡面同本卡, validation_candidate 换成新候选 sha)并发布",
                 "撤换本卡: {supersede_command}(先预演, 核对后去掉 --dry-run 加 --confirm)",
                 "然后对新验证卡跑 lybra loop(本卡撤换后不再推进; 下行续跑命令只用于撤换前复核本卡状态)"
+              ]
+            },
+            "candidate_deliverable_fail": {
+              "why_routine": "AIPOS-F227 件②(10-24 chris HBLX-45V 实撞: 58 项测试全过, 仅 3 份声明 artifacts 未落盘被 FAIL): 审计声明 fail_scope=deliverable = 候选可用、执行体交付物(报告 / 证据 / 声明产物)缺失或不实; 修法固定 = 同候选登记返工轮补交付物(复用 F218 / F219 非卡分支返工路径), 不换候选、不另出验证卡、不 supersede, 不计连败、不进 Owner 收件箱; 返工轮次计入既有上限",
+              "fix": [
+                "FAIL 原因摘录 —— {fail_reason}",
+                "裁决范围: {fail_scope_note}; 候选不变: {source_task}",
+                "同候选补正: {deliverable_exit}",
+                "登记返工后用原命令续跑 loop(本修法末行命令): loop 等执行体补交付物并重写交回, 见新交回即重交并派下一轮审计(交回 commit_sha 不是卡面候选 = 入口拒收 INGEST_CANDIDATE_MISMATCH)"
               ]
             },
             "audit_blocked": {

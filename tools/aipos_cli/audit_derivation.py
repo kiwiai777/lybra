@@ -179,10 +179,15 @@ def build_forensic_anchor_section(
     carried = card_carried_from(source_metadata) if subject.get("kind") == "branch" else None
     carried_line = (f"- **撤换承继**: 本卡分支承继自 `{carried['task_id']}` 分支 `{carried['branch']}`@`{carried['tip']}`; "
                     f"差异基线仍为 `{subject['base']}`(上一行三点 diff 含承继提交, 一并审)\n") if carried else ""
+    # AIPOS-F227 件①: 被审卡交付主体为固定候选 = 附「FAIL 时写 fail_scope」说明(唯一渲染 next_resolver.fail_scope_audit_rule, 开工稿同读)
+    from tools.aipos_cli.next_resolver import fail_scope_audit_rule
+
+    fail_scope_line = f"- **FAIL 范围**: {fail_scope_audit_rule()}\n" if subject.get("kind") == "candidate" else ""
     return (
         "\n## 取证锚点(AIPOS-A1 大项C: 默认注入, 路径来自注册表)\n\n"
         f"- **产品仓绝对路径**: `{code_repo}` (被审卡 lane.repo → project.json repos/code_repo, 禁写死)\n"
         f"{render_forensic_anchor(subject, form='line')}\n"
+        f"{fail_scope_line}"
         f"{carried_line}"
         f"- **报告落点绝对路径**: `{report_location}` (治理根 verdict_root/<审计卡ID>/, 声明渲染; 禁落被审卡目录、禁落产品仓)\n"
         f"{baseline_line}"

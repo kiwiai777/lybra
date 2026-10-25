@@ -3845,9 +3845,11 @@ def _regular_verdicts(workspace_root: Path, task_id: str) -> list[tuple[Path, di
     return regular
 
 
-def _verdict_reason_excerpt(path: Path, fm: dict[str, Any]) -> str:
+def _verdict_reason_excerpt(path: Path, fm: dict[str, Any], *, workspace_root: Path | None = None) -> str:
     """裁决记录原因摘录(Findings summary / 审计结论, owner_truth_view._extract_summary_field 真相视图同一函数), 截
-    transitions nodes.N4.audit_blocked.reason_excerpt_chars 字。audit_block_state / candidate_fail_state 共用。"""
+    transitions nodes.N4.audit_blocked.reason_excerpt_chars 字。audit_block_state / candidate_fail_state 共用。
+    AIPOS-F227 件②: 记录无 Findings summary(findings_summary_present=false 即正文 not provided, 或摘要行缺)= 改读该裁决的审计报告
+    裁决依据(_verdict_report_reason, 声明 transitions nodes.N4.candidate_fail.report_reason); workspace_root 缺 = 不读报告(照旧)。"""
     from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
     from tools.aipos_cli.owner_truth_view import _extract_summary_field
 
@@ -3856,8 +3858,57 @@ def _verdict_reason_excerpt(path: Path, fm: dict[str, Any]) -> str:
     except FrontmatterReadError:
         body = ""
     reason = " ".join((_extract_summary_field(body, ("Findings summary", "审计结论")) or "").split())
+    if workspace_root is not None and (not reason or fm.get("findings_summary_present") is False):
+        reason = _verdict_report_reason(Path(workspace_root), fm) or ("" if fm.get("findings_summary_present") is False else reason)
     limit = int(audit_blocked_declaration()["reason_excerpt_chars"])
     return reason[:limit] + "…" if len(reason) > limit else reason
+
+
+def verdict_report(workspace_root: Path, verdict_fm: dict[str, Any]) -> dict[str, Any] | None:
+    """AIPOS-F227: 裁决所依据的审计报告 = 门快照(report_snapshot_ref, 裁决入门时冻结; 复原 = board_adapter.unwrap_report_snapshot 去记录头
+    并核 sha256)优先, 快照缺 / 不存在退回 report_source_ref(相对治理根); 都没有 = None。返回 {path, meta, body, problem}: 快照校验不符 /
+    frontmatter 解析告警 = problem 非空(meta / body 不可信, 调用方按未声明 / 无摘录处理, 不取其值)。verdict_fail_scope 与原因摘录兜底同读。"""
+    from tools.aipos_cli.board_adapter import unwrap_report_snapshot
+    from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
+
+    for key in ("report_snapshot_ref", "report_source_ref"):
+        ref = str(verdict_fm.get(key) or "").strip()
+        path = (Path(ref) if Path(ref).is_absolute() else Path(workspace_root) / ref) if ref else None
+        if path is None or not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+            if key == "report_snapshot_ref":
+                text = unwrap_report_snapshot(text)
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            return {"path": path, "meta": {}, "body": "", "problem": f"{path}: {exc}"}
+        meta, body, warnings = parse_markdown_frontmatter(text)
+        if warnings:
+            return {"path": path, "meta": {}, "body": "", "problem": f"{path}: frontmatter 解析告警 {warnings}"}
+        return {"path": path, "meta": meta, "body": body, "problem": ""}
+    return None
+
+
+def _verdict_report_reason(workspace_root: Path, verdict_fm: dict[str, Any]) -> str:
+    """AIPOS-F227 件②: 审计报告裁决依据摘录(声明 nodes.N4.candidate_fail.report_reason; 切节 = card_render._split_sections 同一实现)。
+    报告缺 / 读不出 / 无匹配节 = 空串。"""
+    from tools.aipos_cli.card_render import _split_sections
+
+    report = verdict_report(workspace_root, verdict_fm)
+    if report is None or report["problem"]:
+        return ""
+    decl = candidate_fail_declaration()["report_reason"]
+    sections = _split_sections(report["body"])
+    for heading in decl["headings"]:
+        text = next((t for h, t in sections if h and str(heading) in h), None)
+        if text is None:
+            continue
+        lines = [ln.strip().lstrip("-*>#` ").replace("**", "").replace("__", "").strip() for ln in text.splitlines()]
+        marked = next((ln for ln in lines if ln and any(str(m) in ln for m in decl["verdict_line_markers"])), None)
+        picked = marked if marked is not None else " ".join(ln for ln in lines if ln)
+        if picked:
+            return " ".join(picked.split())
+    return ""
 
 
 def audit_block_state(workspace_root: Path, task_id: str) -> dict[str, Any] | None:
@@ -3883,7 +3934,7 @@ def audit_block_state(workspace_root: Path, task_id: str) -> dict[str, Any] | No
         if ruling is None or _verdict_moment(path, fm) > ruling["decided"]:
             consecutive += 1
     latest_path, latest = regular[0]
-    reason = _verdict_reason_excerpt(latest_path, latest)
+    reason = _verdict_reason_excerpt(latest_path, latest, workspace_root=Path(workspace_root))
     blocked_audit = str(latest.get("audit_task_id") or "")
     redispatched, next_round = _next_audit_round(workspace_root, task_id, blocked_audit)
     return {
@@ -3995,21 +4046,28 @@ def _executor_blocked_reason(workspace_root: Path, task_id: str, audit_reason: s
     return ""
 
 
+def rework_command_line(workspace_root: Path, task_id: str, *, actor: str, verdict_id: str) -> str:
+    """登记返工轮命令唯一渲染(既有 queue rework 缺省预演形; 声明 transitions nodes.N4.non_pass_recovery.rework_command, AIPOS-F218 件②):
+    non_pass_recovery 两条可选路与 AIPOS-F227 固定候选同候选补正出口同读。actor 缺 = texts.actor_placeholder。"""
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    decl = non_pass_recovery_declaration()
+    return decl["rework_command"].format(prefix=lybra_command_prefix(workspace_root), task_id=task_id,
+                                         actor=actor or decl["texts"]["actor_placeholder"], verdict_id=verdict_id or "?")
+
+
 def non_pass_recovery(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None, state: dict[str, Any], *,
                       actor: str, policy_ref: str) -> dict[str, Any]:
     """AIPOS-F218 件②: N4 非 PASS(BLOCK = audit_block_state; FAIL = 本卡最新常规裁决)未登记返工轮时给顾问的两条可选路——判定与渲染唯一实现
     (推导核 _derive_audit_blocked / FAIL 分支与 loop status 例行修法占位 audit_blocked_fix_values 同读; 声明 transitions nodes.N4.non_pass_recovery):
     a) 登记返工轮(既有 queue rework 缺省预演形)后重新执行同一卡; b) 仅重审(reaudit_command)。
     返回 {recommended(rework|reaudit), executor_blocked, why, rework_command, reaudit_command, choice, paths}。"""
-    from tools.aipos_cli.workspace_config import lybra_command_prefix
-
     decl = non_pass_recovery_declaration()
     texts = decl["texts"]
     blocked = {str(v).upper() for v in audit_blocked_declaration()["verdicts"]}
     verdict = str(state.get("verdict") or "")
     why = _executor_blocked_reason(Path(workspace_root), task_id, str(state.get("reason") or ""), decl)
-    rework = decl["rework_command"].format(prefix=lybra_command_prefix(workspace_root), task_id=task_id,
-                                           actor=actor or texts["actor_placeholder"], verdict_id=state.get("verdict_id") or "?")
+    rework = rework_command_line(workspace_root, task_id, actor=actor, verdict_id=str(state.get("verdict_id") or ""))
     reaudit = reaudit_command(Path(workspace_root), task_id, card_frontmatter, state, actor=actor, policy_ref=policy_ref)
     if why:
         recommended, choice = "rework", texts["recommend_rework"].format(
@@ -4046,7 +4104,8 @@ def non_pass_fail_state(workspace_root: Path, task_id: str) -> dict[str, Any] | 
     audit_id = str(latest.get("audit_task_id") or "")
     redispatched, next_round = _next_audit_round(workspace_root, task_id, audit_id)
     return {"verdict": value, "verdict_id": str(latest.get("verdict_id") or path.stem), "audit_task_id": audit_id,
-            "reason": _verdict_reason_excerpt(path, latest), "redispatched_to": redispatched, "next_round": next_round,
+            "reason": _verdict_reason_excerpt(path, latest, workspace_root=Path(workspace_root)), "redispatched_to": redispatched,
+            "next_round": next_round,
             "dispatch_reason_template": non_pass_recovery_declaration()["fail_dispatch_reason"]}
 
 
@@ -4066,20 +4125,100 @@ def audit_blocked_fix_values(workspace_root: Path, task_id: str, *, actor: str, 
             "recovery_choice": recovery["choice"], "rework_command": recovery["rework_command"]}
 
 
+_FAIL_SCOPE_TEXTS = ("audit_rule", "criterion", "scope_declared", "scope_undeclared", "scope_invalid", "invalid_refusal", "rework_path",
+                     "deliverable_alt", "candidate_declared_no_alt", "deliverable_suggested", "deliverable_notes")
+
+
 def candidate_fail_declaration() -> dict[str, Any]:
-    """AIPOS-F211 件④: transitions nodes.N4.candidate_fail(唯一读取口)。缺键 = SchemaLoadError(fail-closed)。"""
+    """AIPOS-F211 件④: transitions nodes.N4.candidate_fail(唯一读取口)。缺键 = SchemaLoadError(fail-closed)。
+    AIPOS-F227: 另核 fail_scope(report_key / values 含 default / 补正出口 action_type 与 end_reason / texts)与 report_reason 声明齐。"""
     from tools.schema_loader import SchemaLoadError
 
     decl = _transition_node("N4").get("candidate_fail")
     if (not isinstance(decl, dict) or not isinstance(decl.get("verdicts"), list) or not decl["verdicts"]
             or not all(isinstance(decl.get(k), str) and decl[k].strip() for k in ("action_type", "end_reason"))):
         raise SchemaLoadError("transitions.schema.json nodes.N4.candidate_fail(verdicts / action_type / end_reason)未声明齐(AIPOS-F211)")
+    scope = decl.get("fail_scope")
+    texts = scope.get("texts") if isinstance(scope, dict) else None
+    values = scope.get("values") if isinstance(scope, dict) else None
+    reason = decl.get("report_reason")
+    if (not isinstance(scope, dict) or not isinstance(texts, dict) or not isinstance(values, dict)
+            or set(values) != {"candidate", "deliverable"} or not all(isinstance(v, str) and v.strip() for v in values.values())
+            or scope.get("default") not in values
+            or not all(isinstance(scope.get(k), str) and scope[k].strip()
+                       for k in ("report_key", "deliverable_action_type", "deliverable_end_reason"))
+            or scope["deliverable_end_reason"] == decl["end_reason"] or scope["deliverable_action_type"] == decl["action_type"]
+            or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in _FAIL_SCOPE_TEXTS)
+            or not isinstance(reason, dict)
+            or not all(isinstance(reason.get(k), list) and reason[k] and all(isinstance(x, str) and x for x in reason[k])
+                       for k in ("headings", "verdict_line_markers"))):
+        raise SchemaLoadError("transitions.schema.json nodes.N4.candidate_fail.fail_scope(report_key / values{candidate, deliverable} / "
+                              f"default / deliverable_action_type / deliverable_end_reason / texts.{list(_FAIL_SCOPE_TEXTS)})与 "
+                              "report_reason(headings / verdict_line_markers)未声明齐(AIPOS-F227)")
     return decl
+
+
+def candidate_fail_action_types() -> tuple[str, str]:
+    """AIPOS-F227: 固定候选 FAIL 两种出口的 action.type(candidate_fail / 同候选补正), loop 结束原因按 action.end_reason 记。"""
+    decl = candidate_fail_declaration()
+    return str(decl["action_type"]), str(decl["fail_scope"]["deliverable_action_type"])
+
+
+def candidate_fail_end_reasons() -> tuple[str, str]:
+    """AIPOS-F227: 固定候选 FAIL 两种出口的 loop 结束原因(candidate_fail / 同候选补正); loop status 例行修法占位同读。"""
+    decl = candidate_fail_declaration()
+    return str(decl["end_reason"]), str(decl["fail_scope"]["deliverable_end_reason"])
+
+
+def fail_scope_audit_rule() -> str:
+    """AIPOS-F227 件①: 审计侧「FAIL 时写 fail_scope」说明唯一渲染(texts.audit_rule, 值释义与判据读声明); 审计卡取证锚点
+    (audit_derivation.build_forensic_anchor_section)与审计开工稿(subagent_kickoff)同读, 只对交付主体为固定候选的被审卡出。"""
+    scope = candidate_fail_declaration()["fail_scope"]
+    texts = scope["texts"]
+    return texts["audit_rule"].format(candidate=scope["values"]["candidate"], deliverable=scope["values"]["deliverable"],
+                                      criterion=texts["criterion"])
+
+
+def fail_scope_problem(report_fm: dict[str, Any] | None, *, path: Path | str = "") -> str | None:
+    """AIPOS-F227 件①: 审计报告 frontmatter 的 fail_scope 值核对(裁决入口唯一判定): 未写 = None; 值不在声明 values 内 = 拒因一句
+    (texts.invalid_refusal, 点名声明值); 合法 = None。"""
+    scope = candidate_fail_declaration()["fail_scope"]
+    fm = report_fm if isinstance(report_fm, dict) else {}
+    if scope["report_key"] not in fm or fm.get(scope["report_key"]) in (None, ""):
+        return None
+    value = fm.get(scope["report_key"])
+    if isinstance(value, str) and value.strip() in scope["values"]:
+        return None
+    return scope["texts"]["invalid_refusal"].format(path=path or "审计报告", value=repr(value), allowed="/".join(scope["values"]))
+
+
+def verdict_fail_scope(workspace_root: Path, verdict_fm: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F227 件①: 一条裁决的 FAIL 范围(唯一判定)= 裁决记录自带 report_key 优先, 否则读该裁决的门快照报告(verdict_report)。
+    返回 {scope(candidate|deliverable), declared(bool), value, note}; 未声明 / 值不合 / 报告不可信 = default(candidate, 现行为)且
+    declared=False, note 写明(fail-closed: 不据不可信报告放宽到同候选补正)。"""
+    decl = candidate_fail_declaration()["fail_scope"]
+    texts, key = decl["texts"], decl["report_key"]
+    value: Any = verdict_fm.get(key)
+    if value in (None, ""):
+        report = verdict_report(Path(workspace_root), verdict_fm)
+        if report is not None and report["problem"]:  # 报告不可信(快照校验不符 / 解析告警)= 不取其值, 按 default 并点名
+            return {"scope": decl["default"], "declared": False, "value": None,
+                    "note": texts["scope_invalid"].format(value=f"(报告读不出: {report['problem']})", allowed="/".join(decl["values"]))}
+        value = report["meta"].get(key) if report is not None else None
+    if value in (None, ""):
+        return {"scope": decl["default"], "declared": False, "value": None, "note": texts["scope_undeclared"]}
+    if not (isinstance(value, str) and value.strip() in decl["values"]):
+        return {"scope": decl["default"], "declared": False, "value": value,
+                "note": texts["scope_invalid"].format(value=repr(value), allowed="/".join(decl["values"]))}
+    scope = value.strip()
+    return {"scope": scope, "declared": True, "value": scope,
+            "note": texts["scope_declared"].format(scope=scope, meaning=decl["values"][scope])}
 
 
 def candidate_fail_state(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None) -> dict[str, Any] | None:
     """AIPOS-F211 件④(gap #217): 交付主体为固定候选的卡(task_mode_subject_is_candidate)最新常规裁决值 ∈ nodes.N4.candidate_fail.verdicts
-    = {verdict, verdict_id, audit_task_id, reason, source, candidate}; 否则 None。来源卡 / 候选读 card_candidate_subject(卡面不合 = 只给空串, 不拒)。"""
+    = {verdict, verdict_id, audit_task_id, reason, source, candidate, fail_scope}; 否则 None。来源卡 / 候选读 card_candidate_subject(卡面不合 = 只给空串, 不拒)。
+    AIPOS-F227 件①: fail_scope = verdict_fail_scope(该裁决); 原因摘录 = 记录 Findings summary, 缺则审计报告裁决依据。"""
     fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
     if not task_mode_subject_is_candidate(str(fm.get("task_mode") or "")):
         return None
@@ -4094,19 +4233,42 @@ def candidate_fail_state(workspace_root: Path, task_id: str, card_frontmatter: d
     except CandidateSubjectError:
         subject = {}
     return {"verdict": str(latest.get("verdict") or ""), "verdict_id": str(latest.get("verdict_id") or path.stem),
-            "audit_task_id": str(latest.get("audit_task_id") or ""), "reason": _verdict_reason_excerpt(path, latest),
-            "source": str(subject.get("source") or ""), "candidate": str(subject.get("candidate") or "")}
+            "audit_task_id": str(latest.get("audit_task_id") or ""),
+            "reason": _verdict_reason_excerpt(path, latest, workspace_root=Path(workspace_root)),
+            "source": str(subject.get("source") or ""), "candidate": str(subject.get("candidate") or ""),
+            "fail_scope": verdict_fail_scope(Path(workspace_root), latest)}
 
 
-def candidate_fail_fix_values(workspace_root: Path, task_id: str) -> dict[str, str]:
+def _candidate_rework_path(state: dict[str, Any], rework_command: str) -> str:
+    """AIPOS-F227 件②: 同候选补正路径一句(texts.rework_path; 推导核与 loop status 例行修法同一渲染)。"""
+    texts = candidate_fail_declaration()["fail_scope"]["texts"]
+    return texts["rework_path"].format(rework_command=rework_command, candidate=state.get("candidate") or "?")
+
+
+def candidate_deliverable_exit(state: dict[str, Any], rework_command: str) -> str:
+    """AIPOS-F227 件①②: candidate_fail 出口附带的同候选补正说明——未声明 fail_scope = 另一出口并列(texts.deliverable_alt, 带判据);
+    已声明 candidate = 一句「不适用」; deliverable = 补正路径本身。推导核与 loop status 例行修法同读。"""
+    texts = candidate_fail_declaration()["fail_scope"]["texts"]
+    scope = state.get("fail_scope") or {}
+    if scope.get("scope") == "deliverable":
+        return _candidate_rework_path(state, rework_command)
+    if scope.get("declared"):
+        return texts["candidate_declared_no_alt"]
+    return texts["deliverable_alt"].format(criterion=texts["criterion"], rework_path=_candidate_rework_path(state, rework_command))
+
+
+def candidate_fail_fix_values(workspace_root: Path, task_id: str, *, actor: str = "") -> dict[str, str]:
     """AIPOS-F211 件④: loop status 例行修法 end_reasons.candidate_fail 的占位实值 {fail_reason, source_task, supersede_command}
-    (verbs.schema lybra_loop_status.next_action.routine_rejections.placeholders)。撤换命令 = 既有动词 `lybra queue supersede` 预演形。"""
+    (verbs.schema lybra_loop_status.next_action.routine_rejections.placeholders)。撤换命令 = 既有动词 `lybra queue supersede` 预演形。
+    AIPOS-F227: 另给 {fail_scope_note, deliverable_exit, rework_command}(end_reasons.candidate_fail / candidate_deliverable_fail 同读;
+    返工命令唯一渲染 rework_command_line, --actor = 运行记录 driver)。"""
     path, _q = _find_task_in_queue(Path(workspace_root), task_id)
     fm = _read_frontmatter(path) if path else {}
     state = candidate_fail_state(Path(workspace_root), task_id, fm)
     if state is None:
         note = f"(本卡此刻最新裁决已不是固定候选 FAIL, 无需撤换; 先看 lybra next --task-id {task_id} --workspace-root {workspace_root})"
-        return {"fail_reason": note, "source_task": note, "supersede_command": note}
+        return {"fail_reason": note, "source_task": note, "supersede_command": note, "fail_scope_note": note, "deliverable_exit": note,
+                "rework_command": note}
     reason = (f"裁决 {state['verdict']} {state['verdict_id']}(审计卡 {state['audit_task_id'] or '?'}): "
               f"{state['reason'] or '(裁决记录无 Findings summary, 见审计报告)'}")
     source = f"来源卡 {state['source'] or '(卡面缺 validation_source_task)'}(本卡 FAIL 的固定候选 {state['candidate'] or '?'})"
@@ -4114,13 +4276,21 @@ def candidate_fail_fix_values(workspace_root: Path, task_id: str) -> dict[str, s
 
     supersede = (f"{lybra_command_prefix(workspace_root)} queue supersede --task-id {task_id} --by <新验证卡号> "
                  f"--actor <你的顾问实例> --owner-words \"<Owner 原话摘要>\" --dry-run")
-    return {"fail_reason": reason, "source_task": source, "supersede_command": supersede}
+    rework = rework_command_line(Path(workspace_root), task_id, actor=actor, verdict_id=state["verdict_id"])
+    return {"fail_reason": reason, "source_task": source, "supersede_command": supersede, "fail_scope_note": state["fail_scope"]["note"],
+            "deliverable_exit": candidate_deliverable_exit(state, rework), "rework_command": rework}
 
 
-def _derive_candidate_fail(task_id: str, state: dict[str, Any]) -> dict[str, Any]:
+def _derive_candidate_fail(task_id: str, state: dict[str, Any], recovery: dict[str, Any] | None) -> dict[str, Any]:
     """AIPOS-F211 件④: N4 固定候选 FAIL → 不可推导, action candidate_fail(advisor_fix: 来源卡修复出新候选 → 另出验证卡 → queue supersede
-    本卡); 不计连败, 不进 Owner 收件箱(loop 以 end_reason 结束, 修法读 verbs.schema routine_rejections.end_reasons.candidate_fail)。"""
+    本卡); 不计连败, 不进 Owner 收件箱(loop 以 end_reason 结束, 修法读 verbs.schema routine_rejections.end_reasons.candidate_fail)。
+    AIPOS-F227 件①②: fail_scope=deliverable = 同候选补正出口(_derive_candidate_deliverable_fail); 未声明 = candidate_fail 兼容 + 同候选补正
+    另一出口并列(candidate_deliverable_exit); 返工命令 = recovery.rework_command(non_pass_recovery 同一渲染, --actor = 驱动方)。"""
     decl = candidate_fail_declaration()
+    rework = str((recovery or {}).get("rework_command") or "")
+    if state["fail_scope"]["scope"] == "deliverable":
+        return _derive_candidate_deliverable_fail(task_id, state, rework)
+    exit_note = candidate_deliverable_exit(state, rework)
     return {
         "task_id": task_id,
         "derivable": False,
@@ -4130,14 +4300,45 @@ def _derive_candidate_fail(task_id: str, state: dict[str, Any]) -> dict[str, Any
         "command": "",
         "verb": "",
         "missing_records": [],
-        "suggested_action": (f"固定候选 {state['candidate'] or '?'} 审计 {state['verdict']}(裁决 {state['verdict_id']}): 候选本身不合格, 本卡不返工 —— "
+        "suggested_action": (f"固定候选 {state['candidate'] or '?'} 审计 {state['verdict']}(裁决 {state['verdict_id']}), {state['fail_scope']['note']}: "
+                             f"候选本身不合格, 本卡不返工 —— "
                              f"来源卡 {state['source'] or '?'} 修复出新候选 → 另出验证卡承接新候选 → lybra queue supersede 本卡(--by 新验证卡); "
-                             f"原因: {state['reason'] or '(见审计报告)'}"),
+                             f"原因: {state['reason'] or '(见审计报告)'}"
+                             + ("" if state["fail_scope"]["declared"] else f"; {exit_note}")),
         "notes": (f"N4: 固定候选验证卡裁决 {state['verdict']} = 候选不合格, 出口 = 新候选另出验证卡 + 撤换本卡, 不计连败、不升 Owner"
                   "(AIPOS-F211 件④, 声明 transitions nodes.N4.candidate_fail)"),
         "candidate_fail": state,
         "action": {"type": str(decl["action_type"]), "card": task_id, "end_reason": str(decl["end_reason"]),
-                   "verdict_id": state["verdict_id"], "audit_task_id": state["audit_task_id"]},
+                   "verdict_id": state["verdict_id"], "audit_task_id": state["audit_task_id"],
+                   "fail_scope": state["fail_scope"]["scope"], "fail_scope_declared": state["fail_scope"]["declared"],
+                   "rework_command": rework},
+    }
+
+
+def _derive_candidate_deliverable_fail(task_id: str, state: dict[str, Any], rework: str) -> dict[str, Any]:
+    """AIPOS-F227 件②: N4 固定候选 FAIL 且 fail_scope=deliverable → 不可推导, action candidate_deliverable_fail(advisor_fix: 登记返工轮同候选
+    补交付物 → loop 拉起执行体重写交回 → 重交回派下一轮审计; 复用 F218 / F219 非卡分支返工路径); 不计连败, 不进 Owner 收件箱
+    (修法读 verbs.schema routine_rejections.end_reasons.<deliverable_end_reason>)。"""
+    scope = candidate_fail_declaration()["fail_scope"]
+    texts = scope["texts"]
+    return {
+        "task_id": task_id,
+        "derivable": False,
+        "current_node": "audit_verdict",
+        "current_state": "claimed",
+        "triggered_by": "advisor",
+        "command": "",
+        "verb": "",
+        "missing_records": [],
+        "suggested_action": texts["deliverable_suggested"].format(
+            candidate=state["candidate"] or "?", verdict=state["verdict"], verdict_id=state["verdict_id"],
+            scope_note=state["fail_scope"]["note"], rework_path=_candidate_rework_path(state, rework),
+            reason=state["reason"] or "(见审计报告)"),
+        "notes": texts["deliverable_notes"].format(verdict=state["verdict"]),
+        "candidate_fail": state,
+        "action": {"type": str(scope["deliverable_action_type"]), "card": task_id, "end_reason": str(scope["deliverable_end_reason"]),
+                   "verdict_id": state["verdict_id"], "audit_task_id": state["audit_task_id"], "fail_scope": "deliverable",
+                   "fail_scope_declared": True, "rework_command": rework},
     }
 
 
@@ -4767,12 +4968,13 @@ def _derive_next_step(
                     block = audit_block_state(workspace_root, task_id)
                     if block is not None:
                         return _derive_audit_blocked(workspace_root, task_id, fm, block, conn_arg=conn_arg)
-                    # AIPOS-F211 件④(gap #217): 固定候选验证卡 FAIL = 候选不合格 → 新候选另出验证卡 + 撤换本卡(不返工, 不计连败, 不升 Owner)
+                    # AIPOS-F218 件②: FAIL 等非 PASS 裁决(未登记返工轮)附两条可选路(non_pass_recovery, 与 BLOCK 同一实现)
+                    # AIPOS-F211 件④(gap #217): 固定候选验证卡 FAIL = 候选不合格 → 新候选另出验证卡 + 撤换本卡(不计连败, 不升 Owner);
+                    # AIPOS-F227: 审计声明 fail_scope=deliverable = 同候选补正出口(返工命令读上行同一 recovery), 未声明 = 两出口并列
+                    recovery = _non_pass_fail_recovery(workspace_root, task_id, fm, conn_arg=conn_arg)
                     candidate_fail = candidate_fail_state(workspace_root, task_id, fm)
                     if candidate_fail is not None:
-                        return _derive_candidate_fail(task_id, candidate_fail)
-                    # FAIL 等非 PASS 裁决(未登记返工轮); AIPOS-F218 件②: 附两条可选路(non_pass_recovery, 与 BLOCK 同一实现)
-                    recovery = _non_pass_fail_recovery(workspace_root, task_id, fm, conn_arg=conn_arg)
+                        return _derive_candidate_fail(task_id, candidate_fail, recovery)
                     return {
                         "task_id": task_id,
                         "derivable": False,

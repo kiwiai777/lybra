@@ -437,6 +437,8 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
         # AIPOS-F195 件①: 报告落点不得放代码文件(与章程同一渲染; 声明缺 = 该行省略)
         "report_code_rule": _report_code_rule(report_path.parent),
         "report_field_lines": "\n".join(f"  {line}" for line in render_report_field_lines(view.get("report_required_frontmatter"))),
+        # AIPOS-F227 件①: 被审卡交付主体为固定候选 = 「FAIL 时写 fail_scope」说明(next_resolver.fail_scope_audit_rule, 审计卡取证锚点同读)
+        "fail_scope_rule": _fail_scope_rule(reviewed_card) if card_role == "auditor" else None,
     }
     text = _render(contract, card_role, values)
     return {"ok": True, "task_id": task_id, "role": card_role, "instance": instance, "text": text,
@@ -444,6 +446,18 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
             "sources": {"charter": charter["distribution_id"], "ratchet": test_contract.get("ratchet_source"),
                         "residual_processes": test_contract.get("residual_processes_source"), "scratch": scratch_source,
                         "remote": remote, "baseline_status": baseline["status"], "runall_timing": timing_state}}
+
+
+def _fail_scope_rule(reviewed_card: Path | None) -> str | None:
+    """AIPOS-F227 件①: 审计开工稿交回节「FAIL 时写 fail_scope」一行; 被审卡非固定候选 / 无被审卡 = None(该行省略)。
+    被审卡候选声明不合 = 照出(裁决入口另按候选判据拒收, 不在此另判)。"""
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.next_resolver import fail_scope_audit_rule, task_mode_subject_is_candidate
+
+    if reviewed_card is None:
+        return None
+    reviewed_fm, _body = require_frontmatter(reviewed_card)
+    return fail_scope_audit_rule() if task_mode_subject_is_candidate(str(reviewed_fm.get("task_mode") or "")) else None
 
 
 def _candidate_evidence_lines(gov: Path, *, task_id: str, fm: dict[str, Any], instance: str, reviewed: str,
