@@ -1783,13 +1783,18 @@ def card_scope_fingerprint(metadata: dict[str, Any], body: str, decl: dict[str, 
     import hashlib
     import json
 
+    from tools.aipos_cli.artifact_ingest import evidence_fingerprint_value, runtime_evidence_declaration
+
     decl = decl or auto_extension_declaration()
+    evidence_field = str(runtime_evidence_declaration()["card_field"])
     values: dict[str, Any] = {}
     neutral = [str(x) for x in decl.get("scope_neutral_fields") or []]
     for field in decl["fingerprint_fields"]:
         node: Any = metadata
         for part in str(field).split("."):
             node = node.get(part) if isinstance(node, dict) else None
+        if str(field) == evidence_field:  # AIPOS-F233 件④: 运行证据声明命令按占位词表规范化(别名改名不算范围变化)
+            node = evidence_fingerprint_value(node, metadata)
         values[str(field)] = _strip_neutral(_normalize_value(node), str(field), neutral)
     if decl["fingerprint_body"]:
         values["__body__"] = str(body or "").strip()
@@ -1863,16 +1868,30 @@ def auto_extension_check(repo_root: Path, task_id: str, metadata: dict[str, Any]
         out["why"] = str(texts["refused_baseline"]).format(why=baseline["why"])
         return out
     current = card_scope_fingerprint(metadata, body, decl)
+    equivalent_note = ""
     if current["digest"] != baseline["digest"]:
         changed = sorted(k for k in set(current["values"]) | set(baseline["values"]) if current["values"].get(k) != baseline["values"].get(k))
-        out["why"] = str(texts["refused_changed"]).format(current=current["digest"][:12], baseline=baseline["digest"][:12], fields=", ".join(changed))
-        return out
+        # AIPOS-F233 件④: 运行证据声明只改占位名(渲染等价, 与 queue amend --restricted 同一判据)不算范围变化
+        from tools.aipos_cli.artifact_ingest import evidence_commands_render_equivalent, evidence_subject, runtime_evidence_declaration
+
+        evidence_field = str(runtime_evidence_declaration()["card_field"])
+        if evidence_field in changed:
+            before, after = baseline["values"].get(evidence_field), current["values"].get(evidence_field)
+            if (isinstance(before, dict) and isinstance(after, dict)
+                    and {k: v for k, v in before.items() if k != "commands"} == {k: v for k, v in after.items() if k != "commands"}
+                    and evidence_commands_render_equivalent(before.get("commands") or [], after.get("commands") or [], evidence_subject(metadata))):
+                changed = [k for k in changed if k != evidence_field]
+                equivalent_note = f"; {evidence_field}.commands 自发布起只改占位名(渲染等价, AIPOS-F233 件④), 不算范围变化"
+        if changed:
+            out["why"] = str(texts["refused_changed"]).format(current=current["digest"][:12], baseline=baseline["digest"][:12],
+                                                              fields=", ".join(changed))
+            return out
     record_id = planned_auto_release_id(Path(repo_root), task_id, str(decl["kind"]))
     neutral_note = str(texts["neutral_note"]).format(fields=", ".join(decl["scope_neutral_fields"]))  # AIPOS-F230 件③
     out.update({"eligible": True, "record_id": record_id, "fingerprint": current["digest"], "publish_ref": baseline["publish_ref"],
                 "granted": str(texts["granted"]).format(round=next_round, hard_cap=cap, record_id=record_id),
                 "basis": str(texts["basis"]).format(round=next_round, max_rounds=max_rounds, hard_cap=cap, fingerprint=current["digest"][:12],
-                                                    publish_ref=baseline["publish_ref"], verdict_ref=verdict_ref or "?") + f"; {neutral_note}"})
+                                                    publish_ref=baseline["publish_ref"], verdict_ref=verdict_ref or "?") + f"; {neutral_note}" + equivalent_note})
     return out
 
 

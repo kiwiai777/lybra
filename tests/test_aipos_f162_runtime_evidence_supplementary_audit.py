@@ -162,8 +162,8 @@ def test_item1_declared_card_rejections_original_and_loop_relaunch_cap(rig):
     assert not f90._records(rig.gov, "audit_verdicts", TASK)
     rc, out, err = _cli(["loop", "status", "--task-id", TASK, "--workspace-root", str(rig.gov)])
     _show(f"[件①·loop status 原文]\n{out}{err}")
-    # AIPOS-F225: 审计补做连败 = 第三档(审计执行侧问题归顾问 investigate), 原判事由留在 detail
-    assert "investigate(runtime_evidence_exhausted) — 第三档(归顾问, AIPOS-F225)" in out + err and "审计补做连败" in out + err
+    # AIPOS-F225: 审计补做连败 = 第三档, 原判事由留在 detail; AIPOS-F233 件⑤: 第三档动作改 advisor_fix(环境 / 声明问题顾问处理, 不进 Owner 收件箱)
+    assert "advisor_fix(runtime_evidence_exhausted) — 第三档(归顾问, AIPOS-F225)" in out + err and "审计补做连败" in out + err
 
 
 def test_item1_full_evidence_passes_and_loop_completes_after_one_rework(rig):
@@ -187,6 +187,7 @@ def test_item1_full_evidence_passes_and_loop_completes_after_one_rework(rig):
 def test_item1_fail_unrestricted_undeclared_unchanged_and_declaration_invalid(rig):
     """FAIL 不受限; 未声明卡 PASS 无证据节照旧入门(行为不变); 声明形不对 = fail-closed 拒(不当未声明放行)。"""
     outcomes: dict[str, dict] = {}
+    results: dict[str, object] = {}
 
     def run(task_id: str, extra: dict, verdict: str) -> None:
         f90._card(rig.gov, task_id, "pending", **extra)
@@ -200,11 +201,17 @@ def test_item1_fail_unrestricted_undeclared_unchanged_and_declaration_invalid(ri
             f90._executor_work(rig, task_id)
             return 0 if expect_ready([]) else 3
 
-        _loop(rig, task_id, watch, max_wait=2)
+        results[task_id] = _loop(rig, task_id, watch, max_wait=2)
 
     run("PROBE-F162-FAIL", {"audit_runtime_evidence": EVIDENCE}, "FAIL")
     run("PROBE-F162-UNDECL", {}, "PASS")
     run("PROBE-F162-BAD", {"audit_runtime_evidence": {"required": "yes", "commands": [CMD_TESTS]}}, "PASS")
+    # AIPOS-F233 件③: 声明形不对 = 声明本身错, loop 不拉起审计体即以 runtime_evidence_declaration_invalid 结束(advisor_fix); 报告照写后入口同判拒
+    bad_res, bad_text = results["PROBE-F162-BAD"]
+    _show(f"[件①·声明形不对 loop(AIPOS-F233: 不拉起审计体)]\n{bad_text}")
+    assert "PROBE-F162-BAD" not in outcomes and bad_res.reason == "runtime_evidence_declaration_invalid", (bad_res.reason, bad_text)
+    _report(rig, "PROBE-F162-BADR", "PASS", reviewed="PROBE-F162-BAD")
+    outcomes["PROBE-F162-BAD"] = validate_task_artifact("PROBE-F162-BADR", rig.gov)
     for key, label in (("PROBE-F162-FAIL", "FAIL 不受限"), ("PROBE-F162-UNDECL", "未声明卡行为不变"), ("PROBE-F162-BAD", "声明形不对")):
         o = outcomes[key]
         _show(f"[件①·{label}原文] ok={o['ok']} category={o['category']} reasons={o['reasons']}")

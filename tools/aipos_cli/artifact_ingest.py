@@ -530,7 +530,7 @@ def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]
     from tools.aipos_cli.audit_derivation import is_audit_card
 
     try:
-        return _validate_task_artifact(task_id, workspace_root)
+        return _with_header_repair_note(_validate_task_artifact(task_id, workspace_root))
     except FrontmatterReadError as exc:
         is_audit = is_audit_card(task_id)
         out = {"ok": False, "kind": "verdict" if is_audit else "return",
@@ -579,6 +579,25 @@ def report_unreadable_problem(workspace_root: Path, task_id: str, exc: Any, *, i
                else str(decl["problem_no_line"]).format(reason=reason))
     return {"kinds": [str(decl["kind"])], "correctable": True, "problem": problem, "fix": str(decl["fix"]), "line_no": line_no,
             "line_text": line_text, "reason": raw_reason, "path": str(path), "role": "auditor" if is_audit else "executor"}
+
+
+def _with_header_repair_note(out: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F233 件⑥: 本卡报告头靠自由文本键加引号容错才读出(frontmatter.frontmatter_repair_notes 唯一判定)= 附 notes(报告原文不改)。"""
+    path = out.get("path") if isinstance(out, dict) else None
+    if not path:
+        return out
+    from tools.aipos_cli.frontmatter import frontmatter_repair_notes
+    from tools.aipos_cli.next_resolver import _artifact_ingest_declaration
+
+    try:
+        text = Path(str(path)).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return out
+    repairs = frontmatter_repair_notes(text)
+    if repairs:
+        template = str((_artifact_ingest_declaration().get("report_header_yaml") or {}).get("repair_note") or "")
+        out.setdefault("notes", []).extend(template.format(**r) for r in repairs)
+    return out
 
 
 def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]:
@@ -1093,10 +1112,12 @@ def parse_runtime_evidence_declaration(raw: Any, *, source: str = "card") -> dic
             "declaration": dict(raw)}
 
 
-def runtime_evidence_amend_problems(current: Any, new: Any, *, claimed: bool) -> list[str]:
+def runtime_evidence_amend_problems(current: Any, new: Any, *, claimed: bool, card_fm: dict[str, Any] | None = None) -> list[str]:
     """AIPOS-F223 件②: queue amend 改卡面 audit_runtime_evidence 的判据(唯一实现; `lybra queue amend` 调用)。新值形校验同出卡
     (parse_runtime_evidence_declaration); claimed 卡(--restricted)只许改 card.schema restricted_amend.claimed_card_subfields 所列子键,
-    其余子键须与卡面原值相同(不改命令 / required = 不改验收)。返回拒因原文(空 = 通过)。"""
+    其余子键须与卡面原值相同(不改命令 / required = 不改验收)。AIPOS-F233 件④: restricted_amend.render_equivalent_subfields 所列子键
+    (commands)改前改后按占位词表渲染等价(evidence_commands_render_equivalent; 交付主体 = card_fm)= 放行(只改占位名, 不改验收)。
+    词表外的 {xxx} 是字面文本, 不拒(提示由 normalize_runtime_evidence_declaration 给)。返回拒因原文(空 = 通过)。"""
     key = str(runtime_evidence_declaration()["card_field"])
     try:
         parse_runtime_evidence_declaration(new)
@@ -1105,13 +1126,335 @@ def runtime_evidence_amend_problems(current: Any, new: Any, *, claimed: bool) ->
     if not claimed:
         return []
     allowed = set(restricted_amend_subfields().get(key) or [])
-    before = current if isinstance(current, dict) else {}
+    equivalent = set(render_equivalent_subfields().get(key) or [])
+    before = dict(current) if isinstance(current, dict) else {}
+    if isinstance(before.get("commands"), str):  # 卡面声明形不合(commands 写成单串)= 按单条列表比(形修正不改验收, AIPOS-F233 件③ 出口)
+        before["commands"] = [before["commands"]]
     changed = sorted(k for k in set(before) | set(new) if before.get(k) != new.get(k))
-    illegal = [k for k in changed if k not in allowed]
+    subject = evidence_subject(card_fm)
+    illegal = [k for k in changed if k not in allowed
+               and not (k in equivalent and evidence_commands_render_equivalent(before.get(k) or [], new.get(k) or [], subject))]
     if illegal:
-        return [f"已认领卡受限 amend 只许改 {key} 的子键 {sorted(allowed)}(card.schema restricted_amend.claimed_card_subfields), "
-                f"实改了 {illegal}; 命令 / required 属验收, 在途不改(须改 = 走返工轮或撤卡重发)"]
+        return [f"已认领卡受限 amend 只许改 {key} 的子键 {sorted(allowed)}(card.schema restricted_amend.claimed_card_subfields)"
+                + (f", 及按占位词表渲染等价的 {sorted(equivalent)}(只改占位名 / 别名规范化, AIPOS-F233; card.schema "
+                   "restricted_amend.render_equivalent_subfields)" if equivalent else "")
+                + f", 实改了 {illegal}; 命令 / required 属验收, 在途不改(须改 = 走返工轮或撤卡重发)"]
     return []
+
+
+def render_equivalent_subfields() -> dict[str, list[str]]:
+    """AIPOS-F233 件④: card.schema restricted_amend.render_equivalent_subfields(字段 → 渲染等价时可改子键)唯一读取口。缺 = {}(行为不变)。
+    形不合 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    raw = (load_schema("card").get("restricted_amend") or {}).get("render_equivalent_subfields")
+    if raw is None:
+        return {}
+    out = {k: v for k, v in raw.items() if k != "description"} if isinstance(raw, dict) else None
+    if out is None or any(not isinstance(v, list) or not v or any(not isinstance(s, str) or not s for s in v) for v in out.values()):
+        raise SchemaLoadError("card.schema.json restricted_amend.render_equivalent_subfields 须为 {字段: [子键, …]}")
+    return out
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F233 件①②③④: 审计 / 验证命令占位统一词表(声明 transitions artifact_ingest.verdict.runtime_evidence.placeholder_vocabulary)。
+# 渲染(裁决入口 / 开工稿 / 派审步骤)、发卡规范化(draft create / publish / queue amend / 补审派发)、受限 amend 等价判据与
+# 返工自动放行范围判据全部经本节唯一实现; 原 F199 旧占位迁移提示(runtime_evidence_legacy_problems)退役。
+# ---------------------------------------------------------------------------
+
+_VOCAB_SUBJECTS = ("branch", "candidate")
+_SUBJECT_LABELS = {"branch": "卡分支", "candidate": "固定候选"}
+_VOCAB_TEXTS = ("rewrite", "literal", "literal_suggestion", "declaration_invalid", "amend_outlet", "amend_suggestion")
+
+
+def placeholder_vocabulary() -> dict[str, Any]:
+    """placeholder_vocabulary 唯一读取口 + 加载守卫(fail-closed): 主体恰为 branch / candidate; 每个占位名恰属一个语义; 各主体规范名 =
+    该主体已声明占位(branch = runtime_evidence.placeholders, candidate = candidate_subject.placeholders); 两主体已声明占位全部入表;
+    placeholder_pattern 可编译且恰一个捕获组; 文案齐。返回 {pattern, subjects, meanings, by_name: 名 → 语义, texts}。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = runtime_evidence_declaration().get("placeholder_vocabulary")
+    where = "transitions.schema.json artifact_ingest.verdict.runtime_evidence.placeholder_vocabulary"
+    if not isinstance(decl, dict):
+        raise SchemaLoadError(f"{where} 未声明(AIPOS-F233)")
+    try:
+        pattern = re.compile(str(decl.get("placeholder_pattern") or ""))
+    except re.error as exc:
+        raise SchemaLoadError(f"{where}.placeholder_pattern 不可编译: {exc}") from exc
+    if pattern.groups != 1 or not str(decl.get("placeholder_pattern") or ""):
+        raise SchemaLoadError(f"{where}.placeholder_pattern 须恰一个捕获组(占位名)")
+    subjects = decl.get("subjects")
+    if not isinstance(subjects, dict) or set(subjects) != set(_VOCAB_SUBJECTS):
+        raise SchemaLoadError(f"{where}.subjects 须恰为 {list(_VOCAB_SUBJECTS)}")
+    texts = decl.get("texts")
+    if not isinstance(texts, dict) or any(not str(texts.get(k) or "").strip() for k in _VOCAB_TEXTS):
+        raise SchemaLoadError(f"{where}.texts 须声明齐 {list(_VOCAB_TEXTS)}")
+    declared = {"branch": {str(k) for k in runtime_evidence_declaration()["placeholders"]},
+                "candidate": {str(k) for k in runtime_evidence_candidate_declaration()["placeholders"]}}
+    by_name: dict[str, dict[str, Any]] = {}
+    meanings = decl.get("meanings")
+    if not isinstance(meanings, list) or not meanings:
+        raise SchemaLoadError(f"{where}.meanings 须为非空列表")
+    for meaning in meanings:
+        names = meaning.get("names") if isinstance(meaning, dict) else None
+        canonical = meaning.get("canonical") if isinstance(meaning, dict) else None
+        if (not isinstance(names, list) or not names or any(not isinstance(n, str) or not pattern.fullmatch("{" + n + "}") for n in names)
+                or not isinstance(canonical, dict) or set(canonical) != set(_VOCAB_SUBJECTS)
+                or any(str(canonical[s]) not in declared[s] for s in _VOCAB_SUBJECTS) or not str(meaning.get("id") or "").strip()):
+            raise SchemaLoadError(f"{where}.meanings 项形不合(须 id / names[占位名] / canonical{{branch, candidate}} = 各主体已声明占位): {meaning!r}")
+        for name in names:
+            if name in by_name:
+                raise SchemaLoadError(f"{where}: 占位名 {name!r} 同时属语义 {by_name[name]['id']} 与 {meaning['id']}(每个名恰属一个语义)")
+            by_name[name] = meaning
+    missing = sorted((declared["branch"] | declared["candidate"]) - set(by_name))
+    if missing:
+        raise SchemaLoadError(f"{where}: 已声明占位 {missing} 不在任何语义 names 内(两主体占位须全部入表)")
+    return {"pattern": pattern, "subjects": subjects, "meanings": meanings, "by_name": by_name, "texts": texts}
+
+
+def evidence_subject(card_fm: dict[str, Any] | None) -> str:
+    """声明所在卡(被审卡)的交付主体: 固定候选(enums.schema task_mode.candidate_subject, F196 判据)= candidate, 其余 = branch。"""
+    from tools.aipos_cli.next_resolver import task_mode_subject_is_candidate
+
+    return "candidate" if task_mode_subject_is_candidate(str((card_fm or {}).get("task_mode") or "")) else "branch"
+
+
+def canonicalize_evidence_command(command: str, subject: str, vocab: dict[str, Any] | None = None) -> dict[str, Any]:
+    """一条声明命令按交付主体规范化: 别名改写为该主体规范名(语义不变); 词表外的 {xxx} 是字面文本, 原样保留。
+    返回 {command, pairs: [(原名, 规范名)], unknown: [词表外 {名} 的名(字面)]}。"""
+    vocab = vocab or placeholder_vocabulary()
+    pairs: list[tuple[str, str]] = []
+    unknown: list[str] = []
+
+    def swap(match: re.Match[str]) -> str:
+        name = match.group(1)
+        meaning = vocab["by_name"].get(name)
+        if meaning is None:
+            if name not in unknown:
+                unknown.append(name)
+            return match.group(0)
+        target = str(meaning["canonical"][subject])
+        if target != name and (name, target) not in pairs:
+            pairs.append((name, target))
+        return "{" + target + "}"
+
+    return {"command": vocab["pattern"].sub(swap, str(command)), "pairs": pairs, "unknown": unknown}
+
+
+def render_evidence_command(command: str, subject: str, values: dict[str, Any]) -> str:
+    """AIPOS-F233 件①: 声明命令渲染唯一实现(裁决入口逐字匹配、开工稿 / 派审步骤同用): 先按交付主体把别名改写为规范形, 再以 values
+    (规范名 → 值)代值; values 缺某占位或值为空 = 原样保留(开工稿未起 run 时); 词表外的 {xxx} 是字面文本, 原样保留(按字面与实跑比对)。"""
+    vocab = placeholder_vocabulary()
+    canonical = canonicalize_evidence_command(command, subject, vocab)["command"]
+
+    def fill(match: re.Match[str]) -> str:
+        value = values.get(match.group(1))
+        return str(value) if value not in (None, "") else match.group(0)
+
+    return vocab["pattern"].sub(fill, canonical)
+
+
+def _vocabulary_listing(vocab: dict[str, Any]) -> dict[str, str]:
+    """字面花括号提示里的可用占位清单(各主体规范名 + 同义别名组)。"""
+    branch = ", ".join(dict.fromkeys("{" + str(m["canonical"]["branch"]) + "}" for m in vocab["meanings"]))
+    candidate = ", ".join(dict.fromkeys("{" + str(m["canonical"]["candidate"]) + "}" for m in vocab["meanings"]))
+    parts = []
+    for m in vocab["meanings"]:
+        if len(m["names"]) > 1:
+            parts.append(" ≡ ".join("{" + n + "}" for n in m["names"]) + f"({m['label']})")
+        elif any(str(m["canonical"][s]) != m["names"][0] for s in _VOCAB_SUBJECTS):
+            parts.append("{" + m["names"][0] + "}(" + ", ".join(f"{_SUBJECT_LABELS[s]}主体按 {{{m['canonical'][s]}}} 渲染" for s in _VOCAB_SUBJECTS
+                                                              if str(m["canonical"][s]) != m["names"][0]) + ")")
+    aliases = "; ".join(parts)
+    return {"branch": branch, "candidate": candidate, "aliases": aliases or "(无)"}
+
+
+def evidence_literal_notes(commands: list[Any], *, task_id: str, card_fm: dict[str, Any] | None = None,
+                           card_field: str | None = None) -> list[str]:
+    """AIPOS-F233 件②: 声明命令中形如 {xxx} 但不在词表的花括号 = 字面文本(awk / jq / json 片段等), 不拒; 每条命令一句提示(texts.literal:
+    按字面保留与比对 + 可用占位清单 + difflib 相近的已知占位建议, 如 {workdir} → {worktree})。无 = []。"""
+    import difflib
+
+    vocab = placeholder_vocabulary()
+    field = card_field or str(runtime_evidence_declaration()["card_field"])
+    subject = evidence_subject(card_fm)
+    known = sorted(vocab["by_name"])
+    out: list[str] = []
+    for index, command in enumerate(commands or [], 1):
+        literal = canonicalize_evidence_command(str(command), subject, vocab)["unknown"]
+        if not literal:
+            continue
+        pairs = []
+        for name in literal:
+            close = difflib.get_close_matches(name, known, n=1, cutoff=0.6)
+            if close:
+                pairs.append("{" + name + "} → {" + str(vocab["by_name"][close[0]]["canonical"][subject]) + "}")
+        suggestion = str(vocab["texts"]["literal_suggestion"]).format(pairs=", ".join(pairs)) if pairs else ""
+        out.append(str(vocab["texts"]["literal"]).format(task_id=task_id, card_field=field, index=index,
+                                                         names=" / ".join("{" + n + "}" for n in literal), suggestion=suggestion,
+                                                         **_vocabulary_listing(vocab)))
+    return out
+
+
+def normalize_runtime_evidence_declaration(raw: Any, *, card_fm: dict[str, Any] | None, task_id: str | None = None) -> dict[str, Any]:
+    """AIPOS-F233 件②: 发卡规范化唯一实现(draft create / publish / queue amend / 补审派发同调): 声明命令里的别名按声明所在卡(被审卡)
+    交付主体改写为规范形。返回 {value(改写后的声明, 无改写 = 原值), notes(每条改写一句, 写明改写前后原文), literals(词表外字面花括号提示,
+    不拒; 起草 / 发卡由声明校验 check_runtime_evidence_declaration 同一函数出提示, 此处给 amend 等不经声明校验的调用方)}。
+    形不合(非对象 / commands 非列表)= 原样返回(形校验由 parse_runtime_evidence_declaration 唯一判)。"""
+    out: dict[str, Any] = {"value": raw, "notes": [], "literals": []}
+    if not isinstance(raw, dict) or not isinstance(raw.get("commands"), list):
+        return out
+    vocab = placeholder_vocabulary()
+    tid = str(task_id or (card_fm or {}).get("task_id") or "<卡>")
+    field = str(runtime_evidence_declaration()["card_field"])
+    subject = evidence_subject(card_fm)
+    out["literals"] = evidence_literal_notes(raw["commands"], task_id=tid, card_fm=card_fm, card_field=field)
+    commands: list[Any] = []
+    for index, command in enumerate(raw["commands"], 1):
+        if not isinstance(command, str):
+            commands.append(command)
+            continue
+        canon = canonicalize_evidence_command(command, subject, vocab)
+        commands.append(canon["command"])
+        if canon["pairs"]:
+            out["notes"].append(str(vocab["texts"]["rewrite"]).format(
+                subject=subject, task_id=tid, card_field=field, index=index, before=command, after=canon["command"],
+                pairs=", ".join("{" + a + "} → {" + b + "}" for a, b in canon["pairs"])))
+    if out["notes"]:
+        out["value"] = {**raw, "commands": commands}
+    return out
+
+
+def _placeholder_slots(command: str, vocab: dict[str, Any]) -> tuple[str, list[str]]:
+    """(骨架 = 占位全换成同一记号, 占位名序列)。"""
+    names = [m.group(1) for m in vocab["pattern"].finditer(command)]
+    return vocab["pattern"].sub("\x00", command), names
+
+
+def evidence_commands_render_equivalent(before: Any, after: Any, subject: str) -> bool:
+    """AIPOS-F233 件④ 渲染等价判据唯一实现(声明 placeholder_vocabulary.equivalence; queue amend --restricted 与返工自动放行范围判据同读):
+    条数相同; 逐条骨架逐字相同; 逐个位置: 改前已知占位 = 改后已知且按本主体规范名相同(渲染为同一值); 改前字面花括号 = 改后逐字相同
+    (字面文本改动属改命令, 不算等价)。"""
+    if not isinstance(before, list) or not isinstance(after, list) or len(before) != len(after):
+        return False
+    vocab = placeholder_vocabulary()
+    for old, new in zip(before, after):
+        if not isinstance(old, str) or not isinstance(new, str):
+            return False
+        old_skeleton, old_names = _placeholder_slots(old, vocab)
+        new_skeleton, new_names = _placeholder_slots(new, vocab)
+        if old_skeleton != new_skeleton or len(old_names) != len(new_names):
+            return False
+        for old_name, new_name in zip(old_names, new_names):
+            new_meaning = vocab["by_name"].get(new_name)
+            old_meaning = vocab["by_name"].get(old_name)
+            if old_meaning is None:  # 字面花括号: 须逐字不变
+                if new_name != old_name:
+                    return False
+                continue
+            # 按本主体渲染等价 = 两侧规范名相同(如卡分支主体 {run_dir} 与 {worktree} 都渲染为审计分配工作树)
+            if new_meaning is None or old_meaning["canonical"][subject] != new_meaning["canonical"][subject]:
+                return False
+    return True
+
+
+def evidence_fingerprint_value(value: Any, card_fm: dict[str, Any] | None) -> Any:
+    """AIPOS-F233 件④: 返工自动放行范围指纹里的运行证据声明值(queue_mutation.card_scope_fingerprint 调用): commands 按声明所在卡交付主体
+    规范化(别名改名不改指纹); 其余子键原样。非对象 = 原样。"""
+    if not isinstance(value, dict) or not isinstance(value.get("commands"), list):
+        return value
+    vocab = placeholder_vocabulary()
+    subject = evidence_subject(card_fm)
+    return {**value, "commands": [canonicalize_evidence_command(c, subject, vocab)["command"] if isinstance(c, str) else c
+                                  for c in value["commands"]]}
+
+
+def evidence_declaration_problem(workspace_root: Path | str, audit_task_id: str, audit_fm: dict[str, Any] | None, *,
+                                 reviewed_fm: dict[str, Any] | None = None, reviewed_task_id: str | None = None) -> dict[str, Any] | None:
+    """AIPOS-F233 件③: 审计卡生效的运行证据声明本身是否有问题(唯一判据; 推导核 claimed 审计卡与裁决入口 runtime_evidence_check 同读):
+    形不合(RuntimeEvidenceDeclarationError)/ 含本主体渲染不了的已知占位(该主体在词表无已声明规范名; 加载守卫已保证不发生, 此为
+    fail-closed 兜底)= {category(declaration_invalid_category), reasons, card(声明所在卡), queue, value(卡面原声明), amend(修正命令原文),
+    outlet(出口一句)}; 未声明 / 无问题 = None。词表外的 {xxx} 是字面文本, 不算声明错(按字面渲染与比对)。"""
+    from tools.aipos_cli.audit_derivation import audit_card_reviewed_id
+    from tools.aipos_cli.next_resolver import _find_task_in_queue, _read_frontmatter
+
+    decl = runtime_evidence_declaration()
+    key = str(decl["card_field"])
+    root = Path(workspace_root)
+    reviewed = str(reviewed_task_id or "").strip() or audit_card_reviewed_id(audit_task_id, audit_fm or {})
+    if reviewed_fm is None:
+        path, _q = _find_task_in_queue(root, reviewed) if reviewed else (None, None)
+        reviewed_fm = _read_frontmatter(path) if path else {}
+    on_audit = isinstance(audit_fm, dict) and audit_fm.get(key) not in (None, "")
+    card, card_fm = (audit_task_id, audit_fm or {}) if on_audit else (reviewed, reviewed_fm or {})
+    raw = card_fm.get(key)
+    if raw in (None, ""):
+        return None
+    try:
+        requirement = parse_runtime_evidence_declaration(raw)
+    except RuntimeEvidenceDeclarationError as exc:
+        reasons = [f"卡面 {key} 声明不合({exc})"]
+    else:
+        if requirement is None:
+            return None
+        reasons = _unrenderable_known_placeholders(requirement["commands"], evidence_subject(reviewed_fm or {}), card)
+    if not reasons:
+        return None
+    vocab = placeholder_vocabulary()
+    _path, queue = _find_task_in_queue(root, card) if card else (None, None)
+    fixed = {**raw, "commands": [raw["commands"]]} if isinstance(raw, dict) and isinstance(raw.get("commands"), str) else raw
+    amend = _evidence_amend_command(root, card, queue, fixed)  # 形修正建议: commands 单串 → 列表
+    outlet = str(vocab["texts"]["amend_outlet"]).format(amend=amend, suggestion="")
+    return {"category": str(decl["declaration_invalid_category"]), "reasons": reasons, "card": card, "queue": queue, "value": raw,
+            "amend": amend, "outlet": outlet,
+            "line": str(vocab["texts"]["declaration_invalid"]).format(card_field=key, card=card, problems="; ".join(reasons)) + f"; {outlet}"}
+
+
+def _unrenderable_known_placeholders(commands: list[Any], subject: str, card: str) -> list[str]:
+    """已知占位而本主体无已声明规范名(渲染不了)的命令 → 拒因(加载守卫保证不出现; fail-closed 兜底)。字面花括号不计。"""
+    vocab = placeholder_vocabulary()
+    declared = {"branch": {str(k) for k in runtime_evidence_declaration()["placeholders"]},
+                "candidate": {str(k) for k in runtime_evidence_candidate_declaration()["placeholders"]}}
+    out: list[str] = []
+    for index, command in enumerate(commands or [], 1):
+        bad = [n for n in (m.group(1) for m in vocab["pattern"].finditer(str(command)))
+               if n in vocab["by_name"] and str(vocab["by_name"][n]["canonical"].get(subject) or "") not in declared.get(subject, set())]
+        if bad:
+            out.append(f"卡 {card} 命令 #{index} `{command}` 的占位 {' / '.join('{' + n + '}' for n in bad)} 在交付主体 {subject} 渲染不了")
+    return out
+
+
+def _evidence_amend_command(root: Path, card: str, queue: str | None, value: Any) -> str:
+    """运行证据声明修正命令原文(既有动词 queue amend 预演形; 已认领卡 --restricted)。"""
+    import json
+    import shlex
+
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    key = str(runtime_evidence_declaration()["card_field"])
+    return (f"{lybra_command_prefix(root)} queue amend --task-id {shlex.quote(card or '<卡>')}{' --restricted' if queue == 'claimed' else ''} "
+            f"--actor <顾问实例> --amendments {shlex.quote(json.dumps({key: value}, ensure_ascii=False))} "
+            f"--amendment-reason {shlex.quote('修正运行证据声明本身(不改验收, AIPOS-F233)')} --dry-run")
+
+
+def evidence_declaration_fix_line(workspace_root: Path | str, task_id: str) -> str:
+    """loop 例行修法占位 evidence_amend 的值(verbs.schema routine_rejections.placeholders.evidence_amend): task_id = 运行卡(业务卡或审计卡);
+    业务卡取本卡当前一轮审计卡(审计轮 audit_round_ids 末项, 缺省 <卡>R)。此刻声明已无问题 = 一句说明。"""
+    from tools.aipos_cli.audit_derivation import audit_round_ids, is_audit_card
+    from tools.aipos_cli.next_resolver import _find_task_in_queue, _read_frontmatter
+
+    root = Path(workspace_root)
+    path, _q = _find_task_in_queue(root, task_id)
+    fm = _read_frontmatter(path) if path else {}
+    if is_audit_card(task_id, fm):
+        audit_id, audit_fm = task_id, fm
+    else:
+        rounds = list(audit_round_ids(task_id, root))
+        audit_id = rounds[-1] if rounds else f"{task_id}R"
+        audit_path, _aq = _find_task_in_queue(root, audit_id)
+        audit_fm = _read_frontmatter(audit_path) if audit_path else {"task_id": audit_id, "reviewed_task_id": task_id}
+    problem = evidence_declaration_problem(root, audit_id, audit_fm)
+    return problem["line"] if problem else f"卡 {task_id} 的运行证据声明此刻已无问题(已修正), 直接用原命令续跑"
 
 
 def restricted_amend_subfields() -> dict[str, list[str]]:
@@ -1185,8 +1528,9 @@ def check_runtime_evidence_declaration(raw: Any, *, governance_root: Path | str,
     """运行证据声明校验唯一处(出卡 draft create/publish 与补审派发 audit dispatch --supplementary 同调): 形校验(同裁决入口
     parse_runtime_evidence_declaration)+ 派发前可执行核查。返回 {requirement, problems: [拒因原文], notes: [未核提示]}。
     形不合 = RuntimeEvidenceDeclarationError。problems 非空 = 调用方拒(预演报错, --confirm 拒)。
-    AIPOS-F199 件①: card_frontmatter(声明所在卡)交付主体为固定候选且命令用旧占位 = declaration_invalid_category 拒因 + 迁移提示
-    (runtime_evidence_legacy_problems 唯一判据; 裁决入口同判); 候选声明本身不合由起草 F196 判据报, 此处不重复。"""
+    AIPOS-F233 件②(取代 F199 旧占位迁移提示): 词表外的 {xxx} 是字面文本(awk / jq / json 片段等), 不拒, notes 给提示与相近已知占位
+    (evidence_literal_notes); 别名不拒(调用方先经 normalize_runtime_evidence_declaration 改写为规范形)。
+    card_task_id / card_frontmatter = 声明所在卡(拒因点名用)。"""
     import socket
 
     requirement = parse_runtime_evidence_declaration(raw)
@@ -1194,14 +1538,8 @@ def check_runtime_evidence_declaration(raw: Any, *, governance_root: Path | str,
     if requirement is None:
         return out
     decl = runtime_evidence_declaration()
-    if card_frontmatter is not None:
-        from tools.aipos_cli.next_resolver import CandidateSubjectError
-
-        try:
-            legacy = runtime_evidence_legacy_problems(requirement, str(card_task_id or card_frontmatter.get("task_id") or ""), card_frontmatter)
-        except CandidateSubjectError:  # 候选声明不合: 起草 F196 判据(VALIDATION_*)已拒并给出口, 此处不二报
-            legacy = []
-        out["problems"].extend(f"{decl['declaration_invalid_category']}: {p}" for p in legacy)
+    out["notes"].extend(evidence_literal_notes(requirement["commands"], task_id=str(card_task_id or (card_frontmatter or {}).get("task_id") or "<卡>"),
+                                               card_fm=card_frontmatter, card_field=str(decl["card_field"])))
     check = decl.get("executable_check")
     needed = ("category", "privilege_category", "privilege_commands", "fix_hint", "unverified_note")
     if not isinstance(check, dict) or any(not check.get(k) for k in needed):
@@ -1291,38 +1629,16 @@ def runtime_evidence_candidate_declaration() -> dict[str, Any]:
     from tools.schema_loader import SchemaLoadError
 
     decl = runtime_evidence_declaration().get("candidate_subject")
-    needed = ("entry_required_fields", "placeholders", "legacy_placeholders", "legacy_hint", "outlet", "steps_title", "steps", "command_line",
-              "pending", "remote_steps")
+    needed = ("entry_required_fields", "placeholders", "outlet", "steps_title", "steps", "command_line", "pending", "remote_steps")
     if not isinstance(decl, dict) or any(not decl.get(k) for k in needed):
         raise SchemaLoadError(f"transitions.schema.json artifact_ingest.verdict.runtime_evidence.candidate_subject({'/'.join(needed)})未声明")
     return decl
 
 
 def render_candidate_evidence_command(command: str, values: dict[str, Any]) -> str:
-    """AIPOS-F199: 固定候选卡声明命令的占位渲染(唯一实现; 裁决入口逐字匹配与开工稿 / 派审步骤同用)。占位名读 candidate_subject.placeholders;
-    values 缺某占位 = 原样保留(开工稿未起 run 时)。"""
-    for name in runtime_evidence_candidate_declaration()["placeholders"]:
-        if name in values and values[name] not in (None, ""):
-            command = command.replace("{" + str(name) + "}", str(values[name]))
-    return command
-
-
-def runtime_evidence_legacy_problems(requirement: dict[str, Any] | None, card_task_id: str, card_fm: dict[str, Any] | None) -> list[str]:
-    """AIPOS-F199 件①: 固定候选卡(next_resolver.card_candidate_subject)的声明命令仍用旧占位({worktree}/{commit_sha}/{tree_hash})= 迁移提示原文
-    (每条一句; 非候选卡 / 无要求 = [])。候选声明本身不合 = CandidateSubjectError 上抛(调用方各自给拒因)。"""
-    from tools.aipos_cli.next_resolver import card_candidate_subject
-
-    if not requirement or card_candidate_subject(card_fm) is None:
-        return []
-    decl = runtime_evidence_candidate_declaration()
-    out: list[str] = []
-    for command in requirement.get("commands") or []:
-        legacy = [f"{{{name}}}" for name in decl["legacy_placeholders"] if "{" + str(name) + "}" in command]
-        if legacy:
-            out.append(str(decl["legacy_hint"]).format(task_id=card_task_id, task_mode=(card_fm or {}).get("task_mode"),
-                                                       card_field=runtime_evidence_declaration()["card_field"], command=command,
-                                                       legacy=" / ".join(legacy)))
-    return out
+    """AIPOS-F199: 固定候选卡声明命令的占位渲染(裁决入口逐字匹配与开工稿 / 派审步骤同用)。AIPOS-F233: 薄封装唯一渲染
+    render_evidence_command(主体 candidate: 别名先改写为规范形再代值); values 缺某占位 = 原样保留(开工稿未起 run 时)。"""
+    return render_evidence_command(command, "candidate", values)
 
 
 def render_candidate_evidence_steps(governance_root: Path | str, *, audit_task_id: str, audit_instance: str | None, reviewed_task_id: str,
@@ -1343,7 +1659,8 @@ def render_candidate_evidence_steps(governance_root: Path | str, *, audit_task_i
                                        evidence_card=evidence_card)
     if values.get("host_refusal"):  # 选不出 run = 拒因一行(不渲染任何 run 命令; 裁决入口同判据拒)
         return [str(decl["steps_title"]), str(values["host_refusal"]),
-                *(f"   ⚠ {p}" for p in runtime_evidence_legacy_problems(requirement, reviewed_task_id, reviewed_fm))]
+                *(f"   ℹ {p}" for p in evidence_literal_notes((requirement or {}).get("commands") or [], task_id=reviewed_task_id,
+                                                            card_fm=reviewed_fm))]
     values["heading"] = str(runtime_evidence_declaration()["section_heading"])
     known = {k: v for k, v in values.items() if not str(v).startswith("<")}
     lines = [str(decl["steps_title"])]
@@ -1357,7 +1674,8 @@ def render_candidate_evidence_steps(governance_root: Path | str, *, audit_task_i
                          for c in (requirement or {}).get("commands") or [])
     if values.get("remote"):  # AIPOS-F200 件④: 审计 run 在远端主机 = 证据清单 + 取回副本两步(声明 candidate_subject.remote_steps)
         lines.extend(str(step).format(**values) for step in decl.get("remote_steps") or [])
-    lines.extend(f"   ⚠ {p}" for p in runtime_evidence_legacy_problems(requirement, reviewed_task_id, reviewed_fm))
+    lines.extend(f"   ℹ {p}" for p in evidence_literal_notes((requirement or {}).get("commands") or [], task_id=reviewed_task_id,
+                                                        card_fm=reviewed_fm))
     return lines
 
 
@@ -1391,7 +1709,8 @@ def render_runtime_evidence_requirement(requirement: dict[str, Any], *, candidat
              f"- {runtime_evidence_guidance()}"]  # AIPOS-F165 件②: 与拒因同一固定指引
     if requirement.get("commands"):
         lines.append("- 必须逐条运行并记录:")
-        lines.extend(f"  - `{c}`" for c in requirement["commands"])
+        # AIPOS-F233: 存量别名声明按卡分支主体规范化后展示(审计体照规范占位渲染, 与裁决入口同一渲染)
+        lines.extend(f"  - `{canonicalize_evidence_command(c, 'branch')['command']}`" for c in requirement["commands"])
     else:
         lines.append("- 卡面未列具体命令: 记录你实际运行的验证命令(至少一条)")
     lines += ["", f"证据节格式(节内第一个 ```{decl['block_language']} 块; 日志二选一: {keys['excerpt']} 或 {keys['path']}+{keys['sha256']}):", "",
@@ -1709,6 +2028,8 @@ def ingest_task_artifact(
         "category": check["category"], "reasons": list(check["reasons"]), "command": "", "path": check["path"],
         "output": "", "message": "", "agent_runtime": None,
     }
+    if check.get("notes"):  # AIPOS-F233 件⑥: 报告头容错 note(报告原文不改)
+        result["notes"] = list(check["notes"])
     if kind and kind != check["kind"]:
         result.update({"exit_code": INGEST_EXIT_REJECTED, "category": "INGEST_KIND_MISMATCH",
                        "reasons": [f"推导核声明入门节点 --kind {kind}, 但产物入口按卡与记录判定为 {check['kind']}: 卡态已变, 重推导后再入门"],
@@ -1816,6 +2137,8 @@ def run_ingest_cli(args: Any) -> int:
             print(f"  command: {result['command']}")
         for reason in result.get("reasons") or []:
             print(f"  - {reason}", file=sys.stderr if not result["ok"] else sys.stdout)
+        for note in result.get("notes") or []:  # AIPOS-F233 件⑥
+            print(f"  note: {note}")
         if result.get("output") and result["ok"]:
             print(result["output"].rstrip())
     return int(result["exit_code"])

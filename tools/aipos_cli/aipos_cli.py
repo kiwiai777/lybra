@@ -2674,7 +2674,7 @@ def build_parser() -> argparse.ArgumentParser:
     dispatch_parser.add_argument("--supplementary", action="store_true",
                                  help="AIPOS-F162: 已结案卡补充审计(派生 <原卡ID>-S<n>R 补审卡; 原 closure/原裁决不动; 缺省预演, --confirm 写)")
     dispatch_parser.add_argument("--runtime-evidence-command", action="append", default=None, dest="runtime_evidence_commands",
-                                 help="AIPOS-F162: 补审卡声明 audit_runtime_evidence(required=true)的验证命令, 可多次; 占位 {worktree}/{commit_sha}/{tree_hash}")
+                                 help="AIPOS-F162: 补审卡声明 audit_runtime_evidence(required=true)的验证命令, 可多次; 占位 {worktree}/{commit_sha}/{tree_hash}(AIPOS-F233: 固定候选词表 {src_dir}/{candidate}/{candidate_tree} 为同义别名, 按被审卡主体自动改写为规范形)")
     dispatch_parser.add_argument("--confirm", action="store_true", help="AIPOS-F162: --supplementary 的写入阶段(缺省预演)")
     dispatch_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     dispatch_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -6604,23 +6604,34 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
         # AIPOS-F223 件②: 改卡面 audit_runtime_evidence = 判据 artifact_ingest.runtime_evidence_amend_problems(新值形校验同出卡; 已认领卡
         # --restricted 只许改 card.schema restricted_amend.claimed_card_subfields 所列子键, 如在途验证卡补运行证据执行主机 host)
-        from tools.aipos_cli.artifact_ingest import restricted_amend_subfields, runtime_evidence_amend_problems, runtime_evidence_declaration
+        from tools.aipos_cli.artifact_ingest import (
+            normalize_runtime_evidence_declaration, render_equivalent_subfields, restricted_amend_subfields, runtime_evidence_amend_problems,
+            runtime_evidence_declaration,
+        )
 
         evidence_key = str(runtime_evidence_declaration()["card_field"])
+        evidence_notes: list[str] = []
         if isinstance(amendments, dict) and evidence_key in amendments:
             from tools.aipos_cli.adapter_response import blocked_response
             from tools.aipos_cli.next_resolver import _find_task_in_queue, _read_frontmatter
 
             card_path, _queue = _find_task_in_queue(Path(repo_root), str(args.task_id))
-            current = _read_frontmatter(card_path).get(evidence_key) if card_path else None
-            problems = runtime_evidence_amend_problems(current, amendments[evidence_key], claimed=restricted_fields is not None)
+            card_fm = _read_frontmatter(card_path) if card_path else {}
+            current = card_fm.get(evidence_key)
+            # AIPOS-F233 件②④: 新值别名按本卡交付主体改写为规范形(改写前后原文进输出 warnings); 已认领卡 --restricted 另认渲染等价的 commands
+            subject_fm = {**card_fm, **{k: v for k, v in amendments.items() if k != evidence_key}, "task_id": str(args.task_id)}
+            normalized = normalize_runtime_evidence_declaration(amendments[evidence_key], card_fm=subject_fm, task_id=str(args.task_id))
+            amendments[evidence_key] = normalized["value"]
+            evidence_notes = [*normalized["notes"], *normalized["literals"]]  # 改写前后原文 + 字面花括号提示(不拒)
+            problems = runtime_evidence_amend_problems(current, amendments[evidence_key], claimed=restricted_fields is not None,
+                                                       card_fm=subject_fm)
             if problems:
                 print(render_json(blocked_response(
                     operation="queue_amend", dry_run=bool(args.dry_run), category="VALIDATION_ERROR", message="; ".join(problems),
                     data={"task_id": args.task_id, "field": evidence_key, "validation_errors": problems},
                     safety_notice="AIPOS-F223: audit_runtime_evidence amend 判据 artifact_ingest.runtime_evidence_amend_problems")))
                 return 1
-            if restricted_fields is not None and evidence_key in restricted_amend_subfields():
+            if restricted_fields is not None and evidence_key in (set(restricted_amend_subfields()) | set(render_equivalent_subfields())):
                 restricted_fields = set(restricted_fields) | {evidence_key}
         try:
             result = amend_task(
@@ -6635,6 +6646,8 @@ def main(argv: list[str] | None = None) -> int:
         except (FileNotFoundError, OSError, ValueError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
+        if evidence_notes:  # AIPOS-F233 件②: 占位规范化改写前后原文 / 字面花括号提示
+            result.setdefault("warnings", []).extend(evidence_notes)
         # AIPOS-F213 件①(F208 P1-6): 修订写入成功后即落账(卡面 + 修订记录; 原 CLI amend 不落账)——同一薄壳 queue_writers
         landing = None
         if not args.dry_run and result.get("ok") and result.get("verdict") != Verdict.BLOCK:

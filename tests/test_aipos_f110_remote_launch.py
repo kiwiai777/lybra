@@ -171,8 +171,8 @@ def test_item4_render_kickoff_local_bytes_unchanged_remote_block_fail_closed():
     local = nr.render_kickoff(card)
     pre_f110 = ("已认领任务卡 AIPOS-Z。\n\n工作树路径: /r/.worktrees/AIPOS-Z\n报告落点: /g/task_cards/AIPOS-Z/RETURN.md\n"
                 "任务卡路径: /g/5_tasks/queue/claimed/aipos-z.md\n报告 frontmatter 必填(产品给出; 缺任一项或仍为占位, 报告被拒收):\n"
-                "- branch: card/AIPOS-Z(分支)\n\n按你的 AGENTS.md 执行，完成后写报告到报告落点。")
-    assert local == pre_f110  # 本机工位开工提示与 F110 前逐字节相同
+                "- branch: card/AIPOS-Z(分支)\n" + nr.report_header_quote_rule() + "\n\n按你的 AGENTS.md 执行，完成后写报告到报告落点。")
+    assert local == pre_f110  # 本机工位开工提示与 F110 前逐字节相同(AIPOS-F233 件⑥: 报告必填行末尾追加报告头 YAML 引号规则一行)
     ctx = {"gate_host": "gate", "governance_root": "/g", "workstation_host": "mac", "gate_ssh_alias": "dev", "material_access": "经 ssh dev 读写 {x}"}
     remote = nr.render_kickoff(card, remote=ctx)
     _show("[④] remote render_kickoff 原文:\n" + remote)

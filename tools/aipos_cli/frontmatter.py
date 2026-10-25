@@ -1132,6 +1132,77 @@ def _parse_frontmatter_shared(frontmatter: str) -> tuple[dict[str, Any], list[st
 
 
 def _parse_frontmatter_uncached(frontmatter: str) -> tuple[dict[str, Any], list[str]]:
+    """AIPOS-F233 件⑥: 解析失败(有告警)时, 对声明的自由文本键(transitions artifact_ingest.report_header_yaml.free_text_keys)按整行值加引号
+    重解析一次(_repair_free_text_values); 重解析干净 = 用其结果(原文不改; 产物入口经 frontmatter_repair_notes 记 note), 否则原告警照旧。"""
+    data, warnings = _parse_frontmatter_once(frontmatter)
+    if warnings:
+        repaired, repairs = _repair_free_text_values(frontmatter)
+        if repairs:
+            data2, warnings2 = _parse_frontmatter_once(repaired)
+            if not warnings2:
+                return data2, []
+    return data, warnings
+
+
+# AIPOS-F233 件⑥: 报告头 YAML 常见笔误容错——自由文本键的值含「: 」未加引号(PyYAML: mapping values are not allowed here)
+_TOP_LEVEL_SCALAR_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):[ \t]+(\S.*?)[ \t]*$")
+_NO_REPAIR_LEADS = tuple("'\"|>[{&*!%@`#")
+
+
+def _free_text_keys() -> tuple[str, ...]:
+    """声明的自由文本键(transitions artifact_ingest.report_header_yaml.free_text_keys)。声明读不出 = ()(不修, 行为同 F233 前: 读不出照旧拒)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    try:
+        decl = (load_schema("transitions", code_repo_schema_root()).get("artifact_ingest") or {}).get("report_header_yaml") or {}
+    except SchemaLoadError:
+        return ()
+    keys = decl.get("free_text_keys") if isinstance(decl, dict) else None
+    return tuple(str(k) for k in keys) if isinstance(keys, list) else ()
+
+
+def _repair_free_text_values(frontmatter: str) -> tuple[str, list[dict[str, Any]]]:
+    """顶层自由文本键、值为不带引号的单行 plain scalar 且含「: 」(或以「:」结尾)、不含「 #」注释者 → 整行值加双引号(JSON 转义 = YAML 双引号
+    子集)。返回 (改写后文本, [{index(frontmatter 内 0 基行号), key, line_text}]); 无可改 = (原文, [])。"""
+    import json
+
+    keys = set(_free_text_keys())
+    if not keys:
+        return frontmatter, []
+    lines = frontmatter.split("\n")
+    repairs: list[dict[str, Any]] = []
+    for index, line in enumerate(lines):
+        match = _TOP_LEVEL_SCALAR_RE.match(line)
+        if not match or match.group(1) not in keys:
+            continue
+        value = match.group(2)
+        if value.startswith(_NO_REPAIR_LEADS) or " #" in value or not (": " in value or value.endswith(":")):
+            continue
+        lines[index] = f"{match.group(1)}: {json.dumps(value, ensure_ascii=False)}"
+        repairs.append({"index": index, "key": match.group(1), "line_text": line})
+    return ("\n".join(lines), repairs) if repairs else (frontmatter, [])
+
+
+def frontmatter_repair_notes(text: str) -> list[dict[str, Any]]:
+    """AIPOS-F233 件⑥: 一份 markdown 的 frontmatter 是否靠自由文本键加引号容错才读出(唯一判定; 产物入口 artifact_ingest 记 note)。
+    是 = [{line_no(文件行号, 1 基含首行 ---), key, line_text}]; 否(本就读得出 / 修了仍读不出 / 无 frontmatter)= []。"""
+    if not text.startswith("---"):
+        return []
+    lines = text.splitlines()
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if end is None:
+        return []
+    frontmatter = "\n".join(lines[1:end])
+    _data, warnings = _parse_frontmatter_once(frontmatter)
+    if not warnings:
+        return []
+    repaired, repairs = _repair_free_text_values(frontmatter)
+    if not repairs or _parse_frontmatter_once(repaired)[1]:
+        return []
+    return [{"line_no": r["index"] + 2, "key": r["key"], "line_text": r["line_text"]} for r in repairs]
+
+
+def _parse_frontmatter_once(frontmatter: str) -> tuple[dict[str, Any], list[str]]:
     warnings: list[str] = []
     if yaml is not None:
         try:

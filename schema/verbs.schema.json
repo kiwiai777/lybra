@@ -2909,6 +2909,7 @@
           "not_derivable": "推导不可推导(exit_codes.not_derivable)",
           "artifact_invalid": "产物已落盘但不合规(exit_codes.not_derivable)",
           "runtime_evidence_exhausted": "AIPOS-F162 件①: 审计报告 PASS 类裁决缺独立运行证据(RUNTIME_EVIDENCE_MISSING), 本次运行已为补做拉起审计体达上限(transitions artifact_ingest.verdict.runtime_evidence.loop.relaunch_cap)仍不合格(exit_codes.not_derivable)",
+          "runtime_evidence_declaration_invalid": "AIPOS-F233 件③: 卡面运行证据声明本身有问题(形不合 / 含本主体渲染不了的已知占位; 字面花括号不算), 审计体补做也匹配不上: 推导核给 transitions artifact_ingest.verdict.runtime_evidence.loop.declaration_invalid_action, loop 不拉起审计体即结束(exit_codes.not_derivable; 顾问受限 amend 修正声明后续跑)",
           "record_missing": "账务记录缺(exit_codes.not_derivable)",
           "frontmatter_unreadable": "卡或记录 frontmatter 读不出(exit_codes.not_derivable)",
           "manual_required": "需人工介入/无法识别动词(exit_codes.not_derivable)",
@@ -3266,6 +3267,7 @@
           "not_derivable": "investigate",
           "artifact_invalid": "investigate",
           "runtime_evidence_exhausted": "owner_needed",
+          "runtime_evidence_declaration_invalid": "advisor_fix",
           "record_missing": "investigate",
           "frontmatter_unreadable": "investigate",
           "command_unparseable": "investigate",
@@ -3319,7 +3321,7 @@
           "consecutive_failures": "连败: 本卡最近连续多次运行都异常结束, 不再自动续跑, 请 Owner 定是否改卡 / 换执行体 / 仲裁",
           "routine_fix_exhausted": "例行门拒修了仍连败: 本卡连续多次被同一例行拒因码拒(固定修法对本卡不灵, 或多条 lane 交替抢合入), 不再自处理, 请 Owner 定是否改卡 / 排合入顺序 / 仲裁",
           "card_owner_mismatch": "卡归属不符(AIPOS-F156): 本卡由另一实例发布(门侧发布记录签发实例), 驱动方的信封限 lane(非总顾问)不得跑走别人的卡; 请 Owner 定由归属实例推进, 或改由不限 lane 的总顾问推进",
-          "runtime_evidence_exhausted": "审计补做连败(AIPOS-F162): 审计报告 PASS 类裁决缺卡面要求的独立运行证据, loop 已让审计体按拒因补做到声明上限仍不合格(审计体跑不了声明命令 / 不按格式填 / 只核执行体原件); 请 Owner 定换审计体 / 改卡面运行证据声明 / 仲裁",
+          "runtime_evidence_exhausted": "审计补做连败(AIPOS-F162): 审计报告 PASS 类裁决缺卡面要求的独立运行证据, loop 已让审计体按拒因补做到声明上限仍不合格(审计体跑不了声明命令 / 不按格式填 / 只核执行体原件); AIPOS-F233 件⑤: 归第三档顾问处理(tiers.loop_reasons), 顾问换审计体 / 修审计环境 / 受限 amend 修正声明后续跑; 只有顾问选第一档事由(lybra loop note --owner-reason)才进 Owner 收件箱",
           "envelope_exhausted": "授权: 信封额度已用尽(AIPOS-F166), 请 Owner 按 hint 的续签命令签新信封, 签好用原命令续跑 loop",
           "envelope_expired": "授权: 信封已过期(AIPOS-F166), 请 Owner 按 hint 的续签命令签新信封, 签好用原命令续跑 loop",
           "authorization_out_of_bound": "授权越界(AIPOS-F224): 本卡超出项目常设授权(detail 点名越界维度: 车道 / 任务类型 / 驱动方 / 主机 / 禁区 / 总额 / 到期), 请 Owner 一次扩大授权(收件箱选「扩大授权」或按 detail 里的扩大授权命令), 扩大后用原命令续跑 loop; 不批准 = 顾问调整本卡或转下一张",
@@ -3350,7 +3352,8 @@
             "supersede_command": "AIPOS-F211 件④: 撤换本卡命令(既有动词 `lybra queue supersede` 预演形, --by 留新验证卡号占位, --actor 留顾问实例占位, --owner-words 留 Owner 原话占位; 唯一渲染 next_resolver.candidate_fail_fix_values); 本卡此刻已不是候选 FAIL = 一句说明; 只用于 end_reasons.candidate_fail",
             "fail_scope_note": "AIPOS-F227 件①: 该 FAIL 裁决的范围一句(transitions nodes.N4.candidate_fail.fail_scope.texts.scope_declared / scope_undeclared / scope_invalid; 判定唯一实现 next_resolver.verdict_fail_scope, 读该裁决门快照报告 frontmatter fail_scope); 用于 end_reasons.candidate_fail / candidate_deliverable_fail",
             "deliverable_exit": "AIPOS-F227 件①②: 同候选补正出口一句(唯一渲染 next_resolver.candidate_deliverable_exit, 与 lybra next 同源): 未声明 fail_scope = 另一出口并列(带判据与返工命令); 已声明 candidate = 一句「不适用」; deliverable = 补正路径本身; 用于 end_reasons.candidate_fail / candidate_deliverable_fail",
-            "header_fix_prompt": "AIPOS-F204 件③: 修交回报告头指令原文(verbs.schema lybra_loop.launch.report_fix.executor.prompt, 按本卡此刻的交回以 artifact_ingest.return_header_problem 填实值; 此刻已无可更正问题 = 一句说明); 用于 end_reasons.return_report_form_error。AIPOS-F232 件②: 复核运行最后一步的卡与本卡的报告, 报告头读不出 = 修报告头(读不出)指令(lybra_loop.launch.report_fix.unreadable.prompt, 含解析错行与原因; 审计卡报告 = 审计措辞), 亦用于 end_reasons.audit_report_form_error"
+            "header_fix_prompt": "AIPOS-F204 件③: 修交回报告头指令原文(verbs.schema lybra_loop.launch.report_fix.executor.prompt, 按本卡此刻的交回以 artifact_ingest.return_header_problem 填实值; 此刻已无可更正问题 = 一句说明); 用于 end_reasons.return_report_form_error。AIPOS-F232 件②: 复核运行最后一步的卡与本卡的报告, 报告头读不出 = 修报告头(读不出)指令(lybra_loop.launch.report_fix.unreadable.prompt, 含解析错行与原因; 审计卡报告 = 审计措辞), 亦用于 end_reasons.audit_report_form_error",
+            "evidence_amend": "AIPOS-F233 件③: 卡面运行证据声明错的修正出口一行(唯一渲染 artifact_ingest.evidence_declaration_fix_line: 拒因 + 受限 amend 命令原文与建议改法; 此刻声明已无问题 = 一句说明); 只用于 end_reasons.runtime_evidence_declaration_invalid"
           },
           "resume_hint": "lybra loop --task-id {task_id} --workspace-root {governance_root}{actor_arg}{envelope_arg}",
           "codes": {
@@ -3473,6 +3476,14 @@
                 "另出验证卡承接新候选(卡面同本卡, validation_candidate 换成新候选 sha)并发布",
                 "撤换本卡: {supersede_command}(先预演, 核对后去掉 --dry-run 加 --confirm)",
                 "然后对新验证卡跑 lybra loop(本卡撤换后不再推进; 下行续跑命令只用于撤换前复核本卡状态)"
+              ]
+            },
+            "runtime_evidence_declaration_invalid": {
+              "why_routine": "AIPOS-F233 件③(10-25 chris HBLX-52 实撞: 声明命令用错占位词表, 审计体实跑通过仍逐字不匹配, loop 白拉起审计体两次后升 Owner 撤换): 卡面运行证据声明本身有问题(形不合 / 含本主体渲染不了的已知占位; awk / jq 等字面花括号不算), 审计体再怎么补做也匹配不上; 修法固定 = 顾问受限 amend 修正声明(只改占位名, 渲染等价判据放行, 不需 Owner、不撤换、不失返工自动放行)后续跑, 不拉起审计体白烧",
+              "fix": [
+                "不找 Owner、不撤换、不再拉起审计体: 声明问题与修正命令 —— {evidence_amend}",
+                "预演看清改写前后命令后去掉 --dry-run 确认(已认领卡经 --restricted: 只改占位名 / 别名规范化按渲染等价判据放行; 改命令其余部分 = 改验收, 仍按现行规则走返工轮或撤卡重发)",
+                "修正后用原命令续跑 loop(本修法末行命令): 推导核按新声明渲染, 审计体照常开工 / 已有报告按新声明重判"
               ]
             },
             "candidate_deliverable_fail": {
@@ -3849,7 +3860,7 @@
           "verb_not_authorized": {"tier": 3, "action": "advisor_fix", "why": "信封未授权该动词多为驱动方用错身份 / 信封: 顾问换对的驱动方或信封续跑; 确需扩授权才升第一档(beyond_authority, 覆盖判定归 AIPOS-F224)"},
           "manual_required": {"tier": 3, "action": "investigate", "why": "推导核给不出可执行命令 = 记录 / 产物缺口, 顾问按 lybra next 给的缺项与出口补齐"},
           "wait_timeout": {"tier": 3, "action": "advisor_fix", "why": "工位未交产物是执行侧技术问题: 顾问查工位 / 重派执行体 / 加大 --max-wait 后原命令续跑"},
-          "runtime_evidence_exhausted": {"tier": 3, "action": "investigate", "why": "审计体补做运行证据连败 = 审计执行侧问题: 顾问换审计体 / 修审计环境; 要改卡面运行证据声明 = 改验收才升第一档(rescope)"},
+          "runtime_evidence_exhausted": {"tier": 3, "action": "advisor_fix", "why": "审计体补做运行证据连败 = 环境 / 声明问题(AIPOS-F233 件⑤: 不升 Owner): 顾问换审计体 / 修审计环境 / 声明错按受限 amend 修正(只改占位名不改验收); 真要改卡面验收才由顾问选第一档事由(rescope)升 Owner"},
           "card_owner_mismatch": {"tier": 3, "action": "advisor_fix", "why": "卡归属不符是顾问之间的分工: 由归属实例推进或交不限 lane 的总顾问, 不是 Owner 的决策"},
           "consecutive_failures": {"tier": 3, "action": "investigate", "why": "连败是技术故障的聚合: 顾问按最近一次结束原因查修(lybra next); 要改卡 / 撤卡才升第一档"},
           "routine_fix_exhausted": {"tier": 3, "action": "investigate", "why": "例行门拒修了仍连败 = 固定修法对本卡不灵(多 lane 交替抢合入等): 顾问排合入顺序 / 查卡; 要改卡才升第一档"}

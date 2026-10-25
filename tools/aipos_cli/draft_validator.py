@@ -286,7 +286,7 @@ def validate_draft_metadata(
                 _add(warnings, f"运行证据可执行核查: 审计实例推导不出({exc}), 按治理根所在机核")
             try:
                 checked = check_runtime_evidence_declaration(metadata.get(evidence_key), governance_root=repo_root,
-                                                             audit_instance=audit_instance, card_frontmatter=metadata)  # AIPOS-F199: 候选卡旧占位
+                                                             audit_instance=audit_instance, card_frontmatter=metadata)  # AIPOS-F233: 词表外花括号按字面保留只提示(别名由起草 / 发卡规范化)
             except RuntimeEvidenceDeclarationError as exc:
                 _add(blocking_reasons, f"RUNTIME_EVIDENCE_DECLARATION_INVALID: {exc}")
             else:

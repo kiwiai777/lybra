@@ -3,7 +3,8 @@
 件① 被审卡交付主体为固定候选(enums.schema task_mode.candidate_subject, validation)时, 运行证据判据唯一实现 board_adapter.runtime_evidence_check
     不再推导 / 要求审计产品工作树: 每条记录 {command, run_id, run_dir, exit_code, log_path, log_sha256} 须绑定审计实例自己的验证根 run
     (声明归属 / 已 run-start / 候选 = 卡面候选 / run 内 src-verify SRC_OK 且 tree = 候选 tree / 日志文件指纹); 占位 {run_dir}/{src_dir}/
-    {candidate}/{candidate_tree}; 旧占位 {worktree}/{commit_sha}/{tree_hash} 给迁移提示。code 卡行为不变。
+    {candidate}/{candidate_tree}; AIPOS-F233: 卡分支词表 {worktree}/{commit_sha}/{tree_hash} 为同义别名(按候选主体规范化后渲染, 原迁移提示退役)。
+    code 卡行为不变。
 件② 派审注入(审计卡正文「独立运行证据要求」)与审计开工稿同一渲染 artifact_ingest.render_candidate_evidence_steps:
     declare → run-start → init-run → 源码送达 → src-verify → 按卡面命令运行 → 证据填 run_id/run_dir。
 件③ roles enroll-code / enroll-deliver 凭据: 显式 --workspace-root > --governance-root > F144 解析梯(当前目录所在治理根), 拒因写明文件与来源。
@@ -40,7 +41,6 @@ from tools.aipos_cli import next_resolver as nr  # noqa: E402
 VALR = f"{VAL}R"
 VAL2 = "PROBE-F199-V2"       # 另一张验证卡(他卡 run 靶)
 VAL2R = f"{VAL2}R"
-VALL = "PROBE-F199-V3"       # 旧占位验证卡
 CODE = "PROBE-F199-K1"       # code 卡(行为不变靶)
 CMDS = ["cat {src_dir}/app/feature.txt", "echo verify {candidate} {candidate_tree} {run_dir}"]
 
@@ -265,36 +265,42 @@ def test_item1_validation_evidence_binds_audit_own_run(vrig):
     assert any("卡面声明的命令缺有效运行记录: 'echo verify" in r for r in bad["reasons"])
 
 
-def test_item1_legacy_placeholders_migration_hint_and_draft_refusal(vrig):
-    from tools.aipos_cli.board_adapter import runtime_evidence_check
+def test_item1_alias_placeholders_render_and_draft_rewrite(vrig):
+    """AIPOS-F233 件①② 取代 F199 旧占位迁移提示: 固定候选卡声明用卡分支词表({worktree}/{commit_sha}/{tree_hash})= 同义别名, 裁决入口按
+    候选主体规范化后渲染即可入门(不再 DECLARATION_INVALID); 起草把别名自动改写为规范形并写明改写前后原文; 词表外花括号按字面不拒, 只提示建议。"""
     from tools.aipos_cli.draft_writer import create_draft
-    from tools.aipos_cli.next_resolver import card_branch_name  # noqa: F401  — 声明读取已加载
 
-    gov = vrig.gov
-    legacy = {"required": True, "commands": ["python3 {worktree}/Scripts/run.py --worktree {worktree} --commit {commit_sha} --tree {tree_hash}"]}
-    f78._card(gov, VALL, "pending", assigned=EXEC, task_mode="validation",
-              extra={"harness": "pi", "audit_by": AUDITOR, "validation_source_task": SRC, "validation_candidate": vrig.candidate,
-                     "output_target": f"task_cards/{VALL}/artifacts/", "audit_runtime_evidence": legacy})
+    gov, base = vrig.gov, vrig.base
+    alias = {"required": True, "commands": ["cat {worktree}/app/feature.txt", "echo verify {commit_sha} {tree_hash} {run_dir}"]}
+    _validation_card(vrig, audit_runtime_evidence=alias)
     init_governance_repo(gov)
-    report = _report(gov, f"{VALL}R", VALL, vrig.candidate, [])
-    got = runtime_evidence_check(gov, f"{VALL}R", {"task_id": f"{VALL}R", "task_mode": "audit", "reviewed_task_id": VALL},
-                                 report_path=report, report_fm=nr._read_frontmatter(report))
-    _show("[件① 旧占位·裁决入口迁移提示]\n  " + "\n  ".join(got["reasons"]))
-    assert got["category"] == "RUNTIME_EVIDENCE_DECLARATION_INVALID"
-    assert "旧占位 {worktree} / {commit_sha} / {tree_hash}" in got["reasons"][0] and "{worktree} → {src_dir}" in got["reasons"][0]
-    meta = {"task_id": "PROBE-F199-V4", "title": "旧占位验证卡", "project": "lybra", "context_bundle": "t", "task_mode": "validation",
+    candidate = vrig.candidate
+    tree = f78._git(vrig.code_repo, "rev-parse", f"{candidate}^{{tree}}")
+    decl = _declare(gov, base, VALR, AUDITOR)
+    _run_start(gov, decl, candidate)
+    run = _prepare_run(gov, decl)
+    entries = _exec_commands(run, candidate, tree)  # 按规范占位(CMDS)渲染实跑 = 别名声明渲染后的同一命令
+    got = _check(gov, VALR, VAL, candidate, entries)
+    _show(f"[件① 别名占位·裁决入口(固定候选卡声明卡分支词表)] {got}")
+    assert got is None
+    meta = {"task_id": "PROBE-F199-V4", "title": "别名占位验证卡", "project": "lybra", "context_bundle": "t", "task_mode": "validation",
             "priority": "high", "status": "pending", "created_by": DRIVER, "needs_owner": False, "output_target": "task_cards/PROBE-F199-V4/artifacts/",
-            "artifact_policy": "formal_write", "validation_source_task": SRC, "validation_candidate": vrig.candidate,
-            "audit_runtime_evidence": legacy}
-    res = create_draft(gov, meta, "## Goal\n\n固定候选验证\n", dry_run=True)
-    hits = [r for r in res["blocking_reasons"] if "旧占位" in r]
-    _show(f"[件① 旧占位·起草拒] verdict={res['verdict']}\n  {hits[0] if hits else res['blocking_reasons']}")
-    assert res["verdict"] == "BLOCK" and hits and hits[0].startswith("RUNTIME_EVIDENCE_DECLARATION_INVALID")
-    fixed = {**meta, "audit_runtime_evidence": {"required": True, "commands": [
-        "python3 {src_dir}/Scripts/run.py --worktree {src_dir} --commit {candidate} --tree {candidate_tree}"]}}
-    res = create_draft(gov, fixed, "## Goal\n\n固定候选验证\n", dry_run=True)
-    _show(f"[件① 新占位·起草] verdict={res['verdict']} blocking={res['blocking_reasons']}")
+            "artifact_policy": "formal_write", "validation_source_task": SRC, "validation_candidate": candidate,
+            "audit_runtime_evidence": {"required": True, "commands": [
+                "python3 {worktree}/Scripts/run.py --worktree {worktree} --commit {commit_sha} --tree {tree_hash}"]}}
+    res = create_draft(gov, dict(meta), "## Goal\n\n固定候选验证\n", dry_run=True)
+    notes = [w for w in res["warnings"] if "AIPOS-F233 占位规范化" in w]
+    _show(f"[件② 别名占位·起草自动改写] verdict={res['verdict']}\n  {notes}")
     assert res["verdict"] != "BLOCK", res["blocking_reasons"]
+    assert notes and "改写前 `python3 {worktree}/Scripts/run.py" in notes[0] and "改写后 `python3 {src_dir}/Scripts/run.py --worktree {src_dir} " \
+        "--commit {candidate} --tree {candidate_tree}`" in notes[0]
+    assert "python3 {src_dir}/Scripts/run.py --worktree {src_dir} --commit {candidate} --tree {candidate_tree}" in res["rendered_markdown"]
+    typo = {**meta, "audit_runtime_evidence": {"required": True, "commands": ["python3 {srcdir}/Scripts/run.py --commit {candidate}"]}}
+    res = create_draft(gov, typo, "## Goal\n\n固定候选验证\n", dry_run=True)
+    hits = [w for w in res["warnings"] if "不是占位" in w]
+    _show(f"[件② 词表外花括号·起草不拒(字面保留 + 建议)] verdict={res['verdict']}\n  {hits}")
+    assert res["verdict"] != "BLOCK" and hits and "{srcdir}" in hits[0] and "{srcdir} → {src_dir}" in hits[0]
+    assert "可用: 卡分支主体 {worktree}, {commit_sha}, {tree_hash}" in hits[0] and "{worktree} ≡ {src_dir}" in hits[0]
 
 
 def test_item1_code_card_runtime_evidence_unchanged(vrig):
