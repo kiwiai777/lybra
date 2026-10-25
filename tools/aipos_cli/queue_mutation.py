@@ -1983,9 +1983,11 @@ def in_transit_declaration() -> dict[str, Any]:
             or not str(decl.get("ack_flag") or "").startswith("--")
             or not isinstance(decl.get("orphan_business_states"), list) or not decl["orphan_business_states"]
             or not set(decl["orphan_business_states"]) <= set(QUEUE_STATES)
+            or not isinstance(decl.get("supplementary_exempt_states"), list)
+            or not set(decl["supplementary_exempt_states"]) <= set(decl["orphan_business_states"])
             or not isinstance(texts, dict) or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in _IN_TRANSIT_TEXTS)):
         raise SchemaLoadError(f"transitions.schema.json queue_mutations.in_transit_guard(category ∈ adapter_response.ERROR_CATEGORIES / error_code / "
-                              f"ack_flag / orphan_business_states ⊆ 队列目录 / "
+                              f"ack_flag / orphan_business_states ⊆ 队列目录 / supplementary_exempt_states ⊆ orphan_business_states / "
                               f"texts.{list(_IN_TRANSIT_TEXTS)})未声明齐(AIPOS-F234)")
     return decl
 
@@ -2012,6 +2014,11 @@ def orphan_audit_state(repo_root: Path, task_id: str, metadata: dict[str, Any] |
     path, state = find_task_card(root, business)
     if path is None or state not in decl["orphan_business_states"]:
         return None
+    if state in decl["supplementary_exempt_states"]:  # 补充审计卡本就审已结案卡(AIPOS-F162), 不是孤儿
+        from tools.aipos_cli.audit_derivation import supplementary_audit_cards
+
+        if any(c["audit_task_id"] == tid for c in supplementary_audit_cards(root, business)):
+            return None
     bfm, _body = require_frontmatter(Path(path))
     by = str(bfm.get(supersede_declaration()["card_fields"]["by"]) or "").strip()
     superseded = texts["orphan_superseded"].format(by=by) if by else ""

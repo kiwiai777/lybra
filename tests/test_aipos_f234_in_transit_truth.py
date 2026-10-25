@@ -190,6 +190,11 @@ def test_item2_orphan_audit_next_status_withdraw_and_scan(rig: dict) -> None:
     _audit_card(gov, "AIPOS-T234YR", "AIPOS-T234Y", queue="pending")
     _claimed(gov, "AIPOS-T234Z")  # 业务卡仍在途 → 其审计卡不是孤儿
     _audit_card(gov, "AIPOS-T234ZR", "AIPOS-T234Z", queue="pending")
+    from tools.aipos_cli.audit_derivation import supplementary_audit_id
+
+    sup = supplementary_audit_id("AIPOS-T234Y", 1)  # 已结案卡的补充审计卡(AIPOS-F162)本就审已结案卡 → 不是孤儿
+    _card(gov, sup, "pending", assigned=AUDITOR, extra={"task_mode": "audit", "audit": "none", "derived_from": "AIPOS-T234Y",
+                                                       "reviewed_task_id": "AIPOS-T234Y", "supplementary_of": "AIPOS-T234Y"})
     _commit_all(repo, "orphan audit cards")
 
     step = derive_next_step("AIPOS-T234XR", gov)
@@ -211,7 +216,7 @@ def test_item2_orphan_audit_next_status_withdraw_and_scan(rig: dict) -> None:
     rc, out, err = _cli(gov, "queue", "orphan-audits")
     _show(f"[件②] 存量扫描预演 rc={rc}\n{out}")
     assert rc == 0 and "孤儿审计卡 AIPOS-T234XR(claimed)" in out and "孤儿审计卡 AIPOS-T234YR(pending)" in out
-    assert "AIPOS-T234ZR" not in out and "预演(未执行" in out
+    assert "AIPOS-T234ZR" not in out and sup not in out and "预演(未执行" in out
     assert (gov / "5_tasks/queue/claimed/aipos-t234xr.md").is_file()  # 预演零写入
     rc, _o, err = _cli(gov, "queue", "orphan-audits", "--confirm")
     assert rc == 2 and "--actor" in err
@@ -220,7 +225,7 @@ def test_item2_orphan_audit_next_status_withdraw_and_scan(rig: dict) -> None:
     assert rc == 0 and "孤儿审计卡 AIPOS-T234XR(claimed)已撤回" in out
     for card in ("aipos-t234xr", "aipos-t234yr"):
         assert (gov / f"5_tasks/queue/withdrawn/{card}.md").is_file()
-    assert (gov / "5_tasks/queue/pending/aipos-t234zr.md").is_file()
+    assert (gov / "5_tasks/queue/pending/aipos-t234zr.md").is_file() and (gov / f"5_tasks/queue/pending/{sup.lower()}.md").is_file()
     assert "队列写落账 orphan-audits" in _git(repo, "log", "-1", "--format=%s")
     rc, out, _ = _cli(gov, "queue", "orphan-audits")
     assert rc == 0 and "无孤儿审计卡" in out
