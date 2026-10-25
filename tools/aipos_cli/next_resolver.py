@@ -4571,6 +4571,28 @@ def render_legal_exit_lines(exits: dict[str, Any] | None) -> list[str]:
     return lines
 
 
+def _non_pass_exits(workspace_root: Path, task_id: str, fm: dict[str, Any], state_key: str, verdict_state: dict[str, Any] | None,
+                    recovery: dict[str, Any] | None, *, conn_arg: str | None) -> dict[str, Any]:
+    """推导核非通过分支的合法出口(出口命令 --actor / 信封 = 驱动方, 与 non_pass_recovery 同口径; 推荐 = recovery_exit_key 证据改判)。"""
+    rec, rec_why = recovery_exit_key(recovery)
+    return legal_exits(workspace_root, task_id, fm, state_key, verdict_state=verdict_state,
+                       actor=_driver_actor(workspace_root, connection_json=conn_arg),
+                       policy_ref=_driver_envelope_ref(workspace_root, task_id, fm, conn_arg) or "", recommended=rec, why=rec_why)
+
+
+def _candidate_fail_exits(workspace_root: Path, task_id: str, fm: dict[str, Any], state: dict[str, Any], derived: dict[str, Any], *,
+                          conn_arg: str | None) -> dict[str, Any]:
+    """固定候选 FAIL 两态的合法出口: deliverable = candidate_deliverable_fail; 未声明 fail_scope = evidence_overrides.fail_scope_undeclared 推荐。"""
+    deliverable = derived["action"]["type"] == candidate_fail_action_types()[1]
+    rec, why = None, ""
+    if not deliverable and not state["fail_scope"]["declared"]:
+        rule = legal_exits_declaration()["evidence_overrides"]["fail_scope_undeclared"]
+        rec, why = str(rule["exit"]), str(rule["why"])
+    return legal_exits(workspace_root, task_id, fm, "candidate_deliverable_fail" if deliverable else "candidate_fail",
+                       verdict_state={"verdict_id": state["verdict_id"]}, actor=_driver_actor(workspace_root, connection_json=conn_arg),
+                       policy_ref=_driver_envelope_ref(workspace_root, task_id, fm, conn_arg) or "", recommended=rec, why=why)
+
+
 def legal_exits_for_card(workspace_root: Path, task_id: str) -> dict[str, Any] | None:
     """AIPOS-F230 件①: loop status 读口——本卡此刻推导(derive_next_step, 唯一推导核)若处非通过状态 = 其 legal_exits; 否则 None。
     推导出错 = {error, text}(出声, 不吞)。"""
@@ -5392,22 +5414,12 @@ def _derive_next_step(
                     # AIPOS-F211 件④(gap #217): 固定候选验证卡 FAIL = 候选不合格 → 新候选另出验证卡 + 撤换本卡(不计连败, 不升 Owner);
                     # AIPOS-F227: 审计声明 fail_scope=deliverable = 同候选补正出口(返工命令读上行同一 recovery), 未声明 = 两出口并列
                     recovery = _non_pass_fail_recovery(workspace_root, task_id, fm, conn_arg=conn_arg)
-                    exit_actor = _driver_actor(workspace_root, connection_json=conn_arg)
-                    exit_policy = _driver_envelope_ref(workspace_root, task_id, fm, conn_arg) or ""
                     candidate_fail = candidate_fail_state(workspace_root, task_id, fm)
                     if candidate_fail is not None:
                         # AIPOS-F230 件①: 固定候选 FAIL 两态(candidate_fail / candidate_deliverable_fail)也列全部合法出口
                         derived = _derive_candidate_fail(task_id, candidate_fail, recovery)
-                        deliverable = derived["action"]["type"] == candidate_fail_action_types()[1]
-                        rec, rec_why = None, ""
-                        if not deliverable and not candidate_fail["fail_scope"]["declared"]:
-                            rule = legal_exits_declaration()["evidence_overrides"]["fail_scope_undeclared"]
-                            rec, rec_why = str(rule["exit"]), str(rule["why"])
-                        return _attach_legal_exits(derived, legal_exits(
-                            workspace_root, task_id, fm, "candidate_deliverable_fail" if deliverable else "candidate_fail",
-                            verdict_state={"verdict_id": candidate_fail["verdict_id"]}, actor=exit_actor, policy_ref=exit_policy,
-                            recommended=rec, why=rec_why))
-                    rec, rec_why = recovery_exit_key(recovery)
+                        return _attach_legal_exits(derived, _candidate_fail_exits(workspace_root, task_id, fm, candidate_fail, derived,
+                                                                                  conn_arg=conn_arg))
                     return _attach_legal_exits({
                         "task_id": task_id,
                         "derivable": False,
@@ -5421,8 +5433,8 @@ def _derive_next_step(
                                              + (f"; {recovery['choice']}; {recovery['paths']}" if recovery else "")),
                         "notes": f"N4: 裁决 {verdict_result},需人工处理",
                         **({"recovery": recovery} if recovery else {}),
-                    }, legal_exits(workspace_root, task_id, fm, "FAIL", verdict_state=non_pass_fail_state(workspace_root, task_id),
-                                   actor=exit_actor, policy_ref=exit_policy, recommended=rec, why=rec_why))
+                    }, _non_pass_exits(workspace_root, task_id, fm, "FAIL", non_pass_fail_state(workspace_root, task_id), recovery,
+                                       conn_arg=conn_arg))
             
             # N3→N4: 已派审但无 verdict → 等待审计体产物
             if latest_audit_dispatch and not latest_verdict:
@@ -5553,9 +5565,8 @@ def _derive_next_step(
                                   + (f"; {back_note}" if back_note else "")),
                     }
                     # AIPOS-F230 件①: 复核不通过时的全部合法出口(同主体返工 / 同轮补正 / 换新主体 / 改范围 / 撤卡)
-                    review_step = _attach_legal_exits(review_step, legal_exits(
-                        workspace_root, task_id, fm, "fast_lane_review_fail", actor=_driver_actor(workspace_root, connection_json=conn_arg)))
-                    return review_step
+                    return _attach_legal_exits(review_step, _non_pass_exits(workspace_root, task_id, fm, "fast_lane_review_fail", None, None,
+                                                                            conn_arg=conn_arg))
                 return {
                     "task_id": task_id,
                     "derivable": True,

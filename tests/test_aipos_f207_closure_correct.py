@@ -432,7 +432,10 @@ def test_declarations_single_source():
     mcp = [d for d in READ_TOOL_DESCRIPTORS + WRITE_TOOL_DESCRIPTORS if d["name"] == "lybra_mark_concluded"]
     # AIPOS-F221 件②: enum = 结论值域 + 复核打回返工(review_rework.outcome, 不结案, 不进结论值域; 唯一渲染 mark_concluded_outcome_choices)
     review_rework_outcome = verbs["lybra_mark_concluded"]["review_rework"]["outcome"]
-    assert len(mcp) == 1 and mcp[0]["inputSchema"]["properties"]["outcome"]["enum"] == [*conclusion_outcomes(), review_rework_outcome]
+    # AIPOS-F230 件④: + 同轮补正(same_round.outcome, 不结案)
+    same_round_outcome = verbs["lybra_mark_concluded"]["same_round"]["outcome"]
+    assert len(mcp) == 1 and mcp[0]["inputSchema"]["properties"]["outcome"]["enum"] == [*conclusion_outcomes(), review_rework_outcome,
+                                                                                        same_round_outcome]
     assert review_rework_outcome not in conclusion_outcomes()
     review = verbs["lybra_loop_status"]["next_action"]["advisor_review_close"]
     assert review["verbs"] == ["lybra_mark_concluded"] and review["end_reasons"] == ["manual_required"]

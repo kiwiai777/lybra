@@ -430,6 +430,36 @@ def test_item4_same_round_refused_once_audit_started(rig, monkeypatch):  # noqa:
     assert not got["ok"] and "SAME_ROUND_AUDIT_STARTED" in reason and "合法出口" in reason
 
 
+def test_item4_same_round_fast_lane_back_to_review(rig):  # noqa: F811
+    """快车道卡(LANTU-DEMO1 形态, 无独立审计): 复核前发现报告非终版 = 同轮补正, 不占返工轮; 补正重交回后回到顾问复核。"""
+    from tools.aipos_cli.autonomy_policy import build_autonomy_policy_markdown
+
+    _write(rig.gov / "5_tasks" / "policies" / f"{f221.POLICY}.md", build_autonomy_policy_markdown(
+        policy_id=f221.POLICY, agent_or_role="advisor", active_from="2026-01-01T00:00:00Z", expires_at="2999-01-01T00:00:00Z",
+        max_tasks=20, owner_approval_ref="fixture-envelope-f230", task_selector_task_mode="config", launch_harnesses=["pi"]))
+    f78._card(rig.gov, GOVC, "pending", task_mode="config",
+              extra={"harness": "claude-code", "audit": "none", "output_target": f"task_cards/{GOVC}/artifacts/",
+                     "lane": {"repo": "governance_root", "paths": [f"task_cards/{GOVC}/artifacts/"], "roles": ["executor"]}})
+    init_governance_repo(rig.gov)
+    seen: list[str] = []
+    f221._loop(rig, seen, lambda r: f221._report(r, "草稿"))
+    first = str(nr._read_task_records(rig.gov, GOVC)["latest_return"]["return_id"])
+    rc, out, err = _cli(["--workspace-root", str(rig.gov), "mark-concluded", "--task-id", GOVC, "--actor", DRIVER, "--report-path",
+                         f"task_cards/{GOVC}/RETURN.md", "--outcome", "same_round", "--focus-items", '["补完配置说明第 2 节"]', "--json"])
+    payload = json.loads(out)
+    _show(f"---- 件④ 快车道卡同轮补正 exit {rc} ----\n" + json.dumps(payload.get("data", {}).get("review_record"), ensure_ascii=False)[:800])
+    assert rc == 0 and payload["ok"] and not payload["data"]["linked_audits"]
+    wait = nr.derive_next_step(GOVC, rig.gov)
+    assert wait["action"]["type"] == "await_rework" and "回到顾问复核" in wait["suggested_action"]
+    seen2: list[str] = []
+    res2, text2 = f221._loop(rig, seen2, lambda r: f221._report(r, "终版"))
+    _show(f"---- 件④ 快车道卡补正后续跑 exit {res2.exit_code} reason {res2.reason} ----\n" + _quiet(text2))
+    back = nr.derive_next_step(GOVC, rig.gov)
+    assert seen2 == ["executor"] and f"run return @ same_round/claimed ({GOVC})" in text2
+    assert str(nr._read_task_records(rig.gov, GOVC)["latest_return"]["return_id"]) != first
+    assert back["verb"] == "lybra_mark_concluded" and not (f218._card_fm(rig.gov, GOVC).get("rework_rounds") or [])
+
+
 # ===========================================================================
 # 件⑤ supersede / withdraw 业务卡连带撤在途审计卡
 # ===========================================================================

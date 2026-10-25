@@ -580,7 +580,7 @@ lybra mark-concluded --task-id <卡ID> --actor <你的顾问实例> --report-pat
 - **同轮补正**(已交回、审计未开始——未派审或本轮审计卡还在 pending; 如送审前发现报告非终版): 不占返工轮, 本轮未认领审计卡同一操作撤回,
   执行体补正重写交回后 loop 重交回、门派下一轮取代被撤轮(快车道卡 = 回到你复核); 审计已认领 / 已出裁决 = 拒, 改走裁决后的出口:
 ```bash
-lybra mark-concluded --task-id <卡ID> --actor <你的顾问实例> --report-path <Return相对路径> --outcome same_round --focus-items '["<要补正的点>"]' --dry-run
+lybra mark-concluded --task-id <卡ID> --actor <你的顾问实例> --report-path <Return相对路径> --outcome same_round --focus-items '["<返工要点>"]' --dry-run
 ```
 - **撤换 / 撤卡连带撤审计卡**: `queue supersede` / `queue withdraw` 业务卡时, 其在途审计卡(pending / claimed)同一操作内一并撤回(预演列出,
   随业务卡落账), 不再逐张手工撤。
