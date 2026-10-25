@@ -1285,7 +1285,9 @@ def _sim_residual(governance_root: Path, run: dict[str, Any], texts: dict[str, A
     common = f"--run-dir {run['run_dir']} --expect-fingerprint {entry.get('host_fingerprint') or '<hfp1 指纹>'}"
     sim_delete = (vr.helper_pipe_command(governance_root, run["ssh_alias"], f"sim-delete {common}", entry, vrun) if run["ssh_alias"]
                   else vr.helper_local_command(governance_root, f"sim-delete {common}", entry, vrun))
-    run_finish = (f"lybra --workspace-root {governance_root} project validation-root run-finish --id {entry['id']} --run-id {vrun['run_id']} "
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    run_finish = (f"{lybra_command_prefix(governance_root)} project validation-root run-finish --id {entry['id']} --run-id {vrun['run_id']} "
                   "--sim-evidence <simulator.json 在治理根所在机的副本> --confirm --actor <顾问实例>")
     line = str(texts["sim_residual"]).format(name=sim.get("name"), udid=sim.get("udid"), host=run["host"], run_id=vrun["run_id"],
                                              sim_delete=sim_delete, run_finish=run_finish, task_id=task_id)
