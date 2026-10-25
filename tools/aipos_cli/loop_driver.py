@@ -1967,7 +1967,7 @@ def _drive(
                     launch_card = audit_card
                     if audit_action.get("type") == evidence_loop["derivation_action"]:
                         # AIPOS-F162 件①: 报告被运行证据硬门拒收 = 审计产物不合格 → 让审计体补做(拒因附开工/手工提示); 同一运行内
-                        # 对同一审计卡因此拉起超过声明上限 = 结束(runtime_evidence_exhausted, loop status 判 owner_needed = 连败上限)
+                        # 对同一审计卡因此拉起超过声明上限 = 结束(runtime_evidence_exhausted; AIPOS-F233 件⑤: loop status 档位归第三档 advisor_fix)
                         seen = evidence_rejected.setdefault(audit_card, set())
                         seen.add(_report_fingerprint(audit_action.get("path")))
                         rework_note = str(audit_derivation.get("suggested_action") or "")

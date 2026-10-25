@@ -1567,7 +1567,7 @@
         },
         "loop": {
           "derivation_action": "evidence_rework",
-          "rule": "推导核对 claimed 审计卡已就绪报告先核本节判据, 不过 = 不可推导 action.type=evidence_rework(triggered_by=auditor, 非硬停, 不升 Owner): loop 等审计体并拉起它补做, 拒因原文附在开工提示与手工提示后; 等待中报告被改写仍不过 = 唤醒重判。同一运行内对同一审计卡因本拒因拉起超过 relaunch_cap 次 = 结束原因 exhausted_end_reason(verbs.schema lybra_loop_status.next_action.by_end_reason 判 owner_needed, 即连败上限)",
+          "rule": "推导核对 claimed 审计卡已就绪报告先核本节判据, 不过 = 不可推导 action.type=evidence_rework(triggered_by=auditor, 非硬停, 不升 Owner): loop 等审计体并拉起它补做, 拒因原文附在开工提示与手工提示后; 等待中报告被改写仍不过 = 唤醒重判。同一运行内对同一审计卡因本拒因拉起超过 relaunch_cap 次 = 结束原因 exhausted_end_reason(verbs.schema lybra_loop_status.next_action.by_end_reason 判 owner_needed, 即连败上限; AIPOS-F233 件⑤: 档位守卫 lybra_owner_inbox.tiers.loop_reasons 归第三档 advisor_fix, 不进 Owner 收件箱, 顾问换审计体 / 修环境 / 修声明)",
           "relaunch_cap": 2,
           "exhausted_end_reason": "runtime_evidence_exhausted",
           "declaration_invalid_action": "evidence_declaration_invalid",
