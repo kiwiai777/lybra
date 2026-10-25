@@ -276,7 +276,8 @@ def test_declarations_single_source_and_fail_closed():
     assert decl["max_per_run"] == 1 and decl["end_reason"] in run_decl["end_reasons"]
     assert rules["by_end_reason"][decl["end_reason"]] == "advisor_fix"
     assert any("{header_fix_prompt}" in s for s in rules["routine_rejections"]["end_reasons"][decl["end_reason"]]["fix"])
-    assert rules["routine_rejections"]["return_header_probe"]["end_reasons"] == ["artifact_invalid"]
+    # AIPOS-F232 件②: 报告头读不出(frontmatter_unreadable)同经此复核(清单只追加)
+    assert rules["routine_rejections"]["return_header_probe"]["end_reasons"] == ["artifact_invalid", "frontmatter_unreadable"]
     assert set(header_fix_declaration()["correctable_kinds"]) == {"missing", "mismatch", "form", "contract_misuse"}
     broken = json.loads(json.dumps(contract))
     broken["launch"]["report_fix"]["executor"]["prompt"] = "no placeholders"

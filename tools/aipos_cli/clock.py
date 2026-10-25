@@ -5,7 +5,8 @@
 tests/test_aipos_f109_records_clock_runall.py 以 git grep 守)。
 
 格式声明只在本模块常量一处(ISO_Z_FORMAT / SLUG_FORMATS)。落盘格式与改造前逐字节一致(存量兼容):
-  - ISO 输出 = 秒精度、UTC 以 `Z` 结尾(`2026-10-06T06:14:45Z`)——原 `.replace(microsecond=0).isoformat().replace("+00:00", "Z")`。
+  - ISO 输出 = 秒精度、UTC 以 `Z` 结尾(`2026-10-06T06:14:45Z`)——原 `.replace(microsecond=0).isoformat().replace("+00:00", "Z")`;
+    AIPOS-F232: 须同秒可区分的时刻另用 iso_ms(毫秒精度 `2026-10-06T06:14:45.123Z`), 读侧解析比较。
   - slug 式样按名取(既有落盘名各式并存, 只收口实现不改式样; 新式样只许加进 SLUG_FORMATS)。
 零依赖(只用标准库), 不 import 产品其他模块。
 """
@@ -47,6 +48,13 @@ def iso_z(moment: datetime | None = None) -> str:
     """ISO 输出: 秒精度, UTC 写作 `Z`。moment 缺省 = 当前 UTC。"""
     value = utc_now() if moment is None else moment
     return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def iso_ms(moment: datetime | None = None) -> str:
+    """AIPOS-F232 件⑤: ISO 输出毫秒精度(UTC, `Z` 结尾, 如 `2026-10-25T04:11:49.123Z`)——同秒两写须可区分的时刻(顾问复核记录时刻 /
+    返工轮登记时刻)。读侧比较一律解析成时刻(秒级存量记录 `…49Z` 视同 `…49.000Z`), 不按字符串比。moment 缺省 = 当前 UTC。"""
+    value = utc_now() if moment is None else moment
+    return value.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 #: ISO 文本入参的压缩法(只对这两种式样; 与改造前手写的 `.replace("-", "").replace(":", "")…` 逐字节一致, 含非规范输入)。

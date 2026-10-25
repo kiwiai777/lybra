@@ -363,6 +363,12 @@ Owner 对你口头说了裁决, 由你落记录(写明你转达、Owner 原话)�
 ```bash
 lybra loop note --task-id <卡ID> --workspace-root <治理根> --actor <你的顾问实例> --ask "<要定什么>" --owner-reason <第一档事由键> --options <键=标签> --recommend "<建议>"
 ```
+   **撤回自己过时 / 发错的请求**(AIPOS-F232): 原请求留档, 只追加撤回字段; 只许补写人本人(`--actor` = 当初补写的实例)、该事项未被 Owner 裁决
+   (已裁决 = 按裁决续跑, 拒 exit 7); 写入后收件箱该项消失。F225 前写的请求(无第一档事由)已自动降为第二档告知「旧请求, 可撤回」(不计待定),
+   事项文案里带这条撤回命令:
+```bash
+lybra loop note --task-id <卡ID> --workspace-root <治理根> --actor <你的顾问实例> --retract --retract-reason "<一句话理由>" --confirm
+```
 2. **Owner 看收件箱**(只读; 看板 /owner/inbox 同一数据; project.json `status: paused` 的项目缺省不列, `--include-paused` 可看;
    `--stale-before <日期>` = 遗留视图: 按项目分组每项一行「卡 / 标题 / 卡住原因 / 建议: 撤回 | 冻结为历史 | 保留」, 并给同建议的批量裁决命令):
 ```bash
@@ -648,7 +654,9 @@ lybra audit-verdict --reviewed-task-id <卡ID> --verdict PASS \
 **何时用**:每个项目 Owner 签一次授权(车道 × 任务类型 × 驱动方 / 允许主机 / 拉起 / 到期 + 总卡数 / 禁区, 禁区缺省全禁), 范围内 `lybra loop` 自动覆盖, 不再逐卡逐周签信封。
 覆盖判定优先级: 项目授权先判; 未覆盖才兼容未迁移的旧信封; 已迁入授权的旧信封 = superseded(不挑中、不消耗, 文件不改不删)。总卡数按业务卡计(审计 / 返工派生不另扣, 同信封)。
 **越界**(车道 / 任务类型 / 驱动方 / 主机 / 禁区 / 总额 / 到期)= loop 结束原因 `authorization_out_of_bound` → `owner_needed`, 结束原文点名越界维度 + 一次扩大授权命令;
-收件箱事项选项 = 「扩大项目授权」(一次裁决同时落授权新修订)/ 不批准 / 暂停。用到 80% 或到期前 3 天 = 告知(不阻塞)。验证根声明主机在授权内 = 免 `--owner-ref`。
+收件箱事项选项 = 「扩大项目授权」(一次裁决同时落授权新修订)/ 不批准 / 暂停。用到 80% 或到期前 3 天 = 告知(不阻塞; AIPOS-F232: `lybra loop status`
+(运行用的是该授权)/ `lybra brief` / 收件箱第二档各一行, 附 `lybra project grant extend …` 扩大命令, 原样转 Owner)。验证根声明主机在授权内 = 免 `--owner-ref`。
+全新项目(未签授权、也无信封目录)工位接入推导报「本项目尚未签项目授权」并给 `grant sign` 命令(不再误报「信封目录不存在」)。
 **Owner 亲自敲**(`--confirm` 经门 owner_decision_record, Owner 凭据); 不带 `--confirm` = 本地预演(零写入, 授权修订全文可见):
 ```bash
 lybra project grant show --workspace-root <项目根>

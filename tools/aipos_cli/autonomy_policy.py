@@ -1879,6 +1879,44 @@ def authorization_overview(governance_root: Path | str, *, now: datetime | None 
     return out
 
 
+def authorization_notice_command(governance_root: Path | str, row: dict[str, Any], *, now: datetime | None = None) -> str:
+    """AIPOS-F232 件③: 告知行的扩大授权建议命令(唯一渲染; 收件箱告知 / loop status / brief 同读): 总卡数 + max(1, ceil(extend.quota_step_ratio ×
+    原总卡数)), 到期 = 现在 + extend.expiry_days 天(声明 project_authorization.extend)。row = authorization_overview 的一行。"""
+    import math
+    from datetime import timedelta
+
+    from tools.aipos_cli.clock import iso_z
+
+    decl = project_authorization_declaration()
+    total = int(row.get("max_tasks") or 0)
+    step = max(1, math.ceil(float(decl["extend"]["quota_step_ratio"]) * total))
+    later = iso_z(((now or utc_now()) + timedelta(days=int(decl["extend"]["expiry_days"]))).replace(microsecond=0))
+    return render_authorization_command(governance_root, "extend", [f"--max-tasks {total + step}", f"--expires-at {later}"])
+
+
+def authorization_warnings(governance_root: Path | str, *, now: datetime | None = None,
+                           authorization_id: str | None = None) -> list[dict[str, Any]]:
+    """AIPOS-F232 件③(F224 执行体自报: loop status / brief 预警只认信封): 有告知(authorization_notices: 已用 ≥ notice.used_ratio / 到期前
+    notice.expiry_days 天)的项目授权各一行 {authorization_id, revision, why, command, line, used, max_tasks, expires_at, drivers}; line =
+    messages.notice + 扩大命令(authorization_notice_command)。authorization_id 给定 = 只看该份。brief / loop status / 收件箱告知同读, 判定只在
+    authorization_notices。"""
+    decl = project_authorization_declaration()
+    out: list[dict[str, Any]] = []
+    for row in authorization_overview(governance_root, now=now):
+        if authorization_id and str(row["authorization_id"]) != str(authorization_id):
+            continue
+        if not row.get("notices"):
+            continue
+        aid, why = str(row["authorization_id"]), "; ".join(row["notices"])
+        command = authorization_notice_command(governance_root, row, now=now)
+        line = decl["messages"]["notice"].format(authorization_id=aid, why=why) + f"; 扩大授权(Owner 执行): {command}"
+        out.append({"authorization_id": aid, "revision": row.get("revision"), "why": why, "command": command, "line": line,
+                    "used": row.get("used"), "max_tasks": row.get("max_tasks"), "expires_at": row.get("expires_at"),
+                    "notices": list(row["notices"]),
+                    "drivers": sorted({d for lane in row.get("lanes") or [] for d in lane.get("drivers") or []})})
+    return out
+
+
 # ---- 写: 授权块(签发 / 扩大 / 撤销)构造与校验 + owner_decision_record 同一写路径 -------------------------------------------------
 
 def authorization_block(

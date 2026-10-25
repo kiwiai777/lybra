@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime, timezone
-from tools.aipos_cli.clock import iso_z
+from tools.aipos_cli.clock import iso_ms, iso_z
 from tools.aipos_cli.record_writer import record_dir
 from pathlib import Path
 from typing import Any
@@ -1614,8 +1614,8 @@ def build_rework_round(
         else:  # AIPOS-F225 件②: 第二档自动追加(卡面候选 / 验收 / 范围自发布起未变, 轮次 ≤ 硬上限)
             auto_release = auto
 
-    # 4. 构建新返工轮次
-    now_iso = iso_z()
+    # 4. 构建新返工轮次(AIPOS-F232 件⑤: 登记时刻毫秒精度 clock.iso_ms——与同秒的下一次复核可区分; 读侧解析比较, 秒级存量照读)
+    now_iso = iso_ms()
     new_round = {
         "round": next_round,
         "verdict_ref": verdict_ref,

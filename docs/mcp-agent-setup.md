@@ -61,6 +61,16 @@ overwritten:
    `.lybra/connection.json` then holds one credential per instance (re-enrolling one instance retires only that instance's old
    credential), and `.lybra/role` keeps one record per instance under `instances.<instance>` (declared in
    `schema/config.schema.json` `configuration_sources.role.schema.instances`).
+   **Project standing grant first (AIPOS-F224 / F232).** A project normally needs a single Owner signature instead of per-advisor
+   envelopes: `lybra project grant sign --workspace-root <governance root> --grant-lane <repo>:<mode>[,<mode>…]:<advisor instance>
+   --host <host> [--launch-harness pi] --max-tasks <total cards> --expires-at <ISO>` (no `--confirm` = local preview, zero writes;
+   `--confirm --connection-json <Owner connection.json>` signs it through the gate). `lybra project grant show` lists it with usage
+   and notices; `grant extend` widens it, `grant revoke` withdraws it, `grant draft --from-envelopes` merges in-use envelopes into one
+   draft. Inside the grant `lybra loop` is covered with no envelope; at 80% of the total or 3 days before expiry `lybra loop status`,
+   `lybra brief` and the Owner inbox each show one notice line with the `grant extend` command (not blocking); out of bounds = the
+   loop stops with `authorization_out_of_bound` and the inbox offers "extend the project grant". A brand-new project with neither a
+   grant nor an envelope directory is told to sign a grant (not "envelope directory missing"). Envelopes below keep working for
+   projects that have not migrated.
 2. **Sign one envelope per advisor, limited to its lane.** `lybra envelope mint --confirm --policy-id <id> --agent-or-role
    <advisor instance> --task-mode code --lane-repo <repo name> …` — `--lane-repo` takes a repo name from the project's
    `project.json` `repos.items` (the path of `code_repo` when the project declares no repos list); a value that does not resolve

@@ -157,12 +157,15 @@ def derive_effective_owner_policy_ref(
     """
     if not governance_root:
         return None, "无 governance_root(自包含码未携带且 connection.json 未声明), 无法推导信封"
-    from tools.aipos_cli.autonomy_policy import policies_dir, select_envelope
+    from tools.aipos_cli.autonomy_policy import authorization_ids, authorizations_dir, policies_dir, select_envelope
 
     root = Path(governance_root).expanduser()
     pdir = policies_dir(root)
-    if not pdir.is_dir():
-        return None, f"信封目录不存在: {pdir}"
+    if not pdir.is_dir() and not authorization_ids(root):
+        # AIPOS-F232 件③(F224 执行体自报): 全新项目(无信封目录、也未签项目授权)= 说「尚无授权」, 不报「信封目录不存在」;
+        # 有项目授权而无信封目录 = 照常经 select_envelope(项目授权优先)判覆盖
+        return None, (f"本项目尚未签项目授权(授权目录 {authorizations_dir(root)} 无授权), 也无旧信封; "
+                      "请 Owner 签项目授权(lybra project grant sign … 预演后 --confirm)")
     identities: list[tuple[str | None, str | None, str | None]] = []
     if str(agent_instance or "").strip():
         identities.append((agent_instance, agent_instance, None))
@@ -187,6 +190,17 @@ def envelope_mint_exit(governance_root: Path | str | None, covers: str) -> str:
     return (f"lybra envelope mint --workspace-root {where} --connection-json <Owner 凭据 connection.json> "
             f"--policy-id <信封ID> --agent-or-role {shlex.quote(str(covers))} --max-tasks <N> --task-mode <任务类型> "
             "--expires-at <ISO 到期时间> --decision-summary <说明> --actor owner --dry-run")
+
+
+def _grant_sign_exit(governance_root: Path | str | None, covers: str) -> str:
+    """AIPOS-F232 件③: 接入缺覆盖时的项目授权出口(签发命令唯一渲染 autonomy_policy.render_authorization_command; 车道 / 类型 / 主机 / 总卡数 /
+    到期由 Owner 填)。"""
+    import shlex
+
+    from tools.aipos_cli.autonomy_policy import render_authorization_command
+
+    return render_authorization_command(governance_root or "<治理根>", "sign", [
+        f"--grant-lane <仓> --task-mode <任务类型> --driver {shlex.quote(str(covers))}", "--host <主机>", "--max-tasks <总卡数> --expires-at <到期>"])
 
 
 def enroll_envelope_requirement(
@@ -225,7 +239,8 @@ def enroll_envelope_requirement(
         refusal = (
             f"{ENROLL_ENVELOPE_MISSING}: enroll 推导 owner_policy_ref 失败——接入 {role}(类={role_class}, 实例 "
             f"{agent_instance or '-'})须有覆盖它的生效 PreAuthorized 信封(owner_autonomy_policy): {reason}。已拒: {state}。\n"
-            "下一步: 请 Owner 先铸信封(预演后 --confirm), 再重跑本接入命令:\n"
+            "下一步: 请 Owner 先签项目授权(AIPOS-F224, 优先; 预演后 --confirm)或铸信封, 再重跑本接入命令:\n"
+            f"  {_grant_sign_exit(governance_root, agent_instance or role)}\n"
             f"  {envelope_mint_exit(governance_root, agent_instance or role)}"
         )
     return {"required": required, "policy_id": policy_id, "reason": reason, "refusal": refusal}

@@ -3479,6 +3479,10 @@ def build_parser() -> argparse.ArgumentParser:
     loop_note_parser.add_argument("--owner-reason", default=None, metavar="TIER1_KEY",
                                   help="AIPOS-F225: 第一档事由(键 = verbs.schema lybra_owner_inbox.tiers.tier1.reasons); --ask 必带, "
                                        "缺 / 不在清单 = 拒写(技术故障归顾问自处理)")
+    # AIPOS-F232 件①: 顾问撤回本人补写的 Owner 请求(原请求留档, 追加撤回字段; 声明 verbs.schema lybra_loop_note)
+    loop_note_parser.add_argument("--retract", action="store_true", default=False,
+                                  help="AIPOS-F232: 撤回本人补写的 Owner 请求(只许补写人本人、事项未被 Owner 裁决; 原请求留档); 与 --ask / --grant-* 互斥")
+    loop_note_parser.add_argument("--retract-reason", default=None, help="AIPOS-F232: 撤回理由(一句话, 可选)")
     loop_note_parser.add_argument("--confirm", action="store_true", default=False, help="写入并落账; 缺省预演")
     loop_note_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output JSON")
 
