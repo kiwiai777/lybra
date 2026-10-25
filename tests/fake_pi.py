@@ -60,6 +60,8 @@ def launch(argv: list[str]) -> int:
     if resumes:
         Path(log, f"{card}.resume{resumes}.prompt").write_text(prompt, encoding="utf-8")
     os.environ["FAKE_PI_RESUMES"] = str(resumes)
+    if "--session-id" in argv:  # AIPOS-F231: 假 harness 写会话记录用同一会话 id(真实 pi 的文件名 <时刻>_<会话 id>.jsonl)
+        os.environ["FAKE_PI_SESSION_ID"] = argv[argv.index("--session-id") + 1]
     os.environ["FAKE_PI_PROMPT"] = prompt if resumes else ""  # AIPOS-F204: the resume instruction (report-header fix values)
     os.execv(sys.executable, [sys.executable, str(FAKE_HARNESS), kickoff])
     return 0  # 不可达(execv 替换进程)

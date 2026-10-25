@@ -84,7 +84,7 @@ def test_item1_tier_mapping_guard_rejects_unmapped(monkeypatch):
     _show("---- ① 档位映射(收件箱类别 → 档位)----\n" + "\n".join(f"  {k}: {v}" for k, v in sorted(tiers["categories"].items())))
     assert owner_needed <= set(tiers["loop_reasons"]) and set(tiers["categories"]) == set(oi.CATEGORIES)
     assert set(tiers["tier1"]["reasons"]) == {"direction_fork", "rescope", "beyond_authority", "over_budget", "withdraw",
-                                              "rework_cap_exceeded", "advisor_audit_conflict", "owner_check"}
+                                              "rework_cap_exceeded", "advisor_audit_conflict", "owner_check", "paused"}  # AIPOS-F231 件①: 已暂停(只追加)
     for key in ("gate_rejected", "landing_rejected", "verb_not_authorized", "manual_required", "wait_timeout", "runtime_evidence_exhausted",
                 "card_owner_mismatch", "consecutive_failures", "routine_fix_exhausted"):
         assert tiers["loop_reasons"][key]["tier"] == 3 and tiers["loop_reasons"][key]["action"] in ("advisor_fix", "investigate")
@@ -345,14 +345,14 @@ def test_item6_inbox_counts_before_after_with_chris_like_distribution(rig, monke
 
     def run(task: str, reason: str) -> None:
         f78._card(rig.gov, task, "claimed", extra={"claimed_by": "exec.lybra.test", "claimed_at": "'2026-10-01T00:00:00Z'"})
-        for _ in range(2 if reason == "max_steps_exhausted" else 1):
+        for _ in range(2 if reason == "launch_early_exit" else 1):
             rec = LoopRunRecorder(rig.gov, task, driver=DRIVER, contract=load_loop_contract(), warn=lambda _t: None)
             rec.end(outcome=reason, exit_code=4, reason=reason, message=f"fixture {reason}")
 
     for n in range(3):
         run(f"PROBE-F225-ASK{n}", "manual_required")
     for n in range(2):
-        run(f"PROBE-F225-CF{n}", "max_steps_exhausted")  # 连续 2 次 investigate 类 = 原 consecutive_failures(owner_needed)
+        run(f"PROBE-F225-CF{n}", "launch_early_exit")  # 连续 2 次 investigate 类 = 原 consecutive_failures(owner_needed); AIPOS-F231 件⑥: max-steps 不再计连败
     for n in range(3):
         run(f"PROBE-F225-AB{n}", "audit_blocked_repeated")
     init_governance_repo(rig.gov)

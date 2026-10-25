@@ -528,6 +528,7 @@ class LaunchPlan:
     session_id: str = ""
     resume_max: int = 0
     resume_prompt: str = ""
+    resumed_session: bool = False  # AIPOS-F180B / F231: 本计划 = 续接已有会话(修报告头), 开局已在会话里, 不再做开局体积估算
 
     def append_kickoff_note(self, note: str) -> None:
         """AIPOS-F162 件①: 开工提示后附一段(拒因补做); argv 中整参数 kickoff 同步替换(跨机 kickoff 经 stdin 读 self.kickoff)。"""
@@ -761,6 +762,7 @@ def plan_launch(governance_root: Path, card: str, *, policy: dict[str, Any] | No
         return refuse("--no-launch")
     if card in already_launched and not resume_session:
         return refuse(f"本次 loop 运行已拉起过 {card}, 不自动重试(重跑 loop = 显式再拉起)")
+    plan.resumed_session = bool(resume_session)
     try:
         template = launchable_harnesses().get(plan.harness)
     except SchemaLoadError as exc:
@@ -948,6 +950,181 @@ def _charter_before_launch(index: int, step: LoopStep, plan: LaunchPlan, governa
     return True
 
 
+def context_budget_declaration(contract: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F231 件⑤: verbs.schema lybra_loop.launch.context_budget(fail-closed: 键齐 / 比例 ∈ (0,1] / 窗口与系数为正)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = (launch_declaration(contract).get("context_budget"))
+    keys = ("bytes_per_token", "safe_ratio", "default_window_tokens", "model_windows", "harness_overhead_tokens", "charter_files",
+            "remote_charter_bytes", "compact_heading", "compact_note", "end_reason", "line")
+    if not isinstance(decl, dict) or any(k not in decl for k in keys):
+        raise SchemaLoadError(f"verbs.schema.json verbs.{LOOP_VERB}.launch.context_budget 未声明齐 {list(keys)}")
+    if (not 0 < float(decl["safe_ratio"]) <= 1 or float(decl["bytes_per_token"]) <= 0 or int(decl["default_window_tokens"]) <= 0
+            or not isinstance(decl["model_windows"], dict) or decl["end_reason"] not in contract["run_record"]["end_reasons"]):
+        raise SchemaLoadError(f"verbs.schema.json verbs.{LOOP_VERB}.launch.context_budget: safe_ratio ∈ (0,1], 系数 / 窗口为正, end_reason 须已声明")
+    return decl
+
+
+def early_exit_declaration(contract: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F231 件④: verbs.schema lybra_loop.launch.early_exit(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = launch_declaration(contract).get("early_exit")
+    keys = ("retry_statuses", "max_retries", "base_seconds", "factor", "max_seconds", "status_pattern", "length_stop_reason",
+            "error_stop_reason", "excerpt_chars", "kinds", "end_reasons", "retry_prompt", "line")
+    if not isinstance(decl, dict) or any(k not in decl for k in keys):
+        raise SchemaLoadError(f"verbs.schema.json verbs.{LOOP_VERB}.launch.early_exit 未声明齐 {list(keys)}")
+    ends = decl["end_reasons"]
+    if (not isinstance(ends, dict) or set(ends) != {"provider", "context"} or any(v not in contract["run_record"]["end_reasons"] for v in ends.values())
+            or int(decl["max_retries"]) < 0 or float(decl["base_seconds"]) <= 0 or float(decl["factor"]) < 1 or float(decl["max_seconds"]) <= 0
+            or "{artifact}" not in str(decl["retry_prompt"])):
+        raise SchemaLoadError(f"verbs.schema.json verbs.{LOOP_VERB}.launch.early_exit: end_reasons 须恰为 provider / context 且已声明, "
+                              "重试次数 ≥0、退避秒数为正、factor ≥1, retry_prompt 须含 {artifact}")
+    return decl
+
+
+def provider_backoff_seconds(early: dict[str, Any], attempt: int) -> float:
+    """第 attempt(1 起)次退避秒数 = min(max_seconds, base_seconds × factor^(attempt-1))(唯一算法)。"""
+    return min(float(early["max_seconds"]), float(early["base_seconds"]) * float(early["factor"]) ** max(0, attempt - 1))
+
+
+def context_budget_check(governance_root: Path, plan: LaunchPlan, budget: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F231 件⑤ 开局上下文估算(唯一实现, 只读): 开工稿 + 工位章程(charter_files; 跨机 = remote_charter_bytes)+ 必读件(本卡卡面)
+    字节 / bytes_per_token 向上取整 + harness 开销, 对模型窗口(model_windows.<模型>, 缺 = default_window_tokens)× safe_ratio。
+    → {ok, estimate, limit, window, model, parts{kickoff, charter, cards, overhead}}(单位 = 词元)。"""
+    import math
+
+    per = float(budget["bytes_per_token"])
+
+    def tokens(n: int) -> int:
+        return int(math.ceil(n / per)) if n > 0 else 0
+
+    kickoff = len(str(plan.kickoff or "").encode("utf-8"))
+    charter = 0
+    if plan.location.get("transport") == "remote":
+        charter = int(budget["remote_charter_bytes"])
+    else:
+        for name in budget["charter_files"]:
+            path = Path(plan.cwd or ".") / str(name)
+            if path.is_file():
+                charter += path.stat().st_size
+    task_path, _queue = _find_task_in_queue(governance_root, plan.card)
+    cards = Path(task_path).stat().st_size if task_path and Path(task_path).is_file() else 0
+    overhead = int((budget["harness_overhead_tokens"] or {}).get(plan.harness) or 0)
+    model = str((plan.model or {}).get("model") or "")
+    window = int((budget["model_windows"] or {}).get(model) or budget["default_window_tokens"])
+    parts = {"kickoff": tokens(kickoff), "charter": tokens(charter), "cards": tokens(cards), "overhead": overhead}
+    estimate = sum(parts.values())
+    limit = int(window * float(budget["safe_ratio"]))
+    return {"ok": estimate <= limit, "estimate": estimate, "limit": limit, "window": window,
+            "model": model or "(pi 缺省, 未声明窗口)", "parts": parts,
+            "line": str(budget["line"]).format(estimate=estimate, kickoff=parts["kickoff"], charter=parts["charter"], cards=parts["cards"],
+                                               overhead=overhead, model=model or "(pi 缺省)", window=window, ratio=budget["safe_ratio"], limit=limit)}
+
+
+def _context_before_launch(index: int, step: LoopStep, plan: LaunchPlan, governance_root: Path, result: LoopResult, *,
+                           contract: dict[str, Any], say: Callable[[str], None], recorder: LoopRunRecorder) -> bool:
+    """AIPOS-F231 件⑤: 首次拉起前开局体积守卫(挂在唯一拉起口 _launched_wait 起点, 章程判定之后)。返回 True = 不拉起, loop 以 result 出口返回。
+    超上限 = 先精简(开工稿首个 compact_heading 起各节存运行记录旁 <run_id>.kickoff-<卡>.log, 开工稿只留头部 + 路径; 跨机不精简), 仍超 = 拒拉起。"""
+    budget = context_budget_declaration(contract)
+    check = context_budget_check(governance_root, plan, budget)
+    entry = {"card": plan.card, "estimate": check["estimate"], "limit": check["limit"], "window": check["window"], "model": check["model"],
+             "parts": check["parts"], "kickoff_file": None}
+    if check["ok"]:
+        recorder.context_check({**entry, "outcome": "ok"})
+        return False
+    heading = str(budget["compact_heading"])
+    cut = plan.kickoff.find("\n" + heading)
+    if plan.location.get("transport") != "remote" and cut > 0:
+        saved = recorder.path.with_name(f"{recorder.run_id}.kickoff-{plan.card}.log")
+        rest = plan.kickoff[cut + 1:]
+        saved.write_text(plan.kickoff, encoding="utf-8")
+        note = str(budget["compact_note"]).format(bytes=len(rest.encode("utf-8")), path=saved)
+        old = plan.kickoff
+        plan.kickoff = f"{old[:cut]}\n\n{note}"
+        plan.argv = [plan.kickoff if a == old else a for a in plan.argv]
+        compact = context_budget_check(governance_root, plan, budget)
+        say(f"[{index}] context: {check['line']} → 超上限, 已精简(大节存 {saved}, 开工稿只给路径): {compact['line']}")
+        entry.update({"kickoff_file": str(saved), "estimate": compact["estimate"], "parts": compact["parts"]})
+        if compact["ok"]:
+            recorder.context_check({**entry, "outcome": "compacted"})
+            return False
+        check = compact
+    recorder.context_check({**entry, "outcome": "refused"})
+    msg = (f"开局上下文超出模型窗口安全上限, 不拉起 {plan.harness}({plan.card}): {check['line']}"
+           + (f"(已精简, 大节存 {entry['kickoff_file']})" if entry["kickoff_file"] else "(开工稿无可精简的大节 / 跨机工位不精简)")
+           + "; 出口: 精简工位章程 / 卡面必读件 / 开工稿, 或声明窗口更大的模型(project.json execution.pi_models)后用原命令续跑 loop")
+    step.ok, step.message = False, msg
+    step.launch = {**(step.launch or {}), "launched": False, "refusal": msg}
+    say(f"[{index}] exit {exit_code_for(contract, 'not_derivable')} — {msg}")
+    result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), msg
+    result.reason = str(budget["end_reason"])
+    return True
+
+
+def _backoff_wait(governance_root: Path, recorder: LoopRunRecorder, seconds: float) -> bool:
+    """AIPOS-F231 件④: 401 / 429 退避等待——经唯一等待原语 agent_watch_fs.run_fs_watch(等的是本运行停线请求文件; 禁 sleep 自旋),
+    至多 seconds 秒。返回 True = 等待中收到停线请求(调用方按停线收口)。"""
+    from tools.aipos_cli.agent_watch_fs import run_fs_watch
+    from tools.aipos_cli.loop_run_record import stop_request_path
+
+    target = stop_request_path(recorder.path)
+    sink = io.StringIO()
+    with contextlib.redirect_stdout(sink):
+        run_fs_watch(_watch_args(recorder.dir, [target.name], max_wait=max(0.1, float(seconds)), interval=0.2),
+                     expect_ready=lambda _m: recorder.stop_request() is not None)
+    return recorder.stop_request() is not None
+
+
+def card_paused_stop(governance_root: Path, task_id: str) -> dict[str, Any] | None:
+    """AIPOS-F231 件①: 本卡已被 Owner 暂停(判定唯一 owner_inbox.card_pause_state)→ 推导硬停形(derivable False, action.type = end_reason paused,
+    suggested_action = 恢复命令); 否则 None。loop 起跑 / 每步推导前与 lybra next --task-id 同读。读不出 = 向上(fail-closed)。"""
+    from tools.aipos_cli.owner_inbox import card_pause_state
+
+    pause = card_pause_state(Path(governance_root), task_id)
+    if pause is None:
+        return None
+    reason = pause["end_reason"]
+    return {"task_id": task_id, "derivable": False, "current_node": None, "current_state": reason, "triggered_by": "owner", "command": "",
+            "verb": "", "missing_records": [pause["line"]], "suggested_action": pause["resume_command"],
+            "notes": "AIPOS-F231 件①: Owner 暂停本卡 = 暂停期间 loop 与顾问不续跑(声明 verbs.schema lybra_queue_pause)", "pause": pause,
+            "action": {"type": reason, "card": task_id, "end_reason": reason}}
+
+
+def _stop_requested_end(index: int, governance_root: Path, result: LoopResult, *, contract: dict[str, Any], recorder: LoopRunRecorder,
+                        say: Callable[[str], None], steps: list[LoopStep] | None = None, saved: list[dict[str, Any]] | None = None) -> bool:
+    """AIPOS-F231 件②: 本运行收到停线请求(recorder.stop_request)→ 存现场(未先存 = 按运行记录 launches 存)→ 有界清理(唯一实现
+    loop_run_record.stop_cleanup, 只动核实属本卡者)→ 无残留 = stopped_by_owner(请求带 Owner 原话)/ stop_requested, 有残留 = stop_incomplete
+    (资源 residual 不释放); 出口 exit_codes.stop_requested。返回 True(调用方以 result 返回)。"""
+    from tools.aipos_cli.loop_run_record import stop_cleanup, stop_declaration, stop_report_lines, stop_snapshot
+
+    decl = stop_declaration(contract)
+    req = recorder.stop_request() or {}
+    if not (recorder.meta.get("stop") or {}).get("saved"):
+        recorder.stop_saved(saved if saved is not None else
+                            [stop_snapshot(x, unknown=str(decl["unknown"])) for x in recorder.meta.get("launches") or [] if isinstance(x, dict)],
+                            note=str(req.get("note") or ""))
+    cleanup = stop_cleanup(governance_root, recorder.meta, timeout=float(req.get("timeout") or decl["default_timeout_seconds"]))
+    # 本运行收尾时已按 TERM → 等 → KILL 终止的拉起进程组(含组内孙进程)一并列入已清理(stop_cleanup 随后复核组内无残留)
+    cleanup["cleaned"] = [{"pid": x.get("pid"), "pgid": x.get("pgid"), "host": x.get("host"), "how": x.get("termination"),
+                           "why": f"拉起 {x.get('harness')} {x.get('card')} 进程组 {x.get('remote_pgid') or x.get('pgid')}(收尾终止整组)"}
+                          for x in recorder.meta.get("launches") or [] if isinstance(x, dict) and x.get("outcome") == "stopped"] + cleanup["cleaned"]
+    incomplete = bool(cleanup["residual"])
+    reason = str(decl["end_reasons"]["incomplete" if incomplete else ("owner" if req.get("owner_words") else "advisor")])
+    recorder.stop_finished(cleanup, "incomplete" if incomplete else "stopped")
+    text = decl["texts"]["incomplete" if incomplete else "stopped"]
+    msg = (str(text).replace("{reason}", reason) + f"(请求 {req.get('requested_at')} by {req.get('requested_by') or '-'}"
+           + (f", 原因: {req['reason']}" if req.get("reason") else "") + ")")
+    say(f"[{index}] stop: {msg}")
+    for line in stop_report_lines(recorder.meta):
+        say(line)
+    if steps is not None:
+        steps.append(LoopStep(index, "stop", None, None, recorder.meta.get("task_id") or "", ok=not incomplete, message=msg))
+    result.outcome, result.exit_code, result.message = "stopped", exit_code_for(contract, "stop_requested"), msg
+    result.reason = reason
+    return True
+
+
 def check_workstation(project_root: Path, instance: str, harness: str) -> dict[str, Any]:
     """AIPOS-F110 件③: `lybra project check-workstation` —— loop 拉起前置的逐项只读检查(与 plan_launch 同一读取口/同一 ssh 代码路径):
     land 事件位置 → (local) 工位身份 + harness 可执行在本机 PATH; (remote) 材料声明 + 门机→工位 ssh 探测(目录 + harness 可执行)
@@ -1116,23 +1293,68 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
     非 0 退出 / 被信号终止 / 超时不续接(_should_resume 唯一判定)。"""
     if _charter_before_launch(index, step, plan, governance_root, result, contract=contract, say=say, recorder=recorder):
         return True  # AIPOS-F164 件②: 章程不新鲜且未能 sync = 不拉起
+    if not plan.resumed_session:
+        if _context_before_launch(index, step, plan, governance_root, result, contract=contract, say=say, recorder=recorder):
+            return True  # AIPOS-F231 件⑤: 开局上下文超模型窗口安全上限(精简后仍超)= 不拉起
     wait_timeout = exit_code_for(contract, "wait_timeout")
     deadline = utc_now() + timedelta(seconds=float(watch_args.timeout))  # 续接共用同一 --max-wait(F73D: 本模块不计时自旋)
     artifact = str(Path(str(watch_args.workspace_root)) / wait_patterns[0]) if wait_patterns else "(产物落点)"
-    attempt, resume = plan, 0
+    attempt, resume, retries = plan, 0, 0
+    early = early_exit_declaration(contract)
+    diag: dict[str, Any] = {}
     with _signals_raise_interrupt():
         while True:
-            args = watch_args if resume == 0 else SimpleNamespace(**{**vars(watch_args), "timeout": (deadline - utc_now()).total_seconds()})
+            relaunch = resume + retries
+            args = watch_args if relaunch == 0 else SimpleNamespace(**{**vars(watch_args), "timeout": (deadline - utc_now()).total_seconds()})
+            why = (f"模型服务 {diag.get('status')} 退避重试 {retries}/{early['max_retries']}" if retries and diag.get("kind") in early["retry_statuses"].values()
+                   else "")
             run = _launch_once(index, step, attempt, governance_root, result, contract=contract, decl=decl, watch=watch,
                                watch_args=args, ready=ready, say=say, actor=actor, envelope_id=envelope_id, recorder=recorder,
-                               resume=resume)
+                               resume=relaunch, resume_why=why)
             if run["outcome"] == "artifact_ready":
                 return False
+            if run["outcome"] == "stopped":  # AIPOS-F231 件②: 等待中收到停线请求(进程组已在收尾时终止, 现场已存)
+                _stop_requested_end(index, governance_root, result, contract=contract, recorder=recorder, say=say)
+                return True
             if run["outcome"] not in ("early_exit", "timeout"):
                 return True  # 拉起失败 / 拉起事件写不进: _launch_once 已按出口填 result
+            diag = {}
+            if run["outcome"] == "early_exit":
+                # AIPOS-F231 件④: 早退先读会话记录的真实原因(401 / 429 / length / 其他), 写进运行记录与 loop status
+                from tools.aipos_cli.loop_run_record import diagnosis_line, session_diagnosis
+
+                diag = session_diagnosis(plan.harness, plan.session_id, early)
+                diag["line"] = diagnosis_line(diag, early)
+                recorder.launch_diagnosis(diag)
+                say(f"[{index}] early_exit: {diag['line']}")
+                remaining = (deadline - utc_now()).total_seconds()
+                if diag["kind"] in early["retry_statuses"].values() and retries < int(early["max_retries"]):
+                    backoff = provider_backoff_seconds(early, retries + 1)
+                    if backoff < remaining:
+                        retries += 1
+                        recorder.provider_retry({"attempt": retries, "max": int(early["max_retries"]), "status": diag.get("status"),
+                                                 "kind": diag["kind"], "provider": diag.get("provider"), "backoff_seconds": backoff})
+                        say(f"[{index}] retry: 模型服务 {diag.get('status')}({early['kinds'][diag['kind']]}, provider {diag.get('provider')}) → "
+                            f"退避 {backoff:g}s 后第 {retries}/{early['max_retries']} 次重试" + (f"(同会话 {plan.session_id})" if plan.session_id else ""))
+                        if _backoff_wait(governance_root, recorder, backoff):
+                            _stop_requested_end(index, governance_root, result, contract=contract, recorder=recorder, say=say)
+                            return True
+                        prompt = str(early["retry_prompt"]).replace("{artifact}", artifact).replace("{status}", str(diag.get("status"))).replace(
+                            "{kind}", str(early["kinds"][diag["kind"]]))
+                        attempt = plan.resumed(prompt) if plan.session_id else plan
+                        continue
+                if diag["kind"] in early["retry_statuses"].values() or diag["kind"] == "context_overflow":
+                    end = early["end_reasons"]["context" if diag["kind"] == "context_overflow" else "provider"]
+                    tried = (f"; 已退避重试 {retries}/{early['max_retries']} 次仍失败(额度 / 凭据问题, 归顾问: 查 provider {diag.get('provider')} 的额度 / 凭据)"
+                             if diag["kind"] != "context_overflow" else "; 不续接(续接只会再超)")
+                    step.ok = False
+                    step.message = f"拉起的 {plan.harness} 进程早退(exit {run['returncode']}): {diag['line']}{tried}"
+                    say(f"[{index}] exit {wait_timeout} — {step.message}")
+                    result.outcome, result.exit_code, result.message, result.reason = "wait_timeout", wait_timeout, step.message, str(end)
+                    return True
             if run["outcome"] == "early_exit" and _should_resume(plan, run["returncode"], resume, (deadline - utc_now()).total_seconds()):
                 resume += 1
-                step.launch = {**(step.launch or {}), "session_id": plan.session_id, "resumes": resume}
+                step.launch = {**(step.launch or {}), "session_id": plan.session_id, "resumes": resume, "provider_retries": retries}
                 say(f"[{index}] resume: {plan.harness} {plan.card} exit 0 而产物未就绪(半途停笔) → 同会话 {plan.session_id} 续接 "
                     f"{resume}/{plan.resume_max}(等的是 {artifact})")
                 attempt = plan.resumed(plan.resume_prompt.replace("{artifact}", artifact))
@@ -1143,7 +1365,7 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
                 resumed = (f"(同会话 {plan.session_id} 已续接 {resume}/{plan.resume_max} 次仍未写出)"
                            if plan.session_id and run["returncode"] == 0 else "")
                 step.message = (f"拉起的 {plan.harness} 进程已退出(exit {run['returncode']})而产物未就绪{resumed}: 等的是 {wait_patterns}\n"
-                                f"  stderr 末尾:\n{tail}")
+                                + (f"  {diag['line']}\n" if diag.get("line") else "") + f"  stderr 末尾:\n{tail}")
             else:
                 step.message = f"等待产物超时(watch exit {run['watch_rc']}), 已终止拉起的 {plan.harness} 进程组: 等的是 {wait_patterns}"
             say(f"[{index}] exit 3 — {step.message}")
@@ -1214,9 +1436,29 @@ def _launch_once(index: int, step: LoopStep, plan: LaunchPlan, governance_root: 
             recorder.flush()
 
         watch_out = io.StringIO()
+
+        def _stop_when() -> bool:  # 进程退出或本运行收到停线请求(AIPOS-F231 件②)都唤醒
+            return running.exited() or recorder.stop_request() is not None
+
         with contextlib.redirect_stdout(watch_out):
-            rc = watch(watch_args, expect_ready=ready, stop_when=harness.exited, sleeper=_pump)
+            rc = watch(watch_args, expect_ready=ready, stop_when=_stop_when, sleeper=_pump)
         step.exit_code, step.output = int(rc), watch_out.getvalue().strip()
+        if rc != declared_exit_code("lybra_agent_watch", "change") and recorder.stop_request() is not None:
+            # AIPOS-F231 件②: 先存现场(进程仍在 = 退出状态 unknown), finally 收尾按 TERM → 等 → KILL 终止整个进程组
+            from tools.aipos_cli.loop_run_record import stop_declaration, stop_snapshot
+
+            unknown = str(stop_declaration(contract)["unknown"])
+            recorder.flush(force=True)
+            snaps = [stop_snapshot(x, unknown=unknown) for x in recorder.meta.get("launches") or [] if isinstance(x, dict)]
+            if snaps:
+                snaps[-1] = stop_snapshot(recorder.meta["launches"][-1], unknown=unknown, stderr_tail=list(harness.stderr_tail))
+                if not harness.exited():
+                    snaps[-1]["returncode"] = unknown
+            recorder.stop_saved(snaps, note=str((recorder.stop_request() or {}).get("note") or ""))
+            outcome = "stopped"
+            step.ok, step.message = False, f"等待中收到停线请求, 已存现场, 终止拉起的 {plan.harness} 进程组"
+            say(f"[{index}] stop: {step.message}")
+            return {"outcome": outcome}
         if rc == declared_exit_code("lybra_agent_watch", "change"):  # AIPOS-F101 件③: 哨兵退出码读声明
             outcome = "artifact_ready"
             harness.pump(float(decl["grace_seconds"]))  # 宽限期内自行退出即收尾(输出照常汇总)
@@ -1362,6 +1604,22 @@ def run_loop(
     refused = _single_instance_refusal(task_id, governance_root, recorder, contract=contract, say=say)
     if refused is not None:  # AIPOS-F171B 件①: 同卡已有存活 loop = 拒(未推进任何步)
         return refused
+    try:
+        paused = card_paused_stop(governance_root, task_id)  # AIPOS-F231 件①: Owner 暂停的卡 = 拒起(先于信封校验, 未推进任何步)
+    except (FrontmatterReadError, OSError, ValueError) as exc:
+        msg = f"本卡暂停判定读不出(Owner 决策记录), 拒跑(fail-closed): {type(exc).__name__}: {exc}"
+        say(f"lybra loop {task_id}: exit {exit_code_for(contract, 'not_derivable')} — {msg}")
+        recorder.end(outcome="not_derivable", exit_code=exit_code_for(contract, "not_derivable"), reason="not_derivable", message=msg)
+        return LoopResult(task_id, "not_derivable", exit_code_for(contract, "not_derivable"), msg, missing_records=[msg], reason="not_derivable",
+                          run_record=str(recorder.path), run_log=str(recorder.log_path))
+    if paused is not None:
+        msg = f"本卡已被 Owner 暂停, loop 拒起(未推进任何步, 不派审计、不请求资源): {paused['pause']['line']}"
+        code = exit_code_for(contract, "not_derivable")
+        say(f"lybra loop {task_id}: exit {code} — {msg}")
+        recorder.end(outcome="not_derivable", exit_code=code, reason=str(paused["pause"]["end_reason"]), message=msg)
+        return LoopResult(task_id, "not_derivable", code, msg, missing_records=list(paused["missing_records"]),
+                          suggested_action=str(paused["suggested_action"]), reason=str(paused["pause"]["end_reason"]),
+                          run_record=str(recorder.path), run_log=str(recorder.log_path))
     if continues_run:  # AIPOS-F166 件①: 等待步遇部署更新 re-exec 而来, 与上一运行记录明确关联
         recorder.set_continues(str(continues_run))
         say(f"lybra loop {task_id}: 续等(AIPOS-F166): 接上一运行 {continues_run}(等待中部署已更新, 已 re-exec 到本部署快照, "
@@ -1634,6 +1892,18 @@ def _drive(
         change = guard.check() if guard is not None else None
         if change:
             return _deploy_changed_end(index, change, result, contract=contract, say=say, recorder=recorder)
+        if recorder.stop_request() is not None:  # AIPOS-F231 件②: 停线请求 = 步间停下(存现场 → 清理 → 核无残留释放)
+            _stop_requested_end(index, governance_root, result, contract=contract, recorder=recorder, say=say, steps=steps)
+            return result
+        paused = card_paused_stop(governance_root, task_id)  # AIPOS-F231 件①: 运行中被 Owner 暂停 = 步间停下(不派审计、不请求资源)
+        if paused is not None:
+            msg = f"本卡已被 Owner 暂停, 步间停下(未执行下一步): {paused['pause']['line']}"
+            steps.append(LoopStep(index, "execute", None, paused["current_state"], task_id, ok=False, message=msg))
+            say(f"[{index}] exit {exit_code_for(contract, 'not_derivable')} — {msg}")
+            result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), msg
+            result.missing_records, result.suggested_action = list(paused["missing_records"]), str(paused["suggested_action"])
+            result.reason = str(paused["pause"]["end_reason"])
+            return result
         # 出口 0: closure 记录存在且治理已落账(AIPOS-F94 件①: 本卡落账范围已提交且已推送); 未落账 → 推导核派生 N6 落账步
         # AIPOS-F162 件②: 已结案卡有在途补充审计 = 未完(推导核派 await_artifact 等补审卡), 结案出口不成立
         # AIPOS-F209: 结案口径唯一判定 task_complexity.closure_state(kind: closure = 门生 closure 记录; conclusion = 顾问复核结案
@@ -1838,9 +2108,18 @@ def _drive(
             watch_out = io.StringIO()
             # AIPOS-F152 件①: 手工等待期每轮比对部署(唯一等待原语的 deploy_guard); 不适用时不传(注入的靶场 watch 签名不变)
             guard_kw = {"deploy_guard": guard} if guard is not None and guard.applicable else {}
+
+            def _ready_or_stop(matched: list[str], _inner: Callable[[list[str]], bool] = _ready) -> bool:
+                return recorder.stop_request() is not None or _inner(matched)  # AIPOS-F231 件②: 停线请求也唤醒
+
             with contextlib.redirect_stdout(watch_out):
-                rc = watch(watch_args, expect_ready=_ready, **guard_kw)
+                rc = watch(watch_args, expect_ready=_ready_or_stop, **guard_kw)
             step.exit_code, step.output = int(rc), watch_out.getvalue().strip()
+            if recorder.stop_request() is not None:
+                step.ok, step.message = False, "等待中收到停线请求"
+                steps.append(step)
+                _stop_requested_end(index, governance_root, result, contract=contract, recorder=recorder, say=say, steps=steps)
+                return result
             if guard_kw and rc == declared_exit_code("lybra_agent_watch", "deploy_changed"):
                 change = guard.check()
                 if change:
@@ -2216,6 +2495,8 @@ def _acquire_resources(index: int, card: str, governance_root: Path, result: Loo
         return stop("not_derivable", "not_derivable", f"运行记录读不出, 无从判定独占资源 {names} 是否被占, 拒推进(fail-closed): {why}")
 
     def ready(_matched: list[str]) -> bool:
+        if recorder.stop_request() is not None:  # AIPOS-F231 件②: 排队中收到停线请求 = 醒来收口(未持有, 无可释放)
+            return True
         try:
             current = judge()
         except LoopRunRecordError as exc:
@@ -2251,6 +2532,8 @@ def _acquire_resources(index: int, card: str, governance_root: Path, result: Loo
         sink = io.StringIO()
         with contextlib.redirect_stdout(sink):
             rc = watch(_watch_args(root, ["*/looprun_*.md"], max_wait=remaining, interval=interval), expect_ready=ready, **guard_kw)
+        if recorder.stop_request() is not None:
+            return _stop_requested_end(index, governance_root, result, contract=contract, recorder=recorder, say=say)
         if failure:
             return unreadable(failure[0])
         if rc != declared_exit_code("lybra_agent_watch", "change"):

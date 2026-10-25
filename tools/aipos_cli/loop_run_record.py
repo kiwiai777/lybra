@@ -225,6 +225,33 @@ def _safe_label(value: Any, limit: int = 64) -> str:
 # 件① + 件③ 写侧: 一次 loop 运行 = 一份运行记录(原子替换) + 一份日志(只追加)
 # ---------------------------------------------------------------------------
 
+def render_run_record(m: dict[str, Any]) -> str:
+    """运行记录全文(frontmatter = meta 全量 + 人读摘要正文; 记录器与停线收口 / 复核同一渲染)。"""
+    from tools.aipos_cli.record_writer import render_markdown
+
+    m = {k: v for k, v in m.items() if not str(k).startswith("_")}  # read_run 附加的 _path 等不落盘
+    cur = m.get("current_step") or {}
+    lines = [f"# loop 运行 {m['run_id']}", "",
+             f"- 卡: {m['task_id']}; 驱动方: {m['driver']}; 信封: {m.get('envelope') or '(未定)'}",
+             f"- 主机: {m['host']}; loop pid: {m['pid']}; 开始: {m['started_at']}; 状态: {m['status']}",
+             f"- 当前步: {cur.get('index')} {cur.get('kind')} {cur.get('node')}/{cur.get('state')} {cur.get('card')}" if cur else "- 当前步: (无)",
+             f"- 已落定步数: {len(m['steps'])}; 拉起: {len(m['launches'])} 次",
+             f"- 日志: {m['log_path']}"]
+    if m.get("ended_at"):
+        lines.append(f"- 结束: {m['ended_at']} outcome={m['outcome']} exit={m['exit_code']} reason={m['end_reason']}")
+    lines += ["", "只含已记录事实(步骤 / 进程 / 活动类别与时间 / 结束原因), 不含会话正文与工具参数。",
+              "查看: `lybra loop status --task-id <卡ID>`(读本记录 + 本机探活 + 判停滞)。"]
+    return render_markdown(m, "\n".join(lines), list(m))
+
+
+def _write_record(path: Path, meta: dict[str, Any]) -> None:
+    """原子替换写运行记录(记录器与停线收口 / 复核同一写法)。"""
+    text = render_run_record(meta)
+    tmp = path.with_name(f".{path.name}.tmp{os.getpid()}")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
 class LoopRunRecorder:
     """一次 `lybra loop` 运行的记录器。构造即落盘(建不起来 = LoopRunRecordError, loop 以 not_derivable 出口拒跑, 不静默裸跑)。
 
@@ -293,6 +320,7 @@ class LoopRunRecorder:
         self._active: dict[str, Any] | None = None
         self._harness: Any = None
         self._sealed = False  # AIPOS-F166 件①: 已以 deploy_reexec 封存(本进程即将被新快照替换), 之后的 end() 不再改写
+        self._stop_request: dict[str, Any] | None = None  # AIPOS-F231 件②: 停线请求(读到即缓存)
         try:
             header = render_frontmatter_block({"record_type": str(self.decl["log_record_type"]), "run_id": self.run_id,
                                                "task_id": task_id, "run_record": self.path.name},
@@ -343,28 +371,11 @@ class LoopRunRecorder:
             self.warn(f"warning — 运行记录{what}写入失败({type(exc).__name__}: {exc}); loop 照常推进, 进度以本输出为准")
 
     def _render(self) -> str:
-        from tools.aipos_cli.record_writer import render_markdown
-
-        m = self.meta
-        cur = m.get("current_step") or {}
-        lines = [f"# loop 运行 {m['run_id']}", "",
-                 f"- 卡: {m['task_id']}; 驱动方: {m['driver']}; 信封: {m.get('envelope') or '(未定)'}",
-                 f"- 主机: {m['host']}; loop pid: {m['pid']}; 开始: {m['started_at']}; 状态: {m['status']}",
-                 f"- 当前步: {cur.get('index')} {cur.get('kind')} {cur.get('node')}/{cur.get('state')} {cur.get('card')}" if cur else "- 当前步: (无)",
-                 f"- 已落定步数: {len(m['steps'])}; 拉起: {len(m['launches'])} 次",
-                 f"- 日志: {m['log_path']}"]
-        if m.get("ended_at"):
-            lines.append(f"- 结束: {m['ended_at']} outcome={m['outcome']} exit={m['exit_code']} reason={m['end_reason']}")
-        lines += ["", "只含已记录事实(步骤 / 进程 / 活动类别与时间 / 结束原因), 不含会话正文与工具参数。",
-                  "查看: `lybra loop status --task-id <卡ID>`(读本记录 + 本机探活 + 判停滞)。"]
-        return render_markdown(m, "\n".join(lines), list(m))
+        return render_run_record(self.meta)
 
     def _write(self) -> None:
         self.meta["updated_at"] = iso_z()
-        text = self._render()
-        tmp = self.path.with_name(f".{self.path.name}.tmp{os.getpid()}")
-        tmp.write_text(text, encoding="utf-8")
-        os.replace(tmp, self.path)
+        _write_record(self.path, self.meta)
         self._dirty = False
         self._last_flush = time.monotonic()
 
@@ -569,6 +580,60 @@ class LoopRunRecorder:
         self._dirty = True
         self.flush(force=True)
 
+    # -- AIPOS-F231 件②: 协作式停线(verbs.schema lybra_loop.stop; run_record.stop) --
+    def stop_request(self) -> dict[str, Any] | None:
+        """本运行的停线请求(<run_id> + request_suffix; 每次只 stat, 出现后读一次并缓存)。请求读不出 = 仍按请求处理(停线优先, 原因记 note)。"""
+        if self._stop_request is not None:
+            return self._stop_request
+        path = stop_request_path(self.path)
+        if not path.exists():
+            return None
+        self._stop_request = read_stop_request(self.path)
+        return self._stop_request
+
+    def stop_saved(self, launches: list[dict[str, Any]], *, note: str = "") -> None:
+        """先存现场(清理之前): 请求 + 各拉起快照(stop_snapshot)+ 当前步, 立即落盘。"""
+        req = self.stop_request() or {}
+        self.meta["stop"] = {**{k: req.get(k) for k in ("requested_at", "requested_by", "reason", "owner_words", "relayed_by", "timeout")},
+                             "saved": {"at": iso_z(), "current_step": self.meta.get("current_step"), "launches": launches,
+                                       "log_path": str(self.log_path), "note": note or None},
+                             "cleaned": [], "residual": [], "outcome": None, "finished_at": None}
+        self.log(f"[stop] 停线请求 @ {req.get('requested_at')} by {req.get('requested_by')}: 现场已保存({len(launches)} 次拉起)")
+        self._dirty = True
+        self.flush(force=True)
+
+    def stop_finished(self, cleanup: dict[str, Any], outcome: str) -> None:
+        """清理结果进 stop 段; outcome = stopped(无残留, 资源随结束释放)| incomplete(有残留: resource_lock.state = residual, 不释放)。"""
+        stop = dict(self.meta.get("stop") or {})
+        stop.update({"cleaned": list(cleanup.get("cleaned") or []), "residual": list(cleanup.get("residual") or []),
+                     "outcome": outcome, "finished_at": iso_z()})
+        self.meta["stop"] = stop
+        lock = self.meta.get("resource_lock")
+        if isinstance(lock, dict) and outcome == "incomplete":
+            self.meta["resource_lock"] = {**lock, "state": "residual", "residual_at": iso_z()}
+        self.log(f"[stop] 清理 {len(stop['cleaned'])} 项; 未清理 {len(stop['residual'])} 项; outcome={outcome}")
+        self._dirty = True
+        self.flush(force=True)
+
+    # -- AIPOS-F231 件④⑤: 早退诊断 / 401·429 退避重试 / 开局体积 --
+    def launch_diagnosis(self, diagnosis: dict[str, Any]) -> None:
+        """最近一次拉起(已收尾)的早退诊断 launches[-1].diagnosis。"""
+        if self.meta["launches"]:
+            self.meta["launches"][-1]["diagnosis"] = dict(diagnosis)
+            self._dirty = True
+            self.flush(force=True)
+
+    def provider_retry(self, entry: dict[str, Any]) -> None:
+        self.meta.setdefault("provider_retries", []).append({**entry, "at": iso_z()})
+        self.log(f"[retry] 模型服务 {entry.get('status')}({entry.get('kind')}) 退避 {entry.get('backoff_seconds')}s 后第 {entry.get('attempt')} 次重试")
+        self._dirty = True
+        self.flush(force=True)
+
+    def context_check(self, entry: dict[str, Any]) -> None:
+        self.meta.setdefault("context_checks", []).append({**entry, "at": iso_z()})
+        self._dirty = True
+        self.flush(force=True)
+
     # -- 拉起 --
     def launch_started(self, plan: Any, harness: Any, *, resume: int = 0, resume_why: str = "") -> None:
         """一次拉起(resume=0)或同会话第 resume 次续接(AIPOS-F171B 件②)= launches[] 追加一条; 续接另写日志一行 [resume]。
@@ -643,9 +708,13 @@ class LoopRunRecorder:
         first = next((ln.strip() for ln in str(message or "").splitlines() if ln.strip()), "")
         # AIPOS-F150 件①: 门拒类结束另落结构化拒因码(取自门拒原文全文, 不只首行); 其余结束原因 = null
         codes = extract_end_codes(message, self.decl) if reason in end_codes_reasons(self.decl) else None
-        self.meta.update({"status": "ended", "ended_at": iso_z(), "outcome": outcome, "exit_code": int(exit_code),
+        ended_at = iso_z()
+        self.meta.update({"status": "ended", "ended_at": ended_at, "outcome": outcome, "exit_code": int(exit_code),
                           "end_reason": reason, "end_message": redact_progress(first)[:240] or None, "end_codes": codes,
                           "current_step": None})
+        lock = self.meta.get("resource_lock")
+        if isinstance(lock, dict) and lock.get("state") in ("held", "waiting"):  # AIPOS-F231 件③: 运行结束 = 释放(停线残留 = residual 不动)
+            self.meta["resource_lock"] = {**lock, "state": "released", "released_at": ended_at, "state_before_end": lock.get("state")}
         self.log(f"[end] outcome={outcome} exit={exit_code} reason={reason}" + (f" codes={','.join(codes)}" if codes else ""))
         self.flush(force=True)
         self.close_log()
@@ -706,11 +775,19 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
                                "last_activity_at": act.get("last_activity_at"), "last_activity_kind": act.get("last_activity_kind"),
                                "counts": act.get("counts"), "alive": None, "running_seconds": None, "idle_seconds": None})
     view["deploy"] = meta.get("deploy")  # AIPOS-F152 件①: 本次运行的代码与部署变化(旧记录无此键 = None)
-    for key in ("continues_run", "reexec", "envelope_state", "owner_ask", "resource_lock"):  # AIPOS-F166: 续等关联 / 信封用尽真相; AIPOS-F168: Owner 待决结构字段(无 = 不出现, 存量记录形不变)
+    for key in ("continues_run", "reexec", "envelope_state", "owner_ask", "resource_lock",  # AIPOS-F166 / F168(无 = 不出现, 存量记录形不变)
+                "stop", "provider_retries", "context_checks"):  # AIPOS-F231 件②④⑤
         if meta.get(key):
             view[key] = meta[key]
+    if last is not None and isinstance(last.get("diagnosis"), dict):  # AIPOS-F231 件④: 最近一次拉起的早退诊断
+        view["launch"]["diagnosis"] = last["diagnosis"]
     if meta.get("status") == "ended":
         view["state"] = "ended"
+        lock = view.get("resource_lock")
+        if isinstance(lock, dict) and lock.get("state") in ("held", "waiting"):
+            # AIPOS-F231 件③: 已结束运行的锁 = 已随运行结束释放(存量记录 state 仍为 held 者同此; 停线残留 residual 照原样仍占用)
+            view["resource_lock"] = {**lock, "state": "released", "released_at": lock.get("released_at") or meta.get("ended_at"),
+                                     "state_before_end": lock.get("state")}
         return view
     if host != local_host:
         view["state"] = "unprobeable"
@@ -969,10 +1046,12 @@ def resource_conflict(governance_root: Path, own: dict[str, Any], *, contract: d
             meta = read_run(path, decl)
             rid = str(meta.get("run_id") or "")
             other = meta.get("resource_lock") if isinstance(meta.get("resource_lock"), dict) else None
-            if rid == own_id or meta.get("status") == "ended" or not other:
+            # AIPOS-F231 件②: 停线未清干净的运行(resource_lock.state = residual)结束了也仍算占用(残留可能还在用资源), 不论进程存活
+            residual = bool(other) and other.get("state") == "residual"
+            if rid == own_id or (meta.get("status") == "ended" and not residual) or not other:
                 continue
             shared = sorted(mine & set(other.get("resources") or []))
-            state = str(other.get("state") or "")
+            state = "held" if residual else str(other.get("state") or "")
             if not shared or state not in ("waiting", "held"):
                 continue
             other_key = (str(other.get("requested_at") or ""), rid)
@@ -982,7 +1061,9 @@ def resource_conflict(governance_root: Path, own: dict[str, Any], *, contract: d
                 continue
             view = judge_run(meta, decl, now=now, local_host=local_host)
             age = _seconds(_parse_iso(meta.get("updated_at")), now)
-            if view["state"] == "unprobeable":
+            if residual:
+                live = True
+            elif view["state"] == "unprobeable":
                 live = age is not None and age <= int(decl[str(si["unprobeable_heartbeat_key"])])
             else:
                 live = view["state"] in si["live_states"]
@@ -998,6 +1079,622 @@ def resource_conflict(governance_root: Path, own: dict[str, Any], *, contract: d
         return None
     found.sort(key=lambda item: item[0])
     return found[0][1]
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F231 件④: 拉起早退诊断——读该次拉起固定会话的会话记录(定位器 card.schema intent_face.harness.session_record_locators,
+# 唯一读取口 artifact_ingest._session_locators; 声明 verbs.schema lybra_loop.launch.early_exit)。放在本模块(finalize 预载闭包不下探)而非 harness_launch, 免把 artifact_ingest 拉进合并后预载。只读, 只取停止原因 / 错误首段 / provider / 模型 /
+# 输入词元数(不取会话正文)。
+# ---------------------------------------------------------------------------
+
+def session_diagnosis(harness: str, session_id: str, early: dict[str, Any]) -> dict[str, Any]:
+    """→ {kind, stop_reason, status, provider, model, input_size(本轮输入词元数), error_excerpt, session_file, note}。kind ∈ early.kinds 的键:
+    stopReason = length_stop_reason → context_overflow; = error_stop_reason 且 errorMessage 首段状态码 ∈ retry_statuses → 该类(credential / quota),
+    其余错误 → provider_error; 会话记录找不到 / 无助手消息 / 定位器未声明诊断键 → unknown(note 写明)。"""
+    import glob as _glob
+
+    import json
+
+    from tools.aipos_cli.artifact_ingest import _dig, _session_locators
+    from tools.aipos_cli.harness_launch import redact_progress
+
+    out: dict[str, Any] = {"kind": "unknown", "stop_reason": None, "status": None, "provider": None, "model": None, "input_size": None,
+                           "error_excerpt": None, "session_file": None, "note": None}
+    locator = _session_locators().get(harness) if harness else None
+    if not isinstance(locator, dict) or not locator.get("stop_reason_path") or not locator.get("session_id_file_suffix"):
+        out["note"] = f"harness {harness or '?'} 的会话定位器未声明诊断键(card.schema session_record_locators)"
+        return out
+    if not session_id:
+        out["note"] = "本次拉起未固定会话 id, 会话记录无从定位"
+        return out
+    suffix = str(locator["session_id_file_suffix"]).replace("{session_id}", session_id)
+    files = sorted({f for pattern in locator.get("session_globs") or [] for f in _glob.glob(os.path.expanduser(str(pattern))) if f.endswith(suffix)})
+    if not files:
+        out["note"] = f"本机找不到会话记录 *{suffix}(跨机工位的会话记录在远端主机)"
+        return out
+    out["session_file"] = files[-1]
+    last = None
+    try:
+        with open(files[-1], encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(entry, dict) and _dig(entry, list(locator.get("role_path") or [])) == locator.get("assistant_role"):
+                    last = entry
+    except OSError as exc:
+        out["note"] = f"会话记录读不出({type(exc).__name__}: {exc})"
+        return out
+    if last is None:
+        out["note"] = "会话记录里无助手消息(模型未作答即退出)"
+        return out
+    stop = _dig(last, list(locator["stop_reason_path"]))
+    error = str(_dig(last, list(locator.get("error_message_path") or [])) or "")
+    tokens = [_dig(last, list(p)) for p in locator.get("input_token_paths") or []]
+    out.update({"stop_reason": stop, "provider": _dig(last, list(locator.get("provider_path") or [])),
+                "model": _dig(last, list(locator.get("model_path") or [])),
+                "input_size": sum(int(x) for x in tokens if isinstance(x, int)) if any(isinstance(x, int) for x in tokens) else None,
+                "error_excerpt": redact_progress(error.splitlines()[0] if error else "")[: int(early["excerpt_chars"])] or None})
+    match = re.match(str(early["status_pattern"]), error) if error else None
+    out["status"] = match.group("status") if match else None
+    if stop == early["length_stop_reason"]:
+        out["kind"] = "context_overflow"
+    elif stop == early["error_stop_reason"]:
+        out["kind"] = str((early["retry_statuses"] or {}).get(out["status"] or "") or "provider_error")
+    else:
+        out["kind"] = "unknown"
+        out["note"] = f"最后一条助手消息 stopReason={stop}(非报错 / 非超窗口)"
+    return out
+
+
+def diagnosis_line(diag: dict[str, Any], early: dict[str, Any]) -> str:
+    """诊断 → 一行人话(声明 early_exit.line; loop 结束原文与 loop status 同一渲染)。"""
+    kinds = early["kinds"]
+    values = {"kind_label": kinds.get(diag.get("kind")) or kinds["unknown"], "provider": diag.get("provider") or "?", "model": diag.get("model") or "?",
+              "stop_reason": diag.get("stop_reason") or "?", "status_part": f", HTTP {diag['status']}" if diag.get("status") else "",
+              "size_part": f", 本轮输入 {diag['input_size']} 词元" if diag.get("input_size") else "",
+              "session_file": diag.get("session_file") or (diag.get("note") or "?"),
+              "excerpt_part": f"; 错误首段: {diag['error_excerpt']}" if diag.get("error_excerpt") else ""}
+    return str(early["line"]).format(**values)
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F231 件②: 协作式停线(声明 verbs.schema lybra_loop.stop; CLI = stop_cli; loop 侧 = loop_driver._stop_requested_end)
+# ---------------------------------------------------------------------------
+
+STOP_VERB = "lybra_loop_stop"
+_STOP_KEYS = ("request_suffix", "default_timeout_seconds", "max_timeout_seconds", "kill_grace_seconds", "unknown", "end_reasons", "texts")
+_STOP_TEXT_KEYS = ("requested", "stopped", "incomplete", "pending", "no_live_run", "dead_loop", "rechecked", "dry_run", "saved_header",
+                   "cleaned_header", "residual_header", "resource_released", "resource_residual", "sim_residual", "process_residual",
+                   "remote_unverified")
+
+
+def stop_declaration(contract: dict[str, Any] | None = None) -> dict[str, Any]:
+    """verbs.schema lybra_loop.stop(fail-closed): 键齐 / 文案齐 / 时限为正 / end_reasons 三项为已声明结束原因。"""
+    from tools.aipos_cli.loop_driver import load_loop_contract
+    from tools.schema_loader import SchemaLoadError
+
+    contract = contract or load_loop_contract()
+    decl = contract.get("stop") if isinstance(contract, dict) else None
+    reasons = run_record_declaration(contract)["end_reasons"]
+    where = "verbs.schema.json verbs.lybra_loop.stop"
+    if not isinstance(decl, dict) or any(k not in decl for k in _STOP_KEYS):
+        raise SchemaLoadError(f"{where} 未声明齐 {list(_STOP_KEYS)}")
+    ends = decl["end_reasons"]
+    if not isinstance(ends, dict) or set(ends) != {"owner", "advisor", "incomplete"} or any(v not in reasons for v in ends.values()):
+        raise SchemaLoadError(f"{where}.end_reasons 须恰为 owner / advisor / incomplete 且各为 run_record.end_reasons 已声明者")
+    if any(not isinstance(decl["texts"].get(k), str) or not decl["texts"][k] for k in _STOP_TEXT_KEYS):
+        raise SchemaLoadError(f"{where}.texts 未声明齐 {list(_STOP_TEXT_KEYS)}")
+    for key in ("default_timeout_seconds", "max_timeout_seconds", "kill_grace_seconds"):
+        if not isinstance(decl[key], (int, float)) or isinstance(decl[key], bool) or decl[key] <= 0:
+            raise SchemaLoadError(f"{where}.{key} 须为正数")
+    return decl
+
+
+def stop_request_path(record_path: Path) -> Path:
+    """停线请求文件 = 运行记录同名 + request_suffix(*.log: 不入库, 运行记录 stop 段为真相)。"""
+    record_path = Path(record_path)
+    return record_path.with_name(record_path.stem + str(stop_declaration()["request_suffix"]))
+
+
+def read_stop_request(record_path: Path) -> dict[str, Any]:
+    """读停线请求; 读不出 / 形不合 = 仍是请求(停线优先), note 写明缘由, 时限取缺省。"""
+    import json
+
+    decl = stop_declaration()
+    path = stop_request_path(record_path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("非对象")
+    except (OSError, ValueError) as exc:
+        return {"requested_at": None, "requested_by": None, "reason": None, "owner_words": None, "relayed_by": None,
+                "timeout": float(decl["default_timeout_seconds"]), "note": f"停线请求 {path} 读不出({type(exc).__name__}: {exc}), 按缺省时限处理"}
+    try:
+        timeout = float(data.get("timeout") or decl["default_timeout_seconds"])
+    except (TypeError, ValueError):
+        timeout = float(decl["default_timeout_seconds"])
+    return {**data, "timeout": min(max(timeout, 1.0), float(decl["max_timeout_seconds"]))}
+
+
+def _proc_ticks(fingerprint: Any) -> int | None:
+    text = str(fingerprint or "")
+    return int(text[len(FINGERPRINT_PREFIX_PROC):]) if text.startswith(FINGERPRINT_PREFIX_PROC) and text[len(FINGERPRINT_PREFIX_PROC):].isdigit() else None
+
+
+def local_processes() -> list[dict[str, Any]] | None:
+    """本机进程快照 [{pid, pgrp, ticks, uid, cwd}](Linux /proc; 无 /proc = None, 调用方按「无从核验」处理)。不读命令行与环境(只归属判据)。"""
+    if not _proc_available():
+        return None
+    out: list[dict[str, Any]] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            stat = (entry / "stat").read_text(encoding="utf-8", errors="replace")
+            fields = stat[stat.rindex(")") + 2:].split()
+            if fields[0] in ("Z", "X", "x"):
+                continue
+            uid = entry.stat().st_uid
+        except (OSError, ValueError, IndexError):
+            continue  # 进程已退出 / 不可读 = 不在快照(只动读得到且属本用户者)
+        try:
+            cwd = os.readlink(str(entry / "cwd"))
+        except OSError:
+            cwd = None
+        out.append({"pid": int(entry.name), "pgrp": int(fields[2]), "ticks": int(fields[19]), "uid": uid, "cwd": cwd})
+    return out
+
+
+def card_validation_runs(governance_root: Path, cards: set[str]) -> list[dict[str, Any]]:
+    """本卡(含其审计轮)验证根声明里未收口的 run(project.json validation_roots, 唯一读取口 validation_root.project_validation_roots):
+    [{decl_id, task_id, host, local, run_id, run_dir, simulator, ssh_alias}]。读不出 = 向上(fail-closed)。"""
+    from tools.aipos_cli import validation_root as vr
+
+    wanted = {str(c).upper() for c in cards if c}
+    hosts = vr.project_validation_hosts(governance_root)
+    out: list[dict[str, Any]] = []
+    for entry in vr.project_validation_roots(governance_root):
+        if str(entry.get("task_id") or "").upper() not in wanted:
+            continue
+        for run in entry.get("runs") or []:
+            if run.get("finished_at"):
+                continue
+            out.append({"decl_id": entry["id"], "task_id": entry["task_id"], "host": entry["host"], "local": vr.is_local_host(entry["host"]),
+                        "run_id": run["run_id"], "run_dir": vr.run_directory(entry, run["run_id"]), "simulator": run.get("simulator"),
+                        "ssh_alias": (hosts.get(str(entry["host"])) or {}).get("ssh_alias"), "entry": entry, "run": run})
+    return out
+
+
+def _within(path: str | None, base: str) -> bool:
+    if not path:
+        return False
+    try:
+        real, root = os.path.realpath(path), os.path.realpath(base)
+    except OSError:
+        return False
+    return real == root or real.startswith(root.rstrip("/") + "/")
+
+
+def _sim_residual(governance_root: Path, run: dict[str, Any], texts: dict[str, Any], task_id: str) -> dict[str, Any]:
+    """本卡专用模拟器仍绑定于未收口 run = 未清理项(不自动删), 安全处置 = helper sim-delete + run-finish(命令唯一铸造口 validation_root)。"""
+    from tools.aipos_cli import validation_root as vr
+
+    entry, vrun, sim = run["entry"], run["run"], run["simulator"] or {}
+    common = f"--run-dir {run['run_dir']} --expect-fingerprint {entry.get('host_fingerprint') or '<hfp1 指纹>'}"
+    sim_delete = (vr.helper_pipe_command(governance_root, run["ssh_alias"], f"sim-delete {common}", entry, vrun) if run["ssh_alias"]
+                  else vr.helper_local_command(governance_root, f"sim-delete {common}", entry, vrun))
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    run_finish = (f"{lybra_command_prefix(governance_root)} project validation-root run-finish --id {entry['id']} --run-id {vrun['run_id']} "
+                  "--sim-evidence <simulator.json 在治理根所在机的副本> --confirm --actor <顾问实例>")
+    line = str(texts["sim_residual"]).format(name=sim.get("name"), udid=sim.get("udid"), host=run["host"], run_id=vrun["run_id"],
+                                             sim_delete=sim_delete, run_finish=run_finish, task_id=task_id)
+    return {"kind": "simulator", "host": run["host"], "run_dir": run["run_dir"], "udid": sim.get("udid"), "line": line}
+
+
+def _remote_scan(remote: dict[str, Any], alias: str, run_dir: str) -> tuple[list[int] | None, str]:
+    """经 ssh 列目标主机上命令行含本 run 目录的进程(harness_launch.remote_run_dir_pids 唯一实现); None = 无从核验(原因)。"""
+    from tools.aipos_cli.harness_launch import remote_run_dir_pids
+
+    return remote_run_dir_pids(remote, alias, run_dir)
+
+
+def stop_candidates(governance_root: Path, meta: dict[str, Any], *, exclude_pids: set[int] | None = None) -> dict[str, Any]:
+    """停线清理对象(只读; 只认核实属本卡者)。返回 {local: [{pid, ticks, why}], remote_groups: [{host, pgid, why}], remote_dirs:
+    [{alias, host, run_dir, pids}], residual: [不自动清理的未清理项], notes: [...]}。
+    归属: ①运行记录 launches 的进程组(本机: 组号 = 记录 pgid 且启动时刻不早于组长记录时刻、同一用户; 跨机: 未收尾拉起的 remote_pgid);
+    ②本卡(运行里出现过的卡)验证根未收口 run 目录: 本机 = cwd 落在 run 目录下的同用户进程, 跨机 = ssh ps 命令行含 run 目录的进程;
+    ③本卡专用模拟器(run 已绑定且未收口)= residual(给 sim-delete / run-finish)。"""
+    from tools.aipos_cli.harness_launch import remote_declaration
+    from tools.aipos_cli.loop_driver import launch_declaration, load_loop_contract
+
+    decl = stop_declaration()
+    texts = decl["texts"]
+    exclude = {os.getpid(), *(exclude_pids or set())}
+    local_host = socket.gethostname()
+    out: dict[str, Any] = {"local": [], "remote_groups": [], "remote_dirs": [], "residual": [], "notes": []}
+    procs = local_processes()
+    me = os.getuid()
+    task_id = str(meta.get("task_id") or "")
+    cards = {task_id}
+    seen: set[int] = set()
+
+    def add_local(proc: dict[str, Any], why: str) -> None:
+        if proc["pid"] in exclude or proc["pid"] in seen or proc["uid"] != me:
+            return
+        seen.add(proc["pid"])
+        out["local"].append({"pid": proc["pid"], "ticks": proc["ticks"], "why": why})
+
+    for launch in [x for x in (meta.get("launches") or []) if isinstance(x, dict)]:
+        cards.add(str(launch.get("card") or ""))
+        what = f"拉起 {launch.get('harness')} {launch.get('card')}"
+        if launch.get("transport") == "remote":
+            if launch.get("remote_pgid") and not launch.get("ended_at"):
+                out["remote_groups"].append({"host": launch.get("host"), "pgid": int(launch["remote_pgid"]), "why": f"{what} 远端进程组 {launch['remote_pgid']}"})
+            continue
+        if launch.get("host") and str(launch.get("host")) != local_host:
+            out["notes"].append(f"{what} 记于主机 {launch.get('host')}, 本机不清(请在该机执行)")
+            continue
+        pgid, leader = launch.get("pgid"), _proc_ticks(launch.get("process_fingerprint"))
+        if not isinstance(pgid, int) or procs is None:
+            if procs is None:
+                out["residual"].append({"kind": "unverified", "line": f"本机无 /proc, {what} 进程组 {pgid} 无从核验: 手工核对后重跑 lybra loop stop 复核"})
+            continue
+        for proc in procs:
+            if proc["pgrp"] == pgid and (leader is None or proc["ticks"] >= leader):
+                add_local(proc, f"{what} 进程组 {pgid}(运行记录 launches)")
+    for step in meta.get("steps") or []:
+        if isinstance(step, dict) and step.get("card"):
+            cards.add(str(step["card"]))
+    for run in card_validation_runs(Path(governance_root), cards):
+        if run["simulator"]:
+            out["residual"].append(_sim_residual(Path(governance_root), run, texts, task_id))
+        if run["local"]:
+            if procs is None:
+                out["residual"].append({"kind": "unverified", "line": str(texts["remote_unverified"]).format(host=run["host"], run_dir=run["run_dir"], why="本机无 /proc")})
+                continue
+            for proc in procs:
+                if _within(proc["cwd"], run["run_dir"]):
+                    add_local(proc, f"验证根 {run['decl_id']} run {run['run_id']} 目录下进程(cwd)")
+            continue
+        if not run["ssh_alias"]:
+            out["residual"].append({"kind": "unverified", "host": run["host"], "run_dir": run["run_dir"],
+                                    "line": str(texts["remote_unverified"]).format(host=run["host"], run_dir=run["run_dir"], why="项目未声明该主机 ssh 别名")})
+            continue
+        pids, why = _remote_scan(remote_declaration(launch_declaration(load_loop_contract())), str(run["ssh_alias"]), run["run_dir"])
+        if pids is None:
+            out["residual"].append({"kind": "unverified", "host": run["host"], "run_dir": run["run_dir"],
+                                    "line": str(texts["remote_unverified"]).format(host=run["host"], run_dir=run["run_dir"], why=why)})
+        elif pids:
+            out["remote_dirs"].append({"alias": run["ssh_alias"], "host": run["host"], "run_dir": run["run_dir"], "pids": pids,
+                                       "why": f"验证根 {run['decl_id']} run {run['run_id']} 目录下远端进程(命令行)"})
+    return out
+
+
+def _wait_gone(governance_root: Path, task_id: str, alive: Callable[[], bool], seconds: float) -> None:
+    """有界等目标进程退出(经唯一等待原语 agent_watch_fs.run_fs_watch 的 stop_when; 禁 sleep 自旋)。"""
+    import contextlib
+    import io
+
+    from tools.aipos_cli.agent_watch_fs import run_fs_watch
+    from tools.aipos_cli.loop_driver import _watch_args
+
+    if seconds <= 0 or not alive():
+        return
+    root = loop_runs_dir(Path(governance_root), task_id)
+    root.mkdir(parents=True, exist_ok=True)
+    with contextlib.redirect_stdout(io.StringIO()):
+        run_fs_watch(_watch_args(root, [".lybra-stop-wait-never"], max_wait=seconds, interval=0.2), stop_when=lambda: not alive())
+
+
+def stop_cleanup(governance_root: Path, meta: dict[str, Any], *, timeout: float, dry_run: bool = False,
+                 exclude_pids: set[int] | None = None) -> dict[str, Any]:
+    """按 stop_candidates 在 timeout 秒内有界清理: 本机 TERM → 等至多 kill_grace_seconds → KILL → 再等 → 仍在 = residual(process_residual);
+    远端组 TERM → KILL(harness_launch.remote_signal)后核 gone; 远端 run 目录进程 TERM → KILL(remote_kill_pids)后重扫。dry_run = 只列不发信号。
+    返回 {cleaned: [...], residual: [...], candidates}。"""
+    import signal as _signal
+
+    from tools.aipos_cli.harness_launch import remote_declaration, remote_kill_pids, remote_signal
+    from tools.aipos_cli.loop_driver import launch_declaration, load_loop_contract
+
+    decl = stop_declaration()
+    texts = decl["texts"]
+    task_id = str(meta.get("task_id") or "")
+    cand = stop_candidates(Path(governance_root), meta, exclude_pids=exclude_pids)
+    result: dict[str, Any] = {"cleaned": [], "residual": list(cand["residual"]), "candidates": cand, "notes": list(cand["notes"])}
+    if dry_run:
+        return result
+    deadline = time.monotonic() + max(1.0, float(timeout))
+    grace = float(decl["kill_grace_seconds"])
+    targets = list(cand["local"])
+
+    def alive_targets() -> list[dict[str, Any]]:
+        return [x for x in targets if process_alive(x["pid"], f"{FINGERPRINT_PREFIX_PROC}{x['ticks']}")]
+
+    for sig in (_signal.SIGTERM, _signal.SIGKILL):
+        for item in alive_targets():
+            try:
+                os.kill(item["pid"], sig)
+            except ProcessLookupError:
+                pass  # 已退出 = 清干净
+            except PermissionError as exc:
+                item["error"] = f"{type(exc).__name__}: {exc}"
+        _wait_gone(Path(governance_root), task_id, lambda: bool(alive_targets()), min(grace, deadline - time.monotonic()))
+    left = alive_targets()
+    for item in targets:
+        if item in left:
+            result["residual"].append({"kind": "process", "pid": item["pid"], "why": item["why"],
+                                       "line": str(texts["process_residual"]).format(pid=item["pid"], where=item["why"], seconds=int(timeout), task_id=task_id)})
+        else:
+            result["cleaned"].append({"pid": item["pid"], "why": item["why"], "how": "SIGTERM/SIGKILL"})
+    remote = None
+    if cand["remote_groups"] or cand["remote_dirs"]:
+        remote = remote_declaration(launch_declaration(load_loop_contract()))
+    for group in cand["remote_groups"]:
+        outcomes = [remote_signal(remote, str(group["host"]), group["pgid"], name) for name in ("TERM", "KILL")]
+        probe = remote_signal(remote, str(group["host"]), group["pgid"], "0")
+        if probe == "gone":
+            result["cleaned"].append({"host": group["host"], "pgid": group["pgid"], "why": group["why"], "how": "/".join(outcomes)})
+        else:
+            result["residual"].append({"kind": "remote_group", "host": group["host"], "pgid": group["pgid"],
+                                       "line": f"远端 {group['host']} 进程组 {group['pgid']}({group['why']})未确认退出({probe}): 在目标主机核对 `kill -s 0 -- -{group['pgid']}`, 清理后重跑 lybra loop stop --task-id {task_id} 复核"})
+    for item in cand["remote_dirs"]:
+        remote_kill_pids(remote, str(item["alias"]), item["pids"], "TERM")
+        remote_kill_pids(remote, str(item["alias"]), item["pids"], "KILL")
+        still, why = _remote_scan(remote, str(item["alias"]), item["run_dir"])
+        if still is None or still:
+            result["residual"].append({"kind": "remote_dir", "host": item["host"], "run_dir": item["run_dir"], "pids": still,
+                                       "line": str(texts["remote_unverified"]).format(host=item["host"], run_dir=item["run_dir"], why=why or f"仍在 {still}")})
+        else:
+            result["cleaned"].append({"host": item["host"], "pids": item["pids"], "why": item["why"], "how": "TERM/KILL(ssh)"})
+    return result
+
+
+def stop_snapshot(launch: dict[str, Any], *, unknown: str, stderr_tail: list[str] | None = None) -> dict[str, Any]:
+    """一次拉起的现场快照(停线先存): 命令(harness / 会话)、UTC 时刻、退出状态(仍在跑 / 未收尾 = unknown)、最近活动、stderr 末尾、指纹。"""
+    from tools.aipos_cli.harness_launch import redact_progress
+
+    act = launch.get("activity") or {}
+    rc = launch.get("returncode")
+    return {"card": launch.get("card"), "harness": launch.get("harness"), "session_id": launch.get("session_id"), "pid": launch.get("pid"),
+            "pgid": launch.get("pgid"), "remote_pgid": launch.get("remote_pgid"), "host": launch.get("host"),
+            "process_fingerprint": launch.get("process_fingerprint"), "started_at": launch.get("started_at"),
+            "ended_at": launch.get("ended_at") or unknown, "outcome": launch.get("outcome") or unknown,
+            "returncode": rc if isinstance(rc, int) else unknown, "last_activity_kind": act.get("last_activity_kind") or unknown,
+            "last_activity_at": act.get("last_activity_at") or unknown,
+            "stderr_tail": [redact_progress(x)[:200] for x in (stderr_tail or [])] or None}
+
+
+def stop_report_lines(meta: dict[str, Any]) -> list[str]:
+    """运行记录 stop 段 → 人读行(lybra loop stop 输出与 loop status 同一渲染)。"""
+    decl = stop_declaration()
+    texts = decl["texts"]
+    stop = meta.get("stop") if isinstance(meta.get("stop"), dict) else None
+    if not stop:
+        return []
+    out = [f"  停线请求 {stop.get('requested_at')} by {stop.get('requested_by') or '-'}" + (f"(Owner 原话「{stop['owner_words']}」, 经 {stop.get('relayed_by')})" if stop.get("owner_words") else "")
+           + (f"; 原因: {stop['reason']}" if stop.get("reason") else "") + f"; outcome={stop.get('outcome') or '处理中'}"]
+    saved = stop.get("saved") or {}
+    out.append(f"  {texts['saved_header']} {saved.get('at') or decl['unknown']}; 日志 {saved.get('log_path') or decl['unknown']}")
+    for item in saved.get("launches") or []:
+        out.append(f"    - {item.get('harness')} {item.get('card')} 会话 {item.get('session_id') or '-'} pid {item.get('pid')} pgid {item.get('pgid')}"
+                   f" 开始 {item.get('started_at')} 结束 {item.get('ended_at')} outcome {item.get('outcome')} returncode {item.get('returncode')}"
+                   f" 最近活动 {item.get('last_activity_kind')} @ {item.get('last_activity_at')} 指纹 {item.get('process_fingerprint')}")
+    if stop.get("cleaned"):
+        out.append(f"  {texts['cleaned_header']}")
+        out += [f"    - pid {c.get('pid') or c.get('pids') or c.get('pgid')} @ {c.get('host') or '本机'}: {c.get('why')}({c.get('how')})" for c in stop["cleaned"]]
+    if stop.get("residual"):
+        out.append(f"  {texts['residual_header']}")
+        out += [f"    - {r.get('line')}" for r in stop["residual"]]
+    lock = meta.get("resource_lock") if isinstance(meta.get("resource_lock"), dict) else None
+    if lock:
+        key = "resource_residual" if lock.get("state") == "residual" else ("resource_released" if lock.get("state") == "released" else None)
+        if key:
+            out.append("  " + str(texts[key]).format(resources=", ".join(lock.get("resources") or [])))
+    return out
+
+
+def finish_dead_run(path: Path, meta: dict[str, Any], *, request: dict[str, Any], saved: list[dict[str, Any]], cleanup: dict[str, Any],
+                    reason: str, message: str, exit_code: int) -> dict[str, Any]:
+    """loop 进程已不在(loop_dead)时由 lybra loop stop 写终态(同一渲染与原子写): stop 段 + 结束字段 + 独占资源 released / residual。"""
+    from tools.aipos_cli.harness_launch import redact_progress
+
+    now = iso_z()
+    meta = {k: v for k, v in meta.items() if not str(k).startswith("_")}
+    incomplete = bool(cleanup.get("residual"))
+    meta["stop"] = {**{k: request.get(k) for k in ("requested_at", "requested_by", "reason", "owner_words", "relayed_by", "timeout")},
+                    "saved": {"at": now, "current_step": meta.get("current_step"), "launches": saved, "log_path": meta.get("log_path"),
+                              "note": "loop 进程已不在(loop_dead), 由 lybra loop stop 清理并写终态"},
+                    "cleaned": list(cleanup.get("cleaned") or []), "residual": list(cleanup.get("residual") or []),
+                    "outcome": "incomplete" if incomplete else "stopped", "finished_at": now}
+    lock = meta.get("resource_lock")
+    if isinstance(lock, dict):
+        meta["resource_lock"] = {**lock, "state": "residual" if incomplete else "released", ("residual_at" if incomplete else "released_at"): now}
+    meta.update({"status": "ended", "ended_at": now, "updated_at": now, "outcome": "stopped", "exit_code": int(exit_code), "end_reason": reason,
+                 "end_message": redact_progress(message.splitlines()[0] if message else "")[:240] or None, "end_codes": None, "current_step": None})
+    _write_record(Path(path), meta)
+    log = meta.get("log_path")
+    if log and Path(str(log)).exists():
+        with Path(str(log)).open("a", encoding="utf-8") as handle:
+            handle.write(f"{now} [end] outcome=stopped exit={exit_code} reason={reason}(loop_dead, 由 lybra loop stop 收口)\n")
+    return meta
+
+
+def recheck_residual(path: Path, meta: dict[str, Any], cleanup: dict[str, Any]) -> dict[str, Any]:
+    """stop_incomplete 运行的复核: 无残留 = resource_lock.state released(released_at)+ stop.rechecked_at / outcome stopped; 有 = 更新 residual 列表。"""
+    now = iso_z()
+    meta = {k: v for k, v in meta.items() if not str(k).startswith("_")}
+    stop = dict(meta.get("stop") or {})
+    stop.update({"rechecked_at": now, "residual": list(cleanup.get("residual") or []),
+                 "cleaned": list(stop.get("cleaned") or []) + list(cleanup.get("cleaned") or [])})
+    if not cleanup.get("residual"):
+        stop["outcome"] = "stopped"
+        lock = meta.get("resource_lock")
+        if isinstance(lock, dict):
+            meta["resource_lock"] = {**lock, "state": "released", "released_at": now}
+    meta["stop"] = stop
+    meta["updated_at"] = now
+    _write_record(Path(path), meta)
+    return meta
+
+
+def _latest_meta(governance_root: Path, task_id: str, decl: dict[str, Any], contract: dict[str, Any]) -> dict[str, Any] | None:
+    """本卡最近一次运行(单实例锁拒掉的启动不算, 与 loop status 同一口径)。"""
+    refused = single_instance_declaration(contract)["end_reason"]
+    metas = [m for m in (read_run(p, decl) for p in _run_files(loop_runs_dir(governance_root, task_id)))
+             if not (m.get("status") == "ended" and m.get("end_reason") == refused)]
+    metas.sort(key=lambda m: (str(m.get("started_at") or ""), str(m.get("run_id") or "")))
+    return metas[-1] if metas else None
+
+
+def stop_run(governance_root: Path, task_id: str, *, requested_by: str, reason: str | None = None, owner_words: str | None = None,
+             relayed_by: str | None = None, timeout: float | None = None, dry_run: bool = False,
+             contract: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F231 件② `lybra loop stop` 的唯一实现(CLI = stop_cli 薄壳)。→ {outcome: stopped | incomplete | pending | no_live_run | dry_run,
+    run_id, record, lines(人读), meta}。在跑(running / stalled / launch_dead)= 写停线请求后经唯一等待原语 run_fs_watch 有界等该运行写结束
+    (≤ timeout); loop_dead = 本命令自做同一清理(stop_cleanup)并写终态(finish_dead_run); 最近运行以 stop_incomplete 结束(资源 residual)= 复核
+    (recheck_residual); unprobeable = 拒(在治理根所在机执行)。"""
+    import contextlib
+    import io
+    import json
+
+    from tools.aipos_cli.agent_watch_fs import run_fs_watch
+    from tools.aipos_cli.loop_driver import _watch_args, exit_code_for, load_loop_contract
+
+    contract = contract or load_loop_contract()
+    decl = run_record_declaration(contract)
+    sdecl = stop_declaration(contract)
+    texts = sdecl["texts"]
+    si = single_instance_declaration(contract)
+    timeout = float(timeout if timeout is not None else sdecl["default_timeout_seconds"])
+    if not 0 < timeout <= float(sdecl["max_timeout_seconds"]):
+        raise StatusUsageError(f"--timeout 须在 (0, {sdecl['max_timeout_seconds']}] 秒")
+    if owner_words and not str(relayed_by or "").strip():
+        raise StatusUsageError("带 --owner-words(Owner 原话)须同时给 --relayed-by <转达的顾问实例>")
+    meta = _latest_meta(Path(governance_root), task_id, decl, contract)
+    if meta is None:
+        return {"outcome": "no_live_run", "lines": [str(texts["no_live_run"]).format(task_id=task_id, latest="(无运行记录)")], "meta": None}
+    record = Path(str(meta["_path"]))
+    view = judge_run(meta, decl)
+    unknown = str(sdecl["unknown"])
+    request = {"requested_at": iso_z(), "requested_by": requested_by, "reason": reason or None, "owner_words": owner_words or None,
+               "relayed_by": relayed_by or None, "timeout": timeout}
+    base = {"run_id": meta.get("run_id"), "record": str(record)}
+    if view["state"] == "ended":
+        lock = meta.get("resource_lock") if isinstance(meta.get("resource_lock"), dict) else {}
+        if lock.get("state") != "residual":
+            latest = f"run {meta.get('run_id')} 已结束 {meta.get('ended_at')} reason={meta.get('end_reason')}"
+            return {**base, "outcome": "no_live_run", "lines": [str(texts["no_live_run"]).format(task_id=task_id, latest=latest)], "meta": meta}
+        cleanup = stop_cleanup(Path(governance_root), meta, timeout=timeout, dry_run=dry_run)
+        if dry_run:
+            return {**base, "outcome": "dry_run", "meta": meta, "cleanup": cleanup,
+                    "lines": [str(texts["dry_run"]).format(run_id=meta.get("run_id"))] + _cleanup_lines(cleanup, texts)}
+        meta = recheck_residual(record, meta, cleanup)
+        outcome = "incomplete" if cleanup["residual"] else "stopped"
+        head = texts["incomplete"] if cleanup["residual"] else texts["rechecked"]
+        return {**base, "outcome": outcome, "meta": meta, "lines": [str(head)] + stop_report_lines(meta)}
+    if view["state"] == "unprobeable":
+        return {**base, "outcome": "unprobeable", "meta": meta, "lines": [f"运行记录写于主机 {meta.get('host')}, 本机无从探活与清理: 请在治理根所在机执行 lybra loop stop"]}
+    if dry_run:
+        cleanup = stop_cleanup(Path(governance_root), meta, timeout=timeout, dry_run=True, exclude_pids={int(meta.get("pid") or 0)})
+        return {**base, "outcome": "dry_run", "meta": meta, "cleanup": cleanup,
+                "lines": [str(texts["dry_run"]).format(run_id=meta.get("run_id")), f"  运行状态 {view['state']}"] + _cleanup_lines(cleanup, texts)}
+    if view["state"] == "loop_dead":
+        saved = [stop_snapshot(x, unknown=unknown) for x in meta.get("launches") or [] if isinstance(x, dict)]
+        cleanup = stop_cleanup(Path(governance_root), meta, timeout=timeout)
+        incomplete = bool(cleanup["residual"])
+        end = str(sdecl["end_reasons"]["incomplete" if incomplete else ("owner" if owner_words else "advisor")])
+        msg = str(texts["dead_loop"]) + "; " + str(texts["incomplete" if incomplete else "stopped"]).replace("{reason}", end)
+        meta = finish_dead_run(record, meta, request=request, saved=saved, cleanup=cleanup, reason=end, message=msg,
+                               exit_code=exit_code_for(contract, "stop_requested"))
+        return {**base, "outcome": "incomplete" if incomplete else "stopped", "meta": meta, "lines": [msg] + stop_report_lines(meta)}
+    path = stop_request_path(record)
+    if not path.exists():
+        tmp = path.with_name(f".{path.name}.tmp{os.getpid()}")
+        tmp.write_text(json.dumps(request, ensure_ascii=False) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+        exclude_run_logs(record.parent)
+    lines = [str(texts["requested"]).format(request=path, run_id=meta.get("run_id"), pid=meta.get("pid"), host=meta.get("host"), timeout=f"{timeout:g}")]
+
+    def _ended(_matched: list[str]) -> bool:
+        try:
+            return read_run(record, decl).get("status") == "ended"
+        except LoopRunRecordError:
+            return False
+
+    def _loop_gone() -> bool:
+        return not process_alive(meta.get("pid"), meta.get("process_fingerprint"))
+
+    with contextlib.redirect_stdout(io.StringIO()):
+        run_fs_watch(_watch_args(record.parent, [record.name], max_wait=timeout, interval=0.5), expect_ready=_ended, stop_when=_loop_gone)
+    final = read_run(record, decl)
+    if final.get("status") != "ended":
+        if _loop_gone():  # 等待中 loop 进程没了(被杀 / 崩溃)= 本命令接手清理
+            return stop_run(governance_root, task_id, requested_by=requested_by, reason=reason, owner_words=owner_words,
+                            relayed_by=relayed_by, timeout=timeout, contract=contract)
+        lock = final.get("resource_lock") if isinstance(final.get("resource_lock"), dict) else None
+        pending = [str(texts["pending"]).format(timeout=f"{timeout:g}")]
+        pending.append(f"  {texts['saved_header']} 停线请求 {path}(loop 尚未存现场; 运行记录 {record})")
+        pending.append(f"  {texts['residual_header']}")
+        pending += [f"    - 拉起 {x.get('harness')} {x.get('card')} pid {x.get('pid')} pgid {x.get('pgid')}(outcome {x.get('outcome') or unknown})"
+                    for x in final.get("launches") or [] if isinstance(x, dict) and not x.get("ended_at")] or [f"    - loop pid {final.get('pid')} 仍在推进(当前步 {_step_label(final.get('current_step'))})"]
+        if lock:
+            pending.append("  " + str(texts["resource_residual"]).format(resources=", ".join(lock.get("resources") or [])))
+        return {**base, "outcome": "pending", "meta": final, "lines": lines + pending}
+    stop = final.get("stop") if isinstance(final.get("stop"), dict) else {}
+    outcome = "incomplete" if stop.get("outcome") == "incomplete" else ("stopped" if stop else "ended_otherwise")
+    head = {"stopped": texts["stopped"], "incomplete": texts["incomplete"]}.get(outcome, f"运行在处理停线前已以 {final.get('end_reason')} 结束")
+    return {**base, "outcome": "stopped" if outcome == "ended_otherwise" else outcome, "meta": final,
+            "lines": lines + [str(head).replace("{reason}", str(final.get("end_reason")))] + stop_report_lines(final)}
+
+
+def _cleanup_lines(cleanup: dict[str, Any], texts: dict[str, Any]) -> list[str]:
+    cand = cleanup.get("candidates") or {}
+    out = [f"  将清理(本机): pid {c['pid']} — {c['why']}" for c in cand.get("local") or []]
+    out += [f"  将清理(远端组): {g['host']} pgid {g['pgid']} — {g['why']}" for g in cand.get("remote_groups") or []]
+    out += [f"  将清理(远端 run 目录): {d['host']} pid {d['pids']} — {d['why']}" for d in cand.get("remote_dirs") or []]
+    if cleanup.get("residual"):
+        out.append(f"  {texts['residual_header']}")
+        out += [f"    - {r.get('line')}" for r in cleanup["residual"]]
+    out += [f"  注: {n}" for n in cleanup.get("notes") or []]
+    return out or ["  (无本卡进程需清理)"]
+
+
+def stop_cli(args: Any) -> int:
+    """`lybra loop stop --task-id <卡> [--reason] [--owner-words --relayed-by] [--timeout] [--dry-run] [--json]`(声明 verbs.schema lybra_loop_stop)。"""
+    import json
+    import sys
+
+    from tools.aipos_cli.aipos_cli import _find_repo_root_for_args
+    from tools.aipos_cli.verb_contract import declared_exit_code
+    from tools.schema_loader import SchemaLoadError
+
+    task_id = getattr(args, "task_id", None)
+    if not task_id:
+        print("lybra loop stop: error: the following arguments are required: --task-id", file=sys.stderr)
+        return declared_exit_code(STOP_VERB, "usage")
+    try:
+        governance_root = Path(_find_repo_root_for_args(args))
+        report = stop_run(governance_root, str(task_id), requested_by=str(getattr(args, "actor", None) or getattr(args, "relayed_by", None) or "advisor"),
+                          reason=getattr(args, "reason", None), owner_words=getattr(args, "owner_words", None),
+                          relayed_by=getattr(args, "relayed_by", None), timeout=getattr(args, "stop_timeout", None),
+                          dry_run=bool(getattr(args, "dry_run", False)))
+    except StatusUsageError as exc:
+        print(f"lybra loop stop: {exc}", file=sys.stderr)
+        return declared_exit_code(STOP_VERB, "usage")
+    except (FileNotFoundError, LoopRunRecordError, SchemaLoadError, ValueError, OSError) as exc:
+        print(f"lybra loop stop: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return declared_exit_code(STOP_VERB, "unreadable")
+    if getattr(args, "json", False):
+        print(json.dumps({k: v for k, v in report.items() if k != "meta"} | {"stop": (report.get("meta") or {}).get("stop"),
+                          "resource_lock": (report.get("meta") or {}).get("resource_lock")}, ensure_ascii=False, indent=2, default=str))
+    else:
+        print("\n".join(report["lines"]))
+    code = {"stopped": "stopped", "dry_run": "stopped", "no_live_run": "no_live_run", "incomplete": "incomplete", "pending": "incomplete",
+            "unprobeable": "unreadable"}[report["outcome"]]
+    return declared_exit_code(STOP_VERB, code)
 
 
 def loop_status(governance_root: Path, task_id: str | None = None, *, now: datetime | None = None,
@@ -1062,9 +1759,11 @@ def _loop_status(governance_root: Path, task_id: str | None, *, now: datetime | 
                                           earlier_end_reasons=history if task_id else None,
                                           earlier_end_codes=code_history if task_id else None)
         # AIPOS-F168 件②: 该运行对应的 Owner 收件箱事项已裁决 = 下一动作改为 advisor_fix(owner_ruled), detail 带裁决原文, hint 带续跑命令
-        from tools.aipos_cli.owner_inbox import apply_owner_ruling
+        from tools.aipos_cli.owner_inbox import apply_card_pause, apply_owner_ruling
 
         view["next_action"] = apply_owner_ruling(Path(governance_root), view, view["next_action"])
+        # AIPOS-F231 件①: 本卡已被 Owner 暂停 = 下一动作「已暂停」(owner_needed paused, 给恢复命令, 不给重跑 loop); 已恢复 = 续跑(唯一实现 owner_inbox.apply_card_pause)
+        view["next_action"] = apply_card_pause(Path(governance_root), view, view["next_action"])
         # AIPOS-F225: 仍等 Owner 的按档归类(第一档留 owner_needed 带事由; 第二档自动路径; 第三档归顾问), 唯一实现 owner_inbox.apply_owner_tier
         from tools.aipos_cli.owner_inbox import apply_owner_tier
 
@@ -1130,6 +1829,9 @@ def next_action_declaration(run_decl: dict[str, Any], contract: dict[str, Any] |
                               f"owner_needed 缺事由 {owner_gaps + escalations}"
                               f"(须覆盖 lybra_loop.run_record.states / end_reasons)")
     _check_routine_rejections(decl["routine_rejections"])
+    exempt = decl.get("consecutive_failures_exempt")  # AIPOS-F231 件⑥: 可选; 在则须为已声明结束原因的列表
+    if exempt is not None and (not isinstance(exempt, list) or set(exempt) - reasons):
+        raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.consecutive_failures_exempt 须为已声明结束原因的列表")
     review = decl.get("advisor_review_close")  # AIPOS-F207 件③: 可选; 在则结束原因须已声明、文案齐
     if review is not None and (not isinstance(review, dict) or not isinstance(review.get("end_reasons"), list)
                                or set(review["end_reasons"]) - reasons or not isinstance(review.get("verbs"), list) or not review["verbs"]
@@ -1321,10 +2023,11 @@ def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root:
             action = str((_execution_rule(rules, mode).get("by_end_reason") or {}).get(reason) or action)
             if mode:
                 view = {**view, "execution_mode": mode}
-        if action == "investigate" and earlier_end_reasons is not None:
+        exempt = set(rules.get("consecutive_failures_exempt") or [])  # AIPOS-F231 件⑥: 驱动方主动上限(--max-steps)不算失败
+        if action == "investigate" and earlier_end_reasons is not None and reason not in exempt:
             streak = 1
             for earlier in reversed(earlier_end_reasons):
-                if earlier is None or rules["by_end_reason"].get(str(earlier)) != "investigate":
+                if earlier is None or str(earlier) in exempt or rules["by_end_reason"].get(str(earlier)) != "investigate":
                     break
                 streak += 1
             if streak >= int(rules["consecutive_failures_owner_needed"]):
@@ -1914,10 +2617,29 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
         if v.get("resource_lock"):  # AIPOS-F179 item 2
             rl = v["resource_lock"]
             holder = rl.get("holder") or {}
-            out.append(f"  独占资源 {', '.join(rl.get('resources') or [])}: {rl.get('state')}"
-                       + (f" 自 {rl.get('held_at')}" if rl.get("state") == "held" else f"(请求 {rl.get('requested_at')})")
-                       + (f"; 占用者 卡 {holder.get('task_id')} run {holder.get('run_id')} pid {holder.get('pid')} @ {holder.get('host')}"
-                          if holder and rl.get("state") == "waiting" else ""))
+            names = ", ".join(rl.get("resources") or [])
+            if rl.get("state") == "released":  # AIPOS-F231 件③
+                out.append(f"  独占资源 {names}: 已随运行结束释放({rl.get('released_at')}; 运行中曾 {rl.get('state_before_end') or 'held'}"
+                           + (f" 自 {rl.get('held_at')}" if rl.get("held_at") else "") + ")")
+            elif rl.get("state") == "residual":
+                out.append(f"  独占资源 {names}: 停线未清干净, 仍占用(不释放; 未清理项与安全处置见下方停线段)")
+            else:
+                out.append(f"  独占资源 {names}: {rl.get('state')}"
+                           + (f" 自 {rl.get('held_at')}" if rl.get("state") == "held" else f"(请求 {rl.get('requested_at')})")
+                           + (f"; 占用者 卡 {holder.get('task_id')} run {holder.get('run_id')} pid {holder.get('pid')} @ {holder.get('host')}"
+                              if holder and rl.get("state") == "waiting" else ""))
+        diag = (v.get("launch") or {}).get("diagnosis")
+        if isinstance(diag, dict) and diag.get("line"):  # AIPOS-F231 件④: 早退真实原因
+            out.append(f"  {diag['line']}")
+        if v.get("provider_retries"):
+            last_retry = v["provider_retries"][-1]
+            out.append(f"  模型服务 401 / 429 退避重试: {len(v['provider_retries'])}/{last_retry.get('max')} 次(最近 HTTP {last_retry.get('status')}"
+                       f" {last_retry.get('kind')}, 退避 {last_retry.get('backoff_seconds')}s @ {last_retry.get('at')})")
+        for chk in [c for c in v.get("context_checks") or [] if c.get("outcome") != "ok"]:  # AIPOS-F231 件⑤
+            out.append(f"  开局上下文 {chk.get('card')}: {chk.get('outcome')} 估算 {chk.get('estimate')} / 上限 {chk.get('limit')} 词元"
+                       f"(窗口 {chk.get('window')}, 模型 {chk.get('model')})" + (f"; 大节存 {chk['kickoff_file']}" if chk.get("kickoff_file") else ""))
+        if v.get("stop"):  # AIPOS-F231 件②
+            out.extend(stop_report_lines({**v, "resource_lock": None}))  # 资源行已在上方独占资源行
         if v.get("continues_run"):  # AIPOS-F166 件①
             out.append(f"  续等: 接上一运行 {v['continues_run']}(等待中部署已更新, re-exec 到本运行的部署快照, 从同一等待步续等)")
         if v.get("reexec"):

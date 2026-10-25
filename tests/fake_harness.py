@@ -26,6 +26,12 @@
     validate_outputs       AIPOS-F204: first run as validate_outputs_once; on resume rewrites the frontmatter still wrong (adds a key)
     docs       AIPOS-F197 (executor card only): governance-root-only card (no worktree): write a doc into the report slot artifacts/
                named by the kickoff's「产物落点」and a RETURN whose frontmatter `outputs` lists it (no branch keys)
+    hang_sim   AIPOS-F231: 同 hang, 另起一个脱离本进程组(新会话)的「伪模拟器」进程, cwd = FAKE_SIM_DIR(本卡验证根 run 目录; 验停线按
+               run 目录归属清理组外进程)
+    provider_401 / provider_429 / length   AIPOS-F231: 写一份 pi 会话记录(文件名 <时刻>_<FAKE_PI_SESSION_ID>.jsonl, 与真实 pi 同形)
+               末条助手消息 stopReason=error + errorMessage「401: …」/「429: …」, 或 stopReason=length(本轮输入 = usage.input +
+               cacheRead), 不写产物即 exit 0(验早退真实原因 / 退避重试 / 超窗口不续接)
+    provider_429_once   AIPOS-F231: 首次同 provider_429, 同会话续接时(FAKE_PI_RESUMES≥1)同 work(验退避重试后完成)
   审计卡: 开工提示给出 `- outputs_digest: <值>(` (AIPOS-F197 被审卡只写治理根)= 报告写 verdict + outputs_digest(照抄), 否则写被审 tip
   FAKE_HARNESS_LOG: 目录; 收到的 argv[1](kickoff)按字节原样落 <卡号>.kickoff, cwd 落 <卡号>.cwd(供逐字节比对)
 事件里故意含一行凭据字样、一个未知事件类型、一行非 JSON(验汇总隐去/计数不刷屏)。
@@ -74,6 +80,29 @@ def pi_session(report: Path, model: str) -> None:
         {"type": "message", "message": {"role": "assistant", "provider": "fake", "model": model, "content": [
             {"type": "toolCall", "id": "c1", "name": "write", "arguments": {"path": str(report), "content": "..."}}]}},
     ]
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write("\n".join(json.dumps(x) for x in lines) + "\n")
+
+
+def provider_session(mode: str) -> None:
+    """AIPOS-F231: 模拟 pi 早退的会话记录(真实形: ~/.pi/agent/sessions/--<cwd>--/<时刻>_<会话 id>.jsonl)。"""
+    sid = os.environ.get("FAKE_PI_SESSION_ID") or "no-session"
+    cwd = os.getcwd()
+    path = Path(os.environ["HOME"]) / ".pi" / "agent" / "sessions" / ("--" + cwd.strip("/").replace("/", "-") + "--") / f"2026-10-25T00-00-00-000Z_{sid}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if mode == "length":
+        last = {"role": "assistant", "provider": "kiwiai", "model": "qwen3.7-plus", "stopReason": "length", "errorMessage": None,
+                "usage": {"input": 4725, "output": 1, "cacheRead": 93568}, "content": [{"type": "thinking", "thinking": ""}]}
+    else:
+        code = "401" if mode == "provider_401" else "429"
+        text = ("invalid access token or token expired" if code == "401" else "usage allocated quota exceeded. please try again later")
+        last = {"role": "assistant", "provider": "kiwiai", "model": "qwen3.7-plus", "stopReason": "error",
+                "errorMessage": f'{code}: {{"message":"litellm.BadRequestError: OpenAIException - {text}","code":"{code}"}}',
+                "usage": {"input": 0, "output": 0, "cacheRead": 0}, "content": []}
+    lines = [{"type": "session", "version": 3, "id": sid, "cwd": cwd},
+             {"type": "model_change", "provider": "kiwiai", "modelId": "qwen3.7-plus"},
+             {"type": "message", "message": {"role": "user", "content": [{"type": "text", "text": "kickoff"}]}},
+             {"type": "message", "message": last}]
     with path.open("a", encoding="utf-8") as fh:
         fh.write("\n".join(json.dumps(x) for x in lines) + "\n")
 
@@ -261,10 +290,20 @@ def main() -> int:
             {"type": "text", "text": "UI tests still running… let me poll"}]}})
         emit({"type": "agent_end", "messages": []})
         return 0
-    if mode == "hang":
+    if mode in ("hang", "hang_sim"):
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         subprocess.Popen([sys.executable, os.path.abspath(__file__), "--grandchild"])
+        if mode == "hang_sim":  # AIPOS-F231: 「伪模拟器」脱离本进程组(新会话), 只能按验证根 run 目录(cwd)归属清理
+            sim_dir = os.environ["FAKE_SIM_DIR"]
+            os.makedirs(sim_dir, exist_ok=True)
+            sim = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--grandchild"], cwd=sim_dir, start_new_session=True)
+            if log:
+                Path(log, f"{task_id}.sim_pid").write_text(str(sim.pid), encoding="utf-8")
         time.sleep(600)
+        return 0
+    if mode in ("provider_401", "provider_429", "length") or (mode == "provider_429_once" and os.environ.get("FAKE_PI_RESUMES", "0") == "0"):
+        provider_session("provider_429" if mode == "provider_429_once" else mode)  # AIPOS-F231: 早退真实原因在会话记录里
+        emit({"type": "agent_end", "messages": []})
         return 0
     if mode.startswith("sha_") and reviewed_of(task_id):
         sha_mode(task_id, kickoff, mode)
