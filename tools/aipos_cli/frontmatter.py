@@ -937,38 +937,78 @@ def read_markdown_frontmatter(path: Any) -> tuple[dict[str, Any], str, list[str]
     given = os.fspath(path)
     key = os.path.abspath(given)
     st = os.stat(given)
-    ident = (yaml is not None, st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
-    with _FRONTMATTER_MEMO_LOCK:
-        cached = _FILE_CACHE.get(key)
-        if cached is not None and cached[0] == ident:
-            _FILE_CACHE.move_to_end(key)
-            _FILE_CACHE_STATS["hits"] += 1
-        else:
-            cached = None
+    ident = (yaml is not None, *_stat_identity(st))
+    cached = _file_cache_get(key, ident)
     if cached is not None:
         return _fresh_copy(cached[1]), cached[2], list(cached[3]), cached[4]
     with open(given, encoding="utf-8") as handle:
         text = handle.read()
     data, body, warnings, shared = _markdown_parts(text)
     fence = text.startswith("---")
-    settled = time.time_ns() - max(st.st_mtime_ns, st.st_ctime_ns) >= _FILE_CACHE_RACY_WINDOW_NS
     if not shared:  # no frontmatter / unclosed fence / not memoisable: the mapping is already the caller's own
-        with _FRONTMATTER_MEMO_LOCK:
-            _FILE_CACHE_STATS["misses"] += 1
-            _FILE_CACHE.pop(key, None)
+        _file_cache_put(key, None)
         return data, body, list(warnings), fence
+    _file_cache_put(key, (ident, data, body, list(warnings), fence), st)
+    return _fresh_copy(data), body, list(warnings), fence
+
+
+def read_json_cached(path: Any, *, copy: bool = True) -> Any:
+    """AIPOS-F229 item 2: json.loads of a JSON file (exactly json.loads(open(path, encoding="utf-8").read()), same exceptions:
+    OSError when unreadable, json.JSONDecodeError when invalid) through the same level-1 per-file cache as
+    read_markdown_frontmatter (same stat identity, same racy window, same LRU bound; key namespaced "json"). The board read
+    project.json (one project's is 160+ KB) thousands of times per page; an unchanged file is now read and decoded once.
+    Every call gets its own copy (_fresh_copy: callers may mutate what they get); copy=False = the cache's private object itself,
+    only for read-only callers (workspace_config.load_workspace_config(shared=True)), never mutated nor handed out."""
+    import json
+
+    given = os.fspath(path)
+    key = ("json", os.path.abspath(given))
+    st = os.stat(given)
+    ident = _stat_identity(st)
+    cached = _file_cache_get(key, ident)
+    if cached is not None:
+        return _fresh_copy(cached[1]) if copy else cached[1]
+    with open(given, encoding="utf-8") as handle:
+        text = handle.read()
+    data = json.loads(text)
+    _file_cache_put(key, (ident, data), st)
+    return _fresh_copy(data) if copy else data
+
+
+def _stat_identity(st: os.stat_result) -> tuple[int, ...]:
+    """AIPOS-F177 level-1 validity: (st_dev, st_ino, st_size, st_mtime_ns, st_ctime_ns) — any write changes st_ctime, a replace
+    changes st_ino."""
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+
+
+def _file_cache_get(key: Any, ident: tuple[Any, ...]) -> tuple[Any, ...] | None:
+    """Level-1 lookup: the entry when its stat identity equals ``ident`` (counted as a hit), else None."""
+    with _FRONTMATTER_MEMO_LOCK:
+        cached = _FILE_CACHE.get(key)
+        if cached is not None and cached[0] == ident:
+            _FILE_CACHE.move_to_end(key)
+            _FILE_CACHE_STATS["hits"] += 1
+            return cached
+    return None
+
+
+def _file_cache_put(key: Any, entry: tuple[Any, ...] | None, st: os.stat_result | None = None) -> None:
+    """Level-1 fill after a read (counted as a miss): entry None = not cacheable (dropped); a file whose mtime / ctime is younger
+    than _FILE_CACHE_RACY_WINDOW_NS is never cached (counted unsettled); LRU bound _FILE_CACHE_MAX_ENTRIES."""
+    settled = entry is not None and st is not None and (
+        time.time_ns() - max(st.st_mtime_ns, st.st_ctime_ns) >= _FILE_CACHE_RACY_WINDOW_NS)
     with _FRONTMATTER_MEMO_LOCK:
         _FILE_CACHE_STATS["misses"] += 1
         if settled:
-            _FILE_CACHE[key] = (ident, data, body, list(warnings), fence)
+            _FILE_CACHE[key] = entry
             _FILE_CACHE.move_to_end(key)
             while len(_FILE_CACHE) > _FILE_CACHE_MAX_ENTRIES:
                 _FILE_CACHE.popitem(last=False)
                 _FILE_CACHE_STATS["evictions"] += 1
         else:
             _FILE_CACHE.pop(key, None)
-            _FILE_CACHE_STATS["unsettled"] += 1
-    return _fresh_copy(data), body, list(warnings), fence
+            if entry is not None:
+                _FILE_CACHE_STATS["unsettled"] += 1
 
 
 def parse_yaml_mapping(text: str) -> tuple[dict[str, Any], list[str]]:
@@ -1007,7 +1047,8 @@ _FRONTMATTER_MEMO_LOCK = threading.Lock()
 _FRONTMATTER_MEMO_STATS = {"hits": 0, "misses": 0, "evictions": 0}
 _FILE_CACHE_MAX_ENTRIES = 32768
 _FILE_CACHE_RACY_WINDOW_NS = 2_000_000_000
-_FILE_CACHE: "OrderedDict[str, tuple[tuple[int, ...], dict[str, Any], str, list[str], bool]]" = OrderedDict()
+# key = absolute path (markdown: (ident, mapping, body, warnings, fence)) or ("json", absolute path) (read_json_cached: (ident, value))
+_FILE_CACHE: "OrderedDict[Any, tuple[Any, ...]]" = OrderedDict()
 _FILE_CACHE_STATS = {"hits": 0, "misses": 0, "evictions": 0, "unsettled": 0}
 _CONTAINERS = frozenset((dict, list, set))
 
