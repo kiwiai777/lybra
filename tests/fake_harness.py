@@ -16,7 +16,7 @@
     sha_stay   AIPOS-F180B: first run as sha_typo_once; on resume leaves the report untouched and exits 0
     sha_other  AIPOS-F180B: report commit_sha = FAKE_AUDIT_OTHER_SHA (another real commit = audited the wrong product)
     yaml_bad_once  AIPOS-F232 (audit card only): first run writes the report with the AIPOS-F225R header line
-                   `model: glm-5.3 (provider: kiwiai)` unquoted (PyYAML cannot parse it); on a same-session resume it quotes only
+                   shape `engine: glm-5.3 (provider: kiwiai)` unquoted (AIPOS-F233: non-free-text key) (PyYAML cannot parse it); on a same-session resume it quotes only
                    that value (header fixed, body / verdict untouched)
     yaml_bad   AIPOS-F232: first run as yaml_bad_once; on resume leaves the report untouched and exits 0
     validate   AIPOS-F196 (executor card only): fixed-candidate validation card (no worktree): run the kickoff's validation-root
@@ -253,7 +253,8 @@ def sha_mode(task_id: str, kickoff: str, mode: str) -> None:
     pi_session(report, "fake-audit-model")
 
 
-YAML_BAD_LINE = "model: glm-5.3 (provider: kiwiai)"  # AIPOS-F232: the AIPOS-F225R report header line (unquoted = PyYAML error)
+YAML_BAD_LINE = "engine: glm-5.3 (provider: kiwiai)"  # AIPOS-F232: the AIPOS-F225R header line shape (unquoted = PyYAML error); AIPOS-F233:
+# a key NOT in transitions artifact_ingest.report_header_yaml.free_text_keys (a declared free-text key such as `model` is now tolerated)
 
 
 def yaml_mode(task_id: str, kickoff: str, mode: str) -> None:
@@ -267,7 +268,7 @@ def yaml_mode(task_id: str, kickoff: str, mode: str) -> None:
     if mode == "yaml_bad":
         return
     text = report.read_text(encoding="utf-8")
-    report.write_text(text.replace(f"{YAML_BAD_LINE}\n", "model: 'glm-5.3 (provider: kiwiai)'\n", 1), encoding="utf-8")
+    report.write_text(text.replace(f"{YAML_BAD_LINE}\n", "engine: 'glm-5.3 (provider: kiwiai)'\n", 1), encoding="utf-8")
     pi_session(report, "fake-audit-model")
 
 

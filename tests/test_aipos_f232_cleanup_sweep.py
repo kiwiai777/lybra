@@ -2,7 +2,8 @@
 
 ① 顾问撤回本人旧请求 `lybra loop note --retract`(原请求留档, 追加撤回字段); F225 前无第一档事由的旧顾问请求降为第二档告知
    (不计待定, 列「旧请求, 可撤回」并附撤回命令)——靶场自造 chris 人肉期样本(理想 HBLX-24BV/35V/37V/39V/31 同形);
-② 审计报告头读不出(F225R 实撞 `model: glm-5.3 (provider: kiwiai)` 未加引号)= 报告格式错例行修法: loop 续接审计会话只修报告头
+② 审计报告头读不出(F225R 实撞 `model: glm-5.3 (provider: kiwiai)` 未加引号; AIPOS-F233 起声明的自由文本键 model 容错读出, 靶改用非声明键
+  `engine: …` 同类错)= 报告格式错例行修法: loop 续接审计会话只修报告头
    (指令含解析错行与原因); 会话不可续接 = audit_report_form_error(advisor_fix, 结束原文带修头指令), 不再 investigate;
    F232 前以 frontmatter_unreadable 停线的运行, loop status 复核后同判;
 ③ 项目授权尾巴: loop status / brief 显示授权告知; 全新项目接入推导不误报「信封目录不存在」; 收件箱授权告知文案去「信封」;
@@ -214,8 +215,8 @@ def test_item2_yaml_error_resumes_audit_session_to_fix_header(lrig, monkeypatch)
     assert "报告头读不出" in fix_line and "续接修报告头 1/1" in fix_line
     prompt = (lrig.log / f"{AUDIT}.resume1.prompt").read_text(encoding="utf-8")
     _show(f"[② 修头指令(续接会话)]\n{prompt}")
-    assert prompt.startswith("你的审计报告 ") and "model: glm-5.3 (provider: kiwiai)" in prompt and "PyYAML" in prompt
-    assert re.search(r"报告头第 \d+ 行 `model: glm-5\.3 \(provider: kiwiai\)` 读不出", prompt)
+    assert prompt.startswith("你的审计报告 ") and "engine: glm-5.3 (provider: kiwiai)" in prompt and "PyYAML" in prompt
+    assert re.search(r"报告头第 \d+ 行 `engine: glm-5\.3 \(provider: kiwiai\)` 读不出", prompt)
     assert "整个值加单引号" in prompt
     fixes = _fixes(lrig.gov)
     _show("[② 运行记录 report_fixes] " + json.dumps([{k: f[k] for k in ("card", "role", "outcome", "kinds")} for f in fixes], ensure_ascii=False))
@@ -237,7 +238,7 @@ def test_item2_yaml_error_no_session_routine_fix_not_investigate(lrig, monkeypat
     rc, out, _err = _cli(["loop", "status", "--task-id", TASK, "--workspace-root", str(lrig.gov)])
     _show("---- ② loop status(会话不可续接)----\n" + out[-2200:])
     assert rc == 0 and "顾问下一动作: advisor_fix(audit_report_form_error) — 例行结束 audit_report_form_error 第 1/3 次" in out
-    assert "审计报告头读不出(YAML 解析错" in out and "你的审计报告 " in out and "model: glm-5.3 (provider: kiwiai)" in out
+    assert "审计报告头读不出(YAML 解析错" in out and "你的审计报告 " in out and "engine: glm-5.3 (provider: kiwiai)" in out
 
     # F232 前的停线形(F225R 实撞: end_reason = frontmatter_unreadable)= loop status 复核后同判例行修法, 不再 investigate
     record = Path(_records(lrig.gov)[-1]["log_path"]).with_suffix(".md")
@@ -264,7 +265,7 @@ def test_item2_executor_return_unreadable_same_mechanism(rig):  # noqa: F811
     task = "PROBE-F232-EXEC"
     f78._card(rig.gov, task, "claimed", extra={"claimed_by": EXEC, "claimed_at": "'2026-10-01T00:00:00Z'"})
     ret = rig.gov / "task_cards" / task / "RETURN.md"
-    f78._write(ret, "---\ncommit_sha: abc\nmodel: glm-5.3 (provider: kiwiai)\n---\n# RETURN\n")
+    f78._write(ret, "---\ncommit_sha: abc\nengine: glm-5.3 (provider: kiwiai)\n---\n# RETURN\n")
     init_governance_repo(rig.gov)
     check = validate_task_artifact(task, rig.gov)
     _show(f"[② 执行交回报告头读不出] category={check['category']}\n  header_problem={json.dumps(check.get('header_problem'), ensure_ascii=False)}")
@@ -272,7 +273,7 @@ def test_item2_executor_return_unreadable_same_mechanism(rig):  # noqa: F811
     assert check["header_problem"]["kinds"] == ["unreadable"] and check["header_problem"]["line_no"] == 3
     prompt = header_fix_prompt_value(rig.gov, task)
     _show(f"[② 执行交回修头指令] {prompt}")
-    assert prompt.startswith(f"你的交回报告 {ret} 的报告头(frontmatter)读不出") and "报告头第 3 行 `model: glm-5.3 (provider: kiwiai)` 读不出" in prompt
+    assert prompt.startswith(f"你的交回报告 {ret} 的报告头(frontmatter)读不出") and "报告头第 3 行 `engine: glm-5.3 (provider: kiwiai)` 读不出" in prompt
     rec = LoopRunRecorder(rig.gov, task, driver=DRIVER, contract=load_loop_contract(), warn=_show)
     rec.end(outcome="not_derivable", exit_code=4, reason="frontmatter_unreadable", message=f"frontmatter 读不出 @ None/frontmatter_unreadable ({task})")
     na = lrr.loop_status(rig.gov, task)["next_action"]

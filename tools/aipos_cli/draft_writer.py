@@ -772,6 +772,8 @@ def create_draft(
         _intent_warnings.append(f"harness/lane 派生失败(声明缺失): {e}")
     # AIPOS-F196 件①: 固定候选卡(validation)起草即核来源卡与候选(fail-closed; 与发卡同一判据 candidate_subject_refusals)
     project_reasons = [*project_reasons, *candidate_subject_refusals(repo_root, normalized)]
+    # AIPOS-F233 件②: 运行证据声明命令别名按本卡交付主体改写为规范形(改写前后原文进 warnings; 词表外花括号按字面保留, 提示由 draft_validator 同一声明校验给)
+    _intent_warnings.extend(_normalize_evidence_placeholders(normalized))
     
     # AIPOS-F76 件①: Inject machine-generated 工作纪律 section into body
     # Use the single-source derive function (F68 established, now wiring to create path)
@@ -1093,6 +1095,19 @@ def _append_gate_contract_section(
     return rendered_markdown.rstrip() + "\n\n" + section + "\n"
 
 
+def _normalize_evidence_placeholders(metadata: dict[str, Any]) -> list[str]:
+    """AIPOS-F233 件②: 起草 / 发卡对卡面运行证据声明做占位规范化(唯一实现 artifact_ingest.normalize_runtime_evidence_declaration, 原地改
+    metadata); 返回改写说明(改写前后原文)。无声明 / 无别名 = []。"""
+    from tools.aipos_cli.artifact_ingest import normalize_runtime_evidence_declaration, runtime_evidence_declaration
+
+    key = str(runtime_evidence_declaration()["card_field"])
+    if metadata.get(key) in (None, ""):
+        return []
+    normalized = normalize_runtime_evidence_declaration(metadata[key], card_fm=metadata, task_id=str(metadata.get("task_id") or ""))
+    metadata[key] = normalized["value"]
+    return list(normalized["notes"])
+
+
 def publish_draft(
     repo_root: Path,
     draft_path: str | Path,
@@ -1308,6 +1323,16 @@ def publish_draft(
                 )
         except _IntentSchemaLoadError as exc:
             validation["blocking_reasons"].append(f"AIPOS-F78 件①: harness/lane 声明缺失, 拒发布: {exc}")
+
+        # AIPOS-F233 件②: 发卡规范化——运行证据声明命令别名按本卡交付主体改写为规范形, 改写前后原文进 warnings(= 发布记录 warnings)
+        _evidence_notes = _normalize_evidence_placeholders(publish_metadata)
+        if _evidence_notes:
+            rendered_markdown = render_markdown_task_card(publish_metadata, body)
+            try:
+                rendered_markdown = _append_gate_contract_section(repo_root, publish_metadata, str(task_id), rendered_markdown)
+            except ContractSectionError as exc:
+                validation["blocking_reasons"].append(str(exc))
+        validation["warnings"].extend(_evidence_notes)
 
         # AIPOS-F143 件③: 发卡核身份(执行者 / 审计者须为本项目已接入实例; 判定唯一实现 enrollment.instance_enrollment)——
         # 读派生后的意图面(harness 缺省已补), 与起草缺省同读执行方式声明

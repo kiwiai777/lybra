@@ -1638,6 +1638,12 @@
     "single_implementation": "tools/aipos_cli/artifact_ingest.ingest_task_artifact (CLI: lybra artifact ingest; next_resolver.execute_derived_action 的 return/verdict 步经此入口)",
     "report_contract": "AIPOS-F93 件①(F92R 实撞: 产品要求的报告必填字段从未告知写报告的 agent, 审计报告缺 commit_sha 被 ingest 拒): <return|verdict>.required_frontmatter 是报告必填字段的唯一声明, field_hints 是逐键说明(占位 {branch} = 该报告对应的卡分支: 执行卡 = 本卡分支, 审计卡 = 被审卡分支; {allowed_verdict_values} = N4.record.allowed_verdict_values)。唯一渲染 next_resolver.report_frontmatter_contract / render_report_frontmatter_clause, 渲染进: (a) 派生审计卡报告落点句 audit_derivation.zero_gate_report_sentence, (b) 执行卡报告落点句 machine_zone.derive_machine_zone_纪律段, (c) my-tasks next_card.report_required_frontmatter(工位 go.ts 开工提示只读原样列出; 审计卡由产品给出被审 tip/tree 值 = 取证工作树 HEAD), (d) 认领时生成的报告模板 record_writer.build_<return|verdict>_skeleton_markdown, (e) 章程报告节 charter_render.charter_render_context; 禁第二份清单/第二份文案",
     "report_refusal_clause": "缺任一项或仍为占位, 报告被拒收",
+    "report_header_yaml": {
+      "description": "AIPOS-F233 件⑥(10-25 AIPOS-F225R / F232R 审计报告头 `model: glm-5.3 (provider: kiwiai)` 未加引号致 YAML 解析失败两次): 报告头 YAML 常见笔误的预防与容错(唯一声明)。预防: 执行 / 审计开工提示与 lybra kickoff 的报告必填行(next_resolver.render_report_field_lines 唯一渲染)末尾附 quote_rule(值含冒号须加引号, 自由文本键示例)。容错: frontmatter 唯一解析口(frontmatter._parse_frontmatter_uncached)解析失败时, 对 free_text_keys 所列顶层键、值为不带引号的单行 plain scalar 且含「: 」者, 按整行值加双引号重解析一次; 成功 = 用重解析结果(报告原文不改), 产物入口(artifact_ingest.validate_task_artifact)对本卡报告附 repair_note(frontmatter.frontmatter_repair_notes 唯一判定); 不成功(另有 YAML 错)/ 非声明键同类错 = 照旧读不出(INGEST_FRONTMATTER_UNREADABLE, 修报告头例行修法)。清单只追加。",
+      "free_text_keys": ["model", "harness", "provider", "runtime", "agent", "title", "summary", "note", "notes"],
+      "quote_rule": "- 报告头 YAML: 值含冒号(`: `)须加引号, 自由文本键({keys})同此, 如 `model: \"glm-5.3 (provider: kiwiai)\"`(不加引号 = YAML 读不出, 报告被拒收)",
+      "repair_note": "报告头第 {line_no} 行自由文本键 {key} 的值含冒号未加引号(`{line_text}`), 已按整行值加引号读出(AIPOS-F233 件⑥ 容错; 报告原文未改, 下次请加引号)"
+    },
     "report_refusal_clause_note": "AIPOS-F215 件③(F208 P2-7: 「缺任一项或仍为占位, 拒收」原文在 my-tasks 开工提示三模板 / lybra kickoff 交回节 / 章程报告必填句 / write-return 技能 5+ 处复制): 报告必填字段拒收条款的唯一声明。读取口 next_resolver.report_refusal_clause; 渲染进 verbs lybra_my_tasks.kickoff 模板占位 {refusal_clause}、verbs lybra_kickoff.texts.return_report 占位 {refusal_clause}、章程报告必填句 render_report_frontmatter_clause; 技能只引用开工提示, 不另写原文。",
     "report_placeholder": {
       "description": "AIPOS-F215 件①(gap #219, AIPOS-F213R 审计 F-1: 执行体在第二次全量未完时先写 RETURN.md, 正文含 RUNALL_TIP2_PLACEHOLDER / RESIDUAL_PLACEHOLDER 占位与预写计数; loop 以文件出现即续推, 产物入口只核 frontmatter, 门交回未拒正文占位): 交回 / 审计报告正文占位的唯一判据声明——与认领骨架的「待填写」占位(record_writer.build_<return|verdict>_skeleton_markdown; frontmatter 值判据 next_resolver._is_placeholder_value 同读 skeleton_prefix)同一判据族, 不另立正则表。判定唯一实现 validation_common.report_body_placeholders: 产物入口 artifact_ingest(交回 return 与审计裁决 verdict 同判, 拒因码 rejection_category, 拒因逐条指出行号与该行原文)与门交回自检 board_adapter._check_return_not_skeleton(经 validation_common.check_placeholder_in_text)同读。loop 等待判据不改(仍以报告文件出现为交回信号), 本判据在入门兜底; 写报告一方按 write_last_rule 最后落盘。",
@@ -1820,7 +1826,30 @@
           "commit_sha": "被审分支 tip(审计报告 commit_sha 同值)",
           "tree_hash": "被审分支 tip 的 tree"
         },
-        "command_match": "卡声明的每条命令按占位渲染后, 与某条运行记录的 command 在空白折叠后逐字相等; 加参数(如 --preflight-only)即不算该条已运行",
+        "command_match": "卡声明的每条命令按占位渲染后, 与某条运行记录的 command 在空白折叠后逐字相等; 加参数(如 --preflight-only)即不算该条已运行。AIPOS-F233: 渲染先按 placeholder_vocabulary 把别名改写为被审卡交付主体的规范占位再代值(两种交付主体的同义占位互认)",
+        "placeholder_vocabulary": {
+          "description": "AIPOS-F233 件①(10-25 chris 理想 HBLX-52 实撞: 分支卡 audit_runtime_evidence.commands 误用固定候选卡词表 {src_dir}/{candidate}, 分支卡审计只渲染 {worktree}/{commit_sha}/{tree_hash} → 审计体 59 项离线测试实跑通过, 证据仍逐字不匹配被拒收, loop 按 relaunch_cap 白拉起审计体两次 → runtime_evidence_exhausted → Owner 撤换重发): 审计 / 验证命令占位统一词表(唯一声明; 读取口 artifact_ingest.placeholder_vocabulary, 加载即校验: 每个占位名恰属一个语义, 各主体规范名 = 该主体已声明占位(branch = placeholders, candidate = candidate_subject.placeholders), 两主体已声明占位全部入表)。交付主体 subjects 判据 = 被审卡(声明所在卡)是否固定候选(next_resolver.card_candidate_subject, F196 唯一判据)。meanings 每项一个语义: names = 该语义的全部占位名(两主体同义占位互为别名), canonical.<主体> = 该主体的规范占位名。渲染唯一实现 artifact_ingest.render_evidence_command: 先按主体把别名改写为规范形(canonicalize_evidence_command)再代值; 裁决入口 runtime_evidence_check、开工稿 / 派审步骤、发卡规范化同读。只有出现在某语义 names 里的 {名} 才算占位; 其余 {xxx}(placeholder_pattern 形但不在词表; awk '{print}'、jq、json 片段等)与 ${VAR} 一律是字面文本: 渲染原样保留、裁决入口按字面与实跑逐字比对, 不拒、不判声明错, 只给提示(texts.literal, 附相近已知占位建议)。发卡规范化(normalize_runtime_evidence_declaration): draft create / publish / queue amend / 补审派发(--runtime-evidence-command)对卡面声明命令扫占位: 别名 = 自动改写为本主体规范形, 输出(发布 = 发布记录 warnings)逐条写明改写前后原文(texts.rewrite); 字面花括号 = 不拒, 输出与发布记录 warnings 提示一行(texts.literal, 列出相近已知占位)。已发布在途卡(存量别名声明)按别名渲染即可入门, 不再因用错词表拒收(原 F199 legacy_placeholders 迁移提示退役)。",
+          "placeholder_pattern": "(?<![${])\\{([a-z_][a-z0-9_]*)\\}(?!\\})",
+          "subjects": {
+            "branch": "被审卡交付主体为卡分支(code / docs 等写产品仓的卡与其余非固定候选卡): 审计在审计分配工作树运行",
+            "candidate": "被审卡交付主体为固定候选(enums.schema task_mode.candidate_subject, validation 等): 审计在审计实例自己的验证根 run 运行(AIPOS-F199)"
+          },
+          "meanings": [
+            {"id": "work_dir", "label": "审计 / 验证分配的源码工作目录", "names": ["worktree", "src_dir"], "canonical": {"branch": "worktree", "candidate": "src_dir"}},
+            {"id": "run_root", "label": "审计运行根目录(固定候选 = 验证根 run 目录; 卡分支 = 审计分配工作树本身)", "names": ["run_dir"], "canonical": {"branch": "worktree", "candidate": "run_dir"}},
+            {"id": "subject_commit", "label": "被审主体提交(卡分支 tip / 固定候选, 40 位 sha)", "names": ["commit_sha", "candidate"], "canonical": {"branch": "commit_sha", "candidate": "candidate"}},
+            {"id": "subject_tree", "label": "被审主体提交的 tree", "names": ["tree_hash", "candidate_tree"], "canonical": {"branch": "tree_hash", "candidate": "candidate_tree"}}
+          ],
+          "equivalence": "受限 amend 渲染等价判据(AIPOS-F233 件④, 唯一实现 artifact_ingest.evidence_commands_render_equivalent; queue amend --restricted 与返工自动放行范围判据 queue_mutation.auto_extension_check 同读): 条数相同; 逐条把占位换成同一记号后命令骨架逐字相同; 逐个位置: 改前是已知占位 = 改后须为已知占位且按本卡交付主体的规范名相同(渲染为同一值: 别名规范化 / 同义改名); 改前是字面花括号 = 改后须逐字相同(字面文本的改动属改命令, 不算等价)。不等价 = 照旧(命令属验收, 在途不改)",
+          "texts": {
+            "rewrite": "AIPOS-F233 占位规范化(交付主体 {subject}): 卡 {task_id} {card_field} 命令 #{index} 别名 {pairs} 已改写为规范形: 改写前 `{before}` → 改写后 `{after}`",
+            "literal": "卡 {task_id} {card_field} 命令 #{index} 里的 {names} 不是占位(两种交付主体词表都没有), 按字面保留、按字面比对实跑命令(awk / jq / json 片段等的花括号属此类); 如本意是占位, 可用: 卡分支主体 {branch}; 固定候选主体 {candidate}; 同义互为别名: {aliases}{suggestion}",
+            "literal_suggestion": "; 相近的已知占位: {pairs}",
+            "declaration_invalid": "卡面 {card_field} 声明本身有问题(来源卡 {card}), 审计体补做也匹配不上, 不再拉起审计体(AIPOS-F233 件③): {problems}",
+            "amend_outlet": "出口(顾问自处理, 不需 Owner、不撤换): `{amend}`(amendments 已按拒因给出修正后的声明值, 核对后预演, 看清再去掉 --dry-run 确认; 已认领卡 --restricted 只放行不改验收的修正: 形修正(commands 单串改列表)与渲染等价的占位改名){suggestion}",
+            "amend_suggestion": "; 建议改法: {pairs}"
+          }
+        },
         "worktree_rule": "每条运行记录的 worktree 解析后须 = 审计卡分配工作树; = 被审执行卡工作树单列拒因(执行体原件不算独立核验)",
         "candidate_subject": {
           "description": "AIPOS-F199 件①(10-20 chris OTA HBJOTA-61V 实证, gap #204): 被审卡交付主体为固定候选(enums.schema task_mode.candidate_subject, F196 唯一判据 next_resolver.card_candidate_subject; validation 等)时, 被审卡与其审计卡都不建卡工作树, 执行与审计各在自己声明的验证根 run 里验证固定源码——审计运行证据改为绑定审计实例自己的验证根 run, 不再推导 / 要求审计产品工作树。判据仍在 runtime_evidence_check 唯一实现内分形(其余卡照旧核审计分配工作树, 行为不变); run / 候选 / 源码封签 / 指纹核对复用 validation_root(F190/F191/F194/F197)唯一实现: 运行记录所在 run = validation_root.locate_run(声明 path_template 反查), 归属 = validation_root.task_ownership_problems(审计卡 + 审计实例), 源码封签 = validation_root.src_verify_evidence_check(helper src-verify 写在 run 目录的 .lybra-vr/src-verify.jsonl 末条)。audit_runtime_evidence.required 语义与执行 / 审计隔离(executor_run_dir_refs)保留。",
@@ -1831,7 +1860,6 @@
             "candidate": "被审卡卡面固定候选 40 位 sha(validation_candidate)",
             "candidate_tree": "固定候选的 tree(候选所在仓 git rev-parse <候选>^{tree})"
           },
-          "legacy_placeholders": ["worktree", "commit_sha", "tree_hash"],
           "rules": [
             "run_dir 须为某验证根声明 path_template 渲染出的 run 目录(绝对路径), run_id 与之对应",
             "该声明须为本审计卡(task_id = 审计卡号)且属本审计实例(validation_root.task_ownership_problems); 执行实例的 run / 他卡的 run 一律拒",
@@ -1847,7 +1875,6 @@
             "⑧ run 在目标主机 {host}(非治理根所在机)时, 运行记录的日志须写在本 run 的证据目录内(建议 {run_dir}/logs/; 证据目录 = {evidence_dirs}; log_path 填目标主机上的路径; run-long 日志在治理根所在机, 远端 run 不适用); 卡面命令全部跑完、run 仍活动时生成证据清单(AIPOS-F200; 末行 EVIDENCE_OK): {evidence_manifest}",
             "⑨ 在治理根所在机取回证据到审计报告落点副本 {evidence_copy}(经声明 ssh 别名只读拉取清单内文件并逐个核 sha256; 裁决入口对副本做与本机 run 同一核对, 副本禁手改): {evidence_fetch}"
           ],
-          "legacy_hint": "卡 {task_id} 交付主体为固定候选(task_mode={task_mode}), 审计不建产品工作树, 卡面 {card_field} 命令 {command!r} 用了旧占位 {legacy}; 迁移: 改用 {{run_dir}} / {{src_dir}} / {{candidate}} / {{candidate_tree}}(审计实例自己的验证根 run 目录 / 本 run 送达的候选源码 / 固定候选 / 候选 tree), 如 {{worktree}} → {{src_dir}}、{{commit_sha}} → {{candidate}}、{{tree_hash}} → {{candidate_tree}}; 出口: 顾问 lybra queue amend 修正卡面声明(未认领卡)后重推导",
           "outlet": "出口: 审计体按开工稿 / 审计卡「验证卡运行证据步骤」在本审计卡自己的验证根 run 里(run-start → init-run → 源码送达 → src-verify SRC_OK)重跑卡面声明的命令, 按 transitions.schema artifact_ingest.verdict.runtime_evidence.candidate_subject 把每条 command / run_id / run_dir / exit_code / log_path / log_sha256 写进报告「{heading}」节; 跑不了(环境 / 时长)= 给 FAIL 或 BLOCK 并写原因, 不得以执行实例的 run 或其产物代替。",
           "steps_title": "### 验证卡运行证据步骤(AIPOS-F199: 被审卡交付主体为固定候选, 审计不建产品工作树, 证据绑定你自己的验证根 run)",
           "steps": [
@@ -1909,9 +1936,12 @@
         },
         "loop": {
           "derivation_action": "evidence_rework",
-          "rule": "推导核对 claimed 审计卡已就绪报告先核本节判据, 不过 = 不可推导 action.type=evidence_rework(triggered_by=auditor, 非硬停, 不升 Owner): loop 等审计体并拉起它补做, 拒因原文附在开工提示与手工提示后; 等待中报告被改写仍不过 = 唤醒重判。同一运行内对同一审计卡因本拒因拉起超过 relaunch_cap 次 = 结束原因 exhausted_end_reason(verbs.schema lybra_loop_status.next_action.by_end_reason 判 owner_needed, 即连败上限)",
+          "rule": "推导核对 claimed 审计卡已就绪报告先核本节判据, 不过 = 不可推导 action.type=evidence_rework(triggered_by=auditor, 非硬停, 不升 Owner): loop 等审计体并拉起它补做, 拒因原文附在开工提示与手工提示后; 等待中报告被改写仍不过 = 唤醒重判。同一运行内对同一审计卡因本拒因拉起超过 relaunch_cap 次 = 结束原因 exhausted_end_reason(verbs.schema lybra_loop_status.next_action.by_end_reason 判 owner_needed, 即连败上限; AIPOS-F233 件⑤: 档位守卫 lybra_owner_inbox.tiers.loop_reasons 归第三档 advisor_fix, 不进 Owner 收件箱, 顾问换审计体 / 修环境 / 修声明)",
           "relaunch_cap": 2,
-          "exhausted_end_reason": "runtime_evidence_exhausted"
+          "exhausted_end_reason": "runtime_evidence_exhausted",
+          "declaration_invalid_action": "evidence_declaration_invalid",
+          "declaration_invalid_end_reason": "runtime_evidence_declaration_invalid",
+          "declaration_invalid_rule": "AIPOS-F233 件③: 卡面运行证据声明本身有问题(形不合, 或命令含本主体渲染不了的已知占位——词表加载守卫保证两主体都有规范名, 此条作 fail-closed 兜底; 字面花括号不算, 判据唯一 artifact_ingest.evidence_declaration_problem; runtime_evidence_check 同判 declaration_invalid_category)= 审计体补做也匹配不上: 推导核对 claimed 审计卡(有无报告都核)给不可推导 action.type = declaration_invalid_action(triggered_by=advisor, 带受限 amend 命令原文), loop 不拉起 / 不再拉起审计体, 立即以 declaration_invalid_end_reason 结束(verbs.schema lybra_loop_status.next_action.by_end_reason = advisor_fix, 修法 routine_rejections.end_reasons.<该原因>); 顾问 queue amend(已认领卡 --restricted, 渲染等价判据 placeholder_vocabulary.equivalence)修正后原命令续跑"
         }
       },
       "report_snapshot": {

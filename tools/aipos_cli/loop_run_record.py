@@ -2349,6 +2349,11 @@ def _routine_end_reason_action(view: dict[str, Any], rules: dict[str, Any], gove
         values = {**values, **candidate_fail_fix_values(governance_root, task_id, actor=str(view.get("driver") or ""))}
     if any("{header_fix_prompt}" in str(step) for step in routine["end_reasons"][reason]["fix"]):
         values = {**values, "header_fix_prompt": header_fix_prompt_value(governance_root, task_id, view)}  # AIPOS-F204 件③ / F232 件②
+    if any("{evidence_amend}" in str(step) for step in routine["end_reasons"][reason]["fix"]):
+        # AIPOS-F233 件③: 运行证据声明错的修正出口(拒因 + 受限 amend 命令原文 + 建议改法), 唯一渲染 artifact_ingest.evidence_declaration_fix_line
+        from tools.aipos_cli.artifact_ingest import evidence_declaration_fix_line
+
+        values = {**values, "evidence_amend": evidence_declaration_fix_line(governance_root, task_id)}
     where = f"end_reasons.{reason}.fix"
     fix = [_render_routine(step, values, where) for step in routine["end_reasons"][reason]["fix"]]
     resume = _render_routine(routine["resume_hint"], values, "resume_hint")

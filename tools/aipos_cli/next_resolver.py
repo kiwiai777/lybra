@@ -1339,7 +1339,19 @@ def render_report_field_lines(contract: Any, *, decl: dict[str, Any] | None = No
             raise KickoffRenderError("verbs.schema.json lybra_my_tasks.kickoff.report_field_line 缺 with_value/without_value")
         entry = {"key": item["key"], "hint": item["hint"], "value": value or ""}
         field_lines.append(_KICKOFF_PLACEHOLDER_RE.sub(lambda m, entry=entry: _kickoff_value(entry, m.group(1)), line_template))
+    # AIPOS-F233 件⑥: 报告头 YAML 写法预防(值含冒号须加引号; 声明 transitions artifact_ingest.report_header_yaml.quote_rule)
+    field_lines.append(report_header_quote_rule())
     return field_lines
+
+
+def report_header_quote_rule() -> str:
+    """AIPOS-F233 件⑥: 报告必填行末尾的 YAML 引号规则一行(声明 transitions artifact_ingest.report_header_yaml; 缺 = SchemaLoadError)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = _artifact_ingest_declaration().get("report_header_yaml")
+    if not isinstance(decl, dict) or not str(decl.get("quote_rule") or "").strip() or not isinstance(decl.get("free_text_keys"), list):
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.report_header_yaml(quote_rule / free_text_keys)未声明(AIPOS-F233)")
+    return str(decl["quote_rule"]).replace("{keys}", " / ".join(str(k) for k in decl["free_text_keys"]))
 
 
 def remote_kickoff_context(workspace_root: Path, instance: str) -> dict[str, str]:
@@ -1879,6 +1891,30 @@ def _claimer_instance(records: dict[str, Any]) -> str:
 
 def _claim_record_missing(task_id: str) -> str:
     return f"claim 记录 agent_instance(5_tasks/records/claims/{task_id}/claim_*.md, 账务动词 actor 依据)"
+
+
+def _evidence_declaration_invalid(task_id: str, evidence: dict[str, Any], *, node: str, path: str) -> dict[str, Any]:
+    """AIPOS-F233 件③: 审计卡生效的运行证据声明本身有问题(artifact_ingest.evidence_declaration_problem 唯一判据)→ 不可推导,
+    action.type = transitions runtime_evidence.loop.declaration_invalid_action(triggered_by=advisor; end_reason 读声明), loop 不拉起 / 不再拉起
+    审计体, 立即以该结束原因结束(advisor_fix: 顾问受限 amend 修正声明后续跑)。"""
+    from tools.aipos_cli.artifact_ingest import runtime_evidence_declaration
+
+    loop = runtime_evidence_declaration()["loop"]
+    reasons = [r for r in evidence.get("reasons") or [] if r]
+    return {
+        "task_id": task_id,
+        "derivable": False,
+        "current_node": node,
+        "current_state": "claimed",
+        "triggered_by": "advisor",
+        "command": "",
+        "verb": "lybra_audit_verdict_dry_run",
+        "missing_records": reasons,
+        "suggested_action": f"卡面运行证据声明本身有问题({evidence.get('category')}), 顾问修正声明(不拉起审计体): " + "; ".join(reasons),
+        "notes": "N3/N4: 运行证据声明渲染不了 = 声明错归顾问(AIPOS-F233 件③), 不按 relaunch_cap 让审计体补做",
+        "action": {"type": str(loop["declaration_invalid_action"]), "card": task_id, "path": path, "category": evidence.get("category"),
+                   "end_reason": str(loop["declaration_invalid_end_reason"])},
+    }
 
 
 def _not_derivable_no_claim(task_id: str, *, node: str, state: str, verb: str, triggered_by: str, notes: str) -> dict[str, Any]:
@@ -5025,6 +5061,9 @@ def _derive_next_step(
         from tools.aipos_cli.board_adapter import runtime_evidence_check
 
         evidence = runtime_evidence_check(workspace_root, task_id, fm, report_path=verdict_artifact, report_fm=verdict_fm)
+        if evidence is not None and evidence["category"] == str(runtime_evidence_declaration()["declaration_invalid_category"]):
+            # AIPOS-F233 件③: 声明本身有问题(形不合 / 命令渲染不了)= 审计体补做也匹配不上 → 归顾问受限 amend, 不让审计体补做
+            return _evidence_declaration_invalid(task_id, evidence, node="audit_verdict", path=str(verdict_artifact))
         if evidence is not None:
             rework_action = str(runtime_evidence_declaration()["loop"]["derivation_action"])
             return {
@@ -5133,6 +5172,14 @@ def _derive_next_step(
     
     # 审计卡 claimed 但无 verdict 报告 → 不可推导
     if is_audit_card and queue_dir == "claimed" and not verdict_artifact:
+        # AIPOS-F233 件③: 卡面运行证据声明本身有问题(渲染不了)= 不拉起审计体(审计体实跑也匹配不上), 归顾问受限 amend
+        from tools.aipos_cli.artifact_ingest import evidence_declaration_problem
+
+        declaration_problem = evidence_declaration_problem(workspace_root, task_id, fm)  # 形不合等声明本身错归入问题(不上抛; 字面花括号不算)
+        if declaration_problem is not None:
+            return _evidence_declaration_invalid(task_id, {"category": declaration_problem["category"],
+                                                           "reasons": [*declaration_problem["reasons"], declaration_problem["outlet"]]},
+                                                 node="audit_dispatch", path="")
         return {
             "task_id": task_id,
             "derivable": False,

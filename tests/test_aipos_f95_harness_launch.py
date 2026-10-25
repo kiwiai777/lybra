@@ -518,7 +518,8 @@ def test_item1_kickoff_rendered_from_declaration_fail_closed():
     _show("[件①] render_kickoff 原文:\n" + text)
     tmpl = json.loads((REPO_ROOT / "schema" / "verbs.schema.json").read_text(encoding="utf-8"))["verbs"]["lybra_my_tasks"]["kickoff"]
     assert text.startswith("已认领任务卡 AIPOS-Z。\n\n工作树路径: /r/.worktrees/AIPOS-Z\n") and "{" + "task_id}" in tmpl["template"]
-    assert "- commit_sha: (说明 {不是占位})\n- branch: card/AIPOS-Z(分支)\n\n按你的 AGENTS.md 执行" in text
+    # AIPOS-F233 件⑥: 报告必填行末尾追加报告头 YAML 引号规则一行(next_resolver.report_header_quote_rule)
+    assert ("- commit_sha: (说明 {不是占位})\n- branch: card/AIPOS-Z(分支)\n" + nr.report_header_quote_rule() + "\n\n按你的 AGENTS.md 执行") in text
     for broken in ({**card, "report_required_frontmatter": []}, {**card, "worktree_path": None},
                    {**card, "report_required_frontmatter": [{"hint": "x", "value": None}]},
                    {**card, "report_required_frontmatter": [{"key": "k", "hint": "x", "value": 3}]}):
