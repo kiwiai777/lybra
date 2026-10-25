@@ -133,8 +133,10 @@ def test_item2_conclusion_outcomes_single_declaration():
     # AIPOS-F221 件②: CLI choices / MCP enum = 结案值域 + 复核打回返工(verbs.schema lybra_mark_concluded.review_rework.outcome, 不结案,
     # 不进结案值域; 唯一渲染 board_adapter.mark_concluded_outcome_choices)
     rework = _schema("verbs")["verbs"]["lybra_mark_concluded"]["review_rework"]["outcome"]
-    assert declared == outcomes and rework not in declared
-    assert list(cli) == list(mcp["enum"]) == [*declared, rework]
+    # AIPOS-F230 件④: + 同轮补正(verbs.schema lybra_mark_concluded.same_round.outcome, 不结案)
+    same_round = _schema("verbs")["verbs"]["lybra_mark_concluded"]["same_round"]["outcome"]
+    assert declared == outcomes and rework not in declared and same_round not in declared
+    assert list(cli) == list(mcp["enum"]) == [*declared, rework, same_round]
     assert not {"enum", "$enum"} & (set(field) | set(param)), "card 字段 / verbs 参数不得另列结案值域"
 
 

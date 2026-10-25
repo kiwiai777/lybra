@@ -572,6 +572,23 @@ lybra mark-concluded --task-id <卡ID> --actor <你的顾问实例> --report-pat
 5. **声明独立审计**: 审计 pi 开工提示「工作树: 不建(被审卡只写治理根…)」, 报告必填 `verdict` + `outputs_digest`(产品给值, 照抄); 入口与门侧裁决
    都核「此刻清单指纹 = 交回绑定」; finalize 无合入(finalization `merge_commit = outputs:<指纹>`, 不推送不部署)后结案。
 
+#### 非通过状态的全部合法出口(AIPOS-F230: 门只守底线、不规定路线)
+**何时用**: 卡停在任何非通过状态(审计 FAIL / BLOCK / 连续 BLOCK、固定候选 FAIL 两态、快车道复核不通过、返工额度用尽)。`lybra next` 文本末尾
+`Exits(...)` 段、`--json` 的 `legal_exits` 与 `lybra loop status` 的 `next_action.legal_exits` 同一份: 列出全部合法出口(同主体返工 / 同轮补正 /
+重新派审 / 换新主体 / 改范围 / 撤卡 / 授权追加返工)及其命令与推荐理由(推荐按审计 fail_scope、执行产物是否 BLOCK 报告、返工额度改判);
+你按情况任选其一, 门只核所选出口的底线不变式(独立审计 / 证据绑定主体 / 记录可追溯 / 禁区不碰)。标「须 Owner 第一档 X」的出口先带该事由升 Owner。
+- **同轮补正**(已交回、审计未开始——未派审或本轮审计卡还在 pending; 如送审前发现报告非终版): 不占返工轮, 本轮未认领审计卡同一操作撤回,
+  执行体补正重写交回后 loop 重交回、门派下一轮取代被撤轮(快车道卡 = 回到你复核); 审计已认领 / 已出裁决 = 拒, 改走裁决后的出口:
+```bash
+lybra mark-concluded --task-id <卡ID> --actor <你的顾问实例> --report-path <Return相对路径> --outcome same_round --focus-items '["<要补正的点>"]' --dry-run
+```
+- **撤换 / 撤卡连带撤审计卡**: `queue supersede` / `queue withdraw` 业务卡时, 其在途审计卡(pending / claimed)同一操作内一并撤回(预演列出,
+  随业务卡落账), 不再逐张手工撤。
+- **配置 / 文档卡别交付程序**: task_mode=config / docs 的卡交回产物含可执行程序(代码扩展名或 shebang 且超行数阈值或带可执行位; 含本卡验证根 run
+  目录)= 交回入口拒 `INGEST_PROGRAM_IN_NON_CODE_CARD`, 出口 = 另出 task_mode=code 的卡(代码仓车道、测试、独立审计); 发卡时产出指向代码文件即预警。
+- **只改非验收字段不算改范围**: `queue amend --restricted` 只补 `audit_runtime_evidence.host` / lane.paths 等白名单字段, 返工到上限仍第二档自动追加;
+  改验收命令 / 产物 / 候选仍算范围变化。
+
 #### `lybra mark-concluded` / `lybra queue close --conclusion-note`(AIPOS-F78 前置零⑨)
 **何时用**:已 PASS 但不走 finalize 的卡(如产物由续卡承接):
 ```bash

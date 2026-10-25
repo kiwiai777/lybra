@@ -4621,11 +4621,21 @@ def _candidate_run_problem(workspace_root: Path, audit_task_id: str, entry: dict
         return {}, (f"run_dir {run_dir}(run_id {run_id})不是任何验证根声明的 run 目录(project.json validation_roots; 按声明 path_template 反查不到); "
                     "须为本审计卡声明并 run-start 的 run")
     where = f"run {run_id}(声明 {decl_entry['id']}: 卡 {decl_entry['task_id']} 实例 {decl_entry['instance']} 角色类 {decl_entry['role_class']})"
-    if decl_entry["task_id"] != audit_task_id:
+    # AIPOS-F230 件⑥: 条目声明复用上一轮(reuse.field)= 核被引轮次 / 实例 / 资格(唯一判定 next_resolver.audit_evidence_reuse), 过则按被引声明照常核
+    from tools.aipos_cli.next_resolver import evidence_reuse_declaration
+
+    reuse_decl = evidence_reuse_declaration()
+    reused_from = str(entry.get(reuse_decl["field"]) or "").strip()
+    if reused_from:
+        problem = _evidence_reuse_problem(workspace_root, audit_task_id, decl_entry, run_id, reused_from, reuse_decl)
+        if problem:
+            return {}, f"{where} {problem}"
+    elif decl_entry["task_id"] != audit_task_id:
         return {}, f"{where} 是卡 {decl_entry['task_id']} 的 run, 不是本审计卡 {audit_task_id} 的(他卡 run 不构成本卡审计运行证据)"
     if card_kinds().get(decl_entry["role_class"]) != "audit_card":
         return {}, f"{where} 不是审计实例的声明(执行 / 审计隔离)"
-    owned = task_ownership_problems(Path(workspace_root), instance=decl_entry["instance"], role_class=decl_entry["role_class"], task_id=audit_task_id)
+    owned = task_ownership_problems(Path(workspace_root), instance=decl_entry["instance"], role_class=decl_entry["role_class"],
+                                    task_id=reused_from or audit_task_id)
     if owned:
         return {}, f"{where} 不属本审计实例: {'; '.join(owned)}"
     if declaration_status(decl_entry) == "revoked":
@@ -4669,6 +4679,31 @@ def _candidate_run_problem(workspace_root: Path, audit_task_id: str, entry: dict
         return {}, f"日志 {log_path} sha256={actual[:12]} ≠ 报告自述 {log_sha[:12]}"
     return {"run_dir": run_dir, "src_dir": f"{run_dir}/{SRC_DIR_NAME}", "candidate": subject["commit_sha"],
             "candidate_tree": subject["tree_hash"]}, None
+
+
+def _evidence_reuse_problem(workspace_root: Path, audit_task_id: str, decl_entry: dict[str, Any], run_id: str, reused_from: str,
+                            reuse_decl: dict[str, Any]) -> str | None:
+    """AIPOS-F230 件⑥: 复用上一轮运行证据的核对(只供 _candidate_run_problem): ①被引卡 = 本审计卡同一被审卡更早一轮的审计卡; ②run 所在声明
+    属被引卡; ③声明实例 = 本审计卡认领实例; ④资格(next_resolver.audit_evidence_reuse 唯一判定)。通过 = None, 否则拒因一句。"""
+    from tools.aipos_cli.next_resolver import _find_task_in_queue, _read_frontmatter, audit_evidence_reuse
+    from tools.aipos_cli.validation_root import _card_instances
+
+    texts = reuse_decl["texts"]
+    field = reuse_decl["field"]
+    view = audit_evidence_reuse(Path(workspace_root), audit_task_id)
+    if reused_from not in view["earlier_rounds"]:
+        return texts["not_earlier_round"].format(field=field, value=reused_from, audit_task_id=audit_task_id, reviewed=view["reviewed"] or "?",
+                                                 rounds=", ".join(view["earlier_rounds"]) or "(无)")
+    if decl_entry["task_id"] != reused_from:
+        return texts["decl_mismatch"].format(field=field, value=reused_from, run_id=run_id, decl_task=decl_entry["task_id"])
+    path, _q = _find_task_in_queue(Path(workspace_root), audit_task_id)
+    instances = _card_instances(_read_frontmatter(path) if path else {})
+    if decl_entry["instance"] not in instances:
+        return texts["instance_mismatch"].format(run_id=run_id, decl_instance=decl_entry["instance"], instances=sorted(instances) or "(空)")
+    if not view["eligible"]:
+        return texts["not_eligible"].format(value=reused_from, verdict_id=view["verdict_id"] or "?", scope_note=view["scope_note"] or "",
+                                            rework_field=reuse_decl["rework_field"], rework_value=reuse_decl["rework_value"])
+    return None
 
 
 def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: dict[str, Any], *,
@@ -7042,6 +7077,13 @@ def mark_concluded_task(
         from tools.aipos_cli.next_resolver import review_rework_declaration
 
         review_rework = outcome_text == str(review_rework_declaration()["outcome"])
+        # AIPOS-F230 件④: 同轮补正 = same_round.outcome(不是结案结论, 不登记返工轮; 写路径 _mark_concluded_same_round)
+        from tools.aipos_cli.next_resolver import same_round_declaration
+
+        if outcome_text == str(same_round_declaration()["outcome"]):
+            return _mark_concluded_same_round(task_id=str(task_id or "").strip(), actor_text=actor_text, report_ref=str(report_path or "").strip(),
+                                              note=str(conclusion_note or "").strip(), focus_items=focus_items,
+                                              acceptance_criteria=acceptance_criteria, dry_run=dry_run, repo_root=repo_root)
         if outcome_text and not review_rework and outcome_text not in conclusion_decl["outcomes"]:
             raise ValueError(f"--outcome 只认 {list(mark_concluded_outcome_choices())}(得 {outcome!r})")
         if not review_rework and (focus_items is not None or acceptance_criteria is not None):
@@ -7210,10 +7252,109 @@ def mark_concluded_outcome_choices() -> tuple[str, ...]:
     """AIPOS-F221 件②: `lybra mark-concluded --outcome` 的 choices 与 MCP lybra_mark_concluded inputSchema enum 的唯一渲染 = 结案结论值域
     (card.schema dependency_gate.conclusion.outcomes, task_complexity.conclusion_outcomes)+ 复核打回返工(verbs.schema
     lybra_mark_concluded.review_rework.outcome; 不结案, 不进结论值域)。"""
-    from tools.aipos_cli.next_resolver import review_rework_declaration
+    from tools.aipos_cli.next_resolver import review_rework_declaration, same_round_declaration
     from tools.aipos_cli.task_complexity import conclusion_outcomes
 
-    return (*conclusion_outcomes(), str(review_rework_declaration()["outcome"]))
+    # AIPOS-F230 件④: + 同轮补正 outcome(verbs.schema lybra_mark_concluded.same_round; 不结案)
+    return (*conclusion_outcomes(), str(review_rework_declaration()["outcome"]), str(same_round_declaration()["outcome"]))
+
+
+def _mark_concluded_same_round(*, task_id: str, actor_text: str, report_ref: str, note: str, focus_items: Any, acceptance_criteria: Any,
+                               dry_run: bool, repo_root: str | Path | None) -> dict[str, Any]:
+    """AIPOS-F230 件④: 同轮补正写口(声明 verbs.schema lybra_mark_concluded.same_round + transitions nodes.N4.same_round)。前置全过才写:
+    卡在 claimed / 有门交回 / 复核者角色类(queue rework 同一判据)/ 该交回未被同轮打回过(next_resolver.same_round_state)/ 审计未开始
+    (本交回无裁决; 在途审计卡全在 audit_not_started_states)/ 补正要点非空。写: 顾问复核记录(event, outcome = same_round, 不登记返工轮)+
+    本轮未认领审计卡同一操作撤回(queue_mutation.withdraw_linked_audits)。dry_run = 零写入(预演复核记录与撤回清单)。"""
+    from tools.aipos_cli.custom_roles import authorize_instance_class
+    from tools.aipos_cli.next_resolver import (_read_task_records, card_delivery_subject, governance_outputs_return_binding,
+                                               review_rework_declaration, same_round_declaration, same_round_state)
+    from tools.aipos_cli.queue_mutation import in_flight_audit_cards, withdraw_linked_audits
+    from tools.aipos_cli.record_writer import render_markdown, write_records_atomic
+
+    operation = "mark_concluded"
+    decl = same_round_declaration()
+    codes = decl["reject_codes"]
+
+    def _refuse(code: str, **values: Any) -> dict[str, Any]:
+        return blocked_response(operation=operation, dry_run=dry_run, category="VALIDATION_ERROR",
+                                message=f"AIPOS-F230: {code}: " + str(codes[code]).format(task_id=task_id, **values),
+                                actor=_actor_payload(actor_text), data={"task_id": task_id, "code": code, "outcome": decl["outcome"]})
+
+    if not task_id:
+        raise ValueError("task_id is required")
+    resolved_root = _resolve_repo_root(repo_root)
+    card_file, queue_state = find_task_card(resolved_root, task_id)
+    if card_file is None or queue_state != "claimed":
+        return _refuse("SAME_ROUND_NOT_CLAIMED", state=queue_state or "不在队列")
+    fm, _body, _w = parse_markdown_frontmatter(card_file.read_text(encoding="utf-8"))
+    fm = fm if isinstance(fm, dict) else {}
+    role_gate = authorize_instance_class(actor_text, restricted_amend_actor_class(), resolved_root)
+    if not role_gate["ok"]:
+        return _refuse("SAME_ROUND_ROLE", required_class=role_gate["required_class"], actor=actor_text, reason=role_gate["reason"])
+    records = _read_task_records(resolved_root, task_id)
+    return_id = str((records.get("latest_return") or {}).get("return_id") or "").strip()
+    if not return_id:
+        return _refuse("SAME_ROUND_NO_RETURN")
+    pending = same_round_state(resolved_root, task_id, fm, records)
+    if pending is not None:
+        review = pending["review"]
+        return _refuse("SAME_ROUND_ALREADY_PENDING", return_id=return_id, reviewed_at=review.get("verdict_at") or "?",
+                       review_id=review.get("verdict_id") or "?")
+    latest_verdict = records.get("latest_verdict") or {}
+    if latest_verdict and str(latest_verdict.get("reviewed_return_record_ref") or "") == return_id:
+        return _refuse("SAME_ROUND_AUDIT_STARTED", audit_task_id=latest_verdict.get("audit_task_id") or "?",
+                       detail=f"本交回已出裁决 {latest_verdict.get('verdict_id') or '?'}")
+    in_flight = in_flight_audit_cards(resolved_root, task_id)
+    started = [c for c in in_flight if c["state"] not in decl["audit_not_started_states"]]
+    if started:
+        return _refuse("SAME_ROUND_AUDIT_STARTED", audit_task_id=started[-1]["audit_task_id"],
+                       detail=f"审计卡在 {started[-1]['state']}(已认领 = 审计已开始)")
+    items = _json_string_list(focus_items)
+    if not items:
+        return _refuse("SAME_ROUND_FOCUS_REQUIRED", value=repr(focus_items))
+    criteria: list[str] = []
+    if acceptance_criteria is not None:
+        parsed = _json_string_list(acceptance_criteria)
+        if parsed is None:
+            raise ValueError(f"--acceptance-criteria 须为 JSON 字符串数组(得 {acceptance_criteria!r})")
+        criteria = parsed
+    withdraw_ids = [c["audit_task_id"] for c in in_flight]
+    event_type = str(review_rework_declaration()["event_type"])
+    reviewed_at = iso_z()
+    review_id = f"{event_type}_{task_id}_{file_slug('compact', reviewed_at)}"
+    subject = card_delivery_subject(resolved_root, task_id, fm)
+    binding = dict(governance_outputs_return_binding(resolved_root, task_id) or {}) or {"kind": subject.get("kind")}
+    values = {"record_type": RecordType.TASK_PROGRESS_EVENT, "event_type": event_type, "task_id": task_id, "review_id": review_id,
+              "actor": actor_text, "reviewer_instance": actor_text, "timestamp": reviewed_at, "outcome": str(decl["outcome"]),
+              "reviewed_return_record_ref": return_id, "artifact_subject": binding, "report_path": report_ref or None,
+              "conclusion_note": note or None, "focus_items": items, "acceptance_criteria": criteria,
+              "withdrawn_audit_task_id": withdraw_ids[-1] if withdraw_ids else None}
+    meta = {key: values[key] for key in decl["record_fields"]}  # 字段只读声明(声明多出未知字段 = KeyError, fail-closed)
+    body = (f"# Advisor Review (same round): {task_id}\n\n顾问 {actor_text} 在审计开始前复核交回 {return_id}, 同轮打回补正(不登记返工轮、"
+            f"不计返工上限)" + (f"; 本轮未认领审计卡 {', '.join(withdraw_ids)} 同一操作撤回" if withdraw_ids else "") + "。\n\n"
+            + "".join(f"- 补正要点: {x}\n" for x in items) + "".join(f"- 验收: {x}\n" for x in criteria)
+            + "\n卡留 claimed; 执行体补正重写交回后重交(审计卡 = 派下一轮审计取代被撤轮; 快车道 = 回到顾问复核)。判据 transitions nodes.N4.same_round; "
+              "实现 tools/aipos_cli/board_adapter._mark_concluded_same_round。\n")
+    record_path = record_dir(resolved_root, "events", task_id) / f"{review_id}.md"
+    data: dict[str, Any] = {"task_id": task_id, "from_queue": queue_state, "outcome": str(decl["outcome"]), "moved": False,
+                            "review_record": {"review_id": review_id, "path": str(record_path.relative_to(resolved_root)),
+                                              "reviewed_return_record_ref": return_id, "frontmatter": meta}}
+    if dry_run:
+        data["linked_audits"] = withdraw_linked_audits(resolved_root, task_id, action="same_round", actor=actor_text, dry_run=True,
+                                                       detail=f"顾问复核 {review_id}", only=withdraw_ids)
+        return make_response(ok=True, verdict=Verdict.PASS, operation=operation, dry_run=True, actor=_actor_payload(actor_text), data=data,
+                             warnings=[item["line"] for item in data["linked_audits"]],
+                             safety_notice="AIPOS-F230 mark_concluded --outcome same_round dry-run: 复核记录与撤回清单预演, 零写入; 卡留 claimed。")
+    markdown = render_markdown(meta, body, list(meta))
+    written = write_records_atomic(resolved_root, [("event", review_id, markdown, task_id)])
+    data["linked_audits"] = withdraw_linked_audits(resolved_root, task_id, action="same_round", actor=actor_text, dry_run=False,
+                                                   detail=f"顾问复核 {review_id}", only=withdraw_ids)
+    data["written"] = list(written.get("paths") or []) + linked_audit_write_paths(data["linked_audits"])
+    failed = [item["line"] for item in data["linked_audits"] if not item.get("ok")]
+    return make_response(ok=True, verdict=Verdict.PASS, operation=operation, dry_run=False, actor=_actor_payload(actor_text), data=data,
+                         warnings=[item["line"] for item in data["linked_audits"]],
+                         safety_notice=("AIPOS-F230 mark_concluded --outcome same_round: 顾问复核记录已落(不登记返工轮), 卡留 claimed"
+                                        + ("; 连带撤回有失败条, 见 warnings 补撤命令" if failed else "") + "; 复核记录随该卡 N6 收账。"))
 
 
 def _json_string_list(value: Any) -> list[str] | None:
@@ -7283,6 +7424,7 @@ def _mark_concluded_review_rework(*, resolved_root: Path, tid: str, queue_state:
     latest_review = advisor_review_anchor(resolved_root, tid)
     reused: str | None = None
     if (latest_review is not None and str(latest_review[1].get("reviewed_return_record_ref") or "") == return_id
+            and str(latest_review[1].get("outcome") or "") == str(decl["outcome"])  # AIPOS-F230: 同轮补正记录不当复核打回复用
             and rework_round_for_verdict(fm, latest_review[1]) is None):
         reused = review_id = str(latest_review[1]["verdict_id"])
     role_gate = authorize_instance_class(actor_text, restricted_amend_actor_class(), resolved_root)
@@ -8214,6 +8356,7 @@ def queue_write_paths(result: dict[str, Any] | None) -> list[str]:
         paths += [str(data[k]) for k in ("task_path", "amendment_record_path") if data.get(k)]
     if data.get("worktree_cleanup_record"):  # AIPOS-F187: 清理记录随同落账
         paths.append(str(data["worktree_cleanup_record"]))
+    paths += linked_audit_write_paths(data.get("linked_audits"))  # AIPOS-F230 件⑤: 连带撤回的审计卡随同落账
     for item in list(result.get("record_writes") or []) + list(result.get("record_updates") or []):
         if isinstance(item, dict) and item.get("path") and (item.get("wrote") or item.get("updated")):
             paths.append(str(item["path"]))
@@ -8357,6 +8500,14 @@ def withdraw_task(
         
         # Build response
         verdict = result.get("verdict", Verdict.BLOCK)
+        # AIPOS-F230 件⑤: 业务卡撤回 = 其在途审计卡同一操作连带撤回(审计卡自身撤回不再连带)
+        from tools.aipos_cli.audit_derivation import is_audit_card
+        from tools.aipos_cli.queue_mutation import withdraw_linked_audits
+
+        withdrawn_id = str(result.get("task_id") or selected_task_id or "")
+        link_applies = bool(withdrawn_id) and not is_audit_card(withdrawn_id, task.get("metadata") or None)
+        linked = withdraw_linked_audits(resolved_root, withdrawn_id, action="withdraw", actor=actor_text, dry_run=True,
+                                        detail=str(reason).strip()) if link_applies and dry_run else []
         
         if dry_run:
             response = make_response(
@@ -8373,9 +8524,10 @@ def withdraw_task(
                     "to_state": result.get("to_state"),
                     "reason": str(reason).strip(),
                     "owner_ruling_ref": result.get("owner_ruling_ref"),
+                    "linked_audits": linked,  # AIPOS-F230 件⑤: 在途审计卡将随本次撤回一并撤回
                 },
                 summary={"task_id": result.get("task_id"), "to_state": "withdrawn"},
-                warnings=result.get("warnings", []),
+                warnings=list(result.get("warnings", [])) + [item["line"] for item in linked],
                 blocking_reasons=result.get("blocking_reasons", []),
                 safety_notice="AIPOS-315: withdraw will move task to withdrawn/ and preserve all existing records.",
             )
@@ -8406,12 +8558,15 @@ def withdraw_task(
         from tools.aipos_cli.worktree_cleanup import cleanup_after
 
         worktree_cleanup = cleanup_after(resolved_root, str(result.get("task_id") or selected_task_id), trigger="withdraw", actor=actor_text)
+        linked = withdraw_linked_audits(resolved_root, withdrawn_id, action="withdraw", actor=actor_text, dry_run=False,
+                                        detail=str(reason).strip(), profiles=profiles) if link_applies else []
         return make_response(
             ok=True,
             operation=operation,
             dry_run=False,
             actor=_actor_payload(actor_text),
             data={
+                "linked_audits": linked,  # AIPOS-F230 件⑤: 连带撤回的在途审计卡(失败条 ok=false + 补撤命令)
                 "task_id": result.get("task_id"),
                 "source_path": result.get("source_path"),
                 "target_path": result.get("target_path"),
@@ -8425,7 +8580,7 @@ def withdraw_task(
                 "worktree_cleanup_record": worktree_cleanup.get("record"),
             },
             summary={"task_id": result.get("task_id"), "withdrawn": True},
-            warnings=result.get("warnings", []),
+            warnings=list(result.get("warnings", [])) + [item["line"] for item in linked],
             safety_notice="AIPOS-315: task withdrawn, all existing records preserved.",
         )
     except Exception as exc:
@@ -8535,7 +8690,13 @@ def supersede_task(
     if report["blocking_reasons"]:
         report["line"] = texts["blocked_line"].format(reasons="; ".join(report["blocking_reasons"]))
         return report
+    # AIPOS-F230 件⑤: 在途审计卡同一操作连带撤回(唯一实现 queue_mutation.withdraw_linked_audits); 预演列出
+    from tools.aipos_cli.queue_mutation import withdraw_linked_audits
+
     if dry_run:
+        report["linked_audits"] = withdraw_linked_audits(root, report["task_id"], action="supersede", actor=actor_text, dry_run=True,
+                                                         detail=f"由 {report['by']} 承接")
+        report["warnings"].extend(item["line"] for item in report["linked_audits"])
         report.update({"ok": True, "verdict": card_preview.get("verdict") or Verdict.PASS,
                        "line": texts["preview_line_ref" if ref_id else "preview_line"].format(**fill)})
         return report
@@ -8579,7 +8740,24 @@ def supersede_task(
     report["worktree_cleanup"] = cleanup_after(root, report["task_id"], trigger="supersede", actor=actor_text)
     if report["worktree_cleanup"].get("record"):
         report["written"].append(str(report["worktree_cleanup"]["record"]))
+    report["linked_audits"] = withdraw_linked_audits(root, report["task_id"], action="supersede", actor=actor_text, dry_run=False,
+                                                     detail=f"由 {report['by']} 承接", profiles=profiles)
+    report["written"] += linked_audit_write_paths(report["linked_audits"])
+    report["warnings"].extend(item["line"] for item in report["linked_audits"])
     return report
+
+
+def linked_audit_write_paths(items: list[dict[str, Any]] | None) -> list[str]:
+    """AIPOS-F230 件⑤: 连带撤回的审计卡本次写出的文件(源路径删除 + withdrawn 新卡面 + 清理记录), 随业务卡落账。"""
+    paths: list[str] = []
+    for item in items or []:
+        if not item.get("ok") or item.get("planned") or not item.get("target_path"):
+            continue
+        paths += [str(item["path"]), str(item["target_path"])]
+        record = (item.get("worktree_cleanup") or {}).get("record")
+        if record:
+            paths.append(str(record))
+    return paths
 
 
 def _strip_machine_sections(body: str) -> str:

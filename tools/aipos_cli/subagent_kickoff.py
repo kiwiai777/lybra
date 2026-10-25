@@ -439,6 +439,8 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
         "report_field_lines": "\n".join(f"  {line}" for line in render_report_field_lines(view.get("report_required_frontmatter"))),
         # AIPOS-F227 件①: 被审卡交付主体为固定候选 = 「FAIL 时写 fail_scope」说明(next_resolver.fail_scope_audit_rule, 审计卡取证锚点同读)
         "fail_scope_rule": _fail_scope_rule(reviewed_card) if card_role == "auditor" else None,
+        # AIPOS-F230 件⑥: 返工只涉交付物 = 可引用上一轮对同一候选的运行证据(next_resolver.audit_evidence_reuse_line 唯一渲染; 不可复用 = 省略)
+        "evidence_reuse_rule": _evidence_reuse_rule(gov, task_id, reviewed, reviewed_card) if card_role == "auditor" else None,
     }
     text = _render(contract, card_role, values)
     return {"ok": True, "task_id": task_id, "role": card_role, "instance": instance, "text": text,
@@ -446,6 +448,25 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
             "sources": {"charter": charter["distribution_id"], "ratchet": test_contract.get("ratchet_source"),
                         "residual_processes": test_contract.get("residual_processes_source"), "scratch": scratch_source,
                         "remote": remote, "baseline_status": baseline["status"], "runall_timing": timing_state}}
+
+
+def _evidence_reuse_rule(gov: Path, task_id: str, reviewed: str, reviewed_card: Path | None) -> str | None:
+    """AIPOS-F230 件⑥: 审计开工稿「运行证据复用」一行; 被审卡非固定候选 / 不可复用 = None(该行省略)。"""
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.next_resolver import audit_evidence_reuse_line, task_mode_subject_is_candidate
+
+    if reviewed_card is None or not reviewed:
+        return None
+    reviewed_fm, _body = require_frontmatter(reviewed_card)
+    if not task_mode_subject_is_candidate(str(reviewed_fm.get("task_mode") or "")):
+        return None
+    from tools.aipos_cli.next_resolver import CandidateSubjectError, card_candidate_subject
+
+    try:
+        candidate = str((card_candidate_subject(reviewed_fm) or {}).get("candidate") or "")
+    except CandidateSubjectError:
+        candidate = ""  # 候选声明不合: 裁决入口另按候选判据拒收, 此处只渲染说明
+    return audit_evidence_reuse_line(gov, task_id, candidate=candidate, reviewed=reviewed)
 
 
 def _fail_scope_rule(reviewed_card: Path | None) -> str | None:

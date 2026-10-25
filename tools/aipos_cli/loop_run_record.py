@@ -1069,6 +1069,15 @@ def _loop_status(governance_root: Path, task_id: str | None, *, now: datetime | 
         from tools.aipos_cli.owner_inbox import apply_owner_tier
 
         view["next_action"] = apply_owner_tier(Path(governance_root), view, view["next_action"])
+        if task_id and view.get("state") == "ended":
+            # AIPOS-F230 件①: 本卡此刻处非通过状态 = 附全部合法出口(唯一渲染 next_resolver.legal_exits, 与 lybra next 同源)
+            from tools.aipos_cli.next_resolver import legal_exits_for_card
+
+            exits = legal_exits_for_card(Path(governance_root), task_id)
+            if exits:
+                hint = str(view["next_action"].get("hint") or "")
+                view["next_action"] = {**view["next_action"], "legal_exits": exits,
+                                       "hint": f"{hint}\n{exits['text']}" if hint else str(exits["text"])}
         if meta.get("lane_overlaps"):  # AIPOS-F188 件③: 起跑认领前判出的车道重叠(运行记录原样)
             view["lane_overlaps"] = list(meta["lane_overlaps"])
         warning = envelope_warning_view(Path(governance_root), view, now=now)  # AIPOS-F166 件②: 运行所用信封的用量预警

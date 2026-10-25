@@ -333,7 +333,8 @@ def test_item2_rework_outcome_refused_outside_fast_lane(rig):  # noqa: F811
     reason = json.dumps(res, ensure_ascii=False)
     _show(f"[② 非快车道复核打回] {res.get('errors') or res.get('blocking_reasons')}")
     assert res["ok"] is False and "REVIEW_REWORK_NOT_FAST_LANE" in reason and "queue rework" in reason
-    assert "rework" not in conclusion_outcomes() and mark_concluded_outcome_choices() == (*conclusion_outcomes(), "rework")
+    # AIPOS-F230 件④: 另加同轮补正 outcome(same_round, 不结案)
+    assert "rework" not in conclusion_outcomes() and mark_concluded_outcome_choices() == (*conclusion_outcomes(), "rework", "same_round")
     res = mark_concluded_task(task_id="PROBE-F221-A", actor=DRIVER, report_path="r", dry_run=True, repo_root=rig.gov, outcome="pass",
                               focus_items='["x"]')
     assert res["ok"] is False and "--focus-items" in json.dumps(res, ensure_ascii=False)

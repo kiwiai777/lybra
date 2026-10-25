@@ -1720,8 +1720,8 @@ def rework_round_budget(repo_root: Path, task_id: str, rework_rounds: list[Any] 
             "unconsumed": [d for d in granted if d not in referenced], "extension": extension, "auto_extensions": auto_used}
 
 
-_AUTO_EXTENSION_KEYS = ("hard_cap", "round_field", "kind", "fingerprint_fields", "fingerprint_body", "texts")
-_AUTO_EXTENSION_TEXTS = ("granted", "basis", "refused_cap", "refused_changed", "refused_baseline")
+_AUTO_EXTENSION_KEYS = ("hard_cap", "round_field", "kind", "fingerprint_fields", "fingerprint_body", "scope_neutral_fields", "texts")
+_AUTO_EXTENSION_TEXTS = ("granted", "basis", "refused_cap", "refused_changed", "refused_baseline", "neutral_note")
 
 
 def auto_extension_declaration() -> dict[str, Any]:
@@ -1741,6 +1741,11 @@ def auto_extension_declaration() -> dict[str, Any]:
                               f"{list(_AUTO_EXTENSION_KEYS)} / texts.{list(_AUTO_EXTENSION_TEXTS)}(AIPOS-F225)")
     if str(decl["kind"]) not in tier_declaration()["tier2"]["kinds"]:
         raise SchemaLoadError(f"rework_limit.auto_extension.kind {decl['kind']!r} 不在 verbs.schema lybra_owner_inbox.tiers.tier2.kinds")
+    # AIPOS-F230 件③: 非验收字段白名单 = 非空串列表, 不得与某个指纹字段整字段相同(否则「范围」字段被整个豁免)
+    neutral = decl["scope_neutral_fields"]
+    if (not isinstance(neutral, list) or not all(isinstance(x, str) and x.strip() for x in neutral)
+            or set(neutral) & {str(f) for f in decl["fingerprint_fields"]}):
+        raise SchemaLoadError("rework_limit.auto_extension.scope_neutral_fields 须为非空串列表且不与 fingerprint_fields 整字段相同(AIPOS-F230 件③)")
     return decl
 
 
@@ -1752,15 +1757,33 @@ def card_scope_fingerprint(metadata: dict[str, Any], body: str, decl: dict[str, 
 
     decl = decl or auto_extension_declaration()
     values: dict[str, Any] = {}
+    neutral = [str(x) for x in decl.get("scope_neutral_fields") or []]
     for field in decl["fingerprint_fields"]:
         node: Any = metadata
         for part in str(field).split("."):
             node = node.get(part) if isinstance(node, dict) else None
-        values[str(field)] = _normalize_value(node)
+        values[str(field)] = _strip_neutral(_normalize_value(node), str(field), neutral)
     if decl["fingerprint_body"]:
         values["__body__"] = str(body or "").strip()
     digest = hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()
     return {"digest": digest, "values": values}
+
+
+def _strip_neutral(value: Any, field: str, neutral: list[str]) -> Any:
+    """AIPOS-F230 件③: 从指纹字段值中剔除白名单子键(scope_neutral_fields 中以「<field>.」开头者, 点号 = 嵌套); 非 dict 原样。"""
+    subpaths = [n[len(field) + 1:].split(".") for n in neutral if n.startswith(field + ".")]
+    if not subpaths or not isinstance(value, dict):
+        return value
+    import copy
+
+    out = copy.deepcopy(value)
+    for parts in subpaths:
+        node: Any = out
+        for part in parts[:-1]:
+            node = node.get(part) if isinstance(node, dict) else None
+        if isinstance(node, dict):
+            node.pop(parts[-1], None)
+    return out
 
 
 def publish_scope_baseline(repo_root: Path, task_id: str, decl: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1817,10 +1840,97 @@ def auto_extension_check(repo_root: Path, task_id: str, metadata: dict[str, Any]
         out["why"] = str(texts["refused_changed"]).format(current=current["digest"][:12], baseline=baseline["digest"][:12], fields=", ".join(changed))
         return out
     record_id = planned_auto_release_id(Path(repo_root), task_id, str(decl["kind"]))
+    neutral_note = str(texts["neutral_note"]).format(fields=", ".join(decl["scope_neutral_fields"]))  # AIPOS-F230 件③
     out.update({"eligible": True, "record_id": record_id, "fingerprint": current["digest"], "publish_ref": baseline["publish_ref"],
                 "granted": str(texts["granted"]).format(round=next_round, hard_cap=cap, record_id=record_id),
                 "basis": str(texts["basis"]).format(round=next_round, max_rounds=max_rounds, hard_cap=cap, fingerprint=current["digest"][:12],
-                                                    publish_ref=baseline["publish_ref"], verdict_ref=verdict_ref or "?")})
+                                                    publish_ref=baseline["publish_ref"], verdict_ref=verdict_ref or "?") + f"; {neutral_note}"})
+    return out
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F230 件⑤: 撤换 / 撤卡 / 同轮补正连带撤回在途审计卡(声明 transitions queue_mutations.linked_audit_withdrawal)
+# ---------------------------------------------------------------------------
+
+_LINKED_TEXTS = ("reason", "preview", "done", "failed")
+
+
+def linked_audit_declaration() -> dict[str, Any]:
+    """AIPOS-F230 件⑤: transitions.schema queue_mutations.linked_audit_withdrawal(唯一读取口)。states 须 ⊆ withdraw.from_states;
+    缺键 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (load_schema("transitions").get("queue_mutations") or {}).get("linked_audit_withdrawal")
+    texts = decl.get("texts") if isinstance(decl, dict) else None
+    if (not isinstance(decl, dict) or not isinstance(decl.get("states"), list) or not decl["states"]
+            or not set(decl["states"]) <= set(ALLOWED_TRANSITIONS["withdraw"][0]) or not isinstance(decl.get("actions"), list)
+            or not isinstance(texts, dict) or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in _LINKED_TEXTS)):
+        raise SchemaLoadError(f"transitions.schema.json queue_mutations.linked_audit_withdrawal(states ⊆ withdraw.from_states / actions / "
+                              f"texts.{list(_LINKED_TEXTS)})未声明齐(AIPOS-F230 件⑤)")
+    return decl
+
+
+def in_flight_audit_cards(repo_root: Path, task_id: str, *, states: list[str] | tuple[str, ...] | None = None) -> list[dict[str, str]]:
+    """AIPOS-F230 件⑤: 业务卡的在途审计卡(查找唯一实现)= 审计轮(audit_derivation.audit_round_ids)与补充审计卡
+    (audit_derivation.supplementary_audit_cards)中队列状态 ∈ states(缺省 = 声明 linked_audit_withdrawal.states)者, 按轮次序。
+    返回 [{audit_task_id, state, path}]; 卡不唯一(AmbiguousTaskCard)= 上抛(fail-closed)。"""
+    from tools.aipos_cli.audit_derivation import audit_round_ids, supplementary_audit_cards
+    from tools.aipos_cli.task_loader import find_task_card
+
+    wanted = tuple(states) if states is not None else tuple(linked_audit_declaration()["states"])
+    root = Path(repo_root)
+    ids = list(audit_round_ids(task_id, root))
+    for card in supplementary_audit_cards(root, task_id):
+        cid = str(card.get("task_id") or card.get("audit_task_id") or "").strip()
+        if cid and cid not in ids:
+            ids.append(cid)
+    out: list[dict[str, str]] = []
+    for audit_id in ids:
+        path, state = find_task_card(root, audit_id)
+        if path is not None and state in wanted:
+            out.append({"audit_task_id": audit_id, "state": str(state), "path": str(Path(path).relative_to(root))})
+    return out
+
+
+def withdraw_linked_audits(repo_root: Path, task_id: str, *, action: str, actor: str, dry_run: bool, detail: str = "",
+                           only: list[str] | None = None, profiles: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """AIPOS-F230 件⑤: 业务卡 supersede / withdraw / 同轮补正时连带撤回其在途审计卡(唯一实现)。dry_run = 只列(texts.preview);
+    否则逐张经搬卡执行器 mutate_queue_task("withdraw") 撤回(卡面 withdrawal_reason = texts.reason), 失败 = 该条 ok=False + 拒因 + 补撤命令
+    (texts.failed; 不抛, 不回滚业务卡)。only = 只撤这些审计卡号(同轮补正只撤本轮)。返回 [{audit_task_id, state, ok, line, written?}]。"""
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    decl = linked_audit_declaration()
+    texts = decl["texts"]
+    if profiles is None and not dry_run:
+        from tools.aipos_cli.agent_profiles import load_agent_profiles
+
+        profiles = load_agent_profiles(Path(repo_root))
+    reason = str(texts["reason"]).format(task_id=task_id, action=action, detail=f": {detail}" if detail else "")
+    out: list[dict[str, Any]] = []
+    for card in in_flight_audit_cards(repo_root, task_id):
+        if only is not None and card["audit_task_id"] not in only:
+            continue
+        item: dict[str, Any] = {**card, "reason": reason}
+        if dry_run:
+            out.append({**item, "ok": True, "planned": True, "line": str(texts["preview"]).format(**card)})
+            continue
+        command = (f"{lybra_command_prefix(Path(repo_root))} queue withdraw --task-id {card['audit_task_id']} --actor <你的顾问实例> "
+                   f"--reason \"{reason}\" --dry-run")
+        try:
+            result = mutate_queue_task(Path(repo_root), "withdraw", task_id=card["audit_task_id"], actor=actor, reason=reason,
+                                       dry_run=False, profiles=profiles, with_records=False)
+        except (OSError, ValueError, LookupError) as exc:
+            out.append({**item, "ok": False, "line": str(texts["failed"]).format(**card, reason=f"{type(exc).__name__}: {exc}", command=command)})
+            continue
+        if result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons"):
+            out.append({**item, "ok": False, "line": str(texts["failed"]).format(
+                **card, reason="; ".join(str(r) for r in result.get("blocking_reasons") or []) or "被拒", command=command)})
+            continue
+        from tools.aipos_cli.worktree_cleanup import cleanup_after
+
+        cleanup = cleanup_after(Path(repo_root), card["audit_task_id"], trigger="withdraw", actor=actor)
+        out.append({**item, "ok": True, "line": str(texts["done"]).format(**card), "target_path": result.get("target_path"),
+                    "worktree_cleanup": cleanup})
     return out
 
 
