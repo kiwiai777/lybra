@@ -41,6 +41,9 @@
    用执行实例的 run / 他卡的 run / 未 run-start 的 run / 无 SRC_OK 的 run = 裁决入口拒收。
    **固定候选卡判 FAIL 时报告 frontmatter 写 `fail_scope`(AIPOS-F227)**: 发现全部指向交付物(报告 / 证据 / 声明产物缺失或不实)、
    候选行为无缺陷 = `deliverable`(同候选返工补正); 否则 = `candidate`(须新候选); 不写按 `candidate`; 释义与判据见开工稿交回节。
+   **只补交付物的复审轮可复用你上一轮的运行证据(AIPOS-F230)**: 开工稿 / 审计卡锚点出现「运行证据复用」行时, 运行记录条目加
+   `"reused_from": "<上一轮审计卡>"` 并照抄上一轮那条 run 的 run_id / run_dir / log_path / log_sha256(裁决入口核 run 归你本实例、候选一致、封签与指纹);
+   交付物本身仍须本轮逐条核; 没有该行 = 照旧本轮 run 重跑。
    **你的 run 在目标主机(Mac 等, 非治理根所在机)时(AIPOS-F200)**: 日志写本 run `logs/` 下(log_path 填目标主机上的路径), 命令跑完、run 仍活动时
    照抄开工稿「⑧ 生成证据清单」(helper `evidence-manifest`, 末行 `EVIDENCE_OK`), 再照抄「⑨ 取回」(`lybra project validation-root evidence-fetch`,
    副本落你的报告落点 `run_evidence/<run-id>/`); 裁决入口对副本做与本机 run 同一核对, 无副本 / 副本被改 / 清单外文件 = 拒收; 副本禁手改。

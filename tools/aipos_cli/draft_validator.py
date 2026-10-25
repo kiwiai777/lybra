@@ -365,6 +365,11 @@ def validate_draft_metadata(
         if _is_missing(metadata.get(field)):
             _add(warnings, f"Missing recommended field: {field}")
 
+    # AIPOS-F230 件②: 配置 / 文档卡声明的产出指向代码文件 = 预警(交回入口同判据会拒: artifact_ingest.program_guard_declaration)
+    program_warning = program_target_warning(metadata)
+    if program_warning:
+        _add(warnings, program_warning)
+
     # AIPOS-R8C: Project-declarable card policy rules (zero-invasion)
     # If the project has a card_policy declaration, evaluate its rules.
     # When no declaration exists, this is a no-op (behavior identical to pre-R8C).
@@ -394,6 +399,29 @@ def validate_draft_metadata(
         "frontmatter": metadata,
         "target_path": target_path,
     }
+
+
+def program_target_warning(metadata: dict[str, Any]) -> str | None:
+    """AIPOS-F230 件②: 发卡预警——task_mode ∈ program_guard.task_modes 且 output_target / artifacts[].path_glob 指向代码文件(扩展名判据
+    governance_guardrails.is_code_file, 与交回入口同一份 code_files_blacklist)= 预警一句(texts.draft_warning); 否则 None。"""
+    from tools.aipos_cli.artifact_ingest import program_guard_declaration
+    from tools.aipos_cli.governance_guardrails import is_code_file, load_guardrail_declarations
+
+    decl = program_guard_declaration()
+    if decl is None or str(metadata.get("task_mode") or "").strip() not in [str(m) for m in decl["task_modes"]]:
+        return None
+    targets: list[str] = []
+    raw = metadata.get("output_target")
+    targets += [str(x) for x in raw] if isinstance(raw, list) else [p.strip() for p in str(raw or "").split(",")]
+    artifacts = metadata.get("artifacts")
+    targets += [str(a.get("path_glob") or "") for a in artifacts if isinstance(a, dict)] if isinstance(artifacts, list) else []
+    code_decls = load_guardrail_declarations()
+    hits = [t for t in targets if t and is_code_file(t, code_decls)]
+    if not hits:
+        return None
+    texts = decl["texts"]
+    return texts["draft_warning"].format(task_mode=metadata.get("task_mode"), targets=", ".join(hits), max_lines=decl["max_lines"],
+                                         exec_rule=texts["exec_rule"] if decl["executable_bit"] else "")
 
 
 def validate_draft_file(repo_root: Path, provided_path: str | Path) -> dict[str, Any]:

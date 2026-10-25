@@ -1574,6 +1574,38 @@
           "redirect_hint": "Task {task_id} has a formal verdict ({verdict}). Use 'lybra queue close' instead of mark-concluded."
         }
       ],
+      "same_round": {
+        "description": "AIPOS-F230 件④: 同轮补正 = `lybra mark-concluded --outcome {outcome} --focus-items <JSON 数组> [--acceptance-criteria <JSON 数组>] [--report-path <所审交回报告>]`(本 outcome 不是结案结论, 不进 card.schema dependency_gate.conclusion.outcomes; CLI choices / MCP enum 唯一渲染 board_adapter.mark_concluded_outcome_choices 同列)。前置全过才写: 卡在 claimed; 已有门交回记录; 审计未开始——本轮(audit_derivation.current_audit_task_id)无派审, 或已派审但该轮审计卡在 audit_not_started_states 且无本轮裁决(已认领 / 已出裁决 = 拒, 出口 = 等裁决后按 lybra next 合法出口); 该交回未被同轮打回过; focus_items 非空; 复核者角色类 = queue rework 同一判据(board_adapter.restricted_amend_actor_class)。写: 顾问复核记录(record_writer.write_records_atomic, 事件记录 records/events/<卡>/<event_type>_*.md, 字段 record_fields; event_type 同 review_rework)+ 未认领审计卡同一操作撤回(queue_mutation.withdraw_linked_audits)。不登记返工轮、不计返工上限、卡留 claimed。推导与重交回见 transitions nodes.N4.same_round。--dry-run 零写入(预演复核记录与撤回清单)。",
+        "outcome": "same_round",
+        "audit_not_started_states": [
+          "pending"
+        ],
+        "record_fields": [
+          "record_type",
+          "event_type",
+          "task_id",
+          "review_id",
+          "actor",
+          "reviewer_instance",
+          "timestamp",
+          "outcome",
+          "reviewed_return_record_ref",
+          "artifact_subject",
+          "report_path",
+          "conclusion_note",
+          "focus_items",
+          "acceptance_criteria",
+          "withdrawn_audit_task_id"
+        ],
+        "reject_codes": {
+          "SAME_ROUND_NOT_CLAIMED": "卡 {task_id} 在 {state}, 不在 claimed: 同轮补正只对在途卡",
+          "SAME_ROUND_NO_RETURN": "卡 {task_id} 尚无门交回记录, 无可打回的交回; 等执行体交回后再复核",
+          "SAME_ROUND_AUDIT_STARTED": "卡 {task_id} 本轮审计 {audit_task_id} 已开始({detail}), 同轮补正只在审计开始前; 出口: 等本轮裁决后按 lybra next 列出的合法出口(同主体返工 / 重新派审 / 换新主体 / 改范围 / 撤卡)",
+          "SAME_ROUND_ALREADY_PENDING": "交回 {return_id} 已于 {reviewed_at} 被同轮打回(复核记录 {review_id}), 等执行体补正重交回; 同一交回不重复打回",
+          "SAME_ROUND_FOCUS_REQUIRED": "--focus-items 须为非空 JSON 字符串数组(补正要点, 执行体按它补正), 得 {value}",
+          "SAME_ROUND_ROLE": "同轮补正只能由角色类 {required_class} 的实例执行; 实例 '{actor}' 未授权: {reason}"
+        }
+      },
       "review_rework": {
         "description": "AIPOS-F221 件②(10-23 chris 岚图 LANTU-DEMO1 实撞: task_mode=config 的非代码快车道卡交回后 `lybra next` 只给 mark-concluded --outcome pass|block, 顾问复核发现产物缺陷要打回原卡返工无门路径, 转用审计动词 audit-verdict 又报自发现失败): 非代码快车道卡(AIPOS-F197: 交付主体 = 治理根产出清单且不声明独立审计; 唯一判定 next_resolver.fast_lane_review)顾问复核不通过的正式出口 = `lybra mark-concluded --outcome {outcome} --focus-items <JSON 数组> [--acceptance-criteria <JSON 数组>]`(CLI 与 MCP lybra_mark_concluded 同收, 同一写路径 board_adapter.mark_concluded_task; 本 outcome 不是结案结论, 不进 card.schema dependency_gate.conclusion.outcomes, CLI choices / MCP enum = 结论值域 + 本 outcome, 唯一渲染 board_adapter.mark_concluded_outcome_choices)。一次调用: ①前置全过才写——卡在 claimed、属快车道、已有门交回记录、交回后产出未改(governance_outputs_recheck, 与 pass 结案同核)、该交回未被复核打回过(同一交回重复打回 = 拒)、复核者角色类与返工轮次上限(返工节唯一构建 queue_mutation.build_rework_round + custom_roles.authorize_instance_class, 与 `lybra queue rework` 预演同判); ②落一条顾问复核记录(事件记录 records/events/<卡>/<event_type>_*.md, 既有写口 record_writer.write_records_atomic; 字段 record_fields); ③追加返工轮走门 queue rework 同一写函数 board_adapter.queue_rework_task(verdict_ref = 本复核记录 review_id; 受限 amend 只改 rework_rounds; 轮次上限 transitions nodes.queue_rework.guards.rework_limit), 卡留 claimed 不结案; ④推导核沿用 F218/F219 返工判据(transitions nodes.N4.fast_lane_rework; 时间界 rework_return_bound / 新交回判定 non_branch_re_return 同一实现, 复核记录即锚); ⑤同链返工不出新卡——信封额度单位 = 业务卡(lybra_loop.envelope.quota), 本卡已放行则后续步骤不受额度拦截, 不额外扣。--dry-run 零写入(预演复核记录与返工节)。顾问对快车道卡跑审计动词 audit-verdict = 拒(audit_verdict_refusal, CLI 在取凭据前判、门侧裁决预演同判; 唯一实现 next_resolver.fast_lane_audit_refusal)。落账: 复核记录与返工节随该卡 N6 收账(同 queue rework)。",
         "outcome": "rework",
@@ -2322,7 +2354,7 @@
       },
       "layout": {
         "executor": ["header", "", "start_title", "start_charter", "start_card", "start_worktree", "start_no_worktree", "start_repo", "carried", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "no_write_title", "no_write_boundary_lines", "no_write_other_projects", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_code_files", "return_write_last", "return_body", "return_stop", "", "summary"],
-        "auditor": ["header_auditor", "", "start_title", "start_charter", "start_card_auditor", "start_worktree_auditor", "start_repo", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "runtime_evidence_lines", "", "no_write_title", "no_write_boundary_lines", "no_write_other_projects", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline_auditor", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_code_files", "return_fail_scope", "return_write_last", "return_body_auditor", "return_stop", "", "summary"],
+        "auditor": ["header_auditor", "", "start_title", "start_charter", "start_card_auditor", "start_worktree_auditor", "start_repo", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "runtime_evidence_lines", "evidence_reuse_line", "", "no_write_title", "no_write_boundary_lines", "no_write_other_projects", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "", "verify_title", "verify_baseline_auditor", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_code_files", "return_fail_scope", "return_write_last", "return_body_auditor", "return_stop", "", "summary"],
         "note": "每个键 = texts 的一行模板; \"\" = 空行。模板占位值为 null(本卡不适用, 如无承继 / 本机会话 / 无工位)= 该行省略; 列表占位(*_lines)= 逐项按 item_templates 成行。占位缺 / 值非串 = 渲染失败(fail-closed, 不出半截开工稿)。"
       },
       "role_labels": {"executor": "执行体", "auditor": "审计体"},
@@ -2367,6 +2399,7 @@
         "return_write_last": "- {report_write_last_rule}",
         "report_field_lines": "{report_field_lines}",
         "return_fail_scope": "- {fail_scope_rule}",
+        "evidence_reuse_line": "- {evidence_reuse_rule}",
         "return_code_files": "- {report_code_rule}",
         "return_body": "- 正文: 每件做了什么、验收原文证据、两边基线计数、残留进程原文、已知局限。",
         "return_body_auditor": "- 正文: 逐条验收裁定与原文证据、两边独立基线计数、残留进程原文、裁决与理由(以审计卡裁决节为准)。",
@@ -5338,6 +5371,7 @@
               "tools/aipos_cli/draft_writer.py::regen_machine_zone_for_pending->amend_task": {"count": 1, "modes": {"n6": "draft regen-machine-zone(存量 pending 卡机器区批量重生成): 卡面 + 修订记录随各卡 N6 收账(存量迁移命令, 未即时落账 = R5 基线登记, 只减不增)"}},
               "tools/aipos_cli/owner_inbox.py::_release_preview->amend_task": {"count": 1, "modes": {"preview": "owner decide 整批预演", "caller": "owner decide 解除动作 release: 写出经 decide 一次落账"}, "caller": "tools/aipos_cli/owner_inbox.py::decide"},
               "tools/aipos_cli/owner_inbox.py::_release_preview->withdraw_task": {"count": 1, "modes": {"preview": "owner decide 整批预演", "caller": "owner decide 解除动作 withdraw: 写出经 decide 一次落账"}, "caller": "tools/aipos_cli/owner_inbox.py::decide"},
+              "tools/aipos_cli/queue_mutation.py::withdraw_linked_audits->mutate_queue_task": {"count": 1, "modes": {"caller": "AIPOS-F230 件⑤: 业务卡 supersede / withdraw / 同轮补正连带撤在途审计卡, 写出(board_adapter.linked_audit_write_paths)并入业务卡写出清单, 由 CLI main 经 _land_queue_entry 落账(MCP 确认分支经 execute_dry_run 同一薄壳; 同轮补正随该卡 mark-concluded N6 收账)"}, "caller": "tools/aipos_cli/aipos_cli.py::main"},
               "tools/mcp_server/tools.py::lybra_mark_concluded->mark_concluded_task": {"count": 1, "modes": {"preview": "dry_run 缺省预演", "n6": "门顾问复核结案: 由该卡 N6 收账(与 CLI mark-concluded 同)"}},
               "tools/mcp_server/tools.py::lybra_queue_amend_dry_run->amend_task": {"count": 1, "modes": {"preview": "两阶段预演(dry_run=True 恒定)"}},
               "tools/mcp_server/tools.py::lybra_queue_close_confirm->close_task": {"count": 1, "modes": {"n6": "门结案确认: closure 记录 + 卡→completed, 由该卡 N6 收账(close 应答 next_step = N6 落账命令)"}},
