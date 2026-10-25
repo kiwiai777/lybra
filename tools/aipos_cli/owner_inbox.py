@@ -106,9 +106,9 @@ def inbox_declaration() -> dict[str, Any]:
             referenced |= set(hint["after_choices"])
         referenced |= set(cat.get("choice_refused_by_queue_state") or {})  # AIPOS-F201: refusal texts are keyed by option
     auth_texts = decl["categories"]["envelope_warning"].get("authorization")  # AIPOS-F232 件③: 项目授权告知文案
-    if (not isinstance(auth_texts, dict) or any(not str(auth_texts.get(k) or "").strip() for k in ("subject", "ask", "recommend", "impact", "decide_board"))
+    if (not isinstance(auth_texts, dict) or any(not str(auth_texts.get(k) or "").strip() for k in ("label", "subject", "ask", "recommend", "impact", "decide_board"))
             or not isinstance(auth_texts.get("options"), list) or not auth_texts["options"]):
-        raise SchemaLoadError(f"verbs.{VERB}.categories.envelope_warning.authorization 须有非空 subject / ask / recommend / impact / decide_board 与选项列表")
+        raise SchemaLoadError(f"verbs.{VERB}.categories.envelope_warning.authorization 须有非空 label / subject / ask / recommend / impact / decide_board 与选项列表")
     referenced |= set(auth_texts["options"])
     ask_spec = decl["categories"]["loop_owner_needed"].get("advisor_ask")  # AIPOS-F222 件②
     if (not isinstance(ask_spec, dict) or not str(ask_spec.get("reason") or "").strip() or not str(ask_spec.get("impact") or "").strip()
@@ -1272,6 +1272,7 @@ def _authorization_notice_items(root: Path, project: str, decl: dict[str, Any], 
             options=_option_list(list(texts["options"]), decl), since=None, policy_id=aid, home_root=home_root,
             facts={"used": row["used"], "max_tasks": row["max_tasks"], "expires_at": row["expires_at"], "renew_command": command,
                    "authorization_revision": row["revision"], "notices": row["notices"]})
+        item["category_label"] = str(texts["label"])  # 项目授权措辞(类别仍为 envelope_warning: 档位 / 裁决同类)
         item["board_url"] = board_envelope_url(project, aid)
         item["decide_line"] = _fmt(texts["decide_board"], f"{where}.decide_board", board_url=item["board_url"], command=item["decide_command"])
         out.append(item)

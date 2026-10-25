@@ -3682,6 +3682,7 @@
           "options": ["renew", "let_expire"],
           "authorization": {
             "description": "AIPOS-F232 件③(F224 执行体自报: 项目授权告知沿用信封文案「信封 … 定是否续签」): 项目授权告知(autonomy_policy.authorization_warnings, 第二档)同列本类时的文案与选项, 不写「信封」字样。占位 {authorization_id} / {why}(告知原因) / {command}(subject 外: recommend = 扩大授权命令, 唯一渲染 autonomy_policy.authorization_notice_command; decide_board = 既有 owner decide 命令) / {drivers}(授权各车道驱动方) / {board_url}。",
+            "label": "项目授权将尽",
             "subject": "项目授权 {authorization_id}",
             "ask": "{why}: 定是否扩大项目授权(总卡数 / 到期)",
             "recommend": "扩大项目授权(Owner 执行): {command}",
@@ -4048,6 +4049,7 @@
         "retract_preview": "loop note --retract 预演(未写入): 运行 {run_id} [{state}] {record_path} 的 Owner 请求将标为已撤回(原请求留档); 加 --confirm 写入并落账",
         "retract_written": "loop note --retract 已写入: 运行 {run_id} [{state}] {record_path} 的 Owner 请求已撤回(原请求留档), 不再进 Owner 收件箱",
         "retract_removed": "  收件箱核对: 事项 {item_id} 已不再列出",
+        "retract_merged": "  收件箱核对: 该请求曾并入返工上限事项 {item_id}, 请求已撤; 该事项因返工轮次达上限仍待 Owner 定(与本请求无关)",
         "retract_still_listed": "  ⚠ 已写入, 但收件箱此刻仍列出事项 {item_id}(读不出处: {errors}); 用 lybra owner inbox --project {project} 核对",
         "retract_refused": "RETRACT_REFUSED: {reason}, 不写入",
         "retract_refused_reasons": {

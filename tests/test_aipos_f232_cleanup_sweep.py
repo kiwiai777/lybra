@@ -169,6 +169,30 @@ def test_item1_retract_refused_after_owner_ruling(rig):  # noqa: F811
     assert rc == 7 and f"该请求所在事项 {item['item_id']} 已有 Owner 裁决" in err
 
 
+def test_item1_retract_merged_into_rework_limit(rig, monkeypatch):  # noqa: F811
+    """并入返工上限事项的请求撤回 = 请求撤掉, 返工上限事项本身(返工轮次达上限)照列, 回显点明与本请求无关。"""
+    home = rig.gov.parent
+    f222._setup_fast_lane(rig)
+    f221._loop(rig, [], lambda r: f221._report(r, "v1"))
+    with f222._past(monkeypatch, 400, 390):
+        assert f221._rework(rig, f221.FOCUS1, f221.CRITERIA1)[0] == 0
+    f222._rewrite_and_reloop(rig, "v2", 2)
+    with f222._past(monkeypatch, 300, 290):
+        assert f221._rework(rig, ["第 2 轮: 超时清理未实现"])[0] == 0
+    f222._rewrite_and_reloop(rig, "v3", 4)
+    assert f222._note(rig, "--confirm")[0] == 0
+    assert f221._rework(rig, ["第 3 轮: 超时清理仍缺"])[0] == 1  # 升返工上限事项, owner_ask 并入
+    _text, data = _inbox(home)
+    item = next(i for i in data["items"] if i.get("task_id") == f221.CARD)
+    assert item["category"] == "rework_limit" and item["recommend"] == "建议授权追加一轮: 只差超时清理一项"
+    rc, out, err = _cli(["--workspace-root", str(rig.gov), "loop", "note", "--task-id", f221.CARD, "--retract", "--actor", DRIVER, "--confirm"])
+    _show(f"---- ① 撤回并入返工上限事项的请求 rc={rc} ----\n{out}{err}")
+    assert rc == 0 and f"该请求曾并入返工上限事项 {item['item_id']}, 请求已撤" in out
+    _text, data = _inbox(home)
+    after = next(i for i in data["items"] if i.get("task_id") == f221.CARD)
+    assert after["item_id"] == item["item_id"] and after["recommend"] != "建议授权追加一轮: 只差超时清理一项", "请求的建议随撤回去掉"
+
+
 # ===========================================================================
 # ② 审计报告头读不出 = 报告格式错例行修法
 # ===========================================================================
@@ -231,6 +255,31 @@ def test_item2_yaml_error_no_session_routine_fix_not_investigate(lrig, monkeypat
     assert na["action"] == "advisor_fix" and na["reason"] == "audit_report_form_error"
 
 
+def test_item2_executor_return_unreadable_same_mechanism(rig):  # noqa: F811
+    """执行体交回报告头读不出 = 同一判定(role executor), 修头指令用交回措辞; loop status 复核 frontmatter_unreadable 运行 = return_report_form_error。"""
+    from tools.aipos_cli.artifact_ingest import validate_task_artifact
+    from tools.aipos_cli.loop_driver import load_loop_contract
+    from tools.aipos_cli.loop_run_record import LoopRunRecorder, header_fix_prompt_value
+
+    task = "PROBE-F232-EXEC"
+    f78._card(rig.gov, task, "claimed", extra={"claimed_by": EXEC, "claimed_at": "'2026-10-01T00:00:00Z'"})
+    ret = rig.gov / "task_cards" / task / "RETURN.md"
+    f78._write(ret, "---\ncommit_sha: abc\nmodel: glm-5.3 (provider: kiwiai)\n---\n# RETURN\n")
+    init_governance_repo(rig.gov)
+    check = validate_task_artifact(task, rig.gov)
+    _show(f"[② 执行交回报告头读不出] category={check['category']}\n  header_problem={json.dumps(check.get('header_problem'), ensure_ascii=False)}")
+    assert check["category"] == "INGEST_FRONTMATTER_UNREADABLE" and check["header_problem"]["role"] == "executor"
+    assert check["header_problem"]["kinds"] == ["unreadable"] and check["header_problem"]["line_no"] == 3
+    prompt = header_fix_prompt_value(rig.gov, task)
+    _show(f"[② 执行交回修头指令] {prompt}")
+    assert prompt.startswith(f"你的交回报告 {ret} 的报告头(frontmatter)读不出") and "报告头第 3 行 `model: glm-5.3 (provider: kiwiai)` 读不出" in prompt
+    rec = LoopRunRecorder(rig.gov, task, driver=DRIVER, contract=load_loop_contract(), warn=_show)
+    rec.end(outcome="not_derivable", exit_code=4, reason="frontmatter_unreadable", message=f"frontmatter 读不出 @ None/frontmatter_unreadable ({task})")
+    na = lrr.loop_status(rig.gov, task)["next_action"]
+    _show(f"[② loop status(执行交回读不出的 frontmatter_unreadable 运行)] {na['action']}({na['reason']})")
+    assert na["action"] == "advisor_fix" and na["reason"] == "return_report_form_error" and "你的交回报告 " in na["hint"]
+
+
 def test_item2_unreadable_card_still_hard_stops(tmp_path):
     """读不出的不是本卡报告(卡面 / 记录)= 不归报告格式错(report_unreadable_problem = None), 照旧硬停。"""
     from tools.aipos_cli.artifact_ingest import report_unreadable_problem
@@ -270,9 +319,13 @@ def test_item3_authorization_notice_in_loop_status_brief_inbox(owner):  # noqa: 
     warn = [i for i in inbox["notices"] if i["category"] == "envelope_warning"]
     _show("[③ 收件箱授权告知] " + json.dumps([{k: i.get(k) for k in ("subject", "ask", "recommend", "impact", "decide_line")} for i in warn],
                                          ensure_ascii=False))
-    assert len(warn) == 1 and warn[0]["subject"] == f"项目授权 {f224.AUTH}"
+    assert len(warn) == 1 and warn[0]["subject"] == f"项目授权 {f224.AUTH}" and warn[0]["category_label"] == "项目授权将尽"
     assert warn[0]["ask"] == "已用 4/5 张业务卡(≥80%): 定是否扩大项目授权(总卡数 / 到期)"
-    assert all("信封" not in str(warn[0][k]) for k in ("subject", "ask", "recommend", "impact", "decide_line"))
+    assert all("信封" not in str(warn[0][k]) for k in ("category_label", "subject", "ask", "recommend", "impact", "decide_line"))
+    _rc, text, _err = _cli(["owner", "inbox", "--home-root", str(o.gov.parent)])
+    line = next(ln for ln in text.splitlines() if warn[0]["item_id"] in ln)
+    _show(f"[③ 收件箱 CLI 第二档告知行] {line}")
+    assert "(项目授权将尽): 已用 4/5 张业务卡(≥80%): 定是否扩大项目授权" in line and "信封" not in line
     assert [o_["key"] for o_ in warn[0]["options"]] == ["acknowledge", "let_expire"]
 
 

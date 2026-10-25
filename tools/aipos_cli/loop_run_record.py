@@ -1169,8 +1169,10 @@ def next_action_declaration(run_decl: dict[str, Any], contract: dict[str, Any] |
             raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.routine_rejections.return_header_probe.end_reasons 须为已声明结束原因的非空列表")
         from tools.aipos_cli.loop_driver import load_loop_contract, report_fix_declaration
 
-        for role in ("executor", "auditor"):  # AIPOS-F232 件②: frontmatter_unreadable 复核可视同审计卡的修报告头结束原因
-            as_reason = str(report_fix_declaration(load_loop_contract(), role)["end_reason"])
+        contract = load_loop_contract()
+        # AIPOS-F232 件②: frontmatter_unreadable 复核可视同审计卡的修报告头结束原因(审计 / 执行两份声明都核)
+        for fix_decl in (report_fix_declaration(contract), report_fix_declaration(contract, "executor")):
+            as_reason = str(fix_decl["end_reason"])
             if decl["by_end_reason"].get(as_reason) != "advisor_fix":
                 raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.by_end_reason.{as_reason} 须为 advisor_fix(return_header_probe 视同的结束原因)")
     # AIPOS-F225 件①: Owner 介入分级映射守卫(每个可判 owner_needed 的事由须已归档, 唯一实现 owner_inbox._check_tiers, 经 inbox_declaration 加载)
@@ -2329,7 +2331,9 @@ def retract_owner_ask(governance_root: Path, task_id: str, *, actor: str | None 
                                                command="loop_note", task_id=task_id)
     except SchemaLoadError as exc:
         report["landing"] = {"landed": False, "exit_code": 1, "reason": str(exc), "line": f"⚠ 落账未完成(写入已生效, 勿重复执行写命令): {exc}"}
-    if dest.get("item_id"):
+    if dest.get("item_id") and dest.get("merged"):  # 并入的返工上限事项本身仍待定(与本请求无关), 不按「已不再列出」核
+        report["inbox"] = {"item_id": dest["item_id"], "merged": True, "listed": None, "project": None, "errors": []}
+    elif dest.get("item_id"):
         from tools.aipos_cli.owner_inbox import collect_project_inbox
 
         inbox = collect_project_inbox(root, categories=("loop_owner_needed", "rework_limit"))
@@ -2488,7 +2492,9 @@ def _loop_note_retract_cli(args: Any, task_id: str) -> int:
         print(str(texts[head]).format(record_path=report["record_path"], run_id=report["run_id"], state=report["state"]))
         print(render_retracted_ask(report["owner_ask"]))
         inbox = report.get("inbox")
-        if inbox:
+        if inbox and inbox.get("merged"):
+            print(str(texts["retract_merged"]).format(item_id=inbox["item_id"]))
+        elif inbox:
             print(str(texts["retract_still_listed" if inbox["listed"] else "retract_removed"]).format(
                 item_id=inbox["item_id"], errors="; ".join(inbox.get("errors") or []) or "无", project=inbox.get("project") or "?"))
         if landing:

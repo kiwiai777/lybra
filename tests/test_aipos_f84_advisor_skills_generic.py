@@ -88,6 +88,7 @@ PLACEHOLDER_VALUES = {
     "<要定什么>": "方案二选一",
     "<键=标签>": "plan_a=方案A",
     "<建议>": "建议 plan_a",
+    "<一句话理由>": "请求已过时",  # AIPOS-F232: loop note --retract-reason
     "<事项ID>": "OI-0123456789",
     "<选项键>": "acknowledge",
     "<Owner原话摘要>": "Owner 原话(夹具)",
