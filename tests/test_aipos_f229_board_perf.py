@@ -13,6 +13,7 @@ Items covered:
   3. request-level de-duplication: inside a request-level read scope load_records (full) / load_all_tasks run once per governance root
      (outside a scope every call still loads), callers get private containers; get_overview runs in one scope (was 5 records loads and
      3 queue loads per project) and returns the same data as without the scope; a new card / record is seen by the very next request;
+     a lookup-scope re-entry with the already resolved root skips the realpath walk; the code repo root is resolved once per process;
   4. board prewarm at start: read-only, fills the caches, a failure is reported (not swallowed); switch --no-prewarm;
   5. single implementation: the per-file cache and its helpers live only in frontmatter.py.
 """
@@ -344,6 +345,29 @@ def test_item3_get_overview_next_request_sees_a_new_card(rig):
     assert after == before + 1
 
 
+def test_item3_lookup_scope_reentry_same_root_any_spelling_shares_one_index(tmp_path, monkeypatch):
+    from tools.aipos_cli.task_loader import find_task_card, task_card_lookup_scope
+
+    root = tmp_path / "gov"
+    _card(root, "pending", "T229-L1")
+    link = tmp_path / "gov-link"
+    os.symlink(root, link)
+    calls = _count(monkeypatch, task_loader, "_frontmatter_task_id")
+    with task_card_lookup_scope(root.resolve()):
+        for spelling in (root.resolve(), root, link, tmp_path / "x" / ".." / "gov"):
+            with task_card_lookup_scope(spelling):  # re-entry: resolved key hit without a realpath walk, other spellings resolved
+                assert find_task_card(spelling, "T229-L1")[1] == "pending"
+    assert calls["n"] == 1  # one index for the whole scope, whatever the spelling
+
+
+def test_item3_code_repo_schema_root_resolved_once_same_value():
+    from tools import schema_loader
+
+    first = schema_loader.code_repo_schema_root()
+    assert first == Path(schema_loader.__file__).resolve().parents[1] == REPO_ROOT
+    assert schema_loader.code_repo_schema_root() is first  # per process: resolved once
+
+
 # ---------------------------------------------------------------------------
 # item 4: board prewarm
 # ---------------------------------------------------------------------------
@@ -399,6 +423,7 @@ def test_item4_prewarm_switch(monkeypatch):
     ("def _file_cache_put", "tools/aipos_cli/frontmatter.py"),
     ("def request_scope_active", "tools/aipos_cli/task_loader.py"),
     ("def prewarm_read_caches", "web/board/app.py"),
+    ("_CODE_REPO_ROOT_CACHE", "tools/schema_loader.py"),
 ])
 def test_item5_single_implementation(symbol, owner):
     assert _code_hits(symbol) == [owner], symbol
