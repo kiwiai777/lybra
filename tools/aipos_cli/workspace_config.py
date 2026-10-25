@@ -87,9 +87,15 @@ def _validate_workspace_root(path: Path, *, source: str) -> Path:
     return resolved
 
 
-def load_workspace_config(config_path: Path) -> dict[str, Any]:
+def load_workspace_config(config_path: Path, *, shared: bool = False) -> dict[str, Any]:
+    """JSON object file (project.json / .lybra/config.json). AIPOS-F229: read through the per-file read cache
+    (frontmatter.read_json_cached: unchanged stat identity = not read / decoded again; every call gets its own copy).
+    shared=True = the cache's own object without the copy, ONLY for read-only callers that never mutate it nor hand a
+    container of it out (project_paths / project_repos: they read a few keys of a project.json that can be 160+ KB)."""
+    from tools.aipos_cli.frontmatter import read_json_cached
+
     try:
-        data = json.loads(config_path.read_text(encoding="utf-8"))
+        data = read_json_cached(config_path, copy=not shared)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid Lybra workspace config JSON: {config_path}") from exc
     if not isinstance(data, dict):
@@ -648,12 +654,13 @@ def project_json_path(project_root: str | Path) -> Path:
     return Path(project_root) / "project.json"
 
 
-def read_project_json(project_root: str | Path) -> dict[str, Any]:
-    """Read project.json; returns {} if absent. Sole authority for code_repo (ruling 6)."""
+def read_project_json(project_root: str | Path, *, shared: bool = False) -> dict[str, Any]:
+    """Read project.json; returns {} if absent. Sole authority for code_repo (ruling 6).
+    AIPOS-F229: shared=True = load_workspace_config(shared=True) (read-only callers only, see there)."""
     path = project_json_path(project_root)
     if not path.is_file():
         return {}
-    return load_workspace_config(path)
+    return load_workspace_config(path, shared=shared)
 
 
 def declared_project_id(governance_root: str | Path) -> str:
@@ -734,7 +741,7 @@ def project_paths(governance_root: str | Path, *, project: dict[str, Any] | None
     decl = _project_paths_declaration()
     if project is None:
         try:
-            project = read_project_json(root)
+            project = read_project_json(root, shared=True)  # AIPOS-F229: read-only here (keys read, values turned into new objects)
         except (OSError, ValueError) as exc:
             import sys
 
@@ -887,7 +894,7 @@ def project_repos(governance_root: str | Path, *, project: dict[str, Any] | None
     _project_repos_declaration()  # 声明缺 = SchemaLoadError(fail-closed), 代码不写死第二份形
     exists = project_json_path(root).is_file()
     if project is None:
-        project = read_project_json(root)
+        project = read_project_json(root, shared=True)  # AIPOS-F229: read-only here (keys read, values turned into new objects)
     code_repo_raw = str(project.get("code_repo") or "").strip()
     code_repo = Path(code_repo_raw).expanduser() if code_repo_raw else None
     raw = project.get("repos")

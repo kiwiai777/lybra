@@ -96,8 +96,17 @@ def _board_workspaces(repo_root: Path | None, home_root: str | Path | None = Non
 
 
 def get_overview(repo_root: Path | None = None, *, home_root: str | Path | None = None) -> dict[str, Any]:
-    """Multi-workspace overview aggregation (AIPOS-251; AIPOS-F171 件③: 项目列表 = home 根推导 _board_workspaces, 暂停项目标注)."""
-    workspaces_config = _board_workspaces(repo_root, home_root)
+    """Multi-workspace overview aggregation (AIPOS-251; AIPOS-F171 件③: 项目列表 = home 根推导 _board_workspaces, 暂停项目标注).
+    AIPOS-F229 件③: one request-level read scope (task_loader.read_request_scope) for the whole aggregation: per project the
+    queue (load_all_tasks) and the records (load_records) are loaded once and shared by get_queue / get_needs_owner / get_records /
+    owner truth view / advisor pending items (was 3 queue loads and 5 records loads per project)."""
+    from tools.aipos_cli.task_loader import read_request_scope
+
+    with read_request_scope():
+        return _get_overview(_board_workspaces(repo_root, home_root))
+
+
+def _get_overview(workspaces_config: list[dict[str, Any]]) -> dict[str, Any]:
 
     results = []
     for ws_config in workspaces_config:
@@ -3145,11 +3154,37 @@ def make_handler(
     return BoardHandler
 
 
+def prewarm_read_caches(repo_root: Path | None = None, home_root: str | Path | None = None) -> dict[str, Any]:
+    """AIPOS-F229: fill the process read caches (frontmatter / JSON per-file cache, records group cache) once at board start by
+    running the two heaviest read-only derivations the Owner opens first (the overview page data board_pages.collect_overview,
+    which includes the inbox, and the legacy /api/overview get_overview). Read-only, writes nothing; a freshly (re)started board
+    otherwise pays the whole cold parse (~10k record / card files) on the first visit. A failure is reported (stderr + result),
+    never swallowed, and does not stop the board (the pages derive again on request and show their own errors).
+    Returns {ok, seconds, error}."""
+    import time as _time
+
+    from tools.aipos_cli.board_pages import collect_overview
+
+    started = _time.perf_counter()
+    try:
+        collect_overview(home_root)
+        get_overview(repo_root=repo_root, home_root=home_root)
+    except Exception as exc:  # noqa: BLE001 - reported below, the board keeps serving (pages derive again on request)
+        error = f"{type(exc).__name__}: {exc}"
+        print(f"Warning: board read-cache prewarm failed (pages derive on request): {error}", file=sys.stderr, flush=True)
+        return {"ok": False, "seconds": round(_time.perf_counter() - started, 3), "error": error}
+    seconds = round(_time.perf_counter() - started, 3)
+    print(f"AIPOS board read caches prewarmed in {seconds}s", flush=True)
+    return {"ok": True, "seconds": seconds, "error": None}
+
+
 def run_server(host: str = DEFAULT_BOARD_HOST, port: int = DEFAULT_BOARD_PORT, repo_root: Path | None = None,
-               perf_log_path: Path | None = None) -> None:
+               perf_log_path: Path | None = None, *, prewarm: bool = True) -> None:
     handler = make_handler(repo_root=repo_root, perf_log_path=perf_log_path)
     with ThreadingHTTPServer((host, port), handler) as httpd:
         print(f"AIPOS board local UI listening on http://{host}:{port}")
+        if prewarm:  # AIPOS-F229: background, the server answers from the first second
+            threading.Thread(target=prewarm_read_caches, kwargs={"repo_root": repo_root}, name="board-prewarm", daemon=True).start()
         httpd.serve_forever()
 
 
@@ -3160,6 +3195,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo-root", default=None)
     parser.add_argument("--perf-log", default=None, help="AIPOS-F177: optional JSON-lines file for per-request server time "
                         "(separate from the board audit log; off when omitted)")
+    parser.add_argument("--no-prewarm", action="store_true", help="AIPOS-F229: do not fill the read caches in the background at start "
+                        "(default: prewarm, so the first overview / inbox visit after a restart is not a cold parse)")
     parser.add_argument("--board-config", default=None, help="Retired (AIPOS-F171): the project list is derived from the governance home root; "
                         "board_config.json is no longer read (accepted for old launch scripts, ignored)")
     return parser.parse_args()
@@ -3175,7 +3212,7 @@ def main() -> int:
         print("Warning: --board-config is retired (AIPOS-F171): the project list is derived from the governance home root; "
               "the file is not read", file=sys.stderr)
     perf_log = Path(args.perf_log).expanduser().resolve() if args.perf_log else None
-    run_server(host=str(args.host), port=int(args.port), repo_root=repo_root, perf_log_path=perf_log)
+    run_server(host=str(args.host), port=int(args.port), repo_root=repo_root, perf_log_path=perf_log, prewarm=not args.no_prewarm)
     return 0
 
 
