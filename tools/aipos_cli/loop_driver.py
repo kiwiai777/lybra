@@ -1983,6 +1983,23 @@ def _drive(
             state = derivation.get("current_state")
             if action.get("type") in HARD_STOP_ACTIONS:
                 # AIPOS-F78 件③ / F73E 件①: 产物已落盘但不合规 / 账务记录缺 → 不空等, exit 4 点名缺项(补齐后重跑 loop)
+                if action.get("type") == "frontmatter_unreadable":
+                    # AIPOS-F232 item 2: the unreadable file is this card's report (YAML error in the report header) = report form
+                    # error (routine fix: resume the auditor / executor session once to fix only the header), not investigate;
+                    # anything else unreadable (card / record) = hard stop as before (_report_fix returns None)
+                    from tools.aipos_cli.audit_derivation import is_audit_card
+
+                    fixed = _report_fix(index, task_id, target_card, governance_root, result,
+                                        role="auditor" if is_audit_card(target_card) else "executor", steps=steps,
+                                        contract=contract, launch_decl=launch_decl, policy=policy, no_launch=no_launch,
+                                        launched=launched, fixes=report_fixes, watch=watch, max_wait=max_wait, interval=interval,
+                                        say=say, actor=driver_actor, recorder=recorder, node=node, state=state)
+                    if fixed == "resumed":
+                        continue
+                    if fixed == "ended":
+                        if not steps or steps[-1].index != index:
+                            steps.append(LoopStep(index, "execute", node, state, target_card, ok=False, message=result.message))
+                        return result
                 if action.get("type") == "artifact_invalid" and target_card == task_id:
                     # AIPOS-F204 item 2: the executor return header is correctably wrong (missing keys / wrong contract) =
                     # resume the recorded executor session once to fix only the header (same mechanism as F180B)
@@ -2309,6 +2326,23 @@ def report_fix_declaration(contract: dict[str, Any], role: str = "auditor") -> d
     return decl
 
 
+def report_unreadable_fix_prompt(contract: dict[str, Any], artifact: str, problem: dict[str, Any], role: str) -> str:
+    """AIPOS-F232 item 2: the report-header-unreadable fix instruction (single rendering: loop resume, loop end message and loop status
+    routine hint {header_fix_prompt}); declared verbs.schema lybra_loop.launch.report_fix.unreadable; problem = header_problem from
+    artifact_ingest.report_unreadable_problem (line / line text / parse error)."""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = ((contract.get("launch") or {}).get("report_fix") or {}).get("unreadable")
+    prompt = decl.get("prompt") if isinstance(decl, dict) else None
+    who = (decl.get("who") or {}).get(role) if isinstance(decl, dict) and isinstance(decl.get("who"), dict) else None
+    if not isinstance(prompt, str) or any(p not in prompt for p in ("{who}", "{artifact}", "{problem}", "{fix}")) or not who:
+        raise SchemaLoadError(f"verbs.schema.json verbs.{LOOP_VERB}.launch.report_fix.unreadable(prompt 含 {{who}} {{artifact}} {{problem}} {{fix}}, "
+                              f"who.{role})未声明齐(AIPOS-F232)")
+    for key, value in (("who", who), ("artifact", artifact), ("problem", problem.get("problem") or ""), ("fix", problem.get("fix") or "")):
+        prompt = prompt.replace("{" + key + "}", str(value))
+    return prompt
+
+
 def executor_report_fix_prompt(contract: dict[str, Any], artifact: str, problem: dict[str, Any]) -> str:
     """AIPOS-F204 item 2: the executor return-header fix instruction (single rendering: loop resume and loop status
     routine hint {header_fix_prompt}); problem = artifact_ingest.return_header_problem."""
@@ -2332,7 +2366,25 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
 
     check = validate_task_artifact(card, governance_root)
     report = str(check.get("path") or "")
-    if role == "executor":
+    unreadable = check.get("category") == "INGEST_FRONTMATTER_UNREADABLE"
+    if unreadable:
+        # AIPOS-F232 item 2: report header unreadable (YAML error) = same mechanism for both roles; the diagnosis comes from the
+        # artifact-ingest check (header_problem via artifact_ingest.report_unreadable_problem), never judged here
+        problem = check.get("header_problem")
+        if not isinstance(problem, dict) or not problem.get("correctable"):
+            return None  # not this card's report (card / record unreadable) = the original hard stop
+        decl = report_fix_declaration(contract, role)
+        kinds = list(problem.get("kinds") or [])
+        say(f"[{index}] 报告头读不出 @ {node}/{state} ({card}) {check.get('category')}: {problem.get('problem')}")
+        head = f"{'审计' if role == 'auditor' else '执行'}卡 {card} 报告头读不出({problem.get('problem')})"
+        prompt = report_unreadable_fix_prompt(contract, report, problem, role)
+        what = "报告头读不出(报告格式错)"
+        who = "审计" if role == "auditor" else "执行"
+        outlet = f"让{who}体只修报告头使其可解析(修头指令见下一条)"
+        code_outcome = "gate_rejected" if role == "auditor" else "not_derivable"
+        watch_root, patterns = (auditor_artifact_watch if role == "auditor" else executor_artifact_watch)(governance_root, card)
+        resume_why = "AIPOS-F232 修报告头(读不出)"
+    elif role == "executor":
         problem = check.get("header_problem")
         if not isinstance(problem, dict):
             return None
@@ -2377,8 +2429,8 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
         code = exit_code_for(contract, code_outcome)
         msg = (f"{what}, {why}: {head}。出口(advisor_fix, 不升 Owner): {outlet}, "
                f"见 lybra loop status --task-id {task_id} --workspace-root {governance_root} 的下一条")
-        if role == "executor":
-            msg += f"\n  修头指令(会话不可续接时顾问派给本卡执行实例): {prompt}"
+        if role == "executor" or unreadable:  # AIPOS-F232: 读不出的审计报告同样把修头指令带进结束原文(子 agent 审计时顾问派给审计实例)
+            msg += f"\n  修头指令(会话不可续接时顾问派给本卡{who}实例): {prompt}"
         say(f"[{index}] exit {code} — {msg}")
         result.outcome, result.exit_code, result.message, result.reason = code_outcome, code, msg, str(decl["end_reason"])
         return "ended"

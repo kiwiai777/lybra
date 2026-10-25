@@ -43,7 +43,18 @@ lybra project set-repos <项目名> --home-root <home根> --repo <仓名>=<产�
 写 project.json 的命令(`set-repos` / `set-repo` / `set-paths` / `set-workstation`)一律两阶段(AIPOS-F125): 先 `--dry-run` 预演(打印 diff 与校验, 零写入), 确认后 `--confirm` 才写。
 **落账**(AIPOS-F94 / F158 / F159): 卡与声明只在盘上 = 未成为可追溯真相, 须精确提交并推送治理仓。**写治理真相的命令 `--confirm` 写后即自动落账**——`project set-repos` / `set-repo` / `set-paths` / `set-workstation` 等 project 族写命令(提交身份 `--actor`)、`envelope mint --confirm`、`migrate … --confirm`; 输出 `落账: verdict=PASS committed=True pushed=True` 即完成, **不要再手跑 `governance-commit`**。落账失败(exit 3)= 写入已生效, 照输出原文给出的补账命令跑一次即可, 勿重复执行写命令。只有 `project new`(建治理根本身, 不自动落账)之后照 guide 第 1 步原样跑那条 `lybra governance-commit --paths …`。治理根须在治理仓(git, 带 origin)内; 不在 = 先 `lybra home git-init --home-root <home根>`, 由 Owner 按其输出配远端并首推。
 
-### Step 3–4(Owner): 三张信封 + 签码接入顾问(enroll-deliver)
+### Step 3–4(Owner): 项目授权(或三张信封)+ 签码接入顾问(enroll-deliver)
+
+**项目常设授权优先**(AIPOS-F224 / F232): 新项目由 Owner 签一次项目授权(车道 × 任务类型 × 驱动方 / 主机 / 拉起 / 到期 + 总卡数), 范围内
+`lybra loop` 自动覆盖, 不再逐卡签信封; 签了项目授权就不必再签下面的三张信封(未签任何授权的全新项目, 接入推导报「本项目尚未签项目授权」并给
+这条签发命令)。形如(Owner 亲自敲; 不带 `--confirm` = 本地预演零写入):
+```bash
+lybra project grant sign --workspace-root <项目根> --grant-lane <仓名>:code,validation:<你的顾问实例> --host <主机> --launch-harness pi --max-tasks 60 --expires-at <到期时间>
+lybra project grant sign --workspace-root <项目根> …(同上参数) --confirm --connection-json <Owner凭据>
+lybra project grant show --workspace-root <项目根>   # 查看授权、已用 / 总卡数、告知(已用 ≥80% / 到期前 3 天)
+```
+用到 80% 或到期前 3 天 = 告知(第二档, 不阻塞: `lybra loop status` / `lybra brief` / Owner 收件箱各一行, 附 `lybra project grant extend …` 扩大命令);
+越界 = loop 停 `authorization_out_of_bound`, 收件箱选「扩大项目授权」。仍用旧信封的项目照下面三张信封签(兼容)。
 
 把 guide 第 3、4 步原样交给 Owner(你不代敲)。形如:
 ```bash

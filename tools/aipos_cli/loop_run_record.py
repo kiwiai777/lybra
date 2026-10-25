@@ -764,6 +764,8 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
         "end_reason": meta.get("end_reason"), "end_message": meta.get("end_message"), "ended_at": meta.get("ended_at"),
         "end_codes": [str(c) for c in (meta.get("end_codes") or [])],  # AIPOS-F150: 旧记录无此键 = 空列表
         "wait_card": _last_wait_card(meta),  # AIPOS-F156 件①: 最后一次等待的卡(执行方式分流只对本卡执行体等待生效)
+        # AIPOS-F232 件②: 最后一个已落定步的卡(结束于报告读不出时报告所属卡: 审计报告挂审计卡)
+        "last_step_card": next((str(st.get("card") or "") or None for st in reversed(meta.get("steps") or []) if isinstance(st, dict)), None),
     }
     last = launches[-1] if launches else None
     if last is not None:
@@ -779,6 +781,9 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
                 "stop", "provider_retries", "context_checks"):  # AIPOS-F231 件②④⑤
         if meta.get(key):
             view[key] = meta[key]
+    if isinstance(view.get("owner_ask"), dict) and view["owner_ask"].get("retracted_at"):
+        # AIPOS-F232 件①: 顾问已撤回的请求(lybra loop note --retract, 原请求留档)不再作 owner_ask(收件箱 / 下一动作同读), 改挂 owner_ask_retracted
+        view["owner_ask_retracted"] = view.pop("owner_ask")
     if last is not None and isinstance(last.get("diagnosis"), dict):  # AIPOS-F231 件④: 最近一次拉起的早退诊断
         view["launch"]["diagnosis"] = last["diagnosis"]
     if meta.get("status") == "ended":
@@ -1866,9 +1871,12 @@ def next_action_declaration(run_decl: dict[str, Any], contract: dict[str, Any] |
             raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.routine_rejections.return_header_probe.end_reasons 须为已声明结束原因的非空列表")
         from tools.aipos_cli.loop_driver import load_loop_contract, report_fix_declaration
 
-        as_reason = str(report_fix_declaration(load_loop_contract(), "executor")["end_reason"])
-        if decl["by_end_reason"].get(as_reason) != "advisor_fix":
-            raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.by_end_reason.{as_reason} 须为 advisor_fix(return_header_probe 视同的结束原因)")
+        contract = load_loop_contract()
+        # AIPOS-F232 件②: frontmatter_unreadable 复核可视同审计卡的修报告头结束原因(审计 / 执行两份声明都核)
+        for fix_decl in (report_fix_declaration(contract), report_fix_declaration(contract, "executor")):
+            as_reason = str(fix_decl["end_reason"])
+            if decl["by_end_reason"].get(as_reason) != "advisor_fix":
+                raise SchemaLoadError(f"verbs.{STATUS_VERB}.next_action.by_end_reason.{as_reason} 须为 advisor_fix(return_header_probe 视同的结束原因)")
     # AIPOS-F225 件①: Owner 介入分级映射守卫(每个可判 owner_needed 的事由须已归档, 唯一实现 owner_inbox._check_tiers, 经 inbox_declaration 加载)
     from tools.aipos_cli.owner_inbox import inbox_declaration
 
@@ -1879,12 +1887,22 @@ def next_action_declaration(run_decl: dict[str, Any], contract: dict[str, Any] |
 def envelope_warning_view(governance_root: Path, view: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any] | None:
     """AIPOS-F166 件②: 运行所用信封的预警(判定唯一 autonomy_policy.envelope_warning; 用量真相 envelope_usage 现读门侧计数)。
     达阈值 = {policy_id, state, why, line(声明 envelope.renew.messages.warn 渲染, 含续签命令)}; 否 / 无信封 / 信封缺 = None。
-    AIPOS-F172(gap #160): 状态取信封状态单一推导 autonomy_policy.envelope_status(看板信封页 / 收件箱同读)——已被同驱动方更新信封接替 = 不预警。"""
-    from tools.aipos_cli.autonomy_policy import envelope_renew_declaration, envelope_status, renew_plan
+    AIPOS-F172(gap #160): 状态取信封状态单一推导 autonomy_policy.envelope_status(看板信封页 / 收件箱同读)——已被同驱动方更新信封接替 = 不预警。
+    AIPOS-F232 件③: 运行用的是项目授权(或已迁入项目授权的旧信封)= 该授权的告知(autonomy_policy.authorization_warnings: 已用 / 到期, 含扩大
+    授权命令; 收件箱 / brief 同读), {policy_id = 授权 ID, state = authorization_notice, why, line}; 无告知 = None。"""
+    from tools.aipos_cli.autonomy_policy import (authorization_superseded_policies, authorization_warnings, envelope_renew_declaration,
+                                                 envelope_status, is_authorization_id, renew_plan)
 
     pid = str(view.get("envelope") or "").strip()
     if not pid:
         return None
+    aid = pid if is_authorization_id(governance_root, pid) else authorization_superseded_policies(governance_root).get(pid)
+    if aid:
+        notices = authorization_warnings(governance_root, now=now, authorization_id=aid)
+        if not notices:
+            return None
+        return {"policy_id": aid, "state": "authorization_notice", "why": notices[0]["why"], "next_policy_id": aid,
+                "line": notices[0]["line"]}
     row = envelope_status(governance_root, pid, now=now)
     why = (row or {}).get("why")
     if not row or row["superseded_by"] or not why:
@@ -2177,42 +2195,74 @@ def _landing_probe_codes(view: dict[str, Any], rules: dict[str, Any], governance
     return [], ""
 
 
+def _report_cards(view: dict[str, Any]) -> list[str]:
+    """AIPOS-F232 件②: 结束时报告可能属的卡(去重有序): 最后一个已落定步的卡(读不出的审计报告挂审计卡)、本卡。"""
+    return [c for c in dict.fromkeys([str(view.get("last_step_card") or "").strip(), str(view.get("task_id") or "").strip()]) if c]
+
+
+def _report_header_check(governance_root: Path, view: dict[str, Any], *, unreadable_only: bool) -> tuple[str, dict[str, Any] | None]:
+    """依次以产物入口同一校验(artifact_ingest.validate_task_artifact, 只读)复核 _report_cards 各卡此刻的报告: 首个 header_problem 可纠正者 =
+    (卡, 校验结果); unreadable_only = 只认报告头读不出(INGEST_FRONTMATTER_UNREADABLE)。无 = ("", None)。复核出错向上(调用方点名)。"""
+    from tools.aipos_cli.artifact_ingest import validate_task_artifact
+
+    for card in _report_cards(view):
+        check = validate_task_artifact(card, Path(governance_root))
+        problem = check.get("header_problem")
+        if not isinstance(problem, dict) or not problem.get("correctable"):
+            continue
+        if unreadable_only and check.get("category") != "INGEST_FRONTMATTER_UNREADABLE":
+            continue
+        return card, check
+    return "", None
+
+
 def _return_header_probe(view: dict[str, Any], rules: dict[str, Any], governance_root: Path, reason: str) -> tuple[str, str]:
     """AIPOS-F204 件③(声明 routine_rejections.return_header_probe): 以所列结束原因结束的运行 → 以产物入口同一校验
     (artifact_ingest.validate_task_artifact 的 header_problem; 只读)复核本卡此刻的交回: 报告头可纠正 = (视同结束原因, "");
-    否则 ("", "")。复核出错 = ("", 原文)(调用方写进 detail, 照旧判)。"""
+    否则 ("", "")。复核出错 = ("", 原文)(调用方写进 detail, 照旧判)。
+    AIPOS-F232 件②: 结束原因 frontmatter_unreadable(F232 前 loop 对报告头 YAML 错即此)= 复核最后一步的卡与本卡的报告, 报告头读不出 =
+    按该卡角色视同其修报告头结束原因(审计卡 = launch.report_fix.end_reason, 执行卡 = report_fix.executor.end_reason; advisor_fix 例行修法),
+    不再 investigate; 读不出的不是报告(卡面 / 记录)= 照旧。"""
     probe = (rules.get("routine_rejections") or {}).get("return_header_probe")
     if not isinstance(probe, dict) or reason not in (probe.get("end_reasons") or []):
         return "", ""
     task_id = str(view.get("task_id") or "").strip()
     if not task_id:
         return "", ""
-    from tools.aipos_cli.artifact_ingest import validate_task_artifact
+    from tools.aipos_cli.audit_derivation import is_audit_card
     from tools.aipos_cli.loop_driver import load_loop_contract, report_fix_declaration
 
+    unreadable_only = reason == "frontmatter_unreadable"
+    probe_view = view if unreadable_only else {**view, "last_step_card": ""}  # F204 口径: 只复核本卡交回
     try:
-        check = validate_task_artifact(task_id, Path(governance_root))
+        card, check = _report_header_check(Path(governance_root), probe_view, unreadable_only=unreadable_only)
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
-        return "", f"交回报告头复核出错: {type(exc).__name__}: {exc}"
-    problem = check.get("header_problem")
-    if isinstance(problem, dict) and problem.get("correctable"):
-        return str(report_fix_declaration(load_loop_contract(), "executor")["end_reason"]), ""
-    return "", ""
+        return "", f"{'报告' if unreadable_only else '交回'}报告头复核出错: {type(exc).__name__}: {exc}"
+    if check is None:
+        return "", ""
+    role = "auditor" if card != task_id and is_audit_card(card) else "executor"
+    return str(report_fix_declaration(load_loop_contract(), role)["end_reason"]), ""
 
 
-def header_fix_prompt_value(governance_root: Path, task_id: str) -> str:
+def header_fix_prompt_value(governance_root: Path, task_id: str, view: dict[str, Any] | None = None) -> str:
     """AIPOS-F204 件③: 修法占位 {header_fix_prompt} 的实值 = 按本卡此刻交回渲染的修交回报告头指令(唯一渲染
-    loop_driver.executor_report_fix_prompt; 判定 artifact_ingest.return_header_problem); 此刻已无可纠正问题 / 复核出错 = 一句说明。"""
-    from tools.aipos_cli.artifact_ingest import validate_task_artifact
-    from tools.aipos_cli.loop_driver import executor_report_fix_prompt, load_loop_contract
+    loop_driver.executor_report_fix_prompt; 判定 artifact_ingest.return_header_problem); 此刻已无可纠正问题 / 复核出错 = 一句说明。
+    AIPOS-F232 件②: view 给出 = 复核最后一步的卡与本卡(读不出的审计报告挂审计卡); 报告头读不出 = 修报告头(读不出)指令
+    (唯一渲染 loop_driver.report_unreadable_fix_prompt, 含解析错行与原因)。"""
+    from tools.aipos_cli.audit_derivation import is_audit_card
+    from tools.aipos_cli.loop_driver import executor_report_fix_prompt, load_loop_contract, report_unreadable_fix_prompt
 
+    probe_view = view or {"task_id": task_id}
     try:
-        check = validate_task_artifact(task_id, Path(governance_root))
+        card, check = _report_header_check(Path(governance_root), {**probe_view, "task_id": task_id}, unreadable_only=False)
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as exc:
-        return f"(复核本卡交回出错, 给不出指令: {type(exc).__name__}: {exc})"
-    problem = check.get("header_problem")
-    if not isinstance(problem, dict) or not problem.get("correctable"):
-        return f"(本卡此刻的交回报告头已无可纠正问题: 入口校验 {check.get('category') or 'OK'}; 直接用原命令续跑 loop)"
+        return f"(复核本卡报告出错, 给不出指令: {type(exc).__name__}: {exc})"
+    if check is None:
+        return "(本卡此刻的报告头已无可纠正问题(可解析, 交回键齐); 报告头 commit_sha 形式错按上一条修法, 其余直接用原命令续跑 loop)"
+    problem = check["header_problem"]
+    if check.get("category") == "INGEST_FRONTMATTER_UNREADABLE":
+        role = "auditor" if card != task_id and is_audit_card(card) else "executor"
+        return report_unreadable_fix_prompt(load_loop_contract(), str(check.get("path") or ""), problem, role)
     return executor_report_fix_prompt(load_loop_contract(), str(check.get("path") or ""), problem)
 
 
@@ -2289,7 +2339,7 @@ def _routine_end_reason_action(view: dict[str, Any], rules: dict[str, Any], gove
         # AIPOS-F227: + fail scope note / same-candidate rework exit (rework command --actor = run record driver)
         values = {**values, **candidate_fail_fix_values(governance_root, task_id, actor=str(view.get("driver") or ""))}
     if any("{header_fix_prompt}" in str(step) for step in routine["end_reasons"][reason]["fix"]):
-        values = {**values, "header_fix_prompt": header_fix_prompt_value(governance_root, task_id)}  # AIPOS-F204 件③
+        values = {**values, "header_fix_prompt": header_fix_prompt_value(governance_root, task_id, view)}  # AIPOS-F204 件③ / F232 件②
     where = f"end_reasons.{reason}.fix"
     fix = [_render_routine(step, values, where) for step in routine["end_reasons"][reason]["fix"]]
     resume = _render_routine(routine["resume_hint"], values, "resume_hint")
@@ -2663,6 +2713,8 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
             out.append(f"  拒因码: {', '.join(v['end_codes'])}")  # AIPOS-F150 件①: 运行记录结构化拒因码
         if v.get("owner_ask"):  # AIPOS-F168 件③: 顾问补写的 Owner 待决结构字段(收件箱同读)
             out.extend(render_owner_ask(v["owner_ask"]))
+        if v.get("owner_ask_retracted"):  # AIPOS-F232 件①: 已撤回的请求(留档)
+            out.append(render_retracted_ask(v["owner_ask_retracted"]))
         na = v.get("next_action")
         ask_mark = (na or {}).get("owner_ask_inbox") if (na or {}).get("reason") != "owner_ruled" else None
         if isinstance(ask_mark, dict) and ask_mark.get("item_id"):  # AIPOS-F222 件②: 顾问补写的请求已进收件箱(待 Owner 裁决)
@@ -2826,6 +2878,15 @@ def render_owner_ask(ask: dict[str, Any]) -> list[str]:
     return lines
 
 
+def render_retracted_ask(ask: dict[str, Any]) -> str:
+    """AIPOS-F232 件①: 已撤回请求的人读行(loop status / loop note --retract 同一渲染, 文案读 lybra_loop_note.texts)。"""
+    texts = note_declaration()["texts"]
+    reason = str(ask.get("retract_reason") or "").strip()
+    return str(texts["retracted_ask"]).format(retracted_by=ask.get("retracted_by") or "?", retracted_at=ask.get("retracted_at") or "?",
+                                              reason_part=str(texts["retract_reason_part"]).format(reason=reason) if reason else "",
+                                              noted_by=ask.get("noted_by") or "?", noted_at=ask.get("noted_at") or "?", ask=ask.get("ask") or "")
+
+
 def annotate_owner_ask(governance_root: Path, task_id: str, *, ask: str, options: list[str] | None = None,
                        recommend: str | None = None, actor: str | None = None, confirm: bool = False,
                        now: datetime | None = None, grant: dict[str, Any] | None = None,
@@ -2914,6 +2975,96 @@ def _note_owner_reason(value: Any, *, grant_only: bool, task_id: str, decl: dict
             reasons=owner_reason_keys(), got_part=got, task_id=task_id)) from exc
 
 
+def retract_owner_ask(governance_root: Path, task_id: str, *, actor: str | None = None, reason: str | None = None,
+                      confirm: bool = False, now: datetime | None = None) -> dict[str, Any]:
+    """AIPOS-F232 件①(声明 lybra_loop_note --retract) 唯一实现: 顾问撤回本人补写的 Owner 请求。运行取法与 annotate_owner_ask 同一(本卡最近一次运行,
+    state ∈ allowed_states); 拒(LoopNoteRejected retract_refused, 原因 texts.retract_refused_reasons): 无 owner_ask / 已撤回 / --actor(缺省
+    运行记录 driver)≠ owner_ask.noted_by / 该事项已有 Owner 回应(owner_inbox.owner_ask_destination 同一判定 reason=ruled)。预演零写入;
+    确认 = owner_ask 原样留档 + 追加 retracted_at / retracted_by / retract_reason → render_markdown 原子替换 → land_written_paths(loop_note)落账,
+    再经 collect_project_inbox 核对该事项已不再列出。返回 {stage, record_path, run_id, state, owner_ask, item_id, landing, inbox}。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.loop_driver import load_loop_contract
+    from tools.aipos_cli.owner_inbox import owner_ask_destination
+    from tools.aipos_cli.record_writer import render_markdown
+
+    decl = note_declaration()
+    texts = decl["texts"]
+    rdecl = run_record_declaration(load_loop_contract())
+    root = Path(governance_root)
+
+    def _refuse(key: str, **values: Any) -> LoopNoteRejected:
+        why = str(texts["retract_refused_reasons"][key]).format(task_id=task_id, **values)
+        return LoopNoteRejected("retract_refused", str(texts["retract_refused"]).format(reason=why))
+
+    files = _run_files(loop_runs_dir(root, task_id))
+    if not files:
+        raise LoopNoteRejected("no_run", f"卡 {task_id} 无 loop 运行记录(落点 {loop_runs_root(root)})")
+    try:
+        metas = sorted((read_run(p, rdecl) for p in files), key=lambda m: (str(m.get("started_at") or ""), str(m.get("run_id") or "")))
+    except LoopRunRecordError as exc:
+        raise LoopNoteRejected("no_run", f"运行记录读不出: {exc}") from exc
+    meta = metas[-1]
+    run_id = str(meta.get("run_id") or "?")
+    state = judge_run(meta, rdecl, now=now)["state"]
+    if state not in decl["allowed_states"]:
+        raise LoopNoteRejected("run_active", f"卡 {task_id} 最近一次运行 {run_id} 状态 {state}(须 ∈ {decl['allowed_states']}): "
+                                             "运行中的记录由 loop 进程原子重写, 撤回会被覆盖; 等运行结束再撤回")
+    ask = meta.get("owner_ask") if isinstance(meta.get("owner_ask"), dict) else {}
+    if not str(ask.get("ask") or "").strip():
+        raise _refuse("no_ask", run_id=run_id)
+    if ask.get("retracted_at"):
+        raise _refuse("already", run_id=run_id, retracted_at=ask.get("retracted_at"), retracted_by=ask.get("retracted_by") or "?")
+    who = str(actor or meta.get("driver") or "").strip()
+    noted_by = str(ask.get("noted_by") or "").strip()
+    if noted_by and who != noted_by:
+        raise _refuse("not_own", run_id=run_id, noted_by=noted_by, actor=who or "(空)")
+    try:
+        runs = loop_status(root, task_id).get("runs") or []
+    except LoopRunRecordError as exc:
+        raise LoopNoteRejected("no_run", f"运行记录读不出(收件箱去向判不出, 不写): {exc}") from exc
+    view = runs[-1] if runs else {}
+    na = dict(view.get("next_action") or {})
+    if na.get("reason") == "owner_ruled" and isinstance(na.get("ruled_from"), dict):
+        na = {**na, "action": na["ruled_from"].get("action") or "owner_needed", "reason": na["ruled_from"].get("reason")}
+    dest = owner_ask_destination(root, task_id, {**view, "owner_ask": ask}, na) or {}
+    if dest.get("reason") == "ruled":
+        raise _refuse("ruled", item_id=dest.get("item_id") or "?", decision_id=dest.get("decision_id") or "?", choice=dest.get("choice") or "?")
+    retracted = {**ask, "retracted_at": iso_z(now or utc_now()), "retracted_by": who or None,
+                 "retract_reason": str(reason or "").strip() or None}
+    path = Path(meta["_path"])
+    report: dict[str, Any] = {"stage": "confirm" if confirm else "preview", "record_path": str(path), "run_id": run_id, "state": state,
+                              "owner_ask": retracted, "item_id": dest.get("item_id"), "landing": None, "inbox": None}
+    if not confirm:
+        return report
+    try:
+        fm, body = require_frontmatter(path)
+    except FrontmatterReadError as exc:
+        raise LoopNoteRejected("no_run", f"运行记录读不出: {exc}") from exc
+    fm["owner_ask"] = retracted
+    text = render_markdown(fm, body.lstrip("\n"), list(fm))
+    tmp = path.with_name(f".{path.name}.tmp{os.getpid()}")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+    from tools.aipos_cli.governance_commit import land_written_paths
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        report["landing"] = land_written_paths(root, [path.resolve().relative_to(root.resolve()).as_posix()], who or "advisor",
+                                               command="loop_note", task_id=task_id)
+    except SchemaLoadError as exc:
+        report["landing"] = {"landed": False, "exit_code": 1, "reason": str(exc), "line": f"⚠ 落账未完成(写入已生效, 勿重复执行写命令): {exc}"}
+    if dest.get("item_id") and dest.get("merged"):  # 并入的返工上限事项本身仍待定(与本请求无关), 不按「已不再列出」核
+        report["inbox"] = {"item_id": dest["item_id"], "merged": True, "listed": None, "project": None, "errors": []}
+    elif dest.get("item_id"):
+        from tools.aipos_cli.owner_inbox import collect_project_inbox
+
+        inbox = collect_project_inbox(root, categories=("loop_owner_needed", "rework_limit"))
+        listed = any(i["item_id"] == dest["item_id"] for i in [*inbox["items"], *(inbox.get("notices") or [])])
+        report["inbox"] = {"item_id": dest["item_id"], "listed": listed, "project": inbox["project"],
+                           "errors": [f"{e['source']}: {e['error']}" for e in inbox["errors"]]}
+    return report
+
+
 def _note_destination(root: Path, task_id: str, meta: dict[str, Any], owner_ask: dict[str, Any], decl: dict[str, Any]) -> dict[str, Any]:
     """AIPOS-F222 件②: 本次 owner_ask 进哪个收件箱事项(收件箱同一判定 owner_inbox.owner_ask_destination; 运行视图与下一动作取 loop status
     同一推导, 已裁决改写的下一动作还原为原判)。不会进收件箱 = LoopNoteRejected(not_listed, 原因 + 指路)。返回 {item_id, category,
@@ -2973,6 +3124,8 @@ def _note_inbox_line(inbox: dict[str, Any], texts: dict[str, Any], *, confirmed:
               "merged_part": str(texts["merged_part"]) if inbox.get("merged") else ""}
     if not confirmed:
         return str(texts["inbox_will"]).format(**values)
+    if inbox.get("listed") and inbox.get("legacy") and texts.get("inbox_legacy"):  # AIPOS-F232 件①: 旧请求降为第二档告知
+        return str(texts["inbox_legacy"]).format(**values)
     if inbox.get("listed"):
         return str(texts["inbox_listed"]).format(**values)
     return str(texts["inbox_missing"]).format(item_id=values["item_id"], errors="; ".join(inbox.get("errors") or []) or "无",
@@ -2992,6 +3145,8 @@ def loop_note_cli(args: Any) -> int:
     if not task_id:
         print("lybra loop note: 须给 --task-id", file=sys.stderr)
         return declared_exit_code(NOTE_VERB, "usage")
+    if getattr(args, "retract", False):  # AIPOS-F232 件①: 撤回本人请求(与写请求的参数互斥)
+        return _loop_note_retract_cli(args, task_id)
     try:
         root = Path(_find_repo_root_for_args(args))
         grant = {"task_mode": getattr(args, "grant_mode", None), "repos": getattr(args, "grant_repos", None),
@@ -3017,6 +3172,53 @@ def loop_note_cli(args: Any) -> int:
                                                                                           run_id=report["run_id"], state=report["state"]))
         print("\n".join(render_owner_ask(report["owner_ask"])))
         print(_note_inbox_line(report.get("inbox") or {}, texts, confirmed=report["stage"] != "preview"))
+        if landing:
+            print(landing["line"], file=sys.stdout if landing.get("landed") else sys.stderr)
+    if landing and not landing.get("landed"):
+        return int(landing.get("exit_code") or 1)
+    return declared_exit_code(NOTE_VERB, "ok")
+
+
+def _loop_note_retract_cli(args: Any, task_id: str) -> int:
+    """`lybra loop note --retract` 薄壳(AIPOS-F232 件①): 全部逻辑在 retract_owner_ask; 与 --ask / --options / --recommend / --owner-reason /
+    --grant-* 同给 = 拒(retract_refused); 退出码读 verbs.schema lybra_loop_note.exit_codes。"""
+    import json
+    import sys
+
+    from tools.aipos_cli.aipos_cli import _find_repo_root_for_args
+    from tools.aipos_cli.verb_contract import declared_exit_code
+    from tools.schema_loader import SchemaLoadError
+
+    texts = note_declaration()["texts"]
+    mixed = [k for k in ("ask", "note_options", "recommend", "owner_reason", "grant_mode", "grant_repos", "grant_max_tasks", "grant_expires",
+                         "grant_reason") if getattr(args, k, None)]
+    if mixed:
+        print("lybra loop note: " + str(texts["retract_refused"]).format(reason=texts["retract_refused_reasons"]["with_ask"]), file=sys.stderr)
+        return declared_exit_code(NOTE_VERB, "retract_refused")
+    try:
+        root = Path(_find_repo_root_for_args(args))
+        report = retract_owner_ask(root, task_id, actor=getattr(args, "actor", None), reason=getattr(args, "retract_reason", None),
+                                   confirm=bool(getattr(args, "confirm", False)))
+    except LoopNoteRejected as exc:
+        print(f"lybra loop note: {exc}", file=sys.stderr)
+        return declared_exit_code(NOTE_VERB, exc.outcome)
+    except (FileNotFoundError, SchemaLoadError, ValueError, OSError) as exc:
+        print(f"lybra loop note: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return declared_exit_code(NOTE_VERB, "no_run")
+    landing = report.get("landing")
+    if getattr(args, "json", False):
+        print(json.dumps({k: v for k, v in report.items() if k != "landing"} | {"landing": {k: v for k, v in (landing or {}).items() if k != "line"} or None},
+                         indent=2, ensure_ascii=False))
+    else:
+        head = "retract_preview" if report["stage"] == "preview" else "retract_written"
+        print(str(texts[head]).format(record_path=report["record_path"], run_id=report["run_id"], state=report["state"]))
+        print(render_retracted_ask(report["owner_ask"]))
+        inbox = report.get("inbox")
+        if inbox and inbox.get("merged"):
+            print(str(texts["retract_merged"]).format(item_id=inbox["item_id"]))
+        elif inbox:
+            print(str(texts["retract_still_listed" if inbox["listed"] else "retract_removed"]).format(
+                item_id=inbox["item_id"], errors="; ".join(inbox.get("errors") or []) or "无", project=inbox.get("project") or "?"))
         if landing:
             print(landing["line"], file=sys.stdout if landing.get("landed") else sys.stderr)
     if landing and not landing.get("landed"):

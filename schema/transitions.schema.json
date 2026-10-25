@@ -1396,6 +1396,14 @@
           "candidate": "本卡为验证卡(交付主体 = 来源卡 {source} 的固定候选, 不建卡分支): 交回用 {keys} 三键(产品给值, 照抄), 不用 {misused} 契约(那是只写治理根卡的产出清单契约), 删去 {misused} 键",
           "branch": "本卡为代码卡(交付主体 = 卡分支 {branch}): 交回用 {keys} 三键, 不用 {misused} 契约(那是只写治理根卡的产出清单契约), 删去 {misused} 键",
           "governance": "本卡只写治理根(不建卡工作树 / 卡分支): 交回用 {keys} 产出清单契约, 不用 {misused}(那是写产品仓卡的分支三键契约), 删去这些键"
+        },
+        "unreadable": {
+          "description": "AIPOS-F232 件②(10-24 AIPOS-F225R 实撞: 审计报告头 `model: glm-5.3 (provider: kiwiai)` 未加引号致 PyYAML 解析失败, loop 判 frontmatter_unreadable → investigate 停下): 本卡报告(执行卡 = 交回落点 return_root/<卡>, 审计卡 = 裁决落点 verdict_root/<卡>)的 frontmatter 读不出(frontmatter.FrontmatterReadError: YAML 解析错 / 无 frontmatter 块)= 报告格式错, 可纠正(种类 kind), 不再 investigate。产物入口 artifact_ingest.validate_task_artifact 的 INGEST_FRONTMATTER_UNREADABLE 结果另落 header_problem {kinds: [kind], correctable: true, problem, fix, line_no, line_text, reason}(执行 / 审计同形), loop 修报告头(verbs.schema lybra_loop.launch.report_fix.unreadable)与 loop status 例行修法同读。卡面 / 记录读不出(不在报告落点)= 不归此类, 照旧硬停。唯一实现 artifact_ingest.report_unreadable_problem。占位 {line_no} / {line_text}(该行原文, 截 line_chars 字) / {reason}(解析错原文)。",
+          "kind": "unreadable",
+          "line_chars": 200,
+          "problem": "报告头第 {line_no} 行 `{line_text}` 读不出: {reason}",
+          "problem_no_line": "报告头读不出: {reason}",
+          "fix": "只修报告头使其可被 YAML 解析: 值里含 `: ` / ` #` / 开头的 `[` `{` `*` `&` `!` `%` `@` 等特殊字符 = 整个值加单引号(值内单引号写两个 `''`), 如 `model: 'glm-5.3 (provider: kiwiai)'`; 首尾 `---` 分隔行保留; 各键的值含义不变"
         }
       },
       "submits_via": "lybra queue return --confirm(驱动方 token, actor=claim 记录实例, completion_report_ref=Return 相对路径, artifact_refs=[Return 相对路径], actual_model=产品按会话记录定位器填写的运行时模型 AIPOS-F90 件②; frontmatter.model 只作对照)"
@@ -1501,6 +1509,13 @@
           "description": "AIPOS-F223(chris HBLX-42VC2R 实撞: 同审计卡同审计实例有 dev + Mac 两个有效验证根声明, 原 candidate_evidence_values 取 live[-1] 选中 Mac, 把卡面 Linux 工具路径命令渲染到 Mac run 目录): 运行证据 run 的选择唯一实现 validation_root.select_evidence_declaration(开工稿 / 派审步骤经 candidate_evidence_values, 裁决入口经 locate_run → audit_run_selection_problem 同读)。卡面 audit_runtime_evidence.host(field)声明执行主机 = 只在本审计卡本实例该主机的声明里选; 未声明 host: 恰一个声明 = 照旧, 多个 = 禁任取(VR_EVIDENCE_HOST_AMBIGUOUS, 开工稿 / 派审步骤只给拒因一行 refusal_line, 裁决入口同判据拒); 报告 run 属未选中声明 = VR_EVIDENCE_HOST_MISMATCH 点名所选声明。候选池: 开工稿 = 有效声明(active / unbound); 裁决入口 = 未撤销声明(到期声明的 run 照旧可作证据, 与 F199 规则一致)。在途卡补 host = outlet(queue amend, 已认领卡 --restricted, 只改 host; card.schema restricted_amend.claimed_card_subfields)。",
           "field": "host",
           "refusal_line": "   ⚠ 运行证据执行主机未定, 本卡验证根步骤不渲染(裁决入口同判据拒收; 审计停线报告顾问): {problem}; {outlet}",
+          "verdict_refusals": {
+            "description": "AIPOS-F232 件④(F223R 备注: 主机不符时拒因前缀原为「验证根声明读不出, 无从核对 run 归属」, 不准确): 裁决入口(board_adapter._candidate_run_problem 经 locate_run)按拒因码分前缀, 键 = config.schema project_json.validation_roots.reject_codes 中的主机选择码; 其余码照旧 unreadable。占位 {host} = 卡面 audit_runtime_evidence.host(未声明 = host_undeclared), {error} = 拒因原文(含所选声明与 run 目录)。",
+            "VR_EVIDENCE_HOST_MISMATCH": "运行证据 run 不属于卡面声明主机 {host} 的验证根(fail-closed): {error}",
+            "VR_EVIDENCE_HOST_AMBIGUOUS": "运行证据执行主机未定(卡面声明主机 {host}), 选不出唯一验证根 run(fail-closed): {error}",
+            "unreadable": "验证根声明读不出, 无从核对 run 归属(fail-closed): {error}",
+            "host_undeclared": "(未声明 host, 按本审计卡本实例唯一未撤销声明)"
+          },
           "outlet": "出口: 顾问为卡 {card} 的卡面 {card_field} 声明执行主机 {field}(可选主机: {hosts}; 只改 {field}, 命令与 required 不变)——`{amend}`(预演看清后去掉 --dry-run 确认); 补声明后开工稿 / 派审步骤即按该主机的声明渲染",
           "note": "   ℹ 多主机验证(AIPOS-F223): 运行证据命令的执行主机 = {host}({basis}); 本步骤只按该主机的声明 {decl} 渲染; 本审计卡本实例其余声明({others})用于其它验证, 其 run 不作本卡运行证据"
         },

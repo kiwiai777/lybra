@@ -105,6 +105,11 @@ def inbox_declaration() -> dict[str, Any]:
                 raise SchemaLoadError(f"verbs.{VERB}.categories.{name}.reaudit_hint 须有 reasons / after_choices(列表)、非空 text 与 ≥1 整数 commit_chars")
             referenced |= set(hint["after_choices"])
         referenced |= set(cat.get("choice_refused_by_queue_state") or {})  # AIPOS-F201: refusal texts are keyed by option
+    auth_texts = decl["categories"]["envelope_warning"].get("authorization")  # AIPOS-F232 件③: 项目授权告知文案
+    if (not isinstance(auth_texts, dict) or any(not str(auth_texts.get(k) or "").strip() for k in ("label", "subject", "ask", "recommend", "impact", "decide_board"))
+            or not isinstance(auth_texts.get("options"), list) or not auth_texts["options"]):
+        raise SchemaLoadError(f"verbs.{VERB}.categories.envelope_warning.authorization 须有非空 label / subject / ask / recommend / impact / decide_board 与选项列表")
+    referenced |= set(auth_texts["options"])
     ask_spec = decl["categories"]["loop_owner_needed"].get("advisor_ask")  # AIPOS-F222 件②
     if (not isinstance(ask_spec, dict) or not str(ask_spec.get("reason") or "").strip() or not str(ask_spec.get("impact") or "").strip()
             or not isinstance(ask_spec.get("pinned_when_rework_exhausted"), list)):
@@ -179,6 +184,11 @@ def _check_tiers(decl: dict[str, Any]) -> None:
         raise SchemaLoadError(f"{where}.texts 须声明齐 {list(_TIER_TEXTS)}")
     if str(tiers["grant_owner_reason"]) not in reasons:
         raise SchemaLoadError(f"{where}.grant_owner_reason 须 ∈ tier1.reasons")
+    legacy = decl["categories"]["loop_owner_needed"]["advisor_ask"].get("legacy")  # AIPOS-F232 件①: F225 前的旧顾问请求降档
+    if (not isinstance(legacy, dict) or legacy.get("tier") != 2 or str(legacy.get("kind")) not in kinds
+            or any(not str(legacy.get(k) or "").strip() for k in ("label", "ask", "retract_command"))):
+        raise SchemaLoadError(f"verbs.{VERB}.categories.loop_owner_needed.advisor_ask.legacy 须 tier = 2、kind ∈ tiers.tier2.kinds, "
+                              "且有非空 label / ask / retract_command(AIPOS-F232)")
     expected = _owner_needed_reasons(status_contract()["next_action"], decl)
     expected.add(str(auto["revoked_end_reason"]))
     table = tiers["loop_reasons"]
@@ -936,6 +946,14 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
             facts={"run_id": view.get("run_id"), "reason": reason, "driver": view.get("driver"), "envelope": view.get("envelope"),
                    "hint": na.get("hint"), "record_path": view.get("record_path"), "owner_ask_by": ask_rec.get("noted_by")})
         item["relay_to"] = (str(ask_rec.get("noted_by") or "") if advisor_ask else "") or driver or None  # AIPOS-F201: the loop driver is the advisor to tell
+        if advisor_ask and marker.get("legacy"):  # AIPOS-F232 件①: F225 前的旧顾问请求(无第一档事由)= 第二档告知, 附撤回命令
+            legacy = ask_spec["legacy"]
+            retract = _fmt(legacy["retract_command"], "categories.loop_owner_needed.advisor_ask.legacy.retract_command", task_id=task_id,
+                           noted_by=str(ask_rec.get("noted_by") or driver or "<补写的顾问实例>"), governance_root=str(root))
+            item["ask"] = _fmt(legacy["ask"], "categories.loop_owner_needed.advisor_ask.legacy.ask", label=legacy["label"], ask=item["ask"],
+                               retract_command=retract)
+            item["owner_tier"] = int(legacy["tier"])
+            item["legacy_ask"] = {"label": str(legacy["label"]), "retract_command": retract, "kind": str(legacy["kind"])}
         # AIPOS-F225: first-tier reason (loop status apply_owner_tier; advisor_ask = the note's owner_reason)
         item["owner_reason"] = (owner_reason_entry((view.get("owner_ask") or {}).get("owner_reason"), decl)
                                 if advisor_ask and isinstance(view.get("owner_ask"), dict) else na.get("owner_reason"))
@@ -1210,7 +1228,9 @@ def owner_ask_destination(root: Path, task_id: str, view: dict[str, Any], na: di
     decl = decl or inbox_declaration()
     root = Path(root)
     out: dict[str, Any] = {"item_id": None, "category": "loop_owner_needed", "merged": False, "reason": None, "decision_id": None,
-                           "choice": None, "run_id": view.get("run_id"), "state": None}
+                           "choice": None, "run_id": view.get("run_id"), "state": None,
+                           # AIPOS-F232 件①: 顾问请求(运行非等 Owner)无第一档事由 = F225 前的旧请求, 降第二档告知(advisor_ask.legacy)
+                           "legacy": na.get("action") != "owner_needed" and not str(ask.get("owner_reason") or "").strip()}
     path, state = find_task_card(root, task_id)
     out["state"] = state
     if path is None or state in ("completed", "withdrawn"):
@@ -1224,8 +1244,8 @@ def owner_ask_destination(root: Path, task_id: str, view: dict[str, Any], na: di
     if na.get("action") != "owner_needed":
         fm = require_frontmatter(Path(path))[0] if state == "claimed" else {}
         core = rework_limit_core(root, task_id, fm, decl=decl) if fm else None
-        if core is not None:
-            out.update({"item_id": core["item_id"], "category": "rework_limit", "merged": True})
+        if core is not None:  # 并入返工上限事项(第一档 rework_cap_exceeded)= 不按旧请求降档
+            out.update({"item_id": core["item_id"], "category": "rework_limit", "merged": True, "legacy": False})
     ruling = read_ruling(root, out["item_id"], decl)
     if ruling is None and na.get("action") != "owner_needed":
         noted = str(ask.get("noted_at") or "")
@@ -1303,39 +1323,30 @@ def _envelope_items(root: Path, project: str, decl: dict[str, Any], home_root: P
 
 def _authorization_notice_items(root: Path, project: str, decl: dict[str, Any], home_root: Path | None) -> list[dict[str, Any]]:
     """AIPOS-F224 件②: 项目授权告知(第二档, 不阻塞; 判定唯一 autonomy_policy.authorization_notices: 用到 80% / 到期前 N 天)同列 envelope_warning
-    类(同一「将尽 / 将到期」文案; 建议 = 扩大授权命令, 增量 = 总卡数 / 到期)。"""
-    import math
-    from datetime import timedelta
-
-    from tools.aipos_cli.autonomy_policy import authorization_overview, project_authorization_declaration, render_authorization_command
-    from tools.aipos_cli.clock import iso_z, utc_now
+    类; AIPOS-F232 件③: 行与扩大命令唯一来源 autonomy_policy.authorization_warnings(loop status / brief 同读), 文案读本类 authorization 子声明
+    (项目授权措辞, 不写「信封」; 建议 = 扩大授权命令, 增量 = 总卡数 / 到期)。"""
+    from tools.aipos_cli.autonomy_policy import authorization_warnings
     from tools.aipos_cli.envelope_board import board_envelope_url
 
     cat = decl["categories"]["envelope_warning"]
-    adecl = project_authorization_declaration()
+    texts = cat["authorization"]
+    where = "categories.envelope_warning.authorization"
     out: list[dict[str, Any]] = []
-    for row in authorization_overview(root):
-        if not row.get("notices"):
-            continue
-        aid = str(row["authorization_id"])
-        step = max(1, math.ceil(float(adecl["extend"]["quota_step_ratio"]) * int(row["max_tasks"] or 0)))
-        later = iso_z((utc_now() + timedelta(days=int(adecl["extend"]["expiry_days"]))).replace(microsecond=0))
-        command = render_authorization_command(root, "extend", [f"--max-tasks {int(row['max_tasks'] or 0) + step}", f"--expires-at {later}"])
-        why = "; ".join(row["notices"])
-        drivers = sorted({d for lane in row["lanes"] for d in lane["drivers"]})
+    for row in authorization_warnings(root):
+        aid, why, command = str(row["authorization_id"]), str(row["why"]), str(row["command"])
+        drivers = ", ".join(row["drivers"])
         item = _base_item(
             decl, project=project, governance_root=root, category="envelope_warning", rank=int(cat["rank"]),
-            subject=_fmt(cat["subject"], "categories.envelope_warning.subject", policy_id=aid), anchor=f"{aid}|r{row['revision']}|{why}",
-            source=", ".join(drivers), ask=_fmt(cat["ask"], "categories.envelope_warning.ask", why=why),
-            recommend=_fmt(cat["recommend"], "categories.envelope_warning.recommend", renew_command=command),
-            impact=_fmt(cat["impact"], "categories.envelope_warning.impact", agent_or_role=", ".join(drivers) or "?"),
-            options=_option_list(list(cat["options"]), decl), since=None, policy_id=aid, home_root=home_root,
+            subject=_fmt(texts["subject"], f"{where}.subject", authorization_id=aid), anchor=f"{aid}|r{row['revision']}|{why}",
+            source=drivers, ask=_fmt(texts["ask"], f"{where}.ask", why=why),
+            recommend=_fmt(texts["recommend"], f"{where}.recommend", command=command),
+            impact=_fmt(texts["impact"], f"{where}.impact", drivers=drivers or "?"),
+            options=_option_list(list(texts["options"]), decl), since=None, policy_id=aid, home_root=home_root,
             facts={"used": row["used"], "max_tasks": row["max_tasks"], "expires_at": row["expires_at"], "renew_command": command,
                    "authorization_revision": row["revision"], "notices": row["notices"]})
-        if cat.get("decide_board"):
-            item["board_url"] = board_envelope_url(project, aid)
-            item["decide_line"] = _fmt(cat["decide_board"], "categories.envelope_warning.decide_board", board_url=item["board_url"],
-                                       command=item["decide_command"])
+        item["category_label"] = str(texts["label"])  # 项目授权措辞(类别仍为 envelope_warning: 档位 / 裁决同类)
+        item["board_url"] = board_envelope_url(project, aid)
+        item["decide_line"] = _fmt(texts["decide_board"], f"{where}.decide_board", board_url=item["board_url"], command=item["decide_command"])
         out.append(item)
     return out
 
@@ -1460,7 +1471,7 @@ def collect_project_inbox(governance_root: Path, *, project: str | None = None, 
                 except FrontmatterReadError as exc:
                     errors.append({"project": name, "source": f"裁决记录 {item['decision_id']}", "error": str(exc)})
                     continue
-                tier = category_tier(category, decl)
+                tier = int(item.get("owner_tier") or category_tier(category, decl))  # AIPOS-F232 件①: 事项级降档(旧顾问请求)优先
                 item["owner_tier"] = tier
                 (decided if ruling else items if tier == 1 else notices).append(item)
                 if ruling:  # AIPOS-F201 item 3 (a): ruled, but the truth still stands = the advisor has not continued
@@ -2580,7 +2591,8 @@ def _apply_owner_ask(governance_root: Path, view: dict[str, Any], na: dict[str, 
     dest = owner_ask_destination(governance_root, task_id, view, na)
     if dest is None or dest["reason"] in ("card_closed", "frozen"):
         return na
-    marker = {"item_id": dest["item_id"], "category": dest["category"], "merged": dest["merged"], "resolved_by": dest.get("resolved_by")}
+    marker = {"item_id": dest["item_id"], "category": dest["category"], "merged": dest["merged"], "resolved_by": dest.get("resolved_by"),
+              "legacy": bool(dest.get("legacy"))}
     if dest["reason"] == "ruled":
         return {**_ruled_action(governance_root, view, na, str(dest["item_id"]), dest["ruling"], inbox_declaration()),
                 "owner_ask_inbox": marker}

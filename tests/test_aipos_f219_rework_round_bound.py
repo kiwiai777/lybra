@@ -68,7 +68,7 @@ def _register_round(gov: Path, task_id: str, verdict_ref: str, *, at: datetime |
             "--focus-items", json.dumps(FOCUS2, ensure_ascii=False), "--acceptance-criteria", json.dumps(CRITERIA2, ensure_ascii=False)]
     with monkeypatch.context() as m:
         if at is not None:
-            m.setattr(queue_mutation, "iso_z", lambda: _iso(at))
+            m.setattr(queue_mutation, "iso_ms", lambda: _iso(at))  # AIPOS-F232: 登记时刻改 iso_ms(秒级文本 = 存量形, 照读)
         assert _cli(argv)[0] == 0
         rc, out, err = _cli(argv + ["--confirm"])
     assert rc == 0, out + err

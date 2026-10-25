@@ -476,10 +476,12 @@ def run_brief(
 
         supplementary = supplementary_audit_overview(workspace_root, unreadable)
         # AIPOS-F166 件②③: 有效信封用量预警(唯一判定 autonomy_policy.envelope_warnings)+ 合并后回归未完成(post_merge_regression.unfinished_regressions)
-        from tools.aipos_cli.autonomy_policy import envelope_warnings
+        from tools.aipos_cli.autonomy_policy import authorization_warnings, envelope_warnings
         from tools.aipos_cli.post_merge_regression import unfinished_regressions
 
         envelope_warns = envelope_warnings(workspace_root)
+        # AIPOS-F232 件③: 项目授权告知(已用 / 到期; 唯一判定 autonomy_policy.authorization_notices, 行 = authorization_warnings, 收件箱 / loop status 同读)
+        authorization_warns = authorization_warnings(workspace_root)
         regression_unfinished = unfinished_regressions(workspace_root)
 
         # 4. 治理文档清单
@@ -512,6 +514,7 @@ def run_brief(
                 "queue": queue_summary,
                 "supplementary_audits": supplementary,
                 "envelope_warnings": envelope_warns,
+                "authorization_warnings": authorization_warns,
                 "post_merge_regression_unfinished": regression_unfinished,
                 "governance_docs": [
                     {
@@ -598,6 +601,8 @@ def run_brief(
                 for row in supplementary:
                     print(f"    - {row['line']}")
             for row in envelope_warns:  # AIPOS-F166 件②: 每个达阈值的有效信封一行(含续签命令)
+                print(f"  {row['line']}")
+            for row in authorization_warns:  # AIPOS-F232 件③: 每份有告知的项目授权一行(含扩大授权命令)
                 print(f"  {row['line']}")
             for row in regression_unfinished:  # AIPOS-F166 件③
                 print(f"  {row['line']}")
