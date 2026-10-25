@@ -398,6 +398,7 @@ def test_item4_same_round_before_audit_starts(rig, monkeypatch):  # noqa: F811
     wait = nr.derive_next_step(DOCS, rig.gov)
     _show("---- 件④ 同轮打回后 lybra next 原文 ----\n" + nr.format_output(wait))
     assert wait["action"]["type"] == "await_rework" and wait["current_node"] == "same_round" and "不占返工轮" in wait["missing_records"][0]
+    assert "同轮打回于" in wait["suggested_action"] and "第 ? 轮" not in wait["suggested_action"]
     # 同一交回重复同轮打回 = 拒
     again = mark_concluded_task(task_id=DOCS, actor=DRIVER, dry_run=True, repo_root=rig.gov, outcome="same_round", focus_items=focus)
     assert not again["ok"] and "SAME_ROUND_ALREADY_PENDING" in json.dumps(again, ensure_ascii=False)

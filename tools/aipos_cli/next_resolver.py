@@ -4610,7 +4610,7 @@ def legal_exits_for_card(workspace_root: Path, task_id: str) -> dict[str, Any] |
 
 _SAME_ROUND_TEXTS = ("await_missing", "await_suggested", "after_audit", "after_first", "after_review", "stale_head", "re_return_note",
                      "re_return_suggested", "invalid_fix", "not_updated_note", "without_round_suggested", "without_round_note", "reviewed_what",
-                     "reaudit_ref", "reaudit_note")
+                     "reaudit_ref", "reaudit_note", "bound_note")
 _SAME_ROUND_CODES = ("SAME_ROUND_NOT_CLAIMED", "SAME_ROUND_NO_RETURN", "SAME_ROUND_AUDIT_STARTED", "SAME_ROUND_ALREADY_PENDING",
                      "SAME_ROUND_FOCUS_REQUIRED", "SAME_ROUND_ROLE")
 
@@ -4693,7 +4693,7 @@ def _derive_same_round(workspace_root: Path, task_id: str, fm: dict[str, Any], r
             without_round_note=texts["without_round_note"], not_updated_note=texts["not_updated_note"],
             re_return_notes=f"{name}: {head}; {texts['re_return_note']}", invalid_fix=texts["invalid_fix"],
             re_return_suggested=texts["re_return_suggested"])
-    bound_note = rework_bound_note(state["bound"])
+    bound_note = texts["bound_note"].format(at=state["bound"]["at"].strftime("%Y-%m-%dT%H:%M:%SZ"))  # 时间界 = 复核时刻(无返工轮)
     return {
         "task_id": task_id,
         "derivable": False,

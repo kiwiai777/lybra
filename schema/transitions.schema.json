@@ -781,6 +781,7 @@
           "without_round_suggested": "核门侧交回派审(同轮补正后下一轮应取代被撤的审计轮, audit_derivation._reaudit_round kind=same_round)后重推导; 不重复交回",
           "without_round_note": "已重交回但门未派下一轮审计(AIPOS-F230 件④ fail-closed)",
           "reviewed_what": "同轮补正所打回的是",
+        "bound_note": "同轮打回于 {at}, 等其后重写的交回(早于打回时刻的改写 / 门交回不算)",
           "reaudit_ref": "★复审说理(AIPOS-F230 同轮补正): 上一轮 {superseded} 在审计开始前被顾问复核 {review_id} 同轮打回并撤回, 本轮审补正后的交回; 准绳不变(原卡全文)",
           "reaudit_note": "本卡取代被同轮打回撤回的审计卡 `{superseded}`(顾问复核 {review_id}, 所打回交回 {reviewed}); 本轮审补正后的交回, 准绳不变(原卡全文)。"
         }
