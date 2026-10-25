@@ -4735,12 +4735,9 @@ def _derive_next_step(
     # 审计卡 claimed 但无 verdict 报告 → 不可推导
     if is_audit_card and queue_dir == "claimed" and not verdict_artifact:
         # AIPOS-F233 件③: 卡面运行证据声明本身有问题(渲染不了)= 不拉起审计体(审计体实跑也匹配不上), 归顾问受限 amend
-        from tools.aipos_cli.artifact_ingest import RuntimeEvidenceDeclarationError, evidence_declaration_problem
+        from tools.aipos_cli.artifact_ingest import evidence_declaration_problem
 
-        try:
-            declaration_problem = evidence_declaration_problem(workspace_root, task_id, fm)
-        except RuntimeEvidenceDeclarationError as exc:  # 形不合由 evidence_declaration_problem 自身归入问题; 此处只防御上抛
-            declaration_problem = {"category": "RUNTIME_EVIDENCE_DECLARATION_INVALID", "reasons": [str(exc)], "outlet": ""}
+        declaration_problem = evidence_declaration_problem(workspace_root, task_id, fm)  # 形不合 / 未知占位都归入问题(不上抛)
         if declaration_problem is not None:
             return _evidence_declaration_invalid(task_id, {"category": declaration_problem["category"],
                                                            "reasons": [*declaration_problem["reasons"], declaration_problem["outlet"]]},
