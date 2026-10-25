@@ -1127,7 +1127,9 @@ def runtime_evidence_amend_problems(current: Any, new: Any, *, claimed: bool, ca
         return []
     allowed = set(restricted_amend_subfields().get(key) or [])
     equivalent = set(render_equivalent_subfields().get(key) or [])
-    before = current if isinstance(current, dict) else {}
+    before = dict(current) if isinstance(current, dict) else {}
+    if isinstance(before.get("commands"), str):  # 卡面声明形不合(commands 写成单串)= 按单条列表比(形修正不改验收, AIPOS-F233 件③ 出口)
+        before["commands"] = [before["commands"]]
     changed = sorted(k for k in set(before) | set(new) if before.get(k) != new.get(k))
     subject = evidence_subject(card_fm)
     illegal = [k for k in changed if k not in allowed
@@ -1400,7 +1402,8 @@ def evidence_declaration_problem(workspace_root: Path | str, audit_task_id: str,
         return None
     vocab = placeholder_vocabulary()
     _path, queue = _find_task_in_queue(root, card) if card else (None, None)
-    amend = _evidence_amend_command(root, card, queue, raw)
+    fixed = {**raw, "commands": [raw["commands"]]} if isinstance(raw, dict) and isinstance(raw.get("commands"), str) else raw
+    amend = _evidence_amend_command(root, card, queue, fixed)  # 形修正建议: commands 单串 → 列表
     outlet = str(vocab["texts"]["amend_outlet"]).format(amend=amend, suggestion="")
     return {"category": str(decl["declaration_invalid_category"]), "reasons": reasons, "card": card, "queue": queue, "value": raw,
             "amend": amend, "outlet": outlet,
@@ -1431,7 +1434,7 @@ def _evidence_amend_command(root: Path, card: str, queue: str | None, value: Any
     key = str(runtime_evidence_declaration()["card_field"])
     return (f"{lybra_command_prefix(root)} queue amend --task-id {shlex.quote(card or '<卡>')}{' --restricted' if queue == 'claimed' else ''} "
             f"--actor <顾问实例> --amendments {shlex.quote(json.dumps({key: value}, ensure_ascii=False))} "
-            f"--amendment-reason {shlex.quote('运行证据声明只改占位名(AIPOS-F233)')} --dry-run")
+            f"--amendment-reason {shlex.quote('修正运行证据声明本身(不改验收, AIPOS-F233)')} --dry-run")
 
 
 def evidence_declaration_fix_line(workspace_root: Path | str, task_id: str) -> str:

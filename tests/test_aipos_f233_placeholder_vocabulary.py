@@ -286,6 +286,14 @@ def test_acceptance3_declaration_invalid_ends_advisor_fix_zero_auditor_launch(ri
     _show(f"[验收③ 裁决入口] category={check['category']}\n  " + "\n  ".join(check["reasons"]))
     assert check["category"] == "RUNTIME_EVIDENCE_DECLARATION_INVALID"
 
+    # 顾问照出口的受限 amend 修正声明(commands 单串 → 列表, 不改验收)= 放行; 之后推导核不再判声明错
+    rc, out, err = _amend(rig.gov, TASK, {"required": True, "commands": [BAD_DECL["commands"]]})
+    _show(f"---- 验收③ 照出口受限 amend 修正声明 rc={rc} ----\n{out[-400:]}{err}")
+    assert rc == 0, out + err
+    derived = nr.derive_next_step(AUDIT, rig.gov)
+    _show(f"[验收③ 修正后推导核] action={derived.get('action')} suggested={str(derived.get('suggested_action'))[:200]}")
+    assert (derived.get("action") or {}).get("type") != "evidence_declaration_invalid"
+
 
 # ===========================================================================
 # 件④ 验收④: 占位改名受限 amend 走通且返工自动放行不失; 非等价改动仍被拒

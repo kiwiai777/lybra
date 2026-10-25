@@ -1846,7 +1846,7 @@
             "literal": "卡 {task_id} {card_field} 命令 #{index} 里的 {names} 不是占位(两种交付主体词表都没有), 按字面保留、按字面比对实跑命令(awk / jq / json 片段等的花括号属此类); 如本意是占位, 可用: 卡分支主体 {branch}; 固定候选主体 {candidate}; 同义互为别名: {aliases}{suggestion}",
             "literal_suggestion": "; 相近的已知占位: {pairs}",
             "declaration_invalid": "卡面 {card_field} 声明本身有问题(来源卡 {card}), 审计体补做也匹配不上, 不再拉起审计体(AIPOS-F233 件③): {problems}",
-            "amend_outlet": "出口(顾问自处理, 不需 Owner、不撤换): `{amend}`(只改占位名; 预演看清后去掉 --dry-run 确认; 已认领卡 --restricted 按渲染等价判据放行){suggestion}",
+            "amend_outlet": "出口(顾问自处理, 不需 Owner、不撤换): `{amend}`(amendments 已按拒因给出修正后的声明值, 核对后预演, 看清再去掉 --dry-run 确认; 已认领卡 --restricted 只放行不改验收的修正: 形修正(commands 单串改列表)与渲染等价的占位改名){suggestion}",
             "amend_suggestion": "; 建议改法: {pairs}"
           }
         },
