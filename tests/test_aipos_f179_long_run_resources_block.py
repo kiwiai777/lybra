@@ -297,7 +297,9 @@ def test_item2_second_loop_waits_for_holder_then_continues_and_dead_holder_relea
         assert ctx.get("queued"), "loop B never queued behind A"
         status_text, status_json = ctx["status_b"]
         _show("---- item2 `lybra loop status --task-id B` while queued ----\n" + status_text)
-        run_a = next(r for r in _records(rig.gov, TASK) if r.get("resource_lock", {}).get("state") == "held" and r["status"] == "ended")
+        # AIPOS-F231 件③: 运行结束时锁记为 released(运行中曾 held: state_before_end)
+        run_a = next(r for r in _records(rig.gov, TASK) if r.get("resource_lock", {}).get("state") == "released"
+                     and r["resource_lock"].get("state_before_end") == "held" and r["status"] == "ended")
         na = status_json["next_action"]
         assert na["action"] == "continue_wait" and na["reason"] == "resource_wait", na
         assert f"独占资源 ios-simulator 被占用: 卡 {TASK}(run {run_a['run_id']}, pid {os.getpid()} @ " in na["detail"]
@@ -492,7 +494,8 @@ def test_item3_declarations_and_not_a_consecutive_failure():
     assert {decl["end_reason"], decl["repeated_end_reason"]} <= set(run_decl["end_reasons"])
     assert rules["by_end_reason"]["audit_blocked"] == "advisor_fix" and rules["by_end_reason"]["audit_blocked_repeated"] == "owner_needed"
     view = {"task_id": "C-1", "state": "ended", "end_reason": "not_derivable", "end_message": "处理裁决 BLOCK"}
-    old = lrr.next_action(view, rules, governance_root=Path("/nonexistent-f179"), earlier_end_reasons=["max_steps_exhausted"])
+    # AIPOS-F231 件⑥: --max-steps 主动停不再计连败, 旧口径的连败链用另一 investigate 类结束原因示意
+    old = lrr.next_action(view, rules, governance_root=Path("/nonexistent-f179"), earlier_end_reasons=["launch_early_exit"])
     _show(f"[item3] old-style ending (not_derivable after an investigate run) -> {old['action']}({old['reason']})")
     assert old["action"] == "owner_needed" and old["reason"] == "consecutive_failures"
     src = (REPO_ROOT / "tools" / "aipos_cli" / "next_resolver.py").read_text(encoding="utf-8")

@@ -268,6 +268,49 @@ def remote_signal(remote: dict[str, Any], host: str, pgid: int, signame: str) ->
     return f"failed: ssh exit {proc.returncode}: {_ssh_failure_text(proc)}"
 
 
+# AIPOS-F231 件②: 停线清理目标主机上本卡 run 目录下的进程(命令行含 run 目录; 远端无 /proc 时 cwd 不可得, 只按命令行)。
+# 扫描: $1 = run 目录; 输出 `<pid> <命令行>` 行(本扫描自身的 shell 命令行含名字 lybra-scan, 由调用方排除)。发信号: $1 = 信号名, $2.. = pid。
+_REMOTE_SCAN_SCRIPT = 'ps -A -o pid= -o command=\n'
+_REMOTE_KILL_SCRIPT = 's=$1; shift; kill -s "$s" "$@" 2>/dev/null; exit 0\n'
+
+
+def remote_run_dir_pids(remote: dict[str, Any], host: str, run_dir: str) -> tuple[list[int] | None, str]:
+    """经 ssh 列目标主机上命令行含 run_dir 的进程 pid(排除本扫描自身)。返回 (pids, "") 或 (None, 无从核验的原因)。"""
+    import subprocess
+
+    argv = remote_command(remote, host, _REMOTE_SCAN_SCRIPT, "lybra-scan", [run_dir])
+    try:
+        proc = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=float(remote["kill_timeout_seconds"]))
+    except subprocess.TimeoutExpired:
+        return None, f"ssh {host} 扫描超时({remote['kill_timeout_seconds']}s)"
+    except OSError as exc:
+        return None, f"ssh 执行器起不来: {type(exc).__name__}: {exc}"
+    if proc.returncode != 0:
+        return None, f"ssh {host} 扫描失败(exit {proc.returncode}): {_ssh_failure_text(proc)}"
+    pids: list[int] = []
+    for line in proc.stdout.splitlines():
+        head, _, command = line.strip().partition(" ")
+        if head.isdigit() and run_dir in command and "lybra-scan" not in command:
+            pids.append(int(head))
+    return pids, ""
+
+
+def remote_kill_pids(remote: dict[str, Any], host: str, pids: list[int], signame: str) -> str:
+    """经 ssh 对目标主机上的指定 pid 发信号(只发给 remote_run_dir_pids 核出的本卡进程)。返回 "sent" / "failed: <原因>"。"""
+    import subprocess
+
+    if not pids:
+        return "sent"
+    argv = remote_command(remote, host, _REMOTE_KILL_SCRIPT, "lybra-kill", [signame, *[str(int(p)) for p in pids]])
+    try:
+        proc = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=float(remote["kill_timeout_seconds"]))
+    except subprocess.TimeoutExpired:
+        return f"failed: ssh {signame} 超时({remote['kill_timeout_seconds']}s)"
+    except OSError as exc:
+        return f"failed: {type(exc).__name__}: {exc}"
+    return "sent" if proc.returncode == 0 else f"failed: ssh exit {proc.returncode}: {_ssh_failure_text(proc)}"
+
+
 # ---------------------------------------------------------------------------
 # AIPOS-F165 件③: 拉起禁提权(no_new_privs)。声明 verbs.schema lybra_loop.launch.privilege_guard; 开关 project.json launch_guard
 # (workspace_config.project_launch_guard 唯一读取口)。判定唯一实现 privilege_guard_state(plan_launch 与 check-workstation 同读);

@@ -1156,7 +1156,15 @@
           "tool_name_key": "name",
           "tool_args_key": "arguments",
           "write_tool_names": ["write", "edit"],
-          "write_path_keys": ["path"]
+          "write_path_keys": ["path"],
+          "session_id_file_suffix": "_{session_id}.jsonl",
+          "role_path": ["message", "role"],
+          "assistant_role": "assistant",
+          "stop_reason_path": ["message", "stopReason"],
+          "error_message_path": ["message", "errorMessage"],
+          "provider_path": ["message", "provider"],
+          "input_token_paths": [["message", "usage", "input"], ["message", "usage", "cacheRead"]],
+          "diagnosis_note": "AIPOS-F231 件④: loop 早退诊断(verbs.schema lybra_loop.launch.early_exit)按本定位器找该次拉起的会话记录(session_globs 中文件名以 session_id_file_suffix 结尾者), 取最后一条 role_path = assistant_role 的条目的 stop_reason_path / error_message_path / provider_path / model_path / input_token_paths(求和 = 本轮输入 token); 无这些键的 harness = 不诊断(unknown)"
         },
         "claude-code": {
           "session_globs": ["~/.claude/projects/*/*.jsonl", "~/.claude/projects/*/*/subagents/*.jsonl"],
