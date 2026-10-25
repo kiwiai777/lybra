@@ -485,6 +485,307 @@
           "back_to_review": "第 {round} 轮返工已重交回({evidence}; 顾问复核 {review_id} 打回的是交回 {reviewed}), 回到顾问复核"
         }
       },
+      "legal_exits": {
+        "description": "AIPOS-F230 件①(10-23/24 chris 连续卡住的同一类病: 门把非正常状态写死成唯一一条路——F211 验证卡 FAIL 只能换候选、F197 快车道复核不通过只能结案、返工上限只能找 Owner、多主机只取最后一台; 每次只修撞上的变体, 下一个变体再卡数小时): 门只守底线、不规定路线。invariants = 底线不变式(任何出口都不得违反; 门在所选出口的既有动词上核对——本声明 exits.<出口>.invariants 列该出口经门核哪几条, 门不另判路线)。exits = 合法出口全集: label / invariants / owner_tier1(该出口须 Owner 定时 = verbs.schema lybra_owner_inbox.tiers.tier1.reasons 的键, 顾问升 Owner 带此事由; null = 顾问自走)/ renderer(命令渲染器名, 唯一实现 next_resolver._EXIT_RENDERERS, 复用既有唯一命令构造: rework = rework_command_line / 快车道 review_rework_command, reaudit = reaudit_command, 其余读 command_templates)。states = 「非通过状态 × 交付主体(enums.schema task_mode.delivery_subject.kinds)」表: 每格 = 出口键列表(≥2; 渲染时对本卡不适用的出口——如快车道卡无独立审计的重新派审——剔除并写明原因, 剔除后仍须 ≥2)或 {sole_reason: 为何唯一} / {not_applicable: 为何本主体不出现该状态}; 守卫测试 tests/test_aipos_f230_legal_exits.py 逐格核, 加载口 next_resolver.legal_exits_declaration 同核(fail-closed)。recommend.<状态> = {exit, why} 缺省推荐, 推导核按证据改判(固定候选审计 fail_scope / 执行产物本身是 BLOCK 报告 non_pass_recovery / 返工额度 queue_mutation.rework_round_budget + auto_extension_check)。next(derive_next_step 各非通过分支返回 legal_exits 键 + suggested_action 末尾 texts.line 一句)与 loop status(next_action.legal_exits, loop_run_record 读同一函数)同读唯一渲染 next_resolver.legal_exits; 顾问按情况任选其一, 门只校验所选出口满足不变式。返工额度用尽(下一轮返工被 queue rework 拒: 超上限且无 Owner 追加裁决、不满足第二档自动追加)= 状态改判 rework_limit(同主体返工出口换成 owner_extension)。",
+        "invariants": {
+          "independent_audit": "无独立审计不判通过(写产品仓 / 固定候选的卡须独立审计实例裁决 PASS 才合入或结案; 快车道卡 = 顾问复核结案)",
+          "evidence_bound": "证据绑定主体 / 候选(交回与裁决绑卡分支 tip / 固定候选 / 产出清单指纹, 不符 = 产物入口拒)",
+          "traceable": "记录可追溯(每个出口都落门记录: 返工轮 / 派审记录 / 顾问复核记录 / Owner 决策记录 / 修订记录, 只追加不改写)",
+          "no_forbidden_zone": "禁区不碰(项目授权禁区 / 写权限边界 / 车道外路径; 越界 = 第一档 beyond_authority)"
+        },
+        "exits": {
+          "rework_same_subject": {
+            "label": "同主体返工",
+            "invariants": [
+              "evidence_bound",
+              "traceable",
+              "independent_audit"
+            ],
+            "owner_tier1": null,
+            "renderer": "rework",
+            "note": "同一卡分支 / 同一固定候选 / 同一产出清单上返工后重交回, 派下一轮审计(快车道 = 回到顾问复核); 轮次计入返工上限"
+          },
+          "same_round": {
+            "label": "同轮补正",
+            "invariants": [
+              "evidence_bound",
+              "traceable"
+            ],
+            "owner_tier1": null,
+            "renderer": "same_round",
+            "note": "已交回、审计未开始(未派审或审计卡未认领)时顾问复核打回同一轮, 不新增返工轮; 见 nodes.N4.same_round"
+          },
+          "reaudit": {
+            "label": "重新派审",
+            "invariants": [
+              "independent_audit",
+              "traceable"
+            ],
+            "owner_tier1": null,
+            "renderer": "reaudit",
+            "note": "执行产物不变, 修环境 / 资源后派下一轮审计(审计疑似错判且各持证据 = 第一档 advisor_audit_conflict)"
+          },
+          "new_subject": {
+            "label": "换新主体",
+            "invariants": [
+              "traceable",
+              "independent_audit"
+            ],
+            "owner_tier1": "rescope",
+            "renderer": "supersede",
+            "note": "另出新卡(固定候选卡 = 来源卡修复出新候选另出验证卡)后 queue supersede 本卡; 在途审计卡同一操作连带撤回(AIPOS-F230 件⑤)"
+          },
+          "change_scope": {
+            "label": "改范围",
+            "invariants": [
+              "traceable",
+              "no_forbidden_zone"
+            ],
+            "owner_tier1": "rescope",
+            "renderer": "amend",
+            "note": "改验收 / 范围 / 候选 = Owner 第一档 rescope 裁决后 queue amend(在途卡受限字段 --restricted); 改后返工不再自动追加(范围已变)"
+          },
+          "withdraw": {
+            "label": "撤卡",
+            "invariants": [
+              "traceable"
+            ],
+            "owner_tier1": "withdraw",
+            "renderer": "withdraw",
+            "note": "不做了 = Owner 第一档 withdraw 裁决后 queue withdraw; 在途审计卡同一操作连带撤回(AIPOS-F230 件⑤)"
+          },
+          "owner_extension": {
+            "label": "授权追加返工",
+            "invariants": [
+              "traceable",
+              "evidence_bound"
+            ],
+            "owner_tier1": "rework_cap_exceeded",
+            "renderer": "owner_ask",
+            "note": "返工额度用尽 = 带第一档事由 rework_cap_exceeded 升 Owner(收件箱可裁 extend_rework 授权本卡追加一轮)"
+          }
+        },
+        "command_templates": {
+          "supersede": "{prefix} queue supersede --task-id {task_id} --by <新卡号{subject_hint}> --actor {advisor} --owner-words \"<Owner 原话摘要>\" --dry-run",
+          "amend": "{prefix} queue amend --task-id {task_id}{restricted} --actor {advisor} --amendments '<JSON: 改后的验收 / 范围 / 候选字段>' --amendment-reason \"<Owner 第一档 rescope 裁决 + 理由>\" --dry-run",
+          "withdraw": "{prefix} queue withdraw --task-id {task_id} --actor {advisor} --reason \"<Owner 撤卡原话 / 裁决引用>\" --dry-run",
+          "owner_ask": "{prefix} loop note --task-id {task_id} --owner-reason {owner_reason} --ask \"<要 Owner 定什么>\" --recommend \"<顾问建议>\"",
+          "same_round": "{prefix} mark-concluded --task-id {task_id} --actor {advisor} --report-path {report} --outcome {outcome} --focus-items '[\"<要补正的点>\"]' --dry-run",
+          "subject_hint": {
+            "branch": "",
+            "candidate": ": 来源卡修复出新候选后另出的验证卡",
+            "governance_outputs": ""
+          }
+        },
+        "states": {
+          "FAIL": {
+            "branch": [
+              "rework_same_subject",
+              "reaudit",
+              "new_subject",
+              "change_scope",
+              "withdraw"
+            ],
+            "candidate": {
+              "not_applicable": "固定候选卡 FAIL 归 candidate_fail / candidate_deliverable_fail(按审计 fail_scope 分, AIPOS-F227)"
+            },
+            "governance_outputs": [
+              "rework_same_subject",
+              "reaudit",
+              "new_subject",
+              "change_scope",
+              "withdraw"
+            ]
+          },
+          "BLOCK": {
+            "branch": [
+              "reaudit",
+              "rework_same_subject",
+              "change_scope",
+              "new_subject",
+              "withdraw"
+            ],
+            "candidate": [
+              "reaudit",
+              "rework_same_subject",
+              "change_scope",
+              "new_subject",
+              "withdraw"
+            ],
+            "governance_outputs": [
+              "reaudit",
+              "rework_same_subject",
+              "change_scope",
+              "new_subject",
+              "withdraw"
+            ]
+          },
+          "candidate_fail": {
+            "branch": {
+              "not_applicable": "卡分支卡无固定候选, FAIL 归 FAIL"
+            },
+            "candidate": [
+              "new_subject",
+              "rework_same_subject",
+              "reaudit",
+              "change_scope",
+              "withdraw"
+            ],
+            "governance_outputs": {
+              "not_applicable": "治理根产出卡无固定候选, FAIL 归 FAIL"
+            }
+          },
+          "candidate_deliverable_fail": {
+            "branch": {
+              "not_applicable": "卡分支卡无固定候选, FAIL 归 FAIL"
+            },
+            "candidate": [
+              "rework_same_subject",
+              "new_subject",
+              "reaudit",
+              "change_scope",
+              "withdraw"
+            ],
+            "governance_outputs": {
+              "not_applicable": "治理根产出卡无固定候选, FAIL 归 FAIL"
+            }
+          },
+          "fast_lane_review_fail": {
+            "branch": {
+              "not_applicable": "写产品仓的卡走独立审计, 不经顾问复核结案"
+            },
+            "candidate": {
+              "not_applicable": "固定候选卡走独立审计, 不经顾问复核结案"
+            },
+            "governance_outputs": [
+              "rework_same_subject",
+              "same_round",
+              "new_subject",
+              "change_scope",
+              "withdraw"
+            ]
+          },
+          "rework_limit": {
+            "branch": [
+              "owner_extension",
+              "new_subject",
+              "change_scope",
+              "withdraw",
+              "reaudit"
+            ],
+            "candidate": [
+              "owner_extension",
+              "new_subject",
+              "change_scope",
+              "withdraw",
+              "reaudit"
+            ],
+            "governance_outputs": [
+              "owner_extension",
+              "new_subject",
+              "change_scope",
+              "withdraw",
+              "reaudit"
+            ]
+          },
+          "audit_blocked_repeated": {
+            "branch": [
+              "reaudit",
+              "rework_same_subject",
+              "change_scope",
+              "new_subject",
+              "withdraw"
+            ],
+            "candidate": [
+              "reaudit",
+              "rework_same_subject",
+              "change_scope",
+              "new_subject",
+              "withdraw"
+            ],
+            "governance_outputs": [
+              "reaudit",
+              "rework_same_subject",
+              "change_scope",
+              "new_subject",
+              "withdraw"
+            ]
+          }
+        },
+        "recommend": {
+          "FAIL": {
+            "exit": "rework_same_subject",
+            "why": "裁决 FAIL = 执行产物不合格, 同主体返工; 审计疑似错判才选重新派审"
+          },
+          "BLOCK": {
+            "exit": "reaudit",
+            "why": "BLOCK = 审计未能完成(环境 / 资源 / 时长), 执行产物不变时修环境后重新派审"
+          },
+          "candidate_fail": {
+            "exit": "new_subject",
+            "why": "审计判候选本身不合格(或未声明 fail_scope 按候选处理), 来源卡修复出新候选另出验证卡"
+          },
+          "candidate_deliverable_fail": {
+            "exit": "rework_same_subject",
+            "why": "审计声明 fail_scope=deliverable: 候选可用, 同候选补交付物"
+          },
+          "fast_lane_review_fail": {
+            "exit": "rework_same_subject",
+            "why": "复核不通过 = 打回原卡返工; 只是报告非终版 / 漏交件且未开始复核就发现 = 同轮补正(不占返工轮)"
+          },
+          "rework_limit": {
+            "exit": "new_subject",
+            "why": "返工额度已用尽 = 卡本身有问题: 另出卡承接(或 Owner 授权追加一轮 / 改范围 / 撤卡)"
+          },
+          "audit_blocked_repeated": {
+            "exit": "reaudit",
+            "why": "连续 BLOCK: 部署 / 验证根有变化 = 续跑 loop 自动重新派审; 无变化 = 顾问修环境后重新派审"
+          }
+        },
+        "evidence_overrides": {
+          "executor_blocked": {
+            "exit": "rework_same_subject",
+            "why": "执行产物本身是 BLOCK 报告({why}), 仅重审审的仍是同一份产物"
+          },
+          "fail_scope_undeclared": {
+            "exit": "new_subject",
+            "why": "审计未声明 fail_scope(按候选处理); 审计发现明确只涉交付物时改选同主体返工"
+          }
+        },
+        "texts": {
+          "line": "合法出口({state} × {subject}, 门只守底线 {invariants}; 顾问任选其一, AIPOS-F230): {items}; 推荐 {recommended}({why})",
+          "item": "[{key}] {label}{owner}: {command}",
+          "owner_part": "(须 Owner 第一档 {owner_tier1})",
+          "dropped": "{label} 本卡不适用: {why}",
+          "fast_lane_no_reaudit": "快车道卡不声明独立审计, 无审计轮可重派",
+          "rework_limit_note": "返工额度已用尽({why}), 同主体返工改为带第一档事由升 Owner",
+        "advisor_placeholder": "<你的顾问实例>",
+        "budget_unknown": "返工额度判不出({error}), 按原状态列出口(门 queue rework 照常核额度)"
+        }
+      },
+      "same_round": {
+        "description": "AIPOS-F230 件④(10-24 chris HBLX-31 实撞: 文档卡顾问在送审前发现交回报告非终版, 无「同轮补正」出口, 只能等审计 FAIL 再登记返工轮, 白占一轮返工与一轮审计): 同轮补正。已交回、审计未开始(本轮未派审, 或本轮审计卡仍在 pending 未认领、无裁决)的卡, 顾问 `lybra mark-concluded --outcome same_round --focus-items <JSON 数组>`(声明 verbs.schema lybra_mark_concluded.same_round; CLI 与 MCP 同一写路径 board_adapter.mark_concluded_task)= 落一条顾问复核记录(event_type 同 review_rework.event_type, outcome = same_round; 不登记返工轮、不计返工上限), 本轮未认领的审计卡同一操作内撤回(复核记录 withdrawn_audit_task_id; 撤回唯一实现 queue_mutation.withdraw_linked_audits, 与件⑤同一路径)。推导核(唯一判定 next_resolver.same_round_state): 最新同轮补正记录所审交回 = 门最新交回 → 未见补正 = 等执行体补正(action await_rework, loop 拉起执行体); 晚于复核时刻的重写交回(判据复用 F218/F219 non_branch_re_return, 时间界 = rework_return_bound(复核记录, 无返工轮))= 重交回(_derive_stale_re_return 同一构建, 产物入口同一校验, 不合 = artifact_invalid); 门落新交回 = 补正已消费, 回到常规推进(快车道 = 顾问复核; 审计卡 = 门交回派审, 被撤那一轮由下一轮取代: audit_derivation._reaudit_round kind = same_round, 派审记录 supersedes 被撤轮, 复审说理读 texts.reaudit_ref / reaudit_note)。",
+        "state": "same_round",
+        "kind": "same_round",
+        "texts": {
+          "await_missing": "同轮补正交回(顾问复核 {review_id} 同轮打回交回 {reviewed}, 不占返工轮)",
+          "await_suggested": "执行体按同轮补正要点补正后重写交回(要点: {points}): 交回报告晚于复核时刻重写; loop 见新交回即重交{after}",
+          "after_audit": "并派下一轮审计(取代被撤的 {withdrawn})",
+          "after_first": "并派审",
+          "after_review": "并回到顾问复核",
+          "stale_head": "顾问复核 {review_id} 同轮打回交回 {reviewed}, 已见补正 {evidence}",
+          "re_return_note": "同轮补正已重写交回 → 重交回(不占返工轮, AIPOS-F230 件④, 声明 transitions nodes.N4.same_round)",
+          "re_return_suggested": "重交回同轮补正(门落新 return 记录; 审计卡 = 派下一轮审计, 快车道 = 回到顾问复核)",
+          "invalid_fix": "执行体按产物入口拒因修正交回报告后, 产品随后重交回",
+          "not_updated_note": "交回报告未按同轮补正重写, 不得用原交回重交",
+          "without_round_suggested": "核门侧交回派审(同轮补正后下一轮应取代被撤的审计轮, audit_derivation._reaudit_round kind=same_round)后重推导; 不重复交回",
+          "without_round_note": "已重交回但门未派下一轮审计(AIPOS-F230 件④ fail-closed)",
+          "reviewed_what": "同轮补正所打回的是",
+        "bound_note": "同轮打回于 {at}, 等其后重写的交回(早于打回时刻的改写 / 门交回不算)",
+          "reaudit_ref": "★复审说理(AIPOS-F230 同轮补正): 上一轮 {superseded} 在审计开始前被顾问复核 {review_id} 同轮打回并撤回, 本轮审补正后的交回; 准绳不变(原卡全文)",
+          "reaudit_note": "本卡取代被同轮打回撤回的审计卡 `{superseded}`(顾问复核 {review_id}, 所打回交回 {reviewed}); 本轮审补正后的交回, 准绳不变(原卡全文)。"
+        }
+      },
       "non_pass_recovery": {
         "description": "AIPOS-F218 件②: N4 非 PASS(audit_blocked.verdicts 与 FAIL)且未针对该裁决登记返工轮时, 推导核(lybra next)与 loop status 例行修法(verbs.schema routine_rejections.end_reasons.audit_blocked 占位 recovery_choice / rework_command)同给顾问两条可选路: a) 登记返工轮(既有 queue rework, 附 focus_items / acceptance_criteria; 缺省预演)后由执行体重新执行同一卡; b) 仅重审(既有 R(n+1) 派审, next_resolver.reaudit_command)。执行产物本身是 BLOCK 报告(交回报告 frontmatter 键 return_keys 之一的值 ∈ return_values, 或交回摘要去掉强调符后以 summary_prefixes 之一开头, 或裁决原因摘录含 audit_reason_markers 之一)= 推荐 a 并说明 b 会因产物不变再 BLOCK; 否则 BLOCK 推荐 b、FAIL 推荐 a。固定候选卡 FAIL 仍先走 candidate_fail(候选不合格, 来源卡出新候选)。判定唯一实现 next_resolver.non_pass_recovery。rework_command 占位 {prefix}(workspace_config.lybra_command_prefix)/ {task_id} / {actor}(驱动方; 缺 = texts.actor_placeholder)/ {verdict_id}; FAIL 仅重审的派审理由 = fail_dispatch_reason。",
         "return_keys": ["verdict", "status"],
@@ -1092,14 +1393,17 @@
             "hard_cap": 4,
             "round_field": "auto_extension_ref",
             "kind": "rework_extension",
-            "fingerprint_fields": ["title", "task_mode", "validation_candidate", "validation_source_task", "output_target", "governance_refs", "lane.repo"],
+            "fingerprint_fields": ["title", "task_mode", "validation_candidate", "validation_source_task", "output_target", "governance_refs", "lane.repo", "criteria", "artifacts", "audit_runtime_evidence"],
             "fingerprint_body": true,
+            "scope_neutral_fields": ["audit_runtime_evidence.host", "lane.paths", "lane.roles", "resources", "rework_rounds"],
+            "scope_neutral_description": "AIPOS-F230 件③(10-24 chris HBLX-42VC2 实撞: 只经 queue amend 补 audit_runtime_evidence.host 即被当作「发布后改过」失去第二档自动追加): 「范围未变」判据只看验收 / 候选 / 范围字段(fingerprint_fields: 含验收 criteria / artifacts 与独立运行证据声明 audit_runtime_evidence)。scope_neutral_fields = 非验收字段白名单(点号 = 嵌套子键): 列在白名单的子键从所在指纹字段中剔除后再算指纹(如 audit_runtime_evidence 只剔 host: 改执行主机不算范围变化, 改 commands / required 仍算); 顶层白名单字段(lane.paths 增补、resources、rework_rounds)本不入指纹, 列出 = 声明其修订不算范围变化。白名单项不得与某个 fingerprint_fields 整字段相同(加载即拒, queue_mutation.auto_extension_declaration)。指纹唯一实现 queue_mutation.card_scope_fingerprint(门自核与发布基线同算), 授予依据句附 texts.neutral_note。",
             "texts": {
               "granted": "第 {round} 轮自动追加(第二档, AIPOS-F225: 卡面候选 / 验收 / 范围自发布起未变, 硬上限 {hard_cap} 轮; 自动放行记录 {record_id}, Owner 可撤回)",
               "basis": "返工第 {round} 轮自动追加(上限 {max_rounds} 轮之后、硬上限 {hard_cap} 轮之内; 卡面指纹 {fingerprint} = 发布基线 {publish_ref}; 依据裁决 / 复核 {verdict_ref})",
               "refused_cap": "自动追加已到硬上限({hard_cap} 轮, AIPOS-F225): 返工超硬上限 = 第一档, Owner 定另出卡 / 改卡 / 撤卡 / 授权追加",
               "refused_changed": "卡面候选 / 验收 / 范围自发布起已变(指纹 {current} ≠ 发布基线 {baseline}, 变动键 {fields}), 不自动追加(AIPOS-F225): 改了验收的卡由 Owner 定",
-              "refused_baseline": "卡面发布基线不可核({why}), 不自动追加(AIPOS-F225, fail-closed)"
+              "refused_baseline": "卡面发布基线不可核({why}), 不自动追加(AIPOS-F225, fail-closed)",
+              "neutral_note": "只改非验收字段({fields})不算范围变化(AIPOS-F230 件③)"
             }
           },
           "next_step": {
@@ -1191,6 +1495,24 @@
       "withdraw": {"from_states": ["pending", "claimed", "blocked"], "to_state": "withdrawn", "owner_ruling_required_from": ["blocked"], "owner_ruling_note": "AIPOS-F170 件①: blocked 卡可撤, 但须带 Owner 裁决引用(owner_ruling_ref = 治理根内已落的 owner_decision_record 的 decision_id, 记录 task_id 须为本卡、allowed_next_action 须为 lybra_owner_inbox 中 effect=withdraw_card 的选项); 缺 / 对不上 = 拒(预演只核引用形, 记录未落时由 owner decide 先落记录再执行)。唯一读取口 queue_mutation.withdraw_owner_ruling_states; 撤回原因写入卡面 withdrawal_reason(含裁决引用)。"},
       "adopt": {"from_states": ["claimed"], "to_state": "claimed", "declaration": "nodes.N1.adoption"},
       "supersede": {"from_states": ["pending", "claimed", "blocked"], "to_state": "withdrawn", "actor_role_class": "advisor", "successor_states": ["pending", "claimed", "blocked", "completed"], "decision_choice": "supersede", "card_fields": {"by": "superseded_by", "at": "superseded_at", "owner_words": "superseded_owner_words", "owner_ref": "superseded_owner_ref", "decision_id": "superseded_decision_id"}, "carry_branch": {"card_field": "carried_from", "successor_states": ["pending"], "amendment_type": "supersede_carry_branch", "note": "AIPOS-F186(gap #190, chris 理想 HBLX-16/17 实撞): `queue supersede --carry-branch` = 撤换时新卡承继原卡卡分支与已做工作(顾问起草的在途卡契约需更正 / Owner 中途改目标同一命令)。预演列原卡分支名 / tip / 工作树路径 / 未提交改动计数; 拒: 原卡工作树有未提交改动(不代提交, 先让执行体在原卡分支提交)/ 原卡无卡分支 / 新卡不在 successor_states 或已认领 / 新卡卡分支已存在 / 新卡与原卡解析到不同产品仓 / 新卡已记不同承继。确认: 决策记录落盘后经既有 pending 卡修订唯一实现 board_adapter.amend_task 写新卡卡面 card_field = {task_id, branch, tip}(修订记录 amendment_type 同本声明)再搬原卡; 原卡分支与工作树保留不删。认领: 全产品唯一建树 next_resolver._ensure_worktree 在卡分支尚不存在时以记录 tip 为起点建卡分支(原卡分支当前 tip ≠ 记录 = 拒认领, 队列与记录零变更), 认领输出写「承继自 <原卡> <分支>@<tip>」; my-tasks 开工面 / card render 显示承继来源并提示先把当前 base_branch 合入(base_sync)。审计 / 交回判据 / 合入: 差异基线仍为 base_branch(三点 diff base...卡分支 含承继提交, 一并审), commit_sha / tree_hash 判据不变; queue_close 结案记录写 carried_from。"}, "note": "AIPOS-F184 件③(gap #186): 顾问凭 Owner 裁决撤换在途卡(lybra queue supersede, 唯一实现 board_adapter.supersede_task → queue_mutation.mutate_queue_task 搬卡 + 门侧同一预演 / 执行 board_adapter.record_owner_decision + execute_dry_run 落 owner_decision_record, 与 owner decide --relayed-by 同一记录类型与写路径)。选「withdraw 的带 superseded_by 变体」(终态 = 既有 withdrawn 队列目录)而非新增队列目录 superseded: withdrawn 已是全产品统一的「不再推进」终态(看板 / 收件箱 / loop / lint / 落账判据都按它识别), 新目录须改 enums queue_state 与全部读方 = 第二套终态; 撤换与撤回的差别只在卡面多记 superseded_by 与 Owner 原话, 收件箱该卡事项随卡进 withdrawn 自动消失。actor_role_class = 执行者须为该角色类实例(custom_roles.authorize_instance_class 唯一判定; 不须执行体身份, 不受 withdraw 24h 在途会话保护——Owner 裁决即授权); successor_states = 新卡须已在队列的这些状态之一(不存在 / 已撤回 = 拒); card_fields = 卡面写入的键(AIPOS-F213 件⑤: 角色 → 键名, 角色恰为 by / at / owner_words / owner_ref / decision_id, 键名须为 card.schema fields 已声明字段; transition_engine supersede 分支经 queue_mutation.supersede_declaration 读本表写卡面, 不写死键名; card.schema fields 声明); decision_choice = 决策记录 allowed_next_action(verbs.lybra_owner_inbox.options 同名选项)。原卡工作树与卡分支不删, 由结案清理处理。"}
+    },
+    "linked_audit_withdrawal": {
+      "description": "AIPOS-F230 件⑤(10-24 chris supersede HBLX-24BV / 35V / 39V 后, 其审计卡 24BVR / 35VR / 39VR2 被晾在 claimed / pending, 须顾问逐张手工 withdraw): supersede / withdraw 业务卡时, 其在途审计卡(被审卡 = 本卡的审计轮 audit_derivation.audit_round_ids 与补充审计卡 audit_derivation.supplementary_audit_cards 中, 队列状态 ∈ states 者; 查找唯一实现 queue_mutation.in_flight_audit_cards)同一操作内一并撤回: 预演列出(应答 data.linked_audits, texts.preview), 确认在业务卡搬卡成功后逐张撤回(唯一实现 queue_mutation.withdraw_linked_audits, 搬卡执行器 mutate_queue_task withdraw 同一路径), 审计卡卡面 withdrawal_reason = texts.reason(点名业务卡与操作), 结果进应答 data.linked_audits 与写出清单(随业务卡落账); 审计工作树按撤回同一清理(worktree_cleanup.cleanup_after trigger=withdraw)。某张审计卡撤回失败 = 业务卡照撤, 应答该条 ok=false 与拒因 + 补撤命令(fail-loud, 不回滚)。同轮补正(nodes.N4.same_round)撤本轮未认领审计卡同经此。",
+      "actions": [
+        "withdraw",
+        "supersede",
+        "same_round"
+      ],
+      "states": [
+        "pending",
+        "claimed"
+      ],
+      "texts": {
+        "reason": "随业务卡 {task_id} {action} 连带撤回在途审计卡(AIPOS-F230 件⑤){detail}",
+        "preview": "在途审计卡 {audit_task_id}({state})将随本操作一并撤回",
+        "done": "在途审计卡 {audit_task_id}({state})已随本操作撤回",
+        "failed": "在途审计卡 {audit_task_id}({state})连带撤回失败: {reason}; 补撤: {command}"
+      }
     },
     "correct": {"description": "AIPOS-F207 件②(gap #216, chris 理想 HBLX-27 实撞: 审计误给 PASS_WITH_NOTES 后自动结案, Owner 批准纠正并重派; owner inbox 不列已结案卡、roadmap verify --result mismatch 只对 owner_check 标准、supersede 只对 pending/claimed/blocked——无「Owner 推翻已结案卡」正门): `lybra queue correct` = Owner 纠正已结案卡的唯一正门(唯一实现 board_adapter.correct_closed_task)。不搬卡、不改原卡面、不改原 closure / 裁决 / 交回记录(指纹不变), 只追加: ① Owner 决策记录(既有 owner_decision_record, 与 owner decide --relayed-by / queue supersede 同一构造 owner_inbox.queue_ruling_payload 与写路径 board_adapter.record_owner_decision + execute_dry_run; allowed_next_action = decision_choice, 即 lybra_owner_inbox.options 同名选项); ② 争议标记记录(records/events/<卡>/<dispute_event_type>_<时刻>.md, 记决策 id / 承接卡 / 被争议的 closure 与裁决记录路径与 sha256 / Owner 原话 / 理由; 唯一读取 task_complexity.closure_disputes); ③ 承接卡(followup: 起草经路线图修复卡同一起草函数 roadmap.followup_draft_payload, 继承 inherit_fields + 原卡 milestone / criteria, rebind_fields 里等于原卡号的路径段改指承接卡, ref_field = 决策 id; 经 draft_writer.create_draft + publish_draft 发布, 签发实例 = 转达顾问)。推导侧把争议标记当新输入(不改历史): 依赖判定(task_complexity.unmet_dependencies, card.schema dependency_gate.disputes)不再认原结案; 路线图标准推导(roadmap_drift._criterion_verification)不认原卡为已验证, 无其他已验证挂接卡 = 「不符」并列承接卡; 收件箱「已定待转达」(owner_inbox relays)在承接卡未开跑时给转达话术。from_states = 原卡须在的队列状态; actor_role_class = 转达人(--relayed-by)须为该角色类实例(custom_roles.authorize_instance_class); 同一卡已有争议标记 = 拒(一次纠正一张承接卡; 承接卡结案后若仍不符, 再纠正承接卡)。", "from_states": ["completed"], "actor_role_class": "advisor", "decision_choice": "closed_card_correction", "dispute_event_type": "closure_disputed", "disputed_record_kinds": ["closures", "audit_verdicts", "returns"], "followup": {"task_id_template": "{task_id}C{round}", "inherit_fields_ref": "transitions.queue_mutations.followup_inherit_fields", "rebind_fields": ["output_target", "lane.paths"], "ref_field": "owner_check_ref", "note": "承继字段 = inherit_fields_ref 所引单基表(AIPOS-F214 件①, 与路线图修复卡同一张表), 外加承继来的 task_class 声明的必填字段(enums.schema task_class required_fields, 与路线图修复卡同一起草函数); milestone / criteria 取原卡(原卡未挂路线图 = 不带); artifacts 只留挂在原卡 criteria 上的项(同修复卡口径)。rebind_fields: 值(或列表元素)按 / 分段, 等于原卡号的段换成承接卡号(只写治理根卡的产物落点 5_tasks/records/returns/<卡>/ 等), 其余原样。"}},
     "worktree_cleanup": {
@@ -1389,6 +1711,38 @@
         "legacy_rule": "最新交回记录无产出清单绑定(F197 前的存量交回; F197 起门 queue_return 对只写治理根的卡以同一实现核清单, 不合即拒, 不再落无绑定交回)= 门侧裁决预演 / mark-concluded / finalize 沿 AIPOS-F70 legacy 裁决口径警告放行(警告原文给重交回出口, finalization 记录标 legacy); 审计报告入口(artifact ingest --kind verdict)不放行。唯一实现 next_resolver.governance_outputs_recheck(allow_legacy)",
         "gate_check": "门 queue_return(一切交回提交路径汇入)对只写治理根的卡先以 governance_outputs_manifest 核 Return outputs 清单, 不合 = blocking_reasons `<拒因码>: …`, 交回不落; 合规 = 交回记录 artifact_subject 绑定清单(return_binding_subject)"
       },
+      "program_guard": {
+        "description": "AIPOS-F230 件②(10-23/24 chris LANTU-DEMO1 实撞: task_mode=config 的快车道卡在验证根 run 目录交付约 1400 行进程管理程序 demo-launcher.py(无代码仓 / 无测试 / 无独立审计), 返工 5 轮仍不过): 配置 / 文档卡交付可执行程序须改走代码卡。task_mode ∈ task_modes 的卡交回入门(artifact_ingest._validate_task_artifact, kind=return; 门交回入口与 loop 交回步同经此)扫本卡交回产物: ①交回报告 outputs 清单(只写治理根的卡)与报告落点; ②本卡在本机的验证根 run 目录(validation_root 声明 task_id = 本卡的 run, path_template 渲染; 跳过 skip_dirs 名的目录, 如送达候选源码 src / helper 封签 .lybra-vr / 工具缓存)。交回报告正文提到的其他路径不扫(多为他卡环境 / 工具, 误伤)。程序判据(唯一实现 artifact_ingest.program_files): 普通文件、≤ max_bytes、前 sniff_bytes 字节无 NUL 且可按 utf-8 解码, 且(扩展名属 config.schema code_files_blacklist(governance_guardrails.is_code_file 同一判据)或首行以 shebang_prefix 开头), 且(行数 > max_lines, 或 executable_bit=true 时带可执行位)。命中 = 拒 category, 拒因逐个列文件 / 行数 / 可执行位与出口 texts.refusal; 发卡同判据预警(draft_validator: task_mode ∈ task_modes 且 output_target / artifacts path_glob 指向代码文件扩展名 = warning texts.draft_warning)。task_modes 外的卡(validation 驱动脚本、审计 run 脚本、code 卡)不受限; 缺本节 = 不查(行为不变)。",
+        "task_modes": [
+          "config",
+          "docs"
+        ],
+        "max_lines": 200,
+        "executable_bit": true,
+        "shebang_prefix": "#!",
+        "sniff_bytes": 8192,
+        "max_bytes": 2097152,
+        "skip_dirs": [
+          "src",
+          ".lybra-vr",
+          "run_long",
+          "cache",
+          ".cache",
+          "node_modules",
+          ".git",
+          ".venv",
+          "venv",
+          "__pycache__"
+        ],
+        "category": "INGEST_PROGRAM_IN_NON_CODE_CARD",
+        "texts": {
+          "refusal": "卡 {task_id} 是 task_mode={task_mode}(配置 / 文档卡), 交回产物含可执行程序 {files}(判据: 代码扩展名或 shebang 且行数 > {max_lines}{exec_rule}; 声明 transitions artifact_ingest.return.program_guard)。配置 / 文档卡不交付程序: 出口 = 改走代码卡——顾问另出 task_mode=code 的卡(程序进代码仓车道、带测试、独立审计), Owner 第一档 rescope 后 lybra queue supersede 本卡(或改本卡产出只留配置 / 说明, 程序交给代码卡)",
+          "file": "{path}({lines} 行{exec})",
+          "exec_part": ", 可执行位",
+          "exec_rule": " 或带可执行位",
+          "draft_warning": "task_mode={task_mode}(配置 / 文档卡)声明的产出 {targets} 指向代码文件: 配置 / 文档卡交回含可执行程序会被交回入口拒(transitions artifact_ingest.return.program_guard, 行数 > {max_lines}{exec_rule}); 要交付程序请改出 task_mode=code 的卡(代码仓车道、测试、独立审计)"
+        }
+      },
       "header_fix": {
         "description": "AIPOS-F204 件①②(10-21 chris 岚图 LANTU-VALID1 实撞: validation 卡的 pi 开工提示给出「commit_sha / tree_hash / branch = 产品给值照抄」, pi 却写成只写治理根卡的 outputs 契约; 推导核拒因的补法却是「卡分支 card/<本卡> tip」, 对候选主体卡错误, pi 拉起的执行体无出口只能停线): 执行体交回报告头(frontmatter)可纠正错误的唯一判定与补法渲染。契约分形 = 本卡开工提示同一契约(next_resolver.card_report_contract: candidate = 固定候选三键产品给值 / governance = outputs 产出清单 / branch = 卡分支三键)。种类: missing(必填键缺或占位)/ mismatch(候选主体卡三键 ≠ 产品给值 INGEST_CANDIDATE_MISMATCH, 或 tree_hash ≠ 该 commit 的 tree INGEST_TREE_MISMATCH)/ form(卡分支 tip ≠ 自述 commit_sha 且形式诊断 correctable, 唯一实现 tip_mismatch_diagnosis)/ contract_misuse(写了另一契约的键: 非治理根卡写 outputs, 治理根卡写分支三键)。correctable = 种类全在 correctable_kinds 且产品给得出补法(候选声明不合 = 不可更正, 照旧出口)。补法 = 逐键 `键 = 产品给值(说明)`(产品无值的键 = `键 = 说明`, 与改动前逐字相同); 误用另一契约 = 另附 contract_misuse.<分形> 句。推导核交回节点缺键拒因(next_resolver artifact_invalid suggested_action)、artifact ingest 拒因(校验结果另落 header_problem)与 loop 修交回报告头指令(verbs.schema lybra_loop.launch.report_fix.executor)同读, 禁第二份补法。只修 frontmatter, 不改正文与产物。唯一实现 artifact_ingest.return_header_problem。",
         "correctable_kinds": ["missing", "mismatch", "form", "contract_misuse"],
@@ -1505,6 +1859,21 @@
             "⑥ 在本 run 按卡面声明命令运行(占位 {{run_dir}} = {run_dir}, {{src_dir}} = {src_dir}, {{candidate}} = {candidate}, {{candidate_tree}} = {candidate_tree}; 渲染后逐字一致; 长命令用 run-long, --cwd 在本 run 目录内):",
             "⑦ 「{heading}」节每条填 command / run_id / run_dir / exit_code / log_path / log_sha256(或 {{\"run_long\": \"<运行目录>\", \"run_id\": \"{run_id}\", \"run_dir\": \"{run_dir}\"}}, 命令 / 退出码 / 日志由产品从运行记录取)"
           ],
+          "reuse": {
+            "description": "AIPOS-F230 件⑥(10-24 chris HBLX-45V 实撞: 只补材料(交付物)的返工轮, 审计仍须对同一固定候选完整重新构建 / 重跑): 同一候选、返工焦点只涉交付物时, 审计可引用自己上一轮对同一候选的运行证据(仍是审计自己的 run)。运行记录条目写 field = 被引那一轮审计卡号, run_id / run_dir / log_path / log_sha256 照上一轮那条 run 原样。裁决入口(board_adapter._candidate_run_problem; 资格判定唯一实现 next_resolver.audit_evidence_reuse)核: ①被引 run 所在声明的卡 = field 所写, 且是本审计卡同一被审卡更早一轮的审计卡(audit_derivation.audit_round_ids); ②声明实例 = 本审计卡认领实例(执行 run / 他人 run 拒); ③资格: 本卡最新常规裁决(本轮之前那一轮)fail_scope = deliverable(next_resolver.verdict_fail_scope, 声明 nodes.N4.candidate_fail.fail_scope), 或针对它登记的返工轮写了 rework_field = rework_value(返工节声明只涉交付物); ④其余照常核(run 已开启、候选 = 卡面固定候选、src-verify 封签、日志 sha256)——声明撤销 / 到期不影响(到期声明的 run 照旧可作证据, 与 host_selection pool=verdict 同口径; 撤销 = 拒)。不满足 = 拒因点名哪条; 未写 field = 照旧须本轮 run。开工稿(lybra kickoff 审计卡)与审计卡取证锚点在可复用时渲染 texts.kickoff(next_resolver.audit_evidence_reuse_line 唯一渲染)。",
+            "field": "reused_from",
+            "rework_field": "focus_scope",
+            "rework_value": "deliverable",
+            "texts": {
+              "kickoff": "运行证据复用(AIPOS-F230 件⑥): 本轮返工只涉交付物({basis}), 可引用你上一轮 {previous} 对同一候选 {candidate} 的运行证据——运行记录条目加 \"reused_from\": \"{previous}\", run_id / run_dir / log_path / log_sha256 照 {previous} 那条 run 原样(裁决入口核 run 归你本实例、候选一致、封签与日志指纹); 交付物本身(报告 / 声明产物)仍须本轮逐条核",
+              "basis_scope": "上一轮裁决 {verdict_id} fail_scope=deliverable",
+              "basis_round": "第 {round} 轮返工节 {field}={value}",
+              "not_earlier_round": "运行记录引用 {field}={value}, 但 {value} 不是本审计卡 {audit_task_id} 同一被审卡 {reviewed} 更早一轮的审计卡(更早轮次: {rounds})",
+              "decl_mismatch": "运行记录引用 {field}={value}, 但 run {run_id} 所在声明属卡 {decl_task}, 不是 {value}",
+              "instance_mismatch": "被引 run {run_id} 属实例 {decl_instance}, 不是本审计卡实例 {instances}(复用只限审计自己的 run)",
+              "not_eligible": "运行记录引用上一轮 {value} 的证据, 但本轮返工不只涉交付物(本卡最新裁决 {verdict_id} {scope_note}; 返工节未声明 {rework_field}={rework_value}); 须本轮 run 重跑卡面命令"
+            }
+          },
           "host_selection": {
           "description": "AIPOS-F223(chris HBLX-42VC2R 实撞: 同审计卡同审计实例有 dev + Mac 两个有效验证根声明, 原 candidate_evidence_values 取 live[-1] 选中 Mac, 把卡面 Linux 工具路径命令渲染到 Mac run 目录): 运行证据 run 的选择唯一实现 validation_root.select_evidence_declaration(开工稿 / 派审步骤经 candidate_evidence_values, 裁决入口经 locate_run → audit_run_selection_problem 同读)。卡面 audit_runtime_evidence.host(field)声明执行主机 = 只在本审计卡本实例该主机的声明里选; 未声明 host: 恰一个声明 = 照旧, 多个 = 禁任取(VR_EVIDENCE_HOST_AMBIGUOUS, 开工稿 / 派审步骤只给拒因一行 refusal_line, 裁决入口同判据拒); 报告 run 属未选中声明 = VR_EVIDENCE_HOST_MISMATCH 点名所选声明。候选池: 开工稿 = 有效声明(active / unbound); 裁决入口 = 未撤销声明(到期声明的 run 照旧可作证据, 与 F199 规则一致)。在途卡补 host = outlet(queue amend, 已认领卡 --restricted, 只改 host; card.schema restricted_amend.claimed_card_subfields)。",
           "field": "host",

@@ -117,7 +117,10 @@ def test_deliverable_scope_same_candidate_rework_re_return_dispatches_r2(vrig):
     _show("---- lybra loop status(fail_scope=deliverable)原文 ----\n" + status_text)
     na = status["next_action"]
     assert na["action"] == "advisor_fix" and na["reason"] == "candidate_deliverable_fail", na
-    assert rework in status_text and "queue supersede" not in status_text and "3 份报告产物未交付" in status_text
+    # AIPOS-F230 件①: loop status 末尾另附全部合法出口(含换新主体 supersede); 例行修法本身仍只给同候选补正
+    routine_text = status_text.split("合法出口(")[0]
+    assert rework in routine_text and "queue supersede" not in routine_text and "3 份报告产物未交付" in routine_text
+    assert "合法出口(candidate_deliverable_fail × candidate" in status_text
 
     # 顾问照抄返工命令(补 focus / 验收)登记返工轮: 预演 → --confirm
     argv = shlex.split(rework)[1:]
@@ -191,7 +194,7 @@ def test_candidate_scope_still_candidate_fail_supersede(vrig):
     status_text, status = _status(rig.gov)
     _show("---- lybra loop status(fail_scope=candidate)原文 ----\n" + status_text)
     assert status["next_action"]["reason"] == "candidate_fail" and f"queue supersede --task-id {VAL} --by <新验证卡号>" in status_text
-    assert "queue rework" not in status_text
+    assert "queue rework" not in status_text.split("合法出口(")[0]  # AIPOS-F230 件①: 合法出口全集另列(含同主体返工)
 
 
 def test_undeclared_scope_compat_candidate_fail_with_both_exits(vrig):

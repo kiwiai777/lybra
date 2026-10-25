@@ -183,11 +183,19 @@ def build_forensic_anchor_section(
     from tools.aipos_cli.next_resolver import fail_scope_audit_rule
 
     fail_scope_line = f"- **FAIL 范围**: {fail_scope_audit_rule()}\n" if subject.get("kind") == "candidate" else ""
+    # AIPOS-F230 件⑥: 返工只涉交付物 = 可引用上一轮对同一候选的运行证据(唯一渲染 next_resolver.audit_evidence_reuse_line, 开工稿同读)
+    reuse_line = ""
+    if subject.get("kind") == "candidate" and repo_root is not None and audit_task_id:
+        from tools.aipos_cli.next_resolver import audit_evidence_reuse_line
+
+        reuse = audit_evidence_reuse_line(Path(repo_root), audit_task_id, candidate=str(subject.get("candidate") or ""), reviewed=source_task_id)
+        reuse_line = f"- **运行证据复用**: {reuse}\n" if reuse else ""
     return (
         "\n## 取证锚点(AIPOS-A1 大项C: 默认注入, 路径来自注册表)\n\n"
         f"- **产品仓绝对路径**: `{code_repo}` (被审卡 lane.repo → project.json repos/code_repo, 禁写死)\n"
         f"{render_forensic_anchor(subject, form='line')}\n"
         f"{fail_scope_line}"
+        f"{reuse_line}"
         f"{carried_line}"
         f"- **报告落点绝对路径**: `{report_location}` (治理根 verdict_root/<审计卡ID>/, 声明渲染; 禁落被审卡目录、禁落产品仓)\n"
         f"{baseline_line}"
@@ -765,7 +773,17 @@ def build_derived_audit_task(
     # transitions nodes.N4.non_branch_rework.by_subject.<kind>.reaudit_ref / reaudit_note(占位值唯一构建 next_resolver.non_branch_stale_texts);
     # 卡分支主体措辞不变
     non_branch_reaudit: tuple[dict[str, str], dict[str, Any]] | None = None
-    if reaudit and reaudit.get("kind") != "return_stale":
+    same_round_kind = _same_round_kind()
+    if reaudit and reaudit.get("kind") == same_round_kind:
+        # AIPOS-F230 件④: 同轮补正撤回的那一轮由本轮取代(说理读 transitions nodes.N4.same_round.texts)
+        from tools.aipos_cli.next_resolver import same_round_declaration
+
+        stale = reaudit.get("stale") or {}
+        texts = same_round_declaration()["texts"]
+        non_branch_reaudit = ({"reaudit_ref": texts["reaudit_ref"], "reaudit_note": "\n## 复审说理(AIPOS-F230 同轮补正)\n" + texts["reaudit_note"] + "\n"},
+                              {"superseded": str(reaudit.get("superseded_audit_task_id") or ""), "review_id": str(stale.get("review_id") or ""),
+                               "reviewed": str(stale.get("reviewed_return_record_ref") or "")})
+    elif reaudit and reaudit.get("kind") != "return_stale":
         from tools.aipos_cli.next_resolver import non_branch_rework_declaration, non_branch_stale_texts
 
         stale = reaudit.get("stale") or {}
@@ -916,6 +934,11 @@ def _reaudit_round(repo_root: Path, source_task_id: str, source_metadata: dict[s
 
     with task_card_lookup_scope(Path(repo_root)):  # 只读判定: 轮号查找共用一趟队列索引
         current = current_audit_task_id(source_task_id, repo_root)
+        # AIPOS-F230 件④: 同轮补正撤回了当前一轮(未认领、无裁决)= 本次交回派下一轮取代它(派审记录 supersedes)
+        same = _same_round_superseded(repo_root, source_task_id, current)
+        if same is not None:
+            return {"kind": _same_round_kind(), "audit_task_id": derive_audit_task_id(source_task_id, repo_root=repo_root),
+                    "superseded_audit_task_id": current, "stale": same}
         stale = verdict_staleness(repo_root, source_task_id, source_metadata)
         kind = "verdict_stale"
         if stale is None or str(stale.get("audit_task_id") or "") != current:
@@ -934,6 +957,35 @@ def _reaudit_round(repo_root: Path, source_task_id: str, source_metadata: dict[s
         "superseded_audit_task_id": current,
         "stale": stale,
     }
+
+
+def _same_round_kind() -> str:
+    """AIPOS-F230 件④: 同轮补正复审派生 kind(transitions nodes.N4.same_round.kind 唯一读取)。"""
+    from tools.aipos_cli.next_resolver import same_round_declaration
+
+    return str(same_round_declaration()["kind"])
+
+
+def _same_round_superseded(repo_root: Path, source_task_id: str, current: str) -> dict[str, Any] | None:
+    """AIPOS-F230 件④: 最新同轮补正记录撤回的审计卡 = 当前一轮(其后未再派轮)、该轮在 withdrawn 且无裁决 = {review_id,
+    reviewed_return_record_ref, withdrawn_audit_task_id}; 否则 None。判定读 next_resolver.same_round_reviews(复核记录唯一读取)。"""
+    from tools.aipos_cli.next_resolver import _regular_verdicts, same_round_reviews
+    from tools.aipos_cli.task_loader import find_task_card
+
+    reviews = same_round_reviews(Path(repo_root), source_task_id)
+    if not reviews:
+        return None
+    _path, fm = reviews[-1]
+    withdrawn = str(fm.get("withdrawn_audit_task_id") or "").strip()
+    if not withdrawn or withdrawn != current:
+        return None
+    _card, state = find_task_card(Path(repo_root), withdrawn)
+    if state != "withdrawn":
+        return None
+    if any(str(v.get("audit_task_id") or "") == withdrawn for _p, v in _regular_verdicts(Path(repo_root), source_task_id)):
+        return None
+    return {"review_id": str(fm.get("review_id") or ""), "reviewed_return_record_ref": str(fm.get("reviewed_return_record_ref") or ""),
+            "withdrawn_audit_task_id": withdrawn}
 
 
 def derive_audit_task_on_return(

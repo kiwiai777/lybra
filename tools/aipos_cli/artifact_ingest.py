@@ -401,6 +401,127 @@ def slot_code_refusal(slot_dir: Path) -> dict[str, Any] | None:
     return {"category": category, "reasons": [reason], "code_files": found}
 
 
+_PROGRAM_GUARD_KEYS = ("task_modes", "max_lines", "executable_bit", "shebang_prefix", "sniff_bytes", "max_bytes", "skip_dirs", "category", "texts")
+_PROGRAM_GUARD_TEXTS = ("refusal", "file", "exec_part", "exec_rule", "draft_warning")
+
+
+def program_guard_declaration() -> dict[str, Any] | None:
+    """AIPOS-F230 件②: transitions artifact_ingest.return.program_guard(唯一读取口)。缺本节 = None(不查, 行为不变); 键 / 文案缺或形不合 =
+    SchemaLoadError(fail-closed)。"""
+    from tools.aipos_cli.next_resolver import _artifact_ingest_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    decl = (_artifact_ingest_declaration().get("return") or {}).get("program_guard")
+    if decl is None:
+        return None
+    texts = decl.get("texts") if isinstance(decl, dict) else None
+    ints = ("max_lines", "sniff_bytes", "max_bytes")
+    if (not isinstance(decl, dict) or any(k not in decl for k in _PROGRAM_GUARD_KEYS) or not isinstance(texts, dict)
+            or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in _PROGRAM_GUARD_TEXTS)
+            or not all(isinstance(decl[k], int) and not isinstance(decl[k], bool) and decl[k] > 0 for k in ints)
+            or not isinstance(decl["executable_bit"], bool) or not isinstance(decl["task_modes"], list) or not decl["task_modes"]
+            or not isinstance(decl["skip_dirs"], list) or not str(decl["category"]).strip() or not str(decl["shebang_prefix"])):
+        raise SchemaLoadError(f"transitions.schema.json artifact_ingest.return.program_guard({list(_PROGRAM_GUARD_KEYS)} / texts."
+                              f"{list(_PROGRAM_GUARD_TEXTS)})未声明齐(AIPOS-F230 件②)")
+    return decl
+
+
+def _program_file(path: Path, decl: dict[str, Any], code_decls: Any) -> dict[str, Any] | None:
+    """一个文件是否属「可执行程序」(判据见 program_guard 声明): 是 = {path, lines, executable}; 否 = None。读不出 = 不算(不是文本程序)。"""
+    import stat
+
+    from tools.aipos_cli.governance_guardrails import is_code_file
+
+    try:
+        info = path.lstat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(info.st_mode) or info.st_size > int(decl["max_bytes"]):
+        return None
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    head = data[: int(decl["sniff_bytes"])]
+    if b"\0" in head:
+        return None
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if not (is_code_file(str(path), code_decls) or text.startswith(str(decl["shebang_prefix"]))):
+        return None
+    lines = text.count("\n") + (0 if text.endswith("\n") or not text else 1)
+    executable = bool(info.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
+    if lines > int(decl["max_lines"]) or (decl["executable_bit"] and executable):
+        return {"path": str(path), "lines": lines, "executable": executable}
+    return None
+
+
+def _walk_files(root: Path, skip: set[str]) -> list[Path]:
+    """root 下普通文件(不跟软链; 目录名 ∈ skip 整棵跳过), 按路径排序。"""
+    import os
+
+    out: list[Path] = []
+    for current, dirs, files in os.walk(root, followlinks=False):
+        dirs[:] = sorted(d for d in dirs if d not in skip)
+        out += [Path(current) / f for f in sorted(files)]
+    return out
+
+
+def program_files(workspace_root: Path, task_id: str, card_fm: dict[str, Any] | None,
+                  return_fm: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """AIPOS-F230 件②: 配置 / 文档卡交回产物中的可执行程序(唯一实现; 交回入口与测试同读)。task_mode ∉ program_guard.task_modes /
+    声明缺 = []。扫: 本卡报告落点(含子目录)、交回报告 outputs 所列文件、本卡在本机的验证根 run 目录(validation_root 声明 task_id = 本卡,
+    run_directory 渲染; skip_dirs 跳过)。返回 [{path, lines, executable}](去重, 按路径)。"""
+    decl = program_guard_declaration()
+    fm = card_fm if isinstance(card_fm, dict) else {}
+    if decl is None or str(fm.get("task_mode") or "").strip() not in [str(m) for m in decl["task_modes"]]:
+        return []
+    from tools.aipos_cli.governance_guardrails import load_guardrail_declarations
+    from tools.aipos_cli.next_resolver import return_artifact_dir
+    from tools.aipos_cli.validation_root import is_local_host, project_validation_roots, run_directory
+
+    code_decls = load_guardrail_declarations()
+    skip = {str(d) for d in decl["skip_dirs"]}
+    root = Path(workspace_root)
+    paths: list[Path] = []
+    slot = return_artifact_dir(root, task_id)
+    if slot.is_dir():
+        paths += _walk_files(slot, skip)
+    outputs = (return_fm or {}).get("outputs")
+    for ref in outputs if isinstance(outputs, list) else []:
+        item = Path(str(ref)).expanduser()
+        paths.append(item if item.is_absolute() else root / item)
+    for entry in project_validation_roots(root):
+        if str(entry.get("task_id") or "") != task_id or not is_local_host(entry.get("host")):
+            continue
+        for run in entry.get("runs") or []:
+            run_dir = Path(run_directory(entry, str(run.get("run_id") or "")))
+            if run_dir.is_dir():
+                paths += _walk_files(run_dir, skip)
+    found: dict[str, dict[str, Any]] = {}
+    for path in paths:
+        hit = _program_file(path, decl, code_decls)
+        if hit is not None:
+            found.setdefault(hit["path"], hit)
+    return [found[k] for k in sorted(found)]
+
+
+def program_guard_refusal(workspace_root: Path, task_id: str, card_fm: dict[str, Any] | None,
+                          return_fm: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """AIPOS-F230 件②: 交回入口拒因(命中 program_files = {category, reasons, program_files}; 否则 None)。"""
+    hits = program_files(workspace_root, task_id, card_fm, return_fm)
+    if not hits:
+        return None
+    decl = program_guard_declaration() or {}
+    texts = decl["texts"]
+    files = "; ".join(texts["file"].format(path=h["path"], lines=h["lines"], exec=texts["exec_part"] if h["executable"] else "") for h in hits)
+    reason = texts["refusal"].format(task_id=task_id, task_mode=str((card_fm or {}).get("task_mode") or ""), files=files,
+                                     max_lines=decl["max_lines"], exec_rule=texts["exec_rule"] if decl["executable_bit"] else "")
+    return {"category": str(decl["category"]), "reasons": [reason], "program_files": hits}
+
+
 def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]:
     """校验一张卡的产物(见 _validate_task_artifact)。AIPOS-F100 件②: 卡/记录/产物 frontmatter 读不出 = 拒
     INGEST_FRONTMATTER_UNREADABLE(原文点名文件与行号), 不取缺省继续校验。"""
@@ -615,6 +736,11 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         unfilled = report_placeholder_refusal(content, path, "return")
         if unfilled is not None:
             out["category"], out["reasons"], out["placeholders"] = unfilled["category"], unfilled["reasons"], unfilled["placeholders"]
+            return out
+        # AIPOS-F230 件②: 配置 / 文档卡交回产物含可执行程序 = 拒并指路改走代码卡(判据唯一实现 program_files)
+        program = program_guard_refusal(workspace_root, task_id, card_fm, fm)
+        if program is not None:
+            out["category"], out["reasons"], out["program_files"] = program["category"], program["reasons"], program["program_files"]
             return out
         if governance:
             # AIPOS-F197 件②: 产出清单逐个核对并计算 sha256(唯一实现 governance_outputs_manifest; 门交回记录随后绑定同一清单)

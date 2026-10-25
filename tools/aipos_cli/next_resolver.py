@@ -4355,6 +4355,440 @@ def _derive_candidate_deliverable_fail(task_id: str, state: dict[str, Any], rewo
     }
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F230 件①: 门只守底线、不规定路线——每个非通过状态同时给出全部合法出口(声明 transitions nodes.N4.legal_exits;
+# 命令全部复用既有唯一构造: rework_command_line / review_rework_command / reaudit_command / 声明模板)
+# ---------------------------------------------------------------------------
+
+_LEGAL_EXIT_TEXTS = ("line", "item", "owner_part", "dropped", "fast_lane_no_reaudit", "rework_limit_note", "advisor_placeholder",
+                     "budget_unknown")
+#: 渲染器名全集(声明 exits.<出口>.renderer 只得取其一); 模板型读 command_templates 同名键
+_EXIT_RENDERERS = ("rework", "same_round", "reaudit", "supersede", "amend", "withdraw", "owner_ask")
+_EXIT_TEMPLATE_RENDERERS = ("same_round", "supersede", "amend", "withdraw", "owner_ask")
+#: 同主体返工出口在返工额度用尽时改判 rework_limit 的状态(返工轮计入既有上限)
+_REWORK_LIMITED_STATES = ("FAIL", "BLOCK", "candidate_fail", "candidate_deliverable_fail", "fast_lane_review_fail", "audit_blocked_repeated")
+
+
+def legal_exits_declaration() -> dict[str, Any]:
+    """AIPOS-F230 件①: transitions nodes.N4.legal_exits(唯一读取口)。核: 不变式 / 出口(label / invariants ⊆ 不变式 / owner_tier1 ∈
+    verbs.schema 第一档事由或 null / renderer ∈ _EXIT_RENDERERS)/ 模板齐 / 状态表每行主体键 = 交付主体三态, 每格 = ≥2 个不重复已声明出口或
+    {sole_reason | not_applicable: 非空说明} / recommend 每态一条且推荐出口在该态某格内 / 文案齐。不合 = SchemaLoadError(fail-closed)。"""
+    from tools.aipos_cli.owner_inbox import tier_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    decl = _transition_node("N4").get("legal_exits")
+    where = "transitions.schema.json nodes.N4.legal_exits"
+    if not isinstance(decl, dict):
+        raise SchemaLoadError(f"{where} 未声明(AIPOS-F230 件①)")
+    invariants, exits, states = decl.get("invariants"), decl.get("exits"), decl.get("states")
+    templates, recommend, texts = decl.get("command_templates"), decl.get("recommend"), decl.get("texts")
+    problems: list[str] = []
+    if not isinstance(invariants, dict) or not invariants or not all(isinstance(v, str) and v.strip() for v in invariants.values()):
+        problems.append("invariants 须为非空 {键: 说明}")
+        invariants = {}
+    tier1 = set(tier_declaration()["tier1"]["reasons"])
+    if not isinstance(exits, dict) or not exits:
+        problems.append("exits 须为非空对象")
+        exits = {}
+    for key, spec in exits.items():
+        if (not isinstance(spec, dict) or not str(spec.get("label") or "").strip() or spec.get("renderer") not in _EXIT_RENDERERS
+                or not isinstance(spec.get("invariants"), list) or not spec["invariants"] or not set(spec["invariants"]) <= set(invariants)
+                or not (spec.get("owner_tier1") is None or spec.get("owner_tier1") in tier1)):
+            problems.append(f"exits.{key} 须有 label / renderer ∈ {list(_EXIT_RENDERERS)} / invariants ⊆ invariants / owner_tier1 ∈ 第一档事由或 null")
+    kinds = set(delivery_subject_kinds())
+    if (not isinstance(templates, dict) or not all(isinstance(templates.get(k), str) and templates[k].strip() for k in _EXIT_TEMPLATE_RENDERERS)
+            or not isinstance(templates.get("subject_hint"), dict) or set(templates["subject_hint"]) != kinds):
+        problems.append(f"command_templates 须含 {list(_EXIT_TEMPLATE_RENDERERS)} 与 subject_hint(键 = 交付主体三态)")
+    if not isinstance(states, dict) or not states:
+        problems.append("states 须为非空对象")
+        states = {}
+    for state, row in states.items():
+        if not isinstance(row, dict) or set(row) != kinds:
+            problems.append(f"states.{state} 的主体键须恰为交付主体三态 {sorted(kinds)}")
+            continue
+        for subject, cell in row.items():
+            if isinstance(cell, list):
+                if len(cell) < 2 or len(set(cell)) != len(cell) or not set(cell) <= set(exits):
+                    problems.append(f"states.{state}.{subject} 须为 ≥2 个不重复的已声明出口(或写明 sole_reason)")
+            elif not (isinstance(cell, dict) and len(cell) == 1 and next(iter(cell)) in ("sole_reason", "not_applicable")
+                      and isinstance(next(iter(cell.values())), str) and next(iter(cell.values())).strip()):
+                problems.append(f"states.{state}.{subject} 须为出口列表或 {{sole_reason | not_applicable: 说明}}")
+    if not isinstance(recommend, dict) or set(recommend) != set(states):
+        problems.append("recommend 须对 states 每态各一条")
+    else:
+        for state, rec in recommend.items():
+            cells = [c for c in (states.get(state) or {}).values() if isinstance(c, list)]
+            if not isinstance(rec, dict) or not str(rec.get("why") or "").strip() or not any(rec.get("exit") in c for c in cells):
+                problems.append(f"recommend.{state} 须为 {{exit: 该态某格内的出口, why}}")
+    overrides = decl.get("evidence_overrides")
+    if not isinstance(overrides, dict) or not all(isinstance(v, dict) and v.get("exit") in exits and str(v.get("why") or "").strip()
+                                                  for v in overrides.values()):
+        problems.append("evidence_overrides 须为 {名: {exit, why}}")
+    if not isinstance(texts, dict) or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in _LEGAL_EXIT_TEXTS):
+        problems.append(f"texts 须含 {list(_LEGAL_EXIT_TEXTS)}")
+    if problems:
+        raise SchemaLoadError(f"{where} 未声明齐(AIPOS-F230 件①): " + "; ".join(problems))
+    return decl
+
+
+def rework_budget_exhausted(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None) -> dict[str, Any]:
+    """AIPOS-F230 件①: 下一轮返工是否会被门 queue rework 以额度拒(判据复用 queue_mutation.rework_round_budget + auto_extension_check,
+    与 build_rework_round 同一组函数, 只读)。返回 {exhausted, why, error}: 额度内 / 有未消费 Owner 追加裁决 / 满足第二档自动追加 = 未尽;
+    读不出 = error 非空(调用方照原状态列出口, 门照常核)。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.queue_mutation import auto_extension_check, rework_round_budget
+
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    rounds = fm.get("rework_rounds") if isinstance(fm.get("rework_rounds"), list) else []
+    try:
+        budget = rework_round_budget(Path(workspace_root), task_id, rounds)
+        next_round = len(rounds) + 1
+        if next_round <= budget["limit"] or budget["unconsumed"]:
+            return {"exhausted": False, "why": "", "error": ""}
+        path, _q = _find_task_in_queue(Path(workspace_root), task_id)
+        if path is None:
+            return {"exhausted": False, "why": "", "error": f"卡 {task_id} 不在队列"}
+        meta, body = require_frontmatter(path)
+        auto = auto_extension_check(Path(workspace_root), task_id, meta, body, next_round=next_round, max_rounds=budget["max_rounds"])
+    except (OSError, ValueError, LookupError, FrontmatterReadError) as exc:
+        return {"exhausted": False, "why": "", "error": f"{type(exc).__name__}: {exc}"}
+    if auto.get("eligible"):
+        return {"exhausted": False, "why": "", "error": ""}
+    return {"exhausted": True, "why": f"已登记 {len(rounds)} 轮 ≥ 额度 {budget['limit']}; {auto.get('why') or '不满足第二档自动追加'}", "error": ""}
+
+
+def _exit_state_for_reaudit(workspace_root: Path, task_id: str, verdict_state: dict[str, Any] | None) -> dict[str, Any] | None:
+    """重新派审出口所需的裁决态(含 next_round / redispatched_to): 调用方已给(audit_block_state / non_pass_fail_state 形)则用之,
+    否则按本卡最新常规裁决取(non_pass_fail_state, 再 audit_block_state)。"""
+    st = verdict_state if isinstance(verdict_state, dict) else {}
+    if "next_round" in st or "redispatched_to" in st:
+        return st
+    return non_pass_fail_state(Path(workspace_root), task_id) or audit_block_state(Path(workspace_root), task_id)
+
+
+def _render_exit(workspace_root: Path, task_id: str, fm: dict[str, Any], renderer: str, *, subject: str, verdict_state: dict[str, Any] | None,
+                 actor: str, policy_ref: str, owner_tier1: str | None, decl: dict[str, Any]) -> tuple[str | None, str]:
+    """一个出口的命令(唯一渲染; 返回 (命令, 不适用原因))。命令 = 既有唯一构造(rework / reaudit)或声明模板(其余)。"""
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    texts, templates = decl["texts"], decl["command_templates"]
+    advisor = texts["advisor_placeholder"]
+    prefix = lybra_command_prefix(Path(workspace_root))
+    verdict_id = str((verdict_state or {}).get("verdict_id") or "")
+    fast = fast_lane_review(workspace_root, task_id, fm)
+    try:
+        report_ref = str(_return_artifact_path(workspace_root, task_id).resolve().relative_to(Path(workspace_root).resolve()))
+    except ValueError:
+        report_ref = str(_return_artifact_path(workspace_root, task_id))
+    if renderer == "rework":
+        if fast:
+            return review_rework_command(workspace_root, task_id, report_ref), ""
+        return rework_command_line(workspace_root, task_id, actor=actor, verdict_id=verdict_id), ""
+    if renderer == "reaudit":
+        if fast:
+            return None, texts["fast_lane_no_reaudit"]
+        state = _exit_state_for_reaudit(workspace_root, task_id, verdict_state)
+        if state is None:
+            return None, "本卡无常规审计裁决, 无审计轮可重派"
+        return reaudit_command(Path(workspace_root), task_id, fm, state, actor=actor, policy_ref=policy_ref), ""
+    values = {"prefix": prefix, "task_id": task_id, "advisor": advisor, "report": report_ref, "owner_reason": owner_tier1 or "",
+              "subject_hint": str(templates["subject_hint"].get(subject) or ""), "outcome": str(same_round_declaration()["outcome"]),
+              "restricted": " --restricted" if (_find_task_in_queue(Path(workspace_root), task_id)[1] == "claimed") else ""}
+    return str(templates[renderer]).format(**values), ""
+
+
+def legal_exits(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None, state_key: str, *,
+                verdict_state: dict[str, Any] | None = None, actor: str = "", policy_ref: str = "",
+                recommended: str | None = None, why: str = "") -> dict[str, Any]:
+    """AIPOS-F230 件①: 本卡此刻非通过状态 state_key 的全部合法出口(唯一渲染; next 各非通过分支与 loop status 同读)。
+    交付主体 = card_delivery_subject; 同主体返工所在状态若返工额度用尽(rework_budget_exhausted)= 改判 rework_limit。
+    recommended / why = 调用方按证据给的推荐(审计 fail_scope / 执行产物 BLOCK 报告); 缺 = 声明 recommend.<状态>。推荐出口对本卡不适用 =
+    取首个可用出口。返回 {state, subject, invariants, exits[{key, label, owner_tier1, invariants, command, note}], dropped, recommended, why,
+    budget, text}; 声明格为 sole_reason / not_applicable = exits 空且 text 写明。"""
+    decl = legal_exits_declaration()
+    texts = decl["texts"]
+    fm = card_frontmatter if isinstance(card_frontmatter, dict) else {}
+    subject = str(card_delivery_subject(workspace_root, task_id, fm).get("kind") or "branch")
+    state = state_key
+    budget: dict[str, Any] = {}
+    if state in _REWORK_LIMITED_STATES:
+        budget = rework_budget_exhausted(Path(workspace_root), task_id, fm)
+        if budget["exhausted"]:
+            state, recommended, why = "rework_limit", None, ""
+    cell = decl["states"][state][subject]
+    out: dict[str, Any] = {"state": state, "requested_state": state_key, "subject": subject, "invariants": decl["invariants"],
+                           "exits": [], "dropped": [], "recommended": "", "why": "", "budget": budget, "text": ""}
+    if isinstance(cell, dict):
+        kind, note = next(iter(cell.items()))
+        out.update({kind: note, "text": f"{state} × {subject}: {note}"})
+        return out
+    for key in cell:
+        spec = decl["exits"][key]
+        command, drop = _render_exit(workspace_root, task_id, fm, str(spec["renderer"]), subject=subject, verdict_state=verdict_state,
+                                     actor=actor, policy_ref=policy_ref, owner_tier1=spec.get("owner_tier1"), decl=decl)
+        if command is None:
+            out["dropped"].append({"key": key, "label": spec["label"], "why": drop})
+            continue
+        out["exits"].append({"key": key, "label": str(spec["label"]), "owner_tier1": spec.get("owner_tier1"),
+                             "invariants": list(spec["invariants"]), "command": command, "note": str(spec.get("note") or "")})
+    keys = [e["key"] for e in out["exits"]]
+    rec = decl["recommend"][state]
+    pick, reason = (recommended, why) if recommended in keys else (str(rec["exit"]), str(rec["why"]))
+    if pick not in keys and keys:
+        pick, reason = keys[0], f"{reason}(推荐出口本卡不适用, 取首个可用出口)"
+    if budget.get("exhausted"):
+        reason = f"{reason}; " + texts["rework_limit_note"].format(why=budget["why"])
+    elif budget.get("error"):
+        reason = f"{reason}; " + texts["budget_unknown"].format(error=budget["error"])
+    out["recommended"], out["why"] = pick, reason
+    items = []
+    for e in out["exits"]:
+        owner = texts["owner_part"].format(owner_tier1=e["owner_tier1"]) if e["owner_tier1"] else ""
+        items.append(texts["item"].format(key=e["key"], label=e["label"], owner=owner, command=e["command"]))
+    items += [texts["dropped"].format(label=d["label"], why=d["why"]) for d in out["dropped"]]
+    out["text"] = texts["line"].format(state=state, subject=subject, invariants="/".join(decl["invariants"]), items=" | ".join(items),
+                                       recommended=pick or "(无)", why=reason)
+    return out
+
+
+def recovery_exit_key(recovery: dict[str, Any] | None) -> tuple[str | None, str]:
+    """non_pass_recovery 推荐(rework|reaudit)→ 出口键 + 依据(证据改判: 执行产物本身是 BLOCK 报告 = evidence_overrides.executor_blocked)。"""
+    if not recovery:
+        return None, ""
+    if recovery.get("executor_blocked"):
+        rule = legal_exits_declaration()["evidence_overrides"]["executor_blocked"]
+        return str(rule["exit"]), str(rule["why"]).format(why=recovery.get("why") or "")
+    return ("rework_same_subject" if recovery.get("recommended") == "rework" else "reaudit"), str(recovery.get("choice") or "")
+
+
+def _attach_legal_exits(result: dict[str, Any], exits: dict[str, Any]) -> dict[str, Any]:
+    """推导结果附合法出口(legal_exits 键; suggested_action 仍是推荐主路径不变——全集由 `lybra next` 文本 Exits 段(format_output)、
+    --json 的 legal_exits 与 loop status next_action.legal_exits 同读本键)。"""
+    result["legal_exits"] = exits
+    return result
+
+
+def render_legal_exit_lines(exits: dict[str, Any] | None) -> list[str]:
+    """AIPOS-F230 件①: `lybra next` 文本输出的 Exits 段(每出口一行 + 推荐一行; 文案读 legal_exits.texts)。无 = []。"""
+    if not isinstance(exits, dict) or not (exits.get("exits") or exits.get("dropped") or exits.get("text")):
+        return []
+    if not exits.get("exits"):
+        return [f"Exits: {exits.get('text')}"]
+    texts = legal_exits_declaration()["texts"]
+    lines = [f"Exits({exits['state']} × {exits['subject']}, 门只守底线 {'/'.join(exits.get('invariants') or {})}; 顾问任选其一):"]
+    for e in exits["exits"]:
+        owner = texts["owner_part"].format(owner_tier1=e["owner_tier1"]) if e.get("owner_tier1") else ""
+        lines.append("  " + texts["item"].format(key=e["key"], label=e["label"], owner=owner, command=e["command"]))
+    lines += ["  " + texts["dropped"].format(label=d["label"], why=d["why"]) for d in exits.get("dropped") or []]
+    lines.append(f"  推荐: {exits.get('recommended') or '(无)'}({exits.get('why') or ''})")
+    return lines
+
+
+def _non_pass_exits(workspace_root: Path, task_id: str, fm: dict[str, Any], state_key: str, verdict_state: dict[str, Any] | None,
+                    recovery: dict[str, Any] | None, *, conn_arg: str | None) -> dict[str, Any]:
+    """推导核非通过分支的合法出口(出口命令 --actor / 信封 = 驱动方, 与 non_pass_recovery 同口径; 推荐 = recovery_exit_key 证据改判)。"""
+    rec, rec_why = recovery_exit_key(recovery)
+    return legal_exits(workspace_root, task_id, fm, state_key, verdict_state=verdict_state,
+                       actor=_driver_actor(workspace_root, connection_json=conn_arg),
+                       policy_ref=_driver_envelope_ref(workspace_root, task_id, fm, conn_arg) or "", recommended=rec, why=rec_why)
+
+
+def _candidate_fail_exits(workspace_root: Path, task_id: str, fm: dict[str, Any], state: dict[str, Any], derived: dict[str, Any], *,
+                          conn_arg: str | None) -> dict[str, Any]:
+    """固定候选 FAIL 两态的合法出口: deliverable = candidate_deliverable_fail; 未声明 fail_scope = evidence_overrides.fail_scope_undeclared 推荐。"""
+    deliverable = derived["action"]["type"] == candidate_fail_action_types()[1]
+    rec, why = None, ""
+    if not deliverable and not state["fail_scope"]["declared"]:
+        rule = legal_exits_declaration()["evidence_overrides"]["fail_scope_undeclared"]
+        rec, why = str(rule["exit"]), str(rule["why"])
+    return legal_exits(workspace_root, task_id, fm, "candidate_deliverable_fail" if deliverable else "candidate_fail",
+                       verdict_state={"verdict_id": state["verdict_id"]}, actor=_driver_actor(workspace_root, connection_json=conn_arg),
+                       policy_ref=_driver_envelope_ref(workspace_root, task_id, fm, conn_arg) or "", recommended=rec, why=why)
+
+
+def legal_exits_for_card(workspace_root: Path, task_id: str) -> dict[str, Any] | None:
+    """AIPOS-F230 件①: loop status 读口——本卡此刻推导(derive_next_step, 唯一推导核)若处非通过状态 = 其 legal_exits; 否则 None。
+    推导出错 = {error, text}(出声, 不吞)。"""
+    try:
+        derivation = derive_next_step(task_id, Path(workspace_root))
+    except (OSError, ValueError, LookupError) as exc:
+        return {"error": f"{type(exc).__name__}: {exc}", "exits": [], "text": f"合法出口推导出错: {type(exc).__name__}: {exc}"}
+    exits = derivation.get("legal_exits")
+    return exits if isinstance(exits, dict) else None
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F230 件④: 同轮补正(声明 transitions nodes.N4.same_round + verbs.schema lybra_mark_concluded.same_round)
+# ---------------------------------------------------------------------------
+
+_SAME_ROUND_TEXTS = ("await_missing", "await_suggested", "after_audit", "after_first", "after_review", "stale_head", "re_return_note",
+                     "re_return_suggested", "invalid_fix", "not_updated_note", "without_round_suggested", "without_round_note", "reviewed_what",
+                     "reaudit_ref", "reaudit_note", "bound_note")
+_SAME_ROUND_CODES = ("SAME_ROUND_NOT_CLAIMED", "SAME_ROUND_NO_RETURN", "SAME_ROUND_AUDIT_STARTED", "SAME_ROUND_ALREADY_PENDING",
+                     "SAME_ROUND_FOCUS_REQUIRED", "SAME_ROUND_ROLE")
+
+
+def same_round_declaration() -> dict[str, Any]:
+    """AIPOS-F230 件④: transitions nodes.N4.same_round(推导)+ verbs.schema lybra_mark_concluded.same_round(写口)合并视图(唯一读取口)。
+    outcome 不得与复核打回 outcome 相同; 缺键 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    node = _transition_node("N4").get("same_round")
+    verb = ((load_schema("verbs").get("verbs") or {}).get("lybra_mark_concluded") or {}).get("same_round")
+    texts = node.get("texts") if isinstance(node, dict) else None
+    codes = verb.get("reject_codes") if isinstance(verb, dict) else None
+    if (not isinstance(node, dict) or not str(node.get("state") or "").strip() or not str(node.get("kind") or "").strip()
+            or not isinstance(texts, dict) or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in _SAME_ROUND_TEXTS)
+            or not isinstance(verb, dict) or not str(verb.get("outcome") or "").strip()
+            or str(verb["outcome"]) == str(review_rework_declaration()["outcome"])
+            or not isinstance(verb.get("record_fields"), list) or not isinstance(verb.get("audit_not_started_states"), list)
+            or not isinstance(codes, dict) or not all(isinstance(codes.get(k), str) and codes[k].strip() for k in _SAME_ROUND_CODES)):
+        raise SchemaLoadError(f"transitions nodes.N4.same_round(state / kind / texts.{list(_SAME_ROUND_TEXTS)})与 verbs.lybra_mark_concluded."
+                              f"same_round(outcome ≠ review_rework.outcome / record_fields / audit_not_started_states / reject_codes "
+                              f"{list(_SAME_ROUND_CODES)})未声明齐(AIPOS-F230 件④)")
+    return {**node, **verb, "texts": texts, "reject_codes": codes}
+
+
+def same_round_reviews(workspace_root: Path, task_id: str) -> list[tuple[Path, dict[str, Any]]]:
+    """本卡同轮补正复核记录(advisor_reviews 同一读取, outcome = same_round), 旧 → 新。"""
+    outcome = str(same_round_declaration()["outcome"])
+    return [(p, fm) for p, fm in advisor_reviews(workspace_root, task_id) if str(fm.get("outcome") or "") == outcome]
+
+
+def same_round_state(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None,
+                     records: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """AIPOS-F230 件④ 唯一判定: 最新同轮补正记录所打回的交回 = 门最新交回(补正未消费)= {review_path, review(裁决形视图), evidence,
+    withdrawn_audit_task_id}; evidence = 晚于复核时刻的重写交回(non_branch_re_return; 时间界 = rework_return_bound 以复核记录为锚、无返工轮);
+    已消费(门已落新交回)/ 无记录 = None。"""
+    reviews = same_round_reviews(workspace_root, task_id)
+    if not reviews:
+        return None
+    path, fm = reviews[-1]
+    recs = records if isinstance(records, dict) else _read_task_records(Path(workspace_root), task_id)
+    latest_id = str((recs.get("latest_return") or {}).get("return_id") or "").strip()
+    reviewed = str(fm.get("reviewed_return_record_ref") or "").strip()
+    if not latest_id or latest_id != reviewed:
+        return None
+    view = {**fm, "verdict_id": str(fm.get("review_id") or path.stem), "verdict_at": str(fm.get("timestamp") or ""),
+            "verdict": str(fm.get("outcome") or ""), "reviewed_return_record_ref": reviewed, "audit_task_id": ""}
+    evidence = non_branch_re_return(workspace_root, task_id, card_frontmatter, path, view, None)
+    return {"review_path": path, "review": view, "evidence": evidence,
+            "withdrawn_audit_task_id": str(fm.get("withdrawn_audit_task_id") or "").strip(),
+            "bound": rework_return_bound(path, view, None)}
+
+
+def _derive_same_round(workspace_root: Path, task_id: str, fm: dict[str, Any], records: dict[str, Any], state: dict[str, Any], *,
+                       claimer: str, conn_arg: str | None) -> dict[str, Any]:
+    """AIPOS-F230 件④: 同轮补正未消费时的推导(声明 nodes.N4.same_round): 已见补正 = 重交回(_derive_stale_re_return 同一构建, 产物入口同一
+    校验); 否则 = 等执行体补正(action await_rework, loop 拉起执行体; 不占返工轮)。"""
+    decl = same_round_declaration()
+    texts = decl["texts"]
+    name = str(decl["state"])
+    review = state["review"]
+    points = "; ".join(str(x) for x in (review.get("focus_items") or [])) or "(复核记录无具体项)"
+    withdrawn = state["withdrawn_audit_task_id"]
+    after = (texts["after_review"] if fast_lane_review(workspace_root, task_id, fm)
+             else (texts["after_audit"].format(withdrawn=withdrawn) if withdrawn else texts["after_first"]))
+    values = {"review_id": review["verdict_id"], "reviewed": review["reviewed_return_record_ref"] or "?", "points": points, "after": after}
+    nb_texts = non_branch_rework_declaration()["texts"]
+    if state["evidence"] is not None:
+        head = texts["stale_head"].format(**values, evidence=non_branch_evidence_text(nb_texts, state["evidence"]))
+        tip = _card_branch_tip(workspace_root, task_id, fm)
+        stale = {"subject": str(card_delivery_subject(workspace_root, task_id, fm).get("kind") or ""), "rework_round": None,
+                 "re_execution": state["evidence"], "verdict_id": review["verdict_id"], "verdict": review.get("verdict"),
+                 "verdict_at": review.get("verdict_at"), "audit_task_id": withdrawn, "reviewed_return_record_ref": review["reviewed_return_record_ref"],
+                 "branch": tip[2] if tip else "", "tip": tip[1]["commit_sha"] if tip else "", "tree_hash": tip[1]["tree_hash"] if tip else "",
+                 "reason": ""}
+        return _derive_stale_re_return(
+            workspace_root, task_id, fm, records, stale, claimer=claimer, conn_arg=conn_arg, state=name, stale_key=name, head=head,
+            reviewed_ref=str(review["reviewed_return_record_ref"] or ""), since=str(review.get("verdict_at") or ""),
+            reviewed_what=texts["reviewed_what"], without_round_suggested=texts["without_round_suggested"],
+            without_round_note=texts["without_round_note"], not_updated_note=texts["not_updated_note"],
+            re_return_notes=f"{name}: {head}; {texts['re_return_note']}", invalid_fix=texts["invalid_fix"],
+            re_return_suggested=texts["re_return_suggested"])
+    bound_note = texts["bound_note"].format(at=state["bound"]["at"].strftime("%Y-%m-%dT%H:%M:%SZ"))  # 时间界 = 复核时刻(无返工轮)
+    return {
+        "task_id": task_id,
+        "derivable": False,
+        "current_node": name,
+        "current_state": "claimed",
+        "triggered_by": "executor",
+        "command": "",
+        "verb": "lybra_queue_return_dry_run",
+        "missing_records": [f"{texts['await_missing'].format(**values)}; {bound_note}"],
+        "suggested_action": f"{texts['await_suggested'].format(**values)}; {bound_note}",
+        "notes": (f"N2: 顾问复核 {review['verdict_id']} 同轮打回交回 {values['reviewed']}(不占返工轮"
+                  + (f", 已撤本轮未开始的审计卡 {withdrawn}" if withdrawn else "") + "; AIPOS-F230 件④, 声明 transitions nodes.N4.same_round)"),
+        "same_round": {k: v for k, v in state.items() if k not in ("review_path", "bound")} | {"review_path": str(state["review_path"])},
+        "action": {"type": "await_rework", "card": task_id, "round": 0, "same_round": review["verdict_id"]},
+    }
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F230 件⑥: 审计运行证据复用(声明 transitions artifact_ingest.verdict.runtime_evidence.candidate_subject.reuse)
+# ---------------------------------------------------------------------------
+
+_REUSE_TEXTS = ("kickoff", "basis_scope", "basis_round", "not_earlier_round", "decl_mismatch", "instance_mismatch", "not_eligible")
+
+
+def evidence_reuse_declaration() -> dict[str, Any]:
+    """AIPOS-F230 件⑥: runtime_evidence.candidate_subject.reuse(唯一读取口); 缺键 = SchemaLoadError(fail-closed)。"""
+    from tools.aipos_cli.artifact_ingest import runtime_evidence_candidate_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    decl = runtime_evidence_candidate_declaration().get("reuse")
+    texts = decl.get("texts") if isinstance(decl, dict) else None
+    if (not isinstance(decl, dict) or not all(isinstance(decl.get(k), str) and decl[k].strip() for k in ("field", "rework_field", "rework_value"))
+            or not isinstance(texts, dict) or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in _REUSE_TEXTS)):
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.verdict.runtime_evidence.candidate_subject.reuse(field / rework_field / "
+                              f"rework_value / texts.{list(_REUSE_TEXTS)})未声明齐(AIPOS-F230 件⑥)")
+    return decl
+
+
+def audit_evidence_reuse(workspace_root: Path, audit_task_id: str, *, reviewed: str = "", reviewed_fm: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F230 件⑥ 资格判定(唯一实现; 裁决入口 board_adapter._candidate_run_problem 与开工稿 / 取证锚点同读): 本审计卡之前的更早轮次
+    (audit_derivation.audit_round_ids 中位于本卡之前者)+ 资格依据: 被审卡最新常规裁决(本轮之前那一轮)fail_scope = deliverable
+    (verdict_fail_scope), 或针对它登记的返工轮写 rework_field = rework_value。返回 {eligible, earlier_rounds, previous, basis, verdict_id,
+    scope_note}。"""
+    from tools.aipos_cli.audit_derivation import audit_card_reviewed_id, audit_round_ids
+
+    decl = evidence_reuse_declaration()
+    texts = decl["texts"]
+    root = Path(workspace_root)
+    rid = str(reviewed or "").strip() or audit_card_reviewed_id(audit_task_id, None)
+    rounds = audit_round_ids(rid, root) if rid else []
+    earlier = rounds[: rounds.index(audit_task_id)] if audit_task_id in rounds else list(rounds)
+    out: dict[str, Any] = {"eligible": False, "earlier_rounds": earlier, "previous": earlier[-1] if earlier else "", "basis": "",
+                           "verdict_id": "", "scope_note": "", "reviewed": rid}
+    if not earlier:
+        return out
+    regular = [(p, fm) for p, fm in _regular_verdicts(root, rid) if str(fm.get("audit_task_id") or "") in earlier]
+    if not regular:
+        return out
+    _path, latest = regular[0]
+    out["verdict_id"] = str(latest.get("verdict_id") or _path.stem)
+    scope = verdict_fail_scope(root, latest)
+    out["scope_note"] = scope["note"]
+    if reviewed_fm is None:
+        rpath, _q = _find_task_in_queue(root, rid)
+        reviewed_fm = _read_frontmatter(rpath) if rpath else {}
+    rework = rework_round_for_verdict(reviewed_fm, {**latest, "verdict_id": out["verdict_id"]})
+    if scope["scope"] == "deliverable" and scope["declared"]:
+        out.update({"eligible": True, "basis": texts["basis_scope"].format(verdict_id=out["verdict_id"])})
+    elif rework is not None and str(rework.get(decl["rework_field"]) or "").strip() == str(decl["rework_value"]):
+        out.update({"eligible": True, "basis": texts["basis_round"].format(round=rework.get("round") or "?", field=decl["rework_field"],
+                                                                             value=decl["rework_value"])})
+    return out
+
+
+def audit_evidence_reuse_line(workspace_root: Path, audit_task_id: str, *, candidate: str = "", reviewed: str = "") -> str | None:
+    """AIPOS-F230 件⑥: 开工稿 / 取证锚点的复用说明一行(texts.kickoff); 不可复用 = None。"""
+    view = audit_evidence_reuse(workspace_root, audit_task_id, reviewed=reviewed)
+    if not view["eligible"]:
+        return None
+    return evidence_reuse_declaration()["texts"]["kickoff"].format(basis=view["basis"], previous=view["previous"], candidate=candidate or "?")
+
+
 def _derive_audit_blocked(workspace_root: Path, task_id: str, fm: dict[str, Any], state: dict[str, Any], *,
                           conn_arg: str | None) -> dict[str, Any]:
     """N4 BLOCK -> not derivable, action audit_blocked (advisor fixes environment then re-dispatches R(n+1));
@@ -4377,7 +4811,7 @@ def _derive_audit_blocked(workspace_root: Path, task_id: str, fm: dict[str, Any]
                      f"a) {recovery['rework_command']}")
     else:
         suggested = f"{head}: 原因: {state['reason'] or '(见审计报告)'}; {recovery['choice']}; {recovery['paths']}"
-    return {
+    result = {
         "task_id": task_id,
         "derivable": False,
         "current_node": "audit_verdict",
@@ -4397,6 +4831,10 @@ def _derive_audit_blocked(workspace_root: Path, task_id: str, fm: dict[str, Any]
                    "reaudit_command": "" if repeated else command, "rework_command": recovery["rework_command"],
                    "recommended": recovery["recommended"]},
     }
+    # AIPOS-F230 件①: BLOCK / 连续 BLOCK 也列全部合法出口(推荐 = non_pass_recovery 证据改判)
+    rec, rec_why = recovery_exit_key(recovery)
+    return _attach_legal_exits(result, legal_exits(workspace_root, task_id, fm, "audit_blocked_repeated" if repeated else "BLOCK",
+                                                   verdict_state=state, actor=actor, policy_ref=policy_ref, recommended=rec, why=rec_why))
 
 
 def _derive_owner_reaudit(workspace_root: Path, task_id: str, fm: dict[str, Any], state: dict[str, Any], *, actor: str,
@@ -4898,6 +5336,10 @@ def _derive_next_step(
                 rstale = return_staleness(workspace_root, task_id, fm, records)
                 if rstale is not None:
                     return _derive_return_stale(workspace_root, task_id, fm, records, rstale, claimer=claimer, conn_arg=conn_arg)
+                # AIPOS-F230 件④: 顾问同轮打回了门最新交回(审计开始前, 不占返工轮)= 等执行体补正 / 已补正 = 重交回
+                same_round = same_round_state(workspace_root, task_id, fm, records)
+                if same_round is not None:
+                    return _derive_same_round(workspace_root, task_id, fm, records, same_round, claimer=claimer, conn_arg=conn_arg)
 
             # AIPOS-F112 件②: 复审轮(R2/R3…)已派生且该轮尚无裁决 → 等最新一轮审计卡(loop 认它等待/拉起), 不再拿上一轮裁决派 finalize
             current_audit_id = str(records.get("audit_task_id") or f"{task_id}R")
@@ -4987,8 +5429,11 @@ def _derive_next_step(
                     recovery = _non_pass_fail_recovery(workspace_root, task_id, fm, conn_arg=conn_arg)
                     candidate_fail = candidate_fail_state(workspace_root, task_id, fm)
                     if candidate_fail is not None:
-                        return _derive_candidate_fail(task_id, candidate_fail, recovery)
-                    return {
+                        # AIPOS-F230 件①: 固定候选 FAIL 两态(candidate_fail / candidate_deliverable_fail)也列全部合法出口
+                        derived = _derive_candidate_fail(task_id, candidate_fail, recovery)
+                        return _attach_legal_exits(derived, _candidate_fail_exits(workspace_root, task_id, fm, candidate_fail, derived,
+                                                                                  conn_arg=conn_arg))
+                    return _attach_legal_exits({
                         "task_id": task_id,
                         "derivable": False,
                         "current_node": "audit_verdict",
@@ -5001,7 +5446,8 @@ def _derive_next_step(
                                              + (f"; {recovery['choice']}; {recovery['paths']}" if recovery else "")),
                         "notes": f"N4: 裁决 {verdict_result},需人工处理",
                         **({"recovery": recovery} if recovery else {}),
-                    }
+                    }, _non_pass_exits(workspace_root, task_id, fm, "FAIL", non_pass_fail_state(workspace_root, task_id), recovery,
+                                       conn_arg=conn_arg))
             
             # N3→N4: 已派审但无 verdict → 等待审计体产物
             if latest_audit_dispatch and not latest_verdict:
@@ -5112,7 +5558,7 @@ def _derive_next_step(
                     close_cmd = (f"{lybra_command_prefix(workspace_root)} mark-concluded --task-id {task_id} --actor <你的顾问实例> "
                                  f"--report-path {report_ref} --conclusion-note \"顾问复核: <结论>\"")
                     rework_cmd = review_rework_command(workspace_root, task_id, report_ref)  # AIPOS-F221 件②: 复核不通过的正式出口
-                    return {
+                    review_step = {
                         "task_id": task_id,
                         "derivable": True,
                         "current_node": "return",
@@ -5131,6 +5577,9 @@ def _derive_next_step(
                         "notes": ("非代码卡快车道(只写治理根, AIPOS-F197):顾问复核后 mark-concluded 结案(不通过 = --outcome rework 打回返工)"
                                   + (f"; {back_note}" if back_note else "")),
                     }
+                    # AIPOS-F230 件①: 复核不通过时的全部合法出口(同主体返工 / 同轮补正 / 换新主体 / 改范围 / 撤卡)
+                    return _attach_legal_exits(review_step, _non_pass_exits(workspace_root, task_id, fm, "fast_lane_review_fail", None, None,
+                                                                            conn_arg=conn_arg))
                 return {
                     "task_id": task_id,
                     "derivable": True,
@@ -5593,6 +6042,7 @@ def format_output(result: dict[str, Any], *, json_mode: bool = False) -> str:
         lines.append(f"Supplementary: {render_supplementary_chain(str(task_id), result['supplementary_audit'])}")
     for row in result.get("post_merge_regression_unfinished") or []:  # AIPOS-F166 件③(行文案唯一 post_merge_regression.unfinished_regressions)
         lines.append(f"Regression: {row['line']}")
+    lines += render_legal_exit_lines(result.get("legal_exits"))  # AIPOS-F230 件①: 非通过状态的全部合法出口
 
     return "\n".join(lines)
 
