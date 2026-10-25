@@ -1192,11 +1192,11 @@ def _placeholder_slots(command: str, vocab: dict[str, Any]) -> tuple[str, list[s
 
 def evidence_commands_render_equivalent(before: Any, after: Any, subject: str) -> bool:
     """AIPOS-F233 件④ 渲染等价判据唯一实现(声明 placeholder_vocabulary.equivalence; queue amend --restricted 与返工自动放行范围判据同读):
-    条数相同; 逐条骨架逐字相同; 逐个占位: 改前已知 = 改后同一语义, 改前未知(渲染不了)= 改后已知; 改后不得含未知占位。"""
+    条数相同; 逐条骨架逐字相同; 逐个占位: 改前已知 = 改后按本主体规范名相同(渲染为同一值), 改前未知(渲染不了)= 改后已知;
+    改后不得含未知占位。"""
     if not isinstance(before, list) or not isinstance(after, list) or len(before) != len(after):
         return False
     vocab = placeholder_vocabulary()
-    del subject  # 等价按语义判, 与主体无关(主体只决定规范名); 参数保留供调用方表意
     for old, new in zip(before, after):
         if not isinstance(old, str) or not isinstance(new, str):
             return False
@@ -1207,7 +1207,8 @@ def evidence_commands_render_equivalent(before: Any, after: Any, subject: str) -
         for old_name, new_name in zip(old_names, new_names):
             new_meaning = vocab["by_name"].get(new_name)
             old_meaning = vocab["by_name"].get(old_name)
-            if new_meaning is None or (old_meaning is not None and old_meaning["id"] != new_meaning["id"]):
+            # 按本主体渲染等价 = 两侧规范名相同(如卡分支主体 {run_dir} 与 {worktree} 都渲染为审计分配工作树)
+            if new_meaning is None or (old_meaning is not None and old_meaning["canonical"][subject] != new_meaning["canonical"][subject]):
                 return False
     return True
 
