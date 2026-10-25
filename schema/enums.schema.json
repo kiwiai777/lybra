@@ -147,6 +147,10 @@
           "description": "Owner autonomy policy record"
         },
         {
+          "value": "project_authorization",
+          "description": "AIPOS-F224: project standing authorization revision (<authorizations_root>/<authorization_id>/r<NNNN>.md; append-only revisions; declared verbs.schema lybra_loop.envelope.project_authorization)"
+        },
+        {
           "value": "owner_decision",
           "description": "Owner decision record"
         },

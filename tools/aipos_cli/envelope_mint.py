@@ -63,6 +63,16 @@ def build_mint_payload(
     return payload
 
 
+def grant_ident(payload: dict[str, Any]) -> tuple[str, str]:
+    """AIPOS-F224: 一份授予 payload 的 (ID, 覆盖谁) —— 信封 = (policy_id, agent_or_role); 项目授权 = (authorization_id, 「项目授权 r<修订>」)。
+    mint_via_gate 的出声 / 拒因 / 落账消息同读(同一门 owner_decision_record 路径, 不另立写口)。"""
+    block = payload.get("project_authorization")
+    if isinstance(block, dict):
+        return str(block.get("authorization_id") or ""), f"project grant r{int(block.get('base_revision') or 0) + 1}"
+    policy = payload.get("autonomy_policy") or {}
+    return str(policy.get("policy_id") or ""), str(policy.get("agent_or_role") or "")
+
+
 def mint_preview(payloads: list[dict[str, Any]], *, governance_root: Path, actor: str) -> list[dict[str, Any]]:
     """--dry-run: 每张经本地同一 writer 预演(零写入)。异常(FileNotFoundError / OSError / ValueError)照抛, 调用方出声。"""
     from tools.aipos_cli.board_adapter import record_owner_decision
@@ -125,9 +135,11 @@ def mint_via_gate(
             from tools.schema_loader import SchemaLoadError
 
             written_all = [p for item in signed for p in item["written"]]
+            # AIPOS-F224: 项目授权签发 / 扩大 / 撤销 = 同一门路径, 落账消息用其登记命令(post_write_landing.commands.project_authorization)
+            command = "project_authorization" if any(isinstance(p.get("project_authorization"), dict) for p in payloads) else "envelope_mint"
             try:
                 landing = land_written_paths(governance_root, written_all, actor,
-                                             command="envelope_mint", policy_ids=" ".join(item["policy_id"] for item in signed))
+                                             command=command, policy_ids=" ".join(item["policy_id"] for item in signed))
             except SchemaLoadError as exc:  # 落账声明不可读 = 不落账(fail-closed), 信封已生效: 拒因出声, exit 1
                 landing = {"landed": False, "exit_code": 1, "reason": str(exc), "paths": written_all,
                            "line": f"⚠ 落账未完成(写入已生效, 勿重复执行写命令): {exc}"}
@@ -142,11 +154,11 @@ def mint_via_gate(
         client = GateClient(base_url, token)
         client.initialize()
         for payload in payloads:
-            policy = payload["autonomy_policy"]
+            ident, covers = grant_ident(payload)
             dry = client.call_tool("lybra_owner_decision_record_dry_run", {**payload, "workspace_root": str(governance_root)})
             if dry.get("verdict") == Verdict.BLOCK or not dry.get("ok", False) or not dry.get("dry_run_token"):
                 reasons = dry.get("blocking_reasons") or dry.get("errors") or dry.get("message") or dry
-                return _finish(1, f"门拒 {policy['policy_id']} 预演: {json.dumps(reasons, ensure_ascii=False)[:800]}")
+                return _finish(1, f"门拒 {ident} 预演: {json.dumps(reasons, ensure_ascii=False)[:800]}")
             done = client.call_tool("lybra_owner_decision_record_confirm", {
                 "dry_run_token": dry["dry_run_token"],
                 "actor": actor,
@@ -155,14 +167,13 @@ def mint_via_gate(
             })
             if not done.get("ok", False):
                 reasons = done.get("errors") or done.get("message") or done.get("error_code") or done
-                return _finish(1, f"门拒 {policy['policy_id']} 确认: {json.dumps(reasons, ensure_ascii=False)[:800]}")
+                return _finish(1, f"门拒 {ident} 确认: {json.dumps(reasons, ensure_ascii=False)[:800]}")
             writes = [str(w.get("path")) for w in (done.get("performed_writes") or []) if isinstance(w, dict) and w.get("path")]
             written_files = [governance_root / w for w in writes]
             missing = [str(f) for f in written_files if not f.is_file()]
             if not writes or missing:
-                return _finish(1, f"门应答成功但记录未见落盘({policy['policy_id']}): writes={writes} missing={missing}")
-            signed.append({"policy_id": policy["policy_id"], "agent_or_role": policy["agent_or_role"],
-                           "decision_id": payload["decision_id"], "written": writes})
+                return _finish(1, f"门应答成功但记录未见落盘({ident}): writes={writes} missing={missing}")
+            signed.append({"policy_id": ident, "agent_or_role": covers, "decision_id": payload["decision_id"], "written": writes})
     except GateError as exc:
         return _finish(1, f"门调用失败: {exc}(已签 {len(signed)} 张, 以门生记录为准; 未签的重跑本命令, 已落的 policy_id 会被门拒「already exists」)")
     report["ok"] = True

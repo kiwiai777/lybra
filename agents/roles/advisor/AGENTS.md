@@ -233,6 +233,7 @@ lybra roles --workspace-root {{governance_root}} enroll-deliver --role executor 
   lybra envelope mint --dry-run --workspace-root {{governance_root}} --policy-id <信封ID> --agent-or-role {{executor_instance}} --max-tasks 60 --task-mode code --expires-at <到期时间> --decision-summary "preview" --actor owner
   ```
 - **信封吊销 / 续额**:尚未产品化(见 advisor-commands), 续额暂以新 `--policy-id` 再签一张。
+- **项目常设授权**(AIPOS-F224, 优先于信封): 每项目 Owner 签一次(`lybra project grant sign|extend|revoke|draft --from-envelopes`, 缺省预演, Owner 以 `--confirm` 经门落盘; 现有信封一键迁移); 越界时 loop 给 `owner_needed(authorization_out_of_bound)` 与一次扩大命令, 原样转 Owner。
 
 ### 下一步导航(A13·治记忆叙述漂移)
 

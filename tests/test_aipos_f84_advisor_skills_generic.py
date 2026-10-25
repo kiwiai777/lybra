@@ -55,6 +55,7 @@ PLACEHOLDER_VALUES = {
     "<输出目录>": "/tmp/f84-out",
     "<清单文件>": "/tmp/f84-paths.txt",
     "<到期时间>": "2026-11-01T00:00:00Z",
+    "<主机>": "kiwiai-dev",  # AIPOS-F224: lybra project grant --host(主机标签)
     "<步骤号>": "1",
     # AIPOS-F92: 九步接入流程(lybra-onboarding / advisor-commands)新增占位
     "<home根>": "/tmp/f84-home",
