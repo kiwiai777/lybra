@@ -8886,6 +8886,106 @@ def render_correct_text(report: dict[str, Any]) -> list[str]:
     return lines
 
 
+def pause_task(
+    task_id: str,
+    *,
+    action: str,
+    relayed_by: str | None,
+    owner_words: str | None,
+    owner_ref: str | None = None,
+    actor: str = "owner",
+    dry_run: bool = True,
+    repo_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """AIPOS-F231 件①: Owner 暂停 / 恢复一张在途卡(`lybra queue pause|resume` 唯一实现; 声明 verbs.schema lybra_queue_pause)。
+
+    action ∈ {"pause", "resume"}。前置: 卡在 from_states / 转达人角色类 = actor_role_class(custom_roles.authorize_instance_class)/ 暂停须未暂停、
+    恢复须已暂停(判定唯一 owner_inbox.card_pause_state)。记录 = 既有 owner_decision_record(owner_inbox.queue_ruling_payload, 与 supersede /
+    correct / owner decide 同一构造与写路径 record_owner_decision + execute_dry_run; 选项 = 声明 pause_choice / resume_choice, 锚点 = 裁决时刻
+    = 每次各一份, 追加不覆盖)。预演零写入; 确认写决策记录(written 由 CLI 经 queue_writers 落账)。relayed_by / owner_words 缺或多行 =
+    owner_inbox.InboxUsageError(与 owner decide 同一校验)。返回 {ok, verdict, stage, action, task_id, state, decision_id, decision, pause,
+    blocking_reasons, written, line}。"""
+    from tools.aipos_cli.controlled_execute import OWNER_CONFIRMATION_TOKEN
+    from tools.aipos_cli.custom_roles import authorize_instance_class
+    from tools.aipos_cli.owner_inbox import card_pause_state, pause_rulings, queue_ruling_payload, relay_fields
+    from tools.aipos_cli.queue_mutation import pause_declaration
+    from tools.aipos_cli.task_loader import find_task_card
+
+    decl = pause_declaration()
+    texts = decl["texts"]
+    if action not in ("pause", "resume"):
+        raise ValueError(f"pause_task action 须为 pause / resume, 得到 {action!r}")
+    label = texts["pause_action"] if action == "pause" else texts["resume_action"]
+    choice = str(decl["pause_choice"] if action == "pause" else decl["resume_choice"])
+    relayed, words = relay_fields(relayed_by, owner_words)
+    root = _resolve_repo_root(repo_root)
+    report: dict[str, Any] = {"ok": False, "verdict": Verdict.BLOCK, "stage": "preview" if dry_run else "confirm", "action": action,
+                              "task_id": task_id, "state": None, "decision_id": None, "decision": None, "pause": None,
+                              "relayed_by": relayed, "owner_words": words, "blocking_reasons": [], "written": [], "line": ""}
+
+    def _blocked(reasons: list[str]) -> dict[str, Any]:
+        report["blocking_reasons"].extend(reasons)
+        report["line"] = texts["blocked_line"].format(action=label, reasons="; ".join(report["blocking_reasons"]))
+        return report
+
+    path, state = find_task_card(root, task_id)
+    if path is None:
+        return _blocked([texts["not_found"].format(task_id=task_id)])
+    report["state"] = state
+    if state not in decl["from_states"]:
+        return _blocked([texts["bad_state"].format(task_id=task_id, state=state, states="/".join(decl["from_states"]))])
+    problems: list[str] = []
+    role_gate = authorize_instance_class(relayed, str(decl["actor_role_class"]), root)
+    if not role_gate["ok"]:
+        problems.append(texts["role_refused"].format(required_class=decl["actor_role_class"], reason=role_gate["reason"]))
+    current = card_pause_state(root, task_id)
+    report["pause"] = current
+    if action == "pause" and current is not None:
+        problems.append(texts["already_paused"].format(task_id=task_id, decision_id=current["decision_id"], decided_at=current["decided_at"]))
+    if action == "resume" and current is None:
+        problems.append(texts["not_paused"].format(task_id=task_id))
+    if problems:
+        return _blocked(problems)
+    # 暂停 / 恢复链按裁决时刻排序(card_pause_state 取最近一条): 与上一条同秒 = 顺延 1 秒, 保证链上时刻严格递增(判定不靠文件名序)
+    moment = utc_now().replace(microsecond=0)
+    chain = pause_rulings(root, task_id, decl)
+    if chain:
+        from datetime import timedelta
+
+        prev = datetime.fromisoformat(str(chain[-1].get("decided_at") or "").replace("Z", "+00:00"))
+        if prev >= moment:
+            moment = prev + timedelta(seconds=1)
+    decided_at = iso_z(moment)
+    payload = queue_ruling_payload(root, choice=choice, task_id=task_id, anchor=decided_at, subject=f"{task_id} [{state}] {label}",
+                                   relayed_by=relayed, owner_words=words, owner_ref=str(owner_ref or "").strip() or None,
+                                   decided_at=decided_at, actor=actor)
+    report["decision_id"] = str(payload["decision_id"])
+    dry = record_owner_decision(payload, dry_run=True, repo_root=root, actor="owner")
+    report["decision"] = {k: dry.get(k) for k in ("ok", "verdict", "blocking_reasons", "warnings")}
+    target = (dry.get("data") or {}).get("target_path")
+    report["decision"]["target_path"] = target
+    if dry.get("verdict") == Verdict.BLOCK or not dry.get("ok") or not dry.get("dry_run_token"):
+        return _blocked([f"决策记录预演被拒: {r}" for r in (dry.get("blocking_reasons") or [])]
+                        or [json.dumps(dry.get("errors") or dry.get("message"), ensure_ascii=False)[:400]])
+    if dry_run:
+        report.update({"ok": True, "verdict": Verdict.PASS,
+                       "line": texts["preview_line"].format(action=label, task_id=task_id, state=state, target=target or "?")})
+        return report
+    done = execute_dry_run(str(dry["dry_run_token"]), "owner", owner_confirmation_token=OWNER_CONFIRMATION_TOKEN, repo_root=root)
+    report["decision"] = {k: done.get(k) for k in ("ok", "verdict", "blocking_reasons", "warnings", "errors")}
+    written = [str(w.get("path")) for w in (done.get("performed_writes") or []) if isinstance(w, dict) and w.get("path")]
+    if not done.get("ok") or not written:
+        return _blocked(["决策记录写入失败(零写入): " + json.dumps(done.get("errors") or done.get("blocking_reasons"), ensure_ascii=False)[:400]])
+    report["written"] = written
+    report["pause"] = card_pause_state(root, task_id)  # 写后复核(同一判定): 暂停 = 已暂停, 恢复 = None
+    record = next((w for w in written if Path(w).name.startswith(str(report["decision_id"]))), written[0])
+    report.update({"ok": True, "verdict": Verdict.PASS,
+                   "line": texts["done_line"].format(action=label, task_id=task_id, decision_id=report["decision_id"], record=record)})
+    if report["pause"] is not None:
+        report["line"] += "\n  " + report["pause"]["line"]
+    return report
+
+
 def _correct_criteria_rows(root: Path, criteria: list[str], before: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     """AIPOS-F207: 原卡挂的路线图标准此刻状态(推导唯一 roadmap_drift.roadmap_status; 无路线图 / 未挂 = 空)。before 给出 = 填 after。"""
     if not criteria:

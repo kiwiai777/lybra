@@ -2494,6 +2494,22 @@ def build_parser() -> argparse.ArgumentParser:
     queue_correct_mode.add_argument("--confirm", action="store_true", help="Write the decision, dispute marker and follow-up card, then land the writes")
     queue_correct_parser.add_argument("--json", action="store_true", help="Output JSON")
 
+    # AIPOS-F231 件①: Owner 暂停 / 恢复在途卡(声明 verbs.lybra_queue_pause / lybra_queue_resume; 唯一实现 board_adapter.pause_task)
+    for _pause_action, _pause_help in (
+            ("pause", "AIPOS-F231: the Owner pauses an in-flight card (owner decision record, appended; while paused the loop refuses to start "
+                      "or stops between steps, lybra next --run is refused, loop status shows paused instead of 're-run loop'); preview by default, "
+                      "--confirm writes and lands"),
+            ("resume", "AIPOS-F231: the Owner resumes a paused card (owner decision record, appended); preview by default, --confirm writes and lands")):
+        _pause_parser = queue_subparsers.add_parser(_pause_action, help=_pause_help)
+        _pause_parser.add_argument("--task-id", required=True, help="In-flight card (pending / claimed / blocked)")
+        _pause_parser.add_argument("--relayed-by", default=None, help="Advisor instance relaying the Owner's words (decision captured_by)")
+        _pause_parser.add_argument("--owner-words", default=None, help="Owner's words, one line")
+        _pause_parser.add_argument("--owner-ref", default=None, help="Optional: where the Owner ruled (session ref / inbox item id)")
+        _pause_mode = _pause_parser.add_mutually_exclusive_group()
+        _pause_mode.add_argument("--dry-run", action="store_true", help="Preview, zero writes (default)")
+        _pause_mode.add_argument("--confirm", action="store_true", help="Write the decision record, then land the write")
+        _pause_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     queue_return_repair_parser = queue_subparsers.add_parser("return-repair", help="Repair a stuck return")
     queue_return_repair_parser.add_argument("--task-id", required=True, help="Task ID with stuck return")
     queue_return_repair_parser.add_argument("--actor", required=True, help="Actor performing the repair")
@@ -3485,6 +3501,20 @@ def build_parser() -> argparse.ArgumentParser:
     loop_note_parser.add_argument("--retract-reason", default=None, help="AIPOS-F232: 撤回理由(一句话, 可选)")
     loop_note_parser.add_argument("--confirm", action="store_true", default=False, help="写入并落账; 缺省预演")
     loop_note_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output JSON")
+
+    # AIPOS-F231 件②: `lybra loop stop` —— 协作式停线(声明 verbs.schema lybra_loop_stop / lybra_loop.stop; 全部逻辑在 loop_run_record.stop_run)
+    loop_stop_parser = loop_actions.add_parser(
+        "stop", help="AIPOS-F231: 协作式停线——给本卡在跑的 loop 写停线请求并有界等它保存现场、清理本卡进程 / 隧道 / 模拟器、核无残留后释放独占资源; "
+                     "loop 已不在 = 本命令按运行记录清理并写终态; 上次停线有未清理项 = 复核")
+    loop_stop_parser.add_argument("--task-id", default=argparse.SUPPRESS, help="卡 ID(必填)")
+    loop_stop_parser.add_argument("--reason", default=None, help="停线原因(进运行记录 stop.reason)")
+    loop_stop_parser.add_argument("--owner-words", default=None, help="Owner 原话(带 = 结束原因 stopped_by_owner; 须同给 --relayed-by)")
+    loop_stop_parser.add_argument("--relayed-by", default=None, help="转达 Owner 原话的顾问实例")
+    loop_stop_parser.add_argument("--actor", default=argparse.SUPPRESS, help="请求者(顾问实例; 缺省 = --relayed-by)")
+    loop_stop_parser.add_argument("--timeout", dest="stop_timeout", type=float, default=None,
+                                  help="有界等待 / 清理秒数(缺省与上限读 verbs.schema lybra_loop.stop)")
+    loop_stop_parser.add_argument("--dry-run", action="store_true", default=False, help="预演: 只列将停的运行与将清理 / 未清理项, 零写入、不发信号")
+    loop_stop_parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output JSON")
 
     # AIPOS-F168 件①②: `lybra owner inbox / decide` —— Owner 待决收件箱与一处裁决(声明 verbs.schema lybra_owner_inbox / lybra_owner_decide;
     # 全部逻辑在 owner_inbox, 本处只注册参数)
@@ -6673,6 +6703,36 @@ def main(argv: list[str] | None = None) -> int:
             return _emit_landing(landing)
         return 0 if landing is None or landing["landed"] else int(landing["exit_code"])
 
+    if args.command == "queue" and getattr(args, "queue_command", None) in ("pause", "resume"):
+        # AIPOS-F231 件①: Owner 暂停 / 恢复在途卡(唯一实现 board_adapter.pause_task; 写出的决策记录经 queue_writers 落账)
+        from tools.aipos_cli.board_adapter import pause_task
+        from tools.aipos_cli.owner_inbox import InboxUsageError
+        from tools.aipos_cli.verb_contract import declared_exit_code
+
+        verb = f"lybra_queue_{args.queue_command}"
+        try:
+            result = pause_task(args.task_id, action=args.queue_command, relayed_by=args.relayed_by, owner_words=args.owner_words,
+                                owner_ref=args.owner_ref, dry_run=not args.confirm, repo_root=repo_root)
+        except InboxUsageError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return declared_exit_code(verb, "usage")
+        except (FileNotFoundError, OSError, ValueError, LookupError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return declared_exit_code(verb, "blocked")
+        landing = None
+        if args.confirm and result.get("written"):
+            landing = _land_queue_entry(repo_root, result, actor=str(result.get("relayed_by") or args.relayed_by),
+                                        subcommand=args.queue_command, task_id=result["task_id"], written=result["written"])
+        if args.json:
+            print(render_json(result))
+        else:
+            print(result["line"])
+        if not result.get("ok"):
+            return declared_exit_code(verb, "blocked")
+        if landing is not None and not args.json:
+            return _emit_landing(landing)
+        return 0 if landing is None or landing["landed"] else declared_exit_code(verb, "landing_failed")
+
     if args.command == "queue" and getattr(args, "queue_command", None) == "correct":
         # AIPOS-F207 件②: Owner 纠正已结案卡(唯一实现 board_adapter.correct_closed_task; 写出文件经 queue_writers 落账)
         from tools.aipos_cli.board_adapter import correct_closed_task, render_correct_text
@@ -7085,6 +7145,10 @@ def main(argv: list[str] | None = None) -> int:
             # AIPOS-F168 件③: 薄壳 — 全部逻辑在 loop_run_record.annotate_owner_ask
             from tools.aipos_cli.loop_run_record import loop_note_cli
             return loop_note_cli(args)
+        if getattr(args, "loop_action", None) == "stop":
+            # AIPOS-F231 件②: 协作式停线薄壳 — 全部逻辑在 loop_run_record.stop_run(声明 verbs.schema lybra_loop_stop / lybra_loop.stop)
+            from tools.aipos_cli.loop_run_record import stop_cli
+            return stop_cli(args)
         if getattr(args, "loop_action", None) == "status":
             # AIPOS-F131 件②: 只读薄壳 — 全部逻辑在 loop_run_record(判据唯一 judge_run)
             from tools.aipos_cli.loop_run_record import loop_status_cli
@@ -7113,8 +7177,17 @@ def main(argv: list[str] | None = None) -> int:
                 return int(lane_view_declaration()["invalid_lane_exit_code"])
             if args.task_id:
                 # 单卡模式
-                result = derive_next_step(args.task_id, ws_root)
-                
+                # AIPOS-F231 件①: Owner 暂停的卡 = 「已暂停」(推导硬停形, 给恢复命令; 唯一判定 loop_driver.card_paused_stop → owner_inbox.card_pause_state)
+                from tools.aipos_cli.loop_driver import card_paused_stop
+
+                paused = card_paused_stop(Path(ws_root), args.task_id)
+                result = paused if paused is not None else derive_next_step(args.task_id, ws_root)
+                if run_mode and paused is not None:
+                    from tools.aipos_cli.queue_mutation import pause_declaration
+
+                    print(pause_declaration()["texts"]["next_run_refused"].format(line=paused["pause"]["line"]), file=sys.stderr)
+                    return 1
+
                 if run_mode and result.get("derivable"):
                     # AIPOS-F73件③: 推导后立即执行
                     from tools.aipos_cli.next_resolver import execute_derived_action

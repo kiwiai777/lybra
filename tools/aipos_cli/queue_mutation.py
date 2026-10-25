@@ -353,6 +353,34 @@ def correct_declaration() -> dict[str, Any]:
             "followup": {**followup, **templates, "inherit_fields": inherit}}
 
 
+PAUSE_DECL_KEYS = ("pause_choice", "resume_choice", "from_states", "actor_role_class", "end_reason", "texts", "exit_codes")
+PAUSE_TEXT_KEYS = ("paused_line", "resume_command", "preview_line", "done_line", "blocked_line", "not_found", "bad_state", "already_paused",
+                   "not_paused", "role_refused", "next_run_refused", "pause_action", "resume_action")
+
+
+def pause_declaration() -> dict[str, Any]:
+    """AIPOS-F231 件①: Owner 暂停 / 恢复卡声明唯一读取口 verbs.schema lybra_queue_pause。缺键 / from_states 含非队列目录 / 两个选项未在
+    收件箱声明 / end_reason 未在 loop 结束原因声明 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    verbs = load_schema("verbs", code_repo_schema_root()).get("verbs") or {}
+    spec = verbs.get("lybra_queue_pause")
+    where = "verbs.schema.json verbs.lybra_queue_pause"
+    if not isinstance(spec, dict) or any(not spec.get(k) for k in PAUSE_DECL_KEYS):
+        raise SchemaLoadError(f"{where} 未声明齐 {list(PAUSE_DECL_KEYS)}")
+    texts = spec["texts"]
+    if not isinstance(texts, dict) or any(not isinstance(texts.get(k), str) or not texts[k] for k in PAUSE_TEXT_KEYS):
+        raise SchemaLoadError(f"{where}.texts 未声明齐 {list(PAUSE_TEXT_KEYS)}")
+    bad = [x for x in spec["from_states"] if x not in QUEUE_STATES]
+    if bad:
+        raise SchemaLoadError(f"{where}.from_states 含非队列目录 {bad}")
+    require_inbox_choices([spec["pause_choice"], spec["resume_choice"]], f"{where}.pause_choice / resume_choice")
+    reasons = (((verbs.get("lybra_loop") or {}).get("run_record") or {}).get("end_reasons")) or {}
+    if spec["end_reason"] not in reasons:
+        raise SchemaLoadError(f"{where}.end_reason {spec['end_reason']!r} 须为 lybra_loop.run_record.end_reasons 已声明者")
+    return {**spec, "from_states": tuple(str(x) for x in spec["from_states"])}
+
+
 def require_inbox_choices(choices: Any, where: str, *, pinned: tuple[str, str] | None = None) -> list[str]:
     """AIPOS-F213 件③(F208 P1-8 选项): 跨文件选项引用的唯一校验(原 correct.decision_choice 内联校验上提, 禁第二实现)——choices
     (非空字符串列表)每项须为收件箱声明 verbs.lybra_owner_inbox.options 的键; pinned = (类别, 事由) 时另须 ∈ 该类别

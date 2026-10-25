@@ -407,6 +407,78 @@ def auto_release_stop(governance_root: Path, task_id: str) -> dict[str, Any] | N
     return None if later else latest
 
 
+def pause_rulings(governance_root: Path, task_id: str, spec: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """AIPOS-F231 件①: 本卡的暂停 / 恢复裁决(选项属声明 pause_choice / resume_choice), 旧→新(rulings_for_task 同序)。读不出 = 向上。"""
+    from tools.aipos_cli.queue_mutation import pause_declaration
+
+    spec = spec or pause_declaration()
+    keys = (str(spec["pause_choice"]), str(spec["resume_choice"]))
+    chain = [r for r in rulings_for_task(Path(governance_root), task_id) if str(r.get("allowed_next_action") or "") in keys]
+
+    def _order(ruling: dict[str, Any]) -> tuple[str, int]:
+        # 裁决时刻秒精度: 同秒的暂停 / 恢复(CLI 与收件箱各记一条)按记录文件写入先后定序(同机写入, 不按文件名哈希序)
+        try:
+            written = Path(str(ruling.get("_path") or "")).stat().st_mtime_ns
+        except OSError:
+            written = 0
+        return (str(ruling.get("decided_at") or ""), written)
+
+    return sorted(chain, key=_order)
+
+
+def card_pause_state(governance_root: Path, task_id: str) -> dict[str, Any] | None:
+    """AIPOS-F231 件① 卡暂停唯一判定(loop 拒起 / 步间停、lybra next、loop status、queue pause / resume 前置同读): 本卡收件箱裁决
+    (rulings_for_task, 旧→新)中最近一条选项属 {pause_choice, resume_choice}(声明 verbs.lybra_queue_pause)者为 pause_choice = 已暂停 →
+    {decision_id, decided_at, owner_words, relayed_by, record, line(声明 paused_line 渲染, 含恢复命令), resume_command}; 否则 None。
+    记录追加不覆盖(每次暂停 / 恢复各一份决策记录), 判定只看最近一条。读不出 = 向上(fail-closed, 不猜成未暂停)。"""
+    from tools.aipos_cli.queue_mutation import pause_declaration
+
+    spec = pause_declaration()
+    chain = pause_rulings(Path(governance_root), task_id, spec)
+    latest = chain[-1] if chain else None
+    if latest is None or str(latest.get("allowed_next_action") or "") != str(spec["pause_choice"]):
+        return None
+    texts = spec["texts"]
+    resume_cmd = _fmt(texts["resume_command"], "lybra_queue_pause.texts.resume_command", governance_root=str(governance_root), task_id=task_id)
+    state = {"task_id": task_id, "decision_id": str(latest.get("decision_id") or ""), "decided_at": str(latest.get("decided_at") or ""),
+             "owner_words": latest.get("owner_words") or "", "relayed_by": latest.get("relayed_by") or latest.get("captured_by") or "",
+             "record": str(latest.get("_path") or ""), "resume_command": resume_cmd, "end_reason": str(spec["end_reason"])}
+    state["line"] = _fmt(texts["paused_line"], "lybra_queue_pause.texts.paused_line", **state)
+    return state
+
+
+def apply_card_pause(governance_root: Path, view: dict[str, Any], na: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F231 件①: loop status 每个运行的下一动作(在 apply_owner_ruling 之后、apply_owner_tier 之前调)——
+    - 本卡已暂停(card_pause_state)且该运行事项不是刚被裁成「暂停」(那条走 owner_ruled 转达顾问: 暂停, 不续跑)= owner_needed(reason = 声明
+      end_reason paused, detail = 暂停行含恢复命令, hint = 恢复命令; 不给「重跑 loop」), 收件箱事项锚点 = 暂停裁决(inbox_anchor = pause:<裁决 ID>;
+      同一运行暂停前后是两件事), 该事项已有裁决 = apply_owner_ruling 同一构造;
+    - 本卡已恢复而运行以 paused 结束(最近一条暂停 / 恢复裁决 = 恢复)= advisor_fix(owner_ruled), 裁决行 + 恢复选项 advisor_next(原命令续跑 loop);
+    - 卡已结案 / 其余 = 原样。读不出 = 向上。"""
+    from tools.aipos_cli.queue_mutation import pause_declaration
+
+    if not isinstance(na, dict) or na.get("action") == "card_done_take_next":
+        return na
+    task_id = str(view.get("task_id") or "")
+    if not task_id:
+        return na
+    spec = pause_declaration()
+    pause = card_pause_state(Path(governance_root), task_id)
+    if pause is None:
+        chain = pause_rulings(Path(governance_root), task_id, spec)
+        if na.get("reason") == spec["end_reason"] and chain and str(chain[-1].get("allowed_next_action") or "") == str(spec["resume_choice"]):
+            prev = next((r for r in reversed(chain[:-1]) if str(r.get("allowed_next_action") or "") == str(spec["pause_choice"])), None)
+            iid = loop_item_id(Path(governance_root), task_id, f"pause:{(prev or chain[-1]).get('decision_id')}")
+            return _ruled_action(Path(governance_root), view, na, iid, chain[-1], inbox_declaration())
+        return na
+    ruled = na.get("owner_ruling") if na.get("reason") == "owner_ruled" else None
+    if isinstance(ruled, dict) and str(ruled.get("decision_id") or "") == pause["decision_id"]:
+        return na  # 正是该运行事项上刚裁的「暂停」: 转达顾问(暂停, 不续跑), 不再另列 Owner 事项
+    paused = {"action": "owner_needed", "reason": pause["end_reason"], "detail": pause["line"], "hint": pause["resume_command"],
+              "pause": {k: pause[k] for k in ("decision_id", "decided_at", "owner_words", "relayed_by", "record")},
+              "inbox_anchor": f"pause:{pause['decision_id']}", "paused_from": {"action": na.get("action"), "reason": na.get("reason")}}
+    return apply_owner_ruling(Path(governance_root), view, paused)
+
+
 def revocable_notices(inbox: dict[str, Any], decl: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """AIPOS-F228(设计稿 §5「已自动放行」栏): 收件箱数据(collect_inbox, CLI / 看板同读)中可撤回的第二档事项 = notices 里选项含
     tiers.tier2.auto_release.revoke_option 的事项(现为 auto_released 类), 保持 notices 原序。看板该栏与撤回按钮只读本函数, 禁第二份判定;
@@ -865,7 +937,7 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
         title = (str(card_fm.get("title") or "").strip() or None) if card_fm else _card_title(card_path, errors, project)
         item = _base_item(
             decl, project=project, governance_root=root, category="loop_owner_needed", rank=int(cat["rank"]), subject=subject,
-            anchor=str(view.get("run_id") or ""), source=driver,
+            anchor=str(na.get("inbox_anchor") or view.get("run_id") or ""), source=driver,  # AIPOS-F231: 已暂停 = 暂停裁决锚点
             ask=str(ask_rec.get("ask") or na.get("detail") or reason), recommend=recommend,
             impact=(_fmt(ask_spec["impact"], "categories.loop_owner_needed.advisor_ask.impact", task_id=task_id,
                          end_reason=str(view.get("end_reason") or na.get("reason") or "?")) if advisor_ask
@@ -2458,7 +2530,8 @@ def _mirror_single(report: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 def loop_item_id(governance_root: Path, task_id: str, run_id: str, decl: dict[str, Any] | None = None) -> str:
-    """loop 类事项 ID(收件箱 _loop_items 同一构造: 项目 = 治理根目录名, 主体 = 声明 subject, 锚点 = run_id)。"""
+    """loop 类事项 ID(收件箱 _loop_items 同一构造: 项目 = 治理根目录名, 主体 = 声明 subject, 锚点 = run_id; AIPOS-F231: 已暂停卡 = 下一动作
+    inbox_anchor, 即 pause:<暂停裁决 ID>)。"""
     decl = decl or inbox_declaration()
     root = Path(governance_root).resolve()
     subject = _fmt(decl["categories"]["loop_owner_needed"]["subject"], "categories.loop_owner_needed.subject", task_id=task_id)
@@ -2500,7 +2573,8 @@ def apply_owner_ruling(governance_root: Path, view: dict[str, Any], na: dict[str
         return _apply_owner_ask(Path(governance_root), view, na)
     decl = inbox_declaration()
     task_id = str(view.get("task_id") or "")
-    iid = loop_item_id(Path(governance_root), task_id, str(view.get("run_id") or ""), decl)
+    # AIPOS-F231 件①: 已暂停卡的事项锚点 = 暂停裁决(apply_card_pause 给 inbox_anchor), 其余 = run_id
+    iid = loop_item_id(Path(governance_root), task_id, str(na.get("inbox_anchor") or view.get("run_id") or ""), decl)
     ruling = read_ruling(Path(governance_root), iid, decl)
     if ruling is None:
         return {**na, "inbox_item_id": iid}

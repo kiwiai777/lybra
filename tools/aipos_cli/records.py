@@ -42,27 +42,34 @@ _GROUP_KINDS: dict[str, tuple[str, str]] = {
 
 
 def _group_fingerprint(group_root: Path) -> tuple | None:
-    """组指纹 = 按 (相对路径, mtime_ns, size) 排序元组(纯文件系统事实, 跨进程生效)。
+    """组指纹 = 按 (路径, mtime_ns, size) 排序元组(纯文件系统事实, 跨进程生效)。
 
-    None = 目录不存在。成本 = 一次 scandir 遍历(不读文件内容), 千级文件毫秒量级。
+    None = 目录不存在。成本 = 一次 scandir 遍历(不读文件内容)。
+    AIPOS-F229 件②(廉价化, 判据不变): 只对候选记录文件(.md 普通文件)取 stat——子目录 / 非 .md 项按 scandir 自带的类型判定
+    (d_type, 无额外系统调用)分流, 原先对每个目录项都 lstat 一次; 字符串路径代替 Path 对象。同一请求内经 load_records 请求级
+    memo 每组只算一次(原总览同项目 5 次)。
     """
-    if not group_root.is_dir():
+    root = os.fspath(group_root)
+    if not os.path.isdir(root):
         return None
     entries: list[tuple[str, int, int]] = []
-    stack = [group_root]
+    append = entries.append
+    stack = [root]
     while stack:
         cur = stack.pop()
         try:
             with os.scandir(cur) as it:
                 for entry in it:
                     try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                            continue
+                        if not entry.name.endswith(".md") or not entry.is_file(follow_symlinks=False):
+                            continue
                         st = entry.stat(follow_symlinks=False)
                     except OSError:
                         continue
-                    if entry.is_dir(follow_symlinks=False):
-                        stack.append(Path(entry.path))
-                    elif entry.name.endswith(".md") and entry.is_file(follow_symlinks=False):
-                        entries.append((entry.path, st.st_mtime_ns, st.st_size))
+                    append((entry.path, st.st_mtime_ns, st.st_size))
         except OSError:
             continue
     entries.sort()
@@ -491,7 +498,38 @@ def load_records(
       groups: 只加载指定分组(如 {"claims", "returns"});未列分组为空集。
       task_id: 只加载该任务名下子目录(标准分组按 <group>/<task_id>/ 取; 平铺的
                owner_decisions 不受此约束)。子集加载不走缓存(子集本身便宜)。
+    AIPOS-F229 件③: 处在请求级只读作用域(task_loader.read_request_scope, 看板总览 / 收件箱等一次只读请求)内时, 同一治理根的
+    全量加载每请求只算一次(原总览同项目 5 次: 每次 9 组全量 stat 指纹 + 建索引); 每次交出一份容器副本(_copy_out_records:
+    顶层字典与各列表 / 索引的列表各自新建, 记录字典本身与 F55 组缓存同样共享)。作用域外 = 每次照算(门写动作与逐次调用不变)。
     """
+    if groups is None and task_id is None:
+        from tools.aipos_cli.task_loader import request_memo, request_scope_active
+
+        if request_scope_active():
+            root_key = str(Path(repo_root).resolve())
+            return _copy_out_records(request_memo(("records.load_records", root_key), lambda: _load_records(repo_root)))
+    return _load_records(repo_root, groups=groups, task_id=task_id)
+
+
+def _copy_out_records(result: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F229 件③: load_records 结果的容器副本(调用方增删列表 / 索引项不串到同一请求的别的视图)。"""
+    out: dict[str, Any] = {}
+    for key, value in result.items():
+        if isinstance(value, list):
+            out[key] = list(value)
+        elif isinstance(value, dict):
+            out[key] = {k: list(v) if isinstance(v, list) else (dict(v) if isinstance(v, dict) else v) for k, v in value.items()}
+        else:
+            out[key] = value
+    return out
+
+
+def _load_records(
+    repo_root: Path,
+    *,
+    groups: Iterable[str] | None = None,
+    task_id: str | None = None,
+) -> dict[str, Any]:
     from tools.aipos_cli.record_writer import records_root
 
     records_root_path = repo_root / records_root()

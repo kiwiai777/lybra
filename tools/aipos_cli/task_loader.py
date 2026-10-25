@@ -305,8 +305,11 @@ def task_card_lookup_scope(repo_root: Path) -> Iterator[None]:
     视图扫描逐卡 derive_next_step 各建一趟全队列索引 = O(卡数²), lybra 治理根 1000+ 卡单次 loop status 70 秒); 根不同 = 新建。
     作用域只活在一次只读调用内(视图命令 / 一次推导), 退出即弃, 不跨调用缓存。
     AIPOS-F177 件③: 处在请求级作用域(read_request_scope)内时, 进入新根 = 把该根加进请求作用域(请求结束才弃), 同一请求里各视图共用。"""
-    root = Path(repo_root).resolve()
     current = _LOOKUP_INDEX.get()
+    if current is not None and Path(repo_root) in current["roots"]:  # AIPOS-F229: already a resolved key = no realpath walk
+        yield
+        return
+    root = Path(repo_root).resolve()
     if current is not None and root in current["roots"]:
         yield
         return
@@ -334,6 +337,12 @@ def read_request_scope() -> Iterator[None]:
         yield
     finally:
         _LOOKUP_INDEX.reset(token)
+
+
+def request_scope_active() -> bool:
+    """AIPOS-F229: True = inside a request-level read scope (read_request_scope), i.e. request_memo memoises."""
+    scope = _LOOKUP_INDEX.get()
+    return scope is not None and bool(scope["request"])
 
 
 def request_memo(key: tuple[Any, ...], compute: Callable[[], Any]) -> Any:
@@ -398,8 +407,18 @@ def find_task_card(repo_root: Path, task_id: str, *, states: tuple[str, ...] | N
 
 
 def load_all_tasks(repo_root: Path | None = None) -> list[dict[str, Any]]:
+    """All queue cards (iter_queue_task_paths order), each normalised by load_task_file. AIPOS-F229 item 3: inside a request-level
+    read scope (read_request_scope) one load per governance root per request (the board overview used to load every project's
+    queue three times: get_queue / get_needs_owner / owner truth view); every call gets private copies of the task dicts
+    (frontmatter._fresh_copy). Outside a request scope = loaded every call (unchanged)."""
     resolved_root = find_repo_root(repo_root)
-    return [load_task_file(path, resolved_root) for path in iter_queue_task_paths(resolved_root)]
+    if not request_scope_active():
+        return [load_task_file(path, resolved_root) for path in iter_queue_task_paths(resolved_root)]
+    from tools.aipos_cli.frontmatter import _fresh_copy
+
+    tasks = request_memo(("task_loader.load_all_tasks", str(resolved_root)),
+                         lambda: [load_task_file(path, resolved_root) for path in iter_queue_task_paths(resolved_root)])
+    return [_fresh_copy(task) for task in tasks]
 
 
 def find_task_by_id(task_id: str, repo_root: Path | None = None) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
