@@ -296,7 +296,8 @@ def test_item3_supersede_claimed_card_with_recent_session(rig: dict) -> None:
     w = withdraw_task(task_id="AIPOS-F184C", actor=DRIVER, reason="Owner 改目标", dry_run=True, repo_root=gov)
     refusal = str((w.get("errors") or [{}])[0].get("message") or "")
     _show(f"[件③] 对照: withdraw 预演 = {w.get('verdict')} — {refusal}")
-    assert w.get("verdict") == "BLOCK" and "less than 24 hours" in refusal  # 在途会话保护(24h)拒撤回; supersede 凭 Owner 裁决不受此限
+    # AIPOS-F234 件①: 在途保护按真相判(存活 loop 运行 / 拉起进程), 不再看会话创建时刻——近期会话而无存活进程 = 非在途, 撤回预演放行
+    assert w.get("verdict") != "BLOCK" and (w.get("data") or {}).get("in_transit", {}).get("in_transit") is False, refusal
     words = "F184C 改为统一到官方设计系统, 原目标不做了"
     rc, out, err = _cli(gov, "queue", "supersede", "--task-id", "AIPOS-F184C", "--by", "AIPOS-F184N", "--actor", DRIVER,
                         "--owner-words", words, "--owner-ref", "chat-2026-10-18")

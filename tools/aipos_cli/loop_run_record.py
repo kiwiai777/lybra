@@ -976,6 +976,68 @@ def live_run_conflict(governance_root: Path, task_id: str, *, own: dict[str, Any
     return None
 
 
+def _run_touches_card(meta: dict[str, Any], card: str) -> bool:
+    """运行即本卡的 loop, 或其步 / 当前步 / 拉起涉及本卡(审计拉起记在被审业务卡的运行记录里)。"""
+    if str(meta.get("task_id") or "") == card:
+        return True
+    items = [meta.get("current_step"), *(meta.get("steps") or []), *(meta.get("launches") or [])]
+    return any(isinstance(x, dict) and str(x.get("card") or "") == card for x in items)
+
+
+def card_in_transit(governance_root: Path, task_id: str, *, related: list[str] | tuple[str, ...] = (),
+                    contract: dict[str, Any] | None = None, now: datetime | None = None,
+                    local_host: str | None = None) -> dict[str, Any]:
+    """AIPOS-F234 件①: 卡是否在途(唯一判定; 撤回在途保护预演与正式同读 queue_mutation.withdraw_in_transit_check)。
+    在途 = 本卡有存活的 loop 运行或执行 / 审计拉起进程, 不看会话创建时刻。扫本卡与 related(审计卡 = 其被审业务卡: 审计拉起记在
+    业务卡运行记录里)目录下的运行记录, 只看运行本身即本卡或其步 / 拉起涉及本卡者:
+      - 未结束运行: judge_run(lybra loop status 同一判定)∈ single_instance.live_states = 在途(kind loop); 记于别的主机(unprobeable)=
+        按 single_instance 同一心跳判(updated_at 距今 ≤ run_record.<unprobeable_heartbeat_key> 秒 = 在途, kind unprobeable);
+      - 运行已结束 / loop 已不在: 本卡拉起(launches card = 本卡且无 ended_at)经 process_alive(进程启动时刻指纹)仍在 = 在途(kind launch);
+        远端拉起本机客户端已不在而远端组未收尾 = 无从核验, 按在途(kind remote_unverified, fail-closed)。
+    返回 {task_id, in_transit, live: [{kind, run_id, run_task, host, pid, state?, card?, harness?, remote_pgid?, age?}], runs}。
+    运行记录读不出 / 探活无权限 = LoopRunRecordError 上抛(调用方 fail-closed)。只读, 不发信号。"""
+    from tools.aipos_cli.loop_driver import load_loop_contract
+
+    contract = contract or load_loop_contract()
+    decl = run_record_declaration(contract)
+    si = single_instance_declaration(contract)
+    now = now or utc_now()
+    local_host = local_host or socket.gethostname()
+    card = str(task_id or "").strip()
+    live: list[dict[str, Any]] = []
+    runs = 0
+    for owner in dict.fromkeys(x for x in (card, *related) if str(x or "").strip()):
+        for path in _run_files(loop_runs_dir(Path(governance_root), str(owner))):
+            meta = read_run(path, decl)
+            if not _run_touches_card(meta, card):
+                continue
+            runs += 1
+            base = {"run_id": meta.get("run_id"), "run_task": str(meta.get("task_id") or owner), "host": meta.get("host"),
+                    "pid": meta.get("pid"), "record": str(path)}
+            if meta.get("status") != "ended":
+                view = judge_run(meta, decl, now=now, local_host=local_host)
+                if view["state"] == "unprobeable":
+                    age = _seconds(_parse_iso(meta.get("updated_at")), now)
+                    if age is not None and age <= int(decl[str(si["unprobeable_heartbeat_key"])]):
+                        live.append({**base, "kind": "unprobeable", "state": view["state"], "age": age})
+                    continue
+                if view["state"] in si["live_states"]:
+                    live.append({**base, "kind": "loop", "state": view["state"]})
+                    continue
+            for launch in (meta.get("launches") or []):
+                if not isinstance(launch, dict) or str(launch.get("card") or "") != card or launch.get("ended_at"):
+                    continue
+                item = {**base, "card": card, "harness": launch.get("harness"), "host": launch.get("host") or meta.get("host"),
+                        "pid": launch.get("pid"), "remote_pgid": launch.get("remote_pgid")}
+                if str(meta.get("host") or "") != local_host:
+                    live.append({**item, "kind": "remote_unverified"})  # 别机记录的未收尾拉起: 本机无从核验
+                elif process_alive(launch.get("pid"), launch.get("process_fingerprint")):
+                    live.append({**item, "kind": "launch"})
+                elif launch.get("transport") == "remote" and launch.get("remote_pgid"):
+                    live.append({**item, "kind": "remote_unverified"})
+    return {"task_id": card, "in_transit": bool(live), "live": live, "runs": runs}
+
+
 _RESOURCE_LOCK_KEYS = ("card_field", "enum", "wait_kind", "end_reason", "waiting_message", "acquired_message")
 
 
@@ -1378,8 +1440,9 @@ def stop_candidates(governance_root: Path, meta: dict[str, Any], *, exclude_pids
     return out
 
 
-def _wait_gone(governance_root: Path, task_id: str, alive: Callable[[], bool], seconds: float) -> None:
-    """有界等目标进程退出(经唯一等待原语 agent_watch_fs.run_fs_watch 的 stop_when; 禁 sleep 自旋)。"""
+def _wait_gone(governance_root: Path, task_id: str, alive: Callable[[], bool], seconds: float, *, interval: float = 0.2) -> None:
+    """有界等目标进程退出(经唯一等待原语 agent_watch_fs.run_fs_watch 的 stop_when; 禁 sleep 自旋)。
+    AIPOS-F234 件③: 合并后回归排队串行同经此(alive = 仍有在前的回归; interval 放宽, 每轮判定要扫回归记录)。"""
     import contextlib
     import io
 
@@ -1391,7 +1454,7 @@ def _wait_gone(governance_root: Path, task_id: str, alive: Callable[[], bool], s
     root = loop_runs_dir(Path(governance_root), task_id)
     root.mkdir(parents=True, exist_ok=True)
     with contextlib.redirect_stdout(io.StringIO()):
-        run_fs_watch(_watch_args(root, [".lybra-stop-wait-never"], max_wait=seconds, interval=0.2), stop_when=lambda: not alive())
+        run_fs_watch(_watch_args(root, [".lybra-stop-wait-never"], max_wait=seconds, interval=interval), stop_when=lambda: not alive())
 
 
 def stop_cleanup(governance_root: Path, meta: dict[str, Any], *, timeout: float, dry_run: bool = False,
@@ -1720,6 +1783,18 @@ def loop_status(governance_root: Path, task_id: str | None = None, *, now: datet
             from tools.aipos_cli.owner_inbox import auto_release_records, revoked_auto_release_ids
 
             report["supplementary_audit"] = supplementary_audit_chain(Path(governance_root), task_id)
+            # AIPOS-F234 件②: 孤儿审计卡(本卡或本卡的在途审计卡, 业务卡已撤回 / 撤换 / 结案)= 给「随业务卡撤回」出口(唯一判定
+            # queue_mutation.orphan_audit_state), 并入下一动作提示
+            from tools.aipos_cli.queue_mutation import orphan_audits_for
+
+            orphans = orphan_audits_for(Path(governance_root), task_id)
+            report["orphan_audits"] = orphans
+            na = report.get("next_action")
+            if orphans and isinstance(na, dict):
+                extra = "\n".join(str(o["suggested"]) for o in orphans)
+                report["next_action"] = {**na, "orphan_audits": orphans, "hint": f"{na.get('hint')}\n{extra}" if na.get("hint") else extra}
+                if report.get("runs"):
+                    report["runs"][-1]["next_action"] = report["next_action"]
             # AIPOS-F225 件②: 本卡第二档自动放行记录(读口唯一 owner_inbox.auto_release_records; 已撤回标 revoked)
             revoked = revoked_auto_release_ids(Path(governance_root), task_id)
             report["auto_release_records"] = [{k: r.get(k) for k in ("auto_release_id", "kind", "released_at", "basis", "round", "verdict_ref", "_path")}
@@ -2635,7 +2710,8 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
         if report.get("lane_filter"):
             what += f"(lane {lane_filter_label(report['lane_filter'])})"
         unfinished = [row["line"] for row in report.get("post_merge_regression_unfinished") or []]  # AIPOS-F166 件③
-        return "\n".join([f"{what}(落点 {report['loop_runs_root']})", *unfinished, *summary])
+        orphans = [str(o["suggested"]) for o in report.get("orphan_audits") or []]  # AIPOS-F234 件②: 孤儿审计卡出口
+        return "\n".join([f"{what}(落点 {report['loop_runs_root']})", *orphans, *unfinished, *summary])
     marker = str(lane_view_declaration()["visible_cards"]["frozen_marker"])
     out: list[str] = []
     for v in runs:

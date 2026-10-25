@@ -5022,6 +5022,20 @@ def _derive_next_step(
     # (本轮审的不是卡分支当前 tip)= 不可推导: 不开工、报告不入门, 出口 = 驱动方重交回被审卡(产品随后派下一轮)
     # -----------------------------------------------------------------------
     if is_audit_card and queue_dir in ("pending", "claimed"):  # 未认领的在途轮同判: 作废/过期的轮次不再派认领
+        # AIPOS-F234 件②: 孤儿审计卡(业务卡已撤回 / 撤换 / 结案; 唯一判定 queue_mutation.orphan_audit_state)= 不再审计、不补跑旧命令,
+        # 出口 = 随业务卡撤回(命令原文); 先于轮次 / 报告判据(业务卡已不推进, 其报告缺项不再要审计体补做)
+        from tools.aipos_cli.queue_mutation import orphan_audit_state
+
+        orphan = orphan_audit_state(workspace_root, task_id, fm)
+        if orphan is not None:
+            return {
+                "task_id": task_id, "derivable": False, "current_node": "orphan_audit", "current_state": queue_dir,
+                "triggered_by": "advisor", "command": "", "verb": "", "missing_records": [],
+                "suggested_action": orphan["suggested"],
+                "notes": f"{orphan['note']}(AIPOS-F234 件②, 声明 transitions queue_mutations.in_transit_guard)",
+                "orphan_audit": orphan,
+                "action": {"type": "orphan_audit_withdraw", "card": task_id, "command": orphan["command"]},
+            }
         round_guard = _audit_round_guard(workspace_root, task_id, fm, conn_arg, queue_dir=queue_dir)
         if round_guard is not None:
             return round_guard

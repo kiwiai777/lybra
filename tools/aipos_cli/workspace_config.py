@@ -928,6 +928,8 @@ def project_repos(governance_root: str | Path, *, project: dict[str, Any] | None
             "project_json_exists": exists}
 
 
+#: AIPOS-F118 件② + AIPOS-F234 件③: test_contract.post_merge_regression 的键(config.schema 声明须恰为此集)
+PMR_KEYS = ("mode", "execution", "timeout_seconds", "timeout_recent_runs", "timeout_factor", "serialize")
 TEST_CONTRACT_KEYS = ("runall_path", "require_tests", "test_file_globs", "post_merge_regression", "isolation",
                       "ratchet", "residual_processes")  # AIPOS-F187 件①: 开工稿验证 / 交回节引用的项目声明(人读文本 / pgrep 式样)
 #: AIPOS-F187 件①: test_contract 的非空单行文本键(开工稿引用; 未声明 = None / 声明 default)
@@ -940,8 +942,8 @@ def _post_merge_regression_decl(test_contract_decl: dict[str, Any]) -> dict[str,
 
     decl = (test_contract_decl.get("schema") or {}).get("post_merge_regression")
     keys = (decl or {}).get("schema") if isinstance(decl, dict) else None
-    if not isinstance(keys, dict) or set(keys) != {"mode", "execution", "timeout_seconds"}:
-        raise SchemaLoadError("config.schema.json test_contract.schema.post_merge_regression.schema 未声明或键不为 mode/execution/timeout_seconds")
+    if not isinstance(keys, dict) or set(keys) != set(PMR_KEYS):
+        raise SchemaLoadError(f"config.schema.json test_contract.schema.post_merge_regression.schema 未声明或键不为 {'/'.join(PMR_KEYS)}")
     for key in ("mode", "execution"):
         values = keys[key].get("values")
         if not isinstance(values, list) or keys[key].get("default") not in values:
@@ -949,6 +951,11 @@ def _post_merge_regression_decl(test_contract_decl: dict[str, Any]) -> dict[str,
     default_timeout = keys["timeout_seconds"].get("default")
     if not isinstance(default_timeout, int) or isinstance(default_timeout, bool) or default_timeout < 1:
         raise SchemaLoadError("config.schema.json post_merge_regression.timeout_seconds.default 未声明或非正整数")
+    # AIPOS-F234 件③: 时限推导 / 排队键的缺省(缺省 = 行为不变)
+    runs, factor, serialize = (keys[k].get("default") for k in ("timeout_recent_runs", "timeout_factor", "serialize"))
+    if (not isinstance(runs, int) or isinstance(runs, bool) or runs < 0 or not isinstance(factor, (int, float)) or isinstance(factor, bool)
+            or factor < 1 or not isinstance(serialize, bool)):
+        raise SchemaLoadError("config.schema.json post_merge_regression.timeout_recent_runs(≥0 整数)/ timeout_factor(≥1 数)/ serialize(布尔)缺省未声明或形坏")
     return keys
 
 
@@ -1016,6 +1023,21 @@ def _apply_post_merge_regression(current: dict[str, Any], keys: dict[str, Any], 
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             raise ValueError(f"TEST_CONTRACT_INVALID: {label}.post_merge_regression.timeout_seconds={value!r} 须为正整数(秒)")
         resolved["timeout_seconds"] = value
+    # AIPOS-F234 件③: 时限推导(近 N 次实测中位数 × 倍数, 声明值为下限)与并发排队
+    if "timeout_recent_runs" in raw:
+        value = raw["timeout_recent_runs"]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"TEST_CONTRACT_INVALID: {label}.post_merge_regression.timeout_recent_runs={value!r} 须为 ≥0 整数(0 = 不推导)")
+        resolved["timeout_recent_runs"] = value
+    if "timeout_factor" in raw:
+        value = raw["timeout_factor"]
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or value < 1:
+            raise ValueError(f"TEST_CONTRACT_INVALID: {label}.post_merge_regression.timeout_factor={value!r} 须为 ≥1 的数")
+        resolved["timeout_factor"] = value
+    if "serialize" in raw:
+        if not isinstance(raw["serialize"], bool):
+            raise ValueError(f"TEST_CONTRACT_INVALID: {label}.post_merge_regression.serialize={raw['serialize']!r} 须为 true/false")
+        resolved["serialize"] = raw["serialize"]
     if resolved["mode"] == "block" and resolved["execution"] == "async":
         raise ValueError(
             f"TEST_CONTRACT_INVALID: {label}.post_merge_regression mode=block 不可配 execution=async"
@@ -1063,7 +1085,7 @@ def project_test_contract(governance_root: str | Path, repo_path: str | Path | N
         "test_file_globs": list(default_globs),
         "test_file_globs_source": "config.schema test_contract.test_file_globs.default",
         "post_merge_regression": {
-            **{key: pmr_keys[key]["default"] for key in ("mode", "execution", "timeout_seconds")},
+            **{key: pmr_keys[key]["default"] for key in PMR_KEYS},
             "source": "config.schema test_contract.post_merge_regression 缺省",
         },
         "isolation": isolation_defaults(decl),

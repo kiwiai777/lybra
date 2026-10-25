@@ -2449,7 +2449,25 @@ def build_parser() -> argparse.ArgumentParser:
     queue_withdraw_parser.add_argument("--actor", required=True, help="Actor performing the withdrawal")
     queue_withdraw_parser.add_argument("--reason", required=True, help="Reason for withdrawal")
     queue_withdraw_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    # AIPOS-F234 件①: 在途保护的显式确认出口(旗标名读声明 transitions queue_mutations.in_transit_guard.ack_flag; 判定唯一实现
+    # queue_mutation.withdraw_in_transit_check)
+    queue_withdraw_parser.add_argument("--ack-in-transit", dest="ack_in_transit", action="store_true", default=False,
+                                       help="AIPOS-F234: the card is in transit (a live loop run or launched executor / auditor process) and "
+                                            "you accept losing that in-flight work — withdraw anyway; the risk confirmation (with the live "
+                                            "processes) is written into withdrawal_reason. Without it an in-transit card is refused with the "
+                                            "loop stop exit. No effect when the card is not in transit")
     queue_withdraw_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    # AIPOS-F234 件②: 存量孤儿审计卡一次性扫描(声明 transitions queue_mutations.in_transit_guard; 唯一实现 board_adapter.withdraw_orphan_audits)
+    queue_orphan_parser = queue_subparsers.add_parser(
+        "orphan-audits", help="AIPOS-F234: list audit cards whose business card was already withdrawn / superseded / completed but which "
+                              "are still pending / claimed (preview by default, read-only); --confirm withdraws them one by one through "
+                              "queue withdraw and lands the writes")
+    queue_orphan_parser.add_argument("--actor", default=None, help="Advisor instance performing the withdrawal (required with --confirm)")
+    queue_orphan_mode = queue_orphan_parser.add_mutually_exclusive_group()
+    queue_orphan_mode.add_argument("--dry-run", action="store_true", help="Preview, zero writes (default)")
+    queue_orphan_mode.add_argument("--confirm", action="store_true", help="Withdraw every listed orphan audit card and land the writes")
+    queue_orphan_parser.add_argument("--json", action="store_true", help="Output JSON")
 
     # AIPOS-F184 件③: Owner 中途改目标 → 顾问凭 Owner 原话撤换在途卡(声明 transitions queue_mutations.transitions.supersede /
     # verbs.lybra_queue_supersede; 唯一实现 board_adapter.supersede_task)
@@ -6663,6 +6681,7 @@ def main(argv: list[str] | None = None) -> int:
                 reason=args.reason,
                 dry_run=args.dry_run,
                 repo_root=repo_root,
+                ack_in_transit=bool(getattr(args, "ack_in_transit", False)),
             )
         except (FileNotFoundError, OSError, ValueError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
@@ -6678,6 +6697,34 @@ def main(argv: list[str] | None = None) -> int:
         if landing is not None and not args.json:
             return _emit_landing(landing)
         return 0 if landing is None or landing["landed"] else int(landing["exit_code"])
+
+    if args.command == "queue" and getattr(args, "queue_command", None) == "orphan-audits":
+        # AIPOS-F234 件②: 存量孤儿审计卡(唯一实现 board_adapter.withdraw_orphan_audits; 写出经 queue_writers 落账)
+        from tools.aipos_cli.board_adapter import withdraw_orphan_audits
+
+        if args.confirm and not str(args.actor or "").strip():
+            print("Error: --confirm 须给 --actor <你的顾问实例>(撤回执行身份与落账提交身份)", file=sys.stderr)
+            return 2
+        try:
+            result = withdraw_orphan_audits(actor=str(args.actor or ""), confirm=bool(args.confirm), repo_root=repo_root)
+        except (FileNotFoundError, OSError, ValueError, LookupError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        landing = None
+        if args.confirm and result.get("written"):
+            landing = _land_queue_entry(repo_root, result, actor=str(args.actor), subcommand="orphan-audits",
+                                        task_id=",".join(i["task_id"] for i in result["items"] if i.get("ok")), written=result["written"])
+        if args.json:
+            print(render_json(result))
+        else:
+            for line in result["lines"]:
+                print(line)
+            if not args.confirm and result["items"]:
+                print("预演(未执行、未写任何文件)。执行: 原命令加 --confirm --actor <你的顾问实例>")
+        rc = 0 if result.get("ok") else 1
+        if landing is not None and not args.json:
+            return _emit_landing(landing) or rc
+        return rc if landing is None or landing["landed"] else int(landing["exit_code"])
 
     if args.command == "queue" and getattr(args, "queue_command", None) == "supersede":
         # AIPOS-F184 件③: 顾问凭 Owner 裁决撤换在途卡(唯一实现 board_adapter.supersede_task; 写出文件经 queue_writers 落账)
