@@ -336,6 +336,12 @@ def read_request_scope() -> Iterator[None]:
         _LOOKUP_INDEX.reset(token)
 
 
+def request_scope_active() -> bool:
+    """AIPOS-F229: True = inside a request-level read scope (read_request_scope), i.e. request_memo memoises."""
+    scope = _LOOKUP_INDEX.get()
+    return scope is not None and bool(scope["request"])
+
+
 def request_memo(key: tuple[Any, ...], compute: Callable[[], Any]) -> Any:
     """AIPOS-F177 件③: request-level memo. Inside a request-level read scope (read_request_scope) one value per key per request
     (e.g. the enrollment log split and matched once although every instance check of the onboarding page reads it; the gate
@@ -398,8 +404,18 @@ def find_task_card(repo_root: Path, task_id: str, *, states: tuple[str, ...] | N
 
 
 def load_all_tasks(repo_root: Path | None = None) -> list[dict[str, Any]]:
+    """All queue cards (iter_queue_task_paths order), each normalised by load_task_file. AIPOS-F229 item 3: inside a request-level
+    read scope (read_request_scope) one load per governance root per request (the board overview used to load every project's
+    queue three times: get_queue / get_needs_owner / owner truth view); every call gets private copies of the task dicts
+    (frontmatter._fresh_copy). Outside a request scope = loaded every call (unchanged)."""
     resolved_root = find_repo_root(repo_root)
-    return [load_task_file(path, resolved_root) for path in iter_queue_task_paths(resolved_root)]
+    if not request_scope_active():
+        return [load_task_file(path, resolved_root) for path in iter_queue_task_paths(resolved_root)]
+    from tools.aipos_cli.frontmatter import _fresh_copy
+
+    tasks = request_memo(("task_loader.load_all_tasks", str(resolved_root)),
+                         lambda: [load_task_file(path, resolved_root) for path in iter_queue_task_paths(resolved_root)])
+    return [_fresh_copy(task) for task in tasks]
 
 
 def find_task_by_id(task_id: str, repo_root: Path | None = None) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
