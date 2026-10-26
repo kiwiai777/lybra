@@ -5,7 +5,8 @@
 
 本模块 = 唯一实现(finalize 同步调用 / async 后台子进程同一函数 execute_check):
   - 策略: 项目声明 config.schema test_contract.post_merge_regression(唯一读取口 workspace_config.project_test_contract),
-    mode = warn | block | off(缺省 warn, 说理见声明), execution = sync | async, timeout_seconds = 整个检查总时限。
+    mode = warn | block | off(缺省 warn, 说理见声明), execution = sync | async, timeout_seconds = 单次全量时限(AIPOS-F242 件①:
+    合并后一跑与必要时的合并前基线一跑各自用一份, 不共用; 总上限 = 两跑之和, 记录分列 merged_timeout / baseline_timeout)。
   - 跑法: 复用测试清单本身(`bash <runall_path>`, 不另写执行器), 在合并提交的临时 detached worktree 里跑(产品仓工作树里的
     未跟踪文件不混入), 整个进程组超时 SIGKILL; 用完 worktree remove。
   - 失败集合口径: runall_discovery.failure_set(`✗` 行 + 失败文件段内 pytest FAILED/ERROR 节点; 与 run-all 基线 grep 同口径)。
@@ -379,13 +380,13 @@ def _pending_view(entry: dict[str, Any], now: Any = None) -> dict[str, Any]:
     from tools.aipos_cli.clock import iso_z, utc_now
 
     started = _parse_iso(entry.get("started_at")) if entry.get("started_at") else None
-    timeout = entry.get("timeout_seconds")
-    timeout = int(timeout) if isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and timeout > 0 else None
+    timeout = _total_timeout(entry)  # AIPOS-F242 件①: 预计最迟完成按总上限(两跑之和; 旧记录 = timeout_seconds)
     now = now or utc_now()
     return {"task_id": entry.get("task_id"), "record": entry.get("record"), "pid": entry.get("pid"), "host": entry.get("host"),
             "log": entry.get("log"), "started_at": iso_z(started) if started else None, "timeout_seconds": timeout,
             "deadline": iso_z(started + timedelta(seconds=timeout)) if started and timeout else None,
-            "elapsed_seconds": int((now - started).total_seconds()) if started else None}
+            "elapsed_seconds": int((now - started).total_seconds()) if started else None,
+            "per_run_timeout_seconds": entry.get("per_run_timeout_seconds")}
 
 
 def audit_baseline(governance_root: Path, commit: str) -> dict[str, Any]:
@@ -484,7 +485,9 @@ def render_audit_baseline(result: dict[str, Any]) -> str:
         lines.append(f"结论: {labels[AUDIT_BASELINE_PENDING]}(该 sha 的记录基线尚未落定, 可等)")
         lines.append(f"  进行中: 卡 {pending.get('task_id')} 记录 {pending.get('record')}(pid {pending.get('pid')} @ {pending.get('host') or '本机'}, "
                      f"日志 {pending.get('log')})")
-        lines.append(f"  开始 {pending.get('started_at') or '(记录未写开始时刻)'}, 时限 {pending.get('timeout_seconds') or '(未记)'}s, "
+        per_run = pending.get("per_run_timeout_seconds")
+        lines.append(f"  开始 {pending.get('started_at') or '(记录未写开始时刻)'}, 时限 {pending.get('timeout_seconds') or '(未记)'}s"
+                     + (f"(单次全量 {per_run}s × 跑数)" if per_run and per_run != pending.get("timeout_seconds") else "") + ", "
                      f"预计最迟 {pending.get('deadline') or '(不可推算)'} 完成"
                      + (f"(已运行 {pending['elapsed_seconds']}s)" if isinstance(pending.get("elapsed_seconds"), int) else ""))
         lines.append(f"下一步: 先做本卡 / 被审分支一侧(该侧仍须自跑一次全量); 交回前再查一次本命令, 或 `{result.get('wait_command')}` "
@@ -510,17 +513,20 @@ def _preview(items: list[str]) -> str:
 def execute_check(*, governance_root: Path, repo_root: Path, merge_commit: str, runall_path: str,
                   timeout_seconds: int, log_dir: Path | None = None) -> dict[str, Any]:
     """同步执行检查(finalize sync 与 async 子进程同一函数; AIPOS-F166 件③ `lybra regression run --confirm` 补跑同一函数)。
-    返回记录形字段(不含策略处置)。log_dir = 测试清单日志落点(regression_log_dir)。"""
-    deadline = time.monotonic() + timeout_seconds
+    返回记录形字段(不含策略处置)。log_dir = 测试清单日志落点(regression_log_dir)。
+    AIPOS-F242 件①: timeout_seconds = 单次全量时限(full_run_timeout 唯一推导)。合并后一跑与(无记录基线时)合并前基线一跑各用一份,
+    不共用——基线一跑不再只拿合并后一跑用剩的余量; 记录分列 merged_timeout / baseline_timeout / total_timeout_seconds 与依据
+    timeout_split_basis。基线已有可复用记录 = 只跑一跑(总上限 = 单次时限, 行为不变)。"""
     out: dict[str, Any] = {"merge_commit": merge_commit, "runall_path": runall_path, "timeout_seconds": timeout_seconds,
-                           "merged_complete": False, "notes": []}
+                           "merged_timeout": timeout_seconds, "total_timeout_seconds": timeout_seconds,
+                           "timeout_split_basis": _split_basis(timeout_seconds, runs=1), "merged_complete": False, "notes": []}
     try:
         pre = merge_parent(repo_root, merge_commit)
     except ValueError as exc:
         out.update(status="error", error=str(exc))
         return out
     out["pre_merge_commit"] = pre
-    merged = run_suite(repo_root, merge_commit, runall_path, deadline - time.monotonic(), log_dir)
+    merged = run_suite(repo_root, merge_commit, runall_path, timeout_seconds, log_dir)
     out["merged_log"], out["merged_seconds"] = merged.get("log"), merged.get("seconds")
     for key in ("concurrent_at_start", "concurrent_full_runs"):  # AIPOS-F234 件③
         if key in merged:
@@ -540,7 +546,10 @@ def execute_check(*, governance_root: Path, repo_root: Path, merge_commit: str, 
         if prev.get("execution") == "async" and prev.get("new_failures"):
             out["notes"].append(f"上次合并 {pre[:8]} 的异步回归结果: 新增失败 {len(prev['new_failures'])} 条 [{_preview(list(prev['new_failures']))}]")
     else:
-        before = run_suite(repo_root, pre, runall_path, deadline - time.monotonic(), log_dir)
+        # AIPOS-F242 件①: 基线一跑自带一份单次全量时限(不取合并后一跑的余量)
+        out.update(baseline_timeout=timeout_seconds, total_timeout_seconds=2 * timeout_seconds,
+                   timeout_split_basis=_split_basis(timeout_seconds, runs=2))
+        before = run_suite(repo_root, pre, runall_path, timeout_seconds, log_dir)
         out["baseline_log"], out["baseline_seconds"] = before.get("log"), before.get("seconds")
         if "concurrent_full_runs" in before:  # AIPOS-F234 件③
             out["concurrent_full_runs"] = before["concurrent_full_runs"]
@@ -556,6 +565,36 @@ def execute_check(*, governance_root: Path, repo_root: Path, merge_commit: str, 
     out["fixed_failures"] = sorted(set(baseline) - set(out["merged_failures"]))
     out["status"] = "new_failures" if out["new_failures"] else "pass"
     return out
+
+
+def _split_basis(timeout_seconds: int, *, runs: int) -> str:
+    """AIPOS-F242 件①: 记录里两跑时限的依据(人读一行)。"""
+    if runs <= 1:
+        return (f"合并后一跑时限 {timeout_seconds}s = 单次全量时限(post_merge_regression.full_run_timeout); "
+                "合并前基线取已记录基线时不另跑, 总上限 = 单次时限")
+    return (f"合并后一跑与合并前基线一跑各用单次全量时限 {timeout_seconds}s(post_merge_regression.full_run_timeout), 不共用; "
+            f"总上限 {2 * timeout_seconds}s = 两跑之和(排队另计)")
+
+
+def planned_total_timeout(governance_root: Path, repo_root: Path, merge_commit: str, timeout_seconds: int) -> dict[str, Any]:
+    """AIPOS-F242 件①: 检查开跑前预计的总上限(进行中记录 total_timeout_seconds; 在跑基线的预计最迟完成 / 排队等待上限同读)。
+    合并前 main 已有可复用记录基线(lookup_recorded_baseline, 与 execute_check 取基线同一实现)= 一跑; 否则(含合并父读不出)= 两跑。
+    返回 {runs, total_timeout_seconds, timeout_split_basis}。只读。"""
+    try:
+        pre = merge_parent(repo_root, merge_commit)
+        runs = 1 if lookup_recorded_baseline(governance_root, pre)["failures"] is not None else 2
+    except ValueError:
+        runs = 2  # 判不出就按两跑留足上限(宁等足, 不提前判超时)
+    return {"runs": runs, "total_timeout_seconds": runs * int(timeout_seconds), "timeout_split_basis": _split_basis(int(timeout_seconds), runs=runs)}
+
+
+def _total_timeout(entry: dict[str, Any]) -> int | None:
+    """AIPOS-F242 件①: 记录 / 状态条目的总上限: total_timeout_seconds(F242 起写), 缺(旧记录, 两跑共用一份)= timeout_seconds; 都缺 / 形坏 = None。"""
+    for key in ("total_timeout_seconds", "timeout_seconds"):
+        value = entry.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            return int(value)
+    return None
 
 
 def summary_line(result: dict[str, Any]) -> str:
@@ -704,7 +743,7 @@ def _spawn_async(*, governance_root: Path, repo_root: Path, task_id: str, actor:
     running = {"task_id": task_id, "mode": policy["mode"], "execution": "async", "timeout_seconds": policy["timeout_seconds"],
                "policy_source": policy["policy_source"], "runall_path": policy["runall_path"], "merge_commit": merge_commit,
                "status": "running", "action": "none", "trigger": trigger, "async_log": str(log_path), **_process_identity(proc.pid),
-               **_policy_timing(policy)}
+               **_policy_timing(policy), **_planned(governance_root, repo_root, merge_commit, policy)}
     running["summary"] = summary_line(running)
     try:
         event_path = write_event_record(governance_root, task_id, actor, running, record_id=record_id)
@@ -715,6 +754,12 @@ def _spawn_async(*, governance_root: Path, repo_root: Path, task_id: str, actor:
             note = f"{note}; " if note else ""
             note += f"后台子进程握手管道已断({exc})"
     return {"async_pid": proc.pid, "async_log": str(log_path), "event_record": event_path, "notes": [note] if note else []}
+
+
+def _planned(governance_root: Path, repo_root: Path, merge_commit: str, policy: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F242 件①: 进行中记录的预计总上限(planned_total_timeout; 结论落定时 execute_check 按实际跑数覆写)。"""
+    plan = planned_total_timeout(governance_root, repo_root, merge_commit, int(policy["timeout_seconds"]))
+    return {"total_timeout_seconds": plan["total_timeout_seconds"], "timeout_split_basis": plan["timeout_split_basis"]}
 
 
 def _policy_timing(policy: dict[str, Any]) -> dict[str, Any]:
@@ -776,9 +821,10 @@ def check_after_merge(*, governance_root: Path, repo_root: Path, task_id: str, a
 def _loop_timeout_note(result: dict[str, Any], step_timeout: float) -> None:
     """sync 且声明总时限 ≥ loop 步超时(verbs.schema lybra_loop.step_timeout_seconds, resolve_policy 合并前读入): loop 驱动下
     finalize 会在合并后被杀, 附提示。"""
-    if result["timeout_seconds"] >= step_timeout:
+    total = _total_timeout(result) or result["timeout_seconds"]  # AIPOS-F242 件①: 两跑各一份时限, 比的是总上限
+    if total >= step_timeout:
         result.setdefault("notes", []).append(
-            f"声明 timeout_seconds={result['timeout_seconds']} ≥ loop 步超时 {step_timeout:g}s: loop 驱动 finalize 时可能在合并后、记录前被杀;"
+            f"声明 timeout_seconds={result['timeout_seconds']}(本次总上限 {total}s)≥ loop 步超时 {step_timeout:g}s: loop 驱动 finalize 时可能在合并后、记录前被杀;"
             " 全量清单耗时长的项目宜声明 execution=async 或 mode=off"
         )
 
@@ -923,7 +969,9 @@ def regression_states(governance_root: Path, *, task_id: str | None = None, sha:
         log = pmr.get("async_log") or pmr.get("log_dir")
         entry.update(record=_record_ref(root, path), pid=pid, log=log, host=pmr.get("host"),
                      # AIPOS-F188 件①: pending 基线给开始时刻与时限(F166 前 finalization 记录无 started_at = 退取 finalized_at)
-                     started_at=pmr.get("started_at") or _finalized_at(path), timeout_seconds=pmr.get("timeout_seconds"))
+                     started_at=pmr.get("started_at") or _finalized_at(path), timeout_seconds=pmr.get("timeout_seconds"),
+                     # AIPOS-F242 件①: 总上限(两跑之和; 旧记录缺 = timeout_seconds)与单次时限
+                     total_timeout_seconds=_total_timeout(pmr), per_run_timeout_seconds=pmr.get("timeout_seconds"))
         probe_error = ""
         try:
             if running is not None:
@@ -988,7 +1036,8 @@ def wait_for_turn(governance_root: Path, task_id: str, *, own_pid: int | None, o
 
     root = Path(governance_root)
     ahead = regressions_ahead(root, own_pid=own_pid, own_key=own_key)
-    out: dict[str, Any] = {"behind": [{k: e.get(k) for k in ("task_id", "merge_commit", "pid", "started_at", "timeout_seconds")} for e in ahead],
+    out: dict[str, Any] = {"behind": [{k: e.get(k) for k in ("task_id", "merge_commit", "pid", "started_at", "timeout_seconds", "total_timeout_seconds")}
+                                      for e in ahead],
                            "waited_seconds": 0.0, "still_ahead": 0, "note": ""}
     if not ahead:
         return out
@@ -996,7 +1045,7 @@ def wait_for_turn(governance_root: Path, task_id: str, *, own_pid: int | None, o
     deadlines = []
     for entry in ahead:
         started = _parse_iso(entry.get("started_at")) or now
-        limit = entry.get("timeout_seconds") if isinstance(entry.get("timeout_seconds"), int) else default_timeout
+        limit = _total_timeout(entry) or default_timeout  # AIPOS-F242 件①: 在前者总上限(两跑之和; 旧记录 = timeout_seconds)
         deadlines.append(started + timedelta(seconds=int(limit) + _QUEUE_GRACE_SECONDS))
     remaining = (max(deadlines) - now).total_seconds()
     began = time.monotonic()
@@ -1110,7 +1159,9 @@ def rerun(governance_root: Path, sha: str, *, repo_root: str | Path | None = Non
         log_dir = loop_runs_dir(root, task)  # 预演只算落点, 不建目录(零写入)
     except (OSError, ValueError, SchemaLoadError) as exc:
         return refuse(f"日志落点不可得: {exc}")
-    plan = (f"补跑: 在产品仓 {repo} 的 {commit[:12]} 上跑 {policy['runall_path']}(总时限 {policy['timeout_seconds']}s, 合并前基线优先取记录"
+    planned = planned_total_timeout(root, repo, commit, int(policy["timeout_seconds"]))  # AIPOS-F242 件①
+    plan = (f"补跑: 在产品仓 {repo} 的 {commit[:12]} 上跑 {policy['runall_path']}(单次全量时限 {policy['timeout_seconds']}s, "
+            f"总上限 {planned['total_timeout_seconds']}s: {planned['timeout_split_basis']}; 合并前基线优先取记录"
             + (f"; {policy['timeout_basis']}" if policy.get("timeout_basis") else "") + ("; 并发时排队串行" if policy.get("serialize") else "") + "), "
             f"结论落 records/events/{task}/{EVENT_TYPE}_*.md(同格式回归事件记录), 日志落 {log_dir}/")
     out["lines"].append(plan)
@@ -1143,7 +1194,8 @@ def rerun(governance_root: Path, sha: str, *, repo_root: str | Path | None = Non
     base = {"task_id": task, "mode": policy["mode"], "execution": "sync", "timeout_seconds": policy["timeout_seconds"],
             "policy_source": policy["policy_source"], "runall_path": policy["runall_path"], "merge_commit": commit, "trigger": "rerun",
             **_policy_timing(policy)}
-    running = {**base, "status": "running", "action": "none", **_process_identity(os.getpid()), "log_dir": str(log_dir)}
+    running = {**base, "status": "running", "action": "none", **_process_identity(os.getpid()), "log_dir": str(log_dir),
+               **_planned(root, repo, commit, policy)}
     running["summary"] = summary_line(running)
     try:
         started = write_event_record(root, task, str(actor), running, record_id=record_id)
