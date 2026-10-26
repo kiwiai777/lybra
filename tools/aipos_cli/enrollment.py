@@ -694,6 +694,18 @@ def _refuse_redeclare(code: str, detail: str) -> RedeclareRefused:
     return RedeclareRefused(code, f"{detail}。{redeclaration_declaration()['reject_codes'][code]}")
 
 
+def _lybra_dir(root: Path) -> Path:
+    """某根(治理根 / 工位)的 .lybra 目录(既有原语 service_mode.connection_path 的父目录, 不另拼 .lybra 路径)。"""
+    return _governance_connection(Path(root)).parent
+
+
+def _role_file_path(root: Path) -> Path:
+    """某根的 .lybra/role 位置(enroll_client._role_file: 读口与写入器共用定位)。"""
+    from tools.aipos_cli.enroll_client import _role_file
+
+    return _role_file(_lybra_dir(root))
+
+
 def _role_slot(lybra_dir: Path, instance: str) -> dict[str, Any] | None:
     """该 .lybra/role 中实例的记录(enroll_client.read_role_record 唯一分槽读口); 未登记 = None; 文件 / 槽形坏 = RoleRecordError 上抛。"""
     from tools.aipos_cli.enroll_client import RoleInstanceNotRegistered, read_role_record
@@ -718,9 +730,9 @@ def registered_harness(governance_root: str | Path, instance: str) -> dict[str, 
     out: dict[str, Any] = {"instance": name, "kind": None, "host": None, "dir": None, "source": None, "source_label": None,
                            "slot_file": None, "slot": None}
     slot_root = Path(ev["dir"]).expanduser() if ev["found"] and ev["dir"] else root
-    slot = _role_slot(slot_root / ".lybra", name) if name else None
+    slot = _role_slot(_lybra_dir(slot_root), name) if name else None
     if slot is not None:
-        out["slot_file"] = str(slot_root / ".lybra" / "role")
+        out["slot_file"] = str(_role_file_path(slot_root))
         out["slot"] = slot.get("harness") if isinstance(slot.get("harness"), dict) else None
     if ev["found"] and ev["harness"]:
         seat_session = bool(ev["harness_host"] or ev["harness_dir"]) or not ev["dir"]
@@ -949,8 +961,8 @@ def redeclare_instance(governance_root: str | Path, instance: str, *, harness: s
             raise _refuse_redeclare("REDECLARE_INVALID", f"实例 {name} 是子 agent 执行身份(接入模式 {view['mode']}), 无工作目录, 不给 --dir")
         new = {"kind": kind, "host": new_host, "dir": None}
     else:
-        if _role_slot(root / ".lybra", name) is None:
-            raise _refuse_redeclare("REDECLARE_NOT_ENROLLED", f"治理根 {root / '.lybra' / 'role'} 无实例 {name} 的记录(实例槽)")
+        if _role_slot(_lybra_dir(root), name) is None:
+            raise _refuse_redeclare("REDECLARE_NOT_ENROLLED", f"治理根 {_role_file_path(root)} 无实例 {name} 的记录(实例槽)")
         # 工作目录: 显式 > 同 kind 同会话机沿用现登记 > 无(须给的 kind 由 harness_role_record 拒并给出口)
         new_dir = given["dir"] or (old["dir"] if same_session and new_host == old["host"] else None)
         remote = new_host if new_host != local else None
@@ -970,7 +982,7 @@ def redeclare_instance(governance_root: str | Path, instance: str, *, harness: s
                            "instance": name, "mode": "subagent" if subagent else "seat", "actor": by, "current": current, "old": old,
                            "new": new, "diffs": diffs, "tier": auth["tier"], "basis": auth["basis"], "authorization": auth["authorization"],
                            "why": auth["why"], "item_id": None, "decision_id": None, "owner_choice": None, "state": "apply",
-                           "event_line": None, "request_line": None, "slot_file": str(root / ".lybra" / "role") if seat else None,
+                           "event_line": None, "request_line": None, "slot_file": str(_role_file_path(root)) if seat else None,
                            "slot_harness": slot_record, "log": str(enrollment_trail_path(root)), "written": [], "written_files": []}
     basis = auth["basis"]
     if auth["tier"] == 1:
@@ -1001,10 +1013,10 @@ def redeclare_instance(governance_root: str | Path, instance: str, *, harness: s
     if seat:
         from tools.aipos_cli.enroll_client import write_role_file
 
-        role = str((_role_slot(root / ".lybra", name) or {}).get("role") or ev["role"])
-        write_role_file(root / ".lybra", role, name, None, harness=slot_record, slot_by_instance=True, stamp_key="redeclared_at",
+        role = str((_role_slot(_lybra_dir(root), name) or {}).get("role") or ev["role"])
+        write_role_file(_lybra_dir(root), role, name, None, harness=slot_record, slot_by_instance=True, stamp_key="redeclared_at",
                         keep_top=True)
-        out["written_files"] = [str(root / ".lybra" / "role")]
+        out["written_files"] = [str(_role_file_path(root))]
     after = registered_harness(root, name)
     out["after"] = after
     out["ok"] = all(after[k] == new[k] for k in _REDECLARE_FIELDS)
