@@ -43,13 +43,11 @@ _LIST_PREVIEW = 8
 def resolve_policy(governance_root: Path, repo_root: Path) -> dict[str, Any]:
     """项目策略(runall_path + post_merge_regression)。形坏 = ValueError(TEST_CONTRACT_INVALID) / SchemaLoadError 原样抛(fail-closed)。"""
     from tools.aipos_cli.next_resolver import loop_step_timeout_seconds
-    from tools.aipos_cli.workspace_config import project_test_contract
 
-    contract = project_test_contract(governance_root, repo_root)
-    pmr = contract["post_merge_regression"]
     # AIPOS-F234 件③: 时限按近 N 次全量实测耗时推导(声明值为下限; timeout_recent_runs=0 = 不推导, 行为不变)
-    derived = derive_timeout(governance_root, runall_path=contract["runall_path"], declared=int(pmr["timeout_seconds"]),
-                             recent_runs=int(pmr["timeout_recent_runs"]), factor=float(pmr["timeout_factor"]))
+    # AIPOS-F237 件②: 推导经 full_run_timeout(loop 等交回上限 / 开工稿时限句 / set-test-contract 预演同读)
+    derived = full_run_timeout(governance_root, repo_root)
+    contract, pmr = derived["contract"], derived["post_merge_regression"]
     return {
         # 合并前读入(AIPOS-F120: 合并改写代码源, 合并后不再读声明), 供 sync 时限 ≥ loop 步超时的提示用
         "loop_step_timeout_seconds": loop_step_timeout_seconds(),
@@ -63,6 +61,23 @@ def resolve_policy(governance_root: Path, repo_root: Path) -> dict[str, Any]:
         "policy_source": pmr["source"],
         "runall_source": contract["source"],
     }
+
+
+def full_run_timeout(governance_root: Path, repo_root: str | Path | None = None, *, project: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F237 件②: 本项目(卡仓)同一测试清单「全量跑一次」的时限——唯一推导(合并后回归 resolve_policy / loop 等交回上限
+    loop_driver.full_runs_wait_floor / 开工稿时限句 subagent_kickoff / set-test-contract 预演同读)。= 唯一读取口 project_test_contract
+    (repo_root = 卡仓, project = 将写入的 project.json 内容, 给出即校验这份)+ derive_timeout(近 N 次实测推导, 未开 = 声明值)。
+    返回 {runall_path, timeout_seconds, declared, median, samples, basis, derived(是否开了推导), source, post_merge_regression, contract}。
+    声明形坏 = ValueError(TEST_CONTRACT_INVALID) / SchemaLoadError 原样抛。只读。"""
+    from tools.aipos_cli.workspace_config import project_test_contract
+
+    contract = project_test_contract(governance_root, repo_root, project=project)
+    pmr = contract["post_merge_regression"]
+    derived = derive_timeout(Path(governance_root), runall_path=contract["runall_path"], declared=int(pmr["timeout_seconds"]),
+                             recent_runs=int(pmr["timeout_recent_runs"]), factor=float(pmr["timeout_factor"]))
+    return {"runall_path": contract["runall_path"], "timeout_seconds": int(derived["timeout_seconds"]), "declared": int(pmr["timeout_seconds"]),
+            "median": derived["median"], "samples": derived["samples"], "basis": derived["basis"],
+            "derived": int(pmr["timeout_recent_runs"]) > 0, "source": str(pmr["source"]), "post_merge_regression": pmr, "contract": contract}
 
 
 #: AIPOS-F234 件③: 时限推导样本的口径——合并后一跑超时(error 以此开头)= 该一跑耗时只是下限

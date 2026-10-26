@@ -3144,6 +3144,29 @@ def build_parser() -> argparse.ArgumentParser:
     project_setmodel_parser.add_argument("--workspace-root", help="Target governance root when the project name is omitted (default: the one containing the current directory)")
     project_setmodel_parser.add_argument("--json", action="store_true", help="Output JSON")
     _project_json_two_phase_flags(project_setmodel_parser, "set-model")  # 缺省预演 / --confirm 才写(同一包装, 写后落账)
+    # AIPOS-F237 件①: 合并后回归 / 全量时限声明写入口(project.json test_contract.post_merge_regression; 旗标登记 verbs.schema
+    # project_json_writers.test_contract, 形只在 config.schema; 唯一实现 workspace_config.set_project_test_contract)
+    from tools.aipos_cli.workspace_config import test_contract_writer_declaration
+
+    tc_decl = test_contract_writer_declaration()
+    project_settc_parser = project_subparsers.add_parser("set-test-contract", help="AIPOS-F237: declare the post-merge regression / full-run time limit policy (project.json test_contract.post_merge_regression: timeout_seconds floor, timeout_recent_runs / timeout_factor derivation from recent measured full runs, serialize, mode, execution) with the Owner reference (test_contract.owner_ref); only the given keys change; --dry-run (default) shows the diff and the derived full-run time limit before/after, --confirm writes and lands")
+    project_settc_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory)")
+    tc_types = {"timeout_seconds": int, "timeout_recent_runs": int, "timeout_factor": float, "mode": str, "execution": str}
+    for key, flag in tc_decl["keys"].items():
+        if key in tc_decl["negated_flags"]:
+            group = project_settc_parser.add_mutually_exclusive_group()
+            group.add_argument(flag, dest=f"tc_{key}", action="store_const", const=True, default=None,
+                               help=f"Set test_contract.post_merge_regression.{key} = true (omitted = keep)")
+            group.add_argument(tc_decl["negated_flags"][key], dest=f"tc_{key}", action="store_const", const=False, default=None,
+                               help=f"Set test_contract.post_merge_regression.{key} = false (omitted = keep)")
+            continue
+        project_settc_parser.add_argument(flag, dest=f"tc_{key}", type=tc_types[key], default=None,
+                                          help=f"test_contract.post_merge_regression.{key} (shape declared in config.schema; omitted = keep)")
+    project_settc_parser.add_argument("--owner-ref", required=True, metavar="TEXT", help="Owner instruction summary or decision record this change follows (single line, recorded as test_contract.owner_ref)")
+    project_settc_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
+    project_settc_parser.add_argument("--workspace-root", help="Target governance root when the project name is omitted (default: the one containing the current directory)")
+    project_settc_parser.add_argument("--json", action="store_true", help="Output JSON")
+    _project_json_two_phase_flags(project_settc_parser, "set-test-contract")  # 缺省预演 / --confirm 才写(同一包装, 写后落账)
     # AIPOS-F148 件②: Return 摘要来源声明写入口(project.json return_summary_source; 声明 config.schema project_json.return_summary_source;
     # 缺省 transitions artifact_ingest.return.summary_source; 唯一实现 workspace_config.set_return_summary_source)
     project_setsummary_parser = project_subparsers.add_parser("set-return-summary", help="AIPOS-F148: declare where this project's Return carries its one-line summary (project.json return_summary_source: Return frontmatter keys and/or body section markers; unset keys fall back to transitions.schema artifact_ingest.return.summary_source, default = the 一句话结论 section); --dry-run (default) shows the diff, --confirm writes")
@@ -5277,6 +5300,32 @@ def main(argv: list[str] | None = None) -> int:
                              f"execution.pi_models.{outcome['target_key']} = {outcome['model']}  owner_ref = {args.owner_ref.strip()}"]
                     + [_render_pi_model_affected(entry) for entry in outcome["affected"]]
                     + [f"生效: {outcome['effect_note']}"])
+            if args.project_command == "set-test-contract":
+                # AIPOS-F237 件①: 唯一实现 workspace_config.set_project_test_contract(project_test_contract 校验 + update_project_json 唯一写路径)
+                from tools.aipos_cli.workspace_config import (
+                    PMR_KEYS, TestContractDeclarationError, set_project_test_contract, test_contract_writer_declaration,
+                )
+
+                target = _project_write_target(args, home, args.name)
+                if target is None:
+                    return 1
+                tc_decl = test_contract_writer_declaration()
+                try:
+                    outcome = set_project_test_contract(target["project_root"], {k: getattr(args, f"tc_{k}", None) for k in PMR_KEYS},
+                                                        owner_ref=args.owner_ref, dry_run=not args.confirm)
+                except TestContractDeclarationError as exc:
+                    print(f"Error: {exc.code}(project.json 未改动)", file=sys.stderr)
+                    for problem in exc.problems:
+                        print(f"  - {problem}", file=sys.stderr)
+                    return 1
+                labels = tc_decl["derivation_labels"]
+                return _project_json_two_phase_emit(
+                    "set-test-contract", target, {k: outcome[k] for k in ("dry_run", "changed", "written", "diff", "project_json")},
+                    actor=args.actor, json_out=getattr(args, "json", False),
+                    extra={k: outcome[k] for k in ("post_merge_regression", "owner_ref", "given", "before", "after")},
+                    details=[f"test_contract.post_merge_regression.{k} = {outcome['given'][k]!r}" for k in PMR_KEYS if k in outcome["given"]]
+                    + [f"test_contract.owner_ref = {outcome['owner_ref']}"]
+                    + [tc_decl["derivation_line"].format(when=labels[w], basis=outcome[w]["basis"]) for w in ("before", "after")])
             if args.project_command == "set-return-summary":
                 # AIPOS-F148 件②: 唯一实现 workspace_config.set_return_summary_source(声明校验 + update_project_json 唯一写路径)
                 from tools.aipos_cli.workspace_config import ReturnSummarySourceError, set_return_summary_source
