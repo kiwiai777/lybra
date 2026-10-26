@@ -429,7 +429,11 @@ def enrollment_owner_root(
 # workstation_transport.relocation.event_action 一致(workstation_relocate.relocation_declaration 核, 不一致 = fail-closed)。
 LAND_ACTION = "land"
 RELOCATE_ACTION = "relocate"
-_LAND_LINE_RE = re.compile(rf"^- (?P<ts>\S+)\s+(?P<action>{LAND_ACTION}|{RELOCATE_ACTION})\s+.*?\binstance=(?P<instance>\S+)\s+.*?\breason=(?P<reason>.*)$")
+# AIPOS-F235: 改登记位置事件(redeclare; `lybra roles redeclare`, append_redeclaration_event 唯一写入)与 land / relocate 同族同解析;
+# 动作名与声明 verbs.schema lybra_roles_redeclare.event_action 一致(redeclaration_declaration 核, 不一致 = fail-closed)
+REDECLARE_ACTION = "redeclare"
+_LAND_LINE_RE = re.compile(rf"^- (?P<ts>\S+)\s+(?P<action>{LAND_ACTION}|{RELOCATE_ACTION}|{REDECLARE_ACTION})\s+.*?\binstance=(?P<instance>\S+)\s+"
+                           r".*?\breason=(?P<reason>.*)$")
 _LAND_HOST_RE = re.compile(r"(?:^|\s)host=(?P<host>\S+)")
 _LAND_DIR_RE = re.compile(r"(?:^|\s)workstation=(?P<dir>.+?)(?:\s+files=|$)")
 
@@ -570,14 +574,19 @@ _EVENT_LINE_RE = re.compile(r"^- (?P<ts>\S+)\s+(?P<action>\S+)\s+code_id=(?P<cod
 # ---------------------------------------------------------------------------
 
 _LAND_FROM_RE = re.compile(r"(?:^|\s)relocated_from=(?P<dir>.+?)\s+workstation=")
+# AIPOS-F235: redeclare 行的会话位置段(harness_host / harness_dir 在 workstation= 之前; host= 仍为工位 / 凭据落点所在机, 语义同 land)
+_LAND_HARNESS_HOST_RE = re.compile(r"(?:^|\s)harness_host=(?P<harness_host>\S+)")
+_LAND_HARNESS_DIR_RE = re.compile(r"(?:^|\s)harness_dir=(?P<harness_dir>\S+)")
 _LAND_RELOCATION_RE = re.compile(r"(?:^|\s)relocation=(?P<relocation>\S+)")
 
 
 def location_event(workspace_root: str | Path, instance: str) -> dict[str, Any]:
     """实例最新未作废位置事件(_latest_land 同一读取口)的结构字段: {found, action, ts, code_id, role, host, harness, relocation,
-    relocated_from, dir, line_fields}。line_fields = 能沿用其 code_id / role 渲染 relocate 行。只读。"""
+    relocated_from, dir, line_fields, mode, harness_host, harness_dir}。line_fields = 能沿用其 code_id / role 渲染 relocate / redeclare 行。
+    AIPOS-F235: mode(子 agent land)/ harness_host / harness_dir(redeclare 写: 顾问会话所在机 / 工作目录)一并读出。只读。"""
     out: dict[str, Any] = {"found": False, "action": None, "ts": None, "code_id": None, "role": None, "host": None, "harness": None,
-                           "relocation": None, "relocated_from": None, "dir": None, "line_fields": False}
+                           "relocation": None, "relocated_from": None, "dir": None, "line_fields": False, "mode": None,
+                           "harness_host": None, "harness_dir": None}
     trail = enrollment_trail_path(_workspace_root_path(workspace_root))
     latest = _latest_land(trail, str(instance or "").strip()) if trail.is_file() else None
     if latest is None:
@@ -586,7 +595,8 @@ def location_event(workspace_root: str | Path, instance: str) -> dict[str, Any]:
     event = _EVENT_LINE_RE.match(latest.string)
     role = _LAND_ROLE_RE.search(latest.string[:latest.start("reason")])
     found = {key: (m.group(key) if (m := rx.search(reason)) else None)
-             for key, rx in (("host", _LAND_HOST_RE), ("harness", _LAND_HARNESS_RE), ("relocation", _LAND_RELOCATION_RE))}
+             for key, rx in (("host", _LAND_HOST_RE), ("harness", _LAND_HARNESS_RE), ("relocation", _LAND_RELOCATION_RE),
+                             ("mode", _LAND_MODE_RE), ("harness_host", _LAND_HARNESS_HOST_RE), ("harness_dir", _LAND_HARNESS_DIR_RE))}
     from_match, dir_match = _LAND_FROM_RE.search(reason), _LAND_DIR_RE.search(reason)
     out.update(found=True, action=latest.group("action"), ts=latest.group("ts"), code_id=event.group("code_id") if event else None,
                role=role.group("role") if role else None, **found,
@@ -626,6 +636,424 @@ def append_relocation_event(workspace_root: str | Path, instance: str, *, projec
     _write_trail_line(trail, relocation_event_line(event, instance=instance, project=project, old=old, new=new, by=actor,
                                                    rollback=rollback))
     return trail
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F235: 已接入实例改登记(`lybra roles redeclare`)——顾问换 harness / 主机 / 工作目录后的正式入口, 不作废重接入。
+# 登记真相 = 本日志位置事件(追加 redeclare 行, 与 land / relocate 同族同写口 _write_trail_line, 只追加不改旧行); 治理根 .lybra/role
+# 实例槽经 enroll_client.write_role_file(唯一写路径)随之更新; 二者不一致时以日志为准(registered_harness 先读事件), state lint 报出
+# (registration_drift)。实例名不改(凭据与历史归因按名; 名中主机段只是历史, 主机判据一律读登记); 凭据不动、不重发码。
+# 授权(声明 verbs.schema lybra_roles_redeclare.authorization): 改到 F224 项目常设授权已列主机 / 拉起方式内(或只改工作目录)= 本实例自己或
+# 项目顾问可做(第二档, 记录 = 本次位置事件 authorized_by=); 授权外 = 第一档: 追加 redeclare_request 行进 Owner 收件箱
+# (owner_inbox 类别 enrollment_redeclare), Owner 批准后重跑同一命令 --confirm 生效。
+# ---------------------------------------------------------------------------
+
+REDECLARE_REQUEST_ACTION = "redeclare_request"
+_REDECLARE_VERB = "lybra_roles_redeclare"
+_REDECLARE_REJECT_CODES = ("REDECLARE_INVALID", "REDECLARE_NOT_ENROLLED", "REDECLARE_WORKSTATION", "REDECLARE_ACTOR",
+                           "REDECLARE_NO_CHANGE", "REDECLARE_OWNER_DENIED")
+_REDECLARE_TEXT_KEYS = ("target_line", "mode_seat", "mode_subagent", "current_line", "diff_line", "diff_none", "tier2_authorized", "tier2_dir_only", "tier1_request",
+                        "owner_pending", "owner_approved", "event_line", "slot_line", "slot_none", "request_line", "invariants")
+_REDECLARE_FIELDS = ("kind", "host", "dir")
+_REQUEST_KEY_RE = re.compile(r"(?:^|\s)(?P<key>base|to_harness|to_host|to_dir|why)=(?P<value>\S+)")
+
+
+class RedeclareRefused(ValueError):
+    """改登记拒(code ∈ 声明 reject_codes; message = 拒因原文与出口)。零写入。"""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(f"{code}: {message}")
+        self.code = code
+        self.message = message
+
+
+def redeclaration_declaration() -> dict[str, Any]:
+    """verbs.schema verbs.lybra_roles_redeclare(fail-closed): event_action / request_action 与本模块常量一致; reject_codes / texts /
+    exit_codes {ok, refused, owner_pending} / authorization.inbox_category 齐。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    decl = (load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get(_REDECLARE_VERB)
+    where = f"verbs.schema.json verbs.{_REDECLARE_VERB}"
+    if not isinstance(decl, dict):
+        raise SchemaLoadError(f"{where} 未声明")
+    if decl.get("event_action") != REDECLARE_ACTION or decl.get("request_action") != REDECLARE_REQUEST_ACTION:
+        raise SchemaLoadError(f"{where}.event_action / request_action 须 = {REDECLARE_ACTION} / {REDECLARE_REQUEST_ACTION}(enrollment 解析常量)")
+    codes, texts, exits = decl.get("reject_codes") or {}, decl.get("texts") or {}, decl.get("exit_codes") or {}
+    auth = decl.get("authorization") or {}
+    if (any(not str(codes.get(k) or "").strip() for k in _REDECLARE_REJECT_CODES)
+            or any(not str(texts.get(k) or "").strip() for k in _REDECLARE_TEXT_KEYS)
+            or not all(isinstance((exits.get(k) or {}).get("code"), int) for k in ("ok", "refused", "owner_pending"))
+            or not str(auth.get("inbox_category") or "").strip() or not str(auth.get("approve_option") or "").strip()
+            or not str(auth.get("deny_option") or "").strip()):
+        raise SchemaLoadError(f"{where}: reject_codes {list(_REDECLARE_REJECT_CODES)} / texts {list(_REDECLARE_TEXT_KEYS)} / "
+                              "exit_codes {ok, refused, owner_pending} / authorization {inbox_category, approve_option, deny_option} 未声明齐")
+    return decl
+
+
+def _refuse_redeclare(code: str, detail: str) -> RedeclareRefused:
+    return RedeclareRefused(code, f"{detail}。{redeclaration_declaration()['reject_codes'][code]}")
+
+
+def _role_slot(lybra_dir: Path, instance: str) -> dict[str, Any] | None:
+    """该 .lybra/role 中实例的记录(enroll_client.read_role_record 唯一分槽读口); 未登记 = None; 文件 / 槽形坏 = RoleRecordError 上抛。"""
+    from tools.aipos_cli.enroll_client import RoleInstanceNotRegistered, read_role_record
+
+    try:
+        return read_role_record(lybra_dir, instance)
+    except RoleInstanceNotRegistered:
+        return None
+
+
+def registered_harness(governance_root: str | Path, instance: str) -> dict[str, Any]:
+    """AIPOS-F235: 实例当前登记的 harness {instance, kind, host, dir, source, source_label, slot_file, slot}——唯一读取口(起草缺省 /
+    kickoff 时限句 / card_workstation_view / next 与 kickoff 不符出口 / 看板工位页 / workstation-plan / 改登记预演同读)。
+    判序(日志是登记真相): ① 最新未作废位置事件(location_event)带 harness= = 该事件(redeclare: 会话机 harness_host、工作目录 harness_dir;
+    子 agent land: 会话机 = 事件 host)→ ② 该事件工位目录(无 = 治理根)的 .lybra/role 实例记录 harness {kind, dir, host}(存量顾问接入:
+    land 不带 harness=; 工位记录无 harness = 缺省 pi 工位, 治理根记录无 harness = 未登记)→ ③ 都无 = kind None。只读。"""
+    from tools.aipos_cli.distribution_sync import default_harness_kind
+
+    root = _workspace_root_path(governance_root)
+    name = str(instance or "").strip()
+    ev = location_event(root, name)
+    out: dict[str, Any] = {"instance": name, "kind": None, "host": None, "dir": None, "source": None, "source_label": None,
+                           "slot_file": None, "slot": None}
+    slot_root = Path(ev["dir"]).expanduser() if ev["found"] and ev["dir"] else root
+    slot = _role_slot(slot_root / ".lybra", name) if name else None
+    if slot is not None:
+        out["slot_file"] = str(slot_root / ".lybra" / "role")
+        out["slot"] = slot.get("harness") if isinstance(slot.get("harness"), dict) else None
+    if ev["found"] and ev["harness"]:
+        seat_session = bool(ev["harness_host"] or ev["harness_dir"]) or not ev["dir"]
+        out.update(kind=ev["harness"], host=ev["harness_host"] or (ev["host"] if seat_session else None), dir=ev["harness_dir"],
+                   source="event", source_label=f"{ev['action']}@{ev['ts']}")
+        return out
+    if slot is not None:
+        record = out["slot"]
+        if record and str(record.get("kind") or "").strip():
+            out.update(kind=str(record["kind"]).strip(), host=str(record.get("host") or "").strip() or ev["host"],
+                       dir=str(record.get("dir") or "").strip() or None, source="role_slot", source_label=out["slot_file"])
+        elif slot_root.resolve() != root:  # 工位 .lybra/role 无 harness = pi 工位(既有形态)
+            out.update(kind=default_harness_kind(), host=ev["host"], dir=str(slot_root), source="role_slot", source_label=out["slot_file"])
+    return out
+
+
+def registration_label(reg: dict[str, Any]) -> str | None:
+    """登记一句(看板工位页 / workstation-plan / 预演同一渲染): <kind>@<host>[:<dir>](<来源>); 未登记 = None。"""
+    if not reg.get("kind"):
+        return None
+    where = f"{reg.get('host') or '-'}" + (f":{reg['dir']}" if reg.get("dir") else "")
+    return f"{reg['kind']}@{where}({reg.get('source_label') or reg.get('source') or '-'})"
+
+
+def dispatch_harness(governance_root: str | Path, *, advisor: str | None, executor: str | None) -> dict[str, Any]:
+    """AIPOS-F235 件③: 子 agent 卡的 harness 唯一判定(起草缺省 draft_writer.apply_execution_defaults、卡面缺 harness 时 loop_driver.card_harness、
+    next / kickoff 不符出口 card_harness_mismatch 同读): 派发顾问(卡 created_by / draft_created_by)当前登记的 harness(registered_harness;
+    须为顾问会话 kind, distribution_sync.advisor_harness_kinds)→ 否则共享子 agent 执行身份 land 事件 harness(instance_enrollment; 兜底)→
+    都无 = harness None。返回 {harness, source(advisor|executor|None), advisor, advisor_registration, executor, executor_harness}。
+    连接文件读不出 = ValueError 上抛(fail-closed)。"""
+    from tools.aipos_cli.distribution_sync import advisor_harness_kinds
+
+    root = _workspace_root_path(governance_root)
+    adv, exe = str(advisor or "").strip() or None, str(executor or "").strip() or None
+    out: dict[str, Any] = {"harness": None, "source": None, "advisor": adv, "advisor_registration": None, "executor": exe,
+                           "executor_harness": None}
+    if adv:
+        reg = registered_harness(root, adv)
+        out["advisor_registration"] = reg
+        if reg["kind"] in advisor_harness_kinds():
+            out.update(harness=reg["kind"], source="advisor")
+    if exe:
+        out["executor_harness"] = instance_enrollment(root, exe).get("harness")
+        if out["harness"] is None and out["executor_harness"]:
+            out.update(harness=out["executor_harness"], source="executor")
+    return out
+
+
+def card_dispatch_advisor(card: dict[str, Any] | None) -> str | None:
+    """卡的派发顾问 = 卡面 created_by(发卡签发实例), 缺 = draft_created_by(起草实例)。"""
+    fm = card or {}
+    return next((str(fm.get(k) or "").strip() for k in ("created_by", "draft_created_by") if str(fm.get(k) or "").strip()), None)
+
+
+def _authorization_basis(root: Path, new: dict[str, Any], dims: list[str]) -> dict[str, Any]:
+    """改登记授权判定(第二档 = 本实例 / 项目顾问可做; 第一档 = 进 Owner 收件箱)。dims = 改动维度(kind / host / dir)。
+    只改工作目录 = 第二档(dir_only); 改主机须 ∈ 某份生效授权(状态 active / exhausted, autonomy_policy.envelope_usage 同判)的 hosts,
+    改 harness 须 ∈ 其 launch_harnesses(F224 拉起方式); 都满足的授权 = 第二档(ref = <授权>@r<修订>); 否则第一档(why = 缺的维度)。"""
+    from tools.aipos_cli.autonomy_policy import authorization_ids, envelope_usage, load_authorization
+    from tools.aipos_cli.clock import utc_now
+
+    need = [d for d in dims if d in ("kind", "host")]
+    if not need:
+        return {"tier": 2, "basis": "dir_only", "authorization": None, "why": []}
+    best_why: list[str] | None = None
+    ids = authorization_ids(root)
+    for aid in ids:
+        auth = load_authorization(root, aid)
+        if auth is None or envelope_usage(root, aid, now=utc_now()).get("state") not in ("active", "exhausted"):
+            continue
+        why = ([f"host:{new['host']}"] if "host" in need and new["host"] not in auth["hosts"] else []) + \
+              ([f"harness:{new['kind']}"] if "kind" in need and new["kind"] not in auth["launch_harnesses"] else [])
+        if not why:
+            ref = f"{auth['authorization_id']}@r{auth['revision']}"
+            return {"tier": 2, "basis": ref, "authorization": ref, "why": []}
+        best_why = why if best_why is None or len(why) < len(best_why) else best_why
+    if best_why is None:
+        best_why = [f"no_authorization:{','.join(ids) or '-'}"] + [f"{'host' if d == 'host' else 'harness'}:{new[d]}" for d in need]
+    return {"tier": 1, "basis": None, "authorization": None, "why": best_why}
+
+
+def _project_name(root: Path) -> str:
+    from tools.aipos_cli.workspace_config import read_project_json
+
+    return str(read_project_json(root).get("project") or root.name).strip()
+
+
+def redeclare_item_identity(instance: str, *, base: str, to: dict[str, Any]) -> tuple[str, str]:
+    """收件箱事项 (subject, anchor) 唯一构造(改登记预演算裁决 ID 与收件箱收集 owner_inbox 同读): anchor = 实例 | 目标 | 基准位置事件时刻
+    (基准事件一变 = 新事项; 同一基准同一目标重复请求 = 同一事项)。"""
+    return (f"{instance}", f"{to.get('kind') or '-'}@{to.get('host') or '-'}:{to.get('dir') or '-'}|{base}")
+
+
+def pending_redeclare_requests(governance_root: str | Path) -> list[dict[str, Any]]:
+    """未生效的改登记请求(owner_inbox 类别 enrollment_redeclare 唯一来源): 日志中未作废的 redeclare_request 行, 其 base = 该实例当前最新
+    位置事件时刻(之后已有位置事件 = 已生效 / 已过时, 不列)。每实例同一目标只列一条。返回 [{instance, ts, by, role, base, to, why, line,
+    subject, anchor}]。只读。"""
+    root = _workspace_root_path(governance_root)
+    trail = enrollment_trail_path(root)
+    if not trail.is_file():
+        return []
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for _lineno, line, _void, match in _trail_matches(trail):
+        if not match or match.group("action") != REDECLARE_REQUEST_ACTION:
+            continue
+        instance = match.group("instance")
+        if (_lineno, line) not in _instance_events(trail, instance)["live"]:
+            continue
+        reason = line.split("reason=", 1)[1] if "reason=" in line else ""
+        fields = {m.group("key"): m.group("value") for m in _REQUEST_KEY_RE.finditer(reason)}
+        ev = location_event(root, instance)
+        if not ev["found"] or fields.get("base") != ev["ts"]:
+            continue
+        to = {"kind": fields.get("to_harness"), "host": fields.get("to_host"),
+              "dir": None if fields.get("to_dir") in (None, "-") else fields["to_dir"]}
+        subject, anchor = redeclare_item_identity(instance, base=str(fields.get("base")), to=to)
+        by = line.split(" by=", 1)[1].split()[0] if " by=" in line else ""
+        out[(instance, anchor)] = {"instance": instance, "ts": match.group("ts"), "by": by, "base": fields.get("base"), "to": to,
+                                   "why": [w for w in str(fields.get("why") or "").split(",") if w], "line": line,
+                                   "subject": subject, "anchor": anchor}
+    return list(out.values())
+
+
+def _redeclare_ruling(root: Path, instance: str, base: str, to: dict[str, Any]) -> dict[str, Any]:
+    """该请求对应收件箱事项 ID 与 Owner 裁决(owner_inbox.item_id / read_ruling 唯一实现)。choice = 裁决 allowed_next_action。
+    项目段 = 治理根目录名(收件箱按 home 根注册名枚举项目, owner_inbox.collect_project_inbox 缺省同此)。"""
+    from tools.aipos_cli.owner_inbox import decision_id_for, item_id, read_ruling
+
+    category = str(redeclaration_declaration()["authorization"]["inbox_category"])
+    subject, anchor = redeclare_item_identity(instance, base=base, to=to)
+    iid = item_id(root.name, category, subject, anchor)
+    ruling = read_ruling(root, iid)
+    return {"item_id": iid, "decision_id": decision_id_for(iid), "choice": str((ruling or {}).get("allowed_next_action") or "") or None,
+            "ruling": ruling}
+
+
+def _no_space(value: Any, what: str) -> str:
+    text = str(value or "").strip()
+    if any(ch.isspace() for ch in text):
+        raise _refuse_redeclare("REDECLARE_INVALID", f"{what} 含空白(位置事件按空白分段): {text!r}")
+    return text
+
+
+def redeclaration_event_line(event: dict[str, Any], *, instance: str, project: str, new: dict[str, Any], old: dict[str, Any],
+                             seat: bool, by: str, basis: str, ts: str | None = None) -> str:
+    """redeclare 位置事件一行的唯一渲染(经 _trail_line): 结构字段 code_id / role 沿用最新位置事件; reason = host(治理席位 = 沿用事件工位机;
+    子 agent = 新会话机)[mode] harness [harness_host harness_dir](治理席位)from_harness from_host from_dir authorized_by [workstation 沿用]。"""
+    import socket
+
+    parts = [f"host={(event.get('host') or socket.gethostname()) if seat else new['host']}"]
+    if event.get("mode"):
+        parts.append(f"mode={event['mode']}")
+    parts.append(f"harness={new['kind']}")
+    if seat:
+        parts.append(f"harness_host={new['host']}")
+        if new.get("dir"):
+            parts.append(f"harness_dir={new['dir']}")
+    parts += [f"from_harness={old.get('kind') or '-'}", f"from_host={old.get('host') or '-'}", f"from_dir={old.get('dir') or '-'}",
+              f"authorized_by={basis}"]
+    if event.get("dir"):
+        parts.append(f"workstation={event['dir']}")
+    return _trail_line(action=REDECLARE_ACTION, code_id=str(event["code_id"]), role=str(event["role"]), instance=instance,
+                       project=project, by=by, reason=" ".join(parts), ts=ts)
+
+
+def _redeclare_request_line(event: dict[str, Any], *, instance: str, project: str, new: dict[str, Any], by: str, why: list[str]) -> str:
+    reason = (f"base={event['ts']} to_harness={new['kind']} to_host={new['host'] or '-'} to_dir={new.get('dir') or '-'} "
+              f"why={','.join(why) or '-'}")
+    return _trail_line(action=REDECLARE_REQUEST_ACTION, code_id=str(event["code_id"]), role=str(event["role"]), instance=instance,
+                       project=project, by=by, reason=reason)
+
+
+def redeclare_instance(governance_root: str | Path, instance: str, *, harness: str | None = None, host: str | None = None,
+                       harness_dir: str | None = None, actor: str, dry_run: bool) -> dict[str, Any]:
+    """AIPOS-F235 件①②: `lybra roles redeclare` 预演 / 确认的唯一实现(两阶段 verbs.schema two_phase_protocol.enrollment_log_writers)。
+
+    适用: 本项目已接入的治理席位实例(位置事件工位 = 治理根; 实例槽在治理根 .lybra/role)与子 agent 执行身份(land mode=子 agent 模式);
+    pi 工位 = 拒(REDECLARE_WORKSTATION: 迁目录走 relocate-workstation)。操作者 = 本实例或本项目已接入顾问(advisor_updates_cli.advisor_instances),
+    否则 REDECLARE_ACTOR。新值校验: 治理席位经 distribution_sync.harness_role_record(唯一判定; claude-code 会话须在本机), 子 agent 须为顾问会话
+    kind 且不给工作目录。无变化 = REDECLARE_NO_CHANGE。授权 = _authorization_basis: 第二档 → 确认 = 追加 redeclare 位置事件 + 更新实例槽;
+    第一档 → Owner 裁决批准(_redeclare_ruling)= 同第二档生效(authorized_by=owner:<决策 ID>), 拒 = REDECLARE_OWNER_DENIED,
+    未裁决 = 确认追加一行 redeclare_request(已有同一请求则不重复)进收件箱。返回 {state: apply|request|pending, written, ...}。"""
+    import socket
+
+    from tools.aipos_cli.distribution_sync import advisor_harness_kinds, harness_kind_declaration, harness_role_record
+
+    decl = redeclaration_declaration()
+    root = _workspace_root_path(governance_root)
+    name = _no_space(instance, "--instance")
+    by = _no_space(actor, "--actor")
+    if not name or not by:
+        raise _refuse_redeclare("REDECLARE_INVALID", "须给 --instance 与 --actor")
+    given = {"kind": _no_space(harness, "--harness") or None, "host": _no_space(host, "--host") or None,
+             "dir": _no_space(harness_dir, "--dir") or None}
+    if not any(given.values()):
+        raise _refuse_redeclare("REDECLARE_INVALID", "至少给 --harness / --host / --dir 之一")
+    view = instance_enrollment(root, name)
+    ev = location_event(root, name)
+    if not view["enrolled"] or not ev["found"] or not ev["line_fields"]:
+        raise _refuse_redeclare("REDECLARE_NOT_ENROLLED", f"实例 {name} 在 {enrollment_trail_path(root)} 无可沿用 code_id / role 的未作废位置事件"
+                                f"({view['reason'] or '无 land 事件'}); {enrolled_instances_line(root)}")
+    subagent = bool(view["governance_root_mode"])
+    seat = not subagent and bool(ev["dir"]) and Path(str(ev["dir"])).expanduser().resolve() == root
+    if not subagent and not seat:
+        raise _refuse_redeclare("REDECLARE_WORKSTATION", f"实例 {name} 是工位实例(位置 {ev['host'] or '-'}:{ev['dir'] or '-'})")
+    if by != name:
+        from tools.aipos_cli.advisor_updates_cli import advisor_instances
+
+        advisors = advisor_instances(root)
+        if by not in advisors:
+            raise _refuse_redeclare("REDECLARE_ACTOR", f"操作者 {by} 既不是实例 {name} 本身, 也不是本项目已接入顾问({', '.join(advisors) or '无'})")
+    current = registered_harness(root, name)
+    old = {k: current[k] for k in _REDECLARE_FIELDS}
+    local = socket.gethostname()
+    kind = given["kind"] or old["kind"]
+    kinds = advisor_harness_kinds()
+    if kind not in kinds:
+        raise _refuse_redeclare("REDECLARE_INVALID", f"harness {kind!r} 不是顾问会话 kind({'|'.join(kinds)}); 现登记 {registration_label(current) or '无'}")
+    same_session = given["kind"] in (None, old["kind"])
+    # 会话机: 显式 > 新 kind 声明会话须同机(harness_host=forbidden)= 本机 > 同 kind 沿用现登记 > 本机
+    pinned_local = harness_kind_declaration(kind)["harness_host"] == "forbidden"
+    new_host = given["host"] or (local if pinned_local else None) or (old["host"] if same_session else None) or local
+    slot_record: dict[str, Any] | None = None
+    if subagent:
+        if given["dir"]:
+            raise _refuse_redeclare("REDECLARE_INVALID", f"实例 {name} 是子 agent 执行身份(接入模式 {view['mode']}), 无工作目录, 不给 --dir")
+        new = {"kind": kind, "host": new_host, "dir": None}
+    else:
+        if _role_slot(root / ".lybra", name) is None:
+            raise _refuse_redeclare("REDECLARE_NOT_ENROLLED", f"治理根 {root / '.lybra' / 'role'} 无实例 {name} 的记录(实例槽)")
+        # 工作目录: 显式 > 同 kind 同会话机沿用现登记 > 无(须给的 kind 由 harness_role_record 拒并给出口)
+        new_dir = given["dir"] or (old["dir"] if same_session and new_host == old["host"] else None)
+        remote = new_host if new_host != local else None
+        if remote and harness_kind_declaration(kind)["harness_host"] == "forbidden":
+            raise _refuse_redeclare("REDECLARE_INVALID", f"harness={kind} 的会话须在治理根所在机(本机 {local}), 不能登记到主机 {new_host}")
+        try:
+            slot_record = harness_role_record(kind, new_dir, remote)
+        except ValueError as exc:
+            raise _refuse_redeclare("REDECLARE_INVALID", str(exc)) from exc
+        new = {"kind": kind, "host": new_host, "dir": (slot_record or {}).get("dir")}
+    diffs = [{"field": k, "old": old[k], "new": new[k]} for k in _REDECLARE_FIELDS if old[k] != new[k]]
+    if not diffs:
+        raise _refuse_redeclare("REDECLARE_NO_CHANGE", f"实例 {name} 现登记已是 {registration_label(current)}")
+    project = _project_name(root)
+    auth = _authorization_basis(root, new, [d["field"] for d in diffs])
+    out: dict[str, Any] = {"ok": True, "operation": "roles_redeclare", "dry_run": dry_run, "governance_root": str(root), "project": project,
+                           "instance": name, "mode": "subagent" if subagent else "seat", "actor": by, "current": current, "old": old,
+                           "new": new, "diffs": diffs, "tier": auth["tier"], "basis": auth["basis"], "authorization": auth["authorization"],
+                           "why": auth["why"], "item_id": None, "decision_id": None, "owner_choice": None, "state": "apply",
+                           "event_line": None, "request_line": None, "slot_file": str(root / ".lybra" / "role") if seat else None,
+                           "slot_harness": slot_record, "log": str(enrollment_trail_path(root)), "written": [], "written_files": []}
+    basis = auth["basis"]
+    if auth["tier"] == 1:
+        ruling = _redeclare_ruling(root, name, str(ev["ts"]), new)
+        out.update(item_id=ruling["item_id"], decision_id=ruling["decision_id"], owner_choice=ruling["choice"])
+        approve, deny = decl["authorization"]["approve_option"], decl["authorization"]["deny_option"]
+        if ruling["choice"] == deny:
+            raise _refuse_redeclare("REDECLARE_OWNER_DENIED", f"Owner 已裁决不批准(事项 {ruling['item_id']}, 裁决 {ruling['decision_id']})")
+        if ruling["choice"] == approve:
+            basis = f"owner:{ruling['decision_id']}"
+        else:
+            pending = any(r["instance"] == name and r["anchor"] == redeclare_item_identity(name, base=str(ev["ts"]), to=new)[1]
+                          for r in pending_redeclare_requests(root))
+            out["state"] = "pending" if pending else "request"
+            out["request_line"] = _redeclare_request_line(ev, instance=name, project=project, new=new, by=by, why=auth["why"]).rstrip("\n")
+            if not dry_run and not pending:
+                _write_trail_line(enrollment_trail_path(root), out["request_line"] + "\n")
+                out["written"] = [str(enrollment_trail_path(root))]
+            return out
+    out["basis"] = basis
+    out["event_line"] = redeclaration_event_line(ev, instance=name, project=project, new=new, old=old, seat=seat, by=by,
+                                                 basis=str(basis)).rstrip("\n")
+    if dry_run:
+        return out
+    trail = enrollment_trail_path(root)
+    _write_trail_line(trail, out["event_line"] + "\n")
+    out["written"] = [str(trail)]
+    if seat:
+        from tools.aipos_cli.enroll_client import write_role_file
+
+        role = str((_role_slot(root / ".lybra", name) or {}).get("role") or ev["role"])
+        write_role_file(root / ".lybra", role, name, None, harness=slot_record, slot_by_instance=True, stamp_key="redeclared_at",
+                        keep_top=True)
+        out["written_files"] = [str(root / ".lybra" / "role")]
+    after = registered_harness(root, name)
+    out["after"] = after
+    out["ok"] = all(after[k] == new[k] for k in _REDECLARE_FIELDS)
+    return out
+
+
+def render_redeclaration(result: dict[str, Any]) -> list[str]:
+    """改登记预演 / 确认文本(声明 texts; CLI 唯一渲染)。"""
+    t = redeclaration_declaration()["texts"]
+    will = "" if not result["dry_run"] else "将"
+    lines = [t["target_line"].format(instance=result["instance"], mode=t[f"mode_{result['mode']}"], governance_root=result["governance_root"]),
+             t["current_line"].format(current=registration_label(result["current"]) or "-")]
+    lines += [t["diff_line"].format(field=d["field"], old=d["old"] or "-", new=d["new"] or "-") for d in result["diffs"]] or [t["diff_none"]]
+    if result["tier"] == 2:
+        lines.append(t["tier2_dir_only"] if result["basis"] == "dir_only" else t["tier2_authorized"].format(authorization=result["basis"]))
+    elif result["state"] == "apply":
+        lines.append(t["owner_approved"].format(decision_id=result["decision_id"], item_id=result["item_id"]))
+    else:
+        lines.append(t["tier1_request"].format(why=", ".join(result["why"]) or "-", item_id=result["item_id"]))
+        if result["state"] == "pending":
+            lines.append(t["owner_pending"].format(item_id=result["item_id"]))
+        else:
+            lines.append(t["request_line"].format(will=will, line=result["request_line"]))
+    if result["state"] == "apply":
+        lines.append(t["event_line"].format(will=will, line=result["event_line"]))
+        lines.append(t["slot_line"].format(will=will, path=result["slot_file"], instance=result["instance"],
+                                           harness=json.dumps(result["slot_harness"], ensure_ascii=False))
+                     if result["slot_file"] else t["slot_none"])
+    lines.append(t["invariants"])
+    return lines
+
+
+def registration_drift(governance_root: str | Path) -> list[dict[str, Any]]:
+    """AIPOS-F235 件①: 实例槽与日志登记不一致(state lint 报出; 以日志为准)。对象 = 本项目已接入、最新位置事件带 harness= 且治理根 .lybra/role
+    有其记录(带 harness)的实例; 比 kind / dir / host(槽内有 host 时)。返回 [{instance, event, slot, fields}]。只读。"""
+    root = _workspace_root_path(governance_root)
+    out: list[dict[str, Any]] = []
+    for view in enrolled_instances(root):
+        reg = registered_harness(root, view["instance"])
+        slot = reg.get("slot")
+        if reg["source"] != "event" or not slot:
+            continue
+        slot_view = {"kind": str(slot.get("kind") or "").strip() or None, "dir": str(slot.get("dir") or "").strip() or None,
+                     "host": str(slot.get("host") or "").strip() or None}
+        fields = [k for k in ("kind", "dir") if slot_view[k] != reg[k]] + (["host"] if slot_view["host"] and slot_view["host"] != reg["host"] else [])
+        if fields:
+            out.append({"instance": view["instance"], "event": reg["source_label"], "slot": slot_view, "registered": {k: reg[k] for k in _REDECLARE_FIELDS},
+                        "slot_file": reg["slot_file"], "fields": fields})
+    return out
 
 
 def enrollment_whereabouts(workspace_root: str | Path, instance: str) -> dict[str, Any]:

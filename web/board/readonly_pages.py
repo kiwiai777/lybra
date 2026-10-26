@@ -1171,7 +1171,7 @@ def _ws_status(ctx: _Ctx, t: dict[str, Any], plan: dict[str, Any]) -> str:
         rows.append(f"<tr class=\"ws-row{'' if parts['ok'] else ' rp-alert'}\" data-row=\"{_ESC(view_key)}\""
                     f" data-enrollment=\"{_ESC(str(parts['enrollment'] or ''))}\" data-charter=\"{_ESC(str(parts['charter_state'] or ''))}\">"
                     f"<th>{_ESC(t[key])}</th><td>{_ESC(parts['who'])}{extra}{where}</td></tr>")
-    for key in ("row_pi_modes", "row_hosts", "row_validation_roots"):
+    for key in ("row_pi_modes", "row_hosts", "row_validation_roots", "row_advisors"):  # AIPOS-F235 item 4: advisor registrations
         rows.append(f"<tr class=\"ws-row\" data-row=\"{_ESC(key)}\"><th>{_ESC(t[key])}</th><td>{_ESC(texts_by_key[key])}</td></tr>")
     return (f"<section class=\"ws-status\"><h2>{_ESC(t['status_heading'])}</h2>"
             f"<table class=\"rp-subs ws-table\"><tbody>{''.join(rows)}</tbody></table></section>")

@@ -591,7 +591,8 @@ def _landed_host(explicit: str | None) -> str:
 
 
 def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = None, owner_policy_ref: str | None = None,
-                    *, harness: dict[str, str] | None = None, slot_by_instance: bool = False) -> list[str]:
+                    *, harness: dict[str, str] | None = None, slot_by_instance: bool = False, stamp_key: str = "enrolled_at",
+                    keep_top: bool = False) -> list[str]:
     """写入 .lybra/role 文件(统一JSON格式,AIPOS-R6H靶②)。
     
     AIPOS-F23 验收⑨: 合并保留既有键 —— 禁整文件覆盖。既有 owner_policy_ref 等键
@@ -603,6 +604,8 @@ def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = Non
         agent_instance: agent_instance(可选)
         owner_policy_ref: owner策略引用(可选)
         slot_by_instance: AIPOS-F134 件②: 治理席位类(顾问/规划方)写治理根时 = True, 按实例分槽(见下); 工位类 = False(行为不变)
+        stamp_key: AIPOS-F235: 写入时刻记在哪个键(缺省 enrolled_at = 接入; 改登记 = redeclared_at, 接入时刻原样保留)
+        keep_top: AIPOS-F235: 写入的是分槽中别的实例时顶层记录保持原样(改登记不改「最近接入实例」; 缺省 False = 既有语义)
     """
     role_file = _role_file(lybra_dir)
     role_data: dict[str, Any] = {}
@@ -636,10 +639,11 @@ def write_role_file(lybra_dir: Path, role: str, agent_instance: str | None = Non
     if harness:
         # AIPOS-F92 件②: 工位 harness {kind, dir}(distribution.schema harness_semantics; 缺 = pi 工位)
         record["harness"] = dict(harness)
-    record["enrolled_at"] = iso_z()
+    record[stamp_key] = iso_z()
     if slots is not None and agent_instance:
         slots[agent_instance] = dict(record)
-    role_data = {**record, **({"instances": slots} if slots is not None else {})}
+    head = top if keep_top and slots is not None and prior_instance and prior_instance != agent_instance else record
+    role_data = {**head, **({"instances": slots} if slots is not None else {})}
     role_file.write_text(json.dumps(role_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     role_file.chmod(0o644)
     return sorted(role_data.keys())

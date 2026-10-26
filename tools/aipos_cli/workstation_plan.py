@@ -178,15 +178,18 @@ def _err(exc: BaseException) -> str:
 
 def _instance_view(root: Path, instance: str | None, *, needs_workstation: bool) -> dict[str, Any] | None:
     """实例接入 / 工位 / 章程(enrollment.instance_enrollment + distribution_sync.charter_local_state)。None = 未声明。"""
-    from tools.aipos_cli.distribution_sync import charter_local_state
-    from tools.aipos_cli.enrollment import instance_enrollment
+    from tools.aipos_cli.distribution_sync import charter_local_state, default_harness_kind
+    from tools.aipos_cli.enrollment import instance_enrollment, registered_harness, registration_label
 
     if not instance:
         return None
     out: dict[str, Any] = {"instance": instance, "enrollment": "error", "error": None, "role": None, "dir": None, "transport": None,
-                           "host": None, "charter": None}
+                           "host": None, "charter": None, "registration": None}
     try:
         view = instance_enrollment(root, instance)
+        # AIPOS-F235 件④: 登记的 harness / 主机 / 来源事件(唯一读取口 enrollment.registered_harness); pi 工位 = 位置段已示, 不重复
+        reg = registered_harness(root, instance)
+        out["registration"] = registration_label(reg) if reg["kind"] != default_harness_kind() else None
     except (OSError, ValueError) as exc:
         out["error"] = _err(exc)
         return out
@@ -306,10 +309,24 @@ def collect_status(root: str | Path, *, project: str, home_root: str | Path | No
     except (OSError, ValueError, LookupError, RoleRegistryReadError) as exc:
         status["advisors"] = []
         status["advisors_error"] = _err(exc)
+    status["advisor_registrations"] = _advisor_registrations(gov, status["advisors"])
     known = [v["dir"] for v in (status["pi_executor"], status["auditor"]) if v and v.get("dir") and v.get("transport") != "remote"]
     reserved = {n for n in (execution.get("auditor"), execution.get("subagent_executor")) if n}
     status["candidates"] = _candidates(gov, project, known, reserved)
     return status
+
+
+def _advisor_registrations(root: Path, advisors: list[str]) -> list[dict[str, Any]]:
+    """AIPOS-F235 件④: 各已接入顾问登记的 harness / 主机 / 来源事件(enrollment.registered_harness; 读不出 = 该行带原因)。"""
+    from tools.aipos_cli.enrollment import registered_harness, registration_label
+
+    out = []
+    for name in advisors:
+        try:
+            out.append({"instance": name, "registration": registration_label(registered_harness(root, name)), "error": None})
+        except (OSError, ValueError) as exc:
+            out.append({"instance": name, "registration": None, "error": _err(exc)})
+    return out
 
 
 def _status_risks(status: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
@@ -536,6 +553,8 @@ def instance_parts(t: dict[str, Any], view: dict[str, Any] | None) -> dict[str, 
     if view is None:
         return {"who": t["undeclared"], "where": None, "charter": None, "ok": False, "enrollment": None, "charter_state": None}
     who = _fmt(t["instance_value"], instance=view["instance"], enrollment=t[f"enrollment_{view['enrollment']}"])
+    if view.get("registration"):
+        who += " " + _fmt(t["registered_value"], registration=view["registration"])
     if view.get("error"):
         who += f" {view['error']}"
     where = (_fmt(t["workstation_value"], dir=(f"{view['host']}:" if view.get("transport") == "remote" else "") + view["dir"])
@@ -565,9 +584,13 @@ def status_rows(plan: dict[str, Any], t: dict[str, Any]) -> list[tuple[str, str]
         vr_text = _fmt(t["vr_value"], total=vr["total"], runs=vr["runs"], hosts=", ".join(vr["used_hosts"]) or "-", **vr["counts"])
     else:
         vr_text = t["none"]
+    advisors = t["list_sep"].join(
+        _fmt(t["instance_value"], instance=a["instance"], enrollment=t["enrollment_enrolled"])
+        + (" " + _fmt(t["registered_value"], registration=a["registration"]) if a.get("registration") else "")
+        + (f" {a['error']}" if a.get("error") else "") for a in st.get("advisor_registrations") or []) or t["none"]
     return [("row_subagent", _instance_text(t, st["subagent"])), ("row_pi_executor", _instance_text(t, st["pi_executor"])),
             ("row_auditor", _instance_text(t, st["auditor"])), ("row_pi_modes", modes), ("row_hosts", host_text),
-            ("row_validation_roots", vr_text)]
+            ("row_validation_roots", vr_text), ("row_advisors", advisors)]
 
 
 def routing_lines(rows: list[dict[str, Any]], t: dict[str, Any], *, rule: bool = False) -> list[str]:

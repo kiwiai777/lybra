@@ -1634,6 +1634,10 @@
     "legacy_baseline": "AIPOS-F122 件③: 项目声明了存量冻结(config.schema project_json.legacy_baseline)时, 全项目扫描对冻结卡及其 records/*/<ID>/ 不报任何检查码, 汇总一行 frozen N; --task-id 单卡 lint 对冻结卡照实报并标注 frozen。清单读不出 = LEGACY_BASELINE_INVALID(ERROR), 不隐藏任何卡。是否冻结唯一判定 legacy_baseline.frozen_tasks(与 next 项目扫描、门写动作、loop 共用)。",
     "check_severity": {
       "description": "AIPOS-F94 件③: state lint 各检查码的级别(唯一声明; state_lint 只读, 缺键 = 声明缺失 fail-closed)",
+      "ENROLLMENT_REGISTRATION_DRIFT": {
+        "severity": "WARN",
+        "description": "AIPOS-F235: 治理根 .lybra/role 实例槽与日志登记(最新位置事件 harness / harness_host / harness_dir)不一致(enrollment.registration_drift); 以日志为准, 只提示不计断层(进 notes, 不影响 lint 退出码); 出口: 由该实例或项目顾问重跑 lybra roles redeclare 对齐"
+      },
       "GOVERNANCE_UNCOMMITTED": {
         "severity": "WARN",
         "rationale": "已结案但治理真相未落账: 有产品出口(nodes.N6.landing.command_template, 审计卡指向被审卡)的待办, 不是三方断层(断层 = ERROR); 判据 nodes.N6.landing.criterion 作用于卡自身路径(卡编年史为多卡共享文档, 不归单卡)"

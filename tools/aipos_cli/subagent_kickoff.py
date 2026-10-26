@@ -41,7 +41,7 @@ TEXT_KEYS = ("ratchet_default", "runall_absent", "runall_absent_timeout", "lane_
 ITEM_KEYS = ("boundary_line", "hard_rule_line", "commands_rule_line", "no_write_line")
 REFUSAL_KEYS = ("KICKOFF_ROLE_MISMATCH", "KICKOFF_INSTANCE_MISSING", "KICKOFF_NOT_STARTABLE", "KICKOFF_CHARTER_REFUSED",
                 "KICKOFF_WORKTREE_UNRESOLVED", "KICKOFF_REPORT_UNRESOLVED", "KICKOFF_SCRATCH_IN_GOVERNANCE",
-                "KICKOFF_VALIDATION_ROOT_UNRESOLVED", "KICKOFF_HARNESS_UNRESOLVED")
+                "KICKOFF_VALIDATION_ROOT_UNRESOLVED", "KICKOFF_HARNESS_UNRESOLVED", "KICKOFF_HARNESS_MISMATCH")
 
 
 class KickoffRefused(ValueError):
@@ -319,6 +319,9 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
     harness_refusal = view.get("harness_refusal") or {}
     if harness_refusal:  # 时限句按卡 harness 产出, harness 不可推导 = 拒(原文含出口), 不猜
         raise _refuse(contract, "KICKOFF_HARNESS_UNRESOLVED", task_id=task_id, code=harness_refusal.get("code"), reason=harness_refusal.get("reason"))
+    mismatch = view.get("harness_mismatch") or {}
+    if mismatch:  # AIPOS-F235 件③: 卡面 harness ≠ 派发顾问现登记 = 时限句 / 派发说明会错, 拒并给受限 amend 出口原文
+        raise _refuse(contract, "KICKOFF_HARNESS_MISMATCH", reason=mismatch["reason"], amend_command=mismatch["amend_command"])
     try:
         charter = instance_charter(gov, role_class=card_role, instance=instance)
     except CharterRefused as exc:
