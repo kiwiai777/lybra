@@ -146,6 +146,8 @@ def test_item1_wait_step_deploy_switch_reexecs_to_new_snapshot_and_continues(rig
 
 
 def test_item1_deploy_switch_between_execute_steps_still_deploy_changed(rig, tmp_path):
+    """AIPOS-F241 件④ 起两步之间部署更新也换快照续跑(同一续等口, reexec.kind = step; 全流程见 test_aipos_f241_*): 本用例的续等口
+    launcher 返回而未替换进程 = 退回 deploy_changed 停下, 结束原文附原因(原 F166「执行步之间不续等」随 F241 改为尝试一次)。"""
     deploy = _deploy_with_code_stub(tmp_path / "product")
     f90._card(rig.gov, TASK, "pending")
     init_governance_repo(rig.gov)
@@ -164,7 +166,8 @@ def test_item1_deploy_switch_between_execute_steps_still_deploy_changed(rig, tmp
     _show(f"---- ① 执行步之间部署更新 原文 exit {res.exit_code} ----\n{out.getvalue()}")
     assert res.exit_code == exit_code_for(load_loop_contract(), "deploy_changed") == 6 and res.reason == "deploy_changed"
     assert res.message.startswith("部署已更新(本进程运行快照 commit") and "已在步间停下(未执行下一步)" in res.message
-    assert calls == [], "执行步之间不续等"
+    assert len(calls) == 1 and "--continues-run" in calls[0], "AIPOS-F241 件④: 两步之间也尝试换快照续跑一次"
+    assert "步间换快照续跑未成(AIPOS-F241): re-exec 未替换进程(launcher 返回)" in res.message
     assert _runs(rig.gov)[-1]["end_reason"] == "deploy_changed"
 
 
