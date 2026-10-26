@@ -2730,14 +2730,23 @@ def _return_rejected_action() -> str:
     return str(return_rejected_declaration()["action_type"])
 
 
-def artifact_fix_declaration(contract: dict[str, Any]) -> dict[str, Any]:
-    """AIPOS-F236 item 3: verbs.schema lybra_loop.launch.report_fix.executor.artifact (single reader). Missing / malformed = SchemaLoadError."""
+def artifact_fix_declaration(contract: dict[str, Any], role: str = "executor") -> dict[str, Any]:
+    """AIPOS-F236 item 3: verbs.schema lybra_loop.launch.report_fix.executor.artifact (single reader). Missing / malformed = SchemaLoadError.
+    AIPOS-F239 item 2: role="auditor" = report_fix.artifact (the audit report rejected by the verdict entry for its content); optional
+    category_notes {category: extra instruction} must be a mapping of non-empty strings."""
     from tools.schema_loader import SchemaLoadError
 
-    decl = (((contract.get("launch") or {}).get("report_fix") or {}).get("executor") or {}).get("artifact")
-    where = f"verbs.schema.json verbs.{LOOP_VERB}.launch.report_fix.executor.artifact"
+    fix = ((contract.get("launch") or {}).get("report_fix") or {})
+    if role == "executor":
+        decl = (fix.get("executor") or {}).get("artifact") if isinstance(fix.get("executor"), dict) else None
+        where = f"verbs.schema.json verbs.{LOOP_VERB}.launch.report_fix.executor.artifact"
+    elif role == "auditor":
+        decl = fix.get("artifact")
+        where = f"verbs.schema.json verbs.{LOOP_VERB}.launch.report_fix.artifact"
+    else:
+        raise ValueError(f"artifact_fix_declaration: role={role!r} not in (auditor, executor)")
     if not isinstance(decl, dict):
-        raise SchemaLoadError(f"{where} not declared (AIPOS-F236)")
+        raise SchemaLoadError(f"{where} not declared (AIPOS-F236 / AIPOS-F239)")
     cap = decl.get("max_per_run")
     if not isinstance(cap, int) or isinstance(cap, bool) or cap < 0:
         raise SchemaLoadError(f"{where}.max_per_run must be an integer >= 0")
@@ -2746,19 +2755,34 @@ def artifact_fix_declaration(contract: dict[str, Any]) -> dict[str, Any]:
         raise SchemaLoadError(f"{where}.prompt must contain {{artifact}} {{category}} {{reasons}}")
     if not isinstance(decl.get("categories"), list) or not decl["categories"]:
         raise SchemaLoadError(f"{where}.categories must be a non-empty list")
+    notes = decl.get("category_notes", {})
+    if not isinstance(notes, dict) or not all(isinstance(v, str) and v.strip() for v in notes.values()):
+        raise SchemaLoadError(f"{where}.category_notes must map categories to non-empty strings (AIPOS-F239)")
     if str(decl.get("end_reason") or "") not in ((contract.get("run_record") or {}).get("end_reasons") or {}):
         raise SchemaLoadError(f"{where}.end_reason must be a declared run_record.end_reasons key")
     return decl
 
 
+def _artifact_fix_prompt(contract: dict[str, Any], artifact: str, check: dict[str, Any], role: str) -> str:
+    decl = artifact_fix_declaration(contract, role)
+    prompt = str(decl["prompt"])
+    reasons = " ".join(str(r) for r in check.get("reasons") or [])
+    category = str(check.get("category") or "")
+    for key, value in (("artifact", artifact), ("category", category), ("reasons", reasons)):
+        prompt = prompt.replace("{" + key + "}", str(value))
+    note = (decl.get("category_notes") or {}).get(category)
+    return f"{prompt} {note}" if note else prompt
+
+
 def executor_artifact_fix_prompt(contract: dict[str, Any], artifact: str, check: dict[str, Any]) -> str:
     """AIPOS-F236 item 3: the fix-the-artifacts instruction (single rendering: loop resume and the end message); check = the artifact-entry
-    result (validate_task_artifact: category + reasons with the files and the legal-exit commands)."""
-    prompt = str(artifact_fix_declaration(contract)["prompt"])
-    reasons = " ".join(str(r) for r in check.get("reasons") or [])
-    for key, value in (("artifact", artifact), ("category", check.get("category") or ""), ("reasons", reasons)):
-        prompt = prompt.replace("{" + key + "}", str(value))
-    return prompt
+    result (validate_task_artifact: category + reasons with the files and the legal-exit commands). AIPOS-F239: + category_notes.<category>."""
+    return _artifact_fix_prompt(contract, artifact, check, "executor")
+
+
+def auditor_artifact_fix_prompt(contract: dict[str, Any], artifact: str, check: dict[str, Any]) -> str:
+    """AIPOS-F239 item 2: the fix-the-audit-report instruction (report_fix.artifact; single rendering: loop resume and the end message)."""
+    return _artifact_fix_prompt(contract, artifact, check, "auditor")
 
 
 def same_round_fix_declaration(contract: dict[str, Any]) -> dict[str, Any]:
@@ -2985,6 +3009,21 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
         code_outcome = "not_derivable"
         watch_root, patterns = executor_artifact_watch(governance_root, card)
         resume_why = "AIPOS-F204 修交回报告头"
+    elif role == "auditor" and not check.get("ok") and str(check.get("category") or "") in [
+            str(c) for c in artifact_fix_declaration(contract, "auditor")["categories"]]:
+        # AIPOS-F239 item 2: the verdict entry rejected the audit report for its content (e.g. a plaintext credential; the rejection
+        # lists file / line / kind only) = resume the audit session once to fix the report (report_fix.artifact)
+        decl = artifact_fix_declaration(contract, "auditor")
+        category = str(check.get("category") or "")
+        kinds = [category]
+        say(f"[{index}] 审计报告被裁决入口拒收 @ {node}/{state} ({card}) {category}")
+        head = f"审计卡 {card} 审计报告被裁决入口拒收 {category}"
+        prompt = auditor_artifact_fix_prompt(contract, report, check)
+        what, who, outlet = "审计报告被裁决入口拒收", "审计", "让审计体按拒因只修审计报告后重新入门(修报告指令见下一条)"
+        code_outcome = "gate_rejected"
+        watch_root, patterns = auditor_artifact_watch(governance_root, card)
+        resume_why = "AIPOS-F239 按裁决拒因修审计报告"
+        fix_key, instruction = f"{card}#artifact", "修报告指令"
     else:
         diag = check.get("tip_diagnosis")
         if check.get("category") != "INGEST_TIP_MISMATCH" or not isinstance(diag, dict):
@@ -3013,7 +3052,7 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
         code = exit_code_for(contract, code_outcome)
         msg = (f"{what}, {why}: {head}。出口(advisor_fix, 不升 Owner): {outlet}, "
                f"见 lybra loop status --task-id {task_id} --workspace-root {governance_root} 的下一条")
-        if role == "executor" or unreadable or evidence is not None:  # AIPOS-F232 / F241: 审计报告的修头 / 只补证据指令同样带进结束原文
+        if role == "executor" or unreadable or fix_key != card:  # AIPOS-F232: 读不出的审计报告同样把修头指令带进结束原文(子 agent 审计时顾问派给审计实例); AIPOS-F239: 审计报告修报告指令同此; AIPOS-F241: 只补证据指令同此
             msg += f"\n  {instruction}(会话不可续接时顾问派给本卡{who}实例): {prompt}"
         if exits_text:  # AIPOS-F236: 交回入门拒收 = 附合法出口全集(修后重交 / 换新主体 / 撤卡 / 改范围)
             msg += f"\n  {exits_text}"
