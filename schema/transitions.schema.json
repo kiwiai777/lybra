@@ -1766,7 +1766,8 @@
         "「一句话结论」非占位, 否则拒(INGEST_SUMMARY_MISSING)",
         "AIPOS-F148 件②: 上一条的「一句话结论」= summary_source 声明的摘要来源(缺省即「一句话结论」节); 项目声明 frontmatter_keys 时其非占位值同样算摘要; 拒因原文列出所查的全部来源(INGEST_SUMMARY_MISSING)",
         "INGEST_CODE_FILE_IN_SLOT: AIPOS-F195 件①: 报告落点 <return_root>/<task_id>/(含 artifacts/、run_long/ 等子目录)出现代码文件(判据只读 config.schema code_files_blacklist, 唯一实现 governance_guardrails.is_code_file)= 拒(码读 config.schema governance_worktree.path_constraints.artifact_slot_code_files.ingest_category), 拒因列文件 / sha256 与修法(脚本移出落点放卡工作树或草稿目录; 证据改存 <名>.<扩展>.txt 并在报告写明来源与 sha256); 外部 FINALIZE 交回同此。唯一实现 artifact_ingest.slot_code_refusal",
-        "AIPOS-F215 件①(gap #219): 摘要检查之后, 正文仍有占位(判据 artifact_ingest.report_placeholder, 唯一实现 validation_common.report_body_placeholders)= 拒(INGEST_REPORT_UNFILLED), 拒因逐条列行号与该行原文; 只写治理根卡同此"
+        "AIPOS-F215 件①(gap #219): 摘要检查之后, 正文仍有占位(判据 artifact_ingest.report_placeholder, 唯一实现 validation_common.report_body_placeholders)= 拒(INGEST_REPORT_UNFILLED), 拒因逐条列行号与该行原文; 只写治理根卡同此",
+        "AIPOS-F239 件①②: 占位检查之后, 交回报告 / 报告落点 / outputs / lane 为治理根的卡的 output_target 含明文凭据(判据 artifact_ingest.credential_guard, 唯一实现 artifact_ingest.credential_scan; 私有运行文件不扫)= 拒(INGEST_CREDENTIAL_IN_ARTIFACT), 拒因只列文件 / 行号 / 种类, 不回显值; 外部 FINALIZE 交回同此"
       ],
       "summary_source": {
         "description": "AIPOS-F148 件②(gap #112): 交回「就绪」判据的摘要来源声明——不再写死 lybra 模板节名。推导核就绪判据 next_resolver._check_return_artifact、推导核交回步 result_summary、artifact ingest 摘要检查同用唯一解析 next_resolver.extract_return_summary_text(content, source); source = 项目声明(project.json return_summary_source, config.schema project_json.schema.return_summary_source, 唯一读取口 workspace_config.return_summary_source)逐键覆盖本节缺省。",
@@ -1905,7 +1906,8 @@
         "commit_sha == 被审卡分支 tip(git rev-parse <被审卡分支>; 分支名唯一声明 nodes.N5.branch_integration.branch_pattern, 读取口 next_resolver.card_branch_name), 否则拒(INGEST_TIP_MISMATCH): 审的必须是当前产物",
         "AIPOS-F196: 被审卡交付主体为固定候选(validation)= commit_sha 须等于卡面候选(INGEST_CANDIDATE_MISMATCH), 不核被审卡分支; 裁决 artifact_subject = 候选(门侧 board_adapter 裁决预演同核)",
         "AIPOS-F195 件①: 审计报告落点 <verdict_root>/<audit_task_id>/(含子目录)出现代码文件 = 拒(INGEST_CODE_FILE_IN_SLOT), 与 return 同一实现 artifact_ingest.slot_code_refusal",
-        "AIPOS-F215 件①(gap #219): 必填 frontmatter 已填之后, 正文仍有占位 = 拒(INGEST_REPORT_UNFILLED), 与 return 同一判定 validation_common.report_placeholder_refusal"
+        "AIPOS-F215 件①(gap #219): 必填 frontmatter 已填之后, 正文仍有占位 = 拒(INGEST_REPORT_UNFILLED), 与 return 同一判定 validation_common.report_placeholder_refusal",
+        "AIPOS-F239 件②: 占位检查之后, 审计报告 / 审计落点含明文凭据 = 拒(INGEST_CREDENTIAL_IN_ARTIFACT), 与 return 同一实现 artifact_ingest.credential_scan, 拒因不回显值; loop 续接审计会话脱敏一次(verbs.schema lybra_loop.launch.report_fix.artifact)"
       ],
       "submits_via": "lybra audit-verdict --confirm(驱动方 token, artifact_subject 从被审分支 tip 取 commit_sha/tree_hash, agent_runtime=产品按会话记录定位器填写的运行时模型 AIPOS-F90 件②)",
       "derived_command": "AIPOS-F90 件②: 推导核对 return/verdict 步给驱动方的命令 = `lybra artifact ingest --task-id <ID> --kind <return|verdict> --workspace-root <治理根>`; 入口内部执行推导核同时给出的 shell_command(唯一构建), 驱动方不再手提 audit-verdict / queue return",
@@ -2101,6 +2103,188 @@
         "extra_fields": ["remote_ref", "finalize_return_ref"]
       },
       "derived_command": "lybra artifact ingest --task-id <被审卡ID> --workspace-root <治理根>(action_type=finalize, 信封 allowed_verbs 同 internal finalize)"
+    },
+    "credential_guard": {
+      "description": "AIPOS-F239 件①(10-26 chris 理想 HBLX-85 实撞: config 卡交回报告正文写入了测试凭据, 产物入口对凭据零判据, 只因同时撞程序判据被拒才没入门; 交回 / 裁决报告入门后由 N6 收账提交并推送治理仓, 凭据进 git 历史后撤不回): 产物入口凭据判据唯一声明。判定处 = artifact_ingest._validate_task_artifact 的 return / verdict / finalization 三处(门交回入口与 loop 交回步、裁决步同经此), 实现唯一 = artifact_ingest.credential_scan(命中判定 credential_hits; 存量只读检查 credential_stock_scan 同一实现)。扫描范围 scan: ①本卡报告落点(return_root / verdict_root / FINALIZE 卡落点 <卡>/)内 full_text_dirs 目录下全部文本文件, 其余位置(含报告本身与 runtime/ 等子目录)只扫文件名匹配 slot_globs 者; ②交回报告 outputs 所列文件(只写治理根的卡); ③卡 output_target 所列路径(逗号分隔或列表; 仅当卡 lane 仓解析为治理根自身——不扫产品代码仓——且路径落在治理根内); 跳过 skip_dirs 名的目录。私有运行文件不扫、不入门: 被 git 忽略(git check-ignore -v, 已跟踪者不算)且忽略它的规则 ≠ 忽略报告落点目录本身的规则(落点未被忽略 = 无规则)者, 如落点内 .gitignore 排除的 runtime/private/; 整个落点都被忽略的项目(如 lybra task_cards/)忽略不带「私有」语义 = 全扫; 报告本身永远照扫(裁决报告入门时快照进 records); 不是 git 仓 / check-ignore 出错 = 全扫(fail-closed)。存量只读检查(lybra artifact credential-scan, verbs.schema lybra_artifact_credential_scan)另扫已入门审计报告快照目录(verdict.report_snapshot.location 的目录)。文本判据: 普通文件(不跟软链), 前 sniff_bytes 字节无 NUL, 只读前 max_scan_bytes 字节, 按 utf-8(errors=replace)解码。模式 patterns: 逐条 Python re(MULTILINE)全文匹配, 命名组 value 为命中值(无此组 = 整段), 值长度 < min_value_chars(缺省 1)或命中豁免表 exempt = 不算(值只取完整一段: 值后紧跟左圆括号 / 左方括号 = 函数调用 / 下标取值, 不算); 命中行号按匹配起点计。豁免 exempt(只此一处, 无绕过开关): key_patterns(模式带命名组 key 时, 键全匹配任一 = 不算, 如一次性预演令牌 dry_run_token、词元计数键)、value_patterns(值全匹配任一 = 占位 / 打码 / 变量引用 / 含中日韩字符的叙述; 全部模式适用)、loose_value_patterns(只对 loose = true 的泛化模式——键值式 / 命令行参数——适用: 路径 / 环境变量名 / 数量 / 蛇形或点分标识符, 结构化令牌形不适用)、value_words(值 casefold 后等于任一)、value_substrings(值 casefold 后含任一); 值先去掉首尾引号 / 反引号与尾随标点 strip_chars。命中 = 拒 category, 拒因只给文件 + 行号 + 模式种类(texts.refusal / texts.hit), 绝不回显命中值(拒收记录、loop 日志、next / status 原文同源, 同样不含值); 交回拒收落 return_rejected 记录(rejection_record 同一机制, files 含命中的报告落点外文件), pi 卡由 loop 同会话续接一次按拒因脱敏(verbs.schema lybra_loop.launch.report_fix.executor.artifact.categories 含本码; 审计报告 = report_fix.artifact)。不扫产品代码仓; 不阻止私有运行目录(git 忽略)里存放运行所需凭据。缺本节 = 不查(行为不变); 在而键 / 文案不齐或正则编不过 = 拒 INGEST_DECLARATION_MISSING(fail-closed)。",
+      "category": "INGEST_CREDENTIAL_IN_ARTIFACT",
+      "scan": {
+        "full_text_dirs": [
+          "artifacts"
+        ],
+        "slot_globs": [
+          "*.md",
+          "*.json",
+          "*.txt",
+          "*.yaml",
+          "*.yml",
+          "*.properties",
+          "*.conf",
+          "*.cnf",
+          "*.ini",
+          "*.toml",
+          "*.env",
+          ".env"
+        ],
+        "output_target": true,
+        "outputs": true,
+        "skip_gitignored": true,
+        "skip_dirs": [
+          ".git",
+          "node_modules",
+          "__pycache__",
+          ".venv",
+          "venv"
+        ],
+        "sniff_bytes": 8192,
+        "max_scan_bytes": 4194304,
+        "max_listed": 20
+      },
+      "patterns": [
+        {
+          "kind": "private_key",
+          "label": "私钥块",
+          "regex": "-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----[ \\t]*(?:\\r?\\n|\\\\n)(?:[ \\t]*(?:\\r?\\n|\\\\n))*[ \\t]*(?P<value>[A-Za-z0-9+/=]{16,})"
+        },
+        {
+          "kind": "token_sk",
+          "label": "令牌(sk- 前缀)",
+          "regex": "(?<![A-Za-z0-9_-])(?P<value>sk-[A-Za-z0-9_-]{20,})"
+        },
+        {
+          "kind": "token_github",
+          "label": "令牌(GitHub ghp_ 等)",
+          "regex": "(?<![A-Za-z0-9_])(?P<value>(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}))"
+        },
+        {
+          "kind": "token_slack",
+          "label": "令牌(Slack xox 前缀)",
+          "regex": "(?<![A-Za-z0-9_])(?P<value>xox[abposr]-[A-Za-z0-9-]{10,})"
+        },
+        {
+          "kind": "token_aws",
+          "label": "访问密钥(AWS AKIA / ASIA)",
+          "regex": "(?<![A-Za-z0-9])(?P<value>(?:AKIA|ASIA)[0-9A-Z]{16})(?![0-9A-Za-z])"
+        },
+        {
+          "kind": "token_jwt",
+          "label": "令牌(JWT 三段式)",
+          "regex": "(?<![A-Za-z0-9_-])(?P<value>eyJ[A-Za-z0-9_-]{8,}\\.eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,})"
+        },
+        {
+          "kind": "bearer_header",
+          "label": "Bearer 认证头",
+          "regex": "(?i)(?<![A-Za-z0-9_])bearer[ \\t]+(?P<value>[A-Za-z0-9._~+/-]{16,}=*)"
+        },
+        {
+          "kind": "url_credential",
+          "label": "带口令的连接串",
+          "regex": "(?i)(?<![A-Za-z0-9+.-])[a-z][a-z0-9+.-]*://[^\\s:/@'\\\"<>`]*:(?P<value>[^\\s@/'\\\"<>`]+)@[^\\s/'\\\"<>`]+"
+        },
+        {
+          "kind": "keyvalue_secret",
+          "label": "键值式口令 / 令牌",
+          "regex": "(?i)(?<![A-Za-z0-9_])[*_`\\\"']*(?P<key>[A-Za-z0-9_.-]*(?:password|passwd|passphrase|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credential)|口令|密码|密钥|令牌|私钥)[*_`\\\"']*[ \\t]*(?:=>|:=|=|:|：)[ \\t]*[`\\\"']?(?=(?P<value>[^\\s`\\\"',;|<>()\\[\\]{}（）]+))(?P=value)(?![(\\[])",
+          "min_value_chars": 4,
+          "loose": true
+        },
+        {
+          "kind": "cli_secret_flag",
+          "label": "命令行口令 / 令牌参数",
+          "regex": "(?i)(?<![A-Za-z0-9_-])--(?:password|passwd|pass|token|api-key|apikey|secret|auth-token|access-token)[ \\t]+[`\\\"']?(?P<value>[^\\s`\\\"',;|<>()\\[\\]{}]+)",
+          "min_value_chars": 4,
+          "loose": true
+        }
+      ],
+      "exempt": {
+        "strip_chars": "\"'`.,;:)]}>*_",
+        "key_patterns": [
+          "(?i)[A-Za-z0-9_.-]*dry[_-]?run[_-]?token",
+          "(?i)(?:max|input|output|total|prompt|completion|cache|context)[_-]?tokens?"
+        ],
+        "value_patterns": [
+          ".*(?:\\*{3,}|x{4,}|X{4,}|\\.{3,}|…|•{2,}|#{3,}).*",
+          "<[^<>]*>?",
+          "\\[.*",
+          "\\$\\{.*",
+          "\\$\\(.*",
+          "\\$[A-Za-z_][A-Za-z0-9_]*",
+          "%[A-Za-z_][A-Za-z0-9_]*%",
+          "\\{\\{.*",
+          "\\{[A-Za-z_][A-Za-z0-9_.]*\\}?",
+          "[-_?=0]+",
+          ".*[\\u3000-\\u303f\\u3040-\\u30ff\\u4e00-\\u9fff\\uff00-\\uffef].*"
+        ],
+        "loose_value_patterns": [
+          "(?:/|~/|\\./|\\.\\./).*",
+          "[A-Z]+(?:_[A-Z0-9]+)*",
+          "[~≈约]?[0-9][0-9.,]*[kKmMwW万]?\\+?",
+          "[a-z][a-z0-9]*(?:_[a-z0-9]+)+",
+          "[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)+"
+        ],
+        "value_words": [
+          "pass",
+          "password",
+          "passwd",
+          "pwd",
+          "secret",
+          "token",
+          "credential",
+          "changeme",
+          "change_me",
+          "example",
+          "sample",
+          "placeholder",
+          "redacted",
+          "masked",
+          "hidden",
+          "none",
+          "null",
+          "nil",
+          "true",
+          "false",
+          "yes",
+          "no",
+          "required",
+          "optional",
+          "empty",
+          "n/a",
+          "tbd",
+          "your_password",
+          "your-password",
+          "yourpassword",
+          "your_token",
+          "your-token"
+        ],
+        "value_substrings": [
+          "redacted",
+          "example",
+          "placeholder",
+          "changeme",
+          "fixture",
+          "not-a-secret",
+          "not_a_secret",
+          "已打码",
+          "打码",
+          "脱敏",
+          "占位",
+          "示例"
+        ]
+      },
+      "texts": {
+        "refusal": "{what} 含明文凭据 {count} 处: {hits}(只列文件 / 行号 / 种类, 命中值不回显; 判据 transitions artifact_ingest.credential_guard)。报告一旦入门即随 N6 收账进治理仓提交历史、撤不回。出口: 把命中处的值换成占位(如 <口令> / [已打码] / ${{变量名}}), 并在报告写明凭据存放处(被 .gitignore 排除的私有运行目录, 如 runtime/private/ 下的文件名); 不删验证结论与其余证据; 改完重写报告(先写 .tmp 再改名)后重交。凭据确属运行所需 = 只放被 git 忽略的私有目录。豁免只经声明表 exempt, 无绕过开关。",
+        "hit": "{path} 第 {line} 行({label})",
+        "more": "等共 {count} 处",
+        "what_return": "交回产物",
+        "what_verdict": "审计报告落点",
+        "what_finalization": "FINALIZE 交回产物",
+        "stock_title": "存量凭据只读检查(AIPOS-F239 件③; 判据 transitions artifact_ingest.credential_guard; 只读: 不改任何文件 / 不改写已提交历史, 命中值不回显)",
+        "stock_root": "治理根 {root}: 扫报告落点 {slots} 个, 文本文件 {files} 个",
+        "stock_clean": "无命中",
+        "stock_summary": "命中 {count} 处, 涉及 {slot_count} 个报告落点; 按种类: {by_kind}",
+        "stock_slot": "{slot}: {count} 处",
+        "stock_hit": "  {path} 第 {line} 行({label})",
+        "stock_next": "处置由顾问决定(本检查不改写 git 历史): 未提交的 = 让写报告的角色把值换成占位后重写; 已提交的 = 另行评估是否改写历史 / 轮换凭据"
+      }
     },
     "exit_codes_ref": "verbs.schema.json verbs.lybra_artifact_ingest.exit_codes(退出码唯一声明处, AIPOS-F101 件③ 删本处重复声明)",
     "tip_mismatch_diagnosis": {

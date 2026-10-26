@@ -35,6 +35,14 @@
                (FAKE_PI_RESUMES >= 1) it checks the resume instruction names the rejection, moves the program out of the slot and
                rewrites RETURN
     docs_program       AIPOS-F236: first run as docs_program_once; on resume leaves everything untouched and exits 0
+    docs_cred_once     AIPOS-F239 (executor card only): first run as docs, but RETURN carries a plaintext password line (an obviously
+               fake value built at run time, see fake_secret()); on a same-session resume it checks the resume instruction names
+               INGEST_CREDENTIAL_IN_ARTIFACT and does NOT echo the value, then swaps the value for a placeholder and notes where the
+               credential lives (git-ignored private dir); the verification conclusion is kept
+    docs_cred          AIPOS-F239: first run as docs_cred_once; on resume leaves everything untouched and exits 0
+    cred_once          AIPOS-F239 (audit card only): first run as work, but the audit report carries a plaintext Bearer header line; on a
+               same-session resume it checks the instruction (category named, value not echoed) and swaps the value for [已打码]
+    cred_stay          AIPOS-F239: first run as cred_once; on resume leaves the report untouched and exits 0
     hang_sim   AIPOS-F231: 同 hang, 另起一个脱离本进程组(新会话)的「伪模拟器」进程, cwd = FAKE_SIM_DIR(本卡验证根 run 目录; 验停线按
                run 目录归属清理组外进程)
     provider_401 / provider_429 / length   AIPOS-F231: 写一份 pi 会话记录(文件名 <时刻>_<FAKE_PI_SESSION_ID>.jsonl, 与真实 pi 同形)
@@ -280,6 +288,35 @@ def sha_mode(task_id: str, kickoff: str, mode: str) -> None:
     pi_session(report, "fake-audit-model")
 
 
+def fake_secret() -> str:
+    """AIPOS-F239: an obviously fake credential value, assembled at run time (never a real credential; no exempt substring)."""
+    return "NotReal" + "7Kq2Lm9Wd4"
+
+
+def cred_mode(task_id: str, kickoff: str, mode: str) -> None:
+    """AIPOS-F239: plaintext credential in the executor return (docs_cred*) or in the audit report (cred_*); resume =
+    FAKE_PI_RESUMES >= 1 (set by fake pi): the resume instruction must name the rejection and must not carry the value."""
+    report = Path(field(kickoff, "报告落点"))
+    audit = bool(reviewed_of(task_id))
+    secret = fake_secret()
+    line = (f"- 门探活: curl -H 'Authorization: Bearer {secret}{secret}' http://127.0.0.1:1/mcp\n" if audit
+            else f"- 登录验证: curl -d \"username=demo&password={secret}\" https://127.0.0.1:8443/login → 302(登录成功)\n")
+    if os.environ.get("FAKE_PI_RESUMES", "0") == "0":
+        do_work(task_id, kickoff) if audit else do_docs(task_id, kickoff)
+        report.write_text(report.read_text(encoding="utf-8") + "\n## 验证\n" + line, encoding="utf-8")
+        return
+    if mode in ("docs_cred", "cred_stay"):
+        return
+    prompt = os.environ.get("FAKE_PI_PROMPT", "")
+    if "INGEST_CREDENTIAL_IN_ARTIFACT" not in prompt or secret in prompt:
+        raise SystemExit("fake_harness: resume instruction lacks the rejection or echoes the credential value")
+    text = report.read_text(encoding="utf-8")
+    fixed = (text.replace(f"{secret}{secret}", "[已打码]") if audit
+             else text.replace(secret, "<口令>") + "\n凭据存放处: runtime/private/login-password(git 忽略的私有运行目录)\n")
+    report.write_text(fixed, encoding="utf-8")
+    pi_session(report, "fake-audit-model" if audit else "fake-exec-model")
+
+
 YAML_BAD_LINE = "engine: glm-5.3 (provider: kiwiai)"  # AIPOS-F232: the AIPOS-F225R header line shape (unquoted = PyYAML error); AIPOS-F233:
 # a key NOT in transitions artifact_ingest.report_header_yaml.free_text_keys (a declared free-text key such as `model` is now tolerated)
 
@@ -369,6 +406,10 @@ def main() -> int:
         return 0
     if mode == "validate" and not reviewed_of(task_id):
         do_validate(task_id, kickoff)
+        emit({"type": "agent_end", "messages": []})
+        return 0
+    if (mode in ("docs_cred_once", "docs_cred") and not reviewed_of(task_id)) or (mode in ("cred_once", "cred_stay") and reviewed_of(task_id)):
+        cred_mode(task_id, kickoff, mode)
         emit({"type": "agent_end", "messages": []})
         return 0
     if mode in ("docs_program_once", "docs_program") and not reviewed_of(task_id):
