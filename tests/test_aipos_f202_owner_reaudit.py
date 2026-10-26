@@ -50,10 +50,50 @@ def _show(text: str) -> None:
     print(text, flush=True)
 
 
+#: AIPOS-F242 件②: 夹具「本机运行代码」。loop status / 收件箱的第二档判定现值缺省读本进程运行代码
+#: (next_resolver.current_env → DeployGuard.for_running_process → deploy_runtime.running_code), 不钉 = 读到跑测试那台机的真实部署快照
+#: (从 .deploy/releases/<名> 跑 = 该快照 VERSION 提交 ≠ 夹具提交 → 「部署已变」; 从工作树跑 = 无提交 → 不可比), 结果随本机部署状态翻转。
+#: pin_host_deploy 后本机运行代码 = 夹具最近一次 _loop 的部署提交(模拟「loop 与 status 跑同一份部署」), 与本机真实部署无关。
+_HOST: dict[str, object] = {"pinned": False, "commit": None}
+
+
+def pin_host_deploy(monkeypatch, commit: str | None = None) -> None:
+    """AIPOS-F242 件②: 钉住本进程运行代码身份(夹具值; 之后每次 _loop 以其部署提交更新), 不读本机 .deploy 快照。"""
+    monkeypatch.setitem(_HOST, "pinned", True)
+    monkeypatch.setitem(_HOST, "commit", commit)
+    monkeypatch.setattr(DeployGuard, "for_running_process",
+                        classmethod(lambda cls: cls(RunningCode(REPO_ROOT, "worktree", None, _HOST["commit"], "fixture-host"))))
+
+
+def separate_auto_release_second(monkeypatch) -> None:
+    """AIPOS-F242 件②: 注入时钟——第二档自动放行记录(连续 BLOCK 计数的界, released_at 秒精度)与前后裁决(verdict_at 秒精度)不落同一秒。
+    病根: 夹具跑得快, 放行与下一轮裁决常在同一秒; 界的判据 = 裁决时刻严格晚于放行时刻(next_resolver.audit_block_state), 同秒 = 新裁决被算在
+    界前 → 推导核又派下一轮(R4)→ 夹具 watch 走执行体分支 → `git commit` 无改动退出 1(10-26 F238 合并后回归记成新增失败的那一红)。
+    做法: clock.utc_now 加可控偏移(iso_z 同读), 放行写入前 +1s、写入后再 +1s——放行严格晚于上一笔裁决、下一笔裁决严格晚于放行; 偏移只增不减。"""
+    from datetime import timedelta
+
+    from tools.aipos_cli import clock
+
+    offset = {"seconds": 0}
+    real_now, real_write = clock.utc_now, oi.write_auto_release
+
+    def write(*args, **kwargs):
+        offset["seconds"] += 1
+        try:
+            return real_write(*args, **kwargs)
+        finally:
+            offset["seconds"] += 1
+
+    monkeypatch.setattr(clock, "utc_now", lambda: real_now() + timedelta(seconds=offset["seconds"]))
+    monkeypatch.setattr(oi, "write_auto_release", write)
+
+
 def _loop(rig, watch, commit: str):
     import io
 
     out = io.StringIO()
+    if _HOST["pinned"]:  # AIPOS-F242 件②: 钉住时本机运行代码随夹具部署更新(loop 与 status 同一份部署)
+        _HOST["commit"] = commit
     guard = DeployGuard(RunningCode(REPO_ROOT, "worktree", None, commit, f"fixture-{commit[:7]}"))
     res = run_loop(TASK, rig.gov, actor=DRIVER, policy_id=f90.POLICY, out=out, watch=watch, interval=0.05, max_wait=5, max_steps=40,
                    deploy_guard=guard)

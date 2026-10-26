@@ -828,7 +828,7 @@ _CREDENTIAL_SCAN_KEYS = ("full_text_dirs", "slot_globs", "output_target", "outpu
                          "max_scan_bytes", "max_listed")
 _CREDENTIAL_EXEMPT_KEYS = ("strip_chars", "key_patterns", "value_patterns", "loose_value_patterns", "value_words", "value_substrings")
 _CREDENTIAL_TEXTS = ("refusal", "hit", "more", "what_return", "what_verdict", "what_finalization", "stock_title", "stock_root",
-                     "stock_clean", "stock_summary", "stock_slot", "stock_hit", "stock_next")
+                     "stock_clean", "stock_summary", "stock_slot", "stock_hit", "stock_next", "charter_rule")
 
 
 def credential_guard_declaration() -> dict[str, Any] | None:
@@ -878,6 +878,16 @@ def credential_guard_declaration() -> dict[str, Any] | None:
                                                        "words": {str(w).casefold() for w in exempt["value_words"]},
                                                        "substrings": [str(s).casefold() for s in exempt["value_substrings"]],
                                                        "strip": exempt["strip_chars"]}}
+
+
+def credential_charter_rule() -> str:
+    """AIPOS-F242 件④: 执行 / 审计章程「报告不写明文凭据」事前提示(章程占位 {{credential_rule}}, charter_render 唯一调用)。文案唯一声明
+    transitions artifact_ingest.credential_guard.texts.charter_rule(与入门判据同节); 声明缺本节 = 明确文字(不查, 不留空占位)。
+    声明坏 = SchemaLoadError(fail-closed, 章程不渲染半截)。"""
+    decl = credential_guard_declaration()
+    if decl is None:
+        return "(本产品未声明产物凭据判据 transitions artifact_ingest.credential_guard; 报告与产物仍不得写明文凭据)"
+    return str(decl["texts"]["charter_rule"])
 
 
 def _credential_value_exempt(value: str, decl: dict[str, Any], min_chars: int, loose: bool = False) -> bool:
@@ -977,11 +987,13 @@ def _as_path_items(value: Any) -> list[str]:
 
 def credential_scan(workspace_root: Path, slot: Path, *, card_fm: dict[str, Any] | None = None, report: Path | None = None,
                     report_fm: dict[str, Any] | None = None, decl: dict[str, Any] | None = None,
-                    extra_files: list[Path] | None = None) -> dict[str, Any]:
+                    extra_files: list[Path] | None = None, extra_texts: list[tuple[str, str]] | None = None) -> dict[str, Any]:
     """AIPOS-F239 件①(唯一实现; 交回 / 裁决 / FINALIZE 入门与存量只读检查同调): 按声明 scan 收集本次入门会提交或会被审计读的文本
     (报告本身 + 报告落点 full_text_dirs 下全部 + 其余位置匹配 slot_globs 者 + 报告 outputs + lane 为治理根的卡的 output_target + extra_files),
     去掉私有运行文件(_private_files; 报告本身永远照扫), 逐个 credential_hits。返回 {hits: [{path, abs_path, line, kind, label}],
-    files: 扫描文件数, ignored: 跳过的私有文件数}。声明缺 = 空结果。"""
+    files: 扫描文件数, ignored: 跳过的私有文件数}。声明缺 = 空结果。
+    AIPOS-F242 件③: extra_texts = [(显示名, 文本)]——门侧写入口随请求提交、尚未落盘的文本(MCP 直调交回的 result_summary / return_body,
+    裁决的 findings_summary), 与文件同一 credential_hits 判定, 命中 path = 显示名。"""
     import fnmatch
 
     decl = decl if decl is not None else credential_guard_declaration()
@@ -1033,11 +1045,15 @@ def credential_scan(workspace_root: Path, slot: Path, *, card_fm: dict[str, Any]
         except ValueError:
             shown = str(path)
         hits += [{"path": shown, "abs_path": str(path), **h} for h in credential_hits(text, decl)]
+    for shown, text in extra_texts or []:  # AIPOS-F242 件③: 随请求提交的文本(无文件路径; abs_path = 显示名, 不算报告落点外文件)
+        if str(text or "").strip():
+            scanned += 1
+            hits += [{"path": shown, "abs_path": None, **h} for h in credential_hits(str(text), decl)]
     return {"hits": hits, "files": scanned, "ignored": len(ignored)}
 
 
 def credential_refusal(workspace_root: Path, slot: Path, *, kind: str, report: Path | None = None, card_fm: dict[str, Any] | None = None,
-                       report_fm: dict[str, Any] | None = None) -> dict[str, Any] | None:
+                       report_fm: dict[str, Any] | None = None, extra_texts: list[tuple[str, str]] | None = None) -> dict[str, Any] | None:
     """AIPOS-F239 件②: 产物入口凭据拒因(kind = return / verdict / finalization)。无命中 / 声明缺 = None; 命中 = {category, reasons,
     credential_hits(无值), credential_files(报告落点外的命中文件, 交回拒收记录 files 用)}; 声明坏 = {category INGEST_DECLARATION_MISSING}。"""
     from tools.schema_loader import SchemaLoadError
@@ -1048,7 +1064,8 @@ def credential_refusal(workspace_root: Path, slot: Path, *, kind: str, report: P
         return {"category": "INGEST_DECLARATION_MISSING", "reasons": [f"{exc}"], "credential_hits": [], "credential_files": []}
     if decl is None:
         return None
-    result = credential_scan(Path(workspace_root), Path(slot), card_fm=card_fm, report=report, report_fm=report_fm, decl=decl)
+    result = credential_scan(Path(workspace_root), Path(slot), card_fm=card_fm, report=report, report_fm=report_fm, decl=decl,
+                             extra_texts=extra_texts)
     hits = result["hits"]
     if not hits:
         return None
@@ -1059,9 +1076,40 @@ def credential_refusal(workspace_root: Path, slot: Path, *, kind: str, report: P
         listed += " " + texts["more"].format(count=len(hits))
     what = texts.get(f"what_{kind}") or texts["what_return"]
     reason = texts["refusal"].format(what=what, count=len(hits), hits=listed)
-    outside = sorted({h["abs_path"] for h in hits if not _is_within(Path(slot).resolve(), Path(h["abs_path"]))})
+    outside = sorted({h["abs_path"] for h in hits if h["abs_path"] and not _is_within(Path(slot).resolve(), Path(h["abs_path"]))})
     return {"category": str(decl["category"]), "reasons": [reason],
             "credential_hits": [{k: h[k] for k in ("path", "line", "kind", "label")} for h in hits], "credential_files": outside}
+
+
+def gate_credential_blocking(workspace_root: Path, task_id: str, *, kind: str, card_fm: dict[str, Any] | None,
+                             report: Path | None = None, extra_texts: list[tuple[str, str]] | None = None) -> list[str]:
+    """AIPOS-F242 件③: 门侧交回 / 裁决写入唯一口的凭据判定(board_adapter._build_return_preview / _build_audit_verdict_preview 调,
+    同 F162/F163 运行证据下沉做法)——CLI(artifact ingest 派生 / 手敲)与门 MCP 直调一切提交路径同核。判据 = credential_refusal
+    (同一 credential_scan / credential_hits, 不另写), 拒因同码同文「<category>: <拒因>」(不回显值)。
+    kind = return(落点 = 交回落点 return_artifact_dir, 报告缺省 = find_return_artifact)/ verdict(落点 = 审计落点 verdict_artifact_dir,
+    报告缺省 = _check_verdict_artifact; task_id = 审计卡)。报告 frontmatter 读不出 = 按空(报告正文照扫)。无命中 = []。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
+    from tools.aipos_cli.next_resolver import _check_verdict_artifact, find_return_artifact, return_artifact_dir, verdict_artifact_dir
+
+    root = Path(workspace_root)
+    if kind == "verdict":
+        slot = verdict_artifact_dir(root, task_id)
+        report = report if report is not None else _check_verdict_artifact(root, task_id)
+    else:
+        slot = return_artifact_dir(root, task_id)
+        report = report if report is not None else find_return_artifact(root, task_id)
+    report_fm: dict[str, Any] = {}
+    if report is not None and Path(report).is_file():
+        try:
+            report_fm, _body = require_frontmatter(Path(report), allow_missing_block=True)
+        except FrontmatterReadError:
+            report_fm = {}  # 头读不出: 报告全文与落点照扫(只少了报告头 outputs 清单这一扩展来源); 头本身的拒由其余入门判据给出
+    else:
+        report = None
+    refusal = credential_refusal(root, slot, kind=kind, report=report, card_fm=card_fm, report_fm=report_fm, extra_texts=extra_texts)
+    if refusal is None:
+        return []
+    return [f"{refusal['category']}: {reason}" for reason in refusal["reasons"]]
 
 
 def credential_stock_scan(workspace_root: Path) -> dict[str, Any]:

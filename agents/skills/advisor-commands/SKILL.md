@@ -318,7 +318,7 @@ lybra loop status --workspace-root <治理根> --json                          #
 例行清单只在 verbs.schema `lybra_loop_status.next_action.routine_rejections` 一处声明, 目前:
 - 门拒码 `BRANCH_WRONG_BASE`(交回时基线已前进)/ `MERGE_CONFLICT`(finalize 合入冲突): 派本卡执行体在卡工作树合入最新基线、解冲突、重测、更新交回 frontmatter, 然后末行命令续跑(走既有重审出口);
 - 门拒码 `REPO_MERGE_IN_PROGRESS`(同仓另一张卡正在合入): 不改卡, 等持锁卡合完后末行命令重跑;
-- 结束原因 `deploy_changed`(他卡部署了新版本, 且发生在执行步之间): 末行命令重跑, 从断点续做(本 loop 自己 finalize 的部署不再触发它)。**手工等待步**(等执行体交回)中他卡部署 = loop 自己换新快照从同一等待步续等(AIPOS-F166, 运行记录旧运行 `deploy_reexec` / 新运行 `continues_run`), 不停、不用重跑; 结束原因 `deploy_reexec` 只在新进程没接上时才是最近一次运行, 同样末行命令重跑;
+- 他卡部署了新版本: **执行步之间**(AIPOS-F241, 声明 verbs.schema `lybra_loop.deploy_consistency.step_reexec`)与**手工等待步**(AIPOS-F166, `wait_reexec`)一样, loop 自己换到新部署快照从当前推导点续跑(已落的步不重复; 运行记录旧运行 `deploy_reexec`、reexec 段 kind = step / wait, 新运行 `continues_run`), 不停、不用重跑; 结束原因 `deploy_changed` 只在连续换快照且其间未落任何一步达上限(`step_reexec.max_consecutive`, 防部署连环更新空转)或换快照不可行(新快照不可用 / 余步为 0 / exec 失败)时出现, 结束原文附原因, 末行命令重跑、从断点续做(本 loop 自己 finalize 的部署不触发它); 结束原因 `deploy_reexec` 只在新进程没接上时才是最近一次运行, 同样末行命令重跑;
 - 结束原因 `wait_timeout` 且本卡执行方式 = 顾问派子 agent(project.json `execution`, 或等待目标是子 agent 执行者接入; AIPOS-F156 / F157): 不找 Owner、不敲 `/go`——子 agent 仍在做就等它写完交回后末行命令重跑(可加大 `--max-wait`), 已终止或未派就按 `lybra kickoff --task-id <卡ID>` 的开工稿补派; pi 工位 / 手工工位的 `wait_timeout` 仍是 `owner_needed`。
 同卡同一例行原因连续到声明次数仍被拒 = 产品自动升 `owner_needed`, 不必自己计数。
 **信封用尽 / 过期**(AIPOS-F166): 结束原因 `envelope_exhausted` / `envelope_expired` = `owner_needed(envelope_renew)`, detail 给当前用量 / 上限 / 到期, hint = 续签命令(`lybra envelope mint --confirm`, policy_id = 该驱动方同前缀已有最大序号 +1, 范围照抄用尽的信封)——原样转给 Owner 亲自敲, 签好用原命令续跑。剩余 ≤10% 或 ≤3 次、或 ≤24h 到期时 `loop status` / `brief` 先出一行「信封预警」(阈值声明 verbs.schema `lybra_loop.envelope.renew.warn`), 趁早请 Owner 续签。
