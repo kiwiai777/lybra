@@ -301,7 +301,10 @@ def test_item2_audit_verdict_card_auto_rounds_and_changed_acceptance_not_auto(ri
 # ③ audit_blocked_repeated: 部署变化后自动重新派审 / 无变化 = advisor_fix
 # ===========================================================================
 
-def test_item3_audit_blocked_repeated_auto_reaudit(rig):  # noqa: F811
+def test_item3_audit_blocked_repeated_auto_reaudit(rig, monkeypatch):  # noqa: F811
+    # AIPOS-F242 件②: 本机运行代码钉为夹具部署(不读本机 .deploy 快照)+ 放行记录与前后裁决不同秒(注入时钟)——结果与本机部署状态 / 时序无关
+    f202.pin_host_deploy(monkeypatch)
+    f202.separate_auto_release_second(monkeypatch)
     f202._two_blocks(rig)
     status_text, status = _status(rig.gov, f202.TASK)
     na = status["next_action"]

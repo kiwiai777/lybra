@@ -53,8 +53,10 @@ def _buttons(section: str) -> list[str]:
 
 
 @pytest.fixture
-def tiers(rig, tmp_path):  # noqa: F811
+def tiers(rig, tmp_path, monkeypatch):  # noqa: F811
     """第一档样本: 返工上限卡 RW(F226 同形); 第二档样本: 连续 BLOCK 后部署更新 → loop 自动重新派审(F225, 落自动放行记录, R3 再 BLOCK 1 次)。"""
+    f202.pin_host_deploy(monkeypatch)  # AIPOS-F242 件②: 同 F225 第③项——不读本机部署快照、放行与裁决不同秒
+    f202.separate_auto_release_second(monkeypatch)
     rounds = [{"round": n, "verdict_ref": f"verdict_old_{n}", "created_at": f"2026-10-0{n}T00:00:00Z", "created_by": f78.DRIVER,
                "focus_items": ["x"]} for n in (1, 2)]
     f78._card(rig.gov, RW, "claimed", extra={"claimed_by": "exec.lybra.test", "claimed_at": "'2026-10-01T00:00:00Z'", "rework_rounds": rounds})
