@@ -790,6 +790,10 @@ def build_derived_audit_task(
         if str(stale.get("subject") or "") in non_branch_rework_declaration()["by_subject"]:
             texts, values = non_branch_stale_texts(stale)
             non_branch_reaudit = texts, {**values, "superseded": str(reaudit.get("superseded_audit_task_id") or "")}
+    # AIPOS-F238 件③: 交回入门被拒后顾问同轮补正、补正后的交回入门 = 本轮派审带复审说理(顾问要点; 唯一判定 next_resolver.same_round_rejection_reaudit)
+    rejection_reaudit = _same_round_rejection_reaudit_texts(repo_root, source_task_id, return_record_ref)
+    if rejection_reaudit is not None:
+        forensic_anchors.append(rejection_reaudit[0])
     if non_branch_reaudit is not None:
         forensic_anchors.append(non_branch_reaudit[0]["reaudit_ref"].format(**non_branch_reaudit[1]))
     elif reaudit and reaudit.get("kind") == "return_stale":
@@ -843,6 +847,8 @@ def build_derived_audit_task(
             f"`{stale.get('verdict_commit_sha')}`, 卡分支 `{stale.get('branch')}` 之后又前进到 `{stale.get('tip')}`"
             f"(多为 finalize 合并冲突后在卡工作树合 main), 旧裁决不再覆盖当前产物。按原卡全文对新 tip 整卡重审。\n"
         )
+    if rejection_reaudit is not None:
+        reaudit_note = rejection_reaudit[1] + reaudit_note
     audit_body = f"""## Audit Subject
 Independent audit of task `{source_task_id}`.
 {reaudit_note}
@@ -957,6 +963,23 @@ def _reaudit_round(repo_root: Path, source_task_id: str, source_metadata: dict[s
         "superseded_audit_task_id": current,
         "stale": stale,
     }
+
+
+def _same_round_rejection_reaudit_texts(repo_root: Path | None, source_task_id: str, return_record_ref: str) -> tuple[str, str] | None:
+    """AIPOS-F238 件③: (governance_refs 锚点一行, 正文复审说理节); 判定 next_resolver.same_round_rejection_reaudit, 措辞读 transitions
+    nodes.N4.same_round.rejection.texts(reaudit_ref / reaudit_note / point_line)。不适用 = None。"""
+    if repo_root is None:
+        return None
+    from tools.aipos_cli.next_resolver import same_round_declaration, same_round_rejection_reaudit
+
+    found = same_round_rejection_reaudit(Path(repo_root), source_task_id, return_record_ref)
+    if found is None:
+        return None
+    texts = same_round_declaration()["rejection"]["texts"]
+    values = {**found, "points": "; ".join(found["points"]) or "(复核记录无具体项)",
+              "point_lines": "".join(texts["point_line"].format(item=x) for x in found["points"])}
+    return (texts["reaudit_ref"].format(**values),
+            "\n## 复审说理(AIPOS-F238 同轮补正)\n" + texts["reaudit_note"].format(**values) + "\n")
 
 
 def _same_round_kind() -> str:

@@ -234,12 +234,14 @@ def test_item2_item3_rejection_record_next_gives_exits_not_same_command(rig, mon
     assert not d["derivable"] and d["command"] == "" and d["action"]["type"] == "return_rejected"
     assert "需执行 return 动词" not in text and "不再给交回命令" in d["suggested_action"]
     ex = d["legal_exits"]
-    assert ex["state"] == "return_rejected" and [e["key"] for e in ex["exits"]] == ["fix_resubmit", "new_subject", "withdraw", "change_scope"]
+    # AIPOS-F238 件④: 出口全集含同轮补正(带顾问要点续接原执行体)
+    assert ex["state"] == "return_rejected" and [e["key"] for e in ex["exits"]] == ["fix_resubmit", "same_round_fix", "new_subject", "withdraw",
+                                                                                     "change_scope"]
     assert ex["recommended"] == "new_subject", "配置卡交付本卡程序: 推荐改走代码卡(evidence_overrides.return_rejected_program)"
     resubmit = ex["exits"][0]["command"]
     assert "子 agent 卡(claude-code): 顾问把拒因原文派给执行子 agent" in resubmit
     assert f"lybra artifact ingest --task-id {CARD} --kind return --workspace-root {rig.gov}" in resubmit
-    withdraw = ex["exits"][2]
+    withdraw = ex["exits"][3]
     assert withdraw["owner_tier1"] == "withdraw" and "门不要求 Owner 裁决引用" in withdraw["gate"]
     rc, out, err = _cli(["--workspace-root", str(rig.gov), "next", "--task-id", CARD])
     _show(f"---- 件② CLI lybra next --task-id {CARD} exit {rc} ----\n{out}{err}")

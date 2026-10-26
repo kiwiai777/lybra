@@ -2298,6 +2298,20 @@ def _drive(
                 result.suggested_action = str(derivation.get("suggested_action") or "")
                 result.reason = str(artifact_fix_declaration(contract)["end_reason"])
                 return result
+            if (action.get("type") == "await_rework" and action.get("rejection_id") and str(action.get("card") or task_id) == task_id
+                    and isinstance(derivation.get("same_round"), dict)):
+                # AIPOS-F238 item 2: the advisor reviewed the rejected return (same round) = resume the executor session with the rejection
+                # + the advisor's points (lybra_loop.launch.report_fix.executor.same_round); not resumable = end with the same instruction
+                fixed = _report_fix(index, task_id, task_id, governance_root, result, role="executor", steps=steps,
+                                    contract=contract, launch_decl=launch_decl, policy=policy, no_launch=no_launch,
+                                    launched=launched, fixes=report_fixes, watch=watch, max_wait=max_wait, interval=interval,
+                                    say=say, actor=driver_actor, recorder=recorder, node=node, state=state,
+                                    same_round=derivation["same_round"])
+                if fixed == "resumed":
+                    continue
+                if not steps or steps[-1].index != index:
+                    steps.append(LoopStep(index, "execute", node, state, task_id, ok=False, message=result.message))
+                return result
             if action.get("type") in HARD_STOP_ACTIONS:
                 # AIPOS-F78 件③ / F73E 件①: 产物已落盘但不合规 / 账务记录缺 → 不空等, exit 4 点名缺项(补齐后重跑 loop)
                 if action.get("type") == "frontmatter_unreadable":
@@ -2705,6 +2719,46 @@ def executor_artifact_fix_prompt(contract: dict[str, Any], artifact: str, check:
     return prompt
 
 
+def same_round_fix_declaration(contract: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F238 item 2: verbs.schema lybra_loop.launch.report_fix.executor.same_round (single reader). Missing / malformed = SchemaLoadError."""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = (((contract.get("launch") or {}).get("report_fix") or {}).get("executor") or {}).get("same_round")
+    where = f"verbs.schema.json verbs.{LOOP_VERB}.launch.report_fix.executor.same_round"
+    if not isinstance(decl, dict):
+        raise SchemaLoadError(f"{where} not declared (AIPOS-F238)")
+    cap = decl.get("max_per_run")
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap < 0:
+        raise SchemaLoadError(f"{where}.max_per_run must be an integer >= 0")
+    prompt = decl.get("prompt")
+    if not isinstance(prompt, str) or any(p not in prompt for p in ("{artifact_fix}", "{review_id}", "{points}", "{criteria}")):
+        raise SchemaLoadError(f"{where}.prompt must contain {{artifact_fix}} {{review_id}} {{points}} {{criteria}}")
+    if (not isinstance(decl.get("point_line"), str) or "{item}" not in decl["point_line"]
+            or not isinstance(decl.get("no_criteria"), str) or not decl["no_criteria"].strip()):
+        raise SchemaLoadError(f"{where}.point_line (with {{item}}) / no_criteria must be declared")
+    if str(decl.get("end_reason") or "") not in ((contract.get("run_record") or {}).get("end_reasons") or {}):
+        raise SchemaLoadError(f"{where}.end_reason must be a declared run_record.end_reasons key")
+    return decl
+
+
+def executor_same_round_fix_prompt(contract: dict[str, Any], artifact: str, state: dict[str, Any]) -> str:
+    """AIPOS-F238 item 2: the same-round fix instruction after a rejected return (single rendering: loop resume and the end message for the
+    advisor to dispatch) = the fix-the-artifacts instruction (report_fix.executor.artifact.prompt, rejection = the reviewed rejection record's
+    category / reasons) + the advisor's points one per line + the acceptance criteria; state = next_resolver.same_round_state (subject rejection)."""
+    decl = same_round_fix_declaration(contract)
+    rec = state.get("rejection") or {}
+    review = state.get("review") or {}
+    artifact_fix = executor_artifact_fix_prompt(contract, artifact, {"category": rec.get("category") or "", "reasons": rec.get("reasons") or []})
+    line = str(decl["point_line"])
+    points = "".join(line.replace("{item}", str(x)) for x in review.get("focus_items") or [])
+    criteria = "".join(line.replace("{item}", str(x)) for x in review.get("acceptance_criteria") or []) or str(decl["no_criteria"])
+    prompt = str(decl["prompt"])
+    for key, value in (("artifact_fix", artifact_fix), ("review_id", review.get("verdict_id") or review.get("review_id") or ""),
+                       ("points", points), ("criteria", criteria)):
+        prompt = prompt.replace("{" + key + "}", str(value))
+    return prompt
+
+
 def executor_report_fix_prompt(contract: dict[str, Any], artifact: str, problem: dict[str, Any]) -> str:
     """AIPOS-F204 item 2: the executor return-header fix instruction (single rendering: loop resume and loop status
     routine hint {header_fix_prompt}); problem = artifact_ingest.return_header_problem."""
@@ -2718,21 +2772,54 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
                 contract: dict[str, Any], launch_decl: dict[str, Any], policy: dict[str, Any] | None, no_launch: bool,
                 launched: set[str], fixes: dict[str, int], watch: Callable[..., int], max_wait: float, interval: float,
                 say: Callable[[str], None], actor: str, recorder: LoopRunRecorder, node: Any, state: Any,
-                artifact_fix: bool = False) -> str | None:
+                artifact_fix: bool = False, same_round: dict[str, Any] | None = None) -> str | None:
     """AIPOS-F180B item 2 / AIPOS-F204 item 2 (verbs.schema lybra_loop.launch.report_fix[.executor]): the report of `card` was
     rejected for a header error. Diagnosis comes from the same artifact-ingest check (validate_task_artifact: auditor =
     tip_diagnosis of INGEST_TIP_MISMATCH; executor = header_problem), never judged here. Returns None = not this case / not
     correctable (caller keeps the original outcome), "resumed" = the recorded session rewrote the report (caller re-derives),
-    "ended" = result filled (the declared end_reason, or the launch exits already set by _launch_once)."""
+    "ended" = result filled (the declared end_reason, or the launch exits already set by _launch_once).
+    AIPOS-F238 item 2: same_round = next_resolver.same_round_state of a reviewed rejected return (derivation await_rework with rejection_id)
+    = resume the executor once per review with the same-round instruction (report_fix.executor.same_round; separate counter from the
+    report-header and artifact fixes); never returns None in that mode."""
     from tools.aipos_cli.artifact_ingest import validate_task_artifact
     from tools.aipos_cli.loop_run_record import latest_launch_session
 
-    check = validate_task_artifact(card, governance_root)
-    report = str(check.get("path") or "")
-    unreadable = check.get("category") == "INGEST_FRONTMATTER_UNREADABLE"
-    fix_key, instruction = card, "修头指令"
+    if same_round is not None:
+        from tools.aipos_cli.next_resolver import _return_artifact_path
+
+        check: dict[str, Any] = {}
+        report = str(_return_artifact_path(governance_root, card))
+        unreadable = False
+    else:
+        check = validate_task_artifact(card, governance_root)
+        report = str(check.get("path") or "")
+        unreadable = check.get("category") == "INGEST_FRONTMATTER_UNREADABLE"
+    fix_key, instruction, fix_label = card, "修头指令", "修报告头"
     exits_text = ""
-    if unreadable:
+    extra: dict[str, Any] = {}
+    if same_round is not None:
+        # AIPOS-F238 item 2: the advisor reviewed the rejected return (same round, not a rework round) = resume the executor with the
+        # rejection + the advisor's points + acceptance (one declared template); the re-submission goes through the same artifact entry
+        decl = same_round_fix_declaration(contract)
+        rec = same_round.get("rejection") or {}
+        review = same_round.get("review") or {}
+        review_id = str(review.get("verdict_id") or review.get("review_id") or "")
+        category = str(rec.get("category") or "")
+        kinds = [category]
+        extra = {"kind": "same_round", "review_id": review_id}
+        say(f"[{index}] 同轮补正 @ {node}/{state} ({card}) 顾问复核 {review_id} 所审交回拒收 {rec.get('rejection_id')}({category})")
+        head = f"执行卡 {card} 交回入门被拒 {rec.get('rejection_id')}({category})经顾问复核 {review_id} 同轮补正"
+        prompt = executor_same_round_fix_prompt(contract, report, same_round)
+        what, who = "同轮补正(交回入门被拒)", "执行"
+        outlet = "让执行体按拒因与顾问要点修产物后重写交回报告(同轮补正指令见下一条)"
+        code_outcome = "not_derivable"
+        watch_root, patterns = executor_artifact_watch(governance_root, card)
+        resume_why = "AIPOS-F238 同轮补正(拒因 + 顾问要点)"
+        fix_key, instruction, fix_label = f"{card}#same_round:{review_id}", "同轮补正指令", "同轮补正"
+        from tools.aipos_cli.next_resolver import legal_exits_for_card
+
+        exits_text = str((legal_exits_for_card(governance_root, card) or {}).get("text") or "")
+    elif unreadable:
         # AIPOS-F232 item 2: report header unreadable (YAML error) = same mechanism for both roles; the diagnosis comes from the
         # artifact-ingest check (header_problem via artifact_ingest.report_unreadable_problem), never judged here
         problem = check.get("header_problem")
@@ -2766,7 +2853,7 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
         code_outcome = "not_derivable"
         watch_root, patterns = executor_artifact_watch(governance_root, card)
         resume_why = "AIPOS-F236 按交回拒因修产物"
-        fix_key, instruction = f"{card}#artifact", "修产物指令"
+        fix_key, instruction, fix_label = f"{card}#artifact", "修产物指令", "修产物"
         from tools.aipos_cli.next_resolver import legal_exits_for_card
 
         exits = legal_exits_for_card(governance_root, card)
@@ -2810,7 +2897,8 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
         resume_why = "AIPOS-F180B 修报告头 commit_sha"
 
     def end(outcome: str, why: str, session_id: str | None = None) -> str:
-        recorder.report_fix({"card": card, "role": role, "outcome": outcome, "kinds": kinds, "session_id": session_id, "detail": f"{why}; {head}"})
+        recorder.report_fix({"card": card, "role": role, "outcome": outcome, "kinds": kinds, "session_id": session_id, "detail": f"{why}; {head}",
+                             **extra})
         code = exit_code_for(contract, code_outcome)
         msg = (f"{what}, {why}: {head}。出口(advisor_fix, 不升 Owner): {outlet}, "
                f"见 lybra loop status --task-id {task_id} --workspace-root {governance_root} 的下一条")
@@ -2824,7 +2912,7 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
 
     used, cap = fixes.get(fix_key, 0), int(decl["max_per_run"])
     if used >= cap:
-        return end("exhausted", f"本运行已续接{who}会话修报告头 {used}/{cap} 次仍被拒")
+        return end("exhausted", f"本运行已续接{who}会话{fix_label} {used}/{cap} 次仍被拒")
     try:
         session = latest_launch_session(governance_root, task_id, card, own=recorder.meta, contract=contract)
     except LoopRunRecordError as exc:
@@ -2842,7 +2930,7 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
     step = LoopStep(index, "wait", node, state, card, artifacts=patterns)
     step.launch = {**plan.to_dict(), "report_fix": fixes[fix_key]}
     start = _report_fingerprint(report)
-    say(f"[{index}] report_fix: {head} → 同会话 {sid} 续接{'修产物' if fix_key != card else '修报告头'} {fixes[fix_key]}/{cap}")
+    say(f"[{index}] report_fix: {head} → 同会话 {sid} 续接{fix_label} {fixes[fix_key]}/{cap}")
     recorder.step_started(index, "wait", node, state, card, waiting_for=patterns, mode="launch")
     watch_args = _watch_args(watch_root, patterns, max_wait=max_wait, interval=interval)
 
@@ -2857,7 +2945,7 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
     steps.append(step)
     if run["outcome"] == "artifact_ready":
         recorder.report_fix({"card": card, "role": role, "outcome": "resumed", "kinds": kinds, "session_id": sid,
-                             "detail": f"同会话 {sid} 续接后报告已改写, 重新入门; {head}"})
+                             "detail": f"同会话 {sid} 续接后报告已改写, 重新入门; {head}", **extra})
         return "resumed"
     if run["outcome"] not in ("early_exit", "timeout"):
         return "ended"  # launch_failed / record_failed: _launch_once already filled result

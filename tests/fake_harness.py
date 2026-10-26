@@ -35,6 +35,12 @@
                (FAKE_PI_RESUMES >= 1) it checks the resume instruction names the rejection, moves the program out of the slot and
                rewrites RETURN
     docs_program       AIPOS-F236: first run as docs_program_once; on resume leaves everything untouched and exits 0
+    docs_same_round    AIPOS-F238 (executor card only; chris HBLX-85 shape): first run as docs_program_once, the RETURN body also names the
+               wrong verification target (web login) and carries a test credential. Resume with the plain fix-the-artifacts instruction
+               (before the advisor's same-round review) = left untouched (exit 0); resume with the same-round instruction (FAKE_PI_PROMPT
+               names the rejection and every point in FAKE_SAME_ROUND_EXPECT, `|`-separated) = rewrite RETURN per the points (credential
+               redacted, maintenance interface as the verification target) but keep the program (the re-submission is refused again);
+               the next fix-the-artifacts resume after that = move the program out of the slot and rewrite RETURN
     hang_sim   AIPOS-F231: 同 hang, 另起一个脱离本进程组(新会话)的「伪模拟器」进程, cwd = FAKE_SIM_DIR(本卡验证根 run 目录; 验停线按
                run 目录归属清理组外进程)
     provider_401 / provider_429 / length   AIPOS-F231: 写一份 pi 会话记录(文件名 <时刻>_<FAKE_PI_SESSION_ID>.jsonl, 与真实 pi 同形)
@@ -301,6 +307,39 @@ def docs_program_mode(task_id: str, kickoff: str, mode: str) -> None:
     pi_session(report, "fake-exec-model")
 
 
+def docs_same_round_mode(task_id: str, kickoff: str) -> None:
+    """AIPOS-F238: HBLX-85 shape (see the module docstring, mode docs_same_round); resume = FAKE_PI_RESUMES >= 1 (set by fake pi)."""
+    report = Path(field(kickoff, "报告落点"))
+    program = report.parent / "artifacts" / "demo-launcher"
+    log = Path(os.environ.get("FAKE_HARNESS_LOG") or report.parent.parent)
+    marker = log / f"{task_id}.same-round-applied"
+    prompt = os.environ.get("FAKE_PI_PROMPT", "")
+    if os.environ.get("FAKE_PI_RESUMES", "0") == "0":
+        do_docs(task_id, kickoff)
+        program.write_text("#!/usr/bin/env python3\n" + "".join(f"print('step {i}')\n" for i in range(300)), encoding="utf-8")
+        program.chmod(0o755)
+        report.write_text(report.read_text(encoding="utf-8") + "\n## 验证\n验证对象: 网页登录(浏览器登录后台成功)\n"
+                          "测试账号 admin / 密码 fixture-pass-0000\n", encoding="utf-8")
+        return
+    if "顾问复核" in prompt and "同轮补正" in prompt:
+        expect = [x for x in os.environ.get("FAKE_SAME_ROUND_EXPECT", "").split("|") if x]
+        missing = [x for x in ["INGEST_PROGRAM_IN_NON_CODE_CARD", str(program), *expect] if x not in prompt]
+        if missing:
+            raise SystemExit(f"fake_harness: same-round instruction lacks {missing}: {prompt!r}")
+        text = report.read_text(encoding="utf-8")
+        text = text.replace("验证对象: 网页登录(浏览器登录后台成功)", "验证对象: 维护接口(GET /maint/health 返回 200)")
+        text = text.replace("测试账号 admin / 密码 fixture-pass-0000", "测试账号 admin / 密码 ***(已脱敏)")
+        report.write_text(text + "\n## 同轮补正\n凭据已脱敏; 验证对象改为维护接口。\n", encoding="utf-8")
+        marker.write_text(prompt, encoding="utf-8")
+        pi_session(report, "fake-exec-model")
+        return
+    if marker.exists() and "被产物入口拒收" in prompt and program.exists():
+        (log / f"{task_id}.moved-program").write_bytes(program.read_bytes())
+        program.unlink()
+        report.write_text(report.read_text(encoding="utf-8") + "\n## 按交回拒因修正\n程序不是本卡交付物, 已移出报告落点。\n", encoding="utf-8")
+        pi_session(report, "fake-exec-model")
+
+
 def sha_mode(task_id: str, kickoff: str, mode: str) -> None:
     """AIPOS-F180B: report-header commit_sha fixture modes (audit card only); resume = FAKE_PI_RESUMES >= 1 (set by fake pi)."""
     tip = re.search(r"^- commit_sha: ([0-9a-f]{40})\(", kickoff, re.M).group(1)
@@ -416,6 +455,10 @@ def main() -> int:
         return 0
     if mode in ("docs_program_once", "docs_program") and not reviewed_of(task_id):
         docs_program_mode(task_id, kickoff, mode)
+        emit({"type": "agent_end", "messages": []})
+        return 0
+    if mode == "docs_same_round" and not reviewed_of(task_id):
+        docs_same_round_mode(task_id, kickoff)
         emit({"type": "agent_end", "messages": []})
         return 0
     if mode == "docs" and not reviewed_of(task_id):

@@ -560,10 +560,13 @@ class LoopRunRecorder:
     # -- AIPOS-F180B item 2: report-header fix decisions (verbs.schema lybra_loop.run_record.report_fixes) --
     def report_fix(self, entry: dict[str, Any]) -> None:
         """One report-header fix decision into report_fixes (card / role / outcome / kinds / session_id / detail / at; detail via
-        redact_progress; AIPOS-F204: role = auditor | executor). The log line is written by the caller's loop output (say)."""
+        redact_progress; AIPOS-F204: role = auditor | executor; AIPOS-F238: + kind / review_id for same-round resumes). The log line is
+        written by the caller's loop output (say)."""
         from tools.aipos_cli.harness_launch import redact_progress
 
         record = {k: entry.get(k) for k in ("card", "role", "outcome", "kinds", "session_id")}
+        # AIPOS-F238 item 2: same-round resumes carry kind = same_round + review_id (absent on the other fixes: record shape unchanged)
+        record.update({k: entry[k] for k in ("kind", "review_id") if entry.get(k)})
         record["detail"] = redact_progress(str(entry.get("detail") or ""))[:600]
         record["at"] = iso_z()
         self.meta.setdefault("report_fixes", []).append(record)
