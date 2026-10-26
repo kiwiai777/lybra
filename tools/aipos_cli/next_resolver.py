@@ -4492,8 +4492,9 @@ _LEGAL_EXIT_TEXTS = ("line", "item", "owner_part", "dropped", "fast_lane_no_reau
                      "withdraw_need_owner", "withdraw_no_owner", "gate_part")
 #: 渲染器名全集(声明 exits.<出口>.renderer 只得取其一); 模板型读 command_templates 同名键
 #: AIPOS-F236: resubmit = 交回入门被拒后修产物重交(产物入口命令 ingest_command 唯一构造 + 谁来修)
-_EXIT_RENDERERS = ("rework", "same_round", "reaudit", "supersede", "amend", "withdraw", "owner_ask", "resubmit")
-_EXIT_TEMPLATE_RENDERERS = ("same_round", "supersede", "amend", "withdraw", "owner_ask")
+#: AIPOS-F238: same_round_fix = 交回入门被拒后同轮补正(带顾问要点续接原执行体; 模板型, mark-concluded --outcome same_round 后续跑 loop)
+_EXIT_RENDERERS = ("rework", "same_round", "reaudit", "supersede", "amend", "withdraw", "owner_ask", "resubmit", "same_round_fix")
+_EXIT_TEMPLATE_RENDERERS = ("same_round", "supersede", "amend", "withdraw", "owner_ask", "same_round_fix")
 #: 同主体返工出口在返工额度用尽时改判 rework_limit 的状态(返工轮计入既有上限)
 _REWORK_LIMITED_STATES = ("FAIL", "BLOCK", "candidate_fail", "candidate_deliverable_fail", "fast_lane_review_fail", "audit_blocked_repeated")
 
@@ -4790,6 +4791,9 @@ _SAME_ROUND_TEXTS = ("await_missing", "await_suggested", "after_audit", "after_f
                      "reaudit_ref", "reaudit_note", "bound_note")
 _SAME_ROUND_CODES = ("SAME_ROUND_NOT_CLAIMED", "SAME_ROUND_NO_RETURN", "SAME_ROUND_AUDIT_STARTED", "SAME_ROUND_ALREADY_PENDING",
                      "SAME_ROUND_FOCUS_REQUIRED", "SAME_ROUND_ROLE")
+#: AIPOS-F238: 所审对象 = 入门被拒的交回(transitions nodes.N4.same_round.rejection.texts; 复核记录三键 verbs.same_round.record_fields)
+_SAME_ROUND_REJECTION_TEXTS = ("await_missing", "await_suggested", "bound_note", "notes", "reaudit_ref", "reaudit_note", "point_line")
+_SAME_ROUND_REJECTION_FIELDS = ("reviewed_rejection_ref", "reviewed_fingerprint", "reviewed_report_sha256")
 
 
 def same_round_declaration() -> dict[str, Any]:
@@ -4801,6 +4805,8 @@ def same_round_declaration() -> dict[str, Any]:
     verb = ((load_schema("verbs").get("verbs") or {}).get("lybra_mark_concluded") or {}).get("same_round")
     texts = node.get("texts") if isinstance(node, dict) else None
     codes = verb.get("reject_codes") if isinstance(verb, dict) else None
+    rejection = node.get("rejection") if isinstance(node, dict) else None
+    rtexts = rejection.get("texts") if isinstance(rejection, dict) else None
     if (not isinstance(node, dict) or not str(node.get("state") or "").strip() or not str(node.get("kind") or "").strip()
             or not isinstance(texts, dict) or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in _SAME_ROUND_TEXTS)
             or not isinstance(verb, dict) or not str(verb.get("outcome") or "").strip()
@@ -4810,7 +4816,12 @@ def same_round_declaration() -> dict[str, Any]:
         raise SchemaLoadError(f"transitions nodes.N4.same_round(state / kind / texts.{list(_SAME_ROUND_TEXTS)})与 verbs.lybra_mark_concluded."
                               f"same_round(outcome ≠ review_rework.outcome / record_fields / audit_not_started_states / reject_codes "
                               f"{list(_SAME_ROUND_CODES)})未声明齐(AIPOS-F230 件④)")
-    return {**node, **verb, "texts": texts, "reject_codes": codes}
+    # AIPOS-F238 件①②: 所审对象 = 入门被拒的交回(措辞 + 复核记录三键)缺 = fail-closed
+    if (not isinstance(rtexts, dict) or not all(isinstance(rtexts.get(k), str) and rtexts[k].strip() for k in _SAME_ROUND_REJECTION_TEXTS)
+            or not set(_SAME_ROUND_REJECTION_FIELDS) <= set(verb["record_fields"])):
+        raise SchemaLoadError(f"transitions nodes.N4.same_round.rejection.texts.{list(_SAME_ROUND_REJECTION_TEXTS)} 与 verbs.lybra_mark_concluded."
+                              f"same_round.record_fields ⊇ {list(_SAME_ROUND_REJECTION_FIELDS)} 未声明齐(AIPOS-F238)")
+    return {**node, **verb, "texts": texts, "reject_codes": codes, "rejection": {**rejection, "texts": rtexts}}
 
 
 def same_round_reviews(workspace_root: Path, task_id: str) -> list[tuple[Path, dict[str, Any]]]:
@@ -4819,11 +4830,46 @@ def same_round_reviews(workspace_root: Path, task_id: str) -> list[tuple[Path, d
     return [(p, fm) for p, fm in advisor_reviews(workspace_root, task_id) if str(fm.get("outcome") or "") == outcome]
 
 
+def same_round_rejection_subject(workspace_root: Path, task_id: str, records: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """AIPOS-F238 件①(唯一判定; 写口 board_adapter._mark_concluded_same_round 与推导 same_round_state 同读): 同轮补正的所审对象是否为
+    「入门被拒的交回」= 本卡最新交回拒收记录(artifact_ingest.return_rejection_records, 读口唯一), 且无门交回或门最新交回 returned_at 早于
+    该拒收记录 recorded_at。是 = 该拒收记录(frontmatter + _path); 否 = None。读不出 = 向上(fail-closed)。"""
+    from tools.aipos_cli.artifact_ingest import return_rejection_records
+    from tools.aipos_cli.owner_inbox import _parse_utc
+
+    rejections = return_rejection_records(Path(workspace_root), task_id)
+    if not rejections:
+        return None
+    latest = rejections[-1]
+    recs = records if isinstance(records, dict) else _read_task_records(Path(workspace_root), task_id)
+    gate = recs.get("latest_return") or {}
+    if str(gate.get("return_id") or "").strip():
+        returned, rejected = _parse_utc(gate.get("returned_at")), _parse_utc(latest.get("recorded_at"))
+        if returned is None or rejected is None or returned >= rejected:
+            return None
+    return latest
+
+
+def same_round_rejection_values(workspace_root: Path, task_id: str, rejection: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F238 件①: 以拒收记录为所审对象时复核记录的三键(声明 verbs.same_round.record_fields 的 _SAME_ROUND_REJECTION_FIELDS):
+    rejection_id / 复核时刻产物指纹(artifact_ingest.return_fingerprint, 拒收记录 files 同列)/ 复核时刻交回报告 sha256(报告不在 = 空)。"""
+    from tools.aipos_cli.artifact_ingest import return_fingerprint
+
+    files = [str(f) for f in rejection.get("files") or []] if isinstance(rejection.get("files"), list) else []
+    report = find_return_artifact(Path(workspace_root), task_id)
+    return {"reviewed_rejection_ref": str(rejection.get("rejection_id") or ""),
+            "reviewed_fingerprint": return_fingerprint(Path(workspace_root), task_id, files),
+            "reviewed_report_sha256": _file_sha256(report) if report is not None else ""}
+
+
 def same_round_state(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None,
                      records: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """AIPOS-F230 件④ 唯一判定: 最新同轮补正记录所打回的交回 = 门最新交回(补正未消费)= {review_path, review(裁决形视图), evidence,
     withdrawn_audit_task_id}; evidence = 晚于复核时刻的重写交回(non_branch_re_return; 时间界 = rework_return_bound 以复核记录为锚、无返工轮);
-    已消费(门已落新交回)/ 无记录 = None。"""
+    已消费(门已落新交回)/ 无记录 = None。
+    AIPOS-F238 件②: 最新同轮补正记录所审对象是交回拒收记录(reviewed_rejection_ref)= subject "rejection": 该拒收记录仍是本卡最新拒收记录且
+    其后门未落新交回(门最新交回 returned_at 不晚于复核时刻)= 未消费, 另带 rejection(拒收记录); evidence = 交回报告 sha256 已不同于复核时刻
+    ({source: file, ref, sha256}, 报告改写 = 照常经产物入口重交), 未改写 = None。门落新交回 / 又落新拒收记录 = 已消费 → None。"""
     reviews = same_round_reviews(workspace_root, task_id)
     if not reviews:
         return None
@@ -4831,14 +4877,81 @@ def same_round_state(workspace_root: Path, task_id: str, card_frontmatter: dict[
     recs = records if isinstance(records, dict) else _read_task_records(Path(workspace_root), task_id)
     latest_id = str((recs.get("latest_return") or {}).get("return_id") or "").strip()
     reviewed = str(fm.get("reviewed_return_record_ref") or "").strip()
-    if not latest_id or latest_id != reviewed:
-        return None
     view = {**fm, "verdict_id": str(fm.get("review_id") or path.stem), "verdict_at": str(fm.get("timestamp") or ""),
             "verdict": str(fm.get("outcome") or ""), "reviewed_return_record_ref": reviewed, "audit_task_id": ""}
+    rejection_ref = str(fm.get("reviewed_rejection_ref") or "").strip()
+    if rejection_ref:
+        return _same_round_rejection_state(workspace_root, task_id, path, fm, view, recs, rejection_ref)
+    if not latest_id or latest_id != reviewed:
+        return None
     evidence = non_branch_re_return(workspace_root, task_id, card_frontmatter, path, view, None)
-    return {"review_path": path, "review": view, "evidence": evidence,
+    return {"subject": "return", "review_path": path, "review": view, "evidence": evidence,
             "withdrawn_audit_task_id": str(fm.get("withdrawn_audit_task_id") or "").strip(),
             "bound": rework_return_bound(path, view, None)}
+
+
+def _same_round_rejection_state(workspace_root: Path, task_id: str, path: Path, fm: dict[str, Any], view: dict[str, Any],
+                                recs: dict[str, Any], rejection_ref: str) -> dict[str, Any] | None:
+    """same_round_state 的拒收记录分支(AIPOS-F238 件②)。"""
+    from tools.aipos_cli.artifact_ingest import return_rejection_records
+    from tools.aipos_cli.owner_inbox import _parse_utc
+
+    rejections = return_rejection_records(Path(workspace_root), task_id)
+    if not rejections or str(rejections[-1].get("rejection_id") or "") != rejection_ref:
+        return None  # 又落新拒收记录(重交仍被拒)= 本次复核已消费, 可再次同轮补正
+    reviewed_at = _same_round_review_floor(path, fm)
+    gate = recs.get("latest_return") or {}
+    returned = _parse_utc(gate.get("returned_at"))
+    if str(gate.get("return_id") or "").strip() and returned is not None and returned >= reviewed_at:
+        return None  # 复核后门已落新交回(入门通过)= 已消费, 回常规推进
+    report = find_return_artifact(Path(workspace_root), task_id)
+    digest = _file_sha256(report) if report is not None else ""
+    evidence = None
+    if report is not None and digest != str(fm.get("reviewed_report_sha256") or ""):
+        modified = datetime.fromtimestamp(report.stat().st_mtime, tz=timezone.utc).replace(microsecond=0)
+        evidence = {"source": "file", "ref": str(report), "at": modified.strftime("%Y-%m-%dT%H:%M:%SZ"), "sha256": digest}
+    return {"subject": "rejection", "review_path": path, "review": view, "evidence": evidence, "rejection": rejections[-1],
+            "withdrawn_audit_task_id": str(fm.get("withdrawn_audit_task_id") or "").strip(),
+            "bound": {"at": reviewed_at, "sha": str(fm.get("reviewed_report_sha256") or "") or "(复核时无报告)"}}
+
+
+def _same_round_review_floor(path: Path, fm: dict[str, Any]) -> datetime:
+    """AIPOS-F238: 拒收记录对象复核时刻取整到秒(门交回 returned_at 为秒精度)。复核前已在的门交回必早于该拒收记录 recorded_at(秒精度,
+    same_round_rejection_subject 严格早于)且 recorded_at ≤ 复核时刻取整, 故 returned_at ≥ 取整 = 复核后才落的门交回(同秒落盘不漏判)。"""
+    from tools.aipos_cli.owner_inbox import _parse_utc
+
+    moment = _parse_utc(fm.get("timestamp")) or datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    return moment.replace(microsecond=0)
+
+
+def same_round_rejection_reaudit(workspace_root: Path, task_id: str, return_id: str) -> dict[str, Any] | None:
+    """AIPOS-F238 件③(唯一判定; 门交回派审 audit_derivation.build_derived_audit_task 读): 本卡最新同轮补正记录所审对象是交回拒收记录, 且
+    门交回 return_id 是该复核之后首个门交回(复核时刻之后落的门交回只有这一份)= 本轮审计须带复审说理 {review_id, rejection_id, category,
+    points(要点列表), return_id}; 否则 None。"""
+    from tools.aipos_cli.artifact_ingest import return_rejection_records
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.owner_inbox import _parse_utc
+    from tools.aipos_cli.record_writer import record_file_prefix, record_files_with_prefix
+
+    reviews = same_round_reviews(Path(workspace_root), task_id)
+    if not reviews or not str(return_id or "").strip():
+        return None
+    path, fm = reviews[-1]
+    rejection_ref = str(fm.get("reviewed_rejection_ref") or "").strip()
+    if not rejection_ref:
+        return None
+    reviewed_at = _same_round_review_floor(path, fm)
+    later: list[str] = []
+    for rpath in record_files_with_prefix(record_dir(Path(workspace_root), "returns", task_id), record_file_prefix("returns")):
+        rfm, _body = require_frontmatter(rpath)
+        at = _parse_utc(rfm.get("returned_at"))
+        if at is not None and at >= reviewed_at:
+            later.append(str(rfm.get("return_id") or rpath.stem))
+    if later != [str(return_id)]:
+        return None
+    rejection = next((r for r in return_rejection_records(Path(workspace_root), task_id) if str(r.get("rejection_id") or "") == rejection_ref), {})
+    return {"review_id": str(fm.get("review_id") or path.stem), "rejection_id": rejection_ref, "category": str(rejection.get("category") or "?"),
+            "points": [str(x) for x in (fm.get("focus_items") or [])], "return_id": str(return_id)}
 
 
 def _derive_same_round(workspace_root: Path, task_id: str, fm: dict[str, Any], records: dict[str, Any], state: dict[str, Any], *,
@@ -4854,6 +4967,8 @@ def _derive_same_round(workspace_root: Path, task_id: str, fm: dict[str, Any], r
     after = (texts["after_review"] if fast_lane_review(workspace_root, task_id, fm)
              else (texts["after_audit"].format(withdrawn=withdrawn) if withdrawn else texts["after_first"]))
     values = {"review_id": review["verdict_id"], "reviewed": review["reviewed_return_record_ref"] or "?", "points": points, "after": after}
+    if state.get("subject") == "rejection":
+        return _derive_same_round_rejection(task_id, decl, state, values)
     nb_texts = non_branch_rework_declaration()["texts"]
     if state["evidence"] is not None:
         head = texts["stale_head"].format(**values, evidence=non_branch_evidence_text(nb_texts, state["evidence"]))
@@ -4885,6 +5000,33 @@ def _derive_same_round(workspace_root: Path, task_id: str, fm: dict[str, Any], r
                   + (f", 已撤本轮未开始的审计卡 {withdrawn}" if withdrawn else "") + "; AIPOS-F230 件④, 声明 transitions nodes.N4.same_round)"),
         "same_round": {k: v for k, v in state.items() if k not in ("review_path", "bound")} | {"review_path": str(state["review_path"])},
         "action": {"type": "await_rework", "card": task_id, "round": 0, "same_round": review["verdict_id"]},
+    }
+
+
+def _derive_same_round_rejection(task_id: str, decl: dict[str, Any], state: dict[str, Any], values: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F238 件②: 同轮补正所审对象 = 入门被拒的交回、交回报告未改写 = 等执行体补正(不可推导, action await_rework 带 rejection_id /
+    review_id; 措辞 transitions nodes.N4.same_round.rejection.texts, 原文给拒因 + 顾问要点)。loop 见此 action 按 lybra_loop.launch.report_fix.
+    executor.same_round 续接原执行体或结束(结束原文给同一条完整指令)。报告已改写不经此处(推导照常给交回命令, 产物入口同一校验)。"""
+    texts = decl["rejection"]["texts"]
+    rec = state["rejection"]
+    reasons = " ".join(str(r) for r in rec.get("reasons") or []) or str(rec.get("category") or "")
+    vals = {**values, "rejection_id": str(rec.get("rejection_id") or "?"), "category": str(rec.get("category") or "?"), "reason": reasons}
+    bound_note = texts["bound_note"].format(at=state["bound"]["at"].strftime("%Y-%m-%dT%H:%M:%SZ"), sha=state["bound"]["sha"])
+    review = state["review"]
+    return {
+        "task_id": task_id,
+        "derivable": False,
+        "current_node": str(decl["state"]),
+        "current_state": "claimed",
+        "triggered_by": "executor",
+        "command": "",
+        "verb": "lybra_queue_return_dry_run",
+        "missing_records": [f"{texts['await_missing'].format(**vals)}; {bound_note}"],
+        "suggested_action": f"{texts['await_suggested'].format(**vals)}; {bound_note}",
+        "notes": texts["notes"].format(**vals),
+        "same_round": {k: v for k, v in state.items() if k not in ("review_path", "bound")} | {"review_path": str(state["review_path"])},
+        "action": {"type": "await_rework", "card": task_id, "round": 0, "same_round": review["verdict_id"],
+                   "rejection_id": vals["rejection_id"], "category": vals["category"]},
     }
 
 
@@ -5543,7 +5685,8 @@ def _derive_next_step(
                     return _derive_return_stale(workspace_root, task_id, fm, records, rstale, claimer=claimer, conn_arg=conn_arg)
                 # AIPOS-F230 件④: 顾问同轮打回了门最新交回(审计开始前, 不占返工轮)= 等执行体补正 / 已补正 = 重交回
                 same_round = same_round_state(workspace_root, task_id, fm, records)
-                if same_round is not None:
+                # AIPOS-F238 件②: 所审对象为入门被拒的交回且报告已改写 = 不拦, 照常推进(重交经产物入口同一校验)
+                if same_round is not None and not (same_round["subject"] == "rejection" and same_round["evidence"] is not None):
                     return _derive_same_round(workspace_root, task_id, fm, records, same_round, claimer=claimer, conn_arg=conn_arg)
 
             # AIPOS-F112 件②: 复审轮(R2/R3…)已派生且该轮尚无裁决 → 等最新一轮审计卡(loop 认它等待/拉起), 不再拿上一轮裁决派 finalize
@@ -5809,6 +5952,12 @@ def _derive_next_step(
                 "suggested_action": "等待审计流程",
                 "notes": "已 return,审计流程进行中",
             }
+
+        # AIPOS-F238 件②: 交回入门被拒(无门交回)后顾问同轮补正、交回报告未改写 = 等执行体带拒因 + 顾问要点补正(loop 续接原执行体),
+        # 不给交回命令(被拒报告不入门); 报告已改写 = 照常往下交回(产物入口同一校验, 判据不放宽)
+        same_round = same_round_state(workspace_root, task_id, fm, records)
+        if same_round is not None and same_round["subject"] == "rejection" and same_round["evidence"] is None:
+            return _derive_same_round(workspace_root, task_id, fm, records, same_round, claimer=claimer, conn_arg=conn_arg)
 
         # 有 RETURN.md 但还没 return 记录 → 交回工作(N2)
         if has_return_artifact:
