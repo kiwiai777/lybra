@@ -2836,7 +2836,15 @@
             "max_per_run": 1,
             "end_reason": "return_report_form_error",
             "prompt": "你的交回报告 {artifact} 的 frontmatter 不合本卡交回契约: {problem}。只改报告头(frontmatter)逐键改为: {fix}。不改正文结论、不改产物与报告落点里的其他文件、不提交产品仓; 改完即停。",
-            "prompt_note": "修交回报告头指令唯一声明; 占位 {artifact} = 交回报告(产物入口所读同一份)绝对路径, {problem} = header_problem.problem(判定原文), {fix} = header_problem.fix(逐键补法, 含产品给值)"
+            "prompt_note": "修交回报告头指令唯一声明; 占位 {artifact} = 交回报告(产物入口所读同一份)绝对路径, {problem} = header_problem.problem(判定原文), {fix} = header_problem.fix(逐键补法, 含产品给值)",
+            "artifact": {
+              "description": "AIPOS-F236 件③(10-26 chris LANTU-CLDEP1 实撞: pi 执行的 config 卡交回被产物入口拒 INGEST_PROGRAM_IN_NON_CODE_CARD, loop 以 gate_rejected 结束, 无人按拒因修): F204 同一续接机制扩到「产物不合入门判据」类拒收。触发 = 本卡(执行卡)交回步(artifact ingest --kind return)被拒或推导核判 transitions artifact_ingest.return.rejection_record.action_type(拒后报告与产物未变), 且产物入口同一校验(validate_task_artifact)的 category ∈ categories、无报告头问题(header_problem 优先走上一机制)。以本卡最近一次拉起的固定会话同会话续接执行体一次(拉起判定 / 拉起与等待 / 记录同 report_fix.executor: plan_launch resume_session / _launch_once; 运行记录 report_fixes role = executor, kinds = [category]), 指令 = prompt(按拒因修产物 / 报告, 修完重写交回报告; 确属本卡必须交付而入门判据不允许 = 不删改工作, 交回报告写明 BLOCK 原因由顾问改走出口)。等到交回报告改写后重推导、重新入门。每张执行卡每次运行至多 max_per_run 次(与报告头修复分开计数)。会话不可续接(子 agent / 手工工位 / 无会话记录 / 拉起判定拒 / 工位已变)、本运行已用尽、续接后报告未改写或等待超时 = 以 end_reason 结束(exit_codes.not_derivable; loop status by_end_reason = advisor_fix, 修法 routine_rejections.end_reasons.<end_reason>; 结束原文附修产物指令与合法出口全集 transitions nodes.N4.legal_exits.states.return_rejected), 不升 Owner。门侧拒(产物入口校验通过而门 queue_return 拒)不归此类(照原规则 gate_rejected)。唯一实现 loop_driver._report_fix(role=executor)。",
+              "max_per_run": 1,
+              "end_reason": "return_rejected",
+              "categories": ["INGEST_PROGRAM_IN_NON_CODE_CARD", "INGEST_CODE_FILE_IN_SLOT", "INGEST_REPORT_UNFILLED", "INGEST_SUMMARY_MISSING", "INGEST_OUTPUTS_INVALID", "INGEST_OUTPUT_MISSING", "INGEST_OUTPUT_OUT_OF_BOUNDARY"],
+              "prompt": "你的交回 {artifact} 被产物入口拒收 {category}: {reasons}。按拒因修产物 / 报告(只动本卡报告落点与本卡 run 目录; 拒因点名的文件不是本卡交付物 = 移出或删除; 不改门 / 产品 / 卡面, 不提交产品仓), 修完重写交回报告(先写 .tmp 再改名)。若拒因指的内容确属本卡必须交付而入门判据不允许 = 不删改工作, 把交回报告改写为 BLOCK 并写明原因(由顾问改走代码卡 / 撤换等出口)。改完即停。",
+              "prompt_note": "修产物指令唯一声明; 占位 {artifact} = 交回报告绝对路径, {category} = 产物入口拒因码, {reasons} = 拒因原文(含命中文件与合法出口命令)"
+            }
           },
           "unreadable": {
             "description": "AIPOS-F232 件②: 报告头读不出(YAML 解析错, 判定 transitions artifact_ingest.return.header_fix.unreadable, 唯一实现 artifact_ingest.report_unreadable_problem)= 执行 / 审计报告同一机制: 推导核对本卡报告硬停 frontmatter_unreadable、或裁决 / 交回入门被拒 INGEST_FRONTMATTER_UNREADABLE 且报告在本卡报告落点 = 按角色(审计卡 = auditor, 执行卡 = executor)续接其固定会话一次只修报告头, 指令 = prompt(含解析错行与原因); 上限 / 结束原因沿用该角色(auditor = 本声明 max_per_run / end_reason, executor = executor.*), 会话不可续接 = 以该角色 end_reason 结束(advisor_fix 例行修法, 子 agent 模式由顾问把本指令派给审计 / 执行实例), 不再 investigate、不升 Owner。唯一实现 loop_driver._report_fix。",
@@ -2937,6 +2945,7 @@
           "candidate_deliverable_fail": "AIPOS-F227 件②(10-24 chris HBLX-45V 实撞): 固定候选验证卡审计 FAIL 且审计报告声明 fail_scope=deliverable(候选可用、交付物缺失或不实), 推导核给出「登记返工轮(同候选)→ loop 拉起执行体补交付物重写交回 → 重交回派下一轮审计」(transitions nodes.N4.candidate_fail.fail_scope; exit_codes.not_derivable; 不计连败, 不进 Owner 收件箱)",
           "audit_blocked_repeated": "AIPOS-F179 件③: 本卡最新连续 BLOCK 裁决数 ≥ transitions nodes.N4.audit_blocked.owner_needed_after(修环境重审后仍 BLOCK), 升 Owner(exit_codes.not_derivable); AIPOS-F202: 计数以本卡最近一条「重新派审」收件箱裁决为界(transitions nodes.N4.audit_blocked.owner_reaudit)",
           "audit_report_form_error": "AIPOS-F180B 件②: 裁决入门被拒 INGEST_TIP_MISMATCH 且形式诊断 correctable(报告头 commit_sha 形式错误 / 疑似抄错), 但审计会话不可续接 / 本运行续接已用尽 / 续接后报告未改写(见 launch.report_fix; exit_codes.gate_rejected; 判定原文在结束原文与运行记录 report_fixes 末条 detail)",
+          "return_rejected": "AIPOS-F236 件②③: 执行体交回被产物入口拒收(category ∈ launch.report_fix.executor.artifact.categories; 交回拒收记录 transitions artifact_ingest.return.rejection_record)且执行会话不可续接 / 本运行续接已用尽 / 续接后报告未改写, 或推导核判拒后报告与产物未变(action_type return_rejected)(exit_codes.not_derivable; 结束原文附修产物指令与合法出口全集)",
           "return_report_form_error": "AIPOS-F204 件②: 执行体交回报告头可纠正错误(缺键 / 值不符产品给值 / 形式错 / 误用另一契约; transitions artifact_ingest.return.header_fix), 但执行会话不可续接 / 本运行续接已用尽 / 续接后报告未改写(见 launch.report_fix.executor; exit_codes.not_derivable; 判定原文在结束原文与运行记录 report_fixes 末条 detail)",
           "auto_release_revoked": "AIPOS-F225 件②: Owner 撤回了本卡的第二档自动放行(lybra_owner_inbox.tiers.auto_release: 返工自动追加 / 自动重新派审; 撤回 = 收件箱「已自动放行」事项选 revoke_auto, 既有 owner decide 写路径), 撤回之后本卡尚无 Owner 新裁决 = 卡停住, 推导核不派生推进步(唯一判定 owner_inbox.auto_release_stop, 推导核 next_resolver 首个硬停项之后同判; exit_codes.not_derivable)",
           "paused": "AIPOS-F231 件①: 本卡被 Owner 暂停(lybra queue pause / 收件箱选「暂停此卡」; 判定唯一 owner_inbox.card_pause_state), loop 拒起或步间停下, 未派审计、未请求资源(exit_codes.not_derivable; 恢复 = lybra queue resume 或收件箱「恢复推进」)",
@@ -3293,6 +3302,7 @@
           "audit_blocked_repeated": "owner_needed",
           "audit_report_form_error": "advisor_fix",
           "return_report_form_error": "advisor_fix",
+          "return_rejected": "advisor_fix",
           "auto_release_revoked": "owner_needed",
           "paused": "owner_needed",
           "stopped_by_owner": "advisor_fix",
@@ -3525,6 +3535,15 @@
                 "执行会话可续接(pi 拉起, 运行记录 launches[] 有本卡 session_id, 工位未变)= 直接用原命令续跑 loop(本修法末行命令): loop 以该会话续接一次只修报告头(launch.report_fix.executor), 改好即重新入门、照常派审",
                 "执行会话不可续接(子 agent / 手工工位 / 无会话记录)= 顾问把下面的修头指令原文派给本卡执行实例(派执行子 agent 或在工位会话转述), 执行体改完即停: {header_fix_prompt}",
                 "执行体改完后用原命令续跑 loop(本修法末行命令); 同卡连续以本原因结束达 repeat_owner_needed 次产品升 Owner"
+              ]
+            },
+            "return_rejected": {
+              "why_routine": "AIPOS-F236 件②③(10-26 chris LANTU-CLDEP1 实撞): 执行体交回被产物入口拒收(确定性入门校验, 未落交回记录, 不占返工轮), 拒后报告与产物未变 = 重跑同一交回命令必拒; 修法固定 = 按拒因修产物后重交, 或按合法出口全集(修后重交 / 换新主体 / 撤卡 / 改范围)择一, 不升 Owner(撤卡 / 换主体出口另标是否须 Owner)",
+              "fix": [
+                "不代改执行产物 / 交回报告(执行体的笔)、不改门与产品: 拒因原文与此刻复核见只读 lybra artifact ingest --task-id {task_id} --kind return --workspace-root {governance_root} --dry-run; 合法出口全集(含撤回预演命令与是否须 Owner)见 lybra --workspace-root {governance_root} next --task-id {task_id}",
+                "pi 卡(运行记录 launches[] 有本卡 session_id, 工位未变)= 用原命令续跑 loop(本修法末行命令): loop 同会话续接执行体按拒因修一次(launch.report_fix.executor.artifact), 报告改写后重新入门",
+                "子 agent 卡 / 会话不可续接 = 顾问把结束原文里的修产物指令派给本卡执行实例(派执行子 agent 或在工位会话转述), 执行体修完重写交回报告即停, 之后用原命令续跑 loop",
+                "产物确属本卡不该交付的类型(如配置卡交付本卡写的程序)= 另出代码卡后撤换本卡(lybra next 出口 [new_subject]); 不做了 = 撤卡(出口 [withdraw], 附门侧是否须 Owner 裁决引用); 同卡连续以本原因结束达 repeat_owner_needed 次产品升 Owner"
               ]
             },
             "stopped_by_owner": {"why_routine": "AIPOS-F231 件②: Owner 要求停线, loop 已保存现场、清理本卡进程并核无残留, 独占资源已释放; 不是故障, 修法固定 = 不自动续跑, 等 Owner 再定(要暂停应同时 queue pause)", "fix": ["不自动续跑: 本运行已按 Owner 停线请求收口(现场与清理见运行记录 stop 段 / lybra loop stop 输出), 独占资源已释放给排队的卡", "Owner 要本卡等一等 = 同时登记暂停(lybra queue pause --task-id {task_id} --relayed-by <你的顾问实例> --owner-words <Owner 原话> --confirm), 恢复后再续跑", "Owner 让继续 = 用原命令续跑 loop(本修法末行命令), 推导核按已落记录续做"]},

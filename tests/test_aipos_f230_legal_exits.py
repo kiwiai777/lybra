@@ -73,8 +73,9 @@ def test_item1_declaration_every_cell_two_exits_or_reason(monkeypatch):
             rows.append(f"{state:28s} × {subject:18s} = {cell if isinstance(cell, list) else cell}")
     _show("---- 件① 出口全集表(transitions nodes.N4.legal_exits.states)----\n" + "\n".join(rows))
     # 卡面要求的 7 类非通过状态全在表内; 出口含五类(同主体返工 / 换新主体 / 重新派审 / 改范围 / 撤卡)
+    # AIPOS-F236 件②: 交回入门被拒且拒后未变 = 第 8 类非通过状态 return_rejected(出口含修产物后重交 fix_resubmit)
     assert set(decl["states"]) == {"FAIL", "BLOCK", "candidate_fail", "candidate_deliverable_fail", "fast_lane_review_fail",
-                                   "rework_limit", "audit_blocked_repeated"}
+                                   "rework_limit", "audit_blocked_repeated", "return_rejected"}
     assert {"rework_same_subject", "new_subject", "reaudit", "change_scope", "withdraw"} <= set(decl["exits"])
     assert set(decl["invariants"]) == {"independent_audit", "evidence_bound", "traceable", "no_forbidden_zone"}
     # 反例: 某格只剩一条路且未写明原因 = 加载即拒(fail-closed)
@@ -232,7 +233,10 @@ def test_item1_fast_lane_review_fail_and_matrix_every_cell(rig):  # noqa: F811
 # ===========================================================================
 
 def test_item2_config_card_delivering_program_refused_at_return(rig, tmp_path, monkeypatch):  # noqa: F811
-    from tools.aipos_cli.artifact_ingest import program_files, validate_task_artifact
+    from tools.aipos_cli.artifact_ingest import program_scan, validate_task_artifact
+
+    def program_files(*args):  # AIPOS-F236: 程序判据唯一实现 program_scan(programs = 本卡程序, 输入副本另列)
+        return program_scan(*args)["programs"]
     from tools.aipos_cli.draft_validator import program_target_warning
 
     f78._card(rig.gov, GOVC, "claimed", task_mode="config",

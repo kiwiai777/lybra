@@ -3411,7 +3411,14 @@ def _derive_n6_landing(workspace_root: Path, task_id: str, state: str, connectio
 def _return_submission_step(workspace_root: Path, task_id: str, fm: dict[str, Any], *, claimer: str, conn_arg: str | None,
                             result_summary: str, return_path: Path, node: str, suggested_action: str, notes: str) -> dict[str, Any]:
     """交回步(N1→N2 首交 / AIPOS-F112 verdict_stale 重交回)的唯一构建: 驱动方见产物入口命令 `lybra artifact ingest --kind return`,
-    shell_command = 入口内部执行的同一条薄壳命令(build_return_command_from_artifact 唯一构建), 禁第二条交回路径。"""
+    shell_command = 入口内部执行的同一条薄壳命令(build_return_command_from_artifact 唯一构建), 禁第二条交回路径。
+    AIPOS-F236 件②: 本卡交回入门被拒且自拒后报告与产物未变、此刻复核仍拒(唯一判定 artifact_ingest.return_rejection_state)= 不再给交回命令,
+    改为不可推导 + 合法出口全集(return_rejected); 此刻复核已通过 = 照常给命令并附说明(门侧拒另附出口)。"""
+    from tools.aipos_cli.artifact_ingest import return_rejected_declaration, return_rejection_state
+
+    rejection = return_rejection_state(workspace_root, task_id)
+    if rejection is not None and rejection["still_rejected"]:
+        return _return_rejected_step(workspace_root, task_id, fm, rejection, conn_arg=conn_arg, return_path=return_path, node=node)
     # AIPOS-F78B 件③; AIPOS-F103 件④: 信封 = 覆盖驱动方与本卡的有效信封(唯一挑选 autonomy_policy.select_envelope), 不另从认领记录取
     driver_policy = _driver_envelope_ref(workspace_root, task_id, fm, conn_arg)
     cmd = build_return_command_from_artifact(
@@ -3424,7 +3431,7 @@ def _return_submission_step(workspace_root: Path, task_id: str, fm: dict[str, An
         return_path=return_path,
         autonomy_mode="PreAuthorized" if driver_policy else "Supervised",
     )
-    return {
+    step: dict[str, Any] = {
         "task_id": task_id,
         "derivable": True,
         "current_node": node,
@@ -3438,6 +3445,55 @@ def _return_submission_step(workspace_root: Path, task_id: str, fm: dict[str, An
         "suggested_action": suggested_action,
         "notes": notes,
     }
+    if rejection is not None:  # 拒后未变但此刻复核通过(产品 / 仓已变, 或拒的是门侧): 照常交回 + 说明
+        texts = return_rejected_declaration()["texts"]
+        rec = rejection["record"]
+        values = {"rejection_id": rec.get("rejection_id"), "category": rec.get("category")}
+        step["notes"] = f"{notes}; " + texts["gate_side" if rejection["gate_side"] else "revalidated_ok"].format(**values)
+    return step
+
+
+def _return_rejected_step(workspace_root: Path, task_id: str, fm: dict[str, Any], rejection: dict[str, Any], *, conn_arg: str | None,
+                          return_path: Path, node: str) -> dict[str, Any]:
+    """AIPOS-F236 件②: 交回入门被拒且自拒后报告与产物未变、此刻复核仍拒 = 不可推导(action.type = rejection_record.action_type), 不给交回命令;
+    suggested_action = 此刻拒因 + 合法出口全集(transitions nodes.N4.legal_exits.states.return_rejected; 配置卡交付程序按
+    evidence_overrides.return_rejected_program 推荐换新主体)。loop 见此 action 按 lybra_loop.launch.report_fix.executor.artifact 续接或结束。"""
+    from tools.aipos_cli.artifact_ingest import program_guard_declaration, return_rejected_declaration
+
+    decl = return_rejected_declaration()
+    texts = decl["texts"]
+    rec, check = rejection["record"], rejection["check"]
+    category = str(check.get("category") or "")
+    rec_key, why = None, ""
+    guard = program_guard_declaration() or {}
+    if category and category == str(guard.get("category") or ""):
+        rule = legal_exits_declaration()["evidence_overrides"].get("return_rejected_program") or {}
+        rec_key, why = rule.get("exit"), str(rule.get("why") or "")
+    exits = legal_exits(workspace_root, task_id, fm, str(decl["legal_exits_state"]),
+                        actor=_driver_actor(workspace_root, connection_json=conn_arg),
+                        policy_ref=_driver_envelope_ref(workspace_root, task_id, fm, conn_arg) or "", recommended=rec_key, why=why)
+    try:
+        report_ref = str(Path(return_path).resolve().relative_to(Path(workspace_root).resolve()))
+    except ValueError:
+        report_ref = str(return_path)
+    reason = " ".join(str(r) for r in check.get("reasons") or []) or category
+    values = {"rejection_id": rec.get("rejection_id"), "recorded_at": rec.get("recorded_at"), "category": category,
+              "return_path": report_ref, "reason": reason, "exits": exits["text"], "path": rec.get("_path")}
+    return _attach_legal_exits({
+        "task_id": task_id,
+        "derivable": False,
+        "current_node": node,
+        "current_state": "claimed",
+        "triggered_by": "advisor",
+        "command": "",
+        "verb": "",
+        "missing_records": [texts["missing"].format(**values)],
+        "suggested_action": texts["suggested"].format(**values),
+        "notes": texts["notes"].format(**values),
+        "action": {"type": str(decl["action_type"]), "card": task_id, "path": str(return_path), "category": category,
+                   "rejection_id": rec.get("rejection_id"), "end_reason": str(decl["action_type"])},
+        "return_rejection": {"rejection_id": rec.get("rejection_id"), "category": category, "record_path": rec.get("_path")},
+    }, exits)
 
 
 def verdict_stale_declaration() -> dict[str, Any]:
@@ -4432,9 +4488,11 @@ def _derive_candidate_deliverable_fail(task_id: str, state: dict[str, Any], rewo
 # ---------------------------------------------------------------------------
 
 _LEGAL_EXIT_TEXTS = ("line", "item", "owner_part", "dropped", "fast_lane_no_reaudit", "rework_limit_note", "advisor_placeholder",
-                     "budget_unknown")
+                     "budget_unknown", "resubmit", "resubmit_who_pi", "resubmit_who_subagent", "resubmit_who_unknown", "withdraw_gate",
+                     "withdraw_need_owner", "withdraw_no_owner", "gate_part")
 #: 渲染器名全集(声明 exits.<出口>.renderer 只得取其一); 模板型读 command_templates 同名键
-_EXIT_RENDERERS = ("rework", "same_round", "reaudit", "supersede", "amend", "withdraw", "owner_ask")
+#: AIPOS-F236: resubmit = 交回入门被拒后修产物重交(产物入口命令 ingest_command 唯一构造 + 谁来修)
+_EXIT_RENDERERS = ("rework", "same_round", "reaudit", "supersede", "amend", "withdraw", "owner_ask", "resubmit")
 _EXIT_TEMPLATE_RENDERERS = ("same_round", "supersede", "amend", "withdraw", "owner_ask")
 #: 同主体返工出口在返工额度用尽时改判 rework_limit 的状态(返工轮计入既有上限)
 _REWORK_LIMITED_STATES = ("FAIL", "BLOCK", "candidate_fail", "candidate_deliverable_fail", "fast_lane_review_fail", "audit_blocked_repeated")
@@ -4555,6 +4613,9 @@ def _render_exit(workspace_root: Path, task_id: str, fm: dict[str, Any], rendere
         if fast:
             return review_rework_command(workspace_root, task_id, report_ref), ""
         return rework_command_line(workspace_root, task_id, actor=actor, verdict_id=verdict_id), ""
+    if renderer == "resubmit":  # AIPOS-F236 件②: 修产物后重交(谁修按执行方式: pi = loop 续接, 子 agent = 顾问派)
+        return texts["resubmit"].format(who=_resubmit_who(workspace_root, task_id, fm, texts),
+                                        command=ingest_command(task_id, "return", Path(workspace_root), None)), ""
     if renderer == "reaudit":
         if fast:
             return None, texts["fast_lane_no_reaudit"]
@@ -4566,6 +4627,40 @@ def _render_exit(workspace_root: Path, task_id: str, fm: dict[str, Any], rendere
               "subject_hint": str(templates["subject_hint"].get(subject) or ""), "outcome": str(same_round_declaration()["outcome"]),
               "restricted": " --restricted" if (_find_task_in_queue(Path(workspace_root), task_id)[1] == "claimed") else ""}
     return str(templates[renderer]).format(**values), ""
+
+
+def _resubmit_who(workspace_root: Path, task_id: str, fm: dict[str, Any], texts: dict[str, Any]) -> str:
+    """AIPOS-F236: 修后重交出口的「谁来修」(卡 harness 唯一推导 loop_driver.card_harness: pi = loop 同会话续接执行体, 其余 = 顾问派执行子 agent)。"""
+    from tools.aipos_cli.loop_driver import CardHarnessUnresolved, card_harness
+
+    try:
+        harness = card_harness(fm, Path(workspace_root), task_id=task_id, audit_card=False)
+    except (CardHarnessUnresolved, ValueError, LookupError) as exc:
+        return texts["resubmit_who_unknown"].format(error=f"{type(exc).__name__}: {exc}")
+    if harness == "pi":
+        return texts["resubmit_who_pi"]
+    return texts["resubmit_who_subagent"].format(harness=harness)
+
+
+def withdraw_gate_fact(workspace_root: Path, task_id: str, decl: dict[str, Any] | None = None) -> str:
+    """AIPOS-F236 件②: 撤卡出口的门侧真实判定(与 queue withdraw 同源: 须带 Owner 裁决引用的源目录 queue_mutation.withdraw_owner_ruling_states,
+    本卡队列状态 _find_task_in_queue)。卡不在队列 = 空串。"""
+    from tools.aipos_cli.queue_mutation import withdraw_owner_ruling_states
+
+    texts = (decl or legal_exits_declaration())["texts"]
+    _path, queue = _find_task_in_queue(Path(workspace_root), task_id)
+    if not queue:
+        return ""
+    states = withdraw_owner_ruling_states()
+    need = texts["withdraw_need_owner"] if queue in states else texts["withdraw_no_owner"]
+    return texts["withdraw_gate"].format(queue=queue, need=need, states="/".join(states) or "(无)")
+
+
+def _exit_item(texts: dict[str, Any], e: dict[str, Any]) -> str:
+    """一个出口的文本行(texts.item + 须 Owner 档位 + AIPOS-F236 门侧判定 gate_part); legal_exits.text 与 render_legal_exit_lines 同读。"""
+    owner = texts["owner_part"].format(owner_tier1=e["owner_tier1"]) if e.get("owner_tier1") else ""
+    line = texts["item"].format(key=e["key"], label=e["label"], owner=owner, command=e["command"])
+    return line + (texts["gate_part"].format(gate=e["gate"]) if e.get("gate") else "")
 
 
 def legal_exits(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None, state_key: str, *,
@@ -4600,8 +4695,10 @@ def legal_exits(workspace_root: Path, task_id: str, card_frontmatter: dict[str, 
         if command is None:
             out["dropped"].append({"key": key, "label": spec["label"], "why": drop})
             continue
+        gate = withdraw_gate_fact(workspace_root, task_id, decl) if spec["renderer"] == "withdraw" else ""
         out["exits"].append({"key": key, "label": str(spec["label"]), "owner_tier1": spec.get("owner_tier1"),
-                             "invariants": list(spec["invariants"]), "command": command, "note": str(spec.get("note") or "")})
+                             "invariants": list(spec["invariants"]), "command": command, "note": str(spec.get("note") or ""),
+                             **({"gate": gate} if gate else {})})
     keys = [e["key"] for e in out["exits"]]
     rec = decl["recommend"][state]
     pick, reason = (recommended, why) if recommended in keys else (str(rec["exit"]), str(rec["why"]))
@@ -4612,10 +4709,7 @@ def legal_exits(workspace_root: Path, task_id: str, card_frontmatter: dict[str, 
     elif budget.get("error"):
         reason = f"{reason}; " + texts["budget_unknown"].format(error=budget["error"])
     out["recommended"], out["why"] = pick, reason
-    items = []
-    for e in out["exits"]:
-        owner = texts["owner_part"].format(owner_tier1=e["owner_tier1"]) if e["owner_tier1"] else ""
-        items.append(texts["item"].format(key=e["key"], label=e["label"], owner=owner, command=e["command"]))
+    items = [_exit_item(texts, e) for e in out["exits"]]
     items += [texts["dropped"].format(label=d["label"], why=d["why"]) for d in out["dropped"]]
     out["text"] = texts["line"].format(state=state, subject=subject, invariants="/".join(decl["invariants"]), items=" | ".join(items),
                                        recommended=pick or "(无)", why=reason)
@@ -4648,8 +4742,7 @@ def render_legal_exit_lines(exits: dict[str, Any] | None) -> list[str]:
     texts = legal_exits_declaration()["texts"]
     lines = [f"Exits({exits['state']} × {exits['subject']}, 门只守底线 {'/'.join(exits.get('invariants') or {})}; 顾问任选其一):"]
     for e in exits["exits"]:
-        owner = texts["owner_part"].format(owner_tier1=e["owner_tier1"]) if e.get("owner_tier1") else ""
-        lines.append("  " + texts["item"].format(key=e["key"], label=e["label"], owner=owner, command=e["command"]))
+        lines.append("  " + _exit_item(texts, e))
     lines += ["  " + texts["dropped"].format(label=d["label"], why=d["why"]) for d in exits.get("dropped") or []]
     lines.append(f"  推荐: {exits.get('recommended') or '(无)'}({exits.get('why') or ''})")
     return lines

@@ -554,6 +554,16 @@
             "renderer": "withdraw",
             "note": "不做了 = Owner 第一档 withdraw 裁决后 queue withdraw; 在途审计卡同一操作连带撤回(AIPOS-F230 件⑤)"
           },
+          "fix_resubmit": {
+            "label": "修产物后重交",
+            "invariants": [
+              "evidence_bound",
+              "traceable"
+            ],
+            "owner_tier1": null,
+            "renderer": "resubmit",
+            "note": "AIPOS-F236: 交回入门被拒(未落交回记录, 不占返工轮)= 按拒因修产物 / 报告后重交(产物入口同一校验再判); 谁修: pi 卡 = loop 同会话续接执行体按拒因修一次(verbs.schema lybra_loop.launch.report_fix.executor.artifact), 子 agent 卡 = 顾问把拒因派给执行子 agent"
+          },
           "owner_extension": {
             "label": "授权追加返工",
             "invariants": [
@@ -710,6 +720,26 @@
               "new_subject",
               "withdraw"
             ]
+          },
+          "return_rejected": {
+            "branch": [
+              "fix_resubmit",
+              "new_subject",
+              "withdraw",
+              "change_scope"
+            ],
+            "candidate": [
+              "fix_resubmit",
+              "new_subject",
+              "withdraw",
+              "change_scope"
+            ],
+            "governance_outputs": [
+              "fix_resubmit",
+              "new_subject",
+              "withdraw",
+              "change_scope"
+            ]
           }
         },
         "recommend": {
@@ -740,6 +770,10 @@
           "audit_blocked_repeated": {
             "exit": "reaudit",
             "why": "连续 BLOCK: 部署 / 验证根有变化 = 续跑 loop 自动重新派审; 无变化 = 顾问修环境后重新派审"
+          },
+          "return_rejected": {
+            "exit": "fix_resubmit",
+            "why": "交回入门拒 = 产物不合入门判据(确定性校验, 未落交回记录): 按拒因修产物 / 报告后重交; 产物确属本卡不该交付的类型才换新主体"
           }
         },
         "evidence_overrides": {
@@ -750,6 +784,10 @@
           "fail_scope_undeclared": {
             "exit": "new_subject",
             "why": "审计未声明 fail_scope(按候选处理); 审计发现明确只涉交付物时改选同主体返工"
+          },
+          "return_rejected_program": {
+            "exit": "new_subject",
+            "why": "配置 / 文档卡交回含本卡写的程序(program_guard; 他仓已入库代码的输入副本已豁免): 程序确属交付 = 另出代码卡后撤换本卡; 程序不是交付物 = 选修产物后重交(移出后重交)"
           }
         },
         "texts": {
@@ -760,7 +798,15 @@
           "fast_lane_no_reaudit": "快车道卡不声明独立审计, 无审计轮可重派",
           "rework_limit_note": "返工额度已用尽({why}), 同主体返工改为带第一档事由升 Owner",
         "advisor_placeholder": "<你的顾问实例>",
-        "budget_unknown": "返工额度判不出({error}), 按原状态列出口(门 queue rework 照常核额度)"
+        "budget_unknown": "返工额度判不出({error}), 按原状态列出口(门 queue rework 照常核额度)",
+        "resubmit": "{who}; 修后重交(产物入口同一校验再判): {command}",
+        "resubmit_who_pi": "pi 卡: 原命令续跑 loop = 同会话续接执行体按拒因修一次(lybra_loop.launch.report_fix.executor.artifact)",
+        "resubmit_who_subagent": "子 agent 卡({harness}): 顾问把拒因原文派给执行子 agent 修产物 / 报告",
+        "resubmit_who_unknown": "执行方式判不出({error}): pi 卡 = 续跑 loop 续接执行体修, 子 agent 卡 = 顾问派执行子 agent 修",
+        "withdraw_gate": "门侧真实判定(queue withdraw 同源 queue_mutation.withdraw_owner_ruling_states): 本卡在 {queue}, 撤回{need}(须带裁决引用的源目录 {states}); 在途保护由预演核",
+        "withdraw_need_owner": "须带 Owner 裁决引用(--owner-ruling-ref)",
+        "withdraw_no_owner": "门不要求 Owner 裁决引用(F225 第一档 withdraw 指 Owner 放弃需求; 交回入门误拒 / 改由新卡承接不属放弃时顾问可自走)",
+        "gate_part": " — {gate}"
         }
       },
       "same_round": {
@@ -1755,7 +1801,7 @@
         "gate_check": "门 queue_return(一切交回提交路径汇入)对只写治理根的卡先以 governance_outputs_manifest 核 Return outputs 清单, 不合 = blocking_reasons `<拒因码>: …`, 交回不落; 合规 = 交回记录 artifact_subject 绑定清单(return_binding_subject)"
       },
       "program_guard": {
-        "description": "AIPOS-F230 件②(10-23/24 chris LANTU-DEMO1 实撞: task_mode=config 的快车道卡在验证根 run 目录交付约 1400 行进程管理程序 demo-launcher.py(无代码仓 / 无测试 / 无独立审计), 返工 5 轮仍不过): 配置 / 文档卡交付可执行程序须改走代码卡。task_mode ∈ task_modes 的卡交回入门(artifact_ingest._validate_task_artifact, kind=return; 门交回入口与 loop 交回步同经此)扫本卡交回产物: ①交回报告 outputs 清单(只写治理根的卡)与报告落点; ②本卡在本机的验证根 run 目录(validation_root 声明 task_id = 本卡的 run, path_template 渲染; 跳过 skip_dirs 名的目录, 如送达候选源码 src / helper 封签 .lybra-vr / 工具缓存)。交回报告正文提到的其他路径不扫(多为他卡环境 / 工具, 误伤)。程序判据(唯一实现 artifact_ingest.program_files): 普通文件、≤ max_bytes、前 sniff_bytes 字节无 NUL 且可按 utf-8 解码, 且(扩展名属 config.schema code_files_blacklist(governance_guardrails.is_code_file 同一判据)或首行以 shebang_prefix 开头), 且(行数 > max_lines, 或 executable_bit=true 时带可执行位)。命中 = 拒 category, 拒因逐个列文件 / 行数 / 可执行位与出口 texts.refusal; 发卡同判据预警(draft_validator: task_mode ∈ task_modes 且 output_target / artifacts path_glob 指向代码文件扩展名 = warning texts.draft_warning)。task_modes 外的卡(validation 驱动脚本、审计 run 脚本、code 卡)不受限; 缺本节 = 不查(行为不变)。",
+        "description": "AIPOS-F230 件②(10-23/24 chris LANTU-DEMO1 实撞: task_mode=config 的快车道卡在验证根 run 目录交付约 1400 行进程管理程序 demo-launcher.py(无代码仓 / 无测试 / 无独立审计), 返工 5 轮仍不过): 配置 / 文档卡交付可执行程序须改走代码卡。task_mode ∈ task_modes 的卡交回入门(artifact_ingest._validate_task_artifact, kind=return; 门交回入口与 loop 交回步同经此)扫本卡交回产物: ①交回报告 outputs 清单(只写治理根的卡)与报告落点; ②本卡在本机的验证根 run 目录(validation_root 声明 task_id = 本卡的 run, path_template 渲染; 跳过 skip_dirs 名的目录, 如送达候选源码 src / helper 封签 .lybra-vr / 工具缓存)。交回报告正文提到的其他路径不扫(多为他卡环境 / 工具, 误伤)。程序判据(唯一实现 artifact_ingest.program_scan): 普通文件、≤ max_bytes、前 sniff_bytes 字节无 NUL 且可按 utf-8 解码, 且(扩展名属 config.schema code_files_blacklist(governance_guardrails.is_code_file 同一判据)或首行以 shebang_prefix 开头), 且(行数 > max_lines, 或 executable_bit=true 时带可执行位)。命中 = 拒 category, 拒因逐个列文件 / 行数 / 可执行位与出口 texts.refusal; 发卡同判据预警(draft_validator: task_mode ∈ task_modes 且 output_target / artifacts path_glob 指向代码文件扩展名 = warning texts.draft_warning)。task_modes 外的卡(validation 驱动脚本、审计 run 脚本、code 卡)不受限; 缺本节 = 不查(行为不变)。",
         "task_modes": [
           "config",
           "docs"
@@ -1779,11 +1825,45 @@
         ],
         "category": "INGEST_PROGRAM_IN_NON_CODE_CARD",
         "texts": {
-          "refusal": "卡 {task_id} 是 task_mode={task_mode}(配置 / 文档卡), 交回产物含可执行程序 {files}(判据: 代码扩展名或 shebang 且行数 > {max_lines}{exec_rule}; 声明 transitions artifact_ingest.return.program_guard)。配置 / 文档卡不交付程序: 出口 = 改走代码卡——顾问另出 task_mode=code 的卡(程序进代码仓车道、带测试、独立审计), Owner 第一档 rescope 后 lybra queue supersede 本卡(或改本卡产出只留配置 / 说明, 程序交给代码卡)",
+          "refusal": "卡 {task_id} 是 task_mode={task_mode}(配置 / 文档卡), 交回产物含可执行程序 {files}(判据: 代码扩展名或 shebang 且行数 > {max_lines}{exec_rule}; 内容 git blob 已在本项目声明的仓 = 他仓已入库代码的输入副本, 不算程序(input_copy); 声明 transitions artifact_ingest.return.program_guard)。配置 / 文档卡不交付程序: 程序确属本卡交付 = 改走代码卡——顾问另出 task_mode=code 的卡(程序进代码仓车道、带测试、独立审计)后撤换本卡; 程序不是本卡交付物 = 移出报告落点 / run 目录(或改本卡产出只留配置 / 说明)后重交。{exits}",
           "file": "{path}({lines} 行{exec})",
           "exec_part": ", 可执行位",
           "exec_rule": " 或带可执行位",
           "draft_warning": "task_mode={task_mode}(配置 / 文档卡)声明的产出 {targets} 指向代码文件: 配置 / 文档卡交回含可执行程序会被交回入口拒(transitions artifact_ingest.return.program_guard, 行数 > {max_lines}{exec_rule}); 要交付程序请改出 task_mode=code 的卡(代码仓车道、测试、独立审计)"
+        },
+        "input_copy": {
+          "description": "AIPOS-F236 件①(10-26 chris 岚图 LANTU-CLDEP1 实撞: config 卡卡面要求把 lantu-contracts 固定提交 bb2f5fb 以 git archive 导出到本 run 内只读目录 contracts/, 交回被本守卫以 contracts/tools/p1/validate.py(309 行)等拒——那是他仓已入库代码的只读副本, 不是本卡写的程序; F230 只按固定目录名 skip_dirs 跳过): 命中程序判据的文件, 其内容的 git blob 哈希(sha1(`blob <字节数>\\0` + 内容), 与 git hash-object 同算)已存在于本项目声明的仓(仓集合 = 卡 lane 仓 + project.json repos.items + code_repo, 唯一读取口 workspace_config.resolve_card_repo / project_repos; 治理根不算)= 输入副本, 不算本卡交付的程序: 交回入门不拒, 结果另列 input_copies [{path, lines, executable, blob, repo, repo_path}] 与注记 texts.note(ingest 输出 note 行, 审计可见; 真交回另落事件记录, 见 rejection_record.input_copies_event_type)。核对 = 每仓一次 `git -C <仓> cat-file --batch-check`(与 `git cat-file -e <blob>` 同一对象存在判定的批量形; 类型须为 blob), 唯一实现 artifact_ingest.repo_blob_sources。仓读不出 / 非 git 仓 = 该仓不作来源(fail-closed: 文件照旧算程序), 原因进 repo_errors 与拒因。取舍(单一判定原则): 只按内容判(仓中存在的 blob), 不另立卡面 inputs 声明——同一事实只一个判据, 卡面无需声明也不会漏声明; 仓中不存在的 blob(本卡新写或改过的程序)照旧拒。缺本节 = 不豁免(行为同 F230)。",
+          "texts": {
+            "note": "输入副本(他仓已入库代码的只读副本, 不算本卡交付的程序; 判据 = 文件内容 git blob 已在本项目声明的仓, AIPOS-F236): {files}",
+            "file": "{path}(来源仓 {repo} blob {blob}, {lines} 行)",
+            "repo_error": "仓 {repo}({path})blob 核对失败, 不作来源(fail-closed): {error}"
+          }
+        }
+      },
+      "rejection_record": {
+        "description": "AIPOS-F236 件②(10-26 chris LANTU-CLDEP1 实撞: 交回入门被拒只写在 loop 运行记录结束原文, 无交回拒收记录; `lybra next` 仍给「RETURN.md 已生成, 需执行 return 动词」与同一条 artifact ingest 命令, 重跑必拒, 顾问看不到撤回 / 移走后重交等合法出口): 交回拒收入真相。写: 产物入口真交回(lybra artifact ingest --kind return, 非 --dry-run; loop 交回步同经此)被拒 = 落一条事件记录(record_writer.write_records_atomic kind event, records/events/<卡>/<event_type>_<卡>_<seq>.md; record_type = task_progress_event), 任何 category(产物入口校验拒 INGEST_* 与门侧拒 shell_rejected_category)都落; 交回报告不存在(INGEST_RETURN_MISSING)/ 卡不在交回节点(skip_categories)不是对产物的拒收, 不落。字段 = record_fields: category / reasons(每条截 reason_chars 字)/ return_path / files(拒因点名的报告落点外文件, 如 program_files)/ fingerprint(产物指纹: 报告落点目录全部普通文件 + files 逐个 `<sha256|missing>  <路径>` 按路径排序拼接后 sha256, 唯一实现 artifact_ingest.return_fingerprint)。写口唯一 artifact_ingest.write_return_rejection, 读口唯一 artifact_ingest.return_rejection_records。读(唯一判定 artifact_ingest.return_rejection_state, 推导核交回步唯一构建 next_resolver._return_submission_step 同调 = 首交与重交回同此): 本卡最新拒收记录的指纹 = 此刻指纹(报告与产物自拒后未变)时以产物入口同一校验(validate_task_artifact)复核——仍拒 = 推导核不再给交回命令: 不可推导, action.type = action_type(loop 以 end_reason 结束或续接执行体修一次, 见 verbs.schema lybra_loop.launch.report_fix.executor.artifact), suggested_action / legal_exits = nodes.N4.legal_exits 的 return_rejected 状态全集原文(修后重交 / 换新主体 / 撤卡 / 改范围, 撤卡附门侧真实判定); 此刻已通过(产品升级 / 仓已入库 / 拒的是门侧)= 照常给交回命令并附说明(门侧拒照旧走 F150 例行门拒修法, 不改判 return_rejected——门侧状态可在产物不变时改变); 指纹已变 = 照常给交回命令(产物入口再判)。缺本节 = 不落不读(行为不变)。input_copies_event_type: 真交回入门通过且有输入副本(program_guard.input_copy)= 同一写口落一条该类型事件记录(字段同 record_fields, category = 空, files = 输入副本路径, reasons = 注记原文), 供审计在被审卡事件记录中可见。",
+        "event_type": "return_rejected",
+        "input_copies_event_type": "return_input_copies",
+        "id_template": "{event_type}_{task_id}_{seq}",
+        "record_fields": ["record_type", "event_type", "rejection_id", "task_id", "category", "reasons", "return_path", "files", "fingerprint", "recorded_at", "recorded_by"],
+        "recorded_by": "lybra artifact ingest",
+        "reason_chars": 2000,
+        "skip_categories": ["INGEST_RETURN_MISSING", "INGEST_NOT_AT_RETURN_NODE", "INGEST_KIND_MISMATCH"],
+        "shell_rejected_category": "SHELL_REJECTED",
+        "action_type": "return_rejected",
+        "legal_exits_state": "return_rejected",
+        "body": "# {title}: {task_id}\n\n{summary}(AIPOS-F236, 声明 transitions artifact_ingest.return.rejection_record)\n",
+        "texts": {
+          "rejected_title": "Return Rejected",
+          "rejected_summary": "交回入门被拒 {category}; 报告与产物未变前 lybra next 不再给同一交回命令, 改给合法出口全集",
+          "copies_title": "Return Input Copies",
+          "copies_summary": "交回入门通过; 下列文件为他仓已入库代码的输入副本(不算本卡程序)",
+          "missing": "交回入门拒收 {rejection_id}({recorded_at}): {category}",
+          "suggested": "交回 {return_path} 自 {rejection_id}({recorded_at})入门被拒 {category} 后报告与产物未变, 重跑同一交回命令必拒, 不再给交回命令(AIPOS-F236)。此刻复核拒因: {reason}。{exits}",
+          "notes": "交回入门被拒且自拒后报告与产物未变(AIPOS-F236 件②, 判定 artifact_ingest.return_rejection_state; 拒收记录 {path})",
+          "revalidated_ok": "上次交回入门拒收 {rejection_id}({category})后报告与产物未变, 但此刻产物入口校验已通过(产品 / 仓已变), 照常交回",
+          "gate_side": "上次交回被门侧拒 {rejection_id}({category}; 产物入口校验此刻通过, 门侧状态可能已变): 照常给交回命令(门侧拒因修法见 lybra loop status)",
+          "record_failed": "交回拒收记录未落(fail-closed, 出声): {error}"
         }
       },
       "header_fix": {
