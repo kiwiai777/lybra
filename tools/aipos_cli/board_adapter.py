@@ -3399,6 +3399,17 @@ def _build_return_preview(
             repo_root=repo_root,
         )
         blocking_reasons.extend(artifact_validation_errors)
+        # AIPOS-F242 件③: 凭据判据下沉门侧交回写入口(同 F162/F163 运行证据下沉)——artifact ingest 派生 / 手敲 / 门 MCP 直调一切交回同核
+        # 唯一判据 artifact_ingest.credential_scan(经 gate_credential_blocking), 拒因同码同文、不回显值; 随请求提交的 result_summary /
+        # return_body(门将写成交回报告)与报告 / 落点同扫
+        from tools.aipos_cli.artifact_ingest import gate_credential_blocking
+
+        report_candidate = (repo_root / completion_report_ref) if completion_report_ref and not _unsafe_return_ref(completion_report_ref) else None
+        blocking_reasons.extend(gate_credential_blocking(
+            repo_root, task_id_text, kind="return", card_fm={**source_metadata, "task_id": task_id_text},
+            report=report_candidate if report_candidate is not None and report_candidate.is_file() else None,
+            extra_texts=[("queue_return.result_summary", str(result_summary or "")),
+                         (_return_body_rel(repo_root, task_id_text) + "(return_body)", str(return_body or ""))]))
     
     # AIPOS-R6E 靶④: return覆盖度对照——卡面artifact_scope与实际artifact_refs差异结构化
     artifact_scope = str(source_metadata.get("artifact_scope") or "").strip()
@@ -5225,6 +5236,13 @@ def _build_audit_verdict_preview(
     )
     if runtime_evidence is not None:
         blocking_reasons.extend(f"{runtime_evidence['category']}: {reason}" for reason in runtime_evidence["reasons"])
+    # AIPOS-F242 件③: 凭据判据同在门侧裁决写入唯一口核(审计报告 / 审计落点 + 随请求提交的 findings_summary; 唯一判据 credential_scan,
+    # 经 gate_credential_blocking; 拒因同码同文、不回显值)——ingest 派生 / 手敲 audit-verdict / 门 MCP 直调同核
+    from tools.aipos_cli.artifact_ingest import gate_credential_blocking
+
+    blocking_reasons.extend(gate_credential_blocking(
+        repo_root, str(audit_task.get("task_id") or ""), kind="verdict", card_fm=audit_metadata,
+        extra_texts=[("audit_verdict.findings_summary", str(findings_summary or ""))]))
 
     timestamp = planned_verdict_at or iso_z()
     verdict_id = planned_verdict_id or build_runtime_id("verdict", str(reviewed_task.get("task_id") or ""), timestamp, canonical_agent_instance or actor)
