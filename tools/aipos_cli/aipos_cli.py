@@ -3765,6 +3765,13 @@ def build_parser() -> argparse.ArgumentParser:
                                         help="AIPOS-F90 件②: 推导核声明的入门节点(return=执行体 Return / verdict=审计报告 / finalization=外部 FINALIZE Return); "
                                              "给出时与产物入口自判的种类不符即拒(INGEST_KIND_MISMATCH)")
     artifact_ingest_parser.add_argument("--json", action="store_true", help="JSON 输出")
+    # AIPOS-F239 件③: lybra artifact credential-scan — 存量凭据只读检查(与产物入口同一判据, 不回显值)
+    artifact_cred_parser = artifact_subparsers.add_parser(
+        "credential-scan",
+        help="AIPOS-F239 件③: 只读检查已有报告落点与审计报告快照中的明文凭据(只列落点 / 文件 / 行号 / 种类, 不回显值; 不改文件不改历史)",
+    )
+    artifact_cred_parser.add_argument("--workspace-root", type=Path, help="治理根; 缺省自发现")
+    artifact_cred_parser.add_argument("--json", action="store_true", help="JSON 输出(命中清单不含值)")
 
     # AIPOS-F71: 退役旧入口 next-step 保留为兼容转发(输出退役提示); turn-advancer 入口随 AIPOS-F91 删除
     next_step_parser = subparsers.add_parser("next-step", help="[RETIRED by AIPOS-F71] Use 'lybra next --task-id <ID>' instead")
@@ -7979,8 +7986,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "artifact":
         # AIPOS-F78 件③: 产物入口薄壳(校验后经既有 queue return / audit-verdict 薄壳)
+        if getattr(args, "artifact_command", None) == "credential-scan":  # AIPOS-F239 件③: 只读存量检查
+            from tools.aipos_cli.artifact_ingest import run_credential_scan_cli
+            return run_credential_scan_cli(args)
         if getattr(args, "artifact_command", None) != "ingest":
-            print("Usage: lybra artifact ingest --task-id <ID> [--connection-json PATH] [--dry-run]", file=sys.stderr)
+            print("Usage: lybra artifact ingest --task-id <ID> [--connection-json PATH] [--dry-run] | lybra artifact credential-scan [--json]", file=sys.stderr)
             return 2
         from tools.aipos_cli.artifact_ingest import run_ingest_cli
         return run_ingest_cli(args)

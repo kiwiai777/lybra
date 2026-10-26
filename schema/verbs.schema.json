@@ -2894,9 +2894,10 @@
               "description": "AIPOS-F236 件③(10-26 chris LANTU-CLDEP1 实撞: pi 执行的 config 卡交回被产物入口拒 INGEST_PROGRAM_IN_NON_CODE_CARD, loop 以 gate_rejected 结束, 无人按拒因修): F204 同一续接机制扩到「产物不合入门判据」类拒收。触发 = 本卡(执行卡)交回步(artifact ingest --kind return)被拒或推导核判 transitions artifact_ingest.return.rejection_record.action_type(拒后报告与产物未变), 且产物入口同一校验(validate_task_artifact)的 category ∈ categories、无报告头问题(header_problem 优先走上一机制)。以本卡最近一次拉起的固定会话同会话续接执行体一次(拉起判定 / 拉起与等待 / 记录同 report_fix.executor: plan_launch resume_session / _launch_once; 运行记录 report_fixes role = executor, kinds = [category]), 指令 = prompt(按拒因修产物 / 报告, 修完重写交回报告; 确属本卡必须交付而入门判据不允许 = 不删改工作, 交回报告写明 BLOCK 原因由顾问改走出口)。等到交回报告改写后重推导、重新入门。每张执行卡每次运行至多 max_per_run 次(与报告头修复分开计数)。会话不可续接(子 agent / 手工工位 / 无会话记录 / 拉起判定拒 / 工位已变)、本运行已用尽、续接后报告未改写或等待超时 = 以 end_reason 结束(exit_codes.not_derivable; loop status by_end_reason = advisor_fix, 修法 routine_rejections.end_reasons.<end_reason>; 结束原文附修产物指令与合法出口全集 transitions nodes.N4.legal_exits.states.return_rejected), 不升 Owner。门侧拒(产物入口校验通过而门 queue_return 拒)不归此类(照原规则 gate_rejected)。唯一实现 loop_driver._report_fix(role=executor)。",
               "max_per_run": 1,
               "end_reason": "return_rejected",
-              "categories": ["INGEST_PROGRAM_IN_NON_CODE_CARD", "INGEST_CODE_FILE_IN_SLOT", "INGEST_REPORT_UNFILLED", "INGEST_SUMMARY_MISSING", "INGEST_OUTPUTS_INVALID", "INGEST_OUTPUT_MISSING", "INGEST_OUTPUT_OUT_OF_BOUNDARY"],
+              "categories": ["INGEST_PROGRAM_IN_NON_CODE_CARD", "INGEST_CODE_FILE_IN_SLOT", "INGEST_REPORT_UNFILLED", "INGEST_SUMMARY_MISSING", "INGEST_OUTPUTS_INVALID", "INGEST_OUTPUT_MISSING", "INGEST_OUTPUT_OUT_OF_BOUNDARY", "INGEST_CREDENTIAL_IN_ARTIFACT"],
+              "category_notes": {"INGEST_CREDENTIAL_IN_ARTIFACT": "AIPOS-F239: 拒因是明文凭据(只给文件 / 行号 / 种类)——逐处把值换成占位(如 <口令> / [已打码] / ${变量名}), 并在报告写明凭据存放处(被 .gitignore 排除的私有运行目录内的文件名); 不删验证结论与其余证据, 不把凭据挪到另一个会入门的文件; 运行确需的凭据只放被 git 忽略的私有目录。"},
               "prompt": "你的交回 {artifact} 被产物入口拒收 {category}: {reasons}。按拒因修产物 / 报告(只动本卡报告落点与本卡 run 目录; 拒因点名的文件不是本卡交付物 = 移出或删除; 不改门 / 产品 / 卡面, 不提交产品仓), 修完重写交回报告(先写 .tmp 再改名)。若拒因指的内容确属本卡必须交付而入门判据不允许 = 不删改工作, 把交回报告改写为 BLOCK 并写明原因(由顾问改走代码卡 / 撤换等出口)。改完即停。",
-              "prompt_note": "修产物指令唯一声明; 占位 {artifact} = 交回报告绝对路径, {category} = 产物入口拒因码, {reasons} = 拒因原文(含命中文件与合法出口命令)"
+              "prompt_note": "修产物指令唯一声明; 占位 {artifact} = 交回报告绝对路径, {category} = 产物入口拒因码, {reasons} = 拒因原文(含命中文件与合法出口命令)。AIPOS-F239: category_notes.<拒因码>(可选)= 该拒因码的补充指令, 渲染时接在 prompt 之后(唯一渲染 loop_driver.executor_artifact_fix_prompt)"
             },
             "same_round": {
               "description": "AIPOS-F238 件②(10-26 chris 理想 HBLX-85 实撞: loop 续接 pi 的修产物指令只含拒因, 顾问复核发现的其他问题——报告含测试凭据须脱敏、把网页登录当成维护接口验证——无处交代, 只能先让错报告入门或撤卡重来): 交回入门被拒后顾问同轮补正(mark-concluded --outcome same_round, 所审对象 = 拒收记录; 推导核 transitions nodes.N4.same_round.rejection 判 action await_rework 带 rejection_id)= loop 以本卡最近一次拉起的固定会话同会话续接执行体(拉起判定 / 拉起与等待 / 记录同 report_fix.executor: plan_launch resume_session / _launch_once 唯一拉起口), 指令 = prompt: {artifact_fix} = 修产物指令(report_fix.executor.artifact.prompt 同一声明, 拒因取该拒收记录 category / reasons 原文)+ 顾问要点逐条(point_line)+ 验收逐条(复核记录 acceptance_criteria; 无 = no_criteria)。等交回报告改写后重推导: 照常经产物入口重交(同一校验, 判据一条不放), 再被拒 = 新拒收记录(F236 修产物续接另算, 可再次同轮补正)。每条复核记录每次运行至多 max_per_run 次, 与报告头修复 / 修产物(report_fix.executor.artifact)分开计数——不占 F236 每运行 1 次的修产物额度。运行记录 report_fixes 条目 role = executor, kinds = [拒因码], kind = same_round, review_id = 复核记录号。会话不可续接(子 agent / 手工工位 / 无会话记录 / 拉起判定拒 / 工位已变)、续接后报告未改写或等待超时 = 以 end_reason 结束(exit_codes.not_derivable; 结束原文给可派发的同一条完整指令 + 合法出口全集), 不升 Owner。唯一实现 loop_driver._report_fix(same_round=…)。",
@@ -2907,6 +2908,19 @@
               "no_criteria": "- (复核未另列验收: 按原卡验收与上述要点)\n",
               "prompt_note": "同轮补正(交回入门被拒)续接指令唯一声明; 占位 {artifact_fix} = 修产物指令渲染结果(loop_driver.executor_artifact_fix_prompt), {review_id} = 复核记录号, {points} / {criteria} = point_line 逐条拼接"
             }
+          },
+          "artifact": {
+            "description": "AIPOS-F239 件②(10-26 HBLX-85 产物入口凭据检查): 同一续接机制扩到审计角色的「产物不合入门判据」类拒收。触发 = 审计卡裁决步(artifact ingest --kind verdict)被拒, 且产物入口同一校验(validate_task_artifact)的 category ∈ categories(拒因只给文件 / 行号 / 种类, 不含命中值)。以该审计卡最近一次拉起的固定会话同会话续接审计体一次(拉起判定 / 拉起与等待 / 记录同上: plan_launch resume_session / _launch_once; 运行记录 report_fixes role = auditor, kinds = [category]), 指令 = prompt 后接 category_notes.<拒因码>(可选); 等到审计报告改写后重推导、重新入门。每张审计卡每次运行至多 max_per_run 次(与修报告头分开计数)。会话不可续接(子 agent 审计 / 手工工位 / 无会话记录 / 拉起判定拒 / 工位已变)、本运行已用尽、续接后报告未改写或等待超时 = 以 end_reason 结束(exit_codes.gate_rejected; loop status by_end_reason = advisor_fix, 修法 routine_rejections.end_reasons.<end_reason>; 结束原文附修报告指令), 不升 Owner。唯一实现 loop_driver._report_fix(role=auditor)。",
+            "max_per_run": 1,
+            "end_reason": "audit_report_rejected",
+            "categories": [
+              "INGEST_CREDENTIAL_IN_ARTIFACT"
+            ],
+            "category_notes": {
+              "INGEST_CREDENTIAL_IN_ARTIFACT": "AIPOS-F239: 拒因是明文凭据(只给文件 / 行号 / 种类)——逐处把值换成占位(如 <口令> / [已打码] / ${变量名}), 写明凭据存放处(被 .gitignore 排除的私有目录内的文件名); 不改裁决结论与取证结论, 不把凭据挪到另一个会入门的文件。"
+            },
+            "prompt": "你的审计报告 {artifact} 被裁决入口拒收 {category}: {reasons}。按拒因只修审计报告 / 审计落点里的文件(不改裁决结论、不改被审产物与门 / 产品 / 卡面, 不提交产品仓), 改完重写审计报告(先写 .tmp 再改名)即停。",
+            "prompt_note": "修审计报告指令唯一声明; 占位 {artifact} = 审计报告绝对路径, {category} = 产物入口拒因码, {reasons} = 拒因原文; category_notes.<拒因码> 接在其后(唯一渲染 loop_driver.auditor_artifact_fix_prompt)"
           },
           "unreadable": {
             "description": "AIPOS-F232 件②: 报告头读不出(YAML 解析错, 判定 transitions artifact_ingest.return.header_fix.unreadable, 唯一实现 artifact_ingest.report_unreadable_problem)= 执行 / 审计报告同一机制: 推导核对本卡报告硬停 frontmatter_unreadable、或裁决 / 交回入门被拒 INGEST_FRONTMATTER_UNREADABLE 且报告在本卡报告落点 = 按角色(审计卡 = auditor, 执行卡 = executor)续接其固定会话一次只修报告头, 指令 = prompt(含解析错行与原因); 上限 / 结束原因沿用该角色(auditor = 本声明 max_per_run / end_reason, executor = executor.*), 会话不可续接 = 以该角色 end_reason 结束(advisor_fix 例行修法, 子 agent 模式由顾问把本指令派给审计 / 执行实例), 不再 investigate、不升 Owner。唯一实现 loop_driver._report_fix。",
@@ -3009,6 +3023,7 @@
           "candidate_deliverable_fail": "AIPOS-F227 件②(10-24 chris HBLX-45V 实撞): 固定候选验证卡审计 FAIL 且审计报告声明 fail_scope=deliverable(候选可用、交付物缺失或不实), 推导核给出「登记返工轮(同候选)→ loop 拉起执行体补交付物重写交回 → 重交回派下一轮审计」(transitions nodes.N4.candidate_fail.fail_scope; exit_codes.not_derivable; 不计连败, 不进 Owner 收件箱)",
           "audit_blocked_repeated": "AIPOS-F179 件③: 本卡最新连续 BLOCK 裁决数 ≥ transitions nodes.N4.audit_blocked.owner_needed_after(修环境重审后仍 BLOCK), 升 Owner(exit_codes.not_derivable); AIPOS-F202: 计数以本卡最近一条「重新派审」收件箱裁决为界(transitions nodes.N4.audit_blocked.owner_reaudit)",
           "audit_report_form_error": "AIPOS-F180B 件②: 裁决入门被拒 INGEST_TIP_MISMATCH 且形式诊断 correctable(报告头 commit_sha 形式错误 / 疑似抄错), 但审计会话不可续接 / 本运行续接已用尽 / 续接后报告未改写(见 launch.report_fix; exit_codes.gate_rejected; 判定原文在结束原文与运行记录 report_fixes 末条 detail)",
+          "audit_report_rejected": "AIPOS-F239 件②: 审计报告被裁决入口拒收(category ∈ launch.report_fix.artifact.categories, 如明文凭据 INGEST_CREDENTIAL_IN_ARTIFACT; 拒因只给文件 / 行号 / 种类)且审计会话不可续接 / 本运行续接已用尽 / 续接后报告未改写(exit_codes.gate_rejected; 结束原文附修报告指令)",
           "return_rejected": "AIPOS-F236 件②③: 执行体交回被产物入口拒收(category ∈ launch.report_fix.executor.artifact.categories; 交回拒收记录 transitions artifact_ingest.return.rejection_record)且执行会话不可续接 / 本运行续接已用尽 / 续接后报告未改写, 或推导核判拒后报告与产物未变(action_type return_rejected)(exit_codes.not_derivable; 结束原文附修产物指令与合法出口全集); AIPOS-F238: 顾问同轮补正入门被拒的交回后执行会话不可续接 / 续接后报告未改写 = 同以本原因结束(launch.report_fix.executor.same_round), 结束原文附同轮补正指令(拒因 + 顾问要点 + 验收)",
           "return_report_form_error": "AIPOS-F204 件②: 执行体交回报告头可纠正错误(缺键 / 值不符产品给值 / 形式错 / 误用另一契约; transitions artifact_ingest.return.header_fix), 但执行会话不可续接 / 本运行续接已用尽 / 续接后报告未改写(见 launch.report_fix.executor; exit_codes.not_derivable; 判定原文在结束原文与运行记录 report_fixes 末条 detail)",
           "auto_release_revoked": "AIPOS-F225 件②: Owner 撤回了本卡的第二档自动放行(lybra_owner_inbox.tiers.auto_release: 返工自动追加 / 自动重新派审; 撤回 = 收件箱「已自动放行」事项选 revoke_auto, 既有 owner decide 写路径), 撤回之后本卡尚无 Owner 新裁决 = 卡停住, 推导核不派生推进步(唯一判定 owner_inbox.auto_release_stop, 推导核 next_resolver 首个硬停项之后同判; exit_codes.not_derivable)",
@@ -3368,6 +3383,7 @@
           "audit_report_form_error": "advisor_fix",
           "return_report_form_error": "advisor_fix",
           "return_rejected": "advisor_fix",
+          "audit_report_rejected": "advisor_fix",
           "auto_release_revoked": "owner_needed",
           "paused": "owner_needed",
           "stopped_by_owner": "advisor_fix",
@@ -3601,6 +3617,15 @@
                 "执行会话可续接(pi 拉起, 运行记录 launches[] 有本卡 session_id, 工位未变)= 直接用原命令续跑 loop(本修法末行命令): loop 以该会话续接一次只修报告头(launch.report_fix.executor), 改好即重新入门、照常派审",
                 "执行会话不可续接(子 agent / 手工工位 / 无会话记录)= 顾问把下面的修头指令原文派给本卡执行实例(派执行子 agent 或在工位会话转述), 执行体改完即停: {header_fix_prompt}",
                 "执行体改完后用原命令续跑 loop(本修法末行命令); 同卡连续以本原因结束达 repeat_owner_needed 次产品升 Owner"
+              ]
+            },
+            "audit_report_rejected": {
+              "why_routine": "AIPOS-F239 件②(10-26 HBLX-85 实撞同类): 审计报告被裁决入口拒收(确定性入门校验, 如报告 / 审计落点含明文凭据), 不是裁决结论问题; 修法固定 = 让审计体按拒因只修报告(凭据值换占位并写明存放处)后重新入门, 不改裁决结论、不整轮重审、不升 Owner",
+              "fix": [
+                "不代改审计报告(审计独立性)、不改被审产物、不问 Owner: 拒因原文(只列文件 / 行号 / 种类, 不含值)见只读复核 lybra artifact ingest --task-id <审计卡ID> --kind verdict --workspace-root {governance_root} --dry-run",
+                "审计会话可续接(运行记录 launches[] 有该审计卡的 session_id, 工位未变)= 用原命令续跑 loop(本修法末行命令): loop 以该会话续接一次按拒因修报告(launch.report_fix.artifact)",
+                "审计会话不可续接(子 agent 审计 / 手工工位 / 无会话记录)= 顾问把结束原文里的修报告指令派给本审计卡的审计实例(派审计子 agent 或在审计工位会话转述), 审计体改完即停, 之后用原命令续跑 loop",
+                "同卡连续以本原因结束达 repeat_owner_needed 次产品升 Owner"
               ]
             },
             "return_rejected": {
@@ -5328,6 +5353,44 @@
         "rejected": {"code": 4, "meaning": "声明缺/文件缺/frontmatter 缺/sha 不符/入门节点不符/卡不在可交回或可裁决节点/记录依据不齐/治理根解析失败(fail-closed, 输出缺项与出口)"}
       },
       "exit_codes_note": "AIPOS-F101 件③: artifact ingest 退出码唯一声明处(原 transitions.schema artifact_ingest.exit_codes 重复声明已删); 代码 tools/aipos_cli/artifact_ingest.py 经 verb_contract.declared_exit_code 读本声明, 不写死数字"
+    },
+    "lybra_artifact_credential_scan": {
+      "description": "AIPOS-F239 件③: `lybra [--workspace-root <治理根>] artifact credential-scan [--json]` —— 存量凭据只读检查: 治理根已有报告落点(project.json paths.return_root / verdict_root 下各卡目录)与已入门审计报告快照(transitions artifact_ingest.verdict.report_snapshot 目录)按产物入口同一判据(transitions artifact_ingest.credential_guard, 唯一实现 artifact_ingest.credential_scan)扫一遍, 列出命中清单(落点 / 文件 / 行号 / 种类)与按种类计数, 绝不回显命中值; 只读: 不改任何文件、不改写已提交历史、不连门。供顾问决定是否另行处置 git 历史 / 轮换凭据。",
+      "phase": "single",
+      "surface": [
+        "cli"
+      ],
+      "cli_command": "lybra artifact credential-scan",
+      "single_implementation": "tools/aipos_cli/artifact_ingest.credential_stock_scan(判据 credential_scan 与入门同一实现)/ render_credential_stock(人读唯一出口)/ run_credential_scan_cli",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "workspace_root": {
+            "type": "string",
+            "description": "治理根; 缺省自发现"
+          },
+          "json": {
+            "type": "boolean",
+            "description": "JSON 输出(命中清单不含值)"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "exit_codes": {
+        "clean": {
+          "code": 0,
+          "meaning": "无命中"
+        },
+        "hits": {
+          "code": 1,
+          "meaning": "有命中(清单已列出, 只读, 不含值)"
+        },
+        "error": {
+          "code": 2,
+          "meaning": "治理根解析失败 / 声明不可用(fail-closed)"
+        }
+      }
     },
     "lybra_governance_commit": {
       "description": "AIPOS-R7A2/F69/F79: governance-repo commit — the ONLY commit path for the truth layer (advisor-side). F79: explicit --paths whitelist (git add -- <paths>, never add -A when given; paths outside the governance root or pointing at another project are rejected fail-closed); --dry-run lists the exact files that would be committed without touching the scene (read-only git status --porcelain / git diff --name-status; no add/reset/stash); after a real commit, git show --name-only HEAD is verified against that manifest. Whole-root mode (no --paths) is reserved for lybra's own workspace; every other project MUST pass --paths. Pre-staged files: inside --paths = accepted into the manifest, outside --paths = rejected and listed. AIPOS-R6M file-level guardrails (pre-commit hook) still apply to the selected files. CLI-only (surface=cli); push reuses the F69 fetch -> rebase -> push -> remote-verify flow. AIPOS-F193: a --paths entry that is absent from the work tree AND never tracked (in neither the index nor HEAD; e.g. a card moved by a queue writer before it was ever committed) has nothing to land: it is dropped from staging and the commit pathspec and listed in the result (skipped_vanished_untracked + one result line) instead of failing the whole landing with a git pathspec error; all entries dropped = no-op PASS; tracked deletions (including already-staged git rm) are still committed. Single implementation governance_commit.classify_missing_paths; callers never filter.",

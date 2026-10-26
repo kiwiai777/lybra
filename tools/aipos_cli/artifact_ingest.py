@@ -780,6 +780,7 @@ def _record_ingest_event(workspace_root: Path, task_id: str, result: dict[str, A
         if result.get("category") in [str(c) for c in decl["skip_categories"]]:
             return
         files = [str(h.get("path")) for h in check.get("program_files") or [] if h.get("path")]
+        files += [str(f) for f in check.get("credential_files") or [] if str(f) not in files]  # AIPOS-F239: 报告落点外的命中文件
         kwargs: dict[str, Any] = {"category": str(result.get("category") or ""),
                                   "reasons": [str(r) for r in result.get("reasons") or []], "files": files}
     else:
@@ -816,6 +817,351 @@ def return_rejection_state(workspace_root: Path, task_id: str) -> dict[str, Any]
     check = validate_task_artifact(task_id, Path(workspace_root))
     gate_side = str(latest.get("category") or "") == str(decl["shell_rejected_category"])
     return {"record": latest, "still_rejected": not check.get("ok"), "gate_side": gate_side, "check": check}
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F239: 产物入口凭据检查(声明 transitions artifact_ingest.credential_guard)
+# ---------------------------------------------------------------------------
+
+_CREDENTIAL_KEYS = ("category", "scan", "patterns", "exempt", "texts")
+_CREDENTIAL_SCAN_KEYS = ("full_text_dirs", "slot_globs", "output_target", "outputs", "skip_gitignored", "skip_dirs", "sniff_bytes",
+                         "max_scan_bytes", "max_listed")
+_CREDENTIAL_EXEMPT_KEYS = ("strip_chars", "key_patterns", "value_patterns", "loose_value_patterns", "value_words", "value_substrings")
+_CREDENTIAL_TEXTS = ("refusal", "hit", "more", "what_return", "what_verdict", "what_finalization", "stock_title", "stock_root",
+                     "stock_clean", "stock_summary", "stock_slot", "stock_hit", "stock_next")
+
+
+def credential_guard_declaration() -> dict[str, Any] | None:
+    """AIPOS-F239 件①: transitions artifact_ingest.credential_guard(唯一读取口)。缺本节 = None(不查, 行为不变); 键 / 文案不齐、
+    正则编不过 = SchemaLoadError(fail-closed)。返回声明副本, 另带 _patterns [(kind, label, 编译后正则, 最短值长, loose)] 与 _exempt(编译后豁免)。"""
+    from tools.aipos_cli.next_resolver import _artifact_ingest_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    decl = _artifact_ingest_declaration().get("credential_guard")
+    if decl is None:
+        return None
+    where = "transitions.schema.json artifact_ingest.credential_guard"
+    scan = decl.get("scan") if isinstance(decl, dict) else None
+    exempt = decl.get("exempt") if isinstance(decl, dict) else None
+    texts = decl.get("texts") if isinstance(decl, dict) else None
+    if (not isinstance(decl, dict) or any(k not in decl for k in _CREDENTIAL_KEYS) or not str(decl["category"]).strip()
+            or not isinstance(scan, dict) or any(k not in scan for k in _CREDENTIAL_SCAN_KEYS)
+            or not isinstance(exempt, dict) or any(k not in exempt for k in _CREDENTIAL_EXEMPT_KEYS)
+            or not isinstance(texts, dict) or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in _CREDENTIAL_TEXTS)
+            or not isinstance(decl["patterns"], list) or not decl["patterns"]
+            or not all(isinstance(scan[k], list) for k in ("full_text_dirs", "slot_globs", "skip_dirs"))
+            or not all(isinstance(scan[k], int) and not isinstance(scan[k], bool) and scan[k] > 0
+                       for k in ("sniff_bytes", "max_scan_bytes", "max_listed"))
+            or not all(isinstance(scan[k], bool) for k in ("output_target", "outputs", "skip_gitignored"))
+            or not all(isinstance(exempt[k], list) for k in ("key_patterns", "value_patterns", "loose_value_patterns", "value_words",
+                                                             "value_substrings"))
+            or not isinstance(exempt["strip_chars"], str)):
+        raise SchemaLoadError(f"{where}({list(_CREDENTIAL_KEYS)} / scan.{list(_CREDENTIAL_SCAN_KEYS)} / exempt.{list(_CREDENTIAL_EXEMPT_KEYS)} / "
+                              f"texts.{list(_CREDENTIAL_TEXTS)})未声明齐(AIPOS-F239 件①)")
+    compiled: list[tuple[str, str, re.Pattern[str], int, bool]] = []
+    try:
+        for item in decl["patterns"]:
+            if not isinstance(item, dict) or not all(isinstance(item.get(k), str) and item[k].strip() for k in ("kind", "label", "regex")):
+                raise SchemaLoadError(f"{where}.patterns 每项须有 kind / label / regex(AIPOS-F239 件①)")
+            low = item.get("min_value_chars", 1)
+            if not isinstance(low, int) or isinstance(low, bool) or low < 1:
+                raise SchemaLoadError(f"{where}.patterns[{item['kind']}].min_value_chars 须为 ≥ 1 的整数")
+            if not isinstance(item.get("loose", False), bool):
+                raise SchemaLoadError(f"{where}.patterns[{item['kind']}].loose 须为布尔")
+            compiled.append((item["kind"], item["label"], re.compile(item["regex"], re.MULTILINE), low, bool(item.get("loose", False))))
+        exempt_patterns = [re.compile(str(p)) for p in exempt["value_patterns"]]
+        key_patterns = [re.compile(str(p)) for p in exempt["key_patterns"]]
+        loose_patterns = [re.compile(str(p)) for p in exempt["loose_value_patterns"]]
+    except re.error as exc:
+        raise SchemaLoadError(f"{where}: 正则编不过(fail-closed): {exc}") from exc
+    return {**decl, "_patterns": compiled, "_exempt": {"patterns": exempt_patterns, "keys": key_patterns, "loose": loose_patterns,
+                                                       "words": {str(w).casefold() for w in exempt["value_words"]},
+                                                       "substrings": [str(s).casefold() for s in exempt["value_substrings"]],
+                                                       "strip": exempt["strip_chars"]}}
+
+
+def _credential_value_exempt(value: str, decl: dict[str, Any], min_chars: int, loose: bool = False) -> bool:
+    """命中值是否豁免(声明 exempt 唯一判定): 去首尾引号 / 尾随标点后过短、全匹配占位式(loose 模式另加 loose_value_patterns)、等于占位词、
+    含占位子串 = 豁免。"""
+    ex = decl["_exempt"]
+    core = value.strip().strip(ex["strip"])
+    if len(core) < min_chars:
+        return True
+    folded = core.casefold()
+    if folded in ex["words"] or any(s in folded for s in ex["substrings"]):
+        return True
+    return any(p.fullmatch(core) for p in ex["patterns"] + (ex["loose"] if loose else []))
+
+
+def credential_hits(text: str, decl: dict[str, Any]) -> list[dict[str, Any]]:
+    """AIPOS-F239 件①(唯一判定): 文本中的明文凭据命中 [{line, kind, label}](按行号、种类去重排序)。绝不返回命中值。"""
+    seen: dict[tuple[int, str], dict[str, Any]] = {}
+    for kind, label, rx, low, loose in decl["_patterns"]:
+        for m in rx.finditer(text):
+            value = m.group("value") if "value" in rx.groupindex else m.group(0)
+            key = m.group("key") if "key" in rx.groupindex else None
+            if value is None or _credential_value_exempt(value, decl, low, loose):
+                continue
+            if key and any(p.fullmatch(key) for p in decl["_exempt"]["keys"]):
+                continue
+            line = text.count("\n", 0, m.start()) + 1
+            seen.setdefault((line, kind), {"line": line, "kind": kind, "label": label})
+    return [seen[k] for k in sorted(seen)]
+
+
+def _credential_text(path: Path, scan: dict[str, Any]) -> str | None:
+    """可扫的文本内容(普通文件, 不跟软链; 前 sniff_bytes 字节无 NUL; 只读前 max_scan_bytes 字节)。不是文本 / 读不出 = None。"""
+    try:
+        info = path.lstat()
+        if not stat_module.S_ISREG(info.st_mode):
+            return None
+        with path.open("rb") as handle:
+            data = handle.read(int(scan["max_scan_bytes"]))
+    except OSError:
+        return None
+    if b"\0" in data[: int(scan["sniff_bytes"])]:
+        return None
+    return data.decode("utf-8", errors="replace")
+
+
+def _git_ignore_rules(base: Path, paths: list[Path]) -> dict[str, str] | None:
+    """base 所在 git 仓对 paths 的忽略规则 {路径: 「来源\0行号\0模式」}(git check-ignore -v --stdin -z; 已跟踪者不算忽略, 不在结果中)。
+    不是 git 仓 / 出错 = None(调用方全扫, fail-closed)。"""
+    import subprocess
+
+    if not paths:
+        return {}
+    try:
+        proc = subprocess.run(["git", "-C", str(base), "check-ignore", "-v", "--stdin", "-z"],
+                              input="\0".join(str(p) for p in paths) + "\0", capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode not in (0, 1):
+        return None
+    fields = proc.stdout.split("\0")
+    return {fields[i + 3]: "\0".join(fields[i:i + 3]) for i in range(0, len(fields) - 3, 4) if fields[i + 3]}
+
+
+def _private_files(root: Path, slot: Path, paths: list[Path]) -> set[str]:
+    """AIPOS-F239 件①: 私有运行文件 = 被 git 忽略、且忽略它的规则 ≠ 忽略报告落点目录本身的规则(落点未被忽略 = 无规则)。整个落点都被忽略的
+    项目(如 lybra task_cards/)忽略不带「私有」语义 = 全扫; 不是 git 仓 / 出错 = 全扫(fail-closed)。"""
+    private: set[str] = set()
+    inside = [p for p in paths if _is_within(root, p)]
+    outside = [p for p in paths if not _is_within(root, p)]
+    for base, group in ((root, inside), (slot, outside)):
+        if not group or not base.is_dir():
+            continue
+        rules = _git_ignore_rules(base, [slot, *group])
+        if rules is None:
+            continue
+        slot_rule = rules.get(str(slot))
+        private |= {str(p) for p in group if rules.get(str(p)) is not None and rules[str(p)] != slot_rule}
+    return private
+
+
+def _card_lane_is_governance_root(workspace_root: Path, card_fm: dict[str, Any] | None) -> bool:
+    """卡 lane 仓是否解析为治理根自身(workspace_config.resolve_card_repo 唯一解析; 解析不到 = 否, 不扫 output_target)。"""
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved, resolve_card_repo
+
+    try:
+        repo = resolve_card_repo(workspace_root, card_fm if isinstance(card_fm, dict) else {})
+        return repo.resolve() == Path(workspace_root).resolve()
+    except (CardRepoUnresolved, OSError, ValueError):
+        return False
+
+
+def _as_path_items(value: Any) -> list[str]:
+    items = value if isinstance(value, list) else str(value or "").split(",")
+    return [str(i).strip() for i in items if str(i).strip()]
+
+
+def credential_scan(workspace_root: Path, slot: Path, *, card_fm: dict[str, Any] | None = None, report: Path | None = None,
+                    report_fm: dict[str, Any] | None = None, decl: dict[str, Any] | None = None,
+                    extra_files: list[Path] | None = None) -> dict[str, Any]:
+    """AIPOS-F239 件①(唯一实现; 交回 / 裁决 / FINALIZE 入门与存量只读检查同调): 按声明 scan 收集本次入门会提交或会被审计读的文本
+    (报告本身 + 报告落点 full_text_dirs 下全部 + 其余位置匹配 slot_globs 者 + 报告 outputs + lane 为治理根的卡的 output_target + extra_files),
+    去掉私有运行文件(_private_files; 报告本身永远照扫), 逐个 credential_hits。返回 {hits: [{path, abs_path, line, kind, label}],
+    files: 扫描文件数, ignored: 跳过的私有文件数}。声明缺 = 空结果。"""
+    import fnmatch
+
+    decl = decl if decl is not None else credential_guard_declaration()
+    if decl is None:
+        return {"hits": [], "files": 0, "ignored": 0}
+    scan = decl["scan"]
+    root, slot = Path(workspace_root).resolve(), Path(slot).resolve()
+    skip = {str(d) for d in scan["skip_dirs"]}
+    full_dirs = {str(d) for d in scan["full_text_dirs"]}
+    globs = [str(g) for g in scan["slot_globs"]]
+    report_path = Path(report).resolve() if report is not None else None
+    paths: list[Path] = [report_path] if report_path is not None else []
+    paths += [Path(p).resolve() for p in extra_files or [] if not Path(p).is_symlink()]
+    if slot.is_dir():
+        for path in _walk_files(slot, skip):
+            rel = path.relative_to(slot)
+            if (len(rel.parts) > 1 and rel.parts[0] in full_dirs) or any(fnmatch.fnmatch(path.name, g) for g in globs):
+                paths.append(path)
+    extra: list[str] = []
+    if scan["outputs"]:
+        extra += _as_path_items((report_fm or {}).get("outputs") if isinstance((report_fm or {}).get("outputs"), list) else [])
+    if scan["output_target"] and (card_fm or {}).get("output_target") and _card_lane_is_governance_root(root, card_fm):
+        extra += _as_path_items((card_fm or {}).get("output_target"))
+    for ref in extra:
+        item = Path(ref).expanduser()
+        item = item if item.is_absolute() else root / item
+        if item.is_symlink():
+            continue
+        item = item.resolve()
+        if not _is_within(root, item):
+            continue
+        if item.is_dir():
+            paths += _walk_files(item, skip)
+        elif item.is_file():
+            paths.append(item)
+    unique = list(dict.fromkeys(paths))
+    ignored = _private_files(root, slot, [p for p in unique if p != report_path]) if scan["skip_gitignored"] else set()
+    hits: list[dict[str, Any]] = []
+    scanned = 0
+    for path in unique:
+        if str(path) in ignored:
+            continue
+        text = _credential_text(path, scan)
+        if text is None:
+            continue
+        scanned += 1
+        try:
+            shown = str(path.relative_to(root))
+        except ValueError:
+            shown = str(path)
+        hits += [{"path": shown, "abs_path": str(path), **h} for h in credential_hits(text, decl)]
+    return {"hits": hits, "files": scanned, "ignored": len(ignored)}
+
+
+def credential_refusal(workspace_root: Path, slot: Path, *, kind: str, report: Path | None = None, card_fm: dict[str, Any] | None = None,
+                       report_fm: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """AIPOS-F239 件②: 产物入口凭据拒因(kind = return / verdict / finalization)。无命中 / 声明缺 = None; 命中 = {category, reasons,
+    credential_hits(无值), credential_files(报告落点外的命中文件, 交回拒收记录 files 用)}; 声明坏 = {category INGEST_DECLARATION_MISSING}。"""
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        decl = credential_guard_declaration()
+    except SchemaLoadError as exc:
+        return {"category": "INGEST_DECLARATION_MISSING", "reasons": [f"{exc}"], "credential_hits": [], "credential_files": []}
+    if decl is None:
+        return None
+    result = credential_scan(Path(workspace_root), Path(slot), card_fm=card_fm, report=report, report_fm=report_fm, decl=decl)
+    hits = result["hits"]
+    if not hits:
+        return None
+    texts = decl["texts"]
+    cap = int(decl["scan"]["max_listed"])
+    listed = "; ".join(texts["hit"].format(path=h["path"], line=h["line"], label=h["label"], kind=h["kind"]) for h in hits[:cap])
+    if len(hits) > cap:
+        listed += " " + texts["more"].format(count=len(hits))
+    what = texts.get(f"what_{kind}") or texts["what_return"]
+    reason = texts["refusal"].format(what=what, count=len(hits), hits=listed)
+    outside = sorted({h["abs_path"] for h in hits if not _is_within(Path(slot).resolve(), Path(h["abs_path"]))})
+    return {"category": str(decl["category"]), "reasons": [reason],
+            "credential_hits": [{k: h[k] for k in ("path", "line", "kind", "label")} for h in hits], "credential_files": outside}
+
+
+def credential_stock_scan(workspace_root: Path) -> dict[str, Any]:
+    """AIPOS-F239 件③(只读): 已有报告按入门同一判据 credential_scan 扫一遍——治理根报告落点(paths.return_root / verdict_root 下各卡目录,
+    报告 = 交回 / 裁决文件候选首个命中)与已入门审计报告快照(transitions artifact_ingest.verdict.report_snapshot.location 的目录, records 下)。
+    返回 {declared, root, slots: 扫描落点数, files, hits: [{slot, path, line, kind, label}], by_kind}; 不改任何文件、不回显值。"""
+    from tools.aipos_cli.board_adapter import report_snapshot_declaration
+    from tools.aipos_cli.next_resolver import _artifact_ingest_declaration, _pick_candidate, _project_paths
+    from tools.aipos_cli.record_writer import records_root
+
+    root = Path(workspace_root)
+    decl = credential_guard_declaration()
+    out: dict[str, Any] = {"declared": decl is not None, "root": str(root), "slots": 0, "files": 0, "hits": [], "by_kind": {}}
+    if decl is None:
+        return out
+    ingest = _artifact_ingest_declaration()
+    candidates = [str(c) for c in list(ingest["return"].get("return_file_candidates") or [])
+                  + list(ingest["verdict"].get("verdict_file_candidates") or [])]
+    paths = _project_paths(root)
+    bases = list(dict.fromkeys(Path(str(paths[k])) for k in ("return_root", "verdict_root") if paths.get(k)))
+    slots: list[tuple[Path, Path | None]] = []
+    for base in bases:
+        if base.is_dir():
+            slots += [(d, _pick_candidate(d, candidates)) for d in sorted(base.iterdir()) if d.is_dir() and not d.is_symlink()]
+    snapshot_dirs = Path(str(report_snapshot_declaration()["location"])).parent
+    pattern = re.sub(r"\{[^}]*\}", "*", str(snapshot_dirs))
+    slots += [(d, None) for d in sorted((root / records_root()).glob(pattern)) if d.is_dir() and not d.is_symlink()]
+    seen: set[Path] = set()
+    for slot, report in slots:
+        if slot.resolve() in seen:
+            continue
+        seen.add(slot.resolve())
+        result = credential_scan(root, slot, report=report, decl=decl)
+        out["slots"] += 1
+        out["files"] += int(result["files"])
+        try:
+            label = str(slot.resolve().relative_to(root.resolve()))
+        except ValueError:
+            label = str(slot)
+        for hit in result["hits"]:
+            out["hits"].append({"slot": label, **{k: hit[k] for k in ("path", "line", "kind", "label")}})
+    for hit in out["hits"]:
+        out["by_kind"][hit["kind"]] = out["by_kind"].get(hit["kind"], 0) + 1
+    out["texts"] = decl["texts"]
+    return out
+
+
+def render_credential_stock(result: dict[str, Any]) -> str:
+    """AIPOS-F239 件③: 存量只读检查人读输出(唯一出口; 只列文件 / 行 / 种类, 不含值)。"""
+    if not result.get("declared"):
+        return "artifact_ingest.credential_guard not declared (no check)"
+    texts = result["texts"]
+    lines = [texts["stock_title"], texts["stock_root"].format(root=result["root"], slots=result["slots"], files=result["files"])]
+    hits = result["hits"]
+    if not hits:
+        lines.append(texts["stock_clean"])
+        return "\n".join(lines)
+    per_slot: dict[str, list[dict[str, Any]]] = {}
+    for hit in hits:
+        per_slot.setdefault(hit["slot"], []).append(hit)
+    by_kind = ", ".join(f"{k} {v}" for k, v in sorted(result["by_kind"].items()))
+    lines.append(texts["stock_summary"].format(count=len(hits), slot_count=len(per_slot), by_kind=by_kind))
+    for slot, items in per_slot.items():
+        lines.append(texts["stock_slot"].format(slot=slot, count=len(items)))
+        lines += [texts["stock_hit"].format(path=h["path"], line=h["line"], label=h["label"], kind=h["kind"]) for h in items]
+    lines.append(texts["stock_next"])
+    return "\n".join(lines)
+
+
+def run_credential_scan_cli(args: Any) -> int:
+    """CLI 入口(`lybra artifact credential-scan`, AIPOS-F239 件③): 只读存量检查。退出码读 verbs.schema lybra_artifact_credential_scan.exit_codes。"""
+    import json as _json
+    import sys
+
+    from tools.aipos_cli.aipos_cli import _find_repo_root_for_args
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        governance_root = Path(_find_repo_root_for_args(args))
+        result = credential_stock_scan(governance_root)
+    except (FileNotFoundError, SchemaLoadError, OSError) as exc:
+        print(f"lybra artifact credential-scan: {exc}", file=sys.stderr)
+        return declared_exit_code("lybra_artifact_credential_scan", "error")
+    if getattr(args, "json", False):
+        print(_json.dumps({k: v for k, v in result.items() if k != "texts"}, indent=2, ensure_ascii=False))
+    else:
+        print(render_credential_stock(result))
+    return declared_exit_code("lybra_artifact_credential_scan", "hits" if result["hits"] else "clean")
+
+
+def _apply_credential_refusal(out: dict[str, Any], workspace_root: Path, slot: Path, *, kind: str, report: Path,
+                              card_fm: dict[str, Any] | None, report_fm: dict[str, Any] | None) -> bool:
+    """AIPOS-F239 件②: 入门校验里的凭据判定(唯一调用口, return / verdict / finalization 同调)。命中 = 填 out(category / reasons /
+    credential_hits / credential_files)并返回 True; 否则 False。"""
+    refusal = credential_refusal(workspace_root, slot, kind=kind, report=report, card_fm=card_fm, report_fm=report_fm)
+    if refusal is None:
+        return False
+    out["category"], out["reasons"] = refusal["category"], refusal["reasons"]
+    out["credential_hits"], out["credential_files"] = refusal["credential_hits"], refusal["credential_files"]
+    return True
 
 
 def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]:
@@ -969,6 +1315,9 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
             return out
         fm = _read_frontmatter(path, allow_missing_block=True)
         out["frontmatter"] = fm
+        if _apply_credential_refusal(out, workspace_root, return_artifact_dir(workspace_root, fin_id), kind="finalization", report=path,
+                                     card_fm=card_fm, report_fm=fm):  # AIPOS-F239 件②
+            return out
         problems = invalid_finalization_frontmatter(fm)
         if problems:
             out["category"] = "INGEST_FRONTMATTER_MISSING" if any("缺" in p for p in problems) else "INGEST_DEPLOY_STATUS_INVALID"
@@ -1051,6 +1400,10 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         unfilled = report_placeholder_refusal(content, path, "return")
         if unfilled is not None:
             out["category"], out["reasons"], out["placeholders"] = unfilled["category"], unfilled["reasons"], unfilled["placeholders"]
+            return out
+        # AIPOS-F239 件②: 交回报告 / 报告落点 / outputs / output_target 含明文凭据 = 拒(判据唯一实现 credential_scan, 拒因不回显值)
+        if _apply_credential_refusal(out, workspace_root, return_artifact_dir(workspace_root, task_id), kind="return", report=path,
+                                     card_fm=card_fm, report_fm=fm):
             return out
         # AIPOS-F230 件②: 配置 / 文档卡交回产物含可执行程序 = 拒并指路改走代码卡(判据唯一实现 program_scan)
         # AIPOS-F236 件①: 他仓已入库代码的输入副本不算程序, 结果列 input_copies 并附注记(审计可见)
@@ -1165,6 +1518,10 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
     unfilled = report_placeholder_refusal(content, path, "verdict")
     if unfilled is not None:
         out["category"], out["reasons"], out["placeholders"] = unfilled["category"], unfilled["reasons"], unfilled["placeholders"]
+        return out
+    # AIPOS-F239 件②: 审计报告 / 审计落点含明文凭据 = 拒(与交回同一判据; loop 续接审计会话脱敏一次, verbs lybra_loop.launch.report_fix.artifact)
+    if _apply_credential_refusal(out, workspace_root, verdict_artifact_dir(workspace_root, task_id), kind="verdict", report=path,
+                                 card_fm=card_fm, report_fm=fm):
         return out
     # AIPOS-F227 件①: 报告 fail_scope 值不在声明内 = 拒(唯一判定 next_resolver.fail_scope_problem; 未写 = 放行, 推导核按 candidate 兼容)
     from tools.aipos_cli.next_resolver import fail_scope_problem
