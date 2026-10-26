@@ -30,6 +30,11 @@
     validate_outputs       AIPOS-F204: first run as validate_outputs_once; on resume rewrites the frontmatter still wrong (adds a key)
     docs       AIPOS-F197 (executor card only): governance-root-only card (no worktree): write a doc into the report slot artifacts/
                named by the kickoff's「产物落点」and a RETURN whose frontmatter `outputs` lists it (no branch keys)
+    docs_program_once  AIPOS-F236 (executor card only): first run as docs plus a 300-line program (shebang, executable bit, no
+               extension) in the report slot artifacts/ (config / docs card program guard rejects the return); on a same-session resume
+               (FAKE_PI_RESUMES >= 1) it checks the resume instruction names the rejection, moves the program out of the slot and
+               rewrites RETURN
+    docs_program       AIPOS-F236: first run as docs_program_once; on resume leaves everything untouched and exits 0
     hang_sim   AIPOS-F231: 同 hang, 另起一个脱离本进程组(新会话)的「伪模拟器」进程, cwd = FAKE_SIM_DIR(本卡验证根 run 目录; 验停线按
                run 目录归属清理组外进程)
     provider_401 / provider_429 / length   AIPOS-F231: 写一份 pi 会话记录(文件名 <时刻>_<FAKE_PI_SESSION_ID>.jsonl, 与真实 pi 同形)
@@ -237,6 +242,28 @@ def do_docs(task_id: str, kickoff: str) -> None:
     emit({"type": "tool_execution_end", "toolCallId": "t2", "toolName": "write", "isError": False, "result": {"content": []}})
 
 
+def docs_program_mode(task_id: str, kickoff: str, mode: str) -> None:
+    """AIPOS-F236: config / docs card delivering a program in the slot; resume = FAKE_PI_RESUMES >= 1 (set by fake pi)."""
+    report = Path(field(kickoff, "报告落点"))
+    program = report.parent / "artifacts" / "demo-launcher"
+    if os.environ.get("FAKE_PI_RESUMES", "0") == "0":
+        do_docs(task_id, kickoff)
+        program.write_text("#!/usr/bin/env python3\n" + "".join(f"print('step {i}')\n" for i in range(300)), encoding="utf-8")
+        program.chmod(0o755)
+        return
+    if mode == "docs_program":
+        return
+    prompt = os.environ.get("FAKE_PI_PROMPT", "")
+    if "INGEST_PROGRAM_IN_NON_CODE_CARD" not in prompt or str(program) not in prompt:
+        raise SystemExit(f"fake_harness: resume instruction lacks the rejection: {prompt!r}")
+    moved = Path(os.environ.get("FAKE_HARNESS_LOG") or report.parent.parent) / f"{task_id}.moved-program"
+    moved.write_bytes(program.read_bytes())
+    program.unlink()
+    text = report.read_text(encoding="utf-8")
+    report.write_text(text + "\n## 按交回拒因修正\n程序不是本卡交付物, 已移出报告落点。\n", encoding="utf-8")
+    pi_session(report, "fake-exec-model")
+
+
 def sha_mode(task_id: str, kickoff: str, mode: str) -> None:
     """AIPOS-F180B: report-header commit_sha fixture modes (audit card only); resume = FAKE_PI_RESUMES >= 1 (set by fake pi)."""
     tip = re.search(r"^- commit_sha: ([0-9a-f]{40})\(", kickoff, re.M).group(1)
@@ -342,6 +369,10 @@ def main() -> int:
         return 0
     if mode == "validate" and not reviewed_of(task_id):
         do_validate(task_id, kickoff)
+        emit({"type": "agent_end", "messages": []})
+        return 0
+    if mode in ("docs_program_once", "docs_program") and not reviewed_of(task_id):
+        docs_program_mode(task_id, kickoff, mode)
         emit({"type": "agent_end", "messages": []})
         return 0
     if mode == "docs" and not reviewed_of(task_id):

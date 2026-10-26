@@ -423,7 +423,92 @@ def program_guard_declaration() -> dict[str, Any] | None:
             or not isinstance(decl["skip_dirs"], list) or not str(decl["category"]).strip() or not str(decl["shebang_prefix"])):
         raise SchemaLoadError(f"transitions.schema.json artifact_ingest.return.program_guard({list(_PROGRAM_GUARD_KEYS)} / texts."
                               f"{list(_PROGRAM_GUARD_TEXTS)})未声明齐(AIPOS-F230 件②)")
+    copy = decl.get("input_copy")
+    if copy is not None:  # AIPOS-F236 件①: 缺 = 不豁免(行为同 F230); 在而形不合 = fail-closed
+        ctexts = copy.get("texts") if isinstance(copy, dict) else None
+        if not isinstance(ctexts, dict) or not all(isinstance(ctexts.get(k), str) and ctexts[k].strip() for k in _INPUT_COPY_TEXTS):
+            raise SchemaLoadError(f"transitions.schema.json artifact_ingest.return.program_guard.input_copy.texts.{list(_INPUT_COPY_TEXTS)}"
+                                  f"未声明齐(AIPOS-F236 件①)")
     return decl
+
+
+_INPUT_COPY_TEXTS = ("note", "file", "repo_error")
+
+
+def git_blob_id(data: bytes) -> str:
+    """AIPOS-F236 件①: 内容的 git blob 对象 id(sha1(`blob <字节数>\\0` + 内容), 与 `git hash-object --no-filters` 同算; 唯一实现)。"""
+    import hashlib
+
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def _declared_repos(workspace_root: Path, card_fm: dict[str, Any] | None) -> tuple[list[tuple[str, Path]], list[dict[str, str]]]:
+    """AIPOS-F236 件①: 输入副本的来源仓集合(卡 lane 仓 → project.json repos.items → code_repo; 按真实路径去重; 治理根不算)。
+    唯一读取口 workspace_config.resolve_card_repo / project_repos。返回 ([(仓名或路径, 路径)], [读取错误 {repo, path, error}])。"""
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved, project_repos, resolve_card_repo
+
+    root = Path(workspace_root)
+    out: list[tuple[str, Path]] = []
+    errors: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add(name: str, path: Path) -> None:
+        try:
+            key = str(Path(path).expanduser().resolve())
+        except OSError:
+            key = str(path)
+        if key in seen or key == str(root.resolve()):
+            return
+        seen.add(key)
+        out.append((name, Path(path).expanduser()))
+
+    try:
+        lane = resolve_card_repo(root, card_fm, allow_governance_root=False)
+        add(str(((card_fm or {}).get("lane") or {}).get("repo") or lane), lane)
+    except CardRepoUnresolved:
+        pass  # 只写治理根的卡 / 无产品仓: lane 仓不存在, 照下方清单取
+    try:
+        repos = project_repos(root)
+    except (CardRepoUnresolved, OSError, ValueError) as exc:
+        errors.append({"repo": "project.json repos", "path": str(root), "error": f"{type(exc).__name__}: {exc}"})
+        return out, errors
+    for name in sorted(repos["items"]):
+        add(name, repos["items"][name])
+    if repos["code_repo"] is not None:
+        add("code_repo", repos["code_repo"])
+    return out, errors
+
+
+def repo_blob_sources(workspace_root: Path, card_fm: dict[str, Any] | None, blobs: list[str]) -> dict[str, Any]:
+    """AIPOS-F236 件①(唯一实现): 哪些 blob 已存在于本项目声明的仓(_declared_repos)。每仓一次 `git -C <仓> cat-file --batch-check`
+    (与 `git cat-file -e` 同一对象存在判定的批量形; 类型须为 blob)。返回 {found: {blob: {repo, repo_path}}, errors: [{repo, path, error}]}。
+    仓不在盘上 / 非 git 仓 / git 出错 = 该仓不作来源, 原因进 errors(fail-closed: 对应文件照旧算程序)。"""
+    import subprocess
+
+    wanted = [b for b in dict.fromkeys(blobs) if b]
+    repos, errors = _declared_repos(Path(workspace_root), card_fm)
+    found: dict[str, dict[str, str]] = {}
+    for name, path in repos:
+        remaining = [b for b in wanted if b not in found]
+        if not remaining:
+            break
+        if not path.is_dir():
+            errors.append({"repo": name, "path": str(path), "error": "不在盘上"})
+            continue
+        try:
+            proc = subprocess.run(["git", "-C", str(path), "cat-file", "--batch-check"], input="\n".join(remaining) + "\n",
+                                  capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError) as exc:
+            errors.append({"repo": name, "path": str(path), "error": f"{type(exc).__name__}: {exc}"})
+            continue
+        if proc.returncode != 0:
+            errors.append({"repo": name, "path": str(path), "error": (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()[:300]})
+            continue
+        for line in proc.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[1] == "blob" and parts[0] in remaining:
+                found[parts[0]] = {"repo": name, "repo_path": str(path)}
+    return {"found": found, "errors": errors}
 
 
 def _program_file(path: Path, decl: dict[str, Any], code_decls: Any) -> dict[str, Any] | None:
@@ -454,7 +539,7 @@ def _program_file(path: Path, decl: dict[str, Any], code_decls: Any) -> dict[str
     lines = text.count("\n") + (0 if text.endswith("\n") or not text else 1)
     executable = bool(info.st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH))
     if lines > int(decl["max_lines"]) or (decl["executable_bit"] and executable):
-        return {"path": str(path), "lines": lines, "executable": executable}
+        return {"path": str(path), "lines": lines, "executable": executable, "blob": git_blob_id(data)}
     return None
 
 
@@ -469,15 +554,18 @@ def _walk_files(root: Path, skip: set[str]) -> list[Path]:
     return out
 
 
-def program_files(workspace_root: Path, task_id: str, card_fm: dict[str, Any] | None,
-                  return_fm: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """AIPOS-F230 件②: 配置 / 文档卡交回产物中的可执行程序(唯一实现; 交回入口与测试同读)。task_mode ∉ program_guard.task_modes /
-    声明缺 = []。扫: 本卡报告落点(含子目录)、交回报告 outputs 所列文件、本卡在本机的验证根 run 目录(validation_root 声明 task_id = 本卡,
-    run_directory 渲染; skip_dirs 跳过)。返回 [{path, lines, executable}](去重, 按路径)。"""
+def program_scan(workspace_root: Path, task_id: str, card_fm: dict[str, Any] | None,
+                 return_fm: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F230 件② + AIPOS-F236 件①(唯一实现): 配置 / 文档卡交回产物中命中程序判据的文件, 分「本卡程序」与「输入副本」。
+    task_mode ∉ program_guard.task_modes / 声明缺 = 全空。扫: 本卡报告落点(含子目录)、交回报告 outputs 所列文件、本卡在本机的验证根
+    run 目录(validation_root 声明 task_id = 本卡, run_directory 渲染; skip_dirs 跳过)。命中者内容 blob 已在本项目声明的仓
+    (repo_blob_sources; 声明 program_guard.input_copy 在时才核)= 输入副本。返回 {programs: [{path, lines, executable, blob}],
+    input_copies: [{path, lines, executable, blob, repo, repo_path}], repo_errors: [{repo, path, error}]}(各按路径)。"""
+    empty: dict[str, Any] = {"programs": [], "input_copies": [], "repo_errors": []}
     decl = program_guard_declaration()
     fm = card_fm if isinstance(card_fm, dict) else {}
     if decl is None or str(fm.get("task_mode") or "").strip() not in [str(m) for m in decl["task_modes"]]:
-        return []
+        return empty
     from tools.aipos_cli.governance_guardrails import load_guardrail_declarations
     from tools.aipos_cli.next_resolver import return_artifact_dir
     from tools.aipos_cli.validation_root import is_local_host, project_validation_roots, run_directory
@@ -505,21 +593,229 @@ def program_files(workspace_root: Path, task_id: str, card_fm: dict[str, Any] | 
         hit = _program_file(path, decl, code_decls)
         if hit is not None:
             found.setdefault(hit["path"], hit)
-    return [found[k] for k in sorted(found)]
+    hits = [found[k] for k in sorted(found)]
+    if not hits or decl.get("input_copy") is None:
+        return {**empty, "programs": hits}
+    sources = repo_blob_sources(root, fm, [h["blob"] for h in hits])
+    copies = [{**h, **sources["found"][h["blob"]]} for h in hits if h["blob"] in sources["found"]]
+    return {"programs": [h for h in hits if h["blob"] not in sources["found"]], "input_copies": copies, "repo_errors": sources["errors"]}
+
+
+def input_copy_note(copies: list[dict[str, Any]]) -> str | None:
+    """AIPOS-F236 件①: 输入副本注记原文(texts.note / file; 路径 + 来源仓 + blob)。无副本 / 声明缺 = None。"""
+    decl = program_guard_declaration() or {}
+    copy = decl.get("input_copy")
+    if not copies or not isinstance(copy, dict):
+        return None
+    texts = copy["texts"]
+    files = "; ".join(texts["file"].format(path=c["path"], repo=c["repo"], blob=c["blob"], lines=c["lines"]) for c in copies)
+    return texts["note"].format(files=files)
 
 
 def program_guard_refusal(workspace_root: Path, task_id: str, card_fm: dict[str, Any] | None,
-                          return_fm: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """AIPOS-F230 件②: 交回入口拒因(命中 program_files = {category, reasons, program_files}; 否则 None)。"""
-    hits = program_files(workspace_root, task_id, card_fm, return_fm)
+                          scan: dict[str, Any]) -> dict[str, Any] | None:
+    """AIPOS-F230 件②: 交回入口拒因(scan = program_scan 结果; programs 非空 = {category, reasons, program_files, input_copies, legal_exits};
+    否则 None)。AIPOS-F236 件①③: 输入副本不算(另列注记); 拒因出口 = 合法出口全集命令原文(next_resolver.legal_exits 的 return_rejected
+    状态, 与 lybra next 同源, 含撤回预演命令与门侧是否须 Owner); 仓核对失败另列(fail-closed)。"""
+    hits = scan["programs"]
     if not hits:
         return None
+    from tools.aipos_cli.next_resolver import legal_exits
+
     decl = program_guard_declaration() or {}
     texts = decl["texts"]
     files = "; ".join(texts["file"].format(path=h["path"], lines=h["lines"], exec=texts["exec_part"] if h["executable"] else "") for h in hits)
+    exits = legal_exits(Path(workspace_root), task_id, card_fm, return_rejected_declaration()["legal_exits_state"],
+                        recommended="new_subject", why=_program_exit_why())
     reason = texts["refusal"].format(task_id=task_id, task_mode=str((card_fm or {}).get("task_mode") or ""), files=files,
-                                     max_lines=decl["max_lines"], exec_rule=texts["exec_rule"] if decl["executable_bit"] else "")
-    return {"category": str(decl["category"]), "reasons": [reason], "program_files": hits}
+                                     max_lines=decl["max_lines"], exec_rule=texts["exec_rule"] if decl["executable_bit"] else "",
+                                     exits=exits["text"])
+    reasons = [reason]
+    copy = decl.get("input_copy")
+    if scan.get("repo_errors") and isinstance(copy, dict):
+        reasons.append("; ".join(copy["texts"]["repo_error"].format(**e) for e in scan["repo_errors"]))
+    note = input_copy_note(scan.get("input_copies") or [])
+    if note:
+        reasons.append(note)
+    return {"category": str(decl["category"]), "reasons": reasons, "program_files": hits,
+            "input_copies": list(scan.get("input_copies") or []), "legal_exits": exits}
+
+
+def _program_exit_why() -> str:
+    """配置卡交付程序的推荐依据(legal_exits.evidence_overrides.return_rejected_program; 缺 = 声明 recommend)。"""
+    from tools.aipos_cli.next_resolver import legal_exits_declaration
+
+    rule = (legal_exits_declaration().get("evidence_overrides") or {}).get("return_rejected_program") or {}
+    return str(rule.get("why") or "")
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F236 件②: 交回拒收入真相(声明 transitions artifact_ingest.return.rejection_record)
+# ---------------------------------------------------------------------------
+
+_REJECTION_KEYS = ("event_type", "input_copies_event_type", "id_template", "record_fields", "recorded_by", "reason_chars",
+                   "skip_categories", "shell_rejected_category", "action_type", "legal_exits_state", "body", "texts")
+_REJECTION_TEXTS = ("rejected_title", "rejected_summary", "copies_title", "copies_summary", "missing", "suggested", "notes",
+                    "revalidated_ok", "gate_side", "record_failed")
+
+
+def return_rejected_declaration() -> dict[str, Any]:
+    """AIPOS-F236 件②: transitions artifact_ingest.return.rejection_record(唯一读取口)。缺 / 键或文案不齐 = SchemaLoadError(fail-closed)。"""
+    from tools.aipos_cli.next_resolver import _artifact_ingest_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    decl = (_artifact_ingest_declaration().get("return") or {}).get("rejection_record")
+    texts = decl.get("texts") if isinstance(decl, dict) else None
+    if (not isinstance(decl, dict) or any(k not in decl for k in _REJECTION_KEYS) or not isinstance(texts, dict)
+            or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in _REJECTION_TEXTS)
+            or not isinstance(decl["record_fields"], list) or not isinstance(decl["skip_categories"], list)
+            or not isinstance(decl["reason_chars"], int) or isinstance(decl["reason_chars"], bool) or decl["reason_chars"] <= 0):
+        raise SchemaLoadError(f"transitions.schema.json artifact_ingest.return.rejection_record({list(_REJECTION_KEYS)} / texts."
+                              f"{list(_REJECTION_TEXTS)})未声明齐(AIPOS-F236 件②)")
+    return decl
+
+
+def _file_digest_line(path: Path, label: str) -> str:
+    import hashlib
+
+    try:
+        if path.is_symlink() or not path.is_file():
+            return f"missing  {label}"
+        return f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {label}"
+    except OSError as exc:
+        return f"unreadable:{type(exc).__name__}  {label}"
+
+
+def return_fingerprint(workspace_root: Path, task_id: str, files: list[str] | None = None) -> str:
+    """AIPOS-F236 件②(唯一实现): 交回产物指纹 = 报告落点目录(含子目录, 不跟软链)全部普通文件 + files(拒因点名的报告落点外文件)逐个
+    `<sha256|missing>  <路径>` 按路径排序拼接后 sha256。只读。"""
+    import hashlib
+    import os
+
+    from tools.aipos_cli.next_resolver import return_artifact_dir
+
+    slot = return_artifact_dir(Path(workspace_root), task_id)
+    lines: dict[str, str] = {}
+    if slot.is_dir():
+        for current, dirs, names in os.walk(slot, followlinks=False):
+            dirs.sort()
+            for name in sorted(names):
+                path = Path(current) / name
+                label = f"slot/{path.relative_to(slot)}"
+                lines[label] = _file_digest_line(path, label)
+    for ref in files or []:
+        label = str(ref)
+        lines.setdefault(label, _file_digest_line(Path(label), label))
+    text = "".join(lines[k] + "\n" for k in sorted(lines))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def return_rejection_records(workspace_root: Path, task_id: str, *, event_type: str | None = None) -> list[dict[str, Any]]:
+    """AIPOS-F236 件②(读口唯一): 本卡交回拒收(缺省)/ 输入副本事件记录, 按 recorded_at 旧→新; 每条 = frontmatter + _path。
+    读不出 = FrontmatterReadError 向上(fail-closed)。"""
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.record_writer import record_dir
+
+    decl = return_rejected_declaration()
+    kind = str(event_type or decl["event_type"])
+    directory = record_dir(Path(workspace_root), "events") / task_id
+    out: list[dict[str, Any]] = []
+    for path in sorted(directory.glob(f"{kind}_*.md")) if directory.is_dir() else []:
+        fm, _body = require_frontmatter(path)
+        if str(fm.get("event_type") or "") == kind:
+            out.append({**fm, "_path": str(path)})
+    return sorted(out, key=lambda r: (str(r.get("recorded_at") or ""), _record_seq(r)))
+
+
+def _record_seq(record: dict[str, Any]) -> int:
+    tail = str(record.get("rejection_id") or "").rsplit("_", 1)[-1]
+    return int(tail) if tail.isdigit() else 0
+
+
+def write_return_rejection(workspace_root: Path, task_id: str, *, category: str, reasons: list[str], return_path: str,
+                           files: list[str] | None = None, event_type: str | None = None) -> dict[str, Any]:
+    """AIPOS-F236 件②(写口唯一): 一次交回拒收(或入门通过而有输入副本, event_type = input_copies_event_type)= 一条事件记录
+    (record_writer.write_records_atomic kind event; 字段只读声明 record_fields)。返回 {rejection_id, path}。写不进 = 异常向上。"""
+    from tools.aipos_cli.clock import iso_z
+    from tools.aipos_cli.record_writer import render_markdown, write_records_atomic
+    from tools.schema_constants import RecordType
+
+    decl = return_rejected_declaration()
+    kind = str(event_type or decl["event_type"])
+    texts = decl["texts"]
+    seq = 1 + len(return_rejection_records(Path(workspace_root), task_id, event_type=kind))
+    rid = str(decl["id_template"]).format(event_type=kind, task_id=task_id, seq=seq)
+    chars = int(decl["reason_chars"])
+    refs = [str(f) for f in files or []]
+    values = {"record_type": RecordType.TASK_PROGRESS_EVENT, "event_type": kind, "rejection_id": rid, "task_id": task_id,
+              "category": category, "reasons": [str(r)[:chars] for r in reasons], "return_path": return_path, "files": refs,
+              "fingerprint": return_fingerprint(Path(workspace_root), task_id, refs), "recorded_at": iso_z(),
+              "recorded_by": str(decl["recorded_by"])}
+    meta = {key: values[key] for key in decl["record_fields"]}  # 字段只读声明(声明多出未知字段 = KeyError, fail-closed)
+    rejected = kind == str(decl["event_type"])
+    body = str(decl["body"]).format(title=texts["rejected_title" if rejected else "copies_title"], task_id=task_id,
+                                    summary=texts["rejected_summary" if rejected else "copies_summary"].format(category=category))
+    written = write_records_atomic(Path(workspace_root), [("event", rid, render_markdown(meta, body, list(meta)), task_id)])
+    paths = list(written.get("paths") or [])
+    return {"rejection_id": rid, "path": paths[0] if paths else None}
+
+
+def _record_ingest_event(workspace_root: Path, task_id: str, result: dict[str, Any], check: dict[str, Any], *,
+                         rejected: bool) -> None:
+    """ingest_task_artifact 的落记录(真交回才调): 拒 = 交回拒收记录(skip_categories / 无交回报告 = 不落); 通过且有输入副本 = 输入副本记录。
+    声明不可用 / 写不进 = 拒因(拒时)或 notes(通过时)追加原文(出声, 不吞; 拒的仍拒)。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+    from tools.schema_loader import SchemaLoadError
+
+    key = "reasons" if rejected else "notes"
+    try:
+        decl = return_rejected_declaration()
+    except SchemaLoadError as exc:
+        result.setdefault(key, []).append(f"交回拒收记录声明不可用, 未落记录(fail-closed): {exc}")
+        return
+    path = str(check.get("path") or "")
+    if check.get("kind") != "return" or not path:
+        return
+    if rejected:
+        if result.get("category") in [str(c) for c in decl["skip_categories"]]:
+            return
+        files = [str(h.get("path")) for h in check.get("program_files") or [] if h.get("path")]
+        kwargs: dict[str, Any] = {"category": str(result.get("category") or ""),
+                                  "reasons": [str(r) for r in result.get("reasons") or []], "files": files}
+    else:
+        copies = list(check.get("input_copies") or [])
+        if not copies:
+            return
+        kwargs = {"category": "", "reasons": [input_copy_note(copies) or ""], "files": [str(c["path"]) for c in copies],
+                  "event_type": str(decl["input_copies_event_type"])}
+    try:
+        rel = str(Path(path).resolve().relative_to(Path(workspace_root).resolve()))
+    except (ValueError, OSError):
+        rel = path
+    try:
+        written = write_return_rejection(Path(workspace_root), str(task_id), return_path=rel, **kwargs)
+    except (OSError, ValueError, KeyError, FrontmatterReadError) as exc:
+        result.setdefault(key, []).append(decl["texts"]["record_failed"].format(error=f"{type(exc).__name__}: {exc}"))
+        return
+    result["rejection_record"] = written
+
+
+def return_rejection_state(workspace_root: Path, task_id: str) -> dict[str, Any] | None:
+    """AIPOS-F236 件②(唯一判定; 推导核交回步 next_resolver._return_submission_step 同调): 本卡最新交回拒收记录 + 指纹复核 + 产物入口同一
+    校验复核。无记录 / 指纹已变(报告或产物自拒后改过)= None(照常交回, 产物入口再判)。指纹未变 = {record, still_rejected, gate_side,
+    check}: 此刻校验仍拒 = still_rejected True(check = 此刻校验结果, 拒因原文); 此刻通过 = still_rejected False(gate_side = 记录拒因是门侧拒)。
+    记录读不出 = 向上(fail-closed)。"""
+    decl = return_rejected_declaration()
+    records = return_rejection_records(Path(workspace_root), task_id)
+    if not records:
+        return None
+    latest = records[-1]
+    files = [str(f) for f in latest.get("files") or []] if isinstance(latest.get("files"), list) else []
+    if return_fingerprint(Path(workspace_root), task_id, files) != str(latest.get("fingerprint") or ""):
+        return None
+    check = validate_task_artifact(task_id, Path(workspace_root))
+    gate_side = str(latest.get("category") or "") == str(decl["shell_rejected_category"])
+    return {"record": latest, "still_rejected": not check.get("ok"), "gate_side": gate_side, "check": check}
 
 
 def validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any]:
@@ -756,11 +1052,17 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
         if unfilled is not None:
             out["category"], out["reasons"], out["placeholders"] = unfilled["category"], unfilled["reasons"], unfilled["placeholders"]
             return out
-        # AIPOS-F230 件②: 配置 / 文档卡交回产物含可执行程序 = 拒并指路改走代码卡(判据唯一实现 program_files)
-        program = program_guard_refusal(workspace_root, task_id, card_fm, fm)
+        # AIPOS-F230 件②: 配置 / 文档卡交回产物含可执行程序 = 拒并指路改走代码卡(判据唯一实现 program_scan)
+        # AIPOS-F236 件①: 他仓已入库代码的输入副本不算程序, 结果列 input_copies 并附注记(审计可见)
+        scan = program_scan(workspace_root, task_id, card_fm, fm)
+        program = program_guard_refusal(workspace_root, task_id, card_fm, scan)
         if program is not None:
             out["category"], out["reasons"], out["program_files"] = program["category"], program["reasons"], program["program_files"]
+            out["input_copies"], out["legal_exits"] = program["input_copies"], program["legal_exits"]
             return out
+        if scan["input_copies"]:
+            out["input_copies"] = scan["input_copies"]
+            out.setdefault("notes", []).append(input_copy_note(scan["input_copies"]) or "")
         if governance:
             # AIPOS-F197 件②: 产出清单逐个核对并计算 sha256(唯一实现 governance_outputs_manifest; 门交回记录随后绑定同一清单)
             from tools.aipos_cli.next_resolver import GovernanceOutputsError, governance_outputs_manifest
@@ -2037,7 +2339,11 @@ def ingest_task_artifact(
         return result
     if not check["ok"]:
         result["message"] = f"artifact ingest 拒: {check['category']}"
+        if not dry_run and not (kind and kind != check["kind"]):
+            _record_ingest_event(Path(workspace_root), task_id, result, check, rejected=True)  # AIPOS-F236 件②: 拒收入真相
         return result
+    if check.get("input_copies"):
+        result["input_copies"] = list(check["input_copies"])  # AIPOS-F236 件①: 输入副本注记(--json 可见; 文本输出走 notes)
 
     derivation = derive_next_step(task_id, Path(workspace_root))
     action_type = derivation.get("verb") or ""
@@ -2106,6 +2412,8 @@ def ingest_task_artifact(
     result["category"] = "OK" if result["ok"] else "SHELL_REJECTED"
     if not result["ok"] and result["output"]:
         result["reasons"] = [result["output"]]
+    if check["kind"] == "return":  # AIPOS-F236: 门侧拒同落拒收记录(category = shell_rejected_category); 通过且有输入副本 = 输入副本记录
+        _record_ingest_event(Path(workspace_root), task_id, result, check, rejected=not result["ok"])
     return result
 
 
