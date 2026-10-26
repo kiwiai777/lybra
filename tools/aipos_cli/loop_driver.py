@@ -110,11 +110,21 @@ def parameter_default(contract: dict[str, Any], name: str) -> Any:
     return ((contract.get("parameters") or {}).get("properties") or {}).get(name, {}).get("default")
 
 
-_WAIT_LIMIT_MESSAGES = ("source_explicit", "source_default", "source_mode_default", "source_project", "timeout_subagent")
+_WAIT_LIMIT_MESSAGES = ("source_explicit", "source_default", "source_mode_default", "source_project", "timeout_subagent",
+                        # AIPOS-F237 件②③: 全量推导抬高 / 到上限仍在干活续等
+                        "source_full_runs", "full_runs_basis", "full_runs_unavailable", "extended", "extension_hard_cap", "extension_idle",
+                        "reason_activity", "reason_run_long", "reason_idle")
+
+
+def _positive_number(value: Any, *, allow_zero: bool = False) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and (value >= 0 if allow_zero else value > 0))
 
 
 def wait_limits_declaration(contract: dict[str, Any]) -> dict[str, Any]:
-    """AIPOS-F185 件①: verbs.schema lybra_loop.wait_limits(按执行方式的等交回缺省上限 + 人话文案)。缺 / 形不合 = SchemaLoadError。"""
+    """AIPOS-F185 件①: verbs.schema lybra_loop.wait_limits(按执行方式的等交回缺省上限 + 人话文案)。缺 / 形不合 = SchemaLoadError。
+    AIPOS-F237 件②③: + full_runs {margin_seconds ≥0, runs_branch / runs_main_baseline ≥0 整数} 与 extension {activity_window_seconds /
+    step_seconds >0, hard_cap_factor ≥1}。"""
     from tools.schema_loader import SchemaLoadError
     from tools.aipos_cli.workspace_config import execution_declaration
 
@@ -122,25 +132,65 @@ def wait_limits_declaration(contract: dict[str, Any]) -> dict[str, Any]:
     where = f"verbs.schema.json verbs.{LOOP_VERB}.wait_limits"
     modes = decl.get("by_execution_mode") if isinstance(decl, dict) else None
     msgs = decl.get("messages") if isinstance(decl, dict) else None
+    full = decl.get("full_runs") if isinstance(decl, dict) else None
+    ext = decl.get("extension") if isinstance(decl, dict) else None
     exec_keys = set(execution_declaration()["schema"])
     if (not isinstance(decl, dict) or decl.get("parameter") != "max_wait" or not isinstance(modes, dict)
             or any(not isinstance(rule, dict) or isinstance(rule.get("default"), bool) or not isinstance(rule.get("default"), (int, float))
                    or rule["default"] <= 0 or (rule.get("project_override") is not None and rule["project_override"] not in exec_keys)
                    for rule in modes.values())
-            or not isinstance(msgs, dict) or any(not isinstance(msgs.get(k), str) or not msgs[k] for k in _WAIT_LIMIT_MESSAGES)):
+            or not isinstance(msgs, dict) or any(not isinstance(msgs.get(k), str) or not msgs[k] for k in _WAIT_LIMIT_MESSAGES)
+            or not isinstance(full, dict) or not _positive_number(full.get("margin_seconds"), allow_zero=True)
+            or any(not isinstance(full.get(k), int) or isinstance(full.get(k), bool) or full[k] < 0 for k in ("runs_branch", "runs_main_baseline"))
+            or not isinstance(ext, dict) or not all(_positive_number(ext.get(k)) for k in ("activity_window_seconds", "step_seconds"))
+            or not _positive_number(ext.get("hard_cap_factor")) or ext["hard_cap_factor"] < 1):
         raise SchemaLoadError(f"{where} 未声明齐(parameter=max_wait / by_execution_mode.<方式>.default>0 与 project_override ∈ "
-                              f"config.schema execution 键 / messages {list(_WAIT_LIMIT_MESSAGES)})")
+                              f"config.schema execution 键 / messages {list(_WAIT_LIMIT_MESSAGES)} / full_runs {{margin_seconds, runs_branch, "
+                              "runs_main_baseline}} / extension {activity_window_seconds, step_seconds, hard_cap_factor≥1})")
     return decl
 
 
+def full_runs_wait_floor(governance_root: Path, task_fm: dict[str, Any], decl: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F237 件②: 等交回上限的全量下限(唯一推导)= 全量次数 × 单次全量时限 + full_runs.margin_seconds。
+    单次全量时限 = post_merge_regression.full_run_timeout(卡仓 = workspace_config.resolve_card_repo; 开工稿时限句与合并后回归同读);
+    全量次数 = runs_branch(卡分支 tip)+ main 侧基线(post_merge_regression.audit_baseline: recorded = 0, 其余 = runs_main_baseline;
+    与开工稿 main 侧基线现状同一判定)。未声明 runall_path = 0 次(seconds 0)。
+    返回 {seconds, runs, full_run_seconds, baseline_status, basis}; 卡仓 / 声明读不出 = 异常原样上抛(调用方不抬上限并写原因)。只读。"""
+    from tools.aipos_cli import post_merge_regression as pmr
+    from tools.aipos_cli.workspace_config import resolve_card_repo
+
+    rule, msgs = decl["full_runs"], decl["messages"]
+    repo = resolve_card_repo(governance_root, task_fm)
+    full = pmr.full_run_timeout(governance_root, repo)
+    if not full["runall_path"]:
+        return {"seconds": 0.0, "runs": 0, "full_run_seconds": None, "baseline_status": None,
+                "basis": f"{full['contract']['source']} 未声明 runall_path(无全量可跑, 不抬上限)"}
+    labels = pmr.baseline_state_labels()
+    try:
+        sha, _source = pmr.resolve_audit_sha(governance_root, None, repo)
+        status = str(pmr.audit_baseline(governance_root, sha)["status"])
+        note = f"main {sha[:12]} {labels.get(status, status)}"
+    except (ValueError, OSError) as exc:  # 查不出 = 按须自跑计(开工稿同口径: 查询失败不猜成已记录)
+        status, note = "unavailable", f"main 侧基线查不出({exc})"
+    baseline_runs = 0 if status == pmr.AUDIT_BASELINE_RECORDED else int(rule["runs_main_baseline"])
+    runs = int(rule["runs_branch"]) + baseline_runs
+    margin = float(rule["margin_seconds"])
+    seconds = float(runs * int(full["timeout_seconds"])) + margin
+    basis = str(msgs["full_runs_basis"]).format(seconds=seconds, runs=runs, full_run=float(full["timeout_seconds"]), margin=margin,
+                                                baseline_runs=baseline_runs, baseline_note=note, full_run_basis=full["basis"])
+    return {"seconds": seconds, "runs": runs, "full_run_seconds": int(full["timeout_seconds"]), "baseline_status": status, "basis": basis}
+
+
 def loop_wait_limit(governance_root: Path, task_id: str, task_fm: dict[str, Any], *, contract: dict[str, Any],
-                    explicit: float | None) -> tuple[float, str, str | None]:
-    """AIPOS-F185 件①(gap #187): 本次 loop 每次等交回的上限(唯一读取口)。返回 (秒, 来源说明, 本卡等交回执行方式)。
+                    explicit: float | None) -> tuple[float, str, str | None, dict[str, Any] | None]:
+    """AIPOS-F185 件①(gap #187): 本次 loop 每次等交回的上限(唯一读取口)。返回 (秒, 来源说明, 本卡等交回执行方式, 全量推导 | None)。
     序: 显式 --max-wait > [本卡执行方式有 wait_limits.by_execution_mode 规则] project.json execution.<project_override> > 该规则 default
     > parameters.max_wait.default。执行方式判定 = loop_run_record.card_wait_execution_mode(与 loop status 下一动作同读); 声明读不出 /
-    不合 = 不按执行方式放宽(行为同未声明), 原因写进来源说明(不吞)。"""
+    不合 = 不按执行方式放宽(行为同未声明), 原因写进来源说明(不吞)。
+    AIPOS-F237 件②: 未显式给时再取 max(上述值, full_runs_wait_floor)——抬高时来源说明写推导依据; 推导不出 = 不抬, 原因进来源说明。"""
+    from tools.schema_loader import SchemaLoadError
     from tools.aipos_cli.loop_run_record import card_wait_execution_mode
-    from tools.aipos_cli.workspace_config import ExecutionDeclarationError, project_subagent_max_wait
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved, ExecutionDeclarationError, project_subagent_max_wait
 
     decl = wait_limits_declaration(contract)
     msgs = decl["messages"]
@@ -150,14 +200,63 @@ def loop_wait_limit(governance_root: Path, task_id: str, task_fm: dict[str, Any]
     except (ExecutionDeclarationError, OSError, ValueError) as exc:
         mode, note = None, f"; 执行方式判不出, 不按执行方式放宽({type(exc).__name__}: {exc})"
     if explicit is not None:
-        return float(explicit), str(msgs["source_explicit"]) + note, mode
+        return float(explicit), str(msgs["source_explicit"]) + note, mode, None
     rule = (decl["by_execution_mode"].get(mode) or {}) if mode else {}
     if rule:
         override = project_subagent_max_wait(governance_root) if rule.get("project_override") else None
         if override is not None:
-            return float(override), str(msgs["source_project"]), mode
-        return float(rule["default"]), str(msgs["source_mode_default"]), mode
-    return float(parameter_default(contract, "max_wait")), str(msgs["source_default"]) + note, mode
+            base, source = float(override), str(msgs["source_project"])
+        else:
+            base, source = float(rule["default"]), str(msgs["source_mode_default"])
+    else:
+        base, source = float(parameter_default(contract, "max_wait")), str(msgs["source_default"]) + note
+    try:
+        floor = full_runs_wait_floor(governance_root, task_fm or {}, decl)
+    except (CardRepoUnresolved, SchemaLoadError, OSError, ValueError) as exc:
+        return base, source + "; " + str(msgs["full_runs_unavailable"]).format(error=f"{type(exc).__name__}: {exc}"), mode, None
+    if floor["seconds"] > base:
+        return float(floor["seconds"]), str(msgs["source_full_runs"]).format(base=base, base_source=source, basis=floor["basis"]), mode, floor
+    return base, source, mode, floor
+
+
+def wait_extension_decision(governance_root: Path, card: str, *, decl: dict[str, Any], last_event_at: str | None,
+                            now: datetime, hard_deadline: datetime, max_wait: float, slack: float = 0.0) -> dict[str, Any]:
+    """AIPOS-F237 件③: 拉起的进程(调用方已核仍存活)等到上限时是否续等(唯一判定)。返回 {extend: bool, kind: extend | hard_cap | idle,
+    seconds, reason, line}。续等 = 最近一行输出距今 ≤ extension.activity_window_seconds 或 本卡 run-long 仍在跑(run_long.run_status
+    判 running), 且未到硬上限(hard_deadline = 等待开始 + hard_cap_factor × max_wait; 距硬上限 ≤ slack(哨兵轮询间隔余量)即算已到);
+    续等秒数 = min(step_seconds, 距硬上限)。只读。"""
+    from tools.aipos_cli import run_long
+    from tools.aipos_cli.loop_run_record import _parse_iso
+    from tools.schema_loader import SchemaLoadError
+
+    ext, msgs = decl["extension"], decl["messages"]
+    window, factor = float(ext["activity_window_seconds"]), float(ext["hard_cap_factor"])
+    hard_cap = factor * float(max_wait)
+    seen = _parse_iso(last_event_at) if last_event_at else None
+    idle = max(0.0, (now - seen).total_seconds()) if seen is not None else None
+    running: list[str] = []
+    run_long_note = ""
+    try:
+        running = [str(v.get("name")) for v in run_long.run_status(governance_root, card) if v.get("state") == run_long.STATE_RUNNING]
+    except (run_long.RunLongError, SchemaLoadError, OSError, ValueError) as exc:  # 读不出 = 不算在跑(写明原因, 不吞)
+        run_long_note = f"(run-long 状态读不出: {type(exc).__name__}: {exc})"
+    reasons: list[str] = []
+    if idle is not None and idle <= window:
+        reasons.append(str(msgs["reason_activity"]).format(last_event_at=last_event_at, idle=round(idle), window=window))
+    if running:
+        reasons.append(str(msgs["reason_run_long"]).format(names=running))
+    remaining = (hard_deadline - now).total_seconds()
+    if not reasons:
+        reason = str(msgs["reason_idle"]).format(idle=round(idle) if idle is not None else float("inf"), window=window,
+                                                 run_long_note=run_long_note)
+        return {"extend": False, "kind": "idle", "seconds": 0.0, "reason": reason,
+                "line": str(msgs["extension_idle"]).format(reason=reason)}
+    reason = "; ".join(reasons)
+    if remaining <= max(0.0, float(slack)):
+        return {"extend": False, "kind": "hard_cap", "seconds": 0.0, "reason": reason,
+                "line": str(msgs["extension_hard_cap"]).format(hard_cap=hard_cap, max_wait=float(max_wait), factor=factor, reason=reason)}
+    seconds = min(float(ext["step_seconds"]), remaining)
+    return {"extend": True, "kind": "extend", "seconds": seconds, "reason": reason, "hard_cap": hard_cap, "line": ""}
 
 
 # ---------------------------------------------------------------------------
@@ -1303,6 +1402,10 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
             return True  # AIPOS-F231 件⑤: 开局上下文超模型窗口安全上限(精简后仍超)= 不拉起
     wait_timeout = exit_code_for(contract, "wait_timeout")
     deadline = utc_now() + timedelta(seconds=float(watch_args.timeout))  # 续接共用同一 --max-wait(F73D: 本模块不计时自旋)
+    # AIPOS-F237 件③: 到上限仍在干活 = 续等至硬上限(hard_cap_factor × 上限, 从等待开始计; 判定 wait_extension_decision)
+    wait_decl = wait_limits_declaration(contract)
+    extension = {"decl": wait_decl, "soft": deadline, "max_wait": float(watch_args.timeout),
+                 "hard": utc_now() + timedelta(seconds=float(wait_decl["extension"]["hard_cap_factor"]) * float(watch_args.timeout))}
     artifact = str(Path(str(watch_args.workspace_root)) / wait_patterns[0]) if wait_patterns else "(产物落点)"
     attempt, resume, retries = plan, 0, 0
     early = early_exit_declaration(contract)
@@ -1315,7 +1418,7 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
                    else "")
             run = _launch_once(index, step, attempt, governance_root, result, contract=contract, decl=decl, watch=watch,
                                watch_args=args, ready=ready, say=say, actor=actor, envelope_id=envelope_id, recorder=recorder,
-                               resume=relaunch, resume_why=why)
+                               resume=relaunch, resume_why=why, extension=extension)
             if run["outcome"] == "artifact_ready":
                 return False
             if run["outcome"] == "stopped":  # AIPOS-F231 件②: 等待中收到停线请求(进程组已在收尾时终止, 现场已存)
@@ -1372,11 +1475,48 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
                 step.message = (f"拉起的 {plan.harness} 进程已退出(exit {run['returncode']})而产物未就绪{resumed}: 等的是 {wait_patterns}\n"
                                 + (f"  {diag['line']}\n" if diag.get("line") else "") + f"  stderr 末尾:\n{tail}")
             else:
-                step.message = f"等待产物超时(watch exit {run['watch_rc']}), 已终止拉起的 {plan.harness} 进程组: 等的是 {wait_patterns}"
+                ended = f"; {run['extension_end']}" if run.get("extension_end") else ""  # AIPOS-F237 件③: 续等终止原因
+                step.message = f"等待产物超时(watch exit {run['watch_rc']}), 已终止拉起的 {plan.harness} 进程组: 等的是 {wait_patterns}{ended}"
             say(f"[{index}] exit 3 — {step.message}")
             result.outcome, result.exit_code, result.message = "wait_timeout", wait_timeout, step.message
             result.reason = "launch_early_exit" if run["outcome"] == "early_exit" else "launch_timeout"
             return True
+
+
+def _extend_wait(index: int, plan: LaunchPlan, governance_root: Path, rc: int, *, harness: LaunchedHarness, recorder: LoopRunRecorder,
+                 say: Callable[[str], None], watch: Callable[..., int], watch_args: SimpleNamespace, ready: Callable[[list[str]], bool],
+                 stop_when: Callable[[], bool], sleeper: Callable[[float], None], watch_out: io.StringIO,
+                 extension: dict[str, Any]) -> tuple[int, str]:
+    """AIPOS-F237 件③: 唯一哨兵到上限(timeout 且已到上限时刻)而拉起进程仍存活时, 按 wait_extension_decision 续等(同一哨兵、同一 sleeper),
+    每次续等进运行记录 launches[].wait_extensions 与日志一行; 不再续等 = launches[].wait_extension_end。哨兵提前结束(未到上限时刻,
+    如注入的靶场 watch)/ 进程已退 / 停线请求 = 原判不续等。返回 (最终哨兵退出码, 不再续等的人读原因 | "")。"""
+    from tools.aipos_cli.clock import iso_z
+
+    timeout_rc = declared_exit_code("lybra_agent_watch", "timeout")
+    msgs = extension["decl"]["messages"]
+    slack = float(watch_args.interval) + 1.0
+    count = 0
+    expected_end = extension["soft"]  # 本轮哨兵应结束的时刻(首轮 = 上限时刻; 续等轮 = 续等开始 + 续等秒数)
+    while rc == timeout_rc and recorder.stop_request() is None and not harness.exited():
+        now = utc_now()
+        if (expected_end - now).total_seconds() > slack:
+            return rc, ""  # 哨兵未到本轮时刻即结束(另有原因, 如注入的靶场 watch)= 原判, 不续等
+        decision = wait_extension_decision(governance_root, plan.card, decl=extension["decl"], last_event_at=recorder.launch_last_event_at(),
+                                           now=now, hard_deadline=extension["hard"], max_wait=extension["max_wait"], slack=slack)
+        if not decision["extend"]:
+            recorder.wait_extension_end(decision["kind"], decision["reason"])
+            say(f"[{index}] extend_end: {decision['line']}")
+            return rc, str(decision["line"])
+        count += 1
+        recorder.wait_extended({"seconds": round(float(decision["seconds"]), 1), "count": count, "reason": decision["reason"],
+                                "hard_cap_at": iso_z(extension["hard"])})
+        say(f"[{index}] extend: " + str(msgs["extended"]).format(seconds=decision["seconds"], count=count, hard_cap=decision["hard_cap"],
+                                                                  reason=decision["reason"]))
+        expected_end = utc_now() + timedelta(seconds=float(decision["seconds"]))
+        with contextlib.redirect_stdout(watch_out):
+            rc = watch(SimpleNamespace(**{**vars(watch_args), "timeout": float(decision["seconds"])}), expect_ready=ready,
+                       stop_when=stop_when, sleeper=sleeper)
+    return rc, ""
 
 
 def _should_resume(plan: LaunchPlan, returncode: Any, resumed: int, remaining_seconds: float) -> bool:
@@ -1388,7 +1528,7 @@ def _should_resume(plan: LaunchPlan, returncode: Any, resumed: int, remaining_se
 def _launch_once(index: int, step: LoopStep, plan: LaunchPlan, governance_root: Path, result: LoopResult, *,
                  contract: dict[str, Any], decl: dict[str, Any], watch: Callable[..., int], watch_args: SimpleNamespace,
                  ready: Callable[[list[str]], bool], say: Callable[[str], None], actor: str, envelope_id: str,
-                 recorder: LoopRunRecorder, resume: int, resume_why: str = "") -> dict[str, Any]:
+                 recorder: LoopRunRecorder, resume: int, resume_why: str = "", extension: dict[str, Any] | None = None) -> dict[str, Any]:
     """一次拉起(resume=0)或同会话第 resume 次续接: 起进程 → 留痕 → 经唯一哨兵等待 → 收尾清进程组(调用方须已在 _signals_raise_interrupt 内)。
     返回 {outcome: artifact_ready | early_exit | timeout | launch_failed | record_failed, returncode, watch_rc, stderr_tail};
     launch_failed / record_failed 已按出口填 result。"""
@@ -1447,6 +1587,11 @@ def _launch_once(index: int, step: LoopStep, plan: LaunchPlan, governance_root: 
 
         with contextlib.redirect_stdout(watch_out):
             rc = watch(watch_args, expect_ready=ready, stop_when=_stop_when, sleeper=_pump)
+        extension_end = ""
+        if extension is not None:  # AIPOS-F237 件③: 到上限仍在干活 = 续等(不先杀)
+            rc, extension_end = _extend_wait(index, plan, governance_root, rc, harness=harness, recorder=recorder, say=say, watch=watch,
+                                             watch_args=watch_args, ready=ready, stop_when=_stop_when, sleeper=_pump,
+                                             watch_out=watch_out, extension=extension)
         step.exit_code, step.output = int(rc), watch_out.getvalue().strip()
         if rc != declared_exit_code("lybra_agent_watch", "change") and recorder.stop_request() is not None:
             # AIPOS-F231 件②: 先存现场(进程仍在 = 退出状态 unknown), finally 收尾按 TERM → 等 → KILL 终止整个进程组
@@ -1476,7 +1621,7 @@ def _launch_once(index: int, step: LoopStep, plan: LaunchPlan, governance_root: 
             harness.pump(terminate_wait)  # 进程已退出: 读尽管道余量(EOF 即返回)再取 stderr 末尾
             return {"outcome": outcome, "returncode": harness.proc.returncode, "watch_rc": rc, "stderr_tail": list(harness.stderr_tail)}
         outcome = "timeout"
-        return {"outcome": outcome, "returncode": None, "watch_rc": rc, "stderr_tail": []}
+        return {"outcome": outcome, "returncode": None, "watch_rc": rc, "stderr_tail": [], "extension_end": extension_end}
     except LoopInterrupted as exc:
         if harness is not None:
             outcome = f"interrupted(signal {exc.signum})"
@@ -1576,7 +1721,8 @@ def run_loop(
         return LoopResult(task_id, "not_derivable", exit_code_for(contract, "not_derivable"), str(exc),
                           missing_records=stop["missing_records"], suggested_action=stop["suggested_action"])
     # AIPOS-F185 件①: 等交回上限(显式 > 子 agent 执行方式缺省 / 项目覆盖 > 参数缺省), 来源写进首行
-    max_wait, wait_source, wait_mode = loop_wait_limit(governance_root, task_id, task_fm, contract=contract, explicit=explicit_wait)
+    max_wait, wait_source, wait_mode, wait_floor = loop_wait_limit(governance_root, task_id, task_fm, contract=contract,
+                                                                   explicit=explicit_wait)
     # AIPOS-F78 前置零②: 驱动方身份=显式 --actor → 工位声明(.lybra/role instance)→ connection.json 驱动方 token 实例; 禁占位 advisor
     driver_actor = actor or _driver_actor(governance_root, connection_json=connection_json)
     if not driver_actor:
@@ -1648,7 +1794,7 @@ def run_loop(
                                 now=now, connection_json=connection_json, contract=contract, max_steps=max_steps, max_wait=max_wait,
                                 interval=interval, allowed_verbs=allowed_verbs, say=say, derive=derive, execute=execute,
                                 watch=watch, no_launch=no_launch, recorder=recorder, guard=guard, wait_reexec=wait_reexec,
-                                wait_source=wait_source, wait_mode=wait_mode)
+                                wait_source=wait_source, wait_mode=wait_mode, wait_floor=wait_floor)
     except LoopInterrupted as exc:
         recorder.end(outcome="interrupted", exit_code=128 + exc.signum, reason="interrupted", message=f"收到信号 {exc.signum}",
                      steps=holder.steps)
@@ -1731,7 +1877,8 @@ def _run_enveloped(task_id: str, governance_root: Path, result: LoopResult, *, t
                    max_steps: int, max_wait: float, interval: float, allowed_verbs: set[str], say: _RunOutput,
                    derive: Callable[[str, Path], dict[str, Any]], execute: Callable[..., dict[str, Any]],
                    watch: Callable[..., int], no_launch: bool, recorder: LoopRunRecorder, guard: Any,
-                   wait_reexec: "WaitReexec | None" = None, wait_source: str = "", wait_mode: str | None = None) -> LoopResult:
+                   wait_reexec: "WaitReexec | None" = None, wait_source: str = "", wait_mode: str | None = None,
+                   wait_floor: dict[str, Any] | None = None) -> LoopResult:
     # 件③ 信封(启动前校验; 无信封 exit 5 带申领出口, 禁裸跑); 身份集合含工位角色名(chris: hbj-advisor)
     # AIPOS-F134 件①: 驱动方角色名按本次驱动方实例取(其凭据条目的 role), 故在 driver_scope 内解析(否则取的是工位声明/首个驱动方)
     with driver_scope(actor=driver_actor, policy_id=policy_id):
@@ -1780,6 +1927,8 @@ def _run_enveloped(task_id: str, governance_root: Path, result: LoopResult, *, t
         return LoopResult(task_id, "no_envelope", exit_code_for(contract, "no_envelope"), msg, suggested_action=hint)
     envelope_id = str(policy.get("policy_id"))
     recorder.set_envelope(envelope_id)
+    # AIPOS-F237 件②: 等交回上限及来历进运行记录(推导依据; 首行同文)
+    recorder.set_wait_limit({"seconds": max_wait, "source": wait_source, "mode": wait_mode, "full_runs": wait_floor})
     wait_note = f"(等交回上限: {wait_source})" if wait_source else ""
     say(f"lybra loop {task_id}: envelope={envelope_id} driver={driver_actor} max_steps={max_steps} max_wait={max_wait:g}s{wait_note}")
     for line in choice:  # AIPOS-F185 件③: 写明用的是哪个信封(挑选说明 / 显式信封已被接替而改用)

@@ -37,7 +37,7 @@ TEXT_KEYS = ("ratchet_default", "runall_absent", "runall_absent_timeout", "lane_
              "host_hint_undeclared", "baseline_state_recorded", "baseline_state_pending", "baseline_state_self_run_required",
              "baseline_state_unavailable", "runall_timing_sync", "runall_timing_run_long", "runall_timing_undeclared",
              "tool_timeout_source", "runall_timing_charter", "run_long_threshold_charter", "run_long_threshold_declared",
-             "run_long_threshold_undeclared")
+             "run_long_threshold_undeclared", "runall_timeout_derived")
 ITEM_KEYS = ("boundary_line", "hard_rule_line", "commands_rule_line", "no_write_line")
 REFUSAL_KEYS = ("KICKOFF_ROLE_MISMATCH", "KICKOFF_INSTANCE_MISSING", "KICKOFF_NOT_STARTABLE", "KICKOFF_CHARTER_REFUSED",
                 "KICKOFF_WORKTREE_UNRESOLVED", "KICKOFF_REPORT_UNRESOLVED", "KICKOFF_SCRATCH_IN_GOVERNANCE",
@@ -396,8 +396,14 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
     evidence_lines = _candidate_evidence_lines(gov, task_id=task_id, fm=fm, instance=instance, reviewed=reviewed,
                                                reviewed_card=reviewed_card) if card_role == "auditor" else []
     if runall["runall"]:
-        timing_state, timing = runall_timing(texts, harness, int(test_contract["post_merge_regression"]["timeout_seconds"]),
-                                             runall["runall_timeout_seconds"])
+        # AIPOS-F237 件②: 全量时限 = post_merge_regression.full_run_timeout(唯一推导; loop 等交回上限 / 合并后回归同读)。未开推导 =
+        # 声明值与 charter_render.runall_context 同一措辞(行为不变); 开了 = 推导值 + 依据(措辞读 texts.runall_timeout_derived)
+        from tools.aipos_cli.post_merge_regression import full_run_timeout
+
+        full = full_run_timeout(gov, code_repo)
+        runall_timeout = (str(texts["runall_timeout_derived"]).format(seconds=full["timeout_seconds"], source=full["source"], basis=full["basis"])
+                          if full["derived"] else runall["runall_timeout_seconds"])
+        timing_state, timing = runall_timing(texts, harness, int(full["timeout_seconds"]), runall_timeout)
     else:
         timing_state, timing = "absent", str(texts["runall_absent_timeout"])
     from tools.aipos_cli.post_merge_regression import baseline_state_labels
