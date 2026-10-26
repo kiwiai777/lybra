@@ -314,6 +314,10 @@ def charter_render_context(
 
     ctx["return_write_last_rule"] = report_write_last_rule(f"{paths['return_root']}/<卡ID>/RETURN.md")
     ctx["verdict_write_last_rule"] = report_write_last_rule(f"{paths['verdict_root']}/<审计卡ID>/RETURN.md")
+    # AIPOS-F242 件④: 报告不写明文凭据(事前提示)= artifact_ingest.credential_charter_rule(文案与入门判据同节声明 credential_guard.texts)
+    from tools.aipos_cli.artifact_ingest import credential_charter_rule
+
+    ctx["credential_rule"] = credential_charter_rule()
     # AIPOS-F99 件②: 审计「独立全量基线」的测试清单位置 = 项目声明 test_contract.runall_path(唯一读取口
     # workspace_config.project_test_contract, 卡仓取缺省产品仓; 形坏 = ValueError 原样抛, fail-closed); 未声明 = 明确文字, 不留空占位。
     # AIPOS-F99 / F137: 全量清单位置 / 命令式样 / 时限三键(渲染唯一 runall_context, AIPOS-F187 开工稿同读); 键表只取三标量(指纹不变)

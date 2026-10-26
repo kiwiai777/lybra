@@ -114,6 +114,7 @@
 - **报告落点不放代码文件**(AIPOS-F195):{{verdict_slot_code_rule}}
 - **报告最后落盘**(AIPOS-F215):{{verdict_write_last_rule}}
 - **大文件分段读**(AIPOS-F240):{{read_discipline_rule}}
+- **报告不写明文凭据**(AIPOS-F242):{{credential_rule}}
 - **单发运行中不要只发说明不调用工具就结束;要等长任务就用工具等待**(AIPOS-F171B: 产品以单发模式拉起你, 你发一条纯文字回复
   本次运行即结束; 报告没写出就停笔 = 产品会以同一会话把你叫回来续做, 续做用尽仍无报告 = 本次审计按早退失败计)。
 - **报告头 `commit_sha` 用 `git rev-parse <被审分支>` 的输出原样粘贴, 禁手抄**(AIPOS-F180B: 10-17 实撞报告头少抄中间 3 位被拒;

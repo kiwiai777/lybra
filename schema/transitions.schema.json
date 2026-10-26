@@ -1116,7 +1116,7 @@
           "keys": {
             "status": "pass | new_failures | timeout | error | off | skipped | async_started | running(值域声明 config.schema test_contract.schema.post_merge_regression.statuses; AIPOS-F166 件③: running = 回归事件记录的进行中态——后台检查 / `lybra regression run --confirm` 启动即落, 结论落定时同一记录更新为 pass / new_failures / timeout / error)", "lifecycle": "AIPOS-F166 件③: 异步与补跑的回归事件记录先落 status=running(async_pid / process_fingerprint / host / async_log / started_at), 结论落定时同一 record_id 覆写为结论(进程信息保留); finalization 记录 async_started 段另带 event_record(该事件记录相对路径)。状态判定唯一实现 post_merge_regression.regression_states(verbs.schema lybra_regression_run.states)",
             "action": "none | warned | blocked | recorded(async 后台结果)",
-            "mode": "warn | block | off", "execution": "sync | async", "timeout_seconds": "总时限(秒)", "policy_source": "策略来源(项目声明或 schema 缺省)",
+            "mode": "warn | block | off", "execution": "sync | async", "timeout_seconds": "单次全量时限(秒; AIPOS-F242 件①: 每一跑各用一份)", "merged_timeout": "AIPOS-F242 件①: 合并后一跑的时限(= 单次全量时限)", "baseline_timeout": "AIPOS-F242 件①: 合并前基线一跑的时限(= 单次全量时限; 取已记录基线不另跑 = 无此键)", "total_timeout_seconds": "AIPOS-F242 件①: 检查总上限 = 实际(进行中记录 = 预计)跑数 × 单次全量时限; 在跑基线的预计最迟完成与排队等待上限按此(旧记录缺 = timeout_seconds)", "timeout_split_basis": "AIPOS-F242 件①: 两跑时限的依据(人读一行)", "policy_source": "策略来源(项目声明或 schema 缺省)",
             "runall_path": "测试清单(相对产品仓根)", "merge_commit": "合并提交", "pre_merge_commit": "合并前 main(第一父)",
             "baseline_source": "record:<记录相对路径> | run:<合并前提交>", "baseline_failures": "合并前失败集合", "merged_failures": "合并后失败集合",
             "merged_complete": "合并后一跑是否完整(true 才可作下次基线)", "new_failures": "新增失败(合并后 − 合并前)", "fixed_failures": "转绿(合并前 − 合并后)",
@@ -2301,7 +2301,7 @@
         "refusal": "{what} 含明文凭据 {count} 处: {hits}(只列文件 / 行号 / 种类, 命中值不回显; 判据 transitions artifact_ingest.credential_guard)。报告一旦入门即随 N6 收账进治理仓提交历史、撤不回。出口: 把命中处的值换成占位(如 <口令> / [已打码] / ${{变量名}}), 并在报告写明凭据存放处(被 .gitignore 排除的私有运行目录, 如 runtime/private/ 下的文件名); 不删验证结论与其余证据; 改完重写报告(先写 .tmp 再改名)后重交。凭据确属运行所需 = 只放被 git 忽略的私有目录。豁免只经声明表 exempt, 无绕过开关。",
         "hit": "{path} 第 {line} 行({label})",
         "more": "等共 {count} 处",
-        "what_return": "交回产物",
+        "charter_rule": "报告与产物不写明文凭据(口令 / 令牌 / 私钥 / 带口令的连接串 / 命令行口令参数): 值一律写占位(如 <口令> / [已打码] / ${变量名}), 并注明凭据存放处(被 git 忽略的私有运行目录, 如 runtime/private/ 下的文件名); 交回 / 审计报告、报告落点与产出在入门处(artifact ingest 与门侧交回 / 裁决写入口同核)按判据 transitions artifact_ingest.credential_guard 检查, 命中即拒(拒因只给文件 / 行号 / 种类)——报告入门即随 N6 收账进治理仓提交历史、撤不回, 事前就别写。", "what_return": "交回产物",
         "what_verdict": "审计报告落点",
         "what_finalization": "FINALIZE 交回产物",
         "stock_title": "存量凭据只读检查(AIPOS-F239 件③; 判据 transitions artifact_ingest.credential_guard; 只读: 不改任何文件 / 不改写已提交历史, 命中值不回显)",
