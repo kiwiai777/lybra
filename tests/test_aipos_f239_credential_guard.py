@@ -414,3 +414,24 @@ def test_loop_declarations_single_source():
     del bad["launch"]["report_fix"]["artifact"]
     with pytest.raises(SchemaLoadError, match="report_fix.artifact"):
         artifact_fix_declaration(bad, "auditor")
+
+
+def test_finalization_return_with_credential_rejected(tmp_path, monkeypatch):
+    """外部 FINALIZE 交回(chris external 形态)同一判据: 含明文凭据 = 拒, 不铸 finalization 记录; 脱敏后入门。"""
+    import test_aipos_f78b_chris_zero_migration as f78b
+
+    gov = f78b._chris_gov(tmp_path, monkeypatch, finalize_mode="external", git=False)
+    f78b._slug_card(gov, f78b.TASK, "claimed", f78b.SLUG_FILE)
+    f78b._claim_record(gov, f78b.TASK, f78b.CHRIS_EXEC)
+    f78b._n4_pass_records(gov, f78b.TASK, f78b.CHRIS_EXEC)
+    ret = f78b._finalize_return(gov, f78b.FIN, {"merge_commit": f78b.SHA_M, "remote_ref": f"origin/main@{f78b.SHA_M}",
+                                                 "deploy_status": "not_attempted"})
+    ret.write_text(ret.read_text(encoding="utf-8") + "\n部署凭据 deploy_token=" + SECRET + "\n", encoding="utf-8")
+    got = ai.validate_task_artifact(f78b.TASK, gov)
+    _show(f"[FINALIZE 交回含凭据] kind={got['kind']} {got['category']}: {got['reasons'][0][:240]}")
+    assert got["kind"] == "finalization" and got["category"] == CRED and SECRET not in json.dumps(got, ensure_ascii=False, default=str)
+    assert "FINALIZE 交回产物 含明文凭据 1 处" in got["reasons"][0]
+    assert not ai.ingest_task_artifact(f78b.TASK, gov)["ok"]
+    assert not list((gov / "5_tasks" / "records" / "finalizations").glob("*/*.md"))
+    ret.write_text(ret.read_text(encoding="utf-8").replace(SECRET, "<令牌>"), encoding="utf-8")
+    assert ai.validate_task_artifact(f78b.TASK, gov)["ok"]
