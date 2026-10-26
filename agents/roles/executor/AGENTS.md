@@ -76,6 +76,7 @@
   `{{return_root}}/<任务ID>/artifacts/output.txt`。
 - **报告落点不放代码文件**(AIPOS-F195):{{return_slot_code_rule}}
 - **报告最后落盘**(AIPOS-F215):{{return_write_last_rule}}
+- **大文件分段读**(AIPOS-F240):{{read_discipline_rule}}
 - **卡面声明了验收产物(artifacts)**(AIPOS-F175):按每项 `path_glob` 把截图 / 关键输出 / 报告放进
   `{{return_root}}/<任务ID>/artifacts/`(文件名要匹配声明的 glob), RETURN.md 里列出这些文件; 截图是 Owner 抽查时要看的,
   要能看清验收标准所说的东西。缺了 = 该标准停在「未验证」, 审计不给通过。

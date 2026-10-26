@@ -662,9 +662,11 @@ class LoopRunRecorder:
         self.flush(force=True)
 
     # -- 拉起 --
-    def launch_started(self, plan: Any, harness: Any, *, resume: int = 0, resume_why: str = "") -> None:
+    def launch_started(self, plan: Any, harness: Any, *, resume: int = 0, resume_why: str = "", resume_kind: str = "") -> None:
         """一次拉起(resume=0)或同会话第 resume 次续接(AIPOS-F171B 件②)= launches[] 追加一条; 续接另写日志一行 [resume]。
-        AIPOS-F180B: resume_why = why this resume happened (default = the F171B half-way stop wording)."""
+        AIPOS-F180B: resume_why = why this resume happened (default = the F171B half-way stop wording).
+        AIPOS-F240: resume_kind = 运行中上下文超限的续接类型(launch.early_exit.run_overflow.resume_kind / fresh_kind; 其余 = null);
+        新会话重拉(resume=0 而有 resume_kind)另写日志一行 [fresh]。"""
         self._harness = harness
         self._active = {
             "card": plan.card, "harness": plan.harness, "transport": plan.location.get("transport"),
@@ -675,7 +677,7 @@ class LoopRunRecorder:
             "model": dict(getattr(plan, "model", None) or {}) or None,
             # AIPOS-F171B 件②: 固定会话 id(无 session 声明 = null)/ 第几次续接 / 续接上限(verbs.schema run_record.launch_session)
             "session_id": getattr(plan, "session_id", "") or None, "resume": int(resume),
-            "resume_max": int(getattr(plan, "resume_max", 0) or 0),
+            "resume_max": int(getattr(plan, "resume_max", 0) or 0), "resume_kind": resume_kind or None,
             "started_at": iso_z(), "ended_at": None, "outcome": None, "returncode": None, "termination": None,
             "activity": {"events": 0, "last_event_at": None, "last_activity_at": None, "last_activity_kind": None,
                          "counts": {}},
@@ -684,6 +686,8 @@ class LoopRunRecorder:
         if resume:
             self.log(f"[resume] {plan.harness} {plan.card} 会话 {self._active['session_id']} 续接 {resume}/{self._active['resume_max']}"
                      f"({resume_why or '上一轮 exit 0 而产物未就绪'})")
+        elif resume_kind:
+            self.log(f"[fresh] {plan.harness} {plan.card} 新会话 {self._active['session_id']}({resume_why or resume_kind})")
         self.log(f"[launch] {plan.harness} {plan.card} pid={harness.pid} pgid={harness.pgid}")
         self._dirty = True
         self.flush(force=True)
@@ -799,7 +803,7 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
         act = last.get("activity") or {}
         view["launch"] = {k: last.get(k) for k in ("card", "harness", "transport", "host", "workstation", "pid", "pgid",
                                                     "remote_pgid", "started_at", "ended_at", "outcome", "returncode", "termination",
-                                                    "model", "session_id", "resume", "resume_max")}  # AIPOS-F169: model; AIPOS-F171B: 会话 / 续接(存量记录无 = None)
+                                                    "model", "session_id", "resume", "resume_max", "resume_kind")}  # AIPOS-F169: model; AIPOS-F171B: 会话 / 续接(存量记录无 = None)
         view["launch"].update({"events": act.get("events"), "last_event_at": act.get("last_event_at"),
                                "last_activity_at": act.get("last_activity_at"), "last_activity_kind": act.get("last_activity_kind"),
                                "counts": act.get("counts"), "alive": None, "running_seconds": None, "idle_seconds": None})
@@ -1181,33 +1185,28 @@ def resource_conflict(governance_root: Path, own: dict[str, Any], *, contract: d
 # 输入词元数(不取会话正文)。
 # ---------------------------------------------------------------------------
 
-def session_diagnosis(harness: str, session_id: str, early: dict[str, Any]) -> dict[str, Any]:
-    """→ {kind, stop_reason, status, provider, model, input_size(本轮输入词元数), error_excerpt, session_file, note}。kind ∈ early.kinds 的键:
-    stopReason = length_stop_reason → context_overflow; = error_stop_reason 且 errorMessage 首段状态码 ∈ retry_statuses → 该类(credential / quota),
-    其余错误 → provider_error; 会话记录找不到 / 无助手消息 / 定位器未声明诊断键 → unknown(note 写明)。"""
+def _session_entries(harness: str, session_id: str, out: dict[str, Any]) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    """定位该次拉起固定会话的会话记录并逐行读出(只读; 唯一读取口 artifact_ingest._session_locators)。定位不到 / 读不出 = (None, []), 原因写 out["note"]。"""
     import glob as _glob
 
     import json
 
-    from tools.aipos_cli.artifact_ingest import _dig, _session_locators
-    from tools.aipos_cli.harness_launch import redact_progress
+    from tools.aipos_cli.artifact_ingest import _session_locators
 
-    out: dict[str, Any] = {"kind": "unknown", "stop_reason": None, "status": None, "provider": None, "model": None, "input_size": None,
-                           "error_excerpt": None, "session_file": None, "note": None}
     locator = _session_locators().get(harness) if harness else None
     if not isinstance(locator, dict) or not locator.get("stop_reason_path") or not locator.get("session_id_file_suffix"):
         out["note"] = f"harness {harness or '?'} 的会话定位器未声明诊断键(card.schema session_record_locators)"
-        return out
+        return None, []
     if not session_id:
         out["note"] = "本次拉起未固定会话 id, 会话记录无从定位"
-        return out
+        return None, []
     suffix = str(locator["session_id_file_suffix"]).replace("{session_id}", session_id)
     files = sorted({f for pattern in locator.get("session_globs") or [] for f in _glob.glob(os.path.expanduser(str(pattern))) if f.endswith(suffix)})
     if not files:
         out["note"] = f"本机找不到会话记录 *{suffix}(跨机工位的会话记录在远端主机)"
-        return out
+        return None, []
     out["session_file"] = files[-1]
-    last = None
+    entries: list[dict[str, Any]] = []
     try:
         with open(files[-1], encoding="utf-8", errors="replace") as handle:
             for line in handle:
@@ -1215,25 +1214,83 @@ def session_diagnosis(harness: str, session_id: str, early: dict[str, Any]) -> d
                     entry = json.loads(line)
                 except ValueError:
                     continue
-                if isinstance(entry, dict) and _dig(entry, list(locator.get("role_path") or [])) == locator.get("assistant_role"):
-                    last = entry
+                if isinstance(entry, dict):
+                    entries.append(entry)
     except OSError as exc:
         out["note"] = f"会话记录读不出({type(exc).__name__}: {exc})"
+        return None, []
+    return locator, entries
+
+
+def _input_size(entry: dict[str, Any], locator: dict[str, Any]) -> int | None:
+    """一条助手消息的输入词元 = input_token_paths 各值之和(都不是整数 = None)。"""
+    from tools.aipos_cli.artifact_ingest import _dig
+
+    tokens = [_dig(entry, list(p)) for p in locator.get("input_token_paths") or []]
+    return sum(int(x) for x in tokens if isinstance(x, int)) if any(isinstance(x, int) for x in tokens) else None
+
+
+def _text_chars(content: Any, text_key: str) -> int:
+    """工具结果正文字数(只计数, 不取正文): content 为串 = 其长度; 为列表 = 各项 text_key 文本长度之和。"""
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        return sum(len(str(item.get(text_key) or "")) for item in content if isinstance(item, dict))
+    return 0
+
+
+def _overflow_facts(entries: list[dict[str, Any]], locator: dict[str, Any], last_index: int, run_overflow: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F240: 超限会话的事实——压缩记录条数 / 是否在超限助手消息之后、读入量最大的几次工具结果(工具名与字数)。定位器缺键 = 无统计。"""
+    from tools.aipos_cli.artifact_ingest import _dig
+
+    type_path, ctype = list(locator.get("entry_type_path") or []), locator.get("compaction_entry_type")
+    compactions = [i for i, e in enumerate(entries) if type_path and ctype and _dig(e, type_path) == ctype]
+    role_path, trole = list(locator.get("role_path") or []), locator.get("tool_result_role")
+    results: list[dict[str, Any]] = []
+    if trole and locator.get("tool_name_path") and locator.get("content_path"):
+        for entry in entries:
+            if _dig(entry, role_path) == trole:
+                results.append({"tool": str(_dig(entry, list(locator["tool_name_path"])) or "?"),
+                                "chars": _text_chars(_dig(entry, list(locator["content_path"])), str(locator.get("text_key") or "text"))})
+    results.sort(key=lambda r: -int(r["chars"]))
+    return {"compaction": {"count": len(compactions), "after_overflow": any(i > last_index for i in compactions)},
+            "top_tool_results": results[: int(run_overflow["top_tool_results"])]}
+
+
+def session_diagnosis(harness: str, session_id: str, early: dict[str, Any]) -> dict[str, Any]:
+    """→ {kind, stop_reason, status, provider, model, input_size(本轮 = 末轮输入词元数), first_input_size, assistant_turns, error_excerpt,
+    session_file, note}(+ stopReason=length 时 compaction{count, after_overflow} / top_tool_results[{tool, chars}])。kind ∈ early.kinds 的键:
+    stopReason = length_stop_reason → AIPOS-F240 按 early.run_overflow 分开局 context_overflow / 运行中 run_context_overflow;
+    = error_stop_reason 且 errorMessage 首段状态码 ∈ retry_statuses → 该类(credential / quota), 其余错误 → provider_error;
+    会话记录找不到 / 无助手消息 / 定位器未声明诊断键 → unknown(note 写明)。只取计数与元信息, 不取会话正文。"""
+    from tools.aipos_cli.artifact_ingest import _dig
+    from tools.aipos_cli.harness_launch import redact_progress
+
+    out: dict[str, Any] = {"kind": "unknown", "stop_reason": None, "status": None, "provider": None, "model": None, "input_size": None,
+                           "first_input_size": None, "assistant_turns": 0, "error_excerpt": None, "session_file": None, "note": None}
+    locator, entries = _session_entries(harness, session_id, out)
+    if locator is None:
         return out
-    if last is None:
+    role_path = list(locator.get("role_path") or [])
+    assistants = [(i, e) for i, e in enumerate(entries) if _dig(e, role_path) == locator.get("assistant_role")]
+    if not assistants:
         out["note"] = "会话记录里无助手消息(模型未作答即退出)"
         return out
+    last_index, last = assistants[-1]
     stop = _dig(last, list(locator["stop_reason_path"]))
     error = str(_dig(last, list(locator.get("error_message_path") or [])) or "")
-    tokens = [_dig(last, list(p)) for p in locator.get("input_token_paths") or []]
     out.update({"stop_reason": stop, "provider": _dig(last, list(locator.get("provider_path") or [])),
-                "model": _dig(last, list(locator.get("model_path") or [])),
-                "input_size": sum(int(x) for x in tokens if isinstance(x, int)) if any(isinstance(x, int) for x in tokens) else None,
+                "model": _dig(last, list(locator.get("model_path") or [])), "input_size": _input_size(last, locator),
+                "first_input_size": _input_size(assistants[0][1], locator), "assistant_turns": len(assistants),
                 "error_excerpt": redact_progress(error.splitlines()[0] if error else "")[: int(early["excerpt_chars"])] or None})
     match = re.match(str(early["status_pattern"]), error) if error else None
     out["status"] = match.group("status") if match else None
     if stop == early["length_stop_reason"]:
-        out["kind"] = "context_overflow"
+        ro = early["run_overflow"]
+        out.update(_overflow_facts(entries, locator, last_index, ro))
+        first, last_size = out["first_input_size"], out["input_size"]
+        at_launch = (len(assistants) == 1 or first is None or not last_size or first >= float(ro["launch_first_ratio"]) * float(last_size))
+        out["kind"] = "context_overflow" if at_launch else "run_context_overflow"
     elif stop == early["error_stop_reason"]:
         out["kind"] = str((early["retry_statuses"] or {}).get(out["status"] or "") or "provider_error")
     else:
@@ -1242,15 +1299,45 @@ def session_diagnosis(harness: str, session_id: str, early: dict[str, Any]) -> d
     return out
 
 
+def session_compaction_summary(harness: str, session_id: str, max_chars: int) -> str | None:
+    """AIPOS-F240: 该会话最近一条压缩记录的摘要(定位器 compaction_summary_path), 经 redact_progress 逐行打码后截 max_chars 字; 无 = None。
+    只给新会话开工稿用, 不进运行记录。"""
+    from tools.aipos_cli.artifact_ingest import _dig
+    from tools.aipos_cli.harness_launch import redact_progress
+
+    locator, entries = _session_entries(harness, session_id, {})
+    if locator is None or not locator.get("compaction_summary_path"):
+        return None
+    type_path, ctype = list(locator.get("entry_type_path") or []), locator.get("compaction_entry_type")
+    summaries = [_dig(e, list(locator["compaction_summary_path"])) for e in entries if type_path and ctype and _dig(e, type_path) == ctype]
+    text = next((str(s) for s in reversed(summaries) if isinstance(s, str) and s.strip()), "")
+    if not text:
+        return None
+    redacted = "\n".join(redact_progress(line) for line in text.splitlines())
+    return redacted[:max_chars] + ("…(已截断)" if len(redacted) > max_chars else "")
+
+
+def top_tool_results_text(diag: dict[str, Any]) -> str:
+    """读入最大的工具结果 → 「read 31512 字, bash 32500 字」(诊断行 / 摘要缺省同一渲染)。"""
+    return ", ".join(f"{r.get('tool')} {r.get('chars')} 字" for r in diag.get("top_tool_results") or []) or "(无工具结果)"
+
+
 def diagnosis_line(diag: dict[str, Any], early: dict[str, Any]) -> str:
-    """诊断 → 一行人话(声明 early_exit.line; loop 结束原文与 loop status 同一渲染)。"""
+    """诊断 → 一行人话(声明 early_exit.line; loop 结束原文与 loop status 同一渲染)。AIPOS-F240: 运行中超限另接 run_overflow.line。"""
     kinds = early["kinds"]
     values = {"kind_label": kinds.get(diag.get("kind")) or kinds["unknown"], "provider": diag.get("provider") or "?", "model": diag.get("model") or "?",
               "stop_reason": diag.get("stop_reason") or "?", "status_part": f", HTTP {diag['status']}" if diag.get("status") else "",
               "size_part": f", 本轮输入 {diag['input_size']} 词元" if diag.get("input_size") else "",
               "session_file": diag.get("session_file") or (diag.get("note") or "?"),
               "excerpt_part": f"; 错误首段: {diag['error_excerpt']}" if diag.get("error_excerpt") else ""}
-    return str(early["line"]).format(**values)
+    line = str(early["line"]).format(**values)
+    if diag.get("kind") == "run_context_overflow":
+        comp = diag.get("compaction") or {}
+        compaction = (f"{comp.get('count')} 条(超限之后{'有' if comp.get('after_overflow') else '无'})" if comp.get("count") else "无")
+        line += str(early["run_overflow"]["line"]).format(first=diag.get("first_input_size") or "?", last=diag.get("input_size") or "?",
+                                                          turns=diag.get("assistant_turns") or "?", top=top_tool_results_text(diag),
+                                                          compaction=compaction)
+    return line
 
 
 # ---------------------------------------------------------------------------
@@ -1842,12 +1929,7 @@ def _loop_status(governance_root: Path, task_id: str | None, *, now: datetime | 
     history: list[Any] = []
     code_history: list[Any] = []
     if task_id:
-        files = _run_files(loop_runs_dir(governance_root, task_id))
-        # AIPOS-F171B 件①: 单实例锁拒掉的启动(从未推进)不算「最近一次运行」, 也不进连败计数
-        refused = single_instance_declaration(contract or load_loop_contract())["end_reason"]
-        metas = [m for m in (read_run(p, decl) for p in files)
-                 if not (m.get("status") == "ended" and m.get("end_reason") == refused)]
-        metas.sort(key=lambda m: (str(m.get("started_at") or ""), str(m.get("run_id") or "")))
+        metas = card_runs(governance_root, task_id, decl, contract or load_loop_contract())
         picked = metas[-1:]
         total = len(metas)
         history = [m.get("end_reason") if m.get("status") == "ended" else None for m in metas[:-1]]
@@ -1912,6 +1994,61 @@ NEXT_ACTIONS = ("continue_wait", "owner_needed", "card_done_take_next", "investi
 _NEXT_ACTION_KEYS = ("actions", "by_state", "by_end_reason", "owner_reasons", "consecutive_failures_owner_needed",
                      "take_next_hint", "take_next_none_hint", "wait_hint", "investigate_hint", "routine_rejections", "envelope_renew")
 _ROUTINE_KEYS = ("repeat_owner_needed", "placeholders", "resume_hint", "codes")
+
+
+def card_runs(governance_root: Path, task_id: str, decl: dict[str, Any], contract: dict[str, Any]) -> list[dict[str, Any]]:
+    """本卡各次运行(旧 → 新; 唯一选取 = loop status --task-id 与 lybra next 的 loop 结束出口同读)。AIPOS-F171B 件①: 单实例锁拒掉的启动
+    (从未推进)不算「最近一次运行」, 也不进连败计数。读不出 = LoopRunRecordError(点名文件)。"""
+    refused = single_instance_declaration(contract)["end_reason"]
+    metas = [m for m in (read_run(p, decl) for p in _run_files(loop_runs_dir(governance_root, task_id)))
+             if not (m.get("status") == "ended" and m.get("end_reason") == refused)]
+    metas.sort(key=lambda m: (str(m.get("started_at") or ""), str(m.get("run_id") or "")))
+    return metas
+
+
+def card_loop_end_action(governance_root: Path, task_id: str) -> dict[str, Any] | None:
+    """AIPOS-F240 件④: 本卡最近一次 loop 运行已结束且结束原因 ∈ launch.early_exit.run_overflow.next_end_reasons = 该运行的顾问下一动作
+    (与 loop status 同一判定 next_action, 例行修法 = 出口全集) + {run_id, end_reason, ended_at}; 否则 None。lybra next 对 claimed 卡同读。
+    记录 / 声明读不出 = 上抛(LoopRunRecordError / SchemaLoadError / OSError), 调用方出声。"""
+    from tools.aipos_cli.loop_driver import early_exit_declaration, load_loop_contract
+
+    contract = load_loop_contract()
+    reasons = set(early_exit_declaration(contract)["run_overflow"]["next_end_reasons"])
+    decl = run_record_declaration(contract)
+    metas = card_runs(Path(governance_root), task_id, decl, contract)
+    if not metas or metas[-1].get("status") != "ended" or str(metas[-1].get("end_reason") or "") not in reasons:
+        return None
+    meta = metas[-1]
+    view = judge_run(meta, decl)
+    history = [m.get("end_reason") if m.get("status") == "ended" else None for m in metas[:-1]]
+    action = next_action(view, next_action_declaration(decl), governance_root=Path(governance_root), earlier_end_reasons=history)
+    return {**action, "run_id": meta.get("run_id"), "end_reason": meta.get("end_reason"), "ended_at": meta.get("ended_at"),
+            "end_message": meta.get("end_message")}
+
+
+def rediagnose_runs(governance_root: Path, task_id: str) -> list[dict[str, Any]]:
+    """AIPOS-F240(`lybra loop status --task-id <卡> --rediagnose`, 只读): 本卡各次运行中以早退收尾且有会话 id 的拉起, 按当前声明重读会话记录
+    重新诊断(session_diagnosis 唯一实现)。→ [{run_id, launch, card, session_id, recorded_kind, recorded_end_reason, kind, end_reason, line}];
+    不写任何记录。"""
+    from tools.aipos_cli.loop_driver import early_exit_declaration, load_loop_contract
+
+    contract = load_loop_contract()
+    early = early_exit_declaration(contract)
+    decl = run_record_declaration(contract)
+    ends = {"context_overflow": early["end_reasons"]["context"], "run_context_overflow": early["end_reasons"]["run_context"],
+            **{k: early["end_reasons"]["provider"] for k in (early["retry_statuses"] or {}).values()}}
+    rows: list[dict[str, Any]] = []
+    for meta in card_runs(Path(governance_root), task_id, decl, contract):
+        for k, launch in enumerate(meta.get("launches") or [], 1):
+            if not isinstance(launch, dict) or launch.get("outcome") != "early_exit" or not launch.get("session_id"):
+                continue
+            diag = session_diagnosis(str(launch.get("harness") or ""), str(launch["session_id"]), early)
+            recorded = launch.get("diagnosis") if isinstance(launch.get("diagnosis"), dict) else {}
+            rows.append({"run_id": meta.get("run_id"), "launch": k, "card": launch.get("card"), "session_id": launch["session_id"],
+                         "recorded_kind": recorded.get("kind"), "recorded_end_reason": meta.get("end_reason") if k == len(meta["launches"]) else None,
+                         "kind": diag["kind"], "end_reason": ends.get(diag["kind"]), "line": diagnosis_line(diag, early),
+                         "diagnosis": diag})
+    return rows
 
 
 def status_contract() -> dict[str, Any]:
@@ -2760,6 +2897,8 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
             model = f" 模型 {model_label(la['model'])}" if la.get("model") else ""  # AIPOS-F169: 存量记录无 model = 不显示
             if la.get("session_id"):  # AIPOS-F171B 件②: 固定会话与续接次数(存量记录无 = 不显示)
                 model += f" 会话 {la['session_id']} 续接 {la.get('resume') or 0}/{la.get('resume_max') or 0}"
+                if la.get("resume_kind"):  # AIPOS-F240: 运行中上下文超限的续接类型
+                    model += f"(续接类型 {la['resume_kind']})"
             if la.get("ended_at"):
                 out.append(f"  拉起 {la['harness']} {la['card']}{model} pid={la['pid']} 已收尾: outcome={la.get('outcome')} "
                            f"returncode={la.get('returncode')} termination={la.get('termination')}")
@@ -2892,6 +3031,20 @@ def loop_status_cli(args: Any) -> int:
             print(f"lybra loop status: {exc}", file=sys.stderr)
             return int(lane_view_declaration()["invalid_lane_exit_code"])
         contract = load_loop_contract()
+        if getattr(args, "rediagnose", False):  # AIPOS-F240: 只读重判早退(不写记录)
+            if not task_id:
+                raise StatusUsageError("--rediagnose 须给 --task-id")
+            rows = rediagnose_runs(governance_root, task_id)
+            if getattr(args, "json", False):
+                print(json.dumps(rows, indent=2, ensure_ascii=False))
+            else:
+                print(f"只读重判 {task_id} 早退拉起 {len(rows)} 条(按当前声明重读会话记录; 不写记录):")
+                for row in rows:
+                    print(f"  {row['run_id']} 拉起#{row['launch']} 会话 {row['session_id']}: 原判 {row['recorded_kind'] or '(无诊断)'}"
+                          + (f" / 结束原因 {row['recorded_end_reason']}" if row["recorded_end_reason"] else "")
+                          + f" → 重判 {row['kind']}" + (f" / 结束原因 {row['end_reason']}" if row["end_reason"] else ""))
+                    print(f"    {row['line']}")
+            return declared_exit_code(STATUS_VERB, "ok")
         # AIPOS-F138 件③ → AIPOS-F142 件②: 信封判定诊断行([ENVELOPE_TRACE])的开关只在发射处一处(autonomy_policy.trace_envelope ←
         # CLI 入口 decide_cli_envelope_trace, --verbose 开), 本处不再另设
         if wait is None:

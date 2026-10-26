@@ -5058,9 +5058,29 @@ def derive_next_step(
     try:
         # AIPOS-F112: 推导只读, 一次推导内的卡查找(本卡/审计轮 R…R2/被审卡)共用一趟队列索引(既有 task_card_lookup_scope)
         with task_card_lookup_scope(Path(workspace_root)):
-            return _derive_next_step(task_id, workspace_root)
+            result = _derive_next_step(task_id, workspace_root)
     except FrontmatterReadError as exc:
         return frontmatter_unreadable_stop(task_id, exc)
+    return _attach_loop_end(result, Path(workspace_root), task_id)
+
+
+def _attach_loop_end(result: dict[str, Any], workspace_root: Path, task_id: str) -> dict[str, Any]:
+    """AIPOS-F240 件④: claimed 卡最近一次 loop 运行以上下文超限结束(launch.early_exit.run_overflow.next_end_reasons)= 附 loop_end
+    (与 loop status 同一下一动作 loop_run_record.card_loop_end_action: 结束原因 / 出口全集 / 续跑命令); 不改推导结论。
+    运行记录 / 声明读不出 = loop_end.error(出声, 不吞, 不阻断推导)。"""
+    if not isinstance(result, dict) or str(result.get("current_state") or "") != "claimed":
+        return result
+    from tools.aipos_cli.loop_run_record import LoopRunRecordError, card_loop_end_action
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        action = card_loop_end_action(workspace_root, task_id)
+    except (LoopRunRecordError, SchemaLoadError, OSError, ValueError) as exc:
+        result["loop_end"] = {"error": f"{type(exc).__name__}: {exc}"}
+        return result
+    if action is not None:
+        result["loop_end"] = action
+    return result
 
 
 def _derive_next_step(
@@ -6248,6 +6268,14 @@ def format_output(result: dict[str, Any], *, json_mode: bool = False) -> str:
     for row in result.get("post_merge_regression_unfinished") or []:  # AIPOS-F166 件③(行文案唯一 post_merge_regression.unfinished_regressions)
         lines.append(f"Regression: {row['line']}")
     lines += render_legal_exit_lines(result.get("legal_exits"))  # AIPOS-F230 件①: 非通过状态的全部合法出口
+    loop_end = result.get("loop_end")
+    if isinstance(loop_end, dict):  # AIPOS-F240 件④: 最近一次 loop 运行以上下文超限结束 = loop status 同一下一动作(出口全集)
+        if loop_end.get("error"):
+            lines.append(f"Loop: 最近一次 loop 运行读不出: {loop_end['error']}")
+        else:
+            lines.append(f"Loop: 最近一次 loop 运行 {loop_end.get('run_id')} 于 {loop_end.get('ended_at')} 以 {loop_end.get('end_reason')} 结束"
+                         f"(下一动作 {loop_end.get('action')}): {loop_end.get('detail')}")
+            lines += [f"  {line}" for line in str(loop_end.get("hint") or "").splitlines()]
 
     return "\n".join(lines)
 
