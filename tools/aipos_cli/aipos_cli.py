@@ -1649,6 +1649,38 @@ def _land_project_writes(project_root: str | Path, written: list[str | Path], *,
                             **fields)
 
 
+def _roles_redeclare(args: argparse.Namespace, governance_root: Path) -> int:
+    """AIPOS-F235 件①: `lybra roles redeclare` 薄壳——预演 / 确认 = enrollment.redeclare_instance(唯一实现), 文本 = render_redeclaration;
+    --confirm 有写出 = 经写后落账唯一薄壳(post_write_landing.commands.roles_redeclare)落账一次。退出码读声明 exit_codes。"""
+    from tools.aipos_cli.enrollment import RedeclareRefused, redeclaration_declaration, redeclare_instance, render_redeclaration
+
+    exits = redeclaration_declaration()["exit_codes"]
+    try:
+        result = redeclare_instance(governance_root, args.instance, harness=args.harness, host=args.host, harness_dir=args.harness_dir,
+                                    actor=args.actor, dry_run=not args.confirm)
+    except RedeclareRefused as exc:
+        print(f"Error: {exc}(登记未改)", file=sys.stderr)
+        return int(exits["refused"]["code"])
+    landing = None
+    if result["written"]:
+        landing = _land_project_writes(governance_root, result["written"], actor=args.actor, subcommand="redeclare",
+                                       project=result["project"], command="roles_redeclare", instance=result["instance"])
+    outcome = "refused" if not result["ok"] else ("ok" if result["dry_run"] or result["state"] == "apply" else "owner_pending")
+    rc = int(exits[outcome]["code"])
+    if landing is not None and not landing["landed"]:
+        rc = int(landing["exit_code"])
+    if getattr(args, "json", False):
+        print(render_json({**result, "landing": _landing_view(landing)}))
+        return rc
+    labels = _two_phase_family_declaration("enrollment_log_writers")["outcome_labels"]
+    print(f"roles redeclare {result['instance']}: {labels['preview'] if result['dry_run'] else labels['written']}")
+    for line in render_redeclaration(result):
+        print(line)
+    if landing is not None:
+        print(landing["line"], file=sys.stdout if landing["landed"] else sys.stderr)
+    return rc
+
+
 def _landing_view(landing: dict[str, Any] | None) -> dict[str, Any] | None:
     """落账结果的 JSON 视图(去掉供文本输出的 line; 唯一实现 board_adapter.landing_view)。"""
     from tools.aipos_cli.board_adapter import landing_view
@@ -2855,6 +2887,16 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_void_parser.add_argument(_void_scope["before"], dest="void_before", help="再限定: 只作废时间戳早于该 ISO 时刻的事件(如 2026-10-08T16:00:00Z)")
     _project_json_two_phase_flags(roles_enroll_void_parser, "enroll-void", family="enrollment_log_writers")  # AIPOS-F153 件①: 缺省预演 / --confirm 才写
     roles_enroll_void_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-F235 件①: 已接入实例改登记(换 harness / 主机 / 工作目录; 唯一实现 enrollment.redeclare_instance; 声明 verbs.lybra_roles_redeclare)
+    roles_redeclare_parser = roles_subparsers.add_parser("redeclare", help="AIPOS-F235: 已接入实例改登记——顾问换 harness / 主机 / 工作目录后更新登记(追加 redeclare 位置事件 + 更新治理根 .lybra/role 实例槽; 凭据不动、不重发码, 实例名不改)。改到项目常设授权已列主机 / 拉起方式内(或只改工作目录)= 本实例或项目顾问可做; 授权外 = 请求进 Owner 收件箱, 批准后重跑生效。缺省预演, --confirm 才写并落账")
+    roles_redeclare_parser.add_argument("--instance", required=True, help="本项目已接入的实例(治理席位实例 / 子 agent 执行身份)")
+    roles_redeclare_parser.add_argument("--harness", default=None, help="新 harness(顾问会话 kind, distribution.schema harness_semantics advisor_session)")
+    roles_redeclare_parser.add_argument("--host", default=None, help="新会话所在主机(claude-code 会话须在治理根所在机)")
+    roles_redeclare_parser.add_argument("--dir", "--harness-dir", dest="harness_dir", default=None, help="新工作目录(会话目录; 子 agent 执行身份不给)")
+    roles_redeclare_parser.add_argument("--actor", required=True, help="操作者 = 该实例自己或本项目已接入顾问(写入位置事件 by= 与落账提交身份)")
+    roles_redeclare_parser.add_argument("--workspace-root", dest="workspace_root", default=None, help="目标治理根(缺省 = 全局 --workspace-root / 当前目录所在治理根)")
+    _project_json_two_phase_flags(roles_redeclare_parser, "redeclare", family="enrollment_log_writers")  # 缺省预演 / --confirm 才写
+    roles_redeclare_parser.add_argument("--json", action="store_true", help="Output JSON")
     
     # AIPOS-F66B 件②: 写权限边界可读面 + 读取口(护栏读声明; 单源 roles.schema write_boundary)
     roles_wb_parser = roles_subparsers.add_parser("write-boundary", help="AIPOS-F66B: 写权限边界可读面(角色类 × 面 × read/append/mutate, 读 roles.schema write_boundary)与单次访问判定(--check)")
@@ -4948,6 +4990,8 @@ def main(argv: list[str] | None = None) -> int:
                             print(f"      行 {ev['line']}: {ev['ts']}  {ev['action']}  code_id={ev['code_id']}")
                         print(f"    {'将追加' if result['dry_run'] else '已追加'}: {item['line']}")
                 return 0
+            elif args.roles_command == "redeclare":
+                return _roles_redeclare(args, Path(workspace_root))
             elif args.roles_command == "enroll":
                 # AIPOS-R2/F23: client-side enrollment (exchange code + write .lybra/ config)
                 from tools.aipos_cli.enroll_client import enroll

@@ -308,13 +308,14 @@ def apply_execution_defaults(metadata: dict[str, Any], repo_root: Path) -> list[
     返回拒因(空 = 通过)。未声明 execution = 不动(行为不变)。
       - 派 pi 仅当卡稿显式要 pi(harness=pi 或 assigned_to=pi_executor)且 task_mode ∈ pi_allowed_task_modes(Owner 明示)→ 执行者 = pi_executor;
         否则拒 EXECUTION_PI_NOT_ALLOWED(未列明 = 按缺省, 不静默改派)。
-      - 其余 = 缺省子 agent: assigned_to 缺 → subagent_executor; harness 缺且执行者是 subagent_executor → 其子 agent 模式接入登记记下的
-        顾问会话 kind(enrollment.instance_enrollment; 登记里没有 = 拒, 出口 = 卡稿显式给 harness 或按向导 --executor-mode subagent 接入)。
+      - 其余 = 缺省子 agent: assigned_to 缺 → subagent_executor; harness 缺且执行者是 subagent_executor → AIPOS-F235 件③: 起草顾问(卡稿
+        created_by / draft_created_by)当前登记的 harness, 兜底 = 该执行身份子 agent 模式 land 事件的顾问会话 kind(唯一判定
+        enrollment.dispatch_harness; 都没有 = 拒, 出口 = 卡稿显式给 harness 或按向导 --executor-mode subagent 接入)。
       - audit_by 缺且卡要审计(audit ≠ none)→ auditor(审计恒为声明的独立 pi 审计工位)。"""
     execution, reasons = _execution_or_reasons(repo_root)
     if reasons or execution is None:
         return reasons
-    from tools.aipos_cli.enrollment import instance_enrollment
+    from tools.aipos_cli.enrollment import card_dispatch_advisor, dispatch_harness
     from tools.aipos_cli.workspace_config import execution_wants_pi
 
     task_mode = str(metadata.get("task_mode") or "").strip()
@@ -330,13 +331,13 @@ def apply_execution_defaults(metadata: dict[str, Any], repo_root: Path) -> list[
         metadata["assigned_to"] = assigned or execution["subagent_executor"]
         if not harness and metadata["assigned_to"] == execution["subagent_executor"]:
             try:
-                view = instance_enrollment(repo_root, execution["subagent_executor"])
+                view = dispatch_harness(repo_root, advisor=card_dispatch_advisor(metadata), executor=execution["subagent_executor"])
             except ValueError as exc:
                 return [f"AIPOS-F143: 治理根连接文件读不出, 子 agent 执行者接入登记不可得: {exc}"]
             if not view.get("harness"):
-                return [f"AIPOS-F143: 子 agent 执行者 {execution['subagent_executor']} 无子 agent 模式接入登记(land 事件无 harness=), "
-                        "顾问会话 harness 不可得。出口: 卡稿显式给 harness(claude-code|codex), 或按 lybra onboarding guide "
-                        "--executor-mode subagent 重接入该实例"]
+                return [f"AIPOS-F143: 起草顾问 {view['advisor'] or '(未知)'} 无登记 harness, 子 agent 执行者 {execution['subagent_executor']} "
+                        "亦无子 agent 模式接入登记(land 事件无 harness=), 顾问会话 harness 不可得。出口: 卡稿显式给 harness(claude-code|codex), "
+                        "或 lybra roles redeclare 登记顾问 harness, 或按 lybra onboarding guide --executor-mode subagent 重接入该实例"]
             metadata["harness"] = view["harness"]
     if not str(metadata.get("agent_instance") or "").strip():
         metadata["agent_instance"] = metadata["assigned_to"]

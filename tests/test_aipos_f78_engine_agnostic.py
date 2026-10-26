@@ -197,7 +197,7 @@ def test_f78_item4_declarations_exist_in_schema_single_source():
     assert card["fields"]["harness"]["$enum"] == "harness" and card["fields"]["lane"]["type"] == "object"
     assert card["intent_face"]["harness"]["allowed"] == ["pi", "codex", "claude-code"]
     assert set(card["restricted_amend"]["claimed_card_fields"]) == {"rework_rounds", "output_target", "lane", "resources",  # AIPOS-F179: + resources
-                                                                    "validation_source_task", "validation_candidate"}  # AIPOS-F205: + 候选绑定
+                                                                    "validation_source_task", "validation_candidate", "harness"}  # AIPOS-F205: + 候选绑定; AIPOS-F235: + harness
     roles = json.loads((REPO_ROOT / "schema" / "roles.schema.json").read_text(encoding="utf-8"))
     assert roles["driver"]["role_class"] == "advisor"
     verbs = json.loads((REPO_ROOT / "schema" / "verbs.schema.json").read_text(encoding="utf-8"))["verbs"]
@@ -638,7 +638,7 @@ def test_f78_pre0_5_advisor_restricted_amend_lane_on_claimed_card(tmp_path, monk
     from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
 
     assert restricted_amend_fields() == {"rework_rounds", "output_target", "lane", "resources",  # AIPOS-F179: + resources
-                                         "validation_source_task", "validation_candidate"}  # AIPOS-F205: + 候选绑定
+                                         "validation_source_task", "validation_candidate", "harness"}  # AIPOS-F205: + 候选绑定; AIPOS-F235: + harness
     gov = _make_gov(tmp_path, monkeypatch, shape="lybra")
     path = _card(gov, "F78-AMEND", "claimed", extra={"claimed_by": EXEC, "claim_id": "c1"})
     lane = {"repo": "/r", "paths": ["tools/aipos_cli/", "tests/", "schema/"], "roles": ["executor"]}

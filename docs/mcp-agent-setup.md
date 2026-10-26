@@ -254,6 +254,30 @@ The shared parent's `_distributed/` and `_shared/` stay where they are for the o
 from the sync. Files of the moved workstation that the shared checkout tracked show up there as deleted; the command never runs
 git in that checkout.
 
+## Changing an enrolled instance's registration (harness / host / working directory)
+
+An advisor that moves to another harness (for example from Codex on one machine to Claude Code on the governance-root
+machine), another host or another working directory keeps its instance name and credentials; only the registration changes.
+`lybra roles redeclare` is the entry for that; no void-and-re-enroll and no new code.
+
+1. Preview (default, nothing written): `lybra roles redeclare --workspace-root <governance root> --instance <instance>
+   [--harness <kind>] [--host <host>] [--dir <working directory>] --actor <instance>` prints the current registration, the
+   old → new values, the authorization tier and the location event (or Owner request) it would append.
+2. `--confirm` appends one `redeclare` location event to the project's enrollment log (same family and parser as `land` and
+   `relocate`; append-only, earlier events kept), updates the instance slot in the governance root's `.lybra/role`, and lands
+   the log. The log is the registration truth: when the slot and the log disagree, readers use the log and `lybra state lint`
+   reports `ENROLLMENT_REGISTRATION_DRIFT`.
+3. Authorization: a change of working directory only, or a new host / harness listed in the project's standing authorization
+   (`hosts` / `launch_harnesses`), can be done by the instance itself or a project advisor; the event records
+   `authorized_by=<authorization>@r<revision>`. Anything else goes to the Owner inbox (`enrollment_redeclare`, reason
+   `beyond_authority`) on `--confirm`; after the Owner approves, rerun the same command with `--confirm`.
+
+Sub-agent cards follow the advisor that drafts or dispatches them: the default `harness` of a sub-agent card is that advisor's
+current registration (the shared sub-agent executor's enrollment is only the fallback). When a published card's `harness`
+differs from its advisor's current registration, `lybra next` does not derive the claim and `lybra kickoff` refuses with
+`KICKOFF_HARNESS_MISMATCH`; both print the `lybra queue amend` command to fix the card (`--restricted` for a claimed card).
+`lybra project workstation-plan` and the board workstation page show each advisor's registered harness, host and source event.
+
 ## Start the gate
 
 ```bash

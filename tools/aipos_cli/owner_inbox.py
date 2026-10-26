@@ -52,7 +52,7 @@ VERB = "lybra_owner_inbox"
 DECIDE_VERB = "lybra_owner_decide"
 NOTE_VERB = "lybra_loop_note"
 CATEGORIES = ("loop_owner_needed", "needs_owner_card", "rework_limit", "supplementary_fail", "envelope_warning", "roadmap_drift",
-              "owner_check", "auto_released")
+              "owner_check", "auto_released", "enrollment_redeclare")
 _DECL_KEYS = ("item_id", "decision", "texts", "rank_labels", "categories", "options", "custom_option", "exit_codes", "stale")
 _DECISION_KEYS = ("decision_id_prefix", "decision_type", "decision_status", "capture_surface", "source_tag", "capture_method",
                   "approval_intent", "redaction_status", "token_ref", "capability_ttl_hours", "external_ref_prefix",
@@ -1429,9 +1429,32 @@ def _owner_check_items(root: Path, project: str, decl: dict[str, Any], home_root
     return out
 
 
+def _redeclare_items(root: Path, project: str, decl: dict[str, Any], home_root: Path | None,
+                     errors: list[dict[str, str]]) -> list[dict[str, Any]]:
+    """⑨ AIPOS-F235 件②: 实例改登记授权外请求(唯一来源 enrollment.pending_redeclare_requests; 事项身份 enrollment.redeclare_item_identity,
+    改登记命令按同一身份回查裁决)。请求生效(之后有新位置事件)= 不列。"""
+    from tools.aipos_cli.enrollment import location_event, pending_redeclare_requests, registered_harness, registration_label
+
+    cat = decl["categories"]["enrollment_redeclare"]
+    out: list[dict[str, Any]] = []
+    for req in pending_redeclare_requests(root):
+        to = req["to"]
+        new = f"{to['kind']}@{to['host'] or '-'}" + (f":{to['dir']}" if to.get("dir") else "")
+        fill = {"instance": req["instance"], "by": req["by"] or str(decl["texts"]["unknown_source"]), "new": new,
+                "old": registration_label(registered_harness(root, req["instance"])) or "-", "why": ", ".join(req["why"]) or "-"}
+        item = _base_item(decl, project=project, governance_root=root, category="enrollment_redeclare", rank=int(cat["rank"]),
+                          subject=req["subject"], anchor=req["anchor"], source=req["by"], ask=_fmt(cat["ask"], "categories.enrollment_redeclare.ask", **fill),
+                          recommend=None, impact=str(cat["impact"]), options=_option_list(list(cat["options"]), decl), since=req["ts"],
+                          home_root=home_root, title=_fmt(cat["subject"], "categories.enrollment_redeclare.subject", **fill),
+                          facts={"instance": req["instance"], "to": to, "base": req["base"], "request_line": req["line"],
+                                 "base_event": location_event(root, req["instance"]).get("ts")})
+        out.append(item)
+    return out
+
+
 _COLLECTORS = (("loop_owner_needed", _loop_items), ("needs_owner_card", _needs_owner_items), ("rework_limit", _rework_items),
                ("supplementary_fail", _supplementary_items), ("envelope_warning", _envelope_items), ("roadmap_drift", _roadmap_items),
-               ("owner_check", _owner_check_items), ("auto_released", _auto_release_items))
+               ("owner_check", _owner_check_items), ("auto_released", _auto_release_items), ("enrollment_redeclare", _redeclare_items))
 
 
 def collect_project_inbox(governance_root: Path, *, project: str | None = None, home_root: Path | None = None,

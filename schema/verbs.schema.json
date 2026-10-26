@@ -153,11 +153,12 @@
       "description": "AIPOS-F153 件①: 写接入日志(enrollment_log, 只追加)的本地 CLI 命令同一两阶段语义——与 project_json_writers 同一包装(aipos_cli._project_json_two_phase_flags 注册旗标, family=enrollment_log_writers), 旗标名 / 缺省阶段 / 状态标签读 project_json_writers 一处(本段不重复声明), 本段只登记命令与旗标帮助。缺省 = 预演: 打印将作废的各行(行号 + 动作 + code_id + 时刻)、所在日志与将追加的 void 行, 零写入; --confirm 才追加。预演/写入同一实现 = enrollment.void_instance_events(dry_run)。日后新增写接入日志的命令登记于 commands 即得同一两阶段。AIPOS-F161: `lybra project relocate-workstation` 登记于此(写接入日志的 relocate 位置事件; 预演/确认同一实现 workstation_relocate.relocate_workstation, 声明 enums.schema workstation_transport.relocation)。",
       "commands": [
         "enroll-void",
-        "relocate-workstation"
+        "relocate-workstation",
+        "redeclare"
       ],
       "flag_help": {
-        "dry_run": "Preview without writing (default): enroll-void = the enrollment_log lines to void and the void line to append; relocate-workstation = the move plan, in-flight checks and the relocate location event to append",
-        "confirm": "Execute: enroll-void = append the void line to the scoped enrollment_log; relocate-workstation = move the workstation, sync it, append the relocate location event and land the log"
+        "dry_run": "Preview without writing (default): enroll-void = the enrollment_log lines to void and the void line to append; relocate-workstation = the move plan, in-flight checks and the relocate location event to append; redeclare = the old / new registration (harness, session host, working directory), the authorization tier and the location event or Owner request to append",
+        "confirm": "Execute: enroll-void = append the void line to the scoped enrollment_log; relocate-workstation = move the workstation, sync it, append the relocate location event and land the log; redeclare = append the redeclare location event and update the instance slot (within the project authorization), or file the Owner request (outside it), then land the log"
       },
       "scope": {
         "description": "AIPOS-F153 件①(gap #108): enroll-void 作废作用域必须显式——恰给 --log <日志路径> 或 --project <项目名> 之一(只在该日志作废), 可再以 --code-id(可重复)/ --before <ISO 时刻> 限定; 缺省(两者都不给)= 拒, 拒因列出含该实例未作废事件的各日志作出口。原「按实例跨所有日志一刀切」退役(会连同所属项目新 land 一并作废)。",
@@ -2486,7 +2487,8 @@
         "KICKOFF_REPORT_UNRESOLVED": "卡 {task_id} 报告落点 / 必填字段不可推导({code}): {reason}",
         "KICKOFF_SCRATCH_IN_GOVERNANCE": "草稿目录 {scratch_dir} 落在治理根 {governance_root} 内(草稿永不落治理根); 出口: lybra project set-paths {project} --key scratch_root --value <治理根外的绝对路径> --confirm",
         "KICKOFF_VALIDATION_ROOT_UNRESOLVED": "卡 {task_id} 验证根节不可渲染({code}): {reason}; 与工位 /go 同一拒因(该卡不入选开工, AIPOS-F212 件①: 两面同读 next_resolver.card_workstation_view); 出口: 按拒因修本卡验证根声明(lybra project validation-root list 查看)或给卡补 harness(lybra queue amend), 修后重出开工稿",
-        "KICKOFF_HARNESS_UNRESOLVED": "卡 {task_id} 的 harness 不可推导({code}): {reason}; 开工稿时限句按卡 harness 产出(AIPOS-F212 件③), 不猜"
+        "KICKOFF_HARNESS_UNRESOLVED": "卡 {task_id} 的 harness 不可推导({code}): {reason}; 开工稿时限句按卡 harness 产出(AIPOS-F212 件③), 不猜",
+        "KICKOFF_HARNESS_MISMATCH": "{reason}(AIPOS-F235 件③: 子 agent 卡 harness 随派发顾问现登记); 出口: {amend_command} —— 改后重出开工稿"
       }
     },
     "lybra_loop": {
@@ -3796,6 +3798,18 @@
           "decide_redirect": "事项 {item_id} 是验收抽查(owner_check), 不经 owner decide 裁决: 顾问用 `{verify_command}` 预演后 --confirm 记录 Owner 结论",
           "options": ["owner_confirm", "owner_mismatch"]
         },
+        "enrollment_redeclare": {
+          "rank": 2,
+          "label": "实例改登记待批",
+          "subject": "实例 {instance} 改登记",
+          "ask": "{by} 请求把 {instance} 的登记从 {old} 改为 {new}(超出项目授权: {why}); 批准 = 重跑改登记命令即生效, 不重发码",
+          "impact": "该实例的子 agent 卡缺省 harness / 开工稿时限句仍按旧登记",
+          "options": [
+            "approve_redeclare",
+            "deny_redeclare"
+          ],
+          "note": "AIPOS-F235 件②: 改登记授权外请求(enrollment.pending_redeclare_requests 唯一来源: 日志中未生效的 redeclare_request 行)每条一个事项; 锚点 = enrollment.redeclare_item_identity; 请求生效(之后有新位置事件)= 不列。"
+        },
         "auto_released": {
           "rank": 3,
           "label": "已自动放行(可撤回)",
@@ -3873,7 +3887,8 @@
           "supplementary_fail": {"tier": 2, "kind": "supplementary_repair"},
           "envelope_warning": {"tier": 2, "kind": "envelope_notice"},
           "roadmap_drift": {"tier": 2, "kind": "roadmap_page"},
-          "auto_released": {"tier": 2, "kind": "auto_release_log"}
+          "auto_released": {"tier": 2, "kind": "auto_release_log"},
+          "enrollment_redeclare": {"tier": 1, "owner_reason": "beyond_authority"}
         },
         "needs_owner_reason_field": "owner_reason",
         "grant_owner_reason": "beyond_authority",
@@ -3916,6 +3931,8 @@
         "wait_product": {"label": "等产品 / 环境修复上线后再审", "advisor_next": "Owner 定等修复: 修复上线前不续跑本卡; 上线后原命令重跑 loop(`{resume}`), 仍停 = 收件箱该卡新事项提示可选「重新派审」, Owner 选定后按其续跑"},
         "extend_authorization": {"label": "扩大项目授权(一次裁决改授权, 本卡及同类卡此后自动推进)", "advisor_next": "Owner 已扩大项目授权(裁决 {decision_id} 同时落授权新修订): 用原命令续跑 {resume}"},
         "revoke_auto": {"label": "撤回自动放行(本卡停住, 待另定)", "advisor_next": "Owner 已撤回 {task_id} 的自动放行(裁决 {decision_id}): 本卡停住, 不续跑 loop(推导核以 auto_release_revoked 硬停); 等 Owner 在收件箱对本卡另定(恢复 / 改卡 / 另出卡 / 撤卡)后按其裁决续跑"},
+        "approve_redeclare": {"label": "批准改登记", "advisor_next": "Owner 已批准改登记(裁决 {decision_id}): 由该实例或项目顾问重跑同一条 lybra roles redeclare … --confirm 即生效"},
+        "deny_redeclare": {"label": "不批准改登记", "advisor_next": "Owner 不批准改登记(裁决 {decision_id}): 登记维持原状; 按 Owner 原话调整后另提请求"},
         "extend_rework": {"label": "授权本卡追加一轮返工(每次裁决只放一轮)", "advisor_next": "Owner 已授权 {task_id} 追加一轮返工(裁决 {decision_id}, 每个裁决只放一轮): 按原返工出口再打回一轮, 该轮自动记 owner_extension_ref = 本裁决——非代码快车道卡 `lybra --workspace-root {governance_root} mark-concluded --task-id {task_id} --actor <你的顾问实例> --report-path <交回报告> --outcome rework --focus-items '[\"<返工要点>\"]'`; 审计裁决型卡 `lybra --workspace-root {governance_root} queue rework --task-id {task_id} --actor <你的顾问实例> --verdict-ref <最新裁决> --focus-items '[\"<返工要点>\"]'`(都先 --dry-run 预演), 登记后续跑: `{resume}`"}
       },
       "stale": {
@@ -4740,6 +4757,8 @@
           "row_validation_roots": "验证根声明",
           "row_line": "{label}: {value}",
           "instance_value": "{instance}({enrollment})",
+          "registered_value": "登记 {registration}",
+          "row_advisors": "顾问登记",
           "workstation_value": "工位 {dir}",
           "charter_value": "章程: {state}",
           "undeclared": "(未声明)",
@@ -4914,6 +4933,8 @@
           "row_validation_roots": "Validation-root declarations",
           "row_line": "{label}: {value}",
           "instance_value": "{instance} ({enrollment})",
+          "registered_value": "registered {registration}",
+          "row_advisors": "Advisor registrations",
           "workstation_value": "workstation {dir}",
           "charter_value": "charter: {state}",
           "undeclared": "(not declared)",
@@ -5331,6 +5352,11 @@
             "scope": "AIPOS-F159 件①(gap #144): 写 project.json 的 project 族命令 --confirm 成功后的写出文件(治理根相对): two_phase_protocol.project_json_writers 各命令 = project.json(--confirm 即落, 无改动亦经同一提交口核一次: 范围已落账 = PASS no-op, 前次写后未落账者随之补落); freeze-legacy = 本次追加的清单条目 + 本次补声明 legacy_baseline 时的 project.json(本批无卡可冻 = 无写出, 不落); dispatch-mode set = project.json + 切换留痕文件。AIPOS-F161: relocate-workstation = 本项目 enrollment_log(追加的 relocate 位置事件; 唯一写出, 工位目录在治理仓外不入)。AIPOS-F176: upgrade = `lybra project upgrade --confirm` 配置缺省补齐步写出的 project.json(其余步骤各经自身声明的落账命令: migrate_record_type / migrate_decision_log_pointers; 工位章程在治理仓外不入)。提交身份 = 该命令 --actor(dispatch-mode set 为 --by; 未给 = $USER 或 owner, 与 set-repo / project new 同一缺省)。--dry-run 零写入、不落账。唯一落账点: 写 project.json 的两阶段命令经输出包装 aipos_cli._project_json_two_phase_emit, freeze-legacy / dispatch-mode set 经同一薄壳 aipos_cli._land_project_writes(→ land_written_paths)。不含 project new / import(建治理根本身, 治理根此时可能尚未入治理仓; 向导第 1 步照旧给 governance-commit 与 home git-init)。 AIPOS-F203 件①: validation-root run-start = project.json + 本次新存的验证 helper 快照(paths.validation_helper_root/<摘要>.py.txt; 同摘要已在 = 无新文件)。",
             "message_template": "chore(governance): 项目配置落账 {subcommand} {project}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra project {subcommand} --confirm"
           },
+          "roles_redeclare": {
+            "cli": "lybra roles redeclare --confirm",
+            "scope": "AIPOS-F235: 本项目 enrollment_log(追加的 redeclare 位置事件或 redeclare_request 改登记请求; 唯一写出入治理仓。治理根 .lybra/role 实例槽属本机私有配置, 不入治理仓)",
+            "message_template": "chore(governance): 实例改登记 {instance} {project}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra roles redeclare --confirm"
+          },
           "roadmap_writers": {
             "cli": "lybra roadmap <subcommand> --confirm",
             "subcommands": ["add-milestone", "add-criterion", "set", "remove", "verify"],
@@ -5719,6 +5745,65 @@
       "visibility": "always",
       "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
       "surface": ["mcp"]
+    },
+    "lybra_roles_redeclare": {
+      "description": "AIPOS-F235(10-25 chris 岚图顾问从 Mac Codex 迁到 dev Claude Code: 实例槽仍记 codex@kiwiai-mac, land 无 harness=, 子 agent 代码卡被缺省成 codex, 开工稿时限句与派发说明随之错; 原入口只有 relocate-workstation(只迁 pi 工位目录)与 enroll-void + 重接入(作废凭据重发码, 对一次换 harness 过重)): 已接入实例改登记 `lybra roles redeclare --instance <实例> [--harness <kind>] [--host <主机>] [--dir <工作目录>] [--dry-run|--confirm] --actor <实例>`。适用 = 本项目已接入的治理席位实例(位置事件工位 = 治理根, 实例槽在治理根 .lybra/role)与子 agent 执行身份; pi 工位 = 拒(迁目录走 relocate-workstation)。登记真相 = 本项目 enrollment_log 位置事件: 确认 = 追加一行 event_action 位置事件(与 land / relocate 同族同解析 enrollment._LAND_LINE_RE, 同一写口 _write_trail_line, 只追加不改旧行; 结构字段沿用最新位置事件, reason = host [mode] harness [harness_host harness_dir] from_harness from_host from_dir authorized_by [workstation 沿用])并经 enroll_client.write_role_file(唯一写路径; stamp_key=redeclared_at, keep_top)更新实例槽, 日志一次落账(post_write_landing.commands.roles_redeclare)。读口 enrollment.registered_harness 先读事件(日志为准), 实例槽与日志不一致 = state lint ENROLLMENT_REGISTRATION_DRIFT。实例名不改(凭据与历史归因按名; 名中主机段只是历史, 主机判据一律读登记); 凭据不动、不重发码。唯一实现 enrollment.redeclare_instance(预演 / 确认同一函数), 文本 enrollment.render_redeclaration。",
+      "phase": "render",
+      "surface": [
+        "cli"
+      ],
+      "cli_command": "lybra roles redeclare",
+      "single_implementation": "tools/aipos_cli/enrollment.py::redeclare_instance",
+      "event_action": "redeclare",
+      "request_action": "redeclare_request",
+      "authorization": {
+        "description": "AIPOS-F235 件②: 授权分档(判定 enrollment._authorization_basis): 只改工作目录 = 第二档; 改主机须 ∈ 某份生效 F224 项目常设授权的 hosts、改 harness 须 ∈ 其 launch_harnesses(拉起方式), 满足 = 第二档(本实例自己或本项目已接入顾问可做, 记录 = 本次位置事件 authorized_by=<授权>@r<修订>); 否则 = 第一档: --confirm 追加一行 request_action 进 Owner 收件箱(类别 inbox_category, 事由 beyond_authority), Owner 选 approve_option 后重跑同一命令 --confirm 生效(authorized_by=owner:<决策 ID>), 选 deny_option = REDECLARE_OWNER_DENIED。事项锚点 = 实例 | 目标 | 基准位置事件时刻(enrollment.redeclare_item_identity; 基准事件一变 = 新事项)。",
+        "inbox_category": "enrollment_redeclare",
+        "approve_option": "approve_redeclare",
+        "deny_option": "deny_redeclare"
+      },
+      "reject_codes": {
+        "REDECLARE_INVALID": "出口: 核对参数(至少给 --harness / --host / --dir 之一; harness 为顾问会话 kind; claude-code 会话须在治理根所在机且 --dir 为本机已存在目录; 子 agent 执行身份不给 --dir)后重跑",
+        "REDECLARE_NOT_ENROLLED": "出口: 该实例未在本项目接入(或治理根 .lybra/role 无其实例槽), 先按接入向导接入(lybra onboarding guide), 或核对实例名(lybra roles enroll-where --instance <实例>)",
+        "REDECLARE_WORKSTATION": "出口: pi 工位换目录走 lybra project relocate-workstation(迁目录 + 同步 + relocate 位置事件); 换主机在新主机重新接入",
+        "REDECLARE_ACTOR": "出口: 由该实例自己或本项目已接入顾问执行(--actor <实例>)",
+        "REDECLARE_NO_CHANGE": "出口: 无需改登记",
+        "REDECLARE_OWNER_DENIED": "出口: Owner 不批准本次改登记; 按 Owner 原话调整后另提请求(目标或基准变了 = 新事项)"
+      },
+      "texts": {
+        "target_line": "改登记 {instance}({mode}; 治理根 {governance_root})",
+        "mode_seat": "治理席位实例, 实例槽在治理根 .lybra/role",
+        "mode_subagent": "子 agent 执行身份",
+        "current_line": "  现登记: {current}",
+        "diff_line": "  {field}: {old} → {new}",
+        "diff_none": "  (无差异)",
+        "tier2_authorized": "  授权: 第二档 —— 改到项目授权 {authorization} 已列的主机 / 拉起方式内, 本实例或项目顾问可做(记录 = 本次位置事件)",
+        "tier2_dir_only": "  授权: 第二档 —— 只改工作目录, 本实例或项目顾问可做(记录 = 本次位置事件)",
+        "tier1_request": "  授权: 第一档 —— 超出项目授权({why}); --confirm = 登记请求进 Owner 收件箱(事项 {item_id}), Owner 批准后重跑本命令 --confirm 生效",
+        "owner_pending": "  Owner 收件箱已有该请求(事项 {item_id}), 待裁决; 裁决后重跑本命令",
+        "owner_approved": "  授权: Owner 已批准(事项 {item_id}, 裁决 {decision_id}), --confirm 即生效",
+        "event_line": "  {will}追加位置事件: {line}",
+        "slot_line": "  {will}更新实例槽: {path} 中 {instance} 的 harness = {harness}",
+        "slot_none": "  子 agent 执行身份无实例槽, 只记位置事件",
+        "request_line": "  {will}追加改登记请求: {line}",
+        "invariants": "  凭据不动、不重发码; 实例名不改(名中主机段只是历史, 主机判据一律读登记)"
+      },
+      "card_harness_mismatch": {
+        "description": "AIPOS-F235 件③: 子 agent 卡卡面 harness 与派发顾问(卡 created_by / draft_created_by)现登记 harness(enrollment.dispatch_harness)不符 = next(未认领卡: 不派生认领)/ kickoff(KICKOFF_HARNESS_MISMATCH)给受限 amend 出口原文; 判定唯一 next_resolver.card_harness_mismatch。未认领卡 = 普通 amend; 已认领卡 = --restricted(card.schema restricted_amend.claimed_card_fields 含 harness)。",
+        "reason": "卡 {task_id} 卡面 harness={face}, 派发顾问 {advisor} 现登记 harness={registered}({source}); 开工稿时限句与派发说明按卡面会错",
+        "amend_command": "lybra --workspace-root {governance_root} queue amend --task-id {task_id} --actor {advisor} --amendments '{{\"harness\": \"{registered}\"}}' --amendment-reason \"AIPOS-F235: 卡面 harness 随派发顾问现登记({face} → {registered})\"{restricted}"
+      },
+      "exit_codes": {
+        "ok": {
+          "code": 0
+        },
+        "refused": {
+          "code": 1
+        },
+        "owner_pending": {
+          "code": 3
+        }
+      }
     },
     "lybra_roles_enroll_list": {
       "description": "只读列出接入码(不显示码值)。",

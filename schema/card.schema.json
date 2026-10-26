@@ -1249,7 +1249,7 @@
     }
   },
   "restricted_amend": {
-    "description": "AIPOS-F78 前置零⑤(复用 F75 restricted amend): advisor 对 claimed 卡可受限修改的字段清单, 唯一声明。queue_rework 用其子集 {rework_rounds}; `lybra queue amend --restricted` 读全集。AIPOS-F179 件②: 追加 resources(在办卡补独占资源声明, 不改工作内容; 形校验同出卡 loop_run_record.card_resources)。AIPOS-F205 件③: 追加 validation_source_task / validation_candidate——候选绑定属执行前置(验证根 run-start 候选核对与源码送达的依据), 不改验收与交付契约; 已认领的环境卡(config 等, 如 chris 岚图 LANTU-ENV3)补绑定的正式出口; 值校验与起草 / 发卡同一判据 draft_writer.candidate_subject_refusals(board_adapter.amend_task 同调)。",
+    "description": "AIPOS-F78 前置零⑤(复用 F75 restricted amend): advisor 对 claimed 卡可受限修改的字段清单, 唯一声明。queue_rework 用其子集 {rework_rounds}; `lybra queue amend --restricted` 读全集。AIPOS-F179 件②: 追加 resources(在办卡补独占资源声明, 不改工作内容; 形校验同出卡 loop_run_record.card_resources)。AIPOS-F205 件③: 追加 validation_source_task / validation_candidate——候选绑定属执行前置(验证根 run-start 候选核对与源码送达的依据), 不改验收与交付契约; 已认领的环境卡(config 等, 如 chris 岚图 LANTU-ENV3)补绑定的正式出口; 值校验与起草 / 发卡同一判据 draft_writer.candidate_subject_refusals(board_adapter.amend_task 同调)。 AIPOS-F235 件③: 追加 harness——子 agent 卡卡面 harness 与派发顾问现登记不符(next_resolver.card_harness_mismatch)时已认领卡的受限更正出口(只影响开工稿时限句与派发说明, 不改验收与交付契约)。",
     "actor_role_class": "advisor",
     "claimed_card_fields": [
       "rework_rounds",
@@ -1257,7 +1257,8 @@
       "lane",
       "resources",
       "validation_source_task",
-      "validation_candidate"
+      "validation_candidate",
+      "harness"
     ],
     "claimed_card_subfields": {
       "description": "AIPOS-F223 件②: claimed 卡受限 amend 可改的「字段 → 子键」清单(该字段只许改所列子键, 其余子键须与卡面原值相同; 不进 claimed_card_fields 全集)。audit_runtime_evidence.host = 在途验证卡补声明运行证据执行主机(不改命令与 required, 不改验收); 判据唯一实现 artifact_ingest.runtime_evidence_amend_problems(`lybra queue amend` 同调, 形校验同出卡 parse_runtime_evidence_declaration)。",

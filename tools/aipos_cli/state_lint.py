@@ -35,6 +35,8 @@ FRONTMATTER_INVALID = "FRONTMATTER_INVALID"
 GOVERNANCE_UNCOMMITTED = "GOVERNANCE_UNCOMMITTED"
 #: AIPOS-F209: 顾问复核结案且结论 BLOCK 的信息级提示码(进 result["notes"], 不进 issues: 不计断层、不影响退出码)
 CONCLUDED_BLOCK = "CONCLUDED_BLOCK"
+#: AIPOS-F235: 实例槽与日志登记不一致(信息级, 进 notes)
+ENROLLMENT_REGISTRATION_DRIFT = "ENROLLMENT_REGISTRATION_DRIFT"
 
 
 def check_severity(code: str) -> str:
@@ -396,12 +398,31 @@ def _run_state_lint(governance_root: Path, task_id_filter: str | None) -> dict[s
         })
 
     issues.extend(governance_uncommitted_issues(governance_root, concluded))
+    if task_id_filter is None:
+        notes.extend(registration_drift_notes(governance_root))
 
     return {
         "scanned": len(task_ids),
         "issues": issues,
         "notes": notes,
     }
+
+
+def registration_drift_notes(governance_root: Path) -> list[dict[str, Any]]:
+    """AIPOS-F235 件①: 治理根 .lybra/role 实例槽与日志登记不一致(判定唯一 enrollment.registration_drift; 以日志为准)= 信息级提示
+    ENROLLMENT_REGISTRATION_DRIFT(级别读 check_severity; 进 notes, 不计断层)。登记读不出 = 同码提示带原因(不吞)。全项目扫描才查。"""
+    from tools.aipos_cli.enrollment import registration_drift
+
+    severity = check_severity(ENROLLMENT_REGISTRATION_DRIFT)
+    try:
+        drifts = registration_drift(governance_root)
+    except (OSError, ValueError) as exc:
+        return [{"task_id": "(enrollment)", "severity": severity, "code": ENROLLMENT_REGISTRATION_DRIFT,
+                 "message": f"{ENROLLMENT_REGISTRATION_DRIFT}: 登记一致性读不出: {exc}"}]
+    return [{"task_id": d["instance"], "severity": severity, "code": ENROLLMENT_REGISTRATION_DRIFT,
+             "message": (f"{ENROLLMENT_REGISTRATION_DRIFT}: 实例槽 {d['slot_file']} 与日志登记({d['event']})不一致 {d['fields']}: "
+                         f"槽 {d['slot']} / 日志 {d['registered']}; 以日志为准。出口: 由该实例或项目顾问重跑 lybra roles redeclare 对齐")}
+            for d in drifts]
 
 
 def governance_uncommitted_issues(governance_root: Path, concluded: dict[str, Path | None]) -> list[dict[str, Any]]:

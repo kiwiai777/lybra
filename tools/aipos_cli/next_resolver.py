@@ -1077,6 +1077,40 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
     return view
 
 
+def card_harness_mismatch(workspace_root: Path, task_id: str, fm: dict[str, Any] | None, *, claimed: bool) -> dict[str, Any] | None:
+    """AIPOS-F235 件③: 子 agent 卡卡面 harness 与派发顾问现登记 harness 不符(唯一判定; next 未认领卡不派生认领、kickoff KICKOFF_HARNESS_MISMATCH 同读)。
+    只判: 卡面有 harness、本卡执行方式不是 pi(workspace_config.card_execution_mode; 审计卡恒 pi)、派发顾问(enrollment.card_dispatch_advisor)
+    有登记 harness 且为顾问会话 kind(enrollment.dispatch_harness source=advisor)。不符 = {face, registered, advisor, source, reason, amend_command}
+    (声明 verbs.lybra_roles_redeclare.card_harness_mismatch; 已认领卡 = --restricted, card.schema restricted_amend 含 harness); 其余 = None。
+    执行方式声明形坏 / 连接文件读不出 = None(该口径由 harness 推导 / 发卡核身份各自拒, 本判定不重复拒)。"""
+    from tools.aipos_cli.audit_derivation import is_audit_card
+    from tools.aipos_cli.enrollment import card_dispatch_advisor, dispatch_harness, redeclaration_declaration
+    from tools.aipos_cli.workspace_config import EXECUTION_MODE_PI, card_execution_mode, project_execution
+
+    card = fm or {}
+    face = str(card.get("harness") or "").strip()
+    advisor = card_dispatch_advisor(card)
+    if not face or not advisor:
+        return None
+    try:
+        execution = project_execution(Path(workspace_root))
+        mode = card_execution_mode(execution, card, audit_card=is_audit_card(task_id, card))
+        if mode is None or mode == EXECUTION_MODE_PI:
+            return None
+        view = dispatch_harness(Path(workspace_root), advisor=advisor, executor=None)
+    except ValueError:
+        return None
+    registered = view["harness"]
+    if view["source"] != "advisor" or not registered or registered == face:
+        return None
+    reg = view["advisor_registration"] or {}
+    texts = redeclaration_declaration()["card_harness_mismatch"]
+    fill = {"task_id": task_id, "face": face, "registered": registered, "advisor": advisor, "governance_root": str(workspace_root),
+            "source": reg.get("source_label") or reg.get("source") or "-", "restricted": " --restricted" if claimed else ""}
+    return {"face": face, "registered": registered, "advisor": advisor, "source": fill["source"],
+            "reason": str(texts["reason"]).format(**fill), "amend_command": str(texts["amend_command"]).format(**fill)}
+
+
 def _card_harness_view(workspace_root: Path, task_id: str, fm: dict[str, Any]) -> dict[str, Any]:
     """AIPOS-F212 件①: 开工面的卡 harness(唯一推导 loop_driver.card_harness; /go 验证根沙箱列举与 lybra kickoff 时限句同读)。
     返回 {harness, harness_refusal}: 推导失败(子 agent 执行者无接入登记 / 执行方式声明形坏 / 缺省表缺条目)= harness None +
@@ -1085,9 +1119,10 @@ def _card_harness_view(workspace_root: Path, task_id: str, fm: dict[str, Any]) -
     from tools.schema_loader import SchemaLoadError
 
     try:
-        return {"harness": card_harness(fm, workspace_root, task_id=task_id), "harness_refusal": None}
+        return {"harness": card_harness(fm, workspace_root, task_id=task_id), "harness_refusal": None,
+                "harness_mismatch": card_harness_mismatch(workspace_root, task_id, fm, claimed=True)}  # AIPOS-F235 件③: 开工面(已认领卡)
     except (SchemaLoadError, OSError, ValueError) as exc:
-        return {"harness": None, "harness_refusal": {"code": "HARNESS_UNRESOLVED", "reason": str(exc)}}
+        return {"harness": None, "harness_refusal": {"code": "HARNESS_UNRESOLVED", "reason": str(exc)}, "harness_mismatch": None}
 
 
 def card_report_contract(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None,
@@ -5248,6 +5283,22 @@ def _derive_next_step(
                 "notes": "N0→N1: 依赖未满足, 不派生认领(AIPOS-F133)",
                 "action": {"type": "dependencies_unmet", "card": task_id,
                            "depends_on": [str(d) for d in (fm.get("depends_on") or [])] if isinstance(fm.get("depends_on"), list) else [str(fm.get("depends_on"))]},
+            }
+        # AIPOS-F235 件③: 子 agent 卡卡面 harness 与派发顾问现登记不符 = 不派生认领(认领后开工稿时限句 / 派发说明会按卡面错), 给 amend 出口原文
+        mismatch = card_harness_mismatch(workspace_root, task_id, fm, claimed=False)
+        if mismatch:
+            return {
+                "task_id": task_id,
+                "derivable": False,
+                "current_node": "publish",
+                "current_state": "pending",
+                "triggered_by": "advisor",
+                "command": "",
+                "verb": "lybra_queue_claim_dry_run",
+                "missing_records": [f"卡面 harness = 派发顾问现登记 harness({mismatch['registered']})"],
+                "suggested_action": mismatch["amend_command"],
+                "notes": f"N0→N1: {mismatch['reason']}(AIPOS-F235 件③)",
+                "action": {"type": "harness_mismatch", "card": task_id, **{k: mismatch[k] for k in ("face", "registered", "advisor", "source")}},
             }
         # AIPOS-F90 件①: 认领一段式 = 驱动方 token + 覆盖驱动方与本卡的信封(与 return/verdict/close 同一判据 _driver_envelope_ref,
         # loop --envelope 经 driver_scope 贯穿); 信封在 → PreAuthorized + owner_policy_ref; 不在 → Supervised 形(执行时 exit 5 带申领出口)

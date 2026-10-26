@@ -563,8 +563,9 @@ def card_harness(task_fm: dict[str, Any], governance_root: Path | None = None, *
     Owner 收件箱拉起授权建议同读)。卡面值优先; 缺 = AIPOS-F211 件③(F208 P1-5)由本卡执行方式推出(唯一判定
     workspace_config.card_execution_mode; audit_card 缺省经 audit_derivation.is_audit_card 判, 审计卡恒 pi):
       - pi = "pi";
-      - 子 agent = 该执行者实例(卡面 assigned_to, 缺 = 声明 subagent_executor)子 agent 模式接入登记记下的顾问会话 harness
-        (enrollment.instance_enrollment, 与起草缺省 draft_writer.apply_execution_defaults 同一来源); 登记无 = CardHarnessUnresolved;
+      - 子 agent = AIPOS-F235 件③: 派发顾问(卡面 created_by / draft_created_by)当前登记的 harness, 兜底 = 该执行者实例(卡面 assigned_to,
+        缺 = 声明 subagent_executor)子 agent 模式接入登记记下的顾问会话 harness(唯一判定 enrollment.dispatch_harness, 与起草缺省
+        draft_writer.apply_execution_defaults 同一来源); 都无 = CardHarnessUnresolved;
       - 项目未声明 execution(或未给 governance_root)= card.schema intent_face.harness.default_by_task_mode[task_mode]
         (缺 task_mode = enums.schema task_mode.missing_default.key, 唯一兜底 next_resolver._task_mode_entry)。
     执行方式声明形不合 = ExecutionDeclarationError(ValueError)上抛; 缺省表缺条目 = SchemaLoadError。"""
@@ -584,14 +585,16 @@ def card_harness(task_fm: dict[str, Any], governance_root: Path | None = None, *
         if mode == EXECUTION_MODE_PI:
             return EXECUTION_MODE_PI
         if mode is not None:
-            from tools.aipos_cli.enrollment import instance_enrollment
+            from tools.aipos_cli.enrollment import card_dispatch_advisor, dispatch_harness
 
             instance = str(task_fm.get("assigned_to") or "").strip() or str((execution or {}).get("subagent_executor") or "").strip()
-            harness = str(instance_enrollment(Path(governance_root), instance).get("harness") or "").strip() if instance else ""
+            harness = str(dispatch_harness(Path(governance_root), advisor=card_dispatch_advisor(task_fm), executor=instance or None)["harness"]
+                          or "").strip()
             if not harness:
                 raise CardHarnessUnresolved(
-                    f"卡面无 harness, 本卡执行方式 = {mode}(project.json execution), 执行者实例 {instance or '(无)'} 无子 agent 模式接入登记"
-                    "(land 事件无 harness=), harness 不可推导。出口: lybra queue amend 给卡补 harness(claude-code|codex), 或按 "
+                    f"卡面无 harness, 本卡执行方式 = {mode}(project.json execution), 派发顾问 {card_dispatch_advisor(task_fm) or '(无)'} 无登记 harness, "
+                    f"执行者实例 {instance or '(无)'} 亦无子 agent 模式接入登记(land 事件无 harness=), harness 不可推导。出口: lybra queue amend "
+                    "给卡补 harness(claude-code|codex), 或 lybra roles redeclare 登记顾问 harness, 或按 "
                     "lybra onboarding guide --executor-mode subagent 重接入该实例")
             return harness
     return default_harness_for_task_mode(str(task_fm.get("task_mode") or ""))
