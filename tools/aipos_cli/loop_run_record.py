@@ -436,6 +436,33 @@ class LoopRunRecorder:
         self._dirty = True
         self.flush(force=True)
 
+    def set_wait_limit(self, info: dict[str, Any]) -> None:
+        """AIPOS-F237 件②: 本次运行的等交回上限及来历(verbs.schema lybra_loop.run_record.wait_limit; 唯一产出 loop_driver.loop_wait_limit)。"""
+        self.meta["wait_limit"] = dict(info)
+        self._dirty = True
+        self.flush(force=True)
+
+    # -- AIPOS-F237 件③: 到上限仍在干活的续等(verbs.schema lybra_loop.run_record.wait_extensions) --
+    def launch_last_event_at(self) -> str | None:
+        """当前拉起最近一行输出的时刻(activity.last_event_at; 无输出 = 拉起时刻 started_at; 无在途拉起 = None)。"""
+        if self._active is None:
+            return None
+        return (self._active.get("activity") or {}).get("last_event_at") or self._active.get("started_at")
+
+    def wait_extended(self, entry: dict[str, Any]) -> None:
+        """续等一次: 追加 launches[-1].wait_extensions(人读行由 loop 输出口 say 写日志, 此处不重复)。"""
+        if self._active is not None:
+            self._active.setdefault("wait_extensions", []).append({"at": iso_z(), **entry})
+        self._dirty = True
+        self.flush(force=True)
+
+    def wait_extension_end(self, kind: str, reason: str) -> None:
+        """不再续等(kind = hard_cap | idle): 写 launches[-1].wait_extension_end(人读行由 say 写日志)。"""
+        if self._active is not None:
+            self._active["wait_extension_end"] = {"at": iso_z(), "kind": kind, "reason": reason}
+        self._dirty = True
+        self.flush(force=True)
+
     # -- AIPOS-F152 件①: 部署一致性(verbs.schema lybra_loop.deploy_consistency.run_record_field) --
     def set_deploy(self, info: dict[str, Any]) -> None:
         """本次运行的代码: mode(deploy/dev/worktree)/ 快照 release / commit / deploy_current / deploy_check(active|not_applicable)。"""

@@ -229,7 +229,8 @@ def test_item1_resolver_is_single_implementation_and_cli_has_no_active_project_w
     # AIPOS-F143 件②: + set-execution; AIPOS-F148 件②: + set-return-summary; AIPOS-F161: + relocate-workstation; AIPOS-F169: + set-model;
     # AIPOS-F171: + lybra roadmap(同一目标解析); AIPOS-F176: + project upgrade(同一目标解析); AIPOS-F190: + project validation-root(同一目标解析)
     # AIPOS-F198: + project workstation-plan(同一目标解析); AIPOS-F224: + project grant(同一目标解析)
-    assert len(calls) == 17
+    # AIPOS-F237: + project set-test-contract(同一目标解析)
+    assert len(calls) == 18
     wc_src = (REPO_ROOT / "tools/aipos_cli/workspace_config.py").read_text(encoding="utf-8")
     fn = next(n for n in ast.parse(wc_src).body if isinstance(n, ast.FunctionDef) and n.name == "resolve_project_write_target")
     names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
@@ -258,6 +259,8 @@ def test_item2_first_line_names_target_and_absolute_project_json_for_every_write
         "set-model": ["--model", "kiwiai/qwen3.7-plus", "--owner-ref", "Owner 指示(夹具)"],
         # AIPOS-F148 件②: Return 摘要来源声明写入口(同一两阶段包装)
         "set-return-summary": ["--frontmatter-key", "result_summary"],
+        # AIPOS-F237 件①: 合并后回归 / 全量时限声明写入口(同一两阶段包装)
+        "set-test-contract": ["--timeout-seconds", "900", "--owner-ref", "Owner 指示(夹具)"],
     }
     from tools.aipos_cli.enrollment import _trail_line, _write_trail_line, enrollment_trail_path, subagent_land_detail
     from test_aipos_f169_pi_model_declaration import install_fake_pi

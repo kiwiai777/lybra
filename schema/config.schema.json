@@ -182,6 +182,7 @@
             "repos": {"type": "object", "optional": true, "description": "按仓覆盖: 键 = project.json repos.items 仓名, 值同形(不得再嵌 repos); 卡仓(resolve_card_repo)有覆盖取覆盖, 否则取顶层"},
             "ratchet": {"type": "string", "optional": true, "description": "AIPOS-F187 件①: 本项目(仓)的棘轮做法一句话(人读文本, 非空单行; 如「tests/*_baseline.jsonl 只减不增, 含 CJK 守卫」)。`lybra kickoff` 开工稿验证节原样引用; 未声明 = 开工稿用通用句(verbs.schema lybra_kickoff.texts.ratchet_default)。产品不按此分支判定。repos 覆盖逐键覆盖。"},
             "residual_processes": {"type": "string", "optional": true, "default": "pytest|run-all|until grep", "description": "AIPOS-F187 件①: 交回前残留进程检查的 `pgrep -af` 式样(非空单行扩展正则)。`lybra kickoff` 开工稿交回节给出 `pgrep -af \"<本式样>\"`(原文附报告)。未声明 = 本 default(通用的测试运行器 / 轮询残留); 项目另有夹具进程(如自起门 / 看板)时整体替换声明。repos 覆盖逐键覆盖。"},
+            "owner_ref": {"type": "string", "optional": true, "description": "AIPOS-F237 件①: 最近一次经 `lybra project set-test-contract` 改写本段(post_merge_regression 时限 / 推导 / 排队键)所依据的 Owner 指示摘要或决定记录(非空单行; 同 execution.pi_models.owner_ref)。写入口唯一 set-test-contract(--owner-ref 必填, 每次改写覆盖); 产品不按此分支判定。未声明 = 无(存量手写声明)。"},
             "post_merge_regression": {
               "type": "object",
               "optional": true,
@@ -207,7 +208,7 @@
             }
           },
           "reject_codes": {
-            "TEST_CONTRACT_INVALID": "test_contract 形不合声明(非对象 / runall_path 非相对路径 / require_tests 非布尔 / test_file_globs 非「非空字符串且不含 / 的非空列表」/ repos 键不在 repos.items / post_merge_regression 非对象、含未声明键、mode/execution 不在 values、timeout_seconds 非正整数、block 配 async / isolation 非对象、含未声明键、mode/network 不在 values / AIPOS-F187: ratchet / residual_processes 非「非空单行字符串」)",
+            "TEST_CONTRACT_INVALID": "test_contract 形不合声明(非对象 / runall_path 非相对路径 / require_tests 非布尔 / test_file_globs 非「非空字符串且不含 / 的非空列表」/ repos 键不在 repos.items / post_merge_regression 非对象、含未声明键、mode/execution 不在 values、timeout_seconds 非正整数、block 配 async / isolation 非对象、含未声明键、mode/network 不在 values / AIPOS-F187: ratchet / residual_processes 非「非空单行字符串」/ AIPOS-F237: owner_ref 非「非空单行字符串」)",
             "RUNALL_DIRECTIVE_INVALID": "测试清单文件内声明行形坏(未声明的指令词 / 缺目标 / exclude 缺理由 / 目标重复 / discover 带参数)"
           },
           "runall_directives": {

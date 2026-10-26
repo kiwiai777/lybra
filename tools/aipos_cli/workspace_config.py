@@ -931,9 +931,10 @@ def project_repos(governance_root: str | Path, *, project: dict[str, Any] | None
 #: AIPOS-F118 件② + AIPOS-F234 件③: test_contract.post_merge_regression 的键(config.schema 声明须恰为此集)
 PMR_KEYS = ("mode", "execution", "timeout_seconds", "timeout_recent_runs", "timeout_factor", "serialize")
 TEST_CONTRACT_KEYS = ("runall_path", "require_tests", "test_file_globs", "post_merge_regression", "isolation",
-                      "ratchet", "residual_processes")  # AIPOS-F187 件①: 开工稿验证 / 交回节引用的项目声明(人读文本 / pgrep 式样)
-#: AIPOS-F187 件①: test_contract 的非空单行文本键(开工稿引用; 未声明 = None / 声明 default)
-TEST_CONTRACT_TEXT_KEYS = ("ratchet", "residual_processes")
+                      "ratchet", "residual_processes",  # AIPOS-F187 件①: 开工稿验证 / 交回节引用的项目声明(人读文本 / pgrep 式样)
+                      "owner_ref")  # AIPOS-F237 件①: set-test-contract 改写依据(Owner 指示摘要)
+#: AIPOS-F187 件①: test_contract 的非空单行文本键(开工稿引用; 未声明 = None / 声明 default); AIPOS-F237: + owner_ref
+TEST_CONTRACT_TEXT_KEYS = ("ratchet", "residual_processes", "owner_ref")
 
 
 def _post_merge_regression_decl(test_contract_decl: dict[str, Any]) -> dict[str, Any]:
@@ -1047,7 +1048,8 @@ def _apply_post_merge_regression(current: dict[str, Any], keys: dict[str, Any], 
     return resolved
 
 
-def project_test_contract(governance_root: str | Path, repo_path: str | Path | None = None) -> dict[str, Any]:
+def project_test_contract(governance_root: str | Path, repo_path: str | Path | None = None, *,
+                          project: dict[str, Any] | None = None) -> dict[str, Any]:
     """AIPOS-F93 件③: 交回检查测试约定的唯一读取口(声明 config.schema project_json.schema.test_contract)。
 
     返回 {runall_path: str|None, require_tests: bool|None, test_file_globs: list[str], test_file_globs_source: str, source: str}:
@@ -1059,6 +1061,7 @@ def project_test_contract(governance_root: str | Path, repo_path: str | Path | N
     config.schema 各键 default, 顶层与 repos 覆盖逐键覆盖)。
     AIPOS-F126 件②: isolation = {mode, network, source}(run-all 执行器事前隔离声明; 同上逐键覆盖)。
     形不合声明 = ValueError("TEST_CONTRACT_INVALID: …")(fail-closed, 调用方拒并给出口); project.json 读失败原样抛。
+    AIPOS-F237 件①: project 给出 = 校验这份(将写入的)内容而非盘上文件(update_project_json 写前预检, 同一读取口; 同 project_repos)。
     """
     from tools.schema_loader import SchemaLoadError, load_schema
 
@@ -1076,7 +1079,7 @@ def project_test_contract(governance_root: str | Path, repo_path: str | Path | N
             f"未声明或形坏({_glob_list_problem(default_globs)}); 「测试文件」式样无缺省不可判"
         )
     where = f"{project_json_path(root)} test_contract"
-    raw = read_project_json(root).get("test_contract")
+    raw = (project if project is not None else read_project_json(root)).get("test_contract")
     pmr_keys = _post_merge_regression_decl(decl)
     isolation_keys = _isolation_decl(decl)
     result: dict[str, Any] = {
@@ -1137,7 +1140,7 @@ def project_test_contract(governance_root: str | Path, repo_path: str | Path | N
         return result
     if not isinstance(overrides, dict):
         raise ValueError(f"TEST_CONTRACT_INVALID: {where}.repos 须为 {{仓名: {{…}}}}")
-    repos = project_repos(root)
+    repos = project_repos(root, project=project)
     for name, spec in overrides.items():
         if name not in repos["items"]:
             raise ValueError(f"TEST_CONTRACT_INVALID: {where}.repos 键 {name!r} 不在 project.json repos.items {sorted(repos['items'])} 内")
@@ -1174,6 +1177,113 @@ def _glob_list_problem(value: Any) -> str | None:
         if "/" in item:
             return f"项 {item!r} 含 /(式样按文件名匹配, 不含目录)"
     return None
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F237 件①: `lybra project set-test-contract` —— test_contract.post_merge_regression 的写入口(F234 推导键此前只能手改)。
+# 唯一写路径 update_project_json; 校验 = 唯一读取口 project_test_contract(写前预检 + 写后复核); 旗标登记 verbs.schema
+# two_phase_protocol.project_json_writers.test_contract(键须恰为 PMR_KEYS, 形只在 config.schema 声明)。
+# ---------------------------------------------------------------------------
+
+class TestContractDeclarationError(ValueError):
+    """set-test-contract 拒(fail-closed, project.json 不动)。code ∈ verbs.schema project_json_writers.test_contract.reject_codes。"""
+
+    __test__ = False  # 名字以 Test 开头, 防 pytest 当测试类收集
+
+    def __init__(self, code: str, problems: list[str]):
+        super().__init__(f"{code}: " + "; ".join(problems))
+        self.code = code
+        self.problems = list(problems)
+
+
+_TEST_CONTRACT_REJECT_CODES = ("TEST_CONTRACT_OWNER_REF_REQUIRED", "TEST_CONTRACT_NOTHING_TO_SET", "TEST_CONTRACT_INVALID")
+
+
+def test_contract_writer_declaration() -> dict[str, Any]:
+    """verbs.schema two_phase_protocol.project_json_writers.test_contract(keys {post_merge_regression 键: --旗标} 恰为 PMR_KEYS /
+    negated_flags / reject_codes / derivation_line / derivation_labels)。缺 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = ((load_schema("verbs").get("two_phase_protocol") or {}).get("project_json_writers") or {}).get("test_contract")
+    keys = decl.get("keys") if isinstance(decl, dict) else None
+    negated = decl.get("negated_flags") if isinstance(decl, dict) else None
+    codes = decl.get("reject_codes") if isinstance(decl, dict) else None
+    labels = decl.get("derivation_labels") if isinstance(decl, dict) else None
+    if (not isinstance(keys, dict) or set(keys) != set(PMR_KEYS)
+            or not all(isinstance(v, str) and v.startswith("--") for v in keys.values())
+            or not isinstance(negated, dict) or not all(k in keys and isinstance(v, str) and v.startswith("--") for k, v in negated.items())
+            or not isinstance(codes, dict) or not all(isinstance(codes.get(k), str) and codes[k] for k in _TEST_CONTRACT_REJECT_CODES)
+            or not all(f"{{{k}}}" in str(decl.get("derivation_line") or "") for k in ("when", "basis"))
+            or not isinstance(labels, dict) or not all(isinstance(labels.get(k), str) and labels[k] for k in ("before", "after"))):
+        raise SchemaLoadError("verbs.schema.json two_phase_protocol.project_json_writers.test_contract(keys 恰为 "
+                              f"{'/'.join(PMR_KEYS)} → --旗标 / negated_flags / reject_codes {list(_TEST_CONTRACT_REJECT_CODES)} / "
+                              "derivation_line 含 {when} {basis} / derivation_labels {before, after})未声明齐")
+    return decl
+
+
+def set_project_test_contract(
+    project_root: str | Path,
+    values: dict[str, Any],
+    *,
+    owner_ref: str,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """AIPOS-F237 件①: `lybra project set-test-contract` 的唯一实现——写 project.json test_contract.post_merge_regression 中给出的键
+    (values: PMR_KEYS 子集, 值 None = 未给; 其余键与 test_contract 其他键原样保留)+ test_contract.owner_ref。
+    拒: owner_ref 空 = TEST_CONTRACT_OWNER_REF_REQUIRED; 一个键都没给 = TEST_CONTRACT_NOTHING_TO_SET; 将写内容不合声明 =
+    TEST_CONTRACT_INVALID(project_test_contract 写前预检同判; 现有声明本就不合 = 同码, 先修声明)。dry_run(缺省)= 只预演零写入。
+    返回 {project_json, dry_run, changed, written, diff, post_merge_regression(写后解析值), owner_ref, before, after}——
+    before / after = 单次全量时限推导(post_merge_regression.full_run_timeout 唯一推导)写前 / 写后的 {timeout_seconds, declared, basis}。"""
+    import copy
+
+    from tools.aipos_cli.post_merge_regression import full_run_timeout
+
+    test_contract_writer_declaration()  # 声明缺 = SchemaLoadError(fail-closed)
+    ref = str(owner_ref or "").strip()
+    if not ref or "\n" in ref or "\r" in ref:
+        raise TestContractDeclarationError("TEST_CONTRACT_OWNER_REF_REQUIRED", [f"--owner-ref 须为非空单行串, 得到 {owner_ref!r}"])
+    given = {k: v for k, v in (values or {}).items() if v is not None}
+    unknown = sorted(set(given) - set(PMR_KEYS))
+    if unknown:
+        raise TestContractDeclarationError("TEST_CONTRACT_INVALID", [f"未声明键 {unknown}(允许 {list(PMR_KEYS)})"])
+    if not given:
+        raise TestContractDeclarationError("TEST_CONTRACT_NOTHING_TO_SET", ["没有给出任何 post_merge_regression 键"])
+    before_project = read_project_json(project_root)
+    try:
+        before = full_run_timeout(Path(project_root), project=before_project)
+    except ValueError as exc:  # 现有声明不合 = 拒(先修声明), 不在坏声明上叠写
+        raise TestContractDeclarationError("TEST_CONTRACT_INVALID", [f"现有声明不合: {exc}"]) from exc
+    staged: dict[str, Any] = {}
+
+    def _mutate(data: dict[str, Any]) -> None:
+        section = data.get("test_contract")
+        if section is None:
+            section = {}
+        if not isinstance(section, dict):
+            raise TestContractDeclarationError("TEST_CONTRACT_INVALID", [f"test_contract={section!r} 须为对象"])
+        pmr = section.get("post_merge_regression")
+        if pmr is None:
+            pmr = {}
+        if not isinstance(pmr, dict):
+            raise TestContractDeclarationError("TEST_CONTRACT_INVALID", [f"test_contract.post_merge_regression={pmr!r} 须为对象"])
+        section = dict(section)
+        section["post_merge_regression"] = {**pmr, **given}
+        section["owner_ref"] = ref
+        data["test_contract"] = section
+        staged["after"] = copy.deepcopy(data)
+
+    def _verify(root: Path, *, project: dict[str, Any] | None = None) -> None:
+        try:
+            project_test_contract(root, project=project)
+        except ValueError as exc:
+            raise TestContractDeclarationError("TEST_CONTRACT_INVALID", [str(exc)]) from exc
+
+    outcome = update_project_json(project_root, _mutate, verify=_verify, dry_run=dry_run)
+    after = full_run_timeout(Path(project_root), project=staged["after"])
+    return {**outcome, "project_json": str(project_json_path(project_root)),
+            "post_merge_regression": {k: after["post_merge_regression"][k] for k in PMR_KEYS}, "owner_ref": ref,
+            "given": given, "before": {k: before[k] for k in ("timeout_seconds", "declared", "basis")},
+            "after": {k: after[k] for k in ("timeout_seconds", "declared", "basis")}}
 
 
 # git diff --name-status 状态字母: 改动后文件仍在卡分支上(A 新增 / M 修改 / R 重命名·取新路径 / C 复制·取新路径 / T 类型变更)
