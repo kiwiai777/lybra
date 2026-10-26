@@ -562,7 +562,17 @@
             ],
             "owner_tier1": null,
             "renderer": "resubmit",
-            "note": "AIPOS-F236: 交回入门被拒(未落交回记录, 不占返工轮)= 按拒因修产物 / 报告后重交(产物入口同一校验再判); 谁修: pi 卡 = loop 同会话续接执行体按拒因修一次(verbs.schema lybra_loop.launch.report_fix.executor.artifact), 子 agent 卡 = 顾问把拒因派给执行子 agent"
+            "note": "AIPOS-F236: 交回入门被拒(未落交回记录, 不占返工轮)= 按拒因修产物 / 报告后重交(产物入口同一校验再判); 谁修: pi 卡 = loop 同会话续接执行体按拒因修一次(verbs.schema lybra_loop.launch.report_fix.executor.artifact), 子 agent 卡 = 顾问把拒因派给执行子 agent。AIPOS-F238: 顾问另有入门判据外的要点(报告含凭据须脱敏 / 验证对象错等)= 不走本出口, 走 [same_round_fix] 同轮补正(带要点续接原执行体)"
+          },
+          "same_round_fix": {
+            "label": "同轮补正(带顾问要点续接原执行体)",
+            "invariants": [
+              "evidence_bound",
+              "traceable"
+            ],
+            "owner_tier1": null,
+            "renderer": "same_round_fix",
+            "note": "AIPOS-F238: 交回入门被拒且顾问复核另发现须同轮纠正的问题 = mark-concluded --outcome same_round 以该拒收记录为所审对象落顾问复核记录(不占返工轮), loop 带拒因 + 顾问要点续接原执行体修改后重交; 入门判据一条不放宽, 被拒报告永不入门。见 nodes.N4.same_round.rejection"
           },
           "owner_extension": {
             "label": "授权追加返工",
@@ -581,6 +591,7 @@
           "withdraw": "{prefix} queue withdraw --task-id {task_id} --actor {advisor} --reason \"<Owner 撤卡原话 / 裁决引用>\" --dry-run",
           "owner_ask": "{prefix} loop note --task-id {task_id} --owner-reason {owner_reason} --ask \"<要 Owner 定什么>\" --recommend \"<顾问建议>\"",
           "same_round": "{prefix} mark-concluded --task-id {task_id} --actor {advisor} --report-path {report} --outcome {outcome} --focus-items '[\"<要补正的点>\"]' --dry-run",
+          "same_round_fix": "{prefix} mark-concluded --task-id {task_id} --actor {advisor} --report-path {report} --outcome {outcome} --focus-items '[\"<入门判据外须同轮纠正的点, 如报告含凭据须脱敏 / 验证对象错>\"]' --dry-run(预演通过后去掉 --dry-run 落写), 然后原命令续跑 lybra loop --task-id {task_id}(pi 卡 = 同会话续接原执行体带拒因 + 顾问要点修改重交; 子 agent 卡 = loop 结束原文给同轮补正指令, 顾问派给执行子 agent)",
           "subject_hint": {
             "branch": "",
             "candidate": ": 来源卡修复出新候选后另出的验证卡",
@@ -724,18 +735,21 @@
           "return_rejected": {
             "branch": [
               "fix_resubmit",
+              "same_round_fix",
               "new_subject",
               "withdraw",
               "change_scope"
             ],
             "candidate": [
               "fix_resubmit",
+              "same_round_fix",
               "new_subject",
               "withdraw",
               "change_scope"
             ],
             "governance_outputs": [
               "fix_resubmit",
+              "same_round_fix",
               "new_subject",
               "withdraw",
               "change_scope"
@@ -799,7 +813,7 @@
           "rework_limit_note": "返工额度已用尽({why}), 同主体返工改为带第一档事由升 Owner",
         "advisor_placeholder": "<你的顾问实例>",
         "budget_unknown": "返工额度判不出({error}), 按原状态列出口(门 queue rework 照常核额度)",
-        "resubmit": "{who}; 修后重交(产物入口同一校验再判): {command}",
+        "resubmit": "{who}; 修后重交(产物入口同一校验再判): {command}; 另有顾问要点(入门判据外须同轮纠正的问题)= 走 [same_round_fix] 同轮补正",
         "resubmit_who_pi": "pi 卡: 原命令续跑 loop = 同会话续接执行体按拒因修一次(lybra_loop.launch.report_fix.executor.artifact)",
         "resubmit_who_subagent": "子 agent 卡({harness}): 顾问把拒因原文派给执行子 agent 修产物 / 报告",
         "resubmit_who_unknown": "执行方式判不出({error}): pi 卡 = 续跑 loop 续接执行体修, 子 agent 卡 = 顾问派执行子 agent 修",
@@ -830,6 +844,18 @@
         "bound_note": "同轮打回于 {at}, 等其后重写的交回(早于打回时刻的改写 / 门交回不算)",
           "reaudit_ref": "★复审说理(AIPOS-F230 同轮补正): 上一轮 {superseded} 在审计开始前被顾问复核 {review_id} 同轮打回并撤回, 本轮审补正后的交回; 准绳不变(原卡全文)",
           "reaudit_note": "本卡取代被同轮打回撤回的审计卡 `{superseded}`(顾问复核 {review_id}, 所打回交回 {reviewed}); 本轮审补正后的交回, 准绳不变(原卡全文)。"
+        },
+        "rejection": {
+          "description": "AIPOS-F238 件②③(10-26 chris 理想 HBLX-85 实撞): 所审对象 = 入门被拒的交回(复核记录 reviewed_rejection_ref, 写口见 verbs.schema lybra_mark_concluded.same_round.rejection_subject)。推导核(唯一判定 next_resolver.same_round_state, subject = rejection): 最新同轮补正记录所审拒收记录 = 本卡最新交回拒收记录, 且其后门未落新交回(门最新交回 returned_at 不晚于复核时刻)= 补正未消费; 门落新交回(入门通过)或又落新拒收记录(重交仍被拒, 可再次同轮补正)= 已消费 → None。未消费且交回报告 sha256 仍 = 复核时刻(reviewed_report_sha256)= 等执行体补正: 不可推导, action await_rework(带 rejection_id / review_id), missing_records / suggested_action = texts.await_missing / await_suggested(原文给拒因 + 顾问要点)——loop 对 pi 卡以本卡最近一次拉起的固定会话同会话续接(lybra_loop.launch.report_fix.executor.same_round), 会话不可续接 = 以声明 end_reason 结束、结束原文给可派发的同一条完整指令; 报告已改写 = 不拦(推导照常给交回命令, 产物入口同一校验 validate_task_artifact 再判, 程序 / 车道 / 报告头判据一条不放; 再被拒 = 新拒收记录)。入门通过 = 门落交回, 审计卡照常派审, 本轮派审若是复核后首个门交回 = 审计卡 governance_refs 加 texts.reaudit_ref、正文加 texts.reaudit_note(复审说理带顾问要点, 唯一判定 next_resolver.same_round_rejection_reaudit)。被拒的旧报告永不入门、不进审计。",
+          "texts": {
+            "await_missing": "同轮补正交回(顾问复核 {review_id} 同轮打回入门被拒的交回 {rejection_id}({category}), 不占返工轮; 被拒报告不入门)",
+            "await_suggested": "执行体按交回拒因与顾问同轮补正要点修产物后重写交回报告(拒因 {category}: {reason}; 顾问要点: {points}); 报告改写后照常经产物入口重交(同一校验, 判据不放宽){after}。pi 卡 = 原命令续跑 loop, 同会话续接原执行体(lybra_loop.launch.report_fix.executor.same_round, 不占修产物额度); 子 agent 卡 = 顾问把 loop 结束原文的同轮补正指令派给执行子 agent",
+            "bound_note": "同轮打回于 {at}, 等交回报告改写(复核时报告 sha256 {sha}; 原样未改的被拒报告不入门)",
+            "notes": "N2: 顾问复核 {review_id} 同轮打回入门被拒的交回 {rejection_id}(不占返工轮; AIPOS-F238, 声明 transitions nodes.N4.same_round.rejection)",
+            "reaudit_ref": "★复审说理(AIPOS-F238 同轮补正): 本卡交回入门被拒 {rejection_id}({category})后经顾问复核 {review_id} 同轮补正, 本轮审补正后入门的交回 {return_id}; 顾问要点: {points}; 准绳不变(原卡全文), 被拒的旧报告未入门、不在审计范围",
+            "reaudit_note": "本卡交回入门被拒 `{rejection_id}`({category})后, 顾问复核 `{review_id}` 同轮补正(不占返工轮), 本轮审补正后入门的交回 `{return_id}`。顾问要点(逐条核是否落实):\n{point_lines}准绳不变(原卡全文); 被拒的旧报告未入门、不在审计范围。",
+            "point_line": "- {item}\n"
+          }
         }
       },
       "non_pass_recovery": {

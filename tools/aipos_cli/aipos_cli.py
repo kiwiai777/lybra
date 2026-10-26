@@ -3556,6 +3556,9 @@ def build_parser() -> argparse.ArgumentParser:
     loop_status_parser.add_argument("--wait", type=float, default=None, metavar="SECONDS",
                                     help="AIPOS-F136 件①: 有界等待秒数(须 --task-id; 上限读 verbs.schema lybra_loop_status.wait.max_seconds), "
                                     "经 agent watch 等到顾问下一动作 ≠ continue_wait 或到时, 返回当时状态; 禁 until/sleep 轮询")
+    loop_status_parser.add_argument("--rediagnose", action="store_true", default=False,
+                                    help="AIPOS-F240: 只读重判(须 --task-id): 本卡各次运行中早退的拉起按当前声明重读会话记录重新诊断"
+                                    "(开局 / 运行中上下文超限、首轮 / 末轮输入、读入最大的工具结果、压缩记录); 不写任何记录")
     # AIPOS-F138 件③ 的 --verbose 由 AIPOS-F142 件② 统一挂载(verbs.schema envelope_trace.verbose_commands 含 "loop status", 见 build_parser 末)
     # AIPOS-F168 件③: `lybra loop note` —— 给本卡最近一次运行补写 Owner 待决结构字段(声明 verbs.schema lybra_loop_note; --workspace-root 由
     # governance_root_resolution.commands 统一挂载)。与父解析器同名参数用 SUPPRESS 缺省, 不覆盖写在 note 之前的同名参数

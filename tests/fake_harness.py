@@ -43,12 +43,23 @@
     cred_once          AIPOS-F239 (audit card only): first run as work, but the audit report carries a plaintext Bearer header line; on a
                same-session resume it checks the instruction (category named, value not echoed) and swaps the value for [已打码]
     cred_stay          AIPOS-F239: first run as cred_once; on resume leaves the report untouched and exits 0
+    docs_same_round    AIPOS-F238 (executor card only; chris HBLX-85 shape): first run as docs_program_once, the RETURN body also names the
+               wrong verification target (web login) and carries a test credential. Resume with the plain fix-the-artifacts instruction
+               (before the advisor's same-round review) = left untouched (exit 0); resume with the same-round instruction (FAKE_PI_PROMPT
+               names the rejection and every point in FAKE_SAME_ROUND_EXPECT, `|`-separated) = rewrite RETURN per the points (credential
+               redacted, maintenance interface as the verification target) but keep the program (the re-submission is refused again);
+               the next fix-the-artifacts resume after that = move the program out of the slot and rewrite RETURN
     hang_sim   AIPOS-F231: 同 hang, 另起一个脱离本进程组(新会话)的「伪模拟器」进程, cwd = FAKE_SIM_DIR(本卡验证根 run 目录; 验停线按
                run 目录归属清理组外进程)
     provider_401 / provider_429 / length   AIPOS-F231: 写一份 pi 会话记录(文件名 <时刻>_<FAKE_PI_SESSION_ID>.jsonl, 与真实 pi 同形)
                末条助手消息 stopReason=error + errorMessage「401: …」/「429: …」, 或 stopReason=length(本轮输入 = usage.input +
                cacheRead), 不写产物即 exit 0(验早退真实原因 / 退避重试 / 超窗口不续接)
     provider_429_once   AIPOS-F231: 首次同 provider_429, 同会话续接时(FAKE_PI_RESUMES≥1)同 work(验退避重试后完成)
+    run_length / run_length_once   AIPOS-F240: 写一份运行中上下文累积超限的 pi 会话记录(首轮输入 9453 词元; 中间整文件读入 read 31500 字 /
+               bash 32500 字的工具结果; 末条助手消息 stopReason=length, 输入 3338 + 93568; 其后一条 compaction 记录 = pi 退出前已压缩),
+               不写产物即 exit 0; _once = 同会话续接时(FAKE_PI_RESUMES≥1)同 work(验压缩后同会话续接完成)
+    run_length_nocompact / run_length_nocompact_once   AIPOS-F240: 同 run_length 但压缩记录在超限之前(中途自动压缩, 摘要含一行凭据字样),
+               超限之后无压缩; _once = 新会话开工稿含「上次运行摘要」时同 work(验无压缩 → 新会话附摘要重拉完成)
   审计卡: 开工提示给出 `- outputs_digest: <值>(` (AIPOS-F197 被审卡只写治理根)= 报告写 verdict + outputs_digest(照抄), 否则写被审 tip
   FAKE_HARNESS_LOG: 目录; 收到的 argv[1](kickoff)按字节原样落 <卡号>.kickoff, cwd 落 <卡号>.cwd(供逐字节比对)
 事件里故意含一行凭据字样、一个未知事件类型、一行非 JSON(验汇总隐去/计数不刷屏)。
@@ -122,6 +133,38 @@ def provider_session(mode: str) -> None:
              {"type": "message", "message": last}]
     with path.open("a", encoding="utf-8") as fh:
         fh.write("\n".join(json.dumps(x) for x in lines) + "\n")
+
+
+def run_overflow_session(compaction_after: bool) -> None:
+    """AIPOS-F240: 模拟运行中上下文累积超限的 pi 会话记录(真实形同 HBLX-86: 首轮小、整文件读入大材料、末轮 stopReason=length、compaction)。"""
+    sid = os.environ.get("FAKE_PI_SESSION_ID") or "no-session"
+    cwd = os.getcwd()
+    path = Path(os.environ["HOME"]) / ".pi" / "agent" / "sessions" / ("--" + cwd.strip("/").replace("/", "-") + "--") / f"2026-10-26T00-00-00-000Z_{sid}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    def assistant(stop: str, inp: int, cache: int, tool: str) -> dict:
+        return {"type": "message", "message": {"role": "assistant", "provider": "kiwiai", "model": "qwen3.7-plus", "stopReason": stop,
+                                               "usage": {"input": inp, "output": 1 if stop == "length" else 64, "cacheRead": cache},
+                                               "content": [{"type": "toolCall", "id": "c", "name": tool, "arguments": {"path": "big.txt"}}]}}
+
+    def result(tool: str, chars: int) -> dict:
+        return {"type": "message", "message": {"role": "toolResult", "toolCallId": "c", "toolName": tool, "isError": False,
+                                               "content": [{"type": "text", "text": "协" * chars}]}}
+
+    summary = ("## Goal\n补正 BLE 管理升降结论\n## Progress\n已读 PDF p9-11 / p14 / p32(要点见草稿笔记)\n"
+               "api token: fixture-not-a-secret-value\n## Next\n只读 iOS 源码 FEE2 帧段")
+    compaction = {"type": "compaction", "id": "cmp1", "summary": summary, "tokensBefore": 96907, "details": {"readFiles": ["big.txt"]}}
+    lines = [{"type": "session", "version": 3, "id": sid, "cwd": cwd},
+             {"type": "model_change", "provider": "kiwiai", "modelId": "qwen3.7-plus"},
+             {"type": "message", "message": {"role": "user", "content": [{"type": "text", "text": "kickoff"}]}},
+             assistant("toolUse", 9453, 0, "read"), result("read", 31500)]
+    if not compaction_after:
+        lines.append(compaction)
+    lines += [assistant("toolUse", 3000, 40000, "bash"), result("bash", 32500), assistant("length", 3338, 93568, "read")]
+    if compaction_after:
+        lines.append(compaction)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write("\n".join(json.dumps(x, ensure_ascii=False) for x in lines) + "\n")
 
 
 def reviewed_of(task_id: str) -> str | None:
@@ -272,6 +315,39 @@ def docs_program_mode(task_id: str, kickoff: str, mode: str) -> None:
     pi_session(report, "fake-exec-model")
 
 
+def docs_same_round_mode(task_id: str, kickoff: str) -> None:
+    """AIPOS-F238: HBLX-85 shape (see the module docstring, mode docs_same_round); resume = FAKE_PI_RESUMES >= 1 (set by fake pi)."""
+    report = Path(field(kickoff, "报告落点"))
+    program = report.parent / "artifacts" / "demo-launcher"
+    log = Path(os.environ.get("FAKE_HARNESS_LOG") or report.parent.parent)
+    marker = log / f"{task_id}.same-round-applied"
+    prompt = os.environ.get("FAKE_PI_PROMPT", "")
+    if os.environ.get("FAKE_PI_RESUMES", "0") == "0":
+        do_docs(task_id, kickoff)
+        program.write_text("#!/usr/bin/env python3\n" + "".join(f"print('step {i}')\n" for i in range(300)), encoding="utf-8")
+        program.chmod(0o755)
+        report.write_text(report.read_text(encoding="utf-8") + "\n## 验证\n验证对象: 网页登录(浏览器登录后台成功)\n"
+                          "测试账号 admin / 密码 fixture-pass-0000\n", encoding="utf-8")
+        return
+    if "顾问复核" in prompt and "同轮补正" in prompt:
+        expect = [x for x in os.environ.get("FAKE_SAME_ROUND_EXPECT", "").split("|") if x]
+        missing = [x for x in ["INGEST_PROGRAM_IN_NON_CODE_CARD", str(program), *expect] if x not in prompt]
+        if missing:
+            raise SystemExit(f"fake_harness: same-round instruction lacks {missing}: {prompt!r}")
+        text = report.read_text(encoding="utf-8")
+        text = text.replace("验证对象: 网页登录(浏览器登录后台成功)", "验证对象: 维护接口(GET /maint/health 返回 200)")
+        text = text.replace("测试账号 admin / 密码 fixture-pass-0000", "测试账号 admin / 密码 ***(已脱敏)")
+        report.write_text(text + "\n## 同轮补正\n凭据已脱敏; 验证对象改为维护接口。\n", encoding="utf-8")
+        marker.write_text(prompt, encoding="utf-8")
+        pi_session(report, "fake-exec-model")
+        return
+    if marker.exists() and "被产物入口拒收" in prompt and program.exists():
+        (log / f"{task_id}.moved-program").write_bytes(program.read_bytes())
+        program.unlink()
+        report.write_text(report.read_text(encoding="utf-8") + "\n## 按交回拒因修正\n程序不是本卡交付物, 已移出报告落点。\n", encoding="utf-8")
+        pi_session(report, "fake-exec-model")
+
+
 def sha_mode(task_id: str, kickoff: str, mode: str) -> None:
     """AIPOS-F180B: report-header commit_sha fixture modes (audit card only); resume = FAKE_PI_RESUMES >= 1 (set by fake pi)."""
     tip = re.search(r"^- commit_sha: ([0-9a-f]{40})\(", kickoff, re.M).group(1)
@@ -396,6 +472,12 @@ def main() -> int:
         provider_session("provider_429" if mode == "provider_429_once" else mode)  # AIPOS-F231: 早退真实原因在会话记录里
         emit({"type": "agent_end", "messages": []})
         return 0
+    resumed = os.environ.get("FAKE_PI_RESUMES", "0") != "0"
+    if mode in ("run_length", "run_length_nocompact") or (mode == "run_length_once" and not resumed) or (
+            mode == "run_length_nocompact_once" and "上次运行摘要" not in kickoff):
+        run_overflow_session(compaction_after=mode.startswith("run_length_once") or mode == "run_length")  # AIPOS-F240
+        emit({"type": "agent_end", "messages": []})
+        return 0
     if mode.startswith("sha_") and reviewed_of(task_id):
         sha_mode(task_id, kickoff, mode)
         emit({"type": "agent_end", "messages": []})
@@ -414,6 +496,10 @@ def main() -> int:
         return 0
     if mode in ("docs_program_once", "docs_program") and not reviewed_of(task_id):
         docs_program_mode(task_id, kickoff, mode)
+        emit({"type": "agent_end", "messages": []})
+        return 0
+    if mode == "docs_same_round" and not reviewed_of(task_id):
+        docs_same_round_mode(task_id, kickoff)
         emit({"type": "agent_end", "messages": []})
         return 0
     if mode == "docs" and not reviewed_of(task_id):

@@ -7296,10 +7296,14 @@ def _mark_concluded_same_round(*, task_id: str, actor_text: str, report_ref: str
     """AIPOS-F230 件④: 同轮补正写口(声明 verbs.schema lybra_mark_concluded.same_round + transitions nodes.N4.same_round)。前置全过才写:
     卡在 claimed / 有门交回 / 复核者角色类(queue rework 同一判据)/ 该交回未被同轮打回过(next_resolver.same_round_state)/ 审计未开始
     (本交回无裁决; 在途审计卡全在 audit_not_started_states)/ 补正要点非空。写: 顾问复核记录(event, outcome = same_round, 不登记返工轮)+
-    本轮未认领审计卡同一操作撤回(queue_mutation.withdraw_linked_audits)。dry_run = 零写入(预演复核记录与撤回清单)。"""
+    本轮未认领审计卡同一操作撤回(queue_mutation.withdraw_linked_audits)。dry_run = 零写入(预演复核记录与撤回清单)。
+    AIPOS-F238 件①: 「有门交回」放宽为「有门交回或交回拒收记录」——无门交回(或门最新交回早于最新拒收记录)而有交回拒收记录 = 所审对象是该拒收记录
+    (唯一判定 next_resolver.same_round_rejection_subject; 复核记录 reviewed_rejection_ref / 复核时刻产物指纹 / 报告 sha256); 两者都没有才拒
+    SAME_ROUND_NO_RETURN。同一所审对象(门交回或拒收记录)的复核未消费 = SAME_ROUND_ALREADY_PENDING。入门判据不放宽(被拒报告不入门)。"""
     from tools.aipos_cli.custom_roles import authorize_instance_class
     from tools.aipos_cli.next_resolver import (_read_task_records, card_delivery_subject, governance_outputs_return_binding,
-                                               review_rework_declaration, same_round_declaration, same_round_state)
+                                               review_rework_declaration, same_round_declaration, same_round_rejection_subject,
+                                               same_round_rejection_values, same_round_state)
     from tools.aipos_cli.queue_mutation import in_flight_audit_cards, withdraw_linked_audits
     from tools.aipos_cli.record_writer import render_markdown, write_records_atomic
 
@@ -7325,15 +7329,21 @@ def _mark_concluded_same_round(*, task_id: str, actor_text: str, report_ref: str
         return _refuse("SAME_ROUND_ROLE", required_class=role_gate["required_class"], actor=actor_text, reason=role_gate["reason"])
     records = _read_task_records(resolved_root, task_id)
     return_id = str((records.get("latest_return") or {}).get("return_id") or "").strip()
-    if not return_id:
+    # AIPOS-F238 件①: 所审对象 = 入门被拒的交回(无门交回, 或门最新交回早于最新交回拒收记录; 唯一判定 next_resolver.same_round_rejection_subject)
+    rejection = same_round_rejection_subject(resolved_root, task_id, records)
+    if not return_id and rejection is None:
         return _refuse("SAME_ROUND_NO_RETURN")
+    subject_ref = str(rejection.get("rejection_id") or "") if rejection is not None else return_id
     pending = same_round_state(resolved_root, task_id, fm, records)
     if pending is not None:
         review = pending["review"]
-        return _refuse("SAME_ROUND_ALREADY_PENDING", return_id=return_id, reviewed_at=review.get("verdict_at") or "?",
-                       review_id=review.get("verdict_id") or "?")
+        pending_ref = (str(review.get("reviewed_rejection_ref") or "") if pending["subject"] == "rejection"
+                       else str(review.get("reviewed_return_record_ref") or ""))
+        if pending_ref == subject_ref:  # 同一所审对象(门交回 / 拒收记录)不重复打回
+            return _refuse("SAME_ROUND_ALREADY_PENDING", return_id=subject_ref, reviewed_at=review.get("verdict_at") or "?",
+                           review_id=review.get("verdict_id") or "?")
     latest_verdict = records.get("latest_verdict") or {}
-    if latest_verdict and str(latest_verdict.get("reviewed_return_record_ref") or "") == return_id:
+    if rejection is None and latest_verdict and str(latest_verdict.get("reviewed_return_record_ref") or "") == return_id:
         return _refuse("SAME_ROUND_AUDIT_STARTED", audit_task_id=latest_verdict.get("audit_task_id") or "?",
                        detail=f"本交回已出裁决 {latest_verdict.get('verdict_id') or '?'}")
     in_flight = in_flight_audit_cards(resolved_root, task_id)
@@ -7357,21 +7367,30 @@ def _mark_concluded_same_round(*, task_id: str, actor_text: str, report_ref: str
     review_id = f"{event_type}_{task_id}_{file_slug('compact', reviewed_at).replace('.', '_')}"
     subject = card_delivery_subject(resolved_root, task_id, fm)
     binding = dict(governance_outputs_return_binding(resolved_root, task_id) or {}) or {"kind": subject.get("kind")}
+    # AIPOS-F238 件①: 所审对象 = 拒收记录时 reviewed_return_record_ref 为空, 另记 rejection_id / 复核时刻产物指纹 / 报告 sha256; 门交回对象这三键为 null
+    rejection_values = (same_round_rejection_values(resolved_root, task_id, rejection) if rejection is not None
+                        else {"reviewed_rejection_ref": None, "reviewed_fingerprint": None, "reviewed_report_sha256": None})
     values = {"record_type": RecordType.TASK_PROGRESS_EVENT, "event_type": event_type, "task_id": task_id, "review_id": review_id,
               "actor": actor_text, "reviewer_instance": actor_text, "timestamp": reviewed_at, "outcome": str(decl["outcome"]),
-              "reviewed_return_record_ref": return_id, "artifact_subject": binding, "report_path": report_ref or None,
-              "conclusion_note": note or None, "focus_items": items, "acceptance_criteria": criteria,
-              "withdrawn_audit_task_id": withdraw_ids[-1] if withdraw_ids else None}
+              "reviewed_return_record_ref": return_id if rejection is None else None, "artifact_subject": binding,
+              "report_path": report_ref or None, "conclusion_note": note or None, "focus_items": items, "acceptance_criteria": criteria,
+              "withdrawn_audit_task_id": withdraw_ids[-1] if withdraw_ids else None, **rejection_values}
     meta = {key: values[key] for key in decl["record_fields"]}  # 字段只读声明(声明多出未知字段 = KeyError, fail-closed)
-    body = (f"# Advisor Review (same round): {task_id}\n\n顾问 {actor_text} 在审计开始前复核交回 {return_id}, 同轮打回补正(不登记返工轮、"
+    what = (f"入门被拒的交回 {subject_ref}({rejection.get('category') or '?'}; 拒收记录, 未落门交回)" if rejection is not None
+            else f"交回 {return_id}")
+    body = (f"# Advisor Review (same round): {task_id}\n\n顾问 {actor_text} 在审计开始前复核{what}, 同轮打回补正(不登记返工轮、"
             f"不计返工上限)" + (f"; 本轮未认领审计卡 {', '.join(withdraw_ids)} 同一操作撤回" if withdraw_ids else "") + "。\n\n"
             + "".join(f"- 补正要点: {x}\n" for x in items) + "".join(f"- 验收: {x}\n" for x in criteria)
-            + "\n卡留 claimed; 执行体补正重写交回后重交(审计卡 = 派下一轮审计取代被撤轮; 快车道 = 回到顾问复核)。判据 transitions nodes.N4.same_round; "
-              "实现 tools/aipos_cli/board_adapter._mark_concluded_same_round。\n")
+            + ("\n卡留 claimed; 执行体按拒因与上列要点修产物后重写交回报告, 照常经产物入口重交(判据不放宽, 被拒报告不入门; pi 卡 loop 同会话续接原执行体)。"
+               "判据 transitions nodes.N4.same_round.rejection; " if rejection is not None else
+               "\n卡留 claimed; 执行体补正重写交回后重交(审计卡 = 派下一轮审计取代被撤轮; 快车道 = 回到顾问复核)。判据 transitions nodes.N4.same_round; ")
+            + "实现 tools/aipos_cli/board_adapter._mark_concluded_same_round。\n")
     record_path = record_dir(resolved_root, "events", task_id) / f"{review_id}.md"
     data: dict[str, Any] = {"task_id": task_id, "from_queue": queue_state, "outcome": str(decl["outcome"]), "moved": False,
                             "review_record": {"review_id": review_id, "path": str(record_path.relative_to(resolved_root)),
-                                              "reviewed_return_record_ref": return_id, "frontmatter": meta}}
+                                              "reviewed_return_record_ref": meta.get("reviewed_return_record_ref"),
+                                              "subject": "rejection" if rejection is not None else "return",
+                                              "reviewed_rejection_ref": meta.get("reviewed_rejection_ref"), "frontmatter": meta}}
     if dry_run:
         data["linked_audits"] = withdraw_linked_audits(resolved_root, task_id, action="same_round", actor=actor_text, dry_run=True,
                                                        detail=f"顾问复核 {review_id}", only=withdraw_ids)

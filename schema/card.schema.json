@@ -1164,7 +1164,13 @@
           "error_message_path": ["message", "errorMessage"],
           "provider_path": ["message", "provider"],
           "input_token_paths": [["message", "usage", "input"], ["message", "usage", "cacheRead"]],
-          "diagnosis_note": "AIPOS-F231 件④: loop 早退诊断(verbs.schema lybra_loop.launch.early_exit)按本定位器找该次拉起的会话记录(session_globs 中文件名以 session_id_file_suffix 结尾者), 取最后一条 role_path = assistant_role 的条目的 stop_reason_path / error_message_path / provider_path / model_path / input_token_paths(求和 = 本轮输入 token); 无这些键的 harness = 不诊断(unknown)"
+          "entry_type_path": ["type"],
+          "compaction_entry_type": "compaction",
+          "compaction_summary_path": ["summary"],
+          "tool_result_role": "toolResult",
+          "tool_name_path": ["message", "toolName"],
+          "text_key": "text",
+          "diagnosis_note": "AIPOS-F231 件④: loop 早退诊断(verbs.schema lybra_loop.launch.early_exit)按本定位器找该次拉起的会话记录(session_globs 中文件名以 session_id_file_suffix 结尾者), 取最后一条 role_path = assistant_role 的条目的 stop_reason_path / error_message_path / provider_path / model_path / input_token_paths(求和 = 本轮输入 token); 无这些键的 harness = 不诊断(unknown)。AIPOS-F240: stopReason=length 时另按 entry_type_path = compaction_entry_type 认压缩记录(条数 / 是否在超限助手消息之后; 摘要 = compaction_summary_path, 只给新会话开工稿、不进运行记录), 按 role_path = tool_result_role 认工具结果(工具名 tool_name_path, 字数 = content_path 下各 text_key 文本长度之和), 首条助手消息的 input_token_paths 求和 = 首轮输入; 无这些键 = 无压缩 / 无工具结果统计"
         },
         "claude-code": {
           "session_globs": ["~/.claude/projects/*/*.jsonl", "~/.claude/projects/*/*/subagents/*.jsonl"],

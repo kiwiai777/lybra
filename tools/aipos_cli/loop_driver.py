@@ -644,6 +644,15 @@ class LaunchPlan:
         old = self.kickoff
         return dataclasses.replace(self, kickoff=prompt, argv=[prompt if a == old else a for a in self.argv])
 
+    def fresh_session(self, session_id: str, kickoff: str) -> "LaunchPlan":
+        """AIPOS-F240: 新会话重拉的拉起计划——同一 argv 模板, 会话 id 换成新 id(整参数或跨机命令串里的会话 id 都换), 整参数 kickoff 换成
+        新开工稿(跨机经 stdin 读 kickoff)。不再是续接(resumed_session = False)。"""
+        import dataclasses
+
+        old_kickoff, old_session = self.kickoff, self.session_id
+        argv = [kickoff if a == old_kickoff else (a.replace(old_session, session_id) if old_session else a) for a in self.argv]
+        return dataclasses.replace(self, kickoff=kickoff, argv=argv, session_id=session_id, resumed_session=False)
+
     def to_dict(self) -> dict[str, Any]:
         return {"card": self.card, "harness": self.harness, "instance": self.instance, "launched": not self.refusal,
                 "refusal": self.refusal, "manual_hint": self.manual_hint if self.refusal else "",
@@ -1079,12 +1088,37 @@ def early_exit_declaration(contract: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(decl, dict) or any(k not in decl for k in keys):
         raise SchemaLoadError(f"verbs.schema.json verbs.{LOOP_VERB}.launch.early_exit 未声明齐 {list(keys)}")
     ends = decl["end_reasons"]
-    if (not isinstance(ends, dict) or set(ends) != {"provider", "context"} or any(v not in contract["run_record"]["end_reasons"] for v in ends.values())
+    if (not isinstance(ends, dict) or set(ends) != {"provider", "context", "run_context"}
+            or any(v not in contract["run_record"]["end_reasons"] for v in ends.values())
             or int(decl["max_retries"]) < 0 or float(decl["base_seconds"]) <= 0 or float(decl["factor"]) < 1 or float(decl["max_seconds"]) <= 0
-            or "{artifact}" not in str(decl["retry_prompt"])):
-        raise SchemaLoadError(f"verbs.schema.json verbs.{LOOP_VERB}.launch.early_exit: end_reasons 须恰为 provider / context 且已声明, "
-                              "重试次数 ≥0、退避秒数为正、factor ≥1, retry_prompt 须含 {artifact}")
+            or "{artifact}" not in str(decl["retry_prompt"]) or not {"context_overflow", "run_context_overflow"} <= set(decl["kinds"] or {})):
+        raise SchemaLoadError(f"verbs.schema.json verbs.{LOOP_VERB}.launch.early_exit: end_reasons 须恰为 provider / context / run_context 且已声明, "
+                              "kinds 含 context_overflow / run_context_overflow, 重试次数 ≥0、退避秒数为正、factor ≥1, retry_prompt 须含 {artifact}")
+    _check_run_overflow(decl.get("run_overflow"), contract)
     return decl
+
+
+_RUN_OVERFLOW_KEYS = ("launch_first_ratio", "top_tool_results", "resume_max", "fresh_max", "resume_kind", "fresh_kind", "summary_max_chars",
+                      "points_max_chars", "artifacts_max", "next_end_reasons", "resume_prompt", "fresh_note", "summary_missing", "artifacts_none",
+                      "line", "launch_note", "resume_say", "fresh_say", "end_tried", "exits_head", "exits")
+
+
+def _check_run_overflow(decl: Any, contract: dict[str, Any]) -> None:
+    """AIPOS-F240: verbs.schema lybra_loop.launch.early_exit.run_overflow 形校验(fail-closed): 键齐; 比例 ∈ (0,1]; 次数 / 上限为非负整数;
+    两种续接类型非空且不同; next_end_reasons ⊆ run_record.end_reasons; resume_prompt 含 {artifact}; exits 为非空串列表。"""
+    from tools.schema_loader import SchemaLoadError
+
+    where = f"verbs.schema.json verbs.{LOOP_VERB}.launch.early_exit.run_overflow"
+    if not isinstance(decl, dict) or any(k not in decl for k in _RUN_OVERFLOW_KEYS):
+        raise SchemaLoadError(f"{where} 未声明齐 {list(_RUN_OVERFLOW_KEYS)}(AIPOS-F240)")
+    counts = ("top_tool_results", "resume_max", "fresh_max", "summary_max_chars", "points_max_chars", "artifacts_max")
+    if (not 0 < float(decl["launch_first_ratio"]) <= 1 or any(isinstance(decl[k], bool) or not isinstance(decl[k], int) or decl[k] < 0 for k in counts)
+            or not str(decl["resume_kind"]).strip() or not str(decl["fresh_kind"]).strip() or decl["resume_kind"] == decl["fresh_kind"]
+            or not isinstance(decl["next_end_reasons"], list) or set(decl["next_end_reasons"]) - set(contract["run_record"]["end_reasons"])
+            or "{artifact}" not in str(decl["resume_prompt"])
+            or not isinstance(decl["exits"], list) or not decl["exits"] or not all(isinstance(x, str) and x.strip() for x in decl["exits"])):
+        raise SchemaLoadError(f"{where}: launch_first_ratio ∈ (0,1], 次数 / 上限为非负整数, resume_kind ≠ fresh_kind 且非空, "
+                              "next_end_reasons ⊆ run_record.end_reasons, resume_prompt 含 {artifact}, exits 为非空串列表")
 
 
 def provider_backoff_seconds(early: dict[str, Any], attempt: int) -> float:
@@ -1409,16 +1443,22 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
     artifact = str(Path(str(watch_args.workspace_root)) / wait_patterns[0]) if wait_patterns else "(产物落点)"
     attempt, resume, retries = plan, 0, 0
     early = early_exit_declaration(contract)
+    overflow = early["run_overflow"]
+    # AIPOS-F240: base = 当前会话的拉起计划(新会话重拉后换成新计划; 同会话续接 / 退避重试都从它派生); 运行中超限续接 / 新会话重拉各自计数,
+    # 与半途停笔续接(resume)/ 退避重试(retries)分开; offset = 新会话之前的拉起次数(新会话首次拉起的续接序号从 0 起)
+    base, ctx_resumes, fresh, offset = plan, 0, 0, 0
+    launch_kind, launch_why = "", ""
     diag: dict[str, Any] = {}
     with _signals_raise_interrupt():
         while True:
-            relaunch = resume + retries
+            relaunch = resume + retries + ctx_resumes + fresh
             args = watch_args if relaunch == 0 else SimpleNamespace(**{**vars(watch_args), "timeout": (deadline - utc_now()).total_seconds()})
-            why = (f"模型服务 {diag.get('status')} 退避重试 {retries}/{early['max_retries']}" if retries and diag.get("kind") in early["retry_statuses"].values()
-                   else "")
+            why = launch_why or (f"模型服务 {diag.get('status')} 退避重试 {retries}/{early['max_retries']}"
+                                 if retries and diag.get("kind") in early["retry_statuses"].values() else "")
             run = _launch_once(index, step, attempt, governance_root, result, contract=contract, decl=decl, watch=watch,
                                watch_args=args, ready=ready, say=say, actor=actor, envelope_id=envelope_id, recorder=recorder,
-                               resume=relaunch, resume_why=why, extension=extension)
+                               resume=relaunch - offset, resume_why=why, extension=extension, resume_kind=launch_kind)
+            launch_kind, launch_why = "", ""
             if run["outcome"] == "artifact_ready":
                 return False
             if run["outcome"] == "stopped":  # AIPOS-F231 件②: 等待中收到停线请求(进程组已在收尾时终止, 现场已存)
@@ -1431,7 +1471,7 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
                 # AIPOS-F231 件④: 早退先读会话记录的真实原因(401 / 429 / length / 其他), 写进运行记录与 loop status
                 from tools.aipos_cli.loop_run_record import diagnosis_line, session_diagnosis
 
-                diag = session_diagnosis(plan.harness, plan.session_id, early)
+                diag = session_diagnosis(plan.harness, base.session_id, early)
                 diag["line"] = diagnosis_line(diag, early)
                 recorder.launch_diagnosis(diag)
                 say(f"[{index}] early_exit: {diag['line']}")
@@ -1443,35 +1483,74 @@ def _launched_wait(index: int, step: LoopStep, plan: LaunchPlan, governance_root
                         recorder.provider_retry({"attempt": retries, "max": int(early["max_retries"]), "status": diag.get("status"),
                                                  "kind": diag["kind"], "provider": diag.get("provider"), "backoff_seconds": backoff})
                         say(f"[{index}] retry: 模型服务 {diag.get('status')}({early['kinds'][diag['kind']]}, provider {diag.get('provider')}) → "
-                            f"退避 {backoff:g}s 后第 {retries}/{early['max_retries']} 次重试" + (f"(同会话 {plan.session_id})" if plan.session_id else ""))
+                            f"退避 {backoff:g}s 后第 {retries}/{early['max_retries']} 次重试" + (f"(同会话 {base.session_id})" if base.session_id else ""))
                         if _backoff_wait(governance_root, recorder, backoff):
                             _stop_requested_end(index, governance_root, result, contract=contract, recorder=recorder, say=say)
                             return True
                         prompt = str(early["retry_prompt"]).replace("{artifact}", artifact).replace("{status}", str(diag.get("status"))).replace(
                             "{kind}", str(early["kinds"][diag["kind"]]))
-                        attempt = plan.resumed(prompt) if plan.session_id else plan
+                        attempt = base.resumed(prompt) if base.session_id else base
                         continue
+                if diag["kind"] == "run_context_overflow":
+                    # AIPOS-F240 件②: 运行中累积超 = 会话已压缩则同会话续接, 无压缩则新会话附上次运行摘要重拉一次; 用尽 = 出口全集结束
+                    comp = diag.get("compaction") or {}
+                    why_not = ""
+                    if base.session_id and comp.get("after_overflow") and ctx_resumes < int(overflow["resume_max"]) and remaining > 0:
+                        ctx_resumes += 1
+                        values = _overflow_values(governance_root, base, artifact, overflow)
+                        launch_kind = str(overflow["resume_kind"])
+                        launch_why = str(overflow["resume_say"]).format(session_id=base.session_id, count=ctx_resumes, max=overflow["resume_max"])
+                        step.launch = {**(step.launch or {}), "session_id": base.session_id, "context_resumes": ctx_resumes}
+                        say(f"[{index}] resume: {launch_why}")
+                        attempt = base.resumed(str(overflow["resume_prompt"]).format(artifact=artifact, **values))
+                        continue
+                    if base.session_id and not comp.get("after_overflow") and fresh < int(overflow["fresh_max"]) and remaining > 0:
+                        fresh_plan, why_not = _fresh_session_plan(governance_root, plan, base, artifact, overflow, diag)
+                        if fresh_plan is not None:
+                            fresh += 1
+                            offset = resume + retries + ctx_resumes + fresh
+                            launch_kind = str(overflow["fresh_kind"])
+                            launch_why = str(overflow["fresh_say"]).format(old=base.session_id, session_id=fresh_plan.session_id, count=fresh,
+                                                                           max=overflow["fresh_max"])
+                            step.launch = {**(step.launch or {}), "session_id": fresh_plan.session_id, "fresh_sessions": fresh}
+                            say(f"[{index}] fresh: {launch_why}")
+                            if _context_before_launch(index, step, fresh_plan, governance_root, result, contract=contract, say=say,
+                                                      recorder=recorder):
+                                return True  # AIPOS-F231 件⑤ 同一开局估算: 附摘要后仍超窗口安全上限 = 不拉起
+                            base = attempt = fresh_plan
+                            continue
+                    if remaining <= 0:
+                        why_not = why_not or "等待已无剩余时长"
+                    tried = str(overflow["end_tried"]).format(resumes=ctx_resumes, resume_max=overflow["resume_max"], fresh=fresh,
+                                                              fresh_max=overflow["fresh_max"], why=f"({why_not})" if why_not else "")
+                    exits = str(overflow["exits_head"]) + " / ".join(str(x).format(model=diag.get("model") or "?") for x in overflow["exits"])
+                    step.ok = False
+                    step.message = f"拉起的 {plan.harness} 进程早退(exit {run['returncode']}): {diag['line']}{tried}{exits}"
+                    say(f"[{index}] exit {wait_timeout} — {step.message}")
+                    result.outcome, result.exit_code, result.message = "wait_timeout", wait_timeout, step.message
+                    result.reason = str(early["end_reasons"]["run_context"])
+                    return True
                 if diag["kind"] in early["retry_statuses"].values() or diag["kind"] == "context_overflow":
                     end = early["end_reasons"]["context" if diag["kind"] == "context_overflow" else "provider"]
                     tried = (f"; 已退避重试 {retries}/{early['max_retries']} 次仍失败(额度 / 凭据问题, 归顾问: 查 provider {diag.get('provider')} 的额度 / 凭据)"
-                             if diag["kind"] != "context_overflow" else "; 不续接(续接只会再超)")
+                             if diag["kind"] != "context_overflow" else str(overflow["launch_note"]))
                     step.ok = False
                     step.message = f"拉起的 {plan.harness} 进程早退(exit {run['returncode']}): {diag['line']}{tried}"
                     say(f"[{index}] exit {wait_timeout} — {step.message}")
                     result.outcome, result.exit_code, result.message, result.reason = "wait_timeout", wait_timeout, step.message, str(end)
                     return True
-            if run["outcome"] == "early_exit" and _should_resume(plan, run["returncode"], resume, (deadline - utc_now()).total_seconds()):
+            if run["outcome"] == "early_exit" and _should_resume(base, run["returncode"], resume, (deadline - utc_now()).total_seconds()):
                 resume += 1
-                step.launch = {**(step.launch or {}), "session_id": plan.session_id, "resumes": resume, "provider_retries": retries}
-                say(f"[{index}] resume: {plan.harness} {plan.card} exit 0 而产物未就绪(半途停笔) → 同会话 {plan.session_id} 续接 "
-                    f"{resume}/{plan.resume_max}(等的是 {artifact})")
-                attempt = plan.resumed(plan.resume_prompt.replace("{artifact}", artifact))
+                step.launch = {**(step.launch or {}), "session_id": base.session_id, "resumes": resume, "provider_retries": retries}
+                say(f"[{index}] resume: {plan.harness} {plan.card} exit 0 而产物未就绪(半途停笔) → 同会话 {base.session_id} 续接 "
+                    f"{resume}/{base.resume_max}(等的是 {artifact})")
+                attempt = base.resumed(base.resume_prompt.replace("{artifact}", artifact))
                 continue
             step.ok = False
             if run["outcome"] == "early_exit":
                 tail = "\n".join(f"    {line}" for line in run["stderr_tail"]) or "    (stderr 无输出)"
-                resumed = (f"(同会话 {plan.session_id} 已续接 {resume}/{plan.resume_max} 次仍未写出)"
-                           if plan.session_id and run["returncode"] == 0 else "")
+                resumed = (f"(同会话 {base.session_id} 已续接 {resume}/{base.resume_max} 次仍未写出)"
+                           if base.session_id and run["returncode"] == 0 else "")
                 step.message = (f"拉起的 {plan.harness} 进程已退出(exit {run['returncode']})而产物未就绪{resumed}: 等的是 {wait_patterns}\n"
                                 + (f"  {diag['line']}\n" if diag.get("line") else "") + f"  stderr 末尾:\n{tail}")
             else:
@@ -1519,6 +1598,64 @@ def _extend_wait(index: int, plan: LaunchPlan, governance_root: Path, rc: int, *
     return rc, ""
 
 
+def _report_slot_listing(artifact: str, overflow: dict[str, Any]) -> str:
+    """AIPOS-F240: 本卡报告落点(等待产物所在目录)已有产物清单(相对路径 + 字节数, 至多 artifacts_max 项; 无 = artifacts_none)。只列名, 不读内容。"""
+    slot = Path(artifact).parent
+    limit = int(overflow["artifacts_max"])
+    try:
+        files = sorted(p for p in slot.rglob("*") if p.is_file()) if slot.is_dir() else []
+        shown = [f"{p.relative_to(slot)}({p.stat().st_size} 字节)" for p in files[:limit]]
+    except OSError as exc:  # 清单读不出 = 写明原因(出声), 不阻断续接
+        return f"(报告落点 {slot} 产物清单读不出: {type(exc).__name__}: {exc})"
+    if len(files) > limit:
+        shown.append(f"…另 {len(files) - limit} 项")
+    return f"{slot}/ " + "; ".join(shown) if shown else str(overflow["artifacts_none"])
+
+
+def _overflow_values(governance_root: Path, plan: LaunchPlan, artifact: str, overflow: dict[str, Any]) -> dict[str, str]:
+    """AIPOS-F240: 运行中上下文超限续接指令 / 新会话摘要的占位值——卡面路径、本卡此刻要点(推导核 derive_next_step 唯一推导的建议动作,
+    含返工 / 复核要点; 截 points_max_chars 字)、报告落点已有产物清单、读法纪律(subagent_kickoff.read_discipline_rule 唯一渲染)。
+    推导出错 = 要点处写明原因(不吞, 不阻断续接)。"""
+    from tools.aipos_cli.next_resolver import derive_next_step
+    from tools.aipos_cli.subagent_kickoff import read_discipline_rule
+    from tools.schema_loader import SchemaLoadError
+
+    card_path, _queue = _find_task_in_queue(governance_root, plan.card)
+    try:
+        derived = derive_next_step(plan.card, governance_root)
+        points = str(derived.get("suggested_action") or derived.get("notes") or "(推导核未给建议)")
+    except (OSError, ValueError, LookupError, SchemaLoadError) as exc:
+        points = f"(本卡此刻要点推导出错: {type(exc).__name__}: {exc}; 以卡面为准)"
+    limit = int(overflow["points_max_chars"])
+    points = points[:limit] + ("…(已截断, 全文见 lybra next)" if len(points) > limit else "")
+    return {"card_path": str(card_path or plan.card), "points": points, "artifacts": _report_slot_listing(artifact, overflow),
+            "read_discipline": f"大文件读法: {read_discipline_rule()}"}
+
+
+def _fresh_session_plan(governance_root: Path, plan: LaunchPlan, base: LaunchPlan, artifact: str, overflow: dict[str, Any],
+                        diag: dict[str, Any]) -> tuple[LaunchPlan | None, str]:
+    """AIPOS-F240 件②: 无压缩记录的运行中超限 = 新会话重拉计划: 新会话 id(harness 模板 session 声明, harness_launch.session_launch_args
+    唯一铸造)+ 原开工稿(plan.kickoff, 不叠加)后附 fresh_note(上次会话最近一条压缩摘要经打码截断; 无 = summary_missing)。
+    铸不出新会话 id = (None, 原因)。"""
+    from tools.aipos_cli.autonomy_policy import launchable_harnesses
+    from tools.aipos_cli.harness_launch import session_launch_args
+    from tools.aipos_cli.loop_run_record import session_compaction_summary, top_tool_results_text
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        session = session_launch_args(launchable_harnesses().get(base.harness) or {}, base.harness, base.card)
+    except (ValueError, SchemaLoadError) as exc:
+        return None, f"新会话 id 铸不出: {exc}"
+    if session is None:
+        return None, f"harness {base.harness} 模板无 session 声明, 无从新开会话"
+    summary = (session_compaction_summary(base.harness, base.session_id, int(overflow["summary_max_chars"]))
+               or str(overflow["summary_missing"]).format(top=top_tool_results_text(diag)))
+    values = _overflow_values(governance_root, base, artifact, overflow)
+    note = str(overflow["fresh_note"]).format(session_id=base.session_id, summary=summary, artifacts=values["artifacts"],
+                                              read_discipline=values["read_discipline"])
+    return base.fresh_session(session[0], f"{plan.kickoff}\n\n{note}"), ""
+
+
 def _should_resume(plan: LaunchPlan, returncode: Any, resumed: int, remaining_seconds: float) -> bool:
     """AIPOS-F171B 件②: 是否同会话续接(唯一判定)——固定了会话、进程以 exit 0 自行结束(非 0 / 被信号终止 = 维持早退原判)、
     续接未达上限、等待仍有剩余时长。"""
@@ -1528,7 +1665,8 @@ def _should_resume(plan: LaunchPlan, returncode: Any, resumed: int, remaining_se
 def _launch_once(index: int, step: LoopStep, plan: LaunchPlan, governance_root: Path, result: LoopResult, *,
                  contract: dict[str, Any], decl: dict[str, Any], watch: Callable[..., int], watch_args: SimpleNamespace,
                  ready: Callable[[list[str]], bool], say: Callable[[str], None], actor: str, envelope_id: str,
-                 recorder: LoopRunRecorder, resume: int, resume_why: str = "", extension: dict[str, Any] | None = None) -> dict[str, Any]:
+                 recorder: LoopRunRecorder, resume: int, resume_why: str = "", extension: dict[str, Any] | None = None,
+                 resume_kind: str = "") -> dict[str, Any]:
     """一次拉起(resume=0)或同会话第 resume 次续接: 起进程 → 留痕 → 经唯一哨兵等待 → 收尾清进程组(调用方须已在 _signals_raise_interrupt 内)。
     返回 {outcome: artifact_ready | early_exit | timeout | launch_failed | record_failed, returncode, watch_rc, stderr_tail};
     launch_failed / record_failed 已按出口填 result。"""
@@ -1555,11 +1693,12 @@ def _launch_once(index: int, step: LoopStep, plan: LaunchPlan, governance_root: 
             return {"outcome": "launch_failed"}
         step.launch = {**(step.launch or {}), "pid": harness.pid, "pgid": harness.pgid, "remote_pgid": harness.remote_pgid}
         remote_part = f" remote_pgid={harness.remote_pgid}(经 ssh, kickoff 经 stdin)" if plan.remote else ""
-        what = f"同会话续接 {resume}/{plan.resume_max} 指令" if resume else f"工位 my-tasks --task-id {plan.card} next_card.kickoff"
+        what = (f"同会话续接 {resume}/{plan.resume_max} 指令" if resume
+                else f"工位 my-tasks --task-id {plan.card} next_card.kickoff" + (f" + 上次运行摘要({resume_kind})" if resume_kind else ""))
         say(f"[{index}] launch: {plan.harness} @ {where} pid={harness.pid} pgid={harness.pgid}{remote_part}(信封 {envelope_id} launch_harnesses 授权; "
             f"kickoff = {what}; 禁提权 {harness.privilege_guard['state']}: {harness.privilege_guard['detail']}; "
             f"模型 {model_label(plan.model)}" + (f"; 会话 {plan.session_id}" if plan.session_id else "") + ")")
-        recorder.launch_started(plan, harness, resume=resume, resume_why=resume_why)
+        recorder.launch_started(plan, harness, resume=resume, resume_why=resume_why, resume_kind=resume_kind)
         if early:
             raise LoopInterrupted(early[0])
         failure = _session_event(governance_root, plan.card, actor, "harness_launch",
@@ -2159,6 +2298,20 @@ def _drive(
                 result.suggested_action = str(derivation.get("suggested_action") or "")
                 result.reason = str(artifact_fix_declaration(contract)["end_reason"])
                 return result
+            if (action.get("type") == "await_rework" and action.get("rejection_id") and str(action.get("card") or task_id) == task_id
+                    and isinstance(derivation.get("same_round"), dict)):
+                # AIPOS-F238 item 2: the advisor reviewed the rejected return (same round) = resume the executor session with the rejection
+                # + the advisor's points (lybra_loop.launch.report_fix.executor.same_round); not resumable = end with the same instruction
+                fixed = _report_fix(index, task_id, task_id, governance_root, result, role="executor", steps=steps,
+                                    contract=contract, launch_decl=launch_decl, policy=policy, no_launch=no_launch,
+                                    launched=launched, fixes=report_fixes, watch=watch, max_wait=max_wait, interval=interval,
+                                    say=say, actor=driver_actor, recorder=recorder, node=node, state=state,
+                                    same_round=derivation["same_round"])
+                if fixed == "resumed":
+                    continue
+                if not steps or steps[-1].index != index:
+                    steps.append(LoopStep(index, "execute", node, state, task_id, ok=False, message=result.message))
+                return result
             if action.get("type") in HARD_STOP_ACTIONS:
                 # AIPOS-F78 件③ / F73E 件①: 产物已落盘但不合规 / 账务记录缺 → 不空等, exit 4 点名缺项(补齐后重跑 loop)
                 if action.get("type") == "frontmatter_unreadable":
@@ -2590,6 +2743,46 @@ def auditor_artifact_fix_prompt(contract: dict[str, Any], artifact: str, check: 
     return _artifact_fix_prompt(contract, artifact, check, "auditor")
 
 
+def same_round_fix_declaration(contract: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F238 item 2: verbs.schema lybra_loop.launch.report_fix.executor.same_round (single reader). Missing / malformed = SchemaLoadError."""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = (((contract.get("launch") or {}).get("report_fix") or {}).get("executor") or {}).get("same_round")
+    where = f"verbs.schema.json verbs.{LOOP_VERB}.launch.report_fix.executor.same_round"
+    if not isinstance(decl, dict):
+        raise SchemaLoadError(f"{where} not declared (AIPOS-F238)")
+    cap = decl.get("max_per_run")
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap < 0:
+        raise SchemaLoadError(f"{where}.max_per_run must be an integer >= 0")
+    prompt = decl.get("prompt")
+    if not isinstance(prompt, str) or any(p not in prompt for p in ("{artifact_fix}", "{review_id}", "{points}", "{criteria}")):
+        raise SchemaLoadError(f"{where}.prompt must contain {{artifact_fix}} {{review_id}} {{points}} {{criteria}}")
+    if (not isinstance(decl.get("point_line"), str) or "{item}" not in decl["point_line"]
+            or not isinstance(decl.get("no_criteria"), str) or not decl["no_criteria"].strip()):
+        raise SchemaLoadError(f"{where}.point_line (with {{item}}) / no_criteria must be declared")
+    if str(decl.get("end_reason") or "") not in ((contract.get("run_record") or {}).get("end_reasons") or {}):
+        raise SchemaLoadError(f"{where}.end_reason must be a declared run_record.end_reasons key")
+    return decl
+
+
+def executor_same_round_fix_prompt(contract: dict[str, Any], artifact: str, state: dict[str, Any]) -> str:
+    """AIPOS-F238 item 2: the same-round fix instruction after a rejected return (single rendering: loop resume and the end message for the
+    advisor to dispatch) = the fix-the-artifacts instruction (report_fix.executor.artifact.prompt, rejection = the reviewed rejection record's
+    category / reasons) + the advisor's points one per line + the acceptance criteria; state = next_resolver.same_round_state (subject rejection)."""
+    decl = same_round_fix_declaration(contract)
+    rec = state.get("rejection") or {}
+    review = state.get("review") or {}
+    artifact_fix = executor_artifact_fix_prompt(contract, artifact, {"category": rec.get("category") or "", "reasons": rec.get("reasons") or []})
+    line = str(decl["point_line"])
+    points = "".join(line.replace("{item}", str(x)) for x in review.get("focus_items") or [])
+    criteria = "".join(line.replace("{item}", str(x)) for x in review.get("acceptance_criteria") or []) or str(decl["no_criteria"])
+    prompt = str(decl["prompt"])
+    for key, value in (("artifact_fix", artifact_fix), ("review_id", review.get("verdict_id") or review.get("review_id") or ""),
+                       ("points", points), ("criteria", criteria)):
+        prompt = prompt.replace("{" + key + "}", str(value))
+    return prompt
+
+
 def executor_report_fix_prompt(contract: dict[str, Any], artifact: str, problem: dict[str, Any]) -> str:
     """AIPOS-F204 item 2: the executor return-header fix instruction (single rendering: loop resume and loop status
     routine hint {header_fix_prompt}); problem = artifact_ingest.return_header_problem."""
@@ -2603,21 +2796,54 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
                 contract: dict[str, Any], launch_decl: dict[str, Any], policy: dict[str, Any] | None, no_launch: bool,
                 launched: set[str], fixes: dict[str, int], watch: Callable[..., int], max_wait: float, interval: float,
                 say: Callable[[str], None], actor: str, recorder: LoopRunRecorder, node: Any, state: Any,
-                artifact_fix: bool = False) -> str | None:
+                artifact_fix: bool = False, same_round: dict[str, Any] | None = None) -> str | None:
     """AIPOS-F180B item 2 / AIPOS-F204 item 2 (verbs.schema lybra_loop.launch.report_fix[.executor]): the report of `card` was
     rejected for a header error. Diagnosis comes from the same artifact-ingest check (validate_task_artifact: auditor =
     tip_diagnosis of INGEST_TIP_MISMATCH; executor = header_problem), never judged here. Returns None = not this case / not
     correctable (caller keeps the original outcome), "resumed" = the recorded session rewrote the report (caller re-derives),
-    "ended" = result filled (the declared end_reason, or the launch exits already set by _launch_once)."""
+    "ended" = result filled (the declared end_reason, or the launch exits already set by _launch_once).
+    AIPOS-F238 item 2: same_round = next_resolver.same_round_state of a reviewed rejected return (derivation await_rework with rejection_id)
+    = resume the executor once per review with the same-round instruction (report_fix.executor.same_round; separate counter from the
+    report-header and artifact fixes); never returns None in that mode."""
     from tools.aipos_cli.artifact_ingest import validate_task_artifact
     from tools.aipos_cli.loop_run_record import latest_launch_session
 
-    check = validate_task_artifact(card, governance_root)
-    report = str(check.get("path") or "")
-    unreadable = check.get("category") == "INGEST_FRONTMATTER_UNREADABLE"
-    fix_key, instruction = card, "修头指令"
+    if same_round is not None:
+        from tools.aipos_cli.next_resolver import _return_artifact_path
+
+        check: dict[str, Any] = {}
+        report = str(_return_artifact_path(governance_root, card))
+        unreadable = False
+    else:
+        check = validate_task_artifact(card, governance_root)
+        report = str(check.get("path") or "")
+        unreadable = check.get("category") == "INGEST_FRONTMATTER_UNREADABLE"
+    fix_key, instruction, fix_label = card, "修头指令", "修报告头"
     exits_text = ""
-    if unreadable:
+    extra: dict[str, Any] = {}
+    if same_round is not None:
+        # AIPOS-F238 item 2: the advisor reviewed the rejected return (same round, not a rework round) = resume the executor with the
+        # rejection + the advisor's points + acceptance (one declared template); the re-submission goes through the same artifact entry
+        decl = same_round_fix_declaration(contract)
+        rec = same_round.get("rejection") or {}
+        review = same_round.get("review") or {}
+        review_id = str(review.get("verdict_id") or review.get("review_id") or "")
+        category = str(rec.get("category") or "")
+        kinds = [category]
+        extra = {"kind": "same_round", "review_id": review_id}
+        say(f"[{index}] 同轮补正 @ {node}/{state} ({card}) 顾问复核 {review_id} 所审交回拒收 {rec.get('rejection_id')}({category})")
+        head = f"执行卡 {card} 交回入门被拒 {rec.get('rejection_id')}({category})经顾问复核 {review_id} 同轮补正"
+        prompt = executor_same_round_fix_prompt(contract, report, same_round)
+        what, who = "同轮补正(交回入门被拒)", "执行"
+        outlet = "让执行体按拒因与顾问要点修产物后重写交回报告(同轮补正指令见下一条)"
+        code_outcome = "not_derivable"
+        watch_root, patterns = executor_artifact_watch(governance_root, card)
+        resume_why = "AIPOS-F238 同轮补正(拒因 + 顾问要点)"
+        fix_key, instruction, fix_label = f"{card}#same_round:{review_id}", "同轮补正指令", "同轮补正"
+        from tools.aipos_cli.next_resolver import legal_exits_for_card
+
+        exits_text = str((legal_exits_for_card(governance_root, card) or {}).get("text") or "")
+    elif unreadable:
         # AIPOS-F232 item 2: report header unreadable (YAML error) = same mechanism for both roles; the diagnosis comes from the
         # artifact-ingest check (header_problem via artifact_ingest.report_unreadable_problem), never judged here
         problem = check.get("header_problem")
@@ -2651,7 +2877,7 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
         code_outcome = "not_derivable"
         watch_root, patterns = executor_artifact_watch(governance_root, card)
         resume_why = "AIPOS-F236 按交回拒因修产物"
-        fix_key, instruction = f"{card}#artifact", "修产物指令"
+        fix_key, instruction, fix_label = f"{card}#artifact", "修产物指令", "修产物"
         from tools.aipos_cli.next_resolver import legal_exits_for_card
 
         exits = legal_exits_for_card(governance_root, card)
@@ -2710,7 +2936,8 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
         resume_why = "AIPOS-F180B 修报告头 commit_sha"
 
     def end(outcome: str, why: str, session_id: str | None = None) -> str:
-        recorder.report_fix({"card": card, "role": role, "outcome": outcome, "kinds": kinds, "session_id": session_id, "detail": f"{why}; {head}"})
+        recorder.report_fix({"card": card, "role": role, "outcome": outcome, "kinds": kinds, "session_id": session_id, "detail": f"{why}; {head}",
+                             **extra})
         code = exit_code_for(contract, code_outcome)
         msg = (f"{what}, {why}: {head}。出口(advisor_fix, 不升 Owner): {outlet}, "
                f"见 lybra loop status --task-id {task_id} --workspace-root {governance_root} 的下一条")
@@ -2724,7 +2951,7 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
 
     used, cap = fixes.get(fix_key, 0), int(decl["max_per_run"])
     if used >= cap:
-        return end("exhausted", f"本运行已续接{who}会话修报告头 {used}/{cap} 次仍被拒")
+        return end("exhausted", f"本运行已续接{who}会话{fix_label} {used}/{cap} 次仍被拒")
     try:
         session = latest_launch_session(governance_root, task_id, card, own=recorder.meta, contract=contract)
     except LoopRunRecordError as exc:
@@ -2742,7 +2969,7 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
     step = LoopStep(index, "wait", node, state, card, artifacts=patterns)
     step.launch = {**plan.to_dict(), "report_fix": fixes[fix_key]}
     start = _report_fingerprint(report)
-    say(f"[{index}] report_fix: {head} → 同会话 {sid} 续接{'修产物' if fix_key != card else '修报告头'} {fixes[fix_key]}/{cap}")
+    say(f"[{index}] report_fix: {head} → 同会话 {sid} 续接{fix_label} {fixes[fix_key]}/{cap}")
     recorder.step_started(index, "wait", node, state, card, waiting_for=patterns, mode="launch")
     watch_args = _watch_args(watch_root, patterns, max_wait=max_wait, interval=interval)
 
@@ -2757,7 +2984,7 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
     steps.append(step)
     if run["outcome"] == "artifact_ready":
         recorder.report_fix({"card": card, "role": role, "outcome": "resumed", "kinds": kinds, "session_id": sid,
-                             "detail": f"同会话 {sid} 续接后报告已改写, 重新入门; {head}"})
+                             "detail": f"同会话 {sid} 续接后报告已改写, 重新入门; {head}", **extra})
         return "resumed"
     if run["outcome"] not in ("early_exit", "timeout"):
         return "ended"  # launch_failed / record_failed: _launch_once already filled result
