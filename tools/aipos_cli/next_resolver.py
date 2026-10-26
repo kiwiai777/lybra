@@ -1928,6 +1928,13 @@ def _claim_record_missing(task_id: str) -> str:
     return f"claim 记录 agent_instance(5_tasks/records/claims/{task_id}/claim_*.md, 账务动词 actor 依据)"
 
 
+def runtime_evidence_line(evidence: dict[str, Any]) -> str:
+    """AIPOS-F241 件①: 审计报告运行证据不合的一行拒因原文(唯一渲染; loop 日志 `[轮] runtime_evidence: …`、运行记录该步 detail、loop status、
+    next 同读)= 拒因码 + 逐条拒因(缺哪条 / 哪条不等, 卡面命令与报告命令两侧原文; 不含出口指引)。evidence = board_adapter.runtime_evidence_check 结果。"""
+    problems = [str(p) for p in (evidence.get("problems") or evidence.get("reasons") or []) if str(p).strip()]
+    return f"{evidence.get('category')}: " + " | ".join(problems)
+
+
 def _evidence_declaration_invalid(task_id: str, evidence: dict[str, Any], *, node: str, path: str) -> dict[str, Any]:
     """AIPOS-F233 件③: 审计卡生效的运行证据声明本身有问题(artifact_ingest.evidence_declaration_problem 唯一判据)→ 不可推导,
     action.type = transitions runtime_evidence.loop.declaration_invalid_action(triggered_by=advisor; end_reason 读声明), loop 不拉起 / 不再拉起
@@ -5382,6 +5389,12 @@ def _derive_next_step(
                 "suggested_action": f"审计报告被拒收({evidence['category']}), 审计体补做: " + "; ".join(evidence["reasons"]),
                 "notes": "N4: 审计报告 PASS 类裁决缺卡面要求的独立运行证据(AIPOS-F162 件①), 裁决入口拒收; loop 让审计体补做",
                 "action": {"type": rework_action, "card": task_id, "path": str(verdict_artifact), "category": evidence["category"]},
+                # AIPOS-F241 件①②: 拒因原文(loop 日志 / 运行记录 / loop status / next 同一行, runtime_evidence_line 唯一渲染)与
+                # 缺 / 不等的声明命令(同会话补证据指令只补这几条)
+                "runtime_evidence": {"card": task_id, "report": str(verdict_artifact), "category": evidence["category"],
+                                     "line": runtime_evidence_line(evidence),
+                                     "missing_commands": list(evidence.get("missing_commands") or []),
+                                     "problems": list(evidence.get("problems") or evidence["reasons"])},
             }
         agent_inst = actor
         
@@ -6406,6 +6419,8 @@ def format_output(result: dict[str, Any], *, json_mode: bool = False) -> str:
         if missing:
             lines.append(f"Missing: {', '.join(missing)}")
         lines.append(f"Suggested: {result.get('suggested_action', '?')}")
+        if isinstance(result.get("runtime_evidence"), dict):  # AIPOS-F241 件①: 与 loop 日志 / loop status 同一行原文
+            lines.append(f"runtime_evidence: {result['runtime_evidence'].get('line')}")
 
     notes = result.get("notes", "")
     if notes:

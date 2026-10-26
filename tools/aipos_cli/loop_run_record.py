@@ -252,6 +252,9 @@ def _write_record(path: Path, meta: dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+STEP_DETAIL_MAX = 1200  # AIPOS-F241 件①: 运行记录步 detail 上限(运行证据拒因含卡面命令与报告命令两侧原文, 原 600 截掉一侧)
+
+
 class LoopRunRecorder:
     """一次 `lybra loop` 运行的记录器。构造即落盘(建不起来 = LoopRunRecordError, loop 以 not_derivable 出口拒跑, 不静默裸跑)。
 
@@ -406,19 +409,24 @@ class LoopRunRecorder:
         self._dirty = True
         self.flush(force=True)
 
-    def reexec(self, change: dict[str, Any], *, target: Path) -> None:
+    def reexec(self, change: dict[str, Any], *, target: Path, kind: str = "wait") -> None:
         """件①: 等待步遇部署更新 → 本运行以 deploy_reexec 结束(outcome continued, exit_code null; reexec 段写新快照/提交/进程号), 封存
-        (进程即被新快照替换, 同一 pid 的新运行记录以 continues_run 关联本 run_id)。结束原因名读声明 deploy_consistency.wait_reexec。"""
+        (进程即被新快照替换, 同一 pid 的新运行记录以 continues_run 关联本 run_id)。结束原因名读声明 deploy_consistency.wait_reexec。
+        AIPOS-F241 件④: kind = step = 两步之间换快照从当前推导点续跑(reexec 段另写 kind = step; 等待步续等不写 kind, 存量记录形不变)。"""
         from tools.aipos_cli.loop_driver import load_loop_contract
 
         reason = str(((load_loop_contract().get("deploy_consistency") or {}).get("wait_reexec") or {}).get("end_reason") or "")
         if reason not in self.decl["end_reasons"]:
             raise LoopRunRecordError(f"续等结束原因 {reason!r} 未在 verbs.schema lybra_loop.run_record.end_reasons 声明")
         self.deploy_changed(change)
+        how = ("两步之间部署已更新, 已 re-exec 到新部署快照 {name} 从当前推导点续跑" if kind == "step"
+               else "等待中部署已更新, 已 re-exec 到新部署快照 {name} 从同一等待步续等")
+        reexec = {"to_release": Path(target).name, "to_commit": change.get("to"), "at": iso_z(), "pid": os.getpid()}
+        if kind == "step":
+            reexec["kind"] = "step"
         self.meta.update({"status": "ended", "ended_at": iso_z(), "outcome": "continued", "exit_code": None, "end_reason": reason,
-                          "end_message": f"等待中部署已更新, 已 re-exec 到新部署快照 {Path(target).name} 从同一等待步续等",
-                          "end_codes": None, "current_step": None,
-                          "reexec": {"to_release": Path(target).name, "to_commit": change.get("to"), "at": iso_z(), "pid": os.getpid()}})
+                          "end_message": how.format(name=Path(target).name),
+                          "end_codes": None, "current_step": None, "reexec": reexec})
         self.log(f"[end] outcome=continued reason={reason} → {Path(target).name}(re-exec, pid {os.getpid()})")
         self.flush(force=True)
         self._sealed = True
@@ -494,9 +502,11 @@ class LoopRunRecorder:
         self.flush(force=True)
 
     def step_started(self, index: int, kind: str, node: Any, state: Any, card: str, *, action: str = "",
-                     waiting_for: list[str] | None = None, mode: str | None = None, hint: str | None = None) -> None:
+                     waiting_for: list[str] | None = None, mode: str | None = None, hint: str | None = None,
+                     detail: str | None = None) -> None:
         """mode/hint(AIPOS-F136 件①, 只用于等待步): launch = loop 已拉起执行引擎; manual = 手工模式等工位开工, hint = 开工提示
-        (loop 输出的 manual 行同文, 经 redact_progress, 不含凭据)。"""
+        (loop 输出的 manual 行同文, 经 redact_progress, 不含凭据)。AIPOS-F241 件①: detail = 本步缘由一行(loop 日志同文, 如
+        `runtime_evidence: <拒因原文>`; 经 redact_progress), loop status 当前步下显示。"""
         from tools.aipos_cli.harness_launch import redact_progress
 
         self.meta["current_step"] = {"index": index, "kind": kind, "node": node, "state": state, "card": card,
@@ -507,6 +517,8 @@ class LoopRunRecorder:
         if hint:
             # AIPOS-F155 件②: 等返工交回时提示另附返工节要点, 上限 240 → 600(子 agent 口径开工提示本身已近 240, 原上限截掉返工要点)
             self.meta["current_step"]["hint"] = redact_progress(str(hint))[:600]
+        if detail:
+            self.meta["current_step"]["detail"] = redact_progress(str(detail))[:STEP_DETAIL_MAX]
         self._dirty = True
         self.flush(force=True)
 
@@ -514,12 +526,17 @@ class LoopRunRecorder:
         """把 LoopResult.steps 里新落定的步追加进记录(只记结构化事实: 轮号/节点/动作/结果/时间, 不记命令与输出原文)。"""
         if len(steps) <= self._synced:
             return
+        from tools.aipos_cli.harness_launch import redact_progress
+
         for step in steps[self._synced:]:
             launch = step.launch or {}
-            self.meta["steps"].append({
+            entry = {
                 "index": step.index, "kind": step.kind, "node": step.node, "state": step.state, "card": step.card,
                 "action": step.action_type or None, "ok": bool(step.ok), "exit_code": int(step.exit_code),
-                "launched": bool(launch.get("launched")) if launch else None, "at": iso_z()})
+                "launched": bool(launch.get("launched")) if launch else None, "at": iso_z()}
+            if getattr(step, "detail", ""):  # AIPOS-F241 件①: 本步缘由(如运行证据拒因原文); 无 = 不出现(存量记录形不变)
+                entry["detail"] = redact_progress(str(step.detail))[:STEP_DETAIL_MAX]
+            self.meta["steps"].append(entry)
         self._synced = len(steps)
         self._dirty = True
         self.flush(force=True)
@@ -773,6 +790,17 @@ def _last_wait_card(meta: dict[str, Any]) -> str | None:
     return None
 
 
+def _last_step_detail(meta: dict[str, Any]) -> dict[str, Any] | None:
+    """AIPOS-F241 件①: 当前步(未落定)或最近落定步的 detail(loop 日志同文); 都无 = None。"""
+    cur = meta.get("current_step")
+    if isinstance(cur, dict) and cur.get("detail"):
+        return {"index": cur.get("index"), "detail": cur["detail"]}
+    for step in reversed(list(meta.get("steps") or [])):
+        if isinstance(step, dict) and step.get("detail"):
+            return {"index": step.get("index"), "detail": step["detail"]}
+    return None
+
+
 def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | None = None,
               local_host: str | None = None) -> dict[str, Any]:
     """一份运行记录 → 状态视图(唯一判据)。
@@ -798,6 +826,7 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
         "end_reason": meta.get("end_reason"), "end_message": meta.get("end_message"), "ended_at": meta.get("ended_at"),
         "end_codes": [str(c) for c in (meta.get("end_codes") or [])],  # AIPOS-F150: 旧记录无此键 = 空列表
         "wait_card": _last_wait_card(meta),  # AIPOS-F156 件①: 最后一次等待的卡(执行方式分流只对本卡执行体等待生效)
+        "step_detail": _last_step_detail(meta),  # AIPOS-F241 件①: 最近一步的缘由一行(运行证据拒因原文等; 无 = None)
         # AIPOS-F232 件②: 最后一个已落定步的卡(结束于报告读不出时报告所属卡: 审计报告挂审计卡)
         "last_step_card": next((str(st.get("card") or "") or None for st in reversed(meta.get("steps") or []) if isinstance(st, dict)), None),
     }
@@ -876,6 +905,25 @@ def read_run(path: Path, decl: dict[str, Any]) -> dict[str, Any]:
 
 def _run_files(directory: Path) -> list[Path]:
     return sorted(p for p in directory.glob("looprun_*.md") if p.is_file()) if directory.is_dir() else []
+
+
+def step_reexec_streak(governance_root: Path, task_id: str, own: dict[str, Any], *, contract: dict[str, Any]) -> int:
+    """AIPOS-F241 件④: 连续步间换快照次数(唯一判定; 上限声明 verbs.schema lybra_loop.deploy_consistency.step_reexec.max_consecutive)=
+    从本运行沿 continues_run 回溯: 本运行(及每一个被回溯到的运行)未落任何一步、且其上一运行以步间换快照(reexec.kind = step)结束 = 计一次;
+    遇已落步的运行 / 等待步续等 / 无上一运行即止。上一运行记录读不出 = LoopRunRecordError(调用方 fail-closed 停下)。"""
+    decl = run_record_declaration(contract)
+    count, meta, visited = 0, own, set()
+    while not list(meta.get("steps") or []) and str(meta.get("continues_run") or "").strip():
+        prev_id = str(meta["continues_run"]).strip()
+        if prev_id in visited:
+            break
+        visited.add(prev_id)
+        prev = read_run(loop_runs_dir(governance_root, task_id) / f"{prev_id}.md", decl)
+        if str((prev.get("reexec") or {}).get("kind") or "") != "step":
+            break
+        count += 1
+        meta = prev
+    return count
 
 
 def latest_launch_session(governance_root: Path, task_id: str, card: str, *, own: dict[str, Any],
@@ -2895,6 +2943,8 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
             action = f" {cur.get('action')}" if cur.get("action") else ""
             out.append(f"  当前步 [{cur.get('index')}] {cur.get('kind')}{action} @ {cur.get('node')}/{cur.get('state')} "
                        f"({cur.get('card')}){waiting} 自 {cur.get('since')}")
+        if v.get("step_detail"):  # AIPOS-F241 件①: 本步缘由(loop 日志 `[轮] runtime_evidence: …` 同一原文)
+            out.append(f"  [{v['step_detail'].get('index')}] {v['step_detail'].get('detail')}")
         la = v.get("launch")
         if la:
             model = f" 模型 {model_label(la['model'])}" if la.get("model") else ""  # AIPOS-F169: 存量记录无 model = 不显示
@@ -2949,11 +2999,13 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
                        f"(窗口 {chk.get('window')}, 模型 {chk.get('model')})" + (f"; 大节存 {chk['kickoff_file']}" if chk.get("kickoff_file") else ""))
         if v.get("stop"):  # AIPOS-F231 件②
             out.extend(stop_report_lines({**v, "resource_lock": None}))  # 资源行已在上方独占资源行
-        if v.get("continues_run"):  # AIPOS-F166 件①
-            out.append(f"  续等: 接上一运行 {v['continues_run']}(等待中部署已更新, re-exec 到本运行的部署快照, 从同一等待步续等)")
+        if v.get("continues_run"):  # AIPOS-F166 件① / F241 件④(上一运行步间换快照 = 从当前推导点续跑)
+            out.append(f"  续等: 接上一运行 {v['continues_run']}(部署已更新, re-exec 到本运行的部署快照; 等待步中 = 从同一等待步续等, "
+                       "两步之间 = 从当前推导点续跑)")
         if v.get("reexec"):
             rx = v["reexec"]
-            out.append(f"  续等: 已 re-exec 到新部署快照 {rx.get('to_release')}(commit {rx.get('to_commit')}, pid {rx.get('pid')} 不变), "
+            out.append(f"  续{'跑' if rx.get('kind') == 'step' else '等'}: 已 re-exec 到新部署快照 {rx.get('to_release')}"
+                       f"(commit {rx.get('to_commit')}, pid {rx.get('pid')} 不变{', 两步之间换快照' if rx.get('kind') == 'step' else ''}), "
                        f"后续见 continues_run={v['run_id']} 的运行记录" + (f"; re-exec 未成: {rx['failed']}" if rx.get("failed") else ""))
         if v.get("envelope_warning"):  # AIPOS-F166 件②
             out.append(f"  {v['envelope_warning']['line']}")
