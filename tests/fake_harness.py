@@ -49,6 +49,12 @@
                names the rejection and every point in FAKE_SAME_ROUND_EXPECT, `|`-separated) = rewrite RETURN per the points (credential
                redacted, maintenance interface as the verification target) but keep the program (the re-submission is refused again);
                the next fix-the-artifacts resume after that = move the program out of the slot and rewrite RETURN
+    evidence_once  AIPOS-F241 (audit card only; chris LANTU-CLTOOL4R shape): first run writes the PASS report without the「独立运行证据」
+               section (runtime evidence rejected); when the instruction (same-session resume FAKE_PI_PROMPT, or a fresh kickoff carrying the
+               supplement-only note) lists the commands to supplement (lines `- <backticked command>`), it runs each one (`cd <W> && X` = X with
+               cwd W, recorded run-long style as command X + worktree W) and appends only the evidence section (verdict / body untouched)
+    evidence_bad   AIPOS-F241: as evidence_once, but the supplemented entry records X with an extra argument (still unequal = rejected again)
+    evidence_stay  AIPOS-F241: as evidence_once, but on the supplement instruction leaves the report untouched and exits 0
     hang_sim   AIPOS-F231: 同 hang, 另起一个脱离本进程组(新会话)的「伪模拟器」进程, cwd = FAKE_SIM_DIR(本卡验证根 run 目录; 验停线按
                run 目录归属清理组外进程)
     provider_401 / provider_429 / length   AIPOS-F231: 写一份 pi 会话记录(文件名 <时刻>_<FAKE_PI_SESSION_ID>.jsonl, 与真实 pi 同形)
@@ -364,6 +370,37 @@ def sha_mode(task_id: str, kickoff: str, mode: str) -> None:
     pi_session(report, "fake-audit-model")
 
 
+EVIDENCE_MARK = "只补跑下列"  # AIPOS-F241: the supplement-only instruction (verbs.schema lybra_loop.launch.report_fix.runtime_evidence.prompt)
+
+
+def evidence_mode(task_id: str, kickoff: str, mode: str) -> None:
+    """AIPOS-F241: runtime evidence fixture modes (audit card only)."""
+    report = Path(field(kickoff, "报告落点"))
+    instruction = os.environ.get("FAKE_PI_PROMPT") or kickoff
+    if EVIDENCE_MARK not in instruction:
+        do_work(task_id, kickoff)  # PASS report, no evidence section
+        return
+    if mode == "evidence_stay":
+        return
+    entries = []
+    for command in re.findall(r"^- `(.+)`$", instruction, re.M):
+        match = re.match(r"^cd (\S+) && (.+)$", command)
+        cwd, ran = (match.group(1), match.group(2)) if match else (os.getcwd(), command)
+        if mode == "evidence_bad":
+            ran += " --extra"
+        out = subprocess.run(["bash", "-c", ran], cwd=cwd, capture_output=True, text=True)
+        log = report.parent / f"evidence-{len(entries) + 1}.log"
+        log.write_text(f"$ {ran}\n{out.stdout}{out.stderr}", encoding="utf-8")
+        import hashlib
+
+        entries.append({"command": ran, "worktree": cwd, "exit_code": out.returncode, "log_path": str(log),
+                        "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest()})
+    text = report.read_text(encoding="utf-8")
+    report.write_text(text.rstrip("\n") + "\n\n## 独立运行证据\n\n```json\n" + json.dumps(entries, ensure_ascii=False) + "\n```\n",
+                      encoding="utf-8")
+    pi_session(report, "fake-audit-model")
+
+
 def fake_secret() -> str:
     """AIPOS-F239: an obviously fake credential value, assembled at run time (never a real credential; no exempt substring)."""
     return "NotReal" + "7Kq2Lm9Wd4"
@@ -476,6 +513,10 @@ def main() -> int:
     if mode in ("run_length", "run_length_nocompact") or (mode == "run_length_once" and not resumed) or (
             mode == "run_length_nocompact_once" and "上次运行摘要" not in kickoff):
         run_overflow_session(compaction_after=mode.startswith("run_length_once") or mode == "run_length")  # AIPOS-F240
+        emit({"type": "agent_end", "messages": []})
+        return 0
+    if mode in ("evidence_once", "evidence_bad", "evidence_stay") and reviewed_of(task_id):
+        evidence_mode(task_id, kickoff, mode)
         emit({"type": "agent_end", "messages": []})
         return 0
     if mode.startswith("sha_") and reviewed_of(task_id):

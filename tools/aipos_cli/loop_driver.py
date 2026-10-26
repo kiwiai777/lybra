@@ -279,6 +279,7 @@ class LoopStep:
     message: str = ""
     shell_command: str = ""  # AIPOS-F90 件②: return/verdict 步 = 产物入口内部执行的薄壳命令(含产品填写的模型字段)
     launch: dict[str, Any] | None = None  # AIPOS-F95 件③: 等待步的拉起判定/结果(None = 非 agent 等待步)
+    detail: str = ""  # AIPOS-F241 件①: 本步缘由一行(如 `runtime_evidence: <拒因原文>`), 进运行记录该步 detail(经 redact_progress)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -296,6 +297,7 @@ class LoopStep:
             "artifacts": list(self.artifacts),
             "message": self.message,
             "launch": self.launch,
+            "detail": self.detail,
         }
 
 
@@ -1926,7 +1928,8 @@ def run_loop(
     if guard.applicable:
         say(f"lybra loop {task_id}: 运行部署快照 {guard.running.release}(commit {guard.baseline}); 每步比对 "
             f"{guard.running.describe()['deploy_current']}, 部署一变即停下(deploy_changed)"
-            + ("; 手工等待步中部署一变 = 换新快照从同一等待步续等(re-exec, AIPOS-F166)" if wait_reexec is not None else ""))
+            + ("; 手工等待步中部署一变 = 换新快照从同一等待步续等(re-exec, AIPOS-F166); 两步之间部署一变 = 换新快照从当前推导点续跑"
+               "(re-exec, AIPOS-F241; 连续换快照超上限才停下)" if wait_reexec is not None else ""))
     holder = LoopResult(task_id, "completed", exit_code_for(contract, "completed"), "")
     try:
         result = _run_enveloped(task_id, governance_root, holder, task_fm=task_fm, driver_actor=driver_actor, policy_id=policy_id,
@@ -2184,7 +2187,18 @@ def _drive(
         # AIPOS-F152 件①: 每步推导前比对部署——本进程跑的快照已不是现部署 = 步间干净停下(不执行下一步), 重跑从断点续做
         change = guard.check() if guard is not None else None
         if change:
-            return _deploy_changed_end(index, change, result, contract=contract, say=say, recorder=recorder)
+            note = ""
+            if wait_reexec is not None:
+                # AIPOS-F241 件④: 两步之间(本轮推导之前, 无门动词在执行)部署已更新 = 与等待步同一机制换新快照从当前推导点续跑
+                # (re-exec 成功不返回); 连续换快照超声明上限 / 新快照不可用 / 余步为 0 / exec 失败 = 照旧 deploy_changed 停下, 原因附结束原文
+                note = _step_reexec(index, change, guard, wait_reexec, governance_root=governance_root, task_id=task_id,
+                                    contract=contract, recorder=recorder, say=say, actor=driver_actor, args=_reexec_args(
+                                        task_id, governance_root, driver_actor=driver_actor,
+                                        envelope_id=str((policy or {}).get("policy_id") or ""), remaining=max_steps - index + 1,
+                                        max_wait=max_wait, interval=interval, no_launch=no_launch, connection_json=connection_json,
+                                        run_id=recorder.run_id))
+            return _deploy_changed_end(index, change, result, contract=contract, say=say, recorder=recorder, note=note,
+                                       note_label="步间换快照续跑未成(AIPOS-F241)")
         if recorder.stop_request() is not None:  # AIPOS-F231 件②: 停线请求 = 步间停下(存现场 → 清理 → 核无残留释放)
             _stop_requested_end(index, governance_root, result, contract=contract, recorder=recorder, say=say, steps=steps)
             return result
@@ -2229,6 +2243,9 @@ def _drive(
         rework_note = ""  # AIPOS-F155 件②: 等返工交回时附在手工等待提示后的返工节要点(推导核 suggested_action)
         evidence_relaunch = False  # AIPOS-F162 件①: 本次等待 = 审计报告缺独立运行证据被拒收, 让审计体补做(可再拉起)
         evidence_report = ""  # 被拒收的那份报告(推导核 action.path), 等待起点指纹的依据
+        evidence_detail = ""  # AIPOS-F241 件①: `runtime_evidence: <拒因原文>`(日志 / 运行记录该步 detail / loop status 同文)
+        evidence_prompt = ""  # AIPOS-F241 件②: 只补证据指令(新拉起开工稿 / 手工提示附同一条)
+        evidence_category = ""
 
         if not derivation.get("derivable"):
             action = derivation.get("action") or {}
@@ -2262,17 +2279,37 @@ def _drive(
                         seen = evidence_rejected.setdefault(audit_card, set())
                         seen.add(_report_fingerprint(audit_action.get("path")))
                         rework_note = str(audit_derivation.get("suggested_action") or "")
+                        # AIPOS-F241 件①: 拒因一行原文(推导核 runtime_evidence.line, next 同读)进日志 / 运行记录该步 detail / loop status
+                        evidence = audit_derivation.get("runtime_evidence") if isinstance(audit_derivation.get("runtime_evidence"), dict) else {
+                            "card": audit_card, "report": str(audit_action.get("path") or ""), "category": audit_action.get("category"),
+                            "line": "; ".join(str(r) for r in audit_derivation.get("missing_records") or []), "missing_commands": []}
+                        evidence_detail = f"runtime_evidence: {evidence.get('line')}"
+                        say(f"[{index}] {evidence_detail}")
+                        ev_node, ev_state = audit_derivation.get("current_node"), audit_derivation.get("current_state")
                         if len(seen) > int(evidence_loop["relaunch_cap"]):
                             missing = list(audit_derivation.get("missing_records") or [])
                             msg = (f"审计卡 {audit_card} 报告缺独立运行证据被拒收, 本次运行已让审计体补做 {evidence_loop['relaunch_cap']} 次仍不合格"
                                    f"(声明 relaunch_cap): missing={missing}")
-                            steps.append(LoopStep(index, "execute", audit_derivation.get("current_node"), audit_derivation.get("current_state"),
-                                                  audit_card, ok=False, message=msg))
+                            steps.append(LoopStep(index, "execute", ev_node, ev_state, audit_card, ok=False, message=msg, detail=evidence_detail))
                             say(f"[{index}] exit 4 — {msg}")
                             result.outcome, result.exit_code, result.message = "not_derivable", exit_code_for(contract, "not_derivable"), msg
                             result.missing_records, result.suggested_action = missing, rework_note
                             result.reason = str(evidence_loop["exhausted_end_reason"])
                             return result
+                        # AIPOS-F241 件②: 审计会话可续接 = 同会话只补证据(report_fix.runtime_evidence); 不可续接 = 照原规则新拉起, 开工稿附同一指令
+                        fixed = _report_fix(index, task_id, audit_card, governance_root, result, role="auditor", steps=steps,
+                                            contract=contract, launch_decl=launch_decl, policy=policy, no_launch=no_launch,
+                                            launched=launched, fixes=report_fixes, watch=watch, max_wait=max_wait, interval=interval,
+                                            say=say, actor=driver_actor, recorder=recorder, node=ev_node, state=ev_state, evidence=evidence)
+                        if fixed == "resumed":
+                            continue
+                        if fixed == "ended":
+                            if not steps or steps[-1].index != index:
+                                steps.append(LoopStep(index, "execute", ev_node, ev_state, audit_card, ok=False, message=result.message,
+                                                      detail=evidence_detail))
+                            return result
+                        evidence_prompt = runtime_evidence_fix_prompt(contract, evidence)
+                        evidence_category = str(evidence.get("category") or audit_action.get("category") or "")
                         evidence_relaunch, evidence_report = True, str(audit_action.get("path") or "")
             node = derivation.get("current_node")
             state = derivation.get("current_state")
@@ -2414,7 +2451,7 @@ def _drive(
 
         if wait_patterns:
             step = LoopStep(index, "wait", derivation.get("current_node"), derivation.get("current_state"), target_card,
-                            artifacts=wait_patterns)
+                            artifacts=wait_patterns, detail=evidence_detail if evidence_relaunch else "")
             say(f"[{index}] wait: {target_card} 产物 {wait_patterns} (≤{max_wait}s, 经 agent watch)")
 
             start_report = _report_fingerprint(evidence_report) if evidence_relaunch else ""
@@ -2437,17 +2474,22 @@ def _drive(
                 plan = plan_launch(governance_root, launch_card, policy=policy, no_launch=no_launch, decl=launch_decl,
                                    already_launched=launched - {launch_card} if evidence_relaunch else launched)
                 step.launch = plan.to_dict()
-                if plan.refusal and rework_note:
+                if plan.refusal and evidence_relaunch and evidence_prompt:
+                    # AIPOS-F241 件②: 手工 / 子 agent 审计 = 提示附拒因与只补证据指令(顾问派给审计实例)
+                    plan.manual_hint = (f"{plan.manual_hint}。返工: 审计报告被拒收({evidence_category}), "
+                                        f"只补证据指令(派给审计实例): {evidence_prompt}")
+                elif plan.refusal and rework_note:
                     plan.manual_hint = f"{plan.manual_hint}。返工: {rework_note}"  # AIPOS-F155 件②: 手工提示附返工节要点
-                if evidence_relaunch and not plan.refusal and rework_note:
-                    plan.append_kickoff_note(f"返工(审计报告被拒收, 须补做): {rework_note}")  # AIPOS-F162 件①: 拉起的审计体看得到拒因
+                if evidence_relaunch and not plan.refusal and evidence_prompt:
+                    # AIPOS-F162 件① / F241 件②: 新拉起的审计体看得到上一轮拒因原文与只补证据指令(不从头重审)
+                    plan.append_kickoff_note(str(runtime_evidence_fix_declaration(contract)["fresh_note"]).replace("{prompt}", evidence_prompt))
                 if plan.refusal:
                     say(f"[{index}] manual: {plan.manual_hint}(未拉起: {plan.refusal})")
             # AIPOS-F131 件① / F136 件①: 等待步进运行记录(拉起判定之后: 记开工方式, 手工模式附开工提示, 供 loop status 给顾问下一动作)
             launching = plan is not None and not plan.refusal
             recorder.step_started(index, "wait", step.node, step.state, target_card, waiting_for=wait_patterns,
                                   mode="launch" if launching else "manual",
-                                  hint=None if launching or plan is None else plan.manual_hint)
+                                  hint=None if launching or plan is None else plan.manual_hint, detail=step.detail or None)
             watch_args = _watch_args(watch_root, wait_patterns, max_wait=max_wait, interval=interval)
             if plan is not None and not plan.refusal:
                 launched.add(launch_card)
@@ -2783,6 +2825,50 @@ def executor_same_round_fix_prompt(contract: dict[str, Any], artifact: str, stat
     return prompt
 
 
+def runtime_evidence_fix_declaration(contract: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F241 item 2: verbs.schema lybra_loop.launch.report_fix.runtime_evidence (single reader). Missing / malformed = SchemaLoadError."""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = ((contract.get("launch") or {}).get("report_fix") or {}).get("runtime_evidence")
+    where = f"verbs.schema.json verbs.{LOOP_VERB}.launch.report_fix.runtime_evidence"
+    if not isinstance(decl, dict):
+        raise SchemaLoadError(f"{where} not declared (AIPOS-F241)")
+    cap = decl.get("max_per_run")
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap < 0:
+        raise SchemaLoadError(f"{where}.max_per_run must be an integer >= 0")
+    prompt = decl.get("prompt")
+    if not isinstance(prompt, str) or any(p not in prompt for p in ("{artifact}", "{heading}", "{category}", "{problems}", "{commands}")):
+        raise SchemaLoadError(f"{where}.prompt must contain {{artifact}} {{heading}} {{category}} {{problems}} {{commands}}")
+    if not isinstance(decl.get("command_line"), str) or "{command}" not in decl["command_line"]:
+        raise SchemaLoadError(f"{where}.command_line must contain {{command}}")
+    if not isinstance(decl.get("fresh_note"), str) or "{prompt}" not in decl["fresh_note"]:
+        raise SchemaLoadError(f"{where}.fresh_note must contain {{prompt}}")
+    if str(decl.get("end_reason") or "") not in ((contract.get("run_record") or {}).get("end_reasons") or {}):
+        raise SchemaLoadError(f"{where}.end_reason must be a declared run_record.end_reasons key")
+    return decl
+
+
+def runtime_evidence_fix_prompt(contract: dict[str, Any], evidence: dict[str, Any]) -> str:
+    """AIPOS-F241 item 2: the supplement-the-runtime-evidence-only instruction (single rendering: same-session resume, the fresh launch's
+    kickoff note, the manual / sub-agent hint and the end message); evidence = the derivation's runtime_evidence (next_resolver: report /
+    category / line / missing_commands)."""
+    from tools.aipos_cli.artifact_ingest import runtime_evidence_declaration
+
+    decl = runtime_evidence_fix_declaration(contract)
+    line = str(decl["command_line"])
+    commands = "".join(line.replace("{command}", str(c)) for c in evidence.get("missing_commands") or [])
+    problems = str(evidence.get("line") or "")
+    category = str(evidence.get("category") or "")
+    if category and problems.startswith(f"{category}: "):
+        problems = problems[len(category) + 2:]
+    problems = problems.rstrip("。")  # 模板自带句号
+    prompt = str(decl["prompt"])
+    for key, value in (("artifact", evidence.get("report") or ""), ("heading", runtime_evidence_declaration()["section_heading"]),
+                       ("category", category), ("problems", problems), ("commands", commands)):
+        prompt = prompt.replace("{" + key + "}", str(value))
+    return prompt
+
+
 def executor_report_fix_prompt(contract: dict[str, Any], artifact: str, problem: dict[str, Any]) -> str:
     """AIPOS-F204 item 2: the executor return-header fix instruction (single rendering: loop resume and loop status
     routine hint {header_fix_prompt}); problem = artifact_ingest.return_header_problem."""
@@ -2796,7 +2882,8 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
                 contract: dict[str, Any], launch_decl: dict[str, Any], policy: dict[str, Any] | None, no_launch: bool,
                 launched: set[str], fixes: dict[str, int], watch: Callable[..., int], max_wait: float, interval: float,
                 say: Callable[[str], None], actor: str, recorder: LoopRunRecorder, node: Any, state: Any,
-                artifact_fix: bool = False, same_round: dict[str, Any] | None = None) -> str | None:
+                artifact_fix: bool = False, same_round: dict[str, Any] | None = None,
+                evidence: dict[str, Any] | None = None) -> str | None:
     """AIPOS-F180B item 2 / AIPOS-F204 item 2 (verbs.schema lybra_loop.launch.report_fix[.executor]): the report of `card` was
     rejected for a header error. Diagnosis comes from the same artifact-ingest check (validate_task_artifact: auditor =
     tip_diagnosis of INGEST_TIP_MISMATCH; executor = header_problem), never judged here. Returns None = not this case / not
@@ -2804,11 +2891,18 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
     "ended" = result filled (the declared end_reason, or the launch exits already set by _launch_once).
     AIPOS-F238 item 2: same_round = next_resolver.same_round_state of a reviewed rejected return (derivation await_rework with rejection_id)
     = resume the executor once per review with the same-round instruction (report_fix.executor.same_round; separate counter from the
-    report-header and artifact fixes); never returns None in that mode."""
+    report-header and artifact fixes); never returns None in that mode.
+    AIPOS-F241 item 2: evidence = the audit card derivation's runtime_evidence (evidence_rework, judged by runtime_evidence_check) = resume
+    the audit session once per run to supplement only the runtime evidence (report_fix.runtime_evidence; separate counter); not resumable =
+    returns None after recording not_resumable (caller relaunches by the original rule with the same instruction in the kickoff)."""
     from tools.aipos_cli.artifact_ingest import validate_task_artifact
     from tools.aipos_cli.loop_run_record import latest_launch_session
 
-    if same_round is not None:
+    if evidence is not None:
+        check: dict[str, Any] = {}
+        report = str(evidence.get("report") or "")
+        unreadable = False
+    elif same_round is not None:
         from tools.aipos_cli.next_resolver import _return_artifact_path
 
         check: dict[str, Any] = {}
@@ -2821,7 +2915,24 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
     fix_key, instruction, fix_label = card, "修头指令", "修报告头"
     exits_text = ""
     extra: dict[str, Any] = {}
-    if same_round is not None:
+    step_detail = ""
+    if evidence is not None:
+        # AIPOS-F241 item 2: runtime evidence rejected by the same judgement as the verdict entry = resume the audit session to supplement
+        # only the missing / unequal declared commands and rewrite only the evidence section (one declared template)
+        decl = runtime_evidence_fix_declaration(contract)
+        category = str(evidence.get("category") or "")
+        kinds = [category]
+        extra = {"kind": "runtime_evidence"}
+        step_detail = f"runtime_evidence: {evidence.get('line') or ''}"
+        head = f"审计卡 {card} 报告运行证据不合({evidence.get('line') or category})"
+        prompt = runtime_evidence_fix_prompt(contract, evidence)
+        what, who = "审计报告运行证据不合", "审计"
+        outlet = "让审计体只补缺 / 不等的证据并改写「独立运行证据」节(只补证据指令见下一条)"
+        code_outcome = "not_derivable"
+        watch_root, patterns = auditor_artifact_watch(governance_root, card)
+        resume_why = "AIPOS-F241 只补运行证据"
+        fix_key, instruction, fix_label = f"{card}#runtime_evidence", "只补证据指令", "补运行证据"
+    elif same_round is not None:
         # AIPOS-F238 item 2: the advisor reviewed the rejected return (same round, not a rework round) = resume the executor with the
         # rejection + the advisor's points + acceptance (one declared template); the re-submission goes through the same artifact entry
         decl = same_round_fix_declaration(contract)
@@ -2941,7 +3052,7 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
         code = exit_code_for(contract, code_outcome)
         msg = (f"{what}, {why}: {head}。出口(advisor_fix, 不升 Owner): {outlet}, "
                f"见 lybra loop status --task-id {task_id} --workspace-root {governance_root} 的下一条")
-        if role == "executor" or unreadable or fix_key != card:  # AIPOS-F232: 读不出的审计报告同样把修头指令带进结束原文(子 agent 审计时顾问派给审计实例); AIPOS-F239: 审计报告修报告指令同此
+        if role == "executor" or unreadable or fix_key != card:  # AIPOS-F232: 读不出的审计报告同样把修头指令带进结束原文(子 agent 审计时顾问派给审计实例); AIPOS-F239: 审计报告修报告指令同此; AIPOS-F241: 只补证据指令同此
             msg += f"\n  {instruction}(会话不可续接时顾问派给本卡{who}实例): {prompt}"
         if exits_text:  # AIPOS-F236: 交回入门拒收 = 附合法出口全集(修后重交 / 换新主体 / 撤卡 / 改范围)
             msg += f"\n  {exits_text}"
@@ -2949,28 +3060,37 @@ def _report_fix(index: int, task_id: str, card: str, governance_root: Path, resu
         result.outcome, result.exit_code, result.message, result.reason = code_outcome, code, msg, str(decl["end_reason"])
         return "ended"
 
+    def not_resumable(why: str, session_id: str | None = None) -> str | None:
+        if evidence is None:
+            return end("not_resumable", why, session_id)
+        # AIPOS-F241 item 2: not resumable = the original rule (fresh launch, relaunch_cap) with the same instruction in the kickoff
+        recorder.report_fix({"card": card, "role": role, "outcome": "not_resumable", "kinds": kinds, "session_id": session_id,
+                             "detail": f"{why}; 照原规则新拉起(开工稿附只补证据指令); {head}", **extra})
+        say(f"[{index}] report_fix: {card} {why}, 照原规则新拉起审计体(开工稿附上一轮拒因与只补证据指令)")
+        return None
+
     used, cap = fixes.get(fix_key, 0), int(decl["max_per_run"])
     if used >= cap:
         return end("exhausted", f"本运行已续接{who}会话{fix_label} {used}/{cap} 次仍被拒")
     try:
         session = latest_launch_session(governance_root, task_id, card, own=recorder.meta, contract=contract)
     except LoopRunRecordError as exc:
-        return end("not_resumable", f"运行记录读不出, 找不到{who}会话: {exc}")
+        return not_resumable(f"运行记录读不出, 找不到{who}会话: {exc}")
     if session is None:
-        return end("not_resumable", f"{who}会话不可续接(本卡运行记录无该{who}卡的固定会话 id)")
+        return not_resumable(f"{who}会话不可续接(本卡运行记录无该{who}卡的固定会话 id)")
     sid = session["session_id"]
     plan = plan_launch(governance_root, card, policy=policy, no_launch=no_launch, decl=launch_decl, already_launched=launched,
                        resume_session=sid, resume_kickoff=prompt)
     if plan.refusal:
-        return end("not_resumable", f"{who}会话 {sid} 不可续接: {plan.refusal}", sid)
+        return not_resumable(f"{who}会话 {sid} 不可续接: {plan.refusal}", sid)
     if session.get("workstation") and str(session["workstation"]) != str(plan.cwd):
-        return end("not_resumable", f"{who}会话 {sid} 记录在工位 {session['workstation']}, 该{who}实例现工位 {plan.cwd}", sid)
+        return not_resumable(f"{who}会话 {sid} 记录在工位 {session['workstation']}, 该{who}实例现工位 {plan.cwd}", sid)
     fixes[fix_key] = used + 1
-    step = LoopStep(index, "wait", node, state, card, artifacts=patterns)
+    step = LoopStep(index, "wait", node, state, card, artifacts=patterns, detail=step_detail)
     step.launch = {**plan.to_dict(), "report_fix": fixes[fix_key]}
     start = _report_fingerprint(report)
     say(f"[{index}] report_fix: {head} → 同会话 {sid} 续接{fix_label} {fixes[fix_key]}/{cap}")
-    recorder.step_started(index, "wait", node, state, card, waiting_for=patterns, mode="launch")
+    recorder.step_started(index, "wait", node, state, card, waiting_for=patterns, mode="launch", detail=step_detail or None)
     watch_args = _watch_args(watch_root, patterns, max_wait=max_wait, interval=interval)
 
     def _ready(_matched: list[str]) -> bool:
@@ -3138,7 +3258,8 @@ def _adopt_own_deploy(index: int, guard: Any, governance_root: Path, task_id: st
 
 
 def _deploy_changed_end(index: int, change: dict[str, Any], result: LoopResult, *, contract: dict[str, Any],
-                        say: Callable[[str], None], recorder: LoopRunRecorder, note: str = "") -> LoopResult:
+                        say: Callable[[str], None], recorder: LoopRunRecorder, note: str = "",
+                        note_label: str = "等待步续等未成(AIPOS-F166)") -> LoopResult:
     """AIPOS-F152 件①: 部署已更新 → end_reason deploy_changed(exit_codes.deploy_changed), 运行记录 deploy 段写新旧提交。
     AIPOS-F166 件①: note = 等待步续等不可行的原因(新快照不可用 / 余步为 0 / exec 失败), 附在结束原文末。"""
     from tools.aipos_cli.deploy_runtime import change_commits
@@ -3146,7 +3267,7 @@ def _deploy_changed_end(index: int, change: dict[str, Any], result: LoopResult, 
     code = exit_code_for(contract, "deploy_changed")
     msg = (f"部署已更新({change_commits(change)}), 本 loop 跑的是旧版本代码, 已在步间停下(未执行下一步): "
            f"用原命令重跑 loop 从断点续做(已落的步不重复)。快照 {change.get('running_release')}, 部署链接 {change.get('deploy_current')}"
-           + (f"。等待步续等未成(AIPOS-F166): {note}" if note else ""))
+           + (f"。{note_label}: {note}" if note else ""))
     recorder.deploy_changed(change)
     say(f"[{index}] exit {code} — {msg}")
     result.outcome, result.exit_code, result.message, result.reason = "deploy_changed", code, msg, "deploy_changed"
@@ -3194,24 +3315,71 @@ def _reexec_args(task_id: str, governance_root: Path, *, driver_actor: str, enve
     return args
 
 
+def _step_reexec(index: int, change: dict[str, Any], guard: Any, wait_reexec: WaitReexec, *, governance_root: Path, task_id: str,
+                 contract: dict[str, Any], recorder: LoopRunRecorder, say: Callable[[str], None], actor: str, args: list[str]) -> str:
+    """AIPOS-F241 件④: 两步之间部署已更新 → 连续换快照未超声明上限(verbs.schema lybra_loop.deploy_consistency.step_reexec.max_consecutive;
+    次数唯一判定 loop_run_record.step_reexec_streak)= 日志写顾问未读更新提示(与 loop status / next 同一提示, 无未读不写)后经 _wait_reexec
+    (kind=step)换新快照从当前推导点续跑(成功不返回)。返回 = 不续跑的原因(调用方照 deploy_changed 停, 原因附结束原文)。"""
+    from tools.aipos_cli.loop_run_record import step_reexec_streak
+
+    decl = step_reexec_declaration(contract)
+    cap = int(decl["max_consecutive"])
+    try:
+        streak = step_reexec_streak(governance_root, task_id, recorder.meta, contract=contract)
+    except LoopRunRecordError as exc:
+        return f"运行记录读不出, 连续换快照次数判不出(fail-closed): {exc}"
+    if streak >= cap:
+        return (f"已连续 {streak} 次步间换快照且其间未落任何一步(声明 step_reexec.max_consecutive={cap}), 部署仍在变, 不再续跑; "
+                "部署稳定后用原命令重跑 loop 从断点续做")
+    from tools.aipos_cli.advisor_updates_cli import advisor_banner_lines
+
+    for line in advisor_banner_lines(governance_root, actor or None):  # 未读更新提示(无未读 = [], 读不出 = 一行告警原文)
+        say(f"[{index}] {line}")
+    return _wait_reexec(index, change, guard, wait_reexec, recorder=recorder, say=say, args=args, kind="step",
+                        streak=(streak + 1, cap))
+
+
+def step_reexec_declaration(contract: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F241 件④: verbs.schema lybra_loop.deploy_consistency.step_reexec(唯一读取口); 缺 / 形不合 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = (contract.get("deploy_consistency") or {}).get("step_reexec")
+    where = f"verbs.schema.json verbs.{LOOP_VERB}.deploy_consistency.step_reexec"
+    if not isinstance(decl, dict):
+        raise SchemaLoadError(f"{where} 未声明(AIPOS-F241)")
+    cap = decl.get("max_consecutive")
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap < 1:
+        raise SchemaLoadError(f"{where}.max_consecutive 须为 ≥ 1 的整数")
+    if str(decl.get("end_reason") or "") not in ((contract.get("run_record") or {}).get("end_reasons") or {}):
+        raise SchemaLoadError(f"{where}.end_reason 须为已声明的 run_record.end_reasons 键")
+    return decl
+
+
 def _wait_reexec(index: int, change: dict[str, Any], guard: Any, wait_reexec: WaitReexec, *, recorder: LoopRunRecorder,
-                 say: Callable[[str], None], args: list[str]) -> str:
+                 say: Callable[[str], None], args: list[str], kind: str = "wait", streak: tuple[int, int] | None = None) -> str:
     """等待步续等: 新快照可用且有余步 → 日志 / 运行记录各一行(本运行以 deploy_reexec 结束, 记录封存)→ launcher 替换本进程(不返回)。
-    返回 = 续等不可行的原因(调用方照 deploy_changed 停, 原因附结束原文); launcher 失败 = 解封记录, 由调用方写 deploy_changed 终态。"""
+    返回 = 续等不可行的原因(调用方照 deploy_changed 停, 原因附结束原文); launcher 失败 = 解封记录, 由调用方写 deploy_changed 终态。
+    AIPOS-F241 件④: kind = step = 两步之间换快照从当前推导点续跑(本轮尚未执行; 同一机制, 日志文案与运行记录 reexec.kind 区分),
+    streak = (本次是第几次连续步间换快照, 上限)。"""
     from tools.aipos_cli.deploy_runtime import EntryError, change_commits, short
 
     remaining = int(args[args.index("--max-steps") + 1])
     if remaining < 1:
-        return f"--max-steps 已用尽(本等待步为第 {index} 轮), 不再续等"
+        return f"--max-steps 已用尽(本{'等待' if kind == 'wait' else ''}步为第 {index} 轮), 不再续{'等' if kind == 'wait' else '跑'}"
     try:
         target = guard.current_snapshot()
     except EntryError as exc:
         return f"新部署快照不可用: {exc}"
     args = [*args, *wait_reexec.extra_args]
-    say(f"[{index}] 等待中部署已更新({change_commits(change)}); 本步是等待步(无副作用) → re-exec 到新部署快照 {target.name}"
-        f"(commit {short(change.get('to'))}), 从同一等待步续等(进程号不变; 本运行记录 {recorder.run_id} 以 deploy_reexec 结束, "
-        f"新运行记录 continues_run={recorder.run_id}; 余 {remaining} 轮)")
-    recorder.reexec(change, target=target)
+    if kind == "step":
+        say(f"[{index}] 部署变更: 两步之间部署已更新({change_commits(change)}); 本轮尚未推导 / 执行(无门动词在执行) → re-exec 到新部署快照 "
+            f"{target.name}(commit {short(change.get('to'))}), 从当前推导点续跑(进程号不变; 本运行记录 {recorder.run_id} 以 deploy_reexec 结束, "
+            f"新运行记录 continues_run={recorder.run_id}; 余 {remaining} 轮; 连续步间换快照 {streak[0] if streak else 1}/{streak[1] if streak else '-'})")
+    else:
+        say(f"[{index}] 等待中部署已更新({change_commits(change)}); 本步是等待步(无副作用) → re-exec 到新部署快照 {target.name}"
+            f"(commit {short(change.get('to'))}), 从同一等待步续等(进程号不变; 本运行记录 {recorder.run_id} 以 deploy_reexec 结束, "
+            f"新运行记录 continues_run={recorder.run_id}; 余 {remaining} 轮)")
+    recorder.reexec(change, target=target, kind=kind)
     try:
         wait_reexec.launcher(args, target)
     except (OSError, RuntimeError, EntryError) as exc:

@@ -4612,6 +4612,33 @@ def _collapse_ws(text: str) -> str:
     return " ".join(str(text).split())
 
 
+def _evidence_cd_prefix_re() -> Any:
+    import re
+
+    return re.compile(r"^cd\s+(?P<dir>'[^']*'|\"[^\"]*\"|[^\s'\";&|]+)\s*&&\s*(?P<rest>\S.*)$")
+
+
+def evidence_command_key(command: Any, worktree: Any) -> str:
+    """AIPOS-F241 件③(声明 transitions artifact_ingest.verdict.runtime_evidence.command_match): 运行证据命令的比对键(只供
+    runtime_evidence_check 调用, 门 / 入门预检 / 推导核同读)。空白折叠后, 若命令形如 `cd <W> && X`、<W> 为绝对路径且规范化(展开 ~、
+    解析符号链接与 ..)后 = 该条运行记录的 worktree(run-long 记录即其 --cwd)= 键为 X; 其余一律为空白折叠后的原文(只认这一种前缀等价,
+    加参数 / 别的前缀 / cwd 不同仍判不合)。"""
+    text = _collapse_ws(command)
+    if worktree in (None, ""):
+        return text
+    match = _evidence_cd_prefix_re().match(text)
+    if match is None:
+        return text
+    target = match.group("dir")
+    if target[:1] in ("'", '"'):
+        target = target[1:-1]
+    where = Path(target).expanduser()
+    base = Path(str(worktree)).expanduser()
+    if not where.is_absolute() or not base.is_absolute():
+        return text
+    return match.group("rest") if where.resolve() == base.resolve() else text
+
+
 def _run_locate_refusal(workspace_root: Path, audit_task_id: str, exc: Exception) -> str:
     """AIPOS-F232 件④: 裁决入口定位运行证据 run 被拒的拒因(前缀按拒因码分, 声明 transitions runtime_evidence.candidate_subject.host_selection
     .verdict_refusals): 主机不符 / 主机未定 = 点名卡面声明主机; 其余 = 声明读不出。声明缺键 = SchemaLoadError(fail-closed)。"""
@@ -4841,6 +4868,17 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
     def render(command: str) -> str:  # AIPOS-F233: 唯一渲染(别名按卡分支主体规范化后代值; 词表 placeholder_vocabulary)
         return _collapse_ws(render_evidence_command(command, "branch", values))
 
+    def rejected(problems: list[str], missing_commands: list[str]) -> dict[str, Any]:
+        # AIPOS-F241 件①②: 拒因原文另带 problems(不含出口的逐条拒因, loop 日志 / 运行记录 / loop status / next 同一原文)、
+        # missing_commands(缺 / 不等的声明命令渲染后原文, 同会话补证据指令只补这几条)、outlet; reasons 形不变(= problems + 出口)
+        return {"category": category, "reasons": [*problems, outlet], "problems": list(problems),
+                "missing_commands": list(missing_commands), "outlet": outlet}
+
+    def all_rendered() -> list[str]:
+        if subject is not None:
+            return [_collapse_ws(render_candidate_evidence_command(c, {})) for c in requirement["commands"]]
+        return [render(c) for c in requirement["commands"]]
+
     try:
         text = Path(report_path).read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as exc:
@@ -4848,7 +4886,7 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
     entries, problem = parse_runtime_evidence_section(text)
     where = f"{report_path}: "
     if entries is None:
-        return {"category": category, "reasons": [where + problem + f"; 卡面要求独立运行证据(来源 {requirement['source']})。{outlet}"]}
+        return rejected([where + problem + f"; 卡面要求独立运行证据(来源 {requirement['source']})。"], all_rendered())
     reasons: list[str] = []
     valid_commands: list[str] = []
     valid_runs: list[tuple[str, dict[str, str]]] = []  # AIPOS-F199: 固定候选卡 (实跑命令, 该条 run 的占位值)
@@ -4870,10 +4908,14 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
             if fields is None:
                 reasons.append(f"{label} {problem}")
                 continue
+            # AIPOS-F241 件③: command 比对同一比对键(`cd <记录 --cwd> && X` 与记录命令 X 视为同一条, evidence_command_key)
             clash = [k for k in ("command", "worktree", "exit_code") if entry.get(k) not in (None, "")
-                     and (_collapse_ws(entry[k]) != _collapse_ws(fields[k]) if k == "command" else str(entry[k]) != str(fields[k]))]
+                     and (evidence_command_key(entry[k], fields["worktree"]) != evidence_command_key(fields[k], fields["worktree"])
+                          if k == "command" else str(entry[k]) != str(fields[k]))]
             if clash:
-                reasons.append(f"{label} 字段 {', '.join(clash)} 与引用的 run-long 记录 {entry[run_long_key]} 不一致(以记录为准, 删掉或改对)")
+                sides = "; ".join(f"{k}: 报告写 {_collapse_ws(entry[k])!r} vs 记录 {_collapse_ws(fields[k])!r}" for k in clash)
+                reasons.append(f"{label} 字段 {', '.join(clash)} 与引用的 run-long 记录 {entry[run_long_key]} 不一致(以记录为准, 删掉或改对; "
+                               f"{sides})")
                 continue
             entry = {**{k: v for k, v in entry.items() if k != log_keys["excerpt"]}, **{
                 "command": fields["command"], "worktree": fields["worktree"], "exit_code": fields["exit_code"],
@@ -4911,7 +4953,7 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
             if problem:
                 reasons.append(f"{label} {problem}")
                 continue
-            valid_runs.append((_collapse_ws(command), run_values))
+            valid_runs.append((evidence_command_key(command, entry.get("worktree")), run_values, entry.get("worktree")))
             continue
         worktree = Path(str(entry.get("worktree"))).expanduser()
         resolved = worktree.resolve() if worktree.is_absolute() else None
@@ -4944,22 +4986,27 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
             if actual != log_sha:
                 reasons.append(f"{label} 日志 {log_path} sha256={actual[:12]} ≠ 报告自述 {log_sha[:12]}")
                 continue
-        valid_commands.append(_collapse_ws(command))
+        valid_commands.append(evidence_command_key(command, resolved))  # AIPOS-F241 件③: 比对键(本条 worktree = 审计分配工作树)
     if not entries:
         reasons.append("「独立运行证据」节运行记录为空")
     ran = [_collapse_ws(str(e.get("command"))) for e in entries if isinstance(e, dict) and e.get("command") not in (None, "")]
+    ran_keys = {evidence_command_key(e.get("command"), e.get("worktree")) for e in entries
+                if isinstance(e, dict) and e.get("command") not in (None, "")}
+    missing_commands: list[str] = []
     if subject is not None:  # 差异说明用: 有效 run 的占位值, 都无效时按各条自述 run_dir 试渲染(只作拒因说明, 判据不变)
         from tools.aipos_cli.validation_root_helper import SRC_DIR_NAME
 
-        probes = [v for _got, v in valid_runs] or [
+        probes = [v for _got, v, _wt in valid_runs] or [
             {"run_dir": str(e["run_dir"]).rstrip("/"), "src_dir": f"{str(e['run_dir']).rstrip('/')}/{SRC_DIR_NAME}",
              "candidate": subject["commit_sha"], "candidate_tree": subject["tree_hash"]}
             for e in entries if isinstance(e, dict) and str(e.get("run_dir") or "").strip()]
     for declared in requirement["commands"]:
         if subject is not None:  # AIPOS-F199: 每条有效记录按其自身 run 的占位值渲染声明命令, 逐字一致即算该条已运行
-            if any(_collapse_ws(render_candidate_evidence_command(declared, run_values)) == got for got, run_values in valid_runs):
+            if any(evidence_command_key(render_candidate_evidence_command(declared, run_values), wt) == got
+                   for got, run_values, wt in valid_runs):
                 continue
             shown = _collapse_ws(render_candidate_evidence_command(declared, probes[0] if probes else {}))  # AIPOS-F233: 无 run 也按规范形展示
+            missing_commands.append(shown)
             if shown in ran:  # 命令跑了, 但该条记录不合格(拒因已在上方逐条列出)
                 reasons.append(f"卡面声明的命令 {shown!r}(声明原文 {declared!r})只有不合格的运行记录(见上列该条拒因), 不算已运行")
                 continue
@@ -4967,12 +5014,18 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
                            "命令逐字一致); " + runtime_evidence_command_diff(shown, ran))
             continue
         rendered = render(declared)
-        if rendered not in valid_commands:
-            reasons.append(f"卡面声明的命令缺有效运行记录: {rendered!r}(声明原文 {declared!r}; 须在审计分配工作树运行, 命令逐字一致); "
+        key = evidence_command_key(rendered, audit_resolved)  # AIPOS-F241 件③: `cd <审计分配工作树> && X` 与在该树跑的 X 同一条
+        if key not in valid_commands:
+            missing_commands.append(rendered)
+            if rendered in ran or key in ran_keys:  # 命令跑了, 但该条记录不合格(拒因已在上方逐条列出)
+                reasons.append(f"卡面声明的命令 {rendered!r}(声明原文 {declared!r})只有不合格的运行记录(见上列该条拒因), 不算已运行")
+                continue
+            reasons.append(f"卡面声明的命令缺有效运行记录: {rendered!r}(声明原文 {declared!r}; 须在审计分配工作树运行, 命令逐字一致"
+                           "或为 `cd <审计分配工作树> && 命令` 与在该树运行的同一命令); "
                            + runtime_evidence_command_diff(rendered, ran))  # AIPOS-F165 件②: 逐条差异(声明 vs 实跑)
     if not reasons:
         return None
-    return {"category": category, "reasons": [where + r for r in reasons] + [outlet]}
+    return rejected([where + r for r in reasons], missing_commands)
 
 
 def _build_audit_verdict_preview(
