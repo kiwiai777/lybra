@@ -176,9 +176,10 @@ def test_item2_root_cause_host_deploy_state_and_pinned_fixture_is_deterministic(
     pinned: dict[str, tuple] = {}
     for name, commit in hosts.items():
         with monkeypatch.context() as mp:
-            if commit is not None:
-                snap = _fake_snapshot(tmp_path / name, commit)
-                mp.setattr(dr, "_code_root", lambda snap=snap: snap)
+            # 本机运行代码根显式模拟(不取跑本测试那台机的真实代码根——本测试自身也可能从部署快照跑): 工作树 = 非快照目录
+            root = _fake_snapshot(tmp_path / name, commit) if commit is not None else (tmp_path / name / "worktree")
+            root.mkdir(parents=True, exist_ok=True)
+            mp.setattr(dr, "_code_root", lambda root=root: root)
             running = dr.running_code()
             _text, status = _status(rig.gov, f202.TASK)
             na = status["next_action"]
@@ -319,9 +320,9 @@ def test_item3_single_criterion_both_gate_entries():
     for fn in (board_adapter._build_return_preview, board_adapter._build_audit_verdict_preview):
         assert "gate_credential_blocking(" in inspect.getsource(fn), fn.__name__
     assert "credential_refusal(" in inspect.getsource(artifact_ingest.gate_credential_blocking)
-    grep = subprocess.run(["git", "grep", "-n", "def credential_hits\\|def credential_scan", "--", "tools"], cwd=REPO_ROOT,
-                          capture_output=True, text=True).stdout.strip().splitlines()
-    assert sorted(ln.split(":", 1)[0] for ln in grep) == ["tools/aipos_cli/artifact_ingest.py"] * 2, grep
+    defs = sorted(str(f.relative_to(REPO_ROOT)) for f in (REPO_ROOT / "tools").rglob("*.py")  # 不依赖 .git(部署快照里也能跑)
+                  for line in f.read_text(encoding="utf-8").splitlines() if line.startswith(("def credential_hits(", "def credential_scan(")))
+    assert defs == ["tools/aipos_cli/artifact_ingest.py"] * 2, defs
 
 
 # ===========================================================================
