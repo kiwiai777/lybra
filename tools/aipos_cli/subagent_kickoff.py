@@ -140,10 +140,27 @@ def run_long_threshold(texts: dict[str, Any], harness: str | None) -> str:
     return str(texts[key]).format(harness=harness, tool_timeout=tool_timeout)
 
 
+def read_discipline_rule(contract: dict[str, Any] | None = None) -> str:
+    """AIPOS-F240 件③: 大文件读法纪律唯一渲染(声明 verbs.schema lybra_kickoff.read_discipline: text 占位 {threshold_chars})。开工稿
+    texts.read_discipline、章程占位 {{read_discipline_rule}}(charter_timing_values 带出)、loop 运行中上下文超限续接指令 / 新会话摘要同读。
+    缺 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = (contract or kickoff_contract()).get("read_discipline")
+    threshold = decl.get("threshold_chars") if isinstance(decl, dict) else None
+    if (not isinstance(decl, dict) or not isinstance(decl.get("text"), str) or "{threshold_chars}" not in decl["text"]
+            or isinstance(threshold, bool) or not isinstance(threshold, int) or threshold <= 0):
+        raise SchemaLoadError(f"verbs.schema.json verbs.{KICKOFF_VERB}.read_discipline 未声明齐(text 含 {{threshold_chars}}, threshold_chars 为正整数; AIPOS-F240)")
+    return str(decl["text"]).format(threshold_chars=threshold)
+
+
 def charter_timing_values(runall_timeout: str) -> dict[str, str]:
-    """AIPOS-F212 件③④: 章程渲染上下文的时限两键(charter_render.charter_render_context 唯一调用; 章程不按卡 = charter 态)。"""
-    texts = kickoff_contract()["texts"]
-    return {"runall_timing_charter": runall_timing(texts, None, 0, runall_timeout)[1], "run_long_threshold": run_long_threshold(texts, None)}
+    """AIPOS-F212 件③④: 章程渲染上下文的时限两键(charter_render.charter_render_context 唯一调用; 章程不按卡 = charter 态)。
+    AIPOS-F240 件③: 另带读法纪律 read_discipline_rule(章程占位 {{read_discipline_rule}}, 与开工稿同一渲染 read_discipline_rule)。"""
+    contract = kickoff_contract()
+    texts = contract["texts"]
+    return {"runall_timing_charter": runall_timing(texts, None, 0, runall_timeout)[1], "run_long_threshold": run_long_threshold(texts, None),
+            "read_discipline_rule": read_discipline_rule(contract)}
 
 
 def _refuse(contract: dict[str, Any], refusal_code: str, **values: Any) -> KickoffRefused:
@@ -435,6 +452,7 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
         "hard_rule_lines": _item_lines(items["hard_rule_line"], boundary["hard_rules"]),
         "commands_rule_lines": commands_rules,
         "scratch_dir": str(scratch), "scratch_source": scratch_source,
+        "read_discipline": read_discipline_rule(contract),  # AIPOS-F240 件③: 大文件读法纪律(与章程同一渲染)
         "runall_command": runall["runall_command"] if runall["runall"] else str(texts["runall_absent"]),
         "runall_timing": timing, "harness": harness, "run_long_threshold": run_long_threshold(texts, harness),
         "run_long_start": long_cmds["run_long_start"], "run_long_wait": long_cmds["run_long_wait"],

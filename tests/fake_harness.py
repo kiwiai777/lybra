@@ -41,6 +41,11 @@
                末条助手消息 stopReason=error + errorMessage「401: …」/「429: …」, 或 stopReason=length(本轮输入 = usage.input +
                cacheRead), 不写产物即 exit 0(验早退真实原因 / 退避重试 / 超窗口不续接)
     provider_429_once   AIPOS-F231: 首次同 provider_429, 同会话续接时(FAKE_PI_RESUMES≥1)同 work(验退避重试后完成)
+    run_length / run_length_once   AIPOS-F240: 写一份运行中上下文累积超限的 pi 会话记录(首轮输入 9453 词元; 中间整文件读入 read 31500 字 /
+               bash 32500 字的工具结果; 末条助手消息 stopReason=length, 输入 3338 + 93568; 其后一条 compaction 记录 = pi 退出前已压缩),
+               不写产物即 exit 0; _once = 同会话续接时(FAKE_PI_RESUMES≥1)同 work(验压缩后同会话续接完成)
+    run_length_nocompact / run_length_nocompact_once   AIPOS-F240: 同 run_length 但压缩记录在超限之前(中途自动压缩, 摘要含一行凭据字样),
+               超限之后无压缩; _once = 新会话开工稿含「上次运行摘要」时同 work(验无压缩 → 新会话附摘要重拉完成)
   审计卡: 开工提示给出 `- outputs_digest: <值>(` (AIPOS-F197 被审卡只写治理根)= 报告写 verdict + outputs_digest(照抄), 否则写被审 tip
   FAKE_HARNESS_LOG: 目录; 收到的 argv[1](kickoff)按字节原样落 <卡号>.kickoff, cwd 落 <卡号>.cwd(供逐字节比对)
 事件里故意含一行凭据字样、一个未知事件类型、一行非 JSON(验汇总隐去/计数不刷屏)。
@@ -114,6 +119,38 @@ def provider_session(mode: str) -> None:
              {"type": "message", "message": last}]
     with path.open("a", encoding="utf-8") as fh:
         fh.write("\n".join(json.dumps(x) for x in lines) + "\n")
+
+
+def run_overflow_session(compaction_after: bool) -> None:
+    """AIPOS-F240: 模拟运行中上下文累积超限的 pi 会话记录(真实形同 HBLX-86: 首轮小、整文件读入大材料、末轮 stopReason=length、compaction)。"""
+    sid = os.environ.get("FAKE_PI_SESSION_ID") or "no-session"
+    cwd = os.getcwd()
+    path = Path(os.environ["HOME"]) / ".pi" / "agent" / "sessions" / ("--" + cwd.strip("/").replace("/", "-") + "--") / f"2026-10-26T00-00-00-000Z_{sid}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    def assistant(stop: str, inp: int, cache: int, tool: str) -> dict:
+        return {"type": "message", "message": {"role": "assistant", "provider": "kiwiai", "model": "qwen3.7-plus", "stopReason": stop,
+                                               "usage": {"input": inp, "output": 1 if stop == "length" else 64, "cacheRead": cache},
+                                               "content": [{"type": "toolCall", "id": "c", "name": tool, "arguments": {"path": "big.txt"}}]}}
+
+    def result(tool: str, chars: int) -> dict:
+        return {"type": "message", "message": {"role": "toolResult", "toolCallId": "c", "toolName": tool, "isError": False,
+                                               "content": [{"type": "text", "text": "协" * chars}]}}
+
+    summary = ("## Goal\n补正 BLE 管理升降结论\n## Progress\n已读 PDF p9-11 / p14 / p32(要点见草稿笔记)\n"
+               "api token: fixture-not-a-secret-value\n## Next\n只读 iOS 源码 FEE2 帧段")
+    compaction = {"type": "compaction", "id": "cmp1", "summary": summary, "tokensBefore": 96907, "details": {"readFiles": ["big.txt"]}}
+    lines = [{"type": "session", "version": 3, "id": sid, "cwd": cwd},
+             {"type": "model_change", "provider": "kiwiai", "modelId": "qwen3.7-plus"},
+             {"type": "message", "message": {"role": "user", "content": [{"type": "text", "text": "kickoff"}]}},
+             assistant("toolUse", 9453, 0, "read"), result("read", 31500)]
+    if not compaction_after:
+        lines.append(compaction)
+    lines += [assistant("toolUse", 3000, 40000, "bash"), result("bash", 32500), assistant("length", 3338, 93568, "read")]
+    if compaction_after:
+        lines.append(compaction)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write("\n".join(json.dumps(x, ensure_ascii=False) for x in lines) + "\n")
 
 
 def reviewed_of(task_id: str) -> str | None:
@@ -357,6 +394,12 @@ def main() -> int:
         return 0
     if mode in ("provider_401", "provider_429", "length") or (mode == "provider_429_once" and os.environ.get("FAKE_PI_RESUMES", "0") == "0"):
         provider_session("provider_429" if mode == "provider_429_once" else mode)  # AIPOS-F231: 早退真实原因在会话记录里
+        emit({"type": "agent_end", "messages": []})
+        return 0
+    resumed = os.environ.get("FAKE_PI_RESUMES", "0") != "0"
+    if mode in ("run_length", "run_length_nocompact") or (mode == "run_length_once" and not resumed) or (
+            mode == "run_length_nocompact_once" and "上次运行摘要" not in kickoff):
+        run_overflow_session(compaction_after=mode.startswith("run_length_once") or mode == "run_length")  # AIPOS-F240
         emit({"type": "agent_end", "messages": []})
         return 0
     if mode.startswith("sha_") and reviewed_of(task_id):
