@@ -297,6 +297,72 @@ def lybra_cli_invocation(args: list[str], env: dict[str, str] | None = None,
     return [interpreter, "-m", LYBRA_CLI_MODULE, *[str(a) for a in args]], out_env
 
 
+def _entry_unusable_reason(path: Path) -> str | None:
+    """AIPOS-F244 件①: 候选 lybra 入口不能给他机经非登录 ssh 照抄执行的原因; 可用 = None。
+
+    ① 须为可执行文件; ② 自身路径或跟随符号链接后的真实路径位于部署快照(<部署目录>/releases/<名>, 判定唯一口
+    deploy_runtime.snapshot_deploy_dir)内 = 下次部署即悬空; ③ 脚本 shebang 经 env 按 PATH 找解释器(如 .deploy/current/bin/lybra
+    的 `#!/usr/bin/env node` 薄壳)或解释器非绝对路径 / 不可执行 = 非登录 ssh 的 PATH 里同样起不来。"""
+    from tools.aipos_cli.deploy_runtime import snapshot_deploy_dir
+
+    if not path.is_file() or not os.access(path, os.X_OK):
+        return "不是可执行文件"
+    for where in (Path(os.path.abspath(path)), Path(os.path.realpath(path))):
+        if any(snapshot_deploy_dir(parent) is not None for parent in where.parents):
+            return f"位于部署快照内({where}; 下次部署即悬空)"
+    try:
+        with open(path, "rb") as fh:
+            head = fh.readline(512)
+    except OSError as exc:
+        return f"读不出({type(exc).__name__}: {exc})"
+    if head.startswith(b"#!"):
+        words = head[2:].decode("utf-8", "replace").split()
+        interpreter = words[0] if words else ""
+        if not interpreter or Path(interpreter).name == "env":
+            return f"shebang {head[2:].decode('utf-8', 'replace').strip()!r} 按 PATH 找解释器(非登录 ssh 的 PATH 里可能没有)"
+        if not Path(interpreter).is_absolute() or not os.access(interpreter, os.X_OK):
+            return f"shebang 解释器 {interpreter!r} 不是本机可执行的绝对路径"
+    return None
+
+
+def stable_lybra_entry(*, argv0: str | None = None, path_env: str | None = None,
+                       default_bin_dir: str | None = None) -> dict[str, Any]:
+    """AIPOS-F244 件①: 本机(治理根所在机)lybra 的稳定入口——给他机会话经 ssh 照抄执行的命令用(唯一推导; 拉取出口等各拼装处调用)。
+
+    实撞: 他机会话照抄 `ssh <治理根主机> 'cd <治理根> && lybra …'`, 治理根所在机的非登录非交互 ssh 不读 ~/.profile,
+    ~/.local/bin 不进 PATH → `lybra: command not found`。命令里的 lybra 换成本函数给出的绝对路径即不依赖远端 PATH。
+    候选序: ① 本进程启动所经的入口(sys.argv[0] 名为 lybra 的文件: 运行 sync / 向导的就是它)② 本进程 PATH 上的 lybra
+    ③ 入口缺省目录(deploy_runtime.DEFAULT_BIN_DIR, `tools/lybra-deploy install-entry` 缺省写入处; 按 HOME 展开, 不写死用户目录)。
+    取绝对路径但不跟随符号链接: 入口脚本本身跨部署不变(每次部署原地重写, 启动时才解析 .deploy/current), 跟随到 releases/<版本>
+    则下次部署即悬空——候选落在部署快照内、或 shebang 依赖 PATH(_entry_unusable_reason)= 跳过并记原因。
+    返回 {path, source, skipped}: path = 入口绝对路径(都不可用 = None, 调用方出声并给出口, 不猜); source ∈ argv0 / path / default_bin_dir;
+    skipped = [被跳过候选与原因]。参数供夹具注入(缺省 = 本进程 sys.argv[0] / 环境 PATH / DEFAULT_BIN_DIR)。"""
+    import shutil
+
+    from tools.aipos_cli.deploy_runtime import DEFAULT_BIN_DIR, ENTRY_NAME
+
+    candidates: list[tuple[str, str]] = []
+    first = argv0 if argv0 is not None else (sys.argv[0] if sys.argv else "")
+    if first and Path(first).name == ENTRY_NAME:
+        candidates.append(("argv0", first))
+    found = shutil.which(ENTRY_NAME, path=path_env if path_env is not None else os.environ.get("PATH", ""))
+    if found:
+        candidates.append(("path", found))
+    candidates.append(("default_bin_dir", str(Path(os.path.expanduser(default_bin_dir or DEFAULT_BIN_DIR)) / ENTRY_NAME)))
+    skipped: list[str] = []
+    seen: set[str] = set()
+    for source, raw in candidates:
+        path = os.path.abspath(raw)
+        if path in seen:
+            continue
+        seen.add(path)
+        reason = _entry_unusable_reason(Path(path))
+        if reason is None:
+            return {"path": path, "source": source, "skipped": skipped}
+        skipped.append(f"{path}: {reason}")
+    return {"path": None, "source": None, "skipped": skipped}
+
+
 # ---------------------------------------------------------------------------
 # ① .pi 接线 + ④ AGENTS.md 占位(seed_only: 已存在则跳过并出声)
 # ---------------------------------------------------------------------------

@@ -43,6 +43,12 @@ another machine gets the advisor charter by pull (Lybra never pushes): at sessio
 `ssh <governance-root host> 'cd <governance root> && lybra charter --role advisor --instance <instance>'`, which prints the
 rendered charter (same renderer as `lybra sync`; no credentials in the output). `lybra sync` and step 5 of the guide print
 that command; the host is read from project.json `workstations.<instance>.gate_ssh_alias` (`lybra project set-workstation`).
+The printed pull commands can be copied and run as they are (AIPOS-F244): the `lybra` inside the ssh command is the absolute
+path of the stable `lybra` entry on the governance-root machine (the entry installed by `tools/lybra-deploy install-entry`, which
+survives deploys; never a path under `.deploy/releases/<version>`), because a non-login ssh command does not load `~/.profile`
+and so has no `~/.local/bin` on its `PATH`. While the host is undeclared the command carries the `<治理根主机>` placeholder and the
+same line prints the declaration command to run on the governance-root machine, with this machine's hostname as the candidate
+alias; `lybra roles redeclare` / `enroll-deliver` print the same hint once when they register a session on another host.
 
 A Claude Code advisor session may also run on another machine (AIPOS-F243; for example Claude Code on a Mac that has the
 test devices attached over USB): `lybra onboarding guide <project> --advisor-host <session host> --advisor-dir <session

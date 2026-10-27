@@ -285,6 +285,11 @@ def test_item1_chris_shape_multi_repo_codex_remote_kickoff(tmp_path, monkeypatch
 
     r = _chris_rig(tmp_path, monkeypatch)
     gov, app = r["gov"], r["app"]
+    # AIPOS-F244 件①: 他机会话经 ssh 的 lybra = 治理根所在机稳定入口绝对路径; 靶场 PATH 上放一个入口, 结果与运行环境无关
+    entry = tmp_path / "gate-bin" / "lybra"
+    _write(entry, f"#!{sys.executable}\n")
+    entry.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{entry.parent}:/usr/bin:/bin")
     rc, _o, err = _cli("kickoff", "--task-id", CHRIS_CARD, "--workspace-root", str(gov))
     _show(f"[件① chris 未认领] exit {rc}: {err.strip()}")
     assert rc == declared_exit_code(KICKOFF, "refused") and "KICKOFF_NOT_STARTABLE" in err and "NOT_CLAIMED" in err
@@ -299,7 +304,7 @@ def test_item1_chris_shape_multi_repo_codex_remote_kickoff(tmp_path, monkeypatch
     base_sha = _git(app, "merge-base", "main", f"card/{CHRIS_CARD}")
     for needle in (
         f"你是 {CHRIS} 项目的执行体(实例 {CHRIS_EXEC}), 负责完成卡 {CHRIS_CARD}",
-        f"1. 读章程: `ssh gate-dev 'cd {gov} && lybra charter --role executor --instance {CHRIS_EXEC}'`",
+        f"1. 读章程: `ssh gate-dev 'cd {gov} && {entry} charter --role executor --instance {CHRIS_EXEC}'`",
         f"3. 工作树(认领时已建): `{worktree}`, 分支 card/{CHRIS_CARD}(基于 main {base_sha}",
         f"产品仓: android-app = `{app}`(project.json repos.items, 卡 lane.repo); 车道(lane.paths): `app/`, `Scripts/`",
         f"注意: 你的会话所在机 advmac ≠ 治理根所在机 {socket.gethostname()}",

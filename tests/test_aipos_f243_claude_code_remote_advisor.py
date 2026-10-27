@@ -199,7 +199,7 @@ def test_item2_remote_claude_code_pull_exits_land_same_as_local_sync(probe_range
     step5 = guide["steps"][4]
     _show("---- ④·guide 第 5 步 command 原文(他机 claude-code)----\n" + step5["command"])
     assert ".claude/rules/lybra-advisor.md" in step5["command"] and "| tar -xf -" in step5["command"]
-    assert f"lybra skills --role advisor --instance {inst}" in step5["command"]
+    assert f"{r.bin}/lybra skills --role advisor --instance {inst}" in step5["command"]  # AIPOS-F244 件①: 稳定入口绝对路径
 
     # 声明他机视角治理根主机(既有两阶段写口)后出口带真实主机
     r.sh(f"lybra project set-workstation lybra-probe --instance {inst} --gate-ssh-alias {GATE_ALIAS} "
@@ -217,9 +217,9 @@ def test_item2_remote_claude_code_pull_exits_land_same_as_local_sync(probe_range
     charter_pull, skills_pull = pulls["advisor-charter-claude-code"], pulls["advisor-skills"]
     assert charter_pull["target_path"] == ".claude/rules/lybra-advisor.md" and skills_pull["target_path"] == ".claude/skills/"
     land = (f"mkdir -p .claude/rules && ssh {GATE_ALIAS} "
-            + shlex.quote(f"cd {gov} && lybra charter --role advisor --instance {inst} --body-only")
+            + shlex.quote(f"cd {gov} && {r.bin}/lybra charter --role advisor --instance {inst} --body-only")
             + " > .claude/rules/lybra-advisor.md.tmp && mv .claude/rules/lybra-advisor.md.tmp .claude/rules/lybra-advisor.md")
-    skills = f"ssh {GATE_ALIAS} " + shlex.quote(f"cd {gov} && lybra skills --role advisor --instance {inst}") + " | tar -xf -"
+    skills = f"ssh {GATE_ALIAS} " + shlex.quote(f"cd {gov} && {r.bin}/lybra skills --role advisor --instance {inst}") + " | tar -xf -"
     assert charter_pull["land_command"] == land and skills_pull["command"] == skills
     assert f"`{land}`" in out and f"`{skills}`" in out and ".claude/rules/lybra-advisor.md" in out and ".claude/skills/" in out
     assert not (gov / ".claude").exists() and not (r.session / ".claude").exists(), "他机会话: 本机零落盘(只给出口)"

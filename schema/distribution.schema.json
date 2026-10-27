@@ -532,7 +532,7 @@
       "verb": "lybra_charter",
       "host_source": "project.json workstations.<实例>.gate_ssh_alias(config.schema project_json.workstations: 他机视角门机 = 治理根所在机的 ssh 别名; 唯一读取口 workspace_config.project_workstation); 未声明 = 命令里写 host_placeholder 并附声明出口(lybra project set-workstation), 不猜主机",
       "host_placeholder": "<治理根主机>",
-      "command_shape": "ssh <host> 'cd <治理根> && <verb.cli_command> --role <角色类> --instance <实例>'(唯一拼装 charter_render.charter_pull_command; 治理根 = 本次 sync / 向导所用治理根)",
+      "command_shape": "ssh <host> 'cd <治理根> && <verb.cli_command> --role <角色类> --instance <实例>'(唯一拼装 charter_render.charter_pull_command; 治理根 = 本次 sync / 向导所用治理根); AIPOS-F244: cli_command 首词 lybra 换成治理根所在机 lybra 稳定入口的绝对路径(唯一推导 workstation_wiring.stable_lybra_entry, 拼装 charter_render.remote_cli: 本进程启动入口 / PATH / 入口缺省目录, 不跟随到部署快照 releases/<版本>, 不取 shebang 依赖 PATH 的入口)——非登录 ssh 不加载 ~/.local/bin 进 PATH, 出口原样照抄即可执行; 入口都不可用 = 保留裸 lybra 并在出口提示里点名原因与出口(install-entry); 主机未声明 = 出口提示同一行给声明命令原文(候选值 = 治理根所在机主机名)",
       "single_implementation": "tools/aipos_cli/charter_render.charter_pull_command(拼装) / instance_charter(渲染: 接入登记 → 工位身份(AIPOS-F146: 子 agent 执行者 = land 事件身份, 无工位)→ 角色类 → 本 harness 章程条目 → render_charter); 消费方 distribution_sync._sync_harness_dir(pull 段) + onboarding.generate_onboarding_guide(他机顾问第 5 步开局命令)",
       "land": {
         "description": "AIPOS-F243 件②: 拉取出口带落盘命令的 harness(其章程落点是 Lybra 专名文件, 如 claude-code 的 .claude/rules/lybra-advisor.md; 会话目录里不会撞上会话仓自有文件)。pull 项另给 target_path(落点相对会话目录的路径, 读分发条目 target.relative_path)与 land_command(在会话目录运行: 拉取输出先写 <落点>.tmp 再改名, 拉取失败不毁旧副本); 章程落盘用 body_only_flag(只出章程全文, 不加未读更新横幅, 落盘副本与本机 sync 逐字节一致)。不在本列表的 harness(codex: 落点 AGENTS.md 常为会话仓自有文件)维持 AIPOS-F138 只读出口, 不落盘。",
