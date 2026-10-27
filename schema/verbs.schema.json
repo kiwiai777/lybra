@@ -4323,7 +4323,7 @@
       }
     },
     "lybra_charter": {
-      "description": "AIPOS-F138 件①: `lybra charter --role <角色类> [--instance <实例>] [--harness <kind>] [--workspace-root <治理根>]` —— 拉取式输出该实例的渲染后章程全文到 stdout(母本 + 项目声明 + 写权限边界, 与 sync 落盘同一渲染器 charter_render.render_charter, 同一上下文构造 charter_render_context)。供本机无落点的会话(他机 Codex 顾问)开局经 ssh 在治理根所在机读取(distribution.schema harness_semantics.remote_session_delivery); Lybra 不推送。实例 = 本治理根 enrollment_log 中有 land 事件(enrollment.workstation_location)且其工位 .lybra/role 实例相符者; 缺 --instance = 治理根 .lybra/role 的实例。harness 缺省 = 该工位 role 记录的 harness。 AIPOS-F146: 实例身份与模式经 enrollment.instance_enrollment 一处判定——land 事件 mode 为无工位接入模式(子 agent 执行者, roles.schema executor_modes credential_landing=governance_root)= 身份取 land 事件 role/mode/harness(charter_render.subagent_identity, 不要求工位、不读 .lybra/role), harness 缺省 = land 事件 harness; 母本按渲染上下文 executor_mode 选段(charter_render.select_mode_segments)。输出只含声明文本: 不含凭据 / 令牌 / 注册码(身份只经 workstation_identity 读非秘密字段)。只读: 不写任何文件、不连门、不起进程。",
+      "description": "AIPOS-F138 件①: `lybra charter --role <角色类> [--instance <实例>] [--harness <kind>] [--workspace-root <治理根>]` —— 拉取式输出该实例的渲染后章程全文到 stdout(母本 + 项目声明 + 写权限边界, 与 sync 落盘同一渲染器 charter_render.render_charter, 同一上下文构造 charter_render_context)。供本机无落点的会话(他机 Codex / Claude Code 顾问, AIPOS-F243)开局经 ssh 在治理根所在机读取(distribution.schema harness_semantics.remote_session_delivery); Lybra 不推送。实例 = 本治理根 enrollment_log 中有 land 事件(enrollment.workstation_location)且其工位 .lybra/role 实例相符者; 缺 --instance = 治理根 .lybra/role 的实例。harness 缺省 = 该工位 role 记录的 harness。 AIPOS-F146: 实例身份与模式经 enrollment.instance_enrollment 一处判定——land 事件 mode 为无工位接入模式(子 agent 执行者, roles.schema executor_modes credential_landing=governance_root)= 身份取 land 事件 role/mode/harness(charter_render.subagent_identity, 不要求工位、不读 .lybra/role), harness 缺省 = land 事件 harness; 母本按渲染上下文 executor_mode 选段(charter_render.select_mode_segments)。输出只含声明文本: 不含凭据 / 令牌 / 注册码(身份只经 workstation_identity 读非秘密字段)。只读: 不写任何文件、不连门、不起进程。",
       "phase": "render",
       "surface": ["cli"],
       "cli_command": "lybra charter",
@@ -4334,7 +4334,8 @@
           "role": {"type": "string", "description": "角色类(roles.schema 内建类, 如 advisor); 须等于该实例 .lybra/role 角色解析出的类(custom_roles.resolve_role_to_class), 不符 = 拒"},
           "instance": {"type": "string", "description": "实例名(注册表模板); 缺省 = 治理根 .lybra/role 的实例(顾问工位即治理根)"},
           "harness": {"type": "string", "description": "取哪个 harness 的章程条目(distribution.schema harness_semantics.kinds 的键); 缺省 = 该工位 role 记录的 harness"},
-          "workspace_root": {"type": "string", "description": "治理根; 缺省 = 当前目录向上首个已建治理根(workspace_config.enclosing_governance_root, 不读活动项目)"}
+          "workspace_root": {"type": "string", "description": "治理根; 缺省 = 当前目录向上首个已建治理根(workspace_config.enclosing_governance_root, 不读活动项目)"},
+          "body_only": {"type": "boolean", "description": "AIPOS-F243 件②: 只出章程全文(不加顾问「Lybra 未读更新」横幅), 供他机会话把章程落盘到会话目录(distribution.schema harness_semantics.remote_session_delivery.land.body_only_flag); 落盘副本与本机 sync 逐字节一致。缺省 = 顾问章程开头带未读更新横幅(AIPOS-F167, 既有行为)"}
         },
         "required": ["role"],
         "additionalProperties": false
@@ -4344,6 +4345,30 @@
         "usage": {"code": 2, "meaning": "参数错(缺 --role / harness 不在声明内), 零输出"},
         "refused": {"code": 3, "meaning": "拒(原因与出口在 stderr): 实例未在本治理根接入登记 / 工位在他机 / 工位 .lybra/role 实例或角色类不符 / 该角色该 harness 无章程条目"},
         "unreadable": {"code": 4, "meaning": "治理根或声明解析失败(无治理根 / project.json 坏 / 母本缺 / 母本含未声明占位), fail-closed"}
+      }
+    },
+    "lybra_skills": {
+      "description": "AIPOS-F243 件②: `lybra skills --role <角色类> [--instance <实例>] [--harness <kind>] [--workspace-root <治理根>]` —— 拉取式输出该实例在该 harness 下的技能件(distribution.schema distributions[kind=skills], 文件集合 = 门清单同一构建器 workstation_wiring.declared_role_distributions, 技能清单只此一份)为 tar 流到 stdout; 成员路径 = 分发条目 target.relative_path/<文件相对路径>(如 .claude/skills/<技能名>/SKILL.md), 在会话目录以 `tar -xf -` 展开即与本机 sync 落盘一致。供本机无落点的会话(他机 Claude Code 顾问)开局经 ssh 在治理根所在机取(distribution.schema harness_semantics.remote_session_delivery.skills); Lybra 不推送。实例 / 角色类 / harness 判定与 `lybra charter` 同一实现(charter_render.instance_charter 的身份判定段)。stdout 为终端 = 拒(二进制流不上屏, 出口 = 管道给 tar)。只读: 不写任何文件、不连门、不起进程; 输出只含技能母本文件, 不含凭据。",
+      "phase": "render",
+      "surface": ["cli"],
+      "cli_command": "lybra skills",
+      "single_implementation": "tools/aipos_cli/charter_render.instance_skills(文件集合) / skills_tar_bytes(tar 流) / skills_pull_command(拉取出口拼装) / run_skills_cli(CLI 薄壳; argparse 参数由本条 parameters 生成)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "role": {"type": "string", "description": "角色类(roles.schema 内建类, 如 advisor); 须等于该实例角色解析出的类, 不符 = 拒(同 lybra charter)"},
+          "instance": {"type": "string", "description": "实例名; 缺省 = 治理根 .lybra/role 的实例(同 lybra charter)"},
+          "harness": {"type": "string", "description": "取哪个 harness 的技能条目(distribution.schema harness_semantics.kinds 的键); 缺省 = 该实例登记的 harness"},
+          "workspace_root": {"type": "string", "description": "治理根; 缺省解析同 lybra charter"}
+        },
+        "required": ["role"],
+        "additionalProperties": false
+      },
+      "exit_codes": {
+        "ok": {"code": 0, "meaning": "技能件 tar 流已输出到 stdout"},
+        "usage": {"code": 2, "meaning": "参数错(缺 --role / harness 不在声明内), 零输出"},
+        "refused": {"code": 3, "meaning": "拒(原因与出口在 stderr): 实例未在本治理根接入 / 工位在他机 / 角色类不符 / 该角色该 harness 无技能条目 / stdout 为终端"},
+        "unreadable": {"code": 4, "meaning": "治理根或声明解析失败 / 技能母本缺或与清单哈希不符, fail-closed"}
       }
     },
     "lybra_roadmap": {
@@ -5911,7 +5936,7 @@
       "surface": ["mcp"]
     },
     "lybra_roles_redeclare": {
-      "description": "AIPOS-F235(10-25 chris 岚图顾问从 Mac Codex 迁到 dev Claude Code: 实例槽仍记 codex@kiwiai-mac, land 无 harness=, 子 agent 代码卡被缺省成 codex, 开工稿时限句与派发说明随之错; 原入口只有 relocate-workstation(只迁 pi 工位目录)与 enroll-void + 重接入(作废凭据重发码, 对一次换 harness 过重)): 已接入实例改登记 `lybra roles redeclare --instance <实例> [--harness <kind>] [--host <主机>] [--dir <工作目录>] [--dry-run|--confirm] --actor <实例>`。适用 = 本项目已接入的治理席位实例(位置事件工位 = 治理根, 实例槽在治理根 .lybra/role)与子 agent 执行身份; pi 工位 = 拒(迁目录走 relocate-workstation)。登记真相 = 本项目 enrollment_log 位置事件: 确认 = 追加一行 event_action 位置事件(与 land / relocate 同族同解析 enrollment._LAND_LINE_RE, 同一写口 _write_trail_line, 只追加不改旧行; 结构字段沿用最新位置事件, reason = host [mode] harness [harness_host harness_dir] from_harness from_host from_dir authorized_by [workstation 沿用])并经 enroll_client.write_role_file(唯一写路径; stamp_key=redeclared_at, keep_top)更新实例槽, 日志一次落账(post_write_landing.commands.roles_redeclare)。读口 enrollment.registered_harness 先读事件(日志为准), 实例槽与日志不一致 = state lint ENROLLMENT_REGISTRATION_DRIFT。实例名不改(凭据与历史归因按名; 名中主机段只是历史, 主机判据一律读登记); 凭据不动、不重发码。唯一实现 enrollment.redeclare_instance(预演 / 确认同一函数), 文本 enrollment.render_redeclaration。",
+      "description": "AIPOS-F235(10-25 chris 岚图顾问从 Mac Codex 迁到 dev Claude Code: 实例槽仍记 codex@kiwiai-mac, land 无 harness=, 子 agent 代码卡被缺省成 codex, 开工稿时限句与派发说明随之错; 原入口只有 relocate-workstation(只迁 pi 工位目录)与 enroll-void + 重接入(作废凭据重发码, 对一次换 harness 过重)): 已接入实例改登记 `lybra roles redeclare --instance <实例> [--harness <kind>] [--host <主机>] [--dir <工作目录>] [--dry-run|--confirm] --actor <实例>`。适用 = 本项目已接入的治理席位实例(位置事件工位 = 治理根, 实例槽在治理根 .lybra/role)与子 agent 执行身份; pi 工位 = 拒(迁目录走 relocate-workstation)。登记真相 = 本项目 enrollment_log 位置事件: 确认 = 追加一行 event_action 位置事件(与 land / relocate 同族同解析 enrollment._LAND_LINE_RE, 同一写口 _write_trail_line, 只追加不改旧行; 结构字段沿用最新位置事件, reason = host [mode] harness [harness_host harness_dir] from_harness from_host from_dir authorized_by [workstation 沿用])并经 enroll_client.write_role_file(唯一写路径; stamp_key=redeclared_at, keep_top)更新实例槽, 日志一次落账(post_write_landing.commands.roles_redeclare)。读口 enrollment.registered_harness 先读事件(日志为准), 实例槽与日志不一致 = state lint ENROLLMENT_REGISTRATION_DRIFT。实例名不改(凭据与历史归因按名; 名中主机段只是历史, 主机判据一律读登记); 凭据不动、不重发码。唯一实现 enrollment.redeclare_instance(预演 / 确认同一函数), 文本 enrollment.render_redeclaration。 AIPOS-F243 件③: claude-code 会话可登记在他机(distribution.schema harness_semantics.kinds.claude-code.harness_host=optional: --harness claude-code --host <他机> --dir <他机路径>, 目录如实记、不校验本机存在); codex ↔ claude-code 同主机同目录来回切换两向都走本命令(一次切换一次改登记; 换 kind 不沿用旧会话机与目录, 显式给 --host --dir); 授权分档不变。",
       "phase": "render",
       "surface": [
         "cli"
@@ -5927,7 +5952,7 @@
         "deny_option": "deny_redeclare"
       },
       "reject_codes": {
-        "REDECLARE_INVALID": "出口: 核对参数(至少给 --harness / --host / --dir 之一; harness 为顾问会话 kind; claude-code 会话须在治理根所在机且 --dir 为本机已存在目录; 子 agent 执行身份不给 --dir)后重跑",
+        "REDECLARE_INVALID": "出口: 核对参数(至少给 --harness / --host / --dir 之一; harness 为顾问会话 kind; claude-code 须给 --dir(本机会话 = 本机已存在目录; 他机会话加 --host, 目录如实记, AIPOS-F243); 子 agent 执行身份不给 --dir)后重跑",
         "REDECLARE_NOT_ENROLLED": "出口: 该实例未在本项目接入(或治理根 .lybra/role 无其实例槽), 先按接入向导接入(lybra onboarding guide), 或核对实例名(lybra roles enroll-where --instance <实例>)",
         "REDECLARE_WORKSTATION": "出口: pi 工位换目录走 lybra project relocate-workstation(迁目录 + 同步 + relocate 位置事件); 换主机在新主机重新接入",
         "REDECLARE_ACTOR": "出口: 由该实例自己或本项目已接入顾问执行(--actor <实例>)",

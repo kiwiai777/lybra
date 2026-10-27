@@ -2891,8 +2891,8 @@ def build_parser() -> argparse.ArgumentParser:
     roles_redeclare_parser = roles_subparsers.add_parser("redeclare", help="AIPOS-F235: 已接入实例改登记——顾问换 harness / 主机 / 工作目录后更新登记(追加 redeclare 位置事件 + 更新治理根 .lybra/role 实例槽; 凭据不动、不重发码, 实例名不改)。改到项目常设授权已列主机 / 拉起方式内(或只改工作目录)= 本实例或项目顾问可做; 授权外 = 请求进 Owner 收件箱, 批准后重跑生效。缺省预演, --confirm 才写并落账")
     roles_redeclare_parser.add_argument("--instance", required=True, help="本项目已接入的实例(治理席位实例 / 子 agent 执行身份)")
     roles_redeclare_parser.add_argument("--harness", default=None, help="新 harness(顾问会话 kind, distribution.schema harness_semantics advisor_session)")
-    roles_redeclare_parser.add_argument("--host", default=None, help="新会话所在主机(claude-code 会话须在治理根所在机)")
-    roles_redeclare_parser.add_argument("--dir", "--harness-dir", dest="harness_dir", default=None, help="新工作目录(会话目录; 子 agent 执行身份不给)")
+    roles_redeclare_parser.add_argument("--host", default=None, help="新会话所在主机(会话在他机时给; claude-code / codex 均可登记在他机, AIPOS-F243; 换 kind 不沿用旧会话机, 同机切换也显式给)")
+    roles_redeclare_parser.add_argument("--dir", "--harness-dir", dest="harness_dir", default=None, help="新工作目录(会话目录; 他机会话 = 他机路径, 如实记; 子 agent 执行身份不给)")
     roles_redeclare_parser.add_argument("--actor", required=True, help="操作者 = 该实例自己或本项目已接入顾问(写入位置事件 by= 与落账提交身份)")
     roles_redeclare_parser.add_argument("--workspace-root", dest="workspace_root", default=None, help="目标治理根(缺省 = 全局 --workspace-root / 当前目录所在治理根)")
     _project_json_two_phase_flags(roles_redeclare_parser, "redeclare", family="enrollment_log_writers")  # 缺省预演 / --confirm 才写
@@ -2921,9 +2921,9 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_parser.add_argument("--policy", help="Optional policy reference")
     roles_enroll_parser.add_argument("--bootstrap-token", help="Legacy plain codes only: bootstrap token for HTTP transport auth (self-contained codes need none)")
     roles_enroll_parser.add_argument("--verify", action="store_true", help="AIPOS-R6S 大项C②: enroll 后立刻用新 token 调一次 gate, 不通即报错并回滚")
-    roles_enroll_parser.add_argument("--harness", help="AIPOS-F92/F129: workstation harness kind (legal values = distribution.schema harness_semantics.kinds; default pi; unknown = refused with the declared list). claude-code = advisor Claude Code session: credentials land in --workspace, declared skills land in --harness-dir/.claude/skills; codex = advisor Codex session (may run on another machine): credentials land in --workspace, no .pi wiring, no skills delivered")
-    roles_enroll_parser.add_argument("--harness-dir", help="AIPOS-F92/F129: absolute working directory of a non-pi harness (claude-code: required, must exist here; codex: optional, recorded as given — not checked locally when --harness-host is set)")
-    roles_enroll_parser.add_argument("--harness-host", help="AIPOS-F129: host the harness session runs on when it is not this machine (only kinds declaring harness_host=optional, e.g. codex); recorded in .lybra/role harness.host")
+    roles_enroll_parser.add_argument("--harness", help="AIPOS-F92/F129: workstation harness kind (legal values = distribution.schema harness_semantics.kinds; default pi; unknown = refused with the declared list). claude-code = advisor Claude Code session: credentials land in --workspace, declared skills land in --harness-dir/.claude/skills (session on another machine: add --harness-host, nothing lands here, the session pulls charter and skills at start — AIPOS-F243); codex = advisor Codex session (may run on another machine): credentials land in --workspace, no .pi wiring, no skills delivered")
+    roles_enroll_parser.add_argument("--harness-dir", help="AIPOS-F92/F129: absolute working directory of a non-pi harness (claude-code: required — must exist here unless --harness-host is set; codex: optional; with --harness-host it is the path on that machine, recorded as given and not checked locally)")
+    roles_enroll_parser.add_argument("--harness-host", help="AIPOS-F129: host the harness session runs on when it is not this machine (only kinds declaring harness_host=optional: codex, claude-code since AIPOS-F243); recorded in .lybra/role harness.host")
     roles_enroll_parser.add_argument("--executor-mode", choices=list(_executor_mode_declaration()["values"]), default=None,
                                      help="AIPOS-F143: executor enrollment mode (roles.schema executor_modes; default workstation = existing behavior). "
                                           "subagent = advisor-spawned sub-agent executor (ROLES 1a): credentials land in the governance root's "
@@ -3464,14 +3464,14 @@ def build_parser() -> argparse.ArgumentParser:
     onboarding_guide_parser.add_argument("--workspace-dir", help="Executor workstation directory (defaults to ~/<project>-executor)")
     # AIPOS-F92 件②: 单门 home 根约定下的完整接入参数(全部可缺省推导; guide 打印推导结果与来源)
     onboarding_guide_parser.add_argument("--auditor-dir", help="Auditor workstation directory (defaults to ~/<project>-auditor)")
-    onboarding_guide_parser.add_argument("--advisor-dir", help="Advisor Claude Code session directory — advisor skills land in <dir>/.claude/skills (defaults to ~/<project>)")
+    onboarding_guide_parser.add_argument("--advisor-dir", help="Advisor Claude Code session directory — advisor skills land in <dir>/.claude/skills (defaults to ~/<project> for a session on this machine; with --advisor-host it is required and is the directory on that host, AIPOS-F243)")
     onboarding_guide_parser.add_argument("--repo", action="append", dest="repos", metavar="NAME=ABS_PATH", help="Product repo (repeatable) for Step 2 project set-repos")
     onboarding_guide_parser.add_argument("--default-repo", help="Default repo name when more than one --repo")
     onboarding_guide_parser.add_argument("--host-segment", help="Host segment of instance names (defaults to short hostname)")
     from tools.aipos_cli.distribution_sync import advisor_harness_kinds as _advisor_harness_kinds
     onboarding_guide_parser.add_argument("--advisor-harness", choices=list(_advisor_harness_kinds()), default=None,
                                          help="AIPOS-F129: advisor session harness (choices = distribution.schema harness_semantics.kinds with advisor_session=true; default claude-code = existing guide). codex = Codex session: Step 5 enrolls with --harness codex, no .claude/skills delivery")
-    onboarding_guide_parser.add_argument("--advisor-host", help="AIPOS-F129: host the advisor session runs on when it is not the governance-root machine (codex; recorded as --harness-host; its short name is the advisor instance host segment)")
+    onboarding_guide_parser.add_argument("--advisor-host", help="AIPOS-F129: host the advisor session runs on when it is not the governance-root machine (codex, or claude-code since AIPOS-F243 — then --advisor-dir is required and is the path on that machine; recorded as --harness-host; its short name is the advisor instance host segment)")
     onboarding_guide_parser.add_argument("--executor-mode", choices=list(_executor_mode_declaration()["values"]), default=None,
                                          help="AIPOS-F143: executor enrollment mode (roles.schema executor_modes; default workstation = existing pi executor steps). subagent = advisor-spawned sub-agent executor: Step 7 enrolls it into the governance root with --executor-mode subagent --harness <advisor kind>, Step 9 declares lybra project set-execution")
     onboarding_guide_parser.add_argument("--owner-workspace", help="Gate workspace holding the Owner credential (central registry); defaults to <home>/<active project>")
@@ -3638,6 +3638,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="AIPOS-F138: 输出实例的渲染后章程全文到 stdout(与 sync 同一渲染器; 他机会话开局经 ssh 在治理根所在机读取, 产品不推送)",
     )
     _add_charter_arguments(charter_parser)
+
+    # AIPOS-F243 件②: lybra skills — 拉取式输出实例的技能件 tar 流(他机会话开局经 ssh 取, 在会话目录 tar -xf - 展开; 参数由 verbs.schema lybra_skills 生成)
+    skills_parser = subparsers.add_parser(
+        "skills",
+        help="AIPOS-F243: 输出实例在该 harness 下的技能件 tar 流到 stdout(与 sync 同一清单构建器; 他机会话开局经 ssh 在治理根所在机取, "
+             "在会话目录管道给 tar -xf - 展开到 .claude/skills/; 产品不推送)",
+    )
+    _add_charter_arguments(skills_parser, "lybra_skills")
 
     # AIPOS-F187 件①: lybra kickoff — 子 agent 开工稿由产品生成(声明 verbs.schema lybra_kickoff; 唯一实现 subagent_kickoff)
     kickoff_parser = subparsers.add_parser(
@@ -6389,6 +6397,11 @@ def main(argv: list[str] | None = None) -> int:
         # 治理根由 run_charter_cli 经同一薄壳解析, 解析不出走本命令声明的退出码(lybra_charter.exit_codes.unreadable)
         from tools.aipos_cli.charter_render import run_charter_cli
         return run_charter_cli(args)
+
+    if args.command == "skills":
+        # AIPOS-F243 件②: 只读薄壳 — 全部逻辑在 charter_render(instance_skills / skills_tar_bytes), 治理根解析同 charter
+        from tools.aipos_cli.charter_render import run_skills_cli
+        return run_skills_cli(args)
 
     if args.command == "kickoff":
         # AIPOS-F187 件①: 只读薄壳 — 全部逻辑在 subagent_kickoff(渲染唯一 render_kickoff_brief), 治理根经同一薄壳解析

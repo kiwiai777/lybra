@@ -744,9 +744,9 @@ lybra roles --workspace-root <治理根> enroll-deliver --role executor --instan
 ```
 - **`--actor` = 签发实例**:按该实例在治理根 `.lybra/connection.json` 的凭据签码(F134/F154 按实例选凭据唯一口); 未接入本治理根的实例即拒;
   不给 `--actor` = 按 `--token-role`(缺省 advisor, 缺席回落 owner)取, **同一角色接入两个及以上实例时拒**(禁取首个, 出口 = 加 `--actor`)。
-- 子 agent 执行者(无工位, 凭据落治理根): `--executor-mode subagent --workspace <治理根>`; 顾问会话: `--role <顾问角色> --instance <顾问实例> --workspace <治理根> --harness claude-code --harness-dir <会话目录>`(Codex: `--harness codex`, 会话在他机加 `--harness-host <会话所在机>`)。
+- 子 agent 执行者(无工位, 凭据落治理根): `--executor-mode subagent --workspace <治理根>`; 顾问会话: `--role <顾问角色> --instance <顾问实例> --workspace <治理根> --harness claude-code --harness-dir <会话目录>`(Codex: `--harness codex`; 会话在他机加 `--harness-host <会话所在机>`, Claude Code 同样可在他机, `--harness-dir` 给该机上的会话目录)。
 - 跨机工位加 `--ssh <ssh目标>`(见「跨机工位」)。工位类接入须有覆盖该实例的生效信封(无 = 拒 `ENROLL_ENVELOPE_MISSING`, 未签码)。
-- 他机会话开局取章程(AIPOS-F138, 产品不推送): `ssh <治理根主机> 'cd <治理根> && lybra charter --role advisor --instance <你的顾问实例>'`(`lybra sync` 的 pull 行给出带真实主机的原文)。
+- 他机会话开局取章程(AIPOS-F138, 产品不推送): `ssh <治理根主机> 'cd <治理根> && lybra charter --role advisor --instance <你的顾问实例>'`(`lybra sync` 的 pull 行给出带真实主机的原文); Claude Code 他机会话另取技能并落盘(AIPOS-F243, 见下「顾问会话在 Codex 与 Claude Code 之间切换」)。
 
 **生成**:工位 `.lybra/` 配置(connection.json / role / policy)、工具包、skills; 之后 `lybra sync --harness-root <工位目录> --workspace-root <治理根>` 落齐分发件。
 
@@ -759,6 +759,28 @@ lybra roles --workspace-root <治理根> enroll-code --role auditor --instance <
   --actor <你的顾问实例> --owner-authorization-ref <信封ID> --ttl 86400 --confirm     # 出码(只显示一次)
 ```
 `--actor` 取凭据规则同 `enroll-deliver`。注册码一次性、有时效; 只经输出的 paste_text 原样交接收方在其工位兑换, 不贴进聊天 / 文档(凭据不过手)。
+
+#### 顾问会话在 Codex 与 Claude Code 之间切换(AIPOS-F243: `lybra roles redeclare` + 开局拉章程与技能)
+**何时用**:同一顾问实例换会话 harness(如 Codex 额度吃紧改用同机 Claude Code, 之后再切回)。同一实例、同一凭据(在治理根 `.lybra/`),
+不重发码、实例名不改; Claude Code 与 Codex 会话都可以在治理根以外的机器(产品命令照旧经 ssh 在治理根所在机跑)。
+- **同时只许一个会话在岗**:先收住旧会话, 再改登记, 再开新会话。
+- **切换 = 改登记一次**(两向同一命令; 换 kind 不沿用旧会话机与目录, 同机同目录也显式给 `--host` / `--dir`):
+```bash
+lybra roles redeclare --workspace-root <治理根> --instance <你的顾问实例> --harness claude-code --host <会话所在机> --dir <会话目录> --actor <你的顾问实例>            # 预演(零写入)
+lybra roles redeclare --workspace-root <治理根> --instance <你的顾问实例> --harness claude-code --host <会话所在机> --dir <会话目录> --actor <你的顾问实例> --confirm  # 写入
+lybra roles redeclare --workspace-root <治理根> --instance <你的顾问实例> --harness codex --host <会话所在机> --dir <会话目录> --actor <你的顾问实例>                  # 切回(再 --confirm)
+```
+- 授权: 改到项目常设授权 `launch_harnesses` / `hosts` 内 = 第二档, 自己做; 否则 `--confirm` 把请求放进 Owner 收件箱(`enrollment_redeclare`),
+  Owner 批准后重跑同一命令 `--confirm` 生效。
+- **新会话开局拉章程与技能**(会话不在治理根所在机 = 本机无落点, 产品不推送): 看 pull 行原文(带真实主机与落点相对路径)——
+```bash
+lybra sync --harness-root <治理根> --workspace-root <治理根> --dry-run
+```
+  Claude Code 会话在会话目录跑两条: 章程(`lybra charter … --body-only` 经 ssh 取, 先写 `.tmp` 再改名)→ `.claude/rules/lybra-advisor.md`;
+  技能(`lybra skills …` 经 ssh 取 tar 流, 管道给 `tar -xf -`)→ `.claude/skills/`; 落盘后重开会话即加载。Codex 会话跑 pull 行的
+  `lybra charter` 命令, 输出即章程全文。会话在治理根所在机 = 直接 `lybra sync`(不带 `--dry-run`)落盘。
+- 在途 loop 是治理根所在机上的独立进程, 不受切换影响; 切换后新起草的子 agent 卡缺省 harness 随你现登记(已发布卡与登记不符时
+  `lybra next` / `lybra kickoff` 给 `lybra queue amend` 出口)。
 
 ---
 

@@ -64,7 +64,7 @@ lybra envelope mint --confirm --workspace-root <项目根> --connection-json <Ow
 lybra roles --workspace-root <Owner工作区> --connection-json <Owner凭据> enroll-deliver --role advisor --instance <你的顾问实例> --governance-root <项目根> --workspace <项目根> --harness claude-code --harness-dir <会话目录> --token-role owner --owner-authorization-ref onboarding-<项目名> --dry-run
 lybra roles --workspace-root <Owner工作区> --connection-json <Owner凭据> enroll-deliver --role advisor --instance <你的顾问实例> --governance-root <项目根> --workspace <项目根> --harness claude-code --harness-dir <会话目录> --token-role owner --owner-authorization-ref onboarding-<项目名> --confirm
 ```
-Step 3 输出以门生记录为准(`signed ... wrote 5_tasks/policies/...`)。Step 4 Codex 会话: guide 加 `--advisor-harness codex` 生成 `--harness codex`(会话在他机加 `--advisor-host`, guide 生成 `--harness-host <会话所在机>`)。
+Step 3 输出以门生记录为准(`signed ... wrote 5_tasks/policies/...`)。Step 4 Codex 会话: guide 加 `--advisor-harness codex` 生成 `--harness codex`(会话在他机加 `--advisor-host`, guide 生成 `--harness-host <会话所在机>`)。 Claude Code 会话也可在他机(AIPOS-F243): guide 加 `--advisor-host <会话所在机> --advisor-dir <该机上的会话目录>`, 第 5 步给开局在会话目录落盘章程与技能的两条命令。
 **可选 `--launch-harness pi`**(AIPOS-F95): 授权 `lybra loop` 在工位自动拉起 pi(执行体/审计体等待前按声明模板拉起一次, 过程汇总到顾问界面); **缺省 = 手工模式**(Owner 在工位敲 `/go`)。要不要加由 Owner 决定——先问 Owner, 同意才在交给 Owner 的 Step 3 命令里带上这个参数(两种模式见 advisor-commands「两种开工模式」)。
 
 ### Step 5(你): 顾问就位复核
@@ -73,7 +73,7 @@ Step 3 输出以门生记录为准(`signed ... wrote 5_tasks/policies/...`)。St
 lybra onboarding check <项目名> --step 5 --home-root <home根>
 lybra sync --harness-root <项目根> --workspace-root <项目根> --dry-run
 ```
-凭据已由 Step 4 落治理根 `.lybra/`(`lybra loop` 按治理根取驱动方凭据); 顾问件按 distribution 声明交付到会话目录: Claude Code = 技能 `.claude/skills/` + 顾问章程 `.claude/rules/lybra-advisor.md`, Codex = 顾问章程 `AGENTS.md`(会话目录在本机时; 他机会话本机无落点不落盘, 改为开局拉取: `lybra sync` 的 pull 行给出 `ssh <治理根主机> 'cd <治理根> && lybra charter --role advisor --instance <实例>'`, AIPOS-F138)。在会话目录重启会话即加载。sync 的 plan 为空 = 稳态; 会话目录里已有同名非 Lybra 文件 = 拒不覆盖(移走或换目录)。
+凭据已由 Step 4 落治理根 `.lybra/`(`lybra loop` 按治理根取驱动方凭据); 顾问件按 distribution 声明交付到会话目录: Claude Code = 技能 `.claude/skills/` + 顾问章程 `.claude/rules/lybra-advisor.md`, Codex = 顾问章程 `AGENTS.md`(会话目录在本机时; 他机会话本机无落点不落盘, 改为开局拉取: `lybra sync` 的 pull 行给出 `ssh <治理根主机> 'cd <治理根> && lybra charter --role advisor --instance <实例>'`, AIPOS-F138; Claude Code 他机会话的 pull 行另给章程落盘命令(落 `.claude/rules/lybra-advisor.md`)与技能命令 `ssh <治理根主机> 'cd <治理根> && lybra skills --role advisor --instance <实例>' | tar -xf -`(落 `.claude/skills/`), AIPOS-F243)。在会话目录重启会话即加载。sync 的 plan 为空 = 稳态; 会话目录里已有同名非 Lybra 文件 = 拒不覆盖(移走或换目录)。
 
 ### Step 6–7(你): 工位签码接入(enroll-deliver) + sync
 
