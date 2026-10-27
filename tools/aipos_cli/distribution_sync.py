@@ -1433,7 +1433,6 @@ def _sync_harness_dir(
             else:
                 role_class = str(resolve_role_to_class(str(identity["role"]), gov, required=True))
                 land = harness["kind"] in (remote_session_delivery()["land"]["harnesses"] or [])
-                hint = ""
                 for d in pullable:
                     if _is_charter(d):  # 章程 = 文件型分发物: target.relative_path 即落点文件(同 _file_target_path)
                         exit_ = charter_pull_command(gov, instance=str(identity["instance"]), role_class=role_class,
@@ -1441,7 +1440,6 @@ def _sync_harness_dir(
                     else:
                         exit_ = skills_pull_command(gov, instance=str(identity["instance"]), role_class=role_class)
                         exit_["target_path"] = str(d.get("target_path") or "").strip("/") + "/"
-                    hint = hint or exit_["host_hint"]
                     item = {"distribution_id": d.get("distribution_id"), "kind": d.get("kind"), "mode": "pull",
                             "command": exit_["command"], "host_declared": exit_["host_declared"], "host_hint": exit_["host_hint"]}
                     if exit_.get("target_path"):
@@ -1450,17 +1448,20 @@ def _sync_harness_dir(
                         item["land_command"] = exit_["land_command"]
                     pull.append(item)
                 charter_pull = [p for p in pull if p["kind"] == "charter"]
+                # AIPOS-F244 件③: 出口行各自带提示(主机未声明 = 同一行给声明命令原文; 入口不可用原因), 每行照抄自足
+                def _with_hint(line: str, p: dict[str, Any]) -> str:
+                    return f"{line}。{p['host_hint']}" if p["host_hint"] else line
+
                 if charter_pull and not land:  # AIPOS-F138 原文(codex: 只读出, 不落盘)
-                    notes.append(f"harness={harness['kind']}({where}): 会话不在本机可落处, 章程件 {[p['distribution_id'] for p in charter_pull]} "
-                                 f"= pull: 在会话开局运行 `{charter_pull[0]['command']}`(产品不推送; 输出即渲染后章程全文)")
+                    notes.append(_with_hint(f"harness={harness['kind']}({where}): 会话不在本机可落处, 章程件 "
+                                            f"{[p['distribution_id'] for p in charter_pull]} = pull: 在会话开局运行 "
+                                            f"`{charter_pull[0]['command']}`(产品不推送; 输出即渲染后章程全文)", charter_pull[0]))
                 for p in pull:
                     if p["kind"] == "charter" and not land:
                         continue
                     run = p.get("land_command") or p["command"]
-                    notes.append(f"harness={harness['kind']}({where}): 会话不在本机可落处, {p['kind']} 件 {p['distribution_id']} = pull: "
-                                 f"在会话目录开局运行 `{run}`(由会话自己落盘到会话目录相对路径 {p.get('target_path')}; 产品不推送)")
-                if hint:
-                    notes[-1] += f"。{hint}"
+                    notes.append(_with_hint(f"harness={harness['kind']}({where}): 会话不在本机可落处, {p['kind']} 件 {p['distribution_id']} = pull: "
+                                            f"在会话目录开局运行 `{run}`(由会话自己落盘到会话目录相对路径 {p.get('target_path')}; 产品不推送)", p))
         others = [d for d in undelivered if d["kind"] not in ("charter", "skills")]
         if others:
             notes.append(f"harness={harness['kind']}({where}): 声明给本角色该 harness 的件 {[d['distribution_id'] for d in others]} "

@@ -1669,16 +1669,29 @@ def _roles_redeclare(args: argparse.Namespace, governance_root: Path) -> int:
     rc = int(exits[outcome]["code"])
     if landing is not None and not landing["landed"]:
         rc = int(landing["exit_code"])
+    host_hint = _remote_host_hint(governance_root, result["instance"], (result.get("new") or {}).get("host")) if result["ok"] else None
     if getattr(args, "json", False):
-        print(render_json({**result, "landing": _landing_view(landing)}))
+        print(render_json({**result, "landing": _landing_view(landing), "host_declaration_hint": host_hint}))
         return rc
     labels = _two_phase_family_declaration("enrollment_log_writers")["outcome_labels"]
     print(f"roles redeclare {result['instance']}: {labels['preview'] if result['dry_run'] else labels['written']}")
     for line in render_redeclaration(result):
         print(line)
+    if host_hint:
+        print(f"  {host_hint}")
     if landing is not None:
         print(landing["line"], file=sys.stdout if landing["landed"] else sys.stderr)
     return rc
+
+
+def _remote_host_hint(governance_root: str | Path | None, instance: str | None, host: str | None) -> str | None:
+    """AIPOS-F244 件③: 改登记 / 接入把会话登记到他机而 project.json workstations.<实例> 未声明 = 一次性提示行(含声明命令原文;
+    唯一实现 charter_render.remote_host_declaration_hint)。无治理根 / 无实例 / 本机 / 已声明 = None。"""
+    from tools.aipos_cli.charter_render import remote_host_declaration_hint
+
+    if not governance_root or not str(instance or "").strip():
+        return None
+    return remote_host_declaration_hint(governance_root, str(instance), host)
 
 
 def _landing_view(landing: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -4925,10 +4938,13 @@ def main(argv: list[str] | None = None) -> int:
                     else:
                         print(f"Error: {exc}", file=sys.stderr)
                     return 1
+                host_hint = _remote_host_hint(result.get("governance_root"), result.get("instance"), args.harness_host)
                 if getattr(args, "json", False):
-                    print(render_json(result))
+                    print(render_json({**result, "host_declaration_hint": host_hint}))
                 else:
                     _render_enroll_deliver(result)
+                    if host_hint:
+                        print(f"  {host_hint}")
                 return 0
             elif args.roles_command == "enroll-revoke":
                 # AIPOS-362: revoke enrollment code
@@ -5116,6 +5132,11 @@ def main(argv: list[str] | None = None) -> int:
                                 print(f"    - {ch.get('distribution_id')}: {ch.get('files_written')} 个文件 → {ch.get('target_path')}")
                         if result.get('harness'):
                             print(f"  harness: {json.dumps(result['harness'], ensure_ascii=False)}(已记入 .lybra/role)")
+                        # AIPOS-F244 件③: 会话登记到他机而治理根主机未声明 = 提示一次(含声明命令原文)
+                        host_hint = _remote_host_hint(result.get('workspace_root'), result.get('agent_instance'),
+                                                      getattr(args, "harness_host", None))
+                        if host_hint:
+                            print(f"  {host_hint}")
                         if result.get('subagent_harness'):  # AIPOS-F143 件④
                             print(f"  executor_mode: {result['executor_mode']}(子 agent 执行者; harness={result['subagent_harness']} 已记入 land 事件, 未写 .lybra/role)")
                         pd_ = result.get('policy_derivation')

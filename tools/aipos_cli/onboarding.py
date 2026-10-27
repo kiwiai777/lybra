@@ -527,8 +527,13 @@ def generate_onboarding_guide(
         check4 = ("--dry-run 输出 '预览(未执行; 加 --confirm 执行)'(未签码、零写入); --confirm 输出 '已执行' 与 'harness …' 已记入 .lybra/role; "
                   "治理根下无 .pi/, 本机不新增顾问件")
         creates4 = f"{gov_s}/.lybra/connection.json, {gov_s}/.lybra/role(harness={adv_kind})"
+        # AIPOS-F244 件②: 他机会话经 ssh 跑本 guide 的命令时 lybra 用治理根所在机稳定入口(唯一拼装 charter_render.remote_cli)
+        from tools.aipos_cli.charter_render import remote_cli
+
+        via_ssh = remote_cli("lybra")
         note4 = (f"顾问会话({label})与治理根可不同机: 产品命令在治理根所在机运行(他机会话经 ssh), 本 guide 每条命令都显式带治理根, "
-                 "不依赖 cwd")
+                 "不依赖 cwd; " + (f"经 ssh 运行时 lybra 写治理根所在机入口绝对路径 {via_ssh['cli']}(非登录 ssh 不加载 ~/.local/bin 进 PATH)"
+                                    if via_ssh["entry"] else via_ssh["hint"]))
     steps.append({
         "step_number": 4,
         "actor": "owner",

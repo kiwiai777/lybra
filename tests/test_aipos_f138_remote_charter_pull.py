@@ -121,7 +121,9 @@ def test_item123_remote_codex_advisor_pull_exit_and_charter(probe_range: Range):
     # ③ 向导第 5 步: 开局取章程命令(注释行 —— 在会话所在机每次开局跑, 不是本步现在跑的命令)
     step5 = guide["steps"][4]
     _show("---- ③ guide --advisor-harness codex 第 5 步 command 原文 ----\n" + step5["command"])
-    expected = f"ssh {PLACEHOLDER} 'cd {gov} && lybra charter --role advisor --instance {inst}'"
+    # AIPOS-F244 件①: 经 ssh 的 lybra = 治理根所在机稳定入口绝对路径(靶场 = 跑向导 / sync 的入口 r.bin/lybra), 照抄不依赖远端 PATH
+    entry = f"{r.bin}/lybra"
+    expected = f"ssh {PLACEHOLDER} 'cd {gov} && {entry} charter --role advisor --instance {inst}'"
     assert f"#   {expected}" in step5["command"] and step5["session_start"]["command"] == expected
     assert "lybra project set-workstation lybra-probe --instance advisor.lybra-probe.mac-probe" in step5["command"]
     text_guide = r.sh(f"lybra onboarding guide lybra-probe --repo app={r.session}/app --default-repo app --advisor-harness codex "
@@ -141,7 +143,7 @@ def test_item123_remote_codex_advisor_pull_exit_and_charter(probe_range: Range):
          f"--material-access '经 ssh dev-gate 读写治理根' --home-root {r.hroot} --confirm")
     out = r.sh(f"lybra sync --harness-root {gov} --workspace-root {gov}")
     _show("---- ② sync 原文(主机已声明) ----\n" + out)
-    declared = f"ssh dev-gate 'cd {gov} && lybra charter --role advisor --instance {inst}'"
+    declared = f"ssh dev-gate 'cd {gov} && {entry} charter --role advisor --instance {inst}'"
     assert f"= pull: 在会话开局运行 `{declared}`" in out and "set-workstation" not in out
     assert not (gov / "AGENTS.md").exists() and not (gov / ".claude").exists()  # 他机会话: 本机零落盘(只给出口)
 

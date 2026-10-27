@@ -783,11 +783,45 @@ def instance_charter(
     }
 
 
+def remote_cli(cli_command: str) -> dict[str, Any]:
+    """AIPOS-F244 件①: 给他机会话经 ssh 照抄执行的 lybra 命令头(唯一拼装): verbs.schema 的 cli_command(首词 lybra)首词换成治理根所在机
+    lybra 稳定入口的绝对路径(唯一推导 workstation_wiring.stable_lybra_entry; 非登录 ssh 不加载 ~/.local/bin 进 PATH, 裸 lybra 找不到)。
+
+    返回 {cli, entry, hint}: 入口都不可用 = cli 保留裸 lybra, hint 点名被跳过的候选与出口(装入口), 不猜路径。首词不是 lybra = SchemaLoadError。"""
+    import shlex
+
+    from tools.aipos_cli.deploy_runtime import ENTRY_NAME
+    from tools.aipos_cli.workstation_wiring import stable_lybra_entry
+    from tools.schema_loader import SchemaLoadError
+
+    head, _sep, rest = str(cli_command).strip().partition(" ")
+    if head != ENTRY_NAME:
+        raise SchemaLoadError(f"cli_command {cli_command!r} 首词不是 {ENTRY_NAME}, 无从换成稳定入口")
+    entry = stable_lybra_entry()
+    if entry["path"] is None:
+        hint = (f"治理根所在机未找到不依赖 PATH 的 {ENTRY_NAME} 入口(" + "; ".join(entry["skipped"]) + "), 本出口仍为裸 "
+                f"{ENTRY_NAME}: 非登录 ssh 的 PATH 里没有它就报 command not found; 出口: 在治理根所在机 tools/lybra-deploy install-entry")
+        return {"cli": str(cli_command).strip(), "entry": None, "hint": hint}
+    return {"cli": " ".join(x for x in (shlex.quote(entry["path"]), rest) if x), "entry": entry["path"], "hint": ""}
+
+
+def _workstation_declare_command(project: str, instance: str) -> str:
+    """AIPOS-F244 件③: 他机视角治理根主机的声明命令原文(在治理根所在机运行; 候选值 = 本机主机名, 他机 ssh 别名不同则改; 不猜写 project.json)。"""
+    import shlex
+    import socket
+
+    local = socket.gethostname()
+    access = f"经 ssh {local} 在治理根所在机运行 lybra 命令(取章程与技能)"
+    return (f"{remote_cli('lybra project set-workstation')['cli']} {shlex.quote(project)} --instance {shlex.quote(instance)} "
+            f"--gate-ssh-alias {shlex.quote(local)} --material-access {shlex.quote(access)} --confirm")
+
+
 def _pull_host(governance_root: str | Path, instance: str) -> dict[str, Any]:
     """拉取出口的治理根主机(charter_pull_command / skills_pull_command 同读; 声明 remote_session_delivery.host_source)。
 
     返回 {gov, host, hint}: host = project.json workstations.<实例>.gate_ssh_alias(唯一读取口 workspace_config.project_workstation;
-    治理根尚无 project.json(向导先于建项目生成)或未声明 = None + 声明出口, 不猜主机)。"""
+    治理根尚无 project.json(向导先于建项目生成)或未声明 = None + 声明出口, 不猜主机)。
+    AIPOS-F244 件③: 未声明时 hint 给可直接照抄的声明命令原文(候选值 = 治理根所在机主机名, _workstation_declare_command)。"""
     import shlex
 
     from tools.aipos_cli.workspace_config import WorkstationDeclarationError, project_workstation, read_project_json
@@ -806,9 +840,26 @@ def _pull_host(governance_root: str | Path, instance: str) -> dict[str, Any]:
         hint = f"主机未声明(治理根 {gov} 尚未建项目)"
         project = gov.name
     if host is None:
-        hint += (f"; 声明后本出口带真实主机: lybra project set-workstation {shlex.quote(project)} --instance {shlex.quote(instance)} "
-                 f"--gate-ssh-alias {decl['host_placeholder']} --material-access <一句话> --confirm")
+        hint += (f"; 命令里的 {decl['host_placeholder']} 换成他机上指向治理根所在机的 ssh 别名, 或先声明(在治理根所在机运行; "
+                 f"候选值 = 本机主机名, 他机 ssh 别名不同则改), 之后本出口带真实主机: "
+                 f"{_workstation_declare_command(project, instance)}")
     return {"gov": gov, "host": host, "hint": hint, "host_text": shlex.quote(host) if host else str(decl["host_placeholder"])}
+
+
+def remote_host_declaration_hint(governance_root: str | Path, instance: str, host: str | None) -> str | None:
+    """AIPOS-F244 件③: 改登记 / 接入把实例会话登记到他机(host 非空且非本机)而 project.json workstations.<实例> 未声明时的一次性提示行
+    (含可直接照抄的声明命令原文; 不猜写 project.json)。本机 / 未给主机 / 已声明 / 治理根无 project.json(非治理根, 无从判)= None。"""
+    import socket
+
+    if not str(host or "").strip() or str(host).strip() == socket.gethostname():
+        return None
+    gov = Path(governance_root).expanduser()
+    if not (gov / "project.json").is_file():
+        return None
+    where = _pull_host(gov, instance)
+    if where["host"] is not None:
+        return None
+    return f"提示: 实例 {instance} 的会话登记在他机 {str(host).strip()}; 他机会话拉取出口(lybra sync 的 pull 行): {where['hint']}"
 
 
 def charter_pull_command(governance_root: str | Path, *, instance: str, role_class: str,
@@ -817,17 +868,23 @@ def charter_pull_command(governance_root: str | Path, *, instance: str, role_cla
 
     返回 {command, local_command, host, host_declared, host_hint}: host 见 _pull_host。
     AIPOS-F243 件②: 给 target_path(章程落点相对会话目录的路径; 只给 remote_session_delivery.land.harnesses 内 harness 的件)= 另返回
-    {target_path, land_command}: 在会话目录运行, 以 body_only_flag 取章程全文先写 <落点>.tmp 再改名(拉取失败不毁旧副本)。"""
+    {target_path, land_command}: 在会话目录运行, 以 body_only_flag 取章程全文先写 <落点>.tmp 再改名(拉取失败不毁旧副本)。
+    AIPOS-F244 件①: 经 ssh 的命令(command / land_command)里 lybra = 治理根所在机稳定入口绝对路径(remote_cli); local_command(在治理根
+    所在机本机运行)仍为 cli_command 原文。入口不可用的原因并入 host_hint。"""
     import shlex
 
     decl = remote_session_delivery()
     cli = str(charter_verb_contract()["cli_command"]).strip()
+    rcli = remote_cli(cli)
     where = _pull_host(governance_root, instance)
     gov = where["gov"]
-    remote = f"cd {shlex.quote(str(gov))} && {cli} --role {shlex.quote(role_class)} --instance {shlex.quote(instance)}"
+    args = f"--role {shlex.quote(role_class)} --instance {shlex.quote(instance)}"
+    local = f"cd {shlex.quote(str(gov))} && {cli} {args}"
+    remote = f"cd {shlex.quote(str(gov))} && {rcli['cli']} {args}"
+    hint = "; ".join(h for h in (where["hint"], rcli["hint"]) if h)
     # AIPOS-F187 件①: local_command = 在治理根所在机运行的同一命令(开工稿给本机会话的子 agent; 不另拼)
-    out = {"command": f"ssh {where['host_text']} {shlex.quote(remote)}", "local_command": remote, "host": where["host"],
-           "host_declared": where["host"] is not None, "host_hint": where["hint"]}
+    out = {"command": f"ssh {where['host_text']} {shlex.quote(remote)}", "local_command": local, "host": where["host"],
+           "host_declared": where["host"] is not None, "host_hint": hint}
     if target_path:
         rel = str(target_path).strip("/")
         parent = str(Path(rel).parent)
@@ -841,15 +898,16 @@ def charter_pull_command(governance_root: str | Path, *, instance: str, role_cla
 
 def skills_pull_command(governance_root: str | Path, *, instance: str, role_class: str) -> dict[str, Any]:
     """AIPOS-F243 件②: 他机会话开局取技能件的命令(唯一拼装; 声明 remote_session_delivery.skills): 在会话目录运行,
-    `ssh <治理根主机> 'cd <治理根> && lybra skills --role <类> --instance <实例>' | tar -xf -`。返回 {command, host, host_declared, host_hint}。"""
+    `ssh <治理根主机> 'cd <治理根> && <lybra 稳定入口> skills --role <类> --instance <实例>' | tar -xf -`(AIPOS-F244 件①: remote_cli)。
+    返回 {command, host, host_declared, host_hint}。"""
     import shlex
 
     decl = remote_session_delivery()
-    cli = str(charter_verb_contract(SKILLS_VERB)["cli_command"]).strip()
+    rcli = remote_cli(str(charter_verb_contract(SKILLS_VERB)["cli_command"]).strip())
     where = _pull_host(governance_root, instance)
-    remote = f"cd {shlex.quote(str(where['gov']))} && {cli} --role {shlex.quote(role_class)} --instance {shlex.quote(instance)}"
+    remote = f"cd {shlex.quote(str(where['gov']))} && {rcli['cli']} --role {shlex.quote(role_class)} --instance {shlex.quote(instance)}"
     return {"command": f"ssh {where['host_text']} {shlex.quote(remote)} | {decl['skills']['unpack']}", "host": where["host"],
-            "host_declared": where["host"] is not None, "host_hint": where["hint"]}
+            "host_declared": where["host"] is not None, "host_hint": "; ".join(h for h in (where["hint"], rcli["hint"]) if h)}
 
 
 def instance_skills(

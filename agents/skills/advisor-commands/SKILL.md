@@ -746,7 +746,7 @@ lybra roles --workspace-root <治理根> enroll-deliver --role executor --instan
   不给 `--actor` = 按 `--token-role`(缺省 advisor, 缺席回落 owner)取, **同一角色接入两个及以上实例时拒**(禁取首个, 出口 = 加 `--actor`)。
 - 子 agent 执行者(无工位, 凭据落治理根): `--executor-mode subagent --workspace <治理根>`; 顾问会话: `--role <顾问角色> --instance <顾问实例> --workspace <治理根> --harness claude-code --harness-dir <会话目录>`(Codex: `--harness codex`; 会话在他机加 `--harness-host <会话所在机>`, Claude Code 同样可在他机, `--harness-dir` 给该机上的会话目录)。
 - 跨机工位加 `--ssh <ssh目标>`(见「跨机工位」)。工位类接入须有覆盖该实例的生效信封(无 = 拒 `ENROLL_ENVELOPE_MISSING`, 未签码)。
-- 他机会话开局取章程(AIPOS-F138, 产品不推送): `ssh <治理根主机> 'cd <治理根> && lybra charter --role advisor --instance <你的顾问实例>'`(`lybra sync` 的 pull 行给出带真实主机的原文); Claude Code 他机会话另取技能并落盘(AIPOS-F243, 见下「顾问会话在 Codex 与 Claude Code 之间切换」)。
+- 他机会话开局取章程(AIPOS-F138, 产品不推送): 照抄 `lybra sync` 的 pull 行原文(形如 `ssh <治理根主机> 'cd <治理根> && <lybra 入口绝对路径> charter --role advisor --instance <你的顾问实例>'`; 命令里的 lybra 已是治理根所在机的入口绝对路径, 非登录 ssh 不加载 `~/.local/bin` 也能跑, AIPOS-F244); Claude Code 他机会话另取技能并落盘(AIPOS-F243, 见下「顾问会话在 Codex 与 Claude Code 之间切换」)。
 
 **生成**:工位 `.lybra/` 配置(connection.json / role / policy)、工具包、skills; 之后 `lybra sync --harness-root <工位目录> --workspace-root <治理根>` 落齐分发件。
 
@@ -776,9 +776,12 @@ lybra roles redeclare --workspace-root <治理根> --instance <你的顾问实�
 ```bash
 lybra sync --harness-root <治理根> --workspace-root <治理根> --dry-run
 ```
-  Claude Code 会话在会话目录跑两条: 章程(`lybra charter … --body-only` 经 ssh 取, 先写 `.tmp` 再改名)→ `.claude/rules/lybra-advisor.md`;
-  技能(`lybra skills …` 经 ssh 取 tar 流, 管道给 `tar -xf -`)→ `.claude/skills/`; 落盘后重开会话即加载。Codex 会话跑 pull 行的
-  `lybra charter` 命令, 输出即章程全文。会话在治理根所在机 = 直接 `lybra sync`(不带 `--dry-run`)落盘。
+  **出口命令原样照抄即可执行**(AIPOS-F244): 命令里的 lybra 已是治理根所在机的入口绝对路径(非登录 ssh 的 PATH 不含 `~/.local/bin` 也能跑),
+  不用自己补路径; 主机未声明时出口是占位 `<治理根主机>`, 同一行给出声明命令原文(候选值 = 治理根所在机主机名; 他机 ssh 别名不同则改),
+  在治理根所在机跑完再看 pull 行即带真实主机(改登记 / 接入到他机且未声明时也会提示一次)。
+  Claude Code 会话在会话目录跑两条: 章程(`charter … --body-only` 经 ssh 取, 先写 `.tmp` 再改名)→ `.claude/rules/lybra-advisor.md`;
+  技能(`skills …` 经 ssh 取 tar 流, 管道给 `tar -xf -`)→ `.claude/skills/`; 落盘后重开会话即加载。Codex 会话跑 pull 行的
+  章程命令, 输出即章程全文。会话在治理根所在机 = 直接 `lybra sync`(不带 `--dry-run`)落盘。
 - 在途 loop 是治理根所在机上的独立进程, 不受切换影响; 切换后新起草的子 agent 卡缺省 harness 随你现登记(已发布卡与登记不符时
   `lybra next` / `lybra kickoff` 给 `lybra queue amend` 出口)。
 
