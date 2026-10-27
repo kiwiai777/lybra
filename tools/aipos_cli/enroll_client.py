@@ -1191,8 +1191,10 @@ def enroll(
                 f"凭据已落盘({lybra_dir}), 但 {harness_record['kind']} 件交付失败: {harness_delivery.get('error')}\n"
                 f"出口: lybra sync --harness-root {workspace_root}"
             )
-        # AIPOS-F129: 非本机可落 harness(codex 无 dir / 他机 host)交付零写入, 原因由 sync 点名(note)
-        _where = harness_record.get("dir") or f"host={harness_record.get('host')}"
+        # AIPOS-F129: 非本机可落 harness(codex 无 dir / 他机 host)交付零写入, 原因由 sync 点名(note);
+        # AIPOS-F243 件④: 他机会话(codex / claude-code 带 host)标出会话机, 不把他机目录写成像本机落点
+        _host, _dir = harness_record.get("host"), harness_record.get("dir")
+        _where = f"{_host}:{_dir or '-'}(他机, 本机零写入)" if _host else (_dir or "host=None")
         files_written.append(f"{harness_record['kind']} 件 → {_where}({harness_delivery.get('files_fetched')} 个文件)")
 
     # AIPOS-F54 ⑮: 可启动最小集逐项校验(缺项逐项点名, 禁"少一个键整个起不来但不知道少哪个")

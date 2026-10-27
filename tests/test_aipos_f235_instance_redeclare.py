@@ -187,7 +187,8 @@ def test_item1_refusals_zero_write(tmp_path, monkeypatch):
         (["--instance", ADV_LANTU, "--harness", "claude-code", "--dir", str(gov), "--actor", f"exec.{CHRIS}.x"], "REDECLARE_ACTOR"),
         (["--instance", ADV_LANTU, "--harness", "pi", "--actor", ADV_LANTU], "REDECLARE_INVALID"),
         (["--instance", ADV_LANTU, "--harness", "claude-code", "--actor", ADV_LANTU], "REDECLARE_INVALID"),
-        (["--instance", ADV_LANTU, "--harness", "claude-code", "--host", MAC, "--dir", str(gov), "--actor", ADV_LANTU], "REDECLARE_INVALID"),
+        # AIPOS-F243 件③: claude-code 可登记在他机, 但目录仍必给(他机缺 --dir = 拒)
+        (["--instance", ADV_LANTU, "--harness", "claude-code", "--host", MAC, "--actor", ADV_LANTU], "REDECLARE_INVALID"),
         (["--instance", CHRIS_EXEC, "--harness", "claude-code", "--dir", str(gov), "--actor", ADV_OTA], "REDECLARE_INVALID"),
         (["--instance", ADV_LANTU, "--actor", ADV_LANTU], "REDECLARE_INVALID"),
     ]

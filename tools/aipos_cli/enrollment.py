@@ -911,7 +911,7 @@ def redeclare_instance(governance_root: str | Path, instance: str, *, harness: s
 
     适用: 本项目已接入的治理席位实例(位置事件工位 = 治理根; 实例槽在治理根 .lybra/role)与子 agent 执行身份(land mode=子 agent 模式);
     pi 工位 = 拒(REDECLARE_WORKSTATION: 迁目录走 relocate-workstation)。操作者 = 本实例或本项目已接入顾问(advisor_updates_cli.advisor_instances),
-    否则 REDECLARE_ACTOR。新值校验: 治理席位经 distribution_sync.harness_role_record(唯一判定; claude-code 会话须在本机), 子 agent 须为顾问会话
+    否则 REDECLARE_ACTOR。新值校验: 治理席位经 distribution_sync.harness_role_record(唯一判定; AIPOS-F243: claude-code 与 codex 均可登记在他机, 声明 harness_host), 子 agent 须为顾问会话
     kind 且不给工作目录。无变化 = REDECLARE_NO_CHANGE。授权 = _authorization_basis: 第二档 → 确认 = 追加 redeclare 位置事件 + 更新实例槽;
     第一档 → Owner 裁决批准(_redeclare_ruling)= 同第二档生效(authorized_by=owner:<决策 ID>), 拒 = REDECLARE_OWNER_DENIED,
     未裁决 = 确认追加一行 redeclare_request(已有同一请求则不重复)进收件箱。返回 {state: apply|request|pending, written, ...}。"""
@@ -952,7 +952,8 @@ def redeclare_instance(governance_root: str | Path, instance: str, *, harness: s
     if kind not in kinds:
         raise _refuse_redeclare("REDECLARE_INVALID", f"harness {kind!r} 不是顾问会话 kind({'|'.join(kinds)}); 现登记 {registration_label(current) or '无'}")
     same_session = given["kind"] in (None, old["kind"])
-    # 会话机: 显式 > 新 kind 声明会话须同机(harness_host=forbidden)= 本机 > 同 kind 沿用现登记 > 本机
+    # 会话机: 显式 > 新 kind 声明不登记会话机(harness_host=forbidden)= 本机 > 同 kind 沿用现登记 > 本机
+    # (AIPOS-F243: 顾问会话 kind 现均 harness_host=optional; 换 kind = 换会话, 不沿用旧会话机与目录, 同机切换也显式给 --host --dir)
     pinned_local = harness_kind_declaration(kind)["harness_host"] == "forbidden"
     new_host = given["host"] or (local if pinned_local else None) or (old["host"] if same_session else None) or local
     slot_record: dict[str, Any] | None = None
@@ -967,7 +968,8 @@ def redeclare_instance(governance_root: str | Path, instance: str, *, harness: s
         new_dir = given["dir"] or (old["dir"] if same_session and new_host == old["host"] else None)
         remote = new_host if new_host != local else None
         if remote and harness_kind_declaration(kind)["harness_host"] == "forbidden":
-            raise _refuse_redeclare("REDECLARE_INVALID", f"harness={kind} 的会话须在治理根所在机(本机 {local}), 不能登记到主机 {new_host}")
+            raise _refuse_redeclare("REDECLARE_INVALID", f"harness={kind} 声明 harness_host=forbidden(不登记会话机), 不能登记到主机 {new_host}"
+                                    f"(本机 {local})")
         try:
             slot_record = harness_role_record(kind, new_dir, remote)
         except ValueError as exc:

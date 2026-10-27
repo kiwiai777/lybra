@@ -266,20 +266,23 @@ def advisor_harness_kinds() -> tuple[str, ...]:
 def harness_role_record(kind: str | None, harness_dir: str | Path | None, harness_host: str | None) -> dict[str, Any] | None:
     """AIPOS-F129 件①: enroll 的 harness 参数 → .lybra/role harness 字段(唯一判定; 取舍读 harness_kind_declaration)。
 
-    缺省 kind(pi)= None(不写 harness 字段, 既有工位形态); claude-code = {kind, dir}(dir 须已存在的本机绝对目录);
-    codex = {kind, dir: <可空>, host: <可空>} —— 有 host(他机会话)时 dir 如实记、不校验本机存在。违反 = ValueError(fail-closed)。"""
+    缺省 kind(pi)= None(不写 harness 字段, 既有工位形态); claude-code = {kind, dir}(本机会话: dir 须已存在的本机绝对目录);
+    codex = {kind, dir: <可空>, host: <可空>} —— 有 host(他机会话)时 dir 如实记、不校验本机存在。违反 = ValueError(fail-closed)。
+    AIPOS-F243 件①: claude-code 声明 harness_host=optional —— 他机会话 = {kind, dir, host}(dir 仍必给, 为他机路径, 如实记); 本机会话记录形
+    不变(harness_dir=required 的 kind 无 host 时不写 host 键; harness_dir=optional 的 kind 恒带 host 键, 均为既有形态)。"""
     kind = str(kind or "").strip() or default_harness_kind()
     decl = harness_kind_declaration(kind)
     dir_text = str(harness_dir or "").strip()
     host = str(harness_host or "").strip()
     if host and decl["harness_host"] == "forbidden":
-        raise ValueError(f"--harness-host 不适用于 harness={kind}(声明 harness_host=forbidden; 会话须与本命令同机)")
+        raise ValueError(f"--harness-host 不适用于 harness={kind}(声明 harness_host=forbidden: 该 harness 的会话不登记会话机)")
     if host and any(ch.isspace() for ch in host):
         raise ValueError(f"--harness-host {host!r} 含空白(主机名不得含空白)")
     if dir_text and decl["harness_dir"] == "forbidden":
         raise ValueError(f"--harness-dir 不适用于 harness={kind}(声明 harness_dir=forbidden; 该 harness 的落点即工位根)")
     if not dir_text and decl["harness_dir"] == "required":
-        raise ValueError(f"--harness {kind} 须给 --harness-dir <该 harness 的工作目录>(分发件落点基准, 如 Claude Code 会话目录)")
+        raise ValueError(f"--harness {kind} 须给 --harness-dir <该 harness 的工作目录>(分发件落点基准, 如 Claude Code 会话目录; "
+                         "会话在他机时给他机路径并加 --harness-host)")
     if dir_text:
         path = Path(dir_text).expanduser()
         if not path.is_absolute():
@@ -291,7 +294,7 @@ def harness_role_record(kind: str | None, harness_dir: str | Path | None, harnes
     if kind == default_harness_kind():
         return None
     record: dict[str, Any] = {"kind": kind, "dir": dir_text or None}
-    if decl["harness_host"] != "forbidden":
+    if host or (decl["harness_host"] != "forbidden" and decl["harness_dir"] != "required"):
         record["host"] = host or None
     return record
 
@@ -314,7 +317,7 @@ def workstation_harness(harness_root: Path, instance: str | None = None) -> dict
 
     kind 不在声明内 / dir 取舍违反声明(harness_kind_declaration)= ValueError(fail-closed, 禁猜落点)。
     返回 {kind, dir: Path | None, host: str | None, local: bool, default: bool}; local = 分发件可落本机 dir
-    (AIPOS-F129: codex 无 dir 或有 host(他机会话)= False, dir 按记录原样, 不在本机解析)。"""
+    (AIPOS-F129: codex 无 dir 或有 host(他机会话)= False, dir 按记录原样, 不在本机解析; AIPOS-F243: claude-code 有 host 同此)。"""
     # AIPOS-F106 件④: role 文件只经 charter_render.workstation_identity 读(唯一实现; 坏文件 = WorkstationIdentityError, ValueError 子类)
     from tools.aipos_cli.charter_render import is_enrolled_workstation, workstation_identity, workstation_role_file
 
@@ -1402,19 +1405,22 @@ def _sync_harness_dir(
     AIPOS-F129 件① / F136 件②: 会话不在本机可落处(harness.local=False: codex 无 dir / 他机 host)—— 零写入, 不拒(凭据与身份已落本工位,
     sync 全量巡检不因此失败)。AIPOS-F138 件①: 章程件(kind=charter)给拉取出口(pull 段: 会话开局经 ssh 在治理根所在机跑 `lybra charter`,
     声明 harness_semantics.remote_session_delivery, 命令唯一拼装 charter_render.charter_pull_command; 产品不推送); 其余件仍列 undelivered
-    并点名原因(本机无落点, 禁猜落点)。"""
+    并点名原因(本机无落点, 禁猜落点)。AIPOS-F243 件②: claude-code 他机会话同此; 技能件(kind=skills)也给拉取出口
+    (remote_session_delivery.skills, 命令唯一拼装 charter_render.skills_pull_command); land.harnesses 内的 harness(claude-code)的章程件
+    另给落盘命令与落点相对路径(target_path / land_command), 由会话开局自己落盘。"""
     if not harness.get("local", True):
-        from tools.aipos_cli.charter_render import charter_pull_command
+        from tools.aipos_cli.charter_render import charter_pull_command, remote_session_delivery, skills_pull_command
         from tools.aipos_cli.custom_roles import resolve_role_to_class
 
         dists_here = list(remote.get("distributions") or [])
         where = f"host={harness.get('host')} dir={harness.get('dir')}"
-        charter_dists = [d for d in dists_here if _is_charter(d)]
+        # AIPOS-F243 件②: 拉取出口覆盖章程件与技能件(remote_session_delivery 与其 skills 段); 其余件仍列 undelivered
+        pullable = [d for d in dists_here if _is_charter(d) or d.get("kind") == "skills"]
         undelivered = [{"distribution_id": d.get("distribution_id"), "kind": d.get("kind"), "target_path": d.get("target_path")}
-                       for d in dists_here if not _is_charter(d)]
+                       for d in dists_here if d not in pullable]
         pull: list[dict[str, Any]] = []
         notes: list[str] = []
-        if charter_dists:
+        if pullable:
             # 治理根与 sync 渲染同一解析(resolve_workstation_governance_root); 解析不到 = 照原文出声(不猜, 不拒)
             from tools.aipos_cli.charter_render import resolve_workstation_governance_root
 
@@ -1422,18 +1428,40 @@ def _sync_harness_dir(
                 gov = resolve_workstation_governance_root(identity, explicit=governance_root)
             except FileNotFoundError as exc:  # 出口给不出 = 仍列 undelivered 并点名原因(不丢件)
                 undelivered += [{"distribution_id": d.get("distribution_id"), "kind": d.get("kind"), "target_path": d.get("target_path")}
-                                for d in charter_dists]
-                notes.append(f"章程件 {[d['distribution_id'] for d in charter_dists]} 未交付, 拉取出口给不出: {exc}")
+                                for d in pullable]
+                notes.append(f"件 {[d['distribution_id'] for d in pullable]} 未交付, 拉取出口给不出: {exc}")
             else:
                 role_class = str(resolve_role_to_class(str(identity["role"]), gov, required=True))
-                exit_ = charter_pull_command(gov, instance=str(identity["instance"]), role_class=role_class)
-                pull = [{"distribution_id": d.get("distribution_id"), "kind": d.get("kind"), "mode": "pull",
-                         "command": exit_["command"], "host_declared": exit_["host_declared"], "host_hint": exit_["host_hint"]}
-                        for d in charter_dists]
-                notes.append(f"harness={harness['kind']}({where}): 会话不在本机可落处, 章程件 {[p['distribution_id'] for p in pull]} "
-                             f"= pull: 在会话开局运行 `{exit_['command']}`(产品不推送; 输出即渲染后章程全文)"
-                             + (f"。{exit_['host_hint']}" if exit_["host_hint"] else ""))
-        others = [d for d in undelivered if d["kind"] != "charter"]
+                land = harness["kind"] in (remote_session_delivery()["land"]["harnesses"] or [])
+                hint = ""
+                for d in pullable:
+                    if _is_charter(d):  # 章程 = 文件型分发物: target.relative_path 即落点文件(同 _file_target_path)
+                        exit_ = charter_pull_command(gov, instance=str(identity["instance"]), role_class=role_class,
+                                                     target_path=str(d.get("target_path") or "").strip("/") if land else None)
+                    else:
+                        exit_ = skills_pull_command(gov, instance=str(identity["instance"]), role_class=role_class)
+                        exit_["target_path"] = str(d.get("target_path") or "").strip("/") + "/"
+                    hint = hint or exit_["host_hint"]
+                    item = {"distribution_id": d.get("distribution_id"), "kind": d.get("kind"), "mode": "pull",
+                            "command": exit_["command"], "host_declared": exit_["host_declared"], "host_hint": exit_["host_hint"]}
+                    if exit_.get("target_path"):
+                        item["target_path"] = exit_["target_path"]
+                    if exit_.get("land_command"):
+                        item["land_command"] = exit_["land_command"]
+                    pull.append(item)
+                charter_pull = [p for p in pull if p["kind"] == "charter"]
+                if charter_pull and not land:  # AIPOS-F138 原文(codex: 只读出, 不落盘)
+                    notes.append(f"harness={harness['kind']}({where}): 会话不在本机可落处, 章程件 {[p['distribution_id'] for p in charter_pull]} "
+                                 f"= pull: 在会话开局运行 `{charter_pull[0]['command']}`(产品不推送; 输出即渲染后章程全文)")
+                for p in pull:
+                    if p["kind"] == "charter" and not land:
+                        continue
+                    run = p.get("land_command") or p["command"]
+                    notes.append(f"harness={harness['kind']}({where}): 会话不在本机可落处, {p['kind']} 件 {p['distribution_id']} = pull: "
+                                 f"在会话目录开局运行 `{run}`(由会话自己落盘到会话目录相对路径 {p.get('target_path')}; 产品不推送)")
+                if hint:
+                    notes[-1] += f"。{hint}"
+        others = [d for d in undelivered if d["kind"] not in ("charter", "skills")]
         if others:
             notes.append(f"harness={harness['kind']}({where}): 声明给本角色该 harness 的件 {[d['distribution_id'] for d in others]} "
                          "未交付(本机无落点, 禁猜)。会话目录在本机时: enroll 给 --harness-dir <本机会话目录>(不给 --harness-host)即由本命令交付")
@@ -1708,8 +1736,10 @@ def charter_freshness(harness_root: str | Path, governance_root: str | Path) -> 
         out["detail"] = _one_line(f"sync --dry-run 跳过本工位: {result.get('reason')}")
         return out
     if result.get("pull"):
+        # AIPOS-F243: pull 段可含技能件, 详情取章程件那条(有落盘命令取落盘命令)
+        p0 = next((p for p in result["pull"] if p.get("kind") == "charter"), result["pull"][0])
         out.update(fresh=True, state="pull",
-                   detail=f"会话不在本机可落处, 章程经会话开局拉取(每次现渲染): {result['pull'][0].get('command')}")
+                   detail=f"会话不在本机可落处, 章程经会话开局拉取(每次现渲染): {p0.get('land_command') or p0.get('command')}")
         return out
     stale = [{"distribution_id": p["distribution_id"], "path": rel, "reason": why}
              for p in result.get("plan") or [] if p.get("kind") == "charter" for rel, why in (p.get("reasons") or {}).items()]

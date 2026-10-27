@@ -43,6 +43,17 @@ another machine gets the advisor charter by pull (Lybra never pushes): at sessio
 `ssh <governance-root host> 'cd <governance root> && lybra charter --role advisor --instance <instance>'`, which prints the
 rendered charter (same renderer as `lybra sync`; no credentials in the output). `lybra sync` and step 5 of the guide print
 that command; the host is read from project.json `workstations.<instance>.gate_ssh_alias` (`lybra project set-workstation`).
+
+A Claude Code advisor session may also run on another machine (AIPOS-F243; for example Claude Code on a Mac that has the
+test devices attached over USB): `lybra onboarding guide <project> --advisor-host <session host> --advisor-dir <session
+directory on that host>` enrolls it with `--harness claude-code --harness-dir <dir> --harness-host <host>`; `.lybra/role`
+records `harness: {kind: claude-code, dir, host}` (the directory is not checked locally) and nothing lands on the
+governance-root machine. `lybra sync` then prints two pull lines with the relative landing paths, run from the session
+directory at session start: the charter, fetched with `lybra charter … --body-only` over ssh and written to
+`.claude/rules/lybra-advisor.md` (via a `.tmp` file and a rename), and the skills, `ssh <governance-root host> 'cd <governance
+root> && lybra skills --role advisor --instance <instance>' | tar -xf -`, which unpacks `.claude/skills/<skill>/…`. Both use
+the same renderer and the same manifest builder as a local `lybra sync`, so the landed files are byte-identical to a local
+delivery. `lybra skills` writes a tar stream and refuses to write it to a terminal.
 Legal `--harness`
 values are the keys of `schema/distribution.schema.json` `harness_semantics.kinds`; an unknown value is refused with that
 list before any code is issued. Registering a Codex advisor does not extend the Owner-confirm surface (see
@@ -256,8 +267,12 @@ git in that checkout.
 
 ## Changing an enrolled instance's registration (harness / host / working directory)
 
-An advisor that moves to another harness (for example from Codex on one machine to Claude Code on the governance-root
-machine), another host or another working directory keeps its instance name and credentials; only the registration changes.
+An advisor that moves to another harness (for example from Codex to Claude Code, on the governance-root machine or on
+another machine), another host or another working directory keeps its instance name and credentials; only the registration
+changes. Switching between Codex and Claude Code on the same host and directory works both ways, one `redeclare` per switch;
+a change of kind does not carry the old session host and directory over, so give `--host` and `--dir` explicitly. Only one
+session holds the instance at a time; the new session pulls its charter and skills at start (see the advisor enrollment
+section above), and running loops are separate processes on the governance-root machine, unaffected by the switch.
 `lybra roles redeclare` is the entry for that; no void-and-re-enroll and no new code.
 
 1. Preview (default, nothing written): `lybra roles redeclare --workspace-root <governance root> --instance <instance>

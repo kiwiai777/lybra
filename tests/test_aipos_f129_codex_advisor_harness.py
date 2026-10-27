@@ -54,7 +54,8 @@ def test_item1_kinds_are_single_derivation_source():
     assert advisor_harness_kinds() == ("claude-code", "codex")
     codex = harness_kind_declaration("codex")
     assert (codex["harness_dir"], codex["harness_host"], codex["advisor_session"]) == ("optional", "optional", True)
-    assert (harness_kind_declaration("claude-code")["harness_dir"], harness_kind_declaration("claude-code")["harness_host"]) == ("required", "forbidden")
+    # AIPOS-F243 件①: claude-code 会话可登记在他机(harness_host forbidden → optional, 同 codex 语义; 目录仍必给)
+    assert (harness_kind_declaration("claude-code")["harness_dir"], harness_kind_declaration("claude-code")["harness_host"]) == ("required", "optional")
     assert "harness_semantics.kinds 的键" in sem["rule"]
 
 
@@ -96,11 +97,15 @@ def test_item1_role_record_per_declaration(tmp_path: Path):
     # 本机目录(无 host): 须已存在的绝对目录
     assert harness_role_record("codex", str(local), None) == {"kind": "codex", "dir": str(local.resolve()), "host": None}
     assert harness_role_record("claude-code", str(local), None) == {"kind": "claude-code", "dir": str(local.resolve())}
+    # AIPOS-F243 件①: claude-code 他机会话 = {kind, dir, host}(他机目录如实记, 不校验本机存在); 本机会话记录形不变(无 host 键)
+    assert harness_role_record("claude-code", "/Users/probe/hbj advisor", "mac-probe") == {
+        "kind": "claude-code", "dir": "/Users/probe/hbj advisor", "host": "mac-probe"}
     bad = [
         ("codex", "rel/dir", "mac-probe", "绝对路径"),
         ("codex", str(tmp_path / "nope"), None, "已存在的绝对目录"),
         ("codex", None, "mac probe", "空白"),
-        ("claude-code", str(local), "mac-probe", "--harness-host"),
+        ("claude-code", None, "mac-probe", "须给 --harness-dir"),
+        ("claude-code", "rel/dir", "mac-probe", "绝对路径"),
         ("claude-code", None, None, "须给 --harness-dir"),
         ("pi", str(local), None, "--harness-dir"),
         ("pi", None, "mac-probe", "--harness-host"),
@@ -131,8 +136,11 @@ def test_item1_workstation_harness_reads_codex_record(tmp_path: Path):
     assert bare["dir"] is None and bare["local"] is False
     with pytest.raises(ValueError):
         workstation_harness(_role_ws(tmp_path / "g3", {"kind": "codex", "dir": "rel", "host": "mac-probe"}))
+    # AIPOS-F243 件①: claude-code 他机会话 = 本机无落点(local=False), dir 按记录原样
+    cc = workstation_harness(_role_ws(tmp_path / "g4", {"kind": "claude-code", "dir": "/Users/probe/x", "host": "mac-probe"}))
+    assert (cc["kind"], cc["host"], str(cc["dir"]), cc["local"]) == ("claude-code", "mac-probe", "/Users/probe/x", False)
     with pytest.raises(ValueError):
-        workstation_harness(_role_ws(tmp_path / "g4", {"kind": "claude-code", "dir": "/x", "host": "mac-probe"}))
+        workstation_harness(_role_ws(tmp_path / "g5", {"kind": "claude-code", "dir": None, "host": "mac-probe"}))
 
 
 # ===========================================================================
@@ -148,10 +156,11 @@ def test_item2_unknown_harness_refused_lists_declared(tmp_path: Path, iso_home: 
     print("[②·未知 harness 原文]\n" + out)
     assert rc != 0 and "'gemini'" in out and str(list(declared_harness_kinds())) in out
     assert not ws.exists()  # 先于兑换 / 写盘拒
+    # AIPOS-F243 件①: claude-code 可带 --harness-host(他机会话), 但目录仍必给 —— 缺目录先于兑换 / 写盘拒
     rc, out = _cli("roles", "enroll", "--code", "LYBRAENROLL1.fixture-not-a-code", "--gate-url", "http://127.0.0.1:9",
-                   "--workspace", str(ws), "--harness", "claude-code", "--harness-dir", str(tmp_path), "--harness-host", "mac-probe")
-    print("[②·claude-code 带 --harness-host 原文]\n" + out)
-    assert rc != 0 and "--harness-host" in out and not ws.exists()
+                   "--workspace", str(ws), "--harness", "claude-code", "--harness-host", "mac-probe")
+    print("[②·claude-code 他机缺 --harness-dir 原文]\n" + out)
+    assert rc != 0 and "须给 --harness-dir" in out and not ws.exists()
 
 
 def test_item2_enroll_parser_has_harness_host():
@@ -247,10 +256,13 @@ def test_item3_guide_refusals_read_declaration():
     assert "--advisor-host" in str(exc.value)
     # --host-segment 显式给出时 codex 顾问实例沿用它(不默认成治理根所在机, 也不拒)
     assert generate_onboarding_guide(**BASE, advisor_harness="codex")["instances"]["advisor"] == "advisor.f129-probe.devbox"
+    # AIPOS-F243 件④: claude-code 他机会话须给 --advisor-dir(他机目录不猜); 给了 = 接受, 实例名 host 段 = 会话机短名
     with pytest.raises(ValueError) as exc:
         generate_onboarding_guide(**BASE, advisor_harness="claude-code", advisor_host="mac-probe")
-    print("[③·claude-code 带 --advisor-host 拒]", exc.value)
-    assert "claude-code" in str(exc.value)
+    print("[③·claude-code 他机缺 --advisor-dir 拒]", exc.value)
+    assert "claude-code" in str(exc.value) and "--advisor-dir" in str(exc.value)
+    assert generate_onboarding_guide(**BASE, advisor_harness="claude-code", advisor_host="mac-probe",
+                                     advisor_dir="/Users/probe/sess")["instances"]["advisor"] == "advisor.f129-probe.mac-probe"
     with pytest.raises(ValueError) as exc:
         generate_onboarding_guide(**BASE, advisor_harness="pi")
     print("[③·pi 非顾问会话 harness 拒]", exc.value)
