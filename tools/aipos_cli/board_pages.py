@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 DECL_KEY = "board_readonly_pages"
-PAGES = ("overview", "project", "roadmap", "onboarding")
+PAGES = ("overview", "project", "roadmap", "onboarding", "home", "engineering")  # AIPOS-F246: + 首页 / 工程页(只追加)
 #: 清单项判定(键 = 声明 onboarding_items 的值; 声明里出现未实现的项 = SchemaLoadError, 只追加)
 ONBOARDING_CHECKS = ("governance_root", "advisor", "executor", "auditor", "envelope", "charter", "pi_model", "roadmap", "first_closed")
 _COMMAND_KEYS = ("governance_root", "advisor", "execution_undeclared", "instance_not_enrolled", "envelope_mint", "charter_check",
@@ -62,8 +62,8 @@ def pages_declaration() -> dict[str, Any]:
     chars = decl["evidence_excerpt_chars"]
     if not isinstance(chars, int) or isinstance(chars, bool) or chars < 1:
         raise SchemaLoadError(f"verbs.schema.json {DECL_KEY}.evidence_excerpt_chars 须为正整数")
-    if not all(isinstance(decl["query"].get(k), str) and decl["query"][k] for k in ("project", "milestone", "subproject", "show")):
-        raise SchemaLoadError(f"verbs.schema.json {DECL_KEY}.query(project / milestone / subproject / show)未声明齐")
+    if not all(isinstance(decl["query"].get(k), str) and decl["query"][k] for k in ("project", "milestone", "subproject", "show", "view")):
+        raise SchemaLoadError(f"verbs.schema.json {DECL_KEY}.query(project / milestone / subproject / show / view)未声明齐")
     # AIPOS-F181: root redirect target page / show-all toggle value / legacy project page template
     if (decl.get("root_redirect") not in PAGES or not isinstance(decl.get("show_all_value"), str) or not decl["show_all_value"]
             or "{index}" not in str(decl.get("legacy_project_page") or "") or not str(decl["legacy_project_page"]).startswith("/")
@@ -153,6 +153,13 @@ class ProjectFacts:
         from tools.aipos_cli.autonomy_policy import envelope_overview
 
         return self._get("envelopes", lambda: envelope_overview(self.root)["envelopes"], (OSError, ValueError, LookupError))
+
+    def authorizations(self) -> dict[str, Any]:
+        """AIPOS-F246 件⑤: 本项目在用的项目授权(autonomy_policy.authorization_overview 用量真相 state=active)的授权编号。"""
+        from tools.aipos_cli.autonomy_policy import authorization_overview
+
+        return self._get("authorizations", lambda: [a["authorization_id"] for a in authorization_overview(self.root) if a.get("state") == "active"],
+                         (OSError, ValueError, LookupError))
 
     def advisors(self) -> dict[str, Any]:
         from tools.aipos_cli.advisor_updates_cli import advisor_instances
@@ -527,6 +534,7 @@ def _collect_overview(home_root: str | Path | None, *, show_all: bool) -> dict[s
         f = ProjectFacts(entry, home["home_root"])
         envelopes = f.envelopes()
         current = [r for r in envelopes.get("value") or [] if r.get("current")]
+        auths = f.authorizations()  # AIPOS-F246 件⑤: 在用的项目授权也是「在用」(其全覆盖的旧信封已由 envelope_overview 判接替)
         roadmap = f.roadmap()
         view = roadmap.get("value") or {}
         rows = onboarding_rows(f, decl)
@@ -534,7 +542,8 @@ def _collect_overview(home_root: str | Path | None, *, show_all: bool) -> dict[s
             "project": f.name, "index": entry["index"], "paused": entry["paused"], "hidden": entry["hidden"], "status": entry["status"],
             "status_error": entry["status_error"], "governance_root": str(f.root), "queue": f.queue_counts(),
             "inbox": {"count": inbox_counts.get(f.name, 0) if inbox is not None and f.name in listed else None, "error": inbox_error},
-            "envelopes": {"error": envelopes.get("error"), "active": [r["policy_id"] for r in current if r.get("status") == "active"],
+            "envelopes": {"error": envelopes.get("error") or auths.get("error"),
+                          "active": list(auths.get("value") or []) + [r["policy_id"] for r in current if r.get("status") == "active"],
                           "low": [r["policy_id"] for r in current if r.get("status") != "active"], "url": board_envelope_url(f.name)},
             "roadmap": {"error": roadmap.get("error"), "exists": bool(view.get("exists")), "milestones": len(view.get("milestones") or []),
                         "met": (view.get("totals") or {}).get("met", 0), "total": (view.get("totals") or {}).get("total", 0),
@@ -549,9 +558,10 @@ def _collect_overview(home_root: str | Path | None, *, show_all: bool) -> dict[s
             "inbox_url": str(decl["nav_links"]["inbox"]), "paused": [c["project"] for c in cards if c["paused"]]}
 
 
-def project_url(decl: dict[str, Any], project: str, subproject: str | None = None) -> str:
-    """AIPOS-F181: project page address (query.project / query.subproject)."""
-    return page_url(decl, "project", project=project, subproject=subproject)
+def project_url(decl: dict[str, Any], project: str, subproject: str | None = None, view: str | None = None) -> str:
+    """AIPOS-F181: project page address (query.project / query.subproject). AIPOS-F246: view = query.view (the all-cards list view
+    keeps its view on project tabs / subproject filters)."""
+    return page_url(decl, "project", project=project, subproject=subproject, view=view)
 
 
 def collect_onboarding(home_root: str | Path | None = None, *, show_all: bool = False) -> dict[str, Any]:
@@ -601,7 +611,7 @@ def _subproject_choice(stats: dict[str, Any] | None, wanted: str | None) -> tupl
 
 
 def collect_project(home_root: str | Path | None = None, *, project: str | None = None, subproject: str | None = None,
-                    show_all: bool = False) -> dict[str, Any]:
+                    show_all: bool = False, view: str | None = None) -> dict[str, Any]:
     """AIPOS-F181 item 2: project page = card_stats of the selected project grouped by subproject (in-flight + to-do listed,
     closed folded by the renderer). Unknown project / subproject = named back (not guessed)."""
     from tools.aipos_cli.task_loader import read_request_scope
@@ -612,9 +622,9 @@ def collect_project(home_root: str | Path | None = None, *, project: str | None 
         shown, hidden = visible_entries(home, show_all)
         chosen = _pick_entry(home, shown, project)
         out: dict[str, Any] = {"decl": decl, "home_root": str(home["home_root"]), "hidden": hidden, "show_all": show_all,
-                               "projects": [{"project": e["name"], "paused": e["paused"], "hidden": e["hidden"], "url": project_url(decl, e["name"])}
-                                            for e in _with_chosen(shown, chosen)],
-                               "unknown_project": project if project and chosen is None else None, "selected": None}
+                               "projects": [{"project": e["name"], "paused": e["paused"], "hidden": e["hidden"],
+                                             "url": project_url(decl, e["name"], view=view)} for e in _with_chosen(shown, chosen)],
+                               "unknown_project": project if project and chosen is None else None, "selected": None, "view": view}
         if chosen is None:
             return out
         f = ProjectFacts(chosen, home["home_root"])

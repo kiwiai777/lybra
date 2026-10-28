@@ -41,7 +41,7 @@ ADV1 = f"advisor.{P1}.h1"
 ADV1B = f"advisor.{P1}.h2"
 EXEC1 = f"exec.{P1}.h1"
 AUD1 = f"audit.{P1}.h1"
-NEW_PAGES = ("/owner/overview", "/owner/project", "/owner/roadmap", "/owner/onboarding")  # AIPOS-F181: + project page
+NEW_PAGES = ("/owner/overview", "/owner/project", "/owner/roadmap", "/owner/onboarding", "/owner/home", "/owner/engineering")  # AIPOS-F181: + project page; AIPOS-F246: + home / engineering
 
 
 def _show(text: str) -> None:
@@ -401,8 +401,9 @@ def test_item1_overview_cards_and_links(board):
     assert f'data-project="{P3}" data-paused="true"' in paused and "暂停项目不进收件箱" in paused
     nav = _section(page, '<header class="rp-nav">', "</header>")
     _show(f"[①·导航 HTML 原文] {nav}")
-    for href in ('href="/owner/overview" aria-current="page"', 'href="/owner/roadmap"', 'href="/owner/onboarding"',
-                 'href="/owner/inbox"', 'href="/owner/envelopes"', 'href="/owner/project"'):
+    # AIPOS-F246 item 5: nav = home / project / history / engineering; the overview (with the other pages) sits under engineering
+    for href in ('href="/owner/home"', 'href="/owner/project"', 'href="/owner/project?view=cards"',
+                 'href="/owner/engineering" data-nav="engineering" aria-current="page"'):
         assert href in nav, href
     assert "本页只读" in page and "<form" not in page and "<button" not in page
 
@@ -412,7 +413,7 @@ def test_item4_english_and_narrow_screen(board):
     _show(f"[④·英文 标题与导航] {_text(_section(page, '<header class=\"rp-nav\">', '</header>'))} | {_text(_section(page, '<h1>', '</h1>'))}")
     assert status == 200 and '<html lang="en">' in page and "Project onboarding checklist · 3 projects" in page
     assert "Advisor instance enrolled" in page and "Tell your advisor: Enroll an advisor instance for" in page
-    assert 'href="/owner/roadmap?lang=en"' in page and 'data-set-lang="zh"' in page
+    assert 'href="/owner/home?lang=en"' in page and 'data-set-lang="zh"' in page  # AIPOS-F246: nav = home / project / history / engineering
     status, page, _h = _request(board, f"/owner/roadmap?project={P1}&lang=en")
     assert status == 200 and "Roadmap &amp; acceptance · " in page and "Severe" in page and f"Tell {ADV1}: Handle the roadmap drift" in page
     css = (REPO_ROOT / "web" / "board" / "static" / "readonly-pages.css").read_text(encoding="utf-8")
@@ -478,8 +479,10 @@ def test_item5_i18n_keys_single_channel_zh_en():
                | {f"rp_ob_{kind}_{k}" for k in ONBOARDING_CHECKS for kind in ("item", "ask")}
                | {f"rp_ob_state_{s}" for s in STATES}
                | {f"rp_rm_state_{s}" for s in VERIFICATION_STATES}  # AIPOS-F175: verification five states
-               | {f"rp_qs_{s}" for s in QUEUE_STATES})  # AIPOS-F181: queue state labels
-    prefixes = {"rp_rm_status_", "rp_rm_verify_", "rp_sev_", "rp_ob_item_", "rp_ob_ask_", "rp_ob_state_", "rp_ob_", "rp_rm_state_", "rp_qs_"}
+               | {f"rp_qs_{s}" for s in QUEUE_STATES}  # AIPOS-F181: queue state labels
+               | {f"rp_nav_{k}" for k in pages_declaration()["home"]["nav"]})  # AIPOS-F246: top nav
+    prefixes = {"rp_rm_status_", "rp_rm_verify_", "rp_sev_", "rp_ob_item_", "rp_ob_ask_", "rp_ob_state_", "rp_ob_", "rp_rm_state_", "rp_qs_",
+                "rp_nav_"}
     missing = sorted(k for k in (used | dynamic) if k not in prefixes and k not in zh)
     assert not missing, missing
     assert set(pages_declaration()["onboarding_items"]) <= set(ONBOARDING_CHECKS)

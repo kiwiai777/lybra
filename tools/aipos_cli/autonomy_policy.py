@@ -1339,8 +1339,9 @@ def _envelope_overview(root: Path, now: datetime) -> dict[str, Any]:
                      "agent_or_role": str(policy.get("agent_or_role") or ""), "_from": _parse_iso(policy.get("active_from"))})
     successors = _supersession(rows)  # AIPOS-F185 件③: 接替判定唯一实现(门挑选信封 select_envelope 同读)
     migrated = authorization_superseded_policies(root)  # AIPOS-F224: 已迁入项目授权的旧信封 = superseded(接替者 = 该授权; 文件不改不删)
+    covered = authorization_covered_policies(root, rows, now)  # AIPOS-F246 件⑤: 被更新的在用项目授权全覆盖的旧信封 = 已被它接替
     for row in rows:
-        row["superseded_by"] = migrated.get(row["policy_id"]) or successors[row["policy_id"]]
+        row["superseded_by"] = migrated.get(row["policy_id"]) or successors[row["policy_id"]] or covered.get(row["policy_id"])
     out: list[dict[str, Any]] = []
     for row in rows:
         usage, policy, state = row["usage"], row["policy"], row["state"]
@@ -1602,6 +1603,68 @@ def authorization_superseded_policies(governance_root: Path | str) -> dict[str, 
         for rev in authorization_history(root, aid):
             for pid in rev.get("supersedes_policies") or []:
                 out.setdefault(str(pid), aid)
+    return out
+
+
+def authorization_covered_policies(governance_root: Path | str, rows: list[dict[str, Any]], now: datetime) -> dict[str, str]:
+    """AIPOS-F246 件⑤(Owner 10-28 实测: 看板把已被本项目授权取代的旧信封显示为「在用」): 展示口径的接替——
+    门挑选次序已是「项目授权覆盖则用授权, 未覆盖才兼容旧信封」(select_envelope → judge_authorizations), 未写进 supersedes_policies 的
+    旧信封却仍按信封自身状态显示在用。本函数给 envelope_overview(信封展示状态唯一推导, 看板信封页 / 收件箱 / brief 同读)补上这条接替:
+    旧信封 A 被授权 G 接替 ⇔ G 用量真相为在用(envelope_usage state=active: 生效、在时间窗、额度未尽)、G 的 active_from 严格晚于 A
+    (同 _supersession「新替旧」)、G 项目 = A 的项目选择器(若有)、且 A 覆盖的每个 车道仓 × 任务类型 都在 G 某车道内并以 A 的驱动方
+    为该车道驱动方(A 不限车道 = 本项目全部声明车道 workspace_config.project_lane_keys; 不限任务类型 = enums task_mode 全部)。
+    rows = _envelope_overview 的行({policy_id, state, policy, _from})。返回 {policy_id: authorization_id}; 只读。门挑选不读本函数
+    (授权额度尽 / 过期时门照旧回落旧信封, 那时 G 不在用、本函数也不判接替)。"""
+    root = Path(governance_root)
+    grants: list[tuple[dict[str, Any], datetime]] = []
+    for aid in authorization_ids(root):
+        auth = load_authorization(root, aid)
+        frm = _parse_iso((auth or {}).get("active_from"))
+        if auth is None or frm is None or envelope_usage(root, aid, now=now).get("state") != "active":
+            continue
+        grants.append((auth, frm))
+    if not grants:
+        return {}
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved, _same_path, project_lane_keys, project_repos, repo_name_set
+    from tools.schema_loader import get_enum_values
+
+    items = {str(k): str(v) for k, v in (project_repos(root).get("items") or {}).items()}
+
+    def equiv(ref: str) -> set[str]:
+        out = {ref}
+        if ref in items:
+            out.add(items[ref])
+        for name, path in items.items():
+            if ref.startswith("/") and _same_path(Path(path), Path(ref)):
+                out |= {name, path}
+        return out
+
+    try:
+        all_lanes = [str(x) for x in project_lane_keys(root)]
+    except CardRepoUnresolved:  # 项目车道推不出(无 repos / code_repo 声明)= 不限车道的旧信封无从判全覆盖, 不判接替(fail-closed: 照信封自身状态)
+        all_lanes = []
+    out: dict[str, str] = {}
+    for row in rows:
+        policy = row.get("policy") or {}
+        driver = str(policy.get("agent_or_role") or "").strip()
+        if row.get("state") not in ("active", "not_yet_active", "exhausted", "warn") or not driver or row.get("_from") is None:
+            continue
+        mode = str(policy.get("task_selector_task_mode") or "").strip()
+        modes = [mode] if mode else list(get_enum_values("task_mode"))
+        lanes = repo_name_set(policy.get("task_selector_lane_repo")) or all_lanes
+        selector = str(policy.get("task_selector_project") or "").strip()
+        best: tuple[datetime, str] | None = None
+        for auth, frm in grants:
+            if frm <= row["_from"] or (selector and selector != str(auth.get("project") or "")):
+                continue
+            ok = bool(lanes) and all(
+                any(equiv(str(g["repo"])) & equiv(lane) and driver in g["drivers"] and set(modes) <= set(g["task_modes"])
+                    for g in auth.get("lanes") or [])
+                for lane in lanes)
+            if ok and (best is None or (frm, str(auth["authorization_id"])) > best):
+                best = (frm, str(auth["authorization_id"]))
+        if best is not None:
+            out[str(row["policy_id"])] = best[1]
     return out
 
 

@@ -3727,3 +3727,65 @@ body.rp-page { margin: 0; background: var(--surface-page); color: var(--ink); fo
 .rp-page .ib-decide-actions button:hover { background: var(--mint); }
 .rp-page .ib-words input { font: inherit; width: min(28rem, 100%); margin-left: 6px; }
 .rp-page .ib-fallback > summary { cursor: pointer; color: var(--muted); }
+
+/* ---------------------------------------------------------------------------------------------------------------
+   AIPOS-F246: home (needs-you + one sheet per advisor), project brief, engineering page — the Owner-approved mockup
+   (governance research 2026-10-28-board-redesign-mockup): kicker squares, 5px green left-border cards, flat fills,
+   square corners; attention (stalled / stale) = the board's alert state inside the single green system.
+   --------------------------------------------------------------------------------------------------------------- */
+.rp-page .hm-kicker { display: flex; align-items: center; gap: 10px; font-size: var(--text-kicker); font-weight: 700; letter-spacing: 2px;
+  color: var(--green); margin: 0 0 14px; }
+.rp-page .hm-kicker::before { content: ""; width: 11px; height: 11px; background: var(--green); }
+.rp-page .hm-asks, .rp-page .hm-projects { margin-bottom: 38px; }
+.rp-page .hm-ask { border: var(--border-hairline); border-left: var(--accent-bar) solid var(--green); background: var(--white);
+  padding: 16px 20px; display: flex; gap: 18px; align-items: center; margin-bottom: 10px; }
+.rp-page .hm-ask .hm-what { flex: 1; min-width: 0; }
+.rp-page .hm-ask .hm-t { font-weight: 700; font-size: var(--text-lead); }
+.rp-page .hm-ask .hm-d { color: var(--muted); font-size: var(--text-note); }
+.rp-page .hm-ask .hm-d a { font-weight: 600; }
+.rp-page .hm-more { display: block; text-align: right; font-weight: 600; margin-top: 6px; }
+.rp-page .hm-quiet { color: var(--muted); }
+.rp-page .hm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.rp-page .hm-proj { display: block; color: var(--ink); text-decoration: none; background: var(--surface-card); border: var(--border-hairline);
+  border-left: var(--accent-bar) solid var(--green); padding: 20px 22px; }
+.rp-page .hm-proj:hover { border-color: var(--green-bright); }
+.rp-page .hm-proj .hm-h { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.rp-page .hm-proj .hm-n { font-size: 19px; font-weight: 700; }
+.rp-page .hm-chip { font-size: 11.5px; font-weight: 700; letter-spacing: 1px; padding: 2px 8px; background: var(--green); color: var(--white); }
+.rp-page .hm-chip-q { background: var(--mint-2); color: var(--green); }
+.rp-page .hm-meter { display: flex; align-items: center; gap: 10px; margin: 2px 0 12px; font-size: var(--text-kicker); color: var(--muted); }
+.rp-page .hm-bar { display: block; flex: 1; height: 8px; background: var(--track-bg); border: 1px solid var(--track-border); }
+.rp-page .hm-bar i { display: block; height: 100%; background: var(--green-bright); }
+.rp-page .hm-row { display: flex; gap: 10px; margin: 5px 0; }
+.rp-page .hm-row b { flex-shrink: 0; width: 44px; color: var(--muted); font-weight: 600; font-size: var(--text-kicker); padding-top: 1px; }
+.rp-page .hm-row.hm-warn span, .rp-page .hm-stale { color: var(--state-alert); font-weight: 700; }
+.rp-page .hm-row.hm-none span { color: var(--muted); }
+.rp-page .hm-foot { display: flex; justify-content: space-between; margin-top: 12px; padding-top: 10px; border-top: var(--border-hairline);
+  font-size: var(--text-small); color: var(--muted); }
+.rp-page .hm-paused > summary { cursor: pointer; color: var(--muted); margin: 14px 0 10px; }
+.rp-page .hm-back { font-weight: 600; display: inline-block; margin-bottom: 8px; }
+.rp-page .hm-sub { color: var(--muted); margin: 0 0 18px; }
+.rp-page .hm-headline { background: var(--surface-card); border-left: var(--accent-bar) solid var(--green); padding: 12px 18px; margin-bottom: 24px; }
+.rp-page .hm-two { display: grid; grid-template-columns: 1.25fr 1fr; gap: 26px; }
+.rp-page .hm-sec { margin-bottom: 30px; }
+.rp-page .hm-list { margin: 0; padding: 0; list-style: none; }
+.rp-page .hm-list li { padding: 10px 0; border-bottom: var(--border-hairline); display: flex; gap: 12px; align-items: baseline; }
+.rp-page .hm-list .hm-st { flex-shrink: 0; width: 52px; font-size: var(--text-small); font-weight: 700; color: var(--green); }
+.rp-page .hm-list .hm-st-w { color: var(--state-alert); }
+.rp-page .hm-list .hm-id { margin-left: auto; font-size: var(--text-chip); color: var(--muted); flex-shrink: 0; }
+.rp-page .hm-ms { border-bottom: var(--border-hairline); padding: 12px 0; }
+.rp-page .hm-ms .hm-mt { display: flex; justify-content: space-between; gap: 12px; font-weight: 700; margin-bottom: 6px; }
+.rp-page .hm-ms .hm-mt span { color: var(--muted); font-weight: 600; font-size: var(--text-kicker); text-align: right; }
+.rp-page .hm-ms .hm-mt span[data-authored] { color: inherit; font-weight: 700; font-size: inherit; text-align: left; }
+.rp-page .hm-fold > summary { cursor: pointer; color: var(--muted); padding: 8px 0; }
+.rp-page .hm-ms.hm-ms-done .hm-mt { color: var(--muted); }
+.rp-page .hm-ms.hm-ms-overdue { border-left: var(--bar-alert) solid var(--state-alert); padding-left: 10px; }
+.rp-page .hm-thumbs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 8px; }
+.rp-page .hm-thumbs img { display: block; width: 100%; height: 86px; object-fit: cover; border: var(--border-hairline); background: var(--mint); }
+.rp-page .hm-eng { margin-top: 30px; border-top: var(--border-hairline); padding-top: 14px; color: var(--muted); font-size: var(--text-note); }
+.rp-page .hm-eng > summary { cursor: pointer; }
+.rp-page .hm-eng-links li { margin: 8px 0; }
+@media (max-width: 760px) {
+  .rp-page .hm-grid, .rp-page .hm-two { grid-template-columns: 1fr; }
+  .rp-page .hm-ask { flex-direction: column; align-items: flex-start; }
+}

@@ -320,7 +320,8 @@
       "project cleanup-worktrees",
       "loop stop",
       "queue pause",
-      "queue resume"
+      "queue resume",
+      "project headline"
     ],
     "announce_commands": [
       "next",
@@ -710,12 +711,14 @@
       "overview": "/owner/overview",
       "project": "/owner/project",
       "roadmap": "/owner/roadmap",
-      "onboarding": "/owner/onboarding"
+      "onboarding": "/owner/onboarding",
+      "home": "/owner/home",
+      "engineering": "/owner/engineering"
     },
     "nav_links": {
       "inbox": "/owner/inbox"
     },
-    "root_redirect": "overview",
+    "root_redirect": "home",
     "legacy_project_page": "/workspace/{index}",
     "show_all_value": "all",
     "stylesheet": "/readonly-pages.css",
@@ -723,7 +726,35 @@
       "project": "project",
       "milestone": "milestone",
       "subproject": "sub",
-      "show": "show"
+      "show": "show",
+      "view": "view"
+    },
+    "home": {
+      "description": "AIPOS-F246(Owner 10-28: 看板太工程化、眼花缭乱, 首页只要概要, 详细点进去): 首页 home = 顶部「需要你 · N 件」(owner_inbox.collect_inbox 同一事项, 按紧急度 rank 升序再按等待时长 since 升序, 最多 asks_limit 件, 其余收成一行「还有 N 件」链收件箱; 每件人话标题 = ask_titles 按类别填卡标题 / 里程碑名 / 顾问显示名, 不显示标准 ID 与卡号; 推荐选项与一键在 F248)+ 每个项目下每位在任顾问一张一页纸卡(顾问 = advisor_updates_cli.advisor_instances; 归属 = machine_zone.card_stats 子项目: 以该顾问为键的组 + advisor 判为该顾问的 lane 组, 项目只有一位顾问时无归属的 lane 组也算他的; 暂停顾问 = 其最新简报 status=paused, 折叠; 退役 = 接入判定已不列)。卡内只有: 显示名(简报 title, 无简报 = 唯一顾问用项目名, 否则实例名前缀段)+ 阶段标签(简报 stage)、进度条(该顾问的里程碑 = board_pages._milestone_filter 同一归属, 只计 progress_milestone_statuses 的里程碑标准 met/total; 无 = 近 recent_days 天结案件数)、「现在」「做成」(lybra project headline 最新一条, 超 verbs.lybra_project_headline.stale_hours 标黄「N 天未更新」)、「卡住」(stall 判定)、底栏。首页不出现 forbidden_words(渲染测试守卫; 顾问 / 卡作者写的原文另标 data-authored, 守卫对真根只查界面文字)。project 页缺省 = 一页纸视图(按 query.subproject 选顾问): 在推的事 / 卡住 / 里程碑 / 最近交付物(近 recent_days 天结案卡的图片产物经 artifact_route)/ 等你验收, 工程详情(全部任务卡 = 本页 query.view=cards 原列表视图、信封、接入、工位、审计记录 = 路线图页)默认收起; 已结案卡全量不再缺省下发(页面预算 page_budget_bytes)。导航 = nav(首页 / 项目 / 历史与审计 / 工程); 历史与审计在 F247 前 = 项目页全部任务卡视图; 工程页 engineering = engineering_links 收纳既有各页(不删页与路由)。唯一实现: tools/aipos_cli/board_home.py(数据; 只调上列既有推导 + stall 判定)+ web/board/readonly_pages.py(渲染)。",
+      "nav": ["home", "project", "history", "engineering"],
+      "engineering_links": ["inbox", "overview", "roadmap", "envelopes", "onboarding", "workstation", "upgrade", "cards"],
+      "cards_view_value": "cards",
+      "asks_limit": 3,
+      "recent_days": 7,
+      "title_chars": 48,
+      "progress_milestone_statuses": ["active"],
+      "deliverables_limit": 6,
+      "thumbs_limit": 3,
+      "page_budget_bytes": 61440,
+      "ask_titles": {
+        "description": "需要你事项的人话标题(按收件箱类别; 文案键 = 看板 i18n hm_ask_<类别>, zh / en 同键)。占位: {card} = 卡标题(去卡号前缀, 截 title_chars), {milestone} = 里程碑名, {advisor} = 顾问显示名, {project} = 项目显示名。未列类别 = hm_ask_other。",
+        "categories": ["loop_owner_needed", "needs_owner_card", "rework_limit", "supplementary_fail", "envelope_warning", "roadmap_drift", "owner_check", "enrollment_redeclare", "auto_released"]
+      },
+      "stall": {
+        "description": "卡住判定(唯一实现 board_home.card_last_activity / stall_rows): 在途卡(card_stats group=inflight)最近一次活动 = 下列既有记录文件的最新修改时刻: 本卡 records 各类目录 activity_record_kinds(认领 / 会话 / 交回 / 派审 / 审计 / 改卡 / 事件, 落点经 record_writer.record_dir)、loop 运行记录目录(loop_run_record.loop_runs_dir)、卡文件本身(队列态变化由门改写卡文件)。距今 ≥ threshold_hours = 停滞; 一条记录也读不到 = 停滞(天数按卡文件)。只读展示, 不改卡状态; 清理 = 顾问用 cleanup_commands(既有撤卡 / 冻结命令)。",
+        "threshold_hours": 48,
+        "activity_record_kinds": ["claims", "sessions", "returns", "audit_dispatches", "audit_verdicts", "amendments", "events"],
+        "cleanup_commands": [
+          "lybra queue withdraw --workspace-root {governance_root} --task-id <卡ID> --actor <你的顾问实例> --reason <一句话> --dry-run",
+          "lybra project freeze-legacy --workspace-root {governance_root} --task-ids <卡ID> ... --reason <一句话> --actor <你的顾问实例> --dry-run"
+        ]
+      },
+      "forbidden_words": ["信封", "授权编号", "pol_", "auth_", "lane", "车道", "历史存量", "(未知)", "（未知）", "不可解析", "PASS", "FAIL", "BLOCK", "NEEDS_OWNER", "verdict"]
     },
     "artifact_route": {
       "description": "AIPOS-F175 件②: 路线图页逐条标准的产物缩略图取图路由(仅 GET, 登录会话可看, 与三页同一鉴权闸门)。只返回卡面 artifacts 声明且解析在卡产物落点内、后缀属 card.schema card_artifacts.image_suffixes 的文件(唯一判定 roadmap.artifact_file); 其余 = 404。文本产物不经此路由, 页面直接显示摘录(roadmap.card_artifacts excerpt)。",
@@ -5274,6 +5305,32 @@
         }
       }
     },
+    "lybra_project_headline": {
+      "description": "AIPOS-F246 件①: 顾问简报(看板首页每位顾问一页纸卡的「现在」「做成」两行; 与 F67 `lybra brief` 顾问冷启动派生简报无关)。`lybra project headline --instance <顾问实例> --title <项目显示名> [--stage <阶段>] --now <现在: 一两句人话> --done <最近做成: 一句> [--status active|paused] [--actor <实例|owner>] [--dry-run|--confirm]`: 缺省预演零写入; --confirm 写一条只追加记录(治理根 records advisor_headlines/<实例>/, record_type advisor_headline, 过既有入库护栏)并经 governance_commit.land_written_paths 落账。写入方 = 该顾问本人(--actor 缺省 = --instance; 本治理根连接文件里须有其驱动方凭据, 判定唯一口 two_phase_shell_factory.signer_role_for_actor)或 Owner(--actor owner_actor; 连接文件里须有 owner 角色凭据, two_phase_shell_factory.load_role_token), 他人拒; --instance 须为本治理根已接入顾问(advisor_updates_cli.advisor_instances)。凭据只在进程内判在不在, 不输出。看板取每位顾问最新一条(按 written_at); 字数上限 limits(按字符); 陈旧 = 最新一条距今 ≥ stale_hours(看板标黄「N 天未更新」; 顾问 loop status / next 末尾提示一次更新命令 hint)。status=paused = 该顾问暂停(首页折叠)。唯一实现 tools/aipos_cli/advisor_headline.py。",
+      "phase": "write",
+      "surface": ["cli"],
+      "cli_command": "lybra project headline",
+      "record_kind": "advisor_headlines",
+      "record_type": "advisor_headline",
+      "landing_command": "advisor_headline",
+      "owner_actor": "owner",
+      "statuses": ["active", "paused"],
+      "default_status": "active",
+      "stale_hours": 48,
+      "limits": {"title": 16, "stage": 8, "now": 120, "done": 60},
+      "texts": {
+        "preview": "预演(零写入): 将为 {instance} 写简报 {record}; 去掉 --dry-run 加 --confirm 写入并落账",
+        "written": "已写简报 {record}(写入方 {actor})",
+        "stale_hint": "顾问简报已 {age_hours} 小时未更新(看板首页标黄): 有里程碑进展 / 交付物产出 / 卡住或解除时更新——lybra project headline --workspace-root {governance_root} --instance {instance} --title <项目显示名> --now <现在> --done <最近做成> --confirm"
+      },
+      "reject_codes": ["not_advisor", "not_self", "no_credential", "too_long", "empty", "bad_status", "exists"],
+      "exit_codes": {
+        "ok": {"code": 0, "meaning": "已写入并落账 / 预演已输出"},
+        "refused": {"code": 1, "meaning": "拒: --instance 不是本治理根已接入顾问 / 写入方不是本人或 Owner / 凭据不在 / 字数超限 / 空 / status 不在声明(原因与出口在 stderr), 零写入"},
+        "usage": {"code": 2, "meaning": "参数错"},
+        "landing_failed": {"code": 3, "meaning": "已写入但落账未完成(= post_write_landing.landing_failed_exit_code; 出拒因 + 补账命令, 勿重复执行)"}
+      }
+    },
     "lybra_updates": {
       "description": "AIPOS-F167 件②③(Owner 10-16: 产品更新的「顾问须知」由产品自己送达, Owner 零转述): `lybra updates [--actor <实例>] [--all] [--workspace-root <治理根>] [--json]` 列该顾问实例的未读更新说明全文(--all = 全部, 标已读/未读); `lybra updates --ack --actor <实例> [--dry-run|--confirm]` 记已读(两阶段 two_phase_protocol.advisor_update_writers, 落账 post_write_landing.commands.advisor_update_ack)。更新说明 = 卡面 advisor_notice(card.schema fields.advisor_notice)在部署唯一口汇成的产品侧记录(store), 跨项目共享: 任何接入项目的顾问在其治理根运行本命令读同一份库, 已读按本治理根本实例各记(ack)。四出口(charter 开头 / loop status 末尾 / next 末尾 / brief 末尾)经同一渲染 advisor_updates_cli.advisor_banner_lines 显示「Lybra 有 N 条未读更新」(banner), 无未读 / 库不可用 = 不显示(行为不变); 读不出 = 一行告警(不静默, 不掀翻原命令)。审计/执行体的变化仍走章程渲染(AIPOS-F164), 不重复送达。",
       "phase": "render",
@@ -5521,6 +5578,11 @@
             "cli": "lybra migrate decision-log-pointers --confirm",
             "scope": "AIPOS-F160 件③: 本次补生成的 decision_log 指针文件(decision_log_pointers.run_pointer_backfill 的 written); 推导不出 / 不补的不入, 决策记录本身不改不入",
             "message_template": "chore(governance): decision_log 指针补生成 {count} 份\n\nActor: {actor}\nType: governance_commit\nCommand: lybra migrate decision-log-pointers --confirm"
+          },
+          "advisor_headline": {
+            "cli": "lybra project headline --confirm",
+            "scope": "AIPOS-F246 件①: 本次写出的顾问简报记录(records advisor_headlines/<实例>/headline_*.md, 一份)",
+            "message_template": "chore(governance): 顾问简报 {instance}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra project headline --confirm"
           },
           "advisor_update_ack": {
             "cli": "lybra updates --ack --confirm",

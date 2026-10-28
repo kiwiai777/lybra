@@ -3132,6 +3132,24 @@ def build_parser() -> argparse.ArgumentParser:
     project_cleanup_mode.add_argument("--dry-run", action="store_true", help="Preview, zero writes (default)")
     project_cleanup_mode.add_argument("--confirm", action="store_true", help="Remove the work trees judged removable (branches kept)")
     project_cleanup_parser.add_argument("--json", action="store_true", help="JSON output")
+    # AIPOS-F246 件①: 顾问简报(看板首页一页纸卡「现在 / 做成」; 声明 verbs.schema verbs.lybra_project_headline; 唯一实现 advisor_headline)
+    project_headline_parser = project_subparsers.add_parser(
+        "headline",
+        help="AIPOS-F246: write the advisor headline shown on the board home card (now / done, one or two plain sentences each); "
+             "written by that advisor (its credential in this governance root's connection file) or the Owner, others refused; "
+             "append-only record + landing; --dry-run (default) previews, --confirm writes")
+    project_headline_parser.add_argument("--instance", required=True, help="Advisor instance whose headline this is (enrolled in this governance root)")
+    project_headline_parser.add_argument("--title", required=True, help="Project display name on the board card (e.g. the customer project name)")
+    project_headline_parser.add_argument("--stage", default=None, help="Optional stage tag (e.g. delivery)")
+    project_headline_parser.add_argument("--now", required=True, help="Now: what is being pushed, one or two plain sentences")
+    project_headline_parser.add_argument("--done", required=True, help="Recently done: one sentence")
+    project_headline_parser.add_argument("--status", default=None, help="active (default) or paused (the board folds a paused advisor)")
+    project_headline_parser.add_argument("--actor", default=None, help="Writer: the advisor itself (default = --instance) or the declared Owner actor")
+    project_headline_parser.add_argument("--connection-json", default=None, help="Connection file holding the writer credential (default: this governance root's)")
+    project_headline_mode = project_headline_parser.add_mutually_exclusive_group()
+    project_headline_mode.add_argument("--dry-run", action="store_true", help="Preview, zero writes (default)")
+    project_headline_mode.add_argument("--confirm", action="store_true", help="Write the record and land it")
+    project_headline_parser.add_argument("--json", action="store_true", help="JSON output")
     # AIPOS-F143 件②: 项目执行方式声明写入口(project.json execution; 声明 config.schema project_json.execution; update_project_json 唯一写路径)
     project_setexec_parser = project_subparsers.add_parser("set-execution", help="AIPOS-F143: declare the project's execution mode (project.json execution: sub-agent executor by default, Owner-approved task modes may go to a pi executor workstation, audits always by an independent pi auditor); every instance must already be enrolled in this project; --dry-run (default) shows the diff, --confirm writes")
     project_setexec_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory)")
@@ -5169,6 +5187,11 @@ def main(argv: list[str] | None = None) -> int:
             return _workspace_roots_command(args)
         parser.print_help()
         return 2
+
+    if args.command == "project" and getattr(args, "project_command", None) == "headline":
+        # AIPOS-F246 件①: 薄壳 —— 治理根经 _find_repo_root_for_args(子命令级 --workspace-root); 全部逻辑在 advisor_headline
+        from tools.aipos_cli.advisor_headline import run_headline_cli
+        return run_headline_cli(args)
 
     if args.command == "project" and getattr(args, "project_command", None) == "cleanup-worktrees":
         # AIPOS-F187 件④: 薄壳 —— 治理根经 _find_repo_root_for_args(子命令级 --workspace-root), 不走 home 根解析
@@ -7420,6 +7443,10 @@ def main(argv: list[str] | None = None) -> int:
 
                         for line in advisor_banner_lines(Path(ws_root)):
                             print(line)
+                        from tools.aipos_cli.advisor_headline import headline_hint_lines  # AIPOS-F246 件①: 简报超阈值提示一次
+
+                        for line in headline_hint_lines(Path(ws_root)):
+                            print(line)
                     return 0 if result.get("derivable") else 1
             else:
                 # 项目级扫描(AIPOS-F133 件②: --lane 经 machine_zone.resolve_lane_filter 校验后交同一过滤函数)
@@ -7444,6 +7471,10 @@ def main(argv: list[str] | None = None) -> int:
                     from tools.aipos_cli.machine_zone import owner_view_declaration
 
                     for line in advisor_banner_lines(Path(ws_root), getattr(args, str(owner_view_declaration()["dest"]), None)):
+                        print(line)
+                    from tools.aipos_cli.advisor_headline import headline_hint_lines  # AIPOS-F246 件①: 简报超阈值提示一次
+
+                    for line in headline_hint_lines(Path(ws_root), getattr(args, str(owner_view_declaration()["dest"]), None)):
                         print(line)
                 return 0
         except Exception as exc:

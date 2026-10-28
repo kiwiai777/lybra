@@ -420,14 +420,15 @@ def test_item2_inbox_and_envelope_pages_show_request_cards(board, frozen_clock):
     # F174 skeleton: top nav on the page; owner sign client loaded; no read-only note on this page
     nav = re.search(r'<header class="rp-nav">.*?</header>', page).group(0)
     _show(f"[件②·顶部导航原文] {nav}")
-    assert 'href="/owner/inbox" aria-current="page"' in nav and 'href="/owner/envelopes"' in nav and 'href="/owner/overview"' in nav
+    # AIPOS-F246: top nav = home / project / history / engineering; the inbox (with envelopes and the overview) sits under engineering
+    assert 'href="/owner/engineering" data-nav="engineering" aria-current="page"' in nav and 'href="/owner/home"' in nav
     assert '<script src="/envelopes.js"></script>' in page and 'data-owner="true"' in page and "rp-readonly-note" not in page
     assert f'data-owner-inbox-count="{data["count"]}"' in page and FIXTURE_TOKEN not in page
     _snapshot("01-inbox-request-cards.html", page)
     status, env_page = _request(board, "/owner/envelopes")
     top = env_page[env_page.index('<section class="gr-requests"'):env_page.index('<section class="envelope-project"')]
     _show(f"[件②·信封页顶部「待授权请求」标题] {_plain(re.search(r'<h2>.*?</h2>', top).group(0))}")
-    assert status == 200 and "待授权请求(2)" in top and hw1["item_id"] in top and 'href="/owner/envelopes" aria-current="page"' in env_page
+    assert status == 200 and "待授权请求(2)" in top and hw1["item_id"] in top and 'data-nav="engineering" aria-current="page"' in env_page  # AIPOS-F246: envelopes under engineering
     _snapshot("02-envelopes-request-cards.html", env_page)
 
 
