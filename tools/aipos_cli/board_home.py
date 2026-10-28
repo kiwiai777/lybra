@@ -378,25 +378,30 @@ def _ask_entry(item: dict[str, Any], got: dict[str, Any], decl: dict[str, Any], 
 
 
 def _group_asks(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """同一项目同一里程碑的多件验收抽查合并成一件「N 项验收抽查」(可展开逐项), 位置取组内第一件。"""
-    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    """同一项目的多件验收抽查(同一里程碑 / 同类)合并成一件「N 项验收抽查」(可展开逐项), 位置取组内第一件。组名: 同一里程碑 = 里程碑名;
+    跨里程碑但同一顾问 = 顾问显示名; 否则 = 项目名。"""
+    groups: dict[str, list[dict[str, Any]]] = {}
     for e in entries:
-        if e["category"] == "owner_check" and e["milestone"]:
-            groups.setdefault((e["project"], e["milestone"]), []).append(e)
+        if e["category"] == "owner_check":
+            groups.setdefault(e["project"], []).append(e)
     out: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[str] = set()
     for e in entries:
-        key = (e["project"], e["milestone"])
-        members = groups.get(key) if e["category"] == "owner_check" and e["milestone"] else None
+        members = groups.get(e["project"]) if e["category"] == "owner_check" else None
         if not members or len(members) < 2:
             out.append(e)
-        elif key not in seen:
-            seen.add(key)
+        elif e["project"] not in seen:
+            seen.add(e["project"])
             waited = [m["waited_days"] for m in members if m["waited_days"] is not None]
+            milestones = {m["milestone"] for m in members}
+            names = {str(m["values"].get("advisor") or "") for m in members}
+            title = (e["milestone_title"] or e["values"].get("milestone") or "") if len(milestones) == 1 else (
+                next(iter(names)) if len(names) == 1 and "" not in names else e["project"])
             out.append({"group": True, "project": e["project"], "category": e["category"], "rank": e["rank"], "rank_label": e["rank_label"],
-                        "milestone": e["milestone"], "milestone_title": e["milestone_title"] or e["values"].get("milestone") or "",
-                        "count": len(members), "waited_days": max(waited) if waited else None, "children": members,
-                        "look": members[0]["look"], "url": members[0]["url"]})
+                        "milestone": e["milestone"] if len(milestones) == 1 else "", "milestone_title": title, "count": len(members),
+                        "waited_days": max(waited) if waited else None, "children": members,
+                        "look": members[0]["look"] if len(milestones) == 1 else {"url": members[0]["url"], "key": "hm_ask_go"},
+                        "url": members[0]["url"]})
     return out
 
 

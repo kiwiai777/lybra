@@ -479,7 +479,7 @@ def _ask_group_html(ctx: _Ctx, group: dict[str, Any], owner: bool) -> str:
     return (f"<div class=\"hm-ask hm-group\" data-rank=\"{_ESC(str(group.get('rank')))}\" data-project=\"{_ESC(group['project'])}\""
             f" data-group=\"{group['count']}\"><div class=\"hm-what\"><div class=\"hm-t\">{_ESC(head)}{_authored(group['milestone_title'])}"
             f"{_ESC(tail)}</div><div class=\"hm-d\">{_ESC(str(group.get('rank_label') or ''))} · {_ESC(waited)} · "
-            f"<a href=\"{_ESC(ctx.href(group['look']['url']))}\">{_ESC(ctx.t('hm_look_artifacts'))}</a></div>"
+            f"<a href=\"{_ESC(ctx.href(group['look']['url']))}\">{_ESC(ctx.t(group['look'].get('key') or 'hm_look_artifacts'))}</a></div>"
             f"<details class=\"hm-fold\"><summary>{_ESC(ctx.t('hm_group_open'))}</summary>{children}</details></div></div>")
 
 
