@@ -74,14 +74,10 @@ def declaration() -> dict[str, Any]:
 
 
 def legacy_choices() -> tuple[str, ...]:
-    """历史存量筛选值域唯一读取口(enums.schema history_legacy_filter; CLI choices / 看板筛选 / 检索同读)。须恰含 include / only / exclude
-    (检索按这三个值分支), 否则 SchemaLoadError。"""
-    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, get_enum_values
+    """历史存量筛选值域唯一读取口(enums.schema history_legacy_filter 的投影; CLI choices / 看板筛选 / 检索同读)。"""
+    from tools.schema_loader import code_repo_schema_root, get_enum_values
 
-    values = tuple(get_enum_values(LEGACY_ENUM, code_repo_schema_root()))
-    if sorted(values) != sorted(("include", "only", "exclude")):
-        raise SchemaLoadError(f"enums.schema.json {LEGACY_ENUM} 须恰为 include / only / exclude, 得到 {list(values)}")
-    return values
+    return tuple(get_enum_values(LEGACY_ENUM, code_repo_schema_root()))
 
 
 def _decl_digest(decl: dict[str, Any]) -> str:
