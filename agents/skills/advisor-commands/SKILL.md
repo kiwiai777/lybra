@@ -850,6 +850,21 @@ lybra project headline --workspace-root <治理根> --instance <你的顾问实�
 
 ---
 
+## 收件箱推荐 `lybra owner recommend`(AIPOS-F248 · 看板「需要你」推荐与一键)
+
+Owner 在看板首页「需要你」里每件看到: 人话标题 + 一句为什么找他 + 「看产物 →」+ **推荐按钮(主色实心, 标「推荐」)** + 其他选项小字; 点推荐 → 一行确认 → 确认即生效(验收抽查「符合 / 不符」、授权续期「续 N 天」、其余收件箱裁决都在看板直接落, 不再转话)。
+
+- **你要做的**: 提交需要 Owner 抽查的产物(卡面 `artifacts` 挂 owner_check 标准)或升 Owner 的事时, **同时给推荐与一句理由**——没有推荐 = 看板选项平列, Owner 得自己琢磨。
+- **怎么写**: 理由一句人话写给 Owner(为什么建议这个选项、看哪里能确认), 不写卡号 / 授权编号 / 实例全名; 字数上限读 `verbs.schema lybra_owner_recommend.reason_max_chars`。只能该事项的转达顾问本人(`lybra owner inbox` 里「转达」那位)或 Owner 写, 他人拒; 事项真相变了(新交付 = 新事项)推荐自动失效, 需要再写。
+- **命令**(事项 ID 取自 `lybra owner inbox --json` 的 `item_id`; 缺省预演零写入, `--confirm` 写入并落账):
+
+```bash
+lybra owner recommend --item <事项ID> --choice owner_confirm --reason "首页截图里导航与卡片布局都和设计稿一致" --confirm
+```
+
+- **产品缺省**(不用你写): 授权将尽 = 按原范围续期(天数 / 张数取原授权); 授权用完或不覆盖的请求 = 按你的请求签发。你写了推荐会覆盖缺省的理由。
+- **裁完自动告知你**: Owner 在看板裁决 / 抽查 / 续期落账后, 你下一次 `lybra next` / `lybra loop status` 末尾出现「Owner 在看板直接定了 N 件」原文(含 Owner 原话); 照常续推相关卡, 不必等 Owner 转话。不符会自动起草修复卡, 按提示预演发布。
+
 ## 已退役路径(手写门接口债)
 
 **状态**:顾问手写脚本直接调门接口(代按认领、手按两跳确认、手提裁决)的路径**已退役**(LOOP-REDESIGN §4.5 A12, AIPOS-F90 件③),

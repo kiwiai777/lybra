@@ -112,7 +112,8 @@
 
   Array.prototype.forEach.call(document.querySelectorAll('.ib-decide[data-ib-item]'), function (block) {
     block.addEventListener('click', function (event) {
-      var target = event.target;
+      // AIPOS-F248: the recommended button carries a small tag; a click on it still means its button
+      var target = event.target && event.target.closest ? event.target.closest('[data-ib-choice]') : event.target;
       var choice = target && target.getAttribute && target.getAttribute('data-ib-choice');
       if (!choice) { return; }
       start(block, choice, target.getAttribute('data-ib-label') || choice);

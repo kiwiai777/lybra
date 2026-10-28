@@ -3743,6 +3743,24 @@ body.rp-page { margin: 0; background: var(--surface-page); color: var(--ink); fo
 .rp-page .hm-ask .hm-t { font-weight: 700; font-size: var(--text-lead); }
 .rp-page .hm-ask .hm-d { color: var(--muted); font-size: var(--text-note); }
 .rp-page .hm-ask .hm-d a { font-weight: 600; }
+/* AIPOS-F248: needs-you recommendation + one click (recommended = solid brand button tagged; other options = small text links) */
+.rp-page .hm-acts { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
+.rp-page button.hm-btn { background: var(--green); border-color: var(--green); color: var(--white); font-weight: 700; padding: 10px 20px;
+  font-size: var(--text-lead); white-space: nowrap; }
+.rp-page button.hm-btn small { display: block; font-size: 11px; font-weight: 600; letter-spacing: 1px; }
+.rp-page button.hm-btn:hover { background: var(--green-dark); border-color: var(--green-dark); }
+.rp-page button.hm-btn.hm-btn-small { padding: 5px 14px; font-size: var(--text-note); }
+.rp-page .hm-alt, .rp-page button.hm-alt { color: var(--muted); background: none; border: 0; padding: 0; font-weight: 400;
+  font-size: var(--text-note); text-decoration: underline; cursor: pointer; white-space: nowrap; }
+.rp-page .hm-ask .hm-why { color: var(--ink); }
+.rp-page .hm-bar-line { display: flex; align-items: center; gap: 12px; margin-top: 8px; font-size: var(--text-note); color: var(--green-dark); }
+.rp-page .hm-bar-line[hidden] { display: none; }
+.rp-page .hm-bar-line .hm-words { flex: 1; font: inherit; padding: 5px 8px; border: var(--border-hairline); }
+.rp-page .hm-ask.done { background: var(--mint); border-left-color: var(--green-bright); }
+.rp-page .hm-ask.done .hm-acts { color: var(--green); font-weight: 700; }
+.rp-page .hm-ask.hm-group { display: block; }
+.rp-page .hm-group .hm-ask { margin: 10px 0 0; }
+.rp-page .hm-group > .hm-what > .hm-fold > summary { cursor: pointer; color: var(--green); font-weight: 600; margin-top: 6px; }
 .rp-page .hm-more { display: block; text-align: right; font-weight: 600; margin-top: 6px; }
 .rp-page .hm-quiet { color: var(--muted); }
 .rp-page .hm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }

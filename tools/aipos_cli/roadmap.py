@@ -958,14 +958,16 @@ def _fix_draft_payload(governance_root: Path, source_meta: dict[str, Any], *, fi
 
 def apply_owner_verification(governance_root: str | Path, *, criterion: str, result: str, relayed_by: str | None,
                              owner_words: str | None, note: str | None = None, card: str | None = None, actor: str = "owner",
-                             confirm: bool, project: str, push: bool = True) -> dict[str, Any]:
+                             confirm: bool, project: str, push: bool = True, board: dict[str, Any] | None = None) -> dict[str, Any]:
     """Owner 抽查结论两阶段写(唯一实现)。转达人 / 原话缺 = owner_inbox.InboxUsageError(用法错, 与 owner decide 同一校验)。
     预演: 推导该标准状态(roadmap_drift.roadmap_status), 核前置, 渲染将写的 owner_verifications 记录(writer dry_run)与不符时的修复卡草稿
     (draft_writer.create_draft dry_run), 零写入。确认: 写记录 → (不符)写草稿(owner_check_ref = 本次记录 id)→ land_written_paths 落账。
     拒 = RoadmapError(code ∈ verify.reject_codes)。返回 {dry_run, written, criterion, milestone, task_id, result, label, state_before,
     state_after, record{path, record_id, rendered}, fix{task_id, path, rendered, publish_hint} | None, fix_error, fix_manual, landing}。
     AIPOS-F180C 不连坐: 修复卡起草被拒不拦抽查记录——预演照常渲染记录, fix = None、fix_error = 拒因、fix_manual = 手工出卡指引;
-    确认先写记录, 起草预演已被拒则不写草稿, 记录照样落账(调用方见 fix_error 非零退出); 记录 fix_task_id 仍为预留卡号(标准状态「待出」)。"""
+    确认先写记录, 起草预演已被拒则不写草稿, 记录照样落账(调用方见 fix_error 非零退出); 记录 fix_task_id 仍为预留卡号(标准状态「待出」)。
+    AIPOS-F248 件②①: board = 看板一键抽查来源(owner_inbox.handle_board_decide 传入: decided_via / inbox_item / relay_to / captured_by /
+    capture_surface), 进记录同名字段; 缺省 = CLI 口径(decided_via cli)不变。"""
     from tools.aipos_cli.draft_writer import create_draft
     from tools.aipos_cli.frontmatter import require_frontmatter
     from tools.aipos_cli.owner_inbox import relay_fields
@@ -1006,6 +1008,10 @@ def apply_owner_verification(governance_root: str | Path, *, criterion: str, res
     payload = {"task_id": target, "decision": spec["decision"], "reason": note or words, "decided_via": "cli", "workspace": project,
                "milestone": str(ms["id"]), "criterion": criterion, "result": result, "relayed_by": relayed, "owner_words": words,
                "note": note, "fix_task_id": fix_task_id}
+    if board:
+        from tools.aipos_cli.owner_verification_writer import BOARD_FIELDS
+
+        payload.update({k: board[k] for k in ("decided_via", *BOARD_FIELDS) if board.get(k)})
     record = build_owner_verification_record(root, payload, actor=actor, dry_run=True)
     out: dict[str, Any] = {"dry_run": not confirm, "written": False, "criterion": criterion, "statement": row["statement"],
                            "milestone": ms["id"], "task_id": target, "result": result, "label": spec["label"],

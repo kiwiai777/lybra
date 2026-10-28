@@ -1553,7 +1553,8 @@
       "bench_audit": {"location": "5_tasks/records/bench_audit/{task_id}/bench_{task_id}_{timestamp}.md", "record_types": ["bench_audit"], "timestamp_style": "compact_t", "legacy_filenames": []},
       "authoring_provenance": {"location": "5_tasks/records/authoring_provenance/{attempt_id}.md", "record_types": ["authoring_provenance"], "timestamp_style": null, "legacy_filenames": []},
       "advisor_update_acks": {"location": "5_tasks/records/advisor_update_acks/{agent_instance}/ack_{agent_instance}_{timestamp}.md", "record_types": ["advisor_update_ack"], "timestamp_style": "compact", "legacy_filenames": [], "note": "AIPOS-F167 件③: 顾问实例对 Lybra 更新说明的已读标记(每项目每实例一个目录, 只追加; 已读集合 = 该目录全部记录 acked_update_ids 的并集; 写入 + 落账唯一实现 advisor_updates_cli.ack_updates, 读取 advisor_updates.acked_update_ids)"},
-      "advisor_headlines": {"location": "5_tasks/records/advisor_headlines/{agent_instance}/headline_{agent_instance}_{timestamp}.md", "record_types": ["advisor_headline"], "timestamp_style": "compact", "legacy_filenames": [], "note": "AIPOS-F246 件①: 顾问简报(每项目每顾问实例一个目录, 只追加; 看板取最新一条; 写入 + 落账唯一实现 advisor_headline.write_headline, 读取 advisor_headline.latest_headlines)"}
+      "advisor_headlines": {"location": "5_tasks/records/advisor_headlines/{agent_instance}/headline_{agent_instance}_{timestamp}.md", "record_types": ["advisor_headline"], "timestamp_style": "compact", "legacy_filenames": [], "note": "AIPOS-F246 件①: 顾问简报(每项目每顾问实例一个目录, 只追加; 看板取最新一条; 写入 + 落账唯一实现 advisor_headline.write_headline, 读取 advisor_headline.latest_headlines)"},
+      "owner_recommendations": {"location": "5_tasks/records/owner_recommendations/{item_id}/recommend_{item_id}_{timestamp}.md", "record_types": ["owner_recommendation"], "timestamp_style": "compact", "legacy_filenames": [], "note": "AIPOS-F248 件①: 收件箱事项推荐(每事项一个目录, 只追加; 取最新且事项哈希相符者; 写入 + 落账唯一实现 owner_recommend.write_recommendation, 读取 owner_recommend.recommendation_for)"}
     }
   },
   "queue_mutations": {

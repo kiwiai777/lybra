@@ -3175,6 +3175,10 @@ def loop_status_cli(args: Any) -> int:
 
         for line in headline_hint_lines(governance_root, getattr(args, "actor", None)):
             print(line)
+        from tools.aipos_cli.owner_inbox import board_notice_lines  # AIPOS-F248 件④: Owner 在看板直接定的事(顾问零转话)
+
+        for line in board_notice_lines(governance_root, getattr(args, "actor", None)):
+            print(line)
     if task_id and not report["runs"]:
         return declared_exit_code(STATUS_VERB, "no_run")
     if wait is not None and report.get("deploy_changed"):  # AIPOS-F152 件①: 等待中部署已更新 = 声明出口 deploy_changed

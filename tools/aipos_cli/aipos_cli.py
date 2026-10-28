@@ -1266,7 +1266,11 @@ def _owner_command(args: argparse.Namespace) -> int:
         if report["rc_outcome"] == "landing_failed":
             return int(next((lg.get("exit_code") for lg in landings if not lg.get("landed")), 1) or 1)
         return declared_exit_code(DECIDE_VERB, report["rc_outcome"])
-    print("lybra owner: 须给子命令 inbox | decide", file=sys.stderr)
+    if action == "recommend":  # AIPOS-F248 件①: 薄壳, 全部逻辑在 owner_recommend
+        from tools.aipos_cli.owner_recommend import run_recommend_cli
+
+        return run_recommend_cli(args)
+    print("lybra owner: 须给子命令 inbox | decide | recommend", file=sys.stderr)
     return 2
 
 
@@ -3660,6 +3664,20 @@ def build_parser() -> argparse.ArgumentParser:
     owner_decide_parser.add_argument("--actor", default="owner", help="裁决人身份(缺省 owner)")
     owner_decide_parser.add_argument("--confirm", action="store_true", default=False, help="写入并落账; 缺省预演")
     owner_decide_parser.add_argument("--json", action="store_true", help="JSON 输出")
+    # AIPOS-F248 件①: 收件箱事项推荐(看板「需要你」推荐按钮; 声明 verbs.schema verbs.lybra_owner_recommend; 唯一实现 owner_recommend)
+    owner_recommend_parser = owner_actions.add_parser(
+        "recommend", help="AIPOS-F248: 给收件箱事项写推荐选项 + 一句理由(看板推荐按钮主色实心标「推荐」); 写入方 = 该事项转达顾问本人或 Owner; "
+                          "事项真相变了推荐自动失效; 缺省预演零写入, --confirm 写只追加记录并落账")
+    owner_recommend_parser.add_argument("--item", required=True, help="事项 ID(收件箱列出的 OI-…)")
+    owner_recommend_parser.add_argument("--choice", required=True, help="推荐的选项键(该事项列出的选项之一)")
+    owner_recommend_parser.add_argument("--reason", required=True, help="一句人话理由(单行; 字数上限读 verbs.schema lybra_owner_recommend.reason_max_chars)")
+    owner_recommend_parser.add_argument("--actor", default=None, help="写入方: 该事项转达顾问(缺省)或 owner")
+    owner_recommend_parser.add_argument("--home-root", help="home 根; 缺省 = resolve_home_root 同一优先级梯")
+    owner_recommend_parser.add_argument("--connection-json", default=None, help="写入方凭据所在连接文件(缺省 = 该事项治理根的连接文件)")
+    owner_recommend_mode = owner_recommend_parser.add_mutually_exclusive_group()
+    owner_recommend_mode.add_argument("--dry-run", action="store_true", help="预演, 零写入(缺省)")
+    owner_recommend_mode.add_argument("--confirm", action="store_true", help="写入并落账")
+    owner_recommend_parser.add_argument("--json", action="store_true", help="JSON 输出")
 
     # AIPOS-F138 件①: lybra charter — 拉取式输出实例的渲染后章程(他机会话开局经 ssh 读取; 参数由 verbs.schema lybra_charter 生成)
     from tools.aipos_cli.charter_render import add_charter_arguments as _add_charter_arguments
@@ -7447,6 +7465,10 @@ def main(argv: list[str] | None = None) -> int:
 
                         for line in headline_hint_lines(Path(ws_root)):
                             print(line)
+                        from tools.aipos_cli.owner_inbox import board_notice_lines  # AIPOS-F248 件④: Owner 在看板直接定的事
+
+                        for line in board_notice_lines(Path(ws_root)):
+                            print(line)
                     return 0 if result.get("derivable") else 1
             else:
                 # 项目级扫描(AIPOS-F133 件②: --lane 经 machine_zone.resolve_lane_filter 校验后交同一过滤函数)
@@ -7475,6 +7497,10 @@ def main(argv: list[str] | None = None) -> int:
                     from tools.aipos_cli.advisor_headline import headline_hint_lines  # AIPOS-F246 件①: 简报超阈值提示一次
 
                     for line in headline_hint_lines(Path(ws_root), getattr(args, str(owner_view_declaration()["dest"]), None)):
+                        print(line)
+                    from tools.aipos_cli.owner_inbox import board_notice_lines  # AIPOS-F248 件④: Owner 在看板直接定的事
+
+                    for line in board_notice_lines(Path(ws_root), getattr(args, str(owner_view_declaration()["dest"]), None)):
                         print(line)
                 return 0
         except Exception as exc:

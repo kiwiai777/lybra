@@ -801,6 +801,18 @@ def _card_routes_to_pi(root: Path, card_fm: dict[str, Any], *, task_id: str = ""
     return EXECUTION_MODE_PI if EXECUTION_MODE_PI in stages else None
 
 
+def grant_request_payload(item: dict[str, Any]) -> dict[str, Any]:
+    """授权请求「按建议签发」的 F172 写例外①请求体唯一构造(看板「待授权请求」卡 / AIPOS-F248 首页「需要你」一键同读): mode = new(参数 = 建议;
+    request_item = 事项 ID); grant.kind = authorization = mode authorization / action extend, 建议授权块原样。"""
+    g = item["grant"]
+    if g.get("kind") == "authorization":  # AIPOS-F224: extend the project grant instead of a new envelope
+        return {"workspace": item["project"], "mode": "authorization", "action": "extend", "block": g["authorization"],
+                "request_item": item["item_id"]}
+    return {"workspace": item["project"], "mode": "new", "agent_or_role": g["agent_or_role"], "task_mode": g["task_mode"],
+            "lane_repo": list(g["lane_repos"]), "launch_harness": list(g["launch_harnesses"]), "max_tasks": g["max_tasks"],
+            "expires_at": g["expires_at"], "policy_id": g["policy_id"], "request_item": item["item_id"]}
+
+
 def grant_line(item: dict[str, Any], decl: dict[str, Any] | None = None) -> str:
     """授权请求一行人话(CLI 收件箱 / 收件箱页事项行同用; 文案读 grant_request.texts)。"""
     g = grant_declaration(decl)
@@ -1482,6 +1494,13 @@ def collect_project_inbox(governance_root: Path, *, project: str | None = None, 
     decided: list[dict[str, Any]] = []
     relays: list[dict[str, Any]] = []
     with task_card_lookup_scope(root):
+        from tools.aipos_cli.owner_recommend import recommendation_for, recommendation_index
+
+        try:  # AIPOS-F248 件①: 本根有推荐记录的事项(一次列举)
+            rec_index: set[str] | None = recommendation_index(root)
+        except (OSError, ValueError) as exc:
+            rec_index = None
+            errors.append({"project": name, "source": "收件箱推荐", "error": f"{type(exc).__name__}: {exc}"})
         for category, collect in _COLLECTORS:
             if categories is not None and category not in categories:
                 continue
@@ -1504,6 +1523,12 @@ def collect_project_inbox(governance_root: Path, *, project: str | None = None, 
                     continue
                 tier = int(item.get("owner_tier") or category_tier(category, decl))  # AIPOS-F232 件①: 事项级降档(旧顾问请求)优先
                 item["owner_tier"] = tier
+                item["recommended"] = None
+                if not ruling and rec_index is not None:  # AIPOS-F248 件①: 推荐(顾问 / Owner 记录, 否则产品缺省; 事项哈希不等 = 失效)
+                    try:
+                        item["recommended"] = recommendation_for(root, item, index=rec_index)
+                    except (OSError, ValueError, LookupError, RuntimeError, FrontmatterReadError) as exc:
+                        errors.append({"project": name, "source": f"推荐 {item['item_id']}", "error": f"{type(exc).__name__}: {exc}"})
                 (decided if ruling else items if tier == 1 else notices).append(item)
                 if ruling:  # AIPOS-F201 item 3 (a): ruled, but the truth still stands = the advisor has not continued
                     entry = _decision_relay(root, item, ruling, decl)
@@ -2080,6 +2105,11 @@ def item_lines(item: dict[str, Any], texts: dict[str, Any]) -> list[str]:
     elif item.get("grant_error"):
         lines.append(_fmt(grant_declaration()["texts"]["unavailable"], "grant_request.texts.unavailable", why=item["grant_error"],
                           task_id=item.get("task_id") or ""))
+    from tools.aipos_cli.owner_recommend import recommendation_line
+
+    rec_line = recommendation_line(item)  # AIPOS-F248 件①: 结构化推荐(看板推荐按钮同一数据)
+    if rec_line:
+        lines.append(rec_line)
     if item.get("recommend"):
         lines.append(_fmt(texts["recommend"], "texts.recommend", recommend=item["recommend"]))
     elif item["category"] == "loop_owner_needed":
@@ -2234,10 +2264,19 @@ def _client_tag(project: str) -> str:
     return client_tag(project)
 
 
-def _canonical_item(item: dict[str, Any]) -> str:
-    keep = {k: item.get(k) for k in ("item_id", "project", "category", "subject", "task_id", "policy_id", "ask", "recommend",
-                                     "impact", "options", "anchor", "source")}
+_CANONICAL_KEYS = ("item_id", "project", "category", "subject", "task_id", "policy_id", "ask", "recommend", "impact", "options", "anchor",
+                   "source")
+
+
+def _canonical_item(item: dict[str, Any], keys: tuple[str, ...] | list[str] | None = None) -> str:
+    keep = {k: item.get(k) for k in (keys or _CANONICAL_KEYS)}
     return json.dumps(keep, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def item_hash(item: dict[str, Any], keys: tuple[str, ...] | list[str] | None = None) -> str:
+    """事项哈希唯一构造(所裁事项规范 JSON 的 sha256): 决策记录 evidence_hash / 看板一键参数摘要 item_hash(缺省键 = 全部所裁内容)同读;
+    AIPOS-F248 推荐失效判定传声明 lybra_owner_recommend.hash_basis(只看事项身份与问题本身, 不看随时刻 / 里程碑进度变的说明文字)。"""
+    return hashlib.sha256(_canonical_item(item, keys).encode("utf-8")).hexdigest()
 
 
 def relay_fields(relayed_by: str | None, owner_words: str | None) -> tuple[str, str]:
@@ -2299,7 +2338,7 @@ def build_decision_payload(item: dict[str, Any], choice: str, note: str | None, 
         "owner_approval_evidence": {
             "evidence_id": f"{d['source_tag']}:{item['item_id']}", "source_tag": d["source_tag"], "client_tag": tag,
             "external_ref": external_ref, "approval_actor_ref": actor, "approval_timestamp": decided_at,
-            "approval_intent": d["approval_intent"], "evidence_hash": hashlib.sha256(_canonical_item(item).encode("utf-8")).hexdigest(),
+            "approval_intent": d["approval_intent"], "evidence_hash": item_hash(item),
             "evidence_ref": None, "captured_by": relayed_by, "capture_method": d["capture_method"], "redaction_status": d["redaction_status"],
             "refs": [external_ref],
         },
@@ -2717,7 +2756,8 @@ def next_ruling_lines(governance_root: Path, task_id: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 _BOARD_DECIDE_KEYS = ("write_path", "script_path", "action", "capture_surface", "capture_method", "token_ref", "ruled_param",
-                      "owner_words_max_chars", "excluded_categories", "texts", "errors")
+                      "owner_words_max_chars", "excluded_categories", "verify", "texts", "errors")
+_BOARD_VERIFY_KEYS = ("categories", "results", "words_required", "decided_via", "texts")
 #: handle_owner_write 框架拒因 + 本写例外拒因(声明 errors 须全有; 码与状态码 / 文案读声明)
 _BOARD_DECIDE_ERRORS = ("OWNER_ONLY", "ORIGIN_MISMATCH", "WORKSPACE_REQUIRED", "WORKSPACE_NOT_IN_HOME", "PARAMS_INVALID", "STAGE_INVALID",
                         "ITEM_NOT_FOUND", "ALREADY_RULED", "CHOICE_INVALID", "PREVIEW_BLOCKED", "PREVIEW_TOKEN_REQUIRED", "PREVIEW_TOKEN_INVALID",
@@ -2747,8 +2787,9 @@ def board_decide_declaration(decl: dict[str, Any] | None = None) -> dict[str, An
     texts = spec["texts"]
     lines = texts.get("preview_lines") if isinstance(texts, dict) else None
     if (not isinstance(lines, list) or not lines or not all(isinstance(x, str) and x for x in lines)
-            or not all(isinstance(texts.get(k), str) for k in ("release_none", "release_part", "relay_part"))):
-        raise SchemaLoadError(f"{where}.texts 须有非空 preview_lines 与 release_none / release_part / relay_part")
+            or not all(isinstance(texts.get(k), str) for k in ("release_none", "release_part", "relay_part", "confirm_line", "confirm_words_part"))):
+        raise SchemaLoadError(f"{where}.texts 须有非空 preview_lines 与 release_none / release_part / relay_part / confirm_line / confirm_words_part")
+    _check_board_verify(spec, d, where)
     errors = spec["errors"]
     if not isinstance(errors, dict) or set(errors) != set(_BOARD_DECIDE_ERRORS):
         raise SchemaLoadError(f"{where}.errors 键须恰为 {list(_BOARD_DECIDE_ERRORS)}")
@@ -2756,6 +2797,60 @@ def board_decide_declaration(decl: dict[str, Any] | None = None) -> dict[str, An
         if not isinstance(err, dict) or not isinstance(err.get("status"), int) or not str(err.get("message") or "").strip():
             raise SchemaLoadError(f"{where}.errors.{code} 须有 int status 与非空 message")
     return spec
+
+
+def _check_board_verify(spec: dict[str, Any], decl: dict[str, Any], where: str) -> None:
+    """AIPOS-F248 件②①: board.decide.verify(fail-closed): 键齐; categories ⊆ 收件箱类别; results = 选项键 → roadmap verify 结论
+    (verify_declaration().results 的键); words_required ⊆ results 的键; decided_via ∈ owner_verification_writer.ALLOWED_DECIDED_VIA;
+    texts.preview_lines 非空字符串列表 + fix_none / fix_part / fix_blocked / words_required。"""
+    from tools.aipos_cli.owner_verification_writer import ALLOWED_DECIDED_VIA, RESULT_DECISIONS
+    from tools.schema_loader import SchemaLoadError
+
+    v = spec.get("verify")
+    if not isinstance(v, dict) or any(k not in v for k in _BOARD_VERIFY_KEYS):
+        raise SchemaLoadError(f"{where}.verify 未声明齐 {list(_BOARD_VERIFY_KEYS)}")
+    if not isinstance(v["categories"], list) or not set(v["categories"]) <= set(decl["categories"]):
+        raise SchemaLoadError(f"{where}.verify.categories 须为 categories 内的类别列表")
+    results = v["results"]
+    if (not isinstance(results, dict) or not results or not set(results) <= set(decl["options"])
+            or not set(results.values()) <= set(RESULT_DECISIONS)):
+        raise SchemaLoadError(f"{where}.verify.results 须为 {{选项键: {sorted(RESULT_DECISIONS)} 之一}}")
+    if not isinstance(v["words_required"], list) or not set(v["words_required"]) <= set(results):
+        raise SchemaLoadError(f"{where}.verify.words_required 须为 results 的键列表")
+    if v["decided_via"] not in ALLOWED_DECIDED_VIA:
+        raise SchemaLoadError(f"{where}.verify.decided_via 须 ∈ {sorted(ALLOWED_DECIDED_VIA)}")
+    t = v["texts"]
+    lines = t.get("preview_lines") if isinstance(t, dict) else None
+    if (not isinstance(lines, list) or not lines or not all(isinstance(x, str) and x for x in lines)
+            or not all(isinstance(t.get(k), str) for k in ("fix_none", "fix_part", "fix_blocked", "words_required"))):
+        raise SchemaLoadError(f"{where}.verify.texts 须有非空 preview_lines 与 fix_none / fix_part / fix_blocked / words_required")
+
+
+def board_verification_record(governance_root: Path, item_id: str, decl: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """AIPOS-F248: 该事项在看板一键抽查落下的 owner_verifications 记录(frontmatter inbox_item = 事项 ID; 取最新)或 None。
+    重复确认 = ALREADY_RULED 点名本记录。读不出 = FrontmatterReadError 向上。"""
+    rows = [r for r in board_verification_records(Path(governance_root), decl) if r.get("inbox_item") == item_id]
+    return rows[-1] if rows else None
+
+
+def board_verification_records(governance_root: Path, decl: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """看板一键抽查的 owner_verifications 记录(decided_via = board.decide.verify.decided_via 且带 inbox_item), 按记录时刻旧→新;
+    每条 = frontmatter + record(治理根相对路径)。目录不在 = []; 读不出 = FrontmatterReadError 向上。"""
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.record_writer import record_root
+
+    root = Path(governance_root)
+    base = root / record_root("owner_verifications")
+    if not base.is_dir():
+        return []
+    via = str(board_decide_declaration(decl)["verify"]["decided_via"])
+    out = []
+    for path in sorted(base.glob("*/*.md")):
+        fm, _body = require_frontmatter(path)
+        if str(fm.get("decided_via") or "") == via and fm.get("inbox_item"):
+            out.append({**fm, "record": path.relative_to(root).as_posix()})
+    out.sort(key=lambda r: (str(r.get("decided_at") or ""), r["record"]))
+    return out
 
 
 def board_decide_capture(session: dict[str, Any], spec: dict[str, Any] | None = None) -> dict[str, str]:
@@ -2839,6 +2934,33 @@ def _board_blocked_detail(report: dict[str, Any]) -> str:
     return json.dumps(reasons or [report.get("rc_outcome")], ensure_ascii=False)[:800]
 
 
+def board_confirm_line(spec: dict[str, Any], item: dict[str, Any], label: str, owner_words: str | None) -> str:
+    """AIPOS-F248 件②: 看板一行确认条(点按钮 → 预演 → 这一行 → 确认; 文案 board.decide.texts.confirm_line)。"""
+    texts = spec["texts"]
+    words = str(owner_words or "").strip()
+    part = _fmt(texts["confirm_words_part"], f"{VERB}.board.decide.texts.confirm_words_part", owner_words=words) if words else ""
+    return _fmt(texts["confirm_line"], f"{VERB}.board.decide.texts.confirm_line", label=label, words_part=part,
+                advisor=item.get("relay_to") or relay_texts()["unknown_advisor"])
+
+
+def _verify_preview_lines(spec: dict[str, Any], item: dict[str, Any], params: dict[str, Any], outcome: dict[str, Any],
+                          capture: dict[str, str]) -> list[str]:
+    t = spec["verify"]["texts"]
+    where = f"{VERB}.board.decide.verify.texts"
+    if outcome.get("fix"):
+        fix_line = _fmt(t["fix_part"], f"{where}.fix_part", task_id=outcome["fix"]["task_id"], path=outcome["fix"]["path"])
+    elif outcome.get("fix_error"):
+        fix_line = _fmt(t["fix_blocked"], f"{where}.fix_blocked", reason=outcome["fix_error"])
+    else:
+        fix_line = str(t["fix_none"])
+    values = {"item_id": item["item_id"], "project": item["project"], "subject": item["subject"], "result": outcome["result"],
+              "label": outcome["label"], "state_before": outcome["state_before"], "state_after": outcome["state_after"],
+              "owner_words": params["owner_words"], "record_path": (outcome.get("record") or {}).get("path") or "?",
+              "captured_by": capture["captured_by"], "capture_surface": capture["capture_surface"], "fix_line": fix_line,
+              "advisor": item.get("relay_to") or relay_texts()["unknown_advisor"]}
+    return [_fmt(line, f"{where}.preview_lines", **values) for line in t["preview_lines"]]
+
+
 def handle_board_decide(
     body: dict[str, Any],
     *,
@@ -2853,12 +2975,17 @@ def handle_board_decide(
     """看板写例外③(唯一写路由 board.decide.write_path): 安全判定全在 envelope_board.handle_owner_write(F172 同一框架: Owner 会话 /
     Origin / JSON / workspace / 本会话一次性预演令牌 / 看板审计日志); 本函数只给三个回调, 裁决本身 = decide 同一实现(预演 / --confirm)。
     请求体 {workspace, stage, item_id, choice, owner_words?, preview_token?}。actor = 会话 Owner 角色; relayed_by = Owner 本人
-    (lybra_owner_decide.relay.owner_self); 来源字段 = board_decide_capture(会话)。"""
+    (lybra_owner_decide.relay.owner_self); 来源字段 = board_decide_capture(会话)。
+    AIPOS-F248 件②①: 验收抽查类(board.decide.verify.categories)走同一路由同一框架, 裁决本身 = `lybra roadmap verify` 同一实现
+    roadmap.apply_owner_verification(记 owner_verifications, relayed_by 同为 owner_self; 记录另带 inbox_item / relay_to / 会话来源);
+    words_required 的选项(不符)须带一句 Owner 原话。预演应答另带 confirm_line(看板一行确认条)。"""
     from tools.aipos_cli.envelope_board import MintRequestError, handle_owner_write
+    from tools.aipos_cli.roadmap import RoadmapError
     from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
 
     decl = inbox_declaration()
     spec = board_decide_declaration(decl)
+    verify = spec["verify"]
     relay = ((load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get(DECIDE_VERB) or {}).get("relay") or {}
     if not isinstance(relay.get("owner_self"), str) or not relay["owner_self"].strip():
         raise SchemaLoadError(f"verbs.schema.json verbs.{DECIDE_VERB}.relay.owner_self 未声明")
@@ -2875,28 +3002,64 @@ def handle_board_decide(
             if ruling:
                 raise MintRequestError("ALREADY_RULED", item_id=iid, decision_id=ruling.get("decision_id") or "?",
                                        choice=ruling.get("allowed_next_action") or "?", decided_at=ruling.get("decided_at") or "?") from exc
+            checked = board_verification_record(root, iid, decl)  # AIPOS-F248: 已在看板抽查过 = 点名抽查记录
+            if checked:
+                raise MintRequestError("ALREADY_RULED", item_id=iid, decision_id=checked["record"], choice=checked.get("result") or "?",
+                                       decided_at=checked.get("decided_at") or "?") from exc
             raise MintRequestError("ITEM_NOT_FOUND", item_id=iid) from exc
         except (OSError, ValueError, RuntimeError) as exc:
             raise MintRequestError("PREVIEW_BLOCKED", detail=f"{type(exc).__name__}: {exc}") from exc
         if item["project"] != project:
             raise MintRequestError("PARAMS_INVALID", detail=f"事项 {iid} 属项目 {item['project']}, 不是 workspace {project}")
-        if item["category"] in spec["excluded_categories"] or decl["categories"][item["category"]].get("decide_redirect"):
+        is_verify = item["category"] in verify["categories"]
+        redirect = decl["categories"][item["category"]].get("decide_redirect")
+        if item["category"] in spec["excluded_categories"] or (redirect and not is_verify):
             raise MintRequestError("CHOICE_INVALID", detail=f"事项 {iid}({item['category']})不在看板裁决: "
-                                                            + _fmt(decl["categories"][item["category"]].get("decide_redirect") or "{item_id}",
-                                                                   f"categories.{item['category']}.decide_redirect", item_id=iid,
-                                                                   verify_command=(item.get("facts") or {}).get("verify_command") or ""))
+                                                            + _fmt(redirect or "{item_id}", f"categories.{item['category']}.decide_redirect",
+                                                                   item_id=iid, verify_command=(item.get("facts") or {}).get("verify_command") or ""))
         label = next((o["label"] for o in item["options"] if o["key"] == choice), None)
+        if is_verify:
+            if choice not in verify["results"] or label is None:
+                raise MintRequestError("CHOICE_INVALID", detail=f"事项 {iid} 只认 {sorted(verify['results'])}")
+            if choice in verify["words_required"] and not str(body.get("owner_words") or "").strip():
+                raise MintRequestError("PARAMS_INVALID", detail=_fmt(verify["texts"]["words_required"],
+                                                                    f"{VERB}.board.decide.verify.texts.words_required", label=label))
         words = _board_owner_words(body, label, spec)
         params = {"action": str(spec["action"]), "project": project, "governance_root": str(root), "item_id": iid, "choice": choice,
-                  "owner_words": words, "item_hash": hashlib.sha256(_canonical_item(item).encode("utf-8")).hexdigest()}
+                  "owner_words": words, "item_hash": item_hash(item)}
         audit = {"project": project, "item_id": iid, "choice": choice, "category": item["category"], "task_id": item.get("task_id")}
-        return params, audit, {"item": item, "capture": board_decide_capture(session, spec), "actor": str(session["role"])}
+        return params, audit, {"item": item, "capture": board_decide_capture(session, spec), "actor": str(session["role"]),
+                               "verify": is_verify, "label": label or choice}
+
+    def _verify_run(params: dict[str, Any], context: dict[str, Any], *, confirm: bool) -> dict[str, Any]:
+        from tools.aipos_cli.roadmap import apply_owner_verification
+
+        item, capture = context["item"], context["capture"]
+        board = {"decided_via": str(verify["decided_via"]), "inbox_item": item["item_id"], "relay_to": item.get("relay_to"),
+                 "captured_by": capture["captured_by"], "capture_surface": capture["capture_surface"]}
+        return apply_owner_verification(Path(params["governance_root"]), criterion=str((item.get("facts") or {}).get("criterion") or ""),
+                                        result=str(verify["results"][params["choice"]]), relayed_by=owner_self,
+                                        owner_words=params["owner_words"], card=item.get("task_id"), actor=context["actor"],
+                                        confirm=confirm, project=item["project"], board=board)
 
     def _run(params: dict[str, Any], context: dict[str, Any], *, confirm: bool) -> dict[str, Any]:
         return decide(params["item_id"], params["choice"], home_root=home_root, actor=context["actor"], relayed_by=owner_self,
                       owner_words=params["owner_words"], confirm=confirm, capture=context["capture"])
 
     def preview(params: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+        item = context["item"]
+        confirm_line = board_confirm_line(spec, item, context["label"], params["owner_words"] if body.get("owner_words") else None)
+        if context["verify"]:
+            try:
+                outcome = _verify_run(params, context, confirm=False)
+            except InboxUsageError as exc:
+                raise MintRequestError("CHOICE_INVALID", detail=str(exc)) from exc
+            except (RoadmapError, OSError, ValueError, LookupError, RuntimeError) as exc:
+                raise MintRequestError("PREVIEW_BLOCKED", detail=f"{type(exc).__name__}: {exc}") from exc
+            return {"params": params, "preview_lines": _verify_preview_lines(spec, item, params, outcome, context["capture"]),
+                    "preview": {"result": outcome["result"], "record": (outcome.get("record") or {}).get("path"),
+                                "fix_task_id": outcome.get("fix_task_id"), "fix_error": outcome.get("fix_error")},
+                    "advisor": item.get("relay_to"), "confirm_line": confirm_line}
         try:
             report = _run(params, context, confirm=False)
         except InboxItemNotFound as exc:
@@ -2907,11 +3070,32 @@ def handle_board_decide(
             raise MintRequestError("PREVIEW_BLOCKED", detail=f"{type(exc).__name__}: {exc}") from exc
         if report["rc_outcome"] == "blocked":
             raise MintRequestError("PREVIEW_BLOCKED", detail=_board_blocked_detail(report))
-        item = context["item"]
         return {"params": params, "preview_lines": _board_preview_lines(spec, item, params, report, context["capture"], decl),
-                "preview": _board_report_view(report), "advisor": item.get("relay_to")}
+                "preview": _board_report_view(report), "advisor": item.get("relay_to"), "confirm_line": confirm_line}
+
+    def _verify_confirm(params: dict[str, Any], context: dict[str, Any]) -> tuple[dict, dict, Any]:
+        item = context["item"]
+        try:
+            outcome = _verify_run(params, context, confirm=True)
+        except (RoadmapError, InboxUsageError, OSError, ValueError, LookupError, RuntimeError) as exc:
+            detail = f"{type(exc).__name__}: {exc}"
+            return {"outcome": "decide_failed", "error": detail}, {}, MintRequestError("DECIDE_FAILED", detail=detail)
+        landing = outcome.get("landing") or {}
+        record = (outcome.get("record") or {}).get("path")
+        view = {"written": [p for p in [record, (outcome.get("fix") or {}).get("path")] if p],
+                "landing": {k: landing.get(k) for k in ("landed", "verdict", "committed", "pushed", "commit_hash", "exit_code", "line")
+                            if k in landing} or None, "fix_error": outcome.get("fix_error")}
+        fields = {"outcome": "verified", "record": record, "result": outcome["result"], "written": view["written"], "landing": view["landing"],
+                  "captured_by": context["capture"]["captured_by"], "capture_surface": context["capture"]["capture_surface"]}
+        return fields, {"ok": True, "stage": "confirm", "params": params, "item_id": item["item_id"], "decision_id": record,
+                        "choice": params["choice"], "advisor": item.get("relay_to"), "actor": context["actor"],
+                        "captured_by": context["capture"]["captured_by"], "capture_surface": context["capture"]["capture_surface"],
+                        "result": view, "landing_line": landing.get("line"), "state_after": outcome.get("state_after"),
+                        "redirect": board_decide_page_url(item["item_id"], decl)}, None
 
     def confirm(params: dict[str, Any], context: dict[str, Any]) -> tuple[dict, dict, Any]:
+        if context["verify"]:
+            return _verify_confirm(params, context)
         item = context["item"]
         try:
             report = _run(params, context, confirm=True)
@@ -2958,7 +3142,144 @@ def ruled_banner(inbox: dict[str, Any], item_id: str | None, home_root: str | Pa
             choice = str(ruling.get("allowed_next_action") or "")
             return {"item_id": iid, "decision_id": ruling.get("decision_id"), "pending": False, "advisor": None, "project": proj["name"],
                     "task_id": ruling.get("task_id"), "label": str((decl["options"].get(choice) or {}).get("label") or choice)}
+        checked = board_verification_record(Path(proj["root"]), iid, decl)  # AIPOS-F248: 看板一键抽查(记 owner_verifications)
+        if checked:
+            choice = next((k for k, v in board_decide_declaration(decl)["verify"]["results"].items() if v == checked.get("result")), "")
+            return {"item_id": iid, "decision_id": checked["record"], "pending": False, "advisor": None, "project": proj["name"],
+                    "task_id": checked.get("task_id"), "label": str((decl["options"].get(choice) or {}).get("label") or checked.get("result"))}
     return None
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F248 件④: Owner 在看板直接做的事告知对应顾问(只读既有记录推导; next / loop status 末尾同一渲染)
+# ---------------------------------------------------------------------------
+
+_NOTICE_KEYS = ("window_days", "limit", "renewal_prefixes", "texts")
+_NOTICE_TEXTS = ("heading", "decision", "verification", "verification_fix", "renewal", "more", "unreadable")
+
+
+def board_notice_declaration(decl: dict[str, Any] | None = None) -> dict[str, Any]:
+    """verbs.schema lybra_owner_inbox.board_notice(fail-closed): 键齐; window_days / limit 正整数; renewal_prefixes 有 envelope /
+    authorization 两个非空前缀; texts 齐。"""
+    from tools.schema_loader import SchemaLoadError
+
+    n = (decl or inbox_declaration()).get("board_notice")
+    where = f"verbs.{VERB}.board_notice"
+    if not isinstance(n, dict) or any(k not in n for k in _NOTICE_KEYS):
+        raise SchemaLoadError(f"{where} 未声明齐 {list(_NOTICE_KEYS)}")
+    for key in ("window_days", "limit"):
+        if not isinstance(n[key], int) or isinstance(n[key], bool) or n[key] < 1:
+            raise SchemaLoadError(f"{where}.{key} 须为正整数")
+    prefixes = n["renewal_prefixes"]
+    if not isinstance(prefixes, dict) or any(not str(prefixes.get(k) or "").strip() for k in ("envelope", "authorization")):
+        raise SchemaLoadError(f"{where}.renewal_prefixes 须有非空 envelope / authorization")
+    if any(not isinstance((n["texts"] or {}).get(k), str) for k in _NOTICE_TEXTS):
+        raise SchemaLoadError(f"{where}.texts 须有 {list(_NOTICE_TEXTS)}")
+    return n
+
+
+def _renewal_notices(root: Path, spec: dict[str, Any], cutoff: datetime) -> list[dict[str, Any]]:
+    """看板续签 / 扩大授权(决策记录 capture_surface = 信封页同一来源面, id 前缀 renewal_prefixes)→ 告知该信封驱动方 / 授权各车道驱动方。"""
+    from tools.aipos_cli.autonomy_policy import envelope_usage, load_authorization
+    from tools.aipos_cli.envelope_board import board_envelopes_declaration
+    from tools.aipos_cli.frontmatter import require_frontmatter
+    from tools.aipos_cli.record_writer import record_root
+
+    directory = root / record_root("owner_decisions")
+    if not directory.is_dir():
+        return []
+    surface = str(board_envelopes_declaration()["capture_surface"])
+    prefixes = spec["renewal_prefixes"]
+    out: list[dict[str, Any]] = []
+    for kind, prefix in (("envelope", str(prefixes["envelope"])), ("authorization", str(prefixes["authorization"]))):
+        for path in sorted(directory.glob(f"{prefix}*.md")):
+            rec = _ruling_record(path, *require_frontmatter(path))
+            at = _parse_utc(rec.get("decided_at"))
+            if str(rec.get("capture_surface") or "") != surface or at is None or at < cutoff:
+                continue
+            ident = path.stem[len(prefix):]
+            if kind == "envelope":
+                who = str(((envelope_usage(root, ident).get("policy") or {}).get("agent_or_role")) or "")
+                advisors = [who] if "." in who else None  # 角色级驱动方(无实例名)= 本项目全部顾问
+            else:
+                auth = load_authorization(root, ident.rsplit("-r", 1)[0]) or {}
+                advisors = sorted({d for lane in auth.get("lanes") or [] for d in lane.get("drivers") or []}) or None
+            out.append({"kind": "renewal", "at": at, "advisors": advisors,
+                        "line": _fmt(spec["texts"]["renewal"], f"{VERB}.board_notice.texts.renewal",
+                                     summary=str(rec.get("decision_summary") or path.stem), decided_at=rec.get("decided_at"))})
+    return out
+
+
+def board_notices(governance_root: str | Path, decl: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """window_days 天内 Owner 在看板直接做的事(新→旧): [{kind(decision|verification|renewal), at, advisors(None = 本项目全部顾问), line}]。
+    收件箱一键裁决 = 决策记录 capture_surface 为 board.decide.capture_surface(顾问 = 该卡驱动顾问, 无卡 = 全部); 一键抽查 = owner_verifications
+    看板记录(顾问 = 记录 relay_to); 续签 / 扩大授权 = _renewal_notices。读不出 = 异常向上(调用方一行告警)。"""
+    from tools.aipos_cli.clock import utc_now
+    from tools.aipos_cli.roadmap import load_roadmap, roadmap_index
+
+    d = decl or inbox_declaration()
+    spec = board_notice_declaration(d)
+    board = board_decide_declaration(d)
+    root = Path(governance_root)
+    texts = spec["texts"]
+    cutoff = utc_now() - timedelta(days=int(spec["window_days"]))
+    out: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for rec in _all_rulings(root, d):
+        at = _parse_utc(rec.get("decided_at"))
+        if str(rec.get("capture_surface") or "") != str(board["capture_surface"]) or at is None or at < cutoff:
+            continue
+        task_id = str(rec.get("task_id") or "")
+        driver = _relay_target(root, {"task_id": task_id, "source": None, "project": root.name}, errors, d) if task_id else None
+        out.append({"kind": "decision", "at": at, "advisors": [driver] if driver else None,
+                    "line": _fmt(texts["decision"], f"{VERB}.board_notice.texts.decision", summary=rec.get("decision_summary") or "?",
+                                 owner_words=rec.get("owner_words") or "-", decided_at=rec.get("decided_at"))})
+    checks = [r for r in board_verification_records(root, d) if (_parse_utc(r.get("decided_at")) or cutoff) > cutoff]
+    if checks:
+        roadmap = load_roadmap(root)
+        criteria = roadmap_index(roadmap)["criteria"] if roadmap else {}
+        labels = {v: str((d["options"].get(k) or {}).get("label") or v) for k, v in board["verify"]["results"].items()}
+        for rec in checks:
+            crit = str(rec.get("criterion") or "")
+            fix = (_fmt(texts["verification_fix"], f"{VERB}.board_notice.texts.verification_fix", fix_task_id=rec["fix_task_id"])
+                   if rec.get("fix_task_id") else "")
+            out.append({"kind": "verification", "at": _parse_utc(rec.get("decided_at")),
+                        "advisors": [str(rec["relay_to"])] if rec.get("relay_to") else None,
+                        "line": _fmt(texts["verification"], f"{VERB}.board_notice.texts.verification", criterion=crit,
+                                     statement=str(((criteria.get(crit) or (None, {}))[1]).get("statement") or ""),
+                                     label=labels.get(str(rec.get("result") or ""), rec.get("result")), owner_words=rec.get("owner_words") or "-",
+                                     decided_at=rec.get("decided_at"), fix_part=fix)})
+    out += _renewal_notices(root, spec, cutoff)
+    out.sort(key=lambda n: n["at"], reverse=True)
+    return out
+
+
+def board_notice_lines(governance_root: str | Path, actor: str | None = None) -> list[str]:
+    """`lybra next` / `lybra loop status` 末尾一段(唯一渲染): 查看实例(advisor_updates_cli.resolve_viewer; 视角不定 = 全列)的看板直裁告知,
+    最多 limit 条, 其余一行; 无 = []。读不出 = 一行告警原文(只影响显示, 不改退出码)。"""
+    from tools.aipos_cli.advisor_updates_cli import resolve_viewer
+    from tools.aipos_cli.custom_roles import RoleRegistryReadError
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        spec = board_notice_declaration()
+        viewer = resolve_viewer(governance_root, actor)
+        instance = viewer["instance"] if viewer["instance"] in viewer["candidates"] else None
+        notes = [n for n in board_notices(governance_root) if instance is None or n["advisors"] is None or instance in n["advisors"]]
+    except (SchemaLoadError, RoleRegistryReadError, FrontmatterReadError, OSError, ValueError, LookupError) as exc:
+        try:
+            template = board_notice_declaration()["texts"]["unreadable"]
+        except SchemaLoadError:
+            template = "{error}"
+        return [str(template).format(error=f"{type(exc).__name__}: {exc}")]
+    if not notes:
+        return []
+    texts, limit = spec["texts"], int(spec["limit"])
+    lines = [_fmt(texts["heading"], f"{VERB}.board_notice.texts.heading", count=len(notes))] + [n["line"] for n in notes[:limit]]
+    if len(notes) > limit:
+        lines.append(_fmt(texts["more"], f"{VERB}.board_notice.texts.more", count=len(notes) - limit))
+    return lines
 
 
 # AIPOS-316: Guard against direct invocation

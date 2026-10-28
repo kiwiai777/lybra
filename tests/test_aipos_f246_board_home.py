@@ -339,9 +339,10 @@ def test_item2_needs_you_top_three_plain_titles(board, monkeypatch):
     page = _page(board, "/owner/home")
     asks = re.search(r'<section class="hm-asks".*?</section>', page, re.S).group(0)
     _show(f"[item2 needs-you raw] {asks}")
-    assert 'data-asks="3" data-asks-total="5"' in asks and "还有 2 件 →" in asks
-    order = re.findall(r'href="/owner/inbox#item-(OI-\d)"', asks)
-    assert order == ["OI-1", "OI-4", "OI-3"]  # rank first, then the longest waiting
+    # AIPOS-F248: the two spot checks of one milestone are merged into one "2 acceptance spot checks" (expandable item by item)
+    assert 'data-asks="3" data-asks-total="4"' in asks and "还有 1 件 →" in asks and 'data-group="2"' in asks
+    order = re.findall(r'id="ask-(OI-\d)"', asks)
+    assert order == ["OI-1", "OI-4", "OI-3", "OI-2"]  # rank first, then the longest waiting (group members in place)
     assert "Android entry wired" in asks and "entry screen shows" in asks and "Wire the maintenance page by lock state" in asks
     assert "CX1" not in re.sub(r"<[^>]+>", " ", asks) and "X-1" not in re.sub(r"<[^>]+>", " ", asks)
 

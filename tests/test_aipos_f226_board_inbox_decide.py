@@ -255,6 +255,13 @@ def test_item1_item2_three_kinds_one_click_and_advisor_reads(three):
     assert banner == f"已裁决「环境 / 产品已修好, 重新派审」→ 将由 {DRIVER} 的下一次 loop 接续"
     assert f'data-item-id="{reaudit["item_id"]}"' not in landed and "已裁决待接续 · 顾问下次 loop 自动接续" in landed
 
+    # AIPOS-F248 件④: 看板裁决告知(lybra next / loop status 末尾同一渲染 owner_inbox.board_notice_lines; 该卡驱动顾问视角)
+    from tools.aipos_cli.owner_inbox import board_notice_lines
+
+    notice = board_notice_lines(gov, DRIVER)
+    _show("---- AIPOS-F248 件④·顾问侧看板裁决告知原文 ----\n" + "\n".join(notice))
+    assert notice and notice[0].startswith("Owner 在看板直接定了") and any(WORDS in ln and "reaudit" in ln for ln in notice[1:])
+
     # 件②: 顾问侧 loop status / next 直接读到(无需 owner decide)
     st_text, st = _status(gov, TASK)
     na = st["next_action"]

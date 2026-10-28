@@ -379,33 +379,144 @@ def _home_card(ctx: _Ctx, card: dict[str, Any]) -> str:
             f"<span>{_ESC(ctx.t('hm_detail'))}</span></div></a>")
 
 
-def _ask_html(ctx: _Ctx, ask: dict[str, Any]) -> str:
+def _ask_title_html(ctx: _Ctx, ask: dict[str, Any]) -> str:
     title = ctx.t(ask["key"], **{k: "\u0000" + k + "\u0000" for k in ask["values"]})
     parts = title.split("\u0000")
-    rendered = "".join(_authored(ask["values"][part]) if i % 2 else _ESC(part) for i, part in enumerate(parts))
+    return "".join(_authored(ask["values"][part]) if i % 2 else _ESC(part) for i, part in enumerate(parts))
+
+
+def _button_label(ctx: _Ctx, button: dict[str, Any]) -> str:
+    """Renewal / signing buttons are labelled by the board (\"renew N days\"); option buttons by the declared option label."""
+    if button["kind"] == "extend_authorization" and not button.get("days"):  # expiry already later: only more cards
+        return ctx.t("hm_btn_more", count=button.get("max_tasks") or "?")
+    if button["kind"] in ("renew_envelope", "extend_authorization"):
+        return ctx.t("hm_btn_renew", days=button.get("days") or "?")
+    if button["kind"] == "sign_grant":
+        return ctx.t("hm_btn_grant")
+    return str(button["label"])
+
+
+def _ask_button(ctx: _Ctx, ask: dict[str, Any], button: dict[str, Any], *, primary: bool) -> str:
+    """AIPOS-F248: one one-click button (data only; static/owner-asks.js posts the declared write path, preview -> one confirm line ->
+    confirm; every check is on the server). The confirm / done lines are rendered here (board i18n), {words} filled by the script."""
+    import json
+
+    advisor = ask.get("advisor") or ""
+    kind = button["kind"]
+    label = _button_label(ctx, button)
+    if kind == "extend_authorization" and not button.get("days"):
+        confirm = ctx.t("hm_cf_more", count=button.get("max_tasks") or "?", advisor=advisor)
+        done = ctx.t("hm_done_more", count=button.get("max_tasks") or "?", advisor=advisor)
+    elif kind in ("renew_envelope", "extend_authorization"):
+        confirm = ctx.t("hm_cf_renew", days=button.get("days") or "?", count=button.get("max_tasks") or "?", advisor=advisor)
+        done = ctx.t("hm_done_renew", days=button.get("days") or "?", advisor=advisor)
+    elif kind == "sign_grant":
+        confirm = ctx.t("hm_cf_grant", advisor=advisor)
+        done = ctx.t("hm_done_grant", advisor=advisor)
+    else:
+        confirm = ctx.t("hm_cf_decide", label=label, advisor=advisor, words="{words}")  # {words} = the Owner sentence, filled by the script
+        done = ctx.t("hm_done_decide", label=label, advisor=advisor)
+    attrs = (f" data-ask-path=\"{_ESC(button['path'])}\" data-ask-kind=\"{_ESC(kind)}\""
+             f" data-ask-payload=\"{_ESC(json.dumps(button['payload'], ensure_ascii=False))}\" data-ask-words=\"{_ESC(button['words'])}\""
+             f" data-ask-confirm=\"{_ESC(confirm)}\" data-ask-done=\"{_ESC(done)}\"")
+    if primary:
+        return (f"<button type=\"button\" class=\"hm-btn\" data-ask-primary=\"true\"{attrs}><small>{_ESC(ctx.t('hm_rec_tag'))}</small>"
+                f"{_ESC(label)}</button>")
+    text = label + ("\u2026" if button["words"] == "required" else "")
+    return f"<button type=\"button\" class=\"hm-alt\"{attrs}>{_ESC(text)}</button>"
+
+
+def _ask_acts(ctx: _Ctx, ask: dict[str, Any], owner: bool) -> str:
+    if not owner:
+        return ""
+    buttons = []
+    if ask.get("primary"):
+        buttons.append(_ask_button(ctx, ask, ask["primary"], primary=True))
+    buttons += [_ask_button(ctx, ask, b, primary=False) for b in ask.get("alts") or []]
+    if ask.get("scope_url"):
+        buttons.append(f"<a class=\"hm-alt\" href=\"{_ESC(ctx.href(ask['scope_url']))}\">{_ESC(ctx.t('hm_alt_scope'))}</a>")
+    return f"<div class=\"hm-acts\">{''.join(buttons)}</div>" if buttons else ""
+
+
+def _ask_why(ctx: _Ctx, ask: dict[str, Any]) -> str:
+    """The one "why you" sentence: the recommendation reason (advisor-written = authored text) or the spot-check statement."""
+    rec = ask.get("rec")
+    parts = []
+    if ask.get("detail"):
+        parts.append(_authored(ask["detail"]))
+    if ask.get("artifacts"):
+        parts.append(_ESC(ctx.t("hm_artifacts_count", count=ask["artifacts"])))
+    if rec and rec.get("reason"):
+        label = _button_label(ctx, ask["primary"]) if ask.get("primary") else str(rec.get("label") or "")
+        head = (ctx.t("hm_rec_advisor", advisor=rec.get("by") or ctx.t("hm_advisor_generic"), label=label)
+                if rec.get("source") == "advisor" else ctx.t("hm_rec_default", label=label))
+        reason = _authored(rec["reason"]) if rec.get("source") == "advisor" else _ESC(rec["reason"])
+        parts.append(f"<span class=\"hm-why\">{_ESC(head)}{reason}</span>")
+    return " · ".join(parts)
+
+
+def _ask_html(ctx: _Ctx, ask: dict[str, Any], owner: bool = False) -> str:
+    if ask.get("group"):
+        return _ask_group_html(ctx, ask, owner)
     waited = ctx.t("hm_ask_waited", days=ask["waited_days"]) if ask.get("waited_days") else ctx.t("hm_ask_today")
-    detail = (_authored(ask["detail"]) + " · ") if ask.get("detail") else ""
-    return (f"<div class=\"hm-ask\" data-rank=\"{_ESC(str(ask.get('rank')))}\" data-project=\"{_ESC(ask['project'])}\">"
-            f"<div class=\"hm-what\"><div class=\"hm-t\">{rendered}</div><div class=\"hm-d\">{detail}"
-            f"{_ESC(str(ask.get('rank_label') or ''))} · {_ESC(waited)} · <a href=\"{_ESC(ctx.href(ask['url']))}\">{_ESC(ctx.t('hm_ask_go'))}</a>"
-            f"</div></div></div>")
+    why = _ask_why(ctx, ask)
+    look = ask.get("look") or {"url": ask["url"], "key": "hm_ask_go"}
+    return (f"<div class=\"hm-ask\" id=\"ask-{_ESC(ask['item_id'])}\" data-rank=\"{_ESC(str(ask.get('rank')))}\" data-project=\"{_ESC(ask['project'])}\""
+            f" data-item=\"{_ESC(ask['item_id'])}\" data-recommended=\"{str(bool(ask.get('primary'))).lower()}\">"
+            f"<div class=\"hm-what\"><div class=\"hm-t\">{_ask_title_html(ctx, ask)}</div><div class=\"hm-d\">"
+            + (f"{why} · " if why else "")
+            + f"{_ESC(str(ask.get('rank_label') or ''))} · {_ESC(waited)} · <a href=\"{_ESC(ctx.href(look['url']))}\">{_ESC(ctx.t(look['key']))}</a>"
+            f"</div><div class=\"hm-bar-line\" hidden></div></div>{_ask_acts(ctx, ask, owner)}</div>")
 
 
-def render_home(data: dict[str, Any], lang: str) -> str:
+def _ask_group_html(ctx: _Ctx, group: dict[str, Any], owner: bool) -> str:
+    """AIPOS-F248: several spot checks of one milestone merged into one "N acceptance spot checks", expandable item by item."""
+    waited = ctx.t("hm_ask_waited", days=group["waited_days"]) if group.get("waited_days") else ctx.t("hm_ask_today")
+    marker = "\u0000"
+    title = ctx.t("hm_group_title", milestone=marker, count=group["count"])
+    head, _, tail = title.partition(marker)
+    children = "".join(_ask_html(ctx, child, owner) for child in group["children"])
+    return (f"<div class=\"hm-ask hm-group\" data-rank=\"{_ESC(str(group.get('rank')))}\" data-project=\"{_ESC(group['project'])}\""
+            f" data-group=\"{group['count']}\"><div class=\"hm-what\"><div class=\"hm-t\">{_ESC(head)}{_authored(group['milestone_title'])}"
+            f"{_ESC(tail)}</div><div class=\"hm-d\">{_ESC(str(group.get('rank_label') or ''))} · {_ESC(waited)} · "
+            f"<a href=\"{_ESC(ctx.href(group['look']['url']))}\">{_ESC(ctx.t(group['look'].get('key') or 'hm_look_artifacts'))}</a></div>"
+            f"<details class=\"hm-fold\"><summary>{_ESC(ctx.t('hm_group_open'))}</summary>{children}</details></div></div>")
+
+
+_HM_JS_KEYS = ("hm_js_confirm", "hm_js_cancel", "hm_js_next", "hm_js_working", "hm_js_fail", "hm_js_login", "hm_js_words_required",
+               "hm_js_words_optional", "hm_js_words_part")
+
+
+def _asks_attrs(ctx: _Ctx, owner: bool) -> str:
+    """Body attributes for static/owner-asks.js (Owner sessions only; texts in the page language)."""
+    import json
+
+    if not owner:
+        return ""
+    texts = json.dumps({key: ctx.raw(key) for key in _HM_JS_KEYS}, ensure_ascii=False)
+    return f" data-asks-owner=\"true\" data-asks-texts=\"{_ESC(texts)}\""
+
+
+def render_home(data: dict[str, Any], lang: str, owner: bool = False) -> str:
     ctx = _Ctx(data["decl"], lang)
-    body = [_toggle(ctx, data.get("hidden") or [], bool(data.get("show_all")), str(ctx.decl["pages"]["home"]))]
+    all_asks = bool(data.get("all_asks"))
+    body = [] if all_asks else [_toggle(ctx, data.get("hidden") or [], bool(data.get("show_all")), str(ctx.decl["pages"]["home"]))]
     asks = [f"<section class=\"hm-asks\" data-asks=\"{len(data['asks'])}\" data-asks-total=\"{data['asks_total']}\">",
             f"<div class=\"hm-kicker\">{_ESC(ctx.t('hm_asks_kicker', count=data['asks_total']))}</div>"]
     if data.get("inbox_error"):
         asks.append(f"<p class=\"rp-err\">{_ESC(ctx.t('hm_inbox_error', error=data['inbox_error']))}</p>")
     elif not data["asks"]:
         asks.append(f"<p class=\"hm-quiet\">{_ESC(ctx.t('hm_asks_none'))}</p>")
-    asks += [_ask_html(ctx, a) for a in data["asks"]]
+    asks += [_ask_html(ctx, a, owner) for a in data["asks"]]
     more = int(data["asks_total"]) - len(data["asks"])
     if more > 0:
-        asks.append(f"<a class=\"hm-more\" href=\"{_ESC(ctx.href(data['inbox_url']))}\">{_ESC(ctx.t('hm_ask_more', count=more))}</a>")
+        asks.append(f"<a class=\"hm-more\" href=\"{_ESC(ctx.href(data.get('asks_url') or data['inbox_url']))}\">"
+                    f"{_ESC(ctx.t('hm_ask_more', count=more))}</a>")
     asks.append("</section>")
     body += asks
+    scripts = [str(data["home"]["asks_script"])] if owner and data["asks"] and data["home"].get("asks_script") else []
+    if all_asks:
+        return _page(ctx, "home", ctx.t("hm_title"), body, note_key=None, body_attrs=_asks_attrs(ctx, owner), scripts=scripts)
     active = [c for c in data["cards"] if not c["paused"]]
     paused = [c for c in data["cards"] if c["paused"]]
     body.append(f"<section class=\"hm-projects\" data-cards=\"{len(active)}\"><div class=\"hm-kicker\">{_ESC(ctx.t('hm_projects_kicker'))}</div>")
@@ -418,7 +529,7 @@ def render_home(data: dict[str, Any], lang: str) -> str:
     body.append("</section>")
     for err in data.get("errors") or []:
         body.append(f"<p class=\"rp-err hm-err\">{_ESC(ctx.t('hm_project_error', project=err['project'], error=err['error']))}</p>")
-    return _page(ctx, "home", ctx.t("hm_title"), body, note_key=None)
+    return _page(ctx, "home", ctx.t("hm_title"), body, note_key=None, body_attrs=_asks_attrs(ctx, owner), scripts=scripts)
 
 
 def _brief_rows(ctx: _Ctx, rows: list[dict[str, Any]]) -> str:
@@ -998,14 +1109,10 @@ def grant_sentence(ctx: _Ctx, grant: dict[str, Any]) -> str:
 
 
 def request_payload(item: dict[str, Any]) -> dict[str, Any]:
-    """What "sign as suggested" posts to the F172 write path (mode=new; parameters = the suggestion; request_item = inbox item id)."""
-    g = item["grant"]
-    if g.get("kind") == "authorization":  # AIPOS-F224: same F172 write path, mode authorization, the suggested grant block as is
-        return {"workspace": item["project"], "mode": "authorization", "action": "extend", "block": g["authorization"],
-                "request_item": item["item_id"]}
-    return {"workspace": item["project"], "mode": "new", "agent_or_role": g["agent_or_role"], "task_mode": g["task_mode"],
-            "lane_repo": list(g["lane_repos"]), "launch_harness": list(g["launch_harnesses"]), "max_tasks": g["max_tasks"],
-            "expires_at": g["expires_at"], "policy_id": g["policy_id"], "request_item": item["item_id"]}
+    """What "sign as suggested" posts to the F172 write path (single construction owner_inbox.grant_request_payload, AIPOS-F248)."""
+    from tools.aipos_cli.owner_inbox import grant_request_payload
+
+    return grant_request_payload(item)
 
 
 def _grant_card(ctx: _Ctx, item: dict[str, Any], owner: bool) -> str:
@@ -1073,8 +1180,9 @@ def _decidable(item: dict[str, Any]) -> bool:
     from tools.aipos_cli.owner_inbox import board_decide_declaration, inbox_declaration
 
     decl = inbox_declaration()
-    return (item["category"] not in board_decide_declaration(decl)["excluded_categories"]
-            and not decl["categories"][item["category"]].get("decide_redirect"))
+    spec = board_decide_declaration(decl)
+    return (item["category"] not in spec["excluded_categories"]  # AIPOS-F248: spot checks are decidable here too (verify branch)
+            and (item["category"] in spec["verify"]["categories"] or not decl["categories"][item["category"]].get("decide_redirect")))
 
 
 def _decide_block(ctx: _Ctx, item: dict[str, Any], keys: list[str] | None = None, *, label_key: str | None = None) -> str:
@@ -1088,10 +1196,26 @@ def _decide_block(ctx: _Ctx, item: dict[str, Any], keys: list[str] | None = None
         return ""
     what = ctx.t("ib_card_title", task_id=item["task_id"], title=item["title"]) if item.get("task_id") and item.get("title") else (
         ctx.t("ib_card", task_id=item["task_id"]) if item.get("task_id") else str(item.get("subject") or ""))
+    # AIPOS-F248: the recommended option (item.recommended, same data as the home page) comes first as the tagged primary button;
+    # no recommendation = options side by side (no primary)
+    rec = item.get("recommended") if isinstance(item.get("recommended"), dict) and not label_key else None
+    rec_key = str((rec or {}).get("choice") or "")
+    if rec_key and any(o["key"] == rec_key for o in options):
+        options = sorted(options, key=lambda o: o["key"] != rec_key)
+    else:
+        rec = None
+    rec_attr = ' data-recommended="true"'
     buttons = "".join(
-        f"<button type=\"button\" class=\"ib-decide-btn{' gr-primary' if n == 0 else ''}\" data-ib-choice=\"{_ESC(o['key'])}\""
-        f" data-ib-label=\"{_ESC(o['label'])}\">{_ESC(ctx.t(label_key) if label_key else o['label'])}</button>"
+        f"<button type=\"button\" class=\"ib-decide-btn{' gr-primary' if (rec and o['key'] == rec_key) or (label_key and n == 0) else ''}\""
+        f" data-ib-choice=\"{_ESC(o['key'])}\" data-ib-label=\"{_ESC(o['label'])}\""
+        f"{rec_attr if rec and o['key'] == rec_key else ''}>"
+        + (f"<small>{_ESC(ctx.t('hm_rec_tag'))}</small> " if rec and o["key"] == rec_key else "")
+        + f"{_ESC(ctx.t(label_key) if label_key else o['label'])}</button>"
         for n, o in enumerate(options))
+    if rec and rec.get("reason"):
+        head = (ctx.t("hm_rec_advisor", advisor=rec.get("by") or ctx.t("hm_advisor_generic"), label=rec.get("label") or "")
+                if rec.get("source") == "advisor" else ctx.t("hm_rec_default", label=rec.get("label") or ""))
+        buttons = f"<p class=\"rp-sub ib-rec\">{_ESC(head)}{_authored(rec['reason'])}</p>" + buttons
     return (f"<div class=\"ib-decide\" data-ib-item=\"{_ESC(item['item_id'])}\" data-ib-workspace=\"{_ESC(item['project'])}\""
             f" data-ib-what=\"{_ESC(item['project'] + ' / ' + what)}\" data-ib-advisor=\"{_ESC(item.get('relay_to') or ctx.t('ib_ruled_unknown'))}\">"
             + ("" if label_key else f"<p class=\"rp-sub ib-decide-head\">{_ESC(ctx.t('ib_decide_heading'))}</p>")
@@ -1572,16 +1696,17 @@ def render_error(lang: str, message: str) -> str:
             f"<body class=\"rp-page\"><main><p class=\"rp-err rp-page-error\">{_ESC(text)}</p></main></body></html>")
 
 
-def render_page(page: str, home_root: str | Path | None, params: dict[str, list[str]]) -> str:
+def render_page(page: str, home_root: str | Path | None, params: dict[str, list[str]], owner: bool = False) -> str:
     """page ∈ board_pages.PAGES; params = 查询参数(parse_qs)。声明 / 推导读不出 = 错误页(不吞, 拒因原文)。
-    AIPOS-F245 item 2: the whole render is one request-level read scope (declarations read once per request, also by the renderer)."""
+    AIPOS-F245 item 2: the whole render is one request-level read scope (declarations read once per request, also by the renderer).
+    AIPOS-F248: owner = Owner session (the home page then carries the one-click buttons; the data is the same for every session)."""
     from tools.aipos_cli.task_loader import read_request_scope
 
     with read_request_scope():
-        return _render_page(page, home_root, params)
+        return _render_page(page, home_root, params, owner)
 
 
-def _render_page(page: str, home_root: str | Path | None, params: dict[str, list[str]]) -> str:
+def _render_page(page: str, home_root: str | Path | None, params: dict[str, list[str]], owner: bool = False) -> str:
     from tools.aipos_cli import board_pages
     from tools.schema_loader import SchemaLoadError
 
@@ -1598,7 +1723,8 @@ def _render_page(page: str, home_root: str | Path | None, params: dict[str, list
         if page == "home":  # AIPOS-F246: the home page (one card per advisor)
             from tools.aipos_cli.board_home import collect_home
 
-            return render_home(collect_home(home_root, show_all=show_all), lang)
+            all_asks = bool(decl["home"].get("asks_view_value")) and arg("view") == decl["home"]["asks_view_value"]
+            return render_home(collect_home(home_root, show_all=show_all, all_asks=all_asks), lang, owner)
         if page == "engineering":
             return render_engineering(decl, lang)
         if page == "overview":

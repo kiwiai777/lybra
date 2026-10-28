@@ -286,22 +286,126 @@ def _ask_title(item: dict[str, Any], by_task: dict[str, dict[str, Any]], milesto
                                    "advisor": advisor or project_display, "project": project_display}, "detail": detail}
 
 
-def collect_home(home_root: str | Path | None = None, *, show_all: bool = False) -> dict[str, Any]:
-    """首页数据(看板服务进程内经真相指纹缓存; 任一真相变化 / 换分钟 = 下一次请求重算)。"""
+def collect_home(home_root: str | Path | None = None, *, show_all: bool = False, all_asks: bool = False) -> dict[str, Any]:
+    """首页数据(看板服务进程内经真相指纹缓存; 任一真相变化 / 换分钟 = 下一次请求重算)。all_asks = 「需要你」全量页(AIPOS-F248: 同一呈现, 不限件数)。"""
     from tools.aipos_cli.task_loader import read_request_scope, truth_cached
 
     def compute() -> dict[str, Any]:
         with read_request_scope():
-            return _collect_home(home_root, show_all=show_all)
+            return _collect_home(home_root, show_all=show_all, all_asks=all_asks)
 
-    return truth_cached(("board_home.collect_home", str(home_root), bool(show_all)), compute)
+    return truth_cached(("board_home.collect_home", str(home_root), bool(show_all), bool(all_asks)), compute)
 
 
 def _owner_check_statements(view: dict[str, Any] | None) -> dict[str, str]:
     return {str(c["id"]): str(c.get("statement") or "") for ms in (view or {}).get("milestones") or [] for c in ms.get("criteria") or []}
 
 
-def _collect_home(home_root: str | Path | None, *, show_all: bool) -> dict[str, Any]:
+# ---------------------------------------------------------------------------
+# AIPOS-F248: 「需要你」每件的推荐与一键(按钮 = 既有写例外的请求体; 安全判定全在服务端同一框架)
+# ---------------------------------------------------------------------------
+
+#: 推荐动作 → 走哪条写例外(decide / verify = F226 收件箱一键裁决同一路由; 其余 = F172 信封 / 授权签发同一路由)
+_GRANT_ACTIONS = ("renew_envelope", "extend_authorization", "sign_grant")
+
+
+def ask_actions(item: dict[str, Any]) -> dict[str, Any]:
+    """收件箱事项 → 看板一键按钮(唯一构造): primary = 推荐(item.recommended, owner_recommend.recommendation_for 同一数据)的按钮, 无推荐 = None;
+    alts = 其余可在看板裁决的选项(F226 / F248 verify 同一写路由; 推荐是续签类时不再列「续签」选项); scope_url = 授权类「改范围…」链接
+    (信封 / 授权页)。每个按钮 = {kind, path, payload(不含 stage), choice, label, words(required|optional), days?, max_tasks?}; 不可看板裁决 = alts 空。"""
+    from tools.aipos_cli.envelope_board import board_envelopes_declaration
+    from tools.aipos_cli.owner_inbox import board_decide_declaration, inbox_declaration
+
+    decl = inbox_declaration()
+    spec = board_decide_declaration(decl)
+    verify = spec["verify"]
+    category = str(item.get("category") or "")
+    is_verify = category in verify["categories"]
+    decidable = category not in spec["excluded_categories"] and (is_verify or not decl["categories"][category].get("decide_redirect"))
+    kind = "verify" if is_verify else "decide"
+    rec = item.get("recommended") if isinstance(item.get("recommended"), dict) else None
+
+    def option_button(key: str, label: str) -> dict[str, Any]:
+        return {"kind": kind, "path": str(spec["write_path"]), "choice": key, "label": label,
+                "payload": {"workspace": item["project"], "item_id": item["item_id"], "choice": key},
+                "words": "required" if is_verify and key in verify["words_required"] else "optional"}
+
+    primary = None
+    skip: set[str] = set()
+    if rec and rec.get("action") in _GRANT_ACTIONS and isinstance(rec.get("params"), dict):
+        primary = {"kind": str(rec["action"]), "path": str(board_envelopes_declaration()["write_path"]), "choice": rec.get("choice"),
+                   "label": None, "payload": dict(rec["params"]), "words": "none", "days": rec.get("days"), "max_tasks": rec.get("max_tasks")}
+        skip.add(str(rec.get("choice") or ""))
+    options = [o for o in item.get("options") or [] if (not is_verify or o["key"] in verify["results"])] if decidable else []
+    if rec and primary is None and decidable and any(o["key"] == rec.get("choice") for o in options):
+        primary = option_button(str(rec["choice"]), next(o["label"] for o in options if o["key"] == rec["choice"]))
+        skip.add(str(rec["choice"]))
+    alts = [option_button(o["key"], o["label"]) for o in options if o["key"] not in skip]
+    scope_url = item.get("board_url") if category == "envelope_warning" or isinstance(item.get("grant"), dict) else None
+    return {"primary": primary, "alts": alts, "scope_url": scope_url}
+
+
+def _ask_entry(item: dict[str, Any], got: dict[str, Any], decl: dict[str, Any], home: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """一件「需要你」的展示数据: 人话标题 + 为什么找你(推荐理由 / 抽查标准)+ 看产物链接 + 推荐与其他选项按钮(ask_actions)。"""
+    by_task = {str(r["task_id"]).upper(): r for r in got["stats"].get("rows") or []}
+    ms_titles = {str(ms["id"]): str(ms.get("title") or "") for ms in (got["view"] or {}).get("milestones") or []}
+    displays = {g["instance"]: g["display"] for g in got["advisors"]}
+    row = by_task.get(str(item.get("task_id") or "").upper())
+    owner = next((g for g in got["advisors"] if row is not None and row["subproject"] in g["keys"]), None)
+    project_display = owner["display"] if owner else item["project"]
+    facts = dict(item.get("facts") or {})
+    if item.get("category") == "owner_check" and facts.get("criterion"):
+        facts["statement"] = _owner_check_statements(got["view"]).get(str(facts["criterion"]), "")
+    title = _ask_title({**item, "facts": facts}, by_task, ms_titles, displays, project_display, home)
+    since = _parse_iso(item.get("since"))
+    rec = item.get("recommended") if isinstance(item.get("recommended"), dict) else None
+    category = str(item.get("category") or "")
+    if category == "owner_check" and item.get("board_url"):
+        look = {"url": str(item["board_url"]), "key": "hm_look_artifacts"}
+    elif category == "envelope_warning" and item.get("board_url"):
+        look = {"url": str(item["board_url"]), "key": "hm_look_scope"}
+    else:
+        look = {"url": f"{decl['nav_links']['inbox']}#item-{item['item_id']}", "key": "hm_ask_go"}
+    return {**title, "project": item["project"], "rank": item.get("rank"), "rank_label": item.get("rank_label"),
+            "waited_days": (int((now - since).total_seconds() // 86400) if since else None),
+            "url": f"{decl['nav_links']['inbox']}#item-{item['item_id']}", "item_id": item["item_id"], "category": category,
+            "milestone": str(facts.get("milestone") or ""), "milestone_title": ms_titles.get(str(facts.get("milestone") or ""), ""),
+            "artifacts": len(facts.get("artifacts") or []) if category == "owner_check" else None,
+            "advisor": displays.get(str(item.get("relay_to") or ""), ""), "look": look,
+            "rec": ({"source": rec.get("source"), "label": rec.get("label"), "reason": rec.get("reason"),
+                     "by": displays.get(str(rec.get("by") or ""), "") if rec.get("source") == "advisor" else ""} if rec else None),
+            **ask_actions(item)}
+
+
+def _group_asks(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """同一项目的多件验收抽查(同一里程碑 / 同类)合并成一件「N 项验收抽查」(可展开逐项), 位置取组内第一件。组名: 同一里程碑 = 里程碑名;
+    跨里程碑但同一顾问 = 顾问显示名; 否则 = 项目名。"""
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for e in entries:
+        if e["category"] == "owner_check":
+            groups.setdefault(e["project"], []).append(e)
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for e in entries:
+        members = groups.get(e["project"]) if e["category"] == "owner_check" else None
+        if not members or len(members) < 2:
+            out.append(e)
+        elif e["project"] not in seen:
+            seen.add(e["project"])
+            waited = [m["waited_days"] for m in members if m["waited_days"] is not None]
+            milestones = {m["milestone"] for m in members}
+            names = {str(m["values"].get("advisor") or "") for m in members}
+            title = (e["milestone_title"] or e["values"].get("milestone") or "") if len(milestones) == 1 else (
+                next(iter(names)) if len(names) == 1 and "" not in names else e["project"])
+            out.append({"group": True, "project": e["project"], "category": e["category"], "rank": e["rank"], "rank_label": e["rank_label"],
+                        "milestone": e["milestone"] if len(milestones) == 1 else "", "milestone_title": title, "count": len(members),
+                        "waited_days": max(waited) if waited else None, "children": members,
+                        "look": members[0]["look"] if len(milestones) == 1 else {"url": members[0]["url"], "key": "hm_ask_go"},
+                        "url": members[0]["url"]})
+    return out
+
+
+def _collect_home(home_root: str | Path | None, *, show_all: bool, all_asks: bool = False) -> dict[str, Any]:
     from tools.aipos_cli.clock import utc_now
     from tools.aipos_cli.owner_inbox import collect_inbox
 
@@ -336,29 +440,20 @@ def _collect_home(home_root: str | Path | None, *, show_all: bool) -> dict[str, 
     total = 0
     try:
         inbox = collect_inbox(entries["home_root"], include_paused=show_all)
-        items = [i for i in inbox["items"] if i["project"] in by_project]
-        total = len(items)
+        # AIPOS-F248: 第二档里带一键续期的类别(home.asks_notice_categories, 缺省无)也进「需要你」
+        extra = set(home.get("asks_notice_categories") or [])
+        items = [i for i in [*inbox["items"], *[n for n in inbox.get("notices") or [] if n.get("category") in extra]]
+                 if i["project"] in by_project]
         items.sort(key=lambda i: (int(i.get("rank") or 9), str(i.get("since") or "9999")))
-        for item in items[: int(home["asks_limit"])]:
-            got = by_project[item["project"]]
-            by_task = {str(r["task_id"]).upper(): r for r in got["stats"].get("rows") or []}
-            ms_titles = {str(ms["id"]): str(ms.get("title") or "") for ms in (got["view"] or {}).get("milestones") or []}
-            displays = {g["instance"]: g["display"] for g in got["advisors"]}
-            row = by_task.get(str(item.get("task_id") or "").upper())
-            owner = next((g for g in got["advisors"] if row is not None and row["subproject"] in g["keys"]), None)
-            project_display = owner["display"] if owner else item["project"]
-            facts = dict(item.get("facts") or {})
-            if item.get("category") == "owner_check" and facts.get("criterion"):
-                facts["statement"] = _owner_check_statements(got["view"]).get(str(facts["criterion"]), "")
-            title = _ask_title({**item, "facts": facts}, by_task, ms_titles, displays, project_display, home)
-            since = _parse_iso(item.get("since"))
-            asks.append({**title, "project": item["project"], "rank": item.get("rank"), "rank_label": item.get("rank_label"),
-                         "waited_days": (int((now - since).total_seconds() // 86400) if since else None),
-                         "url": f"{decl['nav_links']['inbox']}#item-{item['item_id']}"})
+        grouped = _group_asks([_ask_entry(item, by_project[item["project"]], decl, home, now) for item in items])
+        total = len(grouped)
+        asks = grouped if all_asks else grouped[: int(home["asks_limit"])]
     except (OSError, ValueError, LookupError) as exc:
         inbox_error = _err(exc)
     return {"decl": decl, "home": home, "home_root": str(entries["home_root"]), "cards": cards, "hidden": hidden, "show_all": show_all,
             "asks": asks, "asks_total": total, "inbox_error": inbox_error, "inbox_url": str(decl["nav_links"]["inbox"]), "errors": errors,
+            "all_asks": all_asks, "asks_url": page_url(decl, "home", view=str(home.get("asks_view_value") or "")) if home.get("asks_view_value")
+            else str(decl["nav_links"]["inbox"]),
             "now": now.replace(microsecond=0).isoformat().replace("+00:00", "Z")}
 
 
