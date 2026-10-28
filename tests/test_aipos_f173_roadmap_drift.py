@@ -359,7 +359,11 @@ def test_declarations_and_single_implementation():
 
     assert "roadmap_drift.roadmap_status(" in Path(aipos_cli.__file__).read_text(encoding="utf-8")
     assert "roadmap_status(resolved_root" in Path(board_adapter.__file__).read_text(encoding="utf-8")
-    assert "roadmap_status(root, project=project)" in Path(owner_inbox.__file__).read_text(encoding="utf-8")
+    # AIPOS-F249 件③: the inbox reads the same derivation through its projection without the milestones' last_activity
+    # (roadmap_drift.roadmap_progress = roadmap_status minus that one field)
+    assert "roadmap_progress(root, project=project)" in Path(owner_inbox.__file__).read_text(encoding="utf-8")
+    progress = src.split("def roadmap_progress(", 1)[1].split("\ndef ", 1)[0]
+    assert "roadmap_status(root, lane=lane, project=project)" in progress and 'ms.pop("last_activity", None)' in progress
 
 
 def test_board_adapter_same_data(rig):
