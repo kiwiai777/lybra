@@ -490,17 +490,26 @@ def candidate_subject_values(workspace_root: Path, task_id: str, card_frontmatte
 
 def _candidate_tree(repo: Path, candidate: str, where: str) -> str:
     """候选在仓中的 tree(git rev-parse <候选>^{tree}); 不是已有提交 / 读失败 = CandidateSubjectError(VALIDATION_CANDIDATE_INVALID)。
-    固定候选主体(candidate_subject_values)与环境卡候选绑定(environment_binding_values)同一核对。"""
+    固定候选主体(candidate_subject_values)与环境卡候选绑定(environment_binding_values)同一核对。
+    AIPOS-F245 件①: 本子进程对真相指纹结果缓存(task_loader.truth_cached)声明为不变读——完整 40 位提交 sha 的 tree 一经读到即不变;
+    读失败 / 候选不是完整 sha = 该推导不入缓存(仓里之后可能出现该提交 / 分支名会移动)。核对本身不变(每次现核)。"""
     import subprocess
 
+    from tools.aipos_cli.task_loader import truth_external_read, truth_refuse
+
     try:
-        proc = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"{candidate}^{{tree}}"],
-                              capture_output=True, text=True, timeout=30)
+        with truth_external_read():
+            proc = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"{candidate}^{{tree}}"],
+                                  capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError) as exc:
+        truth_refuse(f"git rev-parse {candidate} failed")
         raise CandidateSubjectError("VALIDATION_CANDIDATE_INVALID", f"读候选 {candidate} 失败({repo}): {exc}") from exc
     tree = proc.stdout.strip()
     if proc.returncode != 0 or not _FULL_SHA_RE.match(tree):
+        truth_refuse(f"candidate {candidate} not found in {repo}")
         raise CandidateSubjectError("VALIDATION_CANDIDATE_INVALID", f"候选 {candidate} 不是{where} 中已有提交")
+    if not _FULL_SHA_RE.match(str(candidate)):
+        truth_refuse(f"candidate {candidate} is not a full commit sha")
     return tree
 
 

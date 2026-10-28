@@ -720,7 +720,38 @@ def _project_paths_declaration() -> dict[str, dict[str, Any]]:
     return decl
 
 
+def git_dir_of(root: Path) -> Path | None:
+    """The git directory holding ``root`` (walk up for .git; a .git file = `gitdir: <path>`); none = None. No subprocess.
+    AIPOS-F245: moved here from project_upgrade._git_dir (which now delegates; one implementation)."""
+    for base in (root, *root.parents):
+        dot = base / ".git"
+        if dot.is_dir():
+            return dot
+        if dot.is_file():
+            try:
+                text = dot.read_text(encoding="utf-8").strip()
+            except OSError:
+                return None
+            if text.startswith("gitdir:"):
+                target = Path(text.split(":", 1)[1].strip())
+                return target if target.is_absolute() else (base / target)
+            return None
+    return None
+
+
 def project_paths(governance_root: str | Path, *, project: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F245 件②: 读盘上 project.json(project 未给)时, 请求级只读作用域内(task_loader.read_request_scope)每治理根每请求只解析一次
+    (原看板一次总览 3300 次), 每次交出私有副本; 作用域外 / project 给出 = 每次照算。解析见 _project_paths。"""
+    if project is not None:
+        return _project_paths(governance_root, project=project)
+    from tools.aipos_cli.frontmatter import _fresh_copy
+    from tools.aipos_cli.task_loader import request_memo
+
+    return _fresh_copy(request_memo(("workspace_config.project_paths", str(Path(governance_root))),
+                                    lambda: _project_paths(governance_root)))
+
+
+def _project_paths(governance_root: str | Path, *, project: dict[str, Any] | None = None) -> dict[str, Any]:
     """AIPOS-F78: 解析项目落点声明。返回 {return_root: Path, verdict_root: Path, queue_root: Path,
     task_cards_root: Path, manual_gate_mode: bool, finalize_mode: str, foundation_backlog: Path | None,
     hard_rules_source: Path | None, policies_root: Path, declared: {key: bool}}。
@@ -881,6 +912,18 @@ def _same_path(a: Path, b: Path) -> bool:
 
 
 def project_repos(governance_root: str | Path, *, project: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F245 件②: 读盘上 project.json(project 未给)时, 请求级只读作用域内每治理根每请求只解析一次(原看板一次总览 3200+ 次, 每卡
+    lane 解析各一次), 每次交出私有副本; 作用域外 / project 给出 = 每次照算。解析见 _project_repos。"""
+    if project is not None:
+        return _project_repos(governance_root, project=project)
+    from tools.aipos_cli.frontmatter import _fresh_copy
+    from tools.aipos_cli.task_loader import request_memo
+
+    return _fresh_copy(request_memo(("workspace_config.project_repos", str(Path(governance_root))),
+                                    lambda: _project_repos(governance_root)))
+
+
+def _project_repos(governance_root: str | Path, *, project: dict[str, Any] | None = None) -> dict[str, Any]:
     """AIPOS-F78C 件①: 解析项目仓清单(唯一读取口)。
 
     返回 {declared: bool, default: str|None, items: {仓名: Path}, no_deploy: [仓名], code_repo: Path|None, project_json_exists: bool}。

@@ -630,21 +630,11 @@ def _stat_ident(path: Path) -> tuple[Any, ...]:
 
 
 def _git_dir(root: Path) -> Path | None:
-    """The git directory holding the governance root (walk up for .git; a .git file = `gitdir: <path>`); none = None. No subprocess."""
-    for base in (root, *root.parents):
-        dot = base / ".git"
-        if dot.is_dir():
-            return dot
-        if dot.is_file():
-            try:
-                text = dot.read_text(encoding="utf-8").strip()
-            except OSError:
-                return None
-            if text.startswith("gitdir:"):
-                target = Path(text.split(":", 1)[1].strip())
-                return target if target.is_absolute() else (base / target)
-            return None
-    return None
+    """The git directory holding the governance root; AIPOS-F245: the one implementation moved to workspace_config.git_dir_of (the
+    board truth cache reads it too, from a module that must not import this one)."""
+    from tools.aipos_cli.workspace_config import git_dir_of
+
+    return git_dir_of(root)
 
 
 def _badge_fingerprint(root: Path, stations: list[str]) -> tuple[Any, ...]:

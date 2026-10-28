@@ -923,11 +923,16 @@ def card_stats(governance_root: Path) -> dict[str, Any]:
     per governance root (callers get deep copies). Returns {groups, totals: {inflight, todo, closed}, by_state, frozen, frozen_error,
     rows: [{task_id, title, queue_state, group, subproject, owner, owner_source, lane, created_at}], subprojects: [{key, label,
     advisor, lanes, counts, by_state}]}."""
-    from tools.aipos_cli.task_loader import lookup_scope_memo, task_card_lookup_scope
+    from tools.aipos_cli.task_loader import lookup_scope_memo, task_card_lookup_scope, truth_cached
 
     root = Path(governance_root)
-    with task_card_lookup_scope(root):
-        return lookup_scope_memo(root, "machine_zone.card_stats", lambda: _card_stats(root), copy_out=True)
+
+    def compute() -> dict[str, Any]:
+        with task_card_lookup_scope(root):
+            return lookup_scope_memo(root, "machine_zone.card_stats", lambda: _card_stats(root), copy_out=True)
+
+    # AIPOS-F245 件②: 看板服务进程内另按真相指纹缓存(task_loader.truth_cached): 别的项目的真相变了, 本项目卡统计不重推导
+    return truth_cached(("machine_zone.card_stats", str(root)), compute)
 
 
 def _card_stats(root: Path) -> dict[str, Any]:

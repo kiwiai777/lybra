@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 from collections import defaultdict
+from functools import partial
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -119,9 +120,28 @@ def _build_group_records(
 
 
 def _load_group_cached(repo_root: Path, group: str) -> tuple[list[dict[str, Any]], list[str]]:
-    """带指纹缓存的分组加载(增量: 未变组复用, 变更组重扫+双指纹防半写)。"""
-    subdir, kind = _GROUP_KINDS[group]
-    group_root = _record_dir(repo_root, subdir)
+    """带指纹缓存的分组加载(增量: 未变组复用, 变更组重扫+双指纹防半写)。
+    AIPOS-F245 件①: 处在真相指纹结果缓存的推导内(task_loader.truth_cached)时, 本组按 F55 组指纹整体记一笔(truth_note_fingerprint,
+    校验时以同一 _group_fingerprint 重算比对), 组内逐目录 / 逐文件不另记; 双指纹重试用尽仍不一致 = 该推导不入缓存。"""
+    from tools.aipos_cli.task_loader import truth_note_fingerprint, truth_refuse, truth_untracked
+
+    group_root = _record_dir(repo_root, _GROUP_KINDS[group][0])
+    with truth_untracked():
+        records, hand_written, fingerprint = _load_group_fingerprinted(repo_root, group, group_root)
+    if fingerprint is _UNSETTLED_GROUP:
+        truth_refuse(f"records group {group_root} changed while being read")
+    else:
+        newest = max((entry[1] for entry in fingerprint), default=0) if fingerprint else 0
+        truth_note_fingerprint(("records.group", str(group_root)), fingerprint, partial(_group_fingerprint, group_root), newest)
+    return records, hand_written
+
+
+_UNSETTLED_GROUP = object()  # AIPOS-F245: the double fingerprint never matched (records returned as read, fingerprint unknown)
+
+
+def _load_group_fingerprinted(repo_root: Path, group: str, group_root: Path) -> tuple[list[dict[str, Any]], list[str], Any]:
+    """_load_group_cached body: (records, hand-written warnings, the group fingerprint they match | _UNSETTLED_GROUP)."""
+    kind = _GROUP_KINDS[group][1]
     cache_key = (str(repo_root), group)
     records: list[dict[str, Any]] = []
     hand_written: list[str] = []
@@ -130,19 +150,19 @@ def _load_group_cached(repo_root: Path, group: str) -> tuple[list[dict[str, Any]
         if fp_before is None:
             with _RECORDS_CACHE_LOCK:
                 _RECORDS_GROUP_CACHE.pop(cache_key, None)
-            return [], []
+            return [], [], None
         with _RECORDS_CACHE_LOCK:
             cached = _RECORDS_GROUP_CACHE.get(cache_key)
             if cached is not None and cached[0] == fp_before:
-                return list(cached[1]), list(cached[2])
+                return list(cached[1]), list(cached[2]), fp_before
         records, hand_written = _build_group_records(repo_root, group_root, group, kind)
         fp_after = _group_fingerprint(group_root)
         if fp_after == fp_before:
             with _RECORDS_CACHE_LOCK:
                 _RECORDS_GROUP_CACHE[cache_key] = (fp_before, records, hand_written)
-            return list(records), list(hand_written)
+            return list(records), list(hand_written), fp_before
         # 扫描期间组内发生变更(可能读到半写): 重扫一次
-    return records, hand_written
+    return records, hand_written, _UNSETTLED_GROUP
 
 
 def clear_records_cache() -> None:

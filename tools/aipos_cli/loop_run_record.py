@@ -36,6 +36,7 @@ import socket
 import subprocess
 import time
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable
 
@@ -152,6 +153,29 @@ def _proc_available() -> bool:
 
 
 def _start_from_proc(pid: int) -> str | None:
+    """AIPOS-F245 件①: /proc 伪文件内容会变而文件身份(inode / mtime)不变(进程退出成僵尸), 故不按路径记入真相指纹结果缓存, 而以读到的
+    启动时刻指纹本身记一笔(task_loader.truth_note_fingerprint; 校验时以同一读法重读比对: 进程退出 / pid 复用 = 下一次请求即重算)。"""
+    from tools.aipos_cli.task_loader import truth_note_fingerprint, truth_untracked
+
+    with truth_untracked():
+        try:
+            start = _read_proc_start(pid)
+        except LoopRunRecordError as exc:
+            truth_note_fingerprint(("proc.start", pid), ("error", str(exc)), partial(_proc_start_or_error, pid))
+            raise
+    truth_note_fingerprint(("proc.start", pid), start, partial(_proc_start_or_error, pid))
+    return start
+
+
+def _proc_start_or_error(pid: int) -> Any:
+    """Truth-fingerprint recompute of _start_from_proc (never raises: an unreadable /proc entry = its error text)."""
+    try:
+        return _read_proc_start(pid)
+    except LoopRunRecordError as exc:
+        return ("error", str(exc))
+
+
+def _read_proc_start(pid: int) -> str | None:
     try:
         raw = Path(f"/proc/{pid}/stat").read_bytes()
     except (FileNotFoundError, ProcessLookupError):
@@ -1939,6 +1963,20 @@ def loop_status(governance_root: Path, task_id: str | None = None, *, now: datet
     (冻结卡的运行缺省不列 = F122 唯一判定; lane 给出 = 只列所选, 未解析 lane 的运行单独成组); --task-id = 显式点名, 照列(冻结标 frozen)。
     AIPOS-F142 件①: 一次 status 全程一个只读作用域(task_loader.task_card_lookup_scope): 运行行反查卡面、结案取下一张的扫描共用一趟
     队列索引, 冻结清单与信封计数各只算一次; --task-id 只读该卡运行记录; 已结束运行 judge_run 不探活。每次调用(含 --wait 每轮)新建作用域。"""
+    from tools.aipos_cli.task_loader import truth_cached
+
+    if task_id and now is None and contract is None and lane is None:
+        # AIPOS-F245 件②: 单卡状态(收件箱逐张在途卡)在看板服务进程内按真相指纹逐卡缓存(task_loader.truth_cached, 分钟粒度): 一张卡的运行
+        # 记录变了只重推导这张卡; CLI / 门 / 带 now / contract / lane 的调用照旧每次现算
+        return truth_cached(("loop_run_record.loop_status", str(governance_root), str(task_id), bool(include_frozen)),
+                            lambda: _loop_status_scoped(governance_root, task_id, include_frozen=include_frozen))
+    return _loop_status_scoped(governance_root, task_id, now=now, contract=contract, lane=lane, include_frozen=include_frozen)
+
+
+def _loop_status_scoped(governance_root: Path, task_id: str | None = None, *, now: datetime | None = None,
+                        contract: dict[str, Any] | None = None, lane: str | list[str] | None = None,
+                        include_frozen: bool = False) -> dict[str, Any]:
+    """loop_status body (one read scope; see loop_status)."""
     from tools.aipos_cli.task_loader import task_card_lookup_scope
 
     with task_card_lookup_scope(Path(governance_root)):
