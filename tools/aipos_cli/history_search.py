@@ -349,6 +349,7 @@ def _candidates(root: Path, previous: dict[str, Any], frozen: dict[str, Any]) ->
 def project_entries(name: str, governance_root: Path, decl: dict[str, Any] | None = None) -> dict[str, Any]:
     """一个项目的全部历史条目(经索引增量): {entries, frozen, errors, index{path, cards, reused, rebuilt, build_ms, rebuilt_reason,
     write_error}}。entries 每条带 project / legacy(冻结判定现读 legacy_baseline.frozen_tasks, 不进缓存)。"""
+    from tools.aipos_cli.clock import iso_z
     from tools.aipos_cli.legacy_baseline import LegacyBaselineError, frozen_tasks
     from tools.aipos_cli.task_loader import queue_root_for, task_card_lookup_scope, truth_identity_changed, truth_record
     from tools.aipos_cli.workspace_config import project_json_path
@@ -400,7 +401,7 @@ def project_entries(name: str, governance_root: Path, decl: dict[str, Any] | Non
         write_error = None
         if dirty:
             kept = {k: v for k, v in new_cards.items() if isinstance(v.get("truth"), list)}
-            write_error = _write_index(path, {**header, "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            write_error = _write_index(path, {**header, "built_at": iso_z(),
                                               "queue_ids": ids, "cards": kept})
     entries = []
     for rel, card in new_cards.items():
@@ -428,11 +429,13 @@ def split_keywords(values: Any) -> list[str]:
 
 def parse_since(value: str | None, decl: dict[str, Any], today: date | None = None) -> date | None:
     """--since: YYYY-MM-DD 或 <N><since_days_suffix>(近 N 天)。不合 = HistoryUsageError。"""
+    from tools.aipos_cli.clock import utc_now
+
     text = str(value or "").strip()
     if not text:
         return None
     suffix = str(decl["since_days_suffix"])
-    now = today or datetime.now(timezone.utc).date()
+    now = today or utc_now().date()
     if text.endswith(suffix) and text[: -len(suffix)].isdigit():
         return now - timedelta(days=int(text[: -len(suffix)]))
     try:
