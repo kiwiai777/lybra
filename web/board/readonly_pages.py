@@ -1727,7 +1727,9 @@ def _history_chips(ctx: _Ctx, data: dict[str, Any]) -> str:
     rows += [chip(name, f["project"] == name, project=name, advisor=None) for name in projects]
     rows.append(chip(ctx.t("hs_recent", days=days), f["since"] == recent, since=None if f["since"] == recent else recent))
     rows.append(chip(ctx.t("hs_rejected"), f["rejected_once"], rejected_once=None if f["rejected_once"] else flag))
-    for mode in ("only", "exclude"):
+    from tools.aipos_cli.history_search import legacy_choices
+
+    for mode in [m for m in legacy_choices() if m != data["verb"]["legacy_default"]]:  # the non-default legacy filters (enums.schema)
         rows.append(chip(ctx.t("hs_legacy_" + mode), f["legacy"] == mode, legacy=None if f["legacy"] == mode else mode))
     out = [f"<div class=\"hs-filters\" data-filters=\"main\">{''.join(rows)}</div>"]
     result = data.get("result") or {}

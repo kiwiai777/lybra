@@ -418,14 +418,15 @@ def test_item4_project_page_links_history_and_words(board):
 
 def test_page_budget_and_declarations(board):
     from tools.aipos_cli.board_pages import pages_declaration
-    from tools.aipos_cli.history_search import LEGACY_CHOICES, declaration
+    from tools.aipos_cli.history_search import declaration, legacy_choices
 
     decl = pages_declaration()
     page = _page(board, "/owner/history")
     assert len(page.encode("utf-8")) <= int(decl["history"]["page_budget_bytes"])
     assert decl["pages"]["history"] == "/owner/history" and "history" in decl["home"]["nav"]
     verb = declaration()
-    assert list(verb["parameters"]["properties"]["legacy"]["enum"]) == list(LEGACY_CHOICES)
+    assert verb["parameters"]["properties"]["legacy"]["$enum"] == "history_legacy_filter"
+    assert sorted(legacy_choices()) == ["exclude", "include", "only"]
     from web.board.app import _I18N_TEMPLATES
 
     keys = {k for k in _I18N_TEMPLATES["zh"] if k.startswith("hs_")}

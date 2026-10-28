@@ -3721,14 +3721,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="AIPOS-F247: search closed cards (and frozen legacy cards) by keywords: title / card goal / return summary / audit summary; "
              "several keywords = AND, substring match; shows what was done, how it was verified and the audit (verdict, rounds, "
              "rejected once and why, report paths); newest closure first")
-    from tools.aipos_cli.history_search import LEGACY_CHOICES as _history_legacy_choices
+    from tools.aipos_cli.history_search import legacy_choices as _history_legacy_choices  # 值域读 enums.schema(不写死)
 
     history_search_parser.add_argument("keywords", nargs="*", help="Keywords (AND; none = most recent closures)")
     history_search_parser.add_argument("--project", default=None, help="Only this registered project")
     history_search_parser.add_argument("--advisor", default=None, help="Only cards owned by this advisor instance")
     history_search_parser.add_argument("--since", default=None, help="Closed on or after: YYYY-MM-DD or <N>d (last N days)")
     history_search_parser.add_argument("--rejected-once", action="store_true", help="Only cards rejected by an audit at least once")
-    history_search_parser.add_argument("--legacy", choices=list(_history_legacy_choices), default=None,
+    history_search_parser.add_argument("--legacy", choices=list(_history_legacy_choices()), default=None,
                                        help="Frozen legacy cards: include (default) / only / exclude")
     history_search_parser.add_argument("--limit", type=int, default=None, help="Show at most N results (the total is still reported)")
     history_search_parser.add_argument("--all-projects", action="store_true", help="Also search projects hidden on the board (test projects)")

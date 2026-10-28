@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 VERB = "lybra_history_search"
-LEGACY_CHOICES = ("include", "only", "exclude")
+LEGACY_ENUM = "history_legacy_filter"  # enums.schema: the legacy-backlog filter values (include / only / exclude)
 _KEYS = ("legacy_default", "since_days_suffix", "result_limit", "field_chars", "excerpt_chars", "evidence_limit", "credential_mask", "index",
          "texts", "exit_codes", "parameters")
 _TEXT_KEYS = ("header", "header_all", "scope_all", "row", "legacy_mark", "goal", "done", "verify", "verify_none", "audit", "audit_rounds",
@@ -58,9 +58,9 @@ def declaration() -> dict[str, Any]:
     if not isinstance(texts, dict) or any(not texts.get(k) for k in _TEXT_KEYS) or \
             any(not str((texts["verdict_words"] or {}).get(k) or "") for k in VERDICT_WORDS):
         raise SchemaLoadError(f"{where}.texts 未声明齐 {list(_TEXT_KEYS)} / verdict_words {list(VERDICT_WORDS)}")
-    enum = (((decl["parameters"].get("properties") or {}).get("legacy") or {}).get("enum"))
-    if list(enum or []) != list(LEGACY_CHOICES) or decl["legacy_default"] not in LEGACY_CHOICES:
-        raise SchemaLoadError(f"{where}.parameters.legacy.enum 须为 {list(LEGACY_CHOICES)} 且 legacy_default 在内")
+    ref = (((decl["parameters"].get("properties") or {}).get("legacy") or {}).get("$enum"))
+    if ref != LEGACY_ENUM or decl["legacy_default"] not in legacy_choices():
+        raise SchemaLoadError(f"{where}.parameters.legacy 须以 $enum 引 enums.schema {LEGACY_ENUM}, legacy_default 在其值域内")
     for key in ("result_limit", "field_chars", "excerpt_chars", "evidence_limit"):
         if not isinstance(decl[key], int) or isinstance(decl[key], bool) or decl[key] < 1:
             raise SchemaLoadError(f"{where}.{key} 须为正整数")
@@ -71,6 +71,17 @@ def declaration() -> dict[str, Any]:
     if not str(decl["since_days_suffix"] or "").strip():
         raise SchemaLoadError(f"{where}.since_days_suffix 未声明")
     return decl
+
+
+def legacy_choices() -> tuple[str, ...]:
+    """历史存量筛选值域唯一读取口(enums.schema history_legacy_filter; CLI choices / 看板筛选 / 检索同读)。须恰含 include / only / exclude
+    (检索按这三个值分支), 否则 SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, get_enum_values
+
+    values = tuple(get_enum_values(LEGACY_ENUM, code_repo_schema_root()))
+    if sorted(values) != sorted(("include", "only", "exclude")):
+        raise SchemaLoadError(f"enums.schema.json {LEGACY_ENUM} 须恰为 include / only / exclude, 得到 {list(values)}")
+    return values
 
 
 def _decl_digest(decl: dict[str, Any]) -> str:
@@ -478,8 +489,8 @@ def _search(home_root: str | Path | None, keywords: Any, *, project: str | None,
     decl = declaration()
     words = split_keywords(keywords)
     legacy_mode = legacy or str(decl["legacy_default"])
-    if legacy_mode not in LEGACY_CHOICES:
-        raise HistoryUsageError(f"--legacy ∈ {list(LEGACY_CHOICES)}, 得到 {legacy_mode!r}")
+    if legacy_mode not in legacy_choices():
+        raise HistoryUsageError(f"--legacy ∈ {list(legacy_choices())}, 得到 {legacy_mode!r}")
     since_day = parse_since(since, decl)
     home = home_entries(home_root)
     shown, _hidden = visible_entries(home, all_projects)

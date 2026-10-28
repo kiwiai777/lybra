@@ -765,6 +765,14 @@
         }
       ]
     },
+    "history_legacy_filter": {
+      "description": "AIPOS-F247: 历史检索的「历史存量」(冻结卡, legacy_baseline.frozen_tasks)筛选值域唯一声明。读取口 history_search.legacy_choices(verbs lybra_history_search 参数 legacy 以 $enum 引用本枚举; CLI `lybra history search --legacy` choices 与看板「历史与审计」页筛选同读)。",
+      "values": [
+        {"value": "include", "description": "含历史存量(缺省)"},
+        {"value": "only", "description": "只看历史存量"},
+        {"value": "exclude", "description": "不含历史存量"}
+      ]
+    },
     "kickoff_role": {
       "description": "AIPOS-F214 件④(F208 P2-3 / P2-6: kickoff 角色值域原在 verbs lybra_kickoff.parameters.properties.role 内联 enum, CLI `lybra kickoff --role` 的 argparse choices 又写死一份): 开工稿角色值域唯一声明。读取口 subagent_kickoff.kickoff_roles(verbs 参数 role 以 $enum 引用本枚举; 开工稿 layout / role_labels 须覆盖每一值; argparse choices 由其渲染)。",
       "values": [
