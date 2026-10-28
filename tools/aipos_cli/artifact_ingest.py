@@ -14,6 +14,7 @@ symlink / relative-path escape or confused-deputy scratch root.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import stat as stat_module
@@ -880,6 +881,16 @@ def credential_guard_declaration() -> dict[str, Any] | None:
                                                        "strip": exempt["strip_chars"]}}
 
 
+def credential_guard_fingerprint(decl: dict[str, Any] | None = None) -> str:
+    """AIPOS-F250: 判据版本(唯一实现) = credential_guard 的 patterns + exempt 内容摘要(sha256 前 16 位; 未声明 = 固定词)。存放判定结果的
+    派生缓存(history 索引头)把它纳入指纹: 判据变 = 整份重建。decl 缺省 = 现读声明(声明坏 = SchemaLoadError, fail-closed)。"""
+    d = decl if decl is not None else credential_guard_declaration()
+    if d is None:
+        return "undeclared"
+    basis = {"patterns": d["patterns"], "exempt": d["exempt"]}
+    return hashlib.sha256(json.dumps(basis, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
+
+
 def credential_charter_rule() -> str:
     """AIPOS-F242 件④: 执行 / 审计章程「报告不写明文凭据」事前提示(章程占位 {{credential_rule}}, charter_render 唯一调用)。文案唯一声明
     transitions artifact_ingest.credential_guard.texts.charter_rule(与入门判据同节); 声明缺本节 = 明确文字(不查, 不留空占位)。
@@ -918,9 +929,14 @@ def _credential_matches(text: str, decl: dict[str, Any]) -> Iterator[tuple[Any, 
 
 
 def credential_hits(text: str, decl: dict[str, Any]) -> list[dict[str, Any]]:
-    """AIPOS-F239 件①(唯一判定): 文本中的明文凭据命中 [{line, kind, label}](按行号、种类去重排序)。绝不返回命中值。"""
+    """AIPOS-F239 件①(唯一判定): 文本中的明文凭据命中 [{line, kind, label}](按行号、种类去重排序)。绝不返回命中值。
+    AIPOS-F250: 同一处(命中值区间相交)被多条模式命中 = 只记最先声明的那条(专门写法声明在泛化模式之前), 计数按处。"""
     seen: dict[tuple[int, str], dict[str, Any]] = {}
-    for m, _span, kind, label in _credential_matches(text, decl):
+    taken: list[tuple[int, int]] = []
+    for m, span, kind, label in _credential_matches(text, decl):
+        if any(span[0] < end and start < span[1] for start, end in taken):
+            continue
+        taken.append(span)
         line = text.count("\n", 0, m.start()) + 1
         seen.setdefault((line, kind), {"line": line, "kind": kind, "label": label})
     return [seen[k] for k in sorted(seen)]
