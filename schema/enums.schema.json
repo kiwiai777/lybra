@@ -229,6 +229,10 @@
         {
           "value": "advisor_update",
           "description": "AIPOS-F167 件②: 产品侧更新说明记录(部署目录 advisor_updates/update_*.json, 不在治理根; finalize --deploy 成功后汇总; 声明 verbs.schema lybra_updates.store)"
+        },
+        {
+          "value": "advisor_headline",
+          "description": "AIPOS-F246 件①: 顾问简报(看板首页一页纸卡「现在」「做成」两行; records/advisor_headlines/<实例>/headline_*.md, 只追加; `lybra project headline --confirm` 写出并落账; 声明 verbs.schema lybra_project_headline; 写入 / 读取唯一实现 advisor_headline.py)"
         }
       ]
     },

@@ -370,9 +370,11 @@ def test_board_page_same_plan_as_cli_and_zero_writes(board):
     assert f'<option value="{_coder(P2)}">' in form and "method=\"post\"" not in form
     for key in ("lead", "specialist"):
         assert f'data-prompt="{key}"' in page
-    assert 'href="/owner/workstation" aria-current="page"' in page  # 顶部导航同一骨架
+    assert 'href="/owner/engineering" data-nav="engineering" aria-current="page"' in page  # 顶部导航同一骨架(AIPOS-F246: 工位页归「工程」)
     proj = _get(board, f"/owner/project?project={P2}")[1]
-    assert f'class="rp-link rp-workstation-link" href="/owner/workstation?project={P2}"' in proj  # 项目页入口
+    assert f'href="/owner/workstation?project={P2}"' in proj  # 项目页入口(AIPOS-F246: 项目一页纸的「工程详情」内)
+    cards = _get(board, f"/owner/project?project={P2}&view=cards")[1]
+    assert f'class="rp-link rp-workstation-link" href="/owner/workstation?project={P2}"' in cards  # 全部任务卡视图页脚照旧
     status, refused = _get(board, "/owner/workstation", method="POST")
     _show(f"[件② 看板零写入: POST 工位页] {status} {refused[:200]}")
     assert status != 200 or "board_readonly" in refused

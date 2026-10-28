@@ -3171,6 +3171,10 @@ def loop_status_cli(args: Any) -> int:
 
         for line in advisor_banner_lines(governance_root, getattr(args, "actor", None)):
             print(line)
+        from tools.aipos_cli.advisor_headline import headline_hint_lines  # AIPOS-F246 件①: 顾问简报超阈值 = 提示一次更新命令
+
+        for line in headline_hint_lines(governance_root, getattr(args, "actor", None)):
+            print(line)
     if task_id and not report["runs"]:
         return declared_exit_code(STATUS_VERB, "no_run")
     if wait is not None and report.get("deploy_changed"):  # AIPOS-F152 件①: 等待中部署已更新 = 声明出口 deploy_changed

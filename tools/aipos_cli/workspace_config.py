@@ -1475,6 +1475,15 @@ def default_lane_repo(governance_root: str | Path) -> str:
     return str(governance_root)
 
 
+def project_lane_keys(governance_root: str | Path) -> list[str]:
+    """项目声明的全部 lane 键(仓清单仓名; 无清单 = 唯一仓路径)。唯一实现(machine_zone.declared_lanes 薄壳 / autonomy_policy 信封展示接替同读)。"""
+    root = Path(governance_root)
+    repos = project_repos(root)
+    if repos["declared"]:
+        return list(repos["items"])
+    return [str(resolve_card_repo(root, {}))]
+
+
 def repo_name_set(value: Any) -> list[str]:
     """AIPOS-F139: 仓集合的唯一序列化/解析(信封 task_selector_lane_repo 铸造/渲染/判定与 --lane 视图过滤共用, 禁第二路径)。
 

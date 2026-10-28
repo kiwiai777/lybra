@@ -237,12 +237,13 @@ def test_item1_one_skeleton_nav_and_root_redirect(board):
         navs[path] = re.sub(r' aria-current="page"', "", _nav(page))
     _show("[item1 top nav (same on every page) raw] " + navs["/owner/overview"])
     assert len(set(navs.values())) == 1, navs
-    for href in ("/owner/overview", "/owner/project", "/owner/roadmap", "/owner/inbox", "/owner/envelopes", "/owner/onboarding"):
+    # AIPOS-F246 item 5: nav = home / project / history (all-cards view until F247) / engineering (collects the other pages)
+    for href in ("/owner/home", "/owner/project", "/owner/project?view=cards", "/owner/engineering"):
         assert f'href="{href}"' in navs["/owner/overview"], href
     assert 'href="/"' not in navs["/owner/overview"]
     status, body, headers = _get(board, "/", follow=False)
     _show(f"[item1 GET / raw] {status} Location={headers.get('Location')} body={body!r}")
-    assert status == 302 and headers.get("Location") == "/owner/overview"
+    assert status == 302 and headers.get("Location") == "/owner/home"  # AIPOS-F246: root redirect = the home page
     status, legacy, _h = _get(board, "/overview.html")
     assert status == 200 and 'id="workspace-grid"' in legacy  # former home still reachable (linked from the project page footer)
     upgrade = _page(board, "/owner/upgrade")
@@ -295,7 +296,7 @@ def test_item2_item3_overview_counts_subprojects_and_test_hidden(board):
     assert 'data-hidden="1"' in toggle and "显示测试项目(1 个)" in toggle and 'href="/owner/overview?show=all"' in toggle
     paused = _block(page, r'<details class="rp-paused".*?</details>')
     assert f'data-project="{Q}"' in paused
-    named = _page(board, f"/owner/project?project={T}")  # a hidden test project asked for by name is shown, marked as test
+    named = _page(board, f"/owner/project?project={T}&view=cards")  # a hidden test project asked for by name is shown, marked as test
     assert f"项目 · {T}" in named and f'data-project="{T}" aria-current="page"' in named and "T-1" in named
     shown = _page(board, "/owner/overview?show=all")
     probe = _block(shown, rf'<article class="rp-card" data-project="{T}".*?</article>')
@@ -304,7 +305,7 @@ def test_item2_item3_overview_counts_subprojects_and_test_hidden(board):
 
 
 def test_item2_project_page_filter_open_lists_closed_folded(board):
-    page = _page(board, f"/owner/project?project={M}")
+    page = _page(board, f"/owner/project?project={M}&view=cards")  # AIPOS-F246: the former list = the all-cards view
     nav = _block(page, r'<nav class="rp-subnav">.*?</nav>')
     _show(f"[item2 project page subproject filter raw] {nav}")
     assert re.findall(r'data-subproject="([^"]*)"', nav) == ["", ADV_B, ADV_A, "app-r"] and 'data-subproject="" aria-current="page"' in nav
@@ -316,10 +317,10 @@ def test_item2_project_page_filter_open_lists_closed_folded(board):
     assert 'data-task-id="A-3"' in closed and 'data-task-id="O-1"' in closed and " open" not in closed.split(">", 1)[0]
     assert "L-1" not in page and "L-3" not in page  # frozen legacy cards are not listed, only counted as history
     assert "历史存量 4 张" in page and 'href="/workspace/0"' in page
-    only_b = _page(board, f"/owner/project?project={M}&sub={ADV_B}")
+    only_b = _page(board, f"/owner/project?project={M}&sub={ADV_B}&view=cards")
     assert f'data-subproject="{ADV_B}" data-inflight="3"' in only_b and f'<section class="rp-subproject" data-subproject="{ADV_A}"' not in only_b
     assert 'data-task-id="B-1R"' in only_b  # an audit card without its own owner joins the reviewed card's subproject
-    unknown = _page(board, f"/owner/project?project={M}&sub=nobody")
+    unknown = _page(board, f"/owner/project?project={M}&sub=nobody&view=cards")
     assert "子项目 nobody 不在本项目, 已显示全部" in unknown and f'data-subproject="{ADV_A}"' in unknown
 
 
@@ -485,7 +486,7 @@ def test_declarations_i18n_and_single_implementations():
     from web.board.app import _I18N_TEMPLATES
 
     decl = pages_declaration()
-    assert decl["pages"]["project"] == "/owner/project" and decl["root_redirect"] == "overview" and DECLARED[1] == "project"
+    assert decl["pages"]["project"] == "/owner/project" and decl["root_redirect"] == "home" and DECLARED[1] == "project"  # AIPOS-F246
     assert "board_home" not in decl["nav_links"] and decl["query"]["subproject"] == "sub" and decl["show_all_value"] == "all"
     assert card_stats_declaration()["todo_states"] == ["pending"]
     groups = card_state_groups()
@@ -495,9 +496,10 @@ def test_declarations_i18n_and_single_implementations():
     assert set(zh) == set(en)
     src = (REPO_ROOT / "web" / "board" / "readonly_pages.py").read_text(encoding="utf-8")
     used = set(re.findall(r'"((?:rp|ib)_[a-z_]+)"', src)) | set(re.findall(r"'((?:rp|ib)_[a-z_]+)'", src))
-    partial = {"rp_rm_status_", "rp_rm_verify_", "rp_sev_", "rp_ob_state_", "rp_ob_item_", "rp_ob_ask_", "rp_rm_state_", "rp_qs_"}
+    partial = {"rp_rm_status_", "rp_rm_verify_", "rp_sev_", "rp_ob_state_", "rp_ob_item_", "rp_ob_ask_", "rp_rm_state_", "rp_qs_", "rp_nav_"}
     missing = sorted(k for k in used - partial if k not in zh)
     assert not missing, missing
+    assert all(f"rp_nav_{k}" in zh for k in decl["home"]["nav"])  # AIPOS-F246: top nav labels
     assert all(f"rp_qs_{s}" in zh for s in QUEUE_STATES)
     import importlib.util
 

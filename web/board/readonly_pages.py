@@ -88,19 +88,30 @@ def _bar(met: int, total: int, ratio: Any = None) -> str:
             f"<span class=\"rp-bar-text\">{met}/{total}</span>")
 
 
+def _nav_urls(decl: dict[str, Any]) -> dict[str, str]:
+    """AIPOS-F246 item 5: the top nav (declared board_readonly_pages.home.nav): home / project / history & audit (until F247 = the
+    project page all-cards view) / engineering (collects the other pages; no page or route removed)."""
+    from tools.aipos_cli.board_pages import page_url
+
+    home = decl["home"]
+    return {"home": str(decl["pages"]["home"]), "project": str(decl["pages"]["project"]),
+            "history": page_url(decl, "project", view=home["cards_view_value"]), "engineering": str(decl["pages"]["engineering"])}
+
+
 def _page(ctx: _Ctx, page: str, title: str, body: list[str], *, note_key: str | None = "rp_readonly_note", h1_attrs: str = "",
-          body_attrs: str = "", scripts: tuple[str, ...] | list[str] = (), current_url: str | None = None) -> str:
+          body_attrs: str = "", scripts: tuple[str, ...] | list[str] = (), current_url: str | None = None,
+          nav_current: str | None = None) -> str:
     """F174 page skeleton (top nav + stylesheet + language switch). AIPOS-F180: the Owner inbox / envelope pages reuse it with
     note_key=None (no read-only note: they host the F172 write exception), extra body attributes, page scripts and current_url.
-    AIPOS-F181: the single skeleton of the whole board (the upgrade page too; the board root redirects to the overview); one nav."""
+    AIPOS-F181: the single skeleton of the whole board (the upgrade page too; the board root redirects to the home page); one nav.
+    AIPOS-F246 item 5: the nav is home / project / history / engineering; every other page (inbox, envelopes, roadmap, onboarding,
+    workstation, upgrade, the engineering overview) sits under engineering (nav_current overrides, e.g. the all-cards view = history)."""
     decl = ctx.decl
     locale = decl["locale"]
-    nav = [("rp_nav_overview", decl["pages"]["overview"]), ("rp_nav_project", decl["pages"]["project"]),
-           ("rp_nav_roadmap", decl["pages"]["roadmap"]), ("rp_nav_inbox", decl["nav_links"]["inbox"]),
-           ("rp_nav_envelopes", _envelope_page()), ("rp_nav_onboarding", decl["pages"]["onboarding"]),
-           ("rp_nav_workstation", _workstation_page())]
-    links = "".join(f"<a href=\"{_ESC(ctx.href(url))}\"{_CURRENT if url in (decl['pages'].get(page), current_url) else ''}>"
-                    f"{_ESC(ctx.t(key))}</a>" for key, url in nav)
+    urls = _nav_urls(decl)
+    current = nav_current or (page if page in ("home", "project") else "engineering")
+    links = "".join(f"<a href=\"{_ESC(ctx.href(urls[key]))}\" data-nav=\"{_ESC(key)}\"{_CURRENT if key == current else ''}>"
+                    f"{_ESC(ctx.t('rp_nav_' + key))}</a>" for key in decl["home"]["nav"])
     other = next((code for code in locale["supported"] if code != ctx.lang), None)
     switch = ""
     if other:
@@ -292,6 +303,259 @@ def render_overview(data: dict[str, Any], lang: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# AIPOS-F246: home (needs-you + one card per advisor) / project brief (per advisor) / engineering page
+# Text written by advisors / card authors is wrapped in data-authored spans (shown as written; the home forbidden-word guard
+# checks the interface text, board_home.forbidden_hits).
+# ---------------------------------------------------------------------------
+
+def _authored(text: Any) -> str:
+    return f"<span data-authored>{_ESC(str(text))}</span>"
+
+
+def _age_text(ctx: _Ctx, hours: Any) -> str:
+    if hours is None:
+        return ctx.t("hm_foot_none")
+    if hours < 1:
+        return ctx.t("hm_age_now")
+    if hours < 24:
+        return ctx.t("hm_age_hours", hours=int(hours))
+    return ctx.t("hm_age_days", days=int(hours // 24))
+
+
+def _headline_age(ctx: _Ctx, headline: dict[str, Any] | None) -> tuple[str, bool]:
+    """(foot age text, stale)."""
+    if not headline:
+        return ctx.t("hm_foot_none"), False
+    hours = headline.get("age_hours")
+    if headline.get("stale"):
+        return ctx.t("hm_stale", days=int((hours or 0) // 24)), True
+    return _age_text(ctx, hours), False
+
+
+def _meter(ctx: _Ctx, progress: dict[str, Any]) -> str:
+    if progress["kind"] == "criteria":
+        met, total = int(progress["met"]), int(progress["total"])
+        pct = round(100 * met / total) if total else 0
+        text = ctx.t("hm_progress_criteria", met=met, total=total)
+    else:
+        pct = 100 if progress["count"] else 0
+        text = ctx.t("hm_progress_closed", days=progress["days"], count=progress["count"])
+    return (f"<div class=\"hm-meter\" data-progress=\"{_ESC(progress['kind'])}\"><span class=\"hm-bar\" role=\"progressbar\""
+            f" aria-valuenow=\"{pct}\" aria-valuemin=\"0\" aria-valuemax=\"100\"><i style=\"width:{pct}%\"></i></span>"
+            f"<span>{_ESC(text)}</span></div>")
+
+
+def _stuck_text(ctx: _Ctx, count: int, oldest: dict[str, Any] | None) -> str:
+    if not count or not oldest:
+        return _ESC(ctx.t("hm_stuck_none"))
+    marker = "\u0000"
+    key = "hm_stuck_line" if oldest.get("days") is not None else "hm_stuck_line_norecord"
+    text = ctx.t(key, count=count, title=marker, days=oldest.get("days"))
+    head, _, tail = text.partition(marker)
+    return _ESC(head) + _authored(oldest.get("title") or "") + _ESC(tail)
+
+
+def _home_card(ctx: _Ctx, card: dict[str, Any]) -> str:
+    hl = card.get("headline") or {}
+    age, stale = _headline_age(ctx, card.get("headline"))
+    stage = f"<span class=\"hm-chip\" data-authored>{_ESC(hl['stage'])}</span>" if hl.get("stage") else ""
+    paused = f"<span class=\"hm-chip hm-chip-q\">{_ESC(ctx.t('hm_paused_chip'))}</span>" if card.get("paused") else ""
+    if card.get("headline"):
+        rows_now = f"<div class=\"hm-row\"><b>{_ESC(ctx.t('hm_now'))}</b>{_authored(hl.get('now') or '')}</div>"
+        rows_done = f"<div class=\"hm-row\"><b>{_ESC(ctx.t('hm_done'))}</b>{_authored(hl.get('done') or '')}</div>"
+    else:
+        rows_now = f"<div class=\"hm-row hm-none\"><b>{_ESC(ctx.t('hm_now'))}</b><span>{_ESC(ctx.t('hm_no_headline'))}</span></div>"
+        rows_done = ""
+    stuck = (f"<div class=\"hm-row{' hm-warn' if card['stalled'] else ''}\" data-stalled=\"{card['stalled']}\"><b>{_ESC(ctx.t('hm_stuck'))}</b>"
+             f"<span>{_stuck_text(ctx, card['stalled'], card.get('stalled_oldest'))}</span></div>")
+    name = _authored(card["display"]) if hl.get("title") else _ESC(card["display"])
+    return (f"<a class=\"hm-proj\" href=\"{_ESC(ctx.href(card['url']))}\" data-project=\"{_ESC(card['project'])}\""
+            f" data-pushing=\"{card['pushing']}\" data-stalled=\"{card['stalled']}\" data-stale=\"{str(stale).lower()}\""
+            f" data-headline=\"{str(bool(card.get('headline'))).lower()}\">"
+            f"<div class=\"hm-h\"><span class=\"hm-n\">{name}</span>{stage}{paused}</div>{_meter(ctx, card['progress'])}"
+            f"{rows_now}{stuck}{rows_done}"
+            f"<div class=\"hm-foot\"><span class=\"{'hm-stale' if stale else ''}\">"
+            f"{_ESC(ctx.t('hm_foot', advisor=chr(0), age=age)).replace(chr(0), name)}</span>"
+            f"<span>{_ESC(ctx.t('hm_detail'))}</span></div></a>")
+
+
+def _ask_html(ctx: _Ctx, ask: dict[str, Any]) -> str:
+    title = ctx.t(ask["key"], **{k: "\u0000" + k + "\u0000" for k in ask["values"]})
+    parts = title.split("\u0000")
+    rendered = "".join(_authored(ask["values"][part]) if i % 2 else _ESC(part) for i, part in enumerate(parts))
+    waited = ctx.t("hm_ask_waited", days=ask["waited_days"]) if ask.get("waited_days") else ctx.t("hm_ask_today")
+    detail = (_authored(ask["detail"]) + " · ") if ask.get("detail") else ""
+    return (f"<div class=\"hm-ask\" data-rank=\"{_ESC(str(ask.get('rank')))}\" data-project=\"{_ESC(ask['project'])}\">"
+            f"<div class=\"hm-what\"><div class=\"hm-t\">{rendered}</div><div class=\"hm-d\">{detail}"
+            f"{_ESC(str(ask.get('rank_label') or ''))} · {_ESC(waited)} · <a href=\"{_ESC(ctx.href(ask['url']))}\">{_ESC(ctx.t('hm_ask_go'))}</a>"
+            f"</div></div></div>")
+
+
+def render_home(data: dict[str, Any], lang: str) -> str:
+    ctx = _Ctx(data["decl"], lang)
+    body = [_toggle(ctx, data.get("hidden") or [], bool(data.get("show_all")), str(ctx.decl["pages"]["home"]))]
+    asks = [f"<section class=\"hm-asks\" data-asks=\"{len(data['asks'])}\" data-asks-total=\"{data['asks_total']}\">",
+            f"<div class=\"hm-kicker\">{_ESC(ctx.t('hm_asks_kicker', count=data['asks_total']))}</div>"]
+    if data.get("inbox_error"):
+        asks.append(f"<p class=\"rp-err\">{_ESC(ctx.t('hm_inbox_error', error=data['inbox_error']))}</p>")
+    elif not data["asks"]:
+        asks.append(f"<p class=\"hm-quiet\">{_ESC(ctx.t('hm_asks_none'))}</p>")
+    asks += [_ask_html(ctx, a) for a in data["asks"]]
+    more = int(data["asks_total"]) - len(data["asks"])
+    if more > 0:
+        asks.append(f"<a class=\"hm-more\" href=\"{_ESC(ctx.href(data['inbox_url']))}\">{_ESC(ctx.t('hm_ask_more', count=more))}</a>")
+    asks.append("</section>")
+    body += asks
+    active = [c for c in data["cards"] if not c["paused"]]
+    paused = [c for c in data["cards"] if c["paused"]]
+    body.append(f"<section class=\"hm-projects\" data-cards=\"{len(active)}\"><div class=\"hm-kicker\">{_ESC(ctx.t('hm_projects_kicker'))}</div>")
+    if not data["cards"]:
+        body.append(f"<p class=\"hm-quiet\">{_ESC(ctx.t('hm_no_cards'))}</p>")
+    body.append("<div class=\"hm-grid\">" + "".join(_home_card(ctx, c) for c in active) + "</div>")
+    if paused:
+        body.append(f"<details class=\"hm-paused\" data-paused=\"{len(paused)}\"><summary>{_ESC(ctx.t('hm_paused_folded', count=len(paused)))}"
+                    "</summary><div class=\"hm-grid\">" + "".join(_home_card(ctx, c) for c in paused) + "</div></details>")
+    body.append("</section>")
+    for err in data.get("errors") or []:
+        body.append(f"<p class=\"rp-err hm-err\">{_ESC(ctx.t('hm_project_error', project=err['project'], error=err['error']))}</p>")
+    return _page(ctx, "home", ctx.t("hm_title"), body, note_key=None)
+
+
+def _brief_rows(ctx: _Ctx, rows: list[dict[str, Any]]) -> str:
+    items = []
+    for r in rows:
+        state = r["state"]
+        label = ctx.t("pb_state_" + state)
+        extra = ""
+        if state == "stalled":
+            extra = " · " + (ctx.t("pb_stalled_days", days=r["days"]) if r.get("days") is not None else ctx.t("pb_stalled_norecord"))
+        items.append(f"<li data-state=\"{_ESC(state)}\" data-task-id=\"{_ESC(r['task_id'])}\"><span class=\"hm-st{' hm-st-w' if state == 'stalled' else ''}\">"
+                     f"{_ESC(label)}</span><span>{_authored(r['title'])}{_ESC(extra)}</span><span class=\"hm-id\">{_ESC(r['task_id'])}</span></li>")
+    return f"<ul class=\"hm-list\">{''.join(items)}</ul>"
+
+
+def _brief_milestone(ctx: _Ctx, ms: dict[str, Any]) -> str:
+    if ms["status"] == "done":
+        tail = ctx.t("pb_ms_done")
+    elif ms["overdue"]:
+        tail = ctx.t("pb_ms_overdue", date=ms["target_date"])
+    elif ms.get("target_date"):
+        tail = ctx.t("pb_ms_target", date=ms["target_date"])
+    else:
+        tail = ""
+    if ms.get("owner_pending") and ms["status"] != "done":
+        tail = (tail + " · " if tail else "") + ctx.t("pb_ms_owner", count=ms["owner_pending"])
+    pct = round(100 * ms["met"] / ms["total"]) if ms["total"] else 0
+    css = "hm-ms" + (" hm-ms-done" if ms["status"] == "done" else "") + (" hm-ms-overdue" if ms["overdue"] else "")
+    return (f"<div class=\"{css}\" data-milestone=\"{_ESC(ms['id'])}\" data-met=\"{ms['met']}\" data-total=\"{ms['total']}\">"
+            f"<div class=\"hm-mt\">{_authored(ms['title'])}<span>{ms['met']}/{ms['total']}{(' · ' + _ESC(tail)) if tail else ''}</span></div>"
+            f"<span class=\"hm-bar\"><i style=\"width:{pct}%\"></i></span></div>")
+
+
+def render_project_brief(data: dict[str, Any], lang: str) -> str:
+    """AIPOS-F246 item 4: the project page = one sheet per advisor; engineering details folded at the bottom."""
+    ctx = _Ctx(data["decl"], lang)
+    home = data["home"]
+    sel = data["selected"]
+    body = [f"<a class=\"hm-back\" href=\"{_ESC(ctx.href(str(ctx.decl['pages']['home'])))}\">{_ESC(ctx.t('pb_back'))}</a>",
+            _project_tabs(ctx, data, sel["project"] if sel else None)]
+    if data.get("unknown_project"):
+        body.append(f"<p class=\"rp-err\">{_ESC(ctx.t('rp_rm_unknown_project', project=data['unknown_project']))}</p>")
+    if sel is None:
+        if not data["projects"]:
+            body.append(f"<p>{_ESC(ctx.t('rp_rm_no_projects'))}</p>")
+        return _page(ctx, "project", ctx.t("rp_nav_project"), body, note_key=None)
+    for err in sel.get("errors") or []:
+        body.append(f"<p class=\"rp-err\">{_ESC(ctx.t('rp_error', error=err))}</p>")
+    adv = sel.get("advisor")
+    if len(sel["advisors"]) > 1:
+        links = "".join(f"<a href=\"{_ESC(ctx.href(a['url']))}\"{_CURRENT if adv and a['instance'] == adv['instance'] else ''}>{_ESC(a['display'])}</a>"
+                        for a in sel["advisors"])
+        body.append(f"<nav class=\"rp-subnav hm-advisors\"><span>{_ESC(ctx.t('pb_advisors'))}</span>{links}</nav>")
+    if sel.get("unknown_advisor"):
+        body.append(f"<p class=\"rp-err\">{_ESC(ctx.t('pb_unknown_advisor', advisor=sel['unknown_advisor'], shown=(adv or {}).get('display') or '-'))}</p>")
+    title = sel["project"]
+    if adv is None:
+        body.append(f"<p class=\"hm-quiet\">{_ESC(ctx.t('pb_no_advisor'))}</p>")
+    else:
+        title = adv["display"]
+        hl = adv.get("headline") or {}
+        age, stale = _headline_age(ctx, adv.get("headline"))
+        stage = (str(hl.get("stage")) + " · ") if hl.get("stage") else ""
+        body.append(f"<p class=\"hm-sub{' hm-stale' if stale else ''}\">{_ESC(ctx.t('pb_sub', stage=stage, advisor=adv['display'], age=age))}"
+                    f" · {_ESC(ctx.t('pb_counts', pushing=len(adv['pushing']), stalled=len(adv['stalled'])))}</p>")
+        if adv.get("headline"):
+            body.append(f"<div class=\"hm-headline\"><div class=\"hm-row\"><b>{_ESC(ctx.t('hm_now'))}</b>{_authored(hl.get('now') or '')}</div>"
+                        f"<div class=\"hm-row\"><b>{_ESC(ctx.t('hm_done'))}</b>{_authored(hl.get('done') or '')}</div></div>")
+        else:
+            body.append(f"<p class=\"hm-quiet\">{_ESC(ctx.t('hm_no_headline'))}</p>")
+        left = [f"<section class=\"hm-sec\" data-section=\"pushing\" data-count=\"{len(adv['pushing'])}\">"
+                f"<div class=\"hm-kicker\">{_ESC(ctx.t('pb_pushing_kicker'))}</div>"
+                + (_brief_rows(ctx, adv["pushing"]) if adv["pushing"] else f"<p class=\"hm-quiet\">{_ESC(ctx.t('pb_pushing_none'))}</p>")
+                + "</section>"]
+        if adv["stalled"]:
+            left.append(f"<section class=\"hm-sec\" data-section=\"stalled\" data-count=\"{len(adv['stalled'])}\">"
+                        f"<div class=\"hm-kicker\">{_ESC(ctx.t('pb_stalled_kicker', count=len(adv['stalled'])))}</div>"
+                        f"{_brief_rows(ctx, adv['stalled'][:5])}"
+                        + (f"<details class=\"hm-fold\"><summary>{_ESC(ctx.t('hm_ask_more', count=len(adv['stalled']) - 5))}</summary>"
+                           f"{_brief_rows(ctx, adv['stalled'][5:])}</details>" if len(adv["stalled"]) > 5 else "") + "</section>")
+        left.append(f"<section class=\"hm-sec\" data-section=\"milestones\" data-count=\"{len(adv['milestones'])}\">"
+                    f"<div class=\"hm-kicker\">{_ESC(ctx.t('pb_ms_kicker'))}</div>"
+                    + ("".join(_brief_milestone(ctx, m) for m in adv["milestones"]) if adv["milestones"]
+                       else f"<p class=\"hm-quiet\">{_ESC(ctx.t('pb_ms_none'))}</p>") + "</section>")
+        thumbs = [t for d in adv["deliverables"] for t in d["thumbs"]][: int(home["thumbs_limit"])]
+        dl = [f"<section class=\"hm-sec\" data-section=\"deliverables\" data-count=\"{adv['recent_closed']}\">"
+              f"<div class=\"hm-kicker\">{_ESC(ctx.t('pb_dl_kicker'))}</div>"]
+        if thumbs:
+            dl.append("<div class=\"hm-thumbs\">" + "".join(f"<a href=\"{_ESC(t['url'])}\"><img loading=\"lazy\" src=\"{_ESC(t['url'])}\""
+                                                            f" alt=\"{_ESC(t['name'])}\"></a>" for t in thumbs) + "</div>")
+        if adv["deliverables"]:
+            dl.append("<ul class=\"hm-list\">" + "".join(
+                f"<li data-task-id=\"{_ESC(d['task_id'])}\"><span class=\"hm-st\">{_ESC(d['closed_at'])}</span><span>{_authored(d['title'])}</span>"
+                f"<span class=\"hm-id\">{_ESC(d['task_id'])}</span></li>" for d in adv["deliverables"]) + "</ul>")
+            if adv["recent_closed"] > len(adv["deliverables"]):
+                dl.append(f"<p class=\"hm-quiet\">{_ESC(ctx.t('pb_dl_more', days=home['recent_days'], count=adv['recent_closed']))}</p>")
+        else:
+            dl.append(f"<p class=\"hm-quiet\">{_ESC(ctx.t('pb_dl_none', days=home['recent_days']))}</p>")
+        dl.append("</section>")
+        asks = [f"<section class=\"hm-sec\" data-section=\"asks\" data-count=\"{len(adv['asks'])}\">"
+                f"<div class=\"hm-kicker\">{_ESC(ctx.t('pb_asks_kicker', count=len(adv['asks'])))}</div>"]
+        if adv.get("inbox_error"):
+            asks.append(f"<p class=\"rp-err\">{_ESC(ctx.t('hm_inbox_error', error=adv['inbox_error']))}</p>")
+        elif adv["asks"]:
+            asks.append("<ul class=\"hm-list\">" + "".join(
+                f"<li><span class=\"hm-st\">{_ESC(ctx.t('pb_state_check'))}</span><span>{_authored(a['title'])}</span>"
+                f"<a class=\"hm-id\" href=\"{_ESC(ctx.href(a['url']))}\">{_ESC(ctx.t('pb_asks_go'))}</a></li>" for a in adv["asks"]) + "</ul>")
+        else:
+            asks.append(f"<p class=\"hm-quiet\">{_ESC(ctx.t('pb_asks_none'))}</p>")
+        asks.append("</section>")
+        body.append(f"<div class=\"hm-two\"><div>{''.join(left)}</div><div>{''.join(dl)}{''.join(asks)}</div></div>")
+    links = sel["links"]
+    eng = [("pb_eng_cards", links["cards"]), ("pb_eng_roadmap", links["roadmap"]), ("pb_eng_envelopes", links["envelopes"]),
+           ("pb_eng_onboarding", links["onboarding"]), ("pb_eng_workstation", _workstation_page(sel["project"]))]
+    items = "".join(f"<li><a href=\"{_ESC(ctx.href(url))}\">{_ESC(ctx.t(key))}</a></li>" for key, url in eng)
+    body.append(f"<details class=\"hm-eng\"><summary>{_ESC(ctx.t('pb_eng'))}</summary><ul>{items}</ul>"
+                f"<p>{_ESC(ctx.t('pb_eng_cleanup'))}</p>{_command_block(ctx, sel['cleanup_commands'])}</details>")
+    return _page(ctx, "project", title, body, note_key=None)
+
+
+def render_engineering(decl: dict[str, Any], lang: str) -> str:
+    """AIPOS-F246 item 5: the engineering page collects every existing page (declared home.engineering_links; none removed)."""
+    from tools.aipos_cli.board_pages import page_url
+    from tools.aipos_cli.project_upgrade import board_declaration as upgrade_board_declaration
+
+    ctx = _Ctx(decl, lang)
+    urls = {"inbox": str(decl["nav_links"]["inbox"]), "overview": str(decl["pages"]["overview"]), "roadmap": str(decl["pages"]["roadmap"]),
+            "envelopes": _envelope_page(), "onboarding": str(decl["pages"]["onboarding"]), "workstation": _workstation_page(),
+            "upgrade": str(upgrade_board_declaration()["page_path"]),
+            "cards": page_url(decl, "project", view=decl["home"]["cards_view_value"])}
+    items = "".join(f"<li data-link=\"{_ESC(key)}\"><a href=\"{_ESC(ctx.href(urls[key]))}\">{_ESC(ctx.t('eng_' + key))}</a>"
+                    f"<span class=\"rp-sub\"> {_ESC(ctx.t('eng_' + key + '_desc'))}</span></li>" for key in decl["home"]["engineering_links"])
+    body = [f"<p class=\"hm-quiet\">{_ESC(ctx.t('eng_intro'))}</p>", f"<ul class=\"hm-eng-links\">{items}</ul>"]
+    return _page(ctx, "engineering", ctx.t("eng_title"), body, note_key=None)
+
+
+# ---------------------------------------------------------------------------
 # AIPOS-F181 item 2: project page (cards grouped by subproject; in flight + to do listed, closed folded)
 # ---------------------------------------------------------------------------
 
@@ -348,7 +612,7 @@ def render_project(data: dict[str, Any], lang: str) -> str:
 
     ctx = _Ctx(data["decl"], lang)
     sel = data["selected"]
-    page_base = str(ctx.decl["pages"]["project"]) + (f"?{urlencode({ctx.decl['query']['project']: sel['project']})}" if sel else "")
+    page_base = project_url(ctx.decl, sel["project"], view=data.get("view")) if sel else project_url(ctx.decl, "", view=data.get("view"))
     body = [_toggle(ctx, data.get("hidden") or [], bool(data.get("show_all")), page_base),
             _project_tabs(ctx, data, sel["project"] if sel else None)]
     if data.get("unknown_project"):
@@ -356,16 +620,17 @@ def render_project(data: dict[str, Any], lang: str) -> str:
     if sel is None:
         if not data["projects"]:
             body.append(f"<p>{_ESC(ctx.t('rp_rm_no_projects'))}</p>")
-        return _page(ctx, "project", ctx.t("rp_nav_project"), body)
+        return _page(ctx, "project", ctx.t("rp_nav_project"), body, nav_current="history" if data.get("view") else None)
     title = ctx.t("rp_pj_title", project=sel["project"])
     if sel.get("error"):
         body.append(f"<p class=\"rp-err\">{_ESC(ctx.t('rp_error', error=sel['error']))}</p>")
-        return _page(ctx, "project", title, body)
+        return _page(ctx, "project", title, body, nav_current="history" if data.get("view") else None)
     stats = sel["stats"]
     body.append("<ul class=\"rp-summary\">" + "".join(_counts_li(ctx, {"value": stats})) + "</ul>")
     if sel.get("unknown_subproject"):
         body.append(f"<p class=\"rp-err\">{_ESC(ctx.t('rp_pj_unknown_sub', subproject=sel['unknown_subproject']))}</p>")
-    body.append(_subproject_nav(ctx, stats["subprojects"], sel["subproject"], lambda key: project_url(ctx.decl, sel["project"], key)))
+    body.append(_subproject_nav(ctx, stats["subprojects"], sel["subproject"],
+                                lambda key: project_url(ctx.decl, sel["project"], key, view=data.get("view"))))
     shown = [s for s in stats["subprojects"] if sel["subproject"] in (None, s["key"])]
     body.extend(_subproject_section(ctx, s, stats["rows"]) for s in shown)
     if not shown:
@@ -377,7 +642,7 @@ def render_project(data: dict[str, Any], lang: str) -> str:
                 f"<a class=\"rp-link rp-workstation-link\" href=\"{_ESC(ctx.href(_workstation_page(sel['project'])))}\">"
                 f"{_ESC(ctx.t('rp_pj_workstation'))}</a>"
                 f"<a class=\"rp-link rp-legacy\" href=\"{_ESC(sel['legacy_url'])}\">{_ESC(ctx.t('rp_pj_legacy'))}</a></p>")
-    return _page(ctx, "project", title, body)
+    return _page(ctx, "project", title, body, nav_current="history" if data.get("view") else None)
 
 
 # ---------------------------------------------------------------------------
@@ -1330,12 +1595,24 @@ def _render_page(page: str, home_root: str | Path | None, params: dict[str, list
         def arg(name: str) -> str | None:
             return (params.get(query[name]) or [None])[0]
 
+        if page == "home":  # AIPOS-F246: the home page (one card per advisor)
+            from tools.aipos_cli.board_home import collect_home
+
+            return render_home(collect_home(home_root, show_all=show_all), lang)
+        if page == "engineering":
+            return render_engineering(decl, lang)
         if page == "overview":
             return render_overview(board_pages.collect_overview(home_root, show_all=show_all), lang)
         if page == "onboarding":
             return render_onboarding(board_pages.collect_onboarding(home_root, show_all=show_all), lang)
         if page == "project":
-            return render_project(board_pages.collect_project(home_root, project=arg("project"), subproject=arg("subproject"),
+            view = arg("view")
+            if view == decl["home"]["cards_view_value"]:  # AIPOS-F246: the former list view = all task cards (engineering / history)
+                return render_project(board_pages.collect_project(home_root, project=arg("project"), subproject=arg("subproject"),
+                                                                  show_all=show_all, view=view), lang)
+            from tools.aipos_cli.board_home import collect_project_brief
+
+            return render_project_brief(collect_project_brief(home_root, project=arg("project"), advisor=arg("subproject"),
                                                               show_all=show_all), lang)
         if page == "roadmap":
             return render_roadmap(board_pages.collect_roadmap(home_root, project=arg("project"), milestone=arg("milestone"),

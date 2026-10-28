@@ -526,14 +526,11 @@ def lane_of_card(metadata: dict[str, Any] | None, governance_root: Path) -> dict
 
 
 def declared_lanes(governance_root: Path) -> list[str]:
-    """项目声明的全部 lane 键(仓清单仓名; 无清单 = 唯一仓路径)。"""
-    from tools.aipos_cli.workspace_config import project_repos, resolve_card_repo
+    """项目声明的全部 lane 键(仓清单仓名; 无清单 = 唯一仓路径)。AIPOS-F246: 推导体移入 workspace_config.project_lane_keys(信封展示接替
+    autonomy_policy 同读, 不经本模块拖大合并后预载闭包), 本函数为其薄壳。"""
+    from tools.aipos_cli.workspace_config import project_lane_keys
 
-    root = Path(governance_root)
-    repos = project_repos(root)
-    if repos["declared"]:
-        return list(repos["items"])
-    return [str(resolve_card_repo(root, {}))]
+    return project_lane_keys(Path(governance_root))
 
 
 class LaneFilterInvalid(ValueError):
@@ -962,7 +959,9 @@ def _card_stats(root: Path) -> dict[str, Any]:
     for row in view["rows"]:
         metadata = meta_by_path.get(row["path"])
         sub = card_subproject(root, row, metadata, publishes, drivers)
-        rows.append({"task_id": _view_card_id(row, metadata), "title": str((metadata or {}).get("title") or "").strip() or None,
+        # AIPOS-F246: card_id = 卡面原样卡号(task_id 为统一大写的视图键; 记录目录 / 卡文件查找按原样卡号)
+        rows.append({"task_id": _view_card_id(row, metadata), "card_id": str((metadata or {}).get("task_id") or "").strip() or None,
+                     "title": str((metadata or {}).get("title") or "").strip() or None,
                      "queue_state": row["queue_state"], "group": group_of.get(row["queue_state"]), **sub,
                      "created_at": str((metadata or {}).get("created_at") or (metadata or {}).get("draft_created_at") or "") or None,
                      "audit_of": (audit_card_reviewed_id(_view_card_id(row, metadata), metadata) or "").upper()
