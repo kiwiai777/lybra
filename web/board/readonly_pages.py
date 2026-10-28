@@ -990,7 +990,15 @@ def _inbox_body(ctx: _Ctx, inbox: dict[str, Any], show_all: bool, owner: bool = 
 def render_owner_inbox(home_root: str | Path | None, params: dict[str, list[str]], *, owner: bool) -> str:
     """GET /owner/inbox: inbox data (owner_inbox.collect_inbox via board_adapter.get_owner_inbox, same data as the API / CLI) rendered
     in plain words on the F174 skeleton, with the authorization requests on top; Owner sessions get the sign client only when there is
-    something to sign. AIPOS-F181: the paused / test projects switch replaces the command-line hint."""
+    something to sign. AIPOS-F181: the paused / test projects switch replaces the command-line hint.
+    AIPOS-F245 item 2: the whole render is one request-level read scope (the inbox declaration is read and checked once per request)."""
+    from tools.aipos_cli.task_loader import read_request_scope
+
+    with read_request_scope():
+        return _render_owner_inbox(home_root, params, owner=owner)
+
+
+def _render_owner_inbox(home_root: str | Path | None, params: dict[str, list[str]], *, owner: bool) -> str:
     import json
 
     from tools.aipos_cli import board_pages
@@ -1300,7 +1308,15 @@ def render_error(lang: str, message: str) -> str:
 
 
 def render_page(page: str, home_root: str | Path | None, params: dict[str, list[str]]) -> str:
-    """page ∈ board_pages.PAGES; params = 查询参数(parse_qs)。声明 / 推导读不出 = 错误页(不吞, 拒因原文)。"""
+    """page ∈ board_pages.PAGES; params = 查询参数(parse_qs)。声明 / 推导读不出 = 错误页(不吞, 拒因原文)。
+    AIPOS-F245 item 2: the whole render is one request-level read scope (declarations read once per request, also by the renderer)."""
+    from tools.aipos_cli.task_loader import read_request_scope
+
+    with read_request_scope():
+        return _render_page(page, home_root, params)
+
+
+def _render_page(page: str, home_root: str | Path | None, params: dict[str, list[str]]) -> str:
     from tools.aipos_cli import board_pages
     from tools.schema_loader import SchemaLoadError
 

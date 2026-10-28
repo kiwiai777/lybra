@@ -354,10 +354,34 @@ def request_memo(key: tuple[Any, ...], compute: Callable[[], Any]) -> Any:
     scope = _LOOKUP_INDEX.get()
     if scope is None or not scope["request"]:
         return compute()
-    memo = scope.setdefault("request_memo", {})
-    if key not in memo:
-        memo[key] = compute()
-    return memo[key]
+    return _scope_memo(scope.setdefault("request_memo", {}), key, compute)
+
+
+def _scope_memo(memo: dict[Any, tuple[Any, Any]], key: Any, compute: Callable[[], Any]) -> Any:
+    """One memo slot of a read scope: {key: (value, truth)}. AIPOS-F245 件①: while a truth-cached derivation is recording
+    (truth_cached), the truth a memoised value was derived from is kept with it and folded into every recording derivation that
+    reuses it (nested cached derivations share the request's memos and still know everything they depend on); a value memoised while
+    nothing was recording is derived again for a recording one. truth = None when nothing was recording."""
+    tracker = _TRUTH_TRACKER.get()
+    slot = memo.get(key)
+    if slot is not None and (tracker is None or slot[1] is not None):
+        if tracker is not None:
+            tracker.merge(*slot[1])
+        return slot[0]
+    if tracker is None:
+        value = compute()
+        memo[key] = (value, None)
+        return value
+    sub = _TruthTracker()
+    sub.external, sub.quiet = tracker.external, tracker.quiet
+    token = _TRUTH_TRACKER.set(sub)
+    try:
+        value = compute()
+    finally:
+        _TRUTH_TRACKER.reset(token)
+        tracker.merge(sub.stats, sub.fingerprints, sub.refused)
+    memo[key] = (value, (sub.stats, sub.fingerprints, sub.refused))
+    return value
 
 
 def lookup_scope_memo(repo_root: Path, key: str, compute: Callable[[], Any], *, copy_out: bool = False) -> Any:
@@ -367,10 +391,8 @@ def lookup_scope_memo(repo_root: Path, key: str, compute: Callable[[], Any], *, 
     entry = _scope_for(repo_root)
     if entry is None:
         return compute()
-    memo = entry["memo"]
-    if key not in memo:
-        memo[key] = compute()
-    return copy.deepcopy(memo[key]) if copy_out else memo[key]
+    value = _scope_memo(entry["memo"], key, compute)
+    return copy.deepcopy(value) if copy_out else value
 
 
 def find_task_card_matches(repo_root: Path, task_id: str, *, states: tuple[str, ...] | None = None) -> list[Path]:
@@ -380,16 +402,15 @@ def find_task_card_matches(repo_root: Path, task_id: str, *, states: tuple[str, 
         return []
     scope = _scope_for(repo_root)
     if scope is not None:
-        key = tuple(states or QUEUE_STATES)
-        index = scope["by_states"].get(key)
-        if index is None:
-            index = {}
+        def build() -> dict[str, list[Path]]:
+            index: dict[str, list[Path]] = {}
             for path in iter_queue_task_paths(Path(repo_root), states=states):
                 found = _frontmatter_task_id(path)
                 if found:
                     index.setdefault(found, []).append(path)
-            scope["by_states"][key] = index
-        return list(index.get(wanted, []))
+            return index
+
+        return list(_scope_memo(scope["by_states"], tuple(states or QUEUE_STATES), build).get(wanted, []))
     return [p for p in iter_queue_task_paths(Path(repo_root), states=states) if _frontmatter_task_id(p) == wanted]
 
 
@@ -444,6 +465,322 @@ def load_task_by_path(task_path: str, repo_root: Path | None = None) -> dict[str
     if path.suffix != ".md":
         raise ValueError(f"Task path is not a markdown file: {task_path}")
     return load_task_file(path, resolved_root)
+
+# ---------------------------------------------------------------------------
+# AIPOS-F245 件①: truth-fingerprinted result cache (board overview / inbox / roadmap / onboarding pages and their /api data).
+#
+# A cached derivation (truth_cached) is stored with the fingerprint of every piece of truth it read, recorded while it ran:
+#   - every path it stat-ed (os.stat / Path.exists / is_file / is_dir / the F177 per-file read caches) or opened (audit event
+#     "open"), with the F177 level-1 stat identity of a file (frontmatter._stat_identity: dev, ino, size, mtime_ns, ctime_ns); a
+#     directory only stat-ed = "is a directory" (its entries are not what was read); a missing path is recorded as missing;
+#   - every directory it listed (audit events "os.listdir" / "os.scandir": glob, iterdir, walk) = (dev, ino, mtime_ns), so an
+#     added / removed / renamed entry changes it;
+#   - explicit fingerprints computed by their own single implementation (truth_note_fingerprint: the F55 / F229 records group
+#     fingerprint records._group_fingerprint, whose scan is not recorded path by path);
+#   - the wall-clock minute it started in (时间相关项按分钟粒度纳入: overdue / envelope expiry / stale days are never served
+#     from an earlier minute).
+# A stored result is returned only while the minute is the same and every recorded identity / fingerprint is unchanged (checked
+# on every request, so any truth change is reflected by the very next request; a file the derivation itself writes is recorded as
+# it was before the open, so a writing derivation is never served from the cache and its writes still happen). Fail-closed = not
+# stored: a subprocess / socket / thread / signal the derivation was not declared for (truth_external_read), or any truth younger
+# than the F177 racy window (frontmatter.within_racy_window: same-tick rewrites can never be served stale).
+# Read-scope memos (request_memo / lookup_scope_memo / the card index) keep the truth their value was derived from, so cached
+# derivations nested in one request share them and each still records everything it depends on; a nested derivation's
+# fingerprint is folded into the enclosing one (the overview contains the inbox, the inbox each card's loop status). Off unless the board server process
+# switches it on (enable_truth_cache, web.board.app.run_server): CLI, gate and in-process callers compute every call as before.
+# Process memory only, bounded (least-recently-used), one lock; every caller gets its own deep copy.
+# ---------------------------------------------------------------------------
+
+import stat as _stat_module
+import sys as _sys
+import threading as _threading
+import time as _time
+from collections import OrderedDict as _OrderedDict
+
+_TRUTH_TRACKER: "ContextVar[_TruthTracker | None]" = ContextVar("lybra_truth_tracker", default=None)
+_TRUTH_LOCK = _threading.Lock()
+_TRUTH_STATE: dict[str, Any] = {"enabled": False, "hooks": False}
+_TRUTH_MAX_ENTRIES = 256  # pages + per-project roadmap / card statistics + per in-flight card loop status
+_TRUTH_ENTRIES: "_OrderedDict[tuple[Any, ...], dict[str, Any]]" = _OrderedDict()
+_TRUTH_STATS: dict[str, Any] = {"hits": 0, "misses": 0, "stored": 0, "not_stored": 0, "last_not_stored": None, "last_changed": None}
+_REAL_STAT = os.stat
+#: audit events whose outcome is not a file the derivation read: refused unless declared (truth_external_read)
+_TRUTH_EXTERNAL_EVENTS = frozenset({"subprocess.Popen", "os.system", "os.posix_spawn", "os.spawn", "os.exec", "os.fork",
+                                    "os.forkpty", "socket.connect", "os.kill", "os.killpg", "_thread.start_new_thread",
+                                    "_thread.start_joinable_thread"})
+
+
+class _TruthTracker:
+    """What one cached derivation read: stats {(absolute path, mode): identity | None} (mode = True stat / False lstat / "list"
+    directory listing), fingerprints {key: (value, recompute, newest_ns)}, refused (reasons not to store), external (declared
+    subprocess depth), quiet (recording suspended)."""
+
+    __slots__ = ("stats", "fingerprints", "refused", "external", "quiet", "merged")
+
+    def __init__(self) -> None:
+        self.stats: dict[tuple[str, Any], tuple[Any, ...] | None] = {}
+        self.fingerprints: dict[Any, tuple[Any, Callable[[], Any], int]] = {}
+        self.refused: list[str] = []
+        self.external = 0
+        self.quiet = 0
+        self.merged: set[int] = set()  # ids of truth bundles already folded in (a memo reused 4000 times is merged once)
+
+    def merge(self, stats: dict[tuple[str, Any], Any], fingerprints: dict[Any, Any], refused: list[str]) -> None:
+        """Fold an inner derivation's truth in (first observation wins: a change between the two reads invalidates next time).
+        The same bundle (same stats dict object, kept alive by its memo slot / stored entry) is folded in once."""
+        if id(stats) in self.merged:
+            return
+        self.merged.add(id(stats))
+        for key, ident in stats.items():
+            self.stats.setdefault(key, ident)
+        for key, value in fingerprints.items():
+            self.fingerprints.setdefault(key, value)
+        self.refused.extend(refused)
+
+
+def _identity_of(st: os.stat_result, mode: Any = True) -> tuple[Any, ...]:
+    from tools.aipos_cli.frontmatter import _stat_identity
+
+    if _stat_module.S_ISDIR(st.st_mode):
+        return ("listing", st.st_dev, st.st_ino, st.st_mtime_ns) if mode == "list" else ("dir",)
+    return ("file", *_stat_identity(st))
+
+
+def _path_identity(path: str, mode: Any = True) -> tuple[Any, ...] | None:
+    """Identity of a path now (None = missing); an unreadable one = ("error", errno) (compared like any other identity).
+    mode: True = stat, False = lstat, "list" = a directory listed (its entry set counts)."""
+    try:
+        st = _REAL_STAT(path, follow_symlinks=mode is not False)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError as exc:
+        return ("error", exc.errno)
+    return _identity_of(st, mode)
+
+
+def _abs(path: Any) -> str:
+    return os.path.abspath(os.fsdecode(path))
+
+
+def _record_path(tracker: _TruthTracker, path: Any, mode: Any = True) -> None:
+    key = (_abs(path), mode)
+    if key not in tracker.stats:
+        tracker.stats[key] = _path_identity(key[0], key[1])
+
+
+def _tracked_stat(path: Any, *, dir_fd: Any = None, follow_symlinks: bool = True) -> os.stat_result:
+    """os.stat with recording (installed by enable_truth_cache): inside a cached derivation the identity it saw is kept."""
+    tracker = _TRUTH_TRACKER.get()
+    if tracker is None or tracker.quiet or isinstance(path, int):
+        return _REAL_STAT(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+    if dir_fd is not None:
+        tracker.refused.append("stat relative to a directory descriptor")
+        return _REAL_STAT(path, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+    key = (_abs(path), bool(follow_symlinks))
+    try:
+        st = _REAL_STAT(path, follow_symlinks=follow_symlinks)
+    except (FileNotFoundError, NotADirectoryError):
+        tracker.stats.setdefault(key, None)
+        raise
+    except OSError as exc:
+        tracker.stats.setdefault(key, ("error", exc.errno))
+        raise
+    tracker.stats.setdefault(key, _identity_of(st))
+    return st
+
+
+def _truth_audit_hook(event: str, args: tuple[Any, ...]) -> None:
+    """Process audit hook (installed once by enable_truth_cache; outside a cached derivation it only reads one ContextVar)."""
+    tracker = _TRUTH_TRACKER.get()
+    if tracker is None or tracker.quiet:
+        return
+    try:
+        if event == "open":  # read or write: the identity before the open is kept, so a derivation that writes invalidates itself
+            path = args[0]
+            if path is None or isinstance(path, int):
+                return
+            name = os.fsdecode(path)
+            if "__pycache__" not in name:  # interpreter bytecode cache of a lazy import is not truth
+                _record_path(tracker, name)
+        elif event in ("os.listdir", "os.scandir"):
+            path = args[0] if args else None
+            if isinstance(path, int):
+                tracker.refused.append(f"{event} of a directory descriptor")
+                return
+            _record_path(tracker, "." if path is None else path, "list")
+        elif event in _TRUTH_EXTERNAL_EVENTS and not tracker.external:
+            tracker.refused.append(f"{event} {str(args[:2])[:160]}")
+    except Exception as exc:  # noqa: BLE001 - an audit hook must never break the audited call; the result is just not stored
+        tracker.refused.append(f"audit hook {event}: {type(exc).__name__}: {exc}")
+
+
+def enable_truth_cache(enabled: bool = True) -> None:
+    """Board server switch (web.board.app.run_server). Installs the os.stat recorder and the audit hook once per process (audit
+    hooks cannot be removed; both only read a ContextVar outside a cached derivation); enabled=False = compute every call again
+    and drop the stored results and the counters."""
+    with _TRUTH_LOCK:
+        if enabled and not _TRUTH_STATE["hooks"]:
+            os.stat = _tracked_stat
+            _sys.addaudithook(_truth_audit_hook)
+            _TRUTH_STATE["hooks"] = True
+        _TRUTH_STATE["enabled"] = bool(enabled)
+        if not enabled:
+            _TRUTH_ENTRIES.clear()
+            _TRUTH_STATS.update(hits=0, misses=0, stored=0, not_stored=0, last_not_stored=None, last_changed=None)
+
+
+def truth_cache_stats() -> dict[str, Any]:
+    """Counters for the board perf log (hits / misses / stored / not stored and the last reason, the last truth seen changed, entries)."""
+    with _TRUTH_LOCK:
+        return {**_TRUTH_STATS, "entries": len(_TRUTH_ENTRIES), "enabled": bool(_TRUTH_STATE["enabled"])}
+
+
+@contextmanager
+def truth_external_read(inputs: Callable[[], Any] | None = None) -> Iterator[None]:
+    """Declare the subprocess(es) run inside as accounted for: their outcome is fixed by the paths ``inputs()`` returns (recorded
+    like a stat, missing ones as missing; only called inside a cached derivation) or immutable (no inputs, e.g. the tree of a full
+    commit sha once found). Outside a cached derivation = no-op."""
+    tracker = _TRUTH_TRACKER.get()
+    if tracker is None:
+        yield
+        return
+    for path in (inputs() if inputs is not None else ()):
+        _record_path(tracker, path)
+    tracker.external += 1
+    try:
+        yield
+    finally:
+        tracker.external -= 1
+
+
+def truth_git_ignore_inputs(base: Path, paths: Any) -> list[Path]:
+    """The files `git -C <base> check-ignore` reads to answer for ``paths`` (for truth_external_read): every .gitignore from the
+    work tree top down to each path's directory, the repository's info/exclude, config and index (tracked files are never reported
+    ignored), and the user / system git config and default global excludes file. A customised core.excludesFile target is not
+    followed (its config line is: editing it invalidates). Not inside a work tree = the walked .git candidates (all missing)."""
+    from tools.aipos_cli.workspace_config import git_dir_of
+
+    base = Path(base).absolute()
+    top = next((d for d in (base, *base.parents) if (d / ".git").exists()), None)
+    if top is None:
+        return [d / ".git" for d in (base, *base.parents)]
+    inputs: list[Path] = [top / ".git"]
+    dirs: set[Path] = set()
+    for target in [base, *(Path(p).absolute() for p in paths)]:
+        for d in (target, *target.parents):
+            if d == top or top in d.parents:
+                dirs.add(d)
+    inputs += [d / ".gitignore" for d in sorted(dirs)]
+    gdir = git_dir_of(top)
+    if gdir is not None:
+        common = gdir
+        pointer = gdir / "commondir"
+        if pointer.is_file():
+            common = (gdir / pointer.read_text(encoding="utf-8").strip()).resolve()
+        inputs += [gdir / "index", gdir / "commondir", common / "info" / "exclude", common / "config"]
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    inputs += [Path.home() / ".gitconfig", xdg / "git" / "config", xdg / "git" / "ignore", Path("/etc/gitconfig")]
+    return inputs
+
+
+def truth_refuse(reason: str) -> None:
+    """The current cached derivation (if any) must not be stored (its outcome depends on something it cannot fingerprint)."""
+    tracker = _TRUTH_TRACKER.get()
+    if tracker is not None:
+        tracker.refused.append(str(reason))
+
+
+@contextmanager
+def truth_untracked() -> Iterator[None]:
+    """Suspend path-by-path recording (the caller notes its own fingerprint instead, truth_note_fingerprint)."""
+    tracker = _TRUTH_TRACKER.get()
+    if tracker is None:
+        yield
+        return
+    tracker.quiet += 1
+    try:
+        yield
+    finally:
+        tracker.quiet -= 1
+
+
+def truth_note_fingerprint(key: Any, value: Any, recompute: Callable[[], Any], newest_ns: int = 0) -> None:
+    """Record an explicit fingerprint (value = recompute() at read time; newest_ns = its newest mtime for the racy window)."""
+    tracker = _TRUTH_TRACKER.get()
+    if tracker is not None:
+        tracker.fingerprints.setdefault(key, (value, recompute, int(newest_ns)))
+
+
+def _truth_changed(entry: dict[str, Any]) -> str | None:
+    """The first recorded truth that is no longer what the derivation read (None = all unchanged)."""
+    for (path, mode), ident in entry["stats"].items():
+        if _path_identity(path, mode) != ident:
+            return path
+    for key, (value, recompute, _newest) in entry["fingerprints"].items():
+        if recompute() != value:
+            return str(key)
+    return None
+
+
+def _unsettled(tracker: _TruthTracker) -> str | None:
+    """A recorded truth younger than the F177 racy window (frontmatter.within_racy_window; None = settled)."""
+    from tools.aipos_cli.frontmatter import within_racy_window
+
+    for (path, _mode), ident in tracker.stats.items():
+        if ident and ident[0] == "listing" and within_racy_window(ident[3]):
+            return f"unsettled {path}"
+        if ident and ident[0] == "file" and within_racy_window(max(ident[4], ident[5])):
+            return f"unsettled {path}"
+    for key, (_value, _recompute, newest) in tracker.fingerprints.items():
+        if newest and within_racy_window(newest):
+            return f"unsettled {key}"
+    return None
+
+
+def truth_cached(key: tuple[Any, ...], compute: Callable[[], Any]) -> Any:
+    """AIPOS-F245 件①: compute() through the truth-fingerprinted result cache (see the section comment). Off = compute()."""
+    if not _TRUTH_STATE["enabled"]:
+        return compute()
+    parent = _TRUTH_TRACKER.get()
+    minute = int(_time.time() // 60)
+    with _TRUTH_LOCK:
+        entry = _TRUTH_ENTRIES.get(key)
+    changed = None if entry is None else ("next minute" if entry["minute"] != minute else _truth_changed(entry))
+    if entry is not None and changed is None:
+        with _TRUTH_LOCK:
+            _TRUTH_STATS["hits"] += 1
+            if key in _TRUTH_ENTRIES:
+                _TRUTH_ENTRIES.move_to_end(key)
+        if parent is not None:
+            parent.merge(entry["stats"], entry["fingerprints"], [])
+        return copy.deepcopy(entry["value"])
+    tracker = _TruthTracker()
+    token = _TRUTH_TRACKER.set(tracker)
+    try:
+        value = compute()
+    finally:
+        _TRUTH_TRACKER.reset(token)
+        if parent is not None:
+            parent.merge(tracker.stats, tracker.fingerprints, tracker.refused)
+    reason = (tracker.refused[0] if tracker.refused else None) or _unsettled(tracker)
+    stored = {"minute": minute, "stats": tracker.stats, "fingerprints": tracker.fingerprints, "value": copy.deepcopy(value)} \
+        if reason is None else None
+    with _TRUTH_LOCK:
+        _TRUTH_STATS["misses"] += 1
+        if changed is not None:
+            _TRUTH_STATS["last_changed"] = f"{key[0]}: {changed}"[:300]
+        if stored is None:
+            _TRUTH_STATS["not_stored"] += 1
+            _TRUTH_STATS["last_not_stored"] = f"{key[0]}: {reason}"[:300]
+        elif _TRUTH_STATE["enabled"]:
+            _TRUTH_STATS["stored"] += 1
+            _TRUTH_ENTRIES[key] = stored
+            _TRUTH_ENTRIES.move_to_end(key)
+            while len(_TRUTH_ENTRIES) > _TRUTH_MAX_ENTRIES:
+                _TRUTH_ENTRIES.popitem(last=False)
+    return value
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)

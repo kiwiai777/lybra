@@ -781,7 +781,9 @@
       "true",
       "yes",
       "on"
-    ]
+    ],
+    "read_scope_enabled": false,
+    "read_scope_description": "AIPOS-F245 件③: 只读推导(请求级只读作用域 task_loader.read_request_scope 内: 看板总览 / 收件箱 / 路线图 / 接入页, CLI owner inbox)调用信封匹配时是否输出诊断行。false = 不输出(看板每次请求曾在门服务日志刷几十行过期信封轨迹); CLI 已决定开(--verbose)或调试环境变量 debug_env 开时照旧输出; 真正认领 / 匹配诊断路径不在只读作用域内, 行为不变。缺本键 = true(与 F245 前一致)。"
   },
   "verbs": {
     "lybra_queue_list": {

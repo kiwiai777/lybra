@@ -981,6 +981,13 @@ def _stat_identity(st: os.stat_result) -> tuple[int, ...]:
     return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
 
 
+def within_racy_window(newest_ns: int) -> bool:
+    """AIPOS-F245: True = a truth modified at ``newest_ns`` (max of mtime / ctime) is younger than the level-1 racy window, i.e.
+    a same-tick rewrite could still go unseen (the per-file cache never caches such a file; task_loader.truth_cached never stores a
+    result derived from it). One window for both."""
+    return time.time_ns() - int(newest_ns) < _FILE_CACHE_RACY_WINDOW_NS
+
+
 def _file_cache_get(key: Any, ident: tuple[Any, ...]) -> tuple[Any, ...] | None:
     """Level-1 lookup: the entry when its stat identity equals ``ident`` (counted as a hit), else None."""
     with _FRONTMATTER_MEMO_LOCK:

@@ -534,8 +534,12 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
     root = Path(governance_root)
     if now is None:
         # AIPOS-F177 件③: 只读作用域(请求级 / 视图级)内同一治理根同一 lane / project 只推导一次, 各调用方拿深拷贝; 作用域外照旧每次现算
-        return lookup_scope_memo(root, f"roadmap_drift.roadmap_status:{lane!r}:{project!r}",
-                                 lambda: roadmap_status(root, lane=lane, project=project, now=utc_now()), copy_out=True)
+        # AIPOS-F245 件②: 看板服务进程内另按真相指纹缓存(task_loader.truth_cached, 分钟粒度): 别的项目 / 卡的真相变了, 本项目路线图不重推导
+        from tools.aipos_cli.task_loader import truth_cached
+
+        return truth_cached(("roadmap_drift.roadmap_status", str(root), lane, project), lambda: lookup_scope_memo(
+            root, f"roadmap_drift.roadmap_status:{lane!r}:{project!r}",
+            lambda: roadmap_status(root, lane=lane, project=project, now=utc_now()), copy_out=True))
     moment = now
     today = moment.date()
     decl = status_declaration()

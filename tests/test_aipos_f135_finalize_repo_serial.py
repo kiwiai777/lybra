@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import ast
+import re
 import io
 import json
 import os
@@ -426,9 +427,12 @@ def test_invariant_flock_and_no_deploy_single_reader():
     _show(f"[不变量·no_deploy 字面] {readers}")
     # 解析 = project_repos(唯一读取口); 写 = set_project_repos(唯一写入口) 与其 CLI 薄壳; 判定 = deploy_mechanism_present(唯一消费方)
     # (aipos_cli: build_parser 的 --no-deploy dest 与 main 的 set-repos 薄壳输出; workspace_config._mutate = set_project_repos 内写闭包)
+    # AIPOS-F245: project_repos 的解析体移入 _project_repos(project_repos = 请求级记忆的薄壳 + 唯一读取口, 解析仍只此一处)
     assert readers == [("tools/aipos_cli/aipos_cli.py", "build_parser"), ("tools/aipos_cli/aipos_cli.py", "main"),
                        ("tools/aipos_cli/deploy_gate.py", "deploy_mechanism_present"),
-                       ("tools/aipos_cli/workspace_config.py", "_mutate"), ("tools/aipos_cli/workspace_config.py", "project_repos")], readers
+                       ("tools/aipos_cli/workspace_config.py", "_mutate"), ("tools/aipos_cli/workspace_config.py", "_project_repos")], readers
+    wc = (REPO_ROOT / "tools/aipos_cli/workspace_config.py").read_text(encoding="utf-8")
+    assert len(re.findall(r"(?<!\w)_project_repos\(", wc)) == 3  # def + the two calls inside the project_repos shell (no other caller)
     src = (REPO_ROOT / "tools/aipos_cli/deploy_gate.py").read_text(encoding="utf-8")
     assert 'repos.get("no_deploy")' in src and src.count("project_repos(") == 1
 

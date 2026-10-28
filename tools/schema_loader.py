@@ -104,7 +104,7 @@ def _load_json_file(path: Path) -> dict[str, Any]:
         raise SchemaLoadError(f"Error loading schema file {path}: {e}") from e
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=32)  # AIPOS-F245 件②: 7 类 × (缺省根 / 显式代码仓根 / 他根) 原超 8 = 看板一次请求反复淘汰重读 500+ 次
 def load_schema(schema_type: SchemaType, repo_root: Path | None = None) -> dict[str, Any]:
     """Load a schema file by type.
     
@@ -560,8 +560,13 @@ def clear_cache() -> None:
     """Clear the schema cache.
     
     Useful for testing or when schemas are updated at runtime.
+    AIPOS-F245 件②: inside a request-level read scope (task_loader.read_request_scope: one board page / inbox read) at most once per
+    request — the request still sees the declarations as of its start, but a read-only derivation that "refreshes" per card (audit
+    round numbering, 42 times per overview) no longer drops and re-parses every schema each time. Outside a request scope = every call.
     """
-    load_schema.cache_clear()
+    from tools.aipos_cli.task_loader import request_memo
+
+    request_memo(("schema_loader.clear_cache",), load_schema.cache_clear)
 
 
 # Version introspection

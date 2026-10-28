@@ -481,19 +481,29 @@ def artifact_for_route(home_root: str | Path | None, query: dict[str, list[str]]
 
 
 def pending_badge(root: Path, project: str, home_root: Path) -> dict[str, Any]:
-    """AIPOS-F176: per-project "upgradable (N)" badge = project_upgrade.pending_badge (single derivation; charter from recorded truth)."""
+    """AIPOS-F176: per-project "upgradable (N)" badge = project_upgrade.pending_badge (single derivation; charter from recorded truth).
+    AIPOS-F245 item 1: the git commands its plan runs are declared to the truth-fingerprinted result cache under the badge's own
+    declared validity (verbs.schema board.badge_cache: project_upgrade._badge_fingerprint = project.json, the governance repo HEAD /
+    logs/HEAD, the workstation directories and the declaration files, all stat-ed and so recorded; its ttl is re-checked at least every
+    minute because a cached page is derived again each minute) = the same badge the page showed before the cache."""
     from tools.aipos_cli.project_upgrade import pending_badge as upgrade_badge
+    from tools.aipos_cli.task_loader import truth_external_read
 
-    return upgrade_badge(root, project, home_root)
+    with truth_external_read():
+        return upgrade_badge(root, project, home_root)
 
 
 def collect_overview(home_root: str | Path | None = None, *, show_all: bool = False) -> dict[str, Any]:
     """总览页: 每项目一张卡片(在途 / 待办 / 已结案 + 历史存量 + 子项目分组 / 待 Owner 项 / 信封 / 路线图摘要 / 接入完成度), 暂停项目标 paused
     (渲染折叠); AIPOS-F181: status ∈ board_hidden(测试项目)缺省不列, show_all = 页面开关。"""
-    from tools.aipos_cli.task_loader import read_request_scope
+    from tools.aipos_cli.task_loader import read_request_scope, truth_cached
 
-    with read_request_scope():  # AIPOS-F177 item 3: one request-level read scope (per-project derivations shared)
-        return _collect_overview(home_root, show_all=show_all)
+    def compute() -> dict[str, Any]:
+        with read_request_scope():  # AIPOS-F177 item 3: one request-level read scope (per-project derivations shared)
+            return _collect_overview(home_root, show_all=show_all)
+
+    # AIPOS-F245 item 1: result cached on the truth fingerprint (board server only; any truth change = recomputed next request)
+    return truth_cached(("board_pages.collect_overview", str(home_root), bool(show_all)), compute)
 
 
 def _collect_overview(home_root: str | Path | None, *, show_all: bool) -> dict[str, Any]:
@@ -546,10 +556,13 @@ def project_url(decl: dict[str, Any], project: str, subproject: str | None = Non
 
 def collect_onboarding(home_root: str | Path | None = None, *, show_all: bool = False) -> dict[str, Any]:
     """接入页: 每项目一张清单(项与顺序 = 声明 onboarding_items)。"""
-    from tools.aipos_cli.task_loader import read_request_scope
+    from tools.aipos_cli.task_loader import read_request_scope, truth_cached
 
-    with read_request_scope():  # AIPOS-F177 item 3: one request-level read scope (per-project derivations shared)
-        return _collect_onboarding(home_root, show_all=show_all)
+    def compute() -> dict[str, Any]:
+        with read_request_scope():  # AIPOS-F177 item 3: one request-level read scope (per-project derivations shared)
+            return _collect_onboarding(home_root, show_all=show_all)
+
+    return truth_cached(("board_pages.collect_onboarding", str(home_root), bool(show_all)), compute)  # AIPOS-F245 item 1
 
 
 def _collect_onboarding(home_root: str | Path | None, *, show_all: bool) -> dict[str, Any]:
@@ -626,10 +639,14 @@ def collect_roadmap(home_root: str | Path | None = None, *, project: str | None 
     """路线图与验收页: 选中项目(缺省 = 首个未暂停项目)的 roadmap_status 视图 + 选中里程碑(缺省 = 首个 active, 再缺省首个)。
     项目名不在 home 根注册项目 = selected None + unknown_project(渲染点名, 不猜)。AIPOS-F181: subproject 给出 = 只列该子项目挂接卡所在
     (或其 lane 下无卡)的里程碑(card_stats 同一子项目推导)。"""
-    from tools.aipos_cli.task_loader import read_request_scope
+    from tools.aipos_cli.task_loader import read_request_scope, truth_cached
 
-    with read_request_scope():  # AIPOS-F177 item 3: one request-level read scope (per-project derivations shared)
-        return _collect_roadmap(home_root, project=project, milestone=milestone, subproject=subproject, show_all=show_all)
+    def compute() -> dict[str, Any]:
+        with read_request_scope():  # AIPOS-F177 item 3: one request-level read scope (per-project derivations shared)
+            return _collect_roadmap(home_root, project=project, milestone=milestone, subproject=subproject, show_all=show_all)
+
+    return truth_cached(("board_pages.collect_roadmap", str(home_root), project, milestone, subproject, bool(show_all)),
+                        compute)  # AIPOS-F245 item 1
 
 
 def _milestone_filter(view: dict[str, Any], stats: dict[str, Any] | None, key: str | None) -> list[str] | None:

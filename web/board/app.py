@@ -99,11 +99,16 @@ def get_overview(repo_root: Path | None = None, *, home_root: str | Path | None 
     """Multi-workspace overview aggregation (AIPOS-251; AIPOS-F171 件③: 项目列表 = home 根推导 _board_workspaces, 暂停项目标注).
     AIPOS-F229 件③: one request-level read scope (task_loader.read_request_scope) for the whole aggregation: per project the
     queue (load_all_tasks) and the records (load_records) are loaded once and shared by get_queue / get_needs_owner / get_records /
-    owner truth view / advisor pending items (was 3 queue loads and 5 records loads per project)."""
-    from tools.aipos_cli.task_loader import read_request_scope
+    owner truth view / advisor pending items (was 3 queue loads and 5 records loads per project).
+    AIPOS-F245 item 1: board server = result cached on the truth fingerprint (task_loader.truth_cached; any truth change = recomputed
+    on the next request)."""
+    from tools.aipos_cli.task_loader import read_request_scope, truth_cached
 
-    with read_request_scope():
-        return _get_overview(_board_workspaces(repo_root, home_root))
+    def compute() -> dict[str, Any]:
+        with read_request_scope():
+            return _get_overview(_board_workspaces(repo_root, home_root))
+
+    return truth_cached(("web.board.app.get_overview", str(repo_root), str(home_root)), compute)
 
 
 def _get_overview(workspaces_config: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2532,13 +2537,15 @@ def is_authorized(
 def _append_perf_line(log_path: Path, method: str, path: str, started: float) -> None:
     """AIPOS-F177 item 3 (optional board perf log, separate from the board audit log): one JSON line per request with the
     server-side time and the frontmatter read-cache counters. Only the path is logged, never the query string (it may
-    carry one-time login codes)."""
+    carry one-time login codes). AIPOS-F245 item 4: plus the truth-fingerprinted result cache counters (task_loader.truth_cache_stats)."""
     import time
 
     from tools.aipos_cli.frontmatter import frontmatter_memo_stats
+    from tools.aipos_cli.task_loader import truth_cache_stats
 
     record = {"at": _utc_now(), "method": method, "path": path,
-              "server_ms": round((time.perf_counter() - started) * 1000.0, 1), "frontmatter_cache": frontmatter_memo_stats()}
+              "server_ms": round((time.perf_counter() - started) * 1000.0, 1), "frontmatter_cache": frontmatter_memo_stats(),
+              "truth_cache": truth_cache_stats()}
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, ensure_ascii=False) + "\n")
@@ -3180,6 +3187,9 @@ def prewarm_read_caches(repo_root: Path | None = None, home_root: str | Path | N
 
 def run_server(host: str = DEFAULT_BOARD_HOST, port: int = DEFAULT_BOARD_PORT, repo_root: Path | None = None,
                perf_log_path: Path | None = None, *, prewarm: bool = True) -> None:
+    from tools.aipos_cli.task_loader import enable_truth_cache
+
+    enable_truth_cache()  # AIPOS-F245 item 1: this process serves the board pages = their results cached on the truth fingerprint
     handler = make_handler(repo_root=repo_root, perf_log_path=perf_log_path)
     with ThreadingHTTPServer((host, port), handler) as httpd:
         print(f"AIPOS board local UI listening on http://{host}:{port}")

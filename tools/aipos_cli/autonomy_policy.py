@@ -106,12 +106,20 @@ def _debug_env_on(decl: dict[str, Any]) -> bool:
 
 
 def envelope_trace_enabled() -> bool:
-    """唯一开关读口: CLI 已决定 = 用之; 否则(非 CLI 进程)= 调试环境变量开 或 声明 non_cli_default_enabled。"""
+    """唯一开关读口: CLI 已决定 = 用之; 否则(非 CLI 进程)= 调试环境变量开 或 声明 non_cli_default_enabled。
+    AIPOS-F245 件③: 非 CLI 进程处在请求级只读作用域内(task_loader.read_request_scope: 看板页 / 收件箱等只读推导)且调试环境变量未开
+    = 声明 read_scope_enabled(false = 不输出; 缺键 = 照旧输出)。真正认领 / 匹配路径不在只读作用域内, 不变。"""
+    from tools.aipos_cli.task_loader import request_scope_active
+
     decided = _TRACE_SWITCH["enabled"]
     if decided is not None:
         return decided
     decl = envelope_trace_declaration()
-    return _debug_env_on(decl) or bool(decl["non_cli_default_enabled"])
+    if _debug_env_on(decl):
+        return True
+    if request_scope_active() and not decl.get("read_scope_enabled", True):
+        return False
+    return bool(decl["non_cli_default_enabled"])
 
 
 def decide_cli_envelope_trace(verbose: bool) -> None:

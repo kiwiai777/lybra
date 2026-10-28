@@ -77,7 +77,15 @@ class InboxChoiceInvalid(InboxUsageError):
 # ---------------------------------------------------------------------------
 
 def inbox_declaration() -> dict[str, Any]:
-    """verbs.schema lybra_owner_inbox(fail-closed): 键齐; 类别恰为 CATEGORIES; 各类别引用的选项都在 options 且有 label / advisor_next。"""
+    """verbs.schema lybra_owner_inbox(fail-closed): 键齐; 类别恰为 CATEGORIES; 各类别引用的选项都在 options 且有 label / advisor_next。
+    AIPOS-F245 件②: 请求级只读作用域内(task_loader.read_request_scope)每请求只取一次并校验一次(原看板一次收件箱请求 7000+ 次, 含
+    _check_tiers); 作用域外照旧每次。与 load_schema 同样交出共享的声明对象(调用方只读)。"""
+    from tools.aipos_cli.task_loader import request_memo
+
+    return request_memo(("owner_inbox.inbox_declaration",), _inbox_declaration)
+
+
+def _inbox_declaration() -> dict[str, Any]:
     from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
 
     decl = (load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get(VERB)
@@ -1542,11 +1550,16 @@ def collect_inbox(home_root: str | Path | None = None, *, project: str | None = 
     decided_hidden, paused_hidden, errors}。--project 不在注册清单 = ValueError(用法错, 不猜)。
     AIPOS-F170 件②: project.json status = paused(唯一读取口 workspace_config.project_status)的项目缺省不列(include_paused / 显式 --project
     照列), 名单进 paused_hidden; status 读不出 / 值不合 = 该项目照列并在 errors 点名(不猜成暂停)。
-    AIPOS-F177 件③: 全程一个请求级只读作用域(task_loader.read_request_scope): 同一项目在各类别间共用卡索引与整根推导(路线图 / 信封)。"""
-    from tools.aipos_cli.task_loader import read_request_scope
+    AIPOS-F177 件③: 全程一个请求级只读作用域(task_loader.read_request_scope): 同一项目在各类别间共用卡索引与整根推导(路线图 / 信封)。
+    AIPOS-F245 件①: 看板服务进程内结果按真相指纹缓存(task_loader.truth_cached; 任一真相变化下一次请求即重算), CLI / 门照旧每次现算。"""
+    from tools.aipos_cli.task_loader import read_request_scope, truth_cached
 
-    with read_request_scope():
-        return _collect_inbox(home_root, project=project, include_paused=include_paused, categories=categories)
+    def compute() -> dict[str, Any]:
+        with read_request_scope():
+            return _collect_inbox(home_root, project=project, include_paused=include_paused, categories=categories)
+
+    return truth_cached(("owner_inbox.collect_inbox", str(home_root), project, bool(include_paused),
+                         tuple(categories) if categories is not None else None), compute)
 
 
 def grant_requests(inbox: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1708,7 +1721,17 @@ def _ruled_loop_relay(root: Path, project: str, *, task_id: str, view: dict[str,
 
 
 def _all_rulings(root: Path, decl: dict[str, Any]) -> list[dict[str, Any]]:
-    """收件箱裁决记录全部(decision_type = 声明 decision_type), 按裁决时刻旧→新。读不出 = 向上。"""
+    """收件箱裁决记录全部(decision_type = 声明 decision_type), 按裁决时刻旧→新。读不出 = 向上。
+    AIPOS-F245 件②: 请求级只读作用域内每治理根每请求只扫一次(原总览一次请求 100+ 次扫同一批裁决记录), 每次交出私有副本; 作用域外照旧每次扫。"""
+    from tools.aipos_cli.frontmatter import _fresh_copy
+    from tools.aipos_cli.task_loader import request_memo
+
+    d = decl["decision"]
+    key = ("owner_inbox._all_rulings", str(Path(root).resolve()), str(d["decision_id_prefix"]), str(d["decision_type"]))
+    return _fresh_copy(request_memo(key, lambda: _scan_rulings(root, decl)))
+
+
+def _scan_rulings(root: Path, decl: dict[str, Any]) -> list[dict[str, Any]]:
     from tools.aipos_cli.frontmatter import require_frontmatter
     from tools.aipos_cli.record_writer import record_root
 

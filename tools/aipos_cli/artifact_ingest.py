@@ -936,14 +936,18 @@ def _credential_text(path: Path, scan: dict[str, Any]) -> str | None:
 
 def _git_ignore_rules(base: Path, paths: list[Path]) -> dict[str, str] | None:
     """base 所在 git 仓对 paths 的忽略规则 {路径: 「来源\0行号\0模式」}(git check-ignore -v --stdin -z; 已跟踪者不算忽略, 不在结果中)。
-    不是 git 仓 / 出错 = None(调用方全扫, fail-closed)。"""
+    不是 git 仓 / 出错 = None(调用方全扫, fail-closed)。
+    AIPOS-F245: 子进程所读的忽略规则来源经 task_loader.truth_git_ignore_inputs 声明给真相指纹结果缓存(看板只读推导内; 判定本身不变)。"""
     import subprocess
+
+    from tools.aipos_cli.task_loader import truth_external_read, truth_git_ignore_inputs
 
     if not paths:
         return {}
     try:
-        proc = subprocess.run(["git", "-C", str(base), "check-ignore", "-v", "--stdin", "-z"],
-                              input="\0".join(str(p) for p in paths) + "\0", capture_output=True, text=True, timeout=60)
+        with truth_external_read(lambda: truth_git_ignore_inputs(base, paths)):
+            proc = subprocess.run(["git", "-C", str(base), "check-ignore", "-v", "--stdin", "-z"],
+                                  input="\0".join(str(p) for p in paths) + "\0", capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
         return None
     if proc.returncode not in (0, 1):
