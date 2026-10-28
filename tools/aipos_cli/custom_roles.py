@@ -28,8 +28,8 @@ from __future__ import annotations
 
 import json
 import secrets
-from datetime import datetime, timezone
-from tools.aipos_cli.clock import iso_z, utc_now
+from datetime import datetime, timedelta, timezone
+from tools.aipos_cli.clock import holds_until, iso_z, judged_now, utc_now
 from pathlib import Path
 from typing import Any
 
@@ -99,7 +99,9 @@ def _registry_entry_expired(entry: dict[str, Any], now: datetime | None = None) 
         return False
     if expires_dt.tzinfo is None:
         expires_dt = expires_dt.replace(tzinfo=timezone.utc)
-    return (now or utc_now()) > expires_dt
+    moment = now or utc_now()
+    holds_until(moment, expires_dt + timedelta(microseconds=1))  # AIPOS-F249: expired from just after expires_at on
+    return moment > expires_dt
 
 
 def load_custom_roles(project_root: str | Path) -> dict[str, dict[str, str]]:
@@ -147,7 +149,7 @@ def _load_custom_roles(home_root: Path) -> dict[str, dict[str, str]]:
         return {}
 
     builtins = _builtin_role_names()
-    now = utc_now()
+    now = judged_now()  # AIPOS-F249: the expiry judgment reports its flip (_registry_entry_expired)
     result: dict[str, dict[str, str]] = {}
     for entry in registry.values():
         if not isinstance(entry, dict):

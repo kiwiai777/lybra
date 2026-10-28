@@ -35,12 +35,12 @@ import re
 import socket
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from pathlib import Path
 from typing import Any, Callable
 
-from tools.aipos_cli.clock import file_slug, iso_z, utc_now
+from tools.aipos_cli.clock import file_slug, holds_until, iso_z, judged_now, utc_now
 
 RUN_RECORD_KEYS = ("record_type", "log_record_type", "activity_flush_seconds", "stall_after_seconds", "stall_after_tool_seconds",
                    "states", "end_reasons", "activity_categories", "background_category", "end_codes")
@@ -833,7 +833,9 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
     工具开始 tool:<名> = 工具在跑 → stall_after_tool_seconds, 否则 stall_after_seconds); running: 其余。
     「在 / 不在」一律经 process_alive(进程启动时刻指纹, AIPOS-F137); 记录是旧命令行指纹 = 仅按 pid 判, 视图带
     loop_probe_note / launch.probe_note = LEGACY_FINGERPRINT_NOTE。"""
-    now = now or utc_now()
+    # AIPOS-F249: the one time judgment here (stalled: idle seconds > threshold) reports its flip; elapsed / running / idle seconds = time
+    # fields (shown as derived)
+    now = now or judged_now()
     host = str(meta.get("host") or "")
     local_host = local_host or socket.gethostname()
     stall_after = int(decl["stall_after_seconds"])
@@ -908,6 +910,8 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
             view["state"] = "stalled"
         else:
             view["state"] = "running"
+            if last_seen is not None:  # int(idle) > threshold from last_seen + threshold + 1 s on
+                holds_until(now, last_seen + timedelta(seconds=threshold + 1))
         return view
     view["state"] = "running"
     return view

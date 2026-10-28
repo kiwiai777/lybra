@@ -11,12 +11,15 @@
 - 卡住 = 本模块 card_last_activity / stall_rows(唯一实现; 声明 verbs.schema board_readonly_pages.home.stall): 只读既有记录文件的修改时刻。
 - 声明读取口 = home_declaration(fail-closed); 界面文字在看板 i18n 单通道(web/board/app.py _I18N_TEMPLATES), 本模块只给数据。
 - 结果经 task_loader.truth_cached(AIPOS-F245 真相指纹缓存: 看板服务进程内, 任一真相变化下一次请求即重算)。只读: 不写、不连门。
+- AIPOS-F249: 时间判定(卡住 / 最近交付 / 等了几天 / 逾期)经 clock.judged_now 现算并报出翻转时刻(缓存一直有效到最早的翻转, 不按分钟失效);
+  简报「多久前 / 陈旧」与数据时刻 now 是连续变化的时间字段, 在取结果时按当下现算(_finish_time), 不进缓存。卡住判定逐卡缓存
+  (card_stall_state): loop 在跑时运行记录 / 日志每几秒一改, 只重判那一张卡, 判定不变则首页 / 项目页不重算。
 """
 from __future__ import annotations
 
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -116,6 +119,8 @@ def stall_rows(governance_root: Path, rows: list[dict[str, Any]], *, now: dateti
                ) -> list[dict[str, Any]]:
     """在途卡行 → 每行加 {last_activity(ISO | None), idle_hours, stalled}; 停滞 = 距今 ≥ 声明 threshold_hours 或一条活动也读不到。
     只读展示, 不改卡状态。"""
+    from tools.aipos_cli.clock import holds_count, holds_until
+
     spec = (home or home_declaration())["stall"]
     threshold = float(spec["threshold_hours"])
     out = []
@@ -127,9 +132,35 @@ def stall_rows(governance_root: Path, rows: list[dict[str, Any]], *, now: dateti
         else:
             idle = max(0.0, (now.timestamp() - float(act["at"])) / 3600.0)
             stalled = idle >= threshold
+            # AIPOS-F249: the judgment flips at last activity + threshold; the whole days shown change daily from the last activity
+            if not stalled:
+                flip = float(act["at"]) + threshold * 3600.0
+                holds_until(now, flip if flip > now.timestamp() else now.timestamp() + 1.0)
+            holds_count(now, float(act["at"]), 86400, int(idle // 24))
         at = datetime.fromtimestamp(act["at"], tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z") if act["at"] else None
-        out.append({**row, "last_activity": at, "activity_source": act["source"], "idle_hours": idle, "stalled": stalled})
+        out.append({**row, "last_activity": at, "activity_source": act["source"], "idle_hours": idle, "stalled": stalled,
+                    "activity_at": act["at"]})
     return out
+
+
+def card_stall_state(governance_root: Path, task_id: str, home: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F249 件③: 一张在途卡卡住判定(stall_rows 同一判据)里页面要用的部分 {stalled, days(整天数, 读不到活动 = None),
+    activity_at(只停滞卡给: 停滞卡按它排序; 推进中的卡每几秒一变, 不放进结果)}。看板服务进程内逐卡经真相指纹缓存(键含声明的阈值与
+    活动记录类): 运行记录 / 日志改写只重判这一张卡, 判定不变 = 引用它的首页 / 项目页不重算。卡找不到 / 多义 = ValueError(同 stall_rows)。"""
+    from tools.aipos_cli.clock import judged_now
+    from tools.aipos_cli.task_loader import truth_cached
+
+    root = Path(governance_root)
+    home = home or home_declaration()
+    spec = home["stall"]
+
+    def compute() -> dict[str, Any]:
+        row = stall_rows(root, [{"task_id": task_id, "card_id": task_id}], now=judged_now(), home=home)[0]
+        return {"stalled": row["stalled"], "days": int(row["idle_hours"] // 24) if row["idle_hours"] is not None else None,
+                "activity_at": row["activity_at"] if row["stalled"] else None}
+
+    return truth_cached(("board_home.card_stall_state", str(root), str(task_id), float(spec["threshold_hours"]),
+                         tuple(str(k) for k in spec["activity_record_kinds"])), compute)
 
 
 def closed_at(governance_root: Path, task_id: str, *, located: tuple[Path | None, str | None] | None = None) -> float | None:
@@ -216,13 +247,15 @@ def _progress(milestones: list[dict[str, Any]], closed_recent: int, home: dict[s
 
 
 def _project_advisors(f: ProjectFacts, home: dict[str, Any], now: datetime) -> dict[str, Any]:
-    """一个项目全部在任顾问的一页纸数据(每位一项) + 本项目读不出的面(errors)。"""
-    from tools.aipos_cli.advisor_headline import headline_age_hours, is_stale, latest_headlines
+    """一个项目全部在任顾问的一页纸数据(每位一项) + 本项目读不出的面(errors)。AIPOS-F249: 在途卡的卡住判定逐卡取 card_stall_state
+    (行带 stalled / days / activity_at); 简报的「多久前 / 陈旧」不在这里算(取结果时 _finish_time 现算); 最近交付按结案时刻报出移出窗口的时刻。"""
+    from tools.aipos_cli.advisor_headline import latest_headlines
+    from tools.aipos_cli.clock import holds_until
 
     errors: list[str] = []
     advisors_got = f.advisors()
     stats_got = f.queue_counts()
-    roadmap_got = f.roadmap()
+    roadmap_got = f.roadmap_progress()  # AIPOS-F249: the milestones' last_activity is not shown here
     for got in (advisors_got, stats_got, roadmap_got):
         if got.get("error"):
             errors.append(str(got["error"]))
@@ -242,7 +275,7 @@ def _project_advisors(f: ProjectFacts, home: dict[str, Any], now: datetime) -> d
     for inst in advisors:
         keys = _advisor_keys(inst, advisors, stats)
         rows = [r for r in stats["rows"] if r["subproject"] in keys]
-        inflight = stall_rows(f.root, [r for r in rows if r["group"] == "inflight"], now=now, home=home)
+        inflight = [{**r, **card_stall_state(f.root, str(r.get("card_id") or r["task_id"]), home)} for r in rows if r["group"] == "inflight"]
         todo = [r for r in rows if r["group"] == "todo"]
         closed = [r for r in rows if r["group"] == "closed" and not r.get("audit_of")]  # deliverables = business cards (audits are their review)
         milestones = _advisor_milestones(view, stats, keys)
@@ -252,13 +285,15 @@ def _project_advisors(f: ProjectFacts, home: dict[str, Any], now: datetime) -> d
             at = closed_at(f.root, str(r.get("card_id") or r["task_id"]))
             if at is not None and at >= cutoff:
                 recent.append({**r, "closed_at": at})
+                holds_until(now, at + 86400 * int(home["recent_days"]))  # AIPOS-F249: leaves the recent window then
         recent.sort(key=lambda r: -r["closed_at"])
-        stalled = sorted((r for r in inflight if r["stalled"]), key=lambda r: -(r["idle_hours"] if r["idle_hours"] is not None else 1e9))
+        # oldest activity first (same order as idle hours descending; no activity readable = first)
+        stalled = sorted((r for r in inflight if r["stalled"]),
+                         key=lambda r: -(max(0.0, (now.timestamp() - float(r["activity_at"])) / 3600.0) if r["activity_at"] is not None else 1e9))
         headline = headlines.get(inst)
-        age = headline_age_hours(headline, now)
         groups.append({
             "instance": inst, "keys": sorted(keys), "display": _display_name(f.name, inst, advisors, headline),
-            "headline": ({**headline, "age_hours": age, "stale": is_stale(headline, now)} if headline else None),
+            "headline": (dict(headline) if headline else None),  # AIPOS-F249: age_hours / stale filled when the result is taken (_finish_time)
             "paused": bool(headline and headline.get("status") == "paused"),
             "pushing": [r for r in inflight if not r["stalled"]], "stalled": stalled, "todo": todo,
             "milestones": milestones, "recent_closed": recent,
@@ -294,7 +329,26 @@ def collect_home(home_root: str | Path | None = None, *, show_all: bool = False,
         with read_request_scope():
             return _collect_home(home_root, show_all=show_all, all_asks=all_asks)
 
-    return truth_cached(("board_home.collect_home", str(home_root), bool(show_all), bool(all_asks)), compute)
+    return _finish_time(truth_cached(("board_home.collect_home", str(home_root), bool(show_all), bool(all_asks)), compute, page=True))
+
+
+def _finish_time(data: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F249 件①: 连续变化的时间字段在取结果时按当下现算(不进缓存, 缓存的结果只因真相变化或时间判定翻转而重算): 每张简报的
+    age_hours(advisor_headline.headline_age_hours)与 stale(advisor_headline.is_stale, 同一判据)、数据时刻 now。data = collect_home /
+    collect_project_brief 的结果(调用方自己的副本, 原地补)。"""
+    from tools.aipos_cli.advisor_headline import headline_age_hours, is_stale
+    from tools.aipos_cli.clock import utc_now
+
+    now = utc_now()
+    headlines = [c.get("headline") for c in data.get("cards") or []]
+    selected = data.get("selected") or {}
+    headlines.append((selected.get("advisor") or {}).get("headline"))
+    for headline in headlines:
+        if isinstance(headline, dict):
+            headline.update({"age_hours": headline_age_hours(headline, now), "stale": is_stale(headline, now)})
+    if "now" in data:
+        data["now"] = now.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return data
 
 
 def _owner_check_statements(view: dict[str, Any] | None) -> dict[str, str]:
@@ -347,6 +401,8 @@ def ask_actions(item: dict[str, Any]) -> dict[str, Any]:
 
 def _ask_entry(item: dict[str, Any], got: dict[str, Any], decl: dict[str, Any], home: dict[str, Any], now: datetime) -> dict[str, Any]:
     """一件「需要你」的展示数据: 人话标题 + 为什么找你(推荐理由 / 抽查标准)+ 看产物链接 + 推荐与其他选项按钮(ask_actions)。"""
+    from tools.aipos_cli.clock import holds_count
+
     by_task = {str(r["task_id"]).upper(): r for r in got["stats"].get("rows") or []}
     ms_titles = {str(ms["id"]): str(ms.get("title") or "") for ms in (got["view"] or {}).get("milestones") or []}
     displays = {g["instance"]: g["display"] for g in got["advisors"]}
@@ -366,8 +422,10 @@ def _ask_entry(item: dict[str, Any], got: dict[str, Any], decl: dict[str, Any], 
         look = {"url": str(item["board_url"]), "key": "hm_look_scope"}
     else:
         look = {"url": f"{decl['nav_links']['inbox']}#item-{item['item_id']}", "key": "hm_ask_go"}
+    waited = int((now - since).total_seconds() // 86400) if since else None
+    holds_count(now, since, 86400, waited)  # AIPOS-F249: the whole days waited change daily from since
     return {**title, "project": item["project"], "rank": item.get("rank"), "rank_label": item.get("rank_label"),
-            "waited_days": (int((now - since).total_seconds() // 86400) if since else None),
+            "waited_days": waited,
             "url": f"{decl['nav_links']['inbox']}#item-{item['item_id']}", "item_id": item["item_id"], "category": category,
             "milestone": str(facts.get("milestone") or ""), "milestone_title": ms_titles.get(str(facts.get("milestone") or ""), ""),
             "artifacts": len(facts.get("artifacts") or []) if category == "owner_check" else None,
@@ -406,14 +464,14 @@ def _group_asks(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _collect_home(home_root: str | Path | None, *, show_all: bool, all_asks: bool = False) -> dict[str, Any]:
-    from tools.aipos_cli.clock import utc_now
+    from tools.aipos_cli.clock import judged_now
     from tools.aipos_cli.owner_inbox import collect_inbox
 
     decl = pages_declaration()
     home = home_declaration(decl)
     entries = home_entries(home_root)
     shown, hidden = visible_entries(entries, show_all)
-    now = utc_now()
+    now = judged_now()  # AIPOS-F249: every time judgment made on it reports its flip
     cards: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     by_project: dict[str, dict[str, Any]] = {}
@@ -431,8 +489,7 @@ def _collect_home(home_root: str | Path | None, *, show_all: bool, all_asks: boo
                 "paused": g["paused"] or entry["paused"], "headline": g["headline"], "progress": g["progress"],
                 "pushing": len(g["pushing"]) + len(g["todo"]), "stalled": len(stalled),
                 "stalled_oldest": ({"title": human_title(oldest["task_id"], oldest.get("title"), int(home["title_chars"])),
-                                    "days": (int(oldest["idle_hours"] // 24) if oldest["idle_hours"] is not None else None)}
-                                   if oldest else None),
+                                    "days": oldest["days"]} if oldest else None),
                 "url": page_url(decl, "project", project=f.name, subproject=g["instance"]),
             })
     asks: list[dict[str, Any]] = []
@@ -481,7 +538,8 @@ def collect_project_brief(home_root: str | Path | None = None, *, project: str |
         with read_request_scope():
             return _collect_project_brief(home_root, project=project, advisor=advisor, show_all=show_all)
 
-    return truth_cached(("board_home.collect_project_brief", str(home_root), project, advisor, bool(show_all)), compute)
+    return _finish_time(truth_cached(("board_home.collect_project_brief", str(home_root), project, advisor, bool(show_all)), compute,
+                                     page=True))
 
 
 def _deliverable(f: ProjectFacts, row: dict[str, Any], home: dict[str, Any], decl: dict[str, Any]) -> dict[str, Any]:
@@ -509,7 +567,7 @@ def _deliverable(f: ProjectFacts, row: dict[str, Any], home: dict[str, Any], dec
 
 def _collect_project_brief(home_root: str | Path | None, *, project: str | None, advisor: str | None, show_all: bool) -> dict[str, Any]:
     from tools.aipos_cli.board_pages import _envelope_url, _pick_entry, _with_chosen, roadmap_url
-    from tools.aipos_cli.clock import utc_now
+    from tools.aipos_cli.clock import holds_until, judged_now
     from tools.aipos_cli.owner_inbox import collect_inbox
 
     decl = pages_declaration()
@@ -523,7 +581,7 @@ def _collect_project_brief(home_root: str | Path | None, *, project: str | None,
                            "unknown_project": project if project and chosen is None else None, "selected": None}
     if chosen is None:
         return out
-    now = utc_now()
+    now = judged_now()  # AIPOS-F249: every time judgment made on it reports its flip
     f = ProjectFacts(chosen, entries["home_root"])
     got = _project_advisors(f, home, now)
     groups = got["advisors"]
@@ -545,6 +603,8 @@ def _collect_project_brief(home_root: str | Path | None, *, project: str | None,
         return out
     limit = int(home["title_chars"])
     today = str((got["view"] or {}).get("today") or now.date().isoformat())
+    if not (got["view"] or {}).get("today"):  # AIPOS-F249: overdue (target < today) flips when the UTC date changes
+        holds_until(now, datetime(now.year, now.month, now.day, tzinfo=timezone.utc) + timedelta(days=1))
     milestones = []
     for ms in pick["milestones"]:
         prog = ms.get("progress") or {}
@@ -573,7 +633,7 @@ def _collect_project_brief(home_root: str | Path | None, *, project: str | None,
 
     def row_view(r: dict[str, Any], state: str) -> dict[str, Any]:
         return {"task_id": r["task_id"], "title": human_title(r["task_id"], r.get("title"), 2 * limit) or str(r["task_id"]), "state": state,
-                "days": (int(r["idle_hours"] // 24) if r.get("idle_hours") is not None else None)}
+                "days": r.get("days")}
 
     sel["advisor"] = {
         "instance": pick["instance"], "display": pick["display"], "paused": pick["paused"], "headline": headline,

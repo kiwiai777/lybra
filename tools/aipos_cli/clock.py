@@ -13,6 +13,7 @@ tests/test_aipos_f109_records_clock_runall.py 以 git grep 守)。
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Callable
 
 #: ISO 输出式样(秒精度 UTC, Z 结尾)。
 ISO_Z_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
@@ -34,9 +35,59 @@ SLUG_FORMATS: dict[str, str] = {
 }
 
 
+#: AIPOS-F249 件①: 时刻读取的观察者(看板真相缓存开启时由 task_loader 装上; None = 不观察, CLI / 门行为不变)。
+#: 调用形 observer(kind, moment): kind = "read"(utc_now: 未声明判定翻转的读取, 缓存推导按分钟粒度失效, 同 F245)/
+#: "judged"(judged_now: 读者声明它对此刻做的每个时间判定都经 holds_until 报出翻转时刻)/ "until"(holds_until 报的翻转时刻)。
+_observer: Callable[[str, datetime], None] | None = None
+
+
 def utc_now() -> datetime:
     """当前时刻(UTC, 带时区)。"""
-    return datetime.now(timezone.utc)
+    value = datetime.now(timezone.utc)
+    observer = _observer
+    if observer is not None:
+        observer("read", value)
+    return value
+
+
+def judged_now() -> datetime:
+    """AIPOS-F249 件①: 当前时刻(UTC), 供「对它做的每个时间判定都经 holds_until 报出翻转时刻」的读者使用(到期 / 逾期 / 停滞 / 陈旧 /
+    窗口 / 整天数): 看板真相缓存据此让结果一直有效到最早的翻转时刻(不按分钟失效)。由它派生而只作展示的时刻值(建议命令里的
+    「现在 + 有效期」、响应时间戳)= 时间字段(与 F245 同口径)。缓存之外(CLI / 门)与 utc_now 完全相同。"""
+    value = datetime.now(timezone.utc)
+    observer = _observer
+    if observer is not None:
+        observer("judged", value)
+    return value
+
+
+def holds_until(now: datetime, *moments: datetime | float | int | None) -> None:
+    """AIPOS-F249 件①: 报出时间判定的翻转时刻。对 now 做的「now < m / now >= m」类判定到 m 之前结果不变; m <= now = 已定(时间只往前走),
+    不报。m 可为 datetime(无时区 = UTC)/ epoch 秒 / None(忽略)。「now <= m / now > m」类判定的翻转在 m 之后, 调用方传 m 加一个最小刻度
+    (timedelta(microseconds=1))。只在看板真相缓存记录推导时生效; 否则无事。"""
+    observer = _observer
+    if observer is None:
+        return
+    base = now.timestamp()
+    for moment in moments:
+        if moment is None:
+            continue
+        if hasattr(moment, "timestamp"):  # a datetime (duck-typed: callers / tests may hold a datetime subclass)
+            stamp = (moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)).timestamp()
+        else:
+            stamp = float(moment)
+        if stamp > base:
+            observer("until", datetime.fromtimestamp(stamp, timezone.utc))
+
+
+def holds_count(now: datetime, anchor: datetime | float | int | None, unit_seconds: float, count: int | None) -> None:
+    """AIPOS-F249 件①: 报出「自 anchor 起已满几个单位」类计数(整天数 / 整小时数)的下一次变化时刻 = anchor + (count + 1) × 单位;
+    算出的时刻不晚于 now(调用方的浮点计算与精确边界差一个刻度)= 报 now 后 1 秒(马上重判, 不缓存过界)。count / anchor 为 None = 不报。"""
+    if _observer is None or anchor is None or count is None:
+        return
+    start = anchor.timestamp() if hasattr(anchor, "timestamp") else float(anchor)
+    moment = start + (int(count) + 1) * float(unit_seconds)
+    holds_until(now, moment if moment > now.timestamp() else now.timestamp() + 1.0)
 
 
 def local_now() -> datetime:

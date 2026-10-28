@@ -158,6 +158,16 @@ class ProjectFacts:
         return self._get("roadmap", lambda: json_view(roadmap_status(self.root, project=self.name)),
                          (RoadmapError, RoadmapDriftThresholdError, OSError, ValueError, LookupError))
 
+    def roadmap_progress(self) -> dict[str, Any]:
+        """AIPOS-F249 件③: the roadmap view without the milestones' last_activity (roadmap_drift.roadmap_progress; the home / project
+        pages do not show it, and a running loop's run record moves it every few seconds)."""
+        from tools.aipos_cli.roadmap import RoadmapError
+        from tools.aipos_cli.roadmap_drift import json_view, roadmap_progress
+        from tools.aipos_cli.workspace_config import RoadmapDriftThresholdError
+
+        return self._get("roadmap_progress", lambda: json_view(roadmap_progress(self.root, project=self.name)),
+                         (RoadmapError, RoadmapDriftThresholdError, OSError, ValueError, LookupError))
+
     def envelopes(self) -> dict[str, Any]:
         from tools.aipos_cli.autonomy_policy import envelope_overview
 
@@ -519,7 +529,7 @@ def collect_overview(home_root: str | Path | None = None, *, show_all: bool = Fa
             return _collect_overview(home_root, show_all=show_all)
 
     # AIPOS-F245 item 1: result cached on the truth fingerprint (board server only; any truth change = recomputed next request)
-    return truth_cached(("board_pages.collect_overview", str(home_root), bool(show_all)), compute)
+    return truth_cached(("board_pages.collect_overview", str(home_root), bool(show_all)), compute, page=True)
 
 
 def _collect_overview(home_root: str | Path | None, *, show_all: bool) -> dict[str, Any]:
@@ -581,7 +591,7 @@ def collect_onboarding(home_root: str | Path | None = None, *, show_all: bool = 
         with read_request_scope():  # AIPOS-F177 item 3: one request-level read scope (per-project derivations shared)
             return _collect_onboarding(home_root, show_all=show_all)
 
-    return truth_cached(("board_pages.collect_onboarding", str(home_root), bool(show_all)), compute)  # AIPOS-F245 item 1
+    return truth_cached(("board_pages.collect_onboarding", str(home_root), bool(show_all)), compute, page=True)  # AIPOS-F245 item 1
 
 
 def _collect_onboarding(home_root: str | Path | None, *, show_all: bool) -> dict[str, Any]:
@@ -665,7 +675,7 @@ def collect_roadmap(home_root: str | Path | None = None, *, project: str | None 
             return _collect_roadmap(home_root, project=project, milestone=milestone, subproject=subproject, show_all=show_all)
 
     return truth_cached(("board_pages.collect_roadmap", str(home_root), project, milestone, subproject, bool(show_all)),
-                        compute)  # AIPOS-F245 item 1
+                        compute, page=True)  # AIPOS-F245 item 1
 
 
 def _milestone_filter(view: dict[str, Any], stats: dict[str, Any] | None, key: str | None) -> list[str] | None:

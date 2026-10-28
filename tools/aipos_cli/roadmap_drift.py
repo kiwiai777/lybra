@@ -141,13 +141,14 @@ def _card_created(meta: dict[str, Any]) -> datetime | None:
 
 def _card_truth(root: Path, card: dict[str, Any], errors: list[dict[str, str]], cache: dict[str, Any]) -> dict[str, Any]:
     """{records, last_activity, rework_rounds, unreadable}。records = next_resolver._read_task_records(门记录唯一读取);
-    最近推进 = 卡面 *_at / 返工节 created_at / 门记录 *_at / loop 运行记录 *_at 的最晚者。"""
+    最近推进 = 卡面 *_at / 返工节 created_at / 门记录 *_at / loop 运行记录 *_at 的最晚者。
+    AIPOS-F249 件③: 这里的 last_activity 不含 loop 运行记录(运行中每几秒一改): 运行记录的读得出与否经 _card_run_error(稳定), 其 *_at 由
+    _with_run_activity 在里程碑一级并入(_card_run_stamps 同一读法), 结果与原来逐字节一致; 看板服务进程内两者逐卡缓存。"""
     task_id = str(card.get("task_id") or "")
     if task_id in cache:
         return cache[task_id]
     from tools.aipos_cli.frontmatter import FrontmatterReadError
-    from tools.aipos_cli.loop_driver import load_loop_contract
-    from tools.aipos_cli.loop_run_record import LoopRunRecordError, _run_files, loop_runs_dir, read_run, run_record_declaration
+    from tools.aipos_cli.loop_run_record import LoopRunRecordError
     from tools.aipos_cli.next_resolver import _read_task_records
 
     meta = card.get("metadata") or {}
@@ -161,16 +162,51 @@ def _card_truth(root: Path, card: dict[str, Any], errors: list[dict[str, str]], 
             if key.startswith("latest_"):
                 stamps.append(_latest_at(value))
         stamps += [_latest_at(e) for e in records.get("events") or []]
-        rdecl = cache.setdefault("__run_decl__", run_record_declaration(load_loop_contract()))
-        for path in _run_files(loop_runs_dir(root, task_id)):
-            stamps.append(_latest_at(read_run(path, rdecl)))
+        run_error = _card_run_error(root, task_id)
     except (OSError, ValueError, LookupError, FrontmatterReadError, LoopRunRecordError) as exc:
-        out["unreadable"] = f"{type(exc).__name__}: {exc}"
+        run_error = f"{type(exc).__name__}: {exc}"
+    if run_error is not None:
+        out["unreadable"] = run_error
         errors.append({"source": f"卡 {task_id} 的门记录 / 运行记录", "error": out["unreadable"]})
     found = [s for s in stamps if s is not None]
     out["last_activity"] = max(found) if found else None
     cache[task_id] = out
     return out
+
+
+def _card_run_stamps(root: Path, task_id: str) -> dict[str, Any]:
+    """AIPOS-F249 件③: 一张卡 loop 运行记录的 *_at(唯一读法): {latest: 读到的各运行记录 *_at 的最晚者(读不出那份之前读到的照计), error:
+    第一份读不出的「异常类: 原文」| None}。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+    from tools.aipos_cli.loop_driver import load_loop_contract
+    from tools.aipos_cli.loop_run_record import LoopRunRecordError, _run_files, loop_runs_dir, read_run, run_record_declaration
+
+    stamps: list[datetime] = []
+    error = None
+    try:
+        rdecl = run_record_declaration(load_loop_contract())
+        for path in _run_files(loop_runs_dir(root, task_id)):
+            stamp = _latest_at(read_run(path, rdecl))
+            if stamp is not None:
+                stamps.append(stamp)
+    except (OSError, ValueError, LookupError, FrontmatterReadError, LoopRunRecordError) as exc:
+        error = f"{type(exc).__name__}: {exc}"
+    return {"latest": max(stamps) if stamps else None, "error": error}
+
+
+def _card_run_error(root: Path, task_id: str) -> str | None:
+    """AIPOS-F249 件③: 运行记录读不出的原文(_card_run_stamps.error); 看板服务进程内逐卡缓存: 运行中改写只重判这张卡, 读得出 = 值不变,
+    路线图的其余推导不重算。"""
+    from tools.aipos_cli.task_loader import truth_cached
+
+    return truth_cached(("roadmap_drift._card_run_error", str(root), str(task_id)), lambda: _card_run_stamps(root, task_id)["error"])
+
+
+def _card_run_latest(root: Path, task_id: str) -> datetime | None:
+    """AIPOS-F249 件③: 运行记录 *_at 的最晚者(_card_run_stamps.latest); 看板服务进程内逐卡缓存(运行中每次改写都会变, 只重读这张卡)。"""
+    from tools.aipos_cli.task_loader import truth_cached
+
+    return truth_cached(("roadmap_drift._card_run_latest", str(root), str(task_id)), lambda: _card_run_stamps(root, task_id)["latest"])
 
 
 def card_evidence(root: Path, card: dict[str, Any], truth: dict[str, Any], criterion: str | None = None) -> dict[str, Any]:
@@ -526,10 +562,7 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
     unlinked(AIPOS-F181: 只含该 lane 建路线图之后出的游离卡), unlinked_before_roadmap(之前的历史游离卡数), invalid, unreadable_cards, errors, totals}。无路线图 = exists False(调用方给提示, 不报错)。路线图读不出 = RoadmapError;
     阈值不合 = RoadmapDriftThresholdError; 声明缺 = SchemaLoadError(都向上, 调用方点名)。某卡门记录读不出 = 进 errors, 相关标准按未满足、
     相关里程碑不判停滞(不猜)。"""
-    from tools.aipos_cli.clock import utc_now
-    from tools.aipos_cli.roadmap import LINK_INVALID, LINK_LINKED, LINK_UNLINKED, card_links, load_roadmap, roadmap_declaration
-    from tools.aipos_cli.task_loader import lookup_scope_memo, task_card_lookup_scope
-    from tools.aipos_cli.workspace_config import roadmap_drift_thresholds
+    from tools.aipos_cli.task_loader import lookup_scope_memo
 
     root = Path(governance_root)
     if now is None:
@@ -538,10 +571,96 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
         from tools.aipos_cli.task_loader import truth_cached
 
         return truth_cached(("roadmap_drift.roadmap_status", str(root), lane, project), lambda: lookup_scope_memo(
-            root, f"roadmap_drift.roadmap_status:{lane!r}:{project!r}",
-            lambda: roadmap_status(root, lane=lane, project=project, now=utc_now()), copy_out=True))
+            root, f"roadmap_drift.roadmap_status:{lane!r}:{project!r}", lambda: _roadmap_view(root, lane, project, None), copy_out=True))
+    return _roadmap_view(root, lane, project, now)
+
+
+def roadmap_progress(governance_root: str | Path, *, lane: str | None = None, project: str | None = None) -> dict[str, Any]:
+    """AIPOS-F249 件③: roadmap_status(同一推导)去掉各里程碑的 last_activity——loop 在跑时运行记录每几秒改写, 只这一项随之变(由它判出的
+    停滞信号照留)。收件箱(路线图偏差 / 待抽查)与看板首页 / 项目页只读本投影: 看板服务进程内经真相指纹缓存, 运行记录改写重算路线图但投影
+    不变 = 它们不重算。"""
+    from tools.aipos_cli.task_loader import truth_cached
+
+    root = Path(governance_root)
+
+    def compute() -> dict[str, Any]:
+        view = roadmap_status(root, lane=lane, project=project)
+        for ms in view["milestones"]:
+            ms.pop("last_activity", None)
+        return view
+
+    return truth_cached(("roadmap_drift.roadmap_progress", str(root), lane, project), compute)
+
+
+#: AIPOS-F249 件③: the milestone stall judgment needs the cards' loop run record instants (rewritten every few seconds while a loop runs):
+#: _roadmap_core leaves this placeholder in signals and _with_run_activity replaces it (same judgment, same place in the order)
+_STALL_PENDING = "__stall_pending__"
+
+
+def _roadmap_view(root: Path, lane: str | None, project: str | None, now: datetime | None) -> dict[str, Any]:
+    """roadmap_status body: everything but the loop run record instants (_roadmap_core; board server = cached on its own, so a run record
+    rewrite does not re-derive it) + those instants per milestone (_with_run_activity). now None = the current moment (judged)."""
+    from tools.aipos_cli.clock import judged_now
+    from tools.aipos_cli.task_loader import truth_cached
+
+    if now is None:
+        core = truth_cached(("roadmap_drift._roadmap_core", str(root), lane, project),
+                            lambda: _roadmap_core(root, lane=lane, project=project, now=judged_now()))
+        return _with_run_activity(root, core, judged_now(), _card_run_latest)
+    return _with_run_activity(root, _roadmap_core(root, lane=lane, project=project, now=now), now,
+                              lambda r, t: _card_run_stamps(r, t)["latest"])
+
+
+def _with_run_activity(root: Path, view: dict[str, Any], moment: datetime, run_latest: Any) -> dict[str, Any]:
+    """AIPOS-F249 件③: fold the cards' loop run record instants into the core view: each milestone row's last_activity, the stall signal
+    in its place (placeholder from _roadmap_core; judgment unchanged: active, criteria not all met, no unreadable card, last activity older
+    than stall_days), then the next steps (they read the signals)."""
+    from tools.aipos_cli.clock import holds_count, holds_until
+
+    pending = view.pop("_activity", None)
+    if pending is None:
+        return view
+    decl = status_declaration()
+    lasts: dict[str, datetime | None] = {}
+    for slot in pending["milestones"]:
+        found = [x for x in [slot["core_last"], *(run_latest(root, t) for t in slot["cards"])] if x is not None]
+        last = max(found) if found else None
+        lasts[slot["id"]] = last
+        view["milestones"][slot["row"]]["last_activity"] = _iso(last)
+    signals: list[dict[str, Any]] = []
+    stall_days = int(view["thresholds"]["stall_days"]) if view.get("thresholds") else 0
+    for sig in view["signals"]:
+        if sig.get("kind") != _STALL_PENDING:
+            signals.append(sig)
+            continue
+        last = lasts.get(sig["milestone_id"])
+        if sig["eligible"] and last is not None:
+            idle = (moment - last).days
+            holds_count(moment, last, 86400, idle)
+            holds_until(moment, last + timedelta(days=stall_days, microseconds=1))
+            if moment - last > timedelta(days=stall_days):
+                signals.append(_signal(decl, "stalled", anchor=f"{sig['milestone_id']}|{_iso(last)}",
+                                       subject=_inbox_subject("stalled", sig["milestone_id"], None), cards=sig["cards"],
+                                       last_at=_iso(last), idle=idle, threshold=view["thresholds"]["stall_days"],
+                                       met=sig["met"], total=sig["total"], governance_root=root, advisor=sig["advisor"], milestone=sig["milestone"]))
+    view["signals"] = signals
+    view["next_steps"] = _next_steps(decl, view, root, pending["active_seen"])
+    return view
+
+
+def _roadmap_core(governance_root: str | Path, *, lane: str | None, project: str | None, now: datetime) -> dict[str, Any]:
+    """roadmap_status without the loop run record instants (AIPOS-F249 件③): milestone rows' last_activity and the stall signal are left
+    to _with_run_activity (the view carries their inputs under the private key _activity; signals carry a placeholder)."""
+    from tools.aipos_cli.clock import holds_until
+    from tools.aipos_cli.roadmap import LINK_INVALID, LINK_LINKED, LINK_UNLINKED, card_links, load_roadmap, roadmap_declaration
+    from tools.aipos_cli.task_loader import task_card_lookup_scope
+    from tools.aipos_cli.workspace_config import roadmap_drift_thresholds
+
+    root = Path(governance_root)
     moment = now
     today = moment.date()
+    # AIPOS-F249: every time judgment below reports when it flips (the date: next UTC midnight; idle days; stall / window thresholds)
+    holds_until(moment, datetime(today.year, today.month, today.day, tzinfo=timezone.utc) + timedelta(days=1))
     decl = status_declaration()
     rdecl = roadmap_declaration()
     roadmap = load_roadmap(root)
@@ -551,6 +670,7 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
                            "totals": {"met": 0, "total": 0}}
     if not roadmap["exists"]:
         return out
+    out["_activity"] = activity_slots = {"milestones": [], "active_seen": False}
     thresholds = roadmap_drift_thresholds(root)
     out["thresholds"] = thresholds
     errors: list[dict[str, str]] = out["errors"]
@@ -624,7 +744,9 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
             row = {"id": ms_id, "lane": ms["lane"], "title": ms["title"], "status": status, "target_date": ms.get("target_date"),
                    "progress": {"met": n_met, "total": n_total, "ratio": (n_met / n_total) if n_total else None},
                    "mismatch": list(codes.values()), "mismatch_codes": list(codes), "cards": [c["task_id"] for c in ms_cards],
-                   "last_activity": _iso(last), "criteria": criteria_rows}
+                   "last_activity": None, "criteria": criteria_rows}  # AIPOS-F249: last_activity filled by _with_run_activity
+            activity_slots["milestones"].append({"id": ms_id, "row": len(out["milestones"]), "core_last": last,
+                                                 "cards": [str(c.get("task_id") or "") for c in ms_cards]})
             out["milestones"].append(row)
             out["totals"]["met"] += n_met
             out["totals"]["total"] += n_total
@@ -640,14 +762,11 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
                                               subject=_inbox_subject("overdue", ms_id, None), target_date=ms.get("target_date"),
                                               days_over=days_over, status=status, met=n_met, total=n_total, **base))
             # 停滞: active、标准未全满足且挂接卡最近推进早于阈值(有卡读不出 = 不判; 已全满足只差标 done = 见状态不一致, 不算停滞)
-            if (status == "active" and ms_cards and last is not None and not (n_total and n_met == n_total)
-                    and not any(t.get("unreadable") for t in truths)):
-                idle = (moment - last).days
-                if moment - last > timedelta(days=int(thresholds["stall_days"])):
-                    out["signals"].append(_signal(decl, "stalled", anchor=f"{ms_id}|{_iso(last)}",
-                                                  subject=_inbox_subject("stalled", ms_id, None), cards=_ids(ms_cards),
-                                                  last_at=_iso(last), idle=idle, threshold=thresholds["stall_days"],
-                                                  met=n_met, total=n_total, **base))
+            # AIPOS-F249 件③: the last activity includes the loop run record instants = judged by _with_run_activity in this place
+            out["signals"].append({"kind": _STALL_PENDING, "milestone_id": ms_id, "cards": _ids(ms_cards), "advisor": who, "milestone": ms,
+                                   "met": n_met, "total": n_total,
+                                   "eligible": bool(status == "active" and ms_cards and not (n_total and n_met == n_total)
+                                                    and not any(t.get("unreadable") for t in truths))})
             for crit_row in criteria_rows:
                 # 无卡覆盖: active 里程碑下的标准无任何挂接卡
                 if status == "active" and not crit_row["cards"]:
@@ -675,6 +794,7 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
         out["unlinked_before_roadmap"] = sum(1 for c in own if c["state"] == LINK_UNLINKED and not started(c))
         recent = [c for c in after if c["state"] in (LINK_LINKED, LINK_UNLINKED, LINK_INVALID)
                   and (_card_created(c.get("metadata") or {}) or since) > since]
+        holds_until(moment, *(_card_created(c.get("metadata") or {}) + timedelta(days=window) for c in recent))
         free = [c for c in recent if c["state"] == LINK_UNLINKED]
         if recent:
             ratio = len(free) / len(recent)
@@ -687,6 +807,7 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
         change_days = int(thresholds["change_window_days"])
         recent_changes = [e for e in changes if (_as_utc(e.get("decided_at")) or datetime.min.replace(tzinfo=timezone.utc))
                           > moment - timedelta(days=change_days)]
+        holds_until(moment, *(_as_utc(e.get("decided_at")) + timedelta(days=change_days) for e in recent_changes))
         if recent_changes:
             last_change = recent_changes[-1]
             out["signals"].append(_signal(
@@ -694,7 +815,7 @@ def roadmap_status(governance_root: str | Path, *, lane: str | None = None, proj
                 days=change_days, count=len(recent_changes), last_at=last_change.get("decided_at") or "?",
                 last_by=last_change.get("decided_by") or "?", last_summary=last_change.get("summary") or "?",
                 last_path=last_change["path"]))
-        out["next_steps"] = _next_steps(decl, out, root, active_seen)
+        activity_slots["active_seen"] = active_seen  # AIPOS-F249: next steps read the signals = made by _with_run_activity
     return out
 
 

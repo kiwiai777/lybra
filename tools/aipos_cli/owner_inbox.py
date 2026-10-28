@@ -701,10 +701,10 @@ def suggest_grant(root: Path, project: str, *, task_id: str, card_fm: dict[str, 
         envelope_usage,
         next_policy_id,
     )
-    from tools.aipos_cli.clock import iso_z, utc_now
+    from tools.aipos_cli.clock import iso_z, judged_now
     from tools.aipos_cli.workspace_config import project_grant_defaults, project_repos
 
-    now = now or utc_now()
+    now = now or judged_now()  # AIPOS-F249: judgments report their flips (envelope_usage / authorization_refusal); expires_at = time field
     if authorization_ids(root):  # AIPOS-F224 件②: 项目有常设授权 = 建议「扩大项目授权」, 不再新开信封
         return suggest_authorization_extension(root, project, task_id=task_id, card_fm=card_fm, driver=driver, now=now)
     defaults = project_grant_defaults(root)
@@ -870,126 +870,162 @@ def _loop_items(root: Path, project: str, decl: dict[str, Any], home_root: Path 
     冻结卡 = 四视图同一口径不列。运行记录 owner_ask(lybra loop note 补写)优先于声明缺省文案。
     AIPOS-F180: 事由 ∈ grant_request.reasons = 授权请求: 驱动方已有覆盖本卡的信封 = 已自行解除不列; 否则附 grant 建议(suggest_grant)。
     AIPOS-F201 件③: 已自行解除(签发生效)而本卡最近运行仍停在该请求 = 顾问未续跑 → relays 收一条「已签发」转达(窗口内)。"""
-    from tools.aipos_cli.loop_run_record import loop_runs_root, loop_status
-    from tools.aipos_cli.task_loader import find_task_card
+    from tools.aipos_cli.loop_run_record import loop_runs_root
 
-    cat = decl["categories"]["loop_owner_needed"]
     runs_root = loop_runs_root(root)
     out: list[dict[str, Any]] = []
     if not runs_root.is_dir():
         return out
     for directory in sorted(p for p in runs_root.iterdir() if p.is_dir()):
-        task_id = directory.name
-        try:
-            card_path, state = find_task_card(root, task_id)
-            if state in ("completed", "withdrawn"):  # 卡已结案 / 撤回 = 已自行解除: 先判, 免为它算下一动作(结案取下一张会扫全项目)
-                continue
-            report = loop_status(root, task_id)
-        except (OSError, ValueError, LookupError, RuntimeError) as exc:  # 读不出 = 点名进 errors(不猜不吞)
-            errors.append({"project": project, "source": f"loop 运行记录 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
-            continue
-        runs = report.get("runs") or []
-        if not runs:
-            continue
-        view = runs[-1]
-        na = view.get("next_action") or {}
-        if na.get("action") == "advisor_fix" and na.get("reason") == "owner_ruled" and not view.get("frozen"):
-            # AIPOS-F201 item 3 (a): ruled (loop status already reads the ruling) but this run is still the latest = not re-run yet
-            # AIPOS-F222: an owner_ask merged into the rework-limit item is relayed by that item; one answered by a later ruling on
-            # another item is relayed there (no second paragraph for the same decision)
-            ask_mark = na.get("owner_ask_inbox") or {}
-            own = not ask_mark or (ask_mark.get("category") != "rework_limit" and ask_mark.get("resolved_by") != "later")
-            entry = (_ruled_loop_relay(root, project, task_id=task_id, view=view, na=na, decl=decl)
-                     if relays is not None and own else None)
-            if entry is not None:
-                relays.append(entry)
-            continue
-        # AIPOS-F222 件②: 顾问 loop note 补写的 owner_ask 落在下一动作非等 Owner 的运行上(loop status 经 owner_ask_destination 标 owner_ask_inbox)
-        # = 照列(事由 advisor_ask); 判归返工上限事项 = 已并入该事项(_merge_owner_ask), 不另列
-        marker = na.get("owner_ask_inbox") if na.get("action") != "owner_needed" else None
-        if isinstance(marker, dict) and marker.get("category") == "rework_limit":
-            continue
-        advisor_ask = isinstance(marker, dict) and bool(marker.get("item_id"))
-        if (na.get("action") != "owner_needed" and not advisor_ask) or view.get("frozen"):
-            continue
-        ask_spec = cat["advisor_ask"]
-        reason = str(ask_spec["reason"]) if advisor_ask else str(na.get("reason") or "")
-        ask_rec = view.get("owner_ask") if isinstance(view.get("owner_ask"), dict) else {}
-        if ask_rec and not advisor_ask and _owner_ask_answered(root, task_id, ask_rec, project, errors):
-            ask_rec = {}  # AIPOS-F222: 补写之后本卡已有 Owner 裁决 = 该请求已被回应, 不再拿旧请求文案当本事项
-        driver = str(view.get("driver") or "")
-        grant_request = reason in grant_declaration(decl)["reasons"]
-        card_fm: dict[str, Any] = {}
-        if advisor_ask:  # AIPOS-F222: 卡面(返工额度 / 标题)
-            card_fm = _card_frontmatter(card_path, errors, project) or {}
-        if grant_request:
-            card_fm = _card_frontmatter(card_path, errors, project) or {}
-            try:
-                covering = _covered_now(root, task_id, card_fm, driver) if card_fm else None
-            except (OSError, ValueError, LookupError) as exc:  # coverage unreadable = named, item still listed (not guessed resolved)
-                covering = None
-                errors.append({"project": project, "source": f"授权请求 {task_id} 信封覆盖判定", "error": f"{type(exc).__name__}: {exc}"})
-            if covering is not None:  # AIPOS-F180: envelope now covers this card for the driver = self-resolved, not listed
-                if relays is not None:  # AIPOS-F201 item 3: signed but the advisor has not re-run the loop yet = relay
-                    entry = _envelope_relay(root, project, task_id=task_id, driver=driver, policy=covering, decl=decl)
-                    if entry is not None:
-                        relays.append(entry)
-                continue
-        # AIPOS-F225: an advisor escalation of a tier-2 / tier-3 run keeps the run's own reason for the declared option / advice tables
-        basis = str(view.get("end_reason") or reason) if advisor_ask else reason
-        if ask_rec.get("options"):
-            options = [{"key": str(o.get("key")), "label": str(o.get("label"))} for o in ask_rec["options"] if isinstance(o, dict)]
-        else:
-            options = _option_list(list((cat.get("options_by_reason") or {}).get(reason) or (cat.get("options_by_reason") or {}).get(basis)
-                                        or cat["default_options"]), decl)
-        # AIPOS-F202: options pinned for this reason (e.g. reaudit on audit_blocked_repeated) stay offered after the advisor's own;
-        # AIPOS-F225: an advisor escalation (advisor_ask) on such a run keeps them too (manual fallback of the tier-2 auto path)
-        pinned_by = cat.get("pinned_options_by_reason") or {}
-        pinned = [*(pinned_by.get(reason) or []), *((pinned_by.get(basis) or []) if advisor_ask else [])]
-        options += _option_list([k for k in dict.fromkeys(pinned) if k not in {o["key"] for o in options}], decl)
-        if advisor_ask and _rework_exhausted(root, task_id, card_fm, project, errors):  # AIPOS-F222: 返工额度已尽 = 可授权追加一轮
-            options += _option_list([k for k in ask_spec["pinned_when_rework_exhausted"] if k not in {o["key"] for o in options}], decl)
-        recommend = ask_rec.get("recommend") or None
-        if not recommend and basis in (cat.get("recommend_by_reason") or {}):
-            recommend = _fmt(cat["recommend_by_reason"][basis], f"categories.loop_owner_needed.recommend_by_reason.{basis}",
-                             hint=str(na.get("hint") or ""), task_id=task_id)
-        subject = _fmt(cat["subject"], "categories.loop_owner_needed.subject", task_id=task_id)
-        title = (str(card_fm.get("title") or "").strip() or None) if card_fm else _card_title(card_path, errors, project)
-        item = _base_item(
-            decl, project=project, governance_root=root, category="loop_owner_needed", rank=int(cat["rank"]), subject=subject,
-            anchor=str(na.get("inbox_anchor") or view.get("run_id") or ""), source=driver,  # AIPOS-F231: 已暂停 = 暂停裁决锚点
-            ask=str(ask_rec.get("ask") or na.get("detail") or reason), recommend=recommend,
-            impact=(_fmt(ask_spec["impact"], "categories.loop_owner_needed.advisor_ask.impact", task_id=task_id,
-                         end_reason=str(view.get("end_reason") or na.get("reason") or "?")) if advisor_ask
-                    else _fmt(cat["impact"], "categories.loop_owner_needed.impact", task_id=task_id, reason=reason)),
-            options=options, since=view.get("ended_at") or view.get("started_at"), task_id=task_id, home_root=home_root, title=title,
-            facts={"run_id": view.get("run_id"), "reason": reason, "driver": view.get("driver"), "envelope": view.get("envelope"),
-                   "hint": na.get("hint"), "record_path": view.get("record_path"), "owner_ask_by": ask_rec.get("noted_by")})
-        item["relay_to"] = (str(ask_rec.get("noted_by") or "") if advisor_ask else "") or driver or None  # AIPOS-F201: the loop driver is the advisor to tell
-        if advisor_ask and marker.get("legacy"):  # AIPOS-F232 件①: F225 前的旧顾问请求(无第一档事由)= 第二档告知, 附撤回命令
-            legacy = ask_spec["legacy"]
-            retract = _fmt(legacy["retract_command"], "categories.loop_owner_needed.advisor_ask.legacy.retract_command", task_id=task_id,
-                           noted_by=str(ask_rec.get("noted_by") or driver or "<补写的顾问实例>"), governance_root=str(root))
-            item["ask"] = _fmt(legacy["ask"], "categories.loop_owner_needed.advisor_ask.legacy.ask", label=legacy["label"], ask=item["ask"],
-                               retract_command=retract)
-            item["owner_tier"] = int(legacy["tier"])
-            item["legacy_ask"] = {"label": str(legacy["label"]), "retract_command": retract, "kind": str(legacy["kind"])}
-        # AIPOS-F225: first-tier reason (loop status apply_owner_tier; advisor_ask = the note's owner_reason)
-        item["owner_reason"] = (owner_reason_entry((view.get("owner_ask") or {}).get("owner_reason"), decl)
-                                if advisor_ask and isinstance(view.get("owner_ask"), dict) else na.get("owner_reason"))
-        try:
-            item["reaudit_hint"] = reaudit_hint(root, project, task_id=task_id, view=view, reason=basis, decl=decl)
-        except (OSError, ValueError, LookupError, RuntimeError) as exc:  # hint unreadable = named in errors, item still listed
-            item["reaudit_hint"] = None
-            errors.append({"project": project, "source": f"重新派审提示 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
-        if grant_request:
-            if card_fm:
-                _attach_grant(item, root, project, card_fm={**card_fm, "task_id": task_id}, driver=driver,
-                              advisor_grant=ask_rec.get("grant") if isinstance(ask_rec.get("grant"), dict) else None, decl=decl)
-            else:
-                item["grant_error"] = f"卡面 {task_id} 读不出"
-        out.append(item)
+        # AIPOS-F249 件③: per card through the truth cache (board server): a run record rewritten every few seconds while the loop runs
+        # re-derives this card's entry only; an entry that came out the same leaves the inbox (and the pages built on it) as it was
+        got = _loop_card_entry(root, project, directory.name, decl, home_root, relays is not None)
+        errors.extend(got["errors"])
+        if relays is not None:
+            relays.extend(got["relays"])
+        out.extend(got["items"])
     return out
+
+
+def _loop_card_entry(root: Path, project: str, task_id: str, decl: dict[str, Any], home_root: Path | None, want_relays: bool) -> dict[str, Any]:
+    """AIPOS-F249 件③: one card's part of _loop_items = {items, relays, errors} (same judgment, see _loop_card); cached per card on the truth
+    fingerprint in the board server (key: governance root, project, card, home root, relays wanted, declaration digest)."""
+    from tools.aipos_cli.task_loader import truth_cached
+
+    def compute() -> dict[str, Any]:
+        got: dict[str, Any] = {"items": [], "relays": [], "errors": []}
+        _loop_card(root, project, task_id, decl, home_root, got["errors"], got["relays"] if want_relays else None, got["items"])
+        return got
+
+    return truth_cached(("owner_inbox._loop_card_entry", str(root), project, task_id, str(home_root), bool(want_relays),
+                         _decl_digest(decl)), compute)
+
+
+def _decl_digest(decl: dict[str, Any]) -> str:
+    """Digest of the inbox declaration (part of a per-card cache key: a changed declaration = another entry)."""
+    import hashlib
+    import json
+
+    return hashlib.blake2b(json.dumps(decl, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8"), digest_size=16).hexdigest()
+
+
+def _loop_card(root: Path, project: str, task_id: str, decl: dict[str, Any], home_root: Path | None, errors: list[dict[str, str]],
+               relays: list[dict[str, Any]] | None, out: list[dict[str, Any]]) -> None:
+    """① one card of _loop_items: its latest loop run's advisor next action (loop_run_record.loop_status) → an inbox item / a relay
+    (appended to out / relays), unreadable = named in errors."""
+    from tools.aipos_cli.loop_run_record import loop_status
+    from tools.aipos_cli.task_loader import find_task_card
+
+    cat = decl["categories"]["loop_owner_needed"]
+    try:
+        card_path, state = find_task_card(root, task_id)
+        if state in ("completed", "withdrawn"):  # 卡已结案 / 撤回 = 已自行解除: 先判, 免为它算下一动作(结案取下一张会扫全项目)
+            return
+        report = loop_status(root, task_id)
+    except (OSError, ValueError, LookupError, RuntimeError) as exc:  # 读不出 = 点名进 errors(不猜不吞)
+        errors.append({"project": project, "source": f"loop 运行记录 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
+        return
+    runs = report.get("runs") or []
+    if not runs:
+        return
+    view = runs[-1]
+    na = view.get("next_action") or {}
+    if na.get("action") == "advisor_fix" and na.get("reason") == "owner_ruled" and not view.get("frozen"):
+        # AIPOS-F201 item 3 (a): ruled (loop status already reads the ruling) but this run is still the latest = not re-run yet
+        # AIPOS-F222: an owner_ask merged into the rework-limit item is relayed by that item; one answered by a later ruling on
+        # another item is relayed there (no second paragraph for the same decision)
+        ask_mark = na.get("owner_ask_inbox") or {}
+        own = not ask_mark or (ask_mark.get("category") != "rework_limit" and ask_mark.get("resolved_by") != "later")
+        entry = (_ruled_loop_relay(root, project, task_id=task_id, view=view, na=na, decl=decl)
+                 if relays is not None and own else None)
+        if entry is not None:
+            relays.append(entry)
+        return
+    # AIPOS-F222 件②: 顾问 loop note 补写的 owner_ask 落在下一动作非等 Owner 的运行上(loop status 经 owner_ask_destination 标 owner_ask_inbox)
+    # = 照列(事由 advisor_ask); 判归返工上限事项 = 已并入该事项(_merge_owner_ask), 不另列
+    marker = na.get("owner_ask_inbox") if na.get("action") != "owner_needed" else None
+    if isinstance(marker, dict) and marker.get("category") == "rework_limit":
+        return
+    advisor_ask = isinstance(marker, dict) and bool(marker.get("item_id"))
+    if (na.get("action") != "owner_needed" and not advisor_ask) or view.get("frozen"):
+        return
+    ask_spec = cat["advisor_ask"]
+    reason = str(ask_spec["reason"]) if advisor_ask else str(na.get("reason") or "")
+    ask_rec = view.get("owner_ask") if isinstance(view.get("owner_ask"), dict) else {}
+    if ask_rec and not advisor_ask and _owner_ask_answered(root, task_id, ask_rec, project, errors):
+        ask_rec = {}  # AIPOS-F222: 补写之后本卡已有 Owner 裁决 = 该请求已被回应, 不再拿旧请求文案当本事项
+    driver = str(view.get("driver") or "")
+    grant_request = reason in grant_declaration(decl)["reasons"]
+    card_fm: dict[str, Any] = {}
+    if advisor_ask:  # AIPOS-F222: 卡面(返工额度 / 标题)
+        card_fm = _card_frontmatter(card_path, errors, project) or {}
+    if grant_request:
+        card_fm = _card_frontmatter(card_path, errors, project) or {}
+        try:
+            covering = _covered_now(root, task_id, card_fm, driver) if card_fm else None
+        except (OSError, ValueError, LookupError) as exc:  # coverage unreadable = named, item still listed (not guessed resolved)
+            covering = None
+            errors.append({"project": project, "source": f"授权请求 {task_id} 信封覆盖判定", "error": f"{type(exc).__name__}: {exc}"})
+        if covering is not None:  # AIPOS-F180: envelope now covers this card for the driver = self-resolved, not listed
+            if relays is not None:  # AIPOS-F201 item 3: signed but the advisor has not re-run the loop yet = relay
+                entry = _envelope_relay(root, project, task_id=task_id, driver=driver, policy=covering, decl=decl)
+                if entry is not None:
+                    relays.append(entry)
+            return
+    # AIPOS-F225: an advisor escalation of a tier-2 / tier-3 run keeps the run's own reason for the declared option / advice tables
+    basis = str(view.get("end_reason") or reason) if advisor_ask else reason
+    if ask_rec.get("options"):
+        options = [{"key": str(o.get("key")), "label": str(o.get("label"))} for o in ask_rec["options"] if isinstance(o, dict)]
+    else:
+        options = _option_list(list((cat.get("options_by_reason") or {}).get(reason) or (cat.get("options_by_reason") or {}).get(basis)
+                                    or cat["default_options"]), decl)
+    # AIPOS-F202: options pinned for this reason (e.g. reaudit on audit_blocked_repeated) stay offered after the advisor's own;
+    # AIPOS-F225: an advisor escalation (advisor_ask) on such a run keeps them too (manual fallback of the tier-2 auto path)
+    pinned_by = cat.get("pinned_options_by_reason") or {}
+    pinned = [*(pinned_by.get(reason) or []), *((pinned_by.get(basis) or []) if advisor_ask else [])]
+    options += _option_list([k for k in dict.fromkeys(pinned) if k not in {o["key"] for o in options}], decl)
+    if advisor_ask and _rework_exhausted(root, task_id, card_fm, project, errors):  # AIPOS-F222: 返工额度已尽 = 可授权追加一轮
+        options += _option_list([k for k in ask_spec["pinned_when_rework_exhausted"] if k not in {o["key"] for o in options}], decl)
+    recommend = ask_rec.get("recommend") or None
+    if not recommend and basis in (cat.get("recommend_by_reason") or {}):
+        recommend = _fmt(cat["recommend_by_reason"][basis], f"categories.loop_owner_needed.recommend_by_reason.{basis}",
+                         hint=str(na.get("hint") or ""), task_id=task_id)
+    subject = _fmt(cat["subject"], "categories.loop_owner_needed.subject", task_id=task_id)
+    title = (str(card_fm.get("title") or "").strip() or None) if card_fm else _card_title(card_path, errors, project)
+    item = _base_item(
+        decl, project=project, governance_root=root, category="loop_owner_needed", rank=int(cat["rank"]), subject=subject,
+        anchor=str(na.get("inbox_anchor") or view.get("run_id") or ""), source=driver,  # AIPOS-F231: 已暂停 = 暂停裁决锚点
+        ask=str(ask_rec.get("ask") or na.get("detail") or reason), recommend=recommend,
+        impact=(_fmt(ask_spec["impact"], "categories.loop_owner_needed.advisor_ask.impact", task_id=task_id,
+                     end_reason=str(view.get("end_reason") or na.get("reason") or "?")) if advisor_ask
+                else _fmt(cat["impact"], "categories.loop_owner_needed.impact", task_id=task_id, reason=reason)),
+        options=options, since=view.get("ended_at") or view.get("started_at"), task_id=task_id, home_root=home_root, title=title,
+        facts={"run_id": view.get("run_id"), "reason": reason, "driver": view.get("driver"), "envelope": view.get("envelope"),
+               "hint": na.get("hint"), "record_path": view.get("record_path"), "owner_ask_by": ask_rec.get("noted_by")})
+    item["relay_to"] = (str(ask_rec.get("noted_by") or "") if advisor_ask else "") or driver or None  # AIPOS-F201: the loop driver is the advisor to tell
+    if advisor_ask and marker.get("legacy"):  # AIPOS-F232 件①: F225 前的旧顾问请求(无第一档事由)= 第二档告知, 附撤回命令
+        legacy = ask_spec["legacy"]
+        retract = _fmt(legacy["retract_command"], "categories.loop_owner_needed.advisor_ask.legacy.retract_command", task_id=task_id,
+                       noted_by=str(ask_rec.get("noted_by") or driver or "<补写的顾问实例>"), governance_root=str(root))
+        item["ask"] = _fmt(legacy["ask"], "categories.loop_owner_needed.advisor_ask.legacy.ask", label=legacy["label"], ask=item["ask"],
+                           retract_command=retract)
+        item["owner_tier"] = int(legacy["tier"])
+        item["legacy_ask"] = {"label": str(legacy["label"]), "retract_command": retract, "kind": str(legacy["kind"])}
+    # AIPOS-F225: first-tier reason (loop status apply_owner_tier; advisor_ask = the note's owner_reason)
+    item["owner_reason"] = (owner_reason_entry((view.get("owner_ask") or {}).get("owner_reason"), decl)
+                            if advisor_ask and isinstance(view.get("owner_ask"), dict) else na.get("owner_reason"))
+    try:
+        item["reaudit_hint"] = reaudit_hint(root, project, task_id=task_id, view=view, reason=basis, decl=decl)
+    except (OSError, ValueError, LookupError, RuntimeError) as exc:  # hint unreadable = named in errors, item still listed
+        item["reaudit_hint"] = None
+        errors.append({"project": project, "source": f"重新派审提示 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
+    if grant_request:
+        if card_fm:
+            _attach_grant(item, root, project, card_fm={**card_fm, "task_id": task_id}, driver=driver,
+                          advisor_grant=ask_rec.get("grant") if isinstance(ask_rec.get("grant"), dict) else None, decl=decl)
+        else:
+            item["grant_error"] = f"卡面 {task_id} 读不出"
+    out.append(item)
 
 
 def _owner_ask_answered(root: Path, task_id: str, ask: dict[str, Any], project: str, errors: list[dict[str, str]]) -> bool:
@@ -1376,11 +1412,11 @@ def _roadmap_items(root: Path, project: str, decl: dict[str, Any], home_root: Pa
     """⑥ AIPOS-F173: 路线图严重偏差 = 推导唯一实现 roadmap_drift.roadmap_status 中 severity=inbox 的信号(声明 verbs.lybra_roadmap.status
     .signals.*.severity), 每条一个事项; 锚点 = 信号 anchor(真相不变 = 同一事项 ID, 重算不重复)。项目无路线图 = 无事项。
     推导内某卡记录读不出 = 点名进 errors(不猜)。路线图 / 阈值读不出 = 异常向上(collect_project_inbox 点名该类)。"""
-    from tools.aipos_cli.roadmap_drift import roadmap_status
+    from tools.aipos_cli.roadmap_drift import roadmap_progress
     from tools.schema_loader import SchemaLoadError
 
     cat = decl["categories"]["roadmap_drift"]
-    view = roadmap_status(root, project=project)
+    view = roadmap_progress(root, project=project)  # AIPOS-F249: roadmap_status without the run-record-moved last_activity
     for err in view["errors"]:
         errors.append({"project": project, "source": f"路线图偏差: {err['source']}", "error": err["error"]})
     out: list[dict[str, Any]] = []
@@ -1408,10 +1444,10 @@ def _owner_check_items(root: Path, project: str, decl: dict[str, Any], home_root
     """⑦ AIPOS-F175: 验证状态 = owner_pending 的标准(推导唯一实现 roadmap_drift.roadmap_status), 每条一个事项; 锚点 = 标准 + 已自动验证通过的
     挂接卡 + 已有抽查记录数(新交付 / 新记录 = 新事项)。推导读不出处已由 roadmap_drift 类别点名(不重复进 errors)。项目无路线图 = 无事项。"""
     from tools.aipos_cli.board_pages import pages_declaration, roadmap_url
-    from tools.aipos_cli.roadmap_drift import roadmap_status
+    from tools.aipos_cli.roadmap_drift import roadmap_progress
 
     cat = decl["categories"]["owner_check"]
-    view = roadmap_status(root, project=project)
+    view = roadmap_progress(root, project=project)  # AIPOS-F249: roadmap_status without the run-record-moved last_activity
     out: list[dict[str, Any]] = []
     for ms in view["milestones"]:
         if ms["status"] == "dropped":
@@ -1584,7 +1620,7 @@ def collect_inbox(home_root: str | Path | None = None, *, project: str | None = 
             return _collect_inbox(home_root, project=project, include_paused=include_paused, categories=categories)
 
     return truth_cached(("owner_inbox.collect_inbox", str(home_root), project, bool(include_paused),
-                         tuple(categories) if categories is not None else None), compute)
+                         tuple(categories) if categories is not None else None), compute, page=True)
 
 
 def grant_requests(inbox: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1705,11 +1741,18 @@ def option_next(decl: dict[str, Any], choice: str, label: str, *, resume: str, t
 
 
 def _within_window(text: Any, decl: dict[str, Any]) -> bool:
-    """发生时刻在 relay.window_days 天内; 时刻读不出 = True(照列, 不猜成过期)。"""
-    from tools.aipos_cli.clock import utc_now
+    """发生时刻在 relay.window_days 天内; 时刻读不出 = True(照列, 不猜成过期)。AIPOS-F249: 窗口内的判定到 发生时刻 + 窗口 之后才翻转(报给看板真相缓存)。"""
+    from tools.aipos_cli.clock import holds_until, judged_now
 
     when = _parse_utc(text)
-    return when is None or when >= utc_now() - timedelta(days=int(relay_declaration(decl)["window_days"]))
+    if when is None:
+        return True
+    now = judged_now()
+    window = timedelta(days=int(relay_declaration(decl)["window_days"]))
+    inside = when >= now - window
+    if inside:
+        holds_until(now, when + window + timedelta(microseconds=1))
+    return inside
 
 
 def _decision_relay(root: Path, item: dict[str, Any], ruling: dict[str, Any], decl: dict[str, Any]) -> dict[str, Any] | None:

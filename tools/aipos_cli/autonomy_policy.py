@@ -18,7 +18,7 @@ import logging
 import re
 import sys
 from datetime import datetime, timezone
-from tools.aipos_cli.clock import utc_now
+from tools.aipos_cli.clock import holds_until, judged_now, utc_now
 from pathlib import Path
 from typing import Any, Callable
 
@@ -429,8 +429,7 @@ def released_business_cards(repo_root: Path, policy_id: str) -> dict[str, list[s
     pid = str(policy_id or "").strip()
     if not pid:
         return {}
-    roots = lookup_scope_memo(Path(repo_root), "autonomy_policy.preauthorized_claim_roots",
-                              lambda: _preauthorized_claim_roots(Path(repo_root)))
+    roots = lookup_scope_memo(Path(repo_root), "autonomy_policy.preauthorized_claim_roots", lambda: _claim_roots_cached(Path(repo_root)))
     carried = _carried_roots(Path(repo_root), pid)  # AIPOS-F224: 授权承接的(迁入旧信封已放行的)根卡不扣授权额度
     return {root: list(tids) for root, tids in (roots["roots"].get(pid) or {}).items() if root not in carried}
 
@@ -442,9 +441,16 @@ def preauthorized_claim_records(repo_root: Path, policy_id: str) -> int:
     pid = str(policy_id or "").strip()
     if not pid:
         return 0
-    roots = lookup_scope_memo(Path(repo_root), "autonomy_policy.preauthorized_claim_roots",
-                              lambda: _preauthorized_claim_roots(Path(repo_root)))
+    roots = lookup_scope_memo(Path(repo_root), "autonomy_policy.preauthorized_claim_roots", lambda: _claim_roots_cached(Path(repo_root)))
     return int(roots["records"].get(pid, 0))
+
+
+def _claim_roots_cached(repo_root: Path) -> dict[str, dict[str, Any]]:
+    """_preauthorized_claim_roots through the board's truth cache (AIPOS-F249 件③: a loop run record rewrite re-derives that card's loop
+    status, whose envelope warning counts released cards; the claim records it reads did not change = served). Off = computed."""
+    from tools.aipos_cli.task_loader import truth_cached
+
+    return truth_cached(("autonomy_policy.preauthorized_claim_roots", str(repo_root)), lambda: _preauthorized_claim_roots(repo_root))
 
 
 def _preauthorized_claim_roots(repo_root: Path) -> dict[str, dict[str, Any]]:
@@ -734,6 +740,7 @@ def match_claim_envelope(
     active_from = _parse_iso(policy.get("active_from")) if is_dict else None
     expires_at = _parse_iso(policy.get("expires_at")) if is_dict else None
     tw_parseable = active_from is not None and expires_at is not None
+    holds_until(now, active_from, expires_at)  # AIPOS-F249: time window judged on now flips at these instants
 
     try:
         max_tasks = int(policy.get("max_tasks") or 0) if is_dict else 0
@@ -874,7 +881,7 @@ def select_envelope(
     notes(可选, 调用方给列表)= 追加挑选说明(跳过了哪些已接替信封), 供输出写明用的是哪个信封。
     返回 (policy | None, 未匹配原因列表)。"""
     root = Path(governance_root)
-    now = now or utc_now()
+    now = now or judged_now()  # AIPOS-F249: window judgments report their flips (match_claim_envelope / _usage_state / judge_project_authorization)
     triples = [
         (str(a or "").strip(), str(b or "").strip(), (str(c).strip() or None) if c else None)
         for a, b, c in identities
@@ -1036,7 +1043,7 @@ def envelope_usage(governance_root: Path | str, policy_id: str, *, now: datetime
     的 count_bound 即此计数; AIPOS-F192: 单位 = 根业务卡, released_cards = 已放行根卡, claim_records = 认领记录条数仅供新旧口径对照)+ 时间窗。state: missing(信封文件缺 / 形不合)/ inactive(status≠active 或未获 Owner 批准)/ invalid(时间窗读不出)/
     not_yet_active / expired / exhausted / active —— 次序与门判定一致(过期先于额度)。"""
     root = Path(governance_root)
-    now = now or utc_now()
+    now = now or judged_now()  # AIPOS-F249: state flips reported by _usage_state; seconds_to_expiry = time field (shown as is)
     pid = str(policy_id or "").strip()
     policy = load_policy(root, pid) if pid else None
     if policy is None:
@@ -1062,6 +1069,7 @@ def _usage_state(policy: dict[str, Any], used: int, now: datetime) -> str:
     except (TypeError, ValueError):
         max_tasks = 0
     frm, exp = _parse_iso(policy.get("active_from")), _parse_iso(policy.get("expires_at"))
+    holds_until(now, frm, exp)  # AIPOS-F249: not yet active / expired flip at these instants
     if policy.get("status") != POLICY_STATUS_ACTIVE or not policy.get("approved_by_owner"):
         return "inactive"
     if frm is None or exp is None:
@@ -1131,7 +1139,7 @@ def renew_plan(governance_root: Path | str, usage: dict[str, Any], *, identities
     from datetime import timedelta
 
     decl = envelope_renew_declaration()
-    now = now or utc_now()
+    now = now or judged_now()  # AIPOS-F249: only the suggested expiry (time field) is derived from now
     policy = usage.get("policy") or {}
     pid = str(usage.get("policy_id") or "")
     nxt = next_policy_id(governance_root, identities=identities, previous=pid or None, project=str(policy.get("task_selector_project") or ""))
@@ -1208,7 +1216,23 @@ def envelope_warning(usage: dict[str, Any]) -> str | None:
     seconds = usage.get("seconds_to_expiry")
     if isinstance(seconds, int) and seconds <= float(warn["expiry_hours"]) * 3600:
         reasons.append(f"{usage.get('expires_at')} 到期(剩 {seconds // 3600}h{(seconds % 3600) // 60:02d}m, 阈值 ≤{warn['expiry_hours']}h)")
+        _holds_until_seconds_left(usage, (seconds // 60) * 60)  # AIPOS-F249: the minutes shown change
+    elif isinstance(seconds, int):
+        _holds_until_seconds_left(usage, float(warn["expiry_hours"]) * 3600)  # AIPOS-F249: enters the expiry warning window
     return "; ".join(reasons) or None
+
+
+def _holds_until_seconds_left(usage: dict[str, Any], seconds_left: float) -> None:
+    """AIPOS-F249 件①: a judgment on usage.seconds_to_expiry (derived from expires_at at usage time) keeps its outcome until the time left
+    drops below seconds_left: report expires_at − seconds_left (strictly after: + 1 µs); already past = re-judge within a second."""
+    from datetime import timedelta
+
+    exp = _parse_iso(usage.get("expires_at"))
+    if exp is None:
+        return
+    now = judged_now()
+    moment = exp - timedelta(seconds=seconds_left) + timedelta(microseconds=1)
+    holds_until(now, moment if moment > now else now + timedelta(seconds=1))
 
 
 def envelope_warnings(governance_root: Path | str, *, now: datetime | None = None) -> list[dict[str, Any]]:
@@ -1324,7 +1348,7 @@ def envelope_overview(governance_root: Path | str, *, now: datetime | None = Non
     root = Path(governance_root)
     if now is None:
         # AIPOS-F177 件③: 只读作用域(请求级 / 视图级)内同一治理根只推导一次, 各调用方拿深拷贝; 作用域外照旧每次现算
-        return lookup_scope_memo(root, "autonomy_policy.envelope_overview", lambda: envelope_overview(root, now=utc_now()),
+        return lookup_scope_memo(root, "autonomy_policy.envelope_overview", lambda: envelope_overview(root, now=judged_now()),
                                  copy_out=True)
     with task_card_lookup_scope(root):  # 只读推导: 已放行认领计数整根只数一趟(F142 同一作用域, 可重入)
         return _envelope_overview(root, now)
@@ -1755,6 +1779,7 @@ def judge_project_authorization(
                 "label": (spec or {}).get("label"), "facts": facts, "authorization_id": aid, "revision": rev}
 
     frm, exp = _parse_iso(auth.get("active_from")), _parse_iso(auth.get("expires_at"))
+    holds_until(now, frm, exp)  # AIPOS-F249: not yet active / expired flip at these instants
     if auth.get("status") != POLICY_STATUS_ACTIVE or not auth.get("approved_by_owner"):
         return verdict("revoked", f"project grant {aid} r{rev} status={auth.get('status') or 'unset'} (not active / not owner-approved)")
     if frm is None or exp is None:
@@ -1896,7 +1921,8 @@ def authorization_refusal(
     if not ids:
         return None
     triples = [(str(a or "").strip(), str(b or "").strip(), (str(c).strip() or None) if c else None) for a, b, c in identities]
-    found, failures = judge_authorizations(root, ids, triples=[t for t in triples if t[0] or t[1] or t[2]], task=task, now=now or utc_now())
+    found, failures = judge_authorizations(root, ids, triples=[t for t in triples if t[0] or t[1] or t[2]], task=task,
+                                           now=now or judged_now())  # AIPOS-F249: flips reported by judge_project_authorization
     if found is not None or not failures:
         return None
     order = list(project_authorization_declaration()["dimension_order"])
@@ -1920,6 +1946,9 @@ def authorization_notices(governance_root: Path | str, authorization_id: str, *,
     if isinstance(seconds, int) and seconds <= int(notice["expiry_days"]) * 86400:
         out.append(str(notice["messages"]["expiry"]).format(expires_at=usage.get("expires_at"), days=max(0, seconds // 86400),
                                                            expiry_days=notice["expiry_days"]))
+        _holds_until_seconds_left(usage, (max(0, seconds) // 86400) * 86400)  # AIPOS-F249: the days shown change
+    elif isinstance(seconds, int):
+        _holds_until_seconds_left(usage, int(notice["expiry_days"]) * 86400)  # AIPOS-F249: enters the expiry notice window
     return out
 
 
@@ -1927,7 +1956,7 @@ def authorization_overview(governance_root: Path | str, *, now: datetime | None 
     """本项目全部授权的状态(看板「项目授权」主视图 / CLI show / 收件箱告知同读): 每份 = 最新修订 + 门侧同一用量真相(envelope_usage:
     已放行根业务卡, 迁入旧信封承接的根卡不计)+ 告知 + 修订史 + 迁入的旧信封。"""
     root = Path(governance_root)
-    now = now or utc_now()
+    now = now or judged_now()  # AIPOS-F249: flips reported by envelope_usage / authorization_notices
     out: list[dict[str, Any]] = []
     for aid in authorization_ids(root):
         auth = load_authorization(root, aid)
@@ -1961,7 +1990,7 @@ def authorization_notice_command(governance_root: Path | str, row: dict[str, Any
     decl = project_authorization_declaration()
     total = int(row.get("max_tasks") or 0)
     step = max(1, math.ceil(float(decl["extend"]["quota_step_ratio"]) * total))
-    later = iso_z(((now or utc_now()) + timedelta(days=int(decl["extend"]["expiry_days"]))).replace(microsecond=0))
+    later = iso_z(((now or judged_now()) + timedelta(days=int(decl["extend"]["expiry_days"]))).replace(microsecond=0))  # time field
     return render_authorization_command(governance_root, "extend", [f"--max-tasks {total + step}", f"--expires-at {later}"])
 
 
@@ -2281,7 +2310,7 @@ def authorization_extension(governance_root: Path | str, refusal: dict[str, Any]
     auth, facts = refusal.get("auth"), refusal.get("facts") or {}
     if not isinstance(auth, dict) or dim in _AUTH_NO_EXTEND or dim not in decl["dimensions"]:
         return None
-    now = now or utc_now()
+    now = now or judged_now()  # AIPOS-F249: only the suggested expiry / revision stamp (time fields) come from now
     lanes: list[dict[str, Any]] = []
     kw: dict[str, Any] = {}
     flags: list[str] = []
