@@ -838,11 +838,11 @@ lybra governance-commit --governance-root <治理根> --actor <你的顾问实�
 
 - **何时更新**: 里程碑有进展、交付物产出、卡住或解除卡住时;**活跃期至少每天一次**。
 - **怎么写**: 一两句人话, 写给 Owner 看——不写卡号、信封 / 授权编号、车道、实例全名、审计裁决名;字数上限读 `verbs.schema lybra_project_headline.limits`(超了拒写)。
-- **命令**(缺省预演零写入, `--confirm` 写入并落账; 只能你本人或 Owner 写, 他人拒):
+- **命令**(缺省预演零写入, `--confirm` 写入并落账; 只能你本人或 Owner 写, 他人拒; `--title` 项目显示名、`--stage` 阶段可省、`--now` 现在、`--done` 最近做成):
 
 ```bash
-lybra project headline --workspace-root <治理根> --instance <你的顾问实例> --title <项目显示名, 如 理想> \
-  [--stage <阶段, 如 交付期>] --now <现在: 一两句> --done <最近做成: 一句> --confirm
+lybra project headline --workspace-root <治理根> --instance <你的顾问实例> --title 理想 --stage 交付期 \
+  --now "安卓维修直连已打通, 正在把维修页改成按锁状态操作" --done "正式签名包已出(10-27)" --confirm
 ```
 
 - 暂停期(本项目暂时不推)写 `--status paused`, 首页把你的卡折叠;恢复时再写一条 `--status active`。

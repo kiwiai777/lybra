@@ -314,9 +314,11 @@ def test_item4_board_overview_has_readonly_inbox_entry(home, monkeypatch: pytest
                 assert resp.status == 200
                 return resp.read().decode("utf-8")
 
-        # AIPOS-F181: the board root redirects to the read-only overview; its top nav carries the inbox entry
+        # AIPOS-F181: the board root redirects to the read-only start page; AIPOS-F246: = the home page, whose "needs you" section
+        # links into the inbox (the full inbox sits under the engineering entry of the top nav)
         root = get("/")
-        assert '<body class="rp-page rp-overview"' in root and 'href="/owner/inbox"' in root.split('<header class="rp-nav">', 1)[1].split("</header>", 1)[0]
+        assert '<body class="rp-page rp-home"' in root and 'href="/owner/inbox' in root.split("</header>", 1)[1]
+        assert 'href="/owner/inbox"' in get("/owner/engineering")
         overview = get("/overview.html")  # former home stays reachable
         entry = next(ln.strip() for ln in overview.splitlines() if "owner-inbox-link" in ln and "<a " in ln)
         _show(f"---- ④ 看板 GET / overview 入口原文 ----\n{entry}")

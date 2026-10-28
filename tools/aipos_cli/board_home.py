@@ -133,10 +133,18 @@ def stall_rows(governance_root: Path, rows: list[dict[str, Any]], *, now: dateti
 
 
 def closed_at(governance_root: Path, task_id: str) -> float | None:
-    """已结案卡的结案时刻 = 本卡结案记录(record_writer.record_dir closures)最新修改时刻; 无 = None。"""
-    from tools.aipos_cli.record_writer import record_dir
+    """已结案卡的结案时刻(用于「最近交付物」): 结案判定唯一 task_complexity.closure_state 给出的结案记录文件的最新修改时刻;
+    顾问复核结案(无门生结案记录)= 卡文件修改时刻; 未结案 = None。"""
+    from tools.aipos_cli.task_complexity import closure_state
+    from tools.aipos_cli.task_loader import find_task_card
 
-    return _newest_mtime(record_dir(Path(governance_root), "closures", task_id))
+    located = find_task_card(Path(governance_root), task_id)
+    state = closure_state(Path(governance_root), task_id, located=located)
+    if state["closure_files"]:
+        return max(os.stat(p).st_mtime for p in state["closure_files"])
+    if state["concluded"] and located[0] is not None:
+        return os.stat(located[0]).st_mtime
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -482,27 +490,6 @@ def _collect_project_brief(home_root: str | Path | None, *, project: str | None,
         "recent_closed": len(pick["recent_closed"]), "asks": asks, "inbox_error": inbox_error,
     }
     return out
-
-
-# ---------------------------------------------------------------------------
-# 禁词守卫(渲染测试与验收同用)
-# ---------------------------------------------------------------------------
-
-def visible_text(page_html: str, *, include_authored: bool = True) -> str:
-    """页面可见文字(去 <script> / <style> / 标签与属性); include_authored=False = 另去掉 data-authored 标记的顾问 / 卡作者原文。"""
-    import html as _html
-
-    text = re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", page_html)
-    if not include_authored:
-        text = re.sub(r"(?is)<span\b[^>]*\bdata-authored\b[^>]*>.*?</span>", " ", text)
-    text = re.sub(r"(?s)<[^>]+>", " ", text)
-    return _html.unescape(text)
-
-
-def forbidden_hits(page_html: str, words: list[str], *, extra: list[str] | None = None, include_authored: bool = True) -> list[str]:
-    """页面可见文字里出现的禁词(声明 forbidden_words + extra, 如本根全部实例全名)。"""
-    text = visible_text(page_html, include_authored=include_authored)
-    return [w for w in list(words) + list(extra or []) if w and w in text]
 
 
 # AIPOS-316: Guard against direct invocation

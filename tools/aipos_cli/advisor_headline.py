@@ -9,7 +9,7 @@
   记录带 record_type(过既有入库护栏 governance_guardrails B④), 写后经 governance_commit.land_written_paths 落账(AIPOS-F158 同一包装)。
 - 顾问 = advisor_updates_cli.advisor_instances(本治理根已接入、角色类 = 顾问的实例; 退役 / 作废不列)。
 - 写入方: 本人 = 本治理根连接文件里有该实例的驱动方凭据(two_phase_shell_factory.signer_role_for_actor, 签发者即 --actor 的唯一口);
-  Owner = 连接文件里有 owner 角色凭据(confirm_client.load_owner_token)。凭据只在进程内判在不在, 不输出、不落盘。
+  Owner = 连接文件里有 owner 角色凭据(two_phase_shell_factory.load_role_token 取凭据唯一入口)。凭据只在进程内判在不在, 不输出、不落盘。
 - 任何项目同一命令: 不写死项目 ID / 路径 / 实例名。
 """
 from __future__ import annotations
@@ -150,10 +150,10 @@ def _writer_check(root: Path, instance: str, actor: str, decl: dict[str, Any], c
     if not conn.is_file():
         raise HeadlineRefused("no_credential", f"本治理根连接文件不在 {conn}, 无从核写入方凭据; 出口: 在治理根所在机运行(或 --connection-json 指本机连接文件)")
     if actor == owner_actor:
-        from tools.aipos_cli.confirm_client import load_owner_token
+        from tools.aipos_cli.two_phase_shell_factory import load_role_token
 
         try:
-            load_owner_token(connection_json=conn, role=owner_actor)  # 只判在不在; 值不出进程
+            load_role_token(connection_json_path=str(conn), role=owner_actor)  # 取凭据唯一入口; 只判在不在, 值不出进程
         except (ValueError, OSError) as exc:
             raise HeadlineRefused("no_credential", f"连接文件 {conn} 没有可用的 Owner 凭据: {exc}") from exc
         return owner_actor

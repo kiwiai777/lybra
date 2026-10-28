@@ -37,6 +37,24 @@ PNG = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010806000000"
                     "1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082")
 
 
+def visible_text(page_html: str, *, include_authored: bool = True) -> str:
+    """Page text a reader sees (no <script> / <style> / tags / attributes); include_authored=False also drops the advisor /
+    card-author text marked data-authored (shown as written; the guard covers the interface text)."""
+    import html as _html
+
+    text = re.sub(r"(?is)<(script|style)\b.*?</\1>", " ", page_html)
+    if not include_authored:
+        text = re.sub(r"(?is)<span\b[^>]*\bdata-authored\b[^>]*>.*?</span>", " ", text)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    return _html.unescape(text)
+
+
+def forbidden_hits(page_html: str, words: list[str], *, extra: list[str] | None = None, include_authored: bool = True) -> list[str]:
+    """Home forbidden-word guard: declared board_readonly_pages.home.forbidden_words + extra (e.g. every instance full name)."""
+    text = visible_text(page_html, include_authored=include_authored)
+    return [w for w in list(words) + list(extra or []) if w and w in text]
+
+
 def _show(text: str) -> None:
     print(text, flush=True)
 
@@ -280,7 +298,7 @@ def test_item3_stall_judgment_threshold_and_no_record(rig):
 # ===========================================================================
 
 def test_item2_home_one_card_per_advisor_and_forbidden_words(board):
-    from tools.aipos_cli.board_home import forbidden_hits, home_declaration
+    from tools.aipos_cli.board_home import home_declaration
 
     gc = board["gc"]
     _ok(_headline(gc, ADV_X, title="Cust", stage="delivery", now="Wiring the maintenance page by lock state.",
