@@ -244,7 +244,7 @@ def _project_advisors(f: ProjectFacts, home: dict[str, Any], now: datetime) -> d
         rows = [r for r in stats["rows"] if r["subproject"] in keys]
         inflight = stall_rows(f.root, [r for r in rows if r["group"] == "inflight"], now=now, home=home)
         todo = [r for r in rows if r["group"] == "todo"]
-        closed = [r for r in rows if r["group"] == "closed"]
+        closed = [r for r in rows if r["group"] == "closed" and not r.get("audit_of")]  # deliverables = business cards (audits are their review)
         milestones = _advisor_milestones(view, stats, keys)
         cutoff = now.timestamp() - 86400 * int(home["recent_days"])
         recent: list[dict[str, Any]] = []
