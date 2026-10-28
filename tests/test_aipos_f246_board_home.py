@@ -405,6 +405,11 @@ def test_item5_envelope_covered_by_newer_authorization_is_superseded(rig):
     assert before[x_pid] == (True, None)
     assert after[x_pid] == (False, f"auth_{C}", "superseded")  # covered (driver + mode + lane) by the newer grant in use
     assert after[y_pid][0] is True and after[y_pid][1] is None  # Y is not a driver of the grant: still in use
+    from tools.aipos_cli.board_pages import collect_overview
+
+    card = next(c for c in collect_overview(rig["home"])["projects"] if c["project"] == C)
+    _show(f"[item5 engineering overview envelopes in use] {card['envelopes']}")
+    assert card["envelopes"]["active"][0] == f"auth_{C}" and x_pid not in card["envelopes"]["active"] and y_pid in card["envelopes"]["active"]
 
 
 # ===========================================================================

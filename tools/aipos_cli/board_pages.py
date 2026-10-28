@@ -154,6 +154,13 @@ class ProjectFacts:
 
         return self._get("envelopes", lambda: envelope_overview(self.root)["envelopes"], (OSError, ValueError, LookupError))
 
+    def authorizations(self) -> dict[str, Any]:
+        """AIPOS-F246 件⑤: 本项目在用的项目授权(autonomy_policy.authorization_overview 用量真相 state=active)的授权编号。"""
+        from tools.aipos_cli.autonomy_policy import authorization_overview
+
+        return self._get("authorizations", lambda: [a["authorization_id"] for a in authorization_overview(self.root) if a.get("state") == "active"],
+                         (OSError, ValueError, LookupError))
+
     def advisors(self) -> dict[str, Any]:
         from tools.aipos_cli.advisor_updates_cli import advisor_instances
         from tools.aipos_cli.custom_roles import RoleRegistryReadError
@@ -527,6 +534,7 @@ def _collect_overview(home_root: str | Path | None, *, show_all: bool) -> dict[s
         f = ProjectFacts(entry, home["home_root"])
         envelopes = f.envelopes()
         current = [r for r in envelopes.get("value") or [] if r.get("current")]
+        auths = f.authorizations()  # AIPOS-F246 件⑤: 在用的项目授权也是「在用」(其全覆盖的旧信封已由 envelope_overview 判接替)
         roadmap = f.roadmap()
         view = roadmap.get("value") or {}
         rows = onboarding_rows(f, decl)
@@ -534,7 +542,8 @@ def _collect_overview(home_root: str | Path | None, *, show_all: bool) -> dict[s
             "project": f.name, "index": entry["index"], "paused": entry["paused"], "hidden": entry["hidden"], "status": entry["status"],
             "status_error": entry["status_error"], "governance_root": str(f.root), "queue": f.queue_counts(),
             "inbox": {"count": inbox_counts.get(f.name, 0) if inbox is not None and f.name in listed else None, "error": inbox_error},
-            "envelopes": {"error": envelopes.get("error"), "active": [r["policy_id"] for r in current if r.get("status") == "active"],
+            "envelopes": {"error": envelopes.get("error") or auths.get("error"),
+                          "active": list(auths.get("value") or []) + [r["policy_id"] for r in current if r.get("status") == "active"],
                           "low": [r["policy_id"] for r in current if r.get("status") != "active"], "url": board_envelope_url(f.name)},
             "roadmap": {"error": roadmap.get("error"), "exists": bool(view.get("exists")), "milestones": len(view.get("milestones") or []),
                         "met": (view.get("totals") or {}).get("met", 0), "total": (view.get("totals") or {}).get("total", 0),
