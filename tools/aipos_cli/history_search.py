@@ -81,8 +81,12 @@ def legacy_choices() -> tuple[str, ...]:
 
 
 def _decl_digest(decl: dict[str, Any]) -> str:
-    """索引头的声明摘要(声明里影响条目内容的键变了 = 整份重建)。"""
-    basis = {k: decl[k] for k in ("field_chars", "evidence_limit", "credential_mask", "index")}
+    """索引头的声明摘要(声明里影响条目内容的键变了 = 整份重建)。AIPOS-F250: 条目里的报告原文已按凭据判据打码, 判据版本
+    (artifact_ingest.credential_guard_fingerprint)一并纳入——判据变了旧条目整份重建, 不留按旧判据打码(漏打)的文本。"""
+    from tools.aipos_cli.artifact_ingest import credential_guard_fingerprint
+
+    basis = {**{k: decl[k] for k in ("field_chars", "evidence_limit", "credential_mask", "index")},
+             "credential_guard": credential_guard_fingerprint()}
     return hashlib.sha256(json.dumps(basis, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
 
 
@@ -199,7 +203,7 @@ def card_entry(governance_root: Path, path: Path, queue_state: str, decl: dict[s
     try:
         meta, body = require_frontmatter(path)
         task_id = str(meta.get("task_id") or "").strip() or entry["task_id"]
-        entry.update(task_id=task_id, title=str(meta.get("title") or "").strip())
+        entry.update(task_id=task_id, title=credential_redact(str(meta.get("title") or "").strip(), guard, str(d["credential_mask"])))
         if is_audit_card(task_id, meta):
             entry["audit_card"] = True
             return entry
@@ -550,7 +554,9 @@ def _search(home_root: str | Path | None, keywords: Any, *, project: str | None,
 def report_doc(project: str, governance_root: Path | None, task_id: str, doc: str) -> dict[str, Any]:
     """看板报告视图的数据: {task_id, kind, title, ref, body(markdown 正文), problem}。只认该卡由 card_entry 推导给出的那一份:
     交回 = return_ref(frontmatter 去掉); 审计 = 最新常规裁决记录 record_ref 经 next_resolver.verdict_report(门快照优先, 校验后去记录头)。
-    推导没有 / 读不出 = problem(不收任意路径)。"""
+    推导没有 / 读不出 = problem(不收任意路径)。AIPOS-F250: 正文同经产物入口凭据判据打码(artifact_ingest.credential_redact, 与展开内容
+    同一判定、同一 credential_mask)——报告视图不露明文凭据; 判据声明坏 = SchemaLoadError 上抛(fail-closed, 不给未打码原文)。"""
+    from tools.aipos_cli.artifact_ingest import credential_guard_declaration, credential_redact
     from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
     from tools.aipos_cli.next_resolver import _read_frontmatter, verdict_report
 
@@ -580,6 +586,8 @@ def report_doc(project: str, governance_root: Path | None, task_id: str, doc: st
             out["problem"] = f"{task_id}: {doc}"
     except (OSError, ValueError) as exc:
         out["problem"] = f"{type(exc).__name__}: {exc}"
+    if out["body"] is not None:
+        out["body"] = credential_redact(str(out["body"]), credential_guard_declaration(), str(declaration()["credential_mask"]))
     return out
 
 
