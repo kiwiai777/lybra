@@ -3807,3 +3807,43 @@ body.rp-page { margin: 0; background: var(--surface-page); color: var(--ink); fo
   .rp-page .hm-grid, .rp-page .hm-two { grid-template-columns: 1fr; }
   .rp-page .hm-ask { flex-direction: column; align-items: flex-start; }
 }
+
+/* ---------------------------------------------------------------------------------------------------------------
+   AIPOS-F247: history & audit page (mockup view "历史与审计"): search box with the 5px green left bar, filter chips,
+   hit cards (5px green left border, flat, square), expanded detail as a two-column key / value list; highlights in mint.
+   --------------------------------------------------------------------------------------------------------------- */
+.rp-page .hs-sub { color: var(--muted); margin: 0 0 22px; }
+.rp-page .hs-search { display: flex; gap: 10px; margin-bottom: 12px; }
+.rp-page .hs-search input[type="search"] { flex: 1; min-width: 0; font: inherit; font-size: var(--text-lead); padding: 12px 14px;
+  border: var(--border-hairline); border-left: var(--accent-bar) solid var(--green); background: var(--white); color: var(--ink); }
+.rp-page .hs-search button { font: inherit; font-weight: 700; padding: 10px 20px; background: var(--green); color: var(--white);
+  border: 1px solid var(--green); cursor: pointer; }
+.rp-page .hs-search button:hover { background: var(--green-dark); }
+.rp-page .hs-filters { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.rp-page .hs-f { font-size: var(--text-small); padding: 4px 10px; border: var(--border-hairline); color: var(--muted); text-decoration: none;
+  background: var(--white); }
+.rp-page .hs-f:hover { border-color: var(--green-bright); color: var(--green); }
+.rp-page .hs-f.on { background: var(--green); border-color: var(--green); color: var(--white); }
+.rp-page .hs-count { color: var(--muted); margin: 14px 0 12px; }
+.rp-page .hs-none { border: var(--border-hairline); border-left: var(--accent-bar) solid var(--green); background: var(--surface-card);
+  padding: 14px 18px; }
+.rp-page .hs-hit { border: var(--border-hairline); border-left: var(--accent-bar) solid var(--green); background: var(--white);
+  padding: 14px 18px; margin-bottom: 10px; }
+.rp-page .hs-hit > summary { cursor: pointer; list-style: none; }
+.rp-page .hs-hit > summary::-webkit-details-marker { display: none; }
+.rp-page .hs-hit .hs-ht { font-size: 15.5px; font-weight: 700; }
+.rp-page .hs-hit .hs-meta { color: var(--muted); font-size: var(--text-small); }
+.rp-page .hs-hit .hs-id { font-size: var(--text-chip); }
+.rp-page .hs-hit .hs-snip { color: var(--muted); font-size: var(--text-note); margin-top: 4px; }
+.rp-page .hs-hit mark { background: var(--mint-2); color: inherit; }
+.rp-page .hs-kv { display: grid; grid-template-columns: 72px 1fr; gap: 6px 12px; font-size: var(--text-note); margin: 10px 0 0;
+  padding-top: 10px; border-top: var(--border-hairline); }
+.rp-page .hs-kv dt { color: var(--muted); font-weight: 600; }
+.rp-page .hs-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.rp-page .hs-kv code { font-family: var(--font-mono); font-size: var(--text-chip); }
+.rp-page .hs-doc { border: var(--border-hairline); border-left: var(--accent-bar) solid var(--green); background: var(--white); padding: 14px 18px;
+  overflow-wrap: anywhere; }
+.rp-page .hs-doc pre, .rp-page .hs-doc code { white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .rp-page .hs-kv { grid-template-columns: 1fr; }
+}

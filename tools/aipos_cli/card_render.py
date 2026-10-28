@@ -69,6 +69,13 @@ def _pick_section(sections: list[tuple[str, str]], aliases: list[str]) -> str:
     return ""
 
 
+def card_goal(body: str, sections: list[tuple[str, str]] | None = None) -> str:
+    """卡正文的目标段(唯一解析; 意图面渲染与 AIPOS-F247 历史检索同读): 声明别名 intent_face.body_sections_rendered.goal 命中的节,
+    否则首个无标题段(卡号标题 + 「一句话: …」)。"""
+    found = sections if sections is not None else _split_sections(str(body or ""))
+    return _pick_section(found, _section_aliases().get("goal", ["Goal"])) or (found[0][1] if found and not found[0][0] else "")
+
+
 def build_intent_model(task_id: str, governance_root: Path, *, harness: str | None = None) -> dict[str, Any]:
     """从卡 + 声明构造意图模型(唯一)。卡不存在/声明缺 = ValueError/SchemaLoadError(fail-closed)。"""
     from tools.aipos_cli.machine_zone import derive_intent_declarations, intent_face_declaration
@@ -113,7 +120,7 @@ def build_intent_model(task_id: str, governance_root: Path, *, harness: str | No
 
     sections = _split_sections(str(body or ""))
     aliases = _section_aliases()
-    goal = _pick_section(sections, aliases.get("goal", ["Goal"])) or (sections[0][1] if sections and not sections[0][0] else "")
+    goal = card_goal(str(body or ""), sections)
     refs = [str(r) for r in (fm.get("governance_refs") or []) if isinstance(r, (str, int, float))]
     return {
         "task_id": task_id,

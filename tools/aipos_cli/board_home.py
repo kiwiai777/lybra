@@ -132,13 +132,13 @@ def stall_rows(governance_root: Path, rows: list[dict[str, Any]], *, now: dateti
     return out
 
 
-def closed_at(governance_root: Path, task_id: str) -> float | None:
-    """已结案卡的结案时刻(用于「最近交付物」): 结案判定唯一 task_complexity.closure_state 给出的结案记录文件的最新修改时刻;
-    顾问复核结案(无门生结案记录)= 卡文件修改时刻; 未结案 = None。"""
+def closed_at(governance_root: Path, task_id: str, *, located: tuple[Path | None, str | None] | None = None) -> float | None:
+    """已结案卡的结案时刻(用于「最近交付物」/ AIPOS-F247 历史检索结案日): 结案判定唯一 task_complexity.closure_state 给出的结案记录文件的
+    最新修改时刻; 顾问复核结案(无门生结案记录)= 卡文件修改时刻; 未结案 = None。located = 调用方已查到的 (卡路径, 队列状态)(免重查)。"""
     from tools.aipos_cli.task_complexity import closure_state
     from tools.aipos_cli.task_loader import find_task_card
 
-    located = find_task_card(Path(governance_root), task_id)
+    located = located if located is not None else find_task_card(Path(governance_root), task_id)
     state = closure_state(Path(governance_root), task_id, located=located)
     if state["closure_files"]:
         return max(os.stat(p).st_mtime for p in state["closure_files"])

@@ -2272,12 +2272,14 @@ def _extract_return_summary(workspace_root: Path, task_id: str) -> str | None:
     return status["summary"]
 
 
-def extract_return_summary_text(content: str, source: dict[str, Any] | None = None) -> str | None:
+def extract_return_summary_text(content: str, source: dict[str, Any] | None = None, *, paragraph: bool = False) -> str | None:
     """从 Return 提取一句话结论(唯一解析; 推导核就绪判据 / 交回步 / artifact ingest / 审计报告 findings_summary 共用)。骨架占位 → None。
 
     AIPOS-F148 件②: source = 摘要来源 {frontmatter_keys, section_markers}(项目的经 workspace_config.return_summary_source 取);
     缺省 None = transitions artifact_ingest.return.summary_source 缺省(=「一句话结论」节, 与 F148 前写死判据逐字等价)。
-    序: frontmatter_keys 按列序取首个非占位值 → section_markers 正文节首个内容行。"""
+    序: frontmatter_keys 按列序取首个非占位值 → section_markers 正文节首个内容行。
+    AIPOS-F247: paragraph=True = 节内首个内容行连同其后紧接的非空行(到空行 / 下一标题止)作一段返回(折行写的一句话结论;
+    历史检索展示用); 缺省 False = 只取首个内容行(既有判据逐字不变)。"""
     if source is None:
         from tools.aipos_cli.workspace_config import return_summary_source_default
 
@@ -2296,7 +2298,7 @@ def extract_return_summary_text(content: str, source: dict[str, Any] | None = No
         return None
     lines = content.split("\n")
     in_summary_section = False
-    for line in lines:
+    for pos, line in enumerate(lines):
         if any(marker in line for marker in markers):
             in_summary_section = True
             continue
@@ -2315,6 +2317,14 @@ def extract_return_summary_text(content: str, source: dict[str, Any] | None = No
                 summary = summary.rstrip("。")
                 if summary.startswith(_skeleton_prefix()):
                     return None  # 骨架占位, 未交回
+                if paragraph:
+                    rest: list[str] = []
+                    for follow in lines[pos + 1:]:
+                        if not follow.strip() or follow.startswith("#"):
+                            break
+                        rest.append(follow.strip())
+                    if rest:
+                        summary = " ".join([line.strip(), *rest]).strip().rstrip("。")
                 return summary
     return None
 

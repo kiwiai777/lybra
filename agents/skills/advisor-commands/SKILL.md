@@ -865,6 +865,23 @@ lybra owner recommend --item <事项ID> --choice owner_confirm --reason "首页�
 - **产品缺省**(不用你写): 授权将尽 = 按原范围续期(天数 / 张数取原授权); 授权用完或不覆盖的请求 = 按你的请求签发。你写了推荐会覆盖缺省的理由。
 - **裁完自动告知你**: Owner 在看板裁决 / 抽查 / 续期落账后, 你下一次 `lybra next` / `lybra loop status` 末尾出现「Owner 在看板直接定了 N 件」原文(含 Owner 原话); 照常续推相关卡, 不必等 Owner 转话。不符会自动起草修复卡, 按提示预演发布。
 
+---
+
+## 历史检索 `lybra history search`(AIPOS-F247 · 看板「历史与审计」同一实现)
+
+出卡 / 回答 Owner「以前那件事怎么做的、怎么验证的、谁审的」前, **先查历史, 不靠记忆拼**: 各项目已结案卡(含历史存量)按关键字检索, 每条给做了什么(交回一句话结论)、怎么验证(审计报告运行证据)、审计(结论、轮次、是否打回过及原因)、报告路径。看板「历史与审计」页是同一份结果; 项目页不再列已结案全量。
+
+- 多个关键字 = 都要命中(子串匹配, 中文不分词); 没结果会提示换个说法。只读, 不连门。
+- 筛选: `--project`、`--advisor <顾问实例>`、`--since <YYYY-MM-DD 或 30d>`、`--rejected-once`(审计打回过的)、`--legacy include|only|exclude`(历史存量)、`--json`。
+
+```bash
+lybra history search 解绑 再绑定
+lybra history search 签名包 --project <项目名> --since 30d
+lybra history search --advisor <你的顾问实例> --rejected-once --json
+```
+
+- 索引是可丢弃的派生缓存(全局 Lybra 目录下, 不在治理根), 首次检索自动建、之后按真相增量更新; 删了下次自动重建, 不用你管。
+
 ## 已退役路径(手写门接口债)
 
 **状态**:顾问手写脚本直接调门接口(代按认领、手按两跳确认、手提裁决)的路径**已退役**(LOOP-REDESIGN §4.5 A12, AIPOS-F90 件③),

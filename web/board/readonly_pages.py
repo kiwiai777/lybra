@@ -89,13 +89,10 @@ def _bar(met: int, total: int, ratio: Any = None) -> str:
 
 
 def _nav_urls(decl: dict[str, Any]) -> dict[str, str]:
-    """AIPOS-F246 item 5: the top nav (declared board_readonly_pages.home.nav): home / project / history & audit (until F247 = the
-    project page all-cards view) / engineering (collects the other pages; no page or route removed)."""
-    from tools.aipos_cli.board_pages import page_url
-
-    home = decl["home"]
+    """AIPOS-F246 item 5: the top nav (declared board_readonly_pages.home.nav): home / project / history & audit (AIPOS-F247: its own
+    page, pages.history) / engineering (collects the other pages; no page or route removed)."""
     return {"home": str(decl["pages"]["home"]), "project": str(decl["pages"]["project"]),
-            "history": page_url(decl, "project", view=home["cards_view_value"]), "engineering": str(decl["pages"]["engineering"])}
+            "history": str(decl["pages"]["history"]), "engineering": str(decl["pages"]["engineering"])}
 
 
 def _page(ctx: _Ctx, page: str, title: str, body: list[str], *, note_key: str | None = "rp_readonly_note", h1_attrs: str = "",
@@ -109,7 +106,7 @@ def _page(ctx: _Ctx, page: str, title: str, body: list[str], *, note_key: str | 
     decl = ctx.decl
     locale = decl["locale"]
     urls = _nav_urls(decl)
-    current = nav_current or (page if page in ("home", "project") else "engineering")
+    current = nav_current or (page if page in ("home", "project", "history") else "engineering")
     links = "".join(f"<a href=\"{_ESC(ctx.href(urls[key]))}\" data-nav=\"{_ESC(key)}\"{_CURRENT if key == current else ''}>"
                     f"{_ESC(ctx.t('rp_nav_' + key))}</a>" for key in decl["home"]["nav"])
     other = next((code for code in locale["supported"] if code != ctx.lang), None)
@@ -191,8 +188,9 @@ def _state_parts(ctx: _Ctx, by_state: dict[str, int], states: list[str]) -> str:
     return " · ".join(ctx.t("rp_qs_count", state=ctx.t("rp_qs_" + s), count=by_state[s]) for s in states if by_state.get(s))
 
 
-def _counts_li(ctx: _Ctx, queue: dict[str, Any]) -> list[str]:
-    """AIPOS-F181 item 3: counts from machine_zone.card_stats (frozen legacy cards only as the history line)."""
+def _counts_li(ctx: _Ctx, queue: dict[str, Any], *, frozen_line: bool = True) -> list[str]:
+    """AIPOS-F181 item 3: counts from machine_zone.card_stats (frozen legacy cards only as the history line). AIPOS-F247: the project
+    page passes frozen_line=False (the legacy backlog is a filter of the history & audit page only)."""
     if "error" in queue:
         return [f"<li class=\"rp-inflight rp-err\">{_ESC(ctx.t('rp_error', error=queue['error']))}</li>"]
     stats = queue["value"]
@@ -203,7 +201,7 @@ def _counts_li(ctx: _Ctx, queue: dict[str, Any]) -> list[str]:
            + (f" <span class=\"rp-sub\">({_ESC(detail)})</span>" if detail else "") + "</li>"]
     if stats["frozen_error"]:
         out.append(f"<li class=\"rp-frozen rp-err\">{_ESC(ctx.t('rp_ov_frozen_error', error=stats['frozen_error']))}</li>")
-    elif stats["frozen"]:
+    elif stats["frozen"] and frozen_line:
         out.append(f"<li class=\"rp-frozen\" data-frozen=\"{stats['frozen']}\">{_ESC(ctx.t('rp_ov_frozen', count=stats['frozen']))}</li>")
     return out
 
@@ -628,6 +626,10 @@ def render_project_brief(data: dict[str, Any], lang: str) -> str:
                 dl.append(f"<p class=\"hm-quiet\">{_ESC(ctx.t('pb_dl_more', days=home['recent_days'], count=adv['recent_closed']))}</p>")
         else:
             dl.append(f"<p class=\"hm-quiet\">{_ESC(ctx.t('pb_dl_none', days=home['recent_days']))}</p>")
+        from tools.aipos_cli.board_pages import history_url  # AIPOS-F247: every closed card of this advisor = the history page
+
+        dl.append(f"<a class=\"hm-more\" data-link=\"history\" href=\"{_ESC(ctx.href(history_url(ctx.decl, project=sel['project'], advisor=adv['instance'] if len(sel['advisors']) > 1 else None)))}\">"
+                  f"{_ESC(ctx.t('pb_dl_all'))}</a>")
         dl.append("</section>")
         asks = [f"<section class=\"hm-sec\" data-section=\"asks\" data-count=\"{len(adv['asks'])}\">"
                 f"<div class=\"hm-kicker\">{_ESC(ctx.t('pb_asks_kicker', count=len(adv['asks'])))}</div>"]
@@ -697,7 +699,7 @@ def _card_rows(ctx: _Ctx, rows: list[dict[str, Any]]) -> str:
     return f"<ul class=\"rp-rows\">{''.join(items)}</ul>"
 
 
-def _subproject_section(ctx: _Ctx, sub: dict[str, Any], rows: list[dict[str, Any]]) -> str:
+def _subproject_section(ctx: _Ctx, sub: dict[str, Any], rows: list[dict[str, Any]], project: str) -> str:
     mine = [r for r in rows if r["subproject"] == sub["key"]]
     inflight = [r for r in mine if r["group"] == "inflight"]
     todo = [r for r in mine if r["group"] == "todo"]
@@ -711,9 +713,12 @@ def _subproject_section(ctx: _Ctx, sub: dict[str, Any], rows: list[dict[str, Any
         parts.append(f"<h3>{_ESC(ctx.t('rp_pj_todo', count=len(todo)))}</h3>{_card_rows(ctx, todo)}")
     if not inflight and not todo:
         parts.append(f"<p class=\"rp-sub\">{_ESC(ctx.t('rp_pj_nothing'))}</p>")
-    if closed:
-        parts.append(f"<details class=\"rp-closed\" data-closed=\"{len(closed)}\"><summary>{_ESC(ctx.t('rp_pj_closed', count=len(closed)))}"
-                     f"</summary>{_card_rows(ctx, closed)}</details>")
+    if closed:  # AIPOS-F247: closed cards are no longer listed here; one link to the history & audit page, filtered to this project
+        from tools.aipos_cli.board_pages import history_url
+
+        url = history_url(ctx.decl, project=project, advisor=sub["advisor"] if sub.get("advisor") == sub["key"] else None)
+        parts.append(f"<p class=\"rp-closed\" data-closed=\"{len(closed)}\"><a href=\"{_ESC(ctx.href(url))}\">"
+                     f"{_ESC(ctx.t('rp_pj_closed_link', count=len(closed)))}</a></p>")
     parts.append("</section>")
     return "".join(parts)
 
@@ -731,19 +736,19 @@ def render_project(data: dict[str, Any], lang: str) -> str:
     if sel is None:
         if not data["projects"]:
             body.append(f"<p>{_ESC(ctx.t('rp_rm_no_projects'))}</p>")
-        return _page(ctx, "project", ctx.t("rp_nav_project"), body, nav_current="history" if data.get("view") else None)
+        return _page(ctx, "project", ctx.t("rp_nav_project"), body, nav_current="engineering" if data.get("view") else None)
     title = ctx.t("rp_pj_title", project=sel["project"])
     if sel.get("error"):
         body.append(f"<p class=\"rp-err\">{_ESC(ctx.t('rp_error', error=sel['error']))}</p>")
-        return _page(ctx, "project", title, body, nav_current="history" if data.get("view") else None)
+        return _page(ctx, "project", title, body, nav_current="engineering" if data.get("view") else None)
     stats = sel["stats"]
-    body.append("<ul class=\"rp-summary\">" + "".join(_counts_li(ctx, {"value": stats})) + "</ul>")
+    body.append("<ul class=\"rp-summary\">" + "".join(_counts_li(ctx, {"value": stats}, frozen_line=False)) + "</ul>")
     if sel.get("unknown_subproject"):
         body.append(f"<p class=\"rp-err\">{_ESC(ctx.t('rp_pj_unknown_sub', subproject=sel['unknown_subproject']))}</p>")
     body.append(_subproject_nav(ctx, stats["subprojects"], sel["subproject"],
                                 lambda key: project_url(ctx.decl, sel["project"], key, view=data.get("view"))))
     shown = [s for s in stats["subprojects"] if sel["subproject"] in (None, s["key"])]
-    body.extend(_subproject_section(ctx, s, stats["rows"]) for s in shown)
+    body.extend(_subproject_section(ctx, s, stats["rows"], sel["project"]) for s in shown)
     if not shown:
         body.append(f"<p class=\"rp-sub\">{_ESC(ctx.t('rp_pj_nothing'))}</p>")
     rm_url = roadmap_url(ctx.decl, sel["project"]) + (f"&{urlencode({ctx.decl['query']['subproject']: sel['subproject']})}"
@@ -753,7 +758,7 @@ def render_project(data: dict[str, Any], lang: str) -> str:
                 f"<a class=\"rp-link rp-workstation-link\" href=\"{_ESC(ctx.href(_workstation_page(sel['project'])))}\">"
                 f"{_ESC(ctx.t('rp_pj_workstation'))}</a>"
                 f"<a class=\"rp-link rp-legacy\" href=\"{_ESC(sel['legacy_url'])}\">{_ESC(ctx.t('rp_pj_legacy'))}</a></p>")
-    return _page(ctx, "project", title, body, nav_current="history" if data.get("view") else None)
+    return _page(ctx, "project", title, body, nav_current="engineering" if data.get("view") else None)
 
 
 # ---------------------------------------------------------------------------
@@ -1688,6 +1693,184 @@ def render_workstation(home_root: str | Path | None, params: dict[str, list[str]
 # 入口(web/board/app.py do_GET 调; 读不出 = 错误页, 拒因原文)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# AIPOS-F247: history & audit (search box + filters + hits; expanded = done / verified / audit / artifacts; report view)
+# ---------------------------------------------------------------------------
+
+def _marked(text: Any, keywords: list[str]) -> str:
+    """Author text with keyword hits in <mark> (history_search.highlight_spans); marked data-authored (shown as written)."""
+    from tools.aipos_cli.history_search import highlight_spans
+
+    inner = "".join(f"<mark>{_ESC(part)}</mark>" if hit else _ESC(part) for part, hit in highlight_spans(str(text or ""), keywords))
+    return f"<span data-authored>{inner}</span>"
+
+
+def _history_chips(ctx: _Ctx, data: dict[str, Any]) -> str:
+    from tools.aipos_cli.board_pages import history_url
+
+    decl = ctx.decl
+    f = data["filters"]
+    flag = str(decl["history"]["flag_value"])
+    days = int(decl["history"]["recent_days"])
+    recent = f"{days}{data['verb']['since_days_suffix']}"
+    base = {"keywords": f["keywords"], "project": f["project"], "advisor": f["advisor"], "since": f["since"],
+            "rejected_once": flag if f["rejected_once"] else None, "legacy": f["legacy"], "show": decl["show_all_value"] if f["show"] else None}
+
+    def chip(label: str, on: bool, **change: Any) -> str:
+        url = history_url(decl, **{**base, **change})
+        return f"<a class=\"hs-f{' on' if on else ''}\" href=\"{_ESC(ctx.href(url))}\"{_CURRENT if on else ''}>{_ESC(label)}</a>"
+
+    projects = list(data["projects"])
+    if f["project"] and f["project"] not in projects:
+        projects.append(f["project"])
+    rows = [chip(ctx.t("hs_all_projects"), not f["project"], project=None, advisor=None)]
+    rows += [chip(name, f["project"] == name, project=name, advisor=None) for name in projects]
+    rows.append(chip(ctx.t("hs_recent", days=days), f["since"] == recent, since=None if f["since"] == recent else recent))
+    rows.append(chip(ctx.t("hs_rejected"), f["rejected_once"], rejected_once=None if f["rejected_once"] else flag))
+    from tools.aipos_cli.history_search import legacy_choices
+
+    for mode in [m for m in legacy_choices() if m != data["verb"]["legacy_default"]]:  # the non-default legacy filters (enums.schema)
+        rows.append(chip(ctx.t("hs_legacy_" + mode), f["legacy"] == mode, legacy=None if f["legacy"] == mode else mode))
+    out = [f"<div class=\"hs-filters\" data-filters=\"main\">{''.join(rows)}</div>"]
+    result = data.get("result") or {}
+    advisors = next((p["advisors"] for p in result.get("projects") or [] if p["name"] == f["project"]), []) if f["project"] else []
+    if len(advisors) > 1:
+        arow = [chip(ctx.t("hs_all_advisors"), not f["advisor"], advisor=None)]
+        arow += [chip(a["display"], f["advisor"] == a["instance"], advisor=a["instance"]) for a in advisors]
+        out.append(f"<div class=\"hs-filters\" data-filters=\"advisor\">{''.join(arow)}</div>")
+    return "".join(out)
+
+
+def _history_snippet(ctx: _Ctx, r: dict[str, Any], keywords: list[str], chars: int) -> str:
+    """When the title does not carry the first keyword: the first field that does, a short window around the hit."""
+    if not keywords or keywords[0].casefold() in str(r.get("title") or "").casefold():
+        return ""
+    fields = (("hs_k_goal", r.get("goal")), ("hs_k_done", r.get("done")), ("hs_k_audit", (r.get("audit") or {}).get("summary")),
+              ("hs_k_rejected", (r.get("audit") or {}).get("reject_reason")))
+    for key, text in fields:
+        text = str(text or "")
+        at = text.casefold().find(keywords[0].casefold())
+        if at >= 0:
+            width = max(40, chars // 2)
+            start = max(0, at - width // 3)
+            piece = ("…" if start else "") + text[start:start + width] + ("…" if start + width < len(text) else "")
+            return f"<div class=\"hs-snip\">{_ESC(ctx.t(key))}: {_marked(piece, keywords)}</div>"
+    return ""
+
+
+def _history_hit(ctx: _Ctx, r: dict[str, Any], keywords: list[str], verb: dict[str, Any], *, open_: bool) -> str:
+    from tools.aipos_cli.board_home import human_title
+    from tools.aipos_cli.board_pages import artifact_url, history_url
+
+    decl = ctx.decl
+    chars = int(verb["excerpt_chars"])
+    audit = r.get("audit") or {}
+    verdict = ctx.t("hs_verdict_" + r["verdict_key"], verdict=audit.get("verdict") or "")
+    title = human_title(r["task_id"], r.get("title"), 2 * chars) or str(r["task_id"])
+    meta = [_ESC(r["project"])] + ([_ESC(r["advisor_display"])] if r.get("advisor_display") else [])
+    meta.append(_ESC(ctx.t("hs_closed", date=str(r["closed_day"])[5:]) if r.get("closed_day") else ctx.t("hs_no_date")))
+    meta += [_ESC(verdict), f"<span class=\"hs-id\">{_ESC(r['task_id'])}</span>"]
+    kv: list[str] = []  # the mockup's four rows: done / verified / audit / outputs (the card goal only shows as the hit snippet)
+    kv.append(f"<dt>{_ESC(ctx.t('hs_k_done'))}</dt><dd>" + (_marked(r["done"], keywords) if r.get("done") else _ESC(ctx.t("hs_done_none"))) + "</dd>")
+    ver = r.get("verification") or {}
+    if ver.get("entries"):
+        items = "".join(f"<li><code>{_ESC(_clip(e['command'], chars))}</code>"
+                        + (f" · {_ESC(ctx.t('hs_exit', code=e['exit_code']))}" if e.get("exit_code") is not None else "") + "</li>"
+                        for e in ver["entries"])
+        verify = f"<ul class=\"hs-cmds\">{items}</ul>"
+    else:
+        verify = _marked(ver["excerpt"], keywords) if ver.get("excerpt") else _ESC(ctx.t("hs_verify_none"))
+    kv.append(f"<dt>{_ESC(ctx.t('hs_k_verify'))}</dt><dd>{verify}</dd>")
+    links = {"project": r["project"], "task": r["task_id"], "keywords": " ".join(keywords) or None}
+    if audit.get("verdict"):
+        parts = [_ESC(ctx.t("hs_audit_rounds", verdict=verdict, rounds=audit.get("rounds") or 1))]
+        if audit.get("summary"):
+            parts.append(_marked(audit["summary"], keywords))
+        parts.append(_ESC(ctx.t("hs_rejected_once", reason="")) + _marked(audit["reject_reason"] or "-", keywords) if audit.get("rejected")
+                     else _ESC(ctx.t("hs_never_rejected")))
+        if audit.get("record_ref"):
+            parts.append(f"<a href=\"{_ESC(ctx.href(history_url(decl, doc='audit', **links)))}\">{_ESC(ctx.t('hs_report_audit'))}</a>")
+        audit_html = " · ".join(parts)
+    else:
+        audit_html = _ESC(verdict)
+    kv.append(f"<dt>{_ESC(ctx.t('hs_k_audit'))}</dt><dd>{audit_html}</dd>")
+    arts = []
+    if r.get("return_ref"):
+        arts.append(f"<a href=\"{_ESC(ctx.href(history_url(decl, doc='return', **links)))}\">{_ESC(ctx.t('hs_report_return'))}</a>")
+    for a in r.get("artifacts") or []:
+        if a["media"] == "image":
+            arts.append(f"<a href=\"{_ESC(artifact_url(decl, r['project'], r['task_id'], a['name']))}\">{_ESC(a['name'])}</a>")
+        else:
+            arts.append(f"<span data-authored>{_ESC(a['name'])}</span>")
+    if arts:
+        kv.append(f"<dt>{_ESC(ctx.t('hs_k_artifacts'))}</dt><dd>{' · '.join(arts)}</dd>")
+    return (f"<details class=\"hs-hit\" data-task-id=\"{_ESC(r['task_id'])}\" data-project=\"{_ESC(r['project'])}\""
+            f" data-verdict=\"{_ESC(r['verdict_key'])}\" data-rejected=\"{str(bool(audit.get('rejected'))).lower()}\""
+            f" data-legacy=\"{str(bool(r.get('legacy'))).lower()}\"{' open' if open_ else ''}>"
+            f"<summary><div class=\"hs-ht\">{_marked(title, keywords)}</div><div class=\"hs-meta\">{' · '.join(meta)}</div>"
+            f"{_history_snippet(ctx, r, keywords, chars)}</summary><dl class=\"hs-kv\">{''.join(kv)}</dl></details>")
+
+
+def _clip(text: Any, limit: int) -> str:
+    out = str(text or "")
+    return out if len(out) <= limit else out[: limit - 1].rstrip() + "…"
+
+
+def render_history(data: dict[str, Any], lang: str) -> str:
+    """AIPOS-F247: the history & audit page (the mockup view): search form (GET), filters, hits with the expanded detail; ?doc= shows
+    one report the derivation names (rendered by md_source.render_markdown: escape first, then transform)."""
+    from tools.aipos_cli.board_pages import history_url
+    from web.board.md_source import render_markdown
+
+    ctx = _Ctx(data["decl"], lang)
+    decl = ctx.decl
+    f = data["filters"]
+    hq = decl["history"]["query"]
+    body = [f"<p class=\"hs-sub\">{_ESC(ctx.t('hs_sub'))}</p>"]
+    hidden = [(decl["query"]["project"], f["project"]), (hq["advisor"], f["advisor"]), (hq["since"], f["since"]),
+              (hq["rejected_once"], decl["history"]["flag_value"] if f["rejected_once"] else None), (hq["legacy"], f["legacy"]),
+              (decl["query"]["show"], decl["show_all_value"] if f["show"] else None),
+              (decl["locale"]["param"], lang if lang != decl["locale"]["default"] else None)]
+    body.append(f"<form class=\"hs-search\" method=\"get\" action=\"{_ESC(str(decl['pages']['history']))}\" role=\"search\">"
+                f"<input type=\"search\" name=\"{_ESC(hq['keywords'])}\" value=\"{_ESC(f['keywords'])}\""
+                f" placeholder=\"{_ESC(ctx.t('hs_placeholder'))}\" aria-label=\"{_ESC(ctx.t('hs_search'))}\">"
+                + "".join(f"<input type=\"hidden\" name=\"{_ESC(k)}\" value=\"{_ESC(str(v))}\">" for k, v in hidden if v)
+                + f"<button type=\"submit\">{_ESC(ctx.t('hs_search'))}</button></form>")
+    body.append(_history_chips(ctx, data))
+    if data.get("usage_error"):
+        body.append(f"<p class=\"rp-err\">{_ESC(ctx.t('hs_usage', error=data['usage_error']))}</p>")
+        return _page(ctx, "history", ctx.t("hs_title"), body, note_key=None)
+    doc = data.get("doc")
+    result = data["result"]
+    keywords = list(result["keywords"])
+    if doc is not None:
+        back = history_url(decl, keywords=f["keywords"], project=f["project"], advisor=f["advisor"], since=f["since"],
+                           rejected_once=decl["history"]["flag_value"] if f["rejected_once"] else None, legacy=f["legacy"],
+                           show=decl["show_all_value"] if f["show"] else None)
+        body.append(f"<p><a class=\"hm-back\" href=\"{_ESC(ctx.href(back))}\">{_ESC(ctx.t('hs_doc_back'))}</a></p>")
+        head = ctx.t("hs_doc_" + str(doc["kind"]), task=doc["task_id"])
+        if doc.get("problem") or doc.get("body") is None:
+            body.append(f"<p class=\"rp-err\">{_ESC(ctx.t('hs_doc_problem', problem=doc.get('problem') or doc['task_id']))}</p>")
+        else:
+            body.append(f"<h2>{_ESC(head)}</h2><p class=\"hs-meta rp-sub\" data-authored>{_ESC(doc.get('title') or '')}</p>"
+                        f"<div class=\"hs-doc\" data-doc=\"{_ESC(doc['kind'])}\" data-ref=\"{_ESC(doc.get('ref') or '')}\">"
+                        f"{render_markdown(str(doc['body']))}</div>")
+        return _page(ctx, "history", ctx.t("hs_title"), body, note_key=None)
+    total, shown = result["total"], len(result["results"])
+    count_key = ("hs_found" if shown == total else "hs_found_shown") if keywords else ("hs_latest" if shown == total else "hs_latest_shown")
+    body.append(f"<p class=\"hs-count\" data-total=\"{total}\" data-shown=\"{shown}\">{_ESC(ctx.t(count_key, count=total, shown=shown))}</p>")
+    if not result["results"]:
+        body.append(f"<div class=\"hs-none\">{_ESC(ctx.t('hs_none'))}</div>")
+    opened = int(decl["history"]["open_first"])
+    body.extend(_history_hit(ctx, r, keywords, data["verb"], open_=i < opened) for i, r in enumerate(result["results"]))
+    if result["errors"]:
+        items = "".join(f"<li><code>{_ESC(e)}</code></li>" for e in result["errors"])
+        body.append(f"<details class=\"rp-tech\"><summary>{_ESC(ctx.t('hs_errors', count=len(result['errors'])))}</summary><ul>{items}</ul></details>")
+    idx = result["index"]
+    body.append(_tech(ctx, f"<p class=\"rp-sub\">{_ESC(ctx.t('hs_index', cards=sum(i['cards'] for i in idx), rebuilt=sum(i['rebuilt'] for i in idx), ms=result['took_ms']))}</p>"))
+    return _page(ctx, "history", ctx.t("hs_title"), body, note_key=None)
+
+
 def render_error(lang: str, message: str) -> str:
     from web.board.app import _generate_text
 
@@ -1727,6 +1910,8 @@ def _render_page(page: str, home_root: str | Path | None, params: dict[str, list
             return render_home(collect_home(home_root, show_all=show_all, all_asks=all_asks), lang, owner)
         if page == "engineering":
             return render_engineering(decl, lang)
+        if page == "history":  # AIPOS-F247: history & audit (same search as `lybra history search`)
+            return render_history(board_pages.collect_history(home_root, params), lang)
         if page == "overview":
             return render_overview(board_pages.collect_overview(home_root, show_all=show_all), lang)
         if page == "onboarding":

@@ -618,11 +618,9 @@ def enable_truth_cache(enabled: bool = True) -> None:
     """Board server switch (web.board.app.run_server). Installs the os.stat recorder and the audit hook once per process (audit
     hooks cannot be removed; both only read a ContextVar outside a cached derivation); enabled=False = compute every call again
     and drop the stored results and the counters."""
+    if enabled:
+        _install_truth_hooks()
     with _TRUTH_LOCK:
-        if enabled and not _TRUTH_STATE["hooks"]:
-            os.stat = _tracked_stat
-            _sys.addaudithook(_truth_audit_hook)
-            _TRUTH_STATE["hooks"] = True
         _TRUTH_STATE["enabled"] = bool(enabled)
         if not enabled:
             _TRUTH_ENTRIES.clear()
@@ -779,6 +777,59 @@ def truth_cached(key: tuple[Any, ...], compute: Callable[[], Any]) -> Any:
             while len(_TRUTH_ENTRIES) > _TRUTH_MAX_ENTRIES:
                 _TRUTH_ENTRIES.popitem(last=False)
     return value
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F247 件③: the same truth recorder for a derivation whose result is kept OUTSIDE this process (the history search index,
+# a disposable derived cache on disk): truth_record runs compute() under the F245 recorder and hands back what it read as plain
+# data (path, mode, identity), so the caller can persist it next to the result; truth_identity_changed re-checks such records with the
+# same identity judgement (_path_identity) and truth_unsettled with the same racy window. The recorder hooks are installed on first
+# use (enable_truth_cache's own installer); the in-process result cache itself stays off unless the board server switched it on.
+# ---------------------------------------------------------------------------
+
+def _install_truth_hooks() -> None:
+    with _TRUTH_LOCK:
+        if not _TRUTH_STATE["hooks"]:
+            os.stat = _tracked_stat
+            _sys.addaudithook(_truth_audit_hook)
+            _TRUTH_STATE["hooks"] = True
+
+
+def truth_record(compute: Callable[[], Any], *, keep: Callable[[str, Any], bool] | None = None) -> tuple[Any, dict[str, Any]]:
+    """Run compute() recording every piece of truth it reads (same recorder as truth_cached) -> (value, truth).
+    truth = {"stats": [[absolute path, mode, identity | None], ...] (only those keep(path, mode) accepts; mode True stat / False lstat /
+    "list" listing), "refused": first reason the result must not be kept (an undeclared subprocess / socket, an explicit fingerprint
+    that cannot be re-checked outside this process) or None, "unsettled": a kept truth younger than the racy window or None}.
+    Not nested into an enclosing truth_cached derivation's record (the caller keeps its own)."""
+    _install_truth_hooks()
+    tracker = _TruthTracker()
+    token = _TRUTH_TRACKER.set(tracker)
+    try:
+        value = compute()
+    finally:
+        _TRUTH_TRACKER.reset(token)
+    kept = {key: ident for key, ident in tracker.stats.items() if keep is None or keep(key[0], key[1])}
+    refused = tracker.refused[0] if tracker.refused else None
+    if refused is None and tracker.fingerprints:
+        refused = f"explicit fingerprint {next(iter(tracker.fingerprints))!r} is only re-checkable in this process"
+    view = _TruthTracker()
+    view.stats = kept
+    return value, {"stats": [[path, mode, list(ident) if ident is not None else None] for (path, mode), ident in kept.items()],
+                   "refused": refused, "unsettled": _unsettled(view)}
+
+
+def truth_identity_changed(stats: list[Any], seen: dict[tuple[str, Any], Any] | None = None) -> str | None:
+    """The first recorded [path, mode, identity] (truth_record) whose identity is no longer the same (None = all unchanged).
+    seen = a per-call memo {(path, mode): identity now} shared by many records (each path is checked once per call)."""
+    memo = seen if seen is not None else {}
+    for path, mode, ident in stats:
+        key = (str(path), mode)
+        if key not in memo:
+            memo[key] = _path_identity(key[0], mode)
+        now = memo[key]
+        if (list(now) if now is not None else None) != ident:
+            return key[0]
+    return None
 
 
 # AIPOS-316: Guard against direct invocation

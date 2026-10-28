@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 DECL_KEY = "board_readonly_pages"
-PAGES = ("overview", "project", "roadmap", "onboarding", "home", "engineering")  # AIPOS-F246: + 首页 / 工程页(只追加)
+PAGES = ("overview", "project", "roadmap", "onboarding", "home", "engineering", "history")  # AIPOS-F246: + 首页 / 工程页; AIPOS-F247: + 历史与审计(只追加)
 #: 清单项判定(键 = 声明 onboarding_items 的值; 声明里出现未实现的项 = SchemaLoadError, 只追加)
 ONBOARDING_CHECKS = ("governance_root", "advisor", "executor", "auditor", "envelope", "charter", "pi_model", "roadmap", "first_closed")
 _COMMAND_KEYS = ("governance_root", "advisor", "execution_undeclared", "instance_not_enrolled", "envelope_mint", "charter_check",
@@ -70,6 +70,15 @@ def pages_declaration() -> dict[str, Any]:
             or not str((decl.get("nav_links") or {}).get("inbox") or "").startswith("/")):
         raise SchemaLoadError(f"verbs.schema.json {DECL_KEY}: root_redirect ∈ pages / show_all_value / legacy_project_page(/…{{index}}) / "
                               "nav_links.inbox 未声明齐(AIPOS-F181)")
+    # AIPOS-F247: 历史与审计页参数名 / 报告视图种类 / 近 N 天筛选
+    hist = decl.get("history")
+    if (not isinstance(hist, dict) or not all(isinstance((hist.get("query") or {}).get(k), str) and hist["query"][k]
+                                              for k in ("keywords", "advisor", "since", "rejected_once", "legacy", "task", "doc"))
+            or list(hist.get("docs") or []) != ["return", "audit"] or not isinstance(hist.get("recent_days"), int)
+            or not str(hist.get("flag_value") or "") or not isinstance(hist.get("open_first"), int)
+            or not isinstance(hist.get("page_budget_bytes"), int)):
+        raise SchemaLoadError(f"verbs.schema.json {DECL_KEY}.history(query 七键 / docs = [return, audit] / recent_days / flag_value / "
+                              "open_first / page_budget_bytes)未声明齐(AIPOS-F247)")
     route = decl.get("artifact_route")
     if (not isinstance(route, dict) or not str(route.get("path") or "").startswith("/")
             or not all(isinstance((route.get("params") or {}).get(k), str) and route["params"][k] for k in ("project", "task", "file"))):
@@ -721,6 +730,53 @@ def _collect_roadmap(home_root: str | Path | None, *, project: str | None, miles
 
         selected["no_roadmap_hint"] = roadmap_texts()["no_roadmap"].format(project=f.name, path=(view or {}).get("rel") or "?")
     out["selected"] = selected
+    return out
+
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F247: 历史与审计页数据(检索 = history_search.search, CLI 同一实现; 本模块只把查询参数换成检索参数)
+# ---------------------------------------------------------------------------
+
+def history_url(decl: dict[str, Any], **values: Any) -> str:
+    """历史与审计页地址: 键 = project / show(board query)或 history.query 的键; 空值不带。"""
+    from urllib.parse import urlencode
+
+    names = {**{k: v for k, v in decl["history"]["query"].items()}, "project": decl["query"]["project"], "show": decl["query"]["show"]}
+    pairs = [(names[k], str(v)) for k, v in values.items() if v not in (None, "", False)]
+    return str(decl["pages"]["history"]) + (f"?{urlencode(pairs)}" if pairs else "")
+
+
+def collect_history(home_root: str | Path | None, params: dict[str, list[str]] | None) -> dict[str, Any]:
+    """页面查询参数 → history_search.search 同一检索(参数不合 = usage_error 点名, 不猜); query.doc ∈ docs 且给了 task = 报告视图:
+    只认该卡由 history_search.card_entry 推导给出的那份交回 / 审计报告(md_source.render_markdown 安全渲染)。"""
+    from tools.aipos_cli.history_search import HistoryUsageError, declaration, search
+
+    decl = pages_declaration()
+    hq = decl["history"]["query"]
+    params = params or {}
+
+    def arg(name: str) -> str:
+        return str((params.get(name) or [""])[0] or "").strip()
+
+    flag = str(decl["history"]["flag_value"])
+    filters = {"keywords": arg(hq["keywords"]), "project": arg(decl["query"]["project"]) or None, "advisor": arg(hq["advisor"]) or None,
+               "since": arg(hq["since"]) or None, "rejected_once": arg(hq["rejected_once"]) == flag,
+               "legacy": arg(hq["legacy"]) or None, "show": arg(decl["query"]["show"]) == decl["show_all_value"]}
+    out: dict[str, Any] = {"decl": decl, "filters": filters, "result": None, "usage_error": None, "doc": None,
+                           "verb": declaration(), "projects": [e["name"] for e in visible_entries(home_entries(home_root), filters["show"])[0]]}
+    try:
+        out["result"] = search(home_root, filters["keywords"], project=filters["project"], advisor=filters["advisor"], since=filters["since"],
+                               rejected_once=filters["rejected_once"], legacy=filters["legacy"], all_projects=filters["show"])
+    except HistoryUsageError as exc:
+        out["usage_error"] = str(exc)
+        return out
+    task, doc = arg(hq["task"]), arg(hq["doc"])
+    if task and doc in decl["history"]["docs"] and filters["project"]:
+        from tools.aipos_cli.history_search import report_doc
+
+        entry = next((e for e in home_entries(home_root)["projects"] if e["name"] == filters["project"]), None)
+        out["doc"] = report_doc(filters["project"], Path(entry["root"]) if entry else None, task, doc)
     return out
 
 
