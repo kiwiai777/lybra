@@ -233,6 +233,10 @@
         {
           "value": "advisor_headline",
           "description": "AIPOS-F246 件①: 顾问简报(看板首页一页纸卡「现在」「做成」两行; records/advisor_headlines/<实例>/headline_*.md, 只追加; `lybra project headline --confirm` 写出并落账; 声明 verbs.schema lybra_project_headline; 写入 / 读取唯一实现 advisor_headline.py)"
+        },
+        {
+          "value": "owner_recommendation",
+          "description": "AIPOS-F248 件①: 收件箱事项推荐(看板「需要你」推荐按钮; records/owner_recommendations/<事项ID>/recommend_*.md, 只追加; `lybra owner recommend --confirm` 写出并落账; 声明 verbs.schema lybra_owner_recommend; 写入 + 落账 owner_recommend.write_recommendation)"
         }
       ]
     },

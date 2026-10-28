@@ -138,31 +138,39 @@ def is_stale(record: dict[str, Any] | None, now: datetime | None = None) -> bool
 # 写: 两阶段 + 落账
 # ---------------------------------------------------------------------------
 
-def _writer_check(root: Path, instance: str, actor: str, decl: dict[str, Any], connection_json: Path | None) -> str:
-    """写入方核验: 本人(驱动方凭据在本治理根连接文件)或 Owner(owner 角色凭据在)。返回写入方角色说明; 拒 = HeadlineRefused。"""
+def writer_credential_role(root: Path, *, instance: str, actor: str, owner_actor: str, connection_json: Path | None,
+                           refused: Any, what: str) -> str:
+    """写入方核验唯一实现(AIPOS-F246 顾问简报 / AIPOS-F248 收件箱推荐同调): 写入方须为 instance 本人(本治理根连接文件里有其驱动方凭据,
+    two_phase_shell_factory.signer_role_for_actor)或 Owner(owner_actor; owner 角色凭据在, load_role_token 取凭据唯一入口)。凭据只在进程内判
+    在不在, 不输出、不落盘。返回写入方角色说明; 拒 = refused(code, message)(调用方的拒绝异常类, what = 被写的东西, 进出口文案)。"""
     from tools.aipos_cli.service_mode import connection_path
 
     conn = connection_path(root, connection_target=connection_json)
-    owner_actor = str(decl["owner_actor"])
     if actor not in (instance, owner_actor):
-        raise HeadlineRefused("not_self", f"写入方 {actor} 不是 {instance} 本人, 也不是 Owner({owner_actor}); 顾问简报只能本人或 Owner 写。"
-                                          f"出口: 以 {instance} 本人写(--actor 缺省即本人), 或请 Owner 写(--actor {owner_actor})")
+        raise refused("not_self", f"写入方 {actor} 不是 {instance} 本人, 也不是 Owner({owner_actor}); {what}只能 {instance} 本人或 Owner 写。"
+                                  f"出口: 以 {instance} 本人写(--actor 缺省即本人), 或请 Owner 写(--actor {owner_actor})")
     if not conn.is_file():
-        raise HeadlineRefused("no_credential", f"本治理根连接文件不在 {conn}, 无从核写入方凭据; 出口: 在治理根所在机运行(或 --connection-json 指本机连接文件)")
+        raise refused("no_credential", f"本治理根连接文件不在 {conn}, 无从核写入方凭据; 出口: 在治理根所在机运行(或 --connection-json 指本机连接文件)")
     if actor == owner_actor:
         from tools.aipos_cli.two_phase_shell_factory import load_role_token
 
         try:
             load_role_token(connection_json_path=str(conn), role=owner_actor)  # 取凭据唯一入口; 只判在不在, 值不出进程
         except (ValueError, OSError) as exc:
-            raise HeadlineRefused("no_credential", f"连接文件 {conn} 没有可用的 Owner 凭据: {exc}") from exc
+            raise refused("no_credential", f"连接文件 {conn} 没有可用的 Owner 凭据: {exc}") from exc
         return owner_actor
     from tools.aipos_cli.two_phase_shell_factory import signer_role_for_actor
 
     try:
         return signer_role_for_actor(connection_json_path=str(conn), actor=actor, repo_root=root)
     except (ValueError, OSError) as exc:  # DriverTokenError(ValueError 子类)= 该实例凭据不在本连接文件
-        raise HeadlineRefused("no_credential", f"连接文件 {conn} 里没有 {actor} 的顾问凭据(只能本人写自己的简报): {exc}") from exc
+        raise refused("no_credential", f"连接文件 {conn} 里没有 {actor} 的顾问凭据({what}只能本人写): {exc}") from exc
+
+
+def _writer_check(root: Path, instance: str, actor: str, decl: dict[str, Any], connection_json: Path | None) -> str:
+    """写入方核验: 本人(驱动方凭据在本治理根连接文件)或 Owner(owner 角色凭据在)。返回写入方角色说明; 拒 = HeadlineRefused。"""
+    return writer_credential_role(root, instance=instance, actor=actor, owner_actor=str(decl["owner_actor"]), connection_json=connection_json,
+                                  refused=HeadlineRefused, what="顾问简报")
 
 
 def write_headline(governance_root: str | Path, *, instance: str, title: str, now_text: str, done: str, stage: str | None = None,

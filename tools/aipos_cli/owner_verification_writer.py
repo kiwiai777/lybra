@@ -40,6 +40,8 @@ ALLOWED_DECIDED_VIA = {"web_session", "cli", "mcp", "external"}
 RESULT_DECISIONS = {"confirm": "approve", "mismatch": "reject"}
 #: AIPOS-F175: optional criterion spot-check fields (frontmatter order)
 CRITERION_FIELDS = ("workspace", "milestone", "criterion", "result", "relayed_by", "owner_words", "note", "fix_task_id")
+#: AIPOS-F248 件②①: Owner 在看板一键抽查的来源字段(收件箱事项 ID / 告知的顾问 / 看板会话记录人与来源面); 给了才写, 旧记录形不变
+BOARD_FIELDS = ("inbox_item", "relay_to", "captured_by", "capture_surface")
 
 
 def _normalize_task_id(value: Any, blocking_reasons: list[str]) -> str:
@@ -107,7 +109,7 @@ def _metadata(record: dict[str, Any]) -> dict[str, Any]:
         "reason": record.get("reason") or None,
     }
     # AIPOS-F175: criterion spot-check fields only when given (old record shape unchanged)
-    for key in CRITERION_FIELDS:
+    for key in (*CRITERION_FIELDS, *BOARD_FIELDS):
         if record.get(key):
             meta[key] = record[key]
     return meta
@@ -195,7 +197,7 @@ def build_owner_verification_record(
     # AIPOS-F175: criterion spot-check fields (single-line; criterion given = result / relayed_by / owner_words required)
     extra: dict[str, str] = {}
     spot_check = bool(payload.get("criterion"))
-    for key in CRITERION_FIELDS:
+    for key in (*CRITERION_FIELDS, *BOARD_FIELDS):
         required = spot_check and key in ("criterion", "result", "relayed_by", "owner_words")
         text = _normalize_text(payload.get(key), key, blocking_reasons, max_length=2000 if key in ("owner_words", "note") else 200,
                                required=required)
