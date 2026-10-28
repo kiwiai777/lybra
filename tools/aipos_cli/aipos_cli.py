@@ -3710,6 +3710,31 @@ def build_parser() -> argparse.ArgumentParser:
                                 help="Brief for this role; default = by the card (audit card = auditor); a mismatch is refused")
     kickoff_parser.add_argument("--json", action="store_true", help="JSON output (text plus the projected values)")
 
+    # AIPOS-F247 件①: lybra history search — 按关键字查各项目已结案卡怎么做 / 怎么验证 / 谁审的(声明 verbs.schema lybra_history_search;
+    # 唯一实现 history_search, 看板「历史与审计」页同一实现; 跨项目命令(home 根), 只读)
+    history_parser = subparsers.add_parser(
+        "history",
+        help="AIPOS-F247: history & audit of closed cards across the registered projects (read-only; same data as the board page)")
+    history_subparsers = history_parser.add_subparsers(dest="history_command")
+    history_search_parser = history_subparsers.add_parser(
+        "search",
+        help="AIPOS-F247: search closed cards (and frozen legacy cards) by keywords: title / card goal / return summary / audit summary; "
+             "several keywords = AND, substring match; shows what was done, how it was verified and the audit (verdict, rounds, "
+             "rejected once and why, report paths); newest closure first")
+    from tools.aipos_cli.history_search import LEGACY_CHOICES as _history_legacy_choices
+
+    history_search_parser.add_argument("keywords", nargs="*", help="Keywords (AND; none = most recent closures)")
+    history_search_parser.add_argument("--project", default=None, help="Only this registered project")
+    history_search_parser.add_argument("--advisor", default=None, help="Only cards owned by this advisor instance")
+    history_search_parser.add_argument("--since", default=None, help="Closed on or after: YYYY-MM-DD or <N>d (last N days)")
+    history_search_parser.add_argument("--rejected-once", action="store_true", help="Only cards rejected by an audit at least once")
+    history_search_parser.add_argument("--legacy", choices=list(_history_legacy_choices), default=None,
+                                       help="Frozen legacy cards: include (default) / only / exclude")
+    history_search_parser.add_argument("--limit", type=int, default=None, help="Show at most N results (the total is still reported)")
+    history_search_parser.add_argument("--all-projects", action="store_true", help="Also search projects hidden on the board (test projects)")
+    history_search_parser.add_argument("--home-root", default=None, help="Home root (default: the resolve_home_root precedence)")
+    history_search_parser.add_argument("--json", action="store_true", help="JSON output (same data as the board page)")
+
     # AIPOS-F167 件③: lybra updates — 看 Lybra 更新说明(顾问须知)与记已读(--ack 两阶段, 族 advisor_update_writers; 声明 verbs.schema lybra_updates)
     updates_parser = subparsers.add_parser(
         "updates",
@@ -6464,6 +6489,15 @@ def main(argv: list[str] | None = None) -> int:
         # AIPOS-F243 件②: 只读薄壳 — 全部逻辑在 charter_render(instance_skills / skills_tar_bytes), 治理根解析同 charter
         from tools.aipos_cli.charter_render import run_skills_cli
         return run_skills_cli(args)
+
+    if args.command == "history":
+        # AIPOS-F247 件①: 只读薄壳 — 全部逻辑在 history_search(看板「历史与审计」页同一实现); 跨项目(home 根), 先于单治理根解析分派
+        if getattr(args, "history_command", None) != "search":
+            print("usage: lybra history search [<keyword> ...] [--project P] [--advisor A] [--since D] [--rejected-once] "
+                  "[--legacy include|only|exclude] [--limit N] [--json]", file=sys.stderr)
+            return 2
+        from tools.aipos_cli.history_search import run_history_cli
+        return run_history_cli(args)
 
     if args.command == "kickoff":
         # AIPOS-F187 件①: 只读薄壳 — 全部逻辑在 subagent_kickoff(渲染唯一 render_kickoff_brief), 治理根经同一薄壳解析

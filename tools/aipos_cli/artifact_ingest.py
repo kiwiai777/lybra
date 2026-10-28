@@ -20,7 +20,7 @@ import stat as stat_module
 from tools.schema_constants import RecordType
 from tools.aipos_cli.verb_contract import declared_exit_code
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 
@@ -903,20 +903,44 @@ def _credential_value_exempt(value: str, decl: dict[str, Any], min_chars: int, l
     return any(p.fullmatch(core) for p in ex["patterns"] + (ex["loose"] if loose else []))
 
 
-def credential_hits(text: str, decl: dict[str, Any]) -> list[dict[str, Any]]:
-    """AIPOS-F239 件①(唯一判定): 文本中的明文凭据命中 [{line, kind, label}](按行号、种类去重排序)。绝不返回命中值。"""
-    seen: dict[tuple[int, str], dict[str, Any]] = {}
+def _credential_matches(text: str, decl: dict[str, Any]) -> Iterator[tuple[Any, tuple[int, int], str, str]]:
+    """命中判定本体(credential_hits / credential_redact 同一判定): 逐条 (match, 命中值所在区间, kind, label)。"""
     for kind, label, rx, low, loose in decl["_patterns"]:
         for m in rx.finditer(text):
-            value = m.group("value") if "value" in rx.groupindex else m.group(0)
+            has_value = "value" in rx.groupindex
+            value = m.group("value") if has_value else m.group(0)
             key = m.group("key") if "key" in rx.groupindex else None
             if value is None or _credential_value_exempt(value, decl, low, loose):
                 continue
             if key and any(p.fullmatch(key) for p in decl["_exempt"]["keys"]):
                 continue
-            line = text.count("\n", 0, m.start()) + 1
-            seen.setdefault((line, kind), {"line": line, "kind": kind, "label": label})
+            yield m, (m.span("value") if has_value else m.span()), kind, label
+
+
+def credential_hits(text: str, decl: dict[str, Any]) -> list[dict[str, Any]]:
+    """AIPOS-F239 件①(唯一判定): 文本中的明文凭据命中 [{line, kind, label}](按行号、种类去重排序)。绝不返回命中值。"""
+    seen: dict[tuple[int, str], dict[str, Any]] = {}
+    for m, _span, kind, label in _credential_matches(text, decl):
+        line = text.count("\n", 0, m.start()) + 1
+        seen.setdefault((line, kind), {"line": line, "kind": kind, "label": label})
     return [seen[k] for k in sorted(seen)]
+
+
+def credential_redact(text: str, decl: dict[str, Any] | None, mask: str) -> str:
+    """AIPOS-F247: 展示用打码——同一判定(_credential_matches)命中的值换成 mask(历史检索把审计报告里的命令等原文给 Owner 看时不露明文凭据)。
+    decl = None(产品未声明判据)= 原样。只改展示文本, 不改任何文件。"""
+    if not decl or not text:
+        return text
+    spans = sorted({span for _m, span, _k, _l in _credential_matches(text, decl)})
+    out, cursor = [], 0
+    for start, end in spans:
+        if start < cursor:
+            start = cursor
+        if start >= end:
+            continue
+        out += [text[cursor:start], mask]
+        cursor = end
+    return "".join(out) + text[cursor:]
 
 
 def _credential_text(path: Path, scan: dict[str, Any]) -> str | None:

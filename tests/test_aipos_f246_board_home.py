@@ -373,7 +373,8 @@ def test_item4_project_brief_sections_and_budget(board):
     with urllib.request.urlopen(urllib.request.Request(board["base"] + thumb, headers={"Cookie": board["cookie"]}), timeout=60) as resp:
         assert resp.status == 200 and resp.headers.get("Content-Type") == "image/png" and resp.read() == PNG
     cards_view = _page(board, f"/owner/project?project={C}&view=cards")
-    assert 'data-nav="history" aria-current="page"' in cards_view and 'class="rp-subproject"' in cards_view
+    # AIPOS-F247: the all-cards view sits under engineering (history & audit is its own page)
+    assert 'data-nav="engineering" aria-current="page"' in cards_view and 'class="rp-subproject"' in cards_view
     chief = _page(board, f"/owner/project?project={C}&sub={ADV_Y}")
     assert "没有在推的事" in chief and "没有归这位顾问的里程碑" in chief
 

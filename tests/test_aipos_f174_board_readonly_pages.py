@@ -41,7 +41,8 @@ ADV1 = f"advisor.{P1}.h1"
 ADV1B = f"advisor.{P1}.h2"
 EXEC1 = f"exec.{P1}.h1"
 AUD1 = f"audit.{P1}.h1"
-NEW_PAGES = ("/owner/overview", "/owner/project", "/owner/roadmap", "/owner/onboarding", "/owner/home", "/owner/engineering")  # AIPOS-F181: + project page; AIPOS-F246: + home / engineering
+NEW_PAGES = ("/owner/overview", "/owner/project", "/owner/roadmap", "/owner/onboarding", "/owner/home", "/owner/engineering",
+             "/owner/history")  # AIPOS-F181: + project page; AIPOS-F246: + home / engineering; AIPOS-F247: + history & audit
 
 
 def _show(text: str) -> None:
@@ -402,7 +403,7 @@ def test_item1_overview_cards_and_links(board):
     nav = _section(page, '<header class="rp-nav">', "</header>")
     _show(f"[①·导航 HTML 原文] {nav}")
     # AIPOS-F246 item 5: nav = home / project / history / engineering; the overview (with the other pages) sits under engineering
-    for href in ('href="/owner/home"', 'href="/owner/project"', 'href="/owner/project?view=cards"',
+    for href in ('href="/owner/home"', 'href="/owner/project"', 'href="/owner/history"',
                  'href="/owner/engineering" data-nav="engineering" aria-current="page"'):
         assert href in nav, href
     assert "本页只读" in page and "<form" not in page and "<button" not in page

@@ -237,8 +237,8 @@ def test_item1_one_skeleton_nav_and_root_redirect(board):
         navs[path] = re.sub(r' aria-current="page"', "", _nav(page))
     _show("[item1 top nav (same on every page) raw] " + navs["/owner/overview"])
     assert len(set(navs.values())) == 1, navs
-    # AIPOS-F246 item 5: nav = home / project / history (all-cards view until F247) / engineering (collects the other pages)
-    for href in ("/owner/home", "/owner/project", "/owner/project?view=cards", "/owner/engineering"):
+    # AIPOS-F246 item 5: nav = home / project / history / engineering (collects the other pages); AIPOS-F247: history = its own page
+    for href in ("/owner/home", "/owner/project", "/owner/history", "/owner/engineering"):
         assert f'href="{href}"' in navs["/owner/overview"], href
     assert 'href="/"' not in navs["/owner/overview"]
     status, body, headers = _get(board, "/", follow=False)
@@ -311,15 +311,16 @@ def test_item2_project_page_filter_open_lists_closed_folded(board):
     assert re.findall(r'data-subproject="([^"]*)"', nav) == ["", ADV_B, ADV_A, "app-r"] and 'data-subproject="" aria-current="page"' in nav
     a = _block(page, rf'<section class="rp-subproject" data-subproject="{re.escape(ADV_A)}".*?</section>')
     _show(f"[item2 project page section {ADV_A} raw] {a}")
-    open_part = a.split("<details", 1)[0]
-    assert 'data-task-id="A-1"' in open_part and 'data-task-id="A-2"' in open_part and "A-3" not in open_part
-    closed = _block(a, r'<details class="rp-closed" data-closed="2">.*?</details>')
-    assert 'data-task-id="A-3"' in closed and 'data-task-id="O-1"' in closed and " open" not in closed.split(">", 1)[0]
-    assert "L-1" not in page and "L-3" not in page  # frozen legacy cards are not listed, only counted as history
-    assert "历史存量 4 张" in page and 'href="/workspace/0"' in page
+    assert 'data-task-id="A-1"' in a and 'data-task-id="A-2"' in a and "A-3" not in a
+    # AIPOS-F247: closed cards are no longer listed on the project page: one link to the history & audit page (this project)
+    closed = _block(a, r'<p class="rp-closed" data-closed="2">.*?</p>')
+    assert f'href="/owner/history?project={M}&amp;advisor={ADV_A}"' in closed and "O-1" not in closed
+    assert "L-1" not in page and "L-3" not in page  # frozen legacy cards are not listed
+    assert "历史存量" not in page and 'href="/workspace/0"' in page  # the legacy backlog is a filter of the history page only
     only_b = _page(board, f"/owner/project?project={M}&sub={ADV_B}&view=cards")
     assert f'data-subproject="{ADV_B}" data-inflight="3"' in only_b and f'<section class="rp-subproject" data-subproject="{ADV_A}"' not in only_b
-    assert 'data-task-id="B-1R"' in only_b  # an audit card without its own owner joins the reviewed card's subproject
+    # an audit card without its own owner joins the reviewed card's subproject (closed B-3 + B-1R; AIPOS-F247: counted, not listed)
+    assert f'data-subproject="{ADV_B}" data-inflight="3" data-todo="0" data-closed="2"' in only_b
     unknown = _page(board, f"/owner/project?project={M}&sub=nobody&view=cards")
     assert "子项目 nobody 不在本项目, 已显示全部" in unknown and f'data-subproject="{ADV_A}"' in unknown
 
