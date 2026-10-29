@@ -90,6 +90,7 @@ def list_parent(path: str) -> dict[str, Any]:
     info = lstat_info(path, with_sha=False)
     entries = None
     if info.get("type") == "dir":
+        info["writable"] = os.access(path, os.W_OK | os.X_OK)  # 当前用户能否在其下新建(不提权; 不可写 = 计划 / 执行前即拒)
         entries = [lstat_info(os.path.join(path, name)) for name in sorted(os.listdir(path))]
         for item in entries:
             item["name"] = os.path.basename(item["path"])
@@ -145,6 +146,8 @@ def _apply(req: dict[str, Any]) -> tuple[int, dict[str, Any]]:
             if pinfo.get("type") != "dir":
                 return _deny("PARENT_MISSING", f"{path} 的父目录 {parent} 不是已存在的目录(也不由本计划先建; 不越级建父目录), 未做任何写入",
                              parent=pinfo)
+            if not os.access(parent, os.W_OK | os.X_OK):
+                return _deny("PARENT_NOT_WRITABLE", f"{path} 的父目录 {parent} 当前用户不可写(不提权), 未做任何写入", parent=pinfo)
         planned.add(path)
     parents = [p for p in plan.get("baseline_parents") or [] if isinstance(p, str)]
     before = {d: list_parent(d) for d in parents}

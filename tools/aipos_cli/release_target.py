@@ -828,6 +828,10 @@ def plan_release(governance_root: str | Path, *, task_id: str, target_id: str, c
     for directory, view in result["parents"].items():
         if (view.get("info") or {}).get("type") != "dir":
             refused.append(f"{directory}: 父目录不是已存在的目录({(view.get('info') or {}).get('type') or '不存在'}; 不越级建父目录)")
+        elif not (view.get("info") or {}).get("writable"):
+            info = view.get("info") or {}
+            refused.append(f"{directory}: 父目录当前用户不可写(模式 {info.get('mode')} 属主 uid {info.get('uid')} gid {info.get('gid')}; 禁提权, "
+                           "出口: 由 Owner 在目标主机授予写权限或改声明, 不由角色自行突破)")
     if refused:
         raise _err("RELEASE_PLAN_REFUSED", *refused)
     authorization = release_authorization(gov, task_id, fm, entry, target_id=target_id)
