@@ -373,14 +373,14 @@ def _scope_memo(memo: dict[Any, tuple[Any, Any]], key: Any, compute: Callable[[]
         memo[key] = (value, None)
         return value
     sub = _TruthTracker()
-    sub.external, sub.quiet = tracker.external, tracker.quiet
+    sub.external, sub.quiet, sub.flat = tracker.external, tracker.quiet, tracker.flat
     token = _TRUTH_TRACKER.set(sub)
     try:
         value = compute()
     finally:
         _TRUTH_TRACKER.reset(token)
-        tracker.merge(sub.stats, sub.fingerprints, sub.refused)
-    memo[key] = (value, (sub.stats, sub.fingerprints, sub.refused))
+        tracker.merge(*sub.bundle())
+    memo[key] = (value, sub.bundle())
     return value
 
 
@@ -410,7 +410,12 @@ def find_task_card_matches(repo_root: Path, task_id: str, *, states: tuple[str, 
                     index.setdefault(found, []).append(path)
             return index
 
-        return list(_scope_memo(scope["by_states"], tuple(states or QUEUE_STATES), build).get(wanted, []))
+        def indexed() -> dict[str, list[Path]]:
+            # AIPOS-F249 件③: board server = the index is one truth-cached derivation per root, so every cached per-card derivation that
+            # looks a card up depends on the index's value (one nested key) instead of carrying every queue file's identity
+            return truth_cached(("task_loader.card_index", str(Path(repo_root)), tuple(states or QUEUE_STATES)), build)
+
+        return list(_scope_memo(scope["by_states"], tuple(states or QUEUE_STATES), indexed).get(wanted, []))
     return [p for p in iter_queue_task_paths(Path(repo_root), states=states) if _frontmatter_task_id(p) == wanted]
 
 
@@ -468,6 +473,9 @@ def load_task_by_path(task_path: str, repo_root: Path | None = None) -> dict[str
 
 # ---------------------------------------------------------------------------
 # AIPOS-F245 件①: truth-fingerprinted result cache (board overview / inbox / roadmap / onboarding pages and their /api data).
+# AIPOS-F249: the minute left the fingerprint (time judgments report when they flip), nested results are depended on by their value
+# (a re-derived child that came out the same does not re-derive its parents), young truth is fingerprinted by content, and the board
+# server keeps the pages it served fresh in the background.
 #
 # A cached derivation (truth_cached) is stored with the fingerprint of every piece of truth it read, recorded while it ran:
 #   - every path it stat-ed (os.stat / Path.exists / is_file / is_dir / the F177 per-file read caches) or opened (audit event
@@ -475,22 +483,36 @@ def load_task_by_path(task_path: str, repo_root: Path | None = None) -> dict[str
 #     directory only stat-ed = "is a directory" (its entries are not what was read); a missing path is recorded as missing;
 #   - every directory it listed (audit events "os.listdir" / "os.scandir": glob, iterdir, walk) = (dev, ino, mtime_ns), so an
 #     added / removed / renamed entry changes it;
+#   - AIPOS-F249: truth younger than the F177 racy window (frontmatter.within_racy_window: a same-tick rewrite keeps the stat identity)
+#     that the derivation opened or listed is also fingerprinted by content (file bytes / entry names, taken before the derivation
+#     read it and compared on every check); a young file only stat-ed needs nothing more (the identity is all that was read);
 #   - explicit fingerprints computed by their own single implementation (truth_note_fingerprint: the F55 / F229 records group
-#     fingerprint records._group_fingerprint, whose scan is not recorded path by path);
-#   - the wall-clock minute it started in (时间相关项按分钟粒度纳入: overdue / envelope expiry / stale days are never served
-#     from an earlier minute).
-# A stored result is returned only while the minute is the same and every recorded identity / fingerprint is unchanged (checked
-# on every request, so any truth change is reflected by the very next request; a file the derivation itself writes is recorded as
-# it was before the open, so a writing derivation is never served from the cache and its writes still happen). Fail-closed = not
-# stored: a subprocess / socket / thread / signal the derivation was not declared for (truth_external_read), or any truth younger
-# than the F177 racy window (frontmatter.within_racy_window: same-tick rewrites can never be served stale).
+#     fingerprint records._group_fingerprint, whose scan is not recorded path by path); one younger than the racy window = not stored;
+#   - AIPOS-F249 time: the earliest moment one of its time judgments flips (clock.judged_now + clock.holds_until: overdue, expiry,
+#     stalled, stale, windows, whole days); a plain clock read whose judgments do not report (clock.utc_now) = valid to the end of
+#     that minute (the F245 granularity, fail-closed for every judgment not yet converted);
+#   - AIPOS-F249 件③: every nested cached derivation it used = that derivation's key and the digest of the value it handed over
+#     (not the nested truth itself): a check re-checks the nested one first (re-deriving it when its own truth changed) and only a
+#     different value invalidates the outer one (early cut-off: a loop run record rewritten every few seconds re-derives the card it
+#     belongs to, not the pages built on it while nothing they show changed).
+# A stored result is returned only while its time has not run out and every recorded identity / content / fingerprint / nested value
+# is unchanged (checked on every request, so any truth change is reflected by the very next request; a file the derivation itself
+# writes is recorded as it was before the open, so a writing derivation is never served from the cache and its writes still happen).
+# Fail-closed = not stored: a subprocess / socket / thread / signal the derivation was not declared for (truth_external_read), a
+# young explicit fingerprint, a young file too large to fingerprint by content, or a nested derivation that was not stored.
 # Read-scope memos (request_memo / lookup_scope_memo / the card index) keep the truth their value was derived from, so cached
-# derivations nested in one request share them and each still records everything it depends on; a nested derivation's
-# fingerprint is folded into the enclosing one (the overview contains the inbox, the inbox each card's loop status). Off unless the board server process
-# switches it on (enable_truth_cache, web.board.app.run_server): CLI, gate and in-process callers compute every call as before.
-# Process memory only, bounded (least-recently-used), one lock; every caller gets its own deep copy.
+# derivations sharing one request's memos each still record everything they depend on.
+# One derivation per key at a time (single flight): a request that finds a stale result while it is being re-derived waits for that
+# (bounded) instead of deriving it twice. AIPOS-F249 件②: the board server re-derives the most recently served pages in the
+# background after their truth changed (start_truth_refresher, declared verbs.schema board_readonly_pages.truth_refresh), so a
+# request usually finds the latest result already derived; a request never gets a result whose truth is known to have changed.
+# Off unless the board server process switches it on (enable_truth_cache, web.board.app.run_server): CLI, gate and in-process
+# callers compute every call as before. Process memory only, bounded (least-recently-used), one lock; every caller gets its own
+# deep copy.
 # ---------------------------------------------------------------------------
 
+import hashlib as _hashlib
+import pickle as _pickle
 import stat as _stat_module
 import sys as _sys
 import threading as _threading
@@ -498,34 +520,64 @@ import time as _time
 from collections import OrderedDict as _OrderedDict
 
 _TRUTH_TRACKER: "ContextVar[_TruthTracker | None]" = ContextVar("lybra_truth_tracker", default=None)
+#: AIPOS-F249: identities / contents / nested values checked in the current request or refresh pass (each path checked once per pass)
+_TRUTH_PASS: "ContextVar[dict[Any, Any] | None]" = ContextVar("lybra_truth_pass", default=None)
 _TRUTH_LOCK = _threading.Lock()
 _TRUTH_STATE: dict[str, Any] = {"enabled": False, "hooks": False}
-_TRUTH_MAX_ENTRIES = 256  # pages + per-project roadmap / card statistics + per in-flight card loop status
+#: pages + per-project roadmap / card statistics + per-card loop status / loop item / stall judgment (AIPOS-F249 件③)
+_TRUTH_MAX_ENTRIES = 4096
+#: a young file larger than this is not fingerprinted by content (the derivation is then not stored, as before F249)
+_TRUTH_YOUNG_CONTENT_MAX_BYTES = 4 * 1024 * 1024
 _TRUTH_ENTRIES: "_OrderedDict[tuple[Any, ...], dict[str, Any]]" = _OrderedDict()
-_TRUTH_STATS: dict[str, Any] = {"hits": 0, "misses": 0, "stored": 0, "not_stored": 0, "last_not_stored": None, "last_changed": None}
+_TRUTH_INFLIGHT: dict[tuple[Any, ...], _threading.Event] = {}
+#: AIPOS-F249 件②: top-level derivations served to requests (most recent last) = what the background refresher keeps fresh
+_TRUTH_PAGES: "_OrderedDict[tuple[Any, ...], Callable[[], Any]]" = _OrderedDict()
+_TRUTH_REFRESH: dict[str, Any] = {"thread": None, "stop": None, "decl": None, "last": {}}
+_TRUTH_STATS: dict[str, Any] = {}
 _REAL_STAT = os.stat
+_MISSING = object()
 #: audit events whose outcome is not a file the derivation read: refused unless declared (truth_external_read)
 _TRUTH_EXTERNAL_EVENTS = frozenset({"subprocess.Popen", "os.system", "os.posix_spawn", "os.spawn", "os.exec", "os.fork",
                                     "os.forkpty", "socket.connect", "os.kill", "os.killpg", "_thread.start_new_thread",
                                     "_thread.start_joinable_thread"})
 
 
+def _reset_truth_stats() -> None:
+    _TRUTH_STATS.clear()
+    _TRUTH_STATS.update(hits=0, misses=0, stored=0, not_stored=0, last_not_stored=None, last_changed=None, waited=0, refreshed=0,
+                        refresh_seconds=0.0, minute_capped=0, last_minute_cap=None)
+
+
+_reset_truth_stats()
+
+
 class _TruthTracker:
     """What one cached derivation read: stats {(absolute path, mode): identity | None} (mode = True stat / False lstat / "list"
-    directory listing), fingerprints {key: (value, recompute, newest_ns)}, refused (reasons not to store), external (declared
-    subprocess depth), quiet (recording suspended)."""
+    directory listing), young {(path, mode): content digest} (AIPOS-F249: young truth opened / listed), fingerprints
+    {key: (value, recompute, newest_ns)}, children {nested key: value digest} (AIPOS-F249 件③), valid_until (epoch seconds; AIPOS-F249
+    time judgments), refused (reasons not to store), external (declared subprocess depth), quiet (recording suspended)."""
 
-    __slots__ = ("stats", "fingerprints", "refused", "external", "quiet", "merged")
+    __slots__ = ("stats", "young", "fingerprints", "children", "valid_until", "minute_cap", "refused", "external", "quiet", "merged", "flat")
 
     def __init__(self) -> None:
         self.stats: dict[tuple[str, Any], tuple[Any, ...] | None] = {}
+        self.young: dict[tuple[str, Any], Any] = {}
         self.fingerprints: dict[Any, tuple[Any, Callable[[], Any], int]] = {}
+        self.children: dict[tuple[Any, ...], bytes] = {}
+        self.valid_until = float("inf")
+        self.minute_cap: str | None = None
         self.refused: list[str] = []
         self.external = 0
         self.quiet = 0
         self.merged: set[int] = set()  # ids of truth bundles already folded in (a memo reused 4000 times is merged once)
+        self.flat = False  # AIPOS-F249: truth_record's recorder = nested cached derivations are computed in place (all truth flat)
 
-    def merge(self, stats: dict[tuple[str, Any], Any], fingerprints: dict[Any, Any], refused: list[str]) -> None:
+    def bundle(self) -> tuple[Any, ...]:
+        return (self.stats, self.fingerprints, self.refused, self.young, self.children, self.valid_until)
+
+    def merge(self, stats: dict[tuple[str, Any], Any], fingerprints: dict[Any, Any], refused: list[str],
+              young: dict[tuple[str, Any], Any] | None = None, children: dict[tuple[Any, ...], bytes] | None = None,
+              valid_until: float = float("inf")) -> None:
         """Fold an inner derivation's truth in (first observation wins: a change between the two reads invalidates next time).
         The same bundle (same stats dict object, kept alive by its memo slot / stored entry) is folded in once."""
         if id(stats) in self.merged:
@@ -533,8 +585,13 @@ class _TruthTracker:
         self.merged.add(id(stats))
         for key, ident in stats.items():
             self.stats.setdefault(key, ident)
+        for key, digest in (young or {}).items():
+            self.young.setdefault(key, digest)
         for key, value in fingerprints.items():
             self.fingerprints.setdefault(key, value)
+        for key, digest in (children or {}).items():
+            self.children.setdefault(key, digest)
+        self.valid_until = min(self.valid_until, valid_until)
         self.refused.extend(refused)
 
 
@@ -562,10 +619,58 @@ def _abs(path: Any) -> str:
     return os.path.abspath(os.fsdecode(path))
 
 
-def _record_path(tracker: _TruthTracker, path: Any, mode: Any = True) -> None:
+def _young_identity(ident: tuple[Any, ...] | None) -> bool:
+    """AIPOS-F249: an identity younger than the F177 racy window (a same-tick rewrite would keep it)."""
+    from tools.aipos_cli.frontmatter import within_racy_window
+
+    if not ident:
+        return False
+    if ident[0] == "listing":
+        return within_racy_window(ident[3])
+    if ident[0] == "file":
+        return within_racy_window(max(ident[4], ident[5]))
+    return False
+
+
+def _content_digest(path: str, mode: Any) -> Any:
+    """AIPOS-F249: content fingerprint of young truth: a file's bytes / a listed directory's entry names (missing = None, unreadable =
+    ("error", errno)). Read with recording suspended by the caller."""
+    try:
+        if mode == "list":
+            data = "\0".join(sorted(os.listdir(path))).encode("utf-8", "surrogateescape")
+        else:
+            if os.path.getsize(path) > _TRUTH_YOUNG_CONTENT_MAX_BYTES:
+                return ("too_large",)
+            with open(path, "rb") as handle:
+                data = handle.read()
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError as exc:
+        return ("error", exc.errno)
+    return _hashlib.blake2b(data, digest_size=16).digest()
+
+
+def _record_young(tracker: _TruthTracker, key: tuple[str, Any]) -> None:
+    """A young file the derivation opens / a young directory it lists: fingerprint its content now (before the derivation reads it, so
+    any later change, even one keeping the identity, is seen by the next check)."""
+    if key in tracker.young or not _young_identity(tracker.stats.get(key)):
+        return
+    tracker.quiet += 1
+    try:
+        digest = _content_digest(key[0], key[1])
+    finally:
+        tracker.quiet -= 1
+    if digest == ("too_large",):
+        tracker.refused.append(f"young file too large to fingerprint by content {key[0]}")
+    tracker.young[key] = digest
+
+
+def _record_path(tracker: _TruthTracker, path: Any, mode: Any = True, *, read: bool = False) -> None:
     key = (_abs(path), mode)
     if key not in tracker.stats:
         tracker.stats[key] = _path_identity(key[0], key[1])
+    if read or mode == "list":
+        _record_young(tracker, key)
 
 
 def _tracked_stat(path: Any, *, dir_fd: Any = None, follow_symlinks: bool = True) -> os.stat_result:
@@ -601,7 +706,7 @@ def _truth_audit_hook(event: str, args: tuple[Any, ...]) -> None:
                 return
             name = os.fsdecode(path)
             if "__pycache__" not in name:  # interpreter bytecode cache of a lazy import is not truth
-                _record_path(tracker, name)
+                _record_path(tracker, name, read=True)
         elif event in ("os.listdir", "os.scandir"):
             path = args[0] if args else None
             if isinstance(path, int):
@@ -614,23 +719,55 @@ def _truth_audit_hook(event: str, args: tuple[Any, ...]) -> None:
         tracker.refused.append(f"audit hook {event}: {type(exc).__name__}: {exc}")
 
 
+def _truth_clock_observer(kind: str, moment: datetime) -> None:
+    """AIPOS-F249 件①: clock reads inside a cached derivation (installed into tools.aipos_cli.clock by enable_truth_cache).
+    read = a judgment on it may flip any time: valid to the end of that minute (F245 granularity); until = a reported flip."""
+    tracker = _TRUTH_TRACKER.get()
+    if tracker is None:
+        return
+    if kind == "read":
+        cap = (int(moment.timestamp() // 60) + 1) * 60.0
+        if cap < tracker.valid_until:
+            tracker.valid_until = cap
+        if tracker.minute_cap is None:
+            frame = _sys._getframe(2)  # the caller of clock.utc_now (or of iso_z / iso_ms / file_slug one level up)
+            names = []
+            for _ in range(3):
+                if frame is None:
+                    break
+                names.append(f"{os.path.basename(frame.f_code.co_filename)}:{frame.f_lineno}:{frame.f_code.co_name}")
+                frame = frame.f_back
+            tracker.minute_cap = " <- ".join(names)
+    elif kind == "until":
+        stamp = moment.timestamp()
+        if stamp < tracker.valid_until:
+            tracker.valid_until = stamp
+
+
 def enable_truth_cache(enabled: bool = True) -> None:
-    """Board server switch (web.board.app.run_server). Installs the os.stat recorder and the audit hook once per process (audit
-    hooks cannot be removed; both only read a ContextVar outside a cached derivation); enabled=False = compute every call again
-    and drop the stored results and the counters."""
+    """Board server switch (web.board.app.run_server). Installs the os.stat recorder, the audit hook and the clock observer once per
+    process (audit hooks cannot be removed; all three only read a ContextVar outside a cached derivation); enabled=False = compute
+    every call again, stop the background refresher and drop the stored results, the served pages and the counters."""
     if enabled:
         _install_truth_hooks()
+    else:
+        stop_truth_refresher()
     with _TRUTH_LOCK:
         _TRUTH_STATE["enabled"] = bool(enabled)
         if not enabled:
             _TRUTH_ENTRIES.clear()
-            _TRUTH_STATS.update(hits=0, misses=0, stored=0, not_stored=0, last_not_stored=None, last_changed=None)
+            _TRUTH_PAGES.clear()
+            _TRUTH_REFRESH["last"] = {}
+            _reset_truth_stats()
 
 
 def truth_cache_stats() -> dict[str, Any]:
-    """Counters for the board perf log (hits / misses / stored / not stored and the last reason, the last truth seen changed, entries)."""
+    """Counters for the board perf log (hits / misses / stored / not stored and the last reason, the last truth seen changed, entries;
+    AIPOS-F249: waits on an in-flight derivation, background re-derivations and their seconds, results bounded to the minute by a plain
+    clock read and the last such read's call site, served pages kept fresh)."""
     with _TRUTH_LOCK:
-        return {**_TRUTH_STATS, "entries": len(_TRUTH_ENTRIES), "enabled": bool(_TRUTH_STATE["enabled"])}
+        return {**_TRUTH_STATS, "entries": len(_TRUTH_ENTRIES), "pages": len(_TRUTH_PAGES), "enabled": bool(_TRUTH_STATE["enabled"]),
+                "refresher": _TRUTH_REFRESH["thread"] is not None}
 
 
 @contextmanager
@@ -709,74 +846,307 @@ def truth_note_fingerprint(key: Any, value: Any, recompute: Callable[[], Any], n
         tracker.fingerprints.setdefault(key, (value, recompute, int(newest_ns)))
 
 
-def _truth_changed(entry: dict[str, Any]) -> str | None:
-    """The first recorded truth that is no longer what the derivation read (None = all unchanged)."""
-    for (path, mode), ident in entry["stats"].items():
-        if _path_identity(path, mode) != ident:
-            return path
+def _pass_memo() -> dict[Any, Any]:
+    memo = _TRUTH_PASS.get()
+    return memo if memo is not None else {}
+
+
+def _entry_stale(entry: dict[str, Any], memo: dict[Any, Any]) -> str | None:
+    """The first recorded truth that is no longer what the derivation read (None = all unchanged). Identities / contents are checked
+    once per pass (memo); a nested derivation is checked (re-derived when its own truth changed) and compared by value digest."""
+    if _time.time() >= entry["valid_until"]:
+        return "time judgment flipped" if entry["minute_cap"] is None else f"next minute ({entry['minute_cap']})"
+    for key, ident in entry["stats"].items():
+        now = memo.get(key, _MISSING)
+        if now is _MISSING:
+            now = memo[key] = _path_identity(key[0], key[1])
+        if now != ident:
+            return key[0]
+    for key, digest in entry["young"].items():
+        ckey = ("content", key)
+        now = memo.get(ckey, _MISSING)
+        if now is _MISSING:
+            now = memo[ckey] = _content_digest(key[0], key[1])
+        if now != digest:
+            return f"{key[0]} (content)"
     for key, (value, recompute, _newest) in entry["fingerprints"].items():
-        if recompute() != value:
+        fkey = ("fingerprint", key)
+        now = memo.get(fkey, _MISSING)
+        if now is _MISSING:
+            now = memo[fkey] = recompute()
+        if now != value:
             return str(key)
+    for key, digest in entry["children"].items():
+        if _child_digest(key, memo) != digest:
+            return f"nested {key[0]}"
     return None
+
+
+def _child_digest(key: tuple[Any, ...], memo: dict[Any, Any]) -> bytes | None:
+    """The current value digest of a nested derivation (checked once per pass; re-derived when stale, by the stored compute; gone from
+    the cache = None, i.e. changed)."""
+    mkey = ("nested", key)
+    if mkey in memo:
+        return memo[mkey]
+    with _TRUTH_LOCK:
+        entry = _TRUTH_ENTRIES.get(key)
+    if entry is None:
+        return None
+    try:
+        got, _fresh = _resolve(key, entry["compute"])
+    except Exception as exc:  # noqa: BLE001 - not swallowed: = changed, so the outer derivation runs again and meets this error in its own context
+        with _TRUTH_LOCK:
+            _TRUTH_STATS["last_changed"] = f"{key[0]}: re-derivation raised {type(exc).__name__}: {exc}"[:300]
+        memo[mkey] = None
+        return None
+    digest = got["digest"] if got["stored"] else None
+    memo[mkey] = digest
+    return digest
+
+
+def _frozen(value: Any) -> tuple[bytes | None, bytes]:
+    """(stored form, value digest a parent depends on; AIPOS-F249 件③): the pickled value (each caller gets its own copy by unpickling;
+    faster than a deep copy for large views) and its digest; a value that cannot be pickled = (None, fresh unique digest: never equal),
+    kept as a deep copy instead."""
+    try:
+        data = _pickle.dumps(value, protocol=5)
+    except (_pickle.PicklingError, TypeError, AttributeError, RecursionError):
+        return None, os.urandom(16)
+    return data, _hashlib.blake2b(data, digest_size=16).digest()
+
+
+def _thaw(entry: dict[str, Any]) -> Any:
+    """A private copy of a stored value."""
+    return _pickle.loads(entry["blob"]) if entry["blob"] is not None else copy.deepcopy(entry["value"])
 
 
 def _unsettled(tracker: _TruthTracker) -> str | None:
-    """A recorded truth younger than the F177 racy window (frontmatter.within_racy_window; None = settled)."""
+    """A recorded truth that cannot be trusted yet: an explicit fingerprint younger than the F177 racy window (re-checked by its own
+    stat-based recompute, a same-tick rewrite would not show), or young content that could not be fingerprinted (None = settled)."""
     from tools.aipos_cli.frontmatter import within_racy_window
 
-    for (path, _mode), ident in tracker.stats.items():
-        if ident and ident[0] == "listing" and within_racy_window(ident[3]):
-            return f"unsettled {path}"
-        if ident and ident[0] == "file" and within_racy_window(max(ident[4], ident[5])):
-            return f"unsettled {path}"
     for key, (_value, _recompute, newest) in tracker.fingerprints.items():
         if newest and within_racy_window(newest):
             return f"unsettled {key}"
+    for key, digest in tracker.young.items():
+        if isinstance(digest, tuple) and digest and digest[0] in ("too_large", "error"):
+            return f"unsettled {key[0]}"
     return None
 
 
-def truth_cached(key: tuple[Any, ...], compute: Callable[[], Any]) -> Any:
-    """AIPOS-F245 件①: compute() through the truth-fingerprinted result cache (see the section comment). Off = compute()."""
-    if not _TRUTH_STATE["enabled"]:
-        return compute()
-    parent = _TRUTH_TRACKER.get()
-    minute = int(_time.time() // 60)
-    with _TRUTH_LOCK:
-        entry = _TRUTH_ENTRIES.get(key)
-    changed = None if entry is None else ("next minute" if entry["minute"] != minute else _truth_changed(entry))
-    if entry is not None and changed is None:
-        with _TRUTH_LOCK:
-            _TRUTH_STATS["hits"] += 1
-            if key in _TRUTH_ENTRIES:
-                _TRUTH_ENTRIES.move_to_end(key)
-        if parent is not None:
-            parent.merge(entry["stats"], entry["fingerprints"], [])
-        return copy.deepcopy(entry["value"])
+def _store_limit() -> None:
+    while len(_TRUTH_ENTRIES) > _TRUTH_MAX_ENTRIES:
+        _TRUTH_ENTRIES.popitem(last=False)
+
+
+def _derive(key: tuple[Any, ...], compute: Callable[[], Any], changed: str | None) -> tuple[dict[str, Any], Any]:
+    """Run compute() under a fresh recorder; store the result when everything it read could be fingerprinted. -> (entry, value)."""
     tracker = _TruthTracker()
     token = _TRUTH_TRACKER.set(tracker)
     try:
         value = compute()
     finally:
         _TRUTH_TRACKER.reset(token)
-        if parent is not None:
-            parent.merge(tracker.stats, tracker.fingerprints, tracker.refused)
     reason = (tracker.refused[0] if tracker.refused else None) or _unsettled(tracker)
-    stored = {"minute": minute, "stats": tracker.stats, "fingerprints": tracker.fingerprints, "value": copy.deepcopy(value)} \
-        if reason is None else None
+    blob, digest = _frozen(value)
+    entry = {"stats": tracker.stats, "young": tracker.young, "fingerprints": tracker.fingerprints, "children": tracker.children,
+             "valid_until": tracker.valid_until, "minute_cap": tracker.minute_cap, "compute": compute, "digest": digest, "blob": blob,
+             "stored": reason is None, "refused": list(tracker.refused) or ([reason] if reason else [])}
+    if reason is None and blob is None:
+        entry["value"] = copy.deepcopy(value)
     with _TRUTH_LOCK:
         _TRUTH_STATS["misses"] += 1
         if changed is not None:
             _TRUTH_STATS["last_changed"] = f"{key[0]}: {changed}"[:300]
-        if stored is None:
+        if tracker.minute_cap is not None:
+            _TRUTH_STATS["minute_capped"] += 1
+            _TRUTH_STATS["last_minute_cap"] = f"{key[0]}: {tracker.minute_cap}"[:300]
+        if reason is not None:
             _TRUTH_STATS["not_stored"] += 1
             _TRUTH_STATS["last_not_stored"] = f"{key[0]}: {reason}"[:300]
         elif _TRUTH_STATE["enabled"]:
             _TRUTH_STATS["stored"] += 1
-            _TRUTH_ENTRIES[key] = stored
+            _TRUTH_ENTRIES[key] = entry
             _TRUTH_ENTRIES.move_to_end(key)
-            while len(_TRUTH_ENTRIES) > _TRUTH_MAX_ENTRIES:
-                _TRUTH_ENTRIES.popitem(last=False)
-    return value
+            _store_limit()
+    return entry, value
+
+
+def _wait_seconds() -> float:
+    decl = _TRUTH_REFRESH["decl"]
+    return float(decl["max_wait_seconds"]) if decl else 30.0
+
+
+def _resolve(key: tuple[Any, ...], compute: Callable[[], Any]) -> tuple[dict[str, Any], Any]:
+    """The current result for key: the stored one while nothing it depends on changed, else derived again (one derivation per key at a
+    time: a stale result being re-derived by another thread = wait for it, bounded, then check again). -> (entry, fresh value | _MISSING)."""
+    memo = _pass_memo()
+    waited = False
+    while True:
+        with _TRUTH_LOCK:
+            entry = _TRUTH_ENTRIES.get(key)
+        changed = None
+        if entry is not None:
+            changed = _entry_stale(entry, memo)
+            if changed is None:
+                with _TRUTH_LOCK:
+                    _TRUTH_STATS["hits"] += 1
+                    if key in _TRUTH_ENTRIES:
+                        _TRUTH_ENTRIES.move_to_end(key)
+                return entry, _MISSING
+        with _TRUTH_LOCK:
+            event = _TRUTH_INFLIGHT.get(key)
+            owner = event is None
+            if owner:
+                event = _TRUTH_INFLIGHT[key] = _threading.Event()
+        if not owner and not waited:
+            event.wait(_wait_seconds())
+            waited = True
+            with _TRUTH_LOCK:
+                _TRUTH_STATS["waited"] += 1
+            memo.clear()  # identities seen before the wait are older than what the other derivation recorded
+            continue
+        try:
+            return _derive(key, compute, changed)
+        finally:
+            if owner:
+                with _TRUTH_LOCK:
+                    _TRUTH_INFLIGHT.pop(key, None)
+                event.set()
+
+
+def truth_cached(key: tuple[Any, ...], compute: Callable[[], Any], *, page: bool = False) -> Any:
+    """AIPOS-F245 件①: compute() through the truth-fingerprinted result cache (see the section comment). Off = compute().
+    AIPOS-F249: nested inside another cached derivation = that one depends on this result's value; page=True (a board page's data)
+    called from a request (no enclosing derivation, not the refresher) = a served page the background refresher keeps fresh."""
+    if not _TRUTH_STATE["enabled"]:
+        return compute()
+    parent = _TRUTH_TRACKER.get()
+    if parent is not None and parent.flat:  # inside truth_record: its record must hold every path read (it is kept outside this process)
+        return compute()
+    pass_token = _TRUTH_PASS.set({}) if _TRUTH_PASS.get() is None else None
+    token = _TRUTH_TRACKER.set(None)
+    try:
+        entry, fresh = _resolve(key, compute)
+    finally:
+        _TRUTH_TRACKER.reset(token)
+        if pass_token is not None:
+            _TRUTH_PASS.reset(pass_token)
+    if parent is not None:
+        if entry["stored"]:
+            parent.children.setdefault(key, entry["digest"])
+        else:
+            parent.refused.extend(entry["refused"] or [f"nested {key[0]} not stored"])
+    elif page and _threading.current_thread() is not _TRUTH_REFRESH["thread"]:
+        _note_page(key, compute)
+    return fresh if fresh is not _MISSING else _thaw(entry)
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F249 件②: background refresher (board server only). The most recently served pages (top-level cached derivations, at most
+# declared max_pages) are checked every check_interval_seconds; a page whose truth changed (or whose time judgment flipped) is derived
+# again in the background, at most once per debounce_seconds (changes inside that window are merged into the next derivation). A
+# request that meets a stale page being re-derived waits for it (at most max_wait_seconds, then derives it itself); a request never
+# gets a result whose truth is known to have changed. Declared in verbs.schema board_readonly_pages.truth_refresh; missing = no
+# refresher (requests derive on demand, as F245).
+# ---------------------------------------------------------------------------
+
+_REFRESH_KEYS = ("check_interval_seconds", "debounce_seconds", "max_wait_seconds", "max_pages")
+
+
+def truth_refresh_declaration(decl: dict[str, Any] | None) -> dict[str, Any] | None:
+    """verbs.schema board_readonly_pages.truth_refresh (fail-closed when present: every key a positive number, max_pages an integer);
+    None / missing = no background refresher."""
+    from tools.schema_loader import SchemaLoadError
+
+    spec = (decl or {}).get("truth_refresh")
+    if spec is None:
+        return None
+    if not isinstance(spec, dict) or any(k not in spec for k in _REFRESH_KEYS):
+        raise SchemaLoadError(f"verbs.schema.json board_readonly_pages.truth_refresh 未声明齐 {list(_REFRESH_KEYS)}")
+    for k in _REFRESH_KEYS:
+        if not isinstance(spec[k], (int, float)) or isinstance(spec[k], bool) or spec[k] <= 0:
+            raise SchemaLoadError(f"board_readonly_pages.truth_refresh.{k} 须为正数")
+    if not isinstance(spec["max_pages"], int):
+        raise SchemaLoadError("board_readonly_pages.truth_refresh.max_pages 须为正整数")
+    return spec
+
+
+def _note_page(key: tuple[Any, ...], compute: Callable[[], Any]) -> None:
+    decl = _TRUTH_REFRESH["decl"]
+    limit = int(decl["max_pages"]) if decl else 8
+    with _TRUTH_LOCK:
+        _TRUTH_PAGES[key] = compute
+        _TRUTH_PAGES.move_to_end(key)
+        while len(_TRUTH_PAGES) > limit:
+            _TRUTH_PAGES.popitem(last=False)
+
+
+def truth_refresh_pass() -> int:
+    """One background pass: every served page still current is left alone; a stale one is derived again (unless it was derived in the
+    background less than debounce_seconds ago). Returns how many pages were derived. One request-level read scope per pass (the pages
+    share the governance roots' card indexes, as one request would)."""
+    decl = _TRUTH_REFRESH["decl"] or {"debounce_seconds": 5}
+    with _TRUTH_LOCK:
+        pages = list(_TRUTH_PAGES.items())
+    derived = 0
+    token = _TRUTH_PASS.set({})
+    try:
+        with read_request_scope():
+            for key, compute in reversed(pages):  # most recently served first
+                with _TRUTH_LOCK:
+                    entry = _TRUTH_ENTRIES.get(key)
+                if entry is not None and _entry_stale(entry, _pass_memo()) is None:
+                    continue
+                last = _TRUTH_REFRESH["last"].get(key)
+                if last is not None and _time.monotonic() - last < float(decl["debounce_seconds"]):
+                    continue
+                started = _time.perf_counter()
+                _resolve(key, compute)
+                _TRUTH_REFRESH["last"][key] = _time.monotonic()
+                derived += 1
+                with _TRUTH_LOCK:
+                    _TRUTH_STATS["refreshed"] += 1
+                    _TRUTH_STATS["refresh_seconds"] = round(_TRUTH_STATS["refresh_seconds"] + _time.perf_counter() - started, 3)
+    finally:
+        _TRUTH_PASS.reset(token)
+    return derived
+
+
+def _refresh_loop(stop: _threading.Event, interval: float) -> None:
+    while not stop.wait(interval):
+        try:
+            truth_refresh_pass()
+        except Exception as exc:  # noqa: BLE001 - the refresher thread must survive; requests still derive on demand (named on stderr)
+            print(f"Warning: board truth refresher pass failed (requests derive on demand): {type(exc).__name__}: {exc}",
+                  file=_sys.stderr, flush=True)
+
+
+def start_truth_refresher(declaration: dict[str, Any] | None) -> bool:
+    """Start the background refresher (board server, after enable_truth_cache). declaration = truth_refresh_declaration(...); None =
+    not started (False). Idempotent."""
+    if declaration is None or not _TRUTH_STATE["enabled"]:
+        return False
+    with _TRUTH_LOCK:
+        if _TRUTH_REFRESH["thread"] is not None:
+            return True
+        _TRUTH_REFRESH["decl"] = dict(declaration)
+        stop = _threading.Event()
+        thread = _threading.Thread(target=_refresh_loop, args=(stop, float(declaration["check_interval_seconds"])),
+                                   name="board-truth-refresh", daemon=True)
+        _TRUTH_REFRESH.update(thread=thread, stop=stop)
+    thread.start()
+    return True
+
+
+def stop_truth_refresher() -> None:
+    with _TRUTH_LOCK:
+        thread, stop = _TRUTH_REFRESH["thread"], _TRUTH_REFRESH["stop"]
+        _TRUTH_REFRESH.update(thread=None, stop=None, decl=None)
+    if stop is not None:
+        stop.set()
+    if thread is not None and thread is not _threading.current_thread():
+        thread.join(timeout=60)
 
 
 # ---------------------------------------------------------------------------
@@ -788,10 +1158,13 @@ def truth_cached(key: tuple[Any, ...], compute: Callable[[], Any]) -> Any:
 # ---------------------------------------------------------------------------
 
 def _install_truth_hooks() -> None:
+    from tools.aipos_cli import clock
+
     with _TRUTH_LOCK:
         if not _TRUTH_STATE["hooks"]:
             os.stat = _tracked_stat
             _sys.addaudithook(_truth_audit_hook)
+            clock._observer = _truth_clock_observer
             _TRUTH_STATE["hooks"] = True
 
 
@@ -803,19 +1176,46 @@ def truth_record(compute: Callable[[], Any], *, keep: Callable[[str, Any], bool]
     Not nested into an enclosing truth_cached derivation's record (the caller keeps its own)."""
     _install_truth_hooks()
     tracker = _TruthTracker()
+    tracker.flat = True
     token = _TRUTH_TRACKER.set(tracker)
     try:
         value = compute()
     finally:
         _TRUTH_TRACKER.reset(token)
-    kept = {key: ident for key, ident in tracker.stats.items() if keep is None or keep(key[0], key[1])}
     refused = tracker.refused[0] if tracker.refused else None
+    flat = _flatten_nested(tracker.children)  # AIPOS-F249: a memo of this request may carry nested cached results by digest
+    if flat is None:
+        refused = refused or "a nested cached result is no longer in this process (its truth cannot be listed)"
+    else:
+        for key, ident in flat.items():
+            tracker.stats.setdefault(key, ident)
+    kept = {key: ident for key, ident in tracker.stats.items() if keep is None or keep(key[0], key[1])}
     if refused is None and tracker.fingerprints:
         refused = f"explicit fingerprint {next(iter(tracker.fingerprints))!r} is only re-checkable in this process"
-    view = _TruthTracker()
-    view.stats = kept
+    young = next((f"unsettled {path}" for (path, _mode), ident in kept.items() if _young_identity(ident)), None)
     return value, {"stats": [[path, mode, list(ident) if ident is not None else None] for (path, mode), ident in kept.items()],
-                   "refused": refused, "unsettled": _unsettled(view)}
+                   "refused": refused, "unsettled": young}
+
+
+def _flatten_nested(children: dict[tuple[Any, ...], bytes], seen: set[tuple[Any, ...]] | None = None) -> dict[tuple[str, Any], Any] | None:
+    """Every path identity the nested cached results (and theirs) recorded; None = one is gone from the cache or has explicit fingerprints
+    / young content (not listable as plain identities)."""
+    seen = set() if seen is None else seen
+    out: dict[tuple[str, Any], Any] = {}
+    for key in children:
+        if key in seen:
+            continue
+        seen.add(key)
+        with _TRUTH_LOCK:
+            entry = _TRUTH_ENTRIES.get(key)
+        if entry is None or entry["fingerprints"] or entry["young"] or entry["valid_until"] != float("inf"):
+            return None
+        out.update(entry["stats"])
+        inner = _flatten_nested(entry["children"], seen)
+        if inner is None:
+            return None
+        out.update(inner)
+    return out
 
 
 def truth_identity_changed(stats: list[Any], seen: dict[tuple[str, Any], Any] | None = None) -> str | None:

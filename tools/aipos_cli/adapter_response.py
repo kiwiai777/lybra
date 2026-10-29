@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tools.aipos_cli.clock import iso_z
+from tools.aipos_cli.clock import iso_z, judged_now
 from typing import Any
 
 from tools.schema_constants import Verdict
@@ -130,7 +130,7 @@ def make_response(
         "dry_run": dry_run,
         "actor": actor,
         "actor_match": actor_match,
-        "timestamp": iso_z(),
+        "timestamp": iso_z(judged_now()),  # AIPOS-F249: response time stamp = time field (no judgment on it)
         "data": data,
         "summary": summary,
         "planned_writes": list(planned_writes or []),

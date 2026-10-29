@@ -108,7 +108,7 @@ def get_overview(repo_root: Path | None = None, *, home_root: str | Path | None 
         with read_request_scope():
             return _get_overview(_board_workspaces(repo_root, home_root))
 
-    return truth_cached(("web.board.app.get_overview", str(repo_root), str(home_root)), compute)
+    return truth_cached(("web.board.app.get_overview", str(repo_root), str(home_root)), compute, page=True)
 
 
 def _get_overview(workspaces_config: list[dict[str, Any]]) -> dict[str, Any]:
@@ -3522,12 +3522,17 @@ def prewarm_read_caches(repo_root: Path | None = None, home_root: str | Path | N
     Returns {ok, seconds, error}."""
     import time as _time
 
+    from tools.aipos_cli.board_home import collect_home
     from tools.aipos_cli.board_pages import collect_overview
 
     started = _time.perf_counter()
     try:
         collect_overview(home_root)
         get_overview(repo_root=repo_root, home_root=home_root)
+        # AIPOS-F249: the home page and its full "needs you" view (F246 / F248, the pages the Owner opens first) are derived too, so the
+        # background refresher keeps them fresh from the start
+        collect_home(home_root)
+        collect_home(home_root, all_asks=True)
     except Exception as exc:  # noqa: BLE001 - reported below, the board keeps serving (pages derive again on request)
         error = f"{type(exc).__name__}: {exc}"
         print(f"Warning: board read-cache prewarm failed (pages derive on request): {error}", file=sys.stderr, flush=True)
@@ -3537,11 +3542,28 @@ def prewarm_read_caches(repo_root: Path | None = None, home_root: str | Path | N
     return {"ok": True, "seconds": seconds, "error": None}
 
 
+def start_board_refresher() -> bool:
+    """AIPOS-F249 item 2: start the truth cache background refresher with the declared timings (verbs.schema
+    board_readonly_pages.truth_refresh; missing = not started, requests derive on demand as before). An unreadable declaration is
+    reported on stderr and the board serves without the refresher (the pages name their own declaration errors). Returns started."""
+    from tools.aipos_cli.board_pages import pages_declaration
+    from tools.aipos_cli.task_loader import start_truth_refresher, truth_refresh_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    try:
+        spec = truth_refresh_declaration(pages_declaration())
+    except SchemaLoadError as exc:
+        print(f"Warning: board truth refresher not started (declaration unreadable): {exc}", file=sys.stderr, flush=True)
+        return False
+    return start_truth_refresher(spec)
+
+
 def run_server(host: str = DEFAULT_BOARD_HOST, port: int = DEFAULT_BOARD_PORT, repo_root: Path | None = None,
                perf_log_path: Path | None = None, *, prewarm: bool = True) -> None:
     from tools.aipos_cli.task_loader import enable_truth_cache
 
     enable_truth_cache()  # AIPOS-F245 item 1: this process serves the board pages = their results cached on the truth fingerprint
+    start_board_refresher()  # AIPOS-F249 item 2: pages served are re-derived in the background after their truth changed
     handler = make_handler(repo_root=repo_root, perf_log_path=perf_log_path)
     with ThreadingHTTPServer((host, port), handler) as httpd:
         print(f"AIPOS board local UI listening on http://{host}:{port}")

@@ -10,9 +10,11 @@ be cacheable (production keeps 2 s: truth younger than that is never stored); on
 Items covered:
   1. result cache (task_loader.truth_cached): a hit returns the same data as computing again; each truth change (new card, queue state
      move, ruling appended through `owner decide`, envelope changed, record edited in place, roadmap changed) is seen by the very next
-     request; the minute rolls = recomputed; young truth / an undeclared subprocess = not stored; a declared external read is stored;
+     request; the minute rolls = served (AIPOS-F249: time judgments report their flips, tests/test_aipos_f249_*); young truth = stored
+     with a content fingerprint (AIPOS-F249); an undeclared subprocess = not stored; a declared external read is stored;
      /proc liveness is fingerprinted by content (a process that died is seen next request although its /proc file kept its identity);
-     the inbox cached inside the overview carries its truth into the overview; off unless the board server switches it on; the board
+     the inbox cached inside the overview is a nested dependency of the overview (AIPOS-F249: by value digest); off unless the board
+     server switches it on; the board
      HTTP pages reflect a change on the next GET;
   2. de-duplication: the inbox declaration checked once per page request (was 7000+), schema files parsed at most once per request
      (was 500+), project paths / repos / rulings computed once per request inside a request scope and every call outside one;
@@ -209,8 +211,9 @@ def test_item1_every_truth_change_is_seen_by_the_next_request(cached, change):
 
 
 def test_item1_inbox_inside_overview_carries_its_truth(cached):
-    """The overview contains the inbox: the overview's stored fingerprint covers everything the inbox read, also when the inbox was
-    served from its own stored result inside the overview; a ruling = both derived again on the next request."""
+    """The overview contains the inbox: the overview's stored entry depends on the inbox (AIPOS-F249 件③: by the inbox's key and value
+    digest, also when the inbox was served from its own stored result inside the overview; the inbox's own truth is not copied into the
+    overview); a ruling = both derived again on the next request."""
     from tools.aipos_cli.board_pages import collect_overview
     from tools.aipos_cli.owner_inbox import collect_inbox
 
@@ -218,17 +221,18 @@ def test_item1_inbox_inside_overview_carries_its_truth(cached):
     collect_inbox(home)  # the inbox stored on its own first, then served inside the overview
     collect_overview(home)
     entries = dict(task_loader._TRUTH_ENTRIES)
-    inbox = next(e for k, e in entries.items() if k[0] == "owner_inbox.collect_inbox")
+    inbox_key, inbox = next((k, e) for k, e in entries.items() if k[0] == "owner_inbox.collect_inbox")
     assert any(k[0] == "board_pages.collect_overview" for k in entries), _stats()["last_not_stored"]
     overview = next(e for k, e in entries.items() if k[0] == "board_pages.collect_overview")
-    assert set(inbox["stats"]) <= set(overview["stats"]) and set(inbox["fingerprints"]) <= set(overview["fingerprints"])
+    assert overview["children"].get(inbox_key) == inbox["digest"]
     _decide_roadmap_notice(cached)
     after_inbox, after_overview = collect_inbox(home), collect_overview(home)
     with _uncached():
         assert after_inbox == collect_inbox(home) and after_overview == collect_overview(home)
 
 
-def test_item1_next_minute_is_recomputed(cached, monkeypatch):
+def test_item1_next_minute_is_served(cached, monkeypatch):
+    """AIPOS-F249 件①: the minute left the fingerprint; a time judgment reports when it flips (tests/test_aipos_f249_* checks the flips)."""
     from tools.aipos_cli import board_pages
 
     home = cached["home"]
@@ -239,19 +243,23 @@ def test_item1_next_minute_is_recomputed(cached, monkeypatch):
     real = task_loader._time.time
     monkeypatch.setattr(task_loader._time, "time", lambda: real() + 61)
     board_pages.collect_onboarding(home)
-    assert derived[0] == 2  # next minute = derived again (overdue / expiry / stale days never from an old minute)
+    assert derived[0] == 1  # next minute, no judgment on this page flipped = still served
 
 
-def test_item1_young_truth_is_never_stored(rig):
-    """Production racy window (2 s): the fixture was written a moment ago = derived every time, nothing stored."""
+def test_item1_young_truth_is_stored_by_content(rig):
+    """Production racy window (2 s): the fixture was written a moment ago. AIPOS-F249: young truth the derivation opened / listed is
+    fingerprinted by content (a same-tick rewrite keeping the identity is still seen, tests/test_aipos_f249_*), so derivations over it are
+    stored and served; a young explicit fingerprint (records group: re-checked by its own stat-based recompute) still = not stored."""
     from tools.aipos_cli.board_pages import collect_overview
 
     task_loader.enable_truth_cache()
-    collect_overview(rig["home"])
-    collect_overview(rig["home"])
+    first = collect_overview(rig["home"])
+    assert collect_overview(rig["home"]) == first
     stats = _stats()
     _show(f"young fixture: {stats}")
-    assert stats["hits"] == 0 and stats["entries"] == 0 and "unsettled" in str(stats["last_not_stored"])
+    young = [k for k, e in task_loader._TRUTH_ENTRIES.items() if e["young"]]
+    assert stats["hits"] >= 1 and young, stats
+    assert stats["not_stored"] == 0 or "unsettled ('records.group'" in str(stats["last_not_stored"]), stats
 
 
 def test_item1_undeclared_subprocess_not_stored_declared_external_read_stored(tmp_path, monkeypatch):
@@ -363,8 +371,9 @@ def test_item1_board_http_reflects_a_change_on_the_next_get(cached):
     try:
         status, first, _ = _request(b, "/owner/overview")
         assert status == 200
-        hits = _stats()["hits"]
-        assert _request(b, "/owner/overview")[1] == first and _stats()["hits"] == hits + 1
+        hits, misses = _stats()["hits"], _stats()["misses"]
+        # served: nothing derived again (AIPOS-F249: hits also count the nested results checked on the way)
+        assert _request(b, "/owner/overview")[1] == first and _stats()["hits"] > hits and _stats()["misses"] == misses
         _card(cached["g1"], P1, "pending", "F245-HTTP", created_days_ago=0)
         status, after, _ = _request(b, "/owner/overview")
         assert status == 200 and after != first
