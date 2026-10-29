@@ -363,7 +363,7 @@ def test_declarations_and_single_implementation():
     # (roadmap_drift.roadmap_progress = roadmap_status minus that one field)
     assert "roadmap_progress(root, project=project)" in Path(owner_inbox.__file__).read_text(encoding="utf-8")
     progress = src.split("def roadmap_progress(", 1)[1].split("\ndef ", 1)[0]
-    assert "roadmap_status(root, lane=lane, project=project)" in progress and 'ms.pop("last_activity", None)' in progress
+    assert "roadmap_status(root, project=project)" in progress and 'ms.pop("last_activity", None)' in progress
 
 
 def test_board_adapter_same_data(rig):

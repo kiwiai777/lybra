@@ -584,7 +584,7 @@ def roadmap_progress(governance_root: str | Path, *, lane: str | None = None, pr
     root = Path(governance_root)
 
     def compute() -> dict[str, Any]:
-        view = roadmap_status(root, lane=lane, project=project)
+        view = roadmap_status(root, project=project) if lane is None else roadmap_status(root, lane=lane, project=project)
         for ms in view["milestones"]:
             ms.pop("last_activity", None)
         return view

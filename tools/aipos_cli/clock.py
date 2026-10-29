@@ -12,6 +12,7 @@ tests/test_aipos_f109_records_clock_runall.py 以 git grep 守)。
 """
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -41,20 +42,29 @@ SLUG_FORMATS: dict[str, str] = {
 _observer: Callable[[str, datetime], None] | None = None
 
 
+#: judged_now 正在读时刻(本线程): utc_now 不另报「未声明的读取」
+_judging = threading.local()
+
+
 def utc_now() -> datetime:
     """当前时刻(UTC, 带时区)。"""
     value = datetime.now(timezone.utc)
     observer = _observer
-    if observer is not None:
+    if observer is not None and not getattr(_judging, "depth", 0):
         observer("read", value)
     return value
 
 
-def judged_now() -> datetime:
+def judged_now(read: Callable[[], datetime] | None = None) -> datetime:
     """AIPOS-F249 件①: 当前时刻(UTC), 供「对它做的每个时间判定都经 holds_until 报出翻转时刻」的读者使用(到期 / 逾期 / 停滞 / 陈旧 /
     窗口 / 整天数): 看板真相缓存据此让结果一直有效到最早的翻转时刻(不按分钟失效)。由它派生而只作展示的时刻值(建议命令里的
-    「现在 + 有效期」、响应时间戳)= 时间字段(与 F245 同口径)。缓存之外(CLI / 门)与 utc_now 完全相同。"""
-    value = datetime.now(timezone.utc)
+    「现在 + 有效期」、响应时间戳)= 时间字段(与 F245 同口径)。read = 调用方模块里的 utc_now(缺省本模块的; 照旧经它取时刻, 换掉它的
+    夹具 / 调用方照常生效)。缓存之外(CLI / 门)与 utc_now 完全相同。"""
+    _judging.depth = getattr(_judging, "depth", 0) + 1
+    try:
+        value = (read or utc_now)()
+    finally:
+        _judging.depth -= 1
     observer = _observer
     if observer is not None:
         observer("judged", value)

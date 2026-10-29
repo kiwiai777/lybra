@@ -835,7 +835,7 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
     loop_probe_note / launch.probe_note = LEGACY_FINGERPRINT_NOTE。"""
     # AIPOS-F249: the one time judgment here (stalled: idle seconds > threshold) reports its flip; elapsed / running / idle seconds = time
     # fields (shown as derived)
-    now = now or judged_now()
+    now = now or judged_now(utc_now)
     host = str(meta.get("host") or "")
     local_host = local_host or socket.gethostname()
     stall_after = int(decl["stall_after_seconds"])

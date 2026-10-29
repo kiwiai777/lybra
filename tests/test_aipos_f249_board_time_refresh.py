@@ -111,6 +111,16 @@ def _masked(pages: dict[str, str]) -> dict[str, str]:
     return {k: _AGE.sub('"age_hours": <age>', v) for k, v in pages.items()}
 
 
+def _timeless(data: dict) -> dict:
+    """collect_home data taken on the real clock without its time fields (data time now, each headline's age_hours)."""
+    out = json.loads(json.dumps(data, default=str))
+    out.pop("now", None)
+    for card in out.get("cards") or []:
+        if isinstance(card.get("headline"), dict):
+            card["headline"].pop("age_hours", None)
+    return out
+
+
 def _derived() -> int:
     return task_loader.truth_cache_stats()["misses"]
 
@@ -278,17 +288,17 @@ def test_item2_refresher_pass_rederives_a_changed_page_debounce_keeps_freshness(
     _card(rig["gc"], C, "claimed", "X-9", title="X-9 New work", created_by=ADV_X)
     assert task_loader.truth_refresh_pass() >= 1  # the change is derived in the background
     misses = _derived()
-    after = collect_home(home)
+    after = _timeless(collect_home(home))
     assert _derived() == misses, "the request after the background pass must be served"
     with _uncached():
-        assert after == collect_home(home)
-    assert after != first
+        assert after == _timeless(collect_home(home))
+    assert after != _timeless(first)
     # inside the debounce window the background does not derive again, a request still sees the change
     _card(rig["gc"], C, "claimed", "X-10", title="X-10 More work", created_by=ADV_X)
     assert task_loader.truth_refresh_pass() == 0
-    latest = collect_home(home)
+    latest = _timeless(collect_home(home))
     with _uncached():
-        assert latest == collect_home(home)
+        assert latest == _timeless(collect_home(home))
     assert latest != after
     _show(f"[item2 refresher] {task_loader.truth_cache_stats()}")
 

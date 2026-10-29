@@ -149,7 +149,7 @@ def _load_custom_roles(home_root: Path) -> dict[str, dict[str, str]]:
         return {}
 
     builtins = _builtin_role_names()
-    now = judged_now()  # AIPOS-F249: the expiry judgment reports its flip (_registry_entry_expired)
+    now = judged_now(utc_now)  # AIPOS-F249: the expiry judgment reports its flip (_registry_entry_expired)
     result: dict[str, dict[str, str]] = {}
     for entry in registry.values():
         if not isinstance(entry, dict):
