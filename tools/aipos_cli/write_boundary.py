@@ -143,6 +143,7 @@ def _surface_roots(governance_root: Path, decl: dict[str, Any], *, harness_root:
             "host_scoped": root_kind in ("validation_roots", "release_targets"),
             "row_path": str(spec.get("row_path") or ""),  # AIPOS-F251: 按主机声明面的可读面行(缺省 = 验证根模板)
             "row_scope": str(spec.get("row_scope") or ""),
+            "render_levels": [str(x) for x in spec.get("render_levels") or []],  # AIPOS-F251: 缺省 = 全级别都进章程 / 开工稿表(行为不变)
             "description": str(spec.get("description") or ""),
         }
     return out
@@ -181,7 +182,8 @@ def build_write_boundary(
                 # AIPOS-F190: 验证根按主机声明, 可读面给模板(实际声明 = lybra project validation-root list; 本实例条目随章程同源渲染)
                 rows.append({"role": name, "role_class": cls, "surface": surface, "level": str(level),
                              "path": spec["row_path"] or "<声明 base>/<task_id>/<run_id>(按主机声明: lybra project validation-root list)",
-                             "scope": spec["row_scope"] or "本卡本活动 run 目录(按主机)", "description": spec["description"]})
+                             "scope": spec["row_scope"] or "本卡本活动 run 目录(按主机)", "description": spec["description"],
+                             "rendered": not spec["render_levels"] or str(level) in spec["render_levels"]})
                 continue
             for root in spec["roots"] or [None]:
                 rows.append({
@@ -405,7 +407,7 @@ def check_access(
 def role_rows(boundary: dict[str, Any], role: str, *, task_id: str | None = None) -> list[dict[str, Any]]:
     """AIPOS-F212 件④: 某角色的写权限边界行(章程表 render_write_boundary_markdown 与 lybra kickoff 边界行同读, 选行只此一处);
     task_id 给 = 路径占位 <task_id> 落为本卡(开工稿按卡), 缺 = 原样(章程不按卡)。"""
-    rows = [dict(r) for r in boundary["rows"] if r["role"] == role]
+    rows = [dict(r) for r in boundary["rows"] if r["role"] == role and r.get("rendered", True)]  # AIPOS-F251: 面声明 render_levels 外的行不进表
     if task_id:
         for row in rows:
             row["path"] = str(row["path"]).replace("<task_id>", task_id)

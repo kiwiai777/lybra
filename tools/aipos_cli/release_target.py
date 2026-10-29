@@ -26,7 +26,6 @@ import json
 import os
 import posixpath
 import re
-import shlex
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -495,13 +494,15 @@ def run_helper(governance_root: Path, entry: dict[str, Any], op: str, request: d
     way = transport(governance_root, entry)
     argv = ["python3", "-I", "-c", bootstrap_code(sha)]
     shown = f"python3 -I -c <引导: 钉 helper sha256 {sha}>"
-    if not way["local"]:
-        argv = ["ssh", way["alias"], shlex.join(argv)]
-        shown = f"ssh {way['alias']} '{shown}'"
     stdin = f"{len(src)}\n".encode("ascii") + src + json.dumps({"schema": helper.SCHEMA, "op": op, **request}, ensure_ascii=False).encode("utf-8")
     try:
+        if not way["local"]:
+            from tools.aipos_cli.enroll_deliver import ssh_argv  # 本机 ssh 调用唯一拼接口(`ssh -- <别名> <逐参转义命令>`, 拒 '-' 起首别名)
+
+            argv = ssh_argv(way["alias"], argv)
+            shown = f"ssh -- {way['alias']} '{shown}'"
         proc = subprocess.run(argv, input=stdin, capture_output=True, timeout=int(declaration()["helper_timeout_seconds"]))
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         return {"rc": None, "command": shown, "helper_sha256": sha,
                 "result": {"ok": False, "code": "HOST_NO_RESULT", "reason": f"{type(exc).__name__}: {exc}"}}
     lines = [ln for ln in proc.stdout.decode("utf-8", "replace").splitlines() if ln.strip()]

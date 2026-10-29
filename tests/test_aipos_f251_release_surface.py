@@ -107,8 +107,8 @@ def _fake_ssh(tmp: Path, mp: pytest.MonkeyPatch) -> Path:
     bindir.mkdir()
     log = tmp / "fake-ssh.log"
     script = bindir / "ssh"
-    script.write_text('#!/bin/sh\nalias="$1"; shift\nprintf \'%s\\t%.60s\\n\' "$alias" "$*" >> "$FAKE_SSH_LOG"\nexec sh -c "$*"\n',
-                      encoding="utf-8")
+    script.write_text('#!/bin/sh\n[ "$1" = "--" ] && shift\nalias="$1"; shift\nprintf \'%s\\t%.60s\\n\' "$alias" "$*" >> "$FAKE_SSH_LOG"\n'
+                      'exec sh -c "$*"\n', encoding="utf-8")
     script.chmod(0o755)
     mp.setenv("FAKE_SSH_LOG", str(log))
     mp.setenv("PATH", f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")

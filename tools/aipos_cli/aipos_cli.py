@@ -2100,9 +2100,13 @@ def _release_target_cli(args: argparse.Namespace, home: Path | None) -> int:
     details = [f"发布目标 {outcome['target_id']}: 主机 {entry['host']} 源仓 {entry['repo']} 发布根 {entry['release_root']} "
                f"owner_ref={entry['owner_ref']}" + (f" 撤销 {entry['revoked_at']}({entry['revoke_reason']})" if entry.get("revoked_at") else ""),
                f"白名单 {entry['allowlist']}; 入口顺序 {entry['entry_order']}", *outcome["notes"]]
-    return _project_json_two_phase_emit(f"release-target {action}", target, payload, actor=args.actor, json_out=bool(getattr(args, "json", False)),
-                                        extra={"action": action, "target_id": outcome["target_id"], "release_target": entry,
-                                               "notes": outcome["notes"]}, details=details)
+    extra = {"action": action, "target_id": outcome["target_id"], "release_target": entry, "notes": outcome["notes"]}
+    json_out = bool(getattr(args, "json", False))
+    if action == "declare":
+        return _project_json_two_phase_emit("release-target declare", target, payload, actor=args.actor, json_out=json_out, extra=extra,
+                                            details=details)
+    return _project_json_two_phase_emit("release-target revoke", target, payload, actor=args.actor, json_out=json_out, extra=extra,
+                                        details=details)
 
 
 def _release_cli(args: argparse.Namespace) -> int:

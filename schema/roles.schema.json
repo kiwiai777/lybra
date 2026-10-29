@@ -261,8 +261,10 @@
       "release_target": {
         "root": "release_targets",
         "host_scoped": true,
-        "row_path": "<声明发布根>/{releases/<完整 commit>/…, current} + 声明入口链接(按主机声明: lybra project release-target list)",
-        "row_scope": "只新建声明内精确路径(按主机; 写入只经 lybra release apply)",
+        "row_path": "<发布根>/releases/<commit>/、<发布根>/current、入口链接(lybra project release-target list)",
+        "row_scope": "只新建声明内精确路径(按主机; 只经 lybra release apply)",
+        "render_levels": ["append", "mutate"],
+        "render_levels_note": "章程 / 开工稿写权限边界表只渲染本面级别 ∈ render_levels 的角色行(只读行仍在矩阵与 check_access 判定、`lybra roles write-boundary` 可读面中; 不进章程 = 不占章程体积, roles.schema charter_size_guard)",
         "description": "AIPOS-F251: 受控生产发布面(按主机声明, project.json release_targets; `lybra project release-target`)。级别只给 append = 只新建: 只覆盖声明发布根本身、其 releases/ 目录、releases/<完整 commit>/ 新 release 目录及其内容、current 链接、逐条入口链接的精确路径; 任何已存在路径(含悬空链接)、父目录其他条目、发布根内其他路径一律拒(判定见 write_boundary.release_target, 唯一实现 release_target.judge_access)。与 validation_root 是两个面, 判定与报错文案互不冒充; 实际写入只经 `lybra release apply`(另须本卡项目授权放开禁区 production 且含目标主机)"
       }
     },
