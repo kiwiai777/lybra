@@ -229,8 +229,8 @@ def test_item1_resolver_is_single_implementation_and_cli_has_no_active_project_w
     # AIPOS-F143 件②: + set-execution; AIPOS-F148 件②: + set-return-summary; AIPOS-F161: + relocate-workstation; AIPOS-F169: + set-model;
     # AIPOS-F171: + lybra roadmap(同一目标解析); AIPOS-F176: + project upgrade(同一目标解析); AIPOS-F190: + project validation-root(同一目标解析)
     # AIPOS-F198: + project workstation-plan(同一目标解析); AIPOS-F224: + project grant(同一目标解析)
-    # AIPOS-F237: + project set-test-contract(同一目标解析)
-    assert len(calls) == 18
+    # AIPOS-F237: + project set-test-contract(同一目标解析); AIPOS-F251: + project release-target(同一目标解析)
+    assert len(calls) == 19
     wc_src = (REPO_ROOT / "tools/aipos_cli/workspace_config.py").read_text(encoding="utf-8")
     fn = next(n for n in ast.parse(wc_src).body if isinstance(n, ast.FunctionDef) and n.name == "resolve_project_write_target")
     names = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name)} | {n.attr for n in ast.walk(fn) if isinstance(n, ast.Attribute)}
@@ -274,8 +274,9 @@ def test_item2_first_line_names_target_and_absolute_project_json_for_every_write
     from tools.schema_loader import load_schema
 
     # AIPOS-F190: validation-root 四个写动作(两词子命令)同族, 首行 / 次行原文正反例见 test_aipos_f190_validation_root.py
+    # AIPOS-F251: release-target 两个写动作(两词子命令)同族, 首行 / 次行原文正反例见 test_aipos_f251_release_surface.py
     assert sorted(c for c in load_schema("verbs")["two_phase_protocol"]["project_json_writers"]["commands"]
-                  if not c.startswith("validation-root ")) == sorted(argvs)
+                  if not c.startswith(("validation-root ", "release-target "))) == sorted(argvs)
     for command, extra in argvs.items():
         for flags in ([], ["--confirm"]):
             rc, out, err = _cli("project", command, "beta", "--home-root", str(rig["home"]), *extra, *flags)

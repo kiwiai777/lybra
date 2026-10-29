@@ -246,6 +246,10 @@ def card_entry(governance_root: Path, path: Path, queue_state: str, decl: dict[s
         for item in (evidence.get("evidence") or [])[: int(d["evidence_limit"])]:
             if isinstance(item, dict):
                 ver["entries"].append({"command": shown(item.get("command")), "exit_code": item.get("exit_code")})
+        from tools.aipos_cli.release_target import release_history
+
+        for item in release_history(root, task_id):  # AIPOS-F251 件⑤: 受控生产发布记录(计划 / 执行 / 回退)随验证条目展示
+            ver["entries"].append({"command": shown(item["command"]), "exit_code": item["exit_code"]})
         if not ver["entries"]:
             ver["excerpt"] = shown(_evidence_section(report))
         for spec in card_artifacts(root, meta)["entries"]:

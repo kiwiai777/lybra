@@ -131,6 +131,8 @@ def _surface_roots(governance_root: Path, decl: dict[str, Any], *, harness_root:
             roots = [harness_root] if harness_root else []
         elif root_kind == "validation_roots":
             roots = []  # AIPOS-F190: 按主机声明(project.json validation_roots), 不按本机路径前缀匹配; 判定走 validation_root.judge_access
+        elif root_kind == "release_targets":
+            roots = []  # AIPOS-F251: 按主机声明(project.json release_targets), 判定走 release_target.judge_access
         else:
             raise SchemaLoadError(f"roles.schema write_boundary.surfaces.{name}.root={root_kind!r} 未知")
         out[name] = {
@@ -138,7 +140,10 @@ def _surface_roots(governance_root: Path, decl: dict[str, Any], *, harness_root:
             "per_task": bool(spec.get("per_task")),
             "per_task_lane": bool(spec.get("per_task_lane")),
             "per_run": bool(spec.get("per_run")),
-            "host_scoped": root_kind == "validation_roots",
+            "host_scoped": root_kind in ("validation_roots", "release_targets"),
+            "row_path": str(spec.get("row_path") or ""),  # AIPOS-F251: 按主机声明面的可读面行(缺省 = 验证根模板)
+            "row_scope": str(spec.get("row_scope") or ""),
+            "render_levels": [str(x) for x in spec.get("render_levels") or []],  # AIPOS-F251: 缺省 = 全级别都进章程 / 开工稿表(行为不变)
             "description": str(spec.get("description") or ""),
         }
     return out
@@ -176,8 +181,9 @@ def build_write_boundary(
             if spec["host_scoped"]:
                 # AIPOS-F190: 验证根按主机声明, 可读面给模板(实际声明 = lybra project validation-root list; 本实例条目随章程同源渲染)
                 rows.append({"role": name, "role_class": cls, "surface": surface, "level": str(level),
-                             "path": "<声明 base>/<task_id>/<run_id>(按主机声明: lybra project validation-root list)",
-                             "scope": "本卡本活动 run 目录(按主机)", "description": spec["description"]})
+                             "path": spec["row_path"] or "<声明 base>/<task_id>/<run_id>(按主机声明: lybra project validation-root list)",
+                             "scope": spec["row_scope"] or "本卡本活动 run 目录(按主机)", "description": spec["description"],
+                             "rendered": not spec["render_levels"] or str(level) in spec["render_levels"]})
                 continue
             for root in spec["roots"] or [None]:
                 rows.append({
@@ -267,6 +273,8 @@ def check_access(
       7. AIPOS-F190 主机维度: host 缺省 / 等于本机 = 本机判定; 路径落在该主机 validation_roots 声明 base 内 = 面 validation_root
          (validation_root.judge_access: 本实例本卡本活动 run 目录才放行; 本机另按 realpath 判符号链接逃逸);
          他机路径只判 validation_root 面(字面), 不在任何声明 base 内 = SURFACE_UNDECLARED。
+      8. AIPOS-F251 受控生产发布面: validation_root 不命中时, 路径落在该主机某发布目标的发布根 / 入口 / 其父目录内 = 面 release_target
+         (release_target.judge_access: 只声明内精确路径且未存在才放行 append; 父目录其他条目 / 发布根内其他路径 / 已存在 / mutate 一律拒)。
     """
     governance_root = Path(governance_root).expanduser().resolve()
     decl = load_write_boundary_declaration()
@@ -294,6 +302,14 @@ def check_access(
                                 run_id=run_id, host_fingerprint=host_fingerprint)
     if vr_result is not None:
         return {**vr_result, "role_class": cls, "hard_rules": hard_rules}
+    # AIPOS-F251: 受控生产发布面(按主机声明 project.json release_targets; 与 validation_root 是两个面, 判定与文案互不冒充)
+    from tools.aipos_cli import release_target as rt
+
+    granted_rt = str(matrix.get(rt.SURFACE) or "") or None
+    rt_result = rt.judge_access(governance_root, host=host, raw_path=raw, want_rank=want_rank, granted=granted_rt,
+                                granted_rank=_level_rank(decl, granted_rt) if granted_rt else None)
+    if rt_result is not None:
+        return {**rt_result, "role_class": cls, "hard_rules": hard_rules}
     if remote:
         return {
             "allowed": False, "code": "SURFACE_UNDECLARED", "surface": None, "granted_level": None, "role_class": cls, "host": host,
@@ -391,7 +407,7 @@ def check_access(
 def role_rows(boundary: dict[str, Any], role: str, *, task_id: str | None = None) -> list[dict[str, Any]]:
     """AIPOS-F212 件④: 某角色的写权限边界行(章程表 render_write_boundary_markdown 与 lybra kickoff 边界行同读, 选行只此一处);
     task_id 给 = 路径占位 <task_id> 落为本卡(开工稿按卡), 缺 = 原样(章程不按卡)。"""
-    rows = [dict(r) for r in boundary["rows"] if r["role"] == role]
+    rows = [dict(r) for r in boundary["rows"] if r["role"] == role and r.get("rendered", True)]  # AIPOS-F251: 面声明 render_levels 外的行不进表
     if task_id:
         for row in rows:
             row["path"] = str(row["path"]).replace("<task_id>", task_id)
@@ -500,7 +516,7 @@ def run_write_boundary_cli(args: Any, workspace_root: Path) -> int:
                     print(f"  目标主机复核(只认退出码 0 + ALLOW): {result['host_side_check']}")
             return 0 if result["allowed"] else 3
         boundary = build_write_boundary(workspace_root, role=role, harness_root=getattr(args, "harness_root", None))
-    except (WriteBoundaryError, SchemaLoadError, OSError, ValueError) as exc:  # ValidationRootError ⊂ ValueError(段形不合 = 拒, 不放行)
+    except (WriteBoundaryError, SchemaLoadError, OSError, ValueError) as exc:  # ValidationRootError / ReleaseTargetError ⊂ ValueError(段形不合 = 拒, 不放行)
         print(f"lybra roles write-boundary: {exc}", file=sys.stderr)
         return 1
     if getattr(args, "json", False):

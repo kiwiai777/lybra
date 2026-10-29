@@ -41,7 +41,9 @@
         "validation-root run-start",
         "validation-root run-finish",
         "validation-root sim-bind",
-        "validation-root set-host"
+        "validation-root set-host",
+        "release-target declare",
+        "release-target revoke"
       ],
       "default_phase": "dry_run",
       "flags": {
@@ -5707,7 +5709,7 @@
           },
           "project_writers": {
             "cli": "lybra project <subcommand> --confirm",
-            "subcommands": ["set-paths", "set-repo", "set-repos", "set-workstation", "set-meta", "set-execution", "set-model", "set-test-contract", "set-return-summary", "freeze-legacy", "dispatch-mode set", "relocate-workstation", "upgrade", "validation-root declare", "validation-root revoke", "validation-root run-start", "validation-root run-finish", "validation-root sim-bind", "validation-root set-host"],
+            "subcommands": ["set-paths", "set-repo", "set-repos", "set-workstation", "set-meta", "set-execution", "set-model", "set-test-contract", "set-return-summary", "freeze-legacy", "dispatch-mode set", "relocate-workstation", "upgrade", "validation-root declare", "validation-root revoke", "validation-root run-start", "validation-root run-finish", "validation-root sim-bind", "validation-root set-host", "release-target declare", "release-target revoke"],
             "scope": "AIPOS-F159 件①(gap #144): 写 project.json 的 project 族命令 --confirm 成功后的写出文件(治理根相对): two_phase_protocol.project_json_writers 各命令 = project.json(--confirm 即落, 无改动亦经同一提交口核一次: 范围已落账 = PASS no-op, 前次写后未落账者随之补落); freeze-legacy = 本次追加的清单条目 + 本次补声明 legacy_baseline 时的 project.json(本批无卡可冻 = 无写出, 不落); dispatch-mode set = project.json + 切换留痕文件。AIPOS-F161: relocate-workstation = 本项目 enrollment_log(追加的 relocate 位置事件; 唯一写出, 工位目录在治理仓外不入)。AIPOS-F176: upgrade = `lybra project upgrade --confirm` 配置缺省补齐步写出的 project.json(其余步骤各经自身声明的落账命令: migrate_record_type / migrate_decision_log_pointers; 工位章程在治理仓外不入)。提交身份 = 该命令 --actor(dispatch-mode set 为 --by; 未给 = $USER 或 owner, 与 set-repo / project new 同一缺省)。--dry-run 零写入、不落账。唯一落账点: 写 project.json 的两阶段命令经输出包装 aipos_cli._project_json_two_phase_emit, freeze-legacy / dispatch-mode set 经同一薄壳 aipos_cli._land_project_writes(→ land_written_paths)。不含 project new / import(建治理根本身, 治理根此时可能尚未入治理仓; 向导第 1 步照旧给 governance-commit 与 home git-init)。 AIPOS-F203 件①: validation-root run-start = project.json + 本次新存的验证 helper 快照(paths.validation_helper_root/<摘要>.py.txt; 同摘要已在 = 无新文件)。",
             "message_template": "chore(governance): 项目配置落账 {subcommand} {project}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra project {subcommand} --confirm"
           },
@@ -5798,6 +5800,74 @@
         "landing_failed": {
           "code": 3,
           "meaning": "写入已生效但落账未完成(post_write_landing.landing_failed_exit_code)"
+        }
+      }
+    },
+    "lybra_project_release_target": {
+      "description": "AIPOS-F251 件①: `lybra project release-target declare|revoke|list` —— 受控生产发布目标声明(project.json release_targets, 声明 config.schema project_json.release_targets)。declare --id <目标> --host <主机标签> --repo <源仓名> --allow <白名单项>… --release-root <发布根> --entry <入口绝对路径>=current/<对象>… [--entry-order <入口路径>…] [--owner-ref] [--actor] [--dry-run|--confirm]: 主机非本机须已 `validation-root set-host` 声明 ssh 别名(复用 F196); owner_ref 判定与验证根同一实现(validation_root.authorized_owner_ref: 项目授权内自动引用授权修订, 授权外拒; 无授权须 --owner-ref = Owner 确认引用); 同 id 再声明 = 修改(覆盖, 提交史可追溯, 须同样的 Owner 确认)。revoke --id --reason; list 只读。声明本身不放行任何写入。写动作两阶段与写后落账同一包装(two_phase_protocol.project_json_writers; post_write_landing.commands.project_writers)。",
+      "phase": "two_phase",
+      "surface": [
+        "cli"
+      ],
+      "cli_command": "lybra project release-target",
+      "single_implementation": "tools/aipos_cli/release_target.apply_release_target_change(写) / project_release_targets(读) / judge_access(判定, 经 write_boundary.check_access)",
+      "exit_codes": {
+        "ok": {
+          "code": 0,
+          "meaning": "预演完成 / 已写入并落账 / 只读输出"
+        },
+        "refused": {
+          "code": 1,
+          "meaning": "声明不合(拒因码 ∈ config.schema project_json.release_targets.reject_codes; project.json 未改动)"
+        },
+        "usage": {
+          "code": 2,
+          "meaning": "参数错"
+        },
+        "landing_failed": {
+          "code": 3,
+          "meaning": "写入已生效但落账未完成(post_write_landing.landing_failed_exit_code)"
+        }
+      }
+    },
+    "lybra_release": {
+      "description": "AIPOS-F251 件③④: `lybra release plan|apply|verify|rollback --task-id <卡> --target <发布目标>` —— 受控生产发布(唯一实现 tools/aipos_cli/release_target.py; 主机侧 tools/aipos_cli/release_helper.py 经 ssh stdin 下发, 引导钉 sha256)。plan = 只读: 源提交(--commit 完整 40 位; --tree 给出时逐一核对)须被门生 PASS 裁决覆盖(deployment_authorization.commit_pass_coverage)→ 从该提交 git ls-tree / cat-file 按白名单枚举(不读工作树; 源码符号链接 / 子模块 / 白名单外 / 绝对路径 / .. 一律拒)→ 每文件 sha256 → 经 ssh 只读探测每个目的路径(已存在含悬空链接 = 计划判拒)与入口及发布根父目录非递归现状 → 每个新建路径经 write_boundary.check_access(面 release_target, append)→ 写计划记录(records/events/<卡>/release_plan_*, 含计划哈希)。apply = 只执行与计划哈希一致的计划(--plan-hash; 计划记录被改 = 拒), 另核: 卡面 authorization_zones 含 production、本卡认领所用项目授权(认领记录 owner_policy_ref)最新修订生效且 zones_open 含 production、hosts 含目标主机(越界出口 = autonomy_policy.authorization_refusal_message 同一渲染, 只用旧信封 / 无项目授权 = 给 `lybra project grant sign … --open-zone production --host <主机>`); 主机侧逐项原子不覆盖新建(目录不越级、链接不强制、文件 O_EXCL), 传后逐文件核 sha256, 入口按声明顺序首页最后; 任一步失败即停; 落部署记录(deployment_record, operation=release, 含 production_changed / 源 commit 与 tree / 新建清单 / 退出码 / 写前写后父目录基线对照)。verify = 只读: 主机侧核已发布对象与入口链接(可加 --fetch <URL>=<release 内相对文件> 公网核摘要); 审计同用。rollback = 只删本次部署记录里本卡新建、当前 lstat 与链接目标仍精确匹配的入口链接(首页优先), 不递归、不删 release 目录, 任何不一致停线; 落回退记录(records/events/<卡>/release_rollback_*)。全程不调 sudo / su / doas, 不 reload / restart 任何服务, 不碰声明外路径。",
+      "phase": "workstation",
+      "surface": [
+        "cli"
+      ],
+      "cli_command": "lybra release",
+      "single_implementation": "tools/aipos_cli/release_target.py(plan_release / apply_release / verify_release / rollback_release); 主机侧 tools/aipos_cli/release_helper.py",
+      "reject_codes": {
+        "RELEASE_TARGET_INVALID": "发布目标不存在 / 已撤销 / 声明形不合",
+        "RELEASE_CARD_INVALID": "卡不存在 / 未认领(apply 与 rollback 须在本卡执行中)",
+        "RELEASE_COMMIT_INVALID": "--commit 不是源仓已有完整 40 位提交 / --tree 与提交 tree 不符",
+        "RELEASE_COMMIT_NOT_AUDITED": "源提交未被门生 PASS 裁决覆盖",
+        "RELEASE_SOURCE_REJECTED": "源内容不合(白名单项缺失 / 源码符号链接 / 子模块 / 白名单外 / 绝对路径或 ..)",
+        "RELEASE_PLAN_REFUSED": "计划判拒(目的路径已存在含悬空链接 / 写边界不放行 / 父目录不存在)",
+        "RELEASE_PLAN_MISMATCH": "计划记录不存在 / 被改(重算哈希 ≠ 记录 / ≠ --plan-hash)/ 声明或源内容已变",
+        "RELEASE_ZONE_UNDECLARED": "卡面 authorization_zones 未声明 production",
+        "RELEASE_NOT_AUTHORIZED": "无项目授权 / 本卡只用旧信封 / 授权未生效 / 未放开禁区 production / 目标主机不在授权内(出口 = Owner 签发或扩大授权命令)",
+        "RELEASE_HOST_FAILED": "主机侧执行失败或拒(含 helper 摘要不符 / 中途停); 部署记录如实落 production_changed 与已建清单",
+        "RELEASE_NOT_APPLIED": "verify / rollback 找不到本卡本目标的部署记录",
+        "RELEASE_ROLLBACK_STOPPED": "回退遇不一致停线(链接已不在 / 被人改指向 / 不是链接); 已删项如实列出"
+      },
+      "exit_codes": {
+        "ok": {
+          "code": 0,
+          "meaning": "计划已写 / 已发布 / 核对一致 / 已回退"
+        },
+        "refused": {
+          "code": 1,
+          "meaning": "拒(拒因码 ∈ reject_codes; 生产主机未改动, 或已改动部分如实记录)"
+        },
+        "usage": {
+          "code": 2,
+          "meaning": "参数错"
+        },
+        "mismatch": {
+          "code": 3,
+          "meaning": "verify: 已发布对象与计划不一致(逐项原因)"
         }
       }
     },

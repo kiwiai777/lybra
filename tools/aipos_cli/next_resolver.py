@@ -1069,6 +1069,17 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
                     "reason": f"本卡验证根节不可渲染: 沙箱按卡 harness 渲染, harness 不可推导({view['harness_refusal']['reason']})"}
             else:
                 view["validation_root_lines"] = lines
+    # AIPOS-F251 件⑤: 卡面触及禁区 production 且项目声明了发布目标 = 发布节(plan → apply → verify 命令原文与回退; 审计卡只给 verify),
+    # 随本卡验证根节同一槽位下发(工位 /go 与 lybra kickoff 同读); 声明读不出 = 同码拒(fail-closed, 不出缺节的开工提示)
+    from tools.aipos_cli.release_target import ReleaseTargetError, render_kickoff_lines
+
+    try:
+        release_lines = render_kickoff_lines(workspace_root, task_id=task_id, fm=fm)
+    except (ReleaseTargetError, SchemaLoadError, OSError, ValueError) as exc:
+        view["validation_root_refusal"] = {"code": "VALIDATION_ROOT_UNRESOLVED", "reason": f"本卡发布节不可渲染: {exc}"}
+    else:
+        if release_lines and not view.get("validation_root_refusal"):
+            view["validation_root_lines"] = [*view["validation_root_lines"], *release_lines]
     try:
         view["report_path"] = str(card_report_path(workspace_root, task_id, fm))
     except (SchemaLoadError, OSError, ValueError) as exc:

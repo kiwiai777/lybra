@@ -1167,7 +1167,7 @@
           "covering_verdicts": "AIPOS-F130 件③ / F147 件②(gap #110 登记): 同上条件写 = 覆盖该区间的全部 PASS 裁决 id 列表(多卡并集; 空区间 = 空列表)",
           "writer": "deployment_record.build_deployment_record(唯一构建)"
         },
-        "card_attribution": "AIPOS-F147 件①: 部署平铺无卡目录; 归属 = authorization_ref 所指裁决所属的卡(裁决记录在 <records>/audit_verdicts/<卡ID>/<裁决 id>.md)。N6 落账范围(governance_commit.card_own_paths)经 governance_commit.card_deployment_records 按此纳入本卡部署记录; dev_override 部署无裁决、不属任何卡(非卡改动, 用 governance-commit --paths 精确提交)。"
+        "card_attribution": "AIPOS-F147 件①: 部署平铺无卡目录; 归属 = authorization_ref 所指裁决所属的卡(裁决记录在 <records>/audit_verdicts/<卡ID>/<裁决 id>.md)。N6 落账范围(governance_commit.card_own_paths)经 governance_commit.card_deployment_records 按此纳入本卡部署记录; dev_override 部署无裁决、不属任何卡(非卡改动, 用 governance-commit --paths 精确提交)。AIPOS-F251: 受控生产发布(operation=release, `lybra release apply`)的部署记录按 release_task_id 归发布卡(其 authorization_ref 是源提交所属卡的裁决, 不归那张卡)。"
       },
       "automation": {
         "git_operations": "commit (产品仓) + push",
