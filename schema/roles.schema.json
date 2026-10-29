@@ -257,6 +257,13 @@
         "per_run": true,
         "host_scoped": true,
         "description": "AIPOS-F190: 跨机临时验证根(按主机声明, project.json validation_roots; `lybra project validation-root`)。mutate 只对 <声明 base>/<本卡ID>/<当前活动 run-id>/ 内; 跨卡 / 跨 run / 跨角色 / 越界 / .. 穿越 / 符号链接逃逸 / 撤销或到期后一律拒(判定见 write_boundary.validation_root)"
+      },
+      "release_target": {
+        "root": "release_targets",
+        "host_scoped": true,
+        "row_path": "<声明发布根>/{releases/<完整 commit>/…, current} + 声明入口链接(按主机声明: lybra project release-target list)",
+        "row_scope": "只新建声明内精确路径(按主机; 写入只经 lybra release apply)",
+        "description": "AIPOS-F251: 受控生产发布面(按主机声明, project.json release_targets; `lybra project release-target`)。级别只给 append = 只新建: 只覆盖声明发布根本身、其 releases/ 目录、releases/<完整 commit>/ 新 release 目录及其内容、current 链接、逐条入口链接的精确路径; 任何已存在路径(含悬空链接)、父目录其他条目、发布根内其他路径一律拒(判定见 write_boundary.release_target, 唯一实现 release_target.judge_access)。与 validation_root 是两个面, 判定与报错文案互不冒充; 实际写入只经 `lybra release apply`(另须本卡项目授权放开禁区 production 且含目标主机)"
       }
     },
     "matrix": {
@@ -268,7 +275,8 @@
         "return_slot": "mutate",
         "product_repo": "mutate",
         "harness_root": "read",
-        "validation_root": "mutate"
+        "validation_root": "mutate",
+        "release_target": "append"
       },
       "auditor": {
         "governance_root": "read",
@@ -278,7 +286,8 @@
         "verdict_slot": "mutate",
         "product_repo": "read",
         "harness_root": "read",
-        "validation_root": "mutate"
+        "validation_root": "mutate",
+        "release_target": "read"
       },
       "advisor": {
         "governance_root": "read",
@@ -292,7 +301,8 @@
         "verdict_slot": "mutate",
         "product_repo": "read",
         "harness_root": "read",
-        "validation_root": "read"
+        "validation_root": "read",
+        "release_target": "read"
       },
       "planner": {
         "governance_root": "read",
@@ -319,7 +329,7 @@
         "records": "read"
       }
     },
-    "matrix_note": "queue/records 对所有非 owner 角色只读: 账务动词经门铸记录(driver.role_class 的 token), 直接写 = 越界。advisor 的 governance_docs/task_cards 写是治理面(ROLES ⑩ 治理仓 push), 不含产品仓。executor 的 product_repo mutate 受本卡工作树 + lane.paths 双限(与 N3 交回判据②「改动面在界内」同一口径)。AIPOS-F190: executor / auditor 的 validation_root mutate 只对本实例本卡的声明、本卡本 run 目录(执行与审计各自卡目录 = 隔离); advisor 只读。",
+    "matrix_note": "queue/records 对所有非 owner 角色只读: 账务动词经门铸记录(driver.role_class 的 token), 直接写 = 越界。advisor 的 governance_docs/task_cards 写是治理面(ROLES ⑩ 治理仓 push), 不含产品仓。executor 的 product_repo mutate 受本卡工作树 + lane.paths 双限(与 N3 交回判据②「改动面在界内」同一口径)。AIPOS-F190: executor / auditor 的 validation_root mutate 只对本实例本卡的声明、本卡本 run 目录(执行与审计各自卡目录 = 隔离); advisor 只读。AIPOS-F251: release_target 面 executor 只给 append(只新建声明内精确路径, 写入只经 lybra release apply); auditor / advisor 只读(审计用 lybra release verify 复核, 永不 apply / rollback)。",
     "no_write": {
       "description": "AIPOS-F215 件③(AIPOS-F212 RETURN 已知局限②: 开工稿静态 no_write_governance / no_write_product_auditor / no_write_harness 行独立于边界行措辞): 开工稿「禁写与禁止动作」节由写权限边界派生的行。选行 = write_boundary.role_rows(与章程边界表、开工稿边界行同一实现): 该角色级别为 read 且 surfaces 有条目的面各出一行(按 role_rows 序); 占位 {path} = 该面行路径(本卡已落), {slots} = 该角色 mutate 的本卡报告落点面(slot_surfaces)行路径(反引号包住, 多个以「、」连接)。唯一渲染 write_boundary.no_write_lines(lybra kickoff 经 verbs lybra_kickoff.item_templates.no_write_line 成行); 面行路径未解析(无声明根)或开工稿声明该面不适用(子 agent 无工位)= 不出该行; 同文行只出一次(多仓项目 product_repo 每仓一行而模板无 {path})。",
       "slot_surfaces": ["return_slot", "verdict_slot"],
@@ -627,6 +637,66 @@
           "forbid": "kiwiai-pi 不在本声明车道, 此处只给接口; 工位护栏改造另卡",
           "source": "本声明(AIPOS-F190 件④)"
         }
+      }
+    },
+    "release_target": {
+      "description": "AIPOS-F251: 受控生产发布面 release_target 的判定与渲染声明(唯一读取口 release_target.declaration)。声明存储 = project.json release_targets(config.schema project_json.release_targets); 判定入口 = write_boundary.check_access(主机维度, validation_root 之后判)经 release_target.judge_access; 写入只经 `lybra release apply`(verbs.schema verbs.lybra_release)。只新建: 允许的精确路径 = 发布根本身 / <发布根>/<releases_dir> / <发布根>/<releases_dir>/<40 位 commit> 及其内 / <发布根>/<current_link> / 声明的逐条入口链接; 落在发布根内的其他路径、入口链接与发布根的父目录内其他条目 = RELEASE_PATH_NOT_DECLARED; 已存在(本机 lstat, 含悬空链接; 远端由 `lybra release plan` 主机侧只读探测)= RELEASE_TARGET_EXISTS; 已撤销声明 = RELEASE_TARGET_REVOKED; 请求 mutate = LEVEL_EXCEEDED(面只给 append)。",
+      "surface": "release_target",
+      "releases_dir": "releases",
+      "current_link": "current",
+      "index_names": [
+        "index.html",
+        "index.htm"
+      ],
+      "forbidden_roots": [
+        "/",
+        "/Applications",
+        "/Library",
+        "/System",
+        "/Users",
+        "/bin",
+        "/boot",
+        "/dev",
+        "/etc",
+        "/home",
+        "/lib",
+        "/lib64",
+        "/opt",
+        "/private",
+        "/proc",
+        "/root",
+        "/run",
+        "/sbin",
+        "/srv",
+        "/sys",
+        "/tmp",
+        "/usr",
+        "/var",
+        "/var/www",
+        "/var/www/html"
+      ],
+      "forbidden_roots_note": "发布根与入口链接不得恰为这些目录本身(可在其下); 另不得在治理根 / 产品仓内或为其祖先(validation_root._protected_roots 同一推导)。",
+      "helper_module": "tools/aipos_cli/release_helper.py",
+      "helper_timeout_seconds": 600,
+      "event_types": {
+        "plan": "release_plan",
+        "rollback": "release_rollback"
+      },
+      "check_codes": {
+        "RELEASE_PATH_NOT_DECLARED": "路径落在发布目标的发布根内 / 入口或发布根的父目录内, 但不是声明的精确路径(父目录其他条目 / 发布根内其他路径)",
+        "RELEASE_TARGET_EXISTS": "目的路径已存在(含悬空链接; 只新建, 不覆盖)",
+        "RELEASE_TARGET_REVOKED": "发布目标声明已撤销"
+      },
+      "kickoff": {
+        "title": "## 受控发布(AIPOS-F251; 本卡卡面触及禁区 production, 项目声明了发布目标)",
+        "target": "- 发布目标 `{target}`: 主机 {host}({transport}), 源仓 {repo}, 发布根 `{release_root}`, 白名单 {allowlist}, 入口 {entries}",
+        "rule": "- 生产写入只经下列产品动词(先计划后执行, 计划哈希一致才执行; 只新建、同名即停、首页最后接入); 禁裸 ssh / scp / rsync / sudo 写生产主机, 不 reload / restart 任何服务",
+        "plan": "  1. 计划(只读): `{gov_cmd} release plan --task-id {task_id} --target {target} --commit <完整 commit> [--tree <预期 tree>]`(输出计划哈希与计划记录)",
+        "apply": "  2. 执行: `{gov_cmd} release apply --task-id {task_id} --target {target} --plan-hash <计划哈希>`",
+        "verify": "  3. 核对(只读, 审计同用): `{gov_cmd} release verify --task-id {task_id} --target {target}`",
+        "rollback": "  回退(只在本卡导致新故障时): `{gov_cmd} release rollback --task-id {task_id} --target {target}`(只删本卡新建且仍精确匹配的入口链接, 首页优先, 不删 release 目录)",
+        "auditor": "- 审计: 只用 `{gov_cmd} release verify --task-id {task_id} --target {target}` 独立复核, 永不 apply / rollback",
+        "auth": "- 授权现状: {auth}"
       }
     }
   },

@@ -59,8 +59,12 @@ def build_deployment_record(
     deployed_at: str | None = None,
     runtime_directory: str | None = None,
     coverage: dict[str, Any] | None = None,
+    release: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """构建 deployment_record 字典(frontmatter + 摘要)。
+
+    AIPOS-F251: release = 受控生产发布(release_target.apply_release)的发布字段(operation=release / release_task_id / release_target /
+    production_changed / source_tree / plan_hash / created / exit_code / 写前写后基线对照 …), 原样并入 frontmatter(缺省 = 行为不变)。
 
     AIPOS-F130 件③: coverage = deployment_authorization.verdict_ref_deploy_coverage 结果(verdict_ref 部署时由 lybra-deploy 传
     --coverage-base 算出)→ 记录列出覆盖区间(coverage_interval)与覆盖区间的全部裁决(covering_verdicts, 多卡并集)。"""
@@ -89,6 +93,8 @@ def build_deployment_record(
     if coverage is not None:
         frontmatter["coverage_interval"] = coverage["interval"]
         frontmatter["covering_verdicts"] = list(coverage.get("covering_verdicts") or [])
+    if release:
+        frontmatter.update(release)
     return frontmatter
 
 
@@ -121,6 +127,12 @@ def render_record_markdown(frontmatter: dict[str, Any]) -> str:
     if "coverage_interval" in frontmatter:
         body += f"- **coverage_interval**: {frontmatter['coverage_interval']}\n"
         body += f"- **covering_verdicts**: {', '.join(frontmatter['covering_verdicts']) or '(空区间)'}\n"
+    if frontmatter.get("operation") == "release":  # AIPOS-F251: 受控生产发布
+        body += (f"- **release**: 卡 {frontmatter.get('release_task_id')} → 目标 {frontmatter.get('release_target')} 主机 {frontmatter.get('host')}"
+                 f" production_changed={frontmatter.get('production_changed')} 退出码 {frontmatter.get('exit_code')}\n")
+        body += f"- **source_tree**: {frontmatter.get('source_tree')} · **plan_hash**: {frontmatter.get('plan_hash')}\n"
+        body += f"- **created**: {len(frontmatter.get('created') or [])} 项(清单见 frontmatter created)\n"
+        body += f"- **baseline_unexpected**: {frontmatter.get('baseline_unexpected') or '无(写前写后父目录只多出本次新建)'}\n"
     # AIPOS-F87 件①: frontmatter 经单源 record_writer.render_markdown(safe_dump + 写后回读校验), 原逐行 f"{k}: {v}" 拼接退役
     # (值含 `**`/冒号/`#` 时曾可写出不可解析的记录)。字段序 = build_deployment_record 的插入序。
     from tools.aipos_cli.record_writer import render_markdown
@@ -139,6 +151,7 @@ def write_deployment_record(
     runtime_directory: str | None = None,
     dry_run: bool = False,
     coverage: dict[str, Any] | None = None,
+    release: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """写 deployment_record 到治理工作区 records。返回 {ok, path, wrote}。"""
     frontmatter = build_deployment_record(
@@ -149,6 +162,7 @@ def write_deployment_record(
         deployed_at=deployed_at,
         runtime_directory=runtime_directory,
         coverage=coverage,
+        release=release,
     )
     path = record_path(governance_root, commit, frontmatter["deployed_at"])
     if dry_run:

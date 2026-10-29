@@ -91,6 +91,7 @@
 {{regression_baseline_states}}
   卡分支须基于所查 sha: 交回前 main 已前进 = 先在卡工作树 `git merge main` 解冲突, 再按新 sha 查。
 - **没跑完的验证如实写**:环境 / 资源 / 时长导致没跑或没跑完的项, RETURN.md 写 NOT_RUN(或已跑部分的原文计数)与原因, 绝不写成通过。
+- **生产发布只经产品动词**(AIPOS-F251):卡面触及禁区 production 时, 发布只走开工稿发布节的 `lybra release plan → apply → verify`(回退 `release rollback`), 禁裸 ssh / scp / rsync 写生产主机。
 - 你不是审计者、不是规划者:发现方向问题记录在 return 里,不擅自改方向。
 - **产品黑盒原则**(AIPOS-R6I 靶③):产品仓固化命令(lybra finalize/deploy/queue 等)是黑盒——
   **只跑不读源码**。撞门(错误/BLOCK)时如实报回命令输出原文,**绝不考古产品源码猜测行为**。

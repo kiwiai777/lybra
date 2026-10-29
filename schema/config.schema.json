@@ -563,6 +563,40 @@
             "VR_EVIDENCE_HOST_MISMATCH": "AIPOS-F223 件②: 审计报告运行记录的 run 属本审计卡本实例的未选中声明(卡面 audit_runtime_evidence.host 选定的是另一台主机的声明); 拒因点名所选声明与 run 目录"
           }
         },
+        "release_targets": {
+          "type": "object",
+          "required": false,
+          "default": null,
+          "description": "AIPOS-F251: 受控生产发布目标声明(任何项目 / 任何主机 / 任何静态或文件类发布)。键 = 发布目标 id, 值 = entry_schema。缺段 = 无声明(行为不变: write_boundary 面 release_target 无根, 远端生产路径照旧 SURFACE_UNDECLARED)。声明本身不放行任何写入: 写入只经 `lybra release apply`(计划哈希一致 + 本卡项目授权放开禁区 production 且主机维度含目标主机 + 源提交被门生 PASS 裁决覆盖)。写入复用 project.json 唯一写路径 update_project_json(锁 + 写前预检 + 写后复核)与两阶段 / 自动落账包装(verbs.schema two_phase_protocol.project_json_writers); 新增 / 修改须 Owner 确认 = owner_ref 判定与验证根同一实现 validation_root.authorized_owner_ref(项目有常设授权 = 目标主机须在生效授权允许主机内, owner_ref 自动引用该授权修订; 无授权 = 须 --owner-ref), 提交史 = 追溯。唯一读取口 release_target.project_release_targets; 唯一写入口 release_target.apply_release_target_change(`lybra project release-target declare|revoke`)。",
+          "schema": {
+            "entry_schema": {
+              "host": "目标主机标签(本机标签 = 本机直接执行; 他机须已在 validation_roots.hosts 声明 ssh 别名, 复用 F196)",
+              "repo": "源仓名(project.json repos 清单中的名; 发布内容只从该仓固定提交 git ls-tree / cat-file 取, 不读工作树)",
+              "allowlist": "发布白名单(相对源仓根的路径清单, 规范相对路径, 无 `..` / `.` 段 / 绝对路径; 目录项以 `/` 结尾, 文件项不带)",
+              "release_root": "发布根(目标主机绝对规范路径; 其下 releases/<完整 commit>/ 与 current 链接; 不得为禁区目录本身 / 治理根 / 产品仓及其祖先)",
+              "entry_links": "入口链接清单 [{path: 目标主机绝对路径, target: current 下的相对对象, 如 current/index.html}]; 对象须在白名单内; 链接原文 = <release_root>/<target>",
+              "entry_order": "入口创建顺序(entry_links 的 path 排列; 声明缺省 = 声明顺序且首页(roles.schema write_boundary.release_target.index_names)放最后)",
+              "owner_ref": "Owner 确认引用(单行, 禁凭据; 项目授权内自动引用授权修订)",
+              "declared_by": "声明者(--actor)",
+              "declared_at": "声明时刻 ISO Z",
+              "revoked_at": "撤销时刻(null = 有效)",
+              "revoked_by": "撤销者",
+              "revoke_reason": "撤销原因"
+            },
+            "entry_link_schema": {
+              "path": "入口链接在目标主机上的绝对路径",
+              "target": "current 下的相对对象(current/<白名单内对象>)"
+            }
+          },
+          "reject_codes": {
+            "RT_DECLARATION_INVALID": "参数或段形不合(id / 主机标签 / 源仓 / 白名单 / 发布根 / 入口 / 顺序 / 时刻)",
+            "RT_HOST_UNDECLARED": "目标主机不是本机且未在 validation_roots.hosts 声明 ssh 别名(先 `lybra project validation-root set-host`)",
+            "RT_HOST_NOT_AUTHORIZED": "项目有常设授权而目标主机不在生效授权允许主机内(--owner-ref 也不放行; 出口 = Owner 扩大授权 --host)",
+            "RT_ROOT_FORBIDDEN": "发布根或入口落在禁区(禁区目录本身 / 治理根 / 产品仓 / 其祖先)或入口在发布根内",
+            "RT_NOT_FOUND": "发布目标 id 不存在",
+            "RT_STATE_CONFLICT": "状态不允许(已撤销再撤销)"
+          }
+        },
         "launch_guard": {
           "type": "object",
           "required": false,

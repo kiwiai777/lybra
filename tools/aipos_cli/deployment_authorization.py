@@ -456,8 +456,13 @@ def commit_pass_coverage(
     governance_root: Path,
     commit_hash: str,
     subject: str | None = None,
+    *,
+    schema_root: Path | None = None,
 ) -> dict[str, Any]:
     """AIPOS-F130 件②③: 单个 commit 是否被门生 PASS 裁决覆盖 —— 唯一实现。
+
+    AIPOS-F251: schema_root = 归属解析读声明(card_policy 落点)所用的 Lybra 代码仓根; 缺省 = repo_root(行为不变: Lybra 自身产品仓即
+    代码仓)。源仓不是 Lybra 形(无 schema/, 如受控生产发布的他项目源仓)时由调用方给 code_repo_schema_root()。
 
     调用方: 区间覆盖(check_commits_coverage → finalize 完整性 check_commit_interval_coverage 与 lybra-deploy --verdict-ref
     的 check_verdict_ref_authorization)、finalize dev_override 部署基线世系(finalize._dev_override_base_authorized)。
@@ -479,7 +484,7 @@ def commit_pass_coverage(
         subject = _commit_subject(repo_root, commit_hash)
         if subject is None:
             return {**base, "reason": f"{commit_hash[:8]}: 无法读取 commit message"}
-    task_id = _task_id_from_commit_subject(subject, repo_root=repo_root, governance_root=governance_root)
+    task_id = _task_id_from_commit_subject(subject, repo_root=schema_root or repo_root, governance_root=governance_root)
     if not task_id:
         return {**base, "reason": f"{commit_hash[:8]}: 无 task_id (commit message: {subject[:60]})"}
     base["task_id"] = task_id

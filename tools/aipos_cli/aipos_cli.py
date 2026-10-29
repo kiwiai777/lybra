@@ -2054,6 +2054,128 @@ def _validation_root_cli(args: argparse.Namespace, home: Path | None) -> int:
                                         extra=extra, details=details)
 
 
+def _release_target_cli(args: argparse.Namespace, home: Path | None) -> int:
+    """AIPOS-F251 件①: `lybra project release-target declare|revoke|list` 薄壳。写动作两阶段 = 同一包装(_project_json_two_phase_emit, 写后落账);
+    逻辑全在 release_target(唯一实现)。退出码读动词契约 verbs.schema lybra_project_release_target.exit_codes。"""
+    from tools.aipos_cli import release_target as rt
+    from tools.aipos_cli import validation_root as vr
+    from tools.aipos_cli.verb_contract import declared_exit_codes
+    from tools.schema_loader import SchemaLoadError
+
+    codes = declared_exit_codes("lybra_project_release_target")
+    target = _project_write_target(args, home, args.name)
+    if target is None:
+        return codes["refused"]
+    root = Path(target["project_root"])
+    if args.rt_command == "list":
+        try:
+            targets, hosts = rt.project_release_targets(root), vr.project_validation_hosts(root)
+        except (rt.ReleaseTargetError, vr.ValidationRootError, SchemaLoadError, OSError, ValueError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return codes["refused"]
+        if args.json:
+            print(render_json({"project": target["project"], "release_targets": targets, "helper_sha256": rt.helper_sha256()}))
+        else:
+            print(f"项目 {target['project']} 发布目标声明(project.json release_targets):")
+            for line in rt.render_list_lines(targets, hosts):
+                print(f"  {line}")
+        return codes["ok"]
+    action = args.rt_command
+    try:
+        outcome = rt.apply_release_target_change(
+            root, action, dry_run=not args.confirm, actor=args.actor, target_id=args.target_id, host=getattr(args, "host", None),
+            repo=getattr(args, "repo", None), allowlist=getattr(args, "allow", None), release_root=getattr(args, "release_root", None),
+            entries=getattr(args, "entry", None), entry_order=getattr(args, "entry_order", None), owner_ref=getattr(args, "owner_ref", None),
+            reason=getattr(args, "reason", None))
+    except rt.ReleaseTargetError as exc:
+        print(f"Error: {exc.code}(project.json 未改动)", file=sys.stderr)
+        for problem in exc.problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return codes["refused"]
+    except (SchemaLoadError, OSError) as exc:
+        print(f"Error: {exc}(project.json 未改动)", file=sys.stderr)
+        return codes["refused"]
+    entry = outcome["entry"]
+    payload = {k: outcome[k] for k in ("dry_run", "changed", "written", "diff", "project_json")}
+    details = [f"发布目标 {outcome['target_id']}: 主机 {entry['host']} 源仓 {entry['repo']} 发布根 {entry['release_root']} "
+               f"owner_ref={entry['owner_ref']}" + (f" 撤销 {entry['revoked_at']}({entry['revoke_reason']})" if entry.get("revoked_at") else ""),
+               f"白名单 {entry['allowlist']}; 入口顺序 {entry['entry_order']}", *outcome["notes"]]
+    return _project_json_two_phase_emit(f"release-target {action}", target, payload, actor=args.actor, json_out=bool(getattr(args, "json", False)),
+                                        extra={"action": action, "target_id": outcome["target_id"], "release_target": entry,
+                                               "notes": outcome["notes"]}, details=details)
+
+
+def _release_cli(args: argparse.Namespace) -> int:
+    """AIPOS-F251 件④: `lybra release plan|apply|verify|rollback` 薄壳(全部逻辑在 release_target, 唯一实现)。退出码读 verbs.schema
+    lybra_release.exit_codes。治理根 = 全局 --workspace-root / 自发现。不连门、不读凭据。"""
+    from tools.aipos_cli import release_target as rt
+    from tools.aipos_cli.verb_contract import declared_exit_codes
+    from tools.schema_loader import SchemaLoadError
+
+    codes = declared_exit_codes("lybra_release")
+    command = getattr(args, "release_command", None)
+    if command not in ("plan", "apply", "verify", "rollback"):
+        print("Error: 缺子命令(plan / apply / verify / rollback)", file=sys.stderr)
+        return codes["usage"]
+    try:
+        root = Path(_find_repo_root_for_args(args))
+    except (FileNotFoundError, SchemaLoadError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return codes["refused"]
+    json_out = bool(getattr(args, "json", False))
+    try:
+        if command == "plan":
+            out = rt.plan_release(root, task_id=args.task_id, target_id=args.target, commit=args.commit, tree=args.tree,
+                                  paths=args.path or None, actor=args.actor)
+        elif command == "apply":
+            out = rt.apply_release(root, task_id=args.task_id, target_id=args.target, plan_hash=args.plan_hash, actor=args.actor)
+        elif command == "verify":
+            out = rt.verify_release(root, task_id=args.task_id, target_id=args.target, fetch=args.fetch or None)
+        else:
+            out = rt.rollback_release(root, task_id=args.task_id, target_id=args.target, actor=args.actor)
+    except rt.ReleaseTargetError as exc:
+        if json_out:
+            print(render_json({"ok": False, "code": exc.code, "problems": exc.problems, "command": exc.command, **exc.extra}))
+        print(f"Error: {exc.code}", file=sys.stderr)
+        for problem in exc.problems:
+            print(f"  - {problem}", file=sys.stderr)
+        return codes["refused"]
+    except (SchemaLoadError, OSError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return codes["refused"]
+    if json_out:
+        print(render_json({k: v for k, v in out.items() if k != "plan"} | ({"plan": out["plan"]} if command == "plan" else {})))
+        return codes["ok"] if command != "verify" or out["ok"] else codes["mismatch"]
+    if command == "plan":
+        auth = out["authorization"]
+        print(f"release plan {args.task_id} → {args.target}: 计划哈希 {out['plan_hash']}")
+        print(f"  计划记录 {out['record']}; 新建 目录 {out['counts']['dir']} / 文件 {out['counts']['file']} / 链接 {out['counts']['link']}; "
+              f"主机侧只读探测 {out['probe_command']}")
+        for item in out["plan"]["entries"]:
+            print(f"  入口 {item['path']} → {item['target']}")
+        print(f"  授权: {'就绪 — ' + auth['reason'] if auth['ok'] else '未就绪 [' + auth['code'] + '] ' + auth['reason']}")
+        if not auth["ok"]:
+            print(f"  出口: {auth['command']}")
+        print(f"PLAN_OK plan_hash={out['plan_hash']}")
+        return codes["ok"]
+    if command == "apply":
+        rel = out["release"]
+        print(f"release apply {args.task_id} → {args.target}: 已新建 {len(rel['created'])} 项 production_changed={rel['production_changed']}"
+              f" (授权 {rel['authorization']}; {out['command']})")
+        for line in rel["baseline_unexpected"] or ["写前写后父目录基线: 只多出本次新建"]:
+            print(f"  {line}")
+        print(f"APPLY_OK record={out['record']}")
+        return codes["ok"]
+    if command == "verify":
+        for item in out["items"]:
+            print(f"  {'✓' if item.get('ok') else '✗'} {item.get('kind')} {item.get('path')}" + (f": {item['problem']}" if item.get("problem") else ""))
+        print(f"{'VERIFY_OK' if out['ok'] else 'VERIFY_MISMATCH'} commit={out['commit']} record={out['record']}")
+        return codes["ok"] if out["ok"] else codes["mismatch"]
+    print(f"release rollback {args.task_id} → {args.target}: 已删入口链接 {out['removed']}")
+    print(f"ROLLBACK_OK record={out['record']}")
+    return codes["ok"]
+
+
 def _project_upgrade_cli(args: argparse.Namespace, home: Path | None) -> int:
     """AIPOS-F176 件①③: `lybra project upgrade` 薄壳——目标项目解析 = project 族同一实现(_project_write_target); 预演 / 确认 / 引导全部在
     project_upgrade(plan_upgrade / run_upgrade / derive_guidance + 同一文本渲染)。--confirm 缺 --actor 或与 --guidance 同用 = 用法错(零写入)。"""
@@ -3310,6 +3432,33 @@ def build_parser() -> argparse.ArgumentParser:
     vr_helper.add_argument("--run-id", default=None, help="AIPOS-F203: run id (with --id)")
     vr_helper.add_argument("--workspace-root", help="Target governance root when the project name is omitted (only with --id/--run-id)")
     vr_helper.add_argument("--home-root", help="Governance home root (only with --id/--run-id; accepted for the project family)")
+    # AIPOS-F251 件①: 受控生产发布目标声明(project.json release_targets; 唯一实现 release_target.apply_release_target_change)
+    project_rt_parser = project_subparsers.add_parser(
+        "release-target",
+        help="AIPOS-F251: declare a controlled production release target (host + source repo + allowlist + release root + entry links + "
+             "entry order); the declaration itself allows no write — writes only via `lybra release apply`. declare / revoke (--dry-run "
+             "default, --confirm writes project.json and lands it), list")
+    project_rt_sub = project_rt_parser.add_subparsers(dest="rt_command", required=True)
+    rt_declare = project_rt_sub.add_parser("declare", help="Declare (or modify, same id) a release target; Owner confirmation = owner_ref "
+                                                         "(auto-references the standing authorization when its hosts include --host)")
+    _vr_common(rt_declare)
+    rt_declare.add_argument("--id", dest="target_id", required=True, help="Release target id ([a-z0-9][a-z0-9._-]*)")
+    rt_declare.add_argument("--host", required=True, help="Target host label (this host, or one declared via `validation-root set-host`)")
+    rt_declare.add_argument("--repo", required=True, help="Source repo name in project.json repos")
+    rt_declare.add_argument("--allow", action="append", required=True, help="Allowlist item relative to the repo root (directories end with /); repeatable")
+    rt_declare.add_argument("--release-root", required=True, help="Absolute release root on the host (releases/<commit>/ and current live under it)")
+    rt_declare.add_argument("--entry", action="append", required=True, help="Entry link <absolute path>=current/<object>; repeatable")
+    rt_declare.add_argument("--entry-order", action="append", default=None, help="Entry creation order (entry paths; default = declared order, index last)")
+    rt_declare.add_argument("--owner-ref", default=None, help="Owner confirmation reference (single line, no credentials); optional when the project "
+                                                             "has a standing authorization whose hosts include --host")
+    _project_json_two_phase_flags(rt_declare, "release-target declare")
+    rt_revoke = project_rt_sub.add_parser("revoke", help="Revoke a release target (every later plan / apply / write-boundary check is refused)")
+    _vr_common(rt_revoke)
+    rt_revoke.add_argument("--id", dest="target_id", required=True, help="Release target id")
+    rt_revoke.add_argument("--reason", required=True, help="Why (single line)")
+    _project_json_two_phase_flags(rt_revoke, "release-target revoke")
+    rt_list = project_rt_sub.add_parser("list", help="List release target declarations (read-only)")
+    _vr_common(rt_list)
     # AIPOS-F161: pi 工位迁出共用检出(位置声明唯一来源 = enrollment_log 位置事件; 唯一实现 workstation_relocate.relocate_workstation)
     project_relocate_parser = project_subparsers.add_parser("relocate-workstation", help="AIPOS-F161: move an enrolled pi workstation (auditor / executor) of this project out of its current location (e.g. a git checkout shared with other projects) to a location of its own: preview (default) lists the workstation state (credentials by path/mode/size only), old/new location, affected declarations and in-flight checks; --confirm moves it, syncs the new location, appends a relocate location event to the enrollment log, verifies, leaves a read-only pointer in the old directory and lands the log; --rollback moves it back")
     project_relocate_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory)")
@@ -3992,6 +4141,31 @@ def build_parser() -> argparse.ArgumentParser:
     run_long_status.add_argument("--task-id", required=True, help="卡 ID")
     run_long_status.add_argument("--name", default=None, help="运行名; 缺省 = 列本卡全部运行")
     run_long_status.add_argument("--json", action="store_true", help="Output JSON")
+
+    # AIPOS-F251 件④: lybra release — 受控生产发布(声明 verbs.schema lybra_release; 唯一实现 release_target)
+    release_parser = subparsers.add_parser(
+        "release", help="AIPOS-F251: controlled production release of a fixed audited commit to a declared release target "
+                        "(plan → apply → verify; rollback). Only new paths, same-name = stop, index last; no sudo / reload / restart. "
+                        "Use the global `lybra --workspace-root <governance root> release ...`")
+    release_sub = release_parser.add_subparsers(dest="release_command")
+    for name, text in (("plan", "Read-only on the host: audited-commit check, allowlist enumeration + sha256, host probe; writes a plan record"),
+                       ("apply", "Execute exactly the plan with --plan-hash (authorization: production zone + host); writes a deployment record"),
+                       ("verify", "Read-only: host-side check of every created object and entry link (auditors use this)"),
+                       ("rollback", "Remove only this card's created entry links that still match exactly (index first); writes a rollback record")):
+        sub = release_sub.add_parser(name, help=text)
+        sub.add_argument("--task-id", required=True, help="Release card id (auditors: the reviewed card)")
+        sub.add_argument("--target", required=True, help="Release target id (lybra project release-target list)")
+        sub.add_argument("--json", action="store_true", help="Output JSON")
+        if name in ("plan", "apply", "rollback"):
+            sub.add_argument("--actor", default=_default_actor(), help="Actor recorded in the plan / deployment / rollback record")
+        if name == "plan":
+            sub.add_argument("--commit", required=True, help="Full 40-hex source commit (must be covered by a gate-minted PASS verdict)")
+            sub.add_argument("--tree", default=None, help="Expected tree of --commit (checked when given)")
+            sub.add_argument("--path", action="append", default=None, help="Subset of allowlist items to publish (default: all); outside = refused")
+        if name == "apply":
+            sub.add_argument("--plan-hash", required=True, help="Plan hash printed by `release plan` (a tampered plan record is refused)")
+        if name == "verify":
+            sub.add_argument("--fetch", action="append", default=None, help="Public check <URL>=<release-relative file> (sha256 vs source manifest); repeatable")
 
     # AIPOS-R7A2 靶②: governance-commit (顾问收口一条命令)
     governance_commit_parser = subparsers.add_parser("governance-commit", help="AIPOS-R7A2: N6 收账提交(校验四件→commit→push)")
@@ -5332,6 +5506,8 @@ def main(argv: list[str] | None = None) -> int:
                     details=[f"paths.{change['key']}: {change['before']!r} → {change['after']!r}" for change in outcome["changes"]])
             if args.project_command == "validation-root":
                 return _validation_root_cli(args, home)
+            if args.project_command == "release-target":  # AIPOS-F251 件①
+                return _release_target_cli(args, home)
             if args.project_command == "grant":  # AIPOS-F224(子命令名避开凭据判据词 authorization: loop 日志 / 状态按 harness_launch.redact_progress 整行隐去含该词的行)
                 return _project_authorization_cli(args, home)
             if args.project_command == "upgrade":
@@ -5742,6 +5918,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         parser.print_help()
         return 2
+
+    if args.command == "release":  # AIPOS-F251 件④: 受控生产发布薄壳(唯一实现 release_target)
+        return _release_cli(args)
 
     if args.command == "run-long":
         # AIPOS-F179 件①: 薄壳——start / wait / status 全在 run_long(唯一实现), 退出码读声明 verbs.schema lybra_run_long.exit_codes

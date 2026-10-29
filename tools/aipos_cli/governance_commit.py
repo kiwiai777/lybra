@@ -500,7 +500,10 @@ def deployment_attribution(governance_root: Path) -> dict[str, Any]:
                 unreadable.append((record, str(exc)))
                 continue
             ref = str(meta.get("authorization_ref") or "").strip()
-            if ref and str(meta.get("authorization_type") or "") == "verdict_ref":
+            if str(meta.get("operation") or "") == "release" and str(meta.get("release_task_id") or "").strip():
+                # AIPOS-F251: 受控生产发布的部署记录归发布卡(授权裁决属源提交的卡, 不属发布卡); 键 = release:<卡ID>
+                by_ref.setdefault(f"release:{str(meta['release_task_id']).strip()}", []).append(record)
+            elif ref and str(meta.get("authorization_type") or "") == "verdict_ref":
                 by_ref.setdefault(ref, []).append(record)
         hit = (signature, by_ref, unreadable)
         _DEPLOYMENT_INDEX[cache_key] = hit
@@ -509,14 +512,14 @@ def deployment_attribution(governance_root: Path) -> dict[str, Any]:
 
 def card_deployment_records(governance_root: Path, task_id: str) -> list[Path]:
     """本卡的部署记录 = authorization_ref ∈ 本卡裁决 id(<records>/audit_verdicts/<卡ID>/ 下门生裁决记录文件名; 门生判据
-    record_writer.gate_record_files)。dev_override 部署无裁决, 不属任何卡。声明 transitions nodes.N5.deployment_record.card_attribution。"""
+    record_writer.gate_record_files)。dev_override 部署无裁决, 不属任何卡。声明 transitions nodes.N5.deployment_record.card_attribution。
+    AIPOS-F251: 受控生产发布(operation=release)按 release_task_id 归发布卡(其 authorization_ref 是源提交所属卡的裁决, 不归那张卡)。"""
     from tools.aipos_cli.record_writer import gate_record_files, record_dir
 
     verdict_ids = {p.stem for p in gate_record_files(record_dir(Path(governance_root), "audit_verdicts", task_id), "audit_verdicts")}
-    if not verdict_ids:
-        return []
     by_ref = deployment_attribution(governance_root)["by_ref"]
-    return sorted({path for vid in verdict_ids for path in by_ref.get(vid, [])})
+    releases = by_ref.get(f"release:{task_id}", [])  # AIPOS-F251: 本卡受控生产发布的部署记录(operation=release, release_task_id=本卡)
+    return sorted({*releases, *(path for vid in verdict_ids for path in by_ref.get(vid, []))})
 
 
 def loop_run_files(governance_root: Path, task_id: str) -> dict[str, list[Path]]:
