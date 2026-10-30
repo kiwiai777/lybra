@@ -731,6 +731,7 @@ def generate_onboarding_guide(
     ] if subagent_exec else []
     step9 = [
         *step9_exec,
+        *card_policy_lines(gov_s, _actor),  # AIPOS-F252 件①: 首卡前声明卡号形状(值 = Owner 确认的本项目卡号正则, 无内置默认)
         ("# 发卡: 卡稿 JSON 写 project / lane.repo(Step 2 仓名) / audit 等(执行者 / harness / 审计者按执行方式声明缺省); 校验后发布到 pending"
          if subagent_exec else
          "# 发卡: 卡稿 JSON 写 project / assigned_to(执行实例) / lane.repo(Step 2 仓名) / audit 等; 校验后发布到 pending"),
@@ -790,6 +791,21 @@ def generate_onboarding_guide(
     }
 
 
+def card_policy_lines(governance_root: str, actor: str) -> list[str]:
+    """AIPOS-F252 件①: 接入流程的卡号形状声明行(向导第 9 步首卡前 / 人肉期接入第 1 步同一渲染): 说明 + show(看建议值) + 预演 + 确认。
+    命令原文唯一渲染 card_policy_loader.set_task_id_pattern_command / show_command(缺声明报错 / project upgrade 待补项同一出处); 值不内置默认。"""
+    from tools.card_policy_loader import set_task_id_pattern_command, show_command
+
+    base = set_task_id_pattern_command(governance_root)
+    return [
+        "# 卡号形状(task_id_pattern, AIPOS-F252): 受控发布 / finalize / lybra-deploy 的归属解析只读它, 产品无内置默认; "
+        "show 给出按现有卡号前缀推出的建议值(仅建议), 值经 Owner 确认后先预演再 --confirm(写治理根 card_policy.json 并落账)",
+        show_command(governance_root),
+        f"{base} --actor {_shell_quote(actor)} --dry-run",
+        f"{base} --actor {_shell_quote(actor)} --confirm",
+    ]
+
+
 def legacy_onboarding_steps(project_name: str, governance_root: str, *, home_root: str, actor: str, driver_policy: str) -> list[dict[str, Any]]:
     """AIPOS-F123 件③ / AIPOS-F124 件②: 「接入既有人肉项目」一节(接入向导唯一出处; 顺序 = 落点声明 → 冻结 → 收编)。
 
@@ -830,6 +846,7 @@ def legacy_onboarding_steps(project_name: str, governance_root: str, *, home_roo
                 f"# 阶段档案(阶段快照)不在缺省位置时同样声明: --key {STAGE_ARCHIVE_PATH_KEY} --value <相对治理根路径>"
                 "(未声明 = 缺省落点; 落点下无快照 = finalize 阶段闸门拒)",
                 *meta_lines,
+                *card_policy_lines(governance_root, actor),
             ]),
             "purpose": ("为什么先做: 后两步都按声明落点工作——冻结按 queue_root 找卡, 收编按 return_root 写报告骨架、loop 按声明找产物; "
                         "落点未声明时取缺省值, 人肉期项目的真实落点未必是缺省, 骨架会落错位置。"

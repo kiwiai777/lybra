@@ -41,13 +41,11 @@ def _resolve_task_id_pattern(governance_root: Path | None, repo_root: Path | Non
         raise SchemaLoadError(
             "归属解析需要 governance_root 才能读项目声明的 task_id_pattern (card_policy.json)"
         )
-    from tools.card_policy_loader import get_task_id_pattern
+    from tools.card_policy_loader import get_task_id_pattern, missing_pattern_message
     pattern = get_task_id_pattern(governance_root, repo_root=repo_root)
     if not pattern:
-        raise SchemaLoadError(
-            f"项目未声明 task_id_pattern (card_policy.json @ {governance_root}); "
-            "卡号形状是项目属性, 解析器无内置默认, 无法做归属解析 (C2 原则)"
-        )
+        # AIPOS-F252 件①: 缺声明 = 出声停(C2 不变), 拒因带声明命令原文 + 按现有卡号前缀的建议值(release plan / finalize / lybra-deploy 同读)
+        raise SchemaLoadError(missing_pattern_message(governance_root))
     return pattern
 
 

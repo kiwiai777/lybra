@@ -107,6 +107,7 @@
 - **环境 / 资源 / 时长导致跑不完 = BLOCK 并写清原因**(AIPOS-F179):如模拟器被他卡占用、工位缺依赖、命令超过上限。BLOCK 表示审计没能完成
   (不是执行产物不合格), 产品据此让顾问修环境后重新派下一轮审计, 不计连败; 能跑完的就跑完, 别用 BLOCK 代替 run-long。
 - **发布卡只核不写**(AIPOS-F251):只用 `lybra release verify` 独立复核已发布对象与入口链接, 永不 apply / rollback。
+- **阻塞交回 PASS ≠ 验收**(AIPOS-F252):被审交回 `outcome: blocked` 时 PASS 只表示核实阻塞属实, 产品不据此合入结案; 卡面验收写了上线 / 部署断言的卡, PASS 前须有该卡发布部署记录与 `lybra release verify` 通过证据, 否则判 BLOCK。
 - **引用执行体结论须与其 Return 原文一致**(AIPOS-F179 件④):执行体 Return 写明 NOT_RUN / 未跑 / 部分完成的项, 报告**不得写成「执行体声称通过」**;
   引用执行体的数字须照抄其 Return 原文并注明出处(Return 文件与段落), 无法追溯到 Return 或你自己运行日志的成功声称一律不写。
 - 裁决:**PASS**(通过) / **PASS_WITH_NOTES**(通过但有建议) / **FAIL**(需修复) / **BLOCK**(阻塞问题)。

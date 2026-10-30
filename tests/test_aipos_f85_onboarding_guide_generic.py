@@ -40,6 +40,7 @@ PLACEHOLDER_VALUES = {
     "<CARD_DRAFT_JSON>": "/tmp/f85-card.json",
     "<DRAFT_PATH>": "5_tasks/drafts/f85-1.md",
     "<TASK_ID>": "F85-1",
+    "<卡号正则>": "F85-[0-9]+",  # AIPOS-F252 件①: 第 2 步卡号形状声明(值须 Owner 确认, 无内置默认)
 }
 PLACEHOLDER_RE = re.compile(r"<[A-Za-z_一-鿿][^<>\s]*>")
 #: 非 lybra 的 shell 动词登记(guide 新增别的 shell 动词须在此登记并说明, 否则红)

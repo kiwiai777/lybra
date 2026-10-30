@@ -185,6 +185,90 @@ def _pick_candidate(directory: Path, candidates: list[str], *, ready: Any = None
     return None
 
 
+def return_outcome_declaration() -> dict[str, Any]:
+    """AIPOS-F252 件②: 交回结果声明唯一读取口 = transitions.schema artifact_ingest.return.outcome + 值域 enums.schema return_outcome。
+    返回声明 + values(值域元组)。键缺 / 缺省不在值域 / blocked 路由键缺 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (_artifact_ingest_declaration().get("return") or {}).get("outcome")
+    enum = ((load_schema("enums", REPO_ROOT).get("enums") or {}).get("return_outcome") or {}).get("values") or []
+    values = tuple(str(v.get("value")) for v in enum if isinstance(v, dict) and v.get("value"))
+    blocked = (decl or {}).get("blocked") if isinstance(decl, dict) else None
+    keys = ("field", "default", "record_field", "reject_category", "reject_text", "blocked")
+    bkeys = ("action_type", "stop_action_type", "end_reason", "owner_reason", "block_command", "block_reason", "resume", "suggested_block",
+             "stopped", "close_refusal")
+    if (not isinstance(decl, dict) or any(not decl.get(k) for k in keys) or not isinstance(blocked, dict)
+            or any(not str(blocked.get(k) or "").strip() for k in bkeys) or str(decl["default"]) not in values or "blocked" not in values):
+        raise SchemaLoadError("transitions.schema.json artifact_ingest.return.outcome(字段 / 缺省 / 记录字段 / 拒因 / blocked 路由)或 "
+                              "enums.schema return_outcome(含 blocked 与缺省值)未声明齐(AIPOS-F252)")
+    return {**decl, "values": values}
+
+
+def report_return_outcome(report_frontmatter: dict[str, Any] | None) -> tuple[str, bool, str | None]:
+    """AIPOS-F252 件②: 交回报告 frontmatter 声明的结果(唯一判定; 产物入口校验与门交回记录同读)。
+    返回 (值, 是否显式声明, 不合原因 | None): 缺 / 空 = (缺省, False, None); 不在值域 = (原值, True, 原因)。"""
+    decl = return_outcome_declaration()
+    raw = (report_frontmatter or {}).get(str(decl["field"]))
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return str(decl["default"]), False, None
+    value = str(raw).strip() if isinstance(raw, str) else raw
+    if value not in decl["values"]:
+        return str(value), True, f"{decl['field']}={value!r} 不在 {list(decl['values'])}"
+    return str(value), True, None
+
+
+def return_record_outcome(return_record: dict[str, Any] | None) -> str:
+    """AIPOS-F252 件②: 门交回记录上的交回结果(推导核 / 门侧结案只读它; 缺 = 缺省 done, 存量记录行为不变)。"""
+    decl = return_outcome_declaration()
+    value = str((return_record or {}).get(str(decl["record_field"])) or "").strip()
+    return value or str(decl["default"])
+
+
+def round_boundary_declaration() -> dict[str, Any]:
+    """AIPOS-F252 件③: reopen 轮界声明唯一读取口 transitions.schema queue_mutations.transitions.reopen.round_boundary。缺 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = ((((load_schema("transitions", REPO_ROOT).get("queue_mutations") or {}).get("transitions") or {}).get("reopen") or {})
+            .get("round_boundary"))
+    if not isinstance(decl, dict) or any(not str(decl.get(k) or "").strip() for k in ("event_type", "record_id_prefix", "archive_dir")) \
+            or not isinstance(decl.get("record_fields"), list):
+        raise SchemaLoadError("transitions.schema.json queue_mutations.transitions.reopen.round_boundary(event_type / record_id_prefix / "
+                              "archive_dir / record_fields)未声明(AIPOS-F252)")
+    return decl
+
+
+_RECORD_STAMP = re.compile(r"_(\d{8}_\d{6})(?=_|\.|$)")
+
+
+def record_stamp(path: Path | str) -> str | None:
+    """门生记录文件名里的时刻(record_writer.build_runtime_id 的 compact 段 YYYYMMDD_HHMMSS); 无 = None。"""
+    found = _RECORD_STAMP.search(Path(path).name)
+    return found.group(1) if found else None
+
+
+def round_floor(workspace_root: Path, task_id: str) -> tuple[str, int] | None:
+    """AIPOS-F252 件③: 本卡当前一轮的起点 = 最新轮界记录(records/events/<卡>/<record_id_prefix>_*.md)的(文件名时刻, 写入时刻 ns);
+    从未 reopen = None。"""
+    from tools.aipos_cli.record_writer import record_dir
+
+    directory = record_dir(workspace_root, "events", task_id)
+    if not directory.is_dir():
+        return None
+    prefix = f"{round_boundary_declaration()['record_id_prefix']}_"
+    marks = [(stamp, p.stat().st_mtime_ns) for p in directory.glob(f"{prefix}*.md") if (stamp := record_stamp(p))]
+    return max(marks) if marks else None
+
+
+def in_round(path: Path | str, floor: tuple[str, int] | None) -> bool:
+    """记录是否属本轮: 无轮界 = 是; 文件名时刻晚于轮界 = 是, 同一秒按写入先后(轮界之后写的算本轮); 文件名无时刻(非门生命名)= 是(不猜)。"""
+    if not floor:
+        return True
+    stamp = record_stamp(path)
+    if stamp is None or stamp > floor[0]:
+        return True
+    return stamp == floor[0] and Path(path).stat().st_mtime_ns >= floor[1]
+
+
 def return_artifact_dir(workspace_root: Path, task_id: str) -> Path:
     """执行体 Return 落点目录 = <paths.return_root>/<task_id>(声明驱动, lybra 默认 task_cards/<ID>)。"""
     return Path(_project_paths(workspace_root)["return_root"]) / task_id
@@ -2019,6 +2103,8 @@ def _action_type_for_command(command: str) -> str:
         return "return"
     if "queue close" in command:
         return "close"
+    if "queue block" in command:
+        return str(return_outcome_declaration()["blocked"]["action_type"])  # AIPOS-F252 件②: 交回阻塞的 block 转移
     if "audit-verdict" in command or "audit verdict" in command:
         return "verdict"
     if "audit dispatch" in command:
@@ -2087,11 +2173,12 @@ def _find_task_in_queue(workspace_root: Path, task_id: str) -> tuple[Path | None
     return find_task_card(workspace_root, task_id)
 
 
-def _find_latest_record(records_dir: Path, prefix: str) -> dict[str, Any] | None:
-    """在 records 子目录中找最新记录(按修改时间)。返回 frontmatter dict 或 None。"""
+def _find_latest_record(records_dir: Path, prefix: str, *, floor: tuple[str, int] | None = None) -> dict[str, Any] | None:
+    """在 records 子目录中找最新记录(按修改时间)。返回 frontmatter dict 或 None。AIPOS-F252 件③: floor = 本卡轮界(round_floor), 只认本轮记录。"""
     from tools.aipos_cli.record_writer import record_files_with_prefix
 
-    files = sorted(record_files_with_prefix(records_dir, prefix), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted((p for p in record_files_with_prefix(records_dir, prefix) if in_round(p, floor)), key=lambda p: p.stat().st_mtime,
+                   reverse=True)
     if not files:
         return None
     return _read_frontmatter(files[0]) or None
@@ -2113,13 +2200,17 @@ def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
     # 与 state lint 推导同一实现(原各处写死前缀字面量)
     from tools.aipos_cli.record_writer import record_file_prefix
 
+    # AIPOS-F252 件③: reopen 开新一轮 = 只认轮界之后的本卡记录(旧轮记录留档不拦新一轮; 从未 reopen = 全部, 行为不变)
+    floor = round_floor(workspace_root, task_id)
+    result["round_floor"] = floor
+
     # claims
     claims_dir = record_dir(workspace_root, "claims", task_id)
-    result["latest_claim"] = _find_latest_record(claims_dir, record_file_prefix("claims"))
+    result["latest_claim"] = _find_latest_record(claims_dir, record_file_prefix("claims"), floor=floor)
 
     # returns
     returns_dir = record_dir(workspace_root, "returns", task_id)
-    result["latest_return"] = _find_latest_record(returns_dir, record_file_prefix("returns"))
+    result["latest_return"] = _find_latest_record(returns_dir, record_file_prefix("returns"), floor=floor)
 
     # audit_dispatches (AIPOS-F73 前置一: 门写在审计卡 ID 目录下,如 AIPOS-F75R)
     # 派审记录在 audit_dispatches/<audit_task_id>/ 而非 <task_id>/
@@ -2130,7 +2221,7 @@ def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
     result["audit_task_id"] = audit_task_id
     result["audit_round_ids"] = audit_round_ids(task_id, workspace_root)
     dispatches_dir = record_dir(workspace_root, "audit_dispatches", audit_task_id)
-    result["latest_audit_dispatch"] = _find_latest_record(dispatches_dir, record_file_prefix("audit_dispatches"))
+    result["latest_audit_dispatch"] = _find_latest_record(dispatches_dir, record_file_prefix("audit_dispatches"), floor=floor)
 
     # audit_verdicts (keyed by reviewed_task_id)
     verdicts_dir = record_dir(workspace_root, "audit_verdicts", task_id)
@@ -2140,7 +2231,7 @@ def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
 
     result["latest_supplementary_verdict"] = None
     filled: set[str] = set()
-    for vfile in sorted(record_files_with_prefix(verdicts_dir, record_file_prefix("audit_verdicts")),
+    for vfile in sorted((p for p in record_files_with_prefix(verdicts_dir, record_file_prefix("audit_verdicts")) if in_round(p, floor)),
                         key=lambda p: p.stat().st_mtime, reverse=True):
         vfm = _read_frontmatter(vfile) or None
         slot = "latest_supplementary_verdict" if vfm and str(vfm.get("supplementary_of") or "").strip() else "latest_verdict"
@@ -2153,12 +2244,12 @@ def _read_task_records(workspace_root: Path, task_id: str) -> dict[str, Any]:
     # closures(AIPOS-F73E: 门落 close_*, 读 closure_* 即永远找不到 → loop 不得 exit 0; AIPOS-F122 件④: 前缀读声明 N6.record.location,
     # 与写侧 record_writer.CLOSURE_ID_PREFIX 相等由夹具钉住)
     closures_dir = record_dir(workspace_root, "closures", task_id)
-    result["latest_closure"] = _find_latest_record(closures_dir, record_file_prefix("closures"))
+    result["latest_closure"] = _find_latest_record(closures_dir, record_file_prefix("closures"), floor=floor)
 
     # events
     events_dir = record_dir(workspace_root, "events", task_id)
     if events_dir.is_dir():
-        for ef in sorted(events_dir.glob("*.md"), key=lambda p: p.stat().st_mtime):
+        for ef in sorted((p for p in events_dir.glob("*.md") if in_round(p, floor)), key=lambda p: p.stat().st_mtime):
             fm = _read_frontmatter(ef)
             if fm:
                 result["events"].append(fm)
@@ -5132,6 +5223,58 @@ def audit_evidence_reuse_line(workspace_root: Path, audit_task_id: str, *, candi
     return evidence_reuse_declaration()["texts"]["kickoff"].format(basis=view["basis"], previous=view["previous"], candidate=candidate or "?")
 
 
+def _return_is_blocked(records: dict[str, Any]) -> bool:
+    """AIPOS-F252 件②: 本轮最新交回记录声明 outcome=blocked(轮界见 round_floor; 已结案卡不经此判, 推导核按队列状态先分流)。"""
+    latest = records.get("latest_return")
+    return bool(latest) and return_record_outcome(latest) == "blocked"
+
+
+def _derive_return_blocked(workspace_root: Path, task_id: str, records: dict[str, Any]) -> dict[str, Any] | None:
+    """AIPOS-F252 件②: 本轮最新交回声明 outcome=blocked = 不派审 / 不合入 / 不结案(先于 N3-N6 判; 已出的裁决含 PASS 只表示阻塞属实),
+    派生既有 block 转移(lybra queue block, 卡面 needs_owner + 第一档事由)= Owner 收件箱「卡待 Owner」事项; 声明 transitions
+    artifact_ingest.return.outcome.blocked。无 claim 记录(actor 无据)= 不可推导点名缺项。非阻塞交回 = None。"""
+    import shlex
+
+    if not _return_is_blocked(records):
+        return None
+    decl = return_outcome_declaration()["blocked"]
+    latest = records.get("latest_return") or {}
+    return_id = str(latest.get("return_id") or "?")
+    resume = _return_blocked_resume(workspace_root, task_id, records)
+    base = {"task_id": task_id, "current_node": str(decl["stop_action_type"]), "current_state": "claimed", "triggered_by": "advisor",
+            "verb": "lybra_queue_block", "notes": str(decl["suggested_block"])}
+    # actor = 该卡 claim 记录的执行实例(执行体声明的阻塞; 与 close 同一判据 _claimer_instance, AIPOS-F73E): 搬卡执行器按 actor==claimer 判
+    claimer = _claimer_instance(records)
+    if not claimer:
+        return _not_derivable_no_claim(task_id, node=base["current_node"], state="claimed", verb=base["verb"], triggered_by="advisor",
+                                       notes="交回阻塞的 block 转移 actor 无据(无 claim 记录; AIPOS-F73E 件①)")
+    summary = " ".join(str(_extract_return_summary(workspace_root, task_id) or "").split()) or "-"
+    reason = f"{str(decl['block_reason']).format(return_id=return_id, summary=summary)}。{resume}"
+    command = str(decl["block_command"]).format(governance_root=shlex.quote(str(workspace_root)), task_id=task_id, actor=shlex.quote(claimer),
+                                                reason=shlex.quote(reason), owner_reason=str(decl["owner_reason"]))
+    return {**base, "derivable": True, "command": command, "missing_records": [],
+            "suggested_action": f"{decl['suggested_block']}; {resume}"}
+
+
+def _return_blocked_resume(workspace_root: Path, task_id: str, records: dict[str, Any]) -> str:
+    """续跑出口原文(声明 blocked.resume); reopen 的 actor = 本卡认领执行实例(搬卡执行器按 actor 判卡归属, 与 block 同一判据)。"""
+    executor = _claimer_instance(records) or "<本卡执行实例>"
+    return str(return_outcome_declaration()["blocked"]["resume"]).format(governance_root=workspace_root, task_id=task_id, executor=executor)
+
+
+def _return_blocked_stop(workspace_root: Path, task_id: str, records: dict[str, Any]) -> dict[str, Any] | None:
+    """AIPOS-F252 件②: 卡已因交回阻塞转 blocked = 停(loop end_reason 读声明), 出口 = 续跑命令原文; 其他 blocked 卡 = None(原判)。"""
+    if not _return_is_blocked(records):
+        return None
+    decl = return_outcome_declaration()["blocked"]
+    resume = _return_blocked_resume(workspace_root, task_id, records)
+    stopped = str(decl["stopped"]).format(task_id=task_id, return_id=str((records.get("latest_return") or {}).get("return_id") or "?"),
+                                          resume=resume)
+    return {"task_id": task_id, "derivable": False, "current_node": "blocked", "current_state": "blocked", "triggered_by": "owner",
+            "command": "", "verb": "", "missing_records": [stopped], "suggested_action": resume, "notes": str(decl["suggested_block"]),
+            "action": {"type": str(decl["stop_action_type"]), "card": task_id, "end_reason": str(decl["end_reason"])}}
+
+
 def _derive_audit_blocked(workspace_root: Path, task_id: str, fm: dict[str, Any], state: dict[str, Any], *,
                           conn_arg: str | None) -> dict[str, Any]:
     """N4 BLOCK -> not derivable, action audit_blocked (advisor fixes environment then re-dispatches R(n+1));
@@ -5641,6 +5784,11 @@ def _derive_next_step(
 
             finalization_files = existing_finalization_records(workspace_root, task_id)
             has_finalization = bool(finalization_files)
+
+            # AIPOS-F252 件②: 本轮最新交回声明 outcome=blocked = 不派审 / 不合入 / 不结案, 派生 block 转移(先于 N3-N6)
+            blocked_step = _derive_return_blocked(workspace_root, task_id, records)
+            if blocked_step is not None:
+                return blocked_step
             
             # N5→N6: 有 finalization 但无 closure → close
             if has_finalization and not latest_closure:
@@ -6221,6 +6369,9 @@ def _derive_next_step(
 
     # --- blocked → 需人工裁定 ---
     if queue_dir == "blocked":
+        blocked_stop = _return_blocked_stop(workspace_root, task_id, records)  # AIPOS-F252 件②: 交回阻塞转来的 = 停 + 续跑出口
+        if blocked_stop is not None:
+            return blocked_stop
         return {
             "task_id": task_id,
             "derivable": False,
@@ -7374,6 +7525,10 @@ def _execute_derived_action(
     _return_task_path, _q = _find_task_in_queue(workspace_root, task_id) if action_type == "return" else (None, None)
     _return_needs_branch = (card_needs_worktree(workspace_root, {**_read_frontmatter(_return_task_path), "task_id": task_id})
                             if _return_task_path else True)
+    if action_type == "return" and _return_needs_branch and report_return_outcome(
+            _read_frontmatter(find_return_artifact(Path(workspace_root), task_id) or default_return_file(Path(workspace_root), task_id),
+                              allow_missing_block=True))[0] == "blocked":
+        _return_needs_branch = False  # AIPOS-F252 件②: 按卡停线的阻塞交回可无新提交(三键照核分支 tip)
     if action_type == "return" and _return_needs_branch:
         from tools.aipos_cli.workspace_config import CardRepoUnresolved
 
@@ -7435,6 +7590,9 @@ def _execute_derived_action(
     # AIPOS-F94 件①: N6 落账步 = 同一条产品命令在本进程经 CLI 入口(aipos_cli.main)执行——非门动词, 落账代码与驱动它的 loop 同版本
     # (子进程按 PATH 找 lybra 可能落到另一份部署); 输出取 --json 结果原文, 拒因原样透传(他人暂存 / 护栏 / push 未完成)
     if action_type == "governance_commit":
+        return _run_cli_in_process(command, action_type)
+    # AIPOS-F252 件②: 交回阻塞的 block 转移 = 同一 CLI 入口本进程执行(lybra queue block; 写后经 queue_writers 落账), 非门动词
+    if action_type == str(return_outcome_declaration()["blocked"]["action_type"]):
         return _run_cli_in_process(command, action_type)
 
     # AIPOS-F73B件① + F90 件①: 认领 = 执行同一条派生命令 + 只读核验门已建的卡工作树(输出 spawn_worker)

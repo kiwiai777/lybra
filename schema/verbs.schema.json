@@ -227,6 +227,16 @@
         "nothing": "无未读(未写)"
       }
     },
+    "card_policy_writers": {
+      "description": "AIPOS-F252 件①: `lybra project card-policy` 写命令(set-task-id-pattern)同一两阶段语义——旗标注册与其他族同一包装 aipos_cli._project_json_two_phase_flags(family=card_policy_writers), 旗标名 / 缺省阶段 / 状态标签读 project_json_writers 一处; 缺省 = 预演: 校验新值(合法正则、无捕获组 / 锚点、整匹配本项目队列内全部现有卡号)并打印卡号形状声明文件 unified diff, 零写入; --confirm 才写并经 lybra_governance_commit.post_write_landing.commands.card_policy_writers 同一提交口落账。唯一实现 tools/card_policy_loader.apply_task_id_pattern(写位置 = 现行唯一读口 get_project_card_policy_path 认的现有声明文件, 无 = 治理根 card_policy.json)。",
+      "commands": [
+        "set-task-id-pattern"
+      ],
+      "flag_help": {
+        "dry_run": "Preview the task_id_pattern change (validated against every card id in the queue; card_policy.json diff) without writing (default)",
+        "confirm": "Write card_policy.json and land it via the governance-commit path (lybra governance-commit --paths), pushing like N6 landing"
+      }
+    },
     "roadmap_writers": {
       "description": "AIPOS-F171 件①: `lybra roadmap` 族写命令(add-milestone / add-criterion / set / remove)同一两阶段语义——旗标注册与其他族同一包装 aipos_cli._project_json_two_phase_flags(family=roadmap_writers), 旗标名 / 缺省阶段 / 状态标签读 project_json_writers 一处(本段不重复声明); 落账提交身份旗标同读 project_json_writers.landing_actor_flag。缺省 = 预演: 校验改动后的整份路线图(config.schema governance_structure.roadmap)并打印路线图文件 unified diff 与将生成的 decision_log 指针名, 零写入; --confirm 才写路线图文件、生成 decision_log 指针(board_adapter._auto_generate_decision_log_pointer, Record = 路线图文件)并经 lybra_governance_commit.post_write_landing.commands.roadmap_writers 同一提交口落账。唯一实现 tools/aipos_cli/roadmap.py(apply_roadmap_change)。只读 `lybra roadmap show` 不适用两阶段。AIPOS-F175 件③: verify(Owner 抽查结论)同族同旗标——缺省预演: 打印将写的 owner_verifications 记录与(不符时)将起草的修复卡, 零写入; --confirm 写记录(+ 不符时修复卡草稿)并经 post_write_landing.commands.roadmap_writers 同一提交口落账; 唯一实现 roadmap.apply_owner_verification。",
       "commands": [
@@ -2758,17 +2768,9 @@
       "envelope": {
         "family": "owner_autonomy_policy (5_tasks/policies/<policy_id>.md, 由 `lybra envelope mint` 申领, owner_decision_record 落 grant)",
         "matcher": "autonomy_policy.match_claim_envelope(策略有效+时间窗+agent_or_role 覆盖驱动方身份或 advisor 角色+task_selector 覆盖本卡+count_bound; AIPOS-F192: 卡链已由本信封放行 = count_bound 不拦, 见 quota)",
-        "allowed_verbs": [
-          "claim",
-          "return",
-          "dispatch",
-          "verdict",
-          "finalize",
-          "close",
-          "governance_commit"
-        ],
+        "allowed_verbs": ["claim", "return", "dispatch", "verdict", "finalize", "close", "governance_commit", "block"],
         "subject_rule": "AIPOS-F90 件①: 信封 task_selector(task_mode/project/task_ids)的判定对象——审计卡(task_mode=audit 且声明 reviewed_task_id)= 被审卡, 其余 = 本卡; 驱动方(loop_driver.find_envelope)与门(_match_claim_envelope)同读唯一实现 autonomy_policy.envelope_subject。AIPOS-F192: 审计卡认领归属被审卡(根业务卡), 不另扣额度(见 quota)。",
-        "allowed_verbs_note": "loop 只执行 action_type 在此集合内的派生命令; 集合外(含 manual)=exit 5/4。集合唯一声明在此。AIPOS-F78B 件③: 门侧驱动方一阶段放行(queue return/audit-verdict/queue close 的 autonomy_mode=PreAuthorized)也读此集合判 verb 是否在信封授权内(claim 经 _match_claim_envelope, 其余经 _match_driver_envelope, 同一 matcher autonomy_policy.match_claim_envelope)。 AIPOS-F94: governance_commit = N6 落账步(transitions nodes.N6.landing), 独立列入本集合(非门动词, 门侧 _match_driver_envelope 不会收到它); 覆盖驱动方与本卡的有效信封即授权落账。 AIPOS-F123: 收编(lybra_queue_adopt_dry_run, verb_family=claim)按 claim 判授权——门侧经 _match_driver_envelope(verb=声明的 verb_family), 不另列动词。",
+        "allowed_verbs_note": "AIPOS-F252 件②: block = 交回声明 outcome=blocked 时推导核派生的既有 block 转移(transitions artifact_ingest.return.outcome.blocked; lybra queue block 本进程经 CLI 入口执行, 非门动词, 写后经 queue_writers 落账), 覆盖驱动方与本卡的有效信封 / 项目授权即授权。loop 只执行 action_type 在此集合内的派生命令; 集合外(含 manual)=exit 5/4。集合唯一声明在此。AIPOS-F78B 件③: 门侧驱动方一阶段放行(queue return/audit-verdict/queue close 的 autonomy_mode=PreAuthorized)也读此集合判 verb 是否在信封授权内(claim 经 _match_claim_envelope, 其余经 _match_driver_envelope, 同一 matcher autonomy_policy.match_claim_envelope)。 AIPOS-F94: governance_commit = N6 落账步(transitions nodes.N6.landing), 独立列入本集合(非门动词, 门侧 _match_driver_envelope 不会收到它); 覆盖驱动方与本卡的有效信封即授权落账。 AIPOS-F123: 收编(lybra_queue_adopt_dry_run, verb_family=claim)按 claim 判授权——门侧经 _match_driver_envelope(verb=声明的 verb_family), 不另列动词。",
         "one_stage_release": "驱动方 token(roles.schema driver.role_class 或其 role_class 自定义角色) + autonomy_mode=PreAuthorized + owner_policy_ref 命名的信封(agent_or_role 覆盖驱动方实例/角色类, task_selector 覆盖本卡, 有效/时间窗/额度) → 门在 dry_run 一跳内落记录(preauthorized_release=true), 不索 owner_confirm; 不匹配 = BLOCK + envelope_guards 出口, CLI 薄壳 exit 5(无信封)。",
         "launch_harnesses": "AIPOS-F95 件②(b): 信封字段 launch_harnesses(harness 值列表, 取值 ⊆ enums.schema harness 中 launch 非 null 者; 缺省 [] = 不授权拉起, 只手工 /go)。`lybra envelope mint --launch-harness <harness>`(可重复)经 --confirm 由 Owner 签, 门 owner_decision_record 同一路径落盘。loop 判授权 = autonomy_policy.envelope_authorizes_launch(同一信封族唯一实现, 禁第二实现)。",
         "boundary_template": "This artifact records a bounded, revocable Owner pre-authorization (PreAuthorized envelope). Within its time bound, count bound and task_selector it authorizes the covered driver (`lybra loop`, one-stage gate release) to run only these verbs: {allowed_verbs} (declared in verbs.schema lybra_loop.envelope.allowed_verbs). Harness launch authorized: {launch_harnesses} (the loop may start a declared enums.schema harness.launch template once per card at the enrolled local workstation; otherwise the workstation starts work by hand with /go). It does not authorize publish, credential access, or any verb outside this list. Reaching the time or count bound, or status revoked/expired, drops matching actions back to Supervised (per-task owner_confirm).",
@@ -2940,7 +2942,7 @@
               "description": "AIPOS-F236 件③(10-26 chris LANTU-CLDEP1 实撞: pi 执行的 config 卡交回被产物入口拒 INGEST_PROGRAM_IN_NON_CODE_CARD, loop 以 gate_rejected 结束, 无人按拒因修): F204 同一续接机制扩到「产物不合入门判据」类拒收。触发 = 本卡(执行卡)交回步(artifact ingest --kind return)被拒或推导核判 transitions artifact_ingest.return.rejection_record.action_type(拒后报告与产物未变), 且产物入口同一校验(validate_task_artifact)的 category ∈ categories、无报告头问题(header_problem 优先走上一机制)。以本卡最近一次拉起的固定会话同会话续接执行体一次(拉起判定 / 拉起与等待 / 记录同 report_fix.executor: plan_launch resume_session / _launch_once; 运行记录 report_fixes role = executor, kinds = [category]), 指令 = prompt(按拒因修产物 / 报告, 修完重写交回报告; 确属本卡必须交付而入门判据不允许 = 不删改工作, 交回报告写明 BLOCK 原因由顾问改走出口)。等到交回报告改写后重推导、重新入门。每张执行卡每次运行至多 max_per_run 次(与报告头修复分开计数)。会话不可续接(子 agent / 手工工位 / 无会话记录 / 拉起判定拒 / 工位已变)、本运行已用尽、续接后报告未改写或等待超时 = 以 end_reason 结束(exit_codes.not_derivable; loop status by_end_reason = advisor_fix, 修法 routine_rejections.end_reasons.<end_reason>; 结束原文附修产物指令与合法出口全集 transitions nodes.N4.legal_exits.states.return_rejected), 不升 Owner。门侧拒(产物入口校验通过而门 queue_return 拒)不归此类(照原规则 gate_rejected)。唯一实现 loop_driver._report_fix(role=executor)。",
               "max_per_run": 1,
               "end_reason": "return_rejected",
-              "categories": ["INGEST_PROGRAM_IN_NON_CODE_CARD", "INGEST_CODE_FILE_IN_SLOT", "INGEST_REPORT_UNFILLED", "INGEST_SUMMARY_MISSING", "INGEST_OUTPUTS_INVALID", "INGEST_OUTPUT_MISSING", "INGEST_OUTPUT_OUT_OF_BOUNDARY", "INGEST_CREDENTIAL_IN_ARTIFACT"],
+              "categories": ["INGEST_PROGRAM_IN_NON_CODE_CARD", "INGEST_CODE_FILE_IN_SLOT", "INGEST_REPORT_UNFILLED", "INGEST_SUMMARY_MISSING", "INGEST_OUTPUTS_INVALID", "INGEST_OUTPUT_MISSING", "INGEST_OUTPUT_OUT_OF_BOUNDARY", "INGEST_CREDENTIAL_IN_ARTIFACT", "INGEST_RETURN_OUTCOME_INVALID"],
               "category_notes": {"INGEST_CREDENTIAL_IN_ARTIFACT": "AIPOS-F239: 拒因是明文凭据(只给文件 / 行号 / 种类)——逐处把值换成占位(如 <口令> / [已打码] / ${变量名}), 并在报告写明凭据存放处(被 .gitignore 排除的私有运行目录内的文件名); 不删验证结论与其余证据, 不把凭据挪到另一个会入门的文件; 运行确需的凭据只放被 git 忽略的私有目录。"},
               "prompt": "你的交回 {artifact} 被产物入口拒收 {category}: {reasons}。按拒因修产物 / 报告(只动本卡报告落点与本卡 run 目录; 拒因点名的文件不是本卡交付物 = 移出或删除; 不改门 / 产品 / 卡面, 不提交产品仓), 修完重写交回报告(先写 .tmp 再改名)。若拒因指的内容确属本卡必须交付而入门判据不允许 = 不删改工作, 把交回报告改写为 BLOCK 并写明原因(由顾问改走代码卡 / 撤换等出口)。改完即停。",
               "prompt_note": "修产物指令唯一声明; 占位 {artifact} = 交回报告绝对路径, {category} = 产物入口拒因码, {reasons} = 拒因原文(含命中文件与合法出口命令)。AIPOS-F239: category_notes.<拒因码>(可选)= 该拒因码的补充指令, 渲染时接在 prompt 之后(唯一渲染 loop_driver.executor_artifact_fix_prompt)"
@@ -3089,7 +3091,8 @@
           "launch_provider_error": "AIPOS-F231 件④: 拉起的 pi 因模型服务 401 / 429 早退, 有界退避重试用尽(launch.early_exit)仍失败 = 额度 / 凭据问题(结束原文点名 provider / 模型 / 状态码; exit_codes.wait_timeout)",
           "launch_context_overflow": "AIPOS-F231 件④: 拉起的 pi 以 stopReason=length 早退 = 开局上下文超出模型窗口(不续接; 结束原文附输入 token 数; exit_codes.wait_timeout)",
           "run_context_overflow": "AIPOS-F240: 拉起的 pi 以 stopReason=length 早退且首轮输入正常 = 运行中上下文累积超出模型窗口, 同会话续接(会话已压缩)/ 新会话附上次运行摘要重拉(无压缩)用尽仍超(launch.early_exit.run_overflow); 结束原文附首轮 / 末轮输入、读入最大的工具结果与出口全集(续跑 loop / 拆卡 / 换模型); exit_codes.wait_timeout",
-          "launch_context_too_large": "AIPOS-F231 件⑤: 拉起 pi 前开局上下文估算超所用模型窗口安全上限, 精简(大节给路径不内联)后仍超, 未拉起(launch.context_budget; exit_codes.not_derivable)"
+          "launch_context_too_large": "AIPOS-F231 件⑤: 拉起 pi 前开局上下文估算超所用模型窗口安全上限, 精简(大节给路径不内联)后仍超, 未拉起(launch.context_budget; exit_codes.not_derivable)",
+          "return_blocked": "AIPOS-F252 件②: 执行体交回声明 outcome=blocked, 推导核已派生 block 转移(卡进 blocked + needs_owner, Owner 收件箱「卡待 Owner」事项); 结束原文附续跑出口(补齐前置后 reopen 开新一轮再 loop); exit_codes.not_derivable"
         },
         "resource_lock": "AIPOS-F179 件②: 卡声明了独占资源的运行另落 resource_lock {resources, card, state(waiting | held), requested_at, held_at, holder(排队时的占用者: run_id / task_id / pid / host / state)}; 无资源声明的运行不出现本键(存量记录形不变)。lybra loop status 运行行显示「独占资源」行; 判定见 lybra_loop.resource_lock。 AIPOS-F231 件③: 运行结束时 held / waiting 改记 state = released(released_at = 结束时刻), lybra loop status 显示「已随运行结束释放」(存量记录 state 仍为 held 的已结束运行同样显示释放, 判定 judge_run); 停线未清干净 = residual(仍算占用)。",
         "stop": "AIPOS-F231 件②: 停线处理后运行记录另落 stop {requested_at, requested_by, reason, owner_words, relayed_by, timeout, saved(各拉起: card / harness / session_id / pid / pgid / remote_pgid / process_fingerprint / started_at / returncode(仍在跑 = unknown) / last_activity / stderr_tail / log_path; 当前步), cleaned(已清理: pid / 归属依据 / 处置), residual(未清理项: 种类 / 说明 / 安全处置), outcome(stopped | incomplete), finished_at, rechecked_at}; 无停线的运行不出现本键。",
@@ -3447,7 +3450,8 @@
           "launch_provider_error": "advisor_fix",
           "launch_context_overflow": "advisor_fix",
           "launch_context_too_large": "advisor_fix",
-          "run_context_overflow": "advisor_fix"
+          "run_context_overflow": "advisor_fix",
+          "return_blocked": "owner_needed"
         },
         "by_execution_mode": {
           "description": "AIPOS-F156 件①(gap #139): 按本卡执行方式分流的覆盖表(唯一声明, 与 by_end_reason 同节; 判定唯一实现 loop_run_record.next_action)。执行方式 = 运行最后一次等待的卡即本卡(执行体等待; 等审计 / 外部 FINALIZE / 同仓先合入卡的等待不适用)时, 经 workspace_config.card_execution_mode(只读 F143 执行方式声明唯一读取口 workspace_config.project_execution)判出; AIPOS-F157 件③(gap #125): 等待目标实例为无工位的子 agent 执行者(enrollment.instance_enrollment governance_root_mode, 与 lybra_loop.launch.manual_hint.subagent 同一判定 loop_driver.wait_instance_is_subagent)= subagent(未声明 execution 亦然, 等交回超时不再出工位 /go 口径); 未声明 execution 且非子 agent 执行者 / 判不出 = 不覆盖(行为不变)。modes 键 ⊆ config.schema project_json.execution.default_mode 值域。by_end_reason = 该执行方式下覆盖 by_end_reason 的结束原因映射(判为 advisor_fix 的须在 routine_rejections.end_reasons 有修法, 连续计数与其他例行结束原因同一实现); kickoff_detail = 手工等待(reason=manual_kickoff)时顾问下一动作 detail 的前缀(占位 {hint} = 运行记录里的开工提示)。pi 执行工位 / 手工工位(card_execution_mode = pi 或未声明)= 原口径(owner_needed / 向 Owner 说开工提示)。",
@@ -3461,6 +3465,7 @@
           }
         },
         "owner_reasons": {
+          "return_blocked": "执行体交回阻塞(outcome=blocked, AIPOS-F252): 卡已转 blocked(needs_owner), Owner 收件箱「卡待 Owner」事项定: 补齐前置后由顾问 reopen 开新一轮续跑 / 撤卡 / 另出卡",
           "gate_rejected": "门拒: 按拒因原文裁定(设计分叉 / 越界 / 冲突), 改卡或仲裁后续跑",
           "landing_rejected": "N6 落账被拒(他人暂存 / 提交门护栏 / 推送未完成): 由 Owner 定怎么处理他人改动后续跑(拒因仅为产物槽代码文件 = 例行, 见 routine_rejections.landing_probe)",
           "no_envelope": "授权: 无有效信封(缺 / 过期 / 额度用尽), 请 Owner 签发或续额",
@@ -3901,6 +3906,8 @@
           "pinned_options_by_reason": {"audit_blocked_repeated": ["reaudit"]},
           "advisor_ask": {
             "reason": "advisor_ask",
+            "closed_card_reasons": ["advisor_audit_conflict"],
+            "closed_card_reasons_note": "AIPOS-F252 件③(KIWIWEB-003 顾问对已结案卡 loop note advisor_audit_conflict 被 NOT_LISTED 吞掉): 顾问补写的请求带这些第一档事由时, 卡已结案(completed)仍进 Owner 收件箱(本卡最近一次运行的 loop 事项; 判定唯一 owner_inbox.owner_ask_destination, loop note 拒写 / 收件箱同读); 撤回卡照旧不列。Owner 裁决后由顾问按裁决 reopen 开新一轮或维持原结案",
             "impact": "卡 {task_id} 的 loop 已停({end_reason}), 顾问已请 Owner 定(lybra loop note), 裁决前不再推进",
             "pinned_when_rework_exhausted": ["extend_rework"],
             "legacy": {
@@ -4084,7 +4091,8 @@
           "runtime_evidence_exhausted": {"tier": 3, "action": "advisor_fix", "why": "审计体补做运行证据连败 = 环境 / 声明问题(AIPOS-F233 件⑤: 不升 Owner): 顾问换审计体 / 修审计环境 / 声明错按受限 amend 修正(只改占位名不改验收); 真要改卡面验收才由顾问选第一档事由(rescope)升 Owner"},
           "card_owner_mismatch": {"tier": 3, "action": "advisor_fix", "why": "卡归属不符是顾问之间的分工: 由归属实例推进或交不限 lane 的总顾问, 不是 Owner 的决策"},
           "consecutive_failures": {"tier": 3, "action": "investigate", "why": "连败是技术故障的聚合: 顾问按最近一次结束原因查修(lybra next); 要改卡 / 撤卡才升第一档"},
-          "routine_fix_exhausted": {"tier": 3, "action": "investigate", "why": "例行门拒修了仍连败 = 固定修法对本卡不灵(多 lane 交替抢合入等): 顾问排合入顺序 / 查卡; 要改卡才升第一档"}
+          "routine_fix_exhausted": {"tier": 3, "action": "investigate", "why": "例行门拒修了仍连败 = 固定修法对本卡不灵(多 lane 交替抢合入等): 顾问排合入顺序 / 查卡; 要改卡才升第一档"},
+          "return_blocked": {"tier": 1, "owner_reason": "beyond_authority", "inbox_category": "needs_owner_card", "note": "AIPOS-F252 件②: 卡已经 block 转移进 blocked(needs_owner + owner_reason), 收件箱由 needs_owner_card 事项承载(同卡不再列 loop 事项, owner_inbox._loop_card 判 inbox_category)"}
         },
         "categories": {
           "loop_owner_needed": {"tier": 1},
@@ -4799,6 +4807,13 @@
             "done_when": "当前在用信封均为生效状态(接入清单「信封」项已完成)"
           }
         },
+        "declaration_gaps": {
+          "task_id_pattern": {
+            "why": "项目未声明卡号形状 task_id_pattern(card_policy.json): 归属解析(release plan 受控发布 / finalize 区间覆盖 / lybra-deploy --verdict-ref)出声停(AIPOS-F252, C2 无内置默认)",
+            "say": "按 Owner 确认的卡号形状为 {project} 声明 task_id_pattern(先预演核对队列现有卡号, 再 --confirm 写入并落账): {commands}",
+            "done_when": "lybra project card-policy show 显示已声明且队列现有卡号全部匹配"
+          }
+        },
         "card_fields": {
           "audit_runtime_evidence": {
             "why": "近期卡都没声明审计运行证据, 审计 PASS 不必附独立运行记录(F162)",
@@ -4828,6 +4843,7 @@
         "summary_confirm": "结果: 已执行 {done} 步 · 跳过 {skipped} 步 · 失败 {failed} 步 · 未执行 {not_run} 步",
         "stopped": "已停止: 第 {index} 步「{label}」失败, 已成功步保留(写入已生效); 修好后重跑同一条命令(幂等, 只做剩下的)",
         "nothing": "无事可做: 各步均已是最新 / 不适用",
+        "gap_line": "  待补声明(AIPOS-F252; 非机械步, 须顾问按 Owner 确认的值执行): {why}; 命令: {commands}",
         "guidance_head": "需顾问主动用的新能力 — 项目 {project}(按钮做不到, 逐顾问实例转述; 做到后下次检查即消失): {count} 项",
         "guidance_group": "顾问实例 {advisor}:",
         "guidance_item": "  · [{source}] {why}",
@@ -5718,6 +5734,14 @@
             "scope": "AIPOS-F235: 本项目 enrollment_log(追加的 redeclare 位置事件或 redeclare_request 改登记请求; 唯一写出入治理仓。治理根 .lybra/role 实例槽属本机私有配置, 不入治理仓)",
             "message_template": "chore(governance): 实例改登记 {instance} {project}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra roles redeclare --confirm"
           },
+          "card_policy_writers": {
+            "cli": "lybra project card-policy <subcommand> --confirm",
+            "subcommands": [
+              "set-task-id-pattern"
+            ],
+            "scope": "AIPOS-F252 件①: 本次写出的卡号形状声明文件(card_policy_loader.get_project_card_policy_path 认的现有声明, 无 = 治理根 card_policy.json; 治理根相对); 预演零写入、不落账。提交身份 = 该命令 --actor(未给 = $USER 或 owner)。唯一落账点 aipos_cli._card_policy_cli(→ _land_project_writes → land_written_paths)。",
+            "message_template": "chore(governance): 卡号形状声明落账 {subcommand} {project}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra project card-policy {subcommand} --confirm"
+          },
           "roadmap_writers": {
             "cli": "lybra roadmap <subcommand> --confirm",
             "subcommands": ["add-milestone", "add-criterion", "set", "remove", "verify"],
@@ -5792,6 +5816,68 @@
         "refused": {
           "code": 1,
           "meaning": "声明不合(拒因码 ∈ config.schema project_json.validation_roots.reject_codes; project.json 未改动)"
+        },
+        "usage": {
+          "code": 2,
+          "meaning": "参数错"
+        },
+        "landing_failed": {
+          "code": 3,
+          "meaning": "写入已生效但落账未完成(post_write_landing.landing_failed_exit_code)"
+        }
+      }
+    },
+    "lybra_project_card_policy": {
+      "description": "AIPOS-F252 件①(F251 首个真实消费方 kiwiai-web KIWIWEB-003 实撞: 除 lybra 外已建治理根都没有 card_policy.json, 也无产品命令能声明 task_id_pattern, release plan / finalize 归属解析 / lybra-deploy 都在归属解析处出声停): `lybra project card-policy show|set-task-id-pattern` —— 项目卡号形状(task_id_pattern)的查看与声明。show [--json] 只读: 当前声明值与所在文件、队列现有卡号的匹配情况、按卡号前缀给出的建议值。set-task-id-pattern --pattern <正则> [--actor] [--dry-run|--confirm]: 值须为合法正则、不含捕获组与 ^ / $ 锚点(归属解析把它嵌进更大的正则取组)、不匹配空串, 且整匹配本项目队列内全部现有卡号(含审计轮 / 修订卡号)并能从提交信息里原样找出它们, 否则拒并列出不匹配卡号; 写位置 = 现行唯一读口 card_policy_loader.get_project_card_policy_path 认的现有声明文件(只改 task_id_pattern 一键, 其余键原样), 无 = <治理根>/card_policy.json(新建只含 schema_version / task_id_pattern / rules=[]: 零卡面规则 = 行为不变)。建议值只作建议(由现有卡号前缀推出), 产品无内置默认(C2 原则不变), 必须显式 --pattern 确认。写动作两阶段 = two_phase_protocol.card_policy_writers, 写后落账 = post_write_landing.commands.card_policy_writers。接入流程: lybra onboarding guide 第 2 步与「接入既有人肉项目」第 1 步给出本命令; lybra project upgrade 预演把缺声明列为待补项(命令原文); 归属解析缺声明的报错(deployment_authorization._resolve_task_id_pattern, release plan / finalize / lybra-deploy 同读)带本命令原文。",
+      "phase": "two_phase",
+      "surface": [
+        "cli"
+      ],
+      "cli_command": "lybra project card-policy",
+      "single_implementation": "tools/card_policy_loader.apply_task_id_pattern(写) / task_id_pattern_view(读) / task_id_pattern_problems(校验) / suggest_task_id_pattern(建议) / missing_pattern_message(缺声明出口)",
+      "new_file_template": {
+        "schema_version": "1.0.0",
+        "description": "项目卡号形状声明(AIPOS-F5 task_id_pattern; 由 lybra project card-policy set-task-id-pattern 写入, AIPOS-F252)。rules 为空 = 无额外卡面校验(AIPOS-R8C 零侵入)。",
+        "rules": []
+      },
+      "reject_codes": [
+        "TASK_ID_PATTERN_EMPTY",
+        "TASK_ID_PATTERN_INVALID",
+        "TASK_ID_PATTERN_MISMATCH",
+        "CARD_POLICY_UNREADABLE"
+      ],
+      "texts": {
+        "set_command": "{prefix} project card-policy set-task-id-pattern --pattern {pattern}",
+      "show_command": "{prefix} project card-policy show",
+        "pattern_placeholder": "<卡号正则>",
+        "missing": "项目未声明 task_id_pattern (card_policy.json @ {governance_root}); 卡号形状是项目属性, 解析器无内置默认, 无法做归属解析 (C2 原则)。出口: {command} 缺省预演(零写入, 校验队列现有卡号), 核对后同一命令加 --confirm 写入并落账{suggest_part}",
+        "suggest_part": "; 按队列现有卡号前缀推出的建议值 {pattern}(仅建议, 须显式确认)",
+        "empty": "TASK_ID_PATTERN_EMPTY: --pattern 不能为空或仍是占位(值须为 Owner 确认的本项目卡号正则)",
+        "invalid": "TASK_ID_PATTERN_INVALID: {pattern!r} 不是可用的卡号正则: {reason}",
+        "invalid_regex": "正则编译失败 {error}",
+        "invalid_groups": "含捕获组(归属解析把它嵌进更大的正则取组; 分组请用 (?:...))",
+        "invalid_anchor": "含 ^ / $ 锚点(归属解析要在提交信息中间找卡号)",
+        "invalid_empty_match": "能匹配空串",
+        "mismatch": "TASK_ID_PATTERN_MISMATCH: {pattern!r} 不能整匹配本项目队列内 {count} 个现有卡号: {ids}{suggest_part}",
+        "unreadable": "CARD_POLICY_UNREADABLE: 现有声明文件 {path} 读不出({error}); 不覆盖, 先修复该文件",
+        "preview": "预览(未写; 加 --confirm 写入)",
+        "show_declared": "项目 {project} task_id_pattern = {pattern}(声明文件 {path})",
+        "show_missing": "项目 {project} 未声明 task_id_pattern(读口候选首位 {path} 不存在或无该键)",
+        "show_matched": "  队列现有卡号 {count} 个, 不匹配 {mismatched} 个{ids_part}",
+        "show_suggest": "  建议值(仅建议, 须显式确认): {pattern}",
+        "show_set": "  声明: {command}(缺省预演, 核对后加 --confirm)",
+        "head": "目标项目 {project}(来源: {source}) · 卡号形状声明 {path}",
+        "status": "project card-policy set-task-id-pattern {project}: {mode} {path}",
+        "detail": "task_id_pattern {old} → {new}; 队列现有卡号 {count} 个全部整匹配"
+      },
+      "exit_codes": {
+        "ok": {
+          "code": 0,
+          "meaning": "预演完成 / 已写入并落账 / 只读输出"
+        },
+        "refused": {
+          "code": 1,
+          "meaning": "值不合(拒因码 ∈ reject_codes; 声明文件未改动)"
         },
         "usage": {
           "code": 2,

@@ -1565,7 +1565,23 @@
       "claim": {"node": "N1"},
       "block": {"from_states": ["claimed"], "to_state": "blocked"},
       "complete": {"from_states": ["claimed"], "to_state": "completed"},
-      "reopen": {"from_states": ["blocked", "completed"], "to_state": "pending"},
+      "reopen": {"from_states": ["blocked", "completed"], "to_state": "pending", "round_boundary": {
+        "description": "AIPOS-F252 件③(KIWIWEB-003 阻塞却已 completed, 原卡无合法接续): reopen = 开新一轮。轮界 = 一条事件记录(record_writer.write_records_atomic kind event, 记录号前缀 record_id_prefix, 落 records/events/<卡>/), 只追加不改历史。推导核与门(next_resolver._read_task_records 的 latest_* 、finalization_record.existing_finalization_records、门 queue close)只认轮界之后(记录文件名时刻 ≥ 最新轮界时刻)的本卡记录: 旧轮的交回 / 派审 / 裁决 / 合入 / 结案记录原样留档但不拦新一轮(新一轮从认领起照常走 N1→N6, 复审轮卡号照常演进)。同时把本卡执行体交回报告(若有)原样移到报告落点下 archive_dir(新一轮认领重建骨架, 旧报告不被当成新交回); 移动与轮界记录随 reopen 同一次落账(queue_writers)。已审计提交判定(deployment_authorization.commit_pass_coverage)不受轮界影响: 旧轮门生 PASS 只覆盖它绑定的提交; 发布授权额度按根业务卡计(同卡新一轮认领不另扣); 计划记录按计划哈希逐份复核(旧轮计划不被新提交复用)。",
+        "event_type": "queue_reopen_round",
+        "record_id_prefix": "reopen_round",
+        "archive_dir": "rounds/round-{round}",
+        "record_fields": [
+          "record_type",
+          "event_type",
+          "task_id",
+          "round",
+          "from_state",
+          "reopened_at",
+          "reopened_by",
+          "reason",
+          "archived_report"
+        ]
+      }},
       "withdraw": {"from_states": ["pending", "claimed", "blocked"], "to_state": "withdrawn", "owner_ruling_required_from": ["blocked"], "owner_ruling_note": "AIPOS-F170 件①: blocked 卡可撤, 但须带 Owner 裁决引用(owner_ruling_ref = 治理根内已落的 owner_decision_record 的 decision_id, 记录 task_id 须为本卡、allowed_next_action 须为 lybra_owner_inbox 中 effect=withdraw_card 的选项); 缺 / 对不上 = 拒(预演只核引用形, 记录未落时由 owner decide 先落记录再执行)。唯一读取口 queue_mutation.withdraw_owner_ruling_states; 撤回原因写入卡面 withdrawal_reason(含裁决引用)。"},
       "adopt": {"from_states": ["claimed"], "to_state": "claimed", "declaration": "nodes.N1.adoption"},
       "supersede": {"from_states": ["pending", "claimed", "blocked"], "to_state": "withdrawn", "actor_role_class": "advisor", "successor_states": ["pending", "claimed", "blocked", "completed"], "decision_choice": "supersede", "card_fields": {"by": "superseded_by", "at": "superseded_at", "owner_words": "superseded_owner_words", "owner_ref": "superseded_owner_ref", "decision_id": "superseded_decision_id"}, "carry_branch": {"card_field": "carried_from", "successor_states": ["pending"], "amendment_type": "supersede_carry_branch", "note": "AIPOS-F186(gap #190, chris 理想 HBLX-16/17 实撞): `queue supersede --carry-branch` = 撤换时新卡承继原卡卡分支与已做工作(顾问起草的在途卡契约需更正 / Owner 中途改目标同一命令)。预演列原卡分支名 / tip / 工作树路径 / 未提交改动计数; 拒: 原卡工作树有未提交改动(不代提交, 先让执行体在原卡分支提交)/ 原卡无卡分支 / 新卡不在 successor_states 或已认领 / 新卡卡分支已存在 / 新卡与原卡解析到不同产品仓 / 新卡已记不同承继。确认: 决策记录落盘后经既有 pending 卡修订唯一实现 board_adapter.amend_task 写新卡卡面 card_field = {task_id, branch, tip}(修订记录 amendment_type 同本声明)再搬原卡; 原卡分支与工作树保留不删。认领: 全产品唯一建树 next_resolver._ensure_worktree 在卡分支尚不存在时以记录 tip 为起点建卡分支(原卡分支当前 tip ≠ 记录 = 拒认领, 队列与记录零变更), 认领输出写「承继自 <原卡> <分支>@<tip>」; my-tasks 开工面 / card render 显示承继来源并提示先把当前 base_branch 合入(base_sync)。审计 / 交回判据 / 合入: 差异基线仍为 base_branch(三点 diff base...卡分支 含承继提交, 一并审), commit_sha / tree_hash 判据不变; queue_close 结案记录写 carried_from。"}, "note": "AIPOS-F184 件③(gap #186): 顾问凭 Owner 裁决撤换在途卡(lybra queue supersede, 唯一实现 board_adapter.supersede_task → queue_mutation.mutate_queue_task 搬卡 + 门侧同一预演 / 执行 board_adapter.record_owner_decision + execute_dry_run 落 owner_decision_record, 与 owner decide --relayed-by 同一记录类型与写路径)。选「withdraw 的带 superseded_by 变体」(终态 = 既有 withdrawn 队列目录)而非新增队列目录 superseded: withdrawn 已是全产品统一的「不再推进」终态(看板 / 收件箱 / loop / lint / 落账判据都按它识别), 新目录须改 enums queue_state 与全部读方 = 第二套终态; 撤换与撤回的差别只在卡面多记 superseded_by 与 Owner 原话, 收件箱该卡事项随卡进 withdrawn 自动消失。actor_role_class = 执行者须为该角色类实例(custom_roles.authorize_instance_class 唯一判定; 不须执行体身份, 不受 withdraw 在途保护(queue_mutations.in_transit_guard, AIPOS-F234)——Owner 裁决即授权); successor_states = 新卡须已在队列的这些状态之一(不存在 / 已撤回 = 拒); card_fields = 卡面写入的键(AIPOS-F213 件⑤: 角色 → 键名, 角色恰为 by / at / owner_words / owner_ref / decision_id, 键名须为 card.schema fields 已声明字段; transition_engine supersede 分支经 queue_mutation.supersede_declaration 读本表写卡面, 不写死键名; card.schema fields 声明); decision_choice = 决策记录 allowed_next_action(verbs.lybra_owner_inbox.options 同名选项)。原卡工作树与卡分支不删, 由结案清理处理。"}
@@ -1783,10 +1799,35 @@
         "tree_hash": "该 commit 的 tree(git rev-parse <commit_sha>^{tree})",
         "branch": "卡分支名 {branch}"
       },
-      "optional_frontmatter": ["repo", "model"],
-      "optional_frontmatter_rule": "AIPOS-F78C 件③: repo(可选) = 执行体自述产物所在仓(仓名或绝对路径, 与卡 lane.repo 同一解析 workspace_config.resolve_card_repo); 缺省 = 卡 lane.repo 解析仓。AIPOS-F93 件①(Owner 10-02 裁定: 模型字段由产品从会话记录填写, 自报只作对照): model(可选) = 自报模型, 只作对照(runtime_model_bundle model_mismatch), 不必填",
+      "optional_frontmatter": ["repo", "model", "outcome"],
+      "outcome": {
+        "description": "AIPOS-F252 件②: 交回结果声明(单一声明; 读取口 next_resolver.return_outcome_declaration, 值域读 enums.schema return_outcome)。执行体在交回报告 frontmatter 写 outcome: done | blocked(可选键; 缺 = default, 兼容规则 compat_rule)。产物入口校验值域(不在值域 = reject_category 拒, 零写入); 门交回记录(board_adapter._mcp_return_record_plan)按同一读口把报告声明的值写进记录 record_field(缺 = 不写, 存量记录同形)。推导核(next_resolver)与门侧结案(queue close)只读交回记录上的值(本轮最新交回, 轮界见 queue_mutations.transitions.reopen.round_boundary)——不读交回后可能被改写的报告。",
+        "field": "outcome",
+        "values_ref": "enums.schema return_outcome",
+        "default": "done",
+        "record_field": "return_outcome",
+        "compat_rule": "缺字段 = done(F252 前写的交回报告与交回记录全部原样有效, 推导 / 审计 / 结案行为不变); 值须 ∈ enums.schema return_outcome, 大小写敏感; 不在值域 = 入口拒(不猜、不回落 done)",
+        "reject_category": "INGEST_RETURN_OUTCOME_INVALID",
+        "reject_text": "{path}: frontmatter {field}={value!r} 不在 {values}(enums.schema return_outcome; transitions.schema artifact_ingest.return.outcome)。出口: 卡面工作已完成写 done(或删掉该键), 按卡停线未完成写 blocked, 改后产品自动重试",
+        "blocked": {
+          "description": "outcome=blocked 的交回(本轮最新交回记录 return_outcome=blocked)不走 N3 派审 / N5 合入 / N6 结案: 推导核派生既有 block 转移(queue_mutations.transitions.block: claimed → blocked; lybra queue block, 卡面 needs_owner=true + 第一档事由 owner_reason)= loop 账务步 action_type block(lybra_loop.envelope.allowed_verbs; 本进程经 CLI 入口执行, 写后经 queue_writers 落账); 卡进 blocked 后 Owner 收件箱既有「卡待 Owner(needs_owner)」事项列出(不另造收件箱类别), loop 以 end_reason 结束(lybra_loop_status 判 owner_needed; 收件箱该卡只列 needs_owner 事项一条, 不重复列 loop 事项: lybra_owner_inbox.tiers.loop_reasons.return_blocked.inbox_category)。已出的审计裁决(含 PASS)对 blocked 交回只表示核实阻塞属实(audit_semantics), 推导核不据此合入 / 结案; 门侧 queue close 兜底拒(close_refusal)。接续 = resume 命令原文(补齐前置后由顾问 reopen 开新一轮再 loop)。",
+          "action_type": "block",
+          "stop_action_type": "return_blocked",
+          "end_reason": "return_blocked",
+          "owner_reason": "beyond_authority",
+          "block_command": "lybra --workspace-root {governance_root} queue block --task-id {task_id} --actor {actor} --reason {reason} --owner-reason {owner_reason}",
+          "block_reason": "交回声明阻塞(outcome=blocked, 交回 {return_id}): {summary}",
+          "resume": "补齐前置后: lybra --workspace-root {governance_root} queue reopen --task-id {task_id} --actor {executor} --reason '<前置已补齐: …>' 开新一轮(轮界之后才算本轮记录, 旧交回报告归档), 再 lybra loop --task-id {task_id} --workspace-root {governance_root}; 不再做 = Owner 收件箱选撤卡 / 另出卡",
+          "suggested_block": "执行体交回声明阻塞(outcome=blocked): 不派审、不合入、不结案, 转 blocked 进 Owner 收件箱",
+          "stopped": "卡 {task_id} 因交回阻塞已转 blocked(交回 {return_id}; Owner 收件箱「卡待 Owner」事项)。{resume}",
+          "audit_semantics": "审计对 blocked 交回的 PASS 只表示「核实阻塞属实」, 不是「卡面验收达成」: 推导核不据此派生 finalize / close(先于 N5 判); 卡面验收写了上线 / 部署断言的卡, 审计 PASS 前必须有该卡对应的发布部署记录(lybra release apply)与 release verify 通过证据(审计章程同句)",
+          "close_refusal": "RETURN_OUTCOME_BLOCKED: 卡 {task_id} 本轮最新交回 {return_id} 声明 outcome=blocked(卡面验收未达成), 不结案(AIPOS-F252); 出口: lybra next --task-id {task_id} --workspace-root {governance_root}(推导核派生 block 转移进 Owner 收件箱), 补齐前置后 reopen 开新一轮"
+        }
+      },
+      "optional_frontmatter_rule": "AIPOS-F252 件②: outcome(可选) = 交回结果 done | blocked(缺 = done; 声明见 outcome)。AIPOS-F78C 件③: repo(可选) = 执行体自述产物所在仓(仓名或绝对路径, 与卡 lane.repo 同一解析 workspace_config.resolve_card_repo); 缺省 = 卡 lane.repo 解析仓。AIPOS-F93 件①(Owner 10-02 裁定: 模型字段由产品从会话记录填写, 自报只作对照): model(可选) = 自报模型, 只作对照(runtime_model_bundle model_mismatch), 不必填",
       "checks": [
         "frontmatter 缺任一必填字段 = 拒(INGEST_FRONTMATTER_MISSING)并列出缺项与出口",
+        "AIPOS-F252 件②: 必填齐后核交回结果 outcome(可选, 缺 = done): 值不在 enums.schema return_outcome = 拒(INGEST_RETURN_OUTCOME_INVALID, 声明 outcome.reject_text)",
         "卡 lane.repo 解析仓(resolve_card_repo)必须是 git 仓根, 否则拒(LANE_REPO_UNDECLARED, 出口: project.json 声明 repos 清单 + 卡 lane.repo 写仓名); frontmatter.repo(可选)解析结果 ≠ 卡 lane.repo 解析仓 = 拒(INGEST_REPO_MISMATCH)(AIPOS-F78C 件③)",
         "git rev-parse <branch> == commit_sha (分支 tip 精确等于自述 sha), 否则拒(INGEST_TIP_MISMATCH)",
         "AIPOS-F196: 交付主体为固定候选的卡(enums.schema task_mode.candidate_subject; validation)不建卡分支: 不核分支 tip, 改核 commit_sha / tree_hash / branch 三键 = 产品给值(候选 / 候选 tree / 来源卡卡分支名; next_resolver.candidate_subject_values 唯一实值), 否则拒(INGEST_CANDIDATE_MISMATCH); 卡面候选声明不合 = INGEST_CANDIDATE_INVALID。唯一实现 artifact_ingest._candidate_subject_check(return / verdict 同用)",

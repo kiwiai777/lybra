@@ -124,12 +124,14 @@ def record_path(governance_root: Path, task_id: str, finalize_ref: str) -> Path:
 def existing_finalization_records(governance_root: Path, task_id: str) -> list[Path]:
     """本卡已落的 finalization 记录(新到旧, 按 mtime)——「有无 finalization 记录」唯一判据(AIPOS-F120):
     推导核 N5→N6(next_resolver)与 finalize 续跑补记录(件②)共用。读侧 glob finalization_*.md(含存量旧名)。"""
+    from tools.aipos_cli.next_resolver import in_round, round_floor
     from tools.aipos_cli.record_writer import record_dir
 
     directory = record_dir(governance_root, "finalizations", task_id)
     if not directory.is_dir():
         return []
-    return sorted(directory.glob("finalization_*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    floor = round_floor(Path(governance_root), task_id)  # AIPOS-F252 件③: reopen 后只认本轮(轮界之后)的合入记录
+    return sorted((p for p in directory.glob("finalization_*.md") if in_round(p, floor)), key=lambda p: p.stat().st_mtime, reverse=True)
 
 
 def render_record_markdown(frontmatter: dict[str, Any]) -> str:

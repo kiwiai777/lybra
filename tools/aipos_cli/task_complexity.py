@@ -185,9 +185,12 @@ def closure_state(governance_root: "Path", task_id: str, *, located: "tuple[Path
     from tools.aipos_cli.record_writer import gate_record_files, record_dir  # 延迟: record_writer→records→task_loader→本模块 循环
     from tools.aipos_cli.task_loader import find_task_card
 
+    from tools.aipos_cli.next_resolver import in_round, round_floor  # AIPOS-F252 件③: reopen 开新一轮 = 旧轮 closure 不算本轮结案
+
     root = _Path(governance_root)
     decl = dependency_gate_declaration()["conclusion"]
-    files = gate_record_files(record_dir(root, "closures", task_id), "closures")
+    floor = round_floor(root, task_id)
+    files = [p for p in gate_record_files(record_dir(root, "closures", task_id), "closures") if in_round(p, floor)]
     path, queue_state = located if located is not None else find_task_card(root, task_id)
     out: dict[str, Any] = {"task_id": task_id, "kind": None, "outcome": None, "concluded": False, "queue_state": queue_state,
                            "closure_files": [str(p) for p in files], "conclusion": None, "disputes": closure_disputes(root, task_id)}

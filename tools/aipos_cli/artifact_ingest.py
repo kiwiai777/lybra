@@ -1469,6 +1469,16 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
                 f"出口: 执行体补齐后产品自动重试(loop 重推导)。补法: {problem['fix']}" + (f"。{problem['note']}" if problem["note"] else "")
             ]
             return out
+        # AIPOS-F252 件②: 交回结果 outcome(可选, 缺 = done)值须在 enums.schema return_outcome(判定唯一 next_resolver.report_return_outcome)
+        from tools.aipos_cli.next_resolver import report_return_outcome, return_outcome_declaration
+
+        outcome_value, _declared, outcome_problem = report_return_outcome(fm)
+        out["return_outcome"] = outcome_value
+        if outcome_problem:
+            odecl = return_outcome_declaration()
+            out["category"] = str(odecl["reject_category"])
+            out["reasons"] = [str(odecl["reject_text"]).format(path=path, field=odecl["field"], value=outcome_value, values=list(odecl["values"]))]
+            return out
         try:
             content = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as exc:

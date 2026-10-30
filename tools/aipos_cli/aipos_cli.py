@@ -2109,6 +2109,66 @@ def _release_target_cli(args: argparse.Namespace, home: Path | None) -> int:
                                         details=details)
 
 
+def _card_policy_cli(args: argparse.Namespace, home: Path | None) -> int:
+    """AIPOS-F252 件①: `lybra project card-policy show|set-task-id-pattern` 薄壳。逻辑全在 card_policy_loader(唯一实现); 写动作两阶段 =
+    two_phase_protocol.card_policy_writers, --confirm 写后经 _land_project_writes(post_write_landing.commands.card_policy_writers)落账。
+    退出码读动词契约 verbs.schema lybra_project_card_policy.exit_codes; 文案读其 texts。"""
+    from tools import card_policy_loader as cp
+    from tools.aipos_cli.verb_contract import declared_exit_codes
+    from tools.schema_loader import SchemaLoadError
+
+    codes = declared_exit_codes("lybra_project_card_policy")
+    target = _project_write_target(args, home, args.name)
+    if target is None:
+        return codes["refused"]
+    root, project = Path(target["project_root"]), target["project"]
+    json_out = bool(getattr(args, "json", False))
+    try:
+        texts = {str(k): str(v) for k, v in cp.card_policy_declaration()["texts"].items()}
+        if args.cp_command == "show":
+            view = cp.task_id_pattern_view(root)
+            if json_out:
+                print(render_json({"project": project, **view}))
+                return codes["ok"]
+            print(texts["show_declared"].format(project=project, pattern=view["pattern"], path=view["path"]) if view["declared"]
+                  else texts["show_missing"].format(project=project, path=view["path"]))
+            if view["error"]:
+                print(f"  {view['error']}")
+            print(texts["show_matched"].format(count=len(view["task_ids"]), mismatched=len(view["mismatched"]),
+                                               ids_part=f": {', '.join(view['mismatched'])}" if view["mismatched"] else ""))
+            if view["suggestion"]:
+                print(texts["show_suggest"].format(pattern=view["suggestion"]))
+            print(texts["show_set"].format(command=view["command"]))
+            return codes["ok"]
+        outcome = cp.apply_task_id_pattern(root, args.pattern, dry_run=not args.confirm)
+    except cp.CardPolicyError as exc:
+        if json_out:
+            print(render_json({"ok": False, "code": exc.code, "message": str(exc), "mismatched": exc.mismatched}))
+        print(f"Error: {exc}", file=sys.stderr)
+        return codes["refused"]
+    except (SchemaLoadError, OSError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return codes["refused"]
+    landing = None
+    if outcome["written"] or (not outcome["dry_run"] and not outcome["changed"]):
+        landing = _land_project_writes(root, [outcome["path"]], actor=args.actor, subcommand="set-task-id-pattern", project=project,
+                                       command="card_policy_writers")
+    rc = codes["ok"] if landing is None or landing["landed"] else int(landing["exit_code"])
+    if json_out:
+        print(render_json({"ok": True, "project": project, "target_source": target["source"], **outcome, "landing": _landing_view(landing)}))
+        return rc
+    labels = _two_phase_family_declaration("card_policy_writers")["outcome_labels"]
+    mode = labels["written"] if outcome["written"] else (labels["unchanged"] if not outcome["changed"] else labels["preview"])
+    print(texts["head"].format(project=project, source=target["source"], path=outcome["path"]))
+    print(texts["status"].format(project=project, mode=mode, path=outcome["path"]))
+    print("  " + texts["detail"].format(old=outcome["old"], new=outcome["new"], count=len(outcome["task_ids"])))
+    if outcome["diff"]:
+        print(outcome["diff"].rstrip("\n"))
+    if landing is not None:
+        print(landing["line"], file=sys.stdout if landing["landed"] else sys.stderr)
+    return rc
+
+
 def _release_cli(args: argparse.Namespace) -> int:
     """AIPOS-F251 件④: `lybra release plan|apply|verify|rollback` 薄壳(全部逻辑在 release_target, 唯一实现)。退出码读 verbs.schema
     lybra_release.exit_codes。治理根 = 全局 --workspace-root / 自发现。不连门、不读凭据。"""
@@ -2601,6 +2661,8 @@ def build_parser() -> argparse.ArgumentParser:
     queue_block_parser = queue_subparsers.add_parser("block", help="Move a task from claimed to blocked")
     _queue_mutation_arguments(queue_block_parser)
     queue_block_parser.add_argument("--reason", required=True, help="Blocking reason")
+    queue_block_parser.add_argument("--owner-reason", default=None, help="AIPOS-F252: first-tier Owner reason written to the card "
+                                    "(lybra_owner_inbox.tiers.tier1.reasons; the Owner inbox needs_owner item reads it)")
 
     queue_complete_parser = queue_subparsers.add_parser("complete", help="Move a task from claimed to completed")
     _queue_mutation_arguments(queue_complete_parser)
@@ -3463,6 +3525,20 @@ def build_parser() -> argparse.ArgumentParser:
     _project_json_two_phase_flags(rt_revoke, "release-target revoke")
     rt_list = project_rt_sub.add_parser("list", help="List release target declarations (read-only)")
     _vr_common(rt_list)
+    # AIPOS-F252 件①: 项目卡号形状声明(card_policy task_id_pattern; 唯一实现 card_policy_loader.apply_task_id_pattern / task_id_pattern_view)
+    project_cp_parser = project_subparsers.add_parser(
+        "card-policy",
+        help="AIPOS-F252: show / declare the project's card id shape (card_policy.json task_id_pattern) that commit attribution, "
+             "release plan, finalize and lybra-deploy read; no built-in default (the suggestion from existing card ids must be confirmed)")
+    project_cp_sub = project_cp_parser.add_subparsers(dest="cp_command", required=True)
+    cp_show = project_cp_sub.add_parser("show", help="Show the declared task_id_pattern, queue card ids it misses and a suggested value (read-only)")
+    _vr_common(cp_show)
+    cp_set = project_cp_sub.add_parser("set-task-id-pattern", help="Declare task_id_pattern (validated: a regex without capture groups or "
+                                                                   "anchors that fully matches every card id in the queue)")
+    _vr_common(cp_set)
+    cp_set.add_argument("--pattern", required=True, help="Card id regex, e.g. 'PROJ-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*'")
+    cp_set.add_argument("--actor", default=_default_actor(), help="Commit identity for landing card_policy.json after --confirm (default: $USER or owner)")
+    _project_json_two_phase_flags(cp_set, "set-task-id-pattern", family="card_policy_writers")
     # AIPOS-F161: pi 工位迁出共用检出(位置声明唯一来源 = enrollment_log 位置事件; 唯一实现 workstation_relocate.relocate_workstation)
     project_relocate_parser = project_subparsers.add_parser("relocate-workstation", help="AIPOS-F161: move an enrolled pi workstation (auditor / executor) of this project out of its current location (e.g. a git checkout shared with other projects) to a location of its own: preview (default) lists the workstation state (credentials by path/mode/size only), old/new location, affected declarations and in-flight checks; --confirm moves it, syncs the new location, appends a relocate location event to the enrollment log, verifies, leaves a read-only pointer in the old directory and lands the log; --rollback moves it back")
     project_relocate_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory)")
@@ -5449,6 +5525,10 @@ def main(argv: list[str] | None = None) -> int:
                 if collaboration_profile:
                     print(f"collaboration_profile: {collaboration_profile}")
                 print(f"next: 门以 home 根 {home} 发现本项目(双标记 5_tasks/queue + project.json); 接入步骤见 lybra onboarding guide {args.name}")
+                from tools.card_policy_loader import set_task_id_pattern_command
+
+                # AIPOS-F252 件①: 卡号形状无内置默认(C2), 接入须显式声明(值经 Owner 确认; 缺省预演, 核对后加 --confirm)
+                print(f"next: 声明卡号形状 task_id_pattern(受控发布 / finalize 归属解析只读它): {set_task_id_pattern_command(root)}")
                 return 0
             if args.project_command == "freeze-legacy":
                 return _project_freeze_legacy(args)
@@ -5512,6 +5592,8 @@ def main(argv: list[str] | None = None) -> int:
                 return _validation_root_cli(args, home)
             if args.project_command == "release-target":  # AIPOS-F251 件①
                 return _release_target_cli(args, home)
+            if args.project_command == "card-policy":  # AIPOS-F252 件①
+                return _card_policy_cli(args, home)
             if args.project_command == "grant":  # AIPOS-F224(子命令名避开凭据判据词 authorization: loop 日志 / 状态按 harness_launch.redact_progress 整行隐去含该词的行)
                 return _project_authorization_cli(args, home)
             if args.project_command == "upgrade":
@@ -6963,6 +7045,7 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run=args.dry_run,
                 profiles=profiles,
                 with_records=with_records_value,
+                owner_reason=getattr(args, "owner_reason", None),  # AIPOS-F252 件②: 只 block 有此旗标
             )
         except (FileNotFoundError, OSError, ValueError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
