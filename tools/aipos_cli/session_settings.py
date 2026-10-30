@@ -1,6 +1,6 @@
 """AIPOS-F255: 顾问会话设置渲染(声明 distribution.schema harness_semantics.session_settings; 本模块 = 唯一实现)。
 
-10-31 chris 实测: 子路径会话(.advisor-sessions/<实例>)同载上级治理根 .claude/rules/lybra-advisor.md(别的实例的章程 = 身份串); Claude Code
+10-31 chris 实测: 子路径会话(声明 session_dir.secondary_subpath)同载上级治理根 .claude/rules/lybra-advisor.md(别的实例的章程 = 身份串); Claude Code
 自动记忆缺省按 git 仓根定位, 治理根同在一个 git 仓时所有 Claude 顾问读写同一份 MEMORY.md。产品在每个本机 claude-code 会话目录渲染官方设置
 文件(声明 relative_path), 写两键: claudeMdExcludes(排除上级目录中的 Lybra 章程落点)与 autoMemoryDirectory(本实例独立记忆目录; 新会话
 缺省隔离, 既有会话不静默切换, 显式切换走 switch_memory 两阶段)。会话目录 .claude/ 内另写忽略文件, 只列产品渲染物(用户文件照常可见)。
