@@ -7993,9 +7993,10 @@ def close_task(
         task_closures = records.get("task_closures", {}).get(resolved_task_id, [])
         # AIPOS-R6S 大项A③: round 序号 — reopen 后的新 round 允许再次 close(旧 round
         # 的 closure 不拦新 round; append-only 历史保留)。AIPOS-F252 件③: 原按卡面 round 判(selected_task 顶层无 round 键, 恒为 1 =
-        # reopen 后永远 ALREADY_CLOSED)改为 reopen 轮界唯一判据: 本轮(轮界之后)有 closure 记录才拦(_read_task_records 同一轮界)
-        current_closure = _read_task_records(resolved_root, resolved_task_id).get("latest_closure")
-        if task_closures and current_closure is not None:
+        # reopen 后永远 ALREADY_CLOSED)改为结案口径唯一判定 closure_state(只认轮界之后的 closure 记录): 本轮已结案才拦
+        from tools.aipos_cli.task_complexity import closure_state
+
+        if task_closures and closure_state(resolved_root, resolved_task_id)["kind"] == "closure":
             return blocked_response(
                 operation=operation,
                 dry_run=dry_run,

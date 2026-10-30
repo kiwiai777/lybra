@@ -5847,11 +5847,12 @@
         "CARD_POLICY_UNREADABLE"
       ],
       "texts": {
-        "set_command": "lybra --workspace-root {governance_root} project card-policy set-task-id-pattern --pattern '{pattern}'",
+        "set_command": "{prefix} project card-policy set-task-id-pattern --pattern {pattern}",
+      "show_command": "{prefix} project card-policy show",
         "pattern_placeholder": "<卡号正则>",
         "missing": "项目未声明 task_id_pattern (card_policy.json @ {governance_root}); 卡号形状是项目属性, 解析器无内置默认, 无法做归属解析 (C2 原则)。出口: {command} 缺省预演(零写入, 校验队列现有卡号), 核对后同一命令加 --confirm 写入并落账{suggest_part}",
         "suggest_part": "; 按队列现有卡号前缀推出的建议值 {pattern}(仅建议, 须显式确认)",
-        "empty": "TASK_ID_PATTERN_EMPTY: --pattern 不能为空",
+        "empty": "TASK_ID_PATTERN_EMPTY: --pattern 不能为空或仍是占位(值须为 Owner 确认的本项目卡号正则)",
         "invalid": "TASK_ID_PATTERN_INVALID: {pattern!r} 不是可用的卡号正则: {reason}",
         "invalid_regex": "正则编译失败 {error}",
         "invalid_groups": "含捕获组(归属解析把它嵌进更大的正则取组; 分组请用 (?:...))",

@@ -5224,9 +5224,9 @@ def audit_evidence_reuse_line(workspace_root: Path, audit_task_id: str, *, candi
 
 
 def _return_is_blocked(records: dict[str, Any]) -> bool:
-    """AIPOS-F252 件②: 本轮最新交回记录声明 outcome=blocked(且本轮未结案)。"""
+    """AIPOS-F252 件②: 本轮最新交回记录声明 outcome=blocked(轮界见 round_floor; 已结案卡不经此判, 推导核按队列状态先分流)。"""
     latest = records.get("latest_return")
-    return bool(latest) and not records.get("latest_closure") and return_record_outcome(latest) == "blocked"
+    return bool(latest) and return_record_outcome(latest) == "blocked"
 
 
 def _derive_return_blocked(workspace_root: Path, task_id: str, records: dict[str, Any]) -> dict[str, Any] | None:

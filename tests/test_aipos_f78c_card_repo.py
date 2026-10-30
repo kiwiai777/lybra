@@ -190,7 +190,8 @@ def test_f78c_item1_declaration_single_source_config_card_transitions():
     assert "resolve_card_repo" in json.dumps(card["intent_face"]["lane"]["derive"], ensure_ascii=False)
     trans = json.loads((REPO_ROOT / "schema" / "transitions.schema.json").read_text(encoding="utf-8"))
     ret = trans["artifact_ingest"]["return"]
-    assert ret["optional_frontmatter"] == ["repo", "model"] and any("INGEST_REPO_MISMATCH" in c for c in ret["checks"])
+    # AIPOS-F252 件②: + outcome(交回结果 done | blocked, 缺 = done)
+    assert ret["optional_frontmatter"] == ["repo", "model", "outcome"] and any("INGEST_REPO_MISMATCH" in c for c in ret["checks"])
     # 第二读法删除: 按卡取仓的模块不再各自 read_project_json().get("code_repo"); 唯一解析在 workspace_config
     per_card = ["machine_zone.py", "next_resolver.py", "artifact_ingest.py", "card_render.py", "audit_derivation.py",
                 "board_adapter.py", "record_writer.py", "scoped_commit_check.py"]

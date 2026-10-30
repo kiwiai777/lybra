@@ -349,7 +349,7 @@ def test_walkthrough_guide_onboards_new_project_to_first_card_completed(probe_ra
         "audit_by": guide["instances"]["auditor"], "harness": "pi",
         "lane": {"repo": "app", "paths": ["src/", "tests/"], "roles": ["executor"]}}, "body": "# PROBE-1\n"}))
     fills.update({"<CARD_DRAFT_JSON>": str(r.session / "cards" / "probe-1.json"), "<DRAFT_PATH>": "5_tasks/drafts/probe-1.md",
-                  "<TASK_ID>": "PROBE-1"})
+                  "<TASK_ID>": "PROBE-1", "<卡号正则>": "PROBE-[0-9]+"})  # AIPOS-F252 件①: 首卡前声明卡号形状(Owner 确认的值)
     step9 = [l.strip() for l in guide["steps"][8]["command"].splitlines() if l.strip() and not l.startswith("#")]
     loop_cmd = None
     for line in step9:

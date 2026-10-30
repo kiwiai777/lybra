@@ -950,13 +950,13 @@ def _apply_reopen_round(repo_root: Path, plan: dict[str, Any], result: dict[str,
     written = write_records_atomic(Path(repo_root), [("event", str(plan["record_id"]), str(plan["markdown"]), task_id)])
     writes = result.setdefault("record_writes", [])
     for path in written.get("paths") or []:
-        writes.append({"path": rel(path), "record_type": "round_boundary_event", "wrote": True})
+        writes.append({"path": rel(path), "record_type": RecordType.TASK_PROGRESS_EVENT, "kind": "round_boundary", "wrote": True})
     if plan.get("archive_from") and plan.get("archive_to"):
         source, target = Path(str(plan["archive_from"])), Path(str(plan["archive_to"]))
         target.parent.mkdir(parents=True, exist_ok=True)
         source.replace(target)
-        writes.append({"path": rel(target), "record_type": "archived_return_report", "wrote": True})
-        writes.append({"path": rel(source), "record_type": "archived_return_report_source", "wrote": True})
+        writes.append({"path": rel(target), "kind": "archived_return_report", "wrote": True})
+        writes.append({"path": rel(source), "kind": "archived_return_report_source", "wrote": True})
 
 
 def mutate_queue_task(

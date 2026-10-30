@@ -518,10 +518,10 @@ def suggest_task_id_pattern(task_ids: list[str]) -> str | None:
 
 def task_id_pattern_problems(pattern: str, task_ids: list[str]) -> tuple[str | None, str | None, list[str]]:
     """校验一个候选值。返回 (拒因码 | None, 拒因原文 | None, 不匹配卡号)。判据: 非空; 可编译; 无捕获组; 无 ^ / $ 锚点; 不匹配空串;
-    队列每个现有卡号都能整匹配, 且嵌在提交信息里(`Merge card/<卡号>: …`)时原样被找出(归属解析 _task_id_from_commit_subject 的用法)。"""
+    队列每个现有卡号都能整匹配, 且嵌在提交信息中间时原样被找出(归属解析 _task_id_from_commit_subject 的 search 用法)。"""
     t = _texts()
     value = str(pattern or "").strip()
-    if not value:
+    if not value or value == t["pattern_placeholder"]:  # 占位未替换 = 空(值须 Owner 确认, 不得把占位写成声明)
         return "TASK_ID_PATTERN_EMPTY", t["empty"], []
     try:
         compiled = re.compile(value)
@@ -538,7 +538,7 @@ def task_id_pattern_problems(pattern: str, task_ids: list[str]) -> tuple[str | N
         return "TASK_ID_PATTERN_INVALID", t["invalid"].format(pattern=value, reason=reason), []
     bad = []
     for task_id in task_ids:
-        found = compiled.search(f"Merge card/{task_id}: x")
+        found = compiled.search(f"chore: x {task_id}: y")  # 嵌在提交信息中间(归属解析 search 用法)仍原样找出
         if compiled.fullmatch(task_id) is None or found is None or found.group(0) != task_id:
             bad.append(task_id)
     if bad:
@@ -550,9 +550,21 @@ def task_id_pattern_problems(pattern: str, task_ids: list[str]) -> tuple[str | N
 
 
 def set_task_id_pattern_command(governance_root: Path | str, pattern: str | None = None) -> str:
-    """声明命令原文(缺声明报错 / project upgrade 待补项 / onboarding guide 同一渲染)。"""
+    """声明命令原文(缺声明报错 / project upgrade 待补项 / onboarding guide / project new 同一渲染; 治理根前缀唯一渲染
+    workspace_config.lybra_command_prefix, 值经 shlex 引号)。"""
+    import shlex
+
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
     t = _texts()
-    return t["set_command"].format(governance_root=str(governance_root), pattern=pattern or t["pattern_placeholder"])
+    return t["set_command"].format(prefix=lybra_command_prefix(governance_root), pattern=shlex.quote(pattern or t["pattern_placeholder"]))
+
+
+def show_command(governance_root: Path | str) -> str:
+    """只读查看命令原文(onboarding guide 同一渲染)。"""
+    from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+    return _texts()["show_command"].format(prefix=lybra_command_prefix(governance_root))
 
 
 def missing_pattern_message(governance_root: Path | str) -> str:
@@ -639,6 +651,7 @@ __all__ = [
     "missing_pattern_message",
     "queue_task_ids",
     "set_task_id_pattern_command",
+    "show_command",
     "suggest_task_id_pattern",
     "task_id_pattern_problems",
     "task_id_pattern_view",

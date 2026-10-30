@@ -5525,6 +5525,10 @@ def main(argv: list[str] | None = None) -> int:
                 if collaboration_profile:
                     print(f"collaboration_profile: {collaboration_profile}")
                 print(f"next: 门以 home 根 {home} 发现本项目(双标记 5_tasks/queue + project.json); 接入步骤见 lybra onboarding guide {args.name}")
+                from tools.card_policy_loader import set_task_id_pattern_command
+
+                # AIPOS-F252 件①: 卡号形状无内置默认(C2), 接入须显式声明(值经 Owner 确认; 缺省预演, 核对后加 --confirm)
+                print(f"next: 声明卡号形状 task_id_pattern(受控发布 / finalize 归属解析只读它): {set_task_id_pattern_command(root)}")
                 return 0
             if args.project_command == "freeze-legacy":
                 return _project_freeze_legacy(args)

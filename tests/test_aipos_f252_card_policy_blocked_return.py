@@ -74,6 +74,7 @@ def test_item1_declare_command_refusals_then_write_and_landing(rig):
         "匹配空串": ("(?:WEB-[0-9]+)?", "TASK_ID_PATTERN_INVALID"),
         "不匹配现有卡号(审计轮 WEB-3R)": ("WEB-[0-9]+", "TASK_ID_PATTERN_MISMATCH"),
         "空值": (" ", "TASK_ID_PATTERN_EMPTY"),
+        "占位未替换": ("<卡号正则>", "TASK_ID_PATTERN_EMPTY"),
     }
     for what, (value, code) in bad.items():
         rc, out, err = _cp(r, "set-task-id-pattern", "--pattern", value, "--confirm", "--actor", f251.ADVISOR)
@@ -139,9 +140,10 @@ def test_item1_upgrade_preview_and_onboarding_list_the_step(rig, tmp_path):
     assert _cp(r, "set-task-id-pattern", "--pattern", PATTERN, "--actor", f251.ADVISOR, "--confirm")[0] == 0
     assert not [i for g in derive_guidance(r["gov"], project=f251.PROJECT)["groups"] for i in g["items"] if i["key"] == "task_id_pattern"]
     guide = generate_onboarding_guide("probe-cp", home_root=str(tmp_path / "h"), actor=f251.ADVISOR, repos=[f"app={tmp_path}/app"])
-    step2 = next(s for s in guide["steps"] if s["step_number"] == 2)["command"]
-    lines = [ln for ln in step2.splitlines() if "card-policy" in ln]
-    _show("---- 件① onboarding guide 第 2 步卡号形状行 ----\n" + "\n".join(lines))
+    step9 = next(s for s in guide["steps"] if s["step_number"] == 9)["command"]
+    lines = [ln for ln in step9.splitlines() if "card-policy" in ln]
+    _show("---- 件① onboarding guide 第 9 步(首卡前)卡号形状行 ----\n" + "\n".join(lines))
+    assert step9.index("card-policy") < step9.index("draft create")
     assert any(ln.startswith("lybra --workspace-root") and "set-task-id-pattern" in ln for ln in lines)
     from tools.aipos_cli.aipos_cli import build_parser
 
@@ -151,6 +153,11 @@ def test_item1_upgrade_preview_and_onboarding_list_the_step(rig, tmp_path):
             assert args.command == "project" and args.cp_command in ("show", "set-task-id-pattern")
     legacy = legacy_onboarding_steps(f251.PROJECT, str(r["gov"]), home_root=str(tmp_path / "h"), actor=f251.ADVISOR, driver_policy="pol")
     assert "card-policy set-task-id-pattern" in legacy[0]["command"]
+    rc, out, err = _cli("project", "new", "probe-new", "--home-root", tmp_path / "h2", "--actor", f251.ADVISOR)
+    hint = [ln for ln in out.splitlines() if "card-policy" in ln]
+    _show(f"[件① project new 下一步] exit {rc}: {hint}")
+    assert rc == 0 and hint and "set-task-id-pattern --pattern '<卡号正则>'" in hint[0]
+    assert not (tmp_path / "h2" / "probe-new" / "card_policy.json").exists()  # 不内置默认
 
 
 # ===========================================================================
