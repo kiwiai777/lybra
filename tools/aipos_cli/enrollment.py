@@ -1126,7 +1126,8 @@ def _local_host() -> str:
 
 def _host_key(host: str | None) -> str:
     """主机比较键: 短名、小写(实例名主机段与 socket.gethostname() 的 FQDN / 大小写差异不算不同机)。"""
-    return str(host or "").strip().lower().split(".")[0]
+    host_text = str(host or "").strip().lower()
+    return host_text.partition(".")[0]
 
 
 def is_local_host(host: str | None) -> bool:
