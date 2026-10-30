@@ -1031,6 +1031,11 @@ def derive_audit_task_on_return(
     - audit_task_path: str (if derived)
     - performed_writes: list[dict] (if derived)
     """
+    # AIPOS-F252 件②: 本轮最新交回声明 outcome=blocked(按卡停线, 卡面验收未达成)= 不派审(推导核转 block 进 Owner 收件箱)
+    from tools.aipos_cli.next_resolver import _read_task_records, return_record_outcome
+
+    if return_record_outcome(_read_task_records(repo_root, source_task_id).get("latest_return")) == "blocked":
+        return {"derived": False, "reason": "return outcome=blocked: 不派审(AIPOS-F252, transitions artifact_ingest.return.outcome.blocked)"}
     # AIPOS-338 S6: resolve the branch; non-code branches do not derive an R card
     branch_id = _resolve_branch_id(source_metadata, collaboration_profile, repo_root)
     # AIPOS-F112 件②: 已有裁决但按 nodes.N4.verdict_stale 判据过期(卡分支 tip ≠ 最新 PASS 裁决覆盖的 commit)的重交回 →

@@ -1000,6 +1000,7 @@ def build_mcp_return_record_markdown(
     self_check_waived: bool = False,
     self_check_waiver_reason: str | None = None,
     artifact_subject: dict[str, Any] | None = None,
+    return_outcome: dict[str, str] | None = None,
 ) -> str:
     metadata = {
         "record_type": RecordType.RETURN_RECORD,
@@ -1059,6 +1060,10 @@ def build_mcp_return_record_markdown(
                                                or str(artifact_subject.get("outputs_digest") or "").strip()):
         metadata["artifact_subject"] = dict(artifact_subject)
     
+    # AIPOS-F252 件②: 交回报告显式声明的交回结果({记录字段: 值}, 声明 transitions artifact_ingest.return.outcome.record_field);
+    # 报告未声明 = 不写(存量记录同形, 读侧缺 = 缺省 done)
+    if isinstance(return_outcome, dict) and return_outcome:
+        metadata.update({str(k): str(v) for k, v in return_outcome.items()})
     # AIPOS-F49-fix1: self_check_waived 标记（Owner 强制放行）
     if self_check_waived:
         metadata["self_check_waived"] = True

@@ -901,6 +901,64 @@ def _check_for_pass_audit_verdict(repo_root: Path, task_id: str) -> bool:
     return latest_verdict["verdict"] in {Verdict.PASS, Verdict.PASS_WITH_NOTES}
 
 
+def _reopen_round_plan(repo_root: Path, source_task: dict[str, Any], source_metadata: dict[str, Any], updated_metadata: dict[str, Any],
+                      actor: str, reason: str | None) -> dict[str, Any] | None:
+    """AIPOS-F252 件③: reopen 开新一轮的轮界计划(声明 transitions queue_mutations.transitions.reopen.round_boundary)。本轮已有门交回记录才
+    立轮界(无交回 = None, reopen 行为不变: 如 return-repair 的 block → reopen → 重认领); 有 = {record_id, markdown, archive_from,
+    archive_to, problem}: 执行体交回报告(若在)原样移到 <报告落点>/<archive_dir>, 目标已存在 = problem(不覆盖, 零写入)。"""
+    from tools.aipos_cli.next_resolver import (_read_task_records, find_return_artifact, return_artifact_dir, round_boundary_declaration,
+                                               task_mode_is_audit)
+    from tools.aipos_cli.record_writer import build_runtime_id, render_markdown
+
+    task_id = str(source_task.get("task_id") or "")
+    if not task_id or task_mode_is_audit(source_metadata.get("task_mode")) or not _read_task_records(repo_root, task_id).get("latest_return"):
+        return None
+    decl = round_boundary_declaration()
+    try:
+        prev_round = int(source_metadata.get("round") or 1)
+    except (TypeError, ValueError):
+        prev_round = 1
+    reopened_at = str(updated_metadata.get("reopened_at") or iso_z())
+    record_id = build_runtime_id(str(decl["record_id_prefix"]), task_id, reopened_at, actor)
+    plan: dict[str, Any] = {"record_id": record_id, "round": prev_round + 1, "archive_from": None, "archive_to": None, "problem": None}
+    report = find_return_artifact(repo_root, task_id)
+    if report is not None and report.is_file():
+        target = return_artifact_dir(repo_root, task_id) / str(decl["archive_dir"]).format(round=prev_round) / report.name
+        plan["archive_from"], plan["archive_to"] = str(report), str(target)
+        if target.exists():
+            plan["problem"] = f"REOPEN_ARCHIVE_EXISTS: 旧交回报告归档位 {target} 已存在(不覆盖); 先核对该文件后重试"
+    values = {"record_type": RecordType.TASK_PROGRESS_EVENT, "event_type": str(decl["event_type"]), "task_id": task_id, "round": prev_round + 1,
+              "from_state": str(source_task.get("queue_state") or ""), "reopened_at": reopened_at, "reopened_by": actor,
+              "reason": str(reason or ""), "archived_report": plan["archive_to"]}
+    meta = {key: values[key] for key in decl["record_fields"]}  # 字段只读声明(声明多出未知字段 = KeyError, fail-closed)
+    plan["markdown"] = render_markdown(meta, f"# Reopen round {prev_round + 1}: {task_id}\n\n{decl['description']}\n", list(meta))
+    return plan
+
+
+def _apply_reopen_round(repo_root: Path, plan: dict[str, Any], result: dict[str, Any]) -> None:
+    """AIPOS-F252 件③: 落轮界记录(write_records_atomic kind event)+ 归档旧交回报告(原样移动); 写出清单进 result.record_writes(队列写落账同读)。"""
+    from tools.aipos_cli.record_writer import write_records_atomic
+
+    task_id = str(result.get("task_id") or "")
+    root = Path(repo_root).resolve()
+
+    def rel(path: str | Path) -> str:  # 写入器返回治理根相对路径; 绝对路径换算为治理根相对
+        p = Path(path)
+        p = (p if p.is_absolute() else root / p).resolve()
+        return str(p.relative_to(root)) if p.is_relative_to(root) else str(p)
+
+    written = write_records_atomic(Path(repo_root), [("event", str(plan["record_id"]), str(plan["markdown"]), task_id)])
+    writes = result.setdefault("record_writes", [])
+    for path in written.get("paths") or []:
+        writes.append({"path": rel(path), "record_type": "round_boundary_event", "wrote": True})
+    if plan.get("archive_from") and plan.get("archive_to"):
+        source, target = Path(str(plan["archive_from"])), Path(str(plan["archive_to"]))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source.replace(target)
+        writes.append({"path": rel(target), "record_type": "archived_return_report", "wrote": True})
+        writes.append({"path": rel(source), "record_type": "archived_return_report_source", "wrote": True})
+
+
 def mutate_queue_task(
     repo_root: Path,
     action: str,
@@ -917,6 +975,7 @@ def mutate_queue_task(
     session_id_override: str | None = None,
     owner_ruling_ref: str | None = None,
     supersede: dict[str, Any] | None = None,
+    owner_reason: str | None = None,
 ) -> dict[str, Any]:
     # AIPOS-R6A 靶子②: CLI queue mutation 平行路径拆除 — 禁止非 dry-run 执行
     # (绕过 gate 控制执行流程，不产生真实的 claim/return 记录，"卡面假成功")
@@ -1088,6 +1147,21 @@ def mutate_queue_task(
         session_id_override=session_id_override,
         supersede=supersede,
     )
+    if owner_reason is not None:
+        # AIPOS-F252 件②: block 带第一档事由(卡面 needs_owner 的 owner_reason, 收件箱 needs_owner_card 事项同读; 校验唯一 require_owner_reason)
+        from tools.aipos_cli.owner_inbox import OwnerReasonRefused, require_owner_reason, tier_declaration
+
+        if action != "block":
+            raise ValueError("--owner-reason 只用于 queue block")
+        try:
+            updated_metadata[str(tier_declaration()["needs_owner_reason_field"])] = require_owner_reason(owner_reason)
+        except OwnerReasonRefused as exc:
+            result["blocking_reasons"].append(f"OWNER_REASON_INVALID: --owner-reason {str(exc)!r} 不在第一档事由清单(lybra_owner_inbox.tiers.tier1.reasons)")
+    round_plan = _reopen_round_plan(repo_root, source_task, source_metadata, updated_metadata, actor, reason) if action == "reopen" else None
+    if round_plan is not None:
+        result["round_boundary"] = {k: v for k, v in round_plan.items() if k != "markdown"}
+        if round_plan.get("problem"):
+            result["blocking_reasons"].append(round_plan["problem"])
     rendered_markdown = render_task_markdown(updated_metadata, source_body)
     result["updated_frontmatter"] = updated_metadata
     result["planned_writes"] = [{"path": result["target_path"], "kind": "create", "type": "task_markdown"}]
@@ -1235,6 +1309,8 @@ def mutate_queue_task(
                     # Skeleton creation failure blocks claim (fail-closed)
                     raise skeleton_exc
 
+    if round_plan is not None and not round_plan.get("problem"):
+        _apply_reopen_round(repo_root, round_plan, result)  # AIPOS-F252 件③: 轮界记录 + 旧交回报告归档(先于搬卡; 失败 = 异常, 卡未动)
     target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_text(rendered_markdown, encoding="utf-8")
     source_path.unlink()

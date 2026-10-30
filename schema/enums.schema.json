@@ -765,6 +765,19 @@
         }
       ]
     },
+    "return_outcome": {
+      "description": "AIPOS-F252 件②(10-30 kiwiai-web KIWIWEB-003 实撞: 执行体正确停线写了 BLOCK 交回, 审计核实「阻塞属实」写了 verdict=PASS, loop 按 PASS 合入阻塞收据并结案 completed, 生产根本没部署): 执行体交回结果(交回报告 frontmatter outcome)。值域唯一声明在此; 字段名、缺省、兼容规则与路由(blocked 不结案、转 blocked + Owner 收件箱、续跑出口、门侧 close 兜底、审计语义)单一声明在 transitions.schema artifact_ingest.return.outcome。",
+      "values": [
+        {
+          "value": "done",
+          "description": "卡面工作已完成, 交审计按卡面验收(缺字段即此值: F252 前全部交回原样有效)"
+        },
+        {
+          "value": "blocked",
+          "description": "执行体按卡停线(前置未齐 / 超出授权或声明 / 环境不可用), 卡面验收未达成; 产品不派审、不合入、不结案, 转 blocked 进 Owner 收件箱"
+        }
+      ]
+    },
     "history_legacy_filter": {
       "description": "AIPOS-F247: 历史检索的「历史存量」(冻结卡, legacy_baseline.frozen_tasks)筛选值域唯一声明。读取口 history_search.legacy_choices(verbs lybra_history_search 参数 legacy 以 $enum 引用本枚举; CLI `lybra history search --legacy` choices 与看板「历史与审计」页筛选同读)。",
       "values": [

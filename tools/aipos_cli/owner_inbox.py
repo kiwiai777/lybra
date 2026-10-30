@@ -901,6 +901,25 @@ def _loop_card_entry(root: Path, project: str, task_id: str, decl: dict[str, Any
                          _decl_digest(decl)), compute)
 
 
+def closed_card_reasons(decl: dict[str, Any] | None = None) -> set[str]:
+    """AIPOS-F252 件③: 卡已结案仍进收件箱的顾问请求第一档事由(categories.loop_owner_needed.advisor_ask.closed_card_reasons, 须 ⊆ tier1)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = decl or inbox_declaration()
+    keys = {str(k) for k in decl["categories"]["loop_owner_needed"]["advisor_ask"].get("closed_card_reasons") or []}
+    if keys - set(tier_declaration(decl)["tier1"]["reasons"]):
+        raise SchemaLoadError(f"verbs.{VERB}.categories.loop_owner_needed.advisor_ask.closed_card_reasons 须 ⊆ tiers.tier1.reasons(AIPOS-F252)")
+    return keys
+
+
+def _closed_card_ask(root: Path, task_id: str, decl: dict[str, Any]) -> bool:
+    """AIPOS-F252 件③: 已结案卡最近一次运行带顾问补写、未撤回、事由 ∈ closed_card_reasons 的 owner_ask(便宜预判: 只读运行记录, 不算下一动作)。"""
+    metas = _run_metas(root, task_id)
+    ask = metas[-1].get("owner_ask") if metas else None
+    return (isinstance(ask, dict) and not ask.get("retracted_at") and str(ask.get("ask") or "").strip() != ""
+            and str(ask.get("owner_reason") or "") in closed_card_reasons(decl))
+
+
 def _decl_digest(decl: dict[str, Any]) -> str:
     """Digest of the inbox declaration (part of a per-card cache key: a changed declaration = another entry)."""
     import hashlib
@@ -919,7 +938,9 @@ def _loop_card(root: Path, project: str, task_id: str, decl: dict[str, Any], hom
     cat = decl["categories"]["loop_owner_needed"]
     try:
         card_path, state = find_task_card(root, task_id)
-        if state in ("completed", "withdrawn"):  # 卡已结案 / 撤回 = 已自行解除: 先判, 免为它算下一动作(结案取下一张会扫全项目)
+        # 卡已结案 / 撤回 = 已自行解除: 先判, 免为它算下一动作(结案取下一张会扫全项目); AIPOS-F252 件③: 已结案卡上顾问补写的
+        # 声明事由请求(advisor_ask.closed_card_reasons, 如顾问与审计结论冲突)照列
+        if state == "withdrawn" or (state == "completed" and not _closed_card_ask(root, task_id, decl)):
             return
         report = loop_status(root, task_id)
     except (OSError, ValueError, LookupError, RuntimeError) as exc:  # 读不出 = 点名进 errors(不猜不吞)
@@ -930,6 +951,10 @@ def _loop_card(root: Path, project: str, task_id: str, decl: dict[str, Any], hom
         return
     view = runs[-1]
     na = view.get("next_action") or {}
+    # AIPOS-F252 件②: 交回阻塞已转 blocked 的卡由 needs_owner_card 事项承载(tiers.loop_reasons.<事由>.inbox_category), 同卡不再列 loop 事项
+    via = (tier_declaration(decl)["loop_reasons"].get(str(na.get("reason") or "")) or {}).get("inbox_category")
+    if na.get("action") == "owner_needed" and via == "needs_owner_card" and state in decl["categories"]["needs_owner_card"]["queue_states"]:
+        return
     if na.get("action") == "advisor_fix" and na.get("reason") == "owner_ruled" and not view.get("frozen"):
         # AIPOS-F201 item 3 (a): ruled (loop status already reads the ruling) but this run is still the latest = not re-run yet
         # AIPOS-F222: an owner_ask merged into the rework-limit item is relayed by that item; one answered by a later ruling on
@@ -1289,7 +1314,9 @@ def owner_ask_destination(root: Path, task_id: str, view: dict[str, Any], na: di
                            "legacy": na.get("action") != "owner_needed" and not str(ask.get("owner_reason") or "").strip()}
     path, state = find_task_card(root, task_id)
     out["state"] = state
-    if path is None or state in ("completed", "withdrawn"):
+    # AIPOS-F252 件③: 已结案卡上带 closed_card_reasons 事由(如顾问与审计结论冲突)的请求照进收件箱; 撤回卡 / 其他事由照旧不列
+    closed_ok = state == "completed" and str(ask.get("owner_reason") or "") in closed_card_reasons(decl)
+    if path is None or (state in ("completed", "withdrawn") and not closed_ok):
         out["reason"] = "card_closed"
         return out
     if view.get("frozen"):

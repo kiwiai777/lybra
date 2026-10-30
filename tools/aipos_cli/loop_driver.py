@@ -72,6 +72,7 @@ from tools.aipos_cli.next_resolver import (
     executor_artifact_watch,
     frontmatter_unreadable_stop,
     repo_turn_watch,
+    return_outcome_declaration,
 )
 from tools.aipos_cli.frontmatter import FrontmatterReadError
 from tools.aipos_cli.task_complexity import closure_state  # AIPOS-F209: 结案口径唯一判定(loop 结案出口)
@@ -2427,6 +2428,11 @@ def _drive(
                     # queue supersede this card (advisor_fix, not a consecutive failure, no Owner inbox; transitions nodes.N4.candidate_fail);
                     # AIPOS-F227: audit declared fail_scope=deliverable = same-candidate rework exit (end reason from the derivation)
                     msg = f"固定候选审计 FAIL @ {node}/{state}: {derivation.get('suggested_action', '')}"
+                    result.reason = str(action.get("end_reason") or "")
+                elif action.get("type") == return_outcome_declaration()["blocked"]["stop_action_type"]:
+                    # AIPOS-F252 item 2: the executor's return declared outcome=blocked and the card has been moved to blocked (needs_owner,
+                    # Owner inbox) = end with the declared end reason; the message carries the resume command
+                    msg = f"交回阻塞 @ {node}/{state}: {'; '.join(missing)}"
                     result.reason = str(action.get("end_reason") or "")
                 steps.append(LoopStep(index, "execute", node, state, task_id, ok=False, message=msg))
                 say(f"[{index}] exit 4 — {msg}")

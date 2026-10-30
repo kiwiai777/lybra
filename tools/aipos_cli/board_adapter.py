@@ -2167,6 +2167,38 @@ def _write_mcp_claim_records(repo_root: Path, record_plan: dict[str, Any], task_
     return performed
 
 
+def _return_outcome_fields(repo_root: Path, task_id: str, card_metadata: dict[str, Any], blocking: list[str]) -> dict[str, str] | None:
+    """AIPOS-F252 件②: 门交回记录的交回结果字段(声明 transitions artifact_ingest.return.outcome): 报告显式声明 = {record_field: 值};
+    未声明 / 报告不在 = None(存量同形); 值不在值域 = 追加拒因(门拒写, 与产物入口 INGEST_RETURN_OUTCOME_INVALID 同一判定)。
+    只对执行卡(非审计卡)取; 报告路径 = next_resolver.card_report_path 唯一读取口。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+    from tools.aipos_cli.next_resolver import (_read_frontmatter, card_report_path, report_return_outcome, return_outcome_declaration,
+                                               task_mode_is_audit)
+
+    if task_mode_is_audit((card_metadata or {}).get("task_mode")):
+        return None
+    path = card_report_path(Path(repo_root), task_id, {**(card_metadata or {}), "task_id": task_id})
+    if not path.is_file():
+        return None
+    try:
+        value, declared, problem = report_return_outcome(_read_frontmatter(path, allow_missing_block=True))
+    except FrontmatterReadError as exc:
+        blocking.append(f"RETURN_OUTCOME_UNREADABLE: {exc}")
+        return None
+    if problem:
+        blocking.append(f"{return_outcome_declaration()['reject_category']}: {path}: {problem}")
+        return None
+    return {str(return_outcome_declaration()["record_field"]): value} if declared else None
+
+
+def _report_declares_blocked(repo_root: Path, task_id: str, card_metadata: dict[str, Any]) -> bool:
+    """AIPOS-F252 件②: 本卡交回报告声明 outcome=blocked(同一判定 _return_outcome_fields; 读不出 / 值不合 = 否, 拒因由交回记录计划给出)。"""
+    from tools.aipos_cli.next_resolver import return_outcome_declaration
+
+    fields = _return_outcome_fields(repo_root, task_id, card_metadata, [])
+    return (fields or {}).get(str(return_outcome_declaration()["record_field"])) == "blocked"
+
+
 def _mcp_return_record_plan(
     *,
     repo_root: Path,
@@ -2224,6 +2256,8 @@ def _mcp_return_record_plan(
     confirmation_ref = f"owner_policy:{owner_policy_ref}"
     # AIPOS-F114 件①: 交回记录绑定卡分支此刻 tip(与裁决绑 tip 同一读取口), 推导核据此判交回是否已过期(nodes.N3.return_stale)
     from tools.aipos_cli.next_resolver import return_binding_subject
+    # AIPOS-F252 件②: 交回报告声明的交回结果随记录落(同一判定 next_resolver.report_return_outcome; 值不合 = 拒写, fail-closed)
+    return_outcome = _return_outcome_fields(repo_root, task_id, source_metadata, blocking)
 
     return_markdown = build_mcp_return_record_markdown(
         artifact_subject=return_binding_subject(repo_root, task_id, source_metadata),
@@ -2248,6 +2282,7 @@ def _mcp_return_record_plan(
         confirmer=confirmer,
         self_check_waived=self_check_waived,
         self_check_waiver_reason=self_check_waiver_reason,
+        return_outcome=return_outcome,
     )
     session_markdown = ""
     if not blocking:
@@ -3230,7 +3265,8 @@ def _check_branch_compliance(
         )
         if result.returncode == 0:
             commits = [line for line in result.stdout.strip().split("\n") if line.strip()]
-            if not commits:
+            if not commits and not _report_declares_blocked(repo_root, task_id, task_metadata):
+                # AIPOS-F252 件②: 交回报告声明 outcome=blocked(按卡停线)可无新提交; 分支存在与基座两条照核
                 blocking_reasons.append(
                     f"BRANCH_NO_COMMITS: 分支 '{branch_name}' 相对 {base_branch} 没有新提交。"
                     f"出口: 在产品仓 '{branch_name}' 分支提交代码:"
@@ -7935,15 +7971,31 @@ def close_task(
                 safety_notice="AIPOS-283 queue_close requires a prior return record.",
             )
 
+        # AIPOS-F252 件②: 门侧兜底——本轮最新交回声明 outcome=blocked(卡面验收未达成)= 拒结案, 出口点名原因
+        # (判定只读门交回记录 return_outcome: next_resolver._read_task_records 同一轮界 + return_record_outcome; 缺 = done, 存量不变)
+        from tools.aipos_cli.next_resolver import _read_task_records, return_outcome_declaration, return_record_outcome
+
+        latest_return = _read_task_records(resolved_root, resolved_task_id).get("latest_return") or {}
+        if latest_return and return_record_outcome(latest_return) == "blocked":
+            refusal = str(return_outcome_declaration()["blocked"]["close_refusal"]).format(
+                task_id=resolved_task_id, return_id=str(latest_return.get("return_id") or "?"), governance_root=resolved_root)
+            return blocked_response(
+                operation=operation,
+                dry_run=dry_run,
+                category="RETURN_OUTCOME_BLOCKED",
+                message=refusal,
+                actor=_actor_payload(actor_text),
+                data={"task_id": resolved_task_id, "return_id": latest_return.get("return_id"), "return_outcome": "blocked"},
+                safety_notice="AIPOS-F252 queue_close refuses a blocked return (transitions artifact_ingest.return.outcome.blocked).",
+            )
+
         # Check if already closed (idempotency)
         task_closures = records.get("task_closures", {}).get(resolved_task_id, [])
         # AIPOS-R6S 大项A③: round 序号 — reopen 后的新 round 允许再次 close(旧 round
-        # 的 closure 不拦新 round; append-only 历史保留)。
-        try:
-            current_round = int(selected_task.get("round") or 1)
-        except (TypeError, ValueError):
-            current_round = 1
-        if task_closures and current_round <= 1:
+        # 的 closure 不拦新 round; append-only 历史保留)。AIPOS-F252 件③: 原按卡面 round 判(selected_task 顶层无 round 键, 恒为 1 =
+        # reopen 后永远 ALREADY_CLOSED)改为 reopen 轮界唯一判据: 本轮(轮界之后)有 closure 记录才拦(_read_task_records 同一轮界)
+        current_closure = _read_task_records(resolved_root, resolved_task_id).get("latest_closure")
+        if task_closures and current_closure is not None:
             return blocked_response(
                 operation=operation,
                 dry_run=dry_run,

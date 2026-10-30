@@ -3307,7 +3307,8 @@ def annotate_owner_ask(governance_root: Path, task_id: str, *, ask: str, options
                  "noted_by": str(actor or meta.get("driver") or "").strip() or None, "noted_at": iso_z(now or utc_now())}
     if grant_fields:
         owner_ask["grant"] = grant_fields
-    destination = _note_destination(root, task_id, meta, owner_ask, decl)  # AIPOS-F222 件②: 不进收件箱 = 拒写(LoopNoteRejected not_listed)
+    # AIPOS-F222 件②: 不进收件箱 = 拒写(LoopNoteRejected not_listed); AIPOS-F252 件③: 去向判定带所给事由(已结案卡 closed_card_reasons 照列)
+    destination = _note_destination(root, task_id, meta, {**owner_ask, "owner_reason": str(owner_reason or "").strip()}, decl)
     # AIPOS-F225 件③: 升 Owner 必带第一档事由(用法 / 运行状态 / 去向都核过之后判; 缺或不在清单 = 拒写 owner_reason_refused)
     owner_ask["owner_reason"] = _note_owner_reason(owner_reason, grant_only=not asked, task_id=task_id, decl=decl)
     report: dict[str, Any] = {"stage": "confirm" if confirm else "preview", "record_path": str(path), "run_id": meta.get("run_id"),

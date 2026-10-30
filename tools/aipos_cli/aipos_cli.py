@@ -2661,6 +2661,8 @@ def build_parser() -> argparse.ArgumentParser:
     queue_block_parser = queue_subparsers.add_parser("block", help="Move a task from claimed to blocked")
     _queue_mutation_arguments(queue_block_parser)
     queue_block_parser.add_argument("--reason", required=True, help="Blocking reason")
+    queue_block_parser.add_argument("--owner-reason", default=None, help="AIPOS-F252: first-tier Owner reason written to the card "
+                                    "(lybra_owner_inbox.tiers.tier1.reasons; the Owner inbox needs_owner item reads it)")
 
     queue_complete_parser = queue_subparsers.add_parser("complete", help="Move a task from claimed to completed")
     _queue_mutation_arguments(queue_complete_parser)
@@ -7039,6 +7041,7 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run=args.dry_run,
                 profiles=profiles,
                 with_records=with_records_value,
+                owner_reason=getattr(args, "owner_reason", None),  # AIPOS-F252 件②: 只 block 有此旗标
             )
         except (FileNotFoundError, OSError, ValueError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
