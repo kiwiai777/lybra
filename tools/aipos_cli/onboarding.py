@@ -263,7 +263,7 @@ def resolve_advisor_harness(advisor_harness: str | None, advisor_host: str | Non
     role_class = str(resolve_role_to_class(role, required=True))
     deliveries = harness_distributions(declared_role_distributions(role, role_class), kind)
     return {"kind": kind, "host": host, "instance_host": instance_host, "deliveries": deliveries, "declaration": decl,
-            "role_class": role_class}
+            "role": role, "role_class": role_class}
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +348,9 @@ def generate_onboarding_guide(
     advisor_ws: str | None = advisor_dir or None
     advisor_dir_source = {"source": "explicit", "occupant": None} if advisor_ws else None
     if not advisor_ws and adv_h["declaration"]["harness_dir"] == "required" and not adv_h["host"]:
-        dflt = default_session_dir(gov, inst["advisor"])
+        # AIPOS-F254 件②: 向导接入的是项目顾问(adv_h["role"], 层级判据 enrollment.session_tier: 内建角色 = 项目级)= 缺省治理根;
+        # 治理根被同机子项目顾问占着 = 不降级, 下方相撞拦截给换位命令原文
+        dflt = default_session_dir(gov, inst["advisor"], role=adv_h["role"])
         advisor_ws, advisor_dir_source = dflt["path"], {"source": dflt["source"], "occupant": dflt["occupant"]}
     if advisor_ws and not adv_h["host"]:
         retry_argv = ["lybra", "onboarding", "guide", project_name, "--home-root", str(home), "--advisor-harness", adv_h["kind"],
@@ -359,7 +361,7 @@ def generate_onboarding_guide(
         for item in repos or []:
             retry_argv += ["--repo", str(item)]
         refusal = session_dir_refusal(gov, instance=inst["advisor"], kind=adv_h["kind"], host=None, dir=str(Path(advisor_ws).expanduser()),
-                                      retry=shlex.join(retry_argv).replace("DIR_SLOT", "{dir}"))
+                                      role=adv_h["role"], retry=shlex.join(retry_argv).replace("DIR_SLOT", "{dir}"))
         if refusal:
             raise ValueError(refusal)
     advisor_dir_label = (session_dir_source_label(advisor_dir_source["source"], occupant=advisor_dir_source["occupant"])

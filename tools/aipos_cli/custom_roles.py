@@ -43,6 +43,11 @@ def _builtin_role_names() -> set[str]:
     return {spec["role"] for spec in ROLE_SPECS}
 
 
+def is_builtin_role(role_name: str) -> bool:
+    """AIPOS-F254: 角色名是否 = roles.schema 内建角色(角色即其类本身; 判据与 resolve_role_to_class 内建分支同源 _builtin_role_names)。"""
+    return str(role_name or "").strip() in _builtin_role_names()
+
+
 def validate_custom_role_name(name: str) -> tuple[bool, str | None]:
     """Validate a custom role name.
 

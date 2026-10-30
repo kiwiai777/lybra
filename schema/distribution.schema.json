@@ -549,7 +549,7 @@
     },
     "session_dir": {
       "description": "AIPOS-F253: 顾问会话目录(advisor_session=true 的 harness 在治理根所在机的会话目录 harness.dir)的缺省与同机相撞拦截唯一声明。会话目录决定章程落点(分发条目 target.relative_path, 如 claude-code 的 .claude/rules/lybra-advisor.md、codex 的 AGENTS.md)与会话侧按目录分的状态(Claude Code 自动记忆按会话目录分): 同一主机两个顾问实例登记同一会话目录 = 后 sync 的覆盖前者章程(身份串)、记忆混用, 故登记入口一律拒。",
-      "default": "缺省 = 本项目治理根(治理根本身经既有解析定位: 向导 = home 根解析梯 --home-root > LYBRA_HOME_ROOT > ~/.lybra/config.json home_root > 缺省, 再拼项目名; 改登记 / 接入 = 本命令所用的项目治理根), 代码不写死任何路径; 同主机已有别的顾问实例登记治理根为会话目录 = secondary_subpath(按实例区分); 用户显式 --dir / --harness-dir / --advisor-dir 一律优先(仍受 conflict 拦截)。只对 harness_dir=required 的 kind(claude-code)且会话在治理根所在机时给缺省: harness_dir=optional 的 kind(codex)不给缺省(会话目录可空 = 既有行为), 他机会话目录不猜(须显式给)。",
+      "default": "缺省按层级(AIPOS-F254, 层级判据见 tiers): 项目级顾问 = 本项目治理根; 子项目顾问 = secondary_subpath(按实例区分, 不论治理根当时是否空闲)。治理根本身经既有解析定位(向导 = home 根解析梯 --home-root > LYBRA_HOME_ROOT > ~/.lybra/config.json home_root > 缺省, 再拼项目名; 改登记 / 接入 = 本命令所用的项目治理根), 代码不写死任何路径。项目级顾问: 同主机治理根已被别的项目级顾问登记 = secondary_subpath(AIPOS-F253 行为不变); 治理根只被子项目顾问占着 = 仍缺省治理根、不静默降到子路径, 登记入口拒并点名占用者、给换位命令原文(tiers.swap)。用户显式 --dir / --harness-dir / --advisor-dir 一律优先(仍受 conflict 拦截)。只对 harness_dir=required 的 kind(claude-code)且会话在治理根所在机时给缺省: harness_dir=optional 的 kind(codex)不给缺省(会话目录可空 = 既有行为), 他机会话目录不猜(须显式给)。",
       "secondary_subpath": ".advisor-sessions/{instance}",
       "instance_placeholder": "{instance}",
       "subpath_rationale": "相对治理根、按实例名区分(实例名在项目内唯一且改登记不改名; 角色名可多实例共用): ① 在治理根之内 = 从该目录运行 lybra 经治理根解析(当前目录向上首个治理根)即到本项目治理根; ② Claude Code 从会话目录加载 .claude/rules 与 .claude/skills(分发件落该目录, 与本机会话同一 sync 交付); ③ 首段以点开头 = 隐藏目录, 不混进治理文档树。",
@@ -573,10 +573,31 @@
         "explicit": "用户指定",
         "kept": "沿用现登记",
         "governance_root": "缺省 = 治理根",
-        "secondary_subpath": "缺省 = 治理根内声明子路径(同机治理根已被 {occupant} 登记)"
+        "secondary_subpath": "缺省 = 治理根内声明子路径(同机治理根已被 {occupant} 登记)",
+        "subproject_subpath": "缺省 = 治理根内声明子路径(子项目顾问)"
       },
+      "tiers": {
+        "description": "AIPOS-F254 件①: 顾问会话层级判据唯一声明(Owner 10-30: 总顾问理应在治理根, 子项目顾问在治理根内子目录)。判定唯一实现 enrollment.session_tier; 缺省(default_session_dir)、相撞拒因出口(session_dir_refusal)、roles list 层级诊断(render_advisor_sessions)同读。",
+        "role_source": "实例的角色名: 调用方已知(接入预检的签发声明 role / 向导的项目顾问角色 / 工位身份 role)直接给; 否则 = 本项目接入日志最新 land 事件 role=(门签码时记下, enrollment.instance_enrollment), 无 = 治理根 .lybra/role 该实例记录的 role(enroll_client.read_role_record); 都无 = 判不了, 拒(fail-closed)",
+        "rule": "角色名 = roles.schema 内建角色(角色即其类本身, 如 advisor / planner)= project(项目级顾问); 否则(门注册表自定义角色解析到顾问角色类, 如 advisor-lantu / advisor-ota / advisor-lixiang)= subproject(子项目顾问)。只看登记的角色名, 不按实例名前缀猜; 理由: 自定义角色本就是按子项目 / 专项开的(门注册表 role_class 指回顾问类), 内建角色名即项目本身的席位; custom_roles 现无 lane / 子项目字段(有了再以其为准)",
+        "values": {
+          "project": "项目级顾问",
+          "subproject": "子项目顾问"
+        },
+        "swap": {
+          "message": "{code}: 项目级顾问 {instance} 的会话目录 {host}:{dir} = 治理根, 被同机子项目顾问 {occupant} 登记({occupant_label}) —— 治理根归项目级顾问, 不静默降到子路径",
+          "exit": "出口(换位两步): ① 把占用者改到它的声明子路径(只改目录, 第二档): {swap}(预演, 加 --confirm 写入); ② 再跑本命令: {command}"
+        },
+        "diagnosis": {
+          "subproject_at_root": "✗ 违层级: 子项目顾问占治理根(治理根归项目级顾问) —— 换位: {swap}(预演, 加 --confirm 写入)",
+          "project_displaced": "✗ 违层级: 项目级顾问不在治理根(治理根被子项目顾问 {occupants} 占) —— 换位: {swap}(各预演, 加 --confirm 写入); 再 {command}",
+          "explicit": "用户指定",
+          "default": "缺省"
+        }
+      },
+      "slot_sync": "AIPOS-F254 件④: `lybra sync --harness-root <治理根>` 对治理根 .lybra/role 顶层实例照旧 sync, 另对顶层之外每个实例槽中 harness 为顾问会话 kind 且会话目录在本机可落处者(distribution_sync.local_session_slots)各 sync 一次: 身份 / harness 目录取该槽(charter_render.workstation_identity / workstation_harness instance=), 凭据按该实例从治理根连接文件挑(resolve_sync_context instance=, 门按凭据认角色给清单), 章程与技能渲染到该实例自己的会话目录(治理根 = 项目级顾问的, 声明子路径 = 各子项目顾问的); 本地清单写 <治理根>/.lybra/.version-<role>@<实例>(顶层仍 .version-<role>, 既有清单零迁移; 实例在顶层与槽之间换位时读键沿用清单 workstation.instance = 本实例者, distribution_sync._session_manifest_keys), 同角色多实例互不覆盖渲染记录; 信封校正(_correct_owner_policy_ref)只对顶层实例。他机会话槽不在此列(会话开局按 remote_session_delivery 拉取)。",
       "sync_guard": "sync 渲染前兜底(distribution_sync._sync_harness_dir 本机会话分支): 本工位实例的会话目录与同机别的已接入顾问实例登记相撞 = 拒, 不覆盖落点章程(落点章程属另一实例), 零写入; 拒因与登记入口同一判定同一文本。",
-      "single_implementation": "tools/aipos_cli/enrollment.session_dir_conflicts(相撞判定) / session_dir_refusal(拒因与出口) / default_session_dir(缺省) / materialize_session_dir(建子路径 + 忽略文件) / advisor_sessions(登记盘点); 消费方 enrollment.redeclare_instance / enroll_client.enroll_preflight(enroll 与 enroll-deliver 同用)/ onboarding.generate_onboarding_guide / distribution_sync._sync_harness_dir(sync 兜底)/ lybra roles list(只读诊断: 每个顾问实例 harness@host:目录 与现存相撞)"
+      "single_implementation": "tools/aipos_cli/enrollment.session_dir_conflicts(相撞判定) / session_dir_refusal(拒因与出口; AIPOS-F254 治理根被子项目顾问占 = 换位出口) / session_tier(层级判据, AIPOS-F254) / default_session_dir(缺省, 按层级) / materialize_session_dir(建子路径 + 忽略文件) / advisor_sessions(登记盘点); 消费方 enrollment.redeclare_instance / enroll_client.enroll_preflight(enroll 与 enroll-deliver 同用)/ onboarding.generate_onboarding_guide / distribution_sync._sync_harness_dir(sync 兜底)/ lybra roles list(只读诊断: 每个顾问实例 harness@host:目录 与现存相撞)"
     },
     "rule": "sync 只取 target.harness == 工位 harness kind 的条目(缺 target.harness = pi); enroll 的 .pi 接线、共享落点并集、.pi 挂载推导只认 pi 条目。harness kind 合法值 = 本 schema harness_semantics.kinds 的键(enroll --harness 与 onboarding guide --advisor-harness 取值由此推导, 禁代码写死第二份); distributions[].target.harness 须 ∈ kinds(不在 = 声明错误, fail-closed)。AIPOS-F129 说理: 原「合法值 = distributions[].target.harness 并集」推不出无分发件的 kind(codex 顾问本卡不新增技能分发); kinds 本就是每个 kind 语义的唯一声明, 改由其键推导仍是单源, 并集 ⊆ kinds 作一致性校验。",
     "single_implementation": "tools/aipos_cli/distribution_sync.declared_harness_kinds / harness_kind_declaration / advisor_harness_kinds / harness_role_record / workstation_harness / harness_distributions(判定、登记与过滤) + enroll_client.enroll(落 harness 字段并交付) + onboarding.generate_onboarding_guide(顾问 harness) + workstation_wiring.declared_role_skills/declared_role_extensions(只认 pi)",
