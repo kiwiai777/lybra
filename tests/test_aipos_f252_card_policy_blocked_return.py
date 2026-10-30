@@ -294,8 +294,8 @@ def test_item2_audit_pass_on_blocked_return_never_closes_and_gate_close_refuses(
     _show(f"[件② 审计 PASS(核实阻塞属实)+ 已有合入记录] 推导: node={d['current_node']} verb={d['verb']}\n  command={d['command']}")
     assert "queue block" in d["command"] and "queue close" not in d["command"] and d["verb"] == "lybra_queue_block"
     got = close_task(task_id=TASK, actor=f78.EXEC, closure_evidence={"finalize_commit_hash": "a" * 40}, dry_run=False, repo_root=r.gov)
-    _show(f"[件② 门侧 close 兜底] ok={got.get('ok')} category={got.get('category') or (got.get('error') or {}).get('category')}\n"
-          f"  {got.get('message') or (got.get('error') or {}).get('message')}")
+    _show(f"[件② 门侧 close 兜底] ok={got.get('ok')} verdict={got.get('verdict')}\n  "
+          + json.dumps({k: got.get(k) for k in ("blocking_reasons", "data") if got.get(k)}, ensure_ascii=False)[:900])
     assert json.dumps(got, ensure_ascii=False).count("RETURN_OUTCOME_BLOCKED") >= 1
     assert (r.gov / "5_tasks" / "queue" / "claimed" / f"{TASK.lower()}.md").is_file() and not f90._records(r.gov, "closures", TASK)
 
