@@ -548,7 +548,7 @@
       }
     },
     "session_dir": {
-      "description": "AIPOS-F253: 顾问会话目录(advisor_session=true 的 harness 在治理根所在机的会话目录 harness.dir)的缺省与同机相撞拦截唯一声明。会话目录决定章程落点(分发条目 target.relative_path, 如 claude-code 的 .claude/rules/lybra-advisor.md、codex 的 AGENTS.md)与会话侧按目录分的状态(Claude Code 自动记忆按会话目录分): 同一主机两个顾问实例登记同一会话目录 = 后 sync 的覆盖前者章程(身份串)、记忆混用, 故登记入口一律拒。",
+      "description": "AIPOS-F253: 顾问会话目录(advisor_session=true 的 harness 在治理根所在机的会话目录 harness.dir)的缺省与同机相撞拦截唯一声明。会话目录决定章程落点(分发条目 target.relative_path, 如 claude-code 的 .claude/rules/lybra-advisor.md、codex 的 AGENTS.md)与会话侧按目录分的状态(AIPOS-F255 查证更正: Claude Code 自动记忆缺省按 git 仓根定位而非按会话目录, 同目录两会话必共用, 不同目录同仓也共用 —— 隔离见 harness_semantics.session_settings): 同一主机两个顾问实例登记同一会话目录 = 后 sync 的覆盖前者章程(身份串)、记忆混用, 故登记入口一律拒。",
       "default": "缺省按层级(AIPOS-F254, 层级判据见 tiers): 项目级顾问 = 本项目治理根; 子项目顾问 = secondary_subpath(按实例区分, 不论治理根当时是否空闲)。治理根本身经既有解析定位(向导 = home 根解析梯 --home-root > LYBRA_HOME_ROOT > ~/.lybra/config.json home_root > 缺省, 再拼项目名; 改登记 / 接入 = 本命令所用的项目治理根), 代码不写死任何路径。项目级顾问: 同主机治理根已被别的项目级顾问登记 = secondary_subpath(AIPOS-F253 行为不变); 治理根只被子项目顾问占着 = 仍缺省治理根、不静默降到子路径, 登记入口拒并点名占用者、给换位命令原文(tiers.swap)。用户显式 --dir / --harness-dir / --advisor-dir 一律优先(仍受 conflict 拦截)。只对 harness_dir=required 的 kind(claude-code)且会话在治理根所在机时给缺省: harness_dir=optional 的 kind(codex)不给缺省(会话目录可空 = 既有行为), 他机会话目录不猜(须显式给)。",
       "secondary_subpath": ".advisor-sessions/{instance}",
       "instance_placeholder": "{instance}",
@@ -598,6 +598,109 @@
       "slot_sync": "AIPOS-F254 件④: `lybra sync --harness-root <治理根>` 对治理根 .lybra/role 顶层实例照旧 sync, 另对顶层之外每个实例槽中 harness 为顾问会话 kind 且会话目录在本机可落处者(distribution_sync.local_session_slots)各 sync 一次: 身份 / harness 目录取该槽(charter_render.workstation_identity / workstation_harness instance=), 凭据按该实例从治理根连接文件挑(resolve_sync_context instance=, 门按凭据认角色给清单), 章程与技能渲染到该实例自己的会话目录(治理根 = 项目级顾问的, 声明子路径 = 各子项目顾问的); 本地清单写 <治理根>/.lybra/.version-<role>@<实例>(顶层仍 .version-<role>, 既有清单零迁移; 实例在顶层与槽之间换位时读键沿用清单 workstation.instance = 本实例者, distribution_sync._session_manifest_keys), 同角色多实例互不覆盖渲染记录; 信封校正(_correct_owner_policy_ref)只对顶层实例。他机会话槽不在此列(会话开局按 remote_session_delivery 拉取)。",
       "sync_guard": "sync 渲染前兜底(distribution_sync._sync_harness_dir 本机会话分支): 本工位实例的会话目录与同机别的已接入顾问实例登记相撞 = 拒, 不覆盖落点章程(落点章程属另一实例), 零写入; 拒因与登记入口同一判定同一文本。",
       "single_implementation": "tools/aipos_cli/enrollment.session_dir_conflicts(相撞判定) / session_dir_refusal(拒因与出口; AIPOS-F254 治理根被子项目顾问占 = 换位出口) / session_tier(层级判据, AIPOS-F254) / default_session_dir(缺省, 按层级) / materialize_session_dir(建子路径 + 忽略文件) / advisor_sessions(登记盘点); 消费方 enrollment.redeclare_instance / enroll_client.enroll_preflight(enroll 与 enroll-deliver 同用)/ onboarding.generate_onboarding_guide / distribution_sync._sync_harness_dir(sync 兜底)/ lybra roles list(只读诊断: 每个顾问实例 harness@host:目录 与现存相撞)"
+    },
+    "session_settings": {
+      "description": "AIPOS-F255: 顾问会话设置渲染唯一声明。10-31 chris 实测: 子路径会话(session_dir.secondary_subpath)同载上级治理根 .claude/rules/lybra-advisor.md(别的实例的章程 = 身份串); Claude Code 自动记忆缺省按 git 仓根定位, 治理根同在一个 git 仓时所有 Claude 顾问读写同一份 MEMORY.md。产品在每个本机 claude-code 会话目录渲染 relative_path(Claude Code 官方设置文件), 写两键: exclude.key(排除上级目录中的 Lybra 章程落点)与 memory.key(本实例独立记忆目录; 新会话缺省隔离, 既有会话不静默切换)。随 sync 渲染(sync 本机会话分支 distribution_sync._sync_harness_dir, 与章程同一次; 接入交付与 F254 实例槽 sync 同走此口); 设置落点已有用户文件(本地清单无本条渲染记录且内容不同)= 不覆盖, 出声并给并入键的出口。他机会话(harness.host)不适用(会话机上的文件产品不写)。",
+      "evidence": {
+        "checked_version": "本机 claude --version = 2.1.214 (Claude Code); 官方 CHANGELOG 顶 = 2.1.314(github.com/anthropics/claude-code CHANGELOG.md, 10-31 取)",
+        "sources": [
+          "https://code.claude.com/docs/en/memory —— claudeMdExcludes: 数组, 每项 glob 或绝对路径, 按绝对文件路径匹配; 可放任一 settings 层(user / project / local / managed), 数组跨层合并; managed CLAUDE.md 不可排除; 例 \"**/packages/web/**\" 跳过该包下所有 CLAUDE.md 与 rules 文件",
+          "https://code.claude.com/docs/en/memory —— auto memory 落 ~/.claude/projects/<project>/memory/, <project> 由 git 仓派生: 同仓所有 worktree 与子目录共享一个目录; 不在 git 仓 = 项目根; autoMemoryDirectory 改落点, 值须绝对路径或以 ~/ 开头",
+          "https://code.claude.com/docs/en/settings-reference —— autoMemoryDirectory 缺省 = 未设(回落 ~/.claude/projects/<project>/memory/); 来自项目 .claude/settings.json 或 .claude/settings.local.json 时按与 hooks 相同的 workspace trust 规则生效",
+          "https://code.claude.com/docs/en/permissions —— .claude/settings.local.json 自 v2.1.211 起从 git 仓根读(会话在子目录也是), 新版本仍同时读起始目录里的旧文件; 被 git 跟踪或 .claude 为符号链接 = 视为仓库提供",
+          "https://code.claude.com/docs/en/large-codebases —— 项目 .claude/settings.json 不像 CLAUDE.md 那样从上级目录继承(只读 <cwd>/.claude/)",
+          "CHANGELOG 2.1.74: Added autoMemoryDirectory setting; 2.1.239: Fixed claudeMdExcludes not excluding a symlinked .claude/rules file(= .claude/rules 文件受 claudeMdExcludes 管); 2.1.63: auto memory shared across git worktrees of the same repository"
+        ],
+        "fetch_note": "code.claude.com 在本机代理下 TLS 断开(WebFetch / curl 均不通), 文档原文要点经 WebSearch(限 code.claude.com 域)摘要取得, 版本号以官方 CHANGELOG 原文为准"
+      },
+      "harnesses": [
+        "claude-code"
+      ],
+      "relative_path": ".claude/settings.local.json",
+      "path_rationale": "选 local 层(.claude/settings.local.json, 相对会话目录): ① 两键在 local 层各版本均生效(autoMemoryDirectory 早期版本不收项目 .claude/settings.json, 现行文档 project / local 均收); ② local = 「你、仅此项目」语义, 正合按实例的会话设置; ③ 会话目录在 git 仓子目录时 v2.1.211+ 另读仓根的同名文件, 但仍读起始目录这份(官方原文); 仓根那份是全仓共用, 产品不写。项目层 .claude/settings.json 只从会话目录读、不继承, 但早期版本不收 autoMemoryDirectory, 故不选。",
+      "exclude": {
+        "key": "claudeMdExcludes",
+        "rule": "会话目录的每个上级目录(父目录直至文件系统根)× 本 harness 全部章程落点(distributions[kind=charter 且 target.harness = 本 kind].target.relative_path)拼成绝对路径, 逐条列出(官方: 绝对路径按绝对文件路径匹配)。只排除 Lybra 章程落点(别的实例的身份串来源), 不排除上级 CLAUDE.md / AGENTS.md 等项目或用户文件(那是项目真相, 照常加载); 本会话目录自己的章程不在列。静态全列(不依赖谁先登记): 项目级顾问后来才在治理根落章程, 子路径会话也已排除。"
+      },
+      "memory": {
+        "key": "autoMemoryDirectory",
+        "directory": "~/.lybra/advisor-memory/{project}/{instance}",
+        "placeholders": [
+          "{project}",
+          "{instance}"
+        ],
+        "directory_rationale": "按实例(实例名项目内唯一、改登记不改名)= 改会话目录记忆随实例走; 落产品自有目录 ~/.lybra 之下(不放治理根 = 不进治理仓视野、执行体读治理根也读不到顾问私记; 不放 ~/.claude/projects = 不混进 Claude Code 自管的会话记录目录); 写 ~/ 开头的原值(官方允许), 设置文件换机器照用。",
+        "default_new_session": "isolated",
+        "existing_session": "shared",
+        "existing_rule": "既有会话 = 本实例已有本地清单(sync 渲染记录, distribution_sync._session_manifest_keys 读键命中)而清单无 session_settings.memory 记录: 记 shared, 不静默切换(切换 = 其既有记忆失联); 只读诊断标出谁在共享, 显式切换走 lybra roles memory(两阶段)。新会话(无本地清单)= default_new_session。清单已有记录 = 沿用记录。",
+        "modes": {
+          "isolated": "隔离",
+          "shared": "共享"
+        },
+        "enabled_key": "autoMemoryEnabled",
+        "default_location": {
+          "base": "~/.claude/projects",
+          "leaf": "memory",
+          "slug_note": "缺省落点目录名 = git 仓根(主 worktree)绝对路径中非字母数字字符换成 -(本机观察到的命名, 如 -home-kiwi-ai-project-os; 官方只说 <project> 由 git 仓派生): 诊断比对按 git 仓根路径, 目录名只作展示"
+        }
+      },
+      "ignore": {
+        "dir": ".claude",
+        "file": ".gitignore",
+        "header": "# AIPOS-F255: Lybra 渲染物(产品写)。只列产品渲染的文件, 本目录其余文件归用户、不在此列",
+        "rationale": "沿用 F253 landing_exclusion 取舍(目录内自带忽略文件随目录走, 不改治理仓 .gitignore / .git/info/exclude); 与 F253 不同处: .claude/ 下可能有用户自己的文件(如会话权限 settings.local.json、自建技能), 故不忽略整目录, 只逐条列产品渲染物(本次 sync 声明的章程 / 技能文件、本条渲染的设置文件、忽略文件自身), 用户文件照常可见。忽略文件已存在且非 Lybra 渲染 = 不覆盖, 出声。"
+      },
+      "diagnosis": {
+        "settings_sources": [
+          {
+            "scope": "local",
+            "path": "{session_dir}/.claude/settings.local.json"
+          },
+          {
+            "scope": "local",
+            "path": "{git_root}/.claude/settings.local.json"
+          },
+          {
+            "scope": "project",
+            "path": "{session_dir}/.claude/settings.json"
+          },
+          {
+            "scope": "user",
+            "path": "~/.claude/settings.json"
+          }
+        ],
+        "rule": "只读: 按官方层级合并会话实际会读到的设置(数组键合并, 标量键按 settings_sources 顺序先到先得 = local > project > user; managed 层不看)。串身份 = 会话目录某个上级目录里存在 Lybra 章程落点文件且未被 claudeMdExcludes 排除; 共享记忆 = 本会话实际记忆目录与本机别的已登记 claude-code 会话(本 home 根下各项目)相同, 或未设 autoMemoryDirectory(缺省按 git 仓根: 同仓未隔离的任何 Claude 会话都共用)。他机会话 = 不适用。"
+      },
+      "texts": {
+        "rules_ok": "上级章程: 无串身份风险",
+        "rules_risk": "✗ 串身份风险: 会加载上级章程 {paths}(未被 claudeMdExcludes 排除)—— 出口: {command}",
+        "memory_isolated": "记忆: 隔离 {dir}",
+        "memory_disabled": "记忆: 已关闭(autoMemoryEnabled=false)",
+      "memory_default_own": "记忆: 缺省 {dir}(git 仓根 = 会话目录本身, 本机无已登记会话共用)",
+        "memory_shared": "✗ 记忆共享: {dir}({how}{others})—— 显式切换: {command}(预演, 加 --confirm 写入)",
+        "memory_how_default": "未设 autoMemoryDirectory, 缺省按 git 仓根 {root} 定位, 同仓未隔离的 Claude 会话共用",
+        "memory_how_explicit": "autoMemoryDirectory 来自 {source}",
+        "memory_others": "; 本机已登记的共享者: {instances}",
+        "not_applicable": "会话设置: 不适用(他机会话或非 {harnesses})",
+        "settings_user_file": "会话设置落点 {path} 是用户文件(非 Lybra 渲染), 产品不覆盖 —— 出口: 把这些键并入该文件 {keys}",
+        "ignore_user_file": "忽略文件 {path} 是用户文件(非 Lybra 渲染), 产品不覆盖 —— 出口: 把这些行并入该文件 {lines}",
+        "switch_target": "切换记忆 {instance}: {old_mode} {old_dir} → {new_mode} {new_dir}",
+        "switch_sharers": "  现共享者(本机已登记): {instances}",
+        "switch_old_memory": "  旧记忆处理建议: 旧目录 {old_dir} 不动、不删(其他会话照用); {suggestion}",
+        "switch_suggest_isolate": "新目录{state}; 如需带走与本实例相关的旧条目, 手工把 {old_dir}/MEMORY.md 中属本实例的索引行与对应文件拷入 {new_dir}/(产品不复制、不合并)",
+        "switch_suggest_share": "改回共享后本实例读写 {new_dir}; 隔离期写在 {old_dir} 的条目如需保留, 手工并入(产品不复制、不合并)",
+        "switch_target_state_empty": "尚不存在或为空",
+        "switch_target_state_files": "已有 {count} 个文件(将沿用)",
+        "switch_write": "  {will}写: {path}(本地清单 session_settings.memory = {mode}); {will}渲染: {settings}",
+        "switch_invariants": "  不变: 登记(接入日志 / .lybra/role)、章程、他实例的会话设置; 记忆文件本身不搬不删"
+      },
+      "reject_codes": {
+        "MEMORY_SWITCH_NOT_APPLICABLE": "出口: 只对本机 claude-code 顾问会话(lybra roles list 顾问会话登记中 harness=claude-code 且主机 = 本机); 他机会话的记忆在会话机上自理",
+        "MEMORY_SWITCH_NOT_SYNCED": "出口: 该会话尚无渲染记录(本地清单), 先 lybra sync --harness-root <治理根> --workspace-root <治理根>(新会话首次 sync 缺省 = 隔离)",
+        "MEMORY_SWITCH_USER_FILE": "出口: 会话设置落点是用户文件, 产品不覆盖; 把拒因所列键并入该文件, 或移走该文件后重跑",
+        "MEMORY_SWITCH_NO_CHANGE": "出口: 无需切换"
+      },
+      "single_implementation": "tools/aipos_cli/session_settings.declaration(声明读取) / desired_settings(两键内容) / apply_session_settings(渲染 + 忽略文件, sync 唯一写口) / session_view(只读诊断: 上级章程与记忆) / switch_memory(显式切换两阶段); 消费方 distribution_sync._sync_harness_dir(sync 本机会话分支) / lybra roles list(enrollment.render_advisor_sessions 与 --json)/ lybra roles memory"
     },
     "rule": "sync 只取 target.harness == 工位 harness kind 的条目(缺 target.harness = pi); enroll 的 .pi 接线、共享落点并集、.pi 挂载推导只认 pi 条目。harness kind 合法值 = 本 schema harness_semantics.kinds 的键(enroll --harness 与 onboarding guide --advisor-harness 取值由此推导, 禁代码写死第二份); distributions[].target.harness 须 ∈ kinds(不在 = 声明错误, fail-closed)。AIPOS-F129 说理: 原「合法值 = distributions[].target.harness 并集」推不出无分发件的 kind(codex 顾问本卡不新增技能分发); kinds 本就是每个 kind 语义的唯一声明, 改由其键推导仍是单源, 并集 ⊆ kinds 作一致性校验。",
     "single_implementation": "tools/aipos_cli/distribution_sync.declared_harness_kinds / harness_kind_declaration / advisor_harness_kinds / harness_role_record / workstation_harness / harness_distributions(判定、登记与过滤) + enroll_client.enroll(落 harness 字段并交付) + onboarding.generate_onboarding_guide(顾问 harness) + workstation_wiring.declared_role_skills/declared_role_extensions(只认 pi)",

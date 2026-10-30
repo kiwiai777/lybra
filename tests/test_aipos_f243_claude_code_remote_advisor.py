@@ -253,6 +253,14 @@ def test_item2_remote_claude_code_pull_exits_land_same_as_local_sync(probe_range
     out = r.sh(f"lybra sync --harness-root {gov} --workspace-root {gov}")
     _show("---- ③·本机 claude-code sync 原文 ----\n" + out)
     local = _tree(local_dir / ".claude")
+    # AIPOS-F255: 本机会话另有产品按本机路径渲染的会话设置与忽略文件(声明 harness_semantics.session_settings; 他机会话不适用),
+    # 不属分发件, 比对分发件时扣除
+    from tools.aipos_cli.session_settings import declaration as _ss_decl
+
+    ss = _ss_decl()
+    session_only = {str(Path(ss["relative_path"]).relative_to(ss["ignore"]["dir"])), ss["ignore"]["file"]}
+    assert session_only <= set(local), sorted(local)
+    local = {k: v for k, v in local.items() if k not in session_only}
     assert local.keys() == pulled.keys(), sorted(set(local) ^ set(pulled))
     diff = [k for k in local if local[k] != pulled[k]]
     _show(f"[②·内容比对] 本机 sync {len(local)} 个文件 vs 拉取落盘 {len(pulled)} 个文件, 字节不一致 {len(diff)} 个")

@@ -104,6 +104,22 @@ each other instance slot whose session directory is local — each into its own 
 local manifest key (`.version-<role>@<instance>` for slots), so no advisor needs `lybra charter --body-only` / `lybra skills` by
 hand.
 
+**Session settings (AIPOS-F255).** Claude Code loads `.claude/rules` and CLAUDE.md files from every directory above the session
+directory, and keeps auto memory per git repository (all subdirectories and worktrees of one repo share one `MEMORY.md`), so a
+sub-path advisor would also load the project-level advisor's charter and every advisor under one governance repo would share one
+memory. `lybra sync` therefore renders, into each local Claude Code session directory, the settings file declared in
+`schema/distribution.schema.json` `harness_semantics.session_settings` (`.claude/settings.local.json`) with two official keys:
+`claudeMdExcludes` lists the absolute path of every Lybra charter landing in every ancestor directory (the session's own charter
+and ordinary CLAUDE.md / AGENTS.md files are not excluded), and `autoMemoryDirectory` points at the instance's own memory directory
+(`memory.directory`, `~/.lybra/advisor-memory/<project>/<instance>`). A new session (no local manifest yet) is isolated by default;
+an existing session is never switched silently (its old memory would become unreachable): `lybra roles list` shows, per local
+Claude Code session, any ancestor charter it would still load and whom it shares memory with, and `lybra roles memory
+--workspace-root <root> --instance <instance> --mode isolated|shared` previews the switch (target directory, current sharers,
+advice for the old memory, which is never moved or deleted) and writes only with `--confirm`. A `.claude/.gitignore` lists exactly
+the rendered files (charter, skills, the settings file, itself), so they disappear from `git status` while files you create under
+`.claude/` stay visible; a settings or ignore file you wrote yourself is never overwritten — sync prints the keys/lines to merge.
+Sessions on another host are not covered (their files live on that host).
+
 1. **Enroll each advisor with its own instance.** The Owner enrolls each advisor on the governance-root machine, always with
    `--instance` (`lybra roles … enroll-deliver --role <advisor role> --instance <prefix>.<project>.<host> --governance-root
    <governance root> --workspace <governance root> …`, preview first, then `--confirm`); an advisor- or planner-class role
