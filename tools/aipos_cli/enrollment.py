@@ -1420,9 +1420,14 @@ def session_hierarchy(governance_root: str | Path, session: dict[str, Any], sess
 
 def render_advisor_sessions(governance_root: str | Path) -> list[str]:
     """roles list 只读诊断段: 每个顾问实例 [层级] harness@host:目录, 现存相撞者标出(同一判定 session_dir_conflicts); AIPOS-F254 件③:
-    层级合规(session_hierarchy)——违例标出并给换位命令原文, 非缺省目录标「用户指定」(不算违例)。"""
+    层级合规(session_hierarchy)——违例标出并给换位命令原文, 非缺省目录标「用户指定」(不算违例)。AIPOS-F255 件④: 每个会话另列
+    会加载的上级章程(串身份风险)与记忆落点 / 本机共享者(session_settings.session_view)。"""
+    from tools.aipos_cli.session_settings import registered_local_sessions, session_view
+
     sessions = advisor_sessions(governance_root)
-    lines = [f"顾问会话登记({len(sessions)} 个; 同机同目录 = 相撞, AIPOS-F253; 项目级顾问占治理根、子项目顾问进治理根内声明子路径, AIPOS-F254):"]
+    lines = [f"顾问会话登记({len(sessions)} 个; 同机同目录 = 相撞, AIPOS-F253; 项目级顾问占治理根、子项目顾问进治理根内声明子路径, AIPOS-F254; "
+             "上级章程串身份 / 记忆共享, AIPOS-F255):"]
+    peers = registered_local_sessions(governance_root) if sessions else []
     for s in sessions:
         hits = session_dir_conflicts(governance_root, instance=s["instance"], kind=s["kind"], host=s["host"], dir=s["dir"])
         mark = f"  ✗ 相撞: 与 {', '.join(h['instance'] for h in hits)} —— {'; '.join(hits[0]['reasons'])}" if hits else ""
@@ -1431,6 +1436,7 @@ def render_advisor_sessions(governance_root: str | Path) -> list[str]:
         tier_mark = (f"  [{label}] {tier['text']}" if tier["violation"]
                      else f"  [{label} · {tier['text']}]" if tier["applies"] else f"  [{label}]")
         lines.append(f"  {s['instance']:<44} {s['kind']}@{s['host']}:{s['dir']}{mark}{tier_mark}")
+        lines += [f"      {ln}" for ln in session_view(governance_root, s, peers=peers)["lines"]]  # AIPOS-F255 件④
     return lines
 
 

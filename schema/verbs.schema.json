@@ -237,6 +237,16 @@
         "confirm": "Write card_policy.json and land it via the governance-commit path (lybra governance-commit --paths), pushing like N6 landing"
       }
     },
+    "session_settings_writers": {
+      "description": "AIPOS-F255: `lybra roles memory` 同一两阶段语义——旗标注册与其他族同一包装 aipos_cli._project_json_two_phase_flags(family=session_settings_writers), 旗标名 / 缺省阶段 / 状态标签读 project_json_writers 一处; 缺省 = 预演(列现落点与共享者、将切到的目录、旧记忆处理建议、将写的文件), 零写入; --confirm 才写本机渲染记录(治理根 .lybra/.version-<键> 的 session_settings)与会话设置文件(会话目录 .claude/ 内, 产品忽略文件已列)——两者都不入治理仓, 无落账。唯一实现 tools/aipos_cli/session_settings.switch_memory。",
+      "commands": [
+        "memory"
+      ],
+      "flag_help": {
+        "dry_run": "Preview the memory switch (current/target memory directory, sharers, old-memory advice) without writing (default)",
+        "confirm": "Record the memory mode in the local render manifest and re-render the session settings file"
+      }
+    },
     "roadmap_writers": {
       "description": "AIPOS-F171 件①: `lybra roadmap` 族写命令(add-milestone / add-criterion / set / remove)同一两阶段语义——旗标注册与其他族同一包装 aipos_cli._project_json_two_phase_flags(family=roadmap_writers), 旗标名 / 缺省阶段 / 状态标签读 project_json_writers 一处(本段不重复声明); 落账提交身份旗标同读 project_json_writers.landing_actor_flag。缺省 = 预演: 校验改动后的整份路线图(config.schema governance_structure.roadmap)并打印路线图文件 unified diff 与将生成的 decision_log 指针名, 零写入; --confirm 才写路线图文件、生成 decision_log 指针(board_adapter._auto_generate_decision_log_pointer, Record = 路线图文件)并经 lybra_governance_commit.post_write_landing.commands.roadmap_writers 同一提交口落账。唯一实现 tools/aipos_cli/roadmap.py(apply_roadmap_change)。只读 `lybra roadmap show` 不适用两阶段。AIPOS-F175 件③: verify(Owner 抽查结论)同族同旗标——缺省预演: 打印将写的 owner_verifications 记录与(不符时)将起草的修复卡, 零写入; --confirm 写记录(+ 不符时修复卡草稿)并经 post_write_landing.commands.roadmap_writers 同一提交口落账; 唯一实现 roadmap.apply_owner_verification。",
       "commands": [
@@ -6260,6 +6270,15 @@
       "visibility": "always",
       "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
       "surface": ["mcp"]
+    },
+    "lybra_roles_memory": {
+      "description": "AIPOS-F255 件②: 顾问会话记忆显式切换 `lybra roles memory --instance <实例> [--mode isolated|shared] [--dry-run|--confirm] [--workspace-root <治理根>]`。不给 --mode = 只读现状(上级章程串身份风险 + 记忆落点与本机共享者, 同 roles list 诊断)。给 --mode = 两阶段(族 two_phase_protocol.session_settings_writers): 预演列出将切到的目录、旧记忆处理建议(旧目录不动不删、产品不复制不合并, 给手工拷贝建议)、将写的文件; --confirm 写本地渲染清单 session_settings.memory(source=explicit)并按同一渲染器重写会话设置文件。既有会话的记忆只经本命令切换(sync 不静默切)。--mode 值域 = distribution.schema harness_semantics.session_settings.memory.modes 的键(argparse choices 由 session_settings.memory_modes 投影)。拒因码与出口见 distribution.schema harness_semantics.session_settings.reject_codes。",
+      "phase": "render",
+      "surface": [
+        "cli"
+      ],
+      "cli_command": "lybra roles memory",
+      "single_implementation": "tools/aipos_cli/session_settings.switch_memory"
     },
     "lybra_roles_redeclare": {
       "description": "AIPOS-F235(10-25 chris 岚图顾问从 Mac Codex 迁到 dev Claude Code: 实例槽仍记 codex@kiwiai-mac, land 无 harness=, 子 agent 代码卡被缺省成 codex, 开工稿时限句与派发说明随之错; 原入口只有 relocate-workstation(只迁 pi 工位目录)与 enroll-void + 重接入(作废凭据重发码, 对一次换 harness 过重)): 已接入实例改登记 `lybra roles redeclare --instance <实例> [--harness <kind>] [--host <主机>] [--dir <工作目录>] [--dry-run|--confirm] --actor <实例>`。适用 = 本项目已接入的治理席位实例(位置事件工位 = 治理根, 实例槽在治理根 .lybra/role)与子 agent 执行身份; pi 工位 = 拒(迁目录走 relocate-workstation)。登记真相 = 本项目 enrollment_log 位置事件: 确认 = 追加一行 event_action 位置事件(与 land / relocate 同族同解析 enrollment._LAND_LINE_RE, 同一写口 _write_trail_line, 只追加不改旧行; 结构字段沿用最新位置事件, reason = host [mode] harness [harness_host harness_dir] from_harness from_host from_dir authorized_by [workstation 沿用])并经 enroll_client.write_role_file(唯一写路径; stamp_key=redeclared_at, keep_top)更新实例槽, 日志一次落账(post_write_landing.commands.roles_redeclare)。读口 enrollment.registered_harness 先读事件(日志为准), 实例槽与日志不一致 = state lint ENROLLMENT_REGISTRATION_DRIFT。实例名不改(凭据与历史归因按名; 名中主机段只是历史, 主机判据一律读登记); 凭据不动、不重发码。唯一实现 enrollment.redeclare_instance(预演 / 确认同一函数), 文本 enrollment.render_redeclaration。 AIPOS-F243 件③: claude-code 会话可登记在他机(distribution.schema harness_semantics.kinds.claude-code.harness_host=optional: --harness claude-code --host <他机> --dir <他机路径>, 目录如实记、不校验本机存在); codex ↔ claude-code 同主机同目录来回切换两向都走本命令(一次切换一次改登记; 换 kind 不沿用旧会话机与目录, 显式给 --host --dir); 授权分档不变。",

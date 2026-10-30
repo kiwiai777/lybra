@@ -697,8 +697,10 @@ def write_local_manifest(
     pruned: list[str] | None = None,
     manifest_dir: Path | None = None,
     manifest_key: str | None = None,
+    session_settings: dict[str, Any] | None = None,
 ) -> Path:
     """写/更新 _distributed/.version-{role}(含文件哈希, 供连接器版本自答)。AIPOS-F92: manifest_dir 给了(非 pi harness)= 写该目录。
+    AIPOS-F255: session_settings = 本次会话设置渲染记录(session_settings.apply_session_settings 的 record; 调用方显式传入, 不从旧清单复活)。
 
     AIPOS-F66C 件①: manifest 由部署声明每次重生, 禁累积, 禁从陈旧 manifest 复活已剔除条目。
     本函数每次从 remote(当前部署声明) 完全重建 manifest, 不读取/合并旧 manifest。
@@ -745,6 +747,8 @@ def write_local_manifest(
         data["workstation"] = {k: workstation.get(k) for k in ("instance", "project", "role", "harness_root")}
     if pruned is not None:
         data["pruned"] = list(pruned)
+    if session_settings is not None:
+        data["session_settings"] = session_settings
     # 直接覆盖写入(不读取旧 manifest), 实现每次重生
     manifest_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     return manifest_path
@@ -1572,6 +1576,17 @@ def _sync_harness_dir(
         "pi_mount_prune": [],
         "pi_mount_warnings": [],
     }
+    # AIPOS-F255: 会话设置(排除上级章程 + 记忆落点)与 .claude/ 忽略文件(声明 harness_semantics.session_settings; 唯一实现
+    # session_settings.apply_session_settings)。新会话(无本地清单)缺省隔离记忆, 既有会话沿用记录 / 不静默切换。
+    session_report: dict[str, Any] | None = None
+    from tools.aipos_cli import session_settings as _session_settings
+
+    if _session_settings.applies(harness["kind"]):
+        session_report = _session_settings.apply_session_settings(
+            target_root, kind=harness["kind"], project=str(identity.get("project") or ""), instance=str(identity["instance"]),
+            declared_files=list(declared_files), previous=local_manifest.get("session_settings"), has_manifest=bool(local_manifest),
+            dry_run=True)
+    base_result["session_settings"] = ({k: v for k, v in session_report.items() if k != "record"} if session_report else None)
     if dry_run:
         return {**base_result, "files_fetched": 0, "files_pruned": 0, "changes": [], "pruned_files": [], "prune_errors": [],
                 "declaration_gaps": [], "manifest_path": str(_local_manifest_path(target_root, write_key, manifest_dir=manifest_dir)),
@@ -1597,8 +1612,15 @@ def _sync_harness_dir(
         fetched_total += written
         results.append({"distribution_id": dist["distribution_id"], "action": action, "files_written": written,
                         "reasons": dict(item.get("reasons") or {}), "target_path": str(target_root / str(dist.get("target_path") or ""))})
+    if session_report is not None:  # 章程 / 技能落盘后再渲染(忽略文件列本次声明的渲染物)
+        session_report = _session_settings.apply_session_settings(
+            target_root, kind=harness["kind"], project=str(identity.get("project") or ""), instance=str(identity["instance"]),
+            declared_files=list(declared_files), previous=local_manifest.get("session_settings"), has_manifest=bool(local_manifest),
+            dry_run=False)
+        base_result["session_settings"] = {k: v for k, v in session_report.items() if k != "record"}
     manifest_path = write_local_manifest(target_root, remote_h, charter_records=charter_records or None, workstation=identity,
-                                         pruned=[], manifest_dir=manifest_dir, manifest_key=write_key)
+                                         pruned=[], manifest_dir=manifest_dir, manifest_key=write_key,
+                                         session_settings=session_report["record"] if session_report is not None else None)
     return {**base_result, "files_fetched": fetched_total, "files_pruned": 0, "changes": results, "declaration_gaps": declaration_gaps,
             "manifest_path": str(manifest_path), "pruned_files": [], "prune_errors": [],
             "owner_policy_correction": (_SLOT_POLICY_NOTE if slot_scoped
@@ -1981,6 +2003,12 @@ def render_sync_text(run: dict[str, Any]) -> str:
                 lines.append("      up-to-date: 0 file(s) to fetch/render")
             if r.get("note"):  # AIPOS-F129: 非本机可落 harness(codex 他机会话)的无事可做原因
                 lines.append(f"      {r['note']}")
+            ss = r.get("session_settings") or {}
+            if ss.get("applies"):  # AIPOS-F255: 会话设置(排除上级章程 + 记忆落点)与 .claude/ 忽略文件
+                mem = ss["memory"]
+                lines.append(f"      会话设置(AIPOS-F255): {ss['settings']['action']} {ss['settings']['path']}; 记忆 {mem['mode']}({mem['source']})"
+                             f" {mem['directory'] or '缺省(按 git 仓根)'}; 忽略文件 {ss['ignore']['action']} {ss['ignore']['path']}")
+                lines += [f"      ⚠ {n}" for n in ss.get("notes") or []]
             if r.get("would_prune"):
                 lines.append(f"      would-prune (不在声明): {len(r['would_prune'])} file(s)")
                 for pf in r["would_prune"][:5]:

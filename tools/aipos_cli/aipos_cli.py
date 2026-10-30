@@ -1688,6 +1688,27 @@ def _roles_redeclare(args: argparse.Namespace, governance_root: Path) -> int:
     return rc
 
 
+def _roles_memory(args: argparse.Namespace, governance_root: Path) -> int:
+    """AIPOS-F255 件②: `lybra roles memory` 薄壳——现状 / 预演 / 确认 = session_settings.switch_memory(唯一实现)。拒 = exit 1(拒因码 + 出口)。
+    写的是本机渲染记录与会话设置文件(都不入治理仓), 无落账。"""
+    from tools.aipos_cli.session_settings import MemorySwitchError, switch_memory
+
+    try:
+        result = switch_memory(governance_root, instance=args.instance, mode=args.mode, confirm=bool(args.confirm))
+    except MemorySwitchError as exc:
+        print(f"Error: {exc}(未改)", file=sys.stderr)
+        return 1
+    if getattr(args, "json", False):
+        print(render_json(result))
+        return 0
+    labels = _two_phase_family_declaration("session_settings_writers")["outcome_labels"]
+    state = "" if args.mode is None else f": {labels['preview'] if result['dry_run'] else labels['written']}"
+    print(f"roles memory {result['instance']}{state}")
+    for line in result["lines"]:
+        print(f"  {line}" if args.mode is None else line)
+    return 0
+
+
 def _remote_host_hint(governance_root: str | Path | None, instance: str | None, host: str | None) -> str | None:
     """AIPOS-F244 件③: 改登记 / 接入把会话登记到他机而 project.json workstations.<实例> 未声明 = 一次性提示行(含声明命令原文;
     唯一实现 charter_render.remote_host_declaration_hint)。无治理根 / 无实例 / 本机 / 已声明 = None。"""
@@ -3102,6 +3123,15 @@ def build_parser() -> argparse.ArgumentParser:
     roles_redeclare_parser.add_argument("--workspace-root", dest="workspace_root", default=None, help="目标治理根(缺省 = 全局 --workspace-root / 当前目录所在治理根)")
     _project_json_two_phase_flags(roles_redeclare_parser, "redeclare", family="enrollment_log_writers")  # 缺省预演 / --confirm 才写
     roles_redeclare_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-F255 件②: 顾问会话记忆显式切换(两阶段; --mode 值域投影 distribution.schema harness_semantics.session_settings.memory.modes)
+    from tools.aipos_cli.session_settings import memory_modes as _memory_modes
+
+    roles_memory_parser = roles_subparsers.add_parser("memory", help="AIPOS-F255: 本机 claude-code 顾问会话的记忆现状与显式切换——不给 --mode = 只读现状(上级章程串身份风险 + 记忆落点与共享者); 给 --mode = 缺省预演(将切到的目录 / 旧记忆处理建议), --confirm 才写本地渲染记录并重写会话设置文件(既有会话的记忆 sync 不静默切换, 只经本命令)")
+    roles_memory_parser.add_argument("--instance", required=True, help="本项目已登记的本机 claude-code 顾问会话实例")
+    roles_memory_parser.add_argument("--mode", choices=_memory_modes(), default=None, help="isolated = 本实例独立记忆目录(声明 memory.directory); shared = 回到 Claude Code 缺省(按 git 仓根, 同仓共用)")
+    roles_memory_parser.add_argument("--workspace-root", dest="workspace_root", default=None, help="目标治理根(缺省 = 全局 --workspace-root / 当前目录所在治理根)")
+    _project_json_two_phase_flags(roles_memory_parser, "memory", family="session_settings_writers")
+    roles_memory_parser.add_argument("--json", action="store_true", help="Output JSON")
     
     # AIPOS-F66B 件②: 写权限边界可读面 + 读取口(护栏读声明; 单源 roles.schema write_boundary)
     roles_wb_parser = roles_subparsers.add_parser("write-boundary", help="AIPOS-F66B: 写权限边界可读面(角色类 × 面 × read/append/mutate, 读 roles.schema write_boundary)与单次访问判定(--check)")
@@ -4921,11 +4951,16 @@ def main(argv: list[str] | None = None) -> int:
                 from tools.aipos_cli.enrollment import advisor_sessions, render_advisor_sessions, session_dir_conflicts, session_hierarchy
 
                 if getattr(args, "json", False):
+                    # AIPOS-F255 件④: 每个会话的上级章程串身份风险与记忆共享(判定唯一 session_settings.session_view)
+                    from tools.aipos_cli.session_settings import registered_local_sessions, session_view
+
                     _sessions = advisor_sessions(workspace_root)
+                    _peers = registered_local_sessions(workspace_root) if _sessions else []
                     result["advisor_sessions"] = [
                         {**s, "conflicts": [h["instance"] for h in session_dir_conflicts(workspace_root, instance=s["instance"], kind=s["kind"],
                                                                                         host=s["host"], dir=s["dir"])],
-                         "hierarchy": session_hierarchy(workspace_root, s, _sessions)}
+                         "hierarchy": session_hierarchy(workspace_root, s, _sessions),
+                         "session_settings": session_view(workspace_root, s, peers=_peers)}
                         for s in _sessions]
                     print(render_json(result))
                 else:
@@ -5375,6 +5410,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             elif args.roles_command == "redeclare":
                 return _roles_redeclare(args, Path(workspace_root))
+            elif args.roles_command == "memory":
+                return _roles_memory(args, Path(workspace_root))
             elif args.roles_command == "enroll":
                 # AIPOS-R2/F23: client-side enrollment (exchange code + write .lybra/ config)
                 from tools.aipos_cli.enroll_client import enroll
