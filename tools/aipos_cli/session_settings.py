@@ -26,6 +26,8 @@ _TEXT_KEYS = (
 )
 _REJECT_CODES = ("MEMORY_SWITCH_NOT_APPLICABLE", "MEMORY_SWITCH_NOT_SYNCED", "MEMORY_SWITCH_USER_FILE", "MEMORY_SWITCH_NO_CHANGE")
 _SOURCE_SCOPES = ("local", "project", "user")
+_ISOLATED = "isolated"  # 写 autoMemoryDirectory 的模式(声明 memory.modes 的键之一)
+_SHARED = "shared"  # 不写记忆键 = Claude Code 缺省(声明 memory.modes 的键之一)
 
 
 class MemorySwitchError(ValueError):
@@ -65,7 +67,9 @@ def declaration() -> dict[str, Any]:
         problems.append("exclude.key / memory.key / memory.enabled_key")
     if not (directory.startswith("~/") or directory.startswith("/")) or any(p not in directory for p in memory.get("placeholders") or ["?"]):
         problems.append("memory.directory(官方: 绝对路径或 ~/ 开头; 含 placeholders)")
-    if set(modes) != {"isolated", "shared"} or memory.get("default_new_session") not in modes or memory.get("existing_session") not in modes:
+    # 两个模式名由代码分支认(isolated 写记忆键, shared 不写): 逐个查在声明里, 值域本身只读声明(memory_modes 投影)
+    if (len(modes) != 2 or _ISOLATED not in modes or _SHARED not in modes or memory.get("default_new_session") not in modes
+            or memory.get("existing_session") not in modes):
         problems.append("memory.modes {isolated, shared} / default_new_session / existing_session")
     if not str(loc.get("base") or "").strip() or not str(loc.get("leaf") or "").strip():
         problems.append("memory.default_location {base, leaf}")
@@ -124,7 +128,7 @@ def desired_settings(session_dir: str | Path, *, kind: str, project: str, instan
     if memory_mode not in decl["memory"]["modes"]:
         raise ValueError(f"记忆模式 {memory_mode!r} 不在声明 {list(decl['memory']['modes'])}")
     out: dict[str, Any] = {decl["exclude"]["key"]: ancestor_charter_paths(session_dir, kind)}
-    if memory_mode == "isolated":
+    if memory_mode == _ISOLATED:
         out[decl["memory"]["key"]] = memory_directory(project, instance)
     return out
 
@@ -330,7 +334,7 @@ def memory_view(session_dir: str | Path, *, effective: dict[str, Any] | None = N
         return {"mode": "disabled", "dir": None, "key": None, "source": eff["enabled"][1], "git_root": eff["git_root"]}
     if eff["memory"] is not None:
         path = _expand(eff["memory"][0])
-        return {"mode": "isolated", "dir": str(path), "key": str(path.resolve()), "source": eff["memory"][1], "git_root": eff["git_root"]}
+        return {"mode": _ISOLATED, "dir": str(path), "key": str(path.resolve()), "source": eff["memory"][1], "git_root": eff["git_root"]}
     path = default_memory_dir(session_dir, eff["git_root"])
     return {"mode": "default", "dir": str(path), "key": str(path.resolve()), "source": None, "git_root": eff["git_root"]}
 
@@ -388,12 +392,12 @@ def session_view(governance_root: str | Path, session: dict[str, Any], *, peers:
             sharers.append(other["instance"])
     own_repo = mem["mode"] == "default" and (eff["git_root"] is None or eff["git_root"] == here)
     risk = bool(sharers) or (mem["mode"] == "default" and not own_repo)
-    command = switch_command(governance_root, session["instance"], "isolated") if risk else None
+    command = switch_command(governance_root, session["instance"], _ISOLATED) if risk else None
     lines = [texts["rules_risk"].format(paths=", ".join(loaded), command=rules["command"]) if loaded else texts["rules_ok"]]
     if mem["mode"] == "disabled":
         lines.append(texts["memory_disabled"])
     elif not risk:
-        lines.append(texts["memory_isolated"].format(dir=mem["dir"]) if mem["mode"] == "isolated"
+        lines.append(texts["memory_isolated"].format(dir=mem["dir"]) if mem["mode"] == _ISOLATED
                      else texts["memory_default_own"].format(dir=mem["dir"]))
     else:
         how = (texts["memory_how_default"].format(root=eff["git_root"]) if mem["mode"] == "default"
@@ -457,13 +461,13 @@ def switch_memory(governance_root: str | Path, *, instance: str, mode: str | Non
     s_path, s_text = settings_path(here), _dump(want)
     if _ownership(s_path, s_text, ((previous.get("settings") or {}).get("rendered_sha256"))) == "user":
         raise MemorySwitchError("MEMORY_SWITCH_USER_FILE", texts["settings_user_file"].format(path=s_path, keys=json.dumps(want, ensure_ascii=False)))
-    new_dir = str(_expand(want[decl["memory"]["key"]])) if mode == "isolated" else str(default_memory_dir(here, git_root(here)))
+    new_dir = str(_expand(want[decl["memory"]["key"]])) if mode == _ISOLATED else str(default_memory_dir(here, git_root(here)))
     if mode == cur_mode and s_path.is_file() and s_path.read_text(encoding="utf-8") == s_text:
         raise MemorySwitchError("MEMORY_SWITCH_NO_CHANGE", f"实例 {instance} 记忆已是{decl['memory']['modes'][mode]}({new_dir})")
     target = Path(new_dir)
     count = sum(1 for p in target.rglob("*") if p.is_file()) if target.is_dir() else 0
     state = texts["switch_target_state_files"].format(count=count) if count else texts["switch_target_state_empty"]
-    suggestion = (texts["switch_suggest_isolate"].format(state=state, old_dir=old_dir, new_dir=new_dir) if mode == "isolated"
+    suggestion = (texts["switch_suggest_isolate"].format(state=state, old_dir=old_dir, new_dir=new_dir) if mode == _ISOLATED
                   else texts["switch_suggest_share"].format(new_dir=new_dir, old_dir=old_dir))
     will = "" if confirm else "将"
     modes = decl["memory"]["modes"]
@@ -482,7 +486,7 @@ def switch_memory(governance_root: str | Path, *, instance: str, mode: str | Non
     record["settings"] = {"path": str(s_path), "rendered_sha256": _sha(s_text)}
     s_path.parent.mkdir(parents=True, exist_ok=True)
     s_path.write_text(s_text, encoding="utf-8")
-    if mode == "isolated":
+    if mode == _ISOLATED:
         target.mkdir(parents=True, exist_ok=True)
     ig = record.get("ignore") if isinstance(record.get("ignore"), dict) else {}
     entries = sorted(set(ig.get("entries") or []) | set(_ignore_entries(here, [], settings_ours=True)))
