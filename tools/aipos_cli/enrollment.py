@@ -1216,8 +1216,7 @@ def session_role(governance_root: str | Path, instance: str, *, view: dict[str, 
     role = str(seen.get("role") or "").strip()
     if role:
         return role
-    lybra = _lybra_dir(root)
-    slot = _role_slot(lybra, name) if (lybra / "role").is_file() else None
+    slot = _role_slot(_lybra_dir(root), name)  # 无 .lybra/role = None(唯一分槽读口)
     return str((slot or {}).get("role") or "").strip() or None
 
 
