@@ -38,6 +38,7 @@ values_from syntax:
 from __future__ import annotations
 
 import json
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -451,6 +452,180 @@ def get_task_id_pattern(
     return None
 
 
+
+# ---------------------------------------------------------------------------
+# AIPOS-F252 件①: 卡号形状声明的查看 / 校验 / 建议 / 写入(唯一实现; CLI `lybra project card-policy`)
+# ---------------------------------------------------------------------------
+
+_SUGGEST_TAIL = "-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*"
+
+
+class CardPolicyError(ValueError):
+    """AIPOS-F252: 卡号形状声明不合(code ∈ verbs.schema lybra_project_card_policy.reject_codes)。"""
+
+    def __init__(self, code: str, message: str, *, mismatched: list[str] | None = None):
+        super().__init__(message)
+        self.code = code
+        self.mismatched = list(mismatched or [])
+
+
+def card_policy_declaration() -> dict[str, Any]:
+    """verbs.schema lybra_project_card_policy(唯一读取口; 缺 texts / reject_codes / new_file_template = SchemaLoadError)。"""
+    from tools.schema_loader import code_repo_schema_root
+
+    decl = (load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get("lybra_project_card_policy")
+    if (not isinstance(decl, dict) or not isinstance(decl.get("texts"), dict) or not decl.get("reject_codes")
+            or not isinstance(decl.get("new_file_template"), dict)):
+        raise SchemaLoadError("verbs.schema.json verbs.lybra_project_card_policy(texts / reject_codes / new_file_template)未声明齐")
+    return decl
+
+
+def _texts() -> dict[str, str]:
+    return {str(k): str(v) for k, v in card_policy_declaration()["texts"].items()}
+
+
+def default_card_policy_path(governance_root: Path | str) -> Path:
+    """无现有声明时的写位置 = 读口候选首位(<治理根>/card_policy.json; 与 get_project_card_policy_path 同序)。"""
+    return Path(governance_root) / "card_policy.json"
+
+
+def queue_task_ids(governance_root: Path | str) -> list[str]:
+    """本项目队列内全部现有卡号(各状态目录; 卡文件 frontmatter task_id, 与 find_task_card 同一读法), 去重保序。"""
+    from tools.aipos_cli.task_loader import _frontmatter_task_id, iter_queue_task_paths
+
+    ids: list[str] = []
+    for path in iter_queue_task_paths(Path(governance_root)):
+        found = _frontmatter_task_id(path)
+        if found and found not in ids:
+            ids.append(found)
+    return ids
+
+
+def suggest_task_id_pattern(task_ids: list[str]) -> str | None:
+    """由现有卡号前缀推出的建议值(仅建议, 产品不内置默认): 首个 '-' 前的前缀集合 + 通用尾部。无卡号 / 无前缀形 = None。"""
+    prefixes: list[str] = []
+    for task_id in task_ids:
+        head, sep, _tail = str(task_id).partition("-")
+        if not sep or not head:
+            return None
+        if head not in prefixes:
+            prefixes.append(head)
+    if not prefixes:
+        return None
+    parts = [re.escape(prefix) for prefix in sorted(prefixes)]
+    return (parts[0] if len(parts) == 1 else "(?:" + "|".join(parts) + ")") + _SUGGEST_TAIL
+
+
+def task_id_pattern_problems(pattern: str, task_ids: list[str]) -> tuple[str | None, str | None, list[str]]:
+    """校验一个候选值。返回 (拒因码 | None, 拒因原文 | None, 不匹配卡号)。判据: 非空; 可编译; 无捕获组; 无 ^ / $ 锚点; 不匹配空串;
+    队列每个现有卡号都能整匹配, 且嵌在提交信息里(`Merge card/<卡号>: …`)时原样被找出(归属解析 _task_id_from_commit_subject 的用法)。"""
+    t = _texts()
+    value = str(pattern or "").strip()
+    if not value:
+        return "TASK_ID_PATTERN_EMPTY", t["empty"], []
+    try:
+        compiled = re.compile(value)
+    except re.error as exc:
+        return "TASK_ID_PATTERN_INVALID", t["invalid"].format(pattern=value, reason=t["invalid_regex"].format(error=exc)), []
+    reason = None
+    if compiled.groups:
+        reason = t["invalid_groups"]
+    elif re.search(r"(?<!\\)[\^$]", re.sub(r"\[[^\]]*\]", "", value)):
+        reason = t["invalid_anchor"]
+    elif compiled.fullmatch("") is not None:
+        reason = t["invalid_empty_match"]
+    if reason:
+        return "TASK_ID_PATTERN_INVALID", t["invalid"].format(pattern=value, reason=reason), []
+    bad = []
+    for task_id in task_ids:
+        found = compiled.search(f"Merge card/{task_id}: x")
+        if compiled.fullmatch(task_id) is None or found is None or found.group(0) != task_id:
+            bad.append(task_id)
+    if bad:
+        suggestion = suggest_task_id_pattern(task_ids)
+        suggest_part = t["suggest_part"].format(pattern=suggestion) if suggestion else ""
+        return ("TASK_ID_PATTERN_MISMATCH", t["mismatch"].format(pattern=value, count=len(bad), ids=", ".join(bad), suggest_part=suggest_part),
+                bad)
+    return None, None, []
+
+
+def set_task_id_pattern_command(governance_root: Path | str, pattern: str | None = None) -> str:
+    """声明命令原文(缺声明报错 / project upgrade 待补项 / onboarding guide 同一渲染)。"""
+    t = _texts()
+    return t["set_command"].format(governance_root=str(governance_root), pattern=pattern or t["pattern_placeholder"])
+
+
+def missing_pattern_message(governance_root: Path | str) -> str:
+    """缺声明的出声原文(C2: 无内置默认) + 出口命令原文 + 建议值。归属解析(deployment_authorization._resolve_task_id_pattern)唯一调用。"""
+    t = _texts()
+    try:
+        suggestion = suggest_task_id_pattern(queue_task_ids(governance_root))
+    except (OSError, ValueError, SchemaLoadError):
+        suggestion = None
+    return t["missing"].format(governance_root=str(governance_root), command=set_task_id_pattern_command(governance_root, suggestion),
+                               suggest_part=t["suggest_part"].format(pattern=suggestion) if suggestion else "")
+
+
+def task_id_pattern_view(governance_root: Path | str) -> dict[str, Any]:
+    """只读视图: {declared, pattern, path, task_ids, mismatched, suggestion, command, error}。声明文件读不出 = error(不吞)。"""
+    root = Path(governance_root)
+    path = get_project_card_policy_path(root)
+    view: dict[str, Any] = {"declared": False, "pattern": None, "path": str(path or default_card_policy_path(root)), "error": None}
+    if path is not None:
+        try:
+            pattern = load_card_policy_declaration(path).get("task_id_pattern")
+        except SchemaLoadError as exc:
+            view["error"] = str(exc)
+            pattern = None
+        if isinstance(pattern, str) and pattern.strip():
+            view.update(declared=True, pattern=pattern.strip())
+    ids = queue_task_ids(root)
+    view["task_ids"] = ids
+    view["mismatched"] = task_id_pattern_problems(view["pattern"], ids)[2] if view["declared"] else []
+    view["suggestion"] = suggest_task_id_pattern(ids)
+    view["command"] = set_task_id_pattern_command(root, view["pattern"] or view["suggestion"])
+    return view
+
+
+def apply_task_id_pattern(governance_root: Path | str, pattern: str, *, dry_run: bool) -> dict[str, Any]:
+    """写 task_id_pattern(两阶段唯一实现)。位置 = 现行读口认的现有声明文件(只改该键, 其余原样), 无 = <治理根>/card_policy.json(新建 =
+    声明 new_file_template + task_id_pattern)。不合 = CardPolicyError(零写入)。返回 {dry_run, changed, written, diff, path, old, new, task_ids}。"""
+    import difflib
+
+    root = Path(governance_root)
+    ids = queue_task_ids(root)
+    code, message, bad = task_id_pattern_problems(pattern, ids)
+    if code:
+        raise CardPolicyError(code, str(message), mismatched=bad)
+    value = str(pattern).strip()
+    path = get_project_card_policy_path(root)
+    if path is None:
+        path = default_card_policy_path(root)
+        before_text = ""
+        data: dict[str, Any] = dict(card_policy_declaration()["new_file_template"])
+    else:
+        try:
+            before_text = path.read_text(encoding="utf-8")
+            data = load_card_policy_declaration(path)
+        except (OSError, UnicodeDecodeError, SchemaLoadError) as exc:
+            raise CardPolicyError("CARD_POLICY_UNREADABLE", _texts()["unreadable"].format(path=path, error=exc)) from exc
+    old = data.get("task_id_pattern")
+    data["task_id_pattern"] = value
+    after_text = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    changed = old != value
+    diff = "".join(difflib.unified_diff(before_text.splitlines(keepends=True), after_text.splitlines(keepends=True),
+                                        fromfile=f"a/{path.name}", tofile=f"b/{path.name}")) if changed else ""
+    written = False
+    if changed and not dry_run:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(after_text, encoding="utf-8")
+        tmp.replace(path)
+        written = True
+    return {"dry_run": dry_run, "changed": changed, "written": written, "diff": diff, "path": str(path), "old": old, "new": value,
+            "task_ids": ids}
+
+
 __all__ = [
     "get_project_card_policy_path",
     "load_card_policy_declaration",
@@ -459,4 +634,12 @@ __all__ = [
     "evaluate_card_policy_rules",
     "get_card_policy_placeholder_fields",
     "get_task_id_pattern",
+    "CardPolicyError",
+    "apply_task_id_pattern",
+    "missing_pattern_message",
+    "queue_task_ids",
+    "set_task_id_pattern_command",
+    "suggest_task_id_pattern",
+    "task_id_pattern_problems",
+    "task_id_pattern_view",
 ]

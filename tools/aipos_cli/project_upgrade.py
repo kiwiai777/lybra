@@ -34,7 +34,8 @@ OUTCOMES = ("done", "skipped", "failed", "not_run")
 GUIDANCE_SOURCES = ("notice", "onboarding", "card_field")
 _TEXT_KEYS = ("head_preview", "head_confirm", "step_line", "change_line", "detail_line", "run_line", "unread_head", "unread_line",
               "unread_unavailable", "unread_error", "unread_none", "summary_preview", "summary_confirm", "stopped", "nothing",
-              "guidance_head", "guidance_group", "guidance_item", "guidance_say", "guidance_done", "guidance_none", "guidance_error")
+              "guidance_head", "guidance_group", "guidance_item", "guidance_say", "guidance_done", "guidance_none", "guidance_error",
+              "gap_line")
 _BOARD_TEXT_KEYS = ("title", "project_heading", "steps_heading", "guidance_heading", "preview_button", "confirm_button", "cancel_button",
                     "preview_heading", "result_heading", "readonly_hint", "page_error", "details_summary", "command_summary")
 
@@ -91,7 +92,7 @@ def upgrade_declaration() -> dict[str, Any]:
             or not all(isinstance(guidance.get(k), str) for k in ("tell_line", "unknown_advisor"))
             or not isinstance(guidance.get("card_task_modes"), list)
             or not all(isinstance(v, dict) and all(isinstance(v.get(k), str) for k in ("why", "say", "done_when"))
-                       for group in ("onboarding_items", "card_fields") for v in (guidance.get(group) or {}).values())
+                       for group in ("onboarding_items", "card_fields", "declaration_gaps") for v in (guidance.get(group) or {}).values())
             or not all(isinstance((guidance.get("notice") or {}).get(k), str) for k in ("why", "say", "done_when"))):
         raise SchemaLoadError(f"{where}.guidance(recent_cards 正整数 / card_task_modes / tell_line / unknown_advisor / notice / "
                               f"onboarding_items ⊆ {list(ONBOARDING_CHECKS)} / card_fields, 每项 why·say·done_when)未声明齐; 未实现项 {unknown}")
@@ -456,6 +457,16 @@ def _declared(value: Any) -> bool:
     return value not in (None, "", [], {})
 
 
+def _declaration_gap(root: Path, key: str) -> dict[str, Any] | None:
+    """AIPOS-F252 件①: 项目声明缺项(guidance.declaration_gaps 的键)→ {commands} | None(已声明)。未实现的键 = ValueError(加载即拒)。"""
+    if key == "task_id_pattern":
+        from tools.card_policy_loader import task_id_pattern_view
+
+        view = task_id_pattern_view(root)
+        return None if view["declared"] else {"commands": [view["command"]]}
+    raise ValueError(f"guidance.declaration_gaps.{key} 无推导实现")
+
+
 def _item(source: str, key: str, why: str, say: str, done_when: str, commands: list[str] | None = None) -> dict[str, Any]:
     return {"id": f"{source}:{key}", "source": source, "key": key, "why": why, "say": say, "done_when": done_when,
             "commands": list(commands or [])}
@@ -492,6 +503,16 @@ def derive_guidance(governance_root: str | Path, *, project: str, home_root: str
     except _step_errors() as exc:
         cards = []
         errors.append({"source": "card_field", "error": _err(exc)})
+    for key, spec in (g.get("declaration_gaps") or {}).items():  # AIPOS-F252 件①: 项目声明缺项(须按 Owner 确认的值执行, 非机械步)
+        try:
+            gap = _declaration_gap(ctx.root, str(key))
+        except _step_errors() as exc:
+            errors.append({"source": "declaration", "error": _err(exc)})
+            continue
+        if gap is not None:
+            commands = list(gap["commands"])
+            common.append(_item("declaration", str(key), _fmt(spec["why"], **fill), _fmt(spec["say"], **fill, commands="; ".join(f"`{c}`" for c in commands)),
+                                _fmt(spec["done_when"], **fill), commands))
     for field, spec in (g.get("card_fields") or {}).items():
         if cards and not any(_declared(meta.get(field)) for meta in cards):
             common.append(_item("card_field", field, _fmt(spec["why"], **fill), _fmt(spec["say"], **fill), _fmt(spec["done_when"], **fill)))
@@ -538,6 +559,9 @@ def render_plan_lines(plan: dict[str, Any], *, source: str = "-") -> list[str]:
         lines.append(_fmt(t["step_line"], index=i, total=total, label=step["label"], state=states[step["state"]], why=step["why"]))
         lines.extend(_fmt(t["change_line"], text=c) for c in step["changes"])
         lines.extend(_fmt(t["detail_line"], text=d) for d in step["details"])
+    gaps = {i["id"]: i for g in (plan.get("guidance") or {}).get("groups") or [] for i in g["items"] if i.get("source") == "declaration"}
+    for item in gaps.values():  # AIPOS-F252 件①: 声明缺项在预演正文列出(命令原文)
+        lines.append(_fmt(t["gap_line"], why=item["why"], commands="; ".join(item["commands"])))
     unread = plan.get("unread")
     if unread is not None:
         lines.append(t["unread_head"])

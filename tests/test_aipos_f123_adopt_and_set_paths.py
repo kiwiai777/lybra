@@ -461,7 +461,10 @@ def test_item3_onboarding_guide_legacy_section_order_and_commands_parse(tmp_path
             for k, v in subs.items():
                 line = line.replace(k, v)
             parsed.append(build_parser().parse_args(shlex.split(line)[1:]))
+    # AIPOS-F252 件①: 落点声明步同列卡号形状声明(show / 预演 / 确认; 值须 Owner 确认, 无内置默认)
     assert [(a.command, getattr(a, "queue_command", None) or getattr(a, "project_command", None)) for a in parsed] == [
-        ("project", "set-paths"), ("project", "set-paths"), ("queue", "adopt"), ("queue", "adopt"), ("loop", None)]
-    assert parsed[1].confirm and not parsed[0].confirm and parsed[3].confirm and not parsed[2].confirm
+        ("project", "set-paths"), ("project", "set-paths"), ("project", "card-policy"), ("project", "card-policy"),
+        ("project", "card-policy"), ("queue", "adopt"), ("queue", "adopt"), ("loop", None)]
+    assert parsed[1].confirm and not parsed[0].confirm and parsed[6].confirm and not parsed[5].confirm
+    assert parsed[4].confirm and not parsed[3].confirm and parsed[3].cp_command == "set-task-id-pattern"
     assert "probe_proj" not in json.dumps([k for k in guide if k != "project_name"])  # 无写死项目键

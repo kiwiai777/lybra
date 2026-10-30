@@ -227,6 +227,16 @@
         "nothing": "无未读(未写)"
       }
     },
+    "card_policy_writers": {
+      "description": "AIPOS-F252 件①: `lybra project card-policy` 写命令(set-task-id-pattern)同一两阶段语义——旗标注册与其他族同一包装 aipos_cli._project_json_two_phase_flags(family=card_policy_writers), 旗标名 / 缺省阶段 / 状态标签读 project_json_writers 一处; 缺省 = 预演: 校验新值(合法正则、无捕获组 / 锚点、整匹配本项目队列内全部现有卡号)并打印卡号形状声明文件 unified diff, 零写入; --confirm 才写并经 lybra_governance_commit.post_write_landing.commands.card_policy_writers 同一提交口落账。唯一实现 tools/card_policy_loader.apply_task_id_pattern(写位置 = 现行唯一读口 get_project_card_policy_path 认的现有声明文件, 无 = 治理根 card_policy.json)。",
+      "commands": [
+        "set-task-id-pattern"
+      ],
+      "flag_help": {
+        "dry_run": "Preview the task_id_pattern change (validated against every card id in the queue; card_policy.json diff) without writing (default)",
+        "confirm": "Write card_policy.json and land it via the governance-commit path (lybra governance-commit --paths), pushing like N6 landing"
+      }
+    },
     "roadmap_writers": {
       "description": "AIPOS-F171 件①: `lybra roadmap` 族写命令(add-milestone / add-criterion / set / remove)同一两阶段语义——旗标注册与其他族同一包装 aipos_cli._project_json_two_phase_flags(family=roadmap_writers), 旗标名 / 缺省阶段 / 状态标签读 project_json_writers 一处(本段不重复声明); 落账提交身份旗标同读 project_json_writers.landing_actor_flag。缺省 = 预演: 校验改动后的整份路线图(config.schema governance_structure.roadmap)并打印路线图文件 unified diff 与将生成的 decision_log 指针名, 零写入; --confirm 才写路线图文件、生成 decision_log 指针(board_adapter._auto_generate_decision_log_pointer, Record = 路线图文件)并经 lybra_governance_commit.post_write_landing.commands.roadmap_writers 同一提交口落账。唯一实现 tools/aipos_cli/roadmap.py(apply_roadmap_change)。只读 `lybra roadmap show` 不适用两阶段。AIPOS-F175 件③: verify(Owner 抽查结论)同族同旗标——缺省预演: 打印将写的 owner_verifications 记录与(不符时)将起草的修复卡, 零写入; --confirm 写记录(+ 不符时修复卡草稿)并经 post_write_landing.commands.roadmap_writers 同一提交口落账; 唯一实现 roadmap.apply_owner_verification。",
       "commands": [
@@ -4799,6 +4809,13 @@
             "done_when": "当前在用信封均为生效状态(接入清单「信封」项已完成)"
           }
         },
+        "declaration_gaps": {
+          "task_id_pattern": {
+            "why": "项目未声明卡号形状 task_id_pattern(card_policy.json): 归属解析(release plan 受控发布 / finalize 区间覆盖 / lybra-deploy --verdict-ref)出声停(AIPOS-F252, C2 无内置默认)",
+            "say": "按 Owner 确认的卡号形状为 {project} 声明 task_id_pattern(先预演核对队列现有卡号, 再 --confirm 写入并落账): {commands}",
+            "done_when": "lybra project card-policy show 显示已声明且队列现有卡号全部匹配"
+          }
+        },
         "card_fields": {
           "audit_runtime_evidence": {
             "why": "近期卡都没声明审计运行证据, 审计 PASS 不必附独立运行记录(F162)",
@@ -4828,6 +4845,7 @@
         "summary_confirm": "结果: 已执行 {done} 步 · 跳过 {skipped} 步 · 失败 {failed} 步 · 未执行 {not_run} 步",
         "stopped": "已停止: 第 {index} 步「{label}」失败, 已成功步保留(写入已生效); 修好后重跑同一条命令(幂等, 只做剩下的)",
         "nothing": "无事可做: 各步均已是最新 / 不适用",
+        "gap_line": "  待补声明(AIPOS-F252; 非机械步, 须顾问按 Owner 确认的值执行): {why}; 命令: {commands}",
         "guidance_head": "需顾问主动用的新能力 — 项目 {project}(按钮做不到, 逐顾问实例转述; 做到后下次检查即消失): {count} 项",
         "guidance_group": "顾问实例 {advisor}:",
         "guidance_item": "  · [{source}] {why}",
@@ -5718,6 +5736,14 @@
             "scope": "AIPOS-F235: 本项目 enrollment_log(追加的 redeclare 位置事件或 redeclare_request 改登记请求; 唯一写出入治理仓。治理根 .lybra/role 实例槽属本机私有配置, 不入治理仓)",
             "message_template": "chore(governance): 实例改登记 {instance} {project}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra roles redeclare --confirm"
           },
+          "card_policy_writers": {
+            "cli": "lybra project card-policy <subcommand> --confirm",
+            "subcommands": [
+              "set-task-id-pattern"
+            ],
+            "scope": "AIPOS-F252 件①: 本次写出的卡号形状声明文件(card_policy_loader.get_project_card_policy_path 认的现有声明, 无 = 治理根 card_policy.json; 治理根相对); 预演零写入、不落账。提交身份 = 该命令 --actor(未给 = $USER 或 owner)。唯一落账点 aipos_cli._card_policy_cli(→ _land_project_writes → land_written_paths)。",
+            "message_template": "chore(governance): 卡号形状声明落账 {subcommand} {project}\n\nActor: {actor}\nType: governance_commit\nCommand: lybra project card-policy {subcommand} --confirm"
+          },
           "roadmap_writers": {
             "cli": "lybra roadmap <subcommand> --confirm",
             "subcommands": ["add-milestone", "add-criterion", "set", "remove", "verify"],
@@ -5792,6 +5818,67 @@
         "refused": {
           "code": 1,
           "meaning": "声明不合(拒因码 ∈ config.schema project_json.validation_roots.reject_codes; project.json 未改动)"
+        },
+        "usage": {
+          "code": 2,
+          "meaning": "参数错"
+        },
+        "landing_failed": {
+          "code": 3,
+          "meaning": "写入已生效但落账未完成(post_write_landing.landing_failed_exit_code)"
+        }
+      }
+    },
+    "lybra_project_card_policy": {
+      "description": "AIPOS-F252 件①(F251 首个真实消费方 kiwiai-web KIWIWEB-003 实撞: 除 lybra 外已建治理根都没有 card_policy.json, 也无产品命令能声明 task_id_pattern, release plan / finalize 归属解析 / lybra-deploy 都在归属解析处出声停): `lybra project card-policy show|set-task-id-pattern` —— 项目卡号形状(task_id_pattern)的查看与声明。show [--json] 只读: 当前声明值与所在文件、队列现有卡号的匹配情况、按卡号前缀给出的建议值。set-task-id-pattern --pattern <正则> [--actor] [--dry-run|--confirm]: 值须为合法正则、不含捕获组与 ^ / $ 锚点(归属解析把它嵌进更大的正则取组)、不匹配空串, 且整匹配本项目队列内全部现有卡号(含审计轮 / 修订卡号)并能从提交信息里原样找出它们, 否则拒并列出不匹配卡号; 写位置 = 现行唯一读口 card_policy_loader.get_project_card_policy_path 认的现有声明文件(只改 task_id_pattern 一键, 其余键原样), 无 = <治理根>/card_policy.json(新建只含 schema_version / task_id_pattern / rules=[]: 零卡面规则 = 行为不变)。建议值只作建议(由现有卡号前缀推出), 产品无内置默认(C2 原则不变), 必须显式 --pattern 确认。写动作两阶段 = two_phase_protocol.card_policy_writers, 写后落账 = post_write_landing.commands.card_policy_writers。接入流程: lybra onboarding guide 第 2 步与「接入既有人肉项目」第 1 步给出本命令; lybra project upgrade 预演把缺声明列为待补项(命令原文); 归属解析缺声明的报错(deployment_authorization._resolve_task_id_pattern, release plan / finalize / lybra-deploy 同读)带本命令原文。",
+      "phase": "two_phase",
+      "surface": [
+        "cli"
+      ],
+      "cli_command": "lybra project card-policy",
+      "single_implementation": "tools/card_policy_loader.apply_task_id_pattern(写) / task_id_pattern_view(读) / task_id_pattern_problems(校验) / suggest_task_id_pattern(建议) / missing_pattern_message(缺声明出口)",
+      "new_file_template": {
+        "schema_version": "1.0.0",
+        "description": "项目卡号形状声明(AIPOS-F5 task_id_pattern; 由 lybra project card-policy set-task-id-pattern 写入, AIPOS-F252)。rules 为空 = 无额外卡面校验(AIPOS-R8C 零侵入)。",
+        "rules": []
+      },
+      "reject_codes": [
+        "TASK_ID_PATTERN_EMPTY",
+        "TASK_ID_PATTERN_INVALID",
+        "TASK_ID_PATTERN_MISMATCH",
+        "CARD_POLICY_UNREADABLE"
+      ],
+      "texts": {
+        "set_command": "lybra --workspace-root {governance_root} project card-policy set-task-id-pattern --pattern '{pattern}'",
+        "pattern_placeholder": "<卡号正则>",
+        "missing": "项目未声明 task_id_pattern (card_policy.json @ {governance_root}); 卡号形状是项目属性, 解析器无内置默认, 无法做归属解析 (C2 原则)。出口: {command} 缺省预演(零写入, 校验队列现有卡号), 核对后同一命令加 --confirm 写入并落账{suggest_part}",
+        "suggest_part": "; 按队列现有卡号前缀推出的建议值 {pattern}(仅建议, 须显式确认)",
+        "empty": "TASK_ID_PATTERN_EMPTY: --pattern 不能为空",
+        "invalid": "TASK_ID_PATTERN_INVALID: {pattern!r} 不是可用的卡号正则: {reason}",
+        "invalid_regex": "正则编译失败 {error}",
+        "invalid_groups": "含捕获组(归属解析把它嵌进更大的正则取组; 分组请用 (?:...))",
+        "invalid_anchor": "含 ^ / $ 锚点(归属解析要在提交信息中间找卡号)",
+        "invalid_empty_match": "能匹配空串",
+        "mismatch": "TASK_ID_PATTERN_MISMATCH: {pattern!r} 不能整匹配本项目队列内 {count} 个现有卡号: {ids}{suggest_part}",
+        "unreadable": "CARD_POLICY_UNREADABLE: 现有声明文件 {path} 读不出({error}); 不覆盖, 先修复该文件",
+        "preview": "预览(未写; 加 --confirm 写入)",
+        "show_declared": "项目 {project} task_id_pattern = {pattern}(声明文件 {path})",
+        "show_missing": "项目 {project} 未声明 task_id_pattern(读口候选首位 {path} 不存在或无该键)",
+        "show_matched": "  队列现有卡号 {count} 个, 不匹配 {mismatched} 个{ids_part}",
+        "show_suggest": "  建议值(仅建议, 须显式确认): {pattern}",
+        "show_set": "  声明: {command}(缺省预演, 核对后加 --confirm)",
+        "head": "目标项目 {project}(来源: {source}) · 卡号形状声明 {path}",
+        "status": "project card-policy set-task-id-pattern {project}: {mode} {path}",
+        "detail": "task_id_pattern {old} → {new}; 队列现有卡号 {count} 个全部整匹配"
+      },
+      "exit_codes": {
+        "ok": {
+          "code": 0,
+          "meaning": "预演完成 / 已写入并落账 / 只读输出"
+        },
+        "refused": {
+          "code": 1,
+          "meaning": "值不合(拒因码 ∈ reject_codes; 声明文件未改动)"
         },
         "usage": {
           "code": 2,
