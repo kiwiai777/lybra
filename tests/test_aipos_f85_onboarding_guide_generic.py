@@ -214,7 +214,7 @@ def test_item1_steps5_6_are_zero_gate_real_path():
         gov = f"{home}/{kw['project_name']}"
         ws = kw.get("workspace_dir") or f"~/{kw['project_name']}-executor"
         aws = kw.get("auditor_dir") or f"~/{kw['project_name']}-auditor"
-        adv = kw.get("advisor_dir") or f"~/{kw['project_name']}"
+        adv = kw.get("advisor_dir") or gov  # AIPOS-F253 件②: 本机会话缺省 = 治理根(原 ~/<项目>)
         steps = {st["step_number"]: st for st in guide["steps"]}
 
         def lybra_segs(step):

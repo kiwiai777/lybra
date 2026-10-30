@@ -71,6 +71,22 @@ One governance root may be driven by more than one advisor instance — for exam
 only pushes cards of the OTA product repo. Each advisor gets its own credential and its own envelope; nothing is shared or
 overwritten:
 
+**Session directories (AIPOS-F253).** An advisor session directory decides where its charter lands
+(`.claude/rules/lybra-advisor.md` for Claude Code, `AGENTS.md` for Codex) and, for Claude Code, which auto-memory it uses, so two
+advisors on the same host must not share one. The default for a session on the governance-root machine is the project's
+governance root itself (as resolved for the command: the guide uses `--home-root > LYBRA_HOME_ROOT > ~/.lybra/config.json
+home_root > default` plus the project name; `roles redeclare` / enroll use the governance root they run against — no path is
+hard-coded). When another advisor on that host is already registered at the governance root, the default is a per-instance
+sub-path inside it, declared once in `schema/distribution.schema.json` `harness_semantics.session_dir.secondary_subpath`
+(`.advisor-sessions/<instance>`); the product creates it on `--confirm` together with a `.gitignore` that hides the whole
+directory, so rendered charters and skills there never enter governance landing, and `lybra` run from it still resolves the
+governance root upward. An explicit `--dir` / `--harness-dir` / `--advisor-dir` always wins, but every entry point (`roles
+redeclare`, `roles enroll` / `enroll-deliver`, `onboarding guide`, and `lybra sync` before rendering) refuses a directory another
+advisor on the same host already registered when the two would collide (same charter landing, or both Claude Code memory) —
+`SESSION_DIR_TAKEN`, naming the occupying instance and printing the same command with another directory. Sessions on different
+hosts never collide; a Claude Code and a Codex session in one directory do not collide either. `lybra roles list` prints every
+advisor's `harness@host:dir` and marks existing collisions.
+
 1. **Enroll each advisor with its own instance.** The Owner enrolls each advisor on the governance-root machine, always with
    `--instance` (`lybra roles … enroll-deliver --role <advisor role> --instance <prefix>.<project>.<host> --governance-root
    <governance root> --workspace <governance root> …`, preview first, then `--confirm`); an advisor- or planner-class role

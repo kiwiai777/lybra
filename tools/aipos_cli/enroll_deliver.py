@@ -242,10 +242,16 @@ def enroll_deliver(
     if not ws_text:
         raise ValueError("--workspace 必填(工位目录; 治理席位与子 agent 执行者 = 治理根)")
     ws_local = None if ssh else Path(ws_text).expanduser().resolve()
+    # AIPOS-F253 件①: 会话目录相撞的出口 = 同一条命令换 --harness-dir(先预演)
+    retry_argv = ["lybra", "roles", "enroll-deliver", "--role", role, *(["--instance", instance] if instance else []),
+                  "--governance-root", str(gov), "--workspace", ws_text, *(["--harness", str(harness_kind)] if harness_kind else []),
+                  "--harness-dir", "DIR_SLOT", *(["--harness-host", str(harness_host)] if harness_host else []),
+                  "--owner-authorization-ref", auth_ref, "--dry-run"]
     pre = enroll_preflight(workspace_root=ws_local or Path(ws_text), governance_root=str(gov),
                            declared={"role": role, "instance": instance, "role_class": role_class},
                            harness_kind=harness_kind, harness_dir=harness_dir, harness_host=harness_host,
-                           executor_mode=executor_mode, check_target=ssh is None, stage="issue")
+                           executor_mode=executor_mode, check_target=ssh is None, stage="issue",
+                           session_retry=shlex.join(retry_argv).replace("DIR_SLOT", "{dir}"))
     mode = pre["mode"]
     seat_mode = mode in governance_root_executor_modes()
     default_mode = str(executor_mode_declaration()["default"])

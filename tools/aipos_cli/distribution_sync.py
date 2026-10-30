@@ -263,13 +263,16 @@ def advisor_harness_kinds() -> tuple[str, ...]:
     return tuple(k for k in declared_harness_kinds() if harness_kind_declaration(k)["advisor_session"])
 
 
-def harness_role_record(kind: str | None, harness_dir: str | Path | None, harness_host: str | None) -> dict[str, Any] | None:
+def harness_role_record(kind: str | None, harness_dir: str | Path | None, harness_host: str | None, *,
+                        creatable: bool = False) -> dict[str, Any] | None:
     """AIPOS-F129 件①: enroll 的 harness 参数 → .lybra/role harness 字段(唯一判定; 取舍读 harness_kind_declaration)。
 
     缺省 kind(pi)= None(不写 harness 字段, 既有工位形态); claude-code = {kind, dir}(本机会话: dir 须已存在的本机绝对目录);
     codex = {kind, dir: <可空>, host: <可空>} —— 有 host(他机会话)时 dir 如实记、不校验本机存在。违反 = ValueError(fail-closed)。
     AIPOS-F243 件①: claude-code 声明 harness_host=optional —— 他机会话 = {kind, dir, host}(dir 仍必给, 为他机路径, 如实记); 本机会话记录形
-    不变(harness_dir=required 的 kind 无 host 时不写 host 键; harness_dir=optional 的 kind 恒带 host 键, 均为既有形态)。"""
+    不变(harness_dir=required 的 kind 无 host 时不写 host 键; harness_dir=optional 的 kind 恒带 host 键, 均为既有形态)。
+    AIPOS-F253: creatable = 该目录是产品将建的治理根内声明会话子路径(enrollment.is_secondary_session_dir 判, 确认时经
+    materialize_session_dir 建)——本机会话免「须已存在」校验(预演零写入), 其余规则不变。"""
     kind = str(kind or "").strip() or default_harness_kind()
     decl = harness_kind_declaration(kind)
     dir_text = str(harness_dir or "").strip()
@@ -288,7 +291,7 @@ def harness_role_record(kind: str | None, harness_dir: str | Path | None, harnes
         if not path.is_absolute():
             raise ValueError(f"--harness-dir {dir_text} 须为绝对路径(harness={kind} 的会话目录)")
         if not host:
-            if not path.is_dir():
+            if not path.is_dir() and not creatable:
                 raise ValueError(f"--harness-dir {dir_text} 须为已存在的绝对目录(harness={kind} 的分发落点基准; 会话在他机时加 --harness-host)")
             dir_text = str(path.resolve())
     if kind == default_harness_kind():
@@ -1492,6 +1495,20 @@ def _sync_harness_dir(
     render_ctx: dict[str, Any] | None = None
     if any(_is_charter(d) for d in dists):
         gov = resolve_workstation_governance_root(identity, explicit=governance_root)
+        # AIPOS-F253 件①: sync 渲染前兜底——本实例会话目录与同机别的已接入顾问实例登记相撞 = 落点章程属另一实例, 拒不覆盖(零写入;
+        # 判定与拒因同登记入口 enrollment.session_dir_refusal; 出口 = 给本实例改登记到另一目录)
+        if harness["kind"] in advisor_harness_kinds():
+            import shlex
+
+            from tools.aipos_cli.enrollment import session_dir_refusal
+
+            retry = shlex.join(["lybra", "roles", "redeclare", "--workspace-root", str(gov), "--instance", str(identity["instance"]),
+                                "--actor", str(identity["instance"]), "--dir", "DIR_SLOT"]).replace("DIR_SLOT", "{dir}")
+            refusal = session_dir_refusal(gov, instance=str(identity["instance"]), kind=harness["kind"], host=None, dir=str(target_root),
+                                          retry=retry)
+            if refusal:
+                return {"ok": False, "status": "refused", "role": ctx["role"], "harness_root": str(ctx["harness_root"]), "dry_run": dry_run,
+                        "error": f"sync 拒: 不覆盖会话目录 {target_root} 的章程落点(落点章程属另一实例)。{refusal}"}
         render_ctx = charter_render_context(gov, identity=identity, product_commit=str(remote.get("product_commit") or "unknown"))
     local_manifest = _load_local_manifest(target_root, ctx["role"], manifest_dir=manifest_dir)
     foreign = [str(_file_target_path(target_root, d, f["path"])) for d in dists if _is_charter(d) for f in d.get("files", [])
