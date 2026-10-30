@@ -697,6 +697,30 @@ def _load_role_document(lybra_dir: Path) -> dict[str, Any] | None:
     return data
 
 
+def _role_slots(doc: dict[str, Any], role_file: Path) -> dict[str, Any]:
+    """分槽键 instances 的形校验(读口共用): 非对象 / 槽非对象 = RoleRecordError(fail-closed); 无 = {}。"""
+    raw_slots = doc.get(ROLE_SLOTS_KEY)
+    if raw_slots is not None and not isinstance(raw_slots, dict):
+        raise RoleRecordError(f"{role_file} {ROLE_SLOTS_KEY} 须为 {{实例: 记录}} 对象, 得到 {type(raw_slots).__name__}")
+    slots: dict[str, Any] = raw_slots or {}
+    bad = sorted(k for k, v in slots.items() if not isinstance(v, dict))
+    if bad:
+        raise RoleRecordError(f"{role_file} {ROLE_SLOTS_KEY} 槽 {bad} 须为 JSON 对象(role/instance)")
+    return slots
+
+
+def role_record_instances(lybra_dir: str | Path) -> list[str]:
+    """AIPOS-F254 件④: `.lybra/role` 登记的全部实例名(顶层在前, 再 instances 槽, 去重保序; 与 read_role_record 同一形校验)。
+    无文件 = []; 文件 / 槽形坏 = RoleRecordError。只读。"""
+    lybra = Path(lybra_dir)
+    doc = _load_role_document(lybra)
+    if doc is None:
+        return []
+    slots = _role_slots(doc, _role_file(lybra))
+    top = str(doc.get("instance") or "").strip()
+    return list(dict.fromkeys(i for i in [top, *(str(k).strip() for k in slots)] if i))
+
+
 def read_role_record(lybra_dir: str | Path, instance: str | None = None) -> dict[str, Any] | None:
     """AIPOS-F140 件①: `.lybra/role` 的分槽读取(唯一实现; 工位身份 / 章程 / 治理席位实例读点全走这里)。
 
@@ -709,13 +733,7 @@ def read_role_record(lybra_dir: str | Path, instance: str | None = None) -> dict
     if doc is None:
         return None
     role_file = _role_file(lybra)
-    raw_slots = doc.get(ROLE_SLOTS_KEY)
-    if raw_slots is not None and not isinstance(raw_slots, dict):
-        raise RoleRecordError(f"{role_file} {ROLE_SLOTS_KEY} 须为 {{实例: 记录}} 对象, 得到 {type(raw_slots).__name__}")
-    slots: dict[str, Any] = raw_slots or {}
-    bad = sorted(k for k, v in slots.items() if not isinstance(v, dict))
-    if bad:
-        raise RoleRecordError(f"{role_file} {ROLE_SLOTS_KEY} 槽 {bad} 须为 JSON 对象(role/instance)")
+    slots = _role_slots(doc, role_file)
     top = {k: v for k, v in doc.items() if k != ROLE_SLOTS_KEY}
     want = str(instance or "").strip()
     top_instance = str(top.get("instance") or "").strip()
@@ -862,7 +880,7 @@ def enroll_preflight(
     governance_target = is_governance_workspace(workspace_root, governance_root) if check_target else None
     session_dir_create: str | None = None
     if governance_target and harness_record is not None and declared is not None and declared.get("instance"):
-        session_dir_check(workspace_root, str(declared["instance"]), harness_record, retry=session_retry)
+        session_dir_check(workspace_root, str(declared["instance"]), harness_record, retry=session_retry, role=declared.get("role"))
         session_dir_create = str(harness_record.get("dir") or "") if creatable else None
     envelope: dict[str, Any] | None = None
     if declared is not None and declared.get("role_class"):
@@ -886,7 +904,7 @@ def enroll_preflight(
 
 
 def session_dir_check(governance_root: Path | str, instance: str, harness_record: dict[str, Any] | None, *,
-                      retry: str | None = None) -> None:
+                      retry: str | None = None, role: str | None = None) -> None:
     """AIPOS-F253 件①: 接入落治理根(治理席位)时的同机会话目录相撞拦截(判定与拒因唯一 enrollment.session_dir_refusal)。
     harness 非顾问会话 kind / 无会话目录 = 不判。相撞 = RuntimeError(拒因 + 出口命令原文), 先于任何兑换 / 写盘。"""
     from tools.aipos_cli.distribution_sync import advisor_harness_kinds
@@ -896,7 +914,8 @@ def session_dir_check(governance_root: Path | str, instance: str, harness_record
     if record.get("kind") not in advisor_harness_kinds() or not str(record.get("dir") or "").strip():
         return
     refusal = session_dir_refusal(governance_root, instance=instance, kind=str(record["kind"]), host=record.get("host"),
-                                  dir=str(record["dir"]), retry=retry or "原命令把会话目录参数(--harness-dir)换成 {dir} 后重跑")
+                                  dir=str(record["dir"]), retry=retry or "原命令把会话目录参数(--harness-dir)换成 {dir} 后重跑",
+                                  role=str(role or "").strip() or None)  # AIPOS-F254: 层级判据用签发声明 / 门下发的角色名
     if refusal:
         raise RuntimeError(refusal)
 
@@ -1071,7 +1090,7 @@ def enroll(
                 raise RuntimeError(refusal)
             if agent_instance and not (declared or {}).get("instance"):
                 # AIPOS-F253 件①: 旧码无签发声明(换码前不知实例)= 换码后按门下发实例复核会话目录相撞(先于任何落盘)
-                session_dir_check(workspace_root, str(agent_instance), harness_record)
+                session_dir_check(workspace_root, str(agent_instance), harness_record, role=role)
     
     # Step 3: 加载或创建 connection.json (AIPOS-C2 大项B: 铸全 workspace_root)
     # AIPOS-F54-fix1: workspace_root 单源 = governance_root(码内治理根);

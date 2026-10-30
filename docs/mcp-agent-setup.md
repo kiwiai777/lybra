@@ -87,6 +87,23 @@ advisor on the same host already registered when the two would collide (same cha
 hosts never collide; a Claude Code and a Codex session in one directory do not collide either. `lybra roles list` prints every
 advisor's `harness@host:dir` and marks existing collisions.
 
+**Default by tier (AIPOS-F254).** The default is not first-come-first-served: the governance root belongs to the project-level
+advisor. Tier is judged once (`enrollment.session_tier`, declared in `harness_semantics.session_dir.tiers`) from the registered
+role name only: a built-in role (`advisor`, `planner` — the role is its own class) is the project-level advisor; a custom role
+that resolves to the advisor class (`advisor-lantu`, `advisor-ota`, …) is a sub-project advisor. A sub-project advisor's default
+is always its declared sub-path, even when the governance root is free. A project-level advisor's default is the governance root;
+a second project-level advisor on the same host still gets its sub-path (F253 behaviour). If the root is held by a sub-project
+advisor, the product does not silently fall back to a sub-path: `roles redeclare` / `roles enroll` / `enroll-deliver` / `onboarding
+guide` refuse with `SESSION_DIR_TAKEN`, name the occupant, and print the swap: first `lybra roles redeclare --workspace-root <root>
+--instance <occupant> --actor <occupant> --dir <root>/.advisor-sessions/<occupant>` (directory-only change, second tier; preview,
+then `--confirm`), then the original command again. `lybra roles list` tags each advisor with its tier and flags a sub-project
+advisor at the governance root, or a project-level advisor kept out of it by one, each with the swap commands; any other
+non-default directory is only labelled user-specified, never a violation. `lybra sync --harness-root <governance root>`
+renders the charter and skills for every advisor session registered on this host — the top-level instance of `.lybra/role` and
+each other instance slot whose session directory is local — each into its own directory with its own credential and its own
+local manifest key (`.version-<role>@<instance>` for slots), so no advisor needs `lybra charter --body-only` / `lybra skills` by
+hand.
+
 1. **Enroll each advisor with its own instance.** The Owner enrolls each advisor on the governance-root machine, always with
    `--instance` (`lybra roles … enroll-deliver --role <advisor role> --instance <prefix>.<project>.<host> --governance-root
    <governance root> --workspace <governance root> …`, preview first, then `--confirm`); an advisor- or planner-class role

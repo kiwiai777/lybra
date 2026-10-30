@@ -116,8 +116,11 @@ def resolve_sync_context(
     harness_root: Path | None = None,
     gate_url: str | None = None,
     token: str | None = None,
+    instance: str | None = None,
 ) -> dict[str, Any]:
     """解析 sync 身份/连接(harness 根 → role → gate_url → token)。
+    AIPOS-F254 件④: instance = 治理根内该实例槽(角色取槽内 role, 凭据按该实例从 connection.json 挑, 与门侧按实例认人同源);
+    未给 = 顶层实例(现行)。
 
     harness-root 解析序(禁按 cwd 猜):
       1. 显式参数 --harness-root
@@ -161,7 +164,13 @@ def resolve_sync_context(
 
     lybra_dir = ConnectionResolver.discover_lybra_dir(root)  # AIPOS-F106 件④: 既有原语(_validate_enrolled 已保证存在)
 
-    identity = ConnectionResolver.resolve_identity(workspace_root=root)
+    explicit: dict[str, str] | None = None
+    if instance:
+        from tools.aipos_cli.charter_render import workstation_identity
+
+        slot = workstation_identity(root, instance=instance)  # 未登记 = WorkstationInstanceNotRegistered(列出已登记实例)
+        explicit = {"role": str(slot["role"]), "agent_instance": str(slot["instance"]), "actor": str(slot["instance"])}
+    identity = ConnectionResolver.resolve_identity(workspace_root=root, explicit=explicit)
     role = identity["role"]["value"]
     if not role:
         raise ValueError("cannot resolve role from .lybra (无静默缺省); 检查 .lybra/role")
@@ -687,6 +696,7 @@ def write_local_manifest(
     workstation: dict[str, Any] | None = None,
     pruned: list[str] | None = None,
     manifest_dir: Path | None = None,
+    manifest_key: str | None = None,
 ) -> Path:
     """写/更新 _distributed/.version-{role}(含文件哈希, 供连接器版本自答)。AIPOS-F92: manifest_dir 给了(非 pi harness)= 写该目录。
 
@@ -697,7 +707,8 @@ def write_local_manifest(
     AIPOS-F83 件③: pruned = 本次 sync 回收的文件/挂载(给了即记 manifest pruned, 与共享落点 prune 同一出口)。
     """
     role = remote.get("role", "unknown")
-    manifest_path = _local_manifest_path(harness_root, role, manifest_dir=manifest_dir)
+    # AIPOS-F254 件④: manifest_key = 文件键(缺省 = role; 治理根实例槽 = <role>@<实例>, _session_manifest_keys)
+    manifest_path = _local_manifest_path(harness_root, manifest_key or role, manifest_dir=manifest_dir)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
     # AIPOS-F66C 件①: manifest 每次从当前部署声明完全重生(禁累积旧条目)
@@ -1161,8 +1172,11 @@ def sync(
     project: str | None = None,
     dry_run: bool = False,
     adopt_hand_charter: str | None = None,
+    instance: str | None = None,
 ) -> dict[str, Any]:
     """执行一次单工位 sync。返回结构化结果。
+    AIPOS-F254 件④: instance = 治理根 .lybra/role 的该实例槽(多顾问实例治理根; 身份 / harness / 凭据都取该槽, 只对顾问会话 harness,
+    本地清单按实例分键 _session_manifest_keys, 信封校正只对顶层实例); 未给 = 顶层实例(现行)。
     AIPOS-F196 件②: 章程落点是带手工维护标记的手写章程 = 拒覆盖(CHARTER_HAND_MAINTAINED); adopt_hand_charter = Owner 裁决引用 → 备份原章程 +
     采纳记录后照常渲染(hand_maintained_guard 声明)。
 
@@ -1181,7 +1195,7 @@ def sync(
         # 走既有解析序出声(列出找过哪几层)
         resolve_sync_context(harness_root=None, gate_url=gate_url, token=token)
         raise AssertionError("unreachable")
-    identity = workstation_identity(root)  # 缺 .lybra/role = WorkstationIdentityError(fail-closed)
+    identity = workstation_identity(root, instance=instance)  # 缺 .lybra/role = WorkstationIdentityError(fail-closed)
     scope = _scope_project(project=project, governance_root=governance_root) or identity["project"]
     if identity["project"] != scope:
         return {
@@ -1198,8 +1212,13 @@ def sync(
             "changes": [],
         }
 
-    ctx = resolve_sync_context(harness_root=root, gate_url=gate_url, token=token)
+    ctx = resolve_sync_context(harness_root=root, gate_url=gate_url, token=token, instance=instance)
     # 注: _validate_enrolled 已在 resolve_sync_context 内调用, 此处无需重复
+    slot_scoped = bool(instance) and str(identity["instance"]) != str(workstation_identity(root)["instance"])
+    if instance:
+        early = workstation_harness(ctx["harness_root"], instance=instance)
+        if early["kind"] == default_harness_kind():
+            raise ValueError(f"sync --instance {instance}: 实例分槽 sync 只对顾问会话 harness(该实例 harness={early['kind']}); pi 工位按工位根 sync")
 
     client = GateClient(ctx["gate_url"], ctx["token"])
     client.initialize()
@@ -1208,11 +1227,11 @@ def sync(
     if not remote.get("ok"):
         return {"ok": False, "error": f"gate manifest not ok: {remote}", "role": ctx["role"]}
     # AIPOS-F92 件②: 只取给本工位 harness 的条目(distribution.schema harness_semantics); 非 pi harness 走 harness 目录落点
-    harness = workstation_harness(ctx["harness_root"])
+    harness = workstation_harness(ctx["harness_root"], instance=instance)
     remote = {**remote, "distributions": harness_distributions(list(remote.get("distributions") or []), harness["kind"])}
     if harness["kind"] != default_harness_kind():
         return _sync_harness_dir(client, ctx, remote, identity=identity, harness=harness, scope=scope, dry_run=dry_run,
-                                 governance_root=governance_root)
+                                 governance_root=governance_root, slot_scoped=slot_scoped)
 
     # AIPOS-F66B 件①: 章程渲染上下文(只在清单含 charter 时解析治理根; 解析不到 = fail-closed 出声)
     render_ctx: dict[str, Any] | None = None
@@ -1395,6 +1414,7 @@ def _sync_harness_dir(
     scope: str | None,
     dry_run: bool,
     governance_root: Path | None = None,
+    slot_scoped: bool = False,
 ) -> dict[str, Any]:
     """AIPOS-F92 件②: 非 pi harness 工位的分发(同一清单/差异/拉取/落盘引擎: compute_diffs + lybra_distribution_fetch + apply_fetch)。
 
@@ -1483,6 +1503,7 @@ def _sync_harness_dir(
             "shared_prune_guard": None, "pi_mount_prune": [], "pi_mount_warnings": [], "files_fetched": 0, "files_pruned": 0,
             "changes": [], "pruned_files": [], "prune_errors": [], "declaration_gaps": [], "manifest_path": None, "note": note,
             "owner_policy_correction": ({"checked": False, "note": "dry-run 零写入"} if dry_run
+                                        else _SLOT_POLICY_NOTE if slot_scoped
                                         else _correct_owner_policy_ref(Path(ctx["harness_root"]), ctx["role"])),
         }
     from tools.aipos_cli.charter_render import charter_render_context, resolve_workstation_governance_root
@@ -1491,6 +1512,8 @@ def _sync_harness_dir(
     dists = [{**d, "target_base": "harness_root"} for d in remote.get("distributions", [])]
     remote_h = {**remote, "distributions": dists}
     manifest_dir = ctx["lybra_dir"]  # AIPOS-F106 件④: 工位 .lybra 已由 resolve_sync_context 经 discover_lybra_dir 定位
+    # AIPOS-F254 件④: 本地清单按实例归属取读键 / 写键(治理根多顾问实例同角色时互不覆盖渲染记录)
+    read_key, write_key = _session_manifest_keys(manifest_dir, str(ctx["role"]), str(identity["instance"]), slot_scoped=slot_scoped)
     # AIPOS-F136 件②: 章程渲染上下文(只在清单含 charter 时解析治理根; 解析不到 = fail-closed 出声, 与 pi 路径同一解析)
     render_ctx: dict[str, Any] | None = None
     if any(_is_charter(d) for d in dists):
@@ -1505,12 +1528,12 @@ def _sync_harness_dir(
             retry = shlex.join(["lybra", "roles", "redeclare", "--workspace-root", str(gov), "--instance", str(identity["instance"]),
                                 "--actor", str(identity["instance"]), "--dir", "DIR_SLOT"]).replace("DIR_SLOT", "{dir}")
             refusal = session_dir_refusal(gov, instance=str(identity["instance"]), kind=harness["kind"], host=None, dir=str(target_root),
-                                          retry=retry)
+                                          retry=retry, role=str(identity.get("role") or "").strip() or None)
             if refusal:
                 return {"ok": False, "status": "refused", "role": ctx["role"], "harness_root": str(ctx["harness_root"]), "dry_run": dry_run,
                         "error": f"sync 拒: 不覆盖会话目录 {target_root} 的章程落点(落点章程属另一实例)。{refusal}"}
         render_ctx = charter_render_context(gov, identity=identity, product_commit=str(remote.get("product_commit") or "unknown"))
-    local_manifest = _load_local_manifest(target_root, ctx["role"], manifest_dir=manifest_dir)
+    local_manifest = _load_local_manifest(target_root, read_key, manifest_dir=manifest_dir)
     foreign = [str(_file_target_path(target_root, d, f["path"])) for d in dists if _is_charter(d) for f in d.get("files", [])
                if _file_target_path(target_root, d, f["path"]).exists()
                and not (_recorded_file(local_manifest, str(d.get("distribution_id") or ""), f["path"]) or {}).get("rendered_sha256")]
@@ -1518,7 +1541,7 @@ def _sync_harness_dir(
         return {"ok": False, "role": ctx["role"],
                 "error": (f"harness={harness['kind']} 章程落点已有非 Lybra 渲染物 {foreign}(本地清单无渲染记录): 拒, 不覆盖会话目录里的文件"
                           f"(distribution.schema harness_semantics.charter_in_harness_dir)。出口: 移走该文件, 或 enroll 换一个 --harness-dir 后重跑")}
-    diffs, declared_files, _ = compute_diffs(target_root, remote_h, render_context=render_ctx, role=ctx["role"], prune=False,
+    diffs, declared_files, _ = compute_diffs(target_root, remote_h, render_context=render_ctx, role=read_key, prune=False,
                                              manifest_dir=manifest_dir)
     plan = [{
         "distribution_id": item["dist"]["distribution_id"],
@@ -1551,7 +1574,7 @@ def _sync_harness_dir(
     }
     if dry_run:
         return {**base_result, "files_fetched": 0, "files_pruned": 0, "changes": [], "pruned_files": [], "prune_errors": [],
-                "declaration_gaps": [], "manifest_path": str(_local_manifest_path(target_root, ctx["role"], manifest_dir=manifest_dir)),
+                "declaration_gaps": [], "manifest_path": str(_local_manifest_path(target_root, write_key, manifest_dir=manifest_dir)),
                 "owner_policy_correction": {"checked": False, "note": "dry-run 零写入"}}
     fetched_total = 0
     results = []
@@ -1575,10 +1598,32 @@ def _sync_harness_dir(
         results.append({"distribution_id": dist["distribution_id"], "action": action, "files_written": written,
                         "reasons": dict(item.get("reasons") or {}), "target_path": str(target_root / str(dist.get("target_path") or ""))})
     manifest_path = write_local_manifest(target_root, remote_h, charter_records=charter_records or None, workstation=identity,
-                                         pruned=[], manifest_dir=manifest_dir)
+                                         pruned=[], manifest_dir=manifest_dir, manifest_key=write_key)
     return {**base_result, "files_fetched": fetched_total, "files_pruned": 0, "changes": results, "declaration_gaps": declaration_gaps,
             "manifest_path": str(manifest_path), "pruned_files": [], "prune_errors": [],
-            "owner_policy_correction": _correct_owner_policy_ref(Path(ctx["harness_root"]), ctx["role"])}
+            "owner_policy_correction": (_SLOT_POLICY_NOTE if slot_scoped
+                                        else _correct_owner_policy_ref(Path(ctx["harness_root"]), ctx["role"]))}
+
+
+#: AIPOS-F254 件④: 实例分槽 sync 不做信封校正(_correct_owner_policy_ref 只认 .lybra/role 顶层实例; 槽内 owner_policy_ref 由接入 / 改登记写)
+_SLOT_POLICY_NOTE = {"checked": False, "note": "实例分槽 sync: 信封校正只对 .lybra/role 顶层实例, 槽内 owner_policy_ref 不改"}
+
+
+def _session_manifest_keys(manifest_dir: Path, role: str, instance: str, *, slot_scoped: bool) -> tuple[str, str]:
+    """AIPOS-F254 件④: harness 目录工位本地清单的 (读键, 写键)(文件 = <manifest_dir>/.version-<键>)。
+    写键: 顶层实例 = <role>(现行, 既有清单零迁移); 治理根实例槽 = <role>@<实例>(同角色多实例不互相覆盖渲染记录)。
+    读键: 先写键、再另一形(实例在顶层与槽之间换位后沿用旧记录), 只认清单 workstation.instance = 本实例者(顶层形无此字段的存量清单 = 认);
+    都不认 = 写键(无记录)。只读。"""
+    plain, own = role, f"{role}@{instance}"
+    write = own if slot_scoped else plain
+    for key in (write, plain if write == own else own):
+        path = _local_manifest_path(manifest_dir, key, manifest_dir=manifest_dir)
+        if not path.is_file():
+            continue
+        recorded = str(((_load_local_manifest(manifest_dir, key, manifest_dir=manifest_dir).get("workstation") or {}).get("instance")) or "").strip()
+        if recorded == instance or (not recorded and key == plain and not slot_scoped):
+            return key, write
+    return write, write
 
 
 def sync_many(
@@ -1618,17 +1663,21 @@ def sync_many(
         except WorkstationIdentityError as exc:
             entries.append({"harness_root": str(ws), "status": "error", "reason": str(exc)})
             continue
+        result: dict[str, Any] | None = None
         try:
             result = sync(harness_root=ws, gate_url=gate_url, token=token, governance_root=governance_root, project=scope, dry_run=dry_run,
                           adopt_hand_charter=adopt_hand_charter)
-        except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
+        except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:  # 顶层出错记一条; 实例槽照常逐个 sync(下方)
             entries.append({"harness_root": str(ws), "status": "error", "workstation": _public_identity(identity), "reason": f"{exc.__class__.__name__}: {exc}"})
-            continue
-        if not result.get("ok"):
+        if result is not None and not result.get("ok"):
             entries.append({"harness_root": str(ws), "status": "error", "workstation": _public_identity(identity), "reason": str(result.get("error")), "result": result})
-            continue
-        entries.append({"harness_root": str(ws), "status": result.get("status"), "workstation": _public_identity(identity),
-                        "reason": result.get("reason"), "result": result})
+        elif result is not None:
+            entries.append({"harness_root": str(ws), "status": result.get("status"), "workstation": _public_identity(identity),
+                            "reason": result.get("reason"), "result": result})
+        # AIPOS-F254 件④: 治理根多顾问实例 = 顶层之外每个登记在本机的顾问会话槽各自 sync(身份 / harness 目录 / 凭据取该槽, 章程与技能
+        # 按实例渲染到各自会话目录; 互不覆盖由 F253 sync 兜底与按实例清单键保证)
+        entries.extend(_sync_session_slots(ws, top=str(identity["instance"]), gate_url=gate_url, token=token,
+                                           governance_root=governance_root, scope=scope, dry_run=dry_run))
     run = {
         "ok": all(e["status"] != "error" for e in entries),
         "mode": "multi" if multi else "single",
@@ -1649,6 +1698,51 @@ def sync_many(
             }, indent=2, ensure_ascii=False), encoding="utf-8")
         run["run_manifest_path"] = str(run_manifest)
     return run
+
+
+def local_session_slots(harness_root: Path, *, top: str) -> list[str]:
+    """AIPOS-F254 件④: 治理根 .lybra/role 中顶层之外、harness 为顾问会话 kind 且会话目录在本机可落处(workstation_harness local)的实例槽
+    (登记顺序)。工位(无 instances 槽)= []。槽 harness 形坏 = ValueError 上抛(fail-closed)。只读。"""
+    from tools.aipos_cli.charter_render import workstation_role_file
+    from tools.aipos_cli.enroll_client import role_record_instances
+
+    role_file = workstation_role_file(harness_root)
+    if role_file is None or not role_file.is_file():
+        return []
+    kinds = advisor_harness_kinds()
+    out: list[str] = []
+    for inst in role_record_instances(role_file.parent):
+        if inst == top:
+            continue
+        h = workstation_harness(harness_root, instance=inst)
+        if h["kind"] in kinds and h["local"]:
+            out.append(inst)
+    return out
+
+
+def _sync_session_slots(ws: Path, *, top: str, gate_url: str | None, token: str | None, governance_root: Path | None, scope: str | None,
+                        dry_run: bool) -> list[dict[str, Any]]:
+    """sync_many 的实例槽条目(每槽一条, 与工位条目同形, 另带 instance); 单槽出错不阻断其余(同工位条目口径)。显式 --token 只属顶层实例,
+    槽一律按实例从 connection.json 取凭据(token=None)。"""
+    from tools.aipos_cli.charter_render import workstation_identity
+
+    entries: list[dict[str, Any]] = []
+    try:
+        slots = local_session_slots(ws, top=top)
+    except (ValueError, OSError) as exc:
+        return [{"harness_root": str(ws), "status": "error", "reason": f"实例槽列不出: {exc.__class__.__name__}: {exc}"}]
+    for inst in slots:
+        try:
+            identity = workstation_identity(ws, instance=inst)
+            result = sync(harness_root=ws, gate_url=gate_url, token=None, governance_root=governance_root, project=scope, dry_run=dry_run,
+                          instance=inst)
+        except (ValueError, FileNotFoundError, OSError, RuntimeError) as exc:
+            entries.append({"harness_root": str(ws), "instance": inst, "status": "error", "reason": f"{exc.__class__.__name__}: {exc}"})
+            continue
+        status = result.get("status") if result.get("ok") else "error"
+        entries.append({"harness_root": str(ws), "instance": inst, "status": status, "workstation": _public_identity(identity),
+                        "reason": result.get("reason") if result.get("ok") else str(result.get("error")), "result": result})
+    return entries
 
 
 def _correct_owner_policy_ref(harness_root: Path, role: str) -> dict[str, Any]:
@@ -1866,7 +1960,8 @@ def render_sync_text(run: dict[str, Any]) -> str:
     lines = [f"sync {'dry-run' if run.get('dry_run') else 'run'} · mode={run.get('mode')} · scope_project={run.get('scope_project')} · harness_root={run.get('harness_root')}"]
     for e in run.get("workstations", []):
         ws = e.get("workstation") or {}
-        head = f"  - {Path(e['harness_root']).name}: {e['status']}"
+        slot = f" [实例槽 {e['instance']}]" if e.get("instance") else ""  # AIPOS-F254 件④: 治理根内顶层之外的本机顾问会话
+        head = f"  - {Path(e['harness_root']).name}{slot}: {e['status']}"
         if ws:
             head += f" (role={ws.get('role')} instance={ws.get('instance')} project={ws.get('project')})"
         lines.append(head)

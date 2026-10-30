@@ -972,7 +972,7 @@ def redeclare_instance(governance_root: str | Path, instance: str, *, harness: s
         new_dir = given["dir"] or (old["dir"] if same_session and new_host == old["host"] else None)
         dir_source, dir_occupant = ("explicit" if given["dir"] else "kept") if new_dir else None, None
         if not new_dir and is_local_host(new_host) and harness_kind_declaration(kind)["harness_dir"] == "required":
-            dflt = default_session_dir(root, name, host=new_host)
+            dflt = default_session_dir(root, name, host=new_host, role=session_role(root, name, view=view))  # AIPOS-F254: 按层级
             new_dir, dir_source, dir_occupant = dflt["path"], dflt["source"], dflt["occupant"]
         remote = new_host if new_host != local else None
         if remote and harness_kind_declaration(kind)["harness_host"] == "forbidden":
@@ -987,7 +987,8 @@ def redeclare_instance(governance_root: str | Path, instance: str, *, harness: s
         # AIPOS-F253 件①: 同机两个顾问不共用会话目录(判定唯一 session_dir_conflicts; 出口 = 同一命令换 --dir)
         retry = shlex.join(["lybra", "roles", "redeclare", "--workspace-root", str(root), "--instance", name, "--actor", by,
                             "--harness", kind, "--host", str(new_host), "--dir", "DIR_SLOT"]).replace("DIR_SLOT", "{dir}")
-        refusal = session_dir_refusal(root, instance=name, kind=kind, host=new_host, dir=new["dir"], retry=retry)
+        refusal = session_dir_refusal(root, instance=name, kind=kind, host=new_host, dir=new["dir"], retry=retry,
+                                      role=session_role(root, name, view=view), actor=by)
         if refusal:
             raise _refuse_redeclare("REDECLARE_SESSION_DIR_TAKEN", refusal)
         if new["dir"] and dir_source:
@@ -1088,7 +1089,10 @@ def render_redeclaration(result: dict[str, Any]) -> list[str]:
 
 _SESSION_DIR_TEXT_KEYS = ("message", "exit")
 _SESSION_DIR_REASON_KEYS = ("charter", "memory")
-_SESSION_DIR_SOURCE_KEYS = ("explicit", "kept", "governance_root", "secondary_subpath")
+_SESSION_DIR_SOURCE_KEYS = ("explicit", "kept", "governance_root", "secondary_subpath", "subproject_subpath")
+SESSION_TIERS = ("project", "subproject")  # AIPOS-F254: 层级值域(声明 session_dir.tiers.values 须恰为此二键, 代码分支按之)
+_SESSION_TIER_SWAP_KEYS = ("message", "exit")
+_SESSION_TIER_DIAG_KEYS = ("subproject_at_root", "project_displaced", "explicit", "default")
 
 
 def session_dir_declaration() -> dict[str, Any]:
@@ -1115,6 +1119,15 @@ def session_dir_declaration() -> dict[str, Any]:
         raise SchemaLoadError(f"{where}: secondary_subpath(相对、≥2 段、含 instance_placeholder、无 ..)/ ignore_file / ignore_body / "
                               f"conflict {{reject_code, memory_by_dir_harnesses, reasons {list(_SESSION_DIR_REASON_KEYS)}, "
                               f"{', '.join(_SESSION_DIR_TEXT_KEYS)}}} / source_labels {list(_SESSION_DIR_SOURCE_KEYS)} 未声明齐")
+    tiers = decl.get("tiers") if isinstance(decl.get("tiers"), dict) else {}
+    values = tiers.get("values") if isinstance(tiers.get("values"), dict) else {}
+    swap = tiers.get("swap") if isinstance(tiers.get("swap"), dict) else {}
+    diag = tiers.get("diagnosis") if isinstance(tiers.get("diagnosis"), dict) else {}
+    if (set(values) != set(SESSION_TIERS) or any(not str(values.get(k) or "").strip() for k in SESSION_TIERS)
+            or any(not str(swap.get(k) or "").strip() for k in _SESSION_TIER_SWAP_KEYS)
+            or any(not str(diag.get(k) or "").strip() for k in _SESSION_TIER_DIAG_KEYS)):
+        raise SchemaLoadError(f"{where}.tiers(AIPOS-F254): values 须恰为 {list(SESSION_TIERS)} 且各有人读名 / swap {list(_SESSION_TIER_SWAP_KEYS)} / "
+                              f"diagnosis {list(_SESSION_TIER_DIAG_KEYS)} 未声明齐")
     return decl
 
 
@@ -1184,10 +1197,57 @@ def advisor_sessions(governance_root: str | Path) -> list[dict[str, Any]]:
             continue
         host = str(reg.get("host") or "").strip() or _local_host()
         local = is_local_host(host)
-        out.append({"instance": view["instance"], "role": view["role"], "kind": reg["kind"], "host": host, "dir": str(reg["dir"]),
+        role = session_role(root, view["instance"], view=view)
+        out.append({"instance": view["instance"], "role": role, "tier": session_tier(root, view["instance"], role=role),
+                    "kind": reg["kind"], "host": host, "dir": str(reg["dir"]),
                     "local": local, "host_key": _host_key(host), "dir_key": _dir_key(reg["dir"], local=local),
                     "label": registration_label(reg)})
     return out
+
+
+def session_role(governance_root: str | Path, instance: str, *, view: dict[str, Any] | None = None) -> str | None:
+    """AIPOS-F254: 实例登记的角色名(声明 session_dir.tiers.role_source): 接入日志最新 land 事件 role=(instance_enrollment)> 治理根
+    .lybra/role 该实例记录的 role(唯一分槽读口)> None。view = 调用方已取的 instance_enrollment 结果(免重读)。只读。"""
+    root = _workspace_root_path(governance_root)
+    name = str(instance or "").strip()
+    if not name:
+        return None
+    seen = view if view is not None else instance_enrollment(root, name)
+    role = str(seen.get("role") or "").strip()
+    if role:
+        return role
+    lybra = _lybra_dir(root)
+    slot = _role_slot(lybra, name) if (lybra / "role").is_file() else None
+    return str((slot or {}).get("role") or "").strip() or None
+
+
+def session_tier(governance_root: str | Path, instance: str, *, role: str | None = None) -> str:
+    """AIPOS-F254 件①: 顾问会话层级判定(唯一实现; 声明 distribution.schema harness_semantics.session_dir.tiers)。
+    角色名(role 给了即用, 否则 session_role 读登记)= roles.schema 内建角色 = "project"(项目级顾问); 否则 = "subproject"(子项目顾问:
+    门注册表自定义角色)。只看角色名, 不按实例名前缀猜。角色判不了 = ValueError(fail-closed)。"""
+    from tools.aipos_cli.custom_roles import is_builtin_role
+
+    session_dir_declaration()  # tiers 声明不齐 = SchemaLoadError(fail-closed)
+    name = str(role or "").strip() or session_role(governance_root, instance)
+    if not name:
+        raise ValueError(f"实例 {instance!r} 的角色名判不了(接入日志无其 land 事件 role=, 治理根 .lybra/role 亦无其记录): 顾问层级不可判"
+                         "(distribution.schema harness_semantics.session_dir.tiers.role_source)")
+    return "project" if is_builtin_role(name) else "subproject"
+
+
+def session_tier_label(tier: str) -> str:
+    """层级人读名(声明 tiers.values)。"""
+    return str(session_dir_declaration()["tiers"]["values"][tier])
+
+
+def tier_swap_command(governance_root: str | Path, occupant: str, *, actor: str | None = None) -> str:
+    """AIPOS-F254: 换位第一步命令原文——把占治理根的子项目顾问改到它的声明子路径(只改目录 = roles redeclare 第二档; 预演形, 加 --confirm 写入)。
+    actor 缺省 = 占用者自己(改登记操作者 = 该实例或本项目已接入顾问, 占用者自己恒合法)。"""
+    import shlex
+
+    root = _workspace_root_path(governance_root)
+    return shlex.join(["lybra", "roles", "redeclare", "--workspace-root", str(root), "--instance", occupant, "--actor", actor or occupant,
+                       "--dir", str(secondary_session_dir(root, occupant))])
 
 
 def _charter_paths(kind: str) -> set[str]:
@@ -1233,21 +1293,30 @@ def session_dir_conflicts(governance_root: str | Path, *, instance: str, kind: s
         # kind 空 = 只问「谁登记了这个目录」(缺省目录判占用: 治理根被同机任一顾问登记即算占用)
         reasons = _collision_reasons(kind, s["kind"], local=local) if kind else [s["label"] or s["instance"]]
         if reasons:
-            out.append({**{k: s[k] for k in ("instance", "kind", "host", "dir", "label")}, "reasons": reasons})
+            out.append({**{k: s[k] for k in ("instance", "role", "tier", "kind", "host", "dir", "label")}, "reasons": reasons})
     return out
 
 
-def default_session_dir(governance_root: str | Path, instance: str, *, host: str | None = None) -> dict[str, Any]:
-    """AIPOS-F253 件②: 顾问会话目录缺省(唯一实现)。治理根所在机的会话: 同机尚无别的顾问实例登记治理根 = 治理根; 已有 = 治理根内声明子路径
-    (secondary_session_dir)。返回 {path, source(governance_root|secondary_subpath), occupant}。他机会话不给缺省 = ValueError(不猜他机路径)。
-    治理根本身由调用方按既有解析给(本函数不推导、不写死任何路径)。只读。"""
+def default_session_dir(governance_root: str | Path, instance: str, *, host: str | None = None, role: str | None = None) -> dict[str, Any]:
+    """AIPOS-F253 件② / AIPOS-F254 件②: 顾问会话目录缺省(唯一实现), 按层级(session_tier; role 给了即用, 否则读登记):
+    - 子项目顾问 = 治理根内声明子路径(secondary_session_dir), 不论治理根当时是否空闲(source=subproject_subpath);
+    - 项目级顾问: 同机尚无别的顾问实例登记治理根 = 治理根; 已被别的项目级顾问登记 = 声明子路径(source=secondary_subpath, F253 行为不变);
+      只被子项目顾问占着 = 仍是治理根(不静默降到子路径; displaced = 占用的子项目顾问实例, 登记入口经 session_dir_refusal 拒并给换位命令)。
+    返回 {path, source(governance_root|secondary_subpath|subproject_subpath), occupant, tier, displaced}。他机会话不给缺省 = ValueError
+    (不猜他机路径)。治理根本身由调用方按既有解析给(本函数不推导、不写死任何路径)。只读。"""
     if not is_local_host(host):
         raise ValueError(f"会话在他机({host}): 会话目录不给缺省(他机路径不猜), 须显式给目录")
     root = _workspace_root_path(governance_root)
+    tier = session_tier(root, instance, role=role)
+    if tier == "subproject":
+        return {"path": str(secondary_session_dir(root, instance)), "source": "subproject_subpath", "occupant": None, "tier": tier,
+                "displaced": []}
     taken = session_dir_conflicts(root, instance=instance, kind="", host=host, dir=root) if root.is_dir() else []
-    if not taken:
-        return {"path": str(root), "source": "governance_root", "occupant": None}
-    return {"path": str(secondary_session_dir(root, instance)), "source": "secondary_subpath", "occupant": taken[0]["instance"]}
+    peers = [h for h in taken if h["tier"] == "project"]
+    if peers:
+        return {"path": str(secondary_session_dir(root, instance)), "source": "secondary_subpath", "occupant": peers[0]["instance"],
+                "tier": tier, "displaced": []}
+    return {"path": str(root), "source": "governance_root", "occupant": None, "tier": tier, "displaced": [h["instance"] for h in taken]}
 
 
 def session_dir_source_label(source: str, *, occupant: str | None = None) -> str:
@@ -1256,27 +1325,38 @@ def session_dir_source_label(source: str, *, occupant: str | None = None) -> str
 
 
 def session_dir_refusal(governance_root: str | Path, *, instance: str, kind: str, host: str | None, dir: str | Path | None,
-                        retry: str) -> str | None:
+                        retry: str, role: str | None = None, actor: str | None = None) -> str | None:
     """相撞 = 拒因原文(声明 conflict.message + exit; 点名占用者实例与相撞原因, 出口给换目录后的命令原文: retry 中 {dir} 填缺省规则给的
-    另一目录); 不相撞 = None。各登记入口与 sync 兜底同一文本。"""
+    另一目录); 不相撞 = None。各登记入口与 sync 兜底同一文本。
+    AIPOS-F254 件②: 本实例是项目级顾问、目录 = 治理根、相撞的占用者全是子项目顾问 = 换位拒因(声明 tiers.swap: 点名占用者, 出口 = ① 占用者
+    改到其声明子路径的命令原文(tier_swap_command, actor 缺省 = 占用者)② 本命令原文({dir} 填治理根)), 不给「换一个目录」(不静默降级)。
+    role = 本实例角色名(给了即用, 否则读登记; 层级判据 session_tier)。"""
     hits = session_dir_conflicts(governance_root, instance=instance, kind=kind, host=host, dir=dir)
     if not hits:
         return None
-    decl = session_dir_declaration()["conflict"]
+    decl = session_dir_declaration()
+    conflict = decl["conflict"]
     host_text = str(host or "").strip() or _local_host()
+    root = _workspace_root_path(governance_root)
+    first = hits[0]
+    reasons = "; ".join(first["reasons"]) + (f"(另有 {', '.join(h['instance'] for h in hits[1:])})" if len(hits) > 1 else "")
     alt: str
     if is_local_host(host_text):
+        at_root = _dir_key(dir, local=True) == _dir_key(root, local=True)
+        if at_root and all(h["tier"] == "subproject" for h in hits) and session_tier(root, instance, role=role) == "project":
+            swap = decl["tiers"]["swap"]
+            message = swap["message"].format(code=conflict["reject_code"], instance=instance, host=host_text, dir=dir,
+                                             occupant=", ".join(h["instance"] for h in hits), occupant_label=first["label"] or "-")
+            steps = "; ".join(tier_swap_command(root, h["instance"], actor=actor) for h in hits)
+            return f"{message}({reasons})。{swap['exit'].format(swap=steps, command=retry.replace('{dir}', str(root)))}"
         sub = str(secondary_session_dir(governance_root, instance))
-        dflt = default_session_dir(governance_root, instance, host=host_text)["path"]
+        dflt = default_session_dir(governance_root, instance, host=host_text, role=role)["path"]
         alt = dflt if _dir_key(dflt, local=True) != _dir_key(dir, local=True) else sub
     else:
         alt = "<该机上另一会话目录>"
-    first = hits[0]
-    message = decl["message"].format(code=decl["reject_code"], instance=instance, host=host_text, dir=dir, occupant=first["instance"],
-                                     occupant_label=first["label"] or "-",
-                                     reasons="; ".join(first["reasons"]) + (f"(另有 {', '.join(h['instance'] for h in hits[1:])})"
-                                                                           if len(hits) > 1 else ""))
-    return f"{message}。{decl['exit'].format(alt=alt, command=retry.replace('{dir}', alt))}"
+    message = conflict["message"].format(code=conflict["reject_code"], instance=instance, host=host_text, dir=dir, occupant=first["instance"],
+                                         occupant_label=first["label"] or "-", reasons=reasons)
+    return f"{message}。{conflict['exit'].format(alt=alt, command=retry.replace('{dir}', alt))}"
 
 
 def materialize_session_dir(governance_root: str | Path, instance: str, path: str | Path, *, dry_run: bool = False) -> list[str]:
@@ -1298,14 +1378,60 @@ def materialize_session_dir(governance_root: str | Path, instance: str, path: st
     return planned
 
 
+def session_hierarchy(governance_root: str | Path, session: dict[str, Any], sessions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """AIPOS-F254 件③: 一个顾问会话登记的层级合规(只读; roles list 文本与 --json 同读)。只判治理根所在机的会话(他机会话 = 不适用):
+    - 违例 subproject_at_root: 子项目顾问的会话目录 = 治理根 → 换位命令(tier_swap_command);
+    - 违例 project_displaced: 项目级顾问不在治理根且治理根被同机子项目顾问占 → 各占用者换位命令 + 本实例改回治理根的命令;
+    - 否则 = 缺省(目录 = 按层级的缺省目录)/ 用户指定(非缺省目录, 不算违例)。
+    返回 {applies, tier, status(default|explicit|subproject_at_root|project_displaced|remote), violation, commands, text}。"""
+    import shlex
+
+    root = _workspace_root_path(governance_root)
+    diag = session_dir_declaration()["tiers"]["diagnosis"]
+    out: dict[str, Any] = {"applies": False, "tier": session["tier"], "status": "remote", "violation": False, "commands": [], "text": ""}
+    if not session["local"]:
+        return out
+    out["applies"] = True
+    everyone = sessions if sessions is not None else advisor_sessions(root)
+    root_key = _dir_key(root, local=True)
+    at_root = session["dir_key"] == root_key
+    if session["tier"] == "subproject" and at_root:
+        cmd = tier_swap_command(root, session["instance"])
+        out.update(status="subproject_at_root", violation=True, commands=[cmd], text=diag["subproject_at_root"].format(swap=cmd))
+        return out
+    if session["tier"] == "project" and not at_root:
+        squatters = [s["instance"] for s in everyone if s["instance"] != session["instance"] and s["local"] and s["dir_key"] == root_key
+                     and s["tier"] == "subproject"]
+        peers = [s for s in everyone if s["instance"] != session["instance"] and s["local"] and s["dir_key"] == root_key and s["tier"] == "project"]
+        if squatters and not peers:
+            swaps = [tier_swap_command(root, inst) for inst in squatters]
+            back = shlex.join(["lybra", "roles", "redeclare", "--workspace-root", str(root), "--instance", session["instance"], "--actor",
+                               session["instance"], "--dir", str(root)])
+            out.update(status="project_displaced", violation=True, commands=[*swaps, back],
+                       text=diag["project_displaced"].format(occupants=", ".join(squatters), swap="; ".join(swaps), command=back))
+            return out
+    try:
+        dflt = default_session_dir(root, session["instance"], role=session["role"])["path"]
+    except ValueError:
+        dflt = None  # 他机等不给缺省的情形(本分支只到本机会话, 防御)
+    is_default = dflt is not None and _dir_key(dflt, local=True) == session["dir_key"]
+    out.update(status="default" if is_default else "explicit", text=diag["default" if is_default else "explicit"])
+    return out
+
+
 def render_advisor_sessions(governance_root: str | Path) -> list[str]:
-    """roles list 只读诊断段: 每个顾问实例 harness@host:目录, 现存相撞者标出(同一判定 session_dir_conflicts)。"""
+    """roles list 只读诊断段: 每个顾问实例 [层级] harness@host:目录, 现存相撞者标出(同一判定 session_dir_conflicts); AIPOS-F254 件③:
+    层级合规(session_hierarchy)——违例标出并给换位命令原文, 非缺省目录标「用户指定」(不算违例)。"""
     sessions = advisor_sessions(governance_root)
-    lines = [f"顾问会话登记({len(sessions)} 个; 同机同目录 = 相撞, AIPOS-F253):"]
+    lines = [f"顾问会话登记({len(sessions)} 个; 同机同目录 = 相撞, AIPOS-F253; 项目级顾问占治理根、子项目顾问进治理根内声明子路径, AIPOS-F254):"]
     for s in sessions:
         hits = session_dir_conflicts(governance_root, instance=s["instance"], kind=s["kind"], host=s["host"], dir=s["dir"])
         mark = f"  ✗ 相撞: 与 {', '.join(h['instance'] for h in hits)} —— {'; '.join(hits[0]['reasons'])}" if hits else ""
-        lines.append(f"  {s['instance']:<44} {s['kind']}@{s['host']}:{s['dir']}{mark}")
+        tier = session_hierarchy(governance_root, s, sessions)
+        label = session_tier_label(s["tier"])
+        tier_mark = (f"  [{label}] {tier['text']}" if tier["violation"]
+                     else f"  [{label} · {tier['text']}]" if tier["applies"] else f"  [{label}]")
+        lines.append(f"  {s['instance']:<44} {s['kind']}@{s['host']}:{s['dir']}{mark}{tier_mark}")
     return lines
 
 

@@ -6284,7 +6284,7 @@
         "REDECLARE_ACTOR": "出口: 由该实例自己或本项目已接入顾问执行(--actor <实例>)",
         "REDECLARE_NO_CHANGE": "出口: 无需改登记",
         "REDECLARE_OWNER_DENIED": "出口: Owner 不批准本次改登记; 按 Owner 原话调整后另提请求(目标或基准变了 = 新事项)",
-        "REDECLARE_SESSION_DIR_TAKEN": "出口: 同机两个顾问不能共用一个会话目录(章程落点与会话记忆按目录分); 按拒因给的命令原文换一个 --dir(缺省规则: 治理根被占用时用治理根内声明子路径, distribution.schema harness_semantics.session_dir)"
+        "REDECLARE_SESSION_DIR_TAKEN": "出口: 同机两个顾问不能共用一个会话目录(章程落点与会话记忆按目录分); 按拒因给的命令原文换一个 --dir(缺省规则: 治理根被占用时用治理根内声明子路径, distribution.schema harness_semantics.session_dir); AIPOS-F254: 项目级顾问要治理根而治理根被子项目顾问占着 = 按拒因两步换位(先把占用者改到其声明子路径, 再重跑本命令)"
       },
       "texts": {
         "target_line": "改登记 {instance}({mode}; 治理根 {governance_root})",

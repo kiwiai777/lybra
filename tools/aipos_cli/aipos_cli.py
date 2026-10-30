@@ -3097,7 +3097,7 @@ def build_parser() -> argparse.ArgumentParser:
     roles_redeclare_parser.add_argument("--instance", required=True, help="本项目已接入的实例(治理席位实例 / 子 agent 执行身份)")
     roles_redeclare_parser.add_argument("--harness", default=None, help="新 harness(顾问会话 kind, distribution.schema harness_semantics advisor_session)")
     roles_redeclare_parser.add_argument("--host", default=None, help="新会话所在主机(会话在他机时给; claude-code / codex 均可登记在他机, AIPOS-F243; 换 kind 不沿用旧会话机, 同机切换也显式给)")
-    roles_redeclare_parser.add_argument("--dir", "--harness-dir", dest="harness_dir", default=None, help="新工作目录(会话目录; 他机会话 = 他机路径, 如实记; 子 agent 执行身份不给)。AIPOS-F253: 不给且会话在治理根所在机(claude-code)= 缺省治理根, 同机治理根已被别的顾问登记 = 治理根内声明子路径(确认时产品建); 同机两个顾问不能共用一个会话目录(拒并给换目录命令)")
+    roles_redeclare_parser.add_argument("--dir", "--harness-dir", dest="harness_dir", default=None, help="新工作目录(会话目录; 他机会话 = 他机路径, 如实记; 子 agent 执行身份不给)。AIPOS-F253/F254: 不给且会话在治理根所在机(claude-code)= 缺省按层级: 项目级顾问(内建角色, 如 advisor)= 治理根(同机治理根已被别的项目级顾问登记 = 治理根内声明子路径; 被子项目顾问占着 = 拒并给换位命令, 不静默降级); 子项目顾问(门注册表自定义角色)= 治理根内声明子路径(确认时产品建); 同机两个顾问不能共用一个会话目录(拒并给换目录命令)")
     roles_redeclare_parser.add_argument("--actor", required=True, help="操作者 = 该实例自己或本项目已接入顾问(写入位置事件 by= 与落账提交身份)")
     roles_redeclare_parser.add_argument("--workspace-root", dest="workspace_root", default=None, help="目标治理根(缺省 = 全局 --workspace-root / 当前目录所在治理根)")
     _project_json_two_phase_flags(roles_redeclare_parser, "redeclare", family="enrollment_log_writers")  # 缺省预演 / --confirm 才写
@@ -3728,7 +3728,7 @@ def build_parser() -> argparse.ArgumentParser:
     onboarding_guide_parser.add_argument("--workspace-dir", help="Executor workstation directory (defaults to ~/<project>-executor)")
     # AIPOS-F92 件②: 单门 home 根约定下的完整接入参数(全部可缺省推导; guide 打印推导结果与来源)
     onboarding_guide_parser.add_argument("--auditor-dir", help="Auditor workstation directory (defaults to ~/<project>-auditor)")
-    onboarding_guide_parser.add_argument("--advisor-dir", help="Advisor Claude Code session directory — advisor skills land in <dir>/.claude/skills. Default for a session on this machine (AIPOS-F253) = the project governance root (<home root>/<project>, home root via --home-root > LYBRA_HOME_ROOT > ~/.lybra/config.json home_root > default); if another advisor on this host already uses the governance root, the declared per-instance sub-path inside it (distribution.schema harness_semantics.session_dir.secondary_subpath). An explicit value always wins but two advisors on one host may not share a directory (refused, with the retry command). With --advisor-host it is required and is the directory on that host (AIPOS-F243)")
+    onboarding_guide_parser.add_argument("--advisor-dir", help="Advisor Claude Code session directory — advisor skills land in <dir>/.claude/skills. Default for a session on this machine (AIPOS-F253/F254) = the project governance root (<home root>/<project>, home root via --home-root > LYBRA_HOME_ROOT > ~/.lybra/config.json home_root > default), since the guide enrolls the project-level advisor; if another project-level advisor on this host already uses the governance root, the declared per-instance sub-path inside it (distribution.schema harness_semantics.session_dir.secondary_subpath); if only a sub-project advisor (custom role) holds it, the guide refuses and prints the swap command (move that advisor to its declared sub-path first). An explicit value always wins but two advisors on one host may not share a directory (refused, with the retry command). With --advisor-host it is required and is the directory on that host (AIPOS-F243)")
     onboarding_guide_parser.add_argument("--repo", action="append", dest="repos", metavar="NAME=ABS_PATH", help="Product repo (repeatable) for Step 2 project set-repos")
     onboarding_guide_parser.add_argument("--default-repo", help="Default repo name when more than one --repo")
     onboarding_guide_parser.add_argument("--host-segment", help="Host segment of instance names (defaults to short hostname)")
@@ -4917,13 +4917,16 @@ def main(argv: list[str] | None = None) -> int:
             if args.roles_command == "list":
                 result = roles_list_report(workspace_root, connection_target=connection_target)
                 # AIPOS-F253 件①: 只读诊断——每个顾问实例的 harness@host:目录与现存同机相撞(判定唯一 enrollment.session_dir_conflicts)
-                from tools.aipos_cli.enrollment import advisor_sessions, render_advisor_sessions, session_dir_conflicts
+                # AIPOS-F254 件③: 层级合规(判定唯一 enrollment.session_hierarchy: 违例 + 换位命令原文 / 缺省 / 用户指定)
+                from tools.aipos_cli.enrollment import advisor_sessions, render_advisor_sessions, session_dir_conflicts, session_hierarchy
 
                 if getattr(args, "json", False):
+                    _sessions = advisor_sessions(workspace_root)
                     result["advisor_sessions"] = [
                         {**s, "conflicts": [h["instance"] for h in session_dir_conflicts(workspace_root, instance=s["instance"], kind=s["kind"],
-                                                                                        host=s["host"], dir=s["dir"])]}
-                        for s in advisor_sessions(workspace_root)]
+                                                                                        host=s["host"], dir=s["dir"])],
+                         "hierarchy": session_hierarchy(workspace_root, s, _sessions)}
+                        for s in _sessions]
                     print(render_json(result))
                 else:
                     # Render table
