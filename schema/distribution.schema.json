@@ -547,6 +547,37 @@
         "single_implementation": "tools/aipos_cli/charter_render.instance_skills(文件集合: 同 instance_charter 的实例身份判定 → 本 harness kind=skills 条目) / skills_tar_bytes(tar 流) / skills_pull_command(拼装) / run_skills_cli(CLI 薄壳)"
       }
     },
+    "session_dir": {
+      "description": "AIPOS-F253: 顾问会话目录(advisor_session=true 的 harness 在治理根所在机的会话目录 harness.dir)的缺省与同机相撞拦截唯一声明。会话目录决定章程落点(分发条目 target.relative_path, 如 claude-code 的 .claude/rules/lybra-advisor.md、codex 的 AGENTS.md)与会话侧按目录分的状态(Claude Code 自动记忆按会话目录分): 同一主机两个顾问实例登记同一会话目录 = 后 sync 的覆盖前者章程(身份串)、记忆混用, 故登记入口一律拒。",
+      "default": "缺省 = 本项目治理根(治理根本身经既有解析定位: 向导 = home 根解析梯 --home-root > LYBRA_HOME_ROOT > ~/.lybra/config.json home_root > 缺省, 再拼项目名; 改登记 / 接入 = 本命令所用的项目治理根), 代码不写死任何路径; 同主机已有别的顾问实例登记治理根为会话目录 = secondary_subpath(按实例区分); 用户显式 --dir / --harness-dir / --advisor-dir 一律优先(仍受 conflict 拦截)。只对 harness_dir=required 的 kind(claude-code)且会话在治理根所在机时给缺省: harness_dir=optional 的 kind(codex)不给缺省(会话目录可空 = 既有行为), 他机会话目录不猜(须显式给)。",
+      "secondary_subpath": ".advisor-sessions/{instance}",
+      "instance_placeholder": "{instance}",
+      "subpath_rationale": "相对治理根、按实例名区分(实例名在项目内唯一且改登记不改名; 角色名可多实例共用): ① 在治理根之内 = 从该目录运行 lybra 经治理根解析(当前目录向上首个治理根)即到本项目治理根; ② Claude Code 从会话目录加载 .claude/rules 与 .claude/skills(分发件落该目录, 与本机会话同一 sync 交付); ③ 首段以点开头 = 隐藏目录, 不混进治理文档树。",
+      "ignore_file": ".gitignore",
+      "ignore_body": "# AIPOS-F253: 顾问会话目录(产品建, 渲染物与会话自建文件不入治理仓)\n*\n",
+      "landing_exclusion": "选「声明忽略」: 产品建子路径时在其首段目录(secondary_subpath 第一段)写 ignore_file(内容 ignore_body: 忽略整目录含该文件自身), 子路径内的渲染物(章程 / 技能)与会话自建文件对治理仓 git 不可见 → 不进 N6 落账、不触落账判据(git status 未跟踪)与治理仓代码文件守卫。不选「落账白名单排除」: N6 按卡范围精确提交, 本就选不到子路径, 但 git status / governance-commit --paths 仍会看见这些未跟踪文件(误提交与落账判据噪声), 且须改每个落账口才能排干净; 也不改治理仓 .gitignore(治理仓受管文件, 改它本身要落账)或 .git/info/exclude(只在本克隆有效, 换机器即丢)——目录内自带忽略文件随目录走, 换项目 / 换机器零配置。",
+      "conflict": {
+        "scope": "同一主机(主机名取短名、大小写不敏感)且同一会话目录(本机路径 resolve, 他机路径规范化)的两个已接入顾问实例(本项目已接入、非子 agent 执行身份、登记 harness 为顾问会话 kind 且有会话目录; 登记读 enrollment.registered_harness, 日志为真相); 实例自身不算; 他机会话(主机不同)不相撞; 只是目录嵌套(如治理根与其内子路径)不相撞。相撞 = 有实际碰撞(reasons 至少一条): charter = 两方章程落点(分发条目 target.relative_path)相同且都在该目录落章程(本机会话由 sync 落盘; 他机会话只有 remote_session_delivery.land.harnesses 内的 harness 由开局命令落盘, codex 他机会话只读出、不落盘); memory = 两方 harness 都在 memory_by_dir_harnesses(按会话目录分自动记忆)。claude-code 与 codex 同目录(落点不同、无共享记忆)= 不相撞。",
+        "reject_code": "SESSION_DIR_TAKEN",
+        "memory_by_dir_harnesses": [
+          "claude-code"
+        ],
+        "reasons": {
+          "charter": "章程落点相撞 {path}(后 sync 的覆盖前者, 身份串)",
+          "memory": "会话记忆相撞({kind} 按会话目录分自动记忆, 两个顾问混用)"
+        },
+        "message": "{code}: 实例 {instance} 的会话目录 {host}:{dir} 已被同机顾问实例 {occupant} 登记({occupant_label}) —— {reasons}",
+        "exit": "出口: 换一个会话目录(按缺省规则可用 {alt}), 原文: {command}"
+      },
+      "source_labels": {
+        "explicit": "用户指定",
+        "kept": "沿用现登记",
+        "governance_root": "缺省 = 治理根",
+        "secondary_subpath": "缺省 = 治理根内声明子路径(同机治理根已被 {occupant} 登记)"
+      },
+      "sync_guard": "sync 渲染前兜底(distribution_sync._sync_harness_dir 本机会话分支): 本工位实例的会话目录与同机别的已接入顾问实例登记相撞 = 拒, 不覆盖落点章程(落点章程属另一实例), 零写入; 拒因与登记入口同一判定同一文本。",
+      "single_implementation": "tools/aipos_cli/enrollment.session_dir_conflicts(相撞判定) / session_dir_refusal(拒因与出口) / default_session_dir(缺省) / materialize_session_dir(建子路径 + 忽略文件) / advisor_sessions(登记盘点); 消费方 enrollment.redeclare_instance / enroll_client.enroll_preflight(enroll 与 enroll-deliver 同用)/ onboarding.generate_onboarding_guide / distribution_sync._sync_harness_dir(sync 兜底)/ lybra roles list(只读诊断: 每个顾问实例 harness@host:目录 与现存相撞)"
+    },
     "rule": "sync 只取 target.harness == 工位 harness kind 的条目(缺 target.harness = pi); enroll 的 .pi 接线、共享落点并集、.pi 挂载推导只认 pi 条目。harness kind 合法值 = 本 schema harness_semantics.kinds 的键(enroll --harness 与 onboarding guide --advisor-harness 取值由此推导, 禁代码写死第二份); distributions[].target.harness 须 ∈ kinds(不在 = 声明错误, fail-closed)。AIPOS-F129 说理: 原「合法值 = distributions[].target.harness 并集」推不出无分发件的 kind(codex 顾问本卡不新增技能分发); kinds 本就是每个 kind 语义的唯一声明, 改由其键推导仍是单源, 并集 ⊆ kinds 作一致性校验。",
     "single_implementation": "tools/aipos_cli/distribution_sync.declared_harness_kinds / harness_kind_declaration / advisor_harness_kinds / harness_role_record / workstation_harness / harness_distributions(判定、登记与过滤) + enroll_client.enroll(落 harness 字段并交付) + onboarding.generate_onboarding_guide(顾问 harness) + workstation_wiring.declared_role_skills/declared_role_extensions(只认 pi)",
     "kind_fields": {

@@ -301,7 +301,8 @@ def generate_onboarding_guide(
     每步: step_number, title, actor(owner|advisor|workstation), owner_action(Owner 一次性动作序号或 None), command/commands,
     purpose, check, on_fail, creates。参数:
       - workspace_dir: 执行工位目录(兼容旧参数名; 缺省 ~/<项目>-executor); auditor_dir: 审计工位(缺省 ~/<项目>-auditor)
-      - advisor_dir: 顾问 Claude Code 会话目录(顾问技能交付落点基准; 缺省 ~/<项目>); codex 顾问 = 会话目录(可空, 如实记)
+      - advisor_dir: 顾问 Claude Code 会话目录(顾问技能交付落点基准; AIPOS-F253 缺省 = 治理根, 同机治理根已被别的顾问登记 = 治理根内声明子路径);
+        codex 顾问 = 会话目录(可空, 如实记)
       - advisor_harness / advisor_host: AIPOS-F129 件③ 顾问会话 harness(取值读声明, 缺省 claude-code)与会话所在机(见 resolve_advisor_harness)
       - repos: ["<仓名>=<绝对路径>", ...](缺省: code_repo 给了 = 单仓 <项目>=<code_repo>; 都缺 = 占位)
       - owner_workspace / owner_connection_json: Owner 凭据所在(门的中央凭据库; 缺省 home 根/活动项目)
@@ -335,12 +336,34 @@ def generate_onboarding_guide(
     owner_conn = str(Path(owner_connection_json).expanduser()) if owner_connection_json else (
         str(_connection_path(Path(owner_ws))) if not owner_ws.startswith("<") else str(_connection_path(Path("<OWNER_WORKSPACE>"))))
     gate, gate_source = _gate_url(gate_url, owner_conn)
-    # AIPOS-F129: 会话目录必给(harness_dir=required, Claude Code)才落缺省 ~/<项目>; 可空(codex)= 只用显式值, 不猜他机路径
-    # AIPOS-F243 件④: 他机会话(--advisor-host)的会话目录不猜(缺省 ~/<项目> 只给本机会话); 该 kind 必给目录 = 拒并给出口
+    # AIPOS-F129: 会话目录必给(harness_dir=required, Claude Code)才落缺省; 可空(codex)= 只用显式值, 不猜他机路径
+    # AIPOS-F243 件④: 他机会话(--advisor-host)的会话目录不猜(缺省只给本机会话); 该 kind 必给目录 = 拒并给出口
     if adv_h["host"] and adv_h["declaration"]["harness_dir"] == "required" and not str(advisor_dir or "").strip():
         raise ValueError(f"--advisor-harness {adv_h['kind']} 的会话在他机({adv_h['host']}): 须给 --advisor-dir <该机上的会话目录绝对路径>"
                          "(他机目录如实登记, 不猜)")
-    advisor_ws = advisor_dir or (f"~/{project_name}" if adv_h["declaration"]["harness_dir"] == "required" and not adv_h["host"] else None)
+    # AIPOS-F253 件②: 本机会话缺省 = 治理根(上方经 home 根解析梯拼出, 不写死路径); 同机治理根已被别的顾问实例登记 = 治理根内声明子路径
+    # (唯一实现 enrollment.default_session_dir); 显式 --advisor-dir 优先。件①: 本机会话目录与同机已接入顾问相撞 = 拒并给换目录的命令原文
+    from tools.aipos_cli.enrollment import default_session_dir, session_dir_refusal, session_dir_source_label
+
+    advisor_ws: str | None = advisor_dir or None
+    advisor_dir_source = {"source": "explicit", "occupant": None} if advisor_ws else None
+    if not advisor_ws and adv_h["declaration"]["harness_dir"] == "required" and not adv_h["host"]:
+        dflt = default_session_dir(gov, inst["advisor"])
+        advisor_ws, advisor_dir_source = dflt["path"], {"source": dflt["source"], "occupant": dflt["occupant"]}
+    if advisor_ws and not adv_h["host"]:
+        retry_argv = ["lybra", "onboarding", "guide", project_name, "--home-root", str(home), "--advisor-harness", adv_h["kind"],
+                      "--advisor-dir", "DIR_SLOT"]
+        for flag, value in (("--host-segment", host_segment), ("--executor-mode", executor_mode), ("--code-repo", code_repo),
+                            ("--workspace-dir", workspace_dir), ("--auditor-dir", auditor_dir), ("--default-repo", default_repo)):
+            retry_argv += [flag, str(value)] if value else []
+        for item in repos or []:
+            retry_argv += ["--repo", str(item)]
+        refusal = session_dir_refusal(gov, instance=inst["advisor"], kind=adv_h["kind"], host=None, dir=str(Path(advisor_ws).expanduser()),
+                                      retry=shlex.join(retry_argv).replace("DIR_SLOT", "{dir}"))
+        if refusal:
+            raise ValueError(refusal)
+    advisor_dir_label = (session_dir_source_label(advisor_dir_source["source"], occupant=advisor_dir_source["occupant"])
+                         if advisor_dir_source else None)
     exec_ws = workspace_dir or f"~/{project_name}-executor"
     audit_ws = auditor_dir or f"~/{project_name}-auditor"
     _actor = actor or inst["advisor"]
@@ -507,7 +530,9 @@ def generate_onboarding_guide(
         check4 = (f"--dry-run 输出 'roles enroll-deliver advisor: 预览(未执行; 加 --confirm 执行)'(未签码、零写入); --confirm 输出 '已执行'、"
                   f"注册码 code_id 与指纹(无码原文)与 '{adv_kind} 件 → …' 行")
         creates4 = f"{gov_s}/.lybra/connection.json, {gov_s}/.lybra/role, " + ", ".join(landings)
-        note4 = f"顾问会话目录与治理根可不同: 本 guide 每条命令都显式带治理根, 不依赖 cwd; 顾问件交付后在会话目录重启 {label} 会话即加载"
+        note4 = (f"顾问会话目录 {advisor_ws}({advisor_dir_label}; 缺省 = 治理根, 同机治理根已被别的顾问登记 = 治理根内声明子路径, "
+                 f"--advisor-dir 显式优先; 同机两个顾问不能共用一个会话目录): 本 guide 每条命令都显式带治理根, 不依赖 cwd; "
+                 f"顾问件交付后在会话目录重启 {label} 会话即加载")
     else:
         undelivered = ", ".join(d["distribution_id"] for d in adv_h["deliveries"])
         why = (f"声明给 {adv_kind} 的顾问件({undelivered})需本机会话目录, 会话在 {session_at} = 本机无落点不落盘(章程 / 技能件由会话开局拉取, 见 Step 5; 其余件 sync 列 undelivered)"
@@ -774,6 +799,7 @@ def generate_onboarding_guide(
         "instances": inst,
         "policies": policies,
         "advisor_dir": advisor_ws,
+        "advisor_dir_source": advisor_dir_label,  # AIPOS-F253
         "advisor_harness": {"kind": adv_h["kind"], "host": adv_h["host"], "dir": advisor_ws},
         "workstations": {"executor": None if subagent_exec else exec_ws, "auditor": audit_ws},
         "executor_mode": exec_mode,  # AIPOS-F143 件④

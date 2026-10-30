@@ -815,6 +815,7 @@ def enroll_preflight(
     executor_mode: str | None = None,
     check_target: bool = True,
     stage: str = "precheck",
+    session_retry: str | None = None,
 ) -> dict[str, Any]:
     """AIPOS-F151 件③: 接入换码前预检的唯一实现(enroll 换码前、enroll-deliver 签码前同用; 均先于任何写盘 / 兑换 / 签码)。
 
@@ -824,7 +825,9 @@ def enroll_preflight(
     ② declared = {role, instance, role_class}(码内签发声明或 enroll-deliver 参数; role_class 空 = 声明类预检跳过):
        子 agent 模式判据(_seat_mode_refusal)/ 工位类不落治理根(_governance_target_refusal)/ 覆盖信封
        (workstation_wiring.enroll_envelope_requirement, 拒因码 ENROLL_ENVELOPE_MISSING)。
-    任一不满足 = RuntimeError(带出口)。返回 {mode_decl, mode, seat_mode, harness_record, governance_target, envelope}。"""
+    ③ AIPOS-F253: 目标 = 治理根(治理席位)且 harness 为顾问会话 kind 带会话目录 = 同机相撞拦截(session_dir_check; 出口命令 = session_retry,
+       其中 {dir} 填另一目录; 缺 = 通用一句); 会话目录是该实例的治理根内声明子路径 = 免「须已存在」(返回 session_dir_create, enroll 落盘前建)。
+    任一不满足 = RuntimeError(带出口)。返回 {mode_decl, mode, seat_mode, harness_record, governance_target, envelope, session_dir_create}。"""
     from tools.aipos_cli.distribution_sync import harness_role_record
     from tools.aipos_cli.enrollment import executor_mode_declaration, governance_root_executor_modes
 
@@ -848,11 +851,19 @@ def enroll_preflight(
             raise RuntimeError(f"--harness-host {harness_host!r} 含空白(主机名不得含空白)")
         # 子 agent 无工位 harness 目录: 不写 .lybra/role harness、不交付分发件
     elif check_target:
+        from tools.aipos_cli.enrollment import is_secondary_session_dir
+
+        instance0 = str((declared or {}).get("instance") or "").strip() or None
+        creatable = bool(governance_root) and not harness_host and is_secondary_session_dir(governance_root, instance0, harness_dir)
         try:
-            harness_record = harness_role_record(harness_kind, harness_dir, harness_host)
+            harness_record = harness_role_record(harness_kind, harness_dir, harness_host, creatable=creatable)
         except ValueError as exc:
             raise RuntimeError(str(exc)) from exc
     governance_target = is_governance_workspace(workspace_root, governance_root) if check_target else None
+    session_dir_create: str | None = None
+    if governance_target and harness_record is not None and declared is not None and declared.get("instance"):
+        session_dir_check(workspace_root, str(declared["instance"]), harness_record, retry=session_retry)
+        session_dir_create = str(harness_record.get("dir") or "") if creatable else None
     envelope: dict[str, Any] | None = None
     if declared is not None and declared.get("role_class"):
         role, role_class, instance = declared["role"], declared["role_class"], declared.get("instance")
@@ -871,7 +882,23 @@ def enroll_preflight(
         if envelope["refusal"]:
             raise RuntimeError(envelope["refusal"])
     return {"mode_decl": mode_decl, "mode": mode, "seat_mode": seat_mode, "harness_record": harness_record,
-            "governance_target": bool(governance_target), "envelope": envelope}
+            "governance_target": bool(governance_target), "envelope": envelope, "session_dir_create": session_dir_create}
+
+
+def session_dir_check(governance_root: Path | str, instance: str, harness_record: dict[str, Any] | None, *,
+                      retry: str | None = None) -> None:
+    """AIPOS-F253 件①: 接入落治理根(治理席位)时的同机会话目录相撞拦截(判定与拒因唯一 enrollment.session_dir_refusal)。
+    harness 非顾问会话 kind / 无会话目录 = 不判。相撞 = RuntimeError(拒因 + 出口命令原文), 先于任何兑换 / 写盘。"""
+    from tools.aipos_cli.distribution_sync import advisor_harness_kinds
+    from tools.aipos_cli.enrollment import session_dir_refusal
+
+    record = harness_record or {}
+    if record.get("kind") not in advisor_harness_kinds() or not str(record.get("dir") or "").strip():
+        return
+    refusal = session_dir_refusal(governance_root, instance=instance, kind=str(record["kind"]), host=record.get("host"),
+                                  dir=str(record["dir"]), retry=retry or "原命令把会话目录参数(--harness-dir)换成 {dir} 后重跑")
+    if refusal:
+        raise RuntimeError(refusal)
 
 
 def enroll(
@@ -969,6 +996,11 @@ def enroll(
     # AIPOS-F54 同族并入③: 目录不存在时自动创建并出声(chris 实撞 cd: No such file or directory)
     created_workspace_dir = not workspace_root.exists()
     workspace_root.mkdir(parents=True, exist_ok=True)
+    if pre["session_dir_create"]:
+        # AIPOS-F253 件②: 会话目录 = 本实例的治理根内声明子路径 = 建目录与忽略文件(唯一写口 materialize_session_dir; 预检已过相撞拦截)
+        from tools.aipos_cli.enrollment import materialize_session_dir
+
+        materialize_session_dir(workspace_root, str((declared or {}).get("instance")), pre["session_dir_create"])
 
     # Step 2: 确保 .lybra/ 目录存在
     lybra_dir = ensure_lybra_dir(workspace_root)
@@ -1037,6 +1069,9 @@ def enroll(
             refusal = _governance_target_refusal(workspace_root, role, _role_class)
             if refusal:
                 raise RuntimeError(refusal)
+            if agent_instance and not (declared or {}).get("instance"):
+                # AIPOS-F253 件①: 旧码无签发声明(换码前不知实例)= 换码后按门下发实例复核会话目录相撞(先于任何落盘)
+                session_dir_check(workspace_root, str(agent_instance), harness_record)
     
     # Step 3: 加载或创建 connection.json (AIPOS-C2 大项B: 铸全 workspace_root)
     # AIPOS-F54-fix1: workspace_root 单源 = governance_root(码内治理根);

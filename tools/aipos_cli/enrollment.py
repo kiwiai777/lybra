@@ -651,9 +651,10 @@ def append_relocation_event(workspace_root: str | Path, instance: str, *, projec
 REDECLARE_REQUEST_ACTION = "redeclare_request"
 _REDECLARE_VERB = "lybra_roles_redeclare"
 _REDECLARE_REJECT_CODES = ("REDECLARE_INVALID", "REDECLARE_NOT_ENROLLED", "REDECLARE_WORKSTATION", "REDECLARE_ACTOR",
-                           "REDECLARE_NO_CHANGE", "REDECLARE_OWNER_DENIED")
+                           "REDECLARE_NO_CHANGE", "REDECLARE_OWNER_DENIED", "REDECLARE_SESSION_DIR_TAKEN")
 _REDECLARE_TEXT_KEYS = ("target_line", "mode_seat", "mode_subagent", "current_line", "diff_line", "diff_none", "tier2_authorized", "tier2_dir_only", "tier1_request",
-                        "owner_pending", "owner_approved", "event_line", "slot_line", "slot_none", "request_line", "invariants")
+                        "owner_pending", "owner_approved", "event_line", "slot_line", "slot_none", "request_line", "invariants",
+                        "session_dir_line", "session_dir_create")
 _REDECLARE_FIELDS = ("kind", "host", "dir")
 _REQUEST_KEY_RE = re.compile(r"(?:^|\s)(?P<key>base|to_harness|to_host|to_dir|why)=(?P<value>\S+)")
 
@@ -915,11 +916,13 @@ def redeclare_instance(governance_root: str | Path, instance: str, *, harness: s
     kind 且不给工作目录。无变化 = REDECLARE_NO_CHANGE。授权 = _authorization_basis: 第二档 → 确认 = 追加 redeclare 位置事件 + 更新实例槽;
     第一档 → Owner 裁决批准(_redeclare_ruling)= 同第二档生效(authorized_by=owner:<决策 ID>), 拒 = REDECLARE_OWNER_DENIED,
     未裁决 = 确认追加一行 redeclare_request(已有同一请求则不重复)进收件箱。返回 {state: apply|request|pending, written, ...}。"""
+    import shlex
     import socket
 
     from tools.aipos_cli.distribution_sync import advisor_harness_kinds, harness_kind_declaration, harness_role_record
 
     decl = redeclaration_declaration()
+    session_dir: dict[str, Any] | None = None  # AIPOS-F253: 治理席位本次登记的会话目录 {dir, source, occupant, create}
     root = _workspace_root_path(governance_root)
     name = _no_space(instance, "--instance")
     by = _no_space(actor, "--actor")
@@ -964,17 +967,32 @@ def redeclare_instance(governance_root: str | Path, instance: str, *, harness: s
     else:
         if _role_slot(_lybra_dir(root), name) is None:
             raise _refuse_redeclare("REDECLARE_NOT_ENROLLED", f"治理根 {_role_file_path(root)} 无实例 {name} 的记录(实例槽)")
-        # 工作目录: 显式 > 同 kind 同会话机沿用现登记 > 无(须给的 kind 由 harness_role_record 拒并给出口)
+        # 工作目录: 显式 > 同 kind 同会话机沿用现登记 > AIPOS-F253 缺省(会话在治理根所在机且该 kind 必给目录: 治理根; 同机治理根已被别的
+        # 顾问登记 = 治理根内声明子路径, default_session_dir)> 无(须给的 kind 由 harness_role_record 拒并给出口)
         new_dir = given["dir"] or (old["dir"] if same_session and new_host == old["host"] else None)
+        dir_source, dir_occupant = ("explicit" if given["dir"] else "kept") if new_dir else None, None
+        if not new_dir and is_local_host(new_host) and harness_kind_declaration(kind)["harness_dir"] == "required":
+            dflt = default_session_dir(root, name, host=new_host)
+            new_dir, dir_source, dir_occupant = dflt["path"], dflt["source"], dflt["occupant"]
         remote = new_host if new_host != local else None
         if remote and harness_kind_declaration(kind)["harness_host"] == "forbidden":
             raise _refuse_redeclare("REDECLARE_INVALID", f"harness={kind} 声明 harness_host=forbidden(不登记会话机), 不能登记到主机 {new_host}"
                                     f"(本机 {local})")
         try:
-            slot_record = harness_role_record(kind, new_dir, remote)
+            slot_record = harness_role_record(kind, new_dir, remote,
+                                              creatable=not remote and is_secondary_session_dir(root, name, new_dir))
         except ValueError as exc:
             raise _refuse_redeclare("REDECLARE_INVALID", str(exc)) from exc
         new = {"kind": kind, "host": new_host, "dir": (slot_record or {}).get("dir")}
+        # AIPOS-F253 件①: 同机两个顾问不共用会话目录(判定唯一 session_dir_conflicts; 出口 = 同一命令换 --dir)
+        retry = shlex.join(["lybra", "roles", "redeclare", "--workspace-root", str(root), "--instance", name, "--actor", by,
+                            "--harness", kind, "--host", str(new_host), "--dir", "DIR_SLOT"]).replace("DIR_SLOT", "{dir}")
+        refusal = session_dir_refusal(root, instance=name, kind=kind, host=new_host, dir=new["dir"], retry=retry)
+        if refusal:
+            raise _refuse_redeclare("REDECLARE_SESSION_DIR_TAKEN", refusal)
+        if new["dir"] and dir_source:
+            session_dir = {"dir": new["dir"], "source": dir_source, "occupant": dir_occupant,
+                           "create": [] if remote else materialize_session_dir(root, name, new["dir"], dry_run=True)}
     diffs = [{"field": k, "old": old[k], "new": new[k]} for k in _REDECLARE_FIELDS if old[k] != new[k]]
     if not diffs:
         raise _refuse_redeclare("REDECLARE_NO_CHANGE", f"实例 {name} 现登记已是 {registration_label(current)}")
@@ -985,7 +1003,8 @@ def redeclare_instance(governance_root: str | Path, instance: str, *, harness: s
                            "new": new, "diffs": diffs, "tier": auth["tier"], "basis": auth["basis"], "authorization": auth["authorization"],
                            "why": auth["why"], "item_id": None, "decision_id": None, "owner_choice": None, "state": "apply",
                            "event_line": None, "request_line": None, "slot_file": str(_role_file_path(root)) if seat else None,
-                           "slot_harness": slot_record, "log": str(enrollment_trail_path(root)), "written": [], "written_files": []}
+                           "slot_harness": slot_record, "log": str(enrollment_trail_path(root)), "written": [], "written_files": [],
+                           "session_dir": session_dir}
     basis = auth["basis"]
     if auth["tier"] == 1:
         ruling = _redeclare_ruling(root, name, str(ev["ts"]), new)
@@ -1015,10 +1034,12 @@ def redeclare_instance(governance_root: str | Path, instance: str, *, harness: s
     if seat:
         from tools.aipos_cli.enroll_client import write_role_file
 
+        if session_dir and session_dir["create"]:  # AIPOS-F253: 缺省落到治理根内声明子路径 = 先建目录与忽略文件(唯一写口)
+            out["written_files"] += materialize_session_dir(root, name, session_dir["dir"])
         role = str((_role_slot(_lybra_dir(root), name) or {}).get("role") or ev["role"])
         write_role_file(_lybra_dir(root), role, name, None, harness=slot_record, slot_by_instance=True, stamp_key="redeclared_at",
                         keep_top=True)
-        out["written_files"] = [str(_role_file_path(root))]
+        out["written_files"] += [str(_role_file_path(root))]
     after = registered_harness(root, name)
     out["after"] = after
     out["ok"] = all(after[k] == new[k] for k in _REDECLARE_FIELDS)
@@ -1032,6 +1053,11 @@ def render_redeclaration(result: dict[str, Any]) -> list[str]:
     lines = [t["target_line"].format(instance=result["instance"], mode=t[f"mode_{result['mode']}"], governance_root=result["governance_root"]),
              t["current_line"].format(current=registration_label(result["current"]) or "-")]
     lines += [t["diff_line"].format(field=d["field"], old=d["old"] or "-", new=d["new"] or "-") for d in result["diffs"]] or [t["diff_none"]]
+    sd = result.get("session_dir")
+    if sd:  # AIPOS-F253: 会话目录与来源(用户指定 / 沿用 / 缺省 = 治理根 / 缺省 = 治理根内声明子路径)
+        create = t["session_dir_create"].format(will=will, paths=", ".join(sd["create"])) if sd["create"] else ""
+        lines.append(t["session_dir_line"].format(dir=sd["dir"], source=session_dir_source_label(sd["source"], occupant=sd["occupant"]),
+                                                  create=create))
     if result["tier"] == 2:
         lines.append(t["tier2_dir_only"] if result["basis"] == "dir_only" else t["tier2_authorized"].format(authorization=result["basis"]))
     elif result["state"] == "apply":
@@ -1048,6 +1074,238 @@ def render_redeclaration(result: dict[str, Any]) -> list[str]:
                                            harness=json.dumps(result["slot_harness"], ensure_ascii=False))
                      if result["slot_file"] else t["slot_none"])
     lines.append(t["invariants"])
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F253: 顾问会话目录的缺省与同机相撞拦截(声明 distribution.schema harness_semantics.session_dir)。
+# 会话目录决定章程落点(.claude/rules/lybra-advisor.md / AGENTS.md)与 Claude Code 自动记忆分区: 同一主机两个已接入顾问实例登记同一目录 =
+# 后 sync 的覆盖前者章程、记忆混用。判定只此一处(session_dir_conflicts), 登记入口(roles redeclare / enroll 与 enroll-deliver 的
+# enroll_preflight / onboarding guide)与 sync 渲染前兜底同调; 缺省目录(default_session_dir)= 治理根, 同机治理根已被别的顾问登记 =
+# 治理根内声明子路径(按实例), 用户显式目录优先(仍受拦截)。登记真相读 registered_harness(日志为准), 本段只读, 唯一写口 materialize_session_dir
+# (只建声明子路径及其忽略文件)。
+# ---------------------------------------------------------------------------
+
+_SESSION_DIR_TEXT_KEYS = ("message", "exit")
+_SESSION_DIR_REASON_KEYS = ("charter", "memory")
+_SESSION_DIR_SOURCE_KEYS = ("explicit", "kept", "governance_root", "secondary_subpath")
+
+
+def session_dir_declaration() -> dict[str, Any]:
+    """distribution.schema harness_semantics.session_dir(fail-closed): secondary_subpath(相对路径, 含 instance_placeholder, 不含 ..)/
+    ignore_file / ignore_body / conflict {reject_code, memory_by_dir_harnesses, reasons, message, exit} / source_labels 齐。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = ((load_schema("distribution").get("harness_semantics") or {}).get("session_dir"))
+    where = "distribution.schema.json harness_semantics.session_dir"
+    if not isinstance(decl, dict):
+        raise SchemaLoadError(f"{where} 未声明(AIPOS-F253)")
+    sub, ph = str(decl.get("secondary_subpath") or ""), str(decl.get("instance_placeholder") or "")
+    conflict = decl.get("conflict") if isinstance(decl.get("conflict"), dict) else {}
+    reasons = conflict.get("reasons") if isinstance(conflict.get("reasons"), dict) else {}
+    labels = decl.get("source_labels") if isinstance(decl.get("source_labels"), dict) else {}
+    parts = Path(sub).parts
+    if (not ph or ph not in sub or Path(sub).is_absolute() or ".." in parts or len(parts) < 2
+            or not str(decl.get("ignore_file") or "").strip() or "/" in str(decl.get("ignore_file"))
+            or not str(decl.get("ignore_body") or "").strip()
+            or not str(conflict.get("reject_code") or "").strip() or not isinstance(conflict.get("memory_by_dir_harnesses"), list)
+            or any(not str(conflict.get(k) or "").strip() for k in _SESSION_DIR_TEXT_KEYS)
+            or any(not str(reasons.get(k) or "").strip() for k in _SESSION_DIR_REASON_KEYS)
+            or any(not str(labels.get(k) or "").strip() for k in _SESSION_DIR_SOURCE_KEYS)):
+        raise SchemaLoadError(f"{where}: secondary_subpath(相对、≥2 段、含 instance_placeholder、无 ..)/ ignore_file / ignore_body / "
+                              f"conflict {{reject_code, memory_by_dir_harnesses, reasons {list(_SESSION_DIR_REASON_KEYS)}, "
+                              f"{', '.join(_SESSION_DIR_TEXT_KEYS)}}} / source_labels {list(_SESSION_DIR_SOURCE_KEYS)} 未声明齐")
+    return decl
+
+
+def _local_host() -> str:
+    import socket
+
+    return socket.gethostname()
+
+
+def _host_key(host: str | None) -> str:
+    """主机比较键: 短名、小写(实例名主机段与 socket.gethostname() 的 FQDN / 大小写差异不算不同机)。"""
+    host_text = str(host or "").strip().lower()
+    return host_text.partition(".")[0]
+
+
+def is_local_host(host: str | None) -> bool:
+    """会话机是否 = 本机(治理根所在机; 空 = 本机)。"""
+    return not str(host or "").strip() or _host_key(host) == _host_key(_local_host())
+
+
+def _dir_key(path: str | Path, *, local: bool) -> str:
+    """目录比较键: 本机路径 expanduser + resolve; 他机路径只做规范化(不在本机解析)。"""
+    import os
+
+    return str(Path(str(path)).expanduser().resolve()) if local else os.path.normpath(str(path))
+
+
+def secondary_session_dir(governance_root: str | Path, instance: str) -> Path:
+    """治理根内声明子路径(secondary_subpath 填实例名)。实例名含路径分隔符 / 空白 = ValueError(fail-closed)。"""
+    decl = session_dir_declaration()
+    name = str(instance or "").strip()
+    if not name or any(ch.isspace() for ch in name) or "/" in name or name in (".", ".."):
+        raise ValueError(f"实例名 {instance!r} 不能用作会话子路径段")
+    return _workspace_root_path(governance_root) / decl["secondary_subpath"].replace(decl["instance_placeholder"], name)
+
+
+def is_secondary_session_dir(governance_root: str | Path, instance: str | None, path: str | Path | None) -> bool:
+    """path 是否 = 该实例的治理根内声明子路径(本机路径比较)。"""
+    if not instance or not str(path or "").strip():
+        return False
+    return _dir_key(path, local=True) == _dir_key(secondary_session_dir(governance_root, instance), local=True)
+
+
+def advisor_sessions(governance_root: str | Path) -> list[dict[str, Any]]:
+    """本项目已接入顾问实例的会话登记(只读; 相撞判定与 roles list 诊断同读): 已接入(enrolled_instances)、实例名项目段 = 本项目、非子 agent 执行身份、
+    非 pi 工位(位置事件工位 = 治理根或无位置事件)、登记 harness(registered_harness)为顾问会话 kind 且有会话目录者。
+    每项 {instance, role, kind, host, dir, local, host_key, dir_key, label}; host 缺 = 治理根所在机(本机会话记录不带 host 键)。"""
+    from tools.aipos_cli.distribution_sync import advisor_harness_kinds
+
+    root = _workspace_root_path(governance_root)
+    if not root.is_dir() or (not enrollment_trail_path(root).is_file() and not _governance_connection(root).is_file()):
+        return []  # 尚未建成 / 无接入登记的治理根 = 无已接入顾问
+    from tools.aipos_cli.naming_profile import parse_instance_name
+
+    kinds = advisor_harness_kinds()
+    project = _project_name(root)
+    out: list[dict[str, Any]] = []
+    for view in enrolled_instances(root):
+        parsed = parse_instance_name(view["instance"])
+        if view["governance_root_mode"] or (parsed is not None and parsed.get("project") != project):
+            continue  # 子 agent 执行身份无会话目录; 实例名项目段属他项目 = 不是本项目顾问(门工作区连接文件可绑多项目凭据)
+        ev = location_event(root, view["instance"])
+        if ev["found"] and ev["dir"] and _dir_key(ev["dir"], local=True) != str(root):
+            continue  # pi / 他类工位(工位目录不是治理根)不是顾问席位
+        reg = registered_harness(root, view["instance"])
+        if reg["kind"] not in kinds or not str(reg.get("dir") or "").strip():
+            continue
+        host = str(reg.get("host") or "").strip() or _local_host()
+        local = is_local_host(host)
+        out.append({"instance": view["instance"], "role": view["role"], "kind": reg["kind"], "host": host, "dir": str(reg["dir"]),
+                    "local": local, "host_key": _host_key(host), "dir_key": _dir_key(reg["dir"], local=local),
+                    "label": registration_label(reg)})
+    return out
+
+
+def _charter_paths(kind: str) -> set[str]:
+    """该 harness 给治理席位角色类的章程落点相对路径(distributions[kind=charter].target.relative_path)。"""
+    from tools.aipos_cli.custom_roles import role_classes_in_group
+    from tools.schema_loader import load_schema
+
+    seat = set(role_classes_in_group("governance_seat"))
+    return {str((d.get("target") or {}).get("relative_path") or "") for d in load_schema("distribution").get("distributions") or []
+            if d.get("kind") == "charter" and (d.get("target") or {}).get("harness") == kind and seat & set(d.get("applies_to_roles") or [])}
+
+
+def _collision_reasons(kind: str, other_kind: str, *, local: bool) -> list[str]:
+    """同机同目录两个会话的实际碰撞(声明 conflict.scope): charter = 章程落点相同且两方都在该目录落章程(本机会话 sync 落盘; 他机会话只有
+    remote_session_delivery.land.harnesses 内的 harness 落盘); memory = 两方都按会话目录分自动记忆。无碰撞 = []。"""
+    from tools.aipos_cli.charter_render import remote_session_delivery
+
+    decl = session_dir_declaration()["conflict"]
+    texts, memory = decl["reasons"], set(decl["memory_by_dir_harnesses"])
+    landing = set(remote_session_delivery()["land"]["harnesses"] or [])
+    lands = local or (kind in landing and other_kind in landing)
+    out = [texts["charter"].format(path=p) for p in sorted(_charter_paths(kind) & _charter_paths(other_kind)) if p] if lands else []
+    if kind == other_kind and kind in memory:
+        out.append(texts["memory"].format(kind=kind))
+    return out
+
+
+def session_dir_conflicts(governance_root: str | Path, *, instance: str, kind: str, host: str | None,
+                          dir: str | Path | None) -> list[dict[str, Any]]:
+    """AIPOS-F253 件①: 同机相撞判定(唯一实现)。本实例拟登记的会话 (kind, host, dir) 与本项目别的已接入顾问实例(advisor_sessions)
+    同主机同目录且有实际碰撞(_collision_reasons: 章程落点 / 会话记忆)= 相撞; 返回 [{instance, kind, host, dir, label, reasons}](无 = [])。
+    dir 空 = 无会话目录(不判); kind 空 = 只问该目录是否已被同机别的顾问登记(缺省目录判占用用)。只读。"""
+    if not str(dir or "").strip():
+        return []
+    host_text = str(host or "").strip() or _local_host()
+    local = is_local_host(host_text)
+    hkey, dkey = _host_key(host_text), _dir_key(dir, local=local)
+    me = str(instance or "").strip()
+    out: list[dict[str, Any]] = []
+    for s in advisor_sessions(governance_root):
+        if s["instance"] == me or s["host_key"] != hkey or s["dir_key"] != dkey:
+            continue
+        # kind 空 = 只问「谁登记了这个目录」(缺省目录判占用: 治理根被同机任一顾问登记即算占用)
+        reasons = _collision_reasons(kind, s["kind"], local=local) if kind else [s["label"] or s["instance"]]
+        if reasons:
+            out.append({**{k: s[k] for k in ("instance", "kind", "host", "dir", "label")}, "reasons": reasons})
+    return out
+
+
+def default_session_dir(governance_root: str | Path, instance: str, *, host: str | None = None) -> dict[str, Any]:
+    """AIPOS-F253 件②: 顾问会话目录缺省(唯一实现)。治理根所在机的会话: 同机尚无别的顾问实例登记治理根 = 治理根; 已有 = 治理根内声明子路径
+    (secondary_session_dir)。返回 {path, source(governance_root|secondary_subpath), occupant}。他机会话不给缺省 = ValueError(不猜他机路径)。
+    治理根本身由调用方按既有解析给(本函数不推导、不写死任何路径)。只读。"""
+    if not is_local_host(host):
+        raise ValueError(f"会话在他机({host}): 会话目录不给缺省(他机路径不猜), 须显式给目录")
+    root = _workspace_root_path(governance_root)
+    taken = session_dir_conflicts(root, instance=instance, kind="", host=host, dir=root) if root.is_dir() else []
+    if not taken:
+        return {"path": str(root), "source": "governance_root", "occupant": None}
+    return {"path": str(secondary_session_dir(root, instance)), "source": "secondary_subpath", "occupant": taken[0]["instance"]}
+
+
+def session_dir_source_label(source: str, *, occupant: str | None = None) -> str:
+    """会话目录来源人读一句(声明 source_labels; 改登记预演 / 向导同读)。"""
+    return session_dir_declaration()["source_labels"][source].format(occupant=occupant or "-")
+
+
+def session_dir_refusal(governance_root: str | Path, *, instance: str, kind: str, host: str | None, dir: str | Path | None,
+                        retry: str) -> str | None:
+    """相撞 = 拒因原文(声明 conflict.message + exit; 点名占用者实例与相撞原因, 出口给换目录后的命令原文: retry 中 {dir} 填缺省规则给的
+    另一目录); 不相撞 = None。各登记入口与 sync 兜底同一文本。"""
+    hits = session_dir_conflicts(governance_root, instance=instance, kind=kind, host=host, dir=dir)
+    if not hits:
+        return None
+    decl = session_dir_declaration()["conflict"]
+    host_text = str(host or "").strip() or _local_host()
+    alt: str
+    if is_local_host(host_text):
+        sub = str(secondary_session_dir(governance_root, instance))
+        dflt = default_session_dir(governance_root, instance, host=host_text)["path"]
+        alt = dflt if _dir_key(dflt, local=True) != _dir_key(dir, local=True) else sub
+    else:
+        alt = "<该机上另一会话目录>"
+    first = hits[0]
+    message = decl["message"].format(code=decl["reject_code"], instance=instance, host=host_text, dir=dir, occupant=first["instance"],
+                                     occupant_label=first["label"] or "-",
+                                     reasons="; ".join(first["reasons"]) + (f"(另有 {', '.join(h['instance'] for h in hits[1:])})"
+                                                                           if len(hits) > 1 else ""))
+    return f"{message}。{decl['exit'].format(alt=alt, command=retry.replace('{dir}', alt))}"
+
+
+def materialize_session_dir(governance_root: str | Path, instance: str, path: str | Path, *, dry_run: bool = False) -> list[str]:
+    """建该实例的治理根内声明子路径及其首段目录的忽略文件(唯一写口; 声明 landing_exclusion: 子路径内渲染物不进治理落账)。
+    path 不是该实例的声明子路径 = 不动(用户指定目录归用户)。已在 = 只补缺的忽略文件。返回(将)写出的路径。"""
+    if not is_secondary_session_dir(governance_root, instance, path):
+        return []
+    decl = session_dir_declaration()
+    root = _workspace_root_path(governance_root)
+    target = secondary_session_dir(root, instance)
+    top = root / Path(decl["secondary_subpath"]).parts[0]
+    ignore = top / decl["ignore_file"]
+    planned = ([str(target)] if not target.is_dir() else []) + ([str(ignore)] if not ignore.is_file() else [])
+    if dry_run or not planned:
+        return planned
+    target.mkdir(parents=True, exist_ok=True)
+    if not ignore.is_file():
+        ignore.write_text(decl["ignore_body"], encoding="utf-8")
+    return planned
+
+
+def render_advisor_sessions(governance_root: str | Path) -> list[str]:
+    """roles list 只读诊断段: 每个顾问实例 harness@host:目录, 现存相撞者标出(同一判定 session_dir_conflicts)。"""
+    sessions = advisor_sessions(governance_root)
+    lines = [f"顾问会话登记({len(sessions)} 个; 同机同目录 = 相撞, AIPOS-F253):"]
+    for s in sessions:
+        hits = session_dir_conflicts(governance_root, instance=s["instance"], kind=s["kind"], host=s["host"], dir=s["dir"])
+        mark = f"  ✗ 相撞: 与 {', '.join(h['instance'] for h in hits)} —— {'; '.join(hits[0]['reasons'])}" if hits else ""
+        lines.append(f"  {s['instance']:<44} {s['kind']}@{s['host']}:{s['dir']}{mark}")
     return lines
 
 
