@@ -106,9 +106,14 @@ def _pages(home: Path) -> dict[str, str]:
 _AGE = __import__("re").compile(r'"age_hours": [0-9.e-]+')
 
 
+_NOW = __import__("re").compile(r'"now": "[^"]*"')
+
+
 def _masked(pages: dict[str, str]) -> dict[str, str]:
-    """Pages taken on the real clock: the headline age in the data is a continuous time field (computed when the result is taken)."""
-    return {k: _AGE.sub('"age_hours": <age>', v) for k, v in pages.items()}
+    """Pages taken on the real clock: the headline age in the data is a continuous time field (computed when the result is taken);
+    so is the data time `now` (second precision: a cached page and one computed again right after differ when a second boundary falls
+    between them — AIPOS-F254 found this flaking ~1 in 4 on main as well)."""
+    return {k: _NOW.sub('"now": <now>', _AGE.sub('"age_hours": <age>', v)) for k, v in pages.items()}
 
 
 def _timeless(data: dict) -> dict:
