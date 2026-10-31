@@ -711,5 +711,287 @@
       "advisor_session": "true = 可作顾问会话 harness(lybra onboarding guide --advisor-harness 的取值由此推导)",
       "label": "人读名(向导等文案用; 缺 = kind 本身)"
     }
+  },
+  "npm_package": {
+    "description": "AIPOS-F257(产品化 P1 发布面): npm 安装包(package.json files 清单打出的包)的版本单源、运行必需件 / 禁入件、干净 HOME 装包冒烟与发布前自检的唯一声明。唯一读取口 tools.aipos_cli.package_check.package_declaration(缺键 / 形坏 = PackageCheckError, fail-closed); 判定唯一实现同模块(declared_version / version_mirror_problems / check_files / check_pack / smoke_install / preflight)。只追加: 新必需件 = 往 required 加一项; 不执行 npm publish(对外发布由 Owner 决定)。",
+    "version_source": {
+      "file": "package.json",
+      "key_path": [
+        "version"
+      ],
+      "semver_pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$",
+      "rationale": "版本只在 package.json 声明一处: 分发入口是 npm(package.json bin/lybra, pyproject [tool.lybra] distribution = npm), npm pack / install 只认 package.json 的 version; pyproject.toml 只给 pip install -e 开发便利, package-lock.json 由 npm 派生。其余各处 = mirrors, 只做一致性校验(不一致 = 自检 FAIL 并点名文件与键), 不另当版本源。",
+      "mirrors": [
+        {
+          "file": "pyproject.toml",
+          "format": "toml_project_version",
+          "key_path": [
+            "project",
+            "version"
+          ]
+        },
+        {
+          "file": "package-lock.json",
+          "format": "json",
+          "key_path": [
+            "version"
+          ]
+        },
+        {
+          "file": "package-lock.json",
+          "format": "json",
+          "key_path": [
+            "packages",
+            "",
+            "version"
+          ]
+        }
+      ],
+      "running_code_line": "lybra --version: npm 安装包形态(代码根位于 node_modules/ 下)= 「lybra <版本>(npm 安装包; 代码根 …)」; 部署快照 / 开发模式 / 工作树形态 = 原有一行 + 「; 版本 <版本>」(唯一实现 deploy_runtime.version_line)"
+    },
+    "required": {
+      "description": "安装包运行必需件: paths = 逐个必须在包内的文件; trees = 运行时读取的目录, 源中(git 跟踪, 无 .git 时按磁盘)该目录下每个不属禁入件、不属 npm_omitted_basenames 的文件都必须在包内; from_distributions = true 时本 schema distributions[].source.path(技能 / 章程母本 / pi 扩展 / schema 分发源)逐个必须在包内(文件 = 该文件, 目录 = 至少一个文件)。",
+      "paths": [
+        "package.json",
+        "README.md",
+        "QUICKSTART.md",
+        "LICENSE",
+        "bin/lybra",
+        "tools/__init__.py",
+        "tools/schema_loader.py",
+        "tools/lybra-deploy",
+        "tools/aipos_cli/aipos_cli.py",
+        "tools/aipos_cli/deploy_runtime.py",
+        "tools/aipos_cli/package_check.py",
+        "tools/mcp_server/server.py",
+        "web/board/app.py",
+        "web/board/static/index.html",
+        "config/runtime_cmds.yaml",
+        "schema/card.schema.json",
+        "schema/config.schema.json",
+        "schema/distribution.schema.json",
+        "schema/enums.schema.json",
+        "schema/roles.schema.json",
+        "schema/transitions.schema.json",
+        "schema/verbs.schema.json"
+      ],
+      "trees": [
+        "schema",
+        "agents",
+        "tools",
+        "web/board",
+        "config",
+        "0_control_plane",
+        "3_context_bundles"
+      ],
+      "from_distributions": true,
+      "npm_omitted_basenames": [
+        ".gitignore",
+        ".npmignore",
+        ".npmrc"
+      ]
+    },
+    "forbidden": {
+      "description": "禁入件(包内出现任一 = FAIL): 测试文件 = workspace_config.is_test_file(default_test_contract(), 与 run-all 自动发现同一判定); 另按 globs(fnmatch, 对包内相对路径, * 可跨 /)排除测试目录、夹具会话配置、卡报告、部署快照、凭据与本机运行态、构建产物; untracked_is_forbidden = true 时源为 git 仓则包内每个文件都须是 git 跟踪文件(本机产物不入包); credential_scan = true 时包内文本按 transitions artifact_ingest.credential_guard 同一判定(artifact_ingest.credential_hits)扫描, 命中 = FAIL(只报文件 / 行号 / 种类, 不报值); 该判据为报告 / 产物正文而设, 对源码标识符(token 参数名等)必然误报, 故 credential_scan_skips_code_files = true 时跳过代码文件(判据唯一实现 governance_guardrails.is_code_file, 扩展名集 = config.schema code_files_blacklist), 只扫文档 / 声明 / 配置样例 / 静态页等文本; 源码里的凭据切片另由 F121 棘轮守。",
+      "globs": [
+        "tests/*",
+        "*/tests/*",
+        "conftest.py",
+        "*/conftest.py",
+        "task_cards/*",
+        "*/task_cards/*",
+        ".deploy/*",
+        "*/.deploy/*",
+        ".worktrees/*",
+        "node_modules/*",
+        "*/node_modules/*",
+        "*/__pycache__/*",
+        "*.pyc",
+        "*.tgz",
+        ".lybra/*",
+        "*/.lybra/*",
+        ".env",
+        "*/.env",
+        "*.egg-info/*",
+        ".git/*",
+        ".codex/*",
+        ".claude/*",
+        ".github/*",
+        "*/.DS_Store",
+        "._*",
+        "*/._*",
+        "playwright-report/*",
+        "test-results/*",
+        ".pytest_cache/*",
+        "*/.pytest_cache/*"
+      ],
+      "untracked_is_forbidden": true,
+      "credential_scan": true,
+      "credential_scan_skips_code_files": true
+    },
+    "smoke": {
+      "description": "干净 HOME 装包冒烟(唯一实现 package_check.smoke_install): npm pack 产物 → npm install -g --prefix <临时 prefix> --offline(包零运行时依赖, 不连 registry)→ 以全新环境(env 只含 PATH = <prefix>/bin + node / npm / python3 所在处的符号链接目录 + /usr/bin:/bin, HOME = 临时目录; 不带任何 LYBRA_* / AIPOS_*; 无 ~/.lybra ~/.claude ~/.pi)逐步运行 steps。占位: {version} 包版本, {project} 临时项目名, {home_root} 临时 home 根, {governance_root} = {home_root}/{project}, {actor} 冒烟 actor; capture = 从该步 stdout(JSON)按 key_path 取值成为后续步占位。expect_exit = 允许的退出码; expect_stdout / expect_output = 须出现的子串(output = stdout + stderr)。charter / skills 对临时项目里尚未接入的顾问实例 = 只读拒绝出口(拒因带出口, 不崩溃), 证明装出的包能读 schema / 母本并按声明拒绝。",
+      "project": "smokeproj",
+      "actor": "owner",
+      "steps": [
+        {
+          "name": "version",
+          "argv": [
+            "--version"
+          ],
+          "expect_exit": [
+            0
+          ],
+          "expect_stdout": [
+            "lybra {version}",
+            "npm 安装包"
+          ]
+        },
+        {
+          "name": "help",
+          "argv": [
+            "--help"
+          ],
+          "expect_exit": [
+            0
+          ],
+          "expect_stdout": [
+            "onboarding",
+            "charter",
+            "skills"
+          ]
+        },
+        {
+          "name": "onboarding_guide",
+          "argv": [
+            "onboarding",
+            "guide",
+            "{project}",
+            "--home-root",
+            "{home_root}",
+            "--json"
+          ],
+          "expect_exit": [
+            0
+          ],
+          "expect_stdout": [
+            "\"steps\""
+          ],
+          "capture": {
+            "advisor_instance": [
+              "instances",
+              "advisor"
+            ]
+          }
+        },
+        {
+          "name": "onboarding_guide_text",
+          "argv": [
+            "onboarding",
+            "guide",
+            "{project}",
+            "--home-root",
+            "{home_root}"
+          ],
+          "expect_exit": [
+            0
+          ],
+          "expect_stdout": [
+            "Step 1"
+          ]
+        },
+        {
+          "name": "project_new",
+          "argv": [
+            "project",
+            "new",
+            "{project}",
+            "--home-root",
+            "{home_root}",
+            "--actor",
+            "{actor}"
+          ],
+          "expect_exit": [
+            0
+          ],
+          "expect_stdout": [
+            "Created project root:",
+            "stage snapshot:"
+          ]
+        },
+        {
+          "name": "project_list",
+          "argv": [
+            "project",
+            "list",
+            "--home-root",
+            "{home_root}"
+          ],
+          "expect_exit": [
+            0
+          ],
+          "expect_stdout": [
+            "{project}"
+          ]
+        },
+        {
+          "name": "charter_unenrolled",
+          "argv": [
+            "charter",
+            "--role",
+            "advisor",
+            "--instance",
+            "{advisor_instance}",
+            "--harness",
+            "claude-code",
+            "--workspace-root",
+            "{governance_root}"
+          ],
+          "expect_exit": [
+            1,
+            2,
+            3
+          ],
+          "expect_output": [
+            "未在本治理根接入",
+            "出口"
+          ]
+        },
+        {
+          "name": "skills_unenrolled",
+          "argv": [
+            "skills",
+            "--role",
+            "advisor",
+            "--instance",
+            "{advisor_instance}",
+            "--harness",
+            "claude-code",
+            "--workspace-root",
+            "{governance_root}"
+          ],
+          "expect_exit": [
+            1,
+            2,
+            3
+          ],
+          "expect_output": [
+            "未在本治理根接入",
+            "出口"
+          ]
+        }
+      ],
+      "step_timeout_seconds": 120,
+      "install_timeout_seconds": 300
+    },
+    "preflight": {
+      "description": "发布前自检(唯一实现 package_check.preflight; 入口 `npm run preflight` = python3 -m tools.aipos_cli.package_check preflight): 依次 版本单源一致 → npm pack 清单校验(required / forbidden / 凭据)→ 干净 HOME 装包冒烟 → 全量测试 suite_command(在产品仓根运行, 结论以输出末段含 pass_line 且退出码 0 为准); 末行输出一行结论, 全过退出 0, 任一项 FAIL 退出 1。不执行 npm publish、不登录 registry。",
+      "suite_command": [
+        "bash",
+        "tests/run-all.sh"
+      ],
+      "pass_line": "ALL TEST FILES PASS",
+      "suite_timeout_seconds": 3600
+    }
   }
 }
