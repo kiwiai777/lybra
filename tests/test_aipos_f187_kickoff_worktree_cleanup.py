@@ -336,10 +336,19 @@ def test_item1_governance_only_card_kickoff_without_worktree(tmp_path, monkeypat
     from tools.aipos_cli.agent_profiles import load_agent_profiles
     from tools.aipos_cli.queue_mutation import mutate_queue_task
 
+    from test_aipos_f95_harness_launch import _land as _land_ws, _workstation
+
     r = _chris_rig(tmp_path, monkeypatch)
     gov = r["gov"]
-    f78._card(gov, "HBX-G1", "pending", assigned=CHRIS_EXEC, task_mode="governance", extra={"project": CHRIS, "harness": "codex"})
-    claimed = mutate_queue_task(gov, "claim", task_id="HBX-G1", actor=CHRIS_EXEC, dry_run=False, profiles=load_agent_profiles(gov),
+    # AIPOS-F256: 非代码卡一律 pi 执行工位做(子 agent 认领即拒)——本卡由 pi 执行工位认领, 开工稿照出(执行方为 pi, 分工判定放行)
+    pi_exec = f"ops.{CHRIS}.devbox"
+    _land_ws(gov, pi_exec, "executor", _workstation(tmp_path / "home", gov, "chris-ops", "executor", pi_exec))
+    f78._card(gov, "HBX-G1", "pending", assigned=pi_exec, task_mode="governance", extra={"project": CHRIS, "harness": "pi"})
+    sub = f78._card(gov, "HBX-G2", "pending", assigned=CHRIS_EXEC, task_mode="governance", extra={"project": CHRIS, "harness": "codex"})
+    refused = mutate_queue_task(gov, "claim", task_id="HBX-G2", actor=CHRIS_EXEC, dry_run=False, profiles=load_agent_profiles(gov),
+                                with_records=True)
+    assert not refused.get("moved") and "EXECUTOR_DIVISION_REFUSED" in " ".join(refused["blocking_reasons"]), (sub, refused)
+    claimed = mutate_queue_task(gov, "claim", task_id="HBX-G1", actor=pi_exec, dry_run=False, profiles=load_agent_profiles(gov),
                                 with_records=True)
     assert claimed.get("moved") and not claimed.get("worktree_created"), claimed
     rc, brief, err = _cli("kickoff", "--task-id", "HBX-G1", "--workspace-root", str(gov))

@@ -91,7 +91,10 @@ def rig(tmp_path, monkeypatch):
                 workstations={EXEC: {"gate_ssh_alias": "gate-dev", "material_access": "经 ssh gate-dev 读写治理根与产品仓"}})
     (gov / "project.json").write_text(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
     (gov / "5_tasks" / "records" / "sessions").mkdir(parents=True, exist_ok=True)
-    _land_subagent(gov, EXEC, project=CHRIS, harness="codex", host="advmac")
+    # AIPOS-F256 件③: 验证根只认 pi 执行身份——执行实例为 pi 执行工位(原 F190 靶场为 Mac Codex 子 agent, 子 agent 身份写验证根现拒);
+    # 卡面 harness 仍为 codex(本靶场另核开工稿按卡 harness 渲染的沙箱可写根句, 写者身份按认领实例判)
+    ws_exec = _workstation(home, gov, "chris-executor", "executor", EXEC)
+    _land_ws(gov, EXEC, "executor", ws_exec)
     ws = _workstation(home, gov, "chris-auditor", "auditor", AUD)
     _land_ws(gov, AUD, "auditor", ws)
     for card in (CARD, OTHER):

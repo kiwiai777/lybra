@@ -248,6 +248,20 @@ def _card_lane_paths(governance_root: Path, task_id: str) -> tuple[Path, list[st
     return Path(repo), paths
 
 
+def _executor_class_gate(governance_root: Path, result: dict[str, Any], *, want_rank: int, instance: str | None,
+                         task_id: str | None) -> dict[str, Any]:
+    """AIPOS-F256 件③: 面判定已放行的写访问(级别 > read)落在 pi 专属面(roles.schema write_boundary.executor_class_surfaces)时再核写者
+    执行方类别(唯一判定 execution_division.surface_class_problem); 子 agent 身份 = 拒(code / reason 读声明)。其余原样返回。"""
+    if not result.get("allowed") or want_rank == 0:
+        return result
+    from tools.aipos_cli.execution_division import surface_class_problem
+
+    problem = surface_class_problem(governance_root, surface=result.get("surface"), instance=instance, task_id=task_id)
+    if problem is None:
+        return result
+    return {**result, "allowed": False, "code": problem["code"], "reason": problem["reason"]}
+
+
 def check_access(
     governance_root: str | Path,
     *,
@@ -275,6 +289,7 @@ def check_access(
          他机路径只判 validation_root 面(字面), 不在任何声明 base 内 = SURFACE_UNDECLARED。
       8. AIPOS-F251 受控生产发布面: validation_root 不命中时, 路径落在该主机某发布目标的发布根 / 入口 / 其父目录内 = 面 release_target
          (release_target.judge_access: 只声明内精确路径且未存在才放行 append; 父目录其他条目 / 发布根内其他路径 / 已存在 / mutate 一律拒)。
+      9. AIPOS-F256 件③: 7 / 8 两面放行的写访问再核写者执行方类别(_executor_class_gate; 子 agent 身份写 pi 专属面 = 拒)。
     """
     governance_root = Path(governance_root).expanduser().resolve()
     decl = load_write_boundary_declaration()
@@ -301,7 +316,8 @@ def check_access(
                                 granted_rank=_level_rank(decl, granted_vr) if granted_vr else None, instance=instance, task_id=task_id,
                                 run_id=run_id, host_fingerprint=host_fingerprint)
     if vr_result is not None:
-        return {**vr_result, "role_class": cls, "hard_rules": hard_rules}
+        return {**_executor_class_gate(governance_root, vr_result, want_rank=want_rank, instance=instance, task_id=task_id),
+                "role_class": cls, "hard_rules": hard_rules}
     # AIPOS-F251: 受控生产发布面(按主机声明 project.json release_targets; 与 validation_root 是两个面, 判定与文案互不冒充)
     from tools.aipos_cli import release_target as rt
 
@@ -309,7 +325,8 @@ def check_access(
     rt_result = rt.judge_access(governance_root, host=host, raw_path=raw, want_rank=want_rank, granted=granted_rt,
                                 granted_rank=_level_rank(decl, granted_rt) if granted_rt else None)
     if rt_result is not None:
-        return {**rt_result, "role_class": cls, "hard_rules": hard_rules}
+        return {**_executor_class_gate(governance_root, rt_result, want_rank=want_rank, instance=instance, task_id=task_id),
+                "role_class": cls, "hard_rules": hard_rules}
     if remote:
         return {
             "allowed": False, "code": "SURFACE_UNDECLARED", "surface": None, "granted_level": None, "role_class": cls, "host": host,

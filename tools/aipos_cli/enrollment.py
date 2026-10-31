@@ -1714,10 +1714,12 @@ def set_project_execution(
     section: dict[str, Any] = {
         "default_mode": default_mode or decl["schema"]["default_mode"].get("default"),
         "subagent_executor": str(subagent_executor or "").strip(),
-        "pi_allowed_task_modes": [str(m).strip() for m in pi_allowed_task_modes],
         "pi_executor": (str(pi_executor).strip() or None) if pi_executor is not None else None,
         "auditor": str(auditor or "").strip(),
     }
+    # AIPOS-F256 件①: pi_allowed_task_modes 退役为兼容读取(不再改变路由)——未给 = 不写该键(整段重声明即清掉旧键); 给了 = 照写(形校验同旧)
+    if pi_allowed_task_modes:
+        section["pi_allowed_task_modes"] = [str(m).strip() for m in pi_allowed_task_modes]
     staged: dict[str, Any] = {}
 
     def _mutate(data: dict[str, Any]) -> None:

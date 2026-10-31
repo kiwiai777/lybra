@@ -1075,6 +1075,19 @@ def mutate_queue_task(
         if rejection is not None:
             result["blocking_reasons"].append(rejection["message"])
             result["error_code"] = rejection["code"]
+        # AIPOS-F256 件②: 认领核分工(门 MCP / 信封自动放行 / CLI 预览同经本执行器; 唯一判定 execution_division.division_refusal):
+        # 认领者属子 agent 类而 task_mode 为非代码 = 拒并给改派出口; 执行方类别 / 声明读不出 = 拒(fail-closed)
+        from tools.aipos_cli.execution_division import division_refusal
+        from tools.aipos_cli.workspace_config import ExecutionDeclarationError
+
+        try:
+            division = division_refusal(repo_root, {**source_metadata, "task_id": str(source_task.get("task_id") or "")}, stage="claim",
+                                        actor=actor)
+        except (ExecutionDeclarationError, ValueError, OSError) as exc:
+            division = {"code": "EXECUTOR_DIVISION_REFUSED", "message": f"AIPOS-F256: 执行方类别不可判(fail-closed), 拒 claim: {exc}"}
+        if division is not None:
+            result["blocking_reasons"].append(division["message"])
+            result.setdefault("error_code", division["code"])
         # AIPOS-F133 件③: 依赖未满足拒认领(全部 task_class; 判据唯一实现 task_complexity.unmet_dependencies, 只读门生记录,
         # 全部依赖满足才放行)。dependency_gate 级别的 validator 已给出同一拒因时不重复。
         from tools.aipos_cli.task_complexity import unmet_dependencies

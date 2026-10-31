@@ -325,8 +325,35 @@ def _decision_log_pointers(ctx: _Ctx, step: dict[str, Any], fn: Any, *, execute:
     return _migration(ctx, step, fn, execute=execute, actor=actor, item_key="record")
 
 
+def _execution_division(ctx: _Ctx, step: dict[str, Any], fn: Any, *, execute: bool, actor: str | None) -> dict[str, Any]:
+    """AIPOS-F256 件④: 执行分工迁移(execution_division.division_upgrade_step)。机械部分 = 删退役键 execution.pi_allowed_task_modes(落账同
+    config_defaults); 未声明 pi_executor / 在途违例卡(逐张出口)只列不改(既有卡与记录不改写, 由顾问按出口处理)。"""
+    from tools.aipos_cli.execution_division import refusal_exits
+
+    outcome = fn(ctx.root, dry_run=not execute)
+    changes = ([f"project.json 删退役键 execution.pi_allowed_task_modes = {json.dumps(outcome['retired_value'], ensure_ascii=False)}"
+                "(AIPOS-F256: 非代码一律 pi, 该键不再改变路由)"] if outcome["retired_key"] else [])
+    details: list[str] = []
+    if outcome["pi_executor_missing"]:
+        exits = refusal_exits(ctx.root, {}, stage="draft", execution=outcome["execution"])
+        details.append(f"未声明 execution.pi_executor: 非代码卡(在途 {outcome['noncode_cards']} 张; 新起草即拒 EXECUTOR_PI_UNDECLARED)无执行工位。"
+                       f"出口: {exits[0]}")
+    details += [f"在途违例 {v['task_id']}({v['state']}): {v['message']}" for v in outcome["violations"]]
+    details += [f"读不出: {e}" for e in outcome["errors"]]
+    out = {"state": "pending" if changes else "current", "changes": changes, "details": details}
+    if not execute:
+        return out
+    from tools.aipos_cli.governance_commit import land_written_paths
+
+    written = [_rel(ctx.root, outcome["project_json"])] if outcome["removed"] else []
+    landing = land_written_paths(ctx.root, written, str(actor), command=str(step["landing"]), subcommand="upgrade",
+                                 project=ctx.project) if written else None
+    return {**out, "ok": landing is None or bool(landing["landed"]), "written": written, "landing_line": (landing or {}).get("line"),
+            "detail": "; ".join(changes) or "无退役键"}
+
+
 _ADAPTERS = {"config_defaults": _config_defaults, "workstation_charter": _workstation_charter, "record_type": _record_type,
-             "decision_log_pointers": _decision_log_pointers}
+             "decision_log_pointers": _decision_log_pointers, "execution_division": _execution_division}
 
 
 # ---------------------------------------------------------------------------

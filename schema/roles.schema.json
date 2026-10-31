@@ -355,6 +355,13 @@
         "evidence": "2026-10-12 chris LANTU-UI3-S1R: 补审声明命令 /usr/bin/node 在审计主机不存在, 审计用实际 node 跑通后被逐字判据拒收, 于是 sudo 建 /usr/bin/node 系统符号链接再逐字重跑(AIPOS-F165)"
       }
     ],
+    "executor_class_surfaces": {
+      "description": "AIPOS-F256 件③(Owner 10-31 产品化第 5 项: 非代码一律 pi): 只认 pi 执行身份的写面(验证根 / 受控发布目标——远端主机类写面)。写访问(级别 > read)落在 surfaces 所列面时, 写者(--instance, 缺 = 本卡认领实例)的执行方类别(enums.schema task_mode.executor.classes, 判定 execution_division.instance_class: 执行方式声明 / 接入登记)不在 classes = 拒 code(子 agent 身份写这些面); 写者不可判 = 按既有判据。判定唯一 execution_division.surface_class_problem(write_boundary.check_access 在面判定放行后调用; 验证根声明 / 发布计划同经 check_access 或 task_ownership_problems)。",
+      "surfaces": ["validation_root", "release_target"],
+      "classes": ["pi"],
+      "code": "SURFACE_EXECUTOR_CLASS",
+      "reason": "面 {surface} 只认 pi 执行身份(roles.schema write_boundary.executor_class_surfaces), 写者 {instance} 属 {cls}({basis}), 拒; 出口: 该写入交 pi 执行工位做(非代码卡一律 pi; 卡改派见 lybra queue amend / withdraw 的分工拒因出口)"
+    },
     "charter_render": "章程渲染物(distribution.schema charter_render_semantics)附本面的该角色行 + hard_rules 为「写权限边界(声明渲染)」节, 所有角色章程同源下发",
     "validation_root": {
       "description": "AIPOS-F190(chris OTA HBJOTA-60/61 实撞: Mac 上按卡隔离验证在 write-boundary 判 SURFACE_UNDECLARED): 跨机临时验证根——面 validation_root 的判定细则、base 禁区、工具写入重定向与子 agent harness 沙箱渲染的唯一声明。声明存储 = project.json validation_roots(config.schema configuration_sources.project_json.schema.validation_roots); 判定唯一实现 = write_boundary.check_access(经 validation_root.judge_access); 主机身份与主机侧 realpath 判定唯一实现 = tools/aipos_cli/validation_root_helper.py(纯标准库单文件, 治理根侧 import 同一函数)。",

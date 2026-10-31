@@ -504,6 +504,12 @@ def task_ownership_problems(governance_root: Path, *, instance: str, role_class:
     from tools.aipos_cli.audit_derivation import audit_card_reviewed_id, is_audit_card
     from tools.aipos_cli.workspace_config import project_execution
 
+    from tools.aipos_cli.execution_division import surface_class_problem
+
+    # AIPOS-F256 件③: 验证根只认 pi 执行身份(子 agent 身份声明 / 开 run = 拒; 判定唯一 execution_division.surface_class_problem)
+    gate = surface_class_problem(governance_root, surface=SURFACE, instance=instance, task_id=None)
+    if gate is not None:
+        return [f"{gate['code']}: {gate['reason']}"]
     fm = _card_fm(governance_root, task_id)
     audit = is_audit_card(task_id, fm or None)
     if card_kinds()[role_class] == "execution_card":

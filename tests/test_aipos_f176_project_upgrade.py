@@ -143,12 +143,12 @@ def test_item1_preview_confirm_idempotent(urig):
     assert rc == 0 and err == ""
     assert _snapshot(home) == before and (urig["ws_audit"] / "AGENTS.md").read_text(encoding="utf-8") == ws_agents, "预演零写入"
     assert "预览(未写; 加 --confirm --actor <实例或 owner>" in out
-    assert re.search(r"^\[1/4\] 配置缺省补齐: 待升级 — ", out, re.M)
+    assert re.search(r"^\[1/5\] 配置缺省补齐: 待升级 — ", out, re.M)
     assert "会改: project.json 补 charter_auto_sync = true" in out and "会改: project.json 补 launch_resume_max = 2" in out
-    assert re.search(r"^\[2/4\] 工位章程同步: 待升级 — ", out, re.M)
+    assert re.search(r"^\[2/5\] 工位章程同步: 待升级 — ", out, re.M)
     assert f"{AUD} @ {urig['ws_audit']}: stale: " in out and "unrendered" in out and "lybra sync --harness-root" in out
-    assert re.search(r"^\[3/4\] 记录类型补齐: 待升级 — ", out, re.M) and f"会改: {urig['snap']}  类型 audit_report_snapshot" in out
-    assert re.search(r"^\[4/4\] 决策指针补生成: 待升级 — ", out, re.M) and "envelope-pol_f160_b.md → " in out
+    assert re.search(r"^\[3/5\] 记录类型补齐: 待升级 — ", out, re.M) and f"会改: {urig['snap']}  类型 audit_report_snapshot" in out
+    assert re.search(r"^\[4/5\] 决策指针补生成: 待升级 — ", out, re.M) and "envelope-pol_f160_b.md → " in out
     assert "推导不出·不改 3 份(列出不改; 明细: lybra migrate decision-log-pointers --workspace-root" in out
     assert f"    {ADV}: 1 条" in out and f"    {ADV2}: 1 条" in out
     assert "合计: 待升级 4 项(机械, --confirm 一次执行)" in out
@@ -164,11 +164,11 @@ def test_item1_preview_confirm_idempotent(urig):
     _show(f"[①·确认] rc={rc}\n{out}{err}[①·git log -4] {log}\n[①·status] {status!r} pushed={pushed}")
     assert rc == 0 and err == ""
     for i, label in enumerate(("配置缺省补齐", "工位章程同步", "记录类型补齐", "决策指针补生成"), 1):
-        assert re.search(rf"^\[{i}/4\] {label}: 已执行 — ", out, re.M), label
+        assert re.search(rf"^\[{i}/5\] {label}: 已执行 — ", out, re.M), label
     assert out.count("落账: verdict=PASS committed=True pushed=True") == 3
     assert log[:3] == ["chore(governance): decision_log 指针补生成 3 份", "chore(governance): 记录类型补齐迁移 1 份",
                        f"chore(governance): 项目配置落账 upgrade {PROJECT}"] and pushed
-    assert "结果: 已执行 4 步 · 跳过 0 步 · 失败 0 步 · 未执行 0 步" in out
+    assert "结果: 已执行 4 步 · 跳过 1 步 · 失败 0 步 · 未执行 0 步" in out
     data = json.loads((gov / "project.json").read_text(encoding="utf-8"))
     assert data["charter_auto_sync"] is True and data["launch_resume_max"] == 2
     assert f164.RENDER_MARK in (urig["ws_audit"] / "AGENTS.md").read_text(encoding="utf-8")
@@ -179,11 +179,11 @@ def test_item1_preview_confirm_idempotent(urig):
     head = _git(home, "rev-parse", "HEAD")
     rc, out, err = _upgrade(urig, "--confirm", "--actor", ADV)
     _show(f"[①·幂等重跑确认] rc={rc}\n{out}{err}")
-    assert rc == 0 and "无事可做: 各步均已是最新 / 不适用" in out and "结果: 已执行 0 步 · 跳过 4 步 · 失败 0 步 · 未执行 0 步" in out
+    assert rc == 0 and "无事可做: 各步均已是最新 / 不适用" in out and "结果: 已执行 0 步 · 跳过 5 步 · 失败 0 步 · 未执行 0 步" in out
     assert _git(home, "rev-parse", "HEAD") == head and "落账" not in out
     rc, out, err = _upgrade(urig, "--json")
     plan = json.loads(out)
-    assert rc == 0 and plan["pending"] == [] and [s["state"] for s in plan["steps"]] == ["current"] * 4
+    assert rc == 0 and plan["pending"] == [] and [s["state"] for s in plan["steps"]] == ["current"] * 5
 
 
 def test_item1_midway_failure_stops_and_keeps_done_steps(urig, monkeypatch):
@@ -203,12 +203,12 @@ def test_item1_midway_failure_stops_and_keeps_done_steps(urig, monkeypatch):
     log = _git(home, "log", "--format=%s", "-1")
     _show(f"[①·中途失败] rc={rc}\n{out}{err}[①·git log -1] {log}")
     assert rc == 3 and out == ""
-    assert re.search(r"^\[1/4\] 配置缺省补齐: 已执行 — ", err, re.M) and "落账: verdict=PASS committed=True pushed=True" in err
-    assert re.search(r"^\[2/4\] 工位章程同步: 失败 — " + re.escape(AUD) + r": sync 出错: RuntimeError: fixture: 门分发取件不可用", err, re.M)
-    assert re.search(r"^\[3/4\] 记录类型补齐: 未执行\(前一步失败已停\)", err, re.M)
-    assert re.search(r"^\[4/4\] 决策指针补生成: 未执行\(前一步失败已停\)", err, re.M)
+    assert re.search(r"^\[1/5\] 配置缺省补齐: 已执行 — ", err, re.M) and "落账: verdict=PASS committed=True pushed=True" in err
+    assert re.search(r"^\[2/5\] 工位章程同步: 失败 — " + re.escape(AUD) + r": sync 出错: RuntimeError: fixture: 门分发取件不可用", err, re.M)
+    assert re.search(r"^\[3/5\] 记录类型补齐: 未执行\(前一步失败已停\)", err, re.M)
+    assert re.search(r"^\[4/5\] 决策指针补生成: 未执行\(前一步失败已停\)", err, re.M)
     assert "已停止: 第 2 步「工位章程同步」失败, 已成功步保留" in err
-    assert "结果: 已执行 1 步 · 跳过 0 步 · 失败 1 步 · 未执行 2 步" in err
+    assert "结果: 已执行 1 步 · 跳过 0 步 · 失败 1 步 · 未执行 3 步" in err
     assert log == f"chore(governance): 项目配置落账 upgrade {PROJECT}"
     assert json.loads((gov / "project.json").read_text(encoding="utf-8"))["charter_auto_sync"] is True, "已成功步保留"
     assert f"?? {PROJECT}/{urig['snap']}" in _git(home, "status", "--porcelain", "-uall"), "后续步未执行"
@@ -216,8 +216,8 @@ def test_item1_midway_failure_stops_and_keeps_done_steps(urig, monkeypatch):
     monkeypatch.setattr(RepoGate, "call_tool", real_call)
     rc, out, err = _upgrade(urig, "--confirm", "--actor", ADV)
     _show(f"[①·修好后重跑] rc={rc}\n{out}{err}")
-    assert rc == 0 and re.search(r"^\[1/4\] 配置缺省补齐: 跳过 — 已是最新", out, re.M)
-    assert "结果: 已执行 3 步 · 跳过 1 步 · 失败 0 步 · 未执行 0 步" in out
+    assert rc == 0 and re.search(r"^\[1/5\] 配置缺省补齐: 跳过 — 已是最新", out, re.M)
+    assert "结果: 已执行 3 步 · 跳过 2 步 · 失败 0 步 · 未执行 0 步" in out
 
 
 def test_item1_not_applicable_and_unresolved_target(tmp_path, monkeypatch):
@@ -233,8 +233,8 @@ def test_item1_not_applicable_and_unresolved_target(tmp_path, monkeypatch):
     rc, out, err = _cli("project", "upgrade", "f176-bare", "--home-root", hroot)
     _show(f"[①·非 git 治理根 / 无工位] rc={rc}\n{out}{err}")
     assert rc == 0
-    assert re.search(r"^\[2/4\] 工位章程同步: 不适用 — ", out, re.M) and "本项目无已接入的本机工位" in out
-    assert re.search(r"^\[3/4\] 记录类型补齐: 不适用 — ", out, re.M) and "不在 git 工作树内" in out
+    assert re.search(r"^\[2/5\] 工位章程同步: 不适用 — ", out, re.M) and "本项目无已接入的本机工位" in out
+    assert re.search(r"^\[3/5\] 记录类型补齐: 不适用 — ", out, re.M) and "不在 git 工作树内" in out
     assert "(本项目无已接入顾问实例)" in out and "顾问实例 <你的顾问实例>:" in _cli("project", "upgrade", "f176-bare", "--home-root", hroot, "--guidance")[1]
     rc, out, err = _cli("project", "upgrade", "no-such-project", "--home-root", hroot)
     _show(f"[①·项目解析不出] rc={rc}\n{out}{err}")
@@ -347,7 +347,7 @@ def test_item2_board_page_badge_preview_confirm(board):
     assert status == 200 and 'data-owner="true"' in page and 'class="upgrade-preview-button"' in page
     # 章程步取记录真相: 无判定记录 = 待现核, 不计数
     assert re.search(r'<h2 data-pending="3" data-guidance="\d+">', page)
-    assert "[2/4] 工位章程同步: 待现核" in html.unescape(page)
+    assert "[2/5] 工位章程同步: 待现核" in html.unescape(page)
     assert html.escape(f"告诉 {ADV}: {NOTICE_ACTION}") in page
     status, ro = _request(board, f"/owner/upgrade?project={PROJECT}", who="advisor")
     assert status == 200 and 'data-owner="false"' in ro and "upgrade-preview-button" not in ro and "只读视图" in ro
@@ -364,13 +364,13 @@ def test_item2_board_page_badge_preview_confirm(board):
     _show(f"[②·Owner 预演] {status}\n" + "\n".join(pre.get("preview_lines") or [json.dumps(pre, ensure_ascii=False)]))
     assert status == 200 and pre["ok"] and pre["preview_token"] and pre["params"]["pending"] == [
         "config_defaults", "workstation_charter", "record_type", "decision_log_pointers"]
-    assert any("[2/4] 工位章程同步: 待升级" in ln for ln in pre["preview_lines"])
+    assert any("[2/5] 工位章程同步: 待升级" in ln for ln in pre["preview_lines"])
     assert _snapshot(home) == before, "预演零写入"
     status, done = _post(board, {"workspace": PROJECT, "stage": "confirm", "preview_token": pre["preview_token"]})
     _show(f"[②·Owner 确认] {status}\n" + "\n".join(done.get("result_lines") or [json.dumps(done, ensure_ascii=False)]))
     assert status == 200 and done["ok"] and done["capture_surface"] == "board"
     assert done["actor"].startswith("board:owner:owner-fixture:session-sha256:")
-    assert "结果: 已执行 4 步 · 跳过 0 步 · 失败 0 步 · 未执行 0 步" in done["result_lines"]
+    assert "结果: 已执行 4 步 · 跳过 1 步 · 失败 0 步 · 未执行 0 步" in done["result_lines"]
     msg = _git(home, "log", "-1", "--format=%B")
     _show(f"[②·git log -1]\n{msg}")
     assert f"Actor: {done['actor']}" in msg
@@ -482,7 +482,9 @@ def test_single_implementations_and_declarations():
         "workstation_charter": ("tools.aipos_cli.distribution_sync.charter_freshness",
                                 "tools.aipos_cli.distribution_sync.sync_workstation_charter", None),
         "record_type": ("tools.aipos_cli.record_type_migration.run_record_type_migration",) * 2 + ("migrate_record_type",),
-        "decision_log_pointers": ("tools.aipos_cli.decision_log_pointers.run_pointer_backfill",) * 2 + ("migrate_decision_log_pointers",)}
+        "decision_log_pointers": ("tools.aipos_cli.decision_log_pointers.run_pointer_backfill",) * 2 + ("migrate_decision_log_pointers",),
+        # AIPOS-F256 件④: 执行分工迁移步(只追加; 删退役键 pi_allowed_task_modes, 落账同 config_defaults)
+        "execution_division": ("tools.aipos_cli.execution_division.division_upgrade_step",) * 2 + ("project_writers",)}
     assert set(decl["guidance"]["onboarding_items"]) <= set(ONBOARDING_CHECKS)
     assert upgrade_fill_defaults() == {"charter_auto_sync": True, "launch_resume_max": 2}
     src = (REPO_ROOT / "tools" / "aipos_cli" / "project_upgrade.py").read_text(encoding="utf-8")

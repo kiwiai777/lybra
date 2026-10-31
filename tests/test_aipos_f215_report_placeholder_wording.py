@@ -322,7 +322,10 @@ def test_item3_kickoff_no_write_lines_derive_from_role_rows(rig):
     boundary = build_write_boundary(gov, role="executor", harness_root=gov)
     rows = {r["surface"]: r["path"] for r in role_rows(boundary, "executor", task_id=CARD)}
     assert f"- 禁写治理根 `{rows['governance_root']}`(唯一例外: 本卡报告落点 `{rows['return_slot']}` 及其下" in section
-    assert "禁写工位" not in section  # 子 agent 无工位 = 不出工位行(与改前一致)
+    # AIPOS-F256 件③: 本靶场(F190 chris 形)执行实例改为 pi 执行工位(验证根只认 pi 执行身份)= 有工位, 出工位行;
+    # 「子 agent 无工位 = 不出工位行」的分支仍在开工稿(subagent_kickoff: omit_surfaces=harness_root), 本靶场不再有子 agent 写验证根
+    ws_exec = Path(rig["home"]) / "workstations" / "chris-executor"
+    assert f"- 禁写工位 `{ws_exec}`" in section
     ws = Path(rig["home"]) / "workstations" / "chris-auditor"
     aud = no_write_lines(build_write_boundary(gov, role="auditor", harness_root=ws), "auditor", task_id=f"{CARD}R")
     _show("---- 件③ 审计体禁写行(write_boundary.no_write_lines)----\n" + "\n".join(aud))

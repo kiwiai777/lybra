@@ -90,7 +90,7 @@ def vrig(rig, monkeypatch):  # noqa: F811
     sha, tree = f78._branch_with_commit(rig.code_repo, SRC, rel="Scripts/joint/run.py")
     f78._card(rig.gov, SRC, "completed", extra={"harness": "claude-code"})
     f78._card(rig.gov, VAL, "pending", task_mode="validation",
-              extra={"harness": "claude-code", "audit_by": AUDITOR, "validation_source_task": SRC, "validation_candidate": sha,
+              extra={"harness": "pi", "audit_by": AUDITOR, "validation_source_task": SRC, "validation_candidate": sha,
                      "output_target": f"task_cards/{VAL}/artifacts/"})
     init_governance_repo(rig.gov)
     rig.candidate, rig.tree = sha, tree
@@ -327,7 +327,7 @@ def test_scope_add_governance_outputs_card_fail_rework_rewrite_dispatches_r2(rig
         policy_id=POLICY_D, agent_or_role="advisor", active_from="2026-01-01T00:00:00Z", expires_at="2999-01-01T00:00:00Z",
         max_tasks=20, owner_approval_ref="fixture-envelope-f218", task_selector_task_mode="docs", launch_harnesses=["pi"]))
     f78._card(rig.gov, GOV, "pending", task_mode="docs",
-              extra={"harness": "claude-code", "audit": "required", "audit_by": AUDITOR, "output_target": f"task_cards/{GOV}/artifacts/",
+              extra={"harness": "pi", "audit": "required", "audit_by": AUDITOR, "output_target": f"task_cards/{GOV}/artifacts/",
                      "lane": {"repo": "governance_root", "paths": [f"task_cards/{GOV}/artifacts/"], "roles": ["executor"]}})
     init_governance_repo(rig.gov)
     seen: list[str] = []

@@ -386,7 +386,8 @@ def test_item2_wizard_and_docs_have_no_code_on_command_line(tmp_path):
         text = format_guide_text(guide) + json.dumps(guide, ensure_ascii=False)
         delivers = [ln for st in guide["steps"] for ln in str(st["command"]).splitlines() if "enroll-deliver" in ln and not ln.startswith("#")]
         _show(f"[②·向导 {name}] enroll-deliver 行 {len(delivers)} 条; '--code' 出现 {text.count('--code')} 次; 'enroll-code' 出现 {text.count('enroll-code')} 次")
-        assert "--code" not in text and "enroll-code" not in text and len(delivers) == 6
+        # AIPOS-F256 件④: 子 agent 模式另有 pi 执行工位接入(非代码卡一律 pi; 与审计工位同级)= 多一对预演 / 确认
+        assert "--code" not in text and "enroll-code" not in text and len(delivers) == (8 if kw.get("executor_mode") == "subagent" else 6)
     pattern = r"roles enroll --code|--code '|--code \"|--code <"
     hits = subprocess.run(["git", "grep", "-nE", pattern, "--", "docs", "tools/aipos_cli/README.md"], cwd=REPO_ROOT,
                           capture_output=True, text=True)

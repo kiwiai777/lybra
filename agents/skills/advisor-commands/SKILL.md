@@ -470,8 +470,12 @@ lybra project check-workstation <项目名> --home-root <home根> --instance <�
 按角色覆盖优先于项目缺省; 执行 / 审计章程不变(模型对执行体透明)。跨机工位: 可用性按本机 pi 清单核, 工位所在机的 pi 配置在该机 `pi --list-models` 核。
 
 #### 非代码工作交 pi(AIPOS-F196: 验证卡 task_mode=validation + pi 执行工位 + 经 ssh 操作目标主机)
-**分工**(Owner 10-20 定, 任何项目同一组命令, 在治理根所在机运行): 代码卡 = 你派子 agent(`lybra kickoff`); 验证 / 环境 / 文档卡 = pi 执行工位
-(loop 自动拉起, 你不派工); 审计 = 独立 pi 审计工位。验证卡保留独立审计、N5 无合入(finalize 写明「验证卡无合入」, 不合并不推送不部署); 环境卡(config)
+**分工**(Owner 10-20 定; AIPOS-F256 Owner 10-31 收紧为产品强制, 任何项目同一组命令, 在治理根所在机运行): 代码卡 = 你派子 agent(`lybra kickoff`);
+**一切非代码卡**(docs / governance / config / validation)= pi 执行工位(loop 自动拉起, 你不派工); 审计 = 独立 pi 审计工位。执行方按 task_mode 声明
+(enums.schema task_mode.executor), 起草 / 发卡 / 认领 / 开工稿 / 交回五处同判: 子 agent 接非代码卡 = 拒 `EXECUTOR_DIVISION_REFUSED`(拒因带改派出口原文:
+待认领卡 `lybra queue amend` 改派 pi、已认领卡撤卡重发); 项目未声明 pi 执行工位 = 非代码卡起草即拒 `EXECUTOR_PI_UNDECLARED`(出口 = 接入 pi 执行工位后
+`set-execution --pi-executor`); 代码卡交回须在车道内真有产品仓改动(否则 `INGEST_CODE_CHANGE_EMPTY`); 验证根 / 发布目标只认 pi 执行身份。
+旧键 `execution.pi_allowed_task_modes` 退役(不再改变路由), `lybra project upgrade` 预演列出在途违例卡与逐张出口、确认即删该键; `lybra roles list` 末段同列。验证卡保留独立审计、N5 无合入(finalize 写明「验证卡无合入」, 不合并不推送不部署); 环境卡(config)
 由你复核(loop 停在「非代码卡快车道:顾问直接审」)。代码卡只做实现与离线测试, 验证 / 环境类工作单独出卡交 pi。
 
 **先生成切换计划(AIPOS-F198)**: 下面各步的命令、顺序与「哪些已完成」由产品推导, 不手写——Owner 在看板项目「工位设置」页选好目标分工后转给你的提示词,
@@ -496,9 +500,9 @@ lybra sync --harness-root <工位目录> --workspace-root <治理根> --adopt-ha
 lybra project check-workstation <项目名> --home-root <home根> --instance <执行体实例> --harness pi
 ```
    工位仓若是 Owner 的集中仓(多机同步), 备份文件与渲染后的章程由 Owner 提交同步, 你不 commit 工位仓。
-2. **声明执行方式**(列内 task_mode 起草缺省 harness=pi、assigned_to=pi 执行实例; code 不列 = 仍子 agent; 预演后同参加 `--confirm --actor <你的顾问实例>`):
+2. **声明执行方式**(非代码卡起草缺省 harness=pi、assigned_to=pi 执行实例; 代码卡缺省子 agent; 预演后同参加 `--confirm --actor <你的顾问实例>`):
 ```bash
-lybra project set-execution <项目名> --home-root <home根> --subagent-executor <子agent执行实例> --auditor <审计体实例> --pi-executor <执行体实例> --pi-allowed-task-mode validation --pi-allowed-task-mode config --pi-allowed-task-mode docs --dry-run
+lybra project set-execution <项目名> --home-root <home根> --subagent-executor <子agent执行实例> --auditor <审计体实例> --pi-executor <执行体实例> --dry-run
 ```
 3. **pi 经 ssh 操作目标主机**(pi 工位在治理根所在机, 验证在他机如 Mac): 声明目标主机的 ssh 别名(治理根所在机 `~/.ssh/config` 的 Host 名);
    之后该主机上「工位在本机」实例的验证根节 / 开工提示 / `init-command` 一律给 `ssh <别名> '<命令>'`, helper 经管道送入(不落目标主机)。约束 = 章程 + 目标主机

@@ -3377,8 +3377,8 @@ def build_parser() -> argparse.ArgumentParser:
     project_setexec_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory)")
     project_setexec_parser.add_argument("--subagent-executor", required=True, metavar="INSTANCE", help="Sub-agent executor instance (enrolled with lybra roles enroll --executor-mode subagent); default assigned_to of drafted cards")
     project_setexec_parser.add_argument("--auditor", required=True, metavar="INSTANCE", help="Independent pi auditor workstation instance (must have a workstation location); default audit_by of drafted cards")
-    project_setexec_parser.add_argument("--pi-executor", default=None, metavar="INSTANCE", help="pi executor workstation instance (required when --pi-allowed-task-mode is given)")
-    project_setexec_parser.add_argument("--pi-allowed-task-mode", action="append", dest="pi_allowed_task_modes", default=[], metavar="TASK_MODE", help="task_mode the Owner explicitly allows to go to the pi executor (repeatable; enums.schema task_mode); unlisted = sub-agent default")
+    project_setexec_parser.add_argument("--pi-executor", default=None, metavar="INSTANCE", help="pi executor workstation instance (AIPOS-F256: every non-code card — docs/governance/config/validation — goes to it; sub-agents take code cards only)")
+    project_setexec_parser.add_argument("--pi-allowed-task-mode", action="append", dest="pi_allowed_task_modes", default=[], metavar="TASK_MODE", help="RETIRED (AIPOS-F256): compatibility only, no longer changes routing (non-code always goes to the pi executor); omit it — `lybra project upgrade` removes the stored key")
     project_setexec_parser.add_argument("--default-mode", default=None, help="Default execution mode (config.schema project_json.execution.default_mode enum; default subagent)")
     project_setexec_parser.add_argument("--subagent-max-wait", type=float, default=None, metavar="SECONDS", help="AIPOS-F185: how long `lybra loop` waits for a sub-agent executor/auditor return by default (project.json execution.subagent_max_wait; omitted = keep the current value, absent = verbs.schema lybra_loop.wait_limits default)")
     project_setexec_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
@@ -4962,6 +4962,10 @@ def main(argv: list[str] | None = None) -> int:
                          "hierarchy": session_hierarchy(workspace_root, s, _sessions),
                          "session_settings": session_view(workspace_root, s, peers=_peers)}
                         for s in _sessions]
+                    # AIPOS-F256 件④: 执行分工诊断(pi 执行工位声明 + 在途违例卡逐张出口; 判定唯一 execution_division)
+                    from tools.aipos_cli.execution_division import division_summary
+
+                    result["execution_division"] = division_summary(workspace_root)
                     print(render_json(result))
                 else:
                     # Render table
@@ -4973,6 +4977,9 @@ def main(argv: list[str] | None = None) -> int:
                         if role_info.get("validation_message"):
                             print(f"  ⚠ {role_info['validation_message']}")
                     print("\n".join(render_advisor_sessions(workspace_root)))
+                    from tools.aipos_cli.execution_division import division_summary
+
+                    print("\n".join(division_summary(workspace_root)["lines"]))  # AIPOS-F256 件④
             elif args.roles_command == "reconcile":
                 result = roles_reconcile_report(workspace_root, connection_target=connection_target)
                 if getattr(args, "json", False):
@@ -5686,8 +5693,9 @@ def main(argv: list[str] | None = None) -> int:
                 return _project_json_two_phase_emit(
                     "set-execution", target, {k: outcome[k] for k in ("dry_run", "changed", "written", "diff", "project_json")},
                     actor=args.actor, json_out=getattr(args, "json", False), extra={"execution": view},
-                    details=[f"execution.{k} = {view[k]!r}" for k in ("default_mode", "subagent_executor", "pi_allowed_task_modes",
-                                                                       "pi_executor", "auditor")]
+                    details=[f"execution.{k} = {view[k]!r}" for k in ("default_mode", "subagent_executor", "pi_executor", "auditor")]
+                    + (["execution.pi_allowed_task_modes(AIPOS-F256 退役, 不再改变路由) = "
+                        f"{view['pi_allowed_task_modes']!r}"] if view["pi_allowed_task_modes"] else [])
                     + ([f"execution.subagent_max_wait = {args.subagent_max_wait:g}(子 agent 执行方式下 loop 等交回缺省上限, 秒)"]
                        if args.subagent_max_wait is not None else [])
                     + ["各实例已核: 本项目已接入(审计者 / pi 执行者有工位位置); 起草缺省与发卡核身份同读本段"])

@@ -33,9 +33,9 @@
 - ✅ **推进**:`lybra loop --task-id <卡ID>`——认领(信封一段式, 门内同步建工作树)、交回与裁决经产物入口入门、
   派审、finalize、close 全由产品执行;顾问不写任何直接调门接口的脚本。
 - ✅ **派生子 agent(非 pi 引擎)**:开工物只用 `lybra card render --task-id <卡ID> --harness <引擎>` 的渲染物。
-- ✅ **分工(AIPOS-F196, Owner 10-20 定)**:**代码卡 = 你派子 agent**(loop 等待提示 `manual_kickoff` 子 agent 模式, 开工稿
-  `lybra kickoff`);**验证 / 环境 / 文档卡 = pi 执行工位**(project.json `execution.pi_allowed_task_modes` 列内的 task_mode 起草缺省
-  harness=pi、assigned_to=pi_executor, `lybra loop` 自动拉起, 你不派工、不敲 `/go`);**审计 = 独立 pi 审计工位**。验证卡(task_mode=validation)
+- ✅ **分工(AIPOS-F196 / F256, 产品强制)**:**代码卡 = 你派子 agent**(loop 等待提示 `manual_kickoff` 子 agent 模式, 开工稿
+  `lybra kickoff`);**一切非代码卡 = pi 执行工位**(起草缺省 harness=pi、assigned_to=pi_executor, `lybra loop` 自动拉起, 你不派工、
+  不敲 `/go`; 子 agent 接非代码卡五处同判即拒并给出口);**审计 = 独立 pi 审计工位**。验证卡(task_mode=validation)
   保留独立审计、无合入;环境卡(config)由你复核(loop 停在「非代码卡快车道:顾问直接审」)。验证 / 环境类工作单独出卡交 pi,
   代码卡只做实现与离线测试。起草要点见技能手册「非代码工作交 pi」节。
   **AIPOS-F197**:只写治理根的文档 / 配置卡(卡稿 `lane.repo: governance_root`)同样交 pi——开工提示给「产物落点」, 交回 = `outputs` 产出清单(产品核 sha256,

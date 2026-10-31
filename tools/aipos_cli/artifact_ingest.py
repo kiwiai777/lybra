@@ -1469,6 +1469,19 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
                 f"出口: 执行体补齐后产品自动重试(loop 重推导)。补法: {problem['fix']}" + (f"。{problem['note']}" if problem["note"] else "")
             ]
             return out
+        # AIPOS-F256 件②: 交回入口核分工(与起草 / 发卡 / 认领 / 开工稿同一判定 execution_division.division_refusal): 交回者(卡面认领实例)
+        # 属子 agent 类而 task_mode 为非代码 = 拒并给撤卡重发出口; 执行方类别 / 声明读不出 = 拒(fail-closed)
+        from tools.aipos_cli.execution_division import division_refusal
+        from tools.aipos_cli.workspace_config import ExecutionDeclarationError
+
+        try:
+            division = division_refusal(workspace_root, {**card_fm, "task_id": str(card_fm.get("task_id") or task_id)}, stage="return",
+                                        actor=str(card_fm.get("claimed_by") or "").strip() or None)
+        except (ExecutionDeclarationError, ValueError, OSError) as exc:
+            division = {"code": "EXECUTOR_DIVISION_REFUSED", "message": f"AIPOS-F256: 执行方类别不可判(fail-closed): {exc}"}
+        if division is not None:
+            out["category"], out["reasons"] = division["code"], [division["message"]]
+            return out
         # AIPOS-F252 件②: 交回结果 outcome(可选, 缺 = done)值须在 enums.schema return_outcome(判定唯一 next_resolver.report_return_outcome)
         from tools.aipos_cli.next_resolver import report_return_outcome, return_outcome_declaration
 
@@ -1581,6 +1594,15 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
                 out["header_problem"] = return_header_problem(workspace_root, task_id, card_fm, fm, mismatched={"tree_hash": (tree_hash, tree)})
             out["category"] = "INGEST_TREE_MISMATCH"
             out["reasons"] = [f"{commit_sha[:12]} tree={str(tree)[:12]} ≠ Return 自述 tree_hash={tree_hash[:12]}"]
+            return out
+        # AIPOS-F256 件③(防挂羊头): 代码卡交回(结果 = 缺省 done; blocked 停线交回本就未达成验收, 不核)须在卡车道内相对认领基线有产品仓改动
+        # (唯一判定 execution_division.code_change_problem)
+        from tools.aipos_cli.execution_division import code_change_problem
+
+        empty = (code_change_problem(workspace_root, task_id, card_fm, code_repo=code_repo, commit_sha=commit_sha)
+                 if outcome_value == str(return_outcome_declaration()["default"]) else None)
+        if empty is not None:
+            out["category"], out["reasons"] = "INGEST_CODE_CHANGE_EMPTY", [empty]
             return out
         out["ok"], out["category"], out["exit_code"] = True, "OK", INGEST_EXIT_RECORDED
         return out

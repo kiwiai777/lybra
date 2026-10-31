@@ -644,7 +644,7 @@
               "items": {
                 "$enum": "task_mode"
               },
-              "description": "Owner 明示允许派 pi 执行工位的 task_mode 列表(值域 enums.schema task_mode); 未列明 = 按缺省(子 agent)。起草卡显式给 harness=pi(或 assigned_to=pi_executor)且 task_mode 在列才派 pi; 不在列 = 起草/发卡拒 EXECUTION_PI_NOT_ALLOWED。AIPOS-F196 件②(Owner 10-20 定: 只有代码卡由顾问派子 agent, 其他非代码工作拉 pi): 卡稿既未给 harness 也未给 assigned_to 而 task_mode 在列 = 起草缺省 harness=pi、assigned_to=pi_executor(loop 自动拉起); 判定唯一 workspace_config.execution_wants_pi。chris 形: --pi-allowed-task-mode validation --pi-allowed-task-mode config --pi-allowed-task-mode docs(code 不列 = 仍子 agent)。"
+              "description": "AIPOS-F256 件①: 退役为兼容读取(Owner 10-31 产品化第 5 项: 非代码一律 pi, 由 enums.schema task_mode.executor 按 task_mode 声明执行方, 不再按项目选配)——存在时只做形校验(值域 enums.schema task_mode; 非空须声明 pi_executor), 不再改变路由; `lybra project upgrade` 预演提示可删、确认即删(execution_division.division_upgrade_step)。原语义(AIPOS-F143 / F196): Owner 明示允许派 pi 执行工位的 task_mode 列表。"
             },
             "pi_executor": {
               "type": "string",
@@ -690,7 +690,7 @@
             "PI_MODEL_CATALOG_UNAVAILABLE": "set-model: 本机 pi 已配置模型清单取不到(pi 不在 PATH / 超时 / 非零退出 / 输出无表头); 核不了不写(fail-closed)",
             "PI_MODEL_OWNER_REF_REQUIRED": "set-model: 缺 --owner-ref(Owner 指示摘要或决定记录); 切换模型须可追溯到 Owner 指示",
             "EXECUTION_INSTANCE_NOT_ENROLLED": "声明的实例不是本项目已接入实例(或审计者 / pi 执行者无工位位置); 出口: 先按 lybra onboarding guide 接入该实例(子 agent 执行者: --executor-mode subagent), 再声明",
-            "EXECUTION_PI_NOT_ALLOWED": "卡要派 pi 执行工位, 但其 task_mode 不在 execution.pi_allowed_task_modes(Owner 未明示)或未声明 pi_executor; 出口: 去掉 harness=pi 按缺省派子 agent, 或请 Owner 明示后 lybra project set-execution 追加 --pi-allowed-task-mode"
+            "EXECUTION_PI_NOT_ALLOWED": "AIPOS-F256 退役(无产生方; 原 F143 按 pi_allowed_task_modes 拒派 pi): 分工拒因改由 enums.schema task_mode.executor.reject_codes(EXECUTOR_DIVISION_REFUSED / EXECUTOR_PI_UNDECLARED)给出; 本键保留供存量记录查阅"
           }
         },
         "return_summary_source": {
