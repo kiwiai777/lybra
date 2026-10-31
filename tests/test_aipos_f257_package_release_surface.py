@@ -23,6 +23,11 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import test_aipos_f92_onboarding_walkthrough as f92  # noqa: E402  — 隔离靶场 Range / probe_range 唯一来源
+from test_aipos_f136_advisor_follow_through import _run_guide_to_step5  # noqa: E402  — 向导走法唯一来源
+from test_aipos_f92_onboarding_walkthrough import probe_range  # noqa: E402,F401  — pytest fixture
 
 from tools.aipos_cli import deploy_runtime as dr  # noqa: E402
 from tools.aipos_cli import package_check as pc  # noqa: E402
@@ -188,6 +193,52 @@ def test_item3_clean_home_install_smoke(packed):
     steps = {s["name"]: s for s in result["steps"]}
     assert steps["version"]["output"].startswith(f"lybra {version}(npm 安装包; 代码根 {result['prefix']}")
     assert (Path(result["home_root"]) / "smokeproj" / "project.json").is_file()
+
+
+@pytest.fixture
+def package_range(packed, request, monkeypatch, tmp_path_factory):
+    """F92 隔离靶场(临时 HOME / 临时 home 根 / 自起临时门), 但 `lybra` = 从 npm pack 产物装出的入口(不是产品仓 shim、不带 PYTHONPATH):
+    门(lybra serve)、向导各步、charter / skills 全由安装包代码执行。"""
+    work = tmp_path_factory.mktemp("f257-install")
+    prefix = work / "prefix"
+    tool_bin = pc._tool_bin(work)
+    inst = subprocess.run(["npm", "install", "-g", "--prefix", str(prefix), "--offline", "--no-audit", "--no-fund", str(packed["tarball"])],
+                          env=pc._npm_env(work, [str(tool_bin)]), capture_output=True, text=True, timeout=300)
+    assert inst.returncode == 0, inst.stdout + inst.stderr
+    entry = prefix / "bin" / "lybra"
+
+    class PackageRange(f92.Range):
+        def __init__(self, tmp: Path):
+            super().__init__(tmp)
+            (self.bin / "lybra").unlink()
+            (self.bin / "lybra").symlink_to(entry)
+            (self.bin / "node").symlink_to(os.path.realpath(str(tool_bin / "node")))
+            self.env.pop("PYTHONPATH", None)
+            self.package_root = prefix / "lib" / "node_modules" / "lybra"
+
+    monkeypatch.setattr(f92, "Range", PackageRange)
+    return request.getfixturevalue("probe_range")
+
+
+def test_item3_installed_package_runs_gate_guide_enroll_and_charter_skills(package_range):
+    """装出的包(临时 prefix)起临时门, 按向导原样走到顾问接入(F136 走法), 再对该接入实例取 charter / skills 只读出口(真实内容)。"""
+    r = package_range
+    version = pc.declared_version(REPO_ROOT)
+    assert r.sh("lybra --version").startswith(f"lybra {version}(npm 安装包; 代码根 {r.package_root}")
+    gov = r.hroot / "lybra-probe"
+    guide, enroll_out = _run_guide_to_step5(r, f"lybra-probe --repo app={r.session}/app --default-repo app --advisor-dir {r.session} "
+                                               f"--envelope-days 7 --max-tasks 20")
+    instance = guide["instances"]["advisor"]
+    charter = r.sh(f"lybra charter --role advisor --instance {instance} --workspace-root {gov} --body-only")
+    _show(f"[件③·安装包] 接入实例 {instance}; lybra charter 前 8 行:\n" + "\n".join(charter.splitlines()[:8]))
+    assert "<!-- lybra:charter-render" in charter and "`lybra-probe` 项目的顾问" in charter and "{{" not in charter
+    listing = r.sh(f"lybra skills --role advisor --instance {instance} --workspace-root {gov} | tar -tf -")
+    names = sorted({line.split("/")[2] for line in listing.splitlines() if line.startswith(".claude/skills/") and line.count("/") >= 3})
+    _show(f"[件③·安装包] lybra skills tar 流顶层: {names}")
+    assert {"advisor-commands", "lybra-onboarding", "truth-navigator"} <= set(names)
+    assert (r.session / ".claude" / "skills" / "advisor-commands" / "SKILL.md").is_file()
+    for shown in r.log:
+        _show(shown[:1200])
 
 
 # ===========================================================================
