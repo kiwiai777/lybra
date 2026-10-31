@@ -64,8 +64,9 @@ def _config_policy(gov: Path) -> None:
 
 
 def _config_card(rig, queue: str = "claimed", **extra) -> Path:
-    """config 卡(只写治理根, 子 agent 执行, 快车道); claimed = 经队列真认领(claim 记录 + 报告骨架), 与门同一写路径。"""
-    fields = {"harness": "claude-code", "audit": "none", "output_target": f"task_cards/{CARD}/artifacts/",
+    """config 卡(只写治理根, 快车道); claimed = 经队列真认领(claim 记录 + 报告骨架), 与门同一写路径。
+    AIPOS-F256: 非代码卡一律 pi 执行工位做(原为子 agent 执行, 子 agent 认领非代码卡现拒)——卡面 harness = pi。"""
+    fields = {"harness": "pi", "audit": "none", "output_target": f"task_cards/{CARD}/artifacts/",
               "lane": {"repo": "governance_root", "paths": [f"task_cards/{CARD}/artifacts/"], "roles": ["executor"]}}
     fields.update(extra)
     _config_policy(rig.gov)
@@ -239,7 +240,7 @@ def test_item2_item3_rejection_record_next_gives_exits_not_same_command(rig, mon
                                                                                      "change_scope"]
     assert ex["recommended"] == "new_subject", "配置卡交付本卡程序: 推荐改走代码卡(evidence_overrides.return_rejected_program)"
     resubmit = ex["exits"][0]["command"]
-    assert "子 agent 卡(claude-code): 顾问把拒因原文派给执行子 agent" in resubmit
+    assert "pi 卡: 原命令续跑 loop = 同会话续接执行体按拒因修一次" in resubmit  # AIPOS-F256: 非代码卡一律 pi(原为子 agent 卡出口句)
     assert f"lybra artifact ingest --task-id {CARD} --kind return --workspace-root {rig.gov}" in resubmit
     withdraw = ex["exits"][3]
     assert withdraw["owner_tier1"] == "withdraw" and "门不要求 Owner 裁决引用" in withdraw["gate"]

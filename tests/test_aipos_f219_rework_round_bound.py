@@ -96,7 +96,7 @@ def test_item1_hblx31_shape_round2_waits_then_rewrite_dispatches_r2(rig, monkeyp
         policy_id=f218.POLICY_D, agent_or_role="advisor", active_from="2026-01-01T00:00:00Z", expires_at="2999-01-01T00:00:00Z",
         max_tasks=20, owner_approval_ref="fixture-envelope-f219", task_selector_task_mode="docs", launch_harnesses=["pi"]))
     f78._card(rig.gov, GOV, "pending", task_mode="docs",
-              extra={"harness": "claude-code", "audit": "required", "audit_by": AUDITOR, "output_target": f"task_cards/{GOV}/artifacts/",
+              extra={"harness": "pi", "audit": "required", "audit_by": AUDITOR, "output_target": f"task_cards/{GOV}/artifacts/",
                      "lane": {"repo": "governance_root", "paths": [f"task_cards/{GOV}/artifacts/"], "roles": ["executor"]}})
     init_governance_repo(rig.gov)
     seen: list[str] = []

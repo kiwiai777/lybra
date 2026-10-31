@@ -49,7 +49,7 @@ def _setup_fast_lane(rig) -> None:
         policy_id=POLICY, agent_or_role="advisor", active_from="2026-01-01T00:00:00Z", expires_at="2999-01-01T00:00:00Z",
         max_tasks=20, owner_approval_ref="fixture-envelope-f222", task_selector_task_mode="config", launch_harnesses=["pi"]))
     f78._card(rig.gov, CARD, "pending", task_mode="config",
-              extra={"harness": "claude-code", "audit": "none", "output_target": f"task_cards/{CARD}/artifacts/",
+              extra={"harness": "pi", "audit": "none", "output_target": f"task_cards/{CARD}/artifacts/",
                      "lane": {"repo": "governance_root", "paths": [f"task_cards/{CARD}/artifacts/"], "roles": ["executor"]}})
     init_governance_repo(rig.gov)
 

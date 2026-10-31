@@ -325,3 +325,7 @@ def division_summary(governance_root: str | Path) -> dict[str, Any]:
     return {"ok": True, "pi_executor": pi, "retired_key": view["retired_key"], "noncode_cards": view["noncode_cards"],
             "violations": view["violations"], "errors": view["errors"], "lines": lines}
 
+
+
+from tools.aipos_cli._cli_entry_guard import check_direct_invocation  # noqa: E402
+check_direct_invocation(__name__)

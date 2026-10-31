@@ -157,7 +157,7 @@ def test_item1_one_authorization_two_drivers_claim_many_cards_without_envelopes(
     # 两位驱动方各在自己车道再认领(认领后等待即超时 = 声明退出码 3; 认领已落)
     _card(o.gov, "PROBE-OTA-2", "ota")
     _card(o.gov, "PROBE-LT-1", "lantu")
-    _card(o.gov, "PROBE-LT-2", "lantu", task_mode="validation", validation_source_task="PROBE-LT-1",
+    _card(o.gov, "PROBE-LT-2", "lantu", task_mode="validation", harness="pi", validation_source_task="PROBE-LT-1",  # AIPOS-F256: 非代码卡 = pi
           validation_candidate=f78._git(o.lantu, "rev-parse", "HEAD"))
     lines = [f"全链后 {after_chain}"]
     for card, actor in (("PROBE-OTA-2", ADV_OTA), ("PROBE-LT-1", ADV_MAIN), ("PROBE-LT-2", ADV_MAIN)):
@@ -200,7 +200,7 @@ def test_item2_out_of_bound_cases_owner_needed_inbox_and_one_extension(owner):
     rc, out = _sign_two_lanes(o, max_tasks=2)
     assert rc == 0, out
     _card(o.gov, "PROBE-GAMMA-1", "gamma")  # 新车道
-    _card(o.gov, "PROBE-DOCS-1", "ota", task_mode="docs")  # 新任务类型
+    _card(o.gov, "PROBE-DOCS-1", "ota", task_mode="docs", harness="pi")  # 新任务类型(AIPOS-F256: 非代码卡 = pi)
     _card(o.gov, "PROBE-HOST-1", "ota", assigned_to="exec.lybra.otherhost", agent_instance="exec.lybra.otherhost")  # 授权外主机
     _card(o.gov, "PROBE-ZONE-1", "ota", authorization_zones=["production"])  # 禁区(缺省全禁)
     _card(o.gov, "PROBE-DRV-1", "lantu")  # OTA 顾问推 lantu 卡 = 驱动方不在本车道
@@ -415,10 +415,11 @@ def test_item4_regression_envelope_only_project_unchanged(two):
 def test_item5_validation_root_owner_ref_from_authorization(owner, tmp_path):
     from tools.aipos_cli import validation_root as vr
 
-    from test_aipos_f187_kickoff_worktree_cleanup import _land_subagent  # 接入 land 事件唯一靶场构件
+    from test_aipos_f95_harness_launch import _land as _land_ws, _workstation  # 接入 land 事件唯一靶场构件
 
     o = owner
-    _land_subagent(o.gov, f78.EXEC, project="lybra", harness="claude-code", host=vr.local_host_label())
+    # AIPOS-F256 件③: 验证根只认 pi 执行身份——执行实例为 pi 执行工位(原为子 agent 接入, 子 agent 身份声明验证根现拒)
+    _land_ws(o.gov, f78.EXEC, "executor", _workstation(tmp_path / "home", o.gov, "exec-ws", "executor", f78.EXEC))
     _card(o.gov, "PROBE-VR-1", "ota")
     base = str(tmp_path / "vr-base")
     kw = dict(host=vr.local_host_label(), base=base, task_id="PROBE-VR-1", instance=f78.EXEC)
