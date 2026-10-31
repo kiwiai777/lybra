@@ -1,6 +1,6 @@
 {
   "name": "lybra",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "Apache-2.0",
   "description": "An accountable single-agent autonomy loop + an accountability gate any MCP agent can reach via Form B. Gate, not engine; files are truth; drafter != confirmer != executor.",
   "keywords": [
@@ -18,6 +18,7 @@
     "lybra": "bin/lybra"
   },
   "scripts": {
+    "preflight": "python3 -m tools.aipos_cli.package_check preflight",
     "test:visual": "playwright test --config tests/playwright/playwright.config.cjs",
     "test:visual:headed": "playwright test --config tests/playwright/playwright.config.cjs --headed",
     "test:visual:install": "playwright install chromium"
@@ -28,22 +29,34 @@
   "files": [
     "0_control_plane/",
     "3_context_bundles/",
+    "agents/",
     "bin/",
     "config/",
     "docs/",
     "examples/",
+    "schema/",
     "tools/",
     "web/",
     "README.md",
+    "QUICKSTART.md",
+    "LICENSE",
     "package.json",
     "!tools/**/tests/**",
     "!web/**/tests/**",
+    "!tools/**/test_*.py",
+    "!**/conftest.py",
     "!**/__pycache__/**",
     "!**/*.pyc",
     "!**/.DS_Store",
     "!**/._*",
     "!**/task_cards/**",
-    "!.codex/**"
+    "!.codex/**",
+    "!**/*.tgz",
+    "!**/.lybra/**",
+    "!**/.deploy/**",
+    "!**/node_modules/**",
+    "!**/*.egg-info/**",
+    "!**/.pytest_cache/**"
   ],
   "engines": {
     "node": ">=18"
