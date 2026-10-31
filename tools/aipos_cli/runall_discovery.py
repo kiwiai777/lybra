@@ -137,7 +137,11 @@ def isolated_test_env(home: str, base: Mapping[str, str] | None = None) -> dict[
 def isolate_test_session() -> str | None:
     """AIPOS-F116 件②(gap #56): pytest 会话层 HOME 隔离, 由各测试目录 conftest.py 在导入时调用(早于测试模块导入——
     模块级 Path.home() 也拿到临时 HOME)。已由 run-all 执行器隔离(标记 == HOME)→ 不动, 返回 None; 否则新建临时 HOME 原地改写
-    os.environ(isolated_test_env 同一构造), 进程退出时删除, 返回该目录。直接跑 pytest 也不借真实 ~/.lybra 解析到真实治理根。"""
+    os.environ(isolated_test_env 同一构造), 进程退出时删除, 返回该目录。直接跑 pytest 也不借真实 ~/.lybra 解析到真实治理根。
+    AIPOS-F257 件④: 先钉宿主运行身份(deploy_runtime.hermetic_host_identity, 无论 HOME 是否已隔离)。"""
+    from tools.aipos_cli.deploy_runtime import hermetic_host_identity
+
+    hermetic_host_identity()  # AIPOS-F257 件④: 从部署快照目录跑测试时宿主部署状态不泄漏进用例(run-all 已隔离 HOME 时也要钉)
     marked = os.environ.get(ISOLATED_HOME_ENV)
     if marked and marked == os.environ.get("HOME"):
         return None

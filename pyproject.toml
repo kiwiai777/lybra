@@ -7,7 +7,7 @@
 
 [project]
 name = "lybra"
-version = "0.2.0"
+version = "0.3.0"
 description = "Lybra — accountability harness for AI agents (gate core; npm/bin is the distribution entry)."
 requires-python = ">=3.10"
 dependencies = []  # gate core: stdlib only, intentionally zero runtime dependencies
