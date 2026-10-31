@@ -38,8 +38,10 @@ NODE_MODULES_DIRNAME = "node_modules"  # AIPOS-F257: npm 安装包的代码根 =
 LAUNCHER_MARK = "lybra-entry-launcher/v1(AIPOS-F152)"
 ENTRY_NAME = "lybra"
 DEFAULT_BIN_DIR = "~/.local/bin"
-_ENTRY: dict[str, str] = {}  # 入口(launch)本进程登记: dev_tree = 开发开关指向的代码根(running_code 据此判 dev);
-# hermetic_root = 测试会话钉为非快照的本进程真实代码根(AIPOS-F257 件④, hermetic_host_identity)
+_ENTRY: dict[str, str] = {}  # 入口(launch)本进程登记: dev_tree = 开发开关指向的代码根(running_code 据此判 dev)
+# AIPOS-F257 件④: 测试会话钉为非快照的宿主代码根(真实路径)。测试夹具命名空间(同 runall_discovery RUNALL_ISOLATED_HOME), 不是产品配置
+# 环境变量(config.schema environment_variables 只管 LYBRA_* / AIPOS_*); 只由 hermetic_host_identity 写, 子进程随环境继承。
+HERMETIC_ROOT_ENV = "RUNALL_HERMETIC_CODE_ROOT"
 
 
 class EntryError(RuntimeError):
@@ -94,7 +96,7 @@ def running_code(code_root: Path | None = None) -> RunningCode:
     worktree(其余: 卡工作树测试、python -m)。"""
     root = Path(code_root) if code_root is not None else _code_root()
     deploy_dir = snapshot_deploy_dir(root)
-    if deploy_dir is not None and _ENTRY.get("hermetic_root") == os.path.realpath(root):
+    if deploy_dir is not None and os.environ.get(HERMETIC_ROOT_ENV) == os.path.realpath(root):
         deploy_dir = None  # AIPOS-F257 件④: 测试会话里宿主部署状态不泄漏(见 hermetic_host_identity)
     if deploy_dir is not None:
         return RunningCode(root, "deploy", deploy_dir, _read_commit(root / VERSION_FILENAME), root.name)
@@ -110,12 +112,14 @@ def hermetic_host_identity() -> str | None:
     """AIPOS-F257 件④(F242 记账 43 条快照态红用例根因): 测试会话(唯一调用方 runall_discovery.isolate_test_session, 各测试目录
     conftest 导入时)把本进程真实代码根的运行身份钉为非快照——从部署快照目录(<部署目录>/releases/<名>)跑测试时, 宿主的部署状态
     (current 链接 / VERSION 提交)不泄漏进用例: DeployGuard 不适用、loop 不给靶场注入的 watch 传 deploy_guard、更新说明库 / --version
-    按工作树, 与在卡工作树跑同一结果。只作用于该真实代码根(按真实路径比对): 用例经 code_root= 或替换 _code_root 指向自造快照、
-    或子进程从自造快照运行时照真实判据判 deploy(部署一致性夹具不受影响)。返回被钉的根; 本进程代码不在快照里 = None(无需钉)。"""
+    按工作树, 与在卡工作树跑同一结果。钉法 = 环境变量 HERMETIC_ROOT_ENV 记该根真实路径(用例起的子进程随环境继承: 从同一代码根
+    `python -m tools.aipos_cli` / 入口 --dev-tree 也不泄漏)。只作用于该真实代码根(按真实路径比对): 用例经 code_root= 或替换
+    _code_root 指向自造快照、或子进程从自造快照运行时照真实判据判 deploy(部署一致性夹具不受影响)。返回被钉的根; 本进程代码不在
+    快照里 = None(无需钉, 环境不动)。"""
     root = Path(os.path.realpath(_code_root()))
     if snapshot_deploy_dir(root) is None:
         return None
-    _ENTRY["hermetic_root"] = str(root)
+    os.environ[HERMETIC_ROOT_ENV] = str(root)
     return str(root)
 
 
@@ -353,29 +357,31 @@ def _git_head(root: Path) -> str:
     return f"HEAD {head.stdout.strip()[:12]}" + (" +未提交改动" if dirty.returncode == 0 and dirty.stdout.strip() else "")
 
 
-def code_version(code_root: Path) -> str:
+def code_version(code_root: Path) -> tuple[str | None, str]:
     """AIPOS-F257 件②: 代码根的包版本(唯一版本源 distribution.schema npm_package.version_source, 读法唯一实现
-    package_check.declared_version); 读不出 = 「版本不明(缘由)」(--version 照常输出, 不因版本源坏而失败)。"""
+    package_check.declared_version)= (版本, ""); 读不出 = (None, 缘由)(--version 照常输出, 不因版本源坏而失败)。"""
     from tools.aipos_cli.package_check import PackageCheckError, declared_version, package_declaration
 
     try:
-        return declared_version(code_root, package_declaration(code_root))
+        return declared_version(code_root, package_declaration(code_root)), ""
     except PackageCheckError as exc:
-        return f"版本不明({exc})"
+        return None, str(exc)
 
 
 def version_line(running: RunningCode | None = None) -> str:
-    """一行运行身份。AIPOS-F257 件②: npm 安装包形态报包版本; 部署快照 / 开发模式 / 工作树形态保持原有输出并附「; 版本 <版本>」。"""
+    """一行运行身份。AIPOS-F257 件②: npm 安装包形态报包版本(读不出 = 「版本不明(缘由)」); 部署快照 / 开发模式 / 工作树形态保持原有
+    输出并附「; 版本 <版本>」(该代码树没有可读的版本源, 如只含部分文件的夹具树 = 原有输出不变)。"""
     rc = running or running_code()
-    version = code_version(rc.code_root)
+    version, why = code_version(rc.code_root)
     if rc.mode == "package":
-        return f"lybra {version}(npm 安装包; 代码根 {rc.code_root})"
+        return f"lybra {version or f'版本不明({why})'}(npm 安装包; 代码根 {rc.code_root})"
+    suffix = f"; 版本 {version}" if version else ""
     if rc.mode == "deploy":
-        return f"lybra 部署快照 {rc.release}(commit {rc.commit or '不明'}); 代码根 {rc.code_root}; 版本 {version}"
+        return f"lybra 部署快照 {rc.release}(commit {rc.commit or '不明'}); 代码根 {rc.code_root}{suffix}"
     if rc.mode == "dev":
-        return f"lybra 开发模式 {DEV_TREE_FLAG} {rc.code_root}(非部署快照; {_git_head(rc.code_root)}); 版本 {version}"
+        return f"lybra 开发模式 {DEV_TREE_FLAG} {rc.code_root}(非部署快照; {_git_head(rc.code_root)}){suffix}"
     return (f"lybra 工作树代码 {rc.code_root}(未经部署快照入口; {_git_head(rc.code_root)}; "
-            f"装入口: tools/lybra-deploy install-entry); 版本 {version}")
+            f"装入口: tools/lybra-deploy install-entry){suffix}")
 
 
 class VersionAction(argparse.Action):

@@ -184,7 +184,8 @@ def check_files(packed: list[str], sources: list[str], decl: dict[str, Any], *, 
     for tree in req["trees"]:
         prefix = str(tree).rstrip("/") + "/"
         for rel in sorted(s for s in src_set if s.startswith(prefix)):
-            if rel not in pack_set and rel.rsplit("/", 1)[-1] not in omitted and forbidden_reason(rel, decl) is None:
+            if (rel not in pack_set and rel.rsplit("/", 1)[-1] not in omitted and forbidden_reason(rel, decl) is None
+                    and all(m["path"] != rel for m in missing)):
                 missing.append({"path": rel, "why": f"required.trees {tree}"})
     if req["from_distributions"]:
         for src in distribution_sources if distribution_sources is not None else _distribution_sources(None):
