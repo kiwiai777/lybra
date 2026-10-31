@@ -2581,7 +2581,8 @@
         "KICKOFF_SCRATCH_IN_GOVERNANCE": "草稿目录 {scratch_dir} 落在治理根 {governance_root} 内(草稿永不落治理根); 出口: lybra project set-paths {project} --key scratch_root --value <治理根外的绝对路径> --confirm",
         "KICKOFF_VALIDATION_ROOT_UNRESOLVED": "卡 {task_id} 验证根节不可渲染({code}): {reason}; 与工位 /go 同一拒因(该卡不入选开工, AIPOS-F212 件①: 两面同读 next_resolver.card_workstation_view); 出口: 按拒因修本卡验证根声明(lybra project validation-root list 查看)或给卡补 harness(lybra queue amend), 修后重出开工稿",
         "KICKOFF_HARNESS_UNRESOLVED": "卡 {task_id} 的 harness 不可推导({code}): {reason}; 开工稿时限句按卡 harness 产出(AIPOS-F212 件③), 不猜",
-        "KICKOFF_HARNESS_MISMATCH": "{reason}(AIPOS-F235 件③: 子 agent 卡 harness 随派发顾问现登记); 出口: {amend_command} —— 改后重出开工稿"
+        "KICKOFF_HARNESS_MISMATCH": "{reason}(AIPOS-F235 件③: 子 agent 卡 harness 随派发顾问现登记); 出口: {amend_command} —— 改后重出开工稿",
+        "KICKOFF_EXECUTOR_DIVISION": "卡 {task_id} 不出子 agent 开工稿({code}): {reason}(AIPOS-F256: 非代码卡一律 pi 执行工位做, 子 agent 只接代码卡)"
       }
     },
     "lybra_loop": {
@@ -4752,6 +4753,16 @@
           "preview_command": "lybra migrate decision-log-pointers --workspace-root {governance_root}",
           "mechanical": true,
           "landing": "migrate_decision_log_pointers"
+        },
+        {
+          "name": "execution_division",
+          "label": "执行分工迁移(非代码一律 pi)",
+          "why": "AIPOS-F256(Owner 10-31): 非代码卡一律 pi 执行工位做, 子 agent 只接代码卡; 旧的按项目选配键 execution.pi_allowed_task_modes 退役(不再改变路由), 未声明 pi 执行工位的项目非代码卡起草即拒, 在途违例卡逐张给出口(只列不改, 既有卡与记录不改写)",
+          "applies_when": "project_json",
+          "preview": "tools.aipos_cli.execution_division.division_upgrade_step",
+          "execute": "tools.aipos_cli.execution_division.division_upgrade_step",
+          "mechanical": true,
+          "landing": "project_writers"
         }
       ],
       "applies_when": {

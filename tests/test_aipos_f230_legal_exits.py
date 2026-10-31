@@ -191,13 +191,13 @@ def test_item1_fast_lane_review_fail_and_matrix_every_cell(rig):  # noqa: F811
         policy_id=f221.POLICY, agent_or_role="advisor", active_from="2026-01-01T00:00:00Z", expires_at="2999-01-01T00:00:00Z",
         max_tasks=20, owner_approval_ref="fixture-envelope-f230", task_selector_task_mode="config", launch_harnesses=["pi"]))
     f78._card(rig.gov, GOVC, "pending", task_mode="config",
-              extra={"harness": "claude-code", "audit": "none", "output_target": f"task_cards/{GOVC}/artifacts/",
+              extra={"harness": "pi", "audit": "none", "output_target": f"task_cards/{GOVC}/artifacts/",
                      "lane": {"repo": "governance_root", "paths": [f"task_cards/{GOVC}/artifacts/"], "roles": ["executor"]}})
     f78._card(rig.gov, CODE, "pending")
     sha, _tree = f78._branch_with_commit(rig.code_repo, "PROBE-F230-S", rel="app/x.txt")
     f78._card(rig.gov, "PROBE-F230-S", "completed", extra={"harness": "claude-code"})
     f78._card(rig.gov, "PROBE-F230-V", "pending", task_mode="validation",
-              extra={"harness": "claude-code", "audit_by": AUDITOR, "validation_source_task": "PROBE-F230-S", "validation_candidate": sha,
+              extra={"harness": "pi", "audit_by": AUDITOR, "validation_source_task": "PROBE-F230-S", "validation_candidate": sha,
                      "output_target": "task_cards/PROBE-F230-V/artifacts/"})
     init_governance_repo(rig.gov)
     seen: list[str] = []
@@ -240,7 +240,7 @@ def test_item2_config_card_delivering_program_refused_at_return(rig, tmp_path, m
     from tools.aipos_cli.draft_validator import program_target_warning
 
     f78._card(rig.gov, GOVC, "claimed", task_mode="config",
-              extra={"harness": "claude-code", "audit": "none", "output_target": f"task_cards/{GOVC}/artifacts/", "claimed_by": "exec.lybra.test",
+              extra={"harness": "pi", "audit": "none", "output_target": f"task_cards/{GOVC}/artifacts/", "claimed_by": "exec.lybra.test",
                      "lane": {"repo": "governance_root", "paths": [f"task_cards/{GOVC}/artifacts/"], "roles": ["executor"]}})
     init_governance_repo(rig.gov)
     f221._report(rig, "v1")
@@ -345,7 +345,7 @@ def _docs_setup(rig, monkeypatch):
         policy_id=f218.POLICY_D, agent_or_role="advisor", active_from="2026-01-01T00:00:00Z", expires_at="2999-01-01T00:00:00Z",
         max_tasks=20, owner_approval_ref="fixture-envelope-f230", task_selector_task_mode="docs", launch_harnesses=["pi"]))
     f78._card(rig.gov, DOCS, "pending", task_mode="docs",
-              extra={"harness": "claude-code", "audit": "required", "audit_by": AUDITOR, "output_target": f"task_cards/{DOCS}/artifacts/",
+              extra={"harness": "pi", "audit": "required", "audit_by": AUDITOR, "output_target": f"task_cards/{DOCS}/artifacts/",
                      "lane": {"repo": "governance_root", "paths": [f"task_cards/{DOCS}/artifacts/"], "roles": ["executor"]}})
     init_governance_repo(rig.gov)
 
@@ -443,7 +443,7 @@ def test_item4_same_round_fast_lane_back_to_review(rig):  # noqa: F811
         policy_id=f221.POLICY, agent_or_role="advisor", active_from="2026-01-01T00:00:00Z", expires_at="2999-01-01T00:00:00Z",
         max_tasks=20, owner_approval_ref="fixture-envelope-f230", task_selector_task_mode="config", launch_harnesses=["pi"]))
     f78._card(rig.gov, GOVC, "pending", task_mode="config",
-              extra={"harness": "claude-code", "audit": "none", "output_target": f"task_cards/{GOVC}/artifacts/",
+              extra={"harness": "pi", "audit": "none", "output_target": f"task_cards/{GOVC}/artifacts/",
                      "lane": {"repo": "governance_root", "paths": [f"task_cards/{GOVC}/artifacts/"], "roles": ["executor"]}})
     init_governance_repo(rig.gov)
     seen: list[str] = []

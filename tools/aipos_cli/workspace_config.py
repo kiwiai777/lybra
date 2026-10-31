@@ -2223,7 +2223,7 @@ def execution_declaration() -> dict[str, Any]:
             or not isinstance((keys.get("default_mode") or {}).get("enum"), list)
             or not isinstance(codes, dict)
             or not all(isinstance(codes.get(k), str) and codes[k] for k in (
-                "EXECUTION_DECLARATION_INVALID", "EXECUTION_INSTANCE_NOT_ENROLLED", "EXECUTION_PI_NOT_ALLOWED"))):
+                "EXECUTION_DECLARATION_INVALID", "EXECUTION_INSTANCE_NOT_ENROLLED"))):
         raise SchemaLoadError("config.schema.json configuration_sources.project_json.schema.execution(schema {default_mode, "
                               "subagent_executor, pi_allowed_task_modes, pi_executor, auditor} / reject_codes)未声明齐")
     return decl
@@ -2316,16 +2316,20 @@ EXECUTION_MODE_SUBAGENT = "subagent"
 
 def execution_wants_pi(execution: dict[str, Any], card: dict[str, Any] | None) -> bool:
     """卡要派 pi 执行工位: harness=pi, 或未给 harness 而 assigned_to = 声明的 pi_executor(起草缺省与卡执行方式同一谓词)。
-    AIPOS-F196 件②(Owner 10-20 定: 非代码工作交 pi): 卡稿既未给 harness 也未给 assigned_to, 而其 task_mode 在 Owner 明示的
-    pi_allowed_task_modes 内且声明了 pi_executor = 缺省派 pi(validation / config / docs 等); 不在列(如 code)= 缺省子 agent(行为不变)。"""
+    AIPOS-F256 件①(取代 F196 按项目选配 pi_allowed_task_modes): 卡稿既未给 harness 也未给 assigned_to = 按 task_mode 声明的执行方
+    (enums.schema task_mode.executor, 唯一读取口 next_resolver.task_mode_executor): 该执行方不接受子 agent 类(非代码卡)= 派 pi;
+    代码卡 = 缺省子 agent。pi_allowed_task_modes 只作兼容读取, 不再改变路由。未知 task_mode = False(由分工判定拒, 不在此猜)。"""
+    from tools.aipos_cli.next_resolver import task_mode_executor, task_mode_executor_declaration
+
     fm = card if isinstance(card, dict) else {}
     harness = str(fm.get("harness") or "").strip()
     assigned = str(fm.get("assigned_to") or "").strip()
     if harness == EXECUTION_MODE_PI or (not harness and bool(assigned) and assigned == execution.get("pi_executor")):
         return True
-    mode = str(fm.get("task_mode") or "").strip()
-    return (not harness and not assigned and bool(execution.get("pi_executor"))
-            and mode in (execution.get("pi_allowed_task_modes") or []))
+    if harness or assigned:
+        return False
+    kind = task_mode_executor(str(fm.get("task_mode") or "").strip())
+    return kind is not None and EXECUTION_MODE_SUBAGENT not in task_mode_executor_declaration()["kinds"][kind]["accepts"]
 
 
 def card_execution_mode(execution: dict[str, Any] | None, card: dict[str, Any] | None, *, audit_card: bool = False) -> str | None:

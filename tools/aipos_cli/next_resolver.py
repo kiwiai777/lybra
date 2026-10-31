@@ -438,7 +438,8 @@ def _task_mode_entry(task_mode: str) -> dict[str, Any] | None:
     if not mode:
         default = task_mode_missing_default()
         return {"value": default["key"], "missing": True,
-                **{k: default[k] for k in ("writes_product_repo", "independent_audit", "requires_tests")}}
+                **{k: default[k] for k in ("writes_product_repo", "independent_audit", "requires_tests") if k in default},
+                **({"executor": default["executor"]} if "executor" in default else {})}
     return next((item for item in values if isinstance(item, dict) and str(item.get("value") or "").strip().lower() == mode), None)
 
 
@@ -481,6 +482,39 @@ def task_mode_requires_tests(task_mode: str) -> bool:
     if not isinstance(flag, bool):
         raise SchemaLoadError(f"enums.schema.json task_mode={task_mode!r} requires_tests 须为布尔(AIPOS-F211)")
     return flag
+
+
+def task_mode_executor_declaration() -> dict[str, Any]:
+    """AIPOS-F256 件①: enums.schema task_mode.executor(kinds / classes / stages / code_change / reject_codes / texts)唯一读取口。
+    kinds 每项须有 label / execution_key / accepts(⊆ classes 键); 缺 / 形变 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (((load_schema("enums", REPO_ROOT).get("enums") or {}).get("task_mode") or {}).get("executor"))
+    kinds = decl.get("kinds") if isinstance(decl, dict) else None
+    classes = decl.get("classes") if isinstance(decl, dict) else None
+    if (not isinstance(kinds, dict) or not kinds or not isinstance(classes, dict) or not classes
+            or not all(isinstance(v, dict) and isinstance(v.get("label"), str) and isinstance(v.get("execution_key"), str)
+                       and isinstance(v.get("accepts"), list) and v["accepts"] and set(v["accepts"]) <= set(classes) for v in kinds.values())
+            or not all(isinstance(decl.get(k), dict) for k in ("stages", "code_change", "reject_codes", "texts", "transition"))
+            or not set((decl.get("transition") or {}).get("stages") or ()) <= set(decl.get("stages") or {})):
+        raise SchemaLoadError("enums.schema.json enums.task_mode.executor(kinds{label, execution_key, accepts ⊆ classes} / classes / stages / "
+                              "code_change / reject_codes / texts / transition{stages ⊆ stages})未声明齐(AIPOS-F256 / F256B)")
+    return decl
+
+
+def task_mode_executor(task_mode: Any) -> str | None:
+    """AIPOS-F256 件①: 该 task_mode 的执行方 kind(唯一读取口: enums.schema task_mode.values[].executor; 缺值 = missing_default.executor)。
+    未知 task_mode(非空且不在值域)= None(调用方 fail-closed 拒 EXECUTOR_TASK_MODE_UNKNOWN)。值不在 executor.kinds / 缺键 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError
+
+    kinds = task_mode_executor_declaration()["kinds"]
+    entry = _task_mode_entry(str(task_mode or ""))
+    if entry is None:
+        return None
+    kind = entry.get("executor")
+    if kind not in kinds:
+        raise SchemaLoadError(f"enums.schema.json task_mode={entry.get('value')!r} executor={kind!r} 不在 executor.kinds {sorted(kinds)}(AIPOS-F256)")
+    return str(kind)
 
 
 def task_mode_is_audit(task_mode: Any) -> bool:
@@ -5740,6 +5774,28 @@ def _derive_next_step(
                 "suggested_action": mismatch["amend_command"],
                 "notes": f"N0→N1: {mismatch['reason']}(AIPOS-F235 件③)",
                 "action": {"type": "harness_mismatch", "card": task_id, **{k: mismatch[k] for k in ("face", "registered", "advisor", "source")}},
+            }
+        # AIPOS-F256 件④: 待认领卡执行方分工违例(子 agent 接非代码卡; 认领即拒)= 不派生认领, 给改派出口原文(唯一判定 execution_division)
+        from tools.aipos_cli.execution_division import division_refusal
+        from tools.aipos_cli.workspace_config import ExecutionDeclarationError
+
+        try:
+            division = division_refusal(workspace_root, {**fm, "task_id": task_id}, stage="claim", actor=claimant or None)
+        except (ExecutionDeclarationError, ValueError) as exc:
+            division = {"code": "EXECUTOR_DIVISION_REFUSED", "message": f"AIPOS-F256: 执行方类别不可判(fail-closed): {exc}", "exits": []}
+        if division:
+            return {
+                "task_id": task_id,
+                "derivable": False,
+                "current_node": "publish",
+                "current_state": "pending",
+                "triggered_by": "advisor",
+                "command": "",
+                "verb": "lybra_queue_claim_dry_run",
+                "missing_records": [f"执行方分工({division['code']})"],
+                "suggested_action": "; ".join(division["exits"]) or division["message"],
+                "notes": f"N0→N1: {division['message']}",
+                "action": {"type": "executor_division", "card": task_id, "code": division["code"]},
             }
         # AIPOS-F90 件①: 认领一段式 = 驱动方 token + 覆盖驱动方与本卡的信封(与 return/verdict/close 同一判据 _driver_envelope_ref,
         # loop --envelope 经 driver_scope 贯穿); 信封在 → PreAuthorized + owner_policy_ref; 不在 → Supervised 形(执行时 exit 5 带申领出口)

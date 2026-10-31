@@ -41,7 +41,7 @@ TEXT_KEYS = ("ratchet_default", "runall_absent", "runall_absent_timeout", "lane_
 ITEM_KEYS = ("boundary_line", "hard_rule_line", "commands_rule_line", "no_write_line")
 REFUSAL_KEYS = ("KICKOFF_ROLE_MISMATCH", "KICKOFF_INSTANCE_MISSING", "KICKOFF_NOT_STARTABLE", "KICKOFF_CHARTER_REFUSED",
                 "KICKOFF_WORKTREE_UNRESOLVED", "KICKOFF_REPORT_UNRESOLVED", "KICKOFF_SCRATCH_IN_GOVERNANCE",
-                "KICKOFF_VALIDATION_ROOT_UNRESOLVED", "KICKOFF_HARNESS_UNRESOLVED", "KICKOFF_HARNESS_MISMATCH")
+                "KICKOFF_VALIDATION_ROOT_UNRESOLVED", "KICKOFF_HARNESS_UNRESOLVED", "KICKOFF_HARNESS_MISMATCH", "KICKOFF_EXECUTOR_DIVISION")
 
 
 class KickoffRefused(ValueError):
@@ -327,6 +327,14 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
     refusal = kickoff_refusal(gov, task_id, instance, queue_state=state, card_frontmatter=fm)
     if refusal:
         raise _refuse(contract, "KICKOFF_NOT_STARTABLE", task_id=task_id, code=refusal["code"], reason=refusal["reason"])
+    # AIPOS-F256 件②: 开工稿 = 子 agent 开工稿——执行方(认领实例; 判不出 = 子 agent 类)不在该模式 accepts 内(子 agent 接非代码卡)= 拒出稿,
+    # 出口原文同起草 / 认领 / 交回(唯一判定 execution_division.division_refusal)
+    from tools.aipos_cli.execution_division import division_refusal
+    from tools.aipos_cli.workspace_config import EXECUTION_MODE_SUBAGENT
+
+    division = division_refusal(gov, fm, stage="kickoff", actor=instance, fallback_class=EXECUTION_MODE_SUBAGENT)
+    if division is not None:
+        raise _refuse(contract, "KICKOFF_EXECUTOR_DIVISION", task_id=task_id, code=division["code"], reason=division["message"])
     view = card_workstation_view(gov, task_id, fm)
     # AIPOS-F212 件①: 验证根节 / 卡 harness 不可得 = 与 /go 同码拒(开工稿给出口, 不抛异常; /go 同判不入选)。先于章程判:
     # 验证根声明形坏时章程通用段同样读不出, 拒因以开工面为准(两面同码同原文)

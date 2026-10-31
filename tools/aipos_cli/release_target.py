@@ -812,7 +812,8 @@ def plan_release(governance_root: str | Path, *, task_id: str, target_id: str, c
     creates, entries = _creates(entry, commit, manifest)
     refused: list[str] = []
     for item in creates:
-        verdict = check_access(gov, role="executor", path=item["path"], level="append", host=entry["host"])
+        verdict = check_access(gov, role="executor", path=item["path"], level="append", host=entry["host"],
+                               task_id=task_id)  # AIPOS-F256 件③: 写者 = 本卡认领实例(子 agent 身份 = 拒)
         if not verdict["allowed"]:
             refused.append(f"{item['path']}: [{verdict['code']}] {verdict['reason']}")
     p = _release_paths(entry)

@@ -243,19 +243,19 @@ def test_item2_draft_defaults_follow_declaration_three_states(tmp_path, monkeypa
     fb = fm_of(b)
     _show(f"[件②·pi 例外] verdict={b['verdict']} assigned_to={fb['assigned_to']} harness={fb['harness']} audit_by={fb['audit_by']}")
     assert b["verdict"] != "BLOCK" and (fb["assigned_to"], fb["harness"], fb["audit_by"]) == (PIX, "pi", AUDITOR)
-    # 未列明的 task_mode 要 pi = 拒(不静默改派)
-    c = create_draft(gov, _meta("F143-PI-NO", harness="pi"), "## Goal\n\nx\n", dry_run=True)
-    _show(f"[件②·pi 未列明拒] verdict={c['verdict']} {c['blocking_reasons'][0]}")
-    assert c["verdict"] == "BLOCK" and "EXECUTION_PI_NOT_ALLOWED" in c["blocking_reasons"][0]
+    # AIPOS-F256 件①: pi_allowed_task_modes 退役(不再改变路由)——代码卡显式要 pi(无子 agent 能力的 harness)= 派 pi 执行工位, 不再拒
+    c = create_draft(gov, _meta("F143-PI-CODE", harness="pi"), "## Goal\n\nx\n", dry_run=True)
+    _show(f"[件②·代码卡显式 pi(F256 起放行)] verdict={c['verdict']} reasons={c['blocking_reasons']}")
+    assert c["verdict"] != "BLOCK"
     # AIPOS-F196 件②(Owner 10-20 定: 非代码工作交 pi): 卡稿未给 harness / assigned_to 而 task_mode 在 Owner 明示列内 = 缺省派 pi
     # (原 F143「须显式要 pi」改为列内缺省 pi); 卡稿显式给子 agent harness = 照卡稿(不静默改派)
     d = create_draft(gov, _meta("F143-CFG", task_mode="config"), "## Goal\n\nx\n")
     fd = fm_of(d)
     _show(f"[件②·config 列内缺省 = pi(F196)] assigned_to={fd['assigned_to']} harness={fd['harness']}")
     assert (fd["assigned_to"], fd["harness"]) == (PIX, "pi")
-    d2 = create_draft(gov, _meta("F143-CFG-SUB", task_mode="config", harness="claude-code"), "## Goal\n\nx\n")
-    fd2 = fm_of(d2)
-    assert (fd2["assigned_to"], fd2["harness"]) == (SUB, "claude-code")
+    # AIPOS-F256 件②: 卡稿显式给子 agent harness 的非代码卡 = 拒并给出口(不静默改派; 原 F196「照卡稿」退役)
+    d2 = create_draft(gov, _meta("F143-CFG-SUB", task_mode="config", harness="claude-code"), "## Goal\n\nx\n", dry_run=True)
+    assert d2["verdict"] == "BLOCK" and "EXECUTOR_DIVISION_REFUSED" in d2["blocking_reasons"][0]
     # 审计者恒为声明的独立 pi 审计工位(卡稿写了 audit_by 原样保留, 交发卡核身份判)
     e = create_draft(gov, _meta("F143-AUD", audit_by=AUDITOR), "## Goal\n\nx\n", dry_run=True)
     assert e["verdict"] != "BLOCK"
@@ -304,13 +304,16 @@ def test_item3_publish_refuses_unenrolled_identities(tmp_path, monkeypatch):
     # 缺 audit_by 的代码卡: 核派审时将用的实例(audit_derivation.resolve_audit_instance), 模板名未接入 = 拒
     noaud = _publish(gov, "F143-NOAUD", assigned_to=SUB, harness="claude-code")
     assert noaud["verdict"] == "BLOCK" and any("audit_by(缺省推导)" in r for r in noaud["blocking_reasons"])
-    # 声明了执行方式: 派 pi 须在 pi_allowed_task_modes
+    # 声明了执行方式: AIPOS-F256 起 pi_allowed_task_modes 不再改变路由——代码卡派 pi 执行工位(有工位位置)= 通过; 非代码卡派子 agent = 拒
     _declare(gov)
     from tools.aipos_cli.draft_writer import publish_identity_refusals
 
-    refusals, _v = publish_identity_refusals(gov, _meta("F143-PICODE", assigned_to=PIX, harness="pi", audit_by=AUDITOR))
-    _show(f"[件③·声明后 code 卡派 pi 拒] {refusals[0]}")
-    assert "EXECUTION_PI_NOT_ALLOWED" in refusals[0]
+    picode, _v = publish_identity_refusals(gov, _meta("F143-PICODE", assigned_to=PIX, harness="pi", audit_by=AUDITOR))
+    assert picode == []
+    refusals, _v = publish_identity_refusals(gov, _meta("F143-SUBDOC", task_mode="docs", assigned_to=SUB, harness="claude-code",
+                                                       audit_by=AUDITOR))
+    _show(f"[件③·声明后 docs 卡派子 agent 拒(F256)] {refusals[0]}")
+    assert "EXECUTOR_DIVISION_REFUSED" in refusals[0]
     passed, _v = publish_identity_refusals(gov, _meta("F143-PICFG", task_mode="config", assigned_to=PIX, harness="pi", audit_by=AUDITOR))
     assert passed == []  # Owner 明示的 task_mode 派 pi 执行工位(有工位位置)= 通过
 
@@ -449,8 +452,15 @@ def test_item4_onboarding_guide_subagent_mode():
     assert [(a.roles_command, a.workspace, a.executor_mode, a.harness, a.harness_host, a.dry_run, a.confirm) for a in parsed] == [
         ("enroll-deliver", gov, "subagent", "codex", "mac-probe.local", True, False),
         ("enroll-deliver", gov, "subagent", "codex", "mac-probe.local", False, True)]
-    assert "/tmp/f143-ws/exec" not in json.dumps(sub["steps"][5:8], ensure_ascii=False)  # 无执行工位接入 / sync / pi
-    assert "project set-execution" in s9 and f"--subagent-executor {sub['instances']['executor']}" in s9
+    # AIPOS-F256 件④: 子 agent 模式另接入 pi 执行工位(非代码卡一律 pi; 与审计工位同级必备): 第 6 步签码接入 / 第 7 步 sync / 第 8 步起 pi,
+    # 第 9 步 set-execution 带 --pi-executor(原 F143「子 agent 模式无执行工位」改)
+    pi_exec = sub["instances"]["pi_executor"]
+    assert pi_exec == "exec.f143-probe.devbox" and sub["workstations"]["pi_executor"] == "/tmp/f143-ws/exec"
+    assert f"--instance {pi_exec}" in s6 and "lybra sync --harness-root /tmp/f143-ws/exec" in sub["steps"][6]["command"]
+    assert "cd /tmp/f143-ws/exec" in sub["steps"][7]["command"]
+    assert "project set-execution" in s9 and f"--subagent-executor {sub['instances']['executor']}" in s9 and f"--pi-executor {pi_exec}" in s9
+    same_host = generate_onboarding_guide(**BASE, advisor_dir="/tmp/f143-session", executor_mode="subagent")
+    assert same_host["instances"]["executor"] == "exec.f143-probe.devbox" and same_host["instances"]["pi_executor"] == "exec.f143-probe.devbox-pi"
     n = 0
     for _, line in _iter_command_lines(sub):
         if line.startswith("/"):

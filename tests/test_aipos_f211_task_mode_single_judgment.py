@@ -232,7 +232,8 @@ def test_accept2_harness_follows_execution_mode_and_grant_covers_audit_stage(rig
     assert table["审计卡"]["card_harness"] == "pi"
     # 代码卡执行阶段子 agent, 审计阶段(独立审计, 审计卡恒 pi)要拉 pi → 建议含 pi; 缺 task_mode 卡(不独立审计、子 agent)= 不含
     assert table["code(卡面无 harness / assigned_to)"]["授权建议拉起"] == "pi"
-    assert table["缺 task_mode"]["授权建议拉起"] is None
+    # AIPOS-F256 件①: 缺 task_mode = missing_default.executor(pi 执行工位; 非代码一律 pi)→ 执行阶段即拉 pi(原 F211「子 agent、不含」改)
+    assert table["缺 task_mode"]["授权建议拉起"] == "pi" and table["缺 task_mode"]["card_execution_mode"] == "pi"
     grant = suggest_grant(gov, "lybra", task_id="X-1", card_fm={**cards["code(卡面无 harness / assigned_to)"], "title": "x"},
                           driver=f78.DRIVER)
     _show(f"[验收② 授权建议原文(代码卡)] launch_harnesses={grant['launch_harnesses']} 来源={grant['sources']['launch_harnesses']}")

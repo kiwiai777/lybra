@@ -206,7 +206,7 @@ def test_item2_fast_lane_review_rework_round_re_return_back_to_review_then_pass(
         policy_id=POLICY, agent_or_role="advisor", active_from="2026-01-01T00:00:00Z", expires_at="2999-01-01T00:00:00Z",
         max_tasks=20, owner_approval_ref="fixture-envelope-f221", task_selector_task_mode="config", launch_harnesses=["pi"]))
     f78._card(rig.gov, CARD, "pending", task_mode="config",
-              extra={"harness": "claude-code", "audit": "none", "output_target": f"task_cards/{CARD}/artifacts/",
+              extra={"harness": "pi", "audit": "none", "output_target": f"task_cards/{CARD}/artifacts/",
                      "lane": {"repo": "governance_root", "paths": [f"task_cards/{CARD}/artifacts/"], "roles": ["executor"]}})
     init_governance_repo(rig.gov)
     fm0 = f218._card_fm(rig.gov, CARD)
@@ -327,7 +327,7 @@ def test_item2_rework_outcome_refused_outside_fast_lane(rig):  # noqa: F811
     from tools.aipos_cli.task_complexity import conclusion_outcomes
 
     f78._card(rig.gov, "PROBE-F221-A", "claimed", task_mode="docs",
-              extra={"harness": "claude-code", "audit": "required", "claimed_by": "exec.lybra.test", "claimed_at": "2026-10-23T00:00:00Z",
+              extra={"harness": "pi", "audit": "required", "claimed_by": "exec.lybra.test", "claimed_at": "2026-10-23T00:00:00Z",
                      "lane": {"repo": "governance_root", "paths": ["task_cards/PROBE-F221-A/artifacts/"], "roles": ["executor"]}})
     res = mark_concluded_task(task_id="PROBE-F221-A", actor=DRIVER, report_path="task_cards/PROBE-F221-A/RETURN.md", dry_run=True,
                               repo_root=rig.gov, outcome="rework", focus_items='["x"]')
