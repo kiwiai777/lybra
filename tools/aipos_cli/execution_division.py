@@ -265,8 +265,9 @@ def division_violations(governance_root: str | Path) -> dict[str, Any]:
         if task_mode_executor(card.get("task_mode")) not in accepts_subagent:
             out["noncode_cards"] += 1
         claimer = str(card.get("claimed_by") or "").strip() or None
-        try:  # 已认领 = 交回口径(出口撤卡重发); 未认领 = 认领口径(出口改派 amend)
-            refusal = division_refusal(gov, card, stage="return" if claimer else "claim", actor=claimer, execution=execution)
+        waiting = path.parent.name == in_flight[0]  # 首个非终态队列目录(声明序 = 待认领): 认领口径(出口改派 amend)
+        try:  # 其余在途目录 = 交回口径(出口撤卡重发; 卡面缺 claimed_by 的存量卡按目录态判)
+            refusal = division_refusal(gov, card, stage="claim" if waiting else "return", actor=claimer, execution=execution)
         except ValueError as exc:
             out["errors"].append(f"{card['task_id']}: {exc}")
             continue
