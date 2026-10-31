@@ -356,7 +356,7 @@
       }
     ],
     "executor_class_surfaces": {
-      "description": "AIPOS-F256 件③(Owner 10-31 产品化第 5 项: 非代码一律 pi): 只认 pi 执行身份的写面(验证根 / 受控发布目标——远端主机类写面)。写访问(级别 > read)落在 surfaces 所列面时, 写者(--instance, 缺 = 本卡认领实例)的执行方类别(enums.schema task_mode.executor.classes, 判定 execution_division.instance_class: 执行方式声明 / 接入登记)不在 classes = 拒 code(子 agent 身份写这些面); 写者不可判 = 按既有判据。判定唯一 execution_division.surface_class_problem(write_boundary.check_access 在面判定放行后调用; 验证根声明 / 发布计划同经 check_access 或 task_ownership_problems)。",
+      "description": "AIPOS-F256 件③(Owner 10-31 产品化第 5 项: 非代码一律 pi): 只认 pi 执行身份的写面(验证根 / 受控发布目标——远端主机类写面)。写访问(级别 > read)落在 surfaces 所列面时, 写者(--instance, 缺 = 本卡认领实例)的执行方类别(enums.schema task_mode.executor.classes, 判定 execution_division.instance_class: 执行方式声明 / 接入登记)不在 classes = 拒 code(子 agent 身份写这些面); 写者不可判 = 按既有判据。AIPOS-F256B 件⑤: 写入所属卡为过渡在途卡(新规则前已认领的非代码子 agent 卡, enums.schema task_mode.executor.transition)= 按认领时执行方继续, 不拒(验证根声明 / run 目录写入同此)。判定唯一 execution_division.surface_class_problem(write_boundary.check_access 在面判定放行后调用; 验证根声明 / 发布计划同经 check_access 或 task_ownership_problems)。",
       "surfaces": ["validation_root", "release_target"],
       "classes": ["pi"],
       "code": "SURFACE_EXECUTOR_CLASS",

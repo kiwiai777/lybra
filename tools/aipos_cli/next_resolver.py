@@ -495,9 +495,10 @@ def task_mode_executor_declaration() -> dict[str, Any]:
     if (not isinstance(kinds, dict) or not kinds or not isinstance(classes, dict) or not classes
             or not all(isinstance(v, dict) and isinstance(v.get("label"), str) and isinstance(v.get("execution_key"), str)
                        and isinstance(v.get("accepts"), list) and v["accepts"] and set(v["accepts"]) <= set(classes) for v in kinds.values())
-            or not all(isinstance(decl.get(k), dict) for k in ("stages", "code_change", "reject_codes", "texts"))):
+            or not all(isinstance(decl.get(k), dict) for k in ("stages", "code_change", "reject_codes", "texts", "transition"))
+            or not set((decl.get("transition") or {}).get("stages") or ()) <= set(decl.get("stages") or {})):
         raise SchemaLoadError("enums.schema.json enums.task_mode.executor(kinds{label, execution_key, accepts ⊆ classes} / classes / stages / "
-                              "code_change / reject_codes / texts)未声明齐(AIPOS-F256)")
+                              "code_change / reject_codes / texts / transition{stages ⊆ stages})未声明齐(AIPOS-F256 / F256B)")
     return decl
 
 

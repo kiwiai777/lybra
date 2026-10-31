@@ -339,6 +339,7 @@ def _execution_division(ctx: _Ctx, step: dict[str, Any], fn: Any, *, execute: bo
         details.append(f"未声明 execution.pi_executor: 非代码卡(在途 {outcome['noncode_cards']} 张; 新起草即拒 EXECUTOR_PI_UNDECLARED)无执行工位。"
                        f"出口: {exits[0]}")
     details += [f"在途违例 {v['task_id']}({v['state']}): {v['message']}" for v in outcome["violations"]]
+    details += [f"过渡在途(信息项, 不拒) {t['task_id']}({t['state']}): {t['message']}" for t in outcome["transitions"]]  # AIPOS-F256B 件⑤
     details += [f"读不出: {e}" for e in outcome["errors"]]
     out = {"state": "pending" if changes else "current", "changes": changes, "details": details}
     if not execute:

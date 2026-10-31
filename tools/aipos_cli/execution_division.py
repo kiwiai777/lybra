@@ -121,10 +121,66 @@ def refusal_exits(governance_root: str | Path, card: dict[str, Any], *, stage: s
     return exits
 
 
+def claim_evidence(governance_root: str | Path, card: dict[str, Any]) -> str | None:
+    """AIPOS-F256B 件⑤: 卡已认领的凭据(enums.schema task_mode.executor.transition.evidence 序): 门生 / 存量 claim 记录(records claims/<ID>/claim_*.md)
+    → 卡面 claimed_by → 卡在非待认领的在途队列目录(人肉期存量卡常无前两者)。都无 = None(未认领)。多义卡 = AmbiguousTaskCard 上抛(fail-closed)。"""
+    from tools.aipos_cli.next_resolver import _find_task_in_queue
+    from tools.aipos_cli.record_writer import record_dir
+    from tools.aipos_cli.task_loader import QUEUE_STATES, QUEUE_TERMINAL_STATES
+
+    gov = Path(governance_root)
+    task_id = str((card or {}).get("task_id") or "").strip()
+    if not task_id:
+        return None
+    try:
+        claims = record_dir(gov, "claims", task_id)
+    except ValueError:
+        claims = None
+    if claims is not None and claims.is_dir():
+        found = sorted(claims.glob("claim_*.md"))
+        if found:
+            return f"claim 记录 {found[0].name}"
+    claimed_by = str((card or {}).get("claimed_by") or "").strip()
+    if claimed_by:
+        return f"卡面 claimed_by={claimed_by}"
+    in_flight = tuple(q for q in QUEUE_STATES if q not in QUEUE_TERMINAL_STATES)
+    _path, queue = _find_task_in_queue(gov, task_id)
+    if queue in in_flight[1:]:  # 首个在途目录(声明序)= 待认领, 其余 = 已认领后的在途态
+        return f"队列目录 {queue}"
+    return None
+
+
+def division_transition(governance_root: str | Path, card: dict[str, Any], *, actor: str | None = None, execution: Any = ...,
+                        fallback_class: str | None = None) -> dict[str, Any] | None:
+    """AIPOS-F256B 件⑤: 过渡在途卡判定(唯一实现; 判定处 division_refusal / 写面 surface_class_problem / 只读诊断同读)。
+    = 认领后口径(交回)下新规则会拒(严格判定非空)且卡已认领(claim_evidence)→ {code, message, evidence, refusal}; 否则 None。"""
+    strict = _strict_refusal(governance_root, card, stage="return", actor=actor, execution=execution, fallback_class=fallback_class)
+    if strict is None:
+        return None
+    evidence = claim_evidence(governance_root, card)
+    if evidence is None:
+        return None
+    who = strict.get("executor") or {}
+    message = str(_decl()["texts"]["transition"]).format(
+        task_id=str(card.get("task_id") or "<卡ID>"), task_mode=str(card.get("task_mode") or "(缺)"), evidence=evidence,
+        actor=who.get("actor") or str(card.get("claimed_by") or card.get("assigned_to") or "-"), code=strict["code"])
+    return {"code": strict["code"], "message": message, "evidence": evidence, "refusal": strict}
+
+
 def division_refusal(governance_root: str | Path, card: dict[str, Any], *, stage: str, actor: str | None = None,
                      execution: Any = ..., fallback_class: str | None = None) -> dict[str, Any] | None:
-    """五处同判的唯一判定。None = 放行(执行方类别 ∈ 该模式 accepts, 或执行方不可判且无缺省类别); 否则 {code, message, exits, required,
-    executor}。未知 task_mode = EXECUTOR_TASK_MODE_UNKNOWN(fail-closed)。execution 缺省 = 读 project.json(形坏 = ExecutionDeclarationError 上抛)。"""
+    """五处同判的唯一判定。None = 放行(执行方类别 ∈ 该模式 accepts, 或执行方不可判且无缺省类别, 或 AIPOS-F256B 件⑤ 过渡在途:
+    认领后各处(transition.stages)且卡已认领 = 按认领时执行方继续); 否则 {code, message, exits, required, executor}。
+    未知 task_mode = EXECUTOR_TASK_MODE_UNKNOWN(fail-closed; 已认领的人肉期存量卡同按过渡)。execution 缺省 = 读 project.json。"""
+    refusal = _strict_refusal(governance_root, card, stage=stage, actor=actor, execution=execution, fallback_class=fallback_class)
+    if refusal is not None and stage in _decl()["transition"]["stages"] and claim_evidence(governance_root, card or {}) is not None:
+        return None
+    return refusal
+
+
+def _strict_refusal(governance_root: str | Path, card: dict[str, Any], *, stage: str, actor: str | None = None,
+                    execution: Any = ..., fallback_class: str | None = None) -> dict[str, Any] | None:
+    """新规则的严格判定(不含过渡; 只经 division_refusal / division_transition 调用)。"""
     from tools.aipos_cli.next_resolver import task_mode_executor
     from tools.schema_loader import get_enum_values
 
@@ -228,9 +284,13 @@ def surface_class_problem(governance_root: str | Path, *, surface: str | None, i
         name = str(card.get("claimed_by") or card.get("assigned_to") or "").strip()
     if not name:
         return None
-    cls, basis = instance_class(gov, name, _execution(gov))
+    execution = _execution(gov)
+    cls, basis = instance_class(gov, name, execution)
     if cls is None or cls in decl["classes"]:
         return None
+    if card and name in {str(card.get(k) or "").strip() for k in ("claimed_by", "assigned_to", "agent_instance")} and \
+            division_transition(gov, {**card, "task_id": str(task_id)}, actor=name, execution=execution) is not None:
+        return None  # AIPOS-F256B 件⑤: 过渡在途卡的写面按认领时执行方继续
     return {"code": str(decl["code"]), "reason": str(decl["reason"]).format(surface=surface, instance=name, cls=cls, basis=basis,
                                                                               classes=list(decl["classes"]))}
 
@@ -240,7 +300,8 @@ def surface_class_problem(governance_root: str | Path, *, surface: str | None, i
 # ---------------------------------------------------------------------------
 
 def division_violations(governance_root: str | Path) -> dict[str, Any]:
-    """只读盘点: {execution, pi_executor_missing, retired_key, noncode_cards, violations[{task_id, state, message, exits}], errors}。
+    """只读盘点: {execution, pi_executor_missing, retired_key, noncode_cards, violations[{task_id, state, message, exits}],
+    transitions[{task_id, state, code, message, evidence}](AIPOS-F256B 件⑤ 过渡在途信息项), errors}。
     在途 = 非终态队列目录(task_loader.iter_queue_task_paths, 状态集读 enums queue_state 声明); 违例 = division_refusal(认领 / 交回口径)非空。"""
     from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
     from tools.aipos_cli.next_resolver import task_mode_executor
@@ -252,7 +313,7 @@ def division_violations(governance_root: str | Path) -> dict[str, Any]:
     raw = (read_project_json(gov).get("execution") or {})
     out: dict[str, Any] = {"execution": execution, "retired_key": isinstance(raw, dict) and "pi_allowed_task_modes" in raw,
                            "retired_value": raw.get("pi_allowed_task_modes") if isinstance(raw, dict) else None,
-                           "pi_executor_missing": False, "noncode_cards": 0, "violations": [], "errors": []}
+                           "pi_executor_missing": False, "noncode_cards": 0, "violations": [], "transitions": [], "errors": []}
     accepts_subagent = {k for k, v in _decl()["kinds"].items() if EXECUTION_MODE_SUBAGENT in v["accepts"]}
     in_flight = tuple(s for s in QUEUE_STATES if s not in QUEUE_TERMINAL_STATES)
     for path in iter_queue_task_paths(gov, states=in_flight):
@@ -266,11 +327,16 @@ def division_violations(governance_root: str | Path) -> dict[str, Any]:
             out["noncode_cards"] += 1
         claimer = str(card.get("claimed_by") or "").strip() or None
         waiting = path.parent.name == in_flight[0]  # 首个非终态队列目录(声明序 = 待认领): 认领口径(出口改派 amend)
-        try:  # 其余在途目录 = 交回口径(出口撤卡重发; 卡面缺 claimed_by 的存量卡按目录态判)
-            refusal = division_refusal(gov, card, stage="claim" if waiting else "return", actor=claimer, execution=execution)
+        try:  # 其余在途目录 = 认领后口径: AIPOS-F256B 件⑤ 已认领的违例卡 = 过渡在途(信息项, 不拒), 否则交回口径
+            transition = None if waiting else division_transition(gov, card, actor=claimer, execution=execution)
+            refusal = None if transition else division_refusal(gov, card, stage="claim" if waiting else "return", actor=claimer,
+                                                               execution=execution)
         except ValueError as exc:
             out["errors"].append(f"{card['task_id']}: {exc}")
             continue
+        if transition is not None:
+            out["transitions"].append({"task_id": card["task_id"], "state": path.parent.name, "code": transition["code"],
+                                       "message": transition["message"], "evidence": transition["evidence"]})
         if refusal is not None:
             out["violations"].append({"task_id": card["task_id"], "state": path.parent.name, "code": refusal["code"],
                                       "message": refusal["message"], "exits": refusal["exits"]})
@@ -286,8 +352,8 @@ def division_upgrade_step(governance_root: str | Path, *, dry_run: bool = True) 
 
     gov = Path(governance_root)
     view = division_violations(gov)
-    out = {**{k: view[k] for k in ("execution", "retired_key", "retired_value", "pi_executor_missing", "violations", "noncode_cards",
-                                   "errors")},
+    out = {**{k: view[k] for k in ("execution", "retired_key", "retired_value", "pi_executor_missing", "violations", "transitions",
+                                   "noncode_cards", "errors")},
            "removed": False, "written": False, "project_json": str(project_json_path(gov))}
     if dry_run or not view["retired_key"]:
         return out
@@ -322,9 +388,11 @@ def division_summary(governance_root: str | Path) -> dict[str, Any]:
         lines.append("  execution.pi_allowed_task_modes 已退役(不再改变路由); lybra project upgrade --confirm 删除")
     for v in view["violations"]:
         lines.append(f"  ✗ 在途违例 {v['task_id']}({v['state']}, {v['code']}): 出口 {'; '.join(v['exits']) or v['message']}")
+    for t in view["transitions"]:  # AIPOS-F256B 件⑤: 信息项, 不拒
+        lines.append(f"  ~ 过渡在途 {t['task_id']}({t['state']}): {t['message']}")
     lines += [f"  读不出: {e}" for e in view["errors"]]
     return {"ok": True, "pi_executor": pi, "retired_key": view["retired_key"], "noncode_cards": view["noncode_cards"],
-            "violations": view["violations"], "errors": view["errors"], "lines": lines}
+            "violations": view["violations"], "transitions": view["transitions"], "errors": view["errors"], "lines": lines}
 
 
 

@@ -352,6 +352,11 @@
           "pi": "pi 工位(harness kind 的 advisor_session = false; 实例 = 有工位位置且 harness 非顾问会话 kind, 或 execution.pi_executor / execution.auditor)"
         },
         "stages": {"draft": "起草", "publish": "发卡", "claim": "认领", "kickoff": "开工稿", "return": "交回"},
+        "transition": {
+          "description": "AIPOS-F256B 件⑤ 在途卡过渡规则: 判定前已认领的卡(认领凭据见 evidence: 门生 claim 记录 / 卡面 claimed_by / 卡在非待认领的在途队列目录)在认领之后各处(stages: 开工稿 / 交回; 审计 / finalize / 结案本不经分工判定)按其认领时执行方继续, 不拒——新规则生效后子 agent 认领非代码卡即被拒, 故已认领的违例卡必为生效前认领, 无须时间戳判据; 人肉期 task_mode 不在值域的已认领存量卡同理。该卡的 pi 专属写面(验证根 / 发布目标, roles.schema write_boundary.executor_class_surfaces)同样按认领时执行方继续。只读诊断(roles list 执行分工段 / project upgrade 预演)把它们列为「过渡在途」信息项而非违例; 待认领卡与新起草 / 发卡仍按新规则拒并给出口。判定仍只在 execution_division(division_refusal / division_transition)。",
+          "stages": ["kickoff", "return"],
+          "evidence": ["claim_record", "claimed_by", "queue_state"]
+        },
         "code_change": {
           "description": "AIPOS-F256 件③(防挂羊头): 执行方 kind ∈ kinds 的模式(code)且交付主体为卡分支的交回, 须在卡车道(lane.repo 解析仓 + lane.paths)内相对认领基线(git merge-base <基线分支> <commit_sha>)有非空 diff; 空 = 拒 INGEST_CODE_CHANGE_EMPTY 并给出口(改 task_mode 为对应非代码类并改派 pi)。lane.paths 缺 = 全仓。判定唯一 execution_division.code_change_problem(交回入口 artifact_ingest 调用)。",
           "kinds": ["subagent_executor"]
@@ -371,6 +376,7 @@
           "exit_withdraw": "lybra --workspace-root {governance_root} queue withdraw --task-id {task_id} --actor {advisor} --reason \"AIPOS-F256: 非代码卡改派 pi 执行工位\"(已认领卡撤卡), 再按同一卡稿去掉 harness / assigned_to 重发(起草缺省派 pi 执行工位 {pi_executor})",
           "exit_mode": "确为代码工作 = task_mode 改 code 并在车道内改产品仓",
           "exit_pi_undeclared": "按 lybra onboarding guide 接入 pi 执行工位(与审计工位同级), 再 lybra project set-execution --workspace-root {governance_root} --subagent-executor {subagent} --auditor {auditor} --pi-executor <pi 执行工位实例> --dry-run(预演; --actor <顾问实例> --confirm 写入)",
+          "transition": "AIPOS-F256B 过渡在途: 卡 {task_id}(task_mode={task_mode})在新分工规则前已认领({evidence}), 按认领时执行方 {actor} 继续到结案, 不拒; 原判定: {code}",
           "code_change_empty": "AIPOS-F256 INGEST_CODE_CHANGE_EMPTY: 代码卡 {task_id} 交回 {commit_sha} 相对认领基线 {base}({base_ref})在卡车道 {repo}:{paths} 内无产品仓文件改动。出口: 车道内提交代码改动后更新 Return; 或非代码工作 = 改 task_mode 为对应非代码类(docs / governance / config / validation)并改派 pi 执行工位({exits})"
         }
       },

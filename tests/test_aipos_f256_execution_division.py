@@ -143,7 +143,8 @@ def test_accept1_matrix_six_modes_two_executors_five_stages(tmp_path, monkeypatc
         for stage, text in rows["pi"].items():
             assert DIVISION not in text, (mode, "pi", stage, text)
         for stage, text in rows["subagent"].items():
-            if mode == "code":
+            if mode == "code" or stage in ("kickoff", "return"):
+                # AIPOS-F256B 件⑤: 开工稿 / 交回 = 认领后各处, 本矩阵的卡已在认领后队列目录(已认领凭据)= 过渡在途, 按认领时执行方继续
                 assert DIVISION not in text, (mode, stage, text)
             elif not text.startswith("不适用"):
                 assert DIVISION in text and "出口" in text, (mode, stage, text)
@@ -343,15 +344,15 @@ def test_item4_upgrade_lists_inflight_violations_and_roles_list_section(tmp_path
     view = division_upgrade_step(gov, dry_run=True)
     _show("[件④·upgrade 预演盘点] " + json.dumps({k: view[k] for k in ("pi_executor_missing", "noncode_cards", "retired_key")},
                                                  ensure_ascii=False) + "\n" + "\n".join(f"  {v['task_id']}: {v['exits'][-2]}" for v in view["violations"]))
-    assert view["pi_executor_missing"] and [v["task_id"] for v in view["violations"]] == ["F256-V2", "F256-V1"] or \
-        sorted(v["task_id"] for v in view["violations"]) == ["F256-V1", "F256-V2"]
-    by_id = {v["task_id"]: v for v in view["violations"]}
-    assert "queue amend" in by_id["F256-V2"]["exits"][1] and "queue withdraw" in by_id["F256-V1"]["exits"][1]
+    # AIPOS-F256B 件⑤: 已认领的 V1 = 过渡在途(信息项), 违例只剩待认领的 V2
+    assert view["pi_executor_missing"] and [v["task_id"] for v in view["violations"]] == ["F256-V2"]
+    assert [t["task_id"] for t in view["transitions"]] == ["F256-V1"]
+    assert "queue amend" in view["violations"][0]["exits"][1]
     assert (gov / "5_tasks" / "queue" / "claimed" / "f256-v1.md").read_bytes() == before, "既有卡不改写"
     summary = division_summary(gov)
     _show("[件④·roles list 诊断段]\n" + "\n".join(summary["lines"]))
     assert summary["lines"][0].startswith("执行分工(AIPOS-F256") and "未声明 pi 执行工位" in summary["lines"][0]
-    assert sum("✗ 在途违例" in ln for ln in summary["lines"]) == 2
+    assert sum("✗ 在途违例" in ln for ln in summary["lines"]) == 1 and sum("~ 过渡在途" in ln for ln in summary["lines"]) == 1
     rc, out, err = _cli("roles", "--workspace-root", str(gov), "list")
     assert "执行分工(AIPOS-F256" in out, out + err
 
@@ -366,15 +367,63 @@ def test_item2_next_does_not_derive_claim_for_division_violation(tmp_path, monke
     assert d["derivable"] is False and d["action"]["type"] == "executor_division" and "queue amend" in d["suggested_action"]
 
 
-def test_kickoff_refuses_subagent_brief_for_noncode_card(tmp_path, monkeypatch):
+def test_kickoff_and_return_stage_refuse_only_without_claim_evidence(tmp_path, monkeypatch):
+    """开工稿 / 交回口径的严格判定仍在(无认领凭据的卡 = 拒并给撤卡重发出口); 有认领凭据 = 过渡(见验收⑧)。"""
+    from tools.aipos_cli.execution_division import division_refusal
+
+    gov = _gov(tmp_path, monkeypatch)
+    card = {"task_id": "F256-K0", "task_mode": "docs", "harness": "claude-code", "assigned_to": SUB}  # 不在队列、无 claim 记录
+    for stage in ("kickoff", "return"):
+        refusal = division_refusal(gov, card, stage=stage, actor=SUB)
+        _show(f"[件②·{stage} 无认领凭据] {refusal['message'][:200]}…")
+        assert refusal["code"] == DIVISION and "queue withdraw" in refusal["message"]
+
+
+# ===========================================================================
+# 验收⑧(AIPOS-F256B 件⑤): 已认领的子 agent 非代码卡 = 过渡在途(交回 / 开工稿 / 写面通过); 待认领同类卡认领被拒
+# ===========================================================================
+
+def test_accept8_inflight_subagent_noncode_card_transitions_pending_refused(tmp_path, monkeypatch):
+    from tools.aipos_cli.agent_profiles import load_agent_profiles
+    from tools.aipos_cli.artifact_ingest import validate_task_artifact
+    from tools.aipos_cli.execution_division import division_summary, division_transition, surface_class_problem
+    from tools.aipos_cli.queue_mutation import mutate_queue_task
     from tools.aipos_cli.subagent_kickoff import KickoffRefused, render_kickoff_brief
 
     gov = _gov(tmp_path, monkeypatch)
-    f78._card(gov, "F256-K1", "claimed", assigned=SUB, task_mode="docs", extra={"harness": "claude-code", "claimed_by": SUB})
-    with pytest.raises(KickoffRefused) as exc:
-        render_kickoff_brief(gov, "F256-K1")
-    _show(f"[件②·开工稿拒] {exc.value.code}: {exc.value.message}")
-    assert exc.value.code == "KICKOFF_EXECUTOR_DIVISION" and "queue withdraw" in exc.value.message
+    # 新规则前已认领(门生 claim 记录 + 卡面 claimed_by)的子 agent validation / docs 卡
+    for tid, mode in (("F256-T1", "docs"), ("F256-T2", "validation")):
+        f78._card(gov, tid, "claimed", assigned=SUB, task_mode=mode, extra={"harness": "claude-code", "claimed_by": SUB})
+        f78._claim_record(gov, tid, SUB)
+    # 人肉期存量: 卡在已认领目录、无 claim 记录 / claimed_by、task_mode 不在值域
+    f78._card(gov, "F256-T3", "claimed", assigned="codex-legacy-exec", task_mode="ops", extra={"harness": "codex"})
+    trans = division_transition(gov, {"task_id": "F256-T1", "task_mode": "docs", "harness": "claude-code", "claimed_by": SUB}, actor=SUB)
+    _show(f"[验收⑧·过渡判定] {trans['message']}")
+    assert trans["code"] == DIVISION and "claim 记录" in trans["evidence"]
+    try:
+        render_kickoff_brief(gov, "F256-T1")
+        kick = "出稿"
+    except KickoffRefused as exc:
+        kick = exc.code
+    _show(f"[验收⑧·已认领子 agent docs 卡开工稿] {kick}")
+    assert kick == "出稿", kick  # 交回落盘前开工(落盘后 = 已交待入门, 不再开工)
+    f78._write(gov / "task_cards" / "F256-T1" / "RETURN.md", f78._return_text("F256-T1", f78.SHA_A, f78.SHA_A))
+    check = validate_task_artifact("F256-T1", gov)
+    _show(f"[验收⑧·已认领子 agent docs 卡交回] category={check['category']}(分工判定放行; 后续为本靶场未布置的分支)")
+    assert check["category"] != DIVISION and not any("AIPOS-F256" in r for r in check["reasons"]), check
+    assert surface_class_problem(gov, surface="validation_root", instance=SUB, task_id="F256-T2") is None  # 过渡卡写面按认领时执行方
+    assert surface_class_problem(gov, surface="validation_root", instance=SUB, task_id=None)["code"] == "SURFACE_EXECUTOR_CLASS"
+    # 待认领的同类卡: 认领仍按新规则拒
+    f78._card(gov, "F256-T4", "pending", assigned=SUB, task_mode="docs", extra={"harness": "claude-code"})
+    claim = mutate_queue_task(gov, "claim", task_id="F256-T4", actor=SUB, dry_run=True, profiles=load_agent_profiles(gov))
+    reason = next(r for r in claim["blocking_reasons"] if DIVISION in r)
+    _show(f"[验收⑧·待认领同类卡认领拒] {reason}")
+    assert "queue amend" in reason
+    summary = division_summary(gov)
+    _show("[验收⑧·roles list 诊断段]\n" + "\n".join(summary["lines"]))
+    assert [v["task_id"] for v in summary["violations"]] == ["F256-T4"]
+    assert sorted(t["task_id"] for t in summary["transitions"]) == ["F256-T1", "F256-T2", "F256-T3"]
+    assert sum("~ 过渡在途" in ln for ln in summary["lines"]) == 3 and sum("✗ 在途违例" in ln for ln in summary["lines"]) == 1
 
 
 def test_single_implementation_pointers_resolve():
