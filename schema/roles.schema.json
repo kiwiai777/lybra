@@ -755,7 +755,7 @@
     "owner_explicit_target": {
       "description": "AIPOS-F274: Owner 中央凭据跨项目。凭据 projects 不含目标项目时, 只对 project_scope=cross_project 的角色类(Owner)放宽: 动词显式带了目标项目(dispatch 的 project 参数 / 显式 workspace_root / 显式 governance_root), 且目标是门 home 根内已注册项目(注册枚举 = workspace_config._project_candidates, 结构判据 has_workspace_queue(established); 显式根须正是 <home>/<项目>), 即放行。非 Owner 角色(顾问 / 执行 / 审计 / 规划 / 自定义)一律照 projects 成员判定, 不放宽。缺显式目标 = 照现行解析(不猜)。判定唯一实现: tools/project_resolution.ProjectEnforcer.check_project_scope(门 _project_gate_denied / _resolve_queue_workspace / 签码 governance_root 同调)。",
       "enabled": true,
-      "enabled_default_rationale": "缺省开启: 放宽只把「Owner 凭据 + 显式目标 + 已注册项目」这一类原先被拒的请求改为放行; 原先放行的请求一律不变(非 Owner 角色、未带显式目标、目标未注册的判定逐字不变)。关 = false 即回到旧行为(Owner 也按 projects 成员判定)。",
+      "enabled_default_rationale": "缺省开启: 本开关只管放宽——开启只把「Owner 凭据 + 显式目标 + 已注册项目」这一类原先被拒的请求改为放行, 不让任何原先放行的请求变拒(非 Owner 角色、未带显式目标、目标未注册的判定逐字不变)。关 = false 即回到旧放宽前行为(Owner 也按 projects 成员判定)。与开关无关、始终生效的两处收紧见 owner_role_codes 与 enroll_code_scope_check。",
       "explicit_target_args": ["project", "workspace_root", "governance_root"],
       "wildcard": {
         "value": "*",
@@ -765,7 +765,8 @@
       },
       "trace_fields": ["credential_project", "target_project"],
       "trace_note": "跨项目签发(凭据所属项目 ≠ 目标项目)由门写入记录: Owner 决定记录 frontmatter 与注册码记录各带 credential_project / target_project; 客户端自带的同名字段一律被门丢弃(防伪造)。凭据所属项目 = 凭据 default_project, 否则 projects 列表(逗号连接); 两者皆无 = 不可归属, 不写。",
-      "owner_role_codes": "签 Owner 类角色(project_scope=cross_project)的注册码只许 Owner 类凭据发起(非 Owner 自签 Owner 码 = 绕过本放宽的提权路径, 拒)"
+      "owner_role_codes": "签 Owner 类角色(project_scope=cross_project)的注册码只许 Owner 类凭据发起(非 Owner 自签 Owner 码 = 绕过本放宽的提权路径, 拒)",
+      "enroll_code_scope_check": "签码动词显式 governance_root 也经同一执法点核凭据项目域(原只核注册不核项目域: 项目域凭据可为别的已注册项目签码); 非 Owner 凭据为凭据外项目签码 = PROJECT_SCOPE_DENIED, 无 projects 的凭据不受影响"
     }
   }
 }
