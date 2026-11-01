@@ -953,8 +953,10 @@ def _confirm(params: dict[str, Any], payload: dict[str, Any], decl: dict[str, An
              connection_json: Path | None) -> tuple[dict[str, Any], dict[str, Any], MintRequestError | None]:
     from tools.aipos_cli.envelope_mint import mint_via_gate
 
+    # AIPOS-F274 件③: 调门显式传目标项目(门按显式目标判项目域; Owner 中央凭据对 home 根内已注册项目放宽)
     report = mint_via_gate([payload], governance_root=Path(params["governance_root"]), actor=str(payload["actor"]),
-                           connection_json=str(connection_json), token_role=str(decl["token_role"]))
+                           connection_json=str(connection_json), token_role=str(decl["token_role"]),
+                           project=str(params.get("project") or "") or None)
     landing = report.get("landing") or {}
     landing_view = {k: landing.get(k) for k in ("landed", "verdict", "committed", "pushed", "commit", "exit_code") if k in landing}
     result = {"outcome": "signed" if report["signed"] else "mint_rejected", "credential_fingerprint": report.get("credential_fingerprint"),

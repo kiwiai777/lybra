@@ -2222,6 +2222,8 @@ def _synthesize_authorization_decision(payload: dict[str, Any], record: dict[str
         "refs": [relpath],
         "capability_scope": {"token_ref": "owner_console", "operations": ["owner_decision_record"], "projects": [project],
                              "expires_at": iso_z(revised + timedelta(days=1))},
+        # AIPOS-F274 件④: 门注入的跨项目追溯字段原样带给 writer(有才带)
+        **{k: payload[k] for k in ("credential_project", "target_project") if str(payload.get(k) or "").strip()},
     }
 
 

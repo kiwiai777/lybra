@@ -233,7 +233,8 @@ def _gate_client(connection_json: Path | None, token_role: str) -> tuple[Any, st
 
 
 def _gate_args(params: dict[str, Any]) -> dict[str, Any]:
-    return {k: params[k] for k in ("role", "instance", "ttl", "gate_url", "governance_root", "owner_authorization_ref", "actor")}
+    # AIPOS-F274 件③: 显式目标项目(project)随两跳一并传门(门按显式目标判项目域; 码记录 / 运输凭证落目标项目根)
+    return {k: params[k] for k in ("role", "instance", "ttl", "gate_url", "governance_root", "owner_authorization_ref", "actor", "project")}
 
 
 def _call_gate(params: dict[str, Any], connection_json: Path | None, token_role: str, *, confirm: bool) -> tuple[dict[str, Any], str]:
@@ -328,7 +329,9 @@ def handle_enroll_code_request(
         # 码原文只进应答, 不进审计: 审计只记角色 / 实例 / 时效 / 到期 / 码编号 / 码指纹
         result = {**fields, "outcome": "issued", "code_id": conf.get("code_id"), "code_fingerprint": conf.get("fingerprint"),
                   "role": conf.get("role"), "instance": conf.get("instance"), "ttl_seconds": conf.get("ttl_seconds"),
-                  "expires_at": conf.get("expires_at"), "gate_url": conf.get("gate_url"), "governance_root": conf.get("governance_root")}
+                  "expires_at": conf.get("expires_at"), "gate_url": conf.get("gate_url"), "governance_root": conf.get("governance_root"),
+                  # AIPOS-F274 件④: 门写进码记录的跨项目追溯(有才带)
+                  **{k: conf[k] for k in ("credential_project", "target_project") if conf.get(k)}}
         code = {k: conf.get(k) for k in ("code_id", "self_contained_code", "paste_text", "paste_instruction", "next_step", "fingerprint",
                                           "role", "instance", "ttl_seconds", "expires_at", "gate_url", "gate_url_source", "governance_root")}
         exits = exit_commands(board, code_id=str(conf.get("code_id") or ""), instance=conf.get("instance"), project=params["project"])

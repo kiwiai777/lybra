@@ -185,19 +185,75 @@ class ProjectResolver:
         return None
 
 
+def role_is_cross_project(entry: dict[str, Any]) -> bool:
+    """AIPOS-F92 件② / AIPOS-F274: 凭据条目(或门 capability)的角色(role_class 优先, 否则角色名)在 roles.schema 声明
+    project_scope=cross_project → True(Owner 角色类)。唯一读取口(门 http_sse._role_is_cross_project 委托本函数)。
+    注册表不可读 = SchemaLoadError 上抛(fail-closed: 不猜)。"""
+    from tools.schema_loader import get_role_spec
+
+    role = str(entry.get("role_class") or entry.get("role") or "").strip()
+    spec = get_role_spec(role) if role else None
+    return bool(spec) and str(spec.get("project_scope") or "") == "cross_project"
+
+
+def owner_explicit_target_declaration() -> dict[str, Any]:
+    """AIPOS-F274: roles.schema project_scope_semantics.owner_explicit_target(Owner 显式目标跨项目放宽的规则与开关)。
+    缺节 / 缺 enabled 布尔 = SchemaLoadError(fail-closed: 调用方按「不放宽」处理并出声)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (load_schema("roles").get("project_scope_semantics") or {}).get("owner_explicit_target")
+    if not isinstance(decl, dict) or not isinstance(decl.get("enabled"), bool):
+        raise SchemaLoadError("roles.schema project_scope_semantics.owner_explicit_target 缺失或 enabled 非布尔(AIPOS-F274)")
+    return decl
+
+
+def credential_project_label(token_data: dict[str, Any]) -> str | None:
+    """AIPOS-F274 件④: 签发凭据所属项目(记录追溯用): default_project(home 联合注册表按来源项目给 Owner 凭据的路由缺省 / 铸凭据时绑定),
+    否则 projects 列表(逗号连接)。两者皆无 = None(不可归属)。"""
+    default = str(token_data.get("default_project") or "").strip()
+    if default:
+        return default
+    projects = token_data.get("projects")
+    if isinstance(projects, list):
+        names = [str(p).strip() for p in projects if str(p).strip()]
+        if names:
+            return ",".join(names)
+    return None
+
+
+def cross_project_trace(token_data: dict[str, Any], target_project: str) -> dict[str, str] | None:
+    """AIPOS-F274 件④: 跨项目签发追溯字段 {credential_project, target_project}; 凭据所属项目不可归属或目标即在其中 = None(非跨项目)。"""
+    label = credential_project_label(token_data)
+    target = str(target_project or "").strip()
+    if not label or not target or target in label.split(","):
+        return None
+    return {"credential_project": label, "target_project": target}
+
+
 class ProjectEnforcer:
     """统一的项目域执法点 (AIPOS-F66)
     
     检查 token 的 projects 字段与解析出的项目是否匹配。
+    AIPOS-F274: Owner 角色类的显式目标跨项目放宽也只在这里判(owner_explicit_target), 门各判定点同调。
     """
     
     @staticmethod
-    def check_project_scope(token_data: dict[str, Any], active_project: str) -> tuple[bool, str | None]:
+    def check_project_scope(
+        token_data: dict[str, Any],
+        active_project: str,
+        *,
+        explicit: bool = False,
+        target_root: str | Path | None = None,
+        home_root: str | Path | None = None,
+    ) -> tuple[bool, str | None]:
         """检查 token 是否有权访问指定项目
         
         Args:
             token_data: token 数据
             active_project: 当前活跃项目名
+            explicit: 调用方是否显式带了目标项目(AIPOS-F274: project 参数 / 显式 workspace_root / 显式 governance_root)
+            target_root: 显式目标根(有则须正是 <home>/<active_project>)
+            home_root: 门 home 根(缺 = workspace_config.resolve_home_root 唯一解析)
         
         Returns:
             (allowed, error_detail) 
@@ -218,9 +274,57 @@ class ProjectEnforcer:
         
         if active_project in project_list:
             return (True, None)
-        else:
-            return (
-                False,
-                f"token is scoped to projects {project_list}, but active project is '{active_project}'. "
-                f"Rotate a token scoped to this project or operate within an authorized project."
-            )
+        allowed, why = ProjectEnforcer.owner_explicit_target(
+            token_data, active_project, explicit=explicit, target_root=target_root, home_root=home_root)
+        if allowed:
+            return (True, None)
+        detail = (f"token is scoped to projects {project_list}, but active project is '{active_project}'. "
+                  f"Rotate a token scoped to this project or operate within an authorized project.")
+        if why:
+            detail += f" [owner_explicit_target: {why}]"
+        if "*" in project_list:
+            from tools.schema_loader import SchemaLoadError
+
+            try:
+                wildcard = owner_explicit_target_declaration().get("wildcard") or {}
+                detail += f" [\"*\" is not a wildcard; exit: {wildcard.get('exit')}]"
+            except SchemaLoadError as exc:  # 声明读不出: 拒因照出, 不吞
+                detail += f" [\"*\" is not a wildcard; declaration unreadable: {exc}]"
+        return (False, detail)
+
+    @staticmethod
+    def owner_explicit_target(
+        token_data: dict[str, Any],
+        target_project: str,
+        *,
+        explicit: bool,
+        target_root: str | Path | None = None,
+        home_root: str | Path | None = None,
+    ) -> tuple[bool, str | None]:
+        """AIPOS-F274 件②: Owner 角色类显式目标跨项目放宽(规则与开关读 roles.schema project_scope_semantics.owner_explicit_target)。
+        放行须同时满足: 开关开; 凭据角色类 project_scope=cross_project; 调用方显式带目标; 目标是 home 根内已注册项目
+        (workspace_config._project_candidates); 显式根(若给)解析后正是 <home>/<目标>。任一不满足 = (False, 原因)。
+        声明 / 注册表读不出 = 不放宽(fail-closed), 原因带原文。"""
+        from tools.schema_loader import SchemaLoadError
+
+        try:
+            decl = owner_explicit_target_declaration()
+            if not decl["enabled"]:
+                return (False, "disabled by roles.schema project_scope_semantics.owner_explicit_target.enabled")
+            if not role_is_cross_project(token_data):
+                return (False, None)  # 非 Owner 角色类: 不放宽(拒因照成员判定原文)
+        except SchemaLoadError as exc:
+            return (False, f"declaration unreadable ({exc}); not relaxed")
+        if not explicit:
+            return (False, "Owner credential may act on another registered project only when the call names it explicitly "
+                           "(project / workspace_root / governance_root)")
+        target = str(target_project or "").strip()
+        from tools.aipos_cli.workspace_config import _project_candidates, resolve_home_root
+
+        home = Path(home_root).expanduser().resolve() if home_root else resolve_home_root().expanduser().resolve()
+        if not target or target not in _project_candidates(home):
+            return (False, f"target project {target!r} is not a registered project under home root {home} "
+                           "(registry = 5_tasks/queue + project.json)")
+        if target_root is not None and Path(target_root).expanduser().resolve() != (home / target).resolve():
+            return (False, f"explicit root {target_root} is not the registered project root {home / target}")
+        return (True, None)

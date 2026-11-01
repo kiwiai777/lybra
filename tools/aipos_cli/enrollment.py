@@ -227,8 +227,10 @@ def issue_self_contained_code(
     governance_root: str | None = None,
     by: str = "owner",
     reason: str = "",
+    scope_trace: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """F23: 发码的唯一实现(门动词 lybra_enroll_code_* 与 CLI roles enroll-code 共用)。
+    AIPOS-F274 件④: scope_trace = 门算的跨项目签码追溯(凭据所属项目 / 目标项目), 进码记录、create 日志行与应答。
 
     红线: 发码只有一份实现 —— 本函数。产出:
       - 既有 enrollment 记录(create_enrollment_code, 单次/TTL/撤销面沿用)
@@ -259,6 +261,7 @@ def issue_self_contained_code(
         by=by,
         reason=reason,
         governance_root=(governance_root or "").strip() or None,
+        scope_trace=scope_trace,
     )
 
     # ② 运输通行凭证(TTL 与码一致; 码即认证 —— 码过期凭证同步失效)
@@ -311,6 +314,7 @@ def issue_self_contained_code(
         "fingerprint": enrollment["fingerprint"],
         "by": by,
         "reason": reason,
+        **{k: enrollment[k] for k in ("credential_project", "target_project") if enrollment.get(k)},
     }
 
 
@@ -1975,6 +1979,7 @@ def _append_enrollment_trail(
     reason: str,
     governance_root: str | None = None,
     projects: Any = None,
+    extra: str = "",
 ) -> Path:
     """Append-only 审计日志。
 
@@ -1985,7 +1990,7 @@ def _append_enrollment_trail(
     owner = enrollment_owner_root(workspace_root, governance_root=governance_root, projects=projects, instance=instance)
     trail = enrollment_trail_path(owner["root"] or _workspace_root_path(workspace_root))
     line = _trail_line(action=action, code_id=code_id, role=role, instance=instance,
-                       project=owner["project"] if owner["root"] else None, by=by, reason=reason)
+                       project=owner["project"] if owner["root"] else None, by=by, reason=reason, extra=extra)
     _write_trail_line(trail, line)
     return trail
 
@@ -2143,8 +2148,10 @@ def create_enrollment_code(
     by: str = "owner",
     reason: str = "",
     governance_root: str | None = None,
+    scope_trace: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """创建一个注册码。
+    AIPOS-F274 件④: scope_trace = 门算的跨项目签码追溯 {credential_project, target_project}(有才写进码记录与 create 日志行; 缺 = 记录不变)。
     
     Args:
         workspace_root: 工作区根路径
@@ -2193,6 +2200,8 @@ def create_enrollment_code(
         "by": by,
         "reason": reason,
     }
+    trace = {k: str(scope_trace[k]) for k in ("credential_project", "target_project") if (scope_trace or {}).get(k)}
+    record.update(trace)
     
     enrollments = _load_enrollments(root)
     enrollments[code_id] = record
@@ -2207,6 +2216,7 @@ def create_enrollment_code(
         by=by,
         reason=reason,
         governance_root=record["governance_root"],
+        extra="  ".join(f"{k}={v}" for k, v in trace.items()),
     )
     
     return {
@@ -2220,6 +2230,7 @@ def create_enrollment_code(
         "expires_at": record["expires_at"],
         "by": by,
         "reason": reason,
+        **trace,
     }
 
 
