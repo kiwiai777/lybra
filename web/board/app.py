@@ -1146,6 +1146,55 @@ Lybra 服务端位置（AIPOS-286）：
         "sc_sum_none": "本机安装自检还没运行(点开即查 Python / Node.js / git / pi 与模型 / 门是否装好)",
         "sc_sum_error": "本机安装自检读不出:{error}",
         "sc_sum_link": "查看设置自检 →",
+        # AIPOS-F269: board write exception 4 "new project" on the onboarding page (web/board/readonly_pages.py + static/project-new.js), zh / en same keys
+        "pn_heading": "新建项目",
+        "pn_intro": "在 home 根下建一个新项目的治理根(队列 / 治理文档 / project.json / 首份阶段快照), 与命令 lybra project new 是同一个实现。先预演看清将建什么, 确认后才写入并落账。",
+        "pn_name_label": "项目名(home 根下的目录名)",
+        "pn_repo_label": "产品仓绝对路径(可选, 留空 = 之后再声明)",
+        "pn_preview_btn": "预演",
+        "pn_readonly": "新建项目只对 Owner 登录会话开放;其他角色请告诉顾问或 Owner(命令见下)。",
+        "pn_after": "建成后:看板与门都按 home 根扫描发现项目(不用重启看板), 下面的接入清单会列出这个项目, 标「下一步」的那一项就是接着要做的。要让门和顾问用上它, 按「给顾问的命令」里的接入向导逐步做(签授权、顾问凭据、工位);向导会先检查门是否在跑、是否服务这个 home 根。",
+        "pn_name_placeholder": "<项目名>",
+        "pn_home": "home 根:{home_root}",
+        "pn_next": "下一步",
+        "pn_next_none": "接入清单已全部完成",
+        "pn_created_banner": "已建项目 {project}。下一步:{next}",
+        "pn_created_jump": "看清单 →",
+        "pn_created_missing": "home 根里没有已注册项目 {project}(看板只列 home 根已注册项目;刷新或核对项目名)",
+        "pn_js_preview_heading": "预演:将新建项目 {project}(还没写入)",
+        "pn_js_root": "治理根:{root}",
+        "pn_js_registered_by": "registered_by(本会话 Owner):{actor} · 来源:{surface}",
+        "pn_js_tree": "将建的目录与文件",
+        "pn_js_project_json": "project.json 全文",
+        "pn_js_repo_none": "产品仓:这次不声明(之后在接入向导第 2 步声明)",
+        "pn_js_repo": "产品仓:{path}({git})",
+        "pn_js_repo_git": "在 git 仓 {root} 内",
+        "pn_js_repo_nogit": "存在, 但不在任何 git 仓内",
+        "pn_js_gov_git": "落账:home 根在治理仓 {root} 内, 确认后精确提交并推送本次写出的文件",
+        "pn_js_gov_nogit": "落账:home 根不在任何 git 仓内——确认后项目会建好, 但落账会失败(写入已生效)。建议先初始化治理仓:{command}",
+        "pn_js_confirm_btn": "确认新建",
+        "pn_js_cancel_btn": "取消",
+        "pn_js_working": "处理中…",
+        "pn_js_done_heading": "已新建项目 {project}",
+        "pn_js_landed": "已落账:提交 {commit}",
+        "pn_js_not_landed": "落账未完成(项目已建好, 不要重复新建):{line}",
+        "pn_js_next_cmds": "给顾问的命令",
+        "pn_js_go": "去接入清单看下一步",
+        "pn_js_fail_heading": "没有建成",
+        "pn_js_err_other": "请求被拒({code}):{message}",
+        "pn_js_tech": "技术详情",
+        "pn_js_name_missing": "请先填项目名",
+        "pn_js_login": "登录已失效, 请重新登录看板后再试",
+        "pn_js_err_OWNER_ONLY": "只有 Owner 登录会话可以新建项目;请告诉顾问或 Owner。",
+        "pn_js_err_WORKSPACE_REQUIRED": "请先填项目名。",
+        "pn_js_err_PROJECT_NAME_INVALID": "项目名不合:须是 home 根下的一级目录名(不含 /、不是 . 或 ..、不是绝对路径)。",
+        "pn_js_err_PROJECT_EXISTS": "这个项目已存在;换一个名字, 或在下面的接入清单里继续接入它。",
+        "pn_js_err_CODE_REPO_INVALID": "产品仓路径不合(须是绝对路径)。",
+        "pn_js_err_CODE_REPO_NOT_FOUND": "产品仓路径不存在;先建好或克隆产品仓, 或留空先建项目。",
+        "pn_js_err_PREVIEW_TOKEN_EXPIRED": "预演已过期, 请重新预演。",
+        "pn_js_err_PREVIEW_PARAMS_MISMATCH": "预演后改过项目名或产品仓, 请重新预演。",
+        "pn_js_err_AUDIT_LOG_UNAVAILABLE": "看板审计日志写不进, 已拒绝执行(每次新建都要留痕);请告诉顾问检查看板运行目录。",
+        "pn_js_err_PROJECT_NEW_FAILED": "建项目没有完成, 详情见技术详情;请告诉顾问核对。",
         "ib_title": "待你决定 · {count} 件({projects} 个项目)",
         "ib_empty": "待你决定:没有待定事项({projects} 个项目)",
         "ib_heading": "{project} · {what}",
@@ -1733,6 +1782,55 @@ Important boundaries:
         "sc_sum_none": "Install check has not run yet (open it to check Python / Node.js / git / pi and its models / the gate)",
         "sc_sum_error": "Install check could not be read: {error}",
         "sc_sum_link": "Open setup check →",
+        # AIPOS-F269: board write exception 4 "new project" on the onboarding page (web/board/readonly_pages.py + static/project-new.js), zh / en same keys
+        "pn_heading": "New project",
+        "pn_intro": "Creates the governance root of a new project under the home root (queue / governance docs / project.json / first stage snapshot), the same implementation as the command lybra project new. Preview first to see what will be created; nothing is written or committed until you confirm.",
+        "pn_name_label": "Project name (a directory name under the home root)",
+        "pn_repo_label": "Product repo absolute path (optional; empty = declare it later)",
+        "pn_preview_btn": "Preview",
+        "pn_readonly": "Creating a project is open to an Owner login session only; other roles, please tell the advisor or the Owner (command below).",
+        "pn_after": "Once created: the board and the gate find projects by scanning the home root (no board restart), the checklist below lists the new project and the item marked \"Next step\" is what comes next. For the gate and the advisor to use it, follow the onboarding guide in \"Commands for your advisor\" step by step (sign the grant, advisor credential, workstations); the guide first checks the gate is running and serves this home root.",
+        "pn_name_placeholder": "<project-name>",
+        "pn_home": "Home root: {home_root}",
+        "pn_next": "Next step",
+        "pn_next_none": "the checklist is all done",
+        "pn_created_banner": "Project {project} created. Next step: {next}",
+        "pn_created_jump": "Go to its checklist →",
+        "pn_created_missing": "No registered project {project} in the home root (the board lists registered projects only; refresh or check the name)",
+        "pn_js_preview_heading": "Preview: new project {project} (nothing written yet)",
+        "pn_js_root": "Governance root: {root}",
+        "pn_js_registered_by": "registered_by (this Owner session): {actor} · source: {surface}",
+        "pn_js_tree": "Directories and files to create",
+        "pn_js_project_json": "project.json in full",
+        "pn_js_repo_none": "Product repo: not declared this time (declare it in step 2 of the onboarding guide)",
+        "pn_js_repo": "Product repo: {path} ({git})",
+        "pn_js_repo_git": "inside git repo {root}",
+        "pn_js_repo_nogit": "exists, not inside any git repo",
+        "pn_js_gov_git": "Commit: the home root is inside governance repo {root}; on confirm the written files are committed and pushed exactly",
+        "pn_js_gov_nogit": "Commit: the home root is not inside any git repo - on confirm the project is created but the commit fails (the write stays). Initialise the governance repo first: {command}",
+        "pn_js_confirm_btn": "Create it",
+        "pn_js_cancel_btn": "Cancel",
+        "pn_js_working": "Working...",
+        "pn_js_done_heading": "Project {project} created",
+        "pn_js_landed": "Committed: {commit}",
+        "pn_js_not_landed": "Commit not done (the project is created; do not create it again): {line}",
+        "pn_js_next_cmds": "Commands for your advisor",
+        "pn_js_go": "Open the checklist for the next step",
+        "pn_js_fail_heading": "Not created",
+        "pn_js_err_other": "Request refused ({code}): {message}",
+        "pn_js_tech": "Technical details",
+        "pn_js_name_missing": "Fill in the project name first",
+        "pn_js_login": "Your login has expired; log in to the board again and retry",
+        "pn_js_err_OWNER_ONLY": "Only an Owner login session can create a project; please tell the advisor or the Owner.",
+        "pn_js_err_WORKSPACE_REQUIRED": "Fill in the project name first.",
+        "pn_js_err_PROJECT_NAME_INVALID": "Invalid project name: it must be a single directory name under the home root (no /, not . or .., not an absolute path).",
+        "pn_js_err_PROJECT_EXISTS": "This project already exists; pick another name, or continue onboarding it in the checklist below.",
+        "pn_js_err_CODE_REPO_INVALID": "Invalid product repo path (it must be absolute).",
+        "pn_js_err_CODE_REPO_NOT_FOUND": "The product repo path does not exist; create or clone the repo first, or leave it empty and create the project.",
+        "pn_js_err_PREVIEW_TOKEN_EXPIRED": "The preview expired; preview again.",
+        "pn_js_err_PREVIEW_PARAMS_MISMATCH": "The name or product repo changed after the preview; preview again.",
+        "pn_js_err_AUDIT_LOG_UNAVAILABLE": "The board audit log cannot be written, so nothing was done (every creation must be logged); tell the advisor to check the board runtime directory.",
+        "pn_js_err_PROJECT_NEW_FAILED": "The project was not fully created, see the technical details; tell the advisor to check it.",
         "ib_title": "Your decisions · {count} ({projects} projects)",
         "ib_empty": "Your decisions: nothing pending ({projects} projects)",
         "ib_heading": "{project} · {what}",
@@ -2962,7 +3060,7 @@ def make_handler(
     board_audit_log_path: Path | None = None,
     perf_log_path: Path | None = None,
 ) -> type[BaseHTTPRequestHandler]:
-    routes = _api_routes(repo_root, board_config_path, home_root=home_root)  # AIPOS-F171: 只读 GET 路由; POST 只有鉴权通道 + 三个 Owner 写例外
+    routes = _api_routes(repo_root, board_config_path, home_root=home_root)  # AIPOS-F171: 只读 GET 路由; POST 只有鉴权通道 + 四个 Owner 写例外(AIPOS-F269 ④ 新建项目)
     sessions = session_store if session_store is not None else SessionStore()
     # AIPOS-272 FIX-2: 未显式注入时，按 repo_root 发现 connection.json（首选工作区自身）
     conn_paths = connection_paths if connection_paths is not None else _discover_connection_paths(repo_root=repo_root)
@@ -3002,6 +3100,10 @@ def make_handler(
     from tools.aipos_cli.owner_inbox import board_decide_declaration
 
     inbox_decide_decl = board_decide_declaration()
+    # AIPOS-F269 write exception 4 (new project): single write route read from verbs.schema verbs.lybra_project_new.board
+    from tools.aipos_cli.board_project_new import board_declaration as project_new_board_declaration
+
+    project_new_path = str(project_new_board_declaration()["write_path"])
     # AIPOS-F198: workstation page (read-only, GET only; path read from verbs.schema verbs.lybra_project_workstation_plan.board)
     from tools.aipos_cli.workstation_plan import declaration as workstation_plan_declaration
 
@@ -3025,6 +3127,7 @@ def make_handler(
         _perf_log = Path(perf_log_path) if perf_log_path is not None else None  # AIPOS-F177: optional, off by default
         _upgrade_paths = {k: str(upgrade_decl[k]) for k in ("page_path", "write_path")}
         _inbox_decide_path = str(inbox_decide_decl["write_path"])
+        _project_new_path = project_new_path
         _workstation_page = workstation_page
 
         def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
@@ -3381,6 +3484,25 @@ def make_handler(
                 content_type=self.headers.get("Content-Type"))
             self._send_json(HTTPStatus(status), payload)
 
+        # ---- AIPOS-F269 new project: Owner write exception 4 (same F172 framework) ----
+        def _handle_project_new(self) -> None:
+            """POST write exception 4 (single write route): every check lives in board_project_new.handle_project_new_request
+            -> envelope_board.handle_owner_write (workspace resolved as the project to create; Owner session / preview token / Origin /
+            audit log unchanged); creating = workspace_config.scaffold_project (same as `lybra project new`); actor from the session."""
+            from tools.aipos_cli.board_project_new import handle_project_new_request
+            from tools.aipos_cli.envelope_board import session_ref
+
+            sid, info = self._current_session()
+            session = None
+            if info is not None and sid:
+                session = {"role": info.get("role"), "token_ref": info.get("token_ref") or "", "session_ref": session_ref(sid),
+                           "login_method": info.get("login_method") or "", "source_ip": self._source_ip()}
+            status, payload = handle_project_new_request(
+                self._read_json_body(), session=session, home_root=home_root, preview_store=self._previews,
+                audit_log_path=self._board_audit, origin=self.headers.get("Origin"), host=self.headers.get("Host"),
+                content_type=self.headers.get("Content-Type"))
+            self._send_json(HTTPStatus(status), payload)
+
         def do_GET(self) -> None:  # noqa: N802
             if self._perf_log is None:
                 self._route_get()
@@ -3538,6 +3660,10 @@ def make_handler(
             # AIPOS-F226 write exception 3: Owner inbox one-click ruling (declared verbs.lybra_owner_inbox.board.decide.write_path)
             if path == self._inbox_decide_path:
                 self._handle_inbox_decide()
+                return
+            # AIPOS-F269 write exception 4: Owner new project (declared verbs.lybra_project_new.board.write_path)
+            if path == self._project_new_path:
+                self._handle_project_new()
                 return
             self._method_not_allowed()
 
