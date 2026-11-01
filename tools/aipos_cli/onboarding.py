@@ -325,10 +325,19 @@ def workstation_dirs(governance_root: Path, project: str, home_root: Path) -> di
     return {"root": base, "executor": f"{base}/executor", "auditor": f"{base}/auditor", "source": source}
 
 
-def _repo_names(repos: list[str] | None, code_repo: str | None, project: str) -> list[str]:
-    """授权车道仓名 = 第 2 步声明的仓名(`<仓名>=<路径>` 的仓名; 只给 --code-repo = 项目名作单仓名, 与 set-repos 缺省同形); 都缺 = 仓名占位。"""
+def _repo_names(repos: list[str] | None, code_repo: str | None, project: str, governance_root: Path | None = None) -> list[str]:
+    """授权车道仓名 = 第 2 步声明的仓名(`<仓名>=<路径>` 的仓名; 只给 --code-repo = 项目名作单仓名, 与 set-repos 缺省同形); 都没给而项目已建且
+    已声明仓清单 = 声明里的仓名(唯一读取口 workspace_config.project_repos; 已接入项目跑向导); 仍无 = 仓名占位。"""
     items = list(repos or ([f"{project}={code_repo}"] if code_repo else []))
     names = [str(i).split("=", 1)[0] for i in items if "=" in str(i) and not str(i).startswith("<")]
+    if not names and governance_root is not None:
+        from tools.aipos_cli.workspace_config import CardRepoUnresolved, project_json_path, project_repos
+
+        if project_json_path(Path(governance_root)).is_file():
+            try:
+                names = sorted(project_repos(Path(governance_root))["items"])
+            except (CardRepoUnresolved, OSError, ValueError) as exc:  # 清单坏 = 不猜, 给占位并说明(第 2 步重声明)
+                print(f"Warning: {governance_root} 的仓清单读不出({type(exc).__name__}: {exc}); 授权车道写占位", file=sys.stderr)
     return names or [REPO_NAME_PLACEHOLDER]
 
 
@@ -662,7 +671,7 @@ def generate_onboarding_guide(
     _actor = actor or inst["advisor"]
     now = utc_now()
     expires = (now + timedelta(days=int(grant_days))).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    grant = grant_plan(gov, project_name, inst=inst, repo_names=_repo_names(repos, code_repo, project_name), max_tasks=max_tasks,
+    grant = grant_plan(gov, project_name, inst=inst, repo_names=_repo_names(repos, code_repo, project_name, gov), max_tasks=max_tasks,
                        expires_at=expires)
     auth_ref = grant["authorization_id"]
     repo_items = list(repos or ([f"{project_name}={code_repo}"] if code_repo else [REPO_PLACEHOLDER]))
@@ -1129,7 +1138,7 @@ def generate_onboarding_guide(
     })
 
     owner_steps = [s["step_number"] for s in steps if s.get("owner_action")]
-    repo_names = _repo_names(repos, code_repo, project_name)
+    repo_names = grant["lanes"]
     return {
         "project_name": project_name,
         "home_root": str(home),

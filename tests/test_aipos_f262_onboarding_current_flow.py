@@ -236,6 +236,10 @@ def test_accept2_legacy_envelopes_and_existing_grant_hint(iso, monkeypatch):
     (iso["tmp"] / "app").mkdir()  # 授权车道仓须在盘上(门侧解析 lane.repo)
     rc, out = _cli("project", "set-repos", PROJECT, "--home-root", hroot, "--repo", f"app={iso['tmp'] / 'app'}", "--confirm")
     assert rc == 0, out
+    from tools.aipos_cli.onboarding import generate_onboarding_guide
+
+    # 已建项目不给 --repo: 授权车道取已声明仓清单(不写占位)
+    assert generate_onboarding_guide(PROJECT, home_root=str(hroot), host_segment="h1")["authorization"]["lanes"] == ["app"]
     conn = iso["tmp"] / "owner-vault" / "connection.json"
     conn.parent.mkdir()
     conn.write_text(json.dumps({"mcp": {"rpc_url": "http://127.0.0.1:9/mcp"},
