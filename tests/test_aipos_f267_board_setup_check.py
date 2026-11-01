@@ -125,7 +125,9 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_gate: str):
     # 看板服务进程工作区 = 临时治理根; 门地址只经其 connection.json mcp.rpc_url(与 CLI 同一推导口), 令牌原文不得进页面
     conn = gov / ".lybra" / "connection.json"
     conn.parent.mkdir(parents=True, exist_ok=True)
-    conn.write_text(json.dumps({"mcp": {"rpc_url": f"{fake_gate}/mcp"}, "tokens": {"owner": FAKE_TOKEN}}), encoding="utf-8")
+    conn.write_text(json.dumps({"config_version": 1, "mcp": {"rpc_url": f"{fake_gate}/mcp"},
+                                "tokens": [{"role": "owner", "token": FAKE_TOKEN, "scopes": ["owner_confirm"], "token_ref": "owner-fixture"}]}),
+                    encoding="utf-8")
     return {"tmp": tmp_path, "home": hroot, "gov": gov, "gate": fake_gate, "monkeypatch": monkeypatch}
 
 
