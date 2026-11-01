@@ -327,7 +327,8 @@ def _decision_log_pointers(ctx: _Ctx, step: dict[str, Any], fn: Any, *, execute:
 
 def _execution_division(ctx: _Ctx, step: dict[str, Any], fn: Any, *, execute: bool, actor: str | None) -> dict[str, Any]:
     """AIPOS-F256 件④: 执行分工迁移(execution_division.division_upgrade_step)。机械部分 = 删退役键 execution.pi_allowed_task_modes(落账同
-    config_defaults); 未声明 pi_executor / 在途违例卡(逐张出口)只列不改(既有卡与记录不改写, 由顾问按出口处理)。"""
+    config_defaults); 未声明 pi_executor / 在途违例卡(逐张出口)/ AIPOS-F261 子 agent 执行者登记为工位模式(重登记出口)只列不改
+    (既有卡与记录不改写, 由顾问按出口处理)。"""
     from tools.aipos_cli.execution_division import refusal_exits
 
     outcome = fn(ctx.root, dry_run=not execute)
@@ -338,6 +339,8 @@ def _execution_division(ctx: _Ctx, step: dict[str, Any], fn: Any, *, execute: bo
         exits = refusal_exits(ctx.root, {}, stage="draft", execution=outcome["execution"])
         details.append(f"未声明 execution.pi_executor: 非代码卡(在途 {outcome['noncode_cards']} 张; 新起草即拒 EXECUTOR_PI_UNDECLARED)无执行工位。"
                        f"出口: {exits[0]}")
+    if outcome.get("subagent_mode_pending"):  # AIPOS-F261 件②: 子 agent 执行者登记为工位模式 = 待处理项(只列出口, 不自动改)
+        details.append(str(outcome["subagent_mode_pending"]["message"]))
     details += [f"在途违例 {v['task_id']}({v['state']}): {v['message']}" for v in outcome["violations"]]
     details += [f"过渡在途(信息项, 不拒) {t['task_id']}({t['state']}): {t['message']}" for t in outcome["transitions"]]  # AIPOS-F256B 件⑤
     details += [f"读不出: {e}" for e in outcome["errors"]]

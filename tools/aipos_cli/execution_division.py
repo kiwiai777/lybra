@@ -301,7 +301,8 @@ def surface_class_problem(governance_root: str | Path, *, surface: str | None, i
 
 def division_violations(governance_root: str | Path) -> dict[str, Any]:
     """只读盘点: {execution, pi_executor_missing, retired_key, noncode_cards, violations[{task_id, state, message, exits}],
-    transitions[{task_id, state, code, message, evidence}](AIPOS-F256B 件⑤ 过渡在途信息项), errors}。
+    transitions[{task_id, state, code, message, evidence}](AIPOS-F256B 件⑤ 过渡在途信息项), errors,
+    subagent_mode_pending(AIPOS-F261 件②: 已声明的子 agent 执行者最新登记不是子 agent 模式 = {instance, how, command, message}, 否则 None)}。
     在途 = 非终态队列目录(task_loader.iter_queue_task_paths, 状态集读 enums queue_state 声明); 违例 = division_refusal(认领 / 交回口径)非空。"""
     from tools.aipos_cli.frontmatter import parse_markdown_frontmatter
     from tools.aipos_cli.next_resolver import task_mode_executor
@@ -341,6 +342,18 @@ def division_violations(governance_root: str | Path) -> dict[str, Any]:
             out["violations"].append({"task_id": card["task_id"], "state": path.parent.name, "code": refusal["code"],
                                       "message": refusal["message"], "exits": refusal["exits"]})
     out["pi_executor_missing"] = execution is not None and not execution.get("pi_executor")
+    out["subagent_mode_pending"] = None
+    if execution and execution.get("subagent_executor"):
+        # AIPOS-F261 件②: 已声明的子 agent 执行者最新登记不是子 agent 模式 = 待处理项(只列出口, 不自动改; 判定唯一 enrollment.subagent_mode_mismatch)
+        from tools.aipos_cli.enrollment import execution_texts, subagent_mode_mismatch
+
+        try:
+            mismatch = subagent_mode_mismatch(gov, str(execution["subagent_executor"]))
+        except ValueError as exc:  # 连接文件读不出 = 如实记入读不出(只读盘点不拒, 不吞)
+            out["errors"].append(f"subagent_executor={execution['subagent_executor']}: 接入状态不可得: {exc}")
+            mismatch = None
+        if mismatch is not None:
+            out["subagent_mode_pending"] = {**mismatch, "message": str(execution_texts()["pending_item"]).format(**mismatch)}
     return out
 
 
@@ -353,7 +366,7 @@ def division_upgrade_step(governance_root: str | Path, *, dry_run: bool = True) 
     gov = Path(governance_root)
     view = division_violations(gov)
     out = {**{k: view[k] for k in ("execution", "retired_key", "retired_value", "pi_executor_missing", "violations", "transitions",
-                                   "noncode_cards", "errors")},
+                                   "noncode_cards", "errors", "subagent_mode_pending")},
            "removed": False, "written": False, "project_json": str(project_json_path(gov))}
     if dry_run or not view["retired_key"]:
         return out
@@ -384,6 +397,8 @@ def division_summary(governance_root: str | Path) -> dict[str, Any]:
                 f" —— 出口: {refusal_exits(governance_root, {}, stage='draft', execution=view['execution'])[0]}" if view["execution"] else
                 "(项目未声明 execution)"))
     lines = [head]
+    if view["subagent_mode_pending"]:  # AIPOS-F261 件②
+        lines.append(f"  ! {view['subagent_mode_pending']['message']}")
     if view["retired_key"]:
         lines.append("  execution.pi_allowed_task_modes 已退役(不再改变路由); lybra project upgrade --confirm 删除")
     for v in view["violations"]:
@@ -392,6 +407,7 @@ def division_summary(governance_root: str | Path) -> dict[str, Any]:
         lines.append(f"  ~ 过渡在途 {t['task_id']}({t['state']}): {t['message']}")
     lines += [f"  读不出: {e}" for e in view["errors"]]
     return {"ok": True, "pi_executor": pi, "retired_key": view["retired_key"], "noncode_cards": view["noncode_cards"],
+            "subagent_mode_pending": view["subagent_mode_pending"],
             "violations": view["violations"], "transitions": view["transitions"], "errors": view["errors"], "lines": lines}
 
 
