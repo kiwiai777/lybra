@@ -2666,7 +2666,7 @@ def _drive(
                 if fixed == "ended":
                     return result
             if action_type == "return" and target_card == task_id:
-                # AIPOS-F275 item 2: routine gate rejection whose fixer is the executor (e.g. BRANCH_WRONG_BASE) and the executor is a
+                # AIPOS-F275 item 2: routine gate rejection whose fixer is the executor (verbs.schema routine_rejections codes.<code>.fixer) and the executor is a
                 # loop-launchable workstation = relaunch the same workstation with the fix (kickoff + rework points), then retry the return;
                 # not applicable (sub-agent / manual / refused / streak exhausted) = end as before (gate_rejected)
                 relaunched = _routine_relaunch(index, task_id, governance_root, result, gate_text=f"{step.message}\n{step.output}".rstrip(),
@@ -2788,7 +2788,7 @@ def _routine_relaunch(index: int, task_id: str, governance_root: Path, result: L
     rr_decl = run_record_declaration(contract)
     codes = extract_end_codes(gate_text, rr_decl)
     if not codes or any(c not in routine["codes"] or routine_fixer(routine, c) != str(decl["fixer"]) for c in codes):
-        return None  # 非例行 / 修法执行方不是执行体(如 CHANGES_OUT_OF_SCOPE / REPO_MERGE_IN_PROGRESS)= 照原规则结束, 不重拉
+        return None  # 非例行 / 修法执行方不是执行体(未入例行清单的门拒码 / fixer 非 executor 的例行码)= 照原规则结束, 不重拉
 
     def not_applicable(why: str) -> None:
         say(f"[{index}] routine_relaunch: " + str(decl["not_applicable_say"]).format(why=why))
