@@ -1143,7 +1143,7 @@ Lybra 服务端位置（AIPOS-286）：
         "sc_error": "自检读不出(未猜结果):{error}",
         "sc_tech": "命令行查看同一结果:lybra setup check(加 --json 看结构化结果)",
         "sc_sum": "本机安装自检 ✓ {ok} · ✗ {fail} · ⚠ {warn} · 检查于 {time} UTC",
-        "sc_sum_none": "本机安装自检还没运行",
+        "sc_sum_none": "本机安装自检还没运行(点开即查 Python / Node.js / git / pi 与模型 / 门是否装好)",
         "sc_sum_error": "本机安装自检读不出:{error}",
         "sc_sum_link": "查看设置自检 →",
         "ib_title": "待你决定 · {count} 件({projects} 个项目)",
@@ -1730,7 +1730,7 @@ Important boundaries:
         "sc_error": "The setup check could not be read (no result guessed): {error}",
         "sc_tech": "Same result on the command line: lybra setup check (add --json for the structured result)",
         "sc_sum": "Install check ✓ {ok} · ✗ {fail} · ⚠ {warn} · checked at {time} UTC",
-        "sc_sum_none": "Install check has not run yet",
+        "sc_sum_none": "Install check has not run yet (open it to check Python / Node.js / git / pi and its models / the gate)",
         "sc_sum_error": "Install check could not be read: {error}",
         "sc_sum_link": "Open setup check →",
         "ib_title": "Your decisions · {count} ({projects} projects)",
@@ -3615,9 +3615,6 @@ def run_server(host: str = DEFAULT_BOARD_HOST, port: int = DEFAULT_BOARD_PORT, r
         print(f"AIPOS board local UI listening on http://{host}:{port}")
         if prewarm:  # AIPOS-F229: background, the server answers from the first second
             threading.Thread(target=prewarm_read_caches, kwargs={"repo_root": repo_root}, name="board-prewarm", daemon=True).start()
-            from tools.aipos_cli.board_pages import start_setup_refresh
-
-            start_setup_refresh(repo_root)  # AIPOS-F267: the setup check runs once in the background (home / onboarding summary)
         httpd.serve_forever()
 
 

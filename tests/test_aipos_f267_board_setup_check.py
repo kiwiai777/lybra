@@ -420,4 +420,4 @@ def test_declarations_i18n_and_single_implementation():
     for banned in ("shutil.which", "_version_of", "_probe_gate", "--version", "--list-models", "urlopen", "resident_status("):
         assert banned not in pages and banned not in render, banned  # 看板不另写探测
     app = (REPO_ROOT / "web" / "board" / "app.py").read_text(encoding="utf-8")
-    assert "workspace_root=repo_root" in app and "start_setup_refresh(repo_root)" in app  # 门地址 = 看板所在工作区; 启动后台先跑一次
+    assert "workspace_root=repo_root" in app and "start_setup_refresh" not in app  # 门地址 = 看板所在工作区; 启动不预跑(不起探测子进程)
