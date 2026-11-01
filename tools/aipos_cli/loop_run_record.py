@@ -600,10 +600,16 @@ class LoopRunRecorder:
 
     # -- AIPOS-F275 件④: 交回步例行拒自动重拉(verbs.schema lybra_loop.run_record.routine_relaunches) --
     def routine_relaunch(self, entry: dict[str, Any]) -> int:
-        """一次例行拒自动重拉进运行记录 routine_relaunches(attempt / limit / codes / card / harness / instance / pid / outcome / at),
+        """一次例行拒自动重拉进运行记录 routine_relaunches(attempt / limit / codes / card / harness / instance / pid / outcome / gate /
+        fix / return_fields / at; 返工要点 = gate(门拒原文首行)+ fix(声明渲染的固定修法)+ return_fields, 审计读此即见, 文本经 redact_progress),
         返回该条下标(拉起后经 routine_relaunch_update 补 pid / outcome)。日志行由调用方的 loop 输出(say)写。"""
+        from tools.aipos_cli.harness_launch import redact_progress
+
         record = {k: entry.get(k) for k in ("attempt", "limit", "codes", "card", "harness", "instance", "pid", "outcome")}
         record["codes"] = [str(c) for c in (record.get("codes") or [])]
+        record["gate"] = redact_progress(str(entry.get("gate") or ""))[:600]
+        record["fix"] = [redact_progress(str(s)) for s in (entry.get("fix") or [])]
+        record["return_fields"] = [str(f) for f in (entry.get("return_fields") or [])]
         record["at"] = iso_z()
         self.meta.setdefault("routine_relaunches", []).append(record)
         self._dirty = True

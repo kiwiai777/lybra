@@ -2831,7 +2831,8 @@ def _routine_relaunch(index: int, task_id: str, governance_root: Path, result: L
     say(f"[{index}] routine_relaunch: " + str(decl["say"]).format(attempt=attempt, limit=limit, codes=", ".join(codes),
                                                                   harness=plan.harness, instance=plan.instance))
     position = recorder.routine_relaunch({"attempt": attempt, "limit": limit, "codes": codes, "card": task_id, "harness": plan.harness,
-                                          "instance": plan.instance, "pid": None, "outcome": "launching"})
+                                          "instance": plan.instance, "pid": None, "outcome": "launching", "gate": first,
+                                          "fix": fix_steps, "return_fields": fields})
     start = _report_fingerprint(report)
 
     def _commit_sha() -> str | None:

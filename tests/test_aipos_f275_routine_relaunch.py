@@ -165,6 +165,9 @@ def test_item2_pi_branch_wrong_base_relaunched_once_then_completed(lrig, monkeyp
     assert [(r["attempt"], r["limit"], r["codes"], r["card"], r["harness"], r["instance"], r["outcome"]) for r in rel] == [
         (1, limit, [CODE], TASK, "pi", EXEC, "artifact_ready")]
     assert rel[0]["pid"] == int(m.group(1))
+    # 返工要点进运行记录(审计读此即见): 门拒原文首行 + 声明渲染的固定修法(与重拉开工稿同一渲染)+ 须更新字段
+    assert f"{CODE}: 分支 'card/{TASK}' 的基座不是当前 main" in rel[0]["gate"] and rel[0]["return_fields"] == ["commit_sha", "tree_hash"]
+    assert [f"{i}) {s}" for i, s in enumerate(rel[0]["fix"], 1)] == [ln for ln in note.splitlines() if re.match(r"^\d\) ", ln)]
     execs = [l for l in meta["launches"] if l["card"] == TASK]
     assert len(execs) == 2 and execs[1]["pid"] == rel[0]["pid"] and all(l["workstation"] == str(lrig.ws_exec) for l in execs)
     # 卡分支已合入当时的 main(第一次交回时落后的那笔他 lane 提交)
@@ -299,3 +302,22 @@ def test_item4_non_executor_or_non_routine_not_relaunched(rig):
         assert got is None
     assert said == [] and lrr.routine_fixer(_routine(), "REPO_MERGE_IN_PROGRESS") == "advisor"
     assert "CHANGES_OUT_OF_SCOPE" not in _routine()["codes"]
+
+
+def test_item2_single_launch_path_and_counting_implementation():
+    """件② 单实现: 重拉只经唯一拉起判定 plan_launch + 唯一拉起口 _launched_wait(章程新鲜度 / 开局体积守卫在其内照常生效), 不直调 _launch_once;
+    连败计数 loop 与 loop status 同读 routine_streaks; 开工核验放行只经 next_resolver.routine_relaunch_kickoff 一处。"""
+    import inspect
+
+    body = inspect.getsource(ld._routine_relaunch)
+    assert "plan_launch(" in body and "_launched_wait(" in body and "_launch_once(" not in body
+    assert "routine_streaks(" in body and "routine_streaks(" in inspect.getsource(lrr._routine_action)
+    assert "routine_relaunch_kickoff(" in body and "extract_end_codes(" in body
+    launched_wait = inspect.getsource(ld._launched_wait)
+    assert "_charter_before_launch(" in launched_wait and "_context_before_launch(" in launched_wait
+    drv = (REPO_ROOT / "tools" / "aipos_cli" / "loop_driver.py").read_text(encoding="utf-8")
+    assert drv.count("_routine_relaunch(") == 2  # def + 交回步一处调用
+    src = "\n".join((REPO_ROOT / "tools" / "aipos_cli" / name).read_text(encoding="utf-8")
+                    for name in ("loop_driver.py", "loop_run_record.py", "next_resolver.py"))
+    assert src.count("_ROUTINE_RELAUNCH_CARDS.get()") == 2  # 上下文设置 + kickoff_refusal 放行判据各一处
+    assert src.count("in _ROUTINE_RELAUNCH_CARDS.get()") == 1
