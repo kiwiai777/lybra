@@ -233,7 +233,7 @@ def enroll_deliver(
         ssh = str(ssh_target).strip()
     auth_ref = str(owner_authorization_ref or "").strip()
     if not auth_ref:
-        raise ValueError("--owner-authorization-ref 必填(签码是 Owner 授权的门动词; 工位码通常填覆盖该工位的信封 ID)")
+        raise ValueError("--owner-authorization-ref 必填(签码是 Owner 授权的门动词; 填本项目常设授权 ID, 如 auth_<项目>: lybra project grant show 可查, lybra onboarding guide 打印的命令已带; 仍用旧信封的项目可填覆盖该工位的信封 ID)")
     role = str(role or "").strip()
     instance = str(instance or "").strip() or None
     gov = resolve_local_governance_root(governance_root)
