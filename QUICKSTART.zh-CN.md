@@ -72,10 +72,6 @@ lybra project set-repos my-project --repo app=~/code/my-project --confirm
 - **Codex** 顾问:向导命令加 `--advisor-harness codex`。
 - 查任一步状态:`lybra onboarding check my-project --step 3`。
 
-> **关于向导的说明:**向导的 Owner 步骤仍在向最新授权流对齐。若其第 3 步仍打印旧的三信封
-> 命令,改用下面第 4 步的常设授权;它打印的接入步骤是现行的,按打印原样执行即可(其中已带
-> 你的真实实例名与授权引用)。
-
 ## 第 4 步 —— 签项目常设授权(Owner)
 
 一份签名覆盖整个项目——车道、任务模式、驱动方、主机、拉起权限与硬边界——取代逐卡信封:

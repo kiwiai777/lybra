@@ -79,11 +79,6 @@ lybra project set-repos my-project --repo app=~/code/my-project --confirm
 - A **Codex** advisor: add `--advisor-harness codex` to the guide command.
 - Check any step's state: `lybra onboarding check my-project --step 3`.
 
-> **Note on the guide:** the wizard's Owner steps are still being aligned to the newest
-> authorization flow. Where its step 3 prints the older three-envelope command, use the standing
-> grant in Step 4 below instead — the enrollment steps it prints are current; run them as printed
-> (they carry your real instance names and authorization refs).
-
 ## Step 4 — Sign the project standing authorization (Owner)
 
 One signature covers the whole project — lanes, task modes, drivers, hosts, launch permission and
