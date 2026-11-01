@@ -5,6 +5,10 @@
 
 防碎片化(卡面硬约束), 本模块只编排, 各面只调既有唯一实现:
 - 执行方式 = workspace_config.project_execution; 卡类型派给谁 = workspace_config.card_execution_mode + next_resolver.task_mode_independent_audit;
+  AIPOS-F260: 分工模型 = 「非代码一律 pi」(enums.schema task_mode.executor, 不可按项目选配)——目标分工只选 pi 执行工位是谁、在哪;
+  状态读 execution.pi_executor + 其工位位置, 不读退役键 pi_allowed_task_modes; 计划的写回只经 set-execution(enrollment.set_project_execution
+  唯一写路径), 命令永不带退役键旗标, 不清已声明的 pi_executor; 列出的卡类型 = enums task_mode 值域去掉审计模式(next_resolver.task_mode_is_audit),
+  其中非代码类 = workspace_config.execution_wants_pi 同一判定;
 - 接入 = enrollment.instance_enrollment(工位位置 = 其 workstation_location); 覆盖信封 = workstation_wiring.derive_effective_owner_policy_ref
   (接入预检 enroll_envelope_requirement 同一推导), 缺信封出口命令 = workstation_wiring.envelope_mint_exit;
 - 章程状态 = distribution_sync.charter_local_state(sync --dry-run 同一判据 + hand_maintained_charters 手写判定; 不连门);
@@ -29,9 +33,11 @@ STEP_STATES = ("pending", "done", "na", "check")
 _CHANGE_STEPS = ("envelope", "enroll", "charter_adopt", "charter_sync", "execution", "ssh_host")
 _COMMAND_KEYS = ("decision_preview", "decision_confirm", "decision_land", "enroll_preview", "enroll_confirm", "execution_preview",
                  "execution_confirm", "ssh_host_preview", "ssh_host_confirm", "verify")
-_PLACEHOLDER_KEYS = ("advisor", "policy", "workspace", "pi_executor", "subagent", "auditor")
+_PLACEHOLDER_KEYS = ("advisor", "policy", "workspace", "subagent", "auditor")  # AIPOS-F260: pi 执行工位不再出占位(未选 = 不出该旗标)
 _STEP_TEXT_KEYS = ("label", "why", "expect", "refused")
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9._@-]+$")
+#: 看板目标分工 URL 参数(AIPOS-F260: 卡类型勾选 pi_mode / submitted 已退役——非代码一律 pi, 只选 pi 执行工位是谁、在哪)
+_BOARD_PARAM_KEYS = ("pi_executor", "workspace", "host", "ssh_alias", "owner_ref")
 
 
 class TargetError(ValueError):
@@ -44,8 +50,9 @@ class TargetError(ValueError):
 
 def declaration() -> dict[str, Any]:
     """verbs.schema verbs.lybra_project_workstation_plan(fail-closed): 步骤恰为 STEP_NAMES 依序(只追加须先实现); 命令模板 / 占位 / 两种语言文案
-    (含每步 label·why·expect·refused 与各卡类型名)齐; 可选卡类型 ⊆ 路由卡类型 ⊆ enums task_mode; 看板页路径与参数齐。"""
-    from tools.schema_loader import SchemaLoadError, get_enum_values, load_schema
+    (含每步 label·why·expect·refused 与各卡类型名 = routed_modes 每项)齐; 看板页路径与参数齐。AIPOS-F260: 旧的按项目选配声明
+    (offered_pi_modes / routing_modes)已退役, 再出现 = 拒(防回流)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
 
     decl = (load_schema("verbs").get("verbs") or {}).get(VERB)
     where = f"verbs.schema.json verbs.{VERB}"
@@ -56,11 +63,10 @@ def declaration() -> dict[str, Any]:
         raise SchemaLoadError(f"{where}.steps 须依序恰为 {list(STEP_NAMES)}(新步骤只追加且须先实现)")
     if any(s.get("by") not in ("advisor", "owner") for s in steps) or decl.get("step_states") != list(STEP_STATES):
         raise SchemaLoadError(f"{where}.steps[].by ∈ advisor|owner, step_states 须恰为 {list(STEP_STATES)}")
-    modes = set(get_enum_values("task_mode"))
-    offered, routing = decl.get("offered_pi_modes"), decl.get("routing_modes")
-    if (not isinstance(offered, list) or not isinstance(routing, list) or not offered or not set(offered) <= set(routing)
-            or not set(routing) <= modes):
-        raise SchemaLoadError(f"{where}: offered_pi_modes ⊆ routing_modes ⊆ enums.schema task_mode {sorted(modes)}")
+    retired = sorted(k for k in ("offered_pi_modes", "routing_modes") if k in decl)
+    if retired:
+        raise SchemaLoadError(f"{where}: {retired} 已退役(AIPOS-F260: 卡类型 = enums.schema task_mode 值域, 非代码一律 pi, 不按项目选配)")
+    routing = routed_modes()
     commands = decl.get("commands") or {}
     holders = decl.get("placeholders") or {}
     if (not all(isinstance(commands.get(k), str) and commands[k] for k in _COMMAND_KEYS)
@@ -84,13 +90,28 @@ def declaration() -> dict[str, Any]:
     board = decl.get("board") or {}
     params = board.get("params") or {}
     if (not str(board.get("page_path") or "").startswith("/")
-            or not all(isinstance(params.get(k), str) and params[k] for k in ("pi_mode", "pi_executor", "workspace", "host", "ssh_alias",
-                                                                                "owner_ref", "submitted"))):
+            or not all(isinstance(params.get(k), str) and params[k] for k in _BOARD_PARAM_KEYS)):
         raise SchemaLoadError(f"{where}.board(page_path / params)未声明齐")
     codes = decl.get("exit_codes") or {}
     if not all(isinstance((codes.get(k) or {}).get("code"), int) for k in ("ok", "refused", "usage")):
         raise SchemaLoadError(f"{where}.exit_codes(ok / refused / usage)未声明齐")
     return decl
+
+
+def routed_modes() -> list[str]:
+    """各卡类型派给谁所列的卡类型 = enums.schema task_mode 值域(声明序)去掉审计模式(审计卡另一行; next_resolver.task_mode_is_audit 唯一判定)。"""
+    from tools.aipos_cli.next_resolver import task_mode_is_audit
+    from tools.schema_loader import get_enum_values
+
+    return [str(m) for m in get_enum_values("task_mode") if not task_mode_is_audit(m)]
+
+
+def noncode_modes() -> list[str]:
+    """非代码卡类型(一律交 pi 执行工位)= routed_modes 中卡稿未指定执行方时按 task_mode 声明派 pi 的那些(workspace_config.execution_wants_pi
+    同一判定, 读 enums.schema task_mode.executor; 不可按项目选配)。"""
+    from tools.aipos_cli.workspace_config import execution_wants_pi
+
+    return [m for m in routed_modes() if execution_wants_pi({}, {"task_mode": m})]
 
 
 def texts(lang: str) -> dict[str, Any]:
@@ -99,6 +120,11 @@ def texts(lang: str) -> dict[str, Any]:
 
     table = declaration()["texts"]
     return table[lang] if lang in table else table[str(pages_declaration()["locale"]["default"])]
+
+
+def mode_names(t: dict[str, Any], modes: list[str]) -> str:
+    """卡类型名按该语言文案连写(list_sep)。"""
+    return t["list_sep"].join(t[f"mode_{m}"] for m in modes)
 
 
 def _fmt(template: Any, **values: Any) -> str:
@@ -121,26 +147,13 @@ def page_url(project: str | None = None) -> str:
 # 目标分工(CLI 参数 / 看板 URL 参数 → 同一规范形)
 # ---------------------------------------------------------------------------
 
-def normalize_target(*, pi_modes: list[str] | None, pi_executor: str | None, workspace: str | None, host: str | None,
-                     ssh_alias: str | None, owner_ref: str | None, lang: str) -> dict[str, Any]:
-    """目标分工输入的唯一校验: pi_modes None = 保持现状; 卡类型 ∈ offered_pi_modes; 实例名合命名模板; 工位目录绝对路径; 主机与别名成对且为单 token;
-    Owner 引用单行。不合 = TargetError(人话)。"""
+def normalize_target(*, pi_executor: str | None, workspace: str | None, host: str | None, ssh_alias: str | None, owner_ref: str | None,
+                     lang: str) -> dict[str, Any]:
+    """目标分工输入的唯一校验(AIPOS-F260: 只选 pi 执行工位是谁、在哪——非代码一律 pi, 无卡类型选配): 实例名合命名模板; 工位目录绝对路径;
+    主机与别名成对且为单 token; Owner 引用单行。pi 执行工位缺 = 保持现状声明。不合 = TargetError(人话)。"""
     from tools.aipos_cli.naming_profile import parse_instance_name
 
     t = texts(lang)
-    offered = list(declaration()["offered_pi_modes"])
-    modes: list[str] | None = None
-    if pi_modes is not None:
-        modes = []
-        for raw in pi_modes:
-            mode = str(raw).strip()
-            if not mode:
-                continue
-            if mode not in offered:
-                raise TargetError(_fmt(t["error_mode"], mode=mode, allowed=", ".join(offered)))
-            if mode not in modes:
-                modes.append(mode)
-        modes = [m for m in offered if m in modes]  # 声明序(CLI 与看板同一顺序)
     inst = str(pi_executor or "").strip() or None
     if inst is not None and parse_instance_name(inst) is None:
         raise TargetError(_fmt(t["error_instance"], instance=inst))
@@ -153,19 +166,18 @@ def normalize_target(*, pi_modes: list[str] | None, pi_executor: str | None, wor
     ref = str(owner_ref or "").strip() or None
     if owner_ref is not None and str(owner_ref).strip() and "\n" in str(owner_ref).strip():
         raise TargetError(_fmt(t["error_owner_ref"], value=str(owner_ref)))
-    return {"pi_modes": modes, "pi_executor": inst, "workspace": ws, "host": h, "ssh_alias": alias, "owner_ref": ref}
+    return {"pi_executor": inst, "workspace": ws, "host": h, "ssh_alias": alias, "owner_ref": ref}
 
 
 def target_from_query(params: dict[str, list[str]], lang: str) -> dict[str, Any]:
-    """看板 URL 参数(board.params)→ normalize_target。未提交表单(无 submitted 参数)= 卡类型保持现状。"""
+    """看板 URL 参数(board.params)→ normalize_target。旧书签里的卡类型参数(AIPOS-F260 前的 pi_mode / plan)不再读取(忽略)。"""
     names = declaration()["board"]["params"]
 
     def one(key: str) -> str | None:
         return (params.get(names[key]) or [None])[0]
 
-    submitted = bool(params.get(names["submitted"]))
-    return normalize_target(pi_modes=list(params.get(names["pi_mode"]) or []) if submitted else None, pi_executor=one("pi_executor"),
-                            workspace=one("workspace"), host=one("host"), ssh_alias=one("ssh_alias"), owner_ref=one("owner_ref"), lang=lang)
+    return normalize_target(pi_executor=one("pi_executor"), workspace=one("workspace"), host=one("host"), ssh_alias=one("ssh_alias"),
+                            owner_ref=one("owner_ref"), lang=lang)
 
 
 # ---------------------------------------------------------------------------
@@ -244,9 +256,10 @@ def _routing(execution: dict[str, Any] | None, modes: list[str]) -> list[dict[st
             rows.append({"mode": mode, "kind": "undeclared", "instance": None, "independent_audit": independent, "auditor": None})
             continue
         kind = card_execution_mode(execution, {"task_mode": mode})
-        rows.append({"mode": mode, "kind": "pi" if kind == EXECUTION_MODE_PI else "subagent",
-                     "instance": execution["pi_executor"] if kind == EXECUTION_MODE_PI else execution["subagent_executor"],
-                     "independent_audit": independent, "auditor": execution["auditor"]})
+        instance = execution.get("pi_executor") if kind == EXECUTION_MODE_PI else execution.get("subagent_executor")
+        # AIPOS-F260: 非代码卡须 pi 执行工位做(不可选配); 未声明 = 无法派发(起草即拒 EXECUTOR_PI_UNDECLARED), 不显示成「pi 执行工位 -」
+        rows.append({"mode": mode, "kind": ("pi" if instance else "pi_undeclared") if kind == EXECUTION_MODE_PI else "subagent",
+                     "instance": instance, "independent_audit": independent, "auditor": execution.get("auditor")})
     return rows
 
 
@@ -289,7 +302,7 @@ def collect_status(root: str | Path, *, project: str, home_root: str | Path | No
     from tools.aipos_cli.workspace_config import ExecutionDeclarationError, project_execution
 
     gov = Path(root).expanduser().resolve()
-    decl = declaration()
+    declaration()  # fail-closed: 声明坏 = 先拒
     status: dict[str, Any] = {"project": project, "governance_root": str(gov),
                               "home_root": str(Path(home_root).expanduser().resolve()) if home_root else str(gov.parent),
                               "execution": None, "execution_error": None}
@@ -301,9 +314,9 @@ def collect_status(root: str | Path, *, project: str, home_root: str | Path | No
     status["subagent"] = _instance_view(gov, execution.get("subagent_executor"), needs_workstation=False)
     status["pi_executor"] = _instance_view(gov, execution.get("pi_executor"), needs_workstation=True)
     status["auditor"] = _instance_view(gov, execution.get("auditor"), needs_workstation=True)
-    status["pi_modes"] = list(execution.get("pi_allowed_task_modes") or [])
+    status["noncode_modes"] = noncode_modes()  # AIPOS-F260: 非代码一律 pi(enums.schema task_mode.executor), 不读退役键
     status["validation"] = _validation_summary(gov)
-    status["routing"] = _routing(status["execution"], list(decl["routing_modes"]))
+    status["routing"] = _routing(status["execution"], routed_modes())
     try:
         status["advisors"] = advisor_instances(gov)
     except (OSError, ValueError, LookupError, RoleRegistryReadError) as exc:
@@ -370,16 +383,15 @@ def _holder(value: str | None, placeholder: str) -> str:
 
 
 def _resolve_target(status: dict[str, Any], target: dict[str, Any]) -> dict[str, Any]:
-    """目标缺省补全: 卡类型缺 = 现状; pi 实例缺 = 现状 pi 执行工位; 工位目录缺 = 已接入位置 / 候选目录。"""
+    """目标缺省补全: pi 实例缺 = 现状 pi 执行工位(已声明的永不被补成空); 工位目录缺 = 已接入位置 / 候选目录。"""
     execution = status["execution"] or {}
-    modes = list(status["pi_modes"]) if target["pi_modes"] is None else list(target["pi_modes"])
-    inst = (target["pi_executor"] or execution.get("pi_executor")) if modes else None
+    inst = target["pi_executor"] or execution.get("pi_executor")
     enrolled = _instance_view(Path(status["governance_root"]), inst, needs_workstation=True) if inst else None
     if inst and status["pi_executor"] and status["pi_executor"]["instance"] == inst:
         enrolled = status["pi_executor"]
     candidate = next((c["dir"] for c in status["candidates"]["items"] if c["instance"] == inst), None)
     workspace = target["workspace"] or (enrolled or {}).get("dir") or candidate
-    return {**target, "pi_modes": modes, "pi_executor": inst, "workspace": workspace, "view": enrolled}
+    return {**target, "pi_executor": inst, "workspace": workspace, "view": enrolled}
 
 
 def _station_identity(workspace: str | None) -> dict[str, Any] | None:
@@ -409,17 +421,17 @@ def build_plan(root: str | Path, *, project: str, home_root: str | Path | None =
     cmds = decl["commands"]
     gov = Path(root).expanduser().resolve()
     st = status if status is not None else collect_status(gov, project=project, home_root=home_root)
-    tgt = _resolve_target(st, target or normalize_target(pi_modes=None, pi_executor=None, workspace=None, host=None, ssh_alias=None,
-                                                         owner_ref=None, lang=lang))
+    tgt = _resolve_target(st, target or normalize_target(pi_executor=None, workspace=None, host=None, ssh_alias=None, owner_ref=None,
+                                                         lang=lang))
     execution = st["execution"] or {}
     advisors = list(st.get("advisors") or [])
     advisor = _q(advisors[0]) if len(advisors) == 1 else holders["advisor"]
-    inst, ws, modes = tgt["pi_executor"], tgt["workspace"], tgt["pi_modes"]
+    inst, ws, modes = tgt["pi_executor"], tgt["workspace"], list(st["noncode_modes"])
     view = tgt["view"]
     risks = list(_status_risks(st))
-    # 目标侧风险
-    if modes and not inst:
-        risks.append(("risk_target_no_pi", {}))
+    # 目标侧风险(AIPOS-F260: 无 pi 执行工位 = 非代码卡无法派发, 给下一步)
+    if not inst:
+        risks.append(("risk_pi_undeclared", {"modes": mode_names(t, modes)}))
     if inst and inst in {execution.get("auditor"), execution.get("subagent_executor")}:
         raise TargetError(_fmt(t["error_instance_reserved"], instance=inst))
     enrolled = bool(view and view["enrollment"] == "enrolled")
@@ -430,13 +442,12 @@ def build_plan(root: str | Path, *, project: str, home_root: str | Path | None =
     station = _station_identity(ws) if inst else None
     if station and "error" not in station and station["instance"] != inst:
         risks.append(("risk_target_slot_taken", {"dir": ws, "other": station["instance"], "instance": inst}))
-    if "validation" in modes and not tgt["host"] and not st["validation"]["hosts"]:
+    if inst and "validation" in modes and not tgt["host"] and not st["validation"]["hosts"]:
         risks.append(("risk_target_no_host", {}))
     role = (view or {}).get("role") or (station or {}).get("role") or "executor"
     # 决策引用: 已给 = 用它; 否则 = 第 1 步将写出的决策记录(同一命名 decision_entry_path)
-    mode_names = zh["list_sep"].join(zh[f"mode_{m}"] for m in modes)
-    division = (_fmt(zh["target_pi"], modes=mode_names, instance=inst or holders["pi_executor"], dir=ws or holders["workspace"])
-                if modes else zh["target_none"])
+    division = (_fmt(zh["target_pi"], modes=mode_names(zh, modes), instance=inst, dir=ws or holders["workspace"]) if inst
+                else _fmt(zh["target_none"], modes=mode_names(zh, modes)))
     title = _fmt(decl["decision"]["title"], project=project)
     body = _fmt(decl["decision"]["body"], division=division, auditor=execution.get("auditor") or holders["auditor"])
     decision_path = decision_entry_path(gov, title=title)
@@ -480,12 +491,10 @@ def build_plan(root: str | Path, *, project: str, home_root: str | Path | None =
             steps["charter_sync"].update(state="done", detail=charter["detail"])
         else:
             steps["charter_sync"].update(detail=f"{state}: {charter.get('detail') or ''}".strip())
-    # 执行方式
-    want_exec = {"pi_executor": inst if modes else None, "modes": sorted(modes)}
-    have_exec = {"pi_executor": execution.get("pi_executor") if execution.get("pi_allowed_task_modes") else None,
-                 "modes": sorted(execution.get("pi_allowed_task_modes") or [])}
-    if st["execution"] is not None and want_exec == have_exec:
-        steps["execution"].update(state="done", detail=f"pi_executor={have_exec['pi_executor']} pi_allowed_task_modes={have_exec['modes']}")
+    # 执行方式(AIPOS-F260: 只比 pi 执行工位; 写回只经 set-execution, 命令永不带退役键旗标; 目标缺省 = 已声明值, 永不清成空)
+    have = execution.get("pi_executor")
+    if st["execution"] is not None and inst == have:
+        steps["execution"].update(state="done", detail=f"pi_executor={have}")
     else:
         from tools.aipos_cli.workspace_config import execution_declaration
 
@@ -493,11 +502,11 @@ def build_plan(root: str | Path, *, project: str, home_root: str | Path | None =
         extra = ""
         if execution.get("default_mode") and execution["default_mode"] != default_mode:
             extra += f" --default-mode {_q(execution['default_mode'])}"
-        if modes:
-            extra += f" --pi-executor {_holder(inst, holders['pi_executor'])}" + "".join(f" --pi-allowed-task-mode {_q(m)}" for m in modes)
+        if inst:
+            extra += f" --pi-executor {_q(inst)}"
         values = {"governance_root": _q(gov), "subagent": _holder(execution.get("subagent_executor"), holders["subagent"]),
                   "auditor": _holder(execution.get("auditor"), holders["auditor"]), "extra": extra, "advisor": advisor}
-        steps["execution"].update(state="pending", detail=f"pi_executor={have_exec['pi_executor']} pi_allowed_task_modes={have_exec['modes']}",
+        steps["execution"].update(state="pending", detail=f"pi_executor={have}",
                                   preview=_fmt(cmds["execution_preview"], **values), confirm=_fmt(cmds["execution_confirm"], **values))
     # 目标主机 ssh 别名(未选目标主机 = 列出已声明的别名, 不改)
     declared_hosts = st["validation"]["hosts"]
@@ -519,20 +528,19 @@ def build_plan(root: str | Path, *, project: str, home_root: str | Path | None =
                                  confirm=_fmt(cmds["decision_confirm"], **values), land=_fmt(cmds["decision_land"], **values))
     elif tgt["owner_ref"]:
         steps["decision"].update(state="done", detail=tgt["owner_ref"])
-    if inst and modes:
+    if inst:
         steps["verify"].update(state="check", check=_fmt(cmds["verify"], project=_q(project), home_root=_q(st["home_root"]), instance=_q(inst),
                                                          harness=EXECUTION_MODE_PI))
     if changes:
         steps["notify"].update(state="pending")
     target_exec = None
-    if st["execution"] is not None or modes:
-        target_exec = {"default_mode": execution.get("default_mode") or "subagent", "subagent_executor": execution.get("subagent_executor"),
-                       "pi_allowed_task_modes": modes, "pi_executor": inst if modes else None, "auditor": execution.get("auditor")}
+    if st["execution"] is not None or inst:
+        target_exec = {**execution, "pi_executor": inst}
     plan = {"project": project, "governance_root": str(gov), "lang": lang, "status": st, "risks": risks,
-            "target": {k: tgt[k] for k in ("pi_modes", "pi_executor", "workspace", "host", "ssh_alias", "owner_ref")},
+            "target": {k: tgt[k] for k in ("pi_executor", "workspace", "host", "ssh_alias", "owner_ref")},
             "owner_ref": owner_ref if (changes or tgt["owner_ref"]) else None, "decision_path": decision_rel,
             "steps": [steps[n] for n in STEP_NAMES], "changes": changes,
-            "target_routing": _routing(target_exec, list(decl["routing_modes"])), "envelope_url": _envelope_url(project)}
+            "target_routing": _routing(target_exec, routed_modes()), "envelope_url": _envelope_url(project)}
     plan["prompts"] = {"lead": _lead_prompt(plan, t), "specialist": _specialist_prompt(plan, t)}
     plan["lines"] = render_lines(plan)
     return plan
@@ -574,7 +582,9 @@ def status_rows(plan: dict[str, Any], t: dict[str, Any]) -> list[tuple[str, str]
     """现状各行(标签键, 值文本): 看板表格与文本同一推导。"""
     st = plan["status"]
     vr = st["validation"]
-    modes = t["list_sep"].join(t[f"mode_{m}"] for m in st["pi_modes"]) or t["modes_none"]
+    pi_exec = (st["execution"] or {}).get("pi_executor")
+    noncode = (_fmt(t["noncode_value"], modes=mode_names(t, st["noncode_modes"]), instance=pi_exec) if pi_exec
+               else _fmt(t["noncode_undeclared"], modes=mode_names(t, st["noncode_modes"])))
     hosts = sorted(set(vr["hosts"]) | set(vr["used_hosts"]))
     host_text = t["list_sep"].join(_fmt(t["host_value"], host=h, alias=vr["hosts"][h]) if h in vr["hosts"] else _fmt(t["host_no_alias"], host=h)
                                    for h in hosts) or t["none"]
@@ -589,7 +599,7 @@ def status_rows(plan: dict[str, Any], t: dict[str, Any]) -> list[tuple[str, str]
         + (" " + _fmt(t["registered_value"], registration=a["registration"]) if a.get("registration") else "")
         + (f" {a['error']}" if a.get("error") else "") for a in st.get("advisor_registrations") or []) or t["none"]
     return [("row_subagent", _instance_text(t, st["subagent"])), ("row_pi_executor", _instance_text(t, st["pi_executor"])),
-            ("row_auditor", _instance_text(t, st["auditor"])), ("row_pi_modes", modes), ("row_hosts", host_text),
+            ("row_auditor", _instance_text(t, st["auditor"])), ("row_noncode", noncode), ("row_hosts", host_text),
             ("row_validation_roots", vr_text), ("row_advisors", advisors)]
 
 
@@ -598,6 +608,8 @@ def routing_lines(rows: list[dict[str, Any]], t: dict[str, Any], *, rule: bool =
     for r in rows:
         if r["kind"] == "undeclared":
             who = t["route_undeclared"]
+        elif r["kind"] == "pi_undeclared":
+            who = t["route_pi_undeclared"]
         else:
             who = _fmt(t["route_pi" if r["kind"] == "pi" else "route_subagent"], instance=r["instance"] or "-")
         audit = _fmt(t["audit_independent"], auditor=r["auditor"] or "-") if r["independent_audit"] else t["audit_advisor"]
@@ -616,11 +628,11 @@ def risk_texts(plan: dict[str, Any], t: dict[str, Any]) -> list[str]:
 def target_text(plan: dict[str, Any], t: dict[str, Any]) -> str:
     tgt = plan["target"]
     holders = declaration()["placeholders"]
-    if tgt["pi_modes"]:
-        text = _fmt(t["target_pi"], modes=t["list_sep"].join(t[f"mode_{m}"] for m in tgt["pi_modes"]),
-                    instance=tgt["pi_executor"] or holders["pi_executor"], dir=tgt["workspace"] or holders["workspace"])
+    modes = mode_names(t, plan["status"]["noncode_modes"])
+    if tgt["pi_executor"]:
+        text = _fmt(t["target_pi"], modes=modes, instance=tgt["pi_executor"], dir=tgt["workspace"] or holders["workspace"])
     else:
-        text = t["target_none"]
+        text = _fmt(t["target_none"], modes=modes)
     if tgt["host"]:
         text += "; " + _fmt(t["target_host"], host=tgt["host"], alias=tgt["ssh_alias"])
     if tgt["owner_ref"]:

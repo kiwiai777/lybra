@@ -1,6 +1,7 @@
 """AIPOS-F198 — 看板「工位设置」页 + `lybra project workstation-plan`(Owner 10-20: 把 chris 手工切换产品化)。
 
-件① 现状: 子 agent 执行者 / pi 执行工位 / 审计工位(实例、接入、工位、章程状态)/ 交 pi 的卡类型 / 目标主机 ssh 别名 / 验证根摘要 / 各卡类型派给谁, 缺项标红。
+件① 现状: 子 agent 执行者 / pi 执行工位 / 审计工位(实例、接入、工位、章程状态)/ 非代码卡交给谁(AIPOS-F260: 非代码一律 pi, 不可选配)/
+    目标主机 ssh 别名 / 验证根摘要 / 各卡类型派给谁, 缺项标红。
 件② 目标分工: 看板 GET 表单(URL 参数, 不写服务器)/ CLI 参数, 同一规范形 normalize_target。
 件③ 计划与话术: 依赖序(决策日志 → Owner 签信封 → 接入 → 章程接管 / 同步 → set-execution → set-host → 核验 → 通知), 只列缺的步骤, 已完成标出;
     给项目总顾问 / 各专项顾问两段话术。
@@ -41,7 +42,6 @@ from test_aipos_f73d_loop_driver import _write  # noqa: E402
 
 P1, P2, P3 = "f198-none", "f198-hand", "f198-done"
 HOST, ALIAS = "sim-mac", "sim-mac-alias"
-MODES = "validation,config,docs"
 HAND = ("# 角色：coder — 人肉期执行工位(靶场)\n\n"
         "<!-- 手工维护：本章程属本项目，禁止 Lybra 分发器按角色类别覆盖（靶场） -->\n\n手写章程正文。\n")
 
@@ -132,8 +132,7 @@ def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # ③ 已切换完成: coder 已接入 + 产品渲染章程 + 执行方式交 pi + 目标主机 ssh 别名
     _land(govs[P3], _coder(P3), "executor", ws[P3]["coder"])
     f95.sync_fixture_workstations(monkeypatch, govs[P3], ws[P3]["auditor"], ws[P3]["coder"])
-    set_project_execution(govs[P3], subagent_executor=_sub(P3), auditor=_aud(P3), pi_executor=_coder(P3),
-                          pi_allowed_task_modes=["validation", "config", "docs"], dry_run=False)
+    set_project_execution(govs[P3], subagent_executor=_sub(P3), auditor=_aud(P3), pi_executor=_coder(P3), dry_run=False)
     apply_validation_root_change(govs[P3], "set-host", dry_run=False, actor="advisor.fixture", host=HOST, ssh_alias=ALIAS,
                                  owner_ref="Owner 靶场授权")
     return {"home": home, "hroot": hroot, "govs": govs, "ws": ws, "tmp": tmp_path}
@@ -143,7 +142,7 @@ def _plan_cli(r: dict, project: str, *extra: str) -> tuple[int, str, str]:
     return _cli("project", "workstation-plan", project, "--home-root", str(r["hroot"]), *extra)
 
 
-TARGET = ("--pi-modes", MODES, "--host", HOST, "--ssh-alias", ALIAS)
+TARGET = ("--host", HOST, "--ssh-alias", ALIAS)
 
 
 def _states(out: str) -> list[tuple[str, str]]:
@@ -170,7 +169,7 @@ def test_three_shapes_status_plan_and_dependency_order(rig):
     # 依赖顺序: 接入在执行方式声明之前, 信封在接入之前, 决策在最前; 已完成项跳过(总顾问话术只列待办)
     rc, out, _e = _plan_cli(rig, P2, "--pi-executor", _coder(P2), *TARGET)
     order = [out.index(k) for k in ("1. [待办] 决策日志记录", "3. [待办] 接入 pi 执行工位", "4. [待办] 正式接管工位手写章程",
-                                     "6. [待办] 声明执行方式", "7. [待办] 声明目标主机")]
+                                     "6. [待办] 声明 pi 执行工位", "7. [待办] 声明目标主机")]
     assert order == sorted(order)
     lead = out.split("给项目总顾问的话(执行切换)", 1)[1].split("给各专项顾问的话", 1)[0]
     _show(f"[件③ P2 总顾问话术原文]\n{lead}")
@@ -180,12 +179,13 @@ def test_three_shapes_status_plan_and_dependency_order(rig):
     assert "--adopt-hand-charter --owner-ref governance/decision_log/" in lead
     assert "现状: " not in lead  # 话术不带工程化现状行
     status = out.split("现状\n", 1)[1].split("\n\n", 1)[0]
-    assert f"pi 执行工位: (未声明)" in status and "交 pi 的卡类型: (无: 全部卡由子 agent 执行)" in status
+    assert f"pi 执行工位: (未声明)" in status
+    assert "非代码卡(一律交 pi 执行工位): 文档卡、治理卡、环境卡、验证卡 无法派发: 未声明 pi 执行工位(需接入 pi 执行工位)" in status
     risks = out.split("风险\n", 1)[1].split("\n\n", 1)[0]
     _show(f"[件① P2 风险原文]\n{risks}")
     assert "⚠ 验证卡交 pi, 但没有选目标主机" not in risks  # 给了目标主机
-    rc, out1, _e = _plan_cli(rig, P1, "--pi-executor", _coder(P1), "--pi-modes", MODES)
-    assert "⚠ 验证卡交 pi, 但没有选目标主机与 ssh 别名(验证在他机时需要)" in out1
+    rc, out1, _e = _plan_cli(rig, P1, "--pi-executor", _coder(P1))
+    assert "⚠ 验证卡交 pi 执行工位, 但没有选目标主机与 ssh 别名(验证在他机时需要)" in out1
     env = out1.split("2. [待办] Owner 签覆盖 pi 执行工位的信封", 1)[1].split("3. [", 1)[0]
     _show(f"[件③ P1 信封步原文(顾问补充: 接入前须有覆盖信封)]\n{env}")
     assert f"lybra envelope mint --workspace-root {rig['govs'][P1]}" in env and f"--agent-or-role {_coder(P1)}" in env
@@ -195,6 +195,7 @@ def test_three_shapes_status_plan_and_dependency_order(rig):
     assert "目标与现状一致, 无需切换。" in out3 and "现状已符合目标分工, 无需执行切换命令" in out3
     assert f"pi 执行工位: {_coder(P3)}(已接入); 工位 {rig['ws'][P3]['coder']}; 章程: 产品渲染(最新)" in out3
     assert f"目标主机与 ssh 别名: {HOST} → ssh 别名 {ALIAS}" in out3
+    assert f"非代码卡(一律交 pi 执行工位): 文档卡、治理卡、环境卡、验证卡 → pi 执行工位 {_coder(P3)}(不可按项目选配)" in out3
     assert f"验证卡 → pi 执行工位 {_coder(P3)}(loop 自动拉起); 审计: 独立审计 {_aud(P3)}" in out3
     assert f"环境卡 → pi 执行工位 {_coder(P3)}(loop 自动拉起); 审计: 顾问复核" in out3
     assert f"代码卡 → 子 agent {_sub(P3)}(顾问派工)" in out3
@@ -267,7 +268,7 @@ def test_plan_commands_are_live_product_commands(rig, monkeypatch):
     _land(gov, _coder(P2), "executor", rig["ws"][P2]["coder"])
     rc, o, e = _run_cmd(exec_cmd)
     _show(f"[命令实跑 6 set-execution 预演(接入后)] exit {rc}\n{o}{e}")
-    assert rc == 0 and '"validation"' in o and _coder(P2) in o
+    assert rc == 0 and f'"pi_executor": "{_coder(P2)}"' in o and "pi_allowed_task_modes" not in o and "--pi-allowed-task-mode" not in exec_cmd
     rc, out2, _e = _plan_cli(rig, P2, "--pi-executor", _coder(P2), *TARGET)
     assert [s for _n, s in _states(out2)][:4] == ["待办", "已完成", "已完成", "待办"]
 
@@ -324,8 +325,11 @@ def _snapshot(name: str, page: str) -> None:
     (Path(out) / f"{name}-open.html").write_text(re.sub(r"<details", "<details open", inline), encoding="utf-8")  # 折叠段展开
 
 
-def _page_url(project: str, *, lang: str | None = None, pi_executor: str | None = None, modes: str = MODES, host: bool = True) -> str:
-    q: list[tuple[str, str]] = [("project", project), ("plan", "1")] + [("pi_mode", m) for m in modes.split(",") if m]
+def _page_url(project: str, *, lang: str | None = None, pi_executor: str | None = None, host: bool = True,
+              legacy_modes: str = "") -> str:
+    """legacy_modes = AIPOS-F260 前书签里的卡类型参数(pi_mode / plan; 现忽略)。"""
+    q: list[tuple[str, str]] = [("project", project)] + ([("plan", "1")] + [("pi_mode", m) for m in legacy_modes.split(",")]
+                                                         if legacy_modes else [])
     if pi_executor:
         q.append(("pi_executor", pi_executor))
     if host:
@@ -366,7 +370,8 @@ def test_board_page_same_plan_as_cli_and_zero_writes(board):
         ("execution", "pending"), ("ssh_host", "pending"), ("verify", "check"), ("notify", "pending")]
     form = re.search(r'<form class="ws-form" method="get".*?</form>', page, re.S).group(0)
     _show(f"[件② 目标分工表单原文(GET, 选择只在 URL)] {form}")
-    assert 'method="get" action="/owner/workstation"' in form and 'name="pi_mode" value="validation" checked' in form
+    assert 'method="get" action="/owner/workstation"' in form and 'name="pi_mode"' not in form  # AIPOS-F260: 无卡类型勾选
+    assert "非代码卡(文档卡、治理卡、环境卡、验证卡)一律交 pi 执行工位, 不可按项目选配" in html.unescape(form)
     assert f'<option value="{_coder(P2)}">' in form and "method=\"post\"" not in form
     for key in ("lead", "specialist"):
         assert f'data-prompt="{key}"' in page
@@ -385,22 +390,26 @@ def test_board_page_same_plan_as_cli_and_zero_writes(board):
 
 
 def test_input_errors_and_target_defaults(board):
+    # AIPOS-F260: --pi-modes 退役兼容(照抄旧命令仍可跑): 提示后忽略, 计划与不给时逐字节同一
     rc, out, err = _plan_cli(board, P1, "--pi-modes", "validation,code")
-    _show(f"[件② 不可交 pi 的卡类型] exit {rc}: {err.strip()}")
-    assert rc == 2 and "卡类型 code 不在可选值 validation, config, docs" in err
-    rc, out, err = _plan_cli(board, P1, "--pi-modes", MODES, "--pi-executor", "bad name")
+    _show(f"[件② --pi-modes 退役兼容] exit {rc}: {err.strip()}")
+    assert rc == 0 and "--pi-modes 已退役(AIPOS-F260)" in err and out == _plan_cli(board, P1)[1]
+    rc, out, err = _plan_cli(board, P1, "--pi-executor", "bad name")
     assert rc == 2 and "不合命名模板" in err
-    rc, out, err = _plan_cli(board, P1, "--pi-modes", MODES, "--pi-executor", _aud(P1))
+    rc, out, err = _plan_cli(board, P1, "--pi-executor", _aud(P1))
     assert rc == 2 and "不能是审计工位" in err
     rc, out, err = _plan_cli(board, P1, "--host", HOST)
     assert rc == 2 and "成对" in err
-    page = _get(board, _page_url(P1, modes="validation,code"))[1]
+    page = _get(board, _page_url(P1, pi_executor="bad name"))[1]
     _show(f"[件② 看板输入不合法] {re.search(r'<p class=.rp-err ws-input-error.>.*?</p>', page).group(0)}")
     assert "ws-input-error" in page and "ws-status" in page  # 仍给现状
-    # 只给卡类型: pi 执行工位缺 = 风险 + 占位; 只给实例 = 工位目录取同父目录候选
-    rc, out, err = _plan_cli(board, P1, "--pi-modes", MODES)
-    assert "⚠ 目标要把卡交 pi, 但没有选 pi 执行工位实例" in out and "--pi-executor <pi执行实例>" in out
-    rc, out, err = _plan_cli(board, P1, "--pi-modes", MODES, "--pi-executor", _coder(P1))
+    legacy = _get(board, _page_url(P1, legacy_modes="validation,code"))[1]
+    assert "ws-input-error" not in legacy and _pre(legacy) == _pre(_get(board, _page_url(P1))[1])  # 旧书签卡类型参数忽略
+    # 未声明 pi 执行工位且未选: 风险给「无法派发」+ 下一步, 执行方式步不出 --pi-executor; 只给实例 = 工位目录取同父目录候选
+    rc, out, err = _plan_cli(board, P1)
+    assert "⚠ 未声明 pi 执行工位: 非代码卡(文档卡、治理卡、环境卡、验证卡)无法派发(起草即拒 EXECUTOR_PI_UNDECLARED)" in out
+    assert "下一步: 在下方「选择目标分工」填 pi 执行工位实例" in out and "--pi-executor" not in out
+    rc, out, err = _plan_cli(board, P1, "--pi-executor", _coder(P1))
     assert f"--workspace {board['ws'][P1]['coder']}" in out
     # 已有 Owner 决策引用 = 决策步已完成, 各步 --owner-ref 用它
     rc, out, err = _plan_cli(board, P2, "--pi-executor", _coder(P2), *TARGET, "--owner-ref", "coord-fixture-decision")
@@ -420,7 +429,9 @@ def test_declaration_single_source_and_guards():
     from tools.aipos_cli import workstation_plan as wp
 
     decl = wp.declaration()
-    _show(f"[声明] steps={[s['name'] for s in decl['steps']]} offered={decl['offered_pi_modes']} page={decl['board']['page_path']}")
+    _show(f"[声明] steps={[s['name'] for s in decl['steps']]} routed={wp.routed_modes()} noncode={wp.noncode_modes()} "
+          f"page={decl['board']['page_path']}")
+    assert "offered_pi_modes" not in decl and "routing_modes" not in decl and "pi_mode" not in decl["board"]["params"]
     assert set(decl["texts"]) == {"zh", "en"} and set(decl["texts"]["zh"]) == set(decl["texts"]["en"])
     spec = importlib.util.spec_from_file_location("f198_cjk_guard", REPO_ROOT / "web" / "board" / "tests" / "test_aipos288_cjk_source_guard.py")
     guard = importlib.util.module_from_spec(spec)

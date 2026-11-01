@@ -1573,21 +1573,23 @@ def _ws_status(ctx: _Ctx, t: dict[str, Any], plan: dict[str, Any]) -> str:
         rows.append(f"<tr class=\"ws-row{'' if parts['ok'] else ' rp-alert'}\" data-row=\"{_ESC(view_key)}\""
                     f" data-enrollment=\"{_ESC(str(parts['enrollment'] or ''))}\" data-charter=\"{_ESC(str(parts['charter_state'] or ''))}\">"
                     f"<th>{_ESC(t[key])}</th><td>{_ESC(parts['who'])}{extra}{where}</td></tr>")
-    for key in ("row_pi_modes", "row_hosts", "row_validation_roots", "row_advisors"):  # AIPOS-F235 item 4: advisor registrations
-        rows.append(f"<tr class=\"ws-row\" data-row=\"{_ESC(key)}\"><th>{_ESC(t[key])}</th><td>{_ESC(texts_by_key[key])}</td></tr>")
+    no_pi = not (plan["status"]["execution"] or {}).get("pi_executor")  # AIPOS-F260: non-code cards cannot be dispatched = flagged
+    for key in ("row_noncode", "row_hosts", "row_validation_roots", "row_advisors"):  # AIPOS-F235 item 4: advisor registrations
+        alert = " rp-alert" if key == "row_noncode" and no_pi else ""
+        rows.append(f"<tr class=\"ws-row{alert}\" data-row=\"{_ESC(key)}\"><th>{_ESC(t[key])}</th><td>{_ESC(texts_by_key[key])}</td></tr>")
     return (f"<section class=\"ws-status\"><h2>{_ESC(t['status_heading'])}</h2>"
             f"<table class=\"rp-subs ws-table\"><tbody>{''.join(rows)}</tbody></table></section>")
 
 
 def _ws_form(t: dict[str, Any], plan: dict[str, Any], lang: str, query: dict[str, Any], locale: dict[str, Any]) -> str:
-    from tools.aipos_cli.workstation_plan import declaration
+    from tools.aipos_cli.workstation_plan import declaration, mode_names
 
     decl = declaration()
     names = decl["board"]["params"]
     tgt = plan["target"]
     st = plan["status"]
-    boxes = "".join(f"<label class=\"ws-check\"><input type=\"checkbox\" name=\"{_ESC(names['pi_mode'])}\" value=\"{_ESC(m)}\""
-                    f"{' checked' if m in tgt['pi_modes'] else ''}> {_ESC(t['mode_' + m])}</label>" for m in decl["offered_pi_modes"])
+    # AIPOS-F260: no card-type checkboxes (non-code always goes to the pi executor); the form only picks which pi executor and where
+    noncode = f"<p class=\"rp-sub ws-noncode\">{_ESC(t['form_noncode_note'].format(modes=mode_names(t, st['noncode_modes'])))}</p>"
     insts = "".join(f"<option value=\"{_ESC(c['instance'])}\"></option>" for c in st["candidates"]["items"])
     dirs = "".join(f"<option value=\"{_ESC(c['dir'])}\"></option>" for c in st["candidates"]["items"])
     hosts = sorted(set(st["validation"]["hosts"]) | set(st["validation"]["used_hosts"]))
@@ -1601,12 +1603,11 @@ def _ws_form(t: dict[str, Any], plan: dict[str, Any], lang: str, query: dict[str
                 f" value=\"{_ESC(str(value or ''))}\"{listed}>{options}</label>")
 
     hidden = (f"<input type=\"hidden\" name=\"{_ESC(str(query['project']))}\" value=\"{_ESC(plan['project'])}\">"
-              f"<input type=\"hidden\" name=\"{_ESC(names['submitted'])}\" value=\"1\">"
               + (f"<input type=\"hidden\" name=\"{_ESC(str(locale['param']))}\" value=\"{_ESC(lang)}\">"
                  if lang != locale["default"] else ""))
     return (f"<section class=\"ws-choose\"><h2>{_ESC(t['form_heading'])}</h2><p class=\"rp-sub\">{_ESC(t['form_note'])}</p>"
             f"<form class=\"ws-form\" method=\"get\" action=\"{_ESC(str(decl['board']['page_path']))}\">{hidden}"
-            f"<fieldset class=\"ws-modes\"><legend>{_ESC(t['form_modes'])}</legend>{boxes}</fieldset>"
+            f"{noncode}"
             + field("pi_executor", t["form_pi_executor"], tgt["pi_executor"], insts)
             + field("workspace", t["form_workspace"], tgt["workspace"], dirs)
             + field("host", t["form_host"], tgt["host"], host_opts)

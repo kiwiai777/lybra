@@ -2326,9 +2326,10 @@ def _project_workstation_plan_cli(args: argparse.Namespace, home: Path | None) -
     if target is None:
         return codes["refused"]
     try:
-        modes = None if args.pi_modes is None else [m for m in str(args.pi_modes).split(",") if m.strip()]
-        goal = wp.normalize_target(pi_modes=modes, pi_executor=args.pi_executor, workspace=args.workspace, host=args.host,
-                                   ssh_alias=args.ssh_alias, owner_ref=args.owner_ref, lang=lang)
+        if args.pi_modes is not None:  # AIPOS-F260: 退役兼容(章程 / 旧提示词里的命令照抄仍可跑), 提示后忽略, 不读不写退役键
+            print(wp.texts(lang)["notice_pi_modes_retired"], file=sys.stderr)
+        goal = wp.normalize_target(pi_executor=args.pi_executor, workspace=args.workspace, host=args.host, ssh_alias=args.ssh_alias,
+                                   owner_ref=args.owner_ref, lang=lang)
         plan = wp.build_plan(target["project_root"], project=str(target["project"]), home_root=home, target=goal, lang=lang)
     except wp.TargetError as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -3336,7 +3337,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_wsplan_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory)")
     project_wsplan_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_wsplan_parser.add_argument("--workspace-root", help="Target governance root when the project name is omitted")
-    project_wsplan_parser.add_argument("--pi-modes", default=None, metavar="MODES", help="Comma-separated card types to send to the pi executor (verbs.schema lybra_project_workstation_plan.offered_pi_modes, e.g. validation,config,docs); '' = none; omitted = keep the current declaration")
+    project_wsplan_parser.add_argument("--pi-modes", default=None, metavar="MODES", help="RETIRED (AIPOS-F260): non-code cards always go to the pi executor (enums.schema task_mode.executor), card types are no longer chosen; accepted for compatibility and ignored with a notice")
     project_wsplan_parser.add_argument("--pi-executor", default=None, metavar="INSTANCE", help="pi executor workstation instance (existing or new; default = the declared one)")
     project_wsplan_parser.add_argument("--workspace", default=None, metavar="DIR", help="Workstation directory of the pi executor (default = its enrolled location / the discovered workstation)")
     project_wsplan_parser.add_argument("--host", default=None, help="Target host label the pi works over ssh (with --ssh-alias)")
