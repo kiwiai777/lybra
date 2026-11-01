@@ -379,13 +379,17 @@ def test_item4_project_brief_sections_and_budget(board):
     assert "没有在推的事" in chief and "没有归这位顾问的里程碑" in chief
 
 
-def test_item5_nav_engineering_page_and_root(board):
+def test_item5_nav_engineering_page_and_root(board, monkeypatch):
+    from test_aipos_f267_board_setup_check import hermetic_toolchain
+
+    hermetic_toolchain(board["tmp"], monkeypatch)  # AIPOS-F267: the setup check link runs run_setup_check (no real pi / gate)
     status, _body, headers = _get(board, "/", follow=False)
     assert status == 302 and headers.get("Location") == "/owner/home"
     page = _page(board, "/owner/engineering")
     links = re.findall(r'<li data-link="(\w+)"><a href="([^"]+)"', page)
     _show(f"[item5 engineering links] {links}")
-    assert [k for k, _u in links] == ["inbox", "overview", "roadmap", "envelopes", "onboarding", "workstation", "upgrade", "cards"]
+    assert [k for k, _u in links] == ["inbox", "overview", "roadmap", "envelopes", "onboarding", "workstation", "upgrade", "cards",
+                                      "setup"]  # AIPOS-F267: + setup check
     for _k, url in links:  # every collected page still answers (none removed)
         assert _get(board, url.replace("&amp;", "&"))[0] == 200, url
     nav = re.search(r'<header class="rp-nav">.*?</header>', _page(board, "/owner/inbox"), re.S).group(0)

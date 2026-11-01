@@ -1,7 +1,8 @@
 """AIPOS-F263 件①: `lybra setup check [--json]` 安装自检。
 
 声明唯一出处 config.schema setup_check(检查项序 / 标签 / 版本要求 / pi 安装指引 / 门探测 / 出口); 本模块:
-  - run_setup_check: 结构化结果(看板 P3 设置自检页直接复用; 本卡不做看板)
+  - run_setup_check: 结构化结果(看板 P3 设置自检页直接复用: AIPOS-F267 board_pages.setup_check_entry 缓存后渲染)
+  - board_cache_seconds: 看板复用结果的秒数(AIPOS-F267, 声明 setup_check.board)
   - render_setup_check: 人读唯一出口
   - preflight_step: onboarding 向导「前置检查」摘要(✗ 项阻断后续并给出口)
 只读: 不写文件、不连门写、不读 token / 密钥文件内容(门可达只对门基址发一次 GET 声明路径, 永不探 /mcp)。
@@ -20,6 +21,8 @@ from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)
 
 _DECL_KEYS = ("marks", "items", "labels", "probe_timeout_seconds", "requirements", "pi", "gate", "resident_exit")
+#: AIPOS-F267: 看板「设置自检」页复用结果的秒数缺省(config.schema setup_check.board.cache_seconds 缺省时用, 与声明同值)
+BOARD_CACHE_DEFAULT_SECONDS = 60
 
 
 class SetupCheckError(ValueError):
@@ -37,6 +40,18 @@ def setup_check_declaration() -> dict[str, Any]:
     if unknown:
         raise SetupCheckError(f"config.schema.json setup_check.items 无标签: {unknown}")
     return decl
+
+
+def board_cache_seconds(decl: dict[str, Any] | None = None) -> int:
+    """AIPOS-F267: 看板复用 run_setup_check 结果的秒数 = setup_check.board.cache_seconds(缺键 = BOARD_CACHE_DEFAULT_SECONDS;
+    写了但非正整数 = SetupCheckError, fail-closed)。"""
+    board = (decl if decl is not None else setup_check_declaration()).get("board")
+    if board is None or "cache_seconds" not in board:
+        return BOARD_CACHE_DEFAULT_SECONDS
+    value = board["cache_seconds"] if isinstance(board, dict) else None
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise SetupCheckError(f"config.schema.json setup_check.board.cache_seconds 须为正整数, 得到 {value!r}")
+    return value
 
 
 def parse_version(text: str) -> tuple[int, ...] | None:

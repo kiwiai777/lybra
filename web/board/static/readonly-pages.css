@@ -3844,3 +3844,26 @@ body.rp-page { margin: 0; background: var(--surface-page); color: var(--ink); fo
 @media (max-width: 760px) {
   .rp-page .hs-kv { grid-template-columns: 1fr; }
 }
+/* AIPOS-F267: setup check page (/owner/setup) + one-line summary on the home / onboarding pages */
+.rp-page .sc-sum { border: var(--border-hairline); border-left: var(--accent-bar) solid var(--green); background: var(--surface-card);
+  padding: 8px 14px; margin: 0 0 14px; overflow-wrap: anywhere; }
+.rp-page .sc-sum.sc-sum-bad { border-left: var(--bar-alert) solid var(--state-alert); background: var(--state-alert-bg); }
+.rp-page .sc-sum .sc-sum-link { margin-left: 6px; white-space: nowrap; }
+.rp-page .sc-pi-alert { border: var(--border-hairline); border-left: var(--bar-alert) solid var(--state-alert); background: var(--state-alert-bg);
+  padding: 14px 18px; margin: 12px 0 16px; overflow-wrap: anywhere; }
+.rp-page .sc-pi-alert h2 { margin: 0 0 6px; color: var(--state-alert); }
+.rp-page .sc-pi-label { margin: 10px 0 4px; font-weight: 600; }
+.rp-page .sc-copy { margin: 0; padding: 10px 14px; background: var(--code-bg); color: var(--code-fg); font-family: var(--font-mono);
+  white-space: pre-wrap; overflow-wrap: anywhere; }
+.rp-page .sc-copy code { user-select: all; }
+.rp-page .sc-verdict { margin: 10px 0 4px; font-weight: 600; }
+.rp-page .sc-when { color: var(--muted); margin: 0 0 14px; }
+.rp-page .sc-items { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.rp-page .sc-item { border: var(--border-hairline); border-left: var(--accent-bar) solid var(--state-ok); background: var(--white); padding: 10px 16px;
+  overflow-wrap: anywhere; }
+.rp-page .sc-item p { margin: 3px 0; }
+.rp-page .sc-item.sc-warn { border-left-color: var(--state-warn); background: var(--state-warn-bg); }
+.rp-page .sc-item.sc-fail { border-left: var(--bar-alert) solid var(--state-alert); background: var(--state-alert-bg); }
+.rp-page .sc-item.sc-fail .sc-mark, .rp-page .sc-item.sc-fail strong { color: var(--state-alert); font-weight: 700; }
+.rp-page .sc-mark { display: inline-block; min-width: 1.2em; font-weight: 700; }
+.rp-page .sc-detail { color: var(--muted); font-size: var(--text-note); }

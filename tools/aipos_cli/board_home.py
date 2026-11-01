@@ -36,7 +36,7 @@ from tools.aipos_cli.board_pages import (
 _HOME_KEYS = ("nav", "engineering_links", "cards_view_value", "asks_limit", "recent_days", "title_chars", "progress_milestone_statuses",
               "deliverables_limit", "thumbs_limit", "page_budget_bytes", "ask_titles", "stall", "forbidden_words")
 NAV_ITEMS = ("home", "project", "history", "engineering")
-ENGINEERING_LINKS = ("inbox", "overview", "roadmap", "envelopes", "onboarding", "workstation", "upgrade", "cards")
+ENGINEERING_LINKS = ("inbox", "overview", "roadmap", "envelopes", "onboarding", "workstation", "upgrade", "cards", "setup")  # AIPOS-F267: + 设置自检(只追加)
 
 
 def home_declaration(decl: dict[str, Any] | None = None) -> dict[str, Any]:
