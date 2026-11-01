@@ -43,6 +43,7 @@ HOST = "f272h"
 MODELS = ("fixprov/model-a", "fixprov/model-b")
 OWNER2_TOK = "owner2-f272-test-token-QRS"
 ADVISOR_TOK = "advisor-f272-test-token-ABC"
+FIXTURE_SECRETS = {"owner2": OWNER2_TOK, "advisor": ADVISOR_TOK}  # 夹具假令牌(非真实凭据), 只在本进程内用于 OTC 登录
 TOKEN_RE = re.compile(r'("preview_token": ")[^"]+(")')
 PI_SH = ('#!/bin/sh\ncase "$1" in --version) echo 0.85.1;; --list-models) printf "provider  model  context\\n'
          + "".join(f"{m.split('/')[0]}  {m.split('/')[1]}  100K\\n" for m in MODELS) + '";; *) echo "fixture pi: no run" >&2; exit 9;; esac\nexit 0\n')
@@ -184,8 +185,9 @@ def board(rng):
     login.write_text(json.dumps({"tokens": [
         {"role": "owner", "token_ref": "owner-fixture", "scopes": ["owner_confirm"], "token": rng["owner_token"],
          "fingerprint": _token_fingerprint(rng["owner_token"])},
-        {"role": "owner", "token_ref": "owner2-fixture", "scopes": ["owner_confirm"], "token": OWNER2_TOK, "fingerprint": _token_fingerprint(OWNER2_TOK)},
-        {"role": "advisor", "token_ref": "advisor-fixture", "scopes": ["queue_publish"], "token": ADVISOR_TOK,
+        {"role": "owner", "token_ref": "owner2-fixture", "scopes": ["owner_confirm"], "token": FIXTURE_SECRETS["owner2"],
+         "fingerprint": _token_fingerprint(OWNER2_TOK)},
+        {"role": "advisor", "token_ref": "advisor-fixture", "scopes": ["queue_publish"], "token": FIXTURE_SECRETS["advisor"],
          "fingerprint": _token_fingerprint(ADVISOR_TOK)}]}), encoding="utf-8")
     previews = PreviewTokenStore(ttl_seconds=300)
     runtime = rng["tmp"] / "board-runtime"
