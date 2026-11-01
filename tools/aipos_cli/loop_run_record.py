@@ -598,6 +598,23 @@ class LoopRunRecorder:
         self._dirty = True
         self.flush(force=True)
 
+    # -- AIPOS-F275 件④: 交回步例行拒自动重拉(verbs.schema lybra_loop.run_record.routine_relaunches) --
+    def routine_relaunch(self, entry: dict[str, Any]) -> int:
+        """一次例行拒自动重拉进运行记录 routine_relaunches(attempt / limit / codes / card / harness / instance / pid / outcome / at),
+        返回该条下标(拉起后经 routine_relaunch_update 补 pid / outcome)。日志行由调用方的 loop 输出(say)写。"""
+        record = {k: entry.get(k) for k in ("attempt", "limit", "codes", "card", "harness", "instance", "pid", "outcome")}
+        record["codes"] = [str(c) for c in (record.get("codes") or [])]
+        record["at"] = iso_z()
+        self.meta.setdefault("routine_relaunches", []).append(record)
+        self._dirty = True
+        self.flush(force=True)
+        return len(self.meta["routine_relaunches"]) - 1
+
+    def routine_relaunch_update(self, position: int, **fields: Any) -> None:
+        self.meta["routine_relaunches"][position].update({k: v for k, v in fields.items() if k in ("pid", "outcome")})
+        self._dirty = True
+        self.flush(force=True)
+
     # -- AIPOS-F180B item 2: report-header fix decisions (verbs.schema lybra_loop.run_record.report_fixes) --
     def report_fix(self, entry: dict[str, Any]) -> None:
         """One report-header fix decision into report_fixes (card / role / outcome / kinds / session_id / detail / at; detail via
@@ -855,6 +872,8 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
         "step_detail": _last_step_detail(meta),  # AIPOS-F241 件①: 最近一步的缘由一行(运行证据拒因原文等; 无 = None)
         # AIPOS-F232 件②: 最后一个已落定步的卡(结束于报告读不出时报告所属卡: 审计报告挂审计卡)
         "last_step_card": next((str(st.get("card") or "") or None for st in reversed(meta.get("steps") or []) if isinstance(st, dict)), None),
+        # AIPOS-F275 件③: 最后一个已落定步的账务动作(以交回步被拒结束 = return; 例行拒修法按执行体种类分流同读)
+        "last_step_action": next((str(st.get("action") or "") or None for st in reversed(meta.get("steps") or []) if isinstance(st, dict)), None),
     }
     last = launches[-1] if launches else None
     if last is not None:
@@ -867,7 +886,8 @@ def judge_run(meta: dict[str, Any], decl: dict[str, Any], *, now: datetime | Non
                                "counts": act.get("counts"), "alive": None, "running_seconds": None, "idle_seconds": None})
     view["deploy"] = meta.get("deploy")  # AIPOS-F152 件①: 本次运行的代码与部署变化(旧记录无此键 = None)
     for key in ("continues_run", "reexec", "envelope_state", "owner_ask", "resource_lock",  # AIPOS-F166 / F168(无 = 不出现, 存量记录形不变)
-                "stop", "provider_retries", "context_checks"):  # AIPOS-F231 件②④⑤
+                "stop", "provider_retries", "context_checks",  # AIPOS-F231 件②④⑤
+                "routine_relaunches"):  # AIPOS-F275 件④
         if meta.get(key):
             view[key] = meta[key]
     if isinstance(view.get("owner_ask"), dict) and view["owner_ask"].get("retracted_at"):
@@ -2026,7 +2046,8 @@ def _loop_status(governance_root: Path, task_id: str | None, *, now: datetime | 
         picked = metas[-1:]
         total = len(metas)
         history = [m.get("end_reason") if m.get("status") == "ended" else None for m in metas[:-1]]
-        code_history = [[str(c) for c in (m.get("end_codes") or [])] if m.get("status") == "ended" else None for m in metas[:-1]]
+        # AIPOS-F275 件④: 各运行内例行拒自动重拉过的拒因码视同一次以该码结束的运行(连败计数同一实现 routine_streaks)
+        code_history = [codes for m in metas[:-1] for codes in run_code_history(m)] + (relaunch_code_history(metas[-1]) if metas else [])
     else:
         picked = []
         for d in sorted(p for p in root.iterdir() if p.is_dir()) if root.is_dir() else []:
@@ -2343,6 +2364,23 @@ def _check_routine_rejections(routine: Any) -> None:
         if not re.fullmatch(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+", str(code)) or not isinstance(fix, list) or not fix \
                 or any(not isinstance(s, str) or not s.strip() for s in fix):
             raise SchemaLoadError(f"{where}.codes.{code}: 码须为门侧错误码形且 fix 为非空字符串的非空列表")
+    fixers = routine.get("fixers")  # AIPOS-F275 件①: 修法执行方值域(可选; 在则各码 fixer / fixer_default 须在值域内, executor 码须带 executor_fix)
+    if fixers is not None:
+        if not isinstance(fixers, dict) or not {"executor", "advisor"} <= set(fixers):
+            raise SchemaLoadError(f"{where}.fixers 须为含 executor / advisor 的对象")
+        if str(routine.get("fixer_default") or "") not in fixers:
+            raise SchemaLoadError(f"{where}.fixer_default 须 ∈ fixers {sorted(fixers)}")
+        for code, spec in codes.items():
+            fixer = spec.get("fixer", routine["fixer_default"])
+            if fixer not in fixers:
+                raise SchemaLoadError(f"{where}.codes.{code}.fixer={fixer!r} 不在 fixers {sorted(fixers)}")
+            steps, fields = spec.get("executor_fix"), spec.get("return_fields")
+            if fixer == "executor" and (not isinstance(steps, list) or not steps or any(not isinstance(s, str) or not s.strip() for s in steps)
+                                        or not isinstance(fields, list) or any(not isinstance(f, str) for f in fields)):
+                raise SchemaLoadError(f"{where}.codes.{code}: fixer = executor 须带 executor_fix(非空字符串列表)与 return_fields(字符串列表)")
+        texts = routine.get("fixer_texts")
+        if not isinstance(texts, dict) or any(not isinstance(texts.get(k), str) or not texts[k].strip() for k in ("launchable", "subagent")):
+            raise SchemaLoadError(f"{where}.fixer_texts 须含 launchable / subagent 文案")
     probe = routine.get("landing_probe")  # AIPOS-F195 件③: 可选; 在则 end_reasons 为非空列表(码读 transitions N6.landing.slot_code_files)
     if probe is not None and (not isinstance(probe, dict) or not isinstance(probe.get("end_reasons"), list) or not probe["end_reasons"]):
         raise SchemaLoadError(f"{where}.landing_probe 须含非空 end_reasons 列表")
@@ -2607,6 +2645,30 @@ def header_fix_prompt_value(governance_root: Path, task_id: str, view: dict[str,
     return executor_report_fix_prompt(load_loop_contract(), str(check.get("path") or ""), problem)
 
 
+def relaunch_code_history(meta: dict[str, Any]) -> list[list[str]]:
+    """AIPOS-F275 件④: 一份运行记录内例行拒自动重拉各次的拒因码(routine_relaunches[].codes, 旧→新)。"""
+    return [[str(c) for c in (r.get("codes") or [])] for r in (meta.get("routine_relaunches") or []) if isinstance(r, dict)]
+
+
+def run_code_history(meta: dict[str, Any]) -> list[list[str] | None]:
+    """AIPOS-F275 件④: 一份运行记录的拒因码序列(旧→新)= 运行内重拉过的拒因码 + 结束 end_codes(未结束 = None)。连败计数同读。"""
+    return [*relaunch_code_history(meta), [str(c) for c in (meta.get("end_codes") or [])] if meta.get("status") == "ended" else None]
+
+
+def routine_streaks(codes: list[str], earlier_end_codes: list[Any] | None) -> dict[str, int]:
+    """AIPOS-F150 件② / AIPOS-F275 件②: 例行门拒连败计数唯一实现——每码 = 本次(1)+ 其前连续各次(旧→新取尾段, 未结束 = None 断)含该码的次数。
+    loop status(_routine_action)与 loop 交回步例行拒自动重拉(loop_driver._routine_relaunch)同读。"""
+    streaks: dict[str, int] = {}
+    for code in codes:
+        streak = 1
+        for earlier in reversed(earlier_end_codes or []):
+            if earlier is None or code not in earlier:
+                break
+            streak += 1
+        streaks[code] = streak
+    return streaks
+
+
 def _routine_action(view: dict[str, Any], rules: dict[str, Any], governance_root: Path, reason: str, message: str,
                     earlier_end_codes: list[Any] | None) -> dict[str, Any] | None:
     """AIPOS-F150 件②: owner_needed 类结束 → 例行门拒判定。end_codes 为空或含非例行码 = None(调用方照旧 owner_needed)。
@@ -2620,14 +2682,7 @@ def _routine_action(view: dict[str, Any], rules: dict[str, Any], governance_root
     task_id = str(view.get("task_id") or "")
     fill = {"task_id": task_id, "governance_root": str(governance_root)}
     limit = int(routine["repeat_owner_needed"])
-    streaks: dict[str, int] = {}
-    for code in codes:
-        streak = 1
-        for earlier in reversed(earlier_end_codes or []):
-            if earlier is None or code not in earlier:
-                break
-            streak += 1
-        streaks[code] = streak
+    streaks = routine_streaks(codes, earlier_end_codes)
     worst = max(codes, key=lambda c: streaks[c])
     tally = ", ".join(f"{c} 第 {streaks[c]}/{limit} 次" for c in codes)
     if streaks[worst] >= limit:
@@ -2640,14 +2695,49 @@ def _routine_action(view: dict[str, Any], rules: dict[str, Any], governance_root
         return {"action": "owner_needed", "reason": reason, "codes": codes,
                 "detail": f"{rules['owner_reasons'][reason]}(例行拒因 {', '.join(codes)} 的修法渲染不了: {exc})" + (f" — {message}" if message else ""),
                 "hint": str(rules["investigate_hint"]).format(**fill)}
-    fix: list[str] = []
-    for code in codes:
-        fix += [_render_routine(step, values, f"codes.{code}.fix") for step in routine["codes"][code]["fix"]]
+    fix = _fixer_fix_lines(view, routine, governance_root, codes, values, limit)
     resume = _render_routine(routine["resume_hint"], values, "resume_hint")
     hint = _routine_hint(fix, resume)
     return {"action": "advisor_fix", "reason": reason, "codes": codes, "fix": fix, "resume": resume,
             "detail": f"例行门拒 {tally}: 修法固定, 顾问按下一条自处理, 不问 Owner" + (f" — {message}" if message else ""),
             "hint": hint}
+
+
+def routine_fixer(routine: dict[str, Any], code: str) -> str:
+    """AIPOS-F275 件①: 例行码的修法执行方(routine_rejections.codes.<码>.fixer; 缺 = fixer_default = 现行行为)。"""
+    return str((routine["codes"].get(code) or {}).get("fixer") or routine.get("fixer_default") or "advisor")
+
+
+def routine_executor_fix(routine: dict[str, Any], codes: list[str], values: dict[str, str]) -> list[str]:
+    """AIPOS-F275 件②③: 各码 executor_fix 按序渲染(占位同 fix, 唯一渲染 _render_routine)——重拉开工稿返工要点与 loop status 可拉起执行体修法同读。"""
+    out: list[str] = []
+    for code in codes:
+        out += [_render_routine(step, values, f"codes.{code}.executor_fix") for step in routine["codes"][code].get("executor_fix") or []]
+    return out
+
+
+def _fixer_fix_lines(view: dict[str, Any], routine: dict[str, Any], governance_root: Path, codes: list[str], values: dict[str, str],
+                     limit: int) -> list[str]:
+    """例行门拒修法行(AIPOS-F150 各码 fix 按序)。AIPOS-F275 件③: 拒因码全为 fixer = executor 且运行以 routine_relaunch.steps 所列账务步被拒结束
+    = 按本卡执行体种类(loop_driver.relaunch_executor_kind)分别给文案: launchable = fixer_texts.launchable + executor_fix(与重拉开工稿同一渲染);
+    subagent = fixer_texts.subagent + 现行 fix; 其余(手工工位 / 判不出)= 现行 fix 不变。"""
+    fix: list[str] = []
+    for code in codes:
+        fix += [_render_routine(step, values, f"codes.{code}.fix") for step in routine["codes"][code]["fix"]]
+    texts = routine.get("fixer_texts")
+    if not isinstance(texts, dict) or any(routine_fixer(routine, c) != "executor" for c in codes):
+        return fix
+    from tools.aipos_cli.loop_driver import load_loop_contract, relaunch_executor_kind, routine_relaunch_declaration
+
+    last_action = str(view.get("last_step_action") or "")
+    if last_action not in [str(s) for s in routine_relaunch_declaration(load_loop_contract())["steps"]]:
+        return fix
+    kind = relaunch_executor_kind(Path(governance_root), str(view.get("task_id") or ""))
+    if kind["kind"] not in ("launchable", "subagent"):
+        return fix
+    fill = {**values, "harness": kind["harness"] or "(未知 harness)", "instance": kind["instance"] or "(未知实例)", "limit": str(limit)}
+    head = _render_routine(texts[kind["kind"]], fill, f"fixer_texts.{kind['kind']}")
+    return [head, *(routine_executor_fix(routine, codes, values) if kind["kind"] == "launchable" else fix)]
 
 
 def _routine_end_reason_action(view: dict[str, Any], rules: dict[str, Any], governance_root: Path, reason: str, message: str,
@@ -3062,6 +3152,13 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
                    f"(verbs.schema lybra_loop.run_record.{'stall_after_tool_seconds, 工具在跑' if tool else 'stall_after_seconds'})")
         out.append(f"  记录 {v['record_path']}")
         out.append(f"  日志 {v['log_path']}")
+        if v.get("routine_relaunches"):  # AIPOS-F275 件④: 交回步例行拒自动重拉(逐条, 文案读声明 launch.routine_relaunch.status_line)
+            from tools.aipos_cli.loop_driver import load_loop_contract, routine_relaunch_declaration
+
+            line = str(routine_relaunch_declaration(load_loop_contract())["status_line"])
+            for r in v["routine_relaunches"]:
+                out.append("  " + line.format(attempt=r.get("attempt"), limit=r.get("limit"), codes=", ".join(r.get("codes") or []),
+                                              pid=r.get("pid"), outcome=r.get("outcome"), at=r.get("at")))
         if v.get("end_codes"):
             out.append(f"  拒因码: {', '.join(v['end_codes'])}")  # AIPOS-F150 件①: 运行记录结构化拒因码
         if v.get("owner_ask"):  # AIPOS-F168 件③: 顾问补写的 Owner 待决结构字段(收件箱同读)

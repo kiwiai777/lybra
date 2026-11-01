@@ -810,6 +810,72 @@ def workstation_kickoff(governance_root: Path, workstation: str, card: str, *,
     return kickoff, ""
 
 
+def executor_mode_facts(governance_root: Path, card: str, fm: dict[str, Any]) -> dict[str, Any]:
+    """等待目标卡的执行者事实(plan_launch 拉起判定前段, 抽出供 AIPOS-F275 例行拒重拉的执行体种类同读, 禁第二实现):
+    harness(card_harness 唯一推导; 推不出 = harness_error)、instance(_wait_instance)、location(instance_enrollment 的 workstation)、
+    subagent(实例接入模式 governance_root_mode, AIPOS-F146)、enrollment_mode、by_declaration(本卡执行方式 = subagent, AIPOS-F156 件①)。"""
+    from tools.aipos_cli.audit_derivation import is_audit_card
+    from tools.aipos_cli.enrollment import instance_enrollment
+    from tools.aipos_cli.workspace_config import ExecutionDeclarationError, card_execution_mode, project_execution
+    from tools.schema_loader import SchemaLoadError
+
+    facts: dict[str, Any] = {"harness": "", "harness_error": "", "instance": "", "location": {}, "subagent": False,
+                             "enrollment_mode": "", "by_declaration": False}
+    try:
+        # AIPOS-F211 件③: 缺省由本卡执行方式推出(card_harness 唯一推导, 与收件箱授权建议 / kickoff 同读)
+        facts["harness"] = card_harness(fm, governance_root, task_id=card)
+    except (SchemaLoadError, ValueError, OSError) as exc:
+        facts["harness_error"] = str(exc)
+    facts["instance"] = _wait_instance(governance_root, card, fm)
+    try:
+        # AIPOS-F146 件②: 实例身份与模式只经 instance_enrollment 一处判定; 工位位置 = 其结果中的 workstation_location(同一读取口)
+        if facts["instance"]:
+            view = instance_enrollment(governance_root, facts["instance"])
+            facts["subagent"], facts["enrollment_mode"] = bool(view["governance_root_mode"]), str(view.get("mode") or "")
+            facts["location"] = view["workstation"]
+        else:
+            facts["location"] = {"found": False, "reason": f"{card} 无 assigned_to/认领实例"}
+    except (ValueError, OSError, SchemaLoadError) as exc:
+        facts["location"] = {"found": False, "reason": f"工位位置读取失败: {exc}"}
+    # AIPOS-F156 件①: 本卡执行方式(只读 F143 声明, workspace_config.card_execution_mode 唯一判定)= 子 agent 时, 开工提示同为子 agent 口径
+    # (执行者实例无子 agent 接入登记也不出「在工位敲 /go」的 pi 口径); 声明读不出 / 不合 = 不据声明改口径, 照接入模式判定
+    try:
+        facts["by_declaration"] = card_execution_mode(project_execution(governance_root), fm,
+                                                      audit_card=is_audit_card(card, fm)) == "subagent"
+    except (ExecutionDeclarationError, OSError, ValueError):
+        facts["by_declaration"] = False
+    return facts
+
+
+def relaunch_executor_kind(governance_root: Path, card: str) -> dict[str, Any]:
+    """AIPOS-F275 件③: 例行拒修法文案的执行体种类(loop status 同读; 不连门、不起进程)——事实同 plan_launch(executor_mode_facts):
+    子 agent(接入模式或本卡执行方式)= subagent; 卡 harness 有 launch 模板(enums.schema harness.launch)= launchable; 无模板 = manual;
+    卡找不到 / 读不出 / harness 推不出 = unknown(调用方按现行修法, 不猜)。返回 {kind, harness, instance, reason}。"""
+    from tools.aipos_cli.autonomy_policy import launchable_harnesses
+    from tools.schema_loader import SchemaLoadError
+
+    out = {"kind": "unknown", "harness": "", "instance": "", "reason": ""}
+    task_path, _queue = _find_task_in_queue(governance_root, card)
+    if not task_path:
+        return {**out, "reason": f"队列中找不到 {card}"}
+    try:
+        fm = _read_frontmatter(task_path)
+    except FrontmatterReadError as exc:
+        return {**out, "reason": str(exc)}
+    facts = executor_mode_facts(governance_root, card, fm)
+    out.update(harness=facts["harness"], instance=facts["instance"])
+    if facts["subagent"] or facts["by_declaration"]:
+        return {**out, "kind": "subagent"}
+    if facts["harness_error"]:
+        return {**out, "reason": facts["harness_error"]}
+    try:
+        template = launchable_harnesses().get(facts["harness"])
+    except SchemaLoadError as exc:
+        return {**out, "reason": f"harness 声明读取失败: {exc}"}
+    launchable = bool(template) and isinstance(template.get("argv"), list) and bool(template["argv"])
+    return {**out, "kind": "launchable" if launchable else "manual"}
+
+
 def plan_launch(governance_root: Path, card: str, *, policy: dict[str, Any] | None, no_launch: bool,
                 decl: dict[str, Any], already_launched: set[str], resume_session: str = "",
                 resume_kickoff: str = "") -> LaunchPlan:
@@ -820,7 +886,6 @@ def plan_launch(governance_root: Path, card: str, *, policy: dict[str, Any] | No
 
     from tools.aipos_cli.autonomy_policy import envelope_authorizes_launch, launchable_harnesses
     from tools.aipos_cli.charter_render import WorkstationIdentityError, workstation_identity
-    from tools.aipos_cli.enrollment import instance_enrollment
     from tools.schema_loader import SchemaLoadError
 
     plan = LaunchPlan(card=card)
@@ -834,37 +899,18 @@ def plan_launch(governance_root: Path, card: str, *, policy: dict[str, Any] | No
         # AIPOS-F100 件②: 卡读不出 = 不拉起(手工模式点名拒因), 不按空卡面猜 harness/实例
         plan.refusal = plan.manual_hint = str(exc)
         return plan
-    try:
-        # AIPOS-F211 件③: 缺省由本卡执行方式推出(card_harness 唯一推导, 与收件箱授权建议 / kickoff 同读)
-        plan.harness = card_harness(fm, governance_root, task_id=card)
-    except (SchemaLoadError, ValueError, OSError) as exc:
-        plan.refusal = f"卡 harness 不可推导: {exc}"
-    plan.instance = _wait_instance(governance_root, card, fm)
-    subagent = False
-    try:
-        # AIPOS-F146 件②: 实例身份与模式只经 instance_enrollment 一处判定; 工位位置 = 其结果中的 workstation_location(同一读取口)
-        if plan.instance:
-            view = instance_enrollment(governance_root, plan.instance)
-            subagent = bool(view["governance_root_mode"])
-            plan.location = view["workstation"]
-        else:
-            plan.location = {"found": False, "reason": f"{card} 无 assigned_to/认领实例"}
-    except (ValueError, OSError, SchemaLoadError) as exc:
-        plan.location = {"found": False, "reason": f"工位位置读取失败: {exc}"}
-    # AIPOS-F156 件①: 本卡执行方式(只读 F143 声明, workspace_config.card_execution_mode 唯一判定)= 子 agent 时, 开工提示同为子 agent 口径
-    # (执行者实例无子 agent 接入登记也不出「在工位敲 /go」的 pi 口径); 声明读不出 / 不合 = 不据声明改口径, 照接入模式判定
+    facts = executor_mode_facts(governance_root, card, fm)  # AIPOS-F275: 与例行拒重拉的执行体种类判定同一实现
+    plan.harness, plan.instance, plan.location = facts["harness"], facts["instance"], facts["location"]
+    if facts["harness_error"]:
+        plan.refusal = f"卡 harness 不可推导: {facts['harness_error']}"
+    subagent, by_declaration = facts["subagent"], facts["by_declaration"]
     from tools.aipos_cli.audit_derivation import is_audit_card
-    from tools.aipos_cli.workspace_config import ExecutionDeclarationError, card_execution_mode, project_execution
+    from tools.aipos_cli.workspace_config import ExecutionDeclarationError
 
-    try:
-        by_declaration = card_execution_mode(project_execution(governance_root), fm,
-                                             audit_card=is_audit_card(card, fm)) == "subagent"
-    except (ExecutionDeclarationError, OSError, ValueError):
-        by_declaration = False
     plan.manual_hint = _render_manual_hint(decl, harness=plan.harness, instance=plan.instance, location=plan.location,
                                            subagent=subagent or by_declaration, card=card)
     if subagent:  # 无工位可拉起: 不拉起, 等待提示 = 顾问派子 agent(信封是否授权拉起均同)
-        plan.refusal = plan.refusal or f"实例 {plan.instance} 为子 agent 执行者(接入模式 {view['mode']}, 无工位), loop 不拉起"
+        plan.refusal = plan.refusal or f"实例 {plan.instance} 为子 agent 执行者(接入模式 {facts['enrollment_mode']}, 无工位), loop 不拉起"
     elif by_declaration:
         plan.refusal = plan.refusal or "本卡执行方式 = 顾问派子 agent(project.json execution, AIPOS-F143), loop 不拉起"
 
@@ -2619,6 +2665,18 @@ def _drive(
                     continue
                 if fixed == "ended":
                     return result
+            if action_type == "return" and target_card == task_id:
+                # AIPOS-F275 item 2: routine gate rejection whose fixer is the executor (e.g. BRANCH_WRONG_BASE) and the executor is a
+                # loop-launchable workstation = relaunch the same workstation with the fix (kickoff + rework points), then retry the return;
+                # not applicable (sub-agent / manual / refused / streak exhausted) = end as before (gate_rejected)
+                relaunched = _routine_relaunch(index, task_id, governance_root, result, gate_text=f"{step.message}\n{step.output}".rstrip(),
+                                               node=node, state=state, steps=steps, contract=contract, launch_decl=launch_decl,
+                                               policy=policy, no_launch=no_launch, launched=launched, watch=watch, max_wait=max_wait,
+                                               interval=interval, say=say, actor=driver_actor, recorder=recorder)
+                if relaunched == "relaunched":
+                    continue
+                if relaunched == "ended":
+                    return result
             what = "落账拒" if action_type == landing_action else "门拒"
             msg = f"{what} @ {action_type} ({target_card}) exit {step.exit_code}: {step.message}\n{step.output}".rstrip()
             if _is_envelope_rejection(step, contract):
@@ -2683,6 +2741,134 @@ def _lane_overlap_before_claim(index: int, card: str, governance_root: Path, tas
         say(f"[{index}] lane_overlap: {line}")
     if result["overlaps"]:
         recorder.record_lane_overlaps(card, result["overlaps"])
+
+
+_ROUTINE_RELAUNCH_KEYS = ("steps", "fixer", "gate_text_max_chars", "not_ready_categories", "kickoff_note", "return_fields_none", "say",
+                          "launched_say", "not_applicable_say", "exhausted_why", "status_line")
+
+
+def routine_relaunch_declaration(contract: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F275: verbs.schema lybra_loop.launch.routine_relaunch(唯一读取口; loop 与 loop status 同读)。缺 / 形不合 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError
+
+    decl = (contract.get("launch") or {}).get("routine_relaunch") if isinstance(contract.get("launch"), dict) else None
+    where = f"verbs.schema.json verbs.{LOOP_VERB}.launch.routine_relaunch"
+    if not isinstance(decl, dict) or any(k not in decl for k in _ROUTINE_RELAUNCH_KEYS):
+        raise SchemaLoadError(f"{where} 未声明齐 {list(_ROUTINE_RELAUNCH_KEYS)}")
+    if not isinstance(decl["steps"], list) or not decl["steps"] or any(not isinstance(s, str) or not s for s in decl["steps"]):
+        raise SchemaLoadError(f"{where}.steps 须为非空字符串列表(账务动作名)")
+    cap = decl["gate_text_max_chars"]
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap < 1:
+        raise SchemaLoadError(f"{where}.gate_text_max_chars 须为 ≥1 整数")
+    if not isinstance(decl["not_ready_categories"], list):
+        raise SchemaLoadError(f"{where}.not_ready_categories 须为列表")
+    needed = ("{attempt}", "{limit}", "{codes}", "{gate_text}", "{steps}", "{return_fields}", "{artifact}")
+    if not isinstance(decl["kickoff_note"], str) or any(n not in decl["kickoff_note"] for n in needed):
+        raise SchemaLoadError(f"{where}.kickoff_note 须含 {' '.join(needed)}")
+    return decl
+
+
+def _routine_relaunch(index: int, task_id: str, governance_root: Path, result: LoopResult, *, gate_text: str, node: Any, state: Any,
+                      steps: list[LoopStep], contract: dict[str, Any], launch_decl: dict[str, Any], policy: dict[str, Any] | None,
+                      no_launch: bool, launched: set[str], watch: Callable[..., int], max_wait: float, interval: float,
+                      say: Callable[[str], None], actor: str, recorder: LoopRunRecorder) -> str | None:
+    """AIPOS-F275 件②(verbs.schema lybra_loop.launch.routine_relaunch): 本卡交回步被门拒, 拒因码(extract_end_codes 同一抽取)全属例行清单且
+    修法执行方 = 执行体、本卡执行者是 loop 可拉起的工位(唯一拉起判定 plan_launch)、连败未达上限(routine_streaks 同一实现)= 经唯一拉起口
+    _launched_wait 重拉同一工位, 开工稿 = 既有开工稿 + 返工要点(各码 executor_fix 经 _routine_fill 同一渲染); 等交回报告按须更新字段改写且
+    产物入口同一校验不再判 tip 不符。返回 None = 不适用(调用方照旧以门拒结束), "relaunched" = 已改写(调用方重推导重试交回),
+    "ended" = 拉起出口已填 result(早退 / 超时 / 拉起失败 / 章程 / 开局体积)。"""
+    from tools.aipos_cli.artifact_ingest import validate_task_artifact
+    from tools.aipos_cli.loop_run_record import (_RoutineFixUnrenderable, _routine_fill, card_runs, extract_end_codes,
+                                                 relaunch_code_history, routine_executor_fix, routine_fixer, routine_streaks,
+                                                 run_code_history, run_record_declaration, status_contract)
+    from tools.aipos_cli.next_resolver import _return_artifact_path, routine_relaunch_kickoff
+
+    decl = routine_relaunch_declaration(contract)
+    routine = status_contract()["next_action"]["routine_rejections"]
+    rr_decl = run_record_declaration(contract)
+    codes = extract_end_codes(gate_text, rr_decl)
+    if not codes or any(c not in routine["codes"] or routine_fixer(routine, c) != str(decl["fixer"]) for c in codes):
+        return None  # 非例行 / 修法执行方不是执行体(如 CHANGES_OUT_OF_SCOPE / REPO_MERGE_IN_PROGRESS)= 照原规则结束, 不重拉
+
+    def not_applicable(why: str) -> None:
+        say(f"[{index}] routine_relaunch: " + str(decl["not_applicable_say"]).format(why=why))
+        return None
+
+    limit = int(routine["repeat_owner_needed"])
+    try:
+        prior = [c for m in card_runs(governance_root, task_id, rr_decl, contract) if m.get("run_id") != recorder.run_id
+                 for c in run_code_history(m)]
+    except LoopRunRecordError as exc:
+        return not_applicable(f"本卡运行记录读不出, 连败计数不可得(fail-closed): {exc}")
+    streaks = routine_streaks(codes, prior + relaunch_code_history(recorder.meta))
+    worst = max(codes, key=lambda c: streaks[c])
+    attempt = streaks[worst]
+    if attempt >= limit:
+        return not_applicable(str(decl["exhausted_why"]).format(code=worst, streak=attempt, limit=limit))
+    view = {"task_id": task_id, "driver": actor, "envelope": str((policy or {}).get("policy_id") or "")}
+    try:
+        values = _routine_fill(view, routine, governance_root)
+    except _RoutineFixUnrenderable as exc:
+        return not_applicable(f"修法渲染所需事实取不到: {exc}")
+    with routine_relaunch_kickoff(task_id):  # 开工核验对本卡放行「交回已落盘」一项(门已例行拒), 其余照旧
+        plan = plan_launch(governance_root, task_id, policy=policy, no_launch=no_launch, decl=launch_decl,
+                           already_launched=launched - {task_id})
+    if plan.refusal:
+        return not_applicable(f"本卡执行者不由 loop 拉起: {plan.refusal}")
+    report = str(_return_artifact_path(governance_root, task_id))
+    fields: list[str] = []
+    for code in codes:
+        fields += [str(f) for f in routine["codes"][code].get("return_fields") or [] if str(f) not in fields]
+    fix_steps = routine_executor_fix(routine, codes, values)
+    cap = int(decl["gate_text_max_chars"])
+    gate = gate_text if len(gate_text) <= cap else gate_text[:cap] + "…(已截断)"
+    plan.append_kickoff_note(str(decl["kickoff_note"]).format(
+        attempt=attempt, limit=limit, codes=", ".join(codes), gate_text=gate,
+        steps="\n".join(f"{i}) {s}" for i, s in enumerate(fix_steps, 1)),
+        return_fields=", ".join(fields) or str(decl["return_fields_none"]), artifact=report))
+    first = next((ln.strip() for ln in gate.splitlines() if ln.strip()), "")
+    say(f"[{index}] routine_relaunch: 门拒原文 {first}")
+    say(f"[{index}] routine_relaunch: " + str(decl["say"]).format(attempt=attempt, limit=limit, codes=", ".join(codes),
+                                                                  harness=plan.harness, instance=plan.instance))
+    position = recorder.routine_relaunch({"attempt": attempt, "limit": limit, "codes": codes, "card": task_id, "harness": plan.harness,
+                                          "instance": plan.instance, "pid": None, "outcome": "launching"})
+    start = _report_fingerprint(report)
+
+    def _commit_sha() -> str | None:
+        try:
+            return str(_read_frontmatter(Path(report)).get("commit_sha") or "").strip()
+        except (FrontmatterReadError, OSError):
+            return None
+
+    start_sha = _commit_sha()
+    not_ready = {str(c) for c in decl["not_ready_categories"]}
+
+    def _ready(_matched: list[str]) -> bool:
+        # 交回报告已改写, 且须更新 commit_sha 时已改为与拒前不同的值, 且产物入口同一校验(既有 tip 核对)不再判 tip 不符 / 分支缺 / 读不出
+        if _report_fingerprint(report) == start:
+            return False
+        if "commit_sha" in fields:
+            sha = _commit_sha()
+            if not sha or sha == start_sha:
+                return False
+        return str(validate_task_artifact(task_id, governance_root).get("category") or "") not in not_ready
+
+    root, patterns = executor_artifact_watch(governance_root, task_id)
+    wait_step = LoopStep(index, "wait", node, state, task_id, artifacts=patterns)
+    wait_step.launch = {**plan.to_dict(), "routine_relaunch": attempt}
+    recorder.step_started(index, "wait", node, state, task_id, waiting_for=patterns, mode="launch")
+    launched.add(task_id)
+    return_now = _launched_wait(index, wait_step, plan, governance_root, result, contract=contract, decl=launch_decl, watch=watch,
+                                watch_args=_watch_args(root, patterns, max_wait=max_wait, interval=interval), ready=_ready, say=say,
+                                actor=actor, envelope_id=str((policy or {}).get("policy_id") or ""), wait_patterns=patterns,
+                                recorder=recorder)
+    steps.append(wait_step)
+    launch = wait_step.launch or {}
+    outcome = str(launch.get("outcome") or (result.reason if return_now else "artifact_ready"))
+    recorder.routine_relaunch_update(position, pid=launch.get("pid"), outcome=outcome)
+    say(f"[{index}] routine_relaunch: " + str(decl["launched_say"]).format(attempt=attempt, limit=limit, pid=launch.get("pid"),
+                                                                           outcome=outcome))
+    return "ended" if return_now else "relaunched"
 
 
 def report_fix_declaration(contract: dict[str, Any], role: str = "auditor") -> dict[str, Any]:
