@@ -1,9 +1,9 @@
 # Lybra Quick Start — from install to your first card closed
 
-This walkthrough takes a **new machine** to a closed first card with the **current** flow: one
-project standing authorization, advisor-driven loops, sub-agents for code, **pi** workstations for
-everything else. All names below are examples — replace `my-project`, `advisor.my-project.h1`, …
-with your own.
+This walkthrough takes a **new machine** to a closed first card with the **current** flow: an
+eleven-step onboarding guide, one project standing authorization, advisor-driven loops,
+sub-agents for code, **pi** workstations for everything else. All names below are examples —
+replace `my-project`, `advisor.my-project.h1`, … with your own.
 
 **English** · [简体中文](QUICKSTART.zh-CN.md) · [Overview](README.md)
 
@@ -11,58 +11,49 @@ with your own.
 
 | Role | Runs on | Does |
 |---|---|---|
-| Owner | the gate machine | Starts the gate; signs enrollment and the **project standing grant**; reads the Owner inbox; watches the board. Signs **once per project**, not once per card. |
+| Owner | the gate machine | Runs the installation self-check; starts the gate (foreground or resident install); signs enrollment and the **project standing grant**; reads the Owner inbox; watches the board. Signs **once per project**, not once per card. |
 | Advisor | a local command-line agent session (Claude Code by default, Codex supported) | Onboards the project; drafts and publishes cards; drives each card with **`lybra loop`** and follows through with `lybra loop status`; maintains the board headline. |
-| Sub-agent executor | spawned inside the advisor session | Works **code** cards from the `lybra kickoff` brief. |
-| pi executor workstation | a separate directory, running **pi** | Works **every non-code card** (docs / governance / config / validation). Started by `/go` or, when the grant allows, launched by `lybra loop`. |
-| pi auditor workstation | another separate directory, running **pi** | Audits returns. **Never** the executor. |
+| Sub-agent executor | spawned inside the advisor session (`exec.<project>.<host>`) | Works **code** cards from the `lybra kickoff` brief. |
+| pi executor workstation | a workstation directory (default `~/lybra-workstations/<project>/executor`), running **pi** — instance `exec.<project>.<host>-pi` | Works **every non-code card** (docs / governance / config / validation). Started by `/go` or, when the grant allows, launched by `lybra loop`. |
+| pi auditor workstation | another workstation directory (default `~/lybra-workstations/<project>/auditor`), running **pi** | Audits returns. **Never** the executor. |
 
 Executors and auditors never talk to the gate — the product does every gate action for them.
 
 ## Prerequisites
 
-- **Node.js 18+**, **Python 3** and **git** on `PATH`.
+- **Node.js 18+**, **Python 3.10+** and **git** on `PATH`.
 - **pi** (for the executor and auditor workstations), with at least one model configured — check with
   `pi --list-models`.
 - An advisor session: **Claude Code** (default) or **Codex**.
 - The advisor must be able to run local commands on the governance machine (or ssh into it).
 
-## Step 1 — Install
+`lybra setup check` (Step 1) verifies all of this in one command.
+
+## Step 1 — Install and self-check
 
 ```bash
 npm install -g lybra
 lybra --help
+lybra setup check
 ```
 
-`lybra --help` prints the usage tree (serve, onboarding, project, roles, sync, draft, loop, board,
-owner, release, …). Any subcommand explains itself with `--help`; every command is read-only unless
-you pass `--confirm`.
+- `lybra --help` prints the usage tree (setup, serve, onboarding, project, roles, sync, draft,
+  loop, board, owner, release, …). Any subcommand explains itself with `--help`; every command
+  is read-only unless you pass `--confirm`.
+- `lybra setup check` is the read-only installation self-check (it never reads tokens or key
+  files) — the same pre-flight the onboarding guide runs at its top. Seven items, one line each
+  with ✓ / ✗ / ⚠ plus a closing exit line; any ✗ exits 1: **Python ≥ 3.10** · **Node.js ≥ 18** ·
+  **git** · **pi** on PATH · **pi's configured models** · **gate up and reachable** · **resident
+  gate service installed**. Any ✗ exits 1; failure lines carry their exit — the unreachable-gate
+  line names both the foreground start and the resident install commands. Probe another gate
+  address with `--gate-url`; `--json` prints the structured result the board reuses.
 
-## Step 2 — Start the gate (Owner)
+## Step 2 — Create the project (advisor)
 
-Pick a directory that will hold the Owner credential (the central gate registry) and start the gate
-there:
-
-```bash
-lybra serve --workspace-root ~/lybra-gate start
-lybra serve --workspace-root ~/lybra-gate status
-```
-
-Expected: the **board** serves on `127.0.0.1:7117` and the **gate** (MCP) on `127.0.0.1:7118`, with a
-redacted credential status — token values are never printed. `status` shows both listeners and the
-credential directory. Port busy? Rebind both:
-
-```bash
-lybra serve --workspace-root ~/lybra-gate start --board-port 7119 --mcp-port 7120
-```
-
-Stop the gate with Ctrl-C (foreground). Today a resident install (systemd / launchd) is not yet
-productized — see [README · Scope & limits](README.md#scope--limits).
-
-## Step 3 — Create the project (advisor)
-
-Generate the project's onboarding guide — it prints **every** step for *your* project, in order,
-each with the exact command, how to verify it, and failure exits:
+**Guide steps 1–2.** Generate the project's onboarding guide — it prints **all eleven steps**
+for *your* project, in order, each with the exact command, how to verify it, and failure exits.
+Its pre-flight has already run `lybra setup check` (add `--skip-preflight` when generating the
+guide on a machine other than the one being set up):
 
 ```bash
 lybra onboarding guide my-project --repo app=~/code/my-project
@@ -71,18 +62,49 @@ lybra project set-repos my-project --repo app=~/code/my-project --dry-run
 lybra project set-repos my-project --repo app=~/code/my-project --confirm
 ```
 
-- `project new` creates the project under the governance home (default `~/.lybra/projects`); the
-  guide prints the one governance landing line to run for this step. First time on a machine that
-  says "not a git repository"? See the FAQ.
-- `set-repos` is two-phase: `--dry-run` (default) previews repo validation with zero writes;
-  `--confirm` writes `project.json` and auto-lands it in governance.
+- Guide step 1, `project new`, creates the project under the governance home (default
+  `~/.lybra/projects`) and prints the one governance landing line to run for this step. First
+  time on a machine that says "not a git repository"? See the FAQ.
+- Guide step 2, `set-repos`, is two-phase: `--dry-run` (default) previews repo validation with
+  zero writes; `--confirm` writes `project.json` and auto-lands it in governance.
 - A **Codex** advisor: add `--advisor-harness codex` to the guide command.
-- Check any step's state: `lybra onboarding check my-project --step 3`.
+- Check any step's state: `lybra onboarding check my-project --step 2` (`--step 0` = the
+  pre-flight's ✗ items; steps use the guide's 1–11 numbering).
+
+## Step 3 — Start the gate (Owner)
+
+**Guide interlude — after step 2, before step 3.** From the grant on, everything talks to the
+gate. The guide prints both ways for *your* governance root. Foreground (the terminal stays
+open; Ctrl-C stops the gate) — fine for a trial run:
+
+```bash
+lybra serve --workspace-root ~/.lybra/projects/my-project start
+```
+
+Resident — Linux installs a systemd --user unit, macOS a launchd agent (the launchd path is not
+yet verified on real macOS hardware). The default is `--dry-run`: it prints the full unit file
+and the exact install commands with zero writes; `--confirm` writes the unit, enables it now and
+reads its state back:
+
+```bash
+lybra serve --workspace-root ~/.lybra/projects/my-project install --dry-run
+lybra serve --workspace-root ~/.lybra/projects/my-project install --confirm
+```
+
+- An existing same-name unit is never overwritten; a hand-written unit already running
+  `serve start` is reported and never taken over (`--confirm` refused). Remove what install
+  built with `lybra serve --workspace-root ~/.lybra/projects/my-project uninstall --confirm`
+  (hand-written units are never touched).
+- Expected: the **board** serves on `127.0.0.1:7117` and the **gate** (MCP) on `127.0.0.1:7118`;
+  `lybra serve --workspace-root ~/.lybra/projects/my-project status` prints the redacted status
+  (token values are never printed). Verify with `lybra setup check` — the gate item turns ✓.
+  Port busy? See the FAQ.
 
 ## Step 4 — Sign the project standing authorization (Owner)
 
-One signature covers the whole project — lanes, task modes, drivers, hosts, launch permission and
-hard bounds — replacing per-card envelopes:
+**Guide step 3 — the first of the Owner's two one-time actions.** One signature covers the whole
+project — lanes, task modes, drivers, hosts, launch permission and hard bounds — replacing
+per-card envelopes:
 
 ```bash
 lybra project grant show my-project
@@ -97,51 +119,33 @@ lybra project grant sign my-project --grant-lane app --task-mode code --task-mod
   start via `/go` only); `--max-tasks` / `--expires-at` hard bounds; `--host` binds a lane to a host.
 - Revise later: `lybra project grant extend` / `lybra project grant revoke`.
 
-## Step 5 — Enroll the advisor and the workstations
+## Step 5 — Enroll the advisor and the three workstations
 
-The product enrolls roles with **`lybra roles enroll-deliver`** — the one-time enrollment code never
-appears on a command line (no code literals in shell history). Run the exact commands **your guide
-prints**; they carry the real instance names and authorization refs. The shapes are:
+**Guide steps 4–8 — step 4 is the Owner's second one-time action.** The product enrolls roles
+with **`lybra roles enroll-deliver`** — the one-time enrollment code never appears on a command
+line (no code literals in shell history). Run the exact commands **your guide prints**; they
+carry the real instance names and authorization refs. The shapes:
 
-```bash
-lybra roles enroll-deliver --role advisor --instance advisor.my-project.h1 --governance-root ~/.lybra/projects/my-project --workspace ~/.lybra/projects/my-project --harness claude-code --harness-dir ~/sessions/my-project --owner-authorization-ref auth-2026-11-01-01 --confirm
-lybra roles enroll-deliver --role executor --instance subexec.my-project.h1 --governance-root ~/.lybra/projects/my-project --workspace ~/.lybra/projects/my-project --executor-mode subagent --harness claude-code --owner-authorization-ref auth-2026-11-01-01 --confirm
-lybra roles enroll-deliver --role executor --instance exec.my-project.h1 --governance-root ~/.lybra/projects/my-project --workspace ~/my-project-executor --owner-authorization-ref auth-2026-11-01-01 --confirm
-lybra roles enroll-deliver --role auditor --instance audit.my-project.h1 --governance-root ~/.lybra/projects/my-project --workspace ~/my-project-auditor --owner-authorization-ref auth-2026-11-01-01 --confirm
-```
-
-- `--role executor --executor-mode subagent` + `--harness claude-code` enrolls the **sub-agent
-  executor** (code cards) inside the advisor's session; `--role executor` without it, with a pi
-  workspace directory, enrolls the **pi executor workstation**.
-- Then, on each pi workstation, pull its charter, skills and extensions:
+Owner signs the advisor into the governance root (guide step 4) — the advisor session directory
+defaults to the governance root itself, so `.claude/skills` lands right there:
 
 ```bash
-lybra sync --harness-root ~/my-project-executor --workspace-root ~/.lybra/projects/my-project
-lybra sync --harness-root ~/my-project-auditor --workspace-root ~/.lybra/projects/my-project
+lybra roles enroll-deliver --role advisor --instance advisor.my-project.h1 --governance-root ~/.lybra/projects/my-project --workspace ~/.lybra/projects/my-project --harness claude-code --harness-dir ~/.lybra/projects/my-project --token-role owner --owner-authorization-ref auth-2026-11-01-01 --confirm
 ```
 
-`sync` is safe to re-run (idempotent); it lists what was delivered and what stays undelivered. A
-remote workstation on another host records `--harness-host` at enrollment (the guide handles it).
-
-## Step 6 — Declare the division of execution
-
-Declare, once per project, who executes what — code cards to the sub-agent, every non-code card to
-the pi executor, audits to the independent pi auditor:
+Advisor readiness (guide step 5) — the new advisor checks its own prerequisites and that the
+delivered advisor files are stable, then opens the session:
 
 ```bash
-lybra project set-execution my-project --subagent-executor subexec.my-project.h1 --pi-executor exec.my-project.h1 --auditor audit.my-project.h1 --confirm
-lybra project workstation-plan my-project
+lybra onboarding check my-project --step 5
+lybra sync --harness-root ~/.lybra/projects/my-project --workspace-root ~/.lybra/projects/my-project --dry-run
 ```
 
-Preview without `--confirm`. `workstation-plan` prints the read-only workstation plan (the same view
-the onboarding guide shows).
-
-## Step 7 — Bring up the advisor session
-
-- **Claude Code:** start the session in the directory you enrolled with `--harness-dir`. The Lybra
-  skills are already delivered into `.claude/skills` (re-run `lybra sync` to refresh).
-- **Codex** (on the governance machine or over ssh): at session start, pull the charter and skills
-  into the session directory:
+- **Claude Code:** start the session in the session directory (default = the governance root);
+  the Lybra skills are already delivered into `.claude/skills` — (re)start the session to load
+  them.
+- **Codex** (on the governance machine or over ssh): at session start, pull the charter and
+  skills into the session directory:
 
 ```bash
 lybra charter --role advisor --harness codex --workspace-root ~/.lybra/projects/my-project
@@ -151,7 +155,55 @@ lybra skills --role advisor --harness codex --workspace-root ~/.lybra/projects/m
 Pipe the skills stream to `tar -xf -` in the session directory (the command's `--help` prints the
 exact one-liner). Then start Codex there.
 
+The advisor then enrolls the three workstations (guide steps 6–8) — workstation directories
+default to `~/lybra-workstations/<project>/…`; the pi executor's instance name ends in `-pi`; the
+sub-agent executor's credentials live in the governance root:
+
+```bash
+lybra roles enroll-deliver --role auditor --instance audit.my-project.h1 --governance-root ~/.lybra/projects/my-project --workspace ~/lybra-workstations/my-project/auditor --executor-mode workstation --owner-authorization-ref auth-2026-11-01-01 --confirm
+lybra roles enroll-deliver --role executor --instance exec.my-project.h1-pi --governance-root ~/.lybra/projects/my-project --workspace ~/lybra-workstations/my-project/executor --executor-mode workstation --owner-authorization-ref auth-2026-11-01-01 --confirm
+lybra roles enroll-deliver --role executor --instance exec.my-project.h1 --governance-root ~/.lybra/projects/my-project --workspace ~/.lybra/projects/my-project --executor-mode subagent --harness claude-code --owner-authorization-ref auth-2026-11-01-01 --confirm
+```
+
+- `--executor-mode workstation` + a workstation directory enrolls a **pi workstation** (auditor,
+  pi executor); `--executor-mode subagent` + `--harness claude-code` enrolls the **sub-agent
+  executor** (code cards) inside the advisor's session. A remote workstation on another host
+  records `--harness-host` at enrollment (the guide handles it).
+
+## Step 6 — Declare the division of execution
+
+**Guide step 9.** Declare, once per project, who executes what — code cards to the sub-agent,
+every non-code card to the pi executor, audits to the independent pi auditor:
+
+```bash
+lybra project set-execution my-project --subagent-executor exec.my-project.h1 --pi-executor exec.my-project.h1-pi --auditor audit.my-project.h1 --confirm
+lybra project workstation-plan my-project
+```
+
+Preview without `--confirm`. `workstation-plan` prints the read-only workstation plan (the same view
+the onboarding guide shows).
+
+## Step 7 — Sync the workstations and self-check
+
+**Guide step 10.** Deliver each pi workstation's charters, skills and extensions, re-check the
+steady state, and run the workstation self-check:
+
+```bash
+lybra sync --harness-root ~/lybra-workstations/my-project/executor --workspace-root ~/.lybra/projects/my-project
+lybra sync --harness-root ~/lybra-workstations/my-project/auditor --workspace-root ~/.lybra/projects/my-project
+lybra onboarding check my-project --step 10 --workspace-dir ~/lybra-workstations/my-project/executor
+lybra onboarding check my-project --step 10 --workspace-dir ~/lybra-workstations/my-project/auditor
+```
+
+- Expected: a `sync --dry-run` re-run prints `up-to-date: 0 file(s) to fetch/render`; the checks
+  print `✓ Step 10 prerequisites satisfied`; `lybra project workstation-plan my-project` (Step 6)
+  shows all three instances enrolled with fresh charters.
+- `sync` is safe to re-run (idempotent); it lists what was delivered and what stays undelivered.
+
 ## Step 8 — Publish the first card and drive it with lybra loop (advisor)
+
+**Guide step 11.** Before the very first card the guide also has you confirm the card-id pattern
+(`lybra project card-policy` — see Declarations). Then:
 
 ```bash
 lybra draft create --from-json card.json
@@ -204,7 +256,8 @@ lybra owner inbox
 
 ## Declarations on demand
 
-Write-what-you-mean, each `--dry-run` previewable and governance-landed on `--confirm`:
+The onboarding guide lists these at its end — **listed, not forced**; each `--dry-run` previewable
+and governance-landed on `--confirm`:
 
 ```bash
 lybra project card-policy show
@@ -231,8 +284,9 @@ lybra project headline --instance advisor.my-project.h1 --title "My Customer Pro
 
 - **Files are truth.** Cards, records, verdicts and decisions live in the governance root — durable,
   reviewable, outliving any model session.
-- **Gate, not engine.** The gate never runs or wakes agents. The Owner starts the gate; a workstation
-  harness is started by `/go` or — only when the grant allows — by the advisor's loop.
+- **Gate, not engine.** The gate never runs or wakes agents. The Owner starts the gate (foreground
+  or resident install); a workstation harness is started by `/go` or — only when the grant allows —
+  by the advisor's loop.
 - **Executor zero-gate.** Executors and auditors never touch the gate; every gate action is the
   product's.
 - **Drafter ≠ executor ≠ auditor.** The advisor drafts and drives, executors work, an independent pi
@@ -242,8 +296,16 @@ lybra project headline --instance advisor.my-project.h1 --title "My Customer Pro
 
 ## FAQ
 
-**Port 7117 / 7118 already in use.** Start with `--board-port 7119 --mcp-port 7120` (Step 2) and the
+**Port 7117 / 7118 already in use.** Start with `--board-port 7119 --mcp-port 7120` (Step 3) and the
 connection file is updated for clients.
+
+**`lybra setup check` shows the gate as ✗ / ⚠.** The gate isn't running or isn't reachable — the
+✗ / ⚠ line itself names both exits: start it in the foreground (`lybra serve --workspace-root <governance
+root> start`) or install it resident (`lybra serve install`, Step 3). `--gate-url` probes another
+address.
+
+**`serve install` reports a hand-written unit.** Install never takes over a unit it didn't generate —
+keep yours, or stop and remove it yourself, then re-run install.
 
 **`lybra loop` exits 3 while the card is "running".** The workstation hasn't returned yet — check the
 board or the workstation, then re-run `lybra loop status --task-id MYPROJ-1 --wait 540`. If an early

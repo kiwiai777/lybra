@@ -62,7 +62,13 @@ dependencies); for executor / auditor workstations, **pi** with at least one con
 ```bash
 npm install -g lybra
 lybra --help
+lybra setup check
 ```
+
+`lybra setup check` is the read-only installation self-check the onboarding guide runs as its
+pre-flight: seven items — Python ≥ 3.10, Node.js ≥ 18, git, **pi** on PATH with configured models,
+the gate up and reachable, the resident gate service — each with ✓ / ✗ / ⚠ and an exit line; any ✗
+exits 1 with the fix hint. It never reads tokens or key files.
 
 ## How a project runs
 
@@ -85,8 +91,8 @@ A Codex advisor session: `lybra onboarding guide my-project --advisor-harness co
 
 ```bash
 lybra project grant sign my-project --grant-lane app --task-mode code --task-mode docs --driver advisor.my-project.h1 --launch-harness pi --max-tasks 50 --expires-at 2027-01-31T00:00:00Z --confirm
-lybra roles enroll-deliver --role auditor --instance audit.my-project.h1 --governance-root ~/.lybra/projects/my-project --workspace ~/my-project-auditor --owner-authorization-ref auth-2026-11-01-01 --confirm
-lybra project set-execution my-project --subagent-executor subexec.my-project.h1 --pi-executor exec.my-project.h1 --auditor audit.my-project.h1 --confirm
+lybra roles enroll-deliver --role auditor --instance audit.my-project.h1 --governance-root ~/.lybra/projects/my-project --workspace ~/lybra-workstations/my-project/auditor --owner-authorization-ref auth-2026-11-01-01 --confirm
+lybra project set-execution my-project --subagent-executor exec.my-project.h1 --pi-executor exec.my-project.h1-pi --auditor audit.my-project.h1 --confirm
 ```
 
 The grant replaces per-card envelopes: lanes × task modes × drivers / hosts / harness launch, plus
@@ -131,8 +137,10 @@ one-time ticket) and `lybra tui` (optional terminal client; install `textual>=4.
 
 ## Scope & limits
 
-Honest about what is **not yet productized**: a resident gate install (today the gate runs in the
-foreground via `lybra serve start`; systemd / launchd units are hand-written), cross-machine tunnels
+Honest boundaries: the **resident gate install is productized** — `lybra serve install` (Linux: a
+systemd --user unit; macOS: a launchd agent, not yet verified on real macOS hardware) previews with
+`--dry-run` and installs with `--confirm`; hand-written units are reported, never taken over. Not
+yet productized: cross-machine tunnels
 (manual ssh configuration), and cloud-platform advisors that cannot reach the governance-root machine
 (the advisor must be able to run local commands on, or ssh into, the governance machine). Every
 disclosed-deferred / discipline-held item is catalogued in
