@@ -3,15 +3,19 @@
 </p>
 
 <p align="center">
-  <b>The accountability harness for AI agents.</b><br/>
-  面向 AI Agent 的治理型 harness —— 文件为真相源，Owner 掌握每一道决策闸门，每一步皆可审计、可复现。
+  <b>The accountability harness for long-running, multi-role AI projects.</b><br/>
+  面向长期多角色 AI 项目的治理型 harness —— 项目真相固化在文件里，Owner 掌握每一道决策闸门，每一步皆可审计、可复现。
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/lybra"><img alt="npm" src="https://img.shields.io/npm/v/lybra?color=1A7A52&amp;label=npm"></a>
   <img alt="node" src="https://img.shields.io/node/v/lybra?color=1A7A52">
-  <img alt="license" src="https://img.shields.io/github/license/kiwiai777/lybra?color=1A7A52">
+  <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-1A7A52">
   <img alt="status" src="https://img.shields.io/badge/status-early%20access-1A7A52">
+</p>
+
+<p align="center">
+  <b>English</b> · <a href="README.zh-CN.md">简体中文</a> · <a href="QUICKSTART.md">Quick start</a> · <a href="QUICKSTART.zh-CN.md">快速上手(中文)</a>
 </p>
 
 ---
@@ -25,105 +29,122 @@ truth and the gate stay. It optimizes for **accountability**, not raw autonomy.
 Three principles are welded in:
 
 - **Gate, not engine.** The gate does not run or wake agents. The Owner starts the gate; agents run in
-  their own harness (Claude Code, pi, Codex …) and only produce artifacts. A workstation harness is
-  started either by the Owner (`/go`) or — only when the Owner's envelope explicitly authorizes it — by
-  the advisor's `lybra loop`.
+  their own harness and only produce artifacts. A workstation harness is started either by the Owner
+  (`/go`) or — only when the project authorization explicitly allows it — by the advisor's `lybra loop`.
 - **Files are truth.** State lives in durable files, not in compressed conversation memory — it
   outlives the model.
-- **Drafter ≠ executor ≠ auditor.** The advisor drafts and drives; an executor does the work; an
+- **Drafter ≠ executor ≠ auditor.** The advisor drafts and drives; executors do the work; an
   independent auditor judges it. **Executors and auditors never touch the gate** — every gate action
   (claim, return, dispatch, verdict, finalize, close) is done by the product.
 
 > The model isn't the bottleneck. The harness is.
 
+## Roles and who does what
+
+| Who | Does |
+|---|---|
+| **Owner** | Starts the gate (`lybra serve`), issues enrollment, signs the **project standing authorization** once per project (`lybra project grant sign`), decides what the inbox brings (`lybra owner inbox`), and watches the board. No per-card signatures — one grant covers the project's lanes, task modes, drivers, hosts and hard bounds. |
+| **Advisor** — a local command-line agent session (Claude Code by default, Codex supported; `--harness codex`) | Onboards the project, drafts and publishes cards, and advances each card with **`lybra loop`**, following it with `lybra loop status --task-id <id> --wait <seconds>` and stopping only when the product says the Owner is needed. |
+| **Code cards → advisor-spawned sub-agent** | The advisor drives its own sub-agent with the self-contained brief from `lybra kickoff --task-id <id>`; the sub-agent commits on the card branch and writes the report. |
+| **Non-code cards → pi executor workstation** | Every docs / governance / config / validation card goes to a dedicated **pi** workstation. The loop launches pi there (when the authorization allows it) or the Owner presses `/go`. |
+| **Audits → independent pi auditor workstation** | Audits are always done by a separate pi workstation that is not the executor. No independent audit PASS, no finalize. |
+
+Executors and auditors run on **pi** (you install pi and configure a model); the advisor runs on the
+local command-line agent of your choice. See the [Quick start](QUICKSTART.md) for the full walkthrough
+(中文版:[快速上手](QUICKSTART.zh-CN.md)).
+
 ## Install
 
+Prerequisites: **Node.js 18+**, **Python 3** and **git** on `PATH` (the gate core has no Python
+dependencies); for executor / auditor workstations, **pi** with at least one configured model
+(`pi --list-models`); an advisor session — Claude Code or Codex.
+
 ```bash
-npm install -g lybra        # Node 18+ and Python 3 on PATH; the gate core has no Python dependencies
+npm install -g lybra
 lybra --help
 ```
 
 ## How a project runs
 
-| Who | Does |
-|---|---|
-| **Owner** | Starts the gate (`lybra serve`), issues enrollment codes, signs autonomy envelopes (`lybra envelope mint`), and per card either presses **`/go`** in the workstation (manual mode, the default) or authorizes `lybra loop` to start the workstation harness (`lybra envelope mint … --launch-harness pi`). |
-| **Advisor** (a Claude Code or Codex session with the advisor charter and skills) | Onboards the project, drafts and publishes cards, and advances each card with **`lybra loop`**, following it with `lybra loop status --wait` and stopping only when the product says the Owner is needed. |
-| **Executor / auditor workstations** | Opened with `/go`, or launched by an authorized `lybra loop`; commit on the card branch and write the report to the project's declared location. No gate verbs, no credentials pasted. |
-
-**1. Onboard a project** — the product prints every step for your project, in order, with failure exits:
+**1. Onboard a project** — the product prints every step for *your* project, in order, with
+verification and failure exits:
 
 ```bash
-lybra onboarding guide my_project            # steps 1–9: who runs each command, how to verify it
-lybra project new my_project                 # step 1: governance root + project.json under the home root
-lybra project set-repos my_project --repo app=/abs/path/to/app --dry-run   # step 2: preview the project.json diff (no write)
-lybra project set-repos my_project --repo app=/abs/path/to/app --confirm   #         then write it
+lybra onboarding guide my-project --repo app=~/code/my-project
+lybra project new my-project
+lybra project set-repos my-project --repo app=~/code/my-project --dry-run
+lybra project set-repos my-project --repo app=~/code/my-project --confirm
 ```
 
-Every command that writes `project.json` (`set-repos`, `set-repo`, `set-paths`, `set-workstation`) is two-phase:
-`--dry-run` (default) previews the diff and validation with zero writes; `--confirm` writes.
+Every command that writes `project.json` (`set-repos`, `set-execution`, `set-model`, …) is two-phase:
+`--dry-run` (default) previews the diff and validation with zero writes; `--confirm` writes and lands
+it in the governance repository. `lybra onboarding check my-project --step 8` diagnoses any step.
+A Codex advisor session: `lybra onboarding guide my-project --advisor-harness codex`.
 
-The guide's remaining steps cover the Owner's two one-time actions (an advisor enrollment code and
-one command that signs the envelopes), advisor and workstation enrollment (`lybra roles enroll`), and
-distribution (`lybra sync`). The advisor session may be Claude Code (default) or Codex
-(`lybra onboarding guide my_project --advisor-harness codex --advisor-host <session-host>`, which enrolls with
-`lybra roles enroll ... --harness codex`); the advisor charter is rendered into the session directory
-(Claude Code: `.claude/rules/lybra-advisor.md` next to the `.claude/skills/`; Codex: `AGENTS.md`) when that
-directory is on the governance machine. `lybra onboarding check my_project --step <n>` diagnoses any step.
+**2. Authorize and divide** — one Owner signature per project, then declare who executes what:
 
-**2. Run a card** — the advisor publishes a card and drives it to completion with one command:
+```bash
+lybra project grant sign my-project --grant-lane app --task-mode code --task-mode docs --driver advisor.my-project.h1 --launch-harness pi --max-tasks 50 --expires-at 2027-01-31T00:00:00Z --confirm
+lybra roles enroll-deliver --role auditor --instance audit.my-project.h1 --governance-root ~/.lybra/projects/my-project --workspace ~/my-project-auditor --owner-authorization-ref auth-2026-11-01-01 --confirm
+lybra project set-execution my-project --subagent-executor subexec.my-project.h1 --pi-executor exec.my-project.h1 --auditor audit.my-project.h1 --confirm
+```
+
+The grant replaces per-card envelopes: lanes × task modes × drivers / hosts / harness launch, plus
+total-card and expiry hard bounds (`lybra project grant show` inspects it; `extend` / `revoke` revise
+it). `set-execution` declares the division of labor — code cards to the advisor's sub-agent, every
+non-code card to the pi executor workstation, audits always to the independent pi auditor.
+Enrollment happens with `lybra roles enroll-deliver` (the one-time code never appears on a command
+line); workstations pull their charters, skills and extensions with `lybra sync`.
+
+**3. Run cards** — the advisor publishes a card and drives it to completion with one command:
 
 ```bash
 lybra draft create --from-json card.json
-lybra draft publish --path 5_tasks/drafts/<card>.md
-lybra loop --task-id <CARD-ID>
+lybra draft publish --path 5_tasks/drafts/myproj-1.md
+lybra loop --task-id MYPROJ-1
+lybra loop status --task-id MYPROJ-1 --wait 540
 ```
 
 ```
 publish → lybra loop: claim (gate builds the card worktree)
-            → executor workstation (/go, or launched by loop): commits on card/<ID> + writes RETURN
+            → code card: advisor's sub-agent works from lybra kickoff brief
+              non-code card: pi executor workstation (launched by loop, or /go)
             → return ingest → audit dispatch
-            → auditor workstation (/go, or launched by loop): writes the audit report
-            → verdict ingest → finalize → close → governance commit (N6)
+            → pi auditor workstation: writes the audit report
+            → verdict ingest → finalize → close → governance commit
 ```
 
-Two kickoff modes (AIPOS-F95):
+Follow and inspect: `lybra loop status --task-id MYPROJ-1 --wait <seconds>` waits (bounded) and
+returns the advisor's next action — `continue_wait`, `owner_needed`, `card_done_take_next`,
+`investigate` or `advisor_fix`; `lybra agent watch --workspace-root ~/.lybra/projects/my-project` is a
+pure-client, bounded filesystem sentinel any bash-capable agent can use (exit codes:
+[`docs/agent_watch_exit_codes.md`](docs/agent_watch_exit_codes.md)); `lybra next --task-id MYPROJ-1`
+shows a card's next step, `lybra state lint` checks queue / frontmatter / records consistency, and
+`lybra brief` gives a cold-start summary. On-demand declarations — card id policy, post-merge
+regression time limits, production release targets, the pi model per project, board headlines — are
+covered in the [Quick start](QUICKSTART.md).
 
-- **Manual (default).** On an agent step `lybra loop` prints which workstation to open, waits for the
-  artifact, and exits 3 if it is not there yet — press `/go` in that workstation and re-run the same
-  command.
-- **Authorized launch.** If the Owner agreed and minted the envelope with `--launch-harness pi`, the
-  loop starts the harness in the (local) workstation once per agent step from the declared launch
-  template, shows a one-line progress summary, and cleans up the whole process group when the artifact is
-  ready or on timeout / early exit / interrupt. `lybra loop --no-launch` forces manual mode; a
-  workstation on another machine always falls back to manual.
-
-Exit codes are declared in `schema/verbs.schema.json` (`lybra_loop.exit_codes`).
-
-**3. Follow, wait and inspect** — `lybra loop status --task-id <CARD-ID> --wait <seconds>` waits (bounded) on the
-card's loop-run record and returns the advisor's next action — `continue_wait`, `owner_needed` (with the reason),
-`card_done_take_next` or `investigate` — with exit codes declared in `schema/verbs.schema.json`
-(`lybra_loop_status.exit_codes`); without `--wait` it is a read-only snapshot. `lybra agent watch --workspace-root <governance-root>` is a pure-client,
-bounded filesystem sentinel any bash-capable agent can use (exit codes:
-[`docs/agent_watch_exit_codes.md`](docs/agent_watch_exit_codes.md)). `lybra next --task-id <ID>`
-shows the next step of a card, `lybra state lint` checks queue / frontmatter / records consistency
-(including truth not yet committed), and `lybra brief` gives a cold-start summary.
-
-Other surfaces: `lybra board` (local dashboard, default port 7117) and `lybra tui` (optional terminal
-client; install `textual>=4.0` from PyPI — `lybra` itself is npm-only). On macOS pythons with empty
-default CA paths, install `certifi` (or set `SSL_CERT_FILE`) for the TUI's HTTPS; Lybra never disables
-verification.
+Other surfaces: `lybra board` (local dashboard, default port 7117; `lybra board open` opens it with a
+one-time ticket) and `lybra tui` (optional terminal client; install `textual>=4.0` from PyPI —
+`lybra` itself is npm-only). On macOS pythons with empty default CA paths, install `certifi` (or set
+`SSL_CERT_FILE`) for the TUI's HTTPS; Lybra never disables verification.
 
 ## Scope & limits
 
-Every disclosed-deferred / discipline-held item is catalogued honestly, with the structure or
-discipline that holds it, in **[`docs/v1_disclosure.md`](docs/v1_disclosure.md)**.
+Honest about what is **not yet productized**: a resident gate install (today the gate runs in the
+foreground via `lybra serve start`; systemd / launchd units are hand-written), cross-machine tunnels
+(manual ssh configuration), and cloud-platform advisors that cannot reach the governance-root machine
+(the advisor must be able to run local commands on, or ssh into, the governance machine). Every
+disclosed-deferred / discipline-held item is catalogued in
+**[`docs/v1_disclosure.md`](docs/v1_disclosure.md)**.
 
 ## Development
 
+Clone this repository, then:
+
 ```bash
-git clone https://github.com/kiwiai777/lybra && cd lybra
-bash tests/run-all.sh                # resident fixture suite
+bash tests/run-all.sh        # resident fixture suite
+npm run preflight            # version single-source + packaging check + clean-HOME smoke + full suite
 ```
 
 ## Contributing
@@ -134,8 +155,8 @@ file-authoritative and narrowly scoped (see [`docs/release_discipline.md`](docs/
 
 ## About
 
-Built by **KIWIAI**. Lybra turns AI from a personal trial tool into a **manageable, reusable,
-traceable** system you can hold accountable.
+Lybra turns AI from a personal trial tool into a **manageable, reusable, traceable** system you can
+hold accountable.
 
 ## License
 

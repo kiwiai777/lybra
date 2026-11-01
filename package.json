@@ -2,7 +2,7 @@
   "name": "lybra",
   "version": "0.3.0",
   "license": "Apache-2.0",
-  "description": "An accountable single-agent autonomy loop + an accountability gate any MCP agent can reach via Form B. Gate, not engine; files are truth; drafter != confirmer != executor.",
+  "description": "The accountability harness for long-running, multi-role AI projects: project truth lives in files, an owner-gated control plane advances every card, and an independent audit closes the loop. Gate, not engine; files are truth; drafter != executor != auditor.",
   "keywords": [
     "ai-agent",
     "accountability",
@@ -38,7 +38,9 @@
     "tools/",
     "web/",
     "README.md",
+    "README.zh-CN.md",
     "QUICKSTART.md",
+    "QUICKSTART.zh-CN.md",
     "LICENSE",
     "package.json",
     "!tools/**/tests/**",
