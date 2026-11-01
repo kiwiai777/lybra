@@ -570,11 +570,11 @@ def _serve_resident_cli(args: argparse.Namespace, connection_json: str | None) -
 
 
 def _config_cli(args: argparse.Namespace) -> int:
-    """AIPOS-F276 件①: `lybra config set-language <语言>` 薄壳——写 home 配置 language 键(唯一写口 workspace_config.set_language,
+    """AIPOS-F276 件①: `lybra config set-language <语言>` 薄壳——写 home 配置 language 键(i18n.set_language → workspace_config.set_global_config_value 唯一写路径,
     取值域 = 看板 locale.supported); 回显按写入后解析出的用户语言(i18n.resolve_language)。退出码读 verbs.schema lybra_config_set_language。"""
-    from tools.aipos_cli.i18n import LanguageError, cli_flag, env_name, language_declaration, resolve_language
+    from tools.aipos_cli.i18n import (LanguageError, cli_flag, describe_resolution, env_name, language_declaration, resolve_language,
+                                      set_language)
     from tools.aipos_cli.verb_contract import declared_exit_code
-    from tools.aipos_cli.workspace_config import set_language
 
     verb = "lybra_config_set_language"
     if getattr(args, "config_command", None) != "set-language":
@@ -583,6 +583,7 @@ def _config_cli(args: argparse.Namespace) -> int:
     try:
         result = set_language(args.language)
         lang = resolve_language(args)
+        effective = describe_resolution(args)  # 写入后的实际生效语言与来源(环境变量 / --lang 仍可盖过 home 配置)
     except LanguageError as exc:
         print(f"lybra config set-language: {exc}", file=sys.stderr)
         return declared_exit_code(verb, "refused")
@@ -595,9 +596,10 @@ def _config_cli(args: argparse.Namespace) -> int:
         before=result["before"] or unset, after=result["after"], path=result["path"], flag=cli_flag(), env=env_name())
     if args.json:
         print(render_json({"ok": True, "changed": result["changed"], "path": str(result["path"]), "before": result["before"],
-                           "after": result["after"], "message": line}))
+                           "after": result["after"], "effective": lang, "message": line, "effective_line": effective}))
     else:
         print(line)
+        print(effective)
     return declared_exit_code(verb, "ok")
 
 
@@ -3129,7 +3131,7 @@ def build_parser() -> argparse.ArgumentParser:
     setup_check_parser.add_argument("--gate-url", help="Probe this gate address instead of the resolved one (workspace .lybra/connection.json mcp.rpc_url > LYBRA_GATE_URL > default)")
     setup_check_parser.add_argument("--json", action="store_true", help="Output JSON (structured result, same function the board reuses)")
 
-    # AIPOS-F276 件①: home 级用户语言(声明 verbs.schema lybra_config_set_language; 写口 workspace_config.set_language)
+    # AIPOS-F276 件①: home 级用户语言(声明 verbs.schema lybra_config_set_language; 写口 i18n.set_language)
     config_parser = subparsers.add_parser("config", help="AIPOS-F276: home-level user settings (~/.lybra/config.json)")
     config_subparsers = config_parser.add_subparsers(dest="config_command")
     config_lang_parser = config_subparsers.add_parser(

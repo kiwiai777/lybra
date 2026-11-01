@@ -9,7 +9,7 @@
   - 任一档给了非法值 = LanguageError(拒因 + 出口, texts.invalid), 不静默回退。
 双语 texts 标准: {<语言>: {…}} 两层表(可嵌套), 语言集恰为 locale.supported, 各语言键集(含嵌套路径)相等; 唯一读取器 texts(block, lang, where=...)
 每次读取先核结构(缺键 / 多键 / 语言不齐 = SchemaLoadError, 测试期即红, 与看板 _I18N_TEMPLATES「缺 en = 测试失败」同一纪律)。
-只读: 本模块不写任何文件(home 配置写入 = workspace_config.set_language)。
+写入只有 set_language 一处(home 配置 language 键, 经 workspace_config.set_global_config_value 唯一写路径); 其余只读。
 """
 from __future__ import annotations
 
@@ -260,6 +260,23 @@ def board_default_language(env: dict[str, str] | None = None) -> str:
     except LanguageError as exc:
         print(f"lybra board: {exc}", file=sys.stderr)
         return default_language()
+
+
+def set_language(language: str, *, env: dict[str, str] | None = None) -> dict[str, Any]:
+    """`lybra config set-language` 的写入: home 配置(configuration_sources.global_config)的 home_config_key 键, 写口复用
+    workspace_config.set_global_config_value(唯一写路径, 保留其余键; 不新增文件格式)。取值经 validate_language; 非法 = LanguageError
+    (不写)。返回 {path, before, after, changed}; 值不变 = 不改写文件。"""
+    from tools.aipos_cli.workspace_config import global_config_path, load_global_config, set_global_config_value
+
+    key = home_config_key()
+    path = global_config_path(env)
+    if path is None:
+        raise ValueError(f"HOME_NOT_RESOLVED: cannot locate ~/.lybra/config.json to set {key}")
+    after = validate_language(language, source="home_config", path=path)
+    before = load_global_config(env).get(key)
+    if before == after:
+        return {"path": path, "before": before, "after": after, "changed": False}
+    return {"path": set_global_config_value(key, after, env=env), "before": before, "after": after, "changed": True}
 
 
 # ---------------------------------------------------------------------------

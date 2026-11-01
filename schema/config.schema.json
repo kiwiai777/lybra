@@ -790,7 +790,7 @@
       }
     },
     "global_config": {
-      "description": "AIPOS-226 home 级运行时配置(机器级, 不进治理真相、无密钥; HOME 下 .lybra/config.json)。读口 workspace_config.load_global_config(global_config_path 按 HOME 定位, 显式 env 无 HOME = 不读真实 home); 写口 workspace_config.set_global_config_value(唯一写路径; set_active_project / set_language 同调, 保留其余键)。AIPOS-F276: 新键 language(用户语言)= 语言选择第 3 档, 缺键 = 行为不变(落到看板 locale.default)。",
+      "description": "AIPOS-226 home 级运行时配置(机器级, 不进治理真相、无密钥; HOME 下 .lybra/config.json)。读口 workspace_config.load_global_config(global_config_path 按 HOME 定位, 显式 env 无 HOME = 不读真实 home); 写口 workspace_config.set_global_config_value(唯一写路径; set_active_project / i18n.set_language 同调, 保留其余键)。AIPOS-F276: 新键 language(用户语言)= 语言选择第 3 档, 缺键 = 行为不变(落到看板 locale.default)。",
       "source_file": "~/.lybra/config.json",
       "schema": {
         "config_version": {
@@ -815,7 +815,7 @@
           "type": "string",
           "required": false,
           "default": null,
-          "description": "AIPOS-F276: 用户语言(一次设置全局生效; 覆盖首跑——project.json 尚不存在时)。取值域 = verbs.schema board_readonly_pages.locale.supported; 缺省 null = 不声明(落到看板 locale.default, 行为不变)。写口 `lybra config set-language <语言>`(workspace_config.set_language); 读口 i18n.resolve_language(本文件 language 节优先序)"
+          "description": "AIPOS-F276: 用户语言(一次设置全局生效; 覆盖首跑——project.json 尚不存在时)。取值域 = verbs.schema board_readonly_pages.locale.supported; 缺省 null = 不声明(落到看板 locale.default, 行为不变)。写口 `lybra config set-language <语言>`(i18n.set_language → workspace_config.set_global_config_value); 读口 i18n.resolve_language(本文件 language 节优先序)"
         }
       }
     }

@@ -99,6 +99,10 @@ def test_item1_config_set_language_writes_home_config_only(tmp_path, clean_lang_
     rc, out = _cli("config", "set-language", "en")
     _show(f"[件① lybra config set-language en] exit {rc}\n{out}")
     assert rc == declared_exit_code(VERB, "ok") and "User language not set -> en" in out
+    assert f"User language = en (source: home config {home / '.lybra' / 'config.json'} key language)" in out  # 写入后实际生效与来源
+    clean_lang_env.setenv("LYBRA_LANG", "zh")
+    assert "用户语言 = zh(来源: 环境变量 LYBRA_LANG)" in _cli("config", "set-language", "en")[1]  # 环境变量仍盖过 home 配置, 回显点明
+    clean_lang_env.delenv("LYBRA_LANG")
     assert _home_config(home) == {"config_version": 2, "home_root": str(tmp_path / "gh"), "active_project": "keep", "language": "en"}
     before = cfg.read_bytes()
     rc, out = _cli("config", "set-language", "en")

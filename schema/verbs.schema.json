@@ -6622,13 +6622,13 @@
       }
     },
     "lybra_config_set_language": {
-      "description": "AIPOS-F276 件①(产品化 P4 机制): `lybra [--lang <语言>] config set-language <语言> [--json]` —— 一次设置用户语言, 全局生效(所有 lybra 命令的双语出声点与看板缺省语言)。写 home 级运行时配置 config.schema configuration_sources.global_config 的 language 键(~/.lybra/config.json; 唯一写口 workspace_config.set_language → set_global_config_value, 保留其余键; 值不变 = 不改写)。取值域 = board_readonly_pages.locale.supported(唯一声明), 非法 = 拒(退出码 refused, 原文给出口, 不写)。优先序(config.schema language.precedence): 全局 --lang > 环境变量 LYBRA_LANG > 本键 > locale.default——本命令写的是第 3 档, 回显按写入后解析出的语言(文案 config.schema language.texts.set_done / set_same)。不是新文件格式、不进治理真相、不连门。",
+      "description": "AIPOS-F276 件①(产品化 P4 机制): `lybra [--lang <语言>] config set-language <语言> [--json]` —— 一次设置用户语言, 全局生效(所有 lybra 命令的双语出声点与看板缺省语言)。写 home 级运行时配置 config.schema configuration_sources.global_config 的 language 键(~/.lybra/config.json; 唯一写口 i18n.set_language → workspace_config.set_global_config_value, 保留其余键; 值不变 = 不改写)。取值域 = board_readonly_pages.locale.supported(唯一声明), 非法 = 拒(退出码 refused, 原文给出口, 不写)。优先序(config.schema language.precedence): 全局 --lang > 环境变量 LYBRA_LANG > 本键 > locale.default——本命令写的是第 3 档, 回显按写入后解析出的语言(文案 config.schema language.texts.set_done / set_same)。不是新文件格式、不进治理真相、不连门。",
       "phase": "single",
       "surface": [
         "cli"
       ],
       "cli_command": "lybra config set-language",
-      "single_implementation": "tools/aipos_cli/workspace_config.py(set_language / set_global_config_value)+ tools/aipos_cli/i18n.py(validate_language / resolve_language)",
+      "single_implementation": "tools/aipos_cli/i18n.py(set_language / validate_language / resolve_language)+ tools/aipos_cli/workspace_config.py(set_global_config_value)",
       "parameters": {
         "type": "object",
         "properties": {
@@ -6638,7 +6638,7 @@
           },
           "json": {
             "type": "boolean",
-            "description": "输出 {ok, changed, path, before, after, message}"
+            "description": "输出 {ok, changed, path, before, after, effective, message, effective_line}(effective = 写入后 i18n.resolve_language 实际生效的语言; 文本输出第二行 = texts.show_line: 生效语言与来源)"
           }
         }
       },
