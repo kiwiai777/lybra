@@ -90,6 +90,12 @@ lybra sync --harness-root <工位目录> --workspace-root <项目根> --dry-run
 - `401 Unauthorized` → 门拒绝凭据或码(发码门 ≠ 本门); 核对 connection.json mcp.rpc_url 后重跑 Step 6(失败时码已吊销)
 - `.pi/ 接线缺失` / `lybra_bin` 缺失 / `workspace_root` 写错 → 重跑 Step 6 校正; 仍在 = 报 bug
 
+**执行分工**(AIPOS-F256 / F260, 产品按卡类型强制, 不可按项目选配): 代码卡 = 子 agent(你派工); 非代码卡(docs / governance / config / validation) = Step 6 接入的 pi 执行工位(loop 自动拉起); 审计 = pi 审计工位。工位接入后声明执行方式(先预演, 再同参加 `--confirm --actor <你的顾问实例>`; 不带退役旗标 `--pi-allowed-task-mode`):
+```bash
+lybra project set-execution <项目名> --home-root <home根> --subagent-executor <子agent执行实例> --auditor <审计体实例> --pi-executor <执行体实例> --dry-run
+```
+未声明 pi 执行工位 = 非代码卡起草即拒 `EXECUTOR_PI_UNDECLARED`; 出口 = 按 Step 6–7 接入 pi 执行工位后 `set-execution --pi-executor`(切换计划可由看板「工位设置」页或 `lybra project workstation-plan <项目名> --pi-executor <执行体实例>` 生成)。过渡在途: 新分工生效前已认领的非代码卡按原执行方做完; 待认领与新卡按新分工, 违例按拒因给的出口改派。
+
 ### Step 8(工位): 自检 → 起 pi → /go
 
 ```bash

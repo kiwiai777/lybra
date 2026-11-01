@@ -477,13 +477,15 @@ lybra project check-workstation <项目名> --home-root <home根> --instance <�
 `set-execution --pi-executor`); 代码卡交回须在车道内真有产品仓改动(否则 `INGEST_CODE_CHANGE_EMPTY`); 验证根 / 发布目标只认 pi 执行身份。
 旧键 `execution.pi_allowed_task_modes` 退役(不再改变路由), `lybra project upgrade` 预演列出在途违例卡与逐张出口、确认即删该键; `lybra roles list` 末段同列。验证卡保留独立审计、N5 无合入(finalize 写明「验证卡无合入」, 不合并不推送不部署); 环境卡(config)
 由你复核(loop 停在「非代码卡快车道:顾问直接审」)。代码卡只做实现与离线测试, 验证 / 环境类工作单独出卡交 pi。
+分工不可按项目选配(AIPOS-F260): 每个项目只声明「pi 执行工位是谁、在哪」(`set-execution --pi-executor`), 不再勾哪些卡类型交 pi; 工位设置(看板「工位设置」页 / `workstation-plan`)不读不写退役键, 生成的 set-execution 命令永不带 `--pi-allowed-task-mode`、不清已声明的 pi 执行工位。
+过渡在途(AIPOS-F256B): 新分工生效前已认领的非代码卡(claim 记录 / 卡面 claimed_by / 已在认领后队列目录)按原执行方做完——开工稿与交回不拒, `roles list` / `project upgrade` 预演列为「过渡在途」信息项; 待认领卡与新起草 / 发卡按新分工, 违例按拒因给的出口改派(待认领 amend、已认领撤卡重发)。
 
 **先生成切换计划(AIPOS-F198)**: 下面各步的命令、顺序与「哪些已完成」由产品推导, 不手写——Owner 在看板项目「工位设置」页选好目标分工后转给你的提示词,
 与下面命令输出同一份(只读, 零写入); 照它逐步先预演后确认, 被拒原样报告 Owner:
 ```bash
-lybra project workstation-plan <项目名> --home-root <home根> --pi-modes validation,config,docs --pi-executor <执行体实例> --workspace <工位目录> --host <主机标签> --ssh-alias <ssh别名>
+lybra project workstation-plan <项目名> --home-root <home根> --pi-executor <执行体实例> --workspace <工位目录> --host <主机标签> --ssh-alias <ssh别名>
 ```
-输出含: 现状(子 agent 执行者 / pi 执行工位 / 审计工位的接入与章程状态、交 pi 的卡类型、目标主机 ssh 别名、验证根摘要、各卡类型派给谁)、风险、
+输出含: 现状(子 agent 执行者 / pi 执行工位 / 审计工位的接入与章程状态、非代码卡交给谁(未声明 pi 执行工位 = 标「无法派发」+ 下一步)、目标主机 ssh 别名、验证根摘要、各卡类型派给谁)、风险、
 依赖序步骤(决策日志 → Owner 签覆盖信封 → 接入 → 手写章程接管 / 章程同步 → set-execution → set-host → 核验 → 通知专项顾问)、给项目总顾问与给各专项顾问的两段话术。--workspace(既有工位可省)、--host / --ssh-alias(不经 ssh 可省)可省; Owner 已有决策记录时加 --owner-ref 引用它(决策步即为已完成)。
 
 1. **pi 执行工位接入**(工位目录不迁移; 已有手写章程的工位先接管; enroll-deliver 预演后加 `--confirm`):
