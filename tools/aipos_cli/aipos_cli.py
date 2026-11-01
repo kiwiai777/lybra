@@ -543,6 +543,49 @@ def _find_repo_root_for_args(args: argparse.Namespace) -> Path:
     return hit["project_root"]
 
 
+def _serve_resident_cli(args: argparse.Namespace, connection_json: str | None) -> int:
+    """AIPOS-F263 件②: `serve install|uninstall` 薄壳(唯一实现 gate_resident.install / uninstall; 人读 render_resident_report)。
+    退出码: 0 = 预演无拒因 / 确认完成; 1 = 拒(同名 / 手写单元 / 平台不支持 / 服务命令失败, 原文给出口)。"""
+    from tools.aipos_cli.gate_resident import GateResidentError, install, render_resident_report, uninstall
+
+    try:
+        if args.serve_command == "uninstall":
+            result = uninstall(confirm=bool(args.confirm))
+        else:
+            start_args: list[str] = []
+            for flag, value in (("--board-host", args.board_host), ("--board-advertise", args.board_advertise),
+                                ("--board-port", args.board_port), ("--mcp-host", args.mcp_host),
+                                ("--mcp-advertise", args.mcp_advertise), ("--mcp-port", args.mcp_port)):
+                if value is not None:
+                    start_args += [flag, str(value)]
+            if args.reuse_port:
+                start_args.append("--reuse-port")
+            result = install(_resolve_workspace_for_command(args), confirm=bool(args.confirm), connection_json=connection_json,
+                             start_args=start_args)
+    except (GateResidentError, FileNotFoundError, FileExistsError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    print(render_json(result) if args.json else render_resident_report(result))
+    return 0 if result.get("ok") else 1
+
+
+def _setup_check_cli(args: argparse.Namespace) -> int:
+    """AIPOS-F263 件①: `setup check` 薄壳(唯一实现 setup_check.run_setup_check; 人读 render_setup_check)。任一 ✗ = 退出码 1。
+    工作区只用于门地址(其 .lybra/connection.json mcp.rpc_url, 不读 token); 解析不出 = 不带工作区(env / 缺省地址)。"""
+    from tools.aipos_cli.setup_check import render_setup_check, run_setup_check
+
+    if getattr(args, "setup_command", None) != "check":
+        print("usage: lybra setup check [--gate-url URL] [--json]", file=sys.stderr)
+        return 2
+    try:
+        workspace_root: Path | None = _resolve_workspace_for_command(args)
+    except (FileNotFoundError, ValueError, OSError):
+        workspace_root = None
+    result = run_setup_check(workspace_root=workspace_root, gate_url=getattr(args, "gate_url", None))
+    print(render_json(result) if args.json else render_setup_check(result))
+    return 0 if result["ok"] else 1
+
+
 def _run_board_command(args: argparse.Namespace) -> int:
     from web.board.app import run_server
 
@@ -3014,6 +3057,31 @@ def build_parser() -> argparse.ArgumentParser:
     serve_rotate_parser.add_argument("--owner-authorization-ref", help="AIPOS-346 S2: reference to owner authorization for this rotation")
     serve_rotate_parser.add_argument("--roles", help="AIPOS-353: comma-separated list of roles to rotate (e.g. auditor or auditor,executor); unselected roles keep their existing tokens byte-for-byte. Omit for full rotation.")
     serve_rotate_parser.add_argument("--json", action="store_true", help="Output JSON")
+    # AIPOS-F263 件②: 门常驻安装(Linux systemd --user / macOS launchd), 声明 config.schema gate_resident, 唯一实现 gate_resident.py
+    serve_install_parser = serve_subparsers.add_parser("install", help="AIPOS-F263: install the gate as a resident user service (Linux systemd --user unit / macOS launchd agent) rendered from config.schema gate_resident; default --dry-run prints the full file and commands with zero writes; an existing same-name unit is never overwritten; another hand-written unit running `serve start` is reported and not taken over (--confirm refused); --confirm writes the unit, enables it (--now) and reads its state back")
+    serve_install_phase = serve_install_parser.add_mutually_exclusive_group()
+    serve_install_phase.add_argument("--dry-run", action="store_true", help="Preview only (default): unit path, full text, commands, refusals")
+    serve_install_phase.add_argument("--confirm", action="store_true", help="Write the unit, run the declared install commands, read state back")
+    serve_install_parser.add_argument("--board-host", default=None, help="Passed through to the unit's `serve start --board-host`")
+    serve_install_parser.add_argument("--board-advertise", default=None, help="Passed through to `serve start --board-advertise`")
+    serve_install_parser.add_argument("--board-port", type=int, default=None, help="Passed through to `serve start --board-port` (omit = serve start default)")
+    serve_install_parser.add_argument("--mcp-host", default=None, help="Passed through to `serve start --mcp-host`")
+    serve_install_parser.add_argument("--mcp-advertise", default=None, help="Passed through to `serve start --mcp-advertise`")
+    serve_install_parser.add_argument("--mcp-port", type=int, default=None, help="Passed through to `serve start --mcp-port` (omit = serve start default)")
+    serve_install_parser.add_argument("--reuse-port", action="store_true", default=False, help="Passed through to `serve start --reuse-port`")
+    serve_install_parser.add_argument("--json", action="store_true", help="Output JSON")
+    serve_uninstall_parser = serve_subparsers.add_parser("uninstall", help="AIPOS-F263: stop and remove the resident unit generated by `serve install` (only files carrying the managed marker; hand-written units are never touched); default --dry-run")
+    serve_uninstall_phase = serve_uninstall_parser.add_mutually_exclusive_group()
+    serve_uninstall_phase.add_argument("--dry-run", action="store_true", help="Preview only (default)")
+    serve_uninstall_phase.add_argument("--confirm", action="store_true", help="Disable/stop the unit and remove its file")
+    serve_uninstall_parser.add_argument("--json", action="store_true", help="Output JSON")
+
+    # AIPOS-F263 件①: 安装自检, 声明 config.schema setup_check, 唯一实现 setup_check.run_setup_check
+    setup_parser = subparsers.add_parser("setup", help="AIPOS-F263: installation self-check")
+    setup_subparsers = setup_parser.add_subparsers(dest="setup_command")
+    setup_check_parser = setup_subparsers.add_parser("check", help="AIPOS-F263: check python / node / git versions, pi on PATH and its configured models, whether the gate is running and reachable, and whether the gate resident service is installed; one line per item (✓ / ✗ / ⚠) with an exit line; any ✗ = exit 1. Read-only (never reads tokens or key files)")
+    setup_check_parser.add_argument("--gate-url", help="Probe this gate address instead of the resolved one (workspace .lybra/connection.json mcp.rpc_url > LYBRA_GATE_URL > default)")
+    setup_check_parser.add_argument("--json", action="store_true", help="Output JSON (structured result, same function the board reuses)")
 
     # AIPOS-346 S5: roles subcommand (first-class role management)
     from tools.aipos_cli.enrollment import executor_mode_declaration as _executor_mode_declaration  # AIPOS-F143 件④: 取值读声明
@@ -3773,10 +3841,11 @@ def build_parser() -> argparse.ArgumentParser:
     onboarding_guide_parser.add_argument("--owner-connection-json", help="Owner credential connection.json (defaults to <owner-workspace>/.lybra/connection.json)")
     onboarding_guide_parser.add_argument("--envelope-days", type=int, default=30, help="Envelope validity in days (default 30)")
     onboarding_guide_parser.add_argument("--max-tasks", type=int, default=50, help="Envelope max auto-released claims (default 50)")
+    onboarding_guide_parser.add_argument("--skip-preflight", action="store_true", help="AIPOS-F263: do not run the local installation self-check (`lybra setup check`) at the top of the guide; the guide then only names the command (e.g. when reading the guide on a machine that is not the one being set up)")
     onboarding_guide_parser.add_argument("--json", action="store_true", help="Output JSON")
     onboarding_check_parser = onboarding_subparsers.add_parser("check", help="Check prerequisites for a specific onboarding step")
     onboarding_check_parser.add_argument("project_name", help="Project name")
-    onboarding_check_parser.add_argument("--step", type=int, required=True, help="Guide step number to check prerequisites for (1-9, same numbering as onboarding guide)")
+    onboarding_check_parser.add_argument("--step", type=int, required=True, help="Guide step number to check prerequisites for (0 = the guide's preflight, i.e. `lybra setup check` ✗ items; 1-9 = same numbering as onboarding guide)")
     onboarding_check_parser.add_argument("--home-root", help="Governance home root")
     onboarding_check_parser.add_argument("--workspace-dir", help="Workstation directory")
     onboarding_check_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -4820,6 +4889,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Error: {exc}", file=sys.stderr)
             return 1
 
+    if args.command == "setup":
+        return _setup_check_cli(args)
+
     if args.command == "serve":
         if not getattr(args, "serve_command", None):
             parser.print_help()
@@ -4841,6 +4913,8 @@ def main(argv: list[str] | None = None) -> int:
                 result = stop_report(workspace_root, connection_target=connection_target)
                 print(render_json(result))
                 return 1 if result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons") else 0
+            if args.serve_command in ("install", "uninstall"):
+                return _serve_resident_cli(args, conn_override)
             workspace_root = _resolve_workspace_for_command(args)
             if args.serve_command == "start":
                 result = start_report(
@@ -4857,6 +4931,9 @@ def main(argv: list[str] | None = None) -> int:
                 )
             elif args.serve_command == "status":
                 result = status_report(workspace_root, connection_target=connection_target)
+                from tools.aipos_cli.gate_resident import resident_status  # AIPOS-F263 件②: 常驻一节(只读)
+
+                result["resident"] = resident_status()
             elif args.serve_command == "rotate":
                 # AIPOS-254: parse --role-instance (multi-use) into dict
                 role_inst_map = {}
@@ -4898,6 +4975,10 @@ def main(argv: list[str] | None = None) -> int:
             pass
         elif args.serve_command in {"start", "status", "rotate"}:
             print(render_connection_table(result))
+            if args.serve_command == "status":
+                from tools.aipos_cli.gate_resident import render_resident_status_line
+
+                print(render_resident_status_line(result["resident"]))
         else:
             print(render_json(result))
         return 1 if result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons") else 0
@@ -6626,6 +6707,7 @@ def main(argv: list[str] | None = None) -> int:
                     owner_connection_json=args.owner_connection_json,
                     envelope_days=args.envelope_days,
                     max_tasks=args.max_tasks,
+                    run_preflight=not args.skip_preflight,  # AIPOS-F263 件③: 前置检查 = lybra setup check 摘要
                 )
             except ValueError as exc:  # AIPOS-F129: 顾问 harness 取值/会话所在机违反声明 = 拒(原文给出口)
                 print(f"Error: {exc}", file=sys.stderr)
@@ -6636,11 +6718,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(format_guide_text(guide))
             return 0
         elif args.onboarding_command == "check":
+            from tools.aipos_cli.setup_check import run_setup_check
+
             result = validate_step_prerequisites(
                 args.step,
                 project_name=args.project_name,
                 home_root=args.home_root,
                 workspace_dir=args.workspace_dir,
+                preflight=run_setup_check() if args.step == 0 else None,  # AIPOS-F263 件③: --step 0 = 前置检查(setup check ✗ 项)
             )
             if args.json:
                 print(render_json(result))

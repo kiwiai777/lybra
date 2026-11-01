@@ -6378,6 +6378,114 @@
         "usage": {"code": 5, "meaning": "用法错/布防拒绝(如 --expect 模式非法)"},
         "signal": {"code": 130, "meaning": "SIGTERM/SIGINT 干净退出(无输出无 traceback)"}
       }
+    },
+    "lybra_setup_check": {
+      "description": "AIPOS-F263 件①(产品化 P2b; F258 doc-gaps 第 10 条 / F257 P2 输入第 4、7 条): `lybra [--workspace-root <治理根>] setup check [--gate-url <门地址>] [--json]` —— 安装自检: python / node 版本、git、pi 是否在 PATH 及版本、pi 是否有可用模型、门是否在跑且可达、门常驻是否已安装; 每项一行 ✓ / ✗ / ⚠ + 出口一行。检查项序、标签、版本要求、pi 安装指引、门探测路径与各出口唯一声明 = config.schema setup_check; 判定唯一实现 setup_check.run_setup_check(结构化结果, 看板 P3 设置自检页直接复用), 人读唯一出口 render_setup_check。只读: 不写文件、不读 token / 密钥文件内容(pi 模型经 `pi --list-models`, 门地址只取 connection.json mcp.rpc_url), 门可达只对门基址 GET 声明的探测路径(永不探 /mcp)。工作区解析不出 = 不带工作区(门地址落 env / 缺省)。onboarding 向导开头「前置检查」与 `onboarding check --step N` 同读本结果(✗ 项阻断)。",
+      "phase": "single",
+      "surface": [
+        "cli"
+      ],
+      "cli_command": "lybra setup check",
+      "single_implementation": "tools/aipos_cli/setup_check.py(run_setup_check / render_setup_check / preflight_step)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "gate_url": {
+            "type": "string",
+            "description": "探测这个门地址(缺省 = 工作区 .lybra/connection.json mcp.rpc_url > LYBRA_GATE_URL > urls.gate_local)"
+          },
+          "json": {
+            "type": "boolean",
+            "description": "输出结构化结果 {ok, verdict, counts, blocking, items[{id,label,status,mark,detail,exit}]}"
+          }
+        }
+      },
+      "exit_codes": {
+        "ok": {
+          "code": 0,
+          "meaning": "无 ✗ 项(可有 ⚠ 提示)"
+        },
+        "blocked": {
+          "code": 1,
+          "meaning": "有 ✗ 项(阻断), 每项出口一行"
+        },
+        "usage": {
+          "code": 2,
+          "meaning": "参数错(argparse)/ 缺子命令"
+        }
+      }
+    },
+    "lybra_serve_install": {
+      "description": "AIPOS-F263 件②(产品化 P2b; F258 doc-gaps 第 7 条): `lybra serve [--workspace-root <治理根>] [--connection-json <路径>] install [--dry-run|--confirm] [serve start 透传旗标] [--json]` / `lybra serve uninstall [--dry-run|--confirm] [--json]` / `lybra serve status`(附「门常驻」一节)—— 门常驻安装。Linux = systemd --user 单元, macOS = launchd LaunchAgent; 单元名、管理标记、环境文件、各平台落点 / 模板 / 命令唯一声明 = config.schema gate_resident, 唯一实现 gate_resident.py。两阶段: 缺省预演(零写入: 打印将写文件路径与全文、将执行命令); --confirm 写文件后执行声明的 install 命令(systemd: daemon-reload + enable --now)并回读 status 命令。拒(退出码 1, 原文给出口): 已存在同名单元(UNIT_EXISTS_MANAGED: 本命令先前生成, 先 uninstall; UNIT_EXISTS_FOREIGN: 非本命令生成, 不覆盖不接管)、单元目录已有其他名手写常驻门单元(HANDWRITTEN_UNIT_PRESENT: 预演提示「检测到已有手写常驻单元 X, 本命令不接管」, --confirm 拒——两个门争同一端口)、平台未声明、服务命令失败(SERVICE_COMMAND_FAILED)。uninstall 只删带管理标记的本命令生成文件(UNIT_NOT_MANAGED = 拒)。单元目录从 HOME / XDG_CONFIG_HOME 推导, 不提权、不写系统路径。命令式样唯一渲染 gate_resident.install_command(向导起门步同读)。",
+      "phase": "two_phase",
+      "surface": [
+        "cli"
+      ],
+      "cli_command": "lybra serve install",
+      "related_cli_commands": [
+        "lybra serve uninstall",
+        "lybra serve status"
+      ],
+      "single_implementation": "tools/aipos_cli/gate_resident.py(plan_install / install / uninstall / resident_status / render_unit / render_resident_report / render_resident_status_line / install_command)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "description": "预演(缺省): 零写入"
+          },
+          "confirm": {
+            "type": "boolean",
+            "description": "写单元文件并启用, 回读状态"
+          },
+          "board_host": {
+            "type": "string",
+            "description": "透传 serve start --board-host"
+          },
+          "board_advertise": {
+            "type": "string",
+            "description": "透传 serve start --board-advertise"
+          },
+          "board_port": {
+            "type": "integer",
+            "description": "透传 serve start --board-port(缺省不写 = serve start 缺省)"
+          },
+          "mcp_host": {
+            "type": "string",
+            "description": "透传 serve start --mcp-host"
+          },
+          "mcp_advertise": {
+            "type": "string",
+            "description": "透传 serve start --mcp-advertise"
+          },
+          "mcp_port": {
+            "type": "integer",
+            "description": "透传 serve start --mcp-port(缺省不写 = serve start 缺省)"
+          },
+          "reuse_port": {
+            "type": "boolean",
+            "description": "透传 serve start --reuse-port"
+          },
+          "json": {
+            "type": "boolean",
+            "description": "输出 JSON"
+          }
+        }
+      },
+      "exit_codes": {
+        "ok": {
+          "code": 0,
+          "meaning": "预演无拒因 / 确认已写入并执行完声明命令(回读状态见输出)/ uninstall 完成或本无单元"
+        },
+        "refused": {
+          "code": 1,
+          "meaning": "拒: UNIT_EXISTS_MANAGED / UNIT_EXISTS_FOREIGN / HANDWRITTEN_UNIT_PRESENT / UNIT_NOT_MANAGED / SERVICE_COMMAND_FAILED / 平台未声明 / 工作区解析不出(原文给出口)"
+        },
+        "usage": {
+          "code": 2,
+          "meaning": "参数错(argparse)"
+        }
+      }
     }
   }
 }
