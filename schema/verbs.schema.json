@@ -6226,7 +6226,12 @@
       "base_verb": "lybra_queue_withdraw",
       "confirm_verb": "lybra_queue_withdraw_confirm",
       "parameters_source": "tools/mcp_server/tools.py 描述符 inputSchema(本条目只声明工具名/scope/可见性, 参数形状不另写第二份)",
-      "surface": ["mcp"]
+      "surface": ["mcp"],
+      "texts": {
+        "description": "AIPOS-F259 件②: 撤卡预演(CLI queue withdraw --dry-run 与门 / 看板 lybra_queue_withdraw_dry_run 同一入口 board_adapter.withdraw_task; 判定唯一实现 queue_mutation.withdraw_branch_commits_hint)——卡有卡分支(next_resolver._card_branch_tip)且分支相对期望基座(card_expected_base)有提交时, 预演 warnings 加一行 branch_commits; 计数读不出 = branch_commits_unknown(出声, 不吞)。只提示, 不拦截撤卡本身; 正式撤回不重复提示。",
+        "branch_commits": "本卡分支 {branch} 有 {count} 个提交(相对 {base});若要由新卡接着做并复用这些提交, 改用 lybra queue supersede --task-id {task_id} --by <新卡> --actor <顾问实例> --owner-words <Owner 原话摘要> --carry-branch(撤卡不留承接, 复用提交日后部署覆盖会断)",
+        "branch_commits_unknown": "本卡分支 {branch} 相对 {base} 的提交数读不出({error}); 若分支有提交且要由新卡复用, 改用 lybra queue supersede --task-id {task_id} --by <新卡> --carry-branch"
+      }
     },
     "lybra_queue_withdraw_confirm": {
       "description": "撤卡确认。",

@@ -276,7 +276,7 @@ def test_item3_binding_legacy_fallback_and_round_evolution_r2_to_r3(lrig, monkey
     # 存量交回记录(门早于本卡, 无 artifact_subject)→ 退回本轮取证树 HEAD(F107 活体形)
     original = ret_path.read_text(encoding="utf-8")
     legacy = "\n".join(ln for ln in original.splitlines() if not ln.startswith(("artifact_subject:", "  repository:", "  commit_sha:",
-                                                                                   "  tree_hash:", "  branch:"))) + "\n"
+                                                                                   "  tree_hash:", "  branch:", "  base_commit:"))) + "\n"
     ret_path.write_text(legacy, encoding="utf-8")
     assert "artifact_subject" not in legacy and nr.return_record_subject(lrig.gov, TASK, _fm(ret_path)["return_id"]) is None
     stale = nr.return_staleness(lrig.gov, TASK, fm)

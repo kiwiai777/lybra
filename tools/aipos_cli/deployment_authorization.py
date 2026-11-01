@@ -296,6 +296,7 @@ def find_gate_pass_verdict_for_task(
                 "verdict_at": verdict_at,
                 "verdict_id": verdict_id,
                 "artifact_subject": artifact_subject,
+                "reviewed_return_record_ref": str(metadata.get("reviewed_return_record_ref") or "").strip(),  # AIPOS-F259 件①
                 "metadata": metadata,
             })
         except Exception as e:
@@ -379,6 +380,7 @@ def find_gate_pass_verdict_for_task(
                 "verdict_at": latest["verdict_at"],
                 "artifact_subject": latest["artifact_subject"],
                 "is_legacy_verdict": is_legacy,
+                "reviewed_return_record_ref": latest["reviewed_return_record_ref"],  # AIPOS-F259 件①: 审计区间基线读所审交回记录
                 "reason": f"最新门生裁决: {latest['verdict']} ({latest['path'].name})",
             }
     
@@ -468,11 +470,13 @@ def commit_pass_coverage(
     判定: commit 归属卡 = _task_id_from_commit_subject(项目声明 task_id_pattern + N5 branch_pattern; merge --no-ff 信息可解析出卡号);
     先看归属卡自身, 不覆盖再看其世系(_resolve_task_lineage: fix 链末端 + 结案承接, AIPOS-F53)。每张候选卡取最新门生裁决
     (find_gate_pass_verdict_for_task), PASS 且绑定覆盖该 commit(_verdict_binding_covers 四式)即覆盖。
+    AIPOS-F259 件①: 卡号 / 世系都不覆盖(或提交信息无卡号)时再认审计区间(audited_range_coverage): 提交落在某张已合入卡 X 的
+    PASS 审计区间(X 交回时基线..裁决绑定 commit)内 = 由 X 的裁决覆盖, how=audited_range, 结果带 line(预演原文)。
 
     Raises:
         SchemaLoadError: 项目未声明 task_id_pattern(C2: 出声停, 调用方点名)。
     Returns:
-        {covered, commit, task_id, covering_task_id, verdict_id, how, reason}
+        {covered, commit, task_id, covering_task_id, verdict_id, how, reason}(how=audited_range 另带 audited_range{base, bound, return_id} / line)
     """
     from tools.aipos_cli.frontmatter import FrontmatterReadError
 
@@ -484,7 +488,11 @@ def commit_pass_coverage(
             return {**base, "reason": f"{commit_hash[:8]}: 无法读取 commit message"}
     task_id = _task_id_from_commit_subject(subject, repo_root=schema_root or repo_root, governance_root=governance_root)
     if not task_id:
-        return {**base, "reason": f"{commit_hash[:8]}: 无 task_id (commit message: {subject[:60]})"}
+        # AIPOS-F259 件①: 提交信息无卡号 = 按卡号归属找不到 PASS, 同样再认审计区间(落在某张已合入卡的 PASS 审计区间内即覆盖)
+        hit, notes = audited_range_coverage(repo_root, governance_root, commit_hash, base)
+        if hit:
+            return hit
+        return {**base, "reason": f"{commit_hash[:8]}: 无 task_id (commit message: {subject[:60]})" + _not_recognized(notes)}
     base["task_id"] = task_id
 
     tried: list[str] = []
@@ -514,7 +522,99 @@ def commit_pass_coverage(
         hit = _try(candidate)
         if hit:
             return hit
-    return {**base, "reason": f"{commit_hash[:8]} ({task_id}): 无覆盖它的门生 PASS 裁决({'; '.join(tried)})"}
+    # AIPOS-F259 件①: 卡号 / 世系都找不到 → 认审计区间(提交落在某张已合入卡 X 的 PASS 审计区间内 = 由 X 的裁决覆盖, how=audited_range)
+    hit, notes = audited_range_coverage(repo_root, governance_root, commit_hash, base, skip=set(lineage))
+    if hit:
+        return hit
+    return {**base, "reason": f"{commit_hash[:8]} ({task_id}): 无覆盖它的门生 PASS 裁决({'; '.join(tried)})" + _not_recognized(notes)}
+
+
+def audited_range_declaration() -> dict[str, Any]:
+    """AIPOS-F259 件①: transitions.schema nodes.N5.guards.commit_coverage.audited_range(唯一读取口; how / base_key / texts)。
+    缺 / 形不合 = SchemaLoadError(fail-closed)。交回绑定写基线(next_resolver.return_binding_subject)与本模块覆盖判据同读。"""
+    from tools.schema_loader import load_schema
+
+    decl = ((((load_schema("transitions").get("nodes") or {}).get("N5") or {}).get("guards") or {})
+            .get("commit_coverage") or {}).get("audited_range")
+    texts = decl.get("texts") if isinstance(decl, dict) else None
+    if (not isinstance(decl, dict) or not all(isinstance(decl.get(k), str) and decl[k].strip() for k in ("how", "base_key"))
+            or not isinstance(texts, dict) or not all(isinstance(texts.get(k), str) for k in ("covered", "not_recognized"))):
+        raise SchemaLoadError("transitions.schema.json nodes.N5.guards.commit_coverage.audited_range 未声明或形不合"
+                              "(须有 how / base_key 与 texts.covered / texts.not_recognized)")
+    return decl
+
+
+def _not_recognized(notes: list[str]) -> str:
+    if not notes:
+        return ""
+    shown = notes[:3] + ([f"… 另 {len(notes) - 3} 条"] if len(notes) > 3 else [])
+    return "; " + str(audited_range_declaration()["texts"]["not_recognized"]).format(notes="; ".join(shown))
+
+
+def audited_range_coverage(
+    repo_root: Path,
+    governance_root: Path,
+    commit_hash: str,
+    base: dict[str, Any],
+    *,
+    skip: set[str] | None = None,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    """AIPOS-F259 件①: 提交 C 是否落在某张已合入卡 X 的门生 PASS 审计区间内(commit_pass_coverage 的第三条覆盖, 唯一实现)。
+
+    逐张有裁决记录的卡 X(skip = 已按卡号 / 世系试过的卡): 最新门生裁决 PASS 且带 artifact_subject(bound = 绑定 commit);
+    C 是 bound 的祖先或即 bound; 所审交回记录(reviewed_return_record_ref)绑定 commit_sha = bound 且带基线 <base_key>(交回时
+    merge-base, 须为 bound 的祖先); C 不是基线的祖先; bound 已合入基线分支(card_base_branch)。全部成立 = 覆盖。
+    基线推不出 / 绑定不一致 / 记录读不出 = 该卡不认(列入 notes 出声, 回落原判据)。返回 (覆盖结果 | None, 未认依据 notes)。"""
+    from tools.aipos_cli.frontmatter import FrontmatterReadError
+    from tools.aipos_cli.next_resolver import card_base_branch, return_record_subject
+
+    decl = audited_range_declaration()
+    verdicts_root = record_dir(governance_root, "audit_verdicts")
+    if not verdicts_root.is_dir():
+        return None, []
+    commit = commit_hash.strip().lower()
+    notes: list[str] = []
+    base_branch: str | None = None
+    for task_dir in sorted(verdicts_root.iterdir()):
+        candidate = task_dir.name
+        if not task_dir.is_dir() or candidate in (skip or set()):
+            continue
+        check = find_gate_pass_verdict_for_task(candidate, governance_root)
+        if not check.get("found") or check.get("is_legacy_verdict"):
+            continue
+        bound = str((check.get("artifact_subject") or {}).get("commit_sha") or "").strip().lower()
+        if not bound or not _is_ancestor_or_equal(repo_root, commit, bound):
+            continue  # C 不在 X 审过的树里: 与 X 无关(跨卡挪用不认)
+        return_id = str(check.get("reviewed_return_record_ref") or "")
+        try:
+            subject = return_record_subject(governance_root, candidate, return_id)
+        except FrontmatterReadError as exc:
+            notes.append(f"{candidate}: 所审交回记录 {return_id} 读不出({exc})")
+            continue
+        if not subject or str(subject.get("commit_sha") or "").strip().lower() != bound:
+            notes.append(f"{candidate}: 所审交回记录 {return_id or '(裁决未引用)'} 缺或绑定 ≠ 裁决绑定 {bound[:8]}, 基线推不出")
+            continue
+        range_base = str(subject.get(str(decl["base_key"])) or "").strip().lower()
+        if not range_base:
+            notes.append(f"{candidate}: 交回记录 {return_id} 无 {decl['base_key']}(交回时基线未记录), 基线推不出")
+            continue
+        if not _is_ancestor_or_equal(repo_root, range_base, bound):
+            notes.append(f"{candidate}: 交回记录基线 {range_base[:8]} 不是裁决绑定 {bound[:8]} 的祖先, 不认")
+            continue
+        if _is_ancestor_or_equal(repo_root, commit, range_base):
+            continue  # C 在 X 交回时的基线之内(不在审计区间)
+        if base_branch is None:
+            base_branch = card_base_branch()
+        if not _is_ancestor_or_equal(repo_root, bound, base_branch):
+            notes.append(f"{candidate}: 审计区间 {range_base[:8]}..{bound[:8]} 含 {commit[:8]}, 但 {bound[:8]} 未合入 {base_branch}(未合入卡不认)")
+            continue
+        fill = {"commit": commit[:8], "covering_task_id": candidate, "verdict_id": check.get("verdict_id"),
+                "base": range_base[:8], "bound": bound[:8], "return_id": return_id}
+        line = str(decl["texts"]["covered"]).format(**fill)
+        return {**base, "covered": True, "covering_task_id": candidate, "verdict_id": check.get("verdict_id"),
+                "how": str(decl["how"]), "audited_range": {"base": range_base, "bound": bound, "return_id": return_id},
+                "line": line, "reason": line}, notes
+    return None, notes
 
 
 def check_commits_coverage(
@@ -541,12 +641,15 @@ def check_commits_coverage(
                 "missing_commits": [],
                 "covered_commits": covered,
                 "verdicts": verdicts,
-                "message": f"归属解析声明缺失 (task_id_pattern): {e}",
+                "message": f"覆盖判据声明缺失 (task_id_pattern / audited_range): {e}",
             }
         if not result["covered"]:
             missing.append(result["reason"])
             continue
-        covered.append({k: result[k] for k in ("commit", "task_id", "covering_task_id", "verdict_id", "how")})
+        entry = {k: result[k] for k in ("commit", "task_id", "covering_task_id", "verdict_id", "how")}
+        if result.get("line"):  # AIPOS-F259 件①: 审计区间覆盖明细(预演原文逐条列)
+            entry["line"] = result["line"]
+        covered.append(entry)
         if result["verdict_id"] and result["verdict_id"] not in verdicts:
             verdicts.append(result["verdict_id"])
     return {
@@ -558,8 +661,14 @@ def check_commits_coverage(
         "message": (
             f"共 {len(commits)} 个 commit, 其中 {len(missing)} 个未审" if missing else
             f"共 {len(commits)} 个 commit 均属已 PASS 的卡(覆盖裁决 {len(verdicts)} 张: {', '.join(verdicts) or '无'})"
-        ),
+        ) + audited_range_lines(covered),
     }
+
+
+def audited_range_lines(covered: list[dict[str, Any]]) -> str:
+    """AIPOS-F259 件①: 覆盖明细中经审计区间覆盖的提交逐条原文(部署 / finalize 预演同读; 无 = 空串)。"""
+    lines = [str(c["line"]) for c in covered if c.get("line")]
+    return "".join(f"\n  {line}" for line in lines)
 
 
 def commits_to_deploy(repo_root: Path, current_commit: str | None, head_commit: str) -> list[str]:
@@ -933,6 +1042,7 @@ def check_verdict_ref_authorization(
             f"verdict_ref '{verdict_ref}' 授权 OK: {reviewed_task_id} {verdict_value}, "
             f"覆盖 {len(commits_to_deploy)} 个待部署 commit"
             + (f"(区间覆盖裁决并集 {len(coverage['verdicts'])} 张: {', '.join(coverage['verdicts'])})" if commits_to_deploy else "(空区间)")
+            + audited_range_lines(coverage["covered_commits"])  # AIPOS-F259 件①: 经审计区间覆盖的提交逐条列
         ),
     }
 

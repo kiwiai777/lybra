@@ -2232,6 +2232,49 @@ def orphan_audit_cards(repo_root: Path) -> list[dict[str, Any]]:
     return sorted(out, key=lambda x: x["task_id"])
 
 
+def withdraw_branch_texts() -> dict[str, str]:
+    """AIPOS-F259 件②: verbs.schema lybra_queue_withdraw_dry_run.texts(撤卡预演分支提交提示文案唯一读取口)。缺 / 形不合 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, get_verb_contract
+
+    texts = (get_verb_contract("lybra_queue_withdraw_dry_run") or {}).get("texts")
+    if not isinstance(texts, dict) or not all(isinstance(texts.get(k), str) and texts[k].strip()
+                                              for k in ("branch_commits", "branch_commits_unknown")):
+        raise SchemaLoadError("verbs.schema.json lybra_queue_withdraw_dry_run.texts 未声明或形不合(须有 branch_commits / branch_commits_unknown)")
+    return texts
+
+
+def withdraw_branch_commits_hint(repo_root: Path, task_id: str, metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+    """AIPOS-F259 件②: 撤卡预演的卡分支提交提示(唯一实现; board_adapter.withdraw_task 预演 = CLI / 门 / 看板同一入口)。
+
+    卡有卡分支(next_resolver._card_branch_tip; 非代码卡 / 产品仓不可解析 / 无分支 = None)且分支相对期望基座有提交(基线 =
+    next_resolver.card_branch_base, 与交回绑定基线同读)= {count, branch, base, line(texts.branch_commits)}; 0 个提交 = None;
+    基线 / 计数读不出 = {count: None, line(texts.branch_commits_unknown)}(出声, 不吞)。只提示, 不拦截撤卡。"""
+    import subprocess
+
+    from tools.aipos_cli.next_resolver import _card_branch_tip, card_branch_base, card_expected_base
+
+    tip = _card_branch_tip(Path(repo_root), task_id, metadata)
+    if tip is None:
+        return None
+    code_repo, subject, branch = tip
+    texts = withdraw_branch_texts()
+    base_ref = card_expected_base(metadata)
+    fill = {"task_id": task_id, "branch": branch, "base": base_ref}
+    base = card_branch_base(code_repo, metadata, str(subject["commit_sha"]))
+    if base is None:
+        return {"count": None, "branch": branch, "base": base_ref,
+                "line": texts["branch_commits_unknown"].format(**fill, error=f"{base_ref} 与 {branch} 无共同祖先或基座分支不存在")}
+    proc = subprocess.run(["git", "-C", str(code_repo), "rev-list", "--count", f"{base}..{subject['commit_sha']}"],
+                          capture_output=True, text=True, timeout=10)
+    if proc.returncode != 0 or not proc.stdout.strip().isdigit():
+        return {"count": None, "branch": branch, "base": base_ref,
+                "line": texts["branch_commits_unknown"].format(**fill, error=(proc.stderr or proc.stdout).strip() or f"git 退出码 {proc.returncode}")}
+    count = int(proc.stdout.strip())
+    if count == 0:
+        return None
+    return {"count": count, "branch": branch, "base": base_ref, "line": texts["branch_commits"].format(**fill, count=count)}
+
+
 # AIPOS-316: Guard against direct invocation
 from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 from tools.schema_constants import RecordType, Verdict

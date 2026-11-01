@@ -325,7 +325,7 @@
         "state": "return_stale",
         "criterion": "当前一轮审计卡(audit_derivation.current_audit_task_id)已派审且尚无本轮裁决(在途), 其所审交回绑定的 tip ≠ 卡分支 tip(分支已并入 main / 无卡分支 / 非代码卡不算)。已有本轮裁决归 nodes.N4.verdict_stale。唯一实现 next_resolver.return_staleness(卡分支 tip 读取口 _card_branch_tip/_live_card_branch, 与 verdict_staleness 同前置); 推导核在等待审计(N3 等待 / F112 复审轮在途)之前判, 过期不再等旧轮",
         "binding": {
-          "return_record": "门 queue_return 落交回记录时写 artifact_subject{repository, commit_sha, tree_hash, branch} = 卡分支此刻 tip(next_resolver.return_binding_subject, 与裁决绑 tip 同一读取口); 本轮所审交回 = 派审记录 reviewed_return_record_ref",
+          "return_record": "门 queue_return 落交回记录时写 artifact_subject{repository, commit_sha, tree_hash, branch} = 卡分支此刻 tip(next_resolver.return_binding_subject, 与裁决绑 tip 同一读取口); 本轮所审交回 = 派审记录 reviewed_return_record_ref; AIPOS-F259: 卡分支主体另写 base_commit = git merge-base <card_expected_base> <tip>(交回时基线, nodes.N5.guards.commit_coverage.audited_range.base_key; 读不出 = 不写, 审计区间覆盖即不认)",
           "legacy_fallback": "存量交回记录无 artifact_subject(门版本早于 AIPOS-F114)= 用本轮取证工作树 HEAD(门认领时建于被审分支 tip, 即审计体正在审的提交); 两者都有时任一 ≠ 卡分支 tip 即过期; 两者都无(存量记录且本轮未认领)= 不判(认领时取证树建于当前 tip)"
         },
         "outlet": {
@@ -1052,6 +1052,16 @@
             "audience": "advisor",
             "action": "检查区间内未审 commit,确保所有 commit 都关联已 PASS 的任务卡",
             "command": null
+          },
+          "audited_range": {
+            "description": "AIPOS-F259 件①(10-31 F256 撤卡重发 F256B 实撞: F256B 分支复用 F256 的 4 个提交, 审计 PASS 的区间含这 4 个提交, 部署却按提交信息卡号归属已撤的 F256 拒): 覆盖判据唯一实现 deployment_authorization.commit_pass_coverage 在「归属卡自身 + 世系(_resolve_task_lineage)」都找不到覆盖它的门生 PASS 裁决(或提交信息无卡号)时, 再认审计区间——存在某张卡 X 的最新门生裁决为 PASS 且带 artifact_subject(legacy 裁决不认), 其所审交回记录(裁决 reviewed_return_record_ref → next_resolver.return_record_subject)绑定的 commit_sha = 裁决绑定 commit(bound), 且该交回记录带基线 artifact_subject.<base_key>(门 queue_return 落记录时由 next_resolver.return_binding_subject 写入 = git merge-base <卡期望基座 card_expected_base> <交回 tip>), 满足: ①提交 C 是 bound 的祖先或即 bound; ②C 不是基线的祖先(不在 X 交回时的基线之内; 基线须为 bound 的祖先); ③bound 已合入基线分支(card_base_branch; 已合入卡)——则 C 由 X 的裁决覆盖, 覆盖明细 how = how 值(区别于 exact / merge / ancestor / legacy 的卡号 / 世系覆盖), 部署(lybra-deploy 经 deployment_record --check-only)与 finalize 完整性预演原文逐条列 texts.covered。基线推不出(交回记录缺 / 无 <base_key> / 绑定不一致 / 记录读不出)= 不认(fail-closed, 回落原判据, 拒因列出未认依据)。存量交回记录(本卡前)无 <base_key> = 不认, 行为不变。",
+            "how": "audited_range",
+            "base_key": "base_commit",
+            "base_writer": "next_resolver.return_binding_subject",
+            "texts": {
+              "covered": "提交 {commit} 经 {covering_task_id} 审计区间覆盖(门生 PASS 裁决 {verdict_id}; 审计区间 {base}..{bound}, 交回记录 {return_id})",
+              "not_recognized": "审计区间未认: {notes}"
+            }
           }
         },
         "no_dev_override_base": {
