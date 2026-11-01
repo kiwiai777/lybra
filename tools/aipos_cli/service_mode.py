@@ -1465,6 +1465,14 @@ def _read_state(path: Path) -> dict[str, Any]:
     return data
 
 
+def _state_pid(value: Any) -> int:
+    """state 里记的 pid(形坏 = 0, 按未记处理)。"""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _state_children(*states: dict[str, Any]) -> list[dict[str, Any]]:
     """各次读到的 state 里 service_owned 子进程(按 pid + 指纹去重, 保序)。"""
     seen: set[tuple[int, Any]] = set()
@@ -1474,10 +1482,7 @@ def _state_children(*states: dict[str, Any]) -> list[dict[str, Any]]:
         for entry in procs if isinstance(procs, list) else []:
             if not isinstance(entry, dict) or not entry.get("service_owned"):
                 continue
-            try:
-                pid = int(entry.get("pid") or 0)
-            except (TypeError, ValueError):
-                continue
+            pid = _state_pid(entry.get("pid"))
             key = (pid, entry.get("fingerprint", "<legacy>"))
             if pid <= 0 or key in seen:
                 continue
@@ -1521,8 +1526,8 @@ def stop_report(
     states = [first]
     supervisor = first.get("supervisor")
     supervisor_stopped = False
-    if isinstance(supervisor, dict) and int(supervisor.get("pid") or 0) > 0:
-        sup_pid = int(supervisor["pid"])
+    sup_pid = _state_pid(supervisor.get("pid")) if isinstance(supervisor, dict) else 0
+    if isinstance(supervisor, dict) and sup_pid > 0:
         fingerprint, outcome = _identify({**supervisor, "fingerprint": supervisor.get("fingerprint")}, marker=None)
         manager = supervisor.get("service_manager") if isinstance(supervisor.get("service_manager"), dict) else None
         if fingerprint is not None and manager:

@@ -425,3 +425,29 @@ def test_item5_state_write_is_atomic_0600(tmp_path):
     assert json.loads(path.read_text(encoding="utf-8")) == {"processes": []}
     assert (path.stat().st_mode & 0o777) == 0o600
     assert sorted(p.name for p in conn.parent.iterdir()) == ["service_state.json"]
+
+
+def test_item5_malformed_supervisor_pid_is_treated_as_unrecorded(tmp_path):
+    _root, conn = _workspace(tmp_path)
+    _write_state(conn, {"supervisor": {"pid": "not-a-pid"}, "processes": [{"name": "board", "pid": "x", "service_owned": True}]})
+    with patch("tools.aipos_cli.service_mode.os.kill") as kill:
+        report = service_mode.stop_report(_root, connection_target=conn)
+    assert kill.call_args_list == [] and report["verdict"] == "PASS" and report["processes"] == []
+
+
+@pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGHUP])
+def test_item2_supervisor_interrupt_reaps_children_without_respawn(tmp_path, sig):
+    """supervisor 只收到 SIGINT / SIGHUP(停止标志, 不再抛异常): 不重拉, 收子进程后正常退出(退出码 0)。"""
+    root, conn = _workspace(tmp_path)
+    board_port, mcp_port = _free_port(), _free_port()
+    proc = _serve(root, conn, board_port, mcp_port)
+    try:
+        _wait_port(mcp_port, 30)
+        _wait_port(board_port, 30)
+        children = [p["pid"] for p in _state(conn)["processes"]]
+        proc.send_signal(sig)
+        assert proc.wait(timeout=20) == 0
+        assert _wait_gone(children, 5) == []
+        assert fixture_procs.tagged(proc) == []
+    finally:
+        fixture_procs.reap(proc)
