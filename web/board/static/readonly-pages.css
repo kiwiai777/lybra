@@ -379,9 +379,6 @@ body.rp-page { margin: 0; background: var(--surface-page); color: var(--ink); fo
 .rp-page .ws-table tr.rp-alert th { border-left: var(--accent-bar) solid var(--state-alert); }
 .rp-page .ws-risks li.rp-alert { margin: 3px 0; }
 .rp-page .ws-form { display: grid; gap: 8px; max-width: 46em; }
-.rp-page .ws-modes { border: var(--border-hairline); padding: 6px 12px; margin: 0; background: var(--white); }
-.rp-page .ws-modes legend { font-size: var(--text-small); color: var(--muted); padding: 0 4px; }
-.rp-page .ws-check { margin-right: 1.2em; }
 .rp-page .ws-field { display: grid; gap: 2px; font-size: var(--text-small); color: var(--muted); }
 .rp-page .ws-field input { color: var(--ink); }
 .rp-page .ws-steps { margin: 0; padding-left: 22px; display: grid; gap: 6px; }
