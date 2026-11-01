@@ -676,6 +676,8 @@ def render_connection_table(report: dict[str, Any]) -> str:
             lines.append(f"- {warning.get('message')}")
             if warning.get('fix_command'):
                 lines.append(f"  fix: {warning.get('fix_command')}")
+    if report.get("operation") == "serve_status":  # AIPOS-F268 件④: 已停止 state 显示「未运行」, 不列旧 pid
+        lines.extend(["", render_service_state_line(report.get("service_state"))])
     if report.get("blocking_reasons"):
         lines.extend(["", "Blocking:"])
         for reason in report["blocking_reasons"]:
@@ -724,17 +726,50 @@ def status_report(workspace_root: Path, *, connection_target: Path | None = None
 
 
 def redacted_service_state(state: dict[str, Any]) -> dict[str, Any]:
+    """serve status 的 state 投影。AIPOS-F268 件④: state 已标停止(stopped_at)= 未运行, 不列旧 pid(旧 pid 只留在
+    service_state.json 供排查); 无 state = 无运行记录; 其余 = 列出所记 supervisor / 子进程。"""
+    if state.get("stopped_at"):
+        reason = str(state.get("stopped_reason") or "")
+        return {
+            "mode": state.get("mode"),
+            "started_at": state.get("started_at"),
+            "status": "stopped",
+            "label": SERVICE_STATE_LABELS["stopped"],
+            "stopped_at": state.get("stopped_at"),
+            "stopped_reason": reason,
+            "stopped_reason_label": SUPERVISOR_EXIT_REASONS.get(reason, reason),
+            "supervisor": None,
+            "processes": [],
+        }
     processes = []
     for proc in state.get("processes", []) if isinstance(state.get("processes"), list) else []:
         if isinstance(proc, dict):
             processes.append({key: proc.get(key) for key in ("name", "pid", "service_owned", "started_at", "restarts")})
     supervisor = state.get("supervisor")  # AIPOS-F266 件①: 旧 state 无此块 = None
+    status = "recorded" if (processes or isinstance(supervisor, dict)) else "none"
     return {
         "mode": state.get("mode"),
         "started_at": state.get("started_at"),
+        "status": status,
+        "label": SERVICE_STATE_LABELS[status],
         "supervisor": {key: supervisor.get(key) for key in ("pid", "started_at", "service_manager")} if isinstance(supervisor, dict) else None,
         "processes": processes,
     }
+
+
+def render_service_state_line(service_state: dict[str, Any] | None) -> str:
+    """AIPOS-F268 件④: serve status 人读的门进程一行(未运行 / 所记 pid / 无记录)。"""
+    st = service_state or {}
+    label = st.get("label") or SERVICE_STATE_LABELS["none"]
+    if st.get("status") == "stopped":
+        return (f"门进程: {label}(supervisor 于 {st.get('stopped_at')} 退出: {st.get('stopped_reason_label')}; "
+                "最后所记 pid 留在 service_state.json 供排查)")
+    if st.get("status") == "recorded":
+        sup = st.get("supervisor") or {}
+        parts = [f"supervisor pid {sup.get('pid')}"] if sup else []
+        parts += [f"{p.get('name')} pid {p.get('pid')}" for p in st.get("processes") or []]
+        return f"门进程: {label}(" + ", ".join(parts) + "; 前台 serve 由 `lybra serve stop` 停止)"
+    return f"门进程: {label}"
 
 
 def rotate_report(
@@ -1132,6 +1167,7 @@ def _run_supervisor(
                 connection_target=connection_target,
             )
 
+    timeouts = serve_stop_timeouts()  # AIPOS-F268 件③: 收尾等子进程的限时读声明(声明写坏 = 起门前就报, 不等到收尾)
     processes: list[subprocess.Popen[Any]] = []
     started_at = iso_z()
     # AIPOS-238 (F-o3-13 B) + AIPOS-F266 件②: SIGTERM / SIGHUP / SIGINT 只置停止标志(不抛异常): 循环见标志即不再重拉、
@@ -1213,14 +1249,20 @@ def _run_supervisor(
             if not should_exit:
                 _sleep_unless_stopped(0.5)
     except KeyboardInterrupt:
-        pass
+        stop_requested["flag"] = True
     finally:
         for _sig in prev_handlers:  # 收尾期间不让再来的停止信号打断 _terminate_processes(打断 = 子进程成孤儿)
             try:
                 signal.signal(_sig, signal.SIG_IGN)
             except (ValueError, OSError):
                 pass
-        _terminate_processes(processes)
+        _terminate_processes(processes, grace=timeouts["child_grace_seconds"])
+        # AIPOS-F268 件④: 收尾后把 state 标为已停止(保留文件与最后 pid 供排查); 只标本 supervisor 写的 state
+        if processes:
+            reason = "stop_signal" if stop_requested["flag"] else ("restart_limit" if should_exit else "aborted")
+            problem = _mark_state_stopped(workspace_root, supervisor_record, reason, connection_target=connection_target)
+            if problem:
+                print(f"Warning: {problem}", file=sys.stderr)
         for _sig, _handler in prev_handlers.items():
             try:
                 signal.signal(_sig, _handler)
@@ -1287,14 +1329,57 @@ def _write_service_state(
 # 进程启动时刻指纹唯一实现 = loop_run_record.process_fingerprint / process_alive(Linux /proc stat 第 22 字段; 无 /proc 用 ps lstart)。
 # ---------------------------------------------------------------------------
 
-#: supervisor 收到 SIGTERM 后的限时: 其收尾 _terminate_processes 对每个子进程至多等 5 秒再 SIGKILL(两个子进程)+ 余量。
-STOP_SUPERVISOR_GRACE_SECONDS = 15.0
-#: 子进程 SIGTERM 后的限时, 过时 SIGKILL。
-STOP_CHILD_GRACE_SECONDS = 5.0
-#: SIGKILL 后确认退出的限时; 仍在 = 未能停止。
-STOP_KILL_CONFIRM_SECONDS = 3.0
+#: stop 三个限时(supervisor 等待 / 子进程等待 / SIGKILL 后确认)的键; 值只从 config.schema serve.stop 读(AIPOS-F268 件③)。
+SERVE_STOP_TIMEOUT_KEYS = ("supervisor_grace_seconds", "child_grace_seconds", "kill_confirm_seconds")
 #: 进程最终状态(stop 报告逐个列出)。
 STOP_STATUS_LABELS = {"stopped": "已停", "gone": "已不在", "failed": "未能停止", "left_running": "未动(常驻模式)"}
+#: AIPOS-F268 件④: serve status 的 state 状态标签。
+SERVICE_STATE_LABELS = {"stopped": "未运行", "recorded": "已记录在跑", "none": "无运行记录"}
+#: AIPOS-F268 件④: supervisor 退出原因(state.stopped_reason)。
+SUPERVISOR_EXIT_REASONS = {"stop_signal": "收到停止信号", "restart_limit": "子进程达重拉上限", "aborted": "收尾异常退出"}
+
+
+def serve_stop_timeouts() -> dict[str, float]:
+    """config.schema serve.stop 三个限时(唯一读取口; AIPOS-F268 件③)。缺段 / 缺键 / 非正数 = ValueError(fail-closed)。"""
+    from tools.schema_loader import code_repo_schema_root, load_schema
+
+    serve = load_schema("config", code_repo_schema_root()).get("serve")
+    stop = serve.get("stop") if isinstance(serve, dict) else None
+    if not isinstance(stop, dict) or any(k not in stop for k in SERVE_STOP_TIMEOUT_KEYS):
+        raise ValueError(f"config.schema.json serve.stop 未声明齐 {list(SERVE_STOP_TIMEOUT_KEYS)}")
+    out: dict[str, float] = {}
+    for key in SERVE_STOP_TIMEOUT_KEYS:
+        value = stop[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ValueError(f"config.schema.json serve.stop.{key} 须为正数, 得到 {value!r}")
+        out[key] = float(value)
+    return out
+
+
+def _mark_state_stopped(
+    workspace_root: Path, supervisor_record: dict[str, Any], reason: str, *, connection_target: Path | None = None
+) -> str | None:
+    """AIPOS-F268 件④: supervisor 收尾后把 state 标为已停止(加 stopped_at / stopped_reason, 保留 supervisor 与子进程最后 pid)。
+    只标本 supervisor 写的那份(state 所记 supervisor pid + 启动时刻指纹 == 本进程): 已被别的 serve(如 --reuse-port 交接)
+    改写 = 不动。返回问题说明(调用方打 stderr)或 None。"""
+    path = service_state_path(workspace_root, connection_target=connection_target)
+    try:
+        state = _read_state(path)
+    except FileNotFoundError:
+        return f"service_state.json 已不在({path}), 无从标记已停止"
+    except (OSError, ValueError) as exc:
+        return f"service_state.json 读不出, 未标记已停止: {exc}"
+    recorded = state.get("supervisor")
+    if (not isinstance(recorded, dict) or _state_pid(recorded.get("pid")) != supervisor_record.get("pid")
+            or recorded.get("fingerprint") != supervisor_record.get("fingerprint")):
+        return None
+    state["stopped_at"] = iso_z()
+    state["stopped_reason"] = reason
+    try:
+        _write_service_state(workspace_root, state, connection_target=connection_target)
+    except OSError as exc:
+        return f"service_state.json 写不进, 未标记已停止: {exc}"
+    return None
 
 
 def _process_fingerprint(pid: int) -> str | None:
@@ -1437,10 +1522,10 @@ def _wait_gone(pid: int, fingerprint: str, seconds: float) -> bool:
         time.sleep(0.1)
 
 
-def _terminate_verified(pid: int, fingerprint: str, *, grace: float) -> dict[str, Any]:
+def _terminate_verified(pid: int, fingerprint: str, *, grace: float, kill_confirm: float) -> dict[str, Any]:
     """已核身的进程: SIGTERM → 限时 → SIGKILL → 确认。返回 {status, signals, reason}。"""
     signals: list[str] = []
-    for sig, wait_s in ((signal.SIGTERM, grace), (getattr(signal, "SIGKILL", signal.SIGTERM), STOP_KILL_CONFIRM_SECONDS)):
+    for sig, wait_s in ((signal.SIGTERM, grace), (getattr(signal, "SIGKILL", signal.SIGTERM), kill_confirm)):
         if not _process_alive(pid, fingerprint):
             break
         try:
@@ -1495,11 +1580,16 @@ def stop_report(
     workspace_root: Path,
     *,
     connection_target: Path | None = None,
-    supervisor_grace: float = STOP_SUPERVISOR_GRACE_SECONDS,
-    child_grace: float = STOP_CHILD_GRACE_SECONDS,
+    supervisor_grace: float | None = None,
+    child_grace: float | None = None,
 ) -> dict[str, Any]:
     # AIPOS-349: default is workspace path via _resolve_connection_target. No fallback to global.
     path = service_state_path(workspace_root, connection_target=connection_target)
+    # AIPOS-F268 件③: 限时缺省读 config.schema serve.stop(调用方显式给值 = 覆盖, 测试用)
+    timeouts = serve_stop_timeouts()
+    supervisor_grace = timeouts["supervisor_grace_seconds"] if supervisor_grace is None else supervisor_grace
+    child_grace = timeouts["child_grace_seconds"] if child_grace is None else child_grace
+    kill_confirm = timeouts["kill_confirm_seconds"]
     warnings: list[dict[str, Any]] = []
     stopped: list[dict[str, Any]] = []
     results: list[dict[str, Any]] = []
@@ -1545,7 +1635,7 @@ def stop_report(
             return {**base, "ok": False, "verdict": Verdict.BLOCK, "resident": manager, "stopped": [], "processes": results,
                     "warnings": warnings, "blocking_reasons": blocking}
         if fingerprint is not None:
-            outcome = _terminate_verified(sup_pid, fingerprint, grace=supervisor_grace)
+            outcome = _terminate_verified(sup_pid, fingerprint, grace=supervisor_grace, kill_confirm=kill_confirm)
             supervisor_stopped = outcome["status"] == "stopped"
         _record("supervisor", sup_pid, outcome or {"status": "gone", "reason": "进程已不在"})
         # supervisor 停下前可能刚重拉过子进程并回写 state: 重读一次, 两次所记子进程都核
@@ -1562,7 +1652,7 @@ def stop_report(
         pid = entry["pid"]
         fingerprint, outcome = _identify(entry, marker=markers.get(str(entry.get("name"))))
         if fingerprint is not None:
-            outcome = _terminate_verified(pid, fingerprint, grace=child_grace)
+            outcome = _terminate_verified(pid, fingerprint, grace=child_grace, kill_confirm=kill_confirm)
         elif outcome and outcome["status"] == "gone" and supervisor_stopped and outcome.get("reason") == "进程已不在":
             outcome = {"status": "gone", "reason": "supervisor 收尾时已停"}
         if "fingerprint" not in entry and fingerprint is not None:
@@ -1594,13 +1684,14 @@ def _ports_in_use(targets: list[tuple[str, int, str]]) -> list[tuple[str, int, s
     return occupied
 
 
-def _terminate_processes(processes: list[subprocess.Popen[Any]]) -> None:
+def _terminate_processes(processes: list[subprocess.Popen[Any]], *, grace: float) -> None:
+    """supervisor 收尾: 全部 SIGTERM, 每个至多等 grace 秒(config.schema serve.stop.child_grace_seconds)再 SIGKILL。"""
     for proc in processes:
         if proc.poll() is None:
             proc.terminate()
     for proc in processes:
         try:
-            proc.wait(timeout=5)
+            proc.wait(timeout=grace)
         except subprocess.TimeoutExpired:
             proc.kill()
 
