@@ -93,6 +93,7 @@ class InProcessGate:
         InProcessGate.calls.append(name)
         args = dict(arguments)
         root = Path(args.pop("workspace_root"))
+        args.pop("project", None)  # AIPOS-F274: dispatch 路由键(真实门 dispatch_tool 消费、handler 不交给决策 writer), 替身同样不交
         if name == "lybra_owner_decision_record_dry_run":
             return record_owner_decision(args, dry_run=True, repo_root=root, actor=str(args.get("actor") or OWNER))
         if name == "lybra_owner_decision_record_confirm":
