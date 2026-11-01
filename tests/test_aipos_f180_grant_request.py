@@ -759,8 +759,8 @@ def test_single_write_route_single_mint_path_and_cjk_guard():
 
     src = (REPO_ROOT / "web" / "board" / "app.py").read_text(encoding="utf-8")
     do_post = src[src.index("def do_POST(self)"):src.index("def do_PUT(self)")]
-    assert do_post.count("if path == ") == len(board_readonly_declaration()["allowed_post_paths"]) + 5, \
-        "本卡不新增写路由(AIPOS-F226 起写例外③ 收件箱裁决; AIPOS-F269 起写例外④ 新建项目; AIPOS-F270 起写例外⑤ 签注册码)"
+    assert do_post.count("if path == ") == len(board_readonly_declaration()["allowed_post_paths"]) + 7, \
+        "本卡不新增写路由(AIPOS-F226 起写例外③ 收件箱裁决; AIPOS-F269 起写例外④ 新建项目; AIPOS-F270 起写例外⑤ 签注册码; AIPOS-F272 起写例外⑥⑦)"
     pages = (REPO_ROOT / "web" / "board" / "readonly_pages.py").read_text(encoding="utf-8")
     script = (REPO_ROOT / "web" / "board" / "static" / "envelopes.js").read_text(encoding="utf-8")
     for name in ("mint_via_gate(", "record_owner_decision(", "load_role_token(", "fetch("):

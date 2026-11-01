@@ -457,7 +457,7 @@ def test_item2_page_paths_declared_and_no_new_write_route():
     do_post = src[src.index("def do_POST(self)"):src.index("def do_PUT(self)")]
     # 鉴权通道 + 信封签发(F172) + 项目升级(F176 写例外②); 本卡三页无新增写路由
     # AIPOS-F226: + 写例外③ 收件箱裁决; AIPOS-F269: + ④ 新建项目; AIPOS-F270: + ⑤ 签注册码
-    assert do_post.count("if path == ") == len(board_readonly_declaration()["allowed_post_paths"]) + 5
+    assert do_post.count("if path == ") == len(board_readonly_declaration()["allowed_post_paths"]) + 7  # AIPOS-F272: + 写例外⑥⑦
     assert "_readonly_pages" not in do_post and "render_page" not in do_post
 
 
