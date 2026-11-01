@@ -205,9 +205,9 @@ A project with a single advisor needs none of this: `--actor` stays optional and
 
 ## Execution mode (who does the work)
 
-By default the advisor hands execution work (code, configuration, …) to a sub-agent of its own session (Claude Code or
-Codex); an Owner-approved list of task modes may instead go to a pi executor workstation, and audits are always done by an
-independent pi auditor workstation (AIPOS-F143).
+Who does a card is fixed by its task mode, not chosen per project (AIPOS-F143 / F256 / F260): code cards go to a sub-agent
+of the advisor's own session (Claude Code or Codex), every non-code card (docs, governance, configuration, validation, …)
+goes to the pi executor workstation, and audits are always done by an independent pi auditor workstation.
 
 1. **Enroll the sub-agent executor.** The advisor enrolls it into the governance root with `--instance <exec
    prefix>.<project>.<advisor session host>`:
@@ -218,13 +218,15 @@ independent pi auditor workstation (AIPOS-F143).
    rules are declared in `schema/roles.schema.json` `executor_modes`; `lybra onboarding guide <project> --executor-mode subagent`
    prints these steps.
 2. **Declare the execution mode.** `lybra project set-execution --subagent-executor <instance> --auditor <pi auditor>
-   [--pi-executor <pi executor> --pi-allowed-task-mode <task_mode> …]` (preview by default, `--confirm` writes
+   [--pi-executor <pi executor>]` (preview by default, `--confirm` writes
    `project.json` `execution` and commits and pushes it through the governance commit path, commit identity `--actor`;
    declared in `schema/config.schema.json`). Every instance must already be enrolled in the
-   project, and the auditor and pi executor must have a workstation. Without this section nothing changes.
+   project, and the auditor and pi executor must have a workstation. The sub-agent executor's latest enrollment must be
+   sub-agent mode (`mode=subagent`); an instance enrolled as a workstation is refused (`EXECUTION_SUBAGENT_MODE_MISMATCH`)
+   with the `enroll-deliver --executor-mode subagent` command that re-enrolls it (AIPOS-F261). The retired
+   `--pi-allowed-task-mode` option no longer changes routing; leave it out. Without this section nothing changes.
 3. **Draft and publish.** With the section declared, `lybra draft create` fills a missing `assigned_to` / `harness` /
-   `audit_by` from it (a card goes to the pi executor only when the draft asks for `harness: pi` and its task mode is in the
-   approved list). `lybra draft publish` refuses a card whose `assigned_to` or auditor is not enrolled in the project (or, for
+   `audit_by` from it (non-code task modes go to the pi executor, code goes to the sub-agent executor). `lybra draft publish` refuses a card whose `assigned_to` or auditor is not enrolled in the project (or, for
    `harness: pi` and auditors, has no workstation) and lists the enrolled instances. Pass `--actor <your advisor instance>`
    to both commands: the publish record keeps that instance as the card's owner (on a repo shared by several sub-projects,
    `lybra next --actor` and the loop's "take the next card" only offer the owner's cards, and a lane-limited advisor's loop
