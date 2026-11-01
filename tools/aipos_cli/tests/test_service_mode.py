@@ -248,22 +248,33 @@ class ServiceModeTests(unittest.TestCase):
         self.assertTrue(second["ok"])
 
     def test_stop_only_targets_service_owned_processes(self) -> None:
+        # AIPOS-F266: 只停 service_owned 且按启动时刻指纹核身的进程(真夹具进程, 经 F265 助手起与收)。
+        from tools.aipos_cli.loop_run_record import process_fingerprint
+
         (self.root / LOCAL_DIR_REL).mkdir(parents=True)
-        state = {
-            "mode": "service_v0",
-            "processes": [
-                {"name": "board", "pid": 111, "service_owned": True},
-                {"name": "not-ours", "pid": 222, "service_owned": False},
-                {"name": "mcp", "pid": 333, "service_owned": True},
-            ],
-        }
-        service_state_path(self.root).write_text(json.dumps(state), encoding="utf-8")
+        sleep = [sys.executable, "-c", "import time; time.sleep(120)"]
+        board, other, mcp = (fixture_procs.spawn(sleep) for _ in range(3))
+        try:
+            state = {
+                "mode": "service_v0",
+                "processes": [
+                    {"name": "board", "pid": board.pid, "service_owned": True, "fingerprint": process_fingerprint(board.pid)},
+                    {"name": "not-ours", "pid": other.pid, "service_owned": False, "fingerprint": process_fingerprint(other.pid)},
+                    {"name": "mcp", "pid": mcp.pid, "service_owned": True, "fingerprint": process_fingerprint(mcp.pid)},
+                ],
+            }
+            service_state_path(self.root).write_text(json.dumps(state), encoding="utf-8")
 
-        with patch("os.kill") as kill:
-            result = stop_report(self.root)
+            with patch("tools.aipos_cli.service_mode.os.kill", wraps=os.kill) as kill:
+                result = stop_report(self.root, child_grace=3)
 
-        self.assertTrue(result["ok"])
-        self.assertEqual([call.args[0] for call in kill.call_args_list], [111, 333])
+            self.assertTrue(result["ok"])
+            self.assertEqual(sorted({call.args[0] for call in kill.call_args_list}), sorted([board.pid, mcp.pid]))
+            self.assertEqual([row["status"] for row in result["processes"]], ["stopped", "stopped"])
+            self.assertIsNone(other.poll())
+        finally:
+            for proc in (board, other, mcp):
+                fixture_procs.reap(proc)
 
     # ---- AIPOS-238 (F-o3-13) serve lifecycle fail-closed hardening ----
 
