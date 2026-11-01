@@ -8670,7 +8670,11 @@ def withdraw_task(
         link_applies = bool(withdrawn_id) and not is_audit_card(withdrawn_id, task.get("metadata") or None)
         linked = withdraw_linked_audits(resolved_root, withdrawn_id, action="withdraw", actor=actor_text, dry_run=True,
                                         detail=requested_reason) if link_applies and dry_run else []
-        
+        # AIPOS-F259 件②: 卡分支有提交 = 预演提示改用 supersede --carry-branch(撤卡不留承接, 复用提交日后部署覆盖会断); 只提示不拦截
+        from tools.aipos_cli.queue_mutation import withdraw_branch_commits_hint
+
+        branch_hint = withdraw_branch_commits_hint(resolved_root, withdrawn_id, task_meta) if dry_run and withdrawn_id else None
+
         if dry_run:
             response = make_response(
                 ok=verdict != Verdict.BLOCK,
@@ -8690,9 +8694,11 @@ def withdraw_task(
                     "owner_ruling_ref": result.get("owner_ruling_ref"),
                     "linked_audits": linked,  # AIPOS-F230 件⑤: 在途审计卡将随本次撤回一并撤回
                     "in_transit": in_transit_view,  # AIPOS-F234 件①: 在途判定(与确认同一判据)
+                    "branch_commits": branch_hint,  # AIPOS-F259 件②: 卡分支提交提示(无分支 / 无提交 = None)
                 },
                 summary={"task_id": result.get("task_id"), "to_state": "withdrawn"},
-                warnings=list(result.get("warnings", [])) + list(transit["warnings"]) + [item["line"] for item in linked],
+                warnings=list(result.get("warnings", [])) + list(transit["warnings"]) + [item["line"] for item in linked]
+                + ([branch_hint["line"]] if branch_hint else []),
                 blocking_reasons=result.get("blocking_reasons", []),
                 safety_notice="AIPOS-315: withdraw will move task to withdrawn/ and preserve all existing records.",
             )
