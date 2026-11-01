@@ -2497,6 +2497,8 @@ def _render_enroll_deliver(result: dict[str, Any]) -> None:
     env = result.get("envelope") or {}
     if env.get("required") or env.get("policy_id"):
         print(f"  覆盖信封 {env.get('policy_id') or '-'}({env.get('reason')})")
+    for line in result.get("occupancy_notice") or []:  # AIPOS-F261 件①: 目标工位已被别的实例登记(预演 / 确认同带, 不拦截)
+        print(f"  ⚠ {line}")
     if result.get("dry_run"):
         preview = result.get("gate_preview") or {}
         print(f"  有效期 {preview.get('ttl_seconds')} 秒  Gate URL {preview.get('gate_url')}")
@@ -3442,9 +3444,9 @@ def build_parser() -> argparse.ArgumentParser:
     project_headline_mode.add_argument("--confirm", action="store_true", help="Write the record and land it")
     project_headline_parser.add_argument("--json", action="store_true", help="JSON output")
     # AIPOS-F143 件②: 项目执行方式声明写入口(project.json execution; 声明 config.schema project_json.execution; update_project_json 唯一写路径)
-    project_setexec_parser = project_subparsers.add_parser("set-execution", help="AIPOS-F143: declare the project's execution mode (project.json execution: sub-agent executor by default, Owner-approved task modes may go to a pi executor workstation, audits always by an independent pi auditor); every instance must already be enrolled in this project; --dry-run (default) shows the diff, --confirm writes")
+    project_setexec_parser = project_subparsers.add_parser("set-execution", help="AIPOS-F143/F256: declare the project's execution mode (project.json execution: code cards go to the sub-agent executor, every non-code card goes to the pi executor workstation, audits always by an independent pi auditor); every instance must already be enrolled in this project, the sub-agent executor in sub-agent mode (AIPOS-F261); --dry-run (default) shows the diff, --confirm writes")
     project_setexec_parser.add_argument("name", nargs="?", default=None, help="Established project name (default: the project.json#project of --workspace-root / the governance root containing the current directory)")
-    project_setexec_parser.add_argument("--subagent-executor", required=True, metavar="INSTANCE", help="Sub-agent executor instance (enrolled with lybra roles enroll --executor-mode subagent); default assigned_to of drafted cards")
+    project_setexec_parser.add_argument("--subagent-executor", required=True, metavar="INSTANCE", help="Sub-agent executor instance (its latest enrollment must be sub-agent mode: lybra roles enroll-deliver --executor-mode subagent; a workstation-mode instance is refused with the re-enroll command, AIPOS-F261); default assigned_to of drafted code cards")
     project_setexec_parser.add_argument("--auditor", required=True, metavar="INSTANCE", help="Independent pi auditor workstation instance (must have a workstation location); default audit_by of drafted cards")
     project_setexec_parser.add_argument("--pi-executor", default=None, metavar="INSTANCE", help="pi executor workstation instance (AIPOS-F256: every non-code card — docs/governance/config/validation — goes to it; sub-agents take code cards only)")
     project_setexec_parser.add_argument("--pi-allowed-task-mode", action="append", dest="pi_allowed_task_modes", default=[], metavar="TASK_MODE", help="RETIRED (AIPOS-F256): compatibility only, no longer changes routing (non-code always goes to the pi executor); omit it — `lybra project upgrade` removes the stored key")
@@ -5566,6 +5568,8 @@ def main(argv: list[str] | None = None) -> int:
                         # AIPOS-F82 件②: 未写的接线项/章程逐项点名(禁写悬空扩展、禁落未渲染母本)
                         for warn in result.get('warnings') or []:
                             print(f"    ⚠ {warn}")
+                        for line in result.get('occupancy_notice') or []:  # AIPOS-F261 件①: 目标工位已被别的实例登记(不拦截)
+                            print(f"  ⚠ {line}")
                         # AIPOS-F54 ⑮: 可启动最小集逐项校验(缺项逐项点名)
                         mbs = result.get('minimum_bootable_set') or {}
                         if mbs:
@@ -5780,7 +5784,7 @@ def main(argv: list[str] | None = None) -> int:
                         f"{view['pi_allowed_task_modes']!r}"] if view["pi_allowed_task_modes"] else [])
                     + ([f"execution.subagent_max_wait = {args.subagent_max_wait:g}(子 agent 执行方式下 loop 等交回缺省上限, 秒)"]
                        if args.subagent_max_wait is not None else [])
-                    + ["各实例已核: 本项目已接入(审计者 / pi 执行者有工位位置); 起草缺省与发卡核身份同读本段"])
+                    + ["各实例已核: 本项目已接入(审计者 / pi 执行者有工位位置; 子 agent 执行者为子 agent 模式登记); 起草缺省与发卡核身份同读本段"])
             if args.project_command == "set-model":
                 # AIPOS-F169: 唯一实现 enrollment.set_project_pi_model(pi --list-models 核可用 + project_execution 校验 + update_project_json 唯一写路径)
                 from tools.aipos_cli.enrollment import set_project_pi_model

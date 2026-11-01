@@ -621,7 +621,7 @@
         "execution": {
           "type": "object",
           "required": false,
-          "description": "AIPOS-F143 件②(Owner 10-10 定执行方式): 项目执行方式声明。缺省执行类工作(代码/配置等)由顾问派子 agent 做(执行身份 = 本项目「子 agent 执行者」实例 subagent_executor, 其 harness = 该实例子 agent 模式接入登记记下的顾问会话 kind); Owner 明示后, pi_allowed_task_modes 列明的 task_mode 可派 pi 执行工位 pi_executor(loop 自动拉起); 审计恒为独立 pi 审计工位 auditor。缺段 = 未声明, 行为不变(起草不补执行者/审计者, harness 照 card.schema intent_face.harness.default_by_task_mode)。读取方: 起草缺省(draft_writer.create_draft 经 apply_execution_defaults)与发卡核身份(draft_writer.publish_identity_refusals)同读唯一读取口 workspace_config.project_execution; 唯一写入口 `lybra project set-execution [项目] --subagent-executor <实例> --auditor <实例> [--pi-executor <实例> --pi-allowed-task-mode <task_mode>…] [--dry-run|--confirm]`(enrollment.set_project_execution, 经 workspace_config.update_project_json 唯一写路径; 整段声明, 未给的可选键 = 缺省值; AIPOS-F169: pi_models 由同族 `lybra project set-model` 管, set-execution 原样保留)。写前核身份: 各实例须为本项目已接入实例(enrollment.instance_enrollment, 与发卡核身份同一判定), 审计者与 pi 执行者须有工位位置(enrollment.workstation_location)。",
+          "description": "AIPOS-F143 件②(Owner 10-10 定执行方式) / AIPOS-F256 / F260(Owner 10-31 产品化第 5 项: 非代码一律 pi) / F261: 项目执行方式声明。执行方按卡类型由产品定(enums.schema task_mode.executor, 不可按项目选配): 代码卡由顾问派子 agent 做(执行身份 = 本项目「子 agent 执行者」实例 subagent_executor, 须为子 agent 模式接入登记: land 事件 mode=subagent, 其 harness = 该登记记下的顾问会话 kind); 一切非代码卡(docs / governance / config / validation 等)交 pi 执行工位 pi_executor(loop 自动拉起); 审计恒为独立 pi 审计工位 auditor。缺段 = 未声明, 行为不变(起草不补执行者/审计者, harness 照 card.schema intent_face.harness.default_by_task_mode)。读取方: 起草缺省(draft_writer.create_draft 经 apply_execution_defaults)与发卡核身份(draft_writer.publish_identity_refusals)同读唯一读取口 workspace_config.project_execution; 唯一写入口 `lybra project set-execution [项目] --subagent-executor <实例> --auditor <实例> [--pi-executor <实例>] [--dry-run|--confirm]`(enrollment.set_project_execution, 经 workspace_config.update_project_json 唯一写路径; 整段声明, 未给的可选键 = 缺省值; 不写退役键 pi_allowed_task_modes; AIPOS-F169: pi_models 由同族 `lybra project set-model` 管, set-execution 原样保留)。写前核身份: 各实例须为本项目已接入实例(enrollment.instance_enrollment, 与发卡核身份同一判定), 审计者与 pi 执行者须有工位位置(enrollment.workstation_location); AIPOS-F261 件②: 子 agent 执行者最新登记须为子 agent 模式(instance_enrollment governance_root_mode), 否则拒 EXECUTION_SUBAGENT_MODE_MISMATCH 并给重登记出口(enrollment.subagent_reenroll_command); 已声明的存量项目不因此变红: `lybra roles list` / `lybra project upgrade` 预演把「子 agent 执行者登记为工位模式」列为待处理项并给同一出口(execution_division.division_violations), 不自动改。",
           "schema": {
             "default_mode": {
               "type": "string",
@@ -690,7 +690,17 @@
             "PI_MODEL_CATALOG_UNAVAILABLE": "set-model: 本机 pi 已配置模型清单取不到(pi 不在 PATH / 超时 / 非零退出 / 输出无表头); 核不了不写(fail-closed)",
             "PI_MODEL_OWNER_REF_REQUIRED": "set-model: 缺 --owner-ref(Owner 指示摘要或决定记录); 切换模型须可追溯到 Owner 指示",
             "EXECUTION_INSTANCE_NOT_ENROLLED": "声明的实例不是本项目已接入实例(或审计者 / pi 执行者无工位位置); 出口: 先按 lybra onboarding guide 接入该实例(子 agent 执行者: --executor-mode subagent), 再声明",
+            "EXECUTION_SUBAGENT_MODE_MISMATCH": "AIPOS-F261 件②: --subagent-executor 给的实例已接入本项目, 但最新登记不是子 agent 模式(land 事件无 mode=subagent, 如工位模式登记 / 只有凭据条目): loop 会按工位找它, 且其章程落点会被同目录接入的别的实例顶掉; 出口: 先按子 agent 模式重登记该实例(texts.subagent_mode_exit), 再声明",
             "EXECUTION_PI_NOT_ALLOWED": "AIPOS-F256 退役(无产生方; 原 F143 按 pi_allowed_task_modes 拒派 pi): 分工拒因改由 enums.schema task_mode.executor.reject_codes(EXECUTOR_DIVISION_REFUSED / EXECUTOR_PI_UNDECLARED)给出; 本键保留供存量记录查阅"
+          },
+          "texts": {
+            "description": "AIPOS-F261 件②: 子 agent 执行者登记模式核验的话术(set-execution 拒因、roles list / project upgrade 待处理项同读; 判定唯一 enrollment.subagent_mode_mismatch, 出口命令唯一 enrollment.subagent_reenroll_command)。占位: {instance} {how} {command}。只追加。",
+            "subagent_mode_mismatch": "subagent_executor={instance}: 最新登记不是子 agent 模式({how}); 子 agent 执行者须按子 agent 模式登记(land 事件 mode=subagent), 否则 loop 按工位找它, 且其章程落点会被同目录接入的别的实例顶掉",
+            "subagent_mode_exit": "出口: 先按子 agent 模式重登记 {instance}(凭据落治理根, 不动原工位目录; 先预演, 再同一条加 --confirm): {command}",
+            "how_workstation": "工位模式登记于 {dir}, 登记时间 {landed_at}",
+            "how_no_land": "无位置事件, 只有治理根凭据条目",
+            "how_other": "最新位置事件无 mode=subagent",
+            "pending_item": "待处理(不自动改): 子 agent 执行者 {instance} 登记为工位模式({how}); 出口: {command}"
           }
         },
         "return_summary_source": {

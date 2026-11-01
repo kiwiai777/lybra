@@ -1662,6 +1662,113 @@ def has_enrollment_registry(governance_root: str | Path) -> bool:
     return enrollment_trail_path(_workspace_root_path(governance_root)).is_file()
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F261: 工位占用提示(件①)与子 agent 执行者登记模式核验(件②)。判定只经既有登记读取口(_trail_matches 候选 + workstation_location /
+# location_event / instance_enrollment), 话术读声明(verbs.schema two_phase_protocol.roles_writers.workstation_occupancy;
+# config.schema project_json.execution.texts), 重登记出口命令唯一渲染 subagent_reenroll_command。
+# ---------------------------------------------------------------------------
+
+def workstation_occupancy_declaration() -> dict[str, Any]:
+    """verbs.schema two_phase_protocol.roles_writers.workstation_occupancy(texts)唯一读取口。缺 / 形不合 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    decl = (((load_schema("verbs").get("two_phase_protocol") or {}).get("roles_writers") or {}).get("workstation_occupancy"))
+    texts = decl.get("texts") if isinstance(decl, dict) else None
+    keys = ("occupied", "exit_move", "exit_subagent", "subagent_reenroll", "harness_placeholder")
+    if not isinstance(texts, dict) or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in keys):
+        raise SchemaLoadError(f"verbs.schema.json two_phase_protocol.roles_writers.workstation_occupancy.texts {list(keys)} 未声明齐")
+    return decl
+
+
+def execution_texts() -> dict[str, str]:
+    """config.schema project_json.execution.texts(AIPOS-F261 件② 话术)唯一读取口。缺 = SchemaLoadError。"""
+    from tools.aipos_cli.workspace_config import execution_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    texts = execution_declaration().get("texts")
+    keys = ("subagent_mode_mismatch", "subagent_mode_exit", "how_workstation", "how_no_land", "how_other", "pending_item")
+    if not isinstance(texts, dict) or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in keys):
+        raise SchemaLoadError(f"config.schema.json project_json.execution.texts {list(keys)} 未声明齐")
+    return texts
+
+
+def subagent_reenroll_command(governance_root: str | Path, instance: str, *, role: str | None = None, harness: str | None = None) -> str:
+    """把实例按子 agent 模式重登记的出口命令(件① 工位占用提示 / 件② set-execution 拒因 / roles list · project upgrade 待处理项同一渲染)。
+    角色缺 = executor; harness 不是顾问会话 kind = 占位(列出声明的顾问会话 kind)。"""
+    from tools.aipos_cli.distribution_sync import advisor_harness_kinds
+
+    texts = workstation_occupancy_declaration()["texts"]
+    kinds = advisor_harness_kinds()
+    kind = str(harness or "").strip()
+    if kind not in kinds:
+        kind = str(texts["harness_placeholder"]).format(kinds="|".join(kinds))
+    return str(texts["subagent_reenroll"]).format(role=str(role or "").strip() or "executor", instance=instance, harness=kind,
+                                                 governance_root=str(_workspace_root_path(governance_root)))
+
+
+def workstation_occupants(governance_root: str | Path, workspace: str | Path, *, instance: str | None = None,
+                          host: str | None = None) -> list[dict[str, Any]]:
+    """AIPOS-F261 件①: 目标工位目录已被本项目其他实例登记的清单(只读)。候选 = 接入日志中有事件的实例(_trail_matches, 同 enrolled_instances
+    候选口径), 每个经 workstation_location(工位位置唯一读取口: 最新未作废位置事件 workstation=)比对目录与主机; 本实例自身不列。
+    host = 目标所在机(None = 本机; enroll-deliver --ssh 目标的 user@ 前缀不计)。返回 [{instance, role, landed_at, host, dir, harness}]。"""
+    root = _workspace_root_path(governance_root)
+    trail = enrollment_trail_path(root)
+    if not trail.is_file():
+        return []
+    me = str(instance or "").strip()
+    target_host = str(host or "").strip().rpartition("@")[2] or None
+    local = target_host is None or is_local_host(target_host)
+    target = _dir_key(workspace, local=local)
+    names = sorted({event.group("instance") for _n, _line, _void, event in _trail_matches(trail) if event} - {me})
+    out: list[dict[str, Any]] = []
+    for name in names:
+        loc = workstation_location(root, name)
+        if not loc["found"]:
+            continue
+        loc_local = loc["transport"] == "local" or is_local_host(loc["host"])
+        if loc_local != local or (not local and _host_key(loc["host"]) != _host_key(target_host)):
+            continue
+        if _dir_key(str(loc["dir"]), local=local) != target:
+            continue
+        event = location_event(root, name)
+        out.append({"instance": name, "role": event.get("role") or "-", "landed_at": loc["landed_at"], "host": loc["host"],
+                    "dir": loc["dir"], "harness": event.get("harness")})
+    return out
+
+
+def workstation_occupancy_lines(governance_root: str | Path, occupants: list[dict[str, Any]]) -> list[str]:
+    """件① 提示行(预演 / 确认输出同读): 每个占用实例 = occupied + exit_move + exit_subagent(出口命令 subagent_reenroll_command)。"""
+    if not occupants:
+        return []
+    texts = workstation_occupancy_declaration()["texts"]
+    lines: list[str] = []
+    for occ in occupants:
+        fill = {**occ, "governance_root": str(_workspace_root_path(governance_root)),
+                "command": subagent_reenroll_command(governance_root, occ["instance"], role=occ.get("role") if occ.get("role") != "-" else None,
+                                                     harness=occ.get("harness"))}
+        lines += [str(texts[k]).format(**fill) for k in ("occupied", "exit_move", "exit_subagent")]
+    return lines
+
+
+def subagent_mode_mismatch(governance_root: str | Path, instance: str, *, view: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """AIPOS-F261 件②: 已接入实例作子 agent 执行者时, 最新登记不是子 agent 模式(instance_enrollment governance_root_mode 为假)的判定。
+    未接入 / 是子 agent 模式 = None; 否则 {instance, how, command}(how = 现登记形态人话, command = subagent_reenroll_command)。
+    连接文件读不出 = ValueError 上抛(fail-closed, 由调用方记为拒因 / 读不出)。"""
+    got = view if view is not None else instance_enrollment(governance_root, instance)
+    if not got["enrolled"] or got["governance_root_mode"]:
+        return None
+    texts = execution_texts()
+    loc = got["workstation"] or {}
+    if loc.get("found"):
+        how = str(texts["how_workstation"]).format(dir=loc.get("dir"), landed_at=loc.get("landed_at") or "-")
+    elif "land" not in got["via"]:
+        how = str(texts["how_no_land"])
+    else:
+        how = str(texts["how_other"])
+    return {"instance": got["instance"], "how": how,
+            "command": subagent_reenroll_command(governance_root, got["instance"], role=got.get("role"), harness=got.get("harness"))}
+
+
 # AIPOS-F143 件②: 执行方式声明(project.json execution)唯一写入口——读取口 workspace_config.project_execution; 写前核各实例为本项目
 # 已接入实例(instance_enrollment, 与发卡核身份同一判定)。写入经 workspace_config.update_project_json 唯一写路径。
 
@@ -1700,7 +1807,8 @@ def set_project_execution(
 ) -> dict[str, Any]:
     """AIPOS-F143 件②: `lybra project set-execution` 的唯一实现——整段写 project.json execution(未给的可选键 = 声明缺省; 其余键原样保留)。
     校验 = 唯一读取口 project_execution(写前以将写内容预检 + 写后复核, 经 update_project_json verify); 写前另核各实例为本项目已接入实例
-    (execution_instance_refusals; 不过 = EXECUTION_INSTANCE_NOT_ENROLLED 零写入)。dry_run(缺省)= 只预演 diff 零写入。
+    (execution_instance_refusals; 不过 = EXECUTION_INSTANCE_NOT_ENROLLED 零写入); AIPOS-F261 件②: 子 agent 执行者最新登记须为子 agent 模式
+    (subagent_mode_mismatch; 不过 = EXECUTION_SUBAGENT_MODE_MISMATCH 零写入, 带重登记出口)。dry_run(缺省)= 只预演 diff 零写入。
     返回 {project_json, dry_run, changed, written, diff, execution}。"""
     from tools.aipos_cli.workspace_config import (
         ExecutionDeclarationError,
@@ -1740,6 +1848,12 @@ def set_project_execution(
     refusals = execution_instance_refusals(project_root, view or {})
     if refusals:
         raise ExecutionDeclarationError("EXECUTION_INSTANCE_NOT_ENROLLED", refusals)
+    # AIPOS-F261 件②: 子 agent 执行者最新登记须为子 agent 模式(判定唯一 subagent_mode_mismatch), 否则零写入拒并给重登记出口
+    mismatch = subagent_mode_mismatch(project_root, str((view or {}).get("subagent_executor") or ""))
+    if mismatch is not None:
+        texts = execution_texts()
+        raise ExecutionDeclarationError("EXECUTION_SUBAGENT_MODE_MISMATCH", [
+            str(texts["subagent_mode_mismatch"]).format(**mismatch), str(texts["subagent_mode_exit"]).format(**mismatch)])
     outcome = update_project_json(project_root, _mutate, verify=project_execution, dry_run=dry_run)
     return {**outcome, "project_json": str(project_json_path(project_root)), "execution": staged.get("view") or view}
 

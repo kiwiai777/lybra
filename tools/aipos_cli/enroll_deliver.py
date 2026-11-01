@@ -10,7 +10,8 @@
 
 流程(enroll_deliver):
   ① 本机预检(先于签码, 拒 = 不签码): ssh 目标合法; 治理根是本机已建项目; 角色类可解析(custom_roles.resolve_role_to_class);
-     enroll_client.enroll_preflight —— 执行者模式 / harness / 子 agent 判据 / 工位类不落治理根 / 覆盖信封(与 enroll 换码前预检同一实现)
+     enroll_client.enroll_preflight —— 执行者模式 / harness / 子 agent 判据 / 工位类不落治理根 / 覆盖信封(与 enroll 换码前预检同一实现);
+     AIPOS-F261 件①: 工位模式目标目录已被别的实例登记 = 预演 / 确认输出带提示(enrollment.workstation_occupants, 不拦截)
   ② 门动词 lybra_enroll_code_dry_run(门侧校验签码参数: 角色 / 实例 / 治理根注册表 / Owner 授权引用)——预演到此为止, 不出码
   ③ --confirm: lybra_enroll_code_dry_run → lybra_enroll_code_confirm 签码(发码唯一实现 enrollment.issue_self_contained_code 在门进程内);
      同机 = 直调 enroll_client.enroll(code=…, verify=True)(兑换 + 落盘 + land + 连通验证);
@@ -224,7 +225,12 @@ def enroll_deliver(
     返回结果只含 code_id / 指纹 / 落点 / 预检结论; 注册码明文永不出现在返回值、输出或异常文本里。"""
     from tools.aipos_cli.custom_roles import resolve_role_to_class
     from tools.aipos_cli.enroll_client import EnrollLandedError, enroll_preflight
-    from tools.aipos_cli.enrollment import executor_mode_declaration, governance_root_executor_modes
+    from tools.aipos_cli.enrollment import (
+        executor_mode_declaration,
+        governance_root_executor_modes,
+        workstation_occupancy_lines,
+        workstation_occupants,
+    )
 
     # ① 本机预检(先于签码)
     ssh = None
@@ -269,6 +275,12 @@ def enroll_deliver(
         {k: v for k, v in (("kind", harness_kind), ("dir", harness_dir), ("host", harness_host)) if v} or None,
         "envelope": {"required": envelope.get("required"), "policy_id": envelope.get("policy_id"), "reason": envelope.get("reason")},
     }
+    # AIPOS-F261 件①: 工位模式接入前读本项目接入登记, 目标工位目录已被别的实例登记 = 预演与确认输出同带提示行(只提示不拦截;
+    # 判定唯一 enrollment.workstation_occupants, 话术读 verbs.schema roles_writers.workstation_occupancy)。凭据落治理根的模式 / 治理根目标不判。
+    occupants = [] if seat_mode or pre["governance_target"] else workstation_occupants(gov, ws_text if ssh else ws_local, instance=instance,
+                                                                                       host=ssh)
+    target["workstation_occupants"] = occupants
+    target["occupancy_notice"] = workstation_occupancy_lines(gov, occupants)
     params = {
         "role": role,
         "instance": instance,

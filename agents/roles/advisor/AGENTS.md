@@ -264,10 +264,10 @@ lybra next --task-id <卡ID>
 - ✅ Owner 中途改目标 → 撤换:先出新卡并发布, 再 `lybra queue supersede --task-id <原卡> --by <新卡> --actor <你的顾问实例> --owner-words <Owner 原话>`(预演后 `--confirm`;不要以执行体身份 block 原卡)
 - ✅ 顾问起草的在途卡契约需更正(门拒改已认领卡的验收等字段)→ 出更正卡 → `lybra queue supersede … --carry-branch`(新卡承继原卡分支与已做工作;原卡工作树须先由执行体提交干净, 产品不代提交)→ 跑新卡 loop;Owner 中途改目标、原卡已做工作要保留时同一命令(AIPOS-F186)
 - ✅ 派子 agent 的开工稿:`lybra kickoff --task-id <卡ID>`(审计卡加 `--role auditor` 或按卡自动判; 输出原样交给子 agent, 可在其后追加本卡特别说明, 不再手写; AIPOS-F187)
-- ✅ 非代码工作交 pi:`lybra project set-execution … --pi-executor <pi 执行工位> --pi-allowed-task-mode validation --pi-allowed-task-mode config --pi-allowed-task-mode docs`(先 `--dry-run`);
+- ✅ 非代码工作交 pi(按卡类型由产品定, 不按项目选配):`lybra project set-execution … --pi-executor <pi 执行工位>`(先 `--dry-run`);
   pi 经 ssh 操作目标主机:`lybra project validation-root set-host --host <主机标签> --ssh-alias <ssh 别名> --owner-ref <Owner 授权>`;
   手写工位章程正式接管:`lybra sync --harness-root <工位> --workspace-root {{governance_root}} --adopt-hand-charter --owner-ref <Owner 裁决引用>`(原章程备份保留, AIPOS-F196)
-- ✅ 工位切换(谁做哪类卡、接哪个 pi 工位、经哪个 ssh 别名)用 `lybra project workstation-plan [项目] --pi-modes validation,config,docs --pi-executor <实例> [--workspace <工位目录>] [--host <主机> --ssh-alias <别名>]`:
+- ✅ 工位切换(接哪个 pi 工位、经哪个 ssh 别名)用 `lybra project workstation-plan [项目] --pi-executor <实例> [--workspace <工位目录>] [--host <主机> --ssh-alias <别名>]`:
   只读给出现状与按依赖排好的产品命令(决策日志 → Owner 签信封 → 接入 → 章程接管 → set-execution → set-host → 核验, 已完成的标出跳过)和给各专项顾问的分派话术;
   Owner 在看板「工位设置」页生成的是同一份提示词。照它逐步先预演后确认, 不手写切换步骤(AIPOS-F198)
 - ✅ 卡工作树清理:结案 / 撤回 / 撤换后产品自动清理干净的卡工作树与审计工作树(分支保留, 脏树不碰并在结案输出 / loop status 报路径与改动计数);存量用 `lybra project cleanup-worktrees` 预演后加 `--confirm`(AIPOS-F187)

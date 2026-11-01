@@ -920,6 +920,15 @@ def session_dir_check(governance_root: Path | str, instance: str, harness_record
         raise RuntimeError(refusal)
 
 
+def _occupancy_notice(governance_root: str | None, occupants: list[dict[str, Any]]) -> list[str]:
+    """AIPOS-F261 件①: 工位占用提示行(唯一渲染 enrollment.workstation_occupancy_lines)。无占用 = 空。"""
+    if not occupants or not governance_root:
+        return []
+    from tools.aipos_cli.enrollment import workstation_occupancy_lines
+
+    return workstation_occupancy_lines(governance_root, occupants)
+
+
 def enroll(
     *,
     code: str | None = None,
@@ -1010,6 +1019,15 @@ def enroll(
                            executor_mode=executor_mode, check_target=code is not None)
     mode_decl, mode, seat_mode, harness_record = pre["mode_decl"], pre["mode"], pre["seat_mode"], pre["harness_record"]
     _gov_workspace = pre["governance_target"]
+    # AIPOS-F261 件①: 工位模式换码前读本项目接入登记(治理根在本机才读得到), 目标工位已被别的实例登记 = 输出带提示(不拦截;
+    # 判定唯一 enrollment.workstation_occupants, 与 enroll-deliver 同一判定与话术)
+    occupants: list[dict[str, Any]] = []
+    if code is not None and not seat_mode and not _gov_workspace and governance_root:
+        from tools.aipos_cli.enrollment import workstation_occupants
+        from tools.aipos_cli.workspace_config import has_workspace_queue
+
+        if has_workspace_queue(Path(governance_root).expanduser(), established=True):
+            occupants = workstation_occupants(governance_root, workspace_root, instance=(declared or {}).get("instance"))
 
     # FIX-1: 确保目标目录存在(对空目录新机零手工上线)
     # AIPOS-F54 同族并入③: 目录不存在时自动创建并出声(chris 实撞 cd: No such file or directory)
@@ -1285,6 +1303,8 @@ def enroll(
         "harness_delivery": ({k: harness_delivery.get(k) for k in ("status", "files_fetched", "manifest_path", "harness", "changes", "note")}
                              if harness_delivery else None),
         "git_exclude": git_exclude_report,
+        "workstation_occupants": occupants,  # AIPOS-F261 件①
+        "occupancy_notice": _occupancy_notice(governance_root, occupants),
         "next_step": (
             None if code is None else
             (f"子 agent 执行者已接入: 凭据落治理根 {lybra_dir}/connection.json(实例 {agent_instance}, harness={str(harness_kind).strip()}); "
