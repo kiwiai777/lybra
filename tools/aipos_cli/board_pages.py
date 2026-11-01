@@ -808,6 +808,8 @@ _SETUP_CACHE: dict[str, dict[str, Any]] = {}
 #: 工作区键 → 正在跑的那一次(完成即 set)
 _SETUP_RUNNING: dict[str, threading.Event] = {}
 _SETUP_RUNS = [0]
+#: 触发页顶 pi 提醒的两项(config.schema setup_check.items 的检查项 id, 非 project.json 的 pi 模型声明): pi 本身 / pi 可用模型
+_PI_REMINDER_ITEMS = ("pi", "pi_models")
 
 
 def _setup_key(workspace_root: str | Path | None) -> str:
@@ -927,7 +929,7 @@ def pi_reminder(result: dict[str, Any] | None) -> dict[str, Any] | None:
 
     install = setup_check_declaration()["pi"]["install"]
     items = {it["id"]: it for it in result["items"]}
-    pi, models = items.get("pi"), items.get("pi_models")
+    pi, models = (items.get(item_id) for item_id in _PI_REMINDER_ITEMS)
     if pi is not None and pi["status"] == "fail":
         return {"kind": "missing", "text": pi["exit"], "command": str(install["command"]), "url": str(install["url"])}
     if models is not None and models["status"] == "fail":
