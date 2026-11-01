@@ -24,6 +24,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tools.aipos_cli.onboarding import (
+    STEP,
     generate_onboarding_guide,
     format_guide_text,
     validate_step_prerequisites,
@@ -31,19 +32,21 @@ from tools.aipos_cli.onboarding import (
 
 
 def _workstation_enroll_step(guide):
-    """AIPOS-F92: 工位 enroll 步(标题含「工位 enroll」; 原六步的 Step 4)。AIPOS-F151: = Step 6「工位 enroll-deliver」(签码 + 接入一体)。"""
-    return next(st for st in guide["steps"] if "工位 enroll" in st["title"])
+    """AIPOS-F92: 工位 enroll 步(原六步的 Step 4)。AIPOS-F151: 签码 + 接入一体(enroll-deliver)。AIPOS-F262: 执行分工成步后 = pi 执行工位接入步
+    (步号读 onboarding.STEP 唯一声明)。"""
+    return next(st for st in guide["steps"] if st["step_number"] == STEP["pi_executor"])
 
 
 class TestOnboardingGuideGeneration(unittest.TestCase):
     """① 第三项目端到端:probe-xyz 式从 0 走完全流程(验收①④)。"""
 
     def test_guide_generation_probe_xyz(self):
-        """生成 probe-xyz 项目的完整指南(验收①:项目无关性)。AIPOS-F92: 九步(单门 home 根约定, Owner 一次性动作 2 条)。"""
+        """生成 probe-xyz 项目的完整指南(验收①:项目无关性)。AIPOS-F92: 单门 home 根约定, Owner 一次性动作 2 条; AIPOS-F262: 执行分工成步 = 11 步。"""
         guide = generate_onboarding_guide("probe-xyz")
         self.assertEqual(guide["project_name"], "probe-xyz")
-        self.assertEqual(guide["total_steps"], 9)
-        self.assertEqual(len(guide["steps"]), 9)
+        business = max(STEP.values())  # AIPOS-F263: 前置检查 STEP["preflight"] = 0 不占业务步号
+        self.assertEqual(guide["total_steps"], business)
+        self.assertEqual(len(guide["steps"]), business)
         self.assertEqual(guide["owner_actions"], [3, 4])
 
         # 验证每步都有必要字段
@@ -70,17 +73,19 @@ class TestOnboardingGuideGeneration(unittest.TestCase):
         self.assertNotIn("probe-xyz", step1_cmd2)
 
     def test_guide_step_titles(self):
-        """步骤标题完整性检查(AIPOS-F92 九步)。"""
+        """步骤标题完整性检查(AIPOS-F262: 授权取代三信封、执行分工成步, 11 步)。"""
         guide = generate_onboarding_guide("test-proj")
         expected_titles = [
             "建项目",
             "声明产品仓",
-            "签三张信封",            # AIPOS-F151: 信封先于接入(Owner 动作 ①)
+            "签项目常设授权",        # AIPOS-F262 件①: 项目常设授权先于接入(Owner 动作 ①)
             "签码接入顾问到治理根",  # Owner 动作 ②: enroll-deliver, 码不出进程
             "顾问就位复核",
-            "为执行 / 审计工位签码接入",
+            "接入审计工位",          # AIPOS-F262 件②: 执行分工成步
+            "接入 pi 执行工位",
+            "接入子 agent 执行者",
+            "声明执行分工",
             "工位 sync",
-            "工位自检",
             "首卡",
         ]
         for i, exp in enumerate(expected_titles, 1):
@@ -105,7 +110,7 @@ class TestOnboardingGuideGeneration(unittest.TestCase):
         text = format_guide_text(guide)
         self.assertIn("probe-xyz", text)
         self.assertIn("Step 1:", text)
-        self.assertIn("Step 9:", text)
+        self.assertIn(f"Step {max(STEP.values())}:", text)
         self.assertIn("Owner 一次性动作 2 条", text)
         self.assertIn("验证:", text)
         self.assertIn("失败出口:", text)
@@ -138,7 +143,7 @@ class TestStepPrerequisitesValidation(unittest.TestCase):
             ws = Path(tmp) / "workspace"
             ws.mkdir()
             result = validate_step_prerequisites(
-                8, project_name="probe-xyz", workspace_dir=str(ws)
+                STEP["sync"], project_name="probe-xyz", workspace_dir=str(ws)
             )
             self.assertFalse(result["ok"])
             self.assertIn("connection.json", result["missing"])
@@ -153,7 +158,7 @@ class TestStepPrerequisitesValidation(unittest.TestCase):
             conn.write_text(json.dumps({"workspace_root": str(ws)}), encoding="utf-8")
 
             result = validate_step_prerequisites(
-                8, project_name="probe-xyz", workspace_dir=str(ws)
+                STEP["sync"], project_name="probe-xyz", workspace_dir=str(ws)
             )
             self.assertFalse(result["ok"])
             self.assertIn("lybra_bin", result["missing"])
@@ -177,7 +182,7 @@ class TestStepPrerequisitesValidation(unittest.TestCase):
             )
 
             result = validate_step_prerequisites(
-                8, project_name="probe-xyz", workspace_dir=str(ws)
+                STEP["sync"], project_name="probe-xyz", workspace_dir=str(ws)
             )
             self.assertFalse(result["ok"])
             self.assertIn("workspace_root_mismatch", result["missing"])
@@ -192,7 +197,7 @@ class TestStepPrerequisitesValidation(unittest.TestCase):
             role_file.write_text(json.dumps({"role": "executor"}), encoding="utf-8")
 
             result = validate_step_prerequisites(
-                8, project_name="probe-xyz", workspace_dir=str(ws)
+                STEP["sync"], project_name="probe-xyz", workspace_dir=str(ws)
             )
             self.assertFalse(result["ok"])
             self.assertIn("owner_policy_ref", result["missing"])

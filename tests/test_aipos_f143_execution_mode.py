@@ -438,26 +438,28 @@ BASE = dict(project_name="f143-probe", home_root="/tmp/f143-home", gate_url="htt
 
 
 def test_item4_onboarding_guide_subagent_mode():
-    from tools.aipos_cli.onboarding import generate_onboarding_guide
+    from tools.aipos_cli.onboarding import STEP, generate_onboarding_guide
 
     default = generate_onboarding_guide(**BASE, advisor_dir="/tmp/f143-session")
     sub = generate_onboarding_guide(**BASE, advisor_harness="codex", advisor_host="mac-probe.local", executor_mode="subagent")
-    # AIPOS-F151: 工位接入 = 第 6 步 enroll-deliver(先 --dry-run 再 --confirm, 码不出进程); 第 7 步只 sync 工位
-    s6, s9 = sub["steps"][5]["command"], sub["steps"][8]["command"]
-    _show(f"[件④·向导 --executor-mode subagent 第 6 步]\n{s6}\n[第 9 步]\n{s9}")
+    # AIPOS-F151: 工位接入 = enroll-deliver(先 --dry-run 再 --confirm, 码不出进程)。AIPOS-F262 件②: 执行分工成步——审计工位 / pi 执行工位 /
+    # 子 agent 执行者各一步(步号读 onboarding.STEP), 之后 set-execution(三者齐)
+    s8, s9 = sub["steps"][STEP["subagent_executor"] - 1]["command"], sub["steps"][STEP["execution"] - 1]["command"]
+    _show(f"[件④·向导子 agent 执行者步]\n{s8}\n[执行分工步]\n{s9}")
     assert sub["instances"]["executor"] == "exec.f143-probe.mac-probe" and sub["executor_mode"] == "subagent"
     gov = sub["governance_root"]
-    enroll_lines = [ln for ln in s6.splitlines() if "--executor-mode subagent" in ln and not ln.startswith("#")]
+    enroll_lines = [ln for ln in s8.splitlines() if "--executor-mode subagent" in ln and not ln.startswith("#")]
     parsed = [_parse_lybra(_segments(ln)[0][1:], ln) for ln in enroll_lines]
     assert [(a.roles_command, a.workspace, a.executor_mode, a.harness, a.harness_host, a.dry_run, a.confirm) for a in parsed] == [
         ("enroll-deliver", gov, "subagent", "codex", "mac-probe.local", True, False),
         ("enroll-deliver", gov, "subagent", "codex", "mac-probe.local", False, True)]
-    # AIPOS-F256 件④: 子 agent 模式另接入 pi 执行工位(非代码卡一律 pi; 与审计工位同级必备): 第 6 步签码接入 / 第 7 步 sync / 第 8 步起 pi,
-    # 第 9 步 set-execution 带 --pi-executor(原 F143「子 agent 模式无执行工位」改)
+    # AIPOS-F256 件④: pi 执行工位 = 必备步(非代码卡一律 pi; 与审计工位同级); AIPOS-F262: 其 enroll 显式带 --executor-mode workstation
     pi_exec = sub["instances"]["pi_executor"]
     assert pi_exec == "exec.f143-probe.devbox" and sub["workstations"]["pi_executor"] == "/tmp/f143-ws/exec"
-    assert f"--instance {pi_exec}" in s6 and "lybra sync --harness-root /tmp/f143-ws/exec" in sub["steps"][6]["command"]
-    assert "cd /tmp/f143-ws/exec" in sub["steps"][7]["command"]
+    s7 = sub["steps"][STEP["pi_executor"] - 1]["command"]
+    assert f"--instance {pi_exec}" in s7 and "--executor-mode workstation" in s7
+    assert "lybra sync --harness-root /tmp/f143-ws/exec" in sub["steps"][STEP["sync"] - 1]["command"]
+    assert "cd /tmp/f143-ws/exec" in sub["steps"][STEP["first_card"] - 1]["command"]
     assert "project set-execution" in s9 and f"--subagent-executor {sub['instances']['executor']}" in s9 and f"--pi-executor {pi_exec}" in s9
     same_host = generate_onboarding_guide(**BASE, advisor_dir="/tmp/f143-session", executor_mode="subagent")
     assert same_host["instances"]["executor"] == "exec.f143-probe.devbox" and same_host["instances"]["pi_executor"] == "exec.f143-probe.devbox-pi"
@@ -472,7 +474,9 @@ def test_item4_onboarding_guide_subagent_mode():
             else:
                 assert seg[0] in SHELL_VERBS, line
     _show(f"[件④·向导 lybra 命令全部可解析] {n} 条")
-    # 缺省(workstation)= 既有 pi 执行工位步骤不变
-    d7 = default["steps"][6]["command"]
-    assert default["executor_mode"] == "workstation" and "--executor-mode" not in json.dumps(default["steps"], ensure_ascii=False)
-    assert "lybra sync --harness-root /tmp/f143-ws/exec" in d7 and default["instances"]["executor"] == "exec.f143-probe.devbox"
+    # AIPOS-F262: 缺省(不给 --executor-mode)= 同一执行分工流程(子 agent 模式即缺省); 给工位模式 = 拒(单 pi 执行工位包办的旧流程不再生成)
+    assert default["executor_mode"] == "subagent" and default["instances"] == same_host["instances"]
+    with pytest.raises(ValueError) as exc:
+        generate_onboarding_guide(**BASE, advisor_dir="/tmp/f143-session", executor_mode="workstation")
+    _show(f"[件④·向导 --executor-mode workstation 拒] {exc.value}")
+    assert "执行分工" in str(exc.value) and "去掉 --executor-mode" in str(exc.value)

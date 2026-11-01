@@ -3152,7 +3152,7 @@ def build_parser() -> argparse.ArgumentParser:
     roles_deliver_parser.add_argument("--ttl", type=int, help="Code time-to-live in seconds (default 86400)")
     roles_deliver_parser.add_argument("--token-role", default="advisor", help="Role of the local credential used to call the gate (default: advisor; falls back to owner)")
     roles_deliver_parser.add_argument("--actor", default=None, help="AIPOS-F157: signing instance — the gate credential is taken from this instance's entry in connection.json (per-instance selection, AIPOS-F134/F154); required when the token role has two or more instances")
-    roles_deliver_parser.add_argument("--owner-authorization-ref", required=True, help="Owner authorization ref for issuing the code (workstation codes: the envelope covering that workstation)")
+    roles_deliver_parser.add_argument("--owner-authorization-ref", required=True, help="Owner authorization ref for issuing the code: the project standing grant id (lybra project grant show; e.g. auth_<project>, AIPOS-F224), as printed by lybra onboarding guide. Legacy projects still on envelopes may give the envelope covering that workstation")
     roles_deliver_parser.add_argument("--reason", default="", help="Reason recorded with the code")
     roles_deliver_parser.add_argument("--json", action="store_true", help="Output JSON")
     _project_json_two_phase_flags(roles_deliver_parser, "enroll-deliver", family="roles_writers")
@@ -3826,9 +3826,9 @@ def build_parser() -> argparse.ArgumentParser:
     onboarding_guide_parser.add_argument("--gate-url", help=f"Gate URL embedded in the guide's codes (default: loopback per config.schema same_host_rule, port from Owner connection.json mcp.rpc_url > LYBRA_GATE_URL env > {_GATE_URL_DEFAULT}; AIPOS-F153)")
     onboarding_guide_parser.add_argument("--code-repo", help="Optional code repo path")
     onboarding_guide_parser.add_argument("--actor", help="Actor name (defaults to $USER or owner)")
-    onboarding_guide_parser.add_argument("--workspace-dir", help="Executor workstation directory (defaults to ~/<project>-executor)")
+    onboarding_guide_parser.add_argument("--workspace-dir", help="pi executor workstation directory (AIPOS-F262 default: <workstations root>/executor, root = project.json paths.workstations_root or the config.schema default ~/lybra-workstations/<project>; must differ from --auditor-dir and stay outside the home root)")
     # AIPOS-F92 件②: 单门 home 根约定下的完整接入参数(全部可缺省推导; guide 打印推导结果与来源)
-    onboarding_guide_parser.add_argument("--auditor-dir", help="Auditor workstation directory (defaults to ~/<project>-auditor)")
+    onboarding_guide_parser.add_argument("--auditor-dir", help="pi auditor workstation directory (AIPOS-F262 default: <workstations root>/auditor; see --workspace-dir)")
     onboarding_guide_parser.add_argument("--advisor-dir", help="Advisor Claude Code session directory — advisor skills land in <dir>/.claude/skills. Default for a session on this machine (AIPOS-F253/F254) = the project governance root (<home root>/<project>, home root via --home-root > LYBRA_HOME_ROOT > ~/.lybra/config.json home_root > default), since the guide enrolls the project-level advisor; if another project-level advisor on this host already uses the governance root, the declared per-instance sub-path inside it (distribution.schema harness_semantics.session_dir.secondary_subpath); if only a sub-project advisor (custom role) holds it, the guide refuses and prints the swap command (move that advisor to its declared sub-path first). An explicit value always wins but two advisors on one host may not share a directory (refused, with the retry command). With --advisor-host it is required and is the directory on that host (AIPOS-F243)")
     onboarding_guide_parser.add_argument("--repo", action="append", dest="repos", metavar="NAME=ABS_PATH", help="Product repo (repeatable) for Step 2 project set-repos")
     onboarding_guide_parser.add_argument("--default-repo", help="Default repo name when more than one --repo")
@@ -3838,16 +3838,17 @@ def build_parser() -> argparse.ArgumentParser:
                                          help="AIPOS-F129: advisor session harness (choices = distribution.schema harness_semantics.kinds with advisor_session=true; default claude-code = existing guide). codex = Codex session: Step 5 enrolls with --harness codex, no .claude/skills delivery")
     onboarding_guide_parser.add_argument("--advisor-host", help="AIPOS-F129: host the advisor session runs on when it is not the governance-root machine (codex, or claude-code since AIPOS-F243 — then --advisor-dir is required and is the path on that machine; recorded as --harness-host; its short name is the advisor instance host segment)")
     onboarding_guide_parser.add_argument("--executor-mode", choices=list(_executor_mode_declaration()["values"]), default=None,
-                                         help="AIPOS-F143: executor enrollment mode (roles.schema executor_modes; default workstation = existing pi executor steps). subagent = advisor-spawned sub-agent executor: Step 7 enrolls it into the governance root with --executor-mode subagent --harness <advisor kind>, Step 9 declares lybra project set-execution")
-    onboarding_guide_parser.add_argument("--owner-workspace", help="Gate workspace holding the Owner credential (central registry); defaults to <home>/<active project>")
-    onboarding_guide_parser.add_argument("--owner-connection-json", help="Owner credential connection.json (defaults to <owner-workspace>/.lybra/connection.json)")
-    onboarding_guide_parser.add_argument("--envelope-days", type=int, default=30, help="Envelope validity in days (default 30)")
-    onboarding_guide_parser.add_argument("--max-tasks", type=int, default=50, help="Envelope max auto-released claims (default 50)")
+                                         help="AIPOS-F143 / F262: the guide always onboards the execution division (code cards = sub-agent executor enrolled into the governance root with --executor-mode subagent --harness <advisor kind>; non-code cards = pi executor workstation; audits = pi auditor workstation) and declares lybra project set-execution. Kept for compatibility: only the governance-root (sub-agent) mode is accepted; a workstation-only flow is no longer generated")
+    onboarding_guide_parser.add_argument("--owner-workspace", help="Gate workspace holding the Owner credential (central registry; its .lybra/connection.json)")
+    onboarding_guide_parser.add_argument("--owner-connection-json", help="Owner credential connection.json (AIPOS-F262 default: the one connection.json among the gate registry sources — the home root itself and each project under it — that holds an Owner entry; several = the declared active project's; none = the guide says so and asks for this flag, never guessing by project name)")
+    onboarding_guide_parser.add_argument("--grant-days", "--envelope-days", dest="grant_days", type=int, default=30,
+                                         help="Project standing grant validity in days for step 3 (default 30; --envelope-days = legacy alias)")
+    onboarding_guide_parser.add_argument("--max-tasks", type=int, default=50, help="Project standing grant total business cards for step 3 (default 50)")
     onboarding_guide_parser.add_argument("--skip-preflight", action="store_true", help="AIPOS-F263: do not run the local installation self-check (`lybra setup check`) at the top of the guide; the guide then only names the command (e.g. when reading the guide on a machine that is not the one being set up)")
     onboarding_guide_parser.add_argument("--json", action="store_true", help="Output JSON")
     onboarding_check_parser = onboarding_subparsers.add_parser("check", help="Check prerequisites for a specific onboarding step")
     onboarding_check_parser.add_argument("project_name", help="Project name")
-    onboarding_check_parser.add_argument("--step", type=int, required=True, help="Guide step number to check prerequisites for (0 = the guide's preflight, i.e. `lybra setup check` ✗ items; 1-9 = same numbering as onboarding guide)")
+    onboarding_check_parser.add_argument("--step", type=int, required=True, help="Guide step number to check prerequisites for (0 = the guide's preflight, i.e. `lybra setup check` ✗ items; 1-11 = same numbering as onboarding guide)")
     onboarding_check_parser.add_argument("--home-root", help="Governance home root")
     onboarding_check_parser.add_argument("--workspace-dir", help="Workstation directory")
     onboarding_check_parser.add_argument("--json", action="store_true", help="Output JSON")
@@ -6709,7 +6710,7 @@ def main(argv: list[str] | None = None) -> int:
                     executor_mode=args.executor_mode,
                     owner_workspace=args.owner_workspace,
                     owner_connection_json=args.owner_connection_json,
-                    envelope_days=args.envelope_days,
+                    grant_days=args.grant_days,
                     max_tasks=args.max_tasks,
                     run_preflight=not args.skip_preflight,  # AIPOS-F263 件③: 前置检查 = lybra setup check 摘要
                 )
@@ -6722,6 +6723,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(format_guide_text(guide))
             return 0
         elif args.onboarding_command == "check":
+            from tools.aipos_cli.onboarding import STEP as _onboarding_step
             from tools.aipos_cli.setup_check import run_setup_check
 
             result = validate_step_prerequisites(
@@ -6729,7 +6731,7 @@ def main(argv: list[str] | None = None) -> int:
                 project_name=args.project_name,
                 home_root=args.home_root,
                 workspace_dir=args.workspace_dir,
-                preflight=run_setup_check() if args.step == 0 else None,  # AIPOS-F263 件③: --step 0 = 前置检查(setup check ✗ 项)
+                preflight=run_setup_check() if args.step == _onboarding_step["preflight"] else None,  # AIPOS-F263 件③: --step 0 = 前置检查(setup check ✗ 项; 步号读 onboarding.STEP)
             )
             if args.json:
                 print(render_json(result))

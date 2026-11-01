@@ -186,7 +186,7 @@ def _lybra_args(step: dict) -> list:
 
 @pytest.fixture
 def frozen_guide_clock(monkeypatch: pytest.MonkeyPatch):
-    """AIPOS-F189 件①(gap #166): 向导的信封 `--expires-at` = 当前时刻 + envelope_days(秒精度), 同一测试里多次生成再逐字比较
+    """AIPOS-F189 件①(gap #166): 向导的授权(原信封)`--expires-at` = 当前时刻 + grant_days(秒精度), 同一测试里多次生成再逐字比较
     会在跨秒边界时偶发不一致。冻结被测代码既有的时钟入口(onboarding 模块引用的 clock.utc_now)于一次取值, 不另造时间源。"""
     import tools.aipos_cli.onboarding as onboarding
 
@@ -217,14 +217,21 @@ def test_item3_guide_codex_vs_claude_code_default(frozen_guide_clock):
     assert [a.command for a in _lybra_args(cx["steps"][4])] == ["onboarding"]
     blob = json.dumps([cx4, cx["steps"][4]], ensure_ascii=False)
     assert ".claude" not in blob and "claude-code" not in blob
-    # 实例名: 顾问 host 段 = --advisor-host 短名; 工位仍按 --host-segment
-    assert cx["instances"] == {"advisor": "advisor.f129-probe.mac-probe", "executor": "exec.f129-probe.devbox",
-                               "auditor": "audit.f129-probe.devbox"}
+    # 实例名: 顾问 host 段 = --advisor-host 短名; 工位仍按 --host-segment。AIPOS-F262 件②: 接入恒按执行分工——子 agent 执行者主机段 =
+    # 顾问会话所在机, pi 执行工位主机段 = 工位所在机(与子 agent 执行者同名时加 -pi 区分)
+    assert cx["instances"] == {"advisor": "advisor.f129-probe.mac-probe", "executor": "exec.f129-probe.mac-probe",
+                               "pi_executor": "exec.f129-probe.devbox", "auditor": "audit.f129-probe.devbox"}
     assert cc["instances"]["advisor"] == "advisor.f129-probe.devbox"
     assert cx["advisor_harness"] == {"kind": "codex", "host": "mac-probe.local", "dir": None}
-    # 其余各步与 claude-code 一致(除顾问实例名替换)
-    for n in (1, 2, 3, 6, 7, 8, 9):
+    # 其余与顾问 harness 无关的步与 claude-code 一致(除顾问实例名替换); AIPOS-F262: 授权主机 / 子 agent 执行者 / pi 执行工位实例名 / 执行分工
+    # 随顾问会话所在机而变(第 3 / 7 / 8 / 9 / 11 步), 不在此逐字比较
+    from tools.aipos_cli.onboarding import STEP
+
+    for n in (STEP["project"], STEP["repos"], STEP["auditor"], STEP["sync"]):
         assert cx["steps"][n - 1]["command"].replace("mac-probe", "devbox") == cc["steps"][n - 1]["command"], n
+    sub = _lybra_args(cx["steps"][STEP["subagent_executor"] - 1])
+    assert [(a.executor_mode, a.harness, a.harness_host, a.instance) for a in sub] == [
+        ("subagent", "codex", "mac-probe.local", "exec.f129-probe.mac-probe")] * 2
     # 带 --advisor-dir 时如实写 --harness-dir(他机路径不校验)
     cxd = generate_onboarding_guide(**BASE, advisor_harness="codex", advisor_host="mac-probe", advisor_dir="/Users/probe/hbj advisor")
     assert _lybra_args(cxd["steps"][3])[0].harness_dir == "/Users/probe/hbj advisor"
@@ -294,7 +301,7 @@ def test_range_codex_advisor_enroll_lands_governance_root(probe_range: Range):
     r = probe_range
     gov = r.hroot / "lybra-probe"
     guide_args = (f"lybra-probe --repo app={r.session}/app --default-repo app --advisor-harness codex --advisor-host mac-probe "
-                  f"--host-segment devbox --envelope-days 7 --max-tasks 20")
+                  f"--host-segment devbox --grant-days 7 --max-tasks 20")
     guide = json.loads(r.sh(f"lybra onboarding guide {guide_args} --json"))
     assert guide["instances"]["advisor"] == "advisor.lybra-probe.mac-probe"
     for step in guide["steps"][:5]:
@@ -311,7 +318,7 @@ def test_range_codex_advisor_enroll_lands_governance_root(probe_range: Range):
     print("[靶场·治理根 .lybra/role 原文]\n" + role_text)
     role = json.loads(role_text)
     assert role["harness"] == {"kind": "codex", "dir": None, "host": "mac-probe"}
-    assert role["instance"] == "advisor.lybra-probe.mac-probe" and role["owner_policy_ref"] == guide["policies"]["driver"]
+    assert role["instance"] == "advisor.lybra-probe.mac-probe" and role["owner_policy_ref"] == guide["authorization"]["authorization_id"]
     assert (gov / ".lybra" / "connection.json").is_file()
     assert not (gov / ".pi").exists() and not (gov / "AGENTS.md").exists()  # 未建 .pi 接线 / 未落章程
     claude = sorted(str(p) for base in (r.home, r.tmp) for p in base.rglob(".claude"))

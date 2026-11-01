@@ -346,6 +346,12 @@
               "type": "string",
               "default": "5_tasks/validation_root_helpers",
               "description": "AIPOS-F203 件①: 验证 helper 按 run 固定的快照库(相对治理根或绝对; 内容寻址, 文件名 = roles.schema write_boundary.validation_root.helper_pinning.snapshot_filename, 非代码扩展名, 遵 AIPOS-F195 治理仓零代码文件; 缺省不放 records/ 下——records/** 新文件须带记录 frontmatter(护栏 B④), 快照须与 helper 原文逐字节一致)。`project validation-root run-start --confirm` 把当时部署的 helper 原文存一份(同摘要已在 = 复用, 内容不符 = 拒 VR_HELPER_SNAPSHOT_INVALID), 本 run 记录 runs[].helper_sha256 记其摘要; 该 run 的 init-run / src-verify / sim-* / evidence-* 命令与 `validation-root helper --id <声明> --run-id <run>` 一律下发这份快照, 产品升级不改进行中 run。缺省 = 行为对既有项目只是多出该目录; 快照随 run-start 同一落账提交(post_write_landing.commands.project_writers)。唯一读取口 workspace_config.project_paths; 读写唯一实现 validation_root.pin_helper_snapshot / run_helper。"
+            },
+            "workstations_root": {
+              "type": "string",
+              "optional": true,
+              "default_user_home": "lybra-workstations/{project}",
+              "description": "AIPOS-F262 件③: 本项目新接入工位的缺省目录根——`lybra onboarding guide` 给 pi 执行工位 = <本键>/executor、审计工位 = <本键>/auditor(角色类名; 显式 --workspace-dir / --auditor-dir 优先)。须为治理根与 home 根之外的绝对路径(可用 ~/ 开头; 工位目录含工位凭据, 不得进治理仓): 落在其内 = 向导拒并给出口。未声明 = 用户家目录下 default_user_home 模板(占位 {project} = 项目名; 即 ~/lybra-workstations/<项目>)——原缺省 ~/<项目>-executor / ~/<项目>-auditor 直放家目录退役。只影响新接入: 已接入工位的位置以接入登记(land 事件 workstation=)为准, 不迁移。唯一读取口 workspace_config.project_paths(本键可选, 未声明 = None); 缺省与校验唯一实现 onboarding.workstation_dirs。写入口 = `lybra project set-paths <项目> --key workstations_root --value <绝对路径>`(两阶段)。"
             }
           }
         },

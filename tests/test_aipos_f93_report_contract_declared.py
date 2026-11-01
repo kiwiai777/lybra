@@ -233,13 +233,17 @@ def test_item2_enroll_delivery_single_render_gate_cli_guide(tmp_path):
     # 向导: AIPOS-F151 起工位 / 顾问接入 = enroll-deliver(唯一渲染 render_enroll_deliver_command, 码不出进程), 不再示例 --code 兑换
     guide = generate_onboarding_guide("probe", home_root=str(tmp_path / "home"), workspace_dir=str(tmp_path / "ws-exec"),
                                       auditor_dir=str(tmp_path / "ws-audit"), advisor_dir=str(tmp_path / "adv"))
-    step6 = next(s for s in guide["steps"] if s["step_number"] == 6)
+    from tools.aipos_cli.onboarding import STEP  # AIPOS-F262: pi 执行工位接入步(步号唯一声明), 授权引用 = 项目常设授权 ID
+
+    step6 = next(s for s in guide["steps"] if s["step_number"] == STEP["pi_executor"])
     gov = guide["governance_root"]
+    pi_exec = guide["instances"]["pi_executor"]
     assert render_enroll_deliver_command(["lybra", "roles", "--workspace-root", gov], role="executor",
-                                         instance=guide["instances"]["executor"], governance_root=gov, workspace=str(tmp_path / "ws-exec"),
-                                         extra=["--gate-url", guide["gate_url"], "--ttl", "86400", "--actor", guide["instances"]["advisor"],
-                                                "--owner-authorization-ref", guide["policies"]["executor"], "--reason",
-                                                "'Onboarding probe executor'"],  # AIPOS-F157: --actor = 签发实例(顾问)
+                                         instance=pi_exec, governance_root=gov, workspace=str(tmp_path / "ws-exec"),
+                                         extra=["--executor-mode", "workstation", "--gate-url", guide["gate_url"], "--ttl", "86400",
+                                                "--actor", guide["instances"]["advisor"],
+                                                "--owner-authorization-ref", guide["authorization"]["authorization_id"], "--reason",
+                                                f"'Onboarding probe {pi_exec}'"],  # AIPOS-F157: --actor = 签发实例(顾问)
                                          phase="--dry-run") in step6["commands"]
     assert "--code" not in json.dumps(guide["steps"], ensure_ascii=False)
     # 门: 动词说明 / 预演 confirm_output 同一渲染

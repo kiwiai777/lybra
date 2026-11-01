@@ -34,7 +34,6 @@
 {"file": "tools/aipos_cli/verb_contract.py", "kind": "def", "name": "validate_kickoff_verbs", "reason": "存量(AIPOS-F216 R9 起始盘点): 产品代码零引用(AST + 分派指针); 归后续卡定夺删除或接上产品调用方, 只剩测试调用 = 连同测试改调现行入口或删除"}
 {"file": "tools/aipos_cli/verb_contract.py", "kind": "def", "name": "validate_verb_usage", "reason": "存量(AIPOS-F216 R9 起始盘点): 产品代码零引用(AST + 分派指针); 归后续卡定夺删除或接上产品调用方, 只剩测试调用 = 连同测试改调现行入口或删除"}
 {"file": "tools/aipos_cli/workspace_config.py", "kind": "def", "name": "default_dispatch_mode", "reason": "存量(AIPOS-F216 R9 起始盘点): 产品代码零引用(AST + 分派指针); 归后续卡定夺删除或接上产品调用方, 只剩测试调用 = 连同测试改调现行入口或删除"}
-{"file": "tools/aipos_cli/workspace_config.py", "kind": "def", "name": "global_config_active_project", "reason": "存量(AIPOS-F216 R9 起始盘点): 产品代码零引用(AST + 分派指针); 归后续卡定夺删除或接上产品调用方, 只剩测试调用 = 连同测试改调现行入口或删除"}
 {"file": "tools/distribute_tools.py", "kind": "def", "name": "_fingerprint_diff", "reason": "存量(AIPOS-F216 R9 起始盘点): 产品代码零引用(AST + 分派指针); 归后续卡定夺删除或接上产品调用方, 只剩测试调用 = 连同测试改调现行入口或删除"}
 {"file": "tools/distribution_manifest.py", "kind": "def", "name": "write_manifest", "reason": "存量(AIPOS-F216 R9 起始盘点): 产品代码零引用(AST + 分派指针); 归后续卡定夺删除或接上产品调用方, 只剩测试调用 = 连同测试改调现行入口或删除"}
 {"file": "tools/lybra_tui/copilot.py", "kind": "def", "name": "build_llm", "reason": "存量(AIPOS-F216 R9 起始盘点): 产品代码零引用(AST + 分派指针); 归后续卡定夺删除或接上产品调用方, 只剩测试调用 = 连同测试改调现行入口或删除"}

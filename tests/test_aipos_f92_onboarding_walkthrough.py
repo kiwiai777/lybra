@@ -12,6 +12,8 @@
     无部署机制的产品仓部署不适用(deploy_status=skipped)。另: state lint 审计卡终态 = 门生裁决(不报「无 closure」断层)。
 
 test_walkthrough_* = 隔离靶场(临时 HOME / 临时 home 根 / 两个临时产品仓 / 自起临时门 `lybra serve`)按 guide 原样走到一张卡结案。
+AIPOS-F262 起向导为现行流程(十一步): 第 3 步 Owner 签项目常设授权(取代三信封), 第 6 / 7 / 8 步按执行分工接入审计工位 / pi 执行工位 /
+子 agent 执行者, 第 9 步 set-execution, 第 10 步 sync + 自检, 第 11 步首卡(loop 不带信封, 自找项目授权)。
 token 永不上屏(只断言指纹/记录); 注册码只在进程内传递。
 """
 from __future__ import annotations
@@ -305,16 +307,18 @@ def test_walkthrough_guide_onboards_new_project_to_first_card_completed(probe_ra
     gov = r.hroot / "lybra-probe"
     exec_ws, audit_ws = r.home / "kiwiai-pi" / "probe-executor", r.home / "kiwiai-pi" / "probe-auditor"
     guide_args = (f"lybra-probe --repo app={r.session}/app --repo lib={r.session}/lib --default-repo app --advisor-dir {r.session} "
-                  f"--workspace-dir {exec_ws} --auditor-dir {audit_ws} --envelope-days 7 --max-tasks 20")
+                  f"--workspace-dir {exec_ws} --auditor-dir {audit_ws} --grant-days 7 --max-tasks 20")
     text = r.sh(f"lybra onboarding guide {guide_args}")
     assert "Owner 一次性动作 2 条: Step 3, Step 4" in text and f"http://127.0.0.1:{r.mcp_port}" in text
     guide = json.loads(r.sh(f"lybra onboarding guide {guide_args} --json"))
     assert guide["home_root"] == str(r.hroot) and guide["home_root_source"] == "环境变量 LYBRA_HOME_ROOT"
     assert guide["owner_actions"] == [3, 4]
 
+    from tools.aipos_cli.onboarding import STEP
+
     fills: dict[str, str] = {}
     for step in guide["steps"]:
-        if step["step_number"] == 9:
+        if step["step_number"] == STEP["first_card"]:
             break
         texts = step["commands"] if step.get("commands") else [step["command"]]
         for line in (l.strip() for t in texts for l in t.splitlines()):
@@ -327,34 +331,42 @@ def test_walkthrough_guide_onboards_new_project_to_first_card_completed(probe_ra
                 role = re.search(r"--role (\w+)", line).group(1)
                 fills[f"<{role.upper()}_CODE>"] = CODE_RE.findall(out)[0]
 
-    # 件①: 三张信封门生落盘 + Owner 指纹(无 token 原文)
-    for pid in guide["policies"].values():
-        assert (gov / "5_tasks" / "policies" / f"{pid}.md").is_file()
-        assert (gov / "5_tasks" / "records" / "owner_decisions" / f"envelope-{pid}.md").is_file()
+    # 件①(AIPOS-F262): 项目常设授权门生落盘(取代三张信封)+ Owner 指纹(无 token 原文); 无信封
+    auth = guide["authorization"]["authorization_id"]
+    assert (gov / "5_tasks" / "authorizations" / auth / "r0001.md").is_file()
+    assert (gov / "5_tasks" / "records" / "owner_decisions" / f"grant-{auth}-r0001.md").is_file()
+    assert not (gov / "5_tasks" / "policies").exists() or not list((gov / "5_tasks" / "policies").glob("*.md"))
     # 件②: 顾问凭据在治理根, 顾问技能在会话目录 .claude/skills
     role = json.loads((gov / ".lybra" / "role").read_text(encoding="utf-8"))
-    assert role["harness"] == {"kind": "claude-code", "dir": str(r.session)} and role["owner_policy_ref"] == guide["policies"]["driver"]
+    assert role["harness"] == {"kind": "claude-code", "dir": str(r.session)} and role["owner_policy_ref"] == auth
+    # AIPOS-F262 件②: 执行分工已声明(三者齐)
+    execution = json.loads((gov / "project.json").read_text(encoding="utf-8"))["execution"]
+    assert (execution["subagent_executor"], execution["pi_executor"], execution["auditor"]) == (
+        guide["instances"]["executor"], guide["instances"]["pi_executor"], guide["instances"]["auditor"])
     skills = sorted(p.name for p in (r.session / ".claude" / "skills").iterdir())
     print("[②·会话目录技能]", skills)
     assert {"advisor-commands", "lybra-onboarding", "truth-navigator"} <= set(skills)
     assert (exec_ws / ".pi" / "extensions" / "go.ts").is_symlink()  # 首个工位 go.ts 由 sync 补挂
 
-    # Step 9: 发卡 → loop(工位由本夹具扮演: my-tasks 选卡 → 写产物)
+    # 首卡: 发卡 → loop(工位由本夹具扮演: my-tasks 选卡 → 写产物)。代码卡显式交 pi 执行工位(卡稿 harness=pi; 执行分工允许, 夹具无子 agent)
+    pix = guide["instances"]["pi_executor"]
     _write(r.session / "cards" / "probe-1.json", json.dumps({"frontmatter": {
         "task_id": "PROBE-1", "title": "PROBE-1 greet", "project": "lybra-probe",
-        "assigned_to": guide["instances"]["executor"], "agent_instance": guide["instances"]["executor"],
-        "context_bundle": guide["instances"]["executor"], "task_mode": "code", "task_class": "simple", "priority": "medium",
+        "assigned_to": pix, "agent_instance": pix,
+        "context_bundle": pix, "task_mode": "code", "task_class": "simple", "priority": "medium",
         "status": "pending", "created_by": guide["instances"]["advisor"], "needs_owner": False, "output_target": "src/, tests/",
         "artifact_policy": "formal_write", "claim_policy": "assigned_agent_only", "audit": "required",
         "audit_by": guide["instances"]["auditor"], "harness": "pi",
         "lane": {"repo": "app", "paths": ["src/", "tests/"], "roles": ["executor"]}}, "body": "# PROBE-1\n"}))
     fills.update({"<CARD_DRAFT_JSON>": str(r.session / "cards" / "probe-1.json"), "<DRAFT_PATH>": "5_tasks/drafts/probe-1.md",
                   "<TASK_ID>": "PROBE-1", "<卡号正则>": "PROBE-[0-9]+"})  # AIPOS-F252 件①: 首卡前声明卡号形状(Owner 确认的值)
-    step9 = [l.strip() for l in guide["steps"][8]["command"].splitlines() if l.strip() and not l.startswith("#")]
+    step9 = [l.strip() for l in guide["steps"][STEP["first_card"] - 1]["command"].splitlines() if l.strip() and not l.startswith("#")]
     loop_cmd = None
     for line in step9:
         for k, v in fills.items():
             line = line.replace(k, v)
+        if line in ("pi", "/go") or line.startswith("cd ") or " kickoff " in line:
+            continue  # 靶场无 pi / 无子 agent: 工位由本夹具扮演(kickoff 只对子 agent 代码卡)
         if line.startswith("lybra loop"):
             loop_cmd = line + " --max-wait 3 --interval 0.5"
             continue
@@ -390,9 +402,9 @@ def test_walkthrough_guide_onboards_new_project_to_first_card_completed(probe_ra
     # AIPOS-F159 件①: 第 2 步 set-repos --confirm 写后即经同一提交口落账(提交信息含子命令与项目名), 向导随后的核账命令 = PASS no-op
     assert "chore(governance): N6 收账 PROBE-1" in hlog and hlog.count("治理批次更新") >= 1
     assert "chore(governance): 项目配置落账 set-repos lybra-probe" in hlog
-    # AIPOS-F158 件①: 向导第 3 步 Owner 签信封(真门 envelope 路径)后, 门生记录与 decision_log 指针随签发即经同一提交口落账
-    assert "chore(governance): 信封签发落账 " in hlog
-    assert _git(r.hroot, "status", "--porcelain", "-uall", "--", "lybra-probe/5_tasks/policies", "lybra-probe/5_tasks/records/owner_decisions",
+    # AIPOS-F158 件① / AIPOS-F262: 向导第 3 步 Owner 签项目授权(真门 owner_decision_record 路径)后, 门生记录与 decision_log 指针随签发即经同一提交口落账
+    assert f"chore(governance): 项目授权落账 {auth}" in hlog and "chore(governance): 项目配置落账 set-execution lybra-probe" in hlog
+    assert _git(r.hroot, "status", "--porcelain", "-uall", "--", "lybra-probe/5_tasks/authorizations", "lybra-probe/5_tasks/records/owner_decisions",
                 "lybra-probe/governance/decision_log") == ""
     assert _git(r.hroot, "rev-parse", "HEAD") == _git(r.hroot.parent / f"{r.hroot.name}-remote.git", "rev-parse", "main")
     assert _git(r.hroot, "status", "--porcelain", "-uall", "--", "lybra-probe/5_tasks/queue", "lybra-probe/5_tasks/records/claims/PROBE-1",

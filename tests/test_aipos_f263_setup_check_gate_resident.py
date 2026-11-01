@@ -370,5 +370,7 @@ def test_guide_function_default_does_not_probe(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sc, "run_setup_check", _boom)
     guide = generate_onboarding_guide("demo", home_root=str(tmp_path / "hr"), gate_url="http://127.0.0.1:7118")
-    assert guide["preflight"]["ran"] is False and guide["total_steps"] == 9
+    from tools.aipos_cli.onboarding import STEP  # AIPOS-F262: 步号唯一声明(十一步; 前置检查 STEP["preflight"] = 0 不占业务步号)
+
+    assert guide["preflight"]["ran"] is False and guide["total_steps"] == max(STEP.values())
     assert "本次未运行自检" in format_guide_text(guide)
