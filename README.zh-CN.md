@@ -64,7 +64,9 @@ lybra setup check
 
 `lybra setup check` 是接入向导开头跑的同一道只读安装自检：七项 —— Python ≥ 3.10、Node.js ≥
 18、git、**pi** 在 PATH 且已配模型、门在跑且可达、门常驻服务 —— 每项 ✓ / ✗ / ⚠ 加出口
-行；任何 ✗ 即退出码 1 并给出修复提示。绝不读凭据与密钥文件。
+行；任何 ✗ 即退出码 1 并给出修复提示。绝不读凭据与密钥文件。看板「设置自检」页显示同一
+结果（看板首页与接入页的一行 ✓N · ✗N · ⚠N 摘要链接到该页）；常驻门下,「门常驻」项还会
+核对已装单元的 PATH 是否含 pi 所在目录。
 
 ## 项目如何运转
 
@@ -124,7 +126,9 @@ publish → lybra loop: 认领(门建卡工作树)
 [快速上手](QUICKSTART.zh-CN.md)。
 
 其他界面:`lybra board`(本地看板,缺省端口 7117;`lybra board open` 以一次性票据打开)与
-`lybra tui`(可选终端客户端;需从 PyPI 安装 `textual>=4.0`——`lybra` 本体只发 npm)。macOS
+`lybra tui`(可选终端客户端;需从 PyPI 安装 `textual>=4.0`——`lybra` 本体只发 npm)。看板
+接入页还提供「新建项目」——仅 Owner 登录会话,先在一次性副本里预演目录树与 `project.json`
+全文（零写入）再确认;与 `lybra project new` 同一实现外加落账,建成后清单标出下一步。macOS
 某些 Python 的缺省 CA 路径为空时,TUI 的 HTTPS 需安装 `certifi`(或设 `SSL_CERT_FILE`);
 Lybra 绝不关闭证书校验。
 
@@ -132,7 +136,9 @@ Lybra 绝不关闭证书校验。
 
 如实划界：**门常驻安装已产品化** —— `lybra serve install`（Linux：systemd --user 单元；macOS：
 launchd agent，launchd 路径尚未在真机实跑验证）`--dry-run` 预演、`--confirm` 安装；手写单元
-只报告、绝不接管。尚未产品化：跨机隧道
+只报告、绝不接管。单元在安装时固化安装者的 PATH —— 请在能找到 `pi` 的终端里跑
+`serve install`;之后 pi 换了位置,用 `lybra serve uninstall --confirm` 加
+`lybra serve install --confirm` 重装刷新。尚未产品化：跨机隧道
 （手工配置 ssh）、以及无法触达治理根机器的云平台型顾问（顾问必须能在治理机上跑本地命令、或
 能 ssh 进治理机）。全部已披露暂缓 / 纪律持有项收录于
 **[`docs/v1_disclosure.md`](docs/v1_disclosure.md)**。

@@ -46,7 +46,11 @@ lybra setup check
   **git** · **pi** on PATH · **pi's configured models** · **gate up and reachable** · **resident
   gate service installed**. Any ✗ exits 1; failure lines carry their exit — the unreachable-gate
   line names both the foreground start and the resident install commands. Probe another gate
-  address with `--gate-url`; `--json` prints the structured result the board reuses.
+  address with `--gate-url`; `--json` prints the structured result the board reuses. The board's
+  **Setup check** page shows the same result — the board home and onboarding pages carry a
+  one-line ✓N · ✗N · ⚠N summary linking to it, and when pi or its models are missing it shows
+  the install command. With a resident gate, its gate-service item also checks the installed
+  unit's `PATH` covers pi's directory.
 
 ## Step 2 — Create the project (advisor)
 
@@ -70,6 +74,12 @@ lybra project set-repos my-project --repo app=~/code/my-project --confirm
 - A **Codex** advisor: add `--advisor-harness codex` to the guide command.
 - Check any step's state: `lybra onboarding check my-project --step 2` (`--step 0` = the
   pre-flight's ✗ items; steps use the guide's 1–11 numbering).
+- Prefer the board? The Owner can also create the project on the board's onboarding page —
+  **New project** (an Owner login session only) takes the project name and an optional
+  code-repo path, previews the directory tree and the full `project.json` in a throwaway copy
+  (zero real writes), then confirms: same implementation as `lybra project new` plus landing,
+  after which the onboarding checklist lists the project with the next step marked. Continue
+  from there with the guide command above.
 
 ## Step 3 — Start the gate (Owner)
 
@@ -95,10 +105,22 @@ lybra serve --workspace-root ~/.lybra/projects/my-project install --confirm
   `serve start` is reported and never taken over (`--confirm` refused). Remove what install
   built with `lybra serve --workspace-root ~/.lybra/projects/my-project uninstall --confirm`
   (hand-written units are never touched).
+- The unit carries the installer's `PATH` at install time — the preview lists every directory
+  it will write and marks whether pi / node / git resolve inside it. If pi lives under nvm, an
+  npm global prefix or `~/.local/bin`, run `serve install` from a terminal where `pi` is found;
+  if pi moves afterwards, refresh the unit with `uninstall --confirm` then `install --confirm`
+  (the existing unit is never overwritten in place).
 - Expected: the **board** serves on `127.0.0.1:7117` and the **gate** (MCP) on `127.0.0.1:7118`;
   `lybra serve --workspace-root ~/.lybra/projects/my-project status` prints the redacted status
   (token values are never printed). Verify with `lybra setup check` — the gate item turns ✓.
   Port busy? See the FAQ.
+- Stopping the gate — foreground: Ctrl-C, or `lybra serve --workspace-root ~/.lybra/projects/my-project stop`,
+  which stops the supervisor first and then any remaining child processes, reporting each
+  final status (exit 1 if any could not be stopped); after a clean stop, `serve status` shows
+  "not running". Resident unit: `serve stop` sends no signal (the unit's Restart= would relaunch
+  it) — it exits 1 printing the manager's exit (`systemctl --user stop <unit>` on Linux,
+  `launchctl bootout gui/<uid>/<label>` on macOS); disable and remove what install built with
+  `uninstall --confirm`.
 
 ## Step 4 — Sign the project standing authorization (Owner)
 

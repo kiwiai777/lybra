@@ -68,7 +68,10 @@ lybra setup check
 `lybra setup check` is the read-only installation self-check the onboarding guide runs as its
 pre-flight: seven items — Python ≥ 3.10, Node.js ≥ 18, git, **pi** on PATH with configured models,
 the gate up and reachable, the resident gate service — each with ✓ / ✗ / ⚠ and an exit line; any ✗
-exits 1 with the fix hint. It never reads tokens or key files.
+exits 1 with the fix hint. It never reads tokens or key files. The board's **Setup check** page
+shows the same result (a one-line ✓N · ✗N · ⚠N summary on the board home and onboarding pages
+links to it); with a resident gate, its gate-service item also checks the installed unit's `PATH`
+covers pi's directory.
 
 ## How a project runs
 
@@ -132,14 +135,20 @@ covered in the [Quick start](QUICKSTART.md).
 
 Other surfaces: `lybra board` (local dashboard, default port 7117; `lybra board open` opens it with a
 one-time ticket) and `lybra tui` (optional terminal client; install `textual>=4.0` from PyPI —
-`lybra` itself is npm-only). On macOS pythons with empty default CA paths, install `certifi` (or set
+`lybra` itself is npm-only). The board's onboarding page also offers **New project** — an Owner
+login session previews the directory tree and `project.json` in a throwaway copy (zero writes)
+and confirms; same implementation as `lybra project new` plus landing, with the checklist then
+marking the next step. On macOS pythons with empty default CA paths, install `certifi` (or set
 `SSL_CERT_FILE`) for the TUI's HTTPS; Lybra never disables verification.
 
 ## Scope & limits
 
 Honest boundaries: the **resident gate install is productized** — `lybra serve install` (Linux: a
 systemd --user unit; macOS: a launchd agent, not yet verified on real macOS hardware) previews with
-`--dry-run` and installs with `--confirm`; hand-written units are reported, never taken over. Not
+`--dry-run` and installs with `--confirm`; hand-written units are reported, never taken over. The
+unit carries the installer's `PATH` at install time — run `serve install` from a terminal where
+`pi` is found, and if pi moves, refresh the unit with `lybra serve uninstall --confirm` then
+`lybra serve install --confirm`. Not
 yet productized: cross-machine tunnels
 (manual ssh configuration), and cloud-platform advisors that cannot reach the governance-root machine
 (the advisor must be able to run local commands on, or ssh into, the governance machine). Every

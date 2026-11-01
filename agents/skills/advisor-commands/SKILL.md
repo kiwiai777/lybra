@@ -28,7 +28,7 @@ role: advisor
 
 | 阶段 | 职责 | 主要命令 |
 |------|------|----------|
-| **接入(每项目一次)** | 新项目从零到首卡按十一步向导走: 向导开头即跑七项安装自检(任何 ✗ 退出码 1 自带出口), 第 2 步后插起门步(前台 `serve start` 或常驻 `serve install --dry-run`→`--confirm`, 手写单元只报告不接管), Owner 一次性动作仅签常设授权与注册顾问两条 | `lybra onboarding guide <项目名> --repo <仓>=<路径>`, 逐步核验 `lybra onboarding check <项目名> --step <0-11>`(`--step 0` = 自检 ✗ 项) |
+| **接入(每项目一次)** | 新项目从零到首卡按十一步向导走: 向导开头即跑七项安装自检(任何 ✗ 退出码 1 自带出口), 第 2 步后插起门步(前台 `serve start` 或常驻 `serve install --dry-run`→`--confirm`, 手写单元只报告不接管), Owner 一次性动作仅签常设授权与注册顾问两条; 也可由 Owner 在看板接入页「新建项目」直接建(仅 Owner 会话: 预演→确认, 与 `lybra project new` 同一实现+落账, 建成后接入清单标出下一步, 继续照向导做) | `lybra onboarding guide <项目名> --repo <仓>=<路径>`, 逐步核验 `lybra onboarding check <项目名> --step <0-11>`(`--step 0` = 自检 ✗ 项) |
 | **N0 出卡** | 起草与发卡(卡挂路线图里程碑, AIPOS-F171) | `lybra draft create/publish`, `lybra queue amend/withdraw`, `lybra roadmap show/status/add-milestone/add-criterion/set/remove/verify` |
 | **推进** | **Owner 信封授权下, 一条命令把卡从当前节点推到 completed**(产物落盘自动 return→派审→裁决→finalize→close; agent 步只等产物; 信封 `launch_harnesses` 授权时 loop 在工位拉起 harness, 否则手工 `/go`, 见「两种开工模式」) | **`lybra loop --task-id <卡ID>`**(AIPOS-F73D; 替代逐步 `next --run`) |
 | **跟进(持续推进)** | Owner 说一次「推进 <lane>」后不等 Owner 推: 跑 loop → 有界等 → 按产品给的顾问下一动作处理, 只在 owner_needed 停(守则全文在顾问章程「持续推进守则」, 本 skill 不复述) | **`lybra loop status --task-id <卡ID> --wait <秒>`**(AIPOS-F136) |
@@ -929,7 +929,9 @@ lybra history search --advisor <你的顾问实例> --rejected-once --json
 | 手写裁决文件 | 绕过 gate 归因 | `lybra audit-verdict` |
 | 对外消息/交接里留着占位 `<卡ID>` | 接收方冷启动不知道 | 写真实卡 ID(本 skill 的尖括号只是示例占位, 用前替换) |
 | 缺参数自己猜 | 猜错 = 撞墙 | 命令缺参自报,照抄 |
-| 用户报「装不上 / 门连不上」就开猜 | 环境差异猜不中 | 先让门机跑 `lybra setup check`(七项只读自检, 每条 ✗ 自带出口; 探测别的门地址加 `--gate-url <url>`), 照 ✗ 行出口修 |
+| 用户报「装不上 / 门连不上」就开猜 | 环境差异猜不中 | 先让门机跑 `lybra setup check`(七项只读自检, 每条 ✗ 自带出口; 探测别的门地址加 `--gate-url <url>`), 照 ✗ 行出口修; 看板「设置自检」页是同一检查 |
+| Owner 说「看板自检把 pi 报 ✗, 但我终端里 pi 明明在」 | 常驻门看的是单元固化的 PATH, 不是 Owner 终端的 PATH | 看 `lybra setup check`「门常驻」项(单元 PATH 不含 pi 所在目录 = ⚠ 自带出口), 照出口先 `lybra serve uninstall --confirm` 再在能找到 pi 的终端重跑 `lybra serve install --confirm` |
+| 想停常驻门时跑 `lybra serve stop` | 单元由 systemd / launchd 托管(刚停即被重拉), stop 不发信号、退出码 1 只给出口 | 照 stop 输出的出口执行 `systemctl --user stop <单元>` / `launchctl bootout …`; 要停用并拆掉 install 建的单元 = `lybra serve uninstall --confirm` |
 
 ---
 
