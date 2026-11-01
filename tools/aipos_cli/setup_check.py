@@ -5,10 +5,13 @@
   - board_cache_seconds: 看板复用结果的秒数(AIPOS-F267, 声明 setup_check.board)
   - render_setup_check: 人读唯一出口
   - preflight_step: onboarding 向导「前置检查」摘要(✗ 项阻断后续并给出口)
+  - tool_executable: 检查项的可执行名唯一读取口(pi = enums harness launch.argv[0]; node / git = requirements.<id>.argv[0];
+                     AIPOS-F268 gate_resident 单元 PATH 对照同读)
 只读: 不写文件、不连门写、不读 token / 密钥文件内容(门可达只对门基址发一次 GET 声明路径, 永不探 /mcp)。
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -20,7 +23,8 @@ from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 
 check_direct_invocation(__name__)
 
-_DECL_KEYS = ("marks", "items", "labels", "probe_timeout_seconds", "requirements", "pi", "gate", "resident_exit")
+_DECL_KEYS = ("marks", "items", "labels", "probe_timeout_seconds", "requirements", "pi", "gate", "resident_exit",
+              "resident_path_exit", "resident_path_absent")
 #: AIPOS-F267: 看板「设置自检」页复用结果的秒数缺省(config.schema setup_check.board.cache_seconds 缺省时用, 与声明同值)
 BOARD_CACHE_DEFAULT_SECONDS = 60
 
@@ -108,16 +112,30 @@ def _check_versioned(decl: dict[str, Any], item_id: str, timeout: float) -> dict
     return _item(decl, item_id, "ok", f"{out}({where})")
 
 
+def tool_executable(decl: dict[str, Any], item_id: str) -> str:
+    """检查项的可执行名(唯一读取口): pi = enums.schema harness.<pi.harness>.launch.argv[0](与 loop 拉起同一声明);
+    requirements 里带 argv 的项(node / git)= argv[0]。未声明 = SetupCheckError(fail-closed)。"""
+    if item_id == "pi":
+        from tools.aipos_cli.autonomy_policy import launchable_harnesses
+
+        harness = str(decl["pi"]["harness"])
+        template = launchable_harnesses().get(harness) or {}
+        argv = template.get("argv") if isinstance(template.get("argv"), list) else []
+        if not argv:
+            raise SetupCheckError(f"enums.schema harness {harness} launch.argv 未声明, 无从核 pi")
+        return str(argv[0])
+    req = decl["requirements"].get(item_id)
+    argv = req.get("argv") if isinstance(req, dict) else None
+    if not isinstance(argv, list) or not argv:
+        raise SetupCheckError(f"config.schema setup_check.requirements.{item_id}.argv 未声明, 无从得出可执行名")
+    return str(argv[0])
+
+
 def _check_pi(decl: dict[str, Any], timeout: float) -> list[dict[str, Any]]:
-    from tools.aipos_cli.autonomy_policy import launchable_harnesses
     from tools.aipos_cli.harness_launch import harness_model_catalog
 
     spec = decl["pi"]
-    template = launchable_harnesses().get(str(spec["harness"])) or {}
-    argv = template.get("argv") if isinstance(template.get("argv"), list) else []
-    if not argv:
-        raise SetupCheckError(f"enums.schema harness {spec['harness']} launch.argv 未声明, 无从核 pi")
-    exe = str(argv[0])
+    exe = tool_executable(decl, "pi")
     install = spec["install"]
     missing_exit = str(spec["exit_missing"]).replace("{command}", str(install["command"])).replace("{url}", str(install["url"]))
     version, where = _version_of([exe, *[str(a) for a in spec["version_args"]]], timeout)
@@ -166,6 +184,31 @@ def _check_gate(decl: dict[str, Any], workspace_root: Path | None, gate_url: str
     return _item(decl, "gate", "warn", f"{base} 不可达(地址来源: {source}; {how})", str(spec["exit"]))
 
 
+def _resident_path_problem(decl: dict[str, Any], st: dict[str, Any]) -> tuple[str, str] | None:
+    """AIPOS-F268 件②: 已装单元的 PATH(只读解析单元文件, gate_resident.unit_environment)不含 pi 所在目录 = (详情, 出口)。
+    pi 在本进程 PATH 里也找不到 = 不对照(pi 项本身已报 ✗); 单元 PATH 已含能找到 pi 的目录 = 无问题。"""
+    from tools.aipos_cli.gate_resident import path_contains
+
+    unit_env = st.get("unit_environment")
+    exe = tool_executable(decl, "pi")
+    found = shutil.which(exe)
+    if unit_env is None:
+        return (f"单元文件读不出环境, 无从核 PATH 是否含 pi({found or exe})",
+                str(decl["resident_path_exit"]).replace("{pi_dir}", os.path.dirname(found) if found else exe)
+                .replace("{unit_path_value}", "读不出"))
+    unit_path_value = unit_env.get("PATH")
+    if unit_path_value and shutil.which(exe, path=unit_path_value):
+        return None
+    if not found:
+        return None
+    pi_dir = os.path.dirname(found)
+    if unit_path_value and path_contains(unit_path_value, pi_dir):
+        return None
+    shown = unit_path_value if unit_path_value else str(decl["resident_path_absent"])
+    exit_line = str(decl["resident_path_exit"]).replace("{pi_dir}", pi_dir).replace("{unit_path_value}", shown)
+    return f"单元 PATH 不含 pi 所在目录 {pi_dir}(单元 PATH: {shown})", exit_line
+
+
 def _check_resident(decl: dict[str, Any]) -> dict[str, Any]:
     from tools.aipos_cli.gate_resident import resident_status
 
@@ -176,8 +219,13 @@ def _check_resident(decl: dict[str, Any]) -> dict[str, Any]:
     if st.get("installed"):
         state = "在跑" if st.get("active") else "未在跑"
         owner = "本命令生成" if st.get("managed") else "同名但非本命令生成"
-        return _item(decl, "gate_resident", "ok" if st.get("active") else "warn", f"{st['unit_path']}({owner}; {state})",
-                     "单元已装但未在跑: 看 `lybra serve status` 与系统服务日志")
+        detail = f"{st['unit_path']}({owner}; {state})"
+        exits = [] if st.get("active") else ["单元已装但未在跑: 看 `lybra serve status` 与系统服务日志"]
+        path_problem = _resident_path_problem(decl, st)
+        if path_problem:
+            detail += f"; {path_problem[0]}"
+            exits.append(path_problem[1])
+        return _item(decl, "gate_resident", "warn" if exits else "ok", detail, "; ".join(exits) or None)
     if hand:
         names = ", ".join(f"{h['name']}({h['path']})" for h in hand)
         return _item(decl, "gate_resident", "ok", f"检测到已有手写常驻单元 {names}; lybra serve install 不接管")

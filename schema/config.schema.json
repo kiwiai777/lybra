@@ -1537,6 +1537,8 @@
       "exit": "门未在跑或不可达: 前台起门 `lybra serve --workspace-root <治理根> start`(终端常开), 或常驻安装 `lybra serve --workspace-root <治理根> install --dry-run` 预演后 --confirm; 门在他机 = 核对 connection.json mcp.rpc_url / LYBRA_GATE_URL 与网络"
     },
     "resident_exit": "门常驻未安装(不阻断: 也可前台 serve start): `lybra serve --workspace-root <治理根> install --dry-run` 预演将写的单元, 无误后 --confirm",
+    "resident_path_exit": "常驻单元的 PATH 不含 pi 所在目录 {pi_dir}(单元 PATH: {unit_path_value}): 常驻门内看板自检会把 pi 报 ✗、loop 拉 pi 会失败。重跑 lybra serve install --confirm 刷新 PATH(已装单元先 lybra serve uninstall --confirm; 在能找到 pi 的终端里跑)",
+    "resident_path_absent": "(未写 PATH: AIPOS-F268 前安装, 沿用服务管理器缺省)",
     "board": {
       "description": "AIPOS-F267: 看板「设置自检」页(verbs.schema board_readonly_pages.setup)在看板进程内复用 run_setup_check 结果的秒数(该页过期即重跑; 首页 / 接入页摘要过期则先显示上次结果并后台重跑)。缺本键 = setup_check.BOARD_CACHE_DEFAULT_SECONDS(同值); 须为正整数。",
       "cache_seconds": 60
@@ -1556,7 +1558,22 @@
     "environment_file_note": "门进程额外环境(如 pi 模型密钥)写在此文件(KEY=VALUE 每行一条); 本命令只引用其路径, 不创建、不读取其内容; 文件不存在 = 门照常起(systemd EnvironmentFile=- 可选语义; launchd 由 sh 包装按存在才加载)",
     "environment": {
       "LYBRA_HOME_ROOT": "{home_root}",
-      "PYTHONPATH": "{code_root}"
+      "PYTHONPATH": "{code_root}",
+      "PATH": "{install_path}"
+    },
+    "environment_note": "AIPOS-F268 件①: {install_path} = 安装者执行 `serve install` 时的当前 PATH(原样, 不写死任何目录; systemd = Environment=PATH=…, launchd = EnvironmentVariables.PATH)。systemd --user / launchd 缺省 PATH 不含 ~/.local/bin、npm 全局 bin、nvm / volta 等目录, 不写 = 常驻门内看板自检把已装的 pi 报 ✗、loop 在门进程内拉 pi / node / git 找不到。某项渲染为空(如安装者 PATH 为空)= 该项不写进单元(沿用服务管理器缺省)并在预演提示。",
+    "path_check": {
+      "description": "AIPOS-F268 件①②: 单元 PATH 对照。预演逐项列出将写入的 PATH 目录, 并标出 tools 各自在安装者 PATH 中解析到的目录、是否在单元 PATH 内; 安装者 PATH 里找不到某工具 = missing_note 提示(不阻断)。已装单元(本命令生成)的 PATH 与当前 PATH 不一致 = 预演给 drift_note 与「重装以刷新」出口 refresh_exit。setup check 门常驻项读已装单元 PATH(gate_resident.unit_environment 只读解析单元文件), pi 所在目录不在其内 = ⚠ + 出口 setup_check.resident_path_exit。",
+      "tools": [
+        "pi",
+        "node",
+        "git"
+      ],
+      "tools_note": "可执行名不另写: pi = enums.schema harness.<setup_check.pi.harness>.launch.argv[0](与 loop 拉起同一声明), node / git = setup_check.requirements.<id>.argv[0](唯一读取口 setup_check.tool_executable)",
+      "missing_note": "安装者当前 PATH 里找不到 {tool}: 写进单元的 PATH 同样找不到, 常驻门内看板自检 / loop 拉 {tool} 会失败; 装好 {tool} 或把其所在目录加进 PATH 后再装(不阻断)",
+      "empty_note": "环境项 {key} 渲染为空(安装者 {key} 为空), 不写进单元: 门进程沿用服务管理器缺省值",
+      "drift_note": "已装单元 {unit_path} 的 PATH 与当前 PATH 不一致(单元: {unit_value}; 当前: {current_value})",
+      "refresh_exit": "重装以刷新 PATH: `lybra serve uninstall --confirm` 后在能找到 pi 的终端重跑 `{install_confirm}`"
     },
     "module_argv": [
       "-m",
@@ -1683,6 +1700,18 @@
           "stdout_contains": "state = running"
         }
       }
+    }
+  },
+  "serve": {
+    "description": "AIPOS-F268 件③: `lybra serve` 生命周期的最小声明段(原无 serve 段)。stop = `lybra serve stop`(AIPOS-F266)三个限时, 缺省 = F266 原代码常量值(行为不变); 代码只经唯一读取口 service_mode.serve_stop_timeouts 读, 不写常量。须为正数, 写坏 = 读取口报错(fail-closed)。只追加: 新限时 = stop 加一键。",
+    "single_implementation": "tools/aipos_cli/service_mode.py(serve_stop_timeouts 唯一读取口)",
+    "stop": {
+      "supervisor_grace_seconds": 15,
+      "supervisor_grace_note": "stop 对 supervisor 发 SIGTERM 后等其退出的限时(其收尾对每个子进程至多等 child_grace_seconds 再 SIGKILL, 两个子进程 + 余量), 过时 SIGKILL",
+      "child_grace_seconds": 5,
+      "child_grace_note": "子进程 SIGTERM 后等其退出的限时, 过时 SIGKILL; stop 逐个停 state 所记子进程与 supervisor 收尾停子进程同用此值",
+      "kill_confirm_seconds": 3,
+      "kill_confirm_note": "SIGKILL 后确认退出的限时; 仍在 = 未能停止(BLOCK)"
     }
   }
 }

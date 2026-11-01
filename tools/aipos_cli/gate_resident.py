@@ -5,7 +5,10 @@
   - install: --confirm 写文件 → commands.install → 回读 commands.status
   - uninstall: 只删带 managed_marker 的本命令生成文件(先 commands.uninstall)
   - resident_status: 只读(setup check 门常驻项 / serve status 同读)
+  - unit_environment: 只读解析已装单元的环境(systemd Environment= / launchd EnvironmentVariables; AIPOS-F268 件②)
 单元目录从环境(HOME / XDG_CONFIG_HOME)推导, 不假设主机; 不提权、不写系统路径。
+AIPOS-F268 件①: 单元带安装者当前 PATH(声明 environment.PATH = {install_path}); 预演逐项列出 PATH 目录并标出 pi / node / git
+解析到的目录是否在内, 安装者 PATH 里找不到 = 提示; 已装单元 PATH 与当前不一致 = 给「重装以刷新」出口。
 """
 from __future__ import annotations
 
@@ -13,6 +16,7 @@ import os
 import plistlib
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -23,7 +27,8 @@ from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 check_direct_invocation(__name__)
 
 _DECL_KEYS = ("unit_name", "managed_marker", "config_home", "environment_file", "environment", "module_argv",
-              "handwritten_detect", "platforms")
+              "handwritten_detect", "platforms", "path_check")
+_PATH_CHECK_KEYS = ("tools", "missing_note", "empty_note", "drift_note", "refresh_exit")
 _PLATFORM_KEYS = ("kind", "unit_dir", "file_name", "suffix", "commands", "status_active")
 
 
@@ -38,6 +43,8 @@ def gate_resident_declaration() -> dict[str, Any]:
     decl = load_schema("config", code_repo_schema_root()).get("gate_resident")
     if not isinstance(decl, dict) or any(k not in decl for k in _DECL_KEYS):
         raise GateResidentError(f"config.schema.json gate_resident 未声明齐 {list(_DECL_KEYS)}")
+    if not isinstance(decl["path_check"], dict) or any(k not in decl["path_check"] for k in _PATH_CHECK_KEYS):
+        raise GateResidentError(f"config.schema.json gate_resident.path_check 未声明齐 {list(_PATH_CHECK_KEYS)}")
     for name, plat in (decl.get("platforms") or {}).items():
         if not isinstance(plat, dict) or any(k not in plat for k in _PLATFORM_KEYS):
             raise GateResidentError(f"config.schema.json gate_resident.platforms.{name} 未声明齐 {list(_PLATFORM_KEYS)}")
@@ -60,7 +67,9 @@ def _base_values(decl: dict[str, Any], env: Mapping[str, str]) -> dict[str, str]
     home = str(env.get("HOME") or Path.home())
     cfg = decl["config_home"]
     config_home = str(env.get(str(cfg["env"])) or "").strip() or _fill(cfg["default"], {"home": home})
-    values = {"home": home, "config_home": config_home, "unit_name": str(decl["unit_name"])}
+    # AIPOS-F268 件①: 安装者当前 PATH 原样(不写死目录); 调用方给的 env 无 PATH = 空(该环境项不写进单元)
+    values = {"home": home, "config_home": config_home, "unit_name": str(decl["unit_name"]),
+              "install_path": str(env.get("PATH") or "")}
     values["environment_file"] = _fill(decl["environment_file"], values)
     return values
 
@@ -125,7 +134,9 @@ def render_unit(*, workspace_root: Path, home_root: str, code_root: Path, exec_a
     decl, plat, values = pp["decl"], pp["plat"], dict(pp["values"])
     values.update({"marker": str(decl["managed_marker"]), "workspace_root": str(workspace_root), "home_root": str(home_root),
                    "code_root": str(code_root)})
-    env_map = {k: _fill(v, values) for k, v in decl["environment"].items()}
+    rendered = {k: _fill(v, values) for k, v in decl["environment"].items()}
+    env_map = {k: v for k, v in rendered.items() if v}
+    skipped_env = [k for k, v in rendered.items() if not v]  # 渲染为空 = 不写(空 PATH 写进单元比服务管理器缺省更糟)
     if plat["kind"] == "systemd_user":
         sd = {k: v.replace("%", "%%") for k, v in values.items()}
         sd["environment_lines"] = "\n".join(f"Environment={_systemd_quote(f'{k}={v}')}" for k, v in env_map.items())
@@ -154,7 +165,8 @@ def render_unit(*, workspace_root: Path, home_root: str, code_root: Path, exec_a
         text = f"{head}{marker}\n{sep}{rest}"
     else:
         raise GateResidentError(f"gate_resident.platforms.{pp['platform']}.kind {plat['kind']!r} 未实现")
-    return {"platform": pp["platform"], "path": str(pp["unit_path"]), "text": text, "values": values}
+    return {"platform": pp["platform"], "path": str(pp["unit_path"]), "text": text, "values": values, "environment": env_map,
+            "skipped_env": skipped_env}
 
 
 def _exec_line_of(path: Path, kind: str) -> str | None:
@@ -170,6 +182,63 @@ def _exec_line_of(path: Path, kind: str) -> str | None:
     joined = re.sub(r"\\\n", " ", text)
     lines = [ln.split("=", 1)[1] for ln in joined.splitlines() if ln.strip().startswith("ExecStart=")]
     return " ".join(lines) if lines else None
+
+
+def unit_environment(path: Path, kind: str) -> dict[str, str] | None:
+    """AIPOS-F268 件②: 已装单元文件里写的环境(只读解析; setup check / install 预演同读)。
+    systemd: Environment= 行(续行合并, 按 systemd 引号规则拆 KEY=VALUE, %% → %); launchd: plist EnvironmentVariables。
+    文件读不出 / 形坏 = None(调用方按「读不出」报, 不当作空环境)。"""
+    try:
+        if kind == "launchd":
+            data = plistlib.loads(path.read_bytes())
+            env = data.get("EnvironmentVariables") if isinstance(data, dict) else None
+            if env is None:
+                return {}
+            return {str(k): str(v) for k, v in env.items()} if isinstance(env, dict) else None
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except (OSError, ValueError, plistlib.InvalidFileException):
+        return None
+    out: dict[str, str] = {}
+    for line in re.sub(r"\\\n", " ", text).splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("Environment="):
+            continue
+        try:
+            tokens = shlex.split(stripped.split("=", 1)[1], comments=False, posix=True)
+        except ValueError:
+            return None
+        for token in tokens:
+            key, sep, val = token.partition("=")
+            if sep and key:
+                out[key] = val.replace("%%", "%")
+    return out
+
+
+def _path_entries(value: str) -> list[str]:
+    return [p for p in str(value or "").split(os.pathsep) if p]
+
+
+def path_contains(path_value: str | None, directory: str) -> bool:
+    """directory 是否在 PATH 值的目录里(按规范化路径比, 符号链接解析后相同也算)。"""
+    want = {os.path.normpath(directory), os.path.realpath(directory)}
+    return any(os.path.normpath(e) in want or os.path.realpath(e) in want for e in _path_entries(path_value or ""))
+
+
+def path_tool_report(install_path: str, unit_path_value: str | None = None) -> list[dict[str, Any]]:
+    """path_check.tools 各自在安装者 PATH 中解析到的路径 / 目录, 及该目录是否在单元 PATH(缺省 = 将写入的 install_path)内。"""
+    from tools.aipos_cli.setup_check import setup_check_declaration, tool_executable
+
+    decl = gate_resident_declaration()
+    sc_decl = setup_check_declaration()
+    target = install_path if unit_path_value is None else unit_path_value
+    rows = []
+    for tool in decl["path_check"]["tools"]:
+        exe = tool_executable(sc_decl, str(tool))
+        found = shutil.which(exe, path=install_path) if install_path else None
+        directory = os.path.dirname(found) if found else None
+        rows.append({"tool": str(tool), "executable": exe, "resolved": found, "dir": directory,
+                     "in_unit_path": bool(directory) and path_contains(target, directory)})
+    return rows
 
 
 def handwritten_units(*, platform: str | None = None, env: Mapping[str, str] | None = None) -> list[dict[str, str]]:
@@ -231,7 +300,8 @@ def resident_status(*, platform: str | None = None, env: Mapping[str, str] | Non
     status = _run(pp["plat"]["commands"]["status"], pp["values"], env) if installed else None
     return {"supported": True, "platform": pp["platform"], "kind": pp["plat"]["kind"], "unit_path": str(unit_path),
             "installed": installed, "managed": managed, "active": _active(status, pp["plat"]) if status else None,
-            "status_output": status, "handwritten": handwritten_units(platform=pp["platform"], env=env)}
+            "status_output": status, "handwritten": handwritten_units(platform=pp["platform"], env=env),
+            "unit_environment": unit_environment(unit_path, str(pp["plat"]["kind"])) if installed else None}
 
 
 def plan_install(workspace_root: Path, *, connection_json: str | None = None, start_args: list[str] | None = None,
@@ -249,11 +319,31 @@ def plan_install(workspace_root: Path, *, connection_json: str | None = None, st
     path = Path(unit["path"])
     refusals: list[dict[str, str]] = []
     notes: list[str] = []
+    pc = pp["decl"]["path_check"]
+    install_path = unit["values"]["install_path"]
+    for key in unit["skipped_env"]:
+        notes.append(_fill(pc["empty_note"], {"key": key}))
+    path_tools = path_tool_report(install_path)
+    for row in path_tools:
+        if not row["resolved"]:
+            notes.append(_fill(pc["missing_note"], {"tool": row["executable"]}))
+    refresh: dict[str, Any] | None = None
     if path.exists():
         if _is_managed(path, str(pp["decl"]["managed_marker"])):
+            installed_env = unit_environment(path, str(pp["plat"]["kind"]))
+            unit_value = (installed_env or {}).get("PATH")
+            exit_line = f"要改参数: 先 `lybra serve uninstall --confirm` 再重装; 只看现状: `lybra serve status`"
+            if installed_env is None or unit_value != unit["environment"].get("PATH"):
+                shown = "读不出" if installed_env is None else (unit_value if unit_value is not None else "未写 PATH")
+                refresh = {"unit_value": unit_value, "current_value": unit["environment"].get("PATH"),
+                           "exit": _fill(pc["refresh_exit"], {"install_confirm": install_command(ws, "confirm")}),
+                           "unit_tools": path_tool_report(install_path, unit_value or "")}
+                notes.append(_fill(pc["drift_note"], {"unit_path": str(path), "unit_value": shown,
+                                                      "current_value": unit["environment"].get("PATH") or "(空)"}))
+                exit_line = refresh["exit"]
             refusals.append({"code": "UNIT_EXISTS_MANAGED",
                              "reason": f"已存在同名单元 {path}(本命令先前生成), 不覆盖",
-                             "exit": f"要改参数: 先 `lybra serve uninstall --confirm` 再重装; 只看现状: `lybra serve status`"})
+                             "exit": exit_line})
         else:
             refusals.append({"code": "UNIT_EXISTS_FOREIGN",
                              "reason": f"已存在同名文件 {path}, 不是本命令生成(无管理标记), 不覆盖、不接管",
@@ -272,7 +362,8 @@ def plan_install(workspace_root: Path, *, connection_json: str | None = None, st
             "unit_text": unit["text"], "workspace_root": str(ws), "home_root": str(home_root), "home_root_source": home_source,
             "code_root": str(code_root), "environment_file": unit["values"]["environment_file"],
             "commands": commands, "status_command": status_cmd, "refusals": refusals, "notes": notes, "handwritten": hand,
-            "log_dir": unit["values"].get("log_dir")}
+            "log_dir": unit["values"].get("log_dir"), "unit_env_path": unit["environment"].get("PATH"),
+            "path_entries": _path_entries(unit["environment"].get("PATH") or ""), "path_tools": path_tools, "path_refresh": refresh}
 
 
 def install(workspace_root: Path, *, confirm: bool, connection_json: str | None = None, start_args: list[str] | None = None,
@@ -362,6 +453,7 @@ def render_resident_report(report: dict[str, Any]) -> str:
         lines.append(f"代码根: {report.get('code_root')}")
         lines.append(f"环境文件(可选, 只引用不创建): {report.get('environment_file')}")
         if phase == "dry_run":
+            lines.extend(_render_path_section(report))
             lines.append(f"── 将写入 {report.get('unit_path')} 全文 ──")
             lines.extend(str(report.get("unit_text") or "").rstrip("\n").splitlines())
             lines.append("── 全文完 ──")
@@ -388,6 +480,31 @@ def render_resident_report(report: dict[str, Any]) -> str:
         elif op == "serve_uninstall" and phase == "dry_run" and report.get("installed"):
             lines.append("预演无拒因; 确认停用并删除: 同一命令改 --confirm")
     return "\n".join(lines)
+
+
+def _render_path_section(report: dict[str, Any]) -> list[str]:
+    """AIPOS-F268 件①: 预演里的单元 PATH 一节(逐项目录 + pi / node / git 解析到的目录是否在内; 已装单元 PATH 不一致另列)。"""
+    entries = report.get("path_entries") or []
+    if report.get("unit_env_path"):
+        lines = [f"单元 PATH(取自安装者当前 PATH, 共 {len(entries)} 项, 原样写入):"]
+        lines.extend(f"  {i}. {entry}" for i, entry in enumerate(entries, 1))
+    else:
+        lines = ["单元 PATH: 不写(安装者 PATH 为空, 门进程沿用服务管理器缺省)"]
+    for row in report.get("path_tools") or []:
+        if row["resolved"]:
+            mark = "在单元 PATH 内 ✓" if row["in_unit_path"] else "不在单元 PATH 内 ⚠"
+            lines.append(f"  {row['executable']} → {row['resolved']}(目录 {row['dir']}: {mark})")
+        else:
+            lines.append(f"  {row['executable']} → 安装者 PATH 里找不到 ⚠")
+    refresh = report.get("path_refresh")
+    if refresh:
+        lines.append(f"已装单元 PATH: {refresh['unit_value'] if refresh['unit_value'] is not None else '(未写 PATH)'}")
+        for row in refresh.get("unit_tools") or []:
+            if row["resolved"]:
+                lines.append(f"  {row['executable']} 目录 {row['dir']}: "
+                             + ("在已装单元 PATH 内 ✓" if row["in_unit_path"] else "不在已装单元 PATH 内 ⚠"))
+        lines.append(f"出口(重装以刷新): {refresh['exit']}")
+    return lines
 
 
 def render_resident_status_line(status: dict[str, Any]) -> str:
