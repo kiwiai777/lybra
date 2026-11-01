@@ -24,7 +24,6 @@ import json
 import os
 import re
 import shlex
-import signal
 import socket
 import subprocess
 import sys
@@ -38,6 +37,7 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_aipos_f73d_loop_driver import _fm, _write, init_governance_repo  # noqa: E402  — 靶场构件唯一来源
+from tools.aipos_cli.tests import fixture_procs  # noqa: E402  — AIPOS-F265: serve 子进程夹具整组回收
 
 CODE_RE = re.compile(r"LYBRAENROLL1\.[A-Za-z0-9_-]+")
 
@@ -283,9 +283,9 @@ def probe_range(tmp_path: Path):
     init_governance_repo(r.hroot)
     r.sh(f"lybra project new ops --home-root {r.hroot} --actor owner")
     r.mcp_port, r.board_port = _free_port(), _free_port()
-    gate = subprocess.Popen(["lybra", "serve", "--workspace-root", str(r.hroot / "ops"), "start", "--mcp-port", str(r.mcp_port),
-                             "--board-port", str(r.board_port)], cwd=str(tmp_path), env=r.env, start_new_session=True,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    gate = fixture_procs.spawn(["lybra", "serve", "--workspace-root", str(r.hroot / "ops"), "start", "--mcp-port", str(r.mcp_port),
+                                "--board-port", str(r.board_port)], cwd=str(tmp_path), env=r.env,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
         r.sh(f"lybra agent watch --workspace-root {r.hroot / 'ops'} --expect .lybra/service_state.json --timeout 30 --interval 0.5")
         deadline = time.time() + 15  # MCP 端口可连(子进程 bind 晚于 service_state 落盘)
@@ -298,8 +298,7 @@ def probe_range(tmp_path: Path):
                 time.sleep(0.2)
         yield r
     finally:
-        os.killpg(gate.pid, signal.SIGTERM)
-        gate.wait(timeout=20)
+        fixture_procs.reap(gate, grace=20)  # AIPOS-F265: 整组 SIGTERM → 限时 → SIGKILL
 
 
 def test_walkthrough_guide_onboards_new_project_to_first_card_completed(probe_range: Range):

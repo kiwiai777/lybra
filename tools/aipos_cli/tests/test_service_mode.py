@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib import request
 
+from tools.aipos_cli.tests import fixture_procs  # AIPOS-F265: serve / 看板 / 门子进程夹具统一整组回收
 from tools.aipos_cli.service_mode import (
     CONNECTION_REL,
     LOCAL_DIR_REL,
@@ -433,7 +434,7 @@ class ServiceModeTests(unittest.TestCase):
         env = os.environ.copy()
         env["NO_PROXY"] = "127.0.0.1,localhost,::1"
         conn_json = str(self.root / CONNECTION_REL)
-        proc = subprocess.Popen(
+        proc = fixture_procs.spawn(
             [sys.executable, "-m", "tools.aipos_cli.aipos_cli", "--workspace-root", str(self.root),
              "serve", "--connection-json", conn_json, "start",
              "--board-port", str(board_port), "--mcp-port", str(mcp_port)],
@@ -456,14 +457,8 @@ class ServiceModeTests(unittest.TestCase):
                 time.sleep(0.2)
             self.assertEqual(alive, [], f"orphaned children survived SIGTERM: {alive}")
         finally:
-            for pid in child_pids:
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except OSError:
-                    pass
-            if proc.poll() is None:
-                proc.kill()
-            proc.communicate(timeout=5)
+            # AIPOS-F265: 整组回收(supervisor + 看板 + 门; 就绪超时 / 断言失败时 child_pids 还没读到也不留 ppid=1 孤儿)
+            fixture_procs.reap(proc)
 
     def test_serve_stop_kills_without_home_root_or_project(self) -> None:
         # A/F-NEW-a: `serve stop --connection-json X` locates the state + kills recorded PIDs even
@@ -473,7 +468,7 @@ class ServiceModeTests(unittest.TestCase):
         env = os.environ.copy()
         env["NO_PROXY"] = "127.0.0.1,localhost,::1"
         conn_json = str(self.root / CONNECTION_REL)
-        proc = subprocess.Popen(
+        proc = fixture_procs.spawn(
             [sys.executable, "-m", "tools.aipos_cli.aipos_cli", "--workspace-root", str(self.root),
              "serve", "--connection-json", conn_json, "start",
              "--board-port", str(board_port), "--mcp-port", str(mcp_port)],
@@ -504,14 +499,8 @@ class ServiceModeTests(unittest.TestCase):
                 time.sleep(0.2)
             self.assertEqual(alive, [], f"stop did not kill children: {alive}")
         finally:
-            for pid in child_pids:
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except OSError:
-                    pass
-            if proc.poll() is None:
-                proc.kill()
-            proc.communicate(timeout=5)
+            # AIPOS-F265: 整组回收(supervisor + 看板 + 门; 就绪超时 / 断言失败时 child_pids 还没读到也不留 ppid=1 孤儿)
+            fixture_procs.reap(proc)
 
     def test_service_mode_spawn_listens_and_resolves_workspace_without_shell_env(self) -> None:
         board_port = _free_port()
@@ -525,7 +514,7 @@ class ServiceModeTests(unittest.TestCase):
         # the temp workspace via --connection-json so the spawned process stays isolated from the
         # real ~/.lybra (and matches the in-process patched connection_path).
         conn_json = str(self.root / CONNECTION_REL)
-        proc = subprocess.Popen(
+        proc = fixture_procs.spawn(
             [
                 sys.executable,
                 "-m",
@@ -547,8 +536,6 @@ class ServiceModeTests(unittest.TestCase):
             stderr=subprocess.PIPE,
             text=True,
         )
-        stdout = ""
-        stderr = ""
         try:
             _wait_for_port(mcp_port)
             config = json.loads(Path(conn_json).read_text(encoding="utf-8"))
@@ -589,11 +576,9 @@ class ServiceModeTests(unittest.TestCase):
                 timeout=5,
                 check=False,
             )
-            try:
-                stdout, stderr = proc.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.terminate()
-                stdout, stderr = proc.communicate(timeout=5)
+            # AIPOS-F265: 先给 supervisor 5 秒按 `serve stop` 正常退出(读管道), 未退出 / 子进程残留 = 整组回收
+            fixture_procs.reap(proc, settle=5)
+        stdout, stderr = proc.fixture_output
         self.assertEqual(proc.returncode, 0, (stdout, stderr))
 
     def test_service_mode_spawn_listens_on_non_loopback_bind(self) -> None:
@@ -606,7 +591,7 @@ class ServiceModeTests(unittest.TestCase):
         env = os.environ.copy()
         env["NO_PROXY"] = "127.0.0.1,localhost,::1"
         conn_json = str(self.root / CONNECTION_REL)
-        proc = subprocess.Popen(
+        proc = fixture_procs.spawn(
             [
                 sys.executable,
                 "-m",
@@ -636,8 +621,6 @@ class ServiceModeTests(unittest.TestCase):
             stderr=subprocess.PIPE,
             text=True,
         )
-        stdout = ""
-        stderr = ""
         try:
             _wait_for_port(mcp_port)
             config = json.loads(Path(conn_json).read_text(encoding="utf-8"))
@@ -683,11 +666,9 @@ class ServiceModeTests(unittest.TestCase):
                 timeout=5,
                 check=False,
             )
-            try:
-                stdout, stderr = proc.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.terminate()
-                stdout, stderr = proc.communicate(timeout=5)
+            # AIPOS-F265: 先给 supervisor 5 秒按 `serve stop` 正常退出(读管道), 未退出 / 子进程残留 = 整组回收
+            fixture_procs.reap(proc, settle=5)
+        stdout, stderr = proc.fixture_output
         self.assertEqual(proc.returncode, 0, (stdout, stderr))
 
     def test_start_existing_wildcard_config_blocks_without_advertise(self) -> None:

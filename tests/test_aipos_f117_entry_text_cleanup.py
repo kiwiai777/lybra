@@ -37,6 +37,7 @@ LYBRA_BIN = REPO_ROOT / "bin" / "lybra"
 sys.path.insert(0, str(REPO_ROOT))
 
 from tools.aipos_cli.project_structure import emit_yaml  # noqa: E402
+from tools.aipos_cli.tests import fixture_procs  # noqa: E402  — AIPOS-F265: 看板子进程夹具整组回收
 
 
 def _show(line: str) -> None:
@@ -130,7 +131,7 @@ def board_range(tmp_path):
         "config_version": 1, "tokens": [{"role": "owner", "token_ref": "f117-owner", "fingerprint": fp, "scopes": []}],
     }), encoding="utf-8")
     port = _free_port()
-    proc = subprocess.Popen(
+    proc = fixture_procs.spawn(
         [sys.executable, "-m", "web.board.app", "--host", "127.0.0.1", "--port", str(port), "--repo-root", str(repo_root)],
         cwd=str(REPO_ROOT), env=_isolated_env(home, gov_home), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
@@ -148,15 +149,8 @@ def board_range(tmp_path):
         cookie = set_cookie.split(";", 1)[0]
         yield {"base": base, "cookie": cookie, "home": home, "gov_home": gov_home, "repo_root": repo_root, "tmp": tmp_path}
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=10)
-        if proc.stdout:
-            proc.stdout.close()
-    assert proc.poll() is not None  # 看板进程已收尸, 无孤儿
+        fixture_procs.reap(proc, grace=10)  # AIPOS-F265: 整组 SIGTERM → 限时 → SIGKILL(就绪失败 / 断言失败同样回收)
+    assert proc.poll() is not None and fixture_procs.tagged(proc) == []  # 看板进程已收尸, 无孤儿
 
 
 def test_item1_board_import_directory_mode_goes_through_project_new(board_range):
