@@ -1,7 +1,8 @@
 // AIPOS-F269: board write exception 4 "new project" on the onboarding page. The Owner fills a project name (and an optional product repo
 // absolute path) -> POST the single declared write path (body data-pn-write-path) with stage=preview -> show the server's rehearsal (the
 // same implementation as `lybra project new`, run in a throw-away home root: tree + project.json + commit facts) -> confirm with the
-// session-bound preview token -> show the result (created tree, commit line, advisor commands) and a link to the checklist.
+// session-bound preview token -> committed: back to the onboarding page (?created=<name>, banner + "next step"); commit not done:
+// stay on the result (created tree, the commit refusal with its follow-up command, advisor commands) with a link to the checklist.
 // All texts come from the page (body data-pn-texts JSON, board i18n channel); the server decides everything (Owner-only, name check,
 // preview token, audit log, the creation itself). No credentials reach this page.
 (function () {
@@ -132,6 +133,9 @@
         para(t('pn_js_working'));
         post({ workspace: project, code_repo: repo || null, stage: 'confirm', preview_token: preview.preview_token }).then(function (done) {
           if (done.status !== 200 || !done.data.ok) { failure(done); return; }
+          // committed = straight back to the onboarding page (the server-rendered banner names the next step and the advisor
+          // commands); commit not done = stay on the result so the Owner sees why and the follow-up command
+          if ((done.data.landing || {}).landed && done.data.redirect) { window.location.href = langSuffix(done.data.redirect); return; }
           showDone(project, done.data);
         });
       });
