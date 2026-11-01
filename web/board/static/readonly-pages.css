@@ -3888,3 +3888,15 @@ body.rp-page { margin: 0; background: var(--surface-page); color: var(--ink); fo
 .rp-page .ec-pre { white-space: pre-wrap; overflow-x: auto; font-size: var(--text-note); }
 .rp-page .ec-code { white-space: pre-wrap; word-break: break-all; border: var(--border-hairline); padding: 8px; font-size: var(--text-note); }
 .rp-page .ec-once { font-weight: 700; color: var(--state-alert); }
+
+/* AIPOS-F272: "first project grant" / "execution mode" / "pi model" (board write exceptions 6 / 7) next to the onboarding checklist rows */
+.rp-page .ps-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+.rp-page .ps-open, .rp-page .ps-panel-actions button { font: inherit; font-weight: 600; padding: 4px 12px; color: var(--green); cursor: pointer; }
+.rp-page .ps-panel { background: var(--white); border: var(--border-hairline); border-left: var(--accent-bar) solid var(--green);
+  padding: 10px 14px; margin: 8px 0; }
+.rp-page .ps-panel[hidden] { display: none; }
+.rp-page .ps-panel input[type="text"], .rp-page .ps-panel input[type="number"], .rp-page .ps-panel select { font: inherit; min-width: min(24em, 100%); padding: 4px 8px; }
+.rp-page .ps-panel fieldset { border: var(--border-hairline); margin: 6px 0; }
+.rp-page .ps-panel-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.rp-page .ps-pre { white-space: pre-wrap; overflow-x: auto; font-size: var(--text-note); }
+.rp-page .ps-server { color: var(--state-alert); }
