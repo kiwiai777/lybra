@@ -303,6 +303,7 @@ NON_TEST_UNDER_TESTS = {
     "fake_pi.py": "AIPOS-F169 pi 可执行替身(被 F169 夹具以 `pi` 之名放 PATH 首位调用: 假模型清单 / 拉起转 F95 假 harness, 非测试)",
     "ratchet_baseline.py": "AIPOS-F109 件⑤ 棘轮基线 jsonl 读写口(被 f87/f96/F109 夹具导入, 非测试)",
     "conftest.py": "AIPOS-F116 件② pytest 会话层 HOME 隔离(各测试目录, 非测试)",
+    "fixture_procs.py": "AIPOS-F265 件① 夹具子进程(看板 / 门 / serve)共享助手: 新进程组 + 整组回收(被各测试导入, 非测试)",
 }
 CODE_SUFFIXES = (".py", ".sh", ".ts", ".js", ".cjs", ".mjs")
 

@@ -28,6 +28,7 @@ import pytest
 # 确保能导入产品仓模块
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from tools.aipos_cli.tests import fixture_procs  # AIPOS-F265: 门子进程夹具整组回收
 from tools.distribute_tools import (
     execute_distribution,
     distribute_to_harness,
@@ -669,7 +670,6 @@ class TestUnattendedE2EGateLive:
         断到可用性(能调通门), 不是形状 —— tokens:[] 空数组在此必红。
         """
         import time
-        import signal
         repo_root = Path(__file__).resolve().parents[1]
         home, project, owner_token = self._seed_home(tmp_path)
         port = self._free_port()
@@ -678,11 +678,11 @@ class TestUnattendedE2EGateLive:
         env = {**os.environ,
                "PYTHONPATH": str(repo_root),
                "LYBRA_HOME_ROOT": str(home)}
-        gate = subprocess.Popen(
+        gate = fixture_procs.spawn(
             [sys.executable, "-m", "tools.mcp_server", "serve-http",
              "--host", "127.0.0.1", "--port", str(port),
              "--home-root", str(home)],
-            cwd=str(repo_root), env=env, start_new_session=True,
+            cwd=str(repo_root), env=env,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         try:
             # 等门就绪(最多 15s)
@@ -741,14 +741,7 @@ class TestUnattendedE2EGateLive:
             ver = client.call_tool("lybra_gate_version", {})
             assert ver.get("ok") is True, f"落盘凭据调门失败: {json.dumps(ver)[:400]}"
         finally:
-            try:
-                os.killpg(os.getpgid(gate.pid), signal.SIGTERM)
-                gate.wait(timeout=10)
-            except Exception:
-                try:
-                    os.killpg(os.getpgid(gate.pid), signal.SIGKILL)
-                except Exception:
-                    pass
+            fixture_procs.reap(gate, grace=10)  # AIPOS-F265: 整组 SIGTERM → 限时 → SIGKILL
 
 
 if __name__ == "__main__":

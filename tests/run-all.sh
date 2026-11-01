@@ -15,6 +15,8 @@
 #   git status + 关键日志 md5, 只读) + 孤儿进程守卫(测试结束后仍存活的测试后代进程 SIGKILL); 各测试目录 conftest.py 会话层同款 HOME 隔离。
 # AIPOS-F126 事前隔离(主机制): 每个测试文件在沙箱里启动(bwrap 只读绑定 + 独立网络命名空间; 不可用落 Landlock; 都不可用 = 头部明示
 #   「隔离:无, 降级为快照守卫」), 真实 home 根只读, 测试写入当场失败; 沙箱生效时上面的快照守卫只作信息输出, 不判红。
+# AIPOS-F265 夹具回收: 测试起看板 / 门 / serve 子进程一律经共享助手 tools/aipos_cli/tests/fixture_procs(新进程组, 失败 / 超时整组回收);
+#   本清单跑完, 执行器在总结末尾报本轮登记仍存活的夹具进程(有 = ⚠ pid / 命令 / cwd 并回收本轮登记的; 无 = 明示「无」)。
 # 依赖: Python 3 + pytest; Node ≥ 22(TS 夹具类型剥离, 纯 node 内置模块, 无需 npm install)。
 # 输出: 每文件「── <文件> ──」段 + `✓ <文件> PASS` / `✗ <文件> FAIL` 行(与原清单同式样, 基线 grep 不变)。
 set -u
@@ -152,7 +154,6 @@ exit "$overall"
 # lybra-runall: known-failure tools/aipos_cli/tests/test_record_writer.py::RecordWriterTests::test_reopen_with_records_updates_session_when_reference_exists
 # lybra-runall: known-failure tools/aipos_cli/tests/test_service_mode.py::ConnectionLocationTests::test_scopes_unchanged_after_location_move
 # lybra-runall: known-failure tools/aipos_cli/tests/test_service_mode.py::SelectiveRotationTests::test_selective_rotate_on_fresh_workspace
-# lybra-runall: known-failure tools/aipos_cli/tests/test_service_mode.py::ServiceModeTests::test_serve_stop_kills_without_home_root_or_project
 # lybra-runall: known-failure tools/aipos_cli/tests/test_token_rotation.py::TestRotateExecute::test_full_rotation_backup_record_no_plaintext
 # lybra-runall: known-failure tools/aipos_cli/tests/test_writer_flat_contract.py::WriterFlatContractTests::test_publish_record_is_flat
 # lybra-runall: known-failure tools/lybra_tui/tests/test_ai_authoring.py::AiAuthoringTests::test_card_conformant_and_publishable

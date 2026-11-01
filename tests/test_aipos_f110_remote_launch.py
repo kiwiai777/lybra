@@ -341,8 +341,10 @@ def test_item4_single_launch_layer_git_grep():
     _show("[④] git grep start_new_session=True -- tools/:\n" + "\n".join(sessions))
     # AIPOS-F109 件④: run-all 自动发现执行器给每个测试文件独立进程组以便收尾清孤儿(测试执行, 非 harness 拉起层), 显式列出
     # AIPOS-F118 件①: finalize 合并后回归跑测试清单 / async 后台检查(测试执行, 非 harness 拉起层; 唯一拉起口 _popen_group), 显式列出
+    # AIPOS-F265 件①: 测试夹具子进程(看板 / 门 / serve)共享助手——夹具新建进程组以便整组回收(测试夹具, 非 harness 拉起层), 显式列出
     assert [line.split(":", 1)[0] for line in sessions] == [
-        "tools/aipos_cli/harness_launch.py", "tools/aipos_cli/post_merge_regression.py", "tools/aipos_cli/runall_discovery.py"], sessions
+        "tools/aipos_cli/harness_launch.py", "tools/aipos_cli/post_merge_regression.py", "tools/aipos_cli/runall_discovery.py",
+        "tools/aipos_cli/tests/fixture_procs.py"], sessions
     popen = [line for line in grep(r"subprocess\.Popen\(") if "/harness_launch.py" in line or "/loop_driver.py" in line]
     assert [line.split(":", 1)[0] for line in popen] == ["tools/aipos_cli/harness_launch.py"], popen
     ssh_literals = grep(r"\[\"ssh\"")

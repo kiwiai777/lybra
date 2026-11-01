@@ -28,6 +28,11 @@ AIPOS-F116 防护夹具(执行器内建, 每个测试文件前后各取一次, �
     (声明 none / 无可用后端)时保持上述判定, 输出头部明示「隔离:无, 降级为快照守卫」。隔离声明 config.schema test_contract.isolation。
   孤儿进程守卫(件③, gap #12/#25/#55): 测试子进程环境带本轮唯一标记变量(不带 LYBRA_/AIPOS_ 前缀, 嵌套执行器不剥);
     文件结束后仍带标记的存活进程(含另起会话逃出进程组收尸的 web.board.app / serve 子进程)= 泄漏 → SIGKILL 并判红。
+  AIPOS-F265 夹具回收 + 残留报告: 测试起看板 / 门 / serve 子进程一律经共享夹具助手 tools/aipos_cli/tests/fixture_procs
+    (新建进程组; teardown / 超时 / 异常路径对整组 SIGTERM → 限时等待 → SIGKILL, 同一实现 terminate_group); 助手给每个夹具进程环境
+    打登记标签 RUNALL_FIXTURE_TAG=<本轮运行号>:<随机串>(本轮运行号 = 执行器下传的 RUNALL_FIXTURE_RUN; 子孙进程继承)。
+    run-all 结束时按本轮运行号查仍存活的登记夹具进程(fixture_residuals), 有 = 总结末尾逐个列 pid / 命令 / cwd 并标 ⚠,
+    本轮登记的回收(terminate_pids); 无 = 明示「无」。不带本轮登记标签的进程一概不碰(他方 / 生产门 / 别的 run-all)。
 
 用法(由 tests/run-all.sh 调用, cwd = 产品仓根):
   python3 -m tools.aipos_cli.runall_discovery --runall tests/run-all.sh [--governance-root <治理根>] [--list] [--isolation <mode>]
@@ -47,6 +52,7 @@ import site
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -67,6 +73,12 @@ _RULE = "─" * 42
 ISOLATED_HOME_ENV = "RUNALL_ISOLATED_HOME"
 #: 孤儿进程守卫标记变量名前缀(后接本轮随机串, 值 "1"); 故意不用 LYBRA_/AIPOS_ 前缀——嵌套执行器只剥这两类, 外层标记一路下传。
 LEAK_MARK_PREFIX = "RUNALL_LEAK_MARK_"
+#: AIPOS-F265: 本轮运行号环境变量(执行器下传给测试子进程; 共享夹具助手据此给夹具进程打登记标签)。同样不用 LYBRA_/AIPOS_ 前缀。
+FIXTURE_RUN_ENV = "RUNALL_FIXTURE_RUN"
+#: AIPOS-F265: 夹具进程登记标签环境变量(值 = <本轮运行号>:<随机串>; 由 tools/aipos_cli/tests/fixture_procs 写入夹具进程环境)。
+FIXTURE_TAG_ENV = "RUNALL_FIXTURE_TAG"
+#: AIPOS-F265: 夹具进程组收尾宽限(秒): SIGTERM 后等这么久仍有存活成员 = SIGKILL。
+FIXTURE_GRACE_SECONDS = 5.0
 #: 真实治理根守卫监视的项目子目录与关键日志式样(卡面: home 根下各项目 governance/ 与 5_tasks/; 关键日志 = 只追加的治理日志)。
 GUARD_SUBDIRS = ("governance", "5_tasks")
 GUARD_KEY_LOG_GLOB = "*_log.md"
@@ -257,30 +269,39 @@ def attribute_rerun(first_keys: list[str], rerun_keys: list[str]) -> tuple[list[
 # ---------------------------------------------------------------------------
 # AIPOS-F116 件③: 孤儿进程守卫
 # ---------------------------------------------------------------------------
-def marked_processes(leak_mark: str) -> list[tuple[int, str]]:
-    """环境里带标记变量的存活进程 [(pid, 命令行)]。Linux 读 /proc/<pid>/environ; 无 /proc 退回 `ps eww`(BSD/macOS)。"""
-    needle = f"{leak_mark}=1"
+def processes_with_env(entry: str, *, prefix: bool = False) -> list[tuple[int, str]]:
+    """环境里带某一项的存活进程 [(pid, 命令行)]: prefix=False 整项相等(`名=值`), True 按项前缀匹配(AIPOS-F265 登记标签按本轮运行号认)。
+    Linux 读 /proc/<pid>/environ; 无 /proc 退回 `ps eww`(BSD/macOS)。孤儿进程守卫与夹具残留报告同一实现。"""
+    needle = entry.encode()
     found: list[tuple[int, str]] = []
     me = os.getpid()
     proc = Path("/proc")
     if proc.is_dir():
-        for entry in proc.iterdir():
-            if not entry.name.isdigit() or int(entry.name) == me:
+        for item in proc.iterdir():
+            if not item.name.isdigit() or int(item.name) == me:
                 continue
             try:
-                environ = (entry / "environ").read_bytes().split(b"\0")
-                cmdline = (entry / "cmdline").read_bytes()
+                environ = (item / "environ").read_bytes().split(b"\0")
+                cmdline = (item / "cmdline").read_bytes()
             except (FileNotFoundError, ProcessLookupError, PermissionError):
                 continue  # 已退出 / 他用户进程(不可能带本轮标记)
-            if needle.encode() in environ:
-                found.append((int(entry.name), cmdline.replace(b"\0", b" ").decode("utf-8", "replace").strip()))
+            if any(var.startswith(needle) for var in environ) if prefix else needle in environ:
+                found.append((int(item.name), cmdline.replace(b"\0", b" ").decode("utf-8", "replace").strip()))
         return sorted(found)
     listing = subprocess.run(["ps", "-axeww", "-o", "pid=,command="], capture_output=True, text=True, check=True).stdout
     for line in listing.splitlines():
         pid_text, _sep, rest = line.strip().partition(" ")
-        if pid_text.isdigit() and int(pid_text) != me and needle in rest.split():
-            found.append((int(pid_text), rest.split(f" {needle}", 1)[0]))
+        if not pid_text.isdigit() or int(pid_text) == me:
+            continue
+        hit = next((tok for tok in rest.split() if (tok.startswith(entry) if prefix else tok == entry)), None)
+        if hit is not None:
+            found.append((int(pid_text), rest.split(f" {hit}", 1)[0]))
     return sorted(found)
+
+
+def marked_processes(leak_mark: str) -> list[tuple[int, str]]:
+    """环境里带标记变量的存活进程 [(pid, 命令行)](processes_with_env 整项匹配 `<标记>=1`)。"""
+    return processes_with_env(f"{leak_mark}=1")
 
 
 def reap_marked(leak_mark: str) -> list[tuple[int, str]]:
@@ -292,6 +313,109 @@ def reap_marked(leak_mark: str) -> list[tuple[int, str]]:
         except ProcessLookupError:
             continue  # 取快照与清理之间自行退出
     return leaked
+
+
+def process_cwd(pid: int) -> str:
+    """进程当前目录(AIPOS-F265 残留报告用): Linux 读 /proc/<pid>/cwd; 无 /proc 或读不到 = 写明原因的占位串(只用于出声, 不作判据)。"""
+    link = Path("/proc") / str(pid) / "cwd"
+    if not Path("/proc").is_dir():
+        return "(本平台无 /proc, cwd 未知)"
+    try:
+        return os.readlink(link)
+    except FileNotFoundError:
+        return "(进程已退出)"
+    except PermissionError:
+        return "(无权读取)"
+
+
+def _group_alive(pgid: int, leader: subprocess.Popen | None) -> bool:
+    if leader is not None:
+        leader.poll()  # 收掉已退出的组长(僵尸仍算组成员, 不收会把整段宽限白等完)
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def terminate_group(pgid: int, *, grace: float = FIXTURE_GRACE_SECONDS, leader: subprocess.Popen | None = None) -> str:
+    """AIPOS-F265: 夹具进程组收尾唯一实现——整组 SIGTERM → 限时等待(grace 秒)→ 仍有存活成员 = 整组 SIGKILL。
+    leader = 本进程拉起的组长 Popen(给了就顺手收尸)。返回 "gone"(本来就没有存活成员) / "terminated"(SIGTERM 内退净) / "killed"。"""
+    if not _group_alive(pgid, leader):
+        return "gone"
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        return "gone"
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        if not _group_alive(pgid, leader):
+            return "terminated"
+        time.sleep(0.05)
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        return "terminated"
+    if leader is not None:
+        leader.wait()
+    return "killed"
+
+
+def terminate_pids(pids: list[int], *, grace: float = FIXTURE_GRACE_SECONDS) -> list[int]:
+    """逐个 SIGTERM → 限时等待 → 仍存活的 SIGKILL; 返回被 SIGKILL 的 pid。只给调用方按登记标签精确认出的进程用(不按命令行全机匹配)。"""
+    alive = []
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            alive.append(pid)
+        except ProcessLookupError:
+            continue
+    deadline = time.monotonic() + grace
+    while alive and time.monotonic() < deadline:
+        alive = [pid for pid in alive if _pid_alive(pid)]
+        if alive:
+            time.sleep(0.05)
+    killed = []
+    for pid in alive:
+        try:
+            os.kill(pid, signal.SIGKILL)
+            killed.append(pid)
+        except ProcessLookupError:
+            continue
+    return killed
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    stat = Path("/proc") / str(pid) / "stat"
+    try:
+        return stat.read_text(encoding="utf-8", errors="replace").rsplit(")", 1)[1].split()[0] != "Z"  # 僵尸 = 已退出待收尸
+    except (FileNotFoundError, IndexError):
+        return not Path("/proc").is_dir()
+
+
+def fixture_residuals(run_id: str) -> list[dict[str, Any]]:
+    """AIPOS-F265 件②: 本轮(run_id)登记的夹具进程里仍存活者 [{pid, cmd, cwd}](环境带 RUNALL_FIXTURE_TAG=<run_id>:…; 僵尸不算)。"""
+    return [{"pid": pid, "cmd": cmd, "cwd": process_cwd(pid)}
+            for pid, cmd in processes_with_env(f"{FIXTURE_TAG_ENV}={run_id}:", prefix=True) if _pid_alive(pid)]
+
+
+def fixture_residual_report(run_id: str, *, reclaim: bool = True) -> list[str]:
+    """run-all 结束时的残留夹具进程报告行(有 = 每个一行 ⚠ pid / 命令 / cwd, 本轮登记的回收; 无 = 明示一行)。"""
+    residuals = fixture_residuals(run_id)
+    if not residuals:
+        return [f"[runall_discovery] 残留夹具进程: 无(本轮运行号 {run_id} 登记的夹具进程均已收尾)"]
+    lines = [f"[runall_discovery] ⚠ 残留夹具进程 {len(residuals)} 个(本轮运行号 {run_id} 登记, 测试结束后仍存活)"
+             + (", 已回收(SIGTERM → 限时 → SIGKILL)" if reclaim else "")]
+    lines += [f"[runall_discovery] ⚠ 残留夹具进程: pid {r['pid']} 命令 {r['cmd']} cwd {r['cwd']}" for r in residuals]
+    if reclaim:
+        killed = terminate_pids([r["pid"] for r in residuals])
+        if killed:
+            lines.append(f"[runall_discovery] ⚠ 残留夹具进程: SIGTERM 宽限内未退出, 已 SIGKILL: {killed}")
+    return lines
 
 
 def _command(path: str, runner: str, node_excludes: list[str]) -> list[str]:
@@ -308,16 +432,9 @@ def _command(path: str, runner: str, node_excludes: list[str]) -> list[str]:
 
 
 def _reap_group(pgid: int) -> bool:
-    """测试子进程组收尾: 组内仍有存活进程(测试拉起的后台服务未收尾)= SIGKILL 整组并返回 True(调用方出声)。"""
-    try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return False
-    try:
-        os.killpg(pgid, signal.SIGKILL)
-    except ProcessLookupError:
-        return False
-    return True
+    """测试子进程组收尾: 组内仍有存活进程(测试拉起的后台服务未收尾)= 整组清掉并返回 True(调用方出声)。
+    AIPOS-F265: 与夹具收尾同一实现 terminate_group(宽限 0 = SIGTERM 后立即 SIGKILL)。"""
+    return terminate_group(pgid, grace=0) != "gone"
 
 
 def _run(cmd: list[str], repo_root: Path, env: dict[str, str], isolation: Any = None) -> tuple[int | None, str]:
@@ -445,6 +562,7 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None,
          f"(各项目 {'/'.join(GUARD_SUBDIRS)}/; git 仓 {len(targets['repos'])} 个, 非 git 目录 {len(targets['plain'])} 个), "
          f"关键日志 {len(targets['key_logs'])} 个(md5); 只读")
     leak_mark = LEAK_MARK_PREFIX + secrets.token_hex(8)
+    run_id = secrets.token_hex(8)  # AIPOS-F265: 本轮运行号(夹具登记标签前缀)
     home = tempfile.mkdtemp(prefix="lybra-runall-home-")
     protected = runall_isolation.protected_paths(targets)
     try:
@@ -473,11 +591,13 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None,
         # AIPOS-F118: 被上游终止(finalize 合并后回归超时先 SIGTERM 整组)时, 在跑的测试子进程在独立会话里、上游 killpg 够不着——
         # 清理与文件结束后的孤儿收尸同一实现(reap_marked: 带本轮标记的存活进程一律 SIGKILL), 不另设进程组登记。
         reap_marked(leak_mark)
+        terminate_pids([pid for pid, _cmd in processes_with_env(f"{FIXTURE_TAG_ENV}={run_id}:", prefix=True)])  # AIPOS-F265: 本轮登记夹具
         raise SystemExit(128 + signum)
 
     previous_handler = signal.signal(signal.SIGTERM, _on_sigterm)
     try:
         env = _child_env(home, leak_mark)
+        env[FIXTURE_RUN_ENV] = run_id  # AIPOS-F265: 夹具助手据此打本轮登记标签
         for path in plan["to_run"]:
             emit()
             emit(f"── {path} {_RULE}")
@@ -564,6 +684,8 @@ def run(repo_root: Path, runall_rel: str, contract: dict[str, Any], *, out=None,
                  + ("" if guard_changes else "(无测试写入真实治理根)")
                  + f"; 同时段他方写入(重跑未复现, 不计) {guard_concurrent} 处")
         emit(f"[runall_discovery] 孤儿进程守卫汇总: 泄漏进程 {leaks_total} 个" + ("" if leaks_total else "(无带本轮标记的存活进程)"))
+        for line in fixture_residual_report(run_id):  # AIPOS-F265 件②: 总结末尾报残留夹具进程(有 / 无)
+            emit(line)
     finally:
         signal.signal(signal.SIGTERM, previous_handler)
         isolation.close()
