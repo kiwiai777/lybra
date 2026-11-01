@@ -140,9 +140,11 @@ def test_item1_upgrade_preview_and_onboarding_list_the_step(rig, tmp_path):
     assert _cp(r, "set-task-id-pattern", "--pattern", PATTERN, "--actor", f251.ADVISOR, "--confirm")[0] == 0
     assert not [i for g in derive_guidance(r["gov"], project=f251.PROJECT)["groups"] for i in g["items"] if i["key"] == "task_id_pattern"]
     guide = generate_onboarding_guide("probe-cp", home_root=str(tmp_path / "h"), actor=f251.ADVISOR, repos=[f"app={tmp_path}/app"])
-    step9 = next(s for s in guide["steps"] if s["step_number"] == 9)["command"]
+    from tools.aipos_cli.onboarding import STEP  # AIPOS-F262: 步号唯一声明(首卡步 = STEP["first_card"])
+
+    step9 = next(s for s in guide["steps"] if s["step_number"] == STEP["first_card"])["command"]
     lines = [ln for ln in step9.splitlines() if "card-policy" in ln]
-    _show("---- 件① onboarding guide 第 9 步(首卡前)卡号形状行 ----\n" + "\n".join(lines))
+    _show("---- 件① onboarding guide 首卡步(首卡前)卡号形状行 ----\n" + "\n".join(lines))
     assert step9.index("card-policy") < step9.index("draft create")
     assert any(ln.startswith("lybra --workspace-root") and "set-task-id-pattern" in ln for ln in lines)
     from tools.aipos_cli.aipos_cli import build_parser
@@ -151,7 +153,7 @@ def test_item1_upgrade_preview_and_onboarding_list_the_step(rig, tmp_path):
         if ln.startswith("lybra "):
             args = build_parser().parse_args(shlex.split(ln)[1:])
             assert args.command == "project" and args.cp_command in ("show", "set-task-id-pattern")
-    legacy = legacy_onboarding_steps(f251.PROJECT, str(r["gov"]), home_root=str(tmp_path / "h"), actor=f251.ADVISOR, driver_policy="pol")
+    legacy = legacy_onboarding_steps(f251.PROJECT, str(r["gov"]), home_root=str(tmp_path / "h"), actor=f251.ADVISOR, authorization_ref="pol")
     assert "card-policy set-task-id-pattern" in legacy[0]["command"]
     rc, out, err = _cli("project", "new", "probe-new", "--home-root", tmp_path / "h2", "--actor", f251.ADVISOR)
     hint = [ln for ln in out.splitlines() if "card-policy" in ln]

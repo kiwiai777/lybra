@@ -127,6 +127,8 @@ PLACEHOLDER_VALUES = {
     "<验收标准>": "验收标准(夹具)",
     # AIPOS-F225 件③: 顾问升 Owner 必带第一档事由(loop note --owner-reason)
     "<第一档事由键>": "direction_fork",
+    # AIPOS-F262 件①: 接入向导授权引用 = 项目常设授权 ID
+    "<授权ID>": "auth_proj",
 }
 PLACEHOLDER_RE = re.compile(r"<[^<>\s'\"]+>")
 #: 已退役的子命令(示例不得再教)

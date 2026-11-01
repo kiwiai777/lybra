@@ -242,7 +242,6 @@ LADDER_CALLS_ALLOWED = {
     ("board_adapter.py", "find_repo_context"): 1,       # 看板服务
     ("deploy_gate.py", "resolve_workspace_root"): 1,    # 部署门 verdict 校验
     ("finalize.py", "resolve_workspace_root"): 1,       # finalize 治理根缺省(产品仓 cwd 运行)
-    ("onboarding.py", "resolve_active_project"): 1,     # Owner 中央凭据库所在门工作区(home 级)
     ("task_loader.py", "find_repo_root"): 3,            # load_* 以已解析根为 start(直用)
     ("task_loader.py", "find_repo_context"): 1,
     ("task_loader.py", "resolve_workspace_context"): 2,
