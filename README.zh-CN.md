@@ -59,7 +59,12 @@ Claude Code 或 Codex。
 ```bash
 npm install -g lybra
 lybra --help
+lybra setup check
 ```
+
+`lybra setup check` 是接入向导开头跑的同一道只读安装自检：七项 —— Python ≥ 3.10、Node.js ≥
+18、git、**pi** 在 PATH 且已配模型、门在跑且可达、门常驻服务 —— 每项 ✓ / ✗ / ⚠ 加出口
+行；任何 ✗ 即退出码 1 并给出修复提示。绝不读凭据与密钥文件。
 
 ## 项目如何运转
 
@@ -81,8 +86,8 @@ lybra project set-repos my-project --repo app=~/code/my-project --confirm
 
 ```bash
 lybra project grant sign my-project --grant-lane app --task-mode code --task-mode docs --driver advisor.my-project.h1 --launch-harness pi --max-tasks 50 --expires-at 2027-01-31T00:00:00Z --confirm
-lybra roles enroll-deliver --role auditor --instance audit.my-project.h1 --governance-root ~/.lybra/projects/my-project --workspace ~/my-project-auditor --owner-authorization-ref auth-2026-11-01-01 --confirm
-lybra project set-execution my-project --subagent-executor subexec.my-project.h1 --pi-executor exec.my-project.h1 --auditor audit.my-project.h1 --confirm
+lybra roles enroll-deliver --role auditor --instance audit.my-project.h1 --governance-root ~/.lybra/projects/my-project --workspace ~/lybra-workstations/my-project/auditor --owner-authorization-ref auth-2026-11-01-01 --confirm
+lybra project set-execution my-project --subagent-executor exec.my-project.h1 --pi-executor exec.my-project.h1-pi --auditor audit.my-project.h1 --confirm
 ```
 
 常设授权取代逐卡信封:车道 × 任务模式 × 驱动方 / 主机 / harness 拉起,外加总卡数与到期硬边界
@@ -125,9 +130,11 @@ Lybra 绝不关闭证书校验。
 
 ## 范围与边界
 
-如实说明**尚未产品化**的部分:门常驻安装(目前门以前台 `lybra serve start` 运行;
-systemd / launchd 单元需手写)、跨机隧道(手工配置 ssh)、以及无法触达治理根机器的云平台型
-顾问(顾问必须能在治理机上跑本地命令、或能 ssh 进治理机)。全部已披露暂缓 / 纪律持有项收录于
+如实划界：**门常驻安装已产品化** —— `lybra serve install`（Linux：systemd --user 单元；macOS：
+launchd agent，launchd 路径尚未在真机实跑验证）`--dry-run` 预演、`--confirm` 安装；手写单元
+只报告、绝不接管。尚未产品化：跨机隧道
+（手工配置 ssh）、以及无法触达治理根机器的云平台型顾问（顾问必须能在治理机上跑本地命令、或
+能 ssh 进治理机）。全部已披露暂缓 / 纪律持有项收录于
 **[`docs/v1_disclosure.md`](docs/v1_disclosure.md)**。
 
 ## 开发
