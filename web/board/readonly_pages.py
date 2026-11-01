@@ -1008,16 +1008,30 @@ def render_roadmap(data: dict[str, Any], lang: str) -> str:
 _TECH_DETAIL_KEYS = ("rp_ob_detail_governance_root",)
 
 
+#: AIPOS-F269: row states that are not done (the first one is marked "next step"; same rows as the checklist, nothing recomputed)
+_OPEN_STATES = ("todo", "error")
+
+
+def _next_row(proj: dict[str, Any]) -> dict[str, Any] | None:
+    """AIPOS-F269: the project's next step = its first checklist row not done (board_pages.onboarding_rows order, not recomputed)."""
+    return next((row for row in proj["rows"] if row["state"] in _OPEN_STATES), None)
+
+
 def _checklist_html(ctx: _Ctx, proj: dict[str, Any]) -> str:
     items = []
+    nxt = _next_row(proj)
     for row in proj["rows"]:
         details = "".join(f"<li>{_ESC(ctx.t(key, **values))}</li>" for key, values in row["details"] if key not in _TECH_DETAIL_KEYS)
         tech = "".join(f"<p>{_ESC(ctx.t(key, **values))}</p>" for key, values in row["details"] if key in _TECH_DETAIL_KEYS)
         details += f"<li>{_tech(ctx, tech)}</li>" if tech else ""
         tell = f"<p class=\"rp-tell\">{_ESC(ctx.tell(row['tell'], row['ask'][0], row['ask'][1]))}</p>" if row.get("ask") else ""
         links = "".join(f"<a class=\"rp-link\" href=\"{_ESC(ctx.href(url))}\">{_ESC(ctx.t(key))}</a>" for key, url in row["links"])
-        items.append(f"<li class=\"rp-ob-item rp-state-{_ESC(row['state'])}\" data-item=\"{_ESC(row['key'])}\" data-state=\"{_ESC(row['state'])}\">"
-                     f"<p><span class=\"rp-state\">{_ESC(ctx.t('rp_ob_state_' + row['state']))}</span> "
+        is_next = row is nxt  # AIPOS-F269: the first not-done row carries the "next step" mark
+        mark = f"<span class=\"rp-ob-next\">{_ESC(ctx.t('pn_next'))}</span> " if is_next else ""
+        next_attr = " data-next=\"true\"" if is_next else ""
+        items.append(f"<li class=\"rp-ob-item rp-state-{_ESC(row['state'])}\" data-item=\"{_ESC(row['key'])}\" data-state=\"{_ESC(row['state'])}\""
+                     f"{next_attr}>"
+                     f"<p>{mark}<span class=\"rp-state\">{_ESC(ctx.t('rp_ob_state_' + row['state']))}</span> "
                      f"<strong>{_ESC(ctx.t('rp_ob_item_' + row['key']))}</strong></p><ul class=\"rp-details\">{details}</ul>"
                      f"{tell}{_command_block(ctx, row['commands'])}{links}</li>")
     summary = proj["summary"]
@@ -1029,18 +1043,92 @@ def _checklist_html(ctx: _Ctx, proj: dict[str, Any]) -> str:
             f"<ol class=\"rp-checklist\">{''.join(items)}</ol></section>")
 
 
-def render_onboarding(data: dict[str, Any], lang: str, setup: dict[str, Any] | None = None) -> str:
-    """AIPOS-F267: setup = board_pages.setup_summary (one line on top linking the setup check page)."""
+#: AIPOS-F269: i18n templates static/project-new.js fills (texts never live in the script; board i18n channel, zh / en same keys)
+_PN_JS_KEYS = ("pn_js_preview_heading", "pn_js_root", "pn_js_registered_by", "pn_js_tree", "pn_js_project_json", "pn_js_repo_none",
+               "pn_js_repo", "pn_js_repo_git", "pn_js_repo_nogit", "pn_js_gov_git", "pn_js_gov_nogit", "pn_js_confirm_btn",
+               "pn_js_cancel_btn", "pn_js_working", "pn_js_done_heading", "pn_js_landed", "pn_js_not_landed", "pn_js_next_cmds",
+               "pn_js_go", "pn_js_fail_heading", "pn_js_err_other", "pn_js_tech", "pn_js_name_missing", "pn_js_login")
+#: AIPOS-F269: refusal codes the page explains in the page language (other codes = pn_js_err_other with the server message)
+PN_JS_ERROR_CODES = ("OWNER_ONLY", "WORKSPACE_REQUIRED", "PROJECT_NAME_INVALID", "PROJECT_EXISTS", "CODE_REPO_INVALID",
+                     "CODE_REPO_NOT_FOUND", "PREVIEW_TOKEN_EXPIRED", "PREVIEW_PARAMS_MISMATCH", "AUDIT_LOG_UNAVAILABLE", "PROJECT_NEW_FAILED")
+
+
+def _project_new_attrs(ctx: _Ctx) -> str:
+    """AIPOS-F269: body attributes for static/project-new.js (write path from the declaration, unformatted texts in the page language)."""
+    import json
+
+    from tools.aipos_cli.board_project_new import board_declaration
+
+    keys = list(_PN_JS_KEYS) + ["pn_js_err_" + code for code in PN_JS_ERROR_CODES]
+    texts = json.dumps({key: ctx.raw(key) for key in keys}, ensure_ascii=False)
+    return (f" data-pn-owner=\"true\" data-pn-write-path=\"{_ESC(str(board_declaration()['write_path']))}\""
+            f" data-pn-texts=\"{_ESC(texts)}\" data-pn-lang-param=\"{_ESC(str(ctx.decl['locale']['param']))}\"")
+
+
+def _project_new_html(ctx: _Ctx, data: dict[str, Any], owner: bool) -> str:
+    """AIPOS-F269 write exception 4 (new project) on top of the onboarding page: Owner session = form (name + optional product repo
+    absolute path) + preview / confirm panel filled by static/project-new.js; other sessions = read-only hint and the CLI command."""
+    from tools.aipos_cli.board_project_new import VERB
+    from tools.schema_loader import code_repo_schema_root, load_schema
+
+    cli = str(load_schema("verbs", code_repo_schema_root())["verbs"][VERB]["cli_command"])
+    home = str(data["home_root"])
+    out = [f"<section class=\"pn-new\" id=\"pn-new\" data-owner=\"{str(owner).lower()}\"><h2>{_ESC(ctx.t('pn_heading'))}</h2>",
+           f"<p class=\"rp-sub\">{_ESC(ctx.t('pn_intro'))}</p>", _tech(ctx, f"<p>{_ESC(ctx.t('pn_home', home_root=home))}</p>")]
+    if owner:
+        out.append(f"<form class=\"pn-form\" autocomplete=\"off\"><p><label>{_ESC(ctx.t('pn_name_label'))} "
+                   "<input type=\"text\" name=\"workspace\" required></label></p>"
+                   f"<p><label>{_ESC(ctx.t('pn_repo_label'))} <input type=\"text\" name=\"code_repo\"></label></p>"
+                   f"<p><button type=\"submit\" class=\"pn-preview-button\">{_ESC(ctx.t('pn_preview_btn'))}</button></p></form>"
+                   "<section class=\"pn-panel\" hidden><h3></h3><div class=\"pn-panel-body\"></div>"
+                   "<div class=\"pn-panel-actions\"></div></section>")
+    else:
+        out.append(f"<p class=\"rp-readonly-note\">{_ESC(ctx.t('pn_readonly'))}</p>")
+    out.append(f"<p class=\"pn-after\">{_ESC(ctx.t('pn_after'))}</p>")
+    out.append(_command_block(ctx, [f"{cli} {ctx.t('pn_name_placeholder')} --home-root {home}"]))
+    return "".join(out) + "</section>"
+
+
+def _created_html(ctx: _Ctx, data: dict[str, Any], created: str | None) -> str:
+    """AIPOS-F269: after the board created a project the page lands on ?created=<name>: a banner naming its next step (the first
+    not-done checklist row, same rows) + the advisor commands (folded). Not a registered project = says so (not guessed)."""
+    if not created:
+        return ""
+    from tools.aipos_cli.board_project_new import next_commands
+
+    proj = next((p for p in data["projects"] if p["project"] == created), None)
+    if proj is None:
+        return f"<p class=\"pn-created rp-err\" data-created=\"{_ESC(created)}\">{_ESC(ctx.t('pn_created_missing', project=created))}</p>"
+    nxt = _next_row(proj)
+    step = ctx.t("rp_ob_item_" + nxt["key"]) if nxt else ctx.t("pn_next_none")
+    link = f" <a class=\"rp-link\" href=\"#{_ESC(created)}\">{_ESC(ctx.t('pn_created_jump'))}</a>"
+    return (f"<section class=\"pn-created\" data-created=\"{_ESC(created)}\" data-next-item=\"{_ESC(nxt['key'] if nxt else '')}\">"
+            f"<p><strong>{_ESC(ctx.t('pn_created_banner', project=created, next=step))}</strong>{link}</p>"
+            f"{_command_block(ctx, next_commands(created, proj['governance_root'], data['home_root']))}</section>")
+
+
+def render_onboarding(data: dict[str, Any], lang: str, setup: dict[str, Any] | None = None, *, owner: bool = False,
+                      created: str | None = None) -> str:
+    """AIPOS-F267: setup = board_pages.setup_summary (one line on top linking the setup check page).
+    AIPOS-F269: owner = Owner session (the "new project" form + script; other sessions get the read-only hint); created = the project
+    the board just created (?<created_param>=<name>: banner with its next step)."""
     ctx = _Ctx(data["decl"], lang)
     active = [p for p in data["projects"] if not p["paused"]]
     paused = [p for p in data["projects"] if p["paused"]]
     body = [_setup_summary_html(ctx, setup, "rp-ob-setup")] if setup is not None else []
+    body.append(_created_html(ctx, data, created))
+    body.append(_project_new_html(ctx, data, owner))
     body.append(_toggle(ctx, data.get("hidden") or [], bool(data.get("show_all")), str(ctx.decl["pages"]["onboarding"])))
     body += [_checklist_html(ctx, p) for p in active]
     if paused:
         body.append(f"<details class=\"rp-paused\" data-paused=\"{len(paused)}\"><summary>{_ESC(ctx.t('rp_paused_folded', count=len(paused)))}"
                     "</summary>" + "".join(_checklist_html(ctx, p) for p in paused) + "</details>")
-    return _page(ctx, "onboarding", ctx.t("rp_ob_title", count=len(data["projects"])), body)
+    if not owner:
+        return _page(ctx, "onboarding", ctx.t("rp_ob_title", count=len(data["projects"])), body)
+    from tools.aipos_cli.board_project_new import board_declaration
+
+    return _page(ctx, "onboarding", ctx.t("rp_ob_title", count=len(data["projects"])), body, note_key=None,
+                 body_attrs=_project_new_attrs(ctx), scripts=[str(board_declaration()["script_path"])])
 
 
 # ---------------------------------------------------------------------------
@@ -1990,8 +2078,12 @@ def _render_page(page: str, home_root: str | Path | None, params: dict[str, list
         if page == "overview":
             return render_overview(board_pages.collect_overview(home_root, show_all=show_all), lang)
         if page == "onboarding":
+            from tools.aipos_cli.board_project_new import board_declaration as project_new_declaration
+
+            created = (params.get(project_new_declaration()["created_param"]) or [None])[0]  # AIPOS-F269: landed here after creating
             return render_onboarding(board_pages.collect_onboarding(home_root, show_all=show_all), lang,
-                                     board_pages.setup_summary(board_pages.setup_check_latest(workspace_root), decl))  # AIPOS-F267
+                                     board_pages.setup_summary(board_pages.setup_check_latest(workspace_root), decl),  # AIPOS-F267
+                                     owner=owner, created=created)
         if page == "setup":  # AIPOS-F267: setup check (same run_setup_check as `lybra setup check`; short in-process cache)
             return render_setup(board_pages.collect_setup(workspace_root, params), lang)
         if page == "project":

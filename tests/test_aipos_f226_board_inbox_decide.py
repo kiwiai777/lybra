@@ -478,7 +478,7 @@ def test_declaration_single_framework_and_guards():
     verbs = json.loads((REPO_ROOT / "schema" / "verbs.schema.json").read_text(encoding="utf-8"))
     ro = verbs["board_readonly"]
     _show(f"[声明] write_path={spec['write_path']} script={spec['script_path']} 写例外清单={ro['write_exceptions']}")
-    assert spec["write_path"] == DECIDE_PATH and list(ro["write_exceptions"]) == ["envelope_mint", "project_upgrade", "owner_inbox_decide"]
+    assert spec["write_path"] == DECIDE_PATH and list(ro["write_exceptions"])[:3] == ["envelope_mint", "project_upgrade", "owner_inbox_decide"]  # AIPOS-F269: 清单只追加(④ project_new)
     assert spec["write_path"] not in board_readonly_declaration()["allowed_post_paths"]
     assert spec["write_path"] != board_envelopes_declaration()["write_path"]
     src = (REPO_ROOT / "tools" / "aipos_cli" / "owner_inbox.py").read_text(encoding="utf-8")
