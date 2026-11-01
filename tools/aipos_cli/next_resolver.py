@@ -3039,7 +3039,28 @@ def return_binding_subject(workspace_root: Path, task_id: str, card_frontmatter:
             bound[str(non_branch_rework_declaration()["return_fingerprint_key"])] = _file_sha256(report)
         return bound
     tip = _card_branch_tip(workspace_root, task_id, card_frontmatter)
-    return {**tip[1], "branch": tip[2]} if tip else None
+    if not tip:
+        return None
+    bound = {**tip[1], "branch": tip[2]}
+    # AIPOS-F259 件①: 附交回时基线(审计区间 = 基线..tip; deployment_authorization.commit_pass_coverage 审计区间覆盖读它)。
+    # 键名读声明 N5.guards.commit_coverage.audited_range.base_key; 基线读不出 = 不写(该交回的审计区间覆盖即不认, fail-closed)
+    from tools.aipos_cli.deployment_authorization import audited_range_declaration
+
+    base = card_branch_base(tip[0], fm, str(tip[1]["commit_sha"]))
+    if base:
+        bound[str(audited_range_declaration()["base_key"])] = base
+    return bound
+
+
+def card_branch_base(code_repo: Path, task_metadata: dict[str, Any] | None, commit: str) -> str | None:
+    """AIPOS-F259: 卡分支此刻的基线 = git merge-base <卡期望基座 card_expected_base> <commit>(交回绑定的基线 base_commit 与撤卡预演
+    分支提交计数 queue_mutation.withdraw_branch_commits_hint 同读)。基座分支不存在 / 无公共祖先 = None(调用方: 交回不写基线 / 预演出声读不出)。"""
+    import subprocess
+
+    proc = subprocess.run(["git", "-C", str(code_repo), "merge-base", card_expected_base(task_metadata), commit],
+                          capture_output=True, text=True, timeout=10)
+    sha = proc.stdout.strip()
+    return sha if proc.returncode == 0 and _FULL_SHA_RE.match(sha) else None
 
 
 def return_record_subject(workspace_root: Path, task_id: str, return_id: str) -> dict[str, Any] | None:
