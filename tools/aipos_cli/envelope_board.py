@@ -530,6 +530,40 @@ def resolve_workspace(body: dict[str, Any], home_root: str | Path | None) -> tup
     return name, by_name[name]
 
 
+#: AIPOS-F269: workspace 解析方式(handle_owner_write 的 workspace 参数) → 解析函数名; registered = 写例外①②③(既有, 缺省), new = 写例外④
+WORKSPACE_MODES = ("registered", "new")
+
+
+def resolve_new_workspace(body: dict[str, Any], home_root: str | Path | None) -> tuple[str, Path]:
+    """AIPOS-F269 写例外④(新建项目)的 workspace 解析: 请求 workspace = 待建项目名 → (项目名, 将建治理根)。
+    home 根 = owner_inbox.home_projects 同一解析(resolve_home_root_with_source); 将建治理根 = workspace_config.project_root_for
+    (scaffold_project 同读)。缺 = WORKSPACE_REQUIRED; 不是 home 根下一级目录名(含 /、. / ..、绝对路径、读不出的字符)= PROJECT_NAME_INVALID
+    (门与看板只扫描 home 根一级目录, 别处建了也发现不了); 已是 home 根注册项目, 或目录已存在且非空(scaffold_project 拒建的同一情形)
+    = PROJECT_EXISTS。治理根取自解析, 不取请求。"""
+    from tools.aipos_cli.owner_inbox import home_projects
+    from tools.aipos_cli.workspace_config import project_root_for
+
+    name = str(body.get("workspace") or "").strip()
+    if not name:
+        raise MintRequestError("WORKSPACE_REQUIRED")
+    enumerated = home_projects(home_root)
+    home = Path(enumerated["home_root"]).expanduser().resolve()
+    try:
+        target = project_root_for(home, name)
+        # 一级目录判据按解析后的路径(.. / 软链出 home 根 / 绝对路径 / 多级都不在 home 根正下方)
+        direct = target.parent == home and target.name == name and target.resolve().parent == home
+        occupied = direct and target.exists() and (not target.is_dir() or any(target.iterdir()))
+    except (ValueError, OSError) as exc:  # 内嵌 NUL 等读不出的名字 = 名字不合(不猜)
+        raise MintRequestError("PROJECT_NAME_INVALID", workspace=name, home_root=str(home)) from exc
+    if not direct:
+        raise MintRequestError("PROJECT_NAME_INVALID", workspace=name, home_root=str(home))
+    if name in {p["name"] for p in enumerated["projects"]}:
+        raise MintRequestError("PROJECT_EXISTS", workspace=name, reason="home 根已注册项目", root=str(target))
+    if occupied:
+        raise MintRequestError("PROJECT_EXISTS", workspace=name, reason="目录已存在且非空", root=str(target))
+    return name, target
+
+
 def normalize_mint_params(body: dict[str, Any], *, project: str, governance_root: Path, now: datetime) -> dict[str, Any]:
     """表单 → 签发参数(预演与确认同一归一; 摘要据此算)。续签 = 模板须为该项目当前在用信封(envelope_overview), 驱动方 / 范围照抄模板,
     policy_id = 模板行 next_policy_id(F166 renew_plan), 只可改额度与到期; 新签 = 表单给范围, policy_id 缺省 = F166 next_policy_id。"""
@@ -637,6 +671,7 @@ def handle_owner_write(
     host: str | None = None,
     content_type: str | None = None,
     now: datetime | None = None,
+    workspace: str = "registered",
 ) -> tuple[int, dict[str, Any]]:
     """看板 Owner 写例外的唯一安全框架(AIPOS-F172 写例外①信封签发首用; AIPOS-F176 写例外②项目升级同调, 不另写):
     Owner 角色会话(角色名读 board_owner_envelopes.owner_role)/ Origin 与 Host 相符 / JSON 请求体 / stage ∈ preview|confirm /
@@ -648,9 +683,15 @@ def handle_owner_write(
       preview(params, context) -> 应答附加键(dict); 不可预演 = 抛 MintRequestError("PREVIEW_BLOCKED", detail=…)
       confirm(params, context) -> (audit_fields, response, error): error 非 None = 执行未成(其审计照记, 再按 error 码拒)
       pre_confirm(params, context)(可选): 令牌核过后、留痕前的前置拒(如签发凭据库缺)。
-    返回 (HTTP 状态码, 应答)。session = {role, token_ref, session_ref, login_method, source_ip} 或 None(无会话 = 非 Owner)。"""
+    返回 (HTTP 状态码, 应答)。session = {role, token_ref, session_ref, login_method, source_ip} 或 None(无会话 = 非 Owner)。
+    AIPOS-F269: workspace = workspace 解析方式(WORKSPACE_MODES): registered(缺省, 写例外①②③: home 根已注册项目, resolve_workspace)/
+    new(写例外④新建项目: 待建项目名, resolve_new_workspace)。只换这一步, 其余判定(会话 / Origin / JSON / stage / 令牌六类 / 审计日志)不变。"""
     from tools.aipos_cli.clock import utc_now
+    from tools.schema_loader import SchemaLoadError
 
+    if workspace not in WORKSPACE_MODES:  # 调用方写错 = 实现错(不猜成哪一种)
+        raise SchemaLoadError(f"handle_owner_write workspace 须 ∈ {list(WORKSPACE_MODES)}, 得到 {workspace!r}")
+    resolve = resolve_new_workspace if workspace == "new" else resolve_workspace
     frame = board_envelopes_declaration()
     ttl = int(frame["preview_ttl_seconds"])
     now = now or utc_now()
@@ -679,7 +720,7 @@ def handle_owner_write(
             raise MintRequestError("PARAMS_INVALID", detail="Content-Type 须为 application/json")
         if stage not in _STAGES:
             raise MintRequestError("STAGE_INVALID")
-        project, root = resolve_workspace(body, home_root)
+        project, root = resolve(body, home_root)
         params, audit_fields, context = prepare(body, project, root, now, session)
         audit.update(audit_fields)
         digest = params_digest(params)
