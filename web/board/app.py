@@ -1195,6 +1195,54 @@ Lybra 服务端位置（AIPOS-286）：
         "pn_js_err_PREVIEW_PARAMS_MISMATCH": "预演后改过项目名或产品仓, 请重新预演。",
         "pn_js_err_AUDIT_LOG_UNAVAILABLE": "看板审计日志写不进, 已拒绝执行(每次新建都要留痕);请告诉顾问检查看板运行目录。",
         "pn_js_err_PROJECT_NEW_FAILED": "建项目没有完成, 详情见技术详情;请告诉顾问核对。",
+        # AIPOS-F270: board write exception 5 "enrollment code" on the onboarding page (web/board/readonly_pages.py + static/enroll-code.js), zh / en same keys
+        "ec_button": "签注册码:{instance}",
+        "ec_button_suggested": "签注册码(建议实例名 {instance})",
+        "ec_button_noname": "签注册码({role})",
+        "ec_pending": "已签, 待兑换(到期 {time}):{role} · {instance} · 码编号 {code_id}",
+        "ec_pending_any": "不绑实例",
+        "ec_pending_error": "已签的码读不出:{error}",
+        "ec_js_heading": "签注册码:{project}",
+        "ec_js_role": "角色",
+        "ec_js_instance": "实例名(顾问类与子 agent 执行者必填)",
+        "ec_js_ttl": "时效(秒, 留空 = 缺省 {ttl} 秒, 与 lybra roles enroll-code 相同)",
+        "ec_js_preview_btn": "预演",
+        "ec_js_preview_heading": "预演:将为 {project} 签注册码(还没签发)",
+        "ec_js_bind_role": "角色:{role}",
+        "ec_js_bind_instance": "实例:{instance}",
+        "ec_js_bind_gate": "码内门地址:{gate_url}",
+        "ec_js_bind_root": "治理根:{root}",
+        "ec_js_bind_ttl": "时效:{ttl} 秒(自确认签发起算)",
+        "ec_js_bind_actor": "签发人(本会话 Owner):{actor} · 来源:{surface}",
+        "ec_js_any_instance": "不绑实例",
+        "ec_js_confirm_btn": "确认签发",
+        "ec_js_cancel_btn": "取消",
+        "ec_js_working": "处理中…",
+        "ec_js_done_heading": "注册码已签发(只显示这一次)",
+        "ec_js_once": "这个码只在这里显示一次:刷新或离开本页后再也取不回;丢了或发错了, 只能作废后重签。",
+        "ec_js_copy": "复制",
+        "ec_js_copied": "已复制",
+        "ec_js_handoff": "交给对方的一句话(在对方 agent 会话里运行;--workspace 换成对方的工位目录, 顾问换成治理根):",
+        "ec_js_expires": "到期:{time} · 码编号 {code_id} · 指纹 {fingerprint}",
+        "ec_js_exits": "作废重签的命令(未兑换用第一条, 已兑换用第二条)",
+        "ec_js_done_btn": "完成(刷新接入清单)",
+        "ec_js_fail_heading": "没有签成",
+        "ec_js_err_other": "请求被拒({code}):{message}",
+        "ec_js_tech": "技术详情",
+        "ec_js_login": "登录已失效, 请重新登录看板后再试",
+        "ec_js_role_missing": "请先选角色",
+        "ec_js_err_OWNER_ONLY": "只有 Owner 登录会话可以签注册码;请告诉顾问或 Owner。",
+        "ec_js_err_WORKSPACE_NOT_IN_HOME": "这个项目不在 home 根已注册项目里;刷新页面核对。",
+        "ec_js_err_ROLE_INVALID": "这个角色不能在本项目签码;从下拉里选。",
+        "ec_js_err_INSTANCE_REQUIRED": "这个角色必须填实例名(顾问类与子 agent 执行者)。",
+        "ec_js_err_INSTANCE_INVALID": "实例名不合(须是 <前缀>.<项目>.<主机> 形, 不含空白)。",
+        "ec_js_err_GATE_URL_UNRESOLVED": "码内门地址推导不出;请告诉顾问核对门地址声明。",
+        "ec_js_err_CREDENTIAL_UNAVAILABLE": "看板读不到签码凭据;请告诉顾问运行 lybra roles enroll-code。",
+        "ec_js_err_GATE_UNAVAILABLE": "门没在运行或连不上;请告诉顾问检查门服务。",
+        "ec_js_err_GATE_REFUSED": "门拒绝签码, 原因见技术详情。",
+        "ec_js_err_PREVIEW_TOKEN_EXPIRED": "预演已过期, 请重新预演。",
+        "ec_js_err_PREVIEW_PARAMS_MISMATCH": "预演后改过角色、实例或时效, 请重新预演。",
+        "ec_js_err_AUDIT_LOG_UNAVAILABLE": "看板审计日志写不进, 已拒绝执行(每次签码都要留痕);请告诉顾问检查看板运行目录。",
         "ib_title": "待你决定 · {count} 件({projects} 个项目)",
         "ib_empty": "待你决定:没有待定事项({projects} 个项目)",
         "ib_heading": "{project} · {what}",
@@ -1831,6 +1879,54 @@ Important boundaries:
         "pn_js_err_PREVIEW_PARAMS_MISMATCH": "The name or product repo changed after the preview; preview again.",
         "pn_js_err_AUDIT_LOG_UNAVAILABLE": "The board audit log cannot be written, so nothing was done (every creation must be logged); tell the advisor to check the board runtime directory.",
         "pn_js_err_PROJECT_NEW_FAILED": "The project was not fully created, see the technical details; tell the advisor to check it.",
+        # AIPOS-F270: board write exception 5 "enrollment code" on the onboarding page (web/board/readonly_pages.py + static/enroll-code.js), zh / en same keys
+        "ec_button": "Sign enrollment code: {instance}",
+        "ec_button_suggested": "Sign enrollment code (suggested instance {instance})",
+        "ec_button_noname": "Sign enrollment code ({role})",
+        "ec_pending": "Signed, awaiting redemption (expires {time}): {role} · {instance} · code id {code_id}",
+        "ec_pending_any": "any instance",
+        "ec_pending_error": "Signed codes cannot be read: {error}",
+        "ec_js_heading": "Sign enrollment code: {project}",
+        "ec_js_role": "Role",
+        "ec_js_instance": "Instance name (required for advisor-class roles and sub-agent executors)",
+        "ec_js_ttl": "Validity (seconds; empty = default {ttl} seconds, same as lybra roles enroll-code)",
+        "ec_js_preview_btn": "Preview",
+        "ec_js_preview_heading": "Preview: enrollment code for {project} (not signed yet)",
+        "ec_js_bind_role": "Role: {role}",
+        "ec_js_bind_instance": "Instance: {instance}",
+        "ec_js_bind_gate": "Gate address in the code: {gate_url}",
+        "ec_js_bind_root": "Governance root: {root}",
+        "ec_js_bind_ttl": "Validity: {ttl} seconds (from signing)",
+        "ec_js_bind_actor": "Signed by (this Owner session): {actor} · source: {surface}",
+        "ec_js_any_instance": "any instance",
+        "ec_js_confirm_btn": "Confirm and sign",
+        "ec_js_cancel_btn": "Cancel",
+        "ec_js_working": "Working…",
+        "ec_js_done_heading": "Enrollment code signed (shown only this once)",
+        "ec_js_once": "This code is shown only here, once: after a reload or leaving this page it cannot be retrieved; if it is lost or sent to the wrong place, void it and sign again.",
+        "ec_js_copy": "Copy",
+        "ec_js_copied": "Copied",
+        "ec_js_handoff": "One line for the other side (run it in their agent session; replace --workspace with their workstation directory, or the governance root for an advisor):",
+        "ec_js_expires": "Expires: {time} · code id {code_id} · fingerprint {fingerprint}",
+        "ec_js_exits": "Commands to void and sign again (first: not redeemed yet; second: already redeemed)",
+        "ec_js_done_btn": "Done (refresh the checklist)",
+        "ec_js_fail_heading": "Not signed",
+        "ec_js_err_other": "Request refused ({code}): {message}",
+        "ec_js_tech": "Technical details",
+        "ec_js_login": "Your login expired; log in to the board again and retry",
+        "ec_js_role_missing": "Pick a role first",
+        "ec_js_err_OWNER_ONLY": "Only an Owner login session can sign enrollment codes; tell the advisor or the Owner.",
+        "ec_js_err_WORKSPACE_NOT_IN_HOME": "This project is not a registered project of the home root; reload the page and check.",
+        "ec_js_err_ROLE_INVALID": "This role cannot be signed for this project; pick one from the list.",
+        "ec_js_err_INSTANCE_REQUIRED": "This role needs an instance name (advisor-class roles and sub-agent executors).",
+        "ec_js_err_INSTANCE_INVALID": "Invalid instance name (it must look like <prefix>.<project>.<host>, without spaces).",
+        "ec_js_err_GATE_URL_UNRESOLVED": "The gate address for the code cannot be derived; tell the advisor to check the gate address declaration.",
+        "ec_js_err_CREDENTIAL_UNAVAILABLE": "The board cannot read its signing credential; tell the advisor to run lybra roles enroll-code.",
+        "ec_js_err_GATE_UNAVAILABLE": "The gate is not running or cannot be reached; tell the advisor to check the gate service.",
+        "ec_js_err_GATE_REFUSED": "The gate refused to sign, see the technical details.",
+        "ec_js_err_PREVIEW_TOKEN_EXPIRED": "The preview expired; preview again.",
+        "ec_js_err_PREVIEW_PARAMS_MISMATCH": "The role, instance or validity changed after the preview; preview again.",
+        "ec_js_err_AUDIT_LOG_UNAVAILABLE": "The board audit log cannot be written, so nothing was done (every signing must be logged); tell the advisor to check the board runtime directory.",
         "ib_title": "Your decisions · {count} ({projects} projects)",
         "ib_empty": "Your decisions: nothing pending ({projects} projects)",
         "ib_heading": "{project} · {what}",
@@ -3060,7 +3156,7 @@ def make_handler(
     board_audit_log_path: Path | None = None,
     perf_log_path: Path | None = None,
 ) -> type[BaseHTTPRequestHandler]:
-    routes = _api_routes(repo_root, board_config_path, home_root=home_root)  # AIPOS-F171: 只读 GET 路由; POST 只有鉴权通道 + 四个 Owner 写例外(AIPOS-F269 ④ 新建项目)
+    routes = _api_routes(repo_root, board_config_path, home_root=home_root)  # AIPOS-F171: 只读 GET 路由; POST 只有鉴权通道 + 五个 Owner 写例外(AIPOS-F269 ④ 新建项目; AIPOS-F270 ⑤ 签注册码)
     sessions = session_store if session_store is not None else SessionStore()
     # AIPOS-272 FIX-2: 未显式注入时，按 repo_root 发现 connection.json（首选工作区自身）
     conn_paths = connection_paths if connection_paths is not None else _discover_connection_paths(repo_root=repo_root)
@@ -3104,6 +3200,10 @@ def make_handler(
     from tools.aipos_cli.board_project_new import board_declaration as project_new_board_declaration
 
     project_new_path = str(project_new_board_declaration()["write_path"])
+    # AIPOS-F270 write exception 5 (enrollment code): single write route read from verbs.schema verbs.lybra_roles_enroll_code.board
+    from tools.aipos_cli.board_enroll_code import board_declaration as enroll_code_board_declaration
+
+    enroll_code_path = str(enroll_code_board_declaration()["write_path"])
     # AIPOS-F198: workstation page (read-only, GET only; path read from verbs.schema verbs.lybra_project_workstation_plan.board)
     from tools.aipos_cli.workstation_plan import declaration as workstation_plan_declaration
 
@@ -3128,6 +3228,7 @@ def make_handler(
         _upgrade_paths = {k: str(upgrade_decl[k]) for k in ("page_path", "write_path")}
         _inbox_decide_path = str(inbox_decide_decl["write_path"])
         _project_new_path = project_new_path
+        _enroll_code_path = enroll_code_path
         _workstation_page = workstation_page
 
         def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
@@ -3503,6 +3604,26 @@ def make_handler(
                 content_type=self.headers.get("Content-Type"))
             self._send_json(HTTPStatus(status), payload)
 
+        # ---- AIPOS-F270 enrollment code: Owner write exception 5 (same F172 framework) ----
+        def _handle_enroll_code(self) -> None:
+            """POST write exception 5 (single write route): every check lives in board_enroll_code.handle_enroll_code_request
+            -> envelope_board.handle_owner_write (registered project; Owner session / preview token / Origin / audit log unchanged); signing =
+            enroll_deliver.gate_enroll_code (same as `lybra roles enroll-code`) with the board's issuing credential store (write exception 1's);
+            the code itself is only in this confirm response, never in a log; actor from the session."""
+            from tools.aipos_cli.board_enroll_code import handle_enroll_code_request
+            from tools.aipos_cli.envelope_board import session_ref
+
+            sid, info = self._current_session()
+            session = None
+            if info is not None and sid:
+                session = {"role": info.get("role"), "token_ref": info.get("token_ref") or "", "session_ref": session_ref(sid),
+                           "login_method": info.get("login_method") or "", "source_ip": self._source_ip()}
+            status, payload = handle_enroll_code_request(
+                self._read_json_body(), session=session, home_root=home_root, preview_store=self._previews,
+                audit_log_path=self._board_audit, connection_json=self._mint_conn, workspace_root=repo_root,
+                origin=self.headers.get("Origin"), host=self.headers.get("Host"), content_type=self.headers.get("Content-Type"))
+            self._send_json(HTTPStatus(status), payload)
+
         def do_GET(self) -> None:  # noqa: N802
             if self._perf_log is None:
                 self._route_get()
@@ -3664,6 +3785,10 @@ def make_handler(
             # AIPOS-F269 write exception 4: Owner new project (declared verbs.lybra_project_new.board.write_path)
             if path == self._project_new_path:
                 self._handle_project_new()
+                return
+            # AIPOS-F270 write exception 5: Owner enrollment code (declared verbs.lybra_roles_enroll_code.board.write_path)
+            if path == self._enroll_code_path:
+                self._handle_enroll_code()
                 return
             self._method_not_allowed()
 

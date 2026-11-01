@@ -449,7 +449,7 @@ def test_declarations_i18n_and_single_implementation():
     _show(f"[声明] write_path={decl['write_path']} script={decl['script_path']} action={decl['action']} 写例外清单="
           f"{verbs['board_readonly']['write_exceptions']}")
     assert decl["write_path"] == WRITE_PATH and decl["action"] == "project_new" and decl["page"] == "onboarding"
-    assert list(verbs["board_readonly"]["write_exceptions"]) == ["envelope_mint", "project_upgrade", "owner_inbox_decide", "project_new"]
+    assert list(verbs["board_readonly"]["write_exceptions"])[:4] == ["envelope_mint", "project_upgrade", "owner_inbox_decide", "project_new"]  # AIPOS-F270: 清单只追加(⑤ enroll_code)
     assert verbs["verbs"]["lybra_project_new"]["single_implementation"] == "tools/aipos_cli/workspace_config.scaffold_project"
     assert decl["landing"] in post_write_landing_declaration()["commands"]
     assert set(PN_JS_ERROR_CODES) <= set(decl["errors"]), "页面解释的拒因码都在声明码表内"

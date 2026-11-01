@@ -3876,3 +3876,15 @@ body.rp-page { margin: 0; background: var(--surface-page); color: var(--ink); fo
 .rp-page .pn-panel-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
 .rp-page .pn-pre { white-space: pre-wrap; overflow-x: auto; font-size: var(--text-note); }
 .rp-page .rp-ob-next { font-weight: 700; color: var(--green); border: var(--border-hairline); padding: 0 6px; }
+/* AIPOS-F270: "sign enrollment code" (board write exception 5) under the onboarding checklist rows + the one-time code box */
+.rp-page .ec-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+.rp-page .ec-sign, .rp-page .ec-panel-actions button { font: inherit; font-weight: 600; padding: 4px 12px; color: var(--green); cursor: pointer; }
+.rp-page .ec-pending { color: var(--muted); font-size: var(--text-note); }
+.rp-page .ec-panel { background: var(--white); border: var(--border-hairline); border-left: var(--accent-bar) solid var(--green);
+  padding: 10px 14px; margin: 10px 0; }
+.rp-page .ec-panel[hidden] { display: none; }
+.rp-page .ec-panel input[type="text"], .rp-page .ec-panel input[type="number"], .rp-page .ec-panel select { font: inherit; min-width: min(24em, 100%); padding: 4px 8px; }
+.rp-page .ec-panel-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.rp-page .ec-pre { white-space: pre-wrap; overflow-x: auto; font-size: var(--text-note); }
+.rp-page .ec-code { white-space: pre-wrap; word-break: break-all; border: var(--border-hairline); padding: 8px; font-size: var(--text-note); }
+.rp-page .ec-once { font-weight: 700; color: var(--state-alert); }

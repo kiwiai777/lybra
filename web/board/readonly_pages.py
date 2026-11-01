@@ -1017,7 +1017,9 @@ def _next_row(proj: dict[str, Any]) -> dict[str, Any] | None:
     return next((row for row in proj["rows"] if row["state"] in _OPEN_STATES), None)
 
 
-def _checklist_html(ctx: _Ctx, proj: dict[str, Any]) -> str:
+def _checklist_html(ctx: _Ctx, proj: dict[str, Any], enroll: dict[str, Any] | None = None) -> str:
+    """AIPOS-F270: enroll = this project's enrollment-code view (_enroll_view): signed-but-not-redeemed codes under their row (every
+    session; no code text), and for Owner sessions a "sign enrollment code" button next to each open advisor / executor / auditor row."""
     items = []
     nxt = _next_row(proj)
     for row in proj["rows"]:
@@ -1033,11 +1035,16 @@ def _checklist_html(ctx: _Ctx, proj: dict[str, Any]) -> str:
                      f"{next_attr}>"
                      f"<p>{mark}<span class=\"rp-state\">{_ESC(ctx.t('rp_ob_state_' + row['state']))}</span> "
                      f"<strong>{_ESC(ctx.t('rp_ob_item_' + row['key']))}</strong></p><ul class=\"rp-details\">{details}</ul>"
-                     f"{tell}{_command_block(ctx, row['commands'])}{links}</li>")
+                     f"{_enroll_row_html(ctx, enroll, row)}{tell}{_command_block(ctx, row['commands'])}{links}</li>")
     summary = proj["summary"]
     badge = _status_badge(ctx, proj)
+    roles = ""
+    if enroll and enroll.get("owner"):
+        import json
+
+        roles = f" data-ec-roles=\"{_ESC(json.dumps(enroll['roles'], ensure_ascii=False))}\""
     return (f"<section class=\"rp-ob-project\" id=\"{_ESC(proj['project'])}\" data-project=\"{_ESC(proj['project'])}\""
-            f" data-done=\"{summary['done']}\" data-total=\"{summary['total']}\"><h2>{_ESC(proj['project'])}{badge} "
+            f" data-done=\"{summary['done']}\" data-total=\"{summary['total']}\"{roles}><h2>{_ESC(proj['project'])}{badge} "
             f"<span class=\"rp-sub\">{_ESC(ctx.t('rp_ob_summary', done=summary['done'], total=summary['total']))}</span></h2>"
             f"<ul class=\"rp-upgrade-line\">{_upgrade_li(ctx, proj.get('upgrade'))}</ul>"
             f"<ol class=\"rp-checklist\">{''.join(items)}</ol></section>")
@@ -1107,28 +1114,128 @@ def _created_html(ctx: _Ctx, data: dict[str, Any], created: str | None) -> str:
             f"{_command_block(ctx, next_commands(created, proj['governance_root'], data['home_root']))}</section>")
 
 
+#: AIPOS-F270: i18n templates static/enroll-code.js fills (texts never live in the script; board i18n channel, zh / en same keys)
+_EC_JS_KEYS = ("ec_js_heading", "ec_js_role", "ec_js_instance", "ec_js_ttl", "ec_js_preview_btn", "ec_js_preview_heading", "ec_js_bind_role",
+               "ec_js_bind_instance", "ec_js_bind_gate", "ec_js_bind_root", "ec_js_bind_ttl", "ec_js_bind_actor", "ec_js_any_instance",
+               "ec_js_confirm_btn", "ec_js_cancel_btn", "ec_js_working", "ec_js_done_heading", "ec_js_once", "ec_js_copy", "ec_js_copied",
+               "ec_js_handoff", "ec_js_expires", "ec_js_exits", "ec_js_done_btn", "ec_js_fail_heading", "ec_js_err_other", "ec_js_tech",
+               "ec_js_login", "ec_js_role_missing")
+#: AIPOS-F270: refusal codes the page explains in the page language (other codes = ec_js_err_other with the server message)
+EC_JS_ERROR_CODES = ("OWNER_ONLY", "WORKSPACE_NOT_IN_HOME", "ROLE_INVALID", "INSTANCE_REQUIRED", "INSTANCE_INVALID", "GATE_URL_UNRESOLVED",
+                     "CREDENTIAL_UNAVAILABLE", "GATE_UNAVAILABLE", "GATE_REFUSED", "PREVIEW_TOKEN_EXPIRED", "PREVIEW_PARAMS_MISMATCH",
+                     "AUDIT_LOG_UNAVAILABLE")
+
+
+def _enroll_view(proj: dict[str, Any], *, owner: bool, registry_root: str | Path | None) -> dict[str, Any]:
+    """AIPOS-F270: one project's enrollment-code view (board_enroll_code, nothing recomputed here): signed-but-not-redeemed codes per row
+    (enroll-list's implementation, no code text; registry = the board server's workspace) and, for Owner sessions, the sign targets per
+    open row (role + listed / suggested instance) and the project's role choices."""
+    from tools.aipos_cli.board_enroll_code import board_declaration, enroll_targets, pending_codes, role_choices
+    from tools.aipos_cli.custom_roles import RoleRegistryReadError
+
+    decl = board_declaration()
+    view: dict[str, Any] = {"owner": owner, "pending": pending_codes(registry_root, proj["governance_root"], decl), "targets": {},
+                            "roles": [], "row_keys": [k for k in decl["row_roles"] if any(r["key"] == k for r in proj["rows"])] or [""]}
+    if owner:
+        view["targets"] = {row["key"]: enroll_targets(proj["project"], row, decl) for row in proj["rows"]}
+        try:
+            view["roles"] = role_choices(proj["governance_root"])
+        except RoleRegistryReadError as exc:  # gate registry unreadable: no choices offered (the server refuses the same way)
+            view["roles_error"] = str(exc)
+    return view
+
+
+def _expiry_text(value: Any) -> str:
+    """AIPOS-F270: expiry for the "signed, awaiting redemption" line: HH:MM UTC (date added when not today, UTC)."""
+    from datetime import datetime, timezone
+
+    try:
+        at = datetime.fromisoformat(str(value).replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return str(value)
+    today = datetime.now(timezone.utc).date()
+    return at.strftime("%H:%M UTC") if at.date() == today else at.strftime("%m-%d %H:%M UTC")
+
+
+def _enroll_row_html(ctx: _Ctx, enroll: dict[str, Any] | None, row: dict[str, Any]) -> str:
+    """AIPOS-F270: under one checklist row: its signed-but-not-redeemed codes (code id, instance, expiry; never the code) with the void
+    command folded, and for Owner sessions the "sign enrollment code" buttons (prefilled role + instance; static/enroll-code.js)."""
+    if not enroll:
+        return ""
+    out = []
+    pending = enroll["pending"]
+    if pending.get("error") and row["key"] == enroll["row_keys"][0]:  # registry unreadable: said once, on the first enrollment row
+        out.append(f"<p class=\"ec-pending rp-err\">{_ESC(ctx.t('ec_pending_error', error=pending['error']))}</p>")
+    codes = (pending.get("rows") or {}).get(row["key"]) or []
+    if codes:
+        lines = "".join(
+            f"<li data-code-id=\"{_ESC(str(c['code_id']))}\" title=\"{_ESC(str(c.get('expires_at') or ''))}\">"
+            f"{_ESC(ctx.t('ec_pending', time=_expiry_text(c.get('expires_at')), role=c.get('role') or '', code_id=c['code_id'], instance=c.get('instance') or ctx.t('ec_pending_any')))}"
+            f"</li>" for c in codes)
+        out.append(f"<ul class=\"ec-pending\">{lines}</ul>{_command_block(ctx, [c['revoke'] for c in codes])}")
+    targets = (enroll.get("targets") or {}).get(row["key"]) or []
+    if enroll.get("owner") and targets:
+        buttons = []
+        for tg in targets:
+            if not tg["instance"]:
+                label = ctx.t("ec_button_noname", role=tg["role"])
+            else:
+                label = ctx.t("ec_button_suggested" if tg["suggested"] else "ec_button", instance=tg["instance"])
+            buttons.append(f"<button type=\"button\" class=\"ec-sign\" data-ec-role=\"{_ESC(tg['role'])}\""
+                           f" data-ec-instance=\"{_ESC(tg['instance'] or '')}\">{_ESC(label)}</button>")
+        out.append(f"<p class=\"ec-actions\">{''.join(buttons)}</p>")
+    return "".join(out)
+
+
+def _enroll_attrs(ctx: _Ctx) -> str:
+    """AIPOS-F270: body attributes for static/enroll-code.js (write path from the declaration, default validity = the CLI default, unformatted
+    texts in the page language)."""
+    import json
+
+    from tools.aipos_cli.board_enroll_code import board_declaration
+    from tools.aipos_cli.enrollment import ENROLL_DEFAULT_TTL_SECONDS
+
+    keys = list(_EC_JS_KEYS) + ["ec_js_err_" + code for code in EC_JS_ERROR_CODES]
+    texts = json.dumps({key: ctx.raw(key) for key in keys}, ensure_ascii=False)
+    return (f" data-ec-owner=\"true\" data-ec-write-path=\"{_ESC(str(board_declaration()['write_path']))}\""
+            f" data-ec-default-ttl=\"{ENROLL_DEFAULT_TTL_SECONDS}\" data-ec-texts=\"{_ESC(texts)}\"")
+
+
+def _enroll_panel_html() -> str:
+    """AIPOS-F270: the one sign-code panel (Owner sessions; filled by static/enroll-code.js: form -> preview -> confirm -> one-time code box)."""
+    return ("<section class=\"ec-panel\" id=\"ec-panel\" hidden><h3></h3><div class=\"ec-panel-body\"></div>"
+            "<div class=\"ec-panel-actions\"></div></section>")
+
+
 def render_onboarding(data: dict[str, Any], lang: str, setup: dict[str, Any] | None = None, *, owner: bool = False,
-                      created: str | None = None) -> str:
+                      created: str | None = None, enroll_registry: str | Path | None = None) -> str:
     """AIPOS-F267: setup = board_pages.setup_summary (one line on top linking the setup check page).
     AIPOS-F269: owner = Owner session (the "new project" form + script; other sessions get the read-only hint); created = the project
-    the board just created (?<created_param>=<name>: banner with its next step)."""
+    the board just created (?<created_param>=<name>: banner with its next step).
+    AIPOS-F270: enroll_registry = the board server's workspace (its enrollment-code registry): signed-but-not-redeemed codes under the
+    advisor / executor / auditor rows; Owner sessions also get the "sign enrollment code" buttons, panel and script."""
     ctx = _Ctx(data["decl"], lang)
     active = [p for p in data["projects"] if not p["paused"]]
     paused = [p for p in data["projects"] if p["paused"]]
     body = [_setup_summary_html(ctx, setup, "rp-ob-setup")] if setup is not None else []
     body.append(_created_html(ctx, data, created))
     body.append(_project_new_html(ctx, data, owner))
+    if owner:
+        body.append(_enroll_panel_html())
     body.append(_toggle(ctx, data.get("hidden") or [], bool(data.get("show_all")), str(ctx.decl["pages"]["onboarding"])))
-    body += [_checklist_html(ctx, p) for p in active]
+    body += [_checklist_html(ctx, p, _enroll_view(p, owner=owner, registry_root=enroll_registry)) for p in active]
     if paused:
         body.append(f"<details class=\"rp-paused\" data-paused=\"{len(paused)}\"><summary>{_ESC(ctx.t('rp_paused_folded', count=len(paused)))}"
-                    "</summary>" + "".join(_checklist_html(ctx, p) for p in paused) + "</details>")
+                    "</summary>" + "".join(_checklist_html(ctx, p, _enroll_view(p, owner=owner, registry_root=enroll_registry))
+                                           for p in paused) + "</details>")
     if not owner:
         return _page(ctx, "onboarding", ctx.t("rp_ob_title", count=len(data["projects"])), body)
+    from tools.aipos_cli.board_enroll_code import board_declaration as enroll_code_declaration
     from tools.aipos_cli.board_project_new import board_declaration
 
     return _page(ctx, "onboarding", ctx.t("rp_ob_title", count=len(data["projects"])), body, note_key=None,
-                 body_attrs=_project_new_attrs(ctx), scripts=[str(board_declaration()["script_path"])])
+                 body_attrs=_project_new_attrs(ctx) + _enroll_attrs(ctx),
+                 scripts=[str(board_declaration()["script_path"]), str(enroll_code_declaration()["script_path"])])
 
 
 # ---------------------------------------------------------------------------
@@ -2083,7 +2190,7 @@ def _render_page(page: str, home_root: str | Path | None, params: dict[str, list
             created = (params.get(project_new_declaration()["created_param"]) or [None])[0]  # AIPOS-F269: landed here after creating
             return render_onboarding(board_pages.collect_onboarding(home_root, show_all=show_all), lang,
                                      board_pages.setup_summary(board_pages.setup_check_latest(workspace_root), decl),  # AIPOS-F267
-                                     owner=owner, created=created)
+                                     owner=owner, created=created, enroll_registry=workspace_root)  # AIPOS-F270
         if page == "setup":  # AIPOS-F267: setup check (same run_setup_check as `lybra setup check`; short in-process cache)
             return render_setup(board_pages.collect_setup(workspace_root, params), lang)
         if page == "project":
