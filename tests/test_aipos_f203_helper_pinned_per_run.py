@@ -291,7 +291,9 @@ def test_single_source_and_declarations():
     decl = vr.helper_pinning_declaration()
     assert not is_code_file(decl["snapshot_filename"].replace("{sha256}", "0" * 64), load_guardrail_declarations())
     assert "helper_sha256" in vr.entry_key_table()["run_optional"] and "VR_HELPER_SNAPSHOT_INVALID" in vr.reject_codes()
-    assert PROJECT_PATH_KEYS[-1] == "validation_helper_root" and "helper_pin" in vr.TEXT_KEYS
+    # 只追加: AIPOS-F262 在其后追加 workstations_root
+    assert "validation_helper_root" in PROJECT_PATH_KEYS and PROJECT_PATH_KEYS[-2:] == ("validation_helper_root", "workstations_root")
+    assert "helper_pin" in vr.TEXT_KEYS
 
 
 def test_f203_fixture_discovered_by_runall():
