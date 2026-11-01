@@ -727,10 +727,12 @@ def redacted_service_state(state: dict[str, Any]) -> dict[str, Any]:
     processes = []
     for proc in state.get("processes", []) if isinstance(state.get("processes"), list) else []:
         if isinstance(proc, dict):
-            processes.append({key: proc.get(key) for key in ("name", "pid", "service_owned", "started_at")})
+            processes.append({key: proc.get(key) for key in ("name", "pid", "service_owned", "started_at", "restarts")})
+    supervisor = state.get("supervisor")  # AIPOS-F266 件①: 旧 state 无此块 = None
     return {
         "mode": state.get("mode"),
         "started_at": state.get("started_at"),
+        "supervisor": {key: supervisor.get(key) for key in ("pid", "started_at", "service_manager")} if isinstance(supervisor, dict) else None,
         "processes": processes,
     }
 
@@ -1132,16 +1134,16 @@ def _run_supervisor(
 
     processes: list[subprocess.Popen[Any]] = []
     started_at = iso_z()
-    # AIPOS-238 (F-o3-13 B): reap children on SIGTERM/SIGHUP too, not just Ctrl-C (SIGINT). Without
-    # this, a plain `kill` / script exit / non-SIGINT trap orphans board+mcp (they keep the ports with
-    # old tokens). We route the signals into the SAME KeyboardInterrupt cleanup path — pure shutdown
-    # cleanup, NOT a daemon — and restore the prior handlers afterward.
+    # AIPOS-238 (F-o3-13 B) + AIPOS-F266 件②: SIGTERM / SIGHUP / SIGINT 只置停止标志(不抛异常): 循环见标志即不再重拉、
+    # 退出后 finally 收子进程。原做法(信号处抛 KeyboardInterrupt)在 Popen 返回与登记之间被打断会漏收新子进程, 且收尾中
+    # 再来一次 SIGTERM 会打断 _terminate_processes 留孤儿; 现收尾期间这些信号一律忽略, 收完再恢复原处理。
     prev_handlers: dict[int, Any] = {}
+    stop_requested = {"flag": False}
 
     def _shutdown(_signum: int, _frame: Any) -> None:
-        raise KeyboardInterrupt
+        stop_requested["flag"] = True
 
-    for _sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)):
+    for _sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None), signal.SIGINT):
         if _sig is None:
             continue
         try:
@@ -1149,30 +1151,45 @@ def _run_supervisor(
         except (ValueError, OSError):
             pass  # not the main thread / unsupported platform — best-effort
     # AIPOS-272 FIX-1: supervisor 子进程重拉机制（有界退避），防止首启竞态导致子进程崩溃后不重启。
-    # 重启策略：每个子进程独立计数，最多重启 5 次，退避延迟 1/2/4/8/16 秒。systemd 模式不冲突（该逻辑
-    # 仅在前台 demo 模式生效；systemd 有自己的 Restart=）。
+    # 重启策略：每个子进程独立计数，最多重启 5 次，退避延迟 1/2/4/8/16 秒。常驻模式(systemd / launchd)下同一 supervisor
+    # 也跑这段; `serve stop` 先停 supervisor 再停子进程(AIPOS-F266), 常驻模式的 stop 交给 systemctl / launchctl。
     MAX_RESTARTS = 5
     BACKOFF_DELAYS = [1, 2, 4, 8, 16]
     restart_counts = {"board": 0, "mcp": 0}
+    child_started = {"board": started_at, "mcp": started_at}
     child_specs = [("board", board_cmd), ("mcp", mcp_cmd)]
     should_exit = False
-    try:
-        processes.append(subprocess.Popen(board_cmd, env=env))
-        processes.append(subprocess.Popen(mcp_cmd, env=env))
+    # AIPOS-F266 件①: state 记 supervisor 自身(pid + 启动时刻指纹 + 是否由 systemd / launchd 直接拉起), 子进程同记指纹。
+    supervisor_record = _supervisor_record(started_at)
+
+    def _persist_state() -> None:
         state = {
             "mode": SERVICE_MODE,
             "started_at": started_at,
             "connection_path": str(connection_path(workspace_root, connection_target=connection_target)),
+            "supervisor": supervisor_record,
             "processes": [
-                {"name": "board", "pid": processes[0].pid, "service_owned": True, "started_at": started_at},
-                {"name": "mcp", "pid": processes[1].pid, "service_owned": True, "started_at": started_at},
+                _child_record(name, proc, started_at=child_started[name], restarts=restart_counts[name])
+                for (name, _cmd), proc in zip(child_specs, processes)
             ],
         }
         _write_service_state(workspace_root, state, connection_target=connection_target)
+
+    def _sleep_unless_stopped(seconds: float) -> None:
+        deadline = time.monotonic() + seconds
+        while not stop_requested["flag"] and time.monotonic() < deadline:
+            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+
+    try:
+        processes.append(subprocess.Popen(board_cmd, env=env))
+        processes.append(subprocess.Popen(mcp_cmd, env=env))
+        _persist_state()
         print(render_connection_table({"workspace_root": str(workspace_root), "connection": redacted_connection(config), "warnings": warnings, "blocking_reasons": []}))
-        while not should_exit:
+        while not should_exit and not stop_requested["flag"]:
             for i, (name, cmd) in enumerate(child_specs):
                 proc = processes[i]
+                if stop_requested["flag"]:
+                    break
                 if proc.poll() is not None:
                     # 子进程已退出
                     if restart_counts[name] >= MAX_RESTARTS:
@@ -1180,20 +1197,29 @@ def _run_supervisor(
                         print(f"Warning: {name} exited and reached restart limit ({MAX_RESTARTS})", file=sys.stderr)
                         should_exit = True
                         break
-                    # 退避延迟
+                    # 退避延迟(停止请求到来即中断, 不再重拉)
                     delay = BACKOFF_DELAYS[min(restart_counts[name], len(BACKOFF_DELAYS) - 1)]
                     print(f"Warning: {name} (pid {proc.pid}) exited with code {proc.returncode}; restarting in {delay}s (attempt {restart_counts[name] + 1}/{MAX_RESTARTS})...", file=sys.stderr)
-                    time.sleep(delay)
+                    _sleep_unless_stopped(delay)
+                    if stop_requested["flag"]:
+                        break
                     # 重启
-                    new_proc = subprocess.Popen(cmd, env=env)
-                    processes[i] = new_proc
+                    processes[i] = subprocess.Popen(cmd, env=env)
                     restart_counts[name] += 1
-                    print(f"{name} restarted as pid {new_proc.pid}", file=sys.stderr)
+                    child_started[name] = iso_z()
+                    # AIPOS-F266 件③: 重拉后原子回写 state(新 pid + 指纹), `serve stop` 读到的永远是现役子进程
+                    _persist_state()
+                    print(f"{name} restarted as pid {processes[i].pid}", file=sys.stderr)
             if not should_exit:
-                time.sleep(0.5)
+                _sleep_unless_stopped(0.5)
     except KeyboardInterrupt:
         pass
     finally:
+        for _sig in prev_handlers:  # 收尾期间不让再来的停止信号打断 _terminate_processes(打断 = 子进程成孤儿)
+            try:
+                signal.signal(_sig, signal.SIG_IGN)
+            except (ValueError, OSError):
+                pass
         _terminate_processes(processes)
         for _sig, _handler in prev_handlers.items():
             try:
@@ -1242,36 +1268,304 @@ def _run_supervisor(
 def _write_service_state(
     workspace_root: Path, state: dict[str, Any], *, connection_target: Path | None = None
 ) -> None:
+    """AIPOS-F266 件③: 原子写(先写同目录 .tmp-<pid> 再改名, 0600)——supervisor 重拉后回写时 `serve stop` 不会读到半截文件。
+    复用 token_rotation 的 JSON 原子写(唯一实现)。"""
+    from tools.aipos_cli.token_rotation import _atomic_write_config
+
     ensure_local_dir(workspace_root, connection_target=connection_target)
     path = service_state_path(workspace_root, connection_target=connection_target)
-    path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    if os.name == "posix" and not _is_probably_non_posix(path):
-        os.chmod(path, REQUIRED_CONNECTION_MODE)
+    _atomic_write_config(path, state)
 
 
-def stop_report(workspace_root: Path, *, connection_target: Path | None = None) -> dict[str, Any]:
+# ---------------------------------------------------------------------------
+# AIPOS-F266: `serve stop` 停得住 supervisor
+#   件① state 记 supervisor 自身(pid + 启动时刻指纹 + 常驻管理器), 子进程同记指纹; stop 前按指纹核身, 不符(pid 已被复用)只报不杀。
+#   件② stop 先 SIGTERM supervisor(其收尾会停子进程)并限时等待; 超时 SIGKILL; 之后对 state 记录的子进程逐个 SIGTERM → 限时 →
+#        SIGKILL; 报告逐个列最终状态(已停 / 已不在 / 未能停止 + 原因), 有未能停止 = BLOCK。
+#   件④ supervisor 由 systemd / launchd 直接拉起(serve install 常驻单元, 或同形手写单元): stop 不发任何信号(否则与单元
+#        Restart= / KeepAlive 互相打架: 刚停又被拉起), 给出 systemctl / launchctl 出口。
+# 进程启动时刻指纹唯一实现 = loop_run_record.process_fingerprint / process_alive(Linux /proc stat 第 22 字段; 无 /proc 用 ps lstart)。
+# ---------------------------------------------------------------------------
+
+#: supervisor 收到 SIGTERM 后的限时: 其收尾 _terminate_processes 对每个子进程至多等 5 秒再 SIGKILL(两个子进程)+ 余量。
+STOP_SUPERVISOR_GRACE_SECONDS = 15.0
+#: 子进程 SIGTERM 后的限时, 过时 SIGKILL。
+STOP_CHILD_GRACE_SECONDS = 5.0
+#: SIGKILL 后确认退出的限时; 仍在 = 未能停止。
+STOP_KILL_CONFIRM_SECONDS = 3.0
+#: 进程最终状态(stop 报告逐个列出)。
+STOP_STATUS_LABELS = {"stopped": "已停", "gone": "已不在", "failed": "未能停止", "left_running": "未动(常驻模式)"}
+
+
+def _process_fingerprint(pid: int) -> str | None:
+    from tools.aipos_cli.loop_run_record import process_fingerprint
+
+    return process_fingerprint(pid)
+
+
+def _process_alive(pid: int, fingerprint: str) -> bool:
+    from tools.aipos_cli.loop_run_record import process_alive
+
+    return process_alive(pid, fingerprint)
+
+
+def _proc_ppid(proc_root: Path, pid: int) -> int:
+    raw = (proc_root / str(pid) / "stat").read_text(encoding="utf-8", errors="replace")
+    return int(raw.rsplit(")", 1)[1].split()[1])  # 第 2 字段(进程名)可含空格与括号: 按最后一个右括号定位
+
+
+def _systemd_unit_of(cgroup_text: str) -> tuple[str, bool] | None:
+    """/proc/<pid>/cgroup → (所在 .service 单元名, 是否用户级管理器)。cgroup v2 取 `0::` 行; v1 取 name=systemd 行。"""
+    for line in cgroup_text.splitlines():
+        parts = line.split(":", 2)
+        if len(parts) != 3 or parts[1] not in ("", "name=systemd"):
+            continue
+        path = parts[2].strip().rstrip("/")
+        leaf = path.rsplit("/", 1)[-1]
+        if leaf.endswith(".service") and not leaf.startswith("user@"):
+            return leaf, "/user@" in path
+    return None
+
+
+def detect_service_manager(
+    *,
+    pid: int | None = None,
+    ppid: int | None = None,
+    env: dict[str, str] | None = None,
+    platform: str | None = None,
+    proc_root: Path = Path("/proc"),
+) -> dict[str, Any] | None:
+    """AIPOS-F266 件④: 本 supervisor 是否由服务管理器直接拉起(常驻模式)。只读, 不跑任何命令。
+    Linux: 父进程是 systemd(用户级管理器或 pid 1)且本进程所在 cgroup 叶子是 *.service = systemd 单元的主进程;
+    macOS: 父进程是 launchd(pid 1)且 XPC_SERVICE_NAME 为单元标签(终端里是空或 "0")。
+    只认「直接拉起」: 由常驻门再派生的进程(如门拉起的 pi 跑测试起的 serve)父进程不是管理器, 不算常驻。
+    返回 {kind, unit, stop_command} 或 None(前台 / 判不出 = 按前台处理)。"""
+    plat = platform or sys.platform
+    env = dict(os.environ) if env is None else env
+    pid = os.getpid() if pid is None else pid
+    if plat.startswith("linux"):
+        try:
+            parent = _proc_ppid(proc_root, pid) if ppid is None else ppid
+            parent_comm = (proc_root / str(parent) / "comm").read_text(encoding="utf-8", errors="replace").strip()
+            cgroup = (proc_root / str(pid) / "cgroup").read_text(encoding="utf-8", errors="replace")
+        except (OSError, ValueError, IndexError):
+            return None
+        if parent_comm != "systemd":
+            return None
+        found = _systemd_unit_of(cgroup)
+        if found is None:
+            return None
+        unit, user_manager = found
+        argv = ["systemctl", "--user", "stop", unit] if user_manager or parent != 1 else ["systemctl", "stop", unit]
+        return {"kind": "systemd", "unit": unit, "stop_command": " ".join(argv)}
+    if plat == "darwin":
+        parent = os.getppid() if ppid is None else ppid
+        label = str(env.get("XPC_SERVICE_NAME") or "").strip()
+        if parent != 1 or label in ("", "0"):
+            return None
+        uid = os.getuid() if hasattr(os, "getuid") else 0
+        return {"kind": "launchd", "unit": label, "stop_command": f"launchctl bootout gui/{uid}/{label}"}
+    return None
+
+
+def _supervisor_record(started_at: str) -> dict[str, Any]:
+    pid = os.getpid()
+    return {"pid": pid, "fingerprint": _process_fingerprint(pid), "started_at": started_at,
+            "service_manager": detect_service_manager()}
+
+
+def _child_record(name: str, proc: subprocess.Popen[Any], *, started_at: str, restarts: int) -> dict[str, Any]:
+    return {"name": name, "pid": proc.pid, "service_owned": True, "started_at": started_at,
+            "fingerprint": _process_fingerprint(proc.pid), "restarts": restarts}
+
+
+def _child_module_markers() -> dict[str, str]:
+    """旧 state(F266 前, 无指纹)核身用: 子进程命令行里的模块名(取自 _build_child_commands, 不另写一份)。"""
+    board_cmd, mcp_cmd = _build_child_commands({}, child_workspace_root=Path("."), connection_path_str="")
+    return {"board": board_cmd[2], "mcp": mcp_cmd[2]}
+
+
+def _cmdline_of(pid: int) -> str | None:
+    proc_cmdline = Path("/proc") / str(pid) / "cmdline"
+    if Path("/proc/self").is_dir():
+        try:
+            return proc_cmdline.read_bytes().replace(b"\0", b" ").decode("utf-8", "replace").strip() or None
+        except OSError:
+            return None
+    try:
+        out = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return (out.stdout.strip() or None) if out.returncode == 0 else None
+
+
+def _identify(entry: dict[str, Any], *, marker: str | None) -> tuple[str | None, dict[str, Any] | None]:
+    """核身: 返回 (可用于判活的指纹, None) = 是 state 记录的那个进程且仍在; (None, 结果) = 不发信号, 结果即最终状态。
+    新 state: 现读启动时刻指纹 == 记录值; 记录为空(记录时已退出)/ 不符(pid 被复用)= 只报不杀。
+    旧 state(无 fingerprint 键): 命令行含该子进程模块名才认, 否则只报不杀; supervisor 无旧记录(旧 state 不记)。"""
+    from tools.aipos_cli.loop_run_record import LoopRunRecordError
+
+    pid = entry["pid"]
+    try:
+        current = _process_fingerprint(pid)
+    except LoopRunRecordError as exc:
+        return None, {"status": "failed", "reason": f"读不出进程启动时刻, 无法核身, 未发信号: {exc}"}
+    if current is None:
+        return None, {"status": "gone", "reason": "进程已不在"}
+    if "fingerprint" in entry:
+        recorded = entry.get("fingerprint")
+        if not recorded:
+            return None, {"status": "gone", "reason": "记录时已退出(state 无指纹); 该 pid 现为他进程, 未发信号"}
+        if recorded != current:
+            return None, {"status": "gone", "reason": f"pid 已被他进程复用(启动时刻 {current} ≠ state 记录 {recorded}), 未发信号"}
+        return current, None
+    cmdline = _cmdline_of(pid)
+    if cmdline is None:
+        return None, {"status": "failed", "reason": "旧 state 无启动时刻指纹且读不出命令行, 无法核身, 未发信号"}
+    if not marker or marker not in cmdline:
+        return None, {"status": "gone", "reason": f"旧 state 无启动时刻指纹, 该 pid 命令行不含 {marker!r}(已被复用), 未发信号"}
+    return current, None
+
+
+def _wait_gone(pid: int, fingerprint: str, seconds: float) -> bool:
+    deadline = time.monotonic() + seconds
+    while True:
+        if not _process_alive(pid, fingerprint):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+
+
+def _terminate_verified(pid: int, fingerprint: str, *, grace: float) -> dict[str, Any]:
+    """已核身的进程: SIGTERM → 限时 → SIGKILL → 确认。返回 {status, signals, reason}。"""
+    signals: list[str] = []
+    for sig, wait_s in ((signal.SIGTERM, grace), (getattr(signal, "SIGKILL", signal.SIGTERM), STOP_KILL_CONFIRM_SECONDS)):
+        if not _process_alive(pid, fingerprint):
+            break
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            break
+        except PermissionError as exc:
+            return {"status": "failed", "signals": signals, "reason": f"无权限发 {sig.name}: {exc}"}
+        signals.append(sig.name)
+        if _wait_gone(pid, fingerprint, wait_s):
+            return {"status": "stopped", "signals": signals, "reason": f"{sig.name} 后退出"}
+    if _process_alive(pid, fingerprint):
+        return {"status": "failed", "signals": signals, "reason": f"{' → '.join(signals) or '信号'} 后仍在"}
+    return {"status": "stopped" if signals else "gone", "signals": signals,
+            "reason": "已退出" if signals else "进程已不在"}
+
+
+def _read_state(path: Path) -> dict[str, Any]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("service_state.json 顶层不是对象")
+    return data
+
+
+def _state_children(*states: dict[str, Any]) -> list[dict[str, Any]]:
+    """各次读到的 state 里 service_owned 子进程(按 pid + 指纹去重, 保序)。"""
+    seen: set[tuple[int, Any]] = set()
+    out: list[dict[str, Any]] = []
+    for data in states:
+        procs = data.get("processes")
+        for entry in procs if isinstance(procs, list) else []:
+            if not isinstance(entry, dict) or not entry.get("service_owned"):
+                continue
+            try:
+                pid = int(entry.get("pid") or 0)
+            except (TypeError, ValueError):
+                continue
+            key = (pid, entry.get("fingerprint", "<legacy>"))
+            if pid <= 0 or key in seen:
+                continue
+            seen.add(key)
+            out.append({**entry, "pid": pid})
+    return out
+
+
+def stop_report(
+    workspace_root: Path,
+    *,
+    connection_target: Path | None = None,
+    supervisor_grace: float = STOP_SUPERVISOR_GRACE_SECONDS,
+    child_grace: float = STOP_CHILD_GRACE_SECONDS,
+) -> dict[str, Any]:
     # AIPOS-349: default is workspace path via _resolve_connection_target. No fallback to global.
     path = service_state_path(workspace_root, connection_target=connection_target)
     warnings: list[dict[str, Any]] = []
     stopped: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
+    blocking: list[dict[str, Any]] = []
+    base = {"operation": "serve_stop", "workspace_root": str(workspace_root), "state_path": str(path)}
     if not path.exists():
-        return {"operation": "serve_stop", "ok": True, "verdict": Verdict.PASS, "workspace_root": str(workspace_root), "stopped": [], "warnings": [{"message": "No service_state.json found; nothing to stop."}], "blocking_reasons": []}
-    data = json.loads(path.read_text(encoding="utf-8"))
-    processes = data.get("processes") if isinstance(data, dict) else []
-    for proc in processes if isinstance(processes, list) else []:
-        if not isinstance(proc, dict) or not proc.get("service_owned"):
-            continue
-        pid = int(proc.get("pid") or 0)
-        if pid <= 0:
-            continue
-        try:
-            os.kill(pid, signal.SIGTERM)
-            stopped.append({"name": proc.get("name"), "pid": pid, "signal": "SIGTERM"})
-        except ProcessLookupError:
-            warnings.append({"message": f"Process already exited: {pid}", "pid": pid})
-        except PermissionError:
-            warnings.append({"message": f"Permission denied stopping service-owned process: {pid}", "pid": pid})
-    return {"operation": "serve_stop", "ok": True, "verdict": Verdict.PASS, "workspace_root": str(workspace_root), "stopped": stopped, "warnings": warnings, "blocking_reasons": []}
+        return {**base, "ok": True, "verdict": Verdict.PASS, "stopped": [], "processes": [], "warnings": [{"message": "No service_state.json found; nothing to stop."}], "blocking_reasons": []}
+    try:
+        first = _read_state(path)
+    except (OSError, ValueError) as exc:
+        return {**base, "ok": False, "verdict": Verdict.BLOCK, "stopped": [], "processes": [], "warnings": [],
+                "blocking_reasons": [{"message": f"service_state.json 读不出, 未发任何信号: {exc}", "path": str(path)}]}
+
+    def _record(name: Any, pid: int, outcome: dict[str, Any]) -> None:
+        status = outcome["status"]
+        row = {"name": name, "pid": pid, "status": status, "label": STOP_STATUS_LABELS[status],
+               "reason": outcome.get("reason"), "signals": outcome.get("signals") or []}
+        results.append(row)
+        for sig in row["signals"]:
+            stopped.append({"name": name, "pid": pid, "signal": sig})
+        if status == "failed":
+            blocking.append({"message": f"{name} (pid {pid}) 未能停止: {outcome.get('reason')}", "pid": pid})
+
+    states = [first]
+    supervisor = first.get("supervisor")
+    supervisor_stopped = False
+    if isinstance(supervisor, dict) and int(supervisor.get("pid") or 0) > 0:
+        sup_pid = int(supervisor["pid"])
+        fingerprint, outcome = _identify({**supervisor, "fingerprint": supervisor.get("fingerprint")}, marker=None)
+        manager = supervisor.get("service_manager") if isinstance(supervisor.get("service_manager"), dict) else None
+        if fingerprint is not None and manager:
+            # 件④: 常驻单元的主进程 — 发信号 = 与 Restart= / KeepAlive 打架(刚停又被拉起), 一律不动, 给出口
+            stop_cmd = str(manager.get("stop_command") or "")
+            _record("supervisor", sup_pid, {"status": "left_running", "reason": f"由 {manager.get('kind')} 单元 {manager.get('unit')} 常驻托管"})
+            for entry in _state_children(first):
+                _record(entry.get("name"), entry["pid"], {"status": "left_running", "reason": "常驻模式, 随单元停"})
+            blocking.append({
+                "message": (f"serve 由 {manager.get('kind')} 单元 {manager.get('unit')} 常驻托管(serve install 或同形手写单元): "
+                            f"`serve stop` 不发信号(否则单元按 Restart= / KeepAlive 立即重拉)。常驻模式请用 `{stop_cmd}` 停止"
+                            "(停用并移除本命令生成的单元: `lybra serve uninstall --confirm`)。"),
+                "fix_command": stop_cmd,
+            })
+            return {**base, "ok": False, "verdict": Verdict.BLOCK, "resident": manager, "stopped": [], "processes": results,
+                    "warnings": warnings, "blocking_reasons": blocking}
+        if fingerprint is not None:
+            outcome = _terminate_verified(sup_pid, fingerprint, grace=supervisor_grace)
+            supervisor_stopped = outcome["status"] == "stopped"
+        _record("supervisor", sup_pid, outcome or {"status": "gone", "reason": "进程已不在"})
+        # supervisor 停下前可能刚重拉过子进程并回写 state: 重读一次, 两次所记子进程都核
+        if path.exists():
+            try:
+                states.append(_read_state(path))
+            except (OSError, ValueError) as exc:
+                warnings.append({"message": f"停 supervisor 后重读 service_state.json 失败, 按首次读到的子进程处理: {exc}"})
+    else:
+        warnings.append({"message": ("service_state.json 未记 supervisor(AIPOS-F266 前起的 serve): 只能停所记子进程, "
+                                     "supervisor 仍在时会按退避重拉; 请停掉 supervisor 后用新版 `serve start` 重起")})
+    markers = _child_module_markers()
+    for entry in _state_children(*states):
+        pid = entry["pid"]
+        fingerprint, outcome = _identify(entry, marker=markers.get(str(entry.get("name"))))
+        if fingerprint is not None:
+            outcome = _terminate_verified(pid, fingerprint, grace=child_grace)
+        elif outcome and outcome["status"] == "gone" and supervisor_stopped and outcome.get("reason") == "进程已不在":
+            outcome = {"status": "gone", "reason": "supervisor 收尾时已停"}
+        if "fingerprint" not in entry and fingerprint is not None:
+            warnings.append({"message": f"{entry.get('name')} (pid {pid}): 旧 state 无启动时刻指纹, 按命令行核身", "pid": pid})
+        _record(entry.get("name"), pid, outcome or {"status": "gone", "reason": "进程已不在"})
+    ok = not blocking
+    return {**base, "ok": ok, "verdict": Verdict.PASS if ok else Verdict.BLOCK, "stopped": stopped, "processes": results,
+            "warnings": warnings, "blocking_reasons": blocking}
 
 
 def _ports_in_use(targets: list[tuple[str, int, str]]) -> list[tuple[str, int, str]]:
