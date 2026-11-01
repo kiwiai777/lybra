@@ -182,7 +182,9 @@ def test_item2_unregistered_mcp_surfaces_removed():
         assert name not in verbs and name not in TOOL_HANDLERS and f"def {name}(" not in tools_src and f'"{name}"' not in cli_src, name
     for name, impl in (("lybra_project_new", "tools/aipos_cli/workspace_config.scaffold_project"),
                        ("lybra_project_set_repo", "tools/aipos_cli/workspace_config.update_project_repo")):
-        assert verbs[name]["surface"] == ["cli"] and verbs[name]["single_implementation"] == impl, name
+        # AIPOS-F269: lybra_project_new 加看板面(写例外④, 同一实现 scaffold_project), 仍无 mcp 面
+        surface = ["cli", "board"] if name == "lybra_project_new" else ["cli"]
+        assert verbs[name]["surface"] == surface and verbs[name]["single_implementation"] == impl, name
     mcp_declared = sorted(n for n, v in verbs.items() if "mcp" in (v.get("surface") or []))
     _show(f"[件②·MCP 面] 声明 mcp {len(mcp_declared)} 个, 门注册 {len(TOOL_HANDLERS)} 个; 未注册 {sorted(set(mcp_declared) - set(TOOL_HANDLERS))}")
     assert set(mcp_declared) <= set(TOOL_HANDLERS)
