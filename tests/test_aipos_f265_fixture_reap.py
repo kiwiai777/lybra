@@ -120,7 +120,7 @@ def test_item1_escaped_descendant_is_reaped_by_registration_tag(tmp_path):
 
 
 def test_item1_spawn_owns_session_kwargs():
-    for kwargs in ({"start_new_session": False}, {"process_group": 0}, {"preexec_fn": os.setpgrp}):
+    for kwargs in ({"start_new_session": False}, {"process_group": 0}):
         with pytest.raises(ValueError, match="AIPOS-F265"):
             fixture_procs.spawn(SLEEP, **kwargs)
 

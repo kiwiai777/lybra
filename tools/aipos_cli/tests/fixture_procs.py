@@ -35,7 +35,7 @@ from tools.aipos_cli.runall_discovery import (
 #: 本进程拉起、尚未 reap 的夹具 {pid: Popen}(atexit 兜底用)。
 _LIVE: dict[int, subprocess.Popen] = {}
 #: 调用方不得自行指定的 Popen 参数(会让夹具不在自己的新进程组里, 整组回收失效)。
-_FORBIDDEN_KWARGS = ("start_new_session", "process_group", "preexec_fn")
+_FORBIDDEN_KWARGS = ("start_new_session", "process_group")
 
 
 def run_id() -> str:
