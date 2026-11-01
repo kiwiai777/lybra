@@ -42,7 +42,7 @@ ADV1B = f"advisor.{P1}.h2"
 EXEC1 = f"exec.{P1}.h1"
 AUD1 = f"audit.{P1}.h1"
 NEW_PAGES = ("/owner/overview", "/owner/project", "/owner/roadmap", "/owner/onboarding", "/owner/home", "/owner/engineering",
-             "/owner/history")  # AIPOS-F181: + project page; AIPOS-F246: + home / engineering; AIPOS-F247: + history & audit
+             "/owner/history", "/owner/setup")  # AIPOS-F181: + project page; AIPOS-F246: + home / engineering; AIPOS-F247: + history & audit; AIPOS-F267: + setup check
 
 
 def _show(text: str) -> None:
@@ -426,7 +426,10 @@ def test_item4_english_and_narrow_screen(board):
 # ② 仅 GET / 405 / 302 / 零写入
 # ===========================================================================
 
-def test_item2_get_only_405_and_login_redirect(board):
+def test_item2_get_only_405_and_login_redirect(board, monkeypatch):
+    from test_aipos_f267_board_setup_check import hermetic_toolchain
+
+    hermetic_toolchain(board["tmp"], monkeypatch)  # AIPOS-F267: the setup check page runs run_setup_check (no real pi / gate)
     before = _tree_digest(board["home"])
     lines = []
     for path in NEW_PAGES:
