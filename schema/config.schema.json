@@ -1443,5 +1443,232 @@
       "agency_chris_kaia_untouched": "本卡零接触 agency/chris 工作流, kaia-kb 只读",
       "migration_deferred": "切换另行安排, 非本卡范围"
     }
+  },
+  "setup_check": {
+    "description": "AIPOS-F263(产品化 P2b, 底稿 research/2026-10-31-productization-gaps.md ①/P2; Owner 10-31 裁定 2 用户须自装 pi): `lybra setup check [--json]` 安装自检的唯一声明。逐项给 ✓ / ✗ / ⚠ + 出口一行: python 与 node 版本(满足 requirements 声明, 其值镜像 pyproject.toml requires-python 与 package.json engines.node, 一致性由夹具核)、git、pi 是否在 PATH 及版本、pi 是否有可用模型(唯一实现 harness_launch.harness_model_catalog = `pi --list-models`, 只列不发请求, 不读密钥文件)、门是否在跑且可达(地址经 confirm_client.resolve_gate_base_url 唯一推导口: 工作区 .lybra/connection.json mcp.rpc_url > env LYBRA_GATE_URL > urls.gate_local; 只读地址, 不读 token; 探测路径见 gate.probe_path, 永不探 /mcp)、门常驻是否已安装(gate_resident 声明的单元落点, 唯一实现 gate_resident.resident_status)。判定为一个函数返回结构化结果(看板 P3 设置自检页直接复用, 本卡不做看板); 人读唯一出口 setup_check.render_setup_check; 向导前置检查摘要唯一出口 setup_check.preflight_step。fail(✗)= 阻断: 命令退出码 1, onboarding 向导前置检查标阻断、`lybra onboarding check --step N` 不过; warn(⚠)= 提示不阻断(门未起 = ⚠, 起门是向导后续一步)。只追加: 新检查项 = 往 items 加一项 + labels + 出口, 缺省行为不变。",
+    "single_implementation": "tools/aipos_cli/setup_check.py(run_setup_check 结构化结果 / render_setup_check 人读 / preflight_step 向导前置检查摘要 / setup_check_declaration 唯一读取口)",
+    "marks": {
+      "ok": "✓",
+      "fail": "✗",
+      "warn": "⚠"
+    },
+    "items": [
+      "python",
+      "node",
+      "git",
+      "pi",
+      "pi_models",
+      "gate",
+      "gate_resident"
+    ],
+    "labels": {
+      "python": "Python",
+      "node": "Node.js",
+      "git": "git",
+      "pi": "pi(审计 / 非代码执行工位)",
+      "pi_models": "pi 可用模型",
+      "gate": "门(在跑且可达)",
+      "gate_resident": "门常驻"
+    },
+    "probe_timeout_seconds": 15,
+    "requirements": {
+      "python": {
+        "min": "3.10",
+        "mirror": {
+          "file": "pyproject.toml",
+          "key": "requires-python",
+          "form": ">={min}"
+        },
+        "exit": "安装 Python {min} 或更高版本(或设 LYBRA_PYTHON 指向合格解释器)后重跑 lybra setup check"
+      },
+      "node": {
+        "min": "18",
+        "argv": [
+          "node",
+          "--version"
+        ],
+        "mirror": {
+          "file": "package.json",
+          "key_path": [
+            "engines",
+            "node"
+          ],
+          "form": ">={min}"
+        },
+        "exit": "安装 Node.js {min} 或更高版本(npm 安装的 lybra 入口 bin/lybra 是 node 脚本)后重跑 lybra setup check"
+      },
+      "git": {
+        "argv": [
+          "git",
+          "--version"
+        ],
+        "exit": "安装 git(治理仓落账、卡工作树与分支都依赖 git)后重跑 lybra setup check"
+      }
+    },
+    "pi": {
+      "harness": "pi",
+      "harness_note": "可执行名读 enums.schema harness.<harness>.launch.argv[0](与 loop 拉起同一声明), 不另写",
+      "version_args": [
+        "--version"
+      ],
+      "install": {
+        "command": "npm install -g @earendil-works/pi-coding-agent",
+        "url": "https://github.com/earendil-works/pi"
+      },
+      "exit_missing": "pi 未安装: 审计与非代码执行固定由 pi 工位完成(Owner 10-31 裁定), 须自装——{command}(说明: {url}), 装好后重跑 lybra setup check",
+      "exit_models": "pi 没有可用模型: 按 pi 自身文档登录 / 配置模型提供方后, 用 `pi --list-models` 确认至少列出一个模型, 再重跑 lybra setup check(项目用哪个模型另由 lybra project set-model 声明)",
+      "skipped_without_pi": "未核(pi 未安装)",
+    "skipped_exit": "先按上一项装好 pi, 再重跑 lybra setup check 核模型"
+    },
+    "gate": {
+      "probe_path": "/",
+      "probe_note": "对门基址发一次 GET {probe_path}(门对未知路径回 404 结构化错误 = 门已应答 = 可达); 任何 HTTP 应答都算可达, 连接被拒 / 超时 = 不可达。永不探 /mcp(SSE 长连接, 永不返回); 不带凭据、不经代理",
+      "timeout_seconds": 3,
+      "exit": "门未在跑或不可达: 前台起门 `lybra serve --workspace-root <治理根> start`(终端常开), 或常驻安装 `lybra serve --workspace-root <治理根> install --dry-run` 预演后 --confirm; 门在他机 = 核对 connection.json mcp.rpc_url / LYBRA_GATE_URL 与网络"
+    },
+    "resident_exit": "门常驻未安装(不阻断: 也可前台 serve start): `lybra serve --workspace-root <治理根> install --dry-run` 预演将写的单元, 无误后 --confirm"
+  },
+  "gate_resident": {
+    "description": "AIPOS-F263 件②(产品化 P2b; F258 doc-gaps 第 7 条: 门常驻原靠手写 systemd 单元): `lybra serve install [--dry-run|--confirm]` / `serve uninstall [--dry-run|--confirm]` / `serve status`(附常驻一节)的唯一声明。Linux = systemd --user 单元, macOS = launchd LaunchAgent plist; 内容全部从本声明模板渲染: ExecStart / ProgramArguments 指向当前运行的 lybra(本进程解释器 + 代码根; 代码根为部署快照时取部署目录的 current 链接, 随部署切换), 环境文件路径 = environment_file(可选, 不存在不报错, 只读不建), home 根写入 LYBRA_HOME_ROOT(安装时按解析梯解析一次)。预演打印将写文件的全文与路径、将执行的命令, 零写入; 已存在同名单元文件 = 拒覆盖并给出口(本命令生成的: 先 uninstall; 非本命令生成: 不碰); 单元目录下已有其他名的手写常驻单元(按 handwritten_detect 识别: ExecStart / ProgramArguments 含 `serve … start`)= 预演提示「检测到已有手写常驻单元 X, 本命令不接管」, --confirm 拒(两个门争同一端口), 出口 = 先停用并移走手写单元, 或保留它(门已常驻); --confirm 写文件后执行 commands.install(systemd: daemon-reload + enable --now)并回读 commands.status。uninstall 只删带 managed_marker 的本命令生成文件(先 commands.uninstall 停用)。单元目录读环境(HOME / XDG_CONFIG_HOME), 不假设主机; 不提权、不写系统路径。只追加: 新平台 = platforms 加一项。",
+    "single_implementation": "tools/aipos_cli/gate_resident.py(gate_resident_declaration 唯一读取口 / plan_install / install / uninstall / resident_status / render_unit / render_resident_report / install_command 命令式样唯一渲染)",
+    "unit_name": "lybra-gate",
+    "managed_marker": "lybra-managed: generated by lybra serve install (AIPOS-F263); remove with lybra serve uninstall",
+    "managed_marker_note": "整行原样写入单元文件(systemd = # 注释首行; launchd = plist 前 XML 注释), uninstall / 同名判定按含此串识别本命令生成; 不得含 \"--\"(XML 注释禁用)",
+    "config_home": {
+      "env": "XDG_CONFIG_HOME",
+      "default": "{home}/.config"
+    },
+    "environment_file": "{config_home}/lybra/gate.env",
+    "environment_file_note": "门进程额外环境(如 pi 模型密钥)写在此文件(KEY=VALUE 每行一条); 本命令只引用其路径, 不创建、不读取其内容; 文件不存在 = 门照常起(systemd EnvironmentFile=- 可选语义; launchd 由 sh 包装按存在才加载)",
+    "environment": {
+      "LYBRA_HOME_ROOT": "{home_root}",
+      "PYTHONPATH": "{code_root}"
+    },
+    "module_argv": [
+      "-m",
+      "tools.aipos_cli.aipos_cli"
+    ],
+    "handwritten_detect": {
+      "pattern": "\\bserve\\b.*\\bstart\\b",
+      "note": "systemd: 单元目录下其他 *.service 的 ExecStart 行(续行合并后); launchd: 其他 *.plist 的 ProgramArguments 连成一行; 匹配 pattern = 手写常驻门单元"
+    },
+    "platforms": {
+      "linux": {
+        "kind": "systemd_user",
+        "unit_dir": "{config_home}/systemd/user",
+        "file_name": "{unit_name}.service",
+        "suffix": ".service",
+        "template": [
+          "# {marker}",
+          "[Unit]",
+          "Description=Lybra gate (board + MCP) for {workspace_root}",
+          "After=network-online.target",
+          "Wants=network-online.target",
+          "",
+          "[Service]",
+          "EnvironmentFile=-{environment_file}",
+          "{environment_lines}",
+          "WorkingDirectory={code_root}",
+          "ExecStart={exec_start}",
+          "Restart=always",
+          "RestartSec=5",
+          "KillMode=control-group",
+          "KillSignal=SIGTERM",
+          "TimeoutStopSec=10",
+          "",
+          "[Install]",
+          "WantedBy=default.target"
+        ],
+        "commands": {
+          "install": [
+            [
+              "systemctl",
+              "--user",
+              "daemon-reload"
+            ],
+            [
+              "systemctl",
+              "--user",
+              "enable",
+              "--now",
+              "{file_name}"
+            ]
+          ],
+          "status": [
+            "systemctl",
+            "--user",
+            "is-active",
+            "{file_name}"
+          ],
+          "uninstall": [
+            [
+              "systemctl",
+              "--user",
+              "disable",
+              "--now",
+              "{file_name}"
+            ]
+          ],
+          "after_remove": [
+            [
+              "systemctl",
+              "--user",
+              "daemon-reload"
+            ]
+          ]
+        },
+        "status_active": {
+          "stdout_equals": "active"
+        }
+      },
+      "darwin": {
+        "kind": "launchd",
+        "unit_dir": "{home}/Library/LaunchAgents",
+        "file_name": "{unit_name}.plist",
+        "suffix": ".plist",
+        "log_dir": "{home}/Library/Logs/lybra",
+        "env_file_wrapper": "if [ -f {environment_file} ]; then set -a; . {environment_file}; set +a; fi; exec {exec_start}",
+        "plist": {
+          "Label": "{unit_name}",
+          "ProgramArguments": [
+            "/bin/sh",
+            "-c",
+            "{wrapped_exec}"
+          ],
+          "EnvironmentVariables": "{environment}",
+          "WorkingDirectory": "{code_root}",
+          "RunAtLoad": true,
+          "KeepAlive": true,
+          "StandardOutPath": "{log_dir}/{unit_name}.out.log",
+          "StandardErrorPath": "{log_dir}/{unit_name}.err.log"
+        },
+        "commands": {
+          "install": [
+            [
+              "launchctl",
+              "bootstrap",
+              "gui/{uid}",
+              "{unit_path}"
+            ]
+          ],
+          "status": [
+            "launchctl",
+            "print",
+            "gui/{uid}/{unit_name}"
+          ],
+          "uninstall": [
+            [
+              "launchctl",
+              "bootout",
+              "gui/{uid}/{unit_name}"
+            ]
+          ],
+          "after_remove": []
+        },
+        "status_active": {
+          "stdout_contains": "state = running"
+        }
+      }
+    }
   }
 }

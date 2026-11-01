@@ -70,6 +70,7 @@ NOW_PLACEHOLDER = "<NOW>"
 DONE_PLACEHOLDER = "<DONE>"
 #: AIPOS-F262: 步号唯一声明(guide 各步 step_number 与 `lybra onboarding check --step` 前置判定同读; 改步序只改这里)
 STEP = {
+    "preflight": 0,  # AIPOS-F263 件③: 前置检查(lybra setup check 摘要; 不占业务步号, `onboarding check --step 0`)
     "project": 1, "repos": 2, "grant": 3, "advisor": 4, "advisor_check": 5,
     "auditor": 6, "pi_executor": 7, "subagent_executor": 8, "execution": 9, "sync": 10, "first_card": 11,
 }
@@ -582,6 +583,7 @@ def generate_onboarding_guide(
     advisor_harness: str | None = None,
     advisor_host: str | None = None,
     executor_mode: str | None = None,
+    run_preflight: bool = False,
 ) -> dict[str, Any]:
     """生成从 0 接新项目全流程的分步指南(结构化: steps[] + metadata)。步号读 STEP(唯一声明)。
 
@@ -589,6 +591,11 @@ def generate_onboarding_guide(
     `enroll-deliver … --workspace <治理根> --executor-mode subagent --harness <顾问会话 kind>`), 非代码卡 = pi 执行工位, 审计 = 独立 pi 审计工位;
     三者接入后 `lybra project set-execution` 一次声明。executor_mode 只认凭据落治理根的模式(roles.schema executor_modes; 缺省即它), 给工位模式
     = ValueError(单 pi 执行工位包办的旧流程不再生成)。授权 = 第 3 步项目常设授权(AIPOS-F224), 之后各 enroll 命令的授权引用都是它。
+
+    AIPOS-F263 件③: 开头「前置检查」(preflight: run_preflight=True 时跑 setup_check.run_setup_check, 门探测用本指南的门地址;
+    缺省 False = 只给命令不跑, 结构不变)——✗ 项阻断后续(blocking=True, 人读输出在 Step 1 前标阻断并给出口; `onboarding check
+    --step 0` 同判); 「起门」(gate_start: 前台 serve start 或常驻 serve install 二选一)排在首个 Owner 动作步之前(签授权 / 签码要连门)。
+    前置检查与起门不占业务步号: 前置检查 = STEP["preflight"](0, `onboarding check --step 0`), 起门排在 STEP["grant"](首个 Owner 动作步)之前。
 
     每步: step_number, title, actor(owner|advisor|workstation), owner_action(Owner 一次性动作序号或 None), command/commands,
     purpose, check, on_fail, creates。参数:
@@ -1139,6 +1146,12 @@ def generate_onboarding_guide(
 
     owner_steps = [s["step_number"] for s in steps if s.get("owner_action")]
     repo_names = grant["lanes"]
+    # AIPOS-F263 件③: 前置检查(setup check 摘要)+ 起门步(首个 Owner 动作步之前)
+    from tools.aipos_cli.setup_check import preflight_step, run_setup_check
+
+    preflight = preflight_step(run_setup_check(gate_url=gate) if run_preflight else None)
+    gate_start = gate_start_step(owner_ws if not owner_ws.startswith("<") else gov_s, gate,
+                                 before_step=STEP["grant"], preflight=preflight)
     return {
         "project_name": project_name,
         "home_root": str(home),
@@ -1159,6 +1172,8 @@ def generate_onboarding_guide(
         "workstations_source": ws_source,  # AIPOS-F262 件③
         "executor_mode": exec_mode,  # AIPOS-F143 件④ / F262: 子 agent 执行者接入模式(恒按分工)
         "division": division,  # AIPOS-F262 件②
+        "preflight": preflight,  # AIPOS-F263 件③
+        "gate_start": gate_start,  # AIPOS-F263 件③
         "generated_at": now.isoformat(),
         "total_steps": len(steps),
         "owner_actions": owner_steps,
@@ -1173,6 +1188,30 @@ def generate_onboarding_guide(
             f"从 0 接新项目 {project_name} 全流程({len(steps)} 步, 零手工编辑; Owner 一次性动作 = Step {' / '.join(map(str, owner_steps))}):\n"
             + "\n".join(f"  Step {s['step_number']}: {s['title']}" for s in steps)
         ),
+    }
+
+
+def gate_start_step(gate_workspace: str, gate_url: str, *, before_step: int | None, preflight: dict[str, Any]) -> dict[str, Any]:
+    """AIPOS-F263 件③: 向导「起门」步(唯一出处): 前台 `serve start` 或常驻 `serve install`(二选一); 排在 before_step(首个 Owner
+    动作步, 签授权 / 签码要连门)之前。门工作区 = Owner 凭据所在(无既有项目 = 本项目治理根, Step 1 建出后可用)。
+    前置检查已显示门在跑且可达 = 注明本步可略过。命令式样: serve install 经 gate_resident.install_command 唯一渲染。"""
+    from tools.aipos_cli.gate_resident import install_command
+
+    ws = _shell_quote(gate_workspace)
+    reachable = bool(preflight.get("gate_reachable"))
+    return {
+        "title": "让门在跑(之后签授权 / 签码 / loop 都要连门)",
+        "before_step": before_step,
+        "actor": "owner",
+        "options": [
+            {"name": "前台", "command": _cmd("lybra", "serve", "--workspace-root", ws, "start"),
+             "note": "终端常开, 关终端门即停; 适合先试跑"},
+            {"name": "常驻", "commands": [install_command(gate_workspace, "dry-run"), install_command(gate_workspace, "confirm")],
+             "note": "Linux = systemd --user 单元, macOS = launchd; 先预演看将写的单元全文, 无误后 --confirm(启用并回读状态); "
+                     "卸载 `lybra serve uninstall --confirm`"},
+        ],
+        "check": f"lybra setup check 的「门」一项为 ✓(探测 {gate_url})",
+        "skip_note": "前置检查显示门已在跑且可达, 本步可略过" if reachable else None,
     }
 
 
@@ -1276,6 +1315,20 @@ def legacy_onboarding_steps(project_name: str, governance_root: str, *, home_roo
     ]
 
 
+def _format_gate_start(gate_start: dict[str, Any]) -> list[str]:
+    """AIPOS-F263 件③: 起门步人读(format_guide_text 内, 首个 Owner 动作步之前)。"""
+    out = [f"── 起门: {gate_start['title']} [执行方: Owner; 二选一] ──"]
+    for i, opt in enumerate(gate_start["options"], 1):
+        out.append(f"  {i}) {opt['name']}: {opt['note']}")
+        for cmd in opt.get("commands") or [opt["command"]]:
+            out.append(f"     {cmd}")
+    out.append(f"验证: {gate_start['check']}")
+    if gate_start.get("skip_note"):
+        out.append(f"注: {gate_start['skip_note']}")
+    out.append("")
+    return out
+
+
 def format_guide_text(guide: dict[str, Any]) -> str:
     """将结构化 guide 格式化为可读文本(终端输出用)。"""
     lines: list[str] = []
@@ -1300,8 +1353,20 @@ def format_guide_text(guide: dict[str, Any]) -> str:
     owner = guide.get("owner_actions") or []
     lines.append(f"共 {guide['total_steps']} 步, 全程零手工编辑; Owner 一次性动作 {len(owner)} 条: " + ", ".join(f"Step {n}" for n in owner))
     lines.append("")
+    pre = guide.get("preflight")  # AIPOS-F263 件③: 前置检查(lybra setup check 摘要)
+    if pre:
+        lines.append(f"── 前置检查: {pre['title']} [执行方: Owner] ──")
+        lines.append(f"命令: {pre['command']}")
+        lines.extend(f"  {ln}" for ln in pre["lines"])
+        if pre.get("blocking"):
+            lines.append(f"⛔ 前置检查有 ✗ 项({', '.join(pre['blocking_items'])}): 以下各步被阻断——先按上列出口处理, "
+                         f"再跑 `{pre['command']}`(或 `lybra onboarding check {guide['project_name']} --step 0`)复核为无 ✗ 后从 Step 1 往下做")
+        lines.append("")
+    gate_start = guide.get("gate_start")
 
     for step in guide["steps"]:
+        if gate_start and step["step_number"] == gate_start.get("before_step"):
+            lines.extend(_format_gate_start(gate_start))
         who = {"owner": "Owner", "advisor": "顾问", "workstation": "工位"}.get(step.get("actor", ""), step.get("actor", ""))
         lines.append(f"── Step {step['step_number']}: {step['title']} [执行方: {who}] ──")
         lines.append(f"目的: {step['purpose']}")
@@ -1367,12 +1432,15 @@ def validate_step_prerequisites(
     project_name: str,
     home_root: str | None = None,
     workspace_dir: str | None = None,
+    preflight: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """验证进入某一步之前的产物是否齐(负夹具 / 运行时前置检查)。步号 = generate_onboarding_guide 的步号(唯一声明 STEP)。
 
     ≥项目: 项目根 + project.json; ≥授权步: 产品仓声明; ≥顾问接入步: 项目常设授权(或兼容旧信封); ≥顾问复核步: 顾问凭据(治理根 .lybra/connection.json);
     ≥工位 sync 步: 工位 connection.json(lybra_bin / workspace_root==governance_root)+ .pi 接线 + role#owner_policy_ref(工位接入步)。
     AIPOS-F262: 授权先于接入(项目常设授权, AIPOS-F224), 顾问 / 工位接入 = enroll-deliver。工位目录缺省 = workstation_dirs 的 pi 执行工位。
+    AIPOS-F263 件③: preflight = setup_check.run_setup_check 结果(CLI `--step 0` = STEP["preflight"] = 向导前置检查时跑): 其 ✗ 项算缺项,
+    指引 = 该项出口; 缺省 None = 不核(行为不变)。
     返回 {ok: bool, missing: [str], guidance: [str]}。
     """
     from tools.aipos_cli.workspace_config import resolve_home_root
@@ -1382,6 +1450,11 @@ def validate_step_prerequisites(
 
     missing: list[str] = []
     guidance: list[str] = []
+
+    for item in (preflight or {}).get("items") or []:
+        if item["status"] == "fail":
+            missing.append(f"preflight:{item['id']}")
+            guidance.append(f"前置检查 ✗ {item['label']}: {item['detail']}; 出口: {item['exit']}")
 
     if step_number >= STEP["project"]:
         if not project_root.is_dir():

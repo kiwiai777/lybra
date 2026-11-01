@@ -353,7 +353,8 @@ def test_single_declaration_injection_and_catalog_implementation():
     assert {h.split(":", 1)[0] for h in inject if "def model_launch_args" not in h} == {"tools/aipos_cli/loop_driver.py"}
     catalog = grep(r"harness_model_catalog\(")
     assert {h.split(":", 1)[0] for h in catalog if not h.startswith("tools/aipos_cli/harness_launch.py:")} == {
-        "tools/aipos_cli/enrollment.py", "tools/aipos_cli/loop_driver.py"}, catalog
+        "tools/aipos_cli/enrollment.py", "tools/aipos_cli/loop_driver.py",
+        "tools/aipos_cli/setup_check.py"}, catalog  # AIPOS-F263: setup check 的 pi 可用模型项同读唯一实现
     assert not grep(r"list-models[\"']"), "清单命令参数只在 enums.schema launch.model.list_args 声明"
     ex = load_schema("config")["configuration_sources"]["project_json"]["schema"]["execution"]
     pm = ex["schema"]["pi_models"]

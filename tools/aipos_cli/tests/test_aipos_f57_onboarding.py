@@ -44,8 +44,9 @@ class TestOnboardingGuideGeneration(unittest.TestCase):
         """生成 probe-xyz 项目的完整指南(验收①:项目无关性)。AIPOS-F92: 单门 home 根约定, Owner 一次性动作 2 条; AIPOS-F262: 执行分工成步 = 11 步。"""
         guide = generate_onboarding_guide("probe-xyz")
         self.assertEqual(guide["project_name"], "probe-xyz")
-        self.assertEqual(guide["total_steps"], len(STEP))
-        self.assertEqual(len(guide["steps"]), len(STEP))
+        business = max(STEP.values())  # AIPOS-F263: 前置检查 STEP["preflight"] = 0 不占业务步号
+        self.assertEqual(guide["total_steps"], business)
+        self.assertEqual(len(guide["steps"]), business)
         self.assertEqual(guide["owner_actions"], [3, 4])
 
         # 验证每步都有必要字段
@@ -109,7 +110,7 @@ class TestOnboardingGuideGeneration(unittest.TestCase):
         text = format_guide_text(guide)
         self.assertIn("probe-xyz", text)
         self.assertIn("Step 1:", text)
-        self.assertIn(f"Step {len(STEP)}:", text)
+        self.assertIn(f"Step {max(STEP.values())}:", text)
         self.assertIn("Owner 一次性动作 2 条", text)
         self.assertIn("验证:", text)
         self.assertIn("失败出口:", text)
