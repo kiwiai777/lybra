@@ -1123,6 +1123,29 @@ Lybra 服务端位置（AIPOS-286）：
         "eng_upgrade_desc": "治理根跟随产品升级的待办",
         "eng_cards": "全部任务卡",
         "eng_cards_desc": "按子项目列出在途 / 待办卡(已结案卡在「历史与审计」)",
+        "eng_setup": "设置自检",
+        "eng_setup_desc": "本机安装自检:Python / Node.js / git / pi 与可用模型 / 门是否在跑 / 门常驻(与 lybra setup check 同一结果)",
+        # AIPOS-F267: setup check page + one-line summary on home / onboarding (web/board/readonly_pages.py), zh / en same keys
+        "sc_title": "设置自检",
+        "sc_intro": "本机装好了没有:逐项检查, 有 ✗ 的先按「怎么处理」装好, 再点「重新检查」。本页只读, 不写文件、不读凭据;与命令 lybra setup check 是同一个检查。",
+        "sc_verdict_fail": "有 {fail} 项 ✗ 需要先处理({warn} 项 ⚠ 提示, {ok} 项 ✓)",
+        "sc_verdict_ok": "没有 ✗ 项({ok} 项 ✓, {warn} 项 ⚠ 提示)",
+        "sc_checked_at": "检查于 {time} UTC",
+        "sc_cached": "(这是 {age} 秒前的结果, {seconds} 秒内再打开不重跑)",
+        "sc_fresh": "(刚刚检查)",
+        "sc_recheck": "重新检查",
+        "sc_pi_missing_title": "还没装 pi",
+        "sc_pi_models_title": "pi 还没有可用模型",
+        "sc_pi_install": "安装命令(复制到终端运行)",
+        "sc_pi_docs": "pi 安装说明",
+        "sc_exit": "怎么处理",
+        "sc_original": "检查项名称、现值与处理方法按产品声明原文显示。",
+        "sc_error": "自检读不出(未猜结果):{error}",
+        "sc_tech": "命令行查看同一结果:lybra setup check(加 --json 看结构化结果)",
+        "sc_sum": "本机安装自检 ✓ {ok} · ✗ {fail} · ⚠ {warn} · 检查于 {time} UTC",
+        "sc_sum_none": "本机安装自检还没运行",
+        "sc_sum_error": "本机安装自检读不出:{error}",
+        "sc_sum_link": "查看设置自检 →",
         "ib_title": "待你决定 · {count} 件({projects} 个项目)",
         "ib_empty": "待你决定:没有待定事项({projects} 个项目)",
         "ib_heading": "{project} · {what}",
@@ -1687,6 +1710,29 @@ Important boundaries:
         "eng_upgrade_desc": "Pending steps for governance roots to follow the product",
         "eng_cards": "All task cards",
         "eng_cards_desc": "In-flight / to-do cards by subproject (closed cards are in History & audit)",
+        "eng_setup": "Setup check",
+        "eng_setup_desc": "This machine's install check: Python / Node.js / git / pi and its models / gate running / gate as a service (same result as lybra setup check)",
+        # AIPOS-F267: setup check page + one-line summary on home / onboarding (web/board/readonly_pages.py), zh / en same keys
+        "sc_title": "Setup check",
+        "sc_intro": "Is this machine set up: each item is checked; fix every ✗ as its \"how to fix\" says, then press \"Check again\". Read-only: writes no file, reads no credential; the same check as the command lybra setup check.",
+        "sc_verdict_fail": "{fail} item(s) ✗ to fix first ({warn} ⚠ notice, {ok} ✓)",
+        "sc_verdict_ok": "No ✗ item ({ok} ✓, {warn} ⚠ notice)",
+        "sc_checked_at": "Checked at {time} UTC",
+        "sc_cached": "(result from {age}s ago; reopening within {seconds}s does not re-run it)",
+        "sc_fresh": "(just checked)",
+        "sc_recheck": "Check again",
+        "sc_pi_missing_title": "pi is not installed",
+        "sc_pi_models_title": "pi has no usable model yet",
+        "sc_pi_install": "Install command (copy into a terminal)",
+        "sc_pi_docs": "pi install guide",
+        "sc_exit": "How to fix",
+        "sc_original": "Item names, current values and fixes are shown as declared by the product (in their original language).",
+        "sc_error": "The setup check could not be read (no result guessed): {error}",
+        "sc_tech": "Same result on the command line: lybra setup check (add --json for the structured result)",
+        "sc_sum": "Install check ✓ {ok} · ✗ {fail} · ⚠ {warn} · checked at {time} UTC",
+        "sc_sum_none": "Install check has not run yet",
+        "sc_sum_error": "Install check could not be read: {error}",
+        "sc_sum_link": "Open setup check →",
         "ib_title": "Your decisions · {count} ({projects} projects)",
         "ib_empty": "Your decisions: nothing pending ({projects} projects)",
         "ib_heading": "{project} · {what}",
@@ -3413,7 +3459,7 @@ def make_handler(
 
                 _sid, info = self._current_session()  # AIPOS-F248: Owner sessions get the home one-click buttons (checks stay on the server)
                 self._send_html(render_page(self._readonly_pages[path], home_root, parse_qs(urlparse(self.path).query),
-                                            owner=bool(info and info.get("role") == "owner")))
+                                            owner=bool(info and info.get("role") == "owner"), workspace_root=repo_root))  # AIPOS-F267
                 return
 
             # AIPOS-F175: card artifact image (declared on the card, inside its artifact dir, image suffix; anything else = 404)
@@ -3569,6 +3615,9 @@ def run_server(host: str = DEFAULT_BOARD_HOST, port: int = DEFAULT_BOARD_PORT, r
         print(f"AIPOS board local UI listening on http://{host}:{port}")
         if prewarm:  # AIPOS-F229: background, the server answers from the first second
             threading.Thread(target=prewarm_read_caches, kwargs={"repo_root": repo_root}, name="board-prewarm", daemon=True).start()
+            from tools.aipos_cli.board_pages import start_setup_refresh
+
+            start_setup_refresh(repo_root)  # AIPOS-F267: the setup check runs once in the background (home / onboarding summary)
         httpd.serve_forever()
 
 

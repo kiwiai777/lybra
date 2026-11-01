@@ -13,15 +13,18 @@
   章程 = loop_run_record.latest_charter_checks(F164 拉起前判定的记录真相); pi 模型 = workspace_config.pi_model_for_role。
 - 页面路径、清单项与顺序(只追加)、命令模板读 verbs.schema board_readonly_pages(pages_declaration 唯一读取口, fail-closed);
   人话文案在看板 i18n 单通道(web/board/app.py _I18N_TEMPLATES), 本模块只给文案键与填值, 不出界面文字。
-- 任何项目同一组命令: 不写死项目 ID / 路径 / 卡号前缀 / 实例名。只读: 不写任何文件、不连门、不读凭据原文。
+- 任何项目同一组命令: 不写死项目 ID / 路径 / 卡号前缀 / 实例名。只读: 不写任何文件、不连门、不读凭据原文
+  (AIPOS-F267 设置自检: run_setup_check 对门基址发一次不带凭据的 GET 判可达, 与 CLI `lybra setup check` 同一实现)。
 """
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
 DECL_KEY = "board_readonly_pages"
-PAGES = ("overview", "project", "roadmap", "onboarding", "home", "engineering", "history")  # AIPOS-F246: + 首页 / 工程页; AIPOS-F247: + 历史与审计(只追加)
+PAGES = ("overview", "project", "roadmap", "onboarding", "home", "engineering", "history",
+         "setup")  # AIPOS-F246: + 首页 / 工程页; AIPOS-F247: + 历史与审计; AIPOS-F267: + 设置自检(只追加)
 #: 清单项判定(键 = 声明 onboarding_items 的值; 声明里出现未实现的项 = SchemaLoadError, 只追加)
 ONBOARDING_CHECKS = ("governance_root", "advisor", "executor", "auditor", "envelope", "charter", "pi_model", "roadmap", "first_closed")
 _COMMAND_KEYS = ("governance_root", "advisor", "execution_undeclared", "instance_not_enrolled", "envelope_mint", "charter_check",
@@ -79,6 +82,9 @@ def pages_declaration() -> dict[str, Any]:
             or not isinstance(hist.get("page_budget_bytes"), int)):
         raise SchemaLoadError(f"verbs.schema.json {DECL_KEY}.history(query 七键 / docs = [return, audit] / recent_days / flag_value / "
                               "open_first / page_budget_bytes)未声明齐(AIPOS-F247)")
+    # AIPOS-F267: 设置自检页「重新检查」参数名与取值
+    if not str(decl["query"].get("recheck") or "") or not str((decl.get("setup") or {}).get("recheck_value") or ""):
+        raise SchemaLoadError(f"verbs.schema.json {DECL_KEY}: query.recheck / setup.recheck_value 未声明齐(AIPOS-F267)")
     route = decl.get("artifact_route")
     if (not isinstance(route, dict) or not str(route.get("path") or "").startswith("/")
             or not all(isinstance((route.get("params") or {}).get(k), str) and route["params"][k] for k in ("project", "task", "file"))):
@@ -788,6 +794,159 @@ def collect_history(home_root: str | Path | None, params: dict[str, list[str]] |
         entry = next((e for e in home_entries(home_root)["projects"] if e["name"] == filters["project"]), None)
         out["doc"] = report_doc(filters["project"], Path(entry["root"]) if entry else None, task, doc)
     return out
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F267: 设置自检页 + 首页 / 接入页摘要(数据只调 setup_check.run_setup_check, CLI `lybra setup check` 同一实现; 看板不另写探测)
+# 结果在看板进程内按 config.schema setup_check.board.cache_seconds 短时缓存(键 = 看板服务进程工作区: 门地址由 run_setup_check 经
+# confirm_client.resolve_gate_base_url 同一推导口从它得出); 同一工作区同一时刻只跑一次(并发请求等同一次结果)。只读: 只存进程内存。
+# ---------------------------------------------------------------------------
+
+_SETUP_LOCK = threading.Lock()
+#: 工作区键 → 最近一次结果 {result | None, error | None, at(monotonic), run(本进程第几次运行), checked_at}
+_SETUP_CACHE: dict[str, dict[str, Any]] = {}
+#: 工作区键 → 正在跑的那一次(完成即 set)
+_SETUP_RUNNING: dict[str, threading.Event] = {}
+_SETUP_RUNS = [0]
+
+
+def _setup_key(workspace_root: str | Path | None) -> str:
+    return str(Path(workspace_root).expanduser().resolve()) if workspace_root else ""
+
+
+def _run_setup(workspace_root: str | Path | None) -> dict[str, Any]:
+    """跑一次 run_setup_check; 声明 / 探测读不出 = 该次结果记 error(页面与摘要点名原因, 不猜)。"""
+    from tools.aipos_cli.setup_check import run_setup_check
+    from tools.schema_loader import SchemaLoadError
+
+    root = Path(workspace_root).expanduser().resolve() if workspace_root else None
+    try:
+        result = run_setup_check(workspace_root=root)
+        return {"result": result, "error": None, "checked_at": result["checked_at"]}
+    except (ValueError, OSError, LookupError, RuntimeError, SchemaLoadError) as exc:
+        from tools.aipos_cli.clock import iso_z, utc_now
+
+        return {"result": None, "error": _err(exc), "checked_at": iso_z(utc_now())}
+
+
+def _run_owned(key: str, workspace_root: str | Path | None, running: threading.Event) -> dict[str, Any] | None:
+    """跑登记在 _SETUP_RUNNING[key] 的那一次: 存结果(本进程运行序号 + 单调时刻), 撤登记并唤醒等待者(异常退出也撤)。"""
+    import time
+
+    fresh: dict[str, Any] | None = None
+    try:
+        fresh = _run_setup(workspace_root)
+    finally:
+        with _SETUP_LOCK:
+            if fresh is not None:
+                _SETUP_RUNS[0] += 1
+                fresh.update(at=time.monotonic(), run=_SETUP_RUNS[0])
+                _SETUP_CACHE[key] = fresh
+            _SETUP_RUNNING.pop(key, None)
+        running.set()
+    return fresh
+
+
+def setup_check_entry(workspace_root: str | Path | None, *, recheck: bool = False) -> dict[str, Any]:
+    """设置自检页取结果(唯一缓存口): 缓存未过期且非 recheck = 复用(cached True); 否则当场跑(同一工作区已有一次在跑 = 等它的结果)。
+    返回 {result, error, checked_at, run, cached, age_seconds}。"""
+    import time
+
+    from tools.aipos_cli.setup_check import board_cache_seconds
+
+    key, ttl = _setup_key(workspace_root), board_cache_seconds()
+    while True:
+        with _SETUP_LOCK:
+            entry, running = _SETUP_CACHE.get(key), _SETUP_RUNNING.get(key)
+            mine = running is None
+            if mine:
+                if entry is not None and not recheck and time.monotonic() - entry["at"] < ttl:
+                    return {**entry, "cached": True, "age_seconds": int(time.monotonic() - entry["at"])}
+                running = _SETUP_RUNNING[key] = threading.Event()
+        if mine:
+            fresh = _run_owned(key, workspace_root, running)
+            return {**fresh, "cached": False, "age_seconds": 0}
+        seen = entry["run"] if entry is not None else None
+        running.wait()
+        with _SETUP_LOCK:
+            entry = _SETUP_CACHE.get(key)
+        if entry is not None and entry["run"] != seen:  # 那一次留下了新结果; 没留下(异常退出) = 回到循环自己跑
+            return {**entry, "cached": False, "age_seconds": int(time.monotonic() - entry["at"])}
+
+
+def start_setup_refresh(workspace_root: str | Path | None) -> threading.Thread | None:
+    """后台跑一次(看板启动预跑 / 摘要见结果过期): 先登记再起线程(紧随其后的取结果等这一次); 已有一次在跑 = 不另起(None)。"""
+    key = _setup_key(workspace_root)
+    with _SETUP_LOCK:
+        if _SETUP_RUNNING.get(key) is not None:
+            return None
+        running = _SETUP_RUNNING[key] = threading.Event()
+    thread = threading.Thread(target=_run_owned, args=(key, workspace_root, running), name="board-setup-check", daemon=True)
+    thread.start()
+    return thread
+
+
+def setup_check_latest(workspace_root: str | Path | None) -> dict[str, Any] | None:
+    """首页 / 接入页摘要取结果: 只读缓存不等待(无结果 = None); 结果已过期 = 原样返回(stale True)并后台重跑。"""
+    import time
+
+    from tools.aipos_cli.setup_check import board_cache_seconds
+
+    with _SETUP_LOCK:
+        entry = _SETUP_CACHE.get(_setup_key(workspace_root))
+    if entry is None:
+        return None
+    age = time.monotonic() - entry["at"]
+    stale = age >= board_cache_seconds()
+    if stale:
+        start_setup_refresh(workspace_root)
+    return {**entry, "cached": True, "stale": stale, "age_seconds": int(age)}
+
+
+def setup_summary(entry: dict[str, Any] | None, decl: dict[str, Any] | None = None) -> dict[str, Any]:
+    """一行摘要(首页 / 接入页 / 本页同源: 同一次 run_setup_check 结果的派生): state ∈ none / error / fail / warn / ok。"""
+    d = decl or pages_declaration()
+    out: dict[str, Any] = {"url": page_url(d, "setup"), "state": "none", "counts": {"ok": 0, "fail": 0, "warn": 0}, "time": None,
+                           "error": None, "stale": bool((entry or {}).get("stale")), "run": (entry or {}).get("run")}
+    if entry is None:
+        return out
+    out["time"] = str(entry.get("checked_at") or "")[11:19] or None
+    if entry.get("error") or not entry.get("result"):
+        return {**out, "state": "error", "error": entry.get("error")}
+    counts = {k: int(entry["result"]["counts"].get(k, 0)) for k in ("ok", "fail", "warn")}
+    state = "fail" if counts["fail"] else ("warn" if counts["warn"] else "ok")
+    return {**out, "state": state, "counts": counts}
+
+
+def pi_reminder(result: dict[str, Any] | None) -> dict[str, Any] | None:
+    """pi 未装 / pi 无可用模型 = 页顶提醒(文案 = 该项出口, 由 run_setup_check 按 setup_check.pi.exit_missing / exit_models 声明填好;
+    安装命令 / 说明链接 = setup_check.pi.install); 两项都没 ✗ = None(不出提醒块)。"""
+    if not result:
+        return None
+    from tools.aipos_cli.setup_check import setup_check_declaration
+
+    install = setup_check_declaration()["pi"]["install"]
+    items = {it["id"]: it for it in result["items"]}
+    pi, models = items.get("pi"), items.get("pi_models")
+    if pi is not None and pi["status"] == "fail":
+        return {"kind": "missing", "text": pi["exit"], "command": str(install["command"]), "url": str(install["url"])}
+    if models is not None and models["status"] == "fail":
+        return {"kind": "models", "text": models["exit"], "command": None, "url": str(install["url"])}
+    return None
+
+
+def collect_setup(workspace_root: str | Path | None, params: dict[str, list[str]] | None) -> dict[str, Any]:
+    """设置自检页数据: 每项一行(✗ 项置顶, 其余按声明 items 序)+ pi 提醒 + 摘要 + 「重新检查」地址(本页带 query.recheck 的 GET)。"""
+    from tools.aipos_cli.setup_check import board_cache_seconds
+
+    decl = pages_declaration()
+    value = str(decl["setup"]["recheck_value"])
+    recheck = ((params or {}).get(decl["query"]["recheck"]) or [""])[0] == value
+    entry = setup_check_entry(workspace_root, recheck=recheck)
+    result = entry.get("result")
+    rows = sorted(result["items"], key=lambda it: it["status"] != "fail") if result else []
+    return {"decl": decl, "entry": entry, "summary": setup_summary(entry, decl), "rows": rows, "reminder": pi_reminder(result),
+            "recheck": recheck, "recheck_url": page_url(decl, "setup", recheck=value), "cache_seconds": board_cache_seconds()}
 
 
 # AIPOS-316: Guard against direct invocation

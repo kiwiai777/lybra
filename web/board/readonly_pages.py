@@ -495,10 +495,13 @@ def _asks_attrs(ctx: _Ctx, owner: bool) -> str:
     return f" data-asks-owner=\"true\" data-asks-texts=\"{_ESC(texts)}\""
 
 
-def render_home(data: dict[str, Any], lang: str, owner: bool = False) -> str:
+def render_home(data: dict[str, Any], lang: str, owner: bool = False, setup: dict[str, Any] | None = None) -> str:
+    """AIPOS-F267: setup = board_pages.setup_summary (one line linking the setup check page; red-flagged when an item is ✗)."""
     ctx = _Ctx(data["decl"], lang)
     all_asks = bool(data.get("all_asks"))
     body = [] if all_asks else [_toggle(ctx, data.get("hidden") or [], bool(data.get("show_all")), str(ctx.decl["pages"]["home"]))]
+    if setup is not None and not all_asks:
+        body.append(_setup_summary_html(ctx, setup, "hm-setup"))
     asks = [f"<section class=\"hm-asks\" data-asks=\"{len(data['asks'])}\" data-asks-total=\"{data['asks_total']}\">",
             f"<div class=\"hm-kicker\">{_ESC(ctx.t('hm_asks_kicker', count=data['asks_total']))}</div>"]
     if data.get("inbox_error"):
@@ -661,7 +664,8 @@ def render_engineering(decl: dict[str, Any], lang: str) -> str:
     urls = {"inbox": str(decl["nav_links"]["inbox"]), "overview": str(decl["pages"]["overview"]), "roadmap": str(decl["pages"]["roadmap"]),
             "envelopes": _envelope_page(), "onboarding": str(decl["pages"]["onboarding"]), "workstation": _workstation_page(),
             "upgrade": str(upgrade_board_declaration()["page_path"]),
-            "cards": page_url(decl, "project", view=decl["home"]["cards_view_value"])}
+            "cards": page_url(decl, "project", view=decl["home"]["cards_view_value"]),
+            "setup": str(decl["pages"]["setup"])}  # AIPOS-F267
     items = "".join(f"<li data-link=\"{_ESC(key)}\"><a href=\"{_ESC(ctx.href(urls[key]))}\">{_ESC(ctx.t('eng_' + key))}</a>"
                     f"<span class=\"rp-sub\"> {_ESC(ctx.t('eng_' + key + '_desc'))}</span></li>" for key in decl["home"]["engineering_links"])
     body = [f"<p class=\"hm-quiet\">{_ESC(ctx.t('eng_intro'))}</p>", f"<ul class=\"hm-eng-links\">{items}</ul>"]
@@ -1025,11 +1029,13 @@ def _checklist_html(ctx: _Ctx, proj: dict[str, Any]) -> str:
             f"<ol class=\"rp-checklist\">{''.join(items)}</ol></section>")
 
 
-def render_onboarding(data: dict[str, Any], lang: str) -> str:
+def render_onboarding(data: dict[str, Any], lang: str, setup: dict[str, Any] | None = None) -> str:
+    """AIPOS-F267: setup = board_pages.setup_summary (one line on top linking the setup check page)."""
     ctx = _Ctx(data["decl"], lang)
     active = [p for p in data["projects"] if not p["paused"]]
     paused = [p for p in data["projects"] if p["paused"]]
-    body = [_toggle(ctx, data.get("hidden") or [], bool(data.get("show_all")), str(ctx.decl["pages"]["onboarding"]))]
+    body = [_setup_summary_html(ctx, setup, "rp-ob-setup")] if setup is not None else []
+    body.append(_toggle(ctx, data.get("hidden") or [], bool(data.get("show_all")), str(ctx.decl["pages"]["onboarding"])))
     body += [_checklist_html(ctx, p) for p in active]
     if paused:
         body.append(f"<details class=\"rp-paused\" data-paused=\"{len(paused)}\"><summary>{_ESC(ctx.t('rp_paused_folded', count=len(paused)))}"
@@ -1872,6 +1878,70 @@ def render_history(data: dict[str, Any], lang: str) -> str:
     return _page(ctx, "history", ctx.t("hs_title"), body, note_key=None)
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F267: setup check page (data = board_pages.collect_setup over setup_check.run_setup_check; item labels / values / fixes are the
+# declared and probed text, shown as they are in every language) + the one-line summary on the home / onboarding pages
+# ---------------------------------------------------------------------------
+
+def _setup_summary_html(ctx: _Ctx, summary: dict[str, Any], css: str) -> str:
+    state = summary["state"]
+    counts = summary["counts"]
+    if state == "none":
+        text = ctx.t("sc_sum_none")
+    elif state == "error":
+        text = ctx.t("sc_sum_error", error=summary.get("error") or "")
+    else:
+        text = ctx.t("sc_sum", ok=counts["ok"], fail=counts["fail"], warn=counts["warn"], time=summary.get("time") or "")
+    bad = " rp-alert sc-sum-bad" if state in ("fail", "error") else ""
+    return (f"<p class=\"sc-sum {_ESC(css)} sc-sum-{_ESC(state)}{bad}\" data-setup-state=\"{_ESC(state)}\" data-setup-ok=\"{counts['ok']}\""
+            f" data-setup-fail=\"{counts['fail']}\" data-setup-warn=\"{counts['warn']}\"><span class=\"sc-sum-text\">{_ESC(text)}</span> "
+            f"<a class=\"sc-sum-link\" href=\"{_ESC(ctx.href(summary['url']))}\">{_ESC(ctx.t('sc_sum_link'))}</a></p>")
+
+
+def _pi_alert_html(ctx: _Ctx, reminder: dict[str, Any]) -> str:
+    kind = reminder["kind"]
+    command = (f"<p class=\"sc-pi-label\">{_ESC(ctx.t('sc_pi_install'))}</p><pre class=\"sc-copy\"><code>{_ESC(reminder['command'])}</code></pre>"
+               if reminder.get("command") else "")
+    return (f"<section class=\"sc-pi-alert\" role=\"alert\" data-pi-alert=\"{_ESC(kind)}\"><h2>{_ESC(ctx.t('sc_pi_' + kind + '_title'))}</h2>"
+            f"<p class=\"sc-pi-text\">{_rich(reminder['text'])}</p>{command}"
+            f"<p><a class=\"rp-link\" href=\"{_ESC(reminder['url'])}\" rel=\"noopener noreferrer\" target=\"_blank\">{_ESC(ctx.t('sc_pi_docs'))}</a>"
+            f" <span class=\"rp-sub\">{_ESC(reminder['url'])}</span></p></section>")
+
+
+def _setup_row_html(ctx: _Ctx, item: dict[str, Any]) -> str:
+    fix = (f"<p class=\"sc-exit\"><span class=\"rp-sub\">{_ESC(ctx.t('sc_exit'))}</span> {_rich(item['exit'])}</p>"
+           if item.get("exit") else "")
+    return (f"<li class=\"sc-item sc-{_ESC(item['status'])}\" data-item=\"{_ESC(item['id'])}\" data-status=\"{_ESC(item['status'])}\">"
+            f"<p><span class=\"sc-mark\">{_ESC(item['mark'])}</span> <strong>{_ESC(item['label'])}</strong></p>"
+            f"<p class=\"sc-detail\">{_ESC(item['detail'])}</p>{fix}</li>")
+
+
+def render_setup(data: dict[str, Any], lang: str) -> str:
+    ctx = _Ctx(data["decl"], lang)
+    entry, summary = data["entry"], data["summary"]
+    body = [f"<p class=\"hm-quiet\">{_ESC(ctx.t('sc_intro'))}</p>"]
+    if summary["state"] == "error":
+        body.append(f"<p class=\"rp-err sc-error\">{_ESC(ctx.t('sc_error', error=summary.get('error') or ''))}</p>")
+    if data.get("reminder"):
+        body.append(_pi_alert_html(ctx, data["reminder"]))
+    counts = summary["counts"]
+    if summary["state"] != "error":
+        key = "sc_verdict_fail" if counts["fail"] else "sc_verdict_ok"
+        body.append(f"<p class=\"sc-verdict{' rp-alert' if counts['fail'] else ''}\" data-fail=\"{counts['fail']}\" data-warn=\"{counts['warn']}\""
+                    f" data-ok=\"{counts['ok']}\">{_ESC(ctx.t(key, **counts))}</p>")
+    when = ctx.t("sc_cached", age=entry.get("age_seconds", 0), seconds=data["cache_seconds"]) if entry.get("cached") else ctx.t("sc_fresh")
+    body.append(f"<p class=\"sc-when\" data-checked-at=\"{_ESC(entry.get('checked_at') or '')}\" data-run=\"{_ESC(str(entry.get('run') or ''))}\""
+                f" data-cached=\"{str(bool(entry.get('cached'))).lower()}\">{_ESC(ctx.t('sc_checked_at', time=summary.get('time') or ''))} "
+                f"<span class=\"rp-sub\">{_ESC(when)}</span> "
+                f"<a class=\"rp-link sc-recheck\" href=\"{_ESC(ctx.href(data['recheck_url']))}\">{_ESC(ctx.t('sc_recheck'))}</a></p>")
+    if data["rows"]:
+        if ctx.lang != ctx.decl["locale"]["default"]:
+            body.append(f"<p class=\"rp-sub sc-original\">{_ESC(ctx.t('sc_original'))}</p>")
+        body.append("<ol class=\"sc-items\">" + "".join(_setup_row_html(ctx, it) for it in data["rows"]) + "</ol>")
+    body.append(_tech(ctx, f"<p>{_ESC(ctx.t('sc_tech'))}</p>"))
+    return _page(ctx, "setup", ctx.t("sc_title"), body, note_key=None)
+
+
 def render_error(lang: str, message: str) -> str:
     from web.board.app import _generate_text
 
@@ -1880,17 +1950,20 @@ def render_error(lang: str, message: str) -> str:
             f"<body class=\"rp-page\"><main><p class=\"rp-err rp-page-error\">{_ESC(text)}</p></main></body></html>")
 
 
-def render_page(page: str, home_root: str | Path | None, params: dict[str, list[str]], owner: bool = False) -> str:
+def render_page(page: str, home_root: str | Path | None, params: dict[str, list[str]], owner: bool = False,
+                workspace_root: str | Path | None = None) -> str:
     """page ∈ board_pages.PAGES; params = 查询参数(parse_qs)。声明 / 推导读不出 = 错误页(不吞, 拒因原文)。
     AIPOS-F245 item 2: the whole render is one request-level read scope (declarations read once per request, also by the renderer).
-    AIPOS-F248: owner = Owner session (the home page then carries the one-click buttons; the data is the same for every session)."""
+    AIPOS-F248: owner = Owner session (the home page then carries the one-click buttons; the data is the same for every session).
+    AIPOS-F267: workspace_root = the board server's workspace (the setup check resolves the gate address from it, same as the CLI)."""
     from tools.aipos_cli.task_loader import read_request_scope
 
     with read_request_scope():
-        return _render_page(page, home_root, params, owner)
+        return _render_page(page, home_root, params, owner, workspace_root)
 
 
-def _render_page(page: str, home_root: str | Path | None, params: dict[str, list[str]], owner: bool = False) -> str:
+def _render_page(page: str, home_root: str | Path | None, params: dict[str, list[str]], owner: bool = False,
+                 workspace_root: str | Path | None = None) -> str:
     from tools.aipos_cli import board_pages
     from tools.schema_loader import SchemaLoadError
 
@@ -1908,7 +1981,8 @@ def _render_page(page: str, home_root: str | Path | None, params: dict[str, list
             from tools.aipos_cli.board_home import collect_home
 
             all_asks = bool(decl["home"].get("asks_view_value")) and arg("view") == decl["home"]["asks_view_value"]
-            return render_home(collect_home(home_root, show_all=show_all, all_asks=all_asks), lang, owner)
+            setup = None if all_asks else board_pages.setup_summary(board_pages.setup_check_latest(workspace_root), decl)  # AIPOS-F267
+            return render_home(collect_home(home_root, show_all=show_all, all_asks=all_asks), lang, owner, setup)
         if page == "engineering":
             return render_engineering(decl, lang)
         if page == "history":  # AIPOS-F247: history & audit (same search as `lybra history search`)
@@ -1916,7 +1990,10 @@ def _render_page(page: str, home_root: str | Path | None, params: dict[str, list
         if page == "overview":
             return render_overview(board_pages.collect_overview(home_root, show_all=show_all), lang)
         if page == "onboarding":
-            return render_onboarding(board_pages.collect_onboarding(home_root, show_all=show_all), lang)
+            return render_onboarding(board_pages.collect_onboarding(home_root, show_all=show_all), lang,
+                                     board_pages.setup_summary(board_pages.setup_check_latest(workspace_root), decl))  # AIPOS-F267
+        if page == "setup":  # AIPOS-F267: setup check (same run_setup_check as `lybra setup check`; short in-process cache)
+            return render_setup(board_pages.collect_setup(workspace_root, params), lang)
         if page == "project":
             view = arg("view")
             if view == decl["home"]["cards_view_value"]:  # AIPOS-F246: the former list view = all task cards (engineering / history)
