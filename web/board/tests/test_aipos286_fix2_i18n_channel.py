@@ -31,7 +31,8 @@ class TestAIPOS286FIX2I18nChannel:
                                     workspace_label="test", workspace_root="/test",
                                     gate_url="http://test", charter_path="/charter",
                                     example_card_path="/example", 
-                                    server_hostname="host", server_ip="1.2.3.4")
+                                    server_hostname="host", server_ip="1.2.3.4",
+                                    user_language_line="")  # AIPOS-F276: 模板新增用户语言行占位
         assert isinstance(result_zh, str), "Should return zh text"
         assert "工作区" in result_zh, "zh template should contain Chinese"
         
@@ -40,7 +41,8 @@ class TestAIPOS286FIX2I18nChannel:
                                     workspace_label="test", workspace_root="/test",
                                     gate_url="http://test", charter_path="/charter",
                                     example_card_path="/example",
-                                    server_hostname="host", server_ip="1.2.3.4")
+                                    server_hostname="host", server_ip="1.2.3.4",
+                                    user_language_line="")  # AIPOS-F276: 模板新增用户语言行占位
         assert isinstance(result_en, str), "Should return en text"
         assert "Workspace" in result_en or "workspace" in result_en, "en template should contain English"
         

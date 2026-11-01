@@ -1670,7 +1670,7 @@ _OWNER_FLAGS = ("needs_owner", "owner_review_required", "approval_required")
 def relay_declaration(decl: dict[str, Any] | None = None) -> dict[str, Any]:
     """verbs.schema lybra_owner_inbox.relay(fail-closed): 键齐; window_days 正整数; skip_choices ⊆ options; driver_fields 非空字符串列表;
     命令模板齐; 文案语言恰为看板 locale.supported 且每种语言 _RELAY_TEXTS 齐(F198 话术声明同一形)。"""
-    from tools.aipos_cli.board_pages import pages_declaration
+    from tools.aipos_cli.i18n import check_block
     from tools.schema_loader import SchemaLoadError
 
     d = decl or inbox_declaration()
@@ -1686,9 +1686,7 @@ def relay_declaration(decl: dict[str, Any] | None = None) -> dict[str, Any]:
         raise SchemaLoadError(f"{where}.driver_fields 须为非空字段名列表")
     if not all(isinstance((r["commands"] or {}).get(k), str) and r["commands"][k] for k in _RELAY_COMMANDS):
         raise SchemaLoadError(f"{where}.commands 未声明齐 {list(_RELAY_COMMANDS)}")
-    supported = list(pages_declaration()["locale"]["supported"])
-    if sorted(r["texts"]) != sorted(supported):
-        raise SchemaLoadError(f"{where}.texts 语言须恰为看板 locale.supported {supported}")
+    check_block(r["texts"], where=f"{where}.texts")  # AIPOS-F276: 双语块标准(语言恰为 locale.supported、各语言键集相等)唯一校验
     for lang, table in r["texts"].items():
         missing = [k for k in _RELAY_TEXTS if not isinstance((table or {}).get(k), str)]
         if missing:
@@ -1697,12 +1695,10 @@ def relay_declaration(decl: dict[str, Any] | None = None) -> dict[str, Any]:
 
 
 def relay_texts(lang: str | None = None) -> dict[str, str]:
-    """一种语言的话术文案(未知 / 缺省 = 看板缺省语言; CLI 用缺省语言)。"""
-    from tools.aipos_cli.board_pages import pages_declaration
+    """一种语言的话术文案(AIPOS-F276: 经双语块唯一读取器 i18n.texts; 缺省 = 看板缺省语言; CLI 传 i18n.resolve_language 的结果)。"""
+    from tools.aipos_cli.i18n import texts as bilingual_texts
 
-    table = relay_declaration()["texts"]
-    default = str(pages_declaration()["locale"]["default"])
-    return table[lang] if lang in table else table[default]
+    return bilingual_texts(relay_declaration()["texts"], lang, where=f"verbs.{VERB}.relay.texts")
 
 
 def _run_metas(root: Path, task_id: str) -> list[dict[str, Any]]:
@@ -2202,7 +2198,9 @@ def _paused_line(inbox: dict[str, Any], texts: dict[str, Any]) -> str | None:
     return _fmt(texts["paused_hidden"], "texts.paused_hidden", projects=", ".join(names)) if names else None
 
 
-def render_inbox_text(inbox: dict[str, Any]) -> str:
+def render_inbox_text(inbox: dict[str, Any], lang: str | None = None) -> str:
+    """CLI 收件箱文本。AIPOS-F276: lang = i18n.resolve_language 的结果(CLI 传入); 已双语的「已定待转达」段按该语言出(relay_lines),
+    其余段落声明仍单语(本卡不翻译)。lang 缺省 = 看板缺省语言(与 JSON 里 relays[].lines 同字)。"""
     texts = inbox_declaration()["texts"]
     head = "header" if inbox["items"] else "empty"
     out = [_fmt(texts[head], f"texts.{head}", count=inbox["count"], projects=len(inbox["projects"]), home_root=inbox["home_root"])]
@@ -2220,12 +2218,12 @@ def render_inbox_text(inbox: dict[str, Any]) -> str:
         out.extend(_fmt(tt["notice_item"], "tiers.texts.notice_item", **n) for n in notices)
     groups = inbox.get("relays") or []
     if groups:  # AIPOS-F201 item 3: decided / signed, the advisor has not continued yet (same paragraphs as the board)
-        rt = relay_texts()
+        rt = relay_texts(lang)
         out.append("")
         out.append(_fmt(rt["cli_heading"], "relay.texts.cli_heading", count=len(groups)))
         for group in groups:
             out.append("")
-            out.extend("  " + line for line in (group.get("lines") or relay_lines(group)))
+            out.extend("  " + line for line in (relay_lines(group, lang) if lang else (group.get("lines") or relay_lines(group))))
     if inbox["errors"]:
         out.append("")
         out.append(_fmt(texts["errors_header"], "texts.errors_header", count=len(inbox["errors"])))

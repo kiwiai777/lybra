@@ -364,16 +364,40 @@ def set_active_project(name: str, *, env: dict[str, str] | None = None) -> Path:
     project = str(name or "").strip()
     if not project:
         raise ValueError("set_active_project requires a non-empty project name")
+    return set_global_config_value("active_project", project, env=env)
+
+
+def set_global_config_value(key: str, value: Any, *, env: dict[str, str] | None = None) -> Path:
+    """home 级运行时配置(~/.lybra/config.json)唯一写路径(config.schema configuration_sources.global_config): 只改 key, 保留
+    config_version / home_root / 其余键; 文件不存在 = 建 {config_version: 2}。HOME 定位不到 = ValueError(HOME_NOT_RESOLVED)。
+    set_active_project(AIPOS-230)与 set_language(AIPOS-F276)同调。"""
     path = global_config_path(env)
     if path is None:
-        raise ValueError("HOME_NOT_RESOLVED: cannot locate ~/.lybra/config.json to set active_project")
+        raise ValueError(f"HOME_NOT_RESOLVED: cannot locate ~/.lybra/config.json to set {key}")
     config = load_global_config(env)
     if not config:
         config = {"config_version": 2}
-    config["active_project"] = project
+    config[key] = value
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path
+
+
+def set_language(language: str, *, env: dict[str, str] | None = None) -> dict[str, Any]:
+    """AIPOS-F276: `lybra config set-language` 的写入(home 配置 language 键; 键名读 config.schema language.home_config_key)。
+    取值经 i18n.validate_language(取值域 = 看板 locale.supported 唯一声明); 非法 = i18n.LanguageError 上抛(不写)。
+    返回 {path, before, after, changed}; 值不变 = 不改写文件。"""
+    from tools.aipos_cli.i18n import home_config_key, validate_language
+
+    key = home_config_key()
+    path = global_config_path(env)
+    if path is None:
+        raise ValueError(f"HOME_NOT_RESOLVED: cannot locate ~/.lybra/config.json to set {key}")
+    after = validate_language(language, source="home_config", path=path)
+    before = load_global_config(env).get(key)
+    if before == after:
+        return {"path": path, "before": before, "after": after, "changed": False}
+    return {"path": set_global_config_value(key, after, env=env), "before": before, "after": after, "changed": True}
 
 
 def resolve_home_root(

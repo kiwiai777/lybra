@@ -22,6 +22,7 @@ class _Ctx:
     def __init__(self, decl: dict[str, Any], lang: str) -> None:
         self.decl = decl
         self.lang = lang
+        self.default = default_lang(decl)  # AIPOS-F276 item 4: the language a URL without the param renders in
 
     def t(self, key: str, **values: Any) -> str:
         from web.board.app import _generate_text
@@ -35,9 +36,9 @@ class _Ctx:
         return str(_I18N_TEMPLATES[self.lang if self.lang in _I18N_TEMPLATES else "zh"][key])
 
     def href(self, url: str) -> str:
-        """站内链接带上当前语言(缺省语言不带)。"""
+        """站内链接带上当前语言(看板缺省语言不带; AIPOS-F276: 缺省 = default_lang, 即 home 配置 / 环境变量 > locale.default)。"""
         locale = self.decl["locale"]
-        if self.lang == locale["default"]:
+        if self.lang == self.default:
             return url
         base, _, frag = url.partition("#")
         sep = "&" if "?" in base else "?"
@@ -48,10 +49,20 @@ class _Ctx:
         return self.t("rp_tell", advisor=who, ask=self.t(ask_key, **values))
 
 
+def default_lang(decl: dict[str, Any]) -> str:
+    """AIPOS-F276 item 4: the board language when the browser has not chosen one = i18n.board_default_language (the board process's
+    LYBRA_LANG > home config language > locale.default; same single resolver as the CLI, no --lang tier). The browser choice still wins
+    (resolve_lang: the locale.param in the URL; the page script carries storage_key into the URL)."""
+    from tools.aipos_cli.i18n import board_default_language
+
+    code = board_default_language()
+    return code if code in decl["locale"]["supported"] else str(decl["locale"]["default"])
+
+
 def resolve_lang(decl: dict[str, Any], params: dict[str, list[str]]) -> str:
     locale = decl["locale"]
     asked = (params.get(locale["param"]) or [""])[0]
-    return asked if asked in locale["supported"] else str(locale["default"])
+    return asked if asked in locale["supported"] else default_lang(decl)
 
 
 def _rich(text: Any) -> str:
@@ -115,7 +126,7 @@ def _page(ctx: _Ctx, page: str, title: str, body: list[str], *, note_key: str | 
         switch = (f"<a class=\"rp-lang\" data-set-lang=\"{_ESC(other)}\" href=\"?{_ESC(urlencode({locale['param']: other}))}\">"
                   f"{_ESC(ctx.t('rp_lang_other'))}</a>")
     script = (
-        "<script>(function(){var k=" + _js(locale["storage_key"]) + ",p=" + _js(locale["param"]) + ",d=" + _js(locale["default"])
+        "<script>(function(){var k=" + _js(locale["storage_key"]) + ",p=" + _js(locale["param"]) + ",d=" + _js(ctx.default)
         + ";try{var q=new URLSearchParams(location.search),s=localStorage.getItem(k);"
         "document.querySelectorAll('[data-set-lang]').forEach(function(a){a.addEventListener('click',function(){"
         "try{localStorage.setItem(k,a.getAttribute('data-set-lang'))}catch(e){}})});"
@@ -1871,7 +1882,7 @@ def _ws_status(ctx: _Ctx, t: dict[str, Any], plan: dict[str, Any]) -> str:
             f"<table class=\"rp-subs ws-table\"><tbody>{''.join(rows)}</tbody></table></section>")
 
 
-def _ws_form(t: dict[str, Any], plan: dict[str, Any], lang: str, query: dict[str, Any], locale: dict[str, Any]) -> str:
+def _ws_form(t: dict[str, Any], plan: dict[str, Any], lang: str, query: dict[str, Any], locale: dict[str, Any], default: str) -> str:
     from tools.aipos_cli.workstation_plan import declaration, mode_names
 
     decl = declaration()
@@ -1894,7 +1905,7 @@ def _ws_form(t: dict[str, Any], plan: dict[str, Any], lang: str, query: dict[str
 
     hidden = (f"<input type=\"hidden\" name=\"{_ESC(str(query['project']))}\" value=\"{_ESC(plan['project'])}\">"
               + (f"<input type=\"hidden\" name=\"{_ESC(str(locale['param']))}\" value=\"{_ESC(lang)}\">"
-                 if lang != locale["default"] else ""))
+                 if lang != default else ""))
     return (f"<section class=\"ws-choose\"><h2>{_ESC(t['form_heading'])}</h2><p class=\"rp-sub\">{_ESC(t['form_note'])}</p>"
             f"<form class=\"ws-form\" method=\"get\" action=\"{_ESC(str(decl['board']['page_path']))}\">{hidden}"
             f"{noncode}"
@@ -1964,7 +1975,7 @@ def render_workstation(home_root: str | Path | None, params: dict[str, list[str]
         risks = risk_texts(plan, t)
         body.append(f"<section class=\"ws-risks\" data-risks=\"{len(risks)}\"><h2>{_ESC(t['risks_heading'])}</h2><ul>"
                     + ("".join(f"<li class=\"rp-alert\">{_ESC(r)}</li>" for r in risks) or f"<li>{_ESC(t['none'])}</li>") + "</ul></section>")
-        body.append(_ws_form(t, plan, lang, decl["query"], decl["locale"]))
+        body.append(_ws_form(t, plan, lang, decl["query"], decl["locale"], default_lang(decl)))
         body.append(f"<section class=\"ws-target\"><h2>{_ESC(t['target_heading'])}</h2><p>{_ESC(target_text(plan, t))}</p></section>")
         body.append(_ws_steps(t, plan, ctx))
         prompts = [f"<section class=\"ws-prompts\"><p class=\"rp-tell\">{_ESC(t['board_note'])}</p>"]
@@ -2121,7 +2132,7 @@ def render_history(data: dict[str, Any], lang: str) -> str:
     hidden = [(decl["query"]["project"], f["project"]), (hq["advisor"], f["advisor"]), (hq["since"], f["since"]),
               (hq["rejected_once"], decl["history"]["flag_value"] if f["rejected_once"] else None), (hq["legacy"], f["legacy"]),
               (decl["query"]["show"], decl["show_all_value"] if f["show"] else None),
-              (decl["locale"]["param"], lang if lang != decl["locale"]["default"] else None)]
+              (decl["locale"]["param"], lang if lang != ctx.default else None)]
     body.append(f"<form class=\"hs-search\" method=\"get\" action=\"{_ESC(str(decl['pages']['history']))}\" role=\"search\">"
                 f"<input type=\"search\" name=\"{_ESC(hq['keywords'])}\" value=\"{_ESC(f['keywords'])}\""
                 f" placeholder=\"{_ESC(ctx.t('hs_placeholder'))}\" aria-label=\"{_ESC(ctx.t('hs_search'))}\">"

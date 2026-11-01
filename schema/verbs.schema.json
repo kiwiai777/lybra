@@ -2493,7 +2493,7 @@
       }
     },
     "lybra_kickoff": {
-      "description": "AIPOS-F187 件①(10-18 顾问实况: 子 agent 执行模式下 loop 的 manual_kickoff 只给「开工材料 my-tasks + 章程 charter」两条命令, 顾问每张卡手写约 60 行开工稿, F184/F185/F186 三份几乎逐字相同; chris 三位 Codex 顾问各写各的): `lybra kickoff --task-id <卡> [--role executor|auditor] [--json] [--workspace-root <治理根>]` —— 输出一份可直接交给子 agent 的自足开工稿(顾问可在其后追加本卡特别说明)。只读: 不写任何文件、不连门、不起进程。开工稿是渲染, 不是第二份规则文本: 骨架与句子只在本条 texts / layout, 值全部取自既有单源——卡面(task_id / title / lane / 认领实例 claimed_by / carried_from)、project.json(repos、paths.return_root / verdict_root / scratch_root、test_contract.runall_path / ratchet / residual_processes)、章程(实例身份与章程可取 = charter_render.instance_charter 同一判定; 写权限边界与全角色硬规矩 = roles.schema write_boundary 经 write_boundary.build_write_boundary; 门交互硬规矩 = hard_rules_extractor.gate_hard_rules(AIPOS-F212 件②: 与章程硬规矩节同读同序同数; 项目 paths.hard_rules_source § 0.5, 未声明 = roles.schema gate_hard_rules.fallback); 全量命令与时限 = charter_render.runall_context; 时限措辞 = 卡面 harness(loop_driver.card_harness)的单次工具时限 enums.schema harness.<值>.tool_timeout_seconds(AIPOS-F189 件②: 全量时限在其内 = 同步跑写设足秒数, 超限 = 一律 run-long, 未声明 = 不写秒数只教 run-long; 唯一读取口 subagent_kickoff.harness_tool_timeout, 措辞读 texts.runall_timing_<sync|run_long|undeclared>); 长命令 = run_long.charter_commands)、开工面(工作树 / 报告落点 / 报告必填字段 / 承继来源 / 卡 harness / 验证根节与拒因 = next_resolver.card_workstation_view, AIPOS-F212 件①: 与工位 /go 同读同码, 渲染失败 = KICKOFF_VALIDATION_ROOT_UNRESOLVED 拒并给出口, 不重算; 报告必填行式 = lybra_my_tasks.kickoff.report_field_line)。可开工判据 = next_resolver.kickoff_refusal(与工位 /go 同一判据: 卡不在队列 / 未认领 / 已结案 / 当前不该本角色动 / 产物已交 = 拒, 拒因原文)。角色 = 审计卡(audit_derivation.is_audit_card)→ auditor, 否则 executor; --role 与卡不符 = 拒。实例 = 卡面 claimed_by(缺 = assigned_to)。实例会话所在机(子 agent 接入 land 事件 host)≠ 本机 = 章程命令给 ssh 拉取式(charter_render.charter_pull_command, 主机未声明 = 占位 + 声明出口)并加 remote_note。草稿目录 = paths.scratch_root/<卡ID 小写>(未声明 = 系统临时目录下 config.schema paths.scratch_root.default_system_temp), 落在治理根内 = 拒(KICKOFF_SCRATCH_IN_GOVERNANCE)。唯一实现 tools/aipos_cli/subagent_kickoff.render_kickoff_brief; loop 子 agent 模式等待提示(lybra_loop.launch.manual_hint.subagent)与 loop status 下一动作(lybra_loop_status.next_action.by_execution_mode.modes.subagent.kickoff_detail)指向本命令。",
+      "description": "AIPOS-F187 件①(10-18 顾问实况: 子 agent 执行模式下 loop 的 manual_kickoff 只给「开工材料 my-tasks + 章程 charter」两条命令, 顾问每张卡手写约 60 行开工稿, F184/F185/F186 三份几乎逐字相同; chris 三位 Codex 顾问各写各的): `lybra kickoff --task-id <卡> [--role executor|auditor] [--json] [--workspace-root <治理根>]` —— 输出一份可直接交给子 agent 的自足开工稿(顾问可在其后追加本卡特别说明)。只读: 不写任何文件、不连门、不起进程。开工稿是渲染, 不是第二份规则文本: 骨架与句子只在本条 texts / layout, 值全部取自既有单源——卡面(task_id / title / lane / 认领实例 claimed_by / carried_from)、project.json(repos、paths.return_root / verdict_root / scratch_root、test_contract.runall_path / ratchet / residual_processes)、章程(实例身份与章程可取 = charter_render.instance_charter 同一判定; 写权限边界与全角色硬规矩 = roles.schema write_boundary 经 write_boundary.build_write_boundary; 门交互硬规矩 = hard_rules_extractor.gate_hard_rules(AIPOS-F212 件②: 与章程硬规矩节同读同序同数; 项目 paths.hard_rules_source § 0.5, 未声明 = roles.schema gate_hard_rules.fallback); 全量命令与时限 = charter_render.runall_context; 时限措辞 = 卡面 harness(loop_driver.card_harness)的单次工具时限 enums.schema harness.<值>.tool_timeout_seconds(AIPOS-F189 件②: 全量时限在其内 = 同步跑写设足秒数, 超限 = 一律 run-long, 未声明 = 不写秒数只教 run-long; 唯一读取口 subagent_kickoff.harness_tool_timeout, 措辞读 texts.runall_timing_<sync|run_long|undeclared>); 长命令 = run_long.charter_commands)、开工面(工作树 / 报告落点 / 报告必填字段 / 承继来源 / 卡 harness / 验证根节与拒因 = next_resolver.card_workstation_view, AIPOS-F212 件①: 与工位 /go 同读同码, 渲染失败 = KICKOFF_VALIDATION_ROOT_UNRESOLVED 拒并给出口, 不重算; 报告必填行式 = lybra_my_tasks.kickoff.report_field_line)。可开工判据 = next_resolver.kickoff_refusal(与工位 /go 同一判据: 卡不在队列 / 未认领 / 已结案 / 当前不该本角色动 / 产物已交 = 拒, 拒因原文)。角色 = 审计卡(audit_derivation.is_audit_card)→ auditor, 否则 executor; --role 与卡不符 = 拒。实例 = 卡面 claimed_by(缺 = assigned_to)。实例会话所在机(子 agent 接入 land 事件 host)≠ 本机 = 章程命令给 ssh 拉取式(charter_render.charter_pull_command, 主机未声明 = 占位 + 声明出口)并加 remote_note。草稿目录 = paths.scratch_root/<卡ID 小写>(未声明 = 系统临时目录下 config.schema paths.scratch_root.default_system_temp), 落在治理根内 = 拒(KICKOFF_SCRATCH_IN_GOVERNANCE)。唯一实现 tools/aipos_cli/subagent_kickoff.render_kickoff_brief; loop 子 agent 模式等待提示(lybra_loop.launch.manual_hint.subagent)与 loop status 下一动作(lybra_loop_status.next_action.by_execution_mode.modes.subagent.kickoff_detail)指向本命令。 AIPOS-F276 件③: 头行后一行「用户语言」(texts.user_language_line 占位 = i18n.user_language_line, 按用户语言写, 文案 config.schema language.texts; 语言 = i18n.resolve_language: 全局 --lang > LYBRA_LANG > home 配置 language > locale.default)。",
       "phase": "render",
       "surface": ["cli"],
       "cli_command": "lybra kickoff",
@@ -2516,14 +2516,15 @@
         "unreadable": {"code": 3, "meaning": "治理根 / project.json / 声明读取失败(fail-closed)"}
       },
       "layout": {
-        "executor": ["header", "", "start_title", "start_charter", "start_card", "start_worktree", "start_no_worktree", "start_repo", "carried", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "no_write_title", "no_write_boundary_lines", "no_write_other_projects", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "read_discipline", "", "verify_title", "verify_baseline", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_code_files", "return_write_last", "return_body", "return_stop", "", "summary"],
-        "auditor": ["header_auditor", "", "start_title", "start_charter", "start_card_auditor", "start_worktree_auditor", "start_repo", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "runtime_evidence_lines", "evidence_reuse_line", "", "no_write_title", "no_write_boundary_lines", "no_write_other_projects", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "read_discipline", "", "verify_title", "verify_baseline_auditor", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_code_files", "return_fail_scope", "return_write_last", "return_body_auditor", "return_stop", "", "summary"],
+        "executor": ["header", "user_language_line", "", "start_title", "start_charter", "start_card", "start_worktree", "start_no_worktree", "start_repo", "carried", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "no_write_title", "no_write_boundary_lines", "no_write_other_projects", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "read_discipline", "", "verify_title", "verify_baseline", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_code_files", "return_write_last", "return_body", "return_stop", "", "summary"],
+        "auditor": ["header_auditor", "user_language_line", "", "start_title", "start_charter", "start_card_auditor", "start_worktree_auditor", "start_repo", "remote_note", "", "boundary_title", "boundary_lines", "", "validation_root_lines", "", "runtime_evidence_lines", "evidence_reuse_line", "", "no_write_title", "no_write_boundary_lines", "no_write_other_projects", "no_gate", "", "hard_rules_title", "hard_rule_lines", "commands_rules", "", "scratch_title", "scratch", "read_discipline", "", "verify_title", "verify_baseline_auditor", "verify_baseline_now", "verify_runall", "verify_long", "verify_ratchet", "verify_evidence", "verify_no_poll", "", "return_title", "return_processes", "return_report", "report_field_lines", "return_code_files", "return_fail_scope", "return_write_last", "return_body_auditor", "return_stop", "", "summary"],
         "note": "每个键 = texts 的一行模板; \"\" = 空行。模板占位值为 null(本卡不适用, 如无承继 / 本机会话 / 无工位)= 该行省略; 列表占位(*_lines)= 逐项按 item_templates 成行。占位缺 / 值非串 = 渲染失败(fail-closed, 不出半截开工稿)。"
       },
       "role_labels": {"executor": "执行体", "auditor": "审计体"},
       "read_discipline": {"description": "AIPOS-F240 件③: 大文件读法纪律唯一声明(text 占位 {threshold_chars}; 渲染唯一 subagent_kickoff.read_discipline_rule: lybra kickoff 开工稿 texts.read_discipline、执行 / 审计章程占位 {{read_discipline_rule}}、loop 运行中上下文超限续接指令 / 新会话摘要同读)。", "threshold_chars": 20000, "text": "单次读入可能超过 {threshold_chars} 字的文件(PDF 提取文本、整份源码、大表、历史记录)先 grep / head / wc 定位, 再按行段分段读(每次只读需要的段); 远端源码不整文件 cat(ssh 只取 grep 命中附近的行段); 已读过的材料把要点写进草稿目录笔记, 之后读笔记, 不反复整读原文。"},
       "texts": {
         "header": "你是 {project} 项目的{role_label}(实例 {instance}), 负责完成卡 {task_id}: {title}。用中文写报告。",
+        "user_language_line": "{user_language_line}",
         "header_auditor": "你是 {project} 项目的{role_label}(实例 {instance}), 负责审计卡 {task_id}(被审卡 {reviewed_task_id}): {title}。用中文写报告。",
         "start_title": "## 开工",
         "start_charter": "1. 读章程: `{charter_command}`",
@@ -6613,6 +6614,42 @@
         "blocked": {
           "code": 1,
           "meaning": "有 ✗ 项(阻断), 每项出口一行"
+        },
+        "usage": {
+          "code": 2,
+          "meaning": "参数错(argparse)/ 缺子命令"
+        }
+      }
+    },
+    "lybra_config_set_language": {
+      "description": "AIPOS-F276 件①(产品化 P4 机制): `lybra [--lang <语言>] config set-language <语言> [--json]` —— 一次设置用户语言, 全局生效(所有 lybra 命令的双语出声点与看板缺省语言)。写 home 级运行时配置 config.schema configuration_sources.global_config 的 language 键(~/.lybra/config.json; 唯一写口 workspace_config.set_language → set_global_config_value, 保留其余键; 值不变 = 不改写)。取值域 = board_readonly_pages.locale.supported(唯一声明), 非法 = 拒(退出码 refused, 原文给出口, 不写)。优先序(config.schema language.precedence): 全局 --lang > 环境变量 LYBRA_LANG > 本键 > locale.default——本命令写的是第 3 档, 回显按写入后解析出的语言(文案 config.schema language.texts.set_done / set_same)。不是新文件格式、不进治理真相、不连门。",
+      "phase": "single",
+      "surface": [
+        "cli"
+      ],
+      "cli_command": "lybra config set-language",
+      "single_implementation": "tools/aipos_cli/workspace_config.py(set_language / set_global_config_value)+ tools/aipos_cli/i18n.py(validate_language / resolve_language)",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "language": {
+            "type": "string",
+            "description": "语言代码(取值域 = board_readonly_pages.locale.supported; 不在 argparse 另列 choices, 由 i18n.validate_language 判)"
+          },
+          "json": {
+            "type": "boolean",
+            "description": "输出 {ok, changed, path, before, after, message}"
+          }
+        }
+      },
+      "exit_codes": {
+        "ok": {
+          "code": 0,
+          "meaning": "已写入(或值不变未改写)"
+        },
+        "refused": {
+          "code": 1,
+          "meaning": "语言非法 / home 配置定位不到或读写失败(原文给出口, 不写)"
         },
         "usage": {
           "code": 2,
