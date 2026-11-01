@@ -147,7 +147,8 @@ def _check_pi(decl: dict[str, Any], timeout: float) -> list[dict[str, Any]]:
     if catalog["ok"] and catalog["models"]:
         models = catalog["models"]
         shown = ", ".join(models[:5]) + (f" 等 {len(models)} 个" if len(models) > 5 else "")
-        return [pi_item, _item(decl, "pi_models", "ok", f"{len(models)} 个已配置模型: {shown}")]
+        # AIPOS-F272: 完整清单随结果带出(看板「设 pi 模型」候选复用本次结果, 不另起 pi 子进程)
+        return [pi_item, {**_item(decl, "pi_models", "ok", f"{len(models)} 个已配置模型: {shown}"), "models": list(models)}]
     detail = catalog["detail"] if not catalog["ok"] else f"`{' '.join(catalog['command'])}` 列出 0 个模型"
     return [pi_item, _item(decl, "pi_models", "fail", detail, str(spec["exit_models"]))]
 

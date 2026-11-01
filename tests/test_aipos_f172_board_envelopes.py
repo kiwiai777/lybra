@@ -484,7 +484,7 @@ def test_item2_write_path_declared_and_single_route():
     assert re.findall(r'if path == "(/api/auth/[^"]+)"', do_post) == board_readonly_declaration()["allowed_post_paths"]
     # AIPOS-F176: write exception 2 (project upgrade) is the only other write route, via the same framework handle_owner_write
     # AIPOS-F226: + 写例外③ 收件箱裁决; AIPOS-F269: + ④ 新建项目; AIPOS-F270: + ⑤ 签注册码
-    assert do_post.count("if path == ") == len(board_readonly_declaration()["allowed_post_paths"]) + 5
+    assert do_post.count("if path == ") == len(board_readonly_declaration()["allowed_post_paths"]) + 7  # AIPOS-F272: + 写例外⑥⑦
     assert 'if path == self._upgrade_paths["write_path"]' in do_post
     assert 'if path == self._envelope_paths["write_path"]' in do_post
     assert board_envelopes_declaration()["write_path"] == "/api/owner/envelopes/mint"
