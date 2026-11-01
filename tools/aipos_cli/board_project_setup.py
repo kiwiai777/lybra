@@ -27,8 +27,9 @@ GRANT_VERB = "lybra_project_authorization"
 _GRANT_KEYS = ("page", "write_path", "script_path", "action", "row", "text_prefix", "in_use_statuses", "defaults", "errors")
 #: 声明 two_phase_protocol.project_json_writers.board 必有的键
 _EXEC_KEYS = ("page", "write_path", "script_path", "action", "actions", "rows", "text_prefix", "errors")
-#: set-execution 的实例键 → 该位置实例应属的角色类(候选视图按登记角色归位; 写入校验仍只在 set_project_execution)
-_EXECUTION_SLOTS = (("subagent_executor", "executor"), ("auditor", "auditor"), ("pi_executor", "executor"))
+#: set-execution 的实例键 → 该位置是否放执行类实例(执行类 = roles.schema executor_modes 中凭据落治理根模式的 allowed_role_classes; 非执行位置 =
+#: class_groups workstation 组内其余类; 均读声明。候选视图按登记角色归位用, 写入校验仍只在 set_project_execution)
+_EXECUTION_SLOTS = (("subagent_executor", True), ("auditor", False), ("pi_executor", True))
 _OPEN_STATES = ("todo", "error")
 
 
@@ -163,12 +164,21 @@ def grant_prefill(governance_root: str | Path, project: str, *, now: datetime | 
 def execution_candidates(governance_root: str | Path) -> dict[str, Any]:
     """set-execution 候选: 本项目已接入实例(enrollment.enrolled_instances)逐个经 set-execution 既有校验(execution_instance_refusals: 已接入 /
     审计与 pi 执行者有工位; subagent_mode_mismatch: 子 agent 执行者为子 agent 模式登记)判定可放的位置, 再按登记角色类归位(执行类 → 执行者
-    位置, 审计类 → 审计位置)。返回 {slots: {键: [实例]}, current: 现声明 | None, error}。"""
-    from tools.aipos_cli.custom_roles import RoleRegistryReadError, resolve_instance_role_class, resolve_role_to_class
-    from tools.aipos_cli.enrollment import enrolled_instances, execution_instance_refusals, subagent_mode_mismatch
+    位置, 工位组其余类 → 审计位置; 执行类读 roles.schema executor_modes、工位组读 class_groups, 不写死角色名)。返回 {slots: {键: [实例]}, current: 现声明 | None, error}。"""
+    from tools.aipos_cli.custom_roles import RoleRegistryReadError, resolve_instance_role_class, resolve_role_to_class, role_classes_in_group
+    from tools.aipos_cli.enrollment import (
+        enrolled_instances,
+        execution_instance_refusals,
+        executor_mode_declaration,
+        governance_root_executor_modes,
+        subagent_mode_mismatch,
+    )
     from tools.aipos_cli.workspace_config import project_execution
 
     root = Path(governance_root)
+    modes = executor_mode_declaration()["values"]
+    exec_classes = {str(c) for m in governance_root_executor_modes() for c in modes[m]["allowed_role_classes"]}
+    slot_classes = {True: exec_classes, False: set(role_classes_in_group("workstation")) - exec_classes}
     slots: dict[str, list[str]] = {key: [] for key, _cls in _EXECUTION_SLOTS}
     try:
         current = project_execution(root)
@@ -184,8 +194,8 @@ def execution_candidates(governance_root: str | Path) -> dict[str, Any]:
                 cls = pair[1] if pair else None
         except RoleRegistryReadError:
             cls = None
-        for key, want in _EXECUTION_SLOTS:
-            if cls != want or execution_instance_refusals(root, {key: name}):
+        for key, executor_slot in _EXECUTION_SLOTS:
+            if cls not in slot_classes[executor_slot] or execution_instance_refusals(root, {key: name}):
                 continue
             if key == "subagent_executor" and subagent_mode_mismatch(root, name, view=view) is not None:
                 continue
