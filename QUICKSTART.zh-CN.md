@@ -42,6 +42,9 @@ lybra setup check
   **Python ≥ 3.10** · **Node.js ≥ 18** · **git** · **pi** 在 PATH · **pi 的已配置模型** ·
   **门在跑且可达** · **门常驻服务已安装**。失败行自带出口 —— 门不可达那行会同时给出前台起门
   与常驻安装两条命令。探测别的门地址用 `--gate-url`;`--json` 输出板面复用的结构化结果。
+  看板「设置自检」页显示同一结果 —— 看板首页与接入页带一行 ✓N · ✗N · ⚠N 摘要并链接到该页,
+  pi 或其模型缺失时页面给出安装命令;常驻门下,「门常驻」项还会核对已装单元的 PATH 是否
+  含 pi 所在目录。
 
 ## 第 2 步 —— 创建项目(顾问)
 
@@ -63,6 +66,10 @@ lybra project set-repos my-project --repo app=~/code/my-project --confirm
 - **Codex** 顾问:向导命令加 `--advisor-harness codex`。
 - 查任何一步的状态:`lybra onboarding check my-project --step 2`(`--step 0` = 前置检查的 ✗ 项;
   步号沿用向导的 1–11)。
+- 想在看板上建?Owner 也可改在看板接入页建项目 —— 「新建项目」(仅 Owner 登录会话)填项目名
+  与可选的产品仓路径,先在一次性副本里预演目录树与 `project.json` 全文(零真实写入)再确认:
+  与 `lybra project new` 同一实现外加落账,建成后接入清单会列出该项目并标出下一步;接着按
+  上面的向导命令继续即可。
 
 ## 第 3 步 —— 起门
 
@@ -86,9 +93,18 @@ lybra serve --workspace-root ~/.lybra/projects/my-project install --confirm
   (`--confirm` 拒绝)。要拆掉 install 建的单元用
   `lybra serve --workspace-root ~/.lybra/projects/my-project uninstall --confirm`
   (手写单元绝不被碰)。
+- 单元在安装时固化安装者的 PATH —— 预演会逐项列出将写入的 PATH 目录并标注 pi / node / git
+  能否在其中解析到。pi 装在 nvm、npm 全局目录或 `~/.local/bin` 时,在能找到 `pi` 的终端里跑
+  `serve install`;之后 pi 换了位置,用 `uninstall --confirm` 加 `install --confirm` 重装刷新
+  (已存在的单元绝不被原地覆盖)。
 - 预期:**板**在 `127.0.0.1:7117`,**门**(MCP)在 `127.0.0.1:7118`;
   `lybra serve --workspace-root ~/.lybra/projects/my-project status` 打印脱敏状态(凭据值绝不
   打印)。用 `lybra setup check` 复核 —— 门一项变 ✓。端口被占?见 FAQ。
+- 停门 —— 前台:Ctrl-C,或 `lybra serve --workspace-root ~/.lybra/projects/my-project stop`,
+  先停 supervisor 再停余下子进程,逐个报告最终状态(有未能停止的退出码 1);干净停掉后
+  `serve status` 显示「未运行」。常驻单元:`serve stop` 不发信号(单元 Restart= 会立刻重拉),
+  退出码 1 并打印管理器的出口(Linux `systemctl --user stop <单元>`、macOS
+  `launchctl bootout gui/<uid>/<标签>`);要停用并拆掉 install 建的单元用 `uninstall --confirm`。
 
 ## 第 4 步 —— 签项目常设授权(Owner)
 
