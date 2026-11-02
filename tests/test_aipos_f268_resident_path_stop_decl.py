@@ -428,6 +428,13 @@ def test_item5_mark_stopped_only_touches_own_state(tmp_path):
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["stopped_reason"] == "restart_limit" and data["processes"] == [{"name": "board", "pid": 123}]
     st = service_mode.redacted_service_state(data)
-    assert service_mode.render_service_state_line(st).startswith("门进程: 未运行(") and "子进程达重拉上限" in st["stopped_reason_label"]
+    # AIPOS-F277: 文案在 config.schema serve.texts 双语块(经唯一读取器取期望值, 不复制原文)
+    from tools.aipos_cli.i18n import texts as _texts
+
+    t = _texts(service_mode._serve_block(), None, where="serve.texts")
+    head = t["line_stopped"].split("{label}", 1)[0] + t["state_labels"]["stopped"]
+    assert service_mode.render_service_state_line(st).startswith(head) and st["stopped_reason_label"] == t["exit_reasons"]["restart_limit"]
+    en = _texts(service_mode._serve_block(), "en", where="serve.texts")
+    assert service_mode.render_service_state_line(st, "en").startswith(en["line_stopped"].split("{label}", 1)[0] + en["state_labels"]["stopped"])
     path.unlink()
     assert "已不在" in service_mode._mark_state_stopped(tmp_path / "ws", me, "stop_signal", connection_target=conn)

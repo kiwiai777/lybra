@@ -16,6 +16,7 @@ from __future__ import annotations
 import http.server
 import json
 import os
+import html
 import re
 import shutil
 import socket
@@ -302,7 +303,13 @@ def test_item3_english_page_shows_declared_text(board):
     page = _page(board, SETUP + "?lang=en")
     _show("---- ③ 英文设置自检页 <main> 原文 ----\n" + _main(page))
     assert '<html lang="en">' in page and "<h1>Setup check</h1>" in page and "pi is not installed" in page
-    assert "pi(审计 / 非代码执行工位)" in page and "pi 不在 PATH" in page and "How to fix" in page
+    # AIPOS-F277: 检查项标签 / 现值 / 出口为双语渲染值, 英文页显示英文(经唯一读取器取声明, 测试不复制原文)
+    from tools.aipos_cli.i18n import fill, texts
+    from tools.aipos_cli.setup_check import setup_check_declaration
+
+    en = texts(setup_check_declaration()["texts"], "en", where="setup_check.texts")
+    assert html.escape(en["labels"]["pi"]) in page and fill(en["details"]["not_on_path"], {"exe": "pi"}, where="t") in page
+    assert "How to fix" in page
     assert "shown as declared by the product" in page
     assert 'href="/owner/setup?recheck=1&amp;lang=en"' in page and "Check again" in page
     home = _page(board, "/owner/home?lang=en")

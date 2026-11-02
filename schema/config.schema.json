@@ -2039,13 +2039,235 @@
       "child_grace_note": "子进程 SIGTERM 后等其退出的限时, 过时 SIGKILL; stop 逐个停 state 所记子进程与 supervisor 收尾停子进程同用此值",
       "kill_confirm_seconds": 3,
       "kill_confirm_note": "SIGKILL 后确认退出的限时; 仍在 = 未能停止(BLOCK)"
+    },
+    "texts": {
+      "zh": {
+        "state_labels": {
+          "stopped": "未运行",
+          "recorded": "已记录在跑",
+          "none": "无运行记录"
+        },
+        "exit_reasons": {
+          "stop_signal": "收到停止信号",
+          "restart_limit": "子进程达重拉上限",
+          "aborted": "收尾异常退出"
+        },
+        "line_stopped": "门进程: {label}(supervisor 于 {stopped_at} 退出: {reason}; 最后所记 pid 留在 service_state.json 供排查)",
+        "line_recorded": "门进程: {label}({parts}; 前台 serve 由 `lybra serve stop` 停止)",
+        "line_none": "门进程: {label}"
+      },
+      "en": {
+        "state_labels": {
+          "stopped": "not running",
+          "recorded": "recorded as running",
+          "none": "no run record"
+        },
+        "exit_reasons": {
+          "stop_signal": "received a stop signal",
+          "restart_limit": "a child process hit the restart limit",
+          "aborted": "exited abnormally while finishing"
+        },
+        "line_stopped": "Gate processes: {label} (supervisor exited at {stopped_at}: {reason}; the last recorded pids stay in service_state.json for troubleshooting)",
+        "line_recorded": "Gate processes: {label} ({parts}; a foreground serve is stopped with `lybra serve stop`)",
+        "line_none": "Gate processes: {label}"
+      }
     }
   },
   "owner_texts": {
     "description": "AIPOS-F277(产品化 P4 第 1 期, 方案 governance/research/2026-11-02-p4-bilingual-plan.md): Owner 直接看到的命令出声点的双语文案块(每块 texts = {zh, en}, 结构标准与唯一读取器 = AIPOS-F276 i18n.texts / check_block; 各语言同一键的占位集相等, i18n.surface_texts 核)。代码只经读取器取用(i18n.block_localize 渲染为双语渲染值 Localized: str 本身 = 缺省语言, 事项 ID / 哈希 / JSON / 看板行为不变; CLI 出声按 i18n.resolve_language 取用户语言)。setup check / 门常驻的文案在各自声明节 setup_check.texts / gate_resident.texts; 本节放没有专属声明节的出声点。命令名、参数、路径、码值不译。只追加: 新出声点 = 加一块, 缺 en 键 = 守卫失败。",
     "glossary": {
       "description": "中英术语对照(英文译文用词以此为准, 与 README / QUICKSTART 英文版一致; 守卫 tests/test_aipos_f277_owner_bilingual.py 核英文块不出现 avoid 列出的旧译)",
-      "terms": []
+      "terms": [
+        {
+          "zh": "门",
+          "en": "gate",
+          "avoid": [
+            "gateway"
+          ]
+        },
+        {
+          "zh": "卡",
+          "en": "card",
+          "avoid": [
+            "ticket"
+          ]
+        },
+        {
+          "zh": "交回",
+          "en": "return",
+          "avoid": [
+            "hand-in",
+            "handin"
+          ]
+        },
+        {
+          "zh": "审计",
+          "en": "audit",
+          "avoid": []
+        },
+        {
+          "zh": "审计工位",
+          "en": "auditor workstation",
+          "avoid": [
+            "audit station"
+          ]
+        },
+        {
+          "zh": "治理根",
+          "en": "governance root",
+          "avoid": [
+            "governance directory",
+            "governance folder"
+          ]
+        },
+        {
+          "zh": "治理仓",
+          "en": "governance repo",
+          "avoid": [
+            "governance repository"
+          ]
+        },
+        {
+          "zh": "home 根",
+          "en": "home root",
+          "avoid": [
+            "home directory root"
+          ]
+        },
+        {
+          "zh": "项目常设授权",
+          "en": "project standing grant",
+          "avoid": [
+            "standing authorization"
+          ]
+        },
+        {
+          "zh": "项目授权",
+          "en": "project grant",
+          "avoid": []
+        },
+        {
+          "zh": "注册码",
+          "en": "enrollment code",
+          "avoid": [
+            "registration code",
+            "enrolment code"
+          ]
+        },
+        {
+          "zh": "工位",
+          "en": "workstation",
+          "avoid": [
+            "work station"
+          ]
+        },
+        {
+          "zh": "顾问",
+          "en": "advisor",
+          "avoid": [
+            "adviser",
+            "consultant"
+          ]
+        },
+        {
+          "zh": "执行体",
+          "en": "executor",
+          "avoid": []
+        },
+        {
+          "zh": "子 agent 执行者",
+          "en": "sub-agent executor",
+          "avoid": [
+            "subagent executor"
+          ]
+        },
+        {
+          "zh": "pi 执行工位",
+          "en": "pi executor workstation",
+          "avoid": []
+        },
+        {
+          "zh": "落账",
+          "en": "landing",
+          "avoid": [
+            "bookkeeping",
+            "book-keeping"
+          ]
+        },
+        {
+          "zh": "预演",
+          "en": "preview",
+          "avoid": [
+            "rehearsal"
+          ]
+        },
+        {
+          "zh": "Owner 待决收件箱",
+          "en": "Owner decision inbox",
+          "avoid": [
+            "mailbox"
+          ]
+        },
+        {
+          "zh": "信封",
+          "en": "envelope",
+          "avoid": []
+        },
+        {
+          "zh": "出口",
+          "en": "exit",
+          "avoid": []
+        },
+        {
+          "zh": "阶段快照",
+          "en": "stage snapshot",
+          "avoid": []
+        },
+        {
+          "zh": "门常驻",
+          "en": "gate resident service",
+          "avoid": [
+            "daemon"
+          ]
+        },
+        {
+          "zh": "接入",
+          "en": "onboard / enroll",
+          "avoid": []
+        },
+        {
+          "zh": "看板",
+          "en": "board",
+          "avoid": [
+            "dashboard"
+          ]
+        },
+        {
+          "zh": "裁决",
+          "en": "decision / verdict",
+          "avoid": []
+        },
+        {
+          "zh": "返工",
+          "en": "rework",
+          "avoid": []
+        },
+        {
+          "zh": "验收",
+          "en": "acceptance",
+          "avoid": []
+        },
+        {
+          "zh": "车道",
+          "en": "lane",
+          "avoid": []
+        },
+        {
+          "zh": "自检",
+          "en": "self-check",
+          "avoid": []
+        }
+      ]
     },
     "home_root_source": {
       "description": "workspace_config.resolve_home_root_with_source 的来源说明(向导 / project new / serve install 打印)",

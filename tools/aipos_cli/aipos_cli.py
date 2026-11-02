@@ -5063,11 +5063,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.serve_command == "start" and result.get("supervisor_printed"):
             pass
         elif args.serve_command in {"start", "status", "rotate"}:
-            print(render_connection_table(result))
+            serve_lang = _cli_language(args, f"lybra serve {args.serve_command}")  # AIPOS-F277: 门进程 / 门常驻行按用户语言
+            print(render_connection_table(result, serve_lang))
             if args.serve_command == "status":
                 from tools.aipos_cli.gate_resident import render_resident_status_line
 
-                print(render_resident_status_line(result["resident"], _cli_language(args, "lybra serve status")))
+                print(render_resident_status_line(result["resident"], serve_lang))
         else:
             print(render_json(result))
         return 1 if result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons") else 0

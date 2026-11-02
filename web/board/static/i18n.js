@@ -398,7 +398,7 @@ const translations = {
     'login.cancel': 'Cancel',
     'login.hint': 'The session cookie lives only in this process\'s memory, so a restart needs a new sign-in; tokens / OTC / device codes are never written to logs or cookies in plain text.',
     'login.failed': 'Sign-in failed.',
-    'login.otc_err': 'The sign-in link is invalid or expired (a one-time ticket is burned on use and valid for 60s). Generate a new one, or sign in with a token / device code.',
+    'login.otc_err': 'The sign-in link is invalid or expired (a one-time link works once and only for 60s). Generate a new one, or sign in with a token / device code.',
     'login.need_token': 'Enter a token.',
     'login.checking': 'Checking…',
     'login.invalid': 'The token is invalid or matches no role.',

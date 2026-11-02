@@ -1532,32 +1532,35 @@ def _decide_block(ctx: _Ctx, item: dict[str, Any], keys: list[str] | None = None
 def _inbox_item_html(ctx: _Ctx, item: dict[str, Any], lines: list[str], owner: bool = False) -> str:
     """AIPOS-F181 item 4: one inbox item in plain words (project / card / what you are asked); the engineering lines (item id,
     options, decide command with the home root) are folded into "show details". An item that already has a plain-language request
-    card above only points to it."""
+    card above only points to it. AIPOS-F277: declared item texts are bilingual values (i18n.Localized) and follow the page language."""
+    from tools.aipos_cli.i18n import pick
+
     if item.get("task_id"):
         what = ctx.t("ib_card_title", task_id=item["task_id"], title=item["title"]) if item.get("title") else ctx.t("ib_card", task_id=item["task_id"])
     else:
-        what = str(item.get("subject") or "")
+        what = pick(item.get("subject") or "", ctx.lang)
     parts = [f"<section class=\"owner-inbox-item ib-item ib-rank-{item['rank']}\" id=\"item-{_ESC(item['item_id'])}\""
              f" data-item-id=\"{_ESC(item['item_id'])}\" data-category=\"{_ESC(item['category'])}\" data-rank=\"{item['rank']}\""
              f" data-project=\"{_ESC(item['project'])}\" data-grant=\"{str(bool(item.get('grant'))).lower()}\">",
              f"<h2>{_ESC(ctx.t('ib_heading', project=item['project'], what=what))}</h2>",
-             f"<p class=\"ib-kind\"><span class=\"rp-chip ib-chip\">{_ESC(str(item['rank_label']))}</span> {_ESC(str(item['category_label']))}</p>"]
+             f"<p class=\"ib-kind\"><span class=\"rp-chip ib-chip\">{_ESC(pick(item['rank_label'], ctx.lang))}</span> "
+             f"{_ESC(pick(item['category_label'], ctx.lang))}</p>"]
     if item.get("grant"):
         parts.append(f"<p class=\"ib-grant\"><a href=\"#{_ESC(item['item_id'])}\">{_ESC(ctx.t('ib_grant'))}</a></p>")
     else:
         # words before the first command stay visible; the command (with server paths) is in the folded details below
-        parts.append(f"<p class=\"ib-ask\">{_ESC(ctx.t('ib_ask', ask=_words(item['ask'])))}</p>")
+        parts.append(f"<p class=\"ib-ask\">{_ESC(ctx.t('ib_ask', ask=_words(pick(item['ask'], ctx.lang))))}</p>")
         if item.get("recommend") and _words(item["recommend"]):
-            parts.append(f"<p class=\"ib-recommend\">{_ESC(ctx.t('ib_recommend', recommend=_words(item['recommend'])))}</p>")
+            parts.append(f"<p class=\"ib-recommend\">{_ESC(ctx.t('ib_recommend', recommend=_words(pick(item['recommend'], ctx.lang))))}</p>")
         if item.get("reaudit_hint"):  # AIPOS-F202: fix may be live after a "wait for the fix" ruling (same line as the CLI)
-            parts.append(f"<p class=\"rp-tell ib-hint\">{_ESC(item['reaudit_hint'])}</p>")
+            parts.append(f"<p class=\"rp-tell ib-hint\">{_ESC(pick(item['reaudit_hint'], ctx.lang))}</p>")
         if item.get("board_url"):
             parts.append(f"<p class=\"owner-inbox-board\"><a href=\"{_ESC(item['board_url'])}\">{_ESC(ctx.t('ib_board'))}</a></p>")
         if owner:  # AIPOS-F226: Owner session decides here; the per-option messages below are folded as the fallback
             parts.append(_decide_block(ctx, item))
         parts.append(_choice_messages(ctx, item))
     parts.append(f"<details class=\"ib-details\"><summary>{_ESC(ctx.t('ib_details'))}</summary>"
-                 f"<pre>{_ESC(chr(10).join(line.strip() for line in lines))}</pre></details></section>")
+                 f"<pre>{_ESC(chr(10).join(pick(line, ctx.lang).strip() for line in lines))}</pre></details></section>")
     return "".join(parts)
 
 
@@ -2198,17 +2201,24 @@ def _pi_alert_html(ctx: _Ctx, reminder: dict[str, Any]) -> str:
     command = (f"<p class=\"sc-pi-label\">{_ESC(ctx.t('sc_pi_install'))}</p><pre class=\"sc-copy\"><code>{_ESC(reminder['command'])}</code></pre>"
                if reminder.get("command") else "")
     return (f"<section class=\"sc-pi-alert\" role=\"alert\" data-pi-alert=\"{_ESC(kind)}\"><h2>{_ESC(ctx.t('sc_pi_' + kind + '_title'))}</h2>"
-            f"<p class=\"sc-pi-text\">{_rich(reminder['text'])}</p>{command}"
+            f"<p class=\"sc-pi-text\">{_rich(_pick(reminder['text'], ctx.lang))}</p>{command}"
             f"<p><a class=\"rp-link\" href=\"{_ESC(reminder['url'])}\" rel=\"noopener noreferrer\" target=\"_blank\">{_ESC(ctx.t('sc_pi_docs'))}</a>"
             f" <span class=\"rp-sub\">{_ESC(reminder['url'])}</span></p></section>")
 
 
+def _pick(value: Any, lang: str) -> str:
+    """AIPOS-F277: setup check result texts are bilingual values (i18n.Localized); the page shows its own language."""
+    from tools.aipos_cli.i18n import pick
+
+    return pick(value, lang)
+
+
 def _setup_row_html(ctx: _Ctx, item: dict[str, Any]) -> str:
-    fix = (f"<p class=\"sc-exit\"><span class=\"rp-sub\">{_ESC(ctx.t('sc_exit'))}</span> {_rich(item['exit'])}</p>"
+    fix = (f"<p class=\"sc-exit\"><span class=\"rp-sub\">{_ESC(ctx.t('sc_exit'))}</span> {_rich(_pick(item['exit'], ctx.lang))}</p>"
            if item.get("exit") else "")
     return (f"<li class=\"sc-item sc-{_ESC(item['status'])}\" data-item=\"{_ESC(item['id'])}\" data-status=\"{_ESC(item['status'])}\">"
-            f"<p><span class=\"sc-mark\">{_ESC(item['mark'])}</span> <strong>{_ESC(item['label'])}</strong></p>"
-            f"<p class=\"sc-detail\">{_ESC(item['detail'])}</p>{fix}</li>")
+            f"<p><span class=\"sc-mark\">{_ESC(item['mark'])}</span> <strong>{_ESC(_pick(item['label'], ctx.lang))}</strong></p>"
+            f"<p class=\"sc-detail\">{_ESC(_pick(item['detail'], ctx.lang))}</p>{fix}</li>")
 
 
 def render_setup(data: dict[str, Any], lang: str) -> str:
