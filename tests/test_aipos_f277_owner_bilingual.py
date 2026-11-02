@@ -33,12 +33,13 @@ CJK = re.compile(r"[　-〿㐀-䶿一-鿿＀-￯]+")
 PROJECT = "demo"
 #: 改前(main a1d7fafc4ff4)同一场景缺省语言输出, 归一化后的 sha256(F277_RECORD=1 跑本文件 test_zh_output_unchanged 打印)
 # AIPOS-F280 件②: 向导第 3 步 grant sign 加 --project <项目>(门的显式目标项目)与 PROJECT_AMBIGUOUS 出口行, guide / guide_skip / guide_after_new 三份摘要随之更新(其余逐字不变)
+# AIPOS-F282 件②: 向导第 4 / 6–8 步 enroll-deliver 加 --project <项目> 与 PROJECT_AMBIGUOUS 出口行, 同三份摘要随之更新(其余逐字不变)
 ZH_DIGESTS = {
     "setup_check": "074cb9af4537dd71b6a61ec83dddd776dc543f130b56490200d19ebf5a72aff4",
-    "guide": "1336e1fb5fc3e92559abe5f6f86f53cc2c30da675f3af4c361b17196e56d96c0",
-    "guide_skip": "d6f697a40499252446047060151e152102452ce380550e1b9dd20881987aba8e",
+    "guide": "5607b089cd469358716b263ee8d7f7d300c64ff21aa39784362b81a0cbf44e69",
+    "guide_skip": "335285ca2c778bc884f70c36580a5dfc5d7970ab99ddd7b7f38b91250403b01a",
     "project_new": "49def277f1cc2fb99cdaa93bdc4874a8e8a991e603a54ff682a8e4eb07e76d79",
-    "guide_after_new": "066611258a5aa87dafb7677b5be75f139a8083a779f012d300ef070b5955dd34",
+    "guide_after_new": "8dfa37b02245f0f6a3d0a4bf2aa5935db5f6e510d589de44f43a29c028d94397",
     "onboarding_check": "8f292a54605a675404291be970436a75ba6bfd07eeaae2199202a7eeff6797a1",
     "serve_install": "ae07452642661b7a10b456b5a4953d4a120c3ccb80e39b05a77842e3e945e899",
     "serve_uninstall": "5bfe047723acb8fb7fe96915db3e37af397a8132c8fbbf4957c705411dc24792",
