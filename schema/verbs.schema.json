@@ -4580,7 +4580,7 @@
             },
             "texts": {
               "owner_reason_part": " (tier-1 reason: {label} {key})",
-              "needs_owner_reason_missing": " (the card's needs_owner lacks a tier-1 reason {field}; it must be one of {reasons}; AIPOS-F225: the advisor adds the reason or lifts needs_owner before asking the Owner)",
+              "needs_owner_reason_missing": "(the card's needs_owner lacks a tier-1 reason {field}; it must be one of {reasons}; AIPOS-F225: the advisor adds the reason or lifts needs_owner before asking the Owner)",
               "notices_header": "Tier 2 · auto-released / notices (nothing for you to decide; you can still retract or decide with its decide command): {count} item(s)"
             }
           },
