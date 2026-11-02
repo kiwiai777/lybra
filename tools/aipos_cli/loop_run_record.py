@@ -605,7 +605,7 @@ class LoopRunRecorder:
         返回该条下标(拉起后经 routine_relaunch_update 补 pid / outcome)。日志行由调用方的 loop 输出(say)写。"""
         from tools.aipos_cli.harness_launch import redact_progress
 
-        record = {k: entry.get(k) for k in ("attempt", "limit", "codes", "card", "harness", "instance", "pid", "outcome")}
+        record = {k: entry.get(k) for k in ("attempt", "limit", "codes", "card", "step", "harness", "instance", "pid", "outcome")}
         record["codes"] = [str(c) for c in (record.get("codes") or [])]
         record["gate"] = redact_progress(str(entry.get("gate") or ""))[:600]
         record["fix"] = [redact_progress(str(s)) for s in (entry.get("fix") or [])]
@@ -2733,15 +2733,19 @@ def _fixer_fix_lines(view: dict[str, Any], routine: dict[str, Any], governance_r
     texts = routine.get("fixer_texts")
     if not isinstance(texts, dict) or any(routine_fixer(routine, c) != "executor" for c in codes):
         return fix
-    from tools.aipos_cli.loop_driver import load_loop_contract, relaunch_executor_kind, routine_relaunch_declaration
+    from tools.aipos_cli.loop_driver import (load_loop_contract, relaunch_executor_kind, routine_relaunch_declaration,
+                                             routine_relaunch_step_texts)
 
     last_action = str(view.get("last_step_action") or "")
-    if last_action not in [str(s) for s in routine_relaunch_declaration(load_loop_contract())["steps"]]:
+    decl = routine_relaunch_declaration(load_loop_contract())
+    if last_action not in [str(s) for s in decl["steps"]]:
         return fix
     kind = relaunch_executor_kind(Path(governance_root), str(view.get("task_id") or ""))
     if kind["kind"] not in ("launchable", "subagent"):
         return fix
-    fill = {**values, "harness": kind["harness"] or "(未知 harness)", "instance": kind["instance"] or "(未知实例)", "limit": str(limit)}
+    wording = routine_relaunch_step_texts(decl, last_action)  # AIPOS-F278: 被拒步措辞(交回步 / finalize 步)
+    fill = {**values, "harness": kind["harness"] or "(未知 harness)", "instance": kind["instance"] or "(未知实例)", "limit": str(limit),
+            "step": wording["where"], "step_then": wording["then"]}
     head = _render_routine(texts[kind["kind"]], fill, f"fixer_texts.{kind['kind']}")
     return [head, *(routine_executor_fix(routine, codes, values) if kind["kind"] == "launchable" else fix)]
 
@@ -3159,12 +3163,16 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
         out.append(f"  记录 {v['record_path']}")
         out.append(f"  日志 {v['log_path']}")
         if v.get("routine_relaunches"):  # AIPOS-F275 件④: 交回步例行拒自动重拉(逐条, 文案读声明 launch.routine_relaunch.status_line)
-            from tools.aipos_cli.loop_driver import load_loop_contract, routine_relaunch_declaration
+            from tools.aipos_cli.loop_driver import load_loop_contract, routine_relaunch_declaration, routine_relaunch_step_texts
 
-            line = str(routine_relaunch_declaration(load_loop_contract())["status_line"])
+            decl = routine_relaunch_declaration(load_loop_contract())
+            line = str(decl["status_line"])
             for r in v["routine_relaunches"]:
+                # AIPOS-F278: 被拒步(F278 前的存量记录无 step = 交回步, 当时只在交回步重拉); 步名读 step_texts.<步>.where
+                step = str(r.get("step") or "return")
+                where = routine_relaunch_step_texts(decl, step)["where"] if step in [str(s) for s in decl["steps"]] else step
                 out.append("  " + line.format(attempt=r.get("attempt"), limit=r.get("limit"), codes=", ".join(r.get("codes") or []),
-                                              pid=r.get("pid"), outcome=r.get("outcome"), at=r.get("at")))
+                                              pid=r.get("pid"), outcome=r.get("outcome"), at=r.get("at"), step_where=where))
         if v.get("end_codes"):
             out.append(f"  拒因码: {', '.join(v['end_codes'])}")  # AIPOS-F150 件①: 运行记录结构化拒因码
         if v.get("owner_ask"):  # AIPOS-F168 件③: 顾问补写的 Owner 待决结构字段(收件箱同读)

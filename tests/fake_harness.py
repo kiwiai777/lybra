@@ -72,6 +72,11 @@
                the new tip (written to .tmp then renamed); each relaunch kickoff is kept as <卡号>.kickoff.relaunch<k>
     wrong_base_nofix   AIPOS-F275: first launch as wrong_base; on a relaunch it does NOT merge main (commits another change on the card
                branch only) and rewrites RETURN to that tip (still behind main = refused again)
+    merge_conflict     AIPOS-F278 (executor card only): first launch = work (no other lane; the test's finalize double makes main change the
+               same file after the audit PASS = finalize MERGE_CONFLICT); a relaunch carrying the「返工要点」section = merge main into the
+               card branch in the worktree, resolve the conflict by the card's intent (keep the card side of each conflicted file), commit
+               the merge and rewrite RETURN commit_sha / tree_hash to the new tip (.tmp then renamed)
+    merge_conflict_nofix   AIPOS-F278: first launch as merge_conflict; on a relaunch as wrong_base_nofix (no merge, touch commit only)
   审计卡: 开工提示给出 `- outputs_digest: <值>(` (AIPOS-F197 被审卡只写治理根)= 报告写 verdict + outputs_digest(照抄), 否则写被审 tip
   FAKE_HARNESS_LOG: 目录; 收到的 argv[1](kickoff)按字节原样落 <卡号>.kickoff, cwd 落 <卡号>.cwd(供逐字节比对)
 事件里故意含一行凭据字样、一个未知事件类型、一行非 JSON(验汇总隐去/计数不刷屏)。
@@ -228,7 +233,11 @@ RELAUNCH_MARK = "## 返工要点(loop 例行拒自动重拉"
 
 def wrong_base_mode(task_id: str, kickoff: str, mode: str) -> None:
     """AIPOS-F275: 首次 = 他 lane 先合入产品仓 main 再干活(本卡分支落后 main); 带返工要点的重拉 = 按要点在卡工作树合入 main(wrong_base)
-    或只在卡分支再提交一笔不合 main(wrong_base_nofix), 再把 RETURN commit_sha / tree_hash 改为新 tip(先写 .tmp 再改名)。"""
+    或只在卡分支再提交一笔不合 main(wrong_base_nofix), 再把 RETURN commit_sha / tree_hash 改为新 tip(先写 .tmp 再改名)。
+    AIPOS-F278: merge_conflict / merge_conflict_nofix = 首次只干活(不让他 lane 先合入); 重拉 = 合入 main 并按卡意图解冲突 / 同 wrong_base_nofix。"""
+    if RELAUNCH_MARK not in kickoff and mode.startswith("merge_conflict"):
+        do_work(task_id, kickoff)  # AIPOS-F278: 首次正常干活; 冲突由测试在审计 PASS 后让 main 改同一文件
+        return
     if RELAUNCH_MARK not in kickoff:
         repo = os.environ["FAKE_MAIN_REPO"]
         n = len([p for p in Path(repo).glob("other_lane_*.txt")]) + 1
@@ -245,6 +254,17 @@ def wrong_base_mode(task_id: str, kickoff: str, mode: str) -> None:
     if mode == "wrong_base":
         emit({"type": "tool_execution_start", "toolCallId": "t3", "toolName": "bash", "args": {"command": "git merge main"}})
         git(worktree, "merge", "--no-edit", "-q", "main")
+    elif mode == "merge_conflict":
+        emit({"type": "tool_execution_start", "toolCallId": "t3", "toolName": "bash", "args": {"command": "git merge main"}})
+        merged = subprocess.run(["git", "-c", "user.name=fake", "-c", "user.email=fake@fake", "merge", "--no-edit", "-q", "main"],
+                                cwd=worktree, capture_output=True, text=True)
+        if merged.returncode != 0:  # 冲突按卡意图解: 冲突文件保留卡分支一侧, 再提交合并
+            conflicted = git(worktree, "diff", "--name-only", "--diff-filter=U").split()
+            if not conflicted:
+                raise SystemExit(f"fake_harness: git merge main failed without conflicts: {merged.stderr}")
+            git(worktree, "checkout", "--ours", "--", *conflicted)
+            git(worktree, "add", "--", *conflicted)
+            git(worktree, "commit", "-q", "--no-edit")
     else:
         rel = f"tests/nofix_{task_id.lower().replace('-', '_')}.txt"  # 车道内(卡面 tests/), 只为换 tip
         Path(worktree, rel).write_text(f"{time.time()}\n", encoding="utf-8")
@@ -586,7 +606,7 @@ def main() -> int:
         docs_same_round_mode(task_id, kickoff)
         emit({"type": "agent_end", "messages": []})
         return 0
-    if mode in ("wrong_base", "wrong_base_nofix") and not reviewed_of(task_id):
+    if mode in ("wrong_base", "wrong_base_nofix", "merge_conflict", "merge_conflict_nofix") and not reviewed_of(task_id):
         wrong_base_mode(task_id, kickoff, mode)
         emit({"type": "agent_end", "messages": []})
         return 0
