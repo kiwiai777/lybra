@@ -125,7 +125,12 @@ def test_acceptance1_advisor_reopens_blocked_return_then_loop_resumes(f90_rig):
     assert (r.gov / "task_cards" / TASK / "rounds" / "round-1" / "RETURN.md").is_file()  # 旧阻塞交回报告归档
     # reopen 自己的写出(搬卡 + 轮界记录 + 报告归档)随 reopen 落账(loop 账务记录由 N6 落账, 不在此判)
     assert f78._git(r.gov, "status", "--porcelain", "--", "task_cards", "5_tasks/queue", "5_tasks/records/events") == ""
-    # loop 原命令续跑: 重认领 → 交回(done)→ 派审 → 裁决 → 合入 → 结案
+    # loop 原命令续跑: 重认领 → 交回(done)→ 派审 → 裁决 → 合入 → 结案。
+    # 认领记录名按秒(record_writer.build_runtime_id): 真实场景 reopen 由人补齐前置后才发生, 不会与旧轮认领同秒; 靶场一次性跨过当前秒界
+    # (单次定长等待, 非轮询), 免新一轮认领与旧轮认领同名
+    import time
+
+    time.sleep(1.05 - time.time() % 1)
     out = io.StringIO()
     seen: list[str] = []
     res = run_loop(TASK, r.gov, actor=f78.DRIVER, policy_id=f90.POLICY, out=out, watch=f90._agent_watch(r, seen), interval=0.05,
