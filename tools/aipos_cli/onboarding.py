@@ -875,7 +875,7 @@ def generate_onboarding_guide(
         "on_fail": {
             _t("step4.fail_envelope_key"): _t("step4.fail_envelope", grant_step=STEP["grant"], pq=pq, hq=hq),
             "UNKNOWN_GOVERNANCE_ROOT / PROJECT_NOT_ESTABLISHED": _t("step4.fail_unknown_root"),
-            "no usable role token": _t("step4.fail_no_token"),
+            "no usable role token": _t("step4.fail_no_role_cred"),
             "gate call failed": _t("step3.fail_gate"),
             _t("step4.fail_harness_key"): _t("step4.fail_harness"),
             _t("step4.fail_dir_key"): _t("step4.fail_dir"),
@@ -958,7 +958,7 @@ def generate_onboarding_guide(
     # AIPOS-F157 件①: --actor = 签发实例(顾问本人), 按实例取凭据(F134/F154 唯一口; 同角色多顾问实例时缺之即拒)
     common = ["--gate-url", _shell_quote(gate), "--ttl", "86400", "--actor", _shell_quote(inst["advisor"])]
     enroll_on_fail = {
-        "no usable role token": _t("enroll.fail_no_token", advisor_step=STEP["advisor"]),
+        "no usable role token": _t("enroll.fail_no_role_cred", advisor_step=STEP["advisor"]),
         "UNKNOWN_GOVERNANCE_ROOT": _t("enroll.fail_unknown_root", project_step=STEP["project"]),
         _t("step4.fail_envelope_key"): _t("enroll.fail_envelope", grant_step=STEP["grant"], pq=pq, hq=hq),
         "401 Unauthorized": _t("enroll.fail_401"),

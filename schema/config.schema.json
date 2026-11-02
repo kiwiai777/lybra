@@ -2453,7 +2453,7 @@
             "fail_envelope": "第 {grant_step} 步项目授权未签或不覆盖本实例(驱动方 / 主机); 核对 lybra project grant show {pq} --home-root {hq}(预检拒 = 未签码、未改凭据)",
             "fail_envelope_key": "ENROLL_ENVELOPE_MISSING / 推导 owner_policy_ref 失败",
             "fail_unknown_root": "门或本机在 home 根下找不到该项目(第 1 步未完成或门的 home 根不同); 确认门与第 1 步用同一 home 根",
-            "fail_no_token": "--connection-json 须指向持 Owner 凭据的中央凭据库(门 serve 所读的 connection.json)",
+            "fail_no_role_cred": "--connection-json 须指向持 Owner 凭据的中央凭据库(门 serve 所读的 connection.json)",
             "fail_harness_key": "不在 distribution.schema harness_semantics.kinds 声明内",
             "fail_harness": "--harness 取值按输出列出的合法值改正后重跑(预检拒, 未签码)",
             "fail_dir_key": "须为已存在的绝对目录",
@@ -2486,7 +2486,7 @@
             "creates": "无(只读复核)"
           },
           "enroll": {
-            "fail_no_token": "第 {advisor_step} 步未完成(治理根无顾问凭据); 请 Owner 先跑第 {advisor_step} 步",
+            "fail_no_role_cred": "第 {advisor_step} 步未完成(治理根无顾问凭据); 请 Owner 先跑第 {advisor_step} 步",
             "fail_unknown_root": "门找不到项目; 核对门与第 {project_step} 步同一 home 根",
             "fail_envelope": "第 {grant_step} 步项目授权未签或不覆盖该实例(实例名主机段须在授权主机内); 核对 lybra project grant show {pq} --home-root {hq}(预检拒 = 未签码)",
             "fail_401": "门拒绝顾问凭据或码(发码门 ≠ 本门); 核对 connection.json mcp.rpc_url 后重跑本步(失败时码已吊销)",
@@ -2799,7 +2799,7 @@
             "fail_envelope": "The step {grant_step} project grant is not signed or does not cover this instance (driver / host); check lybra project grant show {pq} --home-root {hq} (pre-check refusal = no code issued, no credential changed)",
             "fail_envelope_key": "ENROLL_ENVELOPE_MISSING / deriving owner_policy_ref failed",
             "fail_unknown_root": "The gate or this machine cannot find the project under the home root (step 1 not done, or the gate uses another home root); make sure the gate and step 1 use the same home root",
-            "fail_no_token": "--connection-json must point at the central credential store holding the Owner credential (the connection.json the gate serve reads)",
+            "fail_no_role_cred": "--connection-json must point at the central credential store holding the Owner credential (the connection.json the gate serve reads)",
             "fail_harness_key": "not declared in distribution.schema harness_semantics.kinds",
             "fail_harness": "Fix the --harness value to one of the valid values listed in the output and rerun (pre-check refusal, no code issued)",
             "fail_dir_key": "must be an existing absolute directory",
@@ -2832,7 +2832,7 @@
             "creates": "Nothing (read-only check)"
           },
           "enroll": {
-            "fail_no_token": "Step {advisor_step} not done (no advisor credential in the governance root); ask the Owner to run step {advisor_step} first",
+            "fail_no_role_cred": "Step {advisor_step} not done (no advisor credential in the governance root); ask the Owner to run step {advisor_step} first",
             "fail_unknown_root": "The gate cannot find the project; make sure the gate and step {project_step} use the same home root",
             "fail_envelope": "The step {grant_step} project grant is not signed or does not cover this instance (the instance host segment must be among the grant's hosts); check lybra project grant show {pq} --home-root {hq} (pre-check refusal = no code issued)",
             "fail_401": "The gate rejected the advisor credential or the code (issuing gate ≠ this gate); check connection.json mcp.rpc_url and rerun this step (on failure the code is already revoked)",
