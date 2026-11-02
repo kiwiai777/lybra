@@ -3846,6 +3846,36 @@
         "owner_needed": {"code": 5, "meaning": "--wait: 下一动作 = owner_needed(须 Owner 决定 / 授权, 事由见输出)"},
         "advisor_fix": {"code": 7, "meaning": "AIPOS-F150 --wait: 下一动作 = advisor_fix(例行门拒, 顾问按输出的修法自处理后续跑 loop)"},
         "investigate": {"code": 6, "meaning": "--wait: 下一动作 = investigate(停滞 / 进程已不在 / 别机记录 / 推导或产物类结束原因)"}
+      },
+      "translations": {
+        "description": "AIPOS-F277 译文覆盖层(同 lybra_owner_inbox.translations 的形与守卫): next_action.owner_reasons 原位为缺省语言(loop status / 运行记录 / 推导核照旧); Owner 收件箱事项「要定」以该句起头时按用户语言换成同路径译文(owner_inbox._loop_detail; 句尾运行消息原样)。",
+        "sections": [
+          "next_action.owner_reasons"
+        ],
+        "en": {
+          "next_action": {
+            "owner_reasons": {
+              "return_blocked": "Executor returned blocked (outcome=blocked, AIPOS-F252): the card moved to blocked (needs_owner); decide on the \"card waiting for the Owner\" item in the Owner inbox: once the prerequisites are met the advisor reopens a new round / withdraw the card / issue another card",
+              "gate_rejected": "Gate refused: rule on the refusal as stated (design fork / beyond scope / conflict), change the card or arbitrate, then continue",
+              "landing_rejected": "N6 landing refused (someone else's staged files / commit gate guard / push not done): the Owner decides how to handle the other changes, then continue (a refusal only for code files in the product slot = routine, see routine_rejections.landing_probe)",
+              "no_envelope": "Authorization: no valid envelope (missing / expired / quota used up); the Owner signs or tops it up",
+              "verb_not_authorized": "Authorization: the envelope does not authorize this verb; the Owner decides whether to widen it",
+              "manual_required": "Manual ruling needed: the derivation cannot give an executable command (see the suggested action in detail)",
+              "wait_timeout": "Workstation start: in manual mode the workstation has not delivered; the Owner types /go at the workstation (or signs an envelope with --launch-harness to allow launching), then continue the loop",
+              "consecutive_failures": "Consecutive failures: the card's recent runs all ended abnormally, so it no longer continues by itself; the Owner decides whether to change the card / switch the executor / arbitrate",
+              "routine_fix_exhausted": "Routine refusal still failing after fixes: the card was refused repeatedly with the same routine code (the fixed remedy does not work for this card, or several lanes race to merge), so it stops handling it itself; the Owner decides whether to change the card / order the merges / arbitrate",
+              "card_owner_mismatch": "Card owner mismatch (AIPOS-F156): this card was published by another instance (the gate-side publish record's issuer), and a driver whose envelope is lane-limited (not the general advisor) may not run someone else's card; the Owner decides to have the owning instance drive it, or the general advisor without a lane limit",
+              "runtime_evidence_exhausted": "Audit evidence retries exhausted (AIPOS-F162): a PASS-type audit report lacks the independent runtime evidence the card requires and loop had the auditor redo it up to the declared limit without success (the auditor cannot run the declared commands / does not follow the format / only checks the executor's originals); AIPOS-F233 ⑤: handled by the advisor as tier 3 (tiers.loop_reasons): switch the auditor / fix the audit environment / correct the declaration with a restricted amend, then continue; it reaches the Owner inbox only if the advisor picks a tier-1 reason (lybra loop note --owner-reason)",
+              "envelope_exhausted": "Authorization: the envelope quota is used up (AIPOS-F166); the Owner signs a new envelope with the renewal command in hint, then continue the loop with the original command",
+              "envelope_expired": "Authorization: the envelope has expired (AIPOS-F166); the Owner signs a new envelope with the renewal command in hint, then continue the loop with the original command",
+              "authorization_out_of_bound": "Beyond the authorization (AIPOS-F224): this card exceeds the project standing grant (detail names the dimension: lane / task mode / driver / host / restricted area / total / expiry); the Owner widens the grant once (choose \"widen the project grant\" in the inbox or run the widening command in detail), then continue the loop with the original command; not approved = the advisor adjusts the card or moves on",
+              "audit_blocked_repeated": "Audit BLOCKed repeatedly (AIPOS-F179 ③): the environment was fixed per the BLOCK reason and the audit re-dispatched, but the new round is still BLOCK (consecutive count reached transitions nodes.N4.audit_blocked.owner_needed_after); environment / resource / time problems the advisor cannot fix, or the card's acceptance cannot be completed in the audit environment; the Owner decides on an environment fix / changing the acceptance / another audit environment / arbitration; once fixed the Owner chooses \"re-dispatch the audit\" (reaudit, AIPOS-F202) in the inbox, and after the advisor records it with owner decide, rerunning the loop restarts the count from that decision and dispatches the next audit round",
+              "envelope_renew": "Envelope renewal (AIPOS-F166 ②): the next-action reason for end reasons envelope_exhausted / envelope_expired: detail = current usage / limit / expiry, hint = the renewal command (policy_id = the driver's highest existing number + 1)",
+              "auto_release_revoked": "The Owner retracted this card's auto-release (AIPOS-F225 ②): the card stops and no longer advances by itself; the Owner decides to resume / change the card / issue another card / withdraw it (inbox options), then continue the loop with the original command",
+              "paused": "Paused (AIPOS-F231 ①): the Owner paused this card; while paused neither loop nor the advisor continues (no audit dispatched, no resources requested); resume = the Owner chooses \"resume\" in the inbox, or lybra queue resume relayed by the advisor (detail carries the pause record and the resume command)"
+            }
+          }
+        }
       }
     },
     "lybra_owner_inbox": {
@@ -4346,6 +4376,387 @@
           }
         }
       },
+      "translations": {
+        "description": "AIPOS-F277 译文覆盖层(Owner 面双语): 本声明的单语文案被车道外模块按原路径读取(loop_run_record / next_resolver / queue_mutation / roadmap_drift / board_pages / board_home 等), 原位保留为缺省语言(单一来源, 事项 ID / 事项哈希 / 决策记录照旧用它); 其余语言的同路径译文放在 translations.<语言>。渲染唯一口 owner_inbox._fmt(i18n.overlay_localize): 每条声明模板各语言各填一份 = 双语渲染值, CLI 出声按用户语言取(render_inbox_text / render_stale_text / owner decide / owner recommend)。sections = 应译范围(守卫 i18n.overlay_problems: 范围内含中日韩字符的原位叶子都有译文、译文路径在原位存在、占位集相等、译文不含中日韩字符)。范围外(决策记录正文模板 decision.* 与 Owner 原话前缀须保持原文以便回读; 第三档 / 第二档的顾问面说明; 看板 board / board_notice 段)暂单语。",
+        "sections": [
+          "texts",
+          "rank_labels",
+          "categories",
+          "options",
+          "stale",
+          "grant_request",
+          "custom_option",
+          "tiers.tier1",
+          "tiers.tier2.label",
+          "tiers.tier3.label",
+          "tiers.texts.owner_reason_part",
+          "tiers.texts.notices_header",
+          "tiers.texts.needs_owner_reason_missing",
+          "decision_reference.texts"
+        ],
+        "en": {
+          "texts": {
+            "header": "Owner decision inbox: {count} item(s) pending ({projects} project(s); home root {home_root})",
+            "empty": "Owner decision inbox: nothing pending ({projects} project(s); home root {home_root})",
+            "item": "[{rank_label}] {item_id}  {project} / {subject}  ({category_label}; from {source})",
+            "ask": "  To decide: {ask}",
+            "recommend": "  Advisor suggests: {recommend}",
+            "no_recommend": "  Advisor suggests: (none on record; the advisor can add it with lybra loop note --task-id {task_id} --ask … --recommend …)",
+            "impact": "  Impact: {impact}",
+            "options": "  Options: {options}",
+            "decide": "  Decide: {command}",
+            "since": "  Since: {since}",
+            "errors_header": "Truth that could not be read ({count} place(s), not counted above, never guessed):",
+            "decide_command": "lybra owner decide --item {item_id} --choice <option> --relayed-by <relaying advisor instance|owner> --owner-words <summary of the Owner's words> [--note <note>] --home-root {home_root}",
+            "ruling_line": "The Owner has decided: chose {choice} ({label}){note_part}{relay_part} @ {decided_at}; continue accordingly",
+            "note_part": " (note: {note})",
+            "relay_part": " (relayed by {relayed_by}; Owner's words: \"{owner_words}\")",
+            "paused_hidden": "(paused / test projects are hidden by default: {projects}; add --include-paused to see them)",
+            "next_hint": "  Advisor's next command: {advisor_next}",
+            "relay_to": "  Relay to: {advisor}",
+            "hint": "  Hint: {hint}",
+            "unknown_source": "(not recorded)",
+            "page_error": "The Owner decision inbox cannot be read (never guessed): {error}"
+          },
+          "rank_labels": {
+            "1": "blocking",
+            "2": "pending",
+            "3": "warning"
+          },
+          "categories": {
+            "loop_owner_needed": {
+              "label": "loop stopped, waiting for the Owner",
+              "subject": "card {task_id}",
+              "impact": "The loop of card {task_id} has stopped ({reason}) and no longer advances by itself",
+              "advisor_ask": {
+                "impact": "The loop of card {task_id} has stopped ({end_reason}); the advisor asked the Owner to decide (lybra loop note); nothing advances until the decision",
+                "legacy": {
+                  "label": "old request, retractable",
+                  "ask": "[{label}] {ask} (a request written before F225 has no tier-1 reason, so it is a notice and not counted as pending; the advisor can retract it: {retract_command})",
+                  "retract_command": "lybra loop note --task-id {task_id} --retract --actor {noted_by} --workspace-root {governance_root} --confirm"
+                }
+              },
+              "recommend_by_reason": {
+                "envelope_renew": "Renew with a new envelope (done by the Owner): {hint}",
+                "audit_blocked_repeated": "Once the environment / product is fixed choose \"re-dispatch the audit\" (reaudit): loop restarts the count from that decision and dispatches the next audit round, past verdicts unchanged; if it cannot be fixed soon choose \"wait for the fix\" (wait_product) or change the card's acceptance (rescope)"
+              },
+              "reaudit_hint": {
+                "text": "Since the last decision \"{label}\" (decision {decision_id} @ {decided_at}) the deployment has changed ({from_commit} → {to_commit}): if the awaited fix is live, choose \"re-dispatch the audit\" (reaudit) to continue"
+              }
+            },
+            "needs_owner_card": {
+              "label": "card waiting for the Owner (needs_owner)",
+              "subject": "card {task_id} [{queue_state}]",
+              "impact_by_queue_state": {
+                "pending": "The card carries needs_owner and will not be claimed or advanced",
+                "claimed": "An in-flight card waits for the Owner's review",
+                "blocked": "The card is blocked and will not be advanced"
+              },
+              "choice_refused_by_queue_state": {
+                "release": {
+                  "claimed": "Card {task_id} is already claimed (claimed) and cannot be released: release only lifts the needs_owner hold of an unclaimed (pending) card; an in-flight card is driven per its card by the driver (to change the goal use lybra queue supersede); options for this item: {options}",
+                  "blocked": "Card {task_id} is blocked (blocked) and cannot be released: release does not lift a block; options for this item: {options}"
+                }
+              }
+            },
+            "rework_limit": {
+              "label": "rework round limit reached",
+              "subject": "card {task_id}",
+              "ask": "Reworked {rounds}/{max_rounds} round(s){extension_part}; the latest verdict {verdict} ({verdict_id}) still fails and has no rework section: decide whether to authorize one more rework round for this card / issue a repair card / change the card / withdraw it",
+              "impact": "The rework limit is reached (transitions.schema queue_rework.guards.rework_limit); the advisor cannot add more rework sections and the card is stuck at a failed audit",
+              "advisor_review": {
+                "ask": "Reworked {rounds}/{max_rounds} round(s){extension_part}; the latest advisor review {verdict_id} (non-code fast-lane card, no audit verdict) still fails and has no rework section: decide whether to authorize one more rework round for this card / issue a repair card / change the card / withdraw it",
+                "impact": "The rework limit is reached (transitions.schema queue_rework.guards.rework_limit); the advisor review send-back (mark-concluded --outcome rework) was refused and the card is stuck at a failed advisor review"
+              },
+              "extension_part": " (including {consumed} extra round(s) authorized by the Owner)"
+            },
+            "supplementary_fail": {
+              "label": "supplementary audit failed, pending",
+              "subject": "card {task_id}",
+              "ask": "The supplementary audit {audit_task_id} of a closed card gave {verdict} ({verdict_id}) and no repair card was issued: decide between a repair card and accepting the original closure",
+              "impact": "The audit dispute of a closed card is still open"
+            },
+            "envelope_warning": {
+              "label": "envelope running out",
+              "subject": "envelope {policy_id}",
+              "ask": "{why}: decide whether to renew",
+              "recommend": "Renew (done by the Owner): {renew_command}",
+              "impact": "Automatic progress of {agent_or_role} covered by the envelope stops once its quota is used up / it expires",
+              "decide_board": "  Decide: the Owner renews it on the board \"Envelopes\" page {board_url} (CLI still works: {command})",
+              "authorization": {
+                "label": "project grant running out",
+                "subject": "project grant {authorization_id}",
+                "ask": "{why}: decide whether to widen the project grant (total cards / expiry)",
+                "recommend": "Widen the project grant (done by the Owner): {command}",
+                "impact": "Automatic progress of {drivers} covered by the project grant stops once the total cards are used up / it expires (going beyond it makes loop raise tier 1 \"beyond the project grant\")",
+                "decide_board": "  Decide: the Owner widens the grant on the board \"Project grant\" page {board_url} (CLI still works: {command})"
+              }
+            },
+            "roadmap_drift": {
+              "label": "roadmap drift",
+              "subject_by_kind": {
+                "overdue": "milestone {milestone} overdue",
+                "stalled": "milestone {milestone} stalled",
+                "uncovered": "criterion {criterion} has no card"
+              },
+              "ask": "{reason}: decide to add cards / adjust the roadmap / acknowledge",
+              "impact": "Milestone {milestone} (lane {lane}) drifts from the roadmap ({kind_label}), progress {met}/{total}"
+            },
+            "owner_check": {
+              "label": "acceptance spot check by the Owner",
+              "subject": "criterion {criterion} awaits the Owner's spot check",
+              "ask": "Look at the products delivered by card(s) {cards} and judge whether criterion {criterion} \"{statement}\" is met: {artifacts}",
+              "recommend": "After looking at the products the Owner tells {advisor}: \"{criterion} met\" or \"{criterion} not met: <what is wrong>\"",
+              "impact": "Criterion {criterion} of milestone {milestone} (lane {lane}) counts as met only after the Owner confirms it, progress {met}/{total}",
+              "no_files": "(none)",
+              "decide_line": "  Decide: after the Owner tells the advisor, the advisor records it with `{verify_command}` (preview, then --confirm; not via owner decide)",
+              "verify_command": "lybra roadmap verify --workspace-root {governance_root} --criterion {criterion} --result confirm|mismatch --relayed-by <relaying advisor instance|owner> --owner-words <the Owner's words>",
+              "decide_redirect": "Item {item_id} is an acceptance spot check (owner_check) and is not decided via owner decide: the advisor records the Owner's conclusion with `{verify_command}` (preview, then --confirm)"
+            },
+            "enrollment_redeclare": {
+              "label": "instance re-declaration awaiting approval",
+              "subject": "re-declaration of instance {instance}",
+              "ask": "{by} asks to change the enrollment of {instance} from {old} to {new} (beyond the project grant: {why}); approve = rerunning the re-declaration command takes effect, no new code issued",
+              "impact": "The instance's sub-agent cards keep the old enrollment's default harness / kickoff time-limit sentence"
+            },
+            "auto_released": {
+              "label": "auto-released (retractable)",
+              "subject": "card {task_id} auto-release {auto_release_id}",
+              "ask": "{kind_label}: {basis} (@ {released_at}); nothing for you to decide; to retract choose \"retract the auto-release\" (the card then stops)",
+              "impact": "The tier-2 auto-release is in effect (record {record_path}); retracting = the card stops and no longer advances by itself until you decide otherwise",
+              "kind_labels": {
+                "rework_extension": "one extra rework round added automatically",
+                "auto_reaudit": "audit re-dispatched automatically"
+              }
+            }
+          },
+          "tiers": {
+            "tier1": {
+              "label": "you must decide",
+              "reasons": {
+                "direction_fork": {
+                  "label": "direction / design fork",
+                  "examples": "two implementation routes, architecture trade-offs"
+                },
+                "rescope": {
+                  "label": "change acceptance / candidate / scope",
+                  "examples": "lower the acceptance, change the fixed candidate, split the card; the card's acceptance cannot be completed in the audit environment"
+                },
+                "beyond_authority": {
+                  "label": "beyond the project grant",
+                  "examples": "new lane, new task mode, new host; production / customer environment / real hardware / credentials / external release or sending"
+                },
+                "over_budget": {
+                  "label": "over budget / past deadline",
+                  "examples": "the project grant's total or expiry is reached"
+                },
+                "withdraw": {
+                  "label": "withdraw / give up",
+                  "examples": "not doing it anymore; the Owner retracted an auto-release and the card stopped, pending"
+                },
+                "rework_cap_exceeded": {
+                  "label": "rework beyond the hard cap",
+                  "examples": "the auto-released rework rounds are used up (the card itself is the problem: new card / change the card / withdraw it)"
+                },
+                "advisor_audit_conflict": {
+                  "label": "advisor and audit disagree",
+                  "examples": "the advisor believes the audit misjudged and both sides have evidence"
+                },
+                "owner_check": {
+                  "label": "acceptance spot check",
+                  "examples": "the Owner looks at the products in person (owner_check)"
+                },
+                "paused": {
+                  "label": "paused (waiting for you to resume)",
+                  "examples": "you paused this card (AIPOS-F231): neither loop nor the advisor continues until you resume it"
+                }
+              }
+            },
+            "tier2": {
+              "label": "notice only (auto-released, recorded, retractable)"
+            },
+            "tier3": {
+              "label": "for the advisor"
+            },
+            "texts": {
+              "owner_reason_part": " (tier-1 reason: {label} {key})",
+              "needs_owner_reason_missing": " (the card's needs_owner lacks a tier-1 reason {field}; it must be one of {reasons}; AIPOS-F225: the advisor adds the reason or lifts needs_owner before asking the Owner)",
+              "notices_header": "Tier 2 · auto-released / notices (nothing for you to decide; you can still retract or decide with its decide command): {count} item(s)"
+            }
+          },
+          "options": {
+            "continue": {
+              "label": "continue as the advisor suggests",
+              "advisor_next": "Continue per the Owner's decision: {resume}"
+            },
+            "rework": {
+              "label": "send back for rework / change the card, then continue",
+              "advisor_next": "Change the card or add a rework section per the decision (lybra queue rework …), then continue: {resume}"
+            },
+            "pause": {
+              "label": "pause this card",
+              "advisor_next": "The Owner paused {task_id} (decision {decision_id}, AIPOS-F231 ①: judged only by owner_inbox.card_pause_state): while paused loop refuses to start, dispatches no audit, requests no resources and does not continue; a loop running on this card stops before deriving its next step; to free resources right away = lybra loop stop --task-id {task_id} --workspace-root {governance_root}; move to the next card (lybra next --workspace-root {governance_root}) and wait for the Owner to resume"
+            },
+            "resume": {
+              "label": "resume (lift the pause)",
+              "advisor_next": "The Owner resumed {task_id} (decision {decision_id}, pause lifted): continue the loop with the original command: {resume}"
+            },
+            "renew": {
+              "label": "renew the envelope",
+              "advisor_next": "The Owner decided to renew: once the new envelope is signed (the Owner runs the renewal command from the decision output), continue: {resume}"
+            },
+            "let_expire": {
+              "label": "do not renew, stop when it expires / runs out",
+              "advisor_next": "The Owner does not renew: loop stops when the envelope runs out or expires; no more renewal prompts"
+            },
+            "deny_grant": {
+              "label": "do not approve this grant (tell the advisor)",
+              "advisor_next": "The Owner does not approve this grant: do not continue this card; adjust the request per the Owner's words / note (lybra loop note --task-id {task_id} --grant-…) or change the card and ask again, otherwise move to the next card (lybra next --workspace-root {governance_root})"
+            },
+            "release": {
+              "label": "release and continue (lift needs_owner, proceed as is)",
+              "advisor_next": "The card was released by the decision (needs_owner lifted through the existing exit queue amend, the amendment reason carries the decision record and the Owner's words); proceed as usual: `{resume}`"
+            },
+            "withdraw": {
+              "label": "withdraw the card (not doing it)",
+              "advisor_next": "The card was withdrawn by the decision (existing exit queue withdraw); no further progress"
+            },
+            "freeze_legacy": {
+              "label": "freeze as history (backlog freeze: no further progress, out of the inbox; can be unfrozen)",
+              "advisor_next": "The card was frozen as history by the decision (existing exit project freeze-legacy); no further progress; to drive it again unfreeze first: lybra project freeze-legacy --workspace-root {governance_root} --unfreeze {task_id} --reason <reason> --actor <your advisor instance> --confirm"
+            },
+            "new_card": {
+              "label": "carry on with a new card (this card stops)",
+              "advisor_next": "Issue a new card for the remaining problem per the decision (lybra draft create …); close this card per the decision note"
+            },
+            "rescope": {
+              "label": "change the card's acceptance / split the card",
+              "advisor_next": "Change the card per the decision note (lybra queue amend …), then continue: {resume}"
+            },
+            "acknowledge": {
+              "label": "acknowledged, keep as is",
+              "advisor_next": "The Owner acknowledged and keeps things as they are; no advisor action needed"
+            },
+            "repair": {
+              "label": "issue a repair card",
+              "advisor_next": "Issue a repair card for the supplementary audit problem per the decision (FAIL derivation exit): lybra next --task-id {task_id} --workspace-root {governance_root}"
+            },
+            "accept": {
+              "label": "accept the original closure, no fix",
+              "advisor_next": "The Owner accepts the original closure; the supplementary audit dispute is closed; no advisor action needed"
+            },
+            "add_card": {
+              "label": "add / re-attach cards (roadmap unchanged)",
+              "advisor_next": "Add cards to that milestone / criterion per the decision (card draft milestone / criteria), or re-attach a stray card (lybra queue amend); after progress check with `lybra roadmap status --workspace-root {governance_root}`"
+            },
+            "replan": {
+              "label": "adjust the roadmap (target date / status / criteria)",
+              "advisor_next": "Change the roadmap per the decision: `lybra roadmap set --workspace-root {governance_root} --id <id> --field <field> --value <new value>`, preview then --confirm (a decision_log pointer is left automatically)"
+            },
+            "owner_confirm": {
+              "label": "met",
+              "advisor_next": "The Owner says it is met: `lybra roadmap verify --workspace-root {governance_root} --criterion <criterion id> --result confirm --relayed-by <your advisor instance> --owner-words <the Owner's words>`, preview then --confirm"
+            },
+            "owner_mismatch": {
+              "label": "not met",
+              "advisor_next": "The Owner says it is not met: `lybra roadmap verify --workspace-root {governance_root} --criterion <criterion id> --result mismatch --relayed-by <your advisor instance> --owner-words <the Owner's words> --note <what is wrong>`, preview then --confirm (a repair card is drafted automatically), then preview and publish the repair card draft"
+            },
+            "supersede": {
+              "label": "replace this card with a new one (the Owner changed the goal; this card stops)",
+              "advisor_next": "The Owner decided to replace {task_id} with a new card (decision {decision_id}): not replaced yet = issue and publish a new card for the new goal, then supersede citing this decision (no separate decision, AIPOS-F213): `lybra --workspace-root {governance_root} queue supersede --task-id {task_id} --by <new card ID> --decision-id {decision_id} --actor <your advisor instance>`, preview and then the same command with --confirm; already replaced (the card's superseded_by names the new card) = this card stops, drive the new card: lybra next --workspace-root {governance_root}"
+            },
+            "closed_card_correction": {
+              "label": "correct a closed card (the original closure does not count; a follow-up card redoes it)",
+              "advisor_next": "The Owner decided to correct the closure of {task_id} (decision {decision_id}): not corrected yet = correct it citing this decision (no separate decision, AIPOS-F213): `lybra --workspace-root {governance_root} queue correct --task-id {task_id} --decision-id {decision_id} --relayed-by <your advisor instance>`, preview and then the same command with --confirm (original records unchanged, marked disputed, follow-up card published); already corrected (follow-up card published) = drive the follow-up card: `{resume}`"
+            },
+            "reaudit": {
+              "label": "environment / product fixed, re-dispatch the audit",
+              "advisor_next": "Re-dispatch the audit per the Owner's decision: rerun the loop with the original command; consecutive BLOCKs are counted again from this decision, the next audit round is dispatched and the auditor launched as usual (past verdicts and audit cards unchanged): `{resume}`"
+            },
+            "wait_product": {
+              "label": "wait until the product / environment fix is live, then audit",
+              "advisor_next": "The Owner decided to wait for the fix: do not continue this card until the fix is live; then rerun the loop with the original command (`{resume}`); if it still stops, the inbox shows a new item for this card offering \"re-dispatch the audit\", and you continue per the Owner's choice"
+            },
+            "extend_authorization": {
+              "label": "widen the project grant (one decision changes the grant; this card and similar ones then proceed automatically)",
+              "advisor_next": "The Owner widened the project grant (decision {decision_id} also lands a new grant revision): continue with the original command {resume}"
+            },
+            "revoke_auto": {
+              "label": "retract the auto-release (this card stops, pending)",
+              "advisor_next": "The Owner retracted the auto-release of {task_id} (decision {decision_id}): this card stops and the loop does not continue (the derivation hard-stops on auto_release_revoked); wait for the Owner to decide again on this card in the inbox (resume / change the card / new card / withdraw), then continue per that decision"
+            },
+            "approve_redeclare": {
+              "label": "approve the re-declaration",
+              "advisor_next": "The Owner approved the re-declaration (decision {decision_id}): the instance or the project advisor reruns the same lybra roles redeclare … --confirm and it takes effect"
+            },
+            "deny_redeclare": {
+              "label": "do not approve the re-declaration",
+              "advisor_next": "The Owner did not approve the re-declaration (decision {decision_id}): the enrollment stays as it is; adjust per the Owner's words and ask again"
+            },
+            "extend_rework": {
+              "label": "authorize one more rework round for this card (one round per decision)",
+              "advisor_next": "The Owner authorized one more rework round for {task_id} (decision {decision_id}, one round per decision): send it back once more through the usual rework exit; that round records owner_extension_ref = this decision automatically: non-code fast-lane card `lybra --workspace-root {governance_root} mark-concluded --task-id {task_id} --actor <your advisor instance> --report-path <return report> --outcome rework --focus-items '[\"<rework point>\"]'`; audited card `lybra --workspace-root {governance_root} queue rework --task-id {task_id} --actor <your advisor instance> --verdict-ref <latest verdict> --focus-items '[\"<rework point>\"]'` (preview both with --dry-run first); after recording, continue: `{resume}`"
+            }
+          },
+          "stale": {
+            "header": "Stale pending items (since before {stale_before}): {count} item(s) / {projects} project(s) (home root {home_root}; items with unknown time are not counted)",
+            "empty": "Stale pending items (since before {stale_before}): none ({projects} project(s); home root {home_root})",
+            "project_header": "■ {project} ({count} item(s))",
+            "line": "  {item_id}  {subject}{title_part}  stuck: {ask}  → suggested: {suggest_label}",
+            "title_part": " \"{title}\"",
+            "batch_line": "  Batch {suggest_label} ({count} item(s)): lybra owner decide --items {item_ids} --choice {choice} --relayed-by <relaying advisor instance|owner> --owner-words <summary of the Owner's words> --home-root {home_root}",
+            "keep_label": "keep (decide separately)",
+            "suggest_labels": {
+              "withdraw": "withdraw",
+              "freeze_legacy": "freeze as history"
+            },
+            "date_invalid": "--stale-before must be YYYY-MM-DD or an ISO time, got {value!r}"
+          },
+          "grant_request": {
+            "authorization": {
+              "line": "  Grant request (widen the project grant): {advisor} driving {task_id}{title_part} goes beyond it: {dimension_label}; suggested to widen project grant {authorization_id} to: {change} (revision r{revision})"
+            },
+            "mode_labels": {
+              "code": "code changes",
+              "docs": "docs only",
+              "governance": "governance docs",
+              "config": "config changes",
+              "audit": "audits",
+              "validation": "fixed-candidate validation"
+            },
+            "mode_any": "any mode",
+            "repos_any": "any repo",
+            "sources": {
+              "advisor": "advisor loop note",
+              "card": "card",
+              "previous_envelope": "the driver's previous envelope",
+              "project_default": "project default",
+              "derived": "derived",
+              "card_need": "what this card needs (AIPOS-F192: quota = business cards)",
+              "card_execution": "this card's execution mode dispatches to a pi workstation (AIPOS-F201: workspace_config.card_execution_mode)"
+            },
+            "texts": {
+              "line": "  Grant request: {advisor} asks for a grant for {task_id}{title_part} covering {mode_label}, {repos_part}{launch_part}, {max_tasks} business card(s) (each including its audit and rework), until {expires_date}. Reason: {reason}",
+              "repos_part": "only {repos}",
+              "launch_part": ", allowing loop to launch {harnesses} workstations",
+              "decide_board": "  Decide: the Owner clicks \"sign as suggested\" under \"grant requests\" on the board {board_url} (not approved = {command} choosing deny_grant)",
+              "unavailable": "  Grant request: no suggestion could be derived ({why}); the advisor can state it with lybra loop note --task-id {task_id} --grant-mode …"
+            }
+          },
+          "decision_reference": {
+            "texts": {
+              "not_found": "DECISION_REF_NOT_FOUND: decision record {decision_id} does not exist ({path}); have the Owner decide in the inbox first (lybra owner decide …), or record the Owner's words with this command without --decision-id",
+              "not_inbox": "DECISION_REF_NOT_INBOX: decision record {decision_id} is not an inbox decision (decision_type={got}, must be {want})",
+              "choice_mismatch": "DECISION_REF_CHOICE: the option of decision {decision_id} is \"{got}\", which does not match {action} (must be \"{want}\")",
+              "task_mismatch": "DECISION_REF_TASK: decision {decision_id} rules on card {got}, not {task_id}",
+              "consumed": "DECISION_REF_CONSUMED: decision {decision_id} was already used ({by}); a decision is executed only once"
+            }
+          },
+          "custom_option": {
+            "advisor_next": "Handle per the Owner's decision \"{label}\", then continue: {resume}"
+          }
+        }
+      },
       "exit_codes": {
         "ok": {"code": 0, "meaning": "已输出(含无待定事项)"},
         "partial": {"code": 4, "meaning": "已输出, 但有项目 / 类别的真相读不出(errors 段逐条点名; 未计入事项, 不猜)"},
@@ -4477,7 +4888,41 @@
         "written": "已写推荐 {record}(事项 {item_id}, 推荐「{label}」, 写入方 {actor})",
         "inbox_line": "  推荐: {label} — {reason}({by})",
         "by_advisor": "顾问 {by} 建议",
-        "by_default": "产品缺省"
+        "by_default": "产品缺省",
+        "refused": "拒({code}): {error}",
+        "both_phases": "--dry-run 与 --confirm 不能同时给"
+      },
+      "translations": {
+        "description": "AIPOS-F277 译文覆盖层(同 lybra_owner_inbox.translations 的形与守卫): 原位单语文案为缺省语言(推荐记录 / 看板照旧), 其余语言同路径译文; 渲染唯一口 owner_recommend._rfmt。",
+        "sections": [
+          "texts",
+          "defaults"
+        ],
+        "en": {
+          "defaults": {
+            "envelope_renew": {
+              "label": "renew with the original scope",
+              "reason": "renew for {days} days and {max_tasks} cards with the original scope (taken from the original grant); without renewal it stops when used up or expired"
+            },
+            "authorization_extend": {
+              "label": "widen the project grant with the original scope",
+              "reason": "extend until {date} with {max_tasks} more cards on the original scope (taken from the original grant); without it, it stops when used up or expired"
+            },
+            "grant_sign": {
+              "label": "sign the grant as suggested",
+              "reason": "the grant is used up or does not cover this card: sign {max_tasks} cards until {date} with the scope the advisor asked for; without signing this card stays stopped"
+            }
+          },
+          "texts": {
+            "preview": "Preview (zero writes): will write recommendation \"{label}\" for item {item_id} ({project} / {subject}): {reason}; record {record}; drop --dry-run and add --confirm to write and land it",
+            "written": "Recommendation written {record} (item {item_id}, recommended \"{label}\", writer {actor})",
+            "inbox_line": "  Recommended: {label} ({reason}; {by})",
+            "by_advisor": "suggested by advisor {by}",
+            "by_default": "product default",
+            "refused": "refused ({code}): {error}",
+            "both_phases": "--dry-run and --confirm cannot be given together"
+          }
+        }
       },
       "reject_codes": ["bad_choice", "empty", "too_long", "not_writer", "not_self", "no_credential", "exists"],
       "exit_codes": {

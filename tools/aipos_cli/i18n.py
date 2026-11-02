@@ -307,8 +307,8 @@ def user_language_line(lang: str) -> str:
 # AIPOS-F277: Owner 面双语——模板填充 / 双语渲染值 / 译文覆盖层
 # ---------------------------------------------------------------------------
 
-#: 模板占位 = {标识符}; 字面的「{标识符}」写成 {{标识符}}; 其他花括号(如「{default, items}」)原样保留, 不必转义
-_PLACEHOLDER = _re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}|\{([A-Za-z_][A-Za-z0-9_]*)\}")
+#: 模板占位 = {标识符}(可带转换 !r / !s, 同 str.format); 字面的「{标识符}」写成 {{标识符}}; 其他花括号(如「{default, items}」)原样保留
+_PLACEHOLDER = _re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}|\{([A-Za-z_][A-Za-z0-9_]*)(?:!([rs]))?\}")
 
 
 def placeholders(template: str) -> set[str]:
@@ -329,7 +329,10 @@ def fill(template: Any, values: dict[str, Any] | None = None, *, where: str, lan
         name = m.group(2)
         if name not in vals:
             raise SchemaLoadError(f"{where} 模板占位 {{{name}}} 无值")
-        return pick(vals[name], lang)
+        value = vals[name]
+        if m.group(3) == "r":
+            return repr(pick(value, lang)) if isinstance(value, Localized) else repr(value)
+        return pick(value, lang)
 
     return _PLACEHOLDER.sub(sub, str(template))
 
@@ -350,6 +353,19 @@ class Localized(str):
 
     def __reduce__(self) -> tuple[Any, ...]:  # pickle / deepcopy(task_loader.truth_cached 冻存)保留各语言
         return (Localized, (dict(self.by_lang), self.default))
+
+
+def _register_yaml_representer() -> None:
+    """双语渲染值写进 YAML(记录 frontmatter 等)时按普通 str(缺省语言那份)落盘: SafeDumper / Dumper 都登记(PyYAML 不认 str 子类)。"""
+    try:
+        import yaml
+    except ImportError:  # PyYAML 缺 = 无 YAML 写路径, 无事可做
+        return
+    for dumper in (yaml.SafeDumper, yaml.Dumper):
+        dumper.add_representer(Localized, lambda d, value: d.represent_str(str(value)))
+
+
+_register_yaml_representer()
 
 
 def pick(value: Any, lang: str | None = None) -> str:

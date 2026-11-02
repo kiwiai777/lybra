@@ -1340,7 +1340,7 @@ def _owner_command(args: argparse.Namespace) -> int:
             print(f"lybra owner inbox: {exc}", file=sys.stderr)
             return declared_exit_code(VERB, "usage")
         if view is not None:  # AIPOS-F170 件①: 遗留视图(同一数据)
-            print(render_json(view) if args.json else render_stale_text(view))
+            print(render_json(view) if args.json else render_stale_text(view, lang))
         else:
             print(render_json(inbox) if args.json else render_inbox_text(inbox, lang))
         return declared_exit_code(VERB, "partial" if inbox["errors"] else "ok")

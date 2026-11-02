@@ -32,7 +32,6 @@ SCAN_PATTERNS = [
 # Exempted files (i18n dictionaries)
 EXEMPTED_FILES = {
     "static/i18n.js",  # Primary i18n dictionary
-    "static/login.html",  # Login page (separate auth flow, out of scope for AIPOS-288)
     "static/auth-chrome.js",  # Auth chrome (separate auth flow)
 }
 

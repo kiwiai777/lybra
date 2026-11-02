@@ -3,80 +3,84 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Lybra Board · 登录</title>
+  <title data-i18n="login.title">Lybra Board</title>
   <link rel="stylesheet" href="/readonly-pages.css">
+  <!-- AIPOS-F277: login page joins the board i18n channel (static/i18n.js; default language = data-board-default-lang injected by the server) -->
+  <script src="/i18n.js"></script>
 </head>
 <body class="login-body">
   <main class="login-card">
     <img src="/assets/lybra-logo-black.png" alt="Lybra" class="login-logo">
     <h1 class="login-title">Lybra Board</h1>
-    <p class="login-sub" id="login-sub">输入角色 token 登录(对照 connection.json 校验)</p>
+    <p class="login-sub" id="login-sub" data-i18n="login.sub"></p>
 
     <form id="login-form" autocomplete="off" novalidate>
       <label class="login-field">
         <span class="login-label">Token</span>
         <input type="password" name="token" id="token"
                autocomplete="current-password"
-               placeholder="任意角色 token 均可登录,权限按角色" required>
+               data-i18n-attr="placeholder:login.token_placeholder" required>
       </label>
-      <button type="submit" class="login-submit" id="login-submit">登录</button>
+      <button type="submit" class="login-submit" id="login-submit" data-i18n="login.submit"></button>
       <p id="login-error" class="login-error" role="alert" hidden></p>
     </form>
 
-    <!-- AIPOS-271:本机 OTC 直登由 `lybra board open` 在浏览器自动完成;此处保留 token 手贴
-         与跨机设备码两条人工入口。OTC 链接过期时显示提示。 -->
-    <div class="login-divider"><span>或</span></div>
+    <!-- AIPOS-271: local OTC sign-in is completed in the browser by `lybra board open`; the token form and the cross-machine device code stay as manual entries; an expired OTC link shows a notice. -->
+    <div class="login-divider"><span data-i18n="login.or"></span></div>
 
-    <button type="button" class="login-submit login-submit--alt" id="device-toggle">设备码登录(跨机)</button>
+    <button type="button" class="login-submit login-submit--alt" id="device-toggle" data-i18n="login.device_toggle"></button>
 
     <section id="device-panel" class="device-panel" hidden>
-      <!-- F-271-2: 三路径人话说明(并列展示) -->
-      <p class="device-hint-title">跨机登录设备码：</p>
+      <!-- F-271-2: three sign-in paths side by side -->
+      <p class="device-hint-title" data-i18n="login.device_title"></p>
       <div class="device-code" id="device-code">······</div>
       <div class="device-paths">
-        <p class="device-path"><strong>① 顾问代批</strong>：把这个码发给你的顾问 agent（顾问有文件权可代批）</p>
-        <p class="device-path"><strong>② 短命令</strong>：在 gate 机运行：<code>lybra board approve &lt;码&gt;</code></p>
-        <p class="device-path"><strong>③ token 手贴</strong>：返回上方表单，直接输入 token 登录</p>
+        <p class="device-path"><strong data-i18n="login.path1_title"></strong><span data-i18n="login.path1_text"></span></p>
+        <p class="device-path"><strong data-i18n="login.path2_title"></strong><span data-i18n="login.path2_text"></span><code data-i18n="login.path2_code"></code></p>
+        <p class="device-path"><strong data-i18n="login.path3_title"></strong><span data-i18n="login.path3_text"></span></p>
       </div>
-      <p class="device-status" id="device-status">生成中…</p>
+      <p class="device-status" id="device-status" data-i18n="login.generating"></p>
       <p class="device-countdown" id="device-countdown" hidden></p>
-      <!-- F-271-3: 记住设备 30 天 -->
+      <!-- F-271-3: remember this device for 30 days -->
       <label class="device-remember">
         <input type="checkbox" id="device-remember" checked>
-        <span>记住此设备（30 天）</span>
+        <span data-i18n="login.remember"></span>
       </label>
-      <button type="button" class="device-cancel" id="device-cancel">取消</button>
+      <button type="button" class="device-cancel" id="device-cancel" data-i18n="login.cancel"></button>
     </section>
 
-    <p class="login-hint">
-      会话 cookie 仅本进程内存态,重启需重新登录;token / OTC / 设备码明文不落日志、不进 cookie。
-    </p>
+    <p class="login-hint" data-i18n="login.hint"></p>
   </main>
 
   <script>
     (function () {
       "use strict";
+      var T = window.i18n.t;
       var form = document.getElementById("login-form");
       var err = document.getElementById("login-error");
       var btn = document.getElementById("login-submit");
+      // AIPOS-F277: same channel as the other board pages; html lang follows the chosen language, with a zh / EN switcher
+      document.documentElement.lang = window.i18n.getCurrentLang() === "en" ? "en" : "zh-CN";
+      window.i18n.applyTranslations();
+      document.querySelector(".login-card").appendChild(window.i18n.createLanguageSwitcher());
 
       function showError(msg) {
         err.hidden = false;
-        err.textContent = msg || "登录失败。";
+        err.textContent = msg || T("login.failed");
       }
 
       // AIPOS-271:OTC 链接失效/过期/已用 → server 302 到 /login?otc_err=1,此处提示。
       if (location.search.indexOf("otc_err=1") !== -1) {
-        showError("登录链接已失效或过期(一次性票单次即焚,60s 内有效)。请重新生成,或用 token / 设备码登录。");
+        showError(T("login.otc_err"));
       }
 
       form.addEventListener("submit", function (e) {
         e.preventDefault();
         err.hidden = true;
         var token = document.getElementById("token").value;
-        if (!token) { showError("请输入 token。"); return; }
+        if (!token) { showError(T("login.need_token")); return; }
         btn.disabled = true;
-        btn.textContent = "校验中…";
+        btn.textContent = T("login.checking");
         fetch("/api/auth/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -89,13 +93,13 @@
             window.location.href = res.json.redirect || "/";
           } else {
             btn.disabled = false;
-            btn.textContent = "登录";
-            showError((res.json && res.json.message) || "Token 无效或未匹配到任何角色。");
+            btn.textContent = T("login.submit");
+            showError((res.json && res.json.message) || T("login.invalid"));
           }
         }).catch(function () {
           btn.disabled = false;
-          btn.textContent = "登录";
-          showError("网络错误,请重试。");
+          btn.textContent = T("login.submit");
+          showError(T("login.network"));
         });
       });
 
@@ -119,7 +123,7 @@
         panel.hidden = true;
         toggle.disabled = false;
         codeEl.textContent = "······";
-        statusEl.textContent = "生成中…";
+        statusEl.textContent = T("login.generating");
         countdownEl.hidden = true;
       }
 
@@ -128,20 +132,20 @@
       toggle.addEventListener("click", function () {
         toggle.disabled = true;
         panel.hidden = false;
-        statusEl.textContent = "生成中…";
+        statusEl.textContent = T("login.generating");
         fetch("/api/auth/device/code", {
           method: "POST", headers: { "Content-Type": "application/json" },
           credentials: "same-origin", body: "{}"
         }).then(function (r) { return r.json(); }).then(function (j) {
-          if (!j || !j.ok) { showError("无法生成设备码,请重试。"); resetPanel(); return; }
+          if (!j || !j.ok) { showError(T("login.device_failed")); resetPanel(); return; }
           codeEl.textContent = j.code;
           expiresAt = Date.now() + (j.expires_in || 300) * 1000;
           countdownEl.hidden = false;
-          statusEl.textContent = "等待批准…";
+          statusEl.textContent = T("login.waiting");
           countTimer = setInterval(function () {
             var left = Math.max(0, Math.round((expiresAt - Date.now()) / 1000));
-            countdownEl.textContent = "有效期剩余 " + left + "s";
-            if (left <= 0) { stopPolling(); statusEl.textContent = "设备码已过期,请重新生成。"; }
+            countdownEl.textContent = T("login.remaining").replace("{s}", String(left));
+            if (left <= 0) { stopPolling(); statusEl.textContent = T("login.expired"); }
           }, 1000);
           pollTimer = setInterval(pollDevice, 1500);
           function pollDevice() {
@@ -153,18 +157,18 @@
             }).then(function (r) { return r.json(); }).then(function (p) {
               if (p && p.status === "approved") {
                 stopPolling();
-                statusEl.textContent = "已批准,正在进站…";
+                statusEl.textContent = T("login.approved");
                 window.location.href = p.redirect || "/";
               } else if (p && p.status === "expired") {
                 stopPolling();
-                statusEl.textContent = "设备码已过期,请重新生成。";
+                statusEl.textContent = T("login.expired");
               } else if (p && p.status === "unknown") {
                 stopPolling();
-                statusEl.textContent = "设备码已失效,请重新生成。";
+                statusEl.textContent = T("login.code_invalid");
               }
             }).catch(function () { /* 网络抖动:下一轮再试 */ });
           }
-        }).catch(function () { showError("网络错误,无法生成设备码。"); resetPanel(); });
+        }).catch(function () { showError(T("login.device_network")); resetPanel(); });
       });
     })();
   </script>

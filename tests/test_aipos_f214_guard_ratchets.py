@@ -230,8 +230,8 @@ def test_r8_red_on_tampered_pointer(tmp_path):
 CJK = re.compile(r"[一-鿿㐀-䶿]")
 WEB_BOARD = REPO_ROOT / "web" / "board"
 SCAN_PATTERNS = ("static/*.js", "static/*.html", "*.py")
-#: 与原守卫同一豁免(i18n 字典 / 独立登录流程)
-EXEMPT_FILES = frozenset({"static/i18n.js", "static/login.html", "static/auth-chrome.js"})
+#: 与原守卫同一豁免(i18n 字典 / 独立登录流程); AIPOS-F277: 登录页已纳入看板 i18n 通道, 豁免收紧(只余字典与 auth-chrome.js)
+EXEMPT_FILES = frozenset({"static/i18n.js", "static/auth-chrome.js"})
 EXEMPT_MARKER = "i18n-exempt:"
 I18N_TEMPLATE_NAME = "_I18N_TEMPLATES"
 

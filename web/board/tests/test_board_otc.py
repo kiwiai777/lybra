@@ -390,7 +390,8 @@ class LoginPageContractTests(unittest.TestCase):
     def test_login_page_has_device_code_ui(self) -> None:
         status, body, _sc, _loc = self.server.request("GET", "/login")
         self.assertEqual(status, 200)
-        for needle in ("设备码登录", "device-code", "device/poll", "lybra board approve", "otc_err"):
+        # AIPOS-F277: 文案经看板 i18n 通道(data-i18n 键 / i18n.t), 不再写死在页里
+        for needle in ('data-i18n="login.device_toggle"', "device-code", "device/poll", 'data-i18n="login.path2_code"', "otc_err", 'src="/i18n.js"'):
             self.assertIn(needle, body, f"login.html missing {needle!r}")
 
     def test_login_css_has_device_panel(self) -> None:
