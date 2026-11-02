@@ -120,7 +120,8 @@ def test_item1_fixer_declared_per_code_and_fail_closed():
             lrr._check_routine_rejections(broken["next_action"]["routine_rejections"])
         _show(f"[件① fail-closed·{why}] {exc.value}")
     relaunch = _relaunch_decl()
-    assert relaunch["steps"] == ["return"] and relaunch["fixer"] == "executor"
+    # AIPOS-F278: 适用步追加 finalize(只追加; 交回步行为与措辞不变)
+    assert relaunch["steps"][0] == "return" and relaunch["fixer"] == "executor"
     broken = json.loads(json.dumps(load_loop_contract()))
     broken["launch"]["routine_relaunch"]["kickoff_note"] = "no placeholders"
     with pytest.raises(SchemaLoadError):
@@ -256,7 +257,9 @@ def test_item3_pi_legacy_rejection_status_says_relaunch_then_resume_relaunches(l
     rc, text = _status(lrig.gov, "--wait", "5")
     _show(f"---- 件③ pi 执行体(存量门拒运行)lybra loop status --wait 5 原文 exit {rc} ----\n{text}")
     limit = _routine()["repeat_owner_needed"]
-    head = _routine()["fixer_texts"]["launchable"].format(harness="pi", instance=EXEC, limit=limit)
+    wording = ld.routine_relaunch_step_texts(_relaunch_decl(), "return")  # AIPOS-F278: 被拒步措辞(交回步)
+    head = _routine()["fixer_texts"]["launchable"].format(harness="pi", instance=EXEC, limit=limit, step=wording["where"],
+                                                          step_then=wording["then"])
     assert rc == 7 and f"1) {head}" in text and "loop 在交回步再遇此拒将自动重拉同一工位" in head
     _code_repo, worktree = nr.card_worktree_location(lrig.gov, TASK)
     assert f"2) 在卡工作树 {worktree} 把最新 main 合入卡分支 card/{TASK}" in text and "派本卡执行体" not in text
@@ -294,7 +297,8 @@ def test_item4_non_executor_or_non_routine_not_relaunched(rig):
     }
     said: list[str] = []
     for label, gate_text in cases.items():
-        got = ld._routine_relaunch(1, TASK, rig.gov, result, gate_text=gate_text, node="N2", state="claimed", steps=[],
+        got = ld._routine_relaunch(1, TASK, rig.gov, result, gate_text=gate_text, step_action="return", node="N2", state="claimed",
+                                   steps=[],
                                    contract=load_loop_contract(), launch_decl=ld.launch_declaration(load_loop_contract()), policy=None,
                                    no_launch=False, launched=set(), watch=lambda *a, **k: 3, max_wait=1, interval=0.05,
                                    say=said.append, actor=DRIVER, recorder=_NoRecorder())
