@@ -1367,12 +1367,27 @@ def routine_relaunch_kickoff(task_id: str) -> Iterator[None]:
     """AIPOS-F275 件②(verbs.schema lybra_loop.launch.routine_relaunch): loop 交回步遇修法执行方 = 执行体的例行门拒, 带修法重拉同一工位时,
     在本上下文内(同一进程同一调用链: plan_launch → 工位 my-tasks --task-id → kickoff_refusal)对该执行卡放行「交回已落盘」(ARTIFACT_SUBMITTED)
     一项——交回报告在, 但门已例行拒、须执行体按返工要点改; 其余开工核验(未认领 / 非本人 / 已结案 / 不该本角色 / 读不出)照旧。
+    AIPOS-F278: 放行项按推导核所在步读声明 routine_relaunch.kickoff_release(交回步 = ARTIFACT_SUBMITTED; finalize 步 = 审计已裁决、推导核在
+    finalize 的 NOT_YOUR_TURN), 每步只放行一项, 判定唯一实现 _routine_relaunch_release。
     只由 loop_driver 例行拒重拉调用(唯一实现); 退出上下文即恢复。"""
     token = _ROUTINE_RELAUNCH_CARDS.set(_ROUTINE_RELAUNCH_CARDS.get() | {str(task_id or "").strip()})
     try:
         yield
     finally:
         _ROUTINE_RELAUNCH_CARDS.reset(token)
+
+
+def _routine_relaunch_release(task_id: str, role: str, derivation: dict[str, Any]) -> str | None:
+    """AIPOS-F278: 例行拒重拉范围内(routine_relaunch_kickoff)本执行卡此刻可放行的那一项开工拒因码(声明 lybra_loop.launch.routine_relaunch.
+    kickoff_release: 推导核动词 = 某适用步的 verb 时, 只放行该步的 refusal), 不在范围 / 非执行体 / 推导不可派生 / 动词不在声明 = None(不放行)。"""
+    if role != "executor" or task_id not in _ROUTINE_RELAUNCH_CARDS.get() or not derivation.get("derivable"):
+        return None
+    from tools.aipos_cli.loop_driver import load_loop_contract, routine_relaunch_declaration  # 延迟导入(loop_driver 依赖本模块)
+
+    decl = routine_relaunch_declaration(load_loop_contract())
+    verb = str(derivation.get("verb") or "")
+    return next((str(decl["kickoff_release"][step]["refusal"]) for step in decl["steps"]
+                 if str(decl["kickoff_release"][step]["verb"]) == verb), None)
 
 
 def kickoff_refusal(workspace_root: Path, task_id: str, actor: str, *, queue_state: str | None,
@@ -1419,11 +1434,14 @@ def kickoff_refusal(workspace_root: Path, task_id: str, actor: str, *, queue_sta
     if isinstance(derivation.get("return_stale"), dict) and role == "auditor":
         stale = derivation["return_stale"]
         return refuse("RETURN_STALE", f"{task_id} {stale.get('reason')}; {derivation.get('suggested_action') or ''}")
+    release = _routine_relaunch_release(task_id, role, derivation)  # AIPOS-F275 / F278: 例行拒重拉范围内每步只放行声明的一项
     if derivation.get("triggered_by") != role:
+        if release == "NOT_YOUR_TURN":
+            return None  # AIPOS-F278: finalize 步例行拒(修法执行方 = 执行体), loop 带返工要点重拉本卡执行体
         return refuse("NOT_YOUR_TURN", f"{task_id} 推导核当前节点 {derivation.get('current_node')}/{derivation.get('current_state')}, "
                                        f"该动的是 {derivation.get('triggered_by')}({derivation.get('suggested_action') or ''})")
     if derivation.get("derivable") and derivation.get("verb") in ("lybra_queue_return_dry_run", "lybra_audit_verdict_dry_run"):
-        if role == "executor" and derivation.get("verb") == "lybra_queue_return_dry_run" and task_id in _ROUTINE_RELAUNCH_CARDS.get():
+        if release == "ARTIFACT_SUBMITTED":
             return None  # AIPOS-F275 件②: 交回被门例行拒, loop 带返工要点重拉本卡执行体(routine_relaunch_kickoff 范围内)
         return refuse("ARTIFACT_SUBMITTED", f"{task_id} 的{'审计报告' if role == 'auditor' else ' Return'}已落盘, 产品将自动入门")
     return None

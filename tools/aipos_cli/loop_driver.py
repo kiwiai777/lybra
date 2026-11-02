@@ -2665,11 +2665,14 @@ def _drive(
                     continue
                 if fixed == "ended":
                     return result
-            if action_type == "return" and target_card == task_id:
+            if target_card == task_id and action_type in routine_relaunch_declaration(contract)["steps"]:
                 # AIPOS-F275 item 2: routine gate rejection whose fixer is the executor (verbs.schema routine_rejections codes.<code>.fixer) and the executor is a
                 # loop-launchable workstation = relaunch the same workstation with the fix (kickoff + rework points), then retry the return;
                 # not applicable (sub-agent / manual / refused / streak exhausted) = end as before (gate_rejected)
+                # AIPOS-F278: the same at the finalize step (launch.routine_relaunch.steps); once ready the loop re-derives instead of retrying
+                # finalize (the verdict's tip changed = the existing verdict_stale re-return -> next audit round, never bypassing re-audit)
                 relaunched = _routine_relaunch(index, task_id, governance_root, result, gate_text=f"{step.message}\n{step.output}".rstrip(),
+                                               step_action=action_type,
                                                node=node, state=state, steps=steps, contract=contract, launch_decl=launch_decl,
                                                policy=policy, no_launch=no_launch, launched=launched, watch=watch, max_wait=max_wait,
                                                interval=interval, say=say, actor=driver_actor, recorder=recorder)
@@ -2743,8 +2746,9 @@ def _lane_overlap_before_claim(index: int, card: str, governance_root: Path, tas
         recorder.record_lane_overlaps(card, result["overlaps"])
 
 
-_ROUTINE_RELAUNCH_KEYS = ("steps", "fixer", "gate_text_max_chars", "not_ready_categories", "kickoff_note", "return_fields_none", "say",
-                          "launched_say", "not_applicable_say", "exhausted_why", "status_line")
+_ROUTINE_RELAUNCH_KEYS = ("steps", "step_texts", "kickoff_release", "fixer", "gate_text_max_chars", "not_ready_categories", "kickoff_note",
+                          "return_fields_none", "say", "launched_say", "not_applicable_say", "exhausted_why", "status_line")
+_ROUTINE_RELAUNCH_STEP_KEYS = ("rejected", "after", "say", "where", "then")  # AIPOS-F278: step_texts.<步> 各键
 
 
 def routine_relaunch_declaration(contract: dict[str, Any]) -> dict[str, Any]:
@@ -2762,21 +2766,47 @@ def routine_relaunch_declaration(contract: dict[str, Any]) -> dict[str, Any]:
         raise SchemaLoadError(f"{where}.gate_text_max_chars 须为 ≥1 整数")
     if not isinstance(decl["not_ready_categories"], list):
         raise SchemaLoadError(f"{where}.not_ready_categories 须为列表")
-    needed = ("{attempt}", "{limit}", "{codes}", "{gate_text}", "{steps}", "{return_fields}", "{artifact}")
+    needed = ("{attempt}", "{limit}", "{codes}", "{gate_text}", "{steps}", "{return_fields}", "{artifact}", "{step_rejected}", "{step_after}")
     if not isinstance(decl["kickoff_note"], str) or any(n not in decl["kickoff_note"] for n in needed):
         raise SchemaLoadError(f"{where}.kickoff_note 须含 {' '.join(needed)}")
+    texts = decl["step_texts"]  # AIPOS-F278: 每个适用步各有一套措辞(键齐、值为字符串; then 可为空串)
+    for name in decl["steps"]:
+        entry = texts.get(name) if isinstance(texts, dict) else None
+        if not isinstance(entry, dict) or any(not isinstance(entry.get(k), str) for k in _ROUTINE_RELAUNCH_STEP_KEYS) \
+                or any(not entry[k].strip() for k in _ROUTINE_RELAUNCH_STEP_KEYS if k != "then"):
+            raise SchemaLoadError(f"{where}.step_texts.{name} 须含 {list(_ROUTINE_RELAUNCH_STEP_KEYS)}(字符串; 除 then 外非空)")
+    from tools.aipos_cli.next_resolver import KICKOFF_REFUSAL_CODES
+
+    release = decl["kickoff_release"]  # AIPOS-F278: 每个适用步一项开工核验放行(推导核动词 + 只放行的那一项拒因)
+    for name in decl["steps"]:
+        entry = release.get(name) if isinstance(release, dict) else None
+        if not isinstance(entry, dict) or not isinstance(entry.get("verb"), str) or not entry["verb"].strip() \
+                or entry.get("refusal") not in KICKOFF_REFUSAL_CODES:
+            raise SchemaLoadError(f"{where}.kickoff_release.{name} 须含 verb(推导核动词)与 refusal(∈ {sorted(KICKOFF_REFUSAL_CODES)})")
     return decl
 
 
-def _routine_relaunch(index: int, task_id: str, governance_root: Path, result: LoopResult, *, gate_text: str, node: Any, state: Any,
-                      steps: list[LoopStep], contract: dict[str, Any], launch_decl: dict[str, Any], policy: dict[str, Any] | None,
+def routine_relaunch_step_texts(decl: dict[str, Any], step: str) -> dict[str, str]:
+    """AIPOS-F278: 例行拒自动重拉按被拒账务步的措辞(launch.routine_relaunch.step_texts.<步>; loop 与 loop status 同读)。
+    step 不在 steps = SchemaLoadError(调用方只对 steps 所列步调用)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    if step not in [str(s) for s in decl["steps"]]:
+        raise SchemaLoadError(f"verbs.schema.json verbs.{LOOP_VERB}.launch.routine_relaunch.steps 不含 {step!r}")
+    return {k: str(decl["step_texts"][step][k]) for k in _ROUTINE_RELAUNCH_STEP_KEYS}
+
+
+def _routine_relaunch(index: int, task_id: str, governance_root: Path, result: LoopResult, *, gate_text: str, step_action: str, node: Any,
+                      state: Any, steps: list[LoopStep], contract: dict[str, Any], launch_decl: dict[str, Any], policy: dict[str, Any] | None,
                       no_launch: bool, launched: set[str], watch: Callable[..., int], max_wait: float, interval: float,
                       say: Callable[[str], None], actor: str, recorder: LoopRunRecorder) -> str | None:
     """AIPOS-F275 件②(verbs.schema lybra_loop.launch.routine_relaunch): 本卡交回步被门拒, 拒因码(extract_end_codes 同一抽取)全属例行清单且
     修法执行方 = 执行体、本卡执行者是 loop 可拉起的工位(唯一拉起判定 plan_launch)、连败未达上限(routine_streaks 同一实现)= 经唯一拉起口
     _launched_wait 重拉同一工位, 开工稿 = 既有开工稿 + 返工要点(各码 executor_fix 经 _routine_fill 同一渲染); 等交回报告按须更新字段改写且
     产物入口同一校验不再判 tip 不符。返回 None = 不适用(调用方照旧以门拒结束), "relaunched" = 已改写(调用方重推导重试交回),
-    "ended" = 拉起出口已填 result(早退 / 超时 / 拉起失败 / 章程 / 开局体积)。"""
+    "ended" = 拉起出口已填 result(早退 / 超时 / 拉起失败 / 章程 / 开局体积)。
+    AIPOS-F278: step_action = 被拒账务步(∈ routine_relaunch.steps: return / finalize; 措辞读 step_texts.<步>, 判定与等待判据两步同一实现);
+    finalize 步就绪后调用方同样重推导——裁决覆盖的 tip 已变 = 既有 verdict_stale 重交回 → 下一轮审计, 不直接重试 finalize。"""
     from tools.aipos_cli.artifact_ingest import validate_task_artifact
     from tools.aipos_cli.loop_run_record import (_RoutineFixUnrenderable, _routine_fill, card_runs, extract_end_codes,
                                                  relaunch_code_history, routine_executor_fix, routine_fixer, routine_streaks,
@@ -2784,6 +2814,7 @@ def _routine_relaunch(index: int, task_id: str, governance_root: Path, result: L
     from tools.aipos_cli.next_resolver import _return_artifact_path, routine_relaunch_kickoff
 
     decl = routine_relaunch_declaration(contract)
+    wording = routine_relaunch_step_texts(decl, step_action)
     routine = status_contract()["next_action"]["routine_rejections"]
     rr_decl = run_record_declaration(contract)
     codes = extract_end_codes(gate_text, rr_decl)
@@ -2825,12 +2856,14 @@ def _routine_relaunch(index: int, task_id: str, governance_root: Path, result: L
     plan.append_kickoff_note(str(decl["kickoff_note"]).format(
         attempt=attempt, limit=limit, codes=", ".join(codes), gate_text=gate,
         steps="\n".join(f"{i}) {s}" for i, s in enumerate(fix_steps, 1)),
-        return_fields=", ".join(fields) or str(decl["return_fields_none"]), artifact=report))
+        return_fields=", ".join(fields) or str(decl["return_fields_none"]), artifact=report, step_rejected=wording["rejected"],
+        step_after=wording["after"]))
     first = next((ln.strip() for ln in gate.splitlines() if ln.strip()), "")
     say(f"[{index}] routine_relaunch: 门拒原文 {first}")
     say(f"[{index}] routine_relaunch: " + str(decl["say"]).format(attempt=attempt, limit=limit, codes=", ".join(codes),
-                                                                  harness=plan.harness, instance=plan.instance))
-    position = recorder.routine_relaunch({"attempt": attempt, "limit": limit, "codes": codes, "card": task_id, "harness": plan.harness,
+                                                                  harness=plan.harness, instance=plan.instance, step_say=wording["say"]))
+    position = recorder.routine_relaunch({"attempt": attempt, "limit": limit, "codes": codes, "card": task_id, "step": step_action,
+                                          "harness": plan.harness,
                                           "instance": plan.instance, "pid": None, "outcome": "launching", "gate": first,
                                           "fix": fix_steps, "return_fields": fields})
     start = _report_fingerprint(report)
