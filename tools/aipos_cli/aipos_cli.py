@@ -2814,7 +2814,9 @@ def build_parser() -> argparse.ArgumentParser:
     _queue_mutation_arguments(queue_complete_parser)
     queue_complete_parser.add_argument("--report-link", required=True, help="Completion report link")
 
-    queue_reopen_parser = queue_subparsers.add_parser("reopen", help="Move a task from blocked to pending")
+    queue_reopen_parser = queue_subparsers.add_parser(
+        "reopen", help="Move a task from blocked to pending (AIPOS-F282: for a blocked card --actor may be the claiming executor instance "
+                       "or an advisor-class instance of this project; completed cards keep the claiming-instance rule)")
     _queue_mutation_arguments(queue_reopen_parser)
     queue_reopen_parser.add_argument("--reason", required=True, help="Reopen reason")
 
@@ -3245,6 +3247,11 @@ def build_parser() -> argparse.ArgumentParser:
     roles_deliver_parser.add_argument("--actor", default=None, help="AIPOS-F157: signing instance — the gate credential is taken from this instance's entry in connection.json (per-instance selection, AIPOS-F134/F154); required when the token role has two or more instances")
     roles_deliver_parser.add_argument("--owner-authorization-ref", required=True, help="Owner authorization ref for issuing the code: the project standing grant id (lybra project grant show; e.g. auth_<project>, AIPOS-F224), as printed by lybra onboarding guide. Legacy projects still on envelopes may give the envelope covering that workstation")
     roles_deliver_parser.add_argument("--reason", default="", help="Reason recorded with the code")
+    roles_deliver_parser.add_argument("--project", default=None, help="AIPOS-F282: explicit target project passed to the gate on both phases (the same "
+                                                                       "project field as roles enroll-code --project and the board; needed when the "
+                                                                       "credential covers several projects without a default_project, or is \"*\"); "
+                                                                       "must name the same project as --governance-root (else the gate's PROJECT_MISMATCH). "
+                                                                       "Default: the gate's existing inference")
     roles_deliver_parser.add_argument("--json", action="store_true", help="Output JSON")
     _project_json_two_phase_flags(roles_deliver_parser, "enroll-deliver", family="roles_writers")
     roles_enroll_revoke_parser = roles_subparsers.add_parser("enroll-revoke", help="AIPOS-362: revoke an enrollment code")
@@ -5500,6 +5507,7 @@ def main(argv: list[str] | None = None) -> int:
                         harness_dir=args.harness_dir, harness_host=args.harness_host, executor_mode=args.executor_mode,
                         gate_url=args.gate_url, ttl_seconds=args.ttl, reason=str(args.reason or "").strip(),
                         actor=signer or f"cli:roles-enroll-deliver:{token_role_used}",
+                        project=str(getattr(args, "project", "") or "").strip() or None,  # AIPOS-F282 件②: 显式目标项目透传(缺 = 行为不变)
                     )
                 except (GateVerbRefused, GateError, EnrollDeliverRollbackError, RuntimeError, ValueError) as exc:
                     if getattr(args, "json", False):

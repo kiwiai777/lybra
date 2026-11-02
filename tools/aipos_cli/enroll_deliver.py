@@ -220,11 +220,14 @@ def enroll_deliver(
     harness_root: str | None = None,
     policy: str | None = None,
     force: bool = False,
+    project: str | None = None,
 ) -> dict[str, Any]:
     """AIPOS-F151 件②: 签码 + 接入一体的唯一实现(见模块说明 ①–④)。client = 已持门客户端凭据的 GateClient(或同接口替身)。
 
     confirm=False(缺省)= 预演: 本机预检 + 门 lybra_enroll_code_dry_run, 零写入、不出码; confirm=True = 签码 + 接入。
-    返回结果只含 code_id / 指纹 / 落点 / 预检结论; 注册码明文永不出现在返回值、输出或异常文本里。"""
+    返回结果只含 code_id / 指纹 / 落点 / 预检结论; 注册码明文永不出现在返回值、输出或异常文本里。
+    AIPOS-F282 件②: project = 门调用的显式目标项目(与 roles enroll-code --project / 看板 F274 同一字段, 两跳都带; 缺 = 行为不变);
+    与 --governance-root 不是同一项目 = 门既有 PROJECT_MISMATCH(门侧一处判)。"""
     from tools.aipos_cli.custom_roles import resolve_role_to_class
     from tools.aipos_cli.enroll_client import EnrollLandedError, enroll_preflight
     from tools.aipos_cli.enrollment import (
@@ -254,7 +257,8 @@ def enroll_deliver(
     retry_argv = ["lybra", "roles", "enroll-deliver", "--role", role, *(["--instance", instance] if instance else []),
                   "--governance-root", str(gov), "--workspace", ws_text, *(["--harness", str(harness_kind)] if harness_kind else []),
                   "--harness-dir", "DIR_SLOT", *(["--harness-host", str(harness_host)] if harness_host else []),
-                  "--owner-authorization-ref", auth_ref, "--dry-run"]
+                  "--owner-authorization-ref", auth_ref, *(["--project", str(project).strip()] if str(project or "").strip() else []),
+                  "--dry-run"]
     pre = enroll_preflight(workspace_root=ws_local or Path(ws_text), governance_root=str(gov),
                            declared={"role": role, "instance": instance, "role_class": role_class},
                            harness_kind=harness_kind, harness_dir=harness_dir, harness_host=harness_host,
@@ -292,6 +296,7 @@ def enroll_deliver(
         "owner_authorization_ref": auth_ref,
         "reason": reason or f"enroll-deliver {instance or role} → {target['workspace_root']}",
         "actor": actor,
+        "project": str(project or "").strip() or None,  # AIPOS-F282 件②: 显式目标项目(gate_enroll_code 两跳同带; 空 = 不传)
     }
     credential_fp = getattr(client, "token_fingerprint", None)
     distribute = bool(ssh) and not seat_mode and str(harness_kind or "").strip() in ("", "pi") and mode == default_mode

@@ -393,6 +393,17 @@ def parse_instance_name(name: str) -> dict[str, str] | None:
     return dict(zip(seg_names, parts))
 
 
+def instance_project_segment(name: str, project_root: str | Path) -> tuple[str | None, bool]:
+    """AIPOS-F282 件①: 实例名的项目段(切分唯一 parse_instance_name)与「属本项目」判定(段 ∈ project.json naming_profile 项目段及别名,
+    _accepted_project_segments 同一口径)。返回 (项目段 | None, 是否属本项目); 形不合 = (None, False)。项目段声明读不出 = ValueError 上抛
+    (调用方 fail-closed 拒)。"""
+    parsed = parse_instance_name(name)
+    if parsed is None:
+        return None, False
+    segment = parsed["project"]
+    return segment, segment in _accepted_project_segments(get_naming_profile(project_root))
+
+
 def generate_canonical_name(
     role: str,
     project_root: str | Path,

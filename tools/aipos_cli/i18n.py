@@ -375,6 +375,20 @@ def pick(value: Any, lang: str | None = None) -> str:
     return str(value)
 
 
+def voice(value: Any, *, where: str) -> str:
+    """AIPOS-F282: 无 args 的出声点(门进程 / 推导核 / 搬卡执行器)取一种语言的唯一实现: 双语渲染值按 resolve_language()(环境变量 >
+    home 配置 > 缺省)取; 普通 str 原样。语言设置非法 = 用缺省语言并在 stderr 出声(不吞, 也不让出口文案变成内部错误)。
+    原门侧 tools._owner_voice(AIPOS-F280)收口于此。"""
+    import sys
+
+    try:
+        lang = resolve_language()
+    except LanguageError as exc:
+        print(f"[{where}] user language unresolved ({exc}); text in the default language", file=sys.stderr)
+        return str(value)
+    return pick(value, lang)
+
+
 def localize(templates: dict[str, Any], values: dict[str, Any] | None = None, *, where: str) -> str:
     """同一组值按各语言模板各填一份 → Localized(只有缺省语言模板 = 普通 str)。templates = {语言: 模板}, 须含缺省语言。"""
     from tools.schema_loader import SchemaLoadError

@@ -1591,6 +1591,10 @@
           "reason",
           "archived_report"
         ]
+      }, "advisor_actor": {
+        "description": "AIPOS-F282 件①(11-02 AIPOS-F279 实撞: 交回 outcome=blocked 转 blocked 后续跑出口要 reopen 的 actor = 本卡认领执行实例, 顾问以自身实例 reopen 被搬卡执行器拒 Current actor does not match assigned_to or agent_instance; 顾问用执行体身份敲门动词 = 冒用身份, 只能 Owner 亲手敲, 违反 F252 设计本意与 P6 卡住即有出路): 源队列目录 ∈ from_states 的卡 reopen 时, actor 除本卡认领执行实例(既有判定, 不变)外, 也接受本项目顾问类实例: 实例角色类 = actor_role_class(custom_roles.authorize_instance_class 唯一判定, 读 roles 注册表, 自定义角色按其内建类)且实例名项目段属本项目(naming_profile.instance_project_segment: roles.schema naming.template 的 project 段 ∈ project.json naming_profile 项目段及别名)。判定唯一实现 queue_mutation.reopen_advisor_refusal; 放行时搬卡执行器(mutate_queue_task)不按卡归属判 actor(validator current_actor 置空, 与 withdraw / supersede 同一做法), 卡面 reopened_by 与轮界记录 reopened_by 如实记顾问实例。其余源状态(completed)与其余队列变更(claim / block / complete / withdraw / adopt / supersede)的 actor 判定不变。拒因文案 = config.schema owner_texts.reopen_exit.actor_refused(双语)。推导核续跑出口(owner_texts.reopen_exit.resume)的 actor = 驱动方顾问实例: loop 运行记录 driver(本卡最新一份有 driver 的运行记录; loop 进程内 = 本次 --actor), 不合本判定 = 占位(owner_texts.reopen_exit.advisor_placeholder)。",
+        "from_states": ["blocked"],
+        "actor_role_class": "advisor"
       }},
       "withdraw": {"from_states": ["pending", "claimed", "blocked"], "to_state": "withdrawn", "owner_ruling_required_from": ["blocked"], "owner_ruling_note": "AIPOS-F170 件①: blocked 卡可撤, 但须带 Owner 裁决引用(owner_ruling_ref = 治理根内已落的 owner_decision_record 的 decision_id, 记录 task_id 须为本卡、allowed_next_action 须为 lybra_owner_inbox 中 effect=withdraw_card 的选项); 缺 / 对不上 = 拒(预演只核引用形, 记录未落时由 owner decide 先落记录再执行)。唯一读取口 queue_mutation.withdraw_owner_ruling_states; 撤回原因写入卡面 withdrawal_reason(含裁决引用)。"},
       "adopt": {"from_states": ["claimed"], "to_state": "claimed", "declaration": "nodes.N1.adoption"},
@@ -1827,7 +1831,7 @@
           "owner_reason": "beyond_authority",
           "block_command": "lybra --workspace-root {governance_root} queue block --task-id {task_id} --actor {actor} --reason {reason} --owner-reason {owner_reason}",
           "block_reason": "交回声明阻塞(outcome=blocked, 交回 {return_id}): {summary}",
-          "resume": "补齐前置后: lybra --workspace-root {governance_root} queue reopen --task-id {task_id} --actor {executor} --reason '<前置已补齐: …>' 开新一轮(轮界之后才算本轮记录, 旧交回报告归档), 再 lybra loop --task-id {task_id} --workspace-root {governance_root}; 不再做 = Owner 收件箱选撤卡 / 另出卡",
+          "resume_texts": "config.schema owner_texts.reopen_exit(AIPOS-F282: 续跑出口双语块, 键 resume / advisor_placeholder; reopen actor = 驱动方顾问实例, 判定见 queue_mutations.transitions.reopen.advisor_actor)",
           "suggested_block": "执行体交回声明阻塞(outcome=blocked): 不派审、不合入、不结案, 转 blocked 进 Owner 收件箱",
           "stopped": "卡 {task_id} 因交回阻塞已转 blocked(交回 {return_id}; Owner 收件箱「卡待 Owner」事项)。{resume}",
           "audit_semantics": "审计对 blocked 交回的 PASS 只表示「核实阻塞属实」, 不是「卡面验收达成」: 推导核不据此派生 finalize / close(先于 N5 判); 卡面验收写了上线 / 部署断言的卡, 审计 PASS 前必须有该卡对应的发布部署记录(lybra release apply)与 release verify 通过证据(审计章程同句)",

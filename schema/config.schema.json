@@ -2295,7 +2295,7 @@
           "no_issuer": "凭据角色 {issuer} 不在签码声明表内(只 Owner 类与顾问类可签码), 不能签任何角色的注册码",
           "none_allowed": "(无)",
           "wildcard_target": "PROJECT_AMBIGUOUS: 凭据项目域 {projects} 里的 \"{wildcard}\" 不是项目名, 门不按它推断目标项目",
-          "target_exit": "出口: CLI 加 --project <项目>(lybra envelope mint --confirm / lybra project grant sign --confirm / lybra roles enroll-code); 直接调门带 project 参数; 或铸凭据时绑定 default_project",
+          "target_exit": "出口: CLI 加 --project <项目>(lybra envelope mint --confirm / lybra project grant sign --confirm / lybra roles enroll-code / lybra roles enroll-deliver); 直接调门带 project 参数; 或铸凭据时绑定 default_project",
           "cli_project_conflict": "--project {project} 与项目名参数 {name} 不一致; 只给一个, 或两者给同一项目(未调门, 零写入)"
         },
         "en": {
@@ -2304,8 +2304,23 @@
           "no_issuer": "Credential role {issuer} is not in the enrollment code issuance declaration (only Owner-class and advisor-class credentials may issue codes); it cannot issue a code for any role",
           "none_allowed": "(none)",
           "wildcard_target": "PROJECT_AMBIGUOUS: \"{wildcard}\" in the credential's projects {projects} is not a project name; the gate does not infer a target project from it",
-          "target_exit": "exit: CLI add --project <project> (lybra envelope mint --confirm / lybra project grant sign --confirm / lybra roles enroll-code); calling the gate directly, pass the project argument; or bind default_project when minting the credential",
+          "target_exit": "exit: CLI add --project <project> (lybra envelope mint --confirm / lybra project grant sign --confirm / lybra roles enroll-code / lybra roles enroll-deliver); calling the gate directly, pass the project argument; or bind default_project when minting the credential",
           "cli_project_conflict": "--project {project} and the project name argument {name} differ; give only one, or the same project for both (gate not called, zero writes)"
+        }
+      }
+    },
+    "reopen_exit": {
+      "description": "AIPOS-F282 件①: 交回阻塞卡(blocked)的续跑出口与 reopen actor 拒因。reopen 的 actor = 本卡认领执行实例或本项目顾问类实例(声明 transitions.schema queue_mutations.transitions.reopen.advisor_actor, 判定唯一实现 queue_mutation.reopen_advisor_refusal); 推导核续跑出口(next_resolver._return_blocked_resume)给驱动方顾问实例(loop 运行记录 driver)。出口按用户语言(i18n.resolve_language)出声; 命令名、参数名、拒因码不译。",
+      "texts": {
+        "zh": {
+          "resume": "补齐前置后: lybra --workspace-root {governance_root} queue reopen --task-id {task_id} --actor {advisor} --reason '<前置已补齐: …>' 开新一轮(actor = 本项目顾问实例; 轮界之后才算本轮记录, 旧交回报告归档), 再 lybra loop --task-id {task_id} --workspace-root {governance_root}; 不再做 = Owner 收件箱选撤卡 / 另出卡",
+          "advisor_placeholder": "<本项目顾问实例>",
+          "actor_refused": "reopen {state} 卡 {task_id}: actor {actor} 既不是本卡认领执行实例, 也不是本项目 {project} 的顾问类实例(该实例角色类 {role_class}, 项目段 {segment}); 出口: --actor 换成本项目顾问实例(<顾问前缀>.{project}.<主机>)或本卡认领执行实例"
+        },
+        "en": {
+          "resume": "Once the prerequisites are met: lybra --workspace-root {governance_root} queue reopen --task-id {task_id} --actor {advisor} --reason '<prerequisites met: …>' opens a new round (actor = this project's advisor instance; only records after the round boundary count for the new round, the old return report is archived), then lybra loop --task-id {task_id} --workspace-root {governance_root}; to stop here = withdraw the card / issue another card from the Owner inbox",
+          "advisor_placeholder": "<advisor instance of this project>",
+          "actor_refused": "reopen of {state} card {task_id}: actor {actor} is neither the instance that claimed this card nor an advisor-class instance of project {project} (its role class {role_class}, project segment {segment}); exit: pass --actor as an advisor instance of this project (<advisor prefix>.{project}.<host>) or the claiming executor instance"
         }
       }
     },
@@ -2514,7 +2529,8 @@
             "fail_unknown_root": "门找不到项目; 核对门与第 {project_step} 步同一 home 根",
             "fail_envelope": "第 {grant_step} 步项目授权未签或不覆盖该实例(实例名主机段须在授权主机内); 核对 lybra project grant show {pq} --home-root {hq}(预检拒 = 未签码)",
             "fail_401": "门拒绝顾问凭据或码(发码门 ≠ 本门); 核对 connection.json mcp.rpc_url 后重跑本步(失败时码已吊销)",
-            "fail_rollback": "接入失败时注册码已经门吊销(输出 '已回滚'); 回滚失败按输出出口手工吊销后重跑"
+            "fail_rollback": "接入失败时注册码已经门吊销(输出 '已回滚'); 回滚失败按输出出口手工吊销后重跑",
+            "fail_ambiguous": "命令已带 --project {pq}(门的显式目标项目, AIPOS-F282); 仍报 PROJECT_AMBIGUOUS = 核对 --project 是 home 根内已注册的项目名, 且与 --governance-root 同一项目"
           },
           "station": {
             "title": "接入{sep}{label}(pi, {mode} 模式): {instance} @ {ws}",
@@ -2861,7 +2877,8 @@
             "fail_unknown_root": "The gate cannot find the project; make sure the gate and step {project_step} use the same home root",
             "fail_envelope": "The step {grant_step} project grant is not signed or does not cover this instance (the instance host segment must be among the grant's hosts); check lybra project grant show {pq} --home-root {hq} (pre-check refusal = no code issued)",
             "fail_401": "The gate rejected the advisor credential or the code (issuing gate ≠ this gate); check connection.json mcp.rpc_url and rerun this step (on failure the code is already revoked)",
-            "fail_rollback": "When enrollment fails the gate has already revoked the code (output shows it was rolled back); if the rollback failed, revoke by hand per the exit in the output and rerun"
+            "fail_rollback": "When enrollment fails the gate has already revoked the code (output shows it was rolled back); if the rollback failed, revoke by hand per the exit in the output and rerun",
+            "fail_ambiguous": "The command already carries --project {pq} (the gate's explicit target project, AIPOS-F282); if PROJECT_AMBIGUOUS still appears, check that --project is a project registered under the home root and is the same project as --governance-root"
           },
           "station": {
             "title": "Enroll{sep}{label} (pi, {mode} mode): {instance} @ {ws}",

@@ -187,17 +187,10 @@ def _wildcard_project_value() -> str:
 
 def _owner_voice(value: Any) -> str:
     """AIPOS-F280: 门侧出声的双语渲染值(i18n.Localized)按门进程的用户语言(i18n.resolve_language 唯一解析)取一种; 普通 str 原样。
-    语言设置非法 = 用缺省语言并在门日志出声(不吞, 也不让拒因变门内部错误)。"""
-    import sys
+    语言设置非法 = 用缺省语言并在门日志出声(不吞, 也不让拒因变门内部错误)。AIPOS-F282: 实现收口 i18n.voice(推导核 / 搬卡执行器同调)。"""
+    from tools.aipos_cli.i18n import voice
 
-    from tools.aipos_cli.i18n import LanguageError, pick, resolve_language
-
-    try:
-        lang = resolve_language()
-    except LanguageError as exc:
-        print(f"[tools.py] user language unresolved ({exc}); refusal text in the default language", file=sys.stderr)
-        return str(value)
-    return pick(value, lang)
+    return voice(value, where="tools.py")
 
 
 def _target_exit_text() -> str:

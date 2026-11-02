@@ -825,7 +825,8 @@ def generate_onboarding_guide(
         enroll_extra += ["--harness-dir", _shell_path(advisor_ws)]
     if adv_h["host"]:
         enroll_extra += ["--harness-host", _shell_quote(adv_h["host"])]
-    enroll_extra += ["--token-role", "owner", "--gate-url", _shell_quote(gate), "--ttl", "86400",
+    # AIPOS-F282 件②: --project = 门调用的显式目标项目(Owner 多项目无缺省 / "*" 凭据也能签; 与第 3 步 grant sign 同一字段)
+    enroll_extra += ["--token-role", "owner", "--gate-url", _shell_quote(gate), "--ttl", "86400", "--project", pq,
                      "--owner-authorization-ref", _shell_quote(auth_ref),
                      "--reason", _shell_quote(f"Onboarding {project_name} advisor")]
     step4_deliver = [render_enroll_deliver_command(owner_roles, role="advisor", instance=_shell_quote(inst["advisor"]),
@@ -879,6 +880,7 @@ def generate_onboarding_guide(
             "UNKNOWN_GOVERNANCE_ROOT / PROJECT_NOT_ESTABLISHED": _t("step4.fail_unknown_root"),
             "no usable role token": _t("step4.fail_no_role_cred"),
             "gate call failed": _t("step3.fail_gate"),
+            "PROJECT_AMBIGUOUS": _t("enroll.fail_ambiguous", pq=pq),  # AIPOS-F282 件②
             _t("step4.fail_harness_key"): _t("step4.fail_harness"),
             _t("step4.fail_dir_key"): _t("step4.fail_dir"),
             _t("step4.fail_delivery_key"): _t("step4.fail_delivery"),
@@ -958,12 +960,14 @@ def generate_onboarding_guide(
         raise ValueError("roles.schema class_groups.workstation 未声明审计类工位角色(AIPOS-F102)")
     adv_roles = ["lybra", "roles", "--workspace-root", gq]
     # AIPOS-F157 件①: --actor = 签发实例(顾问本人), 按实例取凭据(F134/F154 唯一口; 同角色多顾问实例时缺之即拒)
-    common = ["--gate-url", _shell_quote(gate), "--ttl", "86400", "--actor", _shell_quote(inst["advisor"])]
+    # AIPOS-F282 件②: --project 同第 4 步(门的显式目标项目)
+    common = ["--gate-url", _shell_quote(gate), "--ttl", "86400", "--actor", _shell_quote(inst["advisor"]), "--project", pq]
     enroll_on_fail = {
         "no usable role token": _t("enroll.fail_no_role_cred", advisor_step=STEP["advisor"]),
         "UNKNOWN_GOVERNANCE_ROOT": _t("enroll.fail_unknown_root", project_step=STEP["project"]),
         _t("step4.fail_envelope_key"): _t("enroll.fail_envelope", grant_step=STEP["grant"], pq=pq, hq=hq),
         "401 Unauthorized": _t("enroll.fail_401"),
+        "PROJECT_AMBIGUOUS": _t("enroll.fail_ambiguous", pq=pq),  # AIPOS-F282 件②
         _t("step4.fail_rollback_key"): _t("enroll.fail_rollback"),
     }
 
