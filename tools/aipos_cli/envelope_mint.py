@@ -87,12 +87,15 @@ def mint_via_gate(
     actor: str,
     connection_json: str | None,
     token_role: str,
+    project: str | None = None,
 ) -> dict[str, Any]:
     """逐张经门两阶段签信封: lybra_owner_decision_record_dry_run(workspace_root=目标治理根, 门按凭据 projects 校验项目范围)
     → _confirm(owner_confirmation_token=OWNER_CONFIRMED; 门另要 owner_confirm scope)。凭据只从 connection.json 读, 只出指纹。
     任一张门拒 = 停在该张(已落的照实列出), exit 1。输出以门生记录为准(performed_writes)。
 
-    返回 report: {ok, exit_code, error, early(凭据 / 门地址未就绪 = True: 未触门, 调用方只出 Error 行), signed, landing, landing_line, ...}。"""
+    返回 report: {ok, exit_code, error, early(凭据 / 门地址未就绪 = True: 未触门, 调用方只出 Error 行), signed, landing, landing_line, ...}。
+    AIPOS-F274: project = 显式目标项目(看板写例外传; 两跳都带 project 参数, 门按显式目标判项目域, Owner 角色类对 home 根内已注册项目放宽);
+    缺 = 行为不变(CLI)。门写进决策记录的跨项目追溯字段(credential_project / target_project)回带到 signed 各项。"""
     from tools.aipos_cli.confirm_client import (
         GateAddressError,
         GateClient,
@@ -150,12 +153,13 @@ def mint_via_gate(
         report["exit_code"] = rc
         return report
 
+    routing = {"project": str(project).strip()} if str(project or "").strip() else {}
     try:
         client = GateClient(base_url, token)
         client.initialize()
         for payload in payloads:
             ident, covers = grant_ident(payload)
-            dry = client.call_tool("lybra_owner_decision_record_dry_run", {**payload, "workspace_root": str(governance_root)})
+            dry = client.call_tool("lybra_owner_decision_record_dry_run", {**payload, "workspace_root": str(governance_root), **routing})
             if dry.get("verdict") == Verdict.BLOCK or not dry.get("ok", False) or not dry.get("dry_run_token"):
                 reasons = dry.get("blocking_reasons") or dry.get("errors") or dry.get("message") or dry
                 return _finish(1, f"门拒 {ident} 预演: {json.dumps(reasons, ensure_ascii=False)[:800]}")
@@ -164,6 +168,7 @@ def mint_via_gate(
                 "actor": actor,
                 "owner_confirmation_token": OWNER_CONFIRMATION_TOKEN,
                 "workspace_root": str(governance_root),
+                **routing,
             })
             if not done.get("ok", False):
                 reasons = done.get("errors") or done.get("message") or done.get("error_code") or done
@@ -173,7 +178,9 @@ def mint_via_gate(
             missing = [str(f) for f in written_files if not f.is_file()]
             if not writes or missing:
                 return _finish(1, f"门应答成功但记录未见落盘({ident}): writes={writes} missing={missing}")
-            signed.append({"policy_id": ident, "agent_or_role": covers, "decision_id": payload["decision_id"], "written": writes})
+            original = ((dry.get("data") or {}).get("original_payload") or {}) if isinstance(dry.get("data"), dict) else {}
+            trace = {k: original[k] for k in ("credential_project", "target_project") if isinstance(original, dict) and original.get(k)}
+            signed.append({"policy_id": ident, "agent_or_role": covers, "decision_id": payload["decision_id"], "written": writes, **trace})
     except GateError as exc:
         return _finish(1, f"门调用失败: {exc}(已签 {len(signed)} 张, 以门生记录为准; 未签的重跑本命令, 已落的 policy_id 会被门拒「already exists」)")
     report["ok"] = True

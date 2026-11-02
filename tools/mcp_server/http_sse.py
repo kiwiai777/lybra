@@ -697,12 +697,11 @@ def load_service_role_registry(connection_json: str | Path, *, error_stream: Tex
 
 def _role_is_cross_project(entry: dict[str, Any]) -> bool:
     """AIPOS-F92 件②: 凭据条目的角色(role_class 优先, 否则角色名)在 roles.schema 声明 project_scope=cross_project → True。
-    注册表不可读 = SchemaLoadError 上抛(fail-closed: 不猜, 整个 home 注册表载入失败出声)。"""
-    from tools.schema_loader import get_role_spec
+    注册表不可读 = SchemaLoadError 上抛(fail-closed: 不猜, 整个 home 注册表载入失败出声)。
+    AIPOS-F274: 判定唯一实现在 tools.project_resolution.role_is_cross_project(门项目域执法点同调), 本函数只委托。"""
+    from tools.project_resolution import role_is_cross_project
 
-    role = str(entry.get("role_class") or entry.get("role") or "").strip()
-    spec = get_role_spec(role) if role else None
-    return bool(spec) and str(spec.get("project_scope") or "") == "cross_project"
+    return role_is_cross_project(entry)
 
 
 class NoServiceRoleTokens(ValueError):

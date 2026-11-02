@@ -746,11 +746,27 @@
     "envelope_identity": "PreAuthorized 一阶段放行时, 信封 agent_or_role 须覆盖驱动方(token 绑定的 agent_instance 或 role_class), 卡实例(actor)不参与身份判定"
   },
   "project_scope_semantics": {
-    "description": "AIPOS-F92 件②: 角色凭据的项目域缺省(门 home 联合注册表 load_unified_service_role_registry 载入时)。唯一读取口: tools/mcp_server/http_sse._role_is_cross_project(经 schema_loader.get_role_spec)。",
+    "description": "AIPOS-F92 件②: 角色凭据的项目域缺省(门 home 联合注册表 load_unified_service_role_registry 载入时)。唯一读取口: tools/project_resolution.role_is_cross_project(经 schema_loader.get_role_spec; 门 http_sse._role_is_cross_project 委托之, AIPOS-F274)。",
     "default": "条目缺 projects 字段 = 缺省为其所在 connection.json 的来源项目(<home>/<项目>/.lybra/connection.json → [项目]; home 级 → [\"*\"])",
     "cross_project": "roles[].project_scope=cross_project 的角色(按 role_class 或内建角色名判)缺 projects 字段时不收窄(门按「无 projects = 不按项目收窄」处理): Owner 是所有项目的所有者, 为新项目签信封 / 发码须跨项目; 显式写了 projects 的条目照写的收窄",
     "values": [
       "cross_project"
-    ]
+    ],
+    "owner_explicit_target": {
+      "description": "AIPOS-F274: Owner 中央凭据跨项目。凭据 projects 不含目标项目时, 只对 project_scope=cross_project 的角色类(Owner)放宽: 动词显式带了目标项目(dispatch 的 project 参数 / 显式 workspace_root / 显式 governance_root), 且目标是门 home 根内已注册项目(注册枚举 = workspace_config._project_candidates, 结构判据 has_workspace_queue(established); 显式根须正是 <home>/<项目>), 即放行。非 Owner 角色(顾问 / 执行 / 审计 / 规划 / 自定义)一律照 projects 成员判定, 不放宽。缺显式目标 = 照现行解析(不猜)。判定唯一实现: tools/project_resolution.ProjectEnforcer.check_project_scope(门 _project_gate_denied / _resolve_queue_workspace / 签码 governance_root 同调)。",
+      "enabled": true,
+      "enabled_default_rationale": "缺省开启: 本开关只管放宽——开启只把「Owner 凭据 + 显式目标 + 已注册项目」这一类原先被拒的请求改为放行, 不让任何原先放行的请求变拒(非 Owner 角色、未带显式目标、目标未注册的判定逐字不变)。关 = false 即回到旧放宽前行为(Owner 也按 projects 成员判定)。与开关无关、始终生效的两处收紧见 owner_role_codes 与 enroll_code_scope_check。",
+      "explicit_target_args": ["project", "workspace_root", "governance_root"],
+      "wildcard": {
+        "value": "*",
+        "treatment": "refuse",
+        "note": "\"*\" 不当通配: 成员判定只认字面项目名(含 \"*\" 的凭据对任何具体项目都不算成员)。Owner 跨项目走本节显式目标放宽(与 projects 值无关); 非 Owner 须按项目铸凭据。",
+        "exit": "Owner: 调门时显式带目标项目(project 参数 / workspace_root / governance_root); 其他角色: lybra serve rotate --project <项目> 铸该项目凭据"
+      },
+      "trace_fields": ["credential_project", "target_project"],
+      "trace_note": "跨项目签发(凭据所属项目 ≠ 目标项目)由门写入记录: Owner 决定记录 frontmatter 与注册码记录各带 credential_project / target_project; 客户端自带的同名字段一律被门丢弃(防伪造)。凭据所属项目 = 凭据 default_project, 否则 projects 列表(逗号连接); 两者皆无 = 不可归属, 不写。",
+      "owner_role_codes": "签 Owner 类角色(project_scope=cross_project)的注册码只许 Owner 类凭据发起(非 Owner 自签 Owner 码 = 绕过本放宽的提权路径, 拒)",
+      "enroll_code_scope_check": "签码动词显式 governance_root 也经同一执法点核凭据项目域(原只核注册不核项目域: 项目域凭据可为别的已注册项目签码); 非 Owner 凭据为凭据外项目签码 = PROJECT_SCOPE_DENIED, 无 projects 的凭据不受影响"
+    }
   }
 }

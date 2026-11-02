@@ -281,10 +281,20 @@ def _render_body(record: dict[str, Any]) -> str:
     return "\n".join(body)
 
 
+#: AIPOS-F274 件④: 跨项目签发追溯字段(门算后注入 payload, 客户端自带的被门丢弃; roles.schema project_scope_semantics.owner_explicit_target.trace_fields)
+SCOPE_TRACE_FIELDS = ("credential_project", "target_project")
+
+
+def _scope_trace_fields(payload: dict[str, Any]) -> dict[str, str]:
+    """payload 里的跨项目追溯字段(有才带; 缺 = 记录与旧版逐字相同)。"""
+    return {k: str(payload[k]).strip() for k in SCOPE_TRACE_FIELDS if str(payload.get(k) or "").strip()}
+
+
 def _metadata(record: dict[str, Any]) -> dict[str, Any]:
     applies_to = record["applies_to"]
     approval_scope = record["approval_scope"]
     evidence = record["owner_approval_evidence"]
+    trace = {k: record[k] for k in SCOPE_TRACE_FIELDS if record.get(k)}
     return {
         "record_type": RecordType.OWNER_DECISION_RECORD,
         "decision_id": record["decision_id"],
@@ -294,6 +304,7 @@ def _metadata(record: dict[str, Any]) -> dict[str, Any]:
         "decided_by_ref": record["decided_by_ref"],
         "captured_by": record["captured_by"],
         "capture_surface": record["capture_surface"],
+        **trace,
         "project": applies_to.get("project"),
         "task_id": applies_to.get("task_id"),
         "draft_path": applies_to.get("draft_path"),
@@ -533,6 +544,7 @@ def build_owner_decision_record(
             _add(blocking_reasons, str(exc))
             policy_ref_path = ""
         normalized_record = _synthesize_policy_grant_record(payload, autonomy_policy, decision_id, actor, policy_ref_path)
+        normalized_record.update(_scope_trace_fields(payload))
     else:
         for field in REQUIRED_PAYLOAD_FIELDS:
             if _is_missing(payload.get(field)):
@@ -571,6 +583,7 @@ def build_owner_decision_record(
             "refs": _normalize_list(payload.get("refs"), "refs", blocking_reasons),
             "capability_scope": capability_scope,
             "recorded_by": actor or str(payload.get("captured_by") or "").strip() or None,
+            **_scope_trace_fields(payload),
         }
     # AIPOS-250: round-trip the RAW autonomy_policy block through original_payload so the confirm
     # re-run (which rebuilds from original_payload) re-materializes the policy artifact identically.
