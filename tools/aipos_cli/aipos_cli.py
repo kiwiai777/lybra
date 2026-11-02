@@ -1430,11 +1430,14 @@ def _envelope_mint_via_gate(
     connection_json: str | None,
     token_role: str,
     json_output: bool,
+    project: str | None = None,
 ) -> int:
-    """`envelope mint --confirm` 出声薄壳: 签发与落账全在 envelope_mint.mint_via_gate(AIPOS-F172 收口, 看板同调), 本函数只按 --json / 文本出声。"""
+    """`envelope mint --confirm` 出声薄壳: 签发与落账全在 envelope_mint.mint_via_gate(AIPOS-F172 收口, 看板同调), 本函数只按 --json / 文本出声。
+    AIPOS-F280: project = --project 显式目标项目(两跳都带; 缺 = 行为不变)。"""
     from tools.aipos_cli.envelope_mint import mint_via_gate
 
-    report = mint_via_gate(payloads, governance_root=governance_root, actor=actor, connection_json=connection_json, token_role=token_role)
+    report = mint_via_gate(payloads, governance_root=governance_root, actor=actor, connection_json=connection_json, token_role=token_role,
+                           project=project)
     if report["early"]:
         print(f"Error: {report['error']}", file=sys.stderr)
         return int(report["exit_code"])
@@ -1899,7 +1902,15 @@ def _project_authorization_cli(args: argparse.Namespace, home: Path | None) -> i
     from tools.aipos_cli.verb_contract import declared_exit_codes
 
     codes = declared_exit_codes("lybra_project_authorization")
-    target = _project_write_target(args, home, args.name)
+    # AIPOS-F280 件②: --project = 门调用的显式目标项目(看板 F274 同一字段); 未给项目名时即目标项目; 两者不一致 = 用法错(零写入、不调门)
+    explicit_project = str(getattr(args, "project", "") or "").strip() or None
+    if explicit_project and args.name and explicit_project != args.name:
+        from tools.aipos_cli.i18n import owner_text, pick, resolve_language
+
+        print(f"Error: {pick(owner_text('enroll_issuance', 'cli_project_conflict', project=explicit_project, name=args.name), resolve_language(args))}",
+              file=sys.stderr)
+        return codes["usage"]
+    target = _project_write_target(args, home, args.name or explicit_project)
     if target is None:
         return codes["refused"]
     root = Path(target["project_root"])
@@ -1952,7 +1963,7 @@ def _project_authorization_cli(args: argparse.Namespace, home: Path | None) -> i
         from tools.aipos_cli.envelope_mint import mint_via_gate
 
         report = mint_via_gate([payload], governance_root=root, actor=args.actor, connection_json=args.connection_json,
-                               token_role=args.token_role)
+                               token_role=args.token_role, project=target["project"] if explicit_project else None)
         if report["early"]:
             print(f"Error: {report['error']}", file=sys.stderr)
             return codes["refused"]
@@ -2466,7 +2477,7 @@ class _RolesIssuerError(RuntimeError):
 def _roles_issuer_root(args: argparse.Namespace) -> tuple[Path, str]:
     """AIPOS-F199 件③(gap #203): 签码命令(roles enroll-code / enroll-deliver)凭据所在治理根的唯一定位 → (治理根, 来源说明)。
     序: 显式 --workspace-root(全局或 roles 级; 原取法不变)> 本命令 --governance-root(enroll_deliver.resolve_local_governance_root:
-    本机已建治理根 / 已登记项目名)> F144 治理根唯一解析梯(_find_repo_root_for_args: 环境变量 > 当前目录所在治理根 > 工位声明; board approve
+    本机已建治理根 / 已登记项目名)> --project(AIPOS-F280, 同取法)> F144 治理根唯一解析梯(_find_repo_root_for_args: 环境变量 > 当前目录所在治理根 > 工位声明; board approve
     F185 同法)。原缺省走 AIPOS-226 home 模型, 在别的项目治理根目录下运行仍取活动项目(lybra)的 connection.json(chris 实撞)。
     解析不出 = FileNotFoundError / ValueError(拒因原文), 调用方停线报错, 不回落活动项目。"""
     from tools.aipos_cli.enroll_deliver import resolve_local_governance_root
@@ -2478,6 +2489,9 @@ def _roles_issuer_root(args: argparse.Namespace) -> tuple[Path, str]:
     governance_root = str(getattr(args, "governance_root", "") or "").strip()
     if governance_root:
         return resolve_local_governance_root(governance_root), f"--governance-root {governance_root}"
+    project = str(getattr(args, "project", "") or "").strip()  # AIPOS-F280 件②: roles enroll-code --project = 已登记项目名(同 --governance-root 取法)
+    if project:
+        return resolve_local_governance_root(project), f"--project {project}"
     root = Path(_find_repo_root_for_args(args))
     hit = getattr(args, "_governance_root_hit", None) or {}
     return root, str(hit.get("source") or root)
@@ -3199,7 +3213,10 @@ def build_parser() -> argparse.ArgumentParser:
     roles_enroll_code_parser.add_argument("--instance", help="Optional instance name to bind (e.g., exec.lybra.mac1); omit for any instance")
     roles_enroll_code_parser.add_argument("--ttl", type=int, help="Time-to-live in seconds (default 86400 = 24h; also bounds the embedded transport credential)")
     roles_enroll_code_parser.add_argument("--gate-url", help="Gate URL to embed. Default (AIPOS-F153, config.schema same_host_rule): loopback http://127.0.0.1:<gate port> when the code is redeemed on the gate host; the gate's connection.json mcp.rpc_url only when --instance is declared cross-host in its project's project.json workstations. Pass an externally reachable URL here for other cross-host redemption")
-    roles_enroll_code_parser.add_argument("--governance-root", help="Governance workspace root to embed (F24A): bare registered project name or absolute path; validated against the project registry on the gate. Default: workspace_root of the local connection.json")
+    roles_enroll_code_parser.add_argument("--governance-root", help="Governance workspace root to embed (F24A): bare registered project name or absolute path; validated against the project registry on the gate. Default: --project when given, else workspace_root of the local connection.json")
+    roles_enroll_code_parser.add_argument("--project", default=None, help="AIPOS-F280: explicit target project passed to the gate (the same project field the board sends; "
+                                                                          "needed when the credential covers several projects without a default_project, or is \"*\"); "
+                                                                          "without --governance-root the code is issued for this project. Default: the gate's existing inference")
     roles_enroll_code_parser.add_argument("--token-role", default="advisor", help="Role of the local token used to call the gate verb (default: advisor; falls back to owner if advisor is absent)")
     roles_enroll_code_parser.add_argument("--actor", default=None, help="AIPOS-F157: signing instance — the gate credential is taken from this instance's entry in connection.json (per-instance selection, AIPOS-F134/F154); required when the token role has two or more instances")
     roles_enroll_code_parser.add_argument("--owner-authorization-ref", help="Reference to owner authorization for this enrollment")
@@ -3797,6 +3814,10 @@ def build_parser() -> argparse.ArgumentParser:
                                                                 "owner_confirm); without it = local preview, zero writes")
         sub.add_argument("--connection-json", help="connection.json holding the Owner credential (token never printed, fingerprint only)")
         sub.add_argument("--token-role", default="owner", help="Credential role used for --confirm (default owner)")
+        sub.add_argument("--project", default=None, help="AIPOS-F280: explicit target project passed to the gate on --confirm (the same project field the board "
+                                                         "sends; needed when the Owner credential covers several projects without a default_project, or is "
+                                                         "\"*\"); also names the project when the positional name is omitted (both given = must match). "
+                                                         "Default: the gate's existing inference")
 
     def _auth_scope(sub: argparse.ArgumentParser) -> None:
         sub.add_argument("--grant-lane", dest="grant_lane", action="append", default=None, help="Lane repo (name in project.json repos.items, or the code repo path); "
@@ -3852,6 +3873,10 @@ def build_parser() -> argparse.ArgumentParser:
     envelope_mint_parser.add_argument("--workspace-root", help="AIPOS-F92: target project governance root (where the policy lands); default = resolved governance workspace")
     envelope_mint_parser.add_argument("--connection-json", help="AIPOS-F92: connection.json holding the Owner credential (default <workspace-root>/.lybra/connection.json); token never printed (fingerprint only)")
     envelope_mint_parser.add_argument("--token-role", default="owner", help="AIPOS-F92: credential role used for --confirm (default owner; arming an envelope needs owner_confirm)")
+    envelope_mint_parser.add_argument("--project", default=None, help="AIPOS-F280: explicit target project passed to the gate on --confirm (the same project field the board "
+                                                                      "sends; needed when the Owner credential covers several projects without a default_project, or is "
+                                                                      "\"*\"); without --workspace-root the envelope lands in that project's governance root "
+                                                                      "(<home>/<project>; a conflicting current governance root is refused). Default: the gate's existing inference")
     envelope_mint_mode = envelope_mint_parser.add_mutually_exclusive_group(required=True)
     envelope_mint_mode.add_argument("--dry-run", action="store_true", help="Preview without writing (same writer and same criteria as --confirm)")
     envelope_mint_mode.add_argument("--confirm", action="store_true", help="AIPOS-F92: sign through the gate (lybra_owner_decision_record_dry_run → _confirm with OWNER_CONFIRMED); output = gate-written records")
@@ -5363,7 +5388,10 @@ def main(argv: list[str] | None = None) -> int:
                 except _RolesIssuerError as exc:
                     return _enroll_code_fail(str(exc), next_step=exc.next_step)
                 # ② 治理根(F24A): 显式参数优先, 缺省=本机 connection.json 的 workspace_root —— 显式化传入, 码内治理根不再依赖门进程环境解析
-                governance_root = governance_root_arg or str(conn_data.get("workspace_root") or "").strip() or None
+                # AIPOS-F280 件②: --project = 门调用的显式目标项目(看板 F274 同一字段); 未给 --governance-root 时码签给该项目(门按注册表核裸项目名);
+                # 同给且不一致 = 门 PROJECT_MISMATCH(门侧一处判)。不传 = 行为不变
+                target_project = str(getattr(args, "project", "") or "").strip() or None
+                governance_root = governance_root_arg or target_project or str(conn_data.get("workspace_root") or "").strip() or None
                 params = {
                     "role": args.role,
                     "instance": instance,
@@ -5373,6 +5401,7 @@ def main(argv: list[str] | None = None) -> int:
                     "owner_authorization_ref": owner_auth_ref,
                     "reason": reason,
                     "actor": signer or f"cli:roles-enroll-code:{token_role_used}",
+                    "project": target_project,
                 }
                 try:
                     issued = gate_enroll_code(client, params, confirm=confirm_phase)
@@ -6880,8 +6909,21 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 for pid, agent in zip(policy_ids, agents)
             ]
+            # AIPOS-F280 件②: --project = 门调用的显式目标项目(看板 F274 同一字段); 目标治理根经 project 族写目标唯一实现
+            # workspace_config.resolve_project_write_target(<home>/<项目>, 与 --workspace-root / 所在治理根冲突 = 拒); 不传 = 行为不变
+            target_project = str(getattr(args, "project", "") or "").strip() or None
             try:
-                envelope_root = governance_workspace_root(getattr(args, "workspace_root", None) or None)
+                if target_project:
+                    from tools.aipos_cli.workspace_config import ProjectTargetError, resolve_home_root, resolve_project_write_target
+
+                    try:
+                        envelope_root = resolve_project_write_target(resolve_home_root(), target_project,
+                                                                     workspace_root=getattr(args, "workspace_root", None) or None)["project_root"]
+                    except ProjectTargetError as exc:
+                        print(f"Error: {exc}", file=sys.stderr)
+                        return 1
+                else:
+                    envelope_root = governance_workspace_root(getattr(args, "workspace_root", None) or None)
             except FileNotFoundError as exc:
                 print(f"Error: {exc}", file=sys.stderr)
                 return 1
@@ -6889,7 +6931,7 @@ def main(argv: list[str] | None = None) -> int:
                 return _envelope_mint_via_gate(
                     payloads, governance_root=envelope_root, actor=args.actor,
                     connection_json=getattr(args, "connection_json", None), token_role=args.token_role,
-                    json_output=bool(args.json),
+                    json_output=bool(args.json), project=target_project,
                 )
             from tools.aipos_cli.envelope_mint import mint_preview  # AIPOS-F172: 预演唯一实现(看板信封页同调)
 

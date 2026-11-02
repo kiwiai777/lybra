@@ -169,6 +169,53 @@ def _reload_token_registry() -> str | None:
     return None
 
 
+class RequestProjectUnresolved(Exception):
+    """AIPOS-F280 件③: 本请求没有可解析的目标项目(凭据项目域通配值 "*" 不是项目名)。dispatch_tool 转为结构化 PROJECT_SCOPE_DENIED
+    (PROJECT_AMBIGUOUS 类拒因 + 出口), 不再是门内部错误。刻意不继承 ValueError / OSError: 各动词按项目解析失败的窄 except 不吞它。"""
+
+
+def _wildcard_project_value() -> str:
+    """凭据项目域的通配值(roles.schema project_scope_semantics.owner_explicit_target.wildcard.value; 读不出 = SchemaLoadError 上抛)。"""
+    from tools.project_resolution import owner_explicit_target_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    value = str(((owner_explicit_target_declaration().get("wildcard") or {}).get("value")) or "")
+    if not value:
+        raise SchemaLoadError("roles.schema project_scope_semantics.owner_explicit_target.wildcard.value 未声明(AIPOS-F280)")
+    return value
+
+
+def _owner_voice(value: Any) -> str:
+    """AIPOS-F280: 门侧出声的双语渲染值(i18n.Localized)按门进程的用户语言(i18n.resolve_language 唯一解析)取一种; 普通 str 原样。
+    语言设置非法 = 用缺省语言并在门日志出声(不吞, 也不让拒因变门内部错误)。"""
+    import sys
+
+    from tools.aipos_cli.i18n import LanguageError, pick, resolve_language
+
+    try:
+        lang = resolve_language()
+    except LanguageError as exc:
+        print(f"[tools.py] user language unresolved ({exc}); refusal text in the default language", file=sys.stderr)
+        return str(value)
+    return pick(value, lang)
+
+
+def _target_exit_text() -> str:
+    """缺显式目标项目时的出口(owner_texts.enroll_issuance.target_exit, 按用户语言)。"""
+    from tools.aipos_cli.i18n import owner_text
+
+    return _owner_voice(owner_text("enroll_issuance", "target_exit"))
+
+
+def _request_project_unresolved_detail(project: str) -> str:
+    from tools.aipos_cli.i18n import owner_text
+
+    projects = _capability_token().get("projects")
+    listing = list(projects) if isinstance(projects, list) else []
+    return (_owner_voice(owner_text("enroll_issuance", "wildcard_target", wildcard=project, projects=str(listing)))
+            + ". " + _target_exit_text())
+
+
 def _repo_root() -> Path:
     """Resolve workspace root for the current request.
     
@@ -178,6 +225,10 @@ def _repo_root() -> Path:
     """
     project = REQUEST_PROJECT.get()
     if project:
+        # AIPOS-F280 件③: 请求项目是凭据通配值("*", 单项目推断或显式传入)= 不是项目名, 不当项目根解析(原抛门内部错误);
+        # 给 PROJECT_AMBIGUOUS 类拒因与「加 --project」出口(dispatch_tool 转结构化 PROJECT_SCOPE_DENIED)
+        if project == _wildcard_project_value():
+            raise RequestProjectUnresolved(_request_project_unresolved_detail(project))
         # Request specifies a project -> resolve via home model
         from tools.aipos_cli.workspace_config import resolve_home_root, resolve_project_root
         home = resolve_home_root()
@@ -715,8 +766,9 @@ def _project_gate_denied(*, explicit: bool = False) -> dict[str, Any] | None:
                 guidance += f" (or bind default_project='{default_project}' at connection level)"
             elif len(token_projects) > 1:
                 guidance += f" or bind a default_project at token mint time. Authorized: {token_projects}"
+            # AIPOS-F280 件③: 带「加 --project」出口(声明双语, 按用户语言)
             return _project_scope_denied_result(
-                f"active project could not be resolved ({exc}). {guidance}"
+                f"active project could not be resolved ({exc}). {guidance}. {_target_exit_text()}"
             )
     
     # Check authorization (AIPOS-F274: 显式 project 参数 = 显式目标, Owner 角色类对 home 根内已注册项目放宽; 判定唯一在 ProjectEnforcer)
@@ -796,6 +848,8 @@ def dispatch_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]
             if denied is not None:
                 return denied
             return handler(args)
+    except RequestProjectUnresolved as exc:  # AIPOS-F280 件③: 无可解析目标项目 = 结构化拒因(非门内部错误)
+        return _project_scope_denied_result(str(exc))
     except Exception as exc:
         import traceback
         import sys
@@ -4491,11 +4545,25 @@ def _resolve_governance_root_arg(value: Any) -> tuple[str | None, dict[str, Any]
     )
 
 
-def _validate_enroll_code_args(args: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+def _enroll_issuer_denied(role: str, role_class: str) -> dict[str, Any] | None:
+    """AIPOS-F280 件①: 签码角色权限(声明表 roles.schema enroll_code_issuance, 唯一判定 enrollment.enroll_issuer_refusal)。拒 = teaching error
+    (拒因码 = 声明 reject_code, 文案按用户语言); 放行 = None。dry_run / 单相动词校验与 confirm 复核同调。"""
+    from tools.aipos_cli.enrollment import enroll_issuer_refusal
+
+    refusal = enroll_issuer_refusal(_capability_token(), role, role_class)
+    if refusal is None:
+        return None
+    return _teaching_error(refusal["code"], _owner_voice(refusal["message"]), _owner_voice(refusal["next"]),
+                           doc_ref="AIPOS-F280 roles.schema enroll_code_issuance")
+
+
+def _validate_enroll_code_args(args: dict[str, Any], *, verb_name: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """F23/F24A: 发码参数校验(dry_run 与单相动词共用)。返回 (validated, teaching_error)。
 
     F24A: ①未知参数一律报错(禁静默吞, F24 证据②); ②governance_root 从项目注册表校验
     (不存在的根必报错); 缺省回落发码门服务的工作区根(与交换/land 同根)。
+    AIPOS-F280 件①: 显式目标项目域判定之后(与 dispatch「项目闸 → scope」同序)按动词声明 required_scope 索 scope(_verb_scope_allowed,
+    门 scope 唯一读取口), 角色解析后按声明表判签发方可签的角色类。
     """
     unknown = sorted(set(args) - _ENROLL_CODE_KNOWN_ARGS)
     if unknown:
@@ -4543,6 +4611,8 @@ def _validate_enroll_code_args(args: dict[str, Any]) -> tuple[dict[str, Any], di
                 f"governance_root resolves to project '{target_name}', outside the token's authorized projects "
                 f"{list(cap.get('projects') or [])}." + (f" ({why})" if why else ""))
         scope_trace = cross_project_trace(cap, target_name)
+    if not _verb_scope_allowed(verb_name):  # AIPOS-F280 件①: 签码只 Owner 类与顾问类(声明 required_scope)
+        return {}, _verb_scope_denied(verb_name, "enrollment code issuance tools")
     if not role:
         return {}, _teaching_error(
             "MISSING_ROLE",
@@ -4606,8 +4676,12 @@ def _validate_enroll_code_args(args: dict[str, Any]) -> tuple[dict[str, Any], di
             f"An enrollment code for the Owner-class role {role!r} can only be issued with an Owner credential.",
             "Ask the Owner to issue this code (Owner credential), or issue a code for a non-Owner role.",
         )
+    denied = _enroll_issuer_denied(role, role_class)  # AIPOS-F280 件①: 签发方角色类可签哪些角色类(声明表)
+    if denied is not None:
+        return {}, denied
     validated = {
         "role": role,
+        "role_class": role_class,  # AIPOS-F280: confirm 复核签码角色权限用
         "instance": instance,
         "ttl": ttl,
         "gate_url": gate_url,
@@ -4627,7 +4701,7 @@ def lybra_enroll_code_dry_run(arguments: dict[str, Any] | None = None) -> dict[s
     with CLI `lybra roles enroll-code`). Owner-gated via owner_authorization_ref.
     """
     args = arguments or {}
-    validated, err = _validate_enroll_code_args(args)
+    validated, err = _validate_enroll_code_args(args, verb_name="lybra_enroll_code_dry_run")
     if err is not None:
         return err
 
@@ -4698,6 +4772,8 @@ def lybra_enroll_code_confirm(arguments: dict[str, Any] | None = None) -> dict[s
             f"Known parameters: {', '.join(sorted(_ENROLL_CODE_CONFIRM_KNOWN_ARGS))}.",
             "Retry with only the known parameters (governance_root 等发码参数属于 dry_run 阶段, confirm 只认 dry_run_token/owner_confirmation_token).",
         )
+    if not _verb_scope_allowed("lybra_enroll_code_confirm"):  # AIPOS-F280 件①: 与 dry_run 同一声明 required_scope
+        return _verb_scope_denied("lybra_enroll_code_confirm", "enrollment code issuance tools")
     dry_run_token = str(args.get("dry_run_token") or "").strip()
     owner_confirmation_token = str(args.get("owner_confirmation_token") or "").strip()
     if not dry_run_token:
@@ -4734,6 +4810,10 @@ def lybra_enroll_code_confirm(arguments: dict[str, Any] | None = None) -> dict[s
             )
     except ValueError:
         pass
+    # AIPOS-F280 件①: 确认方凭据复核签码角色权限(确认可换凭据; 拒 = 不消费预演令牌)
+    denied = _enroll_issuer_denied(str(record["validated"]["role"]), str(record["validated"].get("role_class") or ""))
+    if denied is not None:
+        return denied
     # 一次性消费(confirm 后 token 作废)
     _ENROLL_CODE_DRY_RUNS.pop(dry_run_token, None)
 
@@ -4784,7 +4864,7 @@ def lybra_roles_enroll_code(arguments: dict[str, Any] | None = None) -> dict[str
     The returned self-contained code embeds gate_url/governance_root/transport credential.
     """
     args = arguments or {}
-    validated, err = _validate_enroll_code_args(args)
+    validated, err = _validate_enroll_code_args(args, verb_name="lybra_roles_enroll_code")
     if err is not None:
         return err
     from tools.aipos_cli.enrollment import issue_self_contained_code
