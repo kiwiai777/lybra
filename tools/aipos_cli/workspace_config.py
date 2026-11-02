@@ -364,13 +364,20 @@ def set_active_project(name: str, *, env: dict[str, str] | None = None) -> Path:
     project = str(name or "").strip()
     if not project:
         raise ValueError("set_active_project requires a non-empty project name")
+    return set_global_config_value("active_project", project, env=env)
+
+
+def set_global_config_value(key: str, value: Any, *, env: dict[str, str] | None = None) -> Path:
+    """home 级运行时配置(~/.lybra/config.json)唯一写路径(config.schema configuration_sources.global_config): 只改 key, 保留
+    config_version / home_root / 其余键; 文件不存在 = 建 {config_version: 2}。HOME 定位不到 = ValueError(HOME_NOT_RESOLVED)。
+    set_active_project(AIPOS-230)与 i18n.set_language(AIPOS-F276)同调。"""
     path = global_config_path(env)
     if path is None:
-        raise ValueError("HOME_NOT_RESOLVED: cannot locate ~/.lybra/config.json to set active_project")
+        raise ValueError(f"HOME_NOT_RESOLVED: cannot locate ~/.lybra/config.json to set {key}")
     config = load_global_config(env)
     if not config:
         config = {"config_version": 2}
-    config["active_project"] = project
+    config[key] = value
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path

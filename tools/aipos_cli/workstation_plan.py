@@ -82,11 +82,9 @@ def declaration() -> dict[str, Any]:
         missing += [f"steps.{n}.{k}" for n in STEP_NAMES for k in _STEP_TEXT_KEYS if not isinstance((step_texts.get(n) or {}).get(k), str)]
         if missing:
             raise SchemaLoadError(f"{where}.texts.{lang} 缺 {missing}")
-    from tools.aipos_cli.board_pages import pages_declaration
+    from tools.aipos_cli.i18n import check_block
 
-    supported = list(pages_declaration()["locale"]["supported"])
-    if sorted(texts) != sorted(supported):
-        raise SchemaLoadError(f"{where}.texts 语言须恰为看板 locale.supported {supported}")
+    check_block(texts, where=f"{where}.texts")  # AIPOS-F276: 双语块标准(语言恰为 locale.supported、各语言键集相等)唯一校验
     board = decl.get("board") or {}
     params = board.get("params") or {}
     if (not str(board.get("page_path") or "").startswith("/")
@@ -114,12 +112,11 @@ def noncode_modes() -> list[str]:
     return [m for m in routed_modes() if execution_wants_pi({}, {"task_mode": m})]
 
 
-def texts(lang: str) -> dict[str, Any]:
-    """一种语言的全部文案(未知语言 = 看板缺省语言)。"""
-    from tools.aipos_cli.board_pages import pages_declaration
+def texts(lang: str | None = None) -> dict[str, Any]:
+    """一种语言的全部文案(AIPOS-F276: 经双语块唯一读取器 i18n.texts; 缺省 = 看板缺省语言, 语言取 i18n.resolve_language 的结果)。"""
+    from tools.aipos_cli.i18n import texts as bilingual_texts
 
-    table = declaration()["texts"]
-    return table[lang] if lang in table else table[str(pages_declaration()["locale"]["default"])]
+    return bilingual_texts(declaration()["texts"], lang, where=f"verbs.schema.json verbs.{VERB}.texts")
 
 
 def mode_names(t: dict[str, Any], modes: list[str]) -> str:

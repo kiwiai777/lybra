@@ -665,8 +665,9 @@ const translations = {
   }
 };
 
-// Current language (default: zh, persisted in localStorage)
-let currentLang = localStorage.getItem('lybra_lang') || 'zh';
+// Current language (persisted in localStorage; AIPOS-F276: no browser choice yet = the board default language the server put on
+// <html data-board-default-lang> (LYBRA_LANG > home config language > locale.default), else zh)
+let currentLang = localStorage.getItem('lybra_lang') || document.documentElement.getAttribute('data-board-default-lang') || 'zh';
 
 /**
  * Get translation for a key

@@ -569,6 +569,40 @@ def _serve_resident_cli(args: argparse.Namespace, connection_json: str | None) -
     return 0 if result.get("ok") else 1
 
 
+def _config_cli(args: argparse.Namespace) -> int:
+    """AIPOS-F276 件①: `lybra config set-language <语言>` 薄壳——写 home 配置 language 键(i18n.set_language → workspace_config.set_global_config_value 唯一写路径,
+    取值域 = 看板 locale.supported); 回显按写入后解析出的用户语言(i18n.resolve_language)。退出码读 verbs.schema lybra_config_set_language。"""
+    from tools.aipos_cli.i18n import (LanguageError, cli_flag, describe_resolution, env_name, language_declaration, resolve_language,
+                                      set_language)
+    from tools.aipos_cli.verb_contract import declared_exit_code
+
+    verb = "lybra_config_set_language"
+    if getattr(args, "config_command", None) != "set-language":
+        print("usage: lybra config set-language <language> [--json]", file=sys.stderr)
+        return declared_exit_code(verb, "usage")
+    try:
+        result = set_language(args.language)
+        lang = resolve_language(args)
+        effective = describe_resolution(args)  # 写入后的实际生效语言与来源(环境变量 / --lang 仍可盖过 home 配置)
+    except LanguageError as exc:
+        print(f"lybra config set-language: {exc}", file=sys.stderr)
+        return declared_exit_code(verb, "refused")
+    except (ValueError, OSError) as exc:  # HOME 定位不到 / home 配置读写失败
+        print(f"lybra config set-language: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return declared_exit_code(verb, "refused")
+    t = language_declaration()["texts"][lang]
+    unset = t["unset"]
+    line = (t["set_done"] if result["changed"] else t["set_same"]).format(
+        before=result["before"] or unset, after=result["after"], path=result["path"], flag=cli_flag(), env=env_name())
+    if args.json:
+        print(render_json({"ok": True, "changed": result["changed"], "path": str(result["path"]), "before": result["before"],
+                           "after": result["after"], "effective": lang, "message": line, "effective_line": effective}))
+    else:
+        print(line)
+        print(effective)
+    return declared_exit_code(verb, "ok")
+
+
 def _setup_check_cli(args: argparse.Namespace) -> int:
     """AIPOS-F263 件①: `setup check` 薄壳(唯一实现 setup_check.run_setup_check; 人读 render_setup_check)。任一 ✗ = 退出码 1。
     工作区只用于门地址(其 .lybra/connection.json mcp.rpc_url, 不读 token); 解析不出 = 不带工作区(env / 缺省地址)。"""
@@ -1273,9 +1307,15 @@ def _owner_command(args: argparse.Namespace) -> int:
 
     action = getattr(args, "owner_action", None)
     if action == "inbox":
+        from tools.aipos_cli.i18n import resolve_language
+        from tools.aipos_cli.owner_inbox import relay_lines
+
         try:
+            lang = resolve_language(args)  # AIPOS-F276 件②: 已双语的转达话术按用户语言出(LanguageError 属 ValueError = 用法错)
             inbox = collect_inbox(getattr(args, "home_root", None), project=getattr(args, "project", None),
                                   include_paused=bool(getattr(args, "include_paused", False)))
+            for group in inbox.get("relays") or []:  # JSON 同文: relays[].lines 按同一语言(看板缺省语言时与原文逐字相同)
+                group["lines"] = relay_lines(group, lang)
             view = stale_view(inbox, args.stale_before) if getattr(args, "stale_before", None) else None
         except (ValueError, OSError) as exc:  # InboxUsageError(日期不合)同属用法错
             print(f"lybra owner inbox: {exc}", file=sys.stderr)
@@ -1283,7 +1323,7 @@ def _owner_command(args: argparse.Namespace) -> int:
         if view is not None:  # AIPOS-F170 件①: 遗留视图(同一数据)
             print(render_json(view) if args.json else render_stale_text(view))
         else:
-            print(render_json(inbox) if args.json else render_inbox_text(inbox))
+            print(render_json(inbox) if args.json else render_inbox_text(inbox, lang))
         return declared_exit_code(VERB, "partial" if inbox["errors"] else "ok")
     if action == "decide":
         try:
@@ -2352,18 +2392,18 @@ def _project_workstation_plan_cli(args: argparse.Namespace, home: Path | None) -
     """AIPOS-F198: `lybra project workstation-plan` 薄壳——目标项目解析 = project 族同一实现(_project_write_target); 现状 / 计划 / 话术 / 文本
     全部在 workstation_plan(看板工位设置页同一推导与同一文本)。只读。"""
     from tools.aipos_cli import workstation_plan as wp
-    from tools.aipos_cli.board_pages import pages_declaration
+    from tools.aipos_cli.i18n import LanguageError, resolve_language
     from tools.schema_loader import SchemaLoadError
 
     try:
         codes = {k: int(v["code"]) for k, v in wp.declaration()["exit_codes"].items()}
-        locale = pages_declaration()["locale"]
     except SchemaLoadError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
-    lang = args.lang or str(locale["default"])
-    if lang not in locale["supported"]:
-        print(f"Error: --lang {lang} 不在 {list(locale['supported'])}", file=sys.stderr)
+    try:
+        lang = resolve_language(args)  # AIPOS-F276: --lang > LYBRA_LANG > home 配置 language > 看板 locale.default
+    except LanguageError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         return codes["usage"]
     target = _project_write_target(args, home, args.name)
     if target is None:
@@ -2528,6 +2568,12 @@ def build_parser() -> argparse.ArgumentParser:
     _GATE_URL_DEFAULT = get_config_default_gate_url()
     parser = argparse.ArgumentParser(description="AI Project OS CLI")
     parser.add_argument("--workspace-root", dest="global_workspace_root", help="Workspace root; may also be provided on supported subcommands")
+    # AIPOS-F276 件①: 全局用户语言(唯一注册处; 解析 = i18n.resolve_language: --lang > LYBRA_LANG > home 配置 language > 看板 locale.default)
+    from tools.aipos_cli.i18n import ARGS_DEST as _LANG_DEST
+
+    parser.add_argument("--lang", dest=_LANG_DEST, default=None, metavar="LANG",
+                        help="User language for bilingual output (board locale.supported); overrides LYBRA_LANG and the home config "
+                             "language key (lybra config set-language); invalid value = refused")
     # AIPOS-F152 件②: 本进程运行的代码(部署快照 / --dev-tree 开发模式 / 工作树), 唯一实现 deploy_runtime.version_line
     from tools.aipos_cli.deploy_runtime import DEV_TREE_FLAG, VersionAction
 
@@ -3085,6 +3131,15 @@ def build_parser() -> argparse.ArgumentParser:
     setup_check_parser.add_argument("--gate-url", help="Probe this gate address instead of the resolved one (workspace .lybra/connection.json mcp.rpc_url > LYBRA_GATE_URL > default)")
     setup_check_parser.add_argument("--json", action="store_true", help="Output JSON (structured result, same function the board reuses)")
 
+    # AIPOS-F276 件①: home 级用户语言(声明 verbs.schema lybra_config_set_language; 写口 i18n.set_language)
+    config_parser = subparsers.add_parser("config", help="AIPOS-F276: home-level user settings (~/.lybra/config.json)")
+    config_subparsers = config_parser.add_subparsers(dest="config_command")
+    config_lang_parser = config_subparsers.add_parser(
+        "set-language", help="AIPOS-F276: set the user language once for every lybra command and the board (home config key "
+                             "language); value = one of board locale.supported; LYBRA_LANG / --lang still override it")
+    config_lang_parser.add_argument("language", help="Language code (board locale.supported)")
+    config_lang_parser.add_argument("--json", action="store_true", help="Output JSON")
+
     # AIPOS-346 S5: roles subcommand (first-class role management)
     from tools.aipos_cli.enrollment import executor_mode_declaration as _executor_mode_declaration  # AIPOS-F143 件④: 取值读声明
     roles_parser = subparsers.add_parser("roles", help="AIPOS-346 S5: first-class role management commands")
@@ -3413,7 +3468,9 @@ def build_parser() -> argparse.ArgumentParser:
     project_wsplan_parser.add_argument("--host", default=None, help="Target host label the pi works over ssh (with --ssh-alias)")
     project_wsplan_parser.add_argument("--ssh-alias", default=None, help="ssh alias of the target host on the governance-root machine (with --host)")
     project_wsplan_parser.add_argument("--owner-ref", default=None, help="Existing Owner decision reference (the decision-log step is then done)")
-    project_wsplan_parser.add_argument("--lang", default=None, help="Text language (board locale.supported; default board locale.default)")
+    # AIPOS-F276: 兼容旗标, 与全局 --lang 写同一 dest(SUPPRESS: 不给时不覆盖全局值); 解析同 i18n.resolve_language
+    project_wsplan_parser.add_argument("--lang", dest=_LANG_DEST, default=argparse.SUPPRESS, metavar="LANG",
+                                       help="Same as the global --lang (text language; default = LYBRA_LANG > home config language > board locale.default)")
     project_wsplan_parser.add_argument("--json", action="store_true", help="Output JSON")
     # AIPOS-F187 件④: 存量卡工作树 / 审计工作树清理(判据 transitions.schema queue_mutations.worktree_cleanup; 唯一实现 worktree_cleanup)
     project_cleanup_parser = project_subparsers.add_parser(
@@ -4682,7 +4739,14 @@ def main(argv: list[str] | None = None) -> int:
     if not args.command:
         parser.print_help()
         return 2
+    from tools.aipos_cli.i18n import ARGS_DEST, LanguageError, validate_language
 
+    if getattr(args, ARGS_DEST, None) is not None:  # AIPOS-F276 件①: 全局 --lang 非法 = 拒并给出口(不静默回退), 与具体子命令无关
+        try:
+            validate_language(getattr(args, ARGS_DEST), source="cli_flag")
+        except LanguageError as exc:
+            print(f"lybra: {exc}", file=sys.stderr)
+            return 2
 
     if args.command == "agent":
         # AIPOS-F103 件①: 只剩 `agent watch --workspace-root`(文件系统哨兵, loop 唯一等待); 旧跨机连接器子命令已退役
@@ -4894,6 +4958,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "setup":
         return _setup_check_cli(args)
+
+    if args.command == "config":
+        return _config_cli(args)
 
     if args.command == "serve":
         if not getattr(args, "serve_command", None):

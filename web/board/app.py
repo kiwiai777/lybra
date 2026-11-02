@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import html
 import os
 import json
 import re
@@ -681,6 +682,7 @@ def _get_server_location_info() -> dict[str, Any] | None:
 _I18N_TEMPLATES = {
     "zh": {
         "advisor_prompt": """你是 {workspace_label} 工作区的顾问 (Advisor)。
+{user_language_line}
 
 工作区信息：
 - 路径：{workspace_root}
@@ -1428,6 +1430,7 @@ Lybra 服务端位置（AIPOS-286）：
     },
     "en": {
         "advisor_prompt": """You are the Advisor for the {workspace_label}.
+{user_language_line}
 
 Workspace info:
 - Path: {workspace_root}
@@ -2176,6 +2179,17 @@ Important boundaries:
 }
 
 
+def _with_board_default_lang(body: bytes) -> bytes:
+    """AIPOS-F276 item 4: a static page driven by static/i18n.js learns the board default language (used when the browser has not chosen
+    one; storage_key semantics unchanged): data-board-default-lang on <html> = readonly_pages.default_lang (LYBRA_LANG > home config
+    language > locale.default, the same single resolver as the server-rendered pages)."""
+    from tools.aipos_cli.board_pages import pages_declaration
+    from web.board.readonly_pages import default_lang
+
+    code = default_lang(pages_declaration())
+    return body.replace(b"<html ", f'<html data-board-default-lang="{html.escape(code)}" '.encode("utf-8"), 1)
+
+
 def _generate_text(template_key: str, locale: str, **variables: Any) -> str:
     """
     AIPOS-286 FIX-2: Unified server-side i18n generation channel.
@@ -2343,11 +2357,18 @@ def _generate_advisor_prompt_route(params: dict[str, list[str]], *, repo_root: P
     
     GET /api/generate/advisor-prompt?workspace=<index>&locale=<zh|en>
     Returns generated advisor onboarding prompt in the requested language.
+    AIPOS-F276: no / unsupported locale = the board default language (readonly_pages.default_lang: LYBRA_LANG > home config language >
+    locale.default); the prompt carries one user-language line (i18n.user_language_line, in that language).
     """
+    from tools.aipos_cli.board_pages import pages_declaration
+    from tools.aipos_cli.i18n import user_language_line
+    from web.board.readonly_pages import default_lang
+
     operation = "generate_advisor_prompt"
-    locale = _first_param(params, "locale") or "zh"
-    if locale not in ("zh", "en"):
-        locale = "zh"
+    locale_decl = pages_declaration()
+    locale = _first_param(params, "locale") or ""
+    if locale not in locale_decl["locale"]["supported"]:
+        locale = default_lang(locale_decl)
     
     resolved_root = _resolve_workspace_root(params, repo_root or REPO_ROOT, home_root)  # AIPOS-F171: board_config_path 退役不读
     if resolved_root is None:
@@ -2387,6 +2408,7 @@ def _generate_advisor_prompt_route(params: dict[str, list[str]], *, repo_root: P
             example_card_path=str(resolved_root / "5_tasks" / "drafts" / "example-task.md"),
             server_hostname=server_hostname,
             server_ip=server_ip,
+            user_language_line=user_language_line(locale),
         )
     except KeyError as e:
         return {
@@ -3375,6 +3397,8 @@ def make_handler(
 
         def _send_file(self, path: Path) -> None:
             body = path.read_bytes()
+            if path.suffix == ".html" and b'src="/i18n.js"' in body:
+                body = _with_board_default_lang(body)
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", _content_type(path))
             self.send_header("Content-Length", str(len(body)))

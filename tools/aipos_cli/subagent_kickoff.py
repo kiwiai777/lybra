@@ -289,13 +289,16 @@ def _report_code_rule(report_dir: Path) -> str | None:
     return slot_code_rule_text(f"`{report_dir}/`")
 
 
-def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str | None = None) -> dict[str, Any]:
+def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str | None = None, lang: str | None = None) -> dict[str, Any]:
     """一张已认领卡的子 agent 开工稿(唯一实现)。返回 {ok, task_id, role, instance, text, values}。
+    AIPOS-F276 件③: lang = 用户语言(CLI 传 i18n.resolve_language 结果; 缺省 = 同一解析的无参档: LYBRA_LANG > home 配置 > locale.default),
+    头行后渲染「用户语言」一行(i18n.user_language_line)。
     拒 = KickoffRefused(code, 原文); 声明 / 治理根坏 = SchemaLoadError / ValueError / OSError 上抛(fail-closed)。"""
     from tools.aipos_cli.audit_derivation import audit_card_reviewed_id, is_audit_card
     from tools.aipos_cli.charter_render import CharterRefused, charter_pull_command, instance_charter, runall_context
     from tools.aipos_cli.frontmatter import require_frontmatter
     from tools.aipos_cli.hard_rules_extractor import gate_hard_rules
+    from tools.aipos_cli.i18n import resolve_language, user_language_line
     from tools.aipos_cli.next_resolver import (
         card_base_branch, card_branch_name, card_workstation_view, kickoff_refusal, render_report_field_lines, report_refusal_clause,
     )
@@ -476,6 +479,8 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
         "fail_scope_rule": _fail_scope_rule(reviewed_card) if card_role == "auditor" else None,
         # AIPOS-F230 件⑥: 返工只涉交付物 = 可引用上一轮对同一候选的运行证据(next_resolver.audit_evidence_reuse_line 唯一渲染; 不可复用 = 省略)
         "evidence_reuse_rule": _evidence_reuse_rule(gov, task_id, reviewed, reviewed_card) if card_role == "auditor" else None,
+        # AIPOS-F276 件③: 用户语言行(声明 config.schema language.texts.user_language_line; 语言 = i18n.resolve_language 唯一解析)
+        "user_language_line": user_language_line(lang or resolve_language()),
     }
     text = _render(contract, card_role, values)
     return {"ok": True, "task_id": task_id, "role": card_role, "instance": instance, "text": text,
@@ -547,13 +552,14 @@ def run_kickoff_cli(args: Any) -> int:
     import sys
 
     from tools.aipos_cli.aipos_cli import _find_repo_root_for_args
+    from tools.aipos_cli.i18n import resolve_language
     from tools.aipos_cli.next_resolver import KickoffRenderError
     from tools.aipos_cli.verb_contract import declared_exit_code
     from tools.schema_loader import SchemaLoadError
 
     try:
         gov = Path(_find_repo_root_for_args(args))
-        result = render_kickoff_brief(gov, str(args.task_id), role=getattr(args, "role", None))
+        result = render_kickoff_brief(gov, str(args.task_id), role=getattr(args, "role", None), lang=resolve_language(args))
     except KickoffRefused as exc:
         print(f"lybra kickoff: 拒({exc.code}): {exc.message}", file=sys.stderr)
         return declared_exit_code(KICKOFF_VERB, "refused")

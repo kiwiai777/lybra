@@ -788,6 +788,81 @@
           }
         }
       }
+    },
+    "global_config": {
+      "description": "AIPOS-226 home 级运行时配置(机器级, 不进治理真相、无密钥; HOME 下 .lybra/config.json)。读口 workspace_config.load_global_config(global_config_path 按 HOME 定位, 显式 env 无 HOME = 不读真实 home); 写口 workspace_config.set_global_config_value(唯一写路径; set_active_project / i18n.set_language 同调, 保留其余键)。AIPOS-F276: 新键 language(用户语言)= 语言选择第 3 档, 缺键 = 行为不变(落到看板 locale.default)。",
+      "source_file": "~/.lybra/config.json",
+      "schema": {
+        "config_version": {
+          "type": "integer",
+          "required": false,
+          "default": 2,
+          "description": "配置版本(写口首次建文件时写 2)"
+        },
+        "home_root": {
+          "type": "string",
+          "required": false,
+          "default": null,
+          "description": "home 根(workspace_config.resolve_home_root 优先级梯第 3 档)"
+        },
+        "active_project": {
+          "type": "string",
+          "required": false,
+          "default": null,
+          "description": "活动项目名(workspace_config.resolve_active_project 第 4 档; 写口 set_active_project)"
+        },
+        "language": {
+          "type": "string",
+          "required": false,
+          "default": null,
+          "description": "AIPOS-F276: 用户语言(一次设置全局生效; 覆盖首跑——project.json 尚不存在时)。取值域 = verbs.schema board_readonly_pages.locale.supported; 缺省 null = 不声明(落到看板 locale.default, 行为不变)。写口 `lybra config set-language <语言>`(i18n.set_language → workspace_config.set_global_config_value); 读口 i18n.resolve_language(本文件 language 节优先序)"
+        }
+      }
+    }
+  },
+  "language": {
+    "description": "AIPOS-F276(产品化 P4 机制; Owner 10-31 裁定 1「第一批用户中英文都有」, 顾问方案 governance/research/2026-11-02-p4-bilingual-plan.md): 用户语言选择 + 双语 texts 标准的唯一声明。① 选择: 唯一解析 tools/aipos_cli/i18n.resolve_language, 优先序 precedence = 全局 cli_flag(CLI 根解析器一处注册)> 环境变量 env > home 配置 configuration_sources.global_config 的 home_config_key > 缺省(verbs.schema board_readonly_pages.locale.default); 取值域只读 board_readonly_pages.locale.supported(唯一声明, 禁第二份清单); 任一档给了非法值 = 报错给出口(texts.invalid, 不静默回退)。看板: 浏览器已选(locale.param / storage_key)> home 配置 / 环境变量 > locale.default。② 双语 texts 标准: 结构 = {<语言>: {…}} 两层表, 语言集恰为 locale.supported、各语言键集(含嵌套)相等; 唯一读取器 i18n.texts(block, lang, where)(缺键 / 多键 / 语言不齐 = 声明校验失败, 测试期即红, 同看板纪律)。已迁移读取器的块: verbs.lybra_project_workstation_plan.texts、verbs.lybra_owner_inbox.relay.texts、本节 texts; 未迁移块维持单语。③ 开工稿(lybra kickoff)与看板顾问启动稿(/api/generate/advisor-prompt)各一行用户语言(texts.user_language_line, 按用户语言渲染)。本节只声明机制, 不翻译任何既有文案。",
+    "cli_flag": "--lang",
+    "env": "LYBRA_LANG",
+    "home_config_key": "language",
+    "precedence": ["cli_flag", "env", "home_config", "default"],
+    "values_source": "verbs.schema board_readonly_pages.locale.supported",
+    "default_source": "verbs.schema board_readonly_pages.locale.default",
+    "texts": {
+      "zh": {
+        "name_zh": "中文",
+        "name_en": "英文",
+        "user_language_line": "用户语言 = {language_name}({language}); 对用户(Owner)说话一律用该语言",
+        "source_cli_flag": "全局 {flag}",
+        "source_env": "环境变量 {env}",
+        "source_home_config": "home 配置 {path} 的 {key}",
+        "source_default": "缺省(看板 locale.default)",
+        "invalid": "语言取值 {value!r} 不在 {supported} 内(来源: {source}); 出口: {exit}",
+        "exit_cli_flag": "改用 {flag} 取 {supported} 之一",
+        "exit_env": "把 {env} 改为 {supported} 之一或取消该变量",
+        "exit_home_config": "运行 lybra config set-language <{supported} 之一> 改写 {path}",
+        "set_done": "用户语言 {before} → {after}(写入 {path}); 全局生效, 单次可用 {flag} 或 {env} 覆盖",
+        "set_same": "用户语言已是 {after}({path}), 未改写",
+        "show_line": "用户语言 = {language}(来源: {source})",
+        "unset": "未设置"
+      },
+      "en": {
+        "name_zh": "Chinese",
+        "name_en": "English",
+        "user_language_line": "User language = {language_name} ({language}); always speak to the user (Owner) in this language",
+        "source_cli_flag": "global {flag}",
+        "source_env": "environment variable {env}",
+        "source_home_config": "home config {path} key {key}",
+        "source_default": "default (board locale.default)",
+        "invalid": "Language value {value!r} is not one of {supported} (source: {source}); way out: {exit}",
+        "exit_cli_flag": "pass {flag} with one of {supported}",
+        "exit_env": "set {env} to one of {supported} or unset it",
+        "exit_home_config": "run lybra config set-language <one of {supported}> to rewrite {path}",
+        "set_done": "User language {before} -> {after} (written to {path}); applies everywhere, override once with {flag} or {env}",
+        "set_same": "User language is already {after} ({path}); nothing rewritten",
+        "show_line": "User language = {language} (source: {source})",
+        "unset": "not set"
+      }
     }
   },
   "lybra_dir_authority": {
@@ -1315,6 +1390,10 @@
       "LYBRA_HOME_ROOT": {
         "type": "string",
         "description": "home 根(多项目治理根所在; AIPOS-226 优先级梯, workspace_config.resolve_home_root)"
+      },
+      "LYBRA_LANG": {
+        "type": "string",
+        "description": "AIPOS-F276: 用户语言(进程级覆盖)。语言选择唯一解析 i18n.resolve_language 的第 2 档: 全局 --lang > LYBRA_LANG > home 配置 ~/.lybra/config.json language > 看板 locale.default; 取值域 = verbs.schema board_readonly_pages.locale.supported, 非法值 = 报错给出口(不静默回退)。声明见本文件 language 节"
       },
       "LYBRA_MCP_TOKEN": {
         "type": "string",
