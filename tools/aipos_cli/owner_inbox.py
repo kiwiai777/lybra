@@ -140,6 +140,9 @@ def _inbox_declaration() -> dict[str, Any]:
     if missing:
         raise SchemaLoadError(f"verbs.{VERB}.categories / stale.suggest 引用了未声明的选项 {missing}")
     _check_tiers(decl)  # AIPOS-F225 件①: 档位映射守卫(未归档的事由 / 类别 = 加载即拒)
+    overlay = inbox_overlay_problems(decl)  # AIPOS-F277: 译文覆盖层守卫(缺译 / 路径漂移 / 占位不齐 = 加载即拒, 与缺 en 键同一纪律)
+    if overlay:
+        raise SchemaLoadError(f"verbs.{VERB}.translations 不合标准(AIPOS-F277): " + "; ".join(overlay))
     return decl
 
 
