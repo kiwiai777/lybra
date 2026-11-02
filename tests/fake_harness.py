@@ -66,6 +66,12 @@
                不写产物即 exit 0; _once = 同会话续接时(FAKE_PI_RESUMES≥1)同 work(验压缩后同会话续接完成)
     run_length_nocompact / run_length_nocompact_once   AIPOS-F240: 同 run_length 但压缩记录在超限之前(中途自动压缩, 摘要含一行凭据字样),
                超限之后无压缩; _once = 新会话开工稿含「上次运行摘要」时同 work(验无压缩 → 新会话附摘要重拉完成)
+    wrong_base AIPOS-F275 (executor card only): first launch = another lane lands on the product repo main (FAKE_MAIN_REPO) and then
+               work (card branch now behind main = the gate refuses the return BRANCH_WRONG_BASE); a relaunch whose kickoff carries the
+               「返工要点」section = follow it: merge main into the card branch in the worktree, rewrite RETURN commit_sha / tree_hash to
+               the new tip (written to .tmp then renamed); each relaunch kickoff is kept as <卡号>.kickoff.relaunch<k>
+    wrong_base_nofix   AIPOS-F275: first launch as wrong_base; on a relaunch it does NOT merge main (commits another change on the card
+               branch only) and rewrites RETURN to that tip (still behind main = refused again)
   审计卡: 开工提示给出 `- outputs_digest: <值>(` (AIPOS-F197 被审卡只写治理根)= 报告写 verdict + outputs_digest(照抄), 否则写被审 tip
   FAKE_HARNESS_LOG: 目录; 收到的 argv[1](kickoff)按字节原样落 <卡号>.kickoff, cwd 落 <卡号>.cwd(供逐字节比对)
 事件里故意含一行凭据字样、一个未知事件类型、一行非 JSON(验汇总隐去/计数不刷屏)。
@@ -215,6 +221,43 @@ def do_work(task_id: str, kickoff: str, sha: str | None = None) -> None:
                                       f"# RETURN — {task_id}\n\n## 一句话结论\n完成(假 harness)。\n\n## 改动清单\n- {rel}\n"), encoding="utf-8")
         pi_session(report, "fake-exec-model")
     emit({"type": "tool_execution_end", "toolCallId": "t2", "toolName": "write", "isError": False, "result": {"content": []}})
+
+
+RELAUNCH_MARK = "## 返工要点(loop 例行拒自动重拉"
+
+
+def wrong_base_mode(task_id: str, kickoff: str, mode: str) -> None:
+    """AIPOS-F275: 首次 = 他 lane 先合入产品仓 main 再干活(本卡分支落后 main); 带返工要点的重拉 = 按要点在卡工作树合入 main(wrong_base)
+    或只在卡分支再提交一笔不合 main(wrong_base_nofix), 再把 RETURN commit_sha / tree_hash 改为新 tip(先写 .tmp 再改名)。"""
+    if RELAUNCH_MARK not in kickoff:
+        repo = os.environ["FAKE_MAIN_REPO"]
+        n = len([p for p in Path(repo).glob("other_lane_*.txt")]) + 1
+        Path(repo, f"other_lane_{n}.txt").write_text(f"other lane {n}\n", encoding="utf-8")
+        git(repo, "add", f"other_lane_{n}.txt")
+        git(repo, "commit", "-q", "-m", f"OTHER-{n}: merged first")
+        do_work(task_id, kickoff)
+        return
+    log = os.environ.get("FAKE_HARNESS_LOG")
+    if log:
+        k = len(list(Path(log).glob(f"{task_id}.kickoff.relaunch*"))) + 1
+        Path(log, f"{task_id}.kickoff.relaunch{k}").write_bytes(kickoff.encode("utf-8"))
+    worktree = field(kickoff, "工作树路径")
+    if mode == "wrong_base":
+        emit({"type": "tool_execution_start", "toolCallId": "t3", "toolName": "bash", "args": {"command": "git merge main"}})
+        git(worktree, "merge", "--no-edit", "-q", "main")
+    else:
+        rel = f"tests/nofix_{task_id.lower().replace('-', '_')}.txt"  # 车道内(卡面 tests/), 只为换 tip
+        Path(worktree, rel).write_text(f"{time.time()}\n", encoding="utf-8")
+        git(worktree, "add", rel)
+        git(worktree, "commit", "-q", "-m", f"{task_id}: touch without merging main (fake harness)")
+    sha, tree = git(worktree, "rev-parse", "HEAD"), git(worktree, "rev-parse", "HEAD^{tree}")
+    report = Path(field(kickoff, "报告落点"))
+    body = report.read_text(encoding="utf-8").split("---\n", 2)[2]
+    tmp = report.with_name(report.name + ".tmp")
+    tmp.write_text(frontmatter({"commit_sha": sha, "tree_hash": tree, "branch": f"card/{task_id}"},
+                               body + f"\n## 合入基线\n- 按返工要点处理({mode}), 新 tip {sha}\n"), encoding="utf-8")
+    tmp.replace(report)
+    emit({"type": "tool_execution_end", "toolCallId": "t3", "toolName": "write", "isError": False, "result": {"content": []}})
 
 
 def do_validate(task_id: str, kickoff: str) -> None:
@@ -541,6 +584,10 @@ def main() -> int:
         return 0
     if mode == "docs_same_round" and not reviewed_of(task_id):
         docs_same_round_mode(task_id, kickoff)
+        emit({"type": "agent_end", "messages": []})
+        return 0
+    if mode in ("wrong_base", "wrong_base_nofix") and not reviewed_of(task_id):
+        wrong_base_mode(task_id, kickoff, mode)
         emit({"type": "agent_end", "messages": []})
         return 0
     if mode == "docs" and not reviewed_of(task_id):
