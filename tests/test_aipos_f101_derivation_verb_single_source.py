@@ -312,5 +312,7 @@ def test_item5_examples_use_placeholders_not_lybra_identities():
     assert "<实例>" in example and "<信封>" in example and not LYBRA_IDENTITY_RE.search(example)
     shape = gate._get_verb_param_shape("lybra_queue_return_dry_run")
     assert shape["example"]["actor"] == "<实例>" and shape["example"]["owner_policy_ref"] == "<信封>"
-    err = _payload(gate._validate_enroll_code_args({})[1])
+    # AIPOS-F280: 签码校验按动词声明 required_scope 索 scope(只 Owner 类与顾问类), 以顾问 capability 调才到参数校验
+    with gate.request_capability_scope({"role": "advisor", "token_ref": "svc-advisor", "expires_at": "2999-01-01T00:00:00Z"}):
+        err = _payload(gate._validate_enroll_code_args({}, verb_name="lybra_enroll_code_dry_run")[1])
     assert "<实例>" in json.dumps(err, ensure_ascii=False) and not LYBRA_IDENTITY_RE.search(json.dumps(err, ensure_ascii=False))

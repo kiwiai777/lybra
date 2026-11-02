@@ -332,11 +332,16 @@ def test_item2_governance_seat_code_without_instance_refused(tmp_path, monkeypat
     from tools.mcp_server import tools as gate_tools
 
     monkeypatch.setattr(gate_tools, "_repo_root", lambda: gate)
-    _validated, err = gate_tools._validate_enroll_code_args({"role": "advisor", "owner_authorization_ref": "fixture"})
-    payload = err.get("structuredContent", err)
-    _show(f"[件②·门 dry-run] {json.dumps(payload, ensure_ascii=False)[:300]}")
-    assert "INSTANCE_REQUIRED" in json.dumps(payload)
-    validated, err = gate_tools._validate_enroll_code_args({"role": "advisor", "instance": ADV_OTA, "owner_authorization_ref": "fixture"})
+    # AIPOS-F280: 签码按声明 required_scope 索 scope, 且顾问类按声明表只签工位类 —— 签治理席位类码用 Owner capability(被测判据不变)
+    owner_cap = {"role": "owner", "token_ref": "svc-owner", "expires_at": "2999-01-01T00:00:00Z"}
+    with gate_tools.request_capability_scope(owner_cap):
+        _validated, err = gate_tools._validate_enroll_code_args({"role": "advisor", "owner_authorization_ref": "fixture"},
+                                                                verb_name="lybra_enroll_code_dry_run")
+        payload = err.get("structuredContent", err)
+        _show(f"[件②·门 dry-run] {json.dumps(payload, ensure_ascii=False)[:300]}")
+        assert "INSTANCE_REQUIRED" in json.dumps(payload)
+        validated, err = gate_tools._validate_enroll_code_args({"role": "advisor", "instance": ADV_OTA, "owner_authorization_ref": "fixture"},
+                                                               verb_name="lybra_enroll_code_dry_run")
     assert err is None and validated["instance"] == ADV_OTA
 
 

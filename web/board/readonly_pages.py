@@ -1154,7 +1154,7 @@ def _enroll_view(proj: dict[str, Any], *, owner: bool, registry_root: str | Path
     if owner:
         view["targets"] = {row["key"]: enroll_targets(proj["project"], row, decl) for row in proj["rows"]}
         try:
-            view["roles"] = role_choices(proj["governance_root"])
+            view["roles"] = role_choices(proj["governance_root"], decl)
         except RoleRegistryReadError as exc:  # gate registry unreadable: no choices offered (the server refuses the same way)
             view["roles_error"] = str(exc)
     return view

@@ -311,10 +311,79 @@ def test_item4_on_demand_section_listed_not_forced(iso):
         assert word in section, word
 
 
+# 英文第 4 步标题的术语位按术语单一来源 schema/config.schema.json owner_texts.glossary 取词(AIPOS-F281):
+# 测试不写死英文措辞, 术语再改只改 glossary 一处。标题骨架(序号 / 动词 / 角色)仍按字面核。
+GRANT_TERM_ZH = "项目常设授权"
+EN_STEP4_PREFIX = "## Step 4 — Sign the "
+EN_STEP4_SUFFIX = " (Owner)"
+
+
+def _glossary_term(zh: str) -> dict:
+    from tools.schema_loader import code_repo_schema_root, load_schema
+
+    terms = load_schema("config", code_repo_schema_root())["owner_texts"]["glossary"]["terms"]
+    found = [t for t in terms if t.get("zh") == zh]
+    assert len(found) == 1 and found[0].get("en"), f"glossary 未唯一声明术语 {zh!r}: {found}"
+    return found[0]
+
+
+def en_step4_heading_problems(en: str, term: dict) -> list[str]:
+    """英文 QUICKSTART 第 4 步标题判定(空 = 合格)。
+
+    合格 = 恰一行 `## Step 4 — Sign the <术语> (Owner)`, 术语位 = glossary en 值。
+    过渡期容忍(AIPOS-F279 合入前): 术语位用该条 avoid 词(旧译)且全文其余行仍有同一 avoid 词
+    = 文档整体尚未按 glossary 迁移, 标题与正文同旧, 不单独判红; 一旦正文其余行已清掉该旧译(F279 合入即如此),
+    标题仍用旧译 = 判红(自然收紧, 无需再改本测试)。
+    """
+    lines = en.splitlines()
+    heads = [i for i, line in enumerate(lines) if line.startswith(EN_STEP4_PREFIX)]
+    if len(heads) != 1:
+        return [f"应恰有一行以 {EN_STEP4_PREFIX!r} 开头, 实有 {len(heads)} 行"]
+    head = lines[heads[0]]
+    if not head.endswith(EN_STEP4_SUFFIX):
+        return [f"第 4 步标题须以 {EN_STEP4_SUFFIX!r} 结尾: {head!r}"]
+    slot = head[len(EN_STEP4_PREFIX):-len(EN_STEP4_SUFFIX)]
+    if slot == term["en"]:
+        return []
+    legacy = [bad for bad in term.get("avoid") or [] if bad.lower() in slot.lower()]
+    if not legacy:
+        return [f"第 4 步标题术语位 {slot!r} 不是 glossary en 值 {term['en']!r}"]
+    rest = "\n".join(line for i, line in enumerate(lines) if i != heads[0]).lower()
+    if any(bad.lower() in rest for bad in legacy):
+        return []
+    return [f"第 4 步标题术语位 {slot!r} 用了 glossary avoid 词 {legacy}(正文其余行已迁移), 应为 {term['en']!r}"]
+
+
 def test_accept4_quickstart_mismatch_notes_removed():
     en = (REPO_ROOT / "QUICKSTART.md").read_text(encoding="utf-8")
     zh = (REPO_ROOT / "QUICKSTART.zh-CN.md").read_text(encoding="utf-8")
     assert "Note on the guide" not in en and "still being aligned" not in en
     assert "关于向导的说明" not in zh and "仍在向最新授权流对齐" not in zh
-    # 其余正文不改: 两份仍按现行流程(常设授权 / 执行分工)
-    assert "## Step 4 — Sign the project standing authorization (Owner)" in en and "## 第 4 步 —— 签项目常设授权(Owner)" in zh
+    # 其余正文不改: 两份仍按现行流程(常设授权 / 执行分工); 英文术语位按 glossary 取词(AIPOS-F281)
+    term = _glossary_term(GRANT_TERM_ZH)
+    problems = en_step4_heading_problems(en, term)
+    _show(f"[验收④·英文第 4 步标题] glossary en={term['en']!r} avoid={term.get('avoid')} 判定={problems or '合格'}")
+    assert not problems, problems
+    assert "## 第 4 步 —— 签项目常设授权(Owner)" in zh
+
+
+def test_accept4_en_step4_heading_judgement_follows_glossary():
+    """判定随 glossary 走: 新词合格; 旧译仅在全文未迁移时容忍; 正文已迁移而标题仍旧译 / 非术语词 / 骨架缺失 = 判红。"""
+    term = _glossary_term(GRANT_TERM_ZH)
+    assert term.get("avoid"), "glossary 该条未声明 avoid, 本判定无旧译可核"
+    bad = term["avoid"][0]
+    new_head = f"{EN_STEP4_PREFIX}{term['en']}{EN_STEP4_SUFFIX}"
+    old_head = f"{EN_STEP4_PREFIX}project {bad}{EN_STEP4_SUFFIX}"
+    cases = {
+        "新词 + 正文已迁移": (f"one {term['en']}\n{new_head}\nbody", True),
+        "新词 + 正文仍有旧译": (f"one project {bad}\n{new_head}\nbody", True),
+        "旧译 + 正文仍有旧译(过渡期)": (f"one project {bad}\n{old_head}\nbody", True),
+        "旧译 + 正文已迁移": (f"one {term['en']}\n{old_head}\nbody", False),
+        "非术语词": (f"{EN_STEP4_PREFIX}project permit{EN_STEP4_SUFFIX}", False),
+        "缺 (Owner)": (f"{EN_STEP4_PREFIX}{term['en']}", False),
+        "无第 4 步": ("## Step 3 — x", False),
+        "两行第 4 步": (f"{new_head}\n{new_head}", False),
+    }
+    got = {name: not en_step4_heading_problems(text, term) for name, (text, _) in cases.items()}
+    _show("[F281·判定表] " + json.dumps(got, ensure_ascii=False))
+    assert got == {name: ok for name, (_, ok) in cases.items()}

@@ -768,5 +768,15 @@
       "owner_role_codes": "签 Owner 类角色(project_scope=cross_project)的注册码只许 Owner 类凭据发起(非 Owner 自签 Owner 码 = 绕过本放宽的提权路径, 拒)",
       "enroll_code_scope_check": "签码动词显式 governance_root 也经同一执法点核凭据项目域(原只核注册不核项目域: 项目域凭据可为别的已注册项目签码); 非 Owner 凭据为凭据外项目签码 = PROJECT_SCOPE_DENIED, 无 projects 的凭据不受影响"
     }
+  },
+  "enroll_code_issuance": {
+    "description": "AIPOS-F280 件①: 签注册码的角色权限——哪类凭据可签哪些角色类的码(唯一声明处)。两层同在门侧判定: ① 动词 scope = verbs.schema verbs.lybra_enroll_code_dry_run / lybra_enroll_code_confirm / lybra_roles_enroll_code 的 required_scope(既有作用域词表 owner_decision_record: 只 Owner 类与顾问类持有; 只读 copilot / 执行 / 审计 / 规划 / 派审凭据 = SCOPE_DENIED), 经门 scope 唯一读取口 _verb_scope_allowed 执法(与其他门动词同一处); ② 本表: 签发凭据的角色类(capability role_class 优先, 否则角色名; 自定义角色按其内建类)→ 可签的目标角色类; 目标角色(内建或自定义)经 custom_roles.resolve_role_to_class 解析到内建类后判。表外签发方 = 不可签(fail-closed)。读取口唯一: tools/aipos_cli/enrollment.issuable_role_classes / enroll_issuer_refusal(门三动词与看板 role_choices 同读, 前后端同源)。拒因码 reject_code; 拒因与出口文案 = config.schema owner_texts.enroll_issuance(中英双语)。缺省: 顾问类只能签工位类(执行 / 审计), Owner 类可签全部; 改本表即改门侧判定, 零代码改动。与 project_scope_semantics.owner_explicit_target.owner_role_codes(非 Owner 签 Owner 类码 = OWNER_CODE_REQUIRES_OWNER)并存: 该条先判、拒因更具体。",
+    "issuers": {
+      "owner": {"all_classes": true, "class_groups": [], "classes": []},
+      "advisor": {"all_classes": false, "class_groups": ["workstation"], "classes": []}
+    },
+    "issuer_shape": "issuers.<签发方内建角色类> = {all_classes: 布尔(true = roles[] 全部内建类), class_groups: [class_groups.values 内分组], classes: [内建角色类]}; 可签集合 = all_classes ? 全部 : class_groups 各组内建类 ∪ classes。只追加签发方或放宽集合须经卡。",
+    "reject_code": "ENROLL_CODE_ROLE_NOT_ISSUABLE",
+    "required_scope": "owner_decision_record"
   }
 }

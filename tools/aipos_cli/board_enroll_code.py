@@ -10,7 +10,8 @@
   two_phase_shell_factory.load_role_token, 角色 = board_owner_envelopes.token_role)。
 - 实例名规则 = 既有校验: enrollment.governance_seat_instance_refusal(治理席位类必填)+ roles.schema executor_modes(子 agent 执行者
   requires_instance, 判据 naming_profile.parse_instance_name); 门地址 = enrollment.resolve_gate_url_default(CLI / 门同一缺省推导)。
-- 角色清单 = roles.schema 注册表(class_groups workstation / governance_seat)+ custom_roles.load_custom_roles; 建议实例名 =
+- 角色清单 = 门侧签码声明表(roles.schema enroll_code_issuance, AIPOS-F280)对签发凭据的可签集合 ∩ 声明 board.role_groups 分组的注册表角色
+  + custom_roles.load_custom_roles; 建议实例名 =
   naming_profile.default_instance_name; 待兑换码 = enrollment.list_enrollment_codes(enroll-list 同一实现, 不含原文)。
 - 交给对方的一句话 = 门应答 paste_text(onboarding.enroll_delivery 同一渲染); 作废出口 = 声明 exits(enroll-revoke / enroll-void)。
 码原文只进确认应答(code.self_contained_code / paste_text); 审计日志只记角色 / 实例 / 时效 / 到期 / 码编号 / 码指纹。任何项目 / 角色同一组声明,
@@ -53,6 +54,9 @@ def board_declaration() -> dict[str, Any]:
     for code, spec in (decl["errors"] or {}).items():
         if not isinstance(spec, dict) or not isinstance(spec.get("status"), int) or not str(spec.get("message") or "").strip():
             raise SchemaLoadError(f"{where}.errors.{code} 须有 int status 与非空 message")
+    groups = decl.get("role_groups")  # AIPOS-F280: 接入页列的角色分组(原写死在 role_choices)
+    if not isinstance(groups, list) or not groups or not all(isinstance(g, str) and g for g in groups):
+        raise SchemaLoadError(f"{where}.role_groups 须为非空分组名列表(roles.schema class_groups.values)")
     return decl
 
 
@@ -60,13 +64,20 @@ def board_declaration() -> dict[str, Any]:
 # 角色清单 / 建议实例名 / 清单行的签码目标 / 待兑换码(只读视图; 页面与回调同读)
 # ---------------------------------------------------------------------------
 
-def role_choices(governance_root: str | Path) -> list[str]:
-    """本项目可签码的角色: roles.schema 注册表中属 workstation / governance_seat 分组的内建角色(注册表顺序)+ 门注册表自定义角色
-    (custom_roles.load_custom_roles, 其类同属这两组)。门注册表读不出 = RoleRegistryReadError 上抛(调用方点名, 不当「无自定义角色」)。"""
+def role_choices(governance_root: str | Path, decl: dict[str, Any] | None = None) -> list[str]:
+    """本项目可签码的角色(AIPOS-F280 件①: 与门侧同读一份声明): 角色类 ∈ 门侧签码声明表(enrollment.issuable_role_classes, roles.schema
+    enroll_code_issuance)对看板签发凭据角色类(board_owner_envelopes.token_role)的可签集合 ∩ 本页声明的接入角色分组(board.role_groups)
+    的内建角色(注册表顺序)+ 门注册表自定义角色(custom_roles.load_custom_roles, 其类同在该交集)。门注册表读不出 = RoleRegistryReadError
+    上抛(调用方点名, 不当「无自定义角色」)。签发凭据角色类不在声明表 = 空清单(门同样拒)。"""
     from tools.aipos_cli.custom_roles import load_custom_roles, resolve_role_to_class, role_classes_in_group
+    from tools.aipos_cli.enrollment import issuable_role_classes
+    from tools.aipos_cli.envelope_board import board_envelopes_declaration
     from tools.schema_loader import get_all_role_names
 
-    classes = set(role_classes_in_group("workstation")) | set(role_classes_in_group("governance_seat"))
+    d = decl or board_declaration()
+    signer_class = resolve_role_to_class(str(board_envelopes_declaration()["token_role"]))
+    issuable = set(issuable_role_classes(signer_class or "") or [])
+    classes = {cls for group in d["role_groups"] for cls in role_classes_in_group(group)} & issuable
     out = [r for r in get_all_role_names() if resolve_role_to_class(r, governance_root) in classes]
     for name, spec in sorted(load_custom_roles(governance_root).items()):
         if name not in out and str((spec or {}).get("class") or "") in classes:
@@ -289,7 +300,7 @@ def handle_enroll_code_request(
             raise MintRequestError("PARAMS_INVALID", detail="role 须为字符串, instance 须为字符串或留空")
         role, instance = raw_role.strip(), (raw_instance or "").strip() or None
         try:
-            choices = role_choices(root)
+            choices = role_choices(root, board)
         except RoleRegistryReadError as exc:  # 门注册表读不出 = 判不了自定义角色: 拒(不当「无此角色」)
             raise MintRequestError("PARAMS_INVALID", detail=f"门注册表读不出({exc})") from exc
         if role not in choices:
