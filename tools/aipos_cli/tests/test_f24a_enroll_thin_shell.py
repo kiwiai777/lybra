@@ -53,6 +53,10 @@ def _make_gate_root(tmp: str) -> Path:
     return root
 
 
+#: AIPOS-F280: 签码三动词按声明 required_scope 索 owner_decision_record(只 Owner 类与顾问类持有), 直调出码的用例以顾问 capability 调
+ADVISOR_CAPABILITY = {"role": "advisor", "token_ref": "svc-advisor", "expires_at": "2999-01-01T00:00:00Z"}
+
+
 class TestUnknownParameterRejection(unittest.TestCase):
     """大项B/F24 证据②: 未知参数必报错, 禁静默吞。"""
 
@@ -147,7 +151,7 @@ class TestGovernanceRootRegistry(unittest.TestCase):
             root = _make_gate_root(tmp)
             with patch.object(mcp, "_repo_root", return_value=root), \
                  patch.dict(os.environ, {"LYBRA_HOME_ROOT": str(home)}), \
-                 patch.object(mcp, "_reload_token_registry", lambda: None):
+                 patch.object(mcp, "_reload_token_registry", lambda: None), mcp.request_capability_scope(ADVISOR_CAPABILITY):
                 dry = _payload(mcp.lybra_enroll_code_dry_run({
                     "role": "executor", "owner_authorization_ref": "x",
                     "governance_root": "proj-a",
@@ -173,7 +177,7 @@ class TestGovernanceRootRegistry(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="f24a_dflt_") as tmp:
             root = _make_gate_root(tmp)
             with patch.object(mcp, "_repo_root", return_value=root), \
-                 patch.object(mcp, "_reload_token_registry", lambda: None):
+                 patch.object(mcp, "_reload_token_registry", lambda: None), mcp.request_capability_scope(ADVISOR_CAPABILITY):
                 dry = _payload(mcp.lybra_enroll_code_dry_run({
                     "role": "executor", "owner_authorization_ref": "x",
                 }))

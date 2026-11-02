@@ -769,7 +769,8 @@ def generate_onboarding_guide(
     # 授权先于接入: 工位类接入预检(workstation_wiring.enroll_envelope_requirement → select_envelope, 项目授权优先)须有覆盖它的授权,
     # 顾问 role 的 owner_policy_ref 亦由此推导; 之后各 enroll 命令的 --owner-authorization-ref 一律 = 本授权 ID
     pq = _shell_quote(project_name)
-    grant_parts = ["lybra", "project", "grant", "sign", pq, "--home-root", hq]
+    # AIPOS-F280 件②: --project = 门调用的显式目标项目(Owner 多项目无缺省 / "*" 凭据也能签; 与看板 F274 同一字段)
+    grant_parts = ["lybra", "project", "grant", "sign", pq, "--home-root", hq, "--project", pq]
     for lane in grant["lanes"]:
         grant_parts += ["--grant-lane", lane if lane.startswith("<") else _shell_quote(lane)]
     for mode in grant["task_modes"]:
@@ -804,6 +805,7 @@ def generate_onboarding_guide(
         "check": _t("step3.check", auth=auth_ref, pq=pq, hq=hq),
         "on_fail": {
             "PROJECT_SCOPE_DENIED / OWNER_CONFIRMATION_REQUIRED": _t("step3.fail_scope"),
+            "PROJECT_AMBIGUOUS": _t("step3.fail_ambiguous", pq=pq),  # AIPOS-F280 件②
             _t("step3.fail_no_file_key"): _t("step3.fail_no_file"),
             "gate call failed": _t("step3.fail_gate"),
             _t("step3.fail_refused_key"): _t("step3.fail_refused"),

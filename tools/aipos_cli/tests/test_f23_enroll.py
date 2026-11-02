@@ -392,6 +392,10 @@ class TestRoleFileMergeAndGuards(unittest.TestCase):
             self.assertTrue(enroll_result["ok"])
 
 
+#: AIPOS-F280: 签码三动词按声明 required_scope 索 owner_decision_record(只 Owner 类与顾问类持有), 直调动词的用例以顾问 capability 调
+ADVISOR_CAPABILITY = {"role": "advisor", "token_ref": "svc-advisor", "expires_at": "2999-01-01T00:00:00Z"}
+
+
 class TestMcpVerbs(unittest.TestCase):
     """验收①: 顾问经 MCP 两阶段发码; ⑤: ok=False 带原因与下一步。"""
 
@@ -403,7 +407,7 @@ class TestMcpVerbs(unittest.TestCase):
     def test_two_phase_dry_run_confirm(self):
         with tempfile.TemporaryDirectory(prefix="f23_mcp_") as tmp:
             root, mcp = self._gate_ctx(tmp)
-            with patch.object(mcp, "_repo_root", return_value=root):
+            with patch.object(mcp, "_repo_root", return_value=root), mcp.request_capability_scope(ADVISOR_CAPABILITY):
                 # 缺 role → F9 teaching error(带 example)
                 err = mcp.lybra_enroll_code_dry_run({"owner_authorization_ref": "x"})
                 self.assertFalse(err["structuredContent"]["ok"] if "structuredContent" in err else err.get("ok", True))
@@ -485,7 +489,7 @@ class TestMcpVerbs(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="f23_legacy_") as tmp:
             root, mcp = self._gate_ctx(tmp)
             with patch.object(mcp, "_repo_root", return_value=root), \
-                 patch.object(mcp, "_reload_token_registry", lambda: None):
+                 patch.object(mcp, "_reload_token_registry", lambda: None), mcp.request_capability_scope(ADVISOR_CAPABILITY):
                 resp = mcp.lybra_roles_enroll_code({
                     "role": "executor", "owner_authorization_ref": "t",
                 })

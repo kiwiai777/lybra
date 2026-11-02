@@ -2139,6 +2139,81 @@ def governance_seat_instance_refusal(role: str, instance: str | None, project_ro
             "不带实例的凭据按角色匹配会把同角色既有凭据置 retired。出口: 重发码并给 --instance")
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F280 件①: 签码角色权限(roles.schema enroll_code_issuance)——唯一读取口(门三签码动词与看板 role_choices 同读)
+# ---------------------------------------------------------------------------
+
+def enroll_issuance_declaration() -> dict[str, Any]:
+    """roles.schema enroll_code_issuance(fail-closed): issuers 非空, 每项 {all_classes: 布尔, class_groups: [已声明分组], classes: [内建类]},
+    签发方键与 classes 均须是内建角色类; reject_code / required_scope 非空, required_scope 须与三签码动词声明的 required_scope 一致。"""
+    from tools.aipos_cli.custom_roles import _builtin_role_names, role_classes_in_group
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    where = "roles.schema.json enroll_code_issuance"
+    decl = load_schema("roles").get("enroll_code_issuance")
+    if not isinstance(decl, dict) or not isinstance(decl.get("issuers"), dict) or not decl["issuers"]:
+        raise SchemaLoadError(f"{where} 未声明或 issuers 为空(AIPOS-F280)")
+    if not str(decl.get("reject_code") or "").strip() or not str(decl.get("required_scope") or "").strip():
+        raise SchemaLoadError(f"{where} 缺 reject_code / required_scope")
+    builtin = _builtin_role_names()
+    for issuer, spec in decl["issuers"].items():
+        if issuer not in builtin or not isinstance(spec, dict) or not isinstance(spec.get("all_classes"), bool) \
+                or not isinstance(spec.get("class_groups"), list) or not isinstance(spec.get("classes"), list):
+            raise SchemaLoadError(f"{where}.issuers.{issuer} 须为内建角色类且形如 {{all_classes: 布尔, class_groups: [], classes: []}}")
+        for group in spec["class_groups"]:
+            role_classes_in_group(str(group))  # 未声明分组 = SchemaLoadError
+        unknown = sorted(str(c) for c in spec["classes"] if str(c) not in builtin)
+        if unknown:
+            raise SchemaLoadError(f"{where}.issuers.{issuer}.classes 含非内建角色类 {unknown}")
+    verbs = load_schema("verbs", code_repo_schema_root()).get("verbs") or {}
+    drift = sorted(v for v in ENROLL_CODE_VERBS if (verbs.get(v) or {}).get("required_scope") != decl["required_scope"])
+    if drift:
+        raise SchemaLoadError(f"{where}.required_scope={decl['required_scope']!r} 与 verbs.schema {drift} 的 required_scope 不一致")
+    return decl
+
+
+#: 签码三动词(verbs.schema; 声明 required_scope 须一致, enroll_issuance_declaration 核)
+ENROLL_CODE_VERBS = ("lybra_enroll_code_dry_run", "lybra_enroll_code_confirm", "lybra_roles_enroll_code")
+
+
+def issuer_role_class(capability: dict[str, Any]) -> str:
+    """签发凭据的角色类: capability role_class 优先, 否则角色名(与 project_resolution.role_is_cross_project 同一取法)。"""
+    return str(capability.get("role_class") or capability.get("role") or "").strip()
+
+
+def issuable_role_classes(issuer_class: str) -> list[str] | None:
+    """该签发方角色类可签的内建角色类(注册表顺序); 签发方不在声明表 = None(不可签任何码)。"""
+    from tools.aipos_cli.custom_roles import _declared_class_groups, role_classes_in_group
+
+    spec = enroll_issuance_declaration()["issuers"].get(str(issuer_class or "").strip())
+    if spec is None:
+        return None
+    order = list(_declared_class_groups())
+    if spec["all_classes"]:
+        return order
+    wanted = {cls for group in spec["class_groups"] for cls in role_classes_in_group(str(group))} | {str(c) for c in spec["classes"]}
+    return [cls for cls in order if cls in wanted]
+
+
+def enroll_issuer_refusal(capability: dict[str, Any], role: str, role_class: str) -> dict[str, Any] | None:
+    """门侧签码角色权限判定(声明表 enroll_code_issuance): 签发凭据角色类可签 role_class = None(放行); 否则 {code, message, next}
+    (文案 = config.schema owner_texts.enroll_issuance 双语渲染值, 出声点按用户语言 pick)。"""
+    from tools.aipos_cli.i18n import join, owner_text
+
+    decl = enroll_issuance_declaration()
+    issuer = issuer_role_class(capability) or "-"
+    allowed = issuable_role_classes(issuer)
+    if allowed is not None and role_class in allowed:
+        return None
+    if allowed is None:
+        message = owner_text("enroll_issuance", "no_issuer", issuer=issuer)
+    else:
+        listing = join(", ", allowed) if allowed else owner_text("enroll_issuance", "none_allowed")
+        message = owner_text("enroll_issuance", "not_issuable", issuer=issuer, role=role, role_class=role_class, allowed=listing)
+    return {"code": str(decl["reject_code"]), "message": message,
+            "next": owner_text("enroll_issuance", "not_issuable_next", issuer=issuer), "issuer": issuer, "allowed": allowed}
+
+
 def create_enrollment_code(
     workspace_root: str | Path,
     *,

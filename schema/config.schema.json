@@ -2286,6 +2286,29 @@
         }
       }
     },
+    "enroll_issuance": {
+      "description": "AIPOS-F280: 签码角色权限(roles.schema enroll_code_issuance)门侧拒因与出口, 以及凭据缺显式目标项目(多项目无缺省 / \"*\")时门的 PROJECT_AMBIGUOUS 出口与 CLI --project 的本机拒因。门侧拒因按门进程的用户语言(i18n.resolve_language)出声; 拒因码(ENROLL_CODE_ROLE_NOT_ISSUABLE / PROJECT_AMBIGUOUS)、命令名、参数名不译。",
+      "texts": {
+        "zh": {
+          "not_issuable": "{issuer} 类凭据不能签角色 {role}(类 {role_class})的注册码; 按声明 {issuer} 类可签: {allowed}",
+          "not_issuable_next": "请 Owner 用 Owner 凭据签此码, 或只签 {issuer} 类可签的角色(可签范围声明 = roles.schema enroll_code_issuance)",
+          "no_issuer": "凭据角色 {issuer} 不在签码声明表内(只 Owner 类与顾问类可签码), 不能签任何角色的注册码",
+          "none_allowed": "(无)",
+          "wildcard_target": "PROJECT_AMBIGUOUS: 凭据项目域 {projects} 里的 \"{wildcard}\" 不是项目名, 门不按它推断目标项目",
+          "target_exit": "出口: CLI 加 --project <项目>(lybra envelope mint --confirm / lybra project grant sign --confirm / lybra roles enroll-code); 直接调门带 project 参数; 或铸凭据时绑定 default_project",
+          "cli_project_conflict": "--project {project} 与项目名参数 {name} 不一致; 只给一个, 或两者给同一项目(未调门, 零写入)"
+        },
+        "en": {
+          "not_issuable": "A credential of class {issuer} cannot issue an enrollment code for role {role} (class {role_class}); per the declaration class {issuer} may issue: {allowed}",
+          "not_issuable_next": "Ask the Owner to issue this code with the Owner credential, or issue only roles that class {issuer} may issue (the declaration is roles.schema enroll_code_issuance)",
+          "no_issuer": "Credential role {issuer} is not in the enrollment code issuance declaration (only Owner-class and advisor-class credentials may issue codes); it cannot issue a code for any role",
+          "none_allowed": "(none)",
+          "wildcard_target": "PROJECT_AMBIGUOUS: \"{wildcard}\" in the credential's projects {projects} is not a project name; the gate does not infer a target project from it",
+          "target_exit": "exit: CLI add --project <project> (lybra envelope mint --confirm / lybra project grant sign --confirm / lybra roles enroll-code); calling the gate directly, pass the project argument; or bind default_project when minting the credential",
+          "cli_project_conflict": "--project {project} and the project name argument {name} differ; give only one, or the same project for both (gate not called, zero writes)"
+        }
+      }
+    },
     "project_new": {
       "description": "`lybra project new` 的 Owner 可见输出(aipos_cli 项目族 new 分支)与新项目首份阶段快照 / 决策日志桩的文案(workspace_config.scaffold_project; 语言 = 建项目时的用户语言)",
       "texts": {
@@ -2426,6 +2449,7 @@
             "purpose": "Owner 用门的中央凭据库({conn}; 来源: {source})里的 Owner 凭据经门 owner_decision_record 签项目常设授权 {auth}: 车道 {lanes} × 任务类型 {modes}(审计卡按被审卡判定) × 驱动方 {drivers}; 主机 {hosts}(本向导接入的各实例名主机段); 拉起 {launch}(授权 lybra loop 在工位自动拉起 pi; Owner 删去 --launch-harness = 只手工 /go); 总卡数 + 到期双上限。授权先于接入: 工位接入预检须有覆盖它的生效授权(无则拒, 不签码 / 不改凭据); 之后 lybra loop 自动找到本授权, 不再逐卡签信封",
             "check": "预演输出 'lybra project grant sign 预演(零写入 …): verdict=PASS' 与授权修订全文; --confirm 输出 'signed {auth}' 与 'wrote …/{auth}/r<修订号>.md'(以门生记录为准); 之后 lybra project grant show {pq} --home-root {hq} 列出该授权, 状态 active",
             "fail_scope": "签授权须 Owner 凭据(owner_confirm); --connection-json 指向门的中央凭据库",
+            "fail_ambiguous": "命令已带 --project {pq}(门的显式目标项目); 仍报 PROJECT_AMBIGUOUS = 核对 --project 是 home 根内已注册的项目名, 且与项目名参数一致",
             "fail_no_file_key": "凭据文件不存在",
             "fail_no_file": "--connection-json 须指向门 serve 读取的、持 Owner 凭据的 connection.json; 推不出时给 --owner-connection-json 重新生成本向导",
             "fail_gate": "门未运行或地址不通: lybra serve status; 此为门侧故障, 报 Owner",
@@ -2772,6 +2796,7 @@
             "purpose": "With the Owner credential in the gate's central credential store ({conn}; source: {source}) the Owner signs the project standing grant {auth} through the gate's owner_decision_record: lanes {lanes} × task modes {modes} (an audit card is judged by the card it audits) × drivers {drivers}; hosts {hosts} (the host segments of the instance names this guide enrolls); launch {launch} (authorizes lybra loop to launch pi at the workstations automatically; the Owner removing --launch-harness = manual /go only); hard bounds: total cards + expiry. Grant before enrollment: the workstation enrollment pre-check needs an active grant covering it (otherwise refused, no code issued / no credential changed); afterwards lybra loop finds this grant by itself, no more per-card envelopes",
             "check": "The preview outputs 'lybra project grant sign … verdict=PASS' and the full authorization revision; --confirm outputs 'signed {auth}' and 'wrote …/{auth}/r<revision>.md' (the gate-written record is authoritative); then lybra project grant show {pq} --home-root {hq} lists the grant with state active",
             "fail_scope": "Signing a grant needs the Owner credential (owner_confirm); point --connection-json at the gate's central credential store",
+            "fail_ambiguous": "The command already carries --project {pq} (the gate's explicit target project); if PROJECT_AMBIGUOUS still appears, check that --project is a project registered under the home root and matches the project name argument",
             "fail_no_file_key": "Credential file not found",
             "fail_no_file": "--connection-json must point at the connection.json the gate serve reads that holds the Owner credential; when it cannot be derived, regenerate this guide with --owner-connection-json",
             "fail_gate": "The gate is not running or the address is unreachable: lybra serve status; this is a gate-side fault, report it to the Owner",

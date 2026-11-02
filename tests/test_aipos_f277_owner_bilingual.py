@@ -32,12 +32,13 @@ from test_aipos_f201_owner_relay import LYBRA_ADV, _item, rig  # noqa: E402,F401
 CJK = re.compile(r"[　-〿㐀-䶿一-鿿＀-￯]+")
 PROJECT = "demo"
 #: 改前(main a1d7fafc4ff4)同一场景缺省语言输出, 归一化后的 sha256(F277_RECORD=1 跑本文件 test_zh_output_unchanged 打印)
+# AIPOS-F280 件②: 向导第 3 步 grant sign 加 --project <项目>(门的显式目标项目)与 PROJECT_AMBIGUOUS 出口行, guide / guide_skip / guide_after_new 三份摘要随之更新(其余逐字不变)
 ZH_DIGESTS = {
     "setup_check": "074cb9af4537dd71b6a61ec83dddd776dc543f130b56490200d19ebf5a72aff4",
-    "guide": "bfeafacefefbbe1abb25de8ceba75616f20b4c7a1a739649680440aefcdba427",
-    "guide_skip": "4038e49aa2b0e38370bc488774794b1377d2fccceec7bb4b007f0ee34815acf4",
+    "guide": "1336e1fb5fc3e92559abe5f6f86f53cc2c30da675f3af4c361b17196e56d96c0",
+    "guide_skip": "d6f697a40499252446047060151e152102452ce380550e1b9dd20881987aba8e",
     "project_new": "49def277f1cc2fb99cdaa93bdc4874a8e8a991e603a54ff682a8e4eb07e76d79",
-    "guide_after_new": "b884218930c2d72f9d113f6a54ab726cdc91c710348d957375760cb32c2b232d",
+    "guide_after_new": "066611258a5aa87dafb7677b5be75f139a8083a779f012d300ef070b5955dd34",
     "onboarding_check": "8f292a54605a675404291be970436a75ba6bfd07eeaae2199202a7eeff6797a1",
     "serve_install": "ae07452642661b7a10b456b5a4953d4a120c3ccb80e39b05a77842e3e945e899",
     "serve_uninstall": "5bfe047723acb8fb7fe96915db3e37af397a8132c8fbbf4957c705411dc24792",
