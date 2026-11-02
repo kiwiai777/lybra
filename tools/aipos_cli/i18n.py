@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import os
+import re as _re
 import sys
 from pathlib import Path
 from typing import Any
@@ -41,10 +42,16 @@ class LanguageError(ValueError):
 # ---------------------------------------------------------------------------
 
 def locale_declaration() -> dict[str, Any]:
-    """语言取值域与缺省的唯一声明 = verbs.schema board_readonly_pages.locale(经 board_pages.pages_declaration, fail-closed)。"""
-    from tools.aipos_cli.board_pages import pages_declaration
+    """语言取值域与缺省的唯一声明 = verbs.schema board_readonly_pages.locale(fail-closed: supported 为非空列表、default ∈ supported, 与
+    board_pages.pages_declaration 同一核法)。AIPOS-F277: 直接经 schema_loader 读该节, 不再导入 board_pages——workspace_config(finalize 合并后
+    预载闭包内, 静态导入扫描)经 i18n 取 home 根来源文案, 经 board_pages 会把看板 / TUI 模块牵进闭包; 两口同值由 F277 夹具核。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
 
-    return pages_declaration()["locale"]
+    locale = (load_schema("verbs", code_repo_schema_root()).get("board_readonly_pages") or {}).get("locale")
+    if (not isinstance(locale, dict) or not isinstance(locale.get("supported"), list) or not locale["supported"]
+            or locale.get("default") not in locale["supported"]):
+        raise SchemaLoadError("verbs.schema.json board_readonly_pages.locale(supported 非空 / default ∈ supported)未声明齐")
+    return locale
 
 
 def supported_languages() -> list[str]:
@@ -294,3 +301,240 @@ def user_language_line(lang: str) -> str:
     code = validate_language(lang, source="argument")
     t = language_declaration()["texts"][code]
     return _fmt(t["user_language_line"], language=code, language_name=language_name(code))
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F277: Owner 面双语——模板填充 / 双语渲染值 / 译文覆盖层
+# ---------------------------------------------------------------------------
+
+#: 模板占位 = {标识符}; 字面的「{标识符}」写成 {{标识符}}; 其他花括号(如「{default, items}」)原样保留, 不必转义
+_PLACEHOLDER = _re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}|\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def placeholders(template: str) -> set[str]:
+    """模板里的占位名集合(字面转义 {{名}} 不计)。双语块各语言同一键的占位集须相等(守卫 placeholder_problems)。"""
+    return {m.group(2) for m in _PLACEHOLDER.finditer(str(template)) if m.group(2)}
+
+
+def fill(template: Any, values: dict[str, Any] | None = None, *, where: str, lang: str | None = None) -> str:
+    """Owner 面文案模板填充(唯一实现): {名} 换成 values[名](双语渲染值 Localized 按 lang 取那种语言), {{名}} 还原为字面 {名},
+    其余花括号原样。占位无值 = SchemaLoadError(声明与实现不符, 不猜)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    vals = values or {}
+
+    def sub(m: _re.Match[str]) -> str:
+        if m.group(1):
+            return "{" + m.group(1) + "}"
+        name = m.group(2)
+        if name not in vals:
+            raise SchemaLoadError(f"{where} 模板占位 {{{name}}} 无值")
+        return pick(vals[name], lang)
+
+    return _PLACEHOLDER.sub(sub, str(template))
+
+
+class Localized(str):
+    """双语渲染值: str 本身 = 缺省语言(看板 locale.default)那份——事项 ID / 哈希 / JSON / 看板照旧用它, 行为不变;
+    by_lang 另带各语言渲染, 出声点按用户语言经 pick 取。拼接(+ / f-string / join)得普通 str(只剩缺省语言), 双语只经 fill / localize 传递。"""
+
+    by_lang: dict[str, str]
+    default: str
+
+    def __new__(cls, by_lang: dict[str, str], default: str | None = None) -> "Localized":
+        code = default or default_language()
+        obj = super().__new__(cls, by_lang[code])
+        obj.by_lang = dict(by_lang)
+        obj.default = code
+        return obj
+
+    def __reduce__(self) -> tuple[Any, ...]:  # pickle / deepcopy(task_loader.truth_cached 冻存)保留各语言
+        return (Localized, (dict(self.by_lang), self.default))
+
+
+def pick(value: Any, lang: str | None = None) -> str:
+    """出声点取值: Localized = 该语言那份(lang 缺省 = 缺省语言, 即 str 本身); 其余 = str(value)。"""
+    if isinstance(value, Localized) and lang:
+        return value.by_lang.get(lang, str(value))
+    return str(value)
+
+
+def localize(templates: dict[str, Any], values: dict[str, Any] | None = None, *, where: str) -> str:
+    """同一组值按各语言模板各填一份 → Localized(只有缺省语言模板 = 普通 str)。templates = {语言: 模板}, 须含缺省语言。"""
+    from tools.schema_loader import SchemaLoadError
+
+    default = default_language()
+    if default not in templates:
+        raise SchemaLoadError(f"{where} 缺缺省语言 {default} 的模板")
+    rendered = {code: fill(tpl, values, where=where, lang=code) for code, tpl in templates.items()}
+    return Localized(rendered, default) if len(rendered) > 1 else rendered[default]
+
+
+def lines_in(lines: list[Any], lang: str | None) -> list[str]:
+    """一组出声行按用户语言取值(Localized 取该语言; 普通 str 原样)。"""
+    return [pick(line, lang) for line in lines]
+
+
+def placeholder_problems(block: dict[str, Any]) -> list[str]:
+    """双语块各语言同一键的占位集须相等(否则某语言渲染缺值 / 漏信息)。返回问题清单(空 = 合格)。"""
+    langs = [code for code in block if isinstance(block.get(code), dict)]
+    if len(langs) < 2:
+        return []
+    base, others = langs[0], langs[1:]
+    problems: list[str] = []
+    for path in sorted(_key_paths(block[base])):
+        want = placeholders(_leaf(block[base], path)) if isinstance(_leaf(block[base], path), str) else set()
+        for code in others:
+            leaf = _leaf(block[code], path)
+            got = placeholders(leaf) if isinstance(leaf, str) else set()
+            if got != want:
+                problems.append(f"{path}: {base} {sorted(want)} ≠ {code} {sorted(got)}")
+    return problems
+
+
+def surface_texts(decl: Any, lang: str | None, *, where: str) -> dict[str, Any]:
+    """Owner 面一个出声点的双语块(声明 {zh, en})按用户语言取表: 结构经 check_block, 占位集各语言相等(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    table = texts(decl, lang, where=where)
+    problems = placeholder_problems(decl)
+    if problems:
+        raise SchemaLoadError(f"{where} 双语块占位不一致(AIPOS-F277): " + "; ".join(problems))
+    return table
+
+
+# 译文覆盖层: 原位单语文案被车道外模块按路径读取(不能挪走)时, 其余语言的同路径译文放在同一声明的 translations.<语言> 里;
+# 缺省语言仍是原位那份(单一来源), 覆盖层只放其余语言。守卫 overlay_problems: 覆盖层每个叶子在原位有同路径字符串、占位集相等;
+# 声明的应译范围内含中日韩字符的原位叶子都有译文(完整性)。
+
+#: 应译范围内不译的键(开发面说明)
+OVERLAY_SKIP_KEYS = frozenset({"description", "note", "notes", "single_implementation", "closed_card_reasons_note"})
+_CJK = _re.compile(r"[　-〿㐀-䶿一-鿿＀-￯]")
+
+
+def has_cjk(text: Any) -> bool:
+    return bool(_CJK.search(str(text or "")))
+
+
+def _get_path(decl: Any, path: str) -> Any:
+    node: Any = decl
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
+
+
+def overlay_template(decl: dict[str, Any], path: str, lang: str) -> str | None:
+    """覆盖层取 path 那条模板的 lang 译文(无 = None)。缺省语言 = 原位那份。"""
+    if lang == default_language():
+        found = _get_path(decl, path)
+        return found if isinstance(found, str) else None
+    found = _get_path((decl.get("translations") or {}).get(lang) or {}, path)
+    return found if isinstance(found, str) else None
+
+
+def overlay_localize(decl: dict[str, Any], path: str, template: Any, values: dict[str, Any] | None, *, where: str) -> str:
+    """原位模板 template(path 处, 缺省语言)+ 覆盖层同路径各语言译文 → Localized(无译文的语言不出, pick 落回缺省语言)。"""
+    templates: dict[str, Any] = {default_language(): template}
+    for code in supported_languages():
+        if code != default_language():
+            alt = overlay_template(decl, path, code)
+            if alt is not None:
+                templates[code] = alt
+    return localize(templates, values, where=where)
+
+
+def _string_leaves(node: Any, prefix: str = "") -> dict[str, str]:
+    out: dict[str, str] = {}
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in OVERLAY_SKIP_KEYS or key == "translations":
+                continue
+            out.update(_string_leaves(value, f"{prefix}{key}."))
+    elif isinstance(node, str):
+        out[prefix.rstrip(".")] = node
+    return out
+
+
+def overlay_problems(decl: dict[str, Any], sections: list[str] | tuple[str, ...]) -> list[str]:
+    """覆盖层守卫: ① 译文叶子在原位有同路径字符串; ② 占位集相等; ③ sections(应译范围)里含中日韩字符的原位叶子在每种其余语言都有译文;
+    ④ 译文本身不含中日韩字符(英文等)。返回问题清单(空 = 合格)。"""
+    problems: list[str] = []
+    overlay = decl.get("translations") or {}
+    for code in supported_languages():
+        if code == default_language():
+            continue
+        table = overlay.get(code)
+        if not isinstance(table, dict):
+            problems.append(f"translations.{code} 缺")
+            continue
+        for path, text in _string_leaves(table).items():
+            origin = _get_path(decl, path)
+            if not isinstance(origin, str):
+                problems.append(f"translations.{code}.{path}: 原位无同路径字符串")
+                continue
+            if placeholders(origin) != placeholders(text):
+                problems.append(f"translations.{code}.{path}: 占位 {sorted(placeholders(origin))} ≠ {sorted(placeholders(text))}")
+            if has_cjk(text):
+                problems.append(f"translations.{code}.{path}: 译文含中日韩字符")
+        for section in sections:
+            for path, text in _string_leaves(_get_path(decl, section), f"{section}.").items():
+                if has_cjk(text) and not isinstance(_get_path(table, path), str):
+                    problems.append(f"translations.{code}.{path}: 缺译文")
+    return problems
+
+
+def block_localize(block: dict[str, Any], path: str, values: dict[str, Any] | None = None, *, where: str) -> str:
+    """双语块(结构已核)里 path 那条文案, 各语言各填一份 → Localized(出声点按用户语言 pick; 缺省语言 = str 本身)。"""
+    from tools.schema_loader import SchemaLoadError
+
+    templates = {code: _leaf(table, path) for code, table in block.items()}
+    missing = sorted(code for code, tpl in templates.items() if not isinstance(tpl, str))
+    if missing:
+        raise SchemaLoadError(f"{where}.{path} 在 {missing} 缺")
+    return localize(templates, values, where=f"{where}.{path}")
+
+
+def owner_block(name: str) -> dict[str, Any]:
+    """config.schema owner_texts.<name>.texts(Owner 面出声点双语块; 结构与占位经 surface_texts 核, fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    where = f"config.schema.json owner_texts.{name}.texts"
+    section = (load_schema("config", code_repo_schema_root()).get("owner_texts") or {}).get(name)
+    if not isinstance(section, dict):
+        raise SchemaLoadError(f"config.schema.json owner_texts.{name} 未声明(AIPOS-F277)")
+    block = section.get("texts")
+    surface_texts(block, None, where=where)
+    return block
+
+
+def owner_text(name: str, key: str, /, **values: Any) -> str:
+    """owner_texts.<name> 一条文案 → 双语渲染值(各语言各填一份; 出声点 pick 用户语言)。"""
+    return block_localize(owner_block(name), key, values, where=f"config.schema.json owner_texts.{name}.texts")
+
+
+def join(sep: Any, parts: list[Any]) -> str:
+    """双语拼接: 各语言各连一份(sep 与各段可为 Localized)→ Localized(全是普通 str = 普通 str)。"""
+    if not any(isinstance(p, Localized) for p in [sep, *parts]):
+        return str(sep).join(str(p) for p in parts)
+    langs = supported_languages()
+    return Localized({code: pick(sep, code).join(pick(p, code) for p in parts) for code in langs}, default_language())
+
+
+def concat(*parts: Any) -> str:
+    """双语串接(join 的空分隔特例)。"""
+    return join("", list(parts))
+
+
+def materialize(value: Any, lang: str | None) -> Any:
+    """结构化结果(dict / list / Localized)按用户语言落成普通 str(--json 与人读同语言; 键为 Localized 同样落成该语言)。"""
+    if isinstance(value, Localized):
+        return pick(value, lang)
+    if isinstance(value, dict):
+        return {materialize(k, lang): materialize(v, lang) for k, v in value.items()}
+    if isinstance(value, list):
+        return [materialize(v, lang) for v in value]
+    if isinstance(value, tuple):
+        return tuple(materialize(v, lang) for v in value)
+    return value

@@ -121,6 +121,34 @@ def _cmd(*parts: str) -> str:
     return " ".join(parts)
 
 
+def _t(key: str, /, **values: Any) -> str:
+    """AIPOS-F277: 向导文案 = config.schema owner_texts.onboarding_guide 双语块的一条 → 双语渲染值(i18n.Localized; str 本身 = 缺省语言,
+    改前原文逐字不变); 生成结果经 i18n.materialize 按用户语言落成普通 str。"""
+    from tools.aipos_cli.i18n import owner_text
+
+    return owner_text("onboarding_guide", key, **values)
+
+
+def _join(sep: Any, parts: list[Any]) -> str:
+    from tools.aipos_cli.i18n import join
+
+    return join(sep, parts)
+
+
+def _session_dir_label(source: str, *, occupant: str | None = None) -> str:
+    """顾问会话目录来源人读一句: 缺省语言 = enrollment.session_dir_source_label(唯一出处, 车道外); 其余语言 = 同一声明
+    (distribution.schema harness_semantics.session_dir)的译文覆盖层 translations.<语言>.source_labels(i18n.overlay_localize)。"""
+    from tools.aipos_cli.enrollment import session_dir_declaration, session_dir_source_label
+    from tools.aipos_cli.i18n import overlay_localize, pick
+
+    decl = session_dir_declaration()
+    label = overlay_localize(decl, f"source_labels.{source}", decl["source_labels"][source], {"occupant": occupant or "-"},
+                             where="distribution.schema.json harness_semantics.session_dir.source_labels")
+    if pick(label) != session_dir_source_label(source, occupant=occupant):  # 缺省语言与唯一出处逐字一致(fail-closed)
+        raise ValueError(f"session_dir.source_labels.{source} 渲染与 enrollment.session_dir_source_label 不一致")
+    return label
+
+
 # ---------------------------------------------------------------------------
 # AIPOS-F93 件②: 注册码交付文案唯一渲染(发码 paste_text 与门 enroll_code 动词说明 / next_step、CLI enroll-code
 # 打印同此; 原「会话斜杠 enroll 命令」随 lybra-loop 扩展退役, 禁再出现)。项目无关: 只拼产品命令形。
@@ -194,13 +222,13 @@ def render_landing_command(governance_root: Path, actor: str, paths: list[str]) 
     return governance_commit_paths_command(paths, actor, governance_root)
 
 
-LANDING_ON_FAIL = {
-    "Git status check failed / not a git repository": (
-        "治理根须在治理仓(git)内: lybra home git-init --home-root <home 根>(一次性, 不配远端), Owner 按其输出配 origin 并首推后重跑本条"
-    ),
-    "PUSH NOT DONE": "已提交未推送: 按输出原因处理(无 origin = Owner 配远端; 远端冲突按输出出口)后重跑同一条",
-    "BLOCK(staged 在 --paths 外)": "治理仓有他人已暂存的文件, 本命令不动; 请其所有者先提交或取消暂存后重跑",
-}
+def landing_on_fail() -> dict[str, str]:
+    """落账失败出口(各写治理步共用; 文案 owner_texts.onboarding_guide.landing, AIPOS-F277 双语)。"""
+    return {
+        "Git status check failed / not a git repository": _t("landing.git"),
+        "PUSH NOT DONE": _t("landing.push"),
+        _t("landing.staged_key"): _t("landing.staged"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +255,7 @@ def _holds_owner_credential(conn: Path) -> tuple[bool, str | None]:
     try:
         registry = load_service_role_registry(conn, error_stream=io.StringIO())
     except (OSError, ValueError) as exc:  # json.JSONDecodeError ⊂ ValueError
-        return False, f"{conn} 读不出({type(exc).__name__})"
+        return False, _t("cred.unreadable_item", path=conn, error=type(exc).__name__)
     return any(str(entry.get("role") or "") == OWNER_ROLE for entry in registry.values()), None
 
 
@@ -248,14 +276,14 @@ def resolve_owner_credential(home: Path, *, owner_workspace: str | None = None, 
     if str(owner_connection_json or "").strip():
         conn = Path(str(owner_connection_json)).expanduser()
         ws = Path(str(owner_workspace)).expanduser() if str(owner_workspace or "").strip() else _workspace_of_connection(conn)
-        return {"path": str(conn), "workspace": str(ws), "source": "显式 --owner-connection-json", "resolved": True, "reason": None,
+        return {"path": str(conn), "workspace": str(ws), "source": _t("cred.source_explicit_json"), "resolved": True, "reason": None,
                 "holders": [], "unreadable": []}
     if str(owner_workspace or "").strip():
         ws = Path(str(owner_workspace)).expanduser()
-        return {"path": str(connection_path(ws)), "workspace": str(ws), "source": "显式 --owner-workspace", "resolved": True,
+        return {"path": str(connection_path(ws)), "workspace": str(ws), "source": _t("cred.source_explicit_ws"), "resolved": True,
                 "reason": None, "holders": [], "unreadable": []}
     home = Path(home)
-    sources = [("home 根自身", home)] + [(f"项目 {name}", home / name) for name in _project_candidates(home)]
+    sources = [(_t("cred.label_home"), home)] + [(_t("cred.label_project", name=name), home / name) for name in _project_candidates(home)]
     holders: list[tuple[str, Path]] = []
     unreadable: list[str] = []
     for label, ws in sources:
@@ -273,25 +301,22 @@ def resolve_owner_credential(home: Path, *, owner_workspace: str | None = None, 
     source = ""
     if declared and any(ws == home / declared for _l, ws in holders):
         picked = next(h for h in holders if h[1] == home / declared)
-        source = f"门注册表中持 Owner 凭据的{picked[0]}(已声明活动项目 {declared})"
+        source = _t("cred.source_active", holder=picked[0], declared=declared)
     elif len(holders) == 1:
         picked = holders[0]
-        source = f"门注册表中唯一持 Owner 凭据的{picked[0]}"
+        source = _t("cred.source_single", holder=picked[0])
     info = {"holders": [str(connection_path(ws)) for _l, ws in holders], "unreadable": unreadable}
     if picked is not None:
         return {"path": str(connection_path(picked[1])), "workspace": str(picked[1]), "source": source, "resolved": True,
                 "reason": None, **info}
     if holders:
-        why = (f"home 根 {home} 下有 {len(holders)} 份持 Owner 凭据的 connection.json({', '.join(info['holders'])}), "
-               "且未声明活动项目可据以选择")
+        why = _t("cred.why_many", home=home, count=len(holders), holders=", ".join(info["holders"]))
     else:
-        why = (f"home 根 {home} 的门注册表来源(home 根自身与各已建项目的 .lybra/connection.json)里没有持 Owner 凭据的文件"
-               "(门尚未以本 home 根起过: lybra serve start; 或 Owner 凭据放在别处)")
+        why = _t("cred.why_none", home=home)
     if unreadable:
-        why += f"; 读不出: {'; '.join(unreadable)}"
-    return {"path": None, "workspace": None, "source": "未推导出", "resolved": False,
-            "reason": why + "。请用 --owner-connection-json <门 serve 读取的、持 Owner 凭据的 connection.json> 重新生成本向导"
-                            f"(或在第 3 / 4 步命令里把 {OWNER_CONNECTION_PLACEHOLDER} / {OWNER_WORKSPACE_PLACEHOLDER} 换成它与其工作区)", **info}
+        why = _join("", [why, _t("cred.unreadable_part", items=_join("; ", unreadable))])
+    return {"path": None, "workspace": None, "source": _t("cred.source_unresolved"), "resolved": False,
+            "reason": _t("cred.reason", why=why, conn=OWNER_CONNECTION_PLACEHOLDER, ws=OWNER_WORKSPACE_PLACEHOLDER), **info}
 
 
 def workstation_dirs(governance_root: Path, project: str, home_root: Path) -> dict[str, Any]:
@@ -307,7 +332,7 @@ def workstation_dirs(governance_root: Path, project: str, home_root: Path) -> di
     declared = project_paths(gov).get(WORKSTATIONS_ROOT_KEY) if project_json_path(gov).is_file() else None
     if declared is not None:
         shown, absolute = str(declared), Path(declared).expanduser()
-        source = f"project.json paths.{WORKSTATIONS_ROOT_KEY}(项目声明)"
+        source = _t("ws.source_declared", key=WORKSTATIONS_ROOT_KEY)
     else:
         template = (_project_paths_declaration().get(WORKSTATIONS_ROOT_KEY) or {}).get("default_user_home")
         if not isinstance(template, str) or "{project}" not in template or template.startswith(("/", "~")):
@@ -315,13 +340,12 @@ def workstation_dirs(governance_root: Path, project: str, home_root: Path) -> di
                                   "(须为相对用户家目录的模板, 含 {project})")
         rel = template.replace("{project}", project)
         shown, absolute = f"~/{rel}", Path.home() / rel
-        source = f"config.schema 缺省 project_json.paths.{WORKSTATIONS_ROOT_KEY}.default_user_home({template}; 项目可用 lybra project set-paths 声明)"
+        source = _t("ws.source_default", key=WORKSTATIONS_ROOT_KEY, template=template)
     resolved = absolute.resolve()
-    for label, inner in (("治理根", gov.resolve()), ("home 根", Path(home_root).resolve())):
+    for label, inner in ((_t("ws.label_gov"), gov.resolve()), (_t("ws.label_home"), Path(home_root).resolve())):
         if resolved == inner or inner in resolved.parents:
-            raise ValueError(f"工位根 {absolute}({source})落在{label} {inner} 内: 工位目录含工位凭据, 不得进治理仓。"
-                             f"改用 --workspace-dir / --auditor-dir 给治理仓外目录, 或 lybra project set-paths {shlex.quote(project)} "
-                             f"--key {WORKSTATIONS_ROOT_KEY} --value <治理仓外绝对路径> 改声明")
+            raise ValueError(_t("ws.inside", absolute=absolute, source=source, label=label, inner=inner, project=shlex.quote(project),
+                                key=WORKSTATIONS_ROOT_KEY))
     base = shown.rstrip("/")
     return {"root": base, "executor": f"{base}/executor", "auditor": f"{base}/auditor", "source": source}
 
@@ -402,16 +426,14 @@ def _grant_existing_note(grant: dict[str, Any], project: str, hq: str) -> str | 
     ex = grant["existing"]
     pq = _shell_quote(project)
     if ex["error"]:
-        return f"读不出本项目既有授权({ex['error']}): 先 lybra project grant show {pq} --home-root {hq} 查明再决定是否签"
+        return _t("grant.existing_error", error=ex["error"], pq=pq, hq=hq)
     live = [a for a in ex["authorizations"] if a.get("state") not in (None, "missing")]
     if live:
-        rows = "; ".join(f"{a['authorization_id']} r{a['revision']}(状态 {a['state']}, 已放行 {a['used']}/{a['max_tasks']}, 到期 {a['expires_at']})"
-                         for a in live)
-        return (f"本项目已有项目授权: {rows}——不必重签本步(sign 会以本次范围为全部范围出新修订); 车道 / 任务类型 / 驱动方 / 主机不够时"
-                f"用 lybra project grant extend {pq} --home-root {hq} … 增补(先预演), 现状看 lybra project grant show {pq} --home-root {hq}")
+        rows = _join("; ", [_t("grant.existing_row", id=a["authorization_id"], revision=a["revision"], state=a["state"], used=a["used"],
+                               max_tasks=a["max_tasks"], expires=a["expires_at"]) for a in live])
+        return _t("grant.existing_live", rows=rows, pq=pq, hq=hq)
     if ex["envelopes"]:
-        return (f"本项目已有 {len(ex['envelopes'])} 张旧信封({', '.join(ex['envelopes'])}; 兼容仍生效, 不再新签): 建议合并为项目授权——"
-                f"lybra project grant draft {pq} --home-root {hq} --from-envelopes(预演; Owner 加 --confirm 签), 或按本步命令签新授权")
+        return _t("grant.existing_envelopes", count=len(ex["envelopes"]), ids=", ".join(ex["envelopes"]), pq=pq, hq=hq)
     return None
 
 
@@ -420,37 +442,37 @@ def on_demand_declarations(project: str, governance_root: str, *, home_root: str
     """AIPOS-F262 件④: 「按需声明」一节(只列, 不强制): 每项 = 用途一句 + 何时需要 + 预演命令(零写入; 确认 = 同参改 --confirm)。
     命令形与 QUICKSTART「按需声明」节同一组产品写入口; 值由 Owner / 顾问按项目实况填(占位), 产品无内置默认。"""
     from tools.aipos_cli.workspace_config import lybra_command_prefix  # AIPOS-F215 件③: 治理根命令前缀唯一渲染
-    from tools.card_policy_loader import set_task_id_pattern_command, show_command
+    from tools.card_policy_loader import show_command
 
     pq, hq = _shell_quote(project), _shell_path(home_root)
     repo = repo_names[0] if repo_names else REPO_NAME_PLACEHOLDER
     tail = ["--home-root", hq]
     return [
-        {"key": "card_policy", "title": "卡号形状(card-policy task_id_pattern)",
-         "purpose": "受控发布 / finalize / lybra-deploy 的卡归属解析只读它, 产品无内置默认",
-         "when": "首卡前(第 11 步已带); 卡号规则变化时再改",
-         "commands": [show_command(governance_root), f"{set_task_id_pattern_command(governance_root)} --actor {_shell_quote(actor)} --dry-run"]},
-        {"key": "test_contract", "title": "合并后回归契约(set-test-contract)",
-         "purpose": "全量回归的时限与执行方式; lybra regression baseline 据此记录 main 侧基线, 多数卡不必各自重跑 main 全量",
-         "when": "产品仓有全量测试清单、要让卡分支与 main 两边基线可复用时",
+        {"key": "card_policy", "title": _t("on_demand.card_policy.title"),
+         "purpose": _t("on_demand.card_policy.purpose"),
+         "when": _t("on_demand.card_policy.when"),
+         "commands": [show_command(governance_root), _join("", [pattern_command(governance_root), f" --actor {_shell_quote(actor)} --dry-run"])]},
+        {"key": "test_contract", "title": _t("on_demand.test_contract.title"),
+         "purpose": _t("on_demand.test_contract.purpose"),
+         "when": _t("on_demand.test_contract.when"),
          "commands": [_cmd("lybra", "project", "set-test-contract", pq, *tail, "--timeout-seconds", SECONDS_PLACEHOLDER,
                            "--owner-ref", OWNER_REF_PLACEHOLDER, "--dry-run")]},
-        {"key": "release_target", "title": "生产发布目标(release-target)",
-         "purpose": "声明生产主机 + 白名单 + 发布根; 之后卡的生产发布只经 lybra release plan → apply → verify(回退 release rollback), 禁裸 ssh/scp/rsync",
-         "when": "项目有生产部署时(授权的主机含目标主机时 --owner-ref 可省)",
+        {"key": "release_target", "title": _t("on_demand.release_target.title"),
+         "purpose": _t("on_demand.release_target.purpose"),
+         "when": _t("on_demand.release_target.when"),
          "commands": [_cmd("lybra", "project", "release-target", "declare", pq, *tail, "--id", TARGET_ID_PLACEHOLDER, "--host", HOST_PLACEHOLDER,
                            "--repo", repo if repo.startswith("<") else _shell_quote(repo), "--allow", ALLOW_PLACEHOLDER,
                            "--release-root", RELEASE_ROOT_PLACEHOLDER, "--entry", ENTRY_PLACEHOLDER, "--owner-ref", OWNER_REF_PLACEHOLDER,
                            "--dry-run"),
                       _cmd("lybra", "project", "release-target", "list", pq, *tail)]},
-        {"key": "pi_model", "title": "pi 模型(set-model)",
-         "purpose": "loop 拉起的 pi 执行体 / 审计体用哪个模型(须是本机 pi 已配置的模型, pi --list-models 可查)",
-         "when": "不想沿用 pi 自身缺省模型时(可按角色 --role executor / auditor 分别声明)",
+        {"key": "pi_model", "title": _t("on_demand.pi_model.title"),
+         "purpose": _t("on_demand.pi_model.purpose"),
+         "when": _t("on_demand.pi_model.when"),
          "commands": [_cmd("lybra", "project", "set-model", pq, *tail, "--model", MODEL_PLACEHOLDER, "--owner-ref", OWNER_REF_PLACEHOLDER,
                            "--dry-run")]},
-        {"key": "headline", "title": "看板顾问卡(project headline)",
-         "purpose": "顾问在看板首页的摘要卡: 标题 / 正在推进 / 最近完成",
-         "when": "接入完成后, 以及项目阶段变化时",
+        {"key": "headline", "title": _t("on_demand.headline.title"),
+         "purpose": _t("on_demand.headline.purpose"),
+         "when": _t("on_demand.headline.when"),
          "commands": [_cmd(lybra_command_prefix(governance_root), "project", "headline", "--instance", _shell_quote(advisor),
                            "--title", TITLE_PLACEHOLDER, "--now", NOW_PLACEHOLDER, "--done", DONE_PLACEHOLDER, "--dry-run")]},
     ]
@@ -462,15 +484,15 @@ def _distinct_workstation_targets(*, gov: str, advisor_dir: str | None, exec_ws:
     def norm(p: str) -> Path:
         return Path(p).expanduser().resolve()
 
-    named = {"pi 执行工位(--workspace-dir)": exec_ws, "审计工位(--auditor-dir)": audit_ws, "治理根": gov}
+    gov_label, adv_label = _t("ws.label_gov"), _t("ws.label_advisor")
+    named = {_t("ws.label_exec"): exec_ws, _t("ws.label_audit"): audit_ws, gov_label: gov}
     if advisor_dir:
-        named["顾问会话目录(--advisor-dir)"] = advisor_dir
+        named[adv_label] = advisor_dir
     seen: dict[Path, str] = {}
     for label, path in named.items():
         key = norm(path)
-        if key in seen and {label, seen[key]} != {"治理根", "顾问会话目录(--advisor-dir)"}:  # 顾问会话缺省即治理根(AIPOS-F253)
-            raise ValueError(f"{label} 与{seen[key]}是同一目录 {key}: 一个目录只能登记给一个实例(否则先登记者的章程落点失效)。"
-                             "给各工位不同目录后重跑向导(--workspace-dir / --auditor-dir)")
+        if key in seen and {label, seen[key]} != {gov_label, adv_label}:  # 顾问会话缺省即治理根(AIPOS-F253)
+            raise ValueError(_t("ws.same_dir", label=label, other=seen[key], path=key))
         seen.setdefault(key, label)
 
 
@@ -486,20 +508,20 @@ def _gate_url(explicit: str | None, owner_connection: str) -> tuple[str, str]:
     from tools.aipos_cli.enroll_client import loopback_gate_url
 
     if explicit:
-        return resolve_gate_base_url(explicit_url=explicit), "显式 --gate-url"
-    same_host = "; 同机按 same_host_rule 取 loopback, 端口取自该来源"
+        return resolve_gate_base_url(explicit_url=explicit), _t("gate.source_explicit")
+    same_host = _t("gate.same_host")
     if not owner_connection.startswith("<") and Path(owner_connection).is_file():
         try:
             if declared_rpc_url(owner_connection):
                 base = resolve_gate_base_url(connection_json=owner_connection, require_declared=True)
-                return loopback_gate_url(base), f"{owner_connection} mcp.rpc_url{same_host}"
+                return loopback_gate_url(base), _t("gate.source_connection", conn=owner_connection, same_host=same_host)
         except GateAddressError as exc:
             print(f"Warning: {exc}; 门地址按未声明处理", file=sys.stderr)
     from tools.loop_context import ConnectionResolver
 
     provenance = ConnectionResolver.resolve_identity()["gate_url"]  # 来源自曝(同一解析器): env 兜底 / schema 缺省
     return (loopback_gate_url(resolve_gate_base_url()),
-            ("环境变量 LYBRA_GATE_URL" if provenance["via_env"] else "config.schema 缺省") + same_host)
+            _t("gate.source_env" if provenance["via_env"] else "gate.source_default", same_host=same_host))
 
 
 def _instances(project: str, host: str, advisor_host: str | None = None, *, executor_host: str | None = None) -> dict[str, str]:
@@ -532,22 +554,19 @@ def resolve_advisor_harness(advisor_harness: str | None, advisor_host: str | Non
     kind = str(advisor_harness or ADVISOR_HARNESS).strip()
     allowed = advisor_harness_kinds()
     if kind not in allowed:
-        raise ValueError(f"--advisor-harness {kind!r} 不是声明的顾问会话 harness; 合法值 {list(allowed)}"
-                         "(distribution.schema harness_semantics.kinds.<kind>.advisor_session)")
+        raise ValueError(_t("harness.not_declared", kind=repr(kind), allowed=list(allowed)))
     decl = harness_kind_declaration(kind)
     host = str(advisor_host or "").strip() or None
     if host and decl["harness_host"] == "forbidden":
-        raise ValueError(f"--advisor-host 不适用于 --advisor-harness {kind}(声明 harness_host=forbidden: 该会话与治理根同机, "
-                         "技能交付到本机会话目录); 他机顾问会话用 --advisor-harness 中 harness_host=optional 的值")
+        raise ValueError(_t("harness.host_forbidden", kind=kind))
     if host and any(ch.isspace() for ch in host):
-        raise ValueError(f"--advisor-host {host!r} 含空白(主机名不得含空白)")
+        raise ValueError(_t("harness.host_blank", host=repr(host)))
     if host:
         instance_host = host.split(".")[0]
     elif str(host_segment or "").strip():
         instance_host = str(host_segment).strip()
     elif decl["harness_host"] == "optional" and decl["harness_dir"] != "required":
-        raise ValueError(f"--advisor-harness {kind} 的会话可在他机: 须给 --advisor-host <会话所在机>(或 --host-segment), "
-                         "顾问实例名 host 段不默认成治理根所在机")
+        raise ValueError(_t("harness.host_required", kind=kind))
     else:
         instance_host = socket.gethostname().split(".")[0].strip()
     from tools.aipos_cli.custom_roles import resolve_role_to_class
@@ -626,26 +645,22 @@ def generate_onboarding_guide(
     station_mode = str(mode_decl["default"]) if str(mode_decl["default"]) in station_modes else station_modes[0]
     asked = str(executor_mode or "").strip()
     if asked and asked not in mode_decl["values"]:
-        raise ValueError(f"--executor-mode {asked!r} 不在 {list(mode_decl['values'])}(roles.schema executor_modes)")
+        raise ValueError(_t("mode.not_in", asked=repr(asked), values=list(mode_decl["values"])))
     if asked and asked not in seat_modes:
-        raise ValueError(f"--executor-mode {asked}: 接入流程恒按执行分工(AIPOS-F256 / F262)——代码卡 = 子 agent 执行者(--executor-mode {exec_mode}), "
-                         f"非代码卡 = pi 执行工位({asked} 模式), 审计 = pi 审计工位, 向导三者都接入; 单 pi 执行工位包办的旧流程不再生成。"
-                         "去掉 --executor-mode 重跑")
+        raise ValueError(_t("mode.station_refused", asked=asked, exec_mode=exec_mode))
     inst = _instances(project_name, host, adv_h["instance_host"], executor_host=adv_h["instance_host"])
     owner_cred = resolve_owner_credential(home, owner_workspace=owner_workspace, owner_connection_json=owner_connection_json)
     owner_ws = owner_cred["workspace"] or OWNER_WORKSPACE_PLACEHOLDER
     owner_conn = owner_cred["path"] or OWNER_CONNECTION_PLACEHOLDER
-    owner_note = ("" if owner_cred["resolved"] else
-                  f"⚠ Owner 凭据未推导出: {owner_cred['reason']}")
+    owner_note = ("" if owner_cred["resolved"] else _t("cred.unresolved_note", reason=owner_cred["reason"]))
     gate, gate_source = _gate_url(gate_url, owner_conn)
     # AIPOS-F129: 会话目录必给(harness_dir=required, Claude Code)才落缺省; 可空(codex)= 只用显式值, 不猜他机路径
     # AIPOS-F243 件④: 他机会话(--advisor-host)的会话目录不猜(缺省只给本机会话); 该 kind 必给目录 = 拒并给出口
     if adv_h["host"] and adv_h["declaration"]["harness_dir"] == "required" and not str(advisor_dir or "").strip():
-        raise ValueError(f"--advisor-harness {adv_h['kind']} 的会话在他机({adv_h['host']}): 须给 --advisor-dir <该机上的会话目录绝对路径>"
-                         "(他机目录如实登记, 不猜)")
+        raise ValueError(_t("harness.dir_required", kind=adv_h["kind"], host=adv_h["host"]))
     # AIPOS-F253 件②: 本机会话缺省 = 治理根(上方经 home 根解析梯拼出, 不写死路径); 同机治理根已被别的顾问实例登记 = 治理根内声明子路径
     # (唯一实现 enrollment.default_session_dir); 显式 --advisor-dir 优先。件①: 本机会话目录与同机已接入顾问相撞 = 拒并给换目录的命令原文
-    from tools.aipos_cli.enrollment import default_session_dir, session_dir_refusal, session_dir_source_label
+    from tools.aipos_cli.enrollment import default_session_dir, session_dir_refusal
 
     advisor_ws: str | None = advisor_dir or None
     advisor_dir_source = {"source": "explicit", "occupant": None} if advisor_ws else None
@@ -666,14 +681,15 @@ def generate_onboarding_guide(
                                       role=adv_h["role"], retry=shlex.join(retry_argv).replace("DIR_SLOT", "{dir}"))
         if refusal:
             raise ValueError(refusal)
-    advisor_dir_label = (session_dir_source_label(advisor_dir_source["source"], occupant=advisor_dir_source["occupant"])
+    advisor_dir_label = (_session_dir_label(advisor_dir_source["source"], occupant=advisor_dir_source["occupant"])
                          if advisor_dir_source else None)
     # AIPOS-F262 件③: 工位缺省目录读声明(project.json paths.workstations_root > config.schema 缺省模板), 显式参数优先; 件②: 各目录互不相同
     ws_dirs = workstation_dirs(gov, project_name, home) if not (workspace_dir and auditor_dir) else None
     exec_ws = workspace_dir or ws_dirs["executor"]
     audit_ws = auditor_dir or ws_dirs["auditor"]
-    ws_source = ("显式 --workspace-dir / --auditor-dir" if ws_dirs is None else
-                 f"工位根 {ws_dirs['root']}(来源: {ws_dirs['source']})" + ("; 部分为显式参数" if (workspace_dir or auditor_dir) else ""))
+    ws_source = (_t("ws.source_explicit") if ws_dirs is None else
+                 _join("", [_t("ws.source_root", root=ws_dirs["root"], source=ws_dirs["source"]),
+                            _t("ws.source_partial") if (workspace_dir or auditor_dir) else ""]))
     _distinct_workstation_targets(gov=gov_s, advisor_dir=advisor_ws if not adv_h["host"] else None, exec_ws=exec_ws, audit_ws=audit_ws)
     _actor = actor or inst["advisor"]
     now = utc_now()
@@ -694,37 +710,27 @@ def generate_onboarding_guide(
     from tools.aipos_cli.governance_commit import non_git_exit_command
 
     repo_status = governance_repo_status(home)
-    step1 = [] if repo_status["git"] else [
-        f"# 治理仓未就绪: home 根 {home} 不在任何 git 仓内, 本步落账与之后每张卡的落账都会 fail-closed。先一次性初始化"
-        "(本地 git init, 不配远端、不推送), Owner 按其输出配 origin 并首推:",
-        non_git_exit_command(gov),
-    ]
+    step1 = [] if repo_status["git"] else [_t("step1.not_git", home=home), non_git_exit_command(gov)]
     step1 += [
         _cmd("lybra", "project", "new", _shell_quote(project_name), "--home-root", hq, "--actor", _shell_quote(_actor)),
-        "# 落账: 本步产物精确提交并推送治理仓(AIPOS-F94; 只提交下列路径, 不碰治理仓其他改动)",
+        _t("step1.landing"),
         render_landing_command(gov, _actor, project_new_products(gov)),
     ]
     steps.append({
         "step_number": STEP["project"],
         "actor": "advisor",
         "owner_action": None,
-        "title": "建项目(home 根下的治理根 + project.json + 首份阶段快照)并落账",
-        "command": "\n".join(step1),
-        "purpose": (
-            f"在 home 根 {home}(来源: {home_source})下建 {project_name} 的治理根 {gov_s}: 队列 / 记录 / 治理文档 / project.json, "
-            "并经 governance add stage 写首份阶段快照「项目创建」。门只扫描 home 根发现项目; 要放别处只能改 home 根本身"
-            "(--home-root > LYBRA_HOME_ROOT > ~/.lybra/config.json home_root > 缺省 ~/.lybra/projects), 不登记 home 根外的治理根"
-        ),
-        "check": ("输出 'Created project root:' 与 'stage snapshot:' 行; 验证: lybra project list --home-root <home 根> 出现项目名; "
-                  "落账输出 Verdict: PASS 且 '✓ Pushed to remote'"),
+        "title": _t("step1.title"),
+        "command": _join("\n", step1),
+        "purpose": _t("step1.purpose", home=home, home_source=home_source, project=project_name, gov=gov_s),
+        "check": _t("step1.check"),
         "on_fail": {
-            "PROJECT_EXISTS": "项目根已存在且非空; lybra project list 确认后跳到 Step 2",
-            "PROJECT_NAME_EMPTY": "项目名不能为空; 给一个非空项目名重跑本步",
-            "home 根不对": "home 根只经优先级梯解析(见目的); 换 --home-root 重跑本步",
-            **LANDING_ON_FAIL,
+            "PROJECT_EXISTS": _t("step1.fail_exists"),
+            "PROJECT_NAME_EMPTY": _t("step1.fail_empty"),
+            _t("step1.fail_home_key"): _t("step1.fail_home"),
+            **landing_on_fail(),
         },
-        "creates": f"{gov_s}/(project.json, 5_tasks/, governance/, stage_archive/<日期>_项目创建.md)"
-                   + ("" if repo_status["git"] else f"; {home} 成为治理仓(git, 待 Owner 配 origin)"),
+        "creates": _join("", [_t("step1.creates", gov=gov_s), "" if repo_status["git"] else _t("step1.creates_git", home=home)]),
         "governance_repo": repo_status,
     })
 
@@ -736,28 +742,25 @@ def generate_onboarding_guide(
         repo_parts += ["--default", _shell_quote(repo_default)]
     step2 = [
         # AIPOS-F125: 写 project.json 的命令同一两阶段(verbs.schema two_phase_protocol.project_json_writers): 缺省预演, --confirm 才写
-        "# 先预演(打印将写的 project.json diff 与校验结果, 零写入)给 Owner 看, 再 --confirm 写入",
+        _t("step2.preview"),
         _cmd(*repo_parts, "--dry-run"),
         # AIPOS-F159 件①: --confirm 写后即经同一提交口落账 project.json(提交身份 --actor)。AIPOS-F160 件①(gap #145): 原随后的
         # 「核账/补账」governance-commit 行退役(已落账 = 多余空操作, 新项目照做困惑); 落账失败时 --confirm 自己打印补账命令并 exit 3
-        "# --confirm 写入后即自动提交并推送 project.json(输出 '落账: verdict=PASS …'), 不必再跑 governance-commit; 落账失败(exit 3)时照其输出的补账命令跑一次",
+        _t("step2.confirm"),
         _cmd(*repo_parts, "--actor", _shell_quote(_actor), "--confirm"),
     ]
     steps.append({
         "step_number": STEP["repos"],
         "actor": "advisor",
         "owner_action": None,
-        "title": "声明产品仓(project.json repos / code_repo)并落账",
-        "command": "\n".join(step2),
-        "purpose": ("把产品仓清单写进 project.json(repos {default, items} + code_repo 别名), 经 config.schema project_json.repos 声明校验; "
-                    "卡 lane.repo 写仓名, 建工作树 / finalize 按此解析。之后各卡由 lybra loop 结案后自动落账; 写治理真相的命令(project 族 / "
-                    "project grant / migrate)--confirm 写后自动落账; 其余非卡改动(手改治理文档等)用 governance-commit --paths"),
-        "check": ("--dry-run 输出 'project set-repos <项目>: 预览(未写; 加 --confirm 写入)' + 每个仓一行 + project.json diff(零写入); "
-                  "--confirm 输出 '已写入' 与 '落账: verdict=PASS committed=True pushed=True'(AIPOS-F159: 写后即落账); 多于一个仓须 --default"),
+        "title": _t("step2.title"),
+        "command": _join("\n", step2),
+        "purpose": _t("step2.purpose"),
+        "check": _t("step2.check"),
         "on_fail": {
-            "REPOS_CONFLICT": "路径须为绝对路径、default 须在仓名内; 改参数重跑(预演即报错, project.json 未改动)",
-            "PROJECT_NOT_ESTABLISHED": "Step 1 未完成; 先跑 Step 1",
-            **LANDING_ON_FAIL,
+            "REPOS_CONFLICT": _t("step2.fail_conflict"),
+            "PROJECT_NOT_ESTABLISHED": _t("step2.fail_not_established"),
+            **landing_on_fail(),
         },
         "creates": f"{gov_s}/project.json#repos",
     })
@@ -783,37 +786,31 @@ def generate_onboarding_guide(
     step3_cmds = [_cmd(*grant_parts), _cmd(*grant_parts, "--confirm")]
     existing_note = _grant_existing_note(grant, project_name, hq)
     step3 = [
-        "# 先预演(零写入: 打印授权修订全文与校验)给 Owner 看, 再 --confirm 经门签发并落账; 一份授权覆盖本项目全部车道 / 任务类型 / 驱动方 / 主机,"
-        " 不再逐卡、逐实例签信封",
-        *([f"# ⚠ {existing_note}"] if existing_note else []),
-        *([f"# ⚠ {owner_note}"] if owner_note else []),
+        _t("step3.intro"),
+        *([_t("step3.warn", note=existing_note)] if existing_note else []),
+        *([_t("step3.warn", note=owner_note)] if owner_note else []),
         *step3_cmds,
     ]
     steps.append({
         "step_number": STEP["grant"],
         "actor": "owner",
         "owner_action": 1,
-        "title": f"【Owner 动作 ①】签项目常设授权 {auth_ref}(一份覆盖全项目, 取代逐实例信封)",
-        "command": "\n".join(step3),
+        "title": _t("step3.title", auth=auth_ref),
+        "command": _join("\n", step3),
         "commands": step3_cmds,
-        "purpose": (
-            f"Owner 用门的中央凭据库({owner_conn}; 来源: {owner_cred['source']})里的 Owner 凭据经门 owner_decision_record 签项目常设授权 "
-            f"{auth_ref}: 车道 {', '.join(grant['lanes'])} × 任务类型 {', '.join(grant['task_modes'])}(审计卡按被审卡判定) × 驱动方 "
-            f"{', '.join(grant['drivers'])}; 主机 {', '.join(grant['hosts'])}(本向导接入的各实例名主机段); 拉起 {', '.join(grant['launch_harnesses'])}"
-            "(授权 lybra loop 在工位自动拉起 pi; Owner 删去 --launch-harness = 只手工 /go); 总卡数 + 到期双上限。"
-            "授权先于接入: 工位接入预检须有覆盖它的生效授权(无则拒, 不签码 / 不改凭据); 之后 lybra loop 自动找到本授权, 不再逐卡签信封"
-        ),
-        "check": (f"预演输出 'lybra project grant sign 预演(零写入 …): verdict=PASS' 与授权修订全文; --confirm 输出 'signed {auth_ref}' 与 "
-                  f"'wrote …/{auth_ref}/r<修订号>.md'(以门生记录为准); 之后 lybra project grant show {pq} --home-root {hq} 列出该授权, 状态 active"),
+        "purpose": _t("step3.purpose", conn=owner_conn, source=owner_cred["source"], auth=auth_ref, lanes=", ".join(grant["lanes"]),
+                      modes=", ".join(grant["task_modes"]), drivers=", ".join(grant["drivers"]), hosts=", ".join(grant["hosts"]),
+                      launch=", ".join(grant["launch_harnesses"])),
+        "check": _t("step3.check", auth=auth_ref, pq=pq, hq=hq),
         "on_fail": {
-            "PROJECT_SCOPE_DENIED / OWNER_CONFIRMATION_REQUIRED": "签授权须 Owner 凭据(owner_confirm); --connection-json 指向门的中央凭据库",
-            "凭据文件不存在": f"--connection-json 须指向门 serve 读取的、持 Owner 凭据的 connection.json; 推不出时给 --owner-connection-json 重新生成本向导",
-            "gate call failed": "门未运行或地址不通: lybra serve status; 此为门侧故障, 报 Owner",
-            "✗ 拒因": "按预演列出的拒因改参数(车道须为第 2 步仓名、任务类型须在值域)后重跑预演; 预演零写入",
-            **LANDING_ON_FAIL,
+            "PROJECT_SCOPE_DENIED / OWNER_CONFIRMATION_REQUIRED": _t("step3.fail_scope"),
+            _t("step3.fail_no_file_key"): _t("step3.fail_no_file"),
+            "gate call failed": _t("step3.fail_gate"),
+            _t("step3.fail_refused_key"): _t("step3.fail_refused"),
+            **landing_on_fail(),
         },
-        "creates": f"{gov_s}/<authorizations_root>/{auth_ref}/r<修订号>.md + owner_decisions 记录(落账进治理仓)",
-        "note": " ".join(n for n in (existing_note, owner_note) if n) or None,
+        "creates": _t("step3.creates", gov=gov_s, auth=auth_ref),
+        "note": _join(" ", [n for n in (existing_note, owner_note) if n]) or None,
         "authorization": {k: v for k, v in grant.items() if k != "existing"},
     })
 
@@ -832,7 +829,8 @@ def generate_onboarding_guide(
     step4_deliver = [render_enroll_deliver_command(owner_roles, role="advisor", instance=_shell_quote(inst["advisor"]),
                                                    governance_root=gq, workspace=gq, extra=enroll_extra, phase=phase)
                      for phase in ("--dry-run", "--confirm")]
-    session_at = f"{adv_h['host']}:{advisor_ws or '<会话目录>'}" if adv_h["host"] else (advisor_ws or "<会话目录>")
+    no_dir = _t("step4.session_dir_placeholder")
+    session_at = _join("", [f"{adv_h['host']}:", advisor_ws or no_dir]) if adv_h["host"] else (advisor_ws or no_dir)
     label = str(adv_h["declaration"].get("label") or adv_kind)
     # AIPOS-F136 件②: 顾问件 = 技能 + 章程(advisor-charter-<harness>, 母本 agents/roles/advisor/AGENTS.md 含持续推进守则);
     # 只在会话目录在本机(无 --advisor-host 且有会话目录)时可交付; 他机会话本机无落点(不猜落点): 章程件 = 拉取出口(AIPOS-F138), 其余列 undelivered
@@ -840,71 +838,49 @@ def generate_onboarding_guide(
     session_start: dict[str, Any] | None = None  # AIPOS-F138 件②: 他机会话开局取章程命令(仅本机无落点时)
     if deliverable:
         landings = [f"{advisor_ws}/{d.get('target_path') or ''}" for d in adv_h["deliveries"]]
-        step4 = [
-            "# 先预演(显示将签的角色 / 实例 / 治理根 / 有效期与接入落点, 不签码、零写入)给 Owner 看, 再 --confirm: 签码 + 接入一体,"
-            " 注册码只在本进程内(不打印、不落盘、不进 argv)。凭据落治理根 .lybra/(loop 按治理根取驱动方凭据), 顾问件(技能 / 章程)"
-            "交付到会话目录: " + ", ".join(landings),
-            *step4_deliver,
-        ]
-        title4 = f"【Owner 动作 ②】签码接入顾问到治理根(enroll-deliver, 码不出进程)+ 顾问件交付到 {label} 会话目录"
-        purpose4 = (
-            f"Owner 用门的中央凭据库({owner_conn})里的 Owner 凭据, 在治理根所在机一条命令为 {project_name} 签顾问码并就地兑换: "
-            f"码内嵌门地址 {gate}(来源: {gate_source})与治理根, 只在本进程内传给 enroll(不打印、不落盘、不进 argv), 兑换出的 advisor 凭据"
-            f"(projects=[{project_name}])落 {gov_s}/.lybra/(connection.json + role, owner_policy_ref 由第 {STEP['grant']} 步项目授权 {auth_ref} 推导); "
-            f"产品按 distribution 声明({', '.join(d['distribution_id'] for d in adv_h['deliveries'])}, harness={adv_kind})"
-            f"把顾问件经同一分发引擎交付到 {', '.join(landings)}(章程 = 顾问章程母本的渲染物, 含持续推进守则)"
-        )
-        check4 = (f"--dry-run 输出 'roles enroll-deliver advisor: 预览(未执行; 加 --confirm 执行)'(未签码、零写入); --confirm 输出 '已执行'、"
-                  f"注册码 code_id 与指纹(无码原文)与 '{adv_kind} 件 → …' 行")
+        step4 = [_t("step4.intro_local", landings=", ".join(landings)), *step4_deliver]
+        title4 = _t("step4.title_local", label=label)
+        purpose4 = _t("step4.purpose_local", conn=owner_conn, project=project_name, gate=gate, gate_source=gate_source, gov=gov_s,
+                      grant_step=STEP["grant"], auth=auth_ref, dists=", ".join(d["distribution_id"] for d in adv_h["deliveries"]),
+                      kind=adv_kind, landings=", ".join(landings))
+        check4 = _t("step4.check_local", kind=adv_kind)
         creates4 = f"{gov_s}/.lybra/connection.json, {gov_s}/.lybra/role, " + ", ".join(landings)
-        note4 = (f"顾问会话目录 {advisor_ws}({advisor_dir_label}; 缺省 = 治理根, 同机治理根已被别的顾问登记 = 治理根内声明子路径, "
-                 f"--advisor-dir 显式优先; 同机两个顾问不能共用一个会话目录): 本 guide 每条命令都显式带治理根, 不依赖 cwd; "
-                 f"顾问件交付后在会话目录重启 {label} 会话即加载")
+        note4 = _t("step4.note_local", dir=advisor_ws, dir_source=advisor_dir_label, label=label)
     else:
         undelivered = ", ".join(d["distribution_id"] for d in adv_h["deliveries"])
-        why = (f"声明给 {adv_kind} 的顾问件({undelivered})需本机会话目录, 会话在 {session_at} = 本机无落点不落盘(章程 / 技能件由会话开局拉取, 见 Step 5; 其余件 sync 列 undelivered)"
-               if adv_h["deliveries"] else f"声明里无给 {adv_kind} 的顾问件 = 无分发步骤")
-        step4 = [
-            f"# 先预演再 --confirm(在治理根所在机执行; 签码 + 接入一体, 注册码只在本进程内): 凭据与身份落治理根 .lybra/,"
-            f" role 如实记 harness={adv_kind} 与会话所在(--harness-host / --harness-dir); {why}",
-            *step4_deliver,
-        ]
-        title4 = f"【Owner 动作 ②】签码接入顾问到治理根(enroll-deliver, 码不出进程; {label} 会话, 如实登记会话所在)"
-        purpose4 = (
-            f"Owner 用门的中央凭据库({owner_conn})里的 Owner 凭据, 在治理根所在机一条命令为 {project_name} 签顾问码并就地兑换"
-            f"(码内嵌门地址 {gate}, 来源: {gate_source}; 码只在本进程内): 顾问({label} 会话, 位于 {session_at})的 advisor 凭据落 "
-            f"{gov_s}/.lybra/(connection.json + role); role 的 harness 记 {{kind: {adv_kind}, dir: {advisor_ws or '空'}, host: {adv_h['host'] or '空'}}}"
-            f"(他机目录如实记、不校验本机存在); 不落 .pi 接线; {why}"
-        )
-        check4 = ("--dry-run 输出 '预览(未执行; 加 --confirm 执行)'(未签码、零写入); --confirm 输出 '已执行' 与 'harness …' 已记入 .lybra/role; "
-                  "治理根下无 .pi/, 本机不新增顾问件")
-        creates4 = f"{gov_s}/.lybra/connection.json, {gov_s}/.lybra/role(harness={adv_kind})"
+        why = (_t("step4.why_pull", kind=adv_kind, undelivered=undelivered, session_at=session_at)
+               if adv_h["deliveries"] else _t("step4.why_none", kind=adv_kind))
+        step4 = [_t("step4.intro_remote", kind=adv_kind, why=why), *step4_deliver]
+        title4 = _t("step4.title_remote", label=label)
+        empty = _t("step4.empty")
+        purpose4 = _t("step4.purpose_remote", conn=owner_conn, project=project_name, gate=gate, gate_source=gate_source, label=label,
+                      session_at=session_at, gov=gov_s, kind=adv_kind, dir=advisor_ws or empty, host=adv_h["host"] or empty, why=why)
+        check4 = _t("step4.check_remote")
+        creates4 = _t("step4.creates_remote", gov=gov_s, kind=adv_kind)
         # AIPOS-F244 件②: 他机会话经 ssh 跑本 guide 的命令时 lybra 用治理根所在机稳定入口(唯一拼装 charter_render.remote_cli)
         from tools.aipos_cli.charter_render import remote_cli
 
         via_ssh = remote_cli("lybra")
-        note4 = (f"顾问会话({label})与治理根可不同机: 产品命令在治理根所在机运行(他机会话经 ssh), 本 guide 每条命令都显式带治理根, "
-                 "不依赖 cwd; " + (f"经 ssh 运行时 lybra 写治理根所在机入口绝对路径 {via_ssh['cli']}(非登录 ssh 不加载 ~/.local/bin 进 PATH)"
-                                    if via_ssh["entry"] else via_ssh["hint"]))
+        # 入口不可用时的 hint 原文来自 charter_render.remote_cli(车道外, 单语; AIPOS-F277 已知局限)
+        note4 = _t("step4.note_remote", label=label, ssh=_t("step4.ssh_entry", cli=via_ssh["cli"]) if via_ssh["entry"] else via_ssh["hint"])
     steps.append({
         "step_number": STEP["advisor"],
         "actor": "owner",
         "owner_action": 2,
         "title": title4,
-        "command": "\n".join(step4),
+        "command": _join("\n", step4),
         "commands": step4_deliver,
         "purpose": purpose4,
         "check": check4,
         "on_fail": {
-            "ENROLL_ENVELOPE_MISSING / 推导 owner_policy_ref 失败": (f"第 {STEP['grant']} 步项目授权未签或不覆盖本实例(驱动方 / 主机); 核对 "
-                                                              f"lybra project grant show {pq} --home-root {hq}(预检拒 = 未签码、未改凭据)"),
-            "UNKNOWN_GOVERNANCE_ROOT / PROJECT_NOT_ESTABLISHED": "门或本机在 home 根下找不到该项目(第 1 步未完成或门的 home 根不同); 确认门与第 1 步用同一 home 根",
-            "no usable role token": "--connection-json 须指向持 Owner 凭据的中央凭据库(门 serve 所读的 connection.json)",
-            "gate call failed": "门未运行或地址不通: lybra serve status; 此为门侧故障, 报 Owner",
-            "不在 distribution.schema harness_semantics.kinds 声明内": "--harness 取值按输出列出的合法值改正后重跑(预检拒, 未签码)",
-            "须为已存在的绝对目录": "会话在他机时加 --harness-host <会话所在机>(他机目录如实记, 不校验本机存在); 同机则先建目录",
-            "件交付失败": "凭据已落, 重跑 lybra sync --harness-root <治理根>(勿重跑接入)",
-            "已回滚 / 回滚失败": "接入失败时注册码已经门吊销(输出 '已回滚'); 回滚失败按输出出口手工吊销后重跑本步",
+            _t("step4.fail_envelope_key"): _t("step4.fail_envelope", grant_step=STEP["grant"], pq=pq, hq=hq),
+            "UNKNOWN_GOVERNANCE_ROOT / PROJECT_NOT_ESTABLISHED": _t("step4.fail_unknown_root"),
+            "no usable role token": _t("step4.fail_no_token"),
+            "gate call failed": _t("step3.fail_gate"),
+            _t("step4.fail_harness_key"): _t("step4.fail_harness"),
+            _t("step4.fail_dir_key"): _t("step4.fail_dir"),
+            _t("step4.fail_delivery_key"): _t("step4.fail_delivery"),
+            _t("step4.fail_rollback_key"): _t("step4.fail_rollback"),
         },
         "creates": creates4,
         "note": note4,
@@ -912,16 +888,16 @@ def generate_onboarding_guide(
 
     # ── Step 5: 顾问就位复核(前置自检 + 顾问件稳态 / 开局取章程) ────────────
     step5 = [
-        "# 前置自检(只读): 项目 / 产品仓 / 项目授权 / 顾问凭据齐",
+        _t("step5.precheck"),
         _cmd("lybra", "onboarding", "check", _shell_quote(project_name), "--step", str(STEP["advisor_check"]), "--home-root", hq),
     ]
     if deliverable:
         step5 += [
-            f"# 顾问件稳态复核: plan 为空 = 顾问件已齐(第 {STEP['advisor']} 步已交付; 母本变更后由 lybra sync 重渲染)",
+            _t("step5.steady", advisor_step=STEP["advisor"]),
             f"{_cmd('lybra', 'sync', '--harness-root', gq, '--workspace-root', gq)} --dry-run",
         ]
-        title5 = f"顾问就位复核({label} 会话目录顾问件稳态)"
-        check5 = f"onboarding check 输出 '✓ Step {STEP['advisor_check']} prerequisites satisfied'; sync --dry-run 输出 'up-to-date: 0 file(s) to fetch/render'"
+        title5 = _t("step5.title_local", label=label)
+        check5 = _t("step5.check_local", step=STEP["advisor_check"])
     else:
         # AIPOS-F138 件②: 本机无落点的顾问章程 = 拉取出口(会话开局经 ssh 取渲染后章程, 含持续推进守则; 产品不推送)。
         # 命令唯一拼装 charter_render.charter_pull_command; 在会话所在机每次开局跑, 不是本步现在跑的命令, 故以注释行给出
@@ -933,40 +909,39 @@ def generate_onboarding_guide(
         if charter_dists and not land:
             session_start = charter_pull_command(gov, instance=inst["advisor"], role_class=adv_h["role_class"])
             step5 += [
-                f"# 开局取章程(在 {session_at} 每次开 {label} 会话先运行, 输出 = 渲染后顾问章程全文, 含持续推进守则):",
+                _t("step5.pull_head", session_at=session_at, label=label),
                 f"#   {session_start['command']}",
             ] + ([f"#   ({session_start['host_hint']})"] if session_start["host_hint"] else [])
         elif charter_dists or any(d.get("kind") == "skills" for d in adv_h["deliveries"]):
             # AIPOS-F243 件②④: 落盘型他机会话(claude-code): 开局在会话目录取章程与技能并落到声明的相对落点(与 lybra sync 的 pull 行同一拼装)
             target = str(charter_dists[0].get("target_path") or "").strip("/") if charter_dists else None
             session_start = charter_pull_command(gov, instance=inst["advisor"], role_class=adv_h["role_class"], target_path=target)
-            lines = [f"# 开局取章程与技能(在 {session_at} 每次开 {label} 会话先在会话目录运行; 由会话自己落盘, 产品不推送):"]
+            lines = [_t("step5.land_head", session_at=session_at, label=label)]
             if charter_dists:
-                lines.append(f"#   {session_start['land_command']}    # 章程 → {target}")
+                lines.append(_t("step5.land_charter", command=session_start["land_command"], target=target))
             for d in adv_h["deliveries"]:
                 if d.get("kind") == "skills":
                     sk = skills_pull_command(gov, instance=inst["advisor"], role_class=adv_h["role_class"])
                     session_start["skills_command"] = sk["command"]
-                    lines.append(f"#   {sk['command']}    # 技能 → {str(d.get('target_path') or '').strip('/')}/")
+                    lines.append(_t("step5.land_skills", command=sk["command"], target=str(d.get("target_path") or "").strip("/")))
             step5 += lines + ([f"#   ({session_start['host_hint']})"] if session_start["host_hint"] else [])
-        title5 = f"顾问就位复核({label} 会话: 前置自检 + 开局取章程)"
-        check5 = f"onboarding check 输出 '✓ Step {STEP['advisor_check']} prerequisites satisfied'; 治理根下无 .pi/, 本机不新增顾问件"
+        title5 = _t("step5.title_remote", label=label)
+        check5 = _t("step5.check_remote", step=STEP["advisor_check"])
     steps.append({
         "step_number": STEP["advisor_check"],
         "actor": "advisor",
         "owner_action": None,
         "title": title5,
-        "command": "\n".join(step5),
-        "purpose": (f"新顾问({label} 会话, 位于 {session_at})确认第 1–{STEP['advisor']} 步的产物齐: 治理根 {gov_s}/.lybra/ 已有自己的 advisor 凭据与 role"
-                    f"(owner_policy_ref = 项目授权 {auth_ref}), 顾问件到位(本机会话)或会话开局取章程(他机会话)"),
+        "command": _join("\n", step5),
+        "purpose": _t("step5.purpose", label=label, session_at=session_at, advisor_step=STEP["advisor"], gov=gov_s, auth=auth_ref),
         "check": check5,
         "on_fail": {
-            f"Step {STEP['advisor']} 未完成 / 治理根无顾问凭据": f"请 Owner 重跑第 {STEP['advisor']} 步(先 --dry-run 再 --confirm)",
-            f"Step {STEP['grant']} 未完成 / 无项目授权": f"请 Owner 跑第 {STEP['grant']} 步签项目授权后再跑第 {STEP['advisor']} 步",
-            "--dry-run 的 plan 非空": "再跑一次不带 --dry-run 的 lybra sync --harness-root <治理根> 后复核; 仍非空 = 报 bug, 附 --dry-run --json 输出",
-            "章程落点已有非 Lybra 渲染物": "会话目录里已有同名文件(非 Lybra 渲染): 移走它或换会话目录后重跑 lybra sync(不覆盖用户文件)",
+            _t("step5.fail_advisor_key", advisor_step=STEP["advisor"]): _t("step5.fail_advisor", advisor_step=STEP["advisor"]),
+            _t("step5.fail_grant_key", grant_step=STEP["grant"]): _t("step5.fail_grant", grant_step=STEP["grant"], advisor_step=STEP["advisor"]),
+            _t("step5.fail_plan_key"): _t("step5.fail_plan"),
+            _t("step5.fail_foreign_key"): _t("step5.fail_foreign"),
         },
-        "creates": "无(只读复核)",
+        "creates": _t("step5.creates"),
         "note": note4,
         "session_start": session_start,
     })
@@ -983,12 +958,11 @@ def generate_onboarding_guide(
     # AIPOS-F157 件①: --actor = 签发实例(顾问本人), 按实例取凭据(F134/F154 唯一口; 同角色多顾问实例时缺之即拒)
     common = ["--gate-url", _shell_quote(gate), "--ttl", "86400", "--actor", _shell_quote(inst["advisor"])]
     enroll_on_fail = {
-        "no usable role token": f"第 {STEP['advisor']} 步未完成(治理根无顾问凭据); 请 Owner 先跑第 {STEP['advisor']} 步",
-        "UNKNOWN_GOVERNANCE_ROOT": f"门找不到项目; 核对门与第 {STEP['project']} 步同一 home 根",
-        "ENROLL_ENVELOPE_MISSING / 推导 owner_policy_ref 失败": (f"第 {STEP['grant']} 步项目授权未签或不覆盖该实例(实例名主机段须在授权主机内); "
-                                                          f"核对 lybra project grant show {pq} --home-root {hq}(预检拒 = 未签码)"),
-        "401 Unauthorized": "门拒绝顾问凭据或码(发码门 ≠ 本门); 核对 connection.json mcp.rpc_url 后重跑本步(失败时码已吊销)",
-        "已回滚 / 回滚失败": "接入失败时注册码已经门吊销(输出 '已回滚'); 回滚失败按输出出口手工吊销后重跑",
+        "no usable role token": _t("enroll.fail_no_token", advisor_step=STEP["advisor"]),
+        "UNKNOWN_GOVERNANCE_ROOT": _t("enroll.fail_unknown_root", project_step=STEP["project"]),
+        _t("step4.fail_envelope_key"): _t("enroll.fail_envelope", grant_step=STEP["grant"], pq=pq, hq=hq),
+        "401 Unauthorized": _t("enroll.fail_401"),
+        _t("step4.fail_rollback_key"): _t("enroll.fail_rollback"),
     }
 
     def _enroll_pair(role: str, instance: str, target: str, extra: list[str]) -> list[str]:
@@ -997,34 +971,37 @@ def generate_onboarding_guide(
                                               workspace=target, extra=[*extra, *common, *auth], phase=phase) for phase in ("--dry-run", "--confirm")]
 
     def _workstation_step(number: int, role: str, instance: str, ws: str, label_ws: str, duty: str) -> None:
+        from tools.aipos_cli.i18n import Localized, localize
+
         pair = _enroll_pair(role, instance, _shell_path(ws), ["--executor-mode", station_mode])
+        # 标签以 ASCII 起头(如「pi 执行工位」)时与「接入」间空一格; 各语言按各自标签判定
+        by_lang = label_ws.by_lang if isinstance(label_ws, Localized) else {"zh": str(label_ws)}
+        sep = localize({code: (" " if text[:1].isascii() else "") for code, text in by_lang.items()}, None,
+                       where="onboarding_guide.station.title")
         steps.append({
             "step_number": number,
             "actor": "advisor",
             "owner_action": None,
-            "title": f"接入{' ' if label_ws[:1].isascii() else ''}{label_ws}(pi, {station_mode} 模式): {instance} @ {ws}",
+            "title": _t("station.title", sep=sep, label=label_ws, mode=station_mode, instance=instance, ws=ws),
             "commands": pair,
-            "command": "\n".join([f"# {label_ws}: 先 --dry-run 预演(角色 / 实例 / 治理根 / 落点 / 覆盖授权, 不签码零写入)再 --confirm;"
-                                  f" 注册码只在本进程内; 凭据落工位 .lybra + .pi 接线(owner_policy_ref 由项目授权 {auth_ref} 推导)", *pair]),
-            "purpose": (f"{duty}。顾问用自己的凭据(治理根 .lybra/connection.json, projects=[{project_name}])在治理根所在机一条命令签码并就地兑换;"
-                        f" 工位目录 {ws}(来源: {ws_source}), 一个目录只登记给一个实例"),
-            "check": ("--dry-run 输出 '预览(未执行; 加 --confirm 执行)' 与覆盖授权; --confirm 输出 '已执行'、code_id 与指纹(无码原文)与 "
-                      "'role(含 owner_policy_ref)'; 工位 .lybra/connection.json 含 lybra_bin 且 workspace_root == governance_root"),
+            "command": _join("\n", [_t("station.comment", label=label_ws, auth=auth_ref), *pair]),
+            "purpose": _t("station.purpose", duty=duty, project=project_name, ws=ws, ws_source=ws_source),
+            "check": _t("station.check"),
             "on_fail": {
                 **enroll_on_fail,
-                ".pi 接线缺失": f"接入落 .pi 接线, 第 {STEP['sync']} 步 sync 补挂声明内缺失挂载; 仍缺 = 报 bug(附 sync --json 输出)",
-                "connection.json 缺 lybra_bin": "接入按运行中的 lybra 部署位写入; 用部署的 lybra 命令重跑本步",
-                "workspace_root 写成 harness root": "workspace_root 须等于码内治理根; 重跑本步校正",
+                _t("station.fail_pi_key"): _t("station.fail_pi", sync_step=STEP["sync"]),
+                _t("station.fail_bin_key"): _t("station.fail_bin"),
+                _t("station.fail_root_key"): _t("station.fail_root"),
             },
-            "creates": f"{ws}/.lybra + .pi + AGENTS.md; 治理根接入登记 land 事件(workstation={ws})",
+            "creates": _t("station.creates", ws=ws),
         })
 
     # ── Step 6: 审计工位(独立 pi; 审计恒不随执行方式变化) ──
-    _workstation_step(STEP["auditor"], audit_role, inst["auditor"], audit_ws, "审计工位",
-                      f"审计恒为独立 pi 审计工位 {inst['auditor']}(不审自己做的卡)")
+    _workstation_step(STEP["auditor"], audit_role, inst["auditor"], audit_ws, _t("station.label_audit"),
+                      _t("station.duty_audit", instance=inst["auditor"]))
     # ── Step 7: pi 执行工位(非代码卡一律 pi, AIPOS-F256) ──
-    _workstation_step(STEP["pi_executor"], exec_role, inst["pi_executor"], exec_ws, "pi 执行工位",
-                      f"非代码卡(docs / governance / config / validation)一律由 pi 执行工位 {inst['pi_executor']} 做(loop 按授权拉起 pi, 或 Owner 在工位 /go)")
+    _workstation_step(STEP["pi_executor"], exec_role, inst["pi_executor"], exec_ws, _t("station.label_exec"),
+                      _t("station.duty_exec", instance=inst["pi_executor"]))
 
     # ── Step 8: 子 agent 执行者(代码卡; 顾问会话派生, 凭据落治理根, 无工位) ──
     host_args = ["--harness-host", _shell_quote(adv_h["host"])] if adv_h["host"] else []
@@ -1033,19 +1010,17 @@ def generate_onboarding_guide(
         "step_number": STEP["subagent_executor"],
         "actor": "advisor",
         "owner_action": None,
-        "title": f"接入子 agent 执行者({exec_mode} 模式, 顾问会话 {adv_h['kind']} 派生): {inst['executor']} @ 治理根",
+        "title": _t("step8.title", mode=exec_mode, kind=adv_h["kind"], instance=inst["executor"]),
         "commands": pair8,
-        "command": "\n".join([f"# 子 agent 执行者: 凭据落治理根 .lybra/connection.json(按实例条目), harness = 顾问会话 {adv_h['kind']}; "
-                              "无工位、不 sync、不起 pi(代码卡由顾问按 lybra kickoff 开工稿派子 agent 以此身份交付)", *pair8]),
-        "purpose": (f"代码卡的执行身份 {inst['executor']}(实例名主机段 = 顾问会话所在机): 凭据与治理席位同落治理根 {gov_s}, land 事件记 "
-                    f"mode={exec_mode} harness={adv_h['kind']}(无 workstation= 段 = 无工位位置, 不可派 pi); 与 pi 执行工位 {inst['pi_executor']} 不同名、不同目录"),
-        "check": "--dry-run 输出 '预览(未执行; 加 --confirm 执行)'; --confirm 输出 '已执行' 与 land 事件(mode=subagent); 治理根下不新增 .pi/",
+        "command": _join("\n", [_t("step8.comment", kind=adv_h["kind"]), *pair8]),
+        "purpose": _t("step8.purpose", instance=inst["executor"], gov=gov_s, mode=exec_mode, kind=adv_h["kind"], pi_instance=inst["pi_executor"]),
+        "check": _t("step8.check"),
         "on_fail": {
             **enroll_on_fail,
-            "EXECUTOR_MODE_HARNESS": f"子 agent 模式须给 --harness <顾问会话 kind>(本向导 = {adv_h['kind']})且不给 --harness-dir; 按本步命令原样重跑",
-            "EXECUTOR_MODE_TARGET": f"子 agent 模式凭据须落治理根: --workspace 须为 {gov_s}",
+            "EXECUTOR_MODE_HARNESS": _t("step8.fail_harness", kind=adv_h["kind"]),
+            "EXECUTOR_MODE_TARGET": _t("step8.fail_target", gov=gov_s),
         },
-        "creates": f"{gov_s}/.lybra/connection.json 子 agent 执行者条目 + land 事件(mode={exec_mode}, harness={adv_h['kind']})",
+        "creates": _t("step8.creates", gov=gov_s, mode=exec_mode, kind=adv_h["kind"]),
     })
 
     # ── Step 9: 声明执行分工(三者齐)+ 复核 ──
@@ -1054,26 +1029,23 @@ def generate_onboarding_guide(
                 for phase in (("--dry-run",), ("--actor", _shell_quote(_actor), "--confirm"))]
     division = {"code": inst["executor"], "noncode": inst["pi_executor"], "audit": inst["auditor"]}
     step9 = [
-        "# 声明执行分工(AIPOS-F143 / F256, 产品按卡类型强制): 代码卡 = 子 agent 执行者, 非代码卡一律 pi 执行工位, 审计 = 独立 pi 审计工位;"
-        " 起草缺省与发卡核身份同读此声明(先预演再写入并落账)",
+        _t("step9.declare"),
         *set_exec,
-        "# 复核: 三实例都已接入(✓)且「执行分工」一段显示 pi 执行工位",
+        _t("step9.review"),
         _cmd("lybra", "roles", "--workspace-root", gq, "list"),
     ]
     steps.append({
         "step_number": STEP["execution"],
         "actor": "advisor",
         "owner_action": None,
-        "title": "声明执行分工(project set-execution, 三者齐)并复核",
-        "command": "\n".join(step9),
-        "purpose": (f"一次声明本项目谁执行什么: 代码卡 → 子 agent 执行者 {division['code']}; 非代码卡 → pi 执行工位 {division['noncode']}; "
-                    f"审计 → pi 审计工位 {division['audit']}。写前核身份(各实例须为本项目已接入实例, 审计者与 pi 执行者须有工位位置)"),
-        "check": ("set-execution --dry-run 给 project.json diff(零写入), --confirm 写入并落账('落账: verdict=PASS'); roles list 列出三实例 ✓ 且"
-                  "「执行分工」行 = 'pi 执行工位 = <pi 执行工位实例>'"),
+        "title": _t("step9.title"),
+        "command": _join("\n", step9),
+        "purpose": _t("step9.purpose", code=division["code"], noncode=division["noncode"], audit=division["audit"]),
+        "check": _t("step9.check"),
         "on_fail": {
-            "实例未接入 / 无工位位置": f"回第 {STEP['auditor']}–{STEP['subagent_executor']} 步接入对应实例后重跑本步",
-            "auditor 与执行者相同": "审计者须是独立 pi 审计工位实例, 不得等于任一执行者",
-            **LANDING_ON_FAIL,
+            _t("step9.fail_missing_key"): _t("step9.fail_missing", first=STEP["auditor"], last=STEP["subagent_executor"]),
+            _t("step9.fail_same_key"): _t("step9.fail_same"),
+            **landing_on_fail(),
         },
         "creates": f"{gov_s}/project.json#execution",
         "division": division,
@@ -1081,42 +1053,40 @@ def generate_onboarding_guide(
 
     # ── Step 10: 工位 sync 分发 + 稳态复核 + 工位自检 ──
     step10: list[str] = []
-    for label10, ws in (("pi 执行", exec_ws), ("审计", audit_ws)):
+    for label10, ws in ((_t("step10.label_exec"), exec_ws), (_t("step10.label_audit"), audit_ws)):
         wq = _shell_path(ws)
         sync_ws = f"lybra sync --harness-root {wq} --workspace-root {gq}"
-        step10 += [f"# {label10}工位: 按分发声明落齐工位件 → 稳态复核 → 工位自检(只读, 缺项逐项点名)", sync_ws, f"{sync_ws} --dry-run",
+        step10 += [_t("step10.station", label=label10), sync_ws, f"{sync_ws} --dry-run",
                    _cmd("lybra", "onboarding", "check", pq, "--step", str(STEP["sync"]), "--home-root", hq, "--workspace-dir", wq)]
-    step10 += ["# 工位设置现状(只读; 三实例登记、工位章程新鲜度与执行分工)", _cmd("lybra", "project", "workstation-plan", pq, "--home-root", hq)]
+    step10 += [_t("step10.plan"), _cmd("lybra", "project", "workstation-plan", pq, "--home-root", hq)]
     steps.append({
         "step_number": STEP["sync"],
         "actor": "advisor",
         "owner_action": None,
-        "title": "工位 sync 分发 + 稳态复核 + 工位自检",
-        "command": "\n".join(step10),
-        "purpose": (f"pi 执行工位 {exec_ws} 与审计工位 {audit_ws} 按分发声明落齐技能 / 扩展 / 章程, 复核稳态并自检可启动最小集"
-                    "(子 agent 执行者无工位, 不 sync); 工位只同步分发, 不敲门动词"),
-        "check": (f"sync 工位行 synced(首个工位会补挂 .pi/extensions/go.ts); --dry-run 输出 'up-to-date: 0 file(s) to fetch/render'、无 would-prune 行; "
-                  f"onboarding check 输出 '✓ Step {STEP['sync']} prerequisites satisfied'; workstation-plan 现状三实例已接入、工位章程最新"),
+        "title": _t("step10.title"),
+        "command": _join("\n", step10),
+        "purpose": _t("step10.purpose", exec_ws=exec_ws, audit_ws=audit_ws),
+        "check": _t("step10.check", step=STEP["sync"]),
         "on_fail": {
-            "sync 把工位记为 skipped": f"--workspace-root 须为本项目治理根 {gov_s}",
-            "--dry-run 的 plan 或 prune 非空": "再跑一次不带 --dry-run 的 sync 后复核; 仍非空 = 报 bug, 附 --dry-run --json 输出",
-            "未完成 enroll, 拒绝写入": f"该工位未接入: 回第 {STEP['auditor']} / {STEP['pi_executor']} 步为它 enroll-deliver",
-            "自检缺项": (f"按输出缺项逐项修复(lybra_bin 悬空 → 重跑对应接入步; owner_policy_ref 缺失 → 核对第 {STEP['grant']} 步授权覆盖本工位后重跑 sync)"),
+            _t("step10.fail_skipped_key"): _t("step10.fail_skipped", gov=gov_s),
+            _t("step10.fail_plan_key"): _t("step10.fail_plan"),
+            _t("step10.fail_not_enrolled_key"): _t("step10.fail_not_enrolled", audit_step=STEP["auditor"], exec_step=STEP["pi_executor"]),
+            _t("step10.fail_selfcheck_key"): _t("step10.fail_selfcheck", grant_step=STEP["grant"]),
         },
-        "creates": f"{exec_ws}, {audit_ws} 的工位件, 工位父根 _distributed/",
+        "creates": _t("step10.creates", exec_ws=exec_ws, audit_ws=audit_ws),
     })
 
     # ── Step 11: 首卡(顾问, 产品命令; 执行按分工) ──
     step11 = [
         *card_policy_lines(gov_s, _actor),  # AIPOS-F252 件①: 首卡前声明卡号形状(值 = Owner 确认的本项目卡号正则, 无内置默认)
-        "# 发卡: 卡稿 JSON 写 project / task_mode / lane.repo(第 2 步仓名) / audit 等(执行者 / harness / 审计者按第 9 步执行分工缺省); 校验后发布到 pending",
+        _t("step11.publish"),
         _cmd(lybra_command_prefix(gov_s), "draft", "create", "--from-json", DRAFT_JSON_PLACEHOLDER),
         _cmd(lybra_command_prefix(gov_s), "draft", "publish", "--path", DRAFT_PATH_PLACEHOLDER),
-        f"# 推进: lybra loop 自动找到项目授权 {auth_ref}(不带信封)一段式认领(建工作树)→ 等交回 → 派审 → 等审计报告 → 裁决 → finalize → 结案 → N6 落账",
+        _t("step11.drive", auth=auth_ref),
         _cmd("lybra", "loop", "--task-id", TASK_ID_PLACEHOLDER, "--workspace-root", gq),
-        f"# 代码卡: loop 提示派子 agent 时, 顾问取自包含开工稿, 在顾问会话里派生子 agent(以 {inst['executor']} 身份)照稿执行; 子 agent 写完 RETURN 即停",
+        _t("step11.code", instance=inst["executor"]),
         _cmd(lybra_command_prefix(gov_s), "kickoff", "--task-id", TASK_ID_PLACEHOLDER),
-        f"# 非代码卡(及审计卡): loop 按授权在 pi 执行工位 / 审计工位自动拉起 pi; 授权未放行拉起时, Owner 在该工位手工开工(审计工位同法, cd {_shell_path(audit_ws)}):",
+        _t("step11.noncode", audit_ws=_shell_path(audit_ws)),
         f"cd {_shell_path(exec_ws)}",
         "pi",
         "/go",
@@ -1125,23 +1095,19 @@ def generate_onboarding_guide(
         "step_number": STEP["first_card"],
         "actor": "advisor",
         "owner_action": None,
-        "title": "首卡: 发卡 → lybra loop 推进到结案(代码卡派子 agent / 非代码卡 pi 执行工位)",
-        "command": "\n".join(step11),
-        "purpose": (f"顾问只用产品命令推进: lybra loop 以项目授权 {auth_ref} 驱动整张卡; 执行按第 {STEP['execution']} 步分工——代码卡由顾问 lybra kickoff "
-                    f"派子 agent, 非代码卡由 loop 在 pi 执行工位 {exec_ws} 拉起 pi(或 Owner 在工位 /go); 审计由 pi 审计工位 {audit_ws} 做。"
-                    "执行体 / 审计体只写产物(RETURN / 审计报告), 门动作全由产品做"),
-        "check": "lybra loop 退出码 0 且输出 'done: <卡ID> 已结案(closure 记录存在), 治理已落账'(结案后 loop 自动执行 N6 落账: lybra governance-commit --task-id)",
+        "title": _t("step11.title"),
+        "command": _join("\n", step11),
+        "purpose": _t("step11.purpose", auth=auth_ref, execution_step=STEP["execution"], exec_ws=exec_ws, audit_ws=audit_ws),
+        "check": _t("step11.check"),
         "on_fail": {
-            "exit 5(无有效授权)": f"第 {STEP['grant']} 步授权未签或不覆盖本卡(车道 / 任务类型 / 主机); 按输出的扩大授权命令请 Owner 签",
-            "exit 3(等待超时)": "执行体 / 审计体尚未交回产物: 代码卡确认子 agent 已派出, 非代码卡确认 pi 已拉起或已 /go, 之后重跑同一条 lybra loop",
-            "看进度(loop 跑在后台 / 久无动静)": f"lybra loop status --task-id {TASK_ID_PLACEHOLDER} --workspace-root {gq}"
-                                                "(读运行记录 + 探活 + 判停滞: running/stalled/launch_dead/loop_dead/ended, 含日志路径); "
-                                                "禁 tail/grep 原始日志自判",
-            "exit 2(门拒)": "照输出原文处理; loop 已回读门生记录, 不会重复执行已落步骤",
-            "exit 2(落账拒)": "N6 落账被拒(他人暂存 / 护栏 / 推送未完成): 照输出原文处理后重跑同一条 lybra loop(落账幂等)",
-            "/go 报 工作树尚未建立": "认领与建树由驱动方完成, 工位不自领; 等 lybra loop 认领后再 /go",
+            _t("step11.fail_5_key"): _t("step11.fail_5", grant_step=STEP["grant"]),
+            _t("step11.fail_3_key"): _t("step11.fail_3"),
+            _t("step11.fail_status_key"): _t("step11.fail_status", task=TASK_ID_PLACEHOLDER, gov=gq),
+            _t("step11.fail_gate_key"): _t("step11.fail_gate"),
+            _t("step11.fail_landing_key"): _t("step11.fail_landing"),
+            _t("step11.fail_go_key"): _t("step11.fail_go"),
         },
-        "creates": "卡在 completed 队列 + claim/return/dispatch/verdict/finalization/closure 记录, 且已提交并推送治理仓",
+        "creates": _t("step11.creates"),
     })
 
     owner_steps = [s["step_number"] for s in steps if s.get("owner_action")]
@@ -1184,10 +1150,8 @@ def generate_onboarding_guide(
         # AIPOS-F123 件③ / AIPOS-F124 件②: 接入既有人肉项目(落点声明 → 冻结 → 收编), 新项目可略过
         "legacy_onboarding": legacy_onboarding_steps(project_name, gov_s, home_root=str(home), actor=_actor,
                                                      authorization_ref=auth_ref),
-        "summary": (
-            f"从 0 接新项目 {project_name} 全流程({len(steps)} 步, 零手工编辑; Owner 一次性动作 = Step {' / '.join(map(str, owner_steps))}):\n"
-            + "\n".join(f"  Step {s['step_number']}: {s['title']}" for s in steps)
-        ),
+        "summary": _join("\n", [_t("summary.head", project=project_name, count=len(steps), owner_steps=" / ".join(map(str, owner_steps))),
+                                *(_t("summary.row", n=s["step_number"], title=s["title"]) for s in steps)]),
     }
 
 
@@ -1200,33 +1164,45 @@ def gate_start_step(gate_workspace: str, gate_url: str, *, before_step: int | No
     ws = _shell_quote(gate_workspace)
     reachable = bool(preflight.get("gate_reachable"))
     return {
-        "title": "让门在跑(之后签授权 / 签码 / loop 都要连门)",
+        "title": _t("gate_start.title"),
         "before_step": before_step,
         "actor": "owner",
         "options": [
-            {"name": "前台", "command": _cmd("lybra", "serve", "--workspace-root", ws, "start"),
-             "note": "终端常开, 关终端门即停; 适合先试跑"},
-            {"name": "常驻", "commands": [install_command(gate_workspace, "dry-run"), install_command(gate_workspace, "confirm")],
-             "note": "Linux = systemd --user 单元, macOS = launchd; 先预演看将写的单元全文, 无误后 --confirm(启用并回读状态); "
-                     "卸载 `lybra serve uninstall --confirm`"},
+            {"name": _t("gate_start.foreground"), "command": _cmd("lybra", "serve", "--workspace-root", ws, "start"),
+             "note": _t("gate_start.foreground_note")},
+            {"name": _t("gate_start.resident"), "commands": [install_command(gate_workspace, "dry-run"), install_command(gate_workspace, "confirm")],
+             "note": _t("gate_start.resident_note")},
         ],
-        "check": f"lybra setup check 的「门」一项为 ✓(探测 {gate_url})",
-        "skip_note": "前置检查显示门已在跑且可达, 本步可略过" if reachable else None,
+        "check": _t("gate_start.check", gate=gate_url),
+        "skip_note": _t("gate_start.skip") if reachable else None,
     }
+
+
+def pattern_command(governance_root: str | Path) -> str:
+    """卡号形状声明命令(唯一渲染 card_policy_loader.set_task_id_pattern_command)按语言: 缺省语言 = 其缺省占位(card_policy 声明的
+    pattern_placeholder, 门侧占位拒判同读); 其余语言 = 该语言占位(owner_texts.onboarding_guide.card_policy.pattern_placeholder)。"""
+    from tools.aipos_cli.i18n import Localized, default_language, pick
+    from tools.card_policy_loader import set_task_id_pattern_command
+
+    placeholder = _t("card_policy.pattern_placeholder")
+    if not isinstance(placeholder, Localized):
+        return set_task_id_pattern_command(governance_root)
+    return Localized({code: (set_task_id_pattern_command(governance_root) if code == default_language()
+                             else set_task_id_pattern_command(governance_root, pick(placeholder, code))) for code in placeholder.by_lang},
+                     default_language())
 
 
 def card_policy_lines(governance_root: str, actor: str) -> list[str]:
     """AIPOS-F252 件①: 接入流程的卡号形状声明行(向导第 9 步首卡前 / 人肉期接入第 1 步同一渲染): 说明 + show(看建议值) + 预演 + 确认。
     命令原文唯一渲染 card_policy_loader.set_task_id_pattern_command / show_command(缺声明报错 / project upgrade 待补项同一出处); 值不内置默认。"""
-    from tools.card_policy_loader import set_task_id_pattern_command, show_command
+    from tools.card_policy_loader import show_command
 
-    base = set_task_id_pattern_command(governance_root)
+    base = pattern_command(governance_root)
     return [
-        "# 卡号形状(task_id_pattern, AIPOS-F252): 受控发布 / finalize / lybra-deploy 的归属解析只读它, 产品无内置默认; "
-        "show 给出按现有卡号前缀推出的建议值(仅建议), 值经 Owner 确认后先预演再 --confirm(写治理根 card_policy.json 并落账)",
+        _t("card_policy.comment"),
         show_command(governance_root),
-        f"{base} --actor {_shell_quote(actor)} --dry-run",
-        f"{base} --actor {_shell_quote(actor)} --confirm",
+        _join("", [base, f" --actor {_shell_quote(actor)} --dry-run"]),
+        _join("", [base, f" --actor {_shell_quote(actor)} --confirm"]),
     ]
 
 
@@ -1251,175 +1227,179 @@ def legacy_onboarding_steps(project_name: str, governance_root: str, *, home_roo
     # AIPOS-F170 件②: 只给自由文本键(声明无 enum)的示例行——占位 <META_TEXT> 只对自由文本成立(status 等 enum 键不进向导)
     meta_flags = [project_meta_declaration()["keys"][key] for key, spec in declared_meta_keys().items() if not spec.get("enum")]
     if meta_flags:
-        meta_lines = ["# project.json 说明键(" + " / ".join(f.lstrip("-") for f in meta_flags) + ")同样经产品写入口更新(人肉期旧文免手改), 先预演再 --confirm"]
+        meta_lines = [_t("legacy.meta", keys=" / ".join(f.lstrip("-") for f in meta_flags))]
         meta_args = [part for flag in meta_flags for part in (flag, META_TEXT_PLACEHOLDER)]
         meta_lines += [_cmd("lybra", "project", "set-meta", pq, "--home-root", hq, *meta_args, phase) for phase in ("--dry-run", "--confirm")]
     else:
-        meta_lines = ["# project.json 说明键写入口 lybra project set-meta: 待 config.schema project_json 声明这些键后可用(未声明 = 拒 META_KEY_UNDECLARED)"]
+        meta_lines = [_t("legacy.meta_none")]
     return [
         {
             "order": 1,
-            "title": "落点声明: project.json paths 经产品写入口声明(免手改)",
+            "title": _t("legacy.t1"),
             "actor": "advisor",
-            "command": "\n".join([
-                "# 键名与取值按 config.schema project_json.paths 校验(未知键拒 / finalize_mode 枚举); 先 --dry-run 看 diff, 再 --confirm",
+            "command": _join("\n", [
+                _t("legacy.c1_head"),
                 _cmd("lybra", "project", "set-paths", pq, "--home-root", hq, "--key", PATHS_KEY_PLACEHOLDER, "--value",
                      PATHS_VALUE_PLACEHOLDER, "--dry-run"),
                 _cmd("lybra", "project", "set-paths", pq, "--home-root", hq, "--key", PATHS_KEY_PLACEHOLDER, "--value",
                      PATHS_VALUE_PLACEHOLDER, "--confirm"),
                 # AIPOS-F145 件③: 既有项目声明阶段档案位置(finalize 阶段闸门按此落点核阶段快照)
-                f"# 阶段档案(阶段快照)不在缺省位置时同样声明: --key {STAGE_ARCHIVE_PATH_KEY} --value <相对治理根路径>"
-                "(未声明 = 缺省落点; 落点下无快照 = finalize 阶段闸门拒)",
+                _t("legacy.c1_stage", key=STAGE_ARCHIVE_PATH_KEY),
                 *meta_lines,
                 *card_policy_lines(governance_root, actor),
             ]),
-            "purpose": ("为什么先做: 后两步都按声明落点工作——冻结按 queue_root 找卡, 收编按 return_root 写报告骨架、loop 按声明找产物; "
-                        "落点未声明时取缺省值, 人肉期项目的真实落点未必是缺省, 骨架会落错位置。"
-                        "人肉期项目的 Return/裁决/队列/授权落点逐项声明(可多对 --key/--value; 与缺省相同也显式声明: "
-                        "收编要求 config.schema project_json.paths.adoption.required_declared_keys 已显式声明, 否则拒 ADOPT_PATHS_UNDECLARED)。"
-                        f"阶段档案(阶段快照)若不在缺省位置, 一并声明 {STAGE_ARCHIVE_PATH_KEY}(相对治理根): Lybra 内部 finalize 的阶段闸门按此落点核"
-                        "阶段快照, 未声明而缺省位置无快照 = 拒(AIPOS-F145)。"
-                        "预演首行标明目标项目与 project.json 绝对路径, 核对无误再 --confirm; 在目标项目治理根下运行可省项目名"
-                        "(目标 = 该根 project.json#project, 解析不出即拒, 绝不回落 home 级活动项目; 显式项目名与所在治理根不一致 = 拒)"),
+            "purpose": _t("legacy.p1", key=STAGE_ARCHIVE_PATH_KEY),
         },
         {
             "order": 2,
-            "title": "存量冻结: 人肉期已结束/不再推进的卡一次声明为历史(迁移基线)",
+            "title": _t("legacy.t2"),
             "actor": "advisor",
-            "command": "\n".join([
-                "# 先 --dry-run 核对将冻结的卡与各卡 lint 问题计数, 无误后改 --confirm(清单只追加; 解冻 = --unfreeze)",
+            "command": _join("\n", [
+                _t("legacy.c2_head"),
                 _cmd("lybra", "project", "freeze-legacy", "--queue", "claimed,completed,blocked", "--exclude", TASK_ID_PLACEHOLDER,
                      "--reason", FREEZE_REASON_PLACEHOLDER, "--actor", actor, "--workspace-root", gq, "--dry-run"),
             ]),
-            "purpose": ("为什么在收编之前: 收编认冻结(冻结卡拒 ADOPT_LEGACY_FROZEN), 先把不再推进的卡一次声明为历史, "
-                        "仍在途、要继续推进的卡用 --exclude 留出(交给下一步收编); 冻结卡不被 state lint 报 ERROR、不被 next 当待推进, 门拒对其写动作"),
+            "purpose": _t("legacy.p2"),
         },
         {
             "order": 3,
-            "title": "在途卡收编: 门补铸 claim 记录、绑定既有分支、建卡工作树",
+            "title": _t("legacy.t3"),
             "actor": "advisor",
-            "command": "\n".join([
-                "# 每张在途卡: 先预览(零写入, 含授权判定与全部拒因), 无拒因后改 --confirm; 收编后与新卡同样只用 lybra loop 推进",
+            "command": _join("\n", [
+                _t("legacy.c3_head"),
                 _cmd(lybra_command_prefix(governance_root), "queue", "adopt", "--task-id", TASK_ID_PLACEHOLDER, "--branch",
                      LEGACY_BRANCH_PLACEHOLDER, "--actor", actor, "--owner-policy-ref", authorization_ref, "--dry-run"),
                 _cmd(lybra_command_prefix(governance_root), "queue", "adopt", "--task-id", TASK_ID_PLACEHOLDER, "--branch",
                      LEGACY_BRANCH_PLACEHOLDER, "--actor", actor, "--owner-policy-ref", authorization_ref, "--confirm"),
                 _cmd("lybra", "loop", "--task-id", TASK_ID_PLACEHOLDER, "--workspace-root", gq),
             ]),
-            "purpose": ("为什么最后: 收编写报告骨架与 claim 记录, 依赖前两步(落点已声明、历史卡已冻结)。"
-                        "--branch = 该卡产物所在的既有分支(卡 lane.repo 仓内); 卡分支名与之不同时卡分支建在其 tip 上。"
-                        "拒因(声明 transitions nodes.N1.adoption.guards + config.schema project_json.paths.adoption.guards)一次列全: "
-                        "卡面意图必填缺项 / 分支不存在 / 已有门生 claim / 已冻结 / 落点未声明 / 卡分支分叉 / 建树失败 / 授权不覆盖。"
-                        "已有手写 Return 不被覆盖: loop 按交回判据要求补 commit_sha / tree_hash / branch, 拒因原文给出补法"),
+            "purpose": _t("legacy.p3"),
         },
     ]
 
 
 def _format_gate_start(gate_start: dict[str, Any]) -> list[str]:
     """AIPOS-F263 件③: 起门步人读(format_guide_text 内, 首个 Owner 动作步之前)。"""
-    out = [f"── 起门: {gate_start['title']} [执行方: Owner; 二选一] ──"]
+    out = [_t("text.gs_head", title=gate_start["title"])]
     for i, opt in enumerate(gate_start["options"], 1):
-        out.append(f"  {i}) {opt['name']}: {opt['note']}")
+        out.append(_t("text.gs_option", n=i, name=opt["name"], note=opt["note"]))
         for cmd in opt.get("commands") or [opt["command"]]:
             out.append(f"     {cmd}")
-    out.append(f"验证: {gate_start['check']}")
+    out.append(_t("text.check", check=gate_start["check"]))
     if gate_start.get("skip_note"):
-        out.append(f"注: {gate_start['skip_note']}")
+        out.append(_t("text.note", note=gate_start["skip_note"]))
     out.append("")
     return out
 
 
-def format_guide_text(guide: dict[str, Any]) -> str:
-    """将结构化 guide 格式化为可读文本(终端输出用)。"""
-    lines: list[str] = []
-    lines.append(f"═══ 从 0 接新项目: {guide['project_name']} ═══")
-    lines.append(f"home 根: {guide['home_root']}(来源: {guide.get('home_root_source', '?')})")
-    lines.append(f"治理根: {guide.get('governance_root', '')}")
-    lines.append(f"门地址: {guide['gate_url']}(来源: {guide.get('gate_url_source', '?')})")
+def format_guide_text(guide: dict[str, Any], lang: str | None = None) -> str:
+    """将结构化 guide 格式化为可读文本(终端输出用)。AIPOS-F277: lang = 用户语言(i18n.resolve_language; 缺省 = 缺省语言, 与改前逐字相同);
+    guide 可为 generate_onboarding_guide 原样结果(含双语渲染值)或已按语言落成的结果。"""
+    from tools.aipos_cli.i18n import lines_in
+
+    unknown = _t("text.unknown")
+    lines: list[Any] = []
+    lines.append(_t("text.banner", project=guide["project_name"]))
+    lines.append(_t("text.home", home=guide["home_root"], source=guide.get("home_root_source", unknown)))
+    lines.append(_t("text.gov", gov=guide.get("governance_root", "")))
+    lines.append(_t("text.gate", gate=guide["gate_url"], source=guide.get("gate_url_source", unknown)))
     cred = guide.get("owner_credential") or {}
-    lines.append(f"Owner 凭据: {guide.get('owner_connection_json', '')}(来源: {cred.get('source', '?')})")
+    lines.append(_t("text.cred", conn=guide.get("owner_connection_json", ""), source=cred.get("source", unknown)))
     if cred and not cred.get("resolved"):
-        lines.append(f"  ⚠ Owner 凭据未推导出: {cred.get('reason')}")
+        lines.append(_t("text.cred_warn", reason=cred.get("reason")))
     auth = guide.get("authorization") or {}
     if auth:
-        lines.append(f"项目常设授权: {auth.get('authorization_id')}(第 {STEP['grant']} 步签; 之后各接入命令的授权引用都是它)")
+        lines.append(_t("text.auth", auth=auth.get("authorization_id"), step=STEP["grant"]))
     ws = guide.get("workstations") or {}
-    lines.append(f"工位目录: pi 执行工位 {ws.get('pi_executor')} · 审计工位 {ws.get('auditor')}(来源: {guide.get('workstations_source', '?')})")
+    lines.append(_t("text.ws", exec_ws=ws.get("pi_executor"), audit_ws=ws.get("auditor"), source=guide.get("workstations_source", unknown)))
     div = guide.get("division") or {}
     if div:
-        lines.append(f"执行分工: 代码卡 → 子 agent 执行者 {div.get('code')} · 非代码卡 → pi 执行工位 {div.get('noncode')} · "
-                     f"审计 → pi 审计工位 {div.get('audit')}")
-    lines.append(f"生成时间: {guide['generated_at']}")
+        lines.append(_t("text.division", code=div.get("code"), noncode=div.get("noncode"), audit=div.get("audit")))
+    lines.append(_t("text.generated", at=guide["generated_at"]))
     owner = guide.get("owner_actions") or []
-    lines.append(f"共 {guide['total_steps']} 步, 全程零手工编辑; Owner 一次性动作 {len(owner)} 条: " + ", ".join(f"Step {n}" for n in owner))
+    lines.append(_t("text.total", total=guide["total_steps"], count=len(owner), steps=", ".join(f"Step {n}" for n in owner)))
     lines.append("")
     pre = guide.get("preflight")  # AIPOS-F263 件③: 前置检查(lybra setup check 摘要)
     if pre:
-        lines.append(f"── 前置检查: {pre['title']} [执行方: Owner] ──")
-        lines.append(f"命令: {pre['command']}")
-        lines.extend(f"  {ln}" for ln in pre["lines"])
+        lines.append(_t("text.pre_head", title=pre["title"]))
+        lines.append(_t("text.pre_command", command=pre["command"]))
+        lines.extend(_join("", ["  ", ln]) for ln in pre["lines"])
         if pre.get("blocking"):
-            lines.append(f"⛔ 前置检查有 ✗ 项({', '.join(pre['blocking_items'])}): 以下各步被阻断——先按上列出口处理, "
-                         f"再跑 `{pre['command']}`(或 `lybra onboarding check {guide['project_name']} --step 0`)复核为无 ✗ 后从 Step 1 往下做")
+            lines.append(_t("text.pre_blocking", items=", ".join(pre["blocking_items"]), command=pre["command"], project=guide["project_name"]))
         lines.append("")
     gate_start = guide.get("gate_start")
+    who_keys = {"owner": "text.actor_owner", "advisor": "text.actor_advisor", "workstation": "text.actor_workstation"}
 
     for step in guide["steps"]:
         if gate_start and step["step_number"] == gate_start.get("before_step"):
             lines.extend(_format_gate_start(gate_start))
-        who = {"owner": "Owner", "advisor": "顾问", "workstation": "工位"}.get(step.get("actor", ""), step.get("actor", ""))
-        lines.append(f"── Step {step['step_number']}: {step['title']} [执行方: {who}] ──")
-        lines.append(f"目的: {step['purpose']}")
+        actor = step.get("actor", "")
+        who = _t(who_keys[actor]) if actor in who_keys else actor
+        lines.append(_t("text.step_head", n=step["step_number"], title=step["title"], who=who))
+        lines.append(_t("text.purpose", purpose=step["purpose"]))
         lines.append("")
 
         if "commands" in step and len(step["commands"]) > 1:
-            lines.append("命令(逐条执行):")
+            lines.append(_t("text.commands_each"))
             for i, cmd in enumerate(step["commands"], 1):
                 lines.append(f"  {i}. {cmd}")
         else:
-            lines.append("命令:")
-            for cmd_line in step["command"].split("\n"):
-                lines.append(f"  {cmd_line}")
+            lines.append(_t("text.commands"))
+            for cmd_line in _split_lines(step["command"]):
+                lines.append(_join("", ["  ", cmd_line]))
 
         lines.append("")
-        lines.append(f"验证: {step['check']}")
+        lines.append(_t("text.check", check=step["check"]))
 
         if step.get("on_fail"):
-            lines.append("失败出口:")
+            lines.append(_t("text.on_fail"))
             for err, fix in step["on_fail"].items():
-                lines.append(f"  [{err}] → {fix}")
+                lines.append(_join("", ["  [", err, "] → ", fix]))
 
         if step.get("note"):
-            lines.append(f"注: {step['note']}")
+            lines.append(_t("text.note", note=step["note"]))
 
-        lines.append(f"产物: {step['creates']}")
+        lines.append(_t("text.creates", creates=step["creates"]))
         lines.append("")
 
-    lines.append("═══ 完成: 从项目注册到首卡结案, 零手工编辑 ═══")
+    lines.append(_t("text.done"))
     on_demand = guide.get("on_demand") or []
     if on_demand:
         lines.append("")
-        lines.append("═══ 按需声明(只列, 不强制; 每条先预演, 确认 = 同参改 --confirm) ═══")
+        lines.append(_t("text.on_demand_head"))
         for item in on_demand:
-            lines.append(f"── {item['title']} ──")
-            lines.append(f"用途: {item['purpose']}")
-            lines.append(f"何时需要: {item['when']}")
-            lines.append("命令:")
+            lines.append(_t("text.item_head", title=item["title"]))
+            lines.append(_t("text.use", purpose=item["purpose"]))
+            lines.append(_t("text.when", when=item["when"]))
+            lines.append(_t("text.commands"))
             for cmd_line in item["commands"]:
-                lines.append(f"  {cmd_line}")
+                lines.append(_join("", ["  ", cmd_line]))
             lines.append("")
     legacy = guide.get("legacy_onboarding") or []
     if legacy:
         lines.append("")
-        lines.append("═══ 附: 接入既有人肉项目(人肉期已有卡与记录; 顺序 = 落点声明 → 冻结 → 收编) ═══")
+        lines.append(_t("text.legacy_head"))
         for item in legacy:
-            lines.append(f"── {item['order']}. {item['title']} ──")
-            lines.append(f"目的: {item['purpose']}")
-            lines.append("命令:")
-            for cmd_line in str(item["command"]).split("\n"):
-                lines.append(f"  {cmd_line}")
+            lines.append(_t("text.legacy_item_head", n=item["order"], title=item["title"]))
+            lines.append(_t("text.purpose", purpose=item["purpose"]))
+            lines.append(_t("text.commands"))
+            for cmd_line in _split_lines(item["command"]):
+                lines.append(_join("", ["  ", cmd_line]))
             lines.append("")
-    return "\n".join(lines)
+    return "\n".join(lines_in(lines, lang))
+
+
+def _split_lines(text: Any) -> list[str]:
+    """多行文案按行拆(双语渲染值逐语言拆, 行数不同 = 按缺省语言行数对齐, 各语言行一一对应)。"""
+    from tools.aipos_cli.i18n import Localized, default_language
+
+    if not isinstance(text, Localized):
+        return str(text).split("\n")
+    parts = {code: value.split("\n") for code, value in text.by_lang.items()}
+    count = len(parts[default_language()])
+    if any(len(v) != count for v in parts.values()):
+        raise ValueError("onboarding guide: 双语命令块各语言行数不一致(声明与实现不符)")
+    return [Localized({code: v[i] for code, v in parts.items()}, default_language()) for i in range(count)]
 
 
 # ---------------------------------------------------------------------------
@@ -1454,15 +1434,15 @@ def validate_step_prerequisites(
     for item in (preflight or {}).get("items") or []:
         if item["status"] == "fail":
             missing.append(f"preflight:{item['id']}")
-            guidance.append(f"前置检查 ✗ {item['label']}: {item['detail']}; 出口: {item['exit']}")
+            guidance.append(_t("check.preflight", label=item["label"], detail=item["detail"], exit=item["exit"]))
 
     if step_number >= STEP["project"]:
         if not project_root.is_dir():
             missing.append("project_root")
-            guidance.append(f"Step {STEP['project']} 未完成: 项目目录不存在 {project_root}; 先跑 lybra project new")
+            guidance.append(_t("check.no_project", step=STEP["project"], root=project_root))
         elif not (project_root / "project.json").is_file():
             missing.append("project.json")
-            guidance.append(f"project.json 缺失; 重跑 Step {STEP['project']}")
+            guidance.append(_t("check.no_project_json", step=STEP["project"]))
 
     if step_number >= STEP["grant"] and (project_root / "project.json").is_file():
         from tools.aipos_cli.workspace_config import CardRepoUnresolved, project_repos
@@ -1471,10 +1451,10 @@ def validate_step_prerequisites(
             repos = project_repos(project_root)
             if not repos["declared"] and repos["code_repo"] is None:
                 missing.append("repos")
-                guidance.append(f"Step {STEP['repos']} 未完成: project.json 无产品仓声明; 跑 lybra project set-repos")
+                guidance.append(_t("check.no_repos", step=STEP["repos"]))
         except CardRepoUnresolved as exc:
             missing.append("repos")
-            guidance.append(f"产品仓声明不合规: {exc}; 重跑 Step {STEP['repos']}")
+            guidance.append(_t("check.bad_repos", error=exc, step=STEP["repos"]))
 
     if step_number >= STEP["advisor"] and (project_root / "project.json").is_file():
         # AIPOS-F262 件①: 授权 = 项目常设授权(autonomy_policy.authorization_ids, 声明 authorizations_root); 兼容: 仍用旧信封的项目(policy_ids)不报缺
@@ -1482,7 +1462,7 @@ def validate_step_prerequisites(
 
         if not authorization_ids(project_root) and not policy_ids(project_root):
             missing.append("authorization")
-            guidance.append(f"Step {STEP['grant']} 未完成: 无项目常设授权; Owner 跑 Step {STEP['grant']} 的 lybra project grant sign(先预演再 --confirm)")
+            guidance.append(_t("check.no_grant", step=STEP["grant"]))
 
     # AIPOS-F106 件④: connection.json 定位经 service_mode.connection_path(既有唯一定位); role 只经 charter_render.workstation_identity 读
     from tools.aipos_cli.service_mode import connection_path as _connection_path
@@ -1490,38 +1470,39 @@ def validate_step_prerequisites(
     if step_number >= STEP["advisor_check"] and project_root.is_dir():
         if not _connection_path(project_root).is_file():
             missing.append("advisor_credential")
-            guidance.append(f"Step {STEP['advisor']} 未完成: 治理根无 .lybra/connection.json(顾问凭据); Owner 跑 Step {STEP['advisor']} 的 "
-                            "lybra roles enroll-deliver(先 --dry-run 再 --confirm)")
+            guidance.append(_t("check.no_advisor", step=STEP["advisor"]))
 
     if step_number >= STEP["sync"]:
+        steps = {"audit_step": STEP["auditor"], "exec_step": STEP["pi_executor"]}
         if workspace_dir:
             ws = Path(workspace_dir).expanduser()
         else:
             try:
                 ws = Path(workstation_dirs(project_root, project_name, home)["executor"]).expanduser()
             except ValueError as exc:
-                return {"ok": False, "missing": [*missing, "workspace_dir"], "guidance": [*guidance, f"{exc}; 用 --workspace-dir 指明工位目录"]}
+                return {"ok": False, "missing": [*missing, "workspace_dir"],
+                        "guidance": [*guidance, _t("check.ws_dir", error=exc.args[0] if exc.args else exc)]}
         conn_json = _connection_path(ws)
         if not conn_json.is_file():
             missing.append("connection.json")
-            guidance.append(f"工位未接入: {conn_json} 不存在; 跑工位接入步(Step {STEP['auditor']} / {STEP['pi_executor']})的 lybra roles enroll-deliver(先 --dry-run 再 --confirm)")
+            guidance.append(_t("check.no_conn", path=conn_json, **steps))
         else:
             try:
                 data = json.loads(conn_json.read_text(encoding="utf-8"))
                 if not data.get("lybra_bin"):
                     missing.append("lybra_bin")
-                    guidance.append(f"connection.json 缺 lybra_bin; 重跑工位接入步(Step {STEP['auditor']} / {STEP['pi_executor']}) enroll-deliver")
+                    guidance.append(_t("check.no_bin", **steps))
                 ws_root = data.get("workspace_root", "")
                 gov_root = data.get("governance_root", "")
                 if ws_root and gov_root and Path(ws_root).resolve() != Path(gov_root).resolve():
                     missing.append("workspace_root_mismatch")
-                    guidance.append(f"workspace_root != governance_root; 重跑工位接入步(Step {STEP['auditor']} / {STEP['pi_executor']}) enroll-deliver")
+                    guidance.append(_t("check.root_mismatch", **steps))
             except (OSError, json.JSONDecodeError):
                 missing.append("connection.json_invalid")
-                guidance.append(f"connection.json 格式错误; 重跑工位接入步(Step {STEP['auditor']} / {STEP['pi_executor']})")
+                guidance.append(_t("check.conn_invalid", **steps))
         if not (ws / ".pi" / "settings.json").is_file():
             missing.append(".pi/settings.json")
-            guidance.append(f".pi 接线缺失; 工位接入应自动落, 重跑 Step {STEP['sync']} 的 sync(仍缺再重跑工位接入步(Step {STEP['auditor']} / {STEP['pi_executor']}))")
+            guidance.append(_t("check.no_pi", sync_step=STEP["sync"], **steps))
         from tools.aipos_cli.charter_render import is_enrolled_workstation
         from tools.loop_context import ConnectionResolver
 
@@ -1534,14 +1515,14 @@ def validate_step_prerequisites(
                 ident = ConnectionResolver.resolve_identity(workspace_root=ws, env={})
             except WorkstationFileError as exc:
                 missing.append("role_invalid")
-                guidance.append(f"{exc}; 重跑工位接入步(Step {STEP['auditor']} / {STEP['pi_executor']})")
+                guidance.append(_t("check.role_error", error=exc, **steps))
             else:
                 if ident["role"]["source"] != ".lybra/role":
                     missing.append("role_invalid")
-                    guidance.append(f"role 文件格式错误; 重跑工位接入步(Step {STEP['auditor']} / {STEP['pi_executor']})")
+                    guidance.append(_t("check.role_invalid", **steps))
                 elif ident["owner_policy_ref"]["source"] != ".lybra/role":
                     missing.append("owner_policy_ref")
-                    guidance.append(f"role 文件缺 owner_policy_ref; 核对 Step {STEP['grant']} 项目授权是否覆盖本工位实例(主机段)后重跑 lybra sync")
+                    guidance.append(_t("check.no_policy_ref", grant_step=STEP["grant"]))
 
     return {
         "ok": not missing,

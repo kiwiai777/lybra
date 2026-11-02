@@ -547,7 +547,11 @@ def _serve_resident_cli(args: argparse.Namespace, connection_json: str | None) -
     """AIPOS-F263 件②: `serve install|uninstall` 薄壳(唯一实现 gate_resident.install / uninstall; 人读 render_resident_report)。
     退出码: 0 = 预演无拒因 / 确认完成; 1 = 拒(同名 / 手写单元 / 平台不支持 / 服务命令失败, 原文给出口)。"""
     from tools.aipos_cli.gate_resident import GateResidentError, install, render_resident_report, uninstall
+    from tools.aipos_cli.i18n import pick
 
+    lang = _cli_language(args, f"lybra serve {args.serve_command}")
+    if lang is None:
+        return 2
     try:
         if args.serve_command == "uninstall":
             result = uninstall(confirm=bool(args.confirm))
@@ -563,9 +567,9 @@ def _serve_resident_cli(args: argparse.Namespace, connection_json: str | None) -
             result = install(_resolve_workspace_for_command(args), confirm=bool(args.confirm), connection_json=connection_json,
                              start_args=start_args)
     except (GateResidentError, FileNotFoundError, FileExistsError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
+        print(f"Error: {pick(exc.args[0], lang) if isinstance(exc, GateResidentError) and exc.args else exc}", file=sys.stderr)
         return 1
-    print(render_json(result) if args.json else render_resident_report(result))
+    print(render_json(result) if args.json else render_resident_report(result, lang))
     return 0 if result.get("ok") else 1
 
 
@@ -603,6 +607,18 @@ def _config_cli(args: argparse.Namespace) -> int:
     return declared_exit_code(verb, "ok")
 
 
+def _cli_language(args: argparse.Namespace, prog: str) -> str | None:
+    """AIPOS-F277: Owner 面命令的用户语言(i18n.resolve_language: --lang > LYBRA_LANG > home 配置 > 缺省)。环境变量 / home 配置给了非法值 =
+    打印拒因(带来源与出口)并返回 None, 调用方以用法错退出(与 owner inbox 同一处置, AIPOS-F276)。"""
+    from tools.aipos_cli.i18n import LanguageError, resolve_language
+
+    try:
+        return resolve_language(args)
+    except LanguageError as exc:
+        print(f"{prog}: {exc}", file=sys.stderr)
+        return None
+
+
 def _setup_check_cli(args: argparse.Namespace) -> int:
     """AIPOS-F263 件①: `setup check` 薄壳(唯一实现 setup_check.run_setup_check; 人读 render_setup_check)。任一 ✗ = 退出码 1。
     工作区只用于门地址(其 .lybra/connection.json mcp.rpc_url, 不读 token); 解析不出 = 不带工作区(env / 缺省地址)。"""
@@ -611,12 +627,15 @@ def _setup_check_cli(args: argparse.Namespace) -> int:
     if getattr(args, "setup_command", None) != "check":
         print("usage: lybra setup check [--gate-url URL] [--json]", file=sys.stderr)
         return 2
+    lang = _cli_language(args, "lybra setup check")
+    if lang is None:
+        return 2
     try:
         workspace_root: Path | None = _resolve_workspace_for_command(args)
     except (FileNotFoundError, ValueError, OSError):
         workspace_root = None
     result = run_setup_check(workspace_root=workspace_root, gate_url=getattr(args, "gate_url", None))
-    print(render_json(result) if args.json else render_setup_check(result))
+    print(render_json(result) if args.json else render_setup_check(result, lang))
     return 0 if result["ok"] else 1
 
 
@@ -5048,7 +5067,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.serve_command == "status":
                 from tools.aipos_cli.gate_resident import render_resident_status_line
 
-                print(render_resident_status_line(result["resident"]))
+                print(render_resident_status_line(result["resident"], _cli_language(args, "lybra serve status")))
         else:
             print(render_json(result))
         return 1 if result.get("verdict") == Verdict.BLOCK or result.get("blocking_reasons") else 0
@@ -5719,12 +5738,17 @@ def main(argv: list[str] | None = None) -> int:
                 # AIPOS-F216 件②: 原 AIPOS-F24「~/.lybra/connection.json 在场 = 经门动词 lybra_project_new」分支删除——该门动词自 F24 起
                 # 从未登记进门 TOOL_HANDLERS(门路径恒失败), 门 token 按项目绑定不承接建项目; 建项目恒为本机脚手架。
                 # AIPOS-F92 件②: home 根只经 AIPOS-226 优先级梯解析, 打印结果与来源(门只扫描 home 根, 不登记 home 根外的治理根)
-                print(f"home 根: {home}(来源: {home_source}); 项目建在 {home / args.name}")
+                from tools.aipos_cli.i18n import owner_text, pick
+
+                lang = _cli_language(args, "lybra project new")  # AIPOS-F277: 输出与首份阶段快照按用户语言
+                if lang is None:
+                    return 2
+                print(pick(owner_text("project_new", "home", home=home, source=home_source, path=home / args.name), lang))
                 # AIPOS-F92: 非交互(stdin 非终端, 如 agent 会话)不弹询问, 用缺省协作配置(可后改)
                 collaboration_profile = _ask_project_type_interactive() if sys.stdin.isatty() else None
                 root = scaffold_project(
                     home, args.name, code_repo=args.code_repo, registered_by=args.actor,
-                    collaboration_profile=collaboration_profile
+                    collaboration_profile=collaboration_profile, lang=lang
                 )
                 print(f"Created project root: {root} (local scaffold)")
                 print(f"project.json: {project_json_path(root)}")
@@ -5733,11 +5757,12 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"stage snapshot: {snap}")
                 if collaboration_profile:
                     print(f"collaboration_profile: {collaboration_profile}")
-                print(f"next: 门以 home 根 {home} 发现本项目(双标记 5_tasks/queue + project.json); 接入步骤见 lybra onboarding guide {args.name}")
-                from tools.card_policy_loader import set_task_id_pattern_command
+                print(pick(owner_text("project_new", "next_gate", home=home, name=args.name), lang))
+                from tools.aipos_cli.onboarding import pattern_command
 
                 # AIPOS-F252 件①: 卡号形状无内置默认(C2), 接入须显式声明(值经 Owner 确认; 缺省预演, 核对后加 --confirm)
-                print(f"next: 声明卡号形状 task_id_pattern(受控发布 / finalize 归属解析只读它): {set_task_id_pattern_command(root)}")
+                # AIPOS-F277: 命令唯一渲染 card_policy_loader.set_task_id_pattern_command(占位按用户语言, onboarding.pattern_command)
+                print(pick(owner_text("project_new", "next_pattern", command=pattern_command(root)), lang))
                 return 0
             if args.project_command == "freeze-legacy":
                 return _project_freeze_legacy(args)
@@ -6758,6 +6783,11 @@ def main(argv: list[str] | None = None) -> int:
             format_guide_text,
             validate_step_prerequisites,
         )
+        from tools.aipos_cli.i18n import materialize, pick
+
+        lang = _cli_language(args, f"lybra onboarding {args.onboarding_command}")  # AIPOS-F277: 向导 / 自检按用户语言出声
+        if lang is None:
+            return 2
         if args.onboarding_command == "guide":
             try:
                 guide = generate_onboarding_guide(
@@ -6782,12 +6812,12 @@ def main(argv: list[str] | None = None) -> int:
                     run_preflight=not args.skip_preflight,  # AIPOS-F263 件③: 前置检查 = lybra setup check 摘要
                 )
             except ValueError as exc:  # AIPOS-F129: 顾问 harness 取值/会话所在机违反声明 = 拒(原文给出口)
-                print(f"Error: {exc}", file=sys.stderr)
+                print(f"Error: {pick(exc.args[0], lang) if exc.args else exc}", file=sys.stderr)
                 return 2
             if args.json:
-                print(render_json(guide))
+                print(render_json(materialize(guide, lang)))
             else:
-                print(format_guide_text(guide))
+                print(format_guide_text(guide, lang))
             return 0
         elif args.onboarding_command == "check":
             from tools.aipos_cli.onboarding import STEP as _onboarding_step
@@ -6800,6 +6830,7 @@ def main(argv: list[str] | None = None) -> int:
                 workspace_dir=args.workspace_dir,
                 preflight=run_setup_check() if args.step == _onboarding_step["preflight"] else None,  # AIPOS-F263 件③: --step 0 = 前置检查(setup check ✗ 项; 步号读 onboarding.STEP)
             )
+            result = materialize(result, lang)
             if args.json:
                 print(render_json(result))
             else:

@@ -576,6 +576,18 @@
         "secondary_subpath": "缺省 = 治理根内声明子路径(同机治理根已被 {occupant} 登记)",
         "subproject_subpath": "缺省 = 治理根内声明子路径(子项目顾问)"
       },
+      "translations": {
+        "description": "AIPOS-F277 译文覆盖层: 缺省语言仍是原位文案(单一来源); 其余语言同路径译文(i18n.overlay_localize; 守卫 i18n.overlay_problems)。",
+        "en": {
+          "source_labels": {
+            "explicit": "given by the user",
+            "kept": "kept from the current enrollment",
+            "governance_root": "default = the governance root",
+            "secondary_subpath": "default = the declared sub-path inside the governance root (the governance root on this machine is already enrolled by {occupant})",
+            "subproject_subpath": "default = the declared sub-path inside the governance root (sub-project advisor)"
+          }
+        }
+      },
       "tiers": {
         "description": "AIPOS-F254 件①: 顾问会话层级判据唯一声明(Owner 10-30: 总顾问理应在治理根, 子项目顾问在治理根内子目录)。判定唯一实现 enrollment.session_tier; 缺省(default_session_dir)、相撞拒因出口(session_dir_refusal)、roles list 层级诊断(render_advisor_sessions)同读。",
         "role_source": "实例的角色名: 调用方已知(接入预检的签发声明 role / 向导的项目顾问角色 / 工位身份 role)直接给; 否则 = 本项目接入日志最新 land 事件 role=(门签码时记下, enrollment.instance_enrollment), 无 = 治理根 .lybra/role 该实例记录的 role(enroll_client.read_role_record); 都无 = 判不了, 拒(fail-closed)",
