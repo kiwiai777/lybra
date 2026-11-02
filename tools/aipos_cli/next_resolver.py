@@ -1359,6 +1359,22 @@ KICKOFF_REFUSAL_CODES: dict[str, str] = {
 }
 
 
+_ROUTINE_RELAUNCH_CARDS: ContextVar[frozenset[str]] = ContextVar("routine_relaunch_cards", default=frozenset())
+
+
+@contextmanager
+def routine_relaunch_kickoff(task_id: str) -> Iterator[None]:
+    """AIPOS-F275 件②(verbs.schema lybra_loop.launch.routine_relaunch): loop 交回步遇修法执行方 = 执行体的例行门拒, 带修法重拉同一工位时,
+    在本上下文内(同一进程同一调用链: plan_launch → 工位 my-tasks --task-id → kickoff_refusal)对该执行卡放行「交回已落盘」(ARTIFACT_SUBMITTED)
+    一项——交回报告在, 但门已例行拒、须执行体按返工要点改; 其余开工核验(未认领 / 非本人 / 已结案 / 不该本角色 / 读不出)照旧。
+    只由 loop_driver 例行拒重拉调用(唯一实现); 退出上下文即恢复。"""
+    token = _ROUTINE_RELAUNCH_CARDS.set(_ROUTINE_RELAUNCH_CARDS.get() | {str(task_id or "").strip()})
+    try:
+        yield
+    finally:
+        _ROUTINE_RELAUNCH_CARDS.reset(token)
+
+
 def kickoff_refusal(workspace_root: Path, task_id: str, actor: str, *, queue_state: str | None,
                     card_frontmatter: dict[str, Any] | None = None) -> dict[str, str] | None:
     """AIPOS-F90 件③: 开工核验唯一判据(/go 选卡与「以卡号/路径冷启动」同读)——本实例在办、未结案、产物未交才可开工。
@@ -1407,6 +1423,8 @@ def kickoff_refusal(workspace_root: Path, task_id: str, actor: str, *, queue_sta
         return refuse("NOT_YOUR_TURN", f"{task_id} 推导核当前节点 {derivation.get('current_node')}/{derivation.get('current_state')}, "
                                        f"该动的是 {derivation.get('triggered_by')}({derivation.get('suggested_action') or ''})")
     if derivation.get("derivable") and derivation.get("verb") in ("lybra_queue_return_dry_run", "lybra_audit_verdict_dry_run"):
+        if role == "executor" and derivation.get("verb") == "lybra_queue_return_dry_run" and task_id in _ROUTINE_RELAUNCH_CARDS.get():
+            return None  # AIPOS-F275 件②: 交回被门例行拒, loop 带返工要点重拉本卡执行体(routine_relaunch_kickoff 范围内)
         return refuse("ARTIFACT_SUBMITTED", f"{task_id} 的{'审计报告' if role == 'auditor' else ' Return'}已落盘, 产品将自动入门")
     return None
 

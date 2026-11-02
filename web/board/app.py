@@ -883,7 +883,7 @@ Lybra 服务端位置（AIPOS-286）：
         "rp_ob_item_advisor": "顾问实例已接入",
         "rp_ob_item_executor": "执行实例已接入",
         "rp_ob_item_auditor": "审计实例已接入",
-        "rp_ob_item_envelope": "信封在用且未将尽",
+        "rp_ob_item_envelope": "项目授权(或信封)在用且未将尽",
         "rp_ob_item_charter": "工位章程新鲜",
         "rp_ob_item_pi_model": "pi 模型已声明",
         "rp_ob_item_roadmap": "路线图已声明",
@@ -892,7 +892,7 @@ Lybra 服务端位置（AIPOS-286）：
         "rp_ob_ask_advisor": "给项目 {project} 接入顾问实例",
         "rp_ob_ask_executor": "给项目 {project} 声明并接入执行实例({instance})",
         "rp_ob_ask_auditor": "给项目 {project} 声明并接入审计实例({instance})",
-        "rp_ob_ask_envelope": "给项目 {project} 准备在用信封(续签或新签, 我在信封页授权)",
+        "rp_ob_ask_envelope": "给项目 {project} 准备项目授权(我在接入页首签, 或在信封页扩大; 旧信封续签照旧)",
         "rp_ob_ask_charter": "核对项目 {project} 的工位章程({instance})",
         "rp_ob_ask_pi_model": "给项目 {project} 声明 pi 模型",
         "rp_ob_ask_roadmap": "给项目 {project} 建路线图",
@@ -908,6 +908,9 @@ Lybra 服务端位置（AIPOS-286）：
         "rp_ob_detail_envelope_ok": "在用:{policies}",
         "rp_ob_detail_envelope_low": "将尽或用尽:{policies}",
         "rp_ob_detail_envelope_none": "无在用信封",
+        "rp_ob_detail_authorization_ok": "项目授权在用:{authorizations}",
+        "rp_ob_detail_authorization_none": "无项目授权",
+        "rp_ob_detail_authorization_low": "项目授权已签但不在用(过期 / 用尽 / 未生效):{authorizations};在信封页「项目授权」扩大",
         "rp_ob_detail_charter_ok": "{instance} 最近一次拉起前章程核对 {outcome}({at})",
         "rp_ob_detail_charter_bad": "{instance} 最近一次章程核对未过 {outcome}({at}):{detail}",
         "rp_ob_detail_charter_unchecked": "{instance} 还没有章程核对记录(loop 拉起前会核)",
@@ -1243,6 +1246,66 @@ Lybra 服务端位置（AIPOS-286）：
         "ec_js_err_PREVIEW_TOKEN_EXPIRED": "预演已过期, 请重新预演。",
         "ec_js_err_PREVIEW_PARAMS_MISMATCH": "预演后改过角色、实例或时效, 请重新预演。",
         "ec_js_err_AUDIT_LOG_UNAVAILABLE": "看板审计日志写不进, 已拒绝执行(每次签码都要留痕);请告诉顾问检查看板运行目录。",
+        # AIPOS-F272: board write exceptions 6 "first project grant" / 7 "execution mode + pi model" on the onboarding page
+        # (web/board/readonly_pages.py + static/project-setup.js), zh / en same keys
+        "ps_button_grant": "首签项目授权",
+        "ps_button_execution": "设执行方式",
+        "ps_button_model": "设 pi 模型",
+        "ps_readonly_grant": "首签项目授权要 Owner 登录看板在这里操作;或告诉 Owner 运行下面「给顾问的命令」里的 lybra project grant sign。",
+        "ps_readonly_execution": "设执行方式要 Owner 登录看板在这里操作;或告诉 Owner 运行下面的 lybra project set-execution。",
+        "ps_readonly_model": "设 pi 模型要 Owner 登录看板在这里操作;或告诉 Owner 运行下面的 lybra project set-model。",
+        "ps_js_heading_grant": "首签项目授权:{project}",
+        "ps_js_heading_execution": "设执行方式:{project}",
+        "ps_js_heading_model": "设 pi 模型:{project}",
+        "ps_js_lanes": "车道仓(project.json 仓名, 逗号分隔)",
+        "ps_js_task_modes": "任务类型(逗号分隔)",
+        "ps_js_drivers": "驱动方(顾问实例, 逗号分隔)",
+        "ps_js_hosts": "主机(实例名主机段, 逗号分隔)",
+        "ps_js_launch": "允许 loop 自动拉起",
+        "ps_js_zones": "放开的禁区(缺省全禁)",
+        "ps_js_max_tasks": "总卡数上限",
+        "ps_js_expires_at": "到期(ISO 时刻, 如 2026-12-01T00:00:00Z)",
+        "ps_js_list_hint": "已按本项目现状预填, 可改。",
+        "ps_js_subagent": "子 agent 执行者(写代码的卡)",
+        "ps_js_auditor": "审计工位(pi)",
+        "ps_js_pi_executor": "pi 执行工位(非代码卡, 可空)",
+        "ps_js_none_option": "(不设)",
+        "ps_js_no_candidates": "没有合规的已接入实例(子 agent 执行者须按子 agent 模式接入, 审计 / pi 执行须有工位);先在上面签注册码接入, 或手填实例名。",
+        "ps_js_role": "角色",
+        "ps_js_role_default": "项目缺省(所有角色)",
+        "ps_js_model": "模型",
+        "ps_js_model_manual": "还没读到本机 pi 的模型清单(设置自检还没跑、pi 未装或没有模型);可以手填 <provider>/<id>, 写入时仍按本机 pi 清单核。",
+        "ps_js_owner_ref": "依据(可空, 缺省记本会话 Owner)",
+        "ps_js_preview_btn": "预演",
+        "ps_js_preview_heading": "预演:{project}(还没写入)",
+        "ps_js_cli": "等价的 CLI 命令",
+        "ps_js_diff": "project.json 改动(diff)",
+        "ps_js_full_text": "授权修订全文",
+        "ps_js_affected": "影响的工位",
+        "ps_js_actor": "操作人(本会话 Owner):{actor} · 来源:{surface}",
+        "ps_js_confirm_btn": "确认",
+        "ps_js_cancel_btn": "取消",
+        "ps_js_working": "处理中…",
+        "ps_js_done_heading": "已完成:{project}",
+        "ps_js_landed": "已落账进治理仓。",
+        "ps_js_not_landed": "写入已生效, 但落账没有完成(见技术详情);请告诉顾问补账, 不要重复操作。",
+        "ps_js_done_btn": "完成(刷新接入清单)",
+        "ps_js_fail_heading": "没有完成",
+        "ps_js_err_other": "请求被拒({code})。",
+        "ps_js_tech": "技术详情",
+        "ps_js_login": "登录已失效, 请重新登录看板后再试",
+        "ps_js_server_says": "原因:{message}",
+        "ps_js_err_OWNER_ONLY": "只有 Owner 登录会话可以做这一步;请告诉 Owner。",
+        "ps_js_err_WORKSPACE_NOT_IN_HOME": "这个项目不在 home 根已注册项目里;刷新页面核对。",
+        "ps_js_err_PARAMS_INVALID": "填写的内容不合, 改了再预演。",
+        "ps_js_err_AUTHORIZATION_IN_USE": "本项目已有项目授权, 不重复签;范围不够请到信封页「项目授权」扩大。",
+        "ps_js_err_PREVIEW_BLOCKED": "预演没有通过(与 CLI 同一校验)。",
+        "ps_js_err_CREDENTIAL_UNAVAILABLE": "看板读不到签发凭据;请告诉顾问。",
+        "ps_js_err_MINT_REJECTED": "门没有签发(原因见下)。",
+        "ps_js_err_EXECUTION_REFUSED": "没有通过与 CLI 同一的校验, project.json 未改动。",
+        "ps_js_err_PREVIEW_TOKEN_EXPIRED": "预演已过期, 请重新预演。",
+        "ps_js_err_PREVIEW_PARAMS_MISMATCH": "预演后改过填写内容, 请重新预演。",
+        "ps_js_err_AUDIT_LOG_UNAVAILABLE": "看板审计日志写不进, 已拒绝执行(每次都要留痕);请告诉顾问检查看板运行目录。",
         "ib_title": "待你决定 · {count} 件({projects} 个项目)",
         "ib_empty": "待你决定:没有待定事项({projects} 个项目)",
         "ib_heading": "{project} · {what}",
@@ -1567,7 +1630,7 @@ Important boundaries:
         "rp_ob_item_advisor": "Advisor instance enrolled",
         "rp_ob_item_executor": "Executor instance enrolled",
         "rp_ob_item_auditor": "Auditor instance enrolled",
-        "rp_ob_item_envelope": "Envelope in use and not running low",
+        "rp_ob_item_envelope": "Project grant (or envelope) in use and not running low",
         "rp_ob_item_charter": "Workstation charter fresh",
         "rp_ob_item_pi_model": "pi model declared",
         "rp_ob_item_roadmap": "Roadmap declared",
@@ -1576,7 +1639,7 @@ Important boundaries:
         "rp_ob_ask_advisor": "Enroll an advisor instance for {project}",
         "rp_ob_ask_executor": "Declare and enroll the executor instance of {project} ({instance})",
         "rp_ob_ask_auditor": "Declare and enroll the auditor instance of {project} ({instance})",
-        "rp_ob_ask_envelope": "Prepare an envelope in use for {project} (renew or mint; I authorize it on the Envelopes page)",
+        "rp_ob_ask_envelope": "Prepare a project grant for {project} (I sign the first one on the onboarding page or extend it on the Envelopes page; old envelopes renew as before)",
         "rp_ob_ask_charter": "Check the workstation charter of {project} ({instance})",
         "rp_ob_ask_pi_model": "Declare the pi model for {project}",
         "rp_ob_ask_roadmap": "Set up a roadmap for {project}",
@@ -1592,6 +1655,9 @@ Important boundaries:
         "rp_ob_detail_envelope_ok": "In use: {policies}",
         "rp_ob_detail_envelope_low": "Running low or exhausted: {policies}",
         "rp_ob_detail_envelope_none": "No envelope in use",
+        "rp_ob_detail_authorization_ok": "Project grant in use: {authorizations}",
+        "rp_ob_detail_authorization_none": "No project grant",
+        "rp_ob_detail_authorization_low": "Project grant signed but not in use (expired / used up / not yet active): {authorizations}; extend it under \"Project grant\" on the envelopes page",
         "rp_ob_detail_charter_ok": "Last pre-launch charter check of {instance}: {outcome} ({at})",
         "rp_ob_detail_charter_bad": "Last charter check of {instance} failed: {outcome} ({at}): {detail}",
         "rp_ob_detail_charter_unchecked": "No charter check recorded yet for {instance} (the loop checks it before each launch)",
@@ -1927,6 +1993,66 @@ Important boundaries:
         "ec_js_err_PREVIEW_TOKEN_EXPIRED": "The preview expired; preview again.",
         "ec_js_err_PREVIEW_PARAMS_MISMATCH": "The role, instance or validity changed after the preview; preview again.",
         "ec_js_err_AUDIT_LOG_UNAVAILABLE": "The board audit log cannot be written, so nothing was done (every signing must be logged); tell the advisor to check the board runtime directory.",
+        # AIPOS-F272: board write exceptions 6 "first project grant" / 7 "execution mode + pi model" on the onboarding page
+        # (web/board/readonly_pages.py + static/project-setup.js), zh / en same keys
+        "ps_button_grant": "Sign the first project grant",
+        "ps_button_execution": "Set execution mode",
+        "ps_button_model": "Set pi model",
+        "ps_readonly_grant": "Signing the first project grant needs the Owner signed in to the board here; or ask the Owner to run lybra project grant sign from \"Commands for your advisor\" below.",
+        "ps_readonly_execution": "Setting the execution mode needs the Owner signed in to the board here; or ask the Owner to run lybra project set-execution below.",
+        "ps_readonly_model": "Setting the pi model needs the Owner signed in to the board here; or ask the Owner to run lybra project set-model below.",
+        "ps_js_heading_grant": "First project grant: {project}",
+        "ps_js_heading_execution": "Execution mode: {project}",
+        "ps_js_heading_model": "pi model: {project}",
+        "ps_js_lanes": "Lane repos (project.json repo names, comma separated)",
+        "ps_js_task_modes": "Task types (comma separated)",
+        "ps_js_drivers": "Drivers (advisor instances, comma separated)",
+        "ps_js_hosts": "Hosts (instance host segments, comma separated)",
+        "ps_js_launch": "Let the loop launch automatically",
+        "ps_js_zones": "Open restricted zones (all closed by default)",
+        "ps_js_max_tasks": "Total cards cap",
+        "ps_js_expires_at": "Expires (ISO time, e.g. 2026-12-01T00:00:00Z)",
+        "ps_js_list_hint": "Prefilled from this project's current state; you can change it.",
+        "ps_js_subagent": "Sub-agent executor (code cards)",
+        "ps_js_auditor": "Auditor workstation (pi)",
+        "ps_js_pi_executor": "pi executor workstation (non-code cards, optional)",
+        "ps_js_none_option": "(none)",
+        "ps_js_no_candidates": "No enrolled instance qualifies (the sub-agent executor must be enrolled in sub-agent mode, auditor / pi executor need a workstation); enroll one with an enrollment code above, or type an instance name.",
+        "ps_js_role": "Role",
+        "ps_js_role_default": "Project default (every role)",
+        "ps_js_model": "Model",
+        "ps_js_model_manual": "No pi model list from this machine yet (the setup check has not run, pi is not installed or has no models); you can type <provider>/<id>, writing still checks it against this machine's pi list.",
+        "ps_js_owner_ref": "Reference (optional; defaults to this Owner session)",
+        "ps_js_preview_btn": "Preview",
+        "ps_js_preview_heading": "Preview: {project} (nothing written yet)",
+        "ps_js_cli": "Equivalent CLI command",
+        "ps_js_diff": "project.json change (diff)",
+        "ps_js_full_text": "Full grant revision",
+        "ps_js_affected": "Affected workstations",
+        "ps_js_actor": "By (this Owner session): {actor} · source: {surface}",
+        "ps_js_confirm_btn": "Confirm",
+        "ps_js_cancel_btn": "Cancel",
+        "ps_js_working": "Working…",
+        "ps_js_done_heading": "Done: {project}",
+        "ps_js_landed": "Landed in the governance repo.",
+        "ps_js_not_landed": "The write took effect but landing did not finish (see technical details); ask the advisor to land it, do not repeat the action.",
+        "ps_js_done_btn": "Done (refresh the checklist)",
+        "ps_js_fail_heading": "Not done",
+        "ps_js_err_other": "Request refused ({code}).",
+        "ps_js_tech": "Technical details",
+        "ps_js_login": "Your sign-in expired; sign in to the board again and retry",
+        "ps_js_server_says": "Reason: {message}",
+        "ps_js_err_OWNER_ONLY": "Only an Owner session can do this; tell the Owner.",
+        "ps_js_err_WORKSPACE_NOT_IN_HOME": "This project is not a registered project under the home root; refresh the page.",
+        "ps_js_err_PARAMS_INVALID": "Something you entered is not valid; fix it and preview again.",
+        "ps_js_err_AUTHORIZATION_IN_USE": "This project already has a project grant, so it is not signed again; extend it under \"Project grant\" on the envelopes page.",
+        "ps_js_err_PREVIEW_BLOCKED": "The preview did not pass (same checks as the CLI).",
+        "ps_js_err_CREDENTIAL_UNAVAILABLE": "The board cannot read its issuing credential; tell the advisor.",
+        "ps_js_err_MINT_REJECTED": "The gate did not sign it (reason below).",
+        "ps_js_err_EXECUTION_REFUSED": "It did not pass the same checks as the CLI; project.json is unchanged.",
+        "ps_js_err_PREVIEW_TOKEN_EXPIRED": "The preview expired; preview again.",
+        "ps_js_err_PREVIEW_PARAMS_MISMATCH": "You changed the form after the preview; preview again.",
+        "ps_js_err_AUDIT_LOG_UNAVAILABLE": "The board audit log cannot be written, so nothing was done (every action must be logged); tell the advisor to check the board runtime directory.",
         "ib_title": "Your decisions · {count} ({projects} projects)",
         "ib_empty": "Your decisions: nothing pending ({projects} projects)",
         "ib_heading": "{project} · {what}",
@@ -3204,6 +3330,12 @@ def make_handler(
     from tools.aipos_cli.board_enroll_code import board_declaration as enroll_code_board_declaration
 
     enroll_code_path = str(enroll_code_board_declaration()["write_path"])
+    # AIPOS-F272 write exceptions 6 (first project grant) / 7 (execution mode + pi model): single write routes read from verbs.schema
+    # verbs.lybra_project_authorization.board / two_phase_protocol.project_json_writers.board
+    from tools.aipos_cli.board_project_setup import execution_board_declaration, grant_declaration
+
+    project_grant_path = str(grant_declaration()["write_path"])
+    project_execution_path = str(execution_board_declaration()["write_path"])
     # AIPOS-F198: workstation page (read-only, GET only; path read from verbs.schema verbs.lybra_project_workstation_plan.board)
     from tools.aipos_cli.workstation_plan import declaration as workstation_plan_declaration
 
@@ -3229,6 +3361,8 @@ def make_handler(
         _inbox_decide_path = str(inbox_decide_decl["write_path"])
         _project_new_path = project_new_path
         _enroll_code_path = enroll_code_path
+        _project_grant_path = project_grant_path
+        _project_execution_path = project_execution_path
         _workstation_page = workstation_page
 
         def _send_json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
@@ -3624,6 +3758,27 @@ def make_handler(
                 origin=self.headers.get("Origin"), host=self.headers.get("Host"), content_type=self.headers.get("Content-Type"))
             self._send_json(HTTPStatus(status), payload)
 
+        def _handle_project_setup(self, which: str) -> None:
+            """POST write exceptions 6 / 7 (single write routes): every check lives in board_project_setup.handle_grant_request /
+            handle_execution_request -> envelope_board.handle_owner_write (registered project; Owner session / preview token / Origin / audit log
+            unchanged). 6 signs through write exception 1's project-grant callbacks (gate owner_decision_record, the board's issuing credential
+            store); 7 runs set-execution / set-model's own implementation and lands project.json; actor from the session."""
+            from tools.aipos_cli.board_project_setup import handle_execution_request, handle_grant_request
+            from tools.aipos_cli.envelope_board import session_ref
+
+            sid, info = self._current_session()
+            session = None
+            if info is not None and sid:
+                session = {"role": info.get("role"), "token_ref": info.get("token_ref") or "", "session_ref": session_ref(sid),
+                           "login_method": info.get("login_method") or "", "source_ip": self._source_ip()}
+            common = {"session": session, "home_root": home_root, "preview_store": self._previews, "audit_log_path": self._board_audit,
+                      "origin": self.headers.get("Origin"), "host": self.headers.get("Host"), "content_type": self.headers.get("Content-Type")}
+            if which == "grant":
+                status, payload = handle_grant_request(self._read_json_body(), connection_json=self._mint_conn, **common)
+            else:
+                status, payload = handle_execution_request(self._read_json_body(), **common)
+            self._send_json(HTTPStatus(status), payload)
+
         def do_GET(self) -> None:  # noqa: N802
             if self._perf_log is None:
                 self._route_get()
@@ -3789,6 +3944,14 @@ def make_handler(
             # AIPOS-F270 write exception 5: Owner enrollment code (declared verbs.lybra_roles_enroll_code.board.write_path)
             if path == self._enroll_code_path:
                 self._handle_enroll_code()
+                return
+            # AIPOS-F272 write exception 6: Owner first project grant (declared verbs.lybra_project_authorization.board.write_path)
+            if path == self._project_grant_path:
+                self._handle_project_setup("grant")
+                return
+            # AIPOS-F272 write exception 7: Owner execution mode / pi model (declared two_phase_protocol.project_json_writers.board.write_path)
+            if path == self._project_execution_path:
+                self._handle_project_setup("execution")
                 return
             self._method_not_allowed()
 

@@ -456,13 +456,13 @@ def test_item7_existing_write_exceptions_and_declarations():
     decl = board_declaration()
     ro = verbs["board_readonly"]
     _show(f"[⑦·声明] write_path={decl['write_path']} script={decl['script_path']} action={decl['action']} 写例外清单={ro['write_exceptions']}")
-    assert list(ro["write_exceptions"]) == ["envelope_mint", "project_upgrade", "owner_inbox_decide", "project_new", "enroll_code"]
+    assert list(ro["write_exceptions"])[:5] == ["envelope_mint", "project_upgrade", "owner_inbox_decide", "project_new", "enroll_code"]  # AIPOS-F272: 清单只追加(⑥⑦)
     assert decl["write_path"] == WRITE_PATH and decl["page"] == "onboarding"
     assert len({decl["write_path"], project_new_board()["write_path"], board_envelopes_declaration()["write_path"]}) == 3
     assert decl["write_path"] not in board_readonly_declaration()["allowed_post_paths"]
     src = (REPO_ROOT / "web" / "board" / "app.py").read_text(encoding="utf-8")
     do_post = src[src.index("def do_POST(self)"):src.index("def do_PUT(self)")]
-    assert do_post.count("if path == ") == len(board_readonly_declaration()["allowed_post_paths"]) + 5
+    assert do_post.count("if path == ") == len(board_readonly_declaration()["allowed_post_paths"]) + 7  # AIPOS-F272: + 写例外⑥⑦
     assert set(EC_JS_ERROR_CODES) <= set(decl["errors"]), "页面解释的拒因码都在声明码表内"
     zh = {k for k in _I18N_TEMPLATES["zh"] if k.startswith(decl["text_prefix"])}
     en = {k for k in _I18N_TEMPLATES["en"] if k.startswith(decl["text_prefix"])}

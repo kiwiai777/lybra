@@ -181,10 +181,16 @@ class ProjectFacts:
 
     def authorizations(self) -> dict[str, Any]:
         """AIPOS-F246 件⑤: 本项目在用的项目授权(autonomy_policy.authorization_overview 用量真相 state=active)的授权编号。"""
+        rows = self.authorization_rows()  # AIPOS-F272: 与接入清单同一次推导(不重算)
+        if "error" in rows:
+            return rows
+        return {"value": [a["authorization_id"] for a in rows["value"] if a.get("state") == "active"]}
+
+    def authorization_rows(self) -> dict[str, Any]:
+        """AIPOS-F272: 本项目全部项目授权(autonomy_policy.authorization_overview 同一推导, 看板「项目授权」/ CLI grant show 同读)。"""
         from tools.aipos_cli.autonomy_policy import authorization_overview
 
-        return self._get("authorizations", lambda: [a["authorization_id"] for a in authorization_overview(self.root) if a.get("state") == "active"],
-                         (OSError, ValueError, LookupError))
+        return self._get("authorization_rows", lambda: authorization_overview(self.root), (OSError, ValueError, LookupError))
 
     def advisors(self) -> dict[str, Any]:
         from tools.aipos_cli.advisor_updates_cli import advisor_instances
@@ -319,17 +325,36 @@ def _check_envelope(f: ProjectFacts, decl: dict[str, Any]) -> dict[str, Any]:
     from tools.aipos_cli.envelope_board import board_envelope_url
 
     link = [("rp_nav_envelopes", board_envelope_url(f.name))]
+    # AIPOS-F272: 项目授权(F224, 取代逐实例信封)在用 = 本项完成; 有未撤销但不在用(过期 / 用尽)的 = 待办, 出口 = 信封页「项目授权」扩大;
+    # 都没有 = 首签(看板写例外⑥ / CLI grant sign)。判定只读 authorization_overview(ProjectFacts.authorization_rows)
+    from tools.aipos_cli.autonomy_policy import render_authorization_command
+    from tools.aipos_cli.board_project_setup import blocking_authorizations
+
+    auths = f.authorization_rows()
+    if "error" in auths:
+        return _row("envelope", "error", [("rp_error", {"error": auths["error"]})], ask=("rp_ob_ask_envelope", {"project": f.name}),
+                    links=link, tell=f.tell_target())
+    live = blocking_authorizations(auths["value"])
+    if live:
+        text = _authorization_text(live)
+        if any(a.get("state") == "active" for a in live):
+            return _row("envelope", "ok", [("rp_ob_detail_authorization_ok", {"authorizations": text})], links=link)
+        return _row("envelope", "todo", [("rp_ob_detail_authorization_low", {"authorizations": text})],
+                    ask=("rp_ob_ask_envelope", {"project": f.name}), links=link, tell=f.tell_target(),
+                    commands=[render_authorization_command(f.root, "extend", ["--max-tasks <N>", "--expires-at <YYYY-MM-DDTHH:MM:SSZ>"])])
+    grant = render_authorization_command(f.root, "sign", ["--grant-lane <仓名>", "--task-mode <任务类型>", "--driver <顾问实例>", "--host <主机>",
+                                                          "--max-tasks <N>", "--expires-at <YYYY-MM-DDTHH:MM:SSZ>"])
     got = f.envelopes()
     mint = _command(decl, "envelope_mint", **_fill(f))
     if "error" in got:
         return _row("envelope", "error", [("rp_error", {"error": got["error"]})], ask=("rp_ob_ask_envelope", {"project": f.name}),
-                    commands=[mint], links=link, tell=f.tell_target())
+                    commands=[grant, mint], links=link, tell=f.tell_target())
     current = [r for r in got["value"] if r.get("current")]
     fine = [r for r in current if r.get("status") == "active"]
     low = [r for r in current if r.get("status") != "active"]
     if fine and not low:
         return _row("envelope", "ok", [("rp_ob_detail_envelope_ok", {"policies": _envelope_text(fine)})], links=link)
-    details: list[tuple[str, dict[str, Any]]] = []
+    details: list[tuple[str, dict[str, Any]]] = [("rp_ob_detail_authorization_none", {})]  # AIPOS-F272: 走到这里 = 无未撤销项目授权
     if fine:
         details.append(("rp_ob_detail_envelope_ok", {"policies": _envelope_text(fine)}))
     if low:
@@ -337,9 +362,15 @@ def _check_envelope(f: ProjectFacts, decl: dict[str, Any]) -> dict[str, Any]:
         commands = [str(r["renew_command"]) for r in low if r.get("renew_command")] or [mint]
     else:
         details.append(("rp_ob_detail_envelope_none", {}))
-        commands = [mint]
+        commands = [grant, mint]  # AIPOS-F272: 首签项目授权在先(F224 取代逐实例信封), 旧信封签发命令照留
     return _row("envelope", "todo", details, ask=("rp_ob_ask_envelope", {"project": f.name}), commands=commands, links=link,
                 tell=f.tell_target())
+
+
+def _authorization_text(rows: list[dict[str, Any]]) -> str:
+    """AIPOS-F272: 项目授权一行(authorization_overview 行: 编号 r修订 · 用量真相 state · 已放行/总卡数 · 到期)。"""
+    return "; ".join(f"{r['authorization_id']} r{r.get('revision')}({r.get('state')} {r.get('used')}/{r.get('max_tasks')}"
+                     f" · {r.get('expires_at') or '?'})" for r in rows)
 
 
 def _envelope_text(rows: list[dict[str, Any]]) -> str:

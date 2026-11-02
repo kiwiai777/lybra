@@ -286,7 +286,8 @@ def test_item3_declarations_single_source():
     ingest = (REPO_ROOT / "tools" / "aipos_cli" / "artifact_ingest.py").read_text(encoding="utf-8")
     driver = (REPO_ROOT / "tools" / "aipos_cli" / "loop_driver.py").read_text(encoding="utf-8")
     assert ingest.count("tip_mismatch_diagnosis(") == 3 and "tip_mismatch_diagnosis(" not in driver  # def + 2 decision sites
-    assert driver.count("validate_task_artifact(") == 1 and driver.count("_launch_once(") == 3  # def + 2 call sites
+    # AIPOS-F275: 例行拒重拉的就绪判据同读同一入口校验(tip 核对)= 第 2 处调用; 判定仍只在 artifact_ingest, loop 不另判
+    assert driver.count("validate_task_artifact(") == 2 and driver.count("_launch_once(") == 3  # def + 2 call sites
     assert driver.count("_should_resume(") == 2 and "sleep(" not in driver and "except Exception" not in driver
     assert "tip[:12]" not in ingest and "commit_sha[:12]}: 审的不是当前产物" not in ingest
     assert validate_task_artifact.__module__ == "tools.aipos_cli.artifact_ingest"

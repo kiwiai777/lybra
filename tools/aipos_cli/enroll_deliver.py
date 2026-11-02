@@ -68,6 +68,8 @@ def gate_enroll_code(client: Any, params: dict[str, Any], *, confirm: bool) -> d
         "dry_run_token": dry.get("dry_run_token"),
         "owner_confirmation_token": "OWNER_CONFIRMED",
         "actor": args.get("actor") or "cli:roles-enroll-code",
+        # AIPOS-F274: 预演带了显式目标项目 = 确认同带(门 dispatch 按同一目标路由与判项目域)
+        **({"project": args["project"]} if args.get("project") else {}),
     })
     if not conf.get("ok"):
         raise GateVerbRefused(ENROLL_CODE_CONFIRM_VERB, conf)

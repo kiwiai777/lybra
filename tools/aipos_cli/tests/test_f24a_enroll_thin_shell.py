@@ -97,8 +97,9 @@ class TestUnknownParameterRejection(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="f24a_unk3_") as tmp:
             root = _make_gate_root(tmp)
             with patch.object(mcp, "_repo_root", return_value=root):
+                # AIPOS-F274: project 已是发码动词的已知路由键(dispatch 显式目标项目, 与 governance_root 同给须一致), 改用拼错的未知参数
                 resp = mcp.lybra_roles_enroll_code({
-                    "role": "executor", "owner_authorization_ref": "x", "project": "proj-a",
+                    "role": "executor", "owner_authorization_ref": "x", "projetc": "proj-a",
                 })
                 p = _payload(resp)
                 self.assertFalse(p.get("ok"))

@@ -858,7 +858,7 @@ def normalize_authorization_params(body: dict[str, Any], *, project: str, govern
 
 def _authorization_payload(params: dict[str, Any], decl: dict[str, Any], session: dict[str, Any], now: datetime) -> dict[str, Any]:
     """参数 → owner_decision_record payload(project_authorization 块唯一构造 autonomy_policy.authorization_block / 迁移草案
-    authorization_draft_from_envelopes; 来源字段 = 看板会话)。"""
+    authorization_draft_from_envelopes; 来源字段 = 看板会话)。AIPOS-F272: action = grant(写例外⑥首签, board_project_setup 归一参数)同调。"""
     from tools.aipos_cli.autonomy_policy import authorization_block
 
     root = Path(params["governance_root"])
@@ -871,6 +871,10 @@ def _authorization_payload(params: dict[str, Any], decl: dict[str, Any], session
         block = authorization_block(root, action="revoke", now=now, notes=params["reason"])
     elif isinstance(params.get("block"), dict):
         block = params["block"]
+    elif params["action"] == "grant":  # AIPOS-F272 写例外⑥ 首签: 给出的范围即全集(CLI grant sign 同一构造)
+        block = authorization_block(root, action="grant", now=now, lanes=params["lanes"], hosts=params["hosts"],
+                                    launch_harnesses=params["launch_harnesses"], zones_open=params["zones_open"],
+                                    max_tasks=params["max_tasks"], expires_at=params["expires_at"])
     else:
         block = authorization_block(root, action="extend", now=now, lanes=params["lanes"], hosts=params["hosts"], zones_open=params["zones_open"],
                                     max_tasks=params["max_tasks"], expires_at=params["expires_at"])
@@ -920,8 +924,8 @@ def _authorization_callbacks(decl: dict[str, Any], connection_json: Path | None)
         from tools.aipos_cli.autonomy_policy import render_authorization_command
 
         if connection_json is None:
-            raise MintRequestError("CREDENTIAL_UNAVAILABLE", command=render_authorization_command(
-                params["governance_root"], "draft --from-envelopes" if params["action"] == "migrate" else params["action"], []))
+            sub = {"migrate": "draft --from-envelopes", "grant": "sign"}.get(params["action"], params["action"])  # AIPOS-F272: grant = CLI sign
+            raise MintRequestError("CREDENTIAL_UNAVAILABLE", command=render_authorization_command(params["governance_root"], sub, []))
 
     def confirm(params: dict[str, Any], context: dict[str, Any]) -> tuple[dict, dict, MintRequestError | None]:
         return _confirm(params, context["payload"], decl, connection_json)
@@ -949,8 +953,10 @@ def _confirm(params: dict[str, Any], payload: dict[str, Any], decl: dict[str, An
              connection_json: Path | None) -> tuple[dict[str, Any], dict[str, Any], MintRequestError | None]:
     from tools.aipos_cli.envelope_mint import mint_via_gate
 
+    # AIPOS-F274 件③: 调门显式传目标项目(门按显式目标判项目域; Owner 中央凭据对 home 根内已注册项目放宽)
     report = mint_via_gate([payload], governance_root=Path(params["governance_root"]), actor=str(payload["actor"]),
-                           connection_json=str(connection_json), token_role=str(decl["token_role"]))
+                           connection_json=str(connection_json), token_role=str(decl["token_role"]),
+                           project=str(params.get("project") or "") or None)
     landing = report.get("landing") or {}
     landing_view = {k: landing.get(k) for k in ("landed", "verdict", "committed", "pushed", "commit", "exit_code") if k in landing}
     result = {"outcome": "signed" if report["signed"] else "mint_rejected", "credential_fingerprint": report.get("credential_fingerprint"),

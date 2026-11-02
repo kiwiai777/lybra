@@ -1017,9 +1017,11 @@ def _next_row(proj: dict[str, Any]) -> dict[str, Any] | None:
     return next((row for row in proj["rows"] if row["state"] in _OPEN_STATES), None)
 
 
-def _checklist_html(ctx: _Ctx, proj: dict[str, Any], enroll: dict[str, Any] | None = None) -> str:
+def _checklist_html(ctx: _Ctx, proj: dict[str, Any], enroll: dict[str, Any] | None = None, setup: dict[str, Any] | None = None) -> str:
     """AIPOS-F270: enroll = this project's enrollment-code view (_enroll_view): signed-but-not-redeemed codes under their row (every
-    session; no code text), and for Owner sessions a "sign enrollment code" button next to each open advisor / executor / auditor row."""
+    session; no code text), and for Owner sessions a "sign enrollment code" button next to each open advisor / executor / auditor row.
+    AIPOS-F272: setup = board_project_setup.setup_view: "first project grant" / "execution mode" / "pi model" buttons next to their open rows
+    (Owner sessions; prefill + choices on the section), a read-only hint for other sessions (the row's folded commands stay the CLI exit)."""
     items = []
     nxt = _next_row(proj)
     for row in proj["rows"]:
@@ -1035,7 +1037,8 @@ def _checklist_html(ctx: _Ctx, proj: dict[str, Any], enroll: dict[str, Any] | No
                      f"{next_attr}>"
                      f"<p>{mark}<span class=\"rp-state\">{_ESC(ctx.t('rp_ob_state_' + row['state']))}</span> "
                      f"<strong>{_ESC(ctx.t('rp_ob_item_' + row['key']))}</strong></p><ul class=\"rp-details\">{details}</ul>"
-                     f"{_enroll_row_html(ctx, enroll, row)}{tell}{_command_block(ctx, row['commands'])}{links}</li>")
+                     f"{_enroll_row_html(ctx, enroll, row)}{_ps_row_html(ctx, setup, row)}{tell}{_command_block(ctx, row['commands'])}"
+                     f"{links}</li>")
     summary = proj["summary"]
     badge = _status_badge(ctx, proj)
     roles = ""
@@ -1043,6 +1046,7 @@ def _checklist_html(ctx: _Ctx, proj: dict[str, Any], enroll: dict[str, Any] | No
         import json
 
         roles = f" data-ec-roles=\"{_ESC(json.dumps(enroll['roles'], ensure_ascii=False))}\""
+    roles += _ps_section_attr(setup)
     return (f"<section class=\"rp-ob-project\" id=\"{_ESC(proj['project'])}\" data-project=\"{_ESC(proj['project'])}\""
             f" data-done=\"{summary['done']}\" data-total=\"{summary['total']}\"{roles}><h2>{_ESC(proj['project'])}{badge} "
             f"<span class=\"rp-sub\">{_ESC(ctx.t('rp_ob_summary', done=summary['done'], total=summary['total']))}</span></h2>"
@@ -1201,19 +1205,100 @@ def _enroll_attrs(ctx: _Ctx) -> str:
             f" data-ec-default-ttl=\"{ENROLL_DEFAULT_TTL_SECONDS}\" data-ec-texts=\"{_ESC(texts)}\"")
 
 
+def _ps_script_path() -> str:
+    """AIPOS-F272: write exceptions 6 and 7 share one script (both declarations name it; they must agree)."""
+    from tools.aipos_cli.board_project_setup import execution_board_declaration, grant_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    paths = {str(grant_declaration()["script_path"]), str(execution_board_declaration()["script_path"])}
+    if len(paths) != 1:
+        raise SchemaLoadError(f"verbs.schema.json write exceptions 6 / 7 must name one script_path, got {sorted(paths)}")
+    return paths.pop()
+
+
 def _enroll_panel_html() -> str:
     """AIPOS-F270: the one sign-code panel (Owner sessions; filled by static/enroll-code.js: form -> preview -> confirm -> one-time code box)."""
     return ("<section class=\"ec-panel\" id=\"ec-panel\" hidden><h3></h3><div class=\"ec-panel-body\"></div>"
             "<div class=\"ec-panel-actions\"></div></section>")
 
 
+#: AIPOS-F272: i18n templates static/project-setup.js fills (texts never live in the script; board i18n channel, zh / en same keys)
+_PS_JS_KEYS = ("ps_js_heading_grant", "ps_js_heading_execution", "ps_js_heading_model", "ps_js_lanes", "ps_js_task_modes", "ps_js_drivers",
+               "ps_js_hosts", "ps_js_launch", "ps_js_zones", "ps_js_max_tasks", "ps_js_expires_at", "ps_js_list_hint", "ps_js_subagent",
+               "ps_js_auditor", "ps_js_pi_executor", "ps_js_none_option", "ps_js_no_candidates", "ps_js_role", "ps_js_role_default",
+               "ps_js_model", "ps_js_model_manual", "ps_js_owner_ref", "ps_js_preview_btn", "ps_js_preview_heading", "ps_js_cli",
+               "ps_js_diff", "ps_js_full_text", "ps_js_affected", "ps_js_actor", "ps_js_confirm_btn", "ps_js_cancel_btn", "ps_js_working",
+               "ps_js_done_heading", "ps_js_landed", "ps_js_not_landed", "ps_js_done_btn", "ps_js_fail_heading", "ps_js_err_other",
+               "ps_js_tech", "ps_js_login", "ps_js_server_says")
+#: AIPOS-F272: refusal codes the page explains in the page language (other codes = ps_js_err_other with the server message)
+PS_JS_ERROR_CODES = ("OWNER_ONLY", "WORKSPACE_NOT_IN_HOME", "PARAMS_INVALID", "AUTHORIZATION_IN_USE", "PREVIEW_BLOCKED", "CREDENTIAL_UNAVAILABLE",
+                     "MINT_REJECTED", "EXECUTION_REFUSED", "PREVIEW_TOKEN_EXPIRED", "PREVIEW_PARAMS_MISMATCH", "AUDIT_LOG_UNAVAILABLE")
+
+
+def _ps_view(proj: dict[str, Any], *, owner: bool, setup_entry: dict[str, Any] | None) -> dict[str, Any]:
+    """AIPOS-F272: one project's grant / execution / model view (board_project_setup.setup_view, nothing recomputed here)."""
+    from tools.aipos_cli.board_project_setup import setup_view
+
+    return setup_view(proj, owner=owner, setup_entry=setup_entry)
+
+
+def _ps_row_html(ctx: _Ctx, setup: dict[str, Any] | None, row: dict[str, Any]) -> str:
+    """AIPOS-F272: under one open checklist row: Owner sessions get the buttons for the write exceptions this row maps to
+    (static/project-setup.js opens the panel); other sessions get a read-only hint (the row's folded commands are the CLI exit)."""
+    actions = ((setup or {}).get("buttons") or {}).get(row["key"]) or []
+    if not actions:
+        return ""
+    if not setup.get("owner"):
+        return "".join(f"<p class=\"rp-readonly-note ps-readonly\" data-ps-action=\"{_ESC(a)}\">{_ESC(ctx.t('ps_readonly_' + a))}</p>"
+                       for a in actions)
+    model = setup.get("model") or {}
+    buttons = []
+    for action in actions:
+        role = f" data-ps-role=\"{_ESC(str(model.get('role') or ''))}\"" if action == "model" else ""
+        buttons.append(f"<button type=\"button\" class=\"ps-open\" data-ps-action=\"{_ESC(action)}\"{role}>"
+                       f"{_ESC(ctx.t('ps_button_' + action))}</button>")
+    return f"<p class=\"ps-actions\">{''.join(buttons)}</p>"
+
+
+def _ps_section_attr(setup: dict[str, Any] | None) -> str:
+    """AIPOS-F272: Owner sessions only: the project's prefill / choices as one JSON attribute (data-ps-setup) for static/project-setup.js."""
+    if not setup or not setup.get("owner") or not setup.get("buttons"):
+        return ""
+    import json
+
+    data = {k: setup[k] for k in ("grant", "execution", "model") if k in setup}
+    return f" data-ps-setup=\"{_ESC(json.dumps(data, ensure_ascii=False))}\""
+
+
+def _ps_attrs(ctx: _Ctx) -> str:
+    """AIPOS-F272: body attributes for static/project-setup.js (both write paths from their declarations, unformatted texts in the page
+    language)."""
+    import json
+
+    from tools.aipos_cli.board_project_setup import execution_board_declaration, grant_declaration
+
+    keys = list(_PS_JS_KEYS) + ["ps_js_err_" + code for code in PS_JS_ERROR_CODES]
+    texts = json.dumps({key: ctx.raw(key) for key in keys}, ensure_ascii=False)
+    return (f" data-ps-owner=\"true\" data-ps-grant-path=\"{_ESC(str(grant_declaration()['write_path']))}\""
+            f" data-ps-execution-path=\"{_ESC(str(execution_board_declaration()['write_path']))}\" data-ps-texts=\"{_ESC(texts)}\"")
+
+
+def _ps_panel_html() -> str:
+    """AIPOS-F272: the one grant / execution / model panel (Owner sessions; filled by static/project-setup.js: form -> preview -> confirm)."""
+    return ("<section class=\"ps-panel\" id=\"ps-panel\" hidden><h3></h3><div class=\"ps-panel-body\"></div>"
+            "<div class=\"ps-panel-actions\"></div></section>")
+
+
 def render_onboarding(data: dict[str, Any], lang: str, setup: dict[str, Any] | None = None, *, owner: bool = False,
-                      created: str | None = None, enroll_registry: str | Path | None = None) -> str:
+                      created: str | None = None, enroll_registry: str | Path | None = None,
+                      setup_entry: dict[str, Any] | None = None) -> str:
     """AIPOS-F267: setup = board_pages.setup_summary (one line on top linking the setup check page).
     AIPOS-F269: owner = Owner session (the "new project" form + script; other sessions get the read-only hint); created = the project
     the board just created (?<created_param>=<name>: banner with its next step).
     AIPOS-F270: enroll_registry = the board server's workspace (its enrollment-code registry): signed-but-not-redeemed codes under the
-    advisor / executor / auditor rows; Owner sessions also get the "sign enrollment code" buttons, panel and script."""
+    advisor / executor / auditor rows; Owner sessions also get the "sign enrollment code" buttons, panel and script.
+    AIPOS-F272: setup_entry = the board process's cached setup check (board_pages.setup_check_latest): pi model choices for the "pi model"
+    panel; Owner sessions get the "first project grant" / "execution mode" / "pi model" buttons, panel and script (write exceptions 6 / 7)."""
     ctx = _Ctx(data["decl"], lang)
     active = [p for p in data["projects"] if not p["paused"]]
     paused = [p for p in data["projects"] if p["paused"]]
@@ -1222,11 +1307,14 @@ def render_onboarding(data: dict[str, Any], lang: str, setup: dict[str, Any] | N
     body.append(_project_new_html(ctx, data, owner))
     if owner:
         body.append(_enroll_panel_html())
+        body.append(_ps_panel_html())
     body.append(_toggle(ctx, data.get("hidden") or [], bool(data.get("show_all")), str(ctx.decl["pages"]["onboarding"])))
-    body += [_checklist_html(ctx, p, _enroll_view(p, owner=owner, registry_root=enroll_registry)) for p in active]
+    body += [_checklist_html(ctx, p, _enroll_view(p, owner=owner, registry_root=enroll_registry),
+                             _ps_view(p, owner=owner, setup_entry=setup_entry)) for p in active]
     if paused:
         body.append(f"<details class=\"rp-paused\" data-paused=\"{len(paused)}\"><summary>{_ESC(ctx.t('rp_paused_folded', count=len(paused)))}"
-                    "</summary>" + "".join(_checklist_html(ctx, p, _enroll_view(p, owner=owner, registry_root=enroll_registry))
+                    "</summary>" + "".join(_checklist_html(ctx, p, _enroll_view(p, owner=owner, registry_root=enroll_registry),
+                                                           _ps_view(p, owner=owner, setup_entry=setup_entry))
                                            for p in paused) + "</details>")
     if not owner:
         return _page(ctx, "onboarding", ctx.t("rp_ob_title", count=len(data["projects"])), body)
@@ -1234,8 +1322,9 @@ def render_onboarding(data: dict[str, Any], lang: str, setup: dict[str, Any] | N
     from tools.aipos_cli.board_project_new import board_declaration
 
     return _page(ctx, "onboarding", ctx.t("rp_ob_title", count=len(data["projects"])), body, note_key=None,
-                 body_attrs=_project_new_attrs(ctx) + _enroll_attrs(ctx),
-                 scripts=[str(board_declaration()["script_path"]), str(enroll_code_declaration()["script_path"])])
+                 body_attrs=_project_new_attrs(ctx) + _enroll_attrs(ctx) + _ps_attrs(ctx),
+                 scripts=[str(board_declaration()["script_path"]), str(enroll_code_declaration()["script_path"]),
+                          str(_ps_script_path())])
 
 
 # ---------------------------------------------------------------------------
@@ -2188,9 +2277,11 @@ def _render_page(page: str, home_root: str | Path | None, params: dict[str, list
             from tools.aipos_cli.board_project_new import board_declaration as project_new_declaration
 
             created = (params.get(project_new_declaration()["created_param"]) or [None])[0]  # AIPOS-F269: landed here after creating
+            latest = board_pages.setup_check_latest(workspace_root)  # AIPOS-F272: one cached result (summary + pi model choices)
             return render_onboarding(board_pages.collect_onboarding(home_root, show_all=show_all), lang,
-                                     board_pages.setup_summary(board_pages.setup_check_latest(workspace_root), decl),  # AIPOS-F267
-                                     owner=owner, created=created, enroll_registry=workspace_root)  # AIPOS-F270
+                                     board_pages.setup_summary(latest, decl),  # AIPOS-F267
+                                     owner=owner, created=created, enroll_registry=workspace_root,  # AIPOS-F270
+                                     setup_entry=latest)
         if page == "setup":  # AIPOS-F267: setup check (same run_setup_check as `lybra setup check`; short in-process cache)
             return render_setup(board_pages.collect_setup(workspace_root, params), lang)
         if page == "project":

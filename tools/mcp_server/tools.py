@@ -223,12 +223,17 @@ def _resolve_queue_workspace(args: dict[str, Any] | None) -> Path:
                 )
             
             # Check if target_project is in token's authorized projects
-            if target_project not in [str(p) for p in projects]:
+            # AIPOS-F274: 判定收口到唯一执法点 ProjectEnforcer(显式 workspace_root = 显式目标; Owner 角色类对 home 根内已注册项目放宽)
+            from tools.project_resolution import ProjectEnforcer
+
+            allowed, why = ProjectEnforcer.check_project_scope(token, target_project, explicit=True, target_root=explicit)
+            if not allowed:
                 token_projects = list(projects) if isinstance(projects, list) else []
                 raise ValueError(
                     f"PROJECT_SCOPE_DENIED: Token is scoped to projects {token_projects}, "
                     f"but workspace_root resolves to project '{target_project}'. "
                     f"Use a token authorized for '{target_project}' or operate within an authorized workspace."
+                    + (f" ({why})" if why else "")
                 )
         
         return explicit
@@ -658,21 +663,6 @@ def _scope_denied_result_for(scope: str, label: str) -> dict[str, Any]:
 # so there is deliberately no *_SCOPE constant for it (it is never granted to a role).
 
 
-def _capability_in_project(active_project: str) -> bool:
-    """True if the request's active_project is within the token's `projects` (AIPOS-F66: 调用统一执法器).
-
-    AIPOS-229 §2: a token WITHOUT a `projects` field is NOT narrowed by project -> True (back-compat
-    byte-identical). With `projects`, membership decides. Callers MUST check presence first (R-ii)
-    so an absent-`projects` token never triggers active_project resolution.
-    
-    AIPOS-F66: 收敛到统一执法器 ProjectEnforcer。
-    """
-    from tools.project_resolution import ProjectEnforcer
-    token_data = _capability_token()
-    allowed, _ = ProjectEnforcer.check_project_scope(token_data, active_project)
-    return allowed
-
-
 def _project_scope_denied_result(detail: str) -> dict[str, Any]:
     return _teaching_error(
         "PROJECT_SCOPE_DENIED",
@@ -686,7 +676,7 @@ def _project_scope_denied_result(detail: str) -> dict[str, Any]:
     )
 
 
-def _project_gate_denied() -> dict[str, Any] | None:
+def _project_gate_denied(*, explicit: bool = False) -> dict[str, Any] | None:
     """The project gate (AIPOS-229, AIPOS-294, AIPOS-FND-17). Returns a PROJECT_SCOPE_DENIED result to BLOCK,
     or None to fall through to the operation-scope (★A1) gate.
 
@@ -729,12 +719,16 @@ def _project_gate_denied() -> dict[str, Any] | None:
                 f"active project could not be resolved ({exc}). {guidance}"
             )
     
-    # Check authorization
-    if not _capability_in_project(target_project):
+    # Check authorization (AIPOS-F274: 显式 project 参数 = 显式目标, Owner 角色类对 home 根内已注册项目放宽; 判定唯一在 ProjectEnforcer)
+    from tools.project_resolution import ProjectEnforcer
+
+    allowed, why = ProjectEnforcer.check_project_scope(token, target_project, explicit=explicit and bool(request_project))
+    if not allowed:
         token_projects = list(projects) if isinstance(projects, list) else []
         return _project_scope_denied_result(
             f"project '{target_project}' is not in the token's authorized projects {token_projects}. "
             f"Pass an authorized project explicitly or bind default_project at token mint time."
+            + (f" ({why})" if why else "")
         )
     return None
 
@@ -797,7 +791,8 @@ def dispatch_tool(name: str, arguments: dict[str, Any] | None) -> dict[str, Any]
     # AIPOS-F30: Single exception wrapper for all tools - programming errors must surface with full traceback
     try:
         with request_project_scope(request_project):
-            denied = _project_gate_denied()
+            # AIPOS-F274: 只有调用方自带的 project 参数算显式目标(default_project / 单项目推断不算)
+            denied = _project_gate_denied(explicit=bool(str(args.get("project") or "").strip()))
             if denied is not None:
                 return denied
             return handler(args)
@@ -1935,6 +1930,19 @@ def lybra_owner_decision_record_dry_run(arguments: dict[str, Any] | None = None)
         repo_root = _resolve_queue_workspace(args)
     except ValueError as exc:
         return _teaching_error("WORKSPACE_ROOT_INVALID", str(exc), "Pass a workspace_root the token is scoped to, or omit it.")
+    # AIPOS-F274 件④: 跨项目签发追溯字段只由门算(凭据所属项目 / 目标项目), 客户端自带的同名字段丢弃(防伪造);
+    # project = dispatch 路由键(已在 dispatch_tool 定目标并判项目域), 不进决策 payload(否则信封合成路径读它而确认重放读不到 = 快照不符)
+    from tools.aipos_cli.owner_decision_writer import SCOPE_TRACE_FIELDS
+    from tools.project_resolution import cross_project_trace
+
+    args = {k: v for k, v in args.items() if k not in SCOPE_TRACE_FIELDS and k != "project"}
+    try:
+        target_project = _resolve_active_project_for(repo_root, None)
+    except (ValueError, FileNotFoundError, OSError):
+        target_project = None  # 目标根无可读项目声明 = 不可归属, 不写追溯(writer 自会按其声明拒或放)
+    trace = cross_project_trace(_capability_token(), target_project) if target_project else None
+    if trace:
+        args.update(trace)
     response = record_owner_decision(args, dry_run=True, repo_root=repo_root, actor=str(args.get("actor") or "mcp.client"))
     if response.get("verdict") == Verdict.BLOCK:
         return _map_owner_decision_dry_run_error(response)
@@ -4414,10 +4422,12 @@ def _enroll_code_dry_run_store_prune(now: datetime | None = None) -> None:
 _ENROLL_CODE_KNOWN_ARGS = frozenset({
     "role", "instance", "ttl", "gate_url", "governance_root",
     "owner_authorization_ref", "reason", "actor", "agent_instance",
+    "project",  # AIPOS-F274: dispatch 路由键(显式目标项目; 与 governance_root 同给时须一致)
 })
 # F24A: lybra_enroll_code_confirm 已知参数面
 _ENROLL_CODE_CONFIRM_KNOWN_ARGS = frozenset({
     "dry_run_token", "owner_confirmation_token", "actor", "agent_instance",
+    "project",  # AIPOS-F274: 同 dry_run 的显式目标项目(码记录 / 运输凭证落目标项目根)
 })
 
 
@@ -4509,10 +4519,30 @@ def _validate_enroll_code_args(args: dict[str, Any]) -> tuple[dict[str, Any], di
     owner_authorization_ref = str(args.get("owner_authorization_ref") or "").strip() or None
     reason = str(args.get("reason") or "").strip()
     governance_root: str | None = None
+    scope_trace: dict[str, str] | None = None
     if governance_root_raw:
         governance_root, err = _resolve_governance_root_arg(governance_root_raw)
         if err is not None:
             return {}, err
+        # AIPOS-F274: 显式 governance_root = 显式目标项目, 经唯一执法点核凭据项目域(原只核注册, 不核项目域 = 项目域凭据可为别的项目签码);
+        # Owner 角色类对 home 根内已注册项目放宽。与显式 project 参数同给时须一致(不猜)。
+        from tools.project_resolution import ProjectEnforcer, cross_project_trace
+
+        target_name = Path(governance_root).name
+        explicit_project = str(args.get("project") or "").strip()
+        if explicit_project and explicit_project != target_name:
+            return {}, _teaching_error(
+                "PROJECT_MISMATCH",
+                f"project {explicit_project!r} and governance_root {governance_root!r} (project {target_name!r}) name different projects.",
+                "Pass the same target project in both, or omit project.",
+            )
+        cap = _capability_token()
+        allowed, why = ProjectEnforcer.check_project_scope(cap, target_name, explicit=True, target_root=governance_root)
+        if not allowed:
+            return {}, _project_scope_denied_result(
+                f"governance_root resolves to project '{target_name}', outside the token's authorized projects "
+                f"{list(cap.get('projects') or [])}." + (f" ({why})" if why else ""))
+        scope_trace = cross_project_trace(cap, target_name)
     if not role:
         return {}, _teaching_error(
             "MISSING_ROLE",
@@ -4566,6 +4596,16 @@ def _validate_enroll_code_args(args: dict[str, Any]) -> tuple[dict[str, Any], di
             "INSTANCE_REQUIRED", refusal, "Retry with instance set (e.g. {\"instance\": \"<role-prefix>.<project>.<host>\"}).",
             example_args={"role": role, "instance": "<实例>", "ttl": 86400, "owner_authorization_ref": owner_authorization_ref},
         )
+    # AIPOS-F274: Owner 类角色(project_scope=cross_project)的码只许 Owner 类凭据发起——否则非 Owner 凭据可自签 Owner 码、兑换出
+    # Owner 凭据, 绕过「只放宽 Owner」的边界(roles.schema project_scope_semantics.owner_explicit_target.owner_role_codes)
+    from tools.project_resolution import role_is_cross_project
+
+    if role_is_cross_project({"role": role, "role_class": role_class}) and not role_is_cross_project(_capability_token()):
+        return {}, _teaching_error(
+            "OWNER_CODE_REQUIRES_OWNER",
+            f"An enrollment code for the Owner-class role {role!r} can only be issued with an Owner credential.",
+            "Ask the Owner to issue this code (Owner credential), or issue a code for a non-Owner role.",
+        )
     validated = {
         "role": role,
         "instance": instance,
@@ -4574,6 +4614,7 @@ def _validate_enroll_code_args(args: dict[str, Any]) -> tuple[dict[str, Any], di
         "governance_root": governance_root,
         "owner_authorization_ref": owner_authorization_ref,
         "reason": reason,
+        "scope_trace": scope_trace,  # AIPOS-F274 件④: 跨项目签码追溯(门算, 不收客户端值)
     }
     return validated, None
 
@@ -4713,6 +4754,7 @@ def lybra_enroll_code_confirm(arguments: dict[str, Any] | None = None) -> dict[s
             governance_root=validated.get("governance_root"),
             by=validated["owner_authorization_ref"],
             reason=validated["reason"] or f"owner-authorization-ref: {validated['owner_authorization_ref']}",
+            scope_trace=validated.get("scope_trace"),
         )
     except Exception as exc:
         return _error_result(f"Enrollment code issuance failed: {exc}")
@@ -4757,6 +4799,7 @@ def lybra_roles_enroll_code(arguments: dict[str, Any] | None = None) -> dict[str
             governance_root=validated.get("governance_root"),
             by=validated["owner_authorization_ref"],
             reason=validated["reason"] or f"owner-authorization-ref: {validated['owner_authorization_ref']}",
+            scope_trace=validated.get("scope_trace"),
         )
     except ValueError as exc:
         return _error_result(f"Enrollment code creation failed: {exc}")
