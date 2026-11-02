@@ -1550,14 +1550,137 @@
       "gate",
       "gate_resident"
     ],
-    "labels": {
-      "python": "Python",
-      "node": "Node.js",
-      "git": "git",
-      "pi": "pi(审计 / 非代码执行工位)",
-      "pi_models": "pi 可用模型",
-      "gate": "门(在跑且可达)",
-      "gate_resident": "门常驻"
+    "texts": {
+      "zh": {
+        "labels": {
+          "python": "Python",
+          "node": "Node.js",
+          "git": "git",
+          "pi": "pi(审计 / 非代码执行工位)",
+          "pi_models": "pi 可用模型",
+          "gate": "门(在跑且可达)",
+          "gate_resident": "门常驻"
+        },
+        "exits": {
+          "python": "安装 Python {min} 或更高版本(或设 LYBRA_PYTHON 指向合格解释器)后重跑 lybra setup check",
+          "node": "安装 Node.js {min} 或更高版本(npm 安装的 lybra 入口 bin/lybra 是 node 脚本)后重跑 lybra setup check",
+          "git": "安装 git(治理仓落账、卡工作树与分支都依赖 git)后重跑 lybra setup check",
+          "pi_missing": "pi 未安装: 审计与非代码执行固定由 pi 工位完成(Owner 10-31 裁定), 须自装——{command}(说明: {url}), 装好后重跑 lybra setup check",
+          "pi_models": "pi 没有可用模型: 按 pi 自身文档登录 / 配置模型提供方后, 用 `pi --list-models` 确认至少列出一个模型, 再重跑 lybra setup check(项目用哪个模型另由 lybra project set-model 声明)",
+          "pi_skipped": "先按上一项装好 pi, 再重跑 lybra setup check 核模型",
+          "gate": "门未在跑或不可达: 前台起门 `lybra serve --workspace-root <治理根> start`(终端常开), 或常驻安装 `lybra serve --workspace-root <治理根> install --dry-run` 预演后 --confirm; 门在他机 = 核对 connection.json mcp.rpc_url / LYBRA_GATE_URL 与网络",
+          "resident": "门常驻未安装(不阻断: 也可前台 serve start): `lybra serve --workspace-root <治理根> install --dry-run` 预演将写的单元, 无误后 --confirm",
+          "resident_path": "常驻单元的 PATH 不含 pi 所在目录 {pi_dir}(单元 PATH: {unit_path_value}): 常驻门内看板自检会把 pi 报 ✗、loop 拉 pi 会失败。重跑 lybra serve install --confirm 刷新 PATH(已装单元先 lybra serve uninstall --confirm; 在能找到 pi 的终端里跑)",
+          "resident_not_running": "单元已装但未在跑: 看 `lybra serve status` 与系统服务日志"
+        },
+        "details": {
+          "not_on_path": "{exe} 不在 PATH",
+          "timeout": "`{command}` 超时({seconds}s)",
+          "cannot_start": "`{command}` 起不来: {error}",
+          "exit_nonzero": "`{command}` exit {code}: {tail}",
+          "no_output": "(无输出)",
+          "below": "{have}({where})低于要求 ≥{min}",
+          "ok_required": "{have}({where}; 要求 ≥{min})",
+          "ok_plain": "{have}({where})",
+          "pi_skipped": "未核(pi 未安装)",
+          "models_more": " 等 {count} 个",
+          "models_ok": "{count} 个已配置模型: {shown}{more}",
+          "models_zero": "`{command}` 列出 0 个模型",
+          "gate_unresolved": "门地址推导不出: {error}",
+          "source_explicit": "显式",
+          "source_workspace": "工作区 {workspace}",
+          "source_default": "环境 / 缺省",
+          "gate_ok": "{base}(地址来源: {source}; GET {probe_path} → {how})",
+          "gate_down": "{base} 不可达(地址来源: {source}; {how})",
+          "http_answered": "HTTP {code}(门已应答)",
+          "resident_running": "在跑",
+          "resident_stopped": "未在跑",
+          "resident_managed": "本命令生成",
+          "resident_unmanaged": "同名但非本命令生成",
+          "resident_installed": "{unit_path}({owner}; {state})",
+          "resident_env_unreadable": "单元文件读不出环境, 无从核 PATH 是否含 pi({pi})",
+          "resident_path_unreadable_value": "读不出",
+          "resident_path_absent": "(未写 PATH: AIPOS-F268 前安装, 沿用服务管理器缺省)",
+          "resident_path_missing": "单元 PATH 不含 pi 所在目录 {pi_dir}(单元 PATH: {shown})",
+          "resident_handwritten": "检测到已有手写常驻单元 {names}; lybra serve install 不接管",
+          "resident_absent": "未安装({unit_path} 不存在)",
+          "detail_sep": "; "
+        },
+        "render": {
+          "item": "{mark} {label}: {detail}",
+          "exit": "    出口: {exit}",
+          "summary_blocking": "结论: 有 {fail} 项 ✗(阻断), {warn} 项 ⚠, {ok} 项 ✓",
+          "summary_clear": "结论: 无 ✗ 项({ok} 项 ✓, {warn} 项 ⚠ 提示)",
+          "preflight_title": "本机安装自检",
+          "preflight_not_run": "本次未运行自检(--skip-preflight 或调用方未给结果); 开始 Step 1 前先跑 `{command}`(或 `lybra onboarding check <项目> --step 0`), 有 ✗ 项先按出口处理",
+          "preflight_exit": "  → 出口: {exit}"
+        }
+      },
+      "en": {
+        "labels": {
+          "python": "Python",
+          "node": "Node.js",
+          "git": "git",
+          "pi": "pi (auditor / non-code executor workstations)",
+          "pi_models": "pi available models",
+          "gate": "Gate (running and reachable)",
+          "gate_resident": "Gate resident service"
+        },
+        "exits": {
+          "python": "Install Python {min} or later (or set LYBRA_PYTHON to a suitable interpreter), then rerun lybra setup check",
+          "node": "Install Node.js {min} or later (the npm-installed lybra entry bin/lybra is a node script), then rerun lybra setup check",
+          "git": "Install git (governance landing, card worktrees and branches all depend on git), then rerun lybra setup check",
+          "pi_missing": "pi is not installed: audits and non-code execution always run on pi workstations (Owner ruling 10-31), so install it yourself: {command} (docs: {url}), then rerun lybra setup check",
+          "pi_models": "pi has no usable model: sign in / configure a model provider per pi's own docs, confirm `pi --list-models` lists at least one model, then rerun lybra setup check (which model a project uses is declared separately with lybra project set-model)",
+          "pi_skipped": "Install pi per the previous item first, then rerun lybra setup check to check models",
+          "gate": "The gate is not running or not reachable: start it in the foreground with `lybra serve --workspace-root <governance root> start` (keep the terminal open), or install it as a resident service with `lybra serve --workspace-root <governance root> install --dry-run`, then --confirm; gate on another machine = check connection.json mcp.rpc_url / LYBRA_GATE_URL and the network",
+          "resident": "Gate resident service not installed (not blocking: a foreground serve start also works): preview the unit with `lybra serve --workspace-root <governance root> install --dry-run`, then --confirm",
+          "resident_path": "The resident unit's PATH lacks pi's directory {pi_dir} (unit PATH: {unit_path_value}): the board self-check inside the resident gate will report pi as ✗ and loop will fail to launch pi. Rerun lybra serve install --confirm to refresh PATH (for an installed unit run lybra serve uninstall --confirm first; run it from a terminal where pi is found)",
+          "resident_not_running": "Unit installed but not running: check `lybra serve status` and the system service log"
+        },
+        "details": {
+          "not_on_path": "{exe} is not on PATH",
+          "timeout": "`{command}` timed out ({seconds}s)",
+          "cannot_start": "`{command}` could not start: {error}",
+          "exit_nonzero": "`{command}` exit {code}: {tail}",
+          "no_output": "(no output)",
+          "below": "{have} ({where}) is below the required ≥{min}",
+          "ok_required": "{have} ({where}; requires ≥{min})",
+          "ok_plain": "{have} ({where})",
+          "pi_skipped": "Not checked (pi not installed)",
+          "models_more": " and {count} in total",
+          "models_ok": "{count} configured model(s): {shown}{more}",
+          "models_zero": "`{command}` lists 0 models",
+          "gate_unresolved": "Gate address could not be derived: {error}",
+          "source_explicit": "explicit",
+          "source_workspace": "workspace {workspace}",
+          "source_default": "environment / default",
+          "gate_ok": "{base} (address source: {source}; GET {probe_path} → {how})",
+          "gate_down": "{base} is not reachable (address source: {source}; {how})",
+          "http_answered": "HTTP {code} (the gate answered)",
+          "resident_running": "running",
+          "resident_stopped": "not running",
+          "resident_managed": "generated by this command",
+          "resident_unmanaged": "same name but not generated by this command",
+          "resident_installed": "{unit_path} ({owner}; {state})",
+          "resident_env_unreadable": "The unit file's environment cannot be read, so whether PATH contains pi ({pi}) cannot be checked",
+          "resident_path_unreadable_value": "unreadable",
+          "resident_path_absent": "(no PATH written: installed before AIPOS-F268, using the service manager default)",
+          "resident_path_missing": "The unit PATH lacks pi's directory {pi_dir} (unit PATH: {shown})",
+          "resident_handwritten": "Found existing hand-written resident unit(s) {names}; lybra serve install will not take them over",
+          "resident_absent": "Not installed ({unit_path} does not exist)",
+          "detail_sep": "; "
+        },
+        "render": {
+          "item": "{mark} {label}: {detail}",
+          "exit": "    Exit: {exit}",
+          "summary_blocking": "Result: {fail} item(s) ✗ (blocking), {warn} ⚠, {ok} ✓",
+          "summary_clear": "Result: no ✗ items ({ok} ✓, {warn} ⚠ notices)",
+          "preflight_title": "Local installation self-check",
+          "preflight_not_run": "The self-check was not run this time (--skip-preflight, or the caller gave no result); before Step 1 run `{command}` (or `lybra onboarding check <project> --step 0`) and fix any ✗ item per its exit first",
+          "preflight_exit": "  → Exit: {exit}"
+        }
+      }
     },
     "probe_timeout_seconds": 15,
     "requirements": {
@@ -1567,8 +1690,7 @@
           "file": "pyproject.toml",
           "key": "requires-python",
           "form": ">={min}"
-        },
-        "exit": "安装 Python {min} 或更高版本(或设 LYBRA_PYTHON 指向合格解释器)后重跑 lybra setup check"
+        }
       },
       "node": {
         "min": "18",
@@ -1583,15 +1705,13 @@
             "node"
           ],
           "form": ">={min}"
-        },
-        "exit": "安装 Node.js {min} 或更高版本(npm 安装的 lybra 入口 bin/lybra 是 node 脚本)后重跑 lybra setup check"
+        }
       },
       "git": {
         "argv": [
           "git",
           "--version"
-        ],
-        "exit": "安装 git(治理仓落账、卡工作树与分支都依赖 git)后重跑 lybra setup check"
+        ]
       }
     },
     "pi": {
@@ -1603,21 +1723,13 @@
       "install": {
         "command": "npm install -g @earendil-works/pi-coding-agent",
         "url": "https://github.com/earendil-works/pi"
-      },
-      "exit_missing": "pi 未安装: 审计与非代码执行固定由 pi 工位完成(Owner 10-31 裁定), 须自装——{command}(说明: {url}), 装好后重跑 lybra setup check",
-      "exit_models": "pi 没有可用模型: 按 pi 自身文档登录 / 配置模型提供方后, 用 `pi --list-models` 确认至少列出一个模型, 再重跑 lybra setup check(项目用哪个模型另由 lybra project set-model 声明)",
-      "skipped_without_pi": "未核(pi 未安装)",
-    "skipped_exit": "先按上一项装好 pi, 再重跑 lybra setup check 核模型"
+      }
     },
     "gate": {
       "probe_path": "/",
       "probe_note": "对门基址发一次 GET {probe_path}(门对未知路径回 404 结构化错误 = 门已应答 = 可达); 任何 HTTP 应答都算可达, 连接被拒 / 超时 = 不可达。永不探 /mcp(SSE 长连接, 永不返回); 不带凭据、不经代理",
-      "timeout_seconds": 3,
-      "exit": "门未在跑或不可达: 前台起门 `lybra serve --workspace-root <治理根> start`(终端常开), 或常驻安装 `lybra serve --workspace-root <治理根> install --dry-run` 预演后 --confirm; 门在他机 = 核对 connection.json mcp.rpc_url / LYBRA_GATE_URL 与网络"
+      "timeout_seconds": 3
     },
-    "resident_exit": "门常驻未安装(不阻断: 也可前台 serve start): `lybra serve --workspace-root <治理根> install --dry-run` 预演将写的单元, 无误后 --confirm",
-    "resident_path_exit": "常驻单元的 PATH 不含 pi 所在目录 {pi_dir}(单元 PATH: {unit_path_value}): 常驻门内看板自检会把 pi 报 ✗、loop 拉 pi 会失败。重跑 lybra serve install --confirm 刷新 PATH(已装单元先 lybra serve uninstall --confirm; 在能找到 pi 的终端里跑)",
-    "resident_path_absent": "(未写 PATH: AIPOS-F268 前安装, 沿用服务管理器缺省)",
     "board": {
       "description": "AIPOS-F267: 看板「设置自检」页(verbs.schema board_readonly_pages.setup)在看板进程内复用 run_setup_check 结果的秒数(该页过期即重跑; 首页 / 接入页摘要过期则先显示上次结果并后台重跑)。缺本键 = setup_check.BOARD_CACHE_DEFAULT_SECONDS(同值); 须为正整数。",
       "cache_seconds": 60
@@ -1648,11 +1760,147 @@
         "node",
         "git"
       ],
-      "tools_note": "可执行名不另写: pi = enums.schema harness.<setup_check.pi.harness>.launch.argv[0](与 loop 拉起同一声明), node / git = setup_check.requirements.<id>.argv[0](唯一读取口 setup_check.tool_executable)",
-      "missing_note": "安装者当前 PATH 里找不到 {tool}: 写进单元的 PATH 同样找不到, 常驻门内看板自检 / loop 拉 {tool} 会失败; 装好 {tool} 或把其所在目录加进 PATH 后再装(不阻断)",
-      "empty_note": "环境项 {key} 渲染为空(安装者 {key} 为空), 不写进单元: 门进程沿用服务管理器缺省值",
-      "drift_note": "已装单元 {unit_path} 的 PATH 与当前 PATH 不一致(单元: {unit_value}; 当前: {current_value})",
-      "refresh_exit": "重装以刷新 PATH: `lybra serve uninstall --confirm` 后在能找到 pi 的终端重跑 `{install_confirm}`"
+      "tools_note": "可执行名不另写: pi = enums.schema harness.<setup_check.pi.harness>.launch.argv[0](与 loop 拉起同一声明), node / git = setup_check.requirements.<id>.argv[0](唯一读取口 setup_check.tool_executable)"
+    },
+    "texts": {
+      "zh": {
+        "path_check": {
+          "missing_note": "安装者当前 PATH 里找不到 {tool}: 写进单元的 PATH 同样找不到, 常驻门内看板自检 / loop 拉 {tool} 会失败; 装好 {tool} 或把其所在目录加进 PATH 后再装(不阻断)",
+          "empty_note": "环境项 {key} 渲染为空(安装者 {key} 为空), 不写进单元: 门进程沿用服务管理器缺省值",
+          "drift_note": "已装单元 {unit_path} 的 PATH 与当前 PATH 不一致(单元: {unit_value}; 当前: {current_value})",
+          "refresh_exit": "重装以刷新 PATH: `lybra serve uninstall --confirm` 后在能找到 pi 的终端重跑 `{install_confirm}`",
+          "unreadable": "读不出",
+          "no_path": "未写 PATH",
+          "empty": "(空)"
+        },
+        "plan": {
+          "change_exit": "要改参数: 先 `lybra serve uninstall --confirm` 再重装; 只看现状: `lybra serve status`",
+          "exists_managed": "已存在同名单元 {path}(本命令先前生成), 不覆盖",
+          "exists_foreign": "已存在同名文件 {path}, 不是本命令生成(无管理标记), 不覆盖、不接管",
+          "exists_foreign_exit": "保留它(手写常驻继续用), 或自行停用并移走该文件后再装",
+          "handwritten_note": "检测到已有手写常驻单元 {name}({path}), 本命令不接管",
+          "handwritten_refusal": "单元目录已有手写常驻门单元: {names}; 再装一个会与其争同一端口, --confirm 拒",
+          "handwritten_exit": "保留手写单元(门已常驻, 无需本命令), 或先停用并移走它后再 install --confirm",
+          "command_failed_exit": "单元文件已写 {path}; 按上文报错修好后 `lybra serve uninstall --confirm` 清理再重装",
+          "not_installed": "未安装: {path} 不存在, 无事可做",
+          "not_managed": "{path} 不是本命令生成(无管理标记), 不删",
+          "not_managed_exit": "手写单元请自行停用与移除",
+          "disable_failed": "停用命令有非零退出(文件已删): {commands}"
+        },
+        "report": {
+          "head": "[{op} · {phase}] 平台 {platform}  单元 {unit_path}",
+          "phase_dry_run": "预演(零写入)",
+          "phase_confirm": "确认",
+          "workspace": "工作区(门 --workspace-root): {workspace_root}",
+          "home_root": "home 根(LYBRA_HOME_ROOT): {home_root}(来源: {source})",
+          "code_root": "代码根: {code_root}",
+          "environment_file": "环境文件(可选, 只引用不创建): {environment_file}",
+          "unit_text_head": "── 将写入 {unit_path} 全文 ──",
+          "unit_text_tail": "── 全文完 ──",
+          "commands": "将执行的命令:",
+          "status_after": "确认后回读状态: {command}",
+          "note": "⚠ {note}",
+          "readback": "回读状态: `{command}` → exit {code} {stdout}{state}",
+          "readback_running": "(在跑)",
+          "readback_stopped": "(未在跑)",
+          "refusal": "✗ 拒 {code}: {reason}",
+          "refusal_exit": "  出口: {exit}",
+          "install_clear": "预演无拒因; 确认写入并启用: 同一命令改 --confirm",
+          "uninstall_clear": "预演无拒因; 确认停用并删除: 同一命令改 --confirm",
+          "path_head": "单元 PATH(取自安装者当前 PATH, 共 {count} 项, 原样写入):",
+          "path_none": "单元 PATH: 不写(安装者 PATH 为空, 门进程沿用服务管理器缺省)",
+          "tool_in": "在单元 PATH 内 ✓",
+          "tool_out": "不在单元 PATH 内 ⚠",
+          "tool_row": "  {executable} → {resolved}(目录 {dir}: {mark})",
+          "tool_missing": "  {executable} → 安装者 PATH 里找不到 ⚠",
+          "installed_path": "已装单元 PATH: {value}",
+          "installed_path_none": "(未写 PATH)",
+          "installed_tool_in": "在已装单元 PATH 内 ✓",
+          "installed_tool_out": "不在已装单元 PATH 内 ⚠",
+          "installed_tool_row": "  {executable} 目录 {dir}: {mark}",
+          "refresh_exit": "出口(重装以刷新): {exit}"
+        },
+        "status": {
+          "unsupported": "门常驻: 本平台不支持({detail})",
+          "installed": "门常驻: 已安装 {unit_path}({owner}; {state})",
+          "absent": "门常驻: 未安装({unit_path} 不存在)",
+          "running": "在跑",
+          "stopped": "未在跑",
+          "managed": "本命令生成",
+          "unmanaged": "同名但非本命令生成",
+          "handwritten": "  已有手写常驻单元 {name}({path}), 本命令不接管",
+          "unsupported_platform": "门常驻不支持本平台 {platform}(config.schema gate_resident.platforms 已声明: {declared}); 出口: 前台 `lybra serve start`"
+        }
+      },
+      "en": {
+        "path_check": {
+          "missing_note": "{tool} is not found on the installer's current PATH: the PATH written into the unit will not find it either, so the board self-check inside the resident gate / loop launching {tool} will fail; install {tool} or add its directory to PATH, then install again (not blocking)",
+          "empty_note": "Environment entry {key} renders empty (the installer's {key} is empty), so it is not written into the unit: the gate process keeps the service manager default",
+          "drift_note": "The PATH of installed unit {unit_path} differs from the current PATH (unit: {unit_value}; current: {current_value})",
+          "refresh_exit": "Reinstall to refresh PATH: `lybra serve uninstall --confirm`, then rerun `{install_confirm}` from a terminal where pi is found",
+          "unreadable": "unreadable",
+          "no_path": "no PATH written",
+          "empty": "(empty)"
+        },
+        "plan": {
+          "change_exit": "To change parameters: `lybra serve uninstall --confirm` first, then reinstall; to just see the current state: `lybra serve status`",
+          "exists_managed": "A unit with the same name already exists at {path} (generated earlier by this command); not overwriting",
+          "exists_foreign": "A file with the same name already exists at {path}, not generated by this command (no managed marker); not overwriting or taking it over",
+          "exists_foreign_exit": "Keep it (the hand-written resident setup keeps working), or disable and move that file away yourself, then install",
+          "handwritten_note": "Found existing hand-written resident unit {name} ({path}); this command will not take it over",
+          "handwritten_refusal": "The unit directory already has hand-written resident gate unit(s): {names}; installing another would fight it for the same port, so --confirm is refused",
+          "handwritten_exit": "Keep the hand-written unit (the gate is already resident, no need for this command), or disable and move it away first, then install --confirm",
+          "command_failed_exit": "The unit file was written at {path}; fix the error above, then `lybra serve uninstall --confirm` to clean up and reinstall",
+          "not_installed": "Not installed: {path} does not exist, nothing to do",
+          "not_managed": "{path} was not generated by this command (no managed marker); not deleting",
+          "not_managed_exit": "Disable and remove a hand-written unit yourself",
+          "disable_failed": "A disable command exited non-zero (the file was deleted): {commands}"
+        },
+        "report": {
+          "head": "[{op} · {phase}] platform {platform}  unit {unit_path}",
+          "phase_dry_run": "preview (zero writes)",
+          "phase_confirm": "confirm",
+          "workspace": "Workspace (gate --workspace-root): {workspace_root}",
+          "home_root": "Home root (LYBRA_HOME_ROOT): {home_root} (source: {source})",
+          "code_root": "Code root: {code_root}",
+          "environment_file": "Environment file (optional, referenced only, never created): {environment_file}",
+          "unit_text_head": "── Full text to be written to {unit_path} ──",
+          "unit_text_tail": "── End of text ──",
+          "commands": "Commands to run:",
+          "status_after": "State read back after confirm: {command}",
+          "note": "⚠ {note}",
+          "readback": "State read back: `{command}` → exit {code} {stdout}{state}",
+          "readback_running": " (running)",
+          "readback_stopped": " (not running)",
+          "refusal": "✗ Refused {code}: {reason}",
+          "refusal_exit": "  Exit: {exit}",
+          "install_clear": "Preview has no refusals; to write and enable: the same command with --confirm",
+          "uninstall_clear": "Preview has no refusals; to disable and delete: the same command with --confirm",
+          "path_head": "Unit PATH (taken from the installer's current PATH, {count} entries, written as is):",
+          "path_none": "Unit PATH: not written (the installer's PATH is empty; the gate process keeps the service manager default)",
+          "tool_in": "in unit PATH ✓",
+          "tool_out": "not in unit PATH ⚠",
+          "tool_row": "  {executable} → {resolved} (directory {dir}: {mark})",
+          "tool_missing": "  {executable} → not found on the installer's PATH ⚠",
+          "installed_path": "Installed unit PATH: {value}",
+          "installed_path_none": "(no PATH written)",
+          "installed_tool_in": "in installed unit PATH ✓",
+          "installed_tool_out": "not in installed unit PATH ⚠",
+          "installed_tool_row": "  {executable} directory {dir}: {mark}",
+          "refresh_exit": "Exit (reinstall to refresh): {exit}"
+        },
+        "status": {
+          "unsupported": "Gate resident service: not supported on this platform ({detail})",
+          "installed": "Gate resident service: installed {unit_path} ({owner}; {state})",
+          "absent": "Gate resident service: not installed ({unit_path} does not exist)",
+          "running": "running",
+          "stopped": "not running",
+          "managed": "generated by this command",
+          "unmanaged": "same name but not generated by this command",
+          "handwritten": "  Existing hand-written resident unit {name} ({path}); this command will not take it over",
+          "unsupported_platform": "The gate resident service does not support platform {platform} (config.schema gate_resident.platforms declares: {declared}); exit: foreground `lybra serve start`"
+        }
+      }
     },
     "module_argv": [
       "-m",
@@ -1791,6 +2039,970 @@
       "child_grace_note": "子进程 SIGTERM 后等其退出的限时, 过时 SIGKILL; stop 逐个停 state 所记子进程与 supervisor 收尾停子进程同用此值",
       "kill_confirm_seconds": 3,
       "kill_confirm_note": "SIGKILL 后确认退出的限时; 仍在 = 未能停止(BLOCK)"
+    },
+    "texts": {
+      "zh": {
+        "state_labels": {
+          "stopped": "未运行",
+          "recorded": "已记录在跑",
+          "none": "无运行记录"
+        },
+        "exit_reasons": {
+          "stop_signal": "收到停止信号",
+          "restart_limit": "子进程达重拉上限",
+          "aborted": "收尾异常退出"
+        },
+        "line_stopped": "门进程: {label}(supervisor 于 {stopped_at} 退出: {reason}; 最后所记 pid 留在 service_state.json 供排查)",
+        "line_recorded": "门进程: {label}({parts}; 前台 serve 由 `lybra serve stop` 停止)",
+        "line_none": "门进程: {label}"
+      },
+      "en": {
+        "state_labels": {
+          "stopped": "not running",
+          "recorded": "recorded as running",
+          "none": "no run record"
+        },
+        "exit_reasons": {
+          "stop_signal": "received a stop signal",
+          "restart_limit": "a child process hit the restart limit",
+          "aborted": "exited abnormally while finishing"
+        },
+        "line_stopped": "Gate processes: {label} (supervisor exited at {stopped_at}: {reason}; the last recorded pids stay in service_state.json for troubleshooting)",
+        "line_recorded": "Gate processes: {label} ({parts}; a foreground serve is stopped with `lybra serve stop`)",
+        "line_none": "Gate processes: {label}"
+      }
+    }
+  },
+  "owner_texts": {
+    "description": "AIPOS-F277(产品化 P4 第 1 期, 方案 governance/research/2026-11-02-p4-bilingual-plan.md): Owner 直接看到的命令出声点的双语文案块(每块 texts = {zh, en}, 结构标准与唯一读取器 = AIPOS-F276 i18n.texts / check_block; 各语言同一键的占位集相等, i18n.surface_texts 核)。代码只经读取器取用(i18n.block_localize 渲染为双语渲染值 Localized: str 本身 = 缺省语言, 事项 ID / 哈希 / JSON / 看板行为不变; CLI 出声按 i18n.resolve_language 取用户语言)。setup check / 门常驻的文案在各自声明节 setup_check.texts / gate_resident.texts; 本节放没有专属声明节的出声点。命令名、参数、路径、码值不译。只追加: 新出声点 = 加一块, 缺 en 键 = 守卫失败。",
+    "glossary": {
+      "description": "中英术语对照(英文译文用词以此为准, 与 README / QUICKSTART 英文版一致; 守卫 tests/test_aipos_f277_owner_bilingual.py 核英文块不出现 avoid 列出的旧译)",
+      "terms": [
+        {
+          "zh": "门",
+          "en": "gate",
+          "avoid": [
+            "gateway"
+          ]
+        },
+        {
+          "zh": "卡",
+          "en": "card",
+          "avoid": [
+            "ticket"
+          ]
+        },
+        {
+          "zh": "交回",
+          "en": "return",
+          "avoid": [
+            "hand-in",
+            "handin"
+          ]
+        },
+        {
+          "zh": "审计",
+          "en": "audit",
+          "avoid": []
+        },
+        {
+          "zh": "审计工位",
+          "en": "auditor workstation",
+          "avoid": [
+            "audit station"
+          ]
+        },
+        {
+          "zh": "治理根",
+          "en": "governance root",
+          "avoid": [
+            "governance directory",
+            "governance folder"
+          ]
+        },
+        {
+          "zh": "治理仓",
+          "en": "governance repo",
+          "avoid": [
+            "governance repository"
+          ]
+        },
+        {
+          "zh": "home 根",
+          "en": "home root",
+          "avoid": [
+            "home directory root"
+          ]
+        },
+        {
+          "zh": "项目常设授权",
+          "en": "project standing grant",
+          "avoid": [
+            "standing authorization"
+          ]
+        },
+        {
+          "zh": "项目授权",
+          "en": "project grant",
+          "avoid": []
+        },
+        {
+          "zh": "注册码",
+          "en": "enrollment code",
+          "avoid": [
+            "registration code",
+            "enrolment code"
+          ]
+        },
+        {
+          "zh": "工位",
+          "en": "workstation",
+          "avoid": [
+            "work station"
+          ]
+        },
+        {
+          "zh": "顾问",
+          "en": "advisor",
+          "avoid": [
+            "adviser",
+            "consultant"
+          ]
+        },
+        {
+          "zh": "执行体",
+          "en": "executor",
+          "avoid": []
+        },
+        {
+          "zh": "子 agent 执行者",
+          "en": "sub-agent executor",
+          "avoid": [
+            "subagent executor"
+          ]
+        },
+        {
+          "zh": "pi 执行工位",
+          "en": "pi executor workstation",
+          "avoid": []
+        },
+        {
+          "zh": "落账",
+          "en": "landing",
+          "avoid": [
+            "bookkeeping",
+            "book-keeping"
+          ]
+        },
+        {
+          "zh": "预演",
+          "en": "preview",
+          "avoid": [
+            "rehearsal"
+          ]
+        },
+        {
+          "zh": "Owner 待决收件箱",
+          "en": "Owner decision inbox",
+          "avoid": [
+            "mailbox"
+          ]
+        },
+        {
+          "zh": "信封",
+          "en": "envelope",
+          "avoid": []
+        },
+        {
+          "zh": "出口",
+          "en": "exit",
+          "avoid": []
+        },
+        {
+          "zh": "阶段快照",
+          "en": "stage snapshot",
+          "avoid": []
+        },
+        {
+          "zh": "门常驻",
+          "en": "gate resident service",
+          "avoid": [
+            "daemon"
+          ]
+        },
+        {
+          "zh": "接入",
+          "en": "onboard / enroll",
+          "avoid": []
+        },
+        {
+          "zh": "看板",
+          "en": "board",
+          "avoid": [
+            "dashboard"
+          ]
+        },
+        {
+          "zh": "裁决",
+          "en": "decision / verdict",
+          "avoid": []
+        },
+        {
+          "zh": "返工",
+          "en": "rework",
+          "avoid": []
+        },
+        {
+          "zh": "验收",
+          "en": "acceptance",
+          "avoid": []
+        },
+        {
+          "zh": "车道",
+          "en": "lane",
+          "avoid": []
+        },
+        {
+          "zh": "自检",
+          "en": "self-check",
+          "avoid": []
+        }
+      ]
+    },
+    "home_root_source": {
+      "description": "workspace_config.resolve_home_root_with_source 的来源说明(向导 / project new / serve install 打印)",
+      "texts": {
+        "zh": {
+          "explicit": "显式 --home-root",
+          "env": "环境变量 {env}",
+          "global_config": "全局配置 ~/.lybra/config.json home_root",
+          "default": "缺省 ~/.lybra/projects"
+        },
+        "en": {
+          "explicit": "explicit --home-root",
+          "env": "environment variable {env}",
+          "global_config": "global config ~/.lybra/config.json home_root",
+          "default": "default ~/.lybra/projects"
+        }
+      }
+    },
+    "project_new": {
+      "description": "`lybra project new` 的 Owner 可见输出(aipos_cli 项目族 new 分支)与新项目首份阶段快照 / 决策日志桩的文案(workspace_config.scaffold_project; 语言 = 建项目时的用户语言)",
+      "texts": {
+        "zh": {
+          "home": "home 根: {home}(来源: {source}); 项目建在 {path}",
+          "next_gate": "next: 门以 home 根 {home} 发现本项目(双标记 5_tasks/queue + project.json); 接入步骤见 lybra onboarding guide {name}",
+          "next_pattern": "next: 声明卡号形状 task_id_pattern(受控发布 / finalize 归属解析只读它): {command}",
+          "decision_log_body": "决策粒度条目见 decision_log 目录(lybra governance add decision)。",
+          "stage_name": "项目创建",
+          "stage_body": "## Summary\n\n项目 `{name}` 由 `lybra project new` 创建(registered_by: {registered_by})。治理树(队列 / 记录 / 治理文档 / 阶段快照)已就位,\n本篇是项目的第一份阶段快照, 标记「项目创建」阶段关账: 此后的卡可经 finalize 阶段门(有快照才可转换)。\n\n## Next Stage\n\n按 `lybra onboarding guide` 接入: 声明产品仓 → 顾问凭据 → 信封 → 工位 → 首卡。"
+        },
+        "en": {
+          "home": "Home root: {home} (source: {source}); the project goes to {path}",
+          "next_gate": "next: the gate discovers this project through home root {home} (two markers: 5_tasks/queue + project.json); onboarding steps: lybra onboarding guide {name}",
+          "next_pattern": "next: declare the card ID pattern task_id_pattern (controlled release / finalize ownership resolution reads only this): {command}",
+          "decision_log_body": "Decision-level entries live in the decision_log directory (lybra governance add decision).",
+          "stage_name": "project-created",
+          "stage_body": "## Summary\n\nProject `{name}` was created by `lybra project new` (registered_by: {registered_by}). The governance tree (queue / records / governance docs / stage snapshots) is in place;\nthis is the project's first stage snapshot and closes the \"project created\" stage: from now on cards can pass the finalize stage gate (a snapshot is required for the transition).\n\n## Next Stage\n\nOnboard with `lybra onboarding guide`: declare product repos → advisor credential → grant → workstations → first card."
+        }
+      }
+    },
+    "onboarding_guide": {
+      "description": "`lybra onboarding guide` / `lybra onboarding check` 的全部人读文案(tools/aipos_cli/onboarding.py; 结构化 guide 的文字字段按用户语言取, --json 同语言)",
+      "texts": {
+        "zh": {
+          "cred": {
+            "source_explicit_json": "显式 --owner-connection-json",
+            "source_explicit_ws": "显式 --owner-workspace",
+            "label_home": "home 根自身",
+            "label_project": "项目 {name}",
+            "source_active": "门注册表中持 Owner 凭据的{holder}(已声明活动项目 {declared})",
+            "source_single": "门注册表中唯一持 Owner 凭据的{holder}",
+            "source_unresolved": "未推导出",
+            "unreadable_item": "{path} 读不出({error})",
+            "why_many": "home 根 {home} 下有 {count} 份持 Owner 凭据的 connection.json({holders}), 且未声明活动项目可据以选择",
+            "why_none": "home 根 {home} 的门注册表来源(home 根自身与各已建项目的 .lybra/connection.json)里没有持 Owner 凭据的文件(门尚未以本 home 根起过: lybra serve start; 或 Owner 凭据放在别处)",
+            "unreadable_part": "; 读不出: {items}",
+            "reason": "{why}。请用 --owner-connection-json <门 serve 读取的、持 Owner 凭据的 connection.json> 重新生成本向导(或在第 3 / 4 步命令里把 {conn} / {ws} 换成它与其工作区)",
+            "unresolved_note": "⚠ Owner 凭据未推导出: {reason}"
+          },
+          "ws": {
+            "source_declared": "project.json paths.{key}(项目声明)",
+            "source_default": "config.schema 缺省 project_json.paths.{key}.default_user_home({template}; 项目可用 lybra project set-paths 声明)",
+            "label_gov": "治理根",
+            "label_home": "home 根",
+            "inside": "工位根 {absolute}({source})落在{label} {inner} 内: 工位目录含工位凭据, 不得进治理仓。改用 --workspace-dir / --auditor-dir 给治理仓外目录, 或 lybra project set-paths {project} --key {key} --value <治理仓外绝对路径> 改声明",
+            "label_exec": "pi 执行工位(--workspace-dir)",
+            "label_audit": "审计工位(--auditor-dir)",
+            "label_advisor": "顾问会话目录(--advisor-dir)",
+            "same_dir": "{label} 与{other}是同一目录 {path}: 一个目录只能登记给一个实例(否则先登记者的章程落点失效)。给各工位不同目录后重跑向导(--workspace-dir / --auditor-dir)",
+            "source_explicit": "显式 --workspace-dir / --auditor-dir",
+            "source_root": "工位根 {root}(来源: {source})",
+            "source_partial": "; 部分为显式参数"
+          },
+          "grant": {
+            "existing_error": "读不出本项目既有授权({error}): 先 lybra project grant show {pq} --home-root {hq} 查明再决定是否签",
+            "existing_row": "{id} r{revision}(状态 {state}, 已放行 {used}/{max_tasks}, 到期 {expires})",
+            "existing_live": "本项目已有项目授权: {rows}——不必重签本步(sign 会以本次范围为全部范围出新修订); 车道 / 任务类型 / 驱动方 / 主机不够时用 lybra project grant extend {pq} --home-root {hq} … 增补(先预演), 现状看 lybra project grant show {pq} --home-root {hq}",
+            "existing_envelopes": "本项目已有 {count} 张旧信封({ids}; 兼容仍生效, 不再新签): 建议合并为项目授权——lybra project grant draft {pq} --home-root {hq} --from-envelopes(预演; Owner 加 --confirm 签), 或按本步命令签新授权"
+          },
+          "on_demand": {
+            "card_policy": {
+              "title": "卡号形状(card-policy task_id_pattern)",
+              "purpose": "受控发布 / finalize / lybra-deploy 的卡归属解析只读它, 产品无内置默认",
+              "when": "首卡前(第 11 步已带); 卡号规则变化时再改"
+            },
+            "test_contract": {
+              "title": "合并后回归契约(set-test-contract)",
+              "purpose": "全量回归的时限与执行方式; lybra regression baseline 据此记录 main 侧基线, 多数卡不必各自重跑 main 全量",
+              "when": "产品仓有全量测试清单、要让卡分支与 main 两边基线可复用时"
+            },
+            "release_target": {
+              "title": "生产发布目标(release-target)",
+              "purpose": "声明生产主机 + 白名单 + 发布根; 之后卡的生产发布只经 lybra release plan → apply → verify(回退 release rollback), 禁裸 ssh/scp/rsync",
+              "when": "项目有生产部署时(授权的主机含目标主机时 --owner-ref 可省)"
+            },
+            "pi_model": {
+              "title": "pi 模型(set-model)",
+              "purpose": "loop 拉起的 pi 执行体 / 审计体用哪个模型(须是本机 pi 已配置的模型, pi --list-models 可查)",
+              "when": "不想沿用 pi 自身缺省模型时(可按角色 --role executor / auditor 分别声明)"
+            },
+            "headline": {
+              "title": "看板顾问卡(project headline)",
+              "purpose": "顾问在看板首页的摘要卡: 标题 / 正在推进 / 最近完成",
+              "when": "接入完成后, 以及项目阶段变化时"
+            }
+          },
+          "gate": {
+            "source_explicit": "显式 --gate-url",
+            "same_host": "; 同机按 same_host_rule 取 loopback, 端口取自该来源",
+            "source_connection": "{conn} mcp.rpc_url{same_host}",
+            "source_env": "环境变量 LYBRA_GATE_URL{same_host}",
+            "source_default": "config.schema 缺省{same_host}"
+          },
+          "harness": {
+            "not_declared": "--advisor-harness {kind} 不是声明的顾问会话 harness; 合法值 {allowed}(distribution.schema harness_semantics.kinds.<kind>.advisor_session)",
+            "host_forbidden": "--advisor-host 不适用于 --advisor-harness {kind}(声明 harness_host=forbidden: 该会话与治理根同机, 技能交付到本机会话目录); 他机顾问会话用 --advisor-harness 中 harness_host=optional 的值",
+            "host_blank": "--advisor-host {host} 含空白(主机名不得含空白)",
+            "host_required": "--advisor-harness {kind} 的会话可在他机: 须给 --advisor-host <会话所在机>(或 --host-segment), 顾问实例名 host 段不默认成治理根所在机",
+            "dir_required": "--advisor-harness {kind} 的会话在他机({host}): 须给 --advisor-dir <该机上的会话目录绝对路径>(他机目录如实登记, 不猜)"
+          },
+          "mode": {
+            "not_in": "--executor-mode {asked} 不在 {values}(roles.schema executor_modes)",
+            "station_refused": "--executor-mode {asked}: 接入流程恒按执行分工(AIPOS-F256 / F262)——代码卡 = 子 agent 执行者(--executor-mode {exec_mode}), 非代码卡 = pi 执行工位({asked} 模式), 审计 = pi 审计工位, 向导三者都接入; 单 pi 执行工位包办的旧流程不再生成。去掉 --executor-mode 重跑"
+          },
+          "landing": {
+            "git": "治理根须在治理仓(git)内: lybra home git-init --home-root <home 根>(一次性, 不配远端), Owner 按其输出配 origin 并首推后重跑本条",
+            "push": "已提交未推送: 按输出原因处理(无 origin = Owner 配远端; 远端冲突按输出出口)后重跑同一条",
+            "staged_key": "BLOCK(staged 在 --paths 外)",
+            "staged": "治理仓有他人已暂存的文件, 本命令不动; 请其所有者先提交或取消暂存后重跑"
+          },
+          "step1": {
+            "not_git": "# 治理仓未就绪: home 根 {home} 不在任何 git 仓内, 本步落账与之后每张卡的落账都会 fail-closed。先一次性初始化(本地 git init, 不配远端、不推送), Owner 按其输出配 origin 并首推:",
+            "landing": "# 落账: 本步产物精确提交并推送治理仓(AIPOS-F94; 只提交下列路径, 不碰治理仓其他改动)",
+            "title": "建项目(home 根下的治理根 + project.json + 首份阶段快照)并落账",
+            "purpose": "在 home 根 {home}(来源: {home_source})下建 {project} 的治理根 {gov}: 队列 / 记录 / 治理文档 / project.json, 并经 governance add stage 写首份阶段快照「项目创建」。门只扫描 home 根发现项目; 要放别处只能改 home 根本身(--home-root > LYBRA_HOME_ROOT > ~/.lybra/config.json home_root > 缺省 ~/.lybra/projects), 不登记 home 根外的治理根",
+            "check": "输出 'Created project root:' 与 'stage snapshot:' 行; 验证: lybra project list --home-root <home 根> 出现项目名; 落账输出 Verdict: PASS 且 '✓ Pushed to remote'",
+            "fail_exists": "项目根已存在且非空; lybra project list 确认后跳到 Step 2",
+            "fail_empty": "项目名不能为空; 给一个非空项目名重跑本步",
+            "fail_home_key": "home 根不对",
+            "fail_home": "home 根只经优先级梯解析(见目的); 换 --home-root 重跑本步",
+            "creates": "{gov}/(project.json, 5_tasks/, governance/, stage_archive/<日期>_项目创建.md)",
+            "creates_git": "; {home} 成为治理仓(git, 待 Owner 配 origin)"
+          },
+          "step2": {
+            "preview": "# 先预演(打印将写的 project.json diff 与校验结果, 零写入)给 Owner 看, 再 --confirm 写入",
+            "confirm": "# --confirm 写入后即自动提交并推送 project.json(输出 '落账: verdict=PASS …'), 不必再跑 governance-commit; 落账失败(exit 3)时照其输出的补账命令跑一次",
+            "title": "声明产品仓(project.json repos / code_repo)并落账",
+            "purpose": "把产品仓清单写进 project.json(repos {default, items} + code_repo 别名), 经 config.schema project_json.repos 声明校验; 卡 lane.repo 写仓名, 建工作树 / finalize 按此解析。之后各卡由 lybra loop 结案后自动落账; 写治理真相的命令(project 族 / project grant / migrate)--confirm 写后自动落账; 其余非卡改动(手改治理文档等)用 governance-commit --paths",
+            "check": "--dry-run 输出 'project set-repos <项目>: 预览(未写; 加 --confirm 写入)' + 每个仓一行 + project.json diff(零写入); --confirm 输出 '已写入' 与 '落账: verdict=PASS committed=True pushed=True'(AIPOS-F159: 写后即落账); 多于一个仓须 --default",
+            "fail_conflict": "路径须为绝对路径、default 须在仓名内; 改参数重跑(预演即报错, project.json 未改动)",
+            "fail_not_established": "Step 1 未完成; 先跑 Step 1"
+          },
+          "step3": {
+            "intro": "# 先预演(零写入: 打印授权修订全文与校验)给 Owner 看, 再 --confirm 经门签发并落账; 一份授权覆盖本项目全部车道 / 任务类型 / 驱动方 / 主机, 不再逐卡、逐实例签信封",
+            "warn": "# ⚠ {note}",
+            "title": "【Owner 动作 ①】签项目常设授权 {auth}(一份覆盖全项目, 取代逐实例信封)",
+            "purpose": "Owner 用门的中央凭据库({conn}; 来源: {source})里的 Owner 凭据经门 owner_decision_record 签项目常设授权 {auth}: 车道 {lanes} × 任务类型 {modes}(审计卡按被审卡判定) × 驱动方 {drivers}; 主机 {hosts}(本向导接入的各实例名主机段); 拉起 {launch}(授权 lybra loop 在工位自动拉起 pi; Owner 删去 --launch-harness = 只手工 /go); 总卡数 + 到期双上限。授权先于接入: 工位接入预检须有覆盖它的生效授权(无则拒, 不签码 / 不改凭据); 之后 lybra loop 自动找到本授权, 不再逐卡签信封",
+            "check": "预演输出 'lybra project grant sign 预演(零写入 …): verdict=PASS' 与授权修订全文; --confirm 输出 'signed {auth}' 与 'wrote …/{auth}/r<修订号>.md'(以门生记录为准); 之后 lybra project grant show {pq} --home-root {hq} 列出该授权, 状态 active",
+            "fail_scope": "签授权须 Owner 凭据(owner_confirm); --connection-json 指向门的中央凭据库",
+            "fail_no_file_key": "凭据文件不存在",
+            "fail_no_file": "--connection-json 须指向门 serve 读取的、持 Owner 凭据的 connection.json; 推不出时给 --owner-connection-json 重新生成本向导",
+            "fail_gate": "门未运行或地址不通: lybra serve status; 此为门侧故障, 报 Owner",
+            "fail_refused_key": "✗ 拒因",
+            "fail_refused": "按预演列出的拒因改参数(车道须为第 2 步仓名、任务类型须在值域)后重跑预演; 预演零写入",
+            "creates": "{gov}/<authorizations_root>/{auth}/r<修订号>.md + owner_decisions 记录(落账进治理仓)"
+          },
+          "step4": {
+            "session_dir_placeholder": "<会话目录>",
+            "intro_local": "# 先预演(显示将签的角色 / 实例 / 治理根 / 有效期与接入落点, 不签码、零写入)给 Owner 看, 再 --confirm: 签码 + 接入一体, 注册码只在本进程内(不打印、不落盘、不进 argv)。凭据落治理根 .lybra/(loop 按治理根取驱动方凭据), 顾问件(技能 / 章程)交付到会话目录: {landings}",
+            "title_local": "【Owner 动作 ②】签码接入顾问到治理根(enroll-deliver, 码不出进程)+ 顾问件交付到 {label} 会话目录",
+            "purpose_local": "Owner 用门的中央凭据库({conn})里的 Owner 凭据, 在治理根所在机一条命令为 {project} 签顾问码并就地兑换: 码内嵌门地址 {gate}(来源: {gate_source})与治理根, 只在本进程内传给 enroll(不打印、不落盘、不进 argv), 兑换出的 advisor 凭据(projects=[{project}])落 {gov}/.lybra/(connection.json + role, owner_policy_ref 由第 {grant_step} 步项目授权 {auth} 推导); 产品按 distribution 声明({dists}, harness={kind})把顾问件经同一分发引擎交付到 {landings}(章程 = 顾问章程母本的渲染物, 含持续推进守则)",
+            "check_local": "--dry-run 输出 'roles enroll-deliver advisor: 预览(未执行; 加 --confirm 执行)'(未签码、零写入); --confirm 输出 '已执行'、注册码 code_id 与指纹(无码原文)与 '{kind} 件 → …' 行",
+            "note_local": "顾问会话目录 {dir}({dir_source}; 缺省 = 治理根, 同机治理根已被别的顾问登记 = 治理根内声明子路径, --advisor-dir 显式优先; 同机两个顾问不能共用一个会话目录): 本 guide 每条命令都显式带治理根, 不依赖 cwd; 顾问件交付后在会话目录重启 {label} 会话即加载",
+            "why_pull": "声明给 {kind} 的顾问件({undelivered})需本机会话目录, 会话在 {session_at} = 本机无落点不落盘(章程 / 技能件由会话开局拉取, 见 Step 5; 其余件 sync 列 undelivered)",
+            "why_none": "声明里无给 {kind} 的顾问件 = 无分发步骤",
+            "intro_remote": "# 先预演再 --confirm(在治理根所在机执行; 签码 + 接入一体, 注册码只在本进程内): 凭据与身份落治理根 .lybra/, role 如实记 harness={kind} 与会话所在(--harness-host / --harness-dir); {why}",
+            "title_remote": "【Owner 动作 ②】签码接入顾问到治理根(enroll-deliver, 码不出进程; {label} 会话, 如实登记会话所在)",
+            "purpose_remote": "Owner 用门的中央凭据库({conn})里的 Owner 凭据, 在治理根所在机一条命令为 {project} 签顾问码并就地兑换(码内嵌门地址 {gate}, 来源: {gate_source}; 码只在本进程内): 顾问({label} 会话, 位于 {session_at})的 advisor 凭据落 {gov}/.lybra/(connection.json + role); role 的 harness 记 {{kind: {kind}, dir: {dir}, host: {host}}}(他机目录如实记、不校验本机存在); 不落 .pi 接线; {why}",
+            "empty": "空",
+            "check_remote": "--dry-run 输出 '预览(未执行; 加 --confirm 执行)'(未签码、零写入); --confirm 输出 '已执行' 与 'harness …' 已记入 .lybra/role; 治理根下无 .pi/, 本机不新增顾问件",
+            "creates_remote": "{gov}/.lybra/connection.json, {gov}/.lybra/role(harness={kind})",
+            "note_remote": "顾问会话({label})与治理根可不同机: 产品命令在治理根所在机运行(他机会话经 ssh), 本 guide 每条命令都显式带治理根, 不依赖 cwd; {ssh}",
+            "ssh_entry": "经 ssh 运行时 lybra 写治理根所在机入口绝对路径 {cli}(非登录 ssh 不加载 ~/.local/bin 进 PATH)",
+            "fail_envelope": "第 {grant_step} 步项目授权未签或不覆盖本实例(驱动方 / 主机); 核对 lybra project grant show {pq} --home-root {hq}(预检拒 = 未签码、未改凭据)",
+            "fail_envelope_key": "ENROLL_ENVELOPE_MISSING / 推导 owner_policy_ref 失败",
+            "fail_unknown_root": "门或本机在 home 根下找不到该项目(第 1 步未完成或门的 home 根不同); 确认门与第 1 步用同一 home 根",
+            "fail_no_role_cred": "--connection-json 须指向持 Owner 凭据的中央凭据库(门 serve 所读的 connection.json)",
+            "fail_harness_key": "不在 distribution.schema harness_semantics.kinds 声明内",
+            "fail_harness": "--harness 取值按输出列出的合法值改正后重跑(预检拒, 未签码)",
+            "fail_dir_key": "须为已存在的绝对目录",
+            "fail_dir": "会话在他机时加 --harness-host <会话所在机>(他机目录如实记, 不校验本机存在); 同机则先建目录",
+            "fail_delivery_key": "件交付失败",
+            "fail_delivery": "凭据已落, 重跑 lybra sync --harness-root <治理根>(勿重跑接入)",
+            "fail_rollback_key": "已回滚 / 回滚失败",
+            "fail_rollback": "接入失败时注册码已经门吊销(输出 '已回滚'); 回滚失败按输出出口手工吊销后重跑本步"
+          },
+          "step5": {
+            "precheck": "# 前置自检(只读): 项目 / 产品仓 / 项目授权 / 顾问凭据齐",
+            "steady": "# 顾问件稳态复核: plan 为空 = 顾问件已齐(第 {advisor_step} 步已交付; 母本变更后由 lybra sync 重渲染)",
+            "title_local": "顾问就位复核({label} 会话目录顾问件稳态)",
+            "check_local": "onboarding check 输出 '✓ Step {step} prerequisites satisfied'; sync --dry-run 输出 'up-to-date: 0 file(s) to fetch/render'",
+            "pull_head": "# 开局取章程(在 {session_at} 每次开 {label} 会话先运行, 输出 = 渲染后顾问章程全文, 含持续推进守则):",
+            "land_head": "# 开局取章程与技能(在 {session_at} 每次开 {label} 会话先在会话目录运行; 由会话自己落盘, 产品不推送):",
+            "land_charter": "#   {command}    # 章程 → {target}",
+            "land_skills": "#   {command}    # 技能 → {target}/",
+            "title_remote": "顾问就位复核({label} 会话: 前置自检 + 开局取章程)",
+            "check_remote": "onboarding check 输出 '✓ Step {step} prerequisites satisfied'; 治理根下无 .pi/, 本机不新增顾问件",
+            "purpose": "新顾问({label} 会话, 位于 {session_at})确认第 1–{advisor_step} 步的产物齐: 治理根 {gov}/.lybra/ 已有自己的 advisor 凭据与 role(owner_policy_ref = 项目授权 {auth}), 顾问件到位(本机会话)或会话开局取章程(他机会话)",
+            "fail_advisor_key": "Step {advisor_step} 未完成 / 治理根无顾问凭据",
+            "fail_advisor": "请 Owner 重跑第 {advisor_step} 步(先 --dry-run 再 --confirm)",
+            "fail_grant_key": "Step {grant_step} 未完成 / 无项目授权",
+            "fail_grant": "请 Owner 跑第 {grant_step} 步签项目授权后再跑第 {advisor_step} 步",
+            "fail_plan_key": "--dry-run 的 plan 非空",
+            "fail_plan": "再跑一次不带 --dry-run 的 lybra sync --harness-root <治理根> 后复核; 仍非空 = 报 bug, 附 --dry-run --json 输出",
+            "fail_foreign_key": "章程落点已有非 Lybra 渲染物",
+            "fail_foreign": "会话目录里已有同名文件(非 Lybra 渲染): 移走它或换会话目录后重跑 lybra sync(不覆盖用户文件)",
+            "creates": "无(只读复核)"
+          },
+          "enroll": {
+            "fail_no_role_cred": "第 {advisor_step} 步未完成(治理根无顾问凭据); 请 Owner 先跑第 {advisor_step} 步",
+            "fail_unknown_root": "门找不到项目; 核对门与第 {project_step} 步同一 home 根",
+            "fail_envelope": "第 {grant_step} 步项目授权未签或不覆盖该实例(实例名主机段须在授权主机内); 核对 lybra project grant show {pq} --home-root {hq}(预检拒 = 未签码)",
+            "fail_401": "门拒绝顾问凭据或码(发码门 ≠ 本门); 核对 connection.json mcp.rpc_url 后重跑本步(失败时码已吊销)",
+            "fail_rollback": "接入失败时注册码已经门吊销(输出 '已回滚'); 回滚失败按输出出口手工吊销后重跑"
+          },
+          "station": {
+            "title": "接入{sep}{label}(pi, {mode} 模式): {instance} @ {ws}",
+            "comment": "# {label}: 先 --dry-run 预演(角色 / 实例 / 治理根 / 落点 / 覆盖授权, 不签码零写入)再 --confirm; 注册码只在本进程内; 凭据落工位 .lybra + .pi 接线(owner_policy_ref 由项目授权 {auth} 推导)",
+            "purpose": "{duty}。顾问用自己的凭据(治理根 .lybra/connection.json, projects=[{project}])在治理根所在机一条命令签码并就地兑换; 工位目录 {ws}(来源: {ws_source}), 一个目录只登记给一个实例",
+            "check": "--dry-run 输出 '预览(未执行; 加 --confirm 执行)' 与覆盖授权; --confirm 输出 '已执行'、code_id 与指纹(无码原文)与 'role(含 owner_policy_ref)'; 工位 .lybra/connection.json 含 lybra_bin 且 workspace_root == governance_root",
+            "fail_pi_key": ".pi 接线缺失",
+            "fail_pi": "接入落 .pi 接线, 第 {sync_step} 步 sync 补挂声明内缺失挂载; 仍缺 = 报 bug(附 sync --json 输出)",
+            "fail_bin_key": "connection.json 缺 lybra_bin",
+            "fail_bin": "接入按运行中的 lybra 部署位写入; 用部署的 lybra 命令重跑本步",
+            "fail_root_key": "workspace_root 写成 harness root",
+            "fail_root": "workspace_root 须等于码内治理根; 重跑本步校正",
+            "creates": "{ws}/.lybra + .pi + AGENTS.md; 治理根接入登记 land 事件(workstation={ws})",
+            "label_audit": "审计工位",
+            "duty_audit": "审计恒为独立 pi 审计工位 {instance}(不审自己做的卡)",
+            "label_exec": "pi 执行工位",
+            "duty_exec": "非代码卡(docs / governance / config / validation)一律由 pi 执行工位 {instance} 做(loop 按授权拉起 pi, 或 Owner 在工位 /go)"
+          },
+          "step8": {
+            "title": "接入子 agent 执行者({mode} 模式, 顾问会话 {kind} 派生): {instance} @ 治理根",
+            "comment": "# 子 agent 执行者: 凭据落治理根 .lybra/connection.json(按实例条目), harness = 顾问会话 {kind}; 无工位、不 sync、不起 pi(代码卡由顾问按 lybra kickoff 开工稿派子 agent 以此身份交付)",
+            "purpose": "代码卡的执行身份 {instance}(实例名主机段 = 顾问会话所在机): 凭据与治理席位同落治理根 {gov}, land 事件记 mode={mode} harness={kind}(无 workstation= 段 = 无工位位置, 不可派 pi); 与 pi 执行工位 {pi_instance} 不同名、不同目录",
+            "check": "--dry-run 输出 '预览(未执行; 加 --confirm 执行)'; --confirm 输出 '已执行' 与 land 事件(mode=subagent); 治理根下不新增 .pi/",
+            "fail_harness": "子 agent 模式须给 --harness <顾问会话 kind>(本向导 = {kind})且不给 --harness-dir; 按本步命令原样重跑",
+            "fail_target": "子 agent 模式凭据须落治理根: --workspace 须为 {gov}",
+            "creates": "{gov}/.lybra/connection.json 子 agent 执行者条目 + land 事件(mode={mode}, harness={kind})"
+          },
+          "step9": {
+            "declare": "# 声明执行分工(AIPOS-F143 / F256, 产品按卡类型强制): 代码卡 = 子 agent 执行者, 非代码卡一律 pi 执行工位, 审计 = 独立 pi 审计工位; 起草缺省与发卡核身份同读此声明(先预演再写入并落账)",
+            "review": "# 复核: 三实例都已接入(✓)且「执行分工」一段显示 pi 执行工位",
+            "title": "声明执行分工(project set-execution, 三者齐)并复核",
+            "purpose": "一次声明本项目谁执行什么: 代码卡 → 子 agent 执行者 {code}; 非代码卡 → pi 执行工位 {noncode}; 审计 → pi 审计工位 {audit}。写前核身份(各实例须为本项目已接入实例, 审计者与 pi 执行者须有工位位置)",
+            "check": "set-execution --dry-run 给 project.json diff(零写入), --confirm 写入并落账('落账: verdict=PASS'); roles list 列出三实例 ✓ 且「执行分工」行 = 'pi 执行工位 = <pi 执行工位实例>'",
+            "fail_missing_key": "实例未接入 / 无工位位置",
+            "fail_missing": "回第 {first}–{last} 步接入对应实例后重跑本步",
+            "fail_same_key": "auditor 与执行者相同",
+            "fail_same": "审计者须是独立 pi 审计工位实例, 不得等于任一执行者"
+          },
+          "step10": {
+            "label_exec": "pi 执行",
+            "label_audit": "审计",
+            "station": "# {label}工位: 按分发声明落齐工位件 → 稳态复核 → 工位自检(只读, 缺项逐项点名)",
+            "plan": "# 工位设置现状(只读; 三实例登记、工位章程新鲜度与执行分工)",
+            "title": "工位 sync 分发 + 稳态复核 + 工位自检",
+            "purpose": "pi 执行工位 {exec_ws} 与审计工位 {audit_ws} 按分发声明落齐技能 / 扩展 / 章程, 复核稳态并自检可启动最小集(子 agent 执行者无工位, 不 sync); 工位只同步分发, 不敲门动词",
+            "check": "sync 工位行 synced(首个工位会补挂 .pi/extensions/go.ts); --dry-run 输出 'up-to-date: 0 file(s) to fetch/render'、无 would-prune 行; onboarding check 输出 '✓ Step {step} prerequisites satisfied'; workstation-plan 现状三实例已接入、工位章程最新",
+            "fail_skipped_key": "sync 把工位记为 skipped",
+            "fail_skipped": "--workspace-root 须为本项目治理根 {gov}",
+            "fail_plan_key": "--dry-run 的 plan 或 prune 非空",
+            "fail_plan": "再跑一次不带 --dry-run 的 sync 后复核; 仍非空 = 报 bug, 附 --dry-run --json 输出",
+            "fail_not_enrolled_key": "未完成 enroll, 拒绝写入",
+            "fail_not_enrolled": "该工位未接入: 回第 {audit_step} / {exec_step} 步为它 enroll-deliver",
+            "fail_selfcheck_key": "自检缺项",
+            "fail_selfcheck": "按输出缺项逐项修复(lybra_bin 悬空 → 重跑对应接入步; owner_policy_ref 缺失 → 核对第 {grant_step} 步授权覆盖本工位后重跑 sync)",
+            "creates": "{exec_ws}, {audit_ws} 的工位件, 工位父根 _distributed/"
+          },
+          "step11": {
+            "publish": "# 发卡: 卡稿 JSON 写 project / task_mode / lane.repo(第 2 步仓名) / audit 等(执行者 / harness / 审计者按第 9 步执行分工缺省); 校验后发布到 pending",
+            "drive": "# 推进: lybra loop 自动找到项目授权 {auth}(不带信封)一段式认领(建工作树)→ 等交回 → 派审 → 等审计报告 → 裁决 → finalize → 结案 → N6 落账",
+            "code": "# 代码卡: loop 提示派子 agent 时, 顾问取自包含开工稿, 在顾问会话里派生子 agent(以 {instance} 身份)照稿执行; 子 agent 写完 RETURN 即停",
+            "noncode": "# 非代码卡(及审计卡): loop 按授权在 pi 执行工位 / 审计工位自动拉起 pi; 授权未放行拉起时, Owner 在该工位手工开工(审计工位同法, cd {audit_ws}):",
+            "title": "首卡: 发卡 → lybra loop 推进到结案(代码卡派子 agent / 非代码卡 pi 执行工位)",
+            "purpose": "顾问只用产品命令推进: lybra loop 以项目授权 {auth} 驱动整张卡; 执行按第 {execution_step} 步分工——代码卡由顾问 lybra kickoff 派子 agent, 非代码卡由 loop 在 pi 执行工位 {exec_ws} 拉起 pi(或 Owner 在工位 /go); 审计由 pi 审计工位 {audit_ws} 做。执行体 / 审计体只写产物(RETURN / 审计报告), 门动作全由产品做",
+            "check": "lybra loop 退出码 0 且输出 'done: <卡ID> 已结案(closure 记录存在), 治理已落账'(结案后 loop 自动执行 N6 落账: lybra governance-commit --task-id)",
+            "fail_5_key": "exit 5(无有效授权)",
+            "fail_5": "第 {grant_step} 步授权未签或不覆盖本卡(车道 / 任务类型 / 主机); 按输出的扩大授权命令请 Owner 签",
+            "fail_3_key": "exit 3(等待超时)",
+            "fail_3": "执行体 / 审计体尚未交回产物: 代码卡确认子 agent 已派出, 非代码卡确认 pi 已拉起或已 /go, 之后重跑同一条 lybra loop",
+            "fail_status_key": "看进度(loop 跑在后台 / 久无动静)",
+            "fail_status": "lybra loop status --task-id {task} --workspace-root {gov}(读运行记录 + 探活 + 判停滞: running/stalled/launch_dead/loop_dead/ended, 含日志路径); 禁 tail/grep 原始日志自判",
+            "fail_gate_key": "exit 2(门拒)",
+            "fail_gate": "照输出原文处理; loop 已回读门生记录, 不会重复执行已落步骤",
+            "fail_landing_key": "exit 2(落账拒)",
+            "fail_landing": "N6 落账被拒(他人暂存 / 护栏 / 推送未完成): 照输出原文处理后重跑同一条 lybra loop(落账幂等)",
+            "fail_go_key": "/go 报 工作树尚未建立",
+            "fail_go": "认领与建树由驱动方完成, 工位不自领; 等 lybra loop 认领后再 /go",
+            "creates": "卡在 completed 队列 + claim/return/dispatch/verdict/finalization/closure 记录, 且已提交并推送治理仓"
+          },
+          "summary": {
+            "head": "从 0 接新项目 {project} 全流程({count} 步, 零手工编辑; Owner 一次性动作 = Step {owner_steps}):",
+            "row": "  Step {n}: {title}"
+          },
+          "gate_start": {
+            "title": "让门在跑(之后签授权 / 签码 / loop 都要连门)",
+            "foreground": "前台",
+            "foreground_note": "终端常开, 关终端门即停; 适合先试跑",
+            "resident": "常驻",
+            "resident_note": "Linux = systemd --user 单元, macOS = launchd; 先预演看将写的单元全文, 无误后 --confirm(启用并回读状态); 卸载 `lybra serve uninstall --confirm`",
+            "check": "lybra setup check 的「门」一项为 ✓(探测 {gate})",
+            "skip": "前置检查显示门已在跑且可达, 本步可略过"
+          },
+          "card_policy": {
+            "comment": "# 卡号形状(task_id_pattern, AIPOS-F252): 受控发布 / finalize / lybra-deploy 的归属解析只读它, 产品无内置默认; show 给出按现有卡号前缀推出的建议值(仅建议), 值经 Owner 确认后先预演再 --confirm(写治理根 card_policy.json 并落账)",
+            "pattern_placeholder": "<卡号正则>"
+          },
+          "legacy": {
+            "meta": "# project.json 说明键({keys})同样经产品写入口更新(人肉期旧文免手改), 先预演再 --confirm",
+            "meta_none": "# project.json 说明键写入口 lybra project set-meta: 待 config.schema project_json 声明这些键后可用(未声明 = 拒 META_KEY_UNDECLARED)",
+            "t1": "落点声明: project.json paths 经产品写入口声明(免手改)",
+            "c1_head": "# 键名与取值按 config.schema project_json.paths 校验(未知键拒 / finalize_mode 枚举); 先 --dry-run 看 diff, 再 --confirm",
+            "c1_stage": "# 阶段档案(阶段快照)不在缺省位置时同样声明: --key {key} --value <相对治理根路径>(未声明 = 缺省落点; 落点下无快照 = finalize 阶段闸门拒)",
+            "p1": "为什么先做: 后两步都按声明落点工作——冻结按 queue_root 找卡, 收编按 return_root 写报告骨架、loop 按声明找产物; 落点未声明时取缺省值, 人肉期项目的真实落点未必是缺省, 骨架会落错位置。人肉期项目的 Return/裁决/队列/授权落点逐项声明(可多对 --key/--value; 与缺省相同也显式声明: 收编要求 config.schema project_json.paths.adoption.required_declared_keys 已显式声明, 否则拒 ADOPT_PATHS_UNDECLARED)。阶段档案(阶段快照)若不在缺省位置, 一并声明 {key}(相对治理根): Lybra 内部 finalize 的阶段闸门按此落点核阶段快照, 未声明而缺省位置无快照 = 拒(AIPOS-F145)。预演首行标明目标项目与 project.json 绝对路径, 核对无误再 --confirm; 在目标项目治理根下运行可省项目名(目标 = 该根 project.json#project, 解析不出即拒, 绝不回落 home 级活动项目; 显式项目名与所在治理根不一致 = 拒)",
+            "t2": "存量冻结: 人肉期已结束/不再推进的卡一次声明为历史(迁移基线)",
+            "c2_head": "# 先 --dry-run 核对将冻结的卡与各卡 lint 问题计数, 无误后改 --confirm(清单只追加; 解冻 = --unfreeze)",
+            "p2": "为什么在收编之前: 收编认冻结(冻结卡拒 ADOPT_LEGACY_FROZEN), 先把不再推进的卡一次声明为历史, 仍在途、要继续推进的卡用 --exclude 留出(交给下一步收编); 冻结卡不被 state lint 报 ERROR、不被 next 当待推进, 门拒对其写动作",
+            "t3": "在途卡收编: 门补铸 claim 记录、绑定既有分支、建卡工作树",
+            "c3_head": "# 每张在途卡: 先预览(零写入, 含授权判定与全部拒因), 无拒因后改 --confirm; 收编后与新卡同样只用 lybra loop 推进",
+            "p3": "为什么最后: 收编写报告骨架与 claim 记录, 依赖前两步(落点已声明、历史卡已冻结)。--branch = 该卡产物所在的既有分支(卡 lane.repo 仓内); 卡分支名与之不同时卡分支建在其 tip 上。拒因(声明 transitions nodes.N1.adoption.guards + config.schema project_json.paths.adoption.guards)一次列全: 卡面意图必填缺项 / 分支不存在 / 已有门生 claim / 已冻结 / 落点未声明 / 卡分支分叉 / 建树失败 / 授权不覆盖。已有手写 Return 不被覆盖: loop 按交回判据要求补 commit_sha / tree_hash / branch, 拒因原文给出补法"
+          },
+          "text": {
+            "banner": "═══ 从 0 接新项目: {project} ═══",
+            "home": "home 根: {home}(来源: {source})",
+            "gov": "治理根: {gov}",
+            "gate": "门地址: {gate}(来源: {source})",
+            "cred": "Owner 凭据: {conn}(来源: {source})",
+            "cred_warn": "  ⚠ Owner 凭据未推导出: {reason}",
+            "auth": "项目常设授权: {auth}(第 {step} 步签; 之后各接入命令的授权引用都是它)",
+            "ws": "工位目录: pi 执行工位 {exec_ws} · 审计工位 {audit_ws}(来源: {source})",
+            "division": "执行分工: 代码卡 → 子 agent 执行者 {code} · 非代码卡 → pi 执行工位 {noncode} · 审计 → pi 审计工位 {audit}",
+            "generated": "生成时间: {at}",
+            "total": "共 {total} 步, 全程零手工编辑; Owner 一次性动作 {count} 条: {steps}",
+            "unknown": "?",
+            "pre_head": "── 前置检查: {title} [执行方: Owner] ──",
+            "pre_command": "命令: {command}",
+            "pre_blocking": "⛔ 前置检查有 ✗ 项({items}): 以下各步被阻断——先按上列出口处理, 再跑 `{command}`(或 `lybra onboarding check {project} --step 0`)复核为无 ✗ 后从 Step 1 往下做",
+            "gs_head": "── 起门: {title} [执行方: Owner; 二选一] ──",
+            "gs_option": "  {n}) {name}: {note}",
+            "check": "验证: {check}",
+            "note": "注: {note}",
+            "actor_owner": "Owner",
+            "actor_advisor": "顾问",
+            "actor_workstation": "工位",
+            "step_head": "── Step {n}: {title} [执行方: {who}] ──",
+            "purpose": "目的: {purpose}",
+            "commands_each": "命令(逐条执行):",
+            "commands": "命令:",
+            "on_fail": "失败出口:",
+            "creates": "产物: {creates}",
+            "done": "═══ 完成: 从项目注册到首卡结案, 零手工编辑 ═══",
+            "on_demand_head": "═══ 按需声明(只列, 不强制; 每条先预演, 确认 = 同参改 --confirm) ═══",
+            "item_head": "── {title} ──",
+            "use": "用途: {purpose}",
+            "when": "何时需要: {when}",
+            "legacy_head": "═══ 附: 接入既有人肉项目(人肉期已有卡与记录; 顺序 = 落点声明 → 冻结 → 收编) ═══",
+            "legacy_item_head": "── {n}. {title} ──"
+          },
+          "check": {
+            "preflight": "前置检查 ✗ {label}: {detail}; 出口: {exit}",
+            "no_project": "Step {step} 未完成: 项目目录不存在 {root}; 先跑 lybra project new",
+            "no_project_json": "project.json 缺失; 重跑 Step {step}",
+            "no_repos": "Step {step} 未完成: project.json 无产品仓声明; 跑 lybra project set-repos",
+            "bad_repos": "产品仓声明不合规: {error}; 重跑 Step {step}",
+            "no_grant": "Step {step} 未完成: 无项目常设授权; Owner 跑 Step {step} 的 lybra project grant sign(先预演再 --confirm)",
+            "no_advisor": "Step {step} 未完成: 治理根无 .lybra/connection.json(顾问凭据); Owner 跑 Step {step} 的 lybra roles enroll-deliver(先 --dry-run 再 --confirm)",
+            "ws_dir": "{error}; 用 --workspace-dir 指明工位目录",
+            "no_conn": "工位未接入: {path} 不存在; 跑工位接入步(Step {audit_step} / {exec_step})的 lybra roles enroll-deliver(先 --dry-run 再 --confirm)",
+            "no_bin": "connection.json 缺 lybra_bin; 重跑工位接入步(Step {audit_step} / {exec_step}) enroll-deliver",
+            "root_mismatch": "workspace_root != governance_root; 重跑工位接入步(Step {audit_step} / {exec_step}) enroll-deliver",
+            "conn_invalid": "connection.json 格式错误; 重跑工位接入步(Step {audit_step} / {exec_step})",
+            "no_pi": ".pi 接线缺失; 工位接入应自动落, 重跑 Step {sync_step} 的 sync(仍缺再重跑工位接入步(Step {audit_step} / {exec_step}))",
+            "role_error": "{error}; 重跑工位接入步(Step {audit_step} / {exec_step})",
+            "role_invalid": "role 文件格式错误; 重跑工位接入步(Step {audit_step} / {exec_step})",
+            "no_policy_ref": "role 文件缺 owner_policy_ref; 核对 Step {grant_step} 项目授权是否覆盖本工位实例(主机段)后重跑 lybra sync"
+          }
+        },
+        "en": {
+          "cred": {
+            "source_explicit_json": "explicit --owner-connection-json",
+            "source_explicit_ws": "explicit --owner-workspace",
+            "label_home": "the home root itself",
+            "label_project": "project {name}",
+            "source_active": "the Owner-credential holder in the gate registry: {holder} (declared active project {declared})",
+            "source_single": "the only Owner-credential holder in the gate registry: {holder}",
+            "source_unresolved": "not derived",
+            "unreadable_item": "{path} cannot be read ({error})",
+            "why_many": "the home root {home} has {count} connection.json files holding an Owner credential ({holders}) and no declared active project to choose by",
+            "why_none": "none of the gate registry sources of the home root {home} (the home root itself and each existing project's .lybra/connection.json) holds an Owner credential (the gate has never run with this home root: lybra serve start; or the Owner credential lives elsewhere)",
+            "unreadable_part": "; unreadable: {items}",
+            "reason": "{why}. Regenerate this guide with --owner-connection-json <the connection.json the gate serve reads that holds the Owner credential> (or replace {conn} / {ws} in the step 3 / 4 commands with it and its workspace)",
+            "unresolved_note": "⚠ Owner credential not derived: {reason}"
+          },
+          "ws": {
+            "source_declared": "project.json paths.{key} (project declaration)",
+            "source_default": "config.schema default project_json.paths.{key}.default_user_home ({template}; a project can declare it with lybra project set-paths)",
+            "label_gov": "the governance root",
+            "label_home": "the home root",
+            "inside": "Workstation root {absolute} ({source}) lies inside {label} {inner}: workstation directories hold workstation credentials and must stay out of the governance repo. Use --workspace-dir / --auditor-dir to give directories outside the governance repo, or change the declaration with lybra project set-paths {project} --key {key} --value <absolute path outside the governance repo>",
+            "label_exec": "pi executor workstation (--workspace-dir)",
+            "label_audit": "auditor workstation (--auditor-dir)",
+            "label_advisor": "advisor session directory (--advisor-dir)",
+            "same_dir": "{label} and {other} are the same directory {path}: one directory can be enrolled for only one instance (otherwise the first one's charter landing breaks). Give each workstation its own directory and rerun the guide (--workspace-dir / --auditor-dir)",
+            "source_explicit": "explicit --workspace-dir / --auditor-dir",
+            "source_root": "workstation root {root} (source: {source})",
+            "source_partial": "; partly explicit arguments"
+          },
+          "grant": {
+            "existing_error": "The project's existing authorization cannot be read ({error}): check with lybra project grant show {pq} --home-root {hq} before deciding whether to sign",
+            "existing_row": "{id} r{revision} (state {state}, released {used}/{max_tasks}, expires {expires})",
+            "existing_live": "This project already has a project authorization: {rows}. No need to sign again in this step (sign would issue a new revision with this run's scope as the whole scope); when lanes / task modes / drivers / hosts fall short, add them with lybra project grant extend {pq} --home-root {hq} … (preview first); see the current state with lybra project grant show {pq} --home-root {hq}",
+            "existing_envelopes": "This project still has {count} legacy envelope(s) ({ids}; still honored, no longer issued): consider merging them into a project authorization: lybra project grant draft {pq} --home-root {hq} --from-envelopes (preview; the Owner adds --confirm to sign), or sign a new authorization with this step's commands"
+          },
+          "on_demand": {
+            "card_policy": {
+              "title": "Card ID pattern (card-policy task_id_pattern)",
+              "purpose": "Card ownership resolution for controlled release / finalize / lybra-deploy reads only this; the product has no built-in default",
+              "when": "Before the first card (already part of step 11); change it when the card ID rule changes"
+            },
+            "test_contract": {
+              "title": "Post-merge regression contract (set-test-contract)",
+              "purpose": "Time limit and execution mode of the full regression; lybra regression baseline records the main-side baseline from it, so most cards need not rerun the full main suite themselves",
+              "when": "When the product repo has a full test list and you want card-branch and main baselines to be reusable"
+            },
+            "release_target": {
+              "title": "Production release target (release-target)",
+              "purpose": "Declare the production host + allowlist + release root; afterwards a card's production release goes only through lybra release plan → apply → verify (roll back with release rollback); bare ssh/scp/rsync is forbidden",
+              "when": "When the project deploys to production (--owner-ref can be omitted when the authorization's hosts include the target host)"
+            },
+            "pi_model": {
+              "title": "pi model (set-model)",
+              "purpose": "Which model the pi executor / auditor launched by loop uses (must be a model configured in this machine's pi; check with pi --list-models)",
+              "when": "When you do not want pi's own default model (can be declared per role with --role executor / auditor)"
+            },
+            "headline": {
+              "title": "Board advisor card (project headline)",
+              "purpose": "The advisor's summary card on the board home page: title / in progress / recently done",
+              "when": "After onboarding, and whenever the project phase changes"
+            }
+          },
+          "gate": {
+            "source_explicit": "explicit --gate-url",
+            "same_host": "; same machine = loopback per same_host_rule, port taken from that source",
+            "source_connection": "{conn} mcp.rpc_url{same_host}",
+            "source_env": "environment variable LYBRA_GATE_URL{same_host}",
+            "source_default": "config.schema default{same_host}"
+          },
+          "harness": {
+            "not_declared": "--advisor-harness {kind} is not a declared advisor session harness; valid values {allowed} (distribution.schema harness_semantics.kinds.<kind>.advisor_session)",
+            "host_forbidden": "--advisor-host does not apply to --advisor-harness {kind} (declared harness_host=forbidden: that session runs on the governance-root machine and skills are delivered to the local session directory); for an advisor session on another machine use an --advisor-harness value with harness_host=optional",
+            "host_blank": "--advisor-host {host} contains whitespace (host names may not contain whitespace)",
+            "host_required": "Sessions of --advisor-harness {kind} may run on another machine: give --advisor-host <session machine> (or --host-segment); the advisor instance host segment does not default to the governance-root machine",
+            "dir_required": "The --advisor-harness {kind} session is on another machine ({host}): give --advisor-dir <absolute session directory on that machine> (a remote directory is recorded as given, never guessed)"
+          },
+          "mode": {
+            "not_in": "--executor-mode {asked} is not in {values} (roles.schema executor_modes)",
+            "station_refused": "--executor-mode {asked}: onboarding always follows the execution division (AIPOS-F256 / F262): code cards = sub-agent executor (--executor-mode {exec_mode}), non-code cards = pi executor workstation ({asked} mode), audits = pi auditor workstation, and the guide enrolls all three; the old flow where one pi executor workstation does everything is no longer generated. Rerun without --executor-mode"
+          },
+          "landing": {
+            "git": "The governance root must be inside a governance repo (git): lybra home git-init --home-root <home root> (one-time, no remote configured); the Owner configures origin and makes the first push per its output, then rerun this command",
+            "push": "Committed but not pushed: handle the reason in the output (no origin = the Owner configures a remote; remote conflict = follow the exit in the output), then rerun the same command",
+            "staged_key": "BLOCK (staged outside --paths)",
+            "staged": "The governance repo has files staged by someone else, which this command leaves alone; ask their owner to commit or unstage them, then rerun"
+          },
+          "step1": {
+            "not_git": "# Governance repo not ready: home root {home} is not inside any git repo, so landing this step and every later card will fail closed. Initialize it once first (local git init, no remote, no push); the Owner configures origin and makes the first push per its output:",
+            "landing": "# Landing: commit and push exactly this step's products to the governance repo (AIPOS-F94; only the paths below, other changes in the governance repo untouched)",
+            "title": "Create the project (governance root under the home root + project.json + first stage snapshot) and land it",
+            "purpose": "Create the governance root {gov} of {project} under home root {home} (source: {home_source}): queue / records / governance docs / project.json, and write the first stage snapshot \"project created\" via governance add stage. The gate discovers projects only by scanning the home root; to put it elsewhere you can only change the home root itself (--home-root > LYBRA_HOME_ROOT > ~/.lybra/config.json home_root > default ~/.lybra/projects); governance roots outside the home root are never registered",
+            "check": "The output has 'Created project root:' and 'stage snapshot:' lines; verify: lybra project list --home-root <home root> shows the project name; the landing output has Verdict: PASS and '✓ Pushed to remote'",
+            "fail_exists": "The project root already exists and is not empty; confirm with lybra project list, then skip to Step 2",
+            "fail_empty": "The project name cannot be empty; rerun this step with a non-empty name",
+            "fail_home_key": "Wrong home root",
+            "fail_home": "The home root is resolved only by the precedence ladder (see purpose); rerun this step with another --home-root",
+            "creates": "{gov}/ (project.json, 5_tasks/, governance/, stage_archive/<date>_<stage>.md)",
+            "creates_git": "; {home} becomes the governance repo (git, origin to be configured by the Owner)"
+          },
+          "step2": {
+            "preview": "# Preview first (prints the project.json diff to be written and the validation result, zero writes) for the Owner, then --confirm to write",
+            "confirm": "# --confirm writes and then commits and pushes project.json automatically (output 'landing: verdict=PASS …'), no separate governance-commit needed; if landing fails (exit 3) run the backfill command it prints once",
+            "title": "Declare the product repos (project.json repos / code_repo) and land them",
+            "purpose": "Write the product repo list into project.json (repos {default, items} + code_repo alias), validated against config.schema project_json.repos; a card's lane.repo names a repo, and worktree creation / finalize resolve through it. From then on each card is landed automatically when lybra loop closes it; commands that write governance truth (the project family / project grant / migrate) land automatically after --confirm; other non-card changes (hand-edited governance docs etc.) use governance-commit --paths",
+            "check": "--dry-run outputs 'project set-repos <project>: …' + one line per repo + the project.json diff (zero writes); --confirm outputs the written line and 'verdict=PASS committed=True pushed=True' (AIPOS-F159: landed right after writing); more than one repo requires --default",
+            "fail_conflict": "Paths must be absolute and default must be one of the repo names; fix the arguments and rerun (the preview already reports it; project.json unchanged)",
+            "fail_not_established": "Step 1 not done; run Step 1 first"
+          },
+          "step3": {
+            "intro": "# Preview first (zero writes: prints the full authorization revision and validation) for the Owner, then --confirm to issue it through the gate and land it; one authorization covers all lanes / task modes / drivers / hosts of the project, no more per-card or per-instance envelopes",
+            "warn": "# ⚠ {note}",
+            "title": "[Owner action ①] Sign the project standing grant {auth} (one grant for the whole project, replacing per-instance envelopes)",
+            "purpose": "With the Owner credential in the gate's central credential store ({conn}; source: {source}) the Owner signs the project standing grant {auth} through the gate's owner_decision_record: lanes {lanes} × task modes {modes} (an audit card is judged by the card it audits) × drivers {drivers}; hosts {hosts} (the host segments of the instance names this guide enrolls); launch {launch} (authorizes lybra loop to launch pi at the workstations automatically; the Owner removing --launch-harness = manual /go only); hard bounds: total cards + expiry. Grant before enrollment: the workstation enrollment pre-check needs an active grant covering it (otherwise refused, no code issued / no credential changed); afterwards lybra loop finds this grant by itself, no more per-card envelopes",
+            "check": "The preview outputs 'lybra project grant sign … verdict=PASS' and the full authorization revision; --confirm outputs 'signed {auth}' and 'wrote …/{auth}/r<revision>.md' (the gate-written record is authoritative); then lybra project grant show {pq} --home-root {hq} lists the grant with state active",
+            "fail_scope": "Signing a grant needs the Owner credential (owner_confirm); point --connection-json at the gate's central credential store",
+            "fail_no_file_key": "Credential file not found",
+            "fail_no_file": "--connection-json must point at the connection.json the gate serve reads that holds the Owner credential; when it cannot be derived, regenerate this guide with --owner-connection-json",
+            "fail_gate": "The gate is not running or the address is unreachable: lybra serve status; this is a gate-side fault, report it to the Owner",
+            "fail_refused_key": "✗ refusal",
+            "fail_refused": "Fix the arguments per the refusals listed by the preview (lanes must be the step 2 repo names, task modes must be in range), then rerun the preview; the preview writes nothing",
+            "creates": "{gov}/<authorizations_root>/{auth}/r<revision>.md + owner_decisions record (landed into the governance repo)"
+          },
+          "step4": {
+            "session_dir_placeholder": "<SESSION_DIR>",
+            "intro_local": "# Preview first (shows the role / instance / governance root / validity and enrollment landing to be signed, no code issued, zero writes) for the Owner, then --confirm: issue the code + enroll in one go, the enrollment code stays inside this process (never printed, stored or put in argv). The credential lands in the governance root .lybra/ (loop takes the driver credential by governance root); the advisor kit (skills / charter) is delivered to the session directory: {landings}",
+            "title_local": "[Owner action ②] Issue a code and enroll the advisor into the governance root (enroll-deliver, the code never leaves the process) + deliver the advisor kit to the {label} session directory",
+            "purpose_local": "With the Owner credential in the gate's central credential store ({conn}) the Owner issues and redeems the advisor code for {project} on the governance-root machine in one command: the code embeds gate address {gate} (source: {gate_source}) and the governance root and is passed to enroll only inside this process (never printed, stored or put in argv); the redeemed advisor credential (projects=[{project}]) lands in {gov}/.lybra/ (connection.json + role, owner_policy_ref derived from the step {grant_step} project grant {auth}); per the distribution declaration ({dists}, harness={kind}) the product delivers the advisor kit through the same distribution engine to {landings} (the charter = rendering of the advisor charter master, including the keep-moving rules)",
+            "check_local": "--dry-run outputs 'roles enroll-deliver advisor: …' preview (no code issued, zero writes); --confirm outputs the executed line, the enrollment code_id and fingerprint (never the code itself) and '{kind} … → …' lines",
+            "note_local": "Advisor session directory {dir} ({dir_source}; default = the governance root; when another advisor on this machine already holds the governance root = the declared sub-path inside it; an explicit --advisor-dir wins; two advisors on one machine cannot share a session directory): every command in this guide names the governance root explicitly and does not depend on cwd; after the kit is delivered, restart the {label} session in the session directory to load it",
+            "why_pull": "the advisor kit declared for {kind} ({undelivered}) needs a local session directory; the session is at {session_at} = nothing lands on this machine (the charter / skills are pulled at session start, see Step 5; sync lists the rest as undelivered)",
+            "why_none": "no advisor kit is declared for {kind} = no distribution step",
+            "intro_remote": "# Preview, then --confirm (on the governance-root machine; issue + enroll in one go, the enrollment code stays inside this process): credential and identity land in the governance root .lybra/, and role records harness={kind} and where the session runs (--harness-host / --harness-dir) as given; {why}",
+            "title_remote": "[Owner action ②] Issue a code and enroll the advisor into the governance root (enroll-deliver, the code never leaves the process; {label} session, its location recorded as given)",
+            "purpose_remote": "With the Owner credential in the gate's central credential store ({conn}) the Owner issues and redeems the advisor code for {project} on the governance-root machine in one command (the code embeds gate address {gate}, source: {gate_source}; it stays inside this process): the advisor credential of the advisor ({label} session at {session_at}) lands in {gov}/.lybra/ (connection.json + role); role records harness {{kind: {kind}, dir: {dir}, host: {host}}} (a remote directory is recorded as given, not checked locally); no .pi wiring; {why}",
+            "empty": "empty",
+            "check_remote": "--dry-run outputs a preview (no code issued, zero writes); --confirm outputs the executed line and 'harness …' recorded in .lybra/role; no .pi/ under the governance root, no advisor kit added on this machine",
+            "creates_remote": "{gov}/.lybra/connection.json, {gov}/.lybra/role (harness={kind})",
+            "note_remote": "The advisor session ({label}) and the governance root may be on different machines: product commands run on the governance-root machine (a remote session goes through ssh); every command in this guide names the governance root explicitly and does not depend on cwd; {ssh}",
+            "ssh_entry": "when run over ssh, write lybra as the absolute entry path on the governance-root machine {cli} (a non-login ssh does not put ~/.local/bin on PATH)",
+            "fail_envelope": "The step {grant_step} project grant is not signed or does not cover this instance (driver / host); check lybra project grant show {pq} --home-root {hq} (pre-check refusal = no code issued, no credential changed)",
+            "fail_envelope_key": "ENROLL_ENVELOPE_MISSING / deriving owner_policy_ref failed",
+            "fail_unknown_root": "The gate or this machine cannot find the project under the home root (step 1 not done, or the gate uses another home root); make sure the gate and step 1 use the same home root",
+            "fail_no_role_cred": "--connection-json must point at the central credential store holding the Owner credential (the connection.json the gate serve reads)",
+            "fail_harness_key": "not declared in distribution.schema harness_semantics.kinds",
+            "fail_harness": "Fix the --harness value to one of the valid values listed in the output and rerun (pre-check refusal, no code issued)",
+            "fail_dir_key": "must be an existing absolute directory",
+            "fail_dir": "For a session on another machine add --harness-host <session machine> (a remote directory is recorded as given, not checked locally); on the same machine create the directory first",
+            "fail_delivery_key": "kit delivery failed",
+            "fail_delivery": "The credential is already in place; rerun lybra sync --harness-root <governance root> (do not rerun the enrollment)",
+            "fail_rollback_key": "rolled back / rollback failed",
+            "fail_rollback": "When enrollment fails the gate has already revoked the code (output shows it was rolled back); if the rollback failed, revoke by hand per the exit in the output and rerun this step"
+          },
+          "step5": {
+            "precheck": "# Prerequisite self-check (read-only): project / product repos / project grant / advisor credential all present",
+            "steady": "# Advisor kit steady-state check: an empty plan = the kit is complete (delivered in step {advisor_step}; re-rendered by lybra sync after master changes)",
+            "title_local": "Advisor readiness check ({label} session directory advisor kit steady state)",
+            "check_local": "onboarding check outputs '✓ Step {step} prerequisites satisfied'; sync --dry-run outputs 'up-to-date: 0 file(s) to fetch/render'",
+            "pull_head": "# Fetch the charter at session start (run first every time a {label} session opens at {session_at}; the output = the full rendered advisor charter, including the keep-moving rules):",
+            "land_head": "# Fetch the charter and skills at session start (run first in the session directory every time a {label} session opens at {session_at}; the session writes them itself, the product never pushes):",
+            "land_charter": "#   {command}    # charter → {target}",
+            "land_skills": "#   {command}    # skills → {target}/",
+            "title_remote": "Advisor readiness check ({label} session: prerequisite self-check + fetch the charter at session start)",
+            "check_remote": "onboarding check outputs '✓ Step {step} prerequisites satisfied'; no .pi/ under the governance root, no advisor kit added on this machine",
+            "purpose": "The new advisor ({label} session at {session_at}) confirms the products of steps 1–{advisor_step} are complete: the governance root {gov}/.lybra/ has its own advisor credential and role (owner_policy_ref = project grant {auth}), and the advisor kit is in place (local session) or is fetched at session start (remote session)",
+            "fail_advisor_key": "Step {advisor_step} not done / no advisor credential in the governance root",
+            "fail_advisor": "Ask the Owner to rerun step {advisor_step} (--dry-run first, then --confirm)",
+            "fail_grant_key": "Step {grant_step} not done / no project grant",
+            "fail_grant": "Ask the Owner to run step {grant_step} to sign the project grant, then run step {advisor_step}",
+            "fail_plan_key": "the --dry-run plan is not empty",
+            "fail_plan": "Run lybra sync --harness-root <governance root> once without --dry-run and check again; still not empty = report a bug with the --dry-run --json output",
+            "fail_foreign_key": "the charter landing already holds a non-Lybra file",
+            "fail_foreign": "The session directory already has a file of the same name (not rendered by Lybra): move it away or use another session directory, then rerun lybra sync (user files are never overwritten)",
+            "creates": "Nothing (read-only check)"
+          },
+          "enroll": {
+            "fail_no_role_cred": "Step {advisor_step} not done (no advisor credential in the governance root); ask the Owner to run step {advisor_step} first",
+            "fail_unknown_root": "The gate cannot find the project; make sure the gate and step {project_step} use the same home root",
+            "fail_envelope": "The step {grant_step} project grant is not signed or does not cover this instance (the instance host segment must be among the grant's hosts); check lybra project grant show {pq} --home-root {hq} (pre-check refusal = no code issued)",
+            "fail_401": "The gate rejected the advisor credential or the code (issuing gate ≠ this gate); check connection.json mcp.rpc_url and rerun this step (on failure the code is already revoked)",
+            "fail_rollback": "When enrollment fails the gate has already revoked the code (output shows it was rolled back); if the rollback failed, revoke by hand per the exit in the output and rerun"
+          },
+          "station": {
+            "title": "Enroll{sep}{label} (pi, {mode} mode): {instance} @ {ws}",
+            "comment": "# {label}: preview with --dry-run first (role / instance / governance root / landing / covering grant, no code issued, zero writes), then --confirm; the enrollment code stays inside this process; the credential lands in the workstation .lybra + .pi wiring (owner_policy_ref derived from project grant {auth})",
+            "purpose": "{duty}. The advisor uses its own credential (governance root .lybra/connection.json, projects=[{project}]) to issue and redeem the code on the governance-root machine in one command; workstation directory {ws} (source: {ws_source}); one directory is enrolled for one instance only",
+            "check": "--dry-run outputs a preview and the covering grant; --confirm outputs the executed line, code_id and fingerprint (never the code itself) and 'role (with owner_policy_ref)'; the workstation .lybra/connection.json has lybra_bin and workspace_root == governance_root",
+            "fail_pi_key": ".pi wiring missing",
+            "fail_pi": "Enrollment lands the .pi wiring and the step {sync_step} sync adds any declared mount that is missing; still missing = report a bug (attach the sync --json output)",
+            "fail_bin_key": "connection.json lacks lybra_bin",
+            "fail_bin": "Enrollment writes the running lybra deployment location; rerun this step with the deployed lybra command",
+            "fail_root_key": "workspace_root written as the harness root",
+            "fail_root": "workspace_root must equal the governance root inside the code; rerun this step to correct it",
+            "creates": "{ws}/.lybra + .pi + AGENTS.md; land event of the enrollment in the governance root (workstation={ws})",
+            "label_audit": "auditor workstation",
+            "duty_audit": "Audits always go to the independent pi auditor workstation {instance} (it never audits its own cards)",
+            "label_exec": "pi executor workstation",
+            "duty_exec": "Every non-code card (docs / governance / config / validation) is done by the pi executor workstation {instance} (loop launches pi per the grant, or the Owner runs /go at the workstation)"
+          },
+          "step8": {
+            "title": "Enroll the sub-agent executor ({mode} mode, spawned by the {kind} advisor session): {instance} @ governance root",
+            "comment": "# Sub-agent executor: the credential lands in the governance root .lybra/connection.json (per-instance entry), harness = the advisor session {kind}; no workstation, no sync, no pi (for code cards the advisor spawns a sub-agent from the lybra kickoff brief, which delivers under this identity)",
+            "purpose": "The execution identity for code cards {instance} (instance host segment = the advisor session's machine): credential and governance seat both land in the governance root {gov}; the land event records mode={mode} harness={kind} (no workstation= part = no workstation location, pi cannot be dispatched to it); different name and directory from the pi executor workstation {pi_instance}",
+            "check": "--dry-run outputs a preview; --confirm outputs the executed line and the land event (mode=subagent); no new .pi/ under the governance root",
+            "fail_harness": "Sub-agent mode needs --harness <advisor session kind> (here = {kind}) and no --harness-dir; rerun this step's command as is",
+            "fail_target": "In sub-agent mode the credential must land in the governance root: --workspace must be {gov}",
+            "creates": "{gov}/.lybra/connection.json sub-agent executor entry + land event (mode={mode}, harness={kind})"
+          },
+          "step9": {
+            "declare": "# Declare the execution division (AIPOS-F143 / F256, enforced by card type): code cards = sub-agent executor, every non-code card = pi executor workstation, audits = independent pi auditor workstation; draft defaults and the publish identity check read this declaration (preview first, then write and land)",
+            "review": "# Review: all three instances enrolled (✓) and the execution division section shows the pi executor workstation",
+            "title": "Declare the execution division (project set-execution, all three) and review",
+            "purpose": "Declare once who executes what in this project: code cards → sub-agent executor {code}; non-code cards → pi executor workstation {noncode}; audits → pi auditor workstation {audit}. Identities are checked before writing (each must be an instance enrolled in this project; the auditor and the pi executor must have a workstation location)",
+            "check": "set-execution --dry-run gives the project.json diff (zero writes), --confirm writes and lands it ('verdict=PASS'); roles list shows all three instances ✓ and the execution division line names the pi executor workstation instance",
+            "fail_missing_key": "instance not enrolled / no workstation location",
+            "fail_missing": "Go back to steps {first}–{last} to enroll the instance, then rerun this step",
+            "fail_same_key": "auditor equals an executor",
+            "fail_same": "The auditor must be an independent pi auditor workstation instance, never equal to any executor"
+          },
+          "step10": {
+            "label_exec": "pi executor",
+            "label_audit": "auditor",
+            "station": "# {label} workstation: land the workstation kit per the distribution declaration → steady-state check → workstation self-check (read-only, names each missing item)",
+            "plan": "# Workstation setup status (read-only; the three instances' enrollment, workstation charter freshness and the execution division)",
+            "title": "Workstation sync + steady-state check + workstation self-check",
+            "purpose": "The pi executor workstation {exec_ws} and the auditor workstation {audit_ws} get skills / extensions / charter per the distribution declaration; check the steady state and self-check the minimum bootable set (the sub-agent executor has no workstation and is not synced); workstations only sync, they never run gate verbs",
+            "check": "sync reports the workstation lines as synced (the first workstation also gets .pi/extensions/go.ts); --dry-run outputs 'up-to-date: 0 file(s) to fetch/render' and no would-prune lines; onboarding check outputs '✓ Step {step} prerequisites satisfied'; workstation-plan shows all three instances enrolled and fresh workstation charters",
+            "fail_skipped_key": "sync marks the workstation as skipped",
+            "fail_skipped": "--workspace-root must be this project's governance root {gov}",
+            "fail_plan_key": "the --dry-run plan or prune is not empty",
+            "fail_plan": "Run sync once without --dry-run and check again; still not empty = report a bug with the --dry-run --json output",
+            "fail_not_enrolled_key": "enrollment not completed, write refused",
+            "fail_not_enrolled": "That workstation is not enrolled: go back to step {audit_step} / {exec_step} and enroll-deliver it",
+            "fail_selfcheck_key": "self-check reports missing items",
+            "fail_selfcheck": "Fix each missing item in the output (dangling lybra_bin → rerun the matching enrollment step; owner_policy_ref missing → check that the step {grant_step} grant covers this workstation, then rerun sync)",
+            "creates": "workstation kits of {exec_ws}, {audit_ws}; workstation parent root _distributed/"
+          },
+          "step11": {
+            "publish": "# Publish the card: the card draft JSON gives project / task_mode / lane.repo (a step 2 repo name) / audit etc. (executor / harness / auditor default from the step 9 execution division); validated, then published to pending",
+            "drive": "# Drive: lybra loop finds project grant {auth} by itself (no envelope), claims in one go (builds the worktree) → waits for the return → dispatches the audit → waits for the audit report → verdict → finalize → close → N6 landing",
+            "code": "# Code card: when loop asks for a sub-agent, the advisor takes the self-contained kickoff brief and spawns a sub-agent in the advisor session (as {instance}) that follows it; the sub-agent stops once RETURN is written",
+            "noncode": "# Non-code card (and audit card): loop launches pi at the pi executor / auditor workstation per the grant; when the grant does not allow launching, the Owner starts it by hand at that workstation (same for the auditor workstation, cd {audit_ws}):",
+            "title": "First card: publish → lybra loop drives it to close (code card = sub-agent / non-code card = pi executor workstation)",
+            "purpose": "The advisor drives only with product commands: lybra loop drives the whole card under project grant {auth}; execution follows the step {execution_step} division: for a code card the advisor spawns a sub-agent with lybra kickoff, for a non-code card loop launches pi at the pi executor workstation {exec_ws} (or the Owner runs /go there); audits are done by the pi auditor workstation {audit_ws}. Executors / auditors only write products (RETURN / audit report); every gate action is done by the product",
+            "check": "lybra loop exits 0 and outputs 'done: <card ID> …' with the closure record present and governance landed (after closing, loop runs the N6 landing itself: lybra governance-commit --task-id)",
+            "fail_5_key": "exit 5 (no valid grant)",
+            "fail_5": "The step {grant_step} grant is not signed or does not cover this card (lane / task mode / host); ask the Owner to sign the widening command from the output",
+            "fail_3_key": "exit 3 (wait timed out)",
+            "fail_3": "The executor / auditor has not returned its product yet: for a code card make sure the sub-agent was spawned, for a non-code card make sure pi was launched or /go was run, then rerun the same lybra loop",
+            "fail_status_key": "check progress (loop runs in the background / silent for long)",
+            "fail_status": "lybra loop status --task-id {task} --workspace-root {gov} (reads the run record + liveness + stall check: running/stalled/launch_dead/loop_dead/ended, with log paths); never judge by tail/grep of raw logs",
+            "fail_gate_key": "exit 2 (gate refused)",
+            "fail_gate": "Handle it per the output as is; loop has read back the gate records and will not repeat steps already done",
+            "fail_landing_key": "exit 2 (landing refused)",
+            "fail_landing": "N6 landing refused (someone else's staged files / guard / push not done): handle it per the output, then rerun the same lybra loop (landing is idempotent)",
+            "fail_go_key": "/go says the worktree is not built yet",
+            "fail_go": "Claiming and building the worktree are done by the driver, workstations never claim themselves; wait for lybra loop to claim, then /go",
+            "creates": "The card in the completed queue + claim/return/dispatch/verdict/finalization/closure records, committed and pushed to the governance repo"
+          },
+          "summary": {
+            "head": "Full flow to onboard new project {project} ({count} steps, zero manual editing; Owner one-time actions = Step {owner_steps}):",
+            "row": "  Step {n}: {title}"
+          },
+          "gate_start": {
+            "title": "Get the gate running (signing grants / codes and loop all talk to the gate from here on)",
+            "foreground": "Foreground",
+            "foreground_note": "keep the terminal open, closing it stops the gate; good for a first try",
+            "resident": "Resident",
+            "resident_note": "Linux = systemd --user unit, macOS = launchd; preview the full unit text first, then --confirm (enables it and reads the state back); uninstall with `lybra serve uninstall --confirm`",
+            "check": "The gate item of lybra setup check is ✓ (probing {gate})",
+            "skip": "The pre-flight check shows the gate already running and reachable; this step can be skipped"
+          },
+          "card_policy": {
+            "comment": "# Card ID pattern (task_id_pattern, AIPOS-F252): card ownership resolution for controlled release / finalize / lybra-deploy reads only this, and the product has no built-in default; show suggests a value from existing card ID prefixes (a suggestion only); once the Owner confirms the value, preview first and then --confirm (writes card_policy.json in the governance root and lands it)",
+            "pattern_placeholder": "<CARD_ID_REGEX>"
+          },
+          "legacy": {
+            "meta": "# The project.json description keys ({keys}) are updated through the product write entry as well (no hand-editing of old manual-era text); preview first, then --confirm",
+            "meta_none": "# The project.json description key write entry lybra project set-meta becomes available once config.schema project_json declares those keys (undeclared = refused with META_KEY_UNDECLARED)",
+            "t1": "Landing declarations: declare project.json paths through the product write entry (no hand-editing)",
+            "c1_head": "# Keys and values are validated against config.schema project_json.paths (unknown keys refused / finalize_mode enum); preview the diff with --dry-run first, then --confirm",
+            "c1_stage": "# If the stage archive (stage snapshots) is not in the default place, declare it the same way: --key {key} --value <path relative to the governance root> (undeclared = default location; no snapshot there = the finalize stage gate refuses)",
+            "p1": "Why first: the next two steps work from the declared locations: freezing finds cards by queue_root, adoption writes report skeletons by return_root and loop finds products by the declarations; undeclared locations take defaults, and a manual-era project's real locations are not necessarily the defaults, so skeletons would land in the wrong place. Declare the manual-era project's Return / verdict / queue / authorization locations one by one (several --key/--value pairs allowed; declare explicitly even when equal to the default: adoption requires config.schema project_json.paths.adoption.required_declared_keys to be declared explicitly, otherwise it refuses with ADOPT_PATHS_UNDECLARED). If the stage archive (stage snapshots) is not in the default place, also declare {key} (relative to the governance root): the stage gate of Lybra's internal finalize checks stage snapshots at that location, and undeclared with no snapshot at the default location = refused (AIPOS-F145). The first preview line names the target project and the absolute project.json path; --confirm once it checks out; inside the target project's governance root the project name can be omitted (target = that root's project.json#project; unresolvable = refused, never falling back to the home-level active project; an explicit project name that differs from the governance root you are in = refused)",
+            "t2": "Freeze the backlog: declare manual-era cards that are finished / no longer driven as history in one go (migration baseline)",
+            "c2_head": "# Check the cards to be frozen and each card's lint problem count with --dry-run first, then switch to --confirm (the list is append-only; unfreeze = --unfreeze)",
+            "p2": "Why before adoption: adoption honors freezing (a frozen card is refused with ADOPT_LEGACY_FROZEN), so first declare the cards no longer driven as history in one go and leave the cards still in flight that should continue out with --exclude (for the next step to adopt); frozen cards are not reported as ERROR by state lint, not treated as pending by next, and the gate refuses write actions on them",
+            "t3": "Adopt in-flight cards: the gate back-fills the claim record, binds the existing branch and builds the card worktree",
+            "c3_head": "# For each in-flight card: preview first (zero writes, with the authorization judgment and every refusal), then --confirm once there are no refusals; after adoption drive it with lybra loop like a new card",
+            "p3": "Why last: adoption writes report skeletons and claim records and depends on the previous two steps (locations declared, history cards frozen). --branch = the existing branch holding the card's products (in the card's lane.repo); when the card branch name differs, the card branch is created on its tip. Refusals (declared in transitions nodes.N1.adoption.guards + config.schema project_json.paths.adoption.guards) are listed all at once: missing required card intent / branch not found / gate-issued claim already present / frozen / locations undeclared / card branch diverged / worktree creation failed / grant not covering. An existing hand-written Return is never overwritten: loop asks for commit_sha / tree_hash / branch per the return criteria, and the refusal says how to add them"
+          },
+          "text": {
+            "banner": "═══ Onboard a new project from zero: {project} ═══",
+            "home": "Home root: {home} (source: {source})",
+            "gov": "Governance root: {gov}",
+            "gate": "Gate address: {gate} (source: {source})",
+            "cred": "Owner credential: {conn} (source: {source})",
+            "cred_warn": "  ⚠ Owner credential not derived: {reason}",
+            "auth": "Project standing grant: {auth} (signed in step {step}; every later enrollment command references it)",
+            "ws": "Workstation directories: pi executor workstation {exec_ws} · auditor workstation {audit_ws} (source: {source})",
+            "division": "Execution division: code cards → sub-agent executor {code} · non-code cards → pi executor workstation {noncode} · audits → pi auditor workstation {audit}",
+            "generated": "Generated at: {at}",
+            "total": "{total} steps, zero manual editing; Owner one-time actions {count}: {steps}",
+            "unknown": "?",
+            "pre_head": "── Pre-flight check: {title} [by: Owner] ──",
+            "pre_command": "Command: {command}",
+            "pre_blocking": "⛔ The pre-flight check has ✗ items ({items}): the steps below are blocked. Fix them per the exits above first, then rerun `{command}` (or `lybra onboarding check {project} --step 0`) until there is no ✗, and continue from Step 1",
+            "gs_head": "── Start the gate: {title} [by: Owner; pick one] ──",
+            "gs_option": "  {n}) {name}: {note}",
+            "check": "Check: {check}",
+            "note": "Note: {note}",
+            "actor_owner": "Owner",
+            "actor_advisor": "Advisor",
+            "actor_workstation": "Workstation",
+            "step_head": "── Step {n}: {title} [by: {who}] ──",
+            "purpose": "Purpose: {purpose}",
+            "commands_each": "Commands (run one by one):",
+            "commands": "Commands:",
+            "on_fail": "If it fails:",
+            "creates": "Produces: {creates}",
+            "done": "═══ Done: from project registration to the first card closed, zero manual editing ═══",
+            "on_demand_head": "═══ Declarations as needed (listed, not required; preview each first, confirm = same arguments with --confirm) ═══",
+            "item_head": "── {title} ──",
+            "use": "Use: {purpose}",
+            "when": "When needed: {when}",
+            "legacy_head": "═══ Appendix: onboard an existing manual-era project (cards and records from the manual era; order = landing declarations → freeze → adopt) ═══",
+            "legacy_item_head": "── {n}. {title} ──"
+          },
+          "check": {
+            "preflight": "Pre-flight ✗ {label}: {detail}; exit: {exit}",
+            "no_project": "Step {step} not done: project directory {root} does not exist; run lybra project new first",
+            "no_project_json": "project.json missing; rerun Step {step}",
+            "no_repos": "Step {step} not done: project.json declares no product repo; run lybra project set-repos",
+            "bad_repos": "Product repo declaration invalid: {error}; rerun Step {step}",
+            "no_grant": "Step {step} not done: no project standing grant; the Owner runs lybra project grant sign of Step {step} (preview first, then --confirm)",
+            "no_advisor": "Step {step} not done: no .lybra/connection.json (advisor credential) in the governance root; the Owner runs lybra roles enroll-deliver of Step {step} (--dry-run first, then --confirm)",
+            "ws_dir": "{error}; name the workstation directory with --workspace-dir",
+            "no_conn": "Workstation not enrolled: {path} does not exist; run lybra roles enroll-deliver of the workstation enrollment step (Step {audit_step} / {exec_step}) (--dry-run first, then --confirm)",
+            "no_bin": "connection.json lacks lybra_bin; rerun the workstation enrollment step (Step {audit_step} / {exec_step}) enroll-deliver",
+            "root_mismatch": "workspace_root != governance_root; rerun the workstation enrollment step (Step {audit_step} / {exec_step}) enroll-deliver",
+            "conn_invalid": "connection.json is malformed; rerun the workstation enrollment step (Step {audit_step} / {exec_step})",
+            "no_pi": ".pi wiring missing; enrollment should land it automatically, rerun the sync of Step {sync_step} (still missing = rerun the workstation enrollment step (Step {audit_step} / {exec_step}))",
+            "role_error": "{error}; rerun the workstation enrollment step (Step {audit_step} / {exec_step})",
+            "role_invalid": "The role file is malformed; rerun the workstation enrollment step (Step {audit_step} / {exec_step})",
+            "no_policy_ref": "The role file lacks owner_policy_ref; check that the Step {grant_step} project grant covers this workstation instance (host segment), then rerun lybra sync"
+          }
+        }
+      }
     }
   }
 }

@@ -411,25 +411,27 @@ def resolve_home_root_with_source(
 ) -> tuple[Path, str]:
     """AIPOS-F92 件②: resolve_home_root 的同一优先级梯(唯一实现), 另返回命中的来源说明(向导 / project new 打印给用户看,
     home 根要改只能经此梯: --home-root > LYBRA_HOME_ROOT > ~/.lybra/config.json home_root > 缺省 ~/.lybra/projects)。"""
+    from tools.aipos_cli.i18n import owner_text  # AIPOS-F277: 来源说明 = owner_texts.home_root_source 双语块(str 本身 = 缺省语言, 原文不变)
+
     source_env = env if env is not None else os.environ
     if explicit_root:
-        return Path(explicit_root).expanduser().resolve(), "显式 --home-root"
+        return Path(explicit_root).expanduser().resolve(), owner_text("home_root_source", "explicit")
 
     raw_home = str(source_env.get(HOME_ROOT_ENV) or "").strip()
     if raw_home:
-        return Path(raw_home).expanduser().resolve(), f"环境变量 {HOME_ROOT_ENV}"
+        return Path(raw_home).expanduser().resolve(), owner_text("home_root_source", "env", env=HOME_ROOT_ENV)
 
     configured = global_config_home_root(load_global_config(source_env))
     if configured is not None:
-        return configured.expanduser().resolve(), "全局配置 ~/.lybra/config.json home_root"
+        return configured.expanduser().resolve(), owner_text("home_root_source", "global_config")
 
     # Default ~/.lybra/projects. Honor a patched HOME in `env` (consistent with
     # global_config_path) so callers/tests can isolate from the real home.
     if env is not None:
         home = str(env.get("HOME") or "").strip()
         if home:
-            return Path(home) / ".lybra" / "projects", "缺省 ~/.lybra/projects"
-    return DEFAULT_HOME_ROOT.expanduser(), "缺省 ~/.lybra/projects"
+            return Path(home) / ".lybra" / "projects", owner_text("home_root_source", "default")
+    return DEFAULT_HOME_ROOT.expanduser(), owner_text("home_root_source", "default")
 
 
 def resolve_active_project(
@@ -1740,8 +1742,12 @@ def scaffold_project(
     code_repo: str | Path | None = None,
     registered_by: str = "owner",
     collaboration_profile: dict[str, Any] | None = None,
+    lang: str | None = None,
 ) -> Path:
     """Owner scaffold of a fresh per-project truth root under the home.
+
+    AIPOS-F277: lang = 建项目者的用户语言(i18n.resolve_language; 缺省 None = 缺省语言, 与改前逐字相同): 决策日志桩正文与首份阶段快照
+    (阶段名 / 正文)按该语言写(文案 config.schema owner_texts.project_new)。
 
     Creates the full project tree (queue 4 states, records/drafts/orchestration, governance/,
     stage_archive/, workspace_artifacts/), a single-file governance/decision_log.md (ruling
@@ -1782,8 +1788,10 @@ def scaffold_project(
         # frontmatter)——原裸写无 frontmatter 的桩被治理仓提交门 B② 拒, 向导第 1 步之后的落账(governance-commit --paths)必挡。
         from tools.aipos_cli.governance_add import add_doc
 
+        from tools.aipos_cli.i18n import owner_text, pick
+
         written = add_doc(root, name=decision_log.stem, title=f"{clean} Decision Log",
-                          body="决策粒度条目见 decision_log 目录(lybra governance add decision)。")
+                          body=pick(owner_text("project_new", "decision_log_body"), lang))
         if not written.get("ok") or Path(written["target_path"]) != decision_log:
             raise RuntimeError(f"DECISION_LOG_WRITE_FAILED: {written.get('error') or written.get('message')} "
                                f"(声明落点 {written.get('target_path')} ≠ {decision_log})")
@@ -1792,34 +1800,30 @@ def scaffold_project(
 
     # AIPOS-F92 件③: 首份阶段快照「项目创建」经既有单源 governance add stage(config.schema file_declarations.stage_archive_snapshot)
     # 写入 —— 阶段门判据不变(有快照才可转换), 新项目建成即满足(否则首次 finalize 必 BLOCK「no stage snapshot」, F89 N2)。
-    write_project_created_snapshot(root, clean, registered_by=registered_by)
+    write_project_created_snapshot(root, clean, registered_by=registered_by, lang=lang)
 
     return root
 
 
-#: AIPOS-F92 件③: 新项目首份阶段快照的阶段名(project new 建项目即写; 阶段门 finalize.check_stage_archive_gate 判据不变)
-PROJECT_CREATED_STAGE_NAME = "项目创建"
+def project_created_stage_name(lang: str | None = None) -> str:
+    """AIPOS-F92 件③ / AIPOS-F277: 新项目首份阶段快照的阶段名(project new 建项目即写; 阶段门 finalize.check_stage_archive_gate 判据不变,
+    只认有快照)。按建项目者语言(owner_texts.project_new.stage_name; 缺省 = 缺省语言)。"""
+    from tools.aipos_cli.i18n import owner_text, pick
+
+    return pick(owner_text("project_new", "stage_name"), lang)
 
 
-def write_project_created_snapshot(project_root: str | Path, name: str, *, registered_by: str) -> Path:
-    """AIPOS-F92 件③: 经 governance_add.add_stage(唯一写入口, 声明驱动)写首份阶段快照「项目创建」。
+def write_project_created_snapshot(project_root: str | Path, name: str, *, registered_by: str, lang: str | None = None) -> Path:
+    """AIPOS-F92 件③: 经 governance_add.add_stage(唯一写入口, 声明驱动)写首份阶段快照「项目创建」(AIPOS-F277: 阶段名与正文按 lang)。
 
     失败 = 抛 RuntimeError(fail-closed: 无快照的新项目首次 finalize 必被阶段门拦, 不静默放过)。返回快照路径。
     """
     from tools.aipos_cli.governance_add import add_stage
+    from tools.aipos_cli.i18n import owner_text, pick
 
     root = Path(project_root)
-    body = "\n".join([
-        "## Summary",
-        "",
-        f"项目 `{name}` 由 `lybra project new` 创建(registered_by: {registered_by})。治理树(队列 / 记录 / 治理文档 / 阶段快照)已就位,",
-        "本篇是项目的第一份阶段快照, 标记「项目创建」阶段关账: 此后的卡可经 finalize 阶段门(有快照才可转换)。",
-        "",
-        "## Next Stage",
-        "",
-        "按 `lybra onboarding guide` 接入: 声明产品仓 → 顾问凭据 → 信封 → 工位 → 首卡。",
-    ])
-    result = add_stage(root, stage_name=PROJECT_CREATED_STAGE_NAME, body=body)
+    body = pick(owner_text("project_new", "stage_body", name=name, registered_by=registered_by), lang)
+    result = add_stage(root, stage_name=project_created_stage_name(lang), body=body)
     if not result.get("ok"):
         raise RuntimeError(f"STAGE_SNAPSHOT_WRITE_FAILED: {result.get('error') or result.get('message')}")
     return Path(result["target_path"])

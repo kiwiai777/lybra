@@ -16,6 +16,7 @@ from __future__ import annotations
 import http.server
 import json
 import os
+import html
 import re
 import shutil
 import socket
@@ -225,8 +226,12 @@ def test_item1_without_pi_reminder_with_install_command(board):
     assert 'data-pi-alert="missing"' in alert and "还没装 pi" in alert
     assert f'<pre class="sc-copy"><code>{spec["install"]["command"]}</code></pre>' in alert  # 安装命令 = 声明原文, 可复制代码块
     assert f'href="{spec["install"]["url"]}"' in alert
-    expected = spec["exit_missing"].replace("{command}", spec["install"]["command"]).replace("{url}", spec["install"]["url"])
-    assert expected.split("——")[0] in alert  # 提醒文案 = 声明 exit_missing(由 run_setup_check 填好), 不另写
+    from tools.aipos_cli.i18n import fill, texts
+
+    # AIPOS-F277: 出口文案在 setup_check.texts 双语块(经唯一读取器取缺省语言那份, 测试不复制原文)
+    exits = texts(setup_check_declaration()["texts"], None, where="setup_check.texts")["exits"]
+    expected = fill(exits["pi_missing"], {"command": spec["install"]["command"], "url": spec["install"]["url"]}, where="t")
+    assert expected[:12] in alert and spec["install"]["command"] in alert  # 提醒文案 = 声明 exits.pi_missing(由 run_setup_check 填好), 不另写
     assert page.index("sc-pi-alert") < page.index('class="sc-items"')  # 提醒块在页顶(清单之前)
     items = _items(page)
     assert items[0] == ("pi", "fail"), items  # ✗ 项置顶
@@ -243,7 +248,10 @@ def test_item1_pi_without_models_reminder(board):
     _show("---- ① pi 在但无模型(假 pi 脚本)· 提醒块 + 清单原文 ----\n" + alert + "\n" + re.search(r'<ol class="sc-items">.*?</ol>', page, re.S).group(0))
     spec = setup_check_declaration()["pi"]
     assert 'data-pi-alert="models"' in alert and "pi 还没有可用模型" in alert and "sc-copy" not in alert
-    assert "<code>pi --list-models</code>" in alert and spec["exit_models"].split("`")[0] in alert
+    from tools.aipos_cli.i18n import texts
+
+    exit_models = texts(setup_check_declaration()["texts"], None, where="setup_check.texts")["exits"]["pi_models"]
+    assert "<code>pi --list-models</code>" in alert and exit_models.split("`")[0] in alert
     items = _items(page)
     assert items[0] == ("pi_models", "fail") and dict(items)["pi"] == "ok"
 
@@ -295,7 +303,13 @@ def test_item3_english_page_shows_declared_text(board):
     page = _page(board, SETUP + "?lang=en")
     _show("---- ③ 英文设置自检页 <main> 原文 ----\n" + _main(page))
     assert '<html lang="en">' in page and "<h1>Setup check</h1>" in page and "pi is not installed" in page
-    assert "pi(审计 / 非代码执行工位)" in page and "pi 不在 PATH" in page and "How to fix" in page
+    # AIPOS-F277: 检查项标签 / 现值 / 出口为双语渲染值, 英文页显示英文(经唯一读取器取声明, 测试不复制原文)
+    from tools.aipos_cli.i18n import fill, texts
+    from tools.aipos_cli.setup_check import setup_check_declaration
+
+    en = texts(setup_check_declaration()["texts"], "en", where="setup_check.texts")
+    assert html.escape(en["labels"]["pi"]) in page and fill(en["details"]["not_on_path"], {"exe": "pi"}, where="t") in page
+    assert "How to fix" in page
     assert "shown as declared by the product" in page
     assert 'href="/owner/setup?recheck=1&amp;lang=en"' in page and "Check again" in page
     home = _page(board, "/owner/home?lang=en")

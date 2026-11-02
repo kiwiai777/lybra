@@ -228,7 +228,11 @@ def test_item2_owner_inbox_relay_follows_user_language(board, clean_lang_env):
     _show(f"---- 件② lybra --lang en owner inbox 转达段原文 ----\n{relay(en, 'Tell')}")
     assert rc_zh == rc_en and SEP in zh and "Decided, to relay" in en and SEP not in en
     assert relay(en, "Tell").splitlines()[1].startswith("The Owner has handled the 1 thing(s) below")
-    assert zh.splitlines()[0] == en.splitlines()[0]  # 未迁移段(收件箱头行)不翻译、不受影响
+    # AIPOS-F277: 收件箱头行也已双语(译文覆盖层 lybra_owner_inbox.translations.en.texts.header), 按用户语言出
+    from tools.aipos_cli.owner_inbox import inbox_declaration
+
+    en_head = inbox_declaration()["translations"]["en"]["texts"]["header"].split("{", 1)[0]
+    assert en.splitlines()[0].startswith(en_head) and not zh.splitlines()[0].startswith(en_head)
     # 看板英文同段(浏览器选 en)与 CLI --lang en 逐字一致
     status, page = _request(board, "/owner/inbox?lang=en")
     assert status == 200 and _board_relays(page)[ADV_LX] == relay(en, "Tell")

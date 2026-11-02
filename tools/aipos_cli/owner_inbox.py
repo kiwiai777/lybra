@@ -140,6 +140,9 @@ def _inbox_declaration() -> dict[str, Any]:
     if missing:
         raise SchemaLoadError(f"verbs.{VERB}.categories / stale.suggest 引用了未声明的选项 {missing}")
     _check_tiers(decl)  # AIPOS-F225 件①: 档位映射守卫(未归档的事由 / 类别 = 加载即拒)
+    overlay = inbox_overlay_problems(decl)  # AIPOS-F277: 译文覆盖层守卫(缺译 / 路径漂移 / 占位不齐 = 加载即拒, 与缺 en 键同一纪律)
+    if overlay:
+        raise SchemaLoadError(f"verbs.{VERB}.translations 不合标准(AIPOS-F277): " + "; ".join(overlay))
     return decl
 
 
@@ -239,7 +242,8 @@ def owner_reason_entry(key: Any, decl: dict[str, Any] | None = None) -> dict[str
     """第一档事由键 → {key, label}; 不在清单 = None。"""
     reasons = tier_declaration(decl)["tier1"]["reasons"]
     text = str(key or "").strip()
-    return {"key": text, "label": str(reasons[text]["label"])} if text in reasons else None
+    return ({"key": text, "label": _fmt(reasons[text]["label"], f"tiers.tier1.reasons.{text}.label", decl=decl)}
+            if text in reasons else None)
 
 
 class OwnerReasonRefused(ValueError):
@@ -526,14 +530,44 @@ def _auto_release_items(root: Path, project: str, decl: dict[str, Any], home_roo
     return out
 
 
-def _fmt(template: Any, where: str, **values: Any) -> str:
-    """声明模板渲染; 占位缺值 = SchemaLoadError(声明与实现不符, 不猜)。"""
-    from tools.schema_loader import SchemaLoadError
+def _loop_detail(na: dict[str, Any]) -> str:
+    """AIPOS-F277: loop 停下的「要定」句(推导核 next_action.detail, 车道外 loop_run_record 生成: 事由句 [+ " — " + 运行消息])按用户语言:
+    以 lybra_loop_status.next_action.owner_reasons.<事由> 原句起头 = 其余语言换成该声明译文覆盖层同路径译文(句尾原样); 否则原文。"""
+    from tools.aipos_cli.i18n import Localized, default_language, overlay_template, supported_languages
+    from tools.schema_loader import code_repo_schema_root, load_schema
 
-    try:
-        return str(template).format_map(values)
-    except (KeyError, IndexError, ValueError) as exc:
-        raise SchemaLoadError(f"verbs.{VERB}.{where} 模板占位无值: {exc}") from exc
+    detail = str(na.get("detail") or "")
+    status = (load_schema("verbs", code_repo_schema_root()).get("verbs") or {}).get("lybra_loop_status") or {}
+    head = str(((status.get("next_action") or {}).get("owner_reasons") or {}).get(str(na.get("reason") or "")) or "")
+    if not head or not detail.startswith(head):
+        return detail
+    by_lang = {default_language(): detail}
+    for code in supported_languages():
+        alt = overlay_template(status, f"next_action.owner_reasons.{na.get('reason')}", code) if code != default_language() else None
+        if alt is not None:
+            by_lang[code] = alt + detail[len(head):]
+    return Localized(by_lang, default_language()) if len(by_lang) > 1 else detail
+
+
+def _fmt(template: Any, where: str, *, lang: str | None = None, decl: dict[str, Any] | None = None, **values: Any) -> str:
+    """声明模板渲染(唯一口); 占位缺值 = SchemaLoadError(声明与实现不符, 不猜)。
+    AIPOS-F277: where = 模板在本声明里的路径(可带 verbs.<本动词>. 前缀); 译文覆盖层 translations.<语言> 有同路径译文 = 各语言各填一份,
+    返回双语渲染值(i18n.Localized: str 本身 = 原位缺省语言那份, 事项 ID / 哈希 / 决策记录 / 看板 / JSON 行为不变), 出声点按用户语言 pick。
+    lang 给了 = 模板本身已是该语言(如转达话术双语块的一种语言表), 值按该语言取, 返回普通 str。"""
+    from tools.aipos_cli.i18n import fill, overlay_localize
+
+    if lang:
+        return fill(template, values, where=f"verbs.{VERB}.{where}", lang=lang)
+    path = where[len(VERB) + 1:] if where.startswith(f"{VERB}.") else where
+    return overlay_localize(decl or inbox_declaration(), path, template, values, where=f"verbs.{VERB}.{where}")
+
+
+def inbox_overlay_problems(decl: dict[str, Any] | None = None) -> list[str]:
+    """AIPOS-F277: 本声明译文覆盖层守卫(i18n.overlay_problems, 应译范围 = translations.sections)。空 = 合格。"""
+    from tools.aipos_cli.i18n import overlay_problems
+
+    d = decl or inbox_declaration()
+    return overlay_problems(d, list((d.get("translations") or {}).get("sections") or []))
 
 
 def item_id(project: str, category: str, subject: str, anchor: str, decl: dict[str, Any] | None = None) -> str:
@@ -586,7 +620,7 @@ def _ruling_record(path: Path, fm: dict[str, Any], body: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _option_list(keys: list[str], decl: dict[str, Any]) -> list[dict[str, str]]:
-    return [{"key": k, "label": str(decl["options"][k]["label"])} for k in keys]
+    return [{"key": k, "label": _fmt(decl["options"][k]["label"], f"options.{k}.label")} for k in keys]
 
 
 def _base_item(decl: dict[str, Any], *, project: str, governance_root: Path, category: str, rank: int, subject: str,
@@ -597,10 +631,12 @@ def _base_item(decl: dict[str, Any], *, project: str, governance_root: Path, cat
     iid = item_id(project, category, subject, anchor, decl)
     command = _fmt(decl["texts"]["decide_command"], "texts.decide_command", item_id=iid,
                    home_root=str(home_root) if home_root else "<home 根>")
+    rank_label = (_fmt(decl["rank_labels"][str(rank)], f"rank_labels.{rank}") if str(rank) in decl["rank_labels"] else str(rank))
     return {"item_id": iid, "project": project, "governance_root": str(governance_root), "category": category,
-            "category_label": str(cat["label"]), "rank": int(rank), "rank_label": str(decl["rank_labels"].get(str(rank), rank)),
+            "category_label": _fmt(cat["label"], f"categories.{category}.label"), "rank": int(rank), "rank_label": rank_label,
             "subject": subject, "task_id": task_id, "policy_id": policy_id, "title": str(title or "").strip() or None,
-            "source": source or str(decl["texts"]["unknown_source"]), "ask": ask, "recommend": recommend or None, "impact": impact,
+            "source": source or _fmt(decl["texts"]["unknown_source"], "texts.unknown_source"), "ask": ask, "recommend": recommend or None,
+            "impact": impact,
             "options": options, "since": since, "anchor": anchor, "decision_id": decision_id_for(iid, decl),
             "decide_command": command, "facts": dict(facts or {}), "home_root": str(home_root) if home_root else None}
 
@@ -824,10 +860,12 @@ def grant_line(item: dict[str, Any], decl: dict[str, Any] | None = None) -> str:
                     dimension_label=grant.get("dimension_label") or grant.get("dimension"), authorization_id=grant["authorization_id"],
                     change=grant["change"], revision=grant["revision"])
     repos = ", ".join(grant["lane_repos"])
+    mode = grant["task_mode"]
     return _fmt(t["line"], "grant_request.texts.line", advisor=grant["agent_or_role"], task_id=grant["task_id"],
                 title_part=_fmt(t["title_part"], "grant_request.texts.title_part", title=grant["title"]) if grant.get("title") else "",
-                mode_label=g["mode_labels"].get(grant["task_mode"]) or g["mode_any"],
-                repos_part=_fmt(t["repos_part"], "grant_request.texts.repos_part", repos=repos) if repos else g["repos_any"],
+                mode_label=(_fmt(g["mode_labels"][mode], f"grant_request.mode_labels.{mode}") if g["mode_labels"].get(mode)
+                            else _fmt(g["mode_any"], "grant_request.mode_any")),
+                repos_part=_fmt(t["repos_part"], "grant_request.texts.repos_part", repos=repos) if repos else _fmt(g["repos_any"], "grant_request.repos_any"),
                 launch_part=(_fmt(t["launch_part"], "grant_request.texts.launch_part", harnesses=", ".join(grant["launch_harnesses"]))
                              if grant.get("launch_harnesses") else ""),
                 max_tasks=grant["max_tasks"], expires_date=str(grant["expires_at"])[:10], reason=grant["reason"])
@@ -1020,7 +1058,7 @@ def _loop_card(root: Path, project: str, task_id: str, decl: dict[str, Any], hom
     item = _base_item(
         decl, project=project, governance_root=root, category="loop_owner_needed", rank=int(cat["rank"]), subject=subject,
         anchor=str(na.get("inbox_anchor") or view.get("run_id") or ""), source=driver,  # AIPOS-F231: 已暂停 = 暂停裁决锚点
-        ask=str(ask_rec.get("ask") or na.get("detail") or reason), recommend=recommend,
+        ask=str(ask_rec.get("ask")) if ask_rec.get("ask") else (_loop_detail(na) if na.get("detail") else reason), recommend=recommend,
         impact=(_fmt(ask_spec["impact"], "categories.loop_owner_needed.advisor_ask.impact", task_id=task_id,
                      end_reason=str(view.get("end_reason") or na.get("reason") or "?")) if advisor_ask
                 else _fmt(cat["impact"], "categories.loop_owner_needed.impact", task_id=task_id, reason=reason)),
@@ -1032,7 +1070,8 @@ def _loop_card(root: Path, project: str, task_id: str, decl: dict[str, Any], hom
         legacy = ask_spec["legacy"]
         retract = _fmt(legacy["retract_command"], "categories.loop_owner_needed.advisor_ask.legacy.retract_command", task_id=task_id,
                        noted_by=str(ask_rec.get("noted_by") or driver or "<补写的顾问实例>"), governance_root=str(root))
-        item["ask"] = _fmt(legacy["ask"], "categories.loop_owner_needed.advisor_ask.legacy.ask", label=legacy["label"], ask=item["ask"],
+        item["ask"] = _fmt(legacy["ask"], "categories.loop_owner_needed.advisor_ask.legacy.ask",
+                           label=_fmt(legacy["label"], "categories.loop_owner_needed.advisor_ask.legacy.label"), ask=item["ask"],
                            retract_command=retract)
         item["owner_tier"] = int(legacy["tier"])
         item["legacy_ask"] = {"label": str(legacy["label"]), "retract_command": retract, "kind": str(legacy["kind"])}
@@ -1164,13 +1203,15 @@ def _needs_owner_items(root: Path, project: str, decl: dict[str, Any], home_root
         # AIPOS-F225 件③: needs_owner 卡须带第一档事由(卡面 tiers.needs_owner_reason_field); 存量缺 = 照列并标缺(不隐藏阻塞)
         reason_entry = owner_reason_entry(meta.get(str(tier_declaration(decl)["needs_owner_reason_field"])), decl)
         if reason_entry is None:
-            ask = f"{ask} " + _fmt(tier_declaration(decl)["texts"]["needs_owner_reason_missing"], "tiers.texts.needs_owner_reason_missing",
-                                   field=str(tier_declaration(decl)["needs_owner_reason_field"]), reasons=owner_reason_keys(decl))
+            from tools.aipos_cli.i18n import concat
+
+            ask = concat(ask, " ", _fmt(tier_declaration(decl)["texts"]["needs_owner_reason_missing"], "tiers.texts.needs_owner_reason_missing",
+                                        field=str(tier_declaration(decl)["needs_owner_reason_field"]), reasons=owner_reason_keys(decl)))
         out.append(_base_item(
             decl, project=project, governance_root=root, category="needs_owner_card", rank=int(cat["rank_by_queue_state"][state]),
             subject=subject, anchor=anchor,
             source=str(meta.get("blocked_by") or meta.get("created_by") or meta.get("draft_created_by") or ""),
-            ask=ask, recommend=None, impact=str(cat["impact_by_queue_state"][state]),
+            ask=ask, recommend=None, impact=_fmt(cat["impact_by_queue_state"][state], f"categories.needs_owner_card.impact_by_queue_state.{state}"),
             options=_option_list(list(cat["options_by_queue_state"][state]), decl),
             since=str(meta.get("blocked_at") or meta.get("claimed_at") or meta.get("created_at") or meta.get("draft_created_at") or "") or None,
             task_id=task_id, home_root=home_root, title=meta.get("title"),
@@ -1427,7 +1468,7 @@ def _authorization_notice_items(root: Path, project: str, decl: dict[str, Any], 
             options=_option_list(list(texts["options"]), decl), since=None, policy_id=aid, home_root=home_root,
             facts={"used": row["used"], "max_tasks": row["max_tasks"], "expires_at": row["expires_at"], "renew_command": command,
                    "authorization_revision": row["revision"], "notices": row["notices"]})
-        item["category_label"] = str(texts["label"])  # 项目授权措辞(类别仍为 envelope_warning: 档位 / 裁决同类)
+        item["category_label"] = _fmt(texts["label"], f"{where}.label")  # 项目授权措辞(类别仍为 envelope_warning: 档位 / 裁决同类)
         item["board_url"] = board_envelope_url(project, aid)
         item["decide_line"] = _fmt(texts["decide_board"], f"{where}.decide_board", board_url=item["board_url"], command=item["decide_command"])
         out.append(item)
@@ -1572,7 +1613,8 @@ def collect_project_inbox(governance_root: Path, *, project: str | None = None, 
             except SchemaLoadError:
                 raise  # 声明坏 = 整个命令拒(不是某项目的真相问题)
             except (OSError, ValueError, LookupError, RuntimeError, FrontmatterReadError) as exc:
-                errors.append({"project": name, "source": decl["categories"][category]["label"], "error": f"{type(exc).__name__}: {exc}"})
+                errors.append({"project": name, "source": _fmt(decl["categories"][category]["label"], f"categories.{category}.label"),
+                               "error": f"{type(exc).__name__}: {exc}"})
                 continue
             for item in found:
                 if "owner_reason" not in item:  # AIPOS-F225: 类别级第一档事由(tiers.categories.<类别>.owner_reason; 无 = None)
@@ -1759,7 +1801,8 @@ def option_next(decl: dict[str, Any], choice: str, label: str, *, resume: str, t
     AIPOS-F213 件②: decision_id = 该裁决的决策记录 id(撤换 / 纠正选项的命令带 --decision-id 引用它, 不另记裁决)。"""
     spec = decl["options"].get(choice)
     template = (spec or {}).get("advisor_next") or decl["custom_option"]["advisor_next"]
-    return _fmt(template, "options.advisor_next", resume=resume, task_id=task_id or "", governance_root=str(governance_root), label=label,
+    where = f"options.{choice}.advisor_next" if (spec or {}).get("advisor_next") else "custom_option.advisor_next"
+    return _fmt(template, where, resume=resume, task_id=task_id or "", governance_root=str(governance_root), label=label,
                 decision_id=decision_id or "<decision_id>")
 
 
@@ -1786,7 +1829,8 @@ def _decision_relay(root: Path, item: dict[str, Any], ruling: dict[str, Any], de
     facts = item.get("facts") or {}
     advisor = item.get("relay_to")
     labels = {o["key"]: o["label"] for o in item["options"]}
-    label = str((decl["options"].get(choice) or {}).get("label") or labels.get(choice) or choice)
+    label = (_fmt(decl["options"][choice]["label"], f"options.{choice}.label") if (decl["options"].get(choice) or {}).get("label")
+             else labels.get(choice) or choice)
     resume = _resume_for(root, item.get("task_id"), advisor, facts.get("envelope") if item["category"] == "loop_owner_needed" else None)
     return {"kind": "decision", "advisor": advisor, "project": item["project"], "governance_root": str(root),
             "task_id": item.get("task_id"), "subject": item["subject"], "item_id": item["item_id"],
@@ -1808,7 +1852,7 @@ def _ruled_loop_relay(root: Path, project: str, *, task_id: str, view: dict[str,
             "task_id": task_id, "subject": _fmt(decl["categories"]["loop_owner_needed"]["subject"], "categories.loop_owner_needed.subject",
                                                 task_id=task_id),
             "item_id": na.get("inbox_item_id"), "decision_id": rv.get("decision_id"), "choice": choice, "label": rv.get("label") or choice,
-            "owner_words": rv.get("owner_words"), "done_at": rv.get("decided_at"), "advisor_next": str(rv.get("advisor_next") or "")}
+            "owner_words": rv.get("owner_words"), "done_at": rv.get("decided_at"), "advisor_next": rv.get("advisor_next") or ""}
 
 
 def _all_rulings(root: Path, decl: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1872,7 +1916,7 @@ def _released_relays(root: Path, project: str, decl: dict[str, Any], errors: lis
         except (OSError, ValueError, LookupError, RuntimeError, FrontmatterReadError) as exc:
             errors.append({"project": project, "source": f"已放行转达 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
             continue
-        label = str(decl["options"][choice]["label"])
+        label = _fmt(decl["options"][choice]["label"], f"options.{choice}.label")
         resume = _resume_for(root, task_id, advisor)
         out.append({"kind": "decision", "advisor": advisor, "project": project, "governance_root": str(root), "task_id": task_id,
                     "subject": _fmt(cat["subject"], "categories.needs_owner_card.subject", task_id=task_id, queue_state=state),
@@ -1917,7 +1961,7 @@ def _correction_relays(root: Path, project: str, decl: dict[str, Any], errors: l
         except (OSError, ValueError, LookupError, RuntimeError, FrontmatterReadError) as exc:
             errors.append({"project": project, "source": f"纠正转达 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
             continue
-        label = str(decl["options"][choice]["label"])
+        label = _fmt(decl["options"][choice]["label"], f"options.{choice}.label")
         out.append({"kind": "decision", "advisor": advisor, "project": project, "governance_root": str(root), "task_id": task_id,
                     "subject": f"{task_id} → {followup}", "item_id": None, "decision_id": ruling.get("decision_id"), "choice": choice,
                     "label": label, "owner_words": ruling.get("owner_words"), "done_at": ruling.get("decided_at"),
@@ -2025,7 +2069,7 @@ def _queue_ruling_relays(root: Path, project: str, decl: dict[str, Any], errors:
         except (OSError, ValueError, LookupError, RuntimeError, FrontmatterReadError) as exc:
             errors.append({"project": project, "source": f"撤换 / 纠正转达 {task_id}", "error": f"{type(exc).__name__}: {exc}"})
             continue
-        label = str(decl["options"][choice]["label"])
+        label = _fmt(decl["options"][choice]["label"], f"options.{choice}.label")
         out.append({"kind": "decision", "advisor": advisor, "project": project, "governance_root": str(root), "task_id": task_id,
                     "subject": f"{task_id} [{state}]", "item_id": None, "decision_id": ruling.get("decision_id"), "choice": choice,
                     "label": label, "owner_words": ruling.get("owner_words"), "done_at": ruling.get("decided_at"),
@@ -2055,27 +2099,34 @@ def relay_groups(relays: list[dict[str, Any]]) -> list[dict[str, Any]]:
             for name, rows in sorted(groups.items())]
 
 
-def relay_entry_line(entry: dict[str, Any], n: int, t: dict[str, str]) -> str:
+def relay_entry_line(entry: dict[str, Any], n: int, t: dict[str, str], lang: str | None = None) -> str:
+    """AIPOS-F277: lang = t 那种语言(插值的事项值 / 选项标签 / 顾问下一条按同一语言取; 缺省 = 缺省语言)。"""
+    from tools.aipos_cli.i18n import default_language
+
+    code = lang or default_language()
     if entry["kind"] == "envelope":
         harnesses = ", ".join(entry.get("launch_harnesses") or [])
-        return _fmt(t["entry_envelope"], "relay.texts.entry_envelope", n=n, project=entry["project"], task_id=entry["task_id"],
+        return _fmt(t["entry_envelope"], "relay.texts.entry_envelope", lang=code, n=n, project=entry["project"], task_id=entry["task_id"],
                     policy_id=entry["policy_id"], advisor=entry.get("advisor") or t["unknown_advisor"],
-                    launch_part=_fmt(t["launch_part"], "relay.texts.launch_part", harnesses=harnesses) if harnesses else "",
+                    launch_part=_fmt(t["launch_part"], "relay.texts.launch_part", lang=code, harnesses=harnesses) if harnesses else "",
                     resume=entry["resume"])
     words = entry.get("owner_words")
-    return _fmt(t["entry_decision"], "relay.texts.entry_decision", n=n, project=entry["project"], subject=entry["subject"],
+    return _fmt(t["entry_decision"], "relay.texts.entry_decision", lang=code, n=n, project=entry["project"], subject=entry["subject"],
                 label=entry["label"], decision_id=entry.get("decision_id") or "?",
-                words_part=_fmt(t["words_part"], "relay.texts.words_part", owner_words=words) if words else "",
+                words_part=_fmt(t["words_part"], "relay.texts.words_part", lang=code, owner_words=words) if words else "",
                 advisor_next=entry["advisor_next"])
 
 
 def relay_lines(group: dict[str, Any], lang: str | None = None) -> list[str]:
     """一段转达话术(CLI 收件箱段 / 看板「已定待转达」/ JSON 同一函数同一文字): 告诉 X + 引导 + 逐条 + 注意事项。"""
+    from tools.aipos_cli.i18n import default_language
+
     t = relay_texts(lang)
+    code = lang or default_language()
     entries = group["entries"]
-    lines = [_fmt(t["tell"], "relay.texts.tell", advisor=group.get("advisor") or t["unknown_advisor"]),
-             _fmt(t["lead"], "relay.texts.lead", count=len(entries))]
-    lines += [relay_entry_line(entry, n, t) for n, entry in enumerate(entries, 1)]
+    lines = [_fmt(t["tell"], "relay.texts.tell", lang=code, advisor=group.get("advisor") or t["unknown_advisor"]),
+             _fmt(t["lead"], "relay.texts.lead", lang=code, count=len(entries))]
+    lines += [relay_entry_line(entry, n, t, code) for n, entry in enumerate(entries, 1)]
     lines.append(t["notes"])
     return lines
 
@@ -2085,23 +2136,26 @@ def choice_script(item: dict[str, Any], choice: str, lang: str | None = None) ->
     --confirm 方法与该选项 advisor_next(续跑命令同 loop status)。只生成文字, 不写任何东西。"""
     import shlex
 
+    from tools.aipos_cli.i18n import default_language, pick
+
     decl = inbox_declaration()
     r = relay_declaration(decl)
     t = relay_texts(lang)
+    code = lang or default_language()  # AIPOS-F277: 话术表那种语言; 插值(选项标签 / 事项 / 顾问下一条)按同一语言取
     label = next(o["label"] for o in item["options"] if o["key"] == choice)
     advisor = item.get("relay_to") or t["unknown_advisor"]
-    words = _fmt(t["choice_owner_words"], "relay.texts.choice_owner_words", label=label)
+    words = _fmt(t["choice_owner_words"], "relay.texts.choice_owner_words", lang=code, label=label)
     home = item.get("home_root") or str(Path(item["governance_root"]).parent)
-    preview = _fmt(r["commands"]["decide"], "relay.commands.decide", item_id=item["item_id"], choice=shlex.quote(choice),
+    preview = _fmt(r["commands"]["decide"], "relay.commands.decide", lang=code, item_id=item["item_id"], choice=shlex.quote(choice),
                    advisor=shlex.quote(advisor), owner_words=shlex.quote(words), home_root=shlex.quote(home))
     root = Path(item["governance_root"])
     resume = _resume_for(root, item.get("task_id"), item.get("relay_to"),
                          (item.get("facts") or {}).get("envelope") if item["category"] == "loop_owner_needed" else None)
     nxt = option_next(decl, choice, label, resume=resume, task_id=item.get("task_id"), governance_root=root, decision_id=item.get("decision_id"))
-    return [_fmt(t["tell"], "relay.texts.tell", advisor=advisor),
-            _fmt(t["choice_body"], "relay.texts.choice_body", project=item["project"], subject=item["subject"], label=label,
+    return [_fmt(t["tell"], "relay.texts.tell", lang=code, advisor=advisor),
+            _fmt(t["choice_body"], "relay.texts.choice_body", lang=code, project=item["project"], subject=item["subject"], label=label,
                  preview=preview, advisor_next=nxt),
-            t["notes"]]
+            pick(t["notes"], code)]
 
 
 def choice_scripts_offered(item: dict[str, Any], decl: dict[str, Any] | None = None) -> bool:
@@ -2163,9 +2217,12 @@ def _collect_inbox(home_root: str | Path | None, *, project: str | None, include
 
 def item_lines(item: dict[str, Any], texts: dict[str, Any]) -> list[str]:
     """One inbox item as the CLI lines (AIPOS-F181: the board folds the same lines into an item's "show details")."""
+    from tools.aipos_cli.i18n import concat, join
+
     lines = [_fmt(texts["item"], "texts.item", **item), _fmt(texts["ask"], "texts.ask", ask=item["ask"])]
     if item.get("owner_reason"):  # AIPOS-F225: 第一档事由
-        lines[-1] += _fmt(tier_declaration()["texts"]["owner_reason_part"], "tiers.texts.owner_reason_part", **item["owner_reason"])
+        lines[-1] = concat(lines[-1], _fmt(tier_declaration()["texts"]["owner_reason_part"], "tiers.texts.owner_reason_part",
+                                           **item["owner_reason"]))
     if item.get("grant"):  # AIPOS-F180: authorization request, one plain-language line (same data as the board request card)
         lines.append(grant_line(item))
     elif item.get("grant_error"):
@@ -2181,7 +2238,7 @@ def item_lines(item: dict[str, Any], texts: dict[str, Any]) -> list[str]:
     elif item["category"] == "loop_owner_needed":
         lines.append(_fmt(texts["no_recommend"], "texts.no_recommend", task_id=item.get("task_id") or ""))
     lines.append(_fmt(texts["impact"], "texts.impact", impact=item["impact"]))
-    lines.append(_fmt(texts["options"], "texts.options", options=" / ".join(f"{o['key']}={o['label']}" for o in item["options"])))
+    lines.append(_fmt(texts["options"], "texts.options", options=join(" / ", [concat(o["key"], "=", o["label"]) for o in item["options"]])))
     if item.get("since"):
         lines.append(_fmt(texts["since"], "texts.since", since=item["since"]))
     if item.get("reaudit_hint"):  # AIPOS-F202: a "wait for the fix" ruling, deploy changed since = re-audit can be chosen
@@ -2199,8 +2256,10 @@ def _paused_line(inbox: dict[str, Any], texts: dict[str, Any]) -> str | None:
 
 
 def render_inbox_text(inbox: dict[str, Any], lang: str | None = None) -> str:
-    """CLI 收件箱文本。AIPOS-F276: lang = i18n.resolve_language 的结果(CLI 传入); 已双语的「已定待转达」段按该语言出(relay_lines),
-    其余段落声明仍单语(本卡不翻译)。lang 缺省 = 看板缺省语言(与 JSON 里 relays[].lines 同字)。"""
+    """CLI 收件箱文本。AIPOS-F276: lang = i18n.resolve_language 的结果(CLI 传入); 已双语的「已定待转达」段按该语言出(relay_lines)。
+    AIPOS-F277: 其余段落(头行 / 事项各行 / 第二档告知 / 读不出)经译文覆盖层双语渲染, 按 lang 取; lang 缺省 = 看板缺省语言(与改前逐字相同)。"""
+    from tools.aipos_cli.i18n import default_language, lines_in
+
     texts = inbox_declaration()["texts"]
     head = "header" if inbox["items"] else "empty"
     out = [_fmt(texts[head], f"texts.{head}", count=inbox["count"], projects=len(inbox["projects"]), home_root=inbox["home_root"])]
@@ -2220,7 +2279,7 @@ def render_inbox_text(inbox: dict[str, Any], lang: str | None = None) -> str:
     if groups:  # AIPOS-F201 item 3: decided / signed, the advisor has not continued yet (same paragraphs as the board)
         rt = relay_texts(lang)
         out.append("")
-        out.append(_fmt(rt["cli_heading"], "relay.texts.cli_heading", count=len(groups)))
+        out.append(_fmt(rt["cli_heading"], "relay.texts.cli_heading", lang=lang or default_language(), count=len(groups)))
         for group in groups:
             out.append("")
             out.extend("  " + line for line in (relay_lines(group, lang) if lang else (group.get("lines") or relay_lines(group))))
@@ -2228,7 +2287,7 @@ def render_inbox_text(inbox: dict[str, Any], lang: str | None = None) -> str:
         out.append("")
         out.append(_fmt(texts["errors_header"], "texts.errors_header", count=len(inbox["errors"])))
         out.extend(_fmt(texts["error"], "texts.error", **err) for err in inbox["errors"])
-    return "\n".join(out)
+    return "\n".join(lines_in(out, lang))
 
 
 def render_inbox_error_html(message: str) -> str:
@@ -2292,10 +2351,21 @@ def stale_view(inbox: dict[str, Any], stale_before: str) -> dict[str, Any]:
             "count": sum(len(g["items"]) for g in projects), "errors": inbox["errors"]}
 
 
-def render_stale_text(view: dict[str, Any]) -> str:
+def render_stale_text(view: dict[str, Any], lang: str | None = None) -> str:
+    """遗留视图文本。AIPOS-F277: lang = 用户语言(缺省 = 缺省语言, 与改前逐字相同)。"""
+    from tools.aipos_cli.i18n import Localized, default_language, lines_in
+
     decl = inbox_declaration()
     st, texts = decl["stale"], decl["texts"]
     labels = st.get("suggest_labels") or {}
+
+    def label_of(key: str) -> str:
+        return _fmt(labels[key], f"stale.suggest_labels.{key}") if labels.get(key) else str(key)
+
+    def squash(text: Any) -> str:  # 事项文字压成一行(各语言各压)
+        if isinstance(text, Localized):
+            return Localized({code: " ".join(v.split()) for code, v in text.by_lang.items()}, default_language())
+        return " ".join(str(text).split())
     head = "header" if view["count"] else "empty"
     out = [_fmt(st[head], f"stale.{head}", stale_before=view["stale_before"], count=view["count"], projects=len(view["groups"])
                 if view["count"] else view["projects_scanned"], home_root=view["home_root"])]
@@ -2307,18 +2377,18 @@ def render_stale_text(view: dict[str, Any]) -> str:
         out.append(_fmt(st["project_header"], "stale.project_header", project=group["project"], count=len(group["items"])))
         for row in group["items"]:
             title_part = _fmt(st["title_part"], "stale.title_part", title=row["title"]) if row.get("title") else ""
-            label = str(labels.get(row["suggest"]) or row["suggest"]) if row["suggest"] else str(st["keep_label"])
+            label = label_of(row["suggest"]) if row["suggest"] else _fmt(st["keep_label"], "stale.keep_label")
             out.append(_fmt(st["line"], "stale.line", item_id=row["item_id"], subject=row["subject"], title_part=title_part,
-                            ask=" ".join(str(row["ask"]).split()), suggest_label=label))
+                            ask=squash(row["ask"]), suggest_label=label))
         for batch in group["batches"]:
-            out.append(_fmt(st["batch_line"], "stale.batch_line", suggest_label=str(labels.get(batch["choice"]) or batch["choice"]),
+            out.append(_fmt(st["batch_line"], "stale.batch_line", suggest_label=label_of(batch["choice"]),
                             count=len(batch["item_ids"]), item_ids=",".join(batch["item_ids"]), choice=batch["choice"],
                             home_root=view["home_root"]))
     if view["errors"]:
         out.append("")
         out.append(_fmt(texts["errors_header"], "texts.errors_header", count=len(view["errors"])))
         out.extend(_fmt(texts["error"], "texts.error", **err) for err in view["errors"])
-    return "\n".join(out)
+    return "\n".join(lines_in(out, lang))
 
 
 # ---------------------------------------------------------------------------
@@ -2697,7 +2767,7 @@ def ruling_view(ruling: dict[str, Any], decl: dict[str, Any], *, resume: str, ta
     AIPOS-F170 件③: 记录带 Owner 原话(_ruling_record 读回)= 裁决行附转达段 texts.relay_part(转达人 + 原话); 旧记录无 = 不附。"""
     choice = str(ruling.get("allowed_next_action") or "")
     spec = decl["options"].get(choice)
-    label = str((spec or {}).get("label") or (labels or {}).get(choice) or choice)
+    label = (_fmt(spec["label"], f"options.{choice}.label") if (spec or {}).get("label") else (labels or {}).get(choice) or choice)
     summary = str(ruling.get("decision_summary") or "")
     note_marker = _fmt(decl["texts"]["note_part"], "texts.note_part", note="")
     note = summary.split(note_marker, 1)[1] if note_marker and note_marker in summary else ""

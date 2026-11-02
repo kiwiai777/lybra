@@ -607,7 +607,7 @@ def redacted_connection(config: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def render_connection_table(report: dict[str, Any]) -> str:
+def render_connection_table(report: dict[str, Any], lang: str | None = None) -> str:
     connection = report.get("connection") if isinstance(report.get("connection"), dict) else {}
     board = connection.get("board") if isinstance(connection.get("board"), dict) else {}
     mcp = connection.get("mcp") if isinstance(connection.get("mcp"), dict) else {}
@@ -677,7 +677,7 @@ def render_connection_table(report: dict[str, Any]) -> str:
             if warning.get('fix_command'):
                 lines.append(f"  fix: {warning.get('fix_command')}")
     if report.get("operation") == "serve_status":  # AIPOS-F268 件④: 已停止 state 显示「未运行」, 不列旧 pid
-        lines.extend(["", render_service_state_line(report.get("service_state"))])
+        lines.extend(["", render_service_state_line(report.get("service_state"), lang)])
     if report.get("blocking_reasons"):
         lines.extend(["", "Blocking:"])
         for reason in report["blocking_reasons"]:
@@ -734,10 +734,10 @@ def redacted_service_state(state: dict[str, Any]) -> dict[str, Any]:
             "mode": state.get("mode"),
             "started_at": state.get("started_at"),
             "status": "stopped",
-            "label": SERVICE_STATE_LABELS["stopped"],
+            "label": _serve_text("state_labels.stopped"),
             "stopped_at": state.get("stopped_at"),
             "stopped_reason": reason,
-            "stopped_reason_label": SUPERVISOR_EXIT_REASONS.get(reason, reason),
+            "stopped_reason_label": _serve_text(f"exit_reasons.{reason}") if reason in _serve_block()["zh"]["exit_reasons"] else reason,
             "supervisor": None,
             "processes": [],
         }
@@ -751,25 +751,42 @@ def redacted_service_state(state: dict[str, Any]) -> dict[str, Any]:
         "mode": state.get("mode"),
         "started_at": state.get("started_at"),
         "status": status,
-        "label": SERVICE_STATE_LABELS[status],
+        "label": _serve_text(f"state_labels.{status}"),
         "supervisor": {key: supervisor.get(key) for key in ("pid", "started_at", "service_manager")} if isinstance(supervisor, dict) else None,
         "processes": processes,
     }
 
 
-def render_service_state_line(service_state: dict[str, Any] | None) -> str:
-    """AIPOS-F268 件④: serve status 人读的门进程一行(未运行 / 所记 pid / 无记录)。"""
+def _serve_block() -> dict[str, Any]:
+    """AIPOS-F277: serve status 人读文案 = config.schema serve.texts 双语块(结构 / 占位经 i18n.surface_texts 核, fail-closed)。"""
+    from tools.aipos_cli.i18n import surface_texts
+    from tools.schema_loader import code_repo_schema_root, load_schema
+
+    block = (load_schema("config", code_repo_schema_root()).get("serve") or {}).get("texts")
+    surface_texts(block, None, where="config.schema.json serve.texts")
+    return block
+
+
+def _serve_text(key: str, /, **values: Any) -> str:
+    from tools.aipos_cli.i18n import block_localize
+
+    return block_localize(_serve_block(), key, values, where="config.schema.json serve.texts")
+
+
+def render_service_state_line(service_state: dict[str, Any] | None, lang: str | None = None) -> str:
+    """AIPOS-F268 件④: serve status 人读的门进程一行(未运行 / 所记 pid / 无记录)。AIPOS-F277: lang = 用户语言(缺省 = 缺省语言)。"""
+    from tools.aipos_cli.i18n import pick
+
     st = service_state or {}
-    label = st.get("label") or SERVICE_STATE_LABELS["none"]
+    label = st.get("label") or _serve_text("state_labels.none")
     if st.get("status") == "stopped":
-        return (f"门进程: {label}(supervisor 于 {st.get('stopped_at')} 退出: {st.get('stopped_reason_label')}; "
-                "最后所记 pid 留在 service_state.json 供排查)")
+        return pick(_serve_text("line_stopped", label=label, stopped_at=st.get("stopped_at"), reason=st.get("stopped_reason_label")), lang)
     if st.get("status") == "recorded":
         sup = st.get("supervisor") or {}
         parts = [f"supervisor pid {sup.get('pid')}"] if sup else []
         parts += [f"{p.get('name')} pid {p.get('pid')}" for p in st.get("processes") or []]
-        return f"门进程: {label}(" + ", ".join(parts) + "; 前台 serve 由 `lybra serve stop` 停止)"
-    return f"门进程: {label}"
+        return pick(_serve_text("line_recorded", label=label, parts=", ".join(parts)), lang)
+    return pick(_serve_text("line_none", label=label), lang)
 
 
 def rotate_report(
@@ -1334,9 +1351,7 @@ SERVE_STOP_TIMEOUT_KEYS = ("supervisor_grace_seconds", "child_grace_seconds", "k
 #: 进程最终状态(stop 报告逐个列出)。
 STOP_STATUS_LABELS = {"stopped": "已停", "gone": "已不在", "failed": "未能停止", "left_running": "未动(常驻模式)"}
 #: AIPOS-F268 件④: serve status 的 state 状态标签。
-SERVICE_STATE_LABELS = {"stopped": "未运行", "recorded": "已记录在跑", "none": "无运行记录"}
 #: AIPOS-F268 件④: supervisor 退出原因(state.stopped_reason)。
-SUPERVISOR_EXIT_REASONS = {"stop_signal": "收到停止信号", "restart_limit": "子进程达重拉上限", "aborted": "收尾异常退出"}
 
 
 def serve_stop_timeouts() -> dict[str, float]:

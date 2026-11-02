@@ -29,6 +29,14 @@ _TEXTS = ("preview", "written", "inbox_line", "by_advisor", "by_default")
 _EXITS = ("ok", "refused", "usage", "landing_failed", "not_found")
 
 
+def _rfmt(template: Any, where: str, /, **values: Any) -> str:
+    """AIPOS-F277: 本声明模板渲染唯一口——各语言各填一份(译文覆盖层 translations.<语言>, i18n.overlay_localize)= 双语渲染值;
+    str 本身 = 原位缺省语言(推荐记录 / 看板 / JSON 不变), CLI 出声按用户语言 pick。"""
+    from tools.aipos_cli.i18n import overlay_localize
+
+    return overlay_localize(recommend_declaration(), where, template, values, where=f"verbs.{VERB}.{where}")
+
+
 class RecommendRefused(ValueError):
     """写推荐被拒(零写入); code ∈ 声明 reject_codes, 消息带出口。"""
 
@@ -160,7 +168,8 @@ def default_recommendation(governance_root: Path, item: dict[str, Any], decl: di
     facts = item.get("facts") or {}
     applies = ("grant_request" if isinstance(item.get("grant"), dict) else "authorization" if "authorization_revision" in facts
                else "envelope")
-    spec = next((s for s in (decl["defaults"] or {}).values() if s["category"] == item["category"] and s["applies_to"] == applies), None)
+    key, spec = next(((k, s) for k, s in (decl["defaults"] or {}).items() if s["category"] == item["category"] and s["applies_to"] == applies),
+                     (None, None))
     if spec is None:
         return None
     now = utc_now().replace(microsecond=0)
@@ -203,8 +212,13 @@ def default_recommendation(governance_root: Path, item: dict[str, Any], decl: di
             params = {"workspace": item["project"], "mode": "renew", "template_policy_id": pid, "max_tasks": count, "expires_at": expires,
                       "request_item": item["item_id"]}
         values = {"days": days or "?", "max_tasks": count, "date": expires[:10]}
-    label = str(spec.get("label") or (inbox_declaration()["options"].get(spec["choice"]) or {}).get("label") or spec["choice"])
-    return {"choice": str(spec["choice"]), "label": label, "reason": str(spec["reason"]).format(**values), "source": "default", "by": None,
+    from tools.aipos_cli.owner_inbox import _fmt as inbox_fmt
+
+    option = inbox_declaration()["options"].get(spec["choice"]) or {}
+    label = (_rfmt(spec["label"], f"defaults.{key}.label") if spec.get("label") else
+             inbox_fmt(option["label"], f"options.{spec['choice']}.label") if option.get("label") else str(spec["choice"]))
+    return {"choice": str(spec["choice"]), "label": label, "reason": _rfmt(spec["reason"], f"defaults.{key}.reason", **values),
+            "source": "default", "by": None,
             "action": str(spec["action"]), "record": None, "params": params, "days": values["days"] if values["days"] != "?" else None,
             "max_tasks": values["max_tasks"]}
 
@@ -215,8 +229,9 @@ def recommendation_line(item: dict[str, Any]) -> str | None:
     if not isinstance(rec, dict):
         return None
     texts = recommend_declaration()["texts"]
-    by = (texts["by_advisor"].format(by=rec.get("by") or "?") if rec.get("source") == "advisor" else texts["by_default"])
-    return texts["inbox_line"].format(label=rec.get("label") or rec.get("choice"), reason=rec.get("reason") or "", by=by)
+    by = (_rfmt(texts["by_advisor"], "texts.by_advisor", by=rec.get("by") or "?") if rec.get("source") == "advisor"
+          else _rfmt(texts["by_default"], "texts.by_default"))
+    return _rfmt(texts["inbox_line"], "texts.inbox_line", label=rec.get("label") or rec.get("choice"), reason=rec.get("reason") or "", by=by)
 
 
 # ---------------------------------------------------------------------------
@@ -287,11 +302,18 @@ def write_recommendation(item_id: str, *, choice: str, reason: str, actor: str |
 def run_recommend_cli(args: Any) -> int:
     import json
 
+    from tools.aipos_cli.i18n import LanguageError, pick, resolve_language
     from tools.aipos_cli.owner_inbox import InboxItemNotFound
     from tools.schema_loader import SchemaLoadError
 
+    try:
+        lang = resolve_language(args)  # AIPOS-F277: Owner 可见出声按用户语言
+    except LanguageError as exc:
+        print(f"lybra owner recommend: {exc}", file=sys.stderr)
+        return _exit("usage")
+    texts = recommend_declaration()["texts"]
     if bool(getattr(args, "dry_run", False)) and bool(getattr(args, "confirm", False)):
-        print("lybra owner recommend: --dry-run 与 --confirm 不能同时给", file=sys.stderr)
+        print(f"lybra owner recommend: {pick(_rfmt(texts['both_phases'], 'texts.both_phases'), lang)}", file=sys.stderr)
         return _exit("usage")
     try:
         report = write_recommendation(getattr(args, "item", None) or "", choice=getattr(args, "choice", None) or "",
@@ -302,18 +324,18 @@ def run_recommend_cli(args: Any) -> int:
         print(f"lybra owner recommend: {exc}", file=sys.stderr)
         return _exit("not_found")
     except RecommendRefused as exc:
-        print(f"lybra owner recommend: 拒({exc.code}): {exc}", file=sys.stderr)
+        print(f"lybra owner recommend: {pick(_rfmt(texts['refused'], 'texts.refused', code=exc.code, error=exc), lang)}", file=sys.stderr)
         return _exit("refused")
     except (FileNotFoundError, SchemaLoadError, ValueError, OSError) as exc:
         print(f"lybra owner recommend: {type(exc).__name__}: {exc}", file=sys.stderr)
         return _exit("refused")
     landing = report.get("landing")
-    texts = recommend_declaration()["texts"]
     if getattr(args, "json", False):
         print(json.dumps({**report, "landing": ({k: v for k, v in landing.items() if k != "line"} if landing else None)},
                          ensure_ascii=False, indent=2))
     else:
-        print(str(texts["preview" if report["stage"] == "preview" else "written"]).format(**report))
+        key = "preview" if report["stage"] == "preview" else "written"
+        print(pick(_rfmt(texts[key], f"texts.{key}", **report), lang))
         if landing:
             print(landing["line"], file=sys.stdout if landing.get("landed") else sys.stderr)
     if landing and not landing.get("landed"):

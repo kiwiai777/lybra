@@ -23,8 +23,8 @@ from tools.aipos_cli._cli_entry_guard import check_direct_invocation
 
 check_direct_invocation(__name__)
 
-_DECL_KEYS = ("marks", "items", "labels", "probe_timeout_seconds", "requirements", "pi", "gate", "resident_exit",
-              "resident_path_exit", "resident_path_absent")
+_DECL_KEYS = ("marks", "items", "texts", "probe_timeout_seconds", "requirements", "pi", "gate")
+_WHERE = "config.schema.json setup_check.texts"
 #: AIPOS-F267: 看板「设置自检」页复用结果的秒数缺省(config.schema setup_check.board.cache_seconds 缺省时用, 与声明同值)
 BOARD_CACHE_DEFAULT_SECONDS = 60
 
@@ -34,16 +34,27 @@ class SetupCheckError(ValueError):
 
 
 def setup_check_declaration() -> dict[str, Any]:
-    """config.schema setup_check(唯一读取口)。缺键 = SetupCheckError。"""
+    """config.schema setup_check(唯一读取口)。缺键 = SetupCheckError。AIPOS-F277: 用户可见文案(标签 / 出口 / 详情 / 人读行)= texts 双语块
+    ({zh, en}, 结构与占位经 i18n.surface_texts 核); 结果里的文字为双语渲染值(i18n.Localized: str 本身 = 缺省语言, 看板 / JSON 行为不变),
+    CLI 出声按用户语言取(render_setup_check / preflight_step 的 lang)。"""
+    from tools.aipos_cli.i18n import surface_texts
     from tools.schema_loader import code_repo_schema_root, load_schema
 
     decl = load_schema("config", code_repo_schema_root()).get("setup_check")
     if not isinstance(decl, dict) or any(k not in decl for k in _DECL_KEYS):
         raise SetupCheckError(f"config.schema.json setup_check 未声明齐 {list(_DECL_KEYS)}")
-    unknown = [i for i in decl["items"] if i not in decl["labels"]]
+    labels = surface_texts(decl["texts"], None, where=_WHERE)["labels"]
+    unknown = [i for i in decl["items"] if i not in labels]
     if unknown:
         raise SetupCheckError(f"config.schema.json setup_check.items 无标签: {unknown}")
     return decl
+
+
+def _t(decl: dict[str, Any], key: str, /, **values: Any) -> str:
+    """texts 双语块一条文案 → 双语渲染值(i18n.block_localize)。"""
+    from tools.aipos_cli.i18n import block_localize
+
+    return block_localize(decl["texts"], key, values, where=_WHERE)
 
 
 def board_cache_seconds(decl: dict[str, Any] | None = None) -> int:
@@ -65,24 +76,26 @@ def parse_version(text: str) -> tuple[int, ...] | None:
 
 
 def _item(decl: dict[str, Any], item_id: str, status: str, detail: str, exit_line: str | None = None) -> dict[str, Any]:
-    return {"id": item_id, "label": decl["labels"][item_id], "status": status, "mark": decl["marks"][status],
+    return {"id": item_id, "label": _t(decl, f"labels.{item_id}"), "status": status, "mark": decl["marks"][status],
             "detail": detail, "exit": exit_line if status != "ok" else None}
 
 
-def _version_of(argv: list[str], timeout: float) -> tuple[str | None, str]:
+def _version_of(decl: dict[str, Any], argv: list[str], timeout: float) -> tuple[str | None, str]:
     """跑 [可执行, *参数] 取版本输出首行; 起不来 / 超时 / 非零退出 = (None, 原因)。"""
     exe = shutil.which(argv[0])
     if not exe:
-        return None, f"{argv[0]} 不在 PATH"
+        return None, _t(decl, "details.not_on_path", exe=argv[0])
+    command = " ".join(argv)
     try:
         proc = subprocess.run([exe, *argv[1:]], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return None, f"`{' '.join(argv)}` 超时({timeout:g}s)"
+        return None, _t(decl, "details.timeout", command=command, seconds=f"{timeout:g}")
     except OSError as exc:
-        return None, f"`{' '.join(argv)}` 起不来: {type(exc).__name__}: {exc}"
+        return None, _t(decl, "details.cannot_start", command=command, error=f"{type(exc).__name__}: {exc}")
     out = ((proc.stdout or "").strip() or (proc.stderr or "").strip()).splitlines()
     if proc.returncode != 0:
-        return None, f"`{' '.join(argv)}` exit {proc.returncode}: {out[-1][:200] if out else '(无输出)'}"
+        return None, _t(decl, "details.exit_nonzero", command=command, code=proc.returncode,
+                        tail=out[-1][:200] if out else _t(decl, "details.no_output"))
     return (out[0].strip() if out else ""), exe
 
 
@@ -91,25 +104,25 @@ def _check_python(decl: dict[str, Any]) -> dict[str, Any]:
     have = tuple(sys.version_info[:3])
     shown = ".".join(map(str, have))
     want = parse_version(req["min"]) or ()
-    exit_line = str(req["exit"]).replace("{min}", str(req["min"]))
+    exit_line = _t(decl, "exits.python", min=req["min"])
     if have < want:
-        return _item(decl, "python", "fail", f"{shown}({sys.executable})低于要求 ≥{req['min']}", exit_line)
-    return _item(decl, "python", "ok", f"{shown}({sys.executable}; 要求 ≥{req['min']})")
+        return _item(decl, "python", "fail", _t(decl, "details.below", have=shown, where=sys.executable, min=req["min"]), exit_line)
+    return _item(decl, "python", "ok", _t(decl, "details.ok_required", have=shown, where=sys.executable, min=req["min"]))
 
 
 def _check_versioned(decl: dict[str, Any], item_id: str, timeout: float) -> dict[str, Any]:
     req = decl["requirements"][item_id]
-    exit_line = str(req["exit"]).replace("{min}", str(req.get("min", "")))
-    out, where = _version_of([str(a) for a in req["argv"]], timeout)
+    exit_line = _t(decl, f"exits.{item_id}", min=req.get("min", ""))
+    out, where = _version_of(decl, [str(a) for a in req["argv"]], timeout)
     if out is None:
         return _item(decl, item_id, "fail", where, exit_line)
     have = parse_version(out)
     if req.get("min"):
         want = parse_version(req["min"]) or ()
         if have is None or have < want:
-            return _item(decl, item_id, "fail", f"{out}({where})低于要求 ≥{req['min']}", exit_line)
-        return _item(decl, item_id, "ok", f"{out}({where}; 要求 ≥{req['min']})")
-    return _item(decl, item_id, "ok", f"{out}({where})")
+            return _item(decl, item_id, "fail", _t(decl, "details.below", have=out, where=where, min=req["min"]), exit_line)
+        return _item(decl, item_id, "ok", _t(decl, "details.ok_required", have=out, where=where, min=req["min"]))
+    return _item(decl, item_id, "ok", _t(decl, "details.ok_plain", have=out, where=where))
 
 
 def tool_executable(decl: dict[str, Any], item_id: str) -> str:
@@ -137,23 +150,25 @@ def _check_pi(decl: dict[str, Any], timeout: float) -> list[dict[str, Any]]:
     spec = decl["pi"]
     exe = tool_executable(decl, "pi")
     install = spec["install"]
-    missing_exit = str(spec["exit_missing"]).replace("{command}", str(install["command"])).replace("{url}", str(install["url"]))
-    version, where = _version_of([exe, *[str(a) for a in spec["version_args"]]], timeout)
+    missing_exit = _t(decl, "exits.pi_missing", command=install["command"], url=install["url"])
+    version, where = _version_of(decl, [exe, *[str(a) for a in spec["version_args"]]], timeout)
     if version is None:
         return [_item(decl, "pi", "fail", where, missing_exit),
-                _item(decl, "pi_models", "warn", str(spec["skipped_without_pi"]), str(spec["skipped_exit"]))]
-    pi_item = _item(decl, "pi", "ok", f"{version}({where})")
+                _item(decl, "pi_models", "warn", _t(decl, "details.pi_skipped"), _t(decl, "exits.pi_skipped"))]
+    pi_item = _item(decl, "pi", "ok", _t(decl, "details.ok_plain", have=version, where=where))
     catalog = harness_model_catalog(str(spec["harness"]))
     if catalog["ok"] and catalog["models"]:
         models = catalog["models"]
-        shown = ", ".join(models[:5]) + (f" 等 {len(models)} 个" if len(models) > 5 else "")
+        more = _t(decl, "details.models_more", count=len(models)) if len(models) > 5 else ""
         # AIPOS-F272: 完整清单随结果带出(看板「设 pi 模型」候选复用本次结果, 不另起 pi 子进程)
-        return [pi_item, {**_item(decl, "pi_models", "ok", f"{len(models)} 个已配置模型: {shown}"), "models": list(models)}]
-    detail = catalog["detail"] if not catalog["ok"] else f"`{' '.join(catalog['command'])}` 列出 0 个模型"
-    return [pi_item, _item(decl, "pi_models", "fail", detail, str(spec["exit_models"]))]
+        return [pi_item, {**_item(decl, "pi_models", "ok", _t(decl, "details.models_ok", count=len(models), shown=", ".join(models[:5]), more=more)),
+                          "models": list(models)}]
+    # 核不了的原因原文来自 harness_launch.harness_model_catalog(车道外, 单语; AIPOS-F277 已知局限)
+    detail = catalog["detail"] if not catalog["ok"] else _t(decl, "details.models_zero", command=" ".join(catalog["command"]))
+    return [pi_item, _item(decl, "pi_models", "fail", detail, _t(decl, "exits.pi_models"))]
 
 
-def _probe_gate(url: str, timeout: float) -> tuple[bool, str]:
+def _probe_gate(decl: dict[str, Any], url: str, timeout: float) -> tuple[bool, str]:
     """对门基址 + probe_path 发一次 GET(不带凭据、不经代理); 任何 HTTP 应答 = 可达。"""
     import urllib.error
     import urllib.request
@@ -163,7 +178,7 @@ def _probe_gate(url: str, timeout: float) -> tuple[bool, str]:
         with opener.open(urllib.request.Request(url, method="GET"), timeout=timeout) as resp:
             return True, f"HTTP {resp.status}"
     except urllib.error.HTTPError as exc:
-        return True, f"HTTP {exc.code}(门已应答)"
+        return True, _t(decl, "details.http_answered", code=exc.code)
     except (urllib.error.URLError, OSError, ValueError) as exc:
         reason = getattr(exc, "reason", exc)
         return False, f"{type(reason).__name__}: {reason}"
@@ -176,13 +191,14 @@ def _check_gate(decl: dict[str, Any], workspace_root: Path | None, gate_url: str
     try:
         base = resolve_gate_base_url(workspace_root=workspace_root, explicit_url=gate_url)
     except (GateAddressError, ValueError, OSError) as exc:
-        return _item(decl, "gate", "warn", f"门地址推导不出: {exc}", str(spec["exit"]))
-    source = "显式" if gate_url else (f"工作区 {workspace_root}" if workspace_root else "环境 / 缺省")
+        return _item(decl, "gate", "warn", _t(decl, "details.gate_unresolved", error=exc), _t(decl, "exits.gate"))
+    source = (_t(decl, "details.source_explicit") if gate_url else
+              (_t(decl, "details.source_workspace", workspace=workspace_root) if workspace_root else _t(decl, "details.source_default")))
     probe = base.rstrip("/") + str(spec["probe_path"])
-    ok, how = _probe_gate(probe, float(spec["timeout_seconds"]))
+    ok, how = _probe_gate(decl, probe, float(spec["timeout_seconds"]))
     if ok:
-        return _item(decl, "gate", "ok", f"{base}(地址来源: {source}; GET {spec['probe_path']} → {how})")
-    return _item(decl, "gate", "warn", f"{base} 不可达(地址来源: {source}; {how})", str(spec["exit"]))
+        return _item(decl, "gate", "ok", _t(decl, "details.gate_ok", base=base, source=source, probe_path=spec["probe_path"], how=how))
+    return _item(decl, "gate", "warn", _t(decl, "details.gate_down", base=base, source=source, how=how), _t(decl, "exits.gate"))
 
 
 def _resident_path_problem(decl: dict[str, Any], st: dict[str, Any]) -> tuple[str, str] | None:
@@ -194,9 +210,9 @@ def _resident_path_problem(decl: dict[str, Any], st: dict[str, Any]) -> tuple[st
     exe = tool_executable(decl, "pi")
     found = shutil.which(exe)
     if unit_env is None:
-        return (f"单元文件读不出环境, 无从核 PATH 是否含 pi({found or exe})",
-                str(decl["resident_path_exit"]).replace("{pi_dir}", os.path.dirname(found) if found else exe)
-                .replace("{unit_path_value}", "读不出"))
+        return (_t(decl, "details.resident_env_unreadable", pi=found or exe),
+                _t(decl, "exits.resident_path", pi_dir=os.path.dirname(found) if found else exe,
+                   unit_path_value=_t(decl, "details.resident_path_unreadable_value")))
     unit_path_value = unit_env.get("PATH")
     if unit_path_value and shutil.which(exe, path=unit_path_value):
         return None
@@ -205,9 +221,9 @@ def _resident_path_problem(decl: dict[str, Any], st: dict[str, Any]) -> tuple[st
     pi_dir = os.path.dirname(found)
     if unit_path_value and path_contains(unit_path_value, pi_dir):
         return None
-    shown = unit_path_value if unit_path_value else str(decl["resident_path_absent"])
-    exit_line = str(decl["resident_path_exit"]).replace("{pi_dir}", pi_dir).replace("{unit_path_value}", shown)
-    return f"单元 PATH 不含 pi 所在目录 {pi_dir}(单元 PATH: {shown})", exit_line
+    shown = unit_path_value if unit_path_value else _t(decl, "details.resident_path_absent")
+    exit_line = _t(decl, "exits.resident_path", pi_dir=pi_dir, unit_path_value=shown)
+    return _t(decl, "details.resident_path_missing", pi_dir=pi_dir, shown=shown), exit_line
 
 
 def _check_resident(decl: dict[str, Any]) -> dict[str, Any]:
@@ -215,22 +231,33 @@ def _check_resident(decl: dict[str, Any]) -> dict[str, Any]:
 
     st = resident_status()
     if not st.get("supported"):
-        return _item(decl, "gate_resident", "warn", str(st.get("detail")), str(decl["resident_exit"]))
+        return _item(decl, "gate_resident", "warn", st.get("detail"), _t(decl, "exits.resident"))
     hand = st.get("handwritten") or []
     if st.get("installed"):
-        state = "在跑" if st.get("active") else "未在跑"
-        owner = "本命令生成" if st.get("managed") else "同名但非本命令生成"
-        detail = f"{st['unit_path']}({owner}; {state})"
-        exits = [] if st.get("active") else ["单元已装但未在跑: 看 `lybra serve status` 与系统服务日志"]
+        state = _t(decl, "details.resident_running" if st.get("active") else "details.resident_stopped")
+        owner = _t(decl, "details.resident_managed" if st.get("managed") else "details.resident_unmanaged")
+        detail = _t(decl, "details.resident_installed", unit_path=st["unit_path"], owner=owner, state=state)
+        exits = [] if st.get("active") else [_t(decl, "exits.resident_not_running")]
         path_problem = _resident_path_problem(decl, st)
         if path_problem:
-            detail += f"; {path_problem[0]}"
+            detail = _join(decl, [detail, path_problem[0]])
             exits.append(path_problem[1])
-        return _item(decl, "gate_resident", "warn" if exits else "ok", detail, "; ".join(exits) or None)
+        return _item(decl, "gate_resident", "warn" if exits else "ok", detail, _join(decl, exits) if exits else None)
     if hand:
         names = ", ".join(f"{h['name']}({h['path']})" for h in hand)
-        return _item(decl, "gate_resident", "ok", f"检测到已有手写常驻单元 {names}; lybra serve install 不接管")
-    return _item(decl, "gate_resident", "warn", f"未安装({st['unit_path']} 不存在)", str(decl["resident_exit"]))
+        return _item(decl, "gate_resident", "ok", _t(decl, "details.resident_handwritten", names=names))
+    return _item(decl, "gate_resident", "warn", _t(decl, "details.resident_absent", unit_path=st["unit_path"]), _t(decl, "exits.resident"))
+
+
+def _join(decl: dict[str, Any], parts: list[str]) -> str:
+    """多段详情 / 出口以 details.detail_sep 相连, 各语言各连一份(双语渲染值不因拼接丢语言)。"""
+    from tools.aipos_cli.i18n import localize, supported_languages
+
+    sep = _t(decl, "details.detail_sep")
+    names = [f"p{i}" for i in range(len(parts))]
+    template = "{sep}".join("{" + n + "}" for n in names)
+    return localize({code: template for code in supported_languages()}, {"sep": sep, **dict(zip(names, parts))},
+                    where=f"{_WHERE}.details.detail_sep")
 
 
 def run_setup_check(*, workspace_root: Path | None = None, gate_url: str | None = None) -> dict[str, Any]:
@@ -259,29 +286,43 @@ def run_setup_check(*, workspace_root: Path | None = None, gate_url: str | None 
             "checked_at": iso_z(utc_now())}
 
 
-def render_setup_check(result: dict[str, Any]) -> str:
-    """人读唯一出口: 每项一行(标记 标签: 详情), 非 ✓ 项下一行给出口; 末行汇总。"""
+def render_setup_check(result: dict[str, Any], lang: str | None = None) -> str:
+    """人读唯一出口: 每项一行(标记 标签: 详情), 非 ✓ 项下一行给出口; 末行汇总。AIPOS-F277: lang = 用户语言(i18n.resolve_language;
+    缺省 = 缺省语言, 与改前逐字相同)。"""
+    from tools.aipos_cli.i18n import lines_in
+
+    decl = setup_check_declaration()
     lines = []
     for it in result["items"]:
-        lines.append(f"{it['mark']} {it['label']}: {it['detail']}")
+        lines.append(_t(decl, "render.item", mark=it["mark"], label=it["label"], detail=it["detail"]))
         if it.get("exit"):
-            lines.append(f"    出口: {it['exit']}")
+            lines.append(_t(decl, "render.exit", exit=it["exit"]))
     c = result["counts"]
-    tail = (f"结论: 有 {c['fail']} 项 ✗(阻断), {c['warn']} 项 ⚠, {c['ok']} 项 ✓" if result["blocking"]
-            else f"结论: 无 ✗ 项({c['ok']} 项 ✓, {c['warn']} 项 ⚠ 提示)")
-    lines.append(tail)
-    return "\n".join(lines)
+    lines.append(_t(decl, "render.summary_blocking" if result["blocking"] else "render.summary_clear", **c))
+    return "\n".join(lines_in(lines, lang))
 
 
 def preflight_step(result: dict[str, Any] | None) -> dict[str, Any]:
-    """onboarding 向导「前置检查」摘要(唯一出口): 未运行 = 只给命令; 运行了 = 每项一行 + ✗ 项出口 + 阻断标记。"""
+    """onboarding 向导「前置检查」摘要(唯一出口): 未运行 = 只给命令; 运行了 = 每项一行 + ✗ 项出口 + 阻断标记。
+    AIPOS-F277: title / lines 为双语渲染值(向导人读输出按用户语言取)。"""
+    decl = setup_check_declaration()
     command = "lybra setup check"
+    title = _t(decl, "render.preflight_title")
     if result is None:
-        return {"title": "本机安装自检", "command": command, "ran": False, "blocking": False, "blocking_items": [],
-                "gate_reachable": False, "lines": [f"本次未运行自检(--skip-preflight 或调用方未给结果); 开始 Step 1 前先跑 `{command}`"
-                                                   "(或 `lybra onboarding check <项目> --step 0`), 有 ✗ 项先按出口处理"]}
-    lines = [f"{it['mark']} {it['label']}: {it['detail']}" + (f"  → 出口: {it['exit']}" if it.get("exit") else "")
-             for it in result["items"]]
-    return {"title": "本机安装自检", "command": command, "ran": True, "blocking": bool(result["blocking"]),
+        return {"title": title, "command": command, "ran": False, "blocking": False, "blocking_items": [],
+                "gate_reachable": False, "lines": [_t(decl, "render.preflight_not_run", command=command)]}
+    lines = [_t(decl, "render.item", mark=it["mark"], label=it["label"], detail=it["detail"])
+             if not it.get("exit") else _join_exit(decl, it) for it in result["items"]]
+    return {"title": title, "command": command, "ran": True, "blocking": bool(result["blocking"]),
             "blocking_items": list(result["blocking"]), "counts": dict(result["counts"]), "lines": lines,
             "gate_reachable": any(it["id"] == "gate" and it["status"] == "ok" for it in result["items"])}
+
+
+def _join_exit(decl: dict[str, Any], it: dict[str, Any]) -> str:
+    """向导前置检查一行: 「标记 标签: 详情  → 出口: …」(各语言各一份)。"""
+    from tools.aipos_cli.i18n import localize, supported_languages
+
+    item = _t(decl, "render.item", mark=it["mark"], label=it["label"], detail=it["detail"])
+    tail = _t(decl, "render.preflight_exit", exit=it["exit"])
+    return localize({code: "{item}{tail}" for code in supported_languages()}, {"item": item, "tail": tail},
+                    where=f"{_WHERE}.render.preflight_exit")

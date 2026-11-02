@@ -28,7 +28,8 @@ check_direct_invocation(__name__)
 
 _DECL_KEYS = ("unit_name", "managed_marker", "config_home", "environment_file", "environment", "module_argv",
               "handwritten_detect", "platforms", "path_check")
-_PATH_CHECK_KEYS = ("tools", "missing_note", "empty_note", "drift_note", "refresh_exit")
+_PATH_CHECK_KEYS = ("tools",)
+_WHERE = "config.schema.json gate_resident.texts"
 _PLATFORM_KEYS = ("kind", "unit_dir", "file_name", "suffix", "commands", "status_active")
 
 
@@ -48,7 +49,17 @@ def gate_resident_declaration() -> dict[str, Any]:
     for name, plat in (decl.get("platforms") or {}).items():
         if not isinstance(plat, dict) or any(k not in plat for k in _PLATFORM_KEYS):
             raise GateResidentError(f"config.schema.json gate_resident.platforms.{name} 未声明齐 {list(_PLATFORM_KEYS)}")
+    from tools.aipos_cli.i18n import surface_texts
+
+    surface_texts(decl.get("texts"), None, where=_WHERE)  # AIPOS-F277: 用户可见文案双语块(结构 / 占位 fail-closed)
     return decl
+
+
+def _t(key: str, decl: dict[str, Any] | None = None, /, **values: Any) -> str:
+    """AIPOS-F277: texts 双语块一条文案 → 双语渲染值(i18n.Localized; str 本身 = 缺省语言, JSON / 测试原文不变; 人读出口按用户语言取)。"""
+    from tools.aipos_cli.i18n import block_localize
+
+    return block_localize((decl or gate_resident_declaration())["texts"], key, values, where=_WHERE)
 
 
 def current_platform() -> str:
@@ -80,8 +91,7 @@ def platform_paths(*, platform: str | None = None, env: Mapping[str, str] | None
     plat_name = platform or current_platform()
     plat = (decl["platforms"] or {}).get(plat_name)
     if plat is None:
-        raise GateResidentError(f"门常驻不支持本平台 {plat_name!r}(config.schema gate_resident.platforms 已声明: "
-                                f"{sorted(decl['platforms'])}); 出口: 前台 `lybra serve start`")
+        raise GateResidentError(_t("status.unsupported_platform", decl, platform=repr(plat_name), declared=sorted(decl["platforms"])))
     values = _base_values(decl, env if env is not None else os.environ)
     values["file_name"] = _fill(plat["file_name"], values)
     unit_dir = Path(_fill(plat["unit_dir"], values))
@@ -293,7 +303,7 @@ def resident_status(*, platform: str | None = None, env: Mapping[str, str] | Non
         pp = platform_paths(platform=platform, env=env)
     except GateResidentError as exc:
         return {"supported": False, "platform": platform or current_platform(), "installed": False, "managed": False,
-                "active": None, "unit_path": None, "handwritten": [], "detail": str(exc)}
+                "active": None, "unit_path": None, "handwritten": [], "detail": exc.args[0] if exc.args else str(exc)}
     unit_path: Path = pp["unit_path"]
     installed = unit_path.is_file()
     managed = installed and _is_managed(unit_path, str(pp["decl"]["managed_marker"]))
@@ -319,43 +329,40 @@ def plan_install(workspace_root: Path, *, connection_json: str | None = None, st
     path = Path(unit["path"])
     refusals: list[dict[str, str]] = []
     notes: list[str] = []
-    pc = pp["decl"]["path_check"]
+    decl = pp["decl"]
     install_path = unit["values"]["install_path"]
     for key in unit["skipped_env"]:
-        notes.append(_fill(pc["empty_note"], {"key": key}))
+        notes.append(_t("path_check.empty_note", decl, key=key))
     path_tools = path_tool_report(install_path)
     for row in path_tools:
         if not row["resolved"]:
-            notes.append(_fill(pc["missing_note"], {"tool": row["executable"]}))
+            notes.append(_t("path_check.missing_note", decl, tool=row["executable"]))
     refresh: dict[str, Any] | None = None
     if path.exists():
         if _is_managed(path, str(pp["decl"]["managed_marker"])):
             installed_env = unit_environment(path, str(pp["plat"]["kind"]))
             unit_value = (installed_env or {}).get("PATH")
-            exit_line = f"要改参数: 先 `lybra serve uninstall --confirm` 再重装; 只看现状: `lybra serve status`"
+            exit_line = _t("plan.change_exit", decl)
             if installed_env is None or unit_value != unit["environment"].get("PATH"):
-                shown = "读不出" if installed_env is None else (unit_value if unit_value is not None else "未写 PATH")
+                shown = (_t("path_check.unreadable", decl) if installed_env is None else
+                         (unit_value if unit_value is not None else _t("path_check.no_path", decl)))
                 refresh = {"unit_value": unit_value, "current_value": unit["environment"].get("PATH"),
-                           "exit": _fill(pc["refresh_exit"], {"install_confirm": install_command(ws, "confirm")}),
+                           "exit": _t("path_check.refresh_exit", decl, install_confirm=install_command(ws, "confirm")),
                            "unit_tools": path_tool_report(install_path, unit_value or "")}
-                notes.append(_fill(pc["drift_note"], {"unit_path": str(path), "unit_value": shown,
-                                                      "current_value": unit["environment"].get("PATH") or "(空)"}))
+                notes.append(_t("path_check.drift_note", decl, unit_path=str(path), unit_value=shown,
+                                current_value=unit["environment"].get("PATH") or _t("path_check.empty", decl)))
                 exit_line = refresh["exit"]
-            refusals.append({"code": "UNIT_EXISTS_MANAGED",
-                             "reason": f"已存在同名单元 {path}(本命令先前生成), 不覆盖",
-                             "exit": exit_line})
+            refusals.append({"code": "UNIT_EXISTS_MANAGED", "reason": _t("plan.exists_managed", decl, path=path), "exit": exit_line})
         else:
-            refusals.append({"code": "UNIT_EXISTS_FOREIGN",
-                             "reason": f"已存在同名文件 {path}, 不是本命令生成(无管理标记), 不覆盖、不接管",
-                             "exit": "保留它(手写常驻继续用), 或自行停用并移走该文件后再装"})
+            refusals.append({"code": "UNIT_EXISTS_FOREIGN", "reason": _t("plan.exists_foreign", decl, path=path),
+                             "exit": _t("plan.exists_foreign_exit", decl)})
     hand = handwritten_units(platform=unit["platform"], env=env)
     for h in hand:
-        notes.append(f"检测到已有手写常驻单元 {h['name']}({h['path']}), 本命令不接管")
+        notes.append(_t("plan.handwritten_note", decl, name=h["name"], path=h["path"]))
     if hand:
         refusals.append({"code": "HANDWRITTEN_UNIT_PRESENT",
-                         "reason": "单元目录已有手写常驻门单元: " + ", ".join(h["name"] for h in hand)
-                                   + "; 再装一个会与其争同一端口, --confirm 拒",
-                         "exit": "保留手写单元(门已常驻, 无需本命令), 或先停用并移走它后再 install --confirm"})
+                         "reason": _t("plan.handwritten_refusal", decl, names=", ".join(h["name"] for h in hand)),
+                         "exit": _t("plan.handwritten_exit", decl)})
     commands = [[_fill(a, unit["values"]) for a in argv] for argv in pp["plat"]["commands"]["install"]]
     status_cmd = [_fill(a, unit["values"]) for a in pp["plat"]["commands"]["status"]]
     return {"operation": "serve_install", "platform": unit["platform"], "kind": pp["plat"]["kind"], "unit_path": unit["path"],
@@ -401,7 +408,7 @@ def install(workspace_root: Path, *, confirm: bool, connection_json: str | None 
         plan["ok"] = False
         plan["refusals"].append({"code": "SERVICE_COMMAND_FAILED",
                                  "reason": f"`{shlex.join(failed['argv'])}` exit {failed['returncode']}: {failed['stderr'] or failed['stdout']}",
-                                 "exit": f"单元文件已写 {path}; 按上文报错修好后 `lybra serve uninstall --confirm` 清理再重装"})
+                                 "exit": _t("plan.command_failed_exit", path=path)})
     else:
         plan["ok"] = True
     return plan
@@ -417,13 +424,13 @@ def uninstall(*, confirm: bool, platform: str | None = None, env: Mapping[str, s
                               "unit_path": str(path), "commands": commands + after, "refusals": [], "notes": []}
     if not path.exists():
         result.update(ok=True, installed=False)
-        result["notes"].append(f"未安装: {path} 不存在, 无事可做")
+        result["notes"].append(_t("plan.not_installed", path=path))
         return result
     result["installed"] = True
     if not _is_managed(path, str(pp["decl"]["managed_marker"])):
         result["ok"] = False
-        result["refusals"].append({"code": "UNIT_NOT_MANAGED", "reason": f"{path} 不是本命令生成(无管理标记), 不删",
-                                   "exit": "手写单元请自行停用与移除"})
+        result["refusals"].append({"code": "UNIT_NOT_MANAGED", "reason": _t("plan.not_managed", path=path),
+                                   "exit": _t("plan.not_managed_exit")})
         return result
     if not confirm:
         result["ok"] = True
@@ -438,84 +445,90 @@ def uninstall(*, confirm: bool, platform: str | None = None, env: Mapping[str, s
     result["removed"] = str(path)
     bad = [r for r in ran if r["returncode"] != 0]
     if bad:
-        result["notes"].append("停用命令有非零退出(文件已删): " + "; ".join(f"`{shlex.join(r['argv'])}` exit {r['returncode']}" for r in bad))
+        result["notes"].append(_t("plan.disable_failed", commands="; ".join(f"`{shlex.join(r['argv'])}` exit {r['returncode']}" for r in bad)))
     result["ok"] = True
     return result
 
 
-def render_resident_report(report: dict[str, Any]) -> str:
-    """install / uninstall 人读唯一出口。"""
+def render_resident_report(report: dict[str, Any], lang: str | None = None) -> str:
+    """install / uninstall 人读唯一出口。AIPOS-F277: lang = 用户语言(i18n.resolve_language; 缺省 = 缺省语言, 与改前逐字相同)。"""
+    from tools.aipos_cli.i18n import lines_in
+
     op, phase = report.get("operation"), report.get("phase")
-    lines = [f"[{op} · {'预演(零写入)' if phase == 'dry_run' else '确认'}] 平台 {report.get('platform')}  单元 {report.get('unit_path')}"]
+    lines = [_t("report.head", op=op, phase=_t("report.phase_dry_run" if phase == "dry_run" else "report.phase_confirm"),
+                platform=report.get("platform"), unit_path=report.get("unit_path"))]
     if op == "serve_install":
-        lines.append(f"工作区(门 --workspace-root): {report.get('workspace_root')}")
-        lines.append(f"home 根(LYBRA_HOME_ROOT): {report.get('home_root')}(来源: {report.get('home_root_source')})")
-        lines.append(f"代码根: {report.get('code_root')}")
-        lines.append(f"环境文件(可选, 只引用不创建): {report.get('environment_file')}")
+        lines.append(_t("report.workspace", workspace_root=report.get("workspace_root")))
+        lines.append(_t("report.home_root", home_root=report.get("home_root"), source=report.get("home_root_source")))
+        lines.append(_t("report.code_root", code_root=report.get("code_root")))
+        lines.append(_t("report.environment_file", environment_file=report.get("environment_file")))
         if phase == "dry_run":
             lines.extend(_render_path_section(report))
-            lines.append(f"── 将写入 {report.get('unit_path')} 全文 ──")
+            lines.append(_t("report.unit_text_head", unit_path=report.get("unit_path")))
             lines.extend(str(report.get("unit_text") or "").rstrip("\n").splitlines())
-            lines.append("── 全文完 ──")
+            lines.append(_t("report.unit_text_tail"))
     cmds = report.get("commands") or []
     if cmds and phase == "dry_run":
-        lines.append("将执行的命令:")
+        lines.append(_t("report.commands"))
         lines.extend(f"  {shlex.join(c)}" for c in cmds)
     if op == "serve_install" and phase == "dry_run" and report.get("status_command"):
-        lines.append(f"确认后回读状态: {shlex.join(report['status_command'])}")
+        lines.append(_t("report.status_after", command=shlex.join(report["status_command"])))
     for note in report.get("notes") or []:
-        lines.append(f"⚠ {note}")
+        lines.append(_t("report.note", note=note))
     for item in report.get("ran") or []:
         lines.append(f"  $ {shlex.join(item['argv'])} → exit {item['returncode']}" + (f": {item['stderr']}" if item["stderr"] else ""))
     if op == "serve_install" and phase == "confirm" and report.get("status_output"):
         st = report["status_output"]
-        lines.append(f"回读状态: `{shlex.join(st['argv'])}` → exit {st['returncode']} {st['stdout'][:200]}"
-                     + ("(在跑)" if report.get("active") else "(未在跑)"))
+        lines.append(_t("report.readback", command=shlex.join(st["argv"]), code=st["returncode"], stdout=st["stdout"][:200],
+                        state=_t("report.readback_running" if report.get("active") else "report.readback_stopped")))
     for ref in report.get("refusals") or []:
-        lines.append(f"✗ 拒 {ref['code']}: {ref['reason']}")
-        lines.append(f"  出口: {ref['exit']}")
+        lines.append(_t("report.refusal", code=ref["code"], reason=ref["reason"]))
+        lines.append(_t("report.refusal_exit", exit=ref["exit"]))
     if not report.get("refusals"):
         if op == "serve_install" and phase == "dry_run":
-            lines.append("预演无拒因; 确认写入并启用: 同一命令改 --confirm")
+            lines.append(_t("report.install_clear"))
         elif op == "serve_uninstall" and phase == "dry_run" and report.get("installed"):
-            lines.append("预演无拒因; 确认停用并删除: 同一命令改 --confirm")
-    return "\n".join(lines)
+            lines.append(_t("report.uninstall_clear"))
+    return "\n".join(lines_in(lines, lang))
 
 
 def _render_path_section(report: dict[str, Any]) -> list[str]:
     """AIPOS-F268 件①: 预演里的单元 PATH 一节(逐项目录 + pi / node / git 解析到的目录是否在内; 已装单元 PATH 不一致另列)。"""
     entries = report.get("path_entries") or []
     if report.get("unit_env_path"):
-        lines = [f"单元 PATH(取自安装者当前 PATH, 共 {len(entries)} 项, 原样写入):"]
+        lines = [_t("report.path_head", count=len(entries))]
         lines.extend(f"  {i}. {entry}" for i, entry in enumerate(entries, 1))
     else:
-        lines = ["单元 PATH: 不写(安装者 PATH 为空, 门进程沿用服务管理器缺省)"]
+        lines = [_t("report.path_none")]
     for row in report.get("path_tools") or []:
         if row["resolved"]:
-            mark = "在单元 PATH 内 ✓" if row["in_unit_path"] else "不在单元 PATH 内 ⚠"
-            lines.append(f"  {row['executable']} → {row['resolved']}(目录 {row['dir']}: {mark})")
+            mark = _t("report.tool_in" if row["in_unit_path"] else "report.tool_out")
+            lines.append(_t("report.tool_row", executable=row["executable"], resolved=row["resolved"], dir=row["dir"], mark=mark))
         else:
-            lines.append(f"  {row['executable']} → 安装者 PATH 里找不到 ⚠")
+            lines.append(_t("report.tool_missing", executable=row["executable"]))
     refresh = report.get("path_refresh")
     if refresh:
-        lines.append(f"已装单元 PATH: {refresh['unit_value'] if refresh['unit_value'] is not None else '(未写 PATH)'}")
+        lines.append(_t("report.installed_path", value=refresh["unit_value"] if refresh["unit_value"] is not None
+                        else _t("report.installed_path_none")))
         for row in refresh.get("unit_tools") or []:
             if row["resolved"]:
-                lines.append(f"  {row['executable']} 目录 {row['dir']}: "
-                             + ("在已装单元 PATH 内 ✓" if row["in_unit_path"] else "不在已装单元 PATH 内 ⚠"))
-        lines.append(f"出口(重装以刷新): {refresh['exit']}")
+                lines.append(_t("report.installed_tool_row", executable=row["executable"], dir=row["dir"],
+                                mark=_t("report.installed_tool_in" if row["in_unit_path"] else "report.installed_tool_out")))
+        lines.append(_t("report.refresh_exit", exit=refresh["exit"]))
     return lines
 
 
-def render_resident_status_line(status: dict[str, Any]) -> str:
-    """serve status 常驻一节(一行 + 手写单元)。"""
+def render_resident_status_line(status: dict[str, Any], lang: str | None = None) -> str:
+    """serve status 常驻一节(一行 + 手写单元)。AIPOS-F277: lang = 用户语言。"""
+    from tools.aipos_cli.i18n import lines_in
+
     if not status.get("supported"):
-        return f"门常驻: 本平台不支持({status.get('detail')})"
+        return lines_in([_t("status.unsupported", detail=status.get("detail"))], lang)[0]
     if status.get("installed"):
-        state = "在跑" if status.get("active") else "未在跑"
-        owner = "本命令生成" if status.get("managed") else "同名但非本命令生成"
-        line = f"门常驻: 已安装 {status['unit_path']}({owner}; {state})"
+        state = _t("status.running" if status.get("active") else "status.stopped")
+        owner = _t("status.managed" if status.get("managed") else "status.unmanaged")
+        line = _t("status.installed", unit_path=status["unit_path"], owner=owner, state=state)
     else:
-        line = f"门常驻: 未安装({status['unit_path']} 不存在)"
-    extra = [f"  已有手写常驻单元 {h['name']}({h['path']}), 本命令不接管" for h in status.get("handwritten") or []]
-    return "\n".join([line, *extra])
+        line = _t("status.absent", unit_path=status["unit_path"])
+    extra = [_t("status.handwritten", name=h["name"], path=h["path"]) for h in status.get("handwritten") or []]
+    return "\n".join(lines_in([line, *extra], lang))
