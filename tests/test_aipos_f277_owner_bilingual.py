@@ -33,8 +33,8 @@ CJK = re.compile(r"[　-〿㐀-䶿一-鿿＀-￯]+")
 PROJECT = "demo"
 #: 改前(main a1d7fafc4ff4)同一场景缺省语言输出, 归一化后的 sha256(F277_RECORD=1 跑本文件 test_zh_output_unchanged 打印)
 # AIPOS-F280 件②: 向导第 3 步 grant sign 加 --project <项目>(门的显式目标项目)与 PROJECT_AMBIGUOUS 出口行, guide / guide_skip / guide_after_new 三份摘要随之更新(其余逐字不变)
-# AIPOS-F282 件②: 向导第 4 / 6–8 步 enroll-deliver 加 --project <项目> 与 PROJECT_AMBIGUOUS 出口行, 同三份摘要随之更新(其余逐字不变);
-# 另 _norm 加裸日期归一化(收件箱事项「到 <按当天推出的到期日>」逢跨日即红, 11-03 main 同样复现), inbox / inbox_decided 两份摘要按 F277_RECORD 重录(main 同一归一化下与本分支相等)
+# AIPOS-F282 件②: 向导第 4 / 6–8 步 enroll-deliver 加 --project <项目> 与 PROJECT_AMBIGUOUS 出口行, 同三份摘要随之更新(其余逐字不变;
+# 裸日期归一化与 inbox 三份摘要以 AIPOS-F283 为准, 合并 main 时去掉本卡重复的那份归一化)
 ZH_DIGESTS = {
     "setup_check": "074cb9af4537dd71b6a61ec83dddd776dc543f130b56490200d19ebf5a72aff4",
     "guide": "5607b089cd469358716b263ee8d7f7d300c64ff21aa39784362b81a0cbf44e69",
@@ -44,8 +44,10 @@ ZH_DIGESTS = {
     "onboarding_check": "8f292a54605a675404291be970436a75ba6bfd07eeaae2199202a7eeff6797a1",
     "serve_install": "ae07452642661b7a10b456b5a4953d4a120c3ccb80e39b05a77842e3e945e899",
     "serve_uninstall": "5bfe047723acb8fb7fe96915db3e37af397a8132c8fbbf4957c705411dc24792",
-    "inbox": "9240db8cc9a6aee6ac7f09bc798c6cab252ea971465b19a884ab5d6457360a07",
-    "inbox_decided": "b4df9a78e275a044ee390029b0070e8be681a97f1292e15691931acdc251d624",
+    # AIPOS-F283 件①: 「卡待 Owner」要定改一句话决定、原文降为「详情」行, 选项行给推荐的选项标【推荐】; 另 _norm 归一裸日期(授权请求缺省到期 =
+    # 今天 + N 天, 原摘要次日即不成立); inbox / inbox_decided / inbox_stale 三份摘要随之更新(遗留视图除日期归一外逐字不变)
+    "inbox": "d4b9f7c9b0e06b06cb5cfc5848e42a725fdb34793731d23c21a7f92618b3ac1e",
+    "inbox_decided": "a95e629bfeb2a11762eda8ed5d96f25b6d884a78f87ff01331955ef4a3e9934b",
     "inbox_stale": "45776ecbc1cf02f989b0636c52578531ea21fea6bb3bf2f6f40fd4fe39ecbcb6",
 }
 
@@ -85,9 +87,9 @@ def _norm(text: str, tmp: Path) -> str:
     out = out.replace(sys.executable, "<PY>").replace(".".join(map(str, sys.version_info[:3])), "<PYVER>")
     out = out.replace(socket.gethostname().split(".")[0], "<HOST>")
     out = re.sub(r"\d{4}-\d\d-\d\dT[0-9:.]+(\+00:00|Z)?", "<TS>", out)
+    # AIPOS-F283: 裸日期也归一(授权请求缺省到期 = 今天 + N 天, 原摘要只在录制当天成立, 次日 main 同样不过)
+    out = re.sub(r"(?<!\d)\d{4}-\d\d-\d\d(?!\d)", "<DAY>", out)
     out = re.sub(r"\d{8}_", "<DATE>_", out)
-    # AIPOS-F282: 裸日期(按当天推出的到期日「到 YYYY-MM-DD」、决策日志文件名日期等)随运行日变 = 摘要逢跨日即红; 归一化为 <DAY>
-    out = re.sub(r"(?<![0-9])\d{4}-\d\d-\d\d(?![0-9T])", "<DAY>", out)
     out = re.sub(r"OI-[0-9a-f]+", "OI-X", out)
     return re.sub(r"owner-inbox-[0-9a-f]+", "owner-inbox-X", out)
 

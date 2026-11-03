@@ -172,9 +172,11 @@ def test_item1_inbox_aggregates_two_projects_sorted_by_blocking(rig):
     assert a1["source"] == DRIVER_A and "GATE_DESIGN_FORK" in a1["ask"] and "门拒" in a1["ask"]
     assert [o["key"] for o in a1["options"]] == ["continue", "rework", "pause"]
     b2 = next(i for i in data["items"] if i.get("task_id") == "BETA-2")
-    assert b2["rank"] == 1 and b2["source"] == DRIVER_B and "依赖方接口未定" in b2["ask"]
+    # AIPOS-F283 件①: 「卡待 Owner」要定 = 一句话决定(声明模板), 阻塞原因原文降为 detail
+    assert b2["rank"] == 1 and b2["source"] == DRIVER_B and "依赖方接口未定" in b2["detail"] and "要你定" in b2["ask"]
     # AIPOS-F170 件①: blocked 卡经 Owner 裁决可撤(既有 withdraw 口带裁决引用)/ 冻结为历史(既有 freeze-legacy 口); 仍不给 release
-    assert [o["key"] for o in b2["options"]] == ["withdraw", "freeze_legacy", "new_card", "acknowledge"]
+    # AIPOS-F283 件②: blocked 卡追加「补齐前置后重开」(顾问执行)
+    assert [o["key"] for o in b2["options"]] == ["reopen", "withdraw", "freeze_legacy", "new_card", "acknowledge"]
     env = next(i for i in data["notices"] if i["category"] == "envelope_warning")
     assert "lybra envelope mint" in env["recommend"] and env["source"] == DRIVER_B
     assert f"--home-root {rig['home']}" in a1["decide_command"]

@@ -1,7 +1,7 @@
 # Lybra Quick Start — from install to your first card closed
 
 This walkthrough takes a **new machine** to a closed first card with the **current** flow: an
-eleven-step onboarding guide, one project standing authorization, advisor-driven loops,
+eleven-step onboarding guide, one project standing grant, advisor-driven loops,
 sub-agents for code, **pi** workstations for everything else. All names below are examples —
 replace `my-project`, `advisor.my-project.h1`, … with your own.
 
@@ -28,6 +28,21 @@ Executors and auditors never talk to the gate — the product does every gate ac
 - The advisor must be able to run local commands on the governance machine (or ssh into it).
 
 `lybra setup check` (Step 1) verifies all of this in one command.
+
+## Step 0 — Choose your language (optional)
+
+Lybra speaks English and 简体中文 on its Owner-facing surfaces — the board, the Owner decision
+inbox and the key commands. After Step 1's install, set your language once; it applies to every
+`lybra` command and to the board:
+
+```bash
+lybra config set-language en
+```
+
+One-off overrides: any command accepts `--lang <zh|en>`, and `LYBRA_LANG` works as an environment
+variable. Precedence: `--lang` > `LYBRA_LANG` > the `set-language` home config
+(`~/.lybra/config.json`, key `language`) > the default (Chinese). The board pages also carry
+their own language toggle.
 
 ## Step 1 — Install and self-check
 
@@ -122,7 +137,7 @@ lybra serve --workspace-root ~/.lybra/projects/my-project install --confirm
   `launchctl bootout gui/<uid>/<label>` on macOS); disable and remove what install built with
   `uninstall --confirm`.
 
-## Step 4 — Sign the project standing authorization (Owner)
+## Step 4 — Sign the project standing grant (Owner)
 
 **Guide step 3 — the first of the Owner's two one-time actions.** One signature covers the whole
 project — lanes, task modes, drivers, hosts, launch permission and hard bounds — replacing
@@ -140,6 +155,11 @@ lybra project grant sign my-project --grant-lane app --task-mode code --task-mod
   drive; `--launch-harness pi` allows the loop to launch pi workstations (without it, workstations
   start via `/go` only); `--max-tasks` / `--expires-at` hard bounds; `--host` binds a lane to a host.
 - Revise later: `lybra project grant extend` / `lybra project grant revoke`.
+- Prefer the board? The Owner can sign this first grant on the board's onboarding page too —
+  **Sign the first project grant** (an Owner login session) previews the grant, then confirms:
+  the same implementation as `lybra project grant sign`. An Owner credential works across
+  projects: with an explicit target project it may act on any project registered under the same
+  home root, so a second project created on the board signs its grant the same way.
 
 ## Step 5 — Enroll the advisor and the three workstations
 
@@ -191,6 +211,12 @@ lybra roles enroll-deliver --role executor --instance exec.my-project.h1 --gover
   pi executor); `--executor-mode subagent` + `--harness claude-code` enrolls the **sub-agent
   executor** (code cards) inside the advisor's session. A remote workstation on another host
   records `--harness-host` at enrollment (the guide handles it).
+- Prefer the board? The Owner can also sign enrollment codes on the onboarding page —
+  **Sign enrollment code: `<instance>`** (an Owner login session) previews what the code will
+  bind — role, instance, validity — then shows the code exactly once after confirming (never
+  logged): the same implementation as `lybra roles enroll-code`. The panel also prints the
+  receiver's one-line redemption command (`lybra roles enroll` — the code filled in) for them
+  to run in their own session.
 
 ## Step 6 — Declare the division of execution
 
@@ -204,6 +230,10 @@ lybra project workstation-plan my-project
 
 Preview without `--confirm`. `workstation-plan` prints the read-only workstation plan (the same view
 the onboarding guide shows).
+
+- Prefer the board? **Set execution mode** and **Set pi model** on the onboarding page (an Owner
+  login session, preview → confirm) are the same implementations as `set-execution` /
+  `set-model`; the pi model can be revised later (see Declarations).
 
 ## Step 7 — Sync the workstations and self-check
 
@@ -237,7 +267,7 @@ lybra loop --task-id MYPROJ-1
 - `draft create` writes a draft under `5_tasks/drafts/` from your JSON card (`--help` lists every
   field; CLI flags like `--title` work without JSON). `validate` checks frontmatter and queue
   consistency; `publish` moves it into the queue with the state machine.
-- `lybra loop --task-id MYPROJ-1` finds the project standing authorization (no envelope juggling)
+- `lybra loop --task-id MYPROJ-1` finds the project standing grant (no envelope juggling)
   and advances the card: claim (the gate builds the card worktree) → executor works and returns →
   audit dispatch → pi auditor → verdict → finalize → close, landing governance commits.
 - For a **code card**, the loop tells the advisor to spawn its sub-agent and hand it the
@@ -339,4 +369,5 @@ local init: `lybra home git-init --home-root ~/.lybra/projects`, then the Owner 
 pushes the initial commit.
 
 **Switch the board language.** Use the language toggle on the board page — English / 简体中文 both
-built in.
+built in. To set the language once for every command and the board: `lybra config set-language`
+(Step 0).

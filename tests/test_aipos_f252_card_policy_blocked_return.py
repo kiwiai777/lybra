@@ -242,7 +242,8 @@ def test_item2_blocked_return_loop_blocks_card_inbox_and_resume_exit(f90_rig, co
     items = [i for i in _inbox(r.gov) if i.get("task_id") == TASK]
     _show("---- 件② Owner 收件箱 ----\n" + "\n".join(f"{i['item_id']} [{i['category']}] {i['subject']}: {i['ask']}" for i in items))
     assert [i["category"] for i in items] == ["needs_owner_card"]  # 复用既有事项, 同卡不重复列 loop 事项
-    assert "queue reopen" in items[0]["ask"] and "交回声明阻塞" in items[0]["ask"]
+    # AIPOS-F283 件①: 要定 = 一句话决定; 交回技术原文(含续跑出口)降为 detail
+    assert "queue reopen" in items[0]["detail"] and "交回声明阻塞" in items[0]["detail"] and "要你定" in items[0]["ask"]
     rc, sout, _err = f90_cli(["loop", "status", "--task-id", TASK, "--workspace-root", str(r.gov), "--json"])
     na = json.loads(sout)["next_action"]
     _show(f"[件② loop status] action={na['action']} reason={na['reason']}")

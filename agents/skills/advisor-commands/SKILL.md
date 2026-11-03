@@ -28,7 +28,7 @@ role: advisor
 
 | 阶段 | 职责 | 主要命令 |
 |------|------|----------|
-| **接入(每项目一次)** | 新项目从零到首卡按十一步向导走: 向导开头即跑七项安装自检(任何 ✗ 退出码 1 自带出口), 第 2 步后插起门步(前台 `serve start` 或常驻 `serve install --dry-run`→`--confirm`, 手写单元只报告不接管), Owner 一次性动作仅签常设授权与注册顾问两条; 也可由 Owner 在看板接入页「新建项目」直接建(仅 Owner 会话: 预演→确认, 与 `lybra project new` 同一实现+落账, 建成后接入清单标出下一步, 继续照向导做) | `lybra onboarding guide <项目名> --repo <仓>=<路径>`, 逐步核验 `lybra onboarding check <项目名> --step <0-11>`(`--step 0` = 自检 ✗ 项) |
+| **接入(每项目一次)** | 新项目从零到首卡按十一步向导走: 向导开头即跑七项安装自检(任何 ✗ 退出码 1 自带出口), 第 2 步后插起门步(前台 `serve start` 或常驻 `serve install --dry-run`→`--confirm`, 手写单元只报告不接管), Owner 一次性动作仅签常设授权与注册顾问两条; 也可由 Owner 在看板接入页「新建项目」直接建(仅 Owner 会话: 预演→确认, 与 `lybra project new` 同一实现+落账, 建成后接入清单标出下一步, 继续照向导做)。Owner 侧接入动作看板接入页都能做: 签注册码(F270)、首签项目授权 / 执行方式 / pi 模型(F272), 同为预演→确认、与 CLI 同一实现, 不开终端 | `lybra onboarding guide <项目名> --repo <仓>=<路径>`, 逐步核验 `lybra onboarding check <项目名> --step <0-11>`(`--step 0` = 自检 ✗ 项) |
 | **N0 出卡** | 起草与发卡(卡挂路线图里程碑, AIPOS-F171) | `lybra draft create/publish`, `lybra queue amend/withdraw`, `lybra roadmap show/status/add-milestone/add-criterion/set/remove/verify` |
 | **推进** | **Owner 信封授权下, 一条命令把卡从当前节点推到 completed**(产物落盘自动 return→派审→裁决→finalize→close; agent 步只等产物; 信封 `launch_harnesses` 授权时 loop 在工位拉起 harness, 否则手工 `/go`, 见「两种开工模式」) | **`lybra loop --task-id <卡ID>`**(AIPOS-F73D; 替代逐步 `next --run`) |
 | **跟进(持续推进)** | Owner 说一次「推进 <lane>」后不等 Owner 推: 跑 loop → 有界等 → 按产品给的顾问下一动作处理, 只在 owner_needed 停(守则全文在顾问章程「持续推进守则」, 本 skill 不复述) | **`lybra loop status --task-id <卡ID> --wait <秒>`**(AIPOS-F136) |
@@ -317,7 +317,7 @@ lybra loop status --workspace-root <治理根> --json                          #
 
 **`advisor_fix` 用法**(AIPOS-F150 / F152 / F155; 怎么循环见顾问章程「持续推进守则」): 输出的 hint 是编号修法 + 末行续跑命令, 照做即可, 不问 Owner。
 例行清单只在 verbs.schema `lybra_loop_status.next_action.routine_rejections` 一处声明, 目前:
-- 门拒码 `BRANCH_WRONG_BASE`(交回时基线已前进)/ `MERGE_CONFLICT`(finalize 合入冲突): 派本卡执行体在卡工作树合入最新基线、解冲突、重测、更新交回 frontmatter, 然后末行命令续跑(走既有重审出口);
+- 门拒码 `BRANCH_WRONG_BASE`(交回时基线已前进)/ `MERGE_CONFLICT`(finalize 合入冲突): 派本卡执行体在卡工作树合入最新基线、解冲突、重测、更新交回 frontmatter, 然后末行命令续跑(走既有重审出口)。pi 执行工位撞上这类「修法执行方 = 执行体」的例行拒(交回步 / finalize 步)不必你派: loop 带返工要点自动重拉同一 pi 工位(AIPOS-F275 / F278, finalize 冲突重拉后走 verdict_stale 重交回→下一轮审计, 连败到声明次数自动升 owner_needed), `loop status` 会写明; 子 agent 执行体仍按上面派;
 - 门拒码 `REPO_MERGE_IN_PROGRESS`(同仓另一张卡正在合入): 不改卡, 等持锁卡合完后末行命令重跑;
 - 他卡部署了新版本: **执行步之间**(AIPOS-F241, 声明 verbs.schema `lybra_loop.deploy_consistency.step_reexec`)与**手工等待步**(AIPOS-F166, `wait_reexec`)一样, loop 自己换到新部署快照从当前推导点续跑(已落的步不重复; 运行记录旧运行 `deploy_reexec`、reexec 段 kind = step / wait, 新运行 `continues_run`), 不停、不用重跑; 结束原因 `deploy_changed` 只在连续换快照且其间未落任何一步达上限(`step_reexec.max_consecutive`, 防部署连环更新空转)或换快照不可行(新快照不可用 / 余步为 0 / exec 失败)时出现, 结束原文附原因, 末行命令重跑、从断点续做(本 loop 自己 finalize 的部署不触发它); 结束原因 `deploy_reexec` 只在新进程没接上时才是最近一次运行, 同样末行命令重跑;
 - 结束原因 `wait_timeout` 且本卡执行方式 = 顾问派子 agent(project.json `execution`, 或等待目标是子 agent 执行者接入; AIPOS-F156 / F157): 不找 Owner、不敲 `/go`——子 agent 仍在做就等它写完交回后末行命令重跑(可加大 `--max-wait`), 已终止或未派就按 `lybra kickoff --task-id <卡ID>` 的开工稿补派; pi 工位 / 手工工位的 `wait_timeout` 仍是 `owner_needed`。
@@ -339,6 +339,7 @@ lybra kickoff --task-id <卡ID> --workspace-root <治理根> --json     # 机读
 输出 = 一份自足开工稿: 身份实例、章程命令(会话在他机 = ssh 拉取式)、卡面路径、工作树 / 分支 / 基于哪个 main sha、承继来源、报告落点与 frontmatter 必填字段、
 车道与写权限边界、禁写清单(治理根除报告落点、其他项目根、工位、门写动作、pi)、硬规矩、草稿目录(project.json `paths.scratch_root`, 缺省系统临时目录, 不落治理根)、
 验证要求(本分支最终 tip 必跑全量; main 侧先查 `lybra regression baseline`, 按其输出三态处理(标签与处理以开工稿为准, AIPOS-F212), 并附开工稿生成时的现状一行(AIPOS-F188); 棘轮 / 证据复跑一致 / 长命令 run-long)、交回前残留进程检查、写完即止、末尾简短总结。**原样交给子 agent, 本卡特别说明追加在其后; 不再手写开工稿。**
+开工稿带一行**用户语言**(AIPOS-F276, 解析 = `--lang` > `LYBRA_LANG` > home 配置 > 缺省中文), 子 agent 照它对 Owner 说话; 顾问同样: Owner 用英文 = 你对 Owner 的一切转达 / 简报 / 收件箱请求一律用英文。
 拒(stderr 原文): 卡未认领 / 已结案 / 当前不该本角色动 / 产物已交(与工位 `/go` 同一判据)、实例章程不可取、工作树未建、草稿目录落在治理根内(给 set-paths 出口)。
 项目可声明: `lybra project set-paths <项目> --key scratch_root --value <治理根外绝对路径> --confirm`; project.json `test_contract.ratchet`(棘轮一句话)/ `test_contract.residual_processes`(交回前 pgrep 式样)。
 
@@ -766,6 +767,7 @@ lybra roles --workspace-root <治理根> enroll-code --role auditor --instance <
   --actor <你的顾问实例> --owner-authorization-ref <信封ID> --ttl 86400 --confirm     # 出码(只显示一次)
 ```
 `--actor` 取凭据规则同 `enroll-deliver`。注册码一次性、有时效; 只经输出的 paste_text 原样交接收方在其工位兑换, 不贴进聊天 / 文档(凭据不过手)。
+Owner 也可亲自在看板接入页签码(AIPOS-F270): 「签注册码:<实例>」预演→确认, 码只显示一次、不落日志, 与本命令同一实现; Owner 凭据带显式目标项目可对 home 根下任何已注册项目签码(AIPOS-F274)。
 
 #### 顾问会话在 Codex 与 Claude Code 之间切换(AIPOS-F243: `lybra roles redeclare` + 开局拉章程与技能)
 **何时用**:同一顾问实例换会话 harness(如 Codex 额度吃紧改用同机 Claude Code, 之后再切回)。同一实例、同一凭据(在治理根 `.lybra/`),

@@ -37,13 +37,18 @@ Three principles are welded in:
   independent auditor judges it. **Executors and auditors never touch the gate** — every gate action
   (claim, return, dispatch, verdict, finalize, close) is done by the product.
 
+Owner-facing surfaces are bilingual — the board, the Owner decision inbox and the key commands
+ship in English and 简体中文 alike — and the Owner can finish the onboarding actions on the board
+itself: new project, enrollment codes, the first project grant, execution mode and pi model, no
+terminal needed.
+
 > The model isn't the bottleneck. The harness is.
 
 ## Roles and who does what
 
 | Who | Does |
 |---|---|
-| **Owner** | Starts the gate (`lybra serve`), issues enrollment, signs the **project standing authorization** once per project (`lybra project grant sign`), decides what the inbox brings (`lybra owner inbox`), and watches the board. No per-card signatures — one grant covers the project's lanes, task modes, drivers, hosts and hard bounds. |
+| **Owner** | Starts the gate (`lybra serve`), issues enrollment, signs the **project standing grant** once per project (`lybra project grant sign`), decides what the inbox brings (`lybra owner inbox`), and watches the board. No per-card signatures — one grant covers the project's lanes, task modes, drivers, hosts and hard bounds. |
 | **Advisor** — a local command-line agent session (Claude Code by default, Codex supported; `--harness codex`) | Onboards the project, drafts and publishes cards, and advances each card with **`lybra loop`**, following it with `lybra loop status --task-id <id> --wait <seconds>` and stopping only when the product says the Owner is needed. |
 | **Code cards → advisor-spawned sub-agent** | The advisor drives its own sub-agent with the self-contained brief from `lybra kickoff --task-id <id>`; the sub-agent commits on the card branch and writes the report. |
 | **Non-code cards → pi executor workstation** | Every docs / governance / config / validation card goes to a dedicated **pi** workstation. The loop launches pi there (when the authorization allows it) or the Owner presses `/go`. |
@@ -73,6 +78,10 @@ shows the same result (a one-line ✓N · ✗N · ⚠N summary on the board home
 links to it); with a resident gate, its gate-service item also checks the installed unit's `PATH`
 covers pi's directory.
 
+Lybra speaks to the Owner in English and 简体中文: `lybra config set-language en` sets your
+language once for every command and the board (one-off override: `--lang`, or the `LYBRA_LANG`
+environment variable; precedence in the [Quick start](QUICKSTART.md)).
+
 ## How a project runs
 
 **1. Onboard a project** — the product prints every step for *your* project, in order, with
@@ -87,7 +96,7 @@ lybra project set-repos my-project --repo app=~/code/my-project --confirm
 
 Every command that writes `project.json` (`set-repos`, `set-execution`, `set-model`, …) is two-phase:
 `--dry-run` (default) previews the diff and validation with zero writes; `--confirm` writes and lands
-it in the governance repository. `lybra onboarding check my-project --step 8` diagnoses any step.
+it in the governance repo. `lybra onboarding check my-project --step 8` diagnoses any step.
 A Codex advisor session: `lybra onboarding guide my-project --advisor-harness codex`.
 
 **2. Authorize and divide** — one Owner signature per project, then declare who executes what:

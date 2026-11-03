@@ -3543,9 +3543,9 @@ def retract_owner_ask(governance_root: Path, task_id: str, *, actor: str | None 
     if dest.get("item_id") and dest.get("merged"):  # 并入的返工上限事项本身仍待定(与本请求无关), 不按「已不再列出」核
         report["inbox"] = {"item_id": dest["item_id"], "merged": True, "listed": None, "project": None, "errors": []}
     elif dest.get("item_id"):
-        from tools.aipos_cli.owner_inbox import collect_project_inbox
+        from tools.aipos_cli.owner_inbox import NOTE_CATEGORIES, collect_project_inbox
 
-        inbox = collect_project_inbox(root, categories=("loop_owner_needed", "rework_limit"))
+        inbox = collect_project_inbox(root, categories=NOTE_CATEGORIES)
         listed = any(i["item_id"] == dest["item_id"] for i in [*inbox["items"], *(inbox.get("notices") or [])])
         report["inbox"] = {"item_id": dest["item_id"], "listed": listed, "project": inbox["project"],
                            "errors": [f"{e['source']}: {e['error']}" for e in inbox["errors"]]}
@@ -3590,10 +3590,11 @@ def _note_destination(root: Path, task_id: str, meta: dict[str, Any], owner_ask:
 
 
 def _note_inbox_check(root: Path, destination: dict[str, Any]) -> dict[str, Any]:
-    """AIPOS-F222 件②: 写入后经收件箱同一收集(owner_inbox.collect_project_inbox, 只算 loop / 返工上限两类)核对该事项已列出。"""
-    from tools.aipos_cli.owner_inbox import collect_project_inbox
+    """AIPOS-F222 件②: 写入后经收件箱同一收集(owner_inbox.collect_project_inbox, 只算顾问请求可判归的类别 NOTE_CATEGORIES)核对该事项已列出。
+    AIPOS-F283 件③: 判归「卡待 Owner」事项的请求(交回阻塞卡等)同核, 原先只收 loop / 返工上限两类 = 该类请求恒报 inbox_missing。"""
+    from tools.aipos_cli.owner_inbox import NOTE_CATEGORIES, collect_project_inbox
 
-    inbox = collect_project_inbox(root, categories=("loop_owner_needed", "rework_limit"))
+    inbox = collect_project_inbox(root, categories=NOTE_CATEGORIES)
     listed = any(item["item_id"] == destination["item_id"] for item in inbox["items"])
     return {**destination, "listed": listed, "errors": [f"{e['source']}: {e['error']}" for e in inbox["errors"]],
             "project": inbox["project"]}
@@ -3607,8 +3608,10 @@ def _inbox_category_label(category: Any) -> str:
 
 def _note_inbox_line(inbox: dict[str, Any], texts: dict[str, Any], *, confirmed: bool) -> str:
     """loop note 回显「进哪个收件箱事项」(texts.inbox_will / inbox_listed / inbox_missing)。"""
+    # AIPOS-F283 件③: 并入的事项按类别措辞(merged_part_by_category; 无 = merged_part, 返工上限事项)
+    merged = str((texts.get("merged_part_by_category") or {}).get(str(inbox.get("category") or "")) or texts["merged_part"])
     values = {"item_id": inbox.get("item_id") or "?", "category_label": inbox.get("category_label") or "?",
-              "merged_part": str(texts["merged_part"]) if inbox.get("merged") else ""}
+              "merged_part": merged if inbox.get("merged") else ""}
     if not confirmed:
         return str(texts["inbox_will"]).format(**values)
     if inbox.get("listed") and inbox.get("legacy") and texts.get("inbox_legacy"):  # AIPOS-F232 件①: 旧请求降为第二档告知

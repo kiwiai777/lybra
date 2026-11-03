@@ -24,7 +24,8 @@ VERB = "lybra_owner_recommend"
 _KEYS = ("record_kind", "record_type", "landing_command", "owner_actor", "reason_max_chars", "hash_basis", "actions", "renew_days_cap",
          "defaults", "texts", "reject_codes", "exit_codes")
 _ACTIONS = ("decide", "verify", "renew_envelope", "extend_authorization", "sign_grant")
-_APPLIES = {"envelope": "renew_envelope", "authorization": "extend_authorization", "grant_request": "sign_grant"}
+#: AIPOS-F283 件②: return_blocked = 交回阻塞卡的「卡待 Owner」事项(缺省推荐补齐前置后重开; 动作 decide = 记录 Owner 意向, F226 写例外③同一路径)
+_APPLIES = {"envelope": "renew_envelope", "authorization": "extend_authorization", "grant_request": "sign_grant", "return_blocked": "decide"}
 _TEXTS = ("preview", "written", "inbox_line", "by_advisor", "by_default")
 _EXITS = ("ok", "refused", "usage", "landing_failed", "not_found")
 
@@ -47,7 +48,7 @@ class RecommendRefused(ValueError):
 
 def recommend_declaration() -> dict[str, Any]:
     """verbs.schema verbs.lybra_owner_recommend(fail-closed): 键齐; reason_max_chars 正整数; actions 恰为已实现的四种; defaults 每条
-    category ∈ 收件箱类别、applies_to ∈ {envelope, authorization, grant_request} 且 action 与之对应、choice ∈ 收件箱选项、reason 非空; texts / exit_codes 齐。"""
+    category ∈ 收件箱类别、applies_to ∈ {envelope, authorization, grant_request, return_blocked} 且 action 与之对应、choice ∈ 收件箱选项、reason 非空; texts / exit_codes 齐。"""
     from tools.aipos_cli.owner_inbox import inbox_declaration
     from tools.schema_loader import SchemaLoadError, load_schema
 
@@ -159,19 +160,31 @@ def recommendation_for(governance_root: str | Path, item: dict[str, Any], *, ind
 def default_recommendation(governance_root: Path, item: dict[str, Any], decl: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """按类别声明的产品缺省(defaults): 信封将尽 = 按原范围续签(天数 = 原有效期天数, 张数 = 原额度; 须为当前在用且可续); 项目授权将尽 =
     按原范围扩大(到期 = 现在 + 原有效期天数, 总卡数 = 已用 + 原总卡数); 授权用尽 / 不覆盖(带 grant 建议的授权请求)= 按建议签发
-    (请求体 owner_inbox.grant_request_payload, 看板「待授权请求」卡同一构造)。其余类别无缺省 = None。参数即看板一键签发请求体
-    (F172 写例外①同一实现: mode renew / authorization extend / new; request_item = 本事项 ID)。"""
+    (请求体 owner_inbox.grant_request_payload, 看板「待授权请求」卡同一构造); AIPOS-F283 件②: 交回阻塞卡的「卡待 Owner」事项
+    (facts.return_outcome = blocked)= 补齐前置后重开(动作 decide, 无参数), 顾问 loop note 已写建议(facts.advisor_recommend)= 不用缺省。
+    其余类别无缺省 = None。参数即看板一键签发请求体(F172 写例外①同一实现: mode renew / authorization extend / new; request_item = 本事项 ID)。"""
     from tools.aipos_cli.clock import iso_z, utc_now
     from tools.aipos_cli.owner_inbox import grant_request_payload, inbox_declaration
 
     decl = decl or recommend_declaration()
     facts = item.get("facts") or {}
-    applies = ("grant_request" if isinstance(item.get("grant"), dict) else "authorization" if "authorization_revision" in facts
-               else "envelope")
+    applies = ("grant_request" if isinstance(item.get("grant"), dict) else "return_blocked" if facts.get("return_outcome") == "blocked"
+               else "authorization" if "authorization_revision" in facts else "envelope")
     key, spec = next(((k, s) for k, s in (decl["defaults"] or {}).items() if s["category"] == item["category"] and s["applies_to"] == applies),
                      (None, None))
     if spec is None:
         return None
+    if applies == "return_blocked":
+        from tools.aipos_cli.owner_inbox import _fmt as inbox_fmt
+        from tools.aipos_cli.owner_inbox import inbox_declaration
+
+        if facts.get("advisor_recommend") or not any(o["key"] == spec["choice"] for o in item.get("options") or []):
+            return None  # 顾问 loop note 已写建议(来源优先级高于产品缺省)/ 事项不给该选项 = 不标缺省推荐
+        option = inbox_declaration()["options"][spec["choice"]]
+        label = (_rfmt(spec["label"], f"defaults.{key}.label") if spec.get("label") else
+                 inbox_fmt(option["label"], f"options.{spec['choice']}.label"))
+        return {"choice": str(spec["choice"]), "label": label, "reason": _rfmt(spec["reason"], f"defaults.{key}.reason"), "source": "default",
+                "by": None, "action": str(spec["action"]), "record": None}
     now = utc_now().replace(microsecond=0)
     if applies == "grant_request":
         params = grant_request_payload(item)

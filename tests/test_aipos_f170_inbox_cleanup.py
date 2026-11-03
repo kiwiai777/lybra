@@ -378,7 +378,9 @@ def test_declarations_and_single_implementations():
     assert project_meta_declaration()["keys"]["status"] == "--status" and "status" in declared_meta_keys()
     decl = owner_inbox.inbox_declaration()
     assert decl["options"]["freeze_legacy"]["effect"] == "freeze_legacy"
-    assert decl["categories"]["needs_owner_card"]["options_by_queue_state"]["blocked"] == ["withdraw", "freeze_legacy", "new_card", "acknowledge"]
+    # AIPOS-F283 件②: blocked 卡追加「补齐前置后重开」(顾问执行 reopen, 只记 Owner 意向, 无队列效果)
+    assert decl["categories"]["needs_owner_card"]["options_by_queue_state"]["blocked"] == ["reopen", "withdraw", "freeze_legacy", "new_card", "acknowledge"]
+    assert not decl["options"]["reopen"].get("effect")
     decide = load_schema("verbs")["verbs"]["lybra_owner_decide"]
     assert set(decide["parameters"]["required"]) == {"choice", "relayed_by", "owner_words"}
     src = Path(owner_inbox.__file__).read_text(encoding="utf-8")
