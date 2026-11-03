@@ -1459,6 +1459,10 @@ def _validate_task_artifact(task_id: str, workspace_root: Path) -> dict[str, Any
             if mismatched:  # AIPOS-F204 件②: 三键 ≠ 产品给值 = 报告头可纠正(判定与补法唯一实现 return_header_problem)
                 out["header_problem"] = return_header_problem(workspace_root, task_id, card_fm, fm, mismatched=mismatched)
             out.update(candidate_check)
+            # AIPOS-F291 件①: 卡面声明 deliverable_checks = 交回报告须含「交付物哈希」节(每个交付物 sha256 + 执行 run), 缺 / 错 = 拒
+            deliverable = return_deliverable_refusal(workspace_root, task_id, card_fm, content, path) if out.get("ok") else None
+            if deliverable is not None:
+                out.update({"ok": False, "category": deliverable["category"], "reasons": deliverable["reasons"], "exit_code": INGEST_EXIT_REJECTED})
             return out
         branch = str(fm.get("branch")).strip()
         commit_sha = str(fm.get("commit_sha")).strip()
@@ -1761,9 +1765,10 @@ def parse_runtime_evidence_declaration(raw: Any, *, source: str = "card") -> dic
     key = str(runtime_evidence_declaration()["card_field"])
     if not isinstance(raw, dict):
         raise RuntimeEvidenceDeclarationError(f"{key} 须为对象 {{required: true|false, commands: [...]}}, 实为 {type(raw).__name__}")
-    unknown = sorted(set(raw) - {"required", "commands", "host"})
+    deliverable_field = str(deliverable_checks_declaration()["field"])  # AIPOS-F291: 能力卡交付物验证子键
+    unknown = sorted(set(raw) - {"required", "commands", "host", deliverable_field})
     if unknown:
-        raise RuntimeEvidenceDeclarationError(f"{key} 含未声明的键 {unknown}(只认 required / commands / host)")
+        raise RuntimeEvidenceDeclarationError(f"{key} 含未声明的键 {unknown}(只认 required / commands / host / {deliverable_field})")
     host = raw.get("host")  # AIPOS-F223 件①: 可选执行主机(主机标签形 = 验证根声明 host 同一形校验 validation_root.is_host_label; 缺省 = 不指定)
     from tools.aipos_cli.validation_root import is_host_label
 
@@ -1778,10 +1783,11 @@ def parse_runtime_evidence_declaration(raw: Any, *, source: str = "card") -> dic
         commands = []
     if not isinstance(commands, list) or any(not isinstance(c, str) or not c.strip() for c in commands):
         raise RuntimeEvidenceDeclarationError(f"{key}.commands 须为非空命令串列表, 实为 {commands!r}")
+    deliverables = parse_deliverable_checks(raw[deliverable_field]) if deliverable_field in raw else []
     if not required:
         return None
     return {"commands": [c.strip() for c in commands], "source": source, "host": host.strip() if isinstance(host, str) else None,
-            "declaration": dict(raw)}
+            "declaration": dict(raw), "deliverable_checks": deliverables}
 
 
 def runtime_evidence_amend_problems(current: Any, new: Any, *, claimed: bool, card_fm: dict[str, Any] | None = None,
@@ -2092,7 +2098,12 @@ def evidence_declaration_problem(workspace_root: Path | str, audit_task_id: str,
     else:
         if requirement is None:
             return None
-        reasons = _unrenderable_known_placeholders(requirement["commands"], evidence_subject(reviewed_fm or {}), card)
+        reasons = _unrenderable_known_placeholders(evidence_commands_all(requirement), evidence_subject(reviewed_fm or {}), card)
+        # AIPOS-F291 件①: deliverable_checks 开放条件(在途经 amend 加入的同判); 出口 = 去掉该子键的修正(或补 requires_capabilities 后撤换)
+        deliverable = deliverable_check_problems(requirement, subject_fm=reviewed_fm or {}, card=reviewed or card)
+        if deliverable:
+            reasons = [*reasons, *deliverable]
+            raw = {k: v for k, v in raw.items() if k != str(deliverable_checks_declaration()["field"])}
     if not reasons:
         # AIPOS-F289 件③④: 固定候选卡声明命中跨机写法规则(ssh 前缀 / 写死 run 路径)= 声明错(审计体补做必然被拒), 给改写 + 受限 amend + 撤换出口
         _path, queue = _find_task_in_queue(root, card) if card else (None, None)
@@ -2285,7 +2296,7 @@ def _run_path_hits(command: str, ctx: dict[str, Any]) -> list[dict[str, Any]]:
         else:
             replacement = "{run_dir}" + sub
         hits.append({"span": m.span(), "path": prefix, "run": run, "task": task, "decl": (entry or {}).get("id") or f"base {base}",
-                     "replacement": replacement})
+                     "replacement": replacement, "base": base, "sub": sub})
     return hits
 
 
@@ -2373,16 +2384,36 @@ def cross_host_evidence_problems(governance_root: Path | str, raw: Any, *, card_
     key = str(decl["card_field"])
     rewrite = cross_host_text("rewrite", card_field=key, value=json.dumps(value, ensure_ascii=False) if value is not None
                               else cross_host_text("rewrite_manual"))
-    out = {"category": category, "problems": problems, "value": value, "rewrite": rewrite, "amend": "", "supersede": "", "outlet": ""}
+    out = {"category": category, "problems": problems, "value": value, "rewrite": rewrite, "amend": "", "supersede": "", "outlet": "",
+           "two_stage": None}
+    # AIPOS-F291 件③: 命令读被审卡执行 run 内产物 = 附两段式改写建议(常规命令 → 审计复现 + deliverable_checks); 能力卡 = 改变验收含义, 只给撤换
+    two = deliverable_two_stage(governance_root, raw, subject=str((card_fm or {}).get("task_id") or card or ""), host=new_host, rewritten=value,
+                                _ctx=ctx)
+    from tools.aipos_cli.execution_division import card_capabilities
+    from tools.aipos_cli.next_resolver import host_capability_declaration
+
+    try:
+        capable = bool(card_capabilities(card_fm))
+    except ValueError:
+        capable = False
+    if two is not None:
+        out["two_stage"] = two
+        out["rewrite"] = f"{rewrite}; {two['text']}"
     if outlet:
         from tools.aipos_cli.workspace_config import lybra_command_prefix
 
         root = Path(governance_root)
-        out["amend"] = _evidence_amend_command(root, card, queue, value if value is not None else raw,
-                                               reason=cross_host_text("amend_reason"))
         out["supersede"] = (f"{lybra_command_prefix(root)} queue supersede --task-id {card or '<卡>'} --by <新卡号> --actor <顾问实例> "
                             "--owner-words \"<Owner 原话摘要>\" --dry-run")
+        cap_field = str(host_capability_declaration()["card_field"])
+        if two is not None and capable:
+            out["outlet"] = deliverable_text("two_stage_outlet", supersede=out["supersede"], cap_field=cap_field)
+            return out
+        out["amend"] = _evidence_amend_command(root, card, queue, value if value is not None else raw,
+                                               reason=cross_host_text("amend_reason"))
         out["outlet"] = cross_host_text("outlet", card=card or "<卡>", amend=out["amend"], supersede=out["supersede"])
+        if two is not None:
+            out["outlet"] += "; " + deliverable_text("two_stage_nocap", cap_field=cap_field, supersede=out["supersede"])
     return out
 
 
@@ -2401,6 +2432,287 @@ def cross_host_rewrite_equivalent(governance_root: Path | str, before: Any, afte
             return False
         changed = changed or got["command"] != old
     return changed
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F291: 能力例外卡的「交付物验证」(声明 transitions artifact_ingest.verdict.runtime_evidence.candidate_subject.deliverable_checks)。
+# 卡面子键形校验 parse_deliverable_checks(parse_runtime_evidence_declaration 唯一调用); 开放条件判据 deliverable_check_problems(出卡 / 补审派发 /
+# 推导核 / 裁决入口同读); 核验命令展开 deliverable_expanded_commands(开工稿执行行 / 派审步骤 / 裁决入口逐字匹配同读); 交回声明读取
+# return_deliverables(交回入口 / 审计开工稿 / 裁决入口同读); 取回 / 摘要命令铸造在 validation_root(与 run-cmd / evidence-manifest 同族)。
+# ---------------------------------------------------------------------------
+
+_DELIVERABLE_KEYS = ("field", "item_keys", "artifact_placeholder", "exec_run_placeholder", "entry_fields", "return_reject_category", "texts")
+_DELIVERABLE_TEXTS = ("return_heading", "form_list", "form_item", "capability_required", "candidate_required", "commands_required",
+                      "return_title", "return_item", "return_pending", "return_format", "return_missing", "section_missing", "entry_missing",
+                      "entry_invalid", "run_unknown", "steps_title", "steps_item", "steps_pull", "steps_pull_pending", "steps_verify",
+                      "pending_run", "pending_return", "host_mismatch", "verdict_return", "verdict_unmatched", "verdict_record_missing",
+                      "verdict_sha_mismatch", "verdict_record_bad", "two_stage", "two_stage_manual", "two_stage_outlet", "two_stage_nocap")
+_DELIVERABLE_WHERE = "transitions.schema.json artifact_ingest.verdict.runtime_evidence.candidate_subject.deliverable_checks"
+_SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+
+
+def deliverable_checks_declaration() -> dict[str, Any]:
+    """candidate_subject.deliverable_checks 唯一读取口(fail-closed): 键齐; item_keys 恰 [artifact, commands]; entry_fields = helper 交回条目键
+    (helper 不读 schema, 有意两份对表); texts = 双语块(结构与占位经 i18n.surface_texts 核)且含全部文案键。"""
+    from tools.aipos_cli.i18n import surface_texts
+    from tools.aipos_cli.validation_root_helper import DELIVERABLE_ENTRY_KEYS
+    from tools.schema_loader import SchemaLoadError
+
+    decl = runtime_evidence_candidate_declaration().get("deliverable_checks")
+    if (not isinstance(decl, dict) or any(k not in decl for k in _DELIVERABLE_KEYS)
+            or decl["item_keys"] != ["artifact", "commands"] or tuple(decl["entry_fields"]) != DELIVERABLE_ENTRY_KEYS
+            or any(not isinstance(decl[k], str) or not decl[k].strip() for k in ("field", "artifact_placeholder", "exec_run_placeholder",
+                                                                                   "return_reject_category"))):
+        raise SchemaLoadError(f"{_DELIVERABLE_WHERE}({' / '.join(_DELIVERABLE_KEYS)})未声明齐或与 helper 条目键 {DELIVERABLE_ENTRY_KEYS} 不符"
+                              "(AIPOS-F291)")
+    table = surface_texts(decl["texts"], None, where=f"{_DELIVERABLE_WHERE}.texts")
+    missing = [k for k in _DELIVERABLE_TEXTS if not isinstance(table.get(k), str) or not table[k].strip()]
+    if missing:
+        raise SchemaLoadError(f"{_DELIVERABLE_WHERE}.texts 缺 {missing}(AIPOS-F291)")
+    return decl
+
+
+def deliverable_text(text_key: str, /, **values: Any) -> str:
+    """deliverable_checks 一条文案按用户语言渲染(i18n.block_localize 各语言各填一份 → i18n.voice; 同 cross_host_text)。"""
+    from tools.aipos_cli.i18n import block_localize, voice
+
+    return voice(block_localize(deliverable_checks_declaration()["texts"], text_key, values, where=f"{_DELIVERABLE_WHERE}.texts"),
+                 where="deliverable_checks")
+
+
+def deliverable_return_headings() -> list[str]:
+    """交回报告「交付物哈希」节标题: 各语言 return_heading 任一都认(解析), 渲染用用户语言那条。"""
+    texts = deliverable_checks_declaration()["texts"]
+    return list(dict.fromkeys(str(table["return_heading"]) for table in texts.values()))
+
+
+def parse_deliverable_checks(raw: Any) -> list[dict[str, Any]]:
+    """卡面 audit_runtime_evidence.deliverable_checks 形校验唯一实现 → [{item(1 起), artifact(执行 run 内规范相对路径), commands}]。
+    形不合 = RuntimeEvidenceDeclarationError(双语拒因)。artifact 可写 {exec_run_dir}/<相对路径>(去前缀后同判)。"""
+    import json
+
+    from tools.aipos_cli.validation_root_helper import deliverable_rel_problem
+
+    decl = deliverable_checks_declaration()
+    card_field = str(runtime_evidence_declaration()["card_field"])
+    field = str(decl["field"])
+    placeholder = "{" + str(decl["artifact_placeholder"]) + "}"
+    exec_run = "{" + str(decl["exec_run_placeholder"]) + "}"
+    if not isinstance(raw, list) or not raw:
+        raise RuntimeEvidenceDeclarationError(deliverable_text("form_list", card_field=card_field, field=field,
+                                                               value=json.dumps(raw, ensure_ascii=False)))
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw, 1):
+        artifact = item.get("artifact") if isinstance(item, dict) else None
+        if isinstance(artifact, str) and artifact.startswith(exec_run + "/"):
+            artifact = artifact[len(exec_run) + 1:]
+        commands = item.get("commands") if isinstance(item, dict) else None
+        if (not isinstance(item, dict) or set(item) != set(decl["item_keys"]) or not isinstance(artifact, str)
+                or deliverable_rel_problem(artifact) or artifact in seen
+                or not isinstance(commands, list) or not commands
+                or any(not isinstance(c, str) or not c.strip() or placeholder not in c for c in commands)):
+            raise RuntimeEvidenceDeclarationError(deliverable_text("form_item", card_field=card_field, field=field, item=index,
+                                                                   value=json.dumps(item, ensure_ascii=False), exec_run=exec_run,
+                                                                   placeholder=placeholder))
+        seen.add(artifact)
+        out.append({"item": index, "artifact": artifact, "commands": [c.strip() for c in commands]})
+    return out
+
+
+def deliverable_copy_rel(item: int, artifact: str) -> str:
+    """取回副本在审计 run 内的相对路径(helper deliverable-pull 同一推导: deliverables/<序号>/<交付物末段>)。"""
+    from tools.aipos_cli.validation_root_helper import DELIVERABLE_DIR
+
+    return f"{DELIVERABLE_DIR}/{int(item)}/{artifact.rstrip('/').rsplit('/', 1)[-1]}"
+
+
+def deliverable_expanded_commands(requirement: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """核验命令展开(唯一实现): {artifact_path} → {run_dir}/<副本相对路径>, 之后与常规命令同一占位渲染 / 执行行 / 逐字匹配。
+    返回 [{item, artifact, command}](声明序)。"""
+    decl = deliverable_checks_declaration()
+    placeholder = "{" + str(decl["artifact_placeholder"]) + "}"
+    out = []
+    for check in (requirement or {}).get("deliverable_checks") or []:
+        copy = "{run_dir}/" + deliverable_copy_rel(check["item"], check["artifact"])
+        out.extend({"item": check["item"], "artifact": check["artifact"], "command": c.replace(placeholder, copy)} for c in check["commands"])
+    return out
+
+
+def evidence_commands_all(requirement: dict[str, Any] | None) -> list[str]:
+    """审计须在自己 run 内运行的全部声明命令 = 常规命令 + 展开后的交付物核验命令(开工稿执行行 / 裁决入口同读)。"""
+    return [*((requirement or {}).get("commands") or []), *(e["command"] for e in deliverable_expanded_commands(requirement))]
+
+
+def deliverable_check_problems(requirement: dict[str, Any] | None, *, subject_fm: dict[str, Any] | None, card: str) -> list[str]:
+    """deliverable_checks 开放条件判据(唯一实现): 被审卡带 requires_capabilities(AIPOS-F284 card_capabilities)、交付主体为固定候选、
+    常规 commands 非空。未声明 = []。返回拒因原文(双语渲染)。"""
+    if not (requirement or {}).get("deliverable_checks"):
+        return []
+    from tools.aipos_cli.execution_division import card_capabilities
+    from tools.aipos_cli.next_resolver import host_capability_declaration
+
+    decl = deliverable_checks_declaration()
+    values = {"card": card or "<卡>", "card_field": str(runtime_evidence_declaration()["card_field"]), "field": str(decl["field"]),
+              "cap_field": str(host_capability_declaration()["card_field"])}
+    problems: list[str] = []
+    try:
+        capabilities = card_capabilities(subject_fm)
+    except ValueError as exc:
+        problems.append(str(exc))
+    else:
+        if not capabilities:
+            problems.append(deliverable_text("capability_required", **values))
+    if evidence_subject(subject_fm) != "candidate":
+        problems.append(deliverable_text("candidate_required", **values, mode=str((subject_fm or {}).get("task_mode") or "")))
+    if not (requirement or {}).get("commands"):
+        problems.append(deliverable_text("commands_required", **values))
+    return problems
+
+
+def return_deliverables(governance_root: Path | str, card: str, card_fm: dict[str, Any] | None, *,
+                        report_text: str | None = None) -> dict[str, Any]:
+    """被审(执行)卡交回报告「交付物哈希」节 → {declared: [卡面声明项], items: {序号: {artifact, run_id, sha256, run_dir, entry, run}},
+    problems: [拒因原文]}(交回入口 / 审计开工稿 / 裁决入口同读)。卡面未声明 = declared 空。report_text 缺省读该卡交回报告。
+    每个声明项须有条目: artifact 同卡面、sha256 = 64 位小写十六进制、run_id = 本卡执行实例验证根声明里已开启的 run(validation_root.executor_run)。"""
+    from tools.aipos_cli.next_resolver import find_return_artifact
+    from tools.aipos_cli.validation_root import ValidationRootError, executor_run, run_directory
+
+    out: dict[str, Any] = {"declared": [], "items": {}, "problems": []}
+    try:
+        requirement = runtime_evidence_requirement(None, card_fm)
+    except RuntimeEvidenceDeclarationError as exc:
+        out["problems"].append(str(exc))
+        return out
+    out["declared"] = list((requirement or {}).get("deliverable_checks") or [])
+    if not out["declared"]:
+        return out
+    decl = deliverable_checks_declaration()
+    heading = deliverable_text("return_heading")
+    block = str(runtime_evidence_declaration()["block_language"])
+    if report_text is None:
+        path = find_return_artifact(Path(governance_root), card)
+        try:
+            report_text = path.read_text(encoding="utf-8") if path is not None else ""
+        except (OSError, UnicodeDecodeError) as exc:
+            report_text = ""
+            out["problems"].append(deliverable_text("section_missing", heading=heading, block=block, detail=f"{path}: {exc}"))
+            return out
+    entries, problem = parse_runtime_evidence_section(report_text, headings=deliverable_return_headings())
+    if entries is None:
+        out["problems"].append(deliverable_text("section_missing", heading=heading, block=block, detail=problem))
+        return out
+    keys = list(decl["entry_fields"])
+    for check in out["declared"]:
+        values = {"item": check["item"], "artifact": check["artifact"]}
+        entry = next((e for e in entries if isinstance(e, dict) and e.get("artifact") == check["artifact"]), None)
+        if entry is None:
+            out["problems"].append(deliverable_text("entry_missing", **values))
+            continue
+        sha = str(entry.get(keys[2]) or "").strip()
+        run_id = str(entry.get(keys[1]) or "").strip()
+        if not _SHA256_HEX.match(sha):
+            out["problems"].append(deliverable_text("entry_invalid", **values, key=keys[2], value=repr(entry.get(keys[2])), want="[0-9a-f]{64}"))
+            continue
+        try:
+            found = executor_run(governance_root, card, run_id)
+        except ValidationRootError as exc:
+            out["problems"].append(deliverable_text("run_unknown", **values, run_id=run_id or "''", card=card, problem=str(exc)))
+            continue
+        out["items"][check["item"]] = {"artifact": check["artifact"], "run_id": run_id, "sha256": sha, "entry": found["entry"], "run": found["run"],
+                                       "run_dir": run_directory(found["entry"], run_id)}
+    return out
+
+
+def return_deliverable_refusal(governance_root: Path | str, task_id: str, card_fm: dict[str, Any] | None, report_text: str,
+                               path: Path | str) -> dict[str, Any] | None:
+    """交回入口: 卡面声明 deliverable_checks 而交回报告缺 / 错「交付物哈希」= {category, reasons}; 未声明 / 齐 = None。"""
+    got = return_deliverables(governance_root, task_id, card_fm, report_text=report_text)
+    if not got["declared"] or not got["problems"]:
+        return None
+    decl = deliverable_checks_declaration()
+    return {"category": str(decl["return_reject_category"]),
+            "reasons": [deliverable_text("return_missing", path=str(path), card_field=str(runtime_evidence_declaration()["card_field"]),
+                                         field=str(decl["field"]), heading=deliverable_text("return_heading"), problems="; ".join(got["problems"]))]}
+
+
+def render_deliverable_return_lines(governance_root: Path | str, *, task_id: str, fm: dict[str, Any] | None) -> list[str]:
+    """执行开工稿「交付物哈希」节(随本卡验证根节同一槽位下发): 卡面声明 deliverable_checks = 每项交付物 + 本卡执行 run 内的摘要命令
+    (validation_root.deliverable_digest_command 唯一铸造)+ 交回报告节格式; 未声明 / 形不合(出卡已拒)= []。"""
+    from tools.aipos_cli.validation_root import deliverable_digest_command, executor_active_run, run_directory
+
+    try:
+        requirement = runtime_evidence_requirement(None, fm)
+    except RuntimeEvidenceDeclarationError:
+        return []
+    checks = list((requirement or {}).get("deliverable_checks") or [])
+    if not checks:
+        return []
+    decl = deliverable_checks_declaration()
+    found = executor_active_run(governance_root, task_id, str((fm or {}).get("claimed_by") or (fm or {}).get("assigned_to") or ""))
+    lines = [deliverable_text("return_title", card_field=str(runtime_evidence_declaration()["card_field"]), field=str(decl["field"]))]
+    for check in checks:
+        if found is None:
+            run_dir, digest = "<run_dir>", deliverable_text("return_pending")
+        else:
+            run_dir = run_directory(found["entry"], found["run"]["run_id"])
+            digest = "`" + deliverable_digest_command(governance_root, found["entry"], found["run"], artifact=check["artifact"]) + "`"
+        lines.append(deliverable_text("return_item", item=check["item"], artifact=check["artifact"], run_dir=run_dir, digest=digest))
+    lines.append(deliverable_text("return_format", heading=deliverable_text("return_heading"), block=str(runtime_evidence_declaration()["block_language"])))
+    return lines
+
+
+def _common_rel_prefix(subs: list[str]) -> str:
+    """一组 run 内子路径(以 / 起)的公共段前缀(相对路径, 不含首尾斜杠); 无公共段 = ""。"""
+    parts = [[p for p in s.split("/") if p] for s in subs]
+    common: list[str] = []
+    for segs in zip(*parts):
+        if len(set(segs)) != 1:
+            break
+        common.append(segs[0])
+    return "/".join(common)
+
+
+def deliverable_two_stage(governance_root: Path | str, raw: dict[str, Any], *, subject: str, host: str | None, rewritten: dict[str, Any] | None,
+                          _ctx: dict[str, Any]) -> dict[str, Any] | None:
+    """AIPOS-F291 件③: 声明命令读被审卡执行 run 内产物(F289 判据命中 run 路径且该 run 属被审卡执行声明)= 两段式改写建议: 常规命令 = F289 改写
+    (审计在自己 run 内复现后核)+ deliverable_checks(交付物 = 各命中子路径的公共前缀, 核验命令 = 同一命令把执行 run 内路径换成
+    {artifact_path}); 未命中 = None。返回 {value(整份声明; 定不出交付物 = None), text(建议一句)}。"""
+    import json
+
+    from tools.aipos_cli.validation_root import card_kinds
+
+    decl = deliverable_checks_declaration()
+    hits_by_cmd: list[tuple[str, list[dict[str, Any]]]] = []
+    subs: list[str] = []
+    for command in raw.get("commands") or []:
+        if not isinstance(command, str):
+            continue
+        invocation = _ssh_invocation(command, _ctx["decl"])
+        body = invocation["remote"] if invocation is not None and invocation["remote"] is not None else command
+        hits = [h for h in _run_path_hits(body, _ctx) if h["task"] == subject
+                and card_kinds().get(str((_ctx["by_task"].get((h["base"], h["task"])) or {}).get("role_class") or "")) == "execution_card"]
+        if hits:
+            hits_by_cmd.append((body, hits))
+            subs.extend(h["sub"] or "/" for h in hits)
+    if not hits_by_cmd:
+        return None
+    artifact = _common_rel_prefix(subs)
+    card_field = str(runtime_evidence_declaration()["card_field"])
+    field = str(decl["field"])
+    if not artifact:
+        return {"value": None, "text": deliverable_text("two_stage", card_field=card_field, field=field,
+                                                         value=deliverable_text("two_stage_manual", field=field))}
+    placeholder = "{" + str(decl["artifact_placeholder"]) + "}"
+    commands = []
+    for body, hits in hits_by_cmd:
+        for hit in sorted(hits, key=lambda h: h["span"][0], reverse=True):
+            rest = (hit["sub"] or "")[len(artifact) + 1:]  # sub = "/<artifact>[/…]" → 余下 "[/…]"
+            body = body[:hit["span"][0]] + placeholder + rest + body[hit["span"][1]:]
+        commands.append(body)
+    base = dict(rewritten) if rewritten is not None else {**raw, **({"host": host} if host else {})}
+    value = {**base, field: [{"artifact": artifact, "commands": commands}]}
+    return {"value": value, "text": deliverable_text("two_stage", card_field=card_field, field=field, value=json.dumps(value, ensure_ascii=False))}
 
 
 # ---------------------------------------------------------------------------
@@ -2479,6 +2791,10 @@ def check_runtime_evidence_declaration(raw: Any, *, governance_root: Path | str,
                                          card=str(card_task_id or (card_frontmatter or {}).get("task_id") or ""), outlet=False)
     if cross is not None:  # AIPOS-F289 件③: 出卡 / 补审派发即拦(拒因 + 改写建议双语; 起草阶段改卡稿, 不给 amend)
         out["problems"].extend(f"{cross['category']}: {p}" for p in [*cross["problems"], cross["rewrite"]])
+    # AIPOS-F291 件①: deliverable_checks 只对带 requires_capabilities 且交付主体为固定候选的卡开放, 常规 commands 须非空(同一判据, 推导核 / 裁决入口同读)
+    out["problems"].extend(f"{decl['declaration_invalid_category']}: {p}" for p in deliverable_check_problems(
+        requirement, subject_fm=subject_frontmatter if subject_frontmatter is not None else card_frontmatter,
+        card=str(card_task_id or (card_frontmatter or {}).get("task_id") or "")))
     check = decl.get("executable_check")
     needed = ("category", "privilege_category", "privilege_commands", "fix_hint", "unverified_note")
     if not isinstance(check, dict) or any(not check.get(k) for k in needed):
@@ -2593,9 +2909,12 @@ def render_candidate_evidence_steps(governance_root: Path | str, *, audit_task_i
     decl = runtime_evidence_candidate_declaration()
     # AIPOS-F223 件①: run 选择按卡面执行主机(requirement.host; 唯一实现 validation_root.select_evidence_declaration, 裁决入口同读)
     evidence_card = audit_task_id if (requirement or {}).get("source") == "audit_card" else reviewed_task_id
+    # AIPOS-F291: 能力卡交付物验证 = 读被审卡交回报告「交付物哈希」(交回入口同读), 取回行随本 run 铸
+    returned = (return_deliverables(governance_root, reviewed_task_id, reviewed_fm) if (requirement or {}).get("deliverable_checks")
+                else {"items": {}, "problems": []})
     values = candidate_evidence_values(governance_root, audit_task_id=audit_task_id, audit_instance=str(audit_instance or ""),
                                        candidate=subject["commit_sha"], candidate_tree=subject["tree_hash"], requirement=requirement,
-                                       evidence_card=evidence_card)
+                                       evidence_card=evidence_card, deliverables=returned["items"])
     if values.get("host_refusal"):  # 选不出 run = 拒因一行(不渲染任何 run 命令; 裁决入口同判据拒)
         return [str(decl["steps_title"]), str(values["host_refusal"]),
                 *(f"   ℹ {p}" for p in evidence_literal_notes((requirement or {}).get("commands") or [], task_id=reviewed_task_id,
@@ -2621,10 +2940,44 @@ def render_candidate_evidence_steps(governance_root: Path | str, *, audit_task_i
                 lines.append(str(decl["command_line"]).format(command=render_candidate_evidence_command(c, known)))
                 if values.get("host"):
                     lines.append(cross_host_text("exec_line", exec=exec_lines[i - 1]) if i <= len(exec_lines) else cross_host_text("exec_pending"))
+            if (requirement or {}).get("deliverable_checks"):
+                lines.extend(_deliverable_step_lines(requirement, values, known, exec_lines, returned, command_line=str(decl["command_line"])))
     if values.get("remote"):  # AIPOS-F200 件④: 审计 run 在远端主机 = 证据清单 + 取回副本两步(声明 candidate_subject.remote_steps)
         lines.extend(str(step).format(**values) for step in decl.get("remote_steps") or [])
     lines.extend(f"   ℹ {p}" for p in evidence_literal_notes((requirement or {}).get("commands") or [], task_id=reviewed_task_id,
                                                         card_fm=reviewed_fm))
+    return lines
+
+
+def _deliverable_step_lines(requirement: dict[str, Any], values: dict[str, Any], known: dict[str, Any], exec_lines: list[str],
+                            returned: dict[str, Any], *, command_line: str) -> list[str]:
+    """AIPOS-F291 件②: 审计「验证卡运行证据步骤」⑥ 之后的交付物验证段(开工稿 / 派审注入同一渲染): 每项 = 交回声明 run 与 sha256 + 取回行
+    (validation_root.deliverable_pull_command)+ 展开后的核验命令与执行行(序号接在常规命令之后, 同一铸造口 evidence_exec_command)。"""
+    heading = str(runtime_evidence_declaration()["section_heading"])
+    pulls = values.get("deliverable_pulls") or {}
+    expanded = deliverable_expanded_commands(requirement)
+    offset = len(requirement.get("commands") or [])
+    lines = [deliverable_text("steps_title")]
+    for check in requirement.get("deliverable_checks") or []:
+        item = int(check["item"])
+        got = (returned.get("items") or {}).get(item) or {}
+        copy = render_candidate_evidence_command("{run_dir}/" + deliverable_copy_rel(item, check["artifact"]), known)
+        lines.append(deliverable_text("steps_item", item=item, artifact=check["artifact"], exec_run_id=got.get("run_id") or "?",
+                                      sha256=got.get("sha256") or "?", copy_path=copy))
+        pull = pulls.get(item) or {}
+        if pull.get("exec"):
+            lines.append(deliverable_text("steps_pull", exec=pull["exec"]))
+        else:
+            reason = pull.get("reason") or (deliverable_text("pending_return", problems="; ".join(returned.get("problems") or []))
+                                            if returned.get("problems") else deliverable_text("pending_run"))
+            lines.append(deliverable_text("steps_pull_pending", reason=reason))
+        lines.append(deliverable_text("steps_verify", heading=heading))
+        for index, entry in enumerate(expanded, offset + 1):
+            if entry["item"] != item:
+                continue
+            lines.append(command_line.format(command=render_candidate_evidence_command(entry["command"], known)))
+            if values.get("host"):
+                lines.append(cross_host_text("exec_line", exec=exec_lines[index - 1]) if index <= len(exec_lines) else cross_host_text("exec_pending"))
     return lines
 
 
@@ -2670,19 +3023,22 @@ def render_runtime_evidence_requirement(requirement: dict[str, Any], *, candidat
     return "\n".join(lines)
 
 
-def parse_runtime_evidence_section(report_text: str) -> tuple[list[Any] | None, str]:
-    """报告「独立运行证据」节内首个声明语言代码块 → (运行记录列表, 问题)。节缺 / 块缺 / JSON 坏 / 非列表 = (None, 问题原文)。"""
+def parse_runtime_evidence_section(report_text: str, *, headings: list[str] | None = None) -> tuple[list[Any] | None, str]:
+    """报告「独立运行证据」节内首个声明语言代码块 → (运行记录列表, 问题)。节缺 / 块缺 / JSON 坏 / 非列表 = (None, 问题原文)。
+    AIPOS-F291: headings = 另一节的标题候选(交回报告「交付物哈希」节, 各语言标题任一; 同一解析), 缺省 = 声明 section_heading。"""
     import json as _json
 
     decl = runtime_evidence_declaration()
-    heading = str(decl["section_heading"])
+    accepted = [str(h) for h in headings] if headings else [str(decl["section_heading"])]
+    heading = accepted[0]
     fence = "```" + str(decl["block_language"])
     lines = report_text.splitlines()
     start = None
     level = 0
     for i, line in enumerate(lines):
         stripped = line.strip()
-        if stripped.startswith("#") and stripped.lstrip("#").strip() == heading:
+        if stripped.startswith("#") and stripped.lstrip("#").strip() in accepted:
+            heading = stripped.lstrip("#").strip()
             start, level = i + 1, len(stripped) - len(stripped.lstrip("#"))
             break
     if start is None:

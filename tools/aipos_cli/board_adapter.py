@@ -4795,8 +4795,10 @@ def _candidate_run_problem(workspace_root: Path, audit_task_id: str, entry: dict
         return {}, f"日志 {log_path} 不可读: {exc}"
     if actual != log_sha:
         return {}, f"日志 {log_path} sha256={actual[:12]} ≠ 报告自述 {log_sha[:12]}"
+    # AIPOS-F291: 交付物取回记录的读取源(本机 = run 目录; 远端 = 取回副本 files/)与本声明主机指纹(下划线键不参与占位渲染)
     return {"run_dir": run_dir, "src_dir": f"{run_dir}/{SRC_DIR_NAME}", "candidate": subject["commit_sha"],
-            "candidate_tree": subject["tree_hash"]}, None
+            "candidate_tree": subject["tree_hash"], "_record_root": str(remote["files_root"]) if remote else run_dir,
+            "_fingerprint": str(decl_entry.get("host_fingerprint") or ""), "_run_id": run_id}, None
 
 
 def _remote_run_long_problem(workspace_root: Path, entry: dict[str, Any], run_long: str) -> str | None:
@@ -4942,10 +4944,15 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
         return {"category": category, "reasons": [*problems, outlet], "problems": list(problems),
                 "missing_commands": list(missing_commands), "outlet": outlet}
 
+    # AIPOS-F291: 固定候选卡的声明命令 = 常规命令 + 展开后的交付物核验命令(同一逐字匹配; 常规命令照旧必需)
+    from tools.aipos_cli.artifact_ingest import evidence_commands_all
+
+    declared_commands = evidence_commands_all(requirement) if subject is not None else list(requirement["commands"])
+
     def all_rendered() -> list[str]:
         if subject is not None:
-            return [_collapse_ws(render_candidate_evidence_command(c, {})) for c in requirement["commands"]]
-        return [render(c) for c in requirement["commands"]]
+            return [_collapse_ws(render_candidate_evidence_command(c, {})) for c in declared_commands]
+        return [render(c) for c in declared_commands]
 
     try:
         text = Path(report_path).read_text(encoding="utf-8")
@@ -5073,10 +5080,13 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
             {"run_dir": str(e["run_dir"]).rstrip("/"), "src_dir": f"{str(e['run_dir']).rstrip('/')}/{SRC_DIR_NAME}",
              "candidate": subject["commit_sha"], "candidate_tree": subject["tree_hash"]}
             for e in entries if isinstance(e, dict) and str(e.get("run_dir") or "").strip()]
-    for declared in requirement["commands"]:
+    matched_runs: dict[int, dict[str, str]] = {}  # AIPOS-F291: 声明命令序号 → 匹配上的那条记录所在 run 的值(交付物取回记录核对用)
+    for declared_index, declared in enumerate(declared_commands):
         if subject is not None:  # AIPOS-F199: 每条有效记录按其自身 run 的占位值渲染声明命令, 逐字一致即算该条已运行
-            if any(evidence_command_key(render_candidate_evidence_command(declared, run_values), wt) == got
-                   for got, run_values, wt in valid_runs):
+            hit = next((run_values for got, run_values, wt in valid_runs
+                        if evidence_command_key(render_candidate_evidence_command(declared, run_values), wt) == got), None)
+            if hit is not None:
+                matched_runs[declared_index] = hit
                 continue
             shown = _collapse_ws(render_candidate_evidence_command(declared, probes[0] if probes else {}))  # AIPOS-F233: 无 run 也按规范形展示
             missing_commands.append(shown)
@@ -5096,9 +5106,47 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
             reasons.append(f"卡面声明的命令缺有效运行记录: {rendered!r}(声明原文 {declared!r}; 须在审计分配工作树运行, 命令逐字一致"
                            "或为 `cd <审计分配工作树> && 命令` 与在该树运行的同一命令); "
                            + runtime_evidence_command_diff(rendered, ran))  # AIPOS-F165 件②: 逐条差异(声明 vs 实跑)
+    if subject is not None and requirement.get("deliverable_checks"):
+        reasons.extend(_deliverable_verdict_problems(workspace_root, reviewed, reviewed_fm, requirement, matched_runs))
     if not reasons:
         return None
     return rejected([where + r for r in reasons], missing_commands)
+
+
+def _deliverable_verdict_problems(workspace_root: Path, reviewed: str, reviewed_fm: dict[str, Any] | None, requirement: dict[str, Any],
+                                  matched_runs: dict[int, dict[str, str]]) -> list[str]:
+    """AIPOS-F291 件②(只供 runtime_evidence_check): 能力卡交付物验证的裁决核对——被审卡交回报告「交付物哈希」读得出(交回入口同一读取
+    artifact_ingest.return_deliverables); 每项核验命令在审计自己 run 内匹配上(上方逐字匹配), 该 run 的取回记录(validation_root.
+    deliverable_record_problems)ok 且摘要 = 交回声明、来源 = 交回声明 run 目录、副本 = 固定子目录。返回拒因原文(双语渲染)。"""
+    from tools.aipos_cli.artifact_ingest import deliverable_expanded_commands, deliverable_text, return_deliverables
+    from tools.aipos_cli.validation_root import deliverable_record_problems
+
+    returned = return_deliverables(workspace_root, reviewed, reviewed_fm)
+    if returned["problems"]:
+        return [deliverable_text("verdict_return", card=reviewed, problems="; ".join(returned["problems"]))]
+    offset = len(requirement.get("commands") or [])
+    indexes: dict[int, list[int]] = {}
+    for index, entry in enumerate(deliverable_expanded_commands(requirement), offset):
+        indexes.setdefault(int(entry["item"]), []).append(index)
+    problems: list[str] = []
+    for check in requirement.get("deliverable_checks") or []:
+        item = int(check["item"])
+        values = {"item": item, "artifact": check["artifact"]}
+        run_values = next((matched_runs[i] for i in indexes.get(item, []) if i in matched_runs), None)
+        if run_values is None:  # 核验命令全缺有效记录(上方已逐条列拒因)= 无从定位取回记录
+            problems.append(deliverable_text("verdict_unmatched", **values))
+            continue
+        got = returned["items"][item]
+        for problem in deliverable_record_problems(run_values["_record_root"], item=item, artifact=check["artifact"], expect_sha256=got["sha256"],
+                                                   source_run_dir=got["run_dir"], run_dir=run_values["run_dir"],
+                                                   fingerprint=run_values["_fingerprint"]):
+            if problem["kind"] == "missing":
+                problems.append(deliverable_text("verdict_record_missing", **values, run_id=run_values["_run_id"], record=problem["record"]))
+            elif problem["kind"] == "sha":
+                problems.append(deliverable_text("verdict_sha_mismatch", **values, got=problem["got"], want=problem["want"]))
+            else:
+                problems.append(deliverable_text("verdict_record_bad", **values, key=problem["key"], got=problem["got"], want=problem["want"]))
+    return problems
 
 
 def _build_audit_verdict_preview(
