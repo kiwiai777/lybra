@@ -55,6 +55,15 @@ tools/aipos_cli/validation_root.py 直接 import 本模块的同名函数(声明
       末行 `CMD_ENTRY {…}` = 报告「独立运行证据」节该条(command / run_id / run_dir / exit_code / log_path / log_sha256)。之后照常
       evidence-manifest → 治理根所在机 evidence-fetch。
 
+  AIPOS-F291 能力卡交付物验证(只对带 requires_capabilities 的卡; 完整命令由产品铸: 执行开工稿「交付物哈希」节 / 审计开工稿「交付物验证」):
+  python3 - deliverable-digest --run-dir <执行 run> --expect-fingerprint <hfp1:…> --artifact <run 内相对路径>
+      执行体在自己 run 内算交付物摘要(文件 = 字节 sha256; 目录 = 排序清单行的 sha256, 软链按目标文本计入、逃出即拒), 记
+      <run>/.lybra-vr/deliverables.jsonl; 末行 `DELIVERABLE_ENTRY {…}` = 交回报告「交付物哈希」节该条。
+  python3 - deliverable-pull --run-dir <审计 run> --expect-fingerprint <hfp1:…> --source-run-dir <执行 run> --artifact <相对路径>
+          --expect-sha256 <交回声明> --item <序号>
+      审计在同一主机把执行 run 内交付物复制进本 run 的 deliverables/<序号>/(摘要 = 交回声明才复制, 复制后再核); 每次都记
+      <本 run>/.lybra-vr/deliverables.jsonl; 不一致 = DENY [DELIVERABLE_SHA_MISMATCH](FAIL 线索)。
+
 判定(全部 fail-closed):
   1. 本机指纹 = --expect-fingerprint, 否则 HOST_FINGERPRINT_MISMATCH(跨机调用核对);
   2. run 目录与目标须为规范绝对路径(无 `..` / `.` / 重复斜杠), 否则 PATH_NOT_CANONICAL;
@@ -768,6 +777,157 @@ def _run_cmd_cli(args: argparse.Namespace) -> int:
     return EXIT_ALLOW
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F291: 能力卡交付物验证——执行体在自己 run 内算交付物摘要(deliverable-digest), 审计按交回声明的 sha256 把交付物复制进
+# 自己 run 的固定子目录(deliverable-pull, 同一主机内), 摘要一致才落副本; 记录写各自 run 的 .lybra-vr/deliverables.jsonl
+# ---------------------------------------------------------------------------
+
+DELIVERABLE_DIR = "deliverables"
+DELIVERABLE_EVIDENCE = ".lybra-vr/deliverables.jsonl"
+#: 交回报告「交付物哈希」节条目键(= transitions candidate_subject.deliverable_checks.entry_fields; 治理根侧读取口对表)
+DELIVERABLE_ENTRY_KEYS = ("artifact", "run_id", "sha256")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def deliverable_rel_problem(rel: Any) -> str | None:
+    """交付物在 run 内的相对路径: 非空、规范(无 `..` / `.` 段、无重复斜杠、不以斜杠起止)、无控制字符。返回问题原文或 None。"""
+    text = str(rel or "")
+    if not text or text.startswith("/") or text.endswith("/"):
+        return f"须为 run 内非空相对路径(不以 / 起止): {text!r}"
+    return canonical_problem("/" + text)
+
+
+def deliverable_digest(path: str) -> dict[str, Any]:
+    """交付物摘要(唯一实现; 执行体 deliverable-digest 与审计 deliverable-pull 同读): 普通文件 = 文件字节 sha256(同 `sha256sum`);
+    目录(如应用包)= 按相对路径排序的逐项清单行 `<类型> <可执行位> <相对路径> <文件 sha256 | 链接目标>` 的 sha256。不跟软链: 目录内软链
+    按链接目标文本计入, 目标为绝对路径或逃出该目录 = 拒(fail-closed); 其余非普通文件 = 拒。返回 {ok, kind, sha256, files, problem}。"""
+    import stat as stat_mod
+
+    try:
+        st = os.lstat(path)
+    except OSError as exc:
+        return {"ok": False, "kind": None, "sha256": None, "files": 0, "problem": f"交付物 {path} 不存在或不可读({exc})"}
+    if stat_mod.S_ISLNK(st.st_mode):
+        return {"ok": False, "kind": None, "sha256": None, "files": 0, "problem": f"交付物 {path} 本身是符号链接(不跟随)"}
+    if stat_mod.S_ISREG(st.st_mode):
+        return {"ok": True, "kind": "file", "sha256": hashlib.sha256(_read_nofollow(path)).hexdigest(), "files": 1, "problem": None}
+    if not stat_mod.S_ISDIR(st.st_mode):
+        return {"ok": False, "kind": None, "sha256": None, "files": 0, "problem": f"交付物 {path} 不是普通文件或目录"}
+    lines: list[tuple[str, str]] = []
+    for current, dirs, names in os.walk(path, followlinks=False):
+        dirs.sort()
+        for name in sorted([*dirs, *names]):
+            full = posixpath.join(current, name)
+            rel = posixpath.relpath(full, path)
+            item = os.lstat(full)
+            if stat_mod.S_ISLNK(item.st_mode):
+                target = os.readlink(full)
+                landing = posixpath.normpath(posixpath.join(posixpath.dirname(rel), target))
+                if target.startswith("/") or landing == ".." or landing.startswith("../"):
+                    return {"ok": False, "kind": "dir", "sha256": None, "files": 0,
+                            "problem": f"交付物内 {rel} 是指向 {target!r} 的符号链接(绝对路径或逃出交付物目录, fail-closed)"}
+                lines.append((rel, f"l - {rel} {target}"))
+            elif stat_mod.S_ISDIR(item.st_mode):
+                lines.append((rel, f"d - {rel} -"))
+            elif stat_mod.S_ISREG(item.st_mode):
+                executable = "x" if item.st_mode & 0o111 else "-"
+                lines.append((rel, f"f {executable} {rel} {hashlib.sha256(_read_nofollow(full)).hexdigest()}"))
+            else:
+                return {"ok": False, "kind": "dir", "sha256": None, "files": 0, "problem": f"交付物内 {rel} 不是普通文件 / 目录 / 符号链接"}
+    body = "".join(line + "\n" for _rel, line in sorted(lines))
+    return {"ok": True, "kind": "dir", "sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
+            "files": sum(1 for _rel, ln in lines if ln.startswith("f ")), "problem": None}
+
+
+def _append_deliverable_record(run_dir: str, record: dict[str, Any]) -> None:
+    evidence = posixpath.join(run_dir, DELIVERABLE_EVIDENCE)
+    os.makedirs(posixpath.dirname(evidence), mode=0o700, exist_ok=True)
+    with open(evidence, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _deliverable_digest_cli(args: argparse.Namespace) -> int:
+    """deliverable-digest(执行体, 在自己 run 内): 算交付物摘要, 记录追加 <run>/.lybra-vr/deliverables.jsonl(op=digest), 末行
+    `DELIVERABLE_ENTRY <交回报告条目 JSON>`。退出 0 = 已算; 3 = 拒(路径不合 / 不在 run 内 / 交付物不可摘要)。"""
+    problem = deliverable_rel_problem(args.artifact) or _run_dir_problem(args.run_dir, DELIVERABLE_EVIDENCE)
+    if problem:
+        print(f"DENY [DELIVERABLE_PATH_INVALID] {problem}")
+        return EXIT_DENY
+    source = posixpath.join(args.run_dir, args.artifact)
+    verdict = judge_realpath(args.run_dir, source)
+    if not verdict["allowed"]:
+        print(f"DENY [{verdict['code']}] 交付物 {verdict['reason']}")
+        return EXIT_DENY
+    digest = deliverable_digest(source)
+    if not digest["ok"]:
+        print(f"DENY [DELIVERABLE_UNREADABLE] {digest['problem']}")
+        return EXIT_DENY
+    entry = dict(zip(DELIVERABLE_ENTRY_KEYS, (args.artifact, posixpath.basename(args.run_dir), digest["sha256"])))
+    _append_deliverable_record(args.run_dir, {**entry, "op": "digest", "kind": digest["kind"], "files": digest["files"], "path": source,
+                                              "run_dir": args.run_dir, "host": host_label(), "fingerprint": args.expect_fingerprint,
+                                              "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+    print(f"DELIVERABLE_DIGEST kind={digest['kind']} files={digest['files']} path={source} sha256={digest['sha256']}")
+    print("DELIVERABLE_ENTRY " + json.dumps(entry, ensure_ascii=False))
+    return EXIT_ALLOW
+
+
+def _deliverable_pull_cli(args: argparse.Namespace) -> int:
+    """deliverable-pull(审计, 在自己 run 内; 与执行 run 同一主机): 核源交付物在执行 run 内(真实路径)、摘要 = 交回声明 sha256, 一致才复制到
+    <本 run>/deliverables/<序号>/<交付物末段>(软链按原样复制; 已有旧副本先删), 复制后再核副本摘要; 每次(含不一致)都追加记录
+    <本 run>/.lybra-vr/deliverables.jsonl(op=pull)。末行 `DELIVERABLE_OK …` + 退出 0 = 副本可核验; 3 = 拒(不一致记 ok=false, 即 FAIL 线索)。"""
+    import shutil
+
+    if not _SHA256_RE.match(str(args.expect_sha256 or "")):
+        print(f"DENY [DELIVERABLE_SHA_INVALID] --expect-sha256 {args.expect_sha256!r} 须为 64 位小写十六进制")
+        return EXIT_DENY
+    if args.item < 1:
+        print(f"DENY [DELIVERABLE_ITEM_INVALID] --item {args.item} 须为正整数")
+        return EXIT_DENY
+    copy_rel = posixpath.join(DELIVERABLE_DIR, str(args.item), posixpath.basename(str(args.artifact or "")))
+    problem = (deliverable_rel_problem(args.artifact) or canonical_problem(args.source_run_dir)
+               or _run_dir_problem(args.run_dir, DELIVERABLE_EVIDENCE) or _run_dir_problem(args.run_dir, copy_rel))
+    if problem:
+        print(f"DENY [DELIVERABLE_PATH_INVALID] {problem}")
+        return EXIT_DENY
+    if is_within(args.source_run_dir, args.run_dir) or is_within(args.run_dir, args.source_run_dir):
+        print(f"DENY [DELIVERABLE_PATH_INVALID] 执行 run {args.source_run_dir} 与本 run {args.run_dir} 相互包含")
+        return EXIT_DENY
+    source = posixpath.join(args.source_run_dir, args.artifact)
+    verdict = judge_realpath(args.source_run_dir, source)
+    if not verdict["allowed"]:
+        print(f"DENY [{verdict['code']}] 执行 run 内交付物 {verdict['reason']}")
+        return EXIT_DENY
+    copy_path = posixpath.join(args.run_dir, copy_rel)
+    record = {"op": "pull", "item": args.item, "artifact": args.artifact, "source_run_dir": args.source_run_dir, "source_path": source,
+              "expect_sha256": args.expect_sha256, "copy_path": copy_path, "run_dir": args.run_dir, "run_id": posixpath.basename(args.run_dir),
+              "host": host_label(), "fingerprint": args.expect_fingerprint, "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    digest = deliverable_digest(source)
+    record.update({"source_sha256": digest["sha256"], "kind": digest["kind"], "copy_sha256": None, "ok": False})
+    if not digest["ok"] or digest["sha256"] != args.expect_sha256:
+        reason = digest["problem"] or f"执行 run 内交付物摘要 {digest['sha256']} ≠ 交回声明 {args.expect_sha256}"
+        _append_deliverable_record(args.run_dir, {**record, "problem": reason})
+        print(f"DENY [DELIVERABLE_SHA_MISMATCH] {reason}(不取回; 已记 {DELIVERABLE_EVIDENCE})")
+        return EXIT_DENY
+    parent = posixpath.dirname(copy_path)
+    if os.path.lexists(parent):
+        shutil.rmtree(parent)
+    os.makedirs(parent, mode=0o700)
+    if digest["kind"] == "dir":
+        shutil.copytree(source, copy_path, symlinks=True)
+    else:
+        shutil.copy2(source, copy_path, follow_symlinks=False)
+    copied = deliverable_digest(copy_path)
+    record.update({"copy_sha256": copied["sha256"], "ok": copied["ok"] and copied["sha256"] == args.expect_sha256})
+    if not record["ok"]:
+        record["problem"] = copied["problem"] or f"副本摘要 {copied['sha256']} ≠ 交回声明 {args.expect_sha256}"
+    _append_deliverable_record(args.run_dir, record)
+    if not record["ok"]:
+        print(f"DENY [DELIVERABLE_COPY_MISMATCH] {record['problem']}")
+        return EXIT_DENY
+    print(f"DELIVERABLE_OK item={args.item} kind={digest['kind']} copy={copy_path} sha256={copied['sha256']}")
+    return EXIT_ALLOW
+
+
 def is_udid(value: Any) -> bool:
     return isinstance(value, str) and bool(_UDID_RE.match(value))
 
@@ -1238,6 +1398,21 @@ def _parser() -> argparse.ArgumentParser:
     runc.add_argument("--expect-fingerprint", required=True)
     runc.add_argument("--name", required=True, help="Log name (cmd-<n>); log = <run>/logs/<name>.log")
     runc.add_argument("--command", dest="command_text", required=True, help="The declared command, rendered (placeholders filled), verbatim")
+    dig = sub.add_parser("deliverable-digest", help="AIPOS-F291: executor side; digest one deliverable inside this run (file = sha256 of bytes; "
+                                                    "directory = sha256 of its sorted entry list), append to <run>/.lybra-vr/deliverables.jsonl; "
+                                                    "last line DELIVERABLE_ENTRY = return report entry JSON")
+    dig.add_argument("--run-dir", required=True)
+    dig.add_argument("--expect-fingerprint", required=True)
+    dig.add_argument("--artifact", required=True, help="Deliverable path relative to the run directory")
+    pull = sub.add_parser("deliverable-pull", help="AIPOS-F291: auditor side; copy the executor's deliverable (same host) into "
+                                                   "<run>/deliverables/<item>/ only if its digest equals --expect-sha256 (from the return report); "
+                                                   "every attempt is appended to <run>/.lybra-vr/deliverables.jsonl")
+    pull.add_argument("--run-dir", required=True)
+    pull.add_argument("--expect-fingerprint", required=True)
+    pull.add_argument("--source-run-dir", required=True, help="The executor's run directory (validation-root declaration of the reviewed card)")
+    pull.add_argument("--artifact", required=True, help="Deliverable path relative to the executor's run directory")
+    pull.add_argument("--expect-sha256", required=True)
+    pull.add_argument("--item", type=int, required=True, help="Deliverable number in the card's deliverable_checks (1-based)")
     cmp_ = sub.add_parser("compare", help="Compare two snapshots; exit 0 unchanged, 4 changed")
     cmp_.add_argument("before")
     cmp_.add_argument("after")
@@ -1336,13 +1511,14 @@ def main(argv: list[str] | None = None) -> int:
         except OSError as exc:
             print(f"ERROR [HOST_IO_FAILED] {type(exc).__name__}: {exc}", file=sys.stderr)
             return EXIT_ERROR
-    if args.command == "run-cmd":  # AIPOS-F289 件②
+    if args.command in ("run-cmd", "deliverable-digest", "deliverable-pull"):  # AIPOS-F289 件② / AIPOS-F291
         problem = _own_fingerprint_problem(args.expect_fingerprint)
         if problem:
             print(f"DENY {problem}")
             return EXIT_DENY
+        handler = {"run-cmd": _run_cmd_cli, "deliverable-digest": _deliverable_digest_cli, "deliverable-pull": _deliverable_pull_cli}[args.command]
         try:
-            return _run_cmd_cli(args)
+            return handler(args)
         except OSError as exc:
             print(f"ERROR [HOST_IO_FAILED] {type(exc).__name__}: {exc}", file=sys.stderr)
             return EXIT_ERROR

@@ -46,7 +46,8 @@ role: advisor
 - [ ] **正例**:修复卡 = 纯修复批;验证收账另出一张验证卡(依赖修复卡),链式依赖清晰。
 - [ ] **AIPOS-F196**:环境构建 / 模拟器构建运行 / 截图取证这类「对固定候选的验证」出 `task_mode: validation` 卡(写 `validation_source_task` 来源卡 +
   `validation_candidate` 完整 40 位候选 sha + `lane.repo` 候选所在仓), 交 pi 执行工位、保留独立审计、不写产品仓源码、无合入;代码卡只做实现与离线测试,
-  不把「在目标主机构建验证」塞进代码卡(详见 advisor-commands「非代码工作交 pi」节)。AIPOS-F256: 一切非代码卡(docs / governance / config / validation)
+  不把「在目标主机构建验证」塞进代码卡(详见 advisor-commands「非代码工作交 pi」节)。需主机能力(签名 / 钥匙串)的验证卡带 `requires_capabilities`,
+  审计证据写「常规命令 = 审计自己复现 + `deliverable_checks` = 签名产物按哈希验证」两段(AIPOS-F291)。AIPOS-F256: 一切非代码卡(docs / governance / config / validation)
   一律 pi 执行工位做, 卡稿别写子 agent 的 harness / assigned_to(起草即拒); 代码卡须在车道内真改产品仓, 别把非代码工作报成 code(交回即拒)。正文写清「先按开工稿送达候选源码并核对 SRC_OK(AIPOS-F197), 再构建」。
 - [ ] **AIPOS-F205**:环境卡(config / docs / governance)要在专用验证根为固定候选准备依赖 / 缓存时, 成对写 `validation_source_task` + `validation_candidate`
   (候选 = 来源卡产品仓的完整 40 位 sha; 候选仓按来源卡 lane.repo 解析), 本卡 lane 与交付契约不变(只写治理根仍 `outputs` + 顾问复核);code / validation 卡不用此绑定。

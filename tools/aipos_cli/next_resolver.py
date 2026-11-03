@@ -1223,6 +1223,19 @@ def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: 
     else:
         if release_lines and not view.get("validation_root_refusal"):
             view["validation_root_lines"] = [*view["validation_root_lines"], *release_lines]
+    # AIPOS-F291 件①: 能力卡声明 deliverable_checks = 执行开工稿「交付物哈希」节(摘要命令 + 交回报告节格式), 同一槽位下发; 审计卡不出
+    from tools.aipos_cli.audit_derivation import is_audit_card
+
+    if not is_audit_card(task_id, fm) and not view.get("validation_root_refusal"):
+        from tools.aipos_cli.artifact_ingest import render_deliverable_return_lines
+        from tools.aipos_cli.validation_root import ValidationRootError as _VRError
+
+        try:
+            deliverable_lines = render_deliverable_return_lines(workspace_root, task_id=task_id, fm=fm)
+        except (_VRError, SchemaLoadError, OSError, ValueError) as exc:
+            view["validation_root_refusal"] = {"code": "VALIDATION_ROOT_UNRESOLVED", "reason": f"本卡交付物哈希节不可渲染: {exc}"}
+        else:
+            view["validation_root_lines"] = [*view["validation_root_lines"], *deliverable_lines]
     try:
         view["report_path"] = str(card_report_path(workspace_root, task_id, fm))
     except (SchemaLoadError, OSError, ValueError) as exc:

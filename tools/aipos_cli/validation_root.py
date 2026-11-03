@@ -1347,7 +1347,8 @@ def src_verify_evidence_check(entry: dict[str, Any], run: dict[str, Any], *, can
 
 
 def candidate_evidence_values(governance_root: str | Path, *, audit_task_id: str, audit_instance: str, candidate: str,
-                              candidate_tree: str, requirement: dict[str, Any] | None = None, evidence_card: str = "") -> dict[str, str]:
+                              candidate_tree: str, requirement: dict[str, Any] | None = None, evidence_card: str = "",
+                              deliverables: dict[int, dict[str, Any]] | None = None) -> dict[str, Any]:
     """AIPOS-F199 件②: 审计「验证卡运行证据步骤」渲染值(派审注入 / 开工稿同一函数; 命令全部出自本模块唯一铸造口 init_run_command /
     source_delivery)。本审计卡本实例的声明: 无 = 给顾问 declare 命令; 有、无活动 run = run-start 命令; 有活动 run = 本 run 目录与三条命令。
     AIPOS-F223 件①: 声明 = select_evidence_declaration(host = requirement.host; 裁决入口同一选择)选中的那条; 选不出(多声明未声明 host /
@@ -1394,6 +1395,8 @@ def candidate_evidence_values(governance_root: str | Path, *, audit_task_id: str
                    "evidence_copy": str(run_evidence_copy_dir(gov, entry, "<run-id>")),
                    "evidence_dirs": " / ".join(f"<run_dir>/{d}" for d in run_evidence_declaration()["include_dirs"])})
     run = active_run(entry)
+    # AIPOS-F291: 能力卡交付物取回行(交回声明读得出的项; 同主机 + run 活动且声明有效才铸, 否则给原因)
+    values["deliverable_pulls"] = deliverable_pull_values(gov, entry, run, deliverables or {}, (requirement or {}).get("deliverable_checks") or [])
     if run is None:
         values["run_state"] = (f"无活动 run; 顾问: `{gcmd} project validation-root run-start --id {entry['id']} --candidate {candidate} "
                                "--confirm --actor <顾问实例>`")
@@ -1410,8 +1413,11 @@ def candidate_evidence_values(governance_root: str | Path, *, audit_task_id: str
         from tools.aipos_cli.artifact_ingest import render_candidate_evidence_command
 
         run_values = {"run_dir": run_dir, "src_dir": f"{run_dir}/{helper.SRC_DIR_NAME}", "candidate": candidate, "candidate_tree": candidate_tree}
+        # AIPOS-F291: 能力卡交付物核验命令(展开后)接在常规命令之后, 同一铸造口
+        from tools.aipos_cli.artifact_ingest import evidence_commands_all
+
         values["exec_lines"] = [evidence_exec_command(gov, entry, run, index=i, command=render_candidate_evidence_command(c, run_values))
-                                for i, c in enumerate((requirement or {}).get("commands") or [], 1)]
+                                for i, c in enumerate(evidence_commands_all(requirement), 1)]
         if remote:
             values.update({"evidence_manifest": evidence_manifest_command(gov, entry, run),
                            "evidence_fetch": evidence_fetch_command(gov, entry, run["run_id"])})
@@ -1452,13 +1458,17 @@ def run_evidence_declaration() -> dict[str, Any]:
     # AIPOS-F214 件⑤: helper(只用标准库, 不读 schema)run 内证据文件常量与声明逐项对表(有意两份, 不符 = fail-closed)
     files = decl.get("helper_files")
     expect = {"init_run": helper.INIT_EVIDENCE, "src_verify": helper.SRC_EVIDENCE, "evidence_manifest": helper.EVIDENCE_MANIFEST,
-              "run_cmd": helper.RUN_CMD_EVIDENCE}  # AIPOS-F289 件②: + run-cmd 证据(日志目录 run_cmd_log_dir 另核须 ∈ include_dirs)
-    if (not isinstance(files, dict) or set(files) != {"evidence_dir", "run_cmd_log_dir", *expect} or files["evidence_dir"] not in decl["include_dirs"]
+              "run_cmd": helper.RUN_CMD_EVIDENCE,  # AIPOS-F289 件②: + run-cmd 证据(日志目录 run_cmd_log_dir 另核须 ∈ include_dirs)
+              "deliverable_record": helper.DELIVERABLE_EVIDENCE}  # AIPOS-F291: + 交付物摘要 / 取回记录(副本目录 deliverable_dir 另核须 ∉ include_dirs)
+    if (not isinstance(files, dict) or set(files) != {"evidence_dir", "run_cmd_log_dir", "deliverable_dir", *expect}
+            or files["evidence_dir"] not in decl["include_dirs"]
             or any(files[k] != v or not str(v).startswith(f"{files['evidence_dir']}/") for k, v in expect.items())
-            or files["run_cmd_log_dir"] != helper.RUN_CMD_LOG_DIR or helper.RUN_CMD_LOG_DIR not in decl["include_dirs"]):
+            or files["run_cmd_log_dir"] != helper.RUN_CMD_LOG_DIR or helper.RUN_CMD_LOG_DIR not in decl["include_dirs"]
+            or files["deliverable_dir"] != helper.DELIVERABLE_DIR or helper.DELIVERABLE_DIR in decl["include_dirs"]):
         raise SchemaLoadError("roles.schema.json write_boundary.validation_root.run_evidence.helper_files 须恰为 {evidence_dir(∈ include_dirs), "
-                              f"init_run, src_verify, evidence_manifest, run_cmd, run_cmd_log_dir(∈ include_dirs)}} 且 = helper 常量 {expect} / "
-                              f"RUN_CMD_LOG_DIR={helper.RUN_CMD_LOG_DIR!r}(证据文件在 evidence_dir 下; AIPOS-F214 件⑤ / AIPOS-F289 件②)")
+                              f"init_run, src_verify, evidence_manifest, run_cmd, deliverable_record, run_cmd_log_dir(∈ include_dirs), "
+                              f"deliverable_dir(∉ include_dirs)}} 且 = helper 常量 {expect} / RUN_CMD_LOG_DIR={helper.RUN_CMD_LOG_DIR!r} / "
+                              f"DELIVERABLE_DIR={helper.DELIVERABLE_DIR!r}(证据文件在 evidence_dir 下; AIPOS-F214 件⑤ / AIPOS-F289 件② / AIPOS-F291)")
     return decl
 
 
@@ -1530,6 +1540,115 @@ def evidence_exec_command(governance_root: str | Path, entry: dict[str, Any], ru
     if alias:
         return helper_pipe_command(gov, alias, f"run-cmd {args}", entry, run)
     return helper_local_command(gov, f"run-cmd {args}", entry, run)
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F291: 能力卡交付物验证——执行 run 定位、摘要 / 取回命令铸造(与 run-cmd / evidence-manifest 同族: helper 经本 run 固定快照,
+# 经声明 ssh 别名管道或本机形)、审计 run 取回记录核对(裁决入口唯一调用; 远端 run 读 F200 取回副本)
+# ---------------------------------------------------------------------------
+
+def _executor_entries(governance_root: str | Path, card: str) -> list[dict[str, Any]]:
+    return [e for e in project_validation_roots(governance_root) if e["task_id"] == card and card_kinds().get(e["role_class"]) == "execution_card"]
+
+
+def executor_run(governance_root: str | Path, card: str, run_id: str) -> dict[str, Any]:
+    """卡 card 的执行实例验证根声明里 run_id 那个已开启的 run → {entry, run}。无 / 多于一条 / 声明已撤销 = ValidationRootError(VR_NOT_FOUND)。只读。"""
+    rid = str(run_id or "").strip()
+    hits = [(e, r) for e in _executor_entries(governance_root, card) for r in e.get("runs") or [] if rid and r.get("run_id") == rid]
+    if len(hits) != 1:
+        listing = ", ".join(f"{e['id']}:{r['run_id']}" for e in _executor_entries(governance_root, card) for r in e.get("runs") or []) or "(无)"
+        raise _err("VR_NOT_FOUND", f"卡 {card} 的执行实例验证根声明里 run_id={rid!r} {'不存在' if not hits else '不唯一'}(现有: {listing})")
+    entry, run = hits[0]
+    if declaration_status(entry) == "revoked":
+        raise _err("VR_NOT_FOUND", f"声明 {entry['id']} 已撤销, 其 run 不作交付物来源")
+    return {"entry": entry, "run": run}
+
+
+def executor_active_run(governance_root: str | Path, card: str, instance: str) -> dict[str, Any] | None:
+    """执行开工稿「交付物哈希」节用: 卡 card 本执行实例(缺 = 任一)唯一一条有活动 run 的执行声明 → {entry, run}; 无 / 多 = None(给待定说明)。"""
+    found = [(e, active_run(e)) for e in _executor_entries(governance_root, card) if not instance or e["instance"] == instance]
+    live = [(e, r) for e, r in found if r is not None and declaration_status(e) == "active"]
+    return {"entry": live[0][0], "run": live[0][1]} if len(live) == 1 else None
+
+
+def _helper_line(governance_root: str | Path, entry: dict[str, Any], run: dict[str, Any], remote_args: str) -> str:
+    """helper 子命令执行行(evidence_exec_command 同一形态: 经声明 ssh 别名管道 = helper_pipe_command; 否则本机形 helper_local_command)。"""
+    gov = Path(governance_root).expanduser().resolve()
+    alias = ssh_alias_for(gov, entry)
+    if alias:
+        return helper_pipe_command(gov, alias, remote_args, entry, run)
+    return helper_local_command(gov, remote_args, entry, run)
+
+
+def deliverable_digest_command(governance_root: str | Path, entry: dict[str, Any], run: dict[str, Any], *, artifact: str) -> str:
+    """执行体在自己 run 内算交付物摘要的命令(唯一铸造口; 执行开工稿「交付物哈希」节)。末行 DELIVERABLE_ENTRY = 交回报告条目。"""
+    args = " ".join(shlex.quote(a) for a in ("--run-dir", run_directory(entry, run["run_id"]), "--expect-fingerprint",
+                                             str(entry["host_fingerprint"]), "--artifact", artifact))
+    return _helper_line(governance_root, entry, run, f"deliverable-digest {args}")
+
+
+def deliverable_pull_command(governance_root: str | Path, entry: dict[str, Any], run: dict[str, Any], *, source_run_dir: str, artifact: str,
+                             expect_sha256: str, item: int) -> str:
+    """审计把执行 run 内交付物按交回声明 sha256 取回到自己 run 的命令(唯一铸造口; 审计开工稿 / 派审步骤 ⑥ 交付物验证)。"""
+    args = " ".join(shlex.quote(a) for a in ("--run-dir", run_directory(entry, run["run_id"]), "--expect-fingerprint", str(entry["host_fingerprint"]),
+                                             "--source-run-dir", source_run_dir, "--artifact", artifact, "--expect-sha256", expect_sha256,
+                                             "--item", str(int(item))))
+    return _helper_line(governance_root, entry, run, f"deliverable-pull {args}")
+
+
+def deliverable_pull_values(governance_root: str | Path, entry: dict[str, Any], run: dict[str, Any] | None,
+                            deliverables: dict[int, dict[str, Any]], checks: list[dict[str, Any]]) -> dict[int, dict[str, str]]:
+    """审计开工稿每个交付物的取回行或待定原因: {序号: {exec | reason}}。审计 run 与执行 run 不在同一主机 = 原因(出口改卡面 host)。"""
+    from tools.aipos_cli.artifact_ingest import deliverable_text, runtime_evidence_declaration
+
+    out: dict[int, dict[str, str]] = {}
+    for check in checks:
+        item = int(check["item"])
+        got = deliverables.get(item)
+        if got is None:
+            continue
+        if not same_host(entry["host"], got["entry"]["host"]):
+            out[item] = {"reason": deliverable_text("host_mismatch", audit_host=entry["host"], exec_host=got["entry"]["host"],
+                                                    card_field=str(runtime_evidence_declaration()["card_field"]))}
+        elif run is None or declaration_status(entry) != "active":
+            out[item] = {"reason": deliverable_text("pending_run")}
+        else:
+            out[item] = {"exec": deliverable_pull_command(governance_root, entry, run, source_run_dir=got["run_dir"], artifact=got["artifact"],
+                                                          expect_sha256=got["sha256"], item=item)}
+    return out
+
+
+def deliverable_record_problems(record_root: str | Path, *, item: int, artifact: str, expect_sha256: str, source_run_dir: str, run_dir: str,
+                                fingerprint: str) -> list[dict[str, str]]:
+    """审计 run 的交付物取回记录核对(裁决入口唯一调用): record_root = run 目录(本机)或 F200 取回副本 files/(远端, 已经 evidence_copy_check 核过)。
+    取本交付物最后一条 op=pull 记录: ok、来源 run 目录 / 交付物 / 交回声明 sha256 / 源与副本摘要 / 副本路径 / run 目录 / 主机指纹逐项核。
+    返回 [{kind: missing | sha | field, key, got, want, record}](空 = 通过)。"""
+    import json
+
+    from tools.aipos_cli.artifact_ingest import deliverable_copy_rel
+
+    path = Path(record_root) / helper.DELIVERABLE_EVIDENCE
+    record_name = f"{run_dir}/{helper.DELIVERABLE_EVIDENCE}"
+    try:
+        rows = [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    except FileNotFoundError:
+        return [{"kind": "missing", "record": record_name}]
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        return [{"kind": "missing", "record": f"{record_name}: {exc}"}]
+    mine = [r for r in rows if isinstance(r, dict) and r.get("op") == "pull" and r.get("item") == item]
+    if not mine:
+        return [{"kind": "missing", "record": record_name}]
+    rec = mine[-1]
+    problems: list[dict[str, str]] = []
+    for key in ("source_sha256", "copy_sha256"):
+        if rec.get(key) != expect_sha256:
+            problems.append({"kind": "sha", "key": key, "got": str(rec.get(key)), "want": expect_sha256})
+    want = {"ok": True, "artifact": artifact, "expect_sha256": expect_sha256, "source_run_dir": source_run_dir, "run_dir": run_dir,
+            "copy_path": f"{run_dir}/{deliverable_copy_rel(item, artifact)}", "fingerprint": fingerprint}
+    for key, value in want.items():
+        if rec.get(key) != value and not (key == "ok" and problems):
+            problems.append({"kind": "field", "key": key, "got": repr(rec.get(key)), "want": repr(value)})
+    return problems
 
 
 def evidence_fetch_command(governance_root: str | Path, entry: dict[str, Any], run_id: str) -> str:
