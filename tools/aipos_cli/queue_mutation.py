@@ -92,6 +92,52 @@ def withdraw_owner_ruling_states() -> tuple[str, ...]:
     return states
 
 
+def reopen_advisor_declaration() -> dict[str, Any]:
+    """AIPOS-F282 件①: 顾问 reopen 声明唯一读取口 transitions.schema queue_mutations.transitions.reopen.advisor_actor
+    ({from_states, actor_role_class})。缺 / from_states 不是 reopen.from_states 的非空子集 / 角色类空 = SchemaLoadError(fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    spec = ((load_schema("transitions").get("queue_mutations") or {}).get("transitions") or {}).get("reopen") or {}
+    decl = spec.get("advisor_actor") if isinstance(spec, dict) else None
+    states = tuple(str(s) for s in (decl or {}).get("from_states") or ()) if isinstance(decl, dict) else ()
+    role_class = str((decl or {}).get("actor_role_class") or "").strip() if isinstance(decl, dict) else ""
+    if not states or not set(states) <= set(REOPEN_SOURCE_STATES) or not role_class:
+        raise SchemaLoadError("transitions.schema.json queue_mutations.transitions.reopen.advisor_actor(from_states 须为 reopen.from_states "
+                              f"{list(REOPEN_SOURCE_STATES)} 的非空子集 / actor_role_class 非空)未声明齐(AIPOS-F282), 得到 {decl!r}")
+    return {"from_states": states, "actor_role_class": role_class}
+
+
+def reopen_advisor_refusal(repo_root: Path, actor: str, *, state: str, task_id: str) -> dict[str, Any]:
+    """AIPOS-F282 件①: 「actor 以本项目顾问类实例身份 reopen 该源状态的卡」的唯一判定(搬卡执行器与推导核续跑出口同读)。
+
+    适用 = 源状态 ∈ advisor_actor.from_states; 放行 = 实例角色类 == actor_role_class(custom_roles.authorize_instance_class 唯一判定,
+    读 roles 注册表)且实例名项目段属本项目(naming_profile.instance_project_segment)。返回 {"applies", "ok", "role_class", "segment",
+    "message"}: applies=False = 该源状态不适用(调用方按既有卡归属判定, 行为不变); ok=False 时 message = 双语拒因(owner_texts.reopen_exit
+    .actor_refused, i18n.Localized; 出声点按用户语言取)。项目段声明读不出 = 不放行(fail-closed, 拒因带原因)。"""
+    from tools.aipos_cli.custom_roles import authorize_instance_class
+    from tools.aipos_cli.i18n import owner_text
+    from tools.aipos_cli.naming_profile import get_naming_profile, instance_project_segment
+
+    decl = reopen_advisor_declaration()
+    out: dict[str, Any] = {"applies": state in decl["from_states"], "ok": False, "role_class": None, "segment": None, "message": None}
+    if not out["applies"]:
+        return out
+    gate = authorize_instance_class(str(actor or ""), decl["actor_role_class"], repo_root)
+    out["role_class"] = gate.get("role_class")
+    try:
+        project = str(get_naming_profile(repo_root)["project_segment"])
+        segment, in_project = instance_project_segment(str(actor or ""), repo_root)
+    except (ValueError, KeyError, OSError) as exc:
+        project, segment, in_project = f"?({exc})", None, False
+    out["segment"] = segment
+    if gate["ok"] and in_project:
+        out["ok"] = True
+        return out
+    out["message"] = owner_text("reopen_exit", "actor_refused", state=state, task_id=task_id, actor=actor, project=project,
+                                role_class=gate.get("role_class") or "?", segment=segment or "?")
+    return out
+
+
 def withdraw_owner_ruling_problem(repo_root: Path, task_id: str, owner_ruling_ref: str | None, *, dry_run: bool) -> tuple[str | None, str | None]:
     """AIPOS-F170 件①: 须带 Owner 裁决引用的撤回 → (拒因|None, 提示|None)。引用 = 本治理根已落 owner_decision_record 的 decision_id:
     记录 task_id 须为本卡、allowed_next_action 须为收件箱声明中 effect=withdraw_card 的选项。预演时记录未落 = 提示(owner decide 先落记录
@@ -1047,6 +1093,16 @@ def mutate_queue_task(
     validation_profiles = profiles if profiles else None
     # AIPOS-315: withdraw allows any actor (advisor can revoke any task), skip actor validation(AIPOS-F184: supersede 同, 角色类另判)
     validation_actor = None if action in ("withdraw", "supersede") else actor
+    # AIPOS-F282 件①: 声明源状态(blocked)的 reopen 也接受本项目顾问类实例(唯一判定 reopen_advisor_refusal); 放行 = 不按卡归属判 actor,
+    # 卡面 reopened_by / 轮界记录 reopened_by 如实记该顾问实例。其余源状态 / 其余动作的 actor 判定不变
+    reopen_by_advisor: dict[str, Any] | None = None
+    if action == "reopen":
+        reopen_by_advisor = reopen_advisor_refusal(repo_root, actor, state=str(source_task.get("queue_state") or ""),
+                                                   task_id=str(source_task.get("task_id") or ""))
+        if reopen_by_advisor["ok"]:
+            validation_actor = None
+            result["reopen_actor_basis"] = {"basis": "advisor", "role_class": reopen_by_advisor["role_class"],
+                                            "project_segment": reopen_by_advisor["segment"]}
     validation = validate_single_task(source_task, current_actor=validation_actor, profiles=validation_profiles)
     if validation["blocking_reasons"]:
         # AIPOS-315: filter out actor-related blocks for withdraw
@@ -1065,6 +1121,12 @@ def mutate_queue_task(
                     result["warnings"].append(f"MALFORMED_REPAIR: {reason} (will be cleaned by transition engine)")
                 else:
                     result["blocking_reasons"].extend([reason])
+            # AIPOS-F282 件①: 卡归属判定拒且顾问判定适用(声明源状态)却不放行 = 追加双语拒因与出口(按用户语言出声)
+            if (reopen_by_advisor and reopen_by_advisor["applies"] and not reopen_by_advisor["ok"]
+                    and any("Current actor does not match" in str(r) for r in validation["blocking_reasons"])):
+                from tools.aipos_cli.i18n import voice
+
+                result["blocking_reasons"].append(voice(reopen_by_advisor["message"], where="queue reopen"))
         else:
             result["blocking_reasons"].extend(validation["blocking_reasons"])
     if validation["warnings"]:
@@ -1227,7 +1289,8 @@ def mutate_queue_task(
     preview_task["claimed_by"] = updated_metadata.get("claimed_by")
     preview_task["needs_owner"] = updated_metadata.get("needs_owner")
     # AIPOS-315: use same actor logic for preview validation
-    preview_actor = None if action in ("withdraw", "supersede") else actor
+    # AIPOS-F282 件①: 顾问 reopen 放行时搬卡后预览同样不按卡归属判 actor(与源卡校验同一 validation_actor)
+    preview_actor = validation_actor
     preview_validation = validate_single_task(preview_task, current_actor=preview_actor, profiles=validation_profiles)
     if preview_validation["blocking_reasons"]:
         for reason_text in preview_validation["blocking_reasons"]:

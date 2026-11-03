@@ -195,7 +195,8 @@ def return_outcome_declaration() -> dict[str, Any]:
     values = tuple(str(v.get("value")) for v in enum if isinstance(v, dict) and v.get("value"))
     blocked = (decl or {}).get("blocked") if isinstance(decl, dict) else None
     keys = ("field", "default", "record_field", "reject_category", "reject_text", "blocked")
-    bkeys = ("action_type", "stop_action_type", "end_reason", "owner_reason", "block_command", "block_reason", "resume", "suggested_block",
+    # AIPOS-F282: 续跑出口文案移入 config.schema owner_texts.reopen_exit(双语块, 读取 i18n.owner_text), 声明处只留指针 resume_texts
+    bkeys = ("action_type", "stop_action_type", "end_reason", "owner_reason", "block_command", "block_reason", "resume_texts", "suggested_block",
              "stopped", "close_refusal")
     if (not isinstance(decl, dict) or any(not decl.get(k) for k in keys) or not isinstance(blocked, dict)
             or any(not str(blocked.get(k) or "").strip() for k in bkeys) or str(decl["default"]) not in values or "blocked" not in values):
@@ -5371,10 +5372,36 @@ def _derive_return_blocked(workspace_root: Path, task_id: str, records: dict[str
             "suggested_action": f"{decl['suggested_block']}; {resume}"}
 
 
+def return_blocked_advisor(workspace_root: Path, task_id: str) -> str:
+    """AIPOS-F282 件①: 交回阻塞卡续跑出口里 reopen 的 actor = 驱动方顾问实例(唯一取法): loop 运行记录 driver——loop 进程内 = 本次
+    --actor(即本次运行记录的 driver), 否则本卡运行记录由新到旧第一份有 driver 者; 该实例须过顾问 reopen 判定(queue_mutation
+    .reopen_advisor_refusal, 源状态 = block 转移的目标目录)。取不到 / 不过判定 = ""(调用方用占位, 不回落执行实例或别的身份)。
+    运行记录读不出 = LoopRunRecordError 上抛(fail-closed)。"""
+    from tools.aipos_cli.loop_driver import load_loop_contract
+    from tools.aipos_cli.loop_run_record import _run_files, loop_runs_dir, read_run, run_record_declaration
+    from tools.aipos_cli.queue_mutation import ALLOWED_TRANSITIONS, reopen_advisor_refusal
+
+    driver = str(_scoped_driver().get("actor") or "").strip()
+    if not driver:
+        rdecl = run_record_declaration(load_loop_contract())
+        for path in reversed(_run_files(loop_runs_dir(Path(workspace_root), task_id))):
+            driver = str(read_run(path, rdecl).get("driver") or "").strip()
+            if driver:
+                break
+    if not driver:
+        return ""
+    gate = reopen_advisor_refusal(Path(workspace_root), driver, state=ALLOWED_TRANSITIONS["block"][1], task_id=task_id)
+    return driver if gate["ok"] else ""
+
+
 def _return_blocked_resume(workspace_root: Path, task_id: str, records: dict[str, Any]) -> str:
-    """续跑出口原文(声明 blocked.resume); reopen 的 actor = 本卡认领执行实例(搬卡执行器按 actor 判卡归属, 与 block 同一判据)。"""
-    executor = _claimer_instance(records) or "<本卡执行实例>"
-    return str(return_outcome_declaration()["blocked"]["resume"]).format(governance_root=workspace_root, task_id=task_id, executor=executor)
+    """续跑出口原文(双语块 config.schema owner_texts.reopen_exit.resume, 按用户语言出声 i18n.voice); AIPOS-F282: reopen 的 actor =
+    驱动方顾问实例(return_blocked_advisor; 取不到 = 双语占位), 不再给执行实例(顾问以执行体身份敲门动词 = 冒用身份)。"""
+    from tools.aipos_cli.i18n import owner_text, voice
+
+    advisor = return_blocked_advisor(workspace_root, task_id) or owner_text("reopen_exit", "advisor_placeholder")
+    return voice(owner_text("reopen_exit", "resume", governance_root=workspace_root, task_id=task_id, advisor=advisor),
+                 where="next_resolver return_blocked")
 
 
 def _return_blocked_stop(workspace_root: Path, task_id: str, records: dict[str, Any]) -> dict[str, Any] | None:

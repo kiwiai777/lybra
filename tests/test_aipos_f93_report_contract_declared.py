@@ -241,7 +241,7 @@ def test_item2_enroll_delivery_single_render_gate_cli_guide(tmp_path):
     assert render_enroll_deliver_command(["lybra", "roles", "--workspace-root", gov], role="executor",
                                          instance=pi_exec, governance_root=gov, workspace=str(tmp_path / "ws-exec"),
                                          extra=["--executor-mode", "workstation", "--gate-url", guide["gate_url"], "--ttl", "86400",
-                                                "--actor", guide["instances"]["advisor"],
+                                                "--actor", guide["instances"]["advisor"], "--project", guide["project_name"],  # AIPOS-F282 件②
                                                 "--owner-authorization-ref", guide["authorization"]["authorization_id"], "--reason",
                                                 f"'Onboarding probe {pi_exec}'"],  # AIPOS-F157: --actor = 签发实例(顾问)
                                          phase="--dry-run") in step6["commands"]

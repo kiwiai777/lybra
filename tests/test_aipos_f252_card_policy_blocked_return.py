@@ -236,7 +236,8 @@ def test_item2_blocked_return_loop_blocks_card_inbox_and_resume_exit(f90_rig, co
     assert landed and f78._git(r.gov, "status", "--porcelain", "--", "5_tasks/queue/blocked", "5_tasks/queue/claimed") == ""
     d = nr.derive_next_step(TASK, r.gov)
     _show(f"[件② 推导] {d['current_state']} action={d['action']}\n  missing={d['missing_records']}\n  出口={d['suggested_action']}")
-    assert d["action"]["type"] == "return_blocked" and f"queue reopen --task-id {TASK} --actor {f78.EXEC}" in d["suggested_action"]
+    # AIPOS-F282 件①: 续跑出口的 reopen actor 改为驱动方顾问实例(loop 运行记录 driver), 不再给执行实例
+    assert d["action"]["type"] == "return_blocked" and f"queue reopen --task-id {TASK} --actor {f78.DRIVER}" in d["suggested_action"]
     assert f"lybra loop --task-id {TASK}" in d["suggested_action"]
     items = [i for i in _inbox(r.gov) if i.get("task_id") == TASK]
     _show("---- 件② Owner 收件箱 ----\n" + "\n".join(f"{i['item_id']} [{i['category']}] {i['subject']}: {i['ask']}" for i in items))
