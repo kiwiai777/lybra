@@ -66,7 +66,9 @@ class LockBusy(Exception):
 
 
 class ChannelLock:
-    """flock-based single-instance lock; released by the kernel when the process exits (no stale lock files)."""
+    """flock-based single-instance lock; released by the kernel when the process exits (no stale lock files).
+    Not workspace_config.exclusive_flock: relay/ must not import gate internals (AIPOS-F290 boundary); this is the
+    relay's only flock call site, registered in tests/test_aipos_f135_finalize_repo_serial.py's flock invariant."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -89,8 +91,7 @@ class ChannelLock:
 
     def release(self) -> None:
         if self._fd is not None:
-            fcntl.flock(self._fd, fcntl.LOCK_UN)
-            os.close(self._fd)
+            os.close(self._fd)  # closing the only descriptor drops the flock (no separate unlock call)
             self._fd = None
 
 
