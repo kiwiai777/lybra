@@ -17,7 +17,8 @@ AIPOS-F79 精确批次提交(chris 总顾问实撞):
 - 件②: ``--dry-run`` 输出将提交文件清单(modified/added/deleted/untracked_selected),
   只读 ``git status --porcelain`` + ``git diff --name-status``, 不 add/不 reset/不 stash。
 - 件③: 正式提交后 ``git show --name-only HEAD`` 与清单逐条比对, 不同即 FAIL 出声;
-  预暂存文件在 --paths 内 = 纳入清单, 在 --paths 外 = 拒并列出。
+  预暂存文件在 --paths 内 = 纳入清单, 在 --paths 外 = 拒并列出(AIPOS-F285 起: --paths 外 = 原样保留不再拒;
+  --paths 内暂存版 ≠ 工作区版 = 与他人暂存重叠才拒, 见 verbs.schema lybra_governance_commit.concurrent_landing)。
 - 无 --paths 的整根 ``git add -A -- .`` 仅保留给 lybra 自身工作区; 他项目一律 --paths。
 
 AIPOS-F79C push 假阴性热修(chris 总顾问阻塞, 2026-09-21 --json 取证):
@@ -1665,7 +1666,7 @@ def governance_commit(
     """N6 收账提交:校验四件 → commit → push(唯一提交口; AIPOS-F79C 件③ 总闸在此封口)。
 
     AIPOS-F94 件①: 给 task_id 而不给 --paths/--paths-file = task 范围精确提交——白名单由 resolve_task_scope 按卡与声明推导
-    (本卡与其审计卡的队列文件 / 草稿 / 各类记录 / 台账落点 + 卡编年史), 之后与 --paths 走同一条实现(他人暂存在范围外 = 拒,
+    (本卡与其审计卡的队列文件 / 草稿 / 各类记录 / 台账落点 + 卡编年史), 之后与 --paths 走同一条实现(他人暂存在范围外 = 原样保留不再拒, 范围内与他人暂存重叠 = 拒(AIPOS-F285),
     护栏 / 清单核对 / push 判据不变), 禁整根。范围已落账(task_landing: 已提交且已推送)= PASS no-op(幂等, 不碰 git 写)。
     """
     task_scope: dict[str, Any] | None = None
@@ -2093,7 +2094,7 @@ def _governance_commit_impl(
     # governance-commit 会把这些也一起 commit,然后 rebase 可能导致问题
     # AIPOS-F79 件③: 检查提到 dry-run 之前(dry-run 必须如实预演 BLOCK), 语义改为:
     #   无 --paths: 任何预暂存 → BLOCK(原样);
-    #   有 --paths: 预暂存在 --paths 内 = 纳入清单可接受; 在 --paths 外 = 拒并列出。
+    #   有 --paths: 预暂存在 --paths 内 = 纳入清单可接受; 在 --paths 外 = 拒并列出(以下 AIPOS-F285 段取代)。
     # AIPOS-F79C 件④: 预暂存/暂存集一律 --no-renames, 与清单(diff --no-renames)及 git show --no-renames 同口径
     pre_staged_inside: set[str] = set()
     # AIPOS-F285 件①(11-03 共享仓互锁): 本次 pathspec(--paths / 卡范围; 无 --paths = 治理根 .)之外的他人暂存原样保留、不混入
