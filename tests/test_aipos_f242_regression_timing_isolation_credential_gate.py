@@ -322,7 +322,8 @@ def test_item3_single_criterion_both_gate_entries():
     assert "credential_refusal(" in inspect.getsource(artifact_ingest.gate_credential_blocking)
     defs = sorted(str(f.relative_to(REPO_ROOT)) for f in (REPO_ROOT / "tools").rglob("*.py")  # 不依赖 .git(部署快照里也能跑)
                   for line in f.read_text(encoding="utf-8").splitlines() if line.startswith(("def credential_hits(", "def credential_scan(")))
-    assert defs == ["tools/aipos_cli/artifact_ingest.py"] * 2, defs
+    # AIPOS-F289 件①: 命中判定 credential_hits 迁至轻模块 credential_guard(loop 进度打码同读, 免扩合并后预载闭包); 各仍只一处定义
+    assert defs == ["tools/aipos_cli/artifact_ingest.py", "tools/aipos_cli/credential_guard.py"], defs
 
 
 # ===========================================================================

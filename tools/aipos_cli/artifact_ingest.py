@@ -2189,7 +2189,7 @@ def restricted_amend_subfields() -> dict[str, list[str]]:
 
 _CROSS_HOST_KEYS = ("ssh_commands", "ssh_options_with_arg", "run_cmd_name", "run_long_name", "texts")
 _CROSS_HOST_TEXTS = ("exec_local", "exec_remote", "exec_line", "exec_pending", "remote_run_long", "ssh_prefix", "foreign_run", "rewrite",
-                     "outlet", "amend_reason", "basis_declared", "basis_validation_host", "exhausted_hint")
+                     "outlet", "amend_reason", "basis_declared", "basis_validation_host", "exhausted_hint", "rewrite_manual")
 _CROSS_HOST_WHERE = "transitions.schema.json artifact_ingest.verdict.runtime_evidence.candidate_subject.cross_host"
 
 
@@ -2291,12 +2291,12 @@ def _run_path_hits(command: str, ctx: dict[str, Any]) -> list[dict[str, Any]]:
 
 def cross_host_rewrite(governance_root: Path | str, command: str, *, host: str | None = None,
                        _ctx: dict[str, Any] | None = None) -> dict[str, Any]:
-    """AIPOS-F289 件③④: 一条声明命令的跨机写法判定与改写(唯一实现; 出卡拦截与受限 amend 等价判据同读)。返回 {ssh: {target, host, basis} | None,
+    """AIPOS-F289 件③④: 一条声明命令的跨机写法判定与改写(唯一实现; 出卡拦截与受限 amend 等价判据同读)。返回 {ssh_prefix: {target, host, basis} | None,
     runs: [{path, task, decl, replacement}], command: 改写后命令(无需改写 = 原样; ssh 首段后另有本机控制符 = None 不可自动改写), host: 改写后应声明的主机}。
     ssh 判据: 首段 ssh 目标(去 user@)= 卡面 host、任一验证根主机标签或其 ssh 别名; 其余 ssh(他用途)不算。"""
     ctx = _ctx if _ctx is not None else cross_host_context(governance_root)
     decl = ctx["decl"]
-    out: dict[str, Any] = {"ssh": None, "runs": [], "command": command, "host": host}
+    out: dict[str, Any] = {"ssh_prefix": None, "runs": [], "command": command, "host": host}
     body = command
     invocation = _ssh_invocation(command, decl)
     if invocation is not None:
@@ -2304,12 +2304,12 @@ def cross_host_rewrite(governance_root: Path | str, command: str, *, host: str |
         labels = {str(label): str(meta.get("ssh_alias") or "") for label, meta in ctx["hosts"].items()}
         label = next((lab for lab, alias in labels.items() if target in (lab, alias)), None)
         if host and target == host:
-            out["ssh"] = {"target": invocation["target"], "host": host, "basis": "basis_declared"}
+            out["ssh_prefix"] = {"target": invocation["target"], "host": host, "basis": "basis_declared"}
         elif label is not None:
-            out["ssh"] = {"target": invocation["target"], "host": label, "basis": "basis_validation_host"}
-        if out["ssh"] is not None:
+            out["ssh_prefix"] = {"target": invocation["target"], "host": label, "basis": "basis_validation_host"}
+        if out["ssh_prefix"] is not None:
             body = invocation["remote"]
-            out["host"] = host or out["ssh"]["host"]
+            out["host"] = host or out["ssh_prefix"]["host"]
     if ctx["pattern"] is not None and body is not None:
         hits = _run_path_hits(body, ctx)
         out["runs"] = hits
@@ -2356,9 +2356,9 @@ def cross_host_evidence_problems(governance_root: Path | str, raw: Any, *, card_
             commands.append(command)
             continue
         got = cross_host_rewrite(governance_root, command, host=host, _ctx=ctx)
-        if got["ssh"] is not None:
-            problems.append(cross_host_text("ssh_prefix", index=index, command=command, target=got["ssh"]["target"],
-                                            host=got["ssh"]["host"], basis=cross_host_text(got["ssh"]["basis"])))
+        if got["ssh_prefix"] is not None:
+            problems.append(cross_host_text("ssh_prefix", index=index, command=command, target=got["ssh_prefix"]["target"],
+                                            host=got["ssh_prefix"]["host"], basis=cross_host_text(got["ssh_prefix"]["basis"])))
             new_host = new_host or got["host"]
         for hit in got["runs"]:
             problems.append(cross_host_text("foreign_run", index=index, command=command, path=hit["path"], decl=hit["decl"], task=hit["task"]))
@@ -2372,7 +2372,7 @@ def cross_host_evidence_problems(governance_root: Path | str, raw: Any, *, card_
     value = {**raw, "commands": commands, **({"host": new_host} if new_host else {})} if rewritable else None
     key = str(decl["card_field"])
     rewrite = cross_host_text("rewrite", card_field=key, value=json.dumps(value, ensure_ascii=False) if value is not None
-                              else "(ssh 首段后另有本机命令, 须手工改写 / the ssh segment is followed by local commands: rewrite by hand)")
+                              else cross_host_text("rewrite_manual"))
     out = {"category": category, "problems": problems, "value": value, "rewrite": rewrite, "amend": "", "supersede": "", "outlet": ""}
     if outlet:
         from tools.aipos_cli.workspace_config import lybra_command_prefix

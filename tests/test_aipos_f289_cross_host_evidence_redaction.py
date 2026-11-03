@@ -303,6 +303,11 @@ def test_acceptance3_draft_refuses_ssh_prefix_and_foreign_run_path(xhost):
                                                  audit_instance=AUDITOR, card_task_id=VAL, subject_frontmatter={"task_mode": "validation"})
     _show("[验收③ 补审派发同判据]\n  " + "\n  ".join(checked["problems"]))
     assert any("以 `ssh " + HOST + "` 开头" in p for p in checked["problems"])
+    # ssh 首段后另有本机命令 = 照拒, 改写建议说明须手工改(不自动拼)
+    checked = check_runtime_evidence_declaration({"required": True, "commands": [f"ssh {HOST} 'cat {xhost.exec_run}/src/x' && echo done"]},
+                                                 governance_root=gov, audit_instance=AUDITOR, card_task_id=VAL,
+                                                 subject_frontmatter={"task_mode": "validation"})
+    assert any("不能自动改写" in p for p in checked["problems"]) and any("以 `ssh " + HOST + "` 开头" in p for p in checked["problems"])
     # 卡分支主体(code 卡)不受影响: ssh 他用照旧
     checked = check_runtime_evidence_declaration({"required": True, "commands": [f"ssh {ALIAS} 'true'"]}, governance_root=gov,
                                                  audit_instance=None, card_frontmatter={"task_mode": "code"})
