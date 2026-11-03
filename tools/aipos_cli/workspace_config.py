@@ -2103,7 +2103,7 @@ def _workstations_declaration() -> dict[str, Any]:
 
 
 def _validate_workstation_entry(instance: str, entry: Any, decl: dict[str, Any]) -> dict[str, str]:
-    from tools.aipos_cli.harness_launch import redact_progress
+    from tools.aipos_cli.harness_launch import credential_flagged
 
     if not isinstance(entry, dict):
         raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID", f"workstations.{instance} 须为 JSON 对象, 得到 {type(entry).__name__}")
@@ -2116,7 +2116,7 @@ def _validate_workstation_entry(instance: str, entry: Any, decl: dict[str, Any])
             raise WorkstationDeclarationError("WORKSTATION_MATERIAL_UNDECLARED", f"workstations.{instance}.{key} 未声明")
         if not isinstance(value, str) or "\n" in value or "\r" in value:
             raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID", f"workstations.{instance}.{key} 须为非空单行串")
-        if redact_progress(value) != value:  # 凭据判据与进度打码同一实现(凭据字样 / 长不透明串)
+        if credential_flagged(value):  # 凭据判据与进度打码同一实现(凭据字样 / 长不透明串; AIPOS-F289: 人读字段口径不随进度打码放宽)
             raise WorkstationDeclarationError("WORKSTATION_MATERIAL_INVALID",
                                               f"workstations.{instance}.{key} 含凭据字样或长不透明串(开工提示禁含凭据)")
         out[key] = value.strip()
@@ -2152,7 +2152,7 @@ def project_launch_guard(project_root: str | Path) -> dict[str, Any]:
     """AIPOS-F165 件③: loop 拉起禁提权开关的唯一读取口(声明 config.schema project_json.schema.launch_guard)。
     返回 {no_new_privs: bool, owner_approval_ref: str | None, declared: bool}; 缺段 = 缺省开(声明 default)。
     段形不合 / 关闭而缺 owner_approval_ref = LaunchGuardDeclarationError; project.json 不可读 = 原异常上抛(不吞成缺省)。只读。"""
-    from tools.aipos_cli.harness_launch import redact_progress
+    from tools.aipos_cli.harness_launch import credential_flagged
     from tools.schema_loader import SchemaLoadError, load_schema
 
     decl = (((load_schema("config").get("configuration_sources") or {}).get("project_json") or {}).get("schema") or {}).get("launch_guard")
@@ -2178,7 +2178,7 @@ def project_launch_guard(project_root: str | Path) -> dict[str, Any]:
         raise LaunchGuardDeclarationError(code, f"{where}.no_new_privs 须为布尔 true/false, 实为 {enabled!r}")
     auth = raw.get("owner_approval_ref")
     if auth is not None and (not isinstance(auth, str) or not auth.strip() or "\n" in auth or "\r" in auth
-                             or redact_progress(auth) != auth):
+                             or credential_flagged(auth)):
         raise LaunchGuardDeclarationError(code, f"{where}.owner_approval_ref 须为非空单行串且不含凭据字样, 实为 {auth!r}")
     if not enabled and auth is None:
         raise LaunchGuardDeclarationError(code, f"{where}.no_new_privs=false 而缺 owner_approval_ref(关闭禁提权须 Owner 授权引用)")
@@ -2434,7 +2434,7 @@ def pi_model_id_problem(value: Any) -> str:
 
 
 def _pi_models_problems(raw: Any) -> list[str]:
-    from tools.aipos_cli.harness_launch import redact_progress
+    from tools.aipos_cli.harness_launch import credential_flagged
 
     decl = pi_models_declaration()
     if raw is None:
@@ -2454,7 +2454,7 @@ def _pi_models_problems(raw: Any) -> list[str]:
             elif pi_model_id_problem(model):
                 problems.append(f"pi_models.by_role.{role}: {pi_model_id_problem(model)}")
     ref = raw.get("owner_ref")
-    if ref is not None and (not isinstance(ref, str) or not ref.strip() or "\n" in ref or "\r" in ref or redact_progress(ref) != ref):
+    if ref is not None and (not isinstance(ref, str) or not ref.strip() or "\n" in ref or "\r" in ref or credential_flagged(ref)):
         from tools.aipos_cli.harness_launch import READABLE_REF_HINT
 
         problems.append(f"pi_models.owner_ref 须为非空单行串且不含凭据字样, 实为 {ref!r}({READABLE_REF_HINT})")

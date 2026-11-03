@@ -4,7 +4,7 @@
 (enums.schema harness.launch.events 格式; 未知类型只计数), stderr 只留末尾若干行(verbs.schema lybra_loop.launch)。
 pump(seconds) 作为唯一哨兵 run_fs_watch 的 sleeper: select 事件驱动阻塞读输出至多 seconds 秒, 非 sleep 自旋。
 terminate_group: SIGTERM → 等声明秒数 → SIGKILL 整组(含孙进程)。无守护/调度/心跳/常驻: 进程只活在一次等待内。
-token/凭据永不上屏: 凭据字样所在行整行隐去, 长不透明串打码。
+token/凭据永不上屏: 只遮值不遮键名(AIPOS-F289 件①), 无法定位值的凭据字样行整行隐去, 长不透明串打码。
 AIPOS-F107 件①: loop 的中断信号 = SIGINT/SIGTERM/SIGHUP(loop_signals() 唯一声明; ssh 断线 = SIGHUP, 与 SIGTERM 同语义: 先清进程组再按该信号退出);
 拉起等待与清理期 SIGPIPE 忽略。输出端断开(ssh 断线后终端 EIO / 管道读端关闭 BrokenPipeError)→ TolerantOutput 转为静默丢弃, 不打断清理。
 AIPOS-F110: transport=remote(跨机工位)同一分层——本地进程 = ssh(声明 verbs.schema lybra_loop.launch.remote), 远端固定脚本在工位目录
@@ -28,7 +28,7 @@ class LoopInterrupted(Exception):
         self.signum = signum
 
 
-# 一行式进度: 凭据字样所在行整行隐去; 长不透明串(≥32 位且同含大写/小写/数字, 如 urlsafe token)打码
+# 一行式进度: 只遮值不遮键名(AIPOS-F289 件①, redact_progress); 长不透明串(≥32 位且同含大写/小写/数字, 如 urlsafe token)打码
 _CREDENTIAL_WORD_RE = re.compile(r"(?i)secret|token|password|passwd|private[_-]?key|credential|api[_-]?key|bearer|authorization|LYBRAENROLL")
 _OPAQUE_RE = re.compile(r"[A-Za-z0-9_\-+=]{32,}")
 # AIPOS-F207 件④(gap #214): 按 - _ =(键=值)分段且每段都是可读形 = 人读编号放行(如 Owner-20261021-F205-ENV3B-recovery):
@@ -50,18 +50,97 @@ def readable_identifier(s: str) -> bool:
     return _READABLE_RE.fullmatch(s) is not None
 
 
-def redact_progress(text: str) -> str:
-    """凭据判据唯一实现(进度打码 / 人读字段校验同读): 凭据字样所在行整行隐去; 长不透明串(≥32 位且同含大写 / 小写 / 数字)打码,
-    可读的连字符编号(readable_identifier)放行(AIPOS-F207 件④)。"""
-    if _CREDENTIAL_WORD_RE.search(text):
-        return "[含凭据字样, 整行已隐去]"
+REDACT_MASK = "[已打码]"
+REDACT_HIDDEN_LINE = "[含凭据字样, 整行已隐去]"
+# AIPOS-F289 件①: 键名(含凭据字样的标识符)字符集、紧跟键名的赋值 / 冒号(与 credential_guard keyvalue 模式同形)、值的取法
+_KEY_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-")
+_KEY_ASSIGN_RE = re.compile(r"[*_`\"']*[ \t]*(?:=>|:=|=|:|：)[ \t]*[`\"']?")
 
+
+def _opaque_mask(text: str) -> str:
     def mask(m: re.Match[str]) -> str:
         s = m.group(0)
         opaque = any(c.isupper() for c in s) and any(c.islower() for c in s) and any(c.isdigit() for c in s)
-        return "[已打码]" if opaque and not readable_identifier(s) else s
+        return REDACT_MASK if opaque and not readable_identifier(s) else s
 
     return _OPAQUE_RE.sub(mask, text)
+
+
+def _placeholder_value(value: str, guard: dict[str, Any], rules: dict[str, Any]) -> bool:
+    """严格占位(progress_redaction.placeholder_values: <…> / ${…} / $(…) / $变量 / {…} / [已打码]; 去首尾引号与尾随标点后全匹配)= 不是值。
+    不用产物入口的宽松豁免(中文叙述 / 路径 / 标识符): 进度行里那些可能就是值。"""
+    raw = value.strip().strip("\"'`")
+    core = value.strip().strip(guard["_exempt"]["strip"])
+    return any(text and any(p.fullmatch(text) for p in rules["placeholders"]) for text in (raw, core))
+
+
+def _unlocated_credential(text: str, guard: dict[str, Any], rules: dict[str, Any]) -> str | None:
+    """AIPOS-F289 件①: 打码后的文本里仍含凭据字样的各处, 是否都在「可定位为键名」的语境(声明 credential_guard.progress_redaction)。
+    返回第一处不在语境的凭据字样(= 无法定位值, 整行隐去)或 None。"""
+    terminators = rules["terminators"]
+    key_exempt = guard["_exempt"]["keys"]
+    for m in _CREDENTIAL_WORD_RE.finditer(text):
+        start, end = m.start(), m.end()
+        while start > 0 and text[start - 1] in _KEY_CHARS:
+            start -= 1
+        while end < len(text) and text[end] in _KEY_CHARS:
+            end += 1
+        token, rest = text[start:end], text[end:]
+        if start > 0 and text[start - 1] in "${<%":  # 变量引用 / 占位里的名字($X_TOKEN / ${X_TOKEN} / <token> / %X_TOKEN%)= 不是值
+            continue
+        assign = _KEY_ASSIGN_RE.match(rest)
+        if assign and any(op in assign.group(0) for op in ("=", ":", "：")):  # 键 = 值 / 键: 值
+            after = rest[assign.end():]
+            parts = after.split(None, 1)
+            word = parts[0] if parts else ""
+            if (not word or word[0] in terminators or _placeholder_value(word, guard, rules)  # 值为空 / 已打码 / 严格占位
+                    or any(p.fullmatch(token.strip("-$")) for p in key_exempt)  # 计数键等豁免键(如 input_tokens: 1234)
+                    or (word.casefold() in rules["scheme_words"] and len(parts) > 1)):  # 认证方案词(Authorization: Bearer …; 方案词那一处另判)
+                continue
+            return token
+        if not rest or rest[0] in terminators:
+            continue
+        if not rest[0].isspace():  # 凭据字样后紧跟非键名字符(如中文叙述 / 斜杠)= 定位不了
+            return token
+        word = rest.split(None, 1)[0] if rest.strip() else ""
+        core = word.rstrip(terminators)
+        if (not word or word[0] in terminators or not core or core.casefold() in rules["benign_values"]
+                or _placeholder_value(word, guard, rules)
+                or (_CREDENTIAL_WORD_RE.search(core) and rules["key_list_shape"].fullmatch(core) and rules["key_list_shape"].fullmatch(token))):
+            continue  # 行尾 / 标点 / 状态词 / 占位 / 键名清单(全大写环境变量名接全大写环境变量名)
+        return token
+    return None
+
+
+def redact_progress(text: str) -> str:
+    """凭据判据唯一实现(进度打码): AIPOS-F289 件①起只遮值不遮键名(声明 transitions artifact_ingest.credential_guard.progress_redaction)——
+    ①值按产物入口同一命中判定(credential_guard._credential_matches, 键值式 / Bearer / 带口令连接串 / 命令行口令参数 / 前缀令牌等)打码,
+    键名保留; ②长不透明串(≥32 位且同含大写 / 小写 / 数字)打码, 可读的连字符编号(readable_identifier)放行(AIPOS-F207 件④);
+    ③仍含凭据字样而无法定位值(_unlocated_credential)/ 命中 always_hide = 整行隐去。判据未声明 = 含凭据字样即整行隐去(旧口径)。
+    人读字段校验(含凭据字样即拒)走 credential_flagged, 不随本函数放宽。"""
+    from tools.aipos_cli.credential_guard import credential_guard_declaration, credential_redact, progress_redaction_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    has_word = _CREDENTIAL_WORD_RE.search(text) is not None
+    try:
+        guard = credential_guard_declaration()
+        rules = progress_redaction_declaration() if guard is not None else None
+    except SchemaLoadError:  # 判据声明坏 = 不放宽(含凭据字样整行隐去, 其余照打不透明串), fail-closed
+        guard = rules = None
+    if guard is None or rules is None:
+        return REDACT_HIDDEN_LINE if has_word else _opaque_mask(text)
+    if rules["always_hide"].search(text):
+        return REDACT_HIDDEN_LINE
+    masked = _opaque_mask(credential_redact(text, guard, REDACT_MASK))
+    if _CREDENTIAL_WORD_RE.search(masked) and _unlocated_credential(masked, guard, rules) is not None:
+        return REDACT_HIDDEN_LINE
+    return masked
+
+
+def credential_flagged(text: str) -> bool:
+    """人读字段(owner_ref / 工位材料 / 授权引用等)的凭据判据: 含凭据字样或经 redact_progress 打码会改变文本 = True(调用方拒)。
+    AIPOS-F289 件①: 进度打码放宽为只遮值后, 人读字段口径不变(仍拒凭据字样), 判据同一实现。"""
+    return _CREDENTIAL_WORD_RE.search(text) is not None or redact_progress(text) != text
 
 
 def _first_line(value: Any) -> str:

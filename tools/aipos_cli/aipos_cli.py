@@ -7408,7 +7408,7 @@ def main(argv: list[str] | None = None) -> int:
             amendments[evidence_key] = normalized["value"]
             evidence_notes = [*normalized["notes"], *normalized["literals"]]  # 改写前后原文 + 字面花括号提示(不拒)
             problems = runtime_evidence_amend_problems(current, amendments[evidence_key], claimed=restricted_fields is not None,
-                                                       card_fm=subject_fm)
+                                                       card_fm=subject_fm, governance_root=repo_root)  # AIPOS-F289 件④: 跨机改写等价
             if problems:
                 print(render_json(blocked_response(
                     operation="queue_amend", dry_run=bool(args.dry_run), category="VALIDATION_ERROR", message="; ".join(problems),

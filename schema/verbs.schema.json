@@ -4230,7 +4230,7 @@
           "verb_not_authorized": {"tier": 3, "action": "advisor_fix", "why": "信封未授权该动词多为驱动方用错身份 / 信封: 顾问换对的驱动方或信封续跑; 确需扩授权才升第一档(beyond_authority, 覆盖判定归 AIPOS-F224)"},
           "manual_required": {"tier": 3, "action": "investigate", "why": "推导核给不出可执行命令 = 记录 / 产物缺口, 顾问按 lybra next 给的缺项与出口补齐"},
           "wait_timeout": {"tier": 3, "action": "advisor_fix", "why": "工位未交产物是执行侧技术问题: 顾问查工位 / 重派执行体 / 加大 --max-wait 后原命令续跑"},
-          "runtime_evidence_exhausted": {"tier": 3, "action": "advisor_fix", "why": "审计体补做运行证据连败 = 环境 / 声明问题(AIPOS-F233 件⑤: 不升 Owner): 顾问换审计体 / 修审计环境 / 声明错按受限 amend 修正(只改占位名不改验收); 真要改卡面验收才由顾问选第一档事由(rescope)升 Owner"},
+          "runtime_evidence_exhausted": {"tier": 3, "action": "advisor_fix", "why": "审计体补做运行证据连败 = 环境 / 声明问题(AIPOS-F233 件⑤: 不升 Owner): 顾问换审计体 / 修审计环境 / 声明错按受限 amend 修正(只改占位名不改验收); 真要改卡面验收才由顾问选第一档事由(rescope)升 Owner", "declaration_outlet": true, "declaration_outlet_description": "AIPOS-F289 件④: true = loop status 下一动作另读卡面运行证据声明此刻的问题(artifact_ingest.evidence_declaration_problem_for_card, 含跨机写法规则: ssh 前缀 / 写死 run 路径), 命中跨机写法规则 = hint 附修正出口原文(transitions candidate_subject.cross_host.texts.exhausted_hint: 改写建议 + 受限 amend + 撤换命令)"},
           "card_owner_mismatch": {"tier": 3, "action": "advisor_fix", "why": "卡归属不符是顾问之间的分工: 由归属实例推进或交不限 lane 的总顾问, 不是 Owner 的决策"},
           "consecutive_failures": {"tier": 3, "action": "investigate", "why": "连败是技术故障的聚合: 顾问按最近一次结束原因查修(lybra next); 要改卡 / 撤卡才升第一档"},
           "routine_fix_exhausted": {"tier": 3, "action": "investigate", "why": "例行门拒修了仍连败 = 固定修法对本卡不灵(多 lane 交替抢合入等): 顾问排合入顺序 / 查卡; 要改卡才升第一档"},
