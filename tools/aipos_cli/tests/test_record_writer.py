@@ -101,29 +101,46 @@ class RecordWriterTests(unittest.TestCase):
         self.assertEqual(records["claims"][0]["claim_id"], result["proposed_claim_id"])
         self.assertEqual(records["sessions"][0]["session_id"], result["proposed_session_id"])
 
-    def test_claim_with_records_blocks_if_claim_log_target_exists(self) -> None:
+    def test_claim_with_records_same_second_claim_log_exists_gets_next_seq(self) -> None:
+        # AIPOS-F288 件③(原 AIPOS-F116「同秒同名 = BLOCK」): 认领日志 id 含秒级时间戳; 同秒已有同名认领日志 = 唯一生成口
+        # record_writer.claim_runtime_ids 给认领 / 会话两 id 同加单调序号 _02(不撞名、不覆盖既有记录)。钉住同一时刻使撞名确定成立。
         self.write_task("AIPOS-32-CLAIM-EXISTS")
-        # AIPOS-F116: 认领日志 id 含秒级时间戳, 两次 claim 跨秒即目标不同(F116 分支基线实撞); 钉住同一时刻(同会话记录撞名用例)
         with mock.patch("tools.aipos_cli.queue_mutation.iso_z", return_value="2026-10-06T00:00:00Z"):
             result = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-CLAIM-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
             self.write_file(result["claim_log_path"], "existing")
 
-            blocked = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-CLAIM-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
+            again = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-CLAIM-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
 
-        self.assertEqual(blocked["verdict"], "BLOCK")
-        self.assertTrue(any("Claim log already exists" in item for item in blocked["blocking_reasons"]))
+        self.assertEqual(again["verdict"], "PASS", again["blocking_reasons"])
+        self.assertEqual(again["claim_log_path"], result["claim_log_path"][:-3] + "_02.md")
+        self.assertEqual(again["session_record_path"], result["session_record_path"][:-3] + "_02.md")
+        self.assertEqual((self.repo_root / result["claim_log_path"]).read_text(encoding="utf-8"), "existing")
 
-    def test_claim_with_records_blocks_if_session_record_target_exists(self) -> None:
+    def test_claim_with_records_same_second_session_record_exists_gets_next_seq(self) -> None:
+        # AIPOS-F288 件③: 只有会话记录撞名同样换号(两 id 同号, 认领与会话记录一一对应)
         self.write_task("AIPOS-32-SESSION-EXISTS")
-        # AIPOS-F116: 会话记录 id 含秒级时间戳——两次 claim 跨秒边界时目标路径不同而误绿/误红(F116 main 基线实撞 'PASS' != 'BLOCK');
-        # 钉住同一时刻, 使「第二次 claim 撞上已存在的同一会话记录」确定成立。
         with mock.patch("tools.aipos_cli.queue_mutation.iso_z", return_value="2026-10-06T00:00:00Z"):
             result = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-SESSION-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
             self.write_file(result["session_record_path"], "existing")
 
-            blocked = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-SESSION-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
+            again = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-SESSION-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
 
+        self.assertEqual(again["verdict"], "PASS", again["blocking_reasons"])
+        self.assertEqual(again["session_record_path"], result["session_record_path"][:-3] + "_02.md")
+        self.assertEqual(again["claim_log_path"], result["claim_log_path"][:-3] + "_02.md")
+
+    def test_claim_with_records_blocks_if_given_ids_already_exist(self) -> None:
+        # 显式给定的 id(门两阶段确认沿用预演 planned_claim_id / planned_session_id)撞上已存在记录 = 照旧拒(不覆盖)
+        self.write_task("AIPOS-32-OVERRIDE-EXISTS")
+        with mock.patch("tools.aipos_cli.queue_mutation.iso_z", return_value="2026-10-06T00:00:00Z"):
+            result = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-OVERRIDE-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True)
+        self.write_file(result["claim_log_path"], "existing")
+        self.write_file(result["session_record_path"], "existing")
+        blocked = mutate_queue_task(self.repo_root, "claim", task_id="AIPOS-32-OVERRIDE-EXISTS", actor="dev.codex.local", dry_run=True, with_records=True,
+                                    claim_id_override=Path(result["claim_log_path"]).stem,
+                                    session_id_override=Path(result["session_record_path"]).stem)
         self.assertEqual(blocked["verdict"], "BLOCK")
+        self.assertTrue(any("Claim log already exists" in item for item in blocked["blocking_reasons"]))
         self.assertTrue(any("Session record already exists" in item for item in blocked["blocking_reasons"]))
 
     def test_claim_without_records_preserves_aipos31_behavior(self) -> None:
