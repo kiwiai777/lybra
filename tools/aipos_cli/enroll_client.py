@@ -797,7 +797,7 @@ def _governance_target_refusal(workspace_root: Path, role: str, role_class: str)
         f"工位角色类(executor/auditor)只落工位目录 .lybra/。\n"
         "下一步: 在工位目录(pi harness 目录)运行, 或用 --workspace 指向工位目录。\n"
         "可抄示例: lybra roles enroll-deliver --role <角色> --instance <实例> --governance-root <治理根> "
-        "--workspace ~/workstations/my-agent --owner-authorization-ref <信封ID>(在治理根所在机运行, 码不出进程)\n"
+        "--workspace ~/workstations/my-agent --project <项目> --owner-authorization-ref <信封ID>(在治理根所在机运行, 码不出进程)\n"
         "(顾问角色类 planner/advisor 允许落治理工作区)"
     )
 

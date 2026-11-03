@@ -162,13 +162,14 @@
         "ENROLL_CODE_DECLARATION_MISMATCH": "码内签发声明(role / instance)与门兑换下发的 token 不一致(码被改写或签发方异常); 拒且先于写 connection.json。出口: 请签发方重签新码"
       },
       "workstation_occupancy": {
-        "description": "AIPOS-F261 件①(11-01 lybra pi 执行工位上岗实测: 对已是另一实例登记工位的目录接入新实例, 预览只列将写什么, 确认后原实例章程落点失效, 下游 lybra kickoff 才拒「工位已被别的实例接入」): 工位模式接入(enroll-deliver 预演与确认、roles enroll 换码前; 凭据落治理根的执行者模式与治理根目标不判)前, 读本项目接入登记(各实例最新未作废位置事件的 workstation=, 判定唯一实现 enrollment.workstation_occupants 经 workstation_location 同一读取口)判目标工位目录是否已被另一实例登记; 是 = 预演 / 确认输出逐个列出 texts.occupied + texts.exit_move + texts.exit_subagent(重登记命令 = texts.subagent_reenroll, 与 project set-execution 子 agent 执行者模式拒因、roles list / project upgrade 待处理项同一出口 enrollment.subagent_reenroll_command)。只提示不拦截(Owner 可能就是要换人)。占位: {instance} {role} {landed_at} {dir} {host} {command} {governance_root} {harness}。texts 只追加。",
+        "description": "AIPOS-F261 件①(11-01 lybra pi 执行工位上岗实测: 对已是另一实例登记工位的目录接入新实例, 预览只列将写什么, 确认后原实例章程落点失效, 下游 lybra kickoff 才拒「工位已被别的实例接入」): 工位模式接入(enroll-deliver 预演与确认、roles enroll 换码前; 凭据落治理根的执行者模式与治理根目标不判)前, 读本项目接入登记(各实例最新未作废位置事件的 workstation=, 判定唯一实现 enrollment.workstation_occupants 经 workstation_location 同一读取口)判目标工位目录是否已被另一实例登记; 是 = 预演 / 确认输出逐个列出 texts.occupied + texts.exit_move + texts.exit_subagent(重登记命令 = texts.subagent_reenroll, 与 project set-execution 子 agent 执行者模式拒因、roles list / project upgrade 待处理项同一出口 enrollment.subagent_reenroll_command)。只提示不拦截(Owner 可能就是要换人)。占位: {instance} {role} {landed_at} {dir} {host} {command} {governance_root} {harness} {project}。texts 只追加。AIPOS-F287 件③: subagent_reenroll 带 --project {project}(治理根 project.json project, 读不出 = 占位 project_placeholder; 门调用的显式目标项目, 与向导 enroll-deliver 同一字段), 参数序 = 向导同一渲染 onboarding.render_enroll_deliver_command(夹具 test_aipos_f287_doc_glossary_guard 锁一致)。",
         "texts": {
           "occupied": "目标工位 {dir} 已被实例 {instance} 登记(角色 {role}, 登记时间 {landed_at}); 接入后 {instance} 的章程落点失效(lybra charter / kickoff 将拒「工位已被别的实例接入」)",
           "exit_move": "若 {instance} 仍在用该工位: 换目录(本命令 --workspace 改为另一工位目录)",
           "exit_subagent": "若 {instance} 是子 agent 执行者: 先按子 agent 模式重登记 {instance}: {command}",
-          "subagent_reenroll": "lybra roles enroll-deliver --role {role} --instance {instance} --executor-mode subagent --harness {harness} --governance-root {governance_root} --workspace {governance_root} --owner-authorization-ref <Owner 授权引用> --dry-run",
-          "harness_placeholder": "<顾问会话 kind: {kinds}>"
+          "subagent_reenroll": "lybra roles enroll-deliver --role {role} --instance {instance} --governance-root {governance_root} --workspace {governance_root} --executor-mode subagent --harness {harness} --project {project} --owner-authorization-ref <Owner 授权引用> --dry-run",
+          "harness_placeholder": "<顾问会话 kind: {kinds}>",
+          "project_placeholder": "<项目>"
         }
       }
     },
@@ -5605,8 +5606,8 @@
         "decision_preview": "lybra governance add decision --governance-root {governance_root} --title {title} --body {body} --dry-run",
         "decision_confirm": "lybra governance add decision --governance-root {governance_root} --title {title} --body {body}",
         "decision_land": "lybra governance-commit --governance-root {governance_root} --actor {advisor} --paths {decision_rel}",
-        "enroll_preview": "lybra --workspace-root {governance_root} roles enroll-deliver --role {role} --instance {instance} --governance-root {governance_root} --workspace {workspace} --actor {advisor} --owner-authorization-ref {policy} --dry-run",
-        "enroll_confirm": "lybra --workspace-root {governance_root} roles enroll-deliver --role {role} --instance {instance} --governance-root {governance_root} --workspace {workspace} --actor {advisor} --owner-authorization-ref {policy} --confirm",
+        "enroll_preview": "lybra --workspace-root {governance_root} roles enroll-deliver --role {role} --instance {instance} --governance-root {governance_root} --workspace {workspace} --actor {advisor} --project {project} --owner-authorization-ref {policy} --dry-run",
+        "enroll_confirm": "lybra --workspace-root {governance_root} roles enroll-deliver --role {role} --instance {instance} --governance-root {governance_root} --workspace {workspace} --actor {advisor} --project {project} --owner-authorization-ref {policy} --confirm",
         "execution_preview": "lybra project set-execution --workspace-root {governance_root} --subagent-executor {subagent} --auditor {auditor}{extra} --dry-run",
         "execution_confirm": "lybra project set-execution --workspace-root {governance_root} --subagent-executor {subagent} --auditor {auditor}{extra} --confirm --actor {advisor}",
         "ssh_host_preview": "lybra project validation-root set-host --workspace-root {governance_root} --host {host} --ssh-alias {alias} --owner-ref {owner_ref} --dry-run",
