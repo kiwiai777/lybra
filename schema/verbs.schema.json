@@ -4026,7 +4026,9 @@
         "relay_to": "  转达对象: {advisor}",
         "hint": "  提示: {hint}",
         "unknown_source": "(未记录)",
-        "page_error": "Owner 待决收件箱读不出(不猜): {error}"
+        "page_error": "Owner 待决收件箱读不出(不猜): {error}",
+        "detail": "  详情: {detail}",
+        "recommended_mark": "【推荐】"
       },
       "rank_labels": {"1": "阻塞", "2": "待定", "3": "预警"},
       "categories": {
@@ -4073,15 +4075,17 @@
           "queue_states": ["pending", "claimed", "blocked"],
           "rank_by_queue_state": {"blocked": 1, "claimed": 1, "pending": 2},
           "impact_by_queue_state": {"pending": "卡带 needs_owner, 不会被认领推进", "claimed": "在途卡待 Owner 复核", "blocked": "卡已阻塞, 不会被推进"},
-          "options_by_queue_state": {"pending": ["release", "withdraw", "freeze_legacy", "acknowledge"], "claimed": ["withdraw", "freeze_legacy", "acknowledge"], "blocked": ["withdraw", "freeze_legacy", "new_card", "acknowledge"]},
+          "options_by_queue_state": {"pending": ["release", "withdraw", "freeze_legacy", "acknowledge"], "claimed": ["withdraw", "freeze_legacy", "acknowledge"], "blocked": ["reopen", "withdraw", "freeze_legacy", "new_card", "acknowledge"]},
           "ask": "{reasons}",
+          "headline_by_queue_state": {"pending": "待认领卡标了需 Owner 决定(原因见详情), 不会被认领: 要你定放行继续, 还是撤卡 / 冻结 / 知悉维持", "claimed": "在途卡标了需 Owner 复核(原因见详情): 要你定知悉后按现状继续, 还是撤卡 / 冻结", "blocked": "卡已阻塞(原因见详情): 要你定下一步——补齐前置后重开、另出新卡承接、撤卡还是冻结"},
+          "headline_return_blocked": "执行体按卡停线交回阻塞(outcome=blocked, 卡面验收未达成; 阻塞原因见详情): 要你定这张卡下一步——补齐前置后重开(顾问执行)、另出新卡承接、撤卡还是冻结",
           "choice_refused_by_queue_state": {
             "release": {
               "claimed": "卡 {task_id} 已认领(claimed), 不能放行: 放行只解除未认领(pending)卡的 needs_owner 拦截, 在途卡由驱动方按卡面推进(要换目标用撤换 lybra queue supersede); 本事项可选: {options}",
               "blocked": "卡 {task_id} 已阻塞(blocked), 不能放行: 放行不解除阻塞; 本事项可选: {options}"
             }
           },
-          "note": "AIPOS-F201 件①: choice_refused_by_queue_state = 某选项对该队列状态的卡不可用时的拒因(decide 用法错 usage, 零写入; 如 release 只对 pending 卡: 已认领 / 已阻塞的卡拒并说明原因; 已结案的卡不在收件箱 = 收件箱中无该事项)。AIPOS-F170 件①: blocked 卡经 Owner 裁决可撤(既有 queue withdraw 口放宽: transitions.schema queue_mutations.transitions.withdraw.owner_ruling_required_from 所列源状态须带 Owner 裁决引用 = 本记录 decision_id)或冻结为历史(既有 project freeze-legacy 口, 清单条目 owner_policy_ref = 本记录 decision_id); 不另写解除口"
+          "note": "AIPOS-F201 件①: choice_refused_by_queue_state = 某选项对该队列状态的卡不可用时的拒因(decide 用法错 usage, 零写入; 如 release 只对 pending 卡: 已认领 / 已阻塞的卡拒并说明原因; 已结案的卡不在收件箱 = 收件箱中无该事项)。AIPOS-F170 件①: blocked 卡经 Owner 裁决可撤(既有 queue withdraw 口放宽: transitions.schema queue_mutations.transitions.withdraw.owner_ruling_required_from 所列源状态须带 Owner 裁决引用 = 本记录 decision_id)或冻结为历史(既有 project freeze-legacy 口, 清单条目 owner_policy_ref = 本记录 decision_id); 不另写解除口。AIPOS-F283 件①(11-02 实撞: 阻塞事项只贴执行体交回的技术原文, Owner 看不懂要定什么): 本类事项「要定」(ask)缺省 = 一句话决定——顾问 loop note 补写的请求(owner_ask.ask, 判归本事项见 owner_inbox.owner_ask_destination)优先, 否则按队列状态取 headline_by_queue_state, blocked 卡本轮最新交回声明 outcome=blocked(next_resolver._return_is_blocked)取 headline_return_blocked; 原先的技术原文(ask 模板 = 理由 + 阻塞原因 + 缺第一档事由提示)降为事项 detail(CLI 详情行 texts.detail / 看板折叠详情; 遗留视图卡住原因照旧用它)。顾问 loop note 的自定义选项追加在声明选项之后(去重), 建议 = owner_ask.recommend; 推荐标记 = owner_recommend.recommendation_for(顾问 / Owner 推荐记录 > 产品缺省 lybra_owner_recommend.defaults.return_blocked_reopen; 顾问 loop note 写了建议 = 不用产品缺省)。"
         },
         "rework_limit": {
           "rank": 1,
@@ -4269,6 +4273,7 @@
         "withdraw": {"label": "撤卡(不再做)", "effect": "withdraw_card", "advisor_next": "卡已由裁决撤回(既有解除口 queue withdraw), 不再推进"},
         "freeze_legacy": {"label": "冻结为历史(存量冻结: 不再推进、不再进收件箱; 可解冻)", "effect": "freeze_legacy", "advisor_next": "卡已由裁决冻结为历史(既有口 project freeze-legacy), 不再推进; 确需推进先解冻: lybra project freeze-legacy --workspace-root {governance_root} --unfreeze {task_id} --reason <理由> --actor <你的顾问实例> --confirm"},
         "new_card": {"label": "另出新卡承接(本卡不再推进)", "advisor_next": "按裁决出新卡承接剩余问题(lybra draft create …), 本卡按裁决备注收口"},
+        "reopen": {"label": "补齐前置后重开(顾问执行; 开新一轮续跑)", "advisor_next": "Owner 选补齐前置后重开(裁决 {decision_id}): 先补齐卡面阻塞原因写明的前置, 再以你的顾问实例重开新一轮(既有出口 queue reopen, 先预演): lybra --workspace-root {governance_root} queue reopen --task-id {task_id} --actor <你的顾问实例> --reason '<前置已补齐: …; Owner 裁决 {decision_id}>' --dry-run, 核对后去掉 --dry-run 执行; 然后续跑: {resume}", "note": "AIPOS-F283 件②: blocked 卡的出路「补齐前置后重开」。选它 = 记录 Owner 意向(既有 owner decide / 看板一键裁决同一路径), 不由收件箱或看板改队列; 顾问侧出口(lybra next / loop status 裁决行与「已定待转达」)给出本 advisor_next, 由顾问以自身实例执行既有 queue reopen(actor 判定见 transitions.schema queue_mutations.transitions.reopen, 本卡不改)。"},
         "rescope": {"label": "改卡面验收 / 拆卡", "advisor_next": "按裁决备注改卡(lybra queue amend …)后续跑: {resume}"},
         "acknowledge": {"label": "知悉, 维持现状", "advisor_next": "Owner 已知悉, 维持现状; 不需顾问动作"},
         "repair": {"label": "派修复卡", "advisor_next": "按裁决派修复卡处理补审问题(FAIL 派生出口): lybra next --task-id {task_id} --workspace-root {governance_root}"},
@@ -4417,7 +4422,9 @@
             "relay_to": "  Relay to: {advisor}",
             "hint": "  Hint: {hint}",
             "unknown_source": "(not recorded)",
-            "page_error": "The Owner decision inbox cannot be read (never guessed): {error}"
+            "page_error": "The Owner decision inbox cannot be read (never guessed): {error}",
+            "detail": "  Details: {detail}",
+            "recommended_mark": " [recommended]"
           },
           "rank_labels": {
             "1": "blocking",
@@ -4448,6 +4455,12 @@
             "needs_owner_card": {
               "label": "card waiting for the Owner (needs_owner)",
               "subject": "card {task_id} [{queue_state}]",
+              "headline_by_queue_state": {
+                "pending": "A card waiting to be claimed is marked for the Owner (reasons in the details) and will not be claimed: decide whether to release it, or withdraw / freeze it / acknowledge and keep it as is",
+                "claimed": "An in-flight card is marked for the Owner's review (reasons in the details): decide whether it goes on as is once you have seen it, or is withdrawn / frozen",
+                "blocked": "The card is blocked (reasons in the details): decide the next step: reopen once the prerequisites are in place, carry on with a new card, withdraw it or freeze it"
+              },
+              "headline_return_blocked": "The executor stopped at the card's line and returned it blocked (outcome=blocked, the card's acceptance was not met; the reason is in the details): decide the next step for this card: reopen once the prerequisites are in place (done by the advisor), carry on with a new card, withdraw it or freeze it",
               "impact_by_queue_state": {
                 "pending": "The card carries needs_owner and will not be claimed or advanced",
                 "claimed": "An in-flight card waits for the Owner's review",
@@ -4629,6 +4642,10 @@
             "new_card": {
               "label": "carry on with a new card (this card stops)",
               "advisor_next": "Issue a new card for the remaining problem per the decision (lybra draft create …); close this card per the decision note"
+            },
+            "reopen": {
+              "label": "reopen once the prerequisites are in place (done by the advisor; a new round)",
+              "advisor_next": "The Owner chose to reopen once the prerequisites are in place (decision {decision_id}): first put in place the prerequisites named in the card's block reason, then reopen a new round as your own advisor instance (existing exit queue reopen, preview first): lybra --workspace-root {governance_root} queue reopen --task-id {task_id} --actor <your advisor instance> --reason '<prerequisites in place: ...; Owner decision {decision_id}>' --dry-run, check it, then run it without --dry-run; then resume: {resume}"
             },
             "rescope": {
               "label": "change the card's acceptance / split the card",
@@ -4882,7 +4899,10 @@
         "authorization_extend": {"category": "envelope_warning", "applies_to": "authorization", "choice": "renew", "action": "extend_authorization", "label": "按原范围扩大项目授权",
                                  "reason": "按原范围续到 {date}、再给 {max_tasks} 张(取原授权); 不续则用完或到期即停"},
         "grant_sign": {"category": "loop_owner_needed", "applies_to": "grant_request", "choice": "renew", "action": "sign_grant", "label": "按建议签发授权",
-                       "reason": "授权已用完或不覆盖这张卡: 按顾问请求的范围签 {max_tasks} 张、到 {date}; 不签则这张卡停着"}
+                       "reason": "授权已用完或不覆盖这张卡: 按顾问请求的范围签 {max_tasks} 张、到 {date}; 不签则这张卡停着"},
+        "return_blocked_reopen": {"category": "needs_owner_card", "applies_to": "return_blocked", "choice": "reopen", "action": "decide",
+                                  "reason": "执行体按卡停线并写明了缺的前置: 补齐后由顾问重开一轮续跑, 已做的工作不丢; 确定不再做才撤卡 / 另出新卡",
+                                  "note": "AIPOS-F283 件②: blocked 卡本轮最新交回声明 outcome=blocked(事项 facts.return_outcome)= 缺省推荐「补齐前置后重开」; 顾问 loop note 已写建议(facts.advisor_recommend)= 不用本缺省(来源优先级: 顾问 / Owner 推荐记录 > 顾问 loop note 建议 > 产品缺省)。动作 decide = 记录 Owner 意向(F226 写例外③同一路径), reopen 本身由顾问执行。"}
       },
       "texts": {
         "preview": "预演(零写入): 将为事项 {item_id}({project} / {subject})写推荐「{label}」: {reason}; 记录 {record}; 去掉 --dry-run 加 --confirm 写入并落账",
@@ -4912,6 +4932,9 @@
             "grant_sign": {
               "label": "sign the grant as suggested",
               "reason": "the grant is used up or does not cover this card: sign {max_tasks} cards until {date} with the scope the advisor asked for; without signing this card stays stopped"
+            },
+            "return_blocked_reopen": {
+              "reason": "The executor stopped at the card's line and named the missing prerequisites: once they are in place the advisor reopens a new round, and the work done so far is kept; withdraw it or carry on with a new card only if it will not be done"
             }
           },
           "texts": {
@@ -4956,6 +4979,7 @@
         "inbox_listed": "  已进 Owner 收件箱: {item_id}({category_label}{merged_part}); Owner 裁决后 lybra loop status / lybra next 显示裁决与下一步",
         "inbox_missing": "  ⚠ 已写入, 但收件箱此刻未列出预期事项 {item_id}(读不出处: {errors}); 用 lybra owner inbox --project {project} 核对",
         "merged_part": ", 并入该卡返工上限事项",
+        "merged_part_by_category": {"needs_owner_card": ", 并入该卡「卡待 Owner」事项: 要定改为本请求原文, 自定义选项追加在声明选项之后", "note": "AIPOS-F283 件③: 判归「卡待 Owner」事项(owner_inbox.owner_ask_destination)的回显; 其余类别用 merged_part"},
         "not_listed": "NOT_LISTED: 本次 owner_ask 不会进 Owner 收件箱({reason}), 不写入; {hint}",
         "not_listed_reasons": {
           "card_closed": "卡 {task_id} 已在 {state}",

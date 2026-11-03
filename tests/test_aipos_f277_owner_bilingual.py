@@ -42,9 +42,11 @@ ZH_DIGESTS = {
     "onboarding_check": "8f292a54605a675404291be970436a75ba6bfd07eeaae2199202a7eeff6797a1",
     "serve_install": "ae07452642661b7a10b456b5a4953d4a120c3ccb80e39b05a77842e3e945e899",
     "serve_uninstall": "5bfe047723acb8fb7fe96915db3e37af397a8132c8fbbf4957c705411dc24792",
-    "inbox": "2de1f62ab6210d4d5c811abd4375d75b4aaf92631d74e396015c4f447fccf74c",
-    "inbox_decided": "ec3a23cc8cb702bcbb4769e974753b65d91e758268f3e468ac5ba24f947c0478",
-    "inbox_stale": "9e84ddc7714055e7493035df6efc83c79c868d8149e9b774269d203b8f80653a",
+    # AIPOS-F283 件①: 「卡待 Owner」要定改一句话决定、原文降为「详情」行, 选项行给推荐的选项标【推荐】; 另 _norm 归一裸日期(授权请求缺省到期 =
+    # 今天 + N 天, 原摘要次日即不成立); inbox / inbox_decided / inbox_stale 三份摘要随之更新(遗留视图除日期归一外逐字不变)
+    "inbox": "d4b9f7c9b0e06b06cb5cfc5848e42a725fdb34793731d23c21a7f92618b3ac1e",
+    "inbox_decided": "a95e629bfeb2a11762eda8ed5d96f25b6d884a78f87ff01331955ef4a3e9934b",
+    "inbox_stale": "45776ecbc1cf02f989b0636c52578531ea21fea6bb3bf2f6f40fd4fe39ecbcb6",
 }
 
 
@@ -83,6 +85,8 @@ def _norm(text: str, tmp: Path) -> str:
     out = out.replace(sys.executable, "<PY>").replace(".".join(map(str, sys.version_info[:3])), "<PYVER>")
     out = out.replace(socket.gethostname().split(".")[0], "<HOST>")
     out = re.sub(r"\d{4}-\d\d-\d\dT[0-9:.]+(\+00:00|Z)?", "<TS>", out)
+    # AIPOS-F283: 裸日期也归一(授权请求缺省到期 = 今天 + N 天, 原摘要只在录制当天成立, 次日 main 同样不过)
+    out = re.sub(r"(?<!\d)\d{4}-\d\d-\d\d(?!\d)", "<DAY>", out)
     out = re.sub(r"\d{8}_", "<DATE>_", out)
     out = re.sub(r"OI-[0-9a-f]+", "OI-X", out)
     return re.sub(r"owner-inbox-[0-9a-f]+", "owner-inbox-X", out)

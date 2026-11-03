@@ -1552,6 +1552,11 @@ def _inbox_item_html(ctx: _Ctx, item: dict[str, Any], lines: list[str], owner: b
         parts.append(f"<p class=\"ib-ask\">{_ESC(ctx.t('ib_ask', ask=_words(pick(item['ask'], ctx.lang))))}</p>")
         if item.get("recommend") and _words(item["recommend"]):
             parts.append(f"<p class=\"ib-recommend\">{_ESC(ctx.t('ib_recommend', recommend=_words(pick(item['recommend'], ctx.lang))))}</p>")
+        if not owner and item.get("options"):  # AIPOS-F283 item 1: options side by side, the recommended one tagged (Owner sessions get the decide buttons below, same data)
+            parts.append(_options_line(ctx, item))
+        if item.get("detail"):  # AIPOS-F283 item 1: the technical text (executor return / block reason) folded, the one-line decision above it
+            parts.append(f"<details class=\"ib-tech-detail\"><summary>{_ESC(ctx.t('ib_detail'))}</summary>"
+                         f"<pre>{_ESC(pick(item['detail'], ctx.lang))}</pre></details>")
         if item.get("reaudit_hint"):  # AIPOS-F202: fix may be live after a "wait for the fix" ruling (same line as the CLI)
             parts.append(f"<p class=\"rp-tell ib-hint\">{_ESC(pick(item['reaudit_hint'], ctx.lang))}</p>")
         if item.get("board_url"):
@@ -1562,6 +1567,19 @@ def _inbox_item_html(ctx: _Ctx, item: dict[str, Any], lines: list[str], owner: b
     parts.append(f"<details class=\"ib-details\"><summary>{_ESC(ctx.t('ib_details'))}</summary>"
                  f"<pre>{_ESC(chr(10).join(pick(line, ctx.lang).strip() for line in lines))}</pre></details></section>")
     return "".join(parts)
+
+
+def _options_line(ctx: _Ctx, item: dict[str, Any]) -> str:
+    """AIPOS-F283 件①: an item's options in one line, the recommended one (item.recommended, owner_recommend.recommendation_for, the same
+    data as the CLI options line and the Owner's decide buttons) tagged and first."""
+    from tools.aipos_cli.i18n import pick
+
+    rec = item.get("recommended") if isinstance(item.get("recommended"), dict) else None
+    rec_key = str((rec or {}).get("choice") or "")
+    options = sorted(item["options"], key=lambda o: o["key"] != rec_key) if rec_key else list(item["options"])
+    words = [ctx.t("ib_option_rec", label=pick(o["label"], ctx.lang), tag=ctx.t("hm_rec_tag")) if o["key"] == rec_key
+             else ctx.t("ib_option", label=pick(o["label"], ctx.lang)) for o in options]
+    return (f"<p class=\"ib-options\" data-recommended=\"{_ESC(rec_key)}\">{_ESC(ctx.t('ib_options', options=' / '.join(words)))}</p>")
 
 
 def _choice_messages(ctx: _Ctx, item: dict[str, Any]) -> str:
