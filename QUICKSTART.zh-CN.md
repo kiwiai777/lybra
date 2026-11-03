@@ -27,6 +27,19 @@
 
 以上一条命令全查:`lybra setup check`(第 1 步)。
 
+## 第 0 步 —— 选语言(可选)
+
+Lybra 的 Owner 面 —— 看板、Owner 待决收件箱与关键命令 —— 自带中英双语。装好(第 1 步)后选
+一次语言, 对所有 `lybra` 命令与看板生效:
+
+```bash
+lybra config set-language en   # 例: 切到英文(取值 zh / en)
+```
+
+单次覆盖:任意命令可加 `--lang <zh|en>`,也可用环境变量 `LYBRA_LANG`。优先级:`--lang` >
+`LYBRA_LANG` > `set-language` 写入的家目录配置(`~/.lybra/config.json`,键 `language`)> 缺省
+(中文)。看板页上另有语言切换。
+
 ## 第 1 步 —— 安装并自检
 
 ```bash
@@ -123,6 +136,9 @@ lybra project grant sign my-project --grant-lane app --task-mode code --task-mod
   允许 loop 拉起 pi 工位(不加则工位只能 `/go` 启动);`--max-tasks` / `--expires-at` 硬边界;
   `--host` 把车道绑定到主机。
 - 之后要改:`lybra project grant extend` / `lybra project grant revoke`。
+- 想在看板上签?Owner 也可在看板接入页完成首签 —— 「首签项目授权」(仅 Owner 登录会话)先预演
+  授权再确认:与 `lybra project grant sign` 同一实现。Owner 凭据可跨项目:带显式目标项目时,
+  可对同一 home 根下任何已注册项目操作 —— 看板建的第二个项目同样这样签授权。
 
 ## 第 5 步 —— 注册顾问与三个工位
 
@@ -167,6 +183,10 @@ lybra roles enroll-deliver --role executor --instance exec.my-project.h1 --gover
 - `--executor-mode workstation` + 工位目录 = 注册 **pi 工位**(审计 / pi 执行);
   `--executor-mode subagent` + `--harness claude-code` = 在顾问会话内注册**子 agent 执行者**
   (代码卡)。别的主机上的远程工位在注册时记录 `--harness-host`(向导会处理好)。
+- 看板也能签码:接入页的「签注册码:`<实例>`」(仅 Owner 登录会话)先预演将绑定的角色 /
+  实例 / 时效,确认后码只显示一次、不落日志 —— 与 `lybra roles enroll-code` 同一实现;面板
+  同时给出交给对方的一行兑换命令(`lybra roles enroll`,码由面板带出),对方在自己的工位 /
+  会话里跑。
 
 ## 第 6 步 —— 声明执行分工
 
@@ -179,6 +199,9 @@ lybra project workstation-plan my-project
 ```
 
 不带 `--confirm` 即预演。`workstation-plan` 打印只读的工位计划视图(与接入向导展示的同一份)。
+
+- 想在看板上声明?接入页的「设执行方式」「设 pi 模型」(仅 Owner 登录会话,预演 → 确认)与
+  `set-execution` / `set-model` 同一实现;pi 模型之后也可再改(见「按需声明」)。
 
 ## 第 7 步 —— 同步工位并自检
 
@@ -298,4 +321,5 @@ return 为何被拒,可以预演收账:
 **落账命令报 "not a git repository"。** 治理家目录还不是 git 仓库 —— 一次性本地初始化:
 `lybra home git-init --home-root ~/.lybra/projects`,然后 Owner 添加远端并推送初始提交。
 
-**切换板面语言。** 用板面页上的语言切换 —— 英文 / 简体中文都内置。
+**切换板面语言。** 用板面页上的语言切换 —— 英文 / 简体中文都内置;要一次设好所有命令与看板的
+语言,用 `lybra config set-language`(第 0 步)。
