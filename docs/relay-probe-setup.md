@@ -1,10 +1,10 @@
-# External communication gateway · receive-only probe: setup and test checklist
+# External communication relay · receive-only probe: setup and test checklist
 
 [中文](relay-probe-setup.zh-CN.md)
 
 ## What this is
 
-This is the first step of the external communication gateway. A **receive-only** probe records exactly what the bots receive, and the real design will be based on those results.
+This is the first step of the external communication relay (对外沟通关口). A **receive-only** probe records exactly what the bots receive, and the real design will be based on those results.
 
 - The probe is a separate subsystem in the Lybra product repo, `relay/`. It runs as its own process with its own credentials. The gate never imports it, and it never connects to the gate or runs a gate command.
 - The probe never replies to a message. It only sends the frames the protocols require: subscribe and heartbeat for WeCom; login, polling and lifecycle notices for ClawBot.
