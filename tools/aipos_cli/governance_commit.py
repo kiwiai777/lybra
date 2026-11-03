@@ -1185,6 +1185,29 @@ def _shown_paths(paths: list[str] | set[str], limit: int = 10) -> str:
     return ", ".join(items[:limit]) + (f", … (+{len(items) - limit})" if len(items) > limit else "")
 
 
+def _staged_diverged(governance_root: Path, repo_paths: list[str]) -> set[str]:
+    """AIPOS-F285 件①: 暂存版 ≠ 工作区版的路径(仓根相对)——索引项 blob(git ls-files -s)对比工作区文件按同一过滤器算的 blob
+    (git hash-object); 索引无此项(已 git rm 的删除)= 不算; 索引有而工作区已无 = 算。只读。"""
+    if not repo_paths:
+        return set()
+    raw = _git_readonly(["ls-files", "-s", "-z", "--full-name", "--"] + [f":(top,literal){p}" for p in repo_paths], governance_root)
+    staged: dict[str, str] = {}
+    for record in raw.split("\0"):
+        meta, sep, path = record.partition("\t")
+        fields = meta.split()
+        if sep and len(fields) == 3:
+            staged[path] = fields[1]
+    if not staged:
+        return set()
+    top = Path(_git_readonly(["rev-parse", "--show-toplevel"], governance_root).strip())
+    present = [p for p in sorted(staged) if (top / p).is_file()]
+    hashed = _git_readonly(["hash-object", "--"] + [str(top / p) for p in present], governance_root).split() if present else []
+    if len(hashed) != len(present):
+        raise subprocess.CalledProcessError(1, ["git", "hash-object"], stderr=f"hash-object returned {len(hashed)} of {len(present)} hashes")
+    worktree_blob = dict(zip(present, hashed))
+    return {p for p, blob in staged.items() if worktree_blob.get(p) != blob}
+
+
 def _git_index_write(args: list[str], cwd: Path, *, timeout: int | None = 60, env: dict[str, str] | None = None,
                      prefix: list[str] | None = None) -> subprocess.CompletedProcess:
     """AIPOS-F285 件①④: 写索引的 git 调用(add / commit / reset / restore)——遇 index.lock 竞争(共享仓另一进程正写同一索引)按声明
@@ -2113,10 +2136,8 @@ def _governance_commit_impl(
                 concurrency_sink["kept_line"] = landing_text("kept_outside", count=len(kept_outside), files=_shown_paths(kept_outside))
         overlap: list[str] = []
         if in_scope and selected_paths:
-            # 暂存版 ≠ 工作区版: git diff(索引 vs 工作区)命中; 已 git rm 的删除(两边皆无)/ 暂存即工作区版 = 不命中 = 纳入清单
-            diverged = set(_git_readonly(["diff", "--name-only", "--no-renames", "--"] + [f":(top,literal){p}" for p in sorted(in_scope)],
-                                         governance_root).split("\n")) - {""}
-            overlap = sorted(in_scope & diverged)
+            # 暂存版 ≠ 工作区版(_staged_diverged); 已 git rm 的删除(索引无)/ 暂存即工作区版 = 不算 = 纳入清单
+            overlap = sorted(in_scope & _staged_diverged(governance_root, sorted(in_scope)))
             accepted = in_scope - set(overlap)
             if accepted:
                 operations.append(f"Pre-staged within --paths: {len(accepted)} file(s) accepted into manifest")
