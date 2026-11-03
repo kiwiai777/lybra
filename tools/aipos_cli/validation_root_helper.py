@@ -727,7 +727,7 @@ def _evidence_bundle_cli(args: argparse.Namespace) -> int:
 
 RUN_CMD_LOG_DIR = "logs"
 RUN_CMD_EVIDENCE = ".lybra-vr/evidence-commands.jsonl"
-#: 报告「独立运行证据」条目键(= transitions candidate_subject.entry_required_fields; 治理根侧 validation_root.exec_entry_keys 对表)
+#: 报告「独立运行证据」条目键(= transitions candidate_subject.entry_required_fields; 治理根侧 validation_root.evidence_exec_command 铸命令前对表)
 RUN_CMD_ENTRY_KEYS = ("command", "run_id", "run_dir", "exit_code", "log_path", "log_sha256")
 _RUN_CMD_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
