@@ -1185,7 +1185,7 @@ def _shown_paths(paths: list[str] | set[str], limit: int = 10) -> str:
     return ", ".join(items[:limit]) + (f", … (+{len(items) - limit})" if len(items) > limit else "")
 
 
-def _git_index_write(args: list[str], cwd: Path, *, timeout: int = 60, env: dict[str, str] | None = None,
+def _git_index_write(args: list[str], cwd: Path, *, timeout: int | None = 60, env: dict[str, str] | None = None,
                      prefix: list[str] | None = None) -> subprocess.CompletedProcess:
     """AIPOS-F285 件①④: 写索引的 git 调用(add / commit / reset / restore)——遇 index.lock 竞争(共享仓另一进程正写同一索引)按声明
     index_lock_retry 有界重试; 其余失败 / 重试用尽 = 抛 CalledProcessError(调用方照常处置), 禁静默。"""
@@ -2344,7 +2344,7 @@ def _governance_commit_impl(
             add_paths = [p for p in selected_paths if p not in add_skip]
             if add_paths:
                 staging["staged"] = True
-                _git_index_write(["add", "-A", "--"] + add_paths + exclude_specs, governance_root)
+                _git_index_write(["add", "-A", "--"] + add_paths + exclude_specs, governance_root, timeout=None)  # 原无时限, 保持
             operations.append(f"Staged whitelist only (git add -A -- {' '.join(add_paths)} in {governance_root}; deletions within these paths included)"
                               + (f"; already-staged deletions not re-added: {', '.join(sorted(add_skip))}" if add_skip else ""))
         else:
@@ -2352,7 +2352,7 @@ def _governance_commit_impl(
             # 防止 git add -A 越界 stage 其他项目(如 kiwiaiagency)的文件
             # AIPOS-F79: 整根模式仅限 lybra 自身工作区; 他项目一律 --paths
             staging["staged"] = True
-            _git_index_write(["add", "-A", "--", "."] + exclude_specs, governance_root)
+            _git_index_write(["add", "-A", "--", "."] + exclude_specs, governance_root, timeout=None)  # 原无时限, 保持
             operations.append(f"Staged all governance changes (git add -A -- . in {governance_root})")
         
         # AIPOS-R8B 大项A②: 断言 staged 文件全部落在 governance_root 内,越界即 BLOCK
@@ -2439,6 +2439,7 @@ def _governance_commit_impl(
                 ],
                 governance_root,
                 env=_commit_hook_env(),
+                timeout=None,  # 原无时限(钩子四检耗时随清单增长), 保持
             )
         except subprocess.CalledProcessError as exc:
             hook_output = ((exc.stdout or "") + (exc.stderr or "")).strip()
