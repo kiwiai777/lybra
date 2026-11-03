@@ -2813,7 +2813,7 @@ def _routine_relaunch(index: int, task_id: str, governance_root: Path, result: L
                       no_launch: bool, launched: set[str], watch: Callable[..., int], max_wait: float, interval: float,
                       say: Callable[[str], None], actor: str, recorder: LoopRunRecorder) -> str | None:
     """AIPOS-F275 件②(verbs.schema lybra_loop.launch.routine_relaunch): 本卡交回步被门拒, 拒因码(extract_end_codes 同一抽取)全属例行清单且
-    修法执行方 = 执行体、本卡执行者是 loop 可拉起的工位(唯一拉起判定 plan_launch)、连败未达上限(routine_streaks 同一实现)= 经唯一拉起口
+    修法执行方 = 执行体、本卡执行者是 loop 可拉起的工位(唯一拉起判定 plan_launch)、连败未达上限(routine_streaks 同一实现, AIPOS-F288 按同族计)= 经唯一拉起口
     _launched_wait 重拉同一工位, 开工稿 = 既有开工稿 + 返工要点(各码 executor_fix 经 _routine_fill 同一渲染); 等交回报告按须更新字段改写且
     产物入口同一校验不再判 tip 不符。返回 None = 不适用(调用方照旧以门拒结束), "relaunched" = 已改写(调用方重推导重试交回),
     "ended" = 拉起出口已填 result(早退 / 超时 / 拉起失败 / 章程 / 开局体积)。
@@ -2821,8 +2821,8 @@ def _routine_relaunch(index: int, task_id: str, governance_root: Path, result: L
     finalize 步就绪后调用方同样重推导——裁决覆盖的 tip 已变 = 既有 verdict_stale 重交回 → 下一轮审计, 不直接重试 finalize。"""
     from tools.aipos_cli.artifact_ingest import validate_task_artifact
     from tools.aipos_cli.loop_run_record import (_RoutineFixUnrenderable, _routine_fill, card_runs, extract_end_codes,
-                                                 relaunch_code_history, routine_executor_fix, routine_fixer, routine_streaks,
-                                                 run_code_history, run_record_declaration, status_contract)
+                                                 relaunch_code_history, routine_executor_fix, routine_family_note, routine_fixer,
+                                                 routine_streaks, run_code_history, run_record_declaration, status_contract)
     from tools.aipos_cli.next_resolver import _return_artifact_path, routine_relaunch_kickoff
 
     decl = routine_relaunch_declaration(contract)
@@ -2843,11 +2843,13 @@ def _routine_relaunch(index: int, task_id: str, governance_root: Path, result: L
                  for c in run_code_history(m)]
     except LoopRunRecordError as exc:
         return not_applicable(f"本卡运行记录读不出, 连败计数不可得(fail-closed): {exc}")
-    streaks = routine_streaks(codes, prior + relaunch_code_history(recorder.meta))
+    details = routine_streaks(codes, prior + relaunch_code_history(recorder.meta), routine)  # AIPOS-F288 件①: 同族码合并计数
+    streaks = {c: d["streak"] for c, d in details.items()}
     worst = max(codes, key=lambda c: streaks[c])
     attempt = streaks[worst]
     if attempt >= limit:
-        return not_applicable(str(decl["exhausted_why"]).format(code=worst, streak=attempt, limit=limit))
+        return not_applicable(str(decl["exhausted_why"]).format(code=worst, streak=attempt, limit=limit,
+                                                                family=routine_family_note(routine, details[worst])))
     view = {"task_id": task_id, "driver": actor, "envelope": str((policy or {}).get("policy_id") or "")}
     try:
         values = _routine_fill(view, routine, governance_root)
@@ -2875,6 +2877,7 @@ def _routine_relaunch(index: int, task_id: str, governance_root: Path, result: L
     say(f"[{index}] routine_relaunch: " + str(decl["say"]).format(attempt=attempt, limit=limit, codes=", ".join(codes),
                                                                   harness=plan.harness, instance=plan.instance, step_say=wording["say"]))
     position = recorder.routine_relaunch({"attempt": attempt, "limit": limit, "codes": codes, "card": task_id, "step": step_action,
+                                          "families": {c: d["family"] for c, d in details.items() if d["family"]},
                                           "harness": plan.harness,
                                           "instance": plan.instance, "pid": None, "outcome": "launching", "gate": first,
                                           "fix": fix_steps, "return_fields": fields})

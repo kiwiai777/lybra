@@ -406,11 +406,27 @@ def _frontmatter_safe_dumper() -> Any:
     return _FRONTMATTER_DUMPER
 
 
+def _plain_scalars(value: Any) -> Any:
+    """AIPOS-F288 件④: 写入口统一把 str 子类(双语渲染值 i18n.Localized 等)转成普通 str(= 其缺省语言那份), 映射键 / 列表逐层同转。
+    根因: _FrontmatterDumper 是 SafeDumper 子类, PyYAML 的 add_representer 在子类首次登记时复制父类 representer 表; 若该子类在
+    i18n 模块导入(其为 SafeDumper 登记 Localized)之前建成, 子类表里就没有 Localized → RepresenterError(只在「同进程先写过记录、后才
+    导入 i18n」的加载顺序下出现)。在写入口转成普通 str 与加载顺序无关, 且不让 record_writer 依赖 i18n。"""
+    if isinstance(value, str):
+        return value if type(value) is str else str.__str__(value)
+    if isinstance(value, dict):
+        return {_plain_scalars(k): _plain_scalars(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_plain_scalars(item) for item in value]
+    return value
+
+
 def _dump_frontmatter_yaml(ordered_meta: dict[str, Any]) -> str:
     """frontmatter YAML 文本(不含 --- 围栏)的唯一序列化实现(AIPOS-F22B/F46/F87 单源)。
 
     主路径 yaml.safe_dump; PyYAML 缺席时走 stdlib 回退(zerodep 核心)。卡与记录的 frontmatter 一律经此, 禁逐行拼接写值。
+    AIPOS-F288 件④: 两路写之前统一经 _plain_scalars(str 子类 → 普通 str), 写出与加载顺序无关。
     """
+    ordered_meta = _plain_scalars(ordered_meta)
     if yaml is not None:
         yaml_text = yaml.dump(
             ordered_meta,
@@ -1424,6 +1440,26 @@ def claim_record_paths(repo_root: Path, task_id: str, claim_id: str, session_id:
     claim_path = ensure_safe_record_path(repo_root, expected_claim_log_path(repo_root, task_id, claim_id), RecordType.CLAIM_LOG, task_id)
     session_path = ensure_safe_record_path(repo_root, expected_session_record_path(repo_root, task_id, session_id), RecordType.SESSION_RECORD, task_id)
     return claim_path, session_path
+
+
+#: AIPOS-F288 件③: 同秒重认领的记录名序号上限(两位定宽 _02.._99, 文件名字典序 = 先后序; 超出 = 拒, 不覆盖)
+CLAIM_ID_SEQ_MAX = 99
+
+
+def claim_runtime_ids(repo_root: Path, task_id: str, timestamp: str, actor: str) -> tuple[str, str]:
+    """AIPOS-F288 件③: 认领记录 id / 会话记录 id 的唯一生成口(queue_mutation._prepare_claim 调用)。基名 = build_runtime_id(claim / session,
+    按秒); 同名认领或会话记录已存在(同卡同秒重认领, 如 reopen 后立即重认领)= 两者同加单调序号 _02、_03 … 直到都不存在(两位定宽, 文件名
+    字典序与先后序一致: 基名 < _02 < … < _99)。存量命名(无序号)照读: 读侧一律 glob claim_*.md / session_*.md 与文件名时刻段
+    (next_resolver.record_stamp), 序号在实例段之后, 不影响时刻解析。序号用尽 = ValueError(fail-closed, 不覆盖既有记录)。"""
+    base_claim = build_runtime_id("claim", task_id, timestamp, actor)
+    base_session = build_runtime_id("session", task_id, timestamp, actor)
+    for seq in range(1, CLAIM_ID_SEQ_MAX + 1):
+        suffix = "" if seq == 1 else f"_{seq:02d}"
+        claim_id, session_id = base_claim + suffix, base_session + suffix
+        claim_path, session_path = claim_record_paths(repo_root, task_id, claim_id, session_id)
+        if not claim_path.exists() and not session_path.exists():
+            return claim_id, session_id
+    raise ValueError(f"认领记录名序号用尽({base_claim}_02..{CLAIM_ID_SEQ_MAX}): 同卡同秒认领 {CLAIM_ID_SEQ_MAX} 次, 拒(不覆盖既有记录)")
 
 
 def session_record_path(repo_root: Path, task_id: str, session_id: str) -> Path:
