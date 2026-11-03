@@ -155,6 +155,9 @@ lybra project grant sign my-project --grant-lane app --task-mode code --task-mod
   drive; `--launch-harness pi` allows the loop to launch pi workstations (without it, workstations
   start via `/go` only); `--max-tasks` / `--expires-at` hard bounds; `--host` binds a lane to a host.
 - Revise later: `lybra project grant extend` / `lybra project grant revoke`.
+- `--project <project>` — an Owner credential may cover several projects without a default; if
+  `--confirm` is refused with `PROJECT_AMBIGUOUS`, add `--project` to name the target project (the
+  same flag on `lybra envelope mint`, `lybra roles enroll-code` and `lybra roles enroll-deliver`).
 - Prefer the board? The Owner can sign this first grant on the board's onboarding page too —
   **Sign the first project grant** (an Owner login session) previews the grant, then confirms:
   the same implementation as `lybra project grant sign`. An Owner credential works across
@@ -211,6 +214,10 @@ lybra roles enroll-deliver --role executor --instance exec.my-project.h1 --gover
   pi executor); `--executor-mode subagent` + `--harness claude-code` enrolls the **sub-agent
   executor** (code cards) inside the advisor's session. A remote workstation on another host
   records `--harness-host` at enrollment (the guide handles it).
+- Several projects, one credential: the guide's enroll-deliver commands (steps 4 and 6–8) carry
+  an explicit `--project <project>` — an Owner credential can act on any registered project, and
+  without a declared default the gate refuses with `PROJECT_AMBIGUOUS` (the exit names the flag
+  to add).
 - Prefer the board? The Owner can also sign enrollment codes on the onboarding page —
   **Sign enrollment code: `<instance>`** (an Owner login session) previews what the code will
   bind — role, instance, validity — then shows the code exactly once after confirming (never
@@ -234,6 +241,16 @@ the onboarding guide shows).
 - Prefer the board? **Set execution mode** and **Set pi model** on the onboarding page (an Owner
   login session, preview → confirm) are the same implementations as `set-execution` /
   `set-model`; the pi model can be revised later (see Declarations).
+
+The one exception to the division: builds that need a capability a pi workstation cannot have —
+a local graphical session or the login keychain (iOS signing, say) — declare it on the card with
+`requires_capabilities: [gui_session, login_keychain]`, and the project binds one sub-agent
+instance that has the capability on its enrolled host; those cards go to it instead of the pi
+executor (audits still go to pi):
+
+```bash
+lybra project set-execution my-project --subagent-executor exec.my-project.h1 --pi-executor exec.my-project.h1-pi --auditor audit.my-project.h1 --capability-executor exec.my-project.mac1=gui_session,login_keychain --confirm
+```
 
 ## Step 7 — Sync the workstations and self-check
 
@@ -363,6 +380,16 @@ keep yours, or stop and remove it yourself, then re-run install.
 board or the workstation, then re-run `lybra loop status --task-id MYPROJ-1 --wait 540`. If an early
 exit is reported there, it says why; to see why a return was refused, preview ingestion:
 `lybra artifact ingest --task-id MYPROJ-1 --kind return --dry-run`.
+
+**A card came back blocked.** The executor's report says what prerequisite is missing (`outcome:
+blocked`). Blocked cards land in the Owner decision inbox (Step 9) with a one-line what-to-decide
+headline and a recommended option, plus a ready-made **reopen after the prerequisite is fixed
+(advisor executes)** choice; the advisor reopens the card with its own instance and it runs
+again:
+
+```bash
+lybra queue reopen --task-id MYPROJ-1 --actor advisor.my-project.h1 --reason "prerequisite fixed"
+```
 
 **A landing command says "not a git repository".** The governance home isn't a git repo yet — one-shot
 local init: `lybra home git-init --home-root ~/.lybra/projects`, then the Owner adds the remote and

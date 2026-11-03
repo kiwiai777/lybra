@@ -136,6 +136,9 @@ lybra project grant sign my-project --grant-lane app --task-mode code --task-mod
   允许 loop 拉起 pi 工位(不加则工位只能 `/go` 启动);`--max-tasks` / `--expires-at` 硬边界;
   `--host` 把车道绑定到主机。
 - 之后要改:`lybra project grant extend` / `lybra project grant revoke`。
+- `--project <项目>` —— Owner 凭据可覆盖多个项目;`--confirm` 被以 `PROJECT_AMBIGUOUS` 拒时,
+  加 `--project` 指明目标项目(`lybra envelope mint`、`lybra roles enroll-code`、
+  `lybra roles enroll-deliver` 同参数)。
 - 想在看板上签?Owner 也可在看板接入页完成首签 —— 「首签项目授权」(仅 Owner 登录会话)先预演
   授权再确认:与 `lybra project grant sign` 同一实现。Owner 凭据可跨项目:带显式目标项目时,
   可对同一 home 根下任何已注册项目操作 —— 看板建的第二个项目同样这样签授权。
@@ -183,6 +186,8 @@ lybra roles enroll-deliver --role executor --instance exec.my-project.h1 --gover
 - `--executor-mode workstation` + 工位目录 = 注册 **pi 工位**(审计 / pi 执行);
   `--executor-mode subagent` + `--harness claude-code` = 在顾问会话内注册**子 agent 执行者**
   (代码卡)。别的主机上的远程工位在注册时记录 `--harness-host`(向导会处理好)。
+- 多项目凭据:向导第 4、6–8 步的 enroll-deliver 命令都带显式 `--project <项目>` —— Owner
+  凭据可对任何已注册项目操作,未声明缺省项目时门以 `PROJECT_AMBIGUOUS` 拒并点名要加的参数。
 - 看板也能签码:接入页的「签注册码:`<实例>`」(仅 Owner 登录会话)先预演将绑定的角色 /
   实例 / 时效,确认后码只显示一次、不落日志 —— 与 `lybra roles enroll-code` 同一实现;面板
   同时给出交给对方的一行兑换命令(`lybra roles enroll`,码由面板带出),对方在自己的工位 /
@@ -202,6 +207,14 @@ lybra project workstation-plan my-project
 
 - 想在看板上声明?接入页的「设执行方式」「设 pi 模型」(仅 Owner 登录会话,预演 → 确认)与
   `set-execution` / `set-model` 同一实现;pi 模型之后也可再改(见「按需声明」)。
+
+分工的唯一例外:需要 pi 工位不具备的主机能力的构建 —— 本机图形会话或登录钥匙串(如 iOS 签名
+打包)—— 在卡面写 `requires_capabilities: [gui_session, login_keychain]`,项目声明一个具备该
+能力(绑定其登记主机)的子 agent 实例;此类卡改派它执行,审计仍归 pi:
+
+```bash
+lybra project set-execution my-project --subagent-executor exec.my-project.h1 --pi-executor exec.my-project.h1-pi --auditor audit.my-project.h1 --capability-executor exec.my-project.mac1=gui_session,login_keychain --confirm
+```
 
 ## 第 7 步 —— 同步工位并自检
 
@@ -317,6 +330,14 @@ lybra project headline --instance advisor.my-project.h1 --title "My Customer Pro
 `lybra loop status --task-id MYPROJ-1 --wait 540`。若那里报了提前退出,原因会写明;想看一次
 return 为何被拒,可以预演收账:
 `lybra artifact ingest --task-id MYPROJ-1 --kind return --dry-run`。
+
+**卡被交回为 blocked(阻塞)。** 执行体报告写明缺什么前置(`outcome: blocked`)。阻塞卡进 Owner
+收件箱(第 9 步):一句「要定什么」标题 + 带推荐标记的选项,并自带「补齐前置后重开(顾问执行)」
+一项;由本项目顾问以自身实例重开,卡即续跑:
+
+```bash
+lybra queue reopen --task-id MYPROJ-1 --actor advisor.my-project.h1 --reason "前置已补齐"
+```
 
 **落账命令报 "not a git repository"。** 治理家目录还不是 git 仓库 —— 一次性本地初始化:
 `lybra home git-init --home-root ~/.lybra/projects`,然后 Owner 添加远端并推送初始提交。
