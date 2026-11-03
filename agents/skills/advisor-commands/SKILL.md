@@ -491,6 +491,7 @@ lybra project check-workstation <项目名> --home-root <home根> --instance <�
 分工不可按项目选配(AIPOS-F260): 每个项目只声明「pi 执行工位是谁、在哪」(`set-execution --pi-executor`), 不再勾哪些卡类型交 pi; 工位设置(看板「工位设置」页 / `workstation-plan`)不读不写退役键, 生成的 set-execution 命令永不带 `--pi-allowed-task-mode`、不清已声明的 pi 执行工位。
 过渡在途(AIPOS-F256B): 新分工生效前已认领的非代码卡(claim 记录 / 卡面 claimed_by / 已在认领后队列目录)按原执行方做完——开工稿与交回不拒, `roles list` / `project upgrade` 预演列为「过渡在途」信息项; 待认领卡与新起草 / 发卡按新分工, 违例按拒因给的出口改派(待认领 amend、已认领撤卡重发)。
 能力例外(AIPOS-F284, 唯一例外): 须本机图形会话 / 钥匙串的卡(如 iOS 签名打包)卡稿写 `requires_capabilities: [gui_session, login_keychain]`, 项目先 `set-execution --capability-executor <子 agent 模式实例>=<能力>` 声明具备能力的实例(绑定其登记主机); 起草缺省派该实例, loop 提示在该主机的顾问会话派子 agent; 审计仍 pi; 无实例具备 = 起草 / 发卡即拒并给出口。
+能力卡审计证据(AIPOS-F291): `audit_runtime_evidence.commands` 写审计在自己 run 内的复现(如无签名构建后再核版本 / 配置键), 签名等只做验证写 `deliverable_checks: [{"artifact": "<执行 run 内相对路径>", "commands": ["<核验命令, 含 {artifact_path}>"]}]`; 执行开工稿要求交回写每个交付物 sha256, 审计按它取回到自己 run 后核验。不带 `requires_capabilities` 的卡写该子键 = 出卡即拒。
 
 **先生成切换计划(AIPOS-F198)**: 下面各步的命令、顺序与「哪些已完成」由产品推导, 不手写——Owner 在看板项目「工位设置」页选好目标分工后转给你的提示词,
 与下面命令输出同一份(只读, 零写入); 照它逐步先预演后确认, 被拒原样报告 Owner:
