@@ -232,15 +232,16 @@ def test_item3_pi_not_fixed_third_rejection_owner_needed(lrig, monkeypatch):
     assert res.outcome == "gate_rejected" and res.reason == "gate_rejected", text
     assert [(c["blocked"], c["category"]) for c in calls] == [(True, CODE)]  # finalize 只跑过一次(就绪后不直接重试 finalize)
     assert f"例行拒自动重拉 第 1/{limit} 次: finalize 被门拒 拒因码 {CODE}" in text
-    assert (f"routine_relaunch: 例行拒自动重拉不适用(本卡 BRANCH_WRONG_BASE 连续第 {limit}/{limit} 次仍拒, 不再重拉(loop status 判 owner_needed)), "
-            "照旧以门拒结束") in text
+    # AIPOS-F288 件①: MERGE_CONFLICT / BRANCH_WRONG_BASE 同属「基线落后族」, 连败合并计数(原 F278 已知局限 1: 分别计数要 1 + 3 次)
+    assert (f"routine_relaunch: 例行拒自动重拉不适用(本卡 BRANCH_WRONG_BASE 连续第 {limit}/{limit} 次仍拒"
+            f"(同族「基线落后族」合并计数: BRANCH_WRONG_BASE / {CODE}), 不再重拉(loop status 判 owner_needed)), 照旧以门拒结束") in text
     meta = f275._records(lrig.gov)[-1]
     rel = meta["routine_relaunches"]
     _show("[件③②] 运行记录 routine_relaunches(attempt / codes / step / outcome): "
           + json.dumps([(r["attempt"], r["codes"], r["step"], r["outcome"]) for r in rel], ensure_ascii=False))
     assert [(r["attempt"], r["codes"], r["step"], r["outcome"]) for r in rel] == [
         (1, [CODE], "finalize", "artifact_ready"),
-        *[(i, ["BRANCH_WRONG_BASE"], "return", "artifact_ready") for i in range(1, limit)]]
+        *[(i, ["BRANCH_WRONG_BASE"], "return", "artifact_ready") for i in range(2, limit)]]
     assert meta["end_reason"] == "gate_rejected" and meta["end_codes"] == ["BRANCH_WRONG_BASE"]
     rc, out = _status(lrig.gov, "--wait", "5")
     _show(f"---- 件③② lybra loop status --wait 5 原文 exit {rc} ----\n{out}")
