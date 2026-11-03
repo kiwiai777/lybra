@@ -4072,7 +4072,8 @@ def _build_audit_dispatch_preview(
             warnings.extend(normalized["notes"])
             try:
                 checked = check_runtime_evidence_declaration(raw_evidence, governance_root=repo_root, audit_instance=audit_agent_instance,
-                                                             card_task_id=str(source_task_id_for_verdict))
+                                                             card_task_id=str(source_task_id_for_verdict),
+                                                             subject_frontmatter=source_metadata)  # AIPOS-F289 件③: 被审卡主体定跨机判据
                 blocking_reasons.extend(checked["problems"])
                 warnings.extend(checked["notes"])
                 supplementary_runtime_evidence = raw_evidence
@@ -4798,6 +4799,22 @@ def _candidate_run_problem(workspace_root: Path, audit_task_id: str, entry: dict
             "candidate_tree": subject["tree_hash"]}, None
 
 
+def _remote_run_long_problem(workspace_root: Path, entry: dict[str, Any], run_long: str) -> str | None:
+    """AIPOS-F289 件②: 固定候选卡运行记录以 run-long 引用而自述 run 在目标主机(非治理根所在机)= 拒因(cross_host.texts.remote_run_long, 双语);
+    run 定位不了 / 在本机 = None(交 _candidate_run_problem 照常核)。只供 runtime_evidence_check 调用。"""
+    from tools.aipos_cli.artifact_ingest import cross_host_text
+    from tools.aipos_cli.validation_root import ValidationRootError, is_local_host, locate_run
+
+    run_dir, run_id = str(entry.get("run_dir") or "").strip(), str(entry.get("run_id") or "").strip()
+    try:
+        decl_entry, _run = locate_run(workspace_root, run_dir, run_id)
+    except ValidationRootError:
+        return None
+    if decl_entry is None or is_local_host(decl_entry["host"]):
+        return None
+    return cross_host_text("remote_run_long", run_long=run_long, run_id=run_id, host=decl_entry["host"])
+
+
 def _evidence_reuse_problem(workspace_root: Path, audit_task_id: str, decl_entry: dict[str, Any], run_id: str, reused_from: str,
                             reuse_decl: dict[str, Any]) -> str | None:
     """AIPOS-F230 件⑥: 复用上一轮运行证据的核对(只供 _candidate_run_problem): ①被引卡 = 本审计卡同一被审卡更早一轮的审计卡; ②run 所在声明
@@ -4959,6 +4976,11 @@ def runtime_evidence_check(workspace_root: Path, audit_task_id: str, audit_fm: d
             if fields is None:
                 reasons.append(f"{label} {problem}")
                 continue
+            if subject is not None:  # AIPOS-F289 件②: 远端 run 不认 run-long 引用(工作目录与日志在治理根所在机), 出口 = 开工稿 ⑥ 的 helper run-cmd 执行行
+                remote_problem = _remote_run_long_problem(workspace_root, entry, str(entry[run_long_key]))
+                if remote_problem:
+                    reasons.append(f"{label} {remote_problem}")
+                    continue
             # AIPOS-F241 件③: command 比对同一比对键(`cd <记录 --cwd> && X` 与记录命令 X 视为同一条, evidence_command_key)
             clash = [k for k in ("command", "worktree", "exit_code") if entry.get(k) not in (None, "")
                      and (evidence_command_key(entry[k], fields["worktree"]) != evidence_command_key(fields[k], fields["worktree"])

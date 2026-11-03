@@ -49,6 +49,12 @@ tools/aipos_cli/validation_root.py 直接 import 本模块的同名函数(声明
       只读: 核清单(形 / 封签 / run 目录 / 指纹)与清单内每个文件(不跟软链、真实路径在 run 内、大小与 sha256 一致), 全过才向 stdout
       写 tar 流(manifest.json + files/<相对路径>); 由治理根所在机 `lybra project validation-root evidence-fetch` 经 ssh 别名调用。
 
+  AIPOS-F289 跨机运行证据唯一写法(审计 run 在目标主机时; 完整执行行由产品铸: 开工稿「验证卡运行证据步骤」⑥):
+  python3 - run-cmd --run-dir <run> --expect-fingerprint <hfp1:…> --name cmd-<n> --command <卡面命令渲染后原文>
+      cwd = 本 run 目录, /bin/sh -c 原样执行; 日志 <run>/logs/<名>.log, 退出码与日志 sha256 追加 <run>/.lybra-vr/evidence-commands.jsonl;
+      末行 `CMD_ENTRY {…}` = 报告「独立运行证据」节该条(command / run_id / run_dir / exit_code / log_path / log_sha256)。之后照常
+      evidence-manifest → 治理根所在机 evidence-fetch。
+
 判定(全部 fail-closed):
   1. 本机指纹 = --expect-fingerprint, 否则 HOST_FINGERPRINT_MISMATCH(跨机调用核对);
   2. run 目录与目标须为规范绝对路径(无 `..` / `.` / 重复斜杠), 否则 PATH_NOT_CANONICAL;
@@ -715,6 +721,53 @@ def _evidence_bundle_cli(args: argparse.Namespace) -> int:
 # AIPOS-F194 iOS 本 run 专用模拟器: 缺省设备集内本 run 新建一台, 只写该 UDID, 结束删除, 前后比对
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# AIPOS-F289 件②: 跨机运行证据唯一写法——在目标主机本 run 目录内原样执行一条卡面命令, 日志落 run 内证据目录, 退出码与日志 sha256 记证据
+# ---------------------------------------------------------------------------
+
+RUN_CMD_LOG_DIR = "logs"
+RUN_CMD_EVIDENCE = ".lybra-vr/evidence-commands.jsonl"
+#: 报告「独立运行证据」条目键(= transitions candidate_subject.entry_required_fields; 治理根侧 validation_root.evidence_exec_command 铸命令前对表)
+RUN_CMD_ENTRY_KEYS = ("command", "run_id", "run_dir", "exit_code", "log_path", "log_sha256")
+_RUN_CMD_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def _run_cmd_cli(args: argparse.Namespace) -> int:
+    """run-cmd: cwd = 本 run 目录, `/bin/sh -c <命令>` 原样执行(stdin = /dev/null), stdout + stderr 写 <run>/logs/<名>.log; 退出码 / 日志 sha256 /
+    起止时刻追加 <run>/.lybra-vr/evidence-commands.jsonl; 末两行 `CMD_DONE …` 与 `CMD_ENTRY <报告条目 JSON>`。命令自身失败照记(退出码如实),
+    本子命令退出 0 = 已记录; 3 = 拒(run 目录 / 名字 / 落点不合); 2 = 环境错。"""
+    if not _RUN_CMD_NAME_RE.match(args.name or ""):
+        print(f"DENY [RUN_CMD_NAME_INVALID] --name {args.name!r} 须为字母数字起首、只含字母数字 . _ -、至多 64 字符")
+        return EXIT_DENY
+    if not str(args.command_text or "").strip():
+        print("DENY [RUN_CMD_EMPTY] --command 为空")
+        return EXIT_DENY
+    rel = posixpath.join(RUN_CMD_LOG_DIR, args.name + ".log")
+    for target in (rel, RUN_CMD_EVIDENCE):
+        problem = _run_dir_problem(args.run_dir, target)
+        if problem:
+            print(f"DENY {problem}")
+            return EXIT_DENY
+    log_path = posixpath.join(args.run_dir, rel)
+    os.makedirs(posixpath.dirname(log_path), mode=0o700, exist_ok=True)
+    started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    with open(log_path, "wb") as handle:
+        code = subprocess.run(["/bin/sh", "-c", args.command_text], cwd=args.run_dir, stdin=subprocess.DEVNULL, stdout=handle,
+                              stderr=subprocess.STDOUT, check=False).returncode
+    with open(log_path, "rb") as handle:
+        digest = hashlib.sha256(handle.read()).hexdigest()
+    entry = dict(zip(RUN_CMD_ENTRY_KEYS, (args.command_text, posixpath.basename(args.run_dir), args.run_dir, code, log_path, digest)))
+    record = {**entry, "name": args.name, "host": host_label(), "fingerprint": args.expect_fingerprint, "started_at": started,
+              "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    evidence = posixpath.join(args.run_dir, RUN_CMD_EVIDENCE)
+    os.makedirs(posixpath.dirname(evidence), mode=0o700, exist_ok=True)
+    with open(evidence, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    print(f"CMD_DONE name={args.name} exit={code} log={log_path} sha256={digest}")
+    print("CMD_ENTRY " + json.dumps(entry, ensure_ascii=False))
+    return EXIT_ALLOW
+
+
 def is_udid(value: Any) -> bool:
     return isinstance(value, str) and bool(_UDID_RE.match(value))
 
@@ -1178,6 +1231,13 @@ def _parser() -> argparse.ArgumentParser:
                                                  "tar stream (manifest.json + files/<path>) to stdout; any mismatch = DENY on stderr, exit 3")
     evb.add_argument("--run-dir", required=True)
     evb.add_argument("--expect-fingerprint", required=True)
+    runc = sub.add_parser("run-cmd", help="AIPOS-F289: run one declared evidence command verbatim inside this run directory (cwd = run dir, "
+                                          "/bin/sh -c); log into <run>/logs/<name>.log, exit code + log sha256 appended to "
+                                          "<run>/.lybra-vr/evidence-commands.jsonl; last line CMD_ENTRY = report entry JSON")
+    runc.add_argument("--run-dir", required=True)
+    runc.add_argument("--expect-fingerprint", required=True)
+    runc.add_argument("--name", required=True, help="Log name (cmd-<n>); log = <run>/logs/<name>.log")
+    runc.add_argument("--command", dest="command_text", required=True, help="The declared command, rendered (placeholders filled), verbatim")
     cmp_ = sub.add_parser("compare", help="Compare two snapshots; exit 0 unchanged, 4 changed")
     cmp_.add_argument("before")
     cmp_.add_argument("after")
@@ -1273,6 +1333,16 @@ def main(argv: list[str] | None = None) -> int:
             return EXIT_DENY
         try:
             return _evidence_manifest_cli(args) if args.command == "evidence-manifest" else _evidence_bundle_cli(args)
+        except OSError as exc:
+            print(f"ERROR [HOST_IO_FAILED] {type(exc).__name__}: {exc}", file=sys.stderr)
+            return EXIT_ERROR
+    if args.command == "run-cmd":  # AIPOS-F289 件②
+        problem = _own_fingerprint_problem(args.expect_fingerprint)
+        if problem:
+            print(f"DENY {problem}")
+            return EXIT_DENY
+        try:
+            return _run_cmd_cli(args)
         except OSError as exc:
             print(f"ERROR [HOST_IO_FAILED] {type(exc).__name__}: {exc}", file=sys.stderr)
             return EXIT_ERROR

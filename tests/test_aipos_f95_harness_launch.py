@@ -544,7 +544,10 @@ def test_progress_summary_and_redaction_units():
     assert summarize_event("not json", "pi-json") == (None, "non_json")
     assert summarize_event(ev({"type": "agent_end"}), "other-format") == (None, "raw")
     assert redact_progress("Authorization: Bearer abc") == "[含凭据字样, 整行已隐去]"
-    assert redact_progress("cat .lybra/connection.json token") == "[含凭据字样, 整行已隐去]"
+    # AIPOS-F289 件①: 只遮值不遮键名——行尾的凭据字样无值可遮, 原样保留; 有值的照旧打码, 定位不了值的照旧整行隐去
+    assert redact_progress("cat .lybra/connection.json token") == "cat .lybra/connection.json token"
+    assert redact_progress("cat .lybra/connection.json token=Vq7hR2kLm9") == "cat .lybra/connection.json token=[已打码]"
+    assert redact_progress("the token is hunter2") == "[含凭据字样, 整行已隐去]"
     secret = "Ab3" + "x" * 40
     assert redact_progress(f"value {secret} end") == "value [已打码] end"
     sha = "0123456789abcdef0123456789abcdef01234567"
