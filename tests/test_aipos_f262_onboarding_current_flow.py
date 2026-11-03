@@ -319,21 +319,17 @@ EN_STEP4_SUFFIX = " (Owner)"
 
 
 def _glossary_term(zh: str) -> dict:
-    from tools.schema_loader import code_repo_schema_root, load_schema
+    from glossary_terms import term_by_zh  # AIPOS-F287: 术语表测试侧唯一读取口
 
-    terms = load_schema("config", code_repo_schema_root())["owner_texts"]["glossary"]["terms"]
-    found = [t for t in terms if t.get("zh") == zh]
-    assert len(found) == 1 and found[0].get("en"), f"glossary 未唯一声明术语 {zh!r}: {found}"
-    return found[0]
+    return term_by_zh(zh)
 
 
 def en_step4_heading_problems(en: str, term: dict) -> list[str]:
     """英文 QUICKSTART 第 4 步标题判定(空 = 合格)。
 
     合格 = 恰一行 `## Step 4 — Sign the <术语> (Owner)`, 术语位 = glossary en 值。
-    过渡期容忍(AIPOS-F279 合入前): 术语位用该条 avoid 词(旧译)且全文其余行仍有同一 avoid 词
-    = 文档整体尚未按 glossary 迁移, 标题与正文同旧, 不单独判红; 一旦正文其余行已清掉该旧译(F279 合入即如此),
-    标题仍用旧译 = 判红(自然收紧, 无需再改本测试)。
+    AIPOS-F287 收紧: F281 的过渡期容忍(术语位用旧译且全文其余行仍有同一旧译 = 不单独判红)已删——F279 已把英文文档迁到 glossary 用词,
+    且仓根文档全文术语守卫(tests/test_aipos_f287_doc_glossary_guard.py)逐行核 avoid 词; 「标题与正文同时写回旧译」不再被放过。
     """
     lines = en.splitlines()
     heads = [i for i, line in enumerate(lines) if line.startswith(EN_STEP4_PREFIX)]
@@ -346,12 +342,9 @@ def en_step4_heading_problems(en: str, term: dict) -> list[str]:
     if slot == term["en"]:
         return []
     legacy = [bad for bad in term.get("avoid") or [] if bad.lower() in slot.lower()]
-    if not legacy:
-        return [f"第 4 步标题术语位 {slot!r} 不是 glossary en 值 {term['en']!r}"]
-    rest = "\n".join(line for i, line in enumerate(lines) if i != heads[0]).lower()
-    if any(bad.lower() in rest for bad in legacy):
-        return []
-    return [f"第 4 步标题术语位 {slot!r} 用了 glossary avoid 词 {legacy}(正文其余行已迁移), 应为 {term['en']!r}"]
+    if legacy:
+        return [f"第 4 步标题术语位 {slot!r} 用了 glossary avoid 词 {legacy}, 应为 {term['en']!r}"]
+    return [f"第 4 步标题术语位 {slot!r} 不是 glossary en 值 {term['en']!r}"]
 
 
 def test_accept4_quickstart_mismatch_notes_removed():
@@ -368,7 +361,7 @@ def test_accept4_quickstart_mismatch_notes_removed():
 
 
 def test_accept4_en_step4_heading_judgement_follows_glossary():
-    """判定随 glossary 走: 新词合格; 旧译仅在全文未迁移时容忍; 正文已迁移而标题仍旧译 / 非术语词 / 骨架缺失 = 判红。"""
+    """判定随 glossary 走: 新词合格; 旧译一律判红(AIPOS-F287 收紧: 不再看正文是否已迁移); 非术语词 / 骨架缺失 = 判红。"""
     term = _glossary_term(GRANT_TERM_ZH)
     assert term.get("avoid"), "glossary 该条未声明 avoid, 本判定无旧译可核"
     bad = term["avoid"][0]
@@ -377,7 +370,7 @@ def test_accept4_en_step4_heading_judgement_follows_glossary():
     cases = {
         "新词 + 正文已迁移": (f"one {term['en']}\n{new_head}\nbody", True),
         "新词 + 正文仍有旧译": (f"one project {bad}\n{new_head}\nbody", True),
-        "旧译 + 正文仍有旧译(过渡期)": (f"one project {bad}\n{old_head}\nbody", True),
+        "旧译 + 正文仍有旧译(F281 过渡期容忍, F287 已收紧)": (f"one project {bad}\n{old_head}\nbody", False),
         "旧译 + 正文已迁移": (f"one {term['en']}\n{old_head}\nbody", False),
         "非术语词": (f"{EN_STEP4_PREFIX}project permit{EN_STEP4_SUFFIX}", False),
         "缺 (Owner)": (f"{EN_STEP4_PREFIX}{term['en']}", False),

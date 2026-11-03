@@ -467,8 +467,9 @@ def build_plan(root: str | Path, *, project: str, home_root: str | Path | None =
                 mint = envelope_mint_exit(gov, inst)
                 steps["envelope"].update(state="pending", detail=reason, preview=mint,
                                          confirm=re.sub(r" --dry-run$", " --confirm", mint))
+            # AIPOS-F287 件③: --project = 门调用的显式目标项目(与向导 enroll-deliver 同一字段; 命令形锁 onboarding.render_enroll_deliver_command)
             values = {"governance_root": _q(gov), "role": _q(role), "instance": _q(inst), "workspace": _holder(ws, holders["workspace"]),
-                      "advisor": advisor, "policy": _holder(policy, holders["policy"])}
+                      "advisor": advisor, "policy": _holder(policy, holders["policy"]), "project": _q(project)}
             steps["enroll"].update(state="pending", detail=(view or {}).get("enrollment") or "not_enrolled",
                                    preview=_fmt(cmds["enroll_preview"], **values), confirm=_fmt(cmds["enroll_confirm"], **values))
     # 章程(所选工位目录; 已接入 = 其登记位置)
