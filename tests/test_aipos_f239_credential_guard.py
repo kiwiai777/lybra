@@ -394,7 +394,8 @@ def test_declaration_fail_closed_and_missing_means_no_check(rig, monkeypatch):  
     monkeypatch.setattr(nr, "_artifact_ingest_declaration", lambda: missing)
     assert ai.credential_guard_declaration() is None and ai.validate_task_artifact(CARD, rig.gov)["ok"], "缺本节 = 不查(行为不变)"
     decl = real["credential_guard"]
-    assert set(decl) == {"description", "category", "scan", "patterns", "exempt", "texts"}, "无绕过开关, 豁免只经声明表"
+    # AIPOS-F289 件①: progress_redaction = loop 进度打码的「无法定位值」例外(只管展示打码, 不碰入门判据, 非绕过开关)
+    assert set(decl) == {"description", "category", "scan", "patterns", "exempt", "texts", "progress_redaction"}, "无绕过开关, 豁免只经声明表"
     assert decl["category"] == CRED
 
 

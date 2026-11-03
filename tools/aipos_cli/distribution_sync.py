@@ -477,11 +477,11 @@ def adopt_hand_charters(harness_root: Path, hand: list[dict[str, Any]], *, owner
     dry_run = 只算计划。owner_ref 须非空单行且不含凭据字样(否则 ValueError)。返回 [{path, backup, sha256, owner_ref, adopted_at}]。"""
     import shutil
 
-    from tools.aipos_cli.harness_launch import redact_progress
+    from tools.aipos_cli.harness_launch import credential_flagged
 
     decl = hand_maintained_guard_declaration()
     ref = str(owner_ref or "").strip()
-    if not ref or "\n" in ref or redact_progress(ref) != ref:
+    if not ref or "\n" in ref or credential_flagged(ref):
         from tools.aipos_cli.harness_launch import READABLE_REF_HINT
 
         raise ValueError(f"{decl['owner_ref_flag']} 须为非空单行 Owner 裁决引用且不含凭据字样({READABLE_REF_HINT})")

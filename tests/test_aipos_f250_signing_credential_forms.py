@@ -167,13 +167,15 @@ def test_item2_consumers_share_the_matcher(board, monkeypatch):
     gov = board["gc"]
     _signed_card(gov)
     calls: list[str] = []
-    real = ai._credential_matches
+    from tools.aipos_cli import credential_guard as cg  # AIPOS-F289 件①: 命中判定迁至轻模块 credential_guard(artifact_ingest 原名经其导入)
+
+    real = cg._credential_matches
 
     def spy(text, decl):
         calls.append(text)
         return real(text, decl)
 
-    monkeypatch.setattr(ai, "_credential_matches", spy)
+    monkeypatch.setattr(cg, "_credential_matches", spy)
     seen: dict[str, int] = {}
 
     def mark(name: str) -> None:

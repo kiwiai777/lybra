@@ -536,12 +536,12 @@ def task_ownership_problems(governance_root: Path, *, instance: str, role_class:
 
 
 def _single_line(value: Any, name: str) -> str:
-    from tools.aipos_cli.harness_launch import READABLE_REF_HINT, redact_progress
+    from tools.aipos_cli.harness_launch import READABLE_REF_HINT, credential_flagged
 
     text = str(value or "").strip()
     if not text or "\n" in text or "\r" in text:
         raise _err("VR_DECLARATION_INVALID", f"{name} 须为非空单行串")
-    if redact_progress(text) != text:
+    if credential_flagged(text):
         raise _err("VR_DECLARATION_INVALID", f"{name} 含凭据字样或长不透明串({READABLE_REF_HINT})")
     return text
 
@@ -1406,6 +1406,12 @@ def candidate_evidence_values(governance_root: str | Path, *, audit_task_id: str
                        "evidence_dirs": " / ".join(f"{run_dir}/{d}" for d in run_evidence_declaration()["include_dirs"])})
     if declaration_status(entry, now) == "active":
         values["init_run"] = init_run_command(gov, entry, run)
+        # AIPOS-F289 件②: 每条卡面命令(按本 run 占位渲染)在本 run 内的执行行(唯一铸造口 evidence_exec_command; 本机 = run-long, 远端 = helper run-cmd)
+        from tools.aipos_cli.artifact_ingest import render_candidate_evidence_command
+
+        run_values = {"run_dir": run_dir, "src_dir": f"{run_dir}/{helper.SRC_DIR_NAME}", "candidate": candidate, "candidate_tree": candidate_tree}
+        values["exec_lines"] = [evidence_exec_command(gov, entry, run, index=i, command=render_candidate_evidence_command(c, run_values))
+                                for i, c in enumerate((requirement or {}).get("commands") or [], 1)]
         if remote:
             values.update({"evidence_manifest": evidence_manifest_command(gov, entry, run),
                            "evidence_fetch": evidence_fetch_command(gov, entry, run["run_id"])})
@@ -1445,12 +1451,21 @@ def run_evidence_declaration() -> dict[str, Any]:
                               "copy_layout 恰 manifest·fetch_record·files 单段名 / copy_subdir 单段名 / 上限与时限正整数)")
     # AIPOS-F214 件⑤: helper(只用标准库, 不读 schema)run 内证据文件常量与声明逐项对表(有意两份, 不符 = fail-closed)
     files = decl.get("helper_files")
-    expect = {"init_run": helper.INIT_EVIDENCE, "src_verify": helper.SRC_EVIDENCE, "evidence_manifest": helper.EVIDENCE_MANIFEST}
-    if (not isinstance(files, dict) or set(files) != {"evidence_dir", *expect} or files["evidence_dir"] not in decl["include_dirs"]
-            or any(files[k] != v or not str(v).startswith(f"{files['evidence_dir']}/") for k, v in expect.items())):
+    expect = {"init_run": helper.INIT_EVIDENCE, "src_verify": helper.SRC_EVIDENCE, "evidence_manifest": helper.EVIDENCE_MANIFEST,
+              "run_cmd": helper.RUN_CMD_EVIDENCE}  # AIPOS-F289 件②: + run-cmd 证据(日志目录 run_cmd_log_dir 另核须 ∈ include_dirs)
+    if (not isinstance(files, dict) or set(files) != {"evidence_dir", "run_cmd_log_dir", *expect} or files["evidence_dir"] not in decl["include_dirs"]
+            or any(files[k] != v or not str(v).startswith(f"{files['evidence_dir']}/") for k, v in expect.items())
+            or files["run_cmd_log_dir"] != helper.RUN_CMD_LOG_DIR or helper.RUN_CMD_LOG_DIR not in decl["include_dirs"]):
         raise SchemaLoadError("roles.schema.json write_boundary.validation_root.run_evidence.helper_files 须恰为 {evidence_dir(∈ include_dirs), "
-                              f"init_run, src_verify, evidence_manifest}} 且 = helper 常量 {expect}(证据文件在 evidence_dir 下; AIPOS-F214 件⑤)")
+                              f"init_run, src_verify, evidence_manifest, run_cmd, run_cmd_log_dir(∈ include_dirs)}} 且 = helper 常量 {expect} / "
+                              f"RUN_CMD_LOG_DIR={helper.RUN_CMD_LOG_DIR!r}(证据文件在 evidence_dir 下; AIPOS-F214 件⑤ / AIPOS-F289 件②)")
     return decl
+
+
+def evidence_run_dir_layout() -> dict[str, str]:
+    """AIPOS-F289 件②: run-cmd 在 run 内的落点(声明 helper_files.run_cmd_log_dir / run_cmd; 读取口 run_evidence_declaration 已核 = helper 常量)。"""
+    files = run_evidence_declaration()["helper_files"]
+    return {"log_dir": str(files["run_cmd_log_dir"]), "record": str(files["run_cmd"])}
 
 
 def evidence_limits() -> dict[str, int]:
@@ -1488,6 +1503,33 @@ def evidence_manifest_command(governance_root: str | Path, entry: dict[str, Any]
     if alias:
         return helper_pipe_command(gov, alias, f"evidence-manifest {args}", entry, run)
     return helper_local_command(gov, f"evidence-manifest {args}", entry, run)
+
+
+def evidence_exec_command(governance_root: str | Path, entry: dict[str, Any], run: dict[str, Any], *, index: int, command: str) -> str:
+    """AIPOS-F289 件②: 卡面第 index 条声明命令(已按本 run 占位渲染)在本 run 内的执行行(唯一铸造口; 开工稿 / 派审步骤 ⑥ 与裁决入口拒因出口同源)。
+    run 在治理根所在机 = `lybra run-long start --task-id <审计卡> --name <run_long_name> --cwd <run 目录> -- '<命令>'`(报告条目填 run_long 引用);
+    run 在目标主机 = helper run-cmd(经声明 ssh 别名管道 = helper_pipe_command; 审计实例在目标主机 = 本机形 helper_local_command): cwd = run 目录,
+    日志 <run>/logs/<run_cmd_name>.log, 退出码 / 日志 sha256 记 .lybra-vr/evidence-commands.jsonl, 末行 CMD_ENTRY = 报告条目。"""
+    from tools.aipos_cli.artifact_ingest import cross_host_declaration, runtime_evidence_candidate_declaration
+    from tools.schema_loader import SchemaLoadError
+
+    gov = Path(governance_root).expanduser().resolve()
+    decl = cross_host_declaration()
+    run_dir = run_directory(entry, run["run_id"])
+    if is_local_host(entry["host"]):
+        name = str(decl["run_long_name"]).replace("{run_id}", run["run_id"]).replace("{index}", str(index))
+        return (f"{_gov_cmd(gov)} run-long start --task-id {shlex.quote(entry['task_id'])} --name {shlex.quote(name)} "
+                f"--cwd {shlex.quote(run_dir)} -- {shlex.quote(command)}")
+    if tuple(runtime_evidence_candidate_declaration()["entry_required_fields"]) != helper.RUN_CMD_ENTRY_KEYS:
+        raise SchemaLoadError("helper.RUN_CMD_ENTRY_KEYS ≠ transitions candidate_subject.entry_required_fields(run-cmd 打印的报告条目键须与裁决入口"
+                              "必填键一致; AIPOS-F289 件②, 有意两份对表)")
+    name = str(decl["run_cmd_name"]).replace("{index}", str(index))
+    args = " ".join(shlex.quote(a) for a in ("--run-dir", run_dir, "--expect-fingerprint", str(entry["host_fingerprint"]), "--name", name,
+                                             "--command", command))
+    alias = ssh_alias_for(gov, entry)
+    if alias:
+        return helper_pipe_command(gov, alias, f"run-cmd {args}", entry, run)
+    return helper_local_command(gov, f"run-cmd {args}", entry, run)
 
 
 def evidence_fetch_command(governance_root: str | Path, entry: dict[str, Any], run_id: str) -> str:

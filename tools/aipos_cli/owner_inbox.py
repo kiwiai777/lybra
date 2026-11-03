@@ -321,6 +321,14 @@ def apply_owner_tier(governance_root: Path, view: dict[str, Any], na: dict[str, 
         detail = _fmt(tiers["texts"]["tier3_detail"], "tiers.texts.tier3_detail", why=str(spec["why"]), detail=str(na.get("detail") or ""))
         out = {**na, "action": str(spec["action"]), "owner_tier": 3, "tier_from": {"action": "owner_needed", "reason": reason},
                "detail": detail, "escalate_hint": _fmt(tiers["texts"]["escalate_hint"], "tiers.texts.escalate_hint", **fill)}
+        if spec.get("declaration_outlet"):
+            # AIPOS-F289 件④: 本事由(runtime_evidence_exhausted)且卡面运行证据声明此刻命中跨机写法规则 = 下一动作直接给修正出口原文
+            from tools.aipos_cli.artifact_ingest import cross_host_text, evidence_declaration_problem_for_card
+
+            problem = evidence_declaration_problem_for_card(Path(governance_root), task_id)
+            if problem is not None and problem.get("cross_host"):
+                line = cross_host_text("exhausted_hint", line=problem["line"])
+                out = {**out, "declaration_problem": problem["line"], "hint": f"{out.get('hint')}\n{line}" if out.get("hint") else line}
     # 归顾问的运行上顾问已写升级请求(owner_ask)= 与非等 Owner 运行同一判定(owner_ask_destination: 进收件箱 / 已裁决改写)
     return _apply_owner_ask(Path(governance_root), view, out)
 

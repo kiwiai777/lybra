@@ -24,6 +24,8 @@ description: 只读独立审计程序:独立取证、逐项 PASS/FAIL、F-* 登�
      填 `## 独立运行证据` 节, 跑不了给 FAIL 或 BLOCK 并写原因(细则以章程为准, AIPOS-F162); 被审卡是验证卡(固定候选, 不建工作树)时
      改在**你自己的验证根 run** 重跑, 记录绑定该 run(run_id / run_dir, 步骤见开工稿「验证卡运行证据步骤」, AIPOS-F199);
      run 在目标主机(非治理根所在机)时按开工稿 ⑧⑨ 生成证据清单并取回副本(AIPOS-F200), 门读副本核对;
+     卡面命令一律照开工稿 ⑥ 每条下的「执行」行跑(AIPOS-F289: 本机 run = run-long; 目标主机 run = 产品铸的 helper run-cmd, 末行
+     CMD_ENTRY 的 JSON 原样作报告条目), 不自己给命令加 ssh 前缀, 远端 run 不用 run-long 直接跑卡面命令(裁决入口拒);
    - 声称"只改了 X" → 自己看 diff/git log;
    - 声称"状态为 Y" → 自己查盘上真相。
 3. **逐项核验**:对被审卡的每条验收断言 → PASS/FAIL + 证据(file:line / 命令输出原文)。

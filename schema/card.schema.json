@@ -1280,6 +1280,10 @@
     "render_equivalent_subfields": {
       "description": "AIPOS-F233 件④(10-25 chris HBLX-52: 只纠正审计命令占位也被 Owner「授权更正并正式撤换」): claimed 卡受限 amend 可「渲染等价时」改的「字段 → 子键」清单(只追加)。所列子键改前改后须按 transitions.schema artifact_ingest.verdict.runtime_evidence.placeholder_vocabulary.equivalence 渲染等价(只改占位名 / 别名规范化; 字面花括号改动不算等价), 不需 Owner、不撤换、不算范围变化(返工自动放行范围判据 queue_mutation.auto_extension_check 同读等价判据); 非等价 = 照旧拒(命令属验收)。判据唯一实现 artifact_ingest.runtime_evidence_amend_problems → evidence_commands_render_equivalent。",
       "audit_runtime_evidence": ["commands"]
+    },
+    "cross_host_rewrite_subfields": {
+      "description": "AIPOS-F289 件④(11-03 chris HBLX-160 / HBLX-153: 已认领的固定候选验证卡运行证据命令写成 `ssh <主机> '…<执行 run 路径>…'`, 审计补做必然被裁决入口拒): claimed 卡受限 amend 可「跨机改写等价时」改的「字段 → 子键」清单(只追加)。所列子键改后须逐条 = 改前按 transitions.schema artifact_ingest.verdict.runtime_evidence.candidate_subject.cross_host 规则改写的结果(去掉指向卡面 host / 验证根主机的 ssh 前缀、写死的 run 路径换成 {run_dir} / {src_dir}; 再按占位词表渲染等价)且至少一条确有改写; 只对交付主体为固定候选的卡; 执行主机由 host 子键承载(claimed_card_subfields 已允许)。不改验收含义: 同一命令在同一主机执行, 他人 run 路径本就不构成审计证据(F190)。判据唯一实现 artifact_ingest.runtime_evidence_amend_problems(经 cross_host_rewrite_equivalent)。",
+      "audit_runtime_evidence": ["commands"]
     }
   },
   "roadmap_link": {

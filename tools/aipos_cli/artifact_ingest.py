@@ -20,6 +20,10 @@ import re
 import stat as stat_module
 from tools.schema_constants import RecordType
 from tools.aipos_cli.verb_contract import declared_exit_code
+# AIPOS-F289 件①: 凭据判据读取 / 命中判定迁至轻模块 credential_guard(loop 进度打码同读), 原名经此照旧可用
+from tools.aipos_cli.credential_guard import (  # noqa: F401
+    _credential_matches, _credential_value_exempt, credential_guard_declaration, credential_hits, credential_redact,
+)
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -824,63 +828,6 @@ def return_rejection_state(workspace_root: Path, task_id: str) -> dict[str, Any]
 # AIPOS-F239: 产物入口凭据检查(声明 transitions artifact_ingest.credential_guard)
 # ---------------------------------------------------------------------------
 
-_CREDENTIAL_KEYS = ("category", "scan", "patterns", "exempt", "texts")
-_CREDENTIAL_SCAN_KEYS = ("full_text_dirs", "slot_globs", "output_target", "outputs", "skip_gitignored", "skip_dirs", "sniff_bytes",
-                         "max_scan_bytes", "max_listed")
-_CREDENTIAL_EXEMPT_KEYS = ("strip_chars", "key_patterns", "value_patterns", "loose_value_patterns", "value_words", "value_substrings")
-_CREDENTIAL_TEXTS = ("refusal", "hit", "more", "what_return", "what_verdict", "what_finalization", "stock_title", "stock_root",
-                     "stock_clean", "stock_summary", "stock_slot", "stock_hit", "stock_next", "charter_rule")
-
-
-def credential_guard_declaration() -> dict[str, Any] | None:
-    """AIPOS-F239 件①: transitions artifact_ingest.credential_guard(唯一读取口)。缺本节 = None(不查, 行为不变); 键 / 文案不齐、
-    正则编不过 = SchemaLoadError(fail-closed)。返回声明副本, 另带 _patterns [(kind, label, 编译后正则, 最短值长, loose)] 与 _exempt(编译后豁免)。"""
-    from tools.aipos_cli.next_resolver import _artifact_ingest_declaration
-    from tools.schema_loader import SchemaLoadError
-
-    decl = _artifact_ingest_declaration().get("credential_guard")
-    if decl is None:
-        return None
-    where = "transitions.schema.json artifact_ingest.credential_guard"
-    scan = decl.get("scan") if isinstance(decl, dict) else None
-    exempt = decl.get("exempt") if isinstance(decl, dict) else None
-    texts = decl.get("texts") if isinstance(decl, dict) else None
-    if (not isinstance(decl, dict) or any(k not in decl for k in _CREDENTIAL_KEYS) or not str(decl["category"]).strip()
-            or not isinstance(scan, dict) or any(k not in scan for k in _CREDENTIAL_SCAN_KEYS)
-            or not isinstance(exempt, dict) or any(k not in exempt for k in _CREDENTIAL_EXEMPT_KEYS)
-            or not isinstance(texts, dict) or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in _CREDENTIAL_TEXTS)
-            or not isinstance(decl["patterns"], list) or not decl["patterns"]
-            or not all(isinstance(scan[k], list) for k in ("full_text_dirs", "slot_globs", "skip_dirs"))
-            or not all(isinstance(scan[k], int) and not isinstance(scan[k], bool) and scan[k] > 0
-                       for k in ("sniff_bytes", "max_scan_bytes", "max_listed"))
-            or not all(isinstance(scan[k], bool) for k in ("output_target", "outputs", "skip_gitignored"))
-            or not all(isinstance(exempt[k], list) for k in ("key_patterns", "value_patterns", "loose_value_patterns", "value_words",
-                                                             "value_substrings"))
-            or not isinstance(exempt["strip_chars"], str)):
-        raise SchemaLoadError(f"{where}({list(_CREDENTIAL_KEYS)} / scan.{list(_CREDENTIAL_SCAN_KEYS)} / exempt.{list(_CREDENTIAL_EXEMPT_KEYS)} / "
-                              f"texts.{list(_CREDENTIAL_TEXTS)})未声明齐(AIPOS-F239 件①)")
-    compiled: list[tuple[str, str, re.Pattern[str], int, bool]] = []
-    try:
-        for item in decl["patterns"]:
-            if not isinstance(item, dict) or not all(isinstance(item.get(k), str) and item[k].strip() for k in ("kind", "label", "regex")):
-                raise SchemaLoadError(f"{where}.patterns 每项须有 kind / label / regex(AIPOS-F239 件①)")
-            low = item.get("min_value_chars", 1)
-            if not isinstance(low, int) or isinstance(low, bool) or low < 1:
-                raise SchemaLoadError(f"{where}.patterns[{item['kind']}].min_value_chars 须为 ≥ 1 的整数")
-            if not isinstance(item.get("loose", False), bool):
-                raise SchemaLoadError(f"{where}.patterns[{item['kind']}].loose 须为布尔")
-            compiled.append((item["kind"], item["label"], re.compile(item["regex"], re.MULTILINE), low, bool(item.get("loose", False))))
-        exempt_patterns = [re.compile(str(p)) for p in exempt["value_patterns"]]
-        key_patterns = [re.compile(str(p)) for p in exempt["key_patterns"]]
-        loose_patterns = [re.compile(str(p)) for p in exempt["loose_value_patterns"]]
-    except re.error as exc:
-        raise SchemaLoadError(f"{where}: 正则编不过(fail-closed): {exc}") from exc
-    return {**decl, "_patterns": compiled, "_exempt": {"patterns": exempt_patterns, "keys": key_patterns, "loose": loose_patterns,
-                                                       "words": {str(w).casefold() for w in exempt["value_words"]},
-                                                       "substrings": [str(s).casefold() for s in exempt["value_substrings"]],
-                                                       "strip": exempt["strip_chars"]}}
-
-
 def credential_guard_fingerprint(decl: dict[str, Any] | None = None) -> str:
     """AIPOS-F250: 判据版本(唯一实现) = credential_guard 的 patterns + exempt 内容摘要(sha256 前 16 位; 未声明 = 固定词)。存放判定结果的
     派生缓存(history 索引头)把它纳入指纹: 判据变 = 整份重建。decl 缺省 = 现读声明(声明坏 = SchemaLoadError, fail-closed)。"""
@@ -899,64 +846,6 @@ def credential_charter_rule() -> str:
     if decl is None:
         return "(本产品未声明产物凭据判据 transitions artifact_ingest.credential_guard; 报告与产物仍不得写明文凭据)"
     return str(decl["texts"]["charter_rule"])
-
-
-def _credential_value_exempt(value: str, decl: dict[str, Any], min_chars: int, loose: bool = False) -> bool:
-    """命中值是否豁免(声明 exempt 唯一判定): 去首尾引号 / 尾随标点后过短、全匹配占位式(loose 模式另加 loose_value_patterns)、等于占位词、
-    含占位子串 = 豁免。"""
-    ex = decl["_exempt"]
-    core = value.strip().strip(ex["strip"])
-    if len(core) < min_chars:
-        return True
-    folded = core.casefold()
-    if folded in ex["words"] or any(s in folded for s in ex["substrings"]):
-        return True
-    return any(p.fullmatch(core) for p in ex["patterns"] + (ex["loose"] if loose else []))
-
-
-def _credential_matches(text: str, decl: dict[str, Any]) -> Iterator[tuple[Any, tuple[int, int], str, str]]:
-    """命中判定本体(credential_hits / credential_redact 同一判定): 逐条 (match, 命中值所在区间, kind, label)。"""
-    for kind, label, rx, low, loose in decl["_patterns"]:
-        for m in rx.finditer(text):
-            has_value = "value" in rx.groupindex
-            value = m.group("value") if has_value else m.group(0)
-            key = m.group("key") if "key" in rx.groupindex else None
-            if value is None or _credential_value_exempt(value, decl, low, loose):
-                continue
-            if key and any(p.fullmatch(key) for p in decl["_exempt"]["keys"]):
-                continue
-            yield m, (m.span("value") if has_value else m.span()), kind, label
-
-
-def credential_hits(text: str, decl: dict[str, Any]) -> list[dict[str, Any]]:
-    """AIPOS-F239 件①(唯一判定): 文本中的明文凭据命中 [{line, kind, label}](按行号、种类去重排序)。绝不返回命中值。
-    AIPOS-F250: 同一处(命中值区间相交)被多条模式命中 = 只记最先声明的那条(专门写法声明在泛化模式之前), 计数按处。"""
-    seen: dict[tuple[int, str], dict[str, Any]] = {}
-    taken: list[tuple[int, int]] = []
-    for m, span, kind, label in _credential_matches(text, decl):
-        if any(span[0] < end and start < span[1] for start, end in taken):
-            continue
-        taken.append(span)
-        line = text.count("\n", 0, m.start()) + 1
-        seen.setdefault((line, kind), {"line": line, "kind": kind, "label": label})
-    return [seen[k] for k in sorted(seen)]
-
-
-def credential_redact(text: str, decl: dict[str, Any] | None, mask: str) -> str:
-    """AIPOS-F247: 展示用打码——同一判定(_credential_matches)命中的值换成 mask(历史检索把审计报告里的命令等原文给 Owner 看时不露明文凭据)。
-    decl = None(产品未声明判据)= 原样。只改展示文本, 不改任何文件。"""
-    if not decl or not text:
-        return text
-    spans = sorted({span for _m, span, _k, _l in _credential_matches(text, decl)})
-    out, cursor = [], 0
-    for start, end in spans:
-        if start < cursor:
-            start = cursor
-        if start >= end:
-            continue
-        out += [text[cursor:start], mask]
-        cursor = end
-    return "".join(out) + text[cursor:]
 
 
 def _credential_text(path: Path, scan: dict[str, Any]) -> str | None:
@@ -1895,12 +1784,15 @@ def parse_runtime_evidence_declaration(raw: Any, *, source: str = "card") -> dic
             "declaration": dict(raw)}
 
 
-def runtime_evidence_amend_problems(current: Any, new: Any, *, claimed: bool, card_fm: dict[str, Any] | None = None) -> list[str]:
+def runtime_evidence_amend_problems(current: Any, new: Any, *, claimed: bool, card_fm: dict[str, Any] | None = None,
+                                    governance_root: Path | str | None = None) -> list[str]:
     """AIPOS-F223 件②: queue amend 改卡面 audit_runtime_evidence 的判据(唯一实现; `lybra queue amend` 调用)。新值形校验同出卡
     (parse_runtime_evidence_declaration); claimed 卡(--restricted)只许改 card.schema restricted_amend.claimed_card_subfields 所列子键,
     其余子键须与卡面原值相同(不改命令 / required = 不改验收)。AIPOS-F233 件④: restricted_amend.render_equivalent_subfields 所列子键
     (commands)改前改后按占位词表渲染等价(evidence_commands_render_equivalent; 交付主体 = card_fm)= 放行(只改占位名, 不改验收)。
-    词表外的 {xxx} 是字面文本, 不拒(提示由 normalize_runtime_evidence_declaration 给)。返回拒因原文(空 = 通过)。"""
+    词表外的 {xxx} 是字面文本, 不拒(提示由 normalize_runtime_evidence_declaration 给)。AIPOS-F289 件④: restricted_amend.cross_host_rewrite_subfields
+    所列子键(commands)改后 = 改前按跨机写法改写(去 ssh 前缀 / run 路径换占位, cross_host_rewrite_equivalent; 须给 governance_root)= 放行。
+    返回拒因原文(空 = 通过)。"""
     key = str(runtime_evidence_declaration()["card_field"])
     try:
         parse_runtime_evidence_declaration(new)
@@ -1915,12 +1807,18 @@ def runtime_evidence_amend_problems(current: Any, new: Any, *, claimed: bool, ca
         before["commands"] = [before["commands"]]
     changed = sorted(k for k in set(before) | set(new) if before.get(k) != new.get(k))
     subject = evidence_subject(card_fm)
+    cross = set(cross_host_rewrite_subfields().get(key) or []) if governance_root is not None else set()
+    host = str(new.get("host") or before.get("host") or "").strip() or None
     illegal = [k for k in changed if k not in allowed
-               and not (k in equivalent and evidence_commands_render_equivalent(before.get(k) or [], new.get(k) or [], subject))]
+               and not (k in equivalent and evidence_commands_render_equivalent(before.get(k) or [], new.get(k) or [], subject))
+               and not (k in cross and subject == "candidate"
+                        and cross_host_rewrite_equivalent(governance_root, before.get(k) or [], new.get(k) or [], host=host, subject=subject))]
     if illegal:
         return [f"已认领卡受限 amend 只许改 {key} 的子键 {sorted(allowed)}(card.schema restricted_amend.claimed_card_subfields)"
                 + (f", 及按占位词表渲染等价的 {sorted(equivalent)}(只改占位名 / 别名规范化, AIPOS-F233; card.schema "
                    "restricted_amend.render_equivalent_subfields)" if equivalent else "")
+                + (f", 及固定候选卡按跨机写法改写等价的 {sorted(cross)}(只去 ssh 前缀 / run 路径换占位, AIPOS-F289; card.schema "
+                   "restricted_amend.cross_host_rewrite_subfields)" if cross else "")
                 + f", 实改了 {illegal}; 命令 / required 属验收, 在途不改(须改 = 走返工轮或撤卡重发)"]
     return []
 
@@ -1936,6 +1834,20 @@ def render_equivalent_subfields() -> dict[str, list[str]]:
     out = {k: v for k, v in raw.items() if k != "description"} if isinstance(raw, dict) else None
     if out is None or any(not isinstance(v, list) or not v or any(not isinstance(s, str) or not s for s in v) for v in out.values()):
         raise SchemaLoadError("card.schema.json restricted_amend.render_equivalent_subfields 须为 {字段: [子键, …]}")
+    return out
+
+
+def cross_host_rewrite_subfields() -> dict[str, list[str]]:
+    """AIPOS-F289 件④: card.schema restricted_amend.cross_host_rewrite_subfields(字段 → 跨机改写等价时可改子键)唯一读取口。缺 = {}(行为不变)。
+    形不合 = SchemaLoadError。"""
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    raw = (load_schema("card").get("restricted_amend") or {}).get("cross_host_rewrite_subfields")
+    if raw is None:
+        return {}
+    out = {k: v for k, v in raw.items() if k != "description"} if isinstance(raw, dict) else None
+    if out is None or any(not isinstance(v, list) or not v or any(not isinstance(x, str) or not x for x in v) for v in out.values()):
+        raise SchemaLoadError("card.schema.json restricted_amend.cross_host_rewrite_subfields 须为 {字段: [子键, …]}")
     return out
 
 
@@ -2182,7 +2094,16 @@ def evidence_declaration_problem(workspace_root: Path | str, audit_task_id: str,
             return None
         reasons = _unrenderable_known_placeholders(requirement["commands"], evidence_subject(reviewed_fm or {}), card)
     if not reasons:
-        return None
+        # AIPOS-F289 件③④: 固定候选卡声明命中跨机写法规则(ssh 前缀 / 写死 run 路径)= 声明错(审计体补做必然被拒), 给改写 + 受限 amend + 撤换出口
+        _path, queue = _find_task_in_queue(root, card) if card else (None, None)
+        cross = cross_host_evidence_problems(root, raw, card_fm=reviewed_fm or {}, card=card, queue=queue)
+        if cross is None:
+            return None
+        reasons = [*cross["problems"], cross["rewrite"]]
+        return {"category": cross["category"], "reasons": reasons, "card": card, "queue": queue, "value": raw, "amend": cross["amend"],
+                "outlet": cross["outlet"], "cross_host": cross,
+                "line": str(placeholder_vocabulary()["texts"]["declaration_invalid"]).format(card_field=key, card=card, problems="; ".join(reasons))
+                + f"; {cross['outlet']}"}
     vocab = placeholder_vocabulary()
     _path, queue = _find_task_in_queue(root, card) if card else (None, None)
     fixed = {**raw, "commands": [raw["commands"]]} if isinstance(raw, dict) and isinstance(raw.get("commands"), str) else raw
@@ -2207,8 +2128,8 @@ def _unrenderable_known_placeholders(commands: list[Any], subject: str, card: st
     return out
 
 
-def _evidence_amend_command(root: Path, card: str, queue: str | None, value: Any) -> str:
-    """运行证据声明修正命令原文(既有动词 queue amend 预演形; 已认领卡 --restricted)。"""
+def _evidence_amend_command(root: Path, card: str, queue: str | None, value: Any, *, reason: str | None = None) -> str:
+    """运行证据声明修正命令原文(既有动词 queue amend 预演形; 已认领卡 --restricted)。reason 缺省 = F233 占位修正说理。"""
     import json
     import shlex
 
@@ -2217,12 +2138,19 @@ def _evidence_amend_command(root: Path, card: str, queue: str | None, value: Any
     key = str(runtime_evidence_declaration()["card_field"])
     return (f"{lybra_command_prefix(root)} queue amend --task-id {shlex.quote(card or '<卡>')}{' --restricted' if queue == 'claimed' else ''} "
             f"--actor <顾问实例> --amendments {shlex.quote(json.dumps({key: value}, ensure_ascii=False))} "
-            f"--amendment-reason {shlex.quote('修正运行证据声明本身(不改验收, AIPOS-F233)')} --dry-run")
+            f"--amendment-reason {shlex.quote(reason or '修正运行证据声明本身(不改验收, AIPOS-F233)')} --dry-run")
 
 
 def evidence_declaration_fix_line(workspace_root: Path | str, task_id: str) -> str:
     """loop 例行修法占位 evidence_amend 的值(verbs.schema routine_rejections.placeholders.evidence_amend): task_id = 运行卡(业务卡或审计卡);
     业务卡取本卡当前一轮审计卡(审计轮 audit_round_ids 末项, 缺省 <卡>R)。此刻声明已无问题 = 一句说明。"""
+    problem = evidence_declaration_problem_for_card(workspace_root, task_id)
+    return problem["line"] if problem else f"卡 {task_id} 的运行证据声明此刻已无问题(已修正), 直接用原命令续跑"
+
+
+def evidence_declaration_problem_for_card(workspace_root: Path | str, task_id: str) -> dict[str, Any] | None:
+    """运行卡(业务卡或审计卡)当前一轮审计卡生效的运行证据声明问题(evidence_declaration_problem 同一判据; 例行修法 evidence_amend 与 AIPOS-F289
+    件④ loop status runtime_evidence_exhausted 出口同读)。无问题 = None。"""
     from tools.aipos_cli.audit_derivation import audit_round_ids, is_audit_card
     from tools.aipos_cli.next_resolver import _find_task_in_queue, _read_frontmatter
 
@@ -2236,8 +2164,7 @@ def evidence_declaration_fix_line(workspace_root: Path | str, task_id: str) -> s
         audit_id = rounds[-1] if rounds else f"{task_id}R"
         audit_path, _aq = _find_task_in_queue(root, audit_id)
         audit_fm = _read_frontmatter(audit_path) if audit_path else {"task_id": audit_id, "reviewed_task_id": task_id}
-    problem = evidence_declaration_problem(root, audit_id, audit_fm)
-    return problem["line"] if problem else f"卡 {task_id} 的运行证据声明此刻已无问题(已修正), 直接用原命令续跑"
+    return evidence_declaration_problem(root, audit_id, audit_fm)
 
 
 def restricted_amend_subfields() -> dict[str, list[str]]:
@@ -2252,6 +2179,228 @@ def restricted_amend_subfields() -> dict[str, list[str]]:
     if out is None or any(not isinstance(v, list) or not v or any(not isinstance(s, str) or not s for s in v) for v in out.values()):
         raise SchemaLoadError("card.schema.json restricted_amend.claimed_card_subfields 须为 {字段: [子键, …]}")
     return out
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F289 件②③④: 跨机固定候选卡运行证据唯一写法(声明 transitions artifact_ingest.verdict.runtime_evidence.candidate_subject.cross_host)。
+# 判据唯一实现 cross_host_evidence_problems(出卡 / 补审派发经 check_runtime_evidence_declaration, 推导核 / 裁决入口经 evidence_declaration_problem);
+# 改写唯一实现 cross_host_rewrite(改写建议与受限 amend 等价判据同读); 文案双语经 i18n 读取器(cross_host_text)。
+# ---------------------------------------------------------------------------
+
+_CROSS_HOST_KEYS = ("ssh_commands", "ssh_options_with_arg", "run_cmd_name", "run_long_name", "texts")
+_CROSS_HOST_TEXTS = ("exec_local", "exec_remote", "exec_line", "exec_pending", "remote_run_long", "ssh_prefix", "foreign_run", "rewrite",
+                     "outlet", "amend_reason", "basis_declared", "basis_validation_host", "exhausted_hint", "rewrite_manual")
+_CROSS_HOST_WHERE = "transitions.schema.json artifact_ingest.verdict.runtime_evidence.candidate_subject.cross_host"
+
+
+def cross_host_declaration() -> dict[str, Any]:
+    """candidate_subject.cross_host 唯一读取口(fail-closed): 键齐; texts = 双语块(结构与各语言占位集经 i18n.surface_texts 核)且含全部文案键。"""
+    from tools.aipos_cli.i18n import surface_texts
+    from tools.schema_loader import SchemaLoadError
+
+    decl = runtime_evidence_candidate_declaration().get("cross_host")
+    if (not isinstance(decl, dict) or any(k not in decl for k in _CROSS_HOST_KEYS)
+            or not isinstance(decl["ssh_commands"], list) or not decl["ssh_commands"]
+            or not isinstance(decl["ssh_options_with_arg"], list)
+            or not all(isinstance(decl[k], str) and "{index}" in decl[k] for k in ("run_cmd_name", "run_long_name"))):
+        raise SchemaLoadError(f"{_CROSS_HOST_WHERE}({' / '.join(_CROSS_HOST_KEYS)})未声明齐(AIPOS-F289)")
+    table = surface_texts(decl["texts"], None, where=f"{_CROSS_HOST_WHERE}.texts")
+    missing = [k for k in _CROSS_HOST_TEXTS if not isinstance(table.get(k), str) or not table[k].strip()]
+    if missing:
+        raise SchemaLoadError(f"{_CROSS_HOST_WHERE}.texts 缺 {missing}(AIPOS-F289)")
+    return decl
+
+
+def cross_host_text(key: str, **values: Any) -> str:
+    """cross_host 一条文案按用户语言渲染(i18n.block_localize 各语言各填一份 → i18n.voice 取用户语言; 语言设置非法 = 缺省语言并出声)。"""
+    from tools.aipos_cli.i18n import block_localize, voice
+
+    where = f"{_CROSS_HOST_WHERE}.texts"
+    return voice(block_localize(cross_host_declaration()["texts"], key, values, where=where), where="cross_host")
+
+
+def _ssh_invocation(command: str, decl: dict[str, Any]) -> dict[str, Any] | None:
+    """命令首段是否 ssh 调用: 是 = {target, remote(按 ssh 语义以空格拼回的远端命令; 首段后另有本机控制符 = None)}; 否 / 词法解析不了 = None。"""
+    import shlex
+
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    if not tokens or tokens[0].rsplit("/", 1)[-1] not in {str(c) for c in decl["ssh_commands"]}:
+        return None
+    with_arg = {str(o) for o in decl["ssh_options_with_arg"]}
+    index = 1
+    while index < len(tokens) and tokens[index].startswith("-") and tokens[index] not in _SHELL_SEPARATORS:
+        option = tokens[index]
+        index += 1
+        if option == "--":
+            break
+        if option in with_arg:
+            index += 1
+    if index >= len(tokens) or tokens[index] in _SHELL_SEPARATORS:
+        return None
+    rest = tokens[index + 1:]
+    local_tail = any(t in _SHELL_SEPARATORS for t in rest)
+    return {"target": tokens[index], "remote": None if local_tail or not rest else " ".join(rest)}
+
+
+def _run_path_pattern(governance_root: Path | str) -> tuple[re.Pattern[str] | None, dict[tuple[str, str], dict[str, Any]], list[str]]:
+    """验证根声明 path_template 渲染形的绝对 run 路径正则(任一声明 base 下 <卡>/<run>[/子路径]; 读 project.json validation_roots, 不写死主机 /
+    路径; 该卡尚未声明也认: 同项目共用 base)+ (base, 卡) → 声明 + 各备选对应的 base。无声明 = (None, {}, [])。"""
+    from tools.aipos_cli.validation_root import declaration as vr_declaration, project_validation_roots
+
+    entries = project_validation_roots(governance_root)
+    if not entries:
+        return None, {}, []
+    template = str(vr_declaration()["path_template"])
+    seg = r"[^/\s'\"`;|&()<>]+"
+    alternatives = []
+    bases = sorted({str(e["base"]).rstrip("/") for e in entries}, key=len, reverse=True)
+    for base in bases:
+        body = re.escape(template).replace(re.escape("{base}"), re.escape(base), 1)
+        body = body.replace(re.escape("{task_id}"), f"(?P<task_{len(alternatives)}>{seg})", 1)
+        body = body.replace(re.escape("{run_id}"), f"(?P<run_{len(alternatives)}>{seg})", 1)
+        alternatives.append(body)
+    pattern = re.compile(r"(?<![^\s'\"`=(:])(?:" + "|".join(alternatives) + r")(?P<sub>/[^\s'\"`;|&()<>]*)?(?![^\s'\"`;|&()<>])")
+    by_task = {(str(e["base"]).rstrip("/"), str(e["task_id"])): e for e in entries}
+    return pattern, by_task, bases
+
+
+def _run_path_hits(command: str, ctx: dict[str, Any]) -> list[dict[str, Any]]:
+    from tools.aipos_cli.validation_root_helper import SRC_DIR_NAME
+
+    hits = []
+    for m in ctx["pattern"].finditer(command):
+        groups = {k: v for k, v in m.groupdict().items() if v is not None}
+        slot = next(k for k in groups if k.startswith("task_"))
+        task, run, base = groups[slot], groups["run_" + slot[5:]], ctx["bases"][int(slot[5:])]
+        sub = groups.get("sub") or ""
+        prefix = m.group(0)[:len(m.group(0)) - len(sub)]
+        entry = ctx["by_task"].get((base, task))
+        if sub == f"/{SRC_DIR_NAME}" or sub.startswith(f"/{SRC_DIR_NAME}/"):
+            replacement = "{src_dir}" + sub[len(SRC_DIR_NAME) + 1:]
+        else:
+            replacement = "{run_dir}" + sub
+        hits.append({"span": m.span(), "path": prefix, "run": run, "task": task, "decl": (entry or {}).get("id") or f"base {base}",
+                     "replacement": replacement})
+    return hits
+
+
+def cross_host_rewrite(governance_root: Path | str, command: str, *, host: str | None = None,
+                       _ctx: dict[str, Any] | None = None) -> dict[str, Any]:
+    """AIPOS-F289 件③④: 一条声明命令的跨机写法判定与改写(唯一实现; 出卡拦截与受限 amend 等价判据同读)。返回 {ssh_prefix: {target, host, basis} | None,
+    runs: [{path, task, decl, replacement}], command: 改写后命令(无需改写 = 原样; ssh 首段后另有本机控制符 = None 不可自动改写), host: 改写后应声明的主机}。
+    ssh 判据: 首段 ssh 目标(去 user@)= 卡面 host、任一验证根主机标签或其 ssh 别名; 其余 ssh(他用途)不算。"""
+    ctx = _ctx if _ctx is not None else cross_host_context(governance_root)
+    decl = ctx["decl"]
+    out: dict[str, Any] = {"ssh_prefix": None, "runs": [], "command": command, "host": host}
+    body = command
+    invocation = _ssh_invocation(command, decl)
+    if invocation is not None:
+        target = invocation["target"].rsplit("@", 1)[-1]
+        labels = {str(label): str(meta.get("ssh_alias") or "") for label, meta in ctx["hosts"].items()}
+        label = next((lab for lab, alias in labels.items() if target in (lab, alias)), None)
+        if host and target == host:
+            out["ssh_prefix"] = {"target": invocation["target"], "host": host, "basis": "basis_declared"}
+        elif label is not None:
+            out["ssh_prefix"] = {"target": invocation["target"], "host": label, "basis": "basis_validation_host"}
+        if out["ssh_prefix"] is not None:
+            body = invocation["remote"]
+            out["host"] = host or out["ssh_prefix"]["host"]
+    if ctx["pattern"] is not None and body is not None:
+        hits = _run_path_hits(body, ctx)
+        out["runs"] = hits
+        for hit in sorted(hits, key=lambda h: h["span"][0], reverse=True):
+            body = body[:hit["span"][0]] + hit["replacement"] + body[hit["span"][1]:]
+    elif ctx["pattern"] is not None:
+        out["runs"] = _run_path_hits(command, ctx)
+    out["command"] = body
+    return out
+
+
+def cross_host_context(governance_root: Path | str) -> dict[str, Any]:
+    """一次判定读一次声明: cross_host 声明 + 验证根主机表(project_validation_hosts)+ run 路径正则。验证根声明读不出 = ValidationRootError 上抛。"""
+    from tools.aipos_cli.validation_root import project_validation_hosts
+
+    pattern, by_task, bases = _run_path_pattern(governance_root)
+    return {"decl": cross_host_declaration(), "hosts": project_validation_hosts(governance_root), "pattern": pattern, "by_task": by_task,
+            "bases": bases}
+
+
+def cross_host_evidence_problems(governance_root: Path | str, raw: Any, *, card_fm: dict[str, Any] | None, card: str,
+                                 queue: str | None = None, outlet: bool = True) -> dict[str, Any] | None:
+    """AIPOS-F289 件③(判据唯一实现): 被审卡交付主体为固定候选(evidence_subject = candidate)时, 声明命令的 ssh 前缀(目标 = 卡面 host / 验证根主机)
+    与写死的 run 路径。无问题 / 非固定候选 / 未声明 = None; 有 = {category, problems[拒因原文], value(改写后的整份声明; 不可自动改写 = None),
+    rewrite(改写建议一句), amend / supersede(命令原文; outlet=False 时空), outlet(出口一句)}。验证根声明读不出 = 拒因一条(fail-closed)。"""
+    from tools.aipos_cli.validation_root import ValidationRootError
+
+    if evidence_subject(card_fm) != "candidate" or not isinstance(raw, dict) or not isinstance(raw.get("commands"), list):
+        return None
+    decl = runtime_evidence_declaration()
+    category = str(decl["declaration_invalid_category"])
+    host = str(raw.get("host") or "").strip() or None
+    try:
+        ctx = cross_host_context(governance_root)
+    except ValidationRootError as exc:
+        return {"category": category, "problems": [f"验证根声明读不出, 无从核跨机运行证据写法(fail-closed): {exc}"], "value": None,
+                "rewrite": "", "amend": "", "supersede": "", "outlet": ""}
+    problems: list[str] = []
+    commands: list[Any] = []
+    rewritable = True
+    new_host = host
+    for index, command in enumerate(raw["commands"], 1):
+        if not isinstance(command, str):
+            commands.append(command)
+            continue
+        got = cross_host_rewrite(governance_root, command, host=host, _ctx=ctx)
+        if got["ssh_prefix"] is not None:
+            problems.append(cross_host_text("ssh_prefix", index=index, command=command, target=got["ssh_prefix"]["target"],
+                                            host=got["ssh_prefix"]["host"], basis=cross_host_text(got["ssh_prefix"]["basis"])))
+            new_host = new_host or got["host"]
+        for hit in got["runs"]:
+            problems.append(cross_host_text("foreign_run", index=index, command=command, path=hit["path"], decl=hit["decl"], task=hit["task"]))
+        if got["command"] is None:
+            rewritable = False
+        commands.append(got["command"] if got["command"] is not None else command)
+    if not problems:
+        return None
+    import json
+
+    value = {**raw, "commands": commands, **({"host": new_host} if new_host else {})} if rewritable else None
+    key = str(decl["card_field"])
+    rewrite = cross_host_text("rewrite", card_field=key, value=json.dumps(value, ensure_ascii=False) if value is not None
+                              else cross_host_text("rewrite_manual"))
+    out = {"category": category, "problems": problems, "value": value, "rewrite": rewrite, "amend": "", "supersede": "", "outlet": ""}
+    if outlet:
+        from tools.aipos_cli.workspace_config import lybra_command_prefix
+
+        root = Path(governance_root)
+        out["amend"] = _evidence_amend_command(root, card, queue, value if value is not None else raw,
+                                               reason=cross_host_text("amend_reason"))
+        out["supersede"] = (f"{lybra_command_prefix(root)} queue supersede --task-id {card or '<卡>'} --by <新卡号> --actor <顾问实例> "
+                            "--owner-words \"<Owner 原话摘要>\" --dry-run")
+        out["outlet"] = cross_host_text("outlet", card=card or "<卡>", amend=out["amend"], supersede=out["supersede"])
+    return out
+
+
+def cross_host_rewrite_equivalent(governance_root: Path | str, before: Any, after: Any, *, host: str | None, subject: str) -> bool:
+    """AIPOS-F289 件④: 受限 amend 跨机改写等价判据(card.schema restricted_amend.cross_host_rewrite_subfields; runtime_evidence_amend_problems 唯一调用):
+    条数相同, 逐条 after = cross_host_rewrite(before) 的改写结果(再按占位词表渲染等价); 至少一条确有改写; 不可自动改写的条 = 不等价。"""
+    if not isinstance(before, list) or not isinstance(after, list) or len(before) != len(after):
+        return False
+    ctx = cross_host_context(governance_root)
+    changed = False
+    for old, new in zip(before, after):
+        if not isinstance(old, str) or not isinstance(new, str):
+            return False
+        got = cross_host_rewrite(governance_root, old, host=host, _ctx=ctx)
+        if got["command"] is None or not evidence_commands_render_equivalent([got["command"]], [new], subject):
+            return False
+        changed = changed or got["command"] != old
+    return changed
 
 
 # ---------------------------------------------------------------------------
@@ -2307,13 +2456,16 @@ def runtime_evidence_command_words(command: str) -> list[str]:
 
 
 def check_runtime_evidence_declaration(raw: Any, *, governance_root: Path | str, audit_instance: str | None,
-                                       card_task_id: str | None = None, card_frontmatter: dict[str, Any] | None = None) -> dict[str, Any]:
+                                       card_task_id: str | None = None, card_frontmatter: dict[str, Any] | None = None,
+                                       subject_frontmatter: dict[str, Any] | None = None) -> dict[str, Any]:
     """运行证据声明校验唯一处(出卡 draft create/publish 与补审派发 audit dispatch --supplementary 同调): 形校验(同裁决入口
     parse_runtime_evidence_declaration)+ 派发前可执行核查。返回 {requirement, problems: [拒因原文], notes: [未核提示]}。
     形不合 = RuntimeEvidenceDeclarationError。problems 非空 = 调用方拒(预演报错, --confirm 拒)。
     AIPOS-F233 件②(取代 F199 旧占位迁移提示): 词表外的 {xxx} 是字面文本(awk / jq / json 片段等), 不拒, notes 给提示与相近已知占位
     (evidence_literal_notes); 别名不拒(调用方先经 normalize_runtime_evidence_declaration 改写为规范形)。
-    card_task_id / card_frontmatter = 声明所在卡(拒因点名用)。"""
+    card_task_id / card_frontmatter = 声明所在卡(拒因点名用)。AIPOS-F289 件③: 被审卡(subject_frontmatter, 缺省 = card_frontmatter; 补审派发 =
+    被审卡)交付主体为固定候选时, 跨机写法判据 cross_host_evidence_problems 同一处拦(ssh 前缀 / 写死 run 路径 = RUNTIME_EVIDENCE_DECLARATION_INVALID
+    + 改写建议)。"""
     import socket
 
     requirement = parse_runtime_evidence_declaration(raw)
@@ -2323,6 +2475,10 @@ def check_runtime_evidence_declaration(raw: Any, *, governance_root: Path | str,
     decl = runtime_evidence_declaration()
     out["notes"].extend(evidence_literal_notes(requirement["commands"], task_id=str(card_task_id or (card_frontmatter or {}).get("task_id") or "<卡>"),
                                                card_fm=card_frontmatter, card_field=str(decl["card_field"])))
+    cross = cross_host_evidence_problems(governance_root, raw, card_fm=subject_frontmatter if subject_frontmatter is not None else card_frontmatter,
+                                         card=str(card_task_id or (card_frontmatter or {}).get("task_id") or ""), outlet=False)
+    if cross is not None:  # AIPOS-F289 件③: 出卡 / 补审派发即拦(拒因 + 改写建议双语; 起草阶段改卡稿, 不给 amend)
+        out["problems"].extend(f"{cross['category']}: {p}" for p in [*cross["problems"], cross["rewrite"]])
     check = decl.get("executable_check")
     needed = ("category", "privilege_category", "privilege_commands", "fix_hint", "unverified_note")
     if not isinstance(check, dict) or any(not check.get(k) for k in needed):
@@ -2453,8 +2609,18 @@ def render_candidate_evidence_steps(governance_root: Path | str, *, audit_task_i
     for index, step in enumerate(decl["steps"], 1):
         lines.append(str(step).format(**values))
         if index == after:  # 声明命令逐条(占位按已知值渲染), 位置读声明 commands_after_step
-            lines.extend(str(decl["command_line"]).format(command=render_candidate_evidence_command(c, known))
-                         for c in (requirement or {}).get("commands") or [])
+            # AIPOS-F289 件②: 先说执行方式(本机 run = run-long / 远端 run = helper run-cmd), 每条命令后跟产品铸的执行行(validation_root.evidence_exec_command)
+            from tools.aipos_cli.validation_root import evidence_run_dir_layout
+
+            layout = evidence_run_dir_layout()
+            if values.get("host"):
+                lines.append(cross_host_text("exec_remote" if values.get("remote") else "exec_local", host=values["host"], run_dir=values["run_dir"],
+                                             run_id=values["run_id"], heading=values["heading"], log_dir=layout["log_dir"], record=layout["record"]))
+            exec_lines = list(values.get("exec_lines") or [])
+            for i, c in enumerate((requirement or {}).get("commands") or [], 1):
+                lines.append(str(decl["command_line"]).format(command=render_candidate_evidence_command(c, known)))
+                if values.get("host"):
+                    lines.append(cross_host_text("exec_line", exec=exec_lines[i - 1]) if i <= len(exec_lines) else cross_host_text("exec_pending"))
     if values.get("remote"):  # AIPOS-F200 件④: 审计 run 在远端主机 = 证据清单 + 取回副本两步(声明 candidate_subject.remote_steps)
         lines.extend(str(step).format(**values) for step in decl.get("remote_steps") or [])
     lines.extend(f"   ℹ {p}" for p in evidence_literal_notes((requirement or {}).get("commands") or [], task_id=reviewed_task_id,
