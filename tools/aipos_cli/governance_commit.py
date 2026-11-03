@@ -2406,7 +2406,7 @@ def _governance_commit_impl(
                 "pushed": False,
                 "commit_hash": None,
                 "message": (
-                    "暂存集与 dry-run 清单不一致, 拒绝提交(现场在检查与暂存之间被改动?)。本次暂存已清掉(git reset -- <paths>), 暂存区不留半成品。\n"
+                    "暂存集与 dry-run 清单不一致, 拒绝提交(现场在检查与暂存之间被改动?)。本次暂存的处置见末行(撤回成功 = 暂存区不留半成品)。\n"
                     + (f"多出: {extra}\n" if extra else "")
                     + (f"缺少: {missing_from_stage}\n" if missing_from_stage else "")
                     + f"可执行出口: cd {governance_root} && git status; 然后重跑 --dry-run 核对清单后再提交"
@@ -2447,8 +2447,8 @@ def _governance_commit_impl(
             result = _result_base(committed=False, commit_hash=None)
             result["verdict"] = Verdict.BLOCK
             result["message"] = (
-                f"治理仓 pre-commit 拒绝提交(exit {exc.returncode}); 本次暂存已清掉(git reset -- {' '.join(stage_pathspec)}), "
-                f"预暂存条目已按快照还原, 暂存区不留半成品。\n\n"
+                f"治理仓 pre-commit 拒绝提交(exit {exc.returncode}); 本次暂存的处置见末行(AIPOS-F285: 撤回成功 = 暂存区不留半成品, "
+                f"预暂存条目按快照还原; 撤不回 = 只撤本次路径的手工出口)。\n\n"
                 f"被拒清单({len(rejected_files)}):\n  - " + "\n  - ".join(rejected_files) + "\n\n"
                 f"hook 输出:\n{hook_output}\n\n"
                 f"可执行出口: 按 hook 输出修正文件后重跑同一命令(先 --dry-run: 同一四检模块, 拒因逐字相同)"

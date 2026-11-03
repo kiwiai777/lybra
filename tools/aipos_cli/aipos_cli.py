@@ -3516,7 +3516,9 @@ def build_parser() -> argparse.ArgumentParser:
              "in flight / carried by a pending card -> kept); --dry-run (default) lists, --confirm removes")
     project_cleanup_mode = project_cleanup_parser.add_mutually_exclusive_group()
     project_cleanup_mode.add_argument("--dry-run", action="store_true", help="Preview, zero writes (default)")
-    project_cleanup_mode.add_argument("--confirm", action="store_true", help="Remove the work trees judged removable (branches kept)")
+    project_cleanup_mode.add_argument("--confirm", action="store_true", help="Remove the work trees judged removable (branches kept); "
+                                      "claim leftovers (AIPOS-F285) also get their zero-commit card branch deleted")
+    project_cleanup_parser.add_argument("--task-id", default=None, help="AIPOS-F285: only this card (its work trees and claim-leftover branch)")
     project_cleanup_parser.add_argument("--json", action="store_true", help="JSON output")
     # AIPOS-F246 件①: 顾问简报(看板首页一页纸卡「现在 / 做成」; 声明 verbs.schema verbs.lybra_project_headline; 唯一实现 advisor_headline)
     project_headline_parser = project_subparsers.add_parser(

@@ -1660,7 +1660,13 @@
       "closing_triggers_description": "AIPOS-F209: 结案类触发(属 triggers 键)——承继卡结案时一并清卡面 carried_from 所指原卡的树(cleanup_after include_carried_source); 撤回 / 撤换不清原卡树",
       "projected_states": "AIPOS-F214 件③(F208 P2-2: 原 terminal_states / carry_protect_states 两份手写集合与 enums 终态、撤换承继 successor_states 只校验子集): 本段不再另列状态集合, 读取口 worktree_cleanup.cleanup_declaration 投影——terminal_states = enums.schema queue_state 中 terminal=true 的值(task_loader.QUEUE_TERMINAL_STATES); carry_protect_states = queue_mutations.transitions.supersede.carry_branch.successor_states(承继卡未认领 = 新卡仍在撤换承继允许的状态, 原卡树须留到承继卡认领建树)。本段再写这两个键 = SchemaLoadError(防第二份)。",
       "event_type": "worktree_cleanup",
-      "actions": ["absent", "in_flight", "carried", "dirty", "unreadable", "remove", "removed", "failed", "unknown"]
+      "actions": ["absent", "in_flight", "carried", "dirty", "unreadable", "remove", "removed", "failed", "unknown", "claim_residue", "residue_removed"],
+      "claim_residue": {
+        "description": "AIPOS-F285(11-03 岚图 LANTU-BC3 实撞: 门认领客户端 180s 未应答, 门侧已建卡分支; 重跑认领时 git worktree add 在负载下 30s 超时被杀, 留下半建工作树(管理目录无 index、带「初始化」锁)与 0 提交分支, 卡仍 pending, 清理命令判 dirty 不碰, 只能撤卡重发)。认领半成品的唯一判定 worktree_cleanup.judge_claim_residue(门认领建树 next_resolver._ensure_worktree 与清理 judge_worktree 同读)。适用: 卡无门生认领记录(claims/<卡>/ 无 claim_* 门生记录 = 从未认领成功; 有记录的返工 / 重开走原路径, 行为不变)、非审计取证树、非收编(start_point); 建树侧只在门认领路径(queue_mutation claim 传 claim_attempt=True)判, 修树(queue repair)/ 其他建树入口不判; 清理侧只判 queue_states 内的卡。基线 = 卡面 carried_from.tip(撤换承继)否则 N5.branch_integration.base_branch。判定(依次): 卡分支不在且落点不在 = none; 卡分支有基线之外的提交 = refuse(commits, 可能是他人产物); 卡分支已检出在落点之外的工作树 = refuse(occupied, 分支被他处占用); 落点在盘但不是该仓登记的卡分支工作树 = refuse(foreign); 落点是卡分支工作树但未建完(管理目录无 index: 检出被中断)= rebuild(去锁、强删半建树后在既有分支上重建; 清理 = 可清); 落点登记着但目录已不在 = rebuild(prune 后重建); 落点是建完的卡分支工作树: 有未提交改动 = refuse(dirty), 干净 = reuse(幂等续用, 认领不拒); 只有分支(0 提交、无工作树)= reuse(在既有分支上建树, 原行为)。refuse 一律给出口(texts.refuse_*), 队列与记录零变更。清理: `lybra project cleanup-worktrees [--task-id <卡>]` 预演列 claim_residue(可清), --confirm 删工作树(git worktree remove --force; 带锁先 unlock)并删 0 提交卡分支(删前复核仍 0 提交), 结果 residue_removed; 只清判为认领残留的这一张卡, 不碰他卡与有提交的分支。结案 / 撤回 / 撤换后的自动清理不删残留, 只在保留清单里点名并给清理命令。文案 verbs.schema lybra_project_cleanup_worktrees.claim_residue_texts(中英双语, i18n 唯一读取器)。",
+        "incomplete_marker": "index",
+        "queue_states": ["pending", "withdrawn"],
+        "queue_states_description": "清理判据只对这些队列状态的卡判认领残留(认领未落 = pending; 撤卡 = withdrawn)。已认领 / 在审 / 已结案等状态即使缺门生认领记录(人肉期卡、旧夹具)也不判残留, 走原判据。门认领建树时卡仍在 pending(只由认领路径传 claim_attempt 启用判定, 修树 / 收编 / 其他建树入口不判)。"
+      }
     }
   },
   "record_authenticity": {

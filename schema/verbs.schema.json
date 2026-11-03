@@ -6609,7 +6609,7 @@
       }
     },
     "lybra_project_cleanup_worktrees": {
-      "description": "AIPOS-F187 件④: `lybra project cleanup-worktrees [--dry-run|--confirm] [--json] [--workspace-root <治理根>]` —— 按卡结案 / 撤回自动清理的同一判据(transitions.schema queue_mutations.worktree_cleanup, 唯一实现 worktree_cleanup.judge_worktree)批量处理存量卡工作树与审计工作树, 跨 project.json repos.items 全部仓(无 repos 段 = code_repo)。缺省 = 预演(零写入): 逐仓列出工作树根下每棵卡工作树的判定——已终态且干净 → 删、脏 → 列路径与未提交改动计数(不碰)、在途 → 留、被承继卡引用 → 留、目录名查不到卡 → 不认识(留)。--confirm = 对判为删的执行 `git worktree remove`(不加 --force, 分支保留), 其余不动; 不写治理根(存量清理不落记录, 输出即结果)。顾问在任何项目治理根下可自行运行(由更新通知告知)。主检出与工作树根外的工作树不在清单内。",
+      "description": "AIPOS-F187 件④(AIPOS-F285 加 [--task-id <卡>] 与认领残留 claim_residue): `lybra project cleanup-worktrees [--dry-run|--confirm] [--task-id <卡>] [--json] [--workspace-root <治理根>]` —— 按卡结案 / 撤回自动清理的同一判据(transitions.schema queue_mutations.worktree_cleanup, 唯一实现 worktree_cleanup.judge_worktree)批量处理存量卡工作树与审计工作树, 跨 project.json repos.items 全部仓(无 repos 段 = code_repo)。缺省 = 预演(零写入): 逐仓列出工作树根下每棵卡工作树的判定——已终态且干净 → 删、脏 → 列路径与未提交改动计数(不碰)、在途 → 留、被承继卡引用 → 留、目录名查不到卡 → 不认识(留)。--confirm = 对判为删的执行 `git worktree remove`(不加 --force, 分支保留), 其余不动; 不写治理根(存量清理不落记录, 输出即结果)。顾问在任何项目治理根下可自行运行(由更新通知告知)。主检出与工作树根外的工作树不在清单内。",
       "phase": "single",
       "surface": ["cli"],
       "cli_command": "lybra project cleanup-worktrees",
@@ -6618,7 +6618,8 @@
         "type": "object",
         "properties": {
           "dry_run": {"type": "boolean", "description": "预演(缺省), 零写入"},
-          "confirm": {"type": "boolean", "description": "执行: 删判为「删」的工作树(分支保留)"},
+          "confirm": {"type": "boolean", "description": "执行: 删判为「删」的工作树(分支保留); 判为认领残留(claim_residue, AIPOS-F285)的删工作树并删 0 提交卡分支"},
+          "task_id": {"type": "string", "description": "AIPOS-F285: 只看 / 只清这一张卡(含其工作树与认领残留分支; 不给 = 全项目工作树根)"},
           "json": {"type": "boolean", "description": "JSON 输出"},
           "workspace_root": {"type": "string", "description": "治理根; 缺省自发现(governance_root_resolution)"}
         },
@@ -6657,6 +6658,46 @@
         "reason_failed": "删失败: {error}",
         "reason_removable": "已终态且干净, 尚未清理(lybra project cleanup-worktrees --confirm)",
         "loop_residual": "本卡保留的工作树: {items}"
+      },
+      "claim_residue_texts": {
+        "zh": {
+          "reuse_tree": "续用此前认领尝试留下的卡工作树 {worktree}(分支 {branch} 无基线 {base} 之外的提交、工作树干净; AIPOS-F285 幂等续认领)",
+          "reuse_branch": "续用此前认领尝试留下的卡分支 {branch}(无基线 {base} 之外的提交)建工作树",
+          "rebuild": "此前认领尝试留下的卡工作树 {worktree} 未建完(检出被中断), 已删掉半建树并在卡分支 {branch} 上重建(分支无基线 {base} 之外的提交)",
+          "rebuild_failed": "此前认领尝试留下的半建工作树 {worktree} 清不掉({error}), 认领被拒(队列与记录未变更); 出口: lybra project cleanup-worktrees --task-id {task_id} 预演看原因, 处理后重跑认领",
+          "refuse_commits": "卡 {task_id} 还没有认领成功过, 但卡分支 {branch} 已有 {commits} 个基线 {base} 之外的提交(可能是他人产物), 不续用, 认领被拒(队列与记录未变更); 出口: git -C {repo} log --oneline {base}..{branch} 核对归属; 确属残留可删分支后重跑认领, 否则撤卡重发或换卡号",
+          "refuse_occupied": "卡分支 {branch} 已检出在 {other}(不是本卡落点 {worktree}), 分支被他处占用, 认领被拒(队列与记录未变更); 出口: 核对该工作树归属, 释放(git -C {repo} worktree remove <该树>)后重跑认领",
+          "refuse_foreign": "落点 {worktree} 已存在但不是卡分支 {branch} 的工作树(现为 {current}), 认领被拒(队列与记录未变更); 出口: 核对该目录归属, 移走后重跑认领",
+          "refuse_dirty": "此前认领尝试留下的卡工作树 {worktree} 有 {uncommitted} 个未提交改动, 不续用, 认领被拒(队列与记录未变更); 出口: 核对改动归属; 确属残留: lybra project cleanup-worktrees --task-id {task_id} 预演后处理, 再重跑认领",
+          "cleanup_item": "  认领残留(可清) {worktree}({task_id} {state}; 分支 {branch} 无基线之外的提交; {kind}): 清理 = 删工作树 + 删分支",
+          "cleanup_branch_item": "  认领残留(可清) 分支 {branch}({task_id} {state}; 无工作树、无基线之外的提交): 清理 = 删分支",
+          "cleanup_removed": "  已清认领残留 {worktree}({task_id}; 分支 {branch} 已删)",
+          "kind_incomplete": "工作树未建完",
+          "kind_clean": "工作树干净",
+          "kind_missing": "工作树已登记但目录不在",
+          "summary": "认领残留: 可清 {residue} / 已清 {removed}",
+          "confirm_hint": "确认清理: lybra project cleanup-worktrees --workspace-root {governance_root}{task_flag} --confirm",
+          "kept_reason": "认领残留(分支无新提交); 清理: lybra project cleanup-worktrees --task-id {task_id} 预演后 --confirm"
+        },
+        "en": {
+          "reuse_tree": "Reusing the card work tree {worktree} left by an earlier claim attempt (branch {branch} has no commits beyond base {base}, tree is clean; AIPOS-F285 idempotent re-claim)",
+          "reuse_branch": "Reusing the card branch {branch} left by an earlier claim attempt (no commits beyond base {base}) to build the work tree",
+          "rebuild": "The card work tree {worktree} left by an earlier claim attempt was never finished (checkout interrupted); removed the half-built tree and rebuilt it on card branch {branch} (no commits beyond base {base})",
+          "rebuild_failed": "The half-built work tree {worktree} left by an earlier claim attempt could not be removed ({error}); claim refused (queue and records unchanged). Way out: lybra project cleanup-worktrees --task-id {task_id} to preview the reason, fix it, then rerun the claim",
+          "refuse_commits": "Card {task_id} has never been claimed successfully, but card branch {branch} already has {commits} commit(s) beyond base {base} (possibly someone else's work); not reused, claim refused (queue and records unchanged). Way out: git -C {repo} log --oneline {base}..{branch} to check whose it is; if it is leftover, delete the branch and rerun the claim, otherwise withdraw and reissue the card or use a new card ID",
+          "refuse_occupied": "Card branch {branch} is checked out at {other} (not this card's location {worktree}); the branch is in use elsewhere, claim refused (queue and records unchanged). Way out: check who owns that tree, release it (git -C {repo} worktree remove <that tree>), then rerun the claim",
+          "refuse_foreign": "Location {worktree} exists but is not a work tree of card branch {branch} (it is {current}); claim refused (queue and records unchanged). Way out: check who owns the directory, move it away, then rerun the claim",
+          "refuse_dirty": "The card work tree {worktree} left by an earlier claim attempt has {uncommitted} uncommitted change(s); not reused, claim refused (queue and records unchanged). Way out: check whose changes they are; if leftover: lybra project cleanup-worktrees --task-id {task_id} to preview and handle it, then rerun the claim",
+          "cleanup_item": "  Claim leftover (removable) {worktree} ({task_id} {state}; branch {branch} has no commits beyond base; {kind}): cleanup = remove the tree + delete the branch",
+          "cleanup_branch_item": "  Claim leftover (removable) branch {branch} ({task_id} {state}; no work tree, no commits beyond base): cleanup = delete the branch",
+          "cleanup_removed": "  Removed claim leftover {worktree} ({task_id}; branch {branch} deleted)",
+          "kind_incomplete": "work tree never finished",
+          "kind_clean": "work tree clean",
+          "kind_missing": "work tree registered but directory gone",
+          "summary": "Claim leftovers: removable {residue} / removed {removed}",
+          "confirm_hint": "To clean up: lybra project cleanup-worktrees --workspace-root {governance_root}{task_flag} --confirm",
+          "kept_reason": "claim leftover (branch has no new commits); clean up: lybra project cleanup-worktrees --task-id {task_id}, preview then --confirm"
+        }
       }
     },
     "lybra_project_status": {
