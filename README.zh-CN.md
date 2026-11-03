@@ -87,7 +87,8 @@ lybra project set-repos my-project --repo app=~/code/my-project --confirm
 ```
 
 每条写 `project.json` 的命令(`set-repos`、`set-execution`、`set-model`……)都是两相:
-`--dry-run`(缺省)零写入预览 diff 与校验;`--confirm` 落盘并自动入库。
+`--dry-run`(缺省)零写入预览 diff 与校验;`--confirm` 落盘并自动入库。多个项目可共用一个
+治理仓 —— 每次落账只提交本项目的路径,其他项目已暂存的改动原样保留、互不干扰。
 `lybra onboarding check my-project --step 8` 可诊断任一步骤。Codex 顾问会话:向导命令加
 `--advisor-harness codex`。
 
@@ -100,8 +101,11 @@ lybra project set-execution my-project --subagent-executor exec.my-project.h1 --
 ```
 
 常设授权取代逐卡信封:车道 × 任务模式 × 驱动方 / 主机 / harness 拉起,外加总卡数与到期硬边界
-(`lybra project grant show` 查看;`extend` / `revoke` 修订)。`set-execution` 声明分工——
-代码卡归顾问的子 agent,一切非代码卡归 pi 执行工位,审计永远归独立 pi 审计工位。接入用
+(`lybra project grant show` 查看;`extend` / `revoke` 修订)。`set-execution` 声明分工 ——
+代码卡归顾问的子 agent,一切非代码卡归 pi 执行工位,审计永远归独立 pi 审计工位。唯一例外:
+需要 pi 不具备的主机能力(本机图形会话 / 登录钥匙串,如 iOS 签名打包)的卡在卡面声明
+`requires_capabilities`,改派声明过 `--capability-executor` 的子 agent 实例(绑定其登记主机;
+审计仍归 pi)。接入用
 `lybra roles enroll-deliver`(一次性注册码不出现在命令行);工位用 `lybra sync` 拉取章程、
 技能与扩展。
 

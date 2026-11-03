@@ -96,7 +96,8 @@ lybra project set-repos my-project --repo app=~/code/my-project --confirm
 
 Every command that writes `project.json` (`set-repos`, `set-execution`, `set-model`, …) is two-phase:
 `--dry-run` (default) previews the diff and validation with zero writes; `--confirm` writes and lands
-it in the governance repo. `lybra onboarding check my-project --step 8` diagnoses any step.
+it in the governance repo. Several projects can share one governance repo — each landing commits
+only its own paths, leaving other projects' staged changes untouched. `lybra onboarding check my-project --step 8` diagnoses any step.
 A Codex advisor session: `lybra onboarding guide my-project --advisor-harness codex`.
 
 **2. Authorize and divide** — one Owner signature per project, then declare who executes what:
@@ -110,7 +111,10 @@ lybra project set-execution my-project --subagent-executor exec.my-project.h1 --
 The grant replaces per-card envelopes: lanes × task modes × drivers / hosts / harness launch, plus
 total-card and expiry hard bounds (`lybra project grant show` inspects it; `extend` / `revoke` revise
 it). `set-execution` declares the division of labor — code cards to the advisor's sub-agent, every
-non-code card to the pi executor workstation, audits always to the independent pi auditor.
+non-code card to the pi executor workstation, audits always to the independent pi auditor. The one
+exception: cards that need a capability pi cannot provide — a local GUI session or the login
+keychain (iOS signing, say) — declare `requires_capabilities` on the card and go to a
+`--capability-executor` sub-agent instance bound to an enrolled host that has it (audits still pi).
 Enrollment happens with `lybra roles enroll-deliver` (the one-time code never appears on a command
 line); workstations pull their charters, skills and extensions with `lybra sync`.
 
