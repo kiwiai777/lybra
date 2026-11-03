@@ -330,9 +330,15 @@ def apply_execution_defaults(metadata: dict[str, Any], repo_root: Path) -> list[
         capable = capability_assignee(repo_root, metadata, execution=execution)
     except ValueError as exc:
         return [str(exc)]
-    if capable is not None and capable["refusal"] is not None:
-        return [capable["refusal"]["message"]]
-    if capable is None and execution_wants_pi(execution, metadata):  # AIPOS-F156 件①: 与卡执行方式判定(card_execution_mode)同一谓词
+    if capable is not None:
+        if capable["refusal"] is not None:
+            return [capable["refusal"]["message"]]
+        refusals = _division_refusals(repo_root, metadata, stage="draft", execution=execution)  # 显式给了不具备能力的执行方 = 拒
+        if refusals:
+            return refusals
+        assigned = assigned or str(capable["instance"])
+        metadata["assigned_to"] = assigned  # 之后 execution_wants_pi 恒假(执行方已是具备能力的子 agent 实例)
+    if execution_wants_pi(execution, metadata):  # AIPOS-F156 件①: 与卡执行方式判定(card_execution_mode)同一谓词
         if not assigned and not execution["pi_executor"]:
             return [pi_undeclared_refusal(repo_root, metadata, execution)["message"]]
         metadata["assigned_to"] = assigned or execution["pi_executor"]
