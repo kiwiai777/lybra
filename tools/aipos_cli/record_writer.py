@@ -754,6 +754,7 @@ def build_claim_log_markdown(
     claim_id: str,
     session_id: str,
     created_at: str,
+    capability_exception: str | None = None,
 ) -> str:
     metadata = {
         "record_type": RecordType.CLAIM_LOG,
@@ -774,6 +775,7 @@ def build_claim_log_markdown(
             "## Summary",
             "",
             f"- Task `{task_id}` claimed by `{actor}`.",
+            *_capability_exception_lines(metadata, capability_exception),
             "",
             "## Safety",
             "",
@@ -840,6 +842,18 @@ def _confirmer_fields(confirmer: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _capability_exception_lines(metadata: dict[str, Any], capability_exception: str | None) -> list[str]:
+    """AIPOS-F284 留痕: 能力例外一行(execution_division.capability_trace 渲染)写进记录 frontmatter(键 = enums.schema host_capability.record_field)
+    与正文; 无 = 不写(存量记录同形)。"""
+    text = str(capability_exception or "").strip()
+    if not text:
+        return []
+    from tools.aipos_cli.next_resolver import host_capability_declaration
+
+    metadata[str(host_capability_declaration()["record_field"])] = text
+    return [f"- {text}"]
+
+
 def build_mcp_claim_record_markdown(
     *,
     task_id: str,
@@ -861,6 +875,7 @@ def build_mcp_claim_record_markdown(
     confirmation_ref: str | None = None,
     confirmer: dict[str, Any] | None = None,
     adoption: dict[str, Any] | None = None,
+    capability_exception: str | None = None,
 ) -> str:
     """adoption(AIPOS-F123 件①): 收编铸记录时给 {adopted_from, adopted_by, adopted_branch, adopted_branch_tip, card_branch,
     legacy_card_runtime}(声明 transitions nodes.N1.adoption.record_fields); event_type/operation 标 queue_adopt, from_state=claimed。"""
@@ -919,6 +934,7 @@ def build_mcp_claim_record_markdown(
             f"- Task `{task_id}` was claimed by `{canonical_agent_instance}` through the {metadata['autonomy_mode']} MCP claim surface.",
             f"- Owner policy: `{owner_policy_ref}`.",
             *adoption_lines,
+            *_capability_exception_lines(metadata, capability_exception),
             "",
             "## Boundary",
             "",
@@ -1001,6 +1017,7 @@ def build_mcp_return_record_markdown(
     self_check_waiver_reason: str | None = None,
     artifact_subject: dict[str, Any] | None = None,
     return_outcome: dict[str, str] | None = None,
+    capability_exception: str | None = None,
 ) -> str:
     metadata = {
         "record_type": RecordType.RETURN_RECORD,
@@ -1078,6 +1095,7 @@ def build_mcp_return_record_markdown(
             f"- Task `{task_id}` was returned by `{canonical_agent_instance}` through the Supervised MCP return surface.",
             f"- Owner policy: `{owner_policy_ref}`.",
             f"- Result summary: {result_summary or 'not provided'}",
+            *_capability_exception_lines(metadata, capability_exception),
             "",
             "## Boundary",
             "",

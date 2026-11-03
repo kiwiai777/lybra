@@ -704,13 +704,26 @@ def _subproject_nav(ctx: _Ctx, subs: list[dict[str, Any]], current: str | None, 
     return f"<nav class=\"rp-subnav\"><span>{_ESC(ctx.t('rp_pj_filter'))}</span>{''.join(links)}</nav>"
 
 
+def _capability_chip(ctx: _Ctx, row: dict[str, Any]) -> str:
+    """AIPOS-F284: card row shows the host capabilities it requires (labels from enums.schema host_capability.texts in the page language)."""
+    caps = list(row.get("capabilities") or [])
+    if not caps:
+        return ""
+    from tools.aipos_cli.execution_division import capability_labels
+    from tools.aipos_cli.i18n import pick
+
+    labels = pick(capability_labels(caps), ctx.lang)
+    return (f" <span class=\"rp-chip rp-chip-capability\" data-capabilities=\"{_ESC(','.join(caps))}\">"
+            f"{_ESC(ctx.t('rp_pj_capabilities', caps=labels))}</span>")
+
+
 def _card_rows(ctx: _Ctx, rows: list[dict[str, Any]]) -> str:
     items = []
     for r in rows:
         title = f" <span class=\"rp-row-title\">{_ESC(r['title'])}</span>" if r.get("title") else ""
         items.append(f"<li class=\"rp-row\" data-task-id=\"{_ESC(r['task_id'])}\" data-state=\"{_ESC(r['queue_state'])}\">"
                      f"<span class=\"rp-chip rp-chip-{_ESC(r['queue_state'])}\">{_ESC(ctx.t('rp_qs_' + r['queue_state']))}</span>"
-                     f" <span class=\"rp-card-id\">{_ESC(r['task_id'])}</span>{title}</li>")
+                     f" <span class=\"rp-card-id\">{_ESC(r['task_id'])}</span>{title}{_capability_chip(ctx, r)}</li>")
     return f"<ul class=\"rp-rows\">{''.join(items)}</ul>"
 
 

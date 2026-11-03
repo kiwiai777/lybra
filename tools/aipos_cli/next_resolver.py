@@ -503,6 +503,30 @@ def task_mode_executor_declaration() -> dict[str, Any]:
     return decl
 
 
+def host_capability_declaration() -> dict[str, Any]:
+    """AIPOS-F284: enums.schema host_capability(主机能力值域 + 卡面字段 / 执行声明键 / 记录字段 / 豁免 kind / 双语 texts)唯一读取口。
+    exempt_kinds ⊆ task_mode.executor.kinds; texts 经 AIPOS-F276 双语读取器核结构与占位(i18n.surface_texts), labels 覆盖全部值;
+    缺 / 形变 = SchemaLoadError(fail-closed)。"""
+    from tools.aipos_cli.i18n import supported_languages, surface_texts
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    where = "enums.schema.json enums.host_capability"
+    decl = (load_schema("enums", REPO_ROOT).get("enums") or {}).get("host_capability")
+    values = [str(v.get("value")) for v in (decl.get("values") or []) if isinstance(v, dict)] if isinstance(decl, dict) else []
+    if (not isinstance(decl, dict) or not values
+            or not all(isinstance(decl.get(k), str) and decl[k] for k in ("card_field", "execution_key", "record_field"))
+            or not isinstance(decl.get("exempt_kinds"), list)
+            or not set(decl["exempt_kinds"]) <= set(task_mode_executor_declaration()["kinds"])
+            or not isinstance(decl.get("reject_codes"), dict)):
+        raise SchemaLoadError(f"{where}(values / card_field / execution_key / record_field / exempt_kinds ⊆ task_mode.executor.kinds / "
+                              "reject_codes)未声明齐(AIPOS-F284)")
+    for lang in supported_languages():
+        table = surface_texts(decl.get("texts"), lang, where=f"{where}.texts")
+        if sorted((table.get("labels") or {})) != sorted(values):
+            raise SchemaLoadError(f"{where}.texts.{lang}.labels 须恰为值域 {values}(AIPOS-F284)")
+    return decl
+
+
 def task_mode_executor(task_mode: Any) -> str | None:
     """AIPOS-F256 件①: 该 task_mode 的执行方 kind(唯一读取口: enums.schema task_mode.values[].executor; 缺值 = missing_default.executor)。
     未知 task_mode(非空且不在值域)= None(调用方 fail-closed 拒 EXECUTOR_TASK_MODE_UNKNOWN)。值不在 executor.kinds / 缺键 = SchemaLoadError。"""

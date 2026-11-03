@@ -1807,6 +1807,7 @@ def set_project_execution(
     pi_allowed_task_modes: list[str] | tuple[str, ...] = (),
     default_mode: str | None = None,
     subagent_max_wait: float | None = None,
+    capability_executors: list[str] | tuple[str, ...] | None = None,
     dry_run: bool = True,
 ) -> dict[str, Any]:
     """AIPOS-F143 件②: `lybra project set-execution` 的唯一实现——整段写 project.json execution(未给的可选键 = 声明缺省; 其余键原样保留)。
@@ -1844,6 +1845,12 @@ def set_project_execution(
             section["subagent_max_wait"] = subagent_max_wait
         elif isinstance(previous, dict) and previous.get("subagent_max_wait") is not None:
             section["subagent_max_wait"] = previous["subagent_max_wait"]
+        # AIPOS-F284: 能力执行实例 —— 给了 = 按实例合并(<实例>= 删除); 未给 = 原值保留(同 subagent_max_wait)
+        if capability_merged is not None:
+            if capability_merged:
+                section["capability_executors"] = capability_merged
+        elif isinstance(previous, dict) and previous.get("capability_executors") is not None:
+            section["capability_executors"] = previous["capability_executors"]
         data["execution"] = section
         staged["view"] = project_execution(project_root, project=data)  # 形不合 = 抛, 零写入
 
@@ -1858,8 +1865,54 @@ def set_project_execution(
         texts = execution_texts()
         raise ExecutionDeclarationError("EXECUTION_SUBAGENT_MODE_MISMATCH", [
             str(texts["subagent_mode_mismatch"]).format(**mismatch), str(texts["subagent_mode_exit"]).format(**mismatch)])
+    capability_merged: dict[str, Any] | None = None
+    if capability_executors:
+        capability_merged, cap_refusals = capability_executor_refusals(project_root, list(capability_executors), execution=view or {})
+        if cap_refusals:
+            raise ExecutionDeclarationError("EXECUTION_CAPABILITY_INSTANCE_INVALID", cap_refusals)
     outcome = update_project_json(project_root, _mutate, verify=project_execution, dry_run=dry_run)
-    return {**outcome, "project_json": str(project_json_path(project_root)), "execution": staged.get("view") or view}
+    out = {**outcome, "project_json": str(project_json_path(project_root)), "execution": staged.get("view") or view}
+    if capability_merged is not None:
+        out["capability_executors"] = capability_merged
+    return out
+
+
+def capability_executor_refusals(project_root: str | Path, specs: list[str], *, execution: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """AIPOS-F284: `set-execution --capability-executor <实例>=<能力>[,<能力>]` 的解析与写前核身份(唯一实现)。在现声明
+    (workspace_config.project_capability_executors)上按实例合并(<实例>= 留空 = 删除该实例); 新写的实例须: 本项目已接入
+    (instance_enrollment)、最新登记为子 agent 模式(governance_root_mode)、登记有主机(land 事件 host=; 绑定写入 host)、能力 ∈
+    enums.schema host_capability、不等于 auditor / pi_executor。返回 (合并后声明, 拒因; 拒因话术 = host_capability.texts, 双语渲染值)。"""
+    from tools.aipos_cli.execution_division import capability_text
+    from tools.aipos_cli.workspace_config import project_capability_executors
+    from tools.schema_loader import get_enum_values
+
+    allowed = list(get_enum_values("host_capability"))
+    merged: dict[str, Any] = {k: dict(v) for k, v in project_capability_executors(Path(project_root)).items()}
+    refusals: list[str] = []
+    for raw in specs:
+        name, sep, value = str(raw).partition("=")
+        name = name.strip()
+        caps = [c.strip() for c in value.split(",") if c.strip()]
+        if not sep or not name or any(ch.isspace() for ch in name) or any(c not in allowed for c in caps):
+            refusals.append(capability_text("set_bad_value", {"raw": raw, "allowed": allowed}))
+            continue
+        if not caps:
+            merged.pop(name, None)
+            continue
+        clash = next((k for k in ("auditor", "pi_executor") if execution.get(k) and execution.get(k) == name), None)
+        if clash:
+            refusals.append(capability_text("set_role_clash", {"instance": name, "key": clash}))
+            continue
+        status = instance_enrollment(project_root, name)
+        if not status["enrolled"]:
+            refusals.append(capability_text("set_not_enrolled", {"instance": name}))
+        elif not status["governance_root_mode"]:
+            refusals.append(capability_text("set_not_subagent", {"instance": name, "mode": status.get("mode") or "-"}))
+        elif not str(status.get("host") or "").strip():
+            refusals.append(capability_text("set_no_host", {"instance": name}))
+        else:
+            merged[name] = {"host": str(status["host"]).strip(), "capabilities": list(dict.fromkeys(caps))}
+    return merged, refusals
 
 
 def _pi_model_affected(project_root: str | Path, execution: dict[str, Any], roles: list[str],

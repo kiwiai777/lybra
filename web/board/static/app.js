@@ -1339,6 +1339,7 @@ function summarizeTaskDetail(data) {
     agent_instance: task.metadata?.agent_instance,
     task_mode: task.metadata?.task_mode,
     task_class: task.metadata?.task_class,
+    requires_capabilities: task.metadata?.requires_capabilities,
     effective_task_class: task.effective_task_class,
     complexity_note: task.metadata?.complexity_note,
     warnings: data.warnings,
