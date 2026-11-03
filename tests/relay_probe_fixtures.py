@@ -69,7 +69,8 @@ def ws_frame(opcode: int, payload: bytes, fin: bool = True) -> bytes:
 class FakeWecomServer:
     """scenario: 'normal' | 'auth_fail' | 'replace' (send disconnected_event after the pushes)."""
 
-    def __init__(self, bot_id: str, secret: str, pushes: list[str], scenario: str = "normal") -> None:
+    def __init__(self, bot_id: str, secret: str, pushes: list[str], scenario: str = "normal", echo_cmd: bool = False) -> None:
+        self.echo_cmd = echo_cmd      # responses also carry the request's cmd (tolerance check; docs show no cmd)
         self.bot_id = bot_id
         self.secret = secret
         self.pushes = pushes          # raw JSON texts pushed after a successful subscribe
@@ -147,8 +148,8 @@ class FakeWecomServer:
                 if cmd == "aibot_subscribe":
                     body = frame.get("body") or {}
                     ok = self.scenario != "auth_fail" and body.get("bot_id") == self.bot_id and body.get("secret") == self.secret
-                    self._send_json(sock, {"headers": {"req_id": req_id}, "errcode": 0 if ok else 40058,
-                                           "errmsg": "ok" if ok else "invalid bot_id or secret"})
+                    self._send_json(sock, {**({"cmd": cmd} if self.echo_cmd else {}), "headers": {"req_id": req_id},
+                                           "errcode": 0 if ok else 40058, "errmsg": "ok" if ok else "invalid bot_id or secret"})
                     if not ok:
                         continue
                     self.subscribed.set()
@@ -166,7 +167,8 @@ class FakeWecomServer:
                                                         "aibotid": self.bot_id,
                                                         "event": {"eventtype": "disconnected_event"}}})
                 elif cmd == "ping":
-                    self._send_json(sock, {"headers": {"req_id": req_id}, "errcode": 0, "errmsg": "ok"})
+                    self._send_json(sock, {**({"cmd": cmd} if self.echo_cmd else {}), "headers": {"req_id": req_id},
+                                           "errcode": 0, "errmsg": "ok"})
         except (ConnectionError, OSError):
             return
 

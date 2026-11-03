@@ -17,11 +17,13 @@ PREVIEW_CHARS = 20
 WECOM_DOCUMENTED_TYPES = ("text", "image", "mixed", "voice", "file", "video")
 ILINK_ITEM_TYPES = {1: "text", 2: "image", 3: "voice", 4: "file", 5: "video", 11: "tool_call_start", 12: "tool_call_result"}
 TITLE_HINTS = ("title", "name", "chatname", "group", "chatid", "roomid")
+NOT_TITLE = ("file_name", "filename")      # attachment names are reported under question 3
 
 
 @dataclass
 class Msg:
     seq: int
+    ref: str                      # display reference: frame seq (WeCom) or <frame seq>.<n> (ClawBot batches)
     received_at: str
     msgid: str
     label: str                    # message type label
@@ -65,7 +67,7 @@ def _wecom_messages(frames: list[dict]) -> tuple[list[Msg], dict[str, int]]:
         body = frame.get("body") if isinstance(frame, dict) and isinstance(frame.get("body"), dict) else {}
         if cmd == "aibot_msg_callback":
             mtype = str(body.get("msgtype"))
-            m = Msg(seq=rec["seq"], received_at=rec["received_at"], msgid=str(body.get("msgid") or ""), label=mtype,
+            m = Msg(seq=rec["seq"], ref=str(rec["seq"]), received_at=rec["received_at"], msgid=str(body.get("msgid") or ""), label=mtype,
                     body=body, documented=mtype in WECOM_DOCUMENTED_TYPES)
             texts: list[str] = []
             if mtype == "text":
@@ -107,7 +109,7 @@ def _clawbot_messages(frames: list[dict]) -> tuple[list[Msg], dict[str, int]]:
         if data.get("ret") not in (0, None) or data.get("errcode") not in (0, None):
             key = f"error:ret={data.get('ret')},errcode={data.get('errcode')}"
             other[key] = other.get(key, 0) + 1
-        for msg in data.get("msgs") or []:
+        for n, msg in enumerate(data.get("msgs") or [], start=1):
             if not isinstance(msg, dict):
                 continue
             items = [it for it in (msg.get("item_list") or []) if isinstance(it, dict)]
@@ -119,7 +121,7 @@ def _clawbot_messages(frames: list[dict]) -> tuple[list[Msg], dict[str, int]]:
                     names.append("ref_msg")
             label = names[0] if len(set(names)) == 1 and names else ("+".join(names) if names else "empty")
             documented = all(n in ILINK_ITEM_TYPES.values() or n == "ref_msg" for n in names)
-            msgs.append(Msg(seq=rec["seq"], received_at=rec["received_at"], msgid=str(msg.get("message_id") or ""),
+            msgs.append(Msg(seq=rec["seq"], ref=f"{rec['seq']}.{n}", received_at=rec["received_at"], msgid=str(msg.get("message_id") or ""),
                             label=label, items=names, preview=preview(" ".join(t for t in texts if t)), body=msg,
                             documented=documented))
     return msgs, other
@@ -155,7 +157,7 @@ def summarize(channel: str, channel_dir: Path, t: Callable[..., str]) -> str:
     for m in msgs:
         items = f" [{', '.join(m.items)}]" if m.items else ""
         flag = "" if m.documented else " " + t("sum_undocumented")
-        out.append(f"  #{m.seq} {m.received_at} {m.label}{items}{flag} msgid={m.msgid}")
+        out.append(f"  #{m.ref} {m.received_at} {m.label}{items}{flag} msgid={m.msgid}")
         if m.preview:
             out.append("      " + t("sum_preview", text=m.preview))
         for att in by_msg.get(m.msgid, []):
@@ -178,7 +180,7 @@ def summarize(channel: str, channel_dir: Path, t: Callable[..., str]) -> str:
     undocumented = sorted({m.label for m in msgs if not m.documented})
     multi = [m for m in msgs if len(m.items) > 1]
     out.append("  1. " + t("sum_q_forward", undocumented=", ".join(undocumented) or "-",
-                            multi=", ".join(f"#{m.seq}:{len(m.items)}" for m in multi) or "-"))
+                            multi=", ".join(f"#{m.ref}:{len(m.items)}" for m in multi) or "-"))
     images = [a for a in attachments if "image" in str(a.get("path"))]
     ok = [a for a in images if a.get("decrypt") in ("ok", "not_encrypted")]
     out.append("  2. " + t("sum_q_images", total=len(images), ok=len(ok)))
@@ -190,6 +192,8 @@ def summarize(channel: str, channel_dir: Path, t: Callable[..., str]) -> str:
                                     declared=a.get("declared_size") or "-", decrypt=a.get("decrypt")))
     else:
         out.append("  3. " + t("sum_q_no_file"))
-    hints = sorted({p for paths in by_type.values() for p in paths if any(h in p.rsplit(".", 1)[-1].lower() for h in TITLE_HINTS)})
+    hints = sorted({p for paths in by_type.values() for p in paths
+                    if any(h in p.rsplit(".", 1)[-1].lower() for h in TITLE_HINTS)
+                    and p.rsplit(".", 1)[-1].lower() not in NOT_TITLE})
     out.append("  4. " + t("sum_q_title", fields=", ".join(hints) or "-"))
     return "\n".join(out)

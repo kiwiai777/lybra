@@ -157,6 +157,9 @@ def test_probe_records_samples_raw_and_never_sends(rig):
     assert "排期表.xlsx" in out
     assert "图片附件 2 个, 下载并解密成功 2 个" in out
     assert "item_list[].ref_msg.title" in out      # title-like field reported
+    q4 = [line for line in out.splitlines() if "群名 / 标题类字段" in line][0]
+    assert "file_name" not in q4                    # attachment names belong to question 3, not group/title
+    assert "#1.1 " in out and f"msgid={BIG_ID + 2}" in out   # batch members get distinct refs
 
 
 def test_session_expired_exits_with_relogin_hint(rig):

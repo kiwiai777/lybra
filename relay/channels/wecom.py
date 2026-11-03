@@ -149,7 +149,9 @@ class WecomProbe:
                     continue
                 cmd = frame.get("cmd")
                 req_id = str((frame.get("headers") or {}).get("req_id") or "")
-                if not cmd:
+                # responses are matched by our own req_id (documented without `cmd`; tolerated if a cmd is echoed)
+                is_response = "errcode" in frame and cmd not in (CMD_MSG, CMD_EVENT)
+                if is_response or not cmd:
                     if req_id == sub_id:
                         if frame.get("errcode") == 0:
                             authed = True

@@ -207,7 +207,7 @@ class ClawbotProbe:
                     ctx.store.write_state({"get_updates_buf": cursor})
                 if isinstance(data.get("longpolling_timeout_ms"), (int, float)) and data["longpolling_timeout_ms"] > 0:
                     poll = float(data["longpolling_timeout_ms"]) / 1000.0
-                for msg in msgs:
+                for n, msg in enumerate(msgs, start=1):
                     if not isinstance(msg, dict):
                         continue
                     self.messages += 1
@@ -218,7 +218,7 @@ class ClawbotProbe:
                         ctx.store.log(ctx.t("clawbot_bad_media_key", msgid=msgid, error=str(exc)))
                         refs = []
                     types = ",".join(str((it or {}).get("type")) for it in (msg.get("item_list") or []) if isinstance(it, dict))
-                    ctx.say(ctx.t("clawbot_message", seq=rec["seq"] if rec else 0, types=types, media=len(refs)))
+                    ctx.say(ctx.t("clawbot_message", seq=f"{rec['seq'] if rec else 0}.{n}", types=types, media=len(refs)))
                     for ref in refs:
                         self.downloader.submit(ref)
         finally:

@@ -208,3 +208,11 @@ def test_plain_ws_refused_for_non_loopback_host(rig):
                   "--ws-url", "ws://example.invalid:9", "--max-seconds", "3")
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "拒绝连接" in proc.stdout + proc.stderr
+
+
+def test_responses_echoing_cmd_still_match_by_req_id(rig):
+    with FakeWecomServer(BOT_ID, SECRET, rig["pushes"][:1], echo_cmd=True) as server:
+        proc = _run(rig, server.url, seconds=5.0)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "订阅成功" in proc.stdout and "重连" not in proc.stdout
+    assert server.connections == 1 and server.cmds().count("aibot_subscribe") == 1
