@@ -672,6 +672,13 @@
               "minimum": 1,
               "description": "AIPOS-F185 件①(gap #187): 子 agent 执行方式下 `lybra loop` 每次等执行体 / 审计体交回的缺省上限(秒), 覆盖 verbs.schema lybra_loop.wait_limits.by_execution_mode.subagent.default; 缺键 / null = 用该声明缺省。只在本卡执行方式判为子 agent 时生效(pi 拉起模式缺省不变); 显式 --max-wait 仍最优先。读取口 workspace_config.project_subagent_max_wait(形校验并入 project_execution); 写入口 `lybra project set-execution --subagent-max-wait <秒>`(未给 = 原值保留)。"
             },
+            "capability_executors": {
+              "type": "object",
+              "required": false,
+              "default": null,
+              "nullable": true,
+              "description": "AIPOS-F284(Owner 11-02 裁定「声明主机能力后派子 agent」): 哪些执行实例具备哪些主机能力(值域 enums.schema host_capability)。形: {\"<实例>\": {\"host\": \"<该实例接入登记的主机>\", \"capabilities\": [\"<能力>\", …]}}; 只允许子 agent 模式接入的执行实例(land 事件 mode=subagent), host = 写入时其最新 land 事件 host=(绑定登记主机), 不等于 auditor / pi_executor。缺键 / null = 未声明, 行为不变(带 requires_capabilities 的卡起草 / 发卡即拒 EXECUTOR_CAPABILITY_UNDECLARED)。唯一读取口 workspace_config.project_capability_executors(形校验并入 project_execution, 视图不含); 唯一写入口 `lybra project set-execution … --capability-executor <实例>=<能力>[,<能力>]`(可重复; <实例>= 留空 = 删该实例; 未给 = 原值保留, 同 subagent_max_wait), 写前核身份(enrollment.capability_executor_refusals), 禁手改。判定唯一 execution_division._strict_refusal(enums.schema host_capability)。"
+            },
             "pi_models": {
               "type": "object",
               "required": false,
@@ -697,6 +704,7 @@
             "PI_MODEL_OWNER_REF_REQUIRED": "set-model: 缺 --owner-ref(Owner 指示摘要或决定记录); 切换模型须可追溯到 Owner 指示",
             "EXECUTION_INSTANCE_NOT_ENROLLED": "声明的实例不是本项目已接入实例(或审计者 / pi 执行者无工位位置); 出口: 先按 lybra onboarding guide 接入该实例(子 agent 执行者: --executor-mode subagent), 再声明",
             "EXECUTION_SUBAGENT_MODE_MISMATCH": "AIPOS-F261 件②: --subagent-executor 给的实例已接入本项目, 但最新登记不是子 agent 模式(land 事件无 mode=subagent, 如工位模式登记 / 只有凭据条目): loop 会按工位找它, 且其章程落点会被同目录接入的别的实例顶掉; 出口: 先按子 agent 模式重登记该实例(texts.subagent_mode_exit), 再声明",
+            "EXECUTION_CAPABILITY_INSTANCE_INVALID": "AIPOS-F284: --capability-executor 给的实例未接入 / 最新登记非子 agent 模式 / 登记无主机 / 能力值不在 enums.schema host_capability / 与审计者或 pi 执行工位同一实例; 零写入, 拒因逐条带出口(话术 enums.schema host_capability.texts)",
             "EXECUTION_PI_NOT_ALLOWED": "AIPOS-F256 退役(无产生方; 原 F143 按 pi_allowed_task_modes 拒派 pi): 分工拒因改由 enums.schema task_mode.executor.reject_codes(EXECUTOR_DIVISION_REFUSED / EXECUTOR_PI_UNDECLARED)给出; 本键保留供存量记录查阅"
           },
           "texts": {

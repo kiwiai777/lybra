@@ -3544,6 +3544,7 @@ def build_parser() -> argparse.ArgumentParser:
     project_setexec_parser.add_argument("--pi-executor", default=None, metavar="INSTANCE", help="pi executor workstation instance (AIPOS-F256: every non-code card — docs/governance/config/validation — goes to it; sub-agents take code cards only)")
     project_setexec_parser.add_argument("--pi-allowed-task-mode", action="append", dest="pi_allowed_task_modes", default=[], metavar="TASK_MODE", help="RETIRED (AIPOS-F256): compatibility only, no longer changes routing (non-code always goes to the pi executor); omit it — `lybra project upgrade` removes the stored key")
     project_setexec_parser.add_argument("--default-mode", default=None, help="Default execution mode (config.schema project_json.execution.default_mode enum; default subagent)")
+    project_setexec_parser.add_argument("--capability-executor", action="append", dest="capability_executors", default=None, metavar="INSTANCE=CAP[,CAP]", help="AIPOS-F284: declare that a sub-agent-mode execution instance has host capabilities (enums.schema host_capability, e.g. gui_session,login_keychain), bound to its enrolled host (project.json execution.capability_executors); cards with requires_capabilities go to it instead of pi. Repeatable; INSTANCE= with nothing after = remove that instance; omitted = keep the current value")
     project_setexec_parser.add_argument("--subagent-max-wait", type=float, default=None, metavar="SECONDS", help="AIPOS-F185: how long `lybra loop` waits for a sub-agent executor/auditor return by default (project.json execution.subagent_max_wait; omitted = keep the current value, absent = verbs.schema lybra_loop.wait_limits default)")
     project_setexec_parser.add_argument("--home-root", help="Governance home root; defaults to resolver (env/config/default)")
     project_setexec_parser.add_argument("--workspace-root", help="Target governance root when the project name is omitted (default: the one containing the current directory)")
@@ -5892,11 +5893,15 @@ def main(argv: list[str] | None = None) -> int:
                     outcome = set_project_execution(
                         target["project_root"], subagent_executor=args.subagent_executor, auditor=args.auditor,
                         pi_executor=args.pi_executor, pi_allowed_task_modes=list(args.pi_allowed_task_modes or []),
-                        default_mode=args.default_mode, subagent_max_wait=args.subagent_max_wait, dry_run=not args.confirm)
+                        default_mode=args.default_mode, subagent_max_wait=args.subagent_max_wait,
+                        capability_executors=args.capability_executors, dry_run=not args.confirm)
                 except ExecutionDeclarationError as exc:
+                    from tools.aipos_cli.i18n import pick, resolve_language
+
+                    lang = resolve_language(args)  # AIPOS-F284: 双语拒因按用户语言出声(普通串原样)
                     print(f"Error: {exc.code}(project.json 未改动)", file=sys.stderr)
                     for problem in exc.problems:
-                        print(f"  - {problem}", file=sys.stderr)
+                        print(f"  - {pick(problem, lang)}", file=sys.stderr)
                     return 1
                 view = outcome["execution"]
                 return _project_json_two_phase_emit(
@@ -5907,6 +5912,8 @@ def main(argv: list[str] | None = None) -> int:
                         f"{view['pi_allowed_task_modes']!r}"] if view["pi_allowed_task_modes"] else [])
                     + ([f"execution.subagent_max_wait = {args.subagent_max_wait:g}(子 agent 执行方式下 loop 等交回缺省上限, 秒)"]
                        if args.subagent_max_wait is not None else [])
+                    + ([f"execution.capability_executors = {json.dumps(outcome['capability_executors'], ensure_ascii=False)}"
+                        "(AIPOS-F284 能力执行实例: 子 agent 模式登记, 绑定登记主机)"] if "capability_executors" in outcome else [])
                     + ["各实例已核: 本项目已接入(审计者 / pi 执行者有工位位置; 子 agent 执行者为子 agent 模式登记); 起草缺省与发卡核身份同读本段"])
             if args.project_command == "set-model":
                 # AIPOS-F169: 唯一实现 enrollment.set_project_pi_model(pi --list-models 核可用 + project_execution 校验 + update_project_json 唯一写路径)

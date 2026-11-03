@@ -814,6 +814,87 @@
         }
       ]
     },
+    "host_capability": {
+      "description": "AIPOS-F284(Owner 11-02 裁定「声明主机能力后派子 agent」, governance/decision_log/2026-11/2026-11-02-图形会话签名构建执行方.md; 实例 chris HBLX-155 iOS 签名打包须本机图形会话登录钥匙串, pi 经 ssh 执行 codesign 报 errSecInternalComponent): 主机能力值域(只追加)。卡面声明唯一字段 card.schema fields.requires_capabilities(值 ∈ 本枚举; 形校验唯一实现 execution_division.card_capabilities, 出卡 draft_validator 同调); 项目声明哪些执行实例具备哪些能力 = project.json execution.capability_executors(config.schema; 只允许子 agent 模式接入的执行实例, 绑定其登记主机; 唯一写入口 `lybra project set-execution --capability-executor <实例>=<能力>[,<能力>]`)。判定 = 「非代码一律 pi」(enums.schema task_mode.executor)的唯一声明化例外, 只在 execution_division._strict_refusal 一处: 卡带 requires_capabilities(执行方 kind 不在 exempt_kinds)且项目有具备全部能力的实例 = 执行方须为该实例(起草缺省派它; 起草 / 发卡 / 认领 / 开工稿 / 交回五处同判), 否则拒并给出口; 无实例具备 = 拒 EXECUTOR_CAPABILITY_UNDECLARED(出口 = set-execution 补实例能力)。审计卡照旧固定 pi(exempt_kinds)。代码卡交回须含产品仓改动仍按 task_mode(code_change)。验证根 / 发布目标只认 pi 的写面(roles.schema executor_class_surfaces)对本卡同样放行该实例(写面范围不变)。认领 / 交回记录写 record_field 留痕; loop 等待产物步的手工提示、开工稿、看板卡详情显示所需能力与主机。texts = 双语块(AIPOS-F276 i18n.surface_texts 唯一读取器; 命令名、参数、码值不译)。",
+      "card_field": "requires_capabilities",
+      "execution_key": "capability_executors",
+      "record_field": "capability_exception",
+      "exempt_kinds": ["pi_auditor"],
+      "reject_codes": {
+        "CARD_CAPABILITIES_INVALID": "卡面 requires_capabilities 形不合(非字符串列表 / 值不在本枚举)",
+        "EXECUTOR_CAPABILITY_UNDECLARED": "卡声明所需主机能力, 但项目没有具备全部能力的执行实例(execution.capability_executors); 出口: 在具备能力的主机上按子 agent 模式接入执行实例后 lybra project set-execution --capability-executor <实例>=<能力>",
+        "EXECUTOR_CAPABILITY_REFUSED": "卡声明所需主机能力, 本次执行方不是具备全部能力的执行实例; 出口: 改派到具备能力的实例(起草改卡稿 / 待认领 amend / 已认领撤卡重发)",
+        "EXECUTION_CAPABILITY_INSTANCE_INVALID": "set-execution --capability-executor: 实例未接入 / 最新登记非子 agent 模式 / 登记无主机 / 能力值不在本枚举 / 与审计者或 pi 执行工位同一实例"
+      },
+      "values": [
+        {
+          "value": "gui_session",
+          "description": "本机已登录的图形会话(如 macOS 桌面会话、日后 Windows 桌面会话): 须在该会话的终端内执行, ssh 进程拿不到"
+        },
+        {
+          "value": "login_keychain",
+          "description": "已解锁的登录钥匙串(如 iOS / macOS 自动签名 codesign、xcodebuild archive): 只在登录的图形会话内可用"
+        }
+      ],
+      "texts": {
+        "zh": {
+          "labels": {
+            "gui_session": "图形会话",
+            "login_keychain": "登录钥匙串"
+          },
+          "stages": {
+            "draft": "起草",
+            "publish": "发卡",
+            "claim": "认领",
+            "kickoff": "开工稿",
+            "return": "交回"
+          },
+          "invalid": "AIPOS-F284 CARD_CAPABILITIES_INVALID: 卡面 {field} 须为字符串列表, 每项 ∈ enums.schema host_capability {allowed}, 实为 {value}; 出口: 卡稿写 {field}: [{example}]",
+          "undeclared": "AIPOS-F284 EXECUTOR_CAPABILITY_UNDECLARED: 卡 {task_id} 声明所需主机能力 {capabilities}, 本项目没有具备全部能力的执行实例(project.json execution.capability_executors: {declared})。出口: 在具备能力的主机上按子 agent 模式接入执行实例(lybra onboarding guide --executor-mode subagent)后, {set_execution} --capability-executor <实例>={capability_values} --dry-run(预演; 加 --actor <顾问实例> --confirm 写入); 或确无此需要 = 卡稿去掉 {field}",
+          "refused": "AIPOS-F284 EXECUTOR_CAPABILITY_REFUSED: 卡 {task_id} 声明所需主机能力 {capabilities}, 执行方须为具备全部能力的执行实例 {instances}, {stage_label}时执行方 {actor} 不在其中, 拒(不静默改派)。出口: {exit}",
+          "exit_draft": "卡稿 assigned_to / agent_instance 改为 {instance}(或去掉, 起草缺省派该实例), harness 不写 pi, 后重跑 lybra draft create",
+          "exit_pending": "lybra --workspace-root {governance_root} queue amend --task-id {task_id} --actor {advisor} --amendments '{amendments}' --amendment-reason \"AIPOS-F284: capability card reassigned to capable instance\"",
+          "exit_withdraw": "lybra --workspace-root {governance_root} queue withdraw --task-id {task_id} --actor {advisor} --reason \"AIPOS-F284: capability card reassigned to capable instance\"(已认领卡撤卡), 再按同一卡稿去掉 assigned_to / harness 重发(起草缺省派 {instance})",
+          "trace": "能力例外: requires_capabilities={capability_values}, 实例={instance}(主机 {host}); 「非代码一律 pi」的唯一声明化例外(AIPOS-F284), 审计仍 pi",
+          "kickoff_line": "所需主机能力(AIPOS-F284 能力例外): {capabilities}——本卡须在主机 {host} 的图形会话终端内执行, 不经 ssh(钥匙串 / 签名只在已登录的图形会话内可用); 实例 {instance}",
+          "manual_hint": "本卡声明所需主机能力 {capabilities}(AIPOS-F284 能力例外): 请在主机 {host} 的顾问会话派子 agent(实例 {instance}), 在图形会话终端内执行, 不经 ssh",
+          "summary_line": "能力执行实例(AIPOS-F284): {instance}(主机 {host}): {capabilities}",
+          "set_not_enrolled": "{instance}: 不是本项目已接入实例; 出口: 先在具备能力的主机上按 lybra onboarding guide --executor-mode subagent 接入",
+          "set_not_subagent": "{instance}: 最新登记不是子 agent 模式(mode={mode}); 能力执行实例只允许子 agent 模式接入的执行实例(在该主机的顾问会话里派子 agent)",
+          "set_no_host": "{instance}: 接入登记无主机(land 事件无 host=), 能力绑定不了主机; 出口: 在具备能力的主机上重接入该实例",
+          "set_bad_value": "--capability-executor {raw}: 须为 <实例>=<能力>[,<能力>](能力 ∈ {allowed}; <实例>= 留空 = 删除该实例的能力声明)",
+          "set_role_clash": "{instance}: 与 {key} 同一实例(审计恒为独立 pi 工位, pi 执行工位不在图形会话内); 能力执行实例须为子 agent 执行实例"
+        },
+        "en": {
+          "labels": {
+            "gui_session": "graphical session",
+            "login_keychain": "login keychain"
+          },
+          "stages": {
+            "draft": "drafting",
+            "publish": "publishing",
+            "claim": "claiming",
+            "kickoff": "kickoff",
+            "return": "return"
+          },
+          "invalid": "AIPOS-F284 CARD_CAPABILITIES_INVALID: card field {field} must be a list of strings, each in enums.schema host_capability {allowed}; got {value}. Next: write {field}: [{example}] in the card draft",
+          "undeclared": "AIPOS-F284 EXECUTOR_CAPABILITY_UNDECLARED: card {task_id} declares required host capabilities {capabilities}, but no execution instance of this project has all of them (project.json execution.capability_executors: {declared}). Next: enroll an execution instance in sub-agent mode on a host that has the capabilities (lybra onboarding guide --executor-mode subagent), then {set_execution} --capability-executor <instance>={capability_values} --dry-run (preview; add --actor <advisor instance> --confirm to write); or, if not actually needed, drop {field} from the card draft",
+          "refused": "AIPOS-F284 EXECUTOR_CAPABILITY_REFUSED: card {task_id} declares required host capabilities {capabilities}; its executor must be a capable execution instance {instances}, but the executor at {stage_label} is {actor}, which is not one of them; refused (no silent reassignment). Next: {exit}",
+          "exit_draft": "set assigned_to / agent_instance to {instance} in the card draft (or leave them out: drafting defaults to that instance), do not write harness: pi, then rerun lybra draft create",
+          "exit_pending": "lybra --workspace-root {governance_root} queue amend --task-id {task_id} --actor {advisor} --amendments '{amendments}' --amendment-reason \"AIPOS-F284: capability card reassigned to capable instance\"",
+          "exit_withdraw": "lybra --workspace-root {governance_root} queue withdraw --task-id {task_id} --actor {advisor} --reason \"AIPOS-F284: capability card reassigned to capable instance\" (withdraws the claimed card), then republish the same draft without assigned_to / harness (drafting defaults to {instance})",
+          "trace": "Capability exception: requires_capabilities={capability_values}, instance={instance} (host {host}); the single declared exception to \"all non-code work goes to pi\" (AIPOS-F284); audit stays on pi",
+          "kickoff_line": "Required host capabilities (AIPOS-F284 capability exception): {capabilities} - run this card inside a graphical-session terminal on host {host}, not over ssh (the keychain / code signing only work inside a logged-in graphical session); instance {instance}",
+          "manual_hint": "this card declares required host capabilities {capabilities} (AIPOS-F284 capability exception): dispatch a sub-agent from the advisor session on host {host} (instance {instance}) and run it inside a graphical-session terminal, not over ssh",
+          "summary_line": "Capability executors (AIPOS-F284): {instance} (host {host}): {capabilities}",
+          "set_not_enrolled": "{instance}: not an enrolled instance of this project; next: enroll it on the capable host with lybra onboarding guide --executor-mode subagent",
+          "set_not_subagent": "{instance}: its latest enrollment is not sub-agent mode (mode={mode}); capability executors must be execution instances enrolled in sub-agent mode (dispatched as a sub-agent from the advisor session on that host)",
+          "set_no_host": "{instance}: its enrollment records no host (land event without host=), so the capability cannot be bound to a host; next: re-enroll it on the capable host",
+          "set_bad_value": "--capability-executor {raw}: must be <instance>=<capability>[,<capability>] (capability in {allowed}; an empty value after <instance>= removes that instance's declaration)",
+          "set_role_clash": "{instance}: same instance as {key} (audit is always an independent pi workstation; the pi executor is not in a graphical session); a capability executor must be a sub-agent execution instance"
+        }
+      }
+    },
     "return_outcome": {
       "description": "AIPOS-F252 件②(10-30 kiwiai-web KIWIWEB-003 实撞: 执行体正确停线写了 BLOCK 交回, 审计核实「阻塞属实」写了 verdict=PASS, loop 按 PASS 合入阻塞收据并结案 completed, 生产根本没部署): 执行体交回结果(交回报告 frontmatter outcome)。值域唯一声明在此; 字段名、缺省、兼容规则与路由(blocked 不结案、转 blocked + Owner 收件箱、续跑出口、门侧 close 兜底、审计语义)单一声明在 transitions.schema artifact_ingest.return.outcome。",
       "values": [

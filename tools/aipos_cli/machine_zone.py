@@ -915,6 +915,17 @@ def card_subproject(governance_root: Path, row: dict[str, Any], metadata: dict[s
             "lane": lane["lane"], "lane_error": lane["lane_error"]}
 
 
+def _row_capabilities(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    """AIPOS-F284: 看板卡行的所需主机能力(形校验唯一实现 execution_division.card_capabilities)。形不合 = capabilities_invalid 带拒因原文
+    (只读展示不拒, 不吞: 出卡 / 判定处同一形校验另拒)。"""
+    from tools.aipos_cli.execution_division import card_capabilities
+
+    try:
+        return {"capabilities": card_capabilities(metadata or {}), "capabilities_invalid": None}
+    except ValueError as exc:
+        return {"capabilities": [], "capabilities_invalid": str(exc)}
+
+
 def card_stats(governance_root: Path) -> dict[str, Any]:
     """AIPOS-F181: the single board card statistics (see card_stats_declaration). Read-only; inside a read scope one derivation
     per governance root (callers get deep copies). Returns {groups, totals: {inflight, todo, closed}, by_state, frozen, frozen_error,
@@ -965,7 +976,8 @@ def _card_stats(root: Path) -> dict[str, Any]:
                      "queue_state": row["queue_state"], "group": group_of.get(row["queue_state"]), **sub,
                      "created_at": str((metadata or {}).get("created_at") or (metadata or {}).get("draft_created_at") or "") or None,
                      "audit_of": (audit_card_reviewed_id(_view_card_id(row, metadata), metadata) or "").upper()
-                     if is_audit_card(_view_card_id(row, metadata), metadata) else None})
+                     if is_audit_card(_view_card_id(row, metadata), metadata) else None,
+                     **_row_capabilities(metadata)})
     by_id = {r["task_id"]: r for r in rows}
     for r in rows:  # an audit card with no known owner joins the reviewed card's subproject
         reviewed = by_id.get(r["audit_of"] or "")

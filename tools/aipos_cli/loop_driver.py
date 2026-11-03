@@ -909,6 +909,18 @@ def plan_launch(governance_root: Path, card: str, *, policy: dict[str, Any] | No
 
     plan.manual_hint = _render_manual_hint(decl, harness=plan.harness, instance=plan.instance, location=plan.location,
                                            subagent=subagent or by_declaration, card=card)
+    if subagent or by_declaration:  # AIPOS-F284: 能力例外卡 = 手工提示写明主机与所需能力(在该主机顾问会话派子 agent, 图形会话终端内执行)
+        from tools.aipos_cli.execution_division import capability_line
+        from tools.aipos_cli.i18n import resolve_language
+
+        try:
+            cap_hint = capability_line(governance_root, {**fm, "task_id": card}, kind="manual_hint", instance=plan.instance,
+                                       lang=resolve_language())
+        except ValueError as exc:  # 卡面能力声明 / 执行声明形坏 = 不拉起, 拒因原文(fail-closed)
+            plan.refusal = plan.manual_hint = f"{plan.manual_hint}; AIPOS-F284: {exc}"
+            return plan
+        if cap_hint:
+            plan.manual_hint = f"{plan.manual_hint}; {cap_hint}"
     if subagent:  # 无工位可拉起: 不拉起, 等待提示 = 顾问派子 agent(信封是否授权拉起均同)
         plan.refusal = plan.refusal or f"实例 {plan.instance} 为子 agent 执行者(接入模式 {facts['enrollment_mode']}, 无工位), loop 不拉起"
     elif by_declaration:
