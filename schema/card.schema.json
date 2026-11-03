@@ -380,6 +380,12 @@
       "required": false,
       "description": "AIPOS-F179 件②: 本卡执行/审计要独占的资源(如 iOS 模拟器)——独占资源声明只此一个卡面字段, 值 ∈ enums.schema exclusive_resource(首批 ios-simulator / android-emulator)。loop 拉起入口按「项目 + 资源」排队(verbs.schema lybra_loop.resource_lock): 同项目另一张声明了同一资源的卡的 loop 在用时, 本卡 loop 在执行/审计等待前排队等待(运行记录与 loop status 显示占用者), 占用者 loop 结束(或进程已死, F137 判活)后自动继续; 不并发。形校验唯一实现 loop_run_record.card_resources(出卡 draft_validator 同调, 不合 = 拒 CARD_RESOURCES_INVALID); 缺省 = 不声明, 行为不变。"
     },
+    "requires_capabilities": {
+      "type": "array",
+      "items": {"type": "string", "$enum": "host_capability"},
+      "required": false,
+      "description": "AIPOS-F284(Owner 11-02): 本卡执行所需的主机能力(如 iOS 签名打包须图形会话 + 登录钥匙串)——能力声明只此一个卡面字段, 值 ∈ enums.schema host_capability。带本字段 = 「非代码一律 pi」的唯一声明化例外: 执行方 = 项目声明具备全部能力的子 agent 执行实例(project.json execution.capability_executors, 绑定其登记主机), 由该主机上的顾问会话派子 agent 在图形会话终端内执行; 无实例具备 = 起草 / 发卡即拒并给 set-execution --capability-executor 出口。审计照旧固定 pi。形校验与判定唯一实现 execution_division(card_capabilities / _strict_refusal; 出卡 draft_validator 同调, 不合 = 拒 CARD_CAPABILITIES_INVALID); 缺省 = 不声明, 行为不变。"
+    },
     "owner_check_ref": {
       "type": "string",
       "required": false,
@@ -1106,7 +1112,8 @@
       "milestone",
       "criteria",
       "artifacts",
-      "resources"
+      "resources",
+      "requires_capabilities"
     ],
     "body_sections": [
       "Goal",

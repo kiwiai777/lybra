@@ -332,7 +332,7 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
         raise _refuse(contract, "KICKOFF_NOT_STARTABLE", task_id=task_id, code=refusal["code"], reason=refusal["reason"])
     # AIPOS-F256 件②: 开工稿 = 子 agent 开工稿——执行方(认领实例; 判不出 = 子 agent 类)不在该模式 accepts 内(子 agent 接非代码卡)= 拒出稿,
     # 出口原文同起草 / 认领 / 交回(唯一判定 execution_division.division_refusal)
-    from tools.aipos_cli.execution_division import division_refusal
+    from tools.aipos_cli.execution_division import capability_line, division_refusal
     from tools.aipos_cli.workspace_config import EXECUTION_MODE_SUBAGENT
 
     division = division_refusal(gov, fm, stage="kickoff", actor=instance, fallback_class=EXECUTION_MODE_SUBAGENT)
@@ -481,6 +481,9 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
         "evidence_reuse_rule": _evidence_reuse_rule(gov, task_id, reviewed, reviewed_card) if card_role == "auditor" else None,
         # AIPOS-F276 件③: 用户语言行(声明 config.schema language.texts.user_language_line; 语言 = i18n.resolve_language 唯一解析)
         "user_language_line": user_language_line(lang or resolve_language()),
+        # AIPOS-F284: 能力例外卡 = 所需主机能力 + 「在图形会话终端内执行, 不经 ssh」一行(按用户语言; 不适用 = None 省略)
+        "capability_line": capability_line(gov, fm, kind="kickoff_line", instance=instance, lang=lang or resolve_language())
+        if card_role == "executor" else None,
     }
     text = _render(contract, card_role, values)
     return {"ok": True, "task_id": task_id, "role": card_role, "instance": instance, "text": text,

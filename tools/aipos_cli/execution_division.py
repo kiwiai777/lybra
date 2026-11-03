@@ -155,7 +155,7 @@ def division_transition(governance_root: str | Path, card: dict[str, Any], *, ac
     """AIPOS-F256B 件⑤: 过渡在途卡判定(唯一实现; 判定处 division_refusal / 写面 surface_class_problem / 只读诊断同读)。
     = 认领后口径(交回)下新规则会拒(严格判定非空)且卡已认领(claim_evidence)→ {code, message, evidence, refusal}; 否则 None。"""
     strict = _strict_refusal(governance_root, card, stage="return", actor=actor, execution=execution, fallback_class=fallback_class)
-    if strict is None:
+    if strict is None or strict["code"] in _capability_codes():  # AIPOS-F284: 能力卡不走过渡
         return None
     evidence = claim_evidence(governance_root, card)
     if evidence is None:
@@ -171,11 +171,171 @@ def division_refusal(governance_root: str | Path, card: dict[str, Any], *, stage
                      execution: Any = ..., fallback_class: str | None = None) -> dict[str, Any] | None:
     """五处同判的唯一判定。None = 放行(执行方类别 ∈ 该模式 accepts, 或执行方不可判且无缺省类别, 或 AIPOS-F256B 件⑤ 过渡在途:
     认领后各处(transition.stages)且卡已认领 = 按认领时执行方继续); 否则 {code, message, exits, required, executor}。
-    未知 task_mode = EXECUTOR_TASK_MODE_UNKNOWN(fail-closed; 已认领的人肉期存量卡同按过渡)。execution 缺省 = 读 project.json。"""
+    未知 task_mode = EXECUTOR_TASK_MODE_UNKNOWN(fail-closed; 已认领的人肉期存量卡同按过渡)。execution 缺省 = 读 project.json。
+    AIPOS-F284 能力例外(卡带 requires_capabilities)的拒因不走过渡(能力卡认领即按能力判, 不存在规则前认领的能力违例卡)。"""
     refusal = _strict_refusal(governance_root, card, stage=stage, actor=actor, execution=execution, fallback_class=fallback_class)
-    if refusal is not None and stage in _decl()["transition"]["stages"] and claim_evidence(governance_root, card or {}) is not None:
+    if (refusal is not None and refusal["code"] not in _capability_codes() and stage in _decl()["transition"]["stages"]
+            and claim_evidence(governance_root, card or {}) is not None):
         return None
     return refusal
+
+
+# ---------------------------------------------------------------------------
+# AIPOS-F284 能力例外: 卡声明所需主机能力(requires_capabilities)= 「非代码一律 pi」的唯一声明化例外
+# (声明 enums.schema host_capability; 判定只在 _strict_refusal 一处, 五处同判经 division_refusal)
+# ---------------------------------------------------------------------------
+
+def _cap_decl() -> dict[str, Any]:
+    from tools.aipos_cli.next_resolver import host_capability_declaration
+
+    return host_capability_declaration()
+
+
+def _capability_codes() -> frozenset[str]:
+    return frozenset(("EXECUTOR_CAPABILITY_UNDECLARED", "EXECUTOR_CAPABILITY_REFUSED", "CARD_CAPABILITIES_INVALID"))
+
+
+def capability_text(key: str, values: dict[str, Any]) -> str:
+    """host_capability.texts 一条文案 → 双语渲染值(AIPOS-F276 / F277 唯一读取器: str 本身 = 缺省语言, 出声点按用户语言 i18n.pick)。"""
+    from tools.aipos_cli.i18n import block_localize
+
+    return block_localize(_cap_decl()["texts"], key, values, where="enums.schema.json enums.host_capability.texts")
+
+
+def capability_labels(capabilities: list[str]) -> str:
+    """能力值 → 各语言标签串(「图形会话(gui_session), …」)的双语渲染值。"""
+    from tools.aipos_cli.i18n import Localized, default_language
+
+    block = _cap_decl()["texts"]
+    by_lang = {lang: ", ".join(f"{table['labels'].get(c, c)}({c})" if lang == default_language() else f"{table['labels'].get(c, c)} ({c})"
+                               for c in capabilities) for lang, table in block.items()}
+    return Localized(by_lang, default_language())
+
+
+def card_capabilities(card: dict[str, Any] | None) -> list[str]:
+    """卡面所需主机能力(card.schema requires_capabilities; 值 ∈ enums.schema host_capability)唯一形校验(出卡 draft_validator 与判定同调)。
+    缺 / [] = []; 形不合 = ValueError(消息 = CARD_CAPABILITIES_INVALID 双语渲染值)。去重保序。"""
+    from tools.schema_loader import get_enum_values
+
+    decl = _cap_decl()
+    field = str(decl["card_field"])
+    value = (card or {}).get(field) if isinstance(card, dict) else None
+    if value is None or value == []:
+        return []
+    allowed = list(get_enum_values("host_capability"))
+    if not isinstance(value, list) or any(not isinstance(v, str) or v not in allowed for v in value):
+        raise ValueError(capability_text("invalid", {"field": field, "allowed": allowed, "value": repr(value), "example": json.dumps(allowed[0])}))
+    out: list[str] = []
+    for item in value:
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def capability_exception(governance_root: str | Path, card: dict[str, Any] | None) -> dict[str, Any] | None:
+    """卡是否适用能力例外: 卡带 requires_capabilities 且执行方 kind 不在 exempt_kinds(审计卡照旧 pi)= {capabilities, instances[{instance,
+    host, capabilities}](项目声明里具备全部所需能力者, 声明序), labels}; 否则 None。卡面形不合 = ValueError; 执行声明形坏 =
+    ExecutionDeclarationError(调用方 fail-closed)。"""
+    from tools.aipos_cli.next_resolver import task_mode_executor
+    from tools.aipos_cli.workspace_config import project_capability_executors
+
+    caps = card_capabilities(card)
+    if not caps:
+        return None
+    kind = task_mode_executor(str((card or {}).get("task_mode") or ""))
+    if kind is None or kind in _cap_decl()["exempt_kinds"]:
+        return None
+    declared = project_capability_executors(Path(governance_root))
+    instances = [{"instance": name, **entry} for name, entry in declared.items() if set(caps) <= set(entry["capabilities"])]
+    return {"capabilities": caps, "instances": instances, "declared": declared, "labels": capability_labels(caps)}
+
+
+def _capability_refusal(governance_root: Path, card: dict[str, Any], cap: dict[str, Any], *, stage: str, actor: str | None,
+                        execution: dict[str, Any] | None, fallback_class: str | None) -> dict[str, Any] | None:
+    """能力例外下的执行方判定(只经 _strict_refusal 调用): 无实例具备 = EXECUTOR_CAPABILITY_UNDECLARED; 执行方 ∈ 具备能力的实例 = 放行;
+    执行方有名而不在其中 / 执行方属 pi 类 = EXECUTOR_CAPABILITY_REFUSED(出口按判定处); 执行方不可判 = 放行(同既有口径)。"""
+    from tools.aipos_cli.workspace_config import EXECUTION_MODE_PI
+
+    task_id = str(card.get("task_id") or "<卡ID>")
+    field = str(_cap_decl()["card_field"])
+    caps, names = cap["capabilities"], [i["instance"] for i in cap["instances"]]
+    if not names:
+        set_execution = (f"lybra project set-execution --workspace-root {governance_root} --subagent-executor "
+                         f"{(execution or {}).get('subagent_executor') or '<subagent-executor>'} --auditor {(execution or {}).get('auditor') or '<pi-auditor>'}"
+                         + (f" --pi-executor {execution['pi_executor']}" if (execution or {}).get("pi_executor") else ""))
+        message = capability_text("undeclared", {"task_id": task_id, "capabilities": cap["labels"], "capability_values": ",".join(caps),
+                                           "declared": json.dumps(cap["declared"], ensure_ascii=False) if cap["declared"] else "{}",
+                                           "set_execution": set_execution, "field": field})
+        return {"code": "EXECUTOR_CAPABILITY_UNDECLARED", "message": message, "exits": [message], "required": "capability", "executor": None,
+                "capabilities": caps}
+    who = card_executor(governance_root, card, execution=execution, actor=actor, fallback_class=fallback_class)
+    named = who["actor"] not in ("", "-")
+    if who["actor"] in names or (not named and who["class"] != EXECUTION_MODE_PI):
+        return None
+    instance = names[0]
+    from tools.aipos_cli.enrollment import card_dispatch_advisor
+
+    fill = {"governance_root": str(governance_root), "task_id": task_id, "advisor": card_dispatch_advisor(card) or "<advisor-instance>",
+            "instance": instance}
+    if stage in ("draft", "publish"):
+        exit_text = capability_text("exit_draft", fill)
+    elif stage == "claim":
+        harness = str(card.get("harness") or "").strip()
+        amend: dict[str, Any] = {"assigned_to": instance, "agent_instance": instance}
+        if harness == EXECUTION_MODE_PI:
+            from tools.aipos_cli.enrollment import instance_enrollment
+
+            amend["harness"] = instance_enrollment(governance_root, instance).get("harness") or "<advisor-session-harness>"
+        exit_text = capability_text("exit_pending", {**fill, "amendments": json.dumps(amend, ensure_ascii=False)})
+    else:
+        exit_text = capability_text("exit_withdraw", fill)
+    message = capability_text("refused", {"task_id": task_id, "capabilities": cap["labels"], "instances": names, "actor": who["actor"],
+                                    "stage_label": _stage_label(stage), "exit": exit_text})
+    return {"code": "EXECUTOR_CAPABILITY_REFUSED", "message": message, "exits": [exit_text], "required": "capability", "executor": who,
+            "capabilities": caps}
+
+
+def _stage_label(stage: str) -> str:
+    from tools.aipos_cli.i18n import Localized, default_language
+
+    return Localized({lang: str(table["stages"][stage]) for lang, table in _cap_decl()["texts"].items()}, default_language())
+
+
+def capability_assignee(governance_root: str | Path, card: dict[str, Any], *, execution: dict[str, Any] | None) -> dict[str, Any] | None:
+    """起草缺省用: 卡适用能力例外 = {instance, refusal}(instance = 具备全部能力的首个实例; 无 = refusal 为 UNDECLARED 拒因); 否则 None。"""
+    cap = capability_exception(governance_root, card)
+    if cap is None:
+        return None
+    if not cap["instances"]:
+        return {"instance": None, "refusal": _capability_refusal(Path(governance_root), card, cap, stage="draft", actor=None,
+                                                                 execution=execution, fallback_class=None)}
+    return {"instance": cap["instances"][0]["instance"], "refusal": None}
+
+
+def capability_trace(governance_root: str | Path, card: dict[str, Any] | None, actor: str | None) -> str | None:
+    """认领 / 交回记录留痕(record_field)一行: 卡适用能力例外且执行方 = 具备能力的实例 = 「能力例外: requires_capabilities=…, 实例=…」
+    双语渲染值(落盘为缺省语言); 否则 None。卡面 / 声明形坏 = 异常上抛(记录不写半截)。"""
+    cap = capability_exception(governance_root, card)
+    name = str(actor or "").strip()
+    if cap is None or not name:
+        return None
+    entry = next((i for i in cap["instances"] if i["instance"] == name), None)
+    if entry is None:
+        return None
+    return capability_text("trace", {"capability_values": ",".join(cap["capabilities"]), "instance": name, "host": entry["host"]})
+
+
+def capability_line(governance_root: str | Path, card: dict[str, Any] | None, *, kind: str, instance: str | None = None,
+                    lang: str | None = None) -> str | None:
+    """开工稿(kind=kickoff_line)/ loop 等待产物步手工提示(kind=manual_hint)的能力一行, 按 lang 取那种语言; 不适用 = None。
+    实例 = 给定且具备能力者, 否则具备能力的首个实例。"""
+    from tools.aipos_cli.i18n import pick
+
+    cap = capability_exception(governance_root, card)
+    if cap is None or not cap["instances"]:
+        return None
+    entry = next((i for i in cap["instances"] if i["instance"] == str(instance or "").strip()), cap["instances"][0])
+    return pick(capability_text(kind, {"capabilities": cap["labels"], "host": entry["host"], "instance": entry["instance"]}), lang)
 
 
 def _strict_refusal(governance_root: str | Path, card: dict[str, Any], *, stage: str, actor: str | None = None,
@@ -198,6 +358,9 @@ def _strict_refusal(governance_root: str | Path, card: dict[str, Any], *, stage:
                 "message": str(texts["unknown"]).format(task_id=task_id, task_mode=mode, values=list(get_enum_values("task_mode")))}
     if execution is ...:
         execution = _execution(gov)
+    cap = capability_exception(gov, fm)  # AIPOS-F284: 能力例外(唯一声明化例外; 卡面形不合 = ValueError 上抛, 调用方 fail-closed)
+    if cap is not None:
+        return _capability_refusal(gov, fm, cap, stage=stage, actor=actor, execution=execution, fallback_class=fallback_class)
     who = card_executor(gov, fm, execution=execution, actor=actor, fallback_class=fallback_class)
     spec = decl["kinds"][kind]
     if who["class"] is None or who["class"] in spec["accepts"]:
@@ -291,6 +454,8 @@ def surface_class_problem(governance_root: str | Path, *, surface: str | None, i
     if card and name in {str(card.get(k) or "").strip() for k in ("claimed_by", "assigned_to", "agent_instance")} and \
             division_transition(gov, {**card, "task_id": str(task_id)}, actor=name, execution=execution) is not None:
         return None  # AIPOS-F256B 件⑤: 过渡在途卡的写面按认领时执行方继续
+    if card and capability_trace(gov, {**card, "task_id": str(task_id)}, name) is not None:
+        return None  # AIPOS-F284: 能力卡的写面放行其具备能力的执行实例(写面范围不变, 只放行身份类别)
     return {"code": str(decl["code"]), "reason": str(decl["reason"]).format(surface=surface, instance=name, cls=cls, basis=basis,
                                                                               classes=list(decl["classes"]))}
 
@@ -397,6 +562,10 @@ def division_summary(governance_root: str | Path) -> dict[str, Any]:
                 f" —— 出口: {refusal_exits(governance_root, {}, stage='draft', execution=view['execution'])[0]}" if view["execution"] else
                 "(项目未声明 execution)"))
     lines = [head]
+    from tools.aipos_cli.workspace_config import project_capability_executors
+
+    for name, entry in project_capability_executors(Path(governance_root)).items():  # AIPOS-F284: 能力执行实例(声明序)
+        lines.append("  " + capability_text("summary_line", {"instance": name, "host": entry["host"], "capabilities": capability_labels(entry["capabilities"])}))
     if view["subagent_mode_pending"]:  # AIPOS-F261 件②
         lines.append(f"  ! {view['subagent_mode_pending']['message']}")
     if view["retired_key"]:

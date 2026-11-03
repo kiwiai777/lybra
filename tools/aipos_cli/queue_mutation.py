@@ -763,6 +763,14 @@ def _prepare_records_plan(
             result["record_blocking_reasons"].append(f"Claim log already exists: {claim_path.resolve().relative_to(root)}")
         if session_path.exists():
             result["record_blocking_reasons"].append(f"Session record already exists: {session_path.resolve().relative_to(root)}")
+        # AIPOS-F284: 能力例外留痕(execution_division.capability_trace 唯一渲染; 声明形坏 = 拒写记录, fail-closed)
+        from tools.aipos_cli.execution_division import capability_trace
+
+        try:
+            capability = capability_trace(repo_root, {**updated_metadata, "task_id": task_id}, actor)
+        except ValueError as exc:
+            capability = None
+            result["record_blocking_reasons"].append(f"AIPOS-F284: 能力例外留痕不可得(fail-closed): {exc}")
         claim_markdown = build_claim_log_markdown(
             task_id=task_id,
             task_path=task_target_path.replace("/pending/", "/claimed/"),
@@ -770,6 +778,7 @@ def _prepare_records_plan(
             claim_id=claim_id,
             session_id=session_id,
             created_at=timestamp,
+            capability_exception=capability,
         )
         session_markdown = build_session_record_markdown(
             task_id=task_id,

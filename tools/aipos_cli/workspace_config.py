@@ -2291,6 +2291,8 @@ def project_execution(project_root: str | Path, *, project: dict[str, Any] | Non
         problems.append(f"auditor={auditor} 与执行者同一实例(审计恒为独立 pi 工位)")
     problems.extend(_pi_models_problems(raw.get("pi_models")))  # AIPOS-F169: pi 模型声明同段同一校验(视图不含, 读取口 project_pi_models)
     problems.extend(_subagent_max_wait_problems(raw.get("subagent_max_wait")))  # AIPOS-F185 件①: 同段同一校验(视图不含, 读取口 project_subagent_max_wait)
+    # AIPOS-F284: 能力执行实例声明同段同一校验(视图不含, 读取口 project_capability_executors)
+    problems.extend(_capability_executors_problems(raw.get("capability_executors"), clash={"auditor": auditor, "pi_executor": pi_exec}))
     if problems:
         raise ExecutionDeclarationError("EXECUTION_DECLARATION_INVALID", problems)
     return {"default_mode": mode, "subagent_executor": subagent, "pi_allowed_task_modes": allowed, "pi_executor": pi_exec,
@@ -2306,6 +2308,47 @@ def _subagent_max_wait_problems(value: Any) -> list[str]:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value < minimum:
         return [f"subagent_max_wait={value!r} 须为 ≥{minimum} 的秒数(或省略 = 用 verbs.schema lybra_loop.wait_limits 缺省)"]
     return []
+
+
+def _capability_executors_problems(value: Any, *, clash: dict[str, str | None] | None = None) -> list[str]:
+    """AIPOS-F284: execution.capability_executors 形判定(config.schema project_json.execution.schema.capability_executors): 缺 / null = 合规;
+    否则须为 {<实例>: {host: 非空无空白串, capabilities: 非空无重复列表, 值 ∈ enums.schema host_capability}}, 实例不等于 auditor / pi_executor。"""
+    from tools.schema_loader import get_enum_values
+
+    if value is None:
+        return []
+    if not isinstance(value, dict):
+        return ["capability_executors 须为 {<实例>: {host, capabilities}} 对象"]
+    allowed = list(get_enum_values("host_capability"))
+    problems: list[str] = []
+    for name, entry in value.items():
+        label = f"capability_executors.{name}"
+        if not isinstance(name, str) or not name.strip() or any(ch.isspace() for ch in name):
+            problems.append(f"{label}: 实例名须为不含空白的非空串")
+            continue
+        if not isinstance(entry, dict) or set(entry) != {"host", "capabilities"}:
+            problems.append(f"{label} 须恰为 {{host, capabilities}}")
+            continue
+        host, caps = entry.get("host"), entry.get("capabilities")
+        if not isinstance(host, str) or not host.strip() or any(ch.isspace() for ch in host):
+            problems.append(f"{label}.host={host!r} 须为不含空白的主机名(接入登记 land 事件 host=)")
+        if (not isinstance(caps, list) or not caps or len(set(map(str, caps))) != len(caps)
+                or any(not isinstance(c, str) or c not in allowed for c in caps)):
+            problems.append(f"{label}.capabilities={caps!r} 须为非空无重复列表, 每项 ∈ enums.schema host_capability {allowed}")
+        for key, other in (clash or {}).items():
+            if other and other == name:
+                problems.append(f"{label}: 与 {key} 同一实例(能力执行实例须为子 agent 执行实例)")
+    return problems
+
+
+def project_capability_executors(project_root: str | Path, *, project: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+    """AIPOS-F284: project.json execution.capability_executors 的唯一读取口 → {<实例>: {host, capabilities}}(声明序)。未声明 execution /
+    缺键 / null = {}。形不合 = ExecutionDeclarationError(经 project_execution 同一校验, 不吞)。"""
+    data = project if project is not None else read_project_json(project_root)
+    if project_execution(project_root, project=data) is None:
+        return {}
+    value = data["execution"].get("capability_executors") or {}
+    return {str(k): {"host": str(v["host"]), "capabilities": [str(c) for c in v["capabilities"]]} for k, v in value.items()}
 
 
 def project_subagent_max_wait(project_root: str | Path, *, project: dict[str, Any] | None = None) -> float | None:

@@ -309,6 +309,13 @@ def validate_draft_metadata(
             card_resources(metadata)
         except ValueError as exc:
             _add(blocking_reasons, str(exc))
+        # AIPOS-F284: 所需主机能力(card.schema requires_capabilities); 形校验唯一实现 execution_division.card_capabilities
+        from tools.aipos_cli.execution_division import card_capabilities
+
+        try:
+            card_capabilities(metadata)
+        except ValueError as exc:
+            _add(blocking_reasons, str(exc))
         # AIPOS-F171 件②: 路线图挂接(milestone / criteria): 引用不存在 = 拒, 未挂 = 游离卡警告(不拒), 项目无路线图 = 不校验;
         # 唯一判据 roadmap.link_problems(queue amend 同调)
         from tools.aipos_cli.roadmap import link_problems

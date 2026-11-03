@@ -2004,6 +2004,17 @@ def _mark_record_write_report_performed(data: dict[str, Any]) -> None:
                 item["updated"] = True
 
 
+def _capability_trace_or_block(repo_root: Path, card: dict[str, Any], instance: str, blocking: list[str]) -> str | None:
+    """AIPOS-F284 认领 / 交回记录留痕(execution_division.capability_trace 唯一渲染); 卡面能力声明 / 执行声明形坏 = 拒写记录(fail-closed)。"""
+    from tools.aipos_cli.execution_division import capability_trace
+
+    try:
+        return capability_trace(repo_root, card, instance)
+    except ValueError as exc:
+        blocking.append(f"AIPOS-F284: 能力例外留痕不可得(fail-closed): {exc}")
+        return None
+
+
 def _mcp_claim_record_plan(
     *,
     repo_root: Path,
@@ -2034,6 +2045,7 @@ def _mcp_claim_record_plan(
     if session_path.exists():
         blocking.append(f"Session record already exists: {session_rel}")
     confirmation_ref = f"owner_policy:{owner_policy_ref}"
+    capability = _capability_trace_or_block(repo_root, {**updated_metadata, "task_id": task_id}, canonical_agent_instance, blocking)
     claim_markdown = build_mcp_claim_record_markdown(
         task_id=task_id,
         task_path=task_path,
@@ -2054,6 +2066,7 @@ def _mcp_claim_record_plan(
         confirmation_ref=confirmation_ref,
         confirmer=confirmer,
         adoption=adoption,
+        capability_exception=capability,
     )
     session_markdown = build_mcp_claim_session_record_markdown(
         task_id=task_id,
@@ -2258,6 +2271,7 @@ def _mcp_return_record_plan(
     from tools.aipos_cli.next_resolver import return_binding_subject
     # AIPOS-F252 件②: 交回报告声明的交回结果随记录落(同一判定 next_resolver.report_return_outcome; 值不合 = 拒写, fail-closed)
     return_outcome = _return_outcome_fields(repo_root, task_id, source_metadata, blocking)
+    capability = _capability_trace_or_block(repo_root, {**source_metadata, "task_id": task_id}, canonical_agent_instance, blocking)
 
     return_markdown = build_mcp_return_record_markdown(
         artifact_subject=return_binding_subject(repo_root, task_id, source_metadata),
@@ -2283,6 +2297,7 @@ def _mcp_return_record_plan(
         self_check_waived=self_check_waived,
         self_check_waiver_reason=self_check_waiver_reason,
         return_outcome=return_outcome,
+        capability_exception=capability,
     )
     session_markdown = ""
     if not blocking:

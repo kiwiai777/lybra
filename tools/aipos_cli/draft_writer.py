@@ -321,9 +321,18 @@ def apply_execution_defaults(metadata: dict[str, Any], repo_root: Path) -> list[
     from tools.aipos_cli.execution_division import pi_undeclared_refusal
     from tools.aipos_cli.workspace_config import EXECUTION_MODE_PI, execution_wants_pi
 
+    from tools.aipos_cli.execution_division import capability_assignee
+
     harness = str(metadata.get("harness") or "").strip()
     assigned = str(metadata.get("assigned_to") or "").strip()
-    if execution_wants_pi(execution, metadata):  # AIPOS-F156 件①: 与卡执行方式判定(card_execution_mode)同一谓词
+    # AIPOS-F284: 卡带 requires_capabilities(能力例外)= 缺省执行者为具备全部能力的子 agent 执行实例(无实例具备 = 拒并给出口), 不走「非代码派 pi」
+    try:
+        capable = capability_assignee(repo_root, metadata, execution=execution)
+    except ValueError as exc:
+        return [str(exc)]
+    if capable is not None and capable["refusal"] is not None:
+        return [capable["refusal"]["message"]]
+    if capable is None and execution_wants_pi(execution, metadata):  # AIPOS-F156 件①: 与卡执行方式判定(card_execution_mode)同一谓词
         if not assigned and not execution["pi_executor"]:
             return [pi_undeclared_refusal(repo_root, metadata, execution)["message"]]
         metadata["assigned_to"] = assigned or execution["pi_executor"]
@@ -332,14 +341,15 @@ def apply_execution_defaults(metadata: dict[str, Any], repo_root: Path) -> list[
         refusals = _division_refusals(repo_root, metadata, stage="draft", execution=execution)
         if refusals:
             return refusals
-        metadata["assigned_to"] = assigned or execution["subagent_executor"]
-        if not harness and metadata["assigned_to"] == execution["subagent_executor"]:
+        default_executor = capable["instance"] if capable is not None else execution["subagent_executor"]
+        metadata["assigned_to"] = assigned or default_executor
+        if not harness and metadata["assigned_to"] == default_executor:
             try:
-                view = dispatch_harness(repo_root, advisor=card_dispatch_advisor(metadata), executor=execution["subagent_executor"])
+                view = dispatch_harness(repo_root, advisor=card_dispatch_advisor(metadata), executor=default_executor)
             except ValueError as exc:
                 return [f"AIPOS-F143: 治理根连接文件读不出, 子 agent 执行者接入登记不可得: {exc}"]
             if not view.get("harness"):
-                return [f"AIPOS-F143: 起草顾问 {view['advisor'] or '(未知)'} 无登记 harness, 子 agent 执行者 {execution['subagent_executor']} "
+                return [f"AIPOS-F143: 起草顾问 {view['advisor'] or '(未知)'} 无登记 harness, 子 agent 执行者 {default_executor} "
                         "亦无子 agent 模式接入登记(land 事件无 harness=), 顾问会话 harness 不可得。出口: 卡稿显式给 harness(claude-code|codex), "
                         "或 lybra roles redeclare 登记顾问 harness, 或按 lybra onboarding guide --executor-mode subagent 重接入该实例"]
             metadata["harness"] = view["harness"]
