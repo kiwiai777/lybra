@@ -250,12 +250,30 @@ def test_item3_claim_runtime_ids_monotonic_suffix(tmp_path):
     assert CLAIM_ID_SEQ_MAX == 99
 
 
-def test_acceptance3_same_second_reclaim_after_reopen_not_refused(f90_rig, monkeypatch):
-    """验收③: 认领时刻钉在同一秒(旧轮认领与 reopen 后新一轮认领同秒), 新一轮认领不撞名、不被门拒, loop 续跑结案。"""
-    from tools.aipos_cli import queue_mutation as qm
+def _pin_record_second(monkeypatch) -> str:
+    """把「记录命名用的秒级时刻」(唯一时钟源 tools.aipos_cli.clock.iso_z 的无参调用)钉在同一秒 S, 带参调用(换写既有时刻)照旧。
+    钉住时钟模块本身, 并把已导入模块里按名绑定的 iso_z(`from tools.aipos_cli.clock import iso_z`)逐个换成同一钉子; 之后才导入的模块
+    读到的就是钉子。只钉秒级时刻串: utc_now / 单调时钟照常走(等待 / 时限 / 租约不受影响)。
+    AIPOS-F288 返工轮 1(审计 AIPOS-F288R): 原只钉 queue_mutation.iso_z, 旧轮交回记录走真实时钟, 落到 S+1 时被轮界判为本轮交回
+    (墙钟彩票)。现在认领 / 会话 / 交回 / 轮界记录同在秒 S, 新旧轮由轮界同秒的写入先后(next_resolver.in_round)确定区分, 与墙钟无关。"""
+    from tools.aipos_cli import clock
 
-    fixed = qm.iso_z()
-    monkeypatch.setattr(qm, "iso_z", lambda: fixed)
+    real = clock.iso_z
+    fixed = real()
+
+    def pinned(moment=None):
+        return fixed if moment is None else real(moment)
+
+    monkeypatch.setattr(clock, "iso_z", pinned)
+    for name, module in list(sys.modules.items()):
+        if (name.startswith("tools.") or name.startswith("web.")) and getattr(module, "iso_z", None) is real:
+            monkeypatch.setattr(module, "iso_z", pinned)
+    return fixed
+
+
+def test_acceptance3_same_second_reclaim_after_reopen_not_refused(f90_rig, monkeypatch):
+    """验收③: 记录命名时刻钉在同一秒(旧轮认领 / 交回 / 轮界 / 新一轮认领同秒), 新一轮认领不撞名、不被门拒, loop 续跑结案。"""
+    fixed = _pin_record_second(monkeypatch)
     r = f90_rig
     f282._blocked_card(r)
     rc, out, err = f282._reopen(r, f78.DRIVER)
@@ -268,6 +286,10 @@ def test_acceptance3_same_second_reclaim_after_reopen_not_refused(f90_rig, monke
     sessions = sorted(p.name for p in (r.gov / "5_tasks" / "records" / "sessions" / TASK).glob("session_*.md"))
     _show(f"---- 验收③ 同秒(钉 {fixed})reopen 后重认领 loop outcome {res.outcome} ----\n" + f278._lines(text, "run claim", "done:")
           + f"\n[验收③ 认领记录] {claims}\n[验收③ 会话记录] {sessions}")
+    stamp = fixed.replace("-", "").replace(":", "").replace("Z", "").replace("T", "_")
+    returns = sorted(p.name for p in (r.gov / "5_tasks" / "records" / "returns" / TASK).glob("return_*.md"))
+    _show(f"[验收③ 交回记录] {returns}")
+    assert returns and all(stamp in name for name in returns), returns  # 时序确定: 旧轮交回与轮界同秒(不再随墙钟落到 S+1)
     assert "Claim record already exists" not in text and res.outcome == "completed", text
     assert len(claims) == 2 and claims[1] == claims[0][:-3] + "_02.md", claims
     recs = nr._read_task_records(r.gov, TASK)
