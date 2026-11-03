@@ -6242,7 +6242,7 @@
           },
           "json": {
             "type": "boolean",
-            "description": "Emit the result object as JSON (includes selected_paths, commit_manifest, rejected_paths / pre_staged_outside when applicable)"
+            "description": "Emit the result object as JSON (includes selected_paths, commit_manifest, rejected_paths / pre_staged_overlap / pre_staged_kept when applicable)"
           }
         },
         "required": [
@@ -6375,9 +6375,37 @@
         },
         "not_applicable": "envelope revoke / renew: 非 --dry-run 即门外拒(board_adapter.record_owner_decision dry_run=False = _blocked_execute), 无写路径、无记录可落; 日后加写路径须登记于 commands"
       },
+      "concurrent_landing": {
+        "description": "AIPOS-F285(11-03 实撞: ai-project-os 多项目共用一个 git 仓, chris 路线图写命令的自动落账与 lybra N6 落账互相把对方的暂存当拒因, 两边 fail-closed 只能靠 Owner 转达): 共享治理仓并发落账判据, 唯一实现 governance_commit._governance_commit_impl(N6 卡范围 / --paths / 写后落账 land_written_paths 全部经此, 禁第二实现)。① 提交只含本次清单: git commit --only -- <清单逐个文件>(AIPOS-F184 已是此语义; 钩子看到的暂存集 = 清单), 本次 pathspec(--paths 或卡范围; 无 --paths = 治理根 .)之外的他人暂存原样留在索引、不混入、不再拒(结果字段 pre_staged_kept 与操作行列出)。② 只在本次 pathspec 内有他人暂存且其暂存内容 ≠ 工作区内容(git diff --name-only 命中: 提交 --only 取工作区内容会盖掉对方暂存的那一版)时拒(texts.overlap), 带出口; 暂存内容 = 工作区内容(含已 git rm 的删除)= 纳入清单(AIPOS-F79 / F193 原契约, 提交内容即对方暂存内容, 无覆盖)。无 --paths 整根模式: 治理根内任何预暂存仍拒(texts.whole_root, 原 F69-R2 语义), 治理根外的不再拒。③ 暂存之后任一失败(钩子拒 / 清单不符 / git 异常 / 超时)都撤回本次暂存(git reset -q -- <本次 pathspec>, 本次 pathspec 内的预暂存按暂存前索引快照还原; 工作区不动; 范围外他人暂存不碰), 撤回本身遇 index.lock 竞争按 index_lock_retry 重试; 仍撤不回 = 结果 index_restored=false 并给只撤本次路径的手工出口(texts.unstage_failed)。④ 写索引的 git 动作(add / commit / reset / restore)遇 index.lock 竞争(另一进程正在写同一索引)按 index_lock_retry 有界重试, 用尽 = 照常失败并撤回。推送冲突(非快进)仍走既有 F79C 临时工作树整合 / 拒因, 不 force。",
+        "index_lock_retry": {
+          "attempts": 5,
+          "interval_ms": 300,
+          "stderr_marker": "index.lock"
+        },
+        "texts": {
+          "zh": {
+            "overlap": "本次落账路径与他人暂存重叠, 拒绝提交(对方暂存的版本与工作区不同, 提交会盖掉对方暂存): {files}。出口: 等对方落账完成后重跑同一命令; 若确认是本命令此前留下的暂存残留, 先只撤这些路径的暂存(工作区保留): git -C {root} restore --staged -- {pathspec}, 再重跑同一命令",
+            "whole_root": "治理根内有已暂存但未提交的文件(无 --paths 整根落账不混入他人暂存): {files}。出口: 改用 --paths 只落本批路径(根外 / 范围外他人暂存不再挡); 或等对方落账完成后重跑; 若确认是自己的残留: git -C {root} restore --staged -- {pathspec}",
+            "kept_outside": "本次范围外的他人暂存 {count} 个原样保留(不混入本次提交, 不拒): {files}",
+            "unstaged": "本次暂存已撤回(工作区改动保留, 他人暂存未动): {pathspec}",
+            "unstage_failed": "本次暂存未能撤回({error}); 手工只撤本次路径(工作区保留, 不碰他人暂存): git -C {root} restore --staged -- {pathspec}",
+            "landing_unstaged": "  暂存: 本命令 add 的路径已撤出暂存区(工作区改动保留); 重试落账: {remedy}",
+            "landing_unstage_failed": "  暂存: 本命令 add 的路径未能撤出暂存区({error}); 先撤: git -C {root} restore --staged -- {pathspec}; 再重试落账: {remedy}"
+          },
+          "en": {
+            "overlap": "This landing's paths overlap with changes someone else has staged; commit refused (their staged version differs from the working tree, so committing would overwrite what they staged): {files}. Way out: wait for the other landing to finish, then rerun the same command; if you are sure this is staging left behind by an earlier run of this command, unstage only these paths first (working tree kept): git -C {root} restore --staged -- {pathspec}, then rerun the same command",
+            "whole_root": "Files are staged but not committed inside the governance root (a whole-root landing without --paths does not take other people's staging): {files}. Way out: use --paths to land only this batch (staging outside the root or the selection no longer blocks); or wait for the other landing to finish and rerun; if you are sure it is your own leftover: git -C {root} restore --staged -- {pathspec}",
+            "kept_outside": "{count} staged change(s) outside this landing's paths left as they are (not committed, not a refusal): {files}",
+            "unstaged": "This run's staging was undone (working tree changes kept, other people's staging untouched): {pathspec}",
+            "unstage_failed": "This run's staging could not be undone ({error}); undo only this run's paths by hand (working tree kept, other staging untouched): git -C {root} restore --staged -- {pathspec}",
+            "landing_unstaged": "  Staging: the paths this command added were taken out of the index (working tree changes kept); retry the landing: {remedy}",
+            "landing_unstage_failed": "  Staging: the paths this command added could not be taken out of the index ({error}); first undo: git -C {root} restore --staged -- {pathspec}; then retry the landing: {remedy}"
+          }
+        }
+      },
       "exit_codes": {
         "0": "PASS — committed (and pushed unless no_push), or no-op (nothing to commit within the selection), or dry_run manifest emitted",
-        "1": "BLOCK/FAIL — e.g. paths outside governance root (rejected_paths), pre-staged files outside --paths (pre_staged_outside), N6 completeness missing, staged set != manifest, pre-commit guardrail (AIPOS-R6M) rejection, post-commit git show != manifest, push/verification failure",
+        "1": "BLOCK/FAIL — e.g. paths outside governance root (rejected_paths), pre-staged files inside the selection whose staged version differs from the working tree (pre_staged_overlap, AIPOS-F285; staging outside the selection is kept and no longer refused), N6 completeness missing, staged set != manifest, pre-commit guardrail (AIPOS-R6M) rejection, post-commit git show != manifest, push/verification failure",
         "2": "usage error — argparse rejected the arguments (unknown flag / missing --actor)"
       }
     },

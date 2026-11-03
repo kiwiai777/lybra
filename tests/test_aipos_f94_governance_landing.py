@@ -6,7 +6,7 @@
 件① loop 结案后自动 N6 落账:
    ① 一张卡 loop 从认领(claimed)跑到结案后自动落账: 治理仓 git log 出现该卡提交、工作区该卡路径干净、远端已含;
       他项目脏文件 / 他卡记录 / 无关治理文件原样不动(task 范围精确提交, 禁整根)
-   ② 他人暂存存在 → 落账步 exit 2 明确拒因, 他人暂存原样; 处理后重跑 exit 0; 再跑 = 幂等(无新提交)
+   ② 他人暂存存在(本卡范围外)→ AIPOS-F285 起原样保留不再拒, 落账照常 exit 0; 再跑 = 幂等(无新提交)
    close 的 next_step = 产品命令(无手写 git add/commit)
 件② 接入向导第 1 / 2 步之后各落账一次: 命令原文过 argparse; 在临时 git home 原样执行 → 提交仅含本步产物且已推送
      (建项目的 decision_log 桩带声明 frontmatter, 过提交门 B②)
@@ -216,29 +216,24 @@ def test_item1_loop_claimed_to_completed_then_lands_task_scope_and_pushes(rig: d
 # 件① 验收②: 他人暂存 → 明确拒因退出, 不动他人暂存; 处理后重跑落账; 幂等
 # ===========================================================================
 
-def test_item1_foreign_staged_rejects_with_reason_and_leaves_it_untouched(rig: dict):
+def test_item1_foreign_staged_is_kept_and_landing_proceeds(rig: dict):
+    """AIPOS-F285 件①(取代 F94 原「他人暂存 = 落账拒」): 他项目暂存在本卡范围外 = 原样保留、不混入, 落账照常提交推送。"""
     gov, repo = rig["gov"], rig["repo"]
     _closed_card(gov)
     _policy(gov)
     _git(repo, "add", "--", "2_projects/other/plan.md")  # 他人暂存(他项目)
-    staged_before = _git(repo, "diff", "--cached", "--name-only")
+    staged_before = _git(repo, "diff", "--cached")
     head = _git(repo, "rev-parse", "HEAD")
     out = io.StringIO()
     res = run_loop(TASK, gov, actor=DRIVER, out=out, execute=GateDouble(gov), interval=0.01, max_wait=1, max_steps=5)
     text = out.getvalue()
     _show("[②·他人暂存 loop 原文(截)]\n" + text[:1500])
-    assert res.exit_code == 2 and res.outcome == "gate_rejected", text
-    assert "落账拒 @ governance_commit" in res.message and "2_projects/other/plan.md" in res.message
-    assert "staged" in res.message
-    assert _git(repo, "diff", "--cached", "--name-only") == staged_before == "2_projects/other/plan.md"  # 他人暂存原样
-    assert (rig["other"] / "plan.md").read_text(encoding="utf-8") == "plan v2 (other project, uncommitted)\n"
-    assert _git(repo, "rev-parse", "HEAD") == head  # 无提交
-    # 他人处理掉自己的暂存后, 同一条 loop 重跑即落账
-    _git(repo, "reset", "-q", "--", "2_projects/other/plan.md")
-    res2 = run_loop(TASK, gov, actor=DRIVER, out=io.StringIO(), execute=GateDouble(gov), interval=0.01, max_wait=1, max_steps=5)
-    assert res2.exit_code == 0, res2.message
+    assert res.exit_code == 0, text
     landed_head = _git(repo, "rev-parse", "HEAD")
-    assert landed_head != head and _git(repo, "rev-parse", "HEAD") == _git(rig["remote"], "rev-parse", "main")
+    assert landed_head != head and landed_head == _git(rig["remote"], "rev-parse", "main")
+    assert "2_projects/other/plan.md" not in _git(repo, "show", "--name-only", "--format=", "HEAD")  # 不混入
+    assert _git(repo, "diff", "--cached") == staged_before and staged_before  # 他人暂存原样
+    assert (rig["other"] / "plan.md").read_text(encoding="utf-8") == "plan v2 (other project, uncommitted)\n"
     # 幂等: 产品命令再跑 = PASS no-op, 不产生新提交
     again = gc.governance_commit(gov, TASK, DRIVER)
     _show(f"[②·幂等] verdict={again['verdict']} committed={again['committed']} message={again['message']}")

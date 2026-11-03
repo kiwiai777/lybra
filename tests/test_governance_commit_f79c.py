@@ -343,11 +343,11 @@ def test_piece4_directory_pathspec_stages_deletion_and_commit_has_all_three(rig)
 def test_piece4_manifest_mismatch_unstages_this_run_and_restores_prestaged(rig, monkeypatch):
     import tools.aipos_cli.governance_commit as gc
     a, gov = rig["a"], rig["gov"]
-    # --paths 内的预暂存: 暂存内容 X, 工作树随后改成 Y(还原必须还原成 X 而非重新 add 成 Y)
+    # --paths 内的预暂存: 暂存内容 X = 工作树内容(纳入清单; AIPOS-F285: 暂存版 ≠ 工作树版 = 与他人暂存重叠, 暂存前即拒,
+    # 见 tests/test_aipos_f285_concurrent_landing_claim_residue.py); 拒提交时须按暂存前快照还原成仍暂存的 X
     pre = gov / "5_tasks" / "pre.md"
     pre.write_text("X\n", encoding="utf-8")
     _git(a, "add", "--", f"{GOV_REL}/5_tasks/pre.md")
-    pre.write_text("Y\n", encoding="utf-8")
     (gov / "5_tasks" / "LEDGER.md").write_text("# task ledger\n- t1\n- t2\n", encoding="utf-8")
     (gov / "5_tasks" / "queue" / "pending" / "card-1.md").unlink()
     cached_before = _git(a, "diff", "--cached", "--name-only", "--no-renames")
@@ -374,10 +374,11 @@ def test_piece4_manifest_mismatch_unstages_this_run_and_restores_prestaged(rig, 
     # 暂存区只剩原来的预暂存条目, 且内容精确为 X(不是工作树的 Y); 删除与修改回到未暂存状态
     assert _git(a, "diff", "--cached", "--name-only", "--no-renames") == cached_before
     assert _git(a, "show", f":{GOV_REL}/5_tasks/pre.md") == "X\n"
-    assert pre.read_text(encoding="utf-8") == "Y\n"
+    assert pre.read_text(encoding="utf-8") == "X\n"
     st = porcelain(a)
     assert f" M {GOV_REL}/5_tasks/LEDGER.md" in st and f" D {GOV_REL}/5_tasks/queue/pending/card-1.md" in st
-    assert f"AM {GOV_REL}/5_tasks/pre.md" in st
+    assert f"A  {GOV_REL}/5_tasks/pre.md" in st
+    assert result["index_restored"] is True
 
 
 # ---------------------------------------------------------------------------

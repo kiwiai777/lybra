@@ -305,8 +305,9 @@ def test_completeness_check_with_optional_taskid():
     assert result["complete"] is True or "stage_archive" in str(result["missing"])
 
 
-def test_rebase_rejects_outofscope_dirty_tree(governance_repo):
-    """P0 红测试: rebase 前检查范围外脏树 — 有未提交变更必须拒绝且毫发无损
+def test_outofscope_staged_kept_through_remote_integration(governance_repo):
+    """P0(原 test_rebase_rejects_outofscope_dirty_tree): 范围外暂存毫发无损。AIPOS-F285 起不再拒: 本卡照常提交, 远端前进 =
+    F79C 临时工作树整合后推送, 本地分支跟进后他人暂存按快照原样还原(仍在索引、不混入提交)。
     
     简化版测试：验证当 git rebase 遇到 staged 文件时会报错，
     且我们的错误处理正确返回 BLOCK 并保护文件。
@@ -364,20 +365,17 @@ def test_rebase_rejects_outofscope_dirty_tree(governance_repo):
     assert out_of_scope_file.exists(), "范围外文件被删除！"
     assert out_of_scope_file.read_text() == original_content, "范围外文件内容被修改！"
     
-    # ⑦ 验证返回 BLOCK
-    assert result["verdict"] == Verdict.BLOCK, (
-        f"检测到范围外 staged 文件时必须 BLOCK。当前 verdict={result['verdict']}"
-    )
-    
-    # ⑧ 验证错误消息
-    error_msg = result.get("message", "")
-    assert "staged" in error_msg or "committed" in error_msg, (
-        f"错误消息必须说明有 staged 文件: {error_msg}"
-    )
-    assert "处理" in error_msg or "commit" in error_msg, (
-        f"错误消息必须给出可执行出口: {error_msg}"
-    )
-    
+    # ⑦ AIPOS-F285 件①(取代原「范围外 staged = BLOCK」): 范围外暂存原样保留、不混入, 本卡照常提交; 远端已前进 = F79C 临时工作树整合后推送
+    assert result["verdict"] == Verdict.PASS, (result["verdict"], result["message"], result["operations"])
+    assert result["pushed"] is True
+    assert result["pre_staged_kept"] == ["other_project/门操作文件.json"]
+    shown = subprocess.run(["git", "-c", "core.quotepath=false", "show", "--name-only", "--format=", "HEAD"], cwd=str(local),
+                           check=True, capture_output=True, text=True).stdout
+    assert "other_project" not in shown and f"task_cards/{task_id}/AUDIT-REPORT.md" in shown
+    staged = subprocess.run(["git", "-c", "core.quotepath=false", "diff", "--cached", "--name-only"], cwd=str(local),
+                            check=True, capture_output=True, text=True).stdout
+    assert staged == "other_project/门操作文件.json\n", "范围外暂存须原样留在索引"
+
     # ⑦ 断言: 范围外文件逐字节不变(最关键!)
     assert out_of_scope_file.exists(), "范围外文件被删除了!"
     actual_content = out_of_scope_file.read_text()

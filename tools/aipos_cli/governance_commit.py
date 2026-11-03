@@ -38,6 +38,7 @@ AIPOS-F79C push 假阴性热修(chris 总顾问阻塞, 2026-09-21 --json 取证)
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -789,7 +790,16 @@ def land_written_paths(governance_root: Path | str, paths: list[str], actor: str
     else:
         line = (f"⚠ 落账未完成(写入已生效, 勿重复执行写命令): verdict={result.get('verdict')} committed={bool(result.get('committed'))} "
                 f"pushed={bool(result.get('pushed'))} — {str(reason)[:500]}\n  补账: {remedy}")
+        # AIPOS-F285 件②: 本命令已 add 而未提交 = 落账口已撤回本次暂存(工作区保留); 撤不回 = 只撤本次路径的手工出口
+        if "index_restored" in result:
+            if result["index_restored"]:
+                line += "\n" + landing_text("landing_unstaged", remedy=remedy)
+            else:
+                line += "\n" + landing_text("landing_unstage_failed", error=str(result.get("unstage_error") or "")[:300],
+                                            root=shlex.quote(str(root)), pathspec=" ".join(shlex.quote(p) for p in selected), remedy=remedy)
     return {"landed": landed, "verdict": result.get("verdict"), "committed": bool(result.get("committed")),
+            "index_restored": result.get("index_restored"), "unstage_command": result.get("unstage_command"),
+            "pre_staged_kept": list(result.get("pre_staged_kept") or []),
             "pushed": bool(result.get("pushed")), "commit_hash": commit_hash, "paths": selected, "reason": reason,
             "remedy": None if landed else remedy, "exit_code": 0 if landed else int(decl["landing_failed_exit_code"]),
             "operations": list(result.get("operations") or []), "skipped_vanished_untracked": skipped, "line": line}
@@ -1133,6 +1143,66 @@ def _git_run(args: list[str], cwd: Path, *, timeout: int = 60) -> subprocess.Com
     )
 
 
+# ---------------------------------------------------------------------------
+# AIPOS-F285: 共享治理仓并发落账(声明 verbs.schema verbs.lybra_governance_commit.concurrent_landing)
+# ---------------------------------------------------------------------------
+
+def concurrent_landing_declaration() -> dict[str, Any]:
+    """verbs.schema verbs.lybra_governance_commit.concurrent_landing 唯一读取口(双语 texts 经 i18n 唯一读取器核结构与占位)。
+    缺键 / 形不合 = SchemaLoadError(fail-closed)。"""
+    from tools.aipos_cli.i18n import surface_texts
+    from tools.aipos_cli.next_resolver import REPO_ROOT
+    from tools.schema_loader import SchemaLoadError, load_schema
+
+    where = "verbs.schema.json verbs.lybra_governance_commit.concurrent_landing"
+    decl = (((load_schema("verbs", REPO_ROOT).get("verbs") or {}).get("lybra_governance_commit") or {}).get("concurrent_landing"))
+    retry = decl.get("index_lock_retry") if isinstance(decl, dict) else None
+    if (not isinstance(retry, dict) or not isinstance(retry.get("attempts"), int) or isinstance(retry.get("attempts"), bool)
+            or retry["attempts"] < 1 or not isinstance(retry.get("interval_ms"), int) or retry["interval_ms"] < 0
+            or not str(retry.get("stderr_marker") or "").strip()):
+        raise SchemaLoadError(f"{where}.index_lock_retry(attempts ≥ 1 / interval_ms ≥ 0 / stderr_marker)未声明齐")
+    surface_texts(decl.get("texts"), None, where=f"{where}.texts")
+    return decl
+
+
+def landing_text(key: str, /, **values: Any) -> str:
+    """concurrent_landing.texts 一条文案, 按用户语言(i18n.resolve_language: LYBRA_LANG > home 配置 > 缺省)填好。"""
+    from tools.aipos_cli.i18n import fill, resolve_language, surface_texts
+
+    where = "verbs.schema.json verbs.lybra_governance_commit.concurrent_landing.texts"
+    lang = resolve_language()
+    table = surface_texts(concurrent_landing_declaration()["texts"], lang, where=where)
+    if not isinstance(table.get(key), str):
+        from tools.schema_loader import SchemaLoadError
+
+        raise SchemaLoadError(f"{where}.{lang}.{key} 未声明")
+    return fill(table[key], values, where=f"{where}.{key}", lang=lang)
+
+
+def _shown_paths(paths: list[str] | set[str], limit: int = 10) -> str:
+    items = sorted(paths)
+    return ", ".join(items[:limit]) + (f", … (+{len(items) - limit})" if len(items) > limit else "")
+
+
+def _git_index_write(args: list[str], cwd: Path, *, timeout: int = 60, env: dict[str, str] | None = None,
+                     prefix: list[str] | None = None) -> subprocess.CompletedProcess:
+    """AIPOS-F285 件①④: 写索引的 git 调用(add / commit / reset / restore)——遇 index.lock 竞争(共享仓另一进程正写同一索引)按声明
+    index_lock_retry 有界重试; 其余失败 / 重试用尽 = 抛 CalledProcessError(调用方照常处置), 禁静默。"""
+    import time
+
+    retry = concurrent_landing_declaration()["index_lock_retry"]
+    marker = str(retry["stderr_marker"])
+    cmd = (prefix if prefix is not None else _GIT_QUOTEPATH_OFF) + args
+    for attempt in range(1, int(retry["attempts"]) + 1):
+        proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, timeout=timeout, env=env)
+        if proc.returncode == 0:
+            return proc
+        if marker not in ((proc.stderr or "") + (proc.stdout or "")) or attempt >= int(retry["attempts"]):
+            raise subprocess.CalledProcessError(proc.returncode, cmd, output=proc.stdout, stderr=proc.stderr)
+        time.sleep(int(retry["interval_ms"]) / 1000.0)
+    raise subprocess.CalledProcessError(1, cmd)  # pragma: no cover - attempts ≥ 1 由声明守卫保证
+
+
 def _divergence(governance_root: Path, upstream: str) -> tuple[int, int]:
     """件① 判据: (远端独有提交数, 本地独有提交数) = rev-list --count HEAD..upstream / upstream..HEAD。"""
     remote_only = int(_git_readonly(["rev-list", "--count", f"HEAD..{upstream}"], governance_root).strip())
@@ -1465,8 +1535,13 @@ def _push_local_head(
                         + f"; reported only. Exit: save them, then cd {governance_root} && git reset --keep {upstream}"
                     )
                 else:
+                    # AIPOS-F285 件①: reset --keep 会把索引重置为目标提交(他人暂存随之丢失、文件留在工作区)——先快照他人暂存
+                    # (write-tree; 上方 overlap 已保证远端提交不改这些路径), 移动后按快照原样还原这些索引项
+                    others_staged = sorted(set(_git_readonly(["diff", "--cached", "--name-only", "--no-renames"],
+                                                             governance_root).split("\n")) - {""})
+                    staged_snapshot = _git_readonly(["write-tree"], governance_root).strip() if others_staged else None
                     try:
-                        _git_run(["reset", "--keep", upstream], governance_root, timeout=60)
+                        _git_index_write(["reset", "--keep", upstream], governance_root, timeout=60)
                     except subprocess.CalledProcessError as exc:
                         operations.append(
                             f"WARNING: Local branch NOT moved: git reset --keep {upstream} refused: "
@@ -1478,6 +1553,19 @@ def _push_local_head(
                             f"Local branch fast-forwarded to {upstream} ({commit_hash[:8]}) via git reset --keep "
                             f"(only files changed by remote commits updated; other projects' uncommitted files untouched)"
                         )
+                        if others_staged and staged_snapshot:
+                            restore_spec = [f":(top,literal){p}" for p in others_staged]
+                            try:
+                                _git_index_write(["restore", "--staged", f"--source={staged_snapshot}", "--"] + restore_spec,
+                                                 governance_root)
+                                operations.append(f"Restored {len(others_staged)} staged entr(y/ies) of others after the move "
+                                                  f"(index snapshot {staged_snapshot[:12]}; AIPOS-F285)")
+                            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+                                operations.append(
+                                    f"WARNING: others' staging not restored after the move ({' '.join(str(exc.stderr or exc).split())[:200]}); "
+                                    f"exit: cd {governance_root} && git restore --staged --source={staged_snapshot} -- "
+                                    + " ".join(shlex.quote(p) for p in restore_spec)
+                                )
 
         # AIPOS-F69 大项③: push 后校验远端确实包含本次 commit(禁「push 返回 0 即报成功」)
         remote_branches = _git_readonly(
@@ -1590,11 +1678,16 @@ def governance_commit(
     guardrail_sink: dict[str, Any] = {}
     skipped: list[str] = []
     exclusion: dict[str, Any] = {}
+    concurrency: dict[str, Any] = {}
     result = _governance_commit_impl(
         governance_root, task_id, actor,
         repo_root=repo_root, dry_run=dry_run, push=push, message=message, paths=paths, paths_file=paths_file,
-        guardrail_sink=guardrail_sink, skipped_sink=skipped, exclusion_sink=exclusion,
+        guardrail_sink=guardrail_sink, skipped_sink=skipped, exclusion_sink=exclusion, concurrency_sink=concurrency,
     )
+    # AIPOS-F285 件①: 范围外他人暂存原样保留——结果字段 + 一行人话(按用户语言; 不改首行, 首行仍是本次结论)
+    result["pre_staged_kept"] = list(concurrency.get("pre_staged_kept") or [])
+    if concurrency.get("kept_line"):
+        result["pre_staged_kept_line"] = concurrency["kept_line"]
     # AIPOS-F195 件②: 产物槽代码文件排除——结果字段 + 消息首行尾出声(预演 = 将排除; 已提交 = 已排除, 清单已入库)
     result["excluded_code_files"] = [{k: i[k] for k in ("path", "sha256", "size", "manifest", "recorded")}
                                      for i in exclusion.get("excluded") or []]
@@ -1780,6 +1873,7 @@ def _governance_commit_impl(
     guardrail_sink: dict[str, Any] | None = None,
     skipped_sink: list[str] | None = None,
     exclusion_sink: dict[str, Any] | None = None,
+    concurrency_sink: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """N6 收账提交:校验四件 → commit → push。
 
@@ -2002,37 +2096,38 @@ def _governance_commit_impl(
     #   有 --paths: 预暂存在 --paths 内 = 纳入清单可接受; 在 --paths 外 = 拒并列出。
     # AIPOS-F79C 件④: 预暂存/暂存集一律 --no-renames, 与清单(diff --no-renames)及 git show --no-renames 同口径
     pre_staged_inside: set[str] = set()
+    # AIPOS-F285 件①(11-03 共享仓互锁): 本次 pathspec(--paths / 卡范围; 无 --paths = 治理根 .)之外的他人暂存原样保留、不混入
+    # (提交是 --only 清单), 不再拒; 只在 pathspec 内有暂存且暂存版 ≠ 工作区版(提交会盖掉对方暂存)时拒(出口见 texts.overlap)。
+    # 无 --paths 整根模式: 治理根内任何预暂存仍拒(F69-R2 原语义), 治理根外的不再拒。判据声明 concurrent_landing.description。
+    scope_pathspec = list(selected_paths) if selected_paths else ["."]
     try:
-        pre_staged_result = subprocess.run(
-            ["git", "-c", "core.quotepath=false", "diff", "--cached", "--name-only", "--no-renames"],
-            cwd=str(governance_root),
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        pre_staged_files = [f.strip() for f in pre_staged_result.stdout.split('\n') if f.strip()]
-
-        if pre_staged_files and selected_paths:
-            inside_result = subprocess.run(
-                ["git", "-c", "core.quotepath=false", "diff", "--cached", "--name-only", "--no-renames", "--"] + selected_paths,
-                cwd=str(governance_root),
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            inside = {f.strip() for f in inside_result.stdout.split('\n') if f.strip()}
-            outside = [f for f in pre_staged_files if f not in inside]
-            if inside:
-                operations.append(f"Pre-staged within --paths: {len(inside)} file(s) accepted into manifest")
-            pre_staged_inside = inside
-            pre_staged_files = outside
-        
-        if pre_staged_files:
-            # 有 staged 文件 → BLOCK(这些可能是门刚落的账)
-            operations.append(f"Blocked: {len(pre_staged_files)} pre-staged files detected" + (" outside --paths" if selected_paths else ""))
-            file_list = '\n  - '.join(pre_staged_files[:10])
-            if len(pre_staged_files) > 10:
-                file_list += f'\n  - ... and {len(pre_staged_files) - 10} more'
+        pre_staged_all = set(_git_readonly(["diff", "--cached", "--name-only", "--no-renames"], governance_root).split("\n")) - {""}
+        in_scope = (set(_git_readonly(["diff", "--cached", "--name-only", "--no-renames", "--"] + scope_pathspec,
+                                      governance_root).split("\n")) - {""}) if pre_staged_all else set()
+        kept_outside = sorted(pre_staged_all - in_scope)
+        if kept_outside:
+            operations.append(f"Pre-staged outside this run's paths: {len(kept_outside)} file(s) left untouched (not committed, not refused; AIPOS-F285)")
+            if concurrency_sink is not None:
+                concurrency_sink["pre_staged_kept"] = kept_outside
+                concurrency_sink["kept_line"] = landing_text("kept_outside", count=len(kept_outside), files=_shown_paths(kept_outside))
+        overlap: list[str] = []
+        if in_scope and selected_paths:
+            # 暂存版 ≠ 工作区版: git diff(索引 vs 工作区)命中; 已 git rm 的删除(两边皆无)/ 暂存即工作区版 = 不命中 = 纳入清单
+            diverged = set(_git_readonly(["diff", "--name-only", "--no-renames", "--"] + [f":(top,literal){p}" for p in sorted(in_scope)],
+                                         governance_root).split("\n")) - {""}
+            overlap = sorted(in_scope & diverged)
+            accepted = in_scope - set(overlap)
+            if accepted:
+                operations.append(f"Pre-staged within --paths: {len(accepted)} file(s) accepted into manifest")
+            pre_staged_inside = accepted
+        elif in_scope:
+            overlap = sorted(in_scope)
+        if overlap:
+            operations.append(f"Blocked: {len(overlap)} pre-staged file(s) inside this run's paths "
+                              + ("with a staged version different from the working tree" if selected_paths else "(whole-root landing)"))
+            rel_specs = " ".join(shlex.quote(f":/{p}") for p in overlap)
+            message = landing_text("overlap" if selected_paths else "whole_root", files=_shown_paths(overlap),
+                                   root=shlex.quote(str(governance_root)), pathspec=rel_specs)
             return {
                 "verdict": Verdict.BLOCK,
                 "task_id": task_id,
@@ -2042,23 +2137,12 @@ def _governance_commit_impl(
                 "committed": False,
                 "pushed": False,
                 "commit_hash": None,
-                "message": (
-                    f"治理仓有已 staged 但未 committed 的文件"
-                    + ("(在 --paths 白名单之外)" if selected_paths else "")
-                    + f",必须先处理(fail-closed,禁混入本次提交)。\n\n"
-                    f"检测到 {len(pre_staged_files)} 个 staged 文件:\n  - {file_list}\n\n"
-                    f"可执行出口:\n"
-                    f"1. 先提交这些文件: cd {governance_root} && git commit -m '...'\n"
-                    f"2. 或取消 stage: cd {governance_root} && git reset HEAD -- <文件>\n"
-                    + ("3. 或把它们加入 --paths 白名单(若确属本批次)\n" if selected_paths else "")
-                    + f"{'4' if selected_paths else '3'}. 禁止混入本次提交 — 这些可能是门刚落的账,必须独立提交以保持原子性"
-                ),
+                "message": message,
                 "operations": operations,
                 "selected_paths": selected_paths,
-                "pre_staged_outside": pre_staged_files,
+                "pre_staged_overlap": overlap,
                 "commit_manifest": None,
             }
-        
         # AIPOS-F79 件②: 只读取得将提交文件清单(不 add/不 reset/不 stash)
         manifest = collect_commit_manifest(governance_root, selected_paths)
         # AIPOS-F195 件②: 产物槽内新增代码文件不入库(同槽清单记 sha256 并一并落账, 原文件留盘); 槽外代码文件照旧交四检 B① 拒
@@ -2204,61 +2288,75 @@ def _governance_commit_impl(
         }
 
     stage_pathspec = (list(selected_paths) if selected_paths else ["."]) + exclude_specs  # AIPOS-F195: 槽内代码文件排除
+    # AIPOS-F285 件②: 本次暂存状态——暂存之后任一失败(BLOCK / git 异常 / 超时)都经 _restore_after_failure 撤回本次暂存, 不留残留
+    staging: dict[str, Any] = {"staged": False, "committed": False, "saved_index_tree": None}
+    manual_pathspec = " ".join(shlex.quote(p) for p in (selected_paths or ["."]))
 
-    def _unstage_this_run(saved_index_tree: str | None) -> None:
+    def _unstage_this_run(saved_index_tree: str | None) -> dict[str, Any]:
         """AIPOS-F79C 件④: 拒提交时清掉本次暂存(git reset -- <pathspec>, 范围仍限 --paths), 不留半成品;
-        --paths 内原有的预暂存条目从暂存前的索引快照精确还原(不动工作树)。"""
-        _git_run(["reset", "-q", "--"] + stage_pathspec, governance_root)
-        operations.append(f"Unstaged this run's staging (git reset -- {' '.join(stage_pathspec)})")
-        if pre_staged_inside and saved_index_tree:
-            # 预暂存路径来自 diff --cached(仓根相对), 而 cwd 是治理根 → 用 :/ 顶层 pathspec 魔法
-            _git_run(
-                ["restore", "--staged", f"--source={saved_index_tree}", "--"]
-                + [f":/{p}" for p in sorted(pre_staged_inside)],
-                governance_root,
-            )
-            operations.append(f"Restored {len(pre_staged_inside)} pre-staged entr(y/ies) within --paths from index snapshot")
+        --paths 内原有的预暂存条目从暂存前的索引快照精确还原(不动工作树)。
+        AIPOS-F285 件②: 绝不抛——撤回遇 index.lock 竞争按声明重试(_git_index_write); 仍失败 = {ok: False, error, line(只撤本次路径的手工出口)},
+        原先在 except 分支里再抛会把「Commit failed」带着暂存残留返回(11-03 chris 路线图落账残留的病根)。"""
+        try:
+            _git_index_write(["reset", "-q", "--"] + stage_pathspec, governance_root)
+            operations.append(f"Unstaged this run's staging (git reset -- {' '.join(stage_pathspec)})")
+            if pre_staged_inside and saved_index_tree:
+                # 预暂存路径来自 diff --cached(仓根相对), 而 cwd 是治理根 → 用 :/ 顶层 pathspec 魔法
+                _git_index_write(
+                    ["restore", "--staged", f"--source={saved_index_tree}", "--"]
+                    + [f":/{p}" for p in sorted(pre_staged_inside)],
+                    governance_root,
+                )
+                operations.append(f"Restored {len(pre_staged_inside)} pre-staged entr(y/ies) within --paths from index snapshot")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+            detail = " ".join(str(getattr(exc, "stderr", "") or exc).split())[:300]
+            operations.append(f"UNSTAGE FAILED: {detail}")
+            return {"ok": False, "error": detail,
+                    "line": landing_text("unstage_failed", error=detail, root=shlex.quote(str(governance_root)), pathspec=manual_pathspec)}
+        staging["staged"] = False
+        return {"ok": True, "error": None, "line": landing_text("unstaged", pathspec=manual_pathspec)}
+
+    def _with_restore(result: dict[str, Any], restore: dict[str, Any]) -> dict[str, Any]:
+        """撤回结果并入拒绝结果: index_restored + 撤回行(失败时附只撤本次路径的手工出口, 字段 unstage_command)。"""
+        result["index_restored"] = bool(restore["ok"])
+        result["unstage_line"] = restore["line"]
+        if not restore["ok"]:
+            result["unstage_error"] = restore["error"]
+            result["unstage_command"] = f"git -C {shlex.quote(str(governance_root))} restore --staged -- {manual_pathspec}"
+        result["message"] = (str(result.get("message") or "") + "\n" + restore["line"]).lstrip("\n")
+        return result
+
+    def _restore_after_failure(result: dict[str, Any]) -> dict[str, Any]:
+        """git 异常 / 超时出口: 已暂存而未提交 = 撤回本次暂存(件②); 未暂存或已提交 = 原样返回。"""
+        if staging["staged"] and not staging["committed"]:
+            return _with_restore(result, _unstage_this_run(staging["saved_index_tree"]))
+        return result
 
     try:
         # 件④: 暂存前对索引拍快照(write-tree), 仅用于 mismatch 时精确还原 --paths 内的预暂存条目
         saved_index_tree = _git_readonly(["write-tree"], governance_root).strip() if pre_staged_inside else None
+        staging["saved_index_tree"] = saved_index_tree
         if selected_paths:
             # AIPOS-F79 件①: 只 stage 白名单 pathspec, 绝不整根 add -A
             # AIPOS-F79C 件④: -A 限定在 <paths> 内 — 目录 pathspec 内的删除也必须暂存(这不是整根 add -A)
             # AIPOS-F193 件①: 已 git rm 的删除(索引与工作树均无)不再 add(pathspec 不匹配), 删除已在索引, 由 --only 照常提交
             add_paths = [p for p in selected_paths if p not in add_skip]
             if add_paths:
-                subprocess.run(
-                    ["git", "add", "-A", "--"] + add_paths + exclude_specs,
-                    cwd=str(governance_root),
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
+                staging["staged"] = True
+                _git_index_write(["add", "-A", "--"] + add_paths + exclude_specs, governance_root)
             operations.append(f"Staged whitelist only (git add -A -- {' '.join(add_paths)} in {governance_root}; deletions within these paths included)"
                               + (f"; already-staged deletions not re-added: {', '.join(sorted(add_skip))}" if add_skip else ""))
         else:
             # AIPOS-R8B 大项A: Stage all changes in governance repo with pathspec限定到 governance_root
             # 防止 git add -A 越界 stage 其他项目(如 kiwiaiagency)的文件
             # AIPOS-F79: 整根模式仅限 lybra 自身工作区; 他项目一律 --paths
-            subprocess.run(
-                ["git", "add", "-A", "--", "."] + exclude_specs,
-                cwd=str(governance_root),
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+            staging["staged"] = True
+            _git_index_write(["add", "-A", "--", "."] + exclude_specs, governance_root)
             operations.append(f"Staged all governance changes (git add -A -- . in {governance_root})")
         
         # AIPOS-R8B 大项A②: 断言 staged 文件全部落在 governance_root 内,越界即 BLOCK
-        staged_files_result = subprocess.run(
-            ["git", "-c", "core.quotepath=false", "diff", "--cached", "--name-only", "--no-renames"],
-            cwd=str(governance_root),
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        staged_files = [f.strip() for f in staged_files_result.stdout.split('\n') if f.strip()]
+        staged_files = [f.strip() for f in _git_readonly(["diff", "--cached", "--name-only", "--no-renames"], governance_root).split('\n')
+                        if f.strip()]
 
         # 检查 staged 文件是否全部在 governance_root 内(相对路径不应以 ../ 开头)
         out_of_scope = []
@@ -2269,11 +2367,11 @@ def _governance_commit_impl(
 
         if out_of_scope:
             operations.append(f"SCOPE VIOLATION: {len(out_of_scope)} staged files outside governance_root")
-            _unstage_this_run(saved_index_tree)
+            restore = _unstage_this_run(saved_index_tree)
             out_of_scope_list = '\n  - '.join(out_of_scope[:10])  # 最多列10个
             if len(out_of_scope) > 10:
                 out_of_scope_list += f'\n  - ... and {len(out_of_scope) - 10} more'
-            return {
+            return _with_restore({
                 "verdict": Verdict.BLOCK,
                 "task_id": task_id,
                 "actor": actor,
@@ -2284,13 +2382,12 @@ def _governance_commit_impl(
                 "commit_hash": None,
                 "message": f"SCOPE VIOLATION: Staged files outside governance root (G3 铁律):\n  - {out_of_scope_list}",
                 "operations": operations,
-                "index_restored": True,
-            }
+            }, restore)
         
         # AIPOS-F79 件③: 暂存集必须与清单逐条相同, 否则拒提交并出声
         # AIPOS-F79C 件④: 同口径 --no-renames; mismatch 时清掉本次暂存(出声记录, 非静默)再拒, 不留半成品
         # AIPOS-F184 件①: 核对限本次 pathspec(提交是 --only 清单, 范围外他人此刻暂存的文件不进提交, 也不拦本卡落账;
-        # 预暂存于范围外的既有拒仍在上方 pre-staged 检查)
+        # AIPOS-F285 件①: 范围外预暂存不再拒, 原样留在索引)
         staged_set = set(_git_readonly(["diff", "--cached", "--name-only", "--no-renames", "--"] + stage_pathspec,
                                        governance_root).split("\n")) - {""}
         manifest_set = set(_manifest_repo_paths(manifest))
@@ -2298,8 +2395,8 @@ def _governance_commit_impl(
             extra = sorted(staged_set - manifest_set)
             missing_from_stage = sorted(manifest_set - staged_set)
             operations.append(f"MANIFEST MISMATCH before commit: +{len(extra)} unexpected staged, -{len(missing_from_stage)} missing")
-            _unstage_this_run(saved_index_tree)
-            return {
+            restore = _unstage_this_run(saved_index_tree)
+            return _with_restore({
                 "verdict": Verdict.BLOCK,
                 "task_id": task_id,
                 "actor": actor,
@@ -2318,8 +2415,7 @@ def _governance_commit_impl(
                 "selected_paths": selected_paths,
                 "commit_manifest": manifest,
                 "staged_files": sorted(staged_set),
-                "index_restored": True,
-            }
+            }, restore)
         
         # Commit with explicit identity
         # AIPOS-F79D 件③: commit 子进程非零退出(pre-commit hook 拒)也走 _unstage_this_run —— 还原预暂存快照,
@@ -2328,11 +2424,11 @@ def _governance_commit_impl(
         # 病根: 10-16 F173 loop 结束补落账在「范围外预暂存检查」与 commit 之间, 顾问并发 `git add governance/LEDGER.md`,
         # 旧的无 pathspec commit 把整个索引(含 LEDGER)提交进「N6 收账 AIPOS-F173」, 提交后核对 FAIL → 未推送, ahead 1。
         # --only: 只取这些路径的工作树内容建临时索引提交(钩子看到的暂存集 = 清单), 他人此刻暂存的文件原样留在索引里。
+        # AIPOS-F285 件④: 提交遇 index.lock 竞争(共享仓他项目正在写索引)按声明有界重试, 用尽 = 照常拒并撤回本次暂存
         only_pathspec = [f":(top,literal){p}" for p in sorted(manifest_set)]
         try:
-            subprocess.run(
+            _git_index_write(
                 [
-                    "git",
                     "-c", f"user.name={actor}",
                     "-c", f"user.email={actor}@lybra.local",
                     "commit",
@@ -2340,16 +2436,13 @@ def _governance_commit_impl(
                     "--only", "--",
                     *only_pathspec,
                 ],
-                cwd=str(governance_root),
-                check=True,
-                capture_output=True,
-                text=True,
+                governance_root,
                 env=_commit_hook_env(),
             )
         except subprocess.CalledProcessError as exc:
             hook_output = ((exc.stdout or "") + (exc.stderr or "")).strip()
             operations.append(f"Commit rejected by git/pre-commit hook (exit {exc.returncode})")
-            _unstage_this_run(saved_index_tree)
+            restore = _unstage_this_run(saved_index_tree)
             rejected_files = sorted(manifest_set)
             result = _result_base(committed=False, commit_hash=None)
             result["verdict"] = Verdict.BLOCK
@@ -2360,10 +2453,11 @@ def _governance_commit_impl(
                 f"hook 输出:\n{hook_output}\n\n"
                 f"可执行出口: 按 hook 输出修正文件后重跑同一命令(先 --dry-run: 同一四检模块, 拒因逐字相同)"
             )
-            result["index_restored"] = True
             result["rejected_files"] = rejected_files
             result["hook_output"] = hook_output
-            return result
+            return _with_restore(result, restore)
+        staging["committed"] = True
+        staging["staged"] = False  # --only 提交已把本次路径的索引项更新为提交内容, 无残留
         
         # Get commit hash
         commit_hash_result = subprocess.run(
@@ -2442,7 +2536,7 @@ def _governance_commit_impl(
         
     except subprocess.CalledProcessError as e:
         operations.append(f"Git operation failed: {e.stderr}")
-        return {
+        return _restore_after_failure({
             "verdict": Verdict.FAIL,
             "task_id": task_id,
             "actor": actor,
@@ -2455,10 +2549,10 @@ def _governance_commit_impl(
             "operations": operations,
             "selected_paths": selected_paths,
             "commit_manifest": manifest,
-        }
+        })
     except subprocess.TimeoutExpired as e:
         operations.append(f"Git operation timed out: {e.cmd}")
-        return {
+        return _restore_after_failure({
             "verdict": Verdict.FAIL,
             "task_id": task_id,
             "actor": actor,
@@ -2471,7 +2565,7 @@ def _governance_commit_impl(
             "operations": operations,
             "selected_paths": selected_paths,
             "commit_manifest": manifest,
-        }
+        })
 
 
 # AIPOS-316: Guard against direct invocation

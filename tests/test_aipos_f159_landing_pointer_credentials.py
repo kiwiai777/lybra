@@ -105,6 +105,18 @@ def _land_event(gov: Path, instance: str, role: str, reason: str) -> None:
 # 件① project 族 --confirm 写后落账
 # ===========================================================================
 
+
+def _block_landing_hook(home: Path) -> Path:
+    """AIPOS-F285: 落账失败的靶场触发改为「pre-commit 钩子拒」(范围外他人暂存自 F285 起原样保留、不再挡落账)。
+    返回开关文件: 在 = 钩子拒提交; 删 = 放行。"""
+    flag = home / ".git" / "f285-block-landing"
+    hook = home / ".git" / "hooks" / "pre-commit"
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text('#!/bin/sh\nif [ -f "%s" ]; then echo "blocked by F285 test hook" >&2; exit 1; fi\nexit 0\n' % flag, encoding="utf-8")
+    hook.chmod(0o755)
+    flag.write_text("", encoding="utf-8")
+    return flag
+
 def test_item1_set_paths_and_set_execution_confirm_land_dry_run_zero_write(rig):
     from tools.aipos_cli.enrollment import subagent_land_detail
 
@@ -142,29 +154,31 @@ def test_item1_set_paths_and_set_execution_confirm_land_dry_run_zero_write(rig):
 
 
 def test_item1_landing_failure_keeps_write_gives_remedy_and_remedy_lands(rig):
-    """落账被拒(他人已暂存、在本次范围外的文件 = 同一提交口 BLOCK): 写入照常生效, 出拒因 + 补账命令, 以声明退出码退出;
-    他人处理完暂存后按补账命令原样重跑即落账并推送。"""
+    """落账被拒(AIPOS-F285 起靶场改用 pre-commit 钩子拒; 范围外他人暂存原样保留、不再挡): 写入照常生效, 出拒因 + 补账命令,
+    本命令 add 的路径撤出暂存区(件②), 以声明退出码退出; 拒因解除后按补账命令原样重跑即落账并推送, 他人暂存始终不动。"""
     from tools.aipos_cli.governance_commit import post_write_landing_declaration
     from tools.aipos_cli.workspace_config import project_paths
 
     home, gov = rig["home"], rig["gov"]
     _write(home / "others-wip.md", "someone else's staged work\n")
     _git(home, "add", "others-wip.md")
+    flag = _block_landing_hook(home)
     rc, out, err = _cli("project", "set-paths", "--workspace-root", str(gov), "--key", "finalize_mode", "--value", "external",
                         "--actor", ADVISOR, "--confirm")
     _show(f"[件①·落账失败] rc={rc}\nstdout:\n{out}stderr:\n{err}")
     assert rc == post_write_landing_declaration()["landing_failed_exit_code"] == 3
     assert "⚠ 落账未完成(写入已生效, 勿重复执行写命令)" in err and "补账: lybra governance-commit --governance-root" in err
+    assert "暂存: 本命令 add 的路径已撤出暂存区(工作区改动保留)" in err
     assert project_paths(gov)["finalize_mode"] == "external", "落账失败不回滚写入"
-    assert "A  others-wip.md" in _git(home, "status", "--porcelain"), "他人暂存不动"
+    assert _git(home, "diff", "--cached", "--name-only") == "others-wip.md", "本命令暂存已撤回, 他人暂存不动"
     remedy = next(ln.split("补账: ", 1)[1] for ln in err.splitlines() if "补账: " in ln)
     assert remedy.endswith("--paths project.json")
-    _git(home, "reset", "-q", "--", "others-wip.md")
+    flag.unlink()
     argv = shlex.split(remedy)
     rc2, out2, err2 = _cli(*argv[1:])
     _show(f"[件①·按补账命令重跑] $ {remedy}\nrc={rc2}\n{(out2 + err2)[-800:]}")
     assert rc2 == 0
-    assert _git(home, "status", "--porcelain", "-uall") == "?? others-wip.md"
+    assert _git(home, "status", "--porcelain", "-uall") == "A  others-wip.md"
     assert _git(home, "rev-parse", "HEAD") == _git(rig["remote"], "rev-parse", "main")
 
 

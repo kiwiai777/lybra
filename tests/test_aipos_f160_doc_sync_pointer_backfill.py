@@ -131,6 +131,18 @@ def _pointerless_fixture(rig, monkeypatch) -> dict[str, str]:
     return {"log_dir": log_dir.relative_to(gov).as_posix(), "date": date, "clash": clash.relative_to(gov).as_posix()}
 
 
+
+def _block_landing_hook(home: Path) -> Path:
+    """AIPOS-F285: 落账失败的靶场触发改为「pre-commit 钩子拒」(范围外他人暂存自 F285 起原样保留、不再挡落账)。
+    返回开关文件: 在 = 钩子拒提交; 删 = 放行。"""
+    flag = home / ".git" / "f285-block-landing"
+    hook = home / ".git" / "hooks" / "pre-commit"
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text('#!/bin/sh\nif [ -f "%s" ]; then echo "blocked by F285 test hook" >&2; exit 1; fi\nexit 0\n' % flag, encoding="utf-8")
+    hook.chmod(0o755)
+    flag.write_text("", encoding="utf-8")
+    return flag
+
 def test_item3_backfill_preview_confirm_idempotent(rig, monkeypatch):
     home, gov = rig["home"], rig["gov"]
     fx = _pointerless_fixture(rig, monkeypatch)
@@ -194,19 +206,23 @@ def test_item3_backfill_preview_confirm_idempotent(rig, monkeypatch):
 
 
 def test_item3_landing_failure_keeps_pointers_and_gives_remedy(rig, monkeypatch):
-    """落账失败(他人暂存挡提交)= 指针照写(不回滚), 给补账命令并以声明退出码退出; 补账后重跑无可补。"""
+    """落账失败(AIPOS-F285 起靶场改用 pre-commit 钩子拒; 范围外他人暂存不再挡)= 指针照写(不回滚), 给补账命令并以声明退出码退出,
+    本命令 add 的路径撤出暂存区(他人暂存不动); 补账后重跑无可补。"""
     from tools.aipos_cli.governance_commit import post_write_landing_declaration
 
     home, gov = rig["home"], rig["gov"]
     _pointerless_fixture(rig, monkeypatch)
     _write(gov / "governance" / "notes-f160.md", "---\nstatus: active\n---\n# other's staged work\n")
     _git(home, "add", f"{PROJECT}/governance/notes-f160.md")
+    _block_landing_hook(home)
     rc, out, err = _cli("migrate", "decision-log-pointers", "--workspace-root", str(gov), "--actor", ADVISOR, "--confirm")
     _show(f"[件③·落账失败] rc={rc}\n{out}{err}")
     assert rc == post_write_landing_declaration()["landing_failed_exit_code"]
     assert "⚠ 落账未完成(写入已生效, 勿重复执行写命令)" in err and "补账: lybra governance-commit" in err
+    assert "暂存: 本命令 add 的路径已撤出暂存区(工作区改动保留)" in err
     written = [ln.split("wrote ", 1)[1] for ln in out.splitlines() if ln.strip().startswith("wrote ")]
     assert len(written) == 3 and all((gov / w).is_file() for w in written)
+    assert _git(home, "diff", "--cached", "--name-only") == f"{PROJECT}/governance/notes-f160.md", "本命令暂存已撤回, 他人暂存不动"
 
 
 def test_item3_declarations_and_single_implementations():
