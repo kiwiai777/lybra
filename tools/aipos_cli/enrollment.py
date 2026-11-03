@@ -1678,7 +1678,7 @@ def workstation_occupancy_declaration() -> dict[str, Any]:
 
     decl = (((load_schema("verbs").get("two_phase_protocol") or {}).get("roles_writers") or {}).get("workstation_occupancy"))
     texts = decl.get("texts") if isinstance(decl, dict) else None
-    keys = ("occupied", "exit_move", "exit_subagent", "subagent_reenroll", "harness_placeholder")
+    keys = ("occupied", "exit_move", "exit_subagent", "subagent_reenroll", "harness_placeholder", "project_placeholder")
     if not isinstance(texts, dict) or not all(isinstance(texts.get(k), str) and texts[k].strip() for k in keys):
         raise SchemaLoadError(f"verbs.schema.json two_phase_protocol.roles_writers.workstation_occupancy.texts {list(keys)} 未声明齐")
     return decl
@@ -1698,16 +1698,24 @@ def execution_texts() -> dict[str, str]:
 
 def subagent_reenroll_command(governance_root: str | Path, instance: str, *, role: str | None = None, harness: str | None = None) -> str:
     """把实例按子 agent 模式重登记的出口命令(件① 工位占用提示 / 件② set-execution 拒因 / roles list · project upgrade 待处理项同一渲染)。
-    角色缺 = executor; harness 不是顾问会话 kind = 占位(列出声明的顾问会话 kind)。"""
+    角色缺 = executor; harness 不是顾问会话 kind = 占位(列出声明的顾问会话 kind)。
+    AIPOS-F287 件③: 带 --project <项目>(治理根 project.json project, 唯一读取口 workspace_config.declared_project_id; 读不出 = 占位
+    texts.project_placeholder), 与向导 enroll-deliver 同一字段; 参数序锁向导同一渲染 onboarding.render_enroll_deliver_command。"""
     from tools.aipos_cli.distribution_sync import advisor_harness_kinds
+    from tools.aipos_cli.workspace_config import declared_project_id
 
     texts = workstation_occupancy_declaration()["texts"]
     kinds = advisor_harness_kinds()
     kind = str(harness or "").strip()
     if kind not in kinds:
         kind = str(texts["harness_placeholder"]).format(kinds="|".join(kinds))
+    root = _workspace_root_path(governance_root)
+    try:
+        project = declared_project_id(root)
+    except ValueError:  # 出口提示不因 project.json 读不出而失声: 给占位由使用者填(门侧 PROJECT_MISMATCH 仍一处判)
+        project = str(texts["project_placeholder"])
     return str(texts["subagent_reenroll"]).format(role=str(role or "").strip() or "executor", instance=instance, harness=kind,
-                                                 governance_root=str(_workspace_root_path(governance_root)))
+                                                 governance_root=str(root), project=project)
 
 
 def workstation_occupants(governance_root: str | Path, workspace: str | Path, *, instance: str | None = None,

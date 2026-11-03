@@ -35,12 +35,14 @@ PROJECT = "demo"
 # AIPOS-F280 件②: 向导第 3 步 grant sign 加 --project <项目>(门的显式目标项目)与 PROJECT_AMBIGUOUS 出口行, guide / guide_skip / guide_after_new 三份摘要随之更新(其余逐字不变)
 # AIPOS-F282 件②: 向导第 4 / 6–8 步 enroll-deliver 加 --project <项目> 与 PROJECT_AMBIGUOUS 出口行, 同三份摘要随之更新(其余逐字不变;
 # 裸日期归一化与 inbox 三份摘要以 AIPOS-F283 为准, 合并 main 时去掉本卡重复的那份归一化)
+# AIPOS-F287 件②: 向导落账出口行「落账遇暂存」改为 F285 口径(范围外暂存保留不拒, 仅本次路径内暂存冲突时拒并给出口), guide / guide_skip /
+# guide_after_new 三份摘要随之更新(F277_RECORD=1 前后输出逐行比对: 差异仅该出口行)
 ZH_DIGESTS = {
     "setup_check": "074cb9af4537dd71b6a61ec83dddd776dc543f130b56490200d19ebf5a72aff4",
-    "guide": "5607b089cd469358716b263ee8d7f7d300c64ff21aa39784362b81a0cbf44e69",
-    "guide_skip": "335285ca2c778bc884f70c36580a5dfc5d7970ab99ddd7b7f38b91250403b01a",
+    "guide": "356b24868799df99fd30adb2d606047fc5cf173c969b25cd823ca66cc18477b5",
+    "guide_skip": "f8095323fc2c77b32993f7e9ee239a79e478cf395c4cda1f81b1c54f0db9217b",
     "project_new": "49def277f1cc2fb99cdaa93bdc4874a8e8a991e603a54ff682a8e4eb07e76d79",
-    "guide_after_new": "8dfa37b02245f0f6a3d0a4bf2aa5935db5f6e510d589de44f43a29c028d94397",
+    "guide_after_new": "bf54f1b749534bb6727336e1359f4a915659ab21590d313dae9aaac1d34d8ba4",
     "onboarding_check": "8f292a54605a675404291be970436a75ba6bfd07eeaae2199202a7eeff6797a1",
     "serve_install": "ae07452642661b7a10b456b5a4953d4a120c3ccb80e39b05a77842e3e945e899",
     "serve_uninstall": "5bfe047723acb8fb7fe96915db3e37af397a8132c8fbbf4957c705411dc24792",
@@ -320,14 +322,19 @@ def test_bilingual_blocks_overlays_and_glossary():
     _show("[件④ 双语块] " + json.dumps(report, ensure_ascii=False) + "\n[件④ 覆盖层] " + json.dumps(overlays, ensure_ascii=False))
     assert not any(overlays.values()), overlays
     # 术语表: 中英对照非空; 英文译文(双语块 en + 覆盖层 en)不出现 avoid 列的旧译
-    terms = config["owner_texts"]["glossary"]["terms"]
+    from glossary_terms import terms as glossary_terms
+
+    terms = glossary_terms()
     assert len(terms) >= 20 and all(t["zh"] and t["en"] for t in terms)
     english = [i18n._leaf(b["en"], p) for b in blocks.values() for p in i18n._key_paths(b["en"])]
     for decl in (inbox_declaration(), recommend_declaration(), status):
         english += list(i18n._string_leaves(decl["translations"]["en"]).values())
     english += [line for line in (REPO_ROOT / "web" / "board" / "static" / "i18n.js").read_text(encoding="utf-8")
                 .split("\n  en: {", 1)[1].splitlines() if "'login." in line]
-    hits = [(t["en"], bad, text[:80]) for t in terms for bad in t["avoid"] for text in english if bad.lower() in text.lower()]
+    # AIPOS-F287: 命中判定与仓根文档全文守卫同一实现(tests/glossary_terms.avoid_hits: 子串匹配 + 声明的 avoid_except 短语)
+    from glossary_terms import avoid_hits
+
+    hits = [(h["avoid"], text[:80]) for text in english for h in avoid_hits(text, terms)]
     assert not hits, hits
     # 卡号正则占位: 向导缺省语言占位与 card_policy 声明逐字一致(门侧占位拒判同读)
     card_policy = (load_schema("verbs", code_repo_schema_root())["verbs"].get("lybra_project_card_policy") or {})
