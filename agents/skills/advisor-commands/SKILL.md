@@ -351,6 +351,11 @@ lybra project cleanup-worktrees --workspace-root <治理根>             # 预�
 lybra project cleanup-worktrees --workspace-root <治理根> --confirm   # 删判为「删」的(分支保留), 其余不动
 ```
 脏树(常见: 子 agent 留下的未跟踪草稿)= 看清内容后自己处理(提交到卡分支或删文件), 再跑一次预演。
+认领超时残留(AIPOS-F285): 认领中断留下的树在重认领时自动处理 —— 干净 = 幂等复用, 半建 = 删后重建, 脏 / 已提交 = 拒并给出口; 要手动只清一张卡, 同一命令带 `--task-id <卡ID>`(先预演, 再 `--confirm`):
+```bash
+lybra project cleanup-worktrees --workspace-root <治理根> --task-id <卡ID>           # 预演(零写入): 只列这张卡的树
+lybra project cleanup-worktrees --workspace-root <治理根> --task-id <卡ID> --confirm  # 判为「删」的删掉(分支保留)
+```
 
 #### Owner 待决: `lybra loop note` / `lybra owner inbox` / `lybra owner decide`(AIPOS-F168 / F170)
 **何时用**: loop status 给 `owner_needed` 时(怎么停见顾问章程「持续推进守则」)。所有项目需 Owner 定的事集中在一个收件箱, Owner 在那里看、定;
@@ -398,6 +403,10 @@ lybra owner decide --items <事项ID>,<事项ID> --choice freeze_legacy --relaye
    之后部署已更新的, 收件箱该卡新事项多一行「提示: … 可选重新派审」。
    blocked 卡的裁决可选 `withdraw`(经既有撤卡口, 记录带裁决引用)或 `freeze_legacy`(经既有存量冻结口, 清单条目带裁决引用)。之后对应卡
    `lybra loop status` 给 `advisor_fix(owner_ruled)`, detail 显示裁决、转达人与 Owner 原话, 按 hint 续跑; `lybra next --task-id` 附同一裁决行(自定义选项显示标签)。
+   **阻塞卡重开用顾问自身实例**(AIPOS-F282): 交回 `outcome: blocked` 的卡由本项目顾问以自己的实例重开 —— 收件箱选项「补齐前置后重开(顾问执行)」与 `loop status` 出口给同一条命令, `reopened_by` 记顾问实例, Owner 只需口头定夺:
+```bash
+lybra queue reopen --task-id <卡ID> --actor <你的顾问实例> --reason "前置已补齐" --workspace-root <治理根>
+```
 4. **项目暂停 / 恢复**(Owner 说「某项目先停」; 暂停项目的事项不再刷屏收件箱, 其余行为不变; 先预演, 再确认, 自动落账; 恢复 = `--status active`):
 ```bash
 lybra project set-meta <项目名> --home-root <home根> --status paused --dry-run
@@ -835,7 +844,7 @@ lybra governance-commit --governance-root <治理根> --actor <你的顾问实�
 ```
 **规则**:
 - `--paths` 相对治理根(文件或目录,可重复);越出治理根/指向他项目/`.`(整根)一律拒(fail-closed,退出码 1,`rejected_paths` 列出)。
-- 预暂存文件:在 `--paths` 内 = 纳入清单;在 `--paths` 外 = 拒并列出(`pre_staged_outside`)。
+- 预暂存文件(AIPOS-F285):在 `--paths` 内且与工作区一致 = 纳入清单;本次范围外 = 原样保留不混入(多项目共仓不互锁);本次路径内暂存版与工作区不一致 = 拒并列出(`pre_staged_overlap`), 处理该路径后重跑。自动落账失败只撤回本次自己暂存的路径并给重试命令。
 - **你的项目一律 `--paths`**;无 `--paths` 的整根提交(`git add -A -- .`)是产品为其自身治理工作区保留的形态(实现见 governance_commit)——无 `--paths` 的 `--dry-run` 会列出整根范围并 WARNING 标出未跟踪文件数。
 - AIPOS-R6M 文件级护栏(frontmatter/decision_log 只增/record_type)照旧对选定文件生效;禁用「清理/忽略/搬走历史材料」规避,不加 .gitignore。
 - 退出码:0=PASS(含无待收 no-op 与 dry-run);1=BLOCK/FAIL;2=参数用法错误。参数与退出码声明在 `schema/verbs.schema.json` `lybra_governance_commit`。
