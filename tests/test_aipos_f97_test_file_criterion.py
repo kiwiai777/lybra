@@ -305,6 +305,7 @@ NON_TEST_UNDER_TESTS = {
     "conftest.py": "AIPOS-F116 件② pytest 会话层 HOME 隔离(各测试目录, 非测试)",
     "fixture_procs.py": "AIPOS-F265 件① 夹具子进程(看板 / 门 / serve)共享助手: 新进程组 + 整组回收(被各测试导入, 非测试)",
     "glossary_terms.py": "AIPOS-F287 件① 术语表测试侧唯一读取口与 avoid 命中判定(被 F262 / F277 / F287 夹具导入, 非测试)",
+    "relay_probe_fixtures.py": "AIPOS-F290 relay 探针本机假服务端(企业微信长连接 / iLink / 附件下载; 被 test_aipos_f290_relay_* 导入, 非测试)",
 }
 CODE_SUFFIXES = (".py", ".sh", ".ts", ".js", ".cjs", ".mjs")
 

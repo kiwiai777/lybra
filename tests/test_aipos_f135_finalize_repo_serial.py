@@ -422,7 +422,9 @@ def test_invariant_flock_and_no_deploy_single_reader():
     flock = _scan(REPO_ROOT, lambda n: isinstance(n, ast.Attribute) and n.attr == "flock"
                   and isinstance(n.value, ast.Name) and n.value.id == "fcntl")
     _show(f"[不变量·fcntl.flock] {flock}")
-    assert flock == [("tools/aipos_cli/workspace_config.py", "exclusive_flock")], flock
+    # AIPOS-F290: relay/ (separate subsystem, must not import gate internals) has exactly one flock call site of its own:
+    # the per-channel single-instance lock (relay/store.py ChannelLock.acquire). Gate code keeps the single exclusive_flock.
+    assert flock == [("relay/store.py", "acquire"), ("tools/aipos_cli/workspace_config.py", "exclusive_flock")], flock
     readers = _scan(REPO_ROOT, lambda n: isinstance(n, ast.Constant) and n.value == "no_deploy")
     _show(f"[不变量·no_deploy 字面] {readers}")
     # 解析 = project_repos(唯一读取口); 写 = set_project_repos(唯一写入口) 与其 CLI 薄壳; 判定 = deploy_mechanism_present(唯一消费方)
