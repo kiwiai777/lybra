@@ -91,7 +91,8 @@ def _validate_enrolled(root: Path) -> None:
         from tools.aipos_cli.onboarding import render_enroll_deliver_command
 
         deliver = render_enroll_deliver_command(["lybra", "roles"], role="<角色>", instance="<实例>", governance_root="<治理根>",
-                                                workspace=shlex.quote(str(root)), extra=["--owner-authorization-ref", "<授权引用>"],
+                                                workspace=shlex.quote(str(root)),
+                                                extra=["--project", "<项目>", "--owner-authorization-ref", "<授权引用>"],  # AIPOS-F287 件③
                                                 phase="--dry-run")
         raise ValueError(
             f"harness root '{root}' 有 .lybra/ 但缺少 role 文件 — 未完成 enroll, 拒绝写入。\n"

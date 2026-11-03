@@ -259,7 +259,8 @@ def test_item2_reenroll_exit_is_enroll_deliver_without_code():
     _show(f"[件②·重签出口] {TOKEN_REENROLL_EXIT}")
     assert "--code" not in TOKEN_REENROLL_EXIT and " enroll-deliver " in TOKEN_REENROLL_EXIT
     expected = render_enroll_deliver_command(["lybra", "roles"], role="<角色>", instance="<实例>", governance_root="<治理根>",
-                                             workspace="<工位根>", extra=["--owner-authorization-ref", "<授权引用>"], phase="--dry-run")
+                                             workspace="<工位根>", extra=["--project", "<项目>", "--owner-authorization-ref", "<授权引用>"],
+                                             phase="--dry-run")  # AIPOS-F287 件③: 带 --project(门的显式目标项目)
     assert TOKEN_REENROLL_EXIT.startswith(expected), "出口形 = 向导同一渲染(签码 + 兑换一体)"
     argv = shlex.split(expected.replace("<", "x").replace(">", "x"))
     from tools.aipos_cli.aipos_cli import build_parser

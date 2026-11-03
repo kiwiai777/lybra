@@ -1052,8 +1052,8 @@
             "retired_reason": "string — 退役原因(如 superseded by re-enrollment)"
           },
           "resolution": "取值选择器分阶段 agent_instance 匹配 → role 匹配; 每阶段排除 retired 条目与空 token; 首个有可用条目的阶段取第一条。无命中 = 可落下一层(env); 命中的全部 retired = fail-closed(禁落 env 顶替), 拒因只带指纹并携带 reenroll_exit; 登录/鉴权侧按指纹命中 retired 条目 = 拒。",
-          "reenroll_exit": "lybra roles enroll-deliver --role <角色> --instance <实例> --governance-root <治理根> --workspace <工位根> --owner-authorization-ref <授权引用> --dry-run",
-          "reenroll_exit_description": "AIPOS-F160 件②(gap #145): 重签出口 = 签码 + 兑换一体(enroll-deliver, AIPOS-F151; 在治理根所在机执行, 码只在本进程内, 不进命令行 / 不落盘; 跨机工位加 --ssh), 预演后同一命令换 --confirm。形 = 向导同一渲染 onboarding.render_enroll_deliver_command(夹具 test_aipos_f160 锁一致); 原 roles enroll 带码参数的出口(码进命令行)退役。",
+          "reenroll_exit": "lybra roles enroll-deliver --role <角色> --instance <实例> --governance-root <治理根> --workspace <工位根> --project <项目> --owner-authorization-ref <授权引用> --dry-run",
+          "reenroll_exit_description": "AIPOS-F160 件②(gap #145): 重签出口 = 签码 + 兑换一体(enroll-deliver, AIPOS-F151; 在治理根所在机执行, 码只在本进程内, 不进命令行 / 不落盘; 跨机工位加 --ssh), 预演后同一命令换 --confirm。形 = 向导同一渲染 onboarding.render_enroll_deliver_command(夹具 test_aipos_f160 锁一致); 原 roles enroll 带码参数的出口(码进命令行)退役。AIPOS-F287 件③: 带 --project <项目>(门调用的显式目标项目, 与向导第 4 / 6–8 步 enroll-deliver 同一字段; Owner 多项目无缺省凭据也能签), 形仍锁向导同一渲染(夹具 test_aipos_f287_doc_glossary_guard / test_aipos_f160)。",
           "single_implementation": "tools/aipos_cli/token_resolver.py::select_token_entry(取值) / is_token_entry_retired(退役判据); bash 调用方经 python3 -m tools.aipos_cli.token_resolver 取值(只输出 token 到 stdout 供命令替换)"
         }
       },
@@ -2086,7 +2086,17 @@
   "owner_texts": {
     "description": "AIPOS-F277(产品化 P4 第 1 期, 方案 governance/research/2026-11-02-p4-bilingual-plan.md): Owner 直接看到的命令出声点的双语文案块(每块 texts = {zh, en}, 结构标准与唯一读取器 = AIPOS-F276 i18n.texts / check_block; 各语言同一键的占位集相等, i18n.surface_texts 核)。代码只经读取器取用(i18n.block_localize 渲染为双语渲染值 Localized: str 本身 = 缺省语言, 事项 ID / 哈希 / JSON / 看板行为不变; CLI 出声按 i18n.resolve_language 取用户语言)。setup check / 门常驻的文案在各自声明节 setup_check.texts / gate_resident.texts; 本节放没有专属声明节的出声点。命令名、参数、路径、码值不译。只追加: 新出声点 = 加一块, 缺 en 键 = 守卫失败。",
     "glossary": {
-      "description": "中英术语对照(英文译文用词以此为准, 与 README / QUICKSTART 英文版一致; 守卫 tests/test_aipos_f277_owner_bilingual.py 核英文块不出现 avoid 列出的旧译)",
+      "description": "中英术语对照(英文译文用词以此为准, 与 README / QUICKSTART 英文版一致; 守卫 tests/test_aipos_f277_owner_bilingual.py 核英文块不出现 avoid 列出的旧译)。AIPOS-F287: 读取与命中判定唯一实现 tests/glossary_terms.py(avoid_hits; F277 英文块守卫 / F262 第 4 步标题 / F287 仓根文档全文守卫 tests/test_aipos_f287_doc_glossary_guard.py 同读)——不分大小写的子串匹配; 每条可选 avoid_zh(中文旧译, 缺省 = 无, 核 guarded_docs.zh)与 avoid_except(avoid 词在该短语里是另一个意思, 不算命中; 每项 {phrase, reason}, 缺省 = 无)。guarded_docs = 全文术语守卫扫描的仓根文档(en 核 avoid, zh 核 avoid_zh); 现存命中登记 tests/f287_doc_glossary_baseline.jsonl(只减不增)。术语再改只改本节。键与清单只追加。",
+      "guarded_docs": {
+        "en": [
+          "README.md",
+          "QUICKSTART.md"
+        ],
+        "zh": [
+          "README.zh-CN.md",
+          "QUICKSTART.zh-CN.md"
+        ]
+      },
       "terms": [
         {
           "zh": "门",
@@ -2100,6 +2110,12 @@
           "en": "card",
           "avoid": [
             "ticket"
+          ],
+          "avoid_except": [
+            {
+              "phrase": "one-time ticket",
+              "reason": "lybra board open 的一次性登录票据(CLI 帮助同名), 与「卡」不同义"
+            }
           ]
         },
         {
@@ -2442,8 +2458,8 @@
           "landing": {
             "git": "治理根须在治理仓(git)内: lybra home git-init --home-root <home 根>(一次性, 不配远端), Owner 按其输出配 origin 并首推后重跑本条",
             "push": "已提交未推送: 按输出原因处理(无 origin = Owner 配远端; 远端冲突按输出出口)后重跑同一条",
-            "staged_key": "BLOCK(staged 在 --paths 外)",
-            "staged": "治理仓有他人已暂存的文件, 本命令不动; 请其所有者先提交或取消暂存后重跑"
+            "staged_key": "本次落账路径与他人暂存重叠",
+            "staged": "他项目 / 他人在本次路径之外的暂存原样保留(不混入本次提交, 不拒); 只在本次落账路径内有他人暂存、且其版本与工作区不同时拒(AIPOS-F285): 等对方落账完成后重跑本条; 确认是本命令此前留下的暂存残留 = 照输出出口只撤这些路径的暂存(git restore --staged, 工作区保留)后重跑"
           },
           "step1": {
             "not_git": "# 治理仓未就绪: home 根 {home} 不在任何 git 仓内, 本步落账与之后每张卡的落账都会 fail-closed。先一次性初始化(本地 git init, 不配远端、不推送), Owner 按其输出配 origin 并首推:",
@@ -2790,8 +2806,8 @@
           "landing": {
             "git": "The governance root must be inside a governance repo (git): lybra home git-init --home-root <home root> (one-time, no remote configured); the Owner configures origin and makes the first push per its output, then rerun this command",
             "push": "Committed but not pushed: handle the reason in the output (no origin = the Owner configures a remote; remote conflict = follow the exit in the output), then rerun the same command",
-            "staged_key": "BLOCK (staged outside --paths)",
-            "staged": "The governance repo has files staged by someone else, which this command leaves alone; ask their owner to commit or unstage them, then rerun"
+            "staged_key": "overlap with changes someone else has staged",
+            "staged": "Staging by other projects or people outside this landing's paths is left as it is (not committed, not a refusal); only when someone else's staging inside this landing's paths differs from the working tree is the commit refused (AIPOS-F285): wait for the other landing to finish, then rerun this command; if you are sure it is staging left behind by an earlier run of this command, unstage only those paths per the exit in the output (git restore --staged, working tree kept), then rerun"
           },
           "step1": {
             "not_git": "# Governance repo not ready: home root {home} is not inside any git repo, so landing this step and every later card will fail closed. Initialize it once first (local git init, no remote, no push); the Owner configures origin and makes the first push per its output:",

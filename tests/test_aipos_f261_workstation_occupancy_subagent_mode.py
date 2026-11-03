@@ -70,9 +70,12 @@ def test_item1_enroll_deliver_preview_and_confirm_name_the_registered_occupant(g
     assert rc == 0 and f"roles enroll-deliver executor: {PREVIEW}" in out, out + err
     assert f"⚠ {occupied}" in out
     assert f"⚠ {texts['exit_move'].format(instance=OLD)}" in out
-    reenroll = (f"lybra roles enroll-deliver --role executor --instance {OLD} --executor-mode subagent --harness <顾问会话 kind: "
-                f"claude-code|codex> --governance-root {r.project.resolve()} --workspace {r.project.resolve()} "
-                "--owner-authorization-ref <Owner 授权引用> --dry-run")
+    # AIPOS-F287 件③: 参数序 = 向导同一渲染(onboarding.render_enroll_deliver_command), 带 --project <治理根 project.json project>
+    from tools.aipos_cli.workspace_config import declared_project_id
+
+    reenroll = (f"lybra roles enroll-deliver --role executor --instance {OLD} --governance-root {r.project.resolve()} "
+                f"--workspace {r.project.resolve()} --executor-mode subagent --harness <顾问会话 kind: claude-code|codex> "
+                f"--project {declared_project_id(r.project)} --owner-authorization-ref <Owner 授权引用> --dry-run")
     assert f"若 {OLD} 是子 agent 执行者: 先按子 agent 模式重登记 {OLD}: {reenroll}" in out
     assert not (d / ".lybra").exists(), "预演零写入"
     rc, out, err = _deliver(r, NEW, d, "--json")
@@ -157,8 +160,9 @@ def test_item2_set_execution_refuses_workstation_mode_subagent_executor(tmp_path
     _show(f"[件②·工位模式实例作 --subagent-executor 预演] rc={rc}\n{out}{err}")
     assert rc == 1 and MISMATCH in err and (gov / "project.json").read_text(encoding="utf-8") == before
     assert f"subagent_executor={WS_EXEC}: 最新登记不是子 agent 模式(工位模式登记于 {ws}" in err
-    assert (f"lybra roles enroll-deliver --role executor --instance {WS_EXEC} --executor-mode subagent --harness <顾问会话 kind: "
-            f"claude-code|codex> --governance-root {gov.resolve()} --workspace {gov.resolve()}") in err
+    # AIPOS-F287 件③: 参数序 = 向导同一渲染(onboarding.render_enroll_deliver_command), 带 --project <治理根 project.json project>
+    assert (f"lybra roles enroll-deliver --role executor --instance {WS_EXEC} --governance-root {gov.resolve()} --workspace {gov.resolve()} "
+            f"--executor-mode subagent --harness <顾问会话 kind: claude-code|codex> --project lybra --owner-authorization-ref") in err
     rc, out, err = _cli("project", "set-execution", "--workspace-root", str(gov), "--subagent-executor", SUB, "--auditor", AUDITOR)
     _show(f"[件②·子 agent 模式实例预演] rc={rc}\n{out}{err}")
     assert rc == 0 and "预览" in out and f"execution.subagent_executor = '{SUB}'" in out
