@@ -607,6 +607,7 @@ class LoopRunRecorder:
 
         record = {k: entry.get(k) for k in ("attempt", "limit", "codes", "card", "step", "harness", "instance", "pid", "outcome")}
         record["codes"] = [str(c) for c in (record.get("codes") or [])]
+        record["families"] = {str(k): str(v) for k, v in (entry.get("families") or {}).items()}  # AIPOS-F288 件①: 各码所属族名
         record["gate"] = redact_progress(str(entry.get("gate") or ""))[:600]
         record["fix"] = [redact_progress(str(s)) for s in (entry.get("fix") or [])]
         record["return_fields"] = [str(f) for f in (entry.get("return_fields") or [])]
@@ -2387,9 +2388,47 @@ def _check_routine_rejections(routine: Any) -> None:
         texts = routine.get("fixer_texts")
         if not isinstance(texts, dict) or any(not isinstance(texts.get(k), str) or not texts[k].strip() for k in ("launchable", "subagent")):
             raise SchemaLoadError(f"{where}.fixer_texts 须含 launchable / subagent 文案")
+    _check_routine_families(routine, where)
     probe = routine.get("landing_probe")  # AIPOS-F195 件③: 可选; 在则 end_reasons 为非空列表(码读 transitions N6.landing.slot_code_files)
     if probe is not None and (not isinstance(probe, dict) or not isinstance(probe.get("end_reasons"), list) or not probe["end_reasons"]):
         raise SchemaLoadError(f"{where}.landing_probe 须含非空 end_reasons 列表")
+
+
+def _check_routine_families(routine: dict[str, Any], where: str) -> None:
+    """AIPOS-F288 件①: 同族声明形校验(fail-closed; 可选——缺 families = 全按码计): 族名为小写标识符; 每族 codes 为非空列表且各码
+    ∈ codes; 一码至多属一族; 有族则 family_texts 须为合格双语块(i18n.check_block / placeholder_problems), 各语言 names 键 = 族名集,
+    note / status 为非空串。"""
+    from tools.aipos_cli import i18n
+    from tools.schema_loader import SchemaLoadError
+
+    families = routine.get("families")
+    if families is None:
+        return
+    if not isinstance(families, dict):
+        raise SchemaLoadError(f"{where}.families 须为对象(族名 → {{codes, why}})")
+    owner: dict[str, str] = {}
+    names = [n for n in families if n != "description"]
+    for name in names:
+        spec = families[name]
+        codes = spec.get("codes") if isinstance(spec, dict) else None
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", str(name)) or not isinstance(codes, list) or not codes:
+            raise SchemaLoadError(f"{where}.families.{name}: 族名须为小写标识符且 codes 为非空列表")
+        for code in codes:
+            if code not in routine["codes"]:
+                raise SchemaLoadError(f"{where}.families.{name}.codes: {code!r} 不在 routine_rejections.codes(只给例行码分族)")
+            if code in owner:
+                raise SchemaLoadError(f"{where}.families: {code} 同时属 {owner[code]} 与 {name}(一码至多属一族)")
+            owner[str(code)] = str(name)
+    if not names:
+        return
+    block = i18n.check_block(routine.get("family_texts"), where=f"{where}.family_texts")
+    problems = i18n.placeholder_problems(block)
+    if problems:
+        raise SchemaLoadError(f"{where}.family_texts 各语言占位不一致: {problems}")
+    for lang, table in block.items():
+        if sorted((table.get("names") or {}) if isinstance(table.get("names"), dict) else []) != sorted(names) \
+                or any(not str(table.get(k) or "").strip() for k in ("note", "status")):
+            raise SchemaLoadError(f"{where}.family_texts.{lang}: names 键须恰为族名 {sorted(names)}, note / status 须为非空串")
 
 
 def next_action(view: dict[str, Any], rules: dict[str, Any], *, governance_root: Path,
@@ -2661,18 +2700,82 @@ def run_code_history(meta: dict[str, Any]) -> list[list[str] | None]:
     return [*relaunch_code_history(meta), [str(c) for c in (meta.get("end_codes") or [])] if meta.get("status") == "ended" else None]
 
 
-def routine_streaks(codes: list[str], earlier_end_codes: list[Any] | None) -> dict[str, int]:
-    """AIPOS-F150 件② / AIPOS-F275 件②: 例行门拒连败计数唯一实现——每码 = 本次(1)+ 其前连续各次(旧→新取尾段, 未结束 = None 断)含该码的次数。
-    loop status(_routine_action)与 loop 交回步例行拒自动重拉(loop_driver._routine_relaunch)同读。"""
-    streaks: dict[str, int] = {}
+def routine_families(routine: dict[str, Any]) -> dict[str, str]:
+    """AIPOS-F288 件①: 例行码 → 所属族名(routine_rejections.families; 声明形已由 _check_routine_rejections 校验)。不属任何族的码不在结果里。"""
+    out: dict[str, str] = {}
+    for name, spec in (routine.get("families") or {}).items():
+        if name == "description" or not isinstance(spec, dict):
+            continue
+        for code in spec.get("codes") or []:
+            out[str(code)] = str(name)
+    return out
+
+
+def routine_streaks(codes: list[str], earlier_end_codes: list[Any] | None,
+                           routine: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+    """AIPOS-F150 件② / AIPOS-F275 件② / AIPOS-F288 件①: 例行门拒连败计数唯一实现——每码 = 本次(1)+ 其前连续各次(旧→新取尾段,
+    未结束 = None 断)含「本族任一码」的次数; 不属任何族的码 = 含该码本身(按码计, F288 前行为)。族读 routine_rejections.families
+    (routine 缺省 = 现行声明)。返回 {码: {streak, family(族名或 None), merged(本次连败实际出现过的本族码, 声明序)}}。
+    loop status(_routine_action)与 loop 例行拒自动重拉(loop_driver._routine_relaunch)同读。"""
+    rules = routine if routine is not None else status_contract()["next_action"]["routine_rejections"]
+    family_of = routine_families(rules)
+    members: dict[str, list[str]] = {}
+    for code, name in family_of.items():
+        members.setdefault(name, []).append(code)
+    out: dict[str, dict[str, Any]] = {}
     for code in codes:
+        family = family_of.get(code)
+        group = members[family] if family else [code]
+        seen = {code}
         streak = 1
         for earlier in reversed(earlier_end_codes or []):
-            if earlier is None or code not in earlier:
+            hit = [c for c in group if earlier is not None and c in earlier]
+            if not hit:
                 break
+            seen.update(hit)
             streak += 1
-        streaks[code] = streak
-    return streaks
+        out[code] = {"streak": streak, "family": family, "merged": [c for c in group if c in seen]}
+    return out
+
+
+
+def routine_family_note(routine: dict[str, Any], detail: dict[str, Any]) -> str:
+    """AIPOS-F288 件①: 连败说明后缀——族内确有他码并入本次计数(merged 多于 1 码)= family_texts.note 按用户语言(i18n.voice); 否则 ""。"""
+    if not detail.get("family") or len(detail.get("merged") or []) < 2:
+        return ""
+    from tools.aipos_cli import i18n
+
+    where = f"verbs.{STATUS_VERB}.next_action.routine_rejections.family_texts"
+    block = routine["family_texts"]
+    values = {"codes": " / ".join(detail["merged"])}
+    rendered = i18n.Localized({lang: i18n.fill(i18n.texts(block, lang, where=where)["note"],
+                                               {**values, "family": i18n.texts(block, lang, where=where)["names"][detail["family"]]},
+                                               where=where, lang=lang)
+                               for lang in i18n.supported_languages()})
+    return i18n.voice(rendered, where=where)
+
+
+def routine_family_status_lines(routine: dict[str, Any], details: dict[str, dict[str, Any]], limit: int) -> list[str]:
+    """AIPOS-F288 件①: loop status 单列的同族连败行(每个出现的族一行, family_texts.status 按用户语言); 无族码 = []。"""
+    from tools.aipos_cli import i18n
+
+    where = f"verbs.{STATUS_VERB}.next_action.routine_rejections.family_texts"
+    lines: list[str] = []
+    done: set[str] = set()
+    for detail in details.values():
+        family = detail.get("family")
+        if not family or family in done:
+            continue
+        done.add(family)
+        group = [c for c, f in routine_families(routine).items() if f == family]
+        streak = max(d["streak"] for d in details.values() if d.get("family") == family)
+        rendered = i18n.Localized({lang: i18n.fill(i18n.texts(routine["family_texts"], lang, where=where)["status"],
+                                                   {"family": i18n.texts(routine["family_texts"], lang, where=where)["names"][family],
+                                                    "codes": " / ".join(group), "streak": streak, "limit": limit},
+                                                   where=where, lang=lang)
+                                   for lang in i18n.supported_languages()})
+        lines.append(i18n.voice(rendered, where=where))
+    return lines
 
 
 def _routine_action(view: dict[str, Any], rules: dict[str, Any], governance_root: Path, reason: str, message: str,
@@ -2688,13 +2791,17 @@ def _routine_action(view: dict[str, Any], rules: dict[str, Any], governance_root
     task_id = str(view.get("task_id") or "")
     fill = {"task_id": task_id, "governance_root": str(governance_root)}
     limit = int(routine["repeat_owner_needed"])
-    streaks = routine_streaks(codes, earlier_end_codes)
+    details = routine_streaks(codes, earlier_end_codes, routine)  # AIPOS-F288 件①: 同族码合并计数
+    streaks = {c: d["streak"] for c, d in details.items()}
     worst = max(codes, key=lambda c: streaks[c])
-    tally = ", ".join(f"{c} 第 {streaks[c]}/{limit} 次" for c in codes)
+    tally = ", ".join(f"{c} 第 {streaks[c]}/{limit} 次{routine_family_note(routine, details[c])}" for c in codes)
+    family_lines = routine_family_status_lines(routine, details, limit)
+    extra = {"family_lines": family_lines} if family_lines else {}
     if streaks[worst] >= limit:
         return {"action": "owner_needed", "reason": "routine_fix_exhausted", "codes": codes,
-                "detail": f"{rules['owner_reasons']['routine_fix_exhausted']}(本卡 {worst} 连续 {streaks[worst]} 次; 本次 {reason}: {message})",
-                "hint": str(rules["investigate_hint"]).format(**fill)}
+                "detail": f"{rules['owner_reasons']['routine_fix_exhausted']}(本卡 {worst} 连续 {streaks[worst]} 次"
+                          f"{routine_family_note(routine, details[worst])}; 本次 {reason}: {message})",
+                "hint": str(rules["investigate_hint"]).format(**fill), **extra}
     try:
         values = _routine_fill(view, routine, governance_root)
     except _RoutineFixUnrenderable as exc:
@@ -2706,7 +2813,7 @@ def _routine_action(view: dict[str, Any], rules: dict[str, Any], governance_root
     hint = _routine_hint(fix, resume)
     return {"action": "advisor_fix", "reason": reason, "codes": codes, "fix": fix, "resume": resume,
             "detail": f"例行门拒 {tally}: 修法固定, 顾问按下一条自处理, 不问 Owner" + (f" — {message}" if message else ""),
-            "hint": hint}
+            "hint": hint, **extra}
 
 
 def routine_fixer(routine: dict[str, Any], code: str) -> str:
@@ -3175,6 +3282,8 @@ def render_status(report: dict[str, Any], decl_states: dict[str, Any]) -> str:
                                               pid=r.get("pid"), outcome=r.get("outcome"), at=r.get("at"), step_where=where))
         if v.get("end_codes"):
             out.append(f"  拒因码: {', '.join(v['end_codes'])}")  # AIPOS-F150 件①: 运行记录结构化拒因码
+        for line in (v.get("next_action") or {}).get("family_lines") or []:
+            out.append(f"  {line}")  # AIPOS-F288 件①: 同族连败(族名 + 合并计数)
         if v.get("owner_ask"):  # AIPOS-F168 件③: 顾问补写的 Owner 待决结构字段(收件箱同读)
             out.extend(render_owner_ask(v["owner_ask"]))
         if v.get("owner_ask_retracted"):  # AIPOS-F232 件①: 已撤回的请求(留档)
