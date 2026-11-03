@@ -549,13 +549,22 @@ def _prepare_claim(
     *,
     claim_id_override: str | None = None,
     session_id_override: str | None = None,
+    repo_root: Path | None = None,
 ) -> dict[str, Any]:
     updated = dict(metadata)
     task_id = str(updated.get("task_id"))
     # AIPOS-R4A F-2: claim 走转移引擎（一机制一实现）
     from tools.aipos_cli.transition_engine import apply_transition_metadata
-    claim_id = claim_id_override or build_runtime_id("claim", task_id, timestamp, actor)
-    session_id = session_id_override or build_runtime_id("session", task_id, timestamp, actor)
+    # AIPOS-F288 件③: 有治理根 = 记录名经唯一生成口(同秒重认领加单调序号, 不撞名); 无治理根(纯元数据推演)= 按秒基名(既有行为)
+    if repo_root is not None and not (claim_id_override and session_id_override):
+        from tools.aipos_cli.record_writer import claim_runtime_ids
+
+        planned_claim, planned_session = claim_runtime_ids(repo_root, task_id, timestamp, actor)
+    else:
+        planned_claim = build_runtime_id("claim", task_id, timestamp, actor)
+        planned_session = build_runtime_id("session", task_id, timestamp, actor)
+    claim_id = claim_id_override or planned_claim
+    session_id = session_id_override or planned_session
     updated = apply_transition_metadata(
         metadata=metadata,
         transition_name="claim",
@@ -700,6 +709,7 @@ def _mutation_metadata(
     claim_id_override: str | None = None,
     session_id_override: str | None = None,
     supersede: dict[str, Any] | None = None,
+    repo_root: Path | None = None,
 ) -> dict[str, Any]:
     timestamp = iso_z()
     if action == RecordType.CLAIM:
@@ -709,6 +719,7 @@ def _mutation_metadata(
             timestamp,
             claim_id_override=claim_id_override,
             session_id_override=session_id_override,
+            repo_root=repo_root,
         )
     if action == "block":
         assert reason is not None
@@ -1230,6 +1241,7 @@ def mutate_queue_task(
         claim_id_override=claim_id_override,
         session_id_override=session_id_override,
         supersede=supersede,
+        repo_root=repo_root,
     )
     if owner_reason is not None:
         # AIPOS-F252 件②: block 带第一档事由(卡面 needs_owner 的 owner_reason, 收件箱 needs_owner_card 事项同读; 校验唯一 require_owner_reason)
@@ -1627,7 +1639,7 @@ def adopt_queue_task(
         return result
 
     updated = _prepare_claim(metadata, claimer, iso_z(), claim_id_override=claim_id_override,
-                             session_id_override=session_id_override)
+                             session_id_override=session_id_override, repo_root=repo_root)
     updated["active_worktree_branch"] = card_branch
     updated["active_worktree_path"] = str(worktree_path)
     preview_task = load_task_file(source_path, repo_root)
