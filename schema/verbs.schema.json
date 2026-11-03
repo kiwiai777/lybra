@@ -6242,7 +6242,7 @@
           },
           "json": {
             "type": "boolean",
-            "description": "Emit the result object as JSON (includes selected_paths, commit_manifest, rejected_paths / pre_staged_outside when applicable)"
+            "description": "Emit the result object as JSON (includes selected_paths, commit_manifest, rejected_paths / pre_staged_overlap / pre_staged_kept when applicable)"
           }
         },
         "required": [
@@ -6375,9 +6375,37 @@
         },
         "not_applicable": "envelope revoke / renew: 非 --dry-run 即门外拒(board_adapter.record_owner_decision dry_run=False = _blocked_execute), 无写路径、无记录可落; 日后加写路径须登记于 commands"
       },
+      "concurrent_landing": {
+        "description": "AIPOS-F285(11-03 实撞: ai-project-os 多项目共用一个 git 仓, chris 路线图写命令的自动落账与 lybra N6 落账互相把对方的暂存当拒因, 两边 fail-closed 只能靠 Owner 转达): 共享治理仓并发落账判据, 唯一实现 governance_commit._governance_commit_impl(N6 卡范围 / --paths / 写后落账 land_written_paths 全部经此, 禁第二实现)。① 提交只含本次清单: git commit --only -- <清单逐个文件>(AIPOS-F184 已是此语义; 钩子看到的暂存集 = 清单), 本次 pathspec(--paths 或卡范围; 无 --paths = 治理根 .)之外的他人暂存原样留在索引、不混入、不再拒(结果字段 pre_staged_kept 与操作行列出)。② 只在本次 pathspec 内有他人暂存且其暂存内容 ≠ 工作区内容(git diff --name-only 命中: 提交 --only 取工作区内容会盖掉对方暂存的那一版)时拒(texts.overlap), 带出口; 暂存内容 = 工作区内容(含已 git rm 的删除)= 纳入清单(AIPOS-F79 / F193 原契约, 提交内容即对方暂存内容, 无覆盖)。无 --paths 整根模式: 治理根内任何预暂存仍拒(texts.whole_root, 原 F69-R2 语义), 治理根外的不再拒。③ 暂存之后任一失败(钩子拒 / 清单不符 / git 异常 / 超时)都撤回本次暂存(git reset -q -- <本次 pathspec>, 本次 pathspec 内的预暂存按暂存前索引快照还原; 工作区不动; 范围外他人暂存不碰), 撤回本身遇 index.lock 竞争按 index_lock_retry 重试; 仍撤不回 = 结果 index_restored=false 并给只撤本次路径的手工出口(texts.unstage_failed)。④ 写索引的 git 动作(add / commit / reset / restore)遇 index.lock 竞争(另一进程正在写同一索引)按 index_lock_retry 有界重试, 用尽 = 照常失败并撤回。推送冲突(非快进)仍走既有 F79C 临时工作树整合 / 拒因, 不 force。",
+        "index_lock_retry": {
+          "attempts": 5,
+          "interval_ms": 300,
+          "stderr_marker": "index.lock"
+        },
+        "texts": {
+          "zh": {
+            "overlap": "本次落账路径与他人暂存重叠, 拒绝提交(对方暂存的版本与工作区不同, 提交会盖掉对方暂存): {files}。出口: 等对方落账完成后重跑同一命令; 若确认是本命令此前留下的暂存残留, 先只撤这些路径的暂存(工作区保留): git -C {root} restore --staged -- {pathspec}, 再重跑同一命令",
+            "whole_root": "治理根内有已暂存但未提交的文件(无 --paths 整根落账不混入他人暂存): {files}。出口: 改用 --paths 只落本批路径(根外 / 范围外他人暂存不再挡); 或等对方落账完成后重跑; 若确认是自己的残留: git -C {root} restore --staged -- {pathspec}",
+            "kept_outside": "本次范围外的他人暂存 {count} 个原样保留(不混入本次提交, 不拒): {files}",
+            "unstaged": "本次暂存已撤回(工作区改动保留, 他人暂存未动): {pathspec}",
+            "unstage_failed": "本次暂存未能撤回({error}); 手工只撤本次路径(工作区保留, 不碰他人暂存): git -C {root} restore --staged -- {pathspec}",
+            "landing_unstaged": "  暂存: 本命令 add 的路径已撤出暂存区(工作区改动保留); 重试落账: {remedy}",
+            "landing_unstage_failed": "  暂存: 本命令 add 的路径未能撤出暂存区({error}); 先撤: git -C {root} restore --staged -- {pathspec}; 再重试落账: {remedy}"
+          },
+          "en": {
+            "overlap": "This landing's paths overlap with changes someone else has staged; commit refused (their staged version differs from the working tree, so committing would overwrite what they staged): {files}. Way out: wait for the other landing to finish, then rerun the same command; if you are sure this is staging left behind by an earlier run of this command, unstage only these paths first (working tree kept): git -C {root} restore --staged -- {pathspec}, then rerun the same command",
+            "whole_root": "Files are staged but not committed inside the governance root (a whole-root landing without --paths does not take other people's staging): {files}. Way out: use --paths to land only this batch (staging outside the root or the selection no longer blocks); or wait for the other landing to finish and rerun; if you are sure it is your own leftover: git -C {root} restore --staged -- {pathspec}",
+            "kept_outside": "{count} staged change(s) outside this landing's paths left as they are (not committed, not a refusal): {files}",
+            "unstaged": "This run's staging was undone (working tree changes kept, other people's staging untouched): {pathspec}",
+            "unstage_failed": "This run's staging could not be undone ({error}); undo only this run's paths by hand (working tree kept, other staging untouched): git -C {root} restore --staged -- {pathspec}",
+            "landing_unstaged": "  Staging: the paths this command added were taken out of the index (working tree changes kept); retry the landing: {remedy}",
+            "landing_unstage_failed": "  Staging: the paths this command added could not be taken out of the index ({error}); first undo: git -C {root} restore --staged -- {pathspec}; then retry the landing: {remedy}"
+          }
+        }
+      },
       "exit_codes": {
         "0": "PASS — committed (and pushed unless no_push), or no-op (nothing to commit within the selection), or dry_run manifest emitted",
-        "1": "BLOCK/FAIL — e.g. paths outside governance root (rejected_paths), pre-staged files outside --paths (pre_staged_outside), N6 completeness missing, staged set != manifest, pre-commit guardrail (AIPOS-R6M) rejection, post-commit git show != manifest, push/verification failure",
+        "1": "BLOCK/FAIL — e.g. paths outside governance root (rejected_paths), pre-staged files inside the selection whose staged version differs from the working tree (pre_staged_overlap, AIPOS-F285; staging outside the selection is kept and no longer refused), N6 completeness missing, staged set != manifest, pre-commit guardrail (AIPOS-R6M) rejection, post-commit git show != manifest, push/verification failure",
         "2": "usage error — argparse rejected the arguments (unknown flag / missing --actor)"
       }
     },
@@ -6581,7 +6609,7 @@
       }
     },
     "lybra_project_cleanup_worktrees": {
-      "description": "AIPOS-F187 件④: `lybra project cleanup-worktrees [--dry-run|--confirm] [--json] [--workspace-root <治理根>]` —— 按卡结案 / 撤回自动清理的同一判据(transitions.schema queue_mutations.worktree_cleanup, 唯一实现 worktree_cleanup.judge_worktree)批量处理存量卡工作树与审计工作树, 跨 project.json repos.items 全部仓(无 repos 段 = code_repo)。缺省 = 预演(零写入): 逐仓列出工作树根下每棵卡工作树的判定——已终态且干净 → 删、脏 → 列路径与未提交改动计数(不碰)、在途 → 留、被承继卡引用 → 留、目录名查不到卡 → 不认识(留)。--confirm = 对判为删的执行 `git worktree remove`(不加 --force, 分支保留), 其余不动; 不写治理根(存量清理不落记录, 输出即结果)。顾问在任何项目治理根下可自行运行(由更新通知告知)。主检出与工作树根外的工作树不在清单内。",
+      "description": "AIPOS-F187 件④(AIPOS-F285 加 [--task-id <卡>] 与认领残留 claim_residue): `lybra project cleanup-worktrees [--dry-run|--confirm] [--task-id <卡>] [--json] [--workspace-root <治理根>]` —— 按卡结案 / 撤回自动清理的同一判据(transitions.schema queue_mutations.worktree_cleanup, 唯一实现 worktree_cleanup.judge_worktree)批量处理存量卡工作树与审计工作树, 跨 project.json repos.items 全部仓(无 repos 段 = code_repo)。缺省 = 预演(零写入): 逐仓列出工作树根下每棵卡工作树的判定——已终态且干净 → 删、脏 → 列路径与未提交改动计数(不碰)、在途 → 留、被承继卡引用 → 留、目录名查不到卡 → 不认识(留)。--confirm = 对判为删的执行 `git worktree remove`(不加 --force, 分支保留), 其余不动; 不写治理根(存量清理不落记录, 输出即结果)。顾问在任何项目治理根下可自行运行(由更新通知告知)。主检出与工作树根外的工作树不在清单内。",
       "phase": "single",
       "surface": ["cli"],
       "cli_command": "lybra project cleanup-worktrees",
@@ -6590,7 +6618,8 @@
         "type": "object",
         "properties": {
           "dry_run": {"type": "boolean", "description": "预演(缺省), 零写入"},
-          "confirm": {"type": "boolean", "description": "执行: 删判为「删」的工作树(分支保留)"},
+          "confirm": {"type": "boolean", "description": "执行: 删判为「删」的工作树(分支保留); 判为认领残留(claim_residue, AIPOS-F285)的删工作树并删 0 提交卡分支"},
+          "task_id": {"type": "string", "description": "AIPOS-F285: 只看 / 只清这一张卡(含其工作树与认领残留分支; 不给 = 全项目工作树根)"},
           "json": {"type": "boolean", "description": "JSON 输出"},
           "workspace_root": {"type": "string", "description": "治理根; 缺省自发现(governance_root_resolution)"}
         },
@@ -6629,6 +6658,46 @@
         "reason_failed": "删失败: {error}",
         "reason_removable": "已终态且干净, 尚未清理(lybra project cleanup-worktrees --confirm)",
         "loop_residual": "本卡保留的工作树: {items}"
+      },
+      "claim_residue_texts": {
+        "zh": {
+          "reuse_tree": "续用此前认领尝试留下的卡工作树 {worktree}(分支 {branch} 无基线 {base} 之外的提交、工作树干净; AIPOS-F285 幂等续认领)",
+          "reuse_branch": "续用此前认领尝试留下的卡分支 {branch}(无基线 {base} 之外的提交)建工作树",
+          "rebuild": "此前认领尝试留下的卡工作树 {worktree} 未建完(检出被中断), 已删掉半建树并在卡分支 {branch} 上重建(分支无基线 {base} 之外的提交)",
+          "rebuild_failed": "此前认领尝试留下的半建工作树 {worktree} 清不掉({error}), 认领被拒(队列与记录未变更); 出口: lybra project cleanup-worktrees --task-id {task_id} 预演看原因, 处理后重跑认领",
+          "refuse_commits": "卡 {task_id} 还没有认领成功过, 但卡分支 {branch} 已有 {commits} 个基线 {base} 之外的提交(可能是他人产物), 不续用, 认领被拒(队列与记录未变更); 出口: git -C {repo} log --oneline {base}..{branch} 核对归属; 确属残留可删分支后重跑认领, 否则撤卡重发或换卡号",
+          "refuse_occupied": "卡分支 {branch} 已检出在 {other}(不是本卡落点 {worktree}), 分支被他处占用, 认领被拒(队列与记录未变更); 出口: 核对该工作树归属, 释放(git -C {repo} worktree remove <该树>)后重跑认领",
+          "refuse_foreign": "落点 {worktree} 已存在但不是卡分支 {branch} 的工作树(现为 {current}), 认领被拒(队列与记录未变更); 出口: 核对该目录归属, 移走后重跑认领",
+          "refuse_dirty": "此前认领尝试留下的卡工作树 {worktree} 有 {uncommitted} 个未提交改动, 不续用, 认领被拒(队列与记录未变更); 出口: 核对改动归属; 确属残留: lybra project cleanup-worktrees --task-id {task_id} 预演后处理, 再重跑认领",
+          "cleanup_item": "  认领残留(可清) {worktree}({task_id} {state}; 分支 {branch} 无基线之外的提交; {kind}): 清理 = 删工作树 + 删分支",
+          "cleanup_branch_item": "  认领残留(可清) 分支 {branch}({task_id} {state}; 无工作树、无基线之外的提交): 清理 = 删分支",
+          "cleanup_removed": "  已清认领残留 {worktree}({task_id}; 分支 {branch} 已删)",
+          "kind_incomplete": "工作树未建完",
+          "kind_clean": "工作树干净",
+          "kind_missing": "工作树已登记但目录不在",
+          "summary": "认领残留: 可清 {residue} / 已清 {removed}",
+          "confirm_hint": "确认清理: lybra project cleanup-worktrees --workspace-root {governance_root}{task_flag} --confirm",
+          "kept_reason": "认领残留(分支无新提交); 清理: lybra project cleanup-worktrees --task-id {task_id} 预演后 --confirm"
+        },
+        "en": {
+          "reuse_tree": "Reusing the card work tree {worktree} left by an earlier claim attempt (branch {branch} has no commits beyond base {base}, tree is clean; AIPOS-F285 idempotent re-claim)",
+          "reuse_branch": "Reusing the card branch {branch} left by an earlier claim attempt (no commits beyond base {base}) to build the work tree",
+          "rebuild": "The card work tree {worktree} left by an earlier claim attempt was never finished (checkout interrupted); removed the half-built tree and rebuilt it on card branch {branch} (no commits beyond base {base})",
+          "rebuild_failed": "The half-built work tree {worktree} left by an earlier claim attempt could not be removed ({error}); claim refused (queue and records unchanged). Way out: lybra project cleanup-worktrees --task-id {task_id} to preview the reason, fix it, then rerun the claim",
+          "refuse_commits": "Card {task_id} has never been claimed successfully, but card branch {branch} already has {commits} commit(s) beyond base {base} (possibly someone else's work); not reused, claim refused (queue and records unchanged). Way out: git -C {repo} log --oneline {base}..{branch} to check whose it is; if it is leftover, delete the branch and rerun the claim, otherwise withdraw and reissue the card or use a new card ID",
+          "refuse_occupied": "Card branch {branch} is checked out at {other} (not this card's location {worktree}); the branch is in use elsewhere, claim refused (queue and records unchanged). Way out: check who owns that tree, release it (git -C {repo} worktree remove <that tree>), then rerun the claim",
+          "refuse_foreign": "Location {worktree} exists but is not a work tree of card branch {branch} (it is {current}); claim refused (queue and records unchanged). Way out: check who owns the directory, move it away, then rerun the claim",
+          "refuse_dirty": "The card work tree {worktree} left by an earlier claim attempt has {uncommitted} uncommitted change(s); not reused, claim refused (queue and records unchanged). Way out: check whose changes they are; if leftover: lybra project cleanup-worktrees --task-id {task_id} to preview and handle it, then rerun the claim",
+          "cleanup_item": "  Claim leftover (removable) {worktree} ({task_id} {state}; branch {branch} has no commits beyond base; {kind}): cleanup = remove the tree + delete the branch",
+          "cleanup_branch_item": "  Claim leftover (removable) branch {branch} ({task_id} {state}; no work tree, no commits beyond base): cleanup = delete the branch",
+          "cleanup_removed": "  Removed claim leftover {worktree} ({task_id}; branch {branch} deleted)",
+          "kind_incomplete": "work tree never finished",
+          "kind_clean": "work tree clean",
+          "kind_missing": "work tree registered but directory gone",
+          "summary": "Claim leftovers: removable {residue} / removed {removed}",
+          "confirm_hint": "To clean up: lybra project cleanup-worktrees --workspace-root {governance_root}{task_flag} --confirm",
+          "kept_reason": "claim leftover (branch has no new commits); clean up: lybra project cleanup-worktrees --task-id {task_id}, preview then --confirm"
+        }
       }
     },
     "lybra_project_status": {

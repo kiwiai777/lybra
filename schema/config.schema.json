@@ -1112,7 +1112,9 @@
   "timeouts": {
     "description": "Timeout configuration — single source for all timeout defaults. 坑② 修复(R5B前置): timeoutMs 从配置读取,不写死。顾问实测证明网络路径等速(127.0.0.1 vs tailscale 均 2.2s/461卡),真凶在连接器内部预算累加(initialize+queueTasks+claimDryRun+taskPreview 串行)。",
     "gate_mcp_request_ms": 30000,
-    "gate_mcp_request_description": "Gate MCP 单次请求超时(ms)。默认 30s 对齐 DESIGN 护栏常量审查;实测本机单次操作 <3s,30s 为多次串行累加留足容错预算。计时日志(fetch-timing/dryrun-timing/preview-timing/tick-total-timing)用于排查慢点。"
+    "gate_mcp_request_description": "Gate MCP 单次请求超时(ms)。默认 30s 对齐 DESIGN 护栏常量审查;实测本机单次操作 <3s,30s 为多次串行累加留足容错预算。计时日志(fetch-timing/dryrun-timing/preview-timing/tick-total-timing)用于排查慢点。",
+    "worktree_add_seconds": 30,
+    "worktree_add_description": "AIPOS-F285: 门认领建卡工作树(next_resolver._ensure_worktree 的 git worktree add)单次时限(秒), 原写死 30。缺省 30 = 行为不变。超时 = git 被杀, 工作树半建(管理目录无 index、带「初始化」锁)——此后重跑认领按 transitions.schema queue_mutations.worktree_cleanup.claim_residue 判定重建续用, 或 `lybra project cleanup-worktrees --task-id <卡>` 两阶段清掉。不变量(夹具核): 须小于认领客户端等待上限 verbs.schema lybra_queue_claim_dry_run / lybra_queue_claim_confirm .stage_contract.client_timeout_ms(现 180000ms, 客户端等待上限的唯一声明处, 读取口 two_phase_shell_factory.client_timeout_seconds; 本键不另列第二份)。读取口 next_resolver.worktree_add_timeout_seconds。"
   },
   "urls": {
     "description": "URL patterns and defaults。gate_local = 本机门基址缺省(identity_resolution.keys.gate_url 的 schema_default 层, 唯一读取口 schema_loader.get_config_default_gate_url); 其端口段须等于 ports.gate_default(夹具锁定一致; 改为由 ports.gate_default 推导须改 tools/schema_loader.py, 不在 AIPOS-F106 车道, 记缺口)。AIPOS-F106: 无读取方的 gate_tailscale_pattern 删除。",

@@ -7019,7 +7019,7 @@ def carried_kickoff_line(card_frontmatter: dict[str, Any] | None, task_id: str) 
 
 def _ensure_worktree(workspace_root: Path, task_id: str,
                      card_frontmatter: dict[str, Any] | None = None,
-                     *, start_point: str | None = None) -> dict[str, Any]:
+                     *, start_point: str | None = None, claim_attempt: bool = False) -> dict[str, Any]:
     """AIPOS-F73件② + F73D 前置三 + F88 件①: 确保卡工作树存在(建/复用卡分支)——全产品唯一建树实现。
 
     门认领(queue_mutation claim, 原 WorktreeManager 第二实现已退役为委托)与驱动方 next --run 认领后建树都经此函数。
@@ -7035,6 +7035,8 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
             已存在 = 其 tip 须正好等于该提交, 否则拒(绑定不唯一); 工作树已在落点 = 须检出卡分支且 HEAD = 该提交, 否则拒。
             缺省 None = 原认领语义(新卡分支起于 base_branch 声明); AIPOS-F186: 缺省且卡面 carried_from(撤换承继)且卡分支尚不存在 =
             起点取承继记录 tip(carried_start_point 判定, 原卡分支 tip 不符 = 拒)。
+        claim_attempt: AIPOS-F285 件③: 门认领路径(queue_mutation claim)传 True = 先按认领半成品唯一判定 worktree_cleanup.judge_claim_residue
+            处置此前认领尝试留下的卡分支 / 半建树(续用 / 重建 / 拒); 缺省 False = 原行为(修树 / 收编 / 其他建树入口不判)。
 
     Returns:
         {"ok": bool, "worktree_path": str, "branch": str, "message": str[, "carried_from": {...}, "carried_line": str]}
@@ -7080,7 +7082,37 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
     excluded = _exclude_worktree_root(code_repo, worktree_path)
     if excluded is not None:
         return {"ok": False, "worktree_path": "", "branch": branch_name, "message": excluded}
+    governance_root = workspace_root
     workspace_root = code_repo  # 以下 git 操作全部在产品仓
+
+    # AIPOS-F285 件③: 从未认领成功的卡(门认领客户端超时 / 建树被杀)留下的卡分支与半建工作树——唯一判定 worktree_cleanup.judge_claim_residue:
+    # reuse = 幂等续用(不拒); rebuild = 删半建树后在既有分支上重建; refuse = 拒并给出口(队列与记录零变更); none = 原路径。收编(start_point)不判。
+    residue_note: str | None = None
+    residue_kind: str | None = None
+    if claim_attempt and not start_point:
+        from tools.aipos_cli.worktree_cleanup import claim_residue_base, judge_claim_residue, remove_claim_residue, residue_text
+
+        residue_base = claim_residue_base(fm_for_mode)
+        try:
+            residue = judge_claim_residue(governance_root, task_id, code_repo=code_repo, worktree=worktree_path, branch=branch_name,
+                                          base_ref=residue_base)
+        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+            return {"ok": False, "worktree_path": "", "branch": branch_name,
+                    "message": residue_text("rebuild_failed", worktree=str(worktree_path), error=str(exc), task_id=task_id)}
+        residue_kind = residue["kind"]
+        if residue_kind == "refuse":
+            return {"ok": False, "worktree_path": "", "branch": branch_name, "message": residue["message"], "claim_residue": residue}
+        if residue_kind == "rebuild":
+            error = remove_claim_residue(code_repo, worktree_path, branch_name, base_ref=str(residue_base), delete_branch=False)
+            if error:
+                return {"ok": False, "worktree_path": "", "branch": branch_name,
+                        "message": residue_text("rebuild_failed", worktree=str(worktree_path), error=error, task_id=task_id)}
+            residue_note = residue["message"]
+        elif residue_kind == "reuse":
+            if worktree_path.exists():
+                return {"ok": True, "worktree_path": str(worktree_path), "branch": branch_name, "message": residue["message"],
+                        "claim_residue": residue_kind}
+            residue_note = residue["message"]
 
     # 检查 worktree 是否已存在
     if worktree_path.exists():
@@ -7137,6 +7169,8 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
                 "branch": branch_name,
                 "message": f"卡分支 {branch_name} 已存在于 {workspace_root}, tip {result.stdout.strip()} ≠ 绑定提交 {start_point}",
             }
+        # AIPOS-F285: 建树时限读 config.schema timeouts.worktree_add_seconds(原写死 30; 超时 = 半建树, 重跑认领按认领残留判定重建)
+        add_timeout = worktree_add_timeout_seconds()
         if branch_exists:
             # 复用已有分支
             result = subprocess.run(
@@ -7144,7 +7178,7 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
                 cwd=workspace_root,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=add_timeout,
             )
         else:
             # 创建新分支
@@ -7153,7 +7187,7 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
                 cwd=workspace_root,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=add_timeout,
             )
 
         if result.returncode != 0:
@@ -7168,8 +7202,10 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
             "ok": True,
             "worktree_path": str(worktree_path),
             "branch": branch_name,
-            "message": f"Worktree created: {worktree_path}",
+            "message": f"Worktree created: {worktree_path}" + (f"; {residue_note}" if residue_note else ""),
         }
+        if residue_kind in ("reuse", "rebuild"):
+            built["claim_residue"] = residue_kind
         if carried is not None:
             from tools.aipos_cli.queue_mutation import supersede_carry_texts
 
@@ -7184,6 +7220,17 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
             "branch": branch_name,
             "message": f"Exception creating worktree: {exc}",
         }
+
+
+def worktree_add_timeout_seconds() -> int:
+    """AIPOS-F285: 门认领建卡工作树(git worktree add)单次时限——config.schema timeouts.worktree_add_seconds 唯一读取口(缺 / 非正整数 =
+    SchemaLoadError, fail-closed)。"""
+    from tools.schema_loader import SchemaLoadError, code_repo_schema_root, load_schema
+
+    value = (load_schema("config", code_repo_schema_root()).get("timeouts") or {}).get("worktree_add_seconds")
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise SchemaLoadError("config.schema.json timeouts.worktree_add_seconds 未声明或非正整数")
+    return value
 
 
 def worktree_repair_command(task_id: str, actor: str, governance_root: str | Path | None = None, *, confirm: bool = False) -> str:

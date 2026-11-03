@@ -10,7 +10,7 @@
 验收(先红后绿: 本文件对 main 基座跑 = 红, 对 card/AIPOS-F79 跑 = 绿):
 ① --paths 选 2 文件提交后 git show --name-only HEAD == 2 文件; 未跟踪材料仍未跟踪; 他项目 status 不变
 ② --dry-run 输出清单(modified/added/deleted/untracked_selected)且 git status --porcelain 前后逐字相同
-③ 预暂存在 --paths 外 → 拒并列出; 路径越根/他项目/整根/二选一 → 拒
+③ 预暂存在 --paths 外 → 原样保留不再拒(AIPOS-F285 取代); 路径越根/他项目/整根/二选一 → 拒
 ④ R6M 护栏对选定文件仍拦(缺 frontmatter 的 governance/*.md 被拒), 补齐后同一命令通过
 ⑤ 无 --paths 的 dry-run 列出 add -A 范围并 warning 标出 untracked 数量
 ⑦ 本文件入 run-all.sh
@@ -223,30 +223,27 @@ def test_acceptance_2_dry_run_lists_manifest_and_scene_is_untouched(rig):
 # ---------------------------------------------------------------------------
 # 验收③: 预暂存在 --paths 外 → 拒并列出; 路径越根/他项目/整根/二选一 → 拒
 # ---------------------------------------------------------------------------
-def test_acceptance_3a_prestaged_outside_paths_is_rejected_and_listed(rig):
+def test_acceptance_3a_prestaged_outside_paths_is_kept_not_rejected(rig):
+    """AIPOS-F285 件①(取代 F79 原「范围外预暂存 = 拒」): 范围外他人暂存原样保留、不混入本次提交、不再拒。"""
     repo = rig["repo"]
     _git(repo, "add", "--", f"{OTHER_REL}/plan.md")          # 他项目内的预暂存
     _git(repo, "add", "--", f"{GOV_REL}/notes/c.md")         # 治理根内但 --paths 外的预暂存
+    staged_before = _git(repo, "diff", "--cached", "--", f"{OTHER_REL}/plan.md", f"{GOV_REL}/notes/c.md")
+
+    # 同一现场 dry-run 如实预演 PASS(清单只含选定文件), 零写入
     before = scene_snapshot(repo)
+    dry = run(rig, dry_run=True, paths=["notes/a.md", "notes/b.md"])
+    assert dry["verdict"] == Verdict.PASS and dry["dry_run"] is True, dry["message"]
+    assert scene_snapshot(repo) == before
 
     result = run(rig, paths=["notes/a.md", "notes/b.md"])
 
-    assert result["verdict"] == Verdict.BLOCK
-    assert result["committed"] is False
-    assert sorted(result["pre_staged_outside"]) == [f"{GOV_REL}/notes/c.md", f"{OTHER_REL}/plan.md"]
-    assert f"{OTHER_REL}/plan.md" in result["message"] and f"{GOV_REL}/notes/c.md" in result["message"]
-    assert "--paths 白名单之外" in result["message"]
-    assert scene_snapshot(repo) == before, "拒绝路径不得改动现场"
-
-    # 同一现场, dry-run 也必须如实预演 BLOCK(不是先 PASS 再正式撞墙)
-    dry = run(rig, dry_run=True, paths=["notes/a.md", "notes/b.md"])
-    assert dry["verdict"] == Verdict.BLOCK and dry["dry_run"] is True
-    assert scene_snapshot(repo) == before
-
-    # 把预暂存文件纳入 --paths 后 = 可接受并进清单
-    ok = run(rig, dry_run=True, paths=["notes/a.md", "notes/b.md", "notes/c.md"])
-    assert ok["verdict"] == Verdict.BLOCK  # other/plan.md 仍在白名单外(他项目), 依旧拒
-    assert ok["pre_staged_outside"] == [f"{OTHER_REL}/plan.md"]
+    assert result["verdict"] == Verdict.PASS, result["message"]
+    assert result["committed"] is True
+    assert show_names(repo) == {f"{GOV_REL}/notes/a.md", f"{GOV_REL}/notes/b.md"}
+    assert sorted(result["pre_staged_kept"]) == [f"{GOV_REL}/notes/c.md", f"{OTHER_REL}/plan.md"]
+    assert _git(repo, "diff", "--cached", "--", f"{OTHER_REL}/plan.md", f"{GOV_REL}/notes/c.md") == staged_before, "他人暂存须原样保留"
+    assert sorted(cached(repo).split()) == [f"{GOV_REL}/notes/c.md", f"{OTHER_REL}/plan.md"]
 
 
 @pytest.mark.parametrize(

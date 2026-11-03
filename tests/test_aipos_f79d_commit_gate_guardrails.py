@@ -185,11 +185,10 @@ def test_piece1_hook_is_a_shell_over_the_same_module(rig):
 # ---------------------------------------------------------------------------
 def test_piece3_hook_reject_restores_index_and_hook_reason_equals_dry_run(rig, monkeypatch):
     repo, lybra = rig["repo"], rig["lybra"]
-    # --paths 内预暂存: 暂存 X, 工作树随后改 Y(还原须还原成 X)
+    # --paths 内预暂存: 暂存 X = 工作树 X(纳入清单; AIPOS-F285: 暂存版 ≠ 工作树版 = 与他人暂存重叠, 暂存前即拒); 拒提交后须仍暂存 X
     pre = lybra / "notes" / "pre.md"
     pre.write_text("X\n", encoding="utf-8")
     _git(repo, "add", "--", f"{LYBRA_REL}/notes/pre.md")
-    pre.write_text("Y\n", encoding="utf-8")
     (lybra / "notes" / "tool.py").write_text("print('x')\n", encoding="utf-8")
     cached_before = cached(repo)
     assert cached_before == f"{LYBRA_REL}/notes/pre.md\n"
@@ -213,7 +212,7 @@ def test_piece3_hook_reject_restores_index_and_hook_reason_equals_dry_run(rig, m
     # index 精确还原: 只剩预暂存条目, 且内容为 X(非工作树的 Y)
     assert cached(repo) == cached_before
     assert _git(repo, "show", f":{LYBRA_REL}/notes/pre.md").stdout == "X\n"
-    assert pre.read_text(encoding="utf-8") == "Y\n"
+    assert pre.read_text(encoding="utf-8") == "X\n"
 
 
 # ---------------------------------------------------------------------------

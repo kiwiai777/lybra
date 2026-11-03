@@ -1338,7 +1338,9 @@ def mutate_queue_task(
     if action == RecordType.CLAIM and card_needs_worktree(repo_root, dict(updated_metadata)):
         from tools.aipos_cli.next_resolver import _ensure_worktree
 
-        built_worktree = _ensure_worktree(repo_root, str(updated_metadata.get("task_id", "")), card_frontmatter=dict(updated_metadata))
+        # AIPOS-F285 件③: 认领路径带 claim_attempt —— 此前认领尝试(门应答超时 / 建树被杀)留下的卡分支与半建树按唯一判定续用 / 重建 / 拒
+        built_worktree = _ensure_worktree(repo_root, str(updated_metadata.get("task_id", "")), card_frontmatter=dict(updated_metadata),
+                                          claim_attempt=True)
         if not built_worktree.get("ok"):
             reason = str(built_worktree.get("message") or "worktree 建立失败(无拒因原文)")
             result["verdict"] = Verdict.BLOCK
@@ -1413,6 +1415,10 @@ def mutate_queue_task(
         result["worktree_created"] = True
         result["worktree_path"] = str(built_worktree["worktree_path"])
         result["worktree_branch"] = str(built_worktree["branch"])
+        if built_worktree.get("claim_residue"):
+            # AIPOS-F285 件③: 续用 / 重建了此前认领尝试留下的卡分支与工作树(判定 worktree_cleanup.judge_claim_residue)
+            result["worktree_claim_residue"] = str(built_worktree["claim_residue"])
+            result["worktree_line"] = str(built_worktree.get("message") or "")
         if built_worktree.get("carried_from"):
             # AIPOS-F186 件②: 撤换承继卡——卡分支从原卡分支记录 tip 建, 认领输出写「承继自 <原卡> <分支>@<tip>」
             result["worktree_carried_from"] = dict(built_worktree["carried_from"])
