@@ -1957,7 +1957,22 @@ def _finalize_task_impl(
     branch_integration = _load_branch_integration()  # AIPOS-F92: 声明读 Lybra 自身 schema, 不读项目产品仓
     # AIPOS-F108 件②(M18): 分支名 / 基线唯一派生(声明缺 = SchemaLoadError, 不回落写死)
     branch_name = card_branch_name(task_id, branch_integration)
-    base_branch = card_base_branch(branch_integration)
+    from tools.aipos_cli.next_resolver import _find_task_in_queue, _read_frontmatter
+    from tools.aipos_cli.target_branch import card_target_branch, target_branch_problem
+    task_path, _ = _find_task_in_queue(governance_root, task_id)
+    target_metadata = _read_frontmatter(task_path) if task_path else {}
+    problem = target_branch_problem(governance_root, target_metadata, require_binding=True)
+    base_branch = card_target_branch(target_metadata, branch_integration)
+    if "target_branch" in target_metadata:
+        from tools.aipos_cli.workspace_config import resolve_card_repo
+        if resolve_card_repo(governance_root, target_metadata).resolve() != workspace_root.resolve():
+            problem = "TARGET_BRANCH_REPOSITORY_MISMATCH: finalize must use the card repository"
+    if not problem and deploy and base_branch != card_base_branch(branch_integration):
+        problem = "TARGET_BRANCH_DEPLOY_UNSUPPORTED: non-default target must be finalized without deployment"
+    if problem:
+        return {"verdict": Verdict.BLOCK, "task_id": task_id, "can_finalize": False, "committed": False,
+                "pushed": False, "deployed": False, "message": problem, "operations": operations}
+    branch_integration = {**branch_integration, "base_branch": base_branch}
     
     # ② 获取卡分支顶端 commit (如果分支存在且未合并)
     required_commit_sha: str | None = None

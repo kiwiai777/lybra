@@ -218,6 +218,11 @@ def validate_draft_metadata(
     for error in parse_errors or []:
         _add(blocking_reasons, f"Frontmatter parse issue: {error}")
 
+    from tools.aipos_cli.target_branch import target_branch_problem
+    target_problem = target_branch_problem(repo_root, metadata)
+    if target_problem:
+        _add(blocking_reasons, target_problem)
+
     # AIPOS-R0: Schema-based validation (N0 gate)
     # AIPOS-SMOKE-LOOP-1 / R4A F-1 同款修复: schema 单一源在产品仓 (schema/),
     # 绝不能随本函数的 repo_root(发卡时=governance 项目根,无 schema/)去解析 →

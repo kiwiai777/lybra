@@ -393,7 +393,7 @@ def _git(repo: Path, *argv: str) -> str | None:
 def code_change_problem(governance_root: str | Path, task_id: str, card: dict[str, Any], *, code_repo: Path, commit_sha: str) -> str | None:
     """执行方 kind ∈ code_change.kinds 的卡分支交回: 认领基线 = git merge-base <基线分支> <commit_sha>(next_resolver.card_base_branch 唯一读取口),
     车道 = 卡 lane.paths(缺 = 全仓); 车道内 diff 空 = 拒因原文(INGEST_CODE_CHANGE_EMPTY); 非该类模式 / 有改动 = None。基线算不出 = 拒因(fail-closed)。"""
-    from tools.aipos_cli.next_resolver import card_base_branch, task_mode_executor
+    from tools.aipos_cli.next_resolver import card_target_branch, task_mode_executor
 
     decl = _decl()
     kind = task_mode_executor(str(card.get("task_mode") or ""))
@@ -401,7 +401,7 @@ def code_change_problem(governance_root: str | Path, task_id: str, card: dict[st
         return None
     lane = card.get("lane") if isinstance(card.get("lane"), dict) else {}
     paths = [str(p).strip() for p in (lane.get("paths") or []) if str(p).strip()]
-    base_ref = card_base_branch()
+    base_ref = card_target_branch(card)
     base = _git(code_repo, "merge-base", base_ref, commit_sha)
     fill = {"task_id": task_id, "commit_sha": commit_sha, "base_ref": base_ref, "repo": str(code_repo), "paths": paths or ["(全仓)"]}
     if base is None:

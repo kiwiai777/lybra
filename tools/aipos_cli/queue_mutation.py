@@ -286,7 +286,7 @@ def supersede_carry_plan(repo_root: Path, task_id: str, by: str) -> dict[str, An
     返回 {carry: {task_id, branch, tip, worktree_path, worktree_exists, uncommitted, code_repo, successor_branch} | None,
     carried_from: {task_id, branch, tip} | None, problems: [str], idempotent: bool, line: str}。"""
     from tools.aipos_cli.next_resolver import (
-        _read_frontmatter, card_base_branch, card_branch_name, card_carried_from, card_worktree_location, existing_branch_tip,
+        _read_frontmatter, card_target_branch, card_branch_name, card_carried_from, card_worktree_location, existing_branch_tip,
     )
     from tools.aipos_cli.task_loader import find_task_card
     from tools.aipos_cli.workspace_config import CardRepoUnresolved
@@ -308,7 +308,10 @@ def supersede_carry_plan(repo_root: Path, task_id: str, by: str) -> dict[str, An
         return out
     branch = card_branch_name(task_id)
     successor_branch = card_branch_name(by)
-    base = card_base_branch()
+    base = card_target_branch(orig_fm)
+    if base != card_target_branch(new_fm):
+        out["problems"].append("TARGET_BRANCH_CARRY_MISMATCH: successor integration target differs")
+        return out
     if Path(successor_repo).resolve() != Path(code_repo).resolve():
         out["problems"].append(texts["repo_mismatch"].format(by=by, successor_repo=successor_repo, task_id=task_id, repo=code_repo))
         return out
@@ -574,6 +577,9 @@ def _prepare_claim(
         claimed_at=timestamp,
         active_session_id=session_id,
     )
+    if "target_branch" in metadata:
+        from tools.aipos_cli.target_branch import card_target_branch
+        updated["claimed_target_branch"] = card_target_branch(metadata)
     if updated.get("needs_owner") is None:
         updated["needs_owner"] = False
     return updated
@@ -836,6 +842,7 @@ def _prepare_records_plan(
             session_id=session_id,
             created_at=timestamp,
             capability_exception=capability,
+            target_branch=updated_metadata.get("claimed_target_branch"),
         )
         session_markdown = build_session_record_markdown(
             task_id=task_id,

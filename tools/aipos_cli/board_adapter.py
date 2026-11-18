@@ -1467,6 +1467,9 @@ def submit_external_intake(
 def _build_owner_decision(resolved_root: Path, payload: dict[str, Any], *, actor: str | None, dry_run: bool) -> dict[str, Any]:
     """owner_decision_record 构造分派(预演与门确认重放同调): payload 带 project_authorization 块(AIPOS-F224 项目常设授权签发 / 扩大 / 撤销)=
     autonomy_policy.build_authorization_decision(决策记录仍由既有 writer 渲染, 另加授权修订一份写); 其余 = 既有 writer 原样(行为不变)。"""
+    if payload.get("branch_initialization") not in (None, ""):
+        from tools.aipos_cli.branch_initialization import build_branch_decision
+        return build_branch_decision(resolved_root, payload, actor=actor, dry_run=dry_run, backend=backend_build_owner_decision_record)
     if payload.get("project_authorization") not in (None, ""):
         from tools.aipos_cli.autonomy_policy import build_authorization_decision
 
@@ -1501,6 +1504,8 @@ def record_owner_decision(
             "capability_scope": result.get("capability_scope"),
             # AIPOS-250: lets the confirm handler require owner_confirm for a policy grant.
             "autonomy_policy_grant": bool(result.get("autonomy_policy_grant")),
+            "branch_initialization": bool(result.get("branch_initialization")),
+            "branch_plan": result.get("branch_plan"),
             "autonomy_policy_id": result.get("autonomy_policy_id"),
             "autonomy_policy_path": result.get("autonomy_policy_path"),
             # AIPOS-F224: 项目授权修订(签发 / 扩大 / 撤销)随决策记录一并落盘
@@ -2067,6 +2072,7 @@ def _mcp_claim_record_plan(
         confirmer=confirmer,
         adoption=adoption,
         capability_exception=capability,
+        target_branch=updated_metadata.get("claimed_target_branch"),
     )
     session_markdown = build_mcp_claim_session_record_markdown(
         task_id=task_id,
@@ -2823,7 +2829,7 @@ def _check_return_self_checks(
 
 
 def _card_branch_changed_files(
-    product_repo_root: Path, task_id: str, *, with_status: bool = False
+    product_repo_root: Path, task_id: str, *, with_status: bool = False, card_frontmatter: dict[str, Any] | None = None
 ) -> list[str] | list[tuple[str, str]] | None:
     """AIPOS-F78 前置零④: 卡分支相对其与基线分支的合并基的改动文件(`git diff <base>...<卡分支>`, 三点=merge-base)。
     AIPOS-F108 件②: 分支名 / 基线读 N5.branch_integration 声明(next_resolver.card_branch_name / card_base_branch), 零写死。
@@ -2835,10 +2841,10 @@ def _card_branch_changed_files(
     [(状态字母, 改动后路径)] 供「本卡测试文件」判据 workspace_config.card_test_files 排除删除。"""
     import subprocess
 
-    from tools.aipos_cli.next_resolver import card_base_branch, card_branch_name
+    from tools.aipos_cli.next_resolver import card_target_branch, card_branch_name
 
     branch_name = card_branch_name(task_id)
-    base_branch = card_base_branch()
+    base_branch = card_target_branch(card_frontmatter)
     try:
         result = subprocess.run(
             ["git", "diff", f"{base_branch}...{branch_name}", "--name-status"],
@@ -2938,7 +2944,7 @@ def _check_test_in_runall(
         return blocking_reasons  # 无产品仓，跳过
     
     # 1. 卡分支改动集中的本卡测试文件(AIPOS-F97: 唯一判据 workspace_config.card_test_files, 删除不计, 式样读声明)
-    changes = _card_branch_changed_files(product_repo_root, task_id, with_status=True)
+    changes = _card_branch_changed_files(product_repo_root, task_id, with_status=True, card_frontmatter=card_frontmatter)
     if changes is None:
         return blocking_reasons  # git 失败，跳过检查(已 warning)
     contract, invalid = _test_contract_for(repo_root, product_repo_root)
@@ -3029,7 +3035,7 @@ def _check_changes_in_scope(
         return blocking_reasons
     
     # 1. 卡分支改动文件(三点 diff)
-    changed_files = _card_branch_changed_files(product_repo_root, task_id)
+    changed_files = _card_branch_changed_files(product_repo_root, task_id, card_frontmatter=card_frontmatter)
     if changed_files is None:
         return blocking_reasons  # git 失败，跳过检查(已 warning)
     if not changed_files:
@@ -3077,7 +3083,7 @@ def _check_has_tests(
         return blocking_reasons
     
     # 1. 卡分支改动集(AIPOS-F78 前置零④: 三点 diff, 只看卡分支自己的提交; AIPOS-F97: 带状态, 供唯一判据排除删除)
-    changes = _card_branch_changed_files(product_repo_root, task_id, with_status=True)
+    changes = _card_branch_changed_files(product_repo_root, task_id, with_status=True, card_frontmatter=card_frontmatter)
     if changes is None:
         return blocking_reasons  # git 失败，跳过检查(已 warning)
     if not changes:
@@ -3236,10 +3242,14 @@ def _check_branch_compliance(
     
     # AIPOS-F108 件②(M18): 分支名 / 基线读 N5.branch_integration 声明(唯一读取口, 读 Lybra 自身 schema 而非项目产品仓);
     # 原实现读产品仓 schema(非 lybra 形项目无 schema/ → except Exception 静默回落写死 card/{task_id}), 已退役; 声明缺 = SchemaLoadError
-    from tools.aipos_cli.next_resolver import card_base_branch, card_branch_name, card_expected_base
+    from tools.aipos_cli.next_resolver import card_target_branch, card_branch_name, card_expected_base
 
     branch_name = card_branch_name(task_id)
-    base_branch = card_base_branch()
+    from tools.aipos_cli.target_branch import target_branch_problem
+    problem = target_branch_problem(repo_root, task_metadata, require_binding=True)
+    if problem:
+        return [problem]
+    base_branch = card_target_branch(task_metadata)
     
     # 子判据 1: 分支存在
     try:
@@ -6534,7 +6544,7 @@ def execute_dry_run(
                 warnings=warnings_out,
             )
             return make_response(
-                ok=bool(result.get("wrote", False)),
+                ok=bool(result.get("wrote", False)) and verdict != Verdict.BLOCK,
                 verdict=verdict,
                 operation=op,
                 dry_run=False,

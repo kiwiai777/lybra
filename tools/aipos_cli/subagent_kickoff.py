@@ -255,9 +255,12 @@ def baseline_state(governance_root: Path, code_repo: Path, contract: dict[str, A
 
     texts = contract["texts"]
     labels = pmr.baseline_state_labels()  # AIPOS-F212 件④: 三态标签唯一声明(措辞模板只引 {label})
+    from tools.aipos_cli.next_resolver import card_base_branch
     command = pmr.audit_baseline_command(governance_root, code_repo)
     try:
-        sha, _source = pmr.resolve_audit_sha(governance_root, None, code_repo)
+        sha, _source = pmr.resolve_audit_sha(governance_root, base, code_repo)
+        if base != card_base_branch():
+            command = pmr.audit_baseline_command(governance_root, code_repo, sha=sha)
         result = pmr.audit_baseline(governance_root, sha)
     except (ValueError, OSError, SchemaLoadError) as exc:
         return {"baseline_command": command, "baseline_sha": "(不可解析)", "status": "unavailable",
@@ -366,7 +369,7 @@ def render_kickoff_brief(governance_root: str | Path, task_id: str, *, role: str
                       reason=worktree_refusal.get("reason") or "")
 
     reviewed = audit_card_reviewed_id(task_id, fm) if card_role == "auditor" else ""
-    base = card_base_branch()
+    base = (view.get("delivery_subject") or {}).get("base") or card_base_branch()
     worktree = Path(view["worktree_path"]) if needs_worktree else None
     code_repo = branch = base_sha = tip = repo_line = None
     baseline: dict[str, Any] = {"baseline_command": None, "baseline_sha": None, "baseline_state": None, "status": None}

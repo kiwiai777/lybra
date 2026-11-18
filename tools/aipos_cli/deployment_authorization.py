@@ -321,6 +321,12 @@ def find_gate_pass_verdict_for_task(
     # 按 verdict_at 排序,取最新
     latest = max(candidates, key=lambda c: c["verdict_at"])
     
+    from tools.aipos_cli.target_branch import verdict_target_problem
+    target_problem = verdict_target_problem(governance_root, task_id, latest)
+    if target_problem:
+        return {"found": False, "verdict": latest["verdict"], "verdict_id": latest["verdict_id"],
+                "artifact_subject": latest["artifact_subject"], "reason": target_problem}
+
     # AIPOS-F70: 判断是否为 legacy 裁决 (无 artifact_subject)
     is_legacy = latest["artifact_subject"] is None
     

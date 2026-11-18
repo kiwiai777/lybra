@@ -66,6 +66,9 @@ def build_mint_payload(
 def grant_ident(payload: dict[str, Any]) -> tuple[str, str]:
     """AIPOS-F224: 一份授予 payload 的 (ID, 覆盖谁) —— 信封 = (policy_id, agent_or_role); 项目授权 = (authorization_id, 「项目授权 r<修订>」)。
     mint_via_gate 的出声 / 拒因 / 落账消息同读(同一门 owner_decision_record 路径, 不另立写口)。"""
+    branch = payload.get("branch_initialization")
+    if isinstance(branch, dict):
+        return str(payload.get("decision_id") or ""), f"local branch {branch.get('repo')}/{branch.get('branch')}"
     block = payload.get("project_authorization")
     if isinstance(block, dict):
         return str(block.get("authorization_id") or ""), f"project grant r{int(block.get('base_revision') or 0) + 1}"

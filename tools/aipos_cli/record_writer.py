@@ -771,6 +771,7 @@ def build_claim_log_markdown(
     session_id: str,
     created_at: str,
     capability_exception: str | None = None,
+    target_branch: str | None = None,
 ) -> str:
     metadata = {
         "record_type": RecordType.CLAIM_LOG,
@@ -784,6 +785,8 @@ def build_claim_log_markdown(
         "to_state": "claimed",
         "session_id": session_id,
     }
+    if target_branch is not None:
+        metadata["target_branch"] = target_branch
     body = "\n".join(
         [
             f"# Claim Log: {claim_id}",
@@ -892,6 +895,7 @@ def build_mcp_claim_record_markdown(
     confirmer: dict[str, Any] | None = None,
     adoption: dict[str, Any] | None = None,
     capability_exception: str | None = None,
+    target_branch: str | None = None,
 ) -> str:
     """adoption(AIPOS-F123 件①): 收编铸记录时给 {adopted_from, adopted_by, adopted_branch, adopted_branch_tip, card_branch,
     legacy_card_runtime}(声明 transitions nodes.N1.adoption.record_fields); event_type/operation 标 queue_adopt, from_state=claimed。"""
@@ -941,6 +945,8 @@ def build_mcp_claim_record_markdown(
             f"- Adopted from `{metadata['adopted_from']}` by `{metadata['adopted_by']}`: existing branch "
             f"`{metadata['adopted_branch']}` @ `{metadata['adopted_branch_tip']}` bound as card branch `{metadata['card_branch']}`.",
         ]
+    if target_branch is not None:
+        metadata["target_branch"] = target_branch
     body = "\n".join(
         [
             f"# MCP Claim Record: {claim_id}",

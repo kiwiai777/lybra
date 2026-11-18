@@ -1189,7 +1189,7 @@
         "branch_pattern": "card/{task_id}",
         "branch_pattern_note": "{task_id} 为占位符, finalize 以实际 task_id 替换; 解析器将 {task_id} 转为任务 ID 捕获组, 与 feat/fix/chore(ID) 家族兼容。AIPOS-F108 件②(M18): 唯一读取口 next_resolver.card_branch_name(task_id), 产品代码零 f\"card/{…}\" 写死",
         "base_branch": "main",
-        "base_branch_note": "AIPOS-F108 件②(M18): 卡分支的基线分支(建卡工作树的起点 / 交回判据「含本卡提交」「基座合法」与车道改动集 `git diff <base>...<branch>` 的对照基 / finalize 整合目标与部署分支强制)。唯一读取口 next_resolver.card_base_branch(); 产品代码零 \"main\" 写死。fix 卡声明 fix_base_branch 时交回判据以其为基座(卡面声明优先)",
+        "base_branch_note": "Default integration branch for legacy cards. card_target_branch resolves optional task target_branch; card_expected_base uses fix_base_branch only for source/diff. Deployment remains on this default.",
         "merge_strategy": "no-ff",
         "merge_strategy_note": "保留分支历史, 不 squash, 不 ff-only",
         "merge_message_format": "Merge {branch}: {summary} ({verdict_id})",
@@ -1568,7 +1568,7 @@
     }
   },
   "queue_mutations": {
-    "followup_inherit_fields": ["project", "assigned_to", "agent_instance", "context_bundle", "task_mode", "task_class", "priority", "output_target", "artifact_policy", "artifact_scope", "harness", "lane", "audit", "audit_by", "audit_runtime_evidence", "artifacts", "owner_verify", "validation_source_task", "validation_candidate", "resources"],
+    "followup_inherit_fields": ["target_branch", "project", "assigned_to", "agent_instance", "context_bundle", "task_mode", "task_class", "priority", "output_target", "artifact_policy", "artifact_scope", "harness", "lane", "audit", "audit_by", "audit_runtime_evidence", "artifacts", "owner_verify", "validation_source_task", "validation_candidate", "resources"],
     "followup_inherit_fields_description": "AIPOS-F214 件①(F208 P1-7: 路线图修复卡 verbs lybra_roadmap.verify.fix_card 15 项与 Owner 纠正承接卡 correct.followup 20 项两份表喂同一起草口 roadmap.followup_draft_payload, 前者缺 validation_source_task / validation_candidate / artifact_scope / owner_verify / resources → roadmap verify 给验证卡出的修复卡发布被 VALIDATION_SUBJECT_MISSING 拒): 承接卡 / 修复卡承继字段单基表(唯一声明)。两处起草模板只写 inherit_fields_ref = \"transitions.queue_mutations.followup_inherit_fields\" 引用本表, 不得另列 inherit_fields(读取口 roadmap.followup_inherit_fields 校验引用并投影, 另列 = SchemaLoadError); 外加承继来的 task_class 声明的必填字段(enums.schema task_class required_fields)由起草函数补。清单只追加。",
     "description": "AIPOS-F104 件①: 队列搬卡转移表唯一声明——queue_mutation.mutate_queue_task(门 claim/block/complete/reopen/withdraw 搬卡的唯一执行器)只读本表(读取口 queue_mutation.queue_mutation_transitions), 原 queue_mutation.ALLOWED_TRANSITIONS 手写表(withdraw/reopen 源写 \"*\")与 transition_engine.validate_transition 本地简化表退役。from_states = 允许的源队列目录, to_state = 目标队列目录, 均须为 enums.schema queue_state 中 queue_dir=true 的值(读取口校验, 不符 = SchemaLoadError fail-closed)。node = 引用 nodes.<id> 的 from_states/to_state(同一转移不写两遍)。reopen 此处 = AIPOS-348 修正路径(blocked/completed → pending), 与 nodes.reopen(owner 门节点, full_reset/resume_claim)是不同动作。 AIPOS-F170: withdraw 源加 blocked(仅凭 Owner 裁决, 见 withdraw.owner_ruling_required_from)。",
     "transitions": {
@@ -2458,7 +2458,7 @@
       "fail": "补审未通过·修复卡 {repair_task_id}",
       "other": "补审裁决 {verdict}·{audit_task_id}"
     },
-    "repair_inherit_fields": ["lane", "harness", "output_target", "audit", "audit_by", "audit_runtime_evidence"],
+    "repair_inherit_fields": ["target_branch", "lane", "harness", "output_target", "audit", "audit_by", "audit_runtime_evidence"],
     "repair_card": "补审 FAIL/BLOCK = 门同一 writer derive_repair_card_on_fail(supplementary 模式: 不受原卡已结案的级联终局判拦截; 修复卡承继原卡 repair_inherit_fields 所列字段, 卡面 supplementary_of=原卡 + derived_from_verdict_id=补审裁决, 不带 derived_from_audit_task_id 故不触发 fix_card_closure 原卡复审派生), 走常规执行/审计/合入",
     "views": "next(推导核 suggested_action / supplementary_audit 字段)、brief(supplementary_audits 节)、loop status(--task-id 时 supplementary_audit 行)、needs-owner(补审链路节, 只读不升 Owner)同读 audit_derivation.supplementary_audit_chain(唯一实现)",
     "landing": "补审卡自身路径并入原卡落账范围(governance_commit.audit_card_ids 含补审卡), 原卡 loop 结案出口在补审在途时不成立"
