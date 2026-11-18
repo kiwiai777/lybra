@@ -11,7 +11,11 @@ def validate_branch_name(name: Any) -> str:
 
     prefix = str(get_branch_integration()["branch_pattern"]).split("{task_id}")[0]
     if (not isinstance(name, str) or not name or name != name.strip()
-            or name.startswith(("-", "refs/")) or name == "HEAD" or (prefix and name.startswith(prefix))
+            or name.startswith(("-", "refs/")) or name in {
+                "HEAD", "FETCH_HEAD", "ORIG_HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD",
+                "REVERT_HEAD", "BISECT_HEAD", "AUTO_MERGE"}
+            or (len(name) == 40 and all(c in "0123456789abcdefABCDEF" for c in name))
+            or (prefix and name.startswith(prefix))
             or subprocess.run(["git", "check-ref-format", "refs/heads/" + name], capture_output=True).returncode):
         raise SchemaLoadError("TARGET_BRANCH_INVALID: expected a local integration branch name")
     return name
@@ -45,7 +49,15 @@ def target_branch_problem(governance_root: Path, metadata: dict[str, Any] | None
                                 capture_output=True, text=True, timeout=10)
         if result.returncode:
             return f"TARGET_BRANCH_NOT_LOCAL: {target} in {repo}"
-        for source in (fm.get("reviewed_task_id"), fm.get("fix_of"), (fm.get("carried_from") or {}).get("task_id")):
+        resolved = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", target + "^{commit}"],
+                                  capture_output=True, text=True, timeout=10)
+        if resolved.returncode or resolved.stdout.strip() != result.stdout.strip():
+            return f"TARGET_BRANCH_AMBIGUOUS: {target} does not resolve uniquely to its local branch commit"
+        carried = fm.get("carried_from") or {}
+        if not isinstance(carried, dict):
+            return "TARGET_BRANCH_SOURCE_INVALID: carried_from must be an object"
+        for source in (fm.get("reviewed_task_id"), fm.get("derived_from_audit_task_id"),
+                       fm.get("supplementary_of"), carried.get("task_id")):
             if not source:
                 continue
             path, _ = _find_task_in_queue(governance_root, str(source))

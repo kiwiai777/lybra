@@ -1979,6 +1979,11 @@ def _finalize_task_impl(
                            "a deployment mechanism, and omit --deploy")
         except (ValueError, OSError, SchemaLoadError) as exc:
             problem = f"TARGET_BRANCH_DEPLOY_DECLARATION_INVALID: {exc}"
+    if (not problem and push and base_branch != card_base_branch(branch_integration)
+            and _push_not_applicable_reason(workspace_root, base_branch) is None):
+        problem = ("TARGET_BRANCH_PUSH_UNSUPPORTED: non-default target cannot use implicit git push; "
+                   "remove --push for local integration only. Remote delivery requires a separately authorized "
+                   "exact-ref mechanism; do not change project remote configuration to bypass this guard")
     if problem:
         return {"verdict": Verdict.BLOCK, "task_id": task_id, "can_finalize": False, "committed": False,
                 "pushed": False, "deployed": False, "message": problem, "operations": operations}

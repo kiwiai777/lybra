@@ -36,7 +36,15 @@ def _scenario(rig):
     project = json.loads((gov/'project.json').read_text())
     project['repos'] = {'default':'mobile', 'items':{'mobile':str(repo)}, 'no_deploy':['mobile']}
     (gov/'project.json').write_text(json.dumps(project))
-    _card(gov,TASK,'pending',extra={'target_branch':'ota','lane':{'repo':'mobile','paths':['tools/']}})
+    seed=_card(gov,TASK,'pending',extra={'target_branch':'ota','lane':{'repo':'mobile','paths':['tools/']}})
+    meta,_=require_frontmatter(seed)
+    seed.unlink()
+    meta['governance_refs']=['fixture: isolated task integration target']
+    from tools.aipos_cli.draft_writer import create_draft, publish_draft
+    draft=create_draft(gov,meta,'# OTA task\n\n## 验收\n- Integrate only into ota; main SHA remains unchanged.\n')
+    assert draft.get('wrote') and draft.get('verdict')!='BLOCK',draft
+    published=publish_draft(gov,gov/draft['target_path'],actor=DRIVER,dry_run=False)
+    assert published.get('wrote') and published.get('verdict')!='BLOCK',published
     return gov, repo, _git(repo,'rev-parse','main')
 
 
@@ -118,7 +126,7 @@ def test_explicit_target_claim_cannot_change_or_reuse_old_return(rig):
     assert _git(repo,'rev-parse','main')==main
 
 
-@pytest.mark.parametrize('target',['','missing','HEAD','refs/heads/ota','card/PROJ-1','ota~1','../main','-bad','ota '])
+@pytest.mark.parametrize('target',['','missing','HEAD','ORIG_HEAD','a'*40,'refs/heads/ota','card/PROJ-1','ota~1','../main','-bad','ota '])
 def test_bad_target_claim_is_zero_write(rig,target):
     gov,repo,main=_scenario(rig)
     fm={'task_id':TASK,'target_branch':target,'lane':{'repo':'mobile','paths':['tools/']}}
@@ -127,6 +135,41 @@ def test_bad_target_claim_is_zero_write(rig,target):
     assert not out['ok'],out
     assert _git(repo,'show-ref')==before and _git(repo,'rev-parse','main')==main
     assert not (repo/'.worktrees'/TASK).exists()
+
+
+
+
+def test_target_shadowed_by_tag_refused_before_claim(rig):
+    gov,repo,main=_scenario(rig)
+    _git(repo,'tag','ota','main')
+    before=_git(repo,'show-ref')
+    out=_ensure_worktree(gov,TASK,{'task_id':TASK,'target_branch':'ota','lane':{'repo':'mobile','paths':['tools/']}})
+    assert not out['ok'] and 'TARGET_BRANCH_AMBIGUOUS' in str(out),out
+    assert _git(repo,'show-ref')==before and _git(repo,'rev-parse','main')==main
+
+
+@pytest.mark.parametrize('field',['reviewed_task_id','derived_from_audit_task_id','supplementary_of','carried_from'])
+def test_derived_or_carried_target_cannot_switch(rig,field):
+    gov,repo,main=_scenario(rig)
+    _card(gov,'PROJ-291','completed',extra={'target_branch':'main','lane':{'repo':'mobile','paths':['tools/']}})
+    source={'task_id':'PROJ-291'} if field=='carried_from' else 'PROJ-291'
+    fm={'task_id':TASK,'target_branch':'ota','lane':{'repo':'mobile','paths':['tools/']},field:source}
+    assert 'TARGET_BRANCH_SOURCE_MISMATCH' in target_branch_problem(gov,fm)
+    assert _git(repo,'rev-parse','main')==main
+
+
+def test_derived_target_cannot_switch_repository(rig):
+    gov,repo,main=_scenario(rig)
+    other=repo.parent/'other-product'
+    subprocess.run(['git','clone','--quiet',str(repo),str(other)],check=True)
+    _git(other,'branch','ota','origin/ota')
+    project=json.loads((gov/'project.json').read_text())
+    project['repos']['items']['other']=str(other)
+    (gov/'project.json').write_text(json.dumps(project))
+    _card(gov,'PROJ-291','completed',extra={'target_branch':'ota','lane':{'repo':'other','paths':['tools/']}})
+    fm={'task_id':TASK,'target_branch':'ota','lane':{'repo':'mobile','paths':['tools/']},'derived_from_audit_task_id':'PROJ-291'}
+    assert 'TARGET_BRANCH_SOURCE_MISMATCH' in target_branch_problem(gov,fm)
+    assert _git(repo,'rev-parse','main')==main
 
 
 def test_default_and_fix_base_are_separate():
@@ -172,6 +215,30 @@ def test_finalize_invalid_target_is_explicit_zero_write_block(rig):
     out=finalize_task(task_id=TASK,actor=EXEC,workspace_root=repo,governance_root=gov,dry_run=False,deploy=False)
     assert out['verdict']=='BLOCK' and 'TARGET_BRANCH_INVALID' in out['message'],out
     assert _git(repo,'show-ref')==before
+
+
+
+@pytest.mark.parametrize('configuration',[
+    [('push.default','matching')],
+    [('remote.origin.push','refs/heads/main:refs/heads/main')],
+    [('push.default','upstream'),('branch.ota.remote','origin'),('branch.ota.merge','refs/heads/main')],
+])
+def test_nondefault_implicit_remote_push_refused_zero_merge(rig, monkeypatch, configuration):
+    gov,repo,main,path,fm,wt=_claimed(rig)
+    remote=repo.parent/'remote.git'
+    subprocess.run(['git','init','--bare','--quiet',str(remote)],check=True)
+    _git(repo,'remote','add','origin',str(remote))
+    _git(repo,'push','--quiet','origin','main:main','ota:ota')
+    for key,value in configuration:
+        _git(repo,'config',key,value)
+    from tools.aipos_cli import finalize as F
+    before=_git(repo,'show-ref')
+    remote_before=_git(remote,'show-ref')
+    monkeypatch.setattr(F,'_git_push',lambda *a,**k:pytest.fail('implicit remote push attempted'))
+    out=F.finalize_task(task_id=TASK,actor=EXEC,workspace_root=repo,governance_root=gov,dry_run=False,push=True,deploy=False)
+    assert out['verdict']=='BLOCK' and 'TARGET_BRANCH_PUSH_UNSUPPORTED' in out['message'],out
+    assert _git(repo,'show-ref')==before and _git(remote,'show-ref')==remote_before
+    assert _git(repo,'symbolic-ref','--short','HEAD')=='main'
 
 
 def test_init_plan_preflight_and_owner_record_preview(rig):
