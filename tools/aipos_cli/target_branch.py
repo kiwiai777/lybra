@@ -33,18 +33,43 @@ def card_target_branch(metadata: dict[str, Any] | None = None,
     return target
 
 
+def _source_target_problem(governance_root: Path, fm: dict[str, Any], target: str, repo: Path,
+                           chain: frozenset[str]) -> str | None:
+    from tools.aipos_cli.next_resolver import _find_task_in_queue, _read_frontmatter, _card_repo_root, forensic_subject
+
+    carried = fm.get("carried_from") or {}
+    if not isinstance(carried, dict):
+        return "TARGET_BRANCH_SOURCE_INVALID: carried_from must be an object"
+    sources = (forensic_subject(fm), fm.get("reviewed_task_id"), fm.get("derived_from_audit_task_id"),
+               fm.get("supplementary_of"), carried.get("task_id"))
+    for source in dict.fromkeys(str(value) for value in sources if value):
+        if source in chain:
+            return f"TARGET_BRANCH_SOURCE_CYCLE: {source}"
+        path, _ = _find_task_in_queue(governance_root, source)
+        if path is None:
+            return f"TARGET_BRANCH_SOURCE_MISSING: {source}"
+        source_fm = _read_frontmatter(path)
+        source_repo = _card_repo_root(governance_root, source, source_fm)
+        if card_target_branch(source_fm) != target or source_repo.resolve() != repo.resolve():
+            return f"TARGET_BRANCH_SOURCE_MISMATCH: {source}"
+        problem = _source_target_problem(governance_root, source_fm, target, repo, chain | {source})
+        if problem:
+            return problem
+    return None
+
+
 def target_branch_problem(governance_root: Path, metadata: dict[str, Any] | None, *,
                           require_binding: bool = False) -> str | None:
-    from tools.aipos_cli.workspace_config import resolve_card_repo, CardRepoUnresolved
+    from tools.aipos_cli.workspace_config import CardRepoUnresolved
     from tools.schema_loader import SchemaLoadError
-    from tools.aipos_cli.next_resolver import _find_task_in_queue, _read_frontmatter
+    from tools.aipos_cli.next_resolver import _card_repo_root, _read_frontmatter
 
     fm = metadata or {}
     if "target_branch" not in fm and "claimed_target_branch" not in fm:
         return None  # Historical cards retain the original default policy.
     try:
         target = card_target_branch(fm)
-        repo = resolve_card_repo(governance_root, fm)
+        repo = _card_repo_root(governance_root, str(fm.get("task_id") or "<card>"), fm)
         result = subprocess.run(["git", "-C", str(repo), "show-ref", "--verify", "--hash", "refs/heads/" + target],
                                 capture_output=True, text=True, timeout=10)
         if result.returncode:
@@ -53,19 +78,10 @@ def target_branch_problem(governance_root: Path, metadata: dict[str, Any] | None
                                   capture_output=True, text=True, timeout=10)
         if resolved.returncode or resolved.stdout.strip() != result.stdout.strip():
             return f"TARGET_BRANCH_AMBIGUOUS: {target} does not resolve uniquely to its local branch commit"
-        carried = fm.get("carried_from") or {}
-        if not isinstance(carried, dict):
-            return "TARGET_BRANCH_SOURCE_INVALID: carried_from must be an object"
-        for source in (fm.get("reviewed_task_id"), fm.get("derived_from_audit_task_id"),
-                       fm.get("supplementary_of"), carried.get("task_id")):
-            if not source:
-                continue
-            path, _ = _find_task_in_queue(governance_root, str(source))
-            if not path:
-                return f"TARGET_BRANCH_SOURCE_MISSING: {source}"
-            source_fm = _read_frontmatter(path)
-            if card_target_branch(source_fm) != target or resolve_card_repo(governance_root, source_fm).resolve() != repo.resolve():
-                return f"TARGET_BRANCH_SOURCE_MISMATCH: {source}"
+        problem = _source_target_problem(governance_root, fm, target, repo,
+                                         frozenset({str(fm.get("task_id") or "<card>")}))
+        if problem:
+            return problem
         if require_binding and fm.get("claim_id"):
             from tools.aipos_cli.record_writer import claim_record_paths
             claim_path, _ = claim_record_paths(governance_root, str(fm.get("task_id")), str(fm["claim_id"]),
