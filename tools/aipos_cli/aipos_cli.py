@@ -5779,6 +5779,10 @@ def main(argv: list[str] | None = None) -> int:
             parser.print_help()
             return 2
         try:
+            # AIPOS-F293: init-branch resolves the governance root, not the project home.
+            if args.project_command == "init-branch":
+                from tools.aipos_cli.branch_initialization import run_branch_init_cli
+                return run_branch_init_cli(args)
             # AIPOS-293: export doesn't need home_root; dispatch-mode uses --project-root(AIPOS-F117: import 与 project new 同读 home 根)
             if args.project_command in ("export", "dispatch-mode", "freeze-legacy"):
                 pass  # handled below(AIPOS-F122: freeze-legacy 按 --workspace-root 定位治理根)
@@ -5815,9 +5819,6 @@ def main(argv: list[str] | None = None) -> int:
                 # AIPOS-F277: 命令唯一渲染 card_policy_loader.set_task_id_pattern_command(占位按用户语言, onboarding.pattern_command)
                 print(pick(owner_text("project_new", "next_pattern", command=pattern_command(root)), lang))
                 return 0
-            if args.project_command == "init-branch":
-                from tools.aipos_cli.branch_initialization import run_branch_init_cli
-                return run_branch_init_cli(args)
             if args.project_command == "freeze-legacy":
                 return _project_freeze_legacy(args)
             if args.project_command == "set-repos":
