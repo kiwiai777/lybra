@@ -11,7 +11,7 @@ target_branch: ota
 
 The target is immutable after claim. Claim records bind it; returns bind the target and candidate commit; verdict consumption requires that exact returned subject. Derived audits, repairs, and follow-up cards inherit it. Carrying a branch to a card in a different repository or with a different integration target is refused. `fix_base_branch` remains the source checkout/diff base for repairs and does not replace the integration destination.
 
-Claim worktrees start at the selected target. Return scope and test discovery, audit detached worktrees, kickoff baseline hints, and finalize all follow the same metadata resolver. Finalize merges only into that target and records it. A repeated finalize does not merge twice. Non-default targets cannot use `--deploy`; the generated next command omits deployment. Normal push authorization remains unchanged; initializing a branch never pushes.
+Claim worktrees start at the selected target. Return scope and test discovery, audit detached worktrees, kickoff baseline hints, and finalize all follow the same metadata resolver. Finalize merges only into that target and records it. A repeated finalize does not merge twice. Non-default targets cannot use `--deploy`; the generated next command omits deployment. If the repository has an applicable default deployment mechanism, finalize refuses before checkout/merge even without `--deploy`, because its existing automatic deployment path is not a multi-branch deployment contract. OTA repositories declared `no_deploy` (or with no deployment mechanism) can merge normally. Normal push authorization remains unchanged; initializing a branch never pushes.
 
 ## Initialize a release branch
 

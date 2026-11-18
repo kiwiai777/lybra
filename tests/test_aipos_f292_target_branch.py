@@ -144,6 +144,36 @@ def test_nondefault_deploy_refused_before_checkout(rig):
     assert _git(repo,'show-ref')==before and _git(repo,'symbolic-ref','--short','HEAD')=='main'
 
 
+
+def test_nondefault_implicit_deploy_refused_before_checkout(rig, monkeypatch):
+    gov,repo,main,path,fm,wt=_claimed(rig)
+    from tools.aipos_cli.finalize import finalize_task
+    from tools.aipos_cli import deploy_gate
+    project=json.loads((gov/'project.json').read_text())
+    project['repos']['no_deploy']=[]
+    (gov/'project.json').write_text(json.dumps(project))
+    # A deployment mechanism really exists; even an omitted --deploy must not reach legacy auto-deploy.
+    _write(repo/'tools/lybra-deploy','#!/bin/sh\nexit 99\n')
+    _git(repo,'add','--','tools/lybra-deploy')
+    _git(repo,'commit','-qm','fixture default deployment mechanism')
+    assert deploy_gate.deploy_mechanism_present(repo,gov)['applicable']
+    monkeypatch.setattr(deploy_gate,'invoke_lybra_deploy',lambda *a,**k:pytest.fail('non-default deployment invoked'))
+    before=_git(repo,'show-ref')
+    out=finalize_task(task_id=TASK,actor=EXEC,workspace_root=repo,governance_root=gov,dry_run=False,deploy=False)
+    assert out['verdict']=='BLOCK' and 'TARGET_BRANCH_DEPLOY_UNSUPPORTED' in out['message'],out
+    assert _git(repo,'show-ref')==before and _git(repo,'symbolic-ref','--short','HEAD')=='main'
+
+
+def test_finalize_invalid_target_is_explicit_zero_write_block(rig):
+    gov,repo,main,path,fm,wt=_claimed(rig)
+    from tools.aipos_cli.finalize import finalize_task
+    path.write_text(path.read_text().replace('target_branch: ota','target_branch: HEAD'))
+    before=_git(repo,'show-ref')
+    out=finalize_task(task_id=TASK,actor=EXEC,workspace_root=repo,governance_root=gov,dry_run=False,deploy=False)
+    assert out['verdict']=='BLOCK' and 'TARGET_BRANCH_INVALID' in out['message'],out
+    assert _git(repo,'show-ref')==before
+
+
 def test_init_plan_preflight_and_owner_record_preview(rig):
     gov,repo,main=_scenario(rig)
     from tools.aipos_cli.branch_initialization import branch_plan

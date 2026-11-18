@@ -1962,13 +1962,23 @@ def _finalize_task_impl(
     task_path, _ = _find_task_in_queue(governance_root, task_id)
     target_metadata = _read_frontmatter(task_path) if task_path else {}
     problem = target_branch_problem(governance_root, target_metadata, require_binding=True)
+    if problem:
+        return {"verdict": Verdict.BLOCK, "task_id": task_id, "can_finalize": False, "committed": False,
+                "pushed": False, "deployed": False, "message": problem, "operations": operations}
     base_branch = card_target_branch(target_metadata, branch_integration)
     if "target_branch" in target_metadata:
         from tools.aipos_cli.workspace_config import resolve_card_repo
         if resolve_card_repo(governance_root, target_metadata).resolve() != workspace_root.resolve():
             problem = "TARGET_BRANCH_REPOSITORY_MISMATCH: finalize must use the card repository"
-    if not problem and deploy and base_branch != card_base_branch(branch_integration):
-        problem = "TARGET_BRANCH_DEPLOY_UNSUPPORTED: non-default target must be finalized without deployment"
+    if not problem and base_branch != card_base_branch(branch_integration):
+        from tools.aipos_cli.deploy_gate import deploy_mechanism_present
+        try:
+            if deploy or deploy_mechanism_present(workspace_root, governance_root)["applicable"]:
+                problem = ("TARGET_BRANCH_DEPLOY_UNSUPPORTED: non-default target cannot use this repository's "
+                           "default deployment contract; finalize only a repository declared no_deploy or without "
+                           "a deployment mechanism, and omit --deploy")
+        except (ValueError, OSError, SchemaLoadError) as exc:
+            problem = f"TARGET_BRANCH_DEPLOY_DECLARATION_INVALID: {exc}"
     if problem:
         return {"verdict": Verdict.BLOCK, "task_id": task_id, "can_finalize": False, "committed": False,
                 "pushed": False, "deployed": False, "message": problem, "operations": operations}

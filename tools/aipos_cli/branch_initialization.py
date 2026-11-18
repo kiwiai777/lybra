@@ -6,6 +6,7 @@ import re
 import subprocess
 from datetime import timedelta
 from pathlib import Path
+from tools.schema_loader import SchemaLoadError
 from typing import Any, Callable
 
 
@@ -79,7 +80,7 @@ def build_branch_decision(root: Path, payload: dict[str, Any], *, actor: str | N
     try:
         plan = branch_plan(root, payload.get("branch_initialization"))
         base = decision_payload(root, payload, plan, actor)
-    except (ValueError, OSError, TypeError, KeyError) as exc:
+    except (ValueError, OSError, TypeError, KeyError, SchemaLoadError) as exc:
         return {"verdict": Verdict.BLOCK, "blocking_reasons": [str(exc)], "wrote": False, "would_write": False,
                 "planned_writes": [], "original_payload": payload, "branch_initialization": True}
     result = dict(backend(root, base, actor=actor, dry_run=True))
@@ -118,7 +119,7 @@ def run_branch_init_cli(args: Any) -> int:
     block = {"repo": args.repo, "branch": args.branch, "start_commit": args.start_commit, "requested_at": iso_z()}
     try:
         plan = branch_plan(root, block)
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, SchemaLoadError) as exc:
         print(json.dumps({"ok": False, "reason": str(exc)}))
         return 1
     if plan["action"] == "unchanged":
