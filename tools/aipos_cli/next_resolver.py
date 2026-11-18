@@ -107,7 +107,7 @@ def _transition_node(node_id: str) -> dict[str, Any]:
 
 
 def _card_repo_root(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None = None,
-                    *, allow_governance_root: bool = True) -> Path:
+                    *, allow_governance_root: bool = True, _source_chain: frozenset[str] = frozenset()) -> Path:
     """AIPOS-F78C 件②: 卡所在产品仓 = workspace_config.resolve_card_repo(唯一解析: 卡 lane.repo → project.json repos 清单
     → code_repo 别名 → 治理根)。card_frontmatter 缺则按 task_id 读卡。解析不到 = CardRepoUnresolved(调用方转不可派生/拒, fail-closed)。
     allow_governance_root=False(finalize 派生): 无声明时不把治理根当产品仓(F73D 前置一②)。"""
@@ -117,6 +117,26 @@ def _card_repo_root(workspace_root: Path, task_id: str, card_frontmatter: dict[s
     if fm is None:
         task_path, _ = _find_task_in_queue(workspace_root, task_id)
         fm = _read_frontmatter(task_path) if task_path else {}
+    # F294: audit cards use their reviewed source repository even when old cards have no lane.
+    reviewed = forensic_subject(fm)
+    if reviewed is not None:
+        from tools.aipos_cli.workspace_config import CardRepoUnresolved
+        chain = _source_chain | {task_id}
+        if not reviewed:
+            raise CardRepoUnresolved("TARGET_BRANCH_SOURCE_MISSING", "audit card has no reviewed source")
+        if reviewed in chain:
+            raise CardRepoUnresolved("TARGET_BRANCH_SOURCE_CYCLE", f"reviewed source cycle at {reviewed}")
+        source_path, _ = _find_task_in_queue(workspace_root, reviewed)
+        if source_path is None:
+            raise CardRepoUnresolved("TARGET_BRANCH_SOURCE_MISSING", f"reviewed source {reviewed} does not exist")
+        repo = _card_repo_root(workspace_root, reviewed, _read_frontmatter(source_path),
+                               allow_governance_root=allow_governance_root, _source_chain=chain)
+        lane = fm.get("lane") if isinstance(fm.get("lane"), dict) else {}
+        if str(lane.get("repo") or "").strip():
+            declared = resolve_card_repo(workspace_root, fm, allow_governance_root=allow_governance_root)
+            if declared.resolve() != repo.resolve():
+                raise CardRepoUnresolved("TARGET_BRANCH_SOURCE_MISMATCH", f"audit lane conflicts with {reviewed}")
+        return repo
     return resolve_card_repo(workspace_root, {**fm, "task_id": str(fm.get("task_id") or task_id)},
                              allow_governance_root=allow_governance_root)
 
@@ -795,6 +815,9 @@ def card_needs_worktree(workspace_root: Path, card_frontmatter: dict[str, Any] |
     if task_path is None:
         return True
     reviewed_fm = _read_frontmatter(task_path)
+    # Invalid audit-source chains must reach the fail-closed worktree check before claim writes.
+    if forensic_subject(reviewed_fm) is not None:
+        return True
     # AIPOS-F211 件②: reviewed card without task_mode = schema missing_default (no product repo write), single fallback _task_mode_entry
     return card_writes_product_repo(workspace_root, {**reviewed_fm, "task_id": str(reviewed_fm.get("task_id") or reviewed)})
 
@@ -978,11 +1001,7 @@ def card_worktree_location(workspace_root: Path, task_id: str,
     if fm is None:
         task_path, _ = _find_task_in_queue(workspace_root, task_id)
         fm = _read_frontmatter(task_path) if task_path else {}
-    reviewed = forensic_subject(fm)
-    if reviewed:
-        code_repo = _card_repo_root(workspace_root, reviewed)
-    else:
-        code_repo = _card_repo_root(workspace_root, task_id, fm)
+    code_repo = _card_repo_root(workspace_root, task_id, fm)
     return code_repo, _resolve_worktree_root(workspace_root, code_repo) / task_id
 
 
