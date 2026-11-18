@@ -66,7 +66,7 @@ def lane_overlaps(governance_root: str | Path, task_id: str, card_frontmatter: d
     只读; 声明缺 = SchemaLoadError 上抛(fail-closed)。"""
     from tools.aipos_cli.audit_derivation import is_audit_card
     from tools.aipos_cli.frontmatter import FrontmatterReadError, require_frontmatter
-    from tools.aipos_cli.next_resolver import card_base_branch
+    from tools.aipos_cli.next_resolver import card_target_branch
     from tools.aipos_cli.task_loader import iter_queue_task_paths
     from tools.aipos_cli.workspace_config import CardRepoUnresolved, LaneOverlapDeclarationError, lane_overlap_exemptions, resolve_card_repo
 
@@ -99,7 +99,7 @@ def lane_overlaps(governance_root: str | Path, task_id: str, card_frontmatter: d
     except CardRepoUnresolved as exc:
         return note(f"卡 {task_id} 仓解析不了({exc.code}): {exc}")
     out["repo"] = str(repo)
-    base = card_base_branch()
+    base = card_target_branch(fm)
     own = [_segments(p) for p in own_paths]
     for path in iter_queue_task_paths(root, states=tuple(decl["inflight_states"])):
         try:

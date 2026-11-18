@@ -2016,7 +2016,7 @@ def lybra_owner_decision_record_confirm(arguments: dict[str, Any] | None = None)
     token = get_dry_run(dry_run_token)
     plan_data = token.plan.get("data") if token is not None and isinstance(token.plan, dict) else None
     grants_policy = bool(plan_data.get("autonomy_policy_grant")) if isinstance(plan_data, dict) else False
-    if grants_policy:
+    if grants_policy or bool((plan_data or {}).get("branch_initialization")):
         if not _verb_scope_allowed("lybra_owner_decision_record_confirm", "conditional_scope"):
             return _verb_scope_denied("lybra_owner_decision_record_confirm", "owner decision record autonomy-policy grant (Owner-only)", "conditional_scope")
         if owner_confirmation_token != OWNER_CONFIRMATION_TOKEN:
@@ -5721,6 +5721,7 @@ WRITE_TOOL_DESCRIPTORS: list[dict[str, Any]] = [
                 # AIPOS-F224: 项目常设授权块(签发 / 扩大 / 撤销; 构造与校验唯一 autonomy_policy.build_authorization_decision, 决策记录仍由
                 # 既有 writer 渲染, 另落授权修订; 确认同签信封要 Owner-only owner_confirm)
                 "project_authorization": {"type": "object"},
+                "branch_initialization": {"type": "object"},
                 # AIPOS-F78B 件④b / AIPOS-F92 件①: 目标项目治理根(按凭据 projects 校验; CLI envelope mint --confirm 必传)
                 "workspace_root": {"type": "string"},
             },

@@ -170,8 +170,13 @@ def build_forensic_anchor_section(
 
         repo_arg = code_repo if not code_repo.startswith("<unresolved") else None
         labels = baseline_state_labels()  # AIPOS-F212 件④: 三态标签唯一声明
-        baseline_line = (f"- **main 侧基线先查记录**: `{audit_baseline_command(repo_root, repo_arg)}`"
-                         f" (只读; {labels['recorded']} = main 侧不再自跑, {labels['self_run_required']} = 自跑 main 侧; 被审分支一侧必须自跑;"
+        from tools.aipos_cli.next_resolver import card_base_branch
+        from tools.aipos_cli.post_merge_regression import resolve_audit_sha
+        target_base = subject.get("base") or card_base_branch()
+        baseline_sha = (resolve_audit_sha(repo_root, target_base, repo_arg)[0]
+                        if target_base != card_base_branch() else None)
+        baseline_line = (f"- **{target_base} 侧基线先查记录**: `{audit_baseline_command(repo_root, repo_arg, sha=baseline_sha)}`"
+                         f" (只读; {labels['recorded']} = {target_base} 侧不再自跑, {labels['self_run_required']} = 自跑 {target_base} 侧; 被审分支一侧必须自跑;"
                          " 细则以审计章程「独立全量基线」为准)\n")
     # AIPOS-F186 件③: 撤换承继卡——差异基线仍为 base_branch, 承继自原卡的提交在 base...卡分支 内一并审(卡面 carried_from 唯一读取口)
     from tools.aipos_cli.next_resolver import card_carried_from
@@ -760,7 +765,7 @@ def build_derived_audit_task(
     }
     
     # Copy relevant fields if present
-    for key in ["output_target", "artifact_policy", "session_policy", "context_isolation"]:
+    for key in ["output_target", "artifact_policy", "session_policy", "context_isolation", "target_branch"]:
         if key in source_metadata:
             audit_metadata[key] = source_metadata[key]
     
@@ -1373,6 +1378,9 @@ def derive_repair_card_on_fail(
         "anchor_refs": source_metadata.get("anchor_refs", ["g1_owner_gate"]),
         "artifact_scope": source_metadata.get("artifact_scope", ""),
     }
+
+    if "target_branch" in source_metadata:
+        repair_metadata["target_branch"] = source_metadata["target_branch"]
 
     if supplementary_of:
         repair_metadata.pop("derived_from_audit_task_id", None)

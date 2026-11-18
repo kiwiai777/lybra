@@ -210,6 +210,11 @@ def write_finalization_record(
         deploy_status=deploy_status,
         merge_commit=merge_commit,
     )
+    from tools.aipos_cli.next_resolver import _find_task_in_queue, _read_frontmatter, card_target_branch
+    task_path, _ = _find_task_in_queue(governance_root, task_id)
+    target_fm = _read_frontmatter(task_path) if task_path else {}
+    if "target_branch" in target_fm:
+        frontmatter["target_branch"] = card_target_branch(target_fm)
     path = record_path(governance_root, task_id, frontmatter["finalize_ref"])
     if dry_run:
         return {"ok": True, "path": str(path), "wrote": False, "frontmatter": frontmatter}

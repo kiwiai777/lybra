@@ -3,6 +3,8 @@
   "description": "Lybra task card schema - single source of truth for all card fields",
   "last_updated": "2026-08-11",
   "fields": {
+    "target_branch": {"type": "string", "required": false, "description": "Local integration target; immutable after claim. Unset preserves the default."},
+    "claimed_target_branch": {"type": "string", "required": false, "description": "Integration target bound at claim."},
     "task_id": {
       "type": "string",
       "required": true,
@@ -1038,6 +1040,7 @@
     ]
   },
   "runtime_fields": [
+    "claimed_target_branch",
     "claim_id",
     "claimed_by",
     "claimed_at",

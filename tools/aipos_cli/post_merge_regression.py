@@ -452,7 +452,7 @@ def resolve_audit_sha(governance_root: Path, sha: str | None, repo_root: str | P
     return full, what
 
 
-def audit_baseline_command(governance_root: str | Path, repo_root: str | Path | None = None) -> str:
+def audit_baseline_command(governance_root: str | Path, repo_root: str | Path | None = None, sha: str | None = None) -> str:
     """AIPOS-F149 件③: 审计基线查询命令的唯一渲染(章程占位 regression_baseline_command 与审计卡取证锚点共用, 禁第二份字面量)。
     治理根 / 产品仓按声明给出(调用方经 project.json 解析), 不写死主机与路径。"""
     import shlex
@@ -462,6 +462,8 @@ def audit_baseline_command(governance_root: str | Path, repo_root: str | Path | 
     parts = ["regression", "baseline"]
     if repo_root:
         parts += ["--repo-root", str(repo_root)]
+    if sha:
+        parts += ["--sha", sha]
     return " ".join([lybra_command_prefix(governance_root), *(shlex.quote(part) for part in parts)])  # AIPOS-F215 件③: 前缀唯一渲染
 
 

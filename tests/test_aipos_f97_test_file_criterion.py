@@ -278,7 +278,7 @@ def test_unresolvable_change_status_fail_closed_in_both_checks(tmp_path, monkeyp
     _card(gov, "UNK-1", "claimed")
     _card_branch(repo, "UNK-1", write={"tests/test_u.py": "def test_u(): pass\n"})
     monkeypatch.setattr(adapter, "_card_branch_changed_files",
-                        lambda root, tid, *, with_status=False: [("X", "tests/test_u.py")] if with_status else ["tests/test_u.py"])
+                        lambda root, tid, *, with_status=False, card_frontmatter=None: [("X", "tests/test_u.py")] if with_status else ["tests/test_u.py"])
     r1, _w = _runall_reasons(gov, "UNK-1")
     r2, _w = _has_tests_reasons(gov, "UNK-1")
     _show(f"[①·状态判不了] TEST_NOT_IN_RUNALL 位={r1} NO_TESTS 位={r2}")

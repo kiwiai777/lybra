@@ -205,13 +205,13 @@ def _git_out(code_repo: Path, *args: str) -> subprocess.CompletedProcess:
 def claim_residue_base(card_frontmatter: dict[str, Any] | None) -> str | None:
     """认领残留的基线: 卡面 carried_from.tip(撤换承继)否则 N5.branch_integration.base_branch 声明。卡面 carried_from 形不合 = None
     (不判残留, 由认领建树原有的承继拒因暴露)。"""
-    from tools.aipos_cli.next_resolver import card_base_branch, card_carried_from
+    from tools.aipos_cli.next_resolver import card_expected_base, card_carried_from
 
     try:
         carried = card_carried_from(card_frontmatter)
     except ValueError:
         return None
-    return carried["tip"] if carried else card_base_branch()
+    return carried["tip"] if carried else card_expected_base(card_frontmatter)
 
 
 def gate_claimed_before(governance_root: Path, task_id: str) -> bool:

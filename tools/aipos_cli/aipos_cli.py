@@ -3443,6 +3443,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     project_parser = subparsers.add_parser("project", help="Owner project scaffold under the governance home")
     project_subparsers = project_parser.add_subparsers(dest="project_command")
+    branch_init = project_subparsers.add_parser("init-branch", help="Initialize a local integration branch through Owner confirmation")
+    branch_init.add_argument("--repo", required=True, help="Registered project repository name")
+    branch_init.add_argument("--branch", required=True, help="New integration branch name")
+    branch_init.add_argument("--start-commit", required=True, help="Exact 40-character commit SHA")
+    branch_init.add_argument("--actor", default=default_actor)
+    branch_init.add_argument("--connection-json")
+    branch_init.add_argument("--token-role", default="owner")
+    branch_mode = branch_init.add_mutually_exclusive_group()
+    branch_mode.add_argument("--confirm", action="store_true")
+    branch_mode.add_argument("--dry-run", action="store_true")
     project_new_parser = project_subparsers.add_parser("new", help="Scaffold a fresh per-project truth root + project.json")
     project_new_parser.add_argument("name", help="Project name (becomes <home>/<name>)")
     project_new_parser.add_argument("--code-repo", help="Optional absolute path to the project's code repo")
@@ -5805,6 +5815,9 @@ def main(argv: list[str] | None = None) -> int:
                 # AIPOS-F277: 命令唯一渲染 card_policy_loader.set_task_id_pattern_command(占位按用户语言, onboarding.pattern_command)
                 print(pick(owner_text("project_new", "next_pattern", command=pattern_command(root)), lang))
                 return 0
+            if args.project_command == "init-branch":
+                from tools.aipos_cli.branch_initialization import run_branch_init_cli
+                return run_branch_init_cli(args)
             if args.project_command == "freeze-legacy":
                 return _project_freeze_legacy(args)
             if args.project_command == "set-repos":

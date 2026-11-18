@@ -1023,14 +1023,14 @@ def governance_outputs_kind() -> str:
     return kind
 
 
-def branch_delivery_subject(task_id: str | None, *, audit: bool = False, branch_pattern: str | None = None) -> dict[str, Any]:
+def branch_delivery_subject(task_id: str | None, *, audit: bool = False, branch_pattern: str | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     """AIPOS-F210: 卡分支态交付主体 {kind: branch, task_id, audit, branch, base}——分支名 / 基线只经 card_branch_name / card_base_branch
     (声明 transitions.schema N5.branch_integration); branch_pattern = 调用方已读的分支式样(machine_zone 按 product_root 读)。
     task_id 缺 = 分支声明套占位卡号(与 report_frontmatter_contract 同口径)。"""
     subject_id = str(task_id or "").strip()
     placeholder = subject_id or ("<被审卡ID>" if audit else "<卡ID>")
     branch = card_branch_name(placeholder, {"branch_pattern": branch_pattern} if branch_pattern else None)
-    return {"kind": "branch", "task_id": subject_id or None, "audit": audit, "branch": branch, "base": card_base_branch()}
+    return {"kind": "branch", "task_id": subject_id or None, "audit": audit, "branch": branch, "base": card_target_branch(metadata)}
 
 
 def card_delivery_subject(workspace_root: Path | None, task_id: str, card_frontmatter: dict[str, Any] | None, *,
@@ -1066,7 +1066,7 @@ def card_delivery_subject(workspace_root: Path | None, task_id: str, card_frontm
         bound = governance_outputs_return_binding(workspace_root, subject_id) if subject_id else None
         return {"kind": governance_outputs_kind(), "task_id": subject_id or None, "audit": audit,
                 "outputs_digest": str((bound or {}).get("outputs_digest") or "") or None}
-    return branch_delivery_subject(subject_id, audit=audit, branch_pattern=branch_pattern)
+    return branch_delivery_subject(subject_id, audit=audit, branch_pattern=branch_pattern, metadata=subject_fm or fm)
 
 
 def card_workstation_view(workspace_root: Path, task_id: str, card_frontmatter: dict[str, Any] | None, *,
@@ -2653,7 +2653,7 @@ def _live_card_branch(workspace_root: Path, task_id: str,
         return None
     from tools.aipos_cli.finalize import _git_branch_merged_into_main
 
-    if _git_branch_merged_into_main(tip[0], tip[2], card_base_branch()):  # AIPOS-F108 件②: 基线读声明(唯一读取口)
+    if _git_branch_merged_into_main(tip[0], tip[2], card_target_branch(card_frontmatter)):  # AIPOS-F108 件②: 基线读声明(唯一读取口)
         return None
     return tip
 
@@ -3116,6 +3116,8 @@ def return_binding_subject(workspace_root: Path, task_id: str, card_frontmatter:
     if not tip:
         return None
     bound = {**tip[1], "branch": tip[2]}
+    if "target_branch" in fm or "claimed_target_branch" in fm:
+        bound["target_branch"] = card_target_branch(fm)
     # AIPOS-F259 件①: 附交回时基线(审计区间 = 基线..tip; deployment_authorization.commit_pass_coverage 审计区间覆盖读它)。
     # 键名读声明 N5.guards.commit_coverage.audited_range.base_key; 基线读不出 = 不写(该交回的审计区间覆盖即不认, fail-closed)
     from tools.aipos_cli.deployment_authorization import audited_range_declaration
@@ -3585,7 +3587,10 @@ def _build_finalize_command(
     parts.append(f"--task-id {task_id}")
     parts.append(f"--actor {actor}")
     parts.append("--push")
-    parts.append("--deploy")
+    target_path, _ = _find_task_in_queue(governance_root, task_id)
+    target_fm = _read_frontmatter(target_path) if target_path else {}
+    if card_target_branch(target_fm) == card_base_branch():
+        parts.append("--deploy")
     parts.append(f"--workspace-root {code_repo_root}")
     parts.append(f"--governance-root {governance_root}")
     return " ".join(parts)
@@ -6873,7 +6878,7 @@ def format_scan_output(results: list[dict[str, Any]], *, json_mode: bool = False
 # AIPOS-F73件②③: next --run 机器扣扳机 — 推导后立即执行
 # ---------------------------------------------------------------------------
 
-def _check_branch_has_commits(workspace_root: Path, task_id: str) -> bool:
+def _check_branch_has_commits(workspace_root: Path, task_id: str, metadata: dict[str, Any] | None = None) -> bool:
     """AIPOS-F73件③: 检查卡分支是否有提交（相对 main）。
     
     Args:
@@ -6886,7 +6891,7 @@ def _check_branch_has_commits(workspace_root: Path, task_id: str) -> bool:
     import subprocess
     
     branch_name = card_branch_name(task_id)  # AIPOS-F108 件② / F112: 分支名 / 基线读 N5.branch_integration 声明(唯一读取口)
-    base_branch = card_base_branch()
+    base_branch = card_target_branch(metadata)
     
     try:
         # 检查分支是否存在
@@ -6947,12 +6952,15 @@ def card_base_branch(branch_integration: dict[str, Any] | None = None) -> str:
     return base.strip()
 
 
+from tools.aipos_cli.target_branch import card_target_branch
+
+
 def card_expected_base(task_metadata: dict[str, Any] | None, branch_integration: dict[str, Any] | None = None) -> str:
     """AIPOS-F150: 卡分支的「期望基座」唯一判定——卡面 fix_base_branch(fix 卡声明的合法基座)优先, 缺省 = card_base_branch。
     交回检查⑤分支合规「基座合法」(board_adapter._check_branch_compliance)与例行门拒修法渲染(loop_run_record.next_action,
     BRANCH_WRONG_BASE 的 {base})共用, 禁第二实现。"""
     fix_base = str((task_metadata or {}).get("fix_base_branch") or "").strip()
-    return fix_base or card_base_branch(branch_integration)
+    return fix_base or card_target_branch(task_metadata, branch_integration)
 
 
 def existing_branch_tip(code_repo: Path, branch: str) -> str | None:
@@ -7026,7 +7034,7 @@ def carried_kickoff_line(card_frontmatter: dict[str, Any] | None, task_id: str) 
     from tools.aipos_cli.board_adapter import base_sync_command
     from tools.aipos_cli.queue_mutation import supersede_carry_texts
 
-    base = card_base_branch()
+    base = card_target_branch(card_frontmatter)
     return supersede_carry_texts()["kickoff_line"].format(base=base, sync=base_sync_command(card_branch_name(task_id), base), **carried)
 
 
@@ -7070,6 +7078,10 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
         except FrontmatterReadError as exc:
             # AIPOS-F100 件②: 卡读不出 = 不建树(不按空卡面猜仓/模式)
             return {"ok": False, "worktree_path": "", "branch": "", "message": f"卡 {task_id} 不建 worktree: {exc}"}
+    from tools.aipos_cli.target_branch import target_branch_problem
+    target_problem = target_branch_problem(workspace_root, fm_for_mode)
+    if target_problem:
+        return {"ok": False, "worktree_path": "", "branch": "", "message": target_problem}
     if forensic_subject(fm_for_mode) is not None:
         return _ensure_forensic_worktree(workspace_root, task_id, fm_for_mode)
 
@@ -7078,7 +7090,11 @@ def _ensure_worktree(workspace_root: Path, task_id: str,
     try:
         code_repo, worktree_path = card_worktree_location(workspace_root, task_id, card_frontmatter)
         branch_name = card_branch_name(task_id)
-        base_branch = card_base_branch()  # AIPOS-F108 件②: 新卡分支起点读 N5.branch_integration.base_branch 声明
+        base_branch = card_expected_base(fm_for_mode)
+        from tools.aipos_cli.target_branch import target_branch_problem
+        problem = target_branch_problem(workspace_root, fm_for_mode)
+        if problem:
+            raise ValueError(problem)
     except CardRepoUnresolved as exc:
         return {"ok": False, "worktree_path": "", "branch": "", "message": f"无法定位卡 {task_id} 的产品仓建 worktree: {exc}"}
     except SchemaLoadError as exc:
@@ -7757,7 +7773,7 @@ def _execute_derived_action(
         from tools.aipos_cli.workspace_config import CardRepoUnresolved
 
         try:
-            has_commits = _check_branch_has_commits(_card_repo_root(workspace_root, task_id), task_id)
+            has_commits = _check_branch_has_commits(_card_repo_root(workspace_root, task_id), task_id, _read_frontmatter(_return_task_path) if _return_task_path else None)
         except CardRepoUnresolved as exc:
             return {
                 "ok": False,

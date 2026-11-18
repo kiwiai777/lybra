@@ -6812,6 +6812,12 @@
       "surface": ["mcp"]
     },
     "lybra_owner_decision_record_dry_run": {
+      "branch_initialization": {
+        "cli": "project init-branch",
+        "required_fields": ["repo", "branch", "start_commit", "requested_at"],
+        "owner_confirm_required": true,
+        "writes": "One absent local branch at an exact commit plus the Owner decision record; never move existing refs, reset, deploy or push."
+      },
       "description": "Owner 决策记录预览。",
       "phase": "dry_run",
       "required_scope": "owner_decision_record",
